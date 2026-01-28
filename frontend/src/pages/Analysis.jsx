@@ -285,17 +285,17 @@ const Analysis = () => {
                   column.width = 260
                 }
 
-                // 数值列格式化
-                if (['保守ROI', '保守EPC', 'CPC', '费用', '费用($)', '佣金', '回传佣金', '回传佣金($)', '保守佣金', '保守佣金($)', '点击', '订单'].some(col => key.includes(col))) {
+                // 数值列格式化：默认保留两位小数（点击/订单保持整数）
+                if (['保守ROI', '保守EPC', 'CPC', '费用', '费用($)', '佣金', '回传佣金', '回传佣金($)', '保守佣金', '保守佣金($)', '预算', '点击', '订单'].some(col => key.includes(col))) {
                   column.align = 'right'
                   column.render = (text) => {
                     if (text === null || text === undefined || text === '') return '-'
                     const num = Number(text)
                     if (Number.isNaN(num)) return String(text)
                     // 后端按“原始值”返回保守ROI（如 0.4838），这里不做 *100 或加% 等转换
-                    if (key.includes('ROI')) return num.toFixed(4)
+                    if (key.includes('ROI')) return num.toFixed(2)
                     if (key.includes('点击') || key.includes('订单')) return num.toFixed(0)
-                    return num.toFixed(4)
+                    return num.toFixed(2)
                   }
                 }
 

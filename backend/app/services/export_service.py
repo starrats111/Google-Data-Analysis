@@ -25,7 +25,7 @@ from app.models.user import User
 class ExportService:
     """导出服务类"""
     
-    def __init__(self, export_folder: str = "excel", template_file: str = "excel/表6.xlsx"):
+    def __init__(self, export_folder: str = "excel", template_file: str = "excel/输出表格.xlsx"):
         self.export_folder = Path(export_folder)
         self.template_file = Path(template_file)
         self.export_folder.mkdir(parents=True, exist_ok=True)

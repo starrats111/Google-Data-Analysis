@@ -163,18 +163,60 @@ class AnalysisService:
             columns_list = list(result_df_with_actions.columns)
             logger.info(f"分析结果包含的字段: {columns_list}")
             
-            # 确保包含所有必需的模板字段
-            required_fields = ['广告系列', '点击', '佣金', '费用', '出单天数', '最高CPC', 
-                             '预算错失份额', '排名错失份额', '保守EPC', '保守ROI', '操作指令']
-            missing_fields = [f for f in required_fields if f not in columns_list]
+            # ====== 输出通用模板：仅保留指定列，并搬运字段 ======
+            # 注意：操作指令计算依赖预算错失份额/排名错失份额等字段，所以先算完指令再做裁剪。
+            output_df = result_df_with_actions.copy()
+            
+            # 1) 搬运：预算错失份额/排名错失份额 -> IS Budget丢失/IS Rank丢失
+            if 'IS Budget丢失' not in output_df.columns:
+                output_df['IS Budget丢失'] = None
+            if 'IS Rank丢失' not in output_df.columns:
+                output_df['IS Rank丢失'] = None
+            if '预算错失份额' in output_df.columns:
+                output_df['IS Budget丢失'] = output_df['预算错失份额']
+            if '排名错失份额' in output_df.columns:
+                output_df['IS Rank丢失'] = output_df['排名错失份额']
+            
+            # 2) 补齐：广告系列名/MID（兼容历史字段）
+            if '广告系列名' not in output_df.columns and '广告系列' in output_df.columns:
+                output_df['广告系列名'] = output_df['广告系列']
+            if 'MID' not in output_df.columns and '商家ID' in output_df.columns:
+                output_df['MID'] = output_df['商家ID']
+            
+            # 3) 仅保留通用模板列（按截图顺序）
+            output_columns = [
+                '广告系列名',
+                '预算',
+                'L7D点击',
+                'L7D佣金',
+                'L7D花费',
+                'L7D出单天数',
+                '当前Max CPC',
+                'IS Budget丢失',
+                'IS Rank丢失',
+                '保守EPC',
+                '保守ROI',
+                '操作指令',
+                'MID',
+            ]
+            for col in output_columns:
+                if col not in output_df.columns:
+                    output_df[col] = None
+            
+            # 4) 仅返回这些列（删除其他无用列）
+            output_df = output_df[output_columns]
+            
+            # 5) 日志：检查缺失列（理论上不应缺失）
+            missing_fields = [c for c in output_columns if c not in columns_list and c not in ['广告系列名', 'MID', 'IS Budget丢失', 'IS Rank丢失']]
             if missing_fields:
-                logger.warning(f"缺少模板字段: {missing_fields}")
+                logger.warning(f"通用模板输出列缺失（已自动补None）: {missing_fields}")
             
             analysis_result = {
-                "data": result_df_with_actions.to_dict('records'),
+                "data": output_df.to_dict('records'),
+                # summary 保持使用完整数据（不影响页面表格列裁剪）
                 "summary": self._calculate_summary(result_df_with_actions),
                 "status": "completed",
-                "total_rows": len(result_df_with_actions)
+                "total_rows": len(output_df)
             }
             
             return analysis_result
@@ -534,6 +576,10 @@ class AnalysisService:
         cpc_col = self._find_column(df_clean, ['平均每次点击费用', 'CPC', 'cpc', '每次点击成本', '点击成本', 'Avg CPC', 'Cost Per Click'])
         max_cpc_col = self._find_column(df_clean, ['最高CPC', '最高每次点击费用', 'Max CPC', 'max cpc', '最高点击成本'])
         currency_col = self._find_column(df_clean, ['货币代码', '货币', 'Currency code', 'Currency Code', 'Currency', 'currency'])
+        budget_col = self._find_column(df_clean, [
+            '预算', '每日预算', '日预算', '平均每日预算',
+            'Daily budget', 'Budget', 'daily budget'
+        ])
         
         # 过去七天出单天数（从表1读取）
         past_seven_days_orders_col = self._find_column(df_clean, [
@@ -575,6 +621,8 @@ class AnalysisService:
             rename_map[max_cpc_col] = '最高CPC'
         if currency_col and currency_col != '货币代码':
             rename_map[currency_col] = '货币代码'
+        if budget_col and budget_col != '预算':
+            rename_map[budget_col] = '预算'
         if past_seven_days_orders_col and past_seven_days_orders_col != '过去七天出单天数':
             rename_map[past_seven_days_orders_col] = '过去七天出单天数'
         if budget_lost_col and budget_lost_col != '预算错失份额':
@@ -597,6 +645,8 @@ class AnalysisService:
             df_clean['最高CPC'] = df_clean['最高CPC'].apply(self._to_number)
         if '过去七天出单天数' in df_clean.columns:
             df_clean['过去七天出单天数'] = df_clean['过去七天出单天数'].apply(self._to_number)
+        if '预算' in df_clean.columns:
+            df_clean['预算'] = df_clean['预算'].apply(self._to_number)
 
         # 货币换算：若表1为人民币(CNY/RMB)，将费用/CPC/最高CPC换算为美元再进入计算
         if '货币代码' in df_clean.columns:
@@ -977,6 +1027,28 @@ class AnalysisService:
         if '广告系列' in merged.columns:
             result_df['广告系列'] = merged['广告系列']
         # 费用已在上方计算/填充，这里不再重复赋值
+        # 预算（来自表1，如有）
+        if '预算' in merged.columns:
+            result_df['预算'] = merged['预算'].fillna(0)
+
+        # ========= 通用输出模板字段映射（输出表格.xlsx）=========
+        # L7D点击/佣金/花费：过去七天口径（当前实现为表内汇总口径，按现有需求等同于点击/佣金/费用）
+        result_df['L7D点击'] = result_df.get('点击', 0)
+        result_df['L7D佣金'] = result_df.get('佣金', 0)
+        result_df['L7D花费'] = result_df.get('费用', 0)
+        # L7D出单天数：过去七天出单天数（优先用表1的过去七天出单天数，否则退化为出单天数）
+        if '过去七天出单天数' in merged.columns:
+            result_df['L7D出单天数'] = merged['过去七天出单天数'].fillna(0)
+        else:
+            result_df['L7D出单天数'] = result_df.get('出单天数', 0)
+        # 当前Max CPC：最高CPC
+        result_df['当前Max CPC'] = result_df.get('最高CPC', result_df.get('CPC', 0))
+        # IS Budget丢失 / IS Rank丢失
+        result_df['IS Budget丢失'] = result_df.get('预算错失份额', None)
+        result_df['IS Rank丢失'] = result_df.get('排名错失份额', None)
+        # 广告系列名 / MID
+        result_df['广告系列名'] = result_df.get('广告系列', None)
+        result_df['MID'] = result_df.get('商家ID', None)
         
         # 出单天数（从表1读取，如果没有则使用订单数）
         if '过去七天出单天数' in merged.columns:
