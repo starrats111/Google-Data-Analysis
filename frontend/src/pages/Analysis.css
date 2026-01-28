@@ -1,0 +1,55 @@
+.analysis-page {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.analysis-page__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 4px;
+}
+
+.analysis-page__title {
+  margin: 0;
+  line-height: 1.2;
+}
+
+.analysis-page__subtitle {
+  color: rgba(0, 0, 0, 0.45);
+  font-size: 12px;
+  margin-top: 4px;
+}
+
+.analysis-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.analysis-table :global(.ant-table) {
+  border-radius: 10px;
+}
+
+.analysis-table :global(.ant-table-thead > tr > th) {
+  white-space: nowrap;
+}
+
+/* 斑马纹，让大表更易读 */
+.analysis-table :global(.ant-table-tbody > tr:nth-child(even) > td) {
+  background: #fafafa;
+}
+
+/* 展开表更紧凑 */
+.analysis-subtable :global(.ant-table-thead > tr > th),
+.analysis-subtable :global(.ant-table-tbody > tr > td) {
+  padding-top: 8px;
+  padding-bottom: 8px;
+}
+
+
+

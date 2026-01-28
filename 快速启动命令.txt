@@ -1,0 +1,41 @@
+==========================================
+后端启动命令（在 PowerShell 中执行）
+==========================================
+
+cd "D:\Google Analysis\backend"
+python -m venv venv
+.\venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+pip install fastapi uvicorn sqlalchemy pydantic pydantic-settings python-jose passlib python-multipart openpyxl python-dotenv
+python scripts/init_db.py
+python scripts/init_users.py
+python scripts/init_platforms.py
+uvicorn app.main:app --reload
+
+==========================================
+前端启动命令（在新的 PowerShell 窗口中执行）
+==========================================
+
+cd "D:\Google Analysis\frontend"
+npm install
+npm run dev
+
+==========================================
+验证地址
+==========================================
+
+后端API文档：http://localhost:8000/docs
+前端登录页面：http://localhost:3000
+
+默认账户：
+- 经理：manager / manager123
+- 员工：employee1 / employee1123
+
+==========================================
+
+
+
+
+
+
+

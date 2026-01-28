@@ -1,0 +1,66 @@
+==========================================
+正确安装命令 - 版本兼容
+==========================================
+
+【后端安装 - 在 PowerShell 中，一个命令一个命令执行】
+
+cd "D:\Google Analysis\backend"
+
+python -m venv venv
+
+.\venv\Scripts\Activate.ps1
+
+python -m pip install --upgrade pip
+
+pip install fastapi==0.70.1
+
+pip install uvicorn==0.15.0
+
+pip install sqlalchemy==1.4.46
+
+pip install pydantic==1.10.12
+
+pip install python-jose
+
+pip install passlib
+
+pip install python-multipart
+
+pip install openpyxl
+
+pip install python-dotenv
+
+python scripts/init_db.py
+
+python scripts/init_users.py
+
+python scripts/init_platforms.py
+
+uvicorn app.main:app --reload
+
+==========================================
+前端安装 - 在新的 PowerShell 窗口
+==========================================
+
+cd "D:\Google Analysis\frontend"
+
+npm install
+
+npm run dev
+
+==========================================
+验证
+==========================================
+
+后端：http://localhost:8000/docs
+前端：http://localhost:3000
+登录：manager / manager123
+
+==========================================
+
+
+
+
+
+
+
