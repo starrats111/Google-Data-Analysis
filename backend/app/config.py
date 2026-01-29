@@ -1,13 +1,51 @@
 """
 应用配置
 """
+import json
+from pathlib import Path
+from typing import Any, List, Set
+
 try:
     from pydantic_settings import BaseSettings, SettingsConfigDict
 except ImportError:
-    # 兼容 pydantic 1.x
-    from pydantic import BaseSettings
+    # 兼容：在 pydantic v2 未安装 pydantic-settings 时，仍可使用 v1 兼容层
+    try:
+        from pydantic.v1 import BaseSettings  # type: ignore
+    except Exception:
+        # 兼容 pydantic 1.x
+        from pydantic import BaseSettings  # type: ignore
     SettingsConfigDict = None
-from typing import Set
+
+
+def _parse_str_list(value: Any) -> List[str]:
+    """Parse list-like env values.
+
+    Supports:
+    - JSON list: '["http://a","http://b"]'
+    - comma-separated: 'http://a,http://b'
+    - already-a-list
+    """
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return [str(x).strip() for x in value if str(x).strip()]
+    if isinstance(value, str):
+        s = value.strip()
+        if not s:
+            return []
+        # try JSON first
+        if (s.startswith("[") and s.endswith("]")) or (s.startswith('"') and s.endswith('"')):
+            try:
+                parsed = json.loads(s)
+                if isinstance(parsed, list):
+                    return [str(x).strip() for x in parsed if str(x).strip()]
+                if isinstance(parsed, str) and parsed.strip():
+                    return [parsed.strip()]
+            except Exception:
+                pass
+        # fallback: comma-separated
+        return [part.strip() for part in s.split(",") if part.strip()]
+    return [str(value).strip()] if str(value).strip() else []
 
 
 class Settings(BaseSettings):
@@ -36,7 +74,7 @@ class Settings(BaseSettings):
     EMPLOYEE_COUNT: int = 10
     
     # CORS配置
-    CORS_ORIGINS: list = ["http://localhost:3000", "http://localhost:8000"]
+    CORS_ORIGINS: List[str] = ["http://localhost:3000", "http://localhost:8000"]
 
     # 汇率配置
     # 用于当谷歌广告表1为人民币(CNY/RMB)时，将费用/CPC等换算为美元(USD)
@@ -45,14 +83,29 @@ class Settings(BaseSettings):
     
     if SettingsConfigDict is not None:
         # Pydantic v2
+        from pydantic import field_validator
+
+        @field_validator("CORS_ORIGINS", mode="before")
+        @classmethod
+        def _validate_cors_origins(cls, v: Any) -> List[str]:
+            return _parse_str_list(v)
+
+        _env_file = Path(__file__).resolve().parents[1] / ".env"  # backend/.env
         model_config = SettingsConfigDict(
-            env_file=".env",
+            env_file=str(_env_file),
+            env_file_encoding="utf-8",
             case_sensitive=False
         )
     else:
         # Pydantic v1
+        from pydantic import validator
+
+        @validator("CORS_ORIGINS", pre=True)
+        def _validate_cors_origins(cls, v: Any) -> List[str]:
+            return _parse_str_list(v)
+
         class Config:
-            env_file = ".env"
+            env_file = str(Path(__file__).resolve().parents[1] / ".env")  # backend/.env
             case_sensitive = False
 
 

@@ -1006,7 +1006,7 @@ class AnalysisService:
             result_df['佣金'] = merged['佣金'].fillna(0)
         else:
             result_df['佣金'] = 0
-
+        
         # 保守佣金 = 佣金 * 0.72（按你提供的口径）
         result_df['保守佣金'] = result_df['佣金'] * 0.72
 
@@ -1015,7 +1015,7 @@ class AnalysisService:
             lambda row: row['保守佣金'] / row['点击'] if row['点击'] > 0 else 0,
             axis=1
         )
-
+        
         # 保守ROI = (佣金*0.72 - 费用) / 费用
         # 按你要求返回“原始值”，不做 *100 等任何转换；若费用为0则返回None
         result_df['保守ROI'] = result_df.apply(
@@ -1600,7 +1600,7 @@ class AnalysisService:
             # 如果数据中没有，使用手动输入的全局值
             if past_seven_days_orders is None and past_seven_days_orders_global is not None:
                 try:
-                    past_seven_days_orders = float(past_seven_days_orders_global)
+                past_seven_days_orders = float(past_seven_days_orders_global)
                 except (ValueError, TypeError):
                     past_seven_days_orders = None
             
@@ -1624,7 +1624,7 @@ class AnalysisService:
             # 如果数据中没有，使用手动输入的全局值
             if max_cpc is None and max_cpc_global is not None:
                 try:
-                    max_cpc = float(max_cpc_global)
+                max_cpc = float(max_cpc_global)
                 except (ValueError, TypeError):
                     max_cpc = None
             

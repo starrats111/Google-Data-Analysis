@@ -7,12 +7,13 @@ export const useAuth = create((set) => ({
   isAuthenticated: !!localStorage.getItem('token'),
 
   login: async (username, password) => {
-    const formData = new FormData()
-    formData.append('username', username)
-    formData.append('password', password)
+    // FastAPI OAuth2PasswordRequestForm expects x-www-form-urlencoded, not multipart/form-data
+    const body = new URLSearchParams()
+    body.append('username', username)
+    body.append('password', password)
 
-    const response = await api.post('/api/auth/login', formData, {
-      headers: { 'Content-Type': 'multipart/form-data' },
+    const response = await api.post('/api/auth/login', body, {
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     })
 
     const { access_token, user } = response.data
@@ -41,6 +42,9 @@ export const useAuth = create((set) => ({
     }
   },
 }))
+
+
+
 
 
 
