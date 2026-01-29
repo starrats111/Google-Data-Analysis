@@ -939,6 +939,14 @@ class AnalysisService:
         if rename_map:
             df_clean = df_clean.rename(columns=rename_map)
 
+        # 如果仍然没有“展示”列，就从原始表中兜底复制“展示次数/Impressions”
+        # 防止在上面的匹配/重命名过程中遗漏，导致后续每日指标里展示次数一直为 0
+        if '展示' not in df_clean.columns:
+            for col in ['展示次数', 'Impressions', 'impressions']:
+                if col in df.columns:
+                    df_clean['展示'] = df[col]
+                    break
+
         # 数值列转换（兼容逗号小数/千分位/货币符号）
         if '点击' in df_clean.columns:
             df_clean['点击'] = df_clean['点击'].apply(self._to_number)
