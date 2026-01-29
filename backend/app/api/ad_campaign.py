@@ -35,6 +35,7 @@ async def get_ad_campaigns(
     merchant_id: Optional[str] = None,
     campaign_name: Optional[str] = None,
     status: Optional[str] = None,
+    metrics_date: Optional[str] = None,  # YYYY-MM-DD：可选，返回该日每日指标到列表中
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
@@ -58,6 +59,43 @@ async def get_ad_campaigns(
         query = query.filter(AdCampaign.status == status)
     
     campaigns = query.order_by(AdCampaign.created_at.desc()).all()
+
+    # 可选：拼接每日指标
+    if metrics_date:
+        from datetime import datetime
+        from app.models.ad_campaign_daily_metric import AdCampaignDailyMetric
+
+        try:
+            d = datetime.strptime(metrics_date, "%Y-%m-%d").date()
+        except Exception:
+            raise HTTPException(status_code=400, detail="metrics_date 日期格式错误，请使用YYYY-MM-DD")
+
+        ids = [c.id for c in campaigns]
+        if ids:
+            metrics = db.query(AdCampaignDailyMetric).filter(
+                AdCampaignDailyMetric.user_id == current_user.id,
+                AdCampaignDailyMetric.campaign_id.in_(ids),
+                AdCampaignDailyMetric.date == d,
+            ).all()
+            m_map = {m.campaign_id: m for m in metrics}
+        else:
+            m_map = {}
+
+        # 给 response 补充字段（Pydantic 会从 attributes 读取；这里直接挂动态属性）
+        for c in campaigns:
+            m = m_map.get(c.id)
+            setattr(c, "metrics_date", metrics_date)
+            if not m:
+                continue
+            setattr(c, "daily_clicks", float(m.clicks or 0.0))
+            setattr(c, "daily_orders", float(m.orders or 0.0))
+            setattr(c, "daily_budget", float(m.budget or 0.0))
+            setattr(c, "daily_cpc", float(m.cpc or 0.0))
+            setattr(c, "daily_cost", float(m.cost or 0.0))
+            setattr(c, "daily_commission", float(m.commission or 0.0))
+            setattr(c, "daily_past_seven_days_order_days", float(m.past_seven_days_order_days or 0.0))
+            setattr(c, "daily_current_max_cpc", float(m.current_max_cpc or 0.0))
+
     return campaigns
 
 

@@ -25,6 +25,7 @@ class DailyL7DRequest(BaseModel):
 class AnalysisResultResponse(BaseModel):
     id: int
     user_id: int
+    username: Optional[str] = None  # 用户名，用于经理查看员工数据
     affiliate_account_id: Optional[int]
     analysis_date: date
     result_data: Dict[str, Any]

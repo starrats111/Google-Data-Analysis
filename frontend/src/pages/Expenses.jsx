@@ -1,7 +1,8 @@
 import React, { useEffect, useMemo, useState } from 'react'
-import { Card, DatePicker, Select, Space, Table, Statistic, Row, Col, InputNumber, Button, message, Segmented } from 'antd'
+import { Card, DatePicker, Select, Space, Table, Statistic, Row, Col, InputNumber, Button, message, Segmented, Collapse } from 'antd'
 import dayjs from 'dayjs'
 import api from '../services/api'
+import { useAuth } from '../store/authStore'
 
 const { RangePicker } = DatePicker
 const { Option } = Select
@@ -23,9 +24,12 @@ function getPresetRange(preset) {
 }
 
 const Expenses = () => {
+  const { user } = useAuth()
+  const isManager = user?.role === 'manager'
   const [preset, setPreset] = useState('过去7天')
   const [range, setRange] = useState(getPresetRange('过去7天'))
   const [summary, setSummary] = useState(null)
+  const [managerSummary, setManagerSummary] = useState(null) // 经理查看所有员工的数据
   const [daily, setDaily] = useState([])
   const [loading, setLoading] = useState(false)
   const [selectedDate, setSelectedDate] = useState(null) // 单日查看（可选）
@@ -45,12 +49,23 @@ const Expenses = () => {
     if (!startDate || !endDate) return
     setLoading(true)
     try {
-      const [sumRes, dailyRes] = await Promise.all([
-        api.get('/api/expenses/summary', { params: { start_date: startDate, end_date: endDate, today_date: todayDate } }),
-        api.get('/api/expenses/daily', { params: { start_date: startDate, end_date: endDate } }),
-      ])
-      setSummary(sumRes.data)
-      setDaily(dailyRes.data.rows || [])
+      if (isManager) {
+        // 经理：获取所有员工的汇总数据
+        const sumRes = await api.get('/api/expenses/summary', { params: { start_date: startDate, end_date: endDate, today_date: todayDate } })
+        setManagerSummary(sumRes.data)
+        setSummary(null)
+        // 经理不需要daily明细，因为已经在summary中包含了
+        setDaily([])
+      } else {
+        // 员工：获取自己的数据
+        const [sumRes, dailyRes] = await Promise.all([
+          api.get('/api/expenses/summary', { params: { start_date: startDate, end_date: endDate, today_date: todayDate } }),
+          api.get('/api/expenses/daily', { params: { start_date: startDate, end_date: endDate } }),
+        ])
+        setSummary(sumRes.data)
+        setManagerSummary(null)
+        setDaily(dailyRes.data.rows || [])
+      }
     } catch (e) {
       message.error(e.response?.data?.detail || '获取费用数据失败')
     } finally {
@@ -140,50 +155,120 @@ const Expenses = () => {
         </Space>
       </Card>
 
+      {/* 总计统计 */}
       <Row gutter={16} style={{ marginBottom: 16 }}>
         <Col span={6}>
           <Card>
-            <Statistic title="总佣金" value={summary?.totals?.total_commission ?? 0} precision={4} />
+            <Statistic 
+              title="总佣金" 
+              value={isManager ? (managerSummary?.totals?.total_commission ?? 0) : (summary?.totals?.total_commission ?? 0)} 
+              precision={4} 
+            />
           </Card>
         </Col>
         <Col span={6}>
           <Card>
-            <Statistic title="总广告费用" value={summary?.totals?.total_ad_cost ?? 0} precision={4} />
+            <Statistic 
+              title="总广告费用" 
+              value={isManager ? (managerSummary?.totals?.total_ad_cost ?? 0) : (summary?.totals?.total_ad_cost ?? 0)} 
+              precision={4} 
+            />
           </Card>
         </Col>
         <Col span={6}>
           <Card>
-            <Statistic title="净利润(扣拒付)" value={summary?.totals?.net_profit ?? 0} precision={4} />
+            <Statistic 
+              title="净利润(扣拒付)" 
+              value={isManager ? (managerSummary?.totals?.net_profit ?? 0) : (summary?.totals?.net_profit ?? 0)} 
+              precision={4} 
+            />
           </Card>
         </Col>
         <Col span={6}>
           <Card>
-            <Statistic title="平均每日收益" value={summary?.totals?.avg_daily_profit ?? 0} precision={4} />
+            <Statistic 
+              title="平均每日收益" 
+              value={isManager ? (managerSummary?.totals?.avg_daily_profit ?? 0) : (summary?.totals?.avg_daily_profit ?? 0)} 
+              precision={4} 
+            />
           </Card>
         </Col>
       </Row>
 
-      <Card title={`按平台汇总（当天=${summary?.today_date || '-'}；区间=${summary?.start_date || '-'} ~ ${summary?.end_date || '-'}` } style={{ marginBottom: 16 }}>
-        <Table
-          rowKey="platform_id"
-          dataSource={summary?.platforms || []}
-          columns={platformColumns}
-          loading={loading}
-          pagination={false}
-          scroll={{ x: 1200 }}
-        />
-      </Card>
+      {isManager ? (
+        // 经理：显示所有员工汇总 + 按员工汇总 + 按员工+平台明细
+        <>
+          {/* 按员工汇总 */}
+          <Card title={`按员工汇总（区间=${managerSummary?.start_date || '-'} ~ ${managerSummary?.end_date || '-'}）`} style={{ marginBottom: 16 }}>
+            <Table
+              rowKey="user_id"
+              dataSource={managerSummary?.users || []}
+              columns={[
+                { title: '员工', dataIndex: 'username', key: 'username', width: 120 },
+                { title: '总佣金', dataIndex: 'total_commission', key: 'total_commission', align: 'right', render: (v) => Number(v || 0).toFixed(4) },
+                { title: '总广告费用', dataIndex: 'total_ad_cost', key: 'total_ad_cost', align: 'right', render: (v) => Number(v || 0).toFixed(4) },
+                { title: '总拒付佣金', dataIndex: 'total_rejected_commission', key: 'total_rejected_commission', align: 'right', render: (v) => Number(v || 0).toFixed(4) },
+                { title: '净利润', dataIndex: 'net_profit', key: 'net_profit', align: 'right', render: (v) => Number(v || 0).toFixed(4) },
+              ]}
+              loading={loading}
+              pagination={false}
+              scroll={{ x: 800 }}
+            />
+          </Card>
 
-      <Card title="按天明细（可录入拒付佣金）">
-        <Table
-          rowKey={(r) => `${r.date}-${r.platform_id}`}
-          dataSource={daily}
-          columns={dailyColumns}
-          loading={loading}
-          pagination={{ pageSize: 10, showSizeChanger: true }}
-          scroll={{ x: 1000 }}
-        />
-      </Card>
+          {/* 按员工+平台明细 */}
+          <Card title="按员工+平台明细">
+            <Collapse
+              items={managerSummary?.users?.map(user => ({
+                key: user.user_id.toString(),
+                label: (
+                  <Space>
+                    <strong>{user.username}</strong>
+                    <span>总佣金: {Number(user.total_commission || 0).toFixed(4)}</span>
+                    <span>总费用: {Number(user.total_ad_cost || 0).toFixed(4)}</span>
+                    <span>净利润: {Number(user.net_profit || 0).toFixed(4)}</span>
+                  </Space>
+                ),
+                children: (
+                  <Table
+                    rowKey="platform_id"
+                    dataSource={user.platforms || []}
+                    columns={platformColumns}
+                    pagination={false}
+                    scroll={{ x: 1200 }}
+                  />
+                ),
+              })) || []}
+              defaultActiveKey={managerSummary?.users?.map(u => u.user_id.toString()) || []}
+            />
+          </Card>
+        </>
+      ) : (
+        // 员工：显示自己的数据
+        <>
+          <Card title={`按平台汇总（当天=${summary?.today_date || '-'}；区间=${summary?.start_date || '-'} ~ ${summary?.end_date || '-'}` } style={{ marginBottom: 16 }}>
+            <Table
+              rowKey="platform_id"
+              dataSource={summary?.platforms || []}
+              columns={platformColumns}
+              loading={loading}
+              pagination={false}
+              scroll={{ x: 1200 }}
+            />
+          </Card>
+
+          <Card title="按天明细（可录入拒付佣金）">
+            <Table
+              rowKey={(r) => `${r.date}-${r.platform_id}`}
+              dataSource={daily}
+              columns={dailyColumns}
+              loading={loading}
+              pagination={{ pageSize: 10, showSizeChanger: true }}
+              scroll={{ x: 1000 }}
+            />
+          </Card>
+        </>
+      )}
     </div>
   )
 }

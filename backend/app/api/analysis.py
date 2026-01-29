@@ -2,7 +2,7 @@
 数据分析API
 """
 from typing import List, Optional
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -158,8 +158,9 @@ async def get_analysis_results(
 ):
     """获取分析结果列表"""
     from app.models.affiliate_account import AffiliateAccount
+    from app.models.user import User as UserModel
     
-    query = db.query(AnalysisResult)
+    query = db.query(AnalysisResult).join(UserModel, AnalysisResult.user_id == UserModel.id)
     
     # 权限控制
     if current_user.role == "employee":
@@ -178,7 +179,22 @@ async def get_analysis_results(
         query = query.filter(AnalysisResult.analysis_date <= end_date)
     
     results = query.order_by(AnalysisResult.analysis_date.desc()).all()
-    return results
+    
+    # 构建响应，包含用户名
+    response_list = []
+    for result in results:
+        user = db.query(UserModel).filter(UserModel.id == result.user_id).first()
+        response_list.append(AnalysisResultResponse(
+            id=result.id,
+            user_id=result.user_id,
+            username=user.username if user else None,
+            affiliate_account_id=result.affiliate_account_id,
+            analysis_date=result.analysis_date,
+            result_data=result.result_data,
+            created_at=result.created_at,
+        ))
+    
+    return response_list
 
 
 @router.get("/results/{result_id}", response_model=AnalysisResultResponse)
@@ -233,6 +249,8 @@ async def generate_l7d_from_daily(
     from collections import defaultdict
     from app.models.ad_campaign import AdCampaign
     from app.models.ad_campaign_daily_metric import AdCampaignDailyMetric
+    from app.models.data_upload import DataUpload, UploadType
+    from app.services.analysis_service import AnalysisService
 
     # 1）确定日期范围：end = 请求里的日期，默认今天；start = end - 6 天
     if request.end_date:
@@ -243,6 +261,59 @@ async def generate_l7d_from_daily(
     else:
         end = date.today()
     start = end - timedelta(days=6)
+
+    # 2.5）尝试从过去7天表1（Google Ads 上传）中提取 IS Budget丢失 / IS Rank丢失
+    # - 仅用于补齐 L7D 输出中的两列；其它字段继续来自 daily metrics 聚合
+    is_map = {}  # campaign_name -> {"IS Budget丢失": value, "IS Rank丢失": value}
+    try:
+        # 推断平台：若指定了联盟账号，则用该账号的平台ID；否则不限定平台（取用户最近7天的所有谷歌上传）
+        platform_id = None
+        if request.affiliate_account_id:
+            from app.models.affiliate_account import AffiliateAccount
+            acc = db.query(AffiliateAccount).filter(AffiliateAccount.id == request.affiliate_account_id).first()
+            platform_id = acc.platform_id if acc else None
+
+        q_upload = db.query(DataUpload).filter(
+            DataUpload.upload_type == UploadType.GOOGLE_ADS,
+            DataUpload.upload_date >= start,
+            DataUpload.upload_date <= end,
+        )
+        # 员工仅看自己的上传；经理按当前用户（按钮在前端通常为员工）也只用自己的上传更安全
+        q_upload = q_upload.filter(DataUpload.user_id == current_user.id)
+        if platform_id:
+            q_upload = q_upload.filter(DataUpload.platform_id == platform_id)
+
+        uploads = q_upload.order_by(DataUpload.upload_date.asc()).all()
+        if uploads:
+            svc = AnalysisService()
+            # 用“最近一天优先”的策略：同广告系列取最后一个非空值覆盖
+            for up in uploads:
+                df = svc._read_file(up.file_path)
+                df = svc._clean_google_data(df)
+                if df is None or df.empty:
+                    continue
+                # 需要列：广告系列 + 预算错失份额 + 排名错失份额
+                if '广告系列' not in df.columns:
+                    continue
+                for _, r in df.iterrows():
+                    name = r.get('广告系列')
+                    if name is None:
+                        continue
+                    name = str(name).strip()
+                    if not name:
+                        continue
+                    b = r.get('预算错失份额', None)
+                    rk = r.get('排名错失份额', None)
+                    # 兼容：清洗里会把份额格式化成字符串百分比
+                    if name not in is_map:
+                        is_map[name] = {"IS Budget丢失": None, "IS Rank丢失": None}
+                    if b not in [None, '', '-']:
+                        is_map[name]["IS Budget丢失"] = b
+                    if rk not in [None, '', '-']:
+                        is_map[name]["IS Rank丢失"] = rk
+    except Exception:
+        # 不影响L7D生成；缺失时前端可为空
+        pass
 
     # 2）查出这 7 天内、当前用户相关的 daily metrics
     q = db.query(AdCampaignDailyMetric).join(AdCampaign)
@@ -278,6 +349,7 @@ async def generate_l7d_from_daily(
         roi = ((comm - cost) / cost) if cost > 0 else None
 
         campaign = items[0].campaign  # 关联的 AdCampaign 记录
+        is_vals = is_map.get(campaign.campaign_name, {}) if is_map else {}
 
         rows.append({
             "广告系列名": campaign.campaign_name,
@@ -289,6 +361,8 @@ async def generate_l7d_from_daily(
             "L7D花费": cost,
             "L7D出单天数": order_days,
             "当前Max CPC": max_cpc_7d,
+            "IS Budget丢失": is_vals.get("IS Budget丢失"),
+            "IS Rank丢失": is_vals.get("IS Rank丢失"),
             "ROI": roi,
             "点击": clicks,
             "订单": orders,
@@ -319,6 +393,153 @@ async def generate_l7d_from_daily(
         "status": "completed",
         "total_rows": len(rows),
     }
+
+
+@router.post("/from-daily-with-google")
+async def generate_l7d_from_daily_with_google(
+    affiliate_account_id: Optional[int] = Form(default=None),
+    end_date: Optional[str] = Form(default=None),
+    google_file: UploadFile = File(...),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    从每日指标表生成 L7D 主数据，同时额外上传“过去7天谷歌表1”，
+    仅用于提取 IS Budget丢失 / IS Rank丢失（其余字段仍来自每日数据）。
+    """
+    from datetime import date, datetime, timedelta
+    from collections import defaultdict
+    from tempfile import NamedTemporaryFile
+    from app.models.ad_campaign import AdCampaign
+    from app.models.ad_campaign_daily_metric import AdCampaignDailyMetric
+    from app.services.analysis_service import AnalysisService
+
+    # 1）日期范围
+    if end_date:
+        try:
+            end = datetime.strptime(end_date, "%Y-%m-%d").date()
+        except Exception:
+            end = date.today()
+    else:
+        end = date.today()
+    start = end - timedelta(days=6)
+
+    # 2）读取上传的谷歌表，提取 IS 两列（按广告系列名；若有日期列则按区间过滤，并取最近一天）
+    is_map = {}
+    try:
+        suffix = ".xlsx"
+        if google_file.filename and google_file.filename.lower().endswith(".csv"):
+            suffix = ".csv"
+        with NamedTemporaryFile(delete=True, suffix=suffix) as tmp:
+            tmp.write(await google_file.read())
+            tmp.flush()
+            svc = AnalysisService()
+            df = svc._read_file(tmp.name)
+            df = svc._clean_google_data(df)
+            if df is not None and not df.empty and '广告系列' in df.columns:
+                # 可选日期列：如果存在，优先筛选最近7天
+                date_col = None
+                for c in df.columns:
+                    cs = str(c)
+                    if cs in ['日期', 'Date', 'date', 'Day', 'day']:
+                        date_col = c
+                        break
+                if date_col:
+                    try:
+                        import pandas as _pd
+                        dser = _pd.to_datetime(df[date_col], errors='coerce').dt.date
+                        df = df.assign(__d=dser)
+                        df = df[(df['__d'] >= start) & (df['__d'] <= end)].copy()
+                        df = df.sort_values('__d')
+                    except Exception:
+                        pass
+
+                for _, r in df.iterrows():
+                    name = r.get('广告系列')
+                    if name is None:
+                        continue
+                    name = str(name).strip()
+                    if not name:
+                        continue
+                    b = r.get('预算错失份额', None)
+                    rk = r.get('排名错失份额', None)
+                    if name not in is_map:
+                        is_map[name] = {"IS Budget丢失": None, "IS Rank丢失": None}
+                    if b not in [None, '', '-']:
+                        is_map[name]["IS Budget丢失"] = b
+                    if rk not in [None, '', '-']:
+                        is_map[name]["IS Rank丢失"] = rk
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"读取谷歌表失败: {str(e)}")
+
+    # 3）查 7 天 daily metrics
+    q = db.query(AdCampaignDailyMetric).join(AdCampaign)
+    if current_user.role == UserRole.EMPLOYEE:
+        q = q.filter(AdCampaignDailyMetric.user_id == current_user.id)
+    if affiliate_account_id:
+        q = q.filter(AdCampaign.affiliate_account_id == affiliate_account_id)
+    metrics = q.filter(
+        AdCampaignDailyMetric.date >= start,
+        AdCampaignDailyMetric.date <= end,
+    ).all()
+    if not metrics:
+        return {"status": "completed", "total_rows": 0, "data": [], "summary": {}}
+
+    # 4）按 campaign_id 聚合 + 合并 IS 两列
+    grouped = defaultdict(list)
+    for m in metrics:
+        grouped[m.campaign_id].append(m)
+
+    rows = []
+    for campaign_id, items in grouped.items():
+        clicks = sum(m.clicks or 0 for m in items)
+        cost = sum(m.cost or 0 for m in items)
+        comm = sum(m.commission or 0 for m in items)
+        orders = sum(m.orders or 0 for m in items)
+        order_days = sum(1 for m in items if (m.orders or 0) > 0)
+        max_cpc_7d = max((m.current_max_cpc or 0) for m in items)
+        roi = ((comm - cost) / cost) if cost > 0 else None
+
+        campaign = items[0].campaign
+        is_vals = is_map.get(campaign.campaign_name, {}) if is_map else {}
+
+        rows.append({
+            "广告系列名": campaign.campaign_name,
+            "账号=CID": campaign.cid_account,
+            "MID": campaign.merchant_id,
+            "投放国家": campaign.country,
+            "L7D点击": clicks,
+            "L7D佣金": comm,
+            "L7D花费": cost,
+            "L7D出单天数": order_days,
+            "当前Max CPC": max_cpc_7d,
+            "IS Budget丢失": is_vals.get("IS Budget丢失"),
+            "IS Rank丢失": is_vals.get("IS Rank丢失"),
+            "ROI": roi,
+            "点击": clicks,
+            "订单": orders,
+        })
+
+    result = {
+        "status": "completed",
+        "total_rows": len(rows),
+        "data": rows,
+        "summary": {},
+    }
+
+    analysis_result = AnalysisResult(
+        user_id=current_user.id,
+        affiliate_account_id=affiliate_account_id,
+        upload_id_google=None,
+        upload_id_affiliate=None,
+        analysis_date=end,
+        result_data=result,
+    )
+    db.add(analysis_result)
+    db.commit()
+    db.refresh(analysis_result)
+
+    return {"id": analysis_result.id, "status": "completed", "total_rows": len(rows)}
 
 
 

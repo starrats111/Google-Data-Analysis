@@ -62,3 +62,25 @@ class ExpenseDailyResponse(BaseModel):
     rows: List[ExpenseDailyRow]
 
 
+class ExpenseUserSummary(BaseModel):
+    """按员工汇总"""
+    user_id: int
+    username: str
+    total_commission: float
+    total_ad_cost: float
+    total_rejected_commission: float
+    net_profit: float
+    platforms: List[ExpensePlatformSummary]  # 该员工各平台的费用
+
+
+class ExpenseManagerSummaryResponse(BaseModel):
+    """经理查看所有员工的费用汇总"""
+    start_date: str
+    end_date: str
+    today_date: str
+    # 所有员工汇总
+    totals: ExpenseTotals
+    # 按员工汇总
+    users: List[ExpenseUserSummary]
+
+

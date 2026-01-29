@@ -218,6 +218,9 @@ class AnalysisService:
                         from app.models.ad_campaign_daily_metric import AdCampaignDailyMetric
                         if isinstance(db, Session):
                             d = _dt.strptime(str(analysis_date), "%Y-%m-%d").date()
+                            # 本周口径：按自然周（周一 ~ 今天）
+                            start_week = d - _td(days=d.weekday())
+                            # 过去7天口径（用于“当前Max CPC”自动读取）
                             start_7d = d - _td(days=6)
 
                             if '本周费用' not in output_df.columns:
@@ -242,17 +245,25 @@ class AnalysisService:
                                 if not campaign:
                                     continue
 
-                                metrics = db.query(AdCampaignDailyMetric).filter(
+                                # 本周(自然周)汇总：佣金/费用/ROI
+                                week_metrics = db.query(AdCampaignDailyMetric).filter(
+                                    AdCampaignDailyMetric.user_id == user_id,
+                                    AdCampaignDailyMetric.campaign_id == campaign.id,
+                                    AdCampaignDailyMetric.date >= start_week,
+                                    AdCampaignDailyMetric.date <= d,
+                                ).all()
+                                week_cost = sum(float(m.cost or 0) for m in week_metrics)
+                                week_comm = sum(float(m.commission or 0) for m in week_metrics)
+                                week_roi = ((week_comm - week_cost) / week_cost) if week_cost > 0 else None
+
+                                # 过去7天最高 MaxCPC：用于“当前Max CPC”
+                                metrics_7d = db.query(AdCampaignDailyMetric).filter(
                                     AdCampaignDailyMetric.user_id == user_id,
                                     AdCampaignDailyMetric.campaign_id == campaign.id,
                                     AdCampaignDailyMetric.date >= start_7d,
                                     AdCampaignDailyMetric.date <= d,
                                 ).all()
-
-                                week_cost = sum(float(m.cost or 0) for m in metrics)
-                                week_comm = sum(float(m.commission or 0) for m in metrics)
-                                week_roi = ((week_comm - week_cost) / week_cost) if week_cost > 0 else None
-                                max_cpc_7d = max([float(m.current_max_cpc or 0) for m in metrics], default=0.0)
+                                max_cpc_7d = max([float(m.current_max_cpc or 0) for m in metrics_7d], default=0.0)
 
                                 output_df.at[idx, '本周费用'] = week_cost
                                 output_df.at[idx, '本周佣金'] = week_comm
@@ -331,9 +342,11 @@ class AnalysisService:
                     '广告判定',
                     '建议动作',
                 ]
+                # 对每日分析，缺失的数值列默认补 0（避免前端显示“-”误解为缺失）
+                numeric_default_zero = {'预算', '展示', '点击', '费用', '订单', '佣金', 'CPC', '本周费用', '本周佣金'}
                 for col in output_columns:
                     if col not in output_df.columns:
-                        output_df[col] = None
+                        output_df[col] = 0 if col in numeric_default_zero else None
                 output_df = output_df[output_columns]
 
             # ====== L7D：通用模板 ======
@@ -475,10 +488,11 @@ class AnalysisService:
                     return 0.0
 
             metric.clicks = _f(row.get("点击", 0))
+            metric.impressions = _f(row.get("展示", 0))  # 展示次数（来自表1）
             metric.orders = _f(row.get("订单", 0))
             metric.budget = _f(row.get("预算", 0))
             metric.cpc = _f(row.get("CPC", 0))
-            metric.cost = _f(row.get("费用", 0))
+            metric.cost = _f(row.get("费用", 0))  # 费用（来自表1）
             metric.commission = _f(row.get("佣金", row.get("回传佣金", 0)))
             metric.past_seven_days_order_days = _f(row.get("过去七天出单天数", 0))
             metric.current_max_cpc = _f(row.get("最高CPC", row.get("当前Max CPC", 0)))
@@ -755,27 +769,51 @@ class AnalysisService:
         
         尝试跳过可能的标题行，找到真正的列名行
         """
-        # 先读取前几行来检测标题行位置
-        df_preview = pd.read_excel(file_path, engine='openpyxl', nrows=5)
-        
-        # 检测最佳标题行位置（从第0行到第3行）
+        import logging
+        logger = logging.getLogger(__name__)
+
+        # 更鲁棒：扫描前20行，按“业务关键词命中数”识别表头行
+        preview = pd.read_excel(file_path, engine='openpyxl', header=None, nrows=20)
+
+        header_keywords = [
+            '广告系列', 'Campaign',
+            '点击', 'Clicks',
+            '展示', '展示次数', 'Impr', 'Impressions',
+            '费用', '花费', 'Cost',
+            'CPC', 'Avg CPC', '每次点击',
+            '最高CPC', 'Max CPC',
+            '货币', 'Currency',
+            '预算', 'Budget',
+        ]
+
         best_header = 0
-        best_score = 0
-        
-        for header_row in range(min(4, len(df_preview))):
-            df_test = pd.read_excel(file_path, engine='openpyxl', header=header_row, nrows=10)
-            # 计算有效列名数量（非Unnamed且非空）
-            valid_cols = sum(1 for col in df_test.columns 
-                           if not str(col).startswith('Unnamed') 
-                           and str(col).strip() 
-                           and not pd.isna(col))
-            # 如果这一行有更多有效列名，选择它
-            if valid_cols > best_score:
-                best_score = valid_cols
-                best_header = header_row
+        best_score = -1
+        for r in range(min(20, len(preview))):
+            row_vals = preview.iloc[r].tolist()
+            score = 0
+            for v in row_vals:
+                if v is None or (pd is not None and pd.isna(v)):
+                    continue
+                s = str(v).strip()
+                if not s:
+                    continue
+                for kw in header_keywords:
+                    if kw.lower() in s.lower():
+                        score += 1
+                        break
+            if score > best_score:
+                best_score = score
+                best_header = r
+
+        logger.info(f"Excel表头识别：best_header={best_header}, score={best_score}, file={file_path}")
         
         # 使用最佳标题行读取完整数据
         df = pd.read_excel(file_path, engine='openpyxl', header=best_header)
+        try:
+            cols_preview = ", ".join([str(c) for c in df.columns[:60].tolist()])
+            logger.info(f"Excel读取列名（前60个，共{len(df.columns)}列）: {cols_preview}")
+        except Exception:
+            pass
         
         # 清理数据：去除完全空白的行和列
         df = df.dropna(how='all').dropna(axis=1, how='all')
@@ -828,8 +866,16 @@ class AnalysisService:
         # 统一关键字段列名（优先匹配中文原始列名，其次英文）
         campaign_col = self._find_column(df_clean, ['广告系列', 'Campaign', 'campaign', 'Campaign name', '广告系列名称'])
         clicks_col = self._find_column(df_clean, ['点击次数', '点击', 'Clicks', 'clicks', '点击数', 'Click Count', 'click count'])
-        impr_col = self._find_column(df_clean, ['展示', '展示次数', 'Impr.', 'Impr', 'Impressions', 'impressions'])
-        cost_col = self._find_column(df_clean, ['费用', 'Cost', 'cost', '花费', '总费用', '费用 ($)', 'Cost ($)'])
+        # 展示次数：必须取“展示次数/Impressions”（整数），不要误匹配到“展示次数份额/Impression share”（小数/百分比）
+        impr_col = self._find_impressions_count_column(df_clean)
+        cost_col = self._find_column(df_clean, [
+            '费用', '花费', '总费用',
+            'Cost', 'cost',
+            '费用 ($)', 'Cost ($)',
+            '费用(USD)', '费用（USD）', '费用 (USD)',
+            '花费(USD)', '花费（USD）', '花费 (USD)',
+            '费用(美元)', '费用（美元）', '费用 (美元)',
+        ])
         cpc_col = self._find_column(df_clean, ['平均每次点击费用', 'CPC', 'cpc', '每次点击成本', '点击成本', 'Avg CPC', 'Cost Per Click'])
         max_cpc_col = self._find_column(df_clean, ['最高CPC', '最高每次点击费用', 'Max CPC', 'max cpc', '最高点击成本'])
         currency_col = self._find_column(df_clean, ['货币代码', '货币', 'Currency code', 'Currency Code', 'Currency', 'currency'])
@@ -908,6 +954,26 @@ class AnalysisService:
             df_clean['过去七天出单天数'] = df_clean['过去七天出单天数'].apply(self._to_number)
         if '预算' in df_clean.columns:
             df_clean['预算'] = df_clean['预算'].apply(self._to_number)
+
+        # 费用是核心列：
+        # - 优先从表1直接读取“费用”
+        # - 若表1缺少“费用”，但具备“点击”和“CPC”，则用 费用=点击*CPC 兜底（仍然来自表1字段）
+        # - 若仍无法得到费用，则报错（避免后续静默变成0）
+        if '费用' not in df_clean.columns:
+            if ('点击' in df_clean.columns) and ('CPC' in df_clean.columns):
+                try:
+                    import logging
+                    logging.getLogger(__name__).warning("表1缺少“费用”列，使用 费用=点击*CPC 兜底计算")
+                except Exception:
+                    pass
+                df_clean['费用'] = df_clean['点击'] * df_clean['CPC']
+            else:
+                cols_preview = ", ".join([str(c) for c in df_clean.columns[:60].tolist()])
+                raise ValueError(
+                    "无法找到表1中的费用列，且无法用 点击*CPC 推导费用。\n"
+                    "请在谷歌导出报表时勾选“费用/花费/Cost”列，或确保表1包含“点击”和“CPC”。\n"
+                    f"表1列名示例（前60个，共{len(df_clean.columns)}列）: {cols_preview}"
+                )
 
         # 货币换算：若表1为人民币(CNY/RMB)，将费用/CPC/最高CPC换算为美元再进入计算
         if '货币代码' in df_clean.columns:
@@ -1084,11 +1150,43 @@ class AnalysisService:
         s = s.replace('$', '').replace('￥', '').replace('¥', '').replace('€', '').replace('£', '').strip()
         # 去掉百分号（按数值处理）
         s = s.replace('%', '').strip()
-        # 处理千分位/逗号小数
+        # 处理千分位/逗号小数/欧洲格式
         if ',' in s and '.' in s:
-            s = s.replace(',', '')
+            # 既有逗号又有点：判断最后一个分隔符谁更靠后
+            # - 1,234.56 -> 逗号千分位，点小数
+            # - 1.234,56 -> 点千分位，逗号小数
+            if s.rfind(',') > s.rfind('.'):
+                # 欧式：去掉点千分位，逗号改小数点
+                s = s.replace('.', '')
+                s = s.replace(',', '.')
+            else:
+                # 美式：去掉逗号千分位
+                s = s.replace(',', '')
         elif ',' in s and '.' not in s:
-            s = s.replace(',', '.')
+            # 只有逗号：可能是千分位(1,234,567)或小数(16,41)
+            if s.count(',') > 1:
+                # 多个逗号几乎必然是千分位
+                s = s.replace(',', '')
+            else:
+                parts = s.split(',')
+                # 末段3位且其他段都是数字：按千分位处理 1,234
+                if len(parts) == 2 and len(parts[1]) == 3 and parts[0].replace('-', '').isdigit() and parts[1].isdigit():
+                    s = s.replace(',', '')
+                else:
+                    # 否则按逗号小数处理 16,41
+                    s = s.replace(',', '.')
+        elif '.' in s and ',' not in s:
+            # 只有点：可能是千分位 1.234.567 或小数 12.34
+            if s.count('.') > 1:
+                parts = s.split('.')
+                # 如果每段(除第一段可能含负号)都是数字，且末段长度为3，按千分位处理
+                if parts[-1].isdigit() and len(parts[-1]) == 3 and all(p.replace('-', '').isdigit() for p in parts):
+                    s = s.replace('.', '')
+                else:
+                    # 否则保留最后一个点为小数点，去掉其余点
+                    last = parts[-1]
+                    head = ''.join(parts[:-1])
+                    s = f"{head}.{last}"
         # 去掉其他非数字字符（保留负号和小数点）
         s = re.sub(r'[^0-9\.\-]', '', s)
         try:
@@ -1265,9 +1363,16 @@ class AnalysisService:
                            ", ".join(df_google.columns[:10].tolist()) + 
                            "\n请确保表1包含'CPC'、'每次点击成本'或'平均每次点击费用'等字段。")
 
-        # 展示（来自表1，如有；用于每日分析）
-        if '展示' in merged.columns:
-            result_df['展示'] = merged['展示'].fillna(0)
+        # 展示（来自表1；用于每日分析）
+        # 兜底：即使清洗阶段未成功重命名，也尝试在 merged 中匹配“展示次数/Impressions”等列
+        # 同时排除“展示次数份额/Impression share”等份额列
+        impr_col_merged = None
+        try:
+            impr_col_merged = self._find_impressions_count_column(merged)
+        except Exception:
+            impr_col_merged = None
+        if impr_col_merged and impr_col_merged in merged.columns:
+            result_df['展示'] = merged[impr_col_merged].fillna(0)
 
         # 投放国家（来自表1，由广告系列名解析；用于每日分析）
         if '投放国家' in merged.columns:
@@ -1279,11 +1384,14 @@ class AnalysisService:
         else:
             result_df['订单'] = 0
         
-        # 费用（来自表1）——保守ROI计算依赖费用，因此需要在ROI计算前准备好
+        # 费用（来自表1）——核心列，必须存在（避免静默变0）
         if '费用' in merged.columns:
             result_df['费用'] = merged['费用'].fillna(0)
         else:
-            result_df['费用'] = 0
+            raise ValueError(
+                "合并后仍无法找到“费用”列，请检查表1费用列是否识别成功。\n"
+                f"合并后的列名示例（前30个）: {', '.join([str(c) for c in merged.columns[:30].tolist()])}"
+            )
 
         # 佣金（来自表2）——对外统一命名为“佣金”，不再输出“回传佣金”
         if '回传佣金' in merged.columns:
@@ -1556,6 +1664,74 @@ class AnalysisService:
                 if name_lower in col_lower or col_lower in name_lower:
                     return col
         
+        return None
+
+    def _is_impression_share_series(self, series: "pd.Series") -> bool:
+        """
+        判断一列是否更像“展示份额/错失份额”，而不是“展示次数”：
+        - 常见表现：值在 0~1 或 0~100（带%），且列名包含 share/份额/错失/lost 等
+        """
+        try:
+            if series is None:
+                return False
+            s = series.dropna()
+            if len(s) == 0:
+                return False
+            # 取前20个非空样本
+            sample = s.head(20).tolist()
+            raw = [str(x).strip() for x in sample if str(x).strip()]
+            if any('%' in x for x in raw):
+                return True
+            nums = [self._to_number(x) for x in sample]
+            nums = [n for n in nums if n is not None]
+            if not nums:
+                return False
+            mx = max(nums)
+            # 份额常见 0~1 或 0~100
+            if 0 <= mx <= 1.5:
+                return True
+            if 0 < mx <= 100 and any('%' in x for x in raw):
+                return True
+            return False
+        except Exception:
+            return False
+
+    def _find_impressions_count_column(self, df: pd.DataFrame) -> Optional[str]:
+        """
+        专门用于找到“展示次数(整数)”列，避免误匹配到“展示份额/错失份额”。
+        """
+        if df is None or getattr(df, "columns", None) is None:
+            return None
+
+        cols = list(df.columns)
+        # 1) 强优先：精确列名
+        strong_names = ['展示次数', 'Impressions', 'impressions', 'Impr.', 'Impr', '展示']
+        for name in strong_names:
+            if name in cols:
+                # 如果这个“展示”列其实是份额（0~1 或带%），则不要用它
+                if name == '展示' and self._is_impression_share_series(df[name]):
+                    continue
+                return name
+
+        # 2) 次优先：包含“展示次数/Impressions/Impr”且不包含份额/错失
+        bad_tokens = ['份额', 'Share', 'share', '错失', 'lost', 'Lost', 'IS', 'is']
+        good_tokens = ['展示次数', 'Impressions', 'impressions', 'Impr', 'impr', '展示']
+        candidates = []
+        for c in cols:
+            cs = str(c)
+            if any(t in cs for t in bad_tokens):
+                continue
+            if any(t in cs for t in good_tokens):
+                candidates.append(c)
+
+        # 3) 从候选里挑一个“不像份额”的
+        for c in candidates:
+            try:
+                if not self._is_impression_share_series(df[c]):
+                    return c
+            except Exception:
+                continue
+
         return None
     
     def _calculate_summary(self, df: pd.DataFrame) -> Dict:

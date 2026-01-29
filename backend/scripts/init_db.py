@@ -8,7 +8,16 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app.database import engine, Base
-from app.models import User, AffiliatePlatform, AffiliateAccount, DataUpload, AnalysisResult
+from app.models import (
+    User,
+    AffiliatePlatform,
+    AffiliateAccount,
+    DataUpload,
+    AnalysisResult,
+    AdCampaign,
+    ExpenseAdjustment,
+    AdCampaignDailyMetric,
+)
 
 def init_db():
     """创建所有表"""

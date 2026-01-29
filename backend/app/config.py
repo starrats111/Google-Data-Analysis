@@ -92,6 +92,12 @@ class Settings(BaseSettings):
     # 用于当谷歌广告表1为人民币(CNY/RMB)时，将费用/CPC等换算为美元(USD)
     # 含义：1 USD = CNY_TO_USD_RATE CNY，因此 CNY -> USD 需要除以该值
     CNY_TO_USD_RATE: float = 7.2
+
+    # ===== AI 点评（可选）=====
+    # 若不配置 OPENAI_API_KEY，则系统自动使用规则版点评（不影响功能）
+    OPENAI_API_KEY: str = ""
+    OPENAI_MODEL: str = "gpt-4o-mini"
+    OPENAI_BASE_URL: str = "https://api.openai.com/v1"
     
     if SettingsConfigDict is not None:
         # Pydantic v2

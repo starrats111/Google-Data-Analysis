@@ -36,7 +36,11 @@ function App() {
         >
           <Route index element={<Dashboard />} />
           <Route path="upload" element={<Upload />} />
-          <Route path="analysis" element={<Analysis />} />
+          {/* L7D 分析 & 每日分析 分开路由 */}
+          <Route path="analysis-l7d" element={<Analysis mode="l7d" />} />
+          <Route path="analysis-daily" element={<Analysis mode="daily" />} />
+          {/* 兼容老链接：/analysis 默认跳到 L7D 分析页 */}
+          <Route path="analysis" element={<Navigate to="/analysis-l7d" replace />} />
           <Route path="accounts" element={<AffiliateAccounts />} />
           <Route path="ad-campaigns" element={<AdCampaigns />} />
           <Route path="expenses" element={<Expenses />} />

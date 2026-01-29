@@ -1,13 +1,16 @@
-import React, { useEffect, useState } from 'react'
-import { Card, Row, Col, Table, message } from 'antd'
+import React, { useEffect, useMemo, useState } from 'react'
+import { Card, Row, Col, Table, message, Segmented, Tag, Typography, Space } from 'antd'
 import { useAuth } from '../store/authStore'
 import api from '../services/api'
+import ReactECharts from 'echarts-for-react'
 
 const Dashboard = () => {
   const { user } = useAuth()
   const [overviewData, setOverviewData] = useState(null)
   const [employeeData, setEmployeeData] = useState([])
   const [loading, setLoading] = useState(false)
+  const [insightRange, setInsightRange] = useState('过去7天')
+  const [insights, setInsights] = useState(null)
 
   useEffect(() => {
     if (user?.role === 'manager') {
@@ -15,7 +18,7 @@ const Dashboard = () => {
     } else {
       fetchEmployeeData()
     }
-  }, [user])
+  }, [user, insightRange])
 
   const fetchManagerData = async () => {
     setLoading(true)
@@ -37,8 +40,12 @@ const Dashboard = () => {
     // 员工个人数据
     setLoading(true)
     try {
-      const response = await api.get('/api/user/statistics')
-      setOverviewData(response.data)
+      const [statRes, insightRes] = await Promise.all([
+        api.get('/api/user/statistics'),
+        api.get('/api/dashboard/employee-insights', { params: { range: insightRange === '过去15天' ? '15d' : insightRange === '本月' ? 'month' : '7d' } }),
+      ])
+      setOverviewData(statRes.data)
+      setInsights(insightRes.data)
     } catch (error) {
       message.error('获取数据失败')
     } finally {
@@ -93,18 +100,106 @@ const Dashboard = () => {
     )
   }
 
+  const { Text } = Typography
+
+  const campaignColumns = [
+    { title: '广告系列名', dataIndex: 'campaign_name', key: 'campaign_name', ellipsis: true },
+    { title: '佣金', dataIndex: 'commission', key: 'commission', align: 'right', render: (v) => Number(v || 0).toFixed(2) },
+    { title: '费用', dataIndex: 'cost', key: 'cost', align: 'right', render: (v) => Number(v || 0).toFixed(2) },
+    { title: '订单', dataIndex: 'orders', key: 'orders', align: 'right', render: (v) => Number(v || 0).toFixed(0) },
+    { title: 'ROI', dataIndex: 'roi', key: 'roi', align: 'right', render: (v) => (v === null || v === undefined ? '-' : Number(v).toFixed(2)) },
+    {
+      title: 'AI点评',
+      dataIndex: 'ai_commentary',
+      key: 'ai_commentary',
+      render: (v) => <Text type="secondary">{v || '-'}</Text>,
+    },
+  ]
+
+  const trend = insights?.trend || []
+  const commissionOption = useMemo(() => ({
+    tooltip: { trigger: 'axis' },
+    grid: { left: 40, right: 20, top: 20, bottom: 30 },
+    xAxis: { type: 'category', data: trend.map(t => t.date) },
+    yAxis: { type: 'value' },
+    series: [{ type: 'line', data: trend.map(t => Number(t.commission || 0)), smooth: true, name: '佣金' }],
+  }), [trend])
+
+  const costOption = useMemo(() => ({
+    tooltip: { trigger: 'axis' },
+    grid: { left: 40, right: 20, top: 20, bottom: 30 },
+    xAxis: { type: 'category', data: trend.map(t => t.date) },
+    yAxis: { type: 'value' },
+    series: [{ type: 'line', data: trend.map(t => Number(t.cost || 0)), smooth: true, name: '费用' }],
+  }), [trend])
+
   return (
     <div>
-      <h2>我的数据</h2>
-      <Card>
-        <p>欢迎，{user?.username}！</p>
-        <p>这里是您的个人数据总览。</p>
+      <h2>我的数据总览</h2>
+
+      <Card style={{ marginBottom: 16 }}>
+        <Space wrap>
+          <Text>欢迎，<b>{user?.username}</b></Text>
+          <Tag color="blue">{user?.role === 'manager' ? '经理' : '员工'}</Tag>
+        </Space>
+        <div style={{ marginTop: 8 }}>
+          <Text type="secondary">区间选择：</Text>
+          <Segmented
+            style={{ marginLeft: 8 }}
+            options={['过去7天', '过去15天', '本月']}
+            value={insightRange}
+            onChange={(v) => setInsightRange(v)}
+          />
+        </div>
       </Card>
+
+      <Row gutter={16} style={{ marginBottom: 16 }}>
+        <Col span={12}>
+          <Card title="佣金走向">
+            <ReactECharts option={commissionOption} style={{ height: 260 }} />
+          </Card>
+        </Col>
+        <Col span={12}>
+          <Card title="费用走向">
+            <ReactECharts option={costOption} style={{ height: 260 }} />
+          </Card>
+        </Col>
+      </Row>
+
+      <Row gutter={16}>
+        <Col span={12}>
+          <Card title="数据最好的广告系列 Top3（按 ROI）" extra={<Text type="secondary">{insights?.start_date} ~ {insights?.end_date}</Text>}>
+            <Table
+              columns={campaignColumns}
+              dataSource={insights?.top3 || []}
+              rowKey="campaign_id"
+              loading={loading}
+              pagination={false}
+              size="small"
+              scroll={{ x: 900 }}
+            />
+          </Card>
+        </Col>
+        <Col span={12}>
+          <Card title="数据最差的广告系列 Bottom3（按 ROI）" extra={<Text type="secondary">{insights?.start_date} ~ {insights?.end_date}</Text>}>
+            <Table
+              columns={campaignColumns}
+              dataSource={insights?.bottom3 || []}
+              rowKey="campaign_id"
+              loading={loading}
+              pagination={false}
+              size="small"
+              scroll={{ x: 900 }}
+            />
+          </Card>
+        </Col>
+      </Row>
     </div>
   )
 }
 
 export default Dashboard
+
 
 
 

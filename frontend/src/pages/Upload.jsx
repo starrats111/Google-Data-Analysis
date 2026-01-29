@@ -22,7 +22,8 @@ const UploadPage = () => {
   const [selectedGoogleUpload, setSelectedGoogleUpload] = useState(null)
   const [selectedAffiliateUpload, setSelectedAffiliateUpload] = useState(null)
   const [analysisLoading, setAnalysisLoading] = useState(false)
-  const [analysisType, setAnalysisType] = useState('l7d') // l7d / daily
+  // 默认优先“每日分析”
+  const [analysisType, setAnalysisType] = useState('daily') // l7d / daily
   // 操作指令相关参数（员工手动输入）
   const [pastSevenDaysOrders, setPastSevenDaysOrders] = useState('')
   const [maxCpcValue, setMaxCpcValue] = useState('')
@@ -160,7 +161,12 @@ const UploadPage = () => {
       setAnalysisModalVisible(false)
       // 延迟跳转，确保消息显示后再跳转
       setTimeout(() => {
-        navigate('/analysis')
+        // 按分析类型跳转到对应页面
+        if (analysisType === 'daily') {
+          navigate('/analysis-daily')
+        } else {
+          navigate('/analysis-l7d')
+        }
       }, 1000)
     } catch (error) {
       message.error(error.response?.data?.detail || '分析失败，请检查数据格式')
@@ -531,7 +537,7 @@ const UploadPage = () => {
               <br />
               <strong>重要：</strong>表1和表2必须属于同一联盟平台才能进行分析。
               <br />
-              分析完成后，结果将显示在"分析结果"页面，并自动添加阶段标签和操作指令。
+              L7D 分析完成后，结果将显示在“L7D分析”页面；每日分析结果将显示在“每日分析”页面，并自动添加阶段标签和操作指令。
             </p>
           </div>
         </Space>

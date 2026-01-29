@@ -14,6 +14,7 @@ import {
   Tag,
   Row,
   Col,
+  DatePicker,
 } from 'antd'
 import {
   PlusOutlined,
@@ -50,6 +51,7 @@ const AdCampaigns = () => {
   const [searchCampaignName, setSearchCampaignName] = useState('')
   const [filterPlatformId, setFilterPlatformId] = useState(null)
   const [filterStatus, setFilterStatus] = useState(null)
+  const [metricsDate, setMetricsDate] = useState(null) // 查看某一天的每日指标（可选）
 
   useEffect(() => {
     fetchPlatforms()
@@ -83,6 +85,7 @@ const AdCampaigns = () => {
       if (searchCampaignName) params.campaign_name = searchCampaignName
       if (filterPlatformId) params.platform_id = filterPlatformId
       if (filterStatus) params.status = filterStatus
+      if (metricsDate) params.metrics_date = metricsDate.format('YYYY-MM-DD')
 
       const response = await api.get('/api/ad-campaigns', { params })
       setCampaigns(response.data)
@@ -251,6 +254,17 @@ const AdCampaigns = () => {
         <Tag color={status === '启用' ? 'green' : 'red'}>{status}</Tag>
       ),
     },
+    ...(metricsDate
+      ? [
+          { title: '当日订单', dataIndex: 'daily_orders', key: 'daily_orders', align: 'right', width: 110 },
+          { title: '当日预算', dataIndex: 'daily_budget', key: 'daily_budget', align: 'right', width: 110 },
+          { title: '当日CPC', dataIndex: 'daily_cpc', key: 'daily_cpc', align: 'right', width: 110 },
+          { title: '当日花费', dataIndex: 'daily_cost', key: 'daily_cost', align: 'right', width: 110 },
+          { title: '当日佣金', dataIndex: 'daily_commission', key: 'daily_commission', align: 'right', width: 110 },
+          { title: 'L7D出单天数(自动)', dataIndex: 'daily_past_seven_days_order_days', key: 'daily_past_seven_days_order_days', align: 'right', width: 160 },
+          { title: '当前Max CPC(自动)', dataIndex: 'daily_current_max_cpc', key: 'daily_current_max_cpc', align: 'right', width: 160 },
+        ]
+      : []),
     {
       title: '操作',
       key: 'action',
@@ -357,6 +371,21 @@ const AdCampaigns = () => {
             </Button>
           </Col>
         </Row>
+        <Row gutter={16} style={{ marginBottom: 16 }}>
+          <Col span={6}>
+            <DatePicker
+              value={metricsDate}
+              onChange={(v) => {
+                setMetricsDate(v)
+                // 切换日期后立即刷新列表
+                setTimeout(fetchCampaigns, 0)
+              }}
+              allowClear
+              style={{ width: '100%' }}
+              placeholder="选择某一天查看每日指标(可选)"
+            />
+          </Col>
+        </Row>
 
         <Space style={{ marginBottom: 16 }}>
           <Button
@@ -394,7 +423,7 @@ const AdCampaigns = () => {
           dataSource={campaigns}
           rowKey="id"
           loading={loading}
-          scroll={{ x: 1500 }}
+          scroll={{ x: metricsDate ? 2300 : 1500 }}
           pagination={{
             showSizeChanger: true,
             showTotal: (total) => `共 ${total} 条`,

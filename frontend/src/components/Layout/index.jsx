@@ -21,7 +21,7 @@ const Layout = () => {
   const location = useLocation()
   const { user, logout } = useAuth()
 
-  const menuItems = [
+  const allMenuItems = [
     {
       key: '/',
       icon: <DashboardOutlined />,
@@ -31,11 +31,17 @@ const Layout = () => {
       key: '/upload',
       icon: <UploadOutlined />,
       label: '数据上传',
+      roles: ['employee'], // 仅员工可见
     },
     {
-      key: '/analysis',
+      key: '/analysis-l7d',
       icon: <BarChartOutlined />,
-      label: '分析结果',
+      label: 'L7D分析',
+    },
+    {
+      key: '/analysis-daily',
+      icon: <BarChartOutlined />,
+      label: '每日分析',
     },
     {
       key: '/accounts',
@@ -46,6 +52,7 @@ const Layout = () => {
       key: '/ad-campaigns',
       icon: <AppstoreOutlined />,
       label: '我的广告',
+      roles: ['employee'], // 仅员工可见
     },
     {
       key: '/expenses',
@@ -53,6 +60,12 @@ const Layout = () => {
       label: '我的费用',
     },
   ]
+
+  // 根据用户角色过滤菜单项
+  const menuItems = allMenuItems.filter(item => {
+    if (!item.roles) return true // 没有 roles 限制的，所有人都可见
+    return item.roles.includes(user?.role || '')
+  })
 
   const userMenuItems = [
     {

@@ -44,6 +44,17 @@ class AdCampaignResponse(AdCampaignBase):
     platform_id: int
     created_at: datetime
     updated_at: Optional[datetime] = None
+
+    # 可选：某一天的每日指标（通过 /api/ad-campaigns?metrics_date=YYYY-MM-DD 拉取）
+    metrics_date: Optional[str] = None
+    daily_clicks: Optional[float] = None
+    daily_orders: Optional[float] = None
+    daily_budget: Optional[float] = None
+    daily_cpc: Optional[float] = None
+    daily_cost: Optional[float] = None
+    daily_commission: Optional[float] = None
+    daily_past_seven_days_order_days: Optional[float] = None
+    daily_current_max_cpc: Optional[float] = None
     
     class Config:
         from_attributes = True
