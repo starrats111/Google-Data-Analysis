@@ -77,6 +77,8 @@ async def process_analysis(
             platform_id=affiliate_account.platform_id,
             analysis_date=affiliate_upload.upload_date,
             db=db,
+            affiliate_account_id=affiliate_account_id,
+            analysis_type=(request.analysis_type or "l7d"),
             # 传递操作指令相关参数
             past_seven_days_orders_global=request.past_seven_days_orders_global,
             max_cpc_global=request.max_cpc_global

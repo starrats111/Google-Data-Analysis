@@ -99,11 +99,12 @@ class AnomalyService:
         if not self.rules:
             return None
         
-        # 获取当前和前一天的关键指标
+        # 获取当前和对比基线（previous_data）的关键指标
+        # 兼容：旧口径使用“保守EPC/保守ROI”，新“每日分析”口径可能使用“EPC/ROI”
         current_clicks = float(current_data.get('点击', 0) or 0)
         current_orders = float(current_data.get('订单', 0) or 0)
-        current_epc = float(current_data.get('保守EPC', 0) or 0)
-        current_roi = current_data.get('保守ROI', 0)
+        current_epc = float(current_data.get('保守EPC', current_data.get('EPC', 0)) or 0)
+        current_roi = current_data.get('保守ROI', current_data.get('ROI', 0))
         if current_roi is not None:
             try:
                 current_roi = float(current_roi)
@@ -115,8 +116,8 @@ class AnomalyService:
         
         prev_clicks = float(previous_data.get('点击', 0) or 0)
         prev_orders = float(previous_data.get('订单', 0) or 0)
-        prev_epc = float(previous_data.get('保守EPC', 0) or 0)
-        prev_roi = previous_data.get('保守ROI', 0)
+        prev_epc = float(previous_data.get('保守EPC', previous_data.get('EPC', 0)) or 0)
+        prev_roi = previous_data.get('保守ROI', previous_data.get('ROI', 0))
         if prev_roi is not None:
             try:
                 prev_roi = float(prev_roi)

@@ -41,6 +41,8 @@ class AnalysisService:
         analysis_date: Optional[str] = None,
         db: Optional[object] = None,
         affiliate_account_id: Optional[int] = None,
+        # 分析类型：l7d（默认）/ daily（当日口径 + 本周对比）
+        analysis_type: str = "l7d",
         # 操作指令相关参数（员工手动输入）
         past_seven_days_orders_global: Optional[float] = None,
         max_cpc_global: Optional[float] = None
@@ -181,49 +183,191 @@ class AnalysisService:
             columns_list = list(result_df_with_actions.columns)
             logger.info(f"分析结果包含的字段: {columns_list}")
             
-            # ====== 输出通用模板：仅保留指定列，并搬运字段 ======
+            # ====== 输出：按分析类型裁剪列 ======
             # 注意：操作指令计算依赖预算错失份额/排名错失份额等字段，所以先算完指令再做裁剪。
             output_df = result_df_with_actions.copy()
-            
-            # 1) 搬运：预算错失份额/排名错失份额 -> IS Budget丢失/IS Rank丢失
-            if 'IS Budget丢失' not in output_df.columns:
-                output_df['IS Budget丢失'] = None
-            if 'IS Rank丢失' not in output_df.columns:
-                output_df['IS Rank丢失'] = None
-            if '预算错失份额' in output_df.columns:
-                output_df['IS Budget丢失'] = output_df['预算错失份额']
-            if '排名错失份额' in output_df.columns:
-                output_df['IS Rank丢失'] = output_df['排名错失份额']
-            
-            # 2) 补齐：广告系列名/MID（兼容历史字段）
+
+            # 通用补齐：广告系列名/MID（兼容历史字段）
             if '广告系列名' not in output_df.columns and '广告系列' in output_df.columns:
                 output_df['广告系列名'] = output_df['广告系列']
             if 'MID' not in output_df.columns and '商家ID' in output_df.columns:
                 output_df['MID'] = output_df['商家ID']
-            
-            # 3) 仅保留通用模板列（按截图顺序）
-            output_columns = [
-                '广告系列名',
-                '阶段标签',
-                '预算',
-                'L7D点击',
-                'L7D佣金',
-                'L7D花费',
-                'L7D出单天数',
-                '当前Max CPC',
-                'IS Budget丢失',
-                'IS Rank丢失',
-                '保守EPC',
-                '保守ROI',
-                '操作指令',
-                'MID',
-            ]
-            for col in output_columns:
-                if col not in output_df.columns:
-                    output_df[col] = None
-            
-            # 4) 仅返回这些列（删除其他无用列）
-            output_df = output_df[output_columns]
+
+            analysis_type_norm = str(analysis_type or "l7d").strip().lower()
+
+            # ====== DAILY：当日口径 + 本周(过去7天)对比 ======
+            if analysis_type_norm == "daily":
+                # ROI = (佣金-费用)/费用；EPC = 佣金/点击
+                output_df['ROI'] = output_df.apply(
+                    lambda r: ((float(r.get('佣金', 0) or 0) - float(r.get('费用', 0) or 0)) / float(r.get('费用', 0) or 0))
+                    if float(r.get('费用', 0) or 0) > 0 else None,
+                    axis=1
+                )
+                output_df['EPC'] = output_df.apply(
+                    lambda r: (float(r.get('佣金', 0) or 0) / float(r.get('点击', 0) or 0))
+                    if float(r.get('点击', 0) or 0) > 0 else 0,
+                    axis=1
+                )
+
+                # 本周(过去7天)费用/佣金/ROI + 7天最高 MaxCPC（从每日指标表拉取）
+                if db and platform_id and analysis_date:
+                    try:
+                        from datetime import datetime as _dt, timedelta as _td
+                        from sqlalchemy.orm import Session
+                        from app.models.ad_campaign import AdCampaign
+                        from app.models.ad_campaign_daily_metric import AdCampaignDailyMetric
+                        if isinstance(db, Session):
+                            d = _dt.strptime(str(analysis_date), "%Y-%m-%d").date()
+                            start_7d = d - _td(days=6)
+
+                            if '本周费用' not in output_df.columns:
+                                output_df['本周费用'] = None
+                            if '本周佣金' not in output_df.columns:
+                                output_df['本周佣金'] = None
+                            if '本周ROI' not in output_df.columns:
+                                output_df['本周ROI'] = None
+
+                            for idx, row in output_df.iterrows():
+                                mid = row.get('MID', None) or row.get('商家ID', None)
+                                campaign_name = row.get('广告系列名', None) or row.get('广告系列', None)
+                                if mid is None or campaign_name is None:
+                                    continue
+
+                                campaign = db.query(AdCampaign).filter(
+                                    AdCampaign.user_id == user_id,
+                                    AdCampaign.platform_id == platform_id,
+                                    AdCampaign.merchant_id == str(mid),
+                                    AdCampaign.campaign_name == str(campaign_name),
+                                ).first()
+                                if not campaign:
+                                    continue
+
+                                metrics = db.query(AdCampaignDailyMetric).filter(
+                                    AdCampaignDailyMetric.user_id == user_id,
+                                    AdCampaignDailyMetric.campaign_id == campaign.id,
+                                    AdCampaignDailyMetric.date >= start_7d,
+                                    AdCampaignDailyMetric.date <= d,
+                                ).all()
+
+                                week_cost = sum(float(m.cost or 0) for m in metrics)
+                                week_comm = sum(float(m.commission or 0) for m in metrics)
+                                week_roi = ((week_comm - week_cost) / week_cost) if week_cost > 0 else None
+                                max_cpc_7d = max([float(m.current_max_cpc or 0) for m in metrics], default=0.0)
+
+                                output_df.at[idx, '本周费用'] = week_cost
+                                output_df.at[idx, '本周佣金'] = week_comm
+                                output_df.at[idx, '本周ROI'] = week_roi
+                                output_df.at[idx, '当前Max CPC'] = max_cpc_7d
+
+                                # 异常类型：用过去7天(不含当天)作为基线，对比今天
+                                baseline = db.query(AdCampaignDailyMetric).filter(
+                                    AdCampaignDailyMetric.user_id == user_id,
+                                    AdCampaignDailyMetric.campaign_id == campaign.id,
+                                    AdCampaignDailyMetric.date >= (d - _td(days=7)),
+                                    AdCampaignDailyMetric.date <= (d - _td(days=1)),
+                                ).all()
+                                if baseline:
+                                    base_clicks = sum(float(m.clicks or 0) for m in baseline) / max(len(baseline), 1)
+                                    base_orders = sum(float(m.orders or 0) for m in baseline) / max(len(baseline), 1)
+                                    base_cost = sum(float(m.cost or 0) for m in baseline)
+                                    base_comm = sum(float(m.commission or 0) for m in baseline)
+                                    base_roi = ((base_comm - base_cost) / base_cost) if base_cost > 0 else 0
+                                    base_cpc = sum(float(m.cpc or 0) for m in baseline) / max(len(baseline), 1)
+                                    base_clicks_sum = sum(float(m.clicks or 0) for m in baseline)
+                                    base_epc = (base_comm / base_clicks_sum) if base_clicks_sum > 0 else 0
+
+                                    try:
+                                        anomaly_service = AnomalyService()
+                                        anomaly_service.load_rules()
+                                        current_dict = row.to_dict()
+                                        current_dict['ROI'] = float(row.get('ROI', 0) or 0)
+                                        current_dict['EPC'] = float(row.get('EPC', 0) or 0)
+                                        baseline_dict = {
+                                            '点击': base_clicks,
+                                            '订单': base_orders,
+                                            'ROI': base_roi,
+                                            'EPC': base_epc,
+                                            'CPC': base_cpc,
+                                        }
+                                        output_df.at[idx, '异常类型'] = anomaly_service.detect_anomaly(current_dict, baseline_dict)
+                                    except Exception:
+                                        pass
+                    except Exception:
+                        pass
+
+                # 广告判定 & 建议动作（每日口径）
+                def _judge(r):
+                    roi = r.get('ROI', None)
+                    try:
+                        roi = float(roi) if roi is not None else None
+                    except Exception:
+                        roi = None
+                    orders = float(r.get('订单', 0) or 0)
+                    if roi is not None and roi >= 1.5 and orders >= 3:
+                        return "健康"
+                    if roi is not None and roi >= 1 and orders >= 1:
+                        return "观察"
+                    return "危险"
+
+                output_df['广告判定'] = output_df.apply(_judge, axis=1)
+                output_df['建议动作'] = output_df['广告判定'].map({"健康": "加预算", "观察": "不动", "危险": "减/停"})
+
+                output_columns = [
+                    '广告系列名',
+                    '阶段标签',
+                    '投放国家',
+                    '预算',
+                    '展示',
+                    '点击',
+                    '费用',
+                    '订单',
+                    '佣金',
+                    'ROI',
+                    'CPC',
+                    '本周费用',
+                    '本周佣金',
+                    '本周ROI',
+                    '异常类型',
+                    '广告判定',
+                    '建议动作',
+                ]
+                for col in output_columns:
+                    if col not in output_df.columns:
+                        output_df[col] = None
+                output_df = output_df[output_columns]
+
+            # ====== L7D：通用模板 ======
+            else:
+                # 1) 搬运：预算错失份额/排名错失份额 -> IS Budget丢失/IS Rank丢失
+                if 'IS Budget丢失' not in output_df.columns:
+                    output_df['IS Budget丢失'] = None
+                if 'IS Rank丢失' not in output_df.columns:
+                    output_df['IS Rank丢失'] = None
+                if '预算错失份额' in output_df.columns:
+                    output_df['IS Budget丢失'] = output_df['预算错失份额']
+                if '排名错失份额' in output_df.columns:
+                    output_df['IS Rank丢失'] = output_df['排名错失份额']
+
+                output_columns = [
+                    '广告系列名',
+                    '阶段标签',
+                    '预算',
+                    'L7D点击',
+                    'L7D佣金',
+                    'L7D花费',
+                    'L7D出单天数',
+                    '当前Max CPC',
+                    'IS Budget丢失',
+                    'IS Rank丢失',
+                    '保守EPC',
+                    '保守ROI',
+                    '操作指令',
+                    'MID',
+                ]
+                for col in output_columns:
+                    if col not in output_df.columns:
+                        output_df[col] = None
+                output_df = output_df[output_columns]
             
             # 5) 日志：检查缺失列（理论上不应缺失）
             missing_fields = [c for c in output_columns if c not in columns_list and c not in ['广告系列名', 'MID', 'IS Budget丢失', 'IS Rank丢失']]
@@ -684,6 +828,7 @@ class AnalysisService:
         # 统一关键字段列名（优先匹配中文原始列名，其次英文）
         campaign_col = self._find_column(df_clean, ['广告系列', 'Campaign', 'campaign', 'Campaign name', '广告系列名称'])
         clicks_col = self._find_column(df_clean, ['点击次数', '点击', 'Clicks', 'clicks', '点击数', 'Click Count', 'click count'])
+        impr_col = self._find_column(df_clean, ['展示', '展示次数', 'Impr.', 'Impr', 'Impressions', 'impressions'])
         cost_col = self._find_column(df_clean, ['费用', 'Cost', 'cost', '花费', '总费用', '费用 ($)', 'Cost ($)'])
         cpc_col = self._find_column(df_clean, ['平均每次点击费用', 'CPC', 'cpc', '每次点击成本', '点击成本', 'Avg CPC', 'Cost Per Click'])
         max_cpc_col = self._find_column(df_clean, ['最高CPC', '最高每次点击费用', 'Max CPC', 'max cpc', '最高点击成本'])
@@ -725,6 +870,8 @@ class AnalysisService:
             rename_map[campaign_col] = '广告系列'
         if clicks_col and clicks_col != '点击':
             rename_map[clicks_col] = '点击'
+        if impr_col and impr_col != '展示':
+            rename_map[impr_col] = '展示'
         if cost_col and cost_col != '费用':
             rename_map[cost_col] = '费用'
         if cpc_col and cpc_col != 'CPC':
@@ -749,6 +896,8 @@ class AnalysisService:
         # 数值列转换（兼容逗号小数/千分位/货币符号）
         if '点击' in df_clean.columns:
             df_clean['点击'] = df_clean['点击'].apply(self._to_number)
+        if '展示' in df_clean.columns:
+            df_clean['展示'] = df_clean['展示'].apply(self._to_number)
         if '费用' in df_clean.columns:
             df_clean['费用'] = df_clean['费用'].apply(self._to_number)
         if 'CPC' in df_clean.columns:
@@ -791,6 +940,7 @@ class AnalysisService:
         # 从广告系列解析商家ID：序号-平台-商家名-投放国家-投放时间-商家ID（取最后一段）
         if '广告系列' in df_clean.columns:
             df_clean['商家ID'] = df_clean['广告系列'].apply(self._extract_merchant_id_from_campaign)
+            df_clean['投放国家'] = df_clean['广告系列'].apply(self._extract_country_from_campaign)
             # 确保商家ID是字符串格式
             if '商家ID' in df_clean.columns:
                 df_clean['商家ID'] = df_clean['商家ID'].astype(str).str.strip()
@@ -875,6 +1025,22 @@ class AnalysisService:
         # 例如："商家ID123" -> "123"
         m = re.search(r'(\d+)', last)
         return m.group(1) if m else None
+
+    def _extract_country_from_campaign(self, campaign: object) -> Optional[str]:
+        """
+        从广告系列名解析投放国家
+        格式：序号-平台-商家名-投放国家-投放时间-商家ID
+        """
+        if campaign is None or (pd is not None and pd.isna(campaign)):
+            return None
+        s = str(campaign).strip()
+        if not s:
+            return None
+        parts = [p.strip() for p in s.split('-')]
+        # 期望第4段为投放国家
+        if len(parts) >= 4 and parts[3]:
+            return parts[3]
+        return None
 
     def _format_percent_value(self, value: object) -> Optional[str]:
         """
@@ -1098,6 +1264,14 @@ class AnalysisService:
             raise ValueError("无法找到'CPC'相关字段。\n表1的列名（前10个）: " + 
                            ", ".join(df_google.columns[:10].tolist()) + 
                            "\n请确保表1包含'CPC'、'每次点击成本'或'平均每次点击费用'等字段。")
+
+        # 展示（来自表1，如有；用于每日分析）
+        if '展示' in merged.columns:
+            result_df['展示'] = merged['展示'].fillna(0)
+
+        # 投放国家（来自表1，由广告系列名解析；用于每日分析）
+        if '投放国家' in merged.columns:
+            result_df['投放国家'] = merged['投放国家']
         
         # 订单数（来自表2）
         if '订单' in merged.columns:

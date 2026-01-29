@@ -10,6 +10,8 @@ class AnalysisRequest(BaseModel):
     google_ads_upload_id: int
     affiliate_upload_id: int
     affiliate_account_id: Optional[int] = None
+    # 分析类型：l7d（默认，过去7天口径） / daily（当日口径 + 本周对比）
+    analysis_type: Optional[str] = "l7d"
     # 操作指令相关参数（员工手动输入，全局默认值）
     past_seven_days_orders_global: Optional[float] = None  # 过去七天出单天数（全局默认值）
     max_cpc_global: Optional[float] = None  # 最高CPC（全局默认值）
