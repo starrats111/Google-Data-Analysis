@@ -40,6 +40,7 @@ class AnalysisService:
         platform_id: Optional[int] = None,
         analysis_date: Optional[str] = None,
         db: Optional[object] = None,
+        affiliate_account_id: Optional[int] = None,
         # 操作指令相关参数（员工手动输入）
         past_seven_days_orders_global: Optional[float] = None,
         max_cpc_global: Optional[float] = None
@@ -107,6 +108,23 @@ class AnalysisService:
                 ),
                 axis=1
             )
+
+            # 7.5 写入“每日指标”到数据库（用于我的广告/7日聚合）
+            # - 仅在提供 db + analysis_date + platform_id + affiliate_account_id 时入库
+            if db and analysis_date and platform_id and affiliate_account_id:
+                try:
+                    self._upsert_daily_metrics(
+                        db=db,
+                        user_id=user_id,
+                        platform_id=platform_id,
+                        affiliate_account_id=affiliate_account_id,
+                        analysis_date=analysis_date,
+                        analyzed_df=result_df_with_actions,
+                    )
+                except Exception:
+                    # 入库失败不影响当前分析出结果；错误会记录日志
+                    import logging
+                    logging.getLogger(__name__).exception("写入每日指标失败")
             
             # 8. 生成分析结果
             # 如果结果为0行，添加诊断信息
@@ -186,6 +204,7 @@ class AnalysisService:
             # 3) 仅保留通用模板列（按截图顺序）
             output_columns = [
                 '广告系列名',
+                '阶段标签',
                 '预算',
                 'L7D点击',
                 'L7D佣金',
@@ -228,6 +247,99 @@ class AnalysisService:
                 "data": [],
                 "summary": {}
             }
+
+    def _upsert_daily_metrics(
+        self,
+        db: object,
+        user_id: int,
+        platform_id: int,
+        affiliate_account_id: int,
+        analysis_date: str,
+        analyzed_df: "pd.DataFrame",
+    ) -> None:
+        """
+        将单次分析结果（逐广告系列行）写入 ad_campaign_daily_metrics。
+
+        关联键：
+        - user_id + platform_id + merchant_id(MID) + campaign_name(广告系列名/广告系列) -> ad_campaigns
+        - campaign_id + date -> ad_campaign_daily_metrics（唯一）
+        """
+        if not PANDAS_AVAILABLE:
+            return
+
+        from datetime import datetime
+        from sqlalchemy.orm import Session
+        from app.models.ad_campaign import AdCampaign
+        from app.models.ad_campaign_daily_metric import AdCampaignDailyMetric
+
+        if not isinstance(db, Session):
+            # 兼容类型注解；实际运行一定是 Session
+            return
+
+        d = datetime.strptime(str(analysis_date), "%Y-%m-%d").date()
+
+        # 逐行写入（数据量通常不大；优先正确性与可读性）
+        for _, row in analyzed_df.iterrows():
+            # 关键字段：MID + 广告系列名
+            merchant_id = row.get("MID", None) or row.get("商家ID", None)
+            campaign_name = row.get("广告系列名", None) or row.get("广告系列", None) or row.get("campaign", None)
+            if merchant_id is None or campaign_name is None:
+                continue
+            merchant_id = str(merchant_id).strip()
+            campaign_name = str(campaign_name).strip()
+            if not merchant_id or not campaign_name or merchant_id.lower() == "nan" or campaign_name.lower() == "nan":
+                continue
+
+            # 找/建广告系列（我的广告）
+            campaign = db.query(AdCampaign).filter(
+                AdCampaign.user_id == user_id,
+                AdCampaign.platform_id == platform_id,
+                AdCampaign.merchant_id == merchant_id,
+                AdCampaign.campaign_name == campaign_name,
+            ).first()
+            if not campaign:
+                campaign = AdCampaign(
+                    user_id=user_id,
+                    affiliate_account_id=affiliate_account_id,
+                    platform_id=platform_id,
+                    merchant_id=merchant_id,
+                    campaign_name=campaign_name,
+                    status="启用",
+                )
+                db.add(campaign)
+                db.flush()  # 获取 campaign.id
+
+            # Upsert 当日指标
+            metric = db.query(AdCampaignDailyMetric).filter(
+                AdCampaignDailyMetric.campaign_id == campaign.id,
+                AdCampaignDailyMetric.date == d,
+            ).first()
+            if not metric:
+                metric = AdCampaignDailyMetric(
+                    user_id=user_id,
+                    campaign_id=campaign.id,
+                    date=d,
+                )
+                db.add(metric)
+
+            def _f(x) -> float:
+                try:
+                    if x is None:
+                        return 0.0
+                    return float(x)
+                except Exception:
+                    return 0.0
+
+            metric.clicks = _f(row.get("点击", 0))
+            metric.orders = _f(row.get("订单", 0))
+            metric.budget = _f(row.get("预算", 0))
+            metric.cpc = _f(row.get("CPC", 0))
+            metric.cost = _f(row.get("费用", 0))
+            metric.commission = _f(row.get("佣金", row.get("回传佣金", 0)))
+            metric.past_seven_days_order_days = _f(row.get("过去七天出单天数", 0))
+            metric.current_max_cpc = _f(row.get("最高CPC", row.get("当前Max CPC", 0)))
+
+        db.commit()
     
     def _read_file(self, file_path: str) -> pd.DataFrame:
         """
