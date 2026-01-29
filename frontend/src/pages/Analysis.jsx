@@ -17,6 +17,7 @@ const Analysis = () => {
   const [accounts, setAccounts] = useState([])
   const [selectedAccount, setSelectedAccount] = useState(null)
   const [dateRange, setDateRange] = useState(null)
+  const [generatingL7D, setGeneratingL7D] = useState(false)
 
   const fetchAccounts = async () => {
     try {
@@ -43,6 +44,24 @@ const Analysis = () => {
       message.error('获取分析结果失败')
     } finally {
       setLoading(false)
+    }
+  }
+
+  const handleGenerateL7DFromDaily = async () => {
+    try {
+      setGeneratingL7D(true)
+      const body = {}
+      if (selectedAccount) body.affiliate_account_id = selectedAccount
+      if (dateRange && dateRange.length === 2) {
+        body.end_date = dateRange[1].format('YYYY-MM-DD')
+      }
+      await api.post('/api/analysis/from-daily', body)
+      message.success('已基于每日数据生成一份 L7D 分析')
+      fetchResults()
+    } catch (error) {
+      message.error(error.response?.data?.detail || '生成 L7D 分析失败')
+    } finally {
+      setGeneratingL7D(false)
     }
   }
 
@@ -131,6 +150,15 @@ const Analysis = () => {
             支持按联盟账号与日期筛选；展开行可查看每条分析明细
           </Text>
         </div>
+        <Space>
+          <Button
+            type="primary"
+            loading={generatingL7D}
+            onClick={handleGenerateL7DFromDaily}
+          >
+            基于每日数据生成 L7D
+          </Button>
+        </Space>
       </div>
 
       <Card className="analysis-table" styles={{ body: { paddingTop: 14 } }}>

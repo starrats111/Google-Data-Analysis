@@ -10,7 +10,7 @@ from app.middleware.auth import get_current_user
 from app.models.user import User, UserRole
 from app.models.analysis_result import AnalysisResult
 from app.models.data_upload import DataUpload
-from app.schemas.analysis import AnalysisRequest, AnalysisResultResponse, AnalysisSummary
+from app.schemas.analysis import AnalysisRequest, AnalysisResultResponse, AnalysisSummary, DailyL7DRequest
 from app.services.analysis_service import AnalysisService
 
 router = APIRouter(prefix="/api/analysis", tags=["analysis"])
@@ -217,6 +217,108 @@ async def delete_analysis_result(
     db.delete(result)
     db.commit()
     return None
+
+
+@router.post("/from-daily")
+async def generate_l7d_from_daily(
+    request: DailyL7DRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    从每日指标表(ad_campaign_daily_metrics)聚合最近7天，生成一份L7D分析结果，
+    并保存到 analysis_results，便于在“分析结果”页面查看。
+    """
+    from datetime import date, datetime, timedelta
+    from collections import defaultdict
+    from app.models.ad_campaign import AdCampaign
+    from app.models.ad_campaign_daily_metric import AdCampaignDailyMetric
+
+    # 1）确定日期范围：end = 请求里的日期，默认今天；start = end - 6 天
+    if request.end_date:
+        try:
+            end = datetime.strptime(request.end_date, "%Y-%m-%d").date()
+        except Exception:
+            end = date.today()
+    else:
+        end = date.today()
+    start = end - timedelta(days=6)
+
+    # 2）查出这 7 天内、当前用户相关的 daily metrics
+    q = db.query(AdCampaignDailyMetric).join(AdCampaign)
+
+    if current_user.role == UserRole.EMPLOYEE:
+        q = q.filter(AdCampaignDailyMetric.user_id == current_user.id)
+
+    if request.affiliate_account_id:
+        q = q.filter(AdCampaign.affiliate_account_id == request.affiliate_account_id)
+
+    metrics = q.filter(
+        AdCampaignDailyMetric.date >= start,
+        AdCampaignDailyMetric.date <= end,
+    ).all()
+
+    if not metrics:
+        return {"status": "completed", "total_rows": 0, "data": [], "summary": {}}
+
+    # 3）按 campaign_id 聚合成 L7D
+    grouped = defaultdict(list)
+    for m in metrics:
+        grouped[m.campaign_id].append(m)
+
+    rows = []
+    for campaign_id, items in grouped.items():
+        clicks = sum(m.clicks or 0 for m in items)
+        cost = sum(m.cost or 0 for m in items)
+        comm = sum(m.commission or 0 for m in items)
+        orders = sum(m.orders or 0 for m in items)
+        order_days = sum(1 for m in items if (m.orders or 0) > 0)
+        max_cpc_7d = max((m.current_max_cpc or 0) for m in items)
+
+        roi = ((comm - cost) / cost) if cost > 0 else None
+
+        campaign = items[0].campaign  # 关联的 AdCampaign 记录
+
+        rows.append({
+            "广告系列名": campaign.campaign_name,
+            "账号=CID": campaign.cid_account,
+            "MID": campaign.merchant_id,
+            "投放国家": campaign.country,
+            "L7D点击": clicks,
+            "L7D佣金": comm,
+            "L7D花费": cost,
+            "L7D出单天数": order_days,
+            "当前Max CPC": max_cpc_7d,
+            "ROI": roi,
+            "点击": clicks,
+            "订单": orders,
+        })
+
+    result = {
+        "status": "completed",
+        "total_rows": len(rows),
+        "data": rows,
+        "summary": {},
+    }
+
+    # 4）存到 analysis_results，方便前端复用“分析结果”页面
+    analysis_result = AnalysisResult(
+        user_id=current_user.id,
+        affiliate_account_id=request.affiliate_account_id,
+        upload_id_google=None,
+        upload_id_affiliate=None,
+        analysis_date=end,
+        result_data=result,
+    )
+    db.add(analysis_result)
+    db.commit()
+    db.refresh(analysis_result)
+
+    return {
+        "id": analysis_result.id,
+        "status": "completed",
+        "total_rows": len(rows),
+    }
 
 
 

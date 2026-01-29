@@ -17,6 +17,11 @@ class AnalysisRequest(BaseModel):
     max_cpc_global: Optional[float] = None  # 最高CPC（全局默认值）
 
 
+class DailyL7DRequest(BaseModel):
+    """从每日指标表生成 L7D 分析的请求体"""
+    affiliate_account_id: Optional[int] = None  # 可选：指定联盟账号
+    end_date: Optional[str] = None  # 截止日期，YYYY-MM-DD；默认用今天
+
 class AnalysisResultResponse(BaseModel):
     id: int
     user_id: int
