@@ -22,6 +22,7 @@ const UploadPage = () => {
   const [selectedGoogleUpload, setSelectedGoogleUpload] = useState(null)
   const [selectedAffiliateUpload, setSelectedAffiliateUpload] = useState(null)
   const [analysisLoading, setAnalysisLoading] = useState(false)
+  const [analysisType, setAnalysisType] = useState('l7d') // l7d / daily
   // 操作指令相关参数（员工手动输入）
   const [pastSevenDaysOrders, setPastSevenDaysOrders] = useState('')
   const [maxCpcValue, setMaxCpcValue] = useState('')
@@ -117,7 +118,8 @@ const UploadPage = () => {
       const requestData = {
         google_ads_upload_id: selectedGoogleUpload,
         affiliate_upload_id: selectedAffiliateUpload,
-        affiliate_account_id: affiliateAccountId
+        affiliate_account_id: affiliateAccountId,
+        analysis_type: analysisType,
       }
       
       // 如果输入了全局值，添加到请求中
@@ -468,15 +470,29 @@ const UploadPage = () => {
           </div>
 
           <Divider />
+
+          <div>
+            <label style={{ display: 'block', marginBottom: 8, fontWeight: 'bold' }}>
+              分析类型：
+            </label>
+            <Select
+              style={{ width: '100%' }}
+              value={analysisType}
+              onChange={setAnalysisType}
+            >
+              <Option value="l7d">L7D分析（过去7天口径）</Option>
+              <Option value="daily">每日分析（当日 + 本周对比）</Option>
+            </Select>
+          </div>
           
           <div>
             <label style={{ display: 'block', marginBottom: 8, fontWeight: 'bold' }}>
-              操作指令参数（从谷歌中查看后手动输入）：
+              操作指令参数（一般无需手动输入）：
             </label>
             <Space direction="vertical" style={{ width: '100%' }} size="middle">
               <div>
                 <label style={{ display: 'block', marginBottom: 4, fontSize: '13px' }}>
-                  过去七天出单天数（全局默认值，可选）：
+                  过去七天出单天数（全局默认值，可选/兜底）：
                 </label>
                 <InputNumber
                   style={{ width: '100%' }}
@@ -490,7 +506,7 @@ const UploadPage = () => {
               </div>
               <div>
                 <label style={{ display: 'block', marginBottom: 4, fontSize: '13px' }}>
-                  最高CPC（全局默认值，可选）：
+                  最高CPC（全局默认值，可选/兜底）：
                 </label>
                 <InputNumber
                   style={{ width: '100%' }}
@@ -502,7 +518,7 @@ const UploadPage = () => {
                 />
               </div>
               <div style={{ padding: '8px', background: '#e6f7ff', borderRadius: '4px', fontSize: '12px', color: '#666' }}>
-                <strong>说明：</strong>这两个值用于生成操作指令。如果不输入，系统将使用默认逻辑（订单数或CPC值）。
+                <strong>说明：</strong>系统会优先从每日分析数据中自动读取“过去七天出单天数/当前Max CPC”。只有当表格里缺失这些字段时，才需要在这里手动输入作为兜底。
               </div>
             </Space>
           </div>
