@@ -26,6 +26,10 @@ app = FastAPI(title="Google Analysis Platform API")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=getattr(settings, "CORS_ORIGINS", ["*"]) or ["*"],
+    # Allow Cloudflare Pages preview subdomains like:
+    # - https://google-data-analysis.pages.dev
+    # - https://<hash>.google-data-analysis.pages.dev
+    allow_origin_regex=r"^https://([a-z0-9-]+\\.)?google-data-analysis\\.pages\\.dev$",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

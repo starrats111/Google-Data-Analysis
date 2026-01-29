@@ -74,7 +74,13 @@ class Settings(BaseSettings):
     EMPLOYEE_COUNT: int = 10
     
     # CORS配置
-    CORS_ORIGINS: List[str] = ["http://localhost:3000", "http://localhost:8000"]
+    CORS_ORIGINS: List[str] = [
+        "http://localhost:3000",
+        "http://localhost:8000",
+        "https://google-data-analysis.top",
+        # Cloudflare Pages production domain
+        "https://google-data-analysis.pages.dev",
+    ]
 
     # 汇率配置
     # 用于当谷歌广告表1为人民币(CNY/RMB)时，将费用/CPC等换算为美元(USD)
