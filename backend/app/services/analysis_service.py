@@ -1600,7 +1600,7 @@ class AnalysisService:
             # 如果数据中没有，使用手动输入的全局值
             if past_seven_days_orders is None and past_seven_days_orders_global is not None:
                 try:
-                past_seven_days_orders = float(past_seven_days_orders_global)
+                    past_seven_days_orders = float(past_seven_days_orders_global)
                 except (ValueError, TypeError):
                     past_seven_days_orders = None
             
@@ -1624,7 +1624,7 @@ class AnalysisService:
             # 如果数据中没有，使用手动输入的全局值
             if max_cpc is None and max_cpc_global is not None:
                 try:
-                max_cpc = float(max_cpc_global)
+                    max_cpc = float(max_cpc_global)
                 except (ValueError, TypeError):
                     max_cpc = None
             
