@@ -302,8 +302,8 @@ const Analysis = () => {
                 return column
               })
 
-              // 将“账号=CID、广告系列、阶段标签”置于前三列并冻结在左侧
-              const pinnedLeft = ['账号=CID', '广告系列', '阶段标签']
+              // 将“账号=CID、广告系列名、阶段标签”置于前三列并冻结在左侧（兼容旧字段“广告系列”）
+              const pinnedLeft = ['账号=CID', '广告系列名', '广告系列', '阶段标签']
               const leftCols = []
               for (const colName of pinnedLeft) {
                 const idx = dataColumns.findIndex((c) => c.key === colName)
@@ -312,7 +312,7 @@ const Analysis = () => {
                   col.fixed = 'left'
                   // 合理列宽
                   if (colName === '账号=CID') col.width = col.width || 140
-                  if (colName === '广告系列') col.width = col.width || 260
+                  if (colName === '广告系列名' || colName === '广告系列') col.width = col.width || 260
                   if (colName === '阶段标签') col.width = col.width || 120
                   leftCols.push(col)
                 }
