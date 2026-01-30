@@ -30,6 +30,10 @@ class User(Base):
     analysis_results = relationship("AnalysisResult", back_populates="user")
     ad_campaigns = relationship("AdCampaign", back_populates="user", cascade="all, delete-orphan")
     expense_adjustments = relationship("ExpenseAdjustment", cascade="all, delete-orphan")
+    mcc_accounts = relationship("GoogleMccAccount", back_populates="user", cascade="all, delete-orphan")
+    platform_data = relationship("PlatformData", cascade="all, delete-orphan")
+    google_ads_data = relationship("GoogleAdsApiData", cascade="all, delete-orphan")
+    campaign_mappings = relationship("CampaignPlatformMapping", cascade="all, delete-orphan")
 
 
 

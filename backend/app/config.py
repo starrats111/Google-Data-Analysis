@@ -105,13 +105,6 @@ class Settings(BaseSettings):
     OPENAI_MODEL: str = "gpt-4o-mini"
     OPENAI_BASE_URL: str = "https://api.openai.com/v1"
     
-    # ===== Google Ads API 共享配置（可选）=====
-    # 如果配置了这些，员工添加MCC账号时只需要填写MCC账号ID和刷新令牌
-    # 如果不配置，员工需要填写完整的客户端ID、密钥等信息
-    GOOGLE_ADS_SHARED_CLIENT_ID: str = ""
-    GOOGLE_ADS_SHARED_CLIENT_SECRET: str = ""
-    GOOGLE_ADS_SHARED_DEVELOPER_TOKEN: str = ""
-    
     if SettingsConfigDict is not None:
         # Pydantic v2
         from pydantic import field_validator

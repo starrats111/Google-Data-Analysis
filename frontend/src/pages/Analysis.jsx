@@ -39,6 +39,8 @@ const Analysis = ({ mode }) => {
   const [generatingL7D, setGeneratingL7D] = useState(false)
   const [googleModalOpen, setGoogleModalOpen] = useState(false)
   const [googleFile, setGoogleFile] = useState(null)
+  const [generatingFromApi, setGeneratingFromApi] = useState(false)
+  const [generatingFromApi, setGeneratingFromApi] = useState(false)
 
   const fetchAccounts = async () => {
     try {
@@ -175,6 +177,64 @@ const Analysis = ({ mode }) => {
     } finally {
       setLoading(false)
       isInitialMount.current = false
+    }
+  }
+
+  // 从API数据生成分析
+  const handleGenerateFromApi = async () => {
+    if (analysisMode === 'daily') {
+      // 生成每日分析
+      if (!dateRange || dateRange.length !== 2) {
+        message.warning('请选择日期范围')
+        return
+      }
+      
+      setGeneratingFromApi(true)
+      try {
+        const targetDate = dateRange[1].format('YYYY-MM-DD')  // 使用结束日期
+        const response = await api.post('/api/analysis/api/daily', null, {
+          params: { target_date: targetDate }
+        })
+        
+        if (response.data.success) {
+          message.success(`成功生成 ${response.data.total_records} 条每日分析记录`)
+          // 刷新数据
+          fetchResults(false)
+        } else {
+          message.error(response.data.message || '生成失败')
+        }
+      } catch (error) {
+        message.error(error.response?.data?.detail || '生成失败')
+      } finally {
+        setGeneratingFromApi(false)
+      }
+    } else {
+      // 生成L7D分析
+      setGeneratingFromApi(true)
+      try {
+        const endDate = dateRange && dateRange.length === 2 
+          ? dateRange[1].format('YYYY-MM-DD')
+          : null
+        
+        const params = {}
+        if (endDate) {
+          params.end_date = endDate
+        }
+        
+        const response = await api.post('/api/analysis/api/l7d', null, { params })
+        
+        if (response.data.success) {
+          message.success(`成功生成 ${response.data.total_records} 条L7D分析记录`)
+          // 刷新数据
+          fetchResults(false)
+        } else {
+          message.error(response.data.message || '生成失败')
+        }
+      } catch (error) {
+        message.error(error.response?.data?.detail || '生成失败')
+      } finally {
+        setGeneratingFromApi(false)
+      }
     }
   }
 
@@ -355,17 +415,23 @@ const Analysis = ({ mode }) => {
               : '仅展示 L7D 分析结果：支持按联盟账号与日期筛选；展开行可查看每条分析明细'}
           </Text>
         </div>
-        {analysisMode === 'daily' && (
-          <Space>
+        <Space>
+          <Button
+            type="primary"
+            onClick={handleGenerateFromApi}
+            loading={generatingFromApi}
+          >
+            {analysisMode === 'daily' ? '从API数据生成每日分析' : '从API数据生成L7D分析'}
+          </Button>
+          {analysisMode === 'daily' && (
             <Button
-              type="primary"
-              loading={generatingL7D}
               onClick={handleOpenGenerate}
+              loading={generatingL7D}
             >
-              生成L7D分析
+              生成L7D分析（上传文件）
             </Button>
-          </Space>
-        )}
+          )}
+        </Space>
       </div>
 
       <Modal

@@ -15,8 +15,9 @@ from . import expenses  # noqa: F401
 from . import export  # noqa: F401
 from . import stage_label  # noqa: F401
 from . import upload  # noqa: F401
+from . import platform_data  # noqa: F401
+from . import google_ads_data  # noqa: F401
 from . import mcc  # noqa: F401
-from . import oauth  # noqa: F401
 
 
 

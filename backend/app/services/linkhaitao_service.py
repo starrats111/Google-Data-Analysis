@@ -206,3 +206,4 @@ class LinkHaitaoService:
                 "message": f"同步失败: {str(e)}"
             }
 
+

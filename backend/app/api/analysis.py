@@ -9,9 +9,13 @@ from app.database import get_db
 from app.middleware.auth import get_current_user
 from app.models.user import User, UserRole
 from app.models.analysis_result import AnalysisResult
+import logging
+
+logger = logging.getLogger(__name__)
 from app.models.data_upload import DataUpload
 from app.schemas.analysis import AnalysisRequest, AnalysisResultResponse, AnalysisSummary, DailyL7DRequest
 from app.services.analysis_service import AnalysisService
+from app.services.api_analysis_service import ApiAnalysisService
 
 router = APIRouter(prefix="/api/analysis", tags=["analysis"])
 
@@ -619,6 +623,71 @@ async def generate_l7d_from_daily_with_google(
     db.refresh(analysis_result)
 
     return {"id": analysis_result.id, "status": "completed", "total_rows": len(rows)}
+
+
+@router.post("/api/daily")
+async def generate_daily_analysis_from_api(
+    target_date: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    从API数据生成每日分析
+    
+    Args:
+        target_date: 目标日期 YYYY-MM-DD
+    """
+    from datetime import datetime
+    
+    try:
+        target = datetime.strptime(target_date, "%Y-%m-%d").date()
+    except ValueError:
+        raise HTTPException(status_code=400, detail="日期格式错误，应为 YYYY-MM-DD")
+    
+    # 权限检查：员工只能分析自己的数据
+    user_id = current_user.id if current_user.role == "employee" else None
+    
+    api_analysis_service = ApiAnalysisService(db)
+    result = api_analysis_service.generate_daily_analysis(target, user_id)
+    
+    if not result.get("success"):
+        raise HTTPException(status_code=500, detail=result.get("message", "生成分析失败"))
+    
+    return result
+
+
+@router.post("/api/l7d")
+async def generate_l7d_analysis_from_api(
+    end_date: Optional[str] = None,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    从API数据生成L7D分析
+    
+    Args:
+        end_date: 结束日期 YYYY-MM-DD（默认为昨天）
+    """
+    from datetime import datetime, date, timedelta
+    
+    if end_date:
+        try:
+            end = datetime.strptime(end_date, "%Y-%m-%d").date()
+        except ValueError:
+            raise HTTPException(status_code=400, detail="日期格式错误，应为 YYYY-MM-DD")
+    else:
+        end = date.today() - timedelta(days=1)  # 默认昨天
+    
+    # 权限检查：员工只能分析自己的数据
+    user_id = current_user.id if current_user.role == "employee" else None
+    
+    api_analysis_service = ApiAnalysisService(db)
+    result = api_analysis_service.generate_l7d_analysis(end, user_id)
+    
+    if not result.get("success"):
+        raise HTTPException(status_code=500, detail=result.get("message", "生成分析失败"))
+    
+    return result
 
 
 

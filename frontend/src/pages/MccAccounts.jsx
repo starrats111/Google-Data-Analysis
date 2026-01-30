@@ -1,38 +1,29 @@
 import React, { useState, useEffect } from 'react'
-import { Card, Table, Button, Modal, Form, Input, Switch, message, Popconfirm, Tag, Space } from 'antd'
-import { PlusOutlined, EditOutlined, DeleteOutlined, CheckCircleOutlined, CloseCircleOutlined } from '@ant-design/icons'
+import { Card, Table, Button, Modal, Form, Input, message, Popconfirm, Tag, Space, Switch } from 'antd'
+import { PlusOutlined, EditOutlined, DeleteOutlined, SyncOutlined } from '@ant-design/icons'
 import api from '../services/api'
 import { useAuth } from '../store/authStore'
 
-const MccAccounts = () => {
+export default function MccAccounts() {
   const { user } = useAuth()
-  const [accounts, setAccounts] = useState([])
+  const isManager = user?.role === 'manager'
+  
+  const [mccAccounts, setMccAccounts] = useState([])
   const [loading, setLoading] = useState(false)
   const [modalVisible, setModalVisible] = useState(false)
-  const [editingAccount, setEditingAccount] = useState(null)
-  const [testingAccountId, setTestingAccountId] = useState(null)
-  const [sharedConfig, setSharedConfig] = useState(null)
+  const [editingMcc, setEditingMcc] = useState(null)
   const [form] = Form.useForm()
+  const [syncLoading, setSyncLoading] = useState({})
 
   useEffect(() => {
-    fetchAccounts()
-    fetchSharedConfig()
+    fetchMccAccounts()
   }, [])
 
-  const fetchSharedConfig = async () => {
-    try {
-      const response = await api.get('/api/mcc/shared-config')
-      setSharedConfig(response.data)
-    } catch (error) {
-      // 忽略错误，可能是旧版本后端不支持
-    }
-  }
-
-  const fetchAccounts = async () => {
+  const fetchMccAccounts = async () => {
     setLoading(true)
     try {
       const response = await api.get('/api/mcc/accounts')
-      setAccounts(response.data)
+      setMccAccounts(response.data)
     } catch (error) {
       message.error('获取MCC账号列表失败')
     } finally {
@@ -41,37 +32,36 @@ const MccAccounts = () => {
   }
 
   const handleCreate = () => {
-    setEditingAccount(null)
+    setEditingMcc(null)
     form.resetFields()
     setModalVisible(true)
   }
 
-  const handleEdit = (account) => {
-    setEditingAccount(account)
+  const handleEdit = (mcc) => {
+    setEditingMcc(mcc)
     form.setFieldsValue({
-      mcc_account_id: account.mcc_account_id,
-      mcc_account_name: account.mcc_account_name,
-      email: account.email,
-      refresh_token: account.refresh_token,
-      client_id: account.client_id,
-      client_secret: account.client_secret,
-      developer_token: account.developer_token,
-      is_active: account.is_active,
+      mcc_id: mcc.mcc_id,
+      mcc_name: mcc.mcc_name,
+      email: mcc.email,
+      client_id: '',  // 不显示敏感信息
+      client_secret: '',  // 不显示敏感信息
+      refresh_token: '',  // 不显示敏感信息
+      is_active: mcc.is_active
     })
     setModalVisible(true)
   }
 
   const handleSubmit = async (values) => {
     try {
-      if (editingAccount) {
-        await api.put(`/api/mcc/accounts/${editingAccount.id}`, values)
+      if (editingMcc) {
+        await api.put(`/api/mcc/accounts/${editingMcc.id}`, values)
         message.success('更新成功')
       } else {
         await api.post('/api/mcc/accounts', values)
         message.success('创建成功')
       }
       setModalVisible(false)
-      fetchAccounts()
+      fetchMccAccounts()
     } catch (error) {
       message.error(error.response?.data?.detail || '操作失败')
     }
@@ -81,41 +71,51 @@ const MccAccounts = () => {
     try {
       await api.delete(`/api/mcc/accounts/${id}`)
       message.success('删除成功')
-      fetchAccounts()
+      fetchMccAccounts()
     } catch (error) {
       message.error(error.response?.data?.detail || '删除失败')
     }
   }
 
-  const handleTestConnection = async (account) => {
-    setTestingAccountId(account.id)
+  const handleSync = async (mccId) => {
+    setSyncLoading({ ...syncLoading, [mccId]: true })
     try {
-      const response = await api.post(`/api/mcc/accounts/${account.id}/test-connection`)
-      if (response.data.success) {
-        message.success('连接测试成功')
-      } else {
-        message.warning(response.data.message)
-      }
+      const response = await api.post(`/api/mcc/accounts/${mccId}/sync`)
+      message.success(response.data.message || '同步成功')
+      fetchMccAccounts()
     } catch (error) {
-      message.error(error.response?.data?.detail || '测试连接失败')
+      message.error(error.response?.data?.detail || '同步失败')
     } finally {
-      setTestingAccountId(null)
+      setSyncLoading({ ...syncLoading, [mccId]: false })
     }
   }
 
   const columns = [
-    { title: 'MCC账号ID', dataIndex: 'mcc_account_id', key: 'mcc_account_id' },
-    { title: '账号名称', dataIndex: 'mcc_account_name', key: 'mcc_account_name' },
-    { title: '邮箱', dataIndex: 'email', key: 'email' },
+    {
+      title: 'MCC ID',
+      dataIndex: 'mcc_id',
+      key: 'mcc_id',
+    },
+    {
+      title: 'MCC名称',
+      dataIndex: 'mcc_name',
+      key: 'mcc_name',
+    },
+    {
+      title: '邮箱',
+      dataIndex: 'email',
+      key: 'email',
+    },
     {
       title: '状态',
       dataIndex: 'is_active',
       key: 'is_active',
-      render: (val) => (
-        <Tag color={val ? 'green' : 'red'}>
-          {val ? <CheckCircleOutlined /> : <CloseCircleOutlined />} {val ? '激活' : '停用'}
-        </Tag>
-      )
+      render: (val) => <Tag color={val ? 'green' : 'red'}>{val ? '激活' : '停用'}</Tag>
+    },
+    {
+      title: '数据条数',
+      dataIndex: 'data_count',
+      key: 'data_count',
     },
     {
       title: '操作',
@@ -124,11 +124,11 @@ const MccAccounts = () => {
         <Space>
           <Button
             type="link"
-            icon={<CheckCircleOutlined />}
-            onClick={() => handleTestConnection(record)}
-            loading={testingAccountId === record.id}
+            icon={<SyncOutlined />}
+            onClick={() => handleSync(record.id)}
+            loading={syncLoading[record.id]}
           >
-            测试连接
+            同步数据
           </Button>
           <Button
             type="link"
@@ -172,7 +172,7 @@ const MccAccounts = () => {
       <Card>
         <Table
           columns={columns}
-          dataSource={accounts}
+          dataSource={mccAccounts}
           loading={loading}
           rowKey="id"
           locale={{
@@ -182,11 +182,11 @@ const MccAccounts = () => {
       </Card>
 
       <Modal
-        title={editingAccount ? '编辑MCC账号' : '添加MCC账号'}
+        title={editingMcc ? '编辑MCC账号' : '添加MCC账号'}
         open={modalVisible}
         onCancel={() => setModalVisible(false)}
         onOk={() => form.submit()}
-        width={700}
+        width={600}
       >
         <Form
           form={form}
@@ -194,88 +194,62 @@ const MccAccounts = () => {
           onFinish={handleSubmit}
         >
           <Form.Item
-            name="mcc_account_id"
-            label="MCC账号ID"
-            rules={[{ required: true, message: '请输入MCC账号ID' }]}
+            name="mcc_id"
+            label="MCC ID"
+            rules={[{ required: !editingMcc, message: '请输入MCC ID' }]}
           >
-            <Input 
-              placeholder="例如：941-949-6301" 
-              disabled={!!editingAccount}
-            />
+            <Input placeholder="请输入MCC ID" disabled={!!editingMcc} />
           </Form.Item>
 
           <Form.Item
-            name="mcc_account_name"
-            label="账号名称"
+            name="mcc_name"
+            label="MCC名称"
+            rules={[{ required: true, message: '请输入MCC名称' }]}
           >
-            <Input placeholder="可选：给账号起个名字" />
+            <Input placeholder="请输入MCC名称" />
           </Form.Item>
 
           <Form.Item
             name="email"
             label="邮箱"
-            rules={[{ type: 'email', message: '请输入有效的邮箱地址' }]}
+            rules={[{ required: true, message: '请输入邮箱' }, { type: 'email', message: '请输入有效的邮箱地址' }]}
           >
-            <Input placeholder="可选：关联邮箱" />
+            <Input placeholder="请输入邮箱地址" />
           </Form.Item>
 
-          {!sharedConfig?.need_refresh_token_only && (
-            <>
-              <Form.Item
-                name="developer_token"
-                label="开发者令牌"
-                rules={[{ required: true, message: '请输入开发者令牌' }]}
-              >
-                <Input.Password placeholder="请输入开发者令牌" />
-              </Form.Item>
+          <Form.Item
+            name="client_id"
+            label="Client ID（可选）"
+          >
+            <Input placeholder="Google Ads API Client ID" />
+          </Form.Item>
 
-              <Form.Item
-                name="client_id"
-                label="客户端ID"
-                rules={[{ required: true, message: '请输入客户端ID' }]}
-              >
-                <Input placeholder="请输入客户端ID" />
-              </Form.Item>
-
-              <Form.Item
-                name="client_secret"
-                label="客户端密钥"
-                rules={[{ required: true, message: '请输入客户端密钥' }]}
-              >
-                <Input.Password placeholder="请输入客户端密钥" />
-              </Form.Item>
-            </>
-          )}
-
-          {sharedConfig?.need_refresh_token_only && (
-            <div style={{ marginBottom: 16, padding: 12, background: '#e6f7ff', borderRadius: 4 }}>
-              <p style={{ margin: 0, color: '#1890ff' }}>
-                💡 已配置共享的客户端ID、密钥和开发者令牌，你只需要填写MCC账号ID和刷新令牌即可。
-              </p>
-            </div>
-          )}
+          <Form.Item
+            name="client_secret"
+            label="Client Secret（可选）"
+          >
+            <Input.Password placeholder="Google Ads API Client Secret" />
+          </Form.Item>
 
           <Form.Item
             name="refresh_token"
-            label="刷新令牌"
-            rules={[{ required: true, message: '请输入刷新令牌' }]}
+            label="Refresh Token（可选）"
           >
-            <Input.Password placeholder="请输入刷新令牌" />
+            <Input.Password placeholder="Google Ads API Refresh Token" />
           </Form.Item>
 
-          <Form.Item
-            name="is_active"
-            label="状态"
-            valuePropName="checked"
-            initialValue={true}
-          >
-            <Switch checkedChildren="激活" unCheckedChildren="停用" />
-          </Form.Item>
+          {editingMcc && (
+            <Form.Item
+              name="is_active"
+              label="状态"
+              valuePropName="checked"
+            >
+              <Switch checkedChildren="激活" unCheckedChildren="停用" />
+            </Form.Item>
+          )}
         </Form>
       </Modal>
     </div>
   )
 }
-
-export default MccAccounts
 

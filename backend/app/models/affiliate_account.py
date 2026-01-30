@@ -46,6 +46,7 @@ class AffiliateAccount(Base):
     platform = relationship("AffiliatePlatform", back_populates="accounts")
     data_uploads = relationship("DataUpload", back_populates="affiliate_account")
     analysis_results = relationship("AnalysisResult", back_populates="affiliate_account")
+    platform_data = relationship("PlatformData", back_populates="affiliate_account")
 
 
 

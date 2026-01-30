@@ -18,9 +18,10 @@ from app.api import (
     dashboard,
     expenses,
     export,
+    google_ads_data,
     linkhaitao,
     mcc,
-    oauth,
+    platform_data,
     stage_label,
     upload,
 )
@@ -28,10 +29,11 @@ from app.api import (
 
 app = FastAPI(title="Google Analysis Platform API")
 
-# CORS配置 - 支持所有google-data-analysis.top的子域名
-cors_origins = getattr(settings, "CORS_ORIGINS", []) or []
-if not cors_origins or cors_origins == ["*"]:
-    cors_origins = [
+# CORS (开发环境默认；生产环境建议在 .env 里覆盖 CORS_ORIGINS)
+cors_origins = getattr(settings, "CORS_ORIGINS", ["*"]) or ["*"]
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=cors_origins if cors_origins != ["*"] else [
         "https://google-data-analysis.top",
         "https://api.google-data-analysis.top",
         "https://www.google-data-analysis.top",
@@ -40,18 +42,20 @@ if not cors_origins or cors_origins == ["*"]:
         "http://127.0.0.1:5173",
         "http://localhost:8000",
         "http://127.0.0.1:8000",
-    ]
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=cors_origins,
-    # 允许所有google-data-analysis.top的子域名
+    ],
+    # Allow Cloudflare Pages preview subdomains and production domains:
+    # - https://google-data-analysis.pages.dev
+    # - https://<hash>.google-data-analysis.pages.dev
+    # - https://google-data-analysis.top
+    # - https://api.google-data-analysis.top
+    # - https://*.google-data-analysis.top
+    # And allow local dev origins:
+    # - http://localhost:5173 / http://127.0.0.1:5173 (any port)
     allow_origin_regex=r"^(https://([a-z0-9-]+\.)?google-data-analysis\.(pages\.dev|top)|https?://(localhost|127\.0\.0\.1)(:\d+)?)$",
     allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
+    allow_methods=["*"],
     allow_headers=["*"],
     expose_headers=["*"],
-    max_age=3600,
 )
 
 # API routes
@@ -67,7 +71,8 @@ app.include_router(affiliate.router)
 app.include_router(collabglow.router)
 app.include_router(linkhaitao.router)
 app.include_router(mcc.router)
-app.include_router(oauth.router)
+app.include_router(platform_data.router)
+app.include_router(google_ads_data.router)
 app.include_router(stage_label.router)
 
 
@@ -105,16 +110,25 @@ if _dist_dir:
         return {"detail": "Frontend not built"}
 
 
-# 启动定时任务
 @app.on_event("startup")
 async def startup_event():
     """应用启动时执行"""
-    start_scheduler()
+    try:
+        start_scheduler()
+        print("✓ 定时任务调度器已启动")
+    except Exception as e:
+        print(f"⚠ 定时任务调度器启动失败: {e}")
+
 
 @app.on_event("shutdown")
 async def shutdown_event():
     """应用关闭时执行"""
-    shutdown_scheduler()
+    try:
+        shutdown_scheduler()
+        print("✓ 定时任务调度器已关闭")
+    except Exception as e:
+        print(f"⚠ 定时任务调度器关闭失败: {e}")
+
 
 # 注册退出时的清理函数
 atexit.register(shutdown_scheduler)

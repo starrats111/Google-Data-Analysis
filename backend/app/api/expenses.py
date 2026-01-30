@@ -15,6 +15,8 @@ from app.middleware.auth import get_current_user
 from app.models.user import User
 from app.models.analysis_result import AnalysisResult
 from app.models.affiliate_account import AffiliateAccount, AffiliatePlatform
+from app.models.platform_data import PlatformData
+from app.models.google_ads_api_data import GoogleAdsApiData
 from app.models.expense_adjustment import ExpenseAdjustment
 from app.schemas.expenses import (
     ExpenseSummaryResponse,
@@ -321,7 +323,54 @@ async def get_expense_summary(
     platform_map: Dict[int, Dict[str, object]] = {}
     day_set = set()
 
-    # 1) 从每日指标聚合
+    # ===== 先从平台API同步的数据中统计“佣金”（PlatformData），用于覆盖旧逻辑 =====
+    # 账号 -> 平台 映射
+    accounts = db.query(AffiliateAccount).filter(
+        AffiliateAccount.user_id == current_user.id
+    ).all()
+    account_platform_map: Dict[int, int] = {
+        a.id: a.platform_id for a in accounts
+    }
+
+    # 平台名称映射
+    platform_rows = db.query(AffiliatePlatform).all()
+    platform_name_map = {p.id: p.platform_name for p in platform_rows}
+    platform_code_map = {p.platform_code: p.id for p in platform_rows}
+
+    # (platform_id, date) -> commission_from_api
+    api_commission_map: Dict[Tuple[int, date], float] = {}
+    platform_data_rows = db.query(PlatformData).filter(
+        PlatformData.user_id == current_user.id,
+        PlatformData.date >= start,
+        PlatformData.date <= end,
+    ).all()
+    for pd in platform_data_rows:
+        pid = account_platform_map.get(pd.affiliate_account_id)
+        if not pid:
+            continue
+        key = (pid, pd.date)
+        api_commission_map[key] = api_commission_map.get(key, 0.0) + float(pd.commission or 0.0)
+        day_set.add(pd.date)
+
+    # ===== 从 Google Ads API 数据中统计“广告费用”（GoogleAdsApiData），覆盖旧逻辑 =====
+    ga_cost_map: Dict[Tuple[int, date], float] = {}
+    ga_rows = db.query(GoogleAdsApiData).filter(
+        GoogleAdsApiData.user_id == current_user.id,
+        GoogleAdsApiData.date >= start,
+        GoogleAdsApiData.date <= end,
+    ).all()
+    for row in ga_rows:
+        platform_code = row.extracted_platform_code
+        if not platform_code:
+            continue
+        pid = platform_code_map.get(platform_code)
+        if not pid:
+            continue
+        key = (pid, row.date)
+        ga_cost_map[key] = ga_cost_map.get(key, 0.0) + float(row.cost or 0.0)
+        day_set.add(row.date)
+
+    # 1) 从每日指标聚合（仅作为费用的补充/兜底，优先使用Google Ads API）
     metrics = db.query(AdCampaignDailyMetric).join(AdCampaign).filter(
         AdCampaignDailyMetric.user_id == current_user.id,
         AdCampaignDailyMetric.date >= start,
@@ -329,10 +378,6 @@ async def get_expense_summary(
     ).all()
 
     if metrics:
-        # 需要平台名：从广告系列拿 platform_id，再查平台表
-        platform_rows = db.query(AffiliatePlatform).all()
-        platform_name_map = {p.id: p.platform_name for p in platform_rows}
-
         for m in metrics:
             campaign = db.query(AdCampaign).filter(AdCampaign.id == m.campaign_id).first()
             if not campaign:
@@ -349,8 +394,8 @@ async def get_expense_summary(
                 }
             by_date = platform_map[pid]["by_date"]
             if d not in by_date:
-                by_date[d] = [0.0, 0.0]
-            by_date[d][0] += float(m.commission or 0.0)
+                by_date[d] = [0.0, 0.0]  # [commission, cost]
+            # 费用来自每日指标（若该天该平台没有Google Ads数据时作为兜底）
             by_date[d][1] += float(m.cost or 0.0)
     else:
         # 2) 旧逻辑（兼容）：查询区间内分析结果（员工只看自己的）
@@ -377,8 +422,34 @@ async def get_expense_summary(
             by_date = platform_map[pid]["by_date"]
             if d not in by_date:
                 by_date[d] = [0.0, 0.0]
-            by_date[d][0] += commission
+            # 费用仍然沿用旧逻辑（若该天该平台没有Google Ads数据时作为兜底）
             by_date[d][1] += cost
+
+    # 使用 PlatformData 中的佣金覆盖旧逻辑的佣金（佣金直接来自各平台API）
+    for (pid, d), api_comm in api_commission_map.items():
+        if pid not in platform_map:
+            platform_map[pid] = {
+                "platform_id": pid,
+                "platform_name": platform_name_map.get(pid, f"平台{pid}"),
+                "by_date": {},
+            }
+        by_date = platform_map[pid]["by_date"]
+        if d not in by_date:
+            by_date[d] = [0.0, 0.0]
+        by_date[d][0] = api_comm  # 覆盖佣金
+
+    # 使用 Google Ads API 中的费用覆盖旧逻辑的费用（广告费用直接来自Google Ads）
+    for (pid, d), ga_cost in ga_cost_map.items():
+        if pid not in platform_map:
+            platform_map[pid] = {
+                "platform_id": pid,
+                "platform_name": platform_name_map.get(pid, f"平台{pid}"),
+                "by_date": {},
+            }
+        by_date = platform_map[pid]["by_date"]
+        if d not in by_date:
+            by_date[d] = [0.0, 0.0]
+        by_date[d][1] = ga_cost  # 覆盖费用
 
     # 拉取拒付佣金调整（区间内）
     adjustments = db.query(ExpenseAdjustment).filter(
@@ -468,7 +539,48 @@ async def get_expense_daily(
     from app.models.ad_campaign import AdCampaign
     from app.models.ad_campaign_daily_metric import AdCampaignDailyMetric
 
-    # 优先：每日指标 -> 按平台/日期汇总
+    # 从平台API数据中统计每日“佣金”（PlatformData），用于覆盖旧逻辑
+    accounts = db.query(AffiliateAccount).filter(
+        AffiliateAccount.user_id == current_user.id
+    ).all()
+    account_platform_map: Dict[int, int] = {
+        a.id: a.platform_id for a in accounts
+    }
+    platform_rows = db.query(AffiliatePlatform).all()
+    platform_name_map = {p.id: p.platform_name for p in platform_rows}
+    platform_code_map = {p.platform_code: p.id for p in platform_rows}
+
+    api_commission_map: Dict[Tuple[int, date], float] = {}
+    platform_data_rows = db.query(PlatformData).filter(
+        PlatformData.user_id == current_user.id,
+        PlatformData.date >= start,
+        PlatformData.date <= end,
+    ).all()
+    for pd in platform_data_rows:
+        pid = account_platform_map.get(pd.affiliate_account_id)
+        if not pid:
+            continue
+        key = (pid, pd.date)
+        api_commission_map[key] = api_commission_map.get(key, 0.0) + float(pd.commission or 0.0)
+
+    # 从 Google Ads API 统计每日“广告费用”（GoogleAdsApiData），用于覆盖旧逻辑
+    ga_cost_map: Dict[Tuple[int, date], float] = {}
+    ga_rows = db.query(GoogleAdsApiData).filter(
+        GoogleAdsApiData.user_id == current_user.id,
+        GoogleAdsApiData.date >= start,
+        GoogleAdsApiData.date <= end,
+    ).all()
+    for row in ga_rows:
+        platform_code = row.extracted_platform_code
+        if not platform_code:
+            continue
+        pid = platform_code_map.get(platform_code)
+        if not pid:
+            continue
+        key = (pid, row.date)
+        ga_cost_map[key] = ga_cost_map.get(key, 0.0) + float(row.cost or 0.0)
+
+    # 优先：每日指标 -> 按平台/日期汇总广告费用（若某天某平台没有Google Ads数据时作为兜底）
     metrics = db.query(AdCampaignDailyMetric).join(AdCampaign).filter(
         AdCampaignDailyMetric.user_id == current_user.id,
         AdCampaignDailyMetric.date >= start,
@@ -484,10 +596,7 @@ async def get_expense_daily(
 
     rows: List[ExpenseDailyRow] = []
     if metrics:
-        platform_rows = db.query(AffiliatePlatform).all()
-        platform_name_map = {p.id: p.platform_name for p in platform_rows}
-
-        # 聚合 (pid, date) -> [commission, cost]
+        # 聚合 (pid, date) -> [commission, cost]，其中佣金稍后由PlatformData覆盖
         agg: Dict[Tuple[int, date], List[float]] = {}
         for m in metrics:
             campaign = db.query(AdCampaign).filter(AdCampaign.id == m.campaign_id).first()
@@ -497,10 +606,14 @@ async def get_expense_daily(
             key = (pid, m.date)
             if key not in agg:
                 agg[key] = [0.0, 0.0]
-            agg[key][0] += float(m.commission or 0.0)
+            # 费用来自每日指标（若无Google Ads数据时兜底）
             agg[key][1] += float(m.cost or 0.0)
 
-        for (pid, d), (commission, cost) in agg.items():
+        for (pid, d), (commission_cost) in agg.items():
+            api_comm = api_commission_map.get((pid, d), 0.0)
+            commission = api_comm
+            # 优先使用Google Ads API的费用
+            cost = ga_cost_map.get((pid, d), commission_cost[1])
             rejected = adj_map.get((pid, d), 0.0)
             net = commission - rejected - cost
             rows.append(ExpenseDailyRow(
@@ -526,7 +639,9 @@ async def get_expense_daily(
                 continue
             pid = platform.id
             d = r.analysis_date
-            commission, cost = _extract_commission_cost(r.result_data)
+            raw_commission, raw_cost = _extract_commission_cost(r.result_data)
+            commission = api_commission_map.get((pid, d), raw_commission)
+            cost = ga_cost_map.get((pid, d), raw_cost)
             rejected = adj_map.get((pid, d), 0.0)
             net = commission - rejected - cost
             rows.append(ExpenseDailyRow(
