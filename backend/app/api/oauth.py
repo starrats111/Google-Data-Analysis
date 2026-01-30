@@ -14,6 +14,22 @@ router = APIRouter(prefix="/api/oauth", tags=["oauth"])
 # OAuth作用域
 SCOPES = ['https://www.googleapis.com/auth/adwords']
 
+
+@router.get("/shared-credentials")
+async def get_shared_credentials():
+    """
+    获取共享的客户端ID和密钥（用于OAuth工具自动填充）
+    注意：这个端点返回实际的配置值，用于简化员工操作
+    """
+    return {
+        "client_id": settings.GOOGLE_ADS_SHARED_CLIENT_ID or "",
+        "client_secret": settings.GOOGLE_ADS_SHARED_CLIENT_SECRET or "",
+        "has_shared_config": bool(
+            settings.GOOGLE_ADS_SHARED_CLIENT_ID and 
+            settings.GOOGLE_ADS_SHARED_CLIENT_SECRET
+        )
+    }
+
 # 重定向URI（使用服务器地址）
 # 注意：需要在Google Cloud Console中配置这个重定向URI
 REDIRECT_URI = os.getenv('OAUTH_REDIRECT_URI', 'https://api.google-data-analysis.top/api/oauth/callback')

@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import React, { useState, useEffect } from 'react'
 import { Card, Form, Input, Button, Steps, message, Space, Typography, Alert, Divider } from 'antd'
 import { CheckCircleOutlined, CopyOutlined, LinkOutlined } from '@ant-design/icons'
 import api from '../services/api'
@@ -13,17 +13,37 @@ const OAuthTool = () => {
   const [authCode, setAuthCode] = useState('')
   const [refreshToken, setRefreshToken] = useState('')
   const [loading, setLoading] = useState(false)
+  const [sharedConfig, setSharedConfig] = useState({ client_id: '', client_secret: '', has_shared_config: false })
 
-  // 从环境变量或配置中获取共享的客户端ID和密钥（如果已配置）
-  // 注意：这些值应该从后端API获取，而不是硬编码在前端
-  const sharedClientId = import.meta.env.VITE_GOOGLE_ADS_CLIENT_ID || ''
-  const sharedClientSecret = import.meta.env.VITE_GOOGLE_ADS_CLIENT_SECRET || ''
+  // 从后端获取共享配置
+  useEffect(() => {
+    const fetchSharedConfig = async () => {
+      try {
+        const response = await api.get('/api/oauth/shared-credentials')
+        setSharedConfig(response.data)
+        
+        // 如果存在共享配置，自动填充表单
+        if (response.data.has_shared_config) {
+          form.setFieldsValue({
+            client_id: response.data.client_id,
+            client_secret: response.data.client_secret
+          })
+        }
+      } catch (error) {
+        // 忽略错误，可能是旧版本后端不支持
+        console.warn('无法获取共享配置:', error)
+      }
+    }
+    
+    fetchSharedConfig()
+  }, [form])
 
   const handleGetAuthUrl = async (values) => {
     setLoading(true)
     try {
-      const clientId = values.client_id || sharedClientId
-      const clientSecret = values.client_secret || sharedClientSecret
+      // 优先使用表单值，如果没有则使用共享配置
+      const clientId = values.client_id || sharedConfig.client_id
+      const clientSecret = values.client_secret || sharedConfig.client_secret
 
       if (!clientId || !clientSecret) {
         message.error('请填写客户端ID和客户端密钥')
@@ -56,8 +76,8 @@ const OAuthTool = () => {
     setLoading(true)
     try {
       const values = form.getFieldsValue()
-      const clientId = values.client_id || sharedClientId
-      const clientSecret = values.client_secret || sharedClientSecret
+      const clientId = values.client_id || sharedConfig.client_id
+      const clientSecret = values.client_secret || sharedConfig.client_secret
 
       const response = await api.post('/api/oauth/exchange', null, {
         params: {
@@ -122,9 +142,13 @@ const OAuthTool = () => {
             }}
           >
             <Alert
-              message="提示"
-              description="如果经理已配置共享配置，下面的字段会自动填充。如果没有，请向经理获取客户端ID和密钥。"
-              type="info"
+              message={sharedConfig.has_shared_config ? "✅ 已自动填充共享配置" : "提示"}
+              description={
+                sharedConfig.has_shared_config 
+                  ? "下面的字段已自动填充，可以直接点击"生成授权URL"。如果需要使用其他配置，可以手动修改。"
+                  : "如果经理已配置共享配置，下面的字段会自动填充。如果没有，请向经理获取客户端ID和密钥。"
+              }
+              type={sharedConfig.has_shared_config ? "success" : "info"}
               showIcon
               style={{ marginBottom: '24px' }}
             />
@@ -134,7 +158,10 @@ const OAuthTool = () => {
               name="client_id"
               rules={[{ required: true, message: '请输入客户端ID' }]}
             >
-              <Input placeholder="例如: 123456789-xxx.apps.googleusercontent.com" />
+              <Input 
+                placeholder="例如: 123456789-xxx.apps.googleusercontent.com" 
+                disabled={sharedConfig.has_shared_config && sharedConfig.client_id}
+              />
             </Form.Item>
 
             <Form.Item
@@ -142,7 +169,10 @@ const OAuthTool = () => {
               name="client_secret"
               rules={[{ required: true, message: '请输入客户端密钥' }]}
             >
-              <Input.Password placeholder="例如: GOCSPX-xxx" />
+              <Input.Password 
+                placeholder="例如: GOCSPX-xxx"
+                disabled={sharedConfig.has_shared_config && sharedConfig.client_secret}
+              />
             </Form.Item>
 
             <Form.Item>
