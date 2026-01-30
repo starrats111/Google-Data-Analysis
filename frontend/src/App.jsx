@@ -3,7 +3,7 @@ import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-d
 import Layout from './components/Layout'
 import Login from './pages/Login'
 import Dashboard from './pages/Dashboard'
-import Upload from './pages/Upload'
+// import Upload from './pages/Upload' // 已移除：数据上传功能不再需要，改为API自动同步
 import Analysis from './pages/Analysis'
 import AffiliateAccounts from './pages/AffiliateAccounts'
 import MccAccounts from './pages/MccAccounts'
@@ -40,7 +40,7 @@ function App() {
           }
         >
           <Route index element={<Dashboard />} />
-          <Route path="upload" element={<Upload />} />
+          {/* <Route path="upload" element={<Upload />} /> 已移除：数据上传功能不再需要 */}
           {/* 我的分析：先进入总入口，再从里面点 L7D / 每日分析 */}
           <Route path="my-analysis" element={<MyAnalysis />} />
           {/* L7D 分析 & 每日分析 分开路由 */}
