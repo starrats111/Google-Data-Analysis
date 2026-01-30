@@ -1,4 +1,4 @@
-import React, { useMemo, useState, useEffect } from 'react'
+import React, { useMemo, useState, useEffect, useRef } from 'react'
 import { Card, Table, Select, DatePicker, Space, message, Tag, Badge, Typography, Tooltip, Button, Popconfirm, Collapse, Modal, Upload } from 'antd'
 import { UploadOutlined } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
@@ -12,6 +12,14 @@ const { RangePicker } = DatePicker
 const { Option } = Select
 const { Title, Text } = Typography
 
+// 缓存key生成函数
+const getCacheKey = (mode, accountId, dateRange) => {
+  const dateStr = dateRange && dateRange.length === 2 
+    ? `${dateRange[0].format('YYYY-MM-DD')}_${dateRange[1].format('YYYY-MM-DD')}`
+    : 'all'
+  return `analysis_cache_${mode}_${accountId || 'all'}_${dateStr}`
+}
+
 // props:
 // - mode: 'l7d' | 'daily'
 //   默认使用 'l7d'，用于 L7D 分析页面；'daily' 用于每日分析页面
@@ -20,6 +28,8 @@ const Analysis = ({ mode }) => {
   const { user } = useAuth()
   const isManager = user?.role === 'manager'
   const analysisMode = mode || 'l7d'
+  const isInitialMount = useRef(true)
+  const lastFetchParams = useRef(null)
 
   const [results, setResults] = useState([])
   const [loading, setLoading] = useState(false)
@@ -53,9 +63,12 @@ const Analysis = ({ mode }) => {
     return 'unknown'
   }
 
-  const filterByMode = (rows) => {
-    if (!analysisMode) return rows || []
-    return (rows || []).filter(r => {
+  // 使用useMemo缓存过滤结果，避免每次渲染都重新过滤
+  const filteredResults = useMemo(() => {
+    // 如果results为空，直接返回
+    if (!results || results.length === 0) return []
+    if (!analysisMode) return results || []
+    return (results || []).filter(r => {
       const t = detectResultType(r)
       if (analysisMode === 'l7d') {
         return t === 'l7d' || t === 'unknown'
@@ -65,9 +78,40 @@ const Analysis = ({ mode }) => {
       }
       return true
     })
-  }
+  }, [results, analysisMode])
 
-  const fetchResults = async () => {
+  const fetchResults = async (useCache = true) => {
+    // 生成当前请求的参数key
+    const paramsKey = JSON.stringify({
+      account: selectedAccount,
+      dateRange: dateRange ? [dateRange[0].format('YYYY-MM-DD'), dateRange[1].format('YYYY-MM-DD')] : null,
+      mode: analysisMode
+    })
+
+    // 如果参数没变化且不是初始挂载，跳过请求
+    if (useCache && lastFetchParams.current === paramsKey && !isInitialMount.current) {
+      return
+    }
+
+    // 检查缓存
+    const cacheKey = getCacheKey(analysisMode, selectedAccount, dateRange)
+    if (useCache) {
+      try {
+        const cached = sessionStorage.getItem(cacheKey)
+        if (cached) {
+          const { data, timestamp } = JSON.parse(cached)
+          // 缓存有效期5分钟
+          if (Date.now() - timestamp < 5 * 60 * 1000) {
+            setResults(data)
+            lastFetchParams.current = paramsKey
+            return
+          }
+        }
+      } catch (e) {
+        // 缓存读取失败，继续请求
+      }
+    }
+
     setLoading(true)
     try {
       const params = {}
@@ -79,12 +123,24 @@ const Analysis = ({ mode }) => {
 
       const response = await api.get('/api/analysis/results', { params })
       const all = response.data || []
-      const filtered = filterByMode(all)
-      setResults(filtered)
+      
+      // 保存到缓存
+      try {
+        sessionStorage.setItem(cacheKey, JSON.stringify({
+          data: all,
+          timestamp: Date.now()
+        }))
+      } catch (e) {
+        // 缓存写入失败，忽略
+      }
+
+      setResults(all)
+      lastFetchParams.current = paramsKey
     } catch (error) {
       message.error('获取分析结果失败')
     } finally {
       setLoading(false)
+      isInitialMount.current = false
     }
   }
 
@@ -135,10 +191,32 @@ const Analysis = ({ mode }) => {
     fetchAccounts()
   }, [])
 
+  // 当筛选条件变化时，重新获取数据
   useEffect(() => {
-    fetchResults()
+    fetchResults(true)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedAccount, dateRange])
+
+  // 当mode切换时，先尝试从缓存加载，如果没有缓存再请求
+  useEffect(() => {
+    const cacheKey = getCacheKey(analysisMode, selectedAccount, dateRange)
+    try {
+      const cached = sessionStorage.getItem(cacheKey)
+      if (cached) {
+        const { data, timestamp } = JSON.parse(cached)
+        // 缓存有效期5分钟
+        if (Date.now() - timestamp < 5 * 60 * 1000) {
+          setResults(data)
+          return
+        }
+      }
+    } catch (e) {
+      // 缓存读取失败，继续请求
+    }
+    // 如果没有缓存，才请求数据
+    fetchResults(false)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [analysisMode])
 
   const accountNameMap = useMemo(() => {
     const map = new Map()
@@ -297,7 +375,7 @@ const Analysis = ({ mode }) => {
         {isManager ? (
           // 经理账号：按员工分组显示
           (() => {
-            const groupedByUser = results.reduce((acc, result) => {
+            const groupedByUser = filteredResults.reduce((acc, result) => {
               const username = result.username || `用户ID: ${result.user_id}`
               if (!acc[username]) {
                 acc[username] = []
@@ -514,7 +592,7 @@ const Analysis = ({ mode }) => {
           // 员工账号：直接显示表格
           <Table
             columns={columns}
-            dataSource={results}
+            dataSource={filteredResults}
             loading={loading}
             rowKey="id"
             size="middle"
