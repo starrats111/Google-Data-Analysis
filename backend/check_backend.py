@@ -56,7 +56,7 @@ except Exception as e:
 print("\n4. 检查数据库...")
 try:
     from app.database import engine, Base
-    from app.models import user, affiliate_account, affiliate_platform
+    from app.models import AffiliatePlatform, AffiliateAccount
     print("  ✓ 数据库连接成功")
 except Exception as e:
     print(f"  ✗ 数据库连接失败: {e}")
