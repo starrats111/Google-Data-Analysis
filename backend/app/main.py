@@ -8,7 +8,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.config import settings
-from app.scheduler import start_scheduler, shutdown_scheduler
+from app.services.scheduler import start_scheduler, shutdown_scheduler
 from app.api import (
     ad_campaign,
     affiliate,
