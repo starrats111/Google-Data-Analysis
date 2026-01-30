@@ -17,8 +17,16 @@ class MccAccountBase(BaseModel):
     is_active: bool = True
 
 
-class MccAccountCreate(MccAccountBase):
-    pass
+class MccAccountCreate(BaseModel):
+    mcc_account_id: str
+    mcc_account_name: Optional[str] = None
+    email: Optional[EmailStr] = None
+    refresh_token: str
+    # 以下字段可选（如果配置了共享配置，则不需要填写）
+    client_id: Optional[str] = None
+    client_secret: Optional[str] = None
+    developer_token: Optional[str] = None
+    is_active: bool = True
 
 
 class MccAccountUpdate(BaseModel):
