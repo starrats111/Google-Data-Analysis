@@ -20,6 +20,7 @@ from app.api import (
     export,
     linkhaitao,
     mcc,
+    oauth,
     stage_label,
     upload,
 )
@@ -66,6 +67,7 @@ app.include_router(affiliate.router)
 app.include_router(collabglow.router)
 app.include_router(linkhaitao.router)
 app.include_router(mcc.router)
+app.include_router(oauth.router)
 app.include_router(stage_label.router)
 
 

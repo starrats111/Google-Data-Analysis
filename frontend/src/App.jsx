@@ -10,6 +10,7 @@ import MccAccounts from './pages/MccAccounts'
 import AdCampaigns from './pages/AdCampaigns'
 import Expenses from './pages/Expenses'
 import StageLabelDetail from './pages/StageLabelDetail'
+import OAuthTool from './pages/OAuthTool'
 import { useAuth } from './store/authStore'
 
 function PrivateRoute({ children }) {
@@ -27,6 +28,7 @@ function App() {
     >
       <Routes>
         <Route path="/login" element={<Login />} />
+        <Route path="/oauth-tool" element={<OAuthTool />} />
         <Route
           path="/"
           element={
