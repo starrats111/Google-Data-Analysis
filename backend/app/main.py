@@ -1,5 +1,6 @@
 import os
 from pathlib import Path
+import atexit
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -7,6 +8,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.config import settings
+from app.scheduler import start_scheduler, shutdown_scheduler
 from app.api import (
     ad_campaign,
     affiliate,
@@ -100,4 +102,19 @@ if _dist_dir:
         if index_path.exists():
             return FileResponse(str(index_path))
         return {"detail": "Frontend not built"}
+
+
+# 启动定时任务
+@app.on_event("startup")
+async def startup_event():
+    """应用启动时执行"""
+    start_scheduler()
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """应用关闭时执行"""
+    shutdown_scheduler()
+
+# 注册退出时的清理函数
+atexit.register(shutdown_scheduler)
 
