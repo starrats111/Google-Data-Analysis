@@ -330,7 +330,13 @@ const Analysis = ({ mode }) => {
                       const data = record.result_data?.data || []
                       if (!Array.isArray(data) || data.length === 0) return <Text type="secondary">暂无数据</Text>
 
-                      const dataColumns = Object.keys(data[0]).map((key) => {
+                      // 获取所有键，但在L7D分析中过滤掉"ROI"、"点击"、"订单"（操作指令之后的列）
+                      const allKeys = Object.keys(data[0])
+                      const keysToShow = analysisMode === 'l7d' 
+                        ? allKeys.filter(key => !['ROI', '点击', '订单'].includes(key))
+                        : allKeys
+                      
+                      const dataColumns = keysToShow.map((key) => {
                         const column = {
                           title: key,
                           dataIndex: key,
@@ -521,7 +527,13 @@ const Analysis = ({ mode }) => {
               const data = record.result_data?.data || []
               if (!Array.isArray(data) || data.length === 0) return <Text type="secondary">暂无数据</Text>
 
-              const dataColumns = Object.keys(data[0]).map((key) => {
+              // 获取所有键，但在L7D分析中过滤掉"ROI"、"点击"、"订单"（操作指令之后的列）
+              const allKeys = Object.keys(data[0])
+              const keysToShow = analysisMode === 'l7d' 
+                ? allKeys.filter(key => !['ROI', '点击', '订单'].includes(key))
+                : allKeys
+
+              const dataColumns = keysToShow.map((key) => {
                 const column = {
                   title: key,
                   dataIndex: key,
