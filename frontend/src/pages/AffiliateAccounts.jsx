@@ -1,10 +1,12 @@
 import React, { useState, useEffect } from 'react'
-import { Card, Table, Button, Modal, Form, Input, Select, Switch, message, Popconfirm, Collapse, Tag, Space } from 'antd'
-import { PlusOutlined, EditOutlined, DeleteOutlined } from '@ant-design/icons'
+import { Card, Table, Button, Modal, Form, Input, Select, Switch, message, Popconfirm, Collapse, Tag, Space, DatePicker, Statistic, Row, Col, Spin } from 'antd'
+import { PlusOutlined, EditOutlined, DeleteOutlined, SyncOutlined } from '@ant-design/icons'
+import dayjs from 'dayjs'
 import api from '../services/api'
 import { useAuth } from '../store/authStore'
 
 const { Option } = Select
+const { RangePicker } = DatePicker
 
 const AffiliateAccounts = () => {
   const { user } = useAuth()
@@ -19,6 +21,13 @@ const AffiliateAccounts = () => {
   const [editingAccount, setEditingAccount] = useState(null)
   const [accountForm] = Form.useForm()
   const [platformForm] = Form.useForm()
+  
+  // CollabGlow 同步相关状态
+  const [syncModalVisible, setSyncModalVisible] = useState(false)
+  const [syncAccount, setSyncAccount] = useState(null)
+  const [syncing, setSyncing] = useState(false)
+  const [syncResult, setSyncResult] = useState(null)
+  const [syncForm] = Form.useForm()
 
   useEffect(() => {
     fetchPlatforms()
@@ -134,6 +143,84 @@ const AffiliateAccounts = () => {
     }
   }
 
+  // CollabGlow 同步功能
+  const handleSyncCollabGlow = (account) => {
+    setSyncAccount(account)
+    syncForm.resetFields()
+    // 默认选择最近30天
+    const endDate = dayjs()
+    const beginDate = endDate.subtract(30, 'day')
+    syncForm.setFieldsValue({
+      dateRange: [beginDate, endDate],
+      token: ''
+    })
+    setSyncResult(null)
+    setSyncModalVisible(true)
+  }
+
+  const handleSyncSubmit = async (values) => {
+    if (!syncAccount) return
+    
+    setSyncing(true)
+    setSyncResult(null)
+    
+    try {
+      const { dateRange, token } = values
+      const beginDate = dateRange[0].format('YYYY-MM-DD')
+      const endDate = dateRange[1].format('YYYY-MM-DD')
+      
+      const response = await api.post('/api/collabglow/sync-commissions', {
+        account_id: syncAccount.id,
+        begin_date: beginDate,
+        end_date: endDate,
+        token: token || undefined // 如果不提供token，会从账号备注中读取
+      })
+      
+      setSyncResult(response.data)
+      message.success(`成功同步 ${response.data.total_records} 条佣金记录`)
+    } catch (error) {
+      message.error(error.response?.data?.detail || '同步失败')
+      setSyncResult({
+        success: false,
+        message: error.response?.data?.detail || '同步失败'
+      })
+    } finally {
+      setSyncing(false)
+    }
+  }
+
+  const handleTestConnection = async () => {
+    if (!syncAccount) return
+    
+    setSyncing(true)
+    try {
+      const token = syncForm.getFieldValue('token')
+      const response = await api.get('/api/collabglow/test-connection', {
+        params: {
+          account_id: syncAccount.id,
+          token: token || undefined
+        }
+      })
+      
+      if (response.data.success) {
+        message.success(`连接成功！找到 ${response.data.records_found} 条记录`)
+      } else {
+        message.error(response.data.message)
+      }
+    } catch (error) {
+      message.error(error.response?.data?.detail || '测试连接失败')
+    } finally {
+      setSyncing(false)
+    }
+  }
+
+  // 检查是否为 CollabGlow 平台
+  const isCollabGlowPlatform = (account) => {
+    const platformName = account.platform?.platform_name || ''
+    return platformName.toLowerCase().includes('collabglow') || 
+           platformName.toLowerCase().includes('collab')
+  }
+
   // 员工视图：显示自己的账号列表
   const employeeColumns = [
     { title: '账号名称', dataIndex: 'account_name', key: 'account_name' },
@@ -151,6 +238,15 @@ const AffiliateAccounts = () => {
       key: 'action',
       render: (_, record) => (
         <Space>
+          {isCollabGlowPlatform(record) && (
+            <Button
+              type="link"
+              icon={<SyncOutlined />}
+              onClick={() => handleSyncCollabGlow(record)}
+            >
+              同步数据
+            </Button>
+          )}
           <Button
             type="link"
             icon={<EditOutlined />}
@@ -233,6 +329,22 @@ const AffiliateAccounts = () => {
                           render: (val) => <Tag color={val ? 'green' : 'red'}>{val ? '激活' : '停用'}</Tag>
                         },
                         { title: '备注', dataIndex: 'notes', key: 'notes', ellipsis: true },
+                        {
+                          title: '操作',
+                          key: 'action',
+                          render: (_, record) => (
+                            isCollabGlowPlatform(record) ? (
+                              <Button
+                                type="link"
+                                size="small"
+                                icon={<SyncOutlined />}
+                                onClick={() => handleSyncCollabGlow(record)}
+                              >
+                                同步数据
+                              </Button>
+                            ) : null
+                          ),
+                        },
                       ]}
                       dataSource={platform.accounts}
                       rowKey="id"
@@ -281,6 +393,117 @@ const AffiliateAccounts = () => {
               <Input.TextArea rows={3} placeholder="可选：平台描述信息" />
             </Form.Item>
           </Form>
+        </Modal>
+
+        {/* CollabGlow 同步模态框 */}
+        <Modal
+          title={`同步 CollabGlow 数据 - ${syncAccount?.account_name || ''}`}
+          open={syncModalVisible}
+          onCancel={() => {
+            setSyncModalVisible(false)
+            setSyncResult(null)
+          }}
+          onOk={() => syncForm.submit()}
+          width={700}
+          okText="开始同步"
+          cancelText="关闭"
+          confirmLoading={syncing}
+        >
+          <Form
+            form={syncForm}
+            layout="vertical"
+            onFinish={handleSyncSubmit}
+          >
+            <Form.Item
+              name="dateRange"
+              label="选择日期范围"
+              rules={[{ required: true, message: '请选择日期范围' }]}
+            >
+              <RangePicker
+                style={{ width: '100%' }}
+                format="YYYY-MM-DD"
+                disabledDate={(current) => current && current > dayjs().endOf('day')}
+              />
+            </Form.Item>
+
+            <Form.Item
+              name="token"
+              label="CollabGlow Token（可选）"
+              help="如果不填写，将从账号备注中读取 token"
+            >
+              <Input.Password 
+                placeholder="留空则使用账号备注中配置的 token"
+              />
+            </Form.Item>
+
+            <Form.Item>
+              <Button 
+                type="default" 
+                onClick={handleTestConnection}
+                loading={syncing}
+                icon={<SyncOutlined />}
+              >
+                测试连接
+              </Button>
+            </Form.Item>
+          </Form>
+
+          {syncResult && (
+            <div style={{ marginTop: 24, padding: 16, background: '#f5f5f5', borderRadius: 4 }}>
+              <Spin spinning={syncing}>
+                {syncResult.success ? (
+                  <div>
+                    <Row gutter={16}>
+                      <Col span={8}>
+                        <Statistic
+                          title="同步记录数"
+                          value={syncResult.total_records}
+                          valueStyle={{ color: '#3f8600' }}
+                        />
+                      </Col>
+                      <Col span={8}>
+                        <Statistic
+                          title="总佣金"
+                          value={syncResult.total_commission}
+                          prefix="$"
+                          precision={2}
+                          valueStyle={{ color: '#3f8600' }}
+                        />
+                      </Col>
+                      <Col span={8}>
+                        <Statistic
+                          title="状态"
+                          value="成功"
+                          valueStyle={{ color: '#3f8600' }}
+                        />
+                      </Col>
+                    </Row>
+                    {syncResult.data && syncResult.data.length > 0 && (
+                      <div style={{ marginTop: 16 }}>
+                        <h4>佣金明细（前5条）：</h4>
+                        <Table
+                          dataSource={syncResult.data.slice(0, 5)}
+                          columns={[
+                            { title: '品牌ID', dataIndex: 'brand_id', key: 'brand_id' },
+                            { title: 'MCID', dataIndex: 'mcid', key: 'mcid' },
+                            { title: '佣金', dataIndex: 'sale_commission', key: 'sale_commission', render: (v) => `$${v?.toFixed(2) || 0}` },
+                            { title: '结算日期', dataIndex: 'settlement_date', key: 'settlement_date' },
+                          ]}
+                          pagination={false}
+                          size="small"
+                          rowKey="settlement_id"
+                        />
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <div style={{ color: '#ff4d4f' }}>
+                    <strong>同步失败：</strong> {syncResult.message}
+                  </div>
+                )}
+              </Spin>
+            </div>
+          )}
         </Modal>
       </div>
     )
@@ -378,7 +601,118 @@ const AffiliateAccounts = () => {
             >
               <Input.TextArea rows={3} placeholder="可选：备注信息" />
             </Form.Item>
+            </Form>
+        </Modal>
+
+        {/* CollabGlow 同步模态框 */}
+        <Modal
+          title={`同步 CollabGlow 数据 - ${syncAccount?.account_name || ''}`}
+          open={syncModalVisible}
+          onCancel={() => {
+            setSyncModalVisible(false)
+            setSyncResult(null)
+          }}
+          onOk={() => syncForm.submit()}
+          width={700}
+          okText="开始同步"
+          cancelText="关闭"
+          confirmLoading={syncing}
+        >
+          <Form
+            form={syncForm}
+            layout="vertical"
+            onFinish={handleSyncSubmit}
+          >
+            <Form.Item
+              name="dateRange"
+              label="选择日期范围"
+              rules={[{ required: true, message: '请选择日期范围' }]}
+            >
+              <RangePicker
+                style={{ width: '100%' }}
+                format="YYYY-MM-DD"
+                disabledDate={(current) => current && current > dayjs().endOf('day')}
+              />
+            </Form.Item>
+
+            <Form.Item
+              name="token"
+              label="CollabGlow Token（可选）"
+              help="如果不填写，将从账号备注中读取 token"
+            >
+              <Input.Password 
+                placeholder="留空则使用账号备注中配置的 token"
+              />
+            </Form.Item>
+
+            <Form.Item>
+              <Button 
+                type="default" 
+                onClick={handleTestConnection}
+                loading={syncing}
+                icon={<SyncOutlined />}
+              >
+                测试连接
+              </Button>
+            </Form.Item>
           </Form>
+
+          {syncResult && (
+            <div style={{ marginTop: 24, padding: 16, background: '#f5f5f5', borderRadius: 4 }}>
+              <Spin spinning={syncing}>
+                {syncResult.success ? (
+                  <div>
+                    <Row gutter={16}>
+                      <Col span={8}>
+                        <Statistic
+                          title="同步记录数"
+                          value={syncResult.total_records}
+                          valueStyle={{ color: '#3f8600' }}
+                        />
+                      </Col>
+                      <Col span={8}>
+                        <Statistic
+                          title="总佣金"
+                          value={syncResult.total_commission}
+                          prefix="$"
+                          precision={2}
+                          valueStyle={{ color: '#3f8600' }}
+                        />
+                      </Col>
+                      <Col span={8}>
+                        <Statistic
+                          title="状态"
+                          value="成功"
+                          valueStyle={{ color: '#3f8600' }}
+                        />
+                      </Col>
+                    </Row>
+                    {syncResult.data && syncResult.data.length > 0 && (
+                      <div style={{ marginTop: 16 }}>
+                        <h4>佣金明细（前5条）：</h4>
+                        <Table
+                          dataSource={syncResult.data.slice(0, 5)}
+                          columns={[
+                            { title: '品牌ID', dataIndex: 'brand_id', key: 'brand_id' },
+                            { title: 'MCID', dataIndex: 'mcid', key: 'mcid' },
+                            { title: '佣金', dataIndex: 'sale_commission', key: 'sale_commission', render: (v) => `$${v?.toFixed(2) || 0}` },
+                            { title: '结算日期', dataIndex: 'settlement_date', key: 'settlement_date' },
+                          ]}
+                          pagination={false}
+                          size="small"
+                          rowKey="settlement_id"
+                        />
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <div style={{ color: '#ff4d4f' }}>
+                    <strong>同步失败：</strong> {syncResult.message}
+                  </div>
+                )}
+              </Spin>
+            </div>
+          )}
         </Modal>
       </div>
     )
