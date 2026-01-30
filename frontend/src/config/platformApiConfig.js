@@ -17,6 +17,34 @@ export const PLATFORM_API_CONFIG = {
     ]
   },
   
+  // LinkHaitao 平台
+  linkhaitao: {
+    fields: [
+      {
+        name: 'linkhaitao_token',
+        label: 'LinkHaitao API Token',
+        type: 'password',
+        placeholder: '请输入 LinkHaitao API Token',
+        help: '用于同步 LinkHaitao 佣金和订单数据',
+        required: false
+      }
+    ]
+  },
+  
+  // Link-Haitao 平台（别名）
+  'link-haitao': {
+    fields: [
+      {
+        name: 'linkhaitao_token',
+        label: 'LinkHaitao API Token',
+        type: 'password',
+        placeholder: '请输入 LinkHaitao API Token',
+        help: '用于同步 LinkHaitao 佣金和订单数据',
+        required: false
+      }
+    ]
+  },
+  
   // 可以添加更多平台配置
   // 例如：
   // amazon: {

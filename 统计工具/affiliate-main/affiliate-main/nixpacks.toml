@@ -1,0 +1,13 @@
+[phases.setup]
+nixPkgs = ["pkgs.nodejs-20_x", "pkgs.python3", "pkgs.python3Packages.pip", "pkgs.gcc", "pkgs.gnumake"]
+
+[phases.install]
+cmds = [
+  "export PYTHON=$(which python3)",
+  "npm ci --omit=dev"
+]
+
+[phases.build]
+
+[start]
+cmd = "npm start"

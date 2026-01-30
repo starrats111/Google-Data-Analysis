@@ -1,0 +1,919 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>超级管理员 - 联盟营销统计系统</title>
+  <link rel="stylesheet" href="admin.css">
+</head>
+<body>
+  <div class="admin-container">
+    <!-- 侧边栏 -->
+    <aside class="sidebar">
+      <div class="logo">
+        <h2>👑 超级管理员</h2>
+      </div>
+      <nav class="nav-menu">
+        <a href="#dashboard" class="nav-item active" data-page="dashboard">
+          <span class="icon">📊</span>
+          <span>仪表板</span>
+        </a>
+        <a href="#users" class="nav-item" data-page="users">
+          <span class="icon">👥</span>
+          <span>用户管理</span>
+        </a>
+        <a href="#platform-stats" class="nav-item" data-page="platform-stats">
+          <span class="icon">📈</span>
+          <span>平台统计</span>
+        </a>
+        <a href="#invitation-codes" class="nav-item" data-page="invitation-codes">
+          <span class="icon">🎫</span>
+          <span>邀请码管理</span>
+        </a>
+        <a href="#audit-logs" class="nav-item" data-page="audit-logs">
+          <span class="icon">📋</span>
+          <span>审计日志</span>
+        </a>
+        <a href="#data-collection" class="nav-item" data-page="data-collection">
+          <span class="icon">🔄</span>
+          <span>数据采集</span>
+        </a>
+        <a href="#withdrawal-management" class="nav-item" data-page="withdrawal-management">
+          <span class="icon">💰</span>
+          <span>提现管理</span>
+        </a>
+      </nav>
+      <div class="sidebar-footer">
+        <div class="admin-info">
+          <div class="admin-avatar">👤</div>
+          <div class="admin-details">
+            <div class="admin-name" id="adminName">加载中...</div>
+            <div class="admin-role">超级管理员</div>
+          </div>
+          <button class="btn-settings" onclick="openAdminProfileSettings()" title="个人设置">
+            <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/>
+              <circle cx="12" cy="12" r="3"/>
+            </svg>
+          </button>
+        </div>
+        <button class="btn-logout" id="logoutBtn">退出登录</button>
+      </div>
+    </aside>
+
+    <!-- 主内容区 -->
+    <main class="main-content">
+      <!-- 顶部栏 -->
+      <header class="top-bar">
+        <h1 id="pageTitle">仪表板</h1>
+        <div class="top-bar-actions">
+          <span class="current-time" id="currentTime"></span>
+        </div>
+      </header>
+
+      <!-- 页面内容 -->
+      <div class="content-wrapper">
+        <!-- 仪表板页面 -->
+        <div id="page-dashboard" class="page-content active">
+          <div style="padding: 48px 32px; max-width: 1400px; margin: 0 auto;">
+            <div style="text-align: center; margin-bottom: 48px;">
+              <h1 style="color: var(--text-primary); font-size: 32px; font-weight: 700; margin-bottom: 12px;">欢迎使用超级管理员系统</h1>
+              <p style="color: var(--text-secondary); font-size: 16px;">请选择下方功能模块开始使用</p>
+            </div>
+            
+            <!-- 功能模块 -->
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 24px; max-width: 1200px; margin: 0 auto;">
+              <div class="dashboard-shortcut-card" data-page="users">
+                <div class="card-icon">👥</div>
+                <div class="card-title">用户管理</div>
+                <div class="card-description">查看、创建、删除用户，管理用户数据和权限</div>
+              </div>
+              <div class="dashboard-shortcut-card" data-page="platform-stats">
+                <div class="card-icon">📊</div>
+                <div class="card-title">平台统计</div>
+                <div class="card-description">查看全平台数据分析，商家汇总和收益统计</div>
+              </div>
+              <div class="dashboard-shortcut-card" data-page="data-collection">
+                <div class="card-icon">🔄</div>
+                <div class="card-title">数据采集</div>
+                <div class="card-description">批量采集用户数据，Google表格和平台订单</div>
+              </div>
+              <div class="dashboard-shortcut-card" data-page="invitation-codes">
+                <div class="card-icon">🎫</div>
+                <div class="card-title">邀请码管理</div>
+                <div class="card-description">生成和管理邀请码，控制用户注册权限</div>
+              </div>
+              <div class="dashboard-shortcut-card" data-page="audit-logs">
+                <div class="card-icon">📝</div>
+                <div class="card-title">审计日志</div>
+                <div class="card-description">查看所有操作记录，追踪管理员活动</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 用户管理页面 -->
+        <div id="page-users" class="page-content">
+          <div class="page-header">
+            <div class="search-box">
+              <input type="text" id="userSearch" placeholder="搜索用户名或邮箱...">
+              <button id="searchBtn">🔍 搜索</button>
+            </div>
+            <div style="display: flex; gap: 10px; align-items: center;">
+              <div id="batchActions" class="batch-actions" style="display: none;">
+                <span id="selectedCount" style="color: var(--text-secondary); margin-right: 10px; font-size: 14px;">已选择 0 项</span>
+                <button id="batchApproveBtn" class="btn-batch" style="background: #10b981;">批量通过</button>
+                <button id="batchRejectBtn" class="btn-batch" style="background: #f59e0b;">批量拒绝</button>
+                <button id="batchEnableBtn" class="btn-batch" style="background: #4ade80;">批量启用</button>
+                <button id="batchDisableBtn" class="btn-batch" style="background: #f59e0b;">批量禁用</button>
+                <button id="batchDeleteBtn" class="btn-batch" style="background: var(--danger-color);">批量删除</button>
+                <button id="batchExportBtn" class="btn-batch" style="background: #6366f1;">批量导出</button>
+              </div>
+              <button id="showUserAnalyticsBtn" class="btn-create" style="background: #8b5cf6;">📊 统计分析</button>
+              <button id="createUserBtn" class="btn-create">➕ 创建用户</button>
+            </div>
+          </div>
+
+          <!-- 用户统计分析区域 -->
+          <div id="userAnalyticsSection" class="user-analytics-section" style="display: none;">
+            <div class="analytics-header">
+              <h3 style="margin: 0; color: var(--text-primary);">📊 用户统计分析</h3>
+              <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
+                <div style="display: flex; gap: 8px; align-items: center;">
+                  <label style="color: var(--text-secondary);">快速选择:</label>
+                  <select id="analyticsPeriod" style="padding: 6px 12px; background: var(--card-bg); border: 1px solid var(--border-color); border-radius: 4px; color: var(--text-primary);">
+                    <option value="7" selected>最近7天</option>
+                    <option value="30">最近30天</option>
+                    <option value="90">最近90天</option>
+                    <option value="365">最近一年</option>
+                    <option value="custom">自定义日期</option>
+                  </select>
+                </div>
+                <div id="analyticsDateRange" style="display: none; gap: 8px; align-items: center;">
+                  <label style="color: var(--text-secondary);">开始日期:</label>
+                  <input type="date" id="analyticsStartDate" style="padding: 6px 12px; background: var(--card-bg); border: 1px solid var(--border-color); border-radius: 4px; color: var(--text-primary);">
+                  <label style="color: var(--text-secondary);">结束日期:</label>
+                  <input type="date" id="analyticsEndDate" style="padding: 6px 12px; background: var(--card-bg); border: 1px solid var(--border-color); border-radius: 4px; color: var(--text-primary);">
+                </div>
+                <button id="refreshAnalyticsBtn" class="btn-batch" style="background: var(--primary-color);">刷新</button>
+                <button id="hideAnalyticsBtn" class="btn-batch" style="background: var(--text-secondary);">收起</button>
+              </div>
+            </div>
+
+            <!-- 活跃度统计卡片 -->
+            <div class="analytics-cards">
+              <div class="analytics-card">
+                <div class="analytics-card-label">总用户数</div>
+                <div class="analytics-card-value" id="totalUsersStat">-</div>
+              </div>
+              <div class="analytics-card">
+                <div class="analytics-card-label">启用用户</div>
+                <div class="analytics-card-value" id="activeUsersStat" style="color: #4ade80;">-</div>
+              </div>
+              <div class="analytics-card">
+                <div class="analytics-card-label">禁用用户</div>
+                <div class="analytics-card-value" id="inactiveUsersStat" style="color: #f87171;">-</div>
+              </div>
+              <div class="analytics-card">
+                <div class="analytics-card-label">新用户（<span id="periodDays">30</span>天）</div>
+                <div class="analytics-card-value" id="newUsersStat" style="color: #3b82f6;">-</div>
+              </div>
+              <div class="analytics-card">
+                <div class="analytics-card-label">有订单用户</div>
+                <div class="analytics-card-value" id="usersWithOrdersStat">-</div>
+              </div>
+              <div class="analytics-card">
+                <div class="analytics-card-label">有平台账号用户</div>
+                <div class="analytics-card-value" id="usersWithAccountsStat">-</div>
+              </div>
+              <div class="analytics-card">
+                <div class="analytics-card-label">最近30天活跃</div>
+                <div class="analytics-card-value" id="activeLast30DaysStat" style="color: #10b981;">-</div>
+              </div>
+            </div>
+
+            <!-- 贡献度排行 -->
+            <div class="analytics-ranking-container">
+              <h4 style="color: var(--text-primary); margin-bottom: 16px;">🏆 用户贡献度排行（Top 10）</h4>
+              <div class="table-wrapper">
+                <table class="data-table">
+                  <thead>
+                    <tr>
+                      <th style="width: 50px;">排名</th>
+                      <th>用户名</th>
+                      <th>邮箱</th>
+                      <th>平台账号</th>
+                      <th>订单数</th>
+                      <th>总金额($)</th>
+                      <th>总佣金($)</th>
+                      <th>广告费($)</th>
+                      <th>ROI</th>
+                      <th>状态</th>
+                      <th>操作</th>
+                    </tr>
+                  </thead>
+                  <tbody id="contributionRankingBody">
+                    <tr>
+                      <td colspan="11" class="loading">加载中...</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+
+          <div class="table-wrapper">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th style="width: 50px;">
+                    <input type="checkbox" id="selectAllUsers" title="全选/取消全选">
+                  </th>
+                  <th>ID</th>
+                  <th>用户名</th>
+                  <th>邮箱</th>
+                  <th>状态</th>
+                  <th>审核状态</th>
+                  <th>注册时间</th>
+                  <th>平台账号</th>
+                  <th>订单数</th>
+                  <th>总佣金</th>
+                  <th>操作</th>
+                </tr>
+              </thead>
+              <tbody id="usersTableBody">
+                <tr>
+                  <td colspan="11" class="loading">加载中...</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <div class="pagination" id="usersPagination"></div>
+        </div>
+
+        <!-- 用户详情页面 -->
+        <div id="page-user-detail" class="page-content">
+          <div class="page-header">
+            <button class="btn-back" id="backToUsers">← 返回用户列表</button>
+          </div>
+
+          <div class="user-detail-container">
+            <div class="user-detail-card">
+              <h3>用户信息</h3>
+              <div id="userDetailInfo">加载中...</div>
+            </div>
+
+            <div class="user-detail-tabs">
+              <div class="tab-buttons">
+                <button class="tab-btn active" data-tab="accounts">平台账号</button>
+                <button class="tab-btn" data-tab="orders">订单数据</button>
+                <button class="tab-btn" data-tab="ads">广告数据</button>
+                <button class="tab-btn" data-tab="summary">商家汇总</button>
+              </div>
+
+              <div class="tab-content">
+                <div id="tab-accounts" class="tab-pane active">
+                  <div id="userAccountsContent">加载中...</div>
+                </div>
+                <div id="tab-orders" class="tab-pane">
+                  <div class="date-filter-bar">
+                    <label>开始日期:</label>
+                    <input type="date" id="userOrdersStartDate">
+                    <label>结束日期:</label>
+                    <input type="date" id="userOrdersEndDate">
+                    <button class="btn-filter" id="userOrdersFilterBtn">筛选</button>
+                  </div>
+                  <div id="userOrdersContent">加载中...</div>
+                </div>
+                <div id="tab-ads" class="tab-pane">
+                  <div class="date-filter-bar">
+                    <label>开始日期:</label>
+                    <input type="date" id="userAdsStartDate">
+                    <label>结束日期:</label>
+                    <input type="date" id="userAdsEndDate">
+                    <button class="btn-filter" id="userAdsFilterBtn">筛选</button>
+                  </div>
+                  <div id="userAdsContent">加载中...</div>
+                </div>
+                <div id="tab-summary" class="tab-pane">
+                  <div class="date-filter-bar">
+                    <label>开始日期:</label>
+                    <input type="date" id="userSummaryStartDate">
+                    <label>结束日期:</label>
+                    <input type="date" id="userSummaryEndDate">
+                    <button class="btn-filter" id="userSummaryFilterBtn">筛选</button>
+                    <button class="btn-export-admin" id="exportUserSummaryBtn" style="display: none;">
+                      <span>📥</span> 导出Excel
+                    </button>
+                  </div>
+                  <div id="userSummaryContent">加载中...</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 邀请码管理页面 -->
+        <div id="page-invitation-codes" class="page-content">
+          <div class="page-header">
+            <div style="display: flex; gap: 10px; align-items: center; justify-content: space-between; width: 100%;">
+              <h2 style="margin: 0; color: var(--text-primary);">🎫 邀请码管理</h2>
+              <button id="generateInviteCodeBtn" class="btn-create">➕ 生成邀请码</button>
+            </div>
+          </div>
+
+          <div class="table-wrapper">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>ID</th>
+                  <th>邀请码</th>
+                  <th>最大使用次数</th>
+                  <th>已使用次数</th>
+                  <th>剩余次数</th>
+                  <th>过期时间</th>
+                  <th>角色</th>
+                  <th>状态</th>
+                  <th>创建者</th>
+                  <th>创建时间</th>
+                  <th>操作</th>
+                </tr>
+              </thead>
+              <tbody id="invitationCodesTableBody">
+                <tr>
+                  <td colspan="11" class="loading">加载中...</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- 生成邀请码模态框 -->
+        <div id="generateInviteCodeModal" class="modal" style="display: none;">
+          <div class="modal-content">
+            <div class="modal-header">
+              <h3>生成邀请码</h3>
+              <button class="modal-close" onclick="closeGenerateInviteCodeModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+              <form id="generateInviteCodeForm">
+                <div class="form-group">
+                  <label>最大使用次数:</label>
+                  <input type="number" id="inviteCodeMaxUses" value="1" min="1" required>
+                  <small style="color: var(--text-secondary); font-size: 12px;">邀请码最多可被使用多少次</small>
+                </div>
+                <div class="form-group">
+                  <label>过期时间（可选）:</label>
+                  <input type="datetime-local" id="inviteCodeExpiresAt">
+                  <small style="color: var(--text-secondary); font-size: 12px;">留空表示永不过期</small>
+                </div>
+                <div class="form-group">
+                  <label>角色:</label>
+                  <select id="inviteCodeRole">
+                    <option value="user" selected>普通用户</option>
+                    <option value="super_admin">超级管理员</option>
+                  </select>
+                </div>
+                <div class="form-actions">
+                  <button type="button" class="btn-secondary" onclick="closeGenerateInviteCodeModal()">取消</button>
+                  <button type="submit" class="btn-primary">生成</button>
+                </div>
+              </form>
+              <div id="generateInviteCodeStatus" class="status-message" style="display: none;"></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 平台统计页面 -->
+        <div id="page-platform-stats" class="page-content">
+          <div class="page-header">
+            <div class="date-range-picker">
+              <label>开始日期:</label>
+              <input type="date" id="statsStartDate">
+              <label>结束日期:</label>
+              <input type="date" id="statsEndDate">
+              <button id="statsRefreshBtn">刷新</button>
+              <button class="btn-export-admin" id="exportPlatformStatsBtn">
+                <span>📥</span> 导出Excel
+              </button>
+            </div>
+          </div>
+
+          <div id="platformStatsContent">
+            <div class="loading">加载中...</div>
+          </div>
+
+          <!-- 商家分析部分 -->
+          <div class="section-title" style="margin-top: 40px;">📊 商家分析</div>
+          <div class="date-filter-bar">
+            <div class="quick-date-buttons">
+              <button class="btn-quick-date" data-days="0">今天</button>
+              <button class="btn-quick-date" data-days="1">昨天</button>
+              <button class="btn-quick-date active" data-days="7">最近7天</button>
+              <button class="btn-quick-date" data-days="30">最近30天</button>
+              <button class="btn-quick-date" data-type="thisMonth">本月</button>
+              <button class="btn-quick-date" data-type="lastMonth">上月</button>
+            </div>
+            <div style="display: flex; gap: 12px; align-items: center;">
+              <label>开始日期:</label>
+              <input type="date" id="merchantAnalysisStartDate">
+              <label>结束日期:</label>
+              <input type="date" id="merchantAnalysisEndDate">
+              <button class="btn-filter" id="merchantAnalysisFilterBtn">筛选</button>
+              <button class="btn-export-admin" id="exportMerchantAnalysisBtn">
+                <span>📥</span> 导出Excel
+              </button>
+            </div>
+          </div>
+          <div class="search-box" style="margin-bottom: 20px;">
+            <input type="text" id="merchantAnalysisSearch" placeholder="🔍 搜索商家ID、用户名或广告系列...">
+            <button id="merchantAnalysisSearchBtn">搜索</button>
+            <button id="merchantAnalysisClearBtn" style="background: var(--card-bg); color: var(--text-secondary);">清除</button>
+          </div>
+          <div id="merchantAnalysisContent">
+            <div class="loading">选择日期范围后加载数据...</div>
+          </div>
+        </div>
+
+        <!-- 审计日志页面 -->
+        <div id="page-audit-logs" class="page-content">
+          <div class="page-header">
+            <div class="log-filters">
+              <select id="logActionFilter">
+                <option value="">所有操作</option>
+                <option value="view_users_list">查看用户列表</option>
+                <option value="view_user_detail">查看用户详情</option>
+                <option value="view_user_orders">查看用户订单</option>
+                <option value="view_platform_stats">查看平台统计</option>
+                <option value="view_audit_logs">查看审计日志</option>
+              </select>
+              <input type="date" id="logStartDate">
+              <input type="date" id="logEndDate">
+              <button id="logFilterBtn">筛选</button>
+            </div>
+          </div>
+
+          <div class="table-wrapper">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>时间</th>
+                  <th>操作者</th>
+                  <th>操作类型</th>
+                  <th>目标用户</th>
+                  <th>IP地址</th>
+                  <th>耗时(ms)</th>
+                </tr>
+              </thead>
+              <tbody id="auditLogsTableBody">
+                <tr>
+                  <td colspan="6" class="loading">加载中...</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <div class="pagination" id="logsPagination"></div>
+        </div>
+
+        <!-- 数据采集页面 -->
+        <div id="page-data-collection" class="page-content">
+          <h2>数据采集中心</h2>
+          
+          <!-- 采集概览 -->
+          <div class="collection-overview">
+            <div class="stat-card">
+              <div class="stat-icon">📊</div>
+              <div class="stat-info">
+                <div class="stat-label">总用户数</div>
+                <div class="stat-value" id="collectionTotalUsers">-</div>
+              </div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-icon">✅</div>
+              <div class="stat-info">
+                <div class="stat-label">数据最新</div>
+                <div class="stat-value" id="collectionFreshUsers">-</div>
+              </div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-icon">⚠️</div>
+              <div class="stat-info">
+                <div class="stat-label">需要更新</div>
+                <div class="stat-value" id="collectionOutdatedUsers">-</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- 快速操作 -->
+          <div class="collection-actions">
+            <h3>快速操作</h3>
+            
+            <!-- 日期范围选择 -->
+            <div class="collection-date-range">
+              <label>📅 订单采集日期范围：</label>
+              <input type="date" id="collectionStartDate" class="date-input">
+              <span>至</span>
+              <input type="date" id="collectionEndDate" class="date-input">
+              <div class="quick-date-buttons" style="margin-top: 10px;">
+                <button class="btn-quick-date active" onclick="setCollectionDateRange('last7days')">最近7天</button>
+                <button class="btn-quick-date" onclick="setCollectionDateRange('last30days')">最近30天</button>
+                <button class="btn-quick-date" onclick="setCollectionDateRange('thisMonth')">本月</button>
+                <button class="btn-quick-date" onclick="setCollectionDateRange('lastMonth')">上月</button>
+                <button class="btn-quick-date" onclick="setCollectionDateRange('thisYear')">今年</button>
+                <button class="btn-quick-date" onclick="setCollectionDateRange('all')">全部数据</button>
+              </div>
+              <p class="date-hint">💡 提示：日期范围仅影响平台订单采集，Google Sheets 采集不受影响</p>
+            </div>
+            
+            <div class="action-buttons">
+              <button class="btn-collect-all" onclick="startBatchCollection('all')">
+                <span>🔄</span> 一键采集所有数据
+              </button>
+              <button class="btn-collect-sheets" onclick="startBatchCollection('sheets')">
+                <span>📊</span> 批量采集表格数据
+              </button>
+              <button class="btn-collect-platforms" onclick="startBatchCollection('platforms')">
+                <span>💰</span> 批量采集平台数据
+              </button>
+            </div>
+          </div>
+
+          <!-- 用户采集状态列表 -->
+          <div class="user-collection-status">
+            <h3>用户数据状态</h3>
+            <div class="table-wrapper">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>用户</th>
+                    <th>Google表格</th>
+                    <th>平台订单</th>
+                    <th>配置平台</th>
+                    <th>操作</th>
+                  </tr>
+                </thead>
+                <tbody id="collectionStatusTableBody">
+                  <tr>
+                    <td colspan="5" class="loading">加载中...</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <!-- 用户数据统计 -->
+          <div class="user-data-statistics" style="margin-top: 30px;">
+            <h3>用户商家数据分析</h3>
+            <div class="table-wrapper">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>用户</th>
+                    <th>商家ID</th>
+                    <th>广告系列</th>
+                    <th>广告预算</th>
+                    <th>广告费</th>
+                    <th>订单数</th>
+                    <th>佣金</th>
+                    <th>ROI</th>
+                  </tr>
+                </thead>
+                <tbody id="userStatsTableBody">
+                  <tr>
+                    <td colspan="8" class="loading">加载中...</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            
+            <!-- 分页控件 -->
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 20px; padding: 0 10px;">
+              <div style="color: var(--text-secondary); font-size: 14px;">
+                <span id="userStatsPagingInfo">显示 0 条数据</span>
+              </div>
+              <div style="display: flex; gap: 10px; align-items: center;">
+                <label style="color: var(--text-secondary); font-size: 14px;">每页显示：</label>
+                <select id="userStatsPageSize" style="padding: 6px 12px; background: var(--card-bg); color: var(--text-primary); border: 1px solid var(--border-color); border-radius: 4px; cursor: pointer;">
+                  <option value="20">20 条</option>
+                  <option value="50" selected>50 条</option>
+                  <option value="100">100 条</option>
+                  <option value="200">200 条</option>
+                </select>
+              </div>
+              <div id="userStatsPagination" style="display: flex; gap: 8px;"></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 提现管理页面 -->
+        <div id="page-withdrawal-management" class="page-content">
+          <!-- 概览卡片 -->
+          <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; margin-bottom: 30px;">
+            <div class="stat-card" style="background: linear-gradient(135deg, #10b981 0%, #059669 100%); color: white; border: none;">
+              <div class="stat-icon" style="font-size: 32px;">💰</div>
+              <div class="stat-info">
+                <div class="stat-label" style="color: rgba(255,255,255,0.9);">可提现金额</div>
+                <div class="stat-value" id="withdrawalAvailableAmount" style="color: white; font-size: 32px;">$0.00</div>
+              </div>
+            </div>
+            <div class="stat-card" style="background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%); color: white; border: none;">
+              <div class="stat-icon" style="font-size: 32px;">⏳</div>
+              <div class="stat-info">
+                <div class="stat-label" style="color: rgba(255,255,255,0.9);">提现中金额</div>
+                <div class="stat-value" id="withdrawalProcessingAmount" style="color: white; font-size: 32px;">$0.00</div>
+              </div>
+            </div>
+            <div class="stat-card" style="background: linear-gradient(135deg, #6366f1 0%, #4f46e5 100%); color: white; border: none;">
+              <div class="stat-icon" style="font-size: 32px;">💵</div>
+              <div class="stat-info">
+                <div class="stat-label" style="color: rgba(255,255,255,0.9);">已提现佣金</div>
+                <div class="stat-value" id="withdrawalTotalPaid" style="color: white; font-size: 32px;">$0.00</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- 筛选栏 -->
+          <div style="background: var(--dark-bg); padding: 16px; border-radius: 8px; margin-bottom: 24px; display: flex; gap: 12px; align-items: center; flex-wrap: wrap;">
+            <label style="color: var(--text-secondary); font-size: 14px;">日期筛选:</label>
+            <input type="date" id="withdrawalStartDate" style="padding: 8px 12px; background: var(--card-bg); border: 1px solid var(--border-color); border-radius: 6px; color: var(--text-primary);">
+            <span style="color: var(--text-secondary);">至</span>
+            <input type="date" id="withdrawalEndDate" style="padding: 8px 12px; background: var(--card-bg); border: 1px solid var(--border-color); border-radius: 6px; color: var(--text-primary);">
+            
+            <button class="btn-quick-date" data-days="7">最近7天</button>
+            <button class="btn-quick-date active" data-type="thisMonth">本月</button>
+            <button class="btn-quick-date" data-type="lastMonth">上月</button>
+            <button class="btn-quick-date" data-days="90">最近3个月</button>
+            <button class="btn-quick-date" data-days="180">最近半年</button>
+            <button class="btn-quick-date" data-type="all">全部</button>
+            
+            <button class="btn-filter" onclick="applyWithdrawalDateFilter()">
+              🔍 筛选
+            </button>
+            
+            <button class="btn-create" onclick="syncPMOrders()" style="background: #3b82f6; margin-left: auto;">
+              ⚡ 快速更新
+            </button>
+            
+            <button class="btn-create" onclick="exportWithdrawalRecords()" style="background: #10b981;">
+              📥 导出
+            </button>
+          </div>
+
+          <!-- 提现历史记录（按账号分组） -->
+          <div id="withdrawalByAccountContainer">
+            <div style="text-align: center; padding: 40px; color: var(--text-secondary);">
+              加载中...
+            </div>
+          </div>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <!-- 创建用户模态框 -->
+  <div id="createUserModal" class="modal">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h2>创建新用户</h2>
+        <span class="modal-close" id="closeCreateUserModal">&times;</span>
+      </div>
+      <div class="modal-body">
+        <form id="createUserForm">
+          <div class="form-group">
+            <label for="newUserEmail">邮箱 *</label>
+            <input type="email" id="newUserEmail" required placeholder="user@example.com">
+          </div>
+          <div class="form-group">
+            <label for="newUserUsername">用户名（可选）</label>
+            <input type="text" id="newUserUsername" placeholder="用户名">
+          </div>
+          <div class="form-group">
+            <label for="newUserPassword">密码 *</label>
+            <input type="password" id="newUserPassword" required placeholder="至少6位">
+          </div>
+          <div class="form-group">
+            <label for="newUserRole">角色</label>
+            <select id="newUserRole">
+              <option value="user">普通用户</option>
+              <option value="super_admin">超级管理员</option>
+            </select>
+          </div>
+          <div class="form-actions">
+            <button type="button" class="btn-cancel" id="cancelCreateUser">取消</button>
+            <button type="submit" class="btn-submit">创建用户</button>
+          </div>
+        </form>
+        <div id="createUserMessage" class="message"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 编辑用户模态框 -->
+  <div id="editUserModal" class="modal">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h2>编辑用户信息</h2>
+        <span class="modal-close" id="closeEditUserModal">&times;</span>
+      </div>
+      <div class="modal-body">
+        <form id="editUserForm">
+          <input type="hidden" id="editUserId">
+          
+          <div class="form-group">
+            <label for="editUserUsername">用户名</label>
+            <input type="text" id="editUserUsername" placeholder="用户名">
+            <small style="color: #999; font-size: 12px; display: block; margin-top: 4px;">留空则不修改</small>
+          </div>
+          
+          <div class="form-group">
+            <label for="editUserEmail">邮箱</label>
+            <input type="email" id="editUserEmail" placeholder="user@example.com">
+            <small style="color: #999; font-size: 12px; display: block; margin-top: 4px;">留空则不修改</small>
+          </div>
+          
+          <div class="form-group">
+            <label for="editUserPassword">重置密码</label>
+            <input type="password" id="editUserPassword" placeholder="留空则不修改密码">
+            <small style="color: #999; font-size: 12px; display: block; margin-top: 4px;">至少6位，留空则不修改</small>
+          </div>
+          
+          <div class="form-group">
+            <label for="editUserIsActive">账号状态</label>
+            <select id="editUserIsActive">
+              <option value="1">启用</option>
+              <option value="0">禁用</option>
+            </select>
+            <small style="color: #999; font-size: 12px; display: block; margin-top: 4px;">禁用后用户将无法登录</small>
+          </div>
+          
+          <div class="form-actions">
+            <button type="button" class="btn-cancel" id="cancelEditUser">取消</button>
+            <button type="submit" class="btn-submit">保存修改</button>
+          </div>
+        </form>
+        <div id="editUserMessage" class="message"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 超管个人设置 Modal -->
+  <div id="adminProfileSettingsModal" class="modal" style="display: none;">
+    <div class="modal-overlay" onclick="closeAdminProfileSettings()"></div>
+    <div class="modal-content profile-modal">
+      <div class="modal-header">
+        <div class="modal-title">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" class="modal-icon">
+            <path d="M12 15a3 3 0 100-6 3 3 0 000 6z" stroke="currentColor" stroke-width="2"/>
+            <path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83 0 2 2 0 010-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 010-2.83 2 2 0 012.83 0l.06.06a1.65 1.65 0 001.82.33H9a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 0 2 2 0 010 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z" stroke="currentColor" stroke-width="2"/>
+          </svg>
+          <h2>个人设置</h2>
+        </div>
+        <button class="close-btn" onclick="closeAdminProfileSettings()" type="button">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
+            <path d="M18 6L6 18M6 6l12 12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+          </svg>
+        </button>
+      </div>
+      <div class="modal-body">
+        <form id="adminProfileSettingsForm">
+          <!-- 邮箱（只读） -->
+          <div class="form-section">
+            <label class="form-label">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+                <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z" stroke="currentColor" stroke-width="2"/>
+                <path d="M22 6l-10 7L2 6" stroke="currentColor" stroke-width="2"/>
+              </svg>
+              邮箱地址
+            </label>
+            <div class="readonly-field">
+              <input type="email" id="adminProfileEmail" readonly disabled>
+              <span class="lock-badge">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none">
+                  <path d="M19 11H5c-1.1 0-2 .9-2 2v7c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2v-7c0-1.1-.9-2-2-2zM7 11V7c0-2.76 2.24-5 5-5s5 2.24 5 5v4" stroke="currentColor" stroke-width="2"/>
+                </svg>
+                不可修改
+              </span>
+            </div>
+            <small class="form-hint">此邮箱用于登录，出于安全考虑不支持修改</small>
+          </div>
+
+          <!-- 用户名 -->
+          <div class="form-section">
+            <label class="form-label">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+                <path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2M12 11a4 4 0 100-8 4 4 0 000 8z" stroke="currentColor" stroke-width="2"/>
+              </svg>
+              用户名
+            </label>
+            <input type="text" id="adminProfileUsername" placeholder="输入新用户名" required class="form-input">
+          </div>
+
+          <!-- 密码分隔线 -->
+          <div class="section-divider">
+            <span>修改密码（可选）</span>
+          </div>
+
+          <!-- 修改密码（可选） -->
+          <div class="form-section">
+            <label class="form-label">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+                <path d="M19 11H5c-1.1 0-2 .9-2 2v7c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2v-7c0-1.1-.9-2-2-2zM7 11V7c0-2.76 2.24-5 5-5s5 2.24 5 5v4" stroke="currentColor" stroke-width="2"/>
+              </svg>
+              当前密码
+            </label>
+            <input type="password" id="adminProfileCurrentPassword" placeholder="输入当前密码以验证身份" class="form-input">
+          </div>
+
+          <div class="form-section">
+            <label class="form-label">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+                <path d="M12 2L2 7v7c0 5.5 3.8 10.7 10 12 6.2-1.3 10-6.5 10-12V7l-10-5z" stroke="currentColor" stroke-width="2"/>
+              </svg>
+              新密码
+            </label>
+            <input type="password" id="adminProfileNewPassword" placeholder="输入新密码（至少6位）" minlength="6" class="form-input">
+          </div>
+
+          <div class="form-section">
+            <label class="form-label">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+                <path d="M9 11l3 3 8-8M20 12v6a2 2 0 01-2 2H6a2 2 0 01-2-2V6a2 2 0 012-2h9" stroke="currentColor" stroke-width="2"/>
+              </svg>
+              确认新密码
+            </label>
+            <input type="password" id="adminProfileConfirmPassword" placeholder="再次输入新密码" minlength="6" class="form-input">
+          </div>
+
+          <div class="info-box">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+              <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="2"/>
+              <path d="M12 16v-4M12 8h.01" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+            </svg>
+            <span>如果只修改用户名，无需填写密码相关字段</span>
+          </div>
+
+          <div id="adminProfileSettingsStatus" class="status-message"></div>
+
+          <div class="modal-actions">
+            <button type="button" onclick="closeAdminProfileSettings()" class="btn-cancel">取消</button>
+            <button type="submit" class="btn-save">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+                <path d="M19 21H5a2 2 0 01-2-2V5a2 2 0 012-2h11l5 5v11a2 2 0 01-2 2z" stroke="currentColor" stroke-width="2"/>
+                <path d="M17 21v-8H7v8M7 3v5h8" stroke="currentColor" stroke-width="2"/>
+              </svg>
+              保存修改
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <!-- 采集进度模态框 -->
+  <div id="collectionProgressModal" class="modal" style="display: none;">
+    <div class="modal-content" style="max-width: 600px;">
+      <div class="modal-header">
+        <h2 id="collectionProgressTitle">🔄 正在采集数据...</h2>
+      </div>
+      <div class="modal-body">
+        <div class="progress-container">
+          <div class="progress-stats">
+            <div class="progress-stat">
+              <span class="stat-label">当前进度</span>
+              <span class="stat-value" id="collectionProgressText">0 / 0</span>
+            </div>
+            <div class="progress-stat">
+              <span class="stat-label">成功</span>
+              <span class="stat-value success" id="collectionSuccessCount">0</span>
+            </div>
+            <div class="progress-stat">
+              <span class="stat-label">失败</span>
+              <span class="stat-value error" id="collectionFailedCount">0</span>
+            </div>
+          </div>
+          
+          <div class="progress-bar">
+            <div class="progress-fill" id="collectionProgressBar" style="width: 0%"></div>
+          </div>
+          
+          <div class="progress-percentage" id="collectionProgressPercentage">0%</div>
+          
+          <div class="progress-details" id="collectionProgressDetails">
+            准备中...
+          </div>
+        </div>
+        
+        <div class="modal-actions">
+          <button type="button" onclick="closeCollectionProgress()" class="btn-cancel">关闭</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="admin.js"></script>
+  <script src="admin-withdrawal.js"></script>
+</body>
+</html>
+

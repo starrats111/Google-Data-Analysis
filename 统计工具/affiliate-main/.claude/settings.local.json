@@ -1,0 +1,19 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm install:*)",
+      "Bash(git init:*)",
+      "Bash(git add:*)",
+      "Bash(git commit -m \"$(cat <<''EOF''\nfeat: 初始化多用户联盟营销数据采集系统\n\n✨ 核心功能:\n- 用户注册/登录系统（JWT认证）\n- 平台账号管理（AES-256加密）\n- 自动登录LH平台（ddddocr验证码识别）\n- 订单数据采集与持久化（SQLite）\n- 商家汇总报表\n\n🔧 技术栈:\n- 后端: Express.js, SQLite, bcrypt, jsonwebtoken\n- 前端: 原生JavaScript, HTML5, CSS3\n- OCR: ddddocr (Python)\n\n📝 主要文件:\n- server-v2.js: 多用户版服务器\n- public/index-v2.html: 前端页面\n- db.js: 数据库配置\n- utils.js: 工具函数\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\nCo-Authored-By: Claude <noreply@anthropic.com>\nEOF\n)\")",
+      "Bash(gh repo create:*)",
+      "Bash(git config:*)",
+      "Bash(git remote add:*)",
+      "Bash(git branch:*)",
+      "Bash(git push:*)",
+      "Bash(git commit:*)",
+      "Bash(node:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

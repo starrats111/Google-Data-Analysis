@@ -213,7 +213,13 @@ const AffiliateAccounts = () => {
       const beginDate = dateRange[0].format('YYYY-MM-DD')
       const endDate = dateRange[1].format('YYYY-MM-DD')
       
-      const response = await api.post('/api/collabglow/sync-commissions', {
+      // 根据平台选择不同的API端点
+      const isLinkHaitao = isLinkHaitaoPlatform(syncAccount)
+      const apiEndpoint = isLinkHaitao 
+        ? '/api/linkhaitao/sync-commissions-orders'
+        : '/api/collabglow/sync-commissions'
+      
+      const response = await api.post(apiEndpoint, {
         account_id: syncAccount.id,
         begin_date: beginDate,
         end_date: endDate,
@@ -221,7 +227,11 @@ const AffiliateAccounts = () => {
       })
       
       setSyncResult(response.data)
-      message.success(`成功同步 ${response.data.total_records} 条佣金记录`)
+      if (isLinkHaitao) {
+        message.success(`成功同步 ${response.data.total_commission_records || 0} 条佣金记录和 ${response.data.total_orders || 0} 条订单`)
+      } else {
+        message.success(`成功同步 ${response.data.total_records || 0} 条佣金记录`)
+      }
     } catch (error) {
       message.error(error.response?.data?.detail || '同步失败')
       setSyncResult({
@@ -262,8 +272,21 @@ const AffiliateAccounts = () => {
   const isCollabGlowPlatform = (account) => {
     const platform = account.platform || account
     const platformName = platform.platform_name || platform.platformName || ''
+    const platformCode = platform.platform_code || platform.platformCode || ''
     return platformName.toLowerCase().includes('collabglow') || 
-           platformName.toLowerCase().includes('collab')
+           platformName.toLowerCase().includes('collab') ||
+           platformCode.toLowerCase() === 'collabglow'
+  }
+
+  // 检查是否为 LinkHaitao 平台
+  const isLinkHaitaoPlatform = (account) => {
+    const platform = account.platform || account
+    const platformName = platform.platform_name || platform.platformName || ''
+    const platformCode = platform.platform_code || platform.platformCode || ''
+    return platformName.toLowerCase().includes('linkhaitao') || 
+           platformName.toLowerCase().includes('link-haitao') ||
+           platformCode.toLowerCase() === 'linkhaitao' ||
+           platformCode.toLowerCase() === 'link-haitao'
   }
 
   // 员工视图：显示自己的账号列表
@@ -283,7 +306,7 @@ const AffiliateAccounts = () => {
       key: 'action',
       render: (_, record) => (
         <Space>
-          {isCollabGlowPlatform(record) && (
+          {(isCollabGlowPlatform(record) || isLinkHaitaoPlatform(record)) && (
             <Button
               type="link"
               icon={<SyncOutlined />}
@@ -378,7 +401,7 @@ const AffiliateAccounts = () => {
                           title: '操作',
                           key: 'action',
                           render: (_, record) => (
-                            isCollabGlowPlatform(record) ? (
+                            (isCollabGlowPlatform(record) || isLinkHaitaoPlatform(record)) ? (
                               <Button
                                 type="link"
                                 size="small"
@@ -442,7 +465,7 @@ const AffiliateAccounts = () => {
 
         {/* CollabGlow 同步模态框 */}
         <Modal
-          title={`同步 CollabGlow 数据 - ${syncAccount?.account_name || ''}`}
+          title={`同步数据 - ${syncAccount?.account_name || ''}`}
           open={syncModalVisible}
           onCancel={() => {
             setSyncModalVisible(false)
@@ -681,7 +704,7 @@ const AffiliateAccounts = () => {
 
         {/* CollabGlow 同步模态框 */}
         <Modal
-          title={`同步 CollabGlow 数据 - ${syncAccount?.account_name || ''}`}
+          title={`同步数据 - ${syncAccount?.account_name || ''}`}
           open={syncModalVisible}
           onCancel={() => {
             setSyncModalVisible(false)

@@ -1,0 +1,828 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>联盟营销数据采集系统</title>
+  <link rel="stylesheet" href="style-v2.css">
+</head>
+<body>
+  <!-- 登录/注册页面 -->
+  <div id="authSection" class="auth-container">
+    <div class="auth-card">
+      <header class="auth-header">
+        <h1>联盟营销数据采集系统</h1>
+        <p class="subtitle">多用户SaaS版本</p>
+      </header>
+
+      <div class="auth-tabs">
+        <button class="tab-btn active" onclick="showTab('login', event)">登录</button>
+        <button class="tab-btn" onclick="showTab('register', event)">注册</button>
+      </div>
+
+      <!-- 登录表单 -->
+      <div id="loginTab" class="tab-content active">
+        <form id="loginForm">
+          <div class="form-group">
+            <label>邮箱:</label>
+            <input type="email" id="loginEmail" placeholder="your@email.com" required>
+          </div>
+          <div class="form-group">
+            <label>密码:</label>
+            <input type="password" id="loginPassword" placeholder="输入密码" required>
+          </div>
+          <button type="submit" class="btn-primary">登录</button>
+        </form>
+        <div id="loginStatus" class="status-message"></div>
+      </div>
+
+      <!-- 注册表单 -->
+      <div id="registerTab" class="tab-content">
+        <form id="registerForm">
+          <div class="form-group">
+            <label>用户名:</label>
+            <input type="text" id="registerUsername" placeholder="输入用户名" required>
+          </div>
+          <div class="form-group">
+            <label>邮箱:</label>
+            <input type="email" id="registerEmail" placeholder="your@email.com" required>
+          </div>
+          <div class="form-group">
+            <label>密码:</label>
+            <input type="password" id="registerPassword" placeholder="至少6位" minlength="6" required>
+          </div>
+          <div class="form-group">
+            <label>邀请码:</label>
+            <input type="text" id="registerInvitationCode" placeholder="请输入邀请码" required>
+            <small style="color: #999; font-size: 12px; margin-top: 5px; display: block;">请向管理员申请邀请码</small>
+          </div>
+          <button type="submit" class="btn-primary">注册</button>
+        </form>
+        <div id="registerStatus" class="status-message"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 主应用页面（带侧边栏） -->
+  <div id="appSection" class="app-layout" style="display: none;">
+    <!-- 左侧边栏 -->
+    <aside class="sidebar">
+      <div class="sidebar-header">
+        <h2 class="logo">数据采集</h2>
+      </div>
+
+      <nav class="sidebar-nav">
+        <a href="#" class="nav-item active" onclick="showSection('dashboard', event)">
+          <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+            <path d="M3 4C3 3.44772 3.44772 3 4 3H7C7.55228 3 8 3.44772 8 4V7C8 7.55228 7.55228 8 7 8H4C3.44772 8 3 7.55228 3 7V4Z" stroke="currentColor" stroke-width="1.5"/>
+            <path d="M3 13C3 12.4477 3.44772 12 4 12H7C7.55228 12 8 12.4477 8 13V16C8 16.5523 7.55228 17 7 17H4C3.44772 17 3 16.5523 3 16V13Z" stroke="currentColor" stroke-width="1.5"/>
+            <path d="M12 4C12 3.44772 12.4477 3 13 3H16C16.5523 3 17 3.44772 17 4V7C17 7.55228 16.5523 8 16 8H13C12.4477 8 12 7.55228 12 7V4Z" stroke="currentColor" stroke-width="1.5"/>
+            <path d="M12 13C12 12.4477 12.4477 12 13 12H16C16.5523 12 17 12.4477 17 13V16C17 16.5523 16.5523 17 16 17H13C12.4477 17 12 16.5523 12 16V13Z" stroke="currentColor" stroke-width="1.5"/>
+          </svg>
+          <span>数据采集</span>
+        </a>
+
+        <a href="#" class="nav-item" onclick="showSection('accounts', event)">
+          <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+            <path d="M4 6C4 4.89543 4.89543 4 6 4H14C15.1046 4 16 4.89543 16 6V14C16 15.1046 15.1046 16 14 16H6C4.89543 16 4 15.1046 4 14V6Z" stroke="currentColor" stroke-width="1.5"/>
+            <path d="M8 8H12M8 12H10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+          </svg>
+          <span>平台账号</span>
+        </a>
+
+        <a href="#" class="nav-item" onclick="showSection('sheets', event)">
+          <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+            <path d="M5 3C4.44772 3 4 3.44772 4 4V16C4 16.5523 4.44772 17 5 17H15C15.5523 17 16 16.5523 16 16V7L12 3H5Z" stroke="currentColor" stroke-width="1.5"/>
+            <path d="M8 10H12M8 13H12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+          </svg>
+          <span>谷歌表格</span>
+        </a>
+
+        <a href="#" class="nav-item" onclick="showSection('ranking', event)">
+          <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+            <path d="M10 2L12.5 8.5L19 9L14 13.5L15.5 20L10 16.5L4.5 20L6 13.5L1 9L7.5 8.5L10 2Z" stroke="currentColor" stroke-width="1.5" fill="currentColor"/>
+          </svg>
+          <span>推荐榜单</span>
+        </a>
+
+        <a href="#" class="nav-item" onclick="showSection('settlement', event)">
+          <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+            <path d="M3 5C3 4.44772 3.44772 4 4 4H16C16.5523 4 17 4.44772 17 5V15C17 15.5523 16.5523 16 16 16H4C3.44772 16 3 15.5523 3 15V5Z" stroke="currentColor" stroke-width="1.5"/>
+            <path d="M6 8H14M6 11H12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+            <path d="M10 2V4M10 16V18M4 10H2M18 10H16" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+          </svg>
+          <span>结算查询</span>
+        </a>
+      </nav>
+
+      <div class="sidebar-footer">
+        <div class="user-info">
+          <div class="user-avatar">👤</div>
+          <div class="user-details">
+            <div class="user-name" id="currentUser">用户</div>
+            <div class="user-role">普通用户</div>
+          </div>
+          <button onclick="openProfileSettings()" class="settings-btn" title="个人设置">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/>
+              <circle cx="12" cy="12" r="3"/>
+            </svg>
+          </button>
+        </div>
+        <button onclick="logout()" class="logout-btn">退出登录</button>
+      </div>
+    </aside>
+
+    <!-- 主内容区 -->
+    <main class="main-content">
+      <div class="content-header">
+        <h1 id="pageTitle">数据采集</h1>
+      </div>
+
+      <!-- 数据采集面板 -->
+      <div id="dashboardSection" class="content-section">
+        <div class="card" id="collectSection" style="display: none;">
+          <h2>开始采集数据</h2>
+
+          <form id="collectForm">
+            <div class="form-row">
+              <div class="form-group">
+                <label>开始日期:</label>
+                <input type="date" id="startDate" required>
+              </div>
+              <div class="form-group">
+                <label>结束日期:</label>
+                <input type="date" id="endDate" required>
+              </div>
+            </div>
+            <button type="submit" class="btn-primary">
+              <span id="collectBtnText">开始采集</span>
+              <span id="collectSpinner" class="spinner" style="display: none;"></span>
+            </button>
+          </form>
+
+          <div id="collectStatus" class="status-message"></div>
+
+          <!-- 统计卡片 -->
+          <div id="statsSection" style="display: none;">
+            <h3>数据统计</h3>
+            <div class="stats-cards">
+              <div class="stat-card">
+                <div class="stat-label">订单总数</div>
+                <div class="stat-value" id="totalOrders">0</div>
+              </div>
+              <div class="stat-card">
+                <div class="stat-label">总预算</div>
+                <div class="stat-value" id="totalBudget">$0</div>
+              </div>
+              <div class="stat-card">
+                <div class="stat-label">总佣金</div>
+                <div class="stat-value" id="totalCommission">$0</div>
+              </div>
+              <div class="stat-card">
+                <div class="stat-label">总广告费</div>
+                <div class="stat-value" id="totalAdSpend">$0</div>
+              </div>
+              <div class="stat-card">
+                <div class="stat-label">整体ROI</div>
+                <div class="stat-value" id="overallROI">0.00</div>
+              </div>
+            </div>
+          </div>
+
+        <!-- 商家汇总表格 -->
+        <div id="merchantSection" style="display: none;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; margin-top: 30px; padding: 0 4px;">
+            <h3 style="margin: 0;">💼 商家汇总</h3>
+            <div style="display: flex; align-items: center; gap: 16px;">
+              <div style="display: flex; align-items: center; gap: 8px;">
+                <label style="color: var(--text-secondary); font-size: 13px; font-weight: 500;">显示状态：</label>
+                <div style="display: flex; gap: 8px; background: var(--bg-tertiary); padding: 4px; border-radius: 8px;">
+                  <label style="display: flex; align-items: center; cursor: pointer; padding: 6px 12px; border-radius: 6px; transition: all 0.2s;" class="status-filter-label">
+                    <input type="radio" name="showStatus" value="all" style="margin-right: 6px; cursor: pointer;" onchange="handleStatusFilterChange()">
+                    <span style="font-size: 12px; color: var(--text-secondary);">全部</span>
+                  </label>
+                  <label style="display: flex; align-items: center; cursor: pointer; padding: 6px 12px; border-radius: 6px; transition: all 0.2s;" class="status-filter-label">
+                    <input type="radio" name="showStatus" value="active" checked style="margin-right: 6px; cursor: pointer;" onchange="handleStatusFilterChange()">
+                    <span style="font-size: 12px; color: var(--text-secondary);">仅活跃</span>
+                  </label>
+                  <label style="display: flex; align-items: center; cursor: pointer; padding: 6px 12px; border-radius: 6px; transition: all 0.2s;" class="status-filter-label">
+                    <input type="radio" name="showStatus" value="paused" style="margin-right: 6px; cursor: pointer;" onchange="handleStatusFilterChange()">
+                    <span style="font-size: 12px; color: var(--text-secondary);">仅暂停</span>
+                  </label>
+                </div>
+              </div>
+              <button onclick="exportMerchantSummary()" class="btn-export" id="exportBtn" style="display: none;">
+                <span>📥</span> 导出Excel
+              </button>
+            </div>
+          </div>
+            <div class="table-container">
+              <table>
+                <thead>
+                  <tr>
+                    <th style="width: 35px; min-width: 30px;">排名</th>
+                    <th style="width: auto; min-width: 160px;">广告系列</th>
+                    <th style="width: 35px; min-width: 30px;">商家ID</th>
+                    <th style="width: 70px; min-width: 65px;">预算</th>
+                    <th style="width: 80px; min-width: 75px;">展示</th>
+                    <th style="width: 75px; min-width: 70px;">点击</th>
+                    <th style="width: 80px; min-width: 75px;">广告费</th>
+                    <th style="width: 55px; min-width: 50px;">订单数</th>
+                    <th style="width: 85px; min-width: 80px;">总佣金</th>
+                    <th style="width: 50px; min-width: 45px;">CR</th>
+                    <th style="width: 60px; min-width: 55px;">EPC</th>
+                    <th style="width: 60px; min-width: 55px;">CPC</th>
+                    <th style="width: 60px; min-width: 55px;">ROI</th>
+                    <th style="background: #8b5cf6; color: white; width: 250px; min-width: 230px;">操作建议</th>
+                  </tr>
+                </thead>
+                <tbody id="merchantTableBody">
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 平台账号管理面板 -->
+      <div id="accountsSection" class="content-section" style="display: none;">
+        <div class="card">
+          <div class="card-header">
+            <h2>平台账号管理</h2>
+            <button onclick="showAddAccountModal()" class="btn-primary">+ 添加账号</button>
+          </div>
+
+          <div id="accountsList">
+            <!-- 账号列表动态生成 -->
+          </div>
+        </div>
+      </div>
+
+      <!-- Google表格管理面板 -->
+      <div id="sheetsSection" class="content-section" style="display: none;">
+        <div class="card">
+          <div class="card-header">
+            <h2>Google表格管理</h2>
+            <button onclick="showAddGoogleSheetModal()" class="btn-primary">+ 添加表格</button>
+          </div>
+
+          <div id="googleSheetsList">
+            <!-- 表格列表动态生成 -->
+          </div>
+        </div>
+      </div>
+
+      <!-- 推荐榜单面板 -->
+      <div id="rankingSection" class="content-section" style="display: none;">
+        <div class="card">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px; flex-wrap: wrap; gap: 16px;">
+            <div>
+              <h2 style="margin: 0 0 8px 0; font-size: 24px; font-weight: 700; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text;">🔥 热门推荐广告系列 Top 10</h2>
+              <div id="rankingDateRange" style="font-size: 13px; color: var(--text-secondary);"></div>
+            </div>
+            <div style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap;">
+              <select id="rankingRange" onchange="handleRankingRangeChange()" style="padding: 10px 14px; border-radius: 8px; border: 1px solid var(--border-medium); background: var(--bg-tertiary); color: var(--text-primary); font-size: 14px; cursor: pointer; transition: all 0.2s;" onmouseover="this.style.borderColor='var(--accent)'" onmouseout="this.style.borderColor='var(--border-medium)'">
+                <option value="yesterday">昨天</option>
+                <option value="last7days" selected>最近7天</option>
+                <option value="last30days">最近30天</option>
+                <option value="custom">自定义</option>
+              </select>
+              <div id="customDateRange" style="display: none; gap: 8px; align-items: center; flex-direction: row;">
+                <input type="date" id="rankingStartDate" style="padding: 8px 12px; border-radius: 8px; border: 1px solid var(--border-medium); background: var(--bg-tertiary); color: var(--text-primary); font-size: 13px;">
+                <span style="color: var(--text-secondary);">至</span>
+                <input type="date" id="rankingEndDate" style="padding: 8px 12px; border-radius: 8px; border: 1px solid var(--border-medium); background: var(--bg-tertiary); color: var(--text-primary); font-size: 13px;">
+                <button onclick="loadTopAdsRanking()" class="btn-primary" style="padding: 8px 16px; font-size: 13px;">确定</button>
+              </div>
+              <button onclick="loadTopAdsRanking()" class="btn-primary" style="padding: 10px 20px; font-size: 14px;">🔄 刷新</button>
+            </div>
+          </div>
+          <div id="rankingList" style="display: grid; gap: 16px;">
+            <!-- 榜单内容动态生成 -->
+          </div>
+        </div>
+
+        <!-- 稳定广告模块 -->
+        <div class="card" style="margin-top: 24px;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px; flex-wrap: wrap; gap: 16px;">
+            <div>
+              <h2 style="margin: 0 0 8px 0; font-size: 24px; font-weight: 700; background: linear-gradient(135deg, #10b981 0%, #059669 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text;">⭐ 稳定优质广告系列 Top 10</h2>
+              <div id="stableRankingDateRange" style="font-size: 13px; color: var(--text-secondary);"></div>
+            </div>
+            <div style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap;">
+              <div style="font-size: 13px; color: var(--text-secondary);">ROI > 3, 推广人数 ≥ 5</div>
+            </div>
+          </div>
+          <div id="stableRankingList" style="display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); align-items: stretch;">
+            <!-- 稳定广告内容动态生成 -->
+          </div>
+        </div>
+      </div>
+
+      <!-- 结算查询面板 -->
+      <div id="settlementSection" class="content-section" style="display: none;">
+        <div class="card">
+          <h2>💰 结算查询</h2>
+
+          <!-- 筛选条件 -->
+          <div class="settlement-filters" style="margin-bottom: 24px;">
+            <!-- 快捷筛选按钮 -->
+            <div style="margin-bottom: 16px;">
+              <label style="display: block; margin-bottom: 8px; color: var(--text-secondary); font-size: 13px; font-weight: 500;">快捷筛选:</label>
+              <div style="display: flex; flex-direction: column; gap: 8px;">
+                <!-- 近期数据 -->
+                <div style="display: flex; flex-wrap: wrap; gap: 8px;">
+                  <span style="color: var(--text-tertiary); font-size: 12px; width: 60px; line-height: 32px;">近期:</span>
+                  <button type="button" onclick="setQuickFilter('today')" class="btn-quick-filter" data-filter="today">今日</button>
+                  <button type="button" onclick="setQuickFilter('yesterday')" class="btn-quick-filter" data-filter="yesterday">昨天</button>
+                  <button type="button" onclick="setQuickFilter('last7days')" class="btn-quick-filter" data-filter="last7days">最近7天</button>
+                  <button type="button" onclick="setQuickFilter('last30days')" class="btn-quick-filter" data-filter="last30days">最近30天</button>
+                </div>
+                <!-- 月度结算 -->
+                <div style="display: flex; flex-wrap: wrap; gap: 8px;">
+                  <span style="color: var(--text-tertiary); font-size: 12px; width: 60px; line-height: 32px;">月度:</span>
+                  <button type="button" onclick="setQuickFilter('thisMonth')" class="btn-quick-filter" data-filter="thisMonth">本月</button>
+                  <button type="button" onclick="setQuickFilter('lastMonth')" class="btn-quick-filter" data-filter="lastMonth">上月</button>
+                  <button type="button" onclick="setQuickFilter('last2Months')" class="btn-quick-filter" data-filter="last2Months">上上月</button>
+                </div>
+                <!-- 季度结算 -->
+                <div style="display: flex; flex-wrap: wrap; gap: 8px;">
+                  <span style="color: var(--text-tertiary); font-size: 12px; width: 60px; line-height: 32px;">季度:</span>
+                  <button type="button" onclick="setQuickFilter('thisQuarter')" class="btn-quick-filter" data-filter="thisQuarter">本季度</button>
+                  <button type="button" onclick="setQuickFilter('lastQuarter')" class="btn-quick-filter" data-filter="lastQuarter">上个季度</button>
+                  <button type="button" onclick="setQuickFilter('last2Quarters')" class="btn-quick-filter" data-filter="last2Quarters">上上个季度</button>
+                </div>
+                <!-- 半年/年度结算 -->
+                <div style="display: flex; flex-wrap: wrap; gap: 8px;">
+                  <span style="color: var(--text-tertiary); font-size: 12px; width: 60px; line-height: 32px;">长期:</span>
+                  <button type="button" onclick="setQuickFilter('last3Months')" class="btn-quick-filter" data-filter="last3Months">最近3个月</button>
+                  <button type="button" onclick="setQuickFilter('last6Months')" class="btn-quick-filter" data-filter="last6Months">最近半年</button>
+                  <button type="button" onclick="setQuickFilter('firstHalfYear')" class="btn-quick-filter" data-filter="firstHalfYear">上半年</button>
+                  <button type="button" onclick="setQuickFilter('secondHalfYear')" class="btn-quick-filter" data-filter="secondHalfYear">下半年</button>
+                  <button type="button" onclick="setQuickFilter('thisYear')" class="btn-quick-filter" data-filter="thisYear">今年</button>
+                  <button type="button" onclick="setQuickFilter('lastYear')" class="btn-quick-filter" data-filter="lastYear">去年</button>
+                  <button type="button" onclick="setQuickFilter('last12Months')" class="btn-quick-filter" data-filter="last12Months">最近1年</button>
+                  <button type="button" onclick="setQuickFilter('custom')" class="btn-quick-filter" data-filter="custom">自定义</button>
+                </div>
+              </div>
+            </div>
+
+            <!-- 基础筛选 -->
+            <form id="settlementFilterForm" onsubmit="handleSettlementFilter(event)">
+              <div class="form-row">
+                <div class="form-group">
+                  <label>开始日期:</label>
+                  <input type="date" id="settlementStartDate">
+                </div>
+                <div class="form-group">
+                  <label>结束日期:</label>
+                  <input type="date" id="settlementEndDate">
+                </div>
+                <div class="form-group">
+                  <label>平台账号:</label>
+                  <select id="settlementPlatformAccount">
+                    <option value="">全部</option>
+                  </select>
+                </div>
+                <div class="form-group">
+                  <label>订单状态:</label>
+                  <select id="settlementStatus" onchange="handleSettlementStatusChange()">
+                    <option value="all">全部</option>
+                    <option value="待确认">待确认</option>
+                    <option value="已确认">已确认</option>
+                    <option value="已拒绝">已拒绝</option>
+                  </select>
+                </div>
+              </div>
+
+              <!-- 高级筛选 -->
+              <div id="advancedFilters" style="display: none; margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border-light);">
+                <div style="margin-bottom: 12px; color: var(--text-secondary); font-size: 13px; font-weight: 500;">高级筛选:</div>
+                <div class="form-row">
+                  <div class="form-group">
+                    <label>订单金额范围:</label>
+                    <div style="display: flex; gap: 8px; align-items: center;">
+                      <input type="number" id="settlementOrderAmountMin" placeholder="最小值" step="0.01" style="flex: 1;">
+                      <span style="color: var(--text-secondary);">-</span>
+                      <input type="number" id="settlementOrderAmountMax" placeholder="最大值" step="0.01" style="flex: 1;">
+                    </div>
+                  </div>
+                  <div class="form-group">
+                    <label>佣金金额范围:</label>
+                    <div style="display: flex; gap: 8px; align-items: center;">
+                      <input type="number" id="settlementCommissionMin" placeholder="最小值" step="0.01" style="flex: 1;">
+                      <span style="color: var(--text-secondary);">-</span>
+                      <input type="number" id="settlementCommissionMax" placeholder="最大值" step="0.01" style="flex: 1;">
+                    </div>
+                  </div>
+                  <div class="form-group">
+                    <label>商家ID:</label>
+                    <input type="text" id="settlementMerchantId" placeholder="输入商家ID">
+                  </div>
+                  <div class="form-group">
+                    <label>商家名称:</label>
+                    <input type="text" id="settlementMerchantName" placeholder="输入商家名称">
+                  </div>
+                </div>
+                <div class="form-row">
+                  <div class="form-group">
+                    <label>订单ID:</label>
+                    <input type="text" id="settlementOrderId" placeholder="输入订单ID">
+                  </div>
+                  <div class="form-group" style="flex: 1;"></div>
+                  <div class="form-group" style="flex: 1;"></div>
+                </div>
+              </div>
+
+              <div style="display: flex; gap: 12px; margin-top: 16px; flex-wrap: wrap;">
+                <button type="submit" class="btn-primary">查询</button>
+                <button type="button" onclick="toggleAdvancedFilters()" class="btn-secondary" id="toggleAdvancedBtn">
+                  <span id="toggleAdvancedText">展开高级筛选</span>
+                </button>
+                <button type="button" onclick="resetSettlementFilters()" class="btn-secondary">重置</button>
+                <button type="button" onclick="collectSettlementData()" class="btn-primary" id="collectSettlementBtn" style="background: #10b981;">
+                  <span>📥</span> 采集数据
+                </button>
+              </div>
+            </form>
+          </div>
+
+          <!-- 查询状态显示 -->
+          <div id="settlementStatusMessage" class="status-message" style="display: none; margin-bottom: 16px; padding: 12px 16px; border-radius: 8px; background: var(--bg-tertiary); border-left: 4px solid var(--accent); font-size: 14px; line-height: 1.5;">
+            <!-- 状态内容动态更新 -->
+          </div>
+
+          <!-- 数据状态提示 -->
+          <div id="settlementDataStatus" style="display: none; margin-bottom: 16px; padding: 12px; border-radius: 8px; background: var(--bg-tertiary); border-left: 4px solid var(--accent);">
+            <div style="display: flex; align-items: center; gap: 8px;">
+              <span id="settlementDataStatusIcon">⚠️</span>
+              <span id="settlementDataStatusText" style="flex: 1;"></span>
+            </div>
+          </div>
+
+          <!-- 视图切换 -->
+          <div id="settlementViewToggle" style="display: none; margin-bottom: 16px;">
+            <div style="display: flex; gap: 8px; align-items: center;">
+              <span style="color: var(--text-secondary); font-size: 13px; font-weight: 500;">视图模式:</span>
+              <button type="button" onclick="switchSettlementView('merchant')" class="btn-view-toggle active" id="merchantViewBtn">
+                商家汇总
+              </button>
+              <button type="button" onclick="switchSettlementView('detail')" class="btn-view-toggle" id="detailViewBtn">
+                订单明细
+              </button>
+            </div>
+          </div>
+
+          <!-- 统计卡片 -->
+          <div id="settlementStats" style="display: none; margin-bottom: 24px;">
+            <h3 style="margin-bottom: 16px;">📊 统计汇总</h3>
+            <div class="stats-cards">
+              <div class="stat-card">
+                <div class="stat-label">总订单数</div>
+                <div class="stat-value" id="settlementTotalOrders">0</div>
+              </div>
+              <div class="stat-card">
+                <div class="stat-label">总佣金</div>
+                <div class="stat-value" id="settlementTotalCommission">$0</div>
+              </div>
+              <div class="stat-card" style="background: var(--success-light); border-color: var(--success);">
+                <div class="stat-label">已确认佣金</div>
+                <div class="stat-value" style="color: var(--success);" id="settlementConfirmedCommission">$0</div>
+              </div>
+              <div class="stat-card" style="background: var(--warning-light); border-color: var(--warning);">
+                <div class="stat-label">待确认佣金</div>
+                <div class="stat-value" style="color: var(--warning);" id="settlementPendingCommission">$0</div>
+              </div>
+              <div class="stat-card" style="background: var(--danger-light); border-color: var(--danger);">
+                <div class="stat-label">已拒绝佣金</div>
+                <div class="stat-value" style="color: var(--danger);" id="settlementRejectedCommission">$0</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- 商家汇总表格 -->
+          <div id="settlementMerchantSection" style="display: none; margin-bottom: 24px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; flex-wrap: wrap; gap: 12px;">
+              <h3 style="margin: 0;">商家汇总</h3>
+              <div style="display: flex; gap: 12px; align-items: center;">
+                <!-- 商家搜索 -->
+                <input type="text" id="settlementMerchantSearch" placeholder="搜索商家ID、商家名称..." 
+                       style="padding: 8px 12px; border: 1px solid var(--border-light); border-radius: 6px; background: var(--bg-secondary); color: var(--text-primary); font-size: 13px; min-width: 200px;"
+                       oninput="filterSettlementMerchants()">
+                <button onclick="exportSettlementMerchants()" class="btn-export" id="settlementMerchantExportBtn">
+                  <span>📥</span> 导出商家汇总
+                </button>
+              </div>
+            </div>
+            <div class="table-container">
+              <table id="settlementMerchantTable">
+                <thead>
+                  <tr>
+                    <th onclick="sortSettlementMerchants('merchant_id')" style="cursor: pointer; user-select: none; text-align: center;">
+                      商家ID <span class="sort-indicator" data-column="merchant_id"></span>
+                    </th>
+                    <th onclick="sortSettlementMerchants('merchant_name')" style="cursor: pointer; user-select: none; text-align: center;">
+                      商家名称 <span class="sort-indicator" data-column="merchant_name"></span>
+                    </th>
+                    <th onclick="sortSettlementMerchants('platform')" style="cursor: pointer; user-select: none; text-align: center;">
+                      所属平台 <span class="sort-indicator" data-column="platform"></span>
+                    </th>
+                    <th onclick="sortSettlementMerchants('total_orders')" style="cursor: pointer; user-select: none; text-align: center;">
+                      订单数 <span class="sort-indicator" data-column="total_orders"></span>
+                    </th>
+                    <th onclick="sortSettlementMerchants('total_order_amount')" style="cursor: pointer; user-select: none; text-align: right;">
+                      订单金额 <span class="sort-indicator" data-column="total_order_amount"></span>
+                    </th>
+                    <th onclick="sortSettlementMerchants('total_commission')" style="cursor: pointer; user-select: none; text-align: right;">
+                      总佣金 <span class="sort-indicator" data-column="total_commission"></span>
+                    </th>
+                    <th onclick="sortSettlementMerchants('confirmed_commission')" style="cursor: pointer; user-select: none; text-align: right;">
+                      已确认佣金 <span class="sort-indicator" data-column="confirmed_commission"></span>
+                    </th>
+                    <th onclick="sortSettlementMerchants('pending_commission')" style="cursor: pointer; user-select: none; text-align: right;">
+                      待确认佣金 <span class="sort-indicator" data-column="pending_commission"></span>
+                    </th>
+                    <th onclick="sortSettlementMerchants('rejected_commission')" style="cursor: pointer; user-select: none; text-align: right;">
+                      已拒绝佣金 <span class="sort-indicator" data-column="rejected_commission"></span>
+                    </th>
+                    <th onclick="sortSettlementMerchants('settlement_rate')" style="cursor: pointer; user-select: none; text-align: center;">
+                      结算率 <span class="sort-indicator" data-column="settlement_rate"></span>
+                    </th>
+                    <th onclick="sortSettlementMerchants('rejection_rate')" style="cursor: pointer; user-select: none; text-align: center;">
+                      拒付率 <span class="sort-indicator" data-column="rejection_rate"></span>
+                    </th>
+                    <th style="width: 100px; text-align: center;">操作</th>
+                  </tr>
+                </thead>
+                <tbody id="settlementMerchantTableBody">
+                </tbody>
+              </table>
+            </div>
+            <!-- 商家汇总分页 -->
+            <div id="settlementMerchantPagination" style="display: flex; justify-content: space-between; align-items: center; margin-top: 16px; padding: 12px; background: var(--bg-secondary); border-radius: 8px;">
+              <button id="settlementMerchantPrevBtn" onclick="changeSettlementMerchantPage('prev')" class="btn-secondary" disabled style="padding: 8px 16px;">
+                上一页
+              </button>
+              <span id="settlementMerchantPageInfo" style="color: var(--text-primary); font-size: 14px;">
+                第 1 / 1 页，共 0 个商家
+              </span>
+              <button id="settlementMerchantNextBtn" onclick="changeSettlementMerchantPage('next')" class="btn-secondary" disabled style="padding: 8px 16px;">
+                下一页
+              </button>
+            </div>
+          </div>
+
+          <!-- 订单明细表格 -->
+          <div id="settlementTableSection" style="display: none;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; flex-wrap: wrap; gap: 12px;">
+              <h3 style="margin: 0;">订单明细</h3>
+              <div style="display: flex; gap: 12px; align-items: center;">
+                <!-- 表格搜索 -->
+                <input type="text" id="settlementTableSearch" placeholder="搜索订单ID、商家名称..." 
+                       style="padding: 8px 12px; border: 1px solid var(--border-light); border-radius: 6px; background: var(--bg-secondary); color: var(--text-primary); font-size: 13px; min-width: 200px;"
+                       oninput="filterSettlementTable()">
+                <button onclick="exportSettlementData()" class="btn-export" id="settlementExportBtn">
+                  <span>📥</span> 导出Excel
+                </button>
+              </div>
+            </div>
+            <div class="table-container">
+              <table id="settlementTable">
+                <thead>
+                  <tr>
+                    <th onclick="sortSettlementTable('order_id')" style="cursor: pointer; user-select: none;">
+                      订单ID <span class="sort-indicator" data-column="order_id"></span>
+                    </th>
+                    <th onclick="sortSettlementTable('order_date')" style="cursor: pointer; user-select: none;">
+                      订单日期 <span class="sort-indicator" data-column="order_date"></span>
+                    </th>
+                    <th onclick="sortSettlementTable('platform')" style="cursor: pointer; user-select: none;">
+                      平台 <span class="sort-indicator" data-column="platform"></span>
+                    </th>
+                    <th onclick="sortSettlementTable('merchant_id')" style="cursor: pointer; user-select: none;">
+                      商家ID <span class="sort-indicator" data-column="merchant_id"></span>
+                    </th>
+                    <th onclick="sortSettlementTable('merchant_name')" style="cursor: pointer; user-select: none;">
+                      商家名称 <span class="sort-indicator" data-column="merchant_name"></span>
+                    </th>
+                    <th onclick="sortSettlementTable('order_amount')" style="cursor: pointer; user-select: none;">
+                      订单金额 <span class="sort-indicator" data-column="order_amount"></span>
+                    </th>
+                    <th onclick="sortSettlementTable('commission')" style="cursor: pointer; user-select: none;">
+                      佣金金额 <span class="sort-indicator" data-column="commission"></span>
+                    </th>
+                    <th onclick="sortSettlementTable('status')" style="cursor: pointer; user-select: none;">
+                      订单状态 <span class="sort-indicator" data-column="status"></span>
+                    </th>
+                  </tr>
+                </thead>
+                <tbody id="settlementTableBody">
+                </tbody>
+              </table>
+            </div>
+            <!-- 分页 -->
+            <div id="settlementPagination" style="display: none; margin-top: 16px; flex-direction: row; justify-content: center; align-items: center; gap: 12px;">
+              <button onclick="changeSettlementPage('prev')" class="btn-secondary" id="settlementPrevBtn">上一页</button>
+              <span id="settlementPageInfo" style="color: var(--text-secondary);">第 1 页，共 1 页</span>
+              <button onclick="changeSettlementPage('next')" class="btn-secondary" id="settlementNextBtn">下一页</button>
+            </div>
+          </div>
+
+          <div id="settlementStatus" class="status-message"></div>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <!-- 添加账号弹窗 -->
+  <div id="addAccountModal" class="modal">
+    <div class="modal-content">
+      <span class="close" onclick="closeAddAccountModal()">&times;</span>
+      <h2>添加平台账号</h2>
+      <form id="addAccountForm">
+        <div class="form-group">
+          <label>平台:</label>
+          <select id="platformSelect" required onchange="toggleApiTokenField()">
+            <option value="linkhaitao">LinkHaitao</option>
+            <option value="partnermatic">PartnerMatic</option>
+            <option value="linkbux">LinkBux</option>
+            <option value="rewardoo">Rewardoo</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>账号名称:</label>
+          <input type="text" id="accountName" placeholder="平台登录用户名或标识" required>
+        </div>
+        <div class="form-group" id="passwordGroup">
+          <label>账号密码:</label>
+          <input type="password" id="accountPassword" placeholder="平台登录密码">
+          <small>某些平台需要密码进行自动登录</small>
+        </div>
+        <div class="form-group" id="apiTokenGroup" style="display: none;">
+          <label>API Token:</label>
+          <input type="text" id="apiToken" placeholder="API Token（在平台后台获取）">
+          <small id="apiTokenHint">LinkBux、Rewardoo、LinkHaitao和PartnerMatic平台使用API Token采集，无需密码</small>
+        </div>
+        <div class="form-group">
+          <label>联盟序号（可选）:</label>
+          <input type="text" id="affiliateName" placeholder="例如: LH1, PM1, PM4, LB1" maxlength="10">
+          <small>用于区分同平台的多个账号，如 LH1、LH2、PM1、LB1 等</small>
+        </div>
+        <button type="submit" class="btn-primary">添加</button>
+      </form>
+      <div id="addAccountStatus" class="status-message"></div>
+    </div>
+  </div>
+
+  <!-- 订单详情弹窗 -->
+  <div id="settlementOrderDetailModal" class="modal" onclick="if(event.target===this) closeSettlementOrderDetail()">
+    <div class="modal-content" style="max-width: 600px;">
+      <span class="close" onclick="closeSettlementOrderDetail()">&times;</span>
+      <h2>订单详情</h2>
+      <div id="settlementOrderDetailContent" style="padding: 20px 0;">
+        <!-- 订单详情内容动态生成 -->
+      </div>
+    </div>
+  </div>
+
+  <!-- 添加Google表格弹窗 -->
+  <div id="addGoogleSheetModal" class="modal">
+    <div class="modal-content">
+      <span class="close" onclick="closeAddGoogleSheetModal()">&times;</span>
+      <h2>添加Google表格</h2>
+      <form id="addGoogleSheetForm">
+        <div class="form-group">
+          <label>表格名称:</label>
+          <input type="text" id="sheetName" placeholder="例如: 12月广告数据" required>
+        </div>
+        <div class="form-group">
+          <label>表格URL:</label>
+          <input type="url" id="sheetUrl" placeholder="https://docs.google.com/spreadsheets/d/..." required>
+          <small>提示: 请确保表格已设置为"任何人可查看"</small>
+        </div>
+        <div class="form-group">
+          <label>备注（可选）:</label>
+          <input type="text" id="sheetDescription" placeholder="例如: Google Ads搜索广告数据">
+        </div>
+        <button type="submit" class="btn-primary">添加</button>
+      </form>
+      <div id="addGoogleSheetStatus" class="status-message"></div>
+    </div>
+  </div>
+
+  <!-- 个人设置 Modal -->
+  <div id="profileSettingsModal" class="modal" style="display: none;">
+    <div class="modal-overlay" onclick="closeProfileSettings()"></div>
+    <div class="modal-content profile-modal">
+      <div class="modal-header">
+        <div class="modal-title">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" class="modal-icon">
+            <path d="M12 15a3 3 0 100-6 3 3 0 000 6z" stroke="currentColor" stroke-width="2"/>
+            <path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83 0 2 2 0 010-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 010-2.83 2 2 0 012.83 0l.06.06a1.65 1.65 0 001.82.33H9a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 0 2 2 0 010 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z" stroke="currentColor" stroke-width="2"/>
+          </svg>
+          <h2>个人设置</h2>
+        </div>
+        <button class="close-btn" onclick="closeProfileSettings()" type="button">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
+            <path d="M18 6L6 18M6 6l12 12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+          </svg>
+        </button>
+      </div>
+      <div class="modal-body">
+        <form id="profileSettingsForm">
+          <!-- 邮箱（只读） -->
+          <div class="form-section">
+            <label class="form-label">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+                <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z" stroke="currentColor" stroke-width="2"/>
+                <path d="M22 6l-10 7L2 6" stroke="currentColor" stroke-width="2"/>
+              </svg>
+              邮箱地址
+            </label>
+            <div class="readonly-field">
+              <input type="email" id="profileEmail" readonly disabled>
+              <span class="lock-badge">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none">
+                  <path d="M19 11H5c-1.1 0-2 .9-2 2v7c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2v-7c0-1.1-.9-2-2-2zM7 11V7c0-2.76 2.24-5 5-5s5 2.24 5 5v4" stroke="currentColor" stroke-width="2"/>
+                </svg>
+                不可修改
+              </span>
+            </div>
+            <small class="form-hint">此邮箱用于登录，出于安全考虑不支持修改</small>
+          </div>
+
+          <!-- 用户名 -->
+          <div class="form-section">
+            <label class="form-label">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+                <path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2M12 11a4 4 0 100-8 4 4 0 000 8z" stroke="currentColor" stroke-width="2"/>
+              </svg>
+              用户名
+            </label>
+            <input type="text" id="profileUsername" placeholder="输入新用户名" required class="form-input">
+          </div>
+
+          <!-- 密码分隔线 -->
+          <div class="section-divider">
+            <span>修改密码（可选）</span>
+          </div>
+
+          <!-- 修改密码（可选） -->
+          <div class="form-section">
+            <label class="form-label">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+                <path d="M19 11H5c-1.1 0-2 .9-2 2v7c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2v-7c0-1.1-.9-2-2-2zM7 11V7c0-2.76 2.24-5 5-5s5 2.24 5 5v4" stroke="currentColor" stroke-width="2"/>
+              </svg>
+              当前密码
+            </label>
+            <input type="password" id="profileCurrentPassword" placeholder="输入当前密码以验证身份" class="form-input">
+          </div>
+
+          <div class="form-section">
+            <label class="form-label">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+                <path d="M12 2L2 7v7c0 5.5 3.8 10.7 10 12 6.2-1.3 10-6.5 10-12V7l-10-5z" stroke="currentColor" stroke-width="2"/>
+              </svg>
+              新密码
+            </label>
+            <input type="password" id="profileNewPassword" placeholder="输入新密码（至少6位）" minlength="6" class="form-input">
+          </div>
+
+          <div class="form-section">
+            <label class="form-label">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+                <path d="M9 11l3 3 8-8M20 12v6a2 2 0 01-2 2H6a2 2 0 01-2-2V6a2 2 0 012-2h9" stroke="currentColor" stroke-width="2"/>
+              </svg>
+              确认新密码
+            </label>
+            <input type="password" id="profileConfirmPassword" placeholder="再次输入新密码" minlength="6" class="form-input">
+          </div>
+
+          <div class="info-box">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+              <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="2"/>
+              <path d="M12 16v-4M12 8h.01" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+            </svg>
+            <span>如果只修改用户名，无需填写密码相关字段</span>
+          </div>
+
+          <div id="profileSettingsStatus" class="status-message"></div>
+
+          <div class="modal-actions">
+            <button type="button" onclick="closeProfileSettings()" class="btn-cancel">取消</button>
+            <button type="submit" class="btn-save">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+                <path d="M19 21H5a2 2 0 01-2-2V5a2 2 0 012-2h11l5 5v11a2 2 0 01-2 2z" stroke="currentColor" stroke-width="2"/>
+                <path d="M17 21v-8H7v8M7 3v5h8" stroke="currentColor" stroke-width="2"/>
+              </svg>
+              保存修改
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <script src="app-v2.js"></script>
+</body>
+</html>

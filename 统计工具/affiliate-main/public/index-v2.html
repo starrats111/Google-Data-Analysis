@@ -1,0 +1,337 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>联盟营销数据采集系统 - 多用户版 v2.1</title>
+  <link rel="stylesheet" href="style-v2.css">
+</head>
+<body>
+  <div class="container">
+    <!-- 登录/注册页面 -->
+    <div id="authSection" class="section">
+      <header>
+        <h1>🚀 联盟营销数据采集系统</h1>
+        <p class="subtitle">多用户SaaS版本</p>
+      </header>
+
+      <div class="auth-tabs">
+        <button class="tab-btn active" onclick="showTab('login', event)">登录</button>
+        <button class="tab-btn" onclick="showTab('register', event)">注册</button>
+      </div>
+
+      <!-- 登录表单 -->
+      <div id="loginTab" class="tab-content active">
+        <form id="loginForm">
+          <div class="form-group">
+            <label>邮箱:</label>
+            <input type="email" id="loginEmail" placeholder="your@email.com" required>
+          </div>
+          <div class="form-group">
+            <label>密码:</label>
+            <input type="password" id="loginPassword" placeholder="输入密码" required>
+          </div>
+          <button type="submit" class="btn-primary">登录</button>
+        </form>
+        <div id="loginStatus" class="status-message"></div>
+      </div>
+
+      <!-- 注册表单 -->
+      <div id="registerTab" class="tab-content">
+        <form id="registerForm">
+          <div class="form-group">
+            <label>用户名:</label>
+            <input type="text" id="registerUsername" placeholder="输入用户名" required>
+          </div>
+          <div class="form-group">
+            <label>邮箱:</label>
+            <input type="email" id="registerEmail" placeholder="your@email.com" required>
+          </div>
+          <div class="form-group">
+            <label>密码:</label>
+            <input type="password" id="registerPassword" placeholder="至少6位" minlength="6" required>
+          </div>
+          <div class="form-group">
+            <label>邀请码:</label>
+            <input type="text" id="registerInvitationCode" placeholder="请输入邀请码" required>
+            <small style="color: #999; font-size: 12px; margin-top: 5px; display: block;">请向管理员申请邀请码</small>
+          </div>
+          <button type="submit" class="btn-primary">注册</button>
+        </form>
+        <div id="registerStatus" class="status-message"></div>
+      </div>
+    </div>
+
+    <!-- 主应用页面 -->
+    <div id="appSection" style="display: none;">
+      <div class="app-layout">
+        <!-- 侧边栏 -->
+        <aside class="sidebar">
+          <div class="sidebar-header">
+            <div class="logo">📊 数据管理</div>
+          </div>
+          <nav class="sidebar-nav">
+            <div class="nav-item active" onclick="showMainContent()">
+              <span>🏠</span> 数据采集
+            </div>
+            <div class="nav-item" onclick="showRankingSidebar()">
+              <span>🔥</span> 推荐榜单
+            </div>
+          </nav>
+          <div class="sidebar-footer">
+            <div style="padding: 16px; border-top: 1px solid var(--border-light);">
+              <div style="font-size: 12px; color: var(--text-secondary); margin-bottom: 8px;">👤 <strong id="sidebarCurrentUser"></strong></div>
+              <button onclick="logout()" class="btn-secondary" style="width: 100%; padding: 8px;">退出</button>
+            </div>
+          </div>
+        </aside>
+
+        <!-- 主内容区 -->
+        <main class="main-content">
+          <header>
+            <h1>📊 数据采集管理</h1>
+            <div class="user-bar">
+              <span>👤 <strong id="currentUser"></strong></span>
+              <button onclick="logout()" class="btn-secondary">退出</button>
+            </div>
+          </header>
+
+          <div class="section" id="mainContentSection">
+        <!-- 平台账号管理 -->
+        <div class="card">
+          <h2>🔑 平台账号管理</h2>
+
+          <div id="accountsList">
+            <!-- 账号列表动态生成 -->
+          </div>
+
+          <button onclick="showAddAccountModal()" class="btn-primary">+ 添加平台账号</button>
+        </div>
+
+        <!-- Google表格管理 -->
+        <div class="card">
+          <h2>📊 Google表格管理</h2>
+
+          <div id="googleSheetsList">
+            <!-- 表格列表动态生成 -->
+          </div>
+
+          <button onclick="showAddGoogleSheetModal()" class="btn-primary">+ 添加Google表格</button>
+        </div>
+
+        <!-- 数据采集 -->
+        <div class="card" id="collectSection" style="display: none;">
+          <h2>📥 数据采集</h2>
+
+          <form id="collectForm">
+            <div class="form-row">
+              <div class="form-group">
+                <label>开始日期:</label>
+                <input type="date" id="startDate" required>
+              </div>
+              <div class="form-group">
+                <label>结束日期:</label>
+                <input type="date" id="endDate" required>
+              </div>
+            </div>
+            <button type="submit" class="btn-primary">
+              <span id="collectBtnText">开始采集</span>
+              <span id="collectSpinner" class="spinner" style="display: none;"></span>
+            </button>
+          </form>
+
+          <div id="collectStatus" class="status-message"></div>
+
+          <!-- 统计卡片 -->
+          <div id="statsSection" style="display: none;">
+            <h3>📊 数据统计</h3>
+            <div class="stats-cards">
+              <div class="stat-card">
+                <div class="stat-label">订单总数</div>
+                <div class="stat-value" id="totalOrders">0</div>
+              </div>
+              <div class="stat-card">
+                <div class="stat-label">总预算</div>
+                <div class="stat-value" id="totalBudget">$0</div>
+              </div>
+              <div class="stat-card">
+                <div class="stat-label">总佣金</div>
+                <div class="stat-value" id="totalCommission">$0</div>
+              </div>
+            </div>
+          </div>
+
+
+          <!-- 商家汇总表格 -->
+          <div id="merchantSection" style="display: none;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; margin-top: 30px; padding: 0 4px;">
+              <h3 style="margin: 0;">💼 商家汇总</h3>
+              <div style="display: flex; align-items: center; gap: 16px;">
+                <div style="display: flex; align-items: center; gap: 8px;">
+                  <label style="color: var(--text-secondary); font-size: 13px; font-weight: 500;">显示状态：</label>
+                  <div style="display: flex; gap: 8px; background: var(--bg-tertiary); padding: 4px; border-radius: 8px;">
+                    <label style="display: flex; align-items: center; cursor: pointer; padding: 6px 12px; border-radius: 6px; transition: all 0.2s;" class="status-filter-label">
+                      <input type="radio" name="showStatus" value="all" style="margin-right: 6px; cursor: pointer;" onchange="handleStatusFilterChange()">
+                      <span style="font-size: 12px; color: var(--text-secondary);">全部</span>
+                    </label>
+                    <label style="display: flex; align-items: center; cursor: pointer; padding: 6px 12px; border-radius: 6px; transition: all 0.2s;" class="status-filter-label">
+                      <input type="radio" name="showStatus" value="active" checked style="margin-right: 6px; cursor: pointer;" onchange="handleStatusFilterChange()">
+                      <span style="font-size: 12px; color: var(--text-secondary);">仅活跃</span>
+                    </label>
+                    <label style="display: flex; align-items: center; cursor: pointer; padding: 6px 12px; border-radius: 6px; transition: all 0.2s;" class="status-filter-label">
+                      <input type="radio" name="showStatus" value="paused" style="margin-right: 6px; cursor: pointer;" onchange="handleStatusFilterChange()">
+                      <span style="font-size: 12px; color: var(--text-secondary);">仅暂停</span>
+                    </label>
+                  </div>
+                </div>
+                <button onclick="exportMerchantSummary()" class="btn-export" id="exportBtn" style="display: none;">
+                  <span>📥</span> 导出Excel
+                </button>
+              </div>
+            </div>
+            <div class="table-container">
+              <table>
+                <thead>
+                  <tr>
+                    <th style="width: 35px; min-width: 30px;">排名</th>
+                    <th style="background: #4285f4; color: white; width: auto; min-width: 160px;">广告系列</th>
+                    <th style="width: 35px; min-width: 30px;">商家ID</th>
+                    <th style="background: #4285f4; color: white; width: 70px; min-width: 65px;">预算</th>
+                    <th style="background: #4285f4; color: white; width: 80px; min-width: 75px;">展示</th>
+                    <th style="background: #4285f4; color: white; width: 75px; min-width: 70px;">点击</th>
+                    <th style="background: #4285f4; color: white; width: 80px; min-width: 75px;">广告费</th>
+                    <th style="width: 55px; min-width: 50px;">订单数</th>
+                    <th style="width: 85px; min-width: 80px;">总佣金</th>
+                    <th style="background: #28a745; color: white; width: 50px; min-width: 45px;">CR</th>
+                    <th style="background: #28a745; color: white; width: 60px; min-width: 55px;">EPC</th>
+                    <th style="background: #28a745; color: white; width: 60px; min-width: 55px;">CPC</th>
+                    <th style="background: #28a745; color: white; width: 60px; min-width: 55px;">ROI</th>
+                    <th style="background: #8b5cf6; color: white; width: 250px; min-width: 230px;">操作建议</th>
+                  </tr>
+                </thead>
+                <tbody id="merchantTableBody">
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 添加账号弹窗 -->
+  <div id="addAccountModal" class="modal">
+    <div class="modal-content">
+      <span class="close" onclick="closeAddAccountModal()">&times;</span>
+      <h2>添加平台账号</h2>
+      <form id="addAccountForm">
+        <div class="form-group">
+          <label>平台:</label>
+          <select id="platformSelect" required onchange="toggleApiTokenField()">
+            <option value="linkhaitao">LinkHaitao</option>
+            <option value="partnermatic">PartnerMatic</option>
+            <option value="linkbux">LinkBux</option>
+            <option value="rewardoo">Rewardoo</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>账号名称:</label>
+          <input type="text" id="accountName" placeholder="平台登录用户名或标识" required>
+        </div>
+        <div class="form-group" id="passwordGroup">
+          <label>账号密码:</label>
+          <input type="password" id="accountPassword" placeholder="平台登录密码">
+          <small style="color: #999; display: block; margin-top: 5px;">
+            某些平台需要密码进行自动登录
+          </small>
+        </div>
+        <div class="form-group" id="apiTokenGroup" style="display: none;">
+          <label>API Token:</label>
+          <input type="text" id="apiToken" placeholder="API Token（在平台后台获取）">
+          <small style="color: #999; display: block; margin-top: 5px;">
+            <span id="apiTokenHint">LinkBux、Rewardoo、LinkHaitao和PartnerMatic平台使用API Token采集，无需密码</span>
+          </small>
+        </div>
+        <div class="form-group">
+          <label>联盟序号（可选）:</label>
+          <input type="text" id="affiliateName" placeholder="例如: LH1, PM1, PM4, LB1" maxlength="10">
+          <small style="color: #999; display: block; margin-top: 5px;">
+            用于区分同平台的多个账号，如 LH1、LH2、PM1、LB1 等
+          </small>
+        </div>
+        <button type="submit" class="btn-primary">添加</button>
+      </form>
+      <div id="addAccountStatus" class="status-message"></div>
+    </div>
+  </div>
+
+  <!-- 添加Google表格弹窗 -->
+  <div id="addGoogleSheetModal" class="modal">
+    <div class="modal-content">
+      <span class="close" onclick="closeAddGoogleSheetModal()">&times;</span>
+      <h2>添加Google表格</h2>
+      <form id="addGoogleSheetForm">
+        <div class="form-group">
+          <label>表格名称:</label>
+          <input type="text" id="sheetName" placeholder="例如: 12月广告数据" required>
+        </div>
+        <div class="form-group">
+          <label>表格URL:</label>
+          <input type="url" id="sheetUrl" placeholder="https://docs.google.com/spreadsheets/d/..." required>
+          <small style="color: #999; display: block; margin-top: 5px;">
+            提示: 请确保表格已设置为"任何人可查看"
+          </small>
+        </div>
+        <div class="form-group">
+          <label>备注（可选）:</label>
+          <input type="text" id="sheetDescription" placeholder="例如: Google Ads搜索广告数据">
+        </div>
+        <button type="submit" class="btn-primary">添加</button>
+      </form>
+      <div id="addGoogleSheetStatus" class="status-message"></div>
+    </div>
+  </div>
+
+        <!-- 推荐榜单侧边栏内容 -->
+        <main class="main-content" id="rankingContentSection" style="display: none;">
+          <header>
+            <h1>🔥 热门推荐广告系列 Top 10</h1>
+            <div class="user-bar">
+              <span>👤 <strong id="rankingCurrentUser"></strong></span>
+              <button onclick="logout()" class="btn-secondary">退出</button>
+            </div>
+          </header>
+
+          <div class="section">
+            <div class="card" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; border: none;">
+              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; flex-wrap: wrap; gap: 12px;">
+                <h2 style="margin: 0; color: white;">ROI > 3 的优质广告系列</h2>
+                <div style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap;">
+                  <select id="rankingRange" onchange="handleRankingRangeChange()" style="padding: 8px 12px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.3); background: rgba(255,255,255,0.2); color: white; font-size: 13px; cursor: pointer;">
+                    <option value="yesterday">昨天</option>
+                    <option value="last7days">最近7天</option>
+                    <option value="last30days">最近30天</option>
+                    <option value="custom">自定义</option>
+                  </select>
+                  <div id="customDateRange" style="display: none; gap: 8px; align-items: center; flex-direction: row;">
+                    <input type="date" id="rankingStartDate" style="padding: 6px 10px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.3); background: rgba(255,255,255,0.2); color: white; font-size: 12px;">
+                    <span style="color: white;">至</span>
+                    <input type="date" id="rankingEndDate" style="padding: 6px 10px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.3); background: rgba(255,255,255,0.2); color: white; font-size: 12px;">
+                    <button onclick="loadTopAdsRanking()" style="padding: 6px 12px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.3); background: rgba(255,255,255,0.3); color: white; cursor: pointer; font-size: 12px;">确定</button>
+                  </div>
+                  <button onclick="loadTopAdsRanking()" style="padding: 8px 16px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.3); background: rgba(255,255,255,0.2); color: white; cursor: pointer; font-size: 13px;">🔄 刷新</button>
+                </div>
+              </div>
+              <div id="rankingDateRange" style="margin-bottom: 15px; font-size: 13px; opacity: 0.9;"></div>
+              <div id="rankingList" style="display: grid; gap: 12px;">
+                <!-- 榜单内容动态生成 -->
+              </div>
+            </div>
+          </div>
+        </main>
+      </div>
+    </div>
+
+  <script src="app-v2.js"></script>
+</body>
+</html>

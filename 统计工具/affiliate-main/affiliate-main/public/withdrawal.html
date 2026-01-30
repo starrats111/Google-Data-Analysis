@@ -1,0 +1,887 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>提现管理 - 联盟营销统计系统</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+      background: #0a0e27;
+      color: #e0e0e0;
+      line-height: 1.6;
+    }
+
+    .container {
+      max-width: 1400px;
+      margin: 0 auto;
+      padding: 20px;
+    }
+
+    .header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 30px;
+      padding-bottom: 20px;
+      border-bottom: 1px solid #1e2139;
+    }
+
+    .header h1 {
+      font-size: 28px;
+      font-weight: 600;
+      color: #fff;
+    }
+
+    .header-actions {
+      display: flex;
+      gap: 12px;
+    }
+
+    .btn {
+      padding: 10px 20px;
+      border: none;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.3s;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .btn-primary {
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+    }
+
+    .btn-primary:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 8px 20px rgba(102, 126, 234, 0.4);
+    }
+
+    .btn-secondary {
+      background: #1e2139;
+      color: #e0e0e0;
+      border: 1px solid #2d3250;
+    }
+
+    .btn-secondary:hover {
+      background: #2d3250;
+    }
+
+    /* 概览卡片 */
+    .summary-cards {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+      gap: 20px;
+      margin-bottom: 30px;
+    }
+
+    .card {
+      background: linear-gradient(135deg, #1e2139 0%, #252a48 100%);
+      border-radius: 12px;
+      padding: 24px;
+      border: 1px solid #2d3250;
+      transition: all 0.3s;
+    }
+
+    .card:hover {
+      transform: translateY(-4px);
+      box-shadow: 0 12px 24px rgba(0, 0, 0, 0.3);
+    }
+
+    .card-title {
+      font-size: 14px;
+      color: #8b92b0;
+      margin-bottom: 12px;
+      font-weight: 500;
+    }
+
+    .card-value {
+      font-size: 32px;
+      font-weight: 700;
+      color: #fff;
+      margin-bottom: 8px;
+    }
+
+    .card-value.green {
+      color: #10b981;
+    }
+
+    .card-value.blue {
+      color: #3b82f6;
+    }
+
+    .card-value.yellow {
+      color: #f59e0b;
+    }
+
+    .card-subtitle {
+      font-size: 12px;
+      color: #6b7280;
+    }
+
+    /* 筛选栏 */
+    .filters {
+      background: #1e2139;
+      border-radius: 12px;
+      padding: 20px;
+      margin-bottom: 20px;
+      display: flex;
+      gap: 16px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+
+    .filter-group {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .filter-group label {
+      font-size: 12px;
+      color: #8b92b0;
+      font-weight: 500;
+    }
+
+    .filter-group select,
+    .filter-group input {
+      padding: 8px 12px;
+      background: #0a0e27;
+      border: 1px solid #2d3250;
+      border-radius: 6px;
+      color: #e0e0e0;
+      font-size: 14px;
+      min-width: 150px;
+    }
+
+    .filter-group select:focus,
+    .filter-group input:focus {
+      outline: none;
+      border-color: #667eea;
+    }
+
+    /* 表格 */
+    .table-container {
+      background: #1e2139;
+      border-radius: 12px;
+      overflow: hidden;
+      border: 1px solid #2d3250;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+
+    thead {
+      background: #252a48;
+    }
+
+    th {
+      padding: 16px;
+      text-align: left;
+      font-size: 12px;
+      font-weight: 600;
+      color: #8b92b0;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    td {
+      padding: 16px;
+      border-top: 1px solid #2d3250;
+      font-size: 14px;
+      color: #e0e0e0;
+    }
+
+    tr:hover {
+      background: #252a48;
+    }
+
+    /* 状态标签 */
+    .status-badge {
+      display: inline-block;
+      padding: 4px 12px;
+      border-radius: 12px;
+      font-size: 12px;
+      font-weight: 500;
+    }
+
+    .status-pending {
+      background: rgba(245, 158, 11, 0.1);
+      color: #f59e0b;
+      border: 1px solid rgba(245, 158, 11, 0.2);
+    }
+
+    .status-processing {
+      background: rgba(59, 130, 246, 0.1);
+      color: #3b82f6;
+      border: 1px solid rgba(59, 130, 246, 0.2);
+    }
+
+    .status-completed {
+      background: rgba(16, 185, 129, 0.1);
+      color: #10b981;
+      border: 1px solid rgba(16, 185, 129, 0.2);
+    }
+
+    .status-failed {
+      background: rgba(239, 68, 68, 0.1);
+      color: #ef4444;
+      border: 1px solid rgba(239, 68, 68, 0.2);
+    }
+
+    .status-cancelled {
+      background: rgba(107, 114, 128, 0.1);
+      color: #6b7280;
+      border: 1px solid rgba(107, 114, 128, 0.2);
+    }
+
+    /* 分页 */
+    .pagination {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      gap: 8px;
+      margin-top: 20px;
+      padding: 20px;
+    }
+
+    .pagination button {
+      padding: 8px 12px;
+      background: #1e2139;
+      border: 1px solid #2d3250;
+      border-radius: 6px;
+      color: #e0e0e0;
+      cursor: pointer;
+      transition: all 0.3s;
+    }
+
+    .pagination button:hover:not(:disabled) {
+      background: #2d3250;
+    }
+
+    .pagination button:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    .pagination button.active {
+      background: #667eea;
+      border-color: #667eea;
+      color: white;
+    }
+
+    .pagination-info {
+      color: #8b92b0;
+      font-size: 14px;
+    }
+
+    /* 模态框 */
+    .modal {
+      display: none;
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: rgba(0, 0, 0, 0.7);
+      z-index: 1000;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .modal.active {
+      display: flex;
+    }
+
+    .modal-content {
+      background: #1e2139;
+      border-radius: 12px;
+      padding: 32px;
+      max-width: 500px;
+      width: 90%;
+      border: 1px solid #2d3250;
+    }
+
+    .modal-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 24px;
+    }
+
+    .modal-header h2 {
+      font-size: 20px;
+      color: #fff;
+    }
+
+    .modal-close {
+      background: none;
+      border: none;
+      color: #8b92b0;
+      font-size: 24px;
+      cursor: pointer;
+      padding: 0;
+      width: 32px;
+      height: 32px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 6px;
+      transition: all 0.3s;
+    }
+
+    .modal-close:hover {
+      background: #2d3250;
+      color: #fff;
+    }
+
+    .form-group {
+      margin-bottom: 20px;
+    }
+
+    .form-group label {
+      display: block;
+      margin-bottom: 8px;
+      font-size: 14px;
+      color: #8b92b0;
+      font-weight: 500;
+    }
+
+    .form-group input,
+    .form-group select,
+    .form-group textarea {
+      width: 100%;
+      padding: 12px;
+      background: #0a0e27;
+      border: 1px solid #2d3250;
+      border-radius: 8px;
+      color: #e0e0e0;
+      font-size: 14px;
+    }
+
+    .form-group input:focus,
+    .form-group select:focus,
+    .form-group textarea:focus {
+      outline: none;
+      border-color: #667eea;
+    }
+
+    .form-group textarea {
+      resize: vertical;
+      min-height: 80px;
+    }
+
+    .form-hint {
+      font-size: 12px;
+      color: #6b7280;
+      margin-top: 4px;
+    }
+
+    .form-actions {
+      display: flex;
+      gap: 12px;
+      justify-content: flex-end;
+      margin-top: 24px;
+    }
+
+    /* 加载状态 */
+    .loading {
+      text-align: center;
+      padding: 40px;
+      color: #8b92b0;
+    }
+
+    .empty-state {
+      text-align: center;
+      padding: 60px 20px;
+      color: #8b92b0;
+    }
+
+    .empty-state-icon {
+      font-size: 48px;
+      margin-bottom: 16px;
+      opacity: 0.5;
+    }
+
+    /* 响应式 */
+    @media (max-width: 768px) {
+      .summary-cards {
+        grid-template-columns: 1fr;
+      }
+
+      .filters {
+        flex-direction: column;
+        align-items: stretch;
+      }
+
+      .filter-group select,
+      .filter-group input {
+        min-width: 100%;
+      }
+
+      table {
+        font-size: 12px;
+      }
+
+      th, td {
+        padding: 12px 8px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <!-- 头部 -->
+    <div class="header">
+      <h1>💰 提现管理</h1>
+      <div class="header-actions">
+        <button class="btn btn-secondary" onclick="refreshData()">
+          🔄 刷新
+        </button>
+        <button class="btn btn-primary" onclick="openWithdrawalModal()">
+          ➕ 申请提现
+        </button>
+      </div>
+    </div>
+
+    <!-- 概览卡片 -->
+    <div class="summary-cards">
+      <div class="card">
+        <div class="card-title">可提现金额</div>
+        <div class="card-value green" id="availableAmount">$0.00</div>
+        <div class="card-subtitle">Available to Withdraw</div>
+      </div>
+
+      <div class="card">
+        <div class="card-title">已提现金额</div>
+        <div class="card-value blue" id="withdrawnAmount">$0.00</div>
+        <div class="card-subtitle">Total Withdrawn</div>
+      </div>
+
+      <div class="card">
+        <div class="card-title">提现中金额</div>
+        <div class="card-value yellow" id="processingAmount">$0.00</div>
+        <div class="card-subtitle">Processing</div>
+      </div>
+
+      <div class="card">
+        <div class="card-title">已批准佣金</div>
+        <div class="card-value" id="approvedAmount">$0.00</div>
+        <div class="card-subtitle">Approved Commission</div>
+      </div>
+    </div>
+
+    <!-- 筛选栏 -->
+    <div class="filters">
+      <div class="filter-group">
+        <label>平台账号</label>
+        <select id="filterPlatformAccount" onchange="loadWithdrawalHistory()">
+          <option value="">全部账号</option>
+        </select>
+      </div>
+
+      <div class="filter-group">
+        <label>状态</label>
+        <select id="filterStatus" onchange="loadWithdrawalHistory()">
+          <option value="all">全部状态</option>
+          <option value="pending">待处理</option>
+          <option value="processing">处理中</option>
+          <option value="completed">已完成</option>
+          <option value="failed">失败</option>
+          <option value="cancelled">已取消</option>
+        </select>
+      </div>
+
+      <div class="filter-group">
+        <label>日期范围</label>
+        <input type="date" id="filterStartDate" onchange="loadWithdrawalHistory()">
+      </div>
+
+      <div class="filter-group">
+        <label>&nbsp;</label>
+        <input type="date" id="filterEndDate" onchange="loadWithdrawalHistory()">
+      </div>
+    </div>
+
+    <!-- 提现历史表格 -->
+    <div class="table-container">
+      <table>
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>平台账号</th>
+            <th>金额</th>
+            <th>支付方式</th>
+            <th>状态</th>
+            <th>申请时间</th>
+            <th>完成时间</th>
+            <th>操作</th>
+          </tr>
+        </thead>
+        <tbody id="withdrawalTableBody">
+          <tr>
+            <td colspan="8" class="loading">加载中...</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- 分页 -->
+    <div class="pagination" id="pagination"></div>
+  </div>
+
+  <!-- 申请提现模态框 -->
+  <div class="modal" id="withdrawalModal">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h2>申请提现</h2>
+        <button class="modal-close" onclick="closeWithdrawalModal()">×</button>
+      </div>
+
+      <form id="withdrawalForm" onsubmit="submitWithdrawal(event)">
+        <div class="form-group">
+          <label>选择平台账号 *</label>
+          <select id="platformAccountId" required>
+            <option value="">请选择平台账号</option>
+          </select>
+        </div>
+
+        <div class="form-group">
+          <label>提现金额 (USD) *</label>
+          <input 
+            type="number" 
+            id="withdrawalAmount" 
+            step="0.01" 
+            min="0.01" 
+            required
+            placeholder="请输入提现金额"
+          >
+          <div class="form-hint">可提现金额: $<span id="maxAmount">0.00</span></div>
+        </div>
+
+        <div class="form-group">
+          <label>支付方式 *</label>
+          <select id="paymentMethod" required>
+            <option value="">请选择支付方式</option>
+            <option value="paypal">PayPal</option>
+            <option value="bank_transfer">银行转账</option>
+            <option value="wise">Wise</option>
+            <option value="other">其他</option>
+          </select>
+        </div>
+
+        <div class="form-group">
+          <label>支付账号 *</label>
+          <input 
+            type="text" 
+            id="paymentAccount" 
+            required
+            placeholder="请输入支付账号（如PayPal邮箱）"
+          >
+        </div>
+
+        <div class="form-group">
+          <label>备注</label>
+          <textarea 
+            id="withdrawalNote" 
+            placeholder="选填：添加备注信息"
+          ></textarea>
+        </div>
+
+        <div class="form-actions">
+          <button type="button" class="btn btn-secondary" onclick="closeWithdrawalModal()">
+            取消
+          </button>
+          <button type="submit" class="btn btn-primary">
+            提交申请
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <script>
+    // 全局变量
+    let currentPage = 1;
+    let pageSize = 20;
+    let totalPages = 0;
+
+    // 页面加载时初始化
+    document.addEventListener('DOMContentLoaded', function() {
+      loadSummary();
+      loadPlatformAccounts();
+      loadWithdrawalHistory();
+    });
+
+    // 加载提现概览
+    async function loadSummary() {
+      try {
+        // TODO: 替换为实际的 API 调用
+        // const response = await fetch('/api/withdrawal/summary');
+        // const data = await response.json();
+
+        // 模拟数据
+        const data = {
+          availableToWithdraw: 2500.50,
+          withdrawnAmount: 15000.00,
+          processingAmount: 500.00,
+          approvedCommission: 18000.50
+        };
+
+        document.getElementById('availableAmount').textContent = `$${data.availableToWithdraw.toFixed(2)}`;
+        document.getElementById('withdrawnAmount').textContent = `$${data.withdrawnAmount.toFixed(2)}`;
+        document.getElementById('processingAmount').textContent = `$${data.processingAmount.toFixed(2)}`;
+        document.getElementById('approvedAmount').textContent = `$${data.approvedCommission.toFixed(2)}`;
+        document.getElementById('maxAmount').textContent = data.availableToWithdraw.toFixed(2);
+      } catch (error) {
+        console.error('加载概览失败:', error);
+      }
+    }
+
+    // 加载平台账号列表
+    async function loadPlatformAccounts() {
+      try {
+        // TODO: 替换为实际的 API 调用
+        // const response = await fetch('/api/platform-accounts');
+        // const accounts = await response.json();
+
+        // 模拟数据
+        const accounts = [
+          { id: 1, platform: 'partnermatic', account_name: 'living001', affiliate_name: 'PM1' },
+          { id: 2, platform: 'linkhaitao', account_name: 'dhdir', affiliate_name: 'LH1' }
+        ];
+
+        const filterSelect = document.getElementById('filterPlatformAccount');
+        const modalSelect = document.getElementById('platformAccountId');
+
+        accounts.forEach(account => {
+          const option = document.createElement('option');
+          option.value = account.id;
+          option.textContent = `${account.platform} - ${account.account_name} (${account.affiliate_name})`;
+          
+          filterSelect.appendChild(option.cloneNode(true));
+          modalSelect.appendChild(option);
+        });
+      } catch (error) {
+        console.error('加载平台账号失败:', error);
+      }
+    }
+
+    // 加载提现历史
+    async function loadWithdrawalHistory() {
+      try {
+        const tbody = document.getElementById('withdrawalTableBody');
+        tbody.innerHTML = '<tr><td colspan="8" class="loading">加载中...</td></tr>';
+
+        // TODO: 替换为实际的 API 调用
+        // const params = new URLSearchParams({
+        //   page: currentPage,
+        //   pageSize: pageSize,
+        //   status: document.getElementById('filterStatus').value,
+        //   platformAccountId: document.getElementById('filterPlatformAccount').value
+        // });
+        // const response = await fetch(`/api/withdrawal/history?${params}`);
+        // const data = await response.json();
+
+        // 模拟数据
+        const data = {
+          total: 0,
+          page: 1,
+          totalPages: 0,
+          list: []
+        };
+
+        if (data.list.length === 0) {
+          tbody.innerHTML = `
+            <tr>
+              <td colspan="8" class="empty-state">
+                <div class="empty-state-icon">📭</div>
+                <div>暂无提现记录</div>
+              </td>
+            </tr>
+          `;
+          document.getElementById('pagination').innerHTML = '';
+          return;
+        }
+
+        tbody.innerHTML = data.list.map(item => `
+          <tr>
+            <td>#${item.id}</td>
+            <td>${item.platform} - ${item.platform_account_name}</td>
+            <td>$${item.amount.toFixed(2)}</td>
+            <td>${getPaymentMethodText(item.payment_method)}</td>
+            <td><span class="status-badge status-${item.status}">${getStatusText(item.status)}</span></td>
+            <td>${formatDate(item.requested_at)}</td>
+            <td>${item.completed_at ? formatDate(item.completed_at) : '-'}</td>
+            <td>
+              <button class="btn btn-secondary" onclick="viewWithdrawal(${item.id})" style="padding: 6px 12px; font-size: 12px;">
+                查看
+              </button>
+              ${item.status === 'pending' ? `
+                <button class="btn btn-secondary" onclick="cancelWithdrawal(${item.id})" style="padding: 6px 12px; font-size: 12px; margin-left: 4px;">
+                  取消
+                </button>
+              ` : ''}
+            </td>
+          </tr>
+        `).join('');
+
+        renderPagination(data.total, data.page, data.totalPages);
+      } catch (error) {
+        console.error('加载提现历史失败:', error);
+        document.getElementById('withdrawalTableBody').innerHTML = `
+          <tr>
+            <td colspan="8" class="empty-state">
+              <div>加载失败，请刷新重试</div>
+            </td>
+          </tr>
+        `;
+      }
+    }
+
+    // 渲染分页
+    function renderPagination(total, page, totalPages) {
+      const pagination = document.getElementById('pagination');
+      
+      if (totalPages <= 1) {
+        pagination.innerHTML = '';
+        return;
+      }
+
+      let html = `
+        <button onclick="changePage(${page - 1})" ${page === 1 ? 'disabled' : ''}>上一页</button>
+        <span class="pagination-info">第 ${page} / ${totalPages} 页，共 ${total} 条</span>
+        <button onclick="changePage(${page + 1})" ${page === totalPages ? 'disabled' : ''}>下一页</button>
+      `;
+
+      pagination.innerHTML = html;
+    }
+
+    // 切换页码
+    function changePage(page) {
+      currentPage = page;
+      loadWithdrawalHistory();
+    }
+
+    // 打开提现模态框
+    function openWithdrawalModal() {
+      document.getElementById('withdrawalModal').classList.add('active');
+      document.getElementById('withdrawalForm').reset();
+    }
+
+    // 关闭提现模态框
+    function closeWithdrawalModal() {
+      document.getElementById('withdrawalModal').classList.remove('active');
+    }
+
+    // 提交提现申请
+    async function submitWithdrawal(event) {
+      event.preventDefault();
+
+      const formData = {
+        platformAccountId: parseInt(document.getElementById('platformAccountId').value),
+        amount: parseFloat(document.getElementById('withdrawalAmount').value),
+        paymentMethod: document.getElementById('paymentMethod').value,
+        paymentAccount: document.getElementById('paymentAccount').value,
+        note: document.getElementById('withdrawalNote').value
+      };
+
+      try {
+        // TODO: 替换为实际的 API 调用
+        // const response = await fetch('/api/withdrawal/request', {
+        //   method: 'POST',
+        //   headers: { 'Content-Type': 'application/json' },
+        //   body: JSON.stringify(formData)
+        // });
+        // const result = await response.json();
+
+        alert('提现申请已提交！');
+        closeWithdrawalModal();
+        refreshData();
+      } catch (error) {
+        console.error('提交失败:', error);
+        alert('提交失败，请重试');
+      }
+    }
+
+    // 查看提现详情
+    function viewWithdrawal(id) {
+      // TODO: 实现查看详情功能
+      alert(`查看提现详情 #${id}`);
+    }
+
+    // 取消提现
+    async function cancelWithdrawal(id) {
+      if (!confirm('确定要取消这个提现申请吗？')) {
+        return;
+      }
+
+      try {
+        // TODO: 替换为实际的 API 调用
+        // const response = await fetch(`/api/withdrawal/${id}/cancel`, {
+        //   method: 'POST'
+        // });
+        // const result = await response.json();
+
+        alert('提现申请已取消');
+        refreshData();
+      } catch (error) {
+        console.error('取消失败:', error);
+        alert('取消失败，请重试');
+      }
+    }
+
+    // 刷新数据
+    function refreshData() {
+      loadSummary();
+      loadWithdrawalHistory();
+    }
+
+    // 辅助函数
+    function getStatusText(status) {
+      const statusMap = {
+        'pending': '待处理',
+        'processing': '处理中',
+        'completed': '已完成',
+        'failed': '失败',
+        'cancelled': '已取消'
+      };
+      return statusMap[status] || status;
+    }
+
+    function getPaymentMethodText(method) {
+      const methodMap = {
+        'paypal': 'PayPal',
+        'bank_transfer': '银行转账',
+        'wise': 'Wise',
+        'other': '其他'
+      };
+      return methodMap[method] || method;
+    }
+
+    function formatDate(dateString) {
+      if (!dateString) return '-';
+      const date = new Date(dateString);
+      return date.toLocaleString('zh-CN', {
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit'
+      });
+    }
+  </script>
+</body>
+</html>

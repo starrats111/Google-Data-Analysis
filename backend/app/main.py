@@ -16,6 +16,7 @@ from app.api import (
     dashboard,
     expenses,
     export,
+    linkhaitao,
     stage_label,
     upload,
 )
@@ -63,6 +64,7 @@ app.include_router(export.router)
 app.include_router(ad_campaign.router)
 app.include_router(affiliate.router)
 app.include_router(collabglow.router)
+app.include_router(linkhaitao.router)
 app.include_router(stage_label.router)
 
 
