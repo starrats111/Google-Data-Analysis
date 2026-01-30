@@ -57,16 +57,26 @@ async def create_mcc_account(
     db: Session = Depends(get_db)
 ):
     """创建MCC账号"""
-    # 检查MCC账号ID是否已存在
-    existing = db.query(MccAccount).filter(
-        MccAccount.mcc_account_id == account.mcc_account_id
-    ).first()
-    
-    if existing:
-        raise HTTPException(status_code=400, detail="该MCC账号已存在")
+    try:
+        # 检查MCC账号ID是否已存在
+        existing = db.query(MccAccount).filter(
+            MccAccount.mcc_account_id == account.mcc_account_id
+        ).first()
+        
+        if existing:
+            raise HTTPException(status_code=400, detail="该MCC账号已存在")
     
     # 如果配置了共享的客户端ID和密钥，且用户没有提供，则使用共享配置
-    account_data = account.model_dump()
+    try:
+        # 兼容pydantic v1和v2
+        if hasattr(account, 'model_dump'):
+            account_data = account.model_dump()
+        else:
+            account_data = account.dict()
+    except:
+        account_data = account.dict() if hasattr(account, 'dict') else account.__dict__
+    
+    # 使用共享配置填充缺失字段
     if settings.GOOGLE_ADS_SHARED_CLIENT_ID and not account_data.get('client_id'):
         account_data['client_id'] = settings.GOOGLE_ADS_SHARED_CLIENT_ID
     if settings.GOOGLE_ADS_SHARED_CLIENT_SECRET and not account_data.get('client_secret'):
@@ -74,15 +84,38 @@ async def create_mcc_account(
     if settings.GOOGLE_ADS_SHARED_DEVELOPER_TOKEN and not account_data.get('developer_token'):
         account_data['developer_token'] = settings.GOOGLE_ADS_SHARED_DEVELOPER_TOKEN
     
+    # 验证必填字段
+    if not account_data.get('client_id'):
+        raise HTTPException(status_code=400, detail="客户端ID不能为空，请填写或配置共享配置")
+    if not account_data.get('client_secret'):
+        raise HTTPException(status_code=400, detail="客户端密钥不能为空，请填写或配置共享配置")
+    if not account_data.get('developer_token'):
+        raise HTTPException(status_code=400, detail="开发者令牌不能为空，请填写或配置共享配置")
+    if not account_data.get('refresh_token'):
+        raise HTTPException(status_code=400, detail="刷新令牌不能为空")
+    
     # 创建新账号
     new_account = MccAccount(
         user_id=current_user.id,
-        **account_data
+        mcc_account_id=account_data['mcc_account_id'],
+        mcc_account_name=account_data.get('mcc_account_name'),
+        email=account_data.get('email'),
+        refresh_token=account_data['refresh_token'],
+        client_id=account_data['client_id'],
+        client_secret=account_data['client_secret'],
+        developer_token=account_data['developer_token'],
+        is_active=account_data.get('is_active', True)
     )
-    db.add(new_account)
-    db.commit()
-    db.refresh(new_account)
-    return new_account
+        db.add(new_account)
+        db.commit()
+        db.refresh(new_account)
+        return new_account
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"创建MCC账号失败: {e}", exc_info=True)
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"创建失败: {str(e)}")
 
 
 @router.put("/accounts/{account_id}", response_model=MccAccountResponse)
@@ -102,7 +135,15 @@ async def update_mcc_account(
         raise HTTPException(status_code=404, detail="MCC账号不存在")
     
     # 更新字段
-    update_data = account.model_dump(exclude_unset=True)
+    try:
+        # 兼容pydantic v1和v2
+        if hasattr(account, 'model_dump'):
+            update_data = account.model_dump(exclude_unset=True)
+        else:
+            update_data = account.dict(exclude_unset=True)
+    except:
+        update_data = account.dict(exclude_unset=True) if hasattr(account, 'dict') else {}
+    
     for key, value in update_data.items():
         setattr(mcc_account, key, value)
     
