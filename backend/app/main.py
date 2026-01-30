@@ -24,22 +24,32 @@ from app.api import (
 app = FastAPI(title="Google Analysis Platform API")
 
 # CORS (开发环境默认；生产环境建议在 .env 里覆盖 CORS_ORIGINS)
+cors_origins = getattr(settings, "CORS_ORIGINS", ["*"]) or ["*"]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=getattr(settings, "CORS_ORIGINS", ["*"]) or ["*"],
-    # Allow Cloudflare Pages preview subdomains like:
+    allow_origins=cors_origins if cors_origins != ["*"] else [
+        "https://google-data-analysis.top",
+        "https://api.google-data-analysis.top",
+        "https://www.google-data-analysis.top",
+        "https://google-data-analysis.pages.dev",
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "http://localhost:8000",
+        "http://127.0.0.1:8000",
+    ],
+    # Allow Cloudflare Pages preview subdomains and production domains:
     # - https://google-data-analysis.pages.dev
     # - https://<hash>.google-data-analysis.pages.dev
-    # Allow production domains:
     # - https://google-data-analysis.top
     # - https://api.google-data-analysis.top
     # - https://*.google-data-analysis.top
-    # And allow local dev origins like:
+    # And allow local dev origins:
     # - http://localhost:5173 / http://127.0.0.1:5173 (any port)
-    allow_origin_regex=r"^(https://([a-z0-9-]+\\.)?google-data-analysis\\.(pages\\.dev|top)|https?://(localhost|127\\.0\\.0\\.1)(:\\d+)?)$",
+    allow_origin_regex=r"^(https://([a-z0-9-]+\.)?google-data-analysis\.(pages\.dev|top)|https?://(localhost|127\.0\.0\.1)(:\d+)?)$",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["*"],
 )
 
 # API routes
