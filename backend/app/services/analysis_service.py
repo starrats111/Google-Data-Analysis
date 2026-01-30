@@ -256,14 +256,14 @@ class AnalysisService:
                                 week_comm = sum(float(m.commission or 0) for m in week_metrics)
                                 week_roi = ((week_comm - week_cost) / week_cost) if week_cost > 0 else None
 
-                                # 过去7天最高 MaxCPC：用于“当前Max CPC”
+                                # 过去7天最高 CPC：用于“当前Max CPC”（应该是CPC的最大值，不是最高CPC的最大值）
                                 metrics_7d = db.query(AdCampaignDailyMetric).filter(
                                     AdCampaignDailyMetric.user_id == user_id,
                                     AdCampaignDailyMetric.campaign_id == campaign.id,
                                     AdCampaignDailyMetric.date >= start_7d,
                                     AdCampaignDailyMetric.date <= d,
                                 ).all()
-                                max_cpc_7d = max([float(m.current_max_cpc or 0) for m in metrics_7d], default=0.0)
+                                max_cpc_7d = max([float(m.cpc or 0) for m in metrics_7d], default=0.0)
 
                                 output_df.at[idx, '本周费用'] = week_cost
                                 output_df.at[idx, '本周佣金'] = week_comm

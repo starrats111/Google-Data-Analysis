@@ -338,18 +338,50 @@ async def generate_l7d_from_daily(
         grouped[m.campaign_id].append(m)
 
     rows = []
+    # 导入分析服务用于生成操作指令
+    from app.services.analysis_service import AnalysisService
+    import pandas as pd
+    analysis_service = AnalysisService()
+    
     for campaign_id, items in grouped.items():
         clicks = sum(m.clicks or 0 for m in items)
         cost = sum(m.cost or 0 for m in items)
         comm = sum(m.commission or 0 for m in items)
         orders = sum(m.orders or 0 for m in items)
         order_days = sum(1 for m in items if (m.orders or 0) > 0)
-        max_cpc_7d = max((m.current_max_cpc or 0) for m in items)
+        # 修复：MAX CPC应该是过去7天中CPC的最大值，而不是最高CPC的最大值
+        max_cpc_7d = max((m.cpc or 0) for m in items) if items else 0
 
         roi = ((comm - cost) / cost) if cost > 0 else None
+        
+        # 计算保守EPC和保守ROI
+        # 保守EPC = L7D佣金*0.72/L7D点击
+        conservative_epc = (comm * 0.72 / clicks) if clicks > 0 else 0
+        # 保守ROI = (L7D佣金*0.72-L7D花费)/L7D花费
+        conservative_roi = ((comm * 0.72 - cost) / cost) if cost > 0 else None
 
         campaign = items[0].campaign  # 关联的 AdCampaign 记录
         is_vals = is_map.get(campaign.campaign_name, {}) if is_map else {}
+        
+        # 构建用于生成操作指令的行数据
+        # 注意：is_vals中的"IS Budget丢失"和"IS Rank丢失"需要转换为"预算错失份额"和"排名错失份额"
+        is_budget_lost = is_vals.get("IS Budget丢失")
+        is_rank_lost = is_vals.get("IS Rank丢失")
+        instruction_row = {
+            "保守ROI": conservative_roi,
+            "预算错失份额": is_budget_lost,  # IS Budget丢失 -> 预算错失份额
+            "排名错失份额": is_rank_lost,  # IS Rank丢失 -> 排名错失份额
+            "过去七天出单天数": order_days,
+            "最高CPC": max_cpc_7d,
+            "CPC": max_cpc_7d,  # 使用MAX CPC作为CPC值
+            "订单": orders,
+        }
+        # 生成操作指令
+        operation_instruction = analysis_service._generate_operation_instruction(
+            pd.Series(instruction_row),
+            past_seven_days_orders_global=order_days,
+            max_cpc_global=max_cpc_7d
+        )
 
         rows.append({
             "广告系列名": campaign.campaign_name,
@@ -361,8 +393,11 @@ async def generate_l7d_from_daily(
             "L7D花费": cost,
             "L7D出单天数": order_days,
             "当前Max CPC": max_cpc_7d,
-            "IS Budget丢失": is_vals.get("IS Budget丢失"),
-            "IS Rank丢失": is_vals.get("IS Rank丢失"),
+            "IS Budget丢失": is_budget_lost,
+            "IS Rank丢失": is_rank_lost,
+            "保守EPC": conservative_epc,
+            "保守ROI": conservative_roi,
+            "操作指令": operation_instruction,
             "ROI": roi,
             "点击": clicks,
             "订单": orders,
@@ -491,17 +526,49 @@ async def generate_l7d_from_daily_with_google(
         grouped[m.campaign_id].append(m)
 
     rows = []
+    # 导入分析服务用于生成操作指令
+    from app.services.analysis_service import AnalysisService
+    import pandas as pd
+    analysis_service = AnalysisService()
+    
     for campaign_id, items in grouped.items():
         clicks = sum(m.clicks or 0 for m in items)
         cost = sum(m.cost or 0 for m in items)
         comm = sum(m.commission or 0 for m in items)
         orders = sum(m.orders or 0 for m in items)
         order_days = sum(1 for m in items if (m.orders or 0) > 0)
-        max_cpc_7d = max((m.current_max_cpc or 0) for m in items)
+        # 修复：MAX CPC应该是过去7天中CPC的最大值，而不是最高CPC的最大值
+        max_cpc_7d = max((m.cpc or 0) for m in items) if items else 0
         roi = ((comm - cost) / cost) if cost > 0 else None
+        
+        # 计算保守EPC和保守ROI
+        # 保守EPC = L7D佣金*0.72/L7D点击
+        conservative_epc = (comm * 0.72 / clicks) if clicks > 0 else 0
+        # 保守ROI = (L7D佣金*0.72-L7D花费)/L7D花费
+        conservative_roi = ((comm * 0.72 - cost) / cost) if cost > 0 else None
 
         campaign = items[0].campaign
         is_vals = is_map.get(campaign.campaign_name, {}) if is_map else {}
+        
+        # 构建用于生成操作指令的行数据
+        # 注意：is_vals中的"IS Budget丢失"和"IS Rank丢失"需要转换为"预算错失份额"和"排名错失份额"
+        is_budget_lost = is_vals.get("IS Budget丢失")
+        is_rank_lost = is_vals.get("IS Rank丢失")
+        instruction_row = {
+            "保守ROI": conservative_roi,
+            "预算错失份额": is_budget_lost,  # IS Budget丢失 -> 预算错失份额
+            "排名错失份额": is_rank_lost,  # IS Rank丢失 -> 排名错失份额
+            "过去七天出单天数": order_days,
+            "最高CPC": max_cpc_7d,
+            "CPC": max_cpc_7d,  # 使用MAX CPC作为CPC值
+            "订单": orders,
+        }
+        # 生成操作指令
+        operation_instruction = analysis_service._generate_operation_instruction(
+            pd.Series(instruction_row),
+            past_seven_days_orders_global=order_days,
+            max_cpc_global=max_cpc_7d
+        )
 
         rows.append({
             "广告系列名": campaign.campaign_name,
@@ -513,8 +580,11 @@ async def generate_l7d_from_daily_with_google(
             "L7D花费": cost,
             "L7D出单天数": order_days,
             "当前Max CPC": max_cpc_7d,
-            "IS Budget丢失": is_vals.get("IS Budget丢失"),
-            "IS Rank丢失": is_vals.get("IS Rank丢失"),
+            "IS Budget丢失": is_budget_lost,
+            "IS Rank丢失": is_rank_lost,
+            "保守EPC": conservative_epc,
+            "保守ROI": conservative_roi,
+            "操作指令": operation_instruction,
             "ROI": roi,
             "点击": clicks,
             "订单": orders,

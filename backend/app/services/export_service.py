@@ -98,7 +98,16 @@ class ExportService:
             result_data = result.result_data if isinstance(result.result_data, dict) else {}
             
             # 构建导出数据行
+            # 只导出L7D分析数据，过滤掉每日分析数据
+            # L7D分析的特征：有L7D点击、L7D佣金、L7D花费等字段
+            # 每日分析的特征：有展示、点击、费用等字段，但没有L7D前缀
             for row in result_data.get('data', []):
+                # 判断是否为L7D分析：检查是否有L7D相关字段
+                has_l7d_fields = any(key.startswith('L7D') for key in row.keys())
+                # 如果是每日分析（有展示字段但没有L7D字段），则跳过
+                if '展示' in row and not has_l7d_fields:
+                    continue
+                
                 export_row = {
                     '日期': result.analysis_date.strftime('%Y-%m-%d') if result.analysis_date else '',
                     '员工': user.username if user.role == 'employee' else result.user.username,
