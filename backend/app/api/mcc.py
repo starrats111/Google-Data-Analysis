@@ -16,8 +16,26 @@ from app.schemas.mcc import (
     TestConnectionResponse
 )
 from app.services.google_ads_service import GoogleAdsService
+from app.config import settings
 
 router = APIRouter(prefix="/api/mcc", tags=["mcc"])
+
+
+@router.get("/shared-config")
+async def get_shared_config(
+    current_user: User = Depends(get_current_user)
+):
+    """获取共享配置信息（用于简化员工配置）"""
+    return {
+        "has_shared_client_id": bool(settings.GOOGLE_ADS_SHARED_CLIENT_ID),
+        "has_shared_client_secret": bool(settings.GOOGLE_ADS_SHARED_CLIENT_SECRET),
+        "has_shared_developer_token": bool(settings.GOOGLE_ADS_SHARED_DEVELOPER_TOKEN),
+        "need_refresh_token_only": bool(
+            settings.GOOGLE_ADS_SHARED_CLIENT_ID and 
+            settings.GOOGLE_ADS_SHARED_CLIENT_SECRET and 
+            settings.GOOGLE_ADS_SHARED_DEVELOPER_TOKEN
+        )
+    }
 
 
 @router.get("/accounts", response_model=List[MccAccountResponse])
@@ -47,10 +65,19 @@ async def create_mcc_account(
     if existing:
         raise HTTPException(status_code=400, detail="该MCC账号已存在")
     
+    # 如果配置了共享的客户端ID和密钥，且用户没有提供，则使用共享配置
+    account_data = account.model_dump()
+    if settings.GOOGLE_ADS_SHARED_CLIENT_ID and not account_data.get('client_id'):
+        account_data['client_id'] = settings.GOOGLE_ADS_SHARED_CLIENT_ID
+    if settings.GOOGLE_ADS_SHARED_CLIENT_SECRET and not account_data.get('client_secret'):
+        account_data['client_secret'] = settings.GOOGLE_ADS_SHARED_CLIENT_SECRET
+    if settings.GOOGLE_ADS_SHARED_DEVELOPER_TOKEN and not account_data.get('developer_token'):
+        account_data['developer_token'] = settings.GOOGLE_ADS_SHARED_DEVELOPER_TOKEN
+    
     # 创建新账号
     new_account = MccAccount(
         user_id=current_user.id,
-        **account.model_dump()
+        **account_data
     )
     db.add(new_account)
     db.commit()
@@ -149,4 +176,3 @@ async def test_mcc_connection(
             success=False,
             message=f"连接失败: {str(e)}"
         )
-

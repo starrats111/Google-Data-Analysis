@@ -11,11 +11,22 @@ const MccAccounts = () => {
   const [modalVisible, setModalVisible] = useState(false)
   const [editingAccount, setEditingAccount] = useState(null)
   const [testingAccountId, setTestingAccountId] = useState(null)
+  const [sharedConfig, setSharedConfig] = useState(null)
   const [form] = Form.useForm()
 
   useEffect(() => {
     fetchAccounts()
+    fetchSharedConfig()
   }, [])
+
+  const fetchSharedConfig = async () => {
+    try {
+      const response = await api.get('/api/mcc/shared-config')
+      setSharedConfig(response.data)
+    } catch (error) {
+      // 忽略错误，可能是旧版本后端不支持
+    }
+  }
 
   const fetchAccounts = async () => {
     setLoading(true)
@@ -208,29 +219,41 @@ const MccAccounts = () => {
             <Input placeholder="可选：关联邮箱" />
           </Form.Item>
 
-          <Form.Item
-            name="developer_token"
-            label="开发者令牌"
-            rules={[{ required: true, message: '请输入开发者令牌' }]}
-          >
-            <Input.Password placeholder="请输入开发者令牌" />
-          </Form.Item>
+          {!sharedConfig?.need_refresh_token_only && (
+            <>
+              <Form.Item
+                name="developer_token"
+                label="开发者令牌"
+                rules={[{ required: true, message: '请输入开发者令牌' }]}
+              >
+                <Input.Password placeholder="请输入开发者令牌" />
+              </Form.Item>
 
-          <Form.Item
-            name="client_id"
-            label="客户端ID"
-            rules={[{ required: true, message: '请输入客户端ID' }]}
-          >
-            <Input placeholder="请输入客户端ID" />
-          </Form.Item>
+              <Form.Item
+                name="client_id"
+                label="客户端ID"
+                rules={[{ required: true, message: '请输入客户端ID' }]}
+              >
+                <Input placeholder="请输入客户端ID" />
+              </Form.Item>
 
-          <Form.Item
-            name="client_secret"
-            label="客户端密钥"
-            rules={[{ required: true, message: '请输入客户端密钥' }]}
-          >
-            <Input.Password placeholder="请输入客户端密钥" />
-          </Form.Item>
+              <Form.Item
+                name="client_secret"
+                label="客户端密钥"
+                rules={[{ required: true, message: '请输入客户端密钥' }]}
+              >
+                <Input.Password placeholder="请输入客户端密钥" />
+              </Form.Item>
+            </>
+          )}
+
+          {sharedConfig?.need_refresh_token_only && (
+            <div style={{ marginBottom: 16, padding: 12, background: '#e6f7ff', borderRadius: 4 }}>
+              <p style={{ margin: 0, color: '#1890ff' }}>
+                💡 已配置共享的客户端ID、密钥和开发者令牌，你只需要填写MCC账号ID和刷新令牌即可。
+              </p>
+            </div>
+          )}
 
           <Form.Item
             name="refresh_token"
