@@ -75,6 +75,12 @@ class Settings(BaseSettings):
     
     # CORS配置
     CORS_ORIGINS: List[str] = [
+        # 生产环境域名
+        "https://google-data-analysis.top",
+        "https://api.google-data-analysis.top",
+        "https://www.google-data-analysis.top",
+        # Cloudflare Pages
+        "https://google-data-analysis.pages.dev",
         # Local dev (Vite/React)
         "http://localhost:3000",
         "http://127.0.0.1:3000",

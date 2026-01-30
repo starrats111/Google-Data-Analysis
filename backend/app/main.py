@@ -30,9 +30,13 @@ app.add_middleware(
     # Allow Cloudflare Pages preview subdomains like:
     # - https://google-data-analysis.pages.dev
     # - https://<hash>.google-data-analysis.pages.dev
+    # Allow production domains:
+    # - https://google-data-analysis.top
+    # - https://api.google-data-analysis.top
+    # - https://*.google-data-analysis.top
     # And allow local dev origins like:
     # - http://localhost:5173 / http://127.0.0.1:5173 (any port)
-    allow_origin_regex=r"^(https://([a-z0-9-]+\\.)?google-data-analysis\\.pages\\.dev|https?://(localhost|127\\.0\\.0\\.1)(:\\d+)?)$",
+    allow_origin_regex=r"^(https://([a-z0-9-]+\\.)?google-data-analysis\\.(pages\\.dev|top)|https?://(localhost|127\\.0\\.0\\.1)(:\\d+)?)$",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
