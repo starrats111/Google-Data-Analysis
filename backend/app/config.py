@@ -94,6 +94,12 @@ class Settings(BaseSettings):
         "https://google-data-analysis.pages.dev",
     ]
 
+    # ===== Google Ads 共享配置（当前阶段可选，避免因 .env 中残留字段报错）=====
+    # 这三个字段主要给未来 Google Ads API 使用，现在先留空也可以
+    google_ads_shared_client_id: str = ""
+    google_ads_shared_client_secret: str = ""
+    google_ads_shared_developer_token: str = ""
+    
     # 汇率配置
     # 用于当谷歌广告表1为人民币(CNY/RMB)时，将费用/CPC等换算为美元(USD)
     # 含义：1 USD = CNY_TO_USD_RATE CNY，因此 CNY -> USD 需要除以该值
