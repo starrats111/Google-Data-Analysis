@@ -8,6 +8,7 @@ from . import ad_campaign  # noqa: F401
 from . import affiliate  # noqa: F401
 from . import analysis  # noqa: F401
 from . import auth  # noqa: F401
+from . import collabglow  # noqa: F401
 from . import dashboard  # noqa: F401
 from . import expenses  # noqa: F401
 from . import export  # noqa: F401

@@ -12,6 +12,7 @@ from app.api import (
     affiliate,
     analysis,
     auth,
+    collabglow,
     dashboard,
     expenses,
     export,
@@ -47,6 +48,7 @@ app.include_router(expenses.router)
 app.include_router(export.router)
 app.include_router(ad_campaign.router)
 app.include_router(affiliate.router)
+app.include_router(collabglow.router)
 app.include_router(stage_label.router)
 
 
