@@ -94,10 +94,6 @@ const Expenses = () => {
 
   const platformColumns = [
     { title: '平台', dataIndex: 'platform_name', key: 'platform_name', width: 140 },
-    { title: '当天佣金', dataIndex: 'today_commission', key: 'today_commission', align: 'right' },
-    { title: '当天广告费用', dataIndex: 'today_ad_cost', key: 'today_ad_cost', align: 'right' },
-    { title: '当天拒付佣金', dataIndex: 'today_rejected_commission', key: 'today_rejected_commission', align: 'right' },
-    { title: '当天净利润', dataIndex: 'today_net_profit', key: 'today_net_profit', align: 'right' },
     { title: '累计佣金', dataIndex: 'range_commission', key: 'range_commission', align: 'right' },
     { title: '累计广告费用', dataIndex: 'range_ad_cost', key: 'range_ad_cost', align: 'right' },
     { title: '累计拒付佣金', dataIndex: 'range_rejected_commission', key: 'range_rejected_commission', align: 'right' },
