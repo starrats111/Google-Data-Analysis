@@ -40,7 +40,6 @@ const Analysis = ({ mode }) => {
   const [googleModalOpen, setGoogleModalOpen] = useState(false)
   const [googleFile, setGoogleFile] = useState(null)
   const [generatingFromApi, setGeneratingFromApi] = useState(false)
-  const [generatingFromApi, setGeneratingFromApi] = useState(false)
 
   const fetchAccounts = async () => {
     try {
