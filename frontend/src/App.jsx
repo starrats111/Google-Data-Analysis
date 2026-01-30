@@ -6,6 +6,7 @@ import Dashboard from './pages/Dashboard'
 import Upload from './pages/Upload'
 import Analysis from './pages/Analysis'
 import AffiliateAccounts from './pages/AffiliateAccounts'
+import MccAccounts from './pages/MccAccounts'
 import AdCampaigns from './pages/AdCampaigns'
 import Expenses from './pages/Expenses'
 import StageLabelDetail from './pages/StageLabelDetail'
@@ -42,6 +43,7 @@ function App() {
           {/* 兼容老链接：/analysis 默认跳到 L7D 分析页 */}
           <Route path="analysis" element={<Navigate to="/analysis-l7d" replace />} />
           <Route path="accounts" element={<AffiliateAccounts />} />
+          <Route path="mcc-accounts" element={<MccAccounts />} />
           <Route path="ad-campaigns" element={<AdCampaigns />} />
           <Route path="expenses" element={<Expenses />} />
           <Route path="stage-label/:label" element={<StageLabelDetail />} />

@@ -49,6 +49,11 @@ const Layout = () => {
       label: '联盟账号',
     },
     {
+      key: '/mcc-accounts',
+      icon: <AppstoreOutlined />,
+      label: 'MCC账号',
+    },
+    {
       key: '/ad-campaigns',
       icon: <AppstoreOutlined />,
       label: '我的广告',

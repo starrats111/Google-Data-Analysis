@@ -15,6 +15,7 @@ from . import expenses  # noqa: F401
 from . import export  # noqa: F401
 from . import stage_label  # noqa: F401
 from . import upload  # noqa: F401
+from . import mcc  # noqa: F401
 
 
 
