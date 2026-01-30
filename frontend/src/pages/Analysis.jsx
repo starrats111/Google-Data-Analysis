@@ -51,15 +51,37 @@ const Analysis = ({ mode }) => {
 
   const detectResultType = (result) => {
     const data = result?.result_data?.data
-    if (!Array.isArray(data) || data.length === 0) return 'unknown'
-    const keys = Object.keys(data[0] || {})
+    if (!Array.isArray(data) || data.length === 0) {
+      // 空数据时，根据analysis_type字段判断（如果有）
+      // 否则返回unknown，让过滤逻辑决定
+      return 'unknown'
+    }
+    
+    // 检查所有行的列，而不仅仅是第一行
+    const allKeys = new Set()
+    data.forEach(row => {
+      if (row && typeof row === 'object') {
+        Object.keys(row).forEach(k => allKeys.add(k))
+      }
+    })
+    
+    const keys = Array.from(allKeys)
     const hasL7D = keys.some(k =>
       k.startsWith('L7D') ||
       ['L7D点击', 'L7D佣金', 'L7D花费', 'L7D出单天数'].includes(k)
     )
     const hasDailyWeekCols = keys.includes('本周ROI') || keys.includes('本周费用') || keys.includes('本周佣金')
-    if (hasL7D && !hasDailyWeekCols) return 'l7d'
+    const hasDailyCols = keys.includes('展示') || keys.includes('本周费用') || keys.includes('本周佣金') || keys.includes('本周ROI')
+    
+    // 优先判断：如果有本周列且没有L7D列，肯定是每日分析
     if (hasDailyWeekCols && !hasL7D) return 'daily'
+    // 如果有L7D列且没有本周列，肯定是L7D分析
+    if (hasL7D && !hasDailyWeekCols) return 'l7d'
+    // 如果同时有，优先判断为每日分析（因为每日分析可能包含L7D字段）
+    if (hasDailyWeekCols && hasL7D) return 'daily'
+    // 如果有展示列（每日分析特有），判断为每日分析
+    if (hasDailyCols && !hasL7D) return 'daily'
+    
     return 'unknown'
   }
 
@@ -123,6 +145,20 @@ const Analysis = ({ mode }) => {
 
       const response = await api.get('/api/analysis/results', { params })
       const all = response.data || []
+      
+      // 调试：打印获取到的数据信息（帮助排查问题）
+      console.log(`[Analysis] 获取到 ${all.length} 条分析结果`, {
+        mode: analysisMode,
+        params,
+        results: all.map(r => ({
+          id: r.id,
+          date: r.analysis_date,
+          username: r.username || r.user_id,
+          dataRows: r.result_data?.data?.length || 0,
+          detectedType: detectResultType(r),
+          firstRowKeys: r.result_data?.data?.[0] ? Object.keys(r.result_data.data[0]).slice(0, 10) : []
+        }))
+      })
       
       // 保存到缓存
       try {

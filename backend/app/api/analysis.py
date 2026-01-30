@@ -180,10 +180,19 @@ async def get_analysis_results(
     
     results = query.order_by(AnalysisResult.analysis_date.desc()).all()
     
+    # 调试日志：记录查询结果
+    import logging
+    logger = logging.getLogger(__name__)
+    logger.info(f"查询分析结果: 用户={current_user.username}({current_user.id}), 角色={current_user.role}, "
+                f"账号ID={account_id}, 日期范围={start_date}~{end_date}, 结果数={len(results)}")
+    
     # 构建响应，包含用户名
     response_list = []
     for result in results:
         user = db.query(UserModel).filter(UserModel.id == result.user_id).first()
+        data_rows = result.result_data.get('data', []) if isinstance(result.result_data, dict) else []
+        logger.debug(f"分析结果 {result.id}: 用户={user.username if user else result.user_id}, "
+                    f"日期={result.analysis_date}, 数据行数={len(data_rows)}")
         response_list.append(AnalysisResultResponse(
             id=result.id,
             user_id=result.user_id,
