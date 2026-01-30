@@ -4,6 +4,7 @@ import { PlusOutlined, EditOutlined, DeleteOutlined, SyncOutlined } from '@ant-d
 import dayjs from 'dayjs'
 import api from '../services/api'
 import { useAuth } from '../store/authStore'
+import { getPlatformApiConfig, extractApiConfigFromNotes, mergeApiConfigToNotes } from '../config/platformApiConfig'
 
 const { Option } = Select
 const { RangePicker } = DatePicker
@@ -99,26 +100,29 @@ const AffiliateAccounts = () => {
   const handleEditAccount = (account) => {
     setEditingAccount(account)
     
-    // 从notes中提取CollabGlow token（如果存在）
-    let collabglowToken = ''
-    try {
-      if (account.notes) {
-        const notesData = JSON.parse(account.notes)
-        collabglowToken = notesData.collabglow_token || ''
-      }
-    } catch (e) {
-      // 如果notes不是JSON格式，忽略
-    }
+    // 从notes中提取API配置
+    const apiConfig = extractApiConfigFromNotes(account.notes)
     
-    accountForm.setFieldsValue({
+    // 获取平台配置
+    const platform = platforms.find(p => p.id === account.platform_id)
+    const platformConfig = getPlatformApiConfig(platform?.platform_code)
+    
+    // 构建表单初始值
+    const formValues = {
       platform_id: account.platform_id,
       account_name: account.account_name,
       account_code: account.account_code,
       email: account.email,
       is_active: account.is_active,
       notes: account.notes,
-      collabglow_token: collabglowToken,
+    }
+    
+    // 添加API字段的初始值
+    platformConfig.fields.forEach(field => {
+      formValues[field.name] = apiConfig[field.name] || ''
     })
+    
+    accountForm.setFieldsValue(formValues)
     setAccountModalVisible(true)
   }
 
@@ -138,37 +142,32 @@ const AffiliateAccounts = () => {
 
   const handleAccountSubmit = async (values) => {
     try {
-      // 处理CollabGlow token：如果提供了token且平台是CollabGlow，将其存储到notes中
-      const { collabglow_token, platform_id, notes, ...otherValues } = values
+      const { platform_id, notes, ...otherValues } = values
       const selectedPlatform = platforms.find(p => p.id === platform_id)
-      const isCollabGlow = selectedPlatform && isCollabGlowPlatform({ platform: selectedPlatform })
+      const platformConfig = getPlatformApiConfig(selectedPlatform?.platform_code)
       
-      let finalNotes = notes || ''
-      if (isCollabGlow && collabglow_token) {
-        // 将token存储到notes的JSON中
-        try {
-          let notesData = {}
-          if (notes) {
-            try {
-              notesData = JSON.parse(notes)
-            } catch (e) {
-              // 如果notes不是JSON，保留原文本作为其他字段
-              notesData = { other: notes }
-            }
-          }
-          notesData.collabglow_token = collabglow_token
-          finalNotes = JSON.stringify(notesData)
-        } catch (e) {
-          // 如果处理失败，使用原notes
-          finalNotes = notes || ''
+      // 提取API配置字段
+      const apiConfig = {}
+      platformConfig.fields.forEach(field => {
+        if (values[field.name]) {
+          apiConfig[field.name] = values[field.name]
         }
-      }
+      })
       
+      // 将API配置合并到notes中
+      const finalNotes = mergeApiConfigToNotes(notes, apiConfig)
+      
+      // 移除API字段，只保留基本字段
       const submitData = {
         ...otherValues,
         platform_id,
         notes: finalNotes,
       }
+      
+      // 清理API字段
+      platformConfig.fields.forEach(field => {
+        delete submitData[field.name]
+      })
       
       if (editingAccount) {
         await api.put(`/api/affiliate/accounts/${editingAccount.id}`, submitData)
@@ -648,7 +647,7 @@ const AffiliateAccounts = () => {
               <Input.TextArea rows={3} placeholder="可选：备注信息" />
             </Form.Item>
 
-            {/* CollabGlow Token 字段（仅当选择CollabGlow平台时显示） */}
+            {/* 动态显示平台API配置字段 */}
             <Form.Item
               noStyle
               shouldUpdate={(prevValues, currentValues) => 
@@ -658,19 +657,23 @@ const AffiliateAccounts = () => {
               {({ getFieldValue }) => {
                 const selectedPlatformId = getFieldValue('platform_id')
                 const selectedPlatform = platforms.find(p => p.id === selectedPlatformId)
-                const showTokenField = selectedPlatform && isCollabGlowPlatform({ platform: selectedPlatform })
+                const platformConfig = getPlatformApiConfig(selectedPlatform?.platform_code)
                 
-                return showTokenField ? (
+                return platformConfig.fields.map(field => (
                   <Form.Item
-                    name="collabglow_token"
-                    label="CollabGlow API Token"
-                    help="请输入你的 CollabGlow API Token，用于同步佣金数据"
+                    key={field.name}
+                    name={field.name}
+                    label={field.label}
+                    help={field.help}
+                    rules={field.required ? [{ required: true, message: `请输入${field.label}` }] : []}
                   >
-                    <Input.Password 
-                      placeholder="请输入 CollabGlow API Token"
-                    />
+                    {field.type === 'password' ? (
+                      <Input.Password placeholder={field.placeholder} />
+                    ) : (
+                      <Input placeholder={field.placeholder} />
+                    )}
                   </Form.Item>
-                ) : null
+                ))
               }}
             </Form.Item>
           </Form>
