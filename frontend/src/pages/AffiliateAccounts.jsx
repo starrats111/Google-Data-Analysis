@@ -778,15 +778,23 @@ const AffiliateAccounts = () => {
                 const selectedPlatform = platforms.find(p => p.id === selectedPlatformId)
                 if (!selectedPlatform) return null
                 
+                // 获取平台代码和名称（转换为小写用于匹配）
+                const platformCode = (selectedPlatform.platform_code || '').toLowerCase()
+                const platformName = (selectedPlatform.platform_name || '').toLowerCase()
+                
+                // 检查是否是Rewardoo平台（支持多种代码格式）
+                const isRewardoo = platformCode === 'rewardoo' || platformCode === 'rw' || 
+                                  platformName.includes('rewardoo') || platformName.includes('rw')
+                
+                // 获取平台配置
                 const platformConfig = getPlatformApiConfig(selectedPlatform.platform_code)
                 
                 // 检查是否是特定平台的配置（不是默认配置）
-                const platformCode = (selectedPlatform.platform_code || '').toLowerCase()
                 const hasSpecificConfig = PLATFORM_API_CONFIG[platformCode] && 
                                         PLATFORM_API_CONFIG[platformCode] !== PLATFORM_API_CONFIG.default
                 
-                // 如果平台有特定配置，显示字段
-                if (hasSpecificConfig && platformConfig.fields && platformConfig.fields.length > 0) {
+                // 如果是Rewardoo平台或有特定配置，显示字段
+                if ((isRewardoo || hasSpecificConfig) && platformConfig.fields && platformConfig.fields.length > 0) {
                   return platformConfig.fields.map(field => (
                     <Form.Item
                       key={field.name}
