@@ -170,7 +170,14 @@ class GoogleAdsApiSyncService:
         
         try:
             # MCC ID需要转换为customer_id格式（去掉横线，只保留数字）
-            mcc_customer_id = mcc_account.mcc_id.replace("-", "")
+            mcc_customer_id = mcc_account.mcc_id.replace("-", "").strip()
+            
+            # 验证MCC ID格式：必须是10位数字
+            if not mcc_customer_id.isdigit() or len(mcc_customer_id) != 10:
+                return {
+                    "success": False,
+                    "message": f"MCC ID格式错误：{mcc_account.mcc_id}。去掉横线后必须是10位数字，当前是{len(mcc_customer_id)}位：{mcc_customer_id}。请检查MCC ID是否正确。"
+                }
             
             # 创建Google Ads客户端
             # 重要：当通过MCC访问客户账号时，必须设置login_customer_id为MCC的customer_id
@@ -179,7 +186,7 @@ class GoogleAdsApiSyncService:
                 "client_id": mcc_account.client_id,
                 "client_secret": mcc_account.client_secret,
                 "refresh_token": mcc_account.refresh_token,
-                "login_customer_id": mcc_customer_id,  # 设置MCC的customer_id作为login-customer-id
+                "login_customer_id": mcc_customer_id,  # 设置MCC的customer_id作为login-customer-id（必须是10位数字字符串）
                 "use_proto_plus": True
             })
             
