@@ -354,7 +354,7 @@ export default function GoogleAdsData() {
               showTotal: (total) => `共 ${total} 条记录`,
               showQuickJumper: true,
             }}
-            scroll={{ x: 1400 }}
+            scroll={{ x: 1680 }}
             columns={[
               {
                 title: '广告系列',
