@@ -99,6 +99,12 @@ def health():
     return {"status": "ok"}
 
 
+@app.options("/{full_path:path}")
+async def options_handler(full_path: str):
+    """处理所有OPTIONS预检请求"""
+    return {"status": "ok"}
+
+
 @app.get("/")
 def root():
     return {"message": "Google Analysis backend is running", "docs": "/docs"}
