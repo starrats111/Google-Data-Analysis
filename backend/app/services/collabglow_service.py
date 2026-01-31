@@ -209,10 +209,10 @@ class CollabGlowService(PlatformServiceBase):
             payload["endDate"] = end_date
         
         try:
-            logger.info(f"[Commission Details API] 请求佣金明细: transaction_id={transaction_id}, date_range={begin_date}~{end_date}")
+            logger.info(f"[Commission Details API] 请求佣金明细: transaction_id={transaction_id}, date_range={begin_date}~{end_date}, URL={self.commission_details_api}")
             # 增加超时时间到60秒
             response = requests.post(
-                COMMISSION_DETAILS_API,
+                self.commission_details_api,
                 headers=headers,
                 json=payload,
                 timeout=60
