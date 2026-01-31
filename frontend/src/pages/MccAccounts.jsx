@@ -19,6 +19,7 @@ export default function MccAccounts() {
   const [oauthStep, setOauthStep] = useState(0) // 0: 输入信息, 1: 授权, 2: 完成
   const [authorizationUrl, setAuthorizationUrl] = useState('')
   const [oauthForm] = Form.useForm()
+  const [obtainedRefreshToken, setObtainedRefreshToken] = useState('') // 保存获取到的Refresh Token
 
   useEffect(() => {
     fetchMccAccounts()
@@ -353,6 +354,7 @@ export default function MccAccounts() {
           setOauthModalVisible(false)
           setOauthStep(0)
           setAuthorizationUrl('')
+          setObtainedRefreshToken('')
         }}
         footer={null}
         width={700}
@@ -470,10 +472,19 @@ export default function MccAccounts() {
                   })
 
                   if (response.data.success) {
+                    const refreshToken = response.data.refresh_token
+                    // 保存获取到的Refresh Token
+                    setObtainedRefreshToken(refreshToken)
                     // 自动填充Refresh Token到主表单
                     form.setFieldsValue({
-                      refresh_token: response.data.refresh_token
+                      refresh_token: refreshToken
                     })
+                    // 强制更新表单显示
+                    setTimeout(() => {
+                      form.setFieldsValue({
+                        refresh_token: refreshToken
+                      })
+                    }, 100)
                     setOauthStep(2)
                     message.success('成功获取Refresh Token！已自动填充到表单中')
                   }
