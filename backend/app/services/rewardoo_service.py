@@ -108,28 +108,38 @@ class RewardooService(PlatformServiceBase):
                 timeout=30
             )
             
-            # 检查HTTP状态码
+            # 首先检查HTTP状态码，在尝试解析JSON之前
             if response.status_code == 404:
                 error_msg = f"[RW TransactionDetails API] API端点不存在 (404)。请检查API URL是否正确。当前URL: {self.transaction_details_api}。如果Rewardoo有多个渠道，请在账号备注中配置正确的API URL（rewardoo_api_url字段）。"
                 logger.error(error_msg)
                 raise Exception(error_msg)
             elif response.status_code != 200:
-                error_msg = f"[RW TransactionDetails API] HTTP错误 {response.status_code}: {response.text[:200]}"
+                # 对于非200状态码，尝试获取错误信息
+                try:
+                    error_body = response.text[:500]
+                except:
+                    error_body = "无法读取错误响应"
+                error_msg = f"[RW TransactionDetails API] HTTP错误 {response.status_code}: {error_body}"
                 logger.error(error_msg)
                 raise Exception(error_msg)
             
+            # 只有状态码是200时才尝试解析JSON
             # 尝试解析JSON响应
             try:
                 result = response.json()
-            except ValueError:
+            except ValueError as e:
                 # 如果响应不是JSON，可能是HTML错误页面或其他格式
                 error_msg = f"[RW TransactionDetails API] 响应不是有效的JSON格式: {response.text[:200]}"
+                logger.error(error_msg)
+                raise Exception(error_msg)
+            except Exception as e:
+                error_msg = f"[RW TransactionDetails API] 解析响应时出错: {str(e)}"
                 logger.error(error_msg)
                 raise Exception(error_msg)
             
             # 确保result是字典类型
             if not isinstance(result, dict):
-                error_msg = f"[RW TransactionDetails API] 返回格式错误: 期望字典，但得到 {type(result).__name__}: {result}"
+                error_msg = f"[RW TransactionDetails API] 返回格式错误: 期望字典，但得到 {type(result).__name__}: {result}。响应状态码: {response.status_code}。响应内容: {str(result)[:200]}"
                 logger.error(error_msg)
                 raise Exception(error_msg)
             
