@@ -12,6 +12,8 @@ from app.models.platform_data import PlatformData
 from app.models.affiliate_account import AffiliateAccount
 from app.services.collabglow_service import CollabGlowService
 from app.services.linkhaitao_service import LinkHaitaoService
+from app.services.rewardoo_service import RewardooService
+from app.services.unified_platform_service import UnifiedPlatformService
 
 logger = logging.getLogger(__name__)
 
@@ -84,9 +86,19 @@ class PlatformDataSyncService:
             "linkhaitao" in platform_name_normalized
         )
         
+        is_rewardoo = (
+            platform_code_normalized in ["rewardoo", "rw", "reward-oo", "reward_oo"] or
+            platform_name_normalized in ["rw", "rewardoo", "reward-oo"] or
+            "rewardoo" in platform_code_normalized or
+            "rewardoo" in platform_name_normalized
+        )
+        
         if is_collabglow:
             logger.info(f"✓ 识别为CollabGlow平台，开始同步...")
             return self._sync_collabglow_data(account, begin_date, end_date, token)
+        elif is_rewardoo:
+            logger.info(f"✓ 识别为Rewardoo平台，开始同步...")
+            return self._sync_rewardoo_data(account, begin_date, end_date, token)
         elif is_linkhaitao:
             logger.info(f"✓ 识别为LinkHaitao平台，开始同步...")
             return self._sync_linkhaitao_data(account, begin_date, end_date, token)
@@ -123,31 +135,66 @@ class PlatformDataSyncService:
             if not token:
                 return {"success": False, "message": "未配置CollabGlow Token。请在同步对话框中输入Token，或在账号编辑页面的备注中配置。"}
             
-            # 同步数据
+            # 同步数据（使用统一方案）
+            logger.info(f"使用Token进行同步 (Token长度: {len(token) if token else 0})")
             service = CollabGlowService(token=token)
-            result = service.sync_commissions(begin_date, end_date)
             
-            commissions = result.get("data", {}).get("list", [])
-            logger.info(f"CollabGlow API返回 {len(commissions)} 条佣金记录")
-            print(f"[CollabGlow同步] API返回 {len(commissions)} 条佣金记录")  # 确保输出到控制台
+            # 优先使用Transaction API（核心API，可同时获取订单数、佣金和拒付数据）
+            try:
+                logger.info("[CG同步] 使用Transaction API（核心API：订单数+佣金+拒付）")
+                result = service.sync_transactions(begin_date, end_date)
+                transactions_raw = service.extract_transaction_data(result)
+                logger.info(f"[CG同步] Transaction API返回 {len(transactions_raw)} 笔交易（订单）")
+                print(f"[CG同步] Transaction API返回 {len(transactions_raw)} 笔交易（订单）")
+            except Exception as e:
+                # Transaction API失败，回退到Commission Validation API
+                logger.warning(f"[CG同步] Transaction API失败: {e}，回退到Commission Validation API")
+                result = service.sync_commissions(begin_date, end_date, use_transaction_api=False)
+                transactions_raw = service.extract_commission_data(result)
+                # 将Commission Validation API数据转换为统一格式
+                transactions_raw = [
+                    {
+                        "transaction_id": item.get("settlement_id") or f"cg_{item.get('mcid')}_{item.get('settlement_date')}",
+                        "transaction_time": item.get("settlement_date"),
+                        "merchant": item.get("mcid"),
+                        "order_amount": 0,
+                        "commission_amount": item.get("sale_commission", 0),
+                        "status": "approved"  # Commission Validation API默认是已确认的
+                    }
+                    for item in transactions_raw
+                ]
+                logger.info(f"[CG同步] Commission Validation API返回 {len(transactions_raw)} 条佣金记录")
+                print(f"[CG同步] Commission Validation API返回 {len(transactions_raw)} 条佣金记录")
             
-            if not commissions:
+            # 如果返回0条记录，提供更详细的诊断信息
+            if len(transactions_raw) == 0:
+                logger.info(f"提示: 日期范围 {begin_date} ~ {end_date} 内没有数据。请确认：1) Token是否正确 2) 该日期范围内是否有数据 3) 在CollabGlow平台手动检查该日期范围")
+            
+            if not transactions_raw:
                 return {
                     "success": True,
-                    "message": f"同步完成，但该日期范围（{begin_date} ~ {end_date}）内没有佣金数据",
+                    "message": f"同步完成，但该日期范围（{begin_date} ~ {end_date}）内没有数据",
                     "saved_count": 0
                 }
             
+            # 使用统一服务按日期聚合数据并计算6个核心指标
+            date_data = UnifiedPlatformService.aggregate_by_date(
+                transactions_raw,
+                platform='cg',
+                date_field='transaction_time'
+            )
+            
             # 保存到数据库
             saved_count = 0
-            skipped_count = 0
-            for comm in commissions:
-                settlement_date = comm.get("settlement_date")
-                if not settlement_date:
-                    continue
-                
+            for comm_date, data_item in date_data.items():
                 try:
-                    comm_date = datetime.strptime(settlement_date, "%Y-%m-%d").date()
+                    # 准备PlatformData数据
+                    platform_data_dict = UnifiedPlatformService.prepare_platform_data(
+                        transactions_raw,
+                        platform='cg',
+                        target_date=comm_date,
+                        date_field='transaction_time'
+                    )
                     
                     # 查找或创建记录
                     platform_data = self.db.query(PlatformData).filter(
@@ -160,13 +207,14 @@ class PlatformDataSyncService:
                             affiliate_account_id=account.id,
                             user_id=account.user_id,
                             date=comm_date,
-                            commission=comm.get("sale_commission", 0),
-                            orders=0,  # CollabGlow API不提供订单数
-                            order_days_this_week=0
+                            **platform_data_dict
                         )
                         self.db.add(platform_data)
                     else:
-                        platform_data.commission = comm.get("sale_commission", 0)
+                        # 更新所有字段
+                        for key, value in platform_data_dict.items():
+                            if key != 'rejected_rate':  # rejected_rate是计算字段，不存储
+                                setattr(platform_data, key, value)
                         platform_data.last_sync_at = datetime.now()
                     
                     saved_count += 1
@@ -185,6 +233,112 @@ class PlatformDataSyncService:
         except Exception as e:
             self.db.rollback()
             logger.error(f"同步CollabGlow数据失败: {e}")
+            return {"success": False, "message": f"同步失败: {str(e)}"}
+    
+    def _sync_rewardoo_data(
+        self,
+        account: AffiliateAccount,
+        begin_date: str,
+        end_date: str,
+        token: Optional[str] = None
+    ) -> Dict:
+        """
+        同步Rewardoo数据（使用统一方案）
+        
+        核心API：TransactionDetails API
+        辅助API：CommissionDetails API（用于拒付原因分析）
+        """
+        try:
+            # 获取token：优先使用传入的token，如果没有则从账号备注中读取
+            import json
+            if not token:
+                if account.notes:
+                    try:
+                        notes_data = json.loads(account.notes)
+                        token = notes_data.get("rewardoo_token") or notes_data.get("rw_token") or notes_data.get("api_token")
+                    except:
+                        pass
+            
+            if not token:
+                return {"success": False, "message": "未配置Rewardoo Token。请在同步对话框中输入Token，或在账号编辑页面的备注中配置。"}
+            
+            # 同步数据（使用TransactionDetails API，这是核心API）
+            logger.info(f"使用Token进行同步 (Token长度: {len(token) if token else 0})")
+            service = RewardooService(token=token)
+            
+            logger.info("[RW同步] 使用TransactionDetails API（核心API：订单数+佣金+拒付）")
+            result = service.sync_transactions(begin_date, end_date)
+            transactions_raw = service.extract_transaction_data(result)
+            logger.info(f"[RW同步] TransactionDetails API返回 {len(transactions_raw)} 笔交易（订单）")
+            print(f"[RW同步] TransactionDetails API返回 {len(transactions_raw)} 笔交易（订单）")
+            
+            # 如果返回0条记录，提供更详细的诊断信息
+            if len(transactions_raw) == 0:
+                logger.info(f"提示: 日期范围 {begin_date} ~ {end_date} 内没有数据。请确认：1) Token是否正确 2) 该日期范围内是否有数据 3) 在Rewardoo平台手动检查该日期范围")
+            
+            if not transactions_raw:
+                return {
+                    "success": True,
+                    "message": f"同步完成，但该日期范围（{begin_date} ~ {end_date}）内没有数据",
+                    "saved_count": 0
+                }
+            
+            # 使用统一服务按日期聚合数据并计算6个核心指标
+            date_data = UnifiedPlatformService.aggregate_by_date(
+                transactions_raw,
+                platform='rw',
+                date_field='transaction_time'
+            )
+            
+            # 保存到数据库
+            saved_count = 0
+            for comm_date, data_item in date_data.items():
+                try:
+                    # 准备PlatformData数据
+                    platform_data_dict = UnifiedPlatformService.prepare_platform_data(
+                        transactions_raw,
+                        platform='rw',
+                        target_date=comm_date,
+                        date_field='transaction_time'
+                    )
+                    
+                    # 查找或创建记录
+                    platform_data = self.db.query(PlatformData).filter(
+                        PlatformData.affiliate_account_id == account.id,
+                        PlatformData.date == comm_date
+                    ).first()
+                    
+                    if not platform_data:
+                        platform_data = PlatformData(
+                            affiliate_account_id=account.id,
+                            user_id=account.user_id,
+                            date=comm_date,
+                            **platform_data_dict
+                        )
+                        self.db.add(platform_data)
+                    else:
+                        # 更新所有字段
+                        for key, value in platform_data_dict.items():
+                            if key != 'rejected_rate':  # rejected_rate是计算字段，不存储
+                                setattr(platform_data, key, value)
+                        platform_data.last_sync_at = datetime.now()
+                    
+                    saved_count += 1
+                except Exception as e:
+                    logger.error(f"保存Rewardoo数据失败: {e}")
+                    continue
+            
+            self.db.commit()
+            
+            return {
+                "success": True,
+                "message": f"成功同步 {saved_count} 条记录",
+                "saved_count": saved_count
+            }
+            
+        except Exception as e:
+            self.db.rollback()
+            logger.error(f"同步Rewardoo数据失败: {e}")
             return {"success": False, "message": f"同步失败: {str(e)}"}
     
     def _sync_linkhaitao_data(

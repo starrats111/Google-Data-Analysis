@@ -19,12 +19,25 @@ class PlatformData(Base):
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     date = Column(Date, nullable=False, index=True)
     
-    # 平台数据
-    commission = Column(Float, default=0.0, nullable=False)  # 佣金金额
-    orders = Column(Integer, default=0, nullable=False)  # 订单数
-    order_days_this_week = Column(Integer, default=0, nullable=False)  # 本周出单天数
+    # 平台数据（统一数据模型：CG + RW）
+    # 核心指标1-3：订单和佣金
+    orders = Column(Integer, default=0, nullable=False)  # 总订单数
+    approved_orders = Column(Integer, default=0, nullable=False)  # 已确认订单数
+    commission = Column(Float, default=0.0, nullable=False)  # 总佣金（已确认）
     
-    # 订单详情（JSON格式存储）
+    # 核心指标4-5：拒付数据
+    rejected_orders = Column(Integer, default=0, nullable=False)  # 拒付订单数
+    rejected_commission = Column(Float, default=0.0, nullable=False)  # 拒付佣金
+    
+    # 核心指标6：拒付率（计算字段，不存储）
+    # rejected_rate = rejected_orders / orders
+    
+    # 辅助字段
+    order_days_this_week = Column(Integer, default=0, nullable=False)  # 本周出单天数
+    order_amount = Column(Float, default=0.0, nullable=False)  # 订单总金额（用于对账）
+    
+    # 订单详情（JSON格式存储，包含transaction_id用于去重）
+    # 格式: [{"transaction_id": "...", "status": "...", "commission_amount": ..., ...}, ...]
     order_details = Column(Text, nullable=True)  # 存储订单列表JSON
     
     # 元数据

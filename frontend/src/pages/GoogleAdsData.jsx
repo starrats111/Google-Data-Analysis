@@ -95,7 +95,9 @@ export default function GoogleAdsData() {
   const handleSearch = async (values) => {
     setLoading(true)
     try {
-      const params = {}
+      const params = {
+        date_range_type: dateRangeType
+      }
       
       if (values.mcc_id) {
         params.mcc_id = values.mcc_id
@@ -105,56 +107,27 @@ export default function GoogleAdsData() {
         params.platform_code = values.platform_code
       }
       
-      // 获取日期范围：优先使用表单值，如果没有则使用当前选择的时间范围类型
-      let beginDate, endDate
-      if (values.dateRange && values.dateRange.length === 2) {
-        beginDate = values.dateRange[0]
-        endDate = values.dateRange[1]
-      } else {
-        // 如果表单中没有日期范围，根据当前选择的时间范围类型计算
-        const today = dayjs()
-        switch(dateRangeType) {
-          case 'today':
-            beginDate = today
-            endDate = today
-            break
-          case 'yesterday':
-            beginDate = today.subtract(1, 'day')
-            endDate = today.subtract(1, 'day')
-            break
-          case 'past7days':
-            beginDate = today.subtract(7, 'day')
-            endDate = today
-            break
-          case 'thisWeek':
-            beginDate = today.startOf('week')
-            endDate = today
-            break
-          case 'thisMonth':
-            beginDate = today.startOf('month')
-            endDate = today
-            break
-          default:
-            message.warning('请选择日期范围')
-            setLoading(false)
-            return
+      // 如果是自定义日期范围，需要提供begin_date和end_date
+      if (dateRangeType === 'custom') {
+        if (values.dateRange && values.dateRange.length === 2) {
+          params.begin_date = values.dateRange[0].format('YYYY-MM-DD')
+          params.end_date = values.dateRange[1].format('YYYY-MM-DD')
+        } else {
+          message.warning('请选择日期范围')
+          setLoading(false)
+          return
         }
       }
       
-      params.begin_date = beginDate.format('YYYY-MM-DD')
-      params.end_date = endDate.format('YYYY-MM-DD')
+      // 使用新的聚合API，完全对齐Google Ads的统计口径
+      // 返回时间范围级别的汇总（一行），不是每日明细加总
+      const response = await api.get('/api/google-ads-aggregate', { params })
       
-      // 同时获取汇总数据和详细数据
-      const [summaryResponse, detailResponse] = await Promise.all([
-        api.get('/api/google-ads-data/summary', { params }),
-        api.get('/api/google-ads-data', { params })
-      ])
+      setSummaryData(response.data)
+      setDetailData([]) // 不再显示每日明细
       
-      setSummaryData(summaryResponse.data)
-      setDetailData(detailResponse.data || [])
-      
-      if (summaryResponse.data && (summaryResponse.data.total_cost > 0 || summaryResponse.data.total_impressions > 0 || summaryResponse.data.total_clicks > 0)) {
-        message.success(`查询成功，找到 ${detailResponse.data?.length || 0} 条广告系列数据`)
+      if (response.data && (response.data.google_ads_cost > 0 || response.data.affiliate_commission > 0)) {
+        message.success(`查询成功：${response.data.date_range_label}`)
       } else {
         message.info('未找到数据')
       }
@@ -269,67 +242,125 @@ export default function GoogleAdsData() {
         </Form>
       </Card>
 
-      {/* 汇总统计卡片 - 类似Google Ads样式 */}
+      {/* 时间范围级别汇总（一行）- 完全对齐Google Ads */}
       {summaryData && (
         <Card style={{ marginBottom: 16 }}>
-          <Row gutter={[24, 16]}>
-            <Col xs={12} sm={12} md={6}>
-              <div style={{ 
-                padding: '16px', 
-                backgroundColor: '#f5f5f5', 
-                borderRadius: '8px',
-                border: '1px solid #e8e8e8'
-              }}>
-                <div style={{ fontSize: '14px', color: '#666', marginBottom: '8px' }}>点击次数</div>
-                <div style={{ fontSize: '24px', fontWeight: 'bold', color: '#1890ff' }}>
-                  {summaryData.total_clicks?.toLocaleString() || 0}
-                </div>
-              </div>
-            </Col>
-            <Col xs={12} sm={12} md={6}>
-              <div style={{ 
-                padding: '16px', 
-                backgroundColor: '#f5f5f5', 
-                borderRadius: '8px',
-                border: '1px solid #e8e8e8'
-              }}>
-                <div style={{ fontSize: '14px', color: '#666', marginBottom: '8px' }}>展示次数</div>
-                <div style={{ fontSize: '24px', fontWeight: 'bold', color: '#1890ff' }}>
-                  {summaryData.total_impressions?.toLocaleString() || 0}
-                </div>
-              </div>
-            </Col>
-            <Col xs={12} sm={12} md={6}>
-              <div style={{ 
-                padding: '16px', 
-                backgroundColor: '#f5f5f5', 
-                borderRadius: '8px',
-                border: '1px solid #e8e8e8'
-              }}>
-                <div style={{ fontSize: '14px', color: '#666', marginBottom: '8px' }}>平均每次点击费用</div>
-                <div style={{ fontSize: '24px', fontWeight: 'bold', color: '#52c41a' }}>
-                  ${(summaryData.avg_cpc || 0).toFixed(2)}
-                </div>
-              </div>
-            </Col>
-            <Col xs={12} sm={12} md={6}>
-              <div style={{ 
-                padding: '16px', 
-                backgroundColor: '#f5f5f5', 
-                borderRadius: '8px',
-                border: '1px solid #e8e8e8'
-              }}>
-                <div style={{ fontSize: '14px', color: '#666', marginBottom: '8px' }}>费用</div>
-                <div style={{ fontSize: '24px', fontWeight: 'bold', color: '#ff4d4f' }}>
-                  ${(summaryData.total_cost || 0).toFixed(2)}
-                </div>
-              </div>
-            </Col>
-          </Row>
+          <div style={{ marginBottom: 16, paddingBottom: 16, borderBottom: '1px solid #e8e8e8' }}>
+            <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 500 }}>
+              {summaryData.date_range_label || '汇总数据'}
+            </h3>
+            <div style={{ fontSize: '12px', color: '#999', marginTop: '4px' }}>
+              {summaryData.begin_date} ~ {summaryData.end_date}
+            </div>
+          </div>
+          
+          {/* 一行汇总表格 - 和Google Ads一样 */}
+          <Table
+            dataSource={[summaryData]}
+            pagination={false}
+            rowKey="date_range_type"
+            columns={[
+              {
+                title: '时间范围',
+                dataIndex: 'date_range_label',
+                key: 'date_range_label',
+                width: 150,
+                render: (text) => <strong>{text}</strong>
+              },
+              {
+                title: 'Google Ads成本',
+                dataIndex: 'google_ads_cost',
+                key: 'google_ads_cost',
+                width: 150,
+                align: 'right',
+                render: (val) => `$${(val || 0).toFixed(2)}`
+              },
+              {
+                title: '佣金（已确认）',
+                dataIndex: 'affiliate_commission',
+                key: 'affiliate_commission',
+                width: 150,
+                align: 'right',
+                render: (val) => `$${(val || 0).toFixed(2)}`
+              },
+              {
+                title: '拒付佣金',
+                dataIndex: 'affiliate_rejected_commission',
+                key: 'affiliate_rejected_commission',
+                width: 150,
+                align: 'right',
+                render: (val) => (
+                  <span style={{ color: val > 0 ? '#ff4d4f' : '#666' }}>
+                    ${(val || 0).toFixed(2)}
+                  </span>
+                )
+              },
+              {
+                title: '净佣金',
+                dataIndex: 'net_commission',
+                key: 'net_commission',
+                width: 150,
+                align: 'right',
+                render: (val) => `$${(val || 0).toFixed(2)}`
+              },
+              {
+                title: 'ROI',
+                dataIndex: 'roi',
+                key: 'roi',
+                width: 120,
+                align: 'right',
+                render: (val) => (
+                  <span style={{ 
+                    color: val > 0 ? '#52c41a' : val < 0 ? '#ff4d4f' : '#666',
+                    fontWeight: 'bold'
+                  }}>
+                    {val ? `${val.toFixed(2)}%` : '0.00%'}
+                  </span>
+                )
+              },
+              {
+                title: '订单数',
+                dataIndex: 'affiliate_orders',
+                key: 'affiliate_orders',
+                width: 120,
+                align: 'right',
+                render: (val) => (val || 0).toLocaleString()
+              },
+              {
+                title: '点击次数',
+                dataIndex: 'google_ads_clicks',
+                key: 'google_ads_clicks',
+                width: 120,
+                align: 'right',
+                render: (val) => (val || 0).toLocaleString()
+              },
+              {
+                title: '展示次数',
+                dataIndex: 'google_ads_impressions',
+                key: 'google_ads_impressions',
+                width: 120,
+                align: 'right',
+                render: (val) => (val || 0).toLocaleString()
+              },
+              {
+                title: '平均CPC',
+                dataIndex: 'google_ads_cpc',
+                key: 'google_ads_cpc',
+                width: 120,
+                align: 'right',
+                render: (val) => `$${(val || 0).toFixed(4)}`
+              }
+            ]}
+          />
+          
+          <div style={{ marginTop: 16, padding: '12px', backgroundColor: '#f5f5f5', borderRadius: '4px', fontSize: '12px', color: '#666' }}>
+            <strong>说明：</strong>此数据完全对齐Google Ads的统计口径，使用时间范围级别的聚合结果（不是逐日加总），确保与Google Ads UI完全一致。
+          </div>
         </Card>
       )}
 
-      {/* 详细数据表格 - 类似Google Ads样式 */}
+      {/* 不再显示每日明细 - 如需日级分析，请使用明细页 */}
+      {/* 注释掉详细数据表格，只显示时间范围级别的汇总
       {summaryData && detailData.length > 0 && (
         <Card>
           <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>

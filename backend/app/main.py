@@ -12,12 +12,14 @@ from app.services.scheduler import start_scheduler, shutdown_scheduler
 from app.api import (
     ad_campaign,
     affiliate,
+    affiliate_transactions,
     analysis,
     auth,
     collabglow,
     dashboard,
     expenses,
     export,
+    google_ads_aggregate,
     google_ads_data,
     google_oauth,
     linkhaitao,
@@ -80,11 +82,13 @@ app.include_router(expenses.router)
 app.include_router(export.router)
 app.include_router(ad_campaign.router)
 app.include_router(affiliate.router)
+app.include_router(affiliate_transactions.router)
 app.include_router(collabglow.router)
 app.include_router(linkhaitao.router)
 app.include_router(mcc.router)
 app.include_router(platform_data.router)
 app.include_router(google_ads_data.router)
+app.include_router(google_ads_aggregate.router)
 app.include_router(google_oauth.router)
 app.include_router(stage_label.router)
 
