@@ -15,6 +15,7 @@ import Expenses from './pages/Expenses'
 import MyAnalysis from './pages/MyAnalysis'
 import StageLabelDetail from './pages/StageLabelDetail'
 import GoogleOAuthCallback from './pages/GoogleOAuthCallback'
+import RejectionDetails from './pages/RejectionDetails'
 import { useAuth } from './store/authStore'
 
 function PrivateRoute({ children }) {
@@ -57,6 +58,7 @@ function App() {
           <Route path="google-ads-data" element={<GoogleAdsData />} />
           <Route path="ad-campaigns" element={<AdCampaigns />} />
           <Route path="expenses" element={<Expenses />} />
+          <Route path="rejections" element={<RejectionDetails />} />
           <Route path="stage-label/:label" element={<StageLabelDetail />} />
         </Route>
       </Routes>
