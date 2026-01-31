@@ -30,17 +30,28 @@ class RewardooService(PlatformServiceBase):
     - get_transactions(): 核心API，获取订单数 + 已确认佣金 + 拒付佣金（统一接口）
     - get_transaction_details(): 内部方法，调用TransactionDetails API
     - get_commission_details(): 辅助API，获取拒付原因分析
+    
+    支持多渠道：
+    - 每个账号可以配置不同的API端点（通过base_url参数）
+    - 如果未提供base_url，使用默认的BASE_URL
     """
     
-    def __init__(self, token: str):
+    def __init__(self, token: str, base_url: Optional[str] = None):
         """
         初始化服务
         
         Args:
             token: Rewardoo API token
+            base_url: 自定义API基础URL（可选，用于支持不同渠道）
+                     如果未提供，使用默认的BASE_URL
         """
         self.token = token
-        self.base_url = BASE_URL
+        self.base_url = base_url or BASE_URL
+        # 根据base_url构建API端点
+        self.transaction_details_api = f"{self.base_url}/transaction_details"
+        self.commission_details_api = f"{self.base_url}/commission_details"
+        
+        logger.info(f"[RW Service] 初始化，base_url={self.base_url}, transaction_api={self.transaction_details_api}")
     
     def get_transactions(
         self,
@@ -89,9 +100,9 @@ class RewardooService(PlatformServiceBase):
         }
         
         try:
-            logger.info(f"[RW TransactionDetails API] 请求交易数据: {begin_date} ~ {end_date}")
+            logger.info(f"[RW TransactionDetails API] 请求交易数据: {begin_date} ~ {end_date}, URL={self.transaction_details_api}")
             response = requests.post(
-                TRANSACTION_DETAILS_API,
+                self.transaction_details_api,
                 headers=headers,
                 json=payload,
                 timeout=30
@@ -124,7 +135,19 @@ class RewardooService(PlatformServiceBase):
             message = result.get("message", "")
             
             if code == 0 or code == "0" or result.get("success"):
-                transactions = result.get("data", {}).get("transactions", []) or result.get("transactions", [])
+                # 尝试多种可能的响应格式
+                transactions = (
+                    result.get("data", {}).get("transactions", []) or 
+                    result.get("transactions", []) or
+                    result.get("data", []) or
+                    []
+                )
+                
+                # 记录原始响应结构（用于调试）
+                logger.info(f"[RW TransactionDetails API] 响应结构: code={code}, message={message}, data类型={type(result.get('data'))}, transactions数量={len(transactions)}")
+                if len(transactions) == 0:
+                    logger.warning(f"[RW TransactionDetails API] 返回0笔交易。原始响应: {str(result)[:500]}")
+                
                 logger.info(f"[RW TransactionDetails API] 成功获取 {len(transactions)} 笔交易")
                 return {
                     "code": "0",
@@ -199,9 +222,9 @@ class RewardooService(PlatformServiceBase):
             payload["end_date"] = end_date
         
         try:
-            logger.info(f"[RW CommissionDetails API] 请求佣金明细: transaction_id={transaction_id}, date_range={begin_date}~{end_date}")
+            logger.info(f"[RW CommissionDetails API] 请求佣金明细: transaction_id={transaction_id}, date_range={begin_date}~{end_date}, URL={self.commission_details_api}")
             response = requests.post(
-                COMMISSION_DETAILS_API,
+                self.commission_details_api,
                 headers=headers,
                 json=payload,
                 timeout=30
@@ -309,21 +332,53 @@ class RewardooService(PlatformServiceBase):
                 "status": "..."
             }
         """
-        if not result or result.get("code") != "0":
+        if not result:
+            logger.warning("[RW extract_transaction_data] result为空")
             return []
         
-        transactions = result.get("data", {}).get("transactions", [])
+        # 检查响应码
+        code = result.get("code") or result.get("status_code")
+        if code != 0 and code != "0" and not result.get("success"):
+            error_msg = f"[RW extract_transaction_data] API返回错误码: {code}, message: {result.get('message', '')}"
+            logger.warning(error_msg)
+            return []
+        
+        # 尝试多种可能的响应格式
+        data = result.get("data", {})
+        if isinstance(data, list):
+            # 如果data直接是数组
+            transactions = data
+        elif isinstance(data, dict):
+            # 如果data是字典，尝试获取transactions字段
+            transactions = data.get("transactions", [])
+        else:
+            # 如果result直接包含transactions
+            transactions = result.get("transactions", [])
+        
+        logger.info(f"[RW extract_transaction_data] 从响应中提取到 {len(transactions)} 笔原始交易数据")
+        
+        if len(transactions) == 0:
+            logger.warning(f"[RW extract_transaction_data] 未找到交易数据。响应结构: code={code}, data类型={type(data)}, result键={list(result.keys())}")
         
         extracted = []
-        for item in transactions:
-            extracted.append({
-                "transaction_id": item.get("transaction_id") or item.get("id"),
-                "transaction_time": item.get("transaction_time") or item.get("order_date") or item.get("date"),
-                "merchant": item.get("merchant") or item.get("brand") or item.get("brand_name"),
-                "order_amount": float(item.get("order_amount", 0) or item.get("sale_amount", 0) or 0),
-                "commission_amount": float(item.get("commission_amount", 0) or item.get("commission", 0) or 0),
-                "status": item.get("status", "").strip()
-            })
+        for idx, item in enumerate(transactions):
+            try:
+                if not isinstance(item, dict):
+                    logger.warning(f"[RW extract_transaction_data] 交易项 {idx} 不是字典类型: {type(item)}")
+                    continue
+                
+                extracted.append({
+                    "transaction_id": item.get("transaction_id") or item.get("id") or item.get("transactionId") or f"rw_{idx}",
+                    "transaction_time": item.get("transaction_time") or item.get("order_date") or item.get("date") or item.get("transactionDate"),
+                    "merchant": item.get("merchant") or item.get("brand") or item.get("brand_name") or item.get("merchantName") or "",
+                    "order_amount": float(item.get("order_amount", 0) or item.get("sale_amount", 0) or item.get("orderAmount", 0) or 0),
+                    "commission_amount": float(item.get("commission_amount", 0) or item.get("commission", 0) or item.get("commissionAmount", 0) or 0),
+                    "status": str(item.get("status", "") or item.get("transactionStatus", "") or "").strip()
+                })
+            except Exception as e:
+                logger.error(f"[RW extract_transaction_data] 处理交易项 {idx} 时出错: {e}, 数据: {item}")
+                continue
         
+        logger.info(f"[RW extract_transaction_data] 成功提取 {len(extracted)} 笔格式化交易数据")
         return extracted
 

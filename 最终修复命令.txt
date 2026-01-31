@@ -1,0 +1,44 @@
+# ============================================
+# 最终修复命令 - 已移除有问题的关系配置
+# ============================================
+
+# 一键重启命令（直接复制粘贴）：
+cd ~/Google-Data-Analysis/backend && pkill -f "uvicorn app.main:app" && sleep 2 && source venv/bin/activate && nohup uvicorn app.main:app --host 0.0.0.0 --port 8000 > run.log 2>&1 & sleep 3 && curl -s http://127.0.0.1:8000/health && echo "✓ 后端重启成功！" || (echo "✗ 启动失败，查看日志：" && tail -n 50 run.log)
+
+# ============================================
+# 如果上面的命令失败，分步执行：
+# ============================================
+
+# 1. 进入目录
+cd ~/Google-Data-Analysis/backend
+
+# 2. 停止所有uvicorn进程
+pkill -f "uvicorn"
+
+# 3. 等待
+sleep 3
+
+# 4. 激活虚拟环境
+source venv/bin/activate
+
+# 5. 测试导入（检查是否有语法错误）
+python -c "from app.main import app; print('✓ 导入成功')" || echo "✗ 导入失败"
+
+# 6. 启动服务
+nohup uvicorn app.main:app --host 0.0.0.0 --port 8000 > run.log 2>&1 &
+
+# 7. 等待启动
+sleep 5
+
+# 8. 检查进程
+ps aux | grep uvicorn | grep -v grep
+
+# 9. 检查端口
+netstat -tlnp | grep 8000 || ss -tlnp | grep 8000
+
+# 10. 测试健康检查
+curl http://127.0.0.1:8000/health
+
+# 11. 查看日志（如果有问题）
+tail -n 50 run.log
+

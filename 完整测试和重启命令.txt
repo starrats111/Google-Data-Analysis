@@ -1,0 +1,16 @@
+# ============================================
+# 完整测试和重启命令
+# ============================================
+
+# 步骤1：重启服务（加载最新代码，包括OPTIONS处理器）
+kill 131949; sleep 2; cd ~/Google-Data-Analysis/backend; source venv/bin/activate; nohup uvicorn app.main:app --host 0.0.0.0 --port 8000 > run.log 2>&1 & sleep 3; curl -s http://127.0.0.1:8000/health && echo "✓ 服务重启成功！"
+
+# 步骤2：测试OPTIONS请求（CORS预检）- 查看完整响应头
+curl -X OPTIONS "https://api.google-data-analysis.top/api/auth/login" -H "Origin: https://google-data-analysis.top" -H "Access-Control-Request-Method: POST" -H "Access-Control-Request-Headers: Content-Type" -i
+
+# 步骤3：测试POST请求（实际登录）- 只看响应头
+curl -X POST "https://api.google-data-analysis.top/api/auth/login" -H "Origin: https://google-data-analysis.top" -H "Content-Type: application/x-www-form-urlencoded" -d "username=wj07&password=wj123456" -i 2>&1 | head -n 30
+
+# 步骤4：如果还有问题，查看后端日志
+tail -n 30 ~/Google-Data-Analysis/backend/run.log
+

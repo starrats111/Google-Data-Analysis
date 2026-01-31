@@ -168,12 +168,15 @@ class PlatformDataSyncService:
             
             # 如果返回0条记录，提供更详细的诊断信息
             if len(transactions_raw) == 0:
-                logger.info(f"提示: 日期范围 {begin_date} ~ {end_date} 内没有数据。请确认：1) Token是否正确 2) 该日期范围内是否有数据 3) 在CollabGlow平台手动检查该日期范围")
+                diagnostic_msg = f"日期范围 {begin_date} ~ {end_date} 内没有数据。"
+                diagnostic_msg += " 请确认：1) Token是否正确 2) 该日期范围内是否有数据 3) 在CollabGlow平台手动检查该日期范围"
+                logger.warning(f"[CG同步] {diagnostic_msg}")
+                print(f"[CG同步诊断] {diagnostic_msg}")
             
             if not transactions_raw:
                 return {
                     "success": True,
-                    "message": f"同步完成，但该日期范围（{begin_date} ~ {end_date}）内没有数据",
+                    "message": f"同步完成，但该日期范围（{begin_date} ~ {end_date}）内没有数据。请检查：1) Token是否正确 2) 该日期范围内是否有数据 3) 在CollabGlow平台手动检查",
                     "saved_count": 0
                 }
             
@@ -262,9 +265,27 @@ class PlatformDataSyncService:
             if not token:
                 return {"success": False, "message": "未配置Rewardoo Token。请在同步对话框中输入Token，或在账号编辑页面的备注中配置。"}
             
+            # 从账号备注中读取API配置（支持多渠道）
+            api_base_url = None
+            if account.notes:
+                try:
+                    notes_data = json.loads(account.notes)
+                    # 支持多种配置方式
+                    api_base_url = (
+                        notes_data.get("rewardoo_api_url") or 
+                        notes_data.get("rw_api_url") or 
+                        notes_data.get("api_url") or
+                        notes_data.get("rewardoo_base_url") or
+                        notes_data.get("rw_base_url")
+                    )
+                    if api_base_url:
+                        logger.info(f"[RW同步] 使用自定义API URL: {api_base_url}")
+                except:
+                    pass
+            
             # 同步数据（使用TransactionDetails API，这是核心API）
-            logger.info(f"使用Token进行同步 (Token长度: {len(token) if token else 0})")
-            service = RewardooService(token=token)
+            logger.info(f"使用Token进行同步 (Token长度: {len(token) if token else 0}, API URL: {api_base_url or '默认'})")
+            service = RewardooService(token=token, base_url=api_base_url)
             
             logger.info("[RW同步] 使用TransactionDetails API（核心API：订单数+佣金+拒付）")
             result = service.sync_transactions(begin_date, end_date)
@@ -281,12 +302,29 @@ class PlatformDataSyncService:
             
             # 如果返回0条记录，提供更详细的诊断信息
             if len(transactions_raw) == 0:
-                logger.info(f"提示: 日期范围 {begin_date} ~ {end_date} 内没有数据。请确认：1) Token是否正确 2) 该日期范围内是否有数据 3) 在Rewardoo平台手动检查该日期范围")
+                # 检查API响应，看是否真的没有数据还是格式问题
+                api_code = result.get("code") or result.get("status_code")
+                api_message = result.get("message", "")
+                api_data = result.get("data", {})
+                
+                diagnostic_msg = f"日期范围 {begin_date} ~ {end_date} 内没有数据。"
+                diagnostic_msg += f" API响应: code={api_code}, message={api_message}"
+                
+                if isinstance(api_data, dict):
+                    transactions_in_data = api_data.get("transactions", [])
+                    diagnostic_msg += f", data.transactions数量={len(transactions_in_data) if isinstance(transactions_in_data, list) else 'N/A'}"
+                elif isinstance(api_data, list):
+                    diagnostic_msg += f", data是数组，长度={len(api_data)}"
+                
+                diagnostic_msg += "。请确认：1) Token是否正确 2) 该日期范围内是否有数据 3) 在Rewardoo平台手动检查该日期范围 4) API响应格式是否符合预期"
+                
+                logger.warning(f"[RW同步] {diagnostic_msg}")
+                print(f"[RW同步诊断] {diagnostic_msg}")
             
             if not transactions_raw:
                 return {
                     "success": True,
-                    "message": f"同步完成，但该日期范围（{begin_date} ~ {end_date}）内没有数据",
+                    "message": f"同步完成，但该日期范围（{begin_date} ~ {end_date}）内没有数据。请检查：1) Token是否正确 2) 该日期范围内是否有数据 3) 在Rewardoo平台手动检查",
                     "saved_count": 0
                 }
             

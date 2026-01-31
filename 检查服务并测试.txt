@@ -1,0 +1,23 @@
+# ============================================
+# 检查服务状态并测试
+# ============================================
+
+# 1. 检查服务进程
+ps aux | grep uvicorn | grep -v grep
+
+# 2. 检查端口
+netstat -tlnp | grep 8000 || ss -tlnp | grep 8000
+
+# 3. 测试健康检查
+curl http://127.0.0.1:8000/health
+
+# 4. 测试登录接口
+curl -X POST "https://api.google-data-analysis.top/api/auth/login" -H "Origin: https://google-data-analysis.top" -H "Content-Type: application/x-www-form-urlencoded" -d "username=wj07&password=wj123456" -i 2>&1 | head -n 40
+
+# 5. 如果服务没有运行，手动启动
+# cd ~/Google-Data-Analysis/backend
+# source venv/bin/activate
+# nohup uvicorn app.main:app --host 0.0.0.0 --port 8000 > run.log 2>&1 &
+# sleep 3
+# curl http://127.0.0.1:8000/health
+

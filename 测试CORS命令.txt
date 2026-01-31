@@ -1,0 +1,13 @@
+# ============================================
+# 测试CORS配置（单行命令）
+# ============================================
+
+# 测试OPTIONS请求（CORS预检）
+curl -X OPTIONS "https://api.google-data-analysis.top/api/auth/login" -H "Origin: https://google-data-analysis.top" -H "Access-Control-Request-Method: POST" -H "Access-Control-Request-Headers: Content-Type" -v
+
+# 测试POST请求（实际登录）
+curl -X POST "https://api.google-data-analysis.top/api/auth/login" -H "Origin: https://google-data-analysis.top" -H "Content-Type: application/x-www-form-urlencoded" -d "username=wj07&password=wj123456" -v
+
+# 重启服务（确保使用最新代码）
+kill 131949; sleep 2; cd ~/Google-Data-Analysis/backend; source venv/bin/activate; nohup uvicorn app.main:app --host 0.0.0.0 --port 8000 > run.log 2>&1 & sleep 3; curl -s http://127.0.0.1:8000/health && echo "✓ 服务重启成功！"
+

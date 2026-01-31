@@ -1,0 +1,16 @@
+# ============================================
+# 检查服务器上的实际文件内容
+# ============================================
+
+# 查看第55-65行（应该包含关系定义的位置）
+sed -n '55,65p' ~/Google-Data-Analysis/backend/app/models/affiliate_transaction.py
+
+# 查看第90-100行（AffiliateRejection的关系定义位置）
+sed -n '90,100p' ~/Google-Data-Analysis/backend/app/models/affiliate_transaction.py
+
+# 搜索所有包含rejection的行
+grep -n "rejection" ~/Google-Data-Analysis/backend/app/models/affiliate_transaction.py
+
+# 搜索所有包含relationship的行
+grep -n "relationship" ~/Google-Data-Analysis/backend/app/models/affiliate_transaction.py
+

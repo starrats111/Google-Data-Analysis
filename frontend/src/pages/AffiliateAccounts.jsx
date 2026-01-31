@@ -228,9 +228,24 @@ const AffiliateAccounts = () => {
     // 默认选择最近30天
     const endDate = dayjs()
     const beginDate = endDate.subtract(30, 'day')
+    
+    // 从账号备注中读取已有的配置
+    let existingToken = ''
+    let existingApiUrl = ''
+    if (account.notes) {
+      try {
+        const notesData = JSON.parse(account.notes)
+        existingToken = notesData.rewardoo_token || notesData.rw_token || notesData.api_token || ''
+        existingApiUrl = notesData.rewardoo_api_url || notesData.rw_api_url || notesData.api_url || ''
+      } catch (e) {
+        // 忽略解析错误
+      }
+    }
+    
     syncForm.setFieldsValue({
       dateRange: [beginDate, endDate],
-      token: ''
+      token: existingToken,
+      api_url: existingApiUrl
     })
     setSyncResult(null)
     setSyncModalVisible(true)
@@ -243,16 +258,50 @@ const AffiliateAccounts = () => {
     setSyncResult(null)
     
     try {
-      const { dateRange, token } = values
+      const { dateRange, token, api_url } = values
       const beginDate = dateRange[0].format('YYYY-MM-DD')
       const endDate = dateRange[1].format('YYYY-MM-DD')
       
-      // 使用通用的平台数据同步API
-      const response = await api.post(`/api/affiliate/accounts/${syncAccount.id}/sync`, {
+      // 构建请求数据
+      const requestData = {
         begin_date: beginDate,
-        end_date: endDate,
-        token: token || undefined // 如果不提供token，会从账号备注中读取
-      })
+        end_date: endDate
+      }
+      
+      // 如果提供了token，添加到请求中
+      if (token) {
+        requestData.token = token
+      }
+      
+      // 如果提供了API URL，保存到账号备注中（用于Rewardoo多渠道支持）
+      if (api_url && syncAccount?.platform) {
+        const platformCode = (syncAccount.platform.platform_code || '').toLowerCase()
+        if (platformCode === 'rewardoo' || platformCode === 'rw') {
+          // 更新账号备注，保存API URL配置
+          try {
+            let notesData = {}
+            if (syncAccount.notes) {
+              try {
+                notesData = JSON.parse(syncAccount.notes)
+              } catch (e) {
+                // 忽略解析错误
+              }
+            }
+            notesData.rewardoo_api_url = api_url
+            notesData.rw_api_url = api_url
+            
+            // 更新账号备注
+            await api.put(`/api/affiliate/accounts/${syncAccount.id}`, {
+              notes: JSON.stringify(notesData)
+            })
+          } catch (e) {
+            console.warn('保存API URL配置失败:', e)
+          }
+        }
+      }
+      
+      // 使用通用的平台数据同步API
+      const response = await api.post(`/api/affiliate/accounts/${syncAccount.id}/sync`, requestData)
       
       setSyncResult(response.data)
       message.success(`成功同步 ${response.data.saved_count || 0} 条记录`)

@@ -1,0 +1,50 @@
+# ============================================
+# 一键修复CORS和500错误 - 完整解决方案
+# ============================================
+
+# 步骤1：进入后端目录
+cd ~/Google-Data-Analysis/backend
+
+# 步骤2：停止现有服务
+pkill -f "uvicorn app.main:app"
+
+# 步骤3：等待2秒
+sleep 2
+
+# 步骤4：激活虚拟环境
+source venv/bin/activate
+
+# 步骤5：启动服务（后台运行，输出日志）
+nohup uvicorn app.main:app --host 0.0.0.0 --port 8000 > run.log 2>&1 &
+
+# 步骤6：等待3秒让服务启动
+sleep 3
+
+# 步骤7：检查服务状态
+echo "=== 检查服务进程 ==="
+ps aux | grep uvicorn | grep -v grep
+
+echo ""
+echo "=== 检查端口监听 ==="
+netstat -tlnp | grep 8000 || ss -tlnp | grep 8000
+
+echo ""
+echo "=== 测试健康检查 ==="
+curl -s http://127.0.0.1:8000/health
+
+echo ""
+echo "=== 测试CORS配置 ==="
+curl -X OPTIONS https://api.google-data-analysis.top/api/auth/login \
+  -H "Origin: https://google-data-analysis.top" \
+  -H "Access-Control-Request-Method: POST" \
+  -H "Access-Control-Request-Headers: Content-Type" \
+  -v 2>&1 | grep -i "access-control"
+
+echo ""
+echo "=== 查看最近日志（如果有错误） ==="
+tail -n 30 run.log
+
+echo ""
+echo "✓ 如果看到 'Access-Control-Allow-Origin' 和健康检查返回 'ok'，说明修复成功！"
+echo "✓ 现在可以测试前端登录了"
+

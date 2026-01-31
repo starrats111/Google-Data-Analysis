@@ -55,6 +55,14 @@ export const PLATFORM_API_CONFIG = {
         placeholder: '请输入 Rewardoo API Token',
         help: '用于同步 Rewardoo 交易数据（TransactionDetails API）',
         required: false
+      },
+      {
+        name: 'rewardoo_api_url',
+        label: 'Rewardoo API URL（可选，用于不同渠道）',
+        type: 'text',
+        placeholder: '例如: https://api.rewardoo.com/api 或 https://api-channel1.rewardoo.com/api',
+        help: '如果Rewardoo有多个渠道，每个渠道可能有不同的API地址。留空则使用默认地址。',
+        required: false
       }
     ]
   },
@@ -68,6 +76,14 @@ export const PLATFORM_API_CONFIG = {
         type: 'password',
         placeholder: '请输入 Rewardoo API Token',
         help: '用于同步 Rewardoo 交易数据（TransactionDetails API）',
+        required: false
+      },
+      {
+        name: 'rewardoo_api_url',
+        label: 'Rewardoo API URL（可选，用于不同渠道）',
+        type: 'text',
+        placeholder: '例如: https://api.rewardoo.com/api 或 https://api-channel1.rewardoo.com/api',
+        help: '如果Rewardoo有多个渠道，每个渠道可能有不同的API地址。留空则使用默认地址。',
         required: false
       }
     ]

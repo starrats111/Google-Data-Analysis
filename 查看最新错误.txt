@@ -1,0 +1,10 @@
+# ============================================
+# 查看最新的错误日志
+# ============================================
+
+# 查看最近的错误
+tail -n 100 ~/Google-Data-Analysis/backend/run.log
+
+# 或者只看最后50行
+tail -n 50 ~/Google-Data-Analysis/backend/run.log
+

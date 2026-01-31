@@ -1,0 +1,42 @@
+# ============================================
+# 彻底清除缓存并重启
+# ============================================
+
+# 步骤1：停止所有Python进程（确保没有残留）
+pkill -f "uvicorn"
+pkill -f "python.*main"
+sleep 3
+
+# 步骤2：彻底清除所有Python缓存
+find ~/Google-Data-Analysis/backend -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
+find ~/Google-Data-Analysis/backend -name "*.pyc" -delete 2>/dev/null || true
+find ~/Google-Data-Analysis/backend -name "*.pyo" -delete 2>/dev/null || true
+
+# 步骤3：删除可能的SQLAlchemy缓存
+rm -rf ~/Google-Data-Analysis/backend/.pytest_cache 2>/dev/null || true
+
+# 步骤4：验证文件内容（确认关系已注释）
+grep -A 5 "rejection = relationship" ~/Google-Data-Analysis/backend/app/models/affiliate_transaction.py || echo "✓ 关系已注释"
+
+# 步骤5：进入目录并激活虚拟环境
+cd ~/Google-Data-Analysis/backend
+source venv/bin/activate
+
+# 步骤6：测试导入（这会触发SQLAlchemy配置）
+python -c "
+import sys
+sys.path.insert(0, '.')
+from app.models.affiliate_transaction import AffiliateTransaction, AffiliateRejection
+print('✓ 模型导入成功')
+print('✓ AffiliateTransaction 属性:', [x for x in dir(AffiliateTransaction) if not x.startswith('_')])
+"
+
+# 步骤7：如果导入成功，启动服务
+nohup uvicorn app.main:app --host 0.0.0.0 --port 8000 > run.log 2>&1 &
+
+# 步骤8：等待启动
+sleep 5
+
+# 步骤9：检查服务
+curl -s http://127.0.0.1:8000/health && echo "✓ 服务启动成功！" || (echo "✗ 启动失败，查看日志：" && tail -n 50 run.log)
+

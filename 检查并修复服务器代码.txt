@@ -1,0 +1,18 @@
+# ============================================
+# 检查服务器上的实际代码
+# ============================================
+
+# 步骤1：检查文件内容（看关系是否真的被注释）
+grep -n "rejection" ~/Google-Data-Analysis/backend/app/models/affiliate_transaction.py
+
+# 步骤2：如果看到未注释的关系，需要同步代码
+cd ~/Google-Data-Analysis
+git status
+git pull
+
+# 步骤3：再次检查
+grep -n "rejection = relationship" ~/Google-Data-Analysis/backend/app/models/affiliate_transaction.py || echo "✓ 关系已被注释"
+
+# 步骤4：如果关系仍然存在，手动删除
+# 编辑文件，确保 rejection 和 transaction 关系都被注释掉
+

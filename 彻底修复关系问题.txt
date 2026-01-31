@@ -1,0 +1,48 @@
+# ============================================
+# 彻底修复关系问题
+# ============================================
+
+# 步骤1：检查服务器上的实际文件
+grep -n "rejection.*relationship\|transaction.*relationship" ~/Google-Data-Analysis/backend/app/models/affiliate_transaction.py
+
+# 步骤2：如果还有关系定义，使用Python脚本删除
+cat > /tmp/fix_relationship.py << 'EOF'
+import re
+
+file_path = '/home/admin/Google-Data-Analysis/backend/app/models/affiliate_transaction.py'
+with open(file_path, 'r', encoding='utf-8') as f:
+    content = f.read()
+
+# 删除所有包含 rejection = relationship 的行（包括多行定义）
+content = re.sub(r'\s*rejection\s*=\s*relationship\([^)]*\)\s*\n', '', content)
+content = re.sub(r'\s*rejection\s*=\s*relationship\([^)]*\)\s*\n', '', content, flags=re.DOTALL)
+
+# 删除所有包含 transaction = relationship 的行（包括多行定义）
+content = re.sub(r'\s*transaction\s*=\s*relationship\([^)]*\)\s*\n', '', content)
+content = re.sub(r'\s*transaction\s*=\s*relationship\([^)]*\)\s*\n', '', content, flags=re.DOTALL)
+
+with open(file_path, 'w', encoding='utf-8') as f:
+    f.write(content)
+
+print("✓ 关系定义已删除")
+EOF
+
+python3 /tmp/fix_relationship.py
+
+# 步骤3：验证
+grep -n "rejection.*relationship\|transaction.*relationship" ~/Google-Data-Analysis/backend/app/models/affiliate_transaction.py || echo "✓ 关系已完全删除"
+
+# 步骤4：清除所有缓存
+find ~/Google-Data-Analysis/backend -type d -name __pycache__ -exec rm -r {} + 2>/dev/null || true
+find ~/Google-Data-Analysis/backend -name "*.pyc" -delete 2>/dev/null || true
+
+# 步骤5：重启服务
+cd ~/Google-Data-Analysis/backend
+pkill -f "uvicorn"
+sleep 2
+source venv/bin/activate
+python -c "from app.models.affiliate_transaction import AffiliateTransaction; print('✓ 模型导入成功')"
+nohup uvicorn app.main:app --host 0.0.0.0 --port 8000 > run.log 2>&1 &
+sleep 3
+curl http://127.0.0.1:8000/health
+

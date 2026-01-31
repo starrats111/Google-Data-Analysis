@@ -1,0 +1,12 @@
+# ============================================
+# 测试登录请求（查看完整响应）
+# ============================================
+
+# 测试POST登录请求（查看响应头和响应体）
+curl -X POST "https://api.google-data-analysis.top/api/auth/login" -H "Origin: https://google-data-analysis.top" -H "Content-Type: application/x-www-form-urlencoded" -d "username=wj07&password=wj123456" -i
+
+# 如果登录成功，应该看到：
+# - access-control-allow-origin: https://google-data-analysis.top
+# - access-control-allow-credentials: true
+# - 响应体包含 access_token
+

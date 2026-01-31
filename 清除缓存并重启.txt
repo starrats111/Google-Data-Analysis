@@ -1,0 +1,35 @@
+# ============================================
+# 清除Python缓存并重启服务
+# ============================================
+
+# 步骤1：停止服务
+pkill -f "uvicorn"
+
+# 步骤2：清除Python缓存
+find ~/Google-Data-Analysis/backend -type d -name __pycache__ -exec rm -r {} + 2>/dev/null || true
+find ~/Google-Data-Analysis/backend -name "*.pyc" -delete 2>/dev/null || true
+
+# 步骤3：进入目录
+cd ~/Google-Data-Analysis/backend
+
+# 步骤4：激活虚拟环境
+source venv/bin/activate
+
+# 步骤5：验证代码已更新（检查关系是否被注释）
+grep -A 5 "rejection = relationship" app/models/affiliate_transaction.py || echo "✓ 关系已被注释"
+
+# 步骤6：测试导入
+python -c "from app.main import app; print('✓ 导入成功')"
+
+# 步骤7：启动服务
+nohup uvicorn app.main:app --host 0.0.0.0 --port 8000 > run.log 2>&1 &
+
+# 步骤8：等待启动
+sleep 3
+
+# 步骤9：检查服务
+curl -s http://127.0.0.1:8000/health && echo "✓ 服务启动成功！" || echo "✗ 启动失败"
+
+# 步骤10：查看日志（如果有问题）
+tail -n 30 run.log
+

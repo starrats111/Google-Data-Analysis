@@ -1,0 +1,35 @@
+# ============================================
+# 一键修复500错误和CORS问题
+# ============================================
+
+# 完整命令（直接复制粘贴）：
+cd ~/Google-Data-Analysis/backend && pkill -f "uvicorn app.main:app" && sleep 2 && source venv/bin/activate && nohup uvicorn app.main:app --host 0.0.0.0 --port 8000 > run.log 2>&1 & sleep 3 && curl -s http://127.0.0.1:8000/health && echo "✓ 后端重启成功！" || echo "✗ 启动失败，查看日志：tail -n 50 run.log"
+
+# ============================================
+# 分步执行（如果上面的命令不工作）：
+# ============================================
+
+# 1. 进入目录
+cd ~/Google-Data-Analysis/backend
+
+# 2. 停止服务
+pkill -f "uvicorn app.main:app"
+
+# 3. 等待
+sleep 2
+
+# 4. 激活虚拟环境
+source venv/bin/activate
+
+# 5. 启动服务
+nohup uvicorn app.main:app --host 0.0.0.0 --port 8000 > run.log 2>&1 &
+
+# 6. 等待启动
+sleep 3
+
+# 7. 检查状态
+curl http://127.0.0.1:8000/health
+
+# 8. 查看日志（如果有问题）
+tail -n 50 run.log
+

@@ -1,0 +1,36 @@
+# ============================================
+# 完全删除关系定义（包括注释）
+# ============================================
+
+# 步骤1：删除所有包含 rejection 关系定义的行（包括注释）
+cd ~/Google-Data-Analysis/backend
+sed -i '/# rejection = relationship/,/# )/d' app/models/affiliate_transaction.py
+
+# 步骤2：删除所有包含 transaction 关系定义的行（包括注释）
+sed -i '/# transaction = relationship/,/# )/d' app/models/affiliate_transaction.py
+
+# 步骤3：删除所有包含 back_populates 的行
+sed -i '/back_populates/d' app/models/affiliate_transaction.py
+
+# 步骤4：验证
+grep -n "rejection\|transaction.*relationship\|back_populates" app/models/affiliate_transaction.py || echo "✓ 关系定义已完全删除"
+
+# 步骤5：清除缓存
+find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
+find . -name "*.pyc" -delete 2>/dev/null || true
+
+# 步骤6：停止服务
+pkill -f "uvicorn"
+sleep 2
+
+# 步骤7：测试导入
+source venv/bin/activate
+python -c "from app.models.affiliate_transaction import AffiliateTransaction; print('✓ 模型导入成功')"
+
+# 步骤8：启动服务
+nohup uvicorn app.main:app --host 0.0.0.0 --port 8000 > run.log 2>&1 &
+sleep 5
+
+# 步骤9：检查
+curl http://127.0.0.1:8000/health && echo "✓ 服务启动成功！" || tail -n 50 run.log
+

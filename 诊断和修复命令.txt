@@ -1,0 +1,39 @@
+# ============================================
+# 诊断和修复CORS问题
+# ============================================
+
+# 1. 查看最近的日志（看是否有错误）
+tail -n 50 ~/Google-Data-Analysis/backend/run.log
+
+# 2. 测试CORS配置（OPTIONS预检请求）
+curl -X OPTIONS https://api.google-data-analysis.top/api/auth/login \
+  -H "Origin: https://google-data-analysis.top" \
+  -H "Access-Control-Request-Method: POST" \
+  -H "Access-Control-Request-Headers: Content-Type" \
+  -v 2>&1 | grep -i "access-control"
+
+# 3. 测试实际的登录请求（看是否返回CORS头）
+curl -X POST https://api.google-data-analysis.top/api/auth/login \
+  -H "Origin: https://google-data-analysis.top" \
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  -d "username=wj07&password=wj123456" \
+  -v 2>&1 | head -n 30
+
+# 4. 如果服务使用的是旧代码，需要重启
+# 先停止旧进程
+kill 131949
+
+# 等待
+sleep 2
+
+# 重新启动
+cd ~/Google-Data-Analysis/backend
+source venv/bin/activate
+nohup uvicorn app.main:app --host 0.0.0.0 --port 8000 > run.log 2>&1 &
+
+# 等待启动
+sleep 3
+
+# 检查
+curl http://127.0.0.1:8000/health
+
