@@ -116,6 +116,8 @@ async def get_mcc_accounts(
 ):
     """获取MCC账号列表"""
     try:
+        logger.info(f"用户 {current_user.username} (ID: {current_user.id}) 请求MCC账号列表")
+        
         query = db.query(GoogleMccAccount).filter(
             GoogleMccAccount.user_id == current_user.id
         )
@@ -125,6 +127,7 @@ async def get_mcc_accounts(
             query = query.filter(GoogleMccAccount.user_id == current_user.id)
         
         mcc_accounts = query.order_by(GoogleMccAccount.created_at.desc()).all()
+        logger.info(f"查询到 {len(mcc_accounts)} 个MCC账号")
         
         # 获取每个MCC的数据条数
         result = []
@@ -152,11 +155,20 @@ async def get_mcc_accounts(
                 logger.error(f"处理MCC账号 {mcc.id} 时出错: {str(e)}", exc_info=True)
                 continue
         
-        logger.info(f"成功获取 {len(result)} 个MCC账号")
+        logger.info(f"成功返回 {len(result)} 个MCC账号")
         return result
+    except HTTPException:
+        # 重新抛出HTTP异常
+        raise
     except Exception as e:
-        logger.error(f"获取MCC账号列表失败: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"获取MCC账号列表失败: {str(e)}")
+        # 记录完整的错误信息
+        import traceback
+        error_trace = traceback.format_exc()
+        logger.error(f"获取MCC账号列表失败: {str(e)}\n{error_trace}")
+        raise HTTPException(
+            status_code=500, 
+            detail=f"获取MCC账号列表失败: {str(e)}"
+        )
 
 
 @router.get("/accounts/{mcc_id}", response_model=MccAccountResponse)
