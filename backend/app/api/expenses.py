@@ -630,41 +630,77 @@ async def get_expense_daily(
     adj_map: Dict[Tuple[int, date], float] = {(a.platform_id, a.date): float(a.rejected_commission or 0.0) for a in adjustments}
 
     rows: List[ExpenseDailyRow] = []
-    try:
-        if metrics:
-            # 聚合 (pid, date) -> [commission, cost]，其中佣金稍后由PlatformData覆盖
-            agg: Dict[Tuple[int, date], List[float]] = {}
-            for m in metrics:
+    if metrics:
+        # 聚合 (pid, date) -> [commission, cost]，其中佣金稍后由PlatformData覆盖
+        agg: Dict[Tuple[int, date], List[float]] = {}
+        for m in metrics:
+            try:
+                campaign = db.query(AdCampaign).filter(AdCampaign.id == m.campaign_id).first()
+                if not campaign:
+                    continue
+                pid = campaign.platform_id
+                if pid is None:
+                    continue
+                key = (pid, m.date)
+                if key not in agg:
+                    agg[key] = [0.0, 0.0]
+                # 费用来自每日指标（若无Google Ads数据时兜底）
+                agg[key][1] += float(m.cost or 0.0)
+            except Exception as e:
+                import logging
+                logger = logging.getLogger(__name__)
+                logger.warning(f"处理指标数据时出错: {e}", exc_info=True)
+                continue
+
+        for (pid, d), (commission_cost) in agg.items():
+            try:
+                api_comm = api_commission_map.get((pid, d), 0.0)
+                commission = api_comm
+                # 优先使用Google Ads API的费用
+                cost = ga_cost_map.get((pid, d), commission_cost[1] if commission_cost else 0.0)
+                rejected = adj_map.get((pid, d), 0.0)
+                net = commission - rejected - cost
+                rows.append(ExpenseDailyRow(
+                    date=d.strftime("%Y-%m-%d"),
+                    platform_id=pid,
+                    platform_name=platform_name_map.get(pid, f"平台{pid}"),
+                    commission=round(commission, 4),
+                    ad_cost=round(cost, 4),
+                    rejected_commission=round(rejected, 4),
+                    net_profit=round(net, 4),
+                ))
+            except Exception as e:
+                import logging
+                logger = logging.getLogger(__name__)
+                logger.warning(f"处理平台数据时出错 (pid={pid}, date={d}): {e}", exc_info=True)
+                continue
+    else:
+        # 兼容旧逻辑：从分析结果聚合
+        try:
+            results = db.query(AnalysisResult).join(AffiliateAccount).join(AffiliatePlatform).filter(
+                AnalysisResult.user_id == current_user.id,
+                AnalysisResult.analysis_date >= start,
+                AnalysisResult.analysis_date <= end,
+            ).all()
+
+            for r in results:
                 try:
-                    campaign = db.query(AdCampaign).filter(AdCampaign.id == m.campaign_id).first()
-                    if not campaign:
+                    platform = r.affiliate_account.platform
+                    if not platform:
                         continue
-                    pid = campaign.platform_id
+                    pid = platform.id
                     if pid is None:
                         continue
-                    key = (pid, m.date)
-                    if key not in agg:
-                        agg[key] = [0.0, 0.0]
-                    # 费用来自每日指标（若无Google Ads数据时兜底）
-                    agg[key][1] += float(m.cost or 0.0)
-                except Exception as e:
-                    import logging
-                    logger = logging.getLogger(__name__)
-                    logger.warning(f"处理指标数据时出错: {e}", exc_info=True)
-                    continue
-
-            for (pid, d), (commission_cost) in agg.items():
-                try:
-                    api_comm = api_commission_map.get((pid, d), 0.0)
-                    commission = api_comm
-                    # 优先使用Google Ads API的费用
-                    cost = ga_cost_map.get((pid, d), commission_cost[1] if commission_cost else 0.0)
+                    d = r.analysis_date
+                    raw_commission, raw_cost = _extract_commission_cost(r.result_data)
+                    commission = api_commission_map.get((pid, d), raw_commission)
+                    cost = ga_cost_map.get((pid, d), raw_cost)
                     rejected = adj_map.get((pid, d), 0.0)
                     net = commission - rejected - cost
                     rows.append(ExpenseDailyRow(
                         date=d.strftime("%Y-%m-%d"),
                         platform_id=pid,
-                        platform_name=platform_name_map.get(pid, f"平台{pid}"),
+                        platform_name=platform.platform_name,
                         commission=round(commission, 4),
                         ad_cost=round(cost, 4),
                         rejected_commission=round(rejected, 4),
@@ -673,50 +709,13 @@ async def get_expense_daily(
                 except Exception as e:
                     import logging
                     logger = logging.getLogger(__name__)
-                    logger.warning(f"处理平台数据时出错 (pid={pid}, date={d}): {e}", exc_info=True)
+                    logger.warning(f"处理分析结果时出错: {e}", exc_info=True)
                     continue
-        else:
-            # 兼容旧逻辑：从分析结果聚合
-            try:
-                results = db.query(AnalysisResult).join(AffiliateAccount).join(AffiliatePlatform).filter(
-                    AnalysisResult.user_id == current_user.id,
-                    AnalysisResult.analysis_date >= start,
-                    AnalysisResult.analysis_date <= end,
-                ).all()
-
-                for r in results:
-                    try:
-                        platform = r.affiliate_account.platform
-                        if not platform:
-                            continue
-                        pid = platform.id
-                        if pid is None:
-                            continue
-                        d = r.analysis_date
-                        raw_commission, raw_cost = _extract_commission_cost(r.result_data)
-                        commission = api_commission_map.get((pid, d), raw_commission)
-                        cost = ga_cost_map.get((pid, d), raw_cost)
-                        rejected = adj_map.get((pid, d), 0.0)
-                        net = commission - rejected - cost
-                        rows.append(ExpenseDailyRow(
-                            date=d.strftime("%Y-%m-%d"),
-                            platform_id=pid,
-                            platform_name=platform.platform_name,
-                            commission=round(commission, 4),
-                            ad_cost=round(cost, 4),
-                            rejected_commission=round(rejected, 4),
-                            net_profit=round(net, 4),
-                        ))
-                    except Exception as e:
-                        import logging
-                        logger = logging.getLogger(__name__)
-                        logger.warning(f"处理分析结果时出错: {e}", exc_info=True)
-                        continue
-            except Exception as e:
-                import logging
-                logger = logging.getLogger(__name__)
-                logger.error(f"查询分析结果失败: {e}", exc_info=True)
-                # 继续执行，返回空列表而不是崩溃
+        except Exception as e:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"查询分析结果失败: {e}", exc_info=True)
+            # 继续执行，返回空列表而不是崩溃
 
     # 添加未匹配平台的费用行
     for d, unmatched_cost in ga_unmatched_cost_map.items():
