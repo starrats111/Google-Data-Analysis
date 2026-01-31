@@ -76,94 +76,35 @@ export default function MccAccounts() {
 
   const handleSubmit = async (values) => {
     try {
-      // 清理空值：对于可选字段，如果为空字符串或undefined，则不发送（编辑时留空表示不修改）
       const submitData = { ...values }
       
-      console.log('表单原始值:', {
-        client_id: values.client_id ? '有值' : '无值',
-        client_secret: values.client_secret ? '有值' : '无值',
-        refresh_token: values.refresh_token ? '有值' : '无值'
-      })
-      
+      // 简化逻辑：编辑时，如果字段为空字符串或undefined/null，则删除该字段（不发送，保留原值）
+      // 如果字段有值（非空字符串），则发送（更新为新值）
       if (editingMcc) {
-        // 编辑时：只有用户明确填写了新值（且与原始值不同）才发送
-        // 空字符串、undefined、null、或与原始值相同的字段不发送，保留原值
-        const hasClientId = submitData.client_id !== undefined && submitData.client_id !== null && 
-                           typeof submitData.client_id === 'string' && submitData.client_id.trim() !== ''
-        const hasClientSecret = submitData.client_secret !== undefined && submitData.client_secret !== null && 
-                               typeof submitData.client_secret === 'string' && submitData.client_secret.trim() !== ''
-        const hasRefreshToken = submitData.refresh_token !== undefined && submitData.refresh_token !== null && 
-                               typeof submitData.refresh_token === 'string' && submitData.refresh_token.trim() !== ''
-        
-        console.log('字段检查:', {
-          hasClientId,
-          hasClientSecret,
-          hasRefreshToken,
-          originalClientId: originalApiValues.client_id ? '有值' : '无值',
-          originalClientSecret: originalApiValues.client_secret ? '有值' : '无值',
-          originalRefreshToken: originalApiValues.refresh_token ? '有值' : '无值'
+        // 编辑模式：只处理API字段
+        const apiFields = ['client_id', 'client_secret', 'refresh_token']
+        apiFields.forEach(field => {
+          const value = submitData[field]
+          // 如果值为空字符串、undefined或null，删除该字段（不发送，保留原值）
+          if (!value || (typeof value === 'string' && value.trim() === '')) {
+            delete submitData[field]
+          }
         })
-        
-        // 只有当用户填写了新值，且与原始值不同时，才发送
-        // 如果原始值是null/undefined，用户填写了新值，应该发送
-        if (!hasClientId) {
-          delete submitData.client_id
-          console.log('Client ID: 未填写，不发送')
-        } else if (originalApiValues.client_id !== null && originalApiValues.client_id !== undefined && 
-                   submitData.client_id === originalApiValues.client_id) {
-          // 原始值存在且与新值相同，不更新
-          delete submitData.client_id
-          console.log('Client ID: 与原始值相同，不更新')
-        } else {
-          console.log('Client ID: 将发送新值')
-        }
-        
-        if (!hasClientSecret) {
-          delete submitData.client_secret
-          console.log('Client Secret: 未填写，不发送')
-        } else if (originalApiValues.client_secret !== null && originalApiValues.client_secret !== undefined && 
-                   submitData.client_secret === originalApiValues.client_secret) {
-          // 原始值存在且与新值相同，不更新
-          delete submitData.client_secret
-          console.log('Client Secret: 与原始值相同，不更新')
-        } else {
-          console.log('Client Secret: 将发送新值')
-        }
-        
-        if (!hasRefreshToken) {
-          delete submitData.refresh_token
-          console.log('Refresh Token: 未填写，不发送')
-        } else if (originalApiValues.refresh_token !== null && originalApiValues.refresh_token !== undefined && 
-                   submitData.refresh_token === originalApiValues.refresh_token) {
-          // 原始值存在且与新值相同，不更新
-          delete submitData.refresh_token
-          console.log('Refresh Token: 与原始值相同，不更新')
-        } else {
-          console.log('Refresh Token: 将发送新值')
-        }
       } else {
-        // 创建时：空字符串不发送
-        if (submitData.client_id === '' || submitData.client_id === undefined || submitData.client_id === null) {
+        // 创建模式：空字符串不发送
+        if (!submitData.client_id || submitData.client_id.trim() === '') {
           delete submitData.client_id
         }
-        if (submitData.client_secret === '' || submitData.client_secret === undefined || submitData.client_secret === null) {
+        if (!submitData.client_secret || submitData.client_secret.trim() === '') {
           delete submitData.client_secret
         }
-        if (submitData.refresh_token === '' || submitData.refresh_token === undefined || submitData.refresh_token === null) {
+        if (!submitData.refresh_token || submitData.refresh_token.trim() === '') {
           delete submitData.refresh_token
         }
       }
       
-      console.log('最终提交数据:', { 
-        ...submitData, 
-        client_secret: submitData.client_secret ? '***已填写***' : '未发送',
-        refresh_token: submitData.refresh_token ? '***已填写***' : '未发送',
-        client_id: submitData.client_id ? '***已填写***' : '未发送'
-      })
-      
       if (editingMcc) {
         const response = await api.put(`/api/mcc/accounts/${editingMcc.id}`, submitData)
-        console.log('更新响应:', response.data)
         message.success('更新成功')
       } else {
         const response = await api.post('/api/mcc/accounts', submitData)
@@ -171,11 +112,10 @@ export default function MccAccounts() {
       }
       setModalVisible(false)
       form.resetFields()
-      setOriginalApiValues({}) // 清空原始值
+      setOriginalApiValues({})
       fetchMccAccounts()
     } catch (error) {
       console.error('保存失败:', error)
-      console.error('错误详情:', error.response?.data)
       const errorMessage = error.response?.data?.detail || error.message || '操作失败'
       message.error(errorMessage)
     }
