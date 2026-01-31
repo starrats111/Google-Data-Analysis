@@ -74,13 +74,29 @@ export default function MccAccounts() {
         const hasRefreshToken = submitData.refresh_token !== undefined && submitData.refresh_token !== null && 
                                typeof submitData.refresh_token === 'string' && submitData.refresh_token.trim() !== ''
         
-        if (!hasClientId || submitData.client_id === originalApiValues.client_id) {
+        // 只有当用户填写了新值，且与原始值不同时，才发送
+        // 如果原始值是null/undefined，用户填写了新值，应该发送
+        if (!hasClientId) {
+          delete submitData.client_id
+        } else if (originalApiValues.client_id !== null && originalApiValues.client_id !== undefined && 
+                   submitData.client_id === originalApiValues.client_id) {
+          // 原始值存在且与新值相同，不更新
           delete submitData.client_id
         }
-        if (!hasClientSecret || submitData.client_secret === originalApiValues.client_secret) {
+        
+        if (!hasClientSecret) {
+          delete submitData.client_secret
+        } else if (originalApiValues.client_secret !== null && originalApiValues.client_secret !== undefined && 
+                   submitData.client_secret === originalApiValues.client_secret) {
+          // 原始值存在且与新值相同，不更新
           delete submitData.client_secret
         }
-        if (!hasRefreshToken || submitData.refresh_token === originalApiValues.refresh_token) {
+        
+        if (!hasRefreshToken) {
+          delete submitData.refresh_token
+        } else if (originalApiValues.refresh_token !== null && originalApiValues.refresh_token !== undefined && 
+                   submitData.refresh_token === originalApiValues.refresh_token) {
+          // 原始值存在且与新值相同，不更新
           delete submitData.refresh_token
         }
       } else {
