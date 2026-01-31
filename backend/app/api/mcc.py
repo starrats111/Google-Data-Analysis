@@ -274,31 +274,52 @@ async def delete_mcc_account(
     
     注意：删除MCC账号会同时删除所有关联的Google Ads数据（由于外键CASCADE约束）
     """
-    from app.models.google_ads_api_data import GoogleAdsApiData
+    import logging
+    logger = logging.getLogger(__name__)
     
-    mcc_account = db.query(GoogleMccAccount).filter(
-        GoogleMccAccount.id == mcc_id,
-        GoogleMccAccount.user_id == current_user.id
-    ).first()
-    
-    if not mcc_account:
-        raise HTTPException(status_code=404, detail="MCC账号不存在")
-    
-    # 统计关联的Google Ads数据条数
-    data_count = db.query(GoogleAdsApiData).filter(
-        GoogleAdsApiData.mcc_id == mcc_id
-    ).count()
-    
-    # 删除MCC账号（由于外键CASCADE，关联的GoogleAdsApiData会自动删除）
-    db.delete(mcc_account)
-    db.commit()
-    
-    return {
-        "message": f"MCC账号已删除",
-        "deleted_data_count": data_count,
-        "mcc_name": mcc_account.mcc_name,
-        "mcc_id": mcc_account.mcc_id
-    }
+    try:
+        from app.models.google_ads_api_data import GoogleAdsApiData
+        
+        mcc_account = db.query(GoogleMccAccount).filter(
+            GoogleMccAccount.id == mcc_id,
+            GoogleMccAccount.user_id == current_user.id
+        ).first()
+        
+        if not mcc_account:
+            raise HTTPException(status_code=404, detail="MCC账号不存在")
+        
+        # 在删除前保存需要的信息
+        mcc_name = mcc_account.mcc_name
+        mcc_id_str = mcc_account.mcc_id
+        
+        # 统计关联的Google Ads数据条数
+        data_count = db.query(GoogleAdsApiData).filter(
+            GoogleAdsApiData.mcc_id == mcc_id
+        ).count()
+        
+        logger.info(f"准备删除MCC账号 {mcc_id} ({mcc_name})，关联数据条数: {data_count}")
+        
+        # 删除MCC账号（由于外键CASCADE，关联的GoogleAdsApiData会自动删除）
+        db.delete(mcc_account)
+        db.commit()
+        
+        logger.info(f"成功删除MCC账号 {mcc_id} ({mcc_name})")
+        
+        return {
+            "message": f"MCC账号已删除",
+            "deleted_data_count": data_count,
+            "mcc_name": mcc_name,
+            "mcc_id": mcc_id_str
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"删除MCC账号失败: {e}", exc_info=True)
+        db.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail=f"删除MCC账号失败: {str(e)}"
+        )
 
 
 @router.post("/accounts/{mcc_id}/sync")
