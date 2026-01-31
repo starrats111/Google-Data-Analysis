@@ -526,11 +526,26 @@ const AffiliateAccounts = () => {
 
             <Form.Item
               name="token"
-              label="API Token（可选）"
-              help="如果不填写，将从账号备注中读取 token"
+              label={(() => {
+                if (!syncAccount?.platform) return "API Token（可选）"
+                const platformConfig = getPlatformApiConfig(syncAccount.platform.platform_code)
+                const field = platformConfig.fields[0]
+                return field?.label || "API Token（可选）"
+              })()}
+              help={(() => {
+                if (!syncAccount?.platform) return "如果不填写，将从账号备注中读取 token"
+                const platformConfig = getPlatformApiConfig(syncAccount.platform.platform_code)
+                const field = platformConfig.fields[0]
+                return field?.help ? `${field.help}。如果不填写，将从账号备注中读取 token` : `如果不填写，将从账号备注中读取 token`
+              })()}
             >
               <Input.Password 
-                placeholder="留空则使用账号备注中配置的 token"
+                placeholder={(() => {
+                  if (!syncAccount?.platform) return "留空则使用账号备注中配置的 token"
+                  const platformConfig = getPlatformApiConfig(syncAccount.platform.platform_code)
+                  const field = platformConfig.fields[0]
+                  return field?.placeholder || "留空则使用账号备注中配置的 token"
+                })()}
               />
             </Form.Item>
 
@@ -739,11 +754,26 @@ const AffiliateAccounts = () => {
 
             <Form.Item
               name="token"
-              label="API Token（可选）"
-              help="如果不填写，将从账号备注中读取 token"
+              label={(() => {
+                if (!syncAccount?.platform) return "API Token（可选）"
+                const platformConfig = getPlatformApiConfig(syncAccount.platform.platform_code)
+                const field = platformConfig.fields[0]
+                return field?.label || "API Token（可选）"
+              })()}
+              help={(() => {
+                if (!syncAccount?.platform) return "如果不填写，将从账号备注中读取 token"
+                const platformConfig = getPlatformApiConfig(syncAccount.platform.platform_code)
+                const field = platformConfig.fields[0]
+                return field?.help ? `${field.help}。如果不填写，将从账号备注中读取 token` : `如果不填写，将从账号备注中读取 token`
+              })()}
             >
               <Input.Password 
-                placeholder="留空则使用账号备注中配置的 token"
+                placeholder={(() => {
+                  if (!syncAccount?.platform) return "留空则使用账号备注中配置的 token"
+                  const platformConfig = getPlatformApiConfig(syncAccount.platform.platform_code)
+                  const field = platformConfig.fields[0]
+                  return field?.placeholder || "留空则使用账号备注中配置的 token"
+                })()}
               />
             </Form.Item>
 

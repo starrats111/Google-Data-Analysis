@@ -45,6 +45,34 @@ export const PLATFORM_API_CONFIG = {
     ]
   },
   
+  // Rewardoo 平台
+  rewardoo: {
+    fields: [
+      {
+        name: 'rewardoo_token',
+        label: 'Rewardoo API Token',
+        type: 'password',
+        placeholder: '请输入 Rewardoo API Token',
+        help: '用于同步 Rewardoo 交易数据（TransactionDetails API）',
+        required: false
+      }
+    ]
+  },
+  
+  // RW 平台（Rewardoo的别名）
+  rw: {
+    fields: [
+      {
+        name: 'rewardoo_token',
+        label: 'Rewardoo API Token',
+        type: 'password',
+        placeholder: '请输入 Rewardoo API Token',
+        help: '用于同步 Rewardoo 交易数据（TransactionDetails API）',
+        required: false
+      }
+    ]
+  },
+  
   // 可以添加更多平台配置
   // 例如：
   // amazon: {

@@ -96,9 +96,21 @@ class RewardooService(PlatformServiceBase):
                 json=payload,
                 timeout=30
             )
-            response.raise_for_status()
             
-            result = response.json()
+            # 检查HTTP状态码
+            if response.status_code != 200:
+                error_msg = f"[RW TransactionDetails API] HTTP错误 {response.status_code}: {response.text[:200]}"
+                logger.error(error_msg)
+                raise Exception(error_msg)
+            
+            # 尝试解析JSON响应
+            try:
+                result = response.json()
+            except ValueError:
+                # 如果响应不是JSON，可能是HTML错误页面或其他格式
+                error_msg = f"[RW TransactionDetails API] 响应不是有效的JSON格式: {response.text[:200]}"
+                logger.error(error_msg)
+                raise Exception(error_msg)
             
             # 确保result是字典类型
             if not isinstance(result, dict):
