@@ -521,17 +521,62 @@ export default function MccAccounts() {
           <div style={{ textAlign: 'center', padding: '40px 0' }}>
             <CheckCircleOutlined style={{ fontSize: 64, color: '#52c41a', marginBottom: 16 }} />
             <h3>成功获取Refresh Token！</h3>
-            <p>Refresh Token已自动填充到表单中，请点击"确定"保存MCC账号配置。</p>
-            <Button 
-              type="primary" 
-              onClick={() => {
-                setOauthModalVisible(false)
-                setOauthStep(0)
-                setAuthorizationUrl('')
-              }}
-            >
-              完成
-            </Button>
+            <p>Refresh Token已自动填充到表单中。</p>
+            <div style={{ marginTop: 24 }}>
+              <Space>
+                <Button 
+                  type="primary" 
+                  onClick={() => {
+                    setOauthModalVisible(false)
+                    setOauthStep(0)
+                    setAuthorizationUrl('')
+                    // 提示用户点击主表单的确定按钮
+                    message.info('请点击主表单的"确定"按钮保存MCC账号配置')
+                  }}
+                >
+                  完成并返回
+                </Button>
+                <Button
+                  onClick={async () => {
+                    // 直接保存MCC账号
+                    try {
+                      const formValues = form.getFieldsValue()
+                      const refreshToken = formValues.refresh_token
+                      
+                      if (!refreshToken) {
+                        message.error('Refresh Token为空，无法保存')
+                        return
+                      }
+                      
+                      if (editingMcc) {
+                        // 更新现有MCC账号
+                        const submitData = {
+                          refresh_token: refreshToken
+                        }
+                        
+                        await api.put(`/api/mcc/accounts/${editingMcc.id}`, submitData)
+                        message.success('Refresh Token已保存！')
+                        setOauthModalVisible(false)
+                        setOauthStep(0)
+                        setAuthorizationUrl('')
+                        fetchMccAccounts()
+                        setModalVisible(false)
+                      } else {
+                        // 如果是新建，提示用户填写其他必填字段
+                        message.warning('请先填写MCC ID、名称和邮箱，然后点击主表单的"确定"按钮保存')
+                        setOauthModalVisible(false)
+                        setOauthStep(0)
+                        setAuthorizationUrl('')
+                      }
+                    } catch (error) {
+                      message.error(error.response?.data?.detail || '保存失败')
+                    }
+                  }}
+                >
+                  直接保存Refresh Token
+                </Button>
+              </Space>
+            </div>
           </div>
         )}
       </Modal>
