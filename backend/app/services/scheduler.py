@@ -29,10 +29,11 @@ scheduler = BackgroundScheduler(timezone=BEIJING_TZ)
 
 
 def sync_platform_data_job():
-    """同步平台数据任务（每天北京时间4点和16点执行）"""
+    """同步平台数据任务（每天北京时间4点和16点执行，逐天同步过去1周数据：MID、商家、订单数、佣金、拒付佣金）"""
     db: Session = SessionLocal()
     try:
-        logger.info("开始执行平台数据同步任务...")
+        logger.info("=" * 60)
+        logger.info("开始执行平台数据同步任务（过去1周，逐天同步）...")
         
         sync_service = PlatformDataSyncService(db)
         
@@ -41,71 +42,131 @@ def sync_platform_data_job():
             AffiliateAccount.is_active == True
         ).all()
         
+        logger.info(f"找到 {len(active_accounts)} 个活跃账号")
+        
         # 同步最近7天的数据（确保覆盖可能变化的佣金）
         end_date = date.today() - timedelta(days=1)  # 昨天
         begin_date = end_date - timedelta(days=6)  # 7天前
         
-        success_count = 0
-        fail_count = 0
+        logger.info(f"时间范围: {begin_date.isoformat()} 至 {end_date.isoformat()} (共7天)")
         
-        for account in active_accounts:
-            try:
-                result = sync_service.sync_account_data(
-                    account.id,
-                    begin_date.isoformat(),
-                    end_date.isoformat()
-                )
-                
-                if result.get("success"):
-                    success_count += 1
-                    logger.info(f"账号 {account.account_name} 同步成功")
-                else:
-                    fail_count += 1
-                    logger.error(f"账号 {account.account_name} 同步失败: {result.get('message')}")
-            except Exception as e:
-                fail_count += 1
-                logger.error(f"账号 {account.account_name} 同步异常: {e}")
+        total_success_count = 0
+        total_fail_count = 0
+        total_saved = 0
         
-        logger.info(f"平台数据同步任务完成: 成功 {success_count}, 失败 {fail_count}")
+        # 逐天同步，确保数据完整
+        current_date = begin_date
+        while current_date <= end_date:
+            logger.info("-" * 60)
+            logger.info(f"正在同步日期: {current_date.isoformat()}")
+            
+            day_success_count = 0
+            day_fail_count = 0
+            day_saved = 0
+            
+            for account in active_accounts:
+                try:
+                    logger.info(f"  同步账号: {account.account_name} (平台: {account.platform.platform_name if account.platform else '未知'})")
+                    # 逐天同步，每次只同步一天的数据
+                    result = sync_service.sync_account_data(
+                        account.id,
+                        current_date.isoformat(),
+                        current_date.isoformat()  # 开始和结束日期相同，只同步一天
+                    )
+                    
+                    if result.get("success"):
+                        day_success_count += 1
+                        saved_count = result.get("saved_count", 0)
+                        day_saved += saved_count
+                        logger.info(f"  ✓ 账号 {account.account_name} 同步成功: 保存 {saved_count} 条记录")
+                    else:
+                        day_fail_count += 1
+                        error_msg = result.get('message', '未知错误')
+                        logger.error(f"  ✗ 账号 {account.account_name} 同步失败: {error_msg}")
+                except Exception as e:
+                    day_fail_count += 1
+                    logger.error(f"  ✗ 账号 {account.account_name} 同步异常: {e}", exc_info=True)
+            
+            logger.info(f"日期 {current_date.isoformat()} 同步完成: 成功 {day_success_count} 个账号, 失败 {day_fail_count} 个账号, 保存 {day_saved} 条记录")
+            
+            total_success_count += day_success_count
+            total_fail_count += day_fail_count
+            total_saved += day_saved
+            
+            # 移动到下一天
+            current_date += timedelta(days=1)
+        
+        logger.info("=" * 60)
+        logger.info(f"平台数据同步任务完成（逐天同步）:")
+        logger.info(f"  - 同步日期数: 7 天")
+        logger.info(f"  - 总成功次数: {total_success_count} 次")
+        logger.info(f"  - 总失败次数: {total_fail_count} 次")
+        logger.info(f"  - 共保存: {total_saved} 条记录")
+        logger.info(f"  - 提取字段: MID、商家、订单数、佣金、拒付佣金")
+        logger.info("=" * 60)
         
     except Exception as e:
-        logger.error(f"平台数据同步任务执行失败: {e}")
+        logger.error(f"平台数据同步任务执行失败: {e}", exc_info=True)
     finally:
         db.close()
 
 
 def sync_google_ads_data_job():
-    """同步Google Ads数据任务（每天北京时间早上8点执行）"""
+    """同步Google Ads数据任务（每天北京时间早上8点执行，同步前7天数据）"""
     db: Session = SessionLocal()
     try:
-        logger.info("开始执行Google Ads数据同步任务...")
+        logger.info("开始执行Google Ads数据同步任务（前7天）...")
         
         sync_service = GoogleAdsApiSyncService(db)
         
-        # 同步昨天的数据
-        target_date = date.today() - timedelta(days=1)
+        # 同步前7天的数据（从7天前到昨天）
+        end_date = date.today() - timedelta(days=1)  # 昨天
+        begin_date = end_date - timedelta(days=6)  # 7天前
         
-        result = sync_service.sync_all_active_mccs()
+        total_saved = 0
+        success_days = 0
+        fail_days = 0
         
-        if result.get("success"):
-            logger.info(f"Google Ads数据同步完成: 共保存 {result.get('total_saved', 0)} 条记录")
-        else:
-            logger.error(f"Google Ads数据同步失败: {result.get('message')}")
+        # 逐天同步
+        current_date = begin_date
+        while current_date <= end_date:
+            try:
+                logger.info(f"正在同步 {current_date.isoformat()} 的Google Ads数据...")
+                result = sync_service.sync_all_active_mccs(target_date=current_date)
+                
+                if result.get("success"):
+                    saved_count = result.get("total_saved", 0)
+                    total_saved += saved_count
+                    success_days += 1
+                    logger.info(f"{current_date.isoformat()} 同步成功: 保存 {saved_count} 条记录")
+                else:
+                    fail_days += 1
+                    logger.error(f"{current_date.isoformat()} 同步失败: {result.get('message')}")
+            except Exception as e:
+                fail_days += 1
+                logger.error(f"{current_date.isoformat()} 同步异常: {e}")
+            
+            current_date += timedelta(days=1)
+        
+        logger.info(f"Google Ads数据同步完成: 成功 {success_days} 天，失败 {fail_days} 天，共保存 {total_saved} 条记录")
         
     except Exception as e:
-        logger.error(f"Google Ads数据同步任务执行失败: {e}")
+        logger.error(f"Google Ads数据同步任务执行失败: {e}", exc_info=True)
     finally:
         db.close()
 
 
 def daily_analysis_job():
-    """每日分析任务（每天北京时间早上8点05分执行）"""
+    """每日分析任务（每天北京时间早上8点05分执行，取前一天的平台数据和对应商家的Google ads数据进行每日分析）"""
     db: Session = SessionLocal()
     try:
+        logger.info("=" * 60)
         logger.info("开始执行每日分析任务...")
         
         # 分析昨天的数据
         target_date = date.today() - timedelta(days=1)
+        logger.info(f"分析日期: {target_date.isoformat()}")
+        logger.info("数据来源: 前一天的平台数据 + 对应商家的Google Ads数据")
         
         # 调用API分析服务
         api_analysis_service = ApiAnalysisService(db)
@@ -115,24 +176,30 @@ def daily_analysis_job():
         
         if result.get("success"):
             total_records = result.get("total_records", 0)
-            logger.info(f"每日分析任务完成: {target_date.isoformat()}, 共生成 {total_records} 条记录")
+            logger.info(f"✓ 每日分析任务完成: {target_date.isoformat()}, 共生成 {total_records} 条记录")
         else:
-            logger.error(f"每日分析任务失败: {result.get('message')}")
+            logger.error(f"✗ 每日分析任务失败: {result.get('message')}")
+        
+        logger.info("=" * 60)
         
     except Exception as e:
-        logger.error(f"每日分析任务执行失败: {e}", exc_info=True)
+        logger.error(f"✗ 每日分析任务执行失败: {e}", exc_info=True)
     finally:
         db.close()
 
 
 def weekly_l7d_analysis_job():
-    """每周L7D分析任务（每周一/三/五北京时间早上8点10分执行）"""
+    """每周L7D分析任务（每周一/三/五北京时间早上8点10分自动生成L7D数据）"""
     db: Session = SessionLocal()
     try:
+        logger.info("=" * 60)
         logger.info("开始执行每周L7D分析任务...")
 
         # 结束日期为昨天（不包含今天）
         end_date = date.today() - timedelta(days=1)
+        begin_date = end_date - timedelta(days=6)
+        
+        logger.info(f"分析日期范围: {begin_date.isoformat()} 至 {end_date.isoformat()} (过去7天)")
 
         api_analysis_service = ApiAnalysisService(db)
 
@@ -141,16 +208,18 @@ def weekly_l7d_analysis_job():
 
         if result.get("success"):
             logger.info(
-                "每周L7D分析任务完成: %s 至 %s, 共生成 %s 条记录",
+                "✓ 每周L7D分析任务完成: %s 至 %s, 共生成 %s 条记录",
                 result.get("begin_date"),
                 result.get("end_date"),
                 result.get("total_records", 0),
             )
         else:
-            logger.error(f"每周L7D分析任务失败: {result.get('message')}")
+            logger.error(f"✗ 每周L7D分析任务失败: {result.get('message')}")
+
+        logger.info("=" * 60)
 
     except Exception as e:
-        logger.error("每周L7D分析任务执行失败: %s", e, exc_info=True)
+        logger.error("✗ 每周L7D分析任务执行失败: %s", e, exc_info=True)
     finally:
         db.close()
 
@@ -251,9 +320,45 @@ def monthly_summary_job():
             for platform_name, commission in platform_rows
         ]
 
-        # 3. 拒付佣金（目前没有单独字段，占位为0，后续有字段后再补充真实计算逻辑）
-        total_rejected_commission = 0.0
-        platform_rejected_details = []
+        # 3. 拒付佣金（从PlatformData.rejected_commission字段获取）
+        total_rejected_commission = (
+            db.query(func.coalesce(func.sum(PlatformData.rejected_commission), 0))
+            .filter(
+                PlatformData.date >= start_date,
+                PlatformData.date <= end_date,
+            )
+            .scalar()
+            or 0.0
+        )
+
+        platform_rejected_rows = (
+            db.query(
+                AffiliatePlatform.platform_name,
+                func.sum(PlatformData.rejected_commission),
+            )
+            .join(
+                AffiliateAccount,
+                AffiliateAccount.id == PlatformData.affiliate_account_id,
+            )
+            .join(
+                AffiliatePlatform,
+                AffiliatePlatform.id == AffiliateAccount.platform_id,
+            )
+            .filter(
+                PlatformData.date >= start_date,
+                PlatformData.date <= end_date,
+            )
+            .group_by(AffiliatePlatform.id, AffiliatePlatform.platform_name)
+            .all()
+        )
+
+        platform_rejected_details = [
+            {
+                "platform_name": platform_name,
+                "rejected_commission": float(rejected_commission or 0),
+            }
+            for platform_name, rejected_commission in platform_rejected_rows
+        ]
 
         summary = {
             "start_date": start_date.isoformat(),
