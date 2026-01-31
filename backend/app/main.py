@@ -12,6 +12,21 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.config import settings
 from app.services.scheduler import start_scheduler, shutdown_scheduler
+
+# 确保日志目录存在（在导入logging_config之前）
+_log_dir = Path(__file__).parent.parent / "logs"
+_log_dir.mkdir(exist_ok=True)
+
+# 初始化日志配置（静默加载，避免启动失败）
+try:
+    from app.logging_config import root_logger
+except Exception as e:
+    # 如果日志配置加载失败，使用基本配置
+    import logging
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    )
 from app.api import (
     ad_campaign,
     affiliate,

@@ -5,9 +5,10 @@ import logging
 import sys
 from pathlib import Path
 
-# 创建logs目录
-log_dir = Path("logs")
-log_dir.mkdir(exist_ok=True)
+# 创建logs目录（使用绝对路径，基于当前文件位置）
+_log_config_file = Path(__file__)
+_log_dir = _log_config_file.parent.parent / "logs"
+_log_dir.mkdir(exist_ok=True)
 
 # 配置日志格式
 log_format = logging.Formatter(
@@ -29,19 +30,24 @@ console_handler.setFormatter(log_format)
 root_logger.addHandler(console_handler)
 
 # 文件处理器（输出到文件）
-file_handler = logging.FileHandler(
-    log_dir / "app.log",
-    encoding='utf-8'
-)
-file_handler.setLevel(logging.DEBUG)
-file_handler.setFormatter(log_format)
-root_logger.addHandler(file_handler)
+try:
+    file_handler = logging.FileHandler(
+        _log_dir / "app.log",
+        encoding='utf-8'
+    )
+    file_handler.setLevel(logging.DEBUG)
+    file_handler.setFormatter(log_format)
+    root_logger.addHandler(file_handler)
+except Exception as e:
+    # 如果文件日志失败，至少保留控制台日志
+    print(f"警告: 无法创建文件日志处理器: {e}")
 
 # 错误日志文件（只记录错误）
-error_handler = logging.FileHandler(
-    log_dir / "error.log",
-    encoding='utf-8'
-)
+try:
+    error_handler = logging.FileHandler(
+        _log_dir / "error.log",
+        encoding='utf-8'
+    )
 error_handler.setLevel(logging.ERROR)
 error_handler.setFormatter(log_format)
 root_logger.addHandler(error_handler)

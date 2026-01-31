@@ -1,0 +1,27 @@
+# 服务器启动失败诊断命令
+
+## 步骤1：检查代码语法
+cd ~/Google-Data-Analysis/backend
+source venv/bin/activate
+python -m py_compile app/main.py
+
+## 步骤2：检查导入
+cd ~/Google-Data-Analysis/backend
+source venv/bin/activate
+python -c "from app.main import app; print('导入成功')"
+
+## 步骤3：直接运行查看错误（不要用nohup）
+cd ~/Google-Data-Analysis/backend
+source venv/bin/activate
+uvicorn app.main:app --host 0.0.0.0 --port 8000
+
+## 步骤4：检查依赖
+cd ~/Google-Data-Analysis/backend
+source venv/bin/activate
+pip list | grep -E "(fastapi|uvicorn|sqlalchemy|pydantic)"
+
+## 步骤5：检查Python版本
+cd ~/Google-Data-Analysis/backend
+source venv/bin/activate
+python --version
+
