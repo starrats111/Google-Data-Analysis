@@ -235,8 +235,24 @@ const AffiliateAccounts = () => {
     if (account.notes) {
       try {
         const notesData = JSON.parse(account.notes)
-        existingToken = notesData.rewardoo_token || notesData.rw_token || notesData.api_token || ''
-        existingApiUrl = notesData.rewardoo_api_url || notesData.rw_api_url || notesData.api_url || ''
+        // 根据平台类型读取对应的token和API URL
+        const platformCode = (account.platform?.platform_code || '').toLowerCase()
+        const platformName = (account.platform?.platform_name || '').toLowerCase()
+        
+        if (platformCode === 'rw' || platformCode === 'rewardoo' || platformName.includes('rewardoo') || platformName === 'rw') {
+          existingToken = notesData.rewardoo_token || notesData.rw_token || notesData.api_token || ''
+          existingApiUrl = notesData.rewardoo_api_url || notesData.rw_api_url || notesData.api_url || ''
+        } else if (platformCode === 'cg' || platformCode === 'collabglow' || platformName.includes('collabglow')) {
+          existingToken = notesData.collabglow_token || notesData.cg_token || notesData.api_token || ''
+          existingApiUrl = notesData.collabglow_api_url || notesData.cg_api_url || notesData.api_url || ''
+        } else if (['lb', 'pm', 'bsh', 'cf'].includes(platformCode)) {
+          existingToken = notesData[`${platformCode}_token`] || notesData.api_token || notesData.token || ''
+          existingApiUrl = notesData[`${platformCode}_api_url`] || notesData.api_url || ''
+        } else {
+          // 通用fallback
+          existingToken = notesData.api_token || notesData.token || ''
+          existingApiUrl = notesData.api_url || ''
+        }
       } catch (e) {
         // 忽略解析错误
       }
@@ -273,30 +289,41 @@ const AffiliateAccounts = () => {
         requestData.token = token
       }
       
-      // 如果提供了API URL，保存到账号备注中（用于Rewardoo多渠道支持）
+      // 如果提供了API URL，保存到账号备注中（用于多渠道支持）
       if (api_url && syncAccount?.platform) {
         const platformCode = (syncAccount.platform.platform_code || '').toLowerCase()
-        if (platformCode === 'rewardoo' || platformCode === 'rw') {
-          // 更新账号备注，保存API URL配置
-          try {
-            let notesData = {}
-            if (syncAccount.notes) {
-              try {
-                notesData = JSON.parse(syncAccount.notes)
-              } catch (e) {
-                // 忽略解析错误
-              }
+        const platformName = (syncAccount.platform.platform_name || '').toLowerCase()
+        
+        // 更新账号备注，保存API URL配置
+        try {
+          let notesData = {}
+          if (syncAccount.notes) {
+            try {
+              notesData = JSON.parse(syncAccount.notes)
+            } catch (e) {
+              // 忽略解析错误
             }
+          }
+          
+          // 根据平台类型保存对应的API URL
+          if (platformCode === 'rewardoo' || platformCode === 'rw' || platformName.includes('rewardoo') || platformName === 'rw') {
             notesData.rewardoo_api_url = api_url
             notesData.rw_api_url = api_url
-            
-            // 更新账号备注
-            await api.put(`/api/affiliate/accounts/${syncAccount.id}`, {
-              notes: JSON.stringify(notesData)
-            })
-          } catch (e) {
-            console.warn('保存API URL配置失败:', e)
+          } else if (platformCode === 'collabglow' || platformCode === 'cg' || platformName.includes('collabglow')) {
+            notesData.collabglow_api_url = api_url
+            notesData.cg_api_url = api_url
+          } else if (['lb', 'pm', 'bsh', 'cf'].includes(platformCode)) {
+            notesData[`${platformCode}_api_url`] = api_url
           }
+          // 通用字段
+          notesData.api_url = api_url
+          
+          // 更新账号备注
+          await api.put(`/api/affiliate/accounts/${syncAccount.id}`, {
+            notes: JSON.stringify(notesData)
+          })
+        } catch (e) {
+          console.warn('保存API URL配置失败:', e)
         }
       }
       
