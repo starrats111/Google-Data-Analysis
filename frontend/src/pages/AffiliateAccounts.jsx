@@ -649,17 +649,22 @@ const AffiliateAccounts = () => {
               />
             </Form.Item>
 
-            {/* Rewardoo多渠道支持：API URL配置 */}
+            {/* 平台多渠道支持：API URL配置 */}
             {syncAccount?.platform && (() => {
               const platformCode = (syncAccount.platform.platform_code || '').toLowerCase()
               const platformName = (syncAccount.platform.platform_name || '').toLowerCase()
-              // 支持多种平台代码和名称匹配（包括RW、rw、Rewardoo等）
+              
+              // 检查是否是Rewardoo或CollabGlow平台
               const isRewardoo = platformCode === 'rewardoo' || platformCode === 'rw' || 
                                 platformName.includes('rewardoo') || platformName.includes('rw')
+              const isCollabGlow = platformCode === 'collabglow' || platformCode === 'cg' || 
+                                   platformName.includes('collabglow') || platformName.includes('cg')
               
-              if (isRewardoo) {
+              if (isRewardoo || isCollabGlow) {
                 const platformConfig = getPlatformApiConfig(syncAccount.platform.platform_code)
-                const apiUrlField = platformConfig.fields.find(f => f.name === 'rewardoo_api_url')
+                const apiUrlField = platformConfig.fields.find(f => 
+                  f.name === 'rewardoo_api_url' || f.name === 'collabglow_api_url'
+                )
                 if (apiUrlField) {
                   return (
                     <Form.Item
@@ -932,17 +937,22 @@ const AffiliateAccounts = () => {
               />
             </Form.Item>
 
-            {/* Rewardoo多渠道支持：API URL配置 */}
+            {/* 平台多渠道支持：API URL配置 */}
             {syncAccount?.platform && (() => {
               const platformCode = (syncAccount.platform.platform_code || '').toLowerCase()
               const platformName = (syncAccount.platform.platform_name || '').toLowerCase()
-              // 支持多种平台代码和名称匹配（包括RW、rw、Rewardoo等）
+              
+              // 检查是否是Rewardoo或CollabGlow平台
               const isRewardoo = platformCode === 'rewardoo' || platformCode === 'rw' || 
                                 platformName.includes('rewardoo') || platformName.includes('rw')
+              const isCollabGlow = platformCode === 'collabglow' || platformCode === 'cg' || 
+                                   platformName.includes('collabglow') || platformName.includes('cg')
               
-              if (isRewardoo) {
+              if (isRewardoo || isCollabGlow) {
                 const platformConfig = getPlatformApiConfig(syncAccount.platform.platform_code)
-                const apiUrlField = platformConfig.fields.find(f => f.name === 'rewardoo_api_url')
+                const apiUrlField = platformConfig.fields.find(f => 
+                  f.name === 'rewardoo_api_url' || f.name === 'collabglow_api_url'
+                )
                 if (apiUrlField) {
                   return (
                     <Form.Item

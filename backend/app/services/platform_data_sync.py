@@ -135,9 +135,19 @@ class PlatformDataSyncService:
             if not token:
                 return {"success": False, "message": "未配置CollabGlow Token。请在同步对话框中输入Token，或在账号编辑页面的备注中配置。"}
             
+            # 使用ApiConfigService获取API配置（支持多渠道）
+            from app.services.api_config_service import ApiConfigService
+            api_config = ApiConfigService.get_account_api_config(account)
+            api_base_url = api_config.get("base_url")
+            
+            if api_base_url:
+                logger.info(f"[CG同步] 使用API配置: base_url={api_base_url}")
+            else:
+                logger.info(f"[CG同步] 使用默认API配置")
+            
             # 同步数据（使用统一方案）
-            logger.info(f"使用Token进行同步 (Token长度: {len(token) if token else 0})")
-            service = CollabGlowService(token=token)
+            logger.info(f"使用Token进行同步 (Token长度: {len(token) if token else 0}, API URL: {api_base_url or '默认'})")
+            service = CollabGlowService(token=token, base_url=api_base_url)
             
             # 优先使用Transaction API（核心API，可同时获取订单数、佣金和拒付数据）
             try:
