@@ -32,8 +32,28 @@ api.interceptors.request.use((config) => {
   if (token) {
     config.headers.Authorization = `Bearer ${token}`
   }
-  // 调试：记录请求URL
-  console.log('[API Request]', config.method?.toUpperCase(), config.url, 'Full URL:', config.baseURL + config.url)
+  // 调试：记录请求URL的详细信息
+  const fullUrl = config.baseURL + config.url
+  console.log('[API Request]', {
+    method: config.method?.toUpperCase(),
+    url: config.url,
+    baseURL: config.baseURL,
+    fullURL: fullUrl,
+    headers: config.headers,
+    // 检查URL是否被修改
+    urlType: typeof config.url,
+    urlLength: config.url?.length
+  })
+  
+  // 确保URL格式正确
+  if (config.url && config.url.includes('mcc-accounts')) {
+    console.error('[URL ERROR] 检测到错误的URL格式:', config.url)
+    console.error('[URL ERROR] 应该使用 /api/mcc/accounts 而不是', config.url)
+    // 尝试修复URL
+    config.url = config.url.replace(/mcc-accounts:?\d*/, 'mcc/accounts')
+    console.log('[URL FIX] 已修复URL为:', config.url)
+  }
+  
   return config
 })
 
