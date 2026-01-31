@@ -288,6 +288,7 @@ class GoogleAdsApiSyncService:
         try:
             # 方法1：使用 CustomerClient 查询获取MCC下的客户列表（推荐方法）
             try:
+                logger.info(f"尝试使用CustomerClient查询获取MCC {mcc_customer_id} 下的客户账号...")
                 query = """
                     SELECT
                         customer_client.id,
@@ -300,7 +301,9 @@ class GoogleAdsApiSyncService:
                 """
                 
                 ga_service = client.get_service("GoogleAdsService")
+                logger.info(f"执行CustomerClient查询，customer_id={mcc_customer_id}")
                 response = ga_service.search(customer_id=mcc_customer_id, query=query)
+                logger.info(f"CustomerClient查询完成，开始处理结果...")
                 
                 customer_ids = []
                 for row in response:
