@@ -43,9 +43,10 @@ export default function MccAccounts() {
       mcc_id: mcc.mcc_id,
       mcc_name: mcc.mcc_name,
       email: mcc.email,
-      client_id: undefined,  // 不显示已有值，留空表示不修改
-      client_secret: undefined,  // 不显示已有值，留空表示不修改
-      refresh_token: undefined,  // 不显示已有值，留空表示不修改
+      // 如果已有值，显示占位符；如果没有值，显示undefined（留空）
+      client_id: mcc.client_id ? '••••••••••••••••' : undefined,
+      client_secret: mcc.client_secret ? '••••••••••••••••' : undefined,
+      refresh_token: mcc.refresh_token ? '••••••••••••••••' : undefined,
       is_active: mcc.is_active
     })
     setModalVisible(true)

@@ -48,6 +48,9 @@ class MccAccountResponse(BaseModel):
     created_at: str
     updated_at: Optional[str]
     data_count: int  # 该MCC的数据条数
+    client_id: Optional[str] = None  # 包含但不显示实际值
+    client_secret: Optional[str] = None  # 包含但不显示实际值
+    refresh_token: Optional[str] = None  # 包含但不显示实际值
     
     class Config:
         from_attributes = True
@@ -97,7 +100,10 @@ async def create_mcc_account(
         "is_active": mcc_account.is_active,
         "created_at": mcc_account.created_at.isoformat(),
         "updated_at": mcc_account.updated_at.isoformat() if mcc_account.updated_at else None,
-        "data_count": data_count
+        "data_count": data_count,
+        "client_id": mcc_account.client_id,
+        "client_secret": mcc_account.client_secret,
+        "refresh_token": mcc_account.refresh_token
     }
 
 
@@ -132,7 +138,10 @@ async def get_mcc_accounts(
             "is_active": mcc.is_active,
             "created_at": mcc.created_at.isoformat(),
             "updated_at": mcc.updated_at.isoformat() if mcc.updated_at else None,
-            "data_count": data_count
+            "data_count": data_count,
+            "client_id": mcc.client_id,  # 返回实际值，前端会用占位符显示
+            "client_secret": mcc.client_secret,
+            "refresh_token": mcc.refresh_token
         })
     
     return result
@@ -165,7 +174,10 @@ async def get_mcc_account(
         "is_active": mcc_account.is_active,
         "created_at": mcc_account.created_at.isoformat(),
         "updated_at": mcc_account.updated_at.isoformat() if mcc_account.updated_at else None,
-        "data_count": data_count
+        "data_count": data_count,
+        "client_id": mcc_account.client_id,
+        "client_secret": mcc_account.client_secret,
+        "refresh_token": mcc_account.refresh_token
     }
 
 
@@ -218,7 +230,10 @@ async def update_mcc_account(
         "is_active": mcc_account.is_active,
         "created_at": mcc_account.created_at.isoformat(),
         "updated_at": mcc_account.updated_at.isoformat() if mcc_account.updated_at else None,
-        "data_count": data_count
+        "data_count": data_count,
+        "client_id": mcc_account.client_id,
+        "client_secret": mcc_account.client_secret,
+        "refresh_token": mcc_account.refresh_token
     }
 
 
