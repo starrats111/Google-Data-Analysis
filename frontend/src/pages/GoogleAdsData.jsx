@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react'
-import { Card, Button, Form, Select, DatePicker, message, Space, Radio, Statistic, Row, Col } from 'antd'
+import { Card, Button, Form, Select, DatePicker, message, Space, Radio, Statistic, Row, Col, Table, Tag, Input } from 'antd'
 import { SearchOutlined, DownloadOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import api from '../services/api'
@@ -12,10 +12,12 @@ export default function GoogleAdsData() {
   
   const [loading, setLoading] = useState(false)
   const [summaryData, setSummaryData] = useState(null) // 聚合数据
+  const [detailData, setDetailData] = useState([]) // 详细数据
   const [mccAccounts, setMccAccounts] = useState([])
   const [platforms, setPlatforms] = useState([])
   const [form] = Form.useForm()
   const [dateRangeType, setDateRangeType] = useState('past7days') // 时间范围类型
+  const [searchText, setSearchText] = useState('')
 
   useEffect(() => {
     fetchMccAccounts()
@@ -142,12 +144,17 @@ export default function GoogleAdsData() {
       params.begin_date = beginDate.format('YYYY-MM-DD')
       params.end_date = endDate.format('YYYY-MM-DD')
       
-      // 获取聚合数据（总数据）
-      const response = await api.get('/api/google-ads-data/summary', { params })
-      setSummaryData(response.data)
+      // 同时获取汇总数据和详细数据
+      const [summaryResponse, detailResponse] = await Promise.all([
+        api.get('/api/google-ads-data/summary', { params }),
+        api.get('/api/google-ads-data', { params })
+      ])
       
-      if (response.data && (response.data.total_cost > 0 || response.data.total_impressions > 0 || response.data.total_clicks > 0)) {
-        message.success('查询成功')
+      setSummaryData(summaryResponse.data)
+      setDetailData(detailResponse.data || [])
+      
+      if (summaryResponse.data && (summaryResponse.data.total_cost > 0 || summaryResponse.data.total_impressions > 0 || summaryResponse.data.total_clicks > 0)) {
+        message.success(`查询成功，找到 ${detailResponse.data?.length || 0} 条广告系列数据`)
       } else {
         message.info('未找到数据')
       }
@@ -155,6 +162,7 @@ export default function GoogleAdsData() {
       console.error('查询失败:', error)
       message.error(error.response?.data?.detail || '查询失败')
       setSummaryData(null)
+      setDetailData([])
     } finally {
       setLoading(false)
     }
@@ -261,46 +269,246 @@ export default function GoogleAdsData() {
         </Form>
       </Card>
 
+      {/* 汇总统计卡片 - 类似Google Ads样式 */}
       {summaryData && (
-        <Card>
-          <Row gutter={16}>
-            <Col span={6}>
-              <Statistic
-                title="总费用"
-                value={summaryData.total_cost || 0}
-                precision={2}
-                prefix="$"
-                valueStyle={{ color: '#ff4d4f' }}
-              />
+        <Card style={{ marginBottom: 16 }}>
+          <Row gutter={[24, 16]}>
+            <Col xs={12} sm={12} md={6}>
+              <div style={{ 
+                padding: '16px', 
+                backgroundColor: '#f5f5f5', 
+                borderRadius: '8px',
+                border: '1px solid #e8e8e8'
+              }}>
+                <div style={{ fontSize: '14px', color: '#666', marginBottom: '8px' }}>点击次数</div>
+                <div style={{ fontSize: '24px', fontWeight: 'bold', color: '#1890ff' }}>
+                  {summaryData.total_clicks?.toLocaleString() || 0}
+                </div>
+              </div>
             </Col>
-            <Col span={6}>
-              <Statistic
-                title="总展示"
-                value={summaryData.total_impressions || 0}
-                valueStyle={{ color: '#1890ff' }}
-              />
+            <Col xs={12} sm={12} md={6}>
+              <div style={{ 
+                padding: '16px', 
+                backgroundColor: '#f5f5f5', 
+                borderRadius: '8px',
+                border: '1px solid #e8e8e8'
+              }}>
+                <div style={{ fontSize: '14px', color: '#666', marginBottom: '8px' }}>展示次数</div>
+                <div style={{ fontSize: '24px', fontWeight: 'bold', color: '#1890ff' }}>
+                  {summaryData.total_impressions?.toLocaleString() || 0}
+                </div>
+              </div>
             </Col>
-            <Col span={6}>
-              <Statistic
-                title="总点击"
-                value={summaryData.total_clicks || 0}
-                valueStyle={{ color: '#52c41a' }}
-              />
+            <Col xs={12} sm={12} md={6}>
+              <div style={{ 
+                padding: '16px', 
+                backgroundColor: '#f5f5f5', 
+                borderRadius: '8px',
+                border: '1px solid #e8e8e8'
+              }}>
+                <div style={{ fontSize: '14px', color: '#666', marginBottom: '8px' }}>平均每次点击费用</div>
+                <div style={{ fontSize: '24px', fontWeight: 'bold', color: '#52c41a' }}>
+                  ${(summaryData.avg_cpc || 0).toFixed(2)}
+                </div>
+              </div>
             </Col>
-            <Col span={6}>
-              <Statistic
-                title="平均CPC"
-                value={summaryData.avg_cpc || 0}
-                precision={2}
-                prefix="$"
-              />
+            <Col xs={12} sm={12} md={6}>
+              <div style={{ 
+                padding: '16px', 
+                backgroundColor: '#f5f5f5', 
+                borderRadius: '8px',
+                border: '1px solid #e8e8e8'
+              }}>
+                <div style={{ fontSize: '14px', color: '#666', marginBottom: '8px' }}>费用</div>
+                <div style={{ fontSize: '24px', fontWeight: 'bold', color: '#ff4d4f' }}>
+                  ${(summaryData.total_cost || 0).toFixed(2)}
+                </div>
+              </div>
             </Col>
           </Row>
-          {summaryData.date_range && (
-            <div style={{ marginTop: 16, color: '#666', fontSize: '14px' }}>
-              日期范围：{summaryData.date_range.begin_date} 至 {summaryData.date_range.end_date}
-            </div>
-          )}
+        </Card>
+      )}
+
+      {/* 详细数据表格 - 类似Google Ads样式 */}
+      {summaryData && detailData.length > 0 && (
+        <Card>
+          <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <h3 style={{ margin: 0 }}>广告系列</h3>
+            <Input.Search
+              placeholder="搜索广告系列名称"
+              style={{ width: 300 }}
+              onSearch={(value) => setSearchText(value)}
+              allowClear
+            />
+          </div>
+          
+          <Table
+            dataSource={detailData.filter(item => 
+              !searchText || item.campaign_name?.toLowerCase().includes(searchText.toLowerCase())
+            )}
+            loading={loading}
+            rowKey="id"
+            pagination={{
+              pageSize: 20,
+              showSizeChanger: true,
+              showTotal: (total) => `共 ${total} 条记录`,
+              showQuickJumper: true,
+            }}
+            scroll={{ x: 1400 }}
+            columns={[
+              {
+                title: '广告系列',
+                dataIndex: 'campaign_name',
+                key: 'campaign_name',
+                width: 300,
+                fixed: 'left',
+                render: (text, record) => (
+                  <div>
+                    <div style={{ fontWeight: 500 }}>{text}</div>
+                    <div style={{ fontSize: '12px', color: '#999' }}>
+                      ID: {record.campaign_id}
+                    </div>
+                  </div>
+                ),
+              },
+              {
+                title: '日期',
+                dataIndex: 'date',
+                key: 'date',
+                width: 120,
+                sorter: (a, b) => dayjs(a.date).unix() - dayjs(b.date).unix(),
+                render: (date) => dayjs(date).format('YYYY-MM-DD'),
+              },
+              {
+                title: 'MCC',
+                dataIndex: 'mcc_name',
+                key: 'mcc_name',
+                width: 150,
+              },
+              {
+                title: '平台',
+                dataIndex: 'extracted_platform_code',
+                key: 'extracted_platform_code',
+                width: 120,
+                render: (val) => val ? <Tag color="blue">{val}</Tag> : <Tag>未匹配</Tag>,
+              },
+              {
+                title: '预算',
+                dataIndex: 'budget',
+                key: 'budget',
+                width: 120,
+                align: 'right',
+                sorter: (a, b) => a.budget - b.budget,
+                render: (val) => `$${val?.toFixed(2) || '0.00'}`,
+              },
+              {
+                title: '展示次数',
+                dataIndex: 'impressions',
+                key: 'impressions',
+                width: 120,
+                align: 'right',
+                sorter: (a, b) => a.impressions - b.impressions,
+                render: (val) => val?.toLocaleString() || '0',
+              },
+              {
+                title: '点击次数',
+                dataIndex: 'clicks',
+                key: 'clicks',
+                width: 120,
+                align: 'right',
+                sorter: (a, b) => a.clicks - b.clicks,
+                render: (val) => val?.toLocaleString() || '0',
+              },
+              {
+                title: '费用',
+                dataIndex: 'cost',
+                key: 'cost',
+                width: 120,
+                align: 'right',
+                sorter: (a, b) => a.cost - b.cost,
+                render: (val) => `$${val?.toFixed(2) || '0.00'}`,
+              },
+              {
+                title: '平均CPC',
+                dataIndex: 'cpc',
+                key: 'cpc',
+                width: 120,
+                align: 'right',
+                sorter: (a, b) => a.cpc - b.cpc,
+                render: (val) => `$${val?.toFixed(2) || '0.00'}`,
+              },
+              {
+                title: 'CTR',
+                key: 'ctr',
+                width: 100,
+                align: 'right',
+                sorter: (a, b) => {
+                  const ctrA = a.impressions > 0 ? (a.clicks / a.impressions) * 100 : 0
+                  const ctrB = b.impressions > 0 ? (b.clicks / b.impressions) * 100 : 0
+                  return ctrA - ctrB
+                },
+                render: (_, record) => {
+                  const ctr = record.impressions > 0 
+                    ? ((record.clicks / record.impressions) * 100).toFixed(2) 
+                    : '0.00'
+                  return `${ctr}%`
+                },
+              },
+              {
+                title: 'IS Budget丢失',
+                dataIndex: 'is_budget_lost',
+                key: 'is_budget_lost',
+                width: 140,
+                align: 'right',
+                sorter: (a, b) => a.is_budget_lost - b.is_budget_lost,
+                render: (val) => `${(val * 100)?.toFixed(2) || '0.00'}%`,
+              },
+              {
+                title: 'IS Rank丢失',
+                dataIndex: 'is_rank_lost',
+                key: 'is_rank_lost',
+                width: 140,
+                align: 'right',
+                sorter: (a, b) => a.is_rank_lost - b.is_rank_lost,
+                render: (val) => `${(val * 100)?.toFixed(2) || '0.00'}%`,
+              },
+            ]}
+            summary={(pageData) => {
+              const totalCost = pageData.reduce((sum, item) => sum + (item.cost || 0), 0)
+              const totalImpressions = pageData.reduce((sum, item) => sum + (item.impressions || 0), 0)
+              const totalClicks = pageData.reduce((sum, item) => sum + (item.clicks || 0), 0)
+              const avgCpc = totalClicks > 0 ? totalCost / totalClicks : 0
+              const ctr = totalImpressions > 0 ? (totalClicks / totalImpressions) * 100 : 0
+              
+              return (
+                <Table.Summary fixed>
+                  <Table.Summary.Row style={{ backgroundColor: '#fafafa', fontWeight: 'bold' }}>
+                    <Table.Summary.Cell index={0} colSpan={5}>
+                      <div style={{ textAlign: 'left' }}>
+                        总计: 当前视图中的所有广告系列
+                      </div>
+                    </Table.Summary.Cell>
+                    <Table.Summary.Cell index={5} align="right">
+                      {totalImpressions.toLocaleString()}
+                    </Table.Summary.Cell>
+                    <Table.Summary.Cell index={6} align="right">
+                      {totalClicks.toLocaleString()}
+                    </Table.Summary.Cell>
+                    <Table.Summary.Cell index={7} align="right">
+                      ${totalCost.toFixed(2)}
+                    </Table.Summary.Cell>
+                    <Table.Summary.Cell index={8} align="right">
+                      ${avgCpc.toFixed(2)}
+                    </Table.Summary.Cell>
+                    <Table.Summary.Cell index={9} align="right">
+                      {ctr.toFixed(2)}%
+                    </Table.Summary.Cell>
+                    <Table.Summary.Cell index={10} colSpan={2} />
+                  </Table.Summary.Row>
+                </Table.Summary>
+              )
+            }}
+          />
         </Card>
       )}
 
