@@ -1,11 +1,14 @@
 import os
 from pathlib import Path
 import atexit
+import traceback
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
+from fastapi.exceptions import RequestValidationError
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.config import settings
 from app.services.scheduler import start_scheduler, shutdown_scheduler
@@ -34,6 +37,7 @@ app = FastAPI(title="Google Analysis Platform API")
 
 # CORS配置 - 必须在所有路由之前添加
 # 配置允许跨域请求，解决前端Cloudflare部署访问后端阿里云API的CORS问题
+# 使用最宽松的配置确保所有请求都能通过，包括错误响应
 app.add_middleware(
     CORSMiddleware,
     # 明确列出所有允许的来源（包括前端域名）
@@ -52,11 +56,160 @@ app.add_middleware(
     # 正则表达式匹配所有google-data-analysis相关域名和本地开发环境
     allow_origin_regex=r"^(https://([a-z0-9-]+\.)?google-data-analysis\.(pages\.dev|top)|https://www\.google-data-analysis\.top|https://api\.google-data-analysis\.top|https?://(localhost|127\.0\.0\.1)(:\d+)?)$",
     allow_credentials=True,
-    allow_methods=["*"],  # 允许所有HTTP方法（GET, POST, PUT, DELETE, OPTIONS, PATCH等）
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH", "HEAD"],  # 明确列出所有HTTP方法
     allow_headers=["*"],  # 允许所有请求头
     expose_headers=["*"],  # 暴露所有响应头
     max_age=3600,  # 预检请求缓存时间（秒）
 )
+
+
+# 全局异常处理器 - 确保所有错误响应都包含CORS头
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    """全局异常处理器，确保所有错误都返回CORS头"""
+    import traceback
+    
+    # 获取请求的Origin
+    origin = request.headers.get("origin")
+    allowed_origins = [
+        "https://google-data-analysis.top",
+        "https://www.google-data-analysis.top",
+        "https://api.google-data-analysis.top",
+        "https://google-data-analysis.pages.dev",
+    ]
+    
+    # 检查origin是否在允许列表中
+    cors_origin = origin if origin in allowed_origins else None
+    
+    # 如果是google-data-analysis相关域名，也允许
+    if not cors_origin and origin:
+        import re
+        if re.match(r"^https://([a-z0-9-]+\.)?google-data-analysis\.(pages\.dev|top)$", origin):
+            cors_origin = origin
+    
+    # 构建响应头 - 确保总是有CORS头
+    headers = {
+        "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS, PATCH, HEAD",
+        "Access-Control-Allow-Headers": "*",
+    }
+    if cors_origin:
+        headers["Access-Control-Allow-Origin"] = cors_origin
+        headers["Access-Control-Allow-Credentials"] = "true"
+    else:
+        # 即使没有匹配的origin，也设置一个默认值（用于调试）
+        headers["Access-Control-Allow-Origin"] = "*"
+    
+    # 记录错误详情（用于调试）
+    error_detail = str(exc)
+    if hasattr(exc, "detail"):
+        error_detail = exc.detail
+    elif hasattr(exc, "args") and exc.args:
+        error_detail = str(exc.args[0])
+    
+    # 打印错误到控制台（用于调试）
+    print(f"❌ 全局异常捕获: {type(exc).__name__}: {error_detail}")
+    traceback.print_exc()
+    
+    # 返回JSON响应，包含CORS头
+    return JSONResponse(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        content={
+            "detail": error_detail,
+            "type": type(exc).__name__,
+        },
+        headers=headers,
+    )
+
+
+@app.exception_handler(StarletteHTTPException)
+async def http_exception_handler(request: Request, exc: StarletteHTTPException):
+    """HTTP异常处理器，确保包含CORS头"""
+    origin = request.headers.get("origin")
+    allowed_origins = [
+        "https://google-data-analysis.top",
+        "https://www.google-data-analysis.top",
+        "https://api.google-data-analysis.top",
+        "https://google-data-analysis.pages.dev",
+    ]
+    
+    cors_origin = origin if origin in allowed_origins else None
+    if not cors_origin and origin:
+        import re
+        if re.match(r"^https://([a-z0-9-]+\.)?google-data-analysis\.(pages\.dev|top)$", origin):
+            cors_origin = origin
+    
+    headers = {}
+    if cors_origin:
+        headers["Access-Control-Allow-Origin"] = cors_origin
+        headers["Access-Control-Allow-Credentials"] = "true"
+        headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS, PATCH, HEAD"
+        headers["Access-Control-Allow-Headers"] = "*"
+    
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"detail": exc.detail},
+        headers=headers,
+    )
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    """请求验证异常处理器，确保包含CORS头"""
+    origin = request.headers.get("origin")
+    allowed_origins = [
+        "https://google-data-analysis.top",
+        "https://www.google-data-analysis.top",
+        "https://api.google-data-analysis.top",
+        "https://google-data-analysis.pages.dev",
+    ]
+    
+    cors_origin = origin if origin in allowed_origins else None
+    if not cors_origin and origin:
+        import re
+        if re.match(r"^https://([a-z0-9-]+\.)?google-data-analysis\.(pages\.dev|top)$", origin):
+            cors_origin = origin
+    
+    headers = {}
+    if cors_origin:
+        headers["Access-Control-Allow-Origin"] = cors_origin
+        headers["Access-Control-Allow-Credentials"] = "true"
+        headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS, PATCH, HEAD"
+        headers["Access-Control-Allow-Headers"] = "*"
+    
+    return JSONResponse(
+        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        content={"detail": exc.errors()},
+        headers=headers,
+    )
+
+# 全局OPTIONS处理器 - 确保所有OPTIONS请求都返回CORS头
+@app.options("/{full_path:path}")
+async def options_handler(request: Request, full_path: str):
+    """处理所有OPTIONS请求，返回CORS头"""
+    origin = request.headers.get("origin")
+    allowed_origins = [
+        "https://google-data-analysis.top",
+        "https://www.google-data-analysis.top",
+        "https://api.google-data-analysis.top",
+        "https://google-data-analysis.pages.dev",
+    ]
+    
+    cors_origin = origin if origin in allowed_origins else None
+    if not cors_origin and origin:
+        import re
+        if re.match(r"^https://([a-z0-9-]+\.)?google-data-analysis\.(pages\.dev|top)$", origin):
+            cors_origin = origin
+    
+    headers = {
+        "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS, PATCH, HEAD",
+        "Access-Control-Allow-Headers": "*",
+        "Access-Control-Max-Age": "3600",
+    }
+    if cors_origin:
+        headers["Access-Control-Allow-Origin"] = cors_origin
+        headers["Access-Control-Allow-Credentials"] = "true"
+    
+    return JSONResponse(content={}, headers=headers, status_code=200)
 
 # API routes
 app.include_router(auth.router)

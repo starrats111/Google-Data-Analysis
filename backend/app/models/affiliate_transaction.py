@@ -3,7 +3,6 @@
 统一存储8个平台的交易数据：CG / RW / Linkhaitao / PartnerBoost / Linkbux / Partnermatic / BrandSparkHub / CreatorFlare
 """
 from sqlalchemy import Column, Integer, String, DateTime, Numeric, Text, UniqueConstraint, Index
-from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from app.database import Base
 
@@ -54,8 +53,16 @@ class AffiliateTransaction(Base):
         Index("idx_affiliate_transaction_user_time", "user_id", "transaction_time"),
     )
     
-    # 关联关系
-    rejection = relationship("AffiliateRejection", back_populates="transaction", uselist=False)
+    # 关联关系 - 通过 platform 和 transaction_id 关联，不是外键
+    # 注意：由于没有外键，这个关系可能在某些情况下无法自动加载
+    # 如果需要使用，建议手动查询而不是依赖关系
+    # rejection = relationship(
+    #     "AffiliateRejection",
+    #     back_populates="transaction",
+    #     uselist=False,
+    #     primaryjoin="and_(AffiliateTransaction.platform == AffiliateRejection.platform, "
+    #                 "AffiliateTransaction.transaction_id == AffiliateRejection.transaction_id)"
+    # )
 
 
 class AffiliateRejection(Base):
@@ -88,6 +95,13 @@ class AffiliateRejection(Base):
         Index("idx_affiliate_rejection_time", "reject_time"),
     )
     
-    # 关联关系
-    transaction = relationship("AffiliateTransaction", back_populates="rejection")
+    # 关联关系 - 通过 platform 和 transaction_id 关联，不是外键
+    # 注意：由于没有外键，这个关系可能在某些情况下无法自动加载
+    # 如果需要使用，建议手动查询而不是依赖关系
+    # transaction = relationship(
+    #     "AffiliateTransaction",
+    #     back_populates="rejection",
+    #     primaryjoin="and_(AffiliateRejection.platform == AffiliateTransaction.platform, "
+    #                 "AffiliateRejection.transaction_id == AffiliateTransaction.transaction_id)"
+    # )
 
