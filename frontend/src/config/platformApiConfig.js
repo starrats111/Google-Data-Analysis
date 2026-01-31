@@ -229,8 +229,33 @@ export const PLATFORM_API_CONFIG = {
 export const getPlatformApiConfig = (platformCode) => {
   if (!platformCode) return PLATFORM_API_CONFIG.default
   
-  const code = platformCode.toLowerCase()
-  return PLATFORM_API_CONFIG[code] || PLATFORM_API_CONFIG.default
+  const code = platformCode.toLowerCase().trim()
+  
+  // 直接匹配
+  if (PLATFORM_API_CONFIG[code]) {
+    return PLATFORM_API_CONFIG[code]
+  }
+  
+  // 别名匹配（支持多种格式）
+  const aliasMap = {
+    'rw': 'rewardoo',
+    'rewardoo': 'rewardoo',
+    'cg': 'collabglow',
+    'collabglow': 'collabglow',
+    'lh': 'linkhaitao',
+    'linkhaitao': 'linkhaitao',
+    'link-haitao': 'linkhaitao',
+    'lb': 'lb',
+    'pm': 'pm',
+    'bsh': 'bsh',
+    'cf': 'cf'
+  }
+  
+  if (aliasMap[code]) {
+    return PLATFORM_API_CONFIG[aliasMap[code]] || PLATFORM_API_CONFIG.default
+  }
+  
+  return PLATFORM_API_CONFIG.default
 }
 
 /**
