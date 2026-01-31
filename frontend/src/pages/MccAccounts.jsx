@@ -128,7 +128,14 @@ export default function MccAccounts() {
 
   const handleDelete = async (id, record) => {
     try {
-      const response = await api.delete(`/api/mcc/accounts/${id}`)
+      // 确保id是数字类型
+      const mccId = typeof id === 'number' ? id : parseInt(id, 10)
+      if (isNaN(mccId)) {
+        message.error('无效的MCC账号ID')
+        return
+      }
+      
+      const response = await api.delete(`/api/mcc/accounts/${mccId}`)
       const deletedCount = response.data?.deleted_data_count || 0
       const mccName = response.data?.mcc_name || record?.mcc_name || 'MCC账号'
       
@@ -139,7 +146,9 @@ export default function MccAccounts() {
       }
       fetchMccAccounts()
     } catch (error) {
-      message.error(error.response?.data?.detail || '删除失败')
+      console.error('删除失败:', error)
+      const errorMsg = error.response?.data?.detail || error.message || '删除失败'
+      message.error(errorMsg)
     }
   }
 
