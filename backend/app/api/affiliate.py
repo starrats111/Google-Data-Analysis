@@ -606,16 +606,31 @@ async def sync_account_data(
     logger.info(f"开始同步账号 {account_id} 的数据，日期范围: {begin_date} ~ {end_date}")
     print(f"[同步API] 开始同步账号 {account_id}，日期范围: {begin_date} ~ {end_date}")  # 确保输出到控制台
     
-    sync_service = PlatformDataSyncService(db)
-    result = sync_service.sync_account_data(account_id, begin_date, end_date, token=token)
-    
-    logger.info(f"同步结果: success={result.get('success')}, message={result.get('message')}, saved_count={result.get('saved_count', 0)}")
-    print(f"[同步API] 同步结果: success={result.get('success')}, message={result.get('message')}, saved_count={result.get('saved_count', 0)}")  # 确保输出到控制台
-    
-    if not result.get("success"):
-        raise HTTPException(status_code=500, detail=result.get("message", "同步失败"))
-    
-    return result
+    try:
+        sync_service = PlatformDataSyncService(db)
+        result = sync_service.sync_account_data(account_id, begin_date, end_date, token=token)
+        
+        logger.info(f"同步结果: success={result.get('success')}, message={result.get('message')}, saved_count={result.get('saved_count', 0)}")
+        print(f"[同步API] 同步结果: success={result.get('success')}, message={result.get('message')}, saved_count={result.get('saved_count', 0)}")  # 确保输出到控制台
+        
+        if not result.get("success"):
+            # 返回详细的错误信息，但不抛出500错误，让前端显示友好的错误提示
+            error_message = result.get("message", "同步失败")
+            logger.error(f"同步失败: {error_message}")
+            raise HTTPException(
+                status_code=400,  # 使用400而不是500，因为这是业务逻辑错误，不是服务器错误
+                detail=error_message
+            )
+        
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"同步过程中发生异常: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"同步失败: {str(e)}"
+        )
 
 
 

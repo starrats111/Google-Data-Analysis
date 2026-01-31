@@ -56,19 +56,19 @@ app = FastAPI(title="Google Analysis Platform API")
 
 # 定义允许的来源列表
 ALLOWED_ORIGINS = [
-    "https://google-data-analysis.top",
-    "https://www.google-data-analysis.top",
-    "https://api.google-data-analysis.top",
-    "https://google-data-analysis.pages.dev",
-    "http://localhost:5173",
-    "http://127.0.0.1:5173",
-    "http://localhost:3000",
-    "http://127.0.0.1:3000",
-    "http://localhost:8000",
-    "http://127.0.0.1:8000",
+        "https://google-data-analysis.top",
+        "https://www.google-data-analysis.top",
+        "https://api.google-data-analysis.top",
+        "https://google-data-analysis.pages.dev",
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "http://localhost:8000",
+        "http://127.0.0.1:8000",
 ]
 
-# 正则表达式匹配所有google-data-analysis相关域名和本地开发环境
+    # 正则表达式匹配所有google-data-analysis相关域名和本地开发环境
 ALLOWED_ORIGIN_REGEX = r"^(https://([a-z0-9-]+\.)?google-data-analysis\.(pages\.dev|top)|https://www\.google-data-analysis\.top|https://api\.google-data-analysis\.top|https?://(localhost|127\.0\.0\.1)(:\d+)?)$"
 
 app.add_middleware(
@@ -217,7 +217,7 @@ def get_cors_headers(origin: str = None) -> dict:
             import re
             if re.match(ALLOWED_ORIGIN_REGEX, origin):
                 headers["Access-Control-Allow-Origin"] = origin
-                headers["Access-Control-Allow-Credentials"] = "true"
+        headers["Access-Control-Allow-Credentials"] = "true"
             else:
                 # 开发环境：允许所有来源（仅用于调试）
                 headers["Access-Control-Allow-Origin"] = "*"
