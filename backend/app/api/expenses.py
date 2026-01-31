@@ -354,6 +354,7 @@ async def get_expense_summary(
 
     # ===== 从 Google Ads API 数据中统计“广告费用”（GoogleAdsApiData），覆盖旧逻辑 =====
     ga_cost_map: Dict[Tuple[int, date], float] = {}
+    ga_unmatched_cost_map: Dict[date, float] = {}  # 未匹配平台的费用，按日期汇总
     ga_rows = db.query(GoogleAdsApiData).filter(
         GoogleAdsApiData.user_id == current_user.id,
         GoogleAdsApiData.date >= start,
@@ -361,14 +362,21 @@ async def get_expense_summary(
     ).all()
     for row in ga_rows:
         platform_code = row.extracted_platform_code
-        if not platform_code:
-            continue
-        pid = platform_code_map.get(platform_code)
-        if not pid:
-            continue
-        key = (pid, row.date)
-        ga_cost_map[key] = ga_cost_map.get(key, 0.0) + float(row.cost or 0.0)
+        cost = float(row.cost or 0.0)
         day_set.add(row.date)
+        
+        if platform_code:
+            pid = platform_code_map.get(platform_code)
+            if pid:
+                # 已匹配到平台，按平台统计
+                key = (pid, row.date)
+                ga_cost_map[key] = ga_cost_map.get(key, 0.0) + cost
+            else:
+                # 平台代码存在但无法匹配到平台ID，计入未匹配
+                ga_unmatched_cost_map[row.date] = ga_unmatched_cost_map.get(row.date, 0.0) + cost
+        else:
+            # 没有平台代码，计入未匹配
+            ga_unmatched_cost_map[row.date] = ga_unmatched_cost_map.get(row.date, 0.0) + cost
 
     # 1) 从每日指标聚合（仅作为费用的补充/兜底，优先使用Google Ads API）
     metrics = db.query(AdCampaignDailyMetric).join(AdCampaign).filter(
@@ -450,6 +458,13 @@ async def get_expense_summary(
         if d not in by_date:
             by_date[d] = [0.0, 0.0]
         by_date[d][1] = ga_cost  # 覆盖费用
+    
+    # 将未匹配平台的费用也计入总费用（但不分配到具体平台）
+    # 这些费用会在总费用中体现，但不会出现在按平台汇总中
+    for d, unmatched_cost in ga_unmatched_cost_map.items():
+        day_set.add(d)
+        # 未匹配的费用计入总费用，但不分配到具体平台
+        # 这样总费用就能与Google Ads数据页面对上了
 
     # 拉取拒付佣金调整（区间内）
     adjustments = db.query(ExpenseAdjustment).filter(
@@ -501,6 +516,10 @@ async def get_expense_summary(
             range_net_profit=round(range_net, 4),
         ))
 
+    # 将未匹配平台的费用也计入总费用
+    unmatched_total_cost = sum(ga_unmatched_cost_map.values())
+    total_cost += unmatched_total_cost
+    
     day_count = len(day_set) if len(day_set) > 0 else 0
     net_profit = total_commission - total_rejected - total_cost
     avg_daily = (net_profit / day_count) if day_count > 0 else 0.0
@@ -565,6 +584,7 @@ async def get_expense_daily(
 
     # 从 Google Ads API 统计每日“广告费用”（GoogleAdsApiData），用于覆盖旧逻辑
     ga_cost_map: Dict[Tuple[int, date], float] = {}
+    ga_unmatched_cost_map: Dict[date, float] = {}  # 未匹配平台的费用，按日期汇总
     ga_rows = db.query(GoogleAdsApiData).filter(
         GoogleAdsApiData.user_id == current_user.id,
         GoogleAdsApiData.date >= start,
@@ -572,13 +592,20 @@ async def get_expense_daily(
     ).all()
     for row in ga_rows:
         platform_code = row.extracted_platform_code
-        if not platform_code:
-            continue
-        pid = platform_code_map.get(platform_code)
-        if not pid:
-            continue
-        key = (pid, row.date)
-        ga_cost_map[key] = ga_cost_map.get(key, 0.0) + float(row.cost or 0.0)
+        cost = float(row.cost or 0.0)
+        
+        if platform_code:
+            pid = platform_code_map.get(platform_code)
+            if pid:
+                # 已匹配到平台，按平台统计
+                key = (pid, row.date)
+                ga_cost_map[key] = ga_cost_map.get(key, 0.0) + cost
+            else:
+                # 平台代码存在但无法匹配到平台ID，计入未匹配
+                ga_unmatched_cost_map[row.date] = ga_unmatched_cost_map.get(row.date, 0.0) + cost
+        else:
+            # 没有平台代码，计入未匹配
+            ga_unmatched_cost_map[row.date] = ga_unmatched_cost_map.get(row.date, 0.0) + cost
 
     # 优先：每日指标 -> 按平台/日期汇总广告费用（若某天某平台没有Google Ads数据时作为兜底）
     metrics = db.query(AdCampaignDailyMetric).join(AdCampaign).filter(
@@ -654,6 +681,18 @@ async def get_expense_daily(
                 net_profit=round(net, 4),
             ))
 
+    # 添加未匹配平台的费用行
+    for d, unmatched_cost in ga_unmatched_cost_map.items():
+        rows.append(ExpenseDailyRow(
+            date=d.strftime("%Y-%m-%d"),
+            platform_id=-1,  # 使用-1表示未匹配
+            platform_name="未匹配",
+            commission=0.0,
+            ad_cost=round(unmatched_cost, 4),
+            rejected_commission=0.0,
+            net_profit=round(-unmatched_cost, 4),
+        ))
+    
     # 排序：日期 desc, 平台 asc
     rows.sort(key=lambda x: (x.date, x.platform_id), reverse=True)
     return ExpenseDailyResponse(
