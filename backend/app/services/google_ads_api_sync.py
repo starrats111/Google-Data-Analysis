@@ -286,7 +286,7 @@ class GoogleAdsApiSyncService:
             客户账号ID列表
         """
         try:
-            # 方法1：尝试使用 CustomerService 获取可访问的客户
+            # 方法1：使用 CustomerService.list_accessible_customers() 获取所有可访问的客户
             try:
                 customer_service = client.get_service("CustomerService")
                 accessible_customers = customer_service.list_accessible_customers()
@@ -295,24 +295,57 @@ class GoogleAdsApiSyncService:
                 for resource_name in accessible_customers.resource_names:
                     # resource_name格式: "customers/1234567890"
                     customer_id = resource_name.split("/")[-1]
-                    # 排除MCC本身（通常MCC的ID和客户账号ID不同）
+                    # 排除MCC本身（MCC是管理账号，不能直接查询metrics）
                     if customer_id != mcc_customer_id:
                         customer_ids.append(customer_id)
                 
                 if customer_ids:
-                    logger.info(f"通过CustomerService找到 {len(customer_ids)} 个客户账号")
+                    logger.info(f"通过CustomerService找到 {len(customer_ids)} 个客户账号: {customer_ids}")
+                    return customer_ids
+                else:
+                    logger.warning(f"通过CustomerService没有找到客户账号（只有MCC本身）")
+            except Exception as e:
+                logger.warning(f"使用CustomerService获取客户列表失败: {e}")
+            
+            # 方法2：使用 CustomerClientService 获取MCC下的客户列表
+            try:
+                from google.ads.googleads.v23.resources.types.customer_client import CustomerClient
+                from google.ads.googleads.v23.enums.types.manager_link_status_enum import ManagerLinkStatusEnum
+                
+                query = f"""
+                    SELECT
+                        customer_client.id,
+                        customer_client.manager,
+                        customer_client.descriptive_name,
+                        customer_client.status
+                    FROM customer_client
+                    WHERE customer_client.manager = FALSE
+                    AND customer_client.status = 'ENABLED'
+                """
+                
+                ga_service = client.get_service("GoogleAdsService")
+                response = ga_service.search(customer_id=mcc_customer_id, query=query)
+                
+                customer_ids = []
+                for row in response:
+                    client_id = str(row.customer_client.id)
+                    if client_id != mcc_customer_id:
+                        customer_ids.append(client_id)
+                        logger.info(f"找到客户账号: {client_id} ({row.customer_client.descriptive_name})")
+                
+                if customer_ids:
+                    logger.info(f"通过CustomerClient查询找到 {len(customer_ids)} 个客户账号")
                     return customer_ids
             except Exception as e:
-                logger.warning(f"使用CustomerService获取客户列表失败: {e}，尝试其他方法")
+                logger.warning(f"使用CustomerClient查询失败: {e}")
             
-            # 方法2：尝试直接使用MCC ID查询（某些情况下MCC本身也可以查询）
-            logger.info(f"尝试直接使用MCC ID {mcc_customer_id} 查询")
-            return [mcc_customer_id]
+            # 如果两种方法都失败，返回空列表（而不是MCC ID本身）
+            logger.error(f"无法获取MCC {mcc_customer_id} 下的客户账号列表")
+            return []
             
         except Exception as e:
             logger.error(f"获取客户账号列表失败: {e}", exc_info=True)
-            # 如果获取失败，尝试直接使用MCC ID
-            return [mcc_customer_id]
+            return []
     
     def sync_all_active_mccs(self, target_date: Optional[date] = None) -> Dict:
         """
