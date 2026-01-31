@@ -128,13 +128,25 @@ export default function MccAccounts() {
 
   const handleDelete = async (id, record) => {
     try {
-      // 确保id是数字类型
-      const mccId = typeof id === 'number' ? id : parseInt(id, 10)
-      if (isNaN(mccId)) {
+      // 确保id是数字类型，处理可能的字符串格式（如 "1:1"）
+      let mccId
+      if (typeof id === 'number') {
+        mccId = id
+      } else if (typeof id === 'string') {
+        // 如果包含冒号，只取第一部分
+        const cleanId = id.split(':')[0].split('/')[0]
+        mccId = parseInt(cleanId, 10)
+      } else {
+        mccId = parseInt(id, 10)
+      }
+      
+      if (isNaN(mccId) || mccId <= 0) {
+        console.error('无效的MCC账号ID:', id)
         message.error('无效的MCC账号ID')
         return
       }
       
+      console.log('删除MCC账号，ID:', mccId, '原始ID:', id)
       const response = await api.delete(`/api/mcc/accounts/${mccId}`)
       const deletedCount = response.data?.deleted_data_count || 0
       const mccName = response.data?.mcc_name || record?.mcc_name || 'MCC账号'
@@ -147,6 +159,11 @@ export default function MccAccounts() {
       fetchMccAccounts()
     } catch (error) {
       console.error('删除失败:', error)
+      console.error('错误详情:', {
+        message: error.message,
+        response: error.response?.data,
+        config: error.config
+      })
       const errorMsg = error.response?.data?.detail || error.message || '删除失败'
       message.error(errorMsg)
     }

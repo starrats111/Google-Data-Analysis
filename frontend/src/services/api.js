@@ -1,6 +1,23 @@
 import axios from 'axios'
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000'
+// 获取API基础URL
+const getApiBaseUrl = () => {
+  // 优先使用环境变量
+  if (import.meta.env.VITE_API_URL) {
+    return import.meta.env.VITE_API_URL
+  }
+  
+  // 生产环境：使用API子域名
+  if (window.location.hostname === 'google-data-analysis.top' || 
+      window.location.hostname === 'www.google-data-analysis.top') {
+    return 'https://api.google-data-analysis.top'
+  }
+  
+  // 开发环境：使用本地服务器
+  return 'http://localhost:8000'
+}
+
+const API_BASE_URL = getApiBaseUrl()
 
 const api = axios.create({
   baseURL: API_BASE_URL,
