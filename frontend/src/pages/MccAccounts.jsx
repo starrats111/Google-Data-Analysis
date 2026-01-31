@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react'
-import { Card, Table, Button, Modal, Form, Input, message, Popconfirm, Tag, Space, Switch } from 'antd'
-import { PlusOutlined, EditOutlined, DeleteOutlined, SyncOutlined } from '@ant-design/icons'
+import { Card, Table, Button, Modal, Form, Input, message, Popconfirm, Tag, Space, Switch, Steps, Alert } from 'antd'
+import { PlusOutlined, EditOutlined, DeleteOutlined, SyncOutlined, LinkOutlined, CheckCircleOutlined } from '@ant-design/icons'
 import api from '../services/api'
 import { useAuth } from '../store/authStore'
 
@@ -15,6 +15,10 @@ export default function MccAccounts() {
   const [originalApiValues, setOriginalApiValues] = useState({}) // 保存原始API配置值
   const [form] = Form.useForm()
   const [syncLoading, setSyncLoading] = useState({})
+  const [oauthModalVisible, setOauthModalVisible] = useState(false)
+  const [oauthStep, setOauthStep] = useState(0) // 0: 输入信息, 1: 授权, 2: 完成
+  const [authorizationUrl, setAuthorizationUrl] = useState('')
+  const [oauthForm] = Form.useForm()
 
   useEffect(() => {
     fetchMccAccounts()
@@ -303,7 +307,30 @@ export default function MccAccounts() {
             label="Refresh Token（可选）"
             help={editingMcc ? (originalApiValues.refresh_token ? "已配置，留空则不修改，填写新值则更新" : "留空则不设置，填写新值则更新") : undefined}
           >
-            <Input.Password placeholder={editingMcc && originalApiValues.refresh_token ? "已配置，留空则不修改" : "Google Ads API Refresh Token"} />
+            <Input.Group compact>
+              <Input.Password 
+                style={{ width: 'calc(100% - 120px)' }}
+                placeholder={editingMcc && originalApiValues.refresh_token ? "已配置，留空则不修改" : "Google Ads API Refresh Token"} 
+              />
+              <Button 
+                type="link" 
+                icon={<LinkOutlined />}
+                onClick={() => {
+                  if (!form.getFieldValue('client_id') || !form.getFieldValue('client_secret')) {
+                    message.warning('请先填写Client ID和Client Secret')
+                    return
+                  }
+                  oauthForm.setFieldsValue({
+                    client_id: form.getFieldValue('client_id'),
+                    client_secret: form.getFieldValue('client_secret')
+                  })
+                  setOauthStep(0)
+                  setOauthModalVisible(true)
+                }}
+              >
+                在线获取
+              </Button>
+            </Input.Group>
           </Form.Item>
 
           {editingMcc && (

@@ -19,6 +19,7 @@ from app.api import (
     expenses,
     export,
     google_ads_data,
+    google_oauth,
     linkhaitao,
     mcc,
     platform_data,
@@ -73,6 +74,7 @@ app.include_router(linkhaitao.router)
 app.include_router(mcc.router)
 app.include_router(platform_data.router)
 app.include_router(google_ads_data.router)
+app.include_router(google_oauth.router)
 app.include_router(stage_label.router)
 
 

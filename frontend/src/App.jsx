@@ -14,6 +14,7 @@ import AdCampaigns from './pages/AdCampaigns'
 import Expenses from './pages/Expenses'
 import MyAnalysis from './pages/MyAnalysis'
 import StageLabelDetail from './pages/StageLabelDetail'
+import GoogleOAuthCallback from './pages/GoogleOAuthCallback'
 import { useAuth } from './store/authStore'
 
 function PrivateRoute({ children }) {
@@ -31,6 +32,7 @@ function App() {
     >
       <Routes>
         <Route path="/login" element={<Login />} />
+        <Route path="/google-oauth-callback" element={<GoogleOAuthCallback />} />
         <Route
           path="/"
           element={
