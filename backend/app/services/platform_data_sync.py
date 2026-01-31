@@ -55,21 +55,30 @@ class PlatformDataSyncService:
         
         platform_code = account.platform.platform_code.lower() if account.platform.platform_code else ""
         platform_name = account.platform.platform_name or "未知平台"
-        logger.info(f"同步账号 {account.account_name} (ID: {account_id}), 平台代码: {platform_code}, 平台名称: {platform_name}")
+        platform_url = getattr(account.platform, 'description', '') or ''
+        
+        logger.info(f"同步账号 {account.account_name} (ID: {account_id})")
+        logger.info(f"平台信息 - 代码(原始): {account.platform.platform_code}, 代码(小写): {platform_code}, 名称: {platform_name}, URL: {platform_url}")
         
         # 根据平台类型选择不同的服务
-        # 支持多种平台代码格式
-        if platform_code in ["collabglow", "cg", "collab-glow"]:
-            logger.info(f"识别为CollabGlow平台，开始同步...")
+        # 支持多种平台代码格式（不区分大小写）
+        platform_code_normalized = platform_code.strip()
+        
+        if platform_code_normalized in ["collabglow", "cg", "collab-glow", "collab_glow"]:
+            logger.info(f"✓ 识别为CollabGlow平台，开始同步...")
             return self._sync_collabglow_data(account, begin_date, end_date)
-        elif platform_code in ["linkhaitao", "link-haitao", "lh", "link_haitao"]:
-            logger.info(f"识别为LinkHaitao平台，开始同步...")
+        elif platform_code_normalized in ["linkhaitao", "link-haitao", "lh", "link_haitao"]:
+            logger.info(f"✓ 识别为LinkHaitao平台，开始同步...")
             return self._sync_linkhaitao_data(account, begin_date, end_date)
         else:
             # 对于其他平台，尝试从notes中读取通用API配置
             # 如果平台有API token配置，可以在这里扩展支持
-            logger.warning(f"未识别的平台代码: {platform_code} (平台名称: {platform_name})")
-            return {"success": False, "message": f"平台 {platform_name} ({platform_code}) 的API集成尚未实现。请联系管理员添加该平台的API支持。"}
+            logger.warning(f"✗ 未识别的平台代码: '{platform_code_normalized}' (原始: '{account.platform.platform_code}'), 平台名称: {platform_name}")
+            error_msg = f"平台 {platform_name}"
+            if platform_url:
+                error_msg += f" ({platform_url})"
+            error_msg += f" 的API集成尚未实现。请联系管理员添加该平台的API支持。"
+            return {"success": False, "message": error_msg}
     
     def _sync_collabglow_data(
         self,
