@@ -113,38 +113,51 @@ async def get_mcc_accounts(
     db: Session = Depends(get_db)
 ):
     """获取MCC账号列表"""
-    query = db.query(GoogleMccAccount).filter(
-        GoogleMccAccount.user_id == current_user.id
-    )
-    
-    # 权限检查：员工只能查看自己的MCC
-    if current_user.role == "employee":
-        query = query.filter(GoogleMccAccount.user_id == current_user.id)
-    
-    mcc_accounts = query.order_by(GoogleMccAccount.created_at.desc()).all()
-    
-    # 获取每个MCC的数据条数
-    result = []
-    for mcc in mcc_accounts:
-        data_count = db.query(GoogleAdsApiData).filter(
-            GoogleAdsApiData.mcc_id == mcc.id
-        ).count()
+    try:
+        query = db.query(GoogleMccAccount).filter(
+            GoogleMccAccount.user_id == current_user.id
+        )
         
-        result.append({
-            "id": mcc.id,
-            "mcc_id": mcc.mcc_id,
-            "mcc_name": mcc.mcc_name,
-            "email": mcc.email,
-            "is_active": mcc.is_active,
-            "created_at": mcc.created_at.isoformat(),
-            "updated_at": mcc.updated_at.isoformat() if mcc.updated_at else None,
-            "data_count": data_count,
-            "client_id": mcc.client_id,  # 返回实际值，前端会用占位符显示
-            "client_secret": mcc.client_secret,
-            "refresh_token": mcc.refresh_token
-        })
-    
-    return result
+        # 权限检查：员工只能查看自己的MCC
+        if current_user.role == "employee":
+            query = query.filter(GoogleMccAccount.user_id == current_user.id)
+        
+        mcc_accounts = query.order_by(GoogleMccAccount.created_at.desc()).all()
+        
+        # 获取每个MCC的数据条数
+        result = []
+        for mcc in mcc_accounts:
+            try:
+                data_count = db.query(GoogleAdsApiData).filter(
+                    GoogleAdsApiData.mcc_id == mcc.id
+                ).count()
+                
+                result.append({
+                    "id": mcc.id,
+                    "mcc_id": mcc.mcc_id,
+                    "mcc_name": mcc.mcc_name,
+                    "email": mcc.email,
+                    "is_active": mcc.is_active,
+                    "created_at": mcc.created_at.isoformat() if mcc.created_at else datetime.now().isoformat(),
+                    "updated_at": mcc.updated_at.isoformat() if mcc.updated_at else None,
+                    "data_count": data_count,
+                    "client_id": mcc.client_id,  # 返回实际值，前端会用占位符显示
+                    "client_secret": mcc.client_secret,
+                    "refresh_token": mcc.refresh_token
+                })
+            except Exception as e:
+                # 如果单个MCC处理失败，记录错误但继续处理其他MCC
+                import logging
+                logger = logging.getLogger(__name__)
+                logger.error(f"处理MCC账号 {mcc.id} 时出错: {str(e)}")
+                continue
+        
+        return result
+    except Exception as e:
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.error(f"获取MCC账号列表失败: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"获取MCC账号列表失败: {str(e)}")
 
 
 @router.get("/accounts/{mcc_id}", response_model=MccAccountResponse)
