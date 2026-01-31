@@ -26,7 +26,8 @@ class PlatformDataSyncService:
         self,
         account_id: int,
         begin_date: str,
-        end_date: str
+        end_date: str,
+        token: Optional[str] = None
     ) -> Dict:
         """
         同步指定账号的平台数据
@@ -83,10 +84,10 @@ class PlatformDataSyncService:
         
         if is_collabglow:
             logger.info(f"✓ 识别为CollabGlow平台，开始同步...")
-            return self._sync_collabglow_data(account, begin_date, end_date)
+            return self._sync_collabglow_data(account, begin_date, end_date, token)
         elif is_linkhaitao:
             logger.info(f"✓ 识别为LinkHaitao平台，开始同步...")
-            return self._sync_linkhaitao_data(account, begin_date, end_date)
+            return self._sync_linkhaitao_data(account, begin_date, end_date, token)
         else:
             # 对于其他平台，尝试从notes中读取通用API配置
             # 如果平台有API token配置，可以在这里扩展支持
@@ -101,22 +102,23 @@ class PlatformDataSyncService:
         self,
         account: AffiliateAccount,
         begin_date: str,
-        end_date: str
+        end_date: str,
+        token: Optional[str] = None
     ) -> Dict:
         """同步CollabGlow数据"""
         try:
-            # 获取token
+            # 获取token：优先使用传入的token，如果没有则从账号备注中读取
             import json
-            token = None
-            if account.notes:
-                try:
-                    notes_data = json.loads(account.notes)
-                    token = notes_data.get("collabglow_token")
-                except:
-                    pass
+            if not token:
+                if account.notes:
+                    try:
+                        notes_data = json.loads(account.notes)
+                        token = notes_data.get("collabglow_token")
+                    except:
+                        pass
             
             if not token:
-                return {"success": False, "message": "未配置CollabGlow Token"}
+                return {"success": False, "message": "未配置CollabGlow Token。请在同步对话框中输入Token，或在账号编辑页面的备注中配置。"}
             
             # 同步数据
             service = CollabGlowService(token=token)

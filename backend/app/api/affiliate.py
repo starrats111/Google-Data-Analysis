@@ -322,9 +322,9 @@ async def sync_account_data(
         account.notes = json.dumps(notes_data)
         db.commit()
     
-    # 调用同步服务
+    # 调用同步服务（传递token参数，即使已经保存到备注中，也优先使用传入的token）
     sync_service = PlatformDataSyncService(db)
-    result = sync_service.sync_account_data(account_id, begin_date, end_date)
+    result = sync_service.sync_account_data(account_id, begin_date, end_date, token=token)
     
     if not result.get("success"):
         raise HTTPException(status_code=500, detail=result.get("message", "同步失败"))
