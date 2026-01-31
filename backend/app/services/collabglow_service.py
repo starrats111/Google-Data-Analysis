@@ -88,13 +88,38 @@ class CollabGlowService(PlatformServiceBase):
         
         try:
             logger.info(f"[Transaction API] 请求订单和佣金数据: {begin_date} ~ {end_date}")
-            response = requests.post(
-                api_url,
-                headers=headers,
-                json=payload,
-                timeout=30
-            )
-            response.raise_for_status()
+            # 增加超时时间到60秒，并添加重试机制
+            max_retries = 3
+            retry_delay = 2  # 重试间隔（秒）
+            
+            for attempt in range(max_retries):
+                try:
+                    response = requests.post(
+                        api_url,
+                        headers=headers,
+                        json=payload,
+                        timeout=60  # 增加到60秒
+                    )
+                    response.raise_for_status()
+                    break  # 成功则跳出重试循环
+                except requests.exceptions.Timeout as e:
+                    if attempt < max_retries - 1:
+                        logger.warning(f"[Transaction API] 请求超时，第 {attempt + 1}/{max_retries} 次尝试，{retry_delay}秒后重试...")
+                        import time
+                        time.sleep(retry_delay)
+                        continue
+                    else:
+                        error_msg = f"[Transaction API] 请求超时（已重试{max_retries}次）: {str(e)}"
+                        logger.error(error_msg)
+                        raise Exception(error_msg)
+                except requests.exceptions.RequestException as e:
+                    if attempt < max_retries - 1:
+                        logger.warning(f"[Transaction API] 请求失败，第 {attempt + 1}/{max_retries} 次尝试，{retry_delay}秒后重试...")
+                        import time
+                        time.sleep(retry_delay)
+                        continue
+                    else:
+                        raise
             
             result = response.json()
             code = result.get("code")
@@ -170,11 +195,12 @@ class CollabGlowService(PlatformServiceBase):
         
         try:
             logger.info(f"[Commission Details API] 请求佣金明细: transaction_id={transaction_id}, date_range={begin_date}~{end_date}")
+            # 增加超时时间到60秒
             response = requests.post(
                 COMMISSION_DETAILS_API,
                 headers=headers,
                 json=payload,
-                timeout=30
+                timeout=60
             )
             response.raise_for_status()
             
@@ -234,12 +260,38 @@ class CollabGlowService(PlatformServiceBase):
         
         try:
             logger.info(f"[Commission Validation API] 请求佣金验证: {begin_date} ~ {end_date}")
-            response = requests.post(
-                COMMISSION_VALIDATION_API,
-                headers=headers,
-                json=payload,
-                timeout=30
-            )
+            # 增加超时时间到60秒，并添加重试机制
+            max_retries = 3
+            retry_delay = 2  # 重试间隔（秒）
+            
+            for attempt in range(max_retries):
+                try:
+                    response = requests.post(
+                        COMMISSION_VALIDATION_API,
+                        headers=headers,
+                        json=payload,
+                        timeout=60  # 增加到60秒
+                    )
+                    response.raise_for_status()
+                    break  # 成功则跳出重试循环
+                except requests.exceptions.Timeout as e:
+                    if attempt < max_retries - 1:
+                        logger.warning(f"[Commission Validation API] 请求超时，第 {attempt + 1}/{max_retries} 次尝试，{retry_delay}秒后重试...")
+                        import time
+                        time.sleep(retry_delay)
+                        continue
+                    else:
+                        error_msg = f"[Commission Validation API] 请求超时（已重试{max_retries}次）: {str(e)}"
+                        logger.error(error_msg)
+                        raise Exception(error_msg)
+                except requests.exceptions.RequestException as e:
+                    if attempt < max_retries - 1:
+                        logger.warning(f"[Commission Validation API] 请求失败，第 {attempt + 1}/{max_retries} 次尝试，{retry_delay}秒后重试...")
+                        import time
+                        time.sleep(retry_delay)
+                        continue
+                    else:
+                        raise
             response.raise_for_status()
             
             result = response.json()
@@ -308,11 +360,12 @@ class CollabGlowService(PlatformServiceBase):
         
         try:
             logger.info(f"[Payment Summary API] 请求付款汇总: {begin_date} ~ {end_date}")
+            # 增加超时时间到60秒
             response = requests.post(
                 PAYMENT_SUMMARY_API,
                 headers=headers,
                 json=payload,
-                timeout=30
+                timeout=60
             )
             response.raise_for_status()
             
