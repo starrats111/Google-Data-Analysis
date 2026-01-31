@@ -299,7 +299,14 @@ async def delete_mcc_account(
         
         logger.info(f"准备删除MCC账号 {mcc_id} ({mcc_name})，关联数据条数: {data_count}")
         
-        # 删除MCC账号（由于外键CASCADE，关联的GoogleAdsApiData会自动删除）
+        # 先手动删除所有关联的Google Ads数据（避免SQLite CASCADE问题）
+        if data_count > 0:
+            deleted_rows = db.query(GoogleAdsApiData).filter(
+                GoogleAdsApiData.mcc_id == mcc_id
+            ).delete(synchronize_session=False)
+            logger.info(f"已删除 {deleted_rows} 条关联的Google Ads数据")
+        
+        # 删除MCC账号
         db.delete(mcc_account)
         db.commit()
         
