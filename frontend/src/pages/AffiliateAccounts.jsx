@@ -763,10 +763,10 @@ const AffiliateAccounts = () => {
               name="notes"
               label="备注"
             >
-              <Input.TextArea rows={3} placeholder="可选：备注信息" />
+              <Input.TextArea rows={3} placeholder="可选：备注信息（JSON格式，例如：{\"api_token\":\"xxx\",\"rewardoo_api_url\":\"https://api.rewardoo.com/api\"}）" />
             </Form.Item>
 
-            {/* 动态显示平台API配置字段 */}
+            {/* 动态显示平台API配置字段 - 使用Form.Item dependencies确保实时更新 */}
             <Form.Item
               noStyle
               shouldUpdate={(prevValues, currentValues) => 
@@ -776,13 +776,16 @@ const AffiliateAccounts = () => {
               {({ getFieldValue }) => {
                 const selectedPlatformId = getFieldValue('platform_id')
                 const selectedPlatform = platforms.find(p => p.id === selectedPlatformId)
-                if (!selectedPlatform) return null
+                
+                if (!selectedPlatform) {
+                  return null
+                }
                 
                 // 获取平台代码和名称（转换为小写用于匹配）
                 const platformCode = (selectedPlatform.platform_code || '').toLowerCase()
                 const platformName = (selectedPlatform.platform_name || '').toLowerCase()
                 
-                // 检查是否是Rewardoo平台（支持多种代码格式）
+                // 检查是否是Rewardoo平台（支持多种代码格式：rw, RW, rewardoo等）
                 const isRewardoo = platformCode === 'rewardoo' || platformCode === 'rw' || 
                                   platformName.includes('rewardoo') || platformName.includes('rw')
                 
@@ -793,27 +796,82 @@ const AffiliateAccounts = () => {
                 const hasSpecificConfig = PLATFORM_API_CONFIG[platformCode] && 
                                         PLATFORM_API_CONFIG[platformCode] !== PLATFORM_API_CONFIG.default
                 
-                // 如果是Rewardoo平台或有特定配置，显示字段
-                if ((isRewardoo || hasSpecificConfig) && platformConfig.fields && platformConfig.fields.length > 0) {
-                  return platformConfig.fields.map(field => (
-                    <Form.Item
-                      key={field.name}
-                      name={field.name}
-                      label={field.label}
-                      help={field.help}
-                      rules={field.required ? [{ required: true, message: `请输入${field.label}` }] : []}
-                    >
-                      {field.type === 'password' ? (
-                        <Input.Password placeholder={field.placeholder} />
-                      ) : (
-                        <Input placeholder={field.placeholder} />
-                      )}
-                    </Form.Item>
-                  ))
+                // 调试信息（开发环境）
+                if (process.env.NODE_ENV === 'development') {
+                  console.log('Platform Debug:', {
+                    selectedPlatform,
+                    platformCode,
+                    platformName,
+                    isRewardoo,
+                    hasSpecificConfig,
+                    platformConfig,
+                    fields: platformConfig?.fields
+                  })
                 }
+                
+                // 如果是Rewardoo平台或有特定配置，显示字段
+                if ((isRewardoo || hasSpecificConfig) && platformConfig && platformConfig.fields && platformConfig.fields.length > 0) {
+                  return (
+                    <>
+                      {platformConfig.fields.map(field => (
+                        <Form.Item
+                          key={field.name}
+                          name={field.name}
+                          label={field.label}
+                          help={field.help}
+                          rules={field.required ? [{ required: true, message: `请输入${field.label}` }] : []}
+                        >
+                          {field.type === 'password' ? (
+                            <Input.Password placeholder={field.placeholder} />
+                          ) : (
+                            <Input placeholder={field.placeholder} />
+                          )}
+                        </Form.Item>
+                      ))}
+                    </>
+                  )
+                }
+                
                 return null
               }}
             </Form.Item>
+            
+            {/* 备用方案：如果shouldUpdate不工作，直接检查editingAccount的平台 */}
+            {editingAccount && (() => {
+              const accountPlatform = platforms.find(p => p.id === editingAccount.platform_id)
+              if (!accountPlatform) return null
+              
+              const platformCode = (accountPlatform.platform_code || '').toLowerCase()
+              const platformName = (accountPlatform.platform_name || '').toLowerCase()
+              const isRewardoo = platformCode === 'rewardoo' || platformCode === 'rw' || 
+                                platformName.includes('rewardoo') || platformName.includes('rw')
+              
+              if (isRewardoo) {
+                const platformConfig = getPlatformApiConfig(accountPlatform.platform_code)
+                if (platformConfig && platformConfig.fields && platformConfig.fields.length > 0) {
+                  return (
+                    <>
+                      {platformConfig.fields.map(field => (
+                        <Form.Item
+                          key={`backup-${field.name}`}
+                          name={field.name}
+                          label={field.label}
+                          help={field.help}
+                          rules={field.required ? [{ required: true, message: `请输入${field.label}` }] : []}
+                        >
+                          {field.type === 'password' ? (
+                            <Input.Password placeholder={field.placeholder} />
+                          ) : (
+                            <Input placeholder={field.placeholder} />
+                          )}
+                        </Form.Item>
+                      ))}
+                    </>
+                  )
+                }
+              }
+              return null
+            })()}
           </Form>
         </Modal>
 
