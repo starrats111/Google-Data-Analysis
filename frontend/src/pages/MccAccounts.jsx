@@ -55,41 +55,48 @@ export default function MccAccounts() {
     try {
       // 清理空值：对于可选字段，如果为空字符串或undefined，则不发送（编辑时留空表示不修改）
       const submitData = { ...values }
+      
       if (editingMcc) {
         // 编辑时：空字符串或undefined的字段不发送，保留原值
-        if (!submitData.client_id || submitData.client_id.trim() === '') {
+        // 只有用户明确填写了值才发送
+        if (submitData.client_id === undefined || submitData.client_id === null || submitData.client_id.trim() === '') {
           delete submitData.client_id
         }
-        if (!submitData.client_secret || submitData.client_secret.trim() === '') {
+        if (submitData.client_secret === undefined || submitData.client_secret === null || submitData.client_secret.trim() === '') {
           delete submitData.client_secret
         }
-        if (!submitData.refresh_token || submitData.refresh_token.trim() === '') {
+        if (submitData.refresh_token === undefined || submitData.refresh_token === null || submitData.refresh_token.trim() === '') {
           delete submitData.refresh_token
         }
       } else {
-        // 创建时：空字符串可以发送（表示不设置）
-        if (submitData.client_id === '') {
+        // 创建时：空字符串不发送
+        if (submitData.client_id === '' || submitData.client_id === undefined || submitData.client_id === null) {
           delete submitData.client_id
         }
-        if (submitData.client_secret === '') {
+        if (submitData.client_secret === '' || submitData.client_secret === undefined || submitData.client_secret === null) {
           delete submitData.client_secret
         }
-        if (submitData.refresh_token === '') {
+        if (submitData.refresh_token === '' || submitData.refresh_token === undefined || submitData.refresh_token === null) {
           delete submitData.refresh_token
         }
       }
       
+      console.log('提交数据:', { ...submitData, client_secret: submitData.client_secret ? '***' : undefined, refresh_token: submitData.refresh_token ? '***' : undefined })
+      
       if (editingMcc) {
-        await api.put(`/api/mcc/accounts/${editingMcc.id}`, submitData)
+        const response = await api.put(`/api/mcc/accounts/${editingMcc.id}`, submitData)
         message.success('更新成功')
       } else {
-        await api.post('/api/mcc/accounts', submitData)
+        const response = await api.post('/api/mcc/accounts', submitData)
         message.success('创建成功')
       }
       setModalVisible(false)
+      form.resetFields()
       fetchMccAccounts()
     } catch (error) {
-      message.error(error.response?.data?.detail || '操作失败')
+      console.error('保存失败:', error)
+      const errorMessage = error.response?.data?.detail || error.message || '操作失败'
+      message.error(errorMessage)
     }
   }
 

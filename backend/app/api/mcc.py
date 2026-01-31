@@ -190,13 +190,16 @@ async def update_mcc_account(
         mcc_account.mcc_name = mcc_data.mcc_name
     if mcc_data.email is not None:
         mcc_account.email = mcc_data.email
-    # 对于敏感字段，只有非空字符串才更新（空字符串表示不修改）
-    if mcc_data.client_id is not None and mcc_data.client_id != '':
-        mcc_account.client_id = mcc_data.client_id
-    if mcc_data.client_secret is not None and mcc_data.client_secret != '':
-        mcc_account.client_secret = mcc_data.client_secret
-    if mcc_data.refresh_token is not None and mcc_data.refresh_token != '':
-        mcc_account.refresh_token = mcc_data.refresh_token
+    # 对于敏感字段，只有明确提供且非空字符串才更新（None或空字符串表示不修改）
+    if mcc_data.client_id is not None:
+        if mcc_data.client_id.strip() if isinstance(mcc_data.client_id, str) else mcc_data.client_id:
+            mcc_account.client_id = mcc_data.client_id
+    if mcc_data.client_secret is not None:
+        if mcc_data.client_secret.strip() if isinstance(mcc_data.client_secret, str) else mcc_data.client_secret:
+            mcc_account.client_secret = mcc_data.client_secret
+    if mcc_data.refresh_token is not None:
+        if mcc_data.refresh_token.strip() if isinstance(mcc_data.refresh_token, str) else mcc_data.refresh_token:
+            mcc_account.refresh_token = mcc_data.refresh_token
     if mcc_data.is_active is not None:
         mcc_account.is_active = mcc_data.is_active
     
