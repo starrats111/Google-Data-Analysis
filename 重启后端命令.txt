@@ -1,0 +1,66 @@
+# ============================================
+# 一键重启后端服务（解决CORS问题）
+# ============================================
+
+# 方法一：使用现有脚本（推荐，最简单）
+cd ~/Google-Data-Analysis/backend && bash scripts/restart_backend.sh
+
+# ============================================
+# 方法二：手动重启（如果脚本不工作）
+# ============================================
+
+# 1. 停止现有服务
+pkill -f "uvicorn app.main:app"
+
+# 2. 等待2秒
+sleep 2
+
+# 3. 确保在正确目录并激活虚拟环境
+cd ~/Google-Data-Analysis/backend
+source venv/bin/activate
+
+# 4. 启动服务（后台运行）
+nohup uvicorn app.main:app --host 0.0.0.0 --port 8000 > run.log 2>&1 &
+
+# 5. 等待3秒让服务启动
+sleep 3
+
+# 6. 检查服务是否启动成功
+curl -s http://127.0.0.1:8000/health && echo "✓ 后端服务启动成功！" || echo "✗ 后端服务启动失败，查看日志：tail -n 50 run.log"
+
+# ============================================
+# 验证CORS配置是否生效
+# ============================================
+
+# 测试CORS预检请求（OPTIONS）
+curl -X OPTIONS https://api.google-data-analysis.top/api/auth/login \
+  -H "Origin: https://google-data-analysis.top" \
+  -H "Access-Control-Request-Method: POST" \
+  -H "Access-Control-Request-Headers: Content-Type" \
+  -v 2>&1 | grep -i "access-control"
+
+# 如果看到 Access-Control-Allow-Origin 就说明CORS配置成功了
+
+# ============================================
+# 查看后端日志（如果遇到问题）
+# ============================================
+
+# 查看实时日志
+tail -f ~/Google-Data-Analysis/backend/run.log
+
+# 查看最近50行日志
+tail -n 50 ~/Google-Data-Analysis/backend/run.log
+
+# ============================================
+# 检查服务状态
+# ============================================
+
+# 检查进程是否运行
+ps aux | grep uvicorn | grep -v grep
+
+# 检查端口是否监听
+netstat -tlnp | grep 8000 || ss -tlnp | grep 8000
+
+# 测试健康检查接口
+curl http://127.0.0.1:8000/health
+

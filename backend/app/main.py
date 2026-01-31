@@ -33,10 +33,10 @@ from app.api import (
 app = FastAPI(title="Google Analysis Platform API")
 
 # CORS配置 - 必须在所有路由之前添加
-# 使用最宽松的配置确保所有请求都能通过
+# 配置允许跨域请求，解决前端Cloudflare部署访问后端阿里云API的CORS问题
 app.add_middleware(
     CORSMiddleware,
-    # 明确列出所有允许的来源
+    # 明确列出所有允许的来源（包括前端域名）
     allow_origins=[
         "https://google-data-analysis.top",
         "https://www.google-data-analysis.top",
@@ -49,13 +49,13 @@ app.add_middleware(
         "http://localhost:8000",
         "http://127.0.0.1:8000",
     ],
-    # 正则表达式匹配所有子域名
+    # 正则表达式匹配所有google-data-analysis相关域名和本地开发环境
     allow_origin_regex=r"^(https://([a-z0-9-]+\.)?google-data-analysis\.(pages\.dev|top)|https://www\.google-data-analysis\.top|https://api\.google-data-analysis\.top|https?://(localhost|127\.0\.0\.1)(:\d+)?)$",
     allow_credentials=True,
-    allow_methods=["*"],  # 允许所有HTTP方法
+    allow_methods=["*"],  # 允许所有HTTP方法（GET, POST, PUT, DELETE, OPTIONS, PATCH等）
     allow_headers=["*"],  # 允许所有请求头
     expose_headers=["*"],  # 暴露所有响应头
-    max_age=3600,
+    max_age=3600,  # 预检请求缓存时间（秒）
 )
 
 # API routes
