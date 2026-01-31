@@ -110,6 +110,7 @@ async def create_mcc_account(
 
 
 @router.get("/accounts", response_model=List[MccAccountResponse])
+@router.get("/accounts/", response_model=List[MccAccountResponse])  # 兼容带斜杠的URL
 async def get_mcc_accounts(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)

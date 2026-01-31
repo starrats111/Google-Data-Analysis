@@ -26,33 +26,34 @@ const api = axios.create({
   },
 })
 
-// 请求拦截器：添加Token
+// 请求拦截器：添加Token和URL修复
 api.interceptors.request.use((config) => {
   const token = localStorage.getItem('token')
   if (token) {
     config.headers.Authorization = `Bearer ${token}`
   }
-  // 调试：记录请求URL的详细信息
-  const fullUrl = config.baseURL + config.url
-  console.log('[API Request]', {
-    method: config.method?.toUpperCase(),
-    url: config.url,
-    baseURL: config.baseURL,
-    fullURL: fullUrl,
-    headers: config.headers,
-    // 检查URL是否被修改
-    urlType: typeof config.url,
-    urlLength: config.url?.length
-  })
   
-  // 确保URL格式正确
-  if (config.url && config.url.includes('mcc-accounts')) {
-    console.error('[URL ERROR] 检测到错误的URL格式:', config.url)
-    console.error('[URL ERROR] 应该使用 /api/mcc/accounts 而不是', config.url)
-    // 尝试修复URL
-    config.url = config.url.replace(/mcc-accounts:?\d*/, 'mcc/accounts')
-    console.log('[URL FIX] 已修复URL为:', config.url)
+  // 强制修复错误的URL格式（处理缓存导致的错误URL）
+  if (config.url) {
+    // 修复 mcc-accounts:1 或 mcc-accounts 为 mcc/accounts
+    if (config.url.includes('mcc-accounts')) {
+      const originalUrl = config.url
+      config.url = config.url.replace(/\/api\/mcc-accounts:?\d*/g, '/api/mcc/accounts')
+      config.url = config.url.replace(/mcc-accounts:?\d*/g, 'mcc/accounts')
+      if (originalUrl !== config.url) {
+        console.warn('[URL修复]', originalUrl, '→', config.url)
+      }
+    }
+    
+    // 确保URL以 / 开头
+    if (!config.url.startsWith('/')) {
+      config.url = '/' + config.url
+    }
   }
+  
+  // 调试：记录最终请求URL
+  const fullUrl = (config.baseURL || '') + config.url
+  console.log('[API请求]', config.method?.toUpperCase(), config.url, '→', fullUrl)
   
   return config
 })
