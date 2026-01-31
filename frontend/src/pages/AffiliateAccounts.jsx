@@ -4,7 +4,7 @@ import { PlusOutlined, EditOutlined, DeleteOutlined, SyncOutlined } from '@ant-d
 import dayjs from 'dayjs'
 import api from '../services/api'
 import { useAuth } from '../store/authStore'
-import { getPlatformApiConfig, extractApiConfigFromNotes, mergeApiConfigToNotes } from '../config/platformApiConfig'
+import { getPlatformApiConfig, extractApiConfigFromNotes, mergeApiConfigToNotes, PLATFORM_API_CONFIG } from '../config/platformApiConfig'
 
 const { Option } = Select
 const { RangePicker } = DatePicker
@@ -776,23 +776,34 @@ const AffiliateAccounts = () => {
               {({ getFieldValue }) => {
                 const selectedPlatformId = getFieldValue('platform_id')
                 const selectedPlatform = platforms.find(p => p.id === selectedPlatformId)
-                const platformConfig = getPlatformApiConfig(selectedPlatform?.platform_code)
+                if (!selectedPlatform) return null
                 
-                return platformConfig.fields.map(field => (
-                  <Form.Item
-                    key={field.name}
-                    name={field.name}
-                    label={field.label}
-                    help={field.help}
-                    rules={field.required ? [{ required: true, message: `请输入${field.label}` }] : []}
-                  >
-                    {field.type === 'password' ? (
-                      <Input.Password placeholder={field.placeholder} />
-                    ) : (
-                      <Input placeholder={field.placeholder} />
-                    )}
-                  </Form.Item>
-                ))
+                const platformConfig = getPlatformApiConfig(selectedPlatform.platform_code)
+                
+                // 检查是否是特定平台的配置（不是默认配置）
+                const platformCode = (selectedPlatform.platform_code || '').toLowerCase()
+                const hasSpecificConfig = PLATFORM_API_CONFIG[platformCode] && 
+                                        PLATFORM_API_CONFIG[platformCode] !== PLATFORM_API_CONFIG.default
+                
+                // 如果平台有特定配置，显示字段
+                if (hasSpecificConfig && platformConfig.fields && platformConfig.fields.length > 0) {
+                  return platformConfig.fields.map(field => (
+                    <Form.Item
+                      key={field.name}
+                      name={field.name}
+                      label={field.label}
+                      help={field.help}
+                      rules={field.required ? [{ required: true, message: `请输入${field.label}` }] : []}
+                    >
+                      {field.type === 'password' ? (
+                        <Input.Password placeholder={field.placeholder} />
+                      ) : (
+                        <Input placeholder={field.placeholder} />
+                      )}
+                    </Form.Item>
+                  ))
+                }
+                return null
               }}
             </Form.Item>
           </Form>
