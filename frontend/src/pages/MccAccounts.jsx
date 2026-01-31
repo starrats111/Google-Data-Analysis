@@ -184,10 +184,38 @@ export default function MccAccounts() {
         begin_date: beginDateStr,
         end_date: endDateStr
       })
-      message.success(response.data.message || '同步成功')
+      
+      const data = response.data
+      
+      // 显示详细的结果信息
+      if (data.errors && data.errors.length > 0) {
+        // 如果有错误，显示错误详情
+        const errorCount = data.errors.length
+        const errorPreview = data.errors.slice(0, 3).join('; ')
+        const errorMsg = errorCount > 3 
+          ? `同步完成，成功保存 ${data.saved_count || 0} 条记录，${errorCount} 个日期同步失败。失败详情：${errorPreview}...`
+          : `同步完成，成功保存 ${data.saved_count || 0} 条记录，部分日期同步失败：${errorPreview}`
+        
+        if (data.saved_count > 0) {
+          message.warning(errorMsg, 8) // 显示8秒
+        } else {
+          message.error(errorMsg, 10) // 显示10秒
+        }
+        
+        // 在控制台输出完整错误信息
+        console.error('同步错误详情:', data.errors)
+      } else if (data.saved_count === 0) {
+        // 没有保存任何数据，可能是没有数据或配置问题
+        message.warning('同步完成，但没有保存任何数据。可能原因：1) 该日期范围内没有广告系列数据 2) MCC下没有客户账号 3) API配置不正确', 8)
+      } else {
+        message.success(data.message || `同步成功，保存了 ${data.saved_count} 条记录`)
+      }
+      
       fetchMccAccounts()
     } catch (error) {
-      message.error(error.response?.data?.detail || '同步失败')
+      console.error('同步失败:', error)
+      const errorDetail = error.response?.data?.detail || error.message || '同步失败'
+      message.error(`同步失败: ${errorDetail}`, 8)
     } finally {
       setSyncLoading({ ...syncLoading, [mccId]: false })
     }
