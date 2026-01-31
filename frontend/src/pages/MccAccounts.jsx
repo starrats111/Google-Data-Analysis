@@ -40,11 +40,11 @@ export default function MccAccounts() {
 
   const handleEdit = (mcc) => {
     setEditingMcc(mcc)
-    // 保存原始API配置值，用于判断是否需要更新
+    // 保存原始API配置值（保留null/undefined，用于判断是否需要更新）
     setOriginalApiValues({
-      client_id: mcc.client_id || '',
-      client_secret: mcc.client_secret || '',
-      refresh_token: mcc.refresh_token || ''
+      client_id: mcc.client_id,
+      client_secret: mcc.client_secret,
+      refresh_token: mcc.refresh_token
     })
     form.setFieldsValue({
       mcc_id: mcc.mcc_id,
@@ -67,19 +67,20 @@ export default function MccAccounts() {
       if (editingMcc) {
         // 编辑时：只有用户明确填写了新值（且与原始值不同）才发送
         // 空字符串、undefined、null、或与原始值相同的字段不发送，保留原值
-        if (submitData.client_id === undefined || submitData.client_id === null || 
-            (typeof submitData.client_id === 'string' && submitData.client_id.trim() === '') ||
-            submitData.client_id === originalApiValues.client_id) {
+        const hasClientId = submitData.client_id !== undefined && submitData.client_id !== null && 
+                           typeof submitData.client_id === 'string' && submitData.client_id.trim() !== ''
+        const hasClientSecret = submitData.client_secret !== undefined && submitData.client_secret !== null && 
+                               typeof submitData.client_secret === 'string' && submitData.client_secret.trim() !== ''
+        const hasRefreshToken = submitData.refresh_token !== undefined && submitData.refresh_token !== null && 
+                               typeof submitData.refresh_token === 'string' && submitData.refresh_token.trim() !== ''
+        
+        if (!hasClientId || submitData.client_id === originalApiValues.client_id) {
           delete submitData.client_id
         }
-        if (submitData.client_secret === undefined || submitData.client_secret === null || 
-            (typeof submitData.client_secret === 'string' && submitData.client_secret.trim() === '') ||
-            submitData.client_secret === originalApiValues.client_secret) {
+        if (!hasClientSecret || submitData.client_secret === originalApiValues.client_secret) {
           delete submitData.client_secret
         }
-        if (submitData.refresh_token === undefined || submitData.refresh_token === null || 
-            (typeof submitData.refresh_token === 'string' && submitData.refresh_token.trim() === '') ||
-            submitData.refresh_token === originalApiValues.refresh_token) {
+        if (!hasRefreshToken || submitData.refresh_token === originalApiValues.refresh_token) {
           delete submitData.refresh_token
         }
       } else {
