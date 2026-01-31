@@ -2,6 +2,7 @@
 MCC管理API
 用于管理Google MCC账号和数据聚合
 """
+import logging
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from typing import Optional, List
@@ -15,6 +16,7 @@ from app.models.google_ads_api_data import GoogleMccAccount, GoogleAdsApiData
 from app.models.platform_data import PlatformData
 from app.models.affiliate_account import AffiliateAccount
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/mcc", tags=["mcc"])
 
 
@@ -147,15 +149,12 @@ async def get_mcc_accounts(
                 })
             except Exception as e:
                 # 如果单个MCC处理失败，记录错误但继续处理其他MCC
-                import logging
-                logger = logging.getLogger(__name__)
-                logger.error(f"处理MCC账号 {mcc.id} 时出错: {str(e)}")
+                logger.error(f"处理MCC账号 {mcc.id} 时出错: {str(e)}", exc_info=True)
                 continue
         
+        logger.info(f"成功获取 {len(result)} 个MCC账号")
         return result
     except Exception as e:
-        import logging
-        logger = logging.getLogger(__name__)
         logger.error(f"获取MCC账号列表失败: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"获取MCC账号列表失败: {str(e)}")
 
