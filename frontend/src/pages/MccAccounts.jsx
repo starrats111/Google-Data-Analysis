@@ -126,10 +126,17 @@ export default function MccAccounts() {
     }
   }
 
-  const handleDelete = async (id) => {
+  const handleDelete = async (id, record) => {
     try {
-      await api.delete(`/api/mcc/accounts/${id}`)
-      message.success('删除成功')
+      const response = await api.delete(`/api/mcc/accounts/${id}`)
+      const deletedCount = response.data?.deleted_data_count || 0
+      const mccName = response.data?.mcc_name || record?.mcc_name || 'MCC账号'
+      
+      if (deletedCount > 0) {
+        message.success(`已删除MCC账号"${mccName}"，同时删除了 ${deletedCount} 条关联的Google Ads数据`)
+      } else {
+        message.success(`已删除MCC账号"${mccName}"`)
+      }
       fetchMccAccounts()
     } catch (error) {
       message.error(error.response?.data?.detail || '删除失败')
@@ -208,10 +215,20 @@ export default function MccAccounts() {
             编辑
           </Button>
           <Popconfirm
-            title="确定要删除这个MCC账号吗？"
-            onConfirm={() => handleDelete(record.id)}
-            okText="确定"
+            title={
+              <div>
+                <div style={{ marginBottom: 8 }}>确定要删除这个MCC账号吗？</div>
+                <div style={{ fontSize: '12px', color: '#ff4d4f' }}>
+                  {record.data_count > 0 && (
+                    <span>⚠️ 删除后将同时删除 {record.data_count} 条关联的Google Ads数据，此操作不可恢复！</span>
+                  )}
+                </div>
+              </div>
+            }
+            onConfirm={() => handleDelete(record.id, record)}
+            okText="确定删除"
             cancelText="取消"
+            okButtonProps={{ danger: true }}
           >
             <Button
               type="link"

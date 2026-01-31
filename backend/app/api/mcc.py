@@ -269,7 +269,13 @@ async def delete_mcc_account(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """删除MCC账号"""
+    """
+    删除MCC账号
+    
+    注意：删除MCC账号会同时删除所有关联的Google Ads数据（由于外键CASCADE约束）
+    """
+    from app.models.google_ads_api_data import GoogleAdsApiData
+    
     mcc_account = db.query(GoogleMccAccount).filter(
         GoogleMccAccount.id == mcc_id,
         GoogleMccAccount.user_id == current_user.id
@@ -278,10 +284,21 @@ async def delete_mcc_account(
     if not mcc_account:
         raise HTTPException(status_code=404, detail="MCC账号不存在")
     
+    # 统计关联的Google Ads数据条数
+    data_count = db.query(GoogleAdsApiData).filter(
+        GoogleAdsApiData.mcc_id == mcc_id
+    ).count()
+    
+    # 删除MCC账号（由于外键CASCADE，关联的GoogleAdsApiData会自动删除）
     db.delete(mcc_account)
     db.commit()
     
-    return {"message": "MCC账号已删除"}
+    return {
+        "message": f"MCC账号已删除",
+        "deleted_data_count": data_count,
+        "mcc_name": mcc_account.mcc_name,
+        "mcc_id": mcc_account.mcc_id
+    }
 
 
 @router.post("/accounts/{mcc_id}/sync")
