@@ -146,6 +146,10 @@ class PlatformDataSyncService:
             api_config = ApiConfigService.get_account_api_config(account)
             api_base_url = api_config.get("base_url")
             
+            # 如果base_url是空字符串，转换为None，让CollabGlowService使用默认值
+            if api_base_url == "":
+                api_base_url = None
+            
             if api_base_url:
                 logger.info(f"[CG同步] 使用API配置: base_url={api_base_url}")
             else:
@@ -292,6 +296,10 @@ class PlatformDataSyncService:
             from app.services.api_config_service import ApiConfigService
             api_config = ApiConfigService.get_account_api_config(account)
             api_base_url = api_config.get("base_url")
+            
+            # 如果base_url是空字符串，转换为None，让RewardooService使用默认值
+            if api_base_url == "":
+                api_base_url = None
             
             if api_base_url:
                 logger.info(f"[RW同步] 使用API配置: base_url={api_base_url}")

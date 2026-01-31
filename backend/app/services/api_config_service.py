@@ -182,7 +182,12 @@ class ApiConfigService:
                 logger.warning(f"解析账号 {account.id} 的备注配置失败: {e}")
         
         # 合并配置（自定义配置覆盖默认配置）
+        # 但是，如果custom_config中的base_url是空字符串或None，应该使用默认值
         merged_config = {**default_config, **custom_config}
+        
+        # 如果合并后的base_url是空字符串或None，使用默认值
+        if not merged_config.get("base_url") and default_config.get("base_url"):
+            merged_config["base_url"] = default_config["base_url"]
         
         return merged_config
     
@@ -241,7 +246,16 @@ class ApiConfigService:
         
         # 获取当前使用的API配置
         config = ApiConfigService.get_account_api_config(account)
-        current_base_url = config.get("base_url", "未配置")
+        current_base_url = config.get("base_url")
+        
+        # 如果base_url是空字符串或None，显示默认配置或"未配置"
+        if not current_base_url:
+            # 尝试获取默认配置
+            platform_code = account.platform.platform_code if account.platform else None
+            default_config = ApiConfigService.get_platform_config(platform_code)
+            current_base_url = default_config.get("base_url", "未配置")
+        else:
+            current_base_url = str(current_base_url)
         
         # 构建友好的错误消息
         if "404" in error_str or "not found" in error_str.lower():

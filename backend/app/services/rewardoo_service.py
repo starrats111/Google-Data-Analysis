@@ -44,10 +44,11 @@ class RewardooService(PlatformServiceBase):
         Args:
             token: Rewardoo API token
             base_url: 自定义API基础URL（可选，用于支持不同渠道）
-                     如果未提供，使用默认的BASE_URL
+                     如果未提供或为空字符串，使用默认的BASE_URL
         """
         self.token = token
-        self.base_url = base_url or BASE_URL
+        # 如果base_url是None或空字符串，使用默认值
+        self.base_url = (base_url.strip() if base_url and base_url.strip() else None) or BASE_URL
         # 根据base_url构建API端点
         self.transaction_details_api = f"{self.base_url}/transaction_details"
         self.commission_details_api = f"{self.base_url}/commission_details"
