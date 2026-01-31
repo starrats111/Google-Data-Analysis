@@ -125,9 +125,18 @@ class PlatformDataSyncService:
             result = service.sync_commissions(begin_date, end_date)
             
             commissions = result.get("data", {}).get("list", [])
+            logger.info(f"CollabGlow API返回 {len(commissions)} 条佣金记录")
+            
+            if not commissions:
+                return {
+                    "success": True,
+                    "message": f"同步完成，但该日期范围（{begin_date} ~ {end_date}）内没有佣金数据",
+                    "saved_count": 0
+                }
             
             # 保存到数据库
             saved_count = 0
+            skipped_count = 0
             for comm in commissions:
                 settlement_date = comm.get("settlement_date")
                 if not settlement_date:
