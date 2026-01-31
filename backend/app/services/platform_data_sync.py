@@ -268,6 +268,13 @@ class PlatformDataSyncService:
             
             logger.info("[RW同步] 使用TransactionDetails API（核心API：订单数+佣金+拒付）")
             result = service.sync_transactions(begin_date, end_date)
+            
+            # 确保result是字典类型
+            if not isinstance(result, dict):
+                error_msg = f"[RW同步] sync_transactions返回格式错误: 期望字典，但得到 {type(result).__name__}: {result}"
+                logger.error(error_msg)
+                return {"success": False, "message": error_msg}
+            
             transactions_raw = service.extract_transaction_data(result)
             logger.info(f"[RW同步] TransactionDetails API返回 {len(transactions_raw)} 笔交易（订单）")
             print(f"[RW同步] TransactionDetails API返回 {len(transactions_raw)} 笔交易（订单）")

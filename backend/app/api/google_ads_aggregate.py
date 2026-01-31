@@ -92,6 +92,7 @@ def get_date_range_from_type(date_range_type: str) -> tuple[date, date, str]:
         raise HTTPException(status_code=400, detail=f"不支持的日期范围类型: {date_range_type}")
 
 
+@router.get("", response_model=DateRangeAggregateResponse)
 @router.get("/", response_model=DateRangeAggregateResponse)
 async def get_date_range_aggregate(
     date_range_type: str = Query(..., description="日期范围类型: past7days, thisWeek, thisMonth, today, yesterday, custom"),

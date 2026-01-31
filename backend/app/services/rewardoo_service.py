@@ -100,6 +100,12 @@ class RewardooService(PlatformServiceBase):
             
             result = response.json()
             
+            # 确保result是字典类型
+            if not isinstance(result, dict):
+                error_msg = f"[RW TransactionDetails API] 返回格式错误: 期望字典，但得到 {type(result).__name__}: {result}"
+                logger.error(error_msg)
+                raise Exception(error_msg)
+            
             # 根据实际API响应格式调整
             # 假设响应格式: {"code": 0, "data": {"transactions": [...]}}
             code = result.get("code") or result.get("status_code")
