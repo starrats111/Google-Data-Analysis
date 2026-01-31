@@ -31,6 +31,14 @@ export default function GoogleAdsData() {
     
     const today = dayjs()
     switch(type) {
+      case 'today':
+        beginDate = today
+        endDate = today
+        break
+      case 'yesterday':
+        beginDate = today.subtract(1, 'day')
+        endDate = today.subtract(1, 'day')
+        break
       case 'past7days':
         beginDate = today.subtract(7, 'day')
         endDate = today
@@ -54,6 +62,14 @@ export default function GoogleAdsData() {
     form.setFieldsValue({
       dateRange: [beginDate, endDate]
     })
+    
+    // 自动触发查询（除了自定义）
+    if (type !== 'custom') {
+      // 延迟一下确保表单值已更新
+      setTimeout(() => {
+        form.submit()
+      }, 100)
+    }
   }
 
   const fetchMccAccounts = async () => {
@@ -87,25 +103,56 @@ export default function GoogleAdsData() {
         params.platform_code = values.platform_code
       }
       
+      // 获取日期范围：优先使用表单值，如果没有则使用当前选择的时间范围类型
+      let beginDate, endDate
       if (values.dateRange && values.dateRange.length === 2) {
-        params.begin_date = values.dateRange[0].format('YYYY-MM-DD')
-        params.end_date = values.dateRange[1].format('YYYY-MM-DD')
+        beginDate = values.dateRange[0]
+        endDate = values.dateRange[1]
       } else {
-        message.warning('请选择日期范围')
-        setLoading(false)
-        return
+        // 如果表单中没有日期范围，根据当前选择的时间范围类型计算
+        const today = dayjs()
+        switch(dateRangeType) {
+          case 'today':
+            beginDate = today
+            endDate = today
+            break
+          case 'yesterday':
+            beginDate = today.subtract(1, 'day')
+            endDate = today.subtract(1, 'day')
+            break
+          case 'past7days':
+            beginDate = today.subtract(7, 'day')
+            endDate = today
+            break
+          case 'thisWeek':
+            beginDate = today.startOf('week')
+            endDate = today
+            break
+          case 'thisMonth':
+            beginDate = today.startOf('month')
+            endDate = today
+            break
+          default:
+            message.warning('请选择日期范围')
+            setLoading(false)
+            return
+        }
       }
+      
+      params.begin_date = beginDate.format('YYYY-MM-DD')
+      params.end_date = endDate.format('YYYY-MM-DD')
       
       // 获取聚合数据（总数据）
       const response = await api.get('/api/google-ads-data/summary', { params })
       setSummaryData(response.data)
       
-      if (response.data) {
+      if (response.data && (response.data.total_cost > 0 || response.data.total_impressions > 0 || response.data.total_clicks > 0)) {
         message.success('查询成功')
       } else {
         message.info('未找到数据')
       }
     } catch (error) {
+      console.error('查询失败:', error)
       message.error(error.response?.data?.detail || '查询失败')
       setSummaryData(null)
     } finally {
@@ -134,6 +181,8 @@ export default function GoogleAdsData() {
                   onChange={(e) => handleDateRangeChange(e.target.value)}
                   buttonStyle="solid"
                 >
+                  <Radio.Button value="today">今天</Radio.Button>
+                  <Radio.Button value="yesterday">昨天</Radio.Button>
                   <Radio.Button value="past7days">过去七天</Radio.Button>
                   <Radio.Button value="thisWeek">本周</Radio.Button>
                   <Radio.Button value="thisMonth">本月</Radio.Button>
