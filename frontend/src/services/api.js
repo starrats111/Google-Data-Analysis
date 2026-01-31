@@ -32,6 +32,8 @@ api.interceptors.request.use((config) => {
   if (token) {
     config.headers.Authorization = `Bearer ${token}`
   }
+  // 调试：记录请求URL
+  console.log('[API Request]', config.method?.toUpperCase(), config.url, 'Full URL:', config.baseURL + config.url)
   return config
 })
 
