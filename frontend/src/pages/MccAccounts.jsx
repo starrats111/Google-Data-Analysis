@@ -132,9 +132,20 @@ export default function MccAccounts() {
   }
 
   const handleSync = async (mccId) => {
+    // 获取当前日期范围（默认最近7天）
+    const endDate = new Date()
+    const beginDate = new Date()
+    beginDate.setDate(endDate.getDate() - 7)
+    
+    const beginDateStr = beginDate.toISOString().split('T')[0]
+    const endDateStr = endDate.toISOString().split('T')[0]
+    
     setSyncLoading({ ...syncLoading, [mccId]: true })
     try {
-      const response = await api.post(`/api/mcc/accounts/${mccId}/sync`)
+      const response = await api.post(`/api/mcc/accounts/${mccId}/sync`, {
+        begin_date: beginDateStr,
+        end_date: endDateStr
+      })
       message.success(response.data.message || '同步成功')
       fetchMccAccounts()
     } catch (error) {

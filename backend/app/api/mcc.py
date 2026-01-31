@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from typing import Optional, List
 from pydantic import BaseModel
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 from app.database import get_db
 from app.middleware.auth import get_current_user
@@ -287,11 +287,16 @@ async def delete_mcc_account(
 @router.post("/accounts/{mcc_id}/sync")
 async def sync_mcc_data(
     mcc_id: int,
-    target_date: Optional[str] = None,
+    request_data: Optional[dict] = None,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """手动同步MCC数据"""
+    """手动同步MCC数据
+    
+    支持两种方式：
+    1. 单个日期：target_date (YYYY-MM-DD)
+    2. 日期范围：begin_date 和 end_date (YYYY-MM-DD)
+    """
     from app.services.google_ads_api_sync import GoogleAdsApiSyncService
     
     mcc_account = db.query(GoogleMccAccount).filter(
@@ -302,20 +307,76 @@ async def sync_mcc_data(
     if not mcc_account:
         raise HTTPException(status_code=404, detail="MCC账号不存在")
     
-    sync_date = None
-    if target_date:
+    # 解析请求数据
+    if request_data is None:
+        request_data = {}
+    
+    target_date = request_data.get("target_date")
+    begin_date = request_data.get("begin_date")
+    end_date = request_data.get("end_date")
+    
+    sync_service = GoogleAdsApiSyncService(db)
+    
+    # 如果提供了日期范围，同步范围内的所有日期
+    if begin_date and end_date:
+        try:
+            begin = datetime.strptime(begin_date, "%Y-%m-%d").date()
+            end = datetime.strptime(end_date, "%Y-%m-%d").date()
+            
+            if begin > end:
+                raise HTTPException(status_code=400, detail="开始日期不能晚于结束日期")
+            
+            # 同步日期范围内的每一天
+            total_saved = 0
+            current_date = begin
+            errors = []
+            
+            while current_date <= end:
+                result = sync_service.sync_mcc_data(mcc_id, current_date)
+                if result.get("success"):
+                    total_saved += result.get("saved_count", 0)
+                else:
+                    errors.append(f"{current_date.isoformat()}: {result.get('message', '同步失败')}")
+                current_date += timedelta(days=1)
+            
+            if errors:
+                return {
+                    "success": True,
+                    "message": f"同步完成，成功保存 {total_saved} 条记录，部分日期同步失败",
+                    "saved_count": total_saved,
+                    "errors": errors
+                }
+            
+            return {
+                "success": True,
+                "message": f"成功同步 {total_saved} 条广告系列数据",
+                "saved_count": total_saved
+            }
+        except ValueError:
+            raise HTTPException(status_code=400, detail="日期格式错误，应为 YYYY-MM-DD")
+    
+    # 如果提供了单个日期，同步该日期
+    elif target_date:
         try:
             sync_date = datetime.strptime(target_date, "%Y-%m-%d").date()
         except ValueError:
             raise HTTPException(status_code=400, detail="日期格式错误，应为 YYYY-MM-DD")
+        
+        result = sync_service.sync_mcc_data(mcc_id, sync_date)
+        
+        if not result.get("success"):
+            raise HTTPException(status_code=500, detail=result.get("message", "同步失败"))
+        
+        return result
     
-    sync_service = GoogleAdsApiSyncService(db)
-    result = sync_service.sync_mcc_data(mcc_id, sync_date)
-    
-    if not result.get("success"):
-        raise HTTPException(status_code=500, detail=result.get("message", "同步失败"))
-    
-    return result
+    # 如果没有提供日期，默认同步昨天
+    else:
+        result = sync_service.sync_mcc_data(mcc_id, None)
+        
+        if not result.get("success"):
+            raise HTTPException(status_code=500, detail=result.get("message", "同步失败"))
+        
+        return result
 
 
 @router.get("/aggregate")
