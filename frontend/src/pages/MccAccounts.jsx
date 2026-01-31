@@ -58,15 +58,19 @@ export default function MccAccounts() {
       const submitData = { ...values }
       
       if (editingMcc) {
-        // 编辑时：空字符串或undefined的字段不发送，保留原值
-        // 只有用户明确填写了值才发送
-        if (submitData.client_id === undefined || submitData.client_id === null || submitData.client_id.trim() === '') {
+        // 编辑时：空字符串、undefined、或占位符的字段不发送，保留原值
+        // 只有用户明确填写了新值才发送
+        const PLACEHOLDER = '••••••••••••••••'
+        if (submitData.client_id === undefined || submitData.client_id === null || 
+            submitData.client_id.trim() === '' || submitData.client_id === PLACEHOLDER) {
           delete submitData.client_id
         }
-        if (submitData.client_secret === undefined || submitData.client_secret === null || submitData.client_secret.trim() === '') {
+        if (submitData.client_secret === undefined || submitData.client_secret === null || 
+            submitData.client_secret.trim() === '' || submitData.client_secret === PLACEHOLDER) {
           delete submitData.client_secret
         }
-        if (submitData.refresh_token === undefined || submitData.refresh_token === null || submitData.refresh_token.trim() === '') {
+        if (submitData.refresh_token === undefined || submitData.refresh_token === null || 
+            submitData.refresh_token.trim() === '' || submitData.refresh_token === PLACEHOLDER) {
           delete submitData.refresh_token
         }
       } else {
