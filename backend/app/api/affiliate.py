@@ -323,8 +323,14 @@ async def sync_account_data(
         db.commit()
     
     # 调用同步服务（传递token参数，即使已经保存到备注中，也优先使用传入的token）
+    import logging
+    logger = logging.getLogger(__name__)
+    
+    logger.info(f"开始同步账号 {account_id} 的数据，日期范围: {begin_date} ~ {end_date}")
     sync_service = PlatformDataSyncService(db)
     result = sync_service.sync_account_data(account_id, begin_date, end_date, token=token)
+    
+    logger.info(f"同步结果: success={result.get('success')}, message={result.get('message')}, saved_count={result.get('saved_count', 0)}")
     
     if not result.get("success"):
         raise HTTPException(status_code=500, detail=result.get("message", "同步失败"))
