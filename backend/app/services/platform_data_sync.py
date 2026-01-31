@@ -238,7 +238,11 @@ class PlatformDataSyncService:
             logger.error(f"同步CollabGlow数据失败: {e}")
             # 使用ApiConfigService格式化友好的错误消息
             from app.services.api_config_service import ApiConfigService
-            error_message = ApiConfigService.format_error_message(e, account, "Commission Validation API")
+            # 根据错误类型选择API名称
+            api_name = "Commission Validation API"
+            if "Transaction API" in str(e):
+                api_name = "Transaction API"
+            error_message = ApiConfigService.format_error_message(e, account, api_name)
             return {"success": False, "message": f"同步失败: {error_message}"}
     
     def _sync_rewardoo_data(

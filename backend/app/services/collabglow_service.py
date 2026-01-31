@@ -39,17 +39,32 @@ class CollabGlowService(PlatformServiceBase):
     - get_commission_details(): 获取单笔订单佣金明细
     - get_commission_data(): 验证佣金是否有效、是否通过（仅状态）
     - get_payment_summary(): 获取汇总到账金额（付款数据）
+    
+    支持多渠道：
+    - 每个账号可以配置不同的API端点（通过base_url参数）
+    - 如果未提供base_url，使用默认的BASE_URL
     """
     
-    def __init__(self, token: str):
+    def __init__(self, token: str, base_url: Optional[str] = None):
         """
         初始化服务
         
         Args:
             token: CollabGlow API token
+            base_url: 自定义API基础URL（可选，用于支持不同渠道）
+                     如果未提供，使用默认的BASE_URL
         """
         self.token = token
         self.source = SOURCE
+        self.base_url = base_url or BASE_URL
+        # 根据base_url构建API端点
+        self.transaction_api_v3 = f"{self.base_url}/transaction/v3"
+        self.transaction_api = f"{self.base_url}/transaction"
+        self.commission_validation_api = f"{self.base_url}/commission_validation"
+        self.commission_details_api = f"{self.base_url}/commission_details"
+        self.payment_summary_api = f"{self.base_url}/payment_summary"
+        
+        logger.info(f"[CG Service] 初始化，base_url={self.base_url}")
     
     def get_transactions(
         self,
@@ -74,7 +89,7 @@ class CollabGlowService(PlatformServiceBase):
         Returns:
             API 响应数据，包含 transactions 列表
         """
-        api_url = TRANSACTION_API_V3 if use_v3 else TRANSACTION_API
+        api_url = self.transaction_api_v3 if use_v3 else self.transaction_api
         headers = {
             "Content-Type": "application/json"
         }
@@ -259,7 +274,7 @@ class CollabGlowService(PlatformServiceBase):
         }
         
         try:
-            logger.info(f"[Commission Validation API] 请求佣金验证: {begin_date} ~ {end_date}")
+            logger.info(f"[Commission Validation API] 请求佣金验证: {begin_date} ~ {end_date}, URL={self.commission_validation_api}")
             # 增加超时时间到60秒，并添加重试机制
             max_retries = 3
             retry_delay = 2  # 重试间隔（秒）
@@ -267,7 +282,7 @@ class CollabGlowService(PlatformServiceBase):
             for attempt in range(max_retries):
                 try:
                     response = requests.post(
-                        COMMISSION_VALIDATION_API,
+                        self.commission_validation_api,
                         headers=headers,
                         json=payload,
                         timeout=60  # 增加到60秒
@@ -359,10 +374,10 @@ class CollabGlowService(PlatformServiceBase):
         }
         
         try:
-            logger.info(f"[Payment Summary API] 请求付款汇总: {begin_date} ~ {end_date}")
+            logger.info(f"[Payment Summary API] 请求付款汇总: {begin_date} ~ {end_date}, URL={self.payment_summary_api}")
             # 增加超时时间到60秒
             response = requests.post(
-                PAYMENT_SUMMARY_API,
+                self.payment_summary_api,
                 headers=headers,
                 json=payload,
                 timeout=60

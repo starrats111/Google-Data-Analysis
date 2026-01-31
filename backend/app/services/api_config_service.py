@@ -125,10 +125,11 @@ class ApiConfigService:
                 
                 elif platform_code_lower in ["collabglow", "cg"]:
                     # CollabGlow配置
-                    if notes_data.get("collabglow_api_url") or notes_data.get("cg_api_url"):
+                    if notes_data.get("collabglow_api_url") or notes_data.get("cg_api_url") or notes_data.get("api_url"):
                         custom_config["base_url"] = (
                             notes_data.get("collabglow_api_url") or 
-                            notes_data.get("cg_api_url")
+                            notes_data.get("cg_api_url") or
+                            notes_data.get("api_url")
                         )
                 
                 elif platform_code_lower in ["linkhaitao", "lh"]:
