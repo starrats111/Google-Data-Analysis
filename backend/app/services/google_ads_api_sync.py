@@ -286,7 +286,41 @@ class GoogleAdsApiSyncService:
             客户账号ID列表
         """
         try:
-            # 方法1：使用 CustomerService.list_accessible_customers() 获取所有可访问的客户
+            # 方法1：使用 CustomerClient 查询获取MCC下的客户列表（推荐方法）
+            try:
+                query = """
+                    SELECT
+                        customer_client.id,
+                        customer_client.manager,
+                        customer_client.descriptive_name,
+                        customer_client.status
+                    FROM customer_client
+                    WHERE customer_client.manager = FALSE
+                    AND customer_client.status = 'ENABLED'
+                """
+                
+                ga_service = client.get_service("GoogleAdsService")
+                response = ga_service.search(customer_id=mcc_customer_id, query=query)
+                
+                customer_ids = []
+                for row in response:
+                    client_id = str(row.customer_client.id)
+                    if client_id != mcc_customer_id:
+                        customer_ids.append(client_id)
+                        descriptive_name = getattr(row.customer_client, 'descriptive_name', 'N/A')
+                        logger.info(f"找到客户账号: {client_id} ({descriptive_name})")
+                
+                if customer_ids:
+                    logger.info(f"通过CustomerClient查询找到 {len(customer_ids)} 个客户账号: {customer_ids}")
+                    return customer_ids
+                else:
+                    logger.warning(f"通过CustomerClient查询没有找到客户账号（MCC下可能没有客户账号或客户账号未启用）")
+            except Exception as e:
+                logger.warning(f"使用CustomerClient查询失败: {e}")
+                import traceback
+                logger.debug(traceback.format_exc())
+            
+            # 方法2：使用 CustomerService.list_accessible_customers() 作为备选
             try:
                 customer_service = client.get_service("CustomerService")
                 accessible_customers = customer_service.list_accessible_customers()
