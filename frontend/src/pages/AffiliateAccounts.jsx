@@ -213,25 +213,15 @@ const AffiliateAccounts = () => {
       const beginDate = dateRange[0].format('YYYY-MM-DD')
       const endDate = dateRange[1].format('YYYY-MM-DD')
       
-      // 根据平台选择不同的API端点
-      const isLinkHaitao = isLinkHaitaoPlatform(syncAccount)
-      const apiEndpoint = isLinkHaitao 
-        ? '/api/linkhaitao/sync-commissions-orders'
-        : '/api/collabglow/sync-commissions'
-      
-      const response = await api.post(apiEndpoint, {
-        account_id: syncAccount.id,
+      // 使用通用的平台数据同步API
+      const response = await api.post(`/api/affiliate/accounts/${syncAccount.id}/sync`, {
         begin_date: beginDate,
         end_date: endDate,
         token: token || undefined // 如果不提供token，会从账号备注中读取
       })
       
       setSyncResult(response.data)
-      if (isLinkHaitao) {
-        message.success(`成功同步 ${response.data.total_commission_records || 0} 条佣金记录和 ${response.data.total_orders || 0} 条订单`)
-      } else {
-        message.success(`成功同步 ${response.data.total_records || 0} 条佣金记录`)
-      }
+      message.success(`成功同步 ${response.data.saved_count || 0} 条记录`)
     } catch (error) {
       message.error(error.response?.data?.detail || '同步失败')
       setSyncResult({
@@ -249,17 +239,27 @@ const AffiliateAccounts = () => {
     setSyncing(true)
     try {
       const token = syncForm.getFieldValue('token')
-      const response = await api.get('/api/collabglow/test-connection', {
-        params: {
-          account_id: syncAccount.id,
-          token: token || undefined
-        }
+      const dateRange = syncForm.getFieldValue('dateRange')
+      if (!dateRange || dateRange.length !== 2) {
+        message.warning('请先选择日期范围')
+        setSyncing(false)
+        return
+      }
+      
+      const beginDate = dateRange[0].format('YYYY-MM-DD')
+      const endDate = dateRange[1].format('YYYY-MM-DD')
+      
+      // 使用同步接口进行测试（只同步1天数据作为测试）
+      const response = await api.post(`/api/affiliate/accounts/${syncAccount.id}/sync`, {
+        begin_date: beginDate,
+        end_date: beginDate, // 只测试第一天
+        token: token || undefined
       })
       
       if (response.data.success) {
-        message.success(`连接成功！找到 ${response.data.records_found} 条记录`)
+        message.success(`连接成功！找到 ${response.data.saved_count || 0} 条记录`)
       } else {
-        message.error(response.data.message)
+        message.error(response.data.message || '测试连接失败')
       }
     } catch (error) {
       message.error(error.response?.data?.detail || '测试连接失败')
@@ -306,15 +306,13 @@ const AffiliateAccounts = () => {
       key: 'action',
       render: (_, record) => (
         <Space>
-          {(isCollabGlowPlatform(record) || isLinkHaitaoPlatform(record)) && (
-            <Button
-              type="link"
-              icon={<SyncOutlined />}
-              onClick={() => handleSyncCollabGlow(record)}
-            >
-              同步数据
-            </Button>
-          )}
+          <Button
+            type="link"
+            icon={<SyncOutlined />}
+            onClick={() => handleSyncCollabGlow(record)}
+          >
+            同步数据
+          </Button>
           <Button
             type="link"
             icon={<EditOutlined />}
@@ -401,16 +399,14 @@ const AffiliateAccounts = () => {
                           title: '操作',
                           key: 'action',
                           render: (_, record) => (
-                            (isCollabGlowPlatform(record) || isLinkHaitaoPlatform(record)) ? (
-                              <Button
-                                type="link"
-                                size="small"
-                                icon={<SyncOutlined />}
-                                onClick={() => handleSyncCollabGlow(record)}
-                              >
-                                同步数据
-                              </Button>
-                            ) : null
+                            <Button
+                              type="link"
+                              size="small"
+                              icon={<SyncOutlined />}
+                              onClick={() => handleSyncCollabGlow(record)}
+                            >
+                              同步数据
+                            </Button>
                           ),
                         },
                       ]}
@@ -496,7 +492,7 @@ const AffiliateAccounts = () => {
 
             <Form.Item
               name="token"
-              label="CollabGlow Token（可选）"
+              label="API Token（可选）"
               help="如果不填写，将从账号备注中读取 token"
             >
               <Input.Password 
@@ -525,16 +521,7 @@ const AffiliateAccounts = () => {
                       <Col span={8}>
                         <Statistic
                           title="同步记录数"
-                          value={syncResult.total_records}
-                          valueStyle={{ color: '#3f8600' }}
-                        />
-                      </Col>
-                      <Col span={8}>
-                        <Statistic
-                          title="总佣金"
-                          value={syncResult.total_commission}
-                          prefix="$"
-                          precision={2}
+                          value={syncResult.saved_count || 0}
                           valueStyle={{ color: '#3f8600' }}
                         />
                       </Col>
@@ -546,23 +533,6 @@ const AffiliateAccounts = () => {
                         />
                       </Col>
                     </Row>
-                    {syncResult.data && syncResult.data.length > 0 && (
-                      <div style={{ marginTop: 16 }}>
-                        <h4>佣金明细（前5条）：</h4>
-                        <Table
-                          dataSource={syncResult.data.slice(0, 5)}
-                          columns={[
-                            { title: '品牌ID', dataIndex: 'brand_id', key: 'brand_id' },
-                            { title: 'MCID', dataIndex: 'mcid', key: 'mcid' },
-                            { title: '佣金', dataIndex: 'sale_commission', key: 'sale_commission', render: (v) => `$${v?.toFixed(2) || 0}` },
-                            { title: '结算日期', dataIndex: 'settlement_date', key: 'settlement_date' },
-                          ]}
-                          pagination={false}
-                          size="small"
-                          rowKey="settlement_id"
-                        />
-                      </div>
-                    )}
                   </div>
                 ) : (
                   <div style={{ color: '#ff4d4f' }}>
@@ -735,7 +705,7 @@ const AffiliateAccounts = () => {
 
             <Form.Item
               name="token"
-              label="CollabGlow Token（可选）"
+              label="API Token（可选）"
               help="如果不填写，将从账号备注中读取 token"
             >
               <Input.Password 
@@ -764,16 +734,7 @@ const AffiliateAccounts = () => {
                       <Col span={8}>
                         <Statistic
                           title="同步记录数"
-                          value={syncResult.total_records}
-                          valueStyle={{ color: '#3f8600' }}
-                        />
-                      </Col>
-                      <Col span={8}>
-                        <Statistic
-                          title="总佣金"
-                          value={syncResult.total_commission}
-                          prefix="$"
-                          precision={2}
+                          value={syncResult.saved_count || 0}
                           valueStyle={{ color: '#3f8600' }}
                         />
                       </Col>
@@ -785,23 +746,6 @@ const AffiliateAccounts = () => {
                         />
                       </Col>
                     </Row>
-                    {syncResult.data && syncResult.data.length > 0 && (
-                      <div style={{ marginTop: 16 }}>
-                        <h4>佣金明细（前5条）：</h4>
-                        <Table
-                          dataSource={syncResult.data.slice(0, 5)}
-                          columns={[
-                            { title: '品牌ID', dataIndex: 'brand_id', key: 'brand_id' },
-                            { title: 'MCID', dataIndex: 'mcid', key: 'mcid' },
-                            { title: '佣金', dataIndex: 'sale_commission', key: 'sale_commission', render: (v) => `$${v?.toFixed(2) || 0}` },
-                            { title: '结算日期', dataIndex: 'settlement_date', key: 'settlement_date' },
-                          ]}
-                          pagination={false}
-                          size="small"
-                          rowKey="settlement_id"
-                        />
-                      </div>
-                    )}
                   </div>
                 ) : (
                   <div style={{ color: '#ff4d4f' }}>

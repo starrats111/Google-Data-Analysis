@@ -49,12 +49,14 @@ class PlatformDataSyncService:
         platform_code = account.platform.platform_code.lower()
         
         # 根据平台类型选择不同的服务
-        if platform_code == "collabglow":
+        if platform_code == "collabglow" or platform_code == "cg":
             return self._sync_collabglow_data(account, begin_date, end_date)
-        elif platform_code in ["linkhaitao", "link-haitao"]:
+        elif platform_code in ["linkhaitao", "link-haitao", "lh"]:
             return self._sync_linkhaitao_data(account, begin_date, end_date)
         else:
-            return {"success": False, "message": f"暂不支持平台: {platform_code}"}
+            # 对于其他平台，尝试从notes中读取通用API配置
+            # 如果平台有API token配置，可以在这里扩展支持
+            return {"success": False, "message": f"平台 {platform_code} 的API集成尚未实现。请联系管理员添加该平台的API支持。"}
     
     def _sync_collabglow_data(
         self,

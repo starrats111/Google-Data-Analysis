@@ -247,5 +247,67 @@ async def delete_account(
     return None
 
 
+@router.post("/accounts/{account_id}/sync")
+async def sync_account_data(
+    account_id: int,
+    begin_date: str,
+    end_date: str,
+    token: Optional[str] = None,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    同步平台账号数据（通用接口，支持所有平台）
+    
+    Args:
+        account_id: 联盟账号ID
+        begin_date: 开始日期 YYYY-MM-DD
+        end_date: 结束日期 YYYY-MM-DD
+        token: API Token（可选，如果不提供则从账号备注中读取）
+    """
+    from app.services.platform_data_sync import PlatformDataSyncService
+    
+    # 检查账号是否存在
+    account = db.query(AffiliateAccount).filter(AffiliateAccount.id == account_id).first()
+    if not account:
+        raise HTTPException(status_code=404, detail="账号不存在")
+    
+    # 权限控制：只能同步自己的账号
+    if account.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="无权同步此账号")
+    
+    # 如果提供了token，更新到账号备注中
+    if token:
+        import json
+        notes_data = {}
+        if account.notes:
+            try:
+                notes_data = json.loads(account.notes)
+            except:
+                pass
+        
+        # 根据平台代码确定token字段名
+        platform_code = account.platform.platform_code.lower()
+        if platform_code == "collabglow":
+            notes_data["collabglow_token"] = token
+        elif platform_code in ["linkhaitao", "link-haitao"]:
+            notes_data["linkhaitao_token"] = token
+        else:
+            # 通用token字段
+            notes_data["api_token"] = token
+        
+        account.notes = json.dumps(notes_data)
+        db.commit()
+    
+    # 调用同步服务
+    sync_service = PlatformDataSyncService(db)
+    result = sync_service.sync_account_data(account_id, begin_date, end_date)
+    
+    if not result.get("success"):
+        raise HTTPException(status_code=500, detail=result.get("message", "同步失败"))
+    
+    return result
+
+
 
 
