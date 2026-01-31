@@ -222,6 +222,47 @@ async def test_api_connection(
                         "message": f"测试失败: {error_message}"
                     }
         
+        elif platform_code in ["lb", "pm", "bsh", "cf"]:
+            # 通用平台测试
+            from app.services.generic_platform_service import GenericPlatformService
+            from app.services.api_config_service import ApiConfigService
+            
+            api_config = ApiConfigService.get_account_api_config(account)
+            base_url = api_url or api_config.get("base_url")
+            
+            if not base_url:
+                return {
+                    "success": False,
+                    "message": f"未配置{platform_code.upper()} API URL。请在账号备注中添加：{{\"{platform_code}_api_url\": \"https://api.example.com/api\"}}"
+                }
+            
+            try:
+                service = GenericPlatformService(
+                    token=token,
+                    platform_code=platform_code,
+                    base_url=base_url,
+                    api_config=api_config
+                )
+                result = service.get_transactions(begin_date, end_date)
+                
+                if result.get("code") == "0":
+                    transactions_count = len(result.get('data', {}).get('transactions', []))
+                    return {
+                        "success": True,
+                        "message": f"连接成功！API URL: {base_url}。获取到 {transactions_count} 条测试数据。"
+                    }
+                else:
+                    return {
+                        "success": False,
+                        "message": f"连接失败: {result.get('message', '未知错误')}"
+                    }
+            except Exception as e:
+                from app.services.api_config_service import ApiConfigService
+                error_message = ApiConfigService.format_error_message(e, account, f"{platform_code.upper()} API")
+                return {
+                    "success": False,
+                    "message": f"测试失败: {error_message}"
+                }
         else:
             return {
                 "success": False,

@@ -63,6 +63,36 @@ PLATFORM_DEFAULT_CONFIGS = {
         "timeout": 30,
         "max_retries": 3,
         "retry_delay": 2
+    },
+    # 通用平台配置（LB, PM, BSH, CF等）
+    # 这些平台需要通过账号备注配置API URL
+    "lb": {
+        "base_url": "",  # 需要从账号备注中配置
+        "transaction_endpoint": "/transaction",
+        "timeout": 60,
+        "max_retries": 3,
+        "retry_delay": 2
+    },
+    "pm": {
+        "base_url": "",  # 需要从账号备注中配置
+        "transaction_endpoint": "/transaction",
+        "timeout": 60,
+        "max_retries": 3,
+        "retry_delay": 2
+    },
+    "bsh": {
+        "base_url": "",  # 需要从账号备注中配置
+        "transaction_endpoint": "/transaction",
+        "timeout": 60,
+        "max_retries": 3,
+        "retry_delay": 2
+    },
+    "cf": {
+        "base_url": "",  # 需要从账号备注中配置
+        "transaction_endpoint": "/transaction",
+        "timeout": 60,
+        "max_retries": 3,
+        "retry_delay": 2
     }
 }
 
@@ -138,6 +168,14 @@ class ApiConfigService:
                         custom_config["base_url"] = (
                             notes_data.get("linkhaitao_api_url") or 
                             notes_data.get("lh_api_url")
+                        )
+                elif platform_code_lower in ["lb", "pm", "bsh", "cf"]:
+                    # 通用平台配置（LB, PM, BSH, CF）
+                    api_url_key = f"{platform_code_lower}_api_url"
+                    if notes_data.get(api_url_key) or notes_data.get("api_url"):
+                        custom_config["base_url"] = (
+                            notes_data.get(api_url_key) or 
+                            notes_data.get("api_url")
                         )
                 
             except (json.JSONDecodeError, AttributeError) as e:

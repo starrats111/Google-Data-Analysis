@@ -93,6 +93,12 @@ class PlatformDataSyncService:
             "rewardoo" in platform_name_normalized
         )
         
+        # 识别其他平台（LB, PM, BSH, CF等）
+        is_lb = platform_code_normalized == "lb" or platform_name_normalized == "lb"
+        is_pm = platform_code_normalized == "pm" or platform_name_normalized == "pm"
+        is_bsh = platform_code_normalized == "bsh" or platform_name_normalized == "bsh"
+        is_cf = platform_code_normalized == "cf" or platform_name_normalized == "cf"
+        
         if is_collabglow:
             logger.info(f"✓ 识别为CollabGlow平台，开始同步...")
             return self._sync_collabglow_data(account, begin_date, end_date, token)
@@ -102,23 +108,15 @@ class PlatformDataSyncService:
         elif is_linkhaitao:
             logger.info(f"✓ 识别为LinkHaitao平台，开始同步...")
             return self._sync_linkhaitao_data(account, begin_date, end_date, token)
+        elif is_lb or is_pm or is_bsh or is_cf:
+            # 使用通用平台服务
+            platform_code_for_service = platform_code_normalized
+            logger.info(f"✓ 识别为{platform_code_for_service.upper()}平台，使用通用服务...")
+            return self._sync_generic_platform_data(account, begin_date, end_date, token, platform_code_for_service)
         else:
-            # 对于其他平台，尝试从notes中读取通用API配置
-            # 如果平台有API token配置，可以在这里扩展支持
-            logger.warning(f"✗ 未识别的平台代码: '{platform_code_normalized}' (原始: '{account.platform.platform_code}'), 平台名称: {platform_name}")
-            
-            # 提供友好的错误消息，不抛出异常，确保系统继续运行
-            error_msg = f"平台 {platform_name}"
-            if platform_url:
-                error_msg += f" ({platform_url})"
-            error_msg += f" 的API集成尚未实现。\n\n"
-            error_msg += "当前支持的平台：\n"
-            error_msg += "- Rewardoo (RW)\n"
-            error_msg += "- CollabGlow (CG)\n"
-            error_msg += "- LinkHaitao (LH)\n\n"
-            error_msg += "如需添加新平台支持，请联系管理员。"
-            
-            return {"success": False, "message": error_msg}
+            # 对于其他未知平台，也尝试使用通用服务
+            logger.info(f"使用通用服务处理平台: {platform_code_normalized}")
+            return self._sync_generic_platform_data(account, begin_date, end_date, token, platform_code_normalized)
     
     def _sync_collabglow_data(
         self,
@@ -522,6 +520,155 @@ class PlatformDataSyncService:
             self.db.rollback()
             logger.error(f"同步LinkHaitao数据失败: {e}")
             return {"success": False, "message": f"同步失败: {str(e)}"}
+    
+    def _sync_generic_platform_data(
+        self,
+        account: AffiliateAccount,
+        begin_date: str,
+        end_date: str,
+        token: Optional[str] = None,
+        platform_code: str = ""
+    ) -> Dict:
+        """
+        同步通用平台数据（LB, PM, BSH, CF等）
+        
+        支持通过账号备注配置API端点
+        """
+        try:
+            # 获取token：优先使用传入的token，如果没有则从账号备注中读取
+            import json
+            if not token:
+                if account.notes:
+                    try:
+                        notes_data = json.loads(account.notes)
+                        # 尝试多种token字段名
+                        token = (
+                            notes_data.get(f"{platform_code}_token") or
+                            notes_data.get("api_token") or
+                            notes_data.get("token")
+                        )
+                    except:
+                        pass
+            
+            if not token:
+                return {
+                    "success": False,
+                    "message": f"未配置{platform_code.upper()} Token。请在同步对话框中输入Token，或在账号编辑页面的备注中配置。"
+                }
+            
+            # 从账号备注中读取API配置
+            from app.services.api_config_service import ApiConfigService
+            api_config = ApiConfigService.get_account_api_config(account)
+            
+            # 如果配置中没有base_url，尝试从notes中读取
+            base_url = api_config.get("base_url")
+            if not base_url and account.notes:
+                try:
+                    notes_data = json.loads(account.notes)
+                    base_url = (
+                        notes_data.get(f"{platform_code}_api_url") or
+                        notes_data.get("api_url") or
+                        notes_data.get("base_url")
+                    )
+                except:
+                    pass
+            
+            if not base_url:
+                return {
+                    "success": False,
+                    "message": f"未配置{platform_code.upper()} API URL。请在账号备注中添加：{{\"{platform_code}_api_url\": \"https://api.example.com/api\"}}"
+                }
+            
+            # 使用通用平台服务
+            from app.services.generic_platform_service import GenericPlatformService
+            service = GenericPlatformService(
+                token=token,
+                platform_code=platform_code,
+                base_url=base_url,
+                api_config=api_config
+            )
+            
+            # 获取交易数据
+            result = service.get_transactions(begin_date, end_date)
+            
+            if result.get("code") != "0":
+                error_msg = result.get("message", "未知错误")
+                return {
+                    "success": False,
+                    "message": f"同步失败: {error_msg}"
+                }
+            
+            # 提取交易数据
+            transactions_raw = service.extract_transaction_data(result)
+            logger.info(f"[{platform_code.upper()}同步] 获取到 {len(transactions_raw)} 笔交易")
+            
+            if not transactions_raw:
+                return {
+                    "success": True,
+                    "message": f"同步完成，但该日期范围（{begin_date} ~ {end_date}）内没有数据。请检查：1) Token是否正确 2) 该日期范围内是否有数据",
+                    "saved_count": 0
+                }
+            
+            # 使用统一服务按日期聚合数据
+            from app.services.unified_platform_service import UnifiedPlatformService
+            date_data = UnifiedPlatformService.aggregate_by_date(
+                transactions_raw,
+                platform=platform_code,
+                date_field='transaction_time'
+            )
+            
+            # 保存到数据库
+            saved_count = 0
+            for comm_date, data_item in date_data.items():
+                try:
+                    # 准备PlatformData数据
+                    platform_data_dict = UnifiedPlatformService.prepare_platform_data(
+                        transactions_raw,
+                        platform=platform_code,
+                        target_date=comm_date,
+                        date_field='transaction_time'
+                    )
+                    
+                    # 查找或创建记录
+                    platform_data = self.db.query(PlatformData).filter(
+                        PlatformData.affiliate_account_id == account.id,
+                        PlatformData.date == comm_date
+                    ).first()
+                    
+                    if not platform_data:
+                        platform_data = PlatformData(
+                            affiliate_account_id=account.id,
+                            user_id=account.user_id,
+                            date=comm_date,
+                            **platform_data_dict
+                        )
+                        self.db.add(platform_data)
+                    else:
+                        # 更新所有字段
+                        for key, value in platform_data_dict.items():
+                            if key != 'rejected_rate':  # rejected_rate是计算字段，不存储
+                                setattr(platform_data, key, value)
+                        platform_data.last_sync_at = datetime.now()
+                    
+                    saved_count += 1
+                except Exception as e:
+                    logger.error(f"保存{platform_code.upper()}数据失败: {e}")
+                    continue
+            
+            self.db.commit()
+            
+            return {
+                "success": True,
+                "message": f"成功同步 {saved_count} 条记录",
+                "saved_count": saved_count
+            }
+            
+        except Exception as e:
+            self.db.rollback()
+            logger.error(f"同步{platform_code.upper()}数据失败: {e}")
+            from app.services.api_config_service import ApiConfigService
+            error_message = ApiConfigService.format_error_message(e, account, f"{platform_code.upper()} API")
+            return {"success": False, "message": f"同步失败: {error_message}"}
     
     def calculate_weekly_order_days(self, account_id: int, target_date: date) -> int:
         """

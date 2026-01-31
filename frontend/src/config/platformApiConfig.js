@@ -97,6 +97,94 @@ export const PLATFORM_API_CONFIG = {
     ]
   },
   
+  // LB 平台
+  lb: {
+    fields: [
+      {
+        name: 'lb_token',
+        label: 'LB API Token',
+        type: 'password',
+        placeholder: '请输入 LB API Token',
+        help: '用于同步 LB 交易数据',
+        required: false
+      },
+      {
+        name: 'lb_api_url',
+        label: 'LB API URL（必填）',
+        type: 'text',
+        placeholder: '例如: https://api.lb.com/api',
+        help: 'LB平台的API基础URL，必须配置',
+        required: true
+      }
+    ]
+  },
+  
+  // PM 平台
+  pm: {
+    fields: [
+      {
+        name: 'pm_token',
+        label: 'PM API Token',
+        type: 'password',
+        placeholder: '请输入 PM API Token',
+        help: '用于同步 PM 交易数据',
+        required: false
+      },
+      {
+        name: 'pm_api_url',
+        label: 'PM API URL（必填）',
+        type: 'text',
+        placeholder: '例如: https://api.pm.com/api',
+        help: 'PM平台的API基础URL，必须配置',
+        required: true
+      }
+    ]
+  },
+  
+  // BSH 平台
+  bsh: {
+    fields: [
+      {
+        name: 'bsh_token',
+        label: 'BSH API Token',
+        type: 'password',
+        placeholder: '请输入 BSH API Token',
+        help: '用于同步 BSH 交易数据',
+        required: false
+      },
+      {
+        name: 'bsh_api_url',
+        label: 'BSH API URL（必填）',
+        type: 'text',
+        placeholder: '例如: https://api.bsh.com/api',
+        help: 'BSH平台的API基础URL，必须配置',
+        required: true
+      }
+    ]
+  },
+  
+  // CF 平台
+  cf: {
+    fields: [
+      {
+        name: 'cf_token',
+        label: 'CF API Token',
+        type: 'password',
+        placeholder: '请输入 CF API Token',
+        help: '用于同步 CF 交易数据',
+        required: false
+      },
+      {
+        name: 'cf_api_url',
+        label: 'CF API URL（必填）',
+        type: 'text',
+        placeholder: '例如: https://api.cf.com/api',
+        help: 'CF平台的API基础URL，必须配置',
+        required: true
+      }
+    ]
+  },
+  
   // 可以添加更多平台配置
   // 例如：
   // amazon: {
