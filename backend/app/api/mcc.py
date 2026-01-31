@@ -203,15 +203,38 @@ async def update_mcc_account(
     if mcc_data.email is not None:
         mcc_account.email = mcc_data.email
     # 对于敏感字段，只有明确提供且非空字符串才更新（None或空字符串表示不修改）
+    import logging
+    logger = logging.getLogger(__name__)
+    
     if mcc_data.client_id is not None:
-        if mcc_data.client_id.strip() if isinstance(mcc_data.client_id, str) else mcc_data.client_id:
-            mcc_account.client_id = mcc_data.client_id
+        client_id_value = mcc_data.client_id.strip() if isinstance(mcc_data.client_id, str) else mcc_data.client_id
+        if client_id_value:
+            logger.info(f"更新MCC {mcc_account.mcc_id} 的 client_id")
+            mcc_account.client_id = client_id_value
+        else:
+            logger.debug(f"MCC {mcc_account.mcc_id} 的 client_id 为空，不更新")
+    else:
+        logger.debug(f"MCC {mcc_account.mcc_id} 的 client_id 为 None，不更新")
+    
     if mcc_data.client_secret is not None:
-        if mcc_data.client_secret.strip() if isinstance(mcc_data.client_secret, str) else mcc_data.client_secret:
-            mcc_account.client_secret = mcc_data.client_secret
+        client_secret_value = mcc_data.client_secret.strip() if isinstance(mcc_data.client_secret, str) else mcc_data.client_secret
+        if client_secret_value:
+            logger.info(f"更新MCC {mcc_account.mcc_id} 的 client_secret")
+            mcc_account.client_secret = client_secret_value
+        else:
+            logger.debug(f"MCC {mcc_account.mcc_id} 的 client_secret 为空，不更新")
+    else:
+        logger.debug(f"MCC {mcc_account.mcc_id} 的 client_secret 为 None，不更新")
+    
     if mcc_data.refresh_token is not None:
-        if mcc_data.refresh_token.strip() if isinstance(mcc_data.refresh_token, str) else mcc_data.refresh_token:
-            mcc_account.refresh_token = mcc_data.refresh_token
+        refresh_token_value = mcc_data.refresh_token.strip() if isinstance(mcc_data.refresh_token, str) else mcc_data.refresh_token
+        if refresh_token_value:
+            logger.info(f"更新MCC {mcc_account.mcc_id} 的 refresh_token")
+            mcc_account.refresh_token = refresh_token_value
+        else:
+            logger.debug(f"MCC {mcc_account.mcc_id} 的 refresh_token 为空，不更新")
+    else:
+        logger.debug(f"MCC {mcc_account.mcc_id} 的 refresh_token 为 None，不更新")
     if mcc_data.is_active is not None:
         mcc_account.is_active = mcc_data.is_active
     
