@@ -115,3 +115,88 @@ async def get_google_ads_data(
     return response_data
 
 
+@router.get("/summary")
+async def get_google_ads_data_summary(
+    mcc_id: Optional[int] = Query(None, description="MCC ID"),
+    platform_code: Optional[str] = Query(None, description="平台代码"),
+    begin_date: Optional[str] = Query(..., description="开始日期 YYYY-MM-DD"),
+    end_date: Optional[str] = Query(..., description="结束日期 YYYY-MM-DD"),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    获取Google Ads数据汇总（聚合数据）
+    
+    返回指定时间范围内的总费用、总展示、总点击、平均CPC等汇总数据
+    """
+    from sqlalchemy import func
+    
+    query = db.query(GoogleAdsApiData).join(
+        GoogleMccAccount
+    ).filter(
+        GoogleAdsApiData.user_id == current_user.id
+    )
+    
+    # 权限检查：员工只能查看自己的数据
+    if current_user.role == "employee":
+        query = query.filter(GoogleAdsApiData.user_id == current_user.id)
+    
+    # 筛选条件
+    if mcc_id:
+        query = query.filter(GoogleAdsApiData.mcc_id == mcc_id)
+    
+    if platform_code:
+        query = query.filter(GoogleAdsApiData.extracted_platform_code == platform_code)
+    
+    # 日期范围（必需）
+    try:
+        begin = datetime.strptime(begin_date, "%Y-%m-%d").date()
+        end = datetime.strptime(end_date, "%Y-%m-%d").date()
+        query = query.filter(
+            GoogleAdsApiData.date >= begin,
+            GoogleAdsApiData.date <= end
+        )
+    except ValueError:
+        raise HTTPException(status_code=400, detail="日期格式错误，应为 YYYY-MM-DD")
+    
+    # 聚合查询
+    result = db.query(
+        func.sum(GoogleAdsApiData.cost).label('total_cost'),
+        func.sum(GoogleAdsApiData.impressions).label('total_impressions'),
+        func.sum(GoogleAdsApiData.clicks).label('total_clicks'),
+        func.count(GoogleAdsApiData.id).label('record_count')
+    ).join(
+        GoogleMccAccount
+    ).filter(
+        GoogleAdsApiData.user_id == current_user.id,
+        GoogleAdsApiData.date >= begin,
+        GoogleAdsApiData.date <= end
+    )
+    
+    if mcc_id:
+        result = result.filter(GoogleAdsApiData.mcc_id == mcc_id)
+    
+    if platform_code:
+        result = result.filter(GoogleAdsApiData.extracted_platform_code == platform_code)
+    
+    summary = result.first()
+    
+    total_cost = float(summary.total_cost or 0)
+    total_impressions = int(summary.total_impressions or 0)
+    total_clicks = int(summary.total_clicks or 0)
+    record_count = int(summary.record_count or 0)
+    avg_cpc = total_cost / total_clicks if total_clicks > 0 else 0
+    
+    return {
+        "total_cost": total_cost,
+        "total_impressions": total_impressions,
+        "total_clicks": total_clicks,
+        "avg_cpc": avg_cpc,
+        "record_count": record_count,
+        "date_range": {
+            "begin_date": begin_date,
+            "end_date": end_date
+        }
+    }
+
+
