@@ -344,6 +344,197 @@ export default function MccAccounts() {
           )}
         </Form>
       </Modal>
+
+      {/* OAuth获取Refresh Token模态框 */}
+      <Modal
+        title="获取Google Ads API Refresh Token"
+        open={oauthModalVisible}
+        onCancel={() => {
+          setOauthModalVisible(false)
+          setOauthStep(0)
+          setAuthorizationUrl('')
+        }}
+        footer={null}
+        width={700}
+      >
+        <Steps
+          current={oauthStep}
+          items={[
+            { title: '输入信息' },
+            { title: '授权' },
+            { title: '完成' }
+          ]}
+          style={{ marginBottom: 24 }}
+        />
+
+        {oauthStep === 0 && (
+          <Form
+            form={oauthForm}
+            layout="vertical"
+            onFinish={async (values) => {
+              try {
+                // 生成回调URL
+                const redirectUri = `${window.location.origin}/google-oauth-callback`
+                
+                // 获取授权URL
+                const response = await api.get('/api/google-oauth/authorize', {
+                  params: {
+                    client_id: values.client_id,
+                    redirect_uri: redirectUri
+                  }
+                })
+                
+                setAuthorizationUrl(response.data.authorization_url)
+                setOauthStep(1)
+              } catch (error) {
+                message.error(error.response?.data?.detail || '获取授权URL失败')
+              }
+            }}
+          >
+            <Alert
+              message="获取Refresh Token步骤"
+              description={
+                <ol style={{ margin: 0, paddingLeft: 20 }}>
+                  <li>填写Client ID和Client Secret（如果已填写会自动填充）</li>
+                  <li>点击"获取授权URL"按钮</li>
+                  <li>在新窗口中完成Google授权</li>
+                  <li>授权完成后，Refresh Token会自动填充到表单中</li>
+                </ol>
+              }
+              type="info"
+              style={{ marginBottom: 24 }}
+            />
+
+            <Form.Item
+              name="client_id"
+              label="Client ID"
+              rules={[{ required: true, message: '请输入Client ID' }]}
+            >
+              <Input placeholder="Google Ads API Client ID" />
+            </Form.Item>
+
+            <Form.Item
+              name="client_secret"
+              label="Client Secret"
+              rules={[{ required: true, message: '请输入Client Secret' }]}
+            >
+              <Input.Password placeholder="Google Ads API Client Secret" />
+            </Form.Item>
+
+            <Form.Item
+              name="redirect_uri"
+              label="回调URL（Redirect URI）"
+              help="必须在Google Cloud Console中配置此URL为授权重定向URI"
+              initialValue={`${window.location.origin}/google-oauth-callback`}
+            >
+              <Input disabled />
+            </Form.Item>
+
+            <Form.Item>
+              <Button type="primary" htmlType="submit" block>
+                获取授权URL
+              </Button>
+            </Form.Item>
+          </Form>
+        )}
+
+        {oauthStep === 1 && (
+          <div>
+            <Alert
+              message="请完成以下步骤"
+              description={
+                <ol style={{ margin: 0, paddingLeft: 20 }}>
+                  <li>点击下面的"打开授权页面"按钮</li>
+                  <li>在新窗口中登录Google账号并完成授权</li>
+                  <li>授权完成后，页面会跳转并显示授权码</li>
+                  <li>复制授权码（URL参数中的code值）</li>
+                  <li>回到此页面，粘贴授权码并点击"获取Token"</li>
+                </ol>
+              }
+              type="warning"
+              style={{ marginBottom: 24 }}
+            />
+
+            <Form
+              layout="vertical"
+              onFinish={async (values) => {
+                try {
+                  const redirectUri = `${window.location.origin}/google-oauth-callback`
+                  const response = await api.get('/api/google-oauth/callback', {
+                    params: {
+                      code: values.code,
+                      client_id: oauthForm.getFieldValue('client_id'),
+                      client_secret: oauthForm.getFieldValue('client_secret'),
+                      redirect_uri: redirectUri
+                    }
+                  })
+
+                  if (response.data.success) {
+                    // 自动填充Refresh Token到主表单
+                    form.setFieldsValue({
+                      refresh_token: response.data.refresh_token
+                    })
+                    setOauthStep(2)
+                    message.success('成功获取Refresh Token！已自动填充到表单中')
+                  }
+                } catch (error) {
+                  message.error(error.response?.data?.detail || '获取Token失败')
+                }
+              }}
+            >
+              <Form.Item
+                name="code"
+                label="授权码（Authorization Code）"
+                rules={[{ required: true, message: '请输入授权码' }]}
+                help="从授权页面的回调URL中复制code参数的值"
+              >
+                <Input.TextArea 
+                  rows={3}
+                  placeholder="粘贴授权码（从回调URL的code参数中获取）"
+                />
+              </Form.Item>
+
+              <Form.Item>
+                <Space>
+                  <Button 
+                    type="primary"
+                    icon={<LinkOutlined />}
+                    onClick={() => {
+                      window.open(authorizationUrl, '_blank')
+                    }}
+                  >
+                    打开授权页面
+                  </Button>
+                  <Button htmlType="submit">
+                    获取Token
+                  </Button>
+                  <Button onClick={() => setOauthStep(0)}>
+                    返回
+                  </Button>
+                </Space>
+              </Form.Item>
+            </Form>
+          </div>
+        )}
+
+        {oauthStep === 2 && (
+          <div style={{ textAlign: 'center', padding: '40px 0' }}>
+            <CheckCircleOutlined style={{ fontSize: 64, color: '#52c41a', marginBottom: 16 }} />
+            <h3>成功获取Refresh Token！</h3>
+            <p>Refresh Token已自动填充到表单中，请点击"确定"保存MCC账号配置。</p>
+            <Button 
+              type="primary" 
+              onClick={() => {
+                setOauthModalVisible(false)
+                setOauthStep(0)
+                setAuthorizationUrl('')
+              }}
+            >
+              完成
+            </Button>
+          </div>
+        )}
+      </Modal>
     </div>
   )
 }
