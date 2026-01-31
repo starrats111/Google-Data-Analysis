@@ -115,7 +115,8 @@ class PlatformDataSyncService:
                 if account.notes:
                     try:
                         notes_data = json.loads(account.notes)
-                        token = notes_data.get("collabglow_token")
+                        # 优先使用collabglow_token，如果没有则使用api_token（通用token字段）
+                        token = notes_data.get("collabglow_token") or notes_data.get("api_token")
                     except:
                         pass
             

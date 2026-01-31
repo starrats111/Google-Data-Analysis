@@ -311,10 +311,29 @@ async def sync_account_data(
         
         # 根据平台代码确定token字段名
         platform_code = account.platform.platform_code.lower() if account.platform.platform_code else ""
-        if platform_code in ["collabglow", "cg", "collab-glow"]:
+        platform_name = account.platform.platform_name.lower() if account.platform.platform_name else ""
+        
+        # 识别平台（同时检查代码和名称）
+        is_collabglow = (
+            platform_code in ["collabglow", "cg", "collab-glow"] or
+            platform_name in ["cg", "collabglow"] or
+            "collabglow" in platform_code or
+            "collabglow" in platform_name
+        )
+        
+        is_linkhaitao = (
+            platform_code in ["linkhaitao", "link-haitao", "lh", "link_haitao"] or
+            platform_name in ["lh", "linkhaitao"] or
+            "linkhaitao" in platform_code or
+            "linkhaitao" in platform_name
+        )
+        
+        if is_collabglow:
             notes_data["collabglow_token"] = token
-        elif platform_code in ["linkhaitao", "link-haitao", "lh", "link_haitao"]:
+            notes_data["api_token"] = token  # 同时保存为通用字段，方便读取
+        elif is_linkhaitao:
             notes_data["linkhaitao_token"] = token
+            notes_data["api_token"] = token  # 同时保存为通用字段，方便读取
         else:
             # 通用token字段
             notes_data["api_token"] = token
