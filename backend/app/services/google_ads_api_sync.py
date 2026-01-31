@@ -169,17 +169,19 @@ class GoogleAdsApiSyncService:
             }
         
         try:
+            # MCC ID需要转换为customer_id格式（去掉横线，只保留数字）
+            mcc_customer_id = mcc_account.mcc_id.replace("-", "")
+            
             # 创建Google Ads客户端
+            # 重要：当通过MCC访问客户账号时，必须设置login_customer_id为MCC的customer_id
             client = GoogleAdsClient.load_from_dict({
                 "developer_token": settings.google_ads_shared_developer_token,
                 "client_id": mcc_account.client_id,
                 "client_secret": mcc_account.client_secret,
                 "refresh_token": mcc_account.refresh_token,
+                "login_customer_id": mcc_customer_id,  # 设置MCC的customer_id作为login-customer-id
                 "use_proto_plus": True
             })
-            
-            # MCC ID需要转换为customer_id格式（去掉横线，只保留数字）
-            mcc_customer_id = mcc_account.mcc_id.replace("-", "")
             
             # 先获取MCC下的所有客户账号
             customer_ids = self._get_customer_ids(client, mcc_customer_id)
