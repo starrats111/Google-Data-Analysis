@@ -63,11 +63,28 @@ class PlatformDataSyncService:
         # 根据平台类型选择不同的服务
         # 支持多种平台代码格式（不区分大小写）
         platform_code_normalized = platform_code.strip()
+        platform_name_normalized = platform_name.strip().lower()
         
-        if platform_code_normalized in ["collabglow", "cg", "collab-glow", "collab_glow"]:
+        # 识别逻辑：同时检查平台代码和平台名称
+        # 因为有些平台的platform_code可能是URL而不是代码
+        is_collabglow = (
+            platform_code_normalized in ["collabglow", "cg", "collab-glow", "collab_glow"] or
+            platform_name_normalized in ["cg", "collabglow", "collab-glow"] or
+            "collabglow" in platform_code_normalized or
+            "collabglow" in platform_name_normalized
+        )
+        
+        is_linkhaitao = (
+            platform_code_normalized in ["linkhaitao", "link-haitao", "lh", "link_haitao"] or
+            platform_name_normalized in ["lh", "linkhaitao", "link-haitao"] or
+            "linkhaitao" in platform_code_normalized or
+            "linkhaitao" in platform_name_normalized
+        )
+        
+        if is_collabglow:
             logger.info(f"✓ 识别为CollabGlow平台，开始同步...")
             return self._sync_collabglow_data(account, begin_date, end_date)
-        elif platform_code_normalized in ["linkhaitao", "link-haitao", "lh", "link_haitao"]:
+        elif is_linkhaitao:
             logger.info(f"✓ 识别为LinkHaitao平台，开始同步...")
             return self._sync_linkhaitao_data(account, begin_date, end_date)
         else:
