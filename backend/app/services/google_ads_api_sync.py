@@ -48,15 +48,13 @@ class GoogleAdsApiSyncService:
         
         try:
             # 调用Google Ads API获取数据
-            # 这里需要实现实际的API调用逻辑
-            # 由于需要Google Ads API的认证和配置，先创建框架
-            
             api_data = self._fetch_google_ads_data(
                 mcc_account,
                 target_date
             )
             
             if not api_data.get("success"):
+                logger.error(f"MCC {mcc_account.mcc_id} 同步失败: {api_data.get('message')}")
                 return api_data
             
             campaigns_data = api_data.get("campaigns", [])
@@ -198,8 +196,11 @@ class GoogleAdsApiSyncService:
             all_campaigns = []
             date_str = target_date.strftime("%Y-%m-%d")
             
+            logger.info(f"开始查询 {len(customer_ids)} 个客户账号的数据，日期: {date_str}")
+            
             for customer_id in customer_ids:
                 try:
+                    logger.info(f"正在查询客户账号 {customer_id}...")
                     query = f"""
                         SELECT
                             campaign.id,
@@ -219,6 +220,7 @@ class GoogleAdsApiSyncService:
                     ga_service = client.get_service("GoogleAdsService")
                     response = ga_service.search(customer_id=customer_id, query=query)
                     
+                    campaign_count = 0
                     for row in response:
                         budget_micros = row.campaign_budget.amount_micros if row.campaign_budget.amount_micros else 0
                         cost_micros = row.metrics.cost_micros if row.metrics.cost_micros else 0
@@ -235,12 +237,18 @@ class GoogleAdsApiSyncService:
                             "is_budget_lost": row.metrics.search_budget_lost_impression_share if row.metrics.search_budget_lost_impression_share else 0.0,
                             "is_rank_lost": row.metrics.search_rank_lost_impression_share if row.metrics.search_rank_lost_impression_share else 0.0,
                         })
+                        campaign_count += 1
+                    
+                    logger.info(f"客户账号 {customer_id} 查询完成，找到 {campaign_count} 条广告系列")
                         
                 except GoogleAdsException as ex:
-                    logger.error(f"查询客户账号 {customer_id} 失败: {ex}")
+                    error_code = ex.error.code().name if hasattr(ex.error, 'code') else "UNKNOWN"
+                    error_message = ex.error.message if hasattr(ex.error, 'message') else str(ex)
+                    logger.error(f"查询客户账号 {customer_id} 失败: {error_code} - {error_message}")
+                    # 继续尝试下一个客户账号
                     continue
                 except Exception as e:
-                    logger.error(f"处理客户账号 {customer_id} 时出错: {e}")
+                    logger.error(f"处理客户账号 {customer_id} 时出错: {e}", exc_info=True)
                     continue
             
             logger.info(f"成功从 {len(customer_ids)} 个客户账号获取 {len(all_campaigns)} 条广告系列数据")
@@ -278,27 +286,31 @@ class GoogleAdsApiSyncService:
             客户账号ID列表
         """
         try:
-            customer_service = client.get_service("CustomerService")
+            # 方法1：尝试使用 CustomerService 获取可访问的客户
+            try:
+                customer_service = client.get_service("CustomerService")
+                accessible_customers = customer_service.list_accessible_customers()
+                
+                customer_ids = []
+                for resource_name in accessible_customers.resource_names:
+                    # resource_name格式: "customers/1234567890"
+                    customer_id = resource_name.split("/")[-1]
+                    # 排除MCC本身（通常MCC的ID和客户账号ID不同）
+                    if customer_id != mcc_customer_id:
+                        customer_ids.append(customer_id)
+                
+                if customer_ids:
+                    logger.info(f"通过CustomerService找到 {len(customer_ids)} 个客户账号")
+                    return customer_ids
+            except Exception as e:
+                logger.warning(f"使用CustomerService获取客户列表失败: {e}，尝试其他方法")
             
-            # 获取MCC下的所有可访问的客户账号
-            accessible_customers = customer_service.list_accessible_customers()
-            
-            customer_ids = []
-            for resource_name in accessible_customers.resource_names:
-                # resource_name格式: "customers/1234567890"
-                customer_id = resource_name.split("/")[-1]
-                # 排除MCC本身（通常MCC的ID和客户账号ID不同）
-                if customer_id != mcc_customer_id:
-                    customer_ids.append(customer_id)
-            
-            # 如果没有找到子账号，尝试使用MCC本身（某些情况下MCC也可以查询）
-            if not customer_ids:
-                customer_ids = [mcc_customer_id]
-            
-            return customer_ids
+            # 方法2：尝试直接使用MCC ID查询（某些情况下MCC本身也可以查询）
+            logger.info(f"尝试直接使用MCC ID {mcc_customer_id} 查询")
+            return [mcc_customer_id]
             
         except Exception as e:
-            logger.error(f"获取客户账号列表失败: {e}")
+            logger.error(f"获取客户账号列表失败: {e}", exc_info=True)
             # 如果获取失败，尝试直接使用MCC ID
             return [mcc_customer_id]
     
