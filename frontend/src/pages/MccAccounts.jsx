@@ -43,9 +43,9 @@ export default function MccAccounts() {
       mcc_id: mcc.mcc_id,
       mcc_name: mcc.mcc_name,
       email: mcc.email,
-      client_id: '',  // 不显示敏感信息
-      client_secret: '',  // 不显示敏感信息
-      refresh_token: '',  // 不显示敏感信息
+      client_id: undefined,  // 不显示已有值，留空表示不修改
+      client_secret: undefined,  // 不显示已有值，留空表示不修改
+      refresh_token: undefined,  // 不显示已有值，留空表示不修改
       is_active: mcc.is_active
     })
     setModalVisible(true)
@@ -53,11 +53,37 @@ export default function MccAccounts() {
 
   const handleSubmit = async (values) => {
     try {
+      // 清理空值：对于可选字段，如果为空字符串或undefined，则不发送（编辑时留空表示不修改）
+      const submitData = { ...values }
       if (editingMcc) {
-        await api.put(`/api/mcc/accounts/${editingMcc.id}`, values)
+        // 编辑时：空字符串或undefined的字段不发送，保留原值
+        if (!submitData.client_id || submitData.client_id.trim() === '') {
+          delete submitData.client_id
+        }
+        if (!submitData.client_secret || submitData.client_secret.trim() === '') {
+          delete submitData.client_secret
+        }
+        if (!submitData.refresh_token || submitData.refresh_token.trim() === '') {
+          delete submitData.refresh_token
+        }
+      } else {
+        // 创建时：空字符串可以发送（表示不设置）
+        if (submitData.client_id === '') {
+          delete submitData.client_id
+        }
+        if (submitData.client_secret === '') {
+          delete submitData.client_secret
+        }
+        if (submitData.refresh_token === '') {
+          delete submitData.refresh_token
+        }
+      }
+      
+      if (editingMcc) {
+        await api.put(`/api/mcc/accounts/${editingMcc.id}`, submitData)
         message.success('更新成功')
       } else {
-        await api.post('/api/mcc/accounts', values)
+        await api.post('/api/mcc/accounts', submitData)
         message.success('创建成功')
       }
       setModalVisible(false)
@@ -220,6 +246,7 @@ export default function MccAccounts() {
           <Form.Item
             name="client_id"
             label="Client ID（可选）"
+            help={editingMcc ? "留空则不修改，填写新值则更新" : undefined}
           >
             <Input placeholder="Google Ads API Client ID" />
           </Form.Item>
@@ -227,15 +254,17 @@ export default function MccAccounts() {
           <Form.Item
             name="client_secret"
             label="Client Secret（可选）"
+            help={editingMcc ? "留空则不修改，填写新值则更新" : undefined}
           >
-            <Input.Password placeholder="Google Ads API Client Secret" />
+            <Input.Password placeholder={editingMcc ? "留空则不修改，填写新值则更新" : "Google Ads API Client Secret"} />
           </Form.Item>
 
           <Form.Item
             name="refresh_token"
             label="Refresh Token（可选）"
+            help={editingMcc ? "留空则不修改，填写新值则更新" : undefined}
           >
-            <Input.Password placeholder="Google Ads API Refresh Token" />
+            <Input.Password placeholder={editingMcc ? "留空则不修改，填写新值则更新" : "Google Ads API Refresh Token"} />
           </Form.Item>
 
           {editingMcc && (
