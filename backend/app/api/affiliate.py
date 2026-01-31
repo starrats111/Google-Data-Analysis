@@ -291,9 +291,9 @@ async def sync_account_data(
         
         # 根据平台代码确定token字段名
         platform_code = account.platform.platform_code.lower()
-        if platform_code == "collabglow":
+        if platform_code in ["collabglow", "cg", "collab-glow"]:
             notes_data["collabglow_token"] = token
-        elif platform_code in ["linkhaitao", "link-haitao"]:
+        elif platform_code in ["linkhaitao", "link-haitao", "lh", "link_haitao"]:
             notes_data["linkhaitao_token"] = token
         else:
             # 通用token字段
