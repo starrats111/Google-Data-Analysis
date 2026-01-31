@@ -12,6 +12,7 @@ export default function MccAccounts() {
   const [loading, setLoading] = useState(false)
   const [modalVisible, setModalVisible] = useState(false)
   const [editingMcc, setEditingMcc] = useState(null)
+  const [originalApiValues, setOriginalApiValues] = useState({}) // 保存原始API配置值
   const [form] = Form.useForm()
   const [syncLoading, setSyncLoading] = useState({})
 
@@ -39,14 +40,20 @@ export default function MccAccounts() {
 
   const handleEdit = (mcc) => {
     setEditingMcc(mcc)
+    // 保存原始API配置值，用于判断是否需要更新
+    setOriginalApiValues({
+      client_id: mcc.client_id || '',
+      client_secret: mcc.client_secret || '',
+      refresh_token: mcc.refresh_token || ''
+    })
     form.setFieldsValue({
       mcc_id: mcc.mcc_id,
       mcc_name: mcc.mcc_name,
       email: mcc.email,
-      // 如果已有值，显示占位符；如果没有值，显示undefined（留空）
-      client_id: mcc.client_id ? '••••••••••••••••' : undefined,
-      client_secret: mcc.client_secret ? '••••••••••••••••' : undefined,
-      refresh_token: mcc.refresh_token ? '••••••••••••••••' : undefined,
+      // 不设置这些字段的值，留空表示不修改
+      client_id: undefined,
+      client_secret: undefined,
+      refresh_token: undefined,
       is_active: mcc.is_active
     })
     setModalVisible(true)
@@ -58,19 +65,21 @@ export default function MccAccounts() {
       const submitData = { ...values }
       
       if (editingMcc) {
-        // 编辑时：空字符串、undefined、或占位符的字段不发送，保留原值
-        // 只有用户明确填写了新值才发送
-        const PLACEHOLDER = '••••••••••••••••'
+        // 编辑时：只有用户明确填写了新值（且与原始值不同）才发送
+        // 空字符串、undefined、null、或与原始值相同的字段不发送，保留原值
         if (submitData.client_id === undefined || submitData.client_id === null || 
-            submitData.client_id.trim() === '' || submitData.client_id === PLACEHOLDER) {
+            (typeof submitData.client_id === 'string' && submitData.client_id.trim() === '') ||
+            submitData.client_id === originalApiValues.client_id) {
           delete submitData.client_id
         }
         if (submitData.client_secret === undefined || submitData.client_secret === null || 
-            submitData.client_secret.trim() === '' || submitData.client_secret === PLACEHOLDER) {
+            (typeof submitData.client_secret === 'string' && submitData.client_secret.trim() === '') ||
+            submitData.client_secret === originalApiValues.client_secret) {
           delete submitData.client_secret
         }
         if (submitData.refresh_token === undefined || submitData.refresh_token === null || 
-            submitData.refresh_token.trim() === '' || submitData.refresh_token === PLACEHOLDER) {
+            (typeof submitData.refresh_token === 'string' && submitData.refresh_token.trim() === '') ||
+            submitData.refresh_token === originalApiValues.refresh_token) {
           delete submitData.refresh_token
         }
       } else {
@@ -97,6 +106,7 @@ export default function MccAccounts() {
       }
       setModalVisible(false)
       form.resetFields()
+      setOriginalApiValues({}) // 清空原始值
       fetchMccAccounts()
     } catch (error) {
       console.error('保存失败:', error)
@@ -258,25 +268,25 @@ export default function MccAccounts() {
           <Form.Item
             name="client_id"
             label="Client ID（可选）"
-            help={editingMcc ? "留空则不修改，填写新值则更新" : undefined}
+            help={editingMcc ? (originalApiValues.client_id ? "已配置，留空则不修改，填写新值则更新" : "留空则不设置，填写新值则更新") : undefined}
           >
-            <Input placeholder="Google Ads API Client ID" />
+            <Input placeholder={editingMcc && originalApiValues.client_id ? "已配置，留空则不修改" : "Google Ads API Client ID"} />
           </Form.Item>
 
           <Form.Item
             name="client_secret"
             label="Client Secret（可选）"
-            help={editingMcc ? "留空则不修改，填写新值则更新" : undefined}
+            help={editingMcc ? (originalApiValues.client_secret ? "已配置，留空则不修改，填写新值则更新" : "留空则不设置，填写新值则更新") : undefined}
           >
-            <Input.Password placeholder={editingMcc ? "留空则不修改，填写新值则更新" : "Google Ads API Client Secret"} />
+            <Input.Password placeholder={editingMcc && originalApiValues.client_secret ? "已配置，留空则不修改" : "Google Ads API Client Secret"} />
           </Form.Item>
 
           <Form.Item
             name="refresh_token"
             label="Refresh Token（可选）"
-            help={editingMcc ? "留空则不修改，填写新值则更新" : undefined}
+            help={editingMcc ? (originalApiValues.refresh_token ? "已配置，留空则不修改，填写新值则更新" : "留空则不设置，填写新值则更新") : undefined}
           >
-            <Input.Password placeholder={editingMcc ? "留空则不修改，填写新值则更新" : "Google Ads API Refresh Token"} />
+            <Input.Password placeholder={editingMcc && originalApiValues.refresh_token ? "已配置，留空则不修改" : "Google Ads API Refresh Token"} />
           </Form.Item>
 
           {editingMcc && (
