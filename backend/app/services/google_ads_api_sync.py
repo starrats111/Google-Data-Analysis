@@ -307,40 +307,8 @@ class GoogleAdsApiSyncService:
             except Exception as e:
                 logger.warning(f"使用CustomerService获取客户列表失败: {e}")
             
-            # 方法2：使用 CustomerClientService 获取MCC下的客户列表
-            try:
-                from google.ads.googleads.v23.resources.types.customer_client import CustomerClient
-                from google.ads.googleads.v23.enums.types.manager_link_status_enum import ManagerLinkStatusEnum
-                
-                query = f"""
-                    SELECT
-                        customer_client.id,
-                        customer_client.manager,
-                        customer_client.descriptive_name,
-                        customer_client.status
-                    FROM customer_client
-                    WHERE customer_client.manager = FALSE
-                    AND customer_client.status = 'ENABLED'
-                """
-                
-                ga_service = client.get_service("GoogleAdsService")
-                response = ga_service.search(customer_id=mcc_customer_id, query=query)
-                
-                customer_ids = []
-                for row in response:
-                    client_id = str(row.customer_client.id)
-                    if client_id != mcc_customer_id:
-                        customer_ids.append(client_id)
-                        logger.info(f"找到客户账号: {client_id} ({row.customer_client.descriptive_name})")
-                
-                if customer_ids:
-                    logger.info(f"通过CustomerClient查询找到 {len(customer_ids)} 个客户账号")
-                    return customer_ids
-            except Exception as e:
-                logger.warning(f"使用CustomerClient查询失败: {e}")
-            
             # 如果两种方法都失败，返回空列表（而不是MCC ID本身）
-            logger.error(f"无法获取MCC {mcc_customer_id} 下的客户账号列表")
+            logger.error(f"无法获取MCC {mcc_customer_id} 下的客户账号列表。可能的原因：1) MCC下没有客户账号 2) 客户账号未启用 3) API权限不足")
             return []
             
         except Exception as e:
