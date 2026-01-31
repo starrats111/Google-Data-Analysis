@@ -332,7 +332,7 @@ const AffiliateAccounts = () => {
     }
   }
 
-  const handleTestConnection = async () => {
+  const handleTestConnection = async (autoDetect = false) => {
     if (!syncAccount) return
     
     setSyncing(true)
@@ -340,23 +340,54 @@ const AffiliateAccounts = () => {
       const token = syncForm.getFieldValue('token')
       const api_url = syncForm.getFieldValue('api_url')
       
-      // 使用新的API测试端点
+      // 使用新的API测试端点，支持自动检测
       const response = await api.post(`/api/affiliate/accounts/${syncAccount.id}/test-api`, {
         token: token || undefined,
-        api_url: api_url || undefined
+        api_url: api_url || undefined,
+        auto_detect: autoDetect
       })
       
       if (response.data.success) {
         message.success(response.data.message || '连接成功！')
+        // 如果检测到端点，更新表单
+        if (response.data.detected_endpoint && api_url) {
+          syncForm.setFieldsValue({ api_url: response.data.detected_endpoint.split('/transaction')[0] })
+        }
       } else {
         // 显示详细的错误信息（支持多行）
         const errorMsg = response.data.message || '测试连接失败'
-        message.error({
-          content: errorMsg.split('\n').map((line, idx) => (
-            <div key={idx} style={{ marginBottom: idx > 0 ? '4px' : 0, whiteSpace: 'pre-wrap' }}>{line}</div>
-          )),
-          duration: 10, // 显示10秒
-        })
+        const suggestAutoDetect = response.data.suggest_auto_detect
+        
+        if (suggestAutoDetect && !autoDetect) {
+          // 如果建议自动检测，显示带按钮的错误消息
+          message.warning({
+            content: (
+              <div>
+                {errorMsg.split('\n').map((line, idx) => (
+                  <div key={idx} style={{ marginBottom: idx > 0 ? '4px' : 0, whiteSpace: 'pre-wrap' }}>{line}</div>
+                ))}
+                <div style={{ marginTop: '8px' }}>
+                  <Button 
+                    type="primary" 
+                    size="small"
+                    onClick={() => handleTestConnection(true)}
+                    loading={syncing}
+                  >
+                    启用自动检测端点
+                  </Button>
+                </div>
+              </div>
+            ),
+            duration: 15,
+          })
+        } else {
+          message.error({
+            content: errorMsg.split('\n').map((line, idx) => (
+              <div key={idx} style={{ marginBottom: idx > 0 ? '4px' : 0, whiteSpace: 'pre-wrap' }}>{line}</div>
+            )),
+            duration: 10,
+          })
+        }
       }
     } catch (error) {
       const errorMsg = error.response?.data?.detail || error.response?.data?.message || '测试连接失败'

@@ -25,6 +25,7 @@ async def test_api_connection(
     account_id: int,
     token: Optional[str] = None,
     api_url: Optional[str] = None,
+    auto_detect: bool = False,  # 是否自动检测端点
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
@@ -76,23 +77,77 @@ async def test_api_connection(
         begin_date = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d")
         
         if platform_code in ["rewardoo", "rw"]:
+            # 如果启用自动检测，先尝试自动检测端点
+            detected_endpoint = None
+            if auto_detect:
+                from app.services.api_endpoint_detector import ApiEndpointDetector
+                import logging
+                logger = logging.getLogger(__name__)
+                logger.info("[API测试] 开始自动检测Rewardoo API端点...")
+                detected = ApiEndpointDetector.detect_rewardoo_endpoint(token, api_url)
+                if detected:
+                    detected_base_url, detected_path = detected
+                    detected_endpoint = f"{detected_base_url}{detected_path}"
+                    logger.info(f"[API测试] 自动检测到端点: {detected_endpoint}")
+                    # 更新账号备注，保存检测到的API URL
+                    import json
+                    notes_data = {}
+                    if account.notes:
+                        try:
+                            notes_data = json.loads(account.notes)
+                        except:
+                            pass
+                    notes_data["rewardoo_api_url"] = detected_base_url
+                    account.notes = json.dumps(notes_data)
+                    db.commit()
+            
             # 获取API配置
             api_config = ApiConfigService.get_account_api_config(account)
-            base_url = api_url or api_config.get("base_url")
+            base_url = api_url or (detected_endpoint.split(detected_path)[0] if detected_endpoint and 'detected_path' in locals() else None) or api_config.get("base_url")
             
-            service = RewardooService(token=token, base_url=base_url)
-            result = service.get_transaction_details(begin_date, end_date)
-            
-            if result.get("code") == "0" or result.get("success"):
-                return {
-                    "success": True,
-                    "message": f"连接成功！API URL: {base_url or '默认'}。获取到 {len(result.get('data', {}).get('transactions', []))} 条测试数据。"
-                }
-            else:
-                return {
-                    "success": False,
-                    "message": f"连接失败: {result.get('message', '未知错误')}"
-                }
+            try:
+                service = RewardooService(token=token, base_url=base_url)
+                result = service.get_transaction_details(begin_date, end_date)
+                
+                if result.get("code") == "0" or result.get("success"):
+                    transactions_count = len(result.get('data', {}).get('transactions', []))
+                    message = f"连接成功！API URL: {base_url or '默认'}。"
+                    if detected_endpoint:
+                        message += f" 自动检测到可用端点。"
+                    message += f" 获取到 {transactions_count} 条测试数据。"
+                    return {
+                        "success": True,
+                        "message": message,
+                        "detected_endpoint": detected_endpoint
+                    }
+                else:
+                    # 如果失败且未启用自动检测，建议启用自动检测
+                    if not auto_detect:
+                        return {
+                            "success": False,
+                            "message": f"连接失败: {result.get('message', '未知错误')}\n\n提示：可以尝试启用'自动检测端点'功能，系统会自动尝试多个可能的API端点。",
+                            "suggest_auto_detect": True
+                        }
+                    else:
+                        return {
+                            "success": False,
+                            "message": f"连接失败: {result.get('message', '未知错误')}"
+                        }
+            except Exception as e:
+                # 如果失败且未启用自动检测，建议启用自动检测
+                if not auto_detect and "404" in str(e):
+                    return {
+                        "success": False,
+                        "message": f"API端点不存在 (404)。当前URL: {base_url}\n\n提示：可以尝试启用'自动检测端点'功能，系统会自动尝试多个可能的API端点。",
+                        "suggest_auto_detect": True
+                    }
+                else:
+                    from app.services.api_config_service import ApiConfigService
+                    error_message = ApiConfigService.format_error_message(e, account, "API测试")
+                    return {
+                        "success": False,
+                        "message": f"测试失败: {error_message}"
+                    }
         
         elif platform_code in ["collabglow", "cg"]:
             service = CollabGlowService(token=token)
