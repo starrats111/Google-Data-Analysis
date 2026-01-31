@@ -678,26 +678,43 @@ const AffiliateAccounts = () => {
 
             {/* 平台多渠道支持：API URL配置 */}
             {syncAccount?.platform && (() => {
-              const platformCode = (syncAccount.platform.platform_code || '').toLowerCase()
-              const platformName = (syncAccount.platform.platform_name || '').toLowerCase()
+              const platformCode = (syncAccount.platform.platform_code || '').toLowerCase().trim()
+              const platformName = (syncAccount.platform.platform_name || '').toLowerCase().trim()
               
-              // 检查是否是Rewardoo或CollabGlow平台
+              // 检查是否是Rewardoo或CollabGlow平台（支持多种格式）
               const isRewardoo = platformCode === 'rewardoo' || platformCode === 'rw' || 
-                                platformName.includes('rewardoo') || platformName.includes('rw')
+                                platformName.includes('rewardoo') || platformName === 'rw' ||
+                                platformName.includes('rw')
               const isCollabGlow = platformCode === 'collabglow' || platformCode === 'cg' || 
                                    platformName.includes('collabglow') || platformName.includes('cg')
               
-              if (isRewardoo || isCollabGlow) {
-                const platformConfig = getPlatformApiConfig(syncAccount.platform.platform_code)
+              // 也支持LB、PM、BSH、CF等通用平台
+              const isGenericPlatform = ['lb', 'pm', 'bsh', 'cf'].includes(platformCode) || 
+                                       ['lb', 'pm', 'bsh', 'cf'].includes(platformName)
+              
+              if (isRewardoo || isCollabGlow || isGenericPlatform) {
+                // 尝试使用platform_code，如果失败则使用platform_name
+                const configCode = syncAccount.platform.platform_code || syncAccount.platform.platform_name
+                const platformConfig = getPlatformApiConfig(configCode)
+                
+                // 查找API URL字段（支持所有平台的字段名）
                 const apiUrlField = platformConfig.fields.find(f => 
-                  f.name === 'rewardoo_api_url' || f.name === 'collabglow_api_url'
+                  f.name === 'rewardoo_api_url' || 
+                  f.name === 'collabglow_api_url' ||
+                  f.name === 'lb_api_url' ||
+                  f.name === 'pm_api_url' ||
+                  f.name === 'bsh_api_url' ||
+                  f.name === 'cf_api_url' ||
+                  f.name === 'api_url'
                 )
+                
                 if (apiUrlField) {
                   return (
                     <Form.Item
                       name="api_url"
                       label={apiUrlField.label}
                       help={apiUrlField.help}
+                      rules={apiUrlField.required ? [{ required: true, message: `请输入${apiUrlField.label}` }] : []}
                     >
                       <Input 
                         placeholder={apiUrlField.placeholder}
@@ -966,26 +983,43 @@ const AffiliateAccounts = () => {
 
             {/* 平台多渠道支持：API URL配置 */}
             {syncAccount?.platform && (() => {
-              const platformCode = (syncAccount.platform.platform_code || '').toLowerCase()
-              const platformName = (syncAccount.platform.platform_name || '').toLowerCase()
+              const platformCode = (syncAccount.platform.platform_code || '').toLowerCase().trim()
+              const platformName = (syncAccount.platform.platform_name || '').toLowerCase().trim()
               
-              // 检查是否是Rewardoo或CollabGlow平台
+              // 检查是否是Rewardoo或CollabGlow平台（支持多种格式）
               const isRewardoo = platformCode === 'rewardoo' || platformCode === 'rw' || 
-                                platformName.includes('rewardoo') || platformName.includes('rw')
+                                platformName.includes('rewardoo') || platformName === 'rw' ||
+                                platformName.includes('rw')
               const isCollabGlow = platformCode === 'collabglow' || platformCode === 'cg' || 
                                    platformName.includes('collabglow') || platformName.includes('cg')
               
-              if (isRewardoo || isCollabGlow) {
-                const platformConfig = getPlatformApiConfig(syncAccount.platform.platform_code)
+              // 也支持LB、PM、BSH、CF等通用平台
+              const isGenericPlatform = ['lb', 'pm', 'bsh', 'cf'].includes(platformCode) || 
+                                       ['lb', 'pm', 'bsh', 'cf'].includes(platformName)
+              
+              if (isRewardoo || isCollabGlow || isGenericPlatform) {
+                // 尝试使用platform_code，如果失败则使用platform_name
+                const configCode = syncAccount.platform.platform_code || syncAccount.platform.platform_name
+                const platformConfig = getPlatformApiConfig(configCode)
+                
+                // 查找API URL字段（支持所有平台的字段名）
                 const apiUrlField = platformConfig.fields.find(f => 
-                  f.name === 'rewardoo_api_url' || f.name === 'collabglow_api_url'
+                  f.name === 'rewardoo_api_url' || 
+                  f.name === 'collabglow_api_url' ||
+                  f.name === 'lb_api_url' ||
+                  f.name === 'pm_api_url' ||
+                  f.name === 'bsh_api_url' ||
+                  f.name === 'cf_api_url' ||
+                  f.name === 'api_url'
                 )
+                
                 if (apiUrlField) {
                   return (
                     <Form.Item
                       name="api_url"
                       label={apiUrlField.label}
                       help={apiUrlField.help}
+                      rules={apiUrlField.required ? [{ required: true, message: `请输入${apiUrlField.label}` }] : []}
                     >
                       <Input 
                         placeholder={apiUrlField.placeholder}
