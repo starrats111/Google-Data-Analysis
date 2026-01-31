@@ -306,10 +306,26 @@ const AffiliateAccounts = () => {
       setSyncResult(response.data)
       message.success(`成功同步 ${response.data.saved_count || 0} 条记录`)
     } catch (error) {
-      message.error(error.response?.data?.detail || '同步失败')
+      const errorMsg = error.response?.data?.detail || error.response?.data?.message || '同步失败'
+      // 显示详细的错误信息（支持多行）
+      message.error({
+        content: (
+          <div>
+            {errorMsg.split('\n').map((line, idx) => (
+              <div key={idx} style={{ marginBottom: idx > 0 ? '4px' : 0, whiteSpace: 'pre-wrap' }}>
+                {line}
+              </div>
+            ))}
+            <div style={{ marginTop: '8px', fontSize: '12px', color: '#999' }}>
+              提示：查看 <a href="/平台API配置文档.md" target="_blank" style={{ color: '#1890ff' }}>平台API配置文档</a> 获取帮助
+            </div>
+          </div>
+        ),
+        duration: 15, // 显示15秒，让用户有时间阅读
+      })
       setSyncResult({
         success: false,
-        message: error.response?.data?.detail || '同步失败'
+        message: errorMsg
       })
     } finally {
       setSyncing(false)
@@ -322,30 +338,34 @@ const AffiliateAccounts = () => {
     setSyncing(true)
     try {
       const token = syncForm.getFieldValue('token')
-      const dateRange = syncForm.getFieldValue('dateRange')
-      if (!dateRange || dateRange.length !== 2) {
-        message.warning('请先选择日期范围')
-        setSyncing(false)
-        return
-      }
+      const api_url = syncForm.getFieldValue('api_url')
       
-      const beginDate = dateRange[0].format('YYYY-MM-DD')
-      const endDate = dateRange[1].format('YYYY-MM-DD')
-      
-      // 使用同步接口进行测试（只同步1天数据作为测试）
-      const response = await api.post(`/api/affiliate/accounts/${syncAccount.id}/sync`, {
-        begin_date: beginDate,
-        end_date: beginDate, // 只测试第一天
-        token: token || undefined
+      // 使用新的API测试端点
+      const response = await api.post(`/api/affiliate/accounts/${syncAccount.id}/test-api`, {
+        token: token || undefined,
+        api_url: api_url || undefined
       })
       
       if (response.data.success) {
-        message.success(`连接成功！找到 ${response.data.saved_count || 0} 条记录`)
+        message.success(response.data.message || '连接成功！')
       } else {
-        message.error(response.data.message || '测试连接失败')
+        // 显示详细的错误信息（支持多行）
+        const errorMsg = response.data.message || '测试连接失败'
+        message.error({
+          content: errorMsg.split('\n').map((line, idx) => (
+            <div key={idx} style={{ marginBottom: idx > 0 ? '4px' : 0, whiteSpace: 'pre-wrap' }}>{line}</div>
+          )),
+          duration: 10, // 显示10秒
+        })
       }
     } catch (error) {
-      message.error(error.response?.data?.detail || '测试连接失败')
+      const errorMsg = error.response?.data?.detail || error.response?.data?.message || '测试连接失败'
+      message.error({
+        content: errorMsg.split('\n').map((line, idx) => (
+          <div key={idx} style={{ marginBottom: idx > 0 ? '4px' : 0, whiteSpace: 'pre-wrap' }}>{line}</div>
+        )),
+        duration: 10,
+      })
     } finally {
       setSyncing(false)
     }
