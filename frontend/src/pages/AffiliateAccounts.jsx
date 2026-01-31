@@ -763,7 +763,7 @@ const AffiliateAccounts = () => {
               name="notes"
               label="备注"
             >
-              <Input.TextArea rows={3} placeholder="可选：备注信息（JSON格式，例如：{\"api_token\":\"xxx\",\"rewardoo_api_url\":\"https://api.rewardoo.com/api\"}）" />
+              <Input.TextArea rows={3} placeholder='可选：备注信息（JSON格式，例如：{"api_token":"xxx","rewardoo_api_url":"https://api.rewardoo.com/api"}）' />
             </Form.Item>
 
             {/* 动态显示平台API配置字段 - 使用Form.Item dependencies确保实时更新 */}
