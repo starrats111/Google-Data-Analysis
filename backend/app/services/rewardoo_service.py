@@ -109,7 +109,11 @@ class RewardooService(PlatformServiceBase):
             )
             
             # 检查HTTP状态码
-            if response.status_code != 200:
+            if response.status_code == 404:
+                error_msg = f"[RW TransactionDetails API] API端点不存在 (404)。请检查API URL是否正确。当前URL: {self.transaction_details_api}。如果Rewardoo有多个渠道，请在账号备注中配置正确的API URL（rewardoo_api_url字段）。"
+                logger.error(error_msg)
+                raise Exception(error_msg)
+            elif response.status_code != 200:
                 error_msg = f"[RW TransactionDetails API] HTTP错误 {response.status_code}: {response.text[:200]}"
                 logger.error(error_msg)
                 raise Exception(error_msg)

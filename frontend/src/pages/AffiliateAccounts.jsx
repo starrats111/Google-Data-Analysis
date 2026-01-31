@@ -598,6 +598,34 @@ const AffiliateAccounts = () => {
               />
             </Form.Item>
 
+            {/* Rewardoo多渠道支持：API URL配置 */}
+            {syncAccount?.platform && (() => {
+              const platformCode = (syncAccount.platform.platform_code || '').toLowerCase()
+              const platformName = (syncAccount.platform.platform_name || '').toLowerCase()
+              // 支持多种平台代码和名称匹配（包括RW、rw、Rewardoo等）
+              const isRewardoo = platformCode === 'rewardoo' || platformCode === 'rw' || 
+                                platformName.includes('rewardoo') || platformName.includes('rw')
+              
+              if (isRewardoo) {
+                const platformConfig = getPlatformApiConfig(syncAccount.platform.platform_code)
+                const apiUrlField = platformConfig.fields.find(f => f.name === 'rewardoo_api_url')
+                if (apiUrlField) {
+                  return (
+                    <Form.Item
+                      name="api_url"
+                      label={apiUrlField.label}
+                      help={apiUrlField.help}
+                    >
+                      <Input 
+                        placeholder={apiUrlField.placeholder}
+                      />
+                    </Form.Item>
+                  )
+                }
+              }
+              return null
+            })()}
+
             <Form.Item>
               <Button 
                 type="default" 
@@ -825,6 +853,34 @@ const AffiliateAccounts = () => {
                 })()}
               />
             </Form.Item>
+
+            {/* Rewardoo多渠道支持：API URL配置 */}
+            {syncAccount?.platform && (() => {
+              const platformCode = (syncAccount.platform.platform_code || '').toLowerCase()
+              const platformName = (syncAccount.platform.platform_name || '').toLowerCase()
+              // 支持多种平台代码和名称匹配（包括RW、rw、Rewardoo等）
+              const isRewardoo = platformCode === 'rewardoo' || platformCode === 'rw' || 
+                                platformName.includes('rewardoo') || platformName.includes('rw')
+              
+              if (isRewardoo) {
+                const platformConfig = getPlatformApiConfig(syncAccount.platform.platform_code)
+                const apiUrlField = platformConfig.fields.find(f => f.name === 'rewardoo_api_url')
+                if (apiUrlField) {
+                  return (
+                    <Form.Item
+                      name="api_url"
+                      label={apiUrlField.label}
+                      help={apiUrlField.help}
+                    >
+                      <Input 
+                        placeholder={apiUrlField.placeholder}
+                      />
+                    </Form.Item>
+                  )
+                }
+              }
+              return null
+            })()}
 
             <Form.Item>
               <Button 
