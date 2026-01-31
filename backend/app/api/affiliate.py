@@ -250,9 +250,7 @@ async def delete_account(
 @router.post("/accounts/{account_id}/sync")
 async def sync_account_data(
     account_id: int,
-    begin_date: str,
-    end_date: str,
-    token: Optional[str] = None,
+    request_data: dict,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
@@ -261,10 +259,15 @@ async def sync_account_data(
     
     Args:
         account_id: 联盟账号ID
-        begin_date: 开始日期 YYYY-MM-DD
-        end_date: 结束日期 YYYY-MM-DD
-        token: API Token（可选，如果不提供则从账号备注中读取）
+        request_data: 请求数据，包含 begin_date, end_date, token
     """
+    # 从请求体中提取参数
+    begin_date = request_data.get("begin_date")
+    end_date = request_data.get("end_date")
+    token = request_data.get("token")
+    
+    if not begin_date or not end_date:
+        raise HTTPException(status_code=400, detail="缺少必要参数: begin_date 和 end_date")
     from app.services.platform_data_sync import PlatformDataSyncService
     
     # 检查账号是否存在
