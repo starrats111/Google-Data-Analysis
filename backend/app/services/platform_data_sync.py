@@ -178,22 +178,23 @@ class PlatformDataSyncService:
         self,
         account: AffiliateAccount,
         begin_date: str,
-        end_date: str
+        end_date: str,
+        token: Optional[str] = None
     ) -> Dict:
         """同步LinkHaitao数据"""
         try:
-            # 获取token
+            # 获取token：优先使用传入的token，如果没有则从账号备注中读取
             import json
-            token = None
-            if account.notes:
-                try:
-                    notes_data = json.loads(account.notes)
-                    token = notes_data.get("linkhaitao_token") or notes_data.get("token")
-                except:
-                    pass
+            if not token:
+                if account.notes:
+                    try:
+                        notes_data = json.loads(account.notes)
+                        token = notes_data.get("linkhaitao_token") or notes_data.get("token")
+                    except:
+                        pass
             
             if not token:
-                return {"success": False, "message": "未配置LinkHaitao Token"}
+                return {"success": False, "message": "未配置LinkHaitao Token。请在同步对话框中输入Token，或在账号编辑页面的备注中配置。"}
             
             # 同步数据
             service = LinkHaitaoService(token=token)
