@@ -31,30 +31,58 @@ const AffiliateAccounts = () => {
   const [syncForm] = Form.useForm()
 
   useEffect(() => {
-    fetchPlatforms()
-    if (isManager) {
-      fetchAccountsByEmployees()
-    } else {
-      fetchAccounts()
+    let isMounted = true
+    
+    const loadData = async () => {
+      try {
+        await fetchPlatforms()
+        if (isMounted) {
+          if (isManager) {
+            await fetchAccountsByEmployees()
+          } else {
+            await fetchAccounts()
+          }
+        }
+      } catch (error) {
+        console.error('加载数据失败:', error)
+      }
+    }
+    
+    loadData()
+    
+    return () => {
+      isMounted = false
     }
   }, [isManager])
 
   const fetchPlatforms = async () => {
     try {
-      const response = await api.get('/api/affiliate/platforms')
-      setPlatforms(response.data)
+      const response = await api.get('/api/affiliate/platforms', {
+        timeout: 10000 // 10秒超时
+      })
+      setPlatforms(response.data || [])
     } catch (error) {
-      message.error('获取平台列表失败')
+      console.error('获取平台列表失败:', error)
+      if (error.code !== 'ECONNABORTED') {
+        message.error('获取平台列表失败')
+      }
+      setPlatforms([]) // 设置空数组避免卡顿
     }
   }
 
   const fetchAccounts = async () => {
     setLoading(true)
     try {
-      const response = await api.get('/api/affiliate/accounts')
-      setAccounts(response.data)
+      const response = await api.get('/api/affiliate/accounts', {
+        timeout: 15000 // 15秒超时
+      })
+      setAccounts(response.data || [])
     } catch (error) {
-      message.error('获取账号列表失败')
+      console.error('获取账号列表失败:', error)
+      if (error.code !== 'ECONNABORTED') {
+        message.error('获取账号列表失败')
+      }
+      setAccounts([]) // 设置空数组避免卡顿
     } finally {
       setLoading(false)
     }
@@ -63,10 +91,16 @@ const AffiliateAccounts = () => {
   const fetchAccountsByEmployees = async () => {
     setLoading(true)
     try {
-      const response = await api.get('/api/affiliate/accounts/by-employees')
-      setEmployeesData(response.data)
+      const response = await api.get('/api/affiliate/accounts/by-employees', {
+        timeout: 15000 // 15秒超时
+      })
+      setEmployeesData(response.data || [])
     } catch (error) {
-      message.error('获取员工账号信息失败')
+      console.error('获取员工账号信息失败:', error)
+      if (error.code !== 'ECONNABORTED') {
+        message.error('获取员工账号信息失败')
+      }
+      setEmployeesData([]) // 设置空数组避免卡顿
     } finally {
       setLoading(false)
     }

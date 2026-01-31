@@ -67,28 +67,42 @@ async def get_accounts_by_employees(
 ):
     """获取按员工分组的联盟账号信息（经理专用）"""
     from app.models.user import UserRole
+    from sqlalchemy.orm import joinedload
     
-    # 获取所有员工
+    # 获取所有员工，并预加载账号和平台信息（避免N+1查询）
     employees = db.query(User).filter(User.role == UserRole.EMPLOYEE).all()
+    
+    # 一次性获取所有账号和平台信息
+    all_accounts = db.query(AffiliateAccount).options(
+        joinedload(AffiliateAccount.platform)
+    ).all()
+    
+    # 按员工ID分组账号
+    accounts_by_user = {}
+    for account in all_accounts:
+        user_id = account.user_id
+        if user_id not in accounts_by_user:
+            accounts_by_user[user_id] = []
+        accounts_by_user[user_id].append(account)
     
     result = []
     for employee in employees:
-        # 获取该员工的所有账号
-        accounts = db.query(AffiliateAccount).filter(
-            AffiliateAccount.user_id == employee.id
-        ).all()
+        accounts = accounts_by_user.get(employee.id, [])
         
         # 统计信息
         total_accounts = len(accounts)
-        active_accounts = len([acc for acc in accounts if acc.is_active])
+        active_accounts = sum(1 for acc in accounts if acc.is_active)
         
         # 按平台分组
         platforms_info = {}
         for account in accounts:
-            platform_name = account.platform.platform_name
+            platform = account.platform
+            if not platform:
+                continue
+            platform_name = platform.platform_name
             if platform_name not in platforms_info:
                 platforms_info[platform_name] = {
-                    "platform_id": account.platform.id,
+                    "platform_id": platform.id,
                     "platform_name": platform_name,
                     "accounts": []
                 }
