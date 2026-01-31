@@ -92,6 +92,110 @@ def get_date_range_from_type(date_range_type: str) -> tuple[date, date, str]:
         raise HTTPException(status_code=400, detail=f"不支持的日期范围类型: {date_range_type}")
 
 
+@router.get("/by-campaign")
+async def get_campaign_data(
+    date_range_type: str = Query(..., description="日期范围类型: past7days, thisWeek, thisMonth, today, yesterday, custom"),
+    begin_date: Optional[str] = Query(None, description="自定义开始日期 YYYY-MM-DD（仅custom时使用）"),
+    end_date: Optional[str] = Query(None, description="自定义结束日期 YYYY-MM-DD（仅custom时使用）"),
+    mcc_id: Optional[int] = Query(None, description="MCC ID（可选）"),
+    platform_code: Optional[str] = Query(None, description="平台代码（可选）"),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    按广告系列分组获取数据
+    
+    返回格式：
+    - 时间范围（x月x日-y月y日）
+    - 广告系列
+    - 预算
+    - 费用
+    - 展示次数
+    - 点击次数
+    - CPC
+    - CTR
+    - IS Budget丢失
+    - IS Rank丢失
+    """
+    # 获取日期范围
+    if date_range_type == "custom":
+        if not begin_date or not end_date:
+            raise HTTPException(status_code=400, detail="自定义日期范围需要提供begin_date和end_date")
+        try:
+            begin = datetime.strptime(begin_date, "%Y-%m-%d").date()
+            end = datetime.strptime(end_date, "%Y-%m-%d").date()
+        except ValueError:
+            raise HTTPException(status_code=400, detail="日期格式错误，应为 YYYY-MM-DD")
+    else:
+        begin, end, _ = get_date_range_from_type(date_range_type)
+    
+    # 按广告系列分组查询
+    query = db.query(
+        GoogleAdsApiData.campaign_id,
+        GoogleAdsApiData.campaign_name,
+        func.sum(GoogleAdsApiData.budget).label('total_budget'),
+        func.sum(GoogleAdsApiData.cost).label('total_cost'),
+        func.sum(GoogleAdsApiData.impressions).label('total_impressions'),
+        func.sum(GoogleAdsApiData.clicks).label('total_clicks'),
+        func.avg(GoogleAdsApiData.cpc).label('avg_cpc'),
+        func.avg(GoogleAdsApiData.is_budget_lost).label('avg_is_budget_lost'),
+        func.avg(GoogleAdsApiData.is_rank_lost).label('avg_is_rank_lost')
+    ).filter(
+        GoogleAdsApiData.user_id == current_user.id,
+        GoogleAdsApiData.date >= begin,
+        GoogleAdsApiData.date <= end
+    ).group_by(
+        GoogleAdsApiData.campaign_id,
+        GoogleAdsApiData.campaign_name
+    )
+    
+    # 权限检查
+    if current_user.role == "employee":
+        query = query.filter(GoogleAdsApiData.user_id == current_user.id)
+    
+    # 筛选条件
+    if mcc_id:
+        query = query.filter(GoogleAdsApiData.mcc_id == mcc_id)
+    
+    if platform_code:
+        query = query.filter(GoogleAdsApiData.extracted_platform_code == platform_code)
+    
+    results = query.all()
+    
+    # 格式化日期范围显示
+    begin_str = begin.strftime("%m月%d日")
+    end_str = end.strftime("%m月%d日")
+    date_range_display = f"{begin_str}-{end_str}"
+    
+    # 格式化数据
+    campaign_data = []
+    for row in results:
+        total_impressions = float(row.total_impressions or 0)
+        total_clicks = float(row.total_clicks or 0)
+        ctr = (total_clicks / total_impressions * 100) if total_impressions > 0 else 0
+        
+        campaign_data.append({
+            "date_range": date_range_display,
+            "campaign_name": row.campaign_name,
+            "campaign_id": row.campaign_id,
+            "budget": round(float(row.total_budget or 0), 2),
+            "cost": round(float(row.total_cost or 0), 2),
+            "impressions": int(total_impressions),
+            "clicks": int(total_clicks),
+            "cpc": round(float(row.avg_cpc or 0), 4),
+            "ctr": round(ctr, 2),
+            "is_budget_lost": round(float(row.avg_is_budget_lost or 0), 2),
+            "is_rank_lost": round(float(row.avg_is_rank_lost or 0), 2)
+        })
+    
+    return {
+        "begin_date": begin.strftime("%Y-%m-%d"),
+        "end_date": end.strftime("%Y-%m-%d"),
+        "date_range_display": date_range_display,
+        "campaigns": campaign_data
+    }
+
+
 @router.get("", response_model=DateRangeAggregateResponse)
 @router.get("/", response_model=DateRangeAggregateResponse)
 async def get_date_range_aggregate(

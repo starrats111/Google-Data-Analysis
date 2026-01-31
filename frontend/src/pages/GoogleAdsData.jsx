@@ -12,12 +12,14 @@ export default function GoogleAdsData() {
   
   const [loading, setLoading] = useState(false)
   const [summaryData, setSummaryData] = useState(null) // 聚合数据
+  const [campaignData, setCampaignData] = useState([]) // 按广告系列分组的数据
   const [detailData, setDetailData] = useState([]) // 详细数据
   const [mccAccounts, setMccAccounts] = useState([])
   const [platforms, setPlatforms] = useState([])
   const [form] = Form.useForm()
   const [dateRangeType, setDateRangeType] = useState('past7days') // 时间范围类型
   const [searchText, setSearchText] = useState('')
+  const [viewMode, setViewMode] = useState('campaign') // 'campaign' 或 'summary'
 
   useEffect(() => {
     fetchMccAccounts()
@@ -119,22 +121,37 @@ export default function GoogleAdsData() {
         }
       }
       
-      // 使用新的聚合API，完全对齐Google Ads的统计口径
-      // 返回时间范围级别的汇总（一行），不是每日明细加总
-      const response = await api.get('/api/google-ads-aggregate', { params })
-      
-      setSummaryData(response.data)
-      setDetailData([]) // 不再显示每日明细
-      
-      if (response.data && (response.data.google_ads_cost > 0 || response.data.affiliate_commission > 0)) {
-        message.success(`查询成功：${response.data.date_range_label}`)
+      // 根据视图模式选择不同的API
+      if (viewMode === 'campaign') {
+        // 按广告系列分组的数据
+        const campaignResponse = await api.get('/api/google-ads-aggregate/by-campaign', { params })
+        setCampaignData(campaignResponse.data.campaigns || [])
+        setSummaryData(null)
+        setDetailData([])
+        
+        if (campaignResponse.data.campaigns && campaignResponse.data.campaigns.length > 0) {
+          message.success(`查询成功：找到 ${campaignResponse.data.campaigns.length} 个广告系列`)
+        } else {
+          message.info('未找到数据')
+        }
       } else {
-        message.info('未找到数据')
+        // 时间范围级别的汇总数据
+        const response = await api.get('/api/google-ads-aggregate', { params })
+        setSummaryData(response.data)
+        setCampaignData([])
+        setDetailData([])
+        
+        if (response.data && (response.data.google_ads_cost > 0 || response.data.affiliate_commission > 0)) {
+          message.success(`查询成功：${response.data.date_range_label}`)
+        } else {
+          message.info('未找到数据')
+        }
       }
-    } catch (error) {
+      } catch (error) {
       console.error('查询失败:', error)
       message.error(error.response?.data?.detail || '查询失败')
       setSummaryData(null)
+      setCampaignData([])
       setDetailData([])
     } finally {
       setLoading(false)
@@ -155,6 +172,19 @@ export default function GoogleAdsData() {
           onFinish={handleSearch}
         >
           <Row gutter={16}>
+            <Col span={24} style={{ marginBottom: 16 }}>
+              <Form.Item label="视图模式">
+                <Radio.Group 
+                  value={viewMode} 
+                  onChange={(e) => setViewMode(e.target.value)}
+                  buttonStyle="solid"
+                >
+                  <Radio.Button value="campaign">按广告系列</Radio.Button>
+                  <Radio.Button value="summary">时间范围汇总</Radio.Button>
+                </Radio.Group>
+              </Form.Item>
+            </Col>
+            
             <Col span={24} style={{ marginBottom: 16 }}>
               <Form.Item label="时间范围">
                 <Radio.Group 
@@ -242,8 +272,110 @@ export default function GoogleAdsData() {
         </Form>
       </Card>
 
+      {/* 按广告系列分组的数据 */}
+      {viewMode === 'campaign' && campaignData.length > 0 && (
+        <Card style={{ marginBottom: 16 }}>
+          <div style={{ marginBottom: 16, paddingBottom: 16, borderBottom: '1px solid #e8e8e8' }}>
+            <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 500 }}>
+              广告系列数据
+            </h3>
+            <div style={{ fontSize: '12px', color: '#999', marginTop: '4px' }}>
+              {campaignData[0]?.date_range || ''}
+            </div>
+          </div>
+          
+          <Table
+            dataSource={campaignData}
+            pagination={{ pageSize: 20 }}
+            rowKey="campaign_id"
+            scroll={{ x: 1200 }}
+            columns={[
+              {
+                title: '时间范围',
+                dataIndex: 'date_range',
+                key: 'date_range',
+                width: 150,
+                fixed: 'left'
+              },
+              {
+                title: '广告系列',
+                dataIndex: 'campaign_name',
+                key: 'campaign_name',
+                width: 200,
+                fixed: 'left',
+                render: (text) => <strong>{text}</strong>
+              },
+              {
+                title: '预算',
+                dataIndex: 'budget',
+                key: 'budget',
+                width: 120,
+                align: 'right',
+                render: (val) => `$${(val || 0).toFixed(2)}`
+              },
+              {
+                title: '费用',
+                dataIndex: 'cost',
+                key: 'cost',
+                width: 120,
+                align: 'right',
+                render: (val) => `$${(val || 0).toFixed(2)}`
+              },
+              {
+                title: '展示次数',
+                dataIndex: 'impressions',
+                key: 'impressions',
+                width: 120,
+                align: 'right',
+                render: (val) => (val || 0).toLocaleString()
+              },
+              {
+                title: '点击次数',
+                dataIndex: 'clicks',
+                key: 'clicks',
+                width: 120,
+                align: 'right',
+                render: (val) => (val || 0).toLocaleString()
+              },
+              {
+                title: 'CPC',
+                dataIndex: 'cpc',
+                key: 'cpc',
+                width: 100,
+                align: 'right',
+                render: (val) => `$${(val || 0).toFixed(4)}`
+              },
+              {
+                title: 'CTR',
+                dataIndex: 'ctr',
+                key: 'ctr',
+                width: 100,
+                align: 'right',
+                render: (val) => `${(val || 0).toFixed(2)}%`
+              },
+              {
+                title: 'IS Budget丢失',
+                dataIndex: 'is_budget_lost',
+                key: 'is_budget_lost',
+                width: 130,
+                align: 'right',
+                render: (val) => `${(val || 0).toFixed(2)}%`
+              },
+              {
+                title: 'IS Rank丢失',
+                dataIndex: 'is_rank_lost',
+                key: 'is_rank_lost',
+                width: 130,
+                align: 'right',
+                render: (val) => `${(val || 0).toFixed(2)}%`
+              }
+            ]}
+          />
+        </Card>
+      )}
+
       {/* 时间范围级别汇总（一行）- 完全对齐Google Ads */}
-      {summaryData && (
+      {viewMode === 'summary' && summaryData && (
         <Card style={{ marginBottom: 16 }}>
           <div style={{ marginBottom: 16, paddingBottom: 16, borderBottom: '1px solid #e8e8e8' }}>
             <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 500 }}>
@@ -361,7 +493,7 @@ export default function GoogleAdsData() {
 
       {/* 不再显示每日明细 - 如需日级分析，请使用明细页 */}
 
-      {!summaryData && !loading && (
+      {!summaryData && !campaignData.length && !loading && (
         <Card>
           <div style={{ textAlign: 'center', padding: '40px 0', color: '#999' }}>
             请选择时间范围并点击查询
