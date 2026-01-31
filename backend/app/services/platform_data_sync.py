@@ -39,15 +39,22 @@ class PlatformDataSyncService:
         Returns:
             同步结果
         """
-        account = self.db.query(AffiliateAccount).filter(
+        from sqlalchemy.orm import joinedload
+        
+        account = self.db.query(AffiliateAccount).options(
+            joinedload(AffiliateAccount.platform)
+        ).filter(
             AffiliateAccount.id == account_id
         ).first()
         
         if not account:
             return {"success": False, "message": "账号不存在"}
         
-        platform_code = account.platform.platform_code.lower()
-        platform_name = account.platform.platform_name
+        if not account.platform:
+            return {"success": False, "message": "账号关联的平台不存在"}
+        
+        platform_code = account.platform.platform_code.lower() if account.platform.platform_code else ""
+        platform_name = account.platform.platform_name or "未知平台"
         logger.info(f"同步账号 {account.account_name} (ID: {account_id}), 平台代码: {platform_code}, 平台名称: {platform_name}")
         
         # 根据平台类型选择不同的服务

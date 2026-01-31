@@ -284,10 +284,16 @@ async def sync_account_data(
         raise HTTPException(status_code=400, detail="缺少必要参数: begin_date 和 end_date")
     from app.services.platform_data_sync import PlatformDataSyncService
     
-    # 检查账号是否存在
-    account = db.query(AffiliateAccount).filter(AffiliateAccount.id == account_id).first()
+    # 检查账号是否存在，并预加载平台信息
+    from sqlalchemy.orm import joinedload
+    account = db.query(AffiliateAccount).options(
+        joinedload(AffiliateAccount.platform)
+    ).filter(AffiliateAccount.id == account_id).first()
     if not account:
         raise HTTPException(status_code=404, detail="账号不存在")
+    
+    if not account.platform:
+        raise HTTPException(status_code=400, detail="账号关联的平台不存在")
     
     # 权限控制：只能同步自己的账号
     if account.user_id != current_user.id:
@@ -304,7 +310,7 @@ async def sync_account_data(
                 pass
         
         # 根据平台代码确定token字段名
-        platform_code = account.platform.platform_code.lower()
+        platform_code = account.platform.platform_code.lower() if account.platform.platform_code else ""
         if platform_code in ["collabglow", "cg", "collab-glow"]:
             notes_data["collabglow_token"] = token
         elif platform_code in ["linkhaitao", "link-haitao", "lh", "link_haitao"]:
