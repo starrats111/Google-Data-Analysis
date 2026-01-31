@@ -24,8 +24,10 @@ export default function MccAccounts() {
     setLoading(true)
     try {
       const response = await api.get('/api/mcc/accounts')
+      console.log('获取到的MCC账号数据:', response.data)
       setMccAccounts(response.data)
     } catch (error) {
+      console.error('获取MCC账号列表失败:', error)
       message.error('获取MCC账号列表失败')
     } finally {
       setLoading(false)
@@ -39,13 +41,26 @@ export default function MccAccounts() {
   }
 
   const handleEdit = (mcc) => {
+    console.log('编辑MCC账号，原始数据:', {
+      id: mcc.id,
+      mcc_id: mcc.mcc_id,
+      client_id: mcc.client_id ? '已配置' : '未配置',
+      client_secret: mcc.client_secret ? '已配置' : '未配置',
+      refresh_token: mcc.refresh_token ? '已配置' : '未配置'
+    })
     setEditingMcc(mcc)
     // 保存原始API配置值（保留null/undefined，用于判断是否需要更新）
-    setOriginalApiValues({
+    const originalValues = {
       client_id: mcc.client_id,
       client_secret: mcc.client_secret,
       refresh_token: mcc.refresh_token
+    }
+    console.log('保存的原始API值:', {
+      client_id: originalValues.client_id ? '有值' : '无值',
+      client_secret: originalValues.client_secret ? '有值' : '无值',
+      refresh_token: originalValues.refresh_token ? '有值' : '无值'
     })
+    setOriginalApiValues(originalValues)
     form.setFieldsValue({
       mcc_id: mcc.mcc_id,
       mcc_name: mcc.mcc_name,
