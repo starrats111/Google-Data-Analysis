@@ -21,33 +21,48 @@ const Layout = () => {
   const location = useLocation()
   const { user, logout } = useAuth()
 
-  // 极简版菜单：只保留你每天真正要看的几个入口 + 一个「我的分析」总入口
+  // 菜单项：恢复所有必要入口，去掉多余字眼
   const allMenuItems = [
+    {
+      key: '/',
+      icon: <DashboardOutlined />,
+      label: '数据总览',
+    },
     {
       key: '/my-analysis',
       icon: <BarChartOutlined />,
-      label: '我的分析', // 进入后再选择 L7D / 每日分析
+      label: '我的分析',
     },
     {
       key: '/google-ads-data',
       icon: <BarChartOutlined />,
-      label: '表1：谷歌每日数据', // 对应你Excel里的表1
+      label: '谷歌每日数据',
     },
     {
       key: '/platform-data',
       icon: <AccountBookOutlined />,
-      label: '表2：平台每日数据', // 对应你Excel里的表2（佣金/订单）
+      label: '平台每日数据',
     },
     {
       key: '/expenses',
       icon: <WalletOutlined />,
-      label: '简单版：我的收益', // 把佣金-费用-拒付合在一起看
+      label: '我的收益',
+    },
+    {
+      key: '/mcc-accounts',
+      icon: <AccountBookOutlined />,
+      label: 'MCC账号',
+    },
+    {
+      key: '/accounts',
+      icon: <AccountBookOutlined />,
+      label: '平台账号',
     },
     {
       key: '/ad-campaigns',
       icon: <AppstoreOutlined />,
-      label: '高级：我的广告列表',
-      roles: ['employee'], // 仅员工可见，偶尔需要时再点
+      label: '我的广告列表',
+      roles: ['employee'], // 仅员工可见
     },
   ]
 
