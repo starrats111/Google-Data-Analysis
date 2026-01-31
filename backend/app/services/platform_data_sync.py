@@ -106,10 +106,18 @@ class PlatformDataSyncService:
             # 对于其他平台，尝试从notes中读取通用API配置
             # 如果平台有API token配置，可以在这里扩展支持
             logger.warning(f"✗ 未识别的平台代码: '{platform_code_normalized}' (原始: '{account.platform.platform_code}'), 平台名称: {platform_name}")
+            
+            # 提供友好的错误消息，不抛出异常，确保系统继续运行
             error_msg = f"平台 {platform_name}"
             if platform_url:
                 error_msg += f" ({platform_url})"
-            error_msg += f" 的API集成尚未实现。请联系管理员添加该平台的API支持。"
+            error_msg += f" 的API集成尚未实现。\n\n"
+            error_msg += "当前支持的平台：\n"
+            error_msg += "- Rewardoo (RW)\n"
+            error_msg += "- CollabGlow (CG)\n"
+            error_msg += "- LinkHaitao (LH)\n\n"
+            error_msg += "如需添加新平台支持，请联系管理员。"
+            
             return {"success": False, "message": error_msg}
     
     def _sync_collabglow_data(
