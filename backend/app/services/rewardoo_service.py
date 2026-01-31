@@ -20,6 +20,7 @@ COMMISSION_DETAILS_API = f"{BASE_URL}/commission_details"  # 辅助API
 
 
 from app.services.platform_services_base import PlatformServiceBase
+from app.services.api_config_service import ApiConfigService
 
 
 class RewardooService(PlatformServiceBase):

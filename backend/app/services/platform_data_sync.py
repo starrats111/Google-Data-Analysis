@@ -236,7 +236,10 @@ class PlatformDataSyncService:
         except Exception as e:
             self.db.rollback()
             logger.error(f"同步CollabGlow数据失败: {e}")
-            return {"success": False, "message": f"同步失败: {str(e)}"}
+            # 使用ApiConfigService格式化友好的错误消息
+            from app.services.api_config_service import ApiConfigService
+            error_message = ApiConfigService.format_error_message(e, account, "Commission Validation API")
+            return {"success": False, "message": f"同步失败: {error_message}"}
     
     def _sync_rewardoo_data(
         self,
@@ -265,23 +268,15 @@ class PlatformDataSyncService:
             if not token:
                 return {"success": False, "message": "未配置Rewardoo Token。请在同步对话框中输入Token，或在账号编辑页面的备注中配置。"}
             
-            # 从账号备注中读取API配置（支持多渠道）
-            api_base_url = None
-            if account.notes:
-                try:
-                    notes_data = json.loads(account.notes)
-                    # 支持多种配置方式
-                    api_base_url = (
-                        notes_data.get("rewardoo_api_url") or 
-                        notes_data.get("rw_api_url") or 
-                        notes_data.get("api_url") or
-                        notes_data.get("rewardoo_base_url") or
-                        notes_data.get("rw_base_url")
-                    )
-                    if api_base_url:
-                        logger.info(f"[RW同步] 使用自定义API URL: {api_base_url}")
-                except:
-                    pass
+            # 使用ApiConfigService获取API配置（支持多渠道）
+            from app.services.api_config_service import ApiConfigService
+            api_config = ApiConfigService.get_account_api_config(account)
+            api_base_url = api_config.get("base_url")
+            
+            if api_base_url:
+                logger.info(f"[RW同步] 使用API配置: base_url={api_base_url}")
+            else:
+                logger.info(f"[RW同步] 使用默认API配置")
             
             # 同步数据（使用TransactionDetails API，这是核心API）
             logger.info(f"使用Token进行同步 (Token长度: {len(token) if token else 0}, API URL: {api_base_url or '默认'})")
@@ -384,7 +379,10 @@ class PlatformDataSyncService:
         except Exception as e:
             self.db.rollback()
             logger.error(f"同步Rewardoo数据失败: {e}")
-            return {"success": False, "message": f"同步失败: {str(e)}"}
+            # 使用ApiConfigService格式化友好的错误消息
+            from app.services.api_config_service import ApiConfigService
+            error_message = ApiConfigService.format_error_message(e, account, "RW TransactionDetails API")
+            return {"success": False, "message": f"同步失败: {error_message}"}
     
     def _sync_linkhaitao_data(
         self,

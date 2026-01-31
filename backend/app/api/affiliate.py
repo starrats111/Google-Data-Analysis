@@ -20,6 +20,110 @@ from app.schemas.affiliate import (
 router = APIRouter(prefix="/api/affiliate", tags=["affiliate"])
 
 
+@router.post("/accounts/{account_id}/test-api")
+async def test_api_connection(
+    account_id: int,
+    token: Optional[str] = None,
+    api_url: Optional[str] = None,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    测试API连接
+    
+    用于验证API Token和API URL是否正确配置
+    """
+    account = db.query(AffiliateAccount).filter(
+        AffiliateAccount.id == account_id,
+        AffiliateAccount.user_id == current_user.id
+    ).first()
+    
+    if not account:
+        raise HTTPException(status_code=404, detail="账号不存在")
+    
+    if not account.platform:
+        raise HTTPException(status_code=400, detail="账号未关联平台")
+    
+    try:
+        from app.services.api_config_service import ApiConfigService
+        from app.services.rewardoo_service import RewardooService
+        from app.services.collabglow_service import CollabGlowService
+        from datetime import datetime, timedelta
+        
+        platform_code = (account.platform.platform_code or "").lower()
+        
+        # 获取或使用传入的token
+        if not token:
+            import json
+            if account.notes:
+                try:
+                    notes_data = json.loads(account.notes)
+                    if platform_code in ["rewardoo", "rw"]:
+                        token = notes_data.get("rewardoo_token") or notes_data.get("rw_token") or notes_data.get("api_token")
+                    elif platform_code in ["collabglow", "cg"]:
+                        token = notes_data.get("collabglow_token") or notes_data.get("cg_token") or notes_data.get("api_token")
+                except:
+                    pass
+        
+        if not token:
+            return {
+                "success": False,
+                "message": "未配置API Token。请在输入框中输入Token，或在账号备注中配置。"
+            }
+        
+        # 测试连接（使用最近7天的数据）
+        end_date = datetime.now().strftime("%Y-%m-%d")
+        begin_date = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d")
+        
+        if platform_code in ["rewardoo", "rw"]:
+            # 获取API配置
+            api_config = ApiConfigService.get_account_api_config(account)
+            base_url = api_url or api_config.get("base_url")
+            
+            service = RewardooService(token=token, base_url=base_url)
+            result = service.get_transaction_details(begin_date, end_date)
+            
+            if result.get("code") == "0" or result.get("success"):
+                return {
+                    "success": True,
+                    "message": f"连接成功！API URL: {base_url or '默认'}。获取到 {len(result.get('data', {}).get('transactions', []))} 条测试数据。"
+                }
+            else:
+                return {
+                    "success": False,
+                    "message": f"连接失败: {result.get('message', '未知错误')}"
+                }
+        
+        elif platform_code in ["collabglow", "cg"]:
+            service = CollabGlowService(token=token)
+            result = service.get_transactions(begin_date, end_date)
+            
+            if result.get("code") == "0":
+                return {
+                    "success": True,
+                    "message": f"连接成功！获取到 {len(result.get('data', {}).get('transactions', []))} 条测试数据。"
+                }
+            else:
+                return {
+                    "success": False,
+                    "message": f"连接失败: {result.get('message', '未知错误')}"
+                }
+        
+        else:
+            return {
+                "success": False,
+                "message": f"暂不支持测试 {account.platform.platform_name} 平台的API连接"
+            }
+    
+    except Exception as e:
+        from app.services.api_config_service import ApiConfigService
+        error_message = ApiConfigService.format_error_message(e, account, "API测试")
+        return {
+            "success": False,
+            "message": f"测试失败: {error_message}"
+        }
+
+
 @router.get("/platforms", response_model=List[AffiliatePlatformResponse])
 async def get_platforms(db: Session = Depends(get_db)):
     """获取所有联盟平台列表"""
