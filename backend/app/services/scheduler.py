@@ -63,30 +63,30 @@ def sync_platform_data_job():
             day_success_count = 0
             day_fail_count = 0
             day_saved = 0
-        
-        for account in active_accounts:
-            try:
+            
+            for account in active_accounts:
+                try:
                     logger.info(f"  同步账号: {account.account_name} (平台: {account.platform.platform_name if account.platform else '未知'})")
                     # 逐天同步，每次只同步一天的数据
-                result = sync_service.sync_account_data(
-                    account.id,
+                    result = sync_service.sync_account_data(
+                        account.id,
                         current_date.isoformat(),
                         current_date.isoformat()  # 开始和结束日期相同，只同步一天
-                )
-                
-                if result.get("success"):
+                    )
+                    
+                    if result.get("success"):
                         day_success_count += 1
                         saved_count = result.get("saved_count", 0)
                         day_saved += saved_count
                         logger.info(f"  ✓ 账号 {account.account_name} 同步成功: 保存 {saved_count} 条记录")
-                else:
+                    else:
                         day_fail_count += 1
                         error_msg = result.get('message', '未知错误')
                         logger.error(f"  ✗ 账号 {account.account_name} 同步失败: {error_msg}")
-            except Exception as e:
+                except Exception as e:
                     day_fail_count += 1
                     logger.error(f"  ✗ 账号 {account.account_name} 同步异常: {e}", exc_info=True)
-        
+            
             logger.info(f"日期 {current_date.isoformat()} 同步完成: 成功 {day_success_count} 个账号, 失败 {day_fail_count} 个账号, 保存 {day_saved} 条记录")
             
             total_success_count += day_success_count
@@ -133,13 +133,13 @@ def sync_google_ads_data_job():
             try:
                 logger.info(f"正在同步 {current_date.isoformat()} 的Google Ads数据...")
                 result = sync_service.sync_all_active_mccs(target_date=current_date)
-        
-        if result.get("success"):
+                
+                if result.get("success"):
                     saved_count = result.get("total_saved", 0)
                     total_saved += saved_count
                     success_days += 1
                     logger.info(f"{current_date.isoformat()} 同步成功: 保存 {saved_count} 条记录")
-        else:
+                else:
                     fail_days += 1
                     logger.error(f"{current_date.isoformat()} 同步失败: {result.get('message')}")
             except Exception as e:
