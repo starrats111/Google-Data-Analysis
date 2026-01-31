@@ -67,7 +67,7 @@ app.add_middleware(
     # 允许所有 google-data-analysis.top 的子域名和主域名
     allow_origin_regex=r"^(https://([a-z0-9-]+\.)?google-data-analysis\.(pages\.dev|top)|https://www\.google-data-analysis\.top|https://api\.google-data-analysis\.top|https?://(localhost|127\.0\.0\.1)(:\d+)?)$",
     allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
+    allow_methods=["*"],  # 允许所有HTTP方法
     allow_headers=["*"],
     expose_headers=["*"],
 )

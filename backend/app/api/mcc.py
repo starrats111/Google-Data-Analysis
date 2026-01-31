@@ -51,9 +51,6 @@ class MccAccountResponse(BaseModel):
     client_id: Optional[str] = None
     client_secret: Optional[str] = None
     refresh_token: Optional[str] = None
-    client_id: Optional[str] = None  # 包含但不显示实际值
-    client_secret: Optional[str] = None  # 包含但不显示实际值
-    refresh_token: Optional[str] = None  # 包含但不显示实际值
     
     class Config:
         from_attributes = True
