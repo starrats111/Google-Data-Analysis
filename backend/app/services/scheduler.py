@@ -285,7 +285,7 @@ def start_scheduler():
         # 平台数据同步：每天北京时间4点和16点
         scheduler.add_job(
             sync_platform_data_job,
-            trigger=CronTrigger(hour=[4, 16], minute=0),
+            trigger=CronTrigger(hour="4,16", minute=0),
             id='sync_platform_data',
             name='同步平台数据',
             replace_existing=True
