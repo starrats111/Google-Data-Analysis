@@ -66,6 +66,8 @@ class PlatformDataSyncService:
         platform_code_normalized = platform_code.strip()
         platform_name_normalized = platform_name.strip().lower()
         
+        print(f"[平台同步] 账号: {account.account_name}, 平台代码: {platform_code_normalized}, 平台名称: {platform_name_normalized}")  # 确保输出到控制台
+        
         # 识别逻辑：同时检查平台代码和平台名称
         # 因为有些平台的platform_code可能是URL而不是代码
         is_collabglow = (
@@ -126,6 +128,7 @@ class PlatformDataSyncService:
             
             commissions = result.get("data", {}).get("list", [])
             logger.info(f"CollabGlow API返回 {len(commissions)} 条佣金记录")
+            print(f"[CollabGlow同步] API返回 {len(commissions)} 条佣金记录")  # 确保输出到控制台
             
             if not commissions:
                 return {
