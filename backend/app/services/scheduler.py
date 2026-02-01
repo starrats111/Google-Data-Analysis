@@ -133,13 +133,13 @@ def sync_google_ads_data_job():
             try:
                 logger.info(f"正在同步 {current_date.isoformat()} 的Google Ads数据...")
                 result = sync_service.sync_all_active_mccs(target_date=current_date)
-        
-        if result.get("success"):
+                
+                if result.get("success"):
                     saved_count = result.get("total_saved", 0)
                     total_saved += saved_count
                     success_days += 1
                     logger.info(f"{current_date.isoformat()} 同步成功: 保存 {saved_count} 条记录")
-        else:
+                else:
                     fail_days += 1
                     logger.error(f"{current_date.isoformat()} 同步失败: {result.get('message')}")
             except Exception as e:
