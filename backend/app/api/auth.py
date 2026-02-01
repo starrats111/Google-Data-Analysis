@@ -63,55 +63,98 @@ async def get_user_statistics(
     db: Session = Depends(get_db)
 ):
     """获取当前用户的统计数据"""
-    from app.models.data_upload import DataUpload
-    from app.models.analysis_result import AnalysisResult
-    from app.models.affiliate_account import AffiliateAccount
-    from datetime import date, timedelta
-    from sqlalchemy import func
-    
-    # 统计上传数据
-    total_uploads = db.query(DataUpload).filter(
-        DataUpload.user_id == current_user.id
-    ).count()
-    
-    # 统计分析结果
-    total_analyses = db.query(AnalysisResult).filter(
-        AnalysisResult.user_id == current_user.id
-    ).count()
-    
-    # 统计联盟账号数
-    total_accounts = db.query(AffiliateAccount).filter(
-        AffiliateAccount.user_id == current_user.id
-    ).count()
-    
-    active_accounts = db.query(AffiliateAccount).filter(
-        AffiliateAccount.user_id == current_user.id,
-        AffiliateAccount.is_active == True
-    ).count()
-    
-    # 今日上传数
-    today_uploads = db.query(DataUpload).filter(
-        DataUpload.user_id == current_user.id,
-        func.date(DataUpload.uploaded_at) == date.today()
-    ).count()
-    
-    # 最近一次上传时间
-    last_upload = db.query(DataUpload).filter(
-        DataUpload.user_id == current_user.id
-    ).order_by(DataUpload.uploaded_at.desc()).first()
-    
-    # 最近一次分析时间
-    last_analysis = db.query(AnalysisResult).filter(
-        AnalysisResult.user_id == current_user.id
-    ).order_by(AnalysisResult.analysis_date.desc()).first()
-    
-    return {
-        "total_uploads": total_uploads,
-        "total_analyses": total_analyses,
-        "total_accounts": total_accounts,
-        "active_accounts": active_accounts,
-        "today_uploads": today_uploads,
-        "last_upload": last_upload.uploaded_at.isoformat() if last_upload else None,
-        "last_analysis": last_analysis.analysis_date.isoformat() if last_analysis else None
-    }
+    try:
+        from app.models.data_upload import DataUpload
+        from app.models.analysis_result import AnalysisResult
+        from app.models.affiliate_account import AffiliateAccount
+        from datetime import date, timedelta
+        from sqlalchemy import func
+        import logging
+        
+        logger = logging.getLogger(__name__)
+        
+        # 统计上传数据
+        total_uploads = db.query(DataUpload).filter(
+            DataUpload.user_id == current_user.id
+        ).count()
+        
+        # 统计分析结果
+        total_analyses = db.query(AnalysisResult).filter(
+            AnalysisResult.user_id == current_user.id
+        ).count()
+        
+        # 统计联盟账号数
+        total_accounts = db.query(AffiliateAccount).filter(
+            AffiliateAccount.user_id == current_user.id
+        ).count()
+        
+        active_accounts = db.query(AffiliateAccount).filter(
+            AffiliateAccount.user_id == current_user.id,
+            AffiliateAccount.is_active == True
+        ).count()
+        
+        # 今日上传数
+        today_uploads = db.query(DataUpload).filter(
+            DataUpload.user_id == current_user.id,
+            func.date(DataUpload.uploaded_at) == date.today()
+        ).count()
+        
+        # 最近一次上传时间
+        last_upload = None
+        try:
+            last_upload = db.query(DataUpload).filter(
+                DataUpload.user_id == current_user.id
+            ).order_by(DataUpload.uploaded_at.desc()).first()
+        except Exception as e:
+            logger.warning(f"获取最近上传时间失败: {e}")
+        
+        # 最近一次分析时间
+        last_analysis = None
+        try:
+            last_analysis = db.query(AnalysisResult).filter(
+                AnalysisResult.user_id == current_user.id
+            ).order_by(AnalysisResult.analysis_date.desc()).first()
+        except Exception as e:
+            logger.warning(f"获取最近分析时间失败: {e}")
+        
+        # 安全地格式化日期
+        last_upload_time = None
+        if last_upload and hasattr(last_upload, 'uploaded_at') and last_upload.uploaded_at:
+            try:
+                last_upload_time = last_upload.uploaded_at.isoformat()
+            except Exception as e:
+                logger.warning(f"格式化上传时间失败: {e}")
+        
+        last_analysis_time = None
+        if last_analysis and hasattr(last_analysis, 'analysis_date') and last_analysis.analysis_date:
+            try:
+                last_analysis_time = last_analysis.analysis_date.isoformat()
+            except Exception as e:
+                logger.warning(f"格式化分析时间失败: {e}")
+        
+        return {
+            "total_uploads": total_uploads,
+            "total_analyses": total_analyses,
+            "total_accounts": total_accounts,
+            "active_accounts": active_accounts,
+            "today_uploads": today_uploads,
+            "last_upload": last_upload_time,
+            "last_analysis": last_analysis_time
+        }
+    except Exception as e:
+        import logging
+        import traceback
+        logger = logging.getLogger(__name__)
+        logger.error(f"获取用户统计数据失败: {e}", exc_info=True)
+        # 返回默认值而不是抛出异常，避免前端崩溃
+        return {
+            "total_uploads": 0,
+            "total_analyses": 0,
+            "total_accounts": 0,
+            "active_accounts": 0,
+            "today_uploads": 0,
+            "last_upload": None,
+            "last_analysis": None,
+            "error": str(e)
+        }
 
