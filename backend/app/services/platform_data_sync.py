@@ -372,21 +372,31 @@ class PlatformDataSyncService:
             # 先保存明细交易到AffiliateTransaction表（用于查询）
             transaction_service = UnifiedTransactionService(self.db)
             transaction_saved_count = 0
-            for tx in transactions_raw:
+            logger.info(f"[RW同步] 开始保存 {len(transactions_raw)} 条明细交易到AffiliateTransaction表")
+            
+            for idx, tx in enumerate(transactions_raw):
                 try:
                     # 转换时间格式
                     transaction_time = tx.get('transaction_time')
+                    if not transaction_time:
+                        logger.warning(f"[RW同步] 交易 {idx+1}/{len(transactions_raw)} 缺少transaction_time字段: {tx.get('transaction_id', 'unknown')}")
+                        continue
+                    
                     if isinstance(transaction_time, str):
+                        # 如果是空字符串，跳过
+                        if not transaction_time.strip():
+                            logger.warning(f"[RW同步] 交易 {idx+1}/{len(transactions_raw)} 时间为空字符串: {tx.get('transaction_id', 'unknown')}")
+                            continue
                         try:
                             transaction_time = datetime.strptime(transaction_time, "%Y-%m-%d")
                         except:
                             try:
                                 transaction_time = datetime.strptime(transaction_time, "%Y-%m-%d %H:%M:%S")
                             except:
-                                logger.warning(f"无法解析交易时间: {transaction_time}")
+                                logger.warning(f"[RW同步] 无法解析交易时间: {transaction_time}, 交易ID: {tx.get('transaction_id', 'unknown')}")
                                 continue
                     elif not isinstance(transaction_time, datetime):
-                        logger.warning(f"交易时间格式不正确: {transaction_time}")
+                        logger.warning(f"[RW同步] 交易时间格式不正确: {transaction_time}, 类型: {type(transaction_time)}, 交易ID: {tx.get('transaction_id', 'unknown')}")
                         continue
                     
                     # 准备交易数据
@@ -407,10 +417,12 @@ class PlatformDataSyncService:
                     )
                     transaction_saved_count += 1
                 except Exception as e:
-                    logger.warning(f"保存明细交易失败: {e}, 交易数据: {tx.get('transaction_id', 'unknown')}")
+                    logger.warning(f"[RW同步] 保存明细交易失败: {e}, 交易数据: {tx.get('transaction_id', 'unknown')}, 完整数据: {tx}")
+                    import traceback
+                    logger.debug(f"[RW同步] 错误堆栈: {traceback.format_exc()}")
                     continue
             
-            logger.info(f"[RW同步] 已保存 {transaction_saved_count} 条明细交易到AffiliateTransaction表")
+            logger.info(f"[RW同步] 已保存 {transaction_saved_count}/{len(transactions_raw)} 条明细交易到AffiliateTransaction表")
             
             # 如果返回0条记录，提供更详细的诊断信息
             if len(transactions_raw) == 0:
