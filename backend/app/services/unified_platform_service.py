@@ -317,6 +317,18 @@ class UnifiedPlatformService:
             transaction_id = trans.get("transaction_id") or trans.get("id") or trans.get("action_id")
             if transaction_id and transaction_id not in seen_ids:
                 seen_ids.add(transaction_id)
+                
+                # 处理transaction_time，确保是字符串格式
+                transaction_time = trans.get("transaction_time") or trans.get("order_date")
+                if isinstance(transaction_time, datetime):
+                    transaction_time = transaction_time.strftime("%Y-%m-%d %H:%M:%S")
+                elif isinstance(transaction_time, date):
+                    transaction_time = transaction_time.strftime("%Y-%m-%d")
+                elif transaction_time is not None:
+                    transaction_time = str(transaction_time)
+                else:
+                    transaction_time = None
+                
                 order_details.append({
                     "transaction_id": transaction_id,
                     "status": trans.get("status"),
@@ -324,7 +336,7 @@ class UnifiedPlatformService:
                     "commission_amount": trans.get("commission_amount") or trans.get("commission", 0),
                     "order_amount": trans.get("order_amount") or trans.get("sale_amount", 0),
                     "merchant": trans.get("merchant"),
-                    "transaction_time": trans.get("transaction_time") or trans.get("order_date")
+                    "transaction_time": transaction_time
                 })
         
         return {
