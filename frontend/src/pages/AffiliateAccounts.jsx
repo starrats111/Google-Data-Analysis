@@ -289,8 +289,8 @@ const AffiliateAccounts = () => {
         requestData.token = token
       }
       
-      // 如果提供了API URL，保存到账号备注中（用于多渠道支持）
-      if (api_url && syncAccount?.platform) {
+      // 如果提供了token或API URL，保存到账号备注中（用于多渠道支持）
+      if ((token || api_url) && syncAccount?.platform) {
         const platformCode = (syncAccount.platform.platform_code || '').toLowerCase()
         const platformName = (syncAccount.platform.platform_name || '').toLowerCase()
         
@@ -305,18 +305,47 @@ const AffiliateAccounts = () => {
             }
           }
           
-          // 根据平台类型保存对应的API URL
+          // 根据平台类型保存对应的Token和API URL
           if (platformCode === 'rewardoo' || platformCode === 'rw' || platformName.includes('rewardoo') || platformName === 'rw') {
-            notesData.rewardoo_api_url = api_url
-            notesData.rw_api_url = api_url
+            if (token) {
+              notesData.rewardoo_token = token
+              notesData.rw_token = token
+              notesData.api_token = token  // 通用字段
+            }
+            if (api_url) {
+              notesData.rewardoo_api_url = api_url
+              notesData.rw_api_url = api_url
+              notesData.api_url = api_url  // 通用字段
+            }
           } else if (platformCode === 'collabglow' || platformCode === 'cg' || platformName.includes('collabglow')) {
-            notesData.collabglow_api_url = api_url
-            notesData.cg_api_url = api_url
+            if (token) {
+              notesData.collabglow_token = token
+              notesData.cg_token = token
+              notesData.api_token = token  // 通用字段
+            }
+            if (api_url) {
+              notesData.collabglow_api_url = api_url
+              notesData.cg_api_url = api_url
+              notesData.api_url = api_url  // 通用字段
+            }
           } else if (['lb', 'pm', 'bsh', 'cf'].includes(platformCode)) {
-            notesData[`${platformCode}_api_url`] = api_url
+            if (token) {
+              notesData[`${platformCode}_token`] = token
+              notesData.api_token = token  // 通用字段
+            }
+            if (api_url) {
+              notesData[`${platformCode}_api_url`] = api_url
+              notesData.api_url = api_url  // 通用字段
+            }
+          } else {
+            // 通用平台
+            if (token) {
+              notesData.api_token = token
+            }
+            if (api_url) {
+              notesData.api_url = api_url
+            }
           }
-          // 通用字段
-          notesData.api_url = api_url
           
           // 更新账号备注
           await api.put(`/api/affiliate/accounts/${syncAccount.id}`, {
@@ -332,6 +361,13 @@ const AffiliateAccounts = () => {
       
       setSyncResult(response.data)
       message.success(`成功同步 ${response.data.saved_count || 0} 条记录`)
+      
+      // 刷新账号列表，以便更新账号备注中的Token配置
+      if (isManager) {
+        await fetchAccountsByEmployees()
+      } else {
+        await fetchAccounts()
+      }
     } catch (error) {
       const errorMsg = error.response?.data?.detail || error.response?.data?.message || '同步失败'
       // 显示详细的错误信息（支持多行）
