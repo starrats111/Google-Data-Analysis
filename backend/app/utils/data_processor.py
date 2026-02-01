@@ -110,3 +110,4 @@ def validate_calculation_inputs(commission: float, clicks: int, cpc: float) -> t
 
 
 
+

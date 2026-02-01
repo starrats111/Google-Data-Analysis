@@ -13,10 +13,11 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-# API 配置（根据实际API文档调整）
-BASE_URL = "https://api.rewardoo.com/api"  # 请根据实际API地址调整
-TRANSACTION_DETAILS_API = f"{BASE_URL}/transaction_details"  # 核心API
-COMMISSION_DETAILS_API = f"{BASE_URL}/commission_details"  # 辅助API
+# API 配置（根据官方API文档）
+# 官方API端点: https://admin.rewardoo.com/api.php?mod=medium&op=transaction_details
+DEFAULT_BASE_URL = "https://admin.rewardoo.com"  # 默认基础URL
+DEFAULT_TRANSACTION_DETAILS_API = "https://admin.rewardoo.com/api.php?mod=medium&op=transaction_details"  # 核心API
+COMMISSION_DETAILS_API = None  # 暂未使用
 
 
 from app.services.platform_services_base import PlatformServiceBase
@@ -44,14 +45,20 @@ class RewardooService(PlatformServiceBase):
         Args:
             token: Rewardoo API token
             base_url: 自定义API基础URL（可选，用于支持不同渠道）
-                     如果未提供或为空字符串，使用默认的BASE_URL
+                     如果未提供或为空字符串，使用默认的DEFAULT_BASE_URL
         """
         self.token = token
         # 如果base_url是None或空字符串，使用默认值
-        self.base_url = (base_url.strip() if base_url and base_url.strip() else None) or BASE_URL
-        # 根据base_url构建API端点
-        self.transaction_details_api = f"{self.base_url}/transaction_details"
-        self.commission_details_api = f"{self.base_url}/commission_details"
+        if base_url and base_url.strip():
+            self.base_url = base_url.strip().rstrip('/')
+            # 如果提供的是完整URL，直接使用；否则构建完整URL
+            if base_url.startswith('http'):
+                self.transaction_details_api = base_url
+            else:
+                self.transaction_details_api = f"{self.base_url}/api.php?mod=medium&op=transaction_details"
+        else:
+            self.base_url = DEFAULT_BASE_URL
+            self.transaction_details_api = DEFAULT_TRANSACTION_DETAILS_API
         
         logger.info(f"[RW Service] 初始化，base_url={self.base_url}, transaction_api={self.transaction_details_api}")
     
@@ -75,13 +82,19 @@ class RewardooService(PlatformServiceBase):
         """
         【核心API】TransactionDetails API - 获取订单数 + 已确认佣金 + 拒付佣金
         
-        必须用到的字段：
-        - transaction_id: 交易ID（用于去重）
-        - transaction_time: 交易时间
-        - merchant: 商户
-        - order_amount: 订单金额
-        - commission_amount: 佣金金额
-        - status: 状态（关键：approved, rejected, declined）
+        根据官方API文档实现：
+        - URL: https://admin.rewardoo.com/api.php?mod=medium&op=transaction_details
+        - 请求方式: POST application/x-www-form-urlencoded
+        - 必需参数: token, begin_date, end_date
+        - 日期范围限制: 不超过62天
+        
+        返回字段映射：
+        - order_id -> transaction_id (交易ID，用于去重)
+        - order_time -> transaction_time (交易时间)
+        - merchant_name -> merchant (商户)
+        - sale_amount -> order_amount (订单金额)
+        - sale_comm -> commission_amount (佣金金额)
+        - status -> status (状态：Approved/Pending/Rejected)
         
         Args:
             begin_date: 开始日期，格式 YYYY-MM-DD
@@ -90,15 +103,32 @@ class RewardooService(PlatformServiceBase):
         Returns:
             API 响应数据，包含交易列表
         """
+        # 检查日期范围（不超过62天）
+        try:
+            begin = datetime.strptime(begin_date, "%Y-%m-%d")
+            end = datetime.strptime(end_date, "%Y-%m-%d")
+            days_diff = (end - begin).days
+            if days_diff > 62:
+                error_msg = f"[RW TransactionDetails API] 日期范围超过62天限制: {days_diff}天。请缩小日期范围。"
+                logger.error(error_msg)
+                raise Exception(error_msg)
+        except ValueError as e:
+            error_msg = f"[RW TransactionDetails API] 日期格式错误: {str(e)}"
+            logger.error(error_msg)
+            raise Exception(error_msg)
+        
+        # 使用 application/x-www-form-urlencoded 格式
         headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {self.token}"  # 根据实际API调整认证方式
+            "Content-Type": "application/x-www-form-urlencoded"
         }
         
-        payload = {
+        # 准备POST数据（表单格式）
+        data = {
             "token": self.token,
             "begin_date": begin_date,
-            "end_date": end_date
+            "end_date": end_date,
+            "page": 1,
+            "limit": 1000  # 每页最多1000条
         }
         
         try:
@@ -106,7 +136,7 @@ class RewardooService(PlatformServiceBase):
             response = requests.post(
                 self.transaction_details_api,
                 headers=headers,
-                json=payload,
+                data=data,  # 使用data参数，自动编码为application/x-www-form-urlencoded
                 timeout=30
             )
             
@@ -145,44 +175,52 @@ class RewardooService(PlatformServiceBase):
                 logger.error(error_msg)
                 raise Exception(error_msg)
             
-            # 根据实际API响应格式调整
-            # 假设响应格式: {"code": 0, "data": {"transactions": [...]}}
-            code = result.get("code") or result.get("status_code")
-            message = result.get("message", "")
+            # 根据官方API文档，响应格式: {"status": {"code": 0, "msg": "Success"}, "data": {"list": [...], "total_trans": "1", ...}}
+            status = result.get("status", {})
+            code = status.get("code")
+            message = status.get("msg", "")
             
-            if code == 0 or code == "0" or result.get("success"):
-                # 尝试多种可能的响应格式
-                transactions = (
-                    result.get("data", {}).get("transactions", []) or 
-                    result.get("transactions", []) or
-                    result.get("data", []) or
-                    []
-                )
+            # 检查状态码（0表示成功）
+            if code == 0 or code == "0":
+                # 从data.list中获取交易列表
+                data = result.get("data", {})
+                transaction_list = data.get("list", [])
+                total_trans = data.get("total_trans", 0)
+                total_page = data.get("total_page", 1)
+                total_items = data.get("total_items", 0)
                 
                 # 记录原始响应结构（用于调试）
-                logger.info(f"[RW TransactionDetails API] 响应结构: code={code}, message={message}, data类型={type(result.get('data'))}, transactions数量={len(transactions)}")
-                if len(transactions) == 0:
+                logger.info(f"[RW TransactionDetails API] 响应结构: code={code}, msg={message}, total_trans={total_trans}, total_page={total_page}, list数量={len(transaction_list)}")
+                
+                if len(transaction_list) == 0:
                     logger.warning(f"[RW TransactionDetails API] 返回0笔交易。原始响应: {str(result)[:500]}")
                 
-                logger.info(f"[RW TransactionDetails API] 成功获取 {len(transactions)} 笔交易")
+                logger.info(f"[RW TransactionDetails API] 成功获取 {len(transaction_list)} 笔交易（共 {total_trans} 笔）")
+                
+                # 返回统一格式
                 return {
                     "code": "0",
-                    "message": "success",
+                    "message": message or "success",
                     "data": {
-                        "transactions": transactions
-                    }
-                }
-            elif code == 1 or (isinstance(code, str) and "no data" in message.lower()):
-                logger.info(f"[RW TransactionDetails API] 该日期范围内没有数据: {message}")
-                return {
-                    "code": "0",
-                    "message": "success",
-                    "data": {
-                        "transactions": []
+                        "transactions": transaction_list,
+                        "total_trans": total_trans,
+                        "total_page": total_page,
+                        "total_items": total_items
                     }
                 }
             else:
-                error_msg = f"[RW TransactionDetails API] 返回错误: {message} (code: {code})"
+                # 根据API文档的错误码处理
+                error_codes = {
+                    1000: "Affiliate does not exist (联盟账号不存在)",
+                    1001: "Invalid token (Token无效)",
+                    1002: "Call frequency too high (调用频率过高)",
+                    1003: "Missing required parameters or incorrect format (缺少必需参数或格式错误)",
+                    1005: "uid can not exceed 200 characters (uid不能超过200字符)",
+                    1006: "Query time span cannot exceed 62 days (查询时间跨度不能超过62天)"
+                }
+                
+                error_desc = error_codes.get(code, f"未知错误 (code: {code})")
+                error_msg = f"[RW TransactionDetails API] 返回错误: {message} ({error_desc})"
                 logger.error(error_msg)
                 raise Exception(error_msg)
                 
@@ -359,16 +397,16 @@ class RewardooService(PlatformServiceBase):
             logger.warning(error_msg)
             return []
         
-        # 尝试多种可能的响应格式
+        # 根据官方API文档，响应格式: {"data": {"list": [...], ...}}
         data = result.get("data", {})
-        if isinstance(data, list):
-            # 如果data直接是数组
+        if isinstance(data, dict):
+            # 从data.list中获取交易列表
+            transactions = data.get("list", [])
+        elif isinstance(data, list):
+            # 如果data直接是数组（兼容旧格式）
             transactions = data
-        elif isinstance(data, dict):
-            # 如果data是字典，尝试获取transactions字段
-            transactions = data.get("transactions", [])
         else:
-            # 如果result直接包含transactions
+            # 如果result直接包含transactions（兼容旧格式）
             transactions = result.get("transactions", [])
         
         logger.info(f"[RW extract_transaction_data] 从响应中提取到 {len(transactions)} 笔原始交易数据")
@@ -383,13 +421,23 @@ class RewardooService(PlatformServiceBase):
                     logger.warning(f"[RW extract_transaction_data] 交易项 {idx} 不是字典类型: {type(item)}")
                     continue
                 
+                # 根据官方API文档字段映射
+                # API返回字段: order_id, order_time, merchant_name, sale_amount, sale_comm, status
+                # 统一格式字段: transaction_id, transaction_time, merchant, order_amount, commission_amount, status
+                
+                # 状态值转换：Approved/Pending/Rejected -> approved/pending/rejected
+                status_raw = str(item.get("status", "") or "").strip()
+                status_lower = status_raw.lower() if status_raw else ""
+                
                 extracted.append({
-                    "transaction_id": item.get("transaction_id") or item.get("id") or item.get("transactionId") or f"rw_{idx}",
-                    "transaction_time": item.get("transaction_time") or item.get("order_date") or item.get("date") or item.get("transactionDate"),
-                    "merchant": item.get("merchant") or item.get("brand") or item.get("brand_name") or item.get("merchantName") or "",
-                    "order_amount": float(item.get("order_amount", 0) or item.get("sale_amount", 0) or item.get("orderAmount", 0) or 0),
-                    "commission_amount": float(item.get("commission_amount", 0) or item.get("commission", 0) or item.get("commissionAmount", 0) or 0),
-                    "status": str(item.get("status", "") or item.get("transactionStatus", "") or "").strip()
+                    "transaction_id": item.get("order_id") or item.get("transaction_id") or item.get("rewardoo_id") or item.get("id") or f"rw_{idx}",
+                    "transaction_time": item.get("order_time") or item.get("transaction_time") or item.get("validation_date") or item.get("date") or "",
+                    "merchant": item.get("merchant_name") or item.get("merchant") or item.get("brand") or item.get("brand_name") or "",
+                    "order_amount": float(item.get("sale_amount", 0) or item.get("order_amount", 0) or item.get("order_unit", 0) or 0),
+                    "commission_amount": float(item.get("sale_comm", 0) or item.get("commission_amount", 0) or item.get("commission", 0) or 0),
+                    "status": status_lower,  # 转换为小写：approved/pending/rejected
+                    # 保留原始字段（用于调试和扩展）
+                    "raw_data": item
                 })
             except Exception as e:
                 logger.error(f"[RW extract_transaction_data] 处理交易项 {idx} 时出错: {e}, 数据: {item}")
