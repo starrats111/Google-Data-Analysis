@@ -152,7 +152,11 @@ class LinkHaitaoService:
             if isinstance(commission_data, dict):
                 payload = commission_data.get("payload")
                 logger.info(f"[LinkHaitao API] 佣金payload类型: {type(payload)}, 如果是字典，键: {list(payload.keys()) if isinstance(payload, dict) else 'N/A'}")
-                if isinstance(payload, dict):
+                if isinstance(payload, list):
+                    logger.info(f"[LinkHaitao API] 佣金payload列表长度: {len(payload)}")
+                    if len(payload) > 0:
+                        logger.info(f"[LinkHaitao API] 佣金payload第一条记录: {str(payload[0])[:500]}")
+                elif isinstance(payload, dict):
                     logger.info(f"[LinkHaitao API] 佣金payload内容预览: {str(payload)[:500]}")
             
             # 获取订单数据（可能需要分页）
@@ -165,7 +169,11 @@ class LinkHaitaoService:
                 if isinstance(order_data, dict):
                     payload = order_data.get("payload")
                     logger.info(f"[LinkHaitao API] 订单payload类型: {type(payload)}, 如果是字典，键: {list(payload.keys()) if isinstance(payload, dict) else 'N/A'}")
-                    if isinstance(payload, dict):
+                    if isinstance(payload, list):
+                        logger.info(f"[LinkHaitao API] 订单payload列表长度: {len(payload)}")
+                        if len(payload) > 0:
+                            logger.info(f"[LinkHaitao API] 订单payload第一条记录: {str(payload[0])[:500]}")
+                    elif isinstance(payload, dict):
                         logger.info(f"[LinkHaitao API] 订单payload内容预览: {str(payload)[:500]}")
                 
                 # 根据实际 API 响应格式调整
