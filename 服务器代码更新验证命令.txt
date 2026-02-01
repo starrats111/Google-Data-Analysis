@@ -1,0 +1,47 @@
+# 服务器代码更新验证命令
+
+## 1. 确认代码已更新
+```bash
+cd ~/Google-Data-Analysis
+git log --oneline -3
+# 应该看到最新的提交：520806f 或 f19ecc1
+```
+
+## 2. 强制更新代码（如果git pull没有更新）
+```bash
+cd ~/Google-Data-Analysis
+git fetch origin
+git reset --hard origin/main
+```
+
+## 3. 检查文件内容
+```bash
+cd ~/Google-Data-Analysis/backend
+head -n 75 app/services/scheduler.py | tail -n 10
+# 查看第71行附近的代码
+```
+
+## 4. 检查Python语法
+```bash
+cd ~/Google-Data-Analysis/backend
+source venv/bin/activate
+python -m py_compile app/services/scheduler.py
+```
+
+## 5. 如果还有问题，检查文件编码
+```bash
+cd ~/Google-Data-Analysis/backend
+file app/services/scheduler.py
+# 应该显示 UTF-8
+```
+
+## 6. 清理并重新启动
+```bash
+cd ~/Google-Data-Analysis/backend
+find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
+find . -name "*.pyc" -delete 2>/dev/null || true
+source venv/bin/activate
+python -c "from app.main import app; print('✓ 代码检查通过')"
+```
+
+

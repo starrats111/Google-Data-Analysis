@@ -147,11 +147,32 @@ class ApiConfigService:
                 if platform_code_lower in ["rewardoo", "rw"]:
                     # Rewardoo配置
                     if notes_data.get("rewardoo_api_url") or notes_data.get("rw_api_url") or notes_data.get("api_url"):
-                        custom_config["base_url"] = (
+                        raw_url = (
                             notes_data.get("rewardoo_api_url") or 
                             notes_data.get("rw_api_url") or 
                             notes_data.get("api_url")
                         )
+                        # 自动修正常见的URL格式错误
+                        # 如果URL包含 /apidoc，替换为 /api
+                        if "/apidoc" in raw_url:
+                            raw_url = raw_url.replace("/apidoc", "/api")
+                        # 如果URL以 /api 结尾，保持不变；如果没有 /api，尝试添加
+                        if not raw_url.endswith("/api") and not raw_url.endswith("/api/"):
+                            # 如果URL包含 /creator，尝试在 /creator 后添加 /api
+                            if "/creator" in raw_url:
+                                raw_url = raw_url.replace("/creator", "/creator/api")
+                            elif "/parcelandplate" in raw_url:
+                                raw_url = raw_url.replace("/parcelandplate", "/parcelandplate/api")
+                            else:
+                                # 否则在域名后添加 /api
+                                if "://" in raw_url:
+                                    parts = raw_url.split("://", 1)
+                                    if "/" in parts[1]:
+                                        domain = parts[1].split("/")[0]
+                                        raw_url = f"{parts[0]}://{domain}/api"
+                                    else:
+                                        raw_url = f"{raw_url}/api"
+                        custom_config["base_url"] = raw_url.rstrip("/")
                 
                 elif platform_code_lower in ["collabglow", "cg"]:
                     # CollabGlow配置
@@ -180,6 +201,7 @@ class ApiConfigService:
                 
             except (json.JSONDecodeError, AttributeError) as e:
                 logger.warning(f"解析账号 {account.id} 的备注配置失败: {e}")
+                logger.debug(f"[API配置] 账号备注原始内容: {account.notes}")
         
         # 合并配置（自定义配置覆盖默认配置）
         # 但是，如果custom_config中的base_url是空字符串或None，应该使用默认值
@@ -248,14 +270,19 @@ class ApiConfigService:
         config = ApiConfigService.get_account_api_config(account)
         current_base_url = config.get("base_url")
         
+        # 添加调试日志
+        logger.debug(f"[错误格式化] 账号ID={account.id}, 平台代码={platform_code}, 配置={config}, base_url={current_base_url}")
+        
         # 如果base_url是空字符串或None，显示默认配置或"未配置"
         if not current_base_url:
             # 尝试获取默认配置
             platform_code = account.platform.platform_code if account.platform else None
             default_config = ApiConfigService.get_platform_config(platform_code)
             current_base_url = default_config.get("base_url", "未配置")
+            logger.debug(f"[错误格式化] 使用默认配置: {default_config}, base_url={current_base_url}")
         else:
             current_base_url = str(current_base_url)
+            logger.debug(f"[错误格式化] 使用自定义配置: base_url={current_base_url}")
         
         # 构建友好的错误消息
         if "404" in error_str or "not found" in error_str.lower():

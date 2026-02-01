@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react'
-import { Card, Table, Button, Modal, Form, Input, Select, Switch, message, Popconfirm, Collapse, Tag, Space, DatePicker, Statistic, Row, Col, Spin } from 'antd'
+import { Card, Table, Button, Modal, Form, Input, Select, Switch, message, Popconfirm, Collapse, Tag, Space, DatePicker, Statistic, Row, Col, Spin, Checkbox } from 'antd'
 import { PlusOutlined, EditOutlined, DeleteOutlined, SyncOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import api from '../services/api'
@@ -726,10 +726,33 @@ const AffiliateAccounts = () => {
               return null
             })()}
 
+            {/* 自动检测端点选项（仅Rewardoo和CollabGlow平台） */}
+            {syncAccount?.platform && (() => {
+              const platformCode = (syncAccount.platform.platform_code || '').toLowerCase().trim()
+              const platformName = (syncAccount.platform.platform_name || '').toLowerCase().trim()
+              const isRewardoo = platformCode === 'rewardoo' || platformCode === 'rw' || 
+                                platformName.includes('rewardoo') || platformName === 'rw' ||
+                                platformName.includes('rw')
+              const isCollabGlow = platformCode === 'collabglow' || platformCode === 'cg' || 
+                                   platformName.includes('collabglow') || platformName.includes('cg')
+              
+              if (isRewardoo || isCollabGlow) {
+                return (
+                  <Form.Item name="auto_detect" valuePropName="checked">
+                    <Checkbox>启用自动检测端点（系统会自动尝试多个可能的API端点）</Checkbox>
+                  </Form.Item>
+                )
+              }
+              return null
+            })()}
+
             <Form.Item>
               <Button 
                 type="default" 
-                onClick={handleTestConnection}
+                onClick={() => {
+                  const autoDetect = syncForm.getFieldValue('auto_detect') || false
+                  handleTestConnection(autoDetect)
+                }}
                 loading={syncing}
                 icon={<SyncOutlined />}
               >
@@ -1031,10 +1054,33 @@ const AffiliateAccounts = () => {
               return null
             })()}
 
+            {/* 自动检测端点选项（仅Rewardoo和CollabGlow平台） */}
+            {syncAccount?.platform && (() => {
+              const platformCode = (syncAccount.platform.platform_code || '').toLowerCase().trim()
+              const platformName = (syncAccount.platform.platform_name || '').toLowerCase().trim()
+              const isRewardoo = platformCode === 'rewardoo' || platformCode === 'rw' || 
+                                platformName.includes('rewardoo') || platformName === 'rw' ||
+                                platformName.includes('rw')
+              const isCollabGlow = platformCode === 'collabglow' || platformCode === 'cg' || 
+                                   platformName.includes('collabglow') || platformName.includes('cg')
+              
+              if (isRewardoo || isCollabGlow) {
+                return (
+                  <Form.Item name="auto_detect" valuePropName="checked">
+                    <Checkbox>启用自动检测端点（系统会自动尝试多个可能的API端点）</Checkbox>
+                  </Form.Item>
+                )
+              }
+              return null
+            })()}
+
             <Form.Item>
               <Button 
                 type="default" 
-                onClick={handleTestConnection}
+                onClick={() => {
+                  const autoDetect = syncForm.getFieldValue('auto_detect') || false
+                  handleTestConnection(autoDetect)
+                }}
                 loading={syncing}
                 icon={<SyncOutlined />}
               >

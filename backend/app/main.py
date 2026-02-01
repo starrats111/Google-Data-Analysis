@@ -217,7 +217,7 @@ def get_cors_headers(origin: str = None) -> dict:
             import re
             if re.match(ALLOWED_ORIGIN_REGEX, origin):
                 headers["Access-Control-Allow-Origin"] = origin
-                headers["Access-Control-Allow-Credentials"] = "true"
+        headers["Access-Control-Allow-Credentials"] = "true"
             else:
                 # 开发环境：允许所有来源（仅用于调试）
                 headers["Access-Control-Allow-Origin"] = "*"

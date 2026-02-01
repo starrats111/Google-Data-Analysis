@@ -19,6 +19,8 @@ class ApiEndpointDetector:
         "https://api.rewardoo.com",
         "https://rewardoo.com/api",
         "https://www.rewardoo.com/api",
+        "https://www.rewardoo.com/parcelandplate/creator/api",
+        "https://www.rewardoo.com/parcelandplate/api",
         "https://api.rewardoo.net/api",
         "https://api.rewardoo.io/api",
     ]
