@@ -551,10 +551,10 @@ async def get_expense_daily(
 ):
     """按天明细（用于某一日期/某一阶段查看）"""
     try:
-    start = _parse_date(start_date)
-    end = _parse_date(end_date)
-    if end < start:
-        raise HTTPException(status_code=400, detail="结束日期不能早于开始日期")
+        start = _parse_date(start_date)
+        end = _parse_date(end_date)
+        if end < start:
+            raise HTTPException(status_code=400, detail="结束日期不能早于开始日期")
     except HTTPException:
         raise
     except Exception as e:
