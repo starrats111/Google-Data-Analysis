@@ -66,26 +66,26 @@ def sync_platform_data_job():
         
         for account in active_accounts:
             try:
-                    logger.info(f"  同步账号: {account.account_name} (平台: {account.platform.platform_name if account.platform else '未知'})")
-                    # 逐天同步，每次只同步一天的数据
+                logger.info(f"  同步账号: {account.account_name} (平台: {account.platform.platform_name if account.platform else '未知'})")
+                # 逐天同步，每次只同步一天的数据
                 result = sync_service.sync_account_data(
                     account.id,
-                        current_date.isoformat(),
-                        current_date.isoformat()  # 开始和结束日期相同，只同步一天
+                    current_date.isoformat(),
+                    current_date.isoformat()  # 开始和结束日期相同，只同步一天
                 )
                 
                 if result.get("success"):
-                        day_success_count += 1
-                        saved_count = result.get("saved_count", 0)
-                        day_saved += saved_count
-                        logger.info(f"  ✓ 账号 {account.account_name} 同步成功: 保存 {saved_count} 条记录")
+                    day_success_count += 1
+                    saved_count = result.get("saved_count", 0)
+                    day_saved += saved_count
+                    logger.info(f"  ✓ 账号 {account.account_name} 同步成功: 保存 {saved_count} 条记录")
                 else:
-                        day_fail_count += 1
-                        error_msg = result.get('message', '未知错误')
-                        logger.error(f"  ✗ 账号 {account.account_name} 同步失败: {error_msg}")
-            except Exception as e:
                     day_fail_count += 1
-                    logger.error(f"  ✗ 账号 {account.account_name} 同步异常: {e}", exc_info=True)
+                    error_msg = result.get('message', '未知错误')
+                    logger.error(f"  ✗ 账号 {account.account_name} 同步失败: {error_msg}")
+            except Exception as e:
+                day_fail_count += 1
+                logger.error(f"  ✗ 账号 {account.account_name} 同步异常: {e}", exc_info=True)
         
             logger.info(f"日期 {current_date.isoformat()} 同步完成: 成功 {day_success_count} 个账号, 失败 {day_fail_count} 个账号, 保存 {day_saved} 条记录")
             
