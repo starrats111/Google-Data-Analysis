@@ -131,9 +131,10 @@ class UnifiedTransactionService:
         }
         
         # Upsert（使用唯一约束：platform + transaction_id）
+        transaction_id_str = str(tx["transaction_id"])
         transaction = self.db.query(AffiliateTransaction).filter(
             AffiliateTransaction.platform == platform,
-            AffiliateTransaction.transaction_id == str(tx["transaction_id"])
+            AffiliateTransaction.transaction_id == transaction_id_str
         ).first()
         
         if transaction:
@@ -144,8 +145,30 @@ class UnifiedTransactionService:
             transaction.updated_at = datetime.now()
         else:
             # 创建新记录
-            transaction = AffiliateTransaction(**data)
-            self.db.add(transaction)
+            try:
+                transaction = AffiliateTransaction(**data)
+                self.db.add(transaction)
+                # 立即刷新，检查是否有唯一约束错误
+                self.db.flush()
+            except Exception as e:
+                # 如果出现唯一约束错误，可能是并发插入，尝试再次查询
+                if "UNIQUE constraint" in str(e) or "IntegrityError" in str(type(e).__name__):
+                    logger.warning(f"[UnifiedTransactionService] 检测到唯一约束冲突，尝试重新查询: platform={platform}, transaction_id={transaction_id_str}")
+                    transaction = self.db.query(AffiliateTransaction).filter(
+                        AffiliateTransaction.platform == platform,
+                        AffiliateTransaction.transaction_id == transaction_id_str
+                    ).first()
+                    if transaction:
+                        # 更新现有记录
+                        for key, value in data.items():
+                            if key not in ["platform", "transaction_id"]:
+                                setattr(transaction, key, value)
+                        transaction.updated_at = datetime.now()
+                    else:
+                        # 如果还是找不到，重新抛出异常
+                        raise
+                else:
+                    raise
         
         # 如果是拒付状态，保存拒付详情
         if normalized_status == "rejected":
