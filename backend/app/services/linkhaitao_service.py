@@ -149,6 +149,11 @@ class LinkHaitaoService:
             logger.info(f"[LinkHaitao API] 请求佣金数据: {begin_date} ~ {end_date}")
             commission_data = self.get_commission_data(begin_date, end_date)
             logger.info(f"[LinkHaitao API] 佣金数据响应类型: {type(commission_data)}, 键: {list(commission_data.keys()) if isinstance(commission_data, dict) else 'N/A'}")
+            if isinstance(commission_data, dict):
+                payload = commission_data.get("payload")
+                logger.info(f"[LinkHaitao API] 佣金payload类型: {type(payload)}, 如果是字典，键: {list(payload.keys()) if isinstance(payload, dict) else 'N/A'}")
+                if isinstance(payload, dict):
+                    logger.info(f"[LinkHaitao API] 佣金payload内容预览: {str(payload)[:500]}")
             
             # 获取订单数据（可能需要分页）
             logger.info(f"[LinkHaitao API] 请求订单数据: {begin_date} ~ {end_date}")
@@ -157,6 +162,11 @@ class LinkHaitaoService:
             while True:
                 order_data = self.get_order_data(begin_date, end_date, page=page, per_page=100)
                 logger.info(f"[LinkHaitao API] 订单数据响应类型: {type(order_data)}, 键: {list(order_data.keys()) if isinstance(order_data, dict) else 'N/A'}")
+                if isinstance(order_data, dict):
+                    payload = order_data.get("payload")
+                    logger.info(f"[LinkHaitao API] 订单payload类型: {type(payload)}, 如果是字典，键: {list(payload.keys()) if isinstance(payload, dict) else 'N/A'}")
+                    if isinstance(payload, dict):
+                        logger.info(f"[LinkHaitao API] 订单payload内容预览: {str(payload)[:500]}")
                 
                 # 根据实际 API 响应格式调整
                 if isinstance(order_data, dict):
