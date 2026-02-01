@@ -28,7 +28,8 @@ class PlatformDataDetailResponse(BaseModel):
     merchant: Optional[str]
     total_orders: int
     gmv: float
-    approved_commission: float
+    total_commission: float  # 总佣金（所有状态，对应Est. Commission）
+    approved_commission: float  # 已确认佣金（保留用于兼容）
     rejected_commission: float
     rejected_rate: float
     net_commission: float
@@ -41,7 +42,8 @@ class PlatformDataSummaryResponse(BaseModel):
     end_date: date
     total_orders: int
     total_gmv: float
-    total_approved_commission: float
+    total_commission: float  # 总佣金（所有状态，对应Est. Commission）
+    total_approved_commission: float  # 已确认佣金（保留用于兼容）
     total_rejected_commission: float
     total_rejected_rate: float
     total_net_commission: float
@@ -78,6 +80,7 @@ async def get_platform_data_detail(
             AffiliateTransaction.merchant,
             func.count(AffiliateTransaction.id).label('total_orders'),
             func.sum(AffiliateTransaction.order_amount).label('gmv'),
+            func.sum(AffiliateTransaction.commission_amount).label('total_commission'),  # 总佣金（所有状态）
             func.sum(
                 case(
                     (AffiliateTransaction.status == "approved", AffiliateTransaction.commission_amount),
@@ -127,10 +130,12 @@ async def get_platform_data_detail(
         for r in results:
             total_orders = int(r.total_orders or 0)
             gmv = float(r.gmv or 0)
+            total_commission = float(r.total_commission or 0)  # 总佣金（所有状态，对应Est. Commission）
             approved_commission = float(r.approved_commission or 0)
             rejected_commission = float(r.rejected_commission or 0)
-            rejected_rate = (rejected_commission / (approved_commission + rejected_commission) * 100) if (approved_commission + rejected_commission) > 0 else 0
-            net_commission = approved_commission - rejected_commission
+            # 拒付率基于总佣金计算（效仿CollabGlow）
+            rejected_rate = (rejected_commission / total_commission * 100) if total_commission > 0 else 0
+            net_commission = total_commission - rejected_commission  # 净佣金 = 总佣金 - 拒付佣金
             
             # 处理日期：r.date可能是字符串（SQLite date()函数返回字符串）或date对象
             date_str = r.date
@@ -147,7 +152,8 @@ async def get_platform_data_detail(
                 "merchant": r.merchant,
                 "total_orders": total_orders,
                 "gmv": round(gmv, 2),
-                "approved_commission": round(approved_commission, 2),
+                "total_commission": round(total_commission, 2),  # 总佣金（对应Est. Commission）
+                "approved_commission": round(approved_commission, 2),  # 保留用于兼容
                 "rejected_commission": round(rejected_commission, 2),
                 "rejected_rate": round(rejected_rate, 2),
                 "net_commission": round(net_commission, 2)
@@ -200,6 +206,7 @@ async def get_platform_data_summary(
         total_query = base_query.with_entities(
             func.count(AffiliateTransaction.id).label('total_orders'),
             func.sum(AffiliateTransaction.order_amount).label('gmv'),
+            func.sum(AffiliateTransaction.commission_amount).label('total_commission'),  # 总佣金（所有状态）
             func.sum(
                 case(
                     (AffiliateTransaction.status == "approved", AffiliateTransaction.commission_amount),
@@ -217,16 +224,19 @@ async def get_platform_data_summary(
         
         total_orders = int(total_result.total_orders or 0)
         total_gmv = float(total_result.gmv or 0)
+        total_commission = float(total_result.total_commission or 0)  # 总佣金（所有状态）
         total_approved_commission = float(total_result.approved_commission or 0)
         total_rejected_commission = float(total_result.rejected_commission or 0)
-        total_rejected_rate = (total_rejected_commission / (total_approved_commission + total_rejected_commission) * 100) if (total_approved_commission + total_rejected_commission) > 0 else 0
-        total_net_commission = total_approved_commission - total_rejected_commission
+        # 拒付率基于总佣金计算（效仿CollabGlow）
+        total_rejected_rate = (total_rejected_commission / total_commission * 100) if total_commission > 0 else 0
+        total_net_commission = total_commission - total_rejected_commission  # 净佣金 = 总佣金 - 拒付佣金
         
         # 按平台分组汇总
         platform_query = base_query.with_entities(
             AffiliateTransaction.platform,
             func.count(AffiliateTransaction.id).label('orders'),
             func.sum(AffiliateTransaction.order_amount).label('gmv'),
+            func.sum(AffiliateTransaction.commission_amount).label('total_commission'),  # 总佣金（所有状态）
             func.sum(
                 case(
                     (AffiliateTransaction.status == "approved", AffiliateTransaction.commission_amount),
@@ -247,16 +257,18 @@ async def get_platform_data_summary(
         for r in platform_results:
             orders = int(r.orders or 0)
             gmv = float(r.gmv or 0)
+            total_comm = float(r.total_commission or 0)  # 总佣金
             approved = float(r.approved_commission or 0)
             rejected = float(r.rejected_commission or 0)
-            rejected_rate = (rejected / (approved + rejected) * 100) if (approved + rejected) > 0 else 0
-            net = approved - rejected
+            rejected_rate = (rejected / total_comm * 100) if total_comm > 0 else 0  # 基于总佣金计算
+            net = total_comm - rejected  # 净佣金 = 总佣金 - 拒付佣金
             
             platform_breakdown.append({
                 "platform": r.platform,
                 "orders": orders,
                 "gmv": round(gmv, 2),
-                "approved_commission": round(approved, 2),
+                "total_commission": round(total_comm, 2),  # 总佣金
+                "approved_commission": round(approved, 2),  # 保留用于兼容
                 "rejected_commission": round(rejected, 2),
                 "rejected_rate": round(rejected_rate, 2),
                 "net_commission": round(net, 2)
@@ -274,7 +286,8 @@ async def get_platform_data_summary(
             "end_date": end,
             "total_orders": total_orders,
             "total_gmv": round(total_gmv, 2),
-            "total_approved_commission": round(total_approved_commission, 2),
+            "total_commission": round(total_commission, 2),  # 总佣金（对应Est. Commission）
+            "total_approved_commission": round(total_approved_commission, 2),  # 保留用于兼容
             "total_rejected_commission": round(total_rejected_commission, 2),
             "total_rejected_rate": round(total_rejected_rate, 2),
             "total_net_commission": round(total_net_commission, 2),

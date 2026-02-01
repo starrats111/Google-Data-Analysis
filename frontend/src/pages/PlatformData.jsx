@@ -171,12 +171,12 @@ export default function PlatformData() {
       render: (val) => `$${(val || 0).toFixed(2)}`
     },
     {
-      title: '已确认佣金',
-      dataIndex: 'approved_commission',
-      key: 'approved_commission',
+      title: '佣金',
+      dataIndex: 'total_commission',
+      key: 'total_commission',
       width: 150,
       align: 'right',
-      sorter: (a, b) => a.approved_commission - b.approved_commission,
+      sorter: (a, b) => (a.total_commission || 0) - (b.total_commission || 0),
       render: (val) => `$${(val || 0).toFixed(2)}`
     },
     {
@@ -260,9 +260,9 @@ export default function PlatformData() {
       render: (val) => `$${(val || 0).toFixed(2)}`
     },
     {
-      title: '已确认佣金',
-      dataIndex: 'approved_commission',
-      key: 'approved_commission',
+      title: '佣金',
+      dataIndex: 'total_commission',
+      key: 'total_commission',
       width: 150,
       align: 'right',
       render: (val) => `$${(val || 0).toFixed(2)}`
@@ -317,13 +317,13 @@ export default function PlatformData() {
   ]
 
   // 计算汇总数据（明细模式）
-  const totalCommission = detailData.reduce((sum, item) => sum + (item.approved_commission || 0), 0)
+  const totalCommission = detailData.reduce((sum, item) => sum + (item.total_commission || item.approved_commission || 0), 0)  // 总佣金（所有状态）
   const totalRejectedCommission = detailData.reduce((sum, item) => sum + (item.rejected_commission || 0), 0)
   const totalOrders = detailData.reduce((sum, item) => sum + (item.total_orders || 0), 0)
   const totalGmv = detailData.reduce((sum, item) => sum + (item.gmv || 0), 0)
-  const totalNetCommission = totalCommission - totalRejectedCommission
-  const totalRejectedRate = totalCommission + totalRejectedCommission > 0 
-    ? (totalRejectedCommission / (totalCommission + totalRejectedCommission) * 100) 
+  const totalNetCommission = totalCommission - totalRejectedCommission  // 净佣金 = 总佣金 - 拒付佣金
+  const totalRejectedRate = totalCommission > 0 
+    ? (totalRejectedCommission / totalCommission * 100)  // 拒付率基于总佣金计算
     : 0
 
   return (
@@ -426,8 +426,8 @@ export default function PlatformData() {
               </Col>
               <Col xs={12} sm={8} md={6}>
                 <Statistic
-                  title="已确认佣金"
-                  value={summaryData.total_approved_commission}
+                  title="佣金"
+                  value={summaryData.total_commission || summaryData.total_approved_commission}
                   prefix="$"
                   precision={2}
                   valueStyle={{ color: '#52c41a' }}
@@ -500,7 +500,7 @@ export default function PlatformData() {
                   </span>
                 </div>
                 <div>
-                  <span style={{ color: '#666' }}>已确认佣金：</span>
+                  <span style={{ color: '#666' }}>佣金：</span>
                   <span style={{ fontSize: '18px', fontWeight: 'bold', color: '#52c41a' }}>
                     ${totalCommission.toFixed(2)}
                   </span>
