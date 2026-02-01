@@ -146,29 +146,57 @@ class LinkHaitaoService:
         """
         try:
             # 获取佣金数据
+            logger.info(f"[LinkHaitao API] 请求佣金数据: {begin_date} ~ {end_date}")
             commission_data = self.get_commission_data(begin_date, end_date)
+            logger.info(f"[LinkHaitao API] 佣金数据响应类型: {type(commission_data)}, 键: {list(commission_data.keys()) if isinstance(commission_data, dict) else 'N/A'}")
             
             # 获取订单数据（可能需要分页）
+            logger.info(f"[LinkHaitao API] 请求订单数据: {begin_date} ~ {end_date}")
             all_orders = []
             page = 1
             while True:
                 order_data = self.get_order_data(begin_date, end_date, page=page, per_page=100)
+                logger.info(f"[LinkHaitao API] 订单数据响应类型: {type(order_data)}, 键: {list(order_data.keys()) if isinstance(order_data, dict) else 'N/A'}")
                 
                 # 根据实际 API 响应格式调整
                 if isinstance(order_data, dict):
-                    orders = order_data.get("data", {}).get("list", [])
+                    # 尝试多种数据格式
+                    orders = (
+                        order_data.get("data", {}).get("list", []) or
+                        order_data.get("data", {}).get("transactions", []) or
+                        order_data.get("data", {}).get("orders", []) or
+                        order_data.get("list", []) or
+                        order_data.get("transactions", []) or
+                        order_data.get("orders", []) or
+                        []
+                    )
+                    
                     if not orders:
+                        logger.info(f"[LinkHaitao API] 第{page}页没有订单数据，停止分页")
                         break
+                    
+                    logger.info(f"[LinkHaitao API] 第{page}页获取到 {len(orders)} 条订单")
                     all_orders.extend(orders)
                     
                     # 检查是否还有更多页
-                    total_pages = order_data.get("data", {}).get("total_pages", 1)
+                    total_pages = (
+                        order_data.get("data", {}).get("total_pages") or
+                        order_data.get("data", {}).get("totalPage") or
+                        order_data.get("total_pages") or
+                        order_data.get("totalPage") or
+                        1
+                    )
                     if page >= total_pages:
+                        logger.info(f"[LinkHaitao API] 已获取所有页，共 {total_pages} 页")
                         break
                 else:
+                    logger.warning(f"[LinkHaitao API] 订单数据响应不是字典类型: {type(order_data)}")
                     break
                 
                 page += 1
+                if page > 100:  # 防止无限循环
+                    logger.warning(f"[LinkHaitao API] 分页超过100页，停止获取")
+                    break
             
             # 处理数据（这里可以根据实际需求存储到数据库）
             total_commission = 0
@@ -176,16 +204,36 @@ class LinkHaitaoService:
             
             # 解析佣金数据（根据实际 API 响应格式调整）
             if isinstance(commission_data, dict):
-                commission_list = commission_data.get("data", {}).get("list", [])
+                # 尝试多种数据格式
+                commission_list = (
+                    commission_data.get("data", {}).get("list", []) or
+                    commission_data.get("data", {}).get("commissions", []) or
+                    commission_data.get("data", {}).get("transactions", []) or
+                    commission_data.get("list", []) or
+                    commission_data.get("commissions", []) or
+                    commission_data.get("transactions", []) or
+                    []
+                )
+                
+                logger.info(f"[LinkHaitao API] 从响应中提取到 {len(commission_list)} 条佣金记录")
+                
                 for item in commission_list:
-                    commission = float(item.get("sale_comm", 0) or 0)
+                    if not isinstance(item, dict):
+                        logger.warning(f"[LinkHaitao API] 佣金记录不是字典类型: {type(item)}")
+                        continue
+                    
+                    commission = float(item.get("sale_comm", 0) or item.get("commission", 0) or item.get("saleComm", 0) or 0)
                     total_commission += commission
                     commission_records.append({
-                        "settlement_date": item.get("settlement_date"),
+                        "settlement_date": item.get("settlement_date") or item.get("settlementDate") or item.get("date"),
                         "commission": commission,
-                        "brand_id": item.get("brand_id"),
-                        "mcid": item.get("mcid"),
+                        "brand_id": item.get("brand_id") or item.get("brandId"),
+                        "mcid": item.get("mcid") or item.get("mcid"),
+                        "transaction_id": item.get("transaction_id") or item.get("transactionId") or item.get("id"),
+                        "merchant": item.get("merchant") or item.get("merchant_name") or item.get("merchantName") or item.get("mcid"),
                     })
+            
+            logger.info(f"[LinkHaitao API] 汇总结果: 佣金记录 {len(commission_records)} 条，订单 {len(all_orders)} 条，总佣金 {total_commission}")
             
             return {
                 "success": True,
