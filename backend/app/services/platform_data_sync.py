@@ -651,9 +651,8 @@ class PlatformDataSyncService:
                     "saved_count": 0
                 }
             
-            # 使用UnifiedPlatformService按日期聚合数据
-            unified_service = UnifiedPlatformService(self.db)
-            date_data = unified_service.aggregate_by_date(
+            # 使用UnifiedPlatformService按日期聚合数据（静态方法）
+            date_data = UnifiedPlatformService.aggregate_by_date(
                 transactions=all_transactions,
                 platform='linkhaitao',
                 date_field='transaction_time'
