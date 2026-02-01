@@ -22,86 +22,61 @@ class LinkHaitaoService:
         """
         self.token = token
         self.base_url = "https://www.linkhaitao.com"
+        # LinkHaitao Order Report API
+        self.order_report_api = f"{self.base_url}/api.php?mod=medium&op=cashback2"
     
-    def get_commission_data(
+    def get_order_report_data(
         self, 
         begin_date: str, 
-        end_date: str
-    ) -> Dict:
-        """
-        获取佣金数据
-        
-        Args:
-            begin_date: 开始日期，格式 YYYY-MM-DD
-            end_date: 结束日期，格式 YYYY-MM-DD
-        
-        Returns:
-            API 响应数据
-        """
-        # LinkHaitao 佣金数据 API（根据实际文档调整）
-        url = f"{self.base_url}/api2.php?c=report&a=performance"
-        
-        headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {self.token}"  # 根据实际认证方式调整
-        }
-        
-        params = {
-            "token": self.token,
-            "begin_date": begin_date,
-            "end_date": end_date,
-        }
-        
-        try:
-            response = requests.get(url, headers=headers, params=params, timeout=30)
-            response.raise_for_status()
-            return response.json()
-        except requests.exceptions.RequestException as e:
-            logger.error(f"LinkHaitao 获取佣金数据失败: {e}")
-            raise
-    
-    def get_order_data(
-        self,
-        begin_date: str,
         end_date: str,
         page: int = 1,
-        per_page: int = 100
+        per_page: int = 40000
     ) -> Dict:
         """
-        获取订单数据
+        获取订单报告数据（包含佣金和订单信息）
+        
+        根据LinkHaitao API文档：https://www.linkhaitao.com/api.php?mod=medium&op=cashback2
         
         Args:
             begin_date: 开始日期，格式 YYYY-MM-DD
             end_date: 结束日期，格式 YYYY-MM-DD
             page: 页码，默认1
-            per_page: 每页数量，默认100
+            per_page: 每页数量，默认40000（最大）
         
         Returns:
             API 响应数据
         """
-        # LinkHaitao 订单数据 API（根据实际文档调整）
-        url = f"{self.base_url}/api2.php?c=report&a=transactionDetail"
-        
-        headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {self.token}"  # 根据实际认证方式调整
-        }
-        
         params = {
             "token": self.token,
             "begin_date": begin_date,
             "end_date": end_date,
             "page": page,
             "per_page": per_page,
+            "status": "all"  # 获取所有状态的订单
         }
         
         try:
-            response = requests.get(url, headers=headers, params=params, timeout=30)
+            logger.info(f"[LinkHaitao API] 请求订单报告: {begin_date} ~ {end_date}, page={page}, per_page={per_page}")
+            response = requests.get(self.order_report_api, params=params, timeout=30)
             response.raise_for_status()
-            return response.json()
+            result = response.json()
+            
+            # 检查响应状态
+            status = result.get("status", {})
+            code = status.get("code")
+            msg = status.get("msg", "")
+            
+            if code != 0:
+                error_msg = f"LinkHaitao API返回错误: code={code}, msg={msg}"
+                logger.error(error_msg)
+                raise Exception(error_msg)
+            
+            logger.info(f"[LinkHaitao API] 订单报告响应: code={code}, msg={msg}, data数量={len(result.get('data', []))}")
+            return result
         except requests.exceptions.RequestException as e:
-            logger.error(f"LinkHaitao 获取订单数据失败: {e}")
+            logger.error(f"LinkHaitao 获取订单报告失败: {e}")
             raise
+    
     
     def test_connection(self) -> Dict:
         """
@@ -137,6 +112,8 @@ class LinkHaitaoService:
         """
         同步佣金和订单数据
         
+        根据LinkHaitao API文档，使用Order Report API获取订单和佣金数据
+        
         Args:
             begin_date: 开始日期，格式 YYYY-MM-DD
             end_date: 结束日期，格式 YYYY-MM-DD
@@ -145,84 +122,31 @@ class LinkHaitaoService:
             同步结果
         """
         try:
-            # 获取佣金数据
-            logger.info(f"[LinkHaitao API] 请求佣金数据: {begin_date} ~ {end_date}")
-            commission_data = self.get_commission_data(begin_date, end_date)
-            logger.info(f"[LinkHaitao API] 佣金数据响应类型: {type(commission_data)}, 键: {list(commission_data.keys()) if isinstance(commission_data, dict) else 'N/A'}")
-            if isinstance(commission_data, dict):
-                payload = commission_data.get("payload")
-                logger.info(f"[LinkHaitao API] 佣金payload类型: {type(payload)}, 如果是字典，键: {list(payload.keys()) if isinstance(payload, dict) else 'N/A'}")
-                if isinstance(payload, list):
-                    logger.info(f"[LinkHaitao API] 佣金payload列表长度: {len(payload)}")
-                    if len(payload) > 0:
-                        logger.info(f"[LinkHaitao API] 佣金payload第一条记录: {str(payload[0])[:500]}")
-                elif isinstance(payload, dict):
-                    logger.info(f"[LinkHaitao API] 佣金payload内容预览: {str(payload)[:500]}")
-            
-            # 获取订单数据（可能需要分页）
-            logger.info(f"[LinkHaitao API] 请求订单数据: {begin_date} ~ {end_date}")
+            # 使用Order Report API获取订单和佣金数据
             all_orders = []
             page = 1
+            per_page = 40000  # 最大每页数量
+            
             while True:
-                order_data = self.get_order_data(begin_date, end_date, page=page, per_page=100)
-                logger.info(f"[LinkHaitao API] 订单数据响应类型: {type(order_data)}, 键: {list(order_data.keys()) if isinstance(order_data, dict) else 'N/A'}")
-                if isinstance(order_data, dict):
-                    payload = order_data.get("payload")
-                    logger.info(f"[LinkHaitao API] 订单payload类型: {type(payload)}, 如果是字典，键: {list(payload.keys()) if isinstance(payload, dict) else 'N/A'}")
-                    if isinstance(payload, list):
-                        logger.info(f"[LinkHaitao API] 订单payload列表长度: {len(payload)}")
-                        if len(payload) > 0:
-                            logger.info(f"[LinkHaitao API] 订单payload第一条记录: {str(payload[0])[:500]}")
-                    elif isinstance(payload, dict):
-                        logger.info(f"[LinkHaitao API] 订单payload内容预览: {str(payload)[:500]}")
+                order_report = self.get_order_report_data(begin_date, end_date, page=page, per_page=per_page)
                 
-                # 根据实际 API 响应格式调整
-                if isinstance(order_data, dict):
-                    # LinkHaitao的payload是列表，不是字典
-                    payload = order_data.get("payload", [])
-                    if isinstance(payload, list):
-                        orders = payload
-                    elif isinstance(payload, dict):
-                        # 如果payload是字典，尝试从字典中提取列表
-                        orders = (
-                            payload.get("list", []) or
-                            payload.get("transactions", []) or
-                            payload.get("orders", []) or
-                            payload.get("data", []) or
-                            []
-                        )
-                    else:
-                        # 如果payload不是列表也不是字典，尝试其他格式
-                        orders = (
-                            order_data.get("data", {}).get("list", []) or
-                            order_data.get("data", {}).get("transactions", []) or
-                            order_data.get("data", {}).get("orders", []) or
-                            order_data.get("list", []) or
-                            order_data.get("transactions", []) or
-                            order_data.get("orders", []) or
-                            []
-                        )
-                    
-                    if not orders:
-                        logger.info(f"[LinkHaitao API] 第{page}页没有订单数据，停止分页")
-                        break
-                    
-                    logger.info(f"[LinkHaitao API] 第{page}页获取到 {len(orders)} 条订单")
-                    all_orders.extend(orders)
-                    
-                    # 检查是否还有更多页（LinkHaitao的payload是列表，分页信息可能在响应根级别）
-                    total_pages = (
-                        order_data.get("total_pages") or
-                        order_data.get("totalPage") or
-                        order_data.get("data", {}).get("total_pages") or
-                        order_data.get("data", {}).get("totalPage") or
-                        1
-                    )
-                    if page >= total_pages:
-                        logger.info(f"[LinkHaitao API] 已获取所有页，共 {total_pages} 页")
-                        break
-                else:
-                    logger.warning(f"[LinkHaitao API] 订单数据响应不是字典类型: {type(order_data)}")
+                # 根据API文档，响应格式: {"status": {"code": 0, "msg": "success"}, "data": [...]}
+                orders = order_report.get("data", [])
+                
+                if not orders:
+                    logger.info(f"[LinkHaitao API] 第{page}页没有订单数据，停止分页")
+                    break
+                
+                logger.info(f"[LinkHaitao API] 第{page}页获取到 {len(orders)} 条订单")
+                all_orders.extend(orders)
+                
+                # 检查是否还有更多页（根据offset和per_page判断）
+                offset = order_report.get("offset", 0)
+                per_page_actual = order_report.get("per_page", per_page)
+                
+                # 如果返回的数据少于per_page，说明已经是最后一页
+                if len(orders) < per_page_actual:
+                    logger.info(f"[LinkHaitao API] 已获取所有页，当前页数据量 {len(orders)} < {per_page_actual}")
                     break
                 
                 page += 1
@@ -230,71 +154,77 @@ class LinkHaitaoService:
                     logger.warning(f"[LinkHaitao API] 分页超过100页，停止获取")
                     break
             
-            # 处理数据（这里可以根据实际需求存储到数据库）
+            # 处理订单数据，转换为佣金和订单格式
             total_commission = 0
             commission_records = []
+            order_records = []
             
-            # 解析佣金数据（根据实际 API 响应格式调整）
-            if isinstance(commission_data, dict):
-                # LinkHaitao的payload是列表，不是字典
-                payload = commission_data.get("payload", [])
-                if isinstance(payload, list):
-                    commission_list = payload
-                elif isinstance(payload, dict):
-                    # 如果payload是字典，尝试从字典中提取列表
-                    commission_list = (
-                        payload.get("list", []) or
-                        payload.get("commissions", []) or
-                        payload.get("transactions", []) or
-                        payload.get("data", []) or
-                        []
-                    )
+            for item in all_orders:
+                if not isinstance(item, dict):
+                    logger.warning(f"[LinkHaitao API] 订单记录不是字典类型: {type(item)}")
+                    continue
+                
+                # 根据API文档字段映射
+                # API返回字段: order_id, order_time, sale_amount, cashback, status, mcid, advertiser_name
+                # 转换为统一格式
+                cashback = float(item.get("cashback", 0) or 0)
+                sale_amount = float(item.get("sale_amount", 0) or 0)
+                order_time = item.get("order_time") or item.get("report_time")
+                
+                # 转换时间戳为日期字符串
+                if order_time:
+                    try:
+                        if isinstance(order_time, str) and order_time.isdigit():
+                            order_time = int(order_time)
+                        if isinstance(order_time, int):
+                            from datetime import datetime
+                            order_date = datetime.fromtimestamp(order_time).strftime("%Y-%m-%d")
+                        else:
+                            order_date = str(order_time)[:10]  # 取前10个字符作为日期
+                    except:
+                        order_date = None
                 else:
-                    # 如果payload不是列表也不是字典，尝试其他格式
-                    commission_list = (
-                        commission_data.get("data", {}).get("list", []) or
-                        commission_data.get("data", {}).get("commissions", []) or
-                        commission_data.get("data", {}).get("transactions", []) or
-                        commission_data.get("list", []) or
-                        commission_data.get("commissions", []) or
-                        commission_data.get("transactions", []) or
-                        []
-                    )
+                    order_date = None
                 
-                logger.info(f"[LinkHaitao API] 从响应中提取到 {len(commission_list)} 条佣金记录")
+                total_commission += cashback
                 
-                for item in commission_list:
-                    if not isinstance(item, dict):
-                        logger.warning(f"[LinkHaitao API] 佣金记录不是字典类型: {type(item)}")
-                        continue
-                    
-                    commission = float(item.get("sale_comm", 0) or item.get("commission", 0) or item.get("saleComm", 0) or 0)
-                    total_commission += commission
-                    commission_records.append({
-                        "settlement_date": item.get("settlement_date") or item.get("settlementDate") or item.get("date"),
-                        "commission": commission,
-                        "brand_id": item.get("brand_id") or item.get("brandId"),
-                        "mcid": item.get("mcid") or item.get("mcid"),
-                        "transaction_id": item.get("transaction_id") or item.get("transactionId") or item.get("id"),
-                        "merchant": item.get("merchant") or item.get("merchant_name") or item.get("merchantName") or item.get("mcid"),
-                    })
+                # 佣金记录
+                commission_records.append({
+                    "settlement_date": order_date,
+                    "commission": cashback,
+                    "mcid": item.get("mcid") or item.get("m_id"),
+                    "transaction_id": item.get("order_id") or item.get("sign_id"),
+                    "merchant": item.get("advertiser_name") or item.get("mcid"),
+                })
+                
+                # 订单记录
+                order_records.append({
+                    "order_id": item.get("order_id"),
+                    "date": order_date,
+                    "amount": sale_amount,
+                    "commission": cashback,
+                    "status": item.get("status", "untreated"),
+                    "merchant": item.get("advertiser_name") or item.get("mcid"),
+                })
             
-            logger.info(f"[LinkHaitao API] 汇总结果: 佣金记录 {len(commission_records)} 条，订单 {len(all_orders)} 条，总佣金 {total_commission}")
+            logger.info(f"[LinkHaitao API] 汇总结果: 佣金记录 {len(commission_records)} 条，订单 {len(order_records)} 条，总佣金 {total_commission}")
             
             return {
                 "success": True,
                 "total_commission": total_commission,
-                "total_orders": len(all_orders),
+                "total_orders": len(order_records),
                 "total_commission_records": len(commission_records),
                 "commissions": commission_records[:10],  # 只返回前10条作为预览
-                "orders": all_orders[:10],  # 只返回前10条作为预览
+                "orders": order_records[:10],  # 只返回前10条作为预览
                 "data": {
                     "commissions": commission_records,
-                    "orders": all_orders
+                    "orders": order_records
                 }
             }
         except Exception as e:
             logger.error(f"LinkHaitao 同步数据失败: {e}")
+            import traceback
+            logger.error(f"错误堆栈: {traceback.format_exc()}")
             return {
                 "success": False,
                 "message": f"同步失败: {str(e)}"
