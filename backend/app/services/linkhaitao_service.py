@@ -130,8 +130,21 @@ class LinkHaitaoService:
             while True:
                 order_report = self.get_order_report_data(begin_date, end_date, page=page, per_page=per_page)
                 
-                # 根据API文档，响应格式: {"status": {"code": 0, "msg": "success"}, "data": [...]}
-                orders = order_report.get("data", [])
+                # 根据API文档，响应格式可能是:
+                # 1. {"status": {...}, "data": [...]} - data是订单列表
+                # 2. {"status": {...}, "data": {"list": [...], "total": ...}} - data是包含list的字典
+                data = order_report.get("data", [])
+                
+                # 如果data是字典，尝试从list字段获取订单
+                if isinstance(data, dict):
+                    orders = data.get("list", [])
+                    logger.info(f"[LinkHaitao API] data是字典，从list字段提取到 {len(orders)} 条订单")
+                elif isinstance(data, list):
+                    orders = data
+                    logger.info(f"[LinkHaitao API] data是列表，包含 {len(orders)} 条订单")
+                else:
+                    logger.warning(f"[LinkHaitao API] data类型不正确: {type(data)}")
+                    orders = []
                 
                 if not orders:
                     logger.info(f"[LinkHaitao API] 第{page}页没有订单数据，停止分页")
