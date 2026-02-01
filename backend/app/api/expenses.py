@@ -635,17 +635,17 @@ async def get_expense_daily(
         agg: Dict[Tuple[int, date], List[float]] = {}
         for m in metrics:
             try:
-            campaign = db.query(AdCampaign).filter(AdCampaign.id == m.campaign_id).first()
-            if not campaign:
-                continue
-            pid = campaign.platform_id
+                campaign = db.query(AdCampaign).filter(AdCampaign.id == m.campaign_id).first()
+                if not campaign:
+                    continue
+                pid = campaign.platform_id
                 if pid is None:
                     continue
-            key = (pid, m.date)
-            if key not in agg:
-                agg[key] = [0.0, 0.0]
-            # 费用来自每日指标（若无Google Ads数据时兜底）
-            agg[key][1] += float(m.cost or 0.0)
+                key = (pid, m.date)
+                if key not in agg:
+                    agg[key] = [0.0, 0.0]
+                # 费用来自每日指标（若无Google Ads数据时兜底）
+                agg[key][1] += float(m.cost or 0.0)
             except Exception as e:
                 import logging
                 logger = logging.getLogger(__name__)
