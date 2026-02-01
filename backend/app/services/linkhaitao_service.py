@@ -170,9 +170,12 @@ class LinkHaitaoService:
                 
                 # 根据实际 API 响应格式调整
                 if isinstance(order_data, dict):
-                    # 尝试多种数据格式（LinkHaitao使用payload字段）
-                    payload = order_data.get("payload", {})
-                    if isinstance(payload, dict):
+                    # LinkHaitao的payload是列表，不是字典
+                    payload = order_data.get("payload", [])
+                    if isinstance(payload, list):
+                        orders = payload
+                    elif isinstance(payload, dict):
+                        # 如果payload是字典，尝试从字典中提取列表
                         orders = (
                             payload.get("list", []) or
                             payload.get("transactions", []) or
@@ -181,7 +184,7 @@ class LinkHaitaoService:
                             []
                         )
                     else:
-                        # 如果payload不是字典，尝试其他格式
+                        # 如果payload不是列表也不是字典，尝试其他格式
                         orders = (
                             order_data.get("data", {}).get("list", []) or
                             order_data.get("data", {}).get("transactions", []) or
@@ -199,22 +202,14 @@ class LinkHaitaoService:
                     logger.info(f"[LinkHaitao API] 第{page}页获取到 {len(orders)} 条订单")
                     all_orders.extend(orders)
                     
-                    # 检查是否还有更多页
-                    if isinstance(payload, dict):
-                        total_pages = (
-                            payload.get("total_pages") or
-                            payload.get("totalPage") or
-                            payload.get("total") or
-                            1
-                        )
-                    else:
-                        total_pages = (
-                            order_data.get("data", {}).get("total_pages") or
-                            order_data.get("data", {}).get("totalPage") or
-                            order_data.get("total_pages") or
-                            order_data.get("totalPage") or
-                            1
-                        )
+                    # 检查是否还有更多页（LinkHaitao的payload是列表，分页信息可能在响应根级别）
+                    total_pages = (
+                        order_data.get("total_pages") or
+                        order_data.get("totalPage") or
+                        order_data.get("data", {}).get("total_pages") or
+                        order_data.get("data", {}).get("totalPage") or
+                        1
+                    )
                     if page >= total_pages:
                         logger.info(f"[LinkHaitao API] 已获取所有页，共 {total_pages} 页")
                         break
@@ -233,9 +228,12 @@ class LinkHaitaoService:
             
             # 解析佣金数据（根据实际 API 响应格式调整）
             if isinstance(commission_data, dict):
-                # 尝试多种数据格式（LinkHaitao使用payload字段）
-                payload = commission_data.get("payload", {})
-                if isinstance(payload, dict):
+                # LinkHaitao的payload是列表，不是字典
+                payload = commission_data.get("payload", [])
+                if isinstance(payload, list):
+                    commission_list = payload
+                elif isinstance(payload, dict):
+                    # 如果payload是字典，尝试从字典中提取列表
                     commission_list = (
                         payload.get("list", []) or
                         payload.get("commissions", []) or
@@ -244,7 +242,7 @@ class LinkHaitaoService:
                         []
                     )
                 else:
-                    # 如果payload不是字典，尝试其他格式
+                    # 如果payload不是列表也不是字典，尝试其他格式
                     commission_list = (
                         commission_data.get("data", {}).get("list", []) or
                         commission_data.get("data", {}).get("commissions", []) or
