@@ -558,7 +558,20 @@ class PlatformDataSyncService:
                     continue
                 
                 try:
-                    comm_date = datetime.strptime(settlement_date, "%Y-%m-%d").date()
+                    # 支持多种日期格式
+                    date_str_clean = str(settlement_date).strip()
+                    try:
+                        comm_date = datetime.strptime(date_str_clean, "%Y-%m-%d").date()
+                    except ValueError:
+                        try:
+                            comm_date = datetime.strptime(date_str_clean, "%Y-%m-%d %H:%M:%S").date()
+                        except ValueError:
+                            try:
+                                comm_date = datetime.strptime(date_str_clean.split('T')[0], "%Y-%m-%d").date()
+                            except ValueError:
+                                logger.warning(f"[LinkHaitao同步] 无法解析佣金日期格式: {date_str_clean}")
+                                continue
+                    
                     if comm_date not in date_data:
                         date_data[comm_date] = {
                             "commission": 0,
@@ -566,7 +579,8 @@ class PlatformDataSyncService:
                             "order_count": 0
                         }
                     date_data[comm_date]["commission"] += comm.get("commission", 0)
-                except:
+                except Exception as e:
+                    logger.warning(f"[LinkHaitao同步] 处理佣金数据失败: {e}, 数据: {comm}")
                     continue
             
             # 处理订单数据
@@ -576,7 +590,20 @@ class PlatformDataSyncService:
                     continue
                 
                 try:
-                    order_date = datetime.strptime(order_date_str, "%Y-%m-%d").date()
+                    # 支持多种日期格式
+                    date_str_clean = str(order_date_str).strip()
+                    try:
+                        order_date = datetime.strptime(date_str_clean, "%Y-%m-%d").date()
+                    except ValueError:
+                        try:
+                            order_date = datetime.strptime(date_str_clean, "%Y-%m-%d %H:%M:%S").date()
+                        except ValueError:
+                            try:
+                                order_date = datetime.strptime(date_str_clean.split('T')[0], "%Y-%m-%d").date()
+                            except ValueError:
+                                logger.warning(f"[LinkHaitao同步] 无法解析订单日期格式: {date_str_clean}")
+                                continue
+                    
                     if order_date not in date_data:
                         date_data[order_date] = {
                             "commission": 0,
@@ -585,7 +612,8 @@ class PlatformDataSyncService:
                         }
                     date_data[order_date]["orders"].append(order)
                     date_data[order_date]["order_count"] += 1
-                except:
+                except Exception as e:
+                    logger.warning(f"[LinkHaitao同步] 处理订单数据失败: {e}, 数据: {order}")
                     continue
             
             # 先保存明细交易到AffiliateTransaction表（用于查询）
@@ -594,11 +622,26 @@ class PlatformDataSyncService:
             
             # 合并佣金和订单数据，转换为交易格式
             all_transactions = []
+            logger.info(f"[LinkHaitao同步] 开始保存明细交易，佣金数据: {len(commissions)} 条，订单数据: {len(orders)} 条")
+            
             for comm in commissions:
                 settlement_date = comm.get("settlement_date")
                 if settlement_date:
                     try:
-                        transaction_time = datetime.strptime(settlement_date, "%Y-%m-%d")
+                        # 支持多种日期格式
+                        date_str_clean = str(settlement_date).strip()
+                        try:
+                            transaction_time = datetime.strptime(date_str_clean, "%Y-%m-%d")
+                        except ValueError:
+                            try:
+                                transaction_time = datetime.strptime(date_str_clean, "%Y-%m-%d %H:%M:%S")
+                            except ValueError:
+                                try:
+                                    transaction_time = datetime.strptime(date_str_clean.split('T')[0], "%Y-%m-%d")
+                                except ValueError:
+                                    logger.warning(f"[LinkHaitao同步] 无法解析佣金日期: {date_str_clean}")
+                                    continue
+                        
                         all_transactions.append({
                             "transaction_id": comm.get("transaction_id") or comm.get("id") or f"lh_{settlement_date}_{comm.get('commission', 0)}",
                             "transaction_time": transaction_time,
@@ -607,14 +650,28 @@ class PlatformDataSyncService:
                             "order_amount": 0,
                             "merchant": comm.get("merchant") or None,
                         })
-                    except:
+                    except Exception as e:
+                        logger.warning(f"[LinkHaitao同步] 处理佣金交易失败: {e}, 数据: {comm}")
                         continue
             
             for order in orders:
                 order_date_str = order.get("date") or order.get("order_date")
                 if order_date_str:
                     try:
-                        transaction_time = datetime.strptime(order_date_str, "%Y-%m-%d")
+                        # 支持多种日期格式
+                        date_str_clean = str(order_date_str).strip()
+                        try:
+                            transaction_time = datetime.strptime(date_str_clean, "%Y-%m-%d")
+                        except ValueError:
+                            try:
+                                transaction_time = datetime.strptime(date_str_clean, "%Y-%m-%d %H:%M:%S")
+                            except ValueError:
+                                try:
+                                    transaction_time = datetime.strptime(date_str_clean.split('T')[0], "%Y-%m-%d")
+                                except ValueError:
+                                    logger.warning(f"[LinkHaitao同步] 无法解析订单日期: {date_str_clean}")
+                                    continue
+                        
                         all_transactions.append({
                             "transaction_id": order.get("order_id") or order.get("id") or f"lh_{order_date_str}_{order.get('amount', 0)}",
                             "transaction_time": transaction_time,
@@ -623,11 +680,13 @@ class PlatformDataSyncService:
                             "order_amount": float(order.get("amount", 0) or order.get("order_amount", 0) or 0),
                             "merchant": order.get("merchant") or None,
                         })
-                    except:
+                    except Exception as e:
+                        logger.warning(f"[LinkHaitao同步] 处理订单交易失败: {e}, 数据: {order}")
                         continue
             
             # 保存明细交易
-            for tx in all_transactions:
+            logger.info(f"[LinkHaitao同步] 准备保存 {len(all_transactions)} 条明细交易到AffiliateTransaction表")
+            for idx, tx in enumerate(all_transactions):
                 try:
                     transaction_service.normalize_and_save(
                         tx=tx,
@@ -637,10 +696,10 @@ class PlatformDataSyncService:
                     )
                     transaction_saved_count += 1
                 except Exception as e:
-                    logger.warning(f"保存明细交易失败: {e}, 交易数据: {tx.get('transaction_id', 'unknown')}")
+                    logger.warning(f"[LinkHaitao同步] 保存明细交易失败 ({idx+1}/{len(all_transactions)}): {e}, 交易ID: {tx.get('transaction_id', 'unknown')}")
                     continue
             
-            logger.info(f"[LinkHaitao同步] 已保存 {transaction_saved_count} 条明细交易到AffiliateTransaction表")
+            logger.info(f"[LinkHaitao同步] 已保存 {transaction_saved_count}/{len(all_transactions)} 条明细交易到AffiliateTransaction表")
             
             # 保存到数据库
             saved_count = 0
@@ -805,10 +864,12 @@ class PlatformDataSyncService:
                     )
                     transaction_saved_count += 1
                 except Exception as e:
-                    logger.warning(f"保存明细交易失败: {e}, 交易数据: {tx.get('transaction_id', 'unknown')}")
+                    logger.warning(f"[{platform_code.upper()}同步] 保存明细交易失败 ({idx+1}/{len(transactions_raw)}): {e}, 交易ID: {tx.get('transaction_id', 'unknown')}, 完整数据: {tx}")
+                    import traceback
+                    logger.debug(f"[{platform_code.upper()}同步] 错误堆栈: {traceback.format_exc()}")
                     continue
             
-            logger.info(f"[{platform_code.upper()}同步] 已保存 {transaction_saved_count} 条明细交易到AffiliateTransaction表")
+            logger.info(f"[{platform_code.upper()}同步] 已保存 {transaction_saved_count}/{len(transactions_raw)} 条明细交易到AffiliateTransaction表")
             
             if not transactions_raw:
                 return {
