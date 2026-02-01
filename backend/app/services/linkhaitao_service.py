@@ -137,8 +137,25 @@ class LinkHaitaoService:
                     logger.info(f"[LinkHaitao API] 第{page}页没有订单数据，停止分页")
                     break
                 
-                logger.info(f"[LinkHaitao API] 第{page}页获取到 {len(orders)} 条订单")
-                all_orders.extend(orders)
+                # 如果orders中的元素是字符串，尝试解析为JSON
+                parsed_orders = []
+                for order in orders:
+                    if isinstance(order, str):
+                        try:
+                            import json
+                            parsed_order = json.loads(order)
+                            parsed_orders.append(parsed_order)
+                        except:
+                            logger.warning(f"[LinkHaitao API] 无法解析订单字符串: {order[:100]}")
+                            continue
+                    elif isinstance(order, dict):
+                        parsed_orders.append(order)
+                    else:
+                        logger.warning(f"[LinkHaitao API] 订单记录类型不正确: {type(order)}, 值: {str(order)[:100]}")
+                        continue
+                
+                logger.info(f"[LinkHaitao API] 第{page}页获取到 {len(parsed_orders)} 条订单（原始 {len(orders)} 条）")
+                all_orders.extend(parsed_orders)
                 
                 # 检查是否还有更多页（根据offset和per_page判断）
                 offset = order_report.get("offset", 0)
