@@ -660,14 +660,21 @@ class PlatformDataSyncService:
             
             logger.info(f"[LinkHaitao同步] 按日期聚合后共有 {len(date_data)} 天的数据")
             
-            # 保存到PlatformData表
+            # 保存到PlatformData表（使用与CG/RW相同的方式）
             saved_count = 0
             for trans_date, data_item in date_data.items():
                 try:
-                    metrics = data_item.get("metrics", {})
+                    # 使用UnifiedPlatformService.prepare_platform_data准备数据（与CG/RW保持一致）
+                    date_transactions = data_item.get("transactions", [])
+                    platform_data_dict = UnifiedPlatformService.prepare_platform_data(
+                        transactions=date_transactions,
+                        platform='linkhaitao',
+                        target_date=trans_date,
+                        date_field='transaction_time'
+                    )
                     
                     # 过滤掉rejected_rate（这是计算字段，不应该存储）
-                    filtered_dict = {k: v for k, v in metrics.items() if k != "rejected_rate"}
+                    filtered_dict = {k: v for k, v in platform_data_dict.items() if k != 'rejected_rate'}
                     
                     platform_data = self.db.query(PlatformData).filter(
                         PlatformData.affiliate_account_id == account.id,
