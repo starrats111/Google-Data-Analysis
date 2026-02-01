@@ -160,16 +160,27 @@ class LinkHaitaoService:
                 
                 # 根据实际 API 响应格式调整
                 if isinstance(order_data, dict):
-                    # 尝试多种数据格式
-                    orders = (
-                        order_data.get("data", {}).get("list", []) or
-                        order_data.get("data", {}).get("transactions", []) or
-                        order_data.get("data", {}).get("orders", []) or
-                        order_data.get("list", []) or
-                        order_data.get("transactions", []) or
-                        order_data.get("orders", []) or
-                        []
-                    )
+                    # 尝试多种数据格式（LinkHaitao使用payload字段）
+                    payload = order_data.get("payload", {})
+                    if isinstance(payload, dict):
+                        orders = (
+                            payload.get("list", []) or
+                            payload.get("transactions", []) or
+                            payload.get("orders", []) or
+                            payload.get("data", []) or
+                            []
+                        )
+                    else:
+                        # 如果payload不是字典，尝试其他格式
+                        orders = (
+                            order_data.get("data", {}).get("list", []) or
+                            order_data.get("data", {}).get("transactions", []) or
+                            order_data.get("data", {}).get("orders", []) or
+                            order_data.get("list", []) or
+                            order_data.get("transactions", []) or
+                            order_data.get("orders", []) or
+                            []
+                        )
                     
                     if not orders:
                         logger.info(f"[LinkHaitao API] 第{page}页没有订单数据，停止分页")
@@ -179,13 +190,21 @@ class LinkHaitaoService:
                     all_orders.extend(orders)
                     
                     # 检查是否还有更多页
-                    total_pages = (
-                        order_data.get("data", {}).get("total_pages") or
-                        order_data.get("data", {}).get("totalPage") or
-                        order_data.get("total_pages") or
-                        order_data.get("totalPage") or
-                        1
-                    )
+                    if isinstance(payload, dict):
+                        total_pages = (
+                            payload.get("total_pages") or
+                            payload.get("totalPage") or
+                            payload.get("total") or
+                            1
+                        )
+                    else:
+                        total_pages = (
+                            order_data.get("data", {}).get("total_pages") or
+                            order_data.get("data", {}).get("totalPage") or
+                            order_data.get("total_pages") or
+                            order_data.get("totalPage") or
+                            1
+                        )
                     if page >= total_pages:
                         logger.info(f"[LinkHaitao API] 已获取所有页，共 {total_pages} 页")
                         break
@@ -204,16 +223,27 @@ class LinkHaitaoService:
             
             # 解析佣金数据（根据实际 API 响应格式调整）
             if isinstance(commission_data, dict):
-                # 尝试多种数据格式
-                commission_list = (
-                    commission_data.get("data", {}).get("list", []) or
-                    commission_data.get("data", {}).get("commissions", []) or
-                    commission_data.get("data", {}).get("transactions", []) or
-                    commission_data.get("list", []) or
-                    commission_data.get("commissions", []) or
-                    commission_data.get("transactions", []) or
-                    []
-                )
+                # 尝试多种数据格式（LinkHaitao使用payload字段）
+                payload = commission_data.get("payload", {})
+                if isinstance(payload, dict):
+                    commission_list = (
+                        payload.get("list", []) or
+                        payload.get("commissions", []) or
+                        payload.get("transactions", []) or
+                        payload.get("data", []) or
+                        []
+                    )
+                else:
+                    # 如果payload不是字典，尝试其他格式
+                    commission_list = (
+                        commission_data.get("data", {}).get("list", []) or
+                        commission_data.get("data", {}).get("commissions", []) or
+                        commission_data.get("data", {}).get("transactions", []) or
+                        commission_data.get("list", []) or
+                        commission_data.get("commissions", []) or
+                        commission_data.get("transactions", []) or
+                        []
+                    )
                 
                 logger.info(f"[LinkHaitao API] 从响应中提取到 {len(commission_list)} 条佣金记录")
                 
