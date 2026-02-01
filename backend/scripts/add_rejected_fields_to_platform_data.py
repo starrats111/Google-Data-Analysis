@@ -15,7 +15,7 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from sqlalchemy import create_engine, text
-from app.database import get_database_url
+from app.config import settings
 import logging
 
 logging.basicConfig(level=logging.INFO)
@@ -24,8 +24,12 @@ logger = logging.getLogger(__name__)
 
 def migrate():
     """执行数据库迁移"""
-    database_url = get_database_url()
-    engine = create_engine(database_url)
+    database_url = settings.DATABASE_URL
+    # SQLite需要特殊处理
+    if database_url.startswith("sqlite"):
+        engine = create_engine(database_url, connect_args={"check_same_thread": False})
+    else:
+        engine = create_engine(database_url)
     
     with engine.connect() as conn:
         # 开始事务
