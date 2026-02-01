@@ -204,9 +204,34 @@ class UnifiedPlatformService:
             
             try:
                 if isinstance(date_str, str):
-                    trans_date = datetime.strptime(date_str, "%Y-%m-%d").date()
-                else:
+                    # 尝试多种日期格式
+                    date_str_clean = date_str.strip()
+                    try:
+                        # 格式1: YYYY-MM-DD
+                        trans_date = datetime.strptime(date_str_clean, "%Y-%m-%d").date()
+                    except ValueError:
+                        try:
+                            # 格式2: YYYY-MM-DD HH:MM:SS
+                            trans_date = datetime.strptime(date_str_clean, "%Y-%m-%d %H:%M:%S").date()
+                        except ValueError:
+                            try:
+                                # 格式3: YYYY-MM-DDTHH:MM:SS (ISO格式)
+                                trans_date = datetime.strptime(date_str_clean, "%Y-%m-%dT%H:%M:%S").date()
+                            except ValueError:
+                                try:
+                                    # 格式4: YYYY-MM-DD HH:MM:SS.ffffff (带微秒)
+                                    trans_date = datetime.strptime(date_str_clean.split('.')[0], "%Y-%m-%d %H:%M:%S").date()
+                                except ValueError:
+                                    # 如果都失败，记录错误
+                                    logger.warning(f"无法解析日期格式: {date_str_clean}")
+                                    continue
+                elif isinstance(date_str, datetime):
+                    trans_date = date_str.date()
+                elif isinstance(date_str, date):
                     trans_date = date_str
+                else:
+                    logger.warning(f"日期字段类型不正确: {type(date_str)}, 值: {date_str}")
+                    continue
             except Exception as e:
                 logger.error(f"解析日期失败: {date_str}, 错误: {e}")
                 continue
@@ -251,9 +276,31 @@ class UnifiedPlatformService:
             
             try:
                 if isinstance(date_str, str):
-                    trans_date = datetime.strptime(date_str, "%Y-%m-%d").date()
-                else:
+                    # 尝试多种日期格式
+                    date_str_clean = date_str.strip()
+                    try:
+                        # 格式1: YYYY-MM-DD
+                        trans_date = datetime.strptime(date_str_clean, "%Y-%m-%d").date()
+                    except ValueError:
+                        try:
+                            # 格式2: YYYY-MM-DD HH:MM:SS
+                            trans_date = datetime.strptime(date_str_clean, "%Y-%m-%d %H:%M:%S").date()
+                        except ValueError:
+                            try:
+                                # 格式3: YYYY-MM-DDTHH:MM:SS (ISO格式)
+                                trans_date = datetime.strptime(date_str_clean, "%Y-%m-%dT%H:%M:%S").date()
+                            except ValueError:
+                                try:
+                                    # 格式4: YYYY-MM-DD HH:MM:SS.ffffff (带微秒)
+                                    trans_date = datetime.strptime(date_str_clean.split('.')[0], "%Y-%m-%d %H:%M:%S").date()
+                                except ValueError:
+                                    continue
+                elif isinstance(date_str, datetime):
+                    trans_date = date_str.date()
+                elif isinstance(date_str, date):
                     trans_date = date_str
+                else:
+                    continue
             except:
                 continue
             
