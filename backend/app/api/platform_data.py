@@ -47,7 +47,8 @@ class PlatformDataSummaryResponse(BaseModel):
     total_rejected_commission: float
     total_rejected_rate: float
     total_net_commission: float
-    platform_breakdown: List[dict]  # 按平台分组的数据
+    merchant_breakdown: List[dict]  # 按商家聚合（MID、商家、订单数、销售额、佣金）
+    platform_breakdown: List[dict]  # 按平台分组的数据（保留用于兼容）
 
 
 @router.get("/detail", response_model=List[PlatformDataDetailResponse])
@@ -231,7 +232,62 @@ async def get_platform_data_summary(
         total_rejected_rate = (total_rejected_commission / total_commission * 100) if total_commission > 0 else 0
         total_net_commission = total_commission - total_rejected_commission  # 净佣金 = 总佣金 - 拒付佣金
         
-        # 按平台分组汇总
+        # 按平台+商家聚合（汇总模式：MID、商家、订单数、销售额、佣金）
+        merchant_query = base_query.with_entities(
+            AffiliateTransaction.platform,
+            AffiliateTransaction.merchant,
+            func.count(AffiliateTransaction.id).label('orders'),
+            func.sum(AffiliateTransaction.order_amount).label('gmv'),
+            func.sum(AffiliateTransaction.commission_amount).label('total_commission')  # 总佣金（所有状态）
+        ).group_by(
+            AffiliateTransaction.platform,
+            AffiliateTransaction.merchant
+        ).order_by(
+            AffiliateTransaction.platform,
+            func.sum(AffiliateTransaction.commission_amount).desc()
+        )
+        
+        merchant_results = merchant_query.all()
+        
+        # 尝试从广告系列名中提取MID（从GoogleAdsApiData中查找）
+        from app.models.google_ads_api_data import GoogleAdsApiData
+        from app.models.ad_campaign import AdCampaign
+        
+        merchant_breakdown = []
+        for r in merchant_results:
+            orders = int(r.orders or 0)
+            gmv = float(r.gmv or 0)
+            total_comm = float(r.total_commission or 0)
+            
+            # 尝试查找MID：从GoogleAdsApiData中查找匹配的广告系列，提取MID
+            mid = None
+            if r.merchant:
+                # 查找该平台该商家的广告系列，从广告系列名中提取MID
+                # 格式：序号-平台-商家-投放国家-投放时间-MID
+                ga_data = db.query(GoogleAdsApiData).filter(
+                    GoogleAdsApiData.user_id == current_user.id if current_user.role == "employee" else True,
+                    GoogleAdsApiData.extracted_platform_code == r.platform,
+                    GoogleAdsApiData.date >= begin,
+                    GoogleAdsApiData.date <= end,
+                    GoogleAdsApiData.campaign_name.contains(r.merchant)
+                ).first()
+                
+                if ga_data and ga_data.campaign_name:
+                    # 从广告系列名提取MID（最后一个字段）
+                    parts = ga_data.campaign_name.split('-')
+                    if len(parts) >= 6:  # 序号-平台-商家-国家-时间-MID
+                        mid = parts[-1]  # 最后一个字段是MID
+            
+            merchant_breakdown.append({
+                "mid": mid or "",
+                "merchant": r.merchant or "",
+                "platform": r.platform,
+                "orders": orders,
+                "gmv": round(gmv, 2),
+                "total_commission": round(total_comm, 2)
+            })
+        
+        # 按平台分组汇总（保留用于兼容）
         platform_query = base_query.with_entities(
             AffiliateTransaction.platform,
             func.count(AffiliateTransaction.id).label('orders'),
@@ -291,7 +347,8 @@ async def get_platform_data_summary(
             "total_rejected_commission": round(total_rejected_commission, 2),
             "total_rejected_rate": round(total_rejected_rate, 2),
             "total_net_commission": round(total_net_commission, 2),
-            "platform_breakdown": platform_breakdown
+            "merchant_breakdown": merchant_breakdown,  # 按商家聚合（MID、商家、订单数、销售额、佣金）
+            "platform_breakdown": platform_breakdown  # 按平台聚合（保留用于兼容）
         }
         
     except ValueError as e:

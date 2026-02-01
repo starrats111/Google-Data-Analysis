@@ -8,6 +8,8 @@ from sqlalchemy.orm import Session
 import logging
 
 from app.models.google_ads_api_data import GoogleAdsApiData, GoogleMccAccount
+from app.models.ad_campaign import AdCampaign
+from app.models.affiliate_account import AffiliateAccount, AffiliatePlatform
 from app.services.campaign_matcher import CampaignMatcher
 
 logger = logging.getLogger(__name__)
@@ -70,7 +72,7 @@ class GoogleAdsApiSyncService:
                         mcc_account.user_id
                     )
                     
-                    # 查找或创建记录
+                    # 查找或创建GoogleAdsApiData记录
                     existing = self.db.query(GoogleAdsApiData).filter(
                         GoogleAdsApiData.mcc_id == mcc_id,
                         GoogleAdsApiData.campaign_id == campaign_data.get("campaign_id"),
@@ -109,6 +111,69 @@ class GoogleAdsApiSyncService:
                             extracted_account_code=platform_info.get("account_code") if platform_info else None
                         )
                         self.db.add(new_data)
+                    
+                    # 如果提取到了平台信息，尝试匹配或创建AdCampaign记录
+                    if platform_info and platform_info.get("platform_code"):
+                        platform_code = platform_info.get("platform_code")
+                        account_code = platform_info.get("account_code")
+                        
+                        # 查找平台
+                        platform = self.db.query(AffiliatePlatform).filter(
+                            AffiliatePlatform.platform_code == platform_code
+                        ).first()
+                        
+                        if platform:
+                            # 查找或创建联盟账号
+                            affiliate_account_id = None
+                            if account_code:
+                                account = self.db.query(AffiliateAccount).filter(
+                                    AffiliateAccount.user_id == mcc_account.user_id,
+                                    AffiliateAccount.platform_id == platform.id,
+                                    AffiliateAccount.account_code == account_code,
+                                    AffiliateAccount.is_active == True
+                                ).first()
+                                if account:
+                                    affiliate_account_id = account.id
+                            
+                            # 如果没找到匹配的账号，使用该平台下的第一个账号
+                            if not affiliate_account_id:
+                                account = self.db.query(AffiliateAccount).filter(
+                                    AffiliateAccount.user_id == mcc_account.user_id,
+                                    AffiliateAccount.platform_id == platform.id,
+                                    AffiliateAccount.is_active == True
+                                ).first()
+                                if account:
+                                    affiliate_account_id = account.id
+                            
+                            # 从广告系列名提取商家ID（格式：序号-平台-商家-国家-时间-MID）
+                            merchant_id = None
+                            parts = campaign_name.split('-')
+                            if len(parts) >= 3:
+                                merchant_id = parts[2]  # 第三个字段是商家
+                            
+                            # 查找或创建AdCampaign记录
+                            if affiliate_account_id and merchant_id:
+                                ad_campaign = self.db.query(AdCampaign).filter(
+                                    AdCampaign.user_id == mcc_account.user_id,
+                                    AdCampaign.campaign_name == campaign_name
+                                ).first()
+                                
+                                if not ad_campaign:
+                                    # 创建新的AdCampaign记录
+                                    ad_campaign = AdCampaign(
+                                        user_id=mcc_account.user_id,
+                                        affiliate_account_id=affiliate_account_id,
+                                        platform_id=platform.id,
+                                        campaign_name=campaign_name,
+                                        merchant_id=merchant_id,
+                                        status="启用"
+                                    )
+                                    self.db.add(ad_campaign)
+                                    logger.info(f"创建AdCampaign记录: {campaign_name}, 平台: {platform_code}, 商家: {merchant_id}")
+                                elif ad_campaign.platform_id != platform.id:
+                                    # 更新平台ID
+                                    ad_campaign.platform_id = platform.id
+                                    logger.info(f"更新AdCampaign平台ID: {campaign_name}, 平台: {platform_code}")
                     
                     saved_count += 1
                 except Exception as e:

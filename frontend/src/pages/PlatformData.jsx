@@ -234,13 +234,27 @@ export default function PlatformData() {
     }
   ]
 
-  // 汇总模式表格列
+  // 汇总模式表格列（按商家聚合：MID、商家、订单数、销售额、佣金）
   const summaryColumns = [
+    {
+      title: 'MID',
+      dataIndex: 'mid',
+      key: 'mid',
+      width: 120,
+      render: (val) => val || '-'
+    },
+    {
+      title: '商家',
+      dataIndex: 'merchant',
+      key: 'merchant',
+      width: 150,
+      render: (val) => val || '-'
+    },
     {
       title: '平台',
       dataIndex: 'platform',
       key: 'platform',
-      width: 120,
+      width: 100,
       render: (val) => <Tag color="blue">{val}</Tag>
     },
     {
@@ -252,7 +266,7 @@ export default function PlatformData() {
       render: (val) => (val || 0).toLocaleString()
     },
     {
-      title: '交易金额(GMV)',
+      title: '销售额',
       dataIndex: 'gmv',
       key: 'gmv',
       width: 150,
@@ -265,51 +279,8 @@ export default function PlatformData() {
       key: 'total_commission',
       width: 150,
       align: 'right',
-      render: (val) => `$${(val || 0).toFixed(2)}`
-    },
-    {
-      title: '拒付佣金',
-      dataIndex: 'rejected_commission',
-      key: 'rejected_commission',
-      width: 150,
-      align: 'right',
-      render: (val) => {
-        const amount = val || 0
-        if (amount > 0) {
-          return (
-            <Button
-              type="link"
-              size="small"
-              icon={<EyeOutlined />}
-              onClick={() => handleRejectionClick(null, null, null)}
-            >
-              <span style={{ color: '#ff4d4f' }}>${amount.toFixed(2)}</span>
-            </Button>
-          )
-        }
-        return <span>${amount.toFixed(2)}</span>
-      }
-    },
-    {
-      title: '拒付率',
-      dataIndex: 'rejected_rate',
-      key: 'rejected_rate',
-      width: 100,
-      align: 'right',
       render: (val) => (
-        <span style={{ color: val > 0 ? '#ff4d4f' : '#666' }}>
-          {(val || 0).toFixed(2)}%
-        </span>
-      )
-    },
-    {
-      title: '净佣金',
-      dataIndex: 'net_commission',
-      key: 'net_commission',
-      width: 150,
-      align: 'right',
-      render: (val) => (
-        <span style={{ color: val >= 0 ? '#52c41a' : '#ff4d4f', fontWeight: 'bold' }}>
+        <span style={{ color: '#52c41a', fontWeight: 'bold' }}>
           ${(val || 0).toFixed(2)}
         </span>
       )
@@ -340,8 +311,8 @@ export default function PlatformData() {
         >
           <Form.Item label="视图模式" style={{ marginBottom: 16 }}>
             <Radio.Group value={viewMode} onChange={handleViewModeChange} buttonStyle="solid">
-              <Radio.Button value="detail">明细模式</Radio.Button>
               <Radio.Button value="summary">汇总模式</Radio.Button>
+              <Radio.Button value="detail">明细模式</Radio.Button>
             </Radio.Group>
           </Form.Item>
 
@@ -468,14 +439,14 @@ export default function PlatformData() {
 
           <Card>
             <div style={{ marginBottom: 16 }}>
-              <h3 style={{ margin: 0 }}>按平台分组</h3>
+              <h3 style={{ margin: 0 }}>按商家汇总（MID、商家、订单数、销售额、佣金）</h3>
             </div>
             <Table
               columns={summaryColumns}
-              dataSource={summaryData.platform_breakdown || []}
+              dataSource={summaryData.merchant_breakdown || []}
               loading={loading}
-              rowKey="platform"
-              pagination={false}
+              rowKey={(record, index) => `${record.platform}-${record.merchant}-${index}`}
+              pagination={{ pageSize: 20, showSizeChanger: true }}
             />
           </Card>
         </>

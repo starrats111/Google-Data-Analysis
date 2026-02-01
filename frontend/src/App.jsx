@@ -12,6 +12,7 @@ import PlatformData from './pages/PlatformData'
 import GoogleAdsData from './pages/GoogleAdsData'
 import AdCampaigns from './pages/AdCampaigns'
 import Expenses from './pages/Expenses'
+import ExpenseCostDetail from './pages/ExpenseCostDetail'
 import MyAnalysis from './pages/MyAnalysis'
 import StageLabelDetail from './pages/StageLabelDetail'
 import GoogleOAuthCallback from './pages/GoogleOAuthCallback'
@@ -58,6 +59,7 @@ function App() {
           <Route path="google-ads-data" element={<GoogleAdsData />} />
           <Route path="ad-campaigns" element={<AdCampaigns />} />
           <Route path="expenses" element={<Expenses />} />
+          <Route path="expense-cost-detail" element={<ExpenseCostDetail />} />
           <Route path="rejections" element={<RejectionDetails />} />
           <Route path="stage-label/:label" element={<StageLabelDetail />} />
         </Route>

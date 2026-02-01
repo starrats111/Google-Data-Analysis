@@ -32,6 +32,103 @@ from app.schemas.expenses import (
 router = APIRouter(prefix="/api/expenses", tags=["expenses"])
 
 
+@router.get("/cost-detail")
+async def get_cost_detail(
+    start_date: str,
+    end_date: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    获取广告费用详情
+    返回每个MCC账号的费用和每个平台的费用
+    """
+    from app.models.google_ads_api_data import GoogleAdsApiData, GoogleMccAccount
+    from app.models.affiliate_account import AffiliatePlatform
+    
+    start = _parse_date(start_date)
+    end = _parse_date(end_date)
+    
+    # 获取所有平台
+    platforms = db.query(AffiliatePlatform).all()
+    platform_code_map = {p.platform_code: p for p in platforms}
+    
+    # 按MCC账号汇总费用
+    mcc_query = db.query(
+        GoogleMccAccount.id,
+        GoogleMccAccount.mcc_name,
+        GoogleMccAccount.email,
+        func.sum(GoogleAdsApiData.cost).label('total_cost')
+    ).join(
+        GoogleAdsApiData, GoogleAdsApiData.mcc_id == GoogleMccAccount.id
+    ).filter(
+        GoogleMccAccount.user_id == current_user.id,
+        GoogleAdsApiData.date >= start,
+        GoogleAdsApiData.date <= end
+    ).group_by(
+        GoogleMccAccount.id,
+        GoogleMccAccount.mcc_name,
+        GoogleMccAccount.email
+    )
+    
+    mcc_results = mcc_query.all()
+    mcc_breakdown = []
+    for r in mcc_results:
+        mcc_breakdown.append({
+            "mcc_id": r.id,
+            "mcc_name": r.mcc_name,
+            "email": r.email,
+            "total_cost": round(float(r.total_cost or 0), 2)
+        })
+    
+    # 按平台汇总费用
+    platform_query = db.query(
+        GoogleAdsApiData.extracted_platform_code,
+        func.sum(GoogleAdsApiData.cost).label('total_cost')
+    ).filter(
+        GoogleAdsApiData.user_id == current_user.id,
+        GoogleAdsApiData.date >= start,
+        GoogleAdsApiData.date <= end,
+        GoogleAdsApiData.extracted_platform_code.isnot(None)
+    ).group_by(
+        GoogleAdsApiData.extracted_platform_code
+    )
+    
+    platform_results = platform_query.all()
+    platform_breakdown = []
+    for r in platform_results:
+        platform = platform_code_map.get(r.extracted_platform_code)
+        platform_breakdown.append({
+            "platform_code": r.extracted_platform_code,
+            "platform_name": platform.platform_name if platform else r.extracted_platform_code,
+            "total_cost": round(float(r.total_cost or 0), 2)
+        })
+    
+    # 未匹配平台的费用
+    unmatched_query = db.query(
+        func.sum(GoogleAdsApiData.cost).label('total_cost')
+    ).filter(
+        GoogleAdsApiData.user_id == current_user.id,
+        GoogleAdsApiData.date >= start,
+        GoogleAdsApiData.date <= end,
+        GoogleAdsApiData.extracted_platform_code.is_(None)
+    )
+    unmatched_result = unmatched_query.first()
+    unmatched_cost = round(float(unmatched_result.total_cost or 0), 2)
+    
+    # 总费用
+    total_cost = sum(m.get('total_cost', 0) for m in mcc_breakdown)
+    
+    return {
+        "start_date": start_date,
+        "end_date": end_date,
+        "total_cost": total_cost,
+        "mcc_breakdown": mcc_breakdown,
+        "platform_breakdown": platform_breakdown,
+        "unmatched_cost": unmatched_cost
+    }
+
+
 @router.post("/clean-duplicate-costs", status_code=status.HTTP_200_OK)
 async def clean_duplicate_costs(
     start_date: Optional[str] = None,
@@ -43,41 +140,39 @@ async def clean_duplicate_costs(
     """
     清理重复的费用数据
     
-    删除指定日期范围内、指定平台的Google Ads API费用数据（保留手动费用）
+    删除指定日期范围内、指定平台的手动上传费用数据（保留Google Ads API同步的费用）
     用于清理历史遗留的重复数据
     """
-    from app.models.google_ads_api_data import GoogleAdsApiData
-    
     try:
-        query = db.query(GoogleAdsApiData).filter(
-            GoogleAdsApiData.user_id == current_user.id
+        query = db.query(ExpenseAdjustment).filter(
+            ExpenseAdjustment.user_id == current_user.id,
+            ExpenseAdjustment.manual_cost > 0  # 只删除有手动费用的记录
         )
         
         if start_date:
             start = _parse_date(start_date)
-            query = query.filter(GoogleAdsApiData.date >= start)
+            query = query.filter(ExpenseAdjustment.date >= start)
         
         if end_date:
             end = _parse_date(end_date)
-            query = query.filter(GoogleAdsApiData.date <= end)
+            query = query.filter(ExpenseAdjustment.date <= end)
         
         if platform_id:
-            # 需要先获取平台代码
-            platform = db.query(AffiliatePlatform).filter(AffiliatePlatform.id == platform_id).first()
-            if platform:
-                query = query.filter(GoogleAdsApiData.extracted_platform_code == platform.platform_code)
+            query = query.filter(ExpenseAdjustment.platform_id == platform_id)
         
         # 获取要删除的记录数
         count = query.count()
         
         if count == 0:
-            return {"message": "没有找到需要清理的数据", "deleted_count": 0}
+            return {"message": "没有找到需要清理的手动费用数据", "deleted_count": 0}
         
-        # 删除数据
-        query.delete(synchronize_session=False)
+        # 删除手动费用（将manual_cost设为0，而不是删除整个记录，因为可能还有拒付佣金）
+        for adj in query.all():
+            adj.manual_cost = 0.0
+        
         db.commit()
         
-        return {"message": f"成功清理 {count} 条重复费用数据", "deleted_count": count}
+        return {"message": f"成功清理 {count} 条手动费用数据，已保留Google Ads API同步的费用", "deleted_count": count}
         
     except Exception as e:
         db.rollback()

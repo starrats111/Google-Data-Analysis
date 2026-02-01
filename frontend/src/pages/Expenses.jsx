@@ -97,7 +97,7 @@ const Expenses = () => {
   const handleCleanDuplicateCosts = async () => {
     Modal.confirm({
       title: '清理重复费用数据',
-      content: `确定要清理 ${startDate} ~ ${endDate} 范围内的重复费用数据吗？\n\n此操作将删除Google Ads API同步的费用数据（保留手动上传的费用），操作不可恢复！`,
+      content: `确定要清理 ${startDate} ~ ${endDate} 范围内的重复费用数据吗？\n\n此操作将删除手动上传的费用数据（保留Google Ads API同步的费用），操作不可恢复！`,
       okText: '确定清理',
       okType: 'danger',
       cancelText: '取消',
@@ -219,7 +219,13 @@ const Expenses = () => {
           </Card>
         </Col>
         <Col span={6}>
-          <Card>
+          <Card 
+            style={{ cursor: 'pointer' }}
+            onClick={() => {
+              // 跳转到费用详情页
+              window.open(`/expense-cost-detail?start_date=${startDate}&end_date=${endDate}`, '_blank')
+            }}
+          >
             <Statistic 
               title="总广告费用" 
               value={isManager ? (managerSummary?.totals?.total_ad_cost ?? 0) : (summary?.totals?.total_ad_cost ?? 0)} 
