@@ -225,19 +225,21 @@ class PlatformDataSyncService:
                         PlatformData.date == comm_date
                     ).first()
                     
+                    # 过滤掉rejected_rate（计算字段，不存储）
+                    filtered_dict = {k: v for k, v in platform_data_dict.items() if k != 'rejected_rate'}
+                    
                     if not platform_data:
                         platform_data = PlatformData(
                             affiliate_account_id=account.id,
                             user_id=account.user_id,
                             date=comm_date,
-                            **platform_data_dict
+                            **filtered_dict
                         )
                         self.db.add(platform_data)
                     else:
                         # 更新所有字段
-                        for key, value in platform_data_dict.items():
-                            if key != 'rejected_rate':  # rejected_rate是计算字段，不存储
-                                setattr(platform_data, key, value)
+                        for key, value in filtered_dict.items():
+                            setattr(platform_data, key, value)
                         platform_data.last_sync_at = datetime.now()
                     
                     saved_count += 1
@@ -376,19 +378,21 @@ class PlatformDataSyncService:
                         PlatformData.date == comm_date
                     ).first()
                     
+                    # 过滤掉rejected_rate（计算字段，不存储）
+                    filtered_dict = {k: v for k, v in platform_data_dict.items() if k != 'rejected_rate'}
+                    
                     if not platform_data:
                         platform_data = PlatformData(
                             affiliate_account_id=account.id,
                             user_id=account.user_id,
                             date=comm_date,
-                            **platform_data_dict
+                            **filtered_dict
                         )
                         self.db.add(platform_data)
                     else:
                         # 更新所有字段
-                        for key, value in platform_data_dict.items():
-                            if key != 'rejected_rate':  # rejected_rate是计算字段，不存储
-                                setattr(platform_data, key, value)
+                        for key, value in filtered_dict.items():
+                            setattr(platform_data, key, value)
                         platform_data.last_sync_at = datetime.now()
                     
                     saved_count += 1
