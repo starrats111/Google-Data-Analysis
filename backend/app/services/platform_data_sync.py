@@ -548,82 +548,12 @@ class PlatformDataSyncService:
             commissions = data.get("commissions", [])
             orders = data.get("orders", [])
             
-            # 按日期聚合数据
-            date_data = {}
+            logger.info(f"[LinkHaitao同步] API返回佣金数据: {len(commissions)} 条，订单数据: {len(orders)} 条")
             
-            # 处理佣金数据
-            for comm in commissions:
-                settlement_date = comm.get("settlement_date")
-                if not settlement_date:
-                    continue
-                
-                try:
-                    # 支持多种日期格式
-                    date_str_clean = str(settlement_date).strip()
-                    try:
-                        comm_date = datetime.strptime(date_str_clean, "%Y-%m-%d").date()
-                    except ValueError:
-                        try:
-                            comm_date = datetime.strptime(date_str_clean, "%Y-%m-%d %H:%M:%S").date()
-                        except ValueError:
-                            try:
-                                comm_date = datetime.strptime(date_str_clean.split('T')[0], "%Y-%m-%d").date()
-                            except ValueError:
-                                logger.warning(f"[LinkHaitao同步] 无法解析佣金日期格式: {date_str_clean}")
-                                continue
-                    
-                    if comm_date not in date_data:
-                        date_data[comm_date] = {
-                            "commission": 0,
-                            "orders": [],
-                            "order_count": 0
-                        }
-                    date_data[comm_date]["commission"] += comm.get("commission", 0)
-                except Exception as e:
-                    logger.warning(f"[LinkHaitao同步] 处理佣金数据失败: {e}, 数据: {comm}")
-                    continue
-            
-            # 处理订单数据
-            for order in orders:
-                order_date_str = order.get("date") or order.get("order_date")
-                if not order_date_str:
-                    continue
-                
-                try:
-                    # 支持多种日期格式
-                    date_str_clean = str(order_date_str).strip()
-                    try:
-                        order_date = datetime.strptime(date_str_clean, "%Y-%m-%d").date()
-                    except ValueError:
-                        try:
-                            order_date = datetime.strptime(date_str_clean, "%Y-%m-%d %H:%M:%S").date()
-                        except ValueError:
-                            try:
-                                order_date = datetime.strptime(date_str_clean.split('T')[0], "%Y-%m-%d").date()
-                            except ValueError:
-                                logger.warning(f"[LinkHaitao同步] 无法解析订单日期格式: {date_str_clean}")
-                                continue
-                    
-                    if order_date not in date_data:
-                        date_data[order_date] = {
-                            "commission": 0,
-                            "orders": [],
-                            "order_count": 0
-                        }
-                    date_data[order_date]["orders"].append(order)
-                    date_data[order_date]["order_count"] += 1
-                except Exception as e:
-                    logger.warning(f"[LinkHaitao同步] 处理订单数据失败: {e}, 数据: {order}")
-                    continue
-            
-            # 先保存明细交易到AffiliateTransaction表（用于查询）
-            transaction_service = UnifiedTransactionService(self.db)
-            transaction_saved_count = 0
-            
-            # 合并佣金和订单数据，转换为交易格式
+            # 合并佣金和订单数据，转换为统一格式的交易列表
             all_transactions = []
-            logger.info(f"[LinkHaitao同步] 开始保存明细交易，佣金数据: {len(commissions)} 条，订单数据: {len(orders)} 条")
             
+            # 将佣金数据转换为交易格式
             for comm in commissions:
                 settlement_date = comm.get("settlement_date")
                 if settlement_date:
@@ -643,19 +573,20 @@ class PlatformDataSyncService:
                                     continue
                         
                         all_transactions.append({
-                            "transaction_id": comm.get("transaction_id") or comm.get("id") or f"lh_{settlement_date}_{comm.get('commission', 0)}",
+                            "transaction_id": comm.get("transaction_id") or comm.get("id") or f"lh_comm_{settlement_date}_{comm.get('commission', 0)}",
                             "transaction_time": transaction_time,
                             "status": "approved",  # LinkHaitao佣金数据默认是已确认
                             "commission_amount": float(comm.get("commission", 0) or 0),
                             "order_amount": 0,
-                            "merchant": comm.get("merchant") or None,
+                            "merchant": comm.get("merchant") or comm.get("mcid") or None,
                         })
                     except Exception as e:
                         logger.warning(f"[LinkHaitao同步] 处理佣金交易失败: {e}, 数据: {comm}")
                         continue
             
+            # 将订单数据转换为交易格式
             for order in orders:
-                order_date_str = order.get("date") or order.get("order_date")
+                order_date_str = order.get("date") or order.get("order_date") or order.get("transaction_time")
                 if order_date_str:
                     try:
                         # 支持多种日期格式
@@ -673,19 +604,29 @@ class PlatformDataSyncService:
                                     continue
                         
                         all_transactions.append({
-                            "transaction_id": order.get("order_id") or order.get("id") or f"lh_{order_date_str}_{order.get('amount', 0)}",
+                            "transaction_id": order.get("order_id") or order.get("id") or order.get("transaction_id") or f"lh_order_{order_date_str}_{order.get('amount', 0)}",
                             "transaction_time": transaction_time,
                             "status": order.get("status", "pending"),
-                            "commission_amount": float(order.get("commission", 0) or 0),
-                            "order_amount": float(order.get("amount", 0) or order.get("order_amount", 0) or 0),
-                            "merchant": order.get("merchant") or None,
+                            "commission_amount": float(order.get("commission", 0) or order.get("sale_comm", 0) or 0),
+                            "order_amount": float(order.get("amount", 0) or order.get("order_amount", 0) or order.get("sale_amount", 0) or 0),
+                            "merchant": order.get("merchant") or order.get("merchant_name") or order.get("mcid") or None,
                         })
                     except Exception as e:
                         logger.warning(f"[LinkHaitao同步] 处理订单交易失败: {e}, 数据: {order}")
                         continue
             
-            # 保存明细交易
+            logger.info(f"[LinkHaitao同步] 合并后共有 {len(all_transactions)} 条交易数据")
+            
+            # 先保存明细交易到AffiliateTransaction表（用于查询）
+            transaction_service = UnifiedTransactionService(self.db)
+            transaction_saved_count = 0
+            
+            
+            # 先保存明细交易到AffiliateTransaction表（用于查询）
+            transaction_service = UnifiedTransactionService(self.db)
+            transaction_saved_count = 0
             logger.info(f"[LinkHaitao同步] 准备保存 {len(all_transactions)} 条明细交易到AffiliateTransaction表")
+            
             for idx, tx in enumerate(all_transactions):
                 try:
                     transaction_service.normalize_and_save(
@@ -701,35 +642,57 @@ class PlatformDataSyncService:
             
             logger.info(f"[LinkHaitao同步] 已保存 {transaction_saved_count}/{len(all_transactions)} 条明细交易到AffiliateTransaction表")
             
-            # 保存到数据库
+            # 使用UnifiedPlatformService聚合数据并保存到PlatformData表
+            if not all_transactions:
+                logger.warning(f"[LinkHaitao同步] 没有交易数据，无法保存到PlatformData表")
+                return {
+                    "success": True,
+                    "message": f"同步完成，但该日期范围（{begin_date} ~ {end_date}）内没有数据。请检查：1) Token是否正确 2) 该日期范围内是否有数据 3) 在LinkHaitao平台手动检查",
+                    "saved_count": 0
+                }
+            
+            # 使用UnifiedPlatformService按日期聚合数据
+            unified_service = UnifiedPlatformService(self.db)
+            date_data = unified_service.aggregate_by_date(
+                transactions=all_transactions,
+                platform='linkhaitao',
+                date_field='transaction_time'
+            )
+            
+            logger.info(f"[LinkHaitao同步] 按日期聚合后共有 {len(date_data)} 天的数据")
+            
+            # 保存到PlatformData表
             saved_count = 0
-            for comm_date, data_item in date_data.items():
+            for trans_date, data_item in date_data.items():
                 try:
+                    metrics = data_item.get("metrics", {})
+                    
+                    # 过滤掉rejected_rate（这是计算字段，不应该存储）
+                    filtered_dict = {k: v for k, v in metrics.items() if k != "rejected_rate"}
+                    
                     platform_data = self.db.query(PlatformData).filter(
                         PlatformData.affiliate_account_id == account.id,
-                        PlatformData.date == comm_date
+                        PlatformData.date == trans_date
                     ).first()
                     
                     if not platform_data:
                         platform_data = PlatformData(
                             affiliate_account_id=account.id,
                             user_id=account.user_id,
-                            date=comm_date,
-                            commission=data_item["commission"],
-                            orders=data_item["order_count"],
-                            order_days_this_week=0,  # 需要计算本周出单天数
-                            order_details=json.dumps(data_item["orders"]) if data_item["orders"] else None
+                            date=trans_date,
+                            **filtered_dict
                         )
                         self.db.add(platform_data)
                     else:
-                        platform_data.commission = data_item["commission"]
-                        platform_data.orders = data_item["order_count"]
-                        platform_data.order_details = json.dumps(data_item["orders"]) if data_item["orders"] else None
+                        for key, value in filtered_dict.items():
+                            setattr(platform_data, key, value)
                         platform_data.last_sync_at = datetime.now()
                     
                     saved_count += 1
                 except Exception as e:
-                    logger.error(f"保存LinkHaitao数据失败: {e}")
+                    logger.error(f"[LinkHaitao同步] 保存PlatformData失败: {e}, 日期: {trans_date}")
+                    import traceback
+                    logger.debug(f"[LinkHaitao同步] 错误堆栈: {traceback.format_exc()}")
                     continue
             
             self.db.commit()
