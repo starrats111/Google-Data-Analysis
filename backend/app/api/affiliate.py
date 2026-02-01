@@ -572,6 +572,13 @@ async def sync_account_data(
         platform_name = account.platform.platform_name.lower() if account.platform.platform_name else ""
         
         # 识别平台（同时检查代码和名称）
+        is_rewardoo = (
+            platform_code in ["rewardoo", "rw"] or
+            platform_name in ["rw", "rewardoo"] or
+            "rewardoo" in platform_code or
+            "rewardoo" in platform_name
+        )
+        
         is_collabglow = (
             platform_code in ["collabglow", "cg", "collab-glow"] or
             platform_name in ["cg", "collabglow"] or
@@ -586,7 +593,11 @@ async def sync_account_data(
             "linkhaitao" in platform_name
         )
         
-        if is_collabglow:
+        if is_rewardoo:
+            notes_data["rewardoo_token"] = token
+            notes_data["rw_token"] = token
+            notes_data["api_token"] = token  # 同时保存为通用字段，方便读取
+        elif is_collabglow:
             notes_data["collabglow_token"] = token
             notes_data["api_token"] = token  # 同时保存为通用字段，方便读取
         elif is_linkhaitao:
