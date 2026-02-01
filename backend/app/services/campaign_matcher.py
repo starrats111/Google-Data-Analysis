@@ -56,7 +56,28 @@ class CampaignMatcher:
                 continue
         
         # 2. 尝试从广告系列名中自动提取（常见格式）
-        # 格式1: "平台名_账号名_其他" 或 "平台名-账号名-其他"
+        # 格式1: "序号-平台-商家-投放国家-投放时间-MID" (新格式)
+        # 例如: "001-RW-bofrost-US-0126-126966" -> 提取 "RW"
+        new_format_pattern = r"^\d+[_-]([a-z]{2,})[_-]"  # 序号-平台- 或 序号_平台_
+        match = re.match(new_format_pattern, campaign_name, re.IGNORECASE)
+        if match:
+            platform_code = match.group(1).upper()  # 转换为大写（RW, CG, LH等）
+            
+            # 验证平台代码是否存在（支持大小写不敏感）
+            platform = self.db.query(AffiliatePlatform).filter(
+                AffiliatePlatform.platform_code.ilike(platform_code)
+            ).first()
+            
+            if platform:
+                # 尝试提取账号代码（MID部分，最后一个字段）
+                parts = re.split(r'[_-]', campaign_name)
+                account_code = parts[-1] if len(parts) > 1 else None
+                return {
+                    "platform_code": platform.platform_code,
+                    "account_code": account_code
+                }
+        
+        # 格式2: "平台名_账号名_其他" 或 "平台名-账号名-其他" (旧格式)
         patterns = [
             r"^([a-z0-9]+)[_-]([a-z0-9]+)[_-]",  # 平台_账号_ 或 平台-账号-
             r"^([a-z0-9]+)\s+([a-z0-9]+)\s+",    # 平台 账号 

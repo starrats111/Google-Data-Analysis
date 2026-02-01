@@ -9,6 +9,7 @@ class ExpenseAdjustmentUpsert(BaseModel):
     platform_id: int
     date: str  # YYYY-MM-DD
     rejected_commission: float = 0.0
+    manual_cost: Optional[float] = None  # 手动上传的费用（可选）
 
 
 class ExpensePlatformSummary(BaseModel):

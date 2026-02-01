@@ -17,6 +17,7 @@ class ExpenseAdjustment(Base):
     date = Column(Date, nullable=False, index=True)
 
     rejected_commission = Column(Float, default=0.0, nullable=False)  # 拒付佣金
+    manual_cost = Column(Float, default=0.0, nullable=False)  # 手动上传的费用（覆盖Google Ads API数据）
 
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())

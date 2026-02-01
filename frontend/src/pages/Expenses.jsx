@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react'
-import { Card, DatePicker, Select, Space, Table, Statistic, Row, Col, InputNumber, Button, message, Segmented, Collapse } from 'antd'
+import { Card, DatePicker, Select, Space, Table, Statistic, Row, Col, InputNumber, Button, message, Segmented, Collapse, Modal, Popconfirm } from 'antd'
+import { DeleteOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import api from '../services/api'
 import { useAuth } from '../store/authStore'
@@ -78,18 +79,41 @@ const Expenses = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [startDate, endDate, todayDate])
 
-  const handleSaveRejected = async (platformId, dateStr, value) => {
+  const handleSaveRejected = async (platformId, dateStr, rejectedValue, manualCostValue) => {
     try {
       await api.post('/api/expenses/rejected-commission', {
         platform_id: platformId,
         date: dateStr,
-        rejected_commission: Number(value || 0),
+        rejected_commission: Number(rejectedValue || 0),
+        manual_cost: manualCostValue !== undefined ? Number(manualCostValue || 0) : undefined,
       })
-      message.success('已保存拒付佣金')
+      message.success('已保存')
       fetchAll()
     } catch (e) {
       message.error(e.response?.data?.detail || '保存失败')
     }
+  }
+
+  const handleCleanDuplicateCosts = async () => {
+    Modal.confirm({
+      title: '清理重复费用数据',
+      content: `确定要清理 ${startDate} ~ ${endDate} 范围内的重复费用数据吗？\n\n此操作将删除Google Ads API同步的费用数据（保留手动上传的费用），操作不可恢复！`,
+      okText: '确定清理',
+      okType: 'danger',
+      cancelText: '取消',
+      onOk: async () => {
+        try {
+          const response = await api.post('/api/expenses/clean-duplicate-costs', {
+            start_date: startDate,
+            end_date: endDate,
+          })
+          message.success(response.data.message || '清理成功')
+          fetchAll()
+        } catch (e) {
+          message.error(e.response?.data?.detail || '清理失败')
+        }
+      },
+    })
   }
 
   const platformColumns = [
@@ -103,8 +127,27 @@ const Expenses = () => {
   const dailyColumns = [
     { title: '日期', dataIndex: 'date', key: 'date', width: 110 },
     { title: '平台', dataIndex: 'platform_name', key: 'platform_name', width: 140 },
-    { title: '佣金', dataIndex: 'commission', key: 'commission', align: 'right' },
-    { title: '广告费用', dataIndex: 'ad_cost', key: 'ad_cost', align: 'right' },
+    { title: '佣金', dataIndex: 'commission', key: 'commission', align: 'right', render: (v) => (v || 0).toFixed(4) },
+    { 
+      title: '广告费用(可手动)',
+      dataIndex: 'ad_cost',
+      key: 'ad_cost',
+      align: 'right',
+      render: (v, r) => (
+        <Space>
+          <InputNumber
+            value={Number(v || 0)}
+            min={0}
+            step={0.01}
+            style={{ width: 120 }}
+            onChange={(val) => {
+              r.__draftCost = val
+            }}
+          />
+          <Button size="small" onClick={() => handleSaveRejected(r.platform_id, r.date, r.__draftRejected ?? r.rejected_commission ?? 0, r.__draftCost ?? v)}>保存</Button>
+        </Space>
+      ),
+    },
     {
       title: '拒付佣金(手动)',
       dataIndex: 'rejected_commission',
@@ -118,15 +161,14 @@ const Expenses = () => {
             step={0.01}
             style={{ width: 120 }}
             onChange={(val) => {
-              // 仅更新展示，不立即提交
               r.__draftRejected = val
             }}
           />
-          <Button size="small" onClick={() => handleSaveRejected(r.platform_id, r.date, r.__draftRejected ?? v)}>保存</Button>
+          <Button size="small" onClick={() => handleSaveRejected(r.platform_id, r.date, r.__draftRejected ?? v, r.__draftCost ?? r.ad_cost)}>保存</Button>
         </Space>
       ),
     },
-    { title: '净利润', dataIndex: 'net_profit', key: 'net_profit', align: 'right' },
+    { title: '净利润', dataIndex: 'net_profit', key: 'net_profit', align: 'right', render: (v) => (v || 0).toFixed(4) },
   ]
 
   return (
@@ -148,6 +190,20 @@ const Expenses = () => {
             placeholder="选择某一天(可选)"
           />
           <Button onClick={fetchAll} loading={loading}>刷新</Button>
+          {!isManager && (
+            <Popconfirm
+              title="清理重复费用数据"
+              description={`确定要清理 ${startDate} ~ ${endDate} 范围内的重复费用数据吗？此操作将删除Google Ads API同步的费用数据（保留手动上传的费用），操作不可恢复！`}
+              onConfirm={handleCleanDuplicateCosts}
+              okText="确定清理"
+              okType="danger"
+              cancelText="取消"
+            >
+              <Button danger icon={<DeleteOutlined />} loading={loading}>
+                清理重复费用
+              </Button>
+            </Popconfirm>
+          )}
         </Space>
       </Card>
 

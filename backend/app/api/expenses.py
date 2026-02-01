@@ -32,6 +32,61 @@ from app.schemas.expenses import (
 router = APIRouter(prefix="/api/expenses", tags=["expenses"])
 
 
+@router.post("/clean-duplicate-costs", status_code=status.HTTP_200_OK)
+async def clean_duplicate_costs(
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    platform_id: Optional[int] = None,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    清理重复的费用数据
+    
+    删除指定日期范围内、指定平台的Google Ads API费用数据（保留手动费用）
+    用于清理历史遗留的重复数据
+    """
+    from app.models.google_ads_api_data import GoogleAdsApiData
+    
+    try:
+        query = db.query(GoogleAdsApiData).filter(
+            GoogleAdsApiData.user_id == current_user.id
+        )
+        
+        if start_date:
+            start = _parse_date(start_date)
+            query = query.filter(GoogleAdsApiData.date >= start)
+        
+        if end_date:
+            end = _parse_date(end_date)
+            query = query.filter(GoogleAdsApiData.date <= end)
+        
+        if platform_id:
+            # 需要先获取平台代码
+            platform = db.query(AffiliatePlatform).filter(AffiliatePlatform.id == platform_id).first()
+            if platform:
+                query = query.filter(GoogleAdsApiData.extracted_platform_code == platform.platform_code)
+        
+        # 获取要删除的记录数
+        count = query.count()
+        
+        if count == 0:
+            return {"message": "没有找到需要清理的数据", "deleted_count": 0}
+        
+        # 删除数据
+        query.delete(synchronize_session=False)
+        db.commit()
+        
+        return {"message": f"成功清理 {count} 条重复费用数据", "deleted_count": count}
+        
+    except Exception as e:
+        db.rollback()
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.error(f"清理重复费用数据失败: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"清理失败: {str(e)}")
+
+
 def _parse_date(s: str) -> date:
     try:
         return datetime.strptime(s, "%Y-%m-%d").date()
@@ -91,7 +146,7 @@ async def upsert_rejected_commission(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """录入/更新某平台某日的拒付佣金"""
+    """录入/更新某平台某日的拒付佣金和手动费用"""
     d = _parse_date(payload.date)
     platform = db.query(AffiliatePlatform).filter(AffiliatePlatform.id == payload.platform_id).first()
     if not platform:
@@ -108,10 +163,13 @@ async def upsert_rejected_commission(
             platform_id=payload.platform_id,
             date=d,
             rejected_commission=float(payload.rejected_commission or 0.0),
+            manual_cost=float(payload.manual_cost or 0.0) if payload.manual_cost is not None else 0.0,
         )
         db.add(adj)
     else:
         adj.rejected_commission = float(payload.rejected_commission or 0.0)
+        if payload.manual_cost is not None:
+            adj.manual_cost = float(payload.manual_cost or 0.0)
 
     db.commit()
     return {"message": "保存成功"}
@@ -447,6 +505,7 @@ async def get_expense_summary(
         by_date[d][0] = api_comm  # 覆盖佣金
 
     # 使用 Google Ads API 中的费用覆盖旧逻辑的费用（广告费用直接来自Google Ads）
+    # 但如果存在手动费用，则优先使用手动费用
     for (pid, d), ga_cost in ga_cost_map.items():
         if pid not in platform_map:
             platform_map[pid] = {
@@ -457,7 +516,12 @@ async def get_expense_summary(
         by_date = platform_map[pid]["by_date"]
         if d not in by_date:
             by_date[d] = [0.0, 0.0]
-        by_date[d][1] = ga_cost  # 覆盖费用
+        # 如果存在手动费用，优先使用手动费用；否则使用Google Ads API费用
+        manual_cost = manual_cost_map.get((pid, d), None)
+        if manual_cost is not None:
+            by_date[d][1] = manual_cost  # 使用手动费用
+        else:
+            by_date[d][1] = ga_cost  # 使用Google Ads API费用
     
     # 将未匹配平台的费用也计入总费用（但不分配到具体平台）
     # 这些费用会在总费用中体现，但不会出现在按平台汇总中
@@ -466,15 +530,18 @@ async def get_expense_summary(
         # 未匹配的费用计入总费用，但不分配到具体平台
         # 这样总费用就能与Google Ads数据页面对上了
 
-    # 拉取拒付佣金调整（区间内）
+    # 拉取拒付佣金调整和手动费用（区间内）
     adjustments = db.query(ExpenseAdjustment).filter(
         ExpenseAdjustment.user_id == current_user.id,
         ExpenseAdjustment.date >= start,
         ExpenseAdjustment.date <= end,
     ).all()
-    adj_map: Dict[Tuple[int, date], float] = {}
+    adj_map: Dict[Tuple[int, date], float] = {}  # (platform_id, date) -> rejected_commission
+    manual_cost_map: Dict[Tuple[int, date], float] = {}  # (platform_id, date) -> manual_cost
     for a in adjustments:
         adj_map[(a.platform_id, a.date)] = float(a.rejected_commission or 0.0)
+        if a.manual_cost and a.manual_cost > 0:
+            manual_cost_map[(a.platform_id, a.date)] = float(a.manual_cost or 0.0)
 
     # 组装平台汇总
     platforms: List[ExpensePlatformSummary] = []
@@ -490,12 +557,22 @@ async def get_expense_summary(
         today_cost = 0.0
         if today in by_date:
             today_commission, today_cost = by_date[today][0], by_date[today][1]
+        # 如果当天有手动费用，使用手动费用
+        today_manual_cost = manual_cost_map.get((pid, today), None)
+        if today_manual_cost is not None:
+            today_cost = today_manual_cost
         today_rejected = adj_map.get((pid, today), 0.0)
         today_net = today_commission - today_rejected - today_cost
 
         # 区间累计
         range_commission = sum(v[0] for v in by_date.values())
         range_cost = sum(v[1] for v in by_date.values())
+        # 对于有手动费用的日期，使用手动费用覆盖
+        for d in by_date.keys():
+            manual_cost = manual_cost_map.get((pid, d), None)
+            if manual_cost is not None:
+                range_cost -= by_date[d][1]  # 减去原费用
+                range_cost += manual_cost  # 加上手动费用
         range_rejected = sum(adj_map.get((pid, d), 0.0) for d in by_date.keys())
         range_net = range_commission - range_rejected - range_cost
 
@@ -628,6 +705,10 @@ async def get_expense_daily(
         ExpenseAdjustment.date <= end,
     ).all()
     adj_map: Dict[Tuple[int, date], float] = {(a.platform_id, a.date): float(a.rejected_commission or 0.0) for a in adjustments}
+    manual_cost_map: Dict[Tuple[int, date], float] = {}
+    for a in adjustments:
+        if a.manual_cost and a.manual_cost > 0:
+            manual_cost_map[(a.platform_id, a.date)] = float(a.manual_cost or 0.0)
 
     rows: List[ExpenseDailyRow] = []
     if metrics:
@@ -656,8 +737,12 @@ async def get_expense_daily(
             try:
                 api_comm = api_commission_map.get((pid, d), 0.0)
                 commission = api_comm
-                # 优先使用Google Ads API的费用
-                cost = ga_cost_map.get((pid, d), commission_cost[1] if commission_cost else 0.0)
+                # 优先使用手动费用，其次使用Google Ads API的费用，最后使用每日指标的费用
+                manual_cost = manual_cost_map.get((pid, d), None)
+                if manual_cost is not None:
+                    cost = manual_cost
+                else:
+                    cost = ga_cost_map.get((pid, d), commission_cost[1] if commission_cost else 0.0)
                 rejected = adj_map.get((pid, d), 0.0)
                 net = commission - rejected - cost
                 rows.append(ExpenseDailyRow(
@@ -694,7 +779,12 @@ async def get_expense_daily(
                     d = r.analysis_date
                     raw_commission, raw_cost = _extract_commission_cost(r.result_data)
                     commission = api_commission_map.get((pid, d), raw_commission)
-                    cost = ga_cost_map.get((pid, d), raw_cost)
+                    # 优先使用手动费用，其次使用Google Ads API的费用，最后使用分析结果的费用
+                    manual_cost = manual_cost_map.get((pid, d), None)
+                    if manual_cost is not None:
+                        cost = manual_cost
+                    else:
+                        cost = ga_cost_map.get((pid, d), raw_cost)
                     rejected = adj_map.get((pid, d), 0.0)
                     net = commission - rejected - cost
                     rows.append(ExpenseDailyRow(
