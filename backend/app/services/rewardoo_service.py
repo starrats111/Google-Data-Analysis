@@ -397,11 +397,15 @@ class RewardooService(PlatformServiceBase):
             logger.warning(error_msg)
             return []
         
-        # 根据官方API文档，响应格式: {"data": {"list": [...], ...}}
+        # 根据get_transaction_details返回的格式: {"data": {"transactions": [...], ...}}
+        # 或官方API文档格式: {"data": {"list": [...], ...}}
         data = result.get("data", {})
         if isinstance(data, dict):
-            # 从data.list中获取交易列表
-            transactions = data.get("list", [])
+            # 优先从data.transactions获取（get_transaction_details返回的格式）
+            transactions = data.get("transactions", [])
+            # 如果没有，尝试从data.list获取（官方API原始格式）
+            if not transactions:
+                transactions = data.get("list", [])
         elif isinstance(data, list):
             # 如果data直接是数组（兼容旧格式）
             transactions = data
