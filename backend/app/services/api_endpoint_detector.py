@@ -45,13 +45,13 @@ class ApiEndpointDetector:
         "https://app.collabglow.com/api",
     ]
     
-    # CollabGlow可能的API路径
+    # CollabGlow可能的API路径（按优先级排序，/transaction优先）
     COLLABGLOW_POSSIBLE_PATHS = [
-        "/transaction/v3",
-        "/transaction",
+        "/transaction",  # 优先尝试标准Transaction API
+        "/transaction/v3",  # 备选：V3版本
         "/transactions",
-        "/api/transaction/v3",
         "/api/transaction",
+        "/api/transaction/v3",
         "/v3/transaction",
         "/v1/transaction",
         "/commission_validation",

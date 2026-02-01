@@ -70,7 +70,7 @@ class CollabGlowService(PlatformServiceBase):
         self,
         begin_date: str,
         end_date: str,
-        use_v3: bool = True
+        use_v3: bool = False
     ) -> Dict:
         """
         【核心API】Transaction API / V3 - 获取订单数和佣金金额
@@ -102,7 +102,8 @@ class CollabGlowService(PlatformServiceBase):
         }
         
         try:
-            logger.info(f"[Transaction API] 请求订单和佣金数据: {begin_date} ~ {end_date}")
+            logger.info(f"[Transaction API] 请求订单和佣金数据: {begin_date} ~ {end_date}, URL: {api_url}")
+            logger.debug(f"[Transaction API] 请求Payload: {payload}")
             # 增加超时时间到60秒，并添加重试机制
             max_retries = 3
             retry_delay = 2  # 重试间隔（秒）
@@ -140,12 +141,18 @@ class CollabGlowService(PlatformServiceBase):
             code = result.get("code")
             message = result.get("message", "")
             
-            if code == "0":
+            # 支持字符串和整数格式的code
+            code_str = str(code) if code is not None else ""
+            code_int = int(code) if isinstance(code, (int, str)) and str(code).isdigit() else None
+            
+            # 成功：code为"0"或0
+            if code_str == "0" or code_int == 0:
                 data = result.get("data", {})
                 transaction_list = data.get("list", []) or data.get("transactions", [])
                 logger.info(f"[Transaction API] 成功获取 {len(transaction_list)} 笔交易（订单）")
                 return result
-            elif code == "1" and ("no data" in message.lower() or "没有数据" in message.lower() or "not found" in message.lower()):
+            # 无数据：code为"1"或1，且消息包含"no data"
+            elif (code_str == "1" or code_int == 1) and ("no data" in message.lower() or "没有数据" in message.lower() or "not found" in message.lower()):
                 logger.info(f"[Transaction API] 该日期范围内没有数据: {message}")
                 return {
                     "code": "0",
@@ -156,7 +163,16 @@ class CollabGlowService(PlatformServiceBase):
                     }
                 }
             else:
-                error_msg = f"[Transaction API] 返回错误: {message} (code: {code})"
+                # 根据错误码提供更友好的错误信息
+                error_codes = {
+                    1000: "Publisher does not exist (发布者不存在)",
+                    1001: "Invalid token (Token无效)",
+                    1002: "Call frequency too high (调用频率过高)",
+                    1006: "Query time span cannot exceed 62 days (查询时间跨度不能超过62天)",
+                    10001: "Missing required parameters or incorrect format (缺少必需参数或格式错误)"
+                }
+                error_detail = error_codes.get(code_int, message) if code_int else message
+                error_msg = f"[Transaction API] 返回错误: {error_detail} (code: {code})"
                 logger.error(error_msg)
                 raise Exception(error_msg)
                 
@@ -441,18 +457,85 @@ class CollabGlowService(PlatformServiceBase):
             # CG平台状态映射：reversed = 拒付
             raw_status = item.get("status", "").strip()
             
+            # 处理transaction_id：支持camelCase和snake_case
+            transaction_id = (
+                item.get("collabgrowId") or  # API文档中的字段名
+                item.get("collabgrow_id") or
+                item.get("transaction_id") or 
+                item.get("action_id") or 
+                item.get("id") or
+                item.get("orderId") or  # 使用orderId作为备选
+                item.get("order_id")
+            )
+            
+            # 处理transaction_time：支持timestamp和日期字符串
+            order_time = item.get("orderTime") or item.get("order_time")
+            if order_time:
+                # 如果是timestamp（整数），转换为日期字符串
+                if isinstance(order_time, (int, float)):
+                    from datetime import datetime
+                    try:
+                        # 尝试作为秒级timestamp
+                        # 如果值大于10^10，可能是毫秒级timestamp
+                        if order_time > 1e10:
+                            order_time = datetime.fromtimestamp(order_time / 1000).strftime("%Y-%m-%d")
+                        else:
+                            order_time = datetime.fromtimestamp(order_time).strftime("%Y-%m-%d")
+                    except (ValueError, OSError) as e:
+                        logger.warning(f"[Transaction API] 时间戳转换失败: {order_time}, 错误: {e}")
+                        order_time = None
+            
+            transaction_time = (
+                order_time or
+                item.get("transaction_time") or 
+                item.get("order_date") or 
+                item.get("date") or 
+                item.get("settlementDate") or  # camelCase
+                item.get("settlement_date") or
+                item.get("validationDate") or  # camelCase
+                item.get("validation_date")
+            )
+            
+            # 处理merchant：支持camelCase和snake_case
+            merchant = (
+                item.get("merchantName") or  # API文档中的字段名
+                item.get("merchant_name") or
+                item.get("merchant") or 
+                item.get("brand") or 
+                item.get("brand_name") or 
+                item.get("mcid")
+            )
+            
+            # 处理order_amount：支持camelCase和snake_case
+            order_amount = float(
+                item.get("saleAmount") or  # API文档中的字段名
+                item.get("sale_amount") or
+                item.get("order_amount", 0) or 
+                0
+            )
+            
+            # 处理commission_amount：支持camelCase和snake_case
+            commission_amount = float(
+                item.get("saleComm") or  # API文档中的字段名
+                item.get("sale_comm") or
+                item.get("commission_amount", 0) or 
+                item.get("commission", 0) or 
+                0
+            )
+            
             extracted.append({
-                "transaction_id": item.get("transaction_id") or item.get("action_id") or item.get("id"),
-                "transaction_time": item.get("transaction_time") or item.get("order_date") or item.get("date") or item.get("settlement_date"),
-                "merchant": item.get("merchant") or item.get("brand") or item.get("brand_name") or item.get("mcid"),
-                "order_amount": float(item.get("order_amount", 0) or item.get("sale_amount", 0) or 0),
-                "commission_amount": float(item.get("commission_amount", 0) or item.get("commission", 0) or item.get("sale_comm", 0) or 0),
+                "transaction_id": transaction_id,
+                "transaction_time": transaction_time,
+                "merchant": merchant,
+                "order_amount": order_amount,
+                "commission_amount": commission_amount,
                 "status": raw_status,  # 保持原始状态，由统一服务处理映射
                 # 保留原始字段用于兼容
-                "settlement_date": item.get("settlement_date"),
-                "brand_id": item.get("brand_id", 0),
+                "settlement_date": item.get("settlementDate") or item.get("settlement_date"),
+                "brand_id": item.get("brandId") or item.get("brand_id", 0),
                 "mcid": item.get("mcid"),
-                "note": item.get("note")
+                "note": item.get("note"),
+                "order_id": item.get("orderId") or item.get("order_id")
             })
         
         return extracted
@@ -495,7 +578,7 @@ class CollabGlowService(PlatformServiceBase):
         begin_date: str,
         end_date: str,
         max_days: int = 62,
-        use_v3: bool = True
+        use_v3: bool = False
     ) -> Dict:
         """
         【推荐使用】同步交易（订单）和佣金数据
