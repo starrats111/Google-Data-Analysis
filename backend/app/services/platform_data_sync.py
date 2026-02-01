@@ -14,6 +14,7 @@ from app.services.collabglow_service import CollabGlowService
 from app.services.linkhaitao_service import LinkHaitaoService
 from app.services.rewardoo_service import RewardooService
 from app.services.unified_platform_service import UnifiedPlatformService
+from app.services.unified_transaction_service import UnifiedTransactionService
 
 logger = logging.getLogger(__name__)
 
@@ -199,6 +200,49 @@ class PlatformDataSyncService:
                     "message": f"同步完成，但该日期范围（{begin_date} ~ {end_date}）内没有数据。请检查：1) Token是否正确 2) 该日期范围内是否有数据 3) 在CollabGlow平台手动检查",
                     "saved_count": 0
                 }
+            
+            # 先保存明细交易到AffiliateTransaction表（用于查询）
+            transaction_service = UnifiedTransactionService(self.db)
+            transaction_saved_count = 0
+            for tx in transactions_raw:
+                try:
+                    # 转换时间格式
+                    transaction_time = tx.get('transaction_time')
+                    if isinstance(transaction_time, str):
+                        try:
+                            transaction_time = datetime.strptime(transaction_time, "%Y-%m-%d")
+                        except:
+                            try:
+                                transaction_time = datetime.strptime(transaction_time, "%Y-%m-%d %H:%M:%S")
+                            except:
+                                logger.warning(f"无法解析交易时间: {transaction_time}")
+                                continue
+                    elif not isinstance(transaction_time, datetime):
+                        logger.warning(f"交易时间格式不正确: {transaction_time}")
+                        continue
+                    
+                    # 准备交易数据
+                    tx_data = {
+                        "transaction_id": tx.get("transaction_id") or tx.get("order_id") or tx.get("collabgrowId") or f"cg_{tx.get('orderId', '')}",
+                        "transaction_time": transaction_time,
+                        "status": tx.get("status", "pending"),
+                        "commission_amount": float(tx.get("commission_amount", 0) or tx.get("saleComm", 0) or 0),
+                        "order_amount": float(tx.get("order_amount", 0) or tx.get("saleAmount", 0) or 0),
+                        "merchant": tx.get("merchant") or tx.get("merchantName") or tx.get("mcid") or None,
+                    }
+                    
+                    transaction_service.normalize_and_save(
+                        tx=tx_data,
+                        platform='cg',
+                        affiliate_account_id=account.id,
+                        user_id=account.user_id
+                    )
+                    transaction_saved_count += 1
+                except Exception as e:
+                    logger.warning(f"保存明细交易失败: {e}, 交易数据: {tx.get('transaction_id', 'unknown')}")
+                    continue
+            
+            logger.info(f"[CG同步] 已保存 {transaction_saved_count} 条明细交易到AffiliateTransaction表")
             
             # 使用统一服务按日期聚合数据并计算6个核心指标
             date_data = UnifiedPlatformService.aggregate_by_date(
