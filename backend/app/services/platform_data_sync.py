@@ -369,6 +369,49 @@ class PlatformDataSyncService:
             logger.info(f"[RW同步] TransactionDetails API返回 {len(transactions_raw)} 笔交易（订单）")
             print(f"[RW同步] TransactionDetails API返回 {len(transactions_raw)} 笔交易（订单）")
             
+            # 先保存明细交易到AffiliateTransaction表（用于查询）
+            transaction_service = UnifiedTransactionService(self.db)
+            transaction_saved_count = 0
+            for tx in transactions_raw:
+                try:
+                    # 转换时间格式
+                    transaction_time = tx.get('transaction_time')
+                    if isinstance(transaction_time, str):
+                        try:
+                            transaction_time = datetime.strptime(transaction_time, "%Y-%m-%d")
+                        except:
+                            try:
+                                transaction_time = datetime.strptime(transaction_time, "%Y-%m-%d %H:%M:%S")
+                            except:
+                                logger.warning(f"无法解析交易时间: {transaction_time}")
+                                continue
+                    elif not isinstance(transaction_time, datetime):
+                        logger.warning(f"交易时间格式不正确: {transaction_time}")
+                        continue
+                    
+                    # 准备交易数据
+                    tx_data = {
+                        "transaction_id": tx.get("transaction_id") or tx.get("order_id") or f"rw_{tx.get('id', '')}",
+                        "transaction_time": transaction_time,
+                        "status": tx.get("status", "pending"),
+                        "commission_amount": float(tx.get("commission_amount", 0) or tx.get("commission", 0) or 0),
+                        "order_amount": float(tx.get("order_amount", 0) or tx.get("sale_amount", 0) or 0),
+                        "merchant": tx.get("merchant") or tx.get("merchant_name") or None,
+                    }
+                    
+                    transaction_service.normalize_and_save(
+                        tx=tx_data,
+                        platform='rw',
+                        affiliate_account_id=account.id,
+                        user_id=account.user_id
+                    )
+                    transaction_saved_count += 1
+                except Exception as e:
+                    logger.warning(f"保存明细交易失败: {e}, 交易数据: {tx.get('transaction_id', 'unknown')}")
+                    continue
+            
+            logger.info(f"[RW同步] 已保存 {transaction_saved_count} 条明细交易到AffiliateTransaction表")
+            
             # 如果返回0条记录，提供更详细的诊断信息
             if len(transactions_raw) == 0:
                 # 检查API响应，看是否真的没有数据还是格式问题
@@ -533,6 +576,60 @@ class PlatformDataSyncService:
                 except:
                     continue
             
+            # 先保存明细交易到AffiliateTransaction表（用于查询）
+            transaction_service = UnifiedTransactionService(self.db)
+            transaction_saved_count = 0
+            
+            # 合并佣金和订单数据，转换为交易格式
+            all_transactions = []
+            for comm in commissions:
+                settlement_date = comm.get("settlement_date")
+                if settlement_date:
+                    try:
+                        transaction_time = datetime.strptime(settlement_date, "%Y-%m-%d")
+                        all_transactions.append({
+                            "transaction_id": comm.get("transaction_id") or comm.get("id") or f"lh_{settlement_date}_{comm.get('commission', 0)}",
+                            "transaction_time": transaction_time,
+                            "status": "approved",  # LinkHaitao佣金数据默认是已确认
+                            "commission_amount": float(comm.get("commission", 0) or 0),
+                            "order_amount": 0,
+                            "merchant": comm.get("merchant") or None,
+                        })
+                    except:
+                        continue
+            
+            for order in orders:
+                order_date_str = order.get("date") or order.get("order_date")
+                if order_date_str:
+                    try:
+                        transaction_time = datetime.strptime(order_date_str, "%Y-%m-%d")
+                        all_transactions.append({
+                            "transaction_id": order.get("order_id") or order.get("id") or f"lh_{order_date_str}_{order.get('amount', 0)}",
+                            "transaction_time": transaction_time,
+                            "status": order.get("status", "pending"),
+                            "commission_amount": float(order.get("commission", 0) or 0),
+                            "order_amount": float(order.get("amount", 0) or order.get("order_amount", 0) or 0),
+                            "merchant": order.get("merchant") or None,
+                        })
+                    except:
+                        continue
+            
+            # 保存明细交易
+            for tx in all_transactions:
+                try:
+                    transaction_service.normalize_and_save(
+                        tx=tx,
+                        platform='linkhaitao',
+                        affiliate_account_id=account.id,
+                        user_id=account.user_id
+                    )
+                    transaction_saved_count += 1
+                except Exception as e:
+                    logger.warning(f"保存明细交易失败: {e}, 交易数据: {tx.get('transaction_id', 'unknown')}")
+                    continue
+            
+            logger.info(f"[LinkHaitao同步] 已保存 {transaction_saved_count} 条明细交易到AffiliateTransaction表")
+            
             # 保存到数据库
             saved_count = 0
             for comm_date, data_item in date_data.items():
@@ -657,6 +754,49 @@ class PlatformDataSyncService:
             # 提取交易数据
             transactions_raw = service.extract_transaction_data(result)
             logger.info(f"[{platform_code.upper()}同步] 获取到 {len(transactions_raw)} 笔交易")
+            
+            # 先保存明细交易到AffiliateTransaction表（用于查询）
+            transaction_service = UnifiedTransactionService(self.db)
+            transaction_saved_count = 0
+            for tx in transactions_raw:
+                try:
+                    # 转换时间格式
+                    transaction_time = tx.get('transaction_time')
+                    if isinstance(transaction_time, str):
+                        try:
+                            transaction_time = datetime.strptime(transaction_time, "%Y-%m-%d")
+                        except:
+                            try:
+                                transaction_time = datetime.strptime(transaction_time, "%Y-%m-%d %H:%M:%S")
+                            except:
+                                logger.warning(f"无法解析交易时间: {transaction_time}")
+                                continue
+                    elif not isinstance(transaction_time, datetime):
+                        logger.warning(f"交易时间格式不正确: {transaction_time}")
+                        continue
+                    
+                    # 准备交易数据
+                    tx_data = {
+                        "transaction_id": tx.get("transaction_id") or tx.get("order_id") or tx.get("id") or f"{platform_code}_{tx.get('orderId', '')}",
+                        "transaction_time": transaction_time,
+                        "status": tx.get("status", "pending"),
+                        "commission_amount": float(tx.get("commission_amount", 0) or tx.get("commission", 0) or 0),
+                        "order_amount": float(tx.get("order_amount", 0) or tx.get("sale_amount", 0) or 0),
+                        "merchant": tx.get("merchant") or tx.get("merchant_name") or tx.get("mcid") or None,
+                    }
+                    
+                    transaction_service.normalize_and_save(
+                        tx=tx_data,
+                        platform=platform_code,
+                        affiliate_account_id=account.id,
+                        user_id=account.user_id
+                    )
+                    transaction_saved_count += 1
+                except Exception as e:
+                    logger.warning(f"保存明细交易失败: {e}, 交易数据: {tx.get('transaction_id', 'unknown')}")
+                    continue
+            
+            logger.info(f"[{platform_code.upper()}同步] 已保存 {transaction_saved_count} 条明细交易到AffiliateTransaction表")
             
             if not transactions_raw:
                 return {
