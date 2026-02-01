@@ -429,9 +429,23 @@ class RewardooService(PlatformServiceBase):
                 status_raw = str(item.get("status", "") or "").strip()
                 status_lower = status_raw.lower() if status_raw else ""
                 
+                # 处理时间戳：order_time可能是时间戳（整数）或日期字符串
+                order_time = item.get("order_time") or item.get("transaction_time") or item.get("validation_date") or item.get("date") or ""
+                if order_time:
+                    # 如果是时间戳（整数或数字字符串），转换为日期字符串
+                    try:
+                        if isinstance(order_time, (int, float)) or (isinstance(order_time, str) and order_time.isdigit()):
+                            timestamp = int(float(order_time))
+                            # 转换为日期时间字符串
+                            from datetime import datetime
+                            order_time = datetime.fromtimestamp(timestamp).strftime("%Y-%m-%d %H:%M:%S")
+                    except (ValueError, OSError, OverflowError):
+                        # 如果转换失败，保持原值
+                        pass
+                
                 extracted.append({
                     "transaction_id": item.get("order_id") or item.get("transaction_id") or item.get("rewardoo_id") or item.get("id") or f"rw_{idx}",
-                    "transaction_time": item.get("order_time") or item.get("transaction_time") or item.get("validation_date") or item.get("date") or "",
+                    "transaction_time": order_time,
                     "merchant": item.get("merchant_name") or item.get("merchant") or item.get("brand") or item.get("brand_name") or "",
                     "order_amount": float(item.get("sale_amount", 0) or item.get("order_amount", 0) or item.get("order_unit", 0) or 0),
                     "commission_amount": float(item.get("sale_comm", 0) or item.get("commission_amount", 0) or item.get("commission", 0) or 0),
