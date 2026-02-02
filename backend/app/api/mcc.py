@@ -460,7 +460,7 @@ async def sync_mcc_data(
         # 如果提供了单个日期，同步该日期
         elif target_date:
             try:
-            sync_date = datetime.strptime(target_date, "%Y-%m-%d").date()
+                sync_date = datetime.strptime(target_date, "%Y-%m-%d").date()
             except ValueError:
                 raise HTTPException(status_code=400, detail="日期格式错误，应为 YYYY-MM-DD")
             
