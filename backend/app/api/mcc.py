@@ -364,29 +364,36 @@ async def sync_mcc_data(
     1. 单个日期：target_date (YYYY-MM-DD)
     2. 日期范围：begin_date 和 end_date (YYYY-MM-DD)
     """
-    from app.services.google_ads_api_sync import GoogleAdsApiSyncService
+    import logging
+    logger = logging.getLogger(__name__)
     
-    mcc_account = db.query(GoogleMccAccount).filter(
-        GoogleMccAccount.id == mcc_id,
-        GoogleMccAccount.user_id == current_user.id
-    ).first()
-    
-    if not mcc_account:
-        raise HTTPException(status_code=404, detail="MCC账号不存在")
-    
-    # 解析请求数据
-    if request_data is None:
-        request_data = {}
-    
-    target_date = request_data.get("target_date")
-    begin_date = request_data.get("begin_date")
-    end_date = request_data.get("end_date")
-    
-    sync_service = GoogleAdsApiSyncService(db)
-    
-    # 如果提供了日期范围，同步范围内的所有日期
-    if begin_date and end_date:
-        try:
+    try:
+        from app.services.google_ads_api_sync import GoogleAdsApiSyncService
+        
+        mcc_account = db.query(GoogleMccAccount).filter(
+            GoogleMccAccount.id == mcc_id,
+            GoogleMccAccount.user_id == current_user.id
+        ).first()
+        
+        if not mcc_account:
+            logger.error(f"MCC同步失败: 账号 {mcc_id} 不存在或不属于用户 {current_user.id}")
+            raise HTTPException(status_code=404, detail="MCC账号不存在")
+        
+        # 解析请求数据
+        if request_data is None:
+            request_data = {}
+        
+        target_date = request_data.get("target_date")
+        begin_date = request_data.get("begin_date")
+        end_date = request_data.get("end_date")
+        
+        logger.info(f"开始同步MCC账号 {mcc_id} ({mcc_account.mcc_name}), 用户: {current_user.username}")
+        
+        sync_service = GoogleAdsApiSyncService(db)
+        
+        # 如果提供了日期范围，同步范围内的所有日期
+        if begin_date and end_date:
+            try:
             begin = datetime.strptime(begin_date, "%Y-%m-%d").date()
             end = datetime.strptime(end_date, "%Y-%m-%d").date()
             
@@ -447,31 +454,46 @@ async def sync_mcc_data(
                     "message": f"成功同步 {total_saved} 条广告系列数据",
                     "saved_count": total_saved
                 }
-        except ValueError:
-            raise HTTPException(status_code=400, detail="日期格式错误，应为 YYYY-MM-DD")
-    
-    # 如果提供了单个日期，同步该日期
-    elif target_date:
-        try:
+            except ValueError:
+                raise HTTPException(status_code=400, detail="日期格式错误，应为 YYYY-MM-DD")
+        
+        # 如果提供了单个日期，同步该日期
+        elif target_date:
+            try:
             sync_date = datetime.strptime(target_date, "%Y-%m-%d").date()
-        except ValueError:
-            raise HTTPException(status_code=400, detail="日期格式错误，应为 YYYY-MM-DD")
+            except ValueError:
+                raise HTTPException(status_code=400, detail="日期格式错误，应为 YYYY-MM-DD")
+            
+            result = sync_service.sync_mcc_data(mcc_id, sync_date)
+            
+            if not result.get("success"):
+                raise HTTPException(status_code=500, detail=result.get("message", "同步失败"))
+            
+            return result
         
-        result = sync_service.sync_mcc_data(mcc_id, sync_date)
-        
-        if not result.get("success"):
-            raise HTTPException(status_code=500, detail=result.get("message", "同步失败"))
-        
-        return result
-    
-    # 如果没有提供日期，默认同步昨天
-    else:
-        result = sync_service.sync_mcc_data(mcc_id, None)
-        
-        if not result.get("success"):
-            raise HTTPException(status_code=500, detail=result.get("message", "同步失败"))
-        
-        return result
+        # 如果没有提供日期，默认同步昨天
+        else:
+            result = sync_service.sync_mcc_data(mcc_id, None)
+            
+            if not result.get("success"):
+                logger.error(f"MCC {mcc_id} 同步失败: {result.get('message', '未知错误')}")
+                raise HTTPException(status_code=500, detail=result.get("message", "同步失败"))
+            
+            logger.info(f"MCC {mcc_id} 同步成功: {result.get('message', '')}")
+            return result
+    except HTTPException:
+        # 重新抛出HTTP异常（已经包含CORS头）
+        raise
+    except Exception as e:
+        # 捕获所有其他异常，记录日志并返回友好的错误信息
+        logger.error(f"MCC {mcc_id} 同步异常: {str(e)}", exc_info=True)
+        import traceback
+        error_detail = f"同步失败: {str(e)}"
+        logger.error(f"完整错误堆栈:\n{traceback.format_exc()}")
+        raise HTTPException(
+            status_code=500,
+            detail=error_detail
+        )
 
 
 @router.get("/aggregate")
