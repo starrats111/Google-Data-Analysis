@@ -593,6 +593,9 @@ async def get_expense_summary(
 
     # (platform_id, date) -> commission_from_api
     api_commission_map: Dict[Tuple[int, date], float] = {}
+    # 初始化手动佣金和手动费用映射（在使用前先初始化，避免引用错误）
+    manual_commission_map: Dict[Tuple[int, date], float] = {}
+    manual_cost_map: Dict[Tuple[int, date], float] = {}
     platform_data_rows = db.query(PlatformData).filter(
         PlatformData.user_id == current_user.id,
         PlatformData.date >= start,
@@ -796,8 +799,7 @@ async def get_expense_summary(
         ExpenseAdjustment.date <= end,
     ).all()
     adj_map: Dict[Tuple[int, date], float] = {}  # (platform_id, date) -> rejected_commission
-    manual_cost_map: Dict[Tuple[int, date], float] = {}  # (platform_id, date) -> manual_cost
-    manual_commission_map: Dict[Tuple[int, date], float] = {}  # (platform_id, date) -> manual_commission
+    # manual_cost_map 和 manual_commission_map 已在上面初始化，这里只需要填充数据
     for a in adjustments:
         adj_map[(a.platform_id, a.date)] = float(a.rejected_commission or 0.0)
         if a.manual_cost and a.manual_cost > 0:
