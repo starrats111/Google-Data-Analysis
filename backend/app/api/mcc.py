@@ -396,64 +396,64 @@ async def sync_mcc_data(
             try:
                 begin = datetime.strptime(begin_date, "%Y-%m-%d").date()
                 end = datetime.strptime(end_date, "%Y-%m-%d").date()
-            
-            if begin > end:
-                raise HTTPException(status_code=400, detail="开始日期不能晚于结束日期")
-            
-            # 同步日期范围内的每一天
-            total_saved = 0
-            current_date = begin
-            errors = []
-            warnings = []  # 记录警告信息（如没有数据但同步成功）
-            
-            while current_date <= end:
-                result = sync_service.sync_mcc_data(mcc_id, current_date)
-                if result.get("success"):
-                    saved_count = result.get("saved_count", 0)
-                    total_saved += saved_count
-                    # 如果同步成功但没有保存数据，记录警告
-                    if saved_count == 0:
-                        warnings.append(f"{current_date.isoformat()}: 同步成功但该日期没有广告系列数据")
+                
+                if begin > end:
+                    raise HTTPException(status_code=400, detail="开始日期不能晚于结束日期")
+                
+                # 同步日期范围内的每一天
+                total_saved = 0
+                current_date = begin
+                errors = []
+                warnings = []  # 记录警告信息（如没有数据但同步成功）
+                
+                while current_date <= end:
+                    result = sync_service.sync_mcc_data(mcc_id, current_date)
+                    if result.get("success"):
+                        saved_count = result.get("saved_count", 0)
+                        total_saved += saved_count
+                        # 如果同步成功但没有保存数据，记录警告
+                        if saved_count == 0:
+                            warnings.append(f"{current_date.isoformat()}: 同步成功但该日期没有广告系列数据")
+                    else:
+                        errors.append(f"{current_date.isoformat()}: {result.get('message', '同步失败')}")
+                    current_date += timedelta(days=1)
+                
+                # 构建返回消息
+                if errors and total_saved > 0:
+                    # 有错误但保存了部分数据
+                    return {
+                        "success": True,
+                        "message": f"同步完成，成功保存 {total_saved} 条记录，部分日期同步失败",
+                        "saved_count": total_saved,
+                        "errors": errors,
+                        "warnings": warnings if warnings else None
+                    }
+                elif errors and total_saved == 0:
+                    # 全部失败
+                    error_summary = errors[0] if len(errors) == 1 else f"{len(errors)} 个日期同步失败"
+                    return {
+                        "success": False,
+                        "message": f"同步失败：{error_summary}",
+                        "saved_count": 0,
+                        "errors": errors,
+                        "warnings": warnings if warnings else None
+                    }
+                elif total_saved == 0 and warnings:
+                    # 同步成功但没有数据
+                    warning_summary = warnings[0] if len(warnings) == 1 else f"所有日期都没有广告系列数据"
+                    return {
+                        "success": True,
+                        "message": f"同步完成，但没有保存任何数据。{warning_summary}",
+                        "saved_count": 0,
+                        "warnings": warnings
+                    }
                 else:
-                    errors.append(f"{current_date.isoformat()}: {result.get('message', '同步失败')}")
-                current_date += timedelta(days=1)
-            
-            # 构建返回消息
-            if errors and total_saved > 0:
-                # 有错误但保存了部分数据
-                return {
-                    "success": True,
-                    "message": f"同步完成，成功保存 {total_saved} 条记录，部分日期同步失败",
-                    "saved_count": total_saved,
-                    "errors": errors,
-                    "warnings": warnings if warnings else None
-                }
-            elif errors and total_saved == 0:
-                # 全部失败
-                error_summary = errors[0] if len(errors) == 1 else f"{len(errors)} 个日期同步失败"
-                return {
-                    "success": False,
-                    "message": f"同步失败：{error_summary}",
-                    "saved_count": 0,
-                    "errors": errors,
-                    "warnings": warnings if warnings else None
-                }
-            elif total_saved == 0 and warnings:
-                # 同步成功但没有数据
-                warning_summary = warnings[0] if len(warnings) == 1 else f"所有日期都没有广告系列数据"
-                return {
-                    "success": True,
-                    "message": f"同步完成，但没有保存任何数据。{warning_summary}",
-                    "saved_count": 0,
-                    "warnings": warnings
-                }
-            else:
-                # 完全成功
-                return {
-                    "success": True,
-                    "message": f"成功同步 {total_saved} 条广告系列数据",
-                    "saved_count": total_saved
-                }
+                    # 完全成功
+                    return {
+                        "success": True,
+                        "message": f"成功同步 {total_saved} 条广告系列数据",
+                        "saved_count": total_saved
+                    }
             except ValueError:
                 raise HTTPException(status_code=400, detail="日期格式错误，应为 YYYY-MM-DD")
         
