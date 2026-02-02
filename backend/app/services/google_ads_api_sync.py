@@ -6,6 +6,7 @@ from datetime import datetime, date, timedelta
 from typing import List, Dict, Optional
 from sqlalchemy.orm import Session
 import logging
+import time
 
 from app.models.google_ads_api_data import GoogleAdsApiData, GoogleMccAccount
 from app.models.ad_campaign import AdCampaign
@@ -272,9 +273,15 @@ class GoogleAdsApiSyncService:
             
             logger.info(f"开始查询 {len(customer_ids)} 个客户账号的数据，日期: {date_str}")
             
-            for customer_id in customer_ids:
+            for idx, customer_id in enumerate(customer_ids):
                 try:
-                    logger.info(f"正在查询客户账号 {customer_id}...")
+                    # 在请求之间添加延迟，避免触发速率限制
+                    if idx > 0:
+                        delay = 1.0  # 每个请求之间延迟1秒
+                        logger.debug(f"等待 {delay} 秒后继续...")
+                        time.sleep(delay)
+                    
+                    logger.info(f"正在查询客户账号 {customer_id} ({idx + 1}/{len(customer_ids)})...")
                     query = f"""
                         SELECT
                             campaign.id,
@@ -292,7 +299,35 @@ class GoogleAdsApiSyncService:
                     """
                     
                     ga_service = client.get_service("GoogleAdsService")
-                    response = ga_service.search(customer_id=customer_id, query=query)
+                    
+                    # 添加重试机制处理配额耗尽错误
+                    max_retries = 3
+                    retry_delay = 5  # 初始延迟5秒
+                    
+                    for attempt in range(max_retries):
+                        try:
+                            response = ga_service.search(customer_id=customer_id, query=query)
+                            break  # 成功，退出重试循环
+                        except Exception as e:
+                            # 检查是否是配额耗尽错误
+                            is_quota_exhausted = (
+                                "ResourceExhausted" in str(type(e).__name__) or
+                                "429" in str(e) or
+                                "quota" in str(e).lower() or
+                                "Resource has been exhausted" in str(e)
+                            )
+                            
+                            if is_quota_exhausted and attempt < max_retries - 1:
+                                wait_time = retry_delay * (2 ** attempt)  # 指数退避：5秒、10秒、20秒
+                                logger.warning(
+                                    f"客户账号 {customer_id} 查询遇到配额限制，"
+                                    f"等待 {wait_time} 秒后重试 ({attempt + 1}/{max_retries})..."
+                                )
+                                time.sleep(wait_time)
+                                continue
+                            else:
+                                # 最后一次尝试或非配额错误，重新抛出异常
+                                raise
                     
                     campaign_count = 0
                     for row in response:
@@ -318,12 +353,70 @@ class GoogleAdsApiSyncService:
                 except GoogleAdsException as ex:
                     error_code = ex.error.code().name if hasattr(ex.error, 'code') else "UNKNOWN"
                     error_message = ex.error.message if hasattr(ex.error, 'message') else str(ex)
-                    logger.error(f"查询客户账号 {customer_id} 失败: {error_code} - {error_message}")
-                    # 继续尝试下一个客户账号
-                    continue
+                    
+                    # 检查是否是配额耗尽错误
+                    is_quota_exhausted = (
+                        "ResourceExhausted" in error_code or
+                        "429" in error_message or
+                        "quota" in error_message.lower() or
+                        "Resource has been exhausted" in error_message
+                    )
+                    
+                    if is_quota_exhausted:
+                        logger.error(
+                            f"查询客户账号 {customer_id} 失败: Google Ads API配额已耗尽。"
+                            f"请稍后再试或联系Google Ads支持增加配额。"
+                        )
+                        # 如果是配额错误，停止处理剩余账号，返回部分结果
+                        if len(all_campaigns) > 0:
+                            logger.warning(f"已获取 {len(all_campaigns)} 条广告系列，但因配额限制停止同步")
+                            return {
+                                "success": True,
+                                "campaigns": all_campaigns,
+                                "message": f"部分同步成功（{len(all_campaigns)} 条），但因API配额限制未完成所有账号",
+                                "quota_exhausted": True
+                            }
+                        else:
+                            return {
+                                "success": False,
+                                "message": "Google Ads API配额已耗尽。请稍后再试或联系Google Ads支持增加配额。",
+                                "quota_exhausted": True
+                            }
+                    else:
+                        logger.error(f"查询客户账号 {customer_id} 失败: {error_code} - {error_message}")
+                        # 继续尝试下一个客户账号
+                        continue
                 except Exception as e:
-                    logger.error(f"处理客户账号 {customer_id} 时出错: {e}", exc_info=True)
-                    continue
+                    error_str = str(e)
+                    is_quota_exhausted = (
+                        "ResourceExhausted" in str(type(e).__name__) or
+                        "429" in error_str or
+                        "quota" in error_str.lower() or
+                        "Resource has been exhausted" in error_str
+                    )
+                    
+                    if is_quota_exhausted:
+                        logger.error(
+                            f"处理客户账号 {customer_id} 时遇到配额限制: {error_str}"
+                        )
+                        # 如果是配额错误，停止处理剩余账号，返回部分结果
+                        if len(all_campaigns) > 0:
+                            logger.warning(f"已获取 {len(all_campaigns)} 条广告系列，但因配额限制停止同步")
+                            return {
+                                "success": True,
+                                "campaigns": all_campaigns,
+                                "message": f"部分同步成功（{len(all_campaigns)} 条），但因API配额限制未完成所有账号",
+                                "quota_exhausted": True
+                            }
+                        else:
+                            return {
+                                "success": False,
+                                "message": "Google Ads API配额已耗尽。请稍后再试或联系Google Ads支持增加配额。",
+                                "quota_exhausted": True
+                            }
+                    else:
+                        logger.error(f"处理客户账号 {customer_id} 时出错: {e}", exc_info=True)
+                        continue
             
             logger.info(f"成功从 {len(customer_ids)} 个客户账号获取 {len(all_campaigns)} 条广告系列数据")
             
@@ -333,19 +426,49 @@ class GoogleAdsApiSyncService:
             }
             
         except GoogleAdsException as ex:
-            error_msg = f"Google Ads API错误: {ex.error.code().name}"
-            if ex.error.message:
-                error_msg += f" - {ex.error.message}"
+            error_code = ex.error.code().name if hasattr(ex.error, 'code') else "UNKNOWN"
+            error_message = ex.error.message if hasattr(ex.error, 'message') else str(ex)
+            
+            # 检查是否是配额耗尽错误
+            is_quota_exhausted = (
+                "ResourceExhausted" in error_code or
+                "429" in error_message or
+                "quota" in error_message.lower() or
+                "Resource has been exhausted" in error_message
+            )
+            
+            if is_quota_exhausted:
+                error_msg = "Google Ads API配额已耗尽。请稍后再试或联系Google Ads支持增加配额。"
+            else:
+                error_msg = f"Google Ads API错误: {error_code}"
+                if error_message:
+                    error_msg += f" - {error_message}"
+            
             logger.error(error_msg)
             return {
                 "success": False,
-                "message": error_msg
+                "message": error_msg,
+                "quota_exhausted": is_quota_exhausted
             }
         except Exception as e:
-            logger.error(f"调用Google Ads API失败: {e}", exc_info=True)
+            error_str = str(e)
+            is_quota_exhausted = (
+                "ResourceExhausted" in str(type(e).__name__) or
+                "429" in error_str or
+                "quota" in error_str.lower() or
+                "Resource has been exhausted" in error_str
+            )
+            
+            if is_quota_exhausted:
+                error_msg = "Google Ads API配额已耗尽。请稍后再试或联系Google Ads支持增加配额。"
+            else:
+                error_msg = f"API调用失败: {error_str}"
+            
+            logger.error(f"调用Google Ads API失败: {error_msg}", exc_info=True)
             return {
                 "success": False,
-                "message": f"API调用失败: {str(e)}"
+                "message": error_msg,
+                "quota_exhausted": is_quota_exhausted
             }
     
     def _get_customer_ids(self, client, mcc_customer_id: str) -> List[str]:
