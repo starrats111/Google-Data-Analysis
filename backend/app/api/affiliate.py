@@ -281,8 +281,28 @@ async def test_api_connection(
 @router.get("/platforms", response_model=List[AffiliatePlatformResponse])
 async def get_platforms(db: Session = Depends(get_db)):
     """获取所有联盟平台列表"""
-    platforms = db.query(AffiliatePlatform).all()
-    return platforms
+    import logging
+    import time
+    logger = logging.getLogger(__name__)
+    
+    try:
+        start_time = time.time()
+        logger.info("开始获取联盟平台列表")
+        
+        # 使用selectinload避免N+1查询问题，但只加载必要的数据
+        # 对于简单的平台列表，不需要加载accounts关系
+        platforms = db.query(AffiliatePlatform).order_by(AffiliatePlatform.platform_name).all()
+        
+        elapsed_time = time.time() - start_time
+        logger.info(f"成功获取 {len(platforms)} 个平台，耗时 {elapsed_time:.2f} 秒")
+        
+        return platforms
+    except Exception as e:
+        logger.error(f"获取平台列表失败: {str(e)}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"获取平台列表失败: {str(e)}"
+        )
 
 
 @router.post("/platforms", response_model=AffiliatePlatformResponse, status_code=status.HTTP_201_CREATED)

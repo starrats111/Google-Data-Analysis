@@ -57,14 +57,25 @@ const AffiliateAccounts = () => {
 
   const fetchPlatforms = async () => {
     try {
+      console.log('[平台账号] 开始获取平台列表...')
       const response = await api.get('/api/affiliate/platforms', {
-        timeout: 10000 // 10秒超时
+        timeout: 30000 // 30秒超时（增加超时时间）
       })
+      console.log('[平台账号] 成功获取平台列表:', response.data?.length || 0, '个平台')
       setPlatforms(response.data || [])
     } catch (error) {
       console.error('获取平台列表失败:', error)
+      console.error('错误详情:', {
+        message: error.message,
+        code: error.code,
+        response: error.response,
+        request: error.request
+      })
       if (error.code !== 'ECONNABORTED') {
-        message.error('获取平台列表失败')
+        const errorMsg = error.response?.data?.detail || error.message || '获取平台列表失败'
+        message.error(`获取平台列表失败: ${errorMsg}`)
+      } else {
+        message.error('获取平台列表超时，请检查网络连接或稍后重试')
       }
       setPlatforms([]) // 设置空数组避免卡顿
     }
