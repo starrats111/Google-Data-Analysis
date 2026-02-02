@@ -560,6 +560,7 @@ class PlatformDataSyncService:
                     try:
                         # 支持多种日期格式
                         date_str_clean = str(settlement_date).strip()
+                        transaction_time = None
                         try:
                             transaction_time = datetime.strptime(date_str_clean, "%Y-%m-%d")
                         except ValueError:
@@ -570,19 +571,20 @@ class PlatformDataSyncService:
                                     transaction_time = datetime.strptime(date_str_clean.split('T')[0], "%Y-%m-%d")
                                 except ValueError:
                                     logger.warning(f"[LinkHaitao同步] 无法解析佣金日期: {date_str_clean}")
-                    continue
-                
-                        all_transactions.append({
-                            "transaction_id": comm.get("transaction_id") or comm.get("id") or f"lh_comm_{settlement_date}_{comm.get('commission', 0)}",
-                            "transaction_time": transaction_time,
-                            "status": "approved",  # LinkHaitao佣金数据默认是已确认
-                            "commission_amount": float(comm.get("commission", 0) or 0),
-                            "order_amount": 0,
-                            "merchant": comm.get("merchant") or comm.get("mcid") or None,
-                        })
+                                    continue
+                        
+                        if transaction_time:
+                            all_transactions.append({
+                                "transaction_id": comm.get("transaction_id") or comm.get("id") or f"lh_comm_{settlement_date}_{comm.get('commission', 0)}",
+                                "transaction_time": transaction_time,
+                                "status": "approved",  # LinkHaitao佣金数据默认是已确认
+                                "commission_amount": float(comm.get("commission", 0) or 0),
+                                "order_amount": 0,
+                                "merchant": comm.get("merchant") or comm.get("mcid") or None,
+                            })
                     except Exception as e:
                         logger.warning(f"[LinkHaitao同步] 处理佣金交易失败: {e}, 数据: {comm}")
-                    continue
+                        continue
             
             # 将订单数据转换为交易格式
             for order in orders:
