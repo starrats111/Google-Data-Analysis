@@ -26,17 +26,44 @@ router = APIRouter(prefix="/api/affiliate", tags=["affiliate"])
 @router.options("/accounts/by-employees")
 async def options_handler(request: Request):
     """处理OPTIONS预检请求"""
-    from fastapi import Request
     from fastapi.responses import JSONResponse
+    import re
     
     origin = request.headers.get("origin")
+    
+    # 使用与main.py相同的CORS逻辑
+    ALLOWED_ORIGINS = [
+        "https://google-data-analysis.top",
+        "https://www.google-data-analysis.top",
+        "https://api.google-data-analysis.top",
+        "https://google-data-analysis.pages.dev",
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "http://localhost:8000",
+        "http://127.0.0.1:8000",
+    ]
+    ALLOWED_ORIGIN_REGEX = r"^(https://([a-z0-9-]+\.)?google-data-analysis\.(pages\.dev|top)|https://www\.google-data-analysis\.top|https://api\.google-data-analysis\.top|https?://(localhost|127\.0\.0\.1)(:\d+)?)$"
+    
     headers = {
-        "Access-Control-Allow-Origin": origin if origin else "*",
-        "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS, PATCH",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS, PATCH, HEAD",
         "Access-Control-Allow-Headers": "*",
-        "Access-Control-Allow-Credentials": "true",
         "Access-Control-Max-Age": "3600",
     }
+    
+    if origin:
+        if origin in ALLOWED_ORIGINS:
+            headers["Access-Control-Allow-Origin"] = origin
+            headers["Access-Control-Allow-Credentials"] = "true"
+        elif re.match(ALLOWED_ORIGIN_REGEX, origin):
+            headers["Access-Control-Allow-Origin"] = origin
+            headers["Access-Control-Allow-Credentials"] = "true"
+        else:
+            headers["Access-Control-Allow-Origin"] = "*"
+    else:
+        headers["Access-Control-Allow-Origin"] = "*"
+    
     return JSONResponse(content={}, headers=headers, status_code=200)
 
 
