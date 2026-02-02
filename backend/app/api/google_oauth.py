@@ -33,25 +33,39 @@ async def get_authorization_url(
     返回:
     - authorization_url: 授权URL，用户需要访问此URL完成授权
     """
-    # Google OAuth 2.0授权端点
-    auth_url = "https://accounts.google.com/o/oauth2/v2/auth"
+    import logging
+    logger = logging.getLogger(__name__)
     
-    # 构建授权参数
-    params = {
-        "client_id": client_id,
-        "redirect_uri": redirect_uri,
-        "response_type": "code",
-        "scope": "https://www.googleapis.com/auth/adwords",  # Google Ads API权限范围
-        "access_type": "offline",  # 必须设置为offline才能获取refresh_token
-        "prompt": "consent",  # 强制显示授权页面，确保获取refresh_token
-    }
-    
-    authorization_url = f"{auth_url}?{urlencode(params)}"
-    
-    return {
-        "authorization_url": authorization_url,
-        "message": "请访问上面的URL完成授权，授权完成后会跳转到redirect_uri，URL参数中会包含授权码(code)"
-    }
+    try:
+        logger.info(f"用户 {current_user.username} 请求获取授权URL, client_id: {client_id[:10] if client_id else 'None'}...")
+        
+        # Google OAuth 2.0授权端点
+        auth_url = "https://accounts.google.com/o/oauth2/v2/auth"
+        
+        # 构建授权参数
+        params = {
+            "client_id": client_id,
+            "redirect_uri": redirect_uri,
+            "response_type": "code",
+            "scope": "https://www.googleapis.com/auth/adwords",  # Google Ads API权限范围
+            "access_type": "offline",  # 必须设置为offline才能获取refresh_token
+            "prompt": "consent",  # 强制显示授权页面，确保获取refresh_token
+        }
+        
+        authorization_url = f"{auth_url}?{urlencode(params)}"
+        
+        logger.info(f"成功生成授权URL: {authorization_url[:100]}...")
+        
+        return {
+            "authorization_url": authorization_url,
+            "message": "请访问上面的URL完成授权，授权完成后会跳转到redirect_uri，URL参数中会包含授权码(code)"
+        }
+    except Exception as e:
+        logger.error(f"获取授权URL失败: {str(e)}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"获取授权URL失败: {str(e)}"
+        )
 
 
 @router.get("/callback")
