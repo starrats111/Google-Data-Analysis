@@ -77,7 +77,9 @@ class RewardooService(PlatformServiceBase):
     def get_transaction_details(
         self,
         begin_date: str,
-        end_date: str
+        end_date: str,
+        page: int = 1,
+        limit: int = 1000
     ) -> Dict:
         """
         【核心API】TransactionDetails API - 获取订单数 + 已确认佣金 + 拒付佣金
@@ -127,8 +129,8 @@ class RewardooService(PlatformServiceBase):
             "token": self.token,
             "begin_date": begin_date,
             "end_date": end_date,
-            "page": 1,
-            "limit": 1000  # 每页最多1000条
+            "page": int(page) if page and int(page) > 0 else 1,
+            "limit": int(limit) if limit and int(limit) > 0 else 1000  # 每页最多1000条
         }
         
         try:
@@ -195,7 +197,7 @@ class RewardooService(PlatformServiceBase):
                 if len(transaction_list) == 0:
                     logger.warning(f"[RW TransactionDetails API] 返回0笔交易。原始响应: {str(result)[:500]}")
                 
-                logger.info(f"[RW TransactionDetails API] 成功获取 {len(transaction_list)} 笔交易（共 {total_trans} 笔）")
+                logger.info(f"[RW TransactionDetails API] 成功获取 {len(transaction_list)} 笔交易（共 {total_trans} 笔），page={data.get('page')}/{total_page}")
                 
                 # 返回统一格式
                 return {
@@ -334,6 +336,39 @@ class RewardooService(PlatformServiceBase):
         """
         begin = datetime.strptime(begin_date, "%Y-%m-%d")
         end = datetime.strptime(end_date, "%Y-%m-%d")
+
+        def _sync_range(b: datetime, e: datetime) -> Dict:
+            """同步一个日期范围（<= max_days），自动翻页合并所有交易。"""
+            first = self.get_transaction_details(b.strftime("%Y-%m-%d"), e.strftime("%Y-%m-%d"), page=1, limit=1000)
+            if first.get("code") != "0":
+                return first
+            data = first.get("data", {}) or {}
+            transactions = list(data.get("transactions", []) or [])
+            try:
+                total_page = int(data.get("total_page") or 1)
+            except Exception:
+                total_page = 1
+            if total_page > 1:
+                for p in range(2, total_page + 1):
+                    page_res = self.get_transaction_details(b.strftime("%Y-%m-%d"), e.strftime("%Y-%m-%d"), page=p, limit=1000)
+                    if page_res.get("code") != "0":
+                        logger.warning(f"[RW TransactionDetails API] 翻页失败 page={p}/{total_page}: {page_res.get('message')}")
+                        continue
+                    page_data = page_res.get("data", {}) or {}
+                    page_list = page_data.get("transactions", []) or []
+                    if not page_list:
+                        break
+                    transactions.extend(page_list)
+            return {
+                "code": "0",
+                "message": first.get("message", "success"),
+                "data": {
+                    "transactions": transactions,
+                    "total_trans": data.get("total_trans", len(transactions)),
+                    "total_page": total_page,
+                    "total_items": data.get("total_items", 0),
+                }
+            }
         
         if (end - begin).days > max_days:
             # 如果超过最大天数，分段查询
@@ -347,26 +382,17 @@ class RewardooService(PlatformServiceBase):
                     end
                 )
                 
-                result = self.get_transaction_details(
-                    current_begin.strftime("%Y-%m-%d"),
-                    current_end.strftime("%Y-%m-%d")
-                )
+                result = _sync_range(current_begin, current_end)
                 
                 transactions = result.get("data", {}).get("transactions", [])
                 all_transactions.extend(transactions)
                 
                 current_begin = current_end + timedelta(days=1)
             
-            return {
-                "code": "0",
-                "message": "success",
-                "data": {
-                    "transactions": all_transactions
-                }
-            }
+            return {"code": "0", "message": "success", "data": {"transactions": all_transactions}}
         else:
             # 单次查询
-            return self.get_transaction_details(begin_date, end_date)
+            return _sync_range(begin, end)
     
     def extract_transaction_data(self, result: Dict) -> List[Dict]:
         """
