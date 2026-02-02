@@ -25,12 +25,14 @@ class ExpensePlatformSummary(BaseModel):
 
     # 当天
     today_commission: float
+    today_paid_commission: float  # 已付/通过佣金（approved）
     today_ad_cost: float
     today_rejected_commission: float
     today_net_profit: float
 
     # 区间累计
     range_commission: float
+    range_paid_commission: float  # 已付/通过佣金（approved）
     range_ad_cost: float
     range_rejected_commission: float
     range_net_profit: float

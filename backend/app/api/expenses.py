@@ -10,7 +10,7 @@ from datetime import datetime, date
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi import Body
 from sqlalchemy.orm import Session
-from sqlalchemy import func
+from sqlalchemy import func, case
 
 from app.database import get_db
 from app.middleware.auth import get_current_user
@@ -536,10 +536,12 @@ async def _get_manager_expense_summary(start: date, end: date, today: date, db: 
                 platform_id=pid,
                 platform_name=info["platform_name"],
                 today_commission=round(today_commission, 4),
+                today_paid_commission=round(today_commission, 4),
                 today_ad_cost=round(today_cost, 4),
                 today_rejected_commission=round(today_rejected, 4),
                 today_net_profit=round(today_net, 4),
                 range_commission=round(range_commission, 4),
+                range_paid_commission=round(range_commission, 4),
                 range_ad_cost=round(range_cost, 4),
                 range_rejected_commission=round(range_rejected, 4),
                 range_net_profit=round(range_net, 4),
@@ -636,6 +638,57 @@ async def get_expense_summary(
     platform_rows = db.query(AffiliatePlatform).all()
     platform_name_map = {p.id: p.platform_name for p in platform_rows}
     platform_code_map = {p.platform_code: p.id for p in platform_rows}
+
+    # ===== 计算“已付/通过佣金(approved)” 与 “拒付佣金(rejected)”（来自明细交易）=====
+    # 说明：PlatformData.commission 现在是“所有状态”的总佣金；这里补充明细维度的 approved/rejected 佣金，
+    # 用于在表格中展示“已付佣金/拒付佣金”。
+    approved_comm_map: Dict[Tuple[int, date], float] = {}
+    rejected_comm_map: Dict[Tuple[int, date], float] = {}
+    try:
+        from app.models.affiliate_transaction import AffiliateTransaction
+        begin_dt = datetime.combine(start, datetime.min.time())
+        end_dt = datetime.combine(end, datetime.max.time())
+        tx_rows = db.query(
+            AffiliateAccount.platform_id.label("platform_id"),
+            func.date(AffiliateTransaction.transaction_time).label("d"),
+            func.sum(
+                case(
+                    (AffiliateTransaction.status == "approved", AffiliateTransaction.commission_amount),
+                    else_=0
+                )
+            ).label("approved_comm"),
+            func.sum(
+                case(
+                    (AffiliateTransaction.status == "rejected", AffiliateTransaction.commission_amount),
+                    else_=0
+                )
+            ).label("rejected_comm"),
+        ).join(
+            AffiliateAccount, AffiliateAccount.id == AffiliateTransaction.affiliate_account_id
+        ).filter(
+            AffiliateTransaction.user_id == current_user.id,
+            AffiliateTransaction.transaction_time >= begin_dt,
+            AffiliateTransaction.transaction_time <= end_dt,
+        ).group_by(
+            AffiliateAccount.platform_id,
+            func.date(AffiliateTransaction.transaction_time),
+        ).all()
+
+        for r in tx_rows:
+            pid = int(r.platform_id) if r.platform_id is not None else None
+            if pid is None:
+                continue
+            d_raw = r.d
+            if isinstance(d_raw, date):
+                d = d_raw
+            else:
+                d = datetime.strptime(str(d_raw), "%Y-%m-%d").date()
+            approved_comm_map[(pid, d)] = float(r.approved_comm or 0.0)
+            rejected_comm_map[(pid, d)] = float(r.rejected_comm or 0.0)
+    except Exception:
+        # 不因明细统计失败而中断汇总（避免500）
+        approved_comm_map = {}
+        rejected_comm_map = {}
 
     # (platform_id, date) -> commission_from_api
     api_commission_map: Dict[Tuple[int, date], float] = {}
@@ -751,6 +804,9 @@ async def get_expense_summary(
             if not campaign:
                 continue
             pid = campaign.platform_id
+            if pid is None:
+                # 防止 platform_id 为空导致后续响应模型校验失败/500
+                continue
             d = m.date
             day_set.add(d)
 
@@ -858,46 +914,72 @@ async def get_expense_summary(
     total_commission = 0.0
     total_cost = 0.0
     total_rejected = 0.0
+    total_paid = 0.0
 
     for pid, info in sorted(platform_map.items(), key=lambda kv: kv[0]):
         by_date = info["by_date"]
 
         # 当天
         today_commission = 0.0
+        today_paid_commission = 0.0
         today_cost = 0.0
         if today in by_date:
             today_commission, today_cost = by_date[today][0], by_date[today][1]
+        # 已付/通过佣金（approved）
+        if (pid, today) in approved_comm_map:
+            today_paid_commission = approved_comm_map.get((pid, today), 0.0)
+        # 手动佣金：若当天有手动佣金，认为这是“已付佣金/总佣金”的覆盖值
+        today_manual_comm = manual_commission_map.get((pid, today), None)
+        if today_manual_comm is not None:
+            today_commission = today_manual_comm
+            today_paid_commission = today_manual_comm
         # 如果当天有手动费用，使用手动费用
         today_manual_cost = manual_cost_map.get((pid, today), None)
         if today_manual_cost is not None:
             today_cost = today_manual_cost
-        today_rejected = adj_map.get((pid, today), 0.0)
+        # 拒付佣金：交易拒付 + 手动拒付调整
+        today_rejected = rejected_comm_map.get((pid, today), 0.0) + adj_map.get((pid, today), 0.0)
         today_net = today_commission - today_rejected - today_cost
 
         # 区间累计
         range_commission = sum(v[0] for v in by_date.values())
         range_cost = sum(v[1] for v in by_date.values())
+        range_paid_commission = 0.0
         # 对于有手动费用的日期，使用手动费用覆盖
         for d in by_date.keys():
             manual_cost = manual_cost_map.get((pid, d), None)
             if manual_cost is not None:
                 range_cost -= by_date[d][1]  # 减去原费用
                 range_cost += manual_cost  # 加上手动费用
-        range_rejected = sum(adj_map.get((pid, d), 0.0) for d in by_date.keys())
+        # 已付/通过佣金：按天累加 approved；若该天有手动佣金，则用手动佣金覆盖当天的已付/总佣金
+        for d in by_date.keys():
+            manual_comm = manual_commission_map.get((pid, d), None)
+            if manual_comm is not None:
+                range_paid_commission += manual_comm
+            else:
+                range_paid_commission += approved_comm_map.get((pid, d), 0.0)
+
+        range_rejected = sum(
+            (rejected_comm_map.get((pid, d), 0.0) + adj_map.get((pid, d), 0.0))
+            for d in by_date.keys()
+        )
         range_net = range_commission - range_rejected - range_cost
 
         total_commission += range_commission
         total_cost += range_cost
         total_rejected += range_rejected
+        total_paid += range_paid_commission
 
         platforms.append(ExpensePlatformSummary(
             platform_id=pid,
             platform_name=info["platform_name"],
             today_commission=round(today_commission, 4),
+            today_paid_commission=round(today_paid_commission, 4),
             today_ad_cost=round(today_cost, 4),
             today_rejected_commission=round(today_rejected, 4),
             today_net_profit=round(today_net, 4),
             range_commission=round(range_commission, 4),
+            range_paid_commission=round(range_paid_commission, 4),
             range_ad_cost=round(range_cost, 4),
             range_rejected_commission=round(range_rejected, 4),
             range_net_profit=round(range_net, 4),
