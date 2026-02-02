@@ -12,6 +12,7 @@ from typing import Dict, List, Optional
 from datetime import datetime, timedelta
 from sqlalchemy.orm import Session
 from sqlalchemy import and_, or_
+from sqlalchemy.exc import IntegrityError
 import json
 import logging
 
@@ -131,7 +132,7 @@ class UnifiedTransactionService:
         }
         
         # Upsert（使用唯一约束：platform + transaction_id）
-        transaction_id_str = str(tx["transaction_id"])
+        transaction_id_str = str(tx["transaction_id"]).strip()
         transaction = self.db.query(AffiliateTransaction).filter(
             AffiliateTransaction.platform == platform,
             AffiliateTransaction.transaction_id == transaction_id_str
@@ -208,9 +209,10 @@ class UnifiedTransactionService:
         elif not isinstance(reject_time, datetime):
             reject_time = transaction.transaction_time
         
+        txid = str(tx["transaction_id"]).strip()
         data = {
             "platform": platform,
-            "transaction_id": str(tx["transaction_id"]),
+            "transaction_id": txid,
             "commission_amount": float(tx.get("commission_amount", 0) or tx.get("commission", 0) or 0),
             "reject_reason": tx.get("reject_reason") or tx.get("rejection_reason") or tx.get("reason"),
             "reject_time": reject_time,
@@ -221,7 +223,7 @@ class UnifiedTransactionService:
         # Upsert
         rejection = self.db.query(AffiliateRejection).filter(
             AffiliateRejection.platform == platform,
-            AffiliateRejection.transaction_id == str(tx["transaction_id"])
+            AffiliateRejection.transaction_id == txid
         ).first()
         
         if rejection:
@@ -231,8 +233,28 @@ class UnifiedTransactionService:
                     setattr(rejection, key, value)
         else:
             # 创建新记录
+            # 注意：同一次同步中可能遇到重复的 rejected 交易（或同一个 tx 被重复处理），
+            # 这会导致唯一约束(platform, transaction_id)冲突。
+            # 使用 savepoint + flush 做“乐观插入”，冲突则回查并更新。
             rejection = AffiliateRejection(**data)
-            self.db.add(rejection)
+            try:
+                with self.db.begin_nested():
+                    self.db.add(rejection)
+                    self.db.flush()
+            except IntegrityError:
+                # 已存在（可能是本次事务里其他循环刚插入），回查并更新
+                existing = self.db.query(AffiliateRejection).filter(
+                    AffiliateRejection.platform == platform,
+                    AffiliateRejection.transaction_id == txid
+                ).first()
+                if existing:
+                    for key, value in data.items():
+                        if key not in ["platform", "transaction_id"]:
+                            setattr(existing, key, value)
+                    rejection = existing
+                else:
+                    # 理论上不会发生，保守起见继续抛出
+                    raise
         
         return rejection
     
