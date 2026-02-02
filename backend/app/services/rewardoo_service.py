@@ -419,6 +419,26 @@ class RewardooService(PlatformServiceBase):
             logger.warning(f"[RW extract_transaction_data] 未找到交易数据。响应结构: code={code}, data类型={type(data)}, result键={list(result.keys())}")
         
         extracted = []
+
+        def _to_float(v) -> float:
+            """
+            更稳健的数字解析：
+            - 兼容 int/float/字符串
+            - 兼容带逗号、货币符号的字符串（如 "$1,234.56"）
+            """
+            if v is None:
+                return 0.0
+            try:
+                if isinstance(v, (int, float)):
+                    return float(v)
+                s = str(v).strip()
+                if not s:
+                    return 0.0
+                for ch in ["$", "¥", "￥", ","]:
+                    s = s.replace(ch, "")
+                return float(s)
+            except Exception:
+                return 0.0
         for idx, item in enumerate(transactions):
             try:
                 if not isinstance(item, dict):
@@ -451,8 +471,27 @@ class RewardooService(PlatformServiceBase):
                     "transaction_id": item.get("order_id") or item.get("transaction_id") or item.get("rewardoo_id") or item.get("id") or f"rw_{idx}",
                     "transaction_time": order_time,
                     "merchant": item.get("merchant_name") or item.get("merchant") or item.get("brand") or item.get("brand_name") or "",
-                    "order_amount": float(item.get("sale_amount", 0) or item.get("order_amount", 0) or item.get("order_unit", 0) or 0),
-                    "commission_amount": float(item.get("sale_comm", 0) or item.get("commission_amount", 0) or item.get("commission", 0) or 0),
+                    "order_amount": _to_float(
+                        item.get("sale_amount", 0)
+                        or item.get("saleAmount", 0)
+                        or item.get("order_amount", 0)
+                        or item.get("orderAmount", 0)
+                        or item.get("order_unit", 0)
+                        or 0
+                    ),
+                    # Rewardoo 不同渠道字段名可能不同：sale_comm / sale_commission / commissionAmount / payout / earnings 等
+                    "commission_amount": _to_float(
+                        item.get("sale_comm", 0)
+                        or item.get("saleComm", 0)
+                        or item.get("sale_commission", 0)
+                        or item.get("saleCommission", 0)
+                        or item.get("commission_amount", 0)
+                        or item.get("commissionAmount", 0)
+                        or item.get("commission", 0)
+                        or item.get("payout", 0)
+                        or item.get("earnings", 0)
+                        or 0
+                    ),
                     "status": status_lower,  # 转换为小写：approved/pending/rejected
                     # 保留原始字段（用于调试和扩展）
                     "raw_data": item

@@ -453,6 +453,22 @@ class CollabGlowService(PlatformServiceBase):
         transaction_list = data.get("list", []) or data.get("transactions", [])
         
         extracted = []
+
+        def _to_float(v) -> float:
+            """更稳健的数字解析：兼容带逗号/货币符号的字符串。"""
+            if v is None:
+                return 0.0
+            try:
+                if isinstance(v, (int, float)):
+                    return float(v)
+                s = str(v).strip()
+                if not s:
+                    return 0.0
+                for ch in ["$", "¥", "￥", ","]:
+                    s = s.replace(ch, "")
+                return float(s)
+            except Exception:
+                return 0.0
         for item in transaction_list:
             # CG平台状态映射：reversed = 拒付
             raw_status = item.get("status", "").strip()
@@ -507,19 +523,23 @@ class CollabGlowService(PlatformServiceBase):
             )
             
             # 处理order_amount：支持camelCase和snake_case
-            order_amount = float(
+            order_amount = _to_float(
                 item.get("saleAmount") or  # API文档中的字段名
                 item.get("sale_amount") or
                 item.get("order_amount", 0) or 
+                item.get("orderAmount", 0) or
                 0
             )
             
             # 处理commission_amount：支持camelCase和snake_case
-            commission_amount = float(
+            commission_amount = _to_float(
                 item.get("saleComm") or  # API文档中的字段名
                 item.get("sale_comm") or
                 item.get("commission_amount", 0) or 
-                item.get("commission", 0) or 
+                item.get("commissionAmount", 0) or
+                item.get("commission", 0) or
+                item.get("payout", 0) or
+                item.get("earnings", 0) or
                 0
             )
             
