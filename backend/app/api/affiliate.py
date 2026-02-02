@@ -20,6 +20,26 @@ from app.schemas.affiliate import (
 router = APIRouter(prefix="/api/affiliate", tags=["affiliate"])
 
 
+# 显式处理OPTIONS请求，确保CORS预检请求通过
+@router.options("/platforms")
+@router.options("/accounts")
+@router.options("/accounts/by-employees")
+async def options_handler(request: Request):
+    """处理OPTIONS预检请求"""
+    from fastapi import Request
+    from fastapi.responses import JSONResponse
+    
+    origin = request.headers.get("origin")
+    headers = {
+        "Access-Control-Allow-Origin": origin if origin else "*",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS, PATCH",
+        "Access-Control-Allow-Headers": "*",
+        "Access-Control-Allow-Credentials": "true",
+        "Access-Control-Max-Age": "3600",
+    }
+    return JSONResponse(content={}, headers=headers, status_code=200)
+
+
 @router.post("/accounts/{account_id}/test-api")
 async def test_api_connection(
     account_id: int,

@@ -232,13 +232,15 @@ def get_cors_headers(origin: str = None) -> dict:
 @app.options("/{full_path:path}")
 async def options_handler(request: Request, full_path: str):
     """处理所有OPTIONS请求，返回CORS头"""
+    import logging
+    logger = logging.getLogger(__name__)
+    
     origin = request.headers.get("origin")
     headers = get_cors_headers(origin)
     
     # 添加调试日志
-    import logging
-    logger = logging.getLogger(__name__)
-    logger.debug(f"[CORS] OPTIONS请求: {full_path}, Origin: {origin}, Headers: {headers}")
+    logger.info(f"[CORS] OPTIONS请求: {full_path}, Origin: {origin}")
+    logger.debug(f"[CORS] OPTIONS响应头: {headers}")
     
     return JSONResponse(content={}, headers=headers, status_code=200)
 
