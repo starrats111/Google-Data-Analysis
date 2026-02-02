@@ -552,39 +552,31 @@ class PlatformDataSyncService:
             
             # 合并佣金和订单数据，转换为统一格式的交易列表
             all_transactions = []
-            
-            # 将佣金数据转换为交易格式
-            for comm in commissions:
-                settlement_date = comm.get("settlement_date")
-                if settlement_date:
-                    try:
-                        # 支持多种日期格式
-                        date_str_clean = str(settlement_date).strip()
-                        transaction_time = None
-                        try:
-                            transaction_time = datetime.strptime(date_str_clean, "%Y-%m-%d")
-                        except ValueError:
-                            try:
-                                transaction_time = datetime.strptime(date_str_clean, "%Y-%m-%d %H:%M:%S")
-                            except ValueError:
-                                try:
-                                    transaction_time = datetime.strptime(date_str_clean.split('T')[0], "%Y-%m-%d")
-                                except ValueError:
-                                    logger.warning(f"[LinkHaitao同步] 无法解析佣金日期: {date_str_clean}")
-                                    continue
-                        
-                        if transaction_time:
-                            all_transactions.append({
-                                "transaction_id": comm.get("transaction_id") or comm.get("id") or f"lh_comm_{settlement_date}_{comm.get('commission', 0)}",
-                                "transaction_time": transaction_time,
-                                "status": "approved",  # LinkHaitao佣金数据默认是已确认
-                                "commission_amount": float(comm.get("commission", 0) or 0),
-                                "order_amount": 0,
-                                "merchant": comm.get("merchant") or comm.get("mcid") or None,
-                            })
-                    except Exception as e:
-                        logger.warning(f"[LinkHaitao同步] 处理佣金交易失败: {e}, 数据: {comm}")
-                        continue
+
+            # 重要：LinkHaitaoService 返回的 orders 已包含 commission（cashback）信息。
+            # commissions 与 orders 来自同一批订单，若两者都写入会导致“重复计入”（订单数/佣金翻倍）。
+            # 因此这里以 orders 为准，不再把 commissions 写入交易明细。
+
+            # 兼容历史数据：清理本次同步区间内由旧逻辑生成的重复佣金记录（transaction_id 形如 lh_comm_*）
+            try:
+                from app.models.affiliate_transaction import AffiliateTransaction
+                begin_dt = datetime.strptime(begin_date, "%Y-%m-%d")
+                end_dt = datetime.strptime(end_date, "%Y-%m-%d") + timedelta(days=1)
+                dup_q = self.db.query(AffiliateTransaction).filter(
+                    AffiliateTransaction.platform == "linkhaitao",
+                    AffiliateTransaction.affiliate_account_id == account.id,
+                    AffiliateTransaction.user_id == account.user_id,
+                    AffiliateTransaction.transaction_time >= begin_dt,
+                    AffiliateTransaction.transaction_time < end_dt,
+                    AffiliateTransaction.transaction_id.like("lh_comm_%"),
+                )
+                dup_count = dup_q.count()
+                if dup_count:
+                    logger.info(f"[LinkHaitao同步] 清理历史重复佣金明细 {dup_count} 条（lh_comm_*）")
+                    dup_q.delete(synchronize_session=False)
+                    self.db.commit()
+            except Exception as e:
+                logger.warning(f"[LinkHaitao同步] 清理历史重复佣金明细失败（忽略，不影响继续同步）: {e}")
             
             # 将订单数据转换为交易格式
             for order in orders:
