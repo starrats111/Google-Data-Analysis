@@ -394,8 +394,8 @@ async def sync_mcc_data(
         # 如果提供了日期范围，同步范围内的所有日期
         if begin_date and end_date:
             try:
-            begin = datetime.strptime(begin_date, "%Y-%m-%d").date()
-            end = datetime.strptime(end_date, "%Y-%m-%d").date()
+                begin = datetime.strptime(begin_date, "%Y-%m-%d").date()
+                end = datetime.strptime(end_date, "%Y-%m-%d").date()
             
             if begin > end:
                 raise HTTPException(status_code=400, detail="开始日期不能晚于结束日期")
