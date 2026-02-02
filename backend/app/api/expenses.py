@@ -602,6 +602,12 @@ async def get_expense_summary(
         raise HTTPException(status_code=400, detail="结束日期不能早于开始日期")
 
     today = _parse_date(today_date) if today_date else end
+    # 容错：前端允许选择“某一天”，可能会选到区间之外（例如 today_date > end_date）
+    # 统一将 today 夹在 [start, end] 之间，避免后续逻辑出现空键/异常导致500
+    if today < start:
+        today = start
+    elif today > end:
+        today = end
 
     # 优先使用"每日指标"作为费用来源（更贴近"每日表格分析"的需求）
     # 若未写入每日指标，则退回到旧逻辑：从分析结果 JSON 聚合
