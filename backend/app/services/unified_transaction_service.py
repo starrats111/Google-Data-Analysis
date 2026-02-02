@@ -214,7 +214,8 @@ class UnifiedTransactionService:
             "commission_amount": float(tx.get("commission_amount", 0) or tx.get("commission", 0) or 0),
             "reject_reason": tx.get("reject_reason") or tx.get("rejection_reason") or tx.get("reason"),
             "reject_time": reject_time,
-            "raw_payload": json.dumps(tx, ensure_ascii=False) if tx else None,
+            # tx 里可能包含 datetime（例如 transaction_time），需要 default=str 避免序列化失败
+            "raw_payload": json.dumps(tx, ensure_ascii=False, default=str) if tx else None,
         }
         
         # Upsert
