@@ -362,26 +362,63 @@ class GoogleAdsApiSyncService:
                         "Resource has been exhausted" in error_message
                     )
                     
+                    # 检查是否是客户账号未启用错误
+                    is_customer_not_enabled = (
+                        "CUSTOMER_NOT_ENABLED" in error_code or
+                        "PERMISSION_DENIED" in error_code or
+                        "customer account can't be accessed" in error_message.lower() or
+                        "not yet enabled" in error_message.lower() or
+                        "has been deactivated" in error_message.lower()
+                    )
+                    
                     if is_quota_exhausted:
-                        logger.error(
-                            f"查询客户账号 {customer_id} 失败: Google Ads API配额已耗尽。"
-                            f"请稍后再试或联系Google Ads支持增加配额。"
-                        )
+                        # 尝试从错误消息中提取重试时间
+                        retry_seconds = None
+                        if "Retry in" in error_message:
+                            try:
+                                import re
+                                match = re.search(r"Retry in (\d+) seconds", error_message)
+                                if match:
+                                    retry_seconds = int(match.group(1))
+                                    retry_hours = retry_seconds / 3600
+                                    logger.error(
+                                        f"查询客户账号 {customer_id} 失败: Google Ads API配额已耗尽。"
+                                        f"需要等待约 {retry_hours:.1f} 小时（{retry_seconds} 秒）后重试。"
+                                    )
+                            except:
+                                pass
+                        
+                        if retry_seconds is None:
+                            logger.error(
+                                f"查询客户账号 {customer_id} 失败: Google Ads API配额已耗尽。"
+                                f"请稍后再试或联系Google Ads支持增加配额。"
+                            )
+                        
                         # 如果是配额错误，停止处理剩余账号，返回部分结果
                         if len(all_campaigns) > 0:
-                            logger.warning(f"已获取 {len(all_campaigns)} 条广告系列，但因配额限制停止同步")
+                            wait_msg = f"需要等待约 {retry_hours:.1f} 小时" if retry_seconds else "请稍后重试"
+                            logger.warning(f"已获取 {len(all_campaigns)} 条广告系列，但因配额限制停止同步。{wait_msg}")
                             return {
                                 "success": True,
                                 "campaigns": all_campaigns,
-                                "message": f"部分同步成功（{len(all_campaigns)} 条），但因API配额限制未完成所有账号",
-                                "quota_exhausted": True
+                                "message": f"部分同步成功（{len(all_campaigns)} 条），但因API配额限制未完成所有账号。{wait_msg}",
+                                "quota_exhausted": True,
+                                "retry_after_seconds": retry_seconds
                             }
                         else:
+                            wait_msg = f"需要等待约 {retry_hours:.1f} 小时后重试" if retry_seconds else "请稍后再试"
                             return {
                                 "success": False,
-                                "message": "Google Ads API配额已耗尽。请稍后再试或联系Google Ads支持增加配额。",
-                                "quota_exhausted": True
+                                "message": f"Google Ads API配额已耗尽。{wait_msg}或联系Google Ads支持增加配额。",
+                                "quota_exhausted": True,
+                                "retry_after_seconds": retry_seconds
                             }
+                    elif is_customer_not_enabled:
+                        # 客户账号未启用，跳过该账号继续处理
+                        logger.warning(
+                            f"客户账号 {customer_id} 未启用或已停用，跳过该账号: {error_message}"
+                        )
+                        continue
                     else:
                         logger.error(f"查询客户账号 {customer_id} 失败: {error_code} - {error_message}")
                         # 继续尝试下一个客户账号
@@ -395,25 +432,61 @@ class GoogleAdsApiSyncService:
                         "Resource has been exhausted" in error_str
                     )
                     
+                    # 检查是否是客户账号未启用错误
+                    is_customer_not_enabled = (
+                        "CUSTOMER_NOT_ENABLED" in error_str or
+                        "PERMISSION_DENIED" in error_str or
+                        "customer account can't be accessed" in error_str.lower() or
+                        "not yet enabled" in error_str.lower() or
+                        "has been deactivated" in error_str.lower()
+                    )
+                    
                     if is_quota_exhausted:
-                        logger.error(
-                            f"处理客户账号 {customer_id} 时遇到配额限制: {error_str}"
-                        )
+                        # 尝试从错误消息中提取重试时间
+                        retry_seconds = None
+                        if "Retry in" in error_str:
+                            try:
+                                import re
+                                match = re.search(r"Retry in (\d+) seconds", error_str)
+                                if match:
+                                    retry_seconds = int(match.group(1))
+                                    retry_hours = retry_seconds / 3600
+                                    logger.error(
+                                        f"处理客户账号 {customer_id} 时遇到配额限制: 需要等待约 {retry_hours:.1f} 小时（{retry_seconds} 秒）"
+                                    )
+                            except:
+                                pass
+                        
+                        if retry_seconds is None:
+                            logger.error(
+                                f"处理客户账号 {customer_id} 时遇到配额限制: {error_str}"
+                            )
+                        
                         # 如果是配额错误，停止处理剩余账号，返回部分结果
                         if len(all_campaigns) > 0:
-                            logger.warning(f"已获取 {len(all_campaigns)} 条广告系列，但因配额限制停止同步")
+                            wait_msg = f"需要等待约 {retry_hours:.1f} 小时" if retry_seconds else "请稍后重试"
+                            logger.warning(f"已获取 {len(all_campaigns)} 条广告系列，但因配额限制停止同步。{wait_msg}")
                             return {
                                 "success": True,
                                 "campaigns": all_campaigns,
-                                "message": f"部分同步成功（{len(all_campaigns)} 条），但因API配额限制未完成所有账号",
-                                "quota_exhausted": True
+                                "message": f"部分同步成功（{len(all_campaigns)} 条），但因API配额限制未完成所有账号。{wait_msg}",
+                                "quota_exhausted": True,
+                                "retry_after_seconds": retry_seconds
                             }
                         else:
+                            wait_msg = f"需要等待约 {retry_hours:.1f} 小时后重试" if retry_seconds else "请稍后再试"
                             return {
                                 "success": False,
-                                "message": "Google Ads API配额已耗尽。请稍后再试或联系Google Ads支持增加配额。",
-                                "quota_exhausted": True
+                                "message": f"Google Ads API配额已耗尽。{wait_msg}或联系Google Ads支持增加配额。",
+                                "quota_exhausted": True,
+                                "retry_after_seconds": retry_seconds
                             }
+                    elif is_customer_not_enabled:
+                        # 客户账号未启用，跳过该账号继续处理
+                        logger.warning(
+                            f"客户账号 {customer_id} 未启用或已停用，跳过该账号: {error_str}"
+                        )
+                        continue
                     else:
                         logger.error(f"处理客户账号 {customer_id} 时出错: {e}", exc_info=True)
                         continue
