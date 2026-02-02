@@ -578,7 +578,13 @@ response = ga_service.search(customer_id=customer_id, query=query)
 
 ---
 
-**文档版本：** 1.0  
+**文档版本：** 1.1  
 **最后更新：** 2026-02-02  
-**文档状态：** 用于 Google Ads API Standard Access 申请
+**文档状态：** 用于 Google Ads API Standard Access 申请  
+**系统信息：**
+- 员工数量：10 名
+- MCC 账号数量：10 个
+- 支持的联盟平台：CollabGlow、Rewardoo、LinkHaitao 等
+- 生产环境：阿里云服务器 + Cloudflare Pages
+- 系统域名：https://google-data-analysis.top
 
