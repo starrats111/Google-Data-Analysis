@@ -1,13 +1,13 @@
-# ============================================
-# 查看后端错误日志
-# ============================================
+# 请执行以下命令查看错误日志：
 
-# 查看最近的错误日志
+# 1. 查看最近的错误日志（最重要）
 tail -n 100 ~/Google-Data-Analysis/backend/run.log
 
-# 或者只看最后50行
-tail -n 50 ~/Google-Data-Analysis/backend/run.log
+# 2. 如果日志文件不存在或为空，尝试手动启动查看实时错误
+cd ~/Google-Data-Analysis/backend
+source venv/bin/activate
+python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
 
-# 实时查看日志（如果有新的错误）
-tail -f ~/Google-Data-Analysis/backend/run.log
-
+# 3. 或者使用诊断脚本
+cd ~/Google-Data-Analysis
+bash backend/scripts/diagnose_startup.sh

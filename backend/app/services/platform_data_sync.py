@@ -283,7 +283,7 @@ class PlatformDataSyncService:
                     else:
                         # 更新所有字段
                         for key, value in filtered_dict.items():
-                            setattr(platform_data, key, value)
+                                setattr(platform_data, key, value)
                         platform_data.last_sync_at = datetime.now()
                     
                     saved_count += 1
@@ -491,7 +491,7 @@ class PlatformDataSyncService:
                     else:
                         # 更新所有字段
                         for key, value in filtered_dict.items():
-                            setattr(platform_data, key, value)
+                                setattr(platform_data, key, value)
                         platform_data.last_sync_at = datetime.now()
                     
                     saved_count += 1
@@ -570,8 +570,8 @@ class PlatformDataSyncService:
                                     transaction_time = datetime.strptime(date_str_clean.split('T')[0], "%Y-%m-%d")
                                 except ValueError:
                                     logger.warning(f"[LinkHaitao同步] 无法解析佣金日期: {date_str_clean}")
-                                    continue
-                        
+                    continue
+                
                         all_transactions.append({
                             "transaction_id": comm.get("transaction_id") or comm.get("id") or f"lh_comm_{settlement_date}_{comm.get('commission', 0)}",
                             "transaction_time": transaction_time,
@@ -582,7 +582,7 @@ class PlatformDataSyncService:
                         })
                     except Exception as e:
                         logger.warning(f"[LinkHaitao同步] 处理佣金交易失败: {e}, 数据: {comm}")
-                        continue
+                    continue
             
             # 将订单数据转换为交易格式
             for order in orders:
@@ -613,8 +613,8 @@ class PlatformDataSyncService:
                         })
                     except Exception as e:
                         logger.warning(f"[LinkHaitao同步] 处理订单交易失败: {e}, 数据: {order}")
-                        continue
-            
+                    continue
+                
             logger.info(f"[LinkHaitao同步] 合并后共有 {len(all_transactions)} 条交易数据")
             
             # 先保存明细交易到AffiliateTransaction表（用于查询）
@@ -887,7 +887,7 @@ class PlatformDataSyncService:
                     else:
                         # 更新所有字段
                         for key, value in filtered_dict.items():
-                            setattr(platform_data, key, value)
+                                setattr(platform_data, key, value)
                         platform_data.last_sync_at = datetime.now()
                     
                     saved_count += 1

@@ -1,0 +1,53 @@
+========================================
+修复CORS问题 - 分步执行指令
+========================================
+
+【问题】SSH主机密钥验证失败
+
+【解决方案 - 分步执行】
+
+步骤1: 接受SSH主机密钥（在服务器上执行）
+在服务器终端输入：
+ssh-keyscan -H iZj6c8iler63a3kzlfi44tZ >> ~/.ssh/known_hosts
+
+或者直接输入 yes 接受：
+ssh admin@iZj6c8iler63a3kzlfi44tZ "echo 'test'"
+
+步骤2: 进入项目目录
+cd ~/Google-Data-Analysis
+
+步骤3: 拉取最新代码
+git pull origin main
+
+步骤4: 进入后端目录
+cd backend
+
+步骤5: 激活虚拟环境
+source venv/bin/activate
+
+步骤6: 更新依赖（如果需要）
+pip install -q --upgrade pip
+pip install -q -r requirements.txt
+
+步骤7: 停止旧服务
+pkill -f 'uvicorn.*app.main'
+sleep 3
+
+步骤8: 启动新服务
+nohup uvicorn app.main:app --host 0.0.0.0 --port 8000 > run.log 2>&1 &
+
+步骤9: 等待服务启动
+sleep 5
+
+步骤10: 检查服务状态
+curl -s http://127.0.0.1:8000/health
+
+步骤11: 查看日志
+tail -n 20 run.log
+
+【或者一次性执行（在服务器上，不是通过SSH）】
+
+如果你已经在服务器上了，直接执行：
+
+cd ~/Google-Data-Analysis && git pull origin main && cd backend && source venv/bin/activate && pip install -q --upgrade pip && pip install -q -r requirements.txt && pkill -f 'uvicorn.*app.main' && sleep 3 && nohup uvicorn app.main:app --host 0.0.0.0 --port 8000 > run.log 2>&1 & sleep 5 && curl -s http://127.0.0.1:8000/health && echo '' && echo '✓ 服务已重启' && tail -n 10 run.log
+

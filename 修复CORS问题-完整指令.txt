@@ -1,0 +1,113 @@
+========================================
+修复CORS问题 - 平台账号无法查看
+========================================
+
+【问题诊断】
+前端: https://google-data-analysis.top
+后端: https://api.google-data-analysis.top
+错误: CORS预检请求失败，缺少Access-Control-Allow-Origin头
+
+【解决方案 - 一次性执行】
+
+步骤1: 推送最新代码到GitHub（本地执行）
+cd "D:\Google Analysis"
+.\scripts\一键推送GitHub.ps1 "修复CORS配置"
+
+步骤2: 在阿里云服务器更新代码并重启服务（一次性复制执行）
+
+ssh admin@iZj6c8iler63a3kzlfi44tZ "cd ~/Google-Data-Analysis && git pull origin main && cd backend && source venv/bin/activate && pip install -q --upgrade pip && pip install -q -r requirements.txt && pkill -f 'uvicorn.*app.main' && sleep 3 && nohup uvicorn app.main:app --host 0.0.0.0 --port 8000 > run.log 2>&1 & sleep 5 && curl -s -X OPTIONS -H 'Origin: https://google-data-analysis.top' -H 'Access-Control-Request-Method: GET' http://127.0.0.1:8000/api/affiliate/accounts -v && echo '' && echo '✓ 服务已重启，检查CORS响应头' && tail -n 20 run.log"
+
+【或者分步执行】
+
+步骤1: 连接服务器
+ssh admin@iZj6c8iler63a3kzlfi44tZ
+
+步骤2: 进入项目目录并拉取最新代码
+cd ~/Google-Data-Analysis
+git pull origin main
+
+步骤3: 检查CORS配置是否正确
+grep -A 5 "ALLOWED_ORIGINS" backend/app/main.py
+
+步骤4: 进入后端目录
+cd backend
+source venv/bin/activate
+
+步骤5: 更新依赖（如果需要）
+pip install -q --upgrade pip
+pip install -q -r requirements.txt
+
+步骤6: 停止旧服务
+pkill -f 'uvicorn.*app.main'
+sleep 3
+
+步骤7: 启动新服务
+nohup uvicorn app.main:app --host 0.0.0.0 --port 8000 > run.log 2>&1 &
+
+步骤8: 等待服务启动
+sleep 5
+
+步骤9: 测试CORS响应（检查OPTIONS预检请求）
+curl -X OPTIONS \
+  -H "Origin: https://google-data-analysis.top" \
+  -H "Access-Control-Request-Method: GET" \
+  -H "Access-Control-Request-Headers: authorization,content-type" \
+  http://127.0.0.1:8000/api/affiliate/accounts \
+  -v
+
+步骤10: 检查服务日志
+tail -n 30 run.log
+
+步骤11: 健康检查
+curl http://127.0.0.1:8000/health
+
+【验证CORS配置】
+
+执行以下命令检查CORS响应头：
+
+curl -X OPTIONS \
+  -H "Origin: https://google-data-analysis.top" \
+  -H "Access-Control-Request-Method: GET" \
+  -H "Access-Control-Request-Headers: authorization,content-type" \
+  https://api.google-data-analysis.top/api/affiliate/accounts \
+  -v
+
+应该看到响应头包含：
+- Access-Control-Allow-Origin: https://google-data-analysis.top
+- Access-Control-Allow-Methods: GET, POST, PUT, DELETE, OPTIONS, PATCH, HEAD
+- Access-Control-Allow-Headers: *
+- Access-Control-Allow-Credentials: true
+
+【如果还有问题，检查Nginx配置】
+
+如果使用了Nginx反向代理，需要确保Nginx不会覆盖CORS头：
+
+1. 检查Nginx配置
+ssh admin@iZj6c8iler63a3kzlfi44tZ "cat /etc/nginx/sites-available/api.google-data-analysis.top"
+
+2. Nginx配置应该包含：
+location / {
+    proxy_pass http://127.0.0.1:8000;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    
+    # 不要覆盖CORS头，让后端处理
+    # proxy_hide_header Access-Control-Allow-Origin;
+}
+
+【快速诊断命令】
+
+检查服务是否运行:
+ssh admin@iZj6c8iler63a3kzlfi44tZ "ps aux | grep uvicorn"
+
+检查端口是否监听:
+ssh admin@iZj6c8iler63a3kzlfi44tZ "netstat -tlnp | grep 8000"
+
+查看最新日志:
+ssh admin@iZj6c8iler63a3kzlfi44tZ "tail -n 50 ~/Google-Data-Analysis/backend/run.log"
+
+查看CORS相关日志:
+ssh admin@iZj6c8iler63a3kzlfi44tZ "grep -i cors ~/Google-Data-Analysis/backend/run.log | tail -n 20"
+

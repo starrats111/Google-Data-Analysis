@@ -1,0 +1,131 @@
+========================================
+一键推送GitHub + 自动部署完整指令
+========================================
+
+【方式一：使用PowerShell脚本（推荐）】
+
+在项目根目录执行：
+.\scripts\一键推送GitHub.ps1 "你的提交信息"
+
+例如：
+.\scripts\一键推送GitHub.ps1 "修复登录问题"
+
+如果不提供提交信息，会自动使用时间戳作为提交信息：
+.\scripts\一键推送GitHub.ps1
+
+
+【方式二：手动执行Git命令（一次性复制）】
+
+cd "D:\Google Analysis" && git add . && git commit -m "更新代码: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')" && git push origin main
+
+
+【方式三：分步执行（如果方式二失败）】
+
+步骤1: 进入项目目录
+cd "D:\Google Analysis"
+
+步骤2: 检查状态
+git status
+
+步骤3: 添加所有更改
+git add .
+
+步骤4: 提交更改
+git commit -m "你的提交信息"
+
+步骤5: 推送到GitHub
+git push origin main
+
+
+========================================
+后端部署指令（阿里云服务器）
+========================================
+
+【完整部署指令（一次性复制）】
+
+ssh admin@iZj6c8iler63a3kzlfi44tZ "cd ~/Google-Data-Analysis && git pull origin main && cd backend && source venv/bin/activate && pip install -q --upgrade pip && pip install -q -r requirements.txt && pkill -f 'uvicorn.*app.main' && sleep 2 && nohup uvicorn app.main:app --host 0.0.0.0 --port 8000 > run.log 2>&1 & sleep 3 && curl -s http://127.0.0.1:8000/health && echo '' && echo '✓ 部署完成' && tail -n 5 run.log"
+
+
+【或者分步执行】
+
+步骤1: 连接服务器
+ssh admin@iZj6c8iler63a3kzlfi44tZ
+
+步骤2: 进入项目目录并拉取代码
+cd ~/Google-Data-Analysis
+git pull origin main
+
+步骤3: 进入后端目录并激活虚拟环境
+cd backend
+source venv/bin/activate
+
+步骤4: 更新依赖（如果需要）
+pip install -q --upgrade pip
+pip install -q -r requirements.txt
+
+步骤5: 停止旧服务
+pkill -f 'uvicorn.*app.main'
+sleep 2
+
+步骤6: 启动新服务
+nohup uvicorn app.main:app --host 0.0.0.0 --port 8000 > run.log 2>&1 &
+
+步骤7: 等待并检查服务
+sleep 3
+curl -s http://127.0.0.1:8000/health
+echo ""
+echo "✓ 部署完成"
+tail -n 5 run.log
+
+
+========================================
+前端部署说明
+========================================
+
+前端在Cloudflare部署，会自动从GitHub拉取最新代码：
+- 仓库: https://github.com/starrats111/Google-Data-Analysis
+- 推送代码到GitHub后，Cloudflare会自动触发部署
+- 通常需要1-3分钟完成自动部署
+- 无需手动操作
+
+
+========================================
+快速检查命令
+========================================
+
+检查Git状态:
+git status
+
+查看最近的提交:
+git log --oneline -5
+
+检查远程仓库:
+git remote -v
+
+检查服务器服务状态:
+ssh admin@iZj6c8iler63a3kzlfi44tZ "ps aux | grep uvicorn"
+
+检查服务器日志:
+ssh admin@iZj6c8iler63a3kzlfi44tZ "tail -n 50 ~/Google-Data-Analysis/backend/run.log"
+
+
+========================================
+常见问题
+========================================
+
+1. PowerShell执行策略错误:
+   Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
+
+2. Git推送需要认证:
+   - 使用Personal Access Token (推荐)
+   - 或配置SSH密钥
+
+3. 服务器连接失败:
+   - 检查SSH密钥配置
+   - 检查服务器IP和端口
+
+4. 部署后服务无法访问:
+   - 检查防火墙设置
+   - 检查服务是否正常启动: curl http://127.0.0.1:8000/health
+   - 查看日志: tail -f ~/Google-Data-Analysis/backend/run.log
+
