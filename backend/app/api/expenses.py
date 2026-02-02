@@ -8,6 +8,7 @@ from typing import Optional, Dict, Tuple, List
 from datetime import datetime, date
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import Body
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 
@@ -32,8 +33,15 @@ from app.schemas.expenses import (
     ExpenseUserSummary,
     MccCostAdjustmentUpsert,
 )
+from pydantic import BaseModel
 
 router = APIRouter(prefix="/api/expenses", tags=["expenses"])
+
+class CleanDuplicateCostsPayload(BaseModel):
+    start_date: Optional[str] = None
+    end_date: Optional[str] = None
+    platform_id: Optional[int] = None
+    include_mcc: bool = True  # 同时清理“上传MCC费用”产生的手动费用
 
 
 @router.get("/cost-detail")
@@ -68,24 +76,28 @@ async def get_cost_detail(
         mcc_manual_cost_map[(adj.mcc_id, adj.date)] = float(adj.manual_cost or 0.0)
     
     # 按MCC账号汇总费用（包含手动上传的费用）
-    mcc_query = db.query(
+    # 注意：手动上传可能发生在“该区间没有任何API数据”的MCC上，也需要展示出来
+    from sqlalchemy import and_
+    mcc_results = db.query(
         GoogleMccAccount.id,
         GoogleMccAccount.mcc_name,
         GoogleMccAccount.email,
-        func.sum(GoogleAdsApiData.cost).label('api_cost')
-    ).join(
-        GoogleAdsApiData, GoogleAdsApiData.mcc_id == GoogleMccAccount.id
+        func.coalesce(func.sum(GoogleAdsApiData.cost), 0.0).label("api_cost"),
+    ).outerjoin(
+        GoogleAdsApiData,
+        and_(
+            GoogleAdsApiData.mcc_id == GoogleMccAccount.id,
+            GoogleAdsApiData.date >= start,
+            GoogleAdsApiData.date <= end,
+        ),
     ).filter(
         GoogleMccAccount.user_id == current_user.id,
-        GoogleAdsApiData.date >= start,
-        GoogleAdsApiData.date <= end
     ).group_by(
         GoogleMccAccount.id,
         GoogleMccAccount.mcc_name,
-        GoogleMccAccount.email
-    )
-    
-    mcc_results = mcc_query.all()
+        GoogleMccAccount.email,
+    ).all()
+
     mcc_breakdown = []
     for r in mcc_results:
         # 计算该MCC的手动费用总和
@@ -93,14 +105,19 @@ async def get_cost_detail(
             cost for (mcc_id, d), cost in mcc_manual_cost_map.items()
             if mcc_id == r.id and start <= d <= end
         )
+        api_cost = float(r.api_cost or 0.0)
         # 如果存在手动费用，优先使用手动费用；否则使用API费用
-        total_cost = manual_cost_total if manual_cost_total > 0 else float(r.api_cost or 0)
+        total_cost = manual_cost_total if manual_cost_total > 0 else api_cost
+
+        # 没有任何数据则跳过（避免列表太长）
+        if api_cost == 0 and manual_cost_total == 0:
+            continue
         
         mcc_breakdown.append({
             "mcc_id": r.id,
             "mcc_name": r.mcc_name,
             "email": r.email,
-            "api_cost": round(float(r.api_cost or 0), 2),
+            "api_cost": round(api_cost, 2),
             "manual_cost": round(manual_cost_total, 2),
             "total_cost": round(total_cost, 2)
         })
@@ -187,9 +204,7 @@ async def get_cost_detail(
 
 @router.post("/clean-duplicate-costs", status_code=status.HTTP_200_OK)
 async def clean_duplicate_costs(
-    start_date: Optional[str] = None,
-    end_date: Optional[str] = None,
-    platform_id: Optional[int] = None,
+    payload: CleanDuplicateCostsPayload = Body(default=CleanDuplicateCostsPayload()),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -200,9 +215,14 @@ async def clean_duplicate_costs(
     用于清理历史遗留的重复数据
     """
     try:
+        start_date = payload.start_date
+        end_date = payload.end_date
+        platform_id = payload.platform_id
+        include_mcc = payload.include_mcc
+
         query = db.query(ExpenseAdjustment).filter(
             ExpenseAdjustment.user_id == current_user.id,
-            ExpenseAdjustment.manual_cost > 0  # 只删除有手动费用的记录
+            ExpenseAdjustment.manual_cost != 0  # 清理所有非0的手动费用（包含历史异常值）
         )
         
         if start_date:
@@ -219,23 +239,43 @@ async def clean_duplicate_costs(
         # 获取要删除的记录数
         count = query.count()
         
-        if count == 0:
-            return {"message": "没有找到需要清理的手动费用数据", "deleted_count": 0}
+        # 另外：清理“上传MCC费用”写入的数据（会被分摊到平台费用里，导致你觉得RW等平台费用删不掉）
+        mcc_deleted_count = 0
+        if include_mcc:
+            mcc_q = db.query(MccCostAdjustment).filter(
+                MccCostAdjustment.user_id == current_user.id,
+                MccCostAdjustment.manual_cost != 0,
+            )
+            if start_date:
+                mcc_q = mcc_q.filter(MccCostAdjustment.date >= _parse_date(start_date))
+            if end_date:
+                mcc_q = mcc_q.filter(MccCostAdjustment.date <= _parse_date(end_date))
+            # MCC手动费用与平台无直接对应关系，这里不按platform_id过滤
+            mcc_deleted_count = mcc_q.count()
+            for adj in mcc_q.all():
+                db.delete(adj)
         
-        # 真正删除有手动费用的记录（如果只有手动费用，没有拒付佣金，则删除整个记录；否则只清空manual_cost）
+        if count == 0 and mcc_deleted_count == 0:
+            return {"message": "没有找到需要清理的手动费用数据", "deleted_count": 0, "mcc_deleted_count": 0}
+
+        # 真正删除有手动费用的记录（如果该行没有其它手动字段，则删除整行；否则只清空manual_cost）
         deleted_count = 0
         for adj in query.all():
-            if float(adj.rejected_commission or 0) == 0:
-                # 没有拒付佣金，删除整个记录
+            if float(adj.rejected_commission or 0) == 0 and float(adj.manual_commission or 0) == 0:
+                # 没有拒付佣金/手动佣金，删除整个记录
                 db.delete(adj)
                 deleted_count += 1
             else:
-                # 有拒付佣金，只清空manual_cost
+                # 还有其它数据，只清空manual_cost
                 adj.manual_cost = 0.0
         
         db.commit()
         
-        return {"message": f"成功清理 {deleted_count} 条手动费用记录，保留Google Ads API同步的费用", "deleted_count": deleted_count}
+        msg = f"成功清理平台手动费用记录 {deleted_count} 条"
+        if include_mcc:
+            msg += f"，清理MCC手动费用 {mcc_deleted_count} 条"
+        msg += "（保留Google Ads API同步的费用）"
+        return {"message": msg, "deleted_count": deleted_count, "mcc_deleted_count": mcc_deleted_count}
         
     except Exception as e:
         db.rollback()
