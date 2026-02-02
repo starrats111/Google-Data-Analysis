@@ -337,35 +337,68 @@ class RewardooService(PlatformServiceBase):
         begin = datetime.strptime(begin_date, "%Y-%m-%d")
         end = datetime.strptime(end_date, "%Y-%m-%d")
 
+        def _to_int(v, default: int = 0) -> int:
+            try:
+                if v is None:
+                    return default
+                if isinstance(v, int):
+                    return v
+                s = str(v).strip()
+                if not s:
+                    return default
+                return int(float(s))
+            except Exception:
+                return default
+
         def _sync_range(b: datetime, e: datetime) -> Dict:
-            """同步一个日期范围（<= max_days），自动翻页合并所有交易。"""
-            first = self.get_transaction_details(b.strftime("%Y-%m-%d"), e.strftime("%Y-%m-%d"), page=1, limit=1000)
+            """
+            同步一个日期范围（<= max_days），自动翻页合并所有交易。
+            注意：RW 返回的 total_page / total_trans 在不同渠道可能不稳定，因此以“本页数量是否达到limit”作为继续翻页的依据。
+            """
+            limit = 1000
+            all_tx: List[dict] = []
+
+            first = self.get_transaction_details(b.strftime("%Y-%m-%d"), e.strftime("%Y-%m-%d"), page=1, limit=limit)
             if first.get("code") != "0":
                 return first
             data = first.get("data", {}) or {}
-            transactions = list(data.get("transactions", []) or [])
-            try:
-                total_page = int(data.get("total_page") or 1)
-            except Exception:
-                total_page = 1
-            if total_page > 1:
-                for p in range(2, total_page + 1):
-                    page_res = self.get_transaction_details(b.strftime("%Y-%m-%d"), e.strftime("%Y-%m-%d"), page=p, limit=1000)
-                    if page_res.get("code") != "0":
-                        logger.warning(f"[RW TransactionDetails API] 翻页失败 page={p}/{total_page}: {page_res.get('message')}")
-                        continue
-                    page_data = page_res.get("data", {}) or {}
-                    page_list = page_data.get("transactions", []) or []
-                    if not page_list:
-                        break
-                    transactions.extend(page_list)
+            page_list = list(data.get("transactions", []) or [])
+            all_tx.extend(page_list)
+
+            total_trans = _to_int(data.get("total_trans"), default=0) or None
+            total_page = _to_int(data.get("total_page"), default=0) or None
+            # 给一个上限，避免接口异常导致无限翻页
+            max_pages = total_page or (_to_int((total_trans / limit) if total_trans else 0, default=0) + 5) or 50
+            if max_pages < 2:
+                max_pages = 50  # 兜底：如果total_page不可靠，最多拉50页（5万条）
+
+            p = 2
+            while p <= max_pages:
+                # 如果已达到预期总数，提前结束
+                if total_trans and len(all_tx) >= total_trans:
+                    break
+                # 如果上一页不足limit，通常已到末页
+                if len(page_list) < limit:
+                    break
+                res = self.get_transaction_details(b.strftime("%Y-%m-%d"), e.strftime("%Y-%m-%d"), page=p, limit=limit)
+                if res.get("code") != "0":
+                    logger.warning(f"[RW TransactionDetails API] 翻页失败 page={p}: {res.get('message')}")
+                    break
+                rdata = res.get("data", {}) or {}
+                page_list = list(rdata.get("transactions", []) or [])
+                if not page_list:
+                    break
+                all_tx.extend(page_list)
+                p += 1
+
+            logger.info(f"[RW TransactionDetails API] 分页汇总完成：{b.date()}~{e.date()} 拉取 {len(all_tx)} 笔交易（total_trans={total_trans}, pages_tried={p-1})")
             return {
                 "code": "0",
                 "message": first.get("message", "success"),
                 "data": {
-                    "transactions": transactions,
-                    "total_trans": data.get("total_trans", len(transactions)),
-                    "total_page": total_page,
+                    "transactions": all_tx,
+                    "total_trans": total_trans or len(all_tx),
+                    "total_page": total_page or p - 1,
                     "total_items": data.get("total_items", 0),
                 }
             }
