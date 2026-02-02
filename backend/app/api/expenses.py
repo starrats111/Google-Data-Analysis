@@ -9,6 +9,7 @@ from datetime import datetime, date
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
+from sqlalchemy import func
 
 from app.database import get_db
 from app.middleware.auth import get_current_user
@@ -18,6 +19,8 @@ from app.models.affiliate_account import AffiliateAccount, AffiliatePlatform
 from app.models.platform_data import PlatformData
 from app.models.google_ads_api_data import GoogleAdsApiData
 from app.models.expense_adjustment import ExpenseAdjustment
+from app.models.mcc_cost_adjustment import MccCostAdjustment
+from app.models.google_ads_api_data import GoogleMccAccount
 from app.schemas.expenses import (
     ExpenseSummaryResponse,
     ExpenseTotals,
@@ -27,6 +30,7 @@ from app.schemas.expenses import (
     ExpenseDailyRow,
     ExpenseManagerSummaryResponse,
     ExpenseUserSummary,
+    MccCostAdjustmentUpsert,
 )
 
 router = APIRouter(prefix="/api/expenses", tags=["expenses"])
@@ -53,12 +57,22 @@ async def get_cost_detail(
     platforms = db.query(AffiliatePlatform).all()
     platform_code_map = {p.platform_code: p for p in platforms}
     
-    # 按MCC账号汇总费用
+    # 获取手动上传的MCC费用
+    mcc_manual_costs = db.query(MccCostAdjustment).filter(
+        MccCostAdjustment.user_id == current_user.id,
+        MccCostAdjustment.date >= start,
+        MccCostAdjustment.date <= end
+    ).all()
+    mcc_manual_cost_map: Dict[Tuple[int, date], float] = {}
+    for adj in mcc_manual_costs:
+        mcc_manual_cost_map[(adj.mcc_id, adj.date)] = float(adj.manual_cost or 0.0)
+    
+    # 按MCC账号汇总费用（包含手动上传的费用）
     mcc_query = db.query(
         GoogleMccAccount.id,
         GoogleMccAccount.mcc_name,
         GoogleMccAccount.email,
-        func.sum(GoogleAdsApiData.cost).label('total_cost')
+        func.sum(GoogleAdsApiData.cost).label('api_cost')
     ).join(
         GoogleAdsApiData, GoogleAdsApiData.mcc_id == GoogleMccAccount.id
     ).filter(
@@ -74,11 +88,21 @@ async def get_cost_detail(
     mcc_results = mcc_query.all()
     mcc_breakdown = []
     for r in mcc_results:
+        # 计算该MCC的手动费用总和
+        manual_cost_total = sum(
+            cost for (mcc_id, d), cost in mcc_manual_cost_map.items()
+            if mcc_id == r.id and start <= d <= end
+        )
+        # 如果存在手动费用，优先使用手动费用；否则使用API费用
+        total_cost = manual_cost_total if manual_cost_total > 0 else float(r.api_cost or 0)
+        
         mcc_breakdown.append({
             "mcc_id": r.id,
             "mcc_name": r.mcc_name,
             "email": r.email,
-            "total_cost": round(float(r.total_cost or 0), 2)
+            "api_cost": round(float(r.api_cost or 0), 2),
+            "manual_cost": round(manual_cost_total, 2),
+            "total_cost": round(total_cost, 2)
         })
     
     # 按平台汇总费用
@@ -119,12 +143,44 @@ async def get_cost_detail(
     # 总费用
     total_cost = sum(m.get('total_cost', 0) for m in mcc_breakdown)
     
+    # 按平台+日期明细（细分）
+    platform_detail_query = db.query(
+        GoogleAdsApiData.extracted_platform_code,
+        GoogleAdsApiData.date,
+        func.sum(GoogleAdsApiData.cost).label('total_cost'),
+        func.count(GoogleAdsApiData.id).label('campaign_count')
+    ).filter(
+        GoogleAdsApiData.user_id == current_user.id,
+        GoogleAdsApiData.date >= start,
+        GoogleAdsApiData.date <= end,
+        GoogleAdsApiData.extracted_platform_code.isnot(None)
+    ).group_by(
+        GoogleAdsApiData.extracted_platform_code,
+        GoogleAdsApiData.date
+    ).order_by(
+        GoogleAdsApiData.extracted_platform_code,
+        GoogleAdsApiData.date.desc()
+    )
+    
+    platform_detail_results = platform_detail_query.all()
+    platform_details = []
+    for r in platform_detail_results:
+        platform = platform_code_map.get(r.extracted_platform_code)
+        platform_details.append({
+            "platform_code": r.extracted_platform_code,
+            "platform_name": platform.platform_name if platform else r.extracted_platform_code,
+            "date": r.date.isoformat() if isinstance(r.date, date) else str(r.date),
+            "total_cost": round(float(r.total_cost or 0), 2),
+            "campaign_count": int(r.campaign_count or 0)
+        })
+    
     return {
         "start_date": start_date,
         "end_date": end_date,
         "total_cost": total_cost,
         "mcc_breakdown": mcc_breakdown,
         "platform_breakdown": platform_breakdown,
+        "platform_details": platform_details,  # 平台费用明细（按日期细分）
         "unmatched_cost": unmatched_cost
     }
 
@@ -166,13 +222,20 @@ async def clean_duplicate_costs(
         if count == 0:
             return {"message": "没有找到需要清理的手动费用数据", "deleted_count": 0}
         
-        # 删除手动费用（将manual_cost设为0，而不是删除整个记录，因为可能还有拒付佣金）
+        # 真正删除有手动费用的记录（如果只有手动费用，没有拒付佣金，则删除整个记录；否则只清空manual_cost）
+        deleted_count = 0
         for adj in query.all():
-            adj.manual_cost = 0.0
+            if float(adj.rejected_commission or 0) == 0:
+                # 没有拒付佣金，删除整个记录
+                db.delete(adj)
+                deleted_count += 1
+            else:
+                # 有拒付佣金，只清空manual_cost
+                adj.manual_cost = 0.0
         
         db.commit()
         
-        return {"message": f"成功清理 {count} 条手动费用数据，已保留Google Ads API同步的费用", "deleted_count": count}
+        return {"message": f"成功清理 {deleted_count} 条手动费用记录，保留Google Ads API同步的费用", "deleted_count": deleted_count}
         
     except Exception as e:
         db.rollback()
@@ -241,7 +304,7 @@ async def upsert_rejected_commission(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """录入/更新某平台某日的拒付佣金和手动费用"""
+    """录入/更新某平台某日的拒付佣金、手动费用和手动佣金"""
     d = _parse_date(payload.date)
     platform = db.query(AffiliatePlatform).filter(AffiliatePlatform.id == payload.platform_id).first()
     if not platform:
@@ -259,12 +322,50 @@ async def upsert_rejected_commission(
             date=d,
             rejected_commission=float(payload.rejected_commission or 0.0),
             manual_cost=float(payload.manual_cost or 0.0) if payload.manual_cost is not None else 0.0,
+            manual_commission=float(payload.manual_commission or 0.0) if payload.manual_commission is not None else 0.0,
         )
         db.add(adj)
     else:
         adj.rejected_commission = float(payload.rejected_commission or 0.0)
         if payload.manual_cost is not None:
             adj.manual_cost = float(payload.manual_cost or 0.0)
+        if payload.manual_commission is not None:
+            adj.manual_commission = float(payload.manual_commission or 0.0)
+
+    db.commit()
+    return {"message": "保存成功"}
+
+
+@router.post("/mcc-cost", status_code=status.HTTP_200_OK)
+async def upsert_mcc_cost(
+    payload: MccCostAdjustmentUpsert,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """录入/更新某MCC某日的手动费用"""
+    d = _parse_date(payload.date)
+    mcc = db.query(GoogleMccAccount).filter(
+        GoogleMccAccount.id == payload.mcc_id,
+        GoogleMccAccount.user_id == current_user.id
+    ).first()
+    if not mcc:
+        raise HTTPException(status_code=404, detail="MCC账号不存在")
+
+    adj = db.query(MccCostAdjustment).filter(
+        MccCostAdjustment.user_id == current_user.id,
+        MccCostAdjustment.mcc_id == payload.mcc_id,
+        MccCostAdjustment.date == d,
+    ).first()
+    if not adj:
+        adj = MccCostAdjustment(
+            user_id=current_user.id,
+            mcc_id=payload.mcc_id,
+            date=d,
+            manual_cost=float(payload.manual_cost or 0.0),
+        )
+        db.add(adj)
+    else:
+        adj.manual_cost = float(payload.manual_cost or 0.0)
 
     db.commit()
     return {"message": "保存成功"}
@@ -505,6 +606,16 @@ async def get_expense_summary(
         api_commission_map[key] = api_commission_map.get(key, 0.0) + float(pd.commission or 0.0)
         day_set.add(pd.date)
 
+    # 获取手动上传的MCC费用
+    mcc_manual_costs = db.query(MccCostAdjustment).filter(
+        MccCostAdjustment.user_id == current_user.id,
+        MccCostAdjustment.date >= start,
+        MccCostAdjustment.date <= end
+    ).all()
+    mcc_manual_cost_map: Dict[Tuple[int, date], float] = {}  # (mcc_id, date) -> manual_cost
+    for adj in mcc_manual_costs:
+        mcc_manual_cost_map[(adj.mcc_id, adj.date)] = float(adj.manual_cost or 0.0)
+    
     # ===== 从 Google Ads API 数据中统计“广告费用”（GoogleAdsApiData），覆盖旧逻辑 =====
     ga_cost_map: Dict[Tuple[int, date], float] = {}
     ga_unmatched_cost_map: Dict[date, float] = {}  # 未匹配平台的费用，按日期汇总
@@ -513,23 +624,70 @@ async def get_expense_summary(
         GoogleAdsApiData.date >= start,
         GoogleAdsApiData.date <= end,
     ).all()
+    
+    # 按MCC和日期汇总API费用，用于判断是否需要使用手动费用
+    mcc_api_cost_map: Dict[Tuple[int, date], float] = {}  # (mcc_id, date) -> api_cost
+    
     for row in ga_rows:
         platform_code = row.extracted_platform_code
         cost = float(row.cost or 0.0)
         day_set.add(row.date)
+        
+        # 记录MCC的API费用
+        mcc_key = (row.mcc_id, row.date)
+        mcc_api_cost_map[mcc_key] = mcc_api_cost_map.get(mcc_key, 0.0) + cost
+        
+        # 如果该MCC该日期有手动费用，则使用手动费用；否则使用API费用
+        manual_cost = mcc_manual_cost_map.get(mcc_key, None)
+        actual_cost = manual_cost if manual_cost is not None else cost
         
         if platform_code:
             pid = platform_code_map.get(platform_code)
             if pid:
                 # 已匹配到平台，按平台统计
                 key = (pid, row.date)
-                ga_cost_map[key] = ga_cost_map.get(key, 0.0) + cost
+                ga_cost_map[key] = ga_cost_map.get(key, 0.0) + actual_cost
             else:
                 # 平台代码存在但无法匹配到平台ID，计入未匹配
-                ga_unmatched_cost_map[row.date] = ga_unmatched_cost_map.get(row.date, 0.0) + cost
+                ga_unmatched_cost_map[row.date] = ga_unmatched_cost_map.get(row.date, 0.0) + actual_cost
         else:
             # 没有平台代码，计入未匹配
-            ga_unmatched_cost_map[row.date] = ga_unmatched_cost_map.get(row.date, 0.0) + cost
+            ga_unmatched_cost_map[row.date] = ga_unmatched_cost_map.get(row.date, 0.0) + actual_cost
+    
+    # 对于有手动费用但没有API数据的MCC，需要按比例分配到平台
+    # 这里简化处理：如果有手动费用但没有对应日期的API数据，则按该MCC的历史平台比例分配
+    for (mcc_id, d), manual_cost in mcc_manual_cost_map.items():
+        if (mcc_id, d) not in mcc_api_cost_map:
+            # 该MCC该日期没有API数据，但有手动费用
+            # 查找该MCC该日期的所有广告系列，按平台分配
+            mcc_ga_rows = db.query(GoogleAdsApiData).filter(
+                GoogleAdsApiData.mcc_id == mcc_id,
+                GoogleAdsApiData.date == d
+            ).all()
+            
+            if mcc_ga_rows:
+                # 按平台汇总该MCC该日期的费用比例
+                platform_cost_sum: Dict[int, float] = {}
+                total_cost = 0.0
+                for r in mcc_ga_rows:
+                    if r.extracted_platform_code:
+                        pid = platform_code_map.get(r.extracted_platform_code)
+                        if pid:
+                            platform_cost_sum[pid] = platform_cost_sum.get(pid, 0.0) + float(r.cost or 0.0)
+                            total_cost += float(r.cost or 0.0)
+                
+                # 按比例分配手动费用
+                if total_cost > 0:
+                    for pid, cost_ratio in platform_cost_sum.items():
+                        ratio = cost_ratio / total_cost
+                        key = (pid, d)
+                        ga_cost_map[key] = ga_cost_map.get(key, 0.0) + (manual_cost * ratio)
+                else:
+                    # 无法分配，计入未匹配
+                    ga_unmatched_cost_map[d] = ga_unmatched_cost_map.get(d, 0.0) + manual_cost
+            else:
+                # 完全没有数据，计入未匹配
+                ga_unmatched_cost_map[d] = ga_unmatched_cost_map.get(d, 0.0) + manual_cost
 
     # 1) 从每日指标聚合（仅作为费用的补充/兜底，优先使用Google Ads API）
     metrics = db.query(AdCampaignDailyMetric).join(AdCampaign).filter(
@@ -587,6 +745,7 @@ async def get_expense_summary(
             by_date[d][1] += cost
 
     # 使用 PlatformData 中的佣金覆盖旧逻辑的佣金（佣金直接来自各平台API）
+    # 但如果存在手动佣金，则优先使用手动佣金
     for (pid, d), api_comm in api_commission_map.items():
         if pid not in platform_map:
             platform_map[pid] = {
@@ -597,7 +756,12 @@ async def get_expense_summary(
         by_date = platform_map[pid]["by_date"]
         if d not in by_date:
             by_date[d] = [0.0, 0.0]
-        by_date[d][0] = api_comm  # 覆盖佣金
+        # 如果存在手动佣金，优先使用手动佣金；否则使用API佣金
+        manual_comm = manual_commission_map.get((pid, d), None)
+        if manual_comm is not None:
+            by_date[d][0] = manual_comm  # 使用手动佣金
+        else:
+            by_date[d][0] = api_comm  # 使用API佣金
 
     # 使用 Google Ads API 中的费用覆盖旧逻辑的费用（广告费用直接来自Google Ads）
     # 但如果存在手动费用，则优先使用手动费用
@@ -625,7 +789,7 @@ async def get_expense_summary(
         # 未匹配的费用计入总费用，但不分配到具体平台
         # 这样总费用就能与Google Ads数据页面对上了
 
-    # 拉取拒付佣金调整和手动费用（区间内）
+    # 拉取拒付佣金调整、手动费用和手动佣金（区间内）
     adjustments = db.query(ExpenseAdjustment).filter(
         ExpenseAdjustment.user_id == current_user.id,
         ExpenseAdjustment.date >= start,
@@ -633,10 +797,13 @@ async def get_expense_summary(
     ).all()
     adj_map: Dict[Tuple[int, date], float] = {}  # (platform_id, date) -> rejected_commission
     manual_cost_map: Dict[Tuple[int, date], float] = {}  # (platform_id, date) -> manual_cost
+    manual_commission_map: Dict[Tuple[int, date], float] = {}  # (platform_id, date) -> manual_commission
     for a in adjustments:
         adj_map[(a.platform_id, a.date)] = float(a.rejected_commission or 0.0)
         if a.manual_cost and a.manual_cost > 0:
             manual_cost_map[(a.platform_id, a.date)] = float(a.manual_cost or 0.0)
+        if a.manual_commission and a.manual_commission > 0:
+            manual_commission_map[(a.platform_id, a.date)] = float(a.manual_commission or 0.0)
 
     # 组装平台汇总
     platforms: List[ExpensePlatformSummary] = []
@@ -762,9 +929,20 @@ async def get_expense_daily(
         key = (pid, pd.date)
         api_commission_map[key] = api_commission_map.get(key, 0.0) + float(pd.commission or 0.0)
 
+    # 获取手动上传的MCC费用
+    mcc_manual_costs = db.query(MccCostAdjustment).filter(
+        MccCostAdjustment.user_id == current_user.id,
+        MccCostAdjustment.date >= start,
+        MccCostAdjustment.date <= end
+    ).all()
+    mcc_manual_cost_map: Dict[Tuple[int, date], float] = {}
+    for adj in mcc_manual_costs:
+        mcc_manual_cost_map[(adj.mcc_id, adj.date)] = float(adj.manual_cost or 0.0)
+    
     # 从 Google Ads API 统计每日“广告费用”（GoogleAdsApiData），用于覆盖旧逻辑
     ga_cost_map: Dict[Tuple[int, date], float] = {}
     ga_unmatched_cost_map: Dict[date, float] = {}  # 未匹配平台的费用，按日期汇总
+    mcc_api_cost_map: Dict[Tuple[int, date], float] = {}
     ga_rows = db.query(GoogleAdsApiData).filter(
         GoogleAdsApiData.user_id == current_user.id,
         GoogleAdsApiData.date >= start,
@@ -774,18 +952,54 @@ async def get_expense_daily(
         platform_code = row.extracted_platform_code
         cost = float(row.cost or 0.0)
         
+        # 记录MCC的API费用
+        mcc_key = (row.mcc_id, row.date)
+        mcc_api_cost_map[mcc_key] = mcc_api_cost_map.get(mcc_key, 0.0) + cost
+        
+        # 如果该MCC该日期有手动费用，则使用手动费用；否则使用API费用
+        manual_cost = mcc_manual_cost_map.get(mcc_key, None)
+        actual_cost = manual_cost if manual_cost is not None else cost
+        
         if platform_code:
             pid = platform_code_map.get(platform_code)
             if pid:
                 # 已匹配到平台，按平台统计
                 key = (pid, row.date)
-                ga_cost_map[key] = ga_cost_map.get(key, 0.0) + cost
+                ga_cost_map[key] = ga_cost_map.get(key, 0.0) + actual_cost
             else:
                 # 平台代码存在但无法匹配到平台ID，计入未匹配
-                ga_unmatched_cost_map[row.date] = ga_unmatched_cost_map.get(row.date, 0.0) + cost
+                ga_unmatched_cost_map[row.date] = ga_unmatched_cost_map.get(row.date, 0.0) + actual_cost
         else:
             # 没有平台代码，计入未匹配
-            ga_unmatched_cost_map[row.date] = ga_unmatched_cost_map.get(row.date, 0.0) + cost
+            ga_unmatched_cost_map[row.date] = ga_unmatched_cost_map.get(row.date, 0.0) + actual_cost
+    
+    # 对于有手动费用但没有API数据的MCC，需要按比例分配到平台
+    for (mcc_id, d), manual_cost in mcc_manual_cost_map.items():
+        if (mcc_id, d) not in mcc_api_cost_map:
+            mcc_ga_rows = db.query(GoogleAdsApiData).filter(
+                GoogleAdsApiData.mcc_id == mcc_id,
+                GoogleAdsApiData.date == d
+            ).all()
+            
+            if mcc_ga_rows:
+                platform_cost_sum: Dict[int, float] = {}
+                total_cost = 0.0
+                for r in mcc_ga_rows:
+                    if r.extracted_platform_code:
+                        pid = platform_code_map.get(r.extracted_platform_code)
+                        if pid:
+                            platform_cost_sum[pid] = platform_cost_sum.get(pid, 0.0) + float(r.cost or 0.0)
+                            total_cost += float(r.cost or 0.0)
+                
+                if total_cost > 0:
+                    for pid, cost_ratio in platform_cost_sum.items():
+                        ratio = cost_ratio / total_cost
+                        key = (pid, d)
+                        ga_cost_map[key] = ga_cost_map.get(key, 0.0) + (manual_cost * ratio)
+                else:
+                    ga_unmatched_cost_map[d] = ga_unmatched_cost_map.get(d, 0.0) + manual_cost
+            else:
+                ga_unmatched_cost_map[d] = ga_unmatched_cost_map.get(d, 0.0) + manual_cost
 
     # 优先：每日指标 -> 按平台/日期汇总广告费用（若某天某平台没有Google Ads数据时作为兜底）
     metrics = db.query(AdCampaignDailyMetric).join(AdCampaign).filter(
@@ -801,9 +1015,12 @@ async def get_expense_daily(
     ).all()
     adj_map: Dict[Tuple[int, date], float] = {(a.platform_id, a.date): float(a.rejected_commission or 0.0) for a in adjustments}
     manual_cost_map: Dict[Tuple[int, date], float] = {}
+    manual_commission_map: Dict[Tuple[int, date], float] = {}
     for a in adjustments:
         if a.manual_cost and a.manual_cost > 0:
             manual_cost_map[(a.platform_id, a.date)] = float(a.manual_cost or 0.0)
+        if a.manual_commission and a.manual_commission > 0:
+            manual_commission_map[(a.platform_id, a.date)] = float(a.manual_commission or 0.0)
 
     rows: List[ExpenseDailyRow] = []
     if metrics:
@@ -830,8 +1047,12 @@ async def get_expense_daily(
 
         for (pid, d), (commission_cost) in agg.items():
             try:
-                api_comm = api_commission_map.get((pid, d), 0.0)
-                commission = api_comm
+                # 优先使用手动佣金，其次使用API佣金
+                manual_comm = manual_commission_map.get((pid, d), None)
+                if manual_comm is not None:
+                    commission = manual_comm
+                else:
+                    commission = api_commission_map.get((pid, d), 0.0)
                 # 优先使用手动费用，其次使用Google Ads API的费用，最后使用每日指标的费用
                 manual_cost = manual_cost_map.get((pid, d), None)
                 if manual_cost is not None:
@@ -873,7 +1094,12 @@ async def get_expense_daily(
                         continue
                     d = r.analysis_date
                     raw_commission, raw_cost = _extract_commission_cost(r.result_data)
-                    commission = api_commission_map.get((pid, d), raw_commission)
+                    # 优先使用手动佣金，其次使用API佣金
+                    manual_comm = manual_commission_map.get((pid, d), None)
+                    if manual_comm is not None:
+                        commission = manual_comm
+                    else:
+                        commission = api_commission_map.get((pid, d), raw_commission)
                     # 优先使用手动费用，其次使用Google Ads API的费用，最后使用分析结果的费用
                     manual_cost = manual_cost_map.get((pid, d), None)
                     if manual_cost is not None:

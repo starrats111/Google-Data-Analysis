@@ -79,13 +79,14 @@ const Expenses = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [startDate, endDate, todayDate])
 
-  const handleSaveRejected = async (platformId, dateStr, rejectedValue, manualCostValue) => {
+  const handleSaveRejected = async (platformId, dateStr, rejectedValue, manualCostValue, manualCommissionValue) => {
     try {
       await api.post('/api/expenses/rejected-commission', {
         platform_id: platformId,
         date: dateStr,
         rejected_commission: Number(rejectedValue || 0),
         manual_cost: manualCostValue !== undefined ? Number(manualCostValue || 0) : undefined,
+        manual_commission: manualCommissionValue !== undefined ? Number(manualCommissionValue || 0) : undefined,
       })
       message.success('已保存')
       fetchAll()
@@ -127,7 +128,26 @@ const Expenses = () => {
   const dailyColumns = [
     { title: '日期', dataIndex: 'date', key: 'date', width: 110 },
     { title: '平台', dataIndex: 'platform_name', key: 'platform_name', width: 140 },
-    { title: '佣金', dataIndex: 'commission', key: 'commission', align: 'right', render: (v) => (v || 0).toFixed(4) },
+    { 
+      title: '佣金(可手动)',
+      dataIndex: 'commission',
+      key: 'commission',
+      align: 'right',
+      render: (v, r) => (
+        <Space>
+          <InputNumber
+            value={Number(v || 0)}
+            min={0}
+            step={0.01}
+            style={{ width: 120 }}
+            onChange={(val) => {
+              r.__draftCommission = val
+            }}
+          />
+          <Button size="small" onClick={() => handleSaveRejected(r.platform_id, r.date, r.__draftRejected ?? r.rejected_commission ?? 0, r.__draftCost ?? r.ad_cost, r.__draftCommission ?? v)}>保存</Button>
+        </Space>
+      ),
+    },
     { 
       title: '广告费用(可手动)',
       dataIndex: 'ad_cost',
@@ -144,7 +164,7 @@ const Expenses = () => {
               r.__draftCost = val
             }}
           />
-          <Button size="small" onClick={() => handleSaveRejected(r.platform_id, r.date, r.__draftRejected ?? r.rejected_commission ?? 0, r.__draftCost ?? v)}>保存</Button>
+          <Button size="small" onClick={() => handleSaveRejected(r.platform_id, r.date, r.__draftRejected ?? r.rejected_commission ?? 0, r.__draftCost ?? r.ad_cost, undefined)}>保存</Button>
         </Space>
       ),
     },

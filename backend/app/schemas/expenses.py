@@ -10,6 +10,13 @@ class ExpenseAdjustmentUpsert(BaseModel):
     date: str  # YYYY-MM-DD
     rejected_commission: float = 0.0
     manual_cost: Optional[float] = None  # 手动上传的费用（可选）
+    manual_commission: Optional[float] = None  # 手动上传的佣金（可选）
+
+
+class MccCostAdjustmentUpsert(BaseModel):
+    mcc_id: int
+    date: str  # YYYY-MM-DD
+    manual_cost: float  # 手动上传的MCC费用
 
 
 class ExpensePlatformSummary(BaseModel):
