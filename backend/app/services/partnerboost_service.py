@@ -155,6 +155,27 @@ class PartnerBoostService:
             code = status_info.get("code")
             if code != 0:
                 error_msg = status_info.get("msg", "Unknown error")
+                
+                # 错误码映射（提供更友好的错误消息）
+                error_code_map = {
+                    1001: "Invalid token (Token无效，请检查Token是否正确)",
+                    "1001": "Invalid token (Token无效，请检查Token是否正确)",
+                    1002: "Token已过期",
+                    "1002": "Token已过期",
+                    1003: "权限不足",
+                    "1003": "权限不足",
+                }
+                
+                # 如果错误码在映射中，使用映射的消息
+                if code in error_code_map:
+                    friendly_msg = error_code_map[code]
+                    logger.error(f"[PB API] 请求失败: code={code}, msg={error_msg}")
+                    return {
+                        "success": False,
+                        "message": f"{friendly_msg}。原始错误: {error_msg} (code={code})",
+                        "data": {}
+                    }
+                
                 logger.error(f"[PB API] 请求失败: code={code}, msg={error_msg}")
                 return {
                     "success": False,

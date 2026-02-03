@@ -827,8 +827,18 @@ class PlatformDataSyncService:
     ) -> Dict:
         """同步CreatorFlare数据"""
         try:
+            # 获取token：优先使用传入的token，如果没有则从账号备注中读取
+            import json
             if not token:
-                return {"success": False, "message": "未配置CreatorFlare Token"}
+                if account.notes:
+                    try:
+                        notes_data = json.loads(account.notes)
+                        token = notes_data.get("creatorflare_token") or notes_data.get("cf_token") or notes_data.get("api_token")
+                    except:
+                        pass
+            
+            if not token:
+                return {"success": False, "message": "未配置CreatorFlare Token。请在同步对话框中输入Token，或在账号编辑页面的备注中配置。"}
             
             service = CreatorFlareService(token=token)
             result = service.sync_transactions(begin_date, end_date)
@@ -837,8 +847,11 @@ class PlatformDataSyncService:
                 return result
             
             data = result.get("data", {})
+            # CreatorFlare API返回的数据格式是 {"data": {"transactions": [...]}}
+            # 但extract_transaction_data期望的是 {"data": {"list": [...]}}
+            transactions = data.get("transactions", [])
             transactions_raw = service.extract_transaction_data({
-                "data": {"list": data.get("transactions", [])}
+                "data": {"list": transactions}
             })
             
             if not transactions_raw:
@@ -958,7 +971,9 @@ class PlatformDataSyncService:
             
         except Exception as e:
             self.db.rollback()
-            logger.error(f"同步CreatorFlare数据失败: {e}")
+            logger.error(f"同步CreatorFlare数据失败: {e}", exc_info=True)
+            import traceback
+            logger.debug(f"[CF同步] 错误堆栈: {traceback.format_exc()}")
             from app.services.api_config_service import ApiConfigService
             error_message = ApiConfigService.format_error_message(e, account, "CF API")
             return {"success": False, "message": f"同步失败: {error_message}"}
@@ -972,8 +987,18 @@ class PlatformDataSyncService:
     ) -> Dict:
         """同步LinkBux数据"""
         try:
+            # 获取token：优先使用传入的token，如果没有则从账号备注中读取
+            import json
             if not token:
-                return {"success": False, "message": "未配置LinkBux Token"}
+                if account.notes:
+                    try:
+                        notes_data = json.loads(account.notes)
+                        token = notes_data.get("linkbux_token") or notes_data.get("lb_token") or notes_data.get("api_token")
+                    except:
+                        pass
+            
+            if not token:
+                return {"success": False, "message": "未配置LinkBux Token。请在同步对话框中输入Token，或在账号编辑页面的备注中配置。"}
             
             service = LinkBuxService(token=token)
             result = service.sync_transactions(begin_date, end_date)
@@ -982,8 +1007,11 @@ class PlatformDataSyncService:
                 return result
             
             data = result.get("data", {})
+            # LinkBux API返回的数据格式是 {"data": {"transactions": [...]}}
+            # 但extract_transaction_data期望的是 {"data": {"list": [...]}}
+            transactions = data.get("transactions", [])
             transactions_raw = service.extract_transaction_data({
-                "data": {"list": data.get("transactions", [])}
+                "data": {"list": transactions}
             })
             
             if not transactions_raw:
@@ -1103,7 +1131,9 @@ class PlatformDataSyncService:
             
         except Exception as e:
             self.db.rollback()
-            logger.error(f"同步LinkBux数据失败: {e}")
+            logger.error(f"同步LinkBux数据失败: {e}", exc_info=True)
+            import traceback
+            logger.debug(f"[LB同步] 错误堆栈: {traceback.format_exc()}")
             from app.services.api_config_service import ApiConfigService
             error_message = ApiConfigService.format_error_message(e, account, "LB API")
             return {"success": False, "message": f"同步失败: {error_message}"}
@@ -1117,8 +1147,18 @@ class PlatformDataSyncService:
     ) -> Dict:
         """同步PartnerBoost数据"""
         try:
+            # 获取token：优先使用传入的token，如果没有则从账号备注中读取
+            import json
             if not token:
-                return {"success": False, "message": "未配置PartnerBoost Token"}
+                if account.notes:
+                    try:
+                        notes_data = json.loads(account.notes)
+                        token = notes_data.get("partnerboost_token") or notes_data.get("pb_token") or notes_data.get("api_token")
+                    except:
+                        pass
+            
+            if not token:
+                return {"success": False, "message": "未配置PartnerBoost Token。请在同步对话框中输入Token，或在账号编辑页面的备注中配置。"}
             
             service = PartnerBoostService(token=token)
             result = service.sync_transactions(begin_date, end_date)
@@ -1127,8 +1167,11 @@ class PlatformDataSyncService:
                 return result
             
             data = result.get("data", {})
+            # PartnerBoost API返回的数据格式是 {"data": {"transactions": [...]}}
+            # 但extract_transaction_data期望的是 {"data": {"list": [...]}}
+            transactions = data.get("transactions", [])
             transactions_raw = service.extract_transaction_data({
-                "data": {"list": data.get("transactions", [])}
+                "data": {"list": transactions}
             })
             
             if not transactions_raw:
@@ -1248,7 +1291,9 @@ class PlatformDataSyncService:
             
         except Exception as e:
             self.db.rollback()
-            logger.error(f"同步PartnerBoost数据失败: {e}")
+            logger.error(f"同步PartnerBoost数据失败: {e}", exc_info=True)
+            import traceback
+            logger.debug(f"[PB同步] 错误堆栈: {traceback.format_exc()}")
             from app.services.api_config_service import ApiConfigService
             error_message = ApiConfigService.format_error_message(e, account, "PB API")
             return {"success": False, "message": f"同步失败: {error_message}"}
