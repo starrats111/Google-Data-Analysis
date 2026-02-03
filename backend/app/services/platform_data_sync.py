@@ -598,8 +598,11 @@ class PlatformDataSyncService:
                                     continue
                         
                         # LinkHaitao API返回的佣金字段：LinkHaitaoService返回的orders中，佣金字段是"commission"（来自cashback）
-                        # 但为了兼容性，也尝试其他可能的字段名
-                        commission_amount = order.get("commission") or order.get("cashback") or order.get("sale_comm") or order.get("commission_amount") or 0
+                        # 优先使用commission字段（LinkHaitaoService已经将cashback转换为commission）
+                        commission_amount = order.get("commission")
+                        if commission_amount is None:
+                            # 如果commission不存在，尝试其他可能的字段名
+                            commission_amount = order.get("cashback") or order.get("sale_comm") or order.get("commission_amount") or 0
                         # 处理字符串格式的佣金（可能包含$符号或逗号）
                         if isinstance(commission_amount, str):
                             commission_amount = commission_amount.replace("$", "").replace(",", "").strip()
