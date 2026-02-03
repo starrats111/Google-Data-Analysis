@@ -14,6 +14,7 @@ from app.middleware.auth import get_current_user
 from app.models.user import User
 from app.models.google_ads_api_data import GoogleAdsApiData, GoogleMccAccount
 from app.models.affiliate_transaction import AffiliateTransaction
+import re
 
 router = APIRouter(prefix="/api/google-ads-aggregate", tags=["google-ads-aggregate"])
 
@@ -106,6 +107,20 @@ def _infer_platform_code_from_campaign_name(campaign_name: str) -> Optional[str]
     return m.group(1).upper()
 
 
+def _infer_merchant_id_from_campaign_name(campaign_name: str) -> Optional[str]:
+    """
+    从广告系列名推断商家ID（最后一个字段）。
+    支持：001-LB1-xxx-US-1125-240088 / 001_LB1_xxx_US_1125_240088
+    """
+    if not campaign_name:
+        return None
+    parts = [p for p in re.split(r"[_-]", campaign_name) if p]
+    if len(parts) < 2:
+        return None
+    last = parts[-1]
+    return last if re.match(r"^\d+$", last) else None
+
+
 @router.get("/by-campaign")
 async def get_campaign_data(
     date_range_type: str = Query(..., description="日期范围类型: past7days, thisWeek, thisMonth, today, yesterday, custom"),
@@ -113,6 +128,8 @@ async def get_campaign_data(
     end_date: Optional[str] = Query(None, description="自定义结束日期 YYYY-MM-DD（仅custom时使用）"),
     mcc_id: Optional[int] = Query(None, description="MCC ID（可选）"),
     platform_code: Optional[str] = Query(None, description="平台代码（可选）"),
+    status: Optional[str] = Query(None, description="广告系列状态（可选）：ENABLED/PAUSED/REMOVED/UNKNOWN"),
+    merchant_id: Optional[str] = Query(None, description="商家ID（可选）：广告系列名最后一段ID"),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
@@ -245,6 +262,7 @@ async def get_campaign_data(
         inferred_platform_code = row.extracted_platform_code or _infer_platform_code_from_campaign_name(row.campaign_name)
         platform_code = inferred_platform_code
         platform_name = platform_code_map.get(platform_code, platform_code) if platform_code else None
+        inferred_mid = _infer_merchant_id_from_campaign_name(row.campaign_name)
         
         campaign_data.append({
             "date_range": date_range_display,
@@ -253,6 +271,7 @@ async def get_campaign_data(
             "platform_code": platform_code,
             "platform_name": platform_name,
             "status": status,
+            "merchant_id": inferred_mid,
             "budget": round(daily_budget, 2),  # 使用最近一天的预算作为每日预算
             "cost": round(float(row.total_cost or 0), 2),
             "impressions": int(total_impressions),
@@ -267,6 +286,14 @@ async def get_campaign_data(
     if platform_code:
         want = platform_code.upper()
         campaign_data = [c for c in campaign_data if (c.get("platform_code") or "").upper() == want]
+
+    if status:
+        want_s = status.upper()
+        campaign_data = [c for c in campaign_data if (c.get("status") or "").upper() == want_s]
+
+    if merchant_id:
+        want_mid = str(merchant_id).strip()
+        campaign_data = [c for c in campaign_data if str(c.get("merchant_id") or "").strip() == want_mid]
     
     return {
         "begin_date": begin.strftime("%Y-%m-%d"),

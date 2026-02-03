@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react'
-import { Card, Button, Form, Select, DatePicker, message, Space, Radio, Statistic, Row, Col, Table, Tag, Input } from 'antd'
+import { Card, Button, Form, Select, DatePicker, message, Space, Radio, Row, Col, Table, Input } from 'antd'
 import { SearchOutlined, DownloadOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import api from '../services/api'
@@ -19,7 +19,7 @@ export default function GoogleAdsData() {
   const [form] = Form.useForm()
   const [dateRangeType, setDateRangeType] = useState('past7days') // 时间范围类型
   const [searchText, setSearchText] = useState('')
-  const [viewMode, setViewMode] = useState('campaign') // 'campaign' 或 'summary'
+  // 按需求：仅按广告系列视图（移除视图模式切换）
 
   useEffect(() => {
     fetchMccAccounts()
@@ -135,53 +135,43 @@ export default function GoogleAdsData() {
         }
       }
       
-      // 根据视图模式选择不同的API
-      if (viewMode === 'campaign') {
-        // 按广告系列分组的数据
-        const campaignResponse = await api.get('/api/google-ads-aggregate/by-campaign', { 
-          params,
-          signal: abortControllerRef.current.signal
-        })
-        const campaigns = campaignResponse.data.campaigns || []
-        // 广告优先展示已启用(ENABLED)，其次暂停(PAUSED)，最后未知/其它
-        const statusRank = (s) => {
-          const v = (s || '').toUpperCase()
-          if (v === 'ENABLED') return 0
-          if (v === 'PAUSED') return 1
-          if (v === 'REMOVED') return 3
-          return 2
-        }
-        campaigns.sort((a, b) => {
-          const ra = statusRank(a.status)
-          const rb = statusRank(b.status)
-          if (ra !== rb) return ra - rb
-          // 同状态下按花费降序
-          return (Number(b.total_cost || 0) - Number(a.total_cost || 0))
-        })
-        setCampaignData(campaigns)
-        setSummaryData(null)
-        setDetailData([])
-        
-        if (campaignResponse.data.campaigns && campaignResponse.data.campaigns.length > 0) {
-          message.success(`查询成功：找到 ${campaignResponse.data.campaigns.length} 个广告系列`)
-        } else {
-          message.info('未找到数据')
-        }
+      if (values.status) {
+        params.status = values.status
+      }
+
+      if (values.merchant_id) {
+        params.merchant_id = String(values.merchant_id).trim()
+      }
+
+      // 固定：按广告系列分组的数据
+      const campaignResponse = await api.get('/api/google-ads-aggregate/by-campaign', { 
+        params,
+        signal: abortControllerRef.current.signal
+      })
+      const campaigns = campaignResponse.data.campaigns || []
+      // 广告优先展示已启用(ENABLED)，其次暂停(PAUSED)，最后未知/其它
+      const statusRank = (s) => {
+        const v = (s || '').toUpperCase()
+        if (v === 'ENABLED') return 0
+        if (v === 'PAUSED') return 1
+        if (v === 'REMOVED') return 3
+        return 2
+      }
+      campaigns.sort((a, b) => {
+        const ra = statusRank(a.status)
+        const rb = statusRank(b.status)
+        if (ra !== rb) return ra - rb
+        // 同状态下按花费降序
+        return (Number(b.cost || 0) - Number(a.cost || 0))
+      })
+      setCampaignData(campaigns)
+      setSummaryData(null)
+      setDetailData([])
+      
+      if (campaigns.length > 0) {
+        message.success(`查询成功：找到 ${campaigns.length} 个广告系列`)
       } else {
-        // 时间范围级别的汇总数据
-        const response = await api.get('/api/google-ads-aggregate', { 
-          params,
-          signal: abortControllerRef.current.signal
-        })
-        setSummaryData(response.data)
-        setCampaignData([])
-        setDetailData([])
-        
-        if (response.data && (response.data.google_ads_cost > 0 || response.data.affiliate_commission > 0)) {
-          message.success(`查询成功：${response.data.date_range_label}`)
-        } else {
-          message.info('未找到数据')
-        }
+        message.info('未找到数据')
       }
     } catch (error) {
       // 忽略取消的请求
@@ -199,7 +189,7 @@ export default function GoogleAdsData() {
       setLoading(false)
       abortControllerRef.current = null
     }
-  }, [dateRangeType, viewMode, loading])
+  }, [dateRangeType, loading])
 
 
   return (
@@ -215,19 +205,6 @@ export default function GoogleAdsData() {
           onFinish={handleSearch}
         >
           <Row gutter={16}>
-            <Col span={24} style={{ marginBottom: 16 }}>
-              <Form.Item label="视图模式">
-                <Radio.Group 
-                  value={viewMode} 
-                  onChange={(e) => setViewMode(e.target.value)}
-                  buttonStyle="solid"
-                >
-                  <Radio.Button value="campaign">按广告系列</Radio.Button>
-                  <Radio.Button value="summary">时间范围汇总</Radio.Button>
-                </Radio.Group>
-              </Form.Item>
-            </Col>
-            
             <Col span={24} style={{ marginBottom: 16 }}>
               <Form.Item label="时间范围">
                 <Radio.Group 
@@ -297,6 +274,23 @@ export default function GoogleAdsData() {
               </Form.Item>
             </Col>
 
+            <Col span={12}>
+              <Form.Item name="status" label="状态（可选）">
+                <Select placeholder="选择状态" allowClear>
+                  <Select.Option value="ENABLED">已启用</Select.Option>
+                  <Select.Option value="PAUSED">已暂停</Select.Option>
+                  <Select.Option value="REMOVED">已移除</Select.Option>
+                  <Select.Option value="UNKNOWN">未知</Select.Option>
+                </Select>
+              </Form.Item>
+            </Col>
+
+            <Col span={12}>
+              <Form.Item name="merchant_id" label="商家ID（可选）">
+                <Input placeholder="例如：240088（广告系列名最后一段）" allowClear />
+              </Form.Item>
+            </Col>
+
             <Col span={24}>
               <Form.Item>
                 <Button
@@ -316,7 +310,7 @@ export default function GoogleAdsData() {
       </Card>
 
       {/* 按广告系列分组的数据 */}
-      {viewMode === 'campaign' && campaignData.length > 0 && (
+      {campaignData.length > 0 && (
         <Card style={{ marginBottom: 16 }}>
           <div style={{ marginBottom: 16, paddingBottom: 16, borderBottom: '1px solid #e8e8e8' }}>
             <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 500 }}>
@@ -363,6 +357,13 @@ export default function GoogleAdsData() {
                 width: 100,
                 fixed: 'left',
                 render: (text) => text || '-'
+              },
+              {
+                title: '商家ID',
+                dataIndex: 'merchant_id',
+                key: 'merchant_id',
+                width: 120,
+                render: (v) => v || '-'
               },
               {
                 title: '广告系列',
@@ -442,7 +443,7 @@ export default function GoogleAdsData() {
       )}
 
       {/* 时间范围级别汇总（一行）- 完全对齐Google Ads */}
-      {viewMode === 'summary' && summaryData && (
+      {false && summaryData && (
         <Card style={{ marginBottom: 16 }}>
           <div style={{ marginBottom: 16, paddingBottom: 16, borderBottom: '1px solid #e8e8e8' }}>
             <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 500 }}>
