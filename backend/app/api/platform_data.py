@@ -105,7 +105,9 @@ async def get_platform_data_detail(
         
         # 筛选条件
         if platform:
-            query = query.filter(AffiliateTransaction.platform == platform)
+            # 统一转换为小写，因为数据库中存储的是小写（如 'rw', 'cg', 'linkhaitao'）
+            platform_lower = platform.lower().strip()
+            query = query.filter(AffiliateTransaction.platform == platform_lower)
         
         if merchant:
             query = query.filter(AffiliateTransaction.merchant.like(f"%{merchant}%"))
@@ -201,7 +203,9 @@ async def get_platform_data_summary(
         
         # 平台筛选
         if platform:
-            base_query = base_query.filter(AffiliateTransaction.platform == platform)
+            # 统一转换为小写，因为数据库中存储的是小写（如 'rw', 'cg', 'linkhaitao'）
+            platform_lower = platform.lower().strip()
+            base_query = base_query.filter(AffiliateTransaction.platform == platform_lower)
         
         # 总体汇总
         total_query = base_query.with_entities(
