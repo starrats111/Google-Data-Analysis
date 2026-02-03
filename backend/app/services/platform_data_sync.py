@@ -579,7 +579,44 @@ class PlatformDataSyncService:
                 logger.warning(f"[LinkHaitao同步] 清理历史重复佣金明细失败（忽略，不影响继续同步）: {e}")
             
             # 将订单数据转换为交易格式
+            # 先按订单ID分组，对于重复订单，将佣金求和（与平台计算方式一致）
+            orders_by_id = {}
             for order in orders:
+                tx_id = order.get("order_id") or order.get("id") or order.get("transaction_id")
+                if not tx_id:
+                    continue
+                
+                if tx_id not in orders_by_id:
+                    orders_by_id[tx_id] = {
+                        "order": order,
+                        "total_commission": 0,
+                        "count": 0
+                    }
+                
+                # 解析佣金
+                commission_amount = order.get("commission")
+                if commission_amount is None:
+                    commission_amount = order.get("cashback") or order.get("sale_comm") or order.get("commission_amount") or 0
+                if isinstance(commission_amount, str):
+                    commission_amount = commission_amount.replace("$", "").replace(",", "").strip()
+                    try:
+                        commission_amount = float(commission_amount) if commission_amount else 0
+                    except (ValueError, TypeError):
+                        commission_amount = 0
+                else:
+                    commission_amount = float(commission_amount or 0)
+                
+                # 累加佣金（对于重复订单，求和）
+                orders_by_id[tx_id]["total_commission"] += commission_amount
+                orders_by_id[tx_id]["count"] += 1
+            
+            # 现在处理去重后的订单
+            for tx_id, order_data in orders_by_id.items():
+                order = order_data["order"]
+                total_commission = order_data["total_commission"]
+                
+                if order_data["count"] > 1:
+                    logger.debug(f"[LinkHaitao同步] 订单 {tx_id} 有 {order_data['count']} 条重复记录，佣金求和: ${total_commission:.2f}")
                 order_date_str = order.get("date") or order.get("order_date") or order.get("transaction_time")
                 if order_date_str:
                     try:
