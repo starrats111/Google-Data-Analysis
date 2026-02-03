@@ -58,12 +58,6 @@ const Layout = () => {
       icon: <AccountBookOutlined />,
       label: '平台账号',
     },
-    {
-      key: '/ad-campaigns',
-      icon: <AppstoreOutlined />,
-      label: '我的广告列表',
-      roles: ['employee'], // 仅员工可见
-    },
   ]
 
   // 根据用户角色过滤菜单项
