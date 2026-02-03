@@ -1,6 +1,12 @@
 """
 直接测试LinkHaitao API，查看实际返回的原始数据格式
 特别是状态字段的值
+
+使用方法:
+    python test_linkhaitao_raw_data.py <TOKEN>
+    或者
+    python test_linkhaitao_raw_data.py
+    (然后输入Token)
 """
 import sys
 import os
@@ -10,11 +16,20 @@ from app.services.linkhaitao_service import LinkHaitaoService
 from datetime import datetime, timedelta
 import json
 
-# 需要替换为实际的token
-TOKEN = input("请输入LinkHaitao Token: ").strip()
+# 从命令行参数获取token，如果没有则提示输入
+if len(sys.argv) > 1:
+    TOKEN = sys.argv[1].strip()
+else:
+    try:
+        TOKEN = input("请输入LinkHaitao Token: ").strip()
+    except (UnicodeDecodeError, EOFError):
+        print("❌ 输入错误，请使用命令行参数传递Token:")
+        print("   python test_linkhaitao_raw_data.py <TOKEN>")
+        sys.exit(1)
 
 if not TOKEN:
     print("❌ 未提供Token")
+    print("使用方法: python test_linkhaitao_raw_data.py <TOKEN>")
     sys.exit(1)
 
 service = LinkHaitaoService(token=TOKEN)
