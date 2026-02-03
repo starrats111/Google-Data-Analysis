@@ -40,6 +40,14 @@ class CampaignMatcher:
         """
         if not campaign_name:
             return None
+
+        def _normalize_platform_code(raw: str) -> str:
+            """支持 LB1 / RW2 这种“平台码+序号”的写法：只取字母部分作为平台码"""
+            if not raw:
+                return ""
+            raw_u = raw.upper()
+            m = re.match(r"^([A-Z]{2,3})\d*$", raw_u)
+            return (m.group(1) if m else raw_u)
         
         # 1. 首先检查用户自定义的匹配规则（优先级最高）
         custom_mappings = self.db.query(CampaignPlatformMapping).filter(
@@ -67,26 +75,24 @@ class CampaignMatcher:
         match = re.match(new_format_pattern, campaign_name)
         if match:
             # 提取平台代码（第2个字段）
-            raw_platform = match.group(2).upper()
-            # 兼容 LB1 / RW2 这种“平台码+序号”的写法：取字母部分作为平台码
-            m = re.match(r"^([A-Z]{2,3})\d*$", raw_platform)
-            platform_code = (m.group(1) if m else raw_platform)
+            raw_platform = match.group(2)
+            platform_code = _normalize_platform_code(raw_platform)
             # 提取商家ID（最后一个字段，第6个字段）
             account_code = match.group(6)
-            
-            # 验证平台代码是否存在（支持大小写不敏感）
+
+            # 先尝试用平台表标准化平台码；若不存在也返回解析结果（保证能展示平台）
             platform = self.db.query(AffiliatePlatform).filter(
                 AffiliatePlatform.platform_code.ilike(platform_code)
             ).first()
-            
-            if platform:
-                logger.debug(f"从广告系列名 '{campaign_name}' 提取平台代码: {platform.platform_code}, 账号代码: {account_code}")
-                return {
-                    "platform_code": platform.platform_code,
-                    "account_code": account_code
-                }
-            else:
-                logger.debug(f"广告系列名 '{campaign_name}' 匹配标准格式，但平台代码 '{platform_code}' 不存在")
+            normalized_code = platform.platform_code if platform else platform_code
+            logger.debug(
+                f"从广告系列名 '{campaign_name}' 提取平台代码: {normalized_code}, 账号代码: {account_code}"
+                + ("" if platform else "（平台表未找到，使用解析结果）")
+            )
+            return {
+                "platform_code": normalized_code,
+                "account_code": account_code
+            }
         
         # 格式1的简化版本：如果标准格式不匹配，尝试只匹配前两个字段
         # "序号-平台-..." -> 提取平台代码
@@ -94,26 +100,24 @@ class CampaignMatcher:
         simple_format_pattern = r"^\d+[_-]([A-Za-z]{2,3}\d*)[_-]"  # 序号-平台- 或 序号_平台_
         match = re.match(simple_format_pattern, campaign_name, re.IGNORECASE)
         if match:
-            raw_platform = match.group(1).upper()
-            m = re.match(r"^([A-Z]{2,3})\d*$", raw_platform)
-            platform_code = (m.group(1) if m else raw_platform)
-            
-            # 验证平台代码是否存在（支持大小写不敏感）
+            platform_code = _normalize_platform_code(match.group(1))
+
+            # 尝试提取账号代码（MID部分，最后一个字段）
+            parts = re.split(r'[_-]', campaign_name)
+            account_code = parts[-1] if len(parts) > 1 else None
+
             platform = self.db.query(AffiliatePlatform).filter(
                 AffiliatePlatform.platform_code.ilike(platform_code)
             ).first()
-            
-            if platform:
-                # 尝试提取账号代码（MID部分，最后一个字段）
-                parts = re.split(r'[_-]', campaign_name)
-                account_code = parts[-1] if len(parts) > 1 else None
-                logger.debug(f"从广告系列名 '{campaign_name}' 提取平台代码: {platform.platform_code}, 账号代码: {account_code} (简化格式)")
-                return {
-                    "platform_code": platform.platform_code,
-                    "account_code": account_code
-                }
-            else:
-                logger.debug(f"广告系列名 '{campaign_name}' 匹配简化格式，但平台代码 '{platform_code}' 不存在")
+            normalized_code = platform.platform_code if platform else platform_code
+            logger.debug(
+                f"从广告系列名 '{campaign_name}' 提取平台代码: {normalized_code}, 账号代码: {account_code} (简化格式)"
+                + ("" if platform else "（平台表未找到，使用解析结果）")
+            )
+            return {
+                "platform_code": normalized_code,
+                "account_code": account_code
+            }
         
         # 格式2: "平台名_账号名_其他" 或 "平台名-账号名-其他" (旧格式)
         patterns = [

@@ -92,6 +92,20 @@ def get_date_range_from_type(date_range_type: str) -> tuple[date, date, str]:
         raise HTTPException(status_code=400, detail=f"不支持的日期范围类型: {date_range_type}")
 
 
+def _infer_platform_code_from_campaign_name(campaign_name: str) -> Optional[str]:
+    """
+    兜底：当GoogleAdsApiData.extracted_platform_code为空时，从广告系列名推断平台码。
+    支持：001-LB1-xxx / 001_LB1_xxx / 001-LB-xxx
+    """
+    if not campaign_name:
+        return None
+    import re
+    m = re.match(r"^\d+[_-]([A-Za-z]{2,3})\d*[_-]", campaign_name)
+    if not m:
+        return None
+    return m.group(1).upper()
+
+
 @router.get("/by-campaign")
 async def get_campaign_data(
     date_range_type: str = Query(..., description="日期范围类型: past7days, thisWeek, thisMonth, today, yesterday, custom"),
@@ -231,7 +245,7 @@ async def get_campaign_data(
         status = latest_statuses.get(row.campaign_id, "未知")
         
         # 获取平台信息
-        platform_code = row.extracted_platform_code
+        platform_code = row.extracted_platform_code or _infer_platform_code_from_campaign_name(row.campaign_name)
         platform_name = platform_code_map.get(platform_code, platform_code) if platform_code else None
         
         campaign_data.append({
