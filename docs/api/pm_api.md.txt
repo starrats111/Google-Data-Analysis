@@ -1,0 +1,233 @@
+Summary
+You can use this API to pull detailed transactions, commission status and many more.
+
+Updates
+Name
+Description
+v1.0
+2025/05/22 — Add Transaction API
+v1.1
+2025/10/27 — Rename partnerboost_id field to partnermatic_id
+Request Information
+Name
+Description
+Website
+https://api.partnermatic.com/api/transaction
+Return Format
+JSON
+HTTP Request
+POST application/json
+Required Parameters
+Name
+Description
+source
+partnermatic
+token
+beginDate
+Transaction period. Format: YYYY-MM-DD. Either transaction period or validation period is mandatory.
+endDate
+Format: YYYY-MM-DD
+beginApproveDate
+Validation period. Format: YYYY-MM-DD. Either transaction period or validation period is mandatory.
+endApproveDate
+Format: YYYY-MM-DD
+Optional Parameters to Filter
+Name
+Description
+dataScope
+Data Retrieval Range. The default value is "channel", which returns data only for the single channel associated with the current token. If set to "user", it retrieves data for all channels belonging to the user.
+orderId
+Order ID
+status
+Commission Status,The value for this parameter must be of the array data type. Type: List Eg: ["All"]
+uid
+uid, your custom tracking variable.
+brandId
+Brand ID, a series of numbers, like 66303
+mcid
+Unique identifier for the brand, a series of characters, like ulike0
+curPage
+Current page index
+perPage
+Number of transactions shown per page - max 2000 transactions per page
+Return parameters
+Name
+Description
+code
+Response status code (0 = success)
+message
+Response status description (e.g., "success")
+data
+Main data container
+├─ total
+Total number of records
+├─ curPage
+Current page number (starting from 1)
+├─ totalPage
+Total number of pages
+├─ hasNext
+Whether next page exist s (true/false)
+└─ list
+Array of transactions details
+├─ ​​partnermatic_id
+Partnermatic system unique ID
+├─ ​​brand_id
+Brand ID, a series of numbers, like 66303
+├─ ​​mcid
+Unique identifier for the brand, a series of characters, like ulike0
+├─ ​​merchant_name
+Brand Name
+├─ ​​order_id
+Order ID
+├─ ​​order_time
+Transaction Time
+├─ ​​sale_amount
+Sale Amount
+├─ ​​sale_comm
+Sale Commission
+├─ ​​status
+Commission Status
+├─ ​​uid
+uid, your custom tracking variable
+├─ ​​uid2
+uid2, your custom tracking variable
+├─ ​​uid3
+uid3, your custom tracking variable
+├─ ​​uid4
+uid4, your custom tracking variable
+├─ ​​uid5
+uid5, your custom tracking variable
+├─ ​​click_ref
+Unique Click Id
+├─ ​​prod_id
+Product ID
+├─ ​​order_unit
+Order Unit Amount
+├─ ​​comm_rate
+Commission Rate
+├─ ​​validation_date
+Date the transaction validated
+├─ ​​note
+Reason for status change
+├─ ​​customer_country
+Customer country. If empty, it means the merchant does not provide
+├─ ​​voucher_code
+Code used at checkout
+├─ ​​paid_status
+Whether this transaction has been paid to publishers. 1 = paid. 0 = not paid.
+├─ ​​last_update_time
+The latest time we update the transaction status from the advertiser.
+├─ ​​voucher_code
+Code used at checkout
+├─ settlement_date
+Date when commission is approved and ready for you to withdraw
+├─ paid_date
+Date when the payment is marked paid. Format: YYYY-MM-DD
+Result Code
+Return Code
+Description
+0
+Success
+1000
+Publisher does not exist
+1001
+Invalid token
+1002
+Call frequency too high
+1006
+Query time span cannot exceed 62 days
+10001
+Missing required parameters or incorrect format
+Request Format
+curl --location --request POST 'https://api.partnermatic.com/api/transaction' \
+--header 'Content-Type: application/json' \
+--data-raw '
+  {
+    "source": "partnermatic",
+    "token": "token",
+    "dataScope": "user",
+    "beginDate": "2025-06-01",
+    "endDate": "2025-06-05",
+    "curPage": 1,
+    "perPage": 20
+  }
+'
+Return Format
+{
+    "code": "0",
+    "message": "success",
+    "data": {
+        "total": 2,
+        "curPage": 1,
+        "totalPage": 1,
+        "hasNext": false,
+        "list": [
+            {
+                "partnermaticId": "09dfd2d6300c5d106e0a01dcfabbe3d4",
+                "mcid": "grandecosmetics",
+                "merchantName": "Grande Cosmetics",
+                "orderId": "6284837257353",
+                "orderTime": 1749289879,
+                "saleAmount": 58.4,
+                "saleComm": 3.26,
+                "status": "Pending",
+                "normId": "58254",
+                "oriAmount": 58.4,
+                "oriAffBrokerage": 3.26,
+                "prodId": "126927520",
+                "orderUnit": 1,
+                "uid": "pubid",
+                "uid2": null,
+                "uid3": null,
+                "uid4": null,
+                "uid5": null,
+                "clickRef": "pb_rwe64s",
+                "commRate": "Revshare 70.00%",
+                "validationDate": null,
+                "note": null,
+                "customerCountry": "US",
+                "voucherCode": null,
+                "isDirect": 0,
+                "channelId": "PB00225432",
+                "brandId": "65065",
+                "lastUpdateTime": "06-08-2025",
+                "paidStatus": 0,
+                "settlementDate": null,
+                "paidDate": null
+            },
+            {
+                "partnermaticId": "b45718dfcad01815d1b9b43b78686723",
+                "mcid": "grandecosmetics",
+                "merchantName": "Grande Cosmetics",
+                "orderId": "6281126576265",
+                "orderTime": 1749051326,
+                "saleAmount": 30.6,
+                "saleComm": 1.71,
+                "status": "Pending",
+                "normId": "58254",
+                "oriAmount": 30.6,
+                "oriAffBrokerage": 1.71,
+                "prodId": "126059658",
+                "orderUnit": 1,
+                "uid": "pubid",
+                "uid2": null,
+                "uid3": null,
+                "uid4": null,
+                "uid5": null,
+                "clickRef": "pb_rn6vfp",
+                "commRate": "Revshare 70.00%",
+                "validationDate": null,
+                "note": null,
+                "customerCountry": "US",
+                "voucherCode": null,
+                "isDirect": 0,
+                "channelId": "PB00225432",
+                "brandId": "65065",
+                "lastUpdateTime": "06-05-2025",
+                "paidStatus": 0,
+                "settlementDate": null,
+                "paidDate": null
+            }
+        ]
+    }
+}

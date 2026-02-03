@@ -1,0 +1,279 @@
+Summary
+You can use this API to pull detailed transactions, commission status and many more.
+Request Information
+Website
+https://app.partnerboost.com/api.php?mod=medium&op=transaction
+
+Return Format
+JSON or XML
+
+HTTP Request
+POST application/x-www-form-urlencoded
+
+POST application/json
+
+GET
+
+Required Parameters
+Name
+Description
+token
+
+Select a Channel
+begin_date
+Transaction period. Format: YYYY-MM-DD. Either transaction period or validation period is mandatory.
+end_date
+Format: YYYY-MM-DD
+validation_date_begin
+Validation period. Format: YYYY-MM-DD. Either transaction period or validation period is mandatory.
+validation_date_end
+Format: YYYY-MM-DD
+Optional Parameters to Filter
+Name
+Description
+type
+Return Format
+
+Available Filter:
+- json (default)
+- xml
+order_id
+Order ID
+status
+Commission Status
+
+Available Filter:
+- Pending
+- Approved
+- Rejected
+- Normal
+- All
+uid
+uid, your custom tracking variable.
+brand_id
+Brand ID, a series of numbers, like 66303
+mcid
+Unique identifier for the brand, a series of characters, like ulike0
+page
+Current page index
+limit
+Number of transactions shown per page - max 2000 transactions per page
+Return parameters
+Name
+Description
+channel_id
+Channel ID
+total_page
+Total number of pages
+total_trans
+Total number of sales transactions
+total_items
+Total transactions broken down by items
+partnerboost_id
+PartnerBoost system unique ID
+brand_id
+Brand ID, a series of numbers, like 66303
+mcid
+Unique identifier for the brand, a series of characters, like ulike0
+merchant_name
+Brand Name
+order_id
+Order ID
+order_time
+Transaction Time
+sale_amount
+Sale Amount
+sale_comm
+Sale Commission
+status
+Commission Status
+uid
+uid, your custom tracking variable
+uid2
+uid2, your custom tracking variable
+uid3
+uid3, your custom tracking variable
+uid4
+uid4, your custom tracking variable
+uid5
+uid5, your custom tracking variable
+click_ref
+Unique Click Id
+prod_id
+Product ID
+order_unit
+Order Unit Amount
+comm_rate
+Commission Rate
+validation_date
+Date the transaction validated
+note
+Reason for status change
+customer_country
+Customer country. If empty, it means the merchant does not provide
+voucher_code
+Code used at checkout
+paid_status
+Whether this transaction has been paid to publishers. 1 = paid. 0 = not paid.
+last_update_time
+The latest time we update the transaction status from the advertiser.
+voucher_code
+Code used at checkout
+Result Code
+Return Code
+Description
+0
+Success
+1000
+Publisher does not exist
+1001
+Invalid token
+1002
+Call frequency too high
+1003
+Missing required parameters or incorrect format
+1005
+uid can not exceed 200 characters
+1006
+Query time span cannot exceed 62 days
+Return Format
+          
+{
+            status: {
+              code: 0,
+              msg: "Success",
+            },
+            data: {
+              total_page: 8,
+              total_trans: 15,
+              total_items: 15,
+              limit: 2,
+              list: [
+                {
+                  channel_id: "PB00039713",
+                  partnerboost_id: "1f2ad6516f8631db3dc78532058e6ece7",
+                  brand_id: "66303",
+                  mcid: "24sevres",
+                  merchant_name: "24S Worldwide",
+                  order_id: "ZQ74TU21",
+                  order_time: "1608274140",
+                  sale_amount: "369.73",
+                  sale_comm: "41.40",
+                  status: "Pending",
+                  uid: "09753e5e73f9d182709c7d26c23c56921",
+                  uid2: "",
+                  uid3: "",
+                  uid4: "",
+                  uid5: "",
+                  click_ref: "pb_dk3d",
+                  prod_id: "ABDVJM7ZGOLLLLLL00",
+                  order_unit: "1",
+                  comm_rate: "11.20%",
+                  validation_date: "02-10-2023",
+                  note: "order returned",
+                  customer_country: "US",
+                  voucher_code: "Pollenation blog SF 08/2021",
+                  paid_status: 1,
+                  last_update_time: "02-10-2023",
+                },
+                {
+                  channel_id: "PB00039714",
+                  partnerboost_id: "144be4691b04875d4605977a968804a32",
+                  brand_id: "66303",
+                  mcid: "odakyu",
+                  merchant_name: "Odakye",
+                  order_id: "EC201218401838061",
+                  order_time: "1608223560",
+                  sale_amount: "27.00",
+                  sale_comm: "0.43",
+                  status: "Pending",
+                  uid: "cf4ae62a3b1b2a46a8785d4417a5c8881",
+                  uid2: "",
+                  uid3: "",
+                  uid4: "",
+                  uid5: "",
+                  click_ref: "pb_dk3d",
+                  prod_id: "1012021265",
+                  order_unit: "1",
+                  comm_rate: "1.60%",
+                  validation_date: "02-10-2023",
+                  note: "order returned",
+                  customer_country: "US",
+                  voucher_code: "Pollenation blog SF 08/2021",
+                  paid_status: 0,
+                  last_update_time: "02-10-2023",
+                },
+              ],
+            },
+          }
+
+        
+          
+<?xml version="1.0" encoding="utf-8"?>
+          <root>
+            <status>
+                <code>0</code>
+                <msg>Success</msg>
+            </status>
+            <data>
+              <total_page>8</total_page>
+              <total_trans>15</total_trans>
+              <total_items>15</total_items>
+              <limit>2</limit>
+              <list>
+                <item>
+                  <channel_id>PB00039713</channel_id>
+                  <partnerboost_id>1f2ad6516f8631db3dc78532058e6ece7</partnerboost_id>
+                  <mid>66303</mid>
+                  <mcid>24sevres</mcid>
+                  <merchant_name>24S Worldwide</merchant_name>
+                  <order_id>ZQ74TU21</order_id>
+                  <order_time>1608274140</order_time>
+                  <sale_amount>369.73</sale_amount>
+                  <sale_comm>41.40</sale_comm>
+                  <status>Pending</status>
+                  <uid>09753e5e73f9d182709c7d26c23c56921</uid>
+                  <uid2></uid2>
+                  <uid3></uid3>
+                  <uid4></uid4>
+                  <uid5></uid5>
+                  <click_ref>pb_dk32</click_ref>
+                  <prod_id>ABDVJM7ZGOLLLLLL00</prod_id>
+                  <order_unit>1</order_unit>
+                  <comm_rate>11.20%</comm_rate>
+                  <validation_date>02-10-2023</validation_date>
+                  <note>order returned</note>
+                  <customer_country>US</customer_country>
+                  <voucher_code>Pollenation blog SF 08/2021</voucher_code>
+                  <paid_status>1</paid_status>
+                  <last_update_time>02-10-2023</last_update_time>
+                  </item>
+                <item>
+                  <channel_id>PB00039714</channel_id>
+                  <partnerboost_id>144be4691b04875d4605977a968804a32</partnerboost_id>
+                  <mcid>odakyu</mcid>
+                  <merchant_name>Odakyu</merchant_name>
+                  <order_id>EC201218401838061</order_id>
+                  <order_time>1608223560</order_time>
+                  <sale_amount>27.00</sale_amount>
+                  <sale_comm>0.43</sale_comm>
+                  <status>Pending</status>
+                  <uid>cf4ae62a3b1b2a46a8785d4417a5c8881</uid>
+                  <uid2></uid2>
+                  <uid3></uid3>
+                  <uid4></uid4>
+                  <uid5></uid5>
+                  <click_ref>pb_dk32</click_ref>
+                  <prod_id>1012021265</prod_id>
+                  <order_unit>1</order_unit>
+                  <comm_rate>1.60%</comm_rate>
+                  <validation_date>02-10-2023</validation_date>
+                  <note>order returned</note>
+                  <customer_country>US</customer_country>
+                  <voucher_code>Pollenation blog SF 08/2021</voucher_code>
+                  <paid_status>0</paid_status>
+                  <last_update_time>02-10-2023</last_update_time>
+                  </item>
+              </list>
+            </data>
+          </root>

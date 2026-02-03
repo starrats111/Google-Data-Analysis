@@ -1,0 +1,172 @@
+Transaction API
+Summary
+You can use this API to pull detailed transactions, commission status and many more.
+
+Request Information
+URL
+https://www.linkbux.com/api.php?mod=medium&op=transaction_v2
+Return Format
+JSON
+HTTP Request
+GET
+Required Parameters
+token
+Select Channel
+begin_date
+Transaction period. Format: YYYY-MM-DD (Data queries are only supported for dates starting from 2023/1/1.). Either transaction period or validation period is mandatory.
+end_date
+Transaction period. Format: YYYY-MM-DD
+validation_date_begin
+Validation period. Format: YYYY-MM-DD (Data queries are only supported for dates starting from 2023/1/1.). Either transaction period or validation period is mandatory.
+validation_date_end
+Validation period. Format: YYYY-MM-DD
+Optional Parameters to Filter
+type
+Return Format
+Available Filter:
+json
+
+order_id
+Order ID
+status
+Commission Status
+Available Filter:
+ApprovedPendingRejectedAll
+
+uid
+uid, your custom tracking variable. Max 200 characters.
+uid2
+uid2, your custom tracking variable. Max 200 characters.
+mcid
+Merchant ID
+offer_type
+Merchant pricing model
+Available Filter:
+CPSCPCCPA
+
+page
+Current page index
+limit
+Number of transactions shown per page - max 2,000 transactions per page
+payment_id
+The payment ID found under payment history
+settlement_id
+A unique ID that indicates approved commission by merchant
+Return Parameters
+total_page
+Total number of pages
+total_trans
+Total number of sales transactions
+total_items
+Total transactions broken down by items
+linkbux_id
+Linkbux system unique ID
+mid
+mcid
+Merchant ID
+merchant_name
+Merchant Name
+offer_type
+Merchant pricing model
+order_id
+Order ID
+order_time
+Transaction Time
+sale_amount
+Sale Amount
+sale_comm
+Sale Commission
+status
+Commission Status
+uid
+uid, your custom tracking variable
+uid2
+uid2, your custom tracking variable
+click_ref
+A unique order reference identification
+referer_url
+The URL of the referring page
+prod_id
+Product ID
+order_unit
+Order Unit Amount
+comm_rate
+Commission Rate
+validation_date
+Date the transaction validated
+note
+Reason for status change
+customer_country
+Customer country. If empty, it means the merchant does not provide
+voucher_code
+Code used at checkout
+payment_id
+The payment ID found under payment history
+settlement_id
+A unique ID that indicates approved commission by merchant
+ip
+IP Address
+click_time
+Click Time
+Result Code
+0
+Success
+1000
+Affiliate does not exist
+1001
+Invalid token
+1002
+Call frequency too high
+1003
+Missing required parameters or incorrect format
+1005
+uid can not exceed 200 characters
+1006
+Query time span cannot exceed 62 days
+1014
+The chosen time range includes dates earlier than 2023/1/1
+GET
+https://www.linkbux.com/api.php?mod=medium&op=transaction_v2&token={token}&begin_date={begin_date}&end_date={end_date}
+Response Samples:
+Content Type
+application/json; charset=utf-8
+Copy
+Expand All
+Collapse All
+{
+
+"status": {
+
+"code":
+0,
+
+"msg":
+"Success"
+
+},
+
+"data": {
+
+"total_page":
+8,
+
+"total_trans":
+15,
+
+"total_items":
+15,
+
+"limit":
+2,
+
+"list": [
+
+{...}, 21 items
+
+{...} 21 items
+
+]
+
+}
+
+}
