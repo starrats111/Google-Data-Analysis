@@ -634,33 +634,20 @@ class PlatformDataSyncService:
                                     logger.warning(f"[LinkHaitao同步] 无法解析订单日期: {date_str_clean}")
                                     continue
                         
-                        # LinkHaitao API返回的佣金字段：LinkHaitaoService返回的orders中，佣金字段是"commission"（来自cashback）
-                        # 优先使用commission字段（LinkHaitaoService已经将cashback转换为commission）
-                        commission_amount = order.get("commission")
-                        if commission_amount is None:
-                            # 如果commission不存在，尝试其他可能的字段名
-                            commission_amount = order.get("cashback") or order.get("sale_comm") or order.get("commission_amount") or 0
-                        # 处理字符串格式的佣金（可能包含$符号或逗号）
-                        if isinstance(commission_amount, str):
-                            commission_amount = commission_amount.replace("$", "").replace(",", "").strip()
-                            try:
-                                commission_amount = float(commission_amount) if commission_amount else 0
-                            except (ValueError, TypeError):
-                                commission_amount = 0
-                        else:
-                            commission_amount = float(commission_amount or 0)
+                        # 使用分组后的总佣金（对于重复订单，已经求和）
+                        commission_amount = total_commission
                         
                         # 如果佣金为0但订单金额不为0，记录警告（可能是数据问题）
                         order_amount = float(order.get("amount", 0) or order.get("order_amount", 0) or order.get("sale_amount", 0) or 0)
                         if commission_amount == 0 and order_amount > 0:
-                            logger.debug(f"[LinkHaitao同步] 订单 {order.get('order_id')} 佣金为0但订单金额为${order_amount:.2f}，原始数据: {order}")
+                            logger.debug(f"[LinkHaitao同步] 订单 {tx_id} 佣金为0但订单金额为${order_amount:.2f}，原始数据: {order}")
                         
                         all_transactions.append({
-                            "transaction_id": order.get("order_id") or order.get("id") or order.get("transaction_id") or f"lh_order_{order_date_str}_{order.get('amount', 0)}",
+                            "transaction_id": tx_id,
                             "transaction_time": transaction_time,
                             "status": order.get("status", "pending"),
                             "commission_amount": commission_amount,
-                            "order_amount": float(order.get("amount", 0) or order.get("order_amount", 0) or order.get("sale_amount", 0) or 0),
+                            "order_amount": order_amount,
                             "merchant": order.get("merchant") or order.get("merchant_name") or order.get("mcid") or None,
                         })
                     except Exception as e:
