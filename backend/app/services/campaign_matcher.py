@@ -61,12 +61,16 @@ class CampaignMatcher:
         # 2. 尝试从广告系列名中自动提取（常见格式）
         # 格式1: "序号-平台-商家-投放国家-投放时间-商家ID" (标准格式)
         # 例如: "001-RW-bofrost-US-0126-126966" -> 提取 "RW" 和 "126966"
-        # 格式: 序号(数字)-平台(2-3字母)-商家-国家-时间-商家ID
-        new_format_pattern = r"^(\d+)[_-]([A-Za-z]{2,3})[_-]([A-Za-z0-9]+)[_-]([A-Za-z]{2})[_-](\d+)[_-](\d+)$"
+        # 格式: 序号(数字)-平台(2-3字母，可选带平台序号如LB1)-商家-国家-时间-商家ID
+        # 例如: "001-LB1-myhumhealth-US-1125-240088" -> 提取平台 "LB"（忽略平台序号1）和账号 "240088"
+        new_format_pattern = r"^(\d+)[_-]([A-Za-z]{2,3}\d*)[_-]([A-Za-z0-9]+)[_-]([A-Za-z]{2})[_-](\d+)[_-](\d+)$"
         match = re.match(new_format_pattern, campaign_name)
         if match:
             # 提取平台代码（第2个字段）
-            platform_code = match.group(2).upper()  # 转换为大写（RW, CG, LH等）
+            raw_platform = match.group(2).upper()
+            # 兼容 LB1 / RW2 这种“平台码+序号”的写法：取字母部分作为平台码
+            m = re.match(r"^([A-Z]{2,3})\d*$", raw_platform)
+            platform_code = (m.group(1) if m else raw_platform)
             # 提取商家ID（最后一个字段，第6个字段）
             account_code = match.group(6)
             
@@ -86,10 +90,13 @@ class CampaignMatcher:
         
         # 格式1的简化版本：如果标准格式不匹配，尝试只匹配前两个字段
         # "序号-平台-..." -> 提取平台代码
-        simple_format_pattern = r"^\d+[_-]([A-Za-z]{2,3})[_-]"  # 序号-平台- 或 序号_平台_
+        # 兼容平台段带序号：LB1 / RW2 / CG1
+        simple_format_pattern = r"^\d+[_-]([A-Za-z]{2,3}\d*)[_-]"  # 序号-平台- 或 序号_平台_
         match = re.match(simple_format_pattern, campaign_name, re.IGNORECASE)
         if match:
-            platform_code = match.group(1).upper()  # 转换为大写（RW, CG, LH等）
+            raw_platform = match.group(1).upper()
+            m = re.match(r"^([A-Z]{2,3})\d*$", raw_platform)
+            platform_code = (m.group(1) if m else raw_platform)
             
             # 验证平台代码是否存在（支持大小写不敏感）
             platform = self.db.query(AffiliatePlatform).filter(

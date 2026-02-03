@@ -142,7 +142,23 @@ export default function GoogleAdsData() {
           params,
           signal: abortControllerRef.current.signal
         })
-        setCampaignData(campaignResponse.data.campaigns || [])
+        const campaigns = campaignResponse.data.campaigns || []
+        // 广告优先展示已启用(ENABLED)，其次暂停(PAUSED)，最后未知/其它
+        const statusRank = (s) => {
+          const v = (s || '').toUpperCase()
+          if (v === 'ENABLED') return 0
+          if (v === 'PAUSED') return 1
+          if (v === 'REMOVED') return 3
+          return 2
+        }
+        campaigns.sort((a, b) => {
+          const ra = statusRank(a.status)
+          const rb = statusRank(b.status)
+          if (ra !== rb) return ra - rb
+          // 同状态下按花费降序
+          return (Number(b.total_cost || 0) - Number(a.total_cost || 0))
+        })
+        setCampaignData(campaigns)
         setSummaryData(null)
         setDetailData([])
         
