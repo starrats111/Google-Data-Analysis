@@ -85,6 +85,7 @@ app.add_middleware(
 # 辅助函数：获取CORS头（必须在CORS配置之后定义）
 def get_cors_headers(origin: str = None) -> dict:
     """获取CORS响应头"""
+    import re
     headers = {
         "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS, PATCH, HEAD",
         "Access-Control-Allow-Headers": "*",
@@ -96,10 +97,13 @@ def get_cors_headers(origin: str = None) -> dict:
         if origin in ALLOWED_ORIGINS:
             headers["Access-Control-Allow-Origin"] = origin
             headers["Access-Control-Allow-Credentials"] = "true"
-        else:
+        elif re.match(ALLOWED_ORIGIN_REGEX, origin):
             # 使用正则表达式匹配
-            import re
-            if re.match(ALLOWED_ORIGIN_REGEX, origin):
+            headers["Access-Control-Allow-Origin"] = origin
+            headers["Access-Control-Allow-Credentials"] = "true"
+        else:
+            # 对于google-data-analysis相关域名，也允许（更宽松的策略）
+            if "google-data-analysis" in origin:
                 headers["Access-Control-Allow-Origin"] = origin
                 headers["Access-Control-Allow-Credentials"] = "true"
             else:
@@ -198,34 +202,6 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
         headers=headers,
     )
 
-# 辅助函数：获取CORS头
-def get_cors_headers(origin: str = None) -> dict:
-    """获取CORS响应头"""
-    headers = {
-        "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS, PATCH, HEAD",
-        "Access-Control-Allow-Headers": "*",
-        "Access-Control-Max-Age": "3600",
-    }
-    
-    if origin:
-        # 检查origin是否在允许列表中
-        if origin in ALLOWED_ORIGINS:
-            headers["Access-Control-Allow-Origin"] = origin
-            headers["Access-Control-Allow-Credentials"] = "true"
-        else:
-            # 使用正则表达式匹配
-            import re
-            if re.match(ALLOWED_ORIGIN_REGEX, origin):
-                headers["Access-Control-Allow-Origin"] = origin
-                headers["Access-Control-Allow-Credentials"] = "true"
-            else:
-                # 开发环境：允许所有来源（仅用于调试）
-                headers["Access-Control-Allow-Origin"] = "*"
-    else:
-        # 没有origin，允许所有（用于调试）
-        headers["Access-Control-Allow-Origin"] = "*"
-    
-    return headers
 
 # 全局OPTIONS处理器 - 确保所有OPTIONS请求都返回CORS头
 # 注意：FastAPI的CORS中间件应该自动处理OPTIONS，但为了确保，我们显式添加
