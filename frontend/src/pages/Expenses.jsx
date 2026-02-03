@@ -48,6 +48,9 @@ const Expenses = () => {
 
   const fetchAll = async () => {
     if (!startDate || !endDate) return
+    // 防止重复请求：如果正在加载，直接返回
+    if (loading) return
+    
     setLoading(true)
     try {
       if (isManager) {
@@ -68,14 +71,33 @@ const Expenses = () => {
         setDaily(dailyRes.data.rows || [])
       }
     } catch (e) {
-      message.error(e.response?.data?.detail || '获取费用数据失败')
+      // 如果是网络错误，不要显示错误消息，避免刷屏
+      if (e.code === 'ERR_NETWORK' || e.message === 'Network Error') {
+        console.error('网络错误:', e)
+        // 不显示错误消息，避免用户看到大量错误提示
+      } else {
+        message.error(e.response?.data?.detail || '获取费用数据失败')
+      }
     } finally {
       setLoading(false)
     }
   }
 
   useEffect(() => {
-    fetchAll()
+    // 使用 ref 来防止重复调用
+    let cancelled = false
+    
+    const doFetch = async () => {
+      if (!cancelled && startDate && endDate) {
+        await fetchAll()
+      }
+    }
+    
+    doFetch()
+    
+    return () => {
+      cancelled = true
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [startDate, endDate, todayDate])
 

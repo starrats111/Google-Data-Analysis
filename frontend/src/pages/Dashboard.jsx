@@ -13,12 +13,28 @@ const Dashboard = () => {
   const [insights, setInsights] = useState(null)
 
   useEffect(() => {
-    if (user?.role === 'manager') {
-      fetchManagerData()
-    } else {
-      fetchEmployeeData()
+    // 防止重复请求
+    if (loading) return
+    
+    let cancelled = false
+    
+    const doFetch = async () => {
+      if (!cancelled) {
+        if (user?.role === 'manager') {
+          await fetchManagerData()
+        } else {
+          await fetchEmployeeData()
+        }
+      }
     }
-  }, [user, insightRange])
+    
+    doFetch()
+    
+    return () => {
+      cancelled = true
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.role, insightRange])
 
   const fetchManagerData = async () => {
     setLoading(true)
