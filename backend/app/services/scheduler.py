@@ -247,11 +247,11 @@ def sync_approved_commission_job():
         
         logger.info(f"找到 {len(active_accounts)} 个活跃账号")
         
-        # 同步最近30天的数据（确保覆盖可能状态变化的订单）
+        # 同步最近90天的数据（确保覆盖可能状态变化的订单）
         end_date = date.today() - timedelta(days=1)  # 昨天
-        begin_date = end_date - timedelta(days=29)  # 30天前
+        begin_date = end_date - timedelta(days=89)  # 90天前
         
-        logger.info(f"时间范围: {begin_date.isoformat()} 至 {end_date.isoformat()} (共30天)")
+        logger.info(f"时间范围: {begin_date.isoformat()} 至 {end_date.isoformat()} (共90天)")
         logger.info("同步所有状态的订单，更新已付佣金（approved状态）")
         
         total_success_count = 0
@@ -303,7 +303,7 @@ def sync_approved_commission_job():
         
         logger.info("=" * 60)
         logger.info(f"已付佣金同步任务完成:")
-        logger.info(f"  - 同步日期数: 30 天")
+        logger.info(f"  - 同步日期数: 90 天")
         logger.info(f"  - 总成功次数: {total_success_count} 次")
         logger.info(f"  - 总失败次数: {total_fail_count} 次")
         logger.info(f"  - 共保存: {total_saved} 条记录")
