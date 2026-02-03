@@ -69,13 +69,19 @@ class UnifiedPlatformService:
         
         # LinkHaitao平台状态映射
         elif platform.lower() in ['lh', 'linkhaitao', 'link-haitao']:
-            # LinkHaitao可能的状态值：untreated, pending, approved, rejected, cancelled, expired等
-            if raw_status_lower in ['approved', 'confirmed', 'paid', 'settled', 'locked']:
+            # LinkHaitao的状态值：
+            # - Effective -> approved（有效/已确认，计入已付佣金）
+            # - Preliminary Effective -> pending（初步有效，待确认）
+            # - pending -> pending（待处理）
+            # - Expired -> rejected（过期，计入拒付佣金）
+            # - Preliminary Expired -> rejected（初步过期，计入拒付佣金）
+            # - untreated -> pending（未处理）
+            if raw_status_lower in ['approved', 'confirmed', 'paid', 'settled', 'locked', 'effective']:
                 return 'approved'
-            elif raw_status_lower in ['pending', 'processing', 'waiting', 'untreated']:
+            elif raw_status_lower in ['pending', 'processing', 'waiting', 'untreated', 'preliminary effective']:
                 return 'pending'
-            elif raw_status_lower in ['rejected', 'declined', 'reversed', 'cancelled', 'invalid', 'adjusted', 'voided', 'expired']:
-                # expired（过期/失效）应该映射为rejected
+            elif raw_status_lower in ['rejected', 'declined', 'reversed', 'cancelled', 'invalid', 'adjusted', 'voided', 'expired', 'preliminary expired']:
+                # expired和preliminary expired（过期/失效）应该映射为rejected，计入拒付佣金
                 return 'rejected'
         
         # 默认映射

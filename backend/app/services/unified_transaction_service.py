@@ -40,6 +40,7 @@ class UnifiedTransactionService:
         "locked": "approved",
         "paid": "approved",
         "settled": "approved",
+        "effective": "approved",  # LinkHaitao的有效状态（计入已付佣金）
         
         # Pending
         "pending": "pending",
@@ -47,6 +48,7 @@ class UnifiedTransactionService:
         "processing": "pending",
         "waiting": "pending",
         "untreated": "pending",  # LinkHaitao的默认状态
+        "preliminary effective": "pending",  # LinkHaitao的初步有效状态（待确认）
         
         # Rejected
         "rejected": "rejected",
@@ -56,7 +58,8 @@ class UnifiedTransactionService:
         "adjusted": "rejected",
         "cancelled": "rejected",
         "voided": "rejected",
-        "expired": "rejected",  # LinkHaitao的expired状态（过期/失效）应该映射为rejected
+        "expired": "rejected",  # LinkHaitao的expired状态（过期/失效，计入拒付佣金）
+        "preliminary expired": "rejected",  # LinkHaitao的初步过期状态（计入拒付佣金）
     }
     
     def __init__(self, db: Session):
