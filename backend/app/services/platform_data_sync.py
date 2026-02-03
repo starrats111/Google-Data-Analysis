@@ -201,10 +201,35 @@ class PlatformDataSyncService:
                     "saved_count": 0
                 }
             
+            # 先按订单ID分组，对于重复订单，将佣金求和（与平台计算方式一致）
+            transactions_by_id = {}
+            for tx in transactions_raw:
+                tx_id = tx.get("transaction_id") or tx.get("order_id") or tx.get("collabgrowId") or f"cg_{tx.get('orderId', '')}"
+                if not tx_id:
+                    continue
+                
+                if tx_id not in transactions_by_id:
+                    transactions_by_id[tx_id] = {
+                        "tx": tx,
+                        "total_commission": 0,
+                        "count": 0
+                    }
+                
+                # 解析佣金
+                commission_amount = float(tx.get("commission_amount", 0) or tx.get("saleComm", 0) or 0)
+                transactions_by_id[tx_id]["total_commission"] += commission_amount
+                transactions_by_id[tx_id]["count"] += 1
+            
             # 先保存明细交易到AffiliateTransaction表（用于查询）
             transaction_service = UnifiedTransactionService(self.db)
             transaction_saved_count = 0
-            for tx in transactions_raw:
+            for tx_id, tx_data in transactions_by_id.items():
+                tx = tx_data["tx"]
+                total_commission = tx_data["total_commission"]
+                
+                if tx_data["count"] > 1:
+                    logger.debug(f"[CG同步] 订单 {tx_id} 有 {tx_data['count']} 条重复记录，佣金求和: ${total_commission:.2f}")
+                
                 try:
                     # 转换时间格式
                     transaction_time = tx.get('transaction_time')
@@ -221,18 +246,18 @@ class PlatformDataSyncService:
                         logger.warning(f"交易时间格式不正确: {transaction_time}")
                         continue
                     
-                    # 准备交易数据
-                    tx_data = {
-                        "transaction_id": tx.get("transaction_id") or tx.get("order_id") or tx.get("collabgrowId") or f"cg_{tx.get('orderId', '')}",
+                    # 准备交易数据（使用分组后的总佣金）
+                    tx_data_dict = {
+                        "transaction_id": tx_id,
                         "transaction_time": transaction_time,
                         "status": tx.get("status", "pending"),
-                        "commission_amount": float(tx.get("commission_amount", 0) or tx.get("saleComm", 0) or 0),
+                        "commission_amount": total_commission,
                         "order_amount": float(tx.get("order_amount", 0) or tx.get("saleAmount", 0) or 0),
                         "merchant": tx.get("merchant") or tx.get("merchantName") or tx.get("mcid") or None,
                     }
                     
                     transaction_service.normalize_and_save(
-                        tx=tx_data,
+                        tx=tx_data_dict,
                         platform='cg',
                         affiliate_account_id=account.id,
                         user_id=account.user_id
