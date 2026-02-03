@@ -402,15 +402,45 @@ class PlatformDataSyncService:
             for idx, tx in enumerate(transactions_raw):
                 try:
                     # 转换时间格式
+            # 先按订单ID分组，对于重复订单，将佣金求和（与平台计算方式一致）
+            transactions_by_id = {}
+            for tx in transactions_raw:
+                tx_id = tx.get("transaction_id") or tx.get("order_id") or f"rw_{tx.get('id', '')}"
+                if not tx_id:
+                    continue
+                
+                if tx_id not in transactions_by_id:
+                    transactions_by_id[tx_id] = {
+                        "tx": tx,
+                        "total_commission": 0,
+                        "count": 0
+                    }
+                
+                # 解析佣金
+                commission_amount = float(tx.get("commission_amount", 0) or tx.get("commission", 0) or 0)
+                transactions_by_id[tx_id]["total_commission"] += commission_amount
+                transactions_by_id[tx_id]["count"] += 1
+            
+            # 先保存明细交易到AffiliateTransaction表（用于查询）
+            transaction_service = UnifiedTransactionService(self.db)
+            transaction_saved_count = 0
+            for tx_id, tx_data_grouped in transactions_by_id.items():
+                tx = tx_data_grouped["tx"]
+                total_commission = tx_data_grouped["total_commission"]
+                
+                if tx_data_grouped["count"] > 1:
+                    logger.debug(f"[RW同步] 订单 {tx_id} 有 {tx_data_grouped['count']} 条重复记录，佣金求和: ${total_commission:.2f}")
+                
+                try:
                     transaction_time = tx.get('transaction_time')
                     if not transaction_time:
-                        logger.warning(f"[RW同步] 交易 {idx+1}/{len(transactions_raw)} 缺少transaction_time字段: {tx.get('transaction_id', 'unknown')}")
+                        logger.warning(f"[RW同步] 交易缺少transaction_time字段: {tx_id}")
                         continue
                     
                     if isinstance(transaction_time, str):
                         # 如果是空字符串，跳过
                         if not transaction_time.strip():
-                            logger.warning(f"[RW同步] 交易 {idx+1}/{len(transactions_raw)} 时间为空字符串: {tx.get('transaction_id', 'unknown')}")
+                            logger.warning(f"[RW同步] 交易时间为空字符串: {tx_id}")
                             continue
                         try:
                             transaction_time = datetime.strptime(transaction_time, "%Y-%m-%d")
@@ -418,18 +448,18 @@ class PlatformDataSyncService:
                             try:
                                 transaction_time = datetime.strptime(transaction_time, "%Y-%m-%d %H:%M:%S")
                             except:
-                                logger.warning(f"[RW同步] 无法解析交易时间: {transaction_time}, 交易ID: {tx.get('transaction_id', 'unknown')}")
+                                logger.warning(f"[RW同步] 无法解析交易时间: {transaction_time}, 交易ID: {tx_id}")
                                 continue
                     elif not isinstance(transaction_time, datetime):
-                        logger.warning(f"[RW同步] 交易时间格式不正确: {transaction_time}, 类型: {type(transaction_time)}, 交易ID: {tx.get('transaction_id', 'unknown')}")
+                        logger.warning(f"[RW同步] 交易时间格式不正确: {transaction_time}, 类型: {type(transaction_time)}, 交易ID: {tx_id}")
                         continue
                     
-                    # 准备交易数据
+                    # 准备交易数据（使用分组后的总佣金）
                     tx_data = {
-                        "transaction_id": tx.get("transaction_id") or tx.get("order_id") or f"rw_{tx.get('id', '')}",
+                        "transaction_id": tx_id,
                         "transaction_time": transaction_time,
                         "status": tx.get("status", "pending"),
-                        "commission_amount": float(tx.get("commission_amount", 0) or tx.get("commission", 0) or 0),
+                        "commission_amount": total_commission,
                         "order_amount": float(tx.get("order_amount", 0) or tx.get("sale_amount", 0) or 0),
                         "merchant": tx.get("merchant") or tx.get("merchant_name") or None,
                     }
