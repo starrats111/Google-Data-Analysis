@@ -107,15 +107,41 @@ async def get_platform_data_detail(
         if platform:
             # 统一转换为小写，因为数据库中存储的是小写（如 'rw', 'cg', 'linkhaitao'）
             platform_lower = platform.lower().strip()
-            # 平台代码别名映射（前端可能传递 'lh'，但数据库中存储的是 'linkhaitao'）
+            # 平台代码别名映射（前端可能传递缩写或全称，但数据库中存储的是标准格式）
             platform_code_map = {
-                'lh': 'linkhaitao',
-                'link-haitao': 'linkhaitao',
-                'link_haitao': 'linkhaitao',
-                'rw': 'rw',
-                'rewardoo': 'rw',
+                # CG (CollabGlow)
                 'cg': 'cg',
                 'collabglow': 'cg',
+                'collab-glow': 'cg',
+                # RW (Rewardoo)
+                'rw': 'rw',
+                'rewardoo': 'rw',
+                'reward-oo': 'rw',
+                # LinkHaitao
+                'lh': 'linkhaitao',
+                'linkhaitao': 'linkhaitao',
+                'link-haitao': 'linkhaitao',
+                'link_haitao': 'linkhaitao',
+                # PartnerBoost
+                'pb': 'partnerboost',
+                'partnerboost': 'partnerboost',
+                'partner-boost': 'partnerboost',
+                # Linkbux
+                'lb': 'linkbux',
+                'linkbux': 'linkbux',
+                'link-bux': 'linkbux',
+                # Partnermatic
+                'pm': 'partnermatic',
+                'partnermatic': 'partnermatic',
+                'partner-matic': 'partnermatic',
+                # BrandSparkHub
+                'bsh': 'brandsparkhub',
+                'brandsparkhub': 'brandsparkhub',
+                'brand-spark-hub': 'brandsparkhub',
+                # CreatorFlare
+                'cf': 'creatorflare',
+                'creatorflare': 'creatorflare',
+                'creator-flare': 'creatorflare',
             }
             # 如果存在映射，使用映射后的值；否则使用原始值
             platform_final = platform_code_map.get(platform_lower, platform_lower)
@@ -217,15 +243,41 @@ async def get_platform_data_summary(
         if platform:
             # 统一转换为小写，因为数据库中存储的是小写（如 'rw', 'cg', 'linkhaitao'）
             platform_lower = platform.lower().strip()
-            # 平台代码别名映射（前端可能传递 'lh'，但数据库中存储的是 'linkhaitao'）
+            # 平台代码别名映射（前端可能传递缩写或全称，但数据库中存储的是标准格式）
             platform_code_map = {
-                'lh': 'linkhaitao',
-                'link-haitao': 'linkhaitao',
-                'link_haitao': 'linkhaitao',
-                'rw': 'rw',
-                'rewardoo': 'rw',
+                # CG (CollabGlow)
                 'cg': 'cg',
                 'collabglow': 'cg',
+                'collab-glow': 'cg',
+                # RW (Rewardoo)
+                'rw': 'rw',
+                'rewardoo': 'rw',
+                'reward-oo': 'rw',
+                # LinkHaitao
+                'lh': 'linkhaitao',
+                'linkhaitao': 'linkhaitao',
+                'link-haitao': 'linkhaitao',
+                'link_haitao': 'linkhaitao',
+                # PartnerBoost
+                'pb': 'partnerboost',
+                'partnerboost': 'partnerboost',
+                'partner-boost': 'partnerboost',
+                # Linkbux
+                'lb': 'linkbux',
+                'linkbux': 'linkbux',
+                'link-bux': 'linkbux',
+                # Partnermatic
+                'pm': 'partnermatic',
+                'partnermatic': 'partnermatic',
+                'partner-matic': 'partnermatic',
+                # BrandSparkHub
+                'bsh': 'brandsparkhub',
+                'brandsparkhub': 'brandsparkhub',
+                'brand-spark-hub': 'brandsparkhub',
+                # CreatorFlare
+                'cf': 'creatorflare',
+                'creatorflare': 'creatorflare',
+                'creator-flare': 'creatorflare',
             }
             # 如果存在映射，使用映射后的值；否则使用原始值
             platform_final = platform_code_map.get(platform_lower, platform_lower)
