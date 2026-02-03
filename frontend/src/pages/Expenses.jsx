@@ -1,6 +1,5 @@
 import React, { useEffect, useMemo, useState, useCallback, useRef } from 'react'
-import { Card, DatePicker, Select, Space, Table, Statistic, Row, Col, InputNumber, Button, message, Segmented, Collapse, Modal, Popconfirm } from 'antd'
-import { DeleteOutlined } from '@ant-design/icons'
+import { Card, DatePicker, Select, Space, Table, Statistic, Row, Col, Button, message, Segmented, Collapse, Modal } from 'antd'
 import dayjs from 'dayjs'
 import api from '../services/api'
 import { useAuth } from '../store/authStore'
@@ -34,6 +33,9 @@ const Expenses = () => {
   const [daily, setDaily] = useState([])
   const [loading, setLoading] = useState(false)
   const [selectedDate, setSelectedDate] = useState(null) // 单日查看（可选）
+  const [mccModalVisible, setMccModalVisible] = useState(false)
+  const [mccCostLoading, setMccCostLoading] = useState(false)
+  const [mccCostData, setMccCostData] = useState(null)
 
   useEffect(() => {
     const r = getPresetRange(preset)
@@ -48,11 +50,12 @@ const Expenses = () => {
 
   // 使用ref存储请求取消函数，防止重复请求
   const abortControllerRef = useRef(null)
+  const loadingRef = useRef(false)
   
   const fetchAll = useCallback(async () => {
     if (!startDate || !endDate) return
-    // 防止重复请求：如果正在加载，直接返回
-    if (loading) return
+    // 防止重复请求：如果正在加载，直接返回（用 ref 避免把 loading 放进依赖导致 effect 反复触发）
+    if (loadingRef.current) return
     
     // 取消之前的请求
     if (abortControllerRef.current) {
@@ -60,15 +63,17 @@ const Expenses = () => {
     }
     
     // 创建新的AbortController
-    abortControllerRef.current = new AbortController()
+    const controller = new AbortController()
+    abortControllerRef.current = controller
     
+    loadingRef.current = true
     setLoading(true)
     try {
       if (isManager) {
         // 经理：获取所有员工的汇总数据
         const sumRes = await api.get('/api/expenses/summary', { 
           params: { start_date: startDate, end_date: endDate, today_date: todayDate },
-          signal: abortControllerRef.current.signal
+          signal: controller.signal
         })
         setManagerSummary(sumRes.data)
         setSummary(null)
@@ -79,11 +84,11 @@ const Expenses = () => {
         const [sumRes, dailyRes] = await Promise.all([
           api.get('/api/expenses/summary', { 
             params: { start_date: startDate, end_date: endDate, today_date: todayDate },
-            signal: abortControllerRef.current.signal
+            signal: controller.signal
           }),
           api.get('/api/expenses/daily', { 
             params: { start_date: startDate, end_date: endDate },
-            signal: abortControllerRef.current.signal
+            signal: controller.signal
           }),
         ])
         setSummary(sumRes.data)
@@ -106,9 +111,13 @@ const Expenses = () => {
       }
     } finally {
       setLoading(false)
-      abortControllerRef.current = null
+      loadingRef.current = false
+      // 仅清理由本次请求创建的 controller，避免并发/竞态导致把新请求的 controller 清掉
+      if (abortControllerRef.current === controller) {
+        abortControllerRef.current = null
+      }
     }
-  }, [startDate, endDate, todayDate, isManager, loading])
+  }, [startDate, endDate, todayDate, isManager])
 
   useEffect(() => {
     // 使用 ref 来防止重复调用
@@ -131,42 +140,26 @@ const Expenses = () => {
     }
   }, [startDate, endDate, todayDate, fetchAll])
 
-  const handleSaveRejected = async (platformId, dateStr, rejectedValue, manualCostValue, manualCommissionValue) => {
-    try {
-      await api.post('/api/expenses/rejected-commission', {
-        platform_id: platformId,
-        date: dateStr,
-        rejected_commission: Number(rejectedValue || 0),
-        manual_cost: manualCostValue !== undefined ? Number(manualCostValue || 0) : undefined,
-        manual_commission: manualCommissionValue !== undefined ? Number(manualCommissionValue || 0) : undefined,
-      })
-      message.success('已保存')
-      fetchAll()
-    } catch (e) {
-      message.error(e.response?.data?.detail || '保存失败')
+  const handleShowMccCostDetail = async () => {
+    if (!startDate || !endDate) {
+      message.warning('请先选择时间范围')
+      return
     }
-  }
-
-  const handleCleanDuplicateCosts = async () => {
-    Modal.confirm({
-      title: '清理重复费用数据',
-      content: `确定要清理 ${startDate} ~ ${endDate} 范围内的重复费用数据吗？\n\n此操作将删除手动上传的费用数据（保留Google Ads API同步的费用），操作不可恢复！`,
-      okText: '确定清理',
-      okType: 'danger',
-      cancelText: '取消',
-      onOk: async () => {
-        try {
-          const response = await api.post('/api/expenses/clean-duplicate-costs', {
-            start_date: startDate,
-            end_date: endDate,
-          })
-          message.success(response.data.message || '清理成功')
-          fetchAll()
-        } catch (e) {
-          message.error(e.response?.data?.detail || '清理失败')
-        }
-      },
-    })
+    setMccModalVisible(true)
+    setMccCostLoading(true)
+    try {
+      const res = await api.get('/api/expenses/cost-detail', {
+        params: {
+          start_date: startDate,
+          end_date: endDate,
+        },
+      })
+      setMccCostData(res.data || null)
+    } catch (e) {
+      message.error(e.response?.data?.detail || '获取MCC费用明细失败')
+    } finally {
+      setMccCostLoading(false)
+    }
   }
 
   const platformColumns = [
@@ -181,66 +174,9 @@ const Expenses = () => {
   const dailyColumns = [
     { title: '日期', dataIndex: 'date', key: 'date', width: 110 },
     { title: '平台', dataIndex: 'platform_name', key: 'platform_name', width: 140 },
-    { 
-      title: '佣金(可手动)',
-      dataIndex: 'commission',
-      key: 'commission',
-      align: 'right',
-      render: (v, r) => (
-        <Space>
-          <InputNumber
-            value={Number(v || 0)}
-            min={0}
-            step={0.01}
-            style={{ width: 120 }}
-            onChange={(val) => {
-              r.__draftCommission = val
-            }}
-          />
-          <Button size="small" onClick={() => handleSaveRejected(r.platform_id, r.date, r.__draftRejected ?? r.rejected_commission ?? 0, r.__draftCost ?? r.ad_cost, r.__draftCommission ?? v)}>保存</Button>
-        </Space>
-      ),
-    },
-    { 
-      title: '广告费用(可手动)',
-      dataIndex: 'ad_cost',
-      key: 'ad_cost',
-      align: 'right',
-      render: (v, r) => (
-        <Space>
-          <InputNumber
-            value={Number(v || 0)}
-            min={0}
-            step={0.01}
-            style={{ width: 120 }}
-            onChange={(val) => {
-              r.__draftCost = val
-            }}
-          />
-          <Button size="small" onClick={() => handleSaveRejected(r.platform_id, r.date, r.__draftRejected ?? r.rejected_commission ?? 0, r.__draftCost ?? r.ad_cost, undefined)}>保存</Button>
-        </Space>
-      ),
-    },
-    {
-      title: '拒付佣金(手动)',
-      dataIndex: 'rejected_commission',
-      key: 'rejected_commission',
-      align: 'right',
-      render: (v, r) => (
-        <Space>
-          <InputNumber
-            value={Number(v || 0)}
-            min={0}
-            step={0.01}
-            style={{ width: 120 }}
-            onChange={(val) => {
-              r.__draftRejected = val
-            }}
-          />
-          <Button size="small" onClick={() => handleSaveRejected(r.platform_id, r.date, r.__draftRejected ?? v, r.__draftCost ?? r.ad_cost)}>保存</Button>
-        </Space>
-      ),
-    },
+    { title: '佣金', dataIndex: 'commission', key: 'commission', align: 'right', render: (v) => Number(v || 0).toFixed(4) },
+    { title: '广告费用', dataIndex: 'ad_cost', key: 'ad_cost', align: 'right', render: (v) => Number(v || 0).toFixed(4) },
+    { title: '拒付佣金', dataIndex: 'rejected_commission', key: 'rejected_commission', align: 'right', render: (v) => Number(v || 0).toFixed(4) },
     { title: '净利润', dataIndex: 'net_profit', key: 'net_profit', align: 'right', render: (v) => (v || 0).toFixed(4) },
   ]
 
@@ -263,20 +199,6 @@ const Expenses = () => {
             placeholder="选择某一天(可选)"
           />
           <Button onClick={fetchAll} loading={loading}>刷新</Button>
-          {!isManager && (
-            <Popconfirm
-              title="清理重复费用数据"
-              description={`确定要清理 ${startDate} ~ ${endDate} 范围内的重复费用数据吗？此操作将删除Google Ads API同步的费用数据（保留手动上传的费用），操作不可恢复！`}
-              onConfirm={handleCleanDuplicateCosts}
-              okText="确定清理"
-              okType="danger"
-              cancelText="取消"
-            >
-              <Button danger icon={<DeleteOutlined />} loading={loading}>
-                清理重复费用
-              </Button>
-            </Popconfirm>
-          )}
         </Space>
       </Card>
 
@@ -294,10 +216,7 @@ const Expenses = () => {
         <Col span={6}>
           <Card 
             style={{ cursor: 'pointer' }}
-            onClick={() => {
-              // 跳转到费用详情页
-              window.open(`/expense-cost-detail?start_date=${startDate}&end_date=${endDate}`, '_blank')
-            }}
+            onClick={handleShowMccCostDetail}
           >
             <Statistic 
               title="总广告费用" 
@@ -370,7 +289,8 @@ const Expenses = () => {
                   />
                 ),
               })) || []}
-              defaultActiveKey={managerSummary?.users?.map(u => u.user_id.toString()) || []}
+              // 默认不全部展开：员工/平台多时一次性渲染大量 Table 会明显卡顿
+              defaultActiveKey={[]}
             />
           </Card>
         </>
@@ -388,7 +308,7 @@ const Expenses = () => {
             />
           </Card>
 
-          <Card title="按天明细（可录入拒付佣金）">
+          <Card title="按天明细">
             <Table
               rowKey={(r) => `${r.date}-${r.platform_id}`}
               dataSource={daily}
@@ -407,6 +327,29 @@ const Expenses = () => {
           </Card>
         </>
       )}
+
+      {/* MCC费用明细弹窗 */}
+      <Modal
+        open={mccModalVisible}
+        title="MCC 费用明细（按账号）"
+        onCancel={() => setMccModalVisible(false)}
+        footer={null}
+        width={800}
+      >
+        <Table
+          rowKey="mcc_id"
+          loading={mccCostLoading}
+          dataSource={mccCostData?.mcc_breakdown || []}
+          pagination={false}
+          columns={[
+            { title: 'MCC名称', dataIndex: 'mcc_name', key: 'mcc_name' },
+            { title: '邮箱', dataIndex: 'email', key: 'email' },
+            { title: 'API费用', dataIndex: 'api_cost', key: 'api_cost', align: 'right', render: (v) => Number(v || 0).toFixed(2) },
+            { title: '手动费用', dataIndex: 'manual_cost', key: 'manual_cost', align: 'right', render: (v) => Number(v || 0).toFixed(2) },
+            { title: '总费用', dataIndex: 'total_cost', key: 'total_cost', align: 'right', render: (v) => Number(v || 0).toFixed(2) },
+          ]}
+        />
+      </Modal>
     </div>
   )
 }
