@@ -1,0 +1,24 @@
+# 验证服务启动和修复是否生效
+
+# 步骤1: 检查服务是否正常运行
+curl -s http://127.0.0.1:8000/health
+
+# 步骤2: 查看启动日志，确认没有错误
+tail -n 30 run.log
+
+# 步骤3: 测试CORS配置（OPTIONS预检请求）
+curl -X OPTIONS \
+  -H "Origin: https://google-data-analysis.top" \
+  -H "Access-Control-Request-Method: POST" \
+  -H "Access-Control-Request-Headers: Content-Type,Authorization" \
+  -v https://api.google-data-analysis.top/api/mcc/accounts/7/sync 2>&1 | grep -i "access-control"
+
+# 步骤4: 检查进程是否在运行
+ps aux | grep uvicorn | grep -v grep
+
+# 步骤5: 查看最近的错误日志（如果有）
+tail -n 50 logs/app.log 2>/dev/null || echo "日志文件不存在或为空"
+
+# 步骤6: 检查CORS相关日志
+grep -i "cors\|sync\|mcc" run.log | tail -n 20
+

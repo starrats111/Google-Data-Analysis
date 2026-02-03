@@ -1,0 +1,41 @@
+========================================
+服务器启动失败诊断
+========================================
+
+【问题】服务启动失败，Exit 1，连接被拒绝
+
+【立即执行的诊断命令】
+
+步骤1: 查看详细错误日志
+cd ~/Google-Data-Analysis/backend
+tail -n 50 run.log
+
+步骤2: 查看应用错误日志
+tail -n 50 logs/error.log
+
+步骤3: 检查Python环境
+python --version
+which python
+
+步骤4: 检查依赖是否完整
+pip list | grep -E "(fastapi|uvicorn|pydantic)"
+
+步骤5: 尝试前台运行查看实时错误
+uvicorn app.main:app --host 0.0.0.0 --port 8000
+
+【常见问题】
+
+1. 依赖缺失
+   pip install -r requirements.txt
+
+2. 数据库连接问题
+   检查 backend/.env 文件
+
+3. 导入错误
+   查看 run.log 中的具体错误信息
+
+4. 端口被占用（虽然已经清理过）
+   lsof -i:8000
+
+
+

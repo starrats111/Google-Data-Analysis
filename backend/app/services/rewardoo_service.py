@@ -464,7 +464,7 @@ class RewardooService(PlatformServiceBase):
             transactions = data.get("transactions", [])
             # 如果没有，尝试从data.list获取（官方API原始格式）
             if not transactions:
-                transactions = data.get("list", [])
+            transactions = data.get("list", [])
         elif isinstance(data, list):
             # 如果data直接是数组（兼容旧格式）
             transactions = data

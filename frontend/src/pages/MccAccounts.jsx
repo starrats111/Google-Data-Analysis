@@ -26,20 +26,29 @@ export default function MccAccounts() {
   }, [])
 
   const fetchMccAccounts = async () => {
+    // 防止重复请求
+    if (loading) return
+    
     setLoading(true)
     try {
-      console.log('[MCC Accounts] 开始获取MCC账号列表，API URL: /api/mcc/accounts')
+      if (import.meta.env.DEV) {
+        console.log('[MCC Accounts] 开始获取MCC账号列表，API URL: /api/mcc/accounts')
+      }
       const response = await api.get('/api/mcc/accounts')
-      console.log('获取到的MCC账号数据:', response.data)
-      setMccAccounts(response.data)
+      if (import.meta.env.DEV) {
+        console.log('获取到的MCC账号数据:', response.data)
+      }
+      setMccAccounts(response.data || [])
     } catch (error) {
       console.error('获取MCC账号列表失败:', error)
-      console.error('错误详情:', {
-        message: error.message,
-        response: error.response,
-        request: error.request,
-        config: error.config
-      })
+      if (import.meta.env.DEV) {
+        console.error('错误详情:', {
+          message: error.message,
+          response: error.response,
+          request: error.request,
+          config: error.config
+        })
+      }
       message.error('获取MCC账号列表失败: ' + (error.response?.data?.detail || error.message))
     } finally {
       setLoading(false)

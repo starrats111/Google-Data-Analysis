@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useCallback, useRef } from 'react'
 import { Card, Table, Button, Form, Select, DatePicker, message, Tag, Space, Input, Radio, Statistic, Row, Col, Tabs, Modal } from 'antd'
 import { SearchOutlined, DownloadOutlined, EyeOutlined, CheckCircleOutlined, ClockCircleOutlined, CloseCircleOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
@@ -42,7 +42,21 @@ export default function PlatformData() {
     }
   }
 
-  const handleSearch = async (values) => {
+  // 使用ref存储请求取消函数，防止重复请求
+  const abortControllerRef = useRef(null)
+  
+  const handleSearch = useCallback(async (values) => {
+    // 取消之前的请求
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort()
+    }
+    
+    // 防止重复请求
+    if (loading) return
+    
+    // 创建新的AbortController
+    abortControllerRef.current = new AbortController()
+    
     setLoading(true)
     try {
       const params = {}
@@ -66,7 +80,10 @@ export default function PlatformData() {
       
       // 根据视图模式调用不同的API
       if (viewMode === 'summary') {
-        const response = await api.get('/api/platform-data/summary', { params })
+        const response = await api.get('/api/platform-data/summary', { 
+          params,
+          signal: abortControllerRef.current.signal
+        })
         setSummaryData(response.data)
         setDetailData([])
         if (response.data) {
@@ -75,7 +92,10 @@ export default function PlatformData() {
           message.info('未找到数据')
         }
       } else {
-        const response = await api.get('/api/platform-data/detail', { params })
+        const response = await api.get('/api/platform-data/detail', { 
+          params,
+          signal: abortControllerRef.current.signal
+        })
         const data = response.data || []
         setDetailData(data)
         setSummaryData(null)
@@ -86,13 +106,18 @@ export default function PlatformData() {
         }
       }
     } catch (error) {
+      // 忽略取消的请求
+      if (error.name === 'CanceledError' || error.name === 'AbortError') {
+        return
+      }
       message.error(error.response?.data?.detail || '查询失败')
       setDetailData([])
       setSummaryData(null)
     } finally {
       setLoading(false)
+      abortControllerRef.current = null
     }
-  }
+  }, [viewMode, loading])
 
   const handleViewModeChange = async (e) => {
     const newMode = e.target.value
@@ -545,7 +570,14 @@ export default function PlatformData() {
               dataSource={summaryData.merchant_breakdown || []}
               loading={loading}
               rowKey={(record, index) => `${record.platform}-${record.merchant}-${index}`}
-              pagination={{ pageSize: 20, showSizeChanger: true }}
+              pagination={{ 
+                pageSize: 20, 
+                showSizeChanger: true,
+                showQuickJumper: true,
+                showTotal: (total) => `共 ${total} 条`,
+                defaultPageSize: 20,
+                pageSizeOptions: ['10', '20', '50', '100'],
+              }}
             />
           </Card>
 
@@ -680,7 +712,10 @@ export default function PlatformData() {
               pagination={{
                 pageSize: 20,
                 showSizeChanger: true,
+                showQuickJumper: true,
                 showTotal: (total) => `共 ${total} 条记录`,
+                defaultPageSize: 20,
+                pageSizeOptions: ['10', '20', '50', '100'],
               }}
               scroll={{ x: 1200 }}
               locale={{

@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react'
+import React, { useEffect, useMemo, useState, useCallback, useRef } from 'react'
 import { Card, DatePicker, Select, Space, Table, Statistic, Row, Col, InputNumber, Button, message, Segmented, Collapse, Modal, Popconfirm } from 'antd'
 import { DeleteOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
@@ -46,16 +46,30 @@ const Expenses = () => {
   const endDate = useMemo(() => range?.[1]?.format('YYYY-MM-DD'), [range])
   const todayDate = useMemo(() => (selectedDate ? selectedDate.format('YYYY-MM-DD') : endDate), [selectedDate, endDate])
 
-  const fetchAll = async () => {
+  // 使用ref存储请求取消函数，防止重复请求
+  const abortControllerRef = useRef(null)
+  
+  const fetchAll = useCallback(async () => {
     if (!startDate || !endDate) return
     // 防止重复请求：如果正在加载，直接返回
     if (loading) return
+    
+    // 取消之前的请求
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort()
+    }
+    
+    // 创建新的AbortController
+    abortControllerRef.current = new AbortController()
     
     setLoading(true)
     try {
       if (isManager) {
         // 经理：获取所有员工的汇总数据
-        const sumRes = await api.get('/api/expenses/summary', { params: { start_date: startDate, end_date: endDate, today_date: todayDate } })
+        const sumRes = await api.get('/api/expenses/summary', { 
+          params: { start_date: startDate, end_date: endDate, today_date: todayDate },
+          signal: abortControllerRef.current.signal
+        })
         setManagerSummary(sumRes.data)
         setSummary(null)
         // 经理不需要daily明细，因为已经在summary中包含了
@@ -63,25 +77,38 @@ const Expenses = () => {
       } else {
         // 员工：获取自己的数据
         const [sumRes, dailyRes] = await Promise.all([
-          api.get('/api/expenses/summary', { params: { start_date: startDate, end_date: endDate, today_date: todayDate } }),
-          api.get('/api/expenses/daily', { params: { start_date: startDate, end_date: endDate } }),
+          api.get('/api/expenses/summary', { 
+            params: { start_date: startDate, end_date: endDate, today_date: todayDate },
+            signal: abortControllerRef.current.signal
+          }),
+          api.get('/api/expenses/daily', { 
+            params: { start_date: startDate, end_date: endDate },
+            signal: abortControllerRef.current.signal
+          }),
         ])
         setSummary(sumRes.data)
         setManagerSummary(null)
         setDaily(dailyRes.data.rows || [])
       }
     } catch (e) {
+      // 忽略取消的请求
+      if (e.name === 'CanceledError' || e.name === 'AbortError') {
+        return
+      }
       // 如果是网络错误，不要显示错误消息，避免刷屏
       if (e.code === 'ERR_NETWORK' || e.message === 'Network Error') {
-        console.error('网络错误:', e)
+        if (import.meta.env.DEV) {
+          console.error('网络错误:', e)
+        }
         // 不显示错误消息，避免用户看到大量错误提示
       } else {
         message.error(e.response?.data?.detail || '获取费用数据失败')
       }
     } finally {
       setLoading(false)
+      abortControllerRef.current = null
     }
-  }
+  }, [startDate, endDate, todayDate, isManager, loading])
 
   useEffect(() => {
     // 使用 ref 来防止重复调用
@@ -97,9 +124,12 @@ const Expenses = () => {
     
     return () => {
       cancelled = true
+      // 组件卸载时取消请求
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort()
+      }
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [startDate, endDate, todayDate])
+  }, [startDate, endDate, todayDate, fetchAll])
 
   const handleSaveRejected = async (platformId, dateStr, rejectedValue, manualCostValue, manualCommissionValue) => {
     try {
@@ -364,7 +394,14 @@ const Expenses = () => {
               dataSource={daily}
               columns={dailyColumns}
               loading={loading}
-              pagination={{ pageSize: 10, showSizeChanger: true }}
+              pagination={{ 
+                pageSize: 10, 
+                showSizeChanger: true,
+                showQuickJumper: true,
+                showTotal: (total) => `共 ${total} 条`,
+                defaultPageSize: 10,
+                pageSizeOptions: ['10', '20', '50', '100'],
+              }}
               scroll={{ x: 1000 }}
             />
           </Card>

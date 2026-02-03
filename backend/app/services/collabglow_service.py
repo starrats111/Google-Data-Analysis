@@ -537,7 +537,7 @@ class CollabGlowService(PlatformServiceBase):
                 item.get("sale_comm") or
                 item.get("commission_amount", 0) or 
                 item.get("commissionAmount", 0) or
-                item.get("commission", 0) or
+                item.get("commission", 0) or 
                 item.get("payout", 0) or
                 item.get("earnings", 0) or
                 0

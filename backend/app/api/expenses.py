@@ -97,7 +97,7 @@ async def get_cost_detail(
         GoogleMccAccount.mcc_name,
         GoogleMccAccount.email,
     ).all()
-
+    
     mcc_breakdown = []
     for r in mcc_results:
         # 计算该MCC的手动费用总和
@@ -257,7 +257,7 @@ async def clean_duplicate_costs(
         
         if count == 0 and mcc_deleted_count == 0:
             return {"message": "没有找到需要清理的手动费用数据", "deleted_count": 0, "mcc_deleted_count": 0}
-
+        
         # 真正删除有手动费用的记录（如果该行没有其它手动字段，则删除整行；否则只清空manual_cost）
         deleted_count = 0
         for adj in query.all():

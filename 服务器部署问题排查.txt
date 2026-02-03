@@ -1,0 +1,77 @@
+========================================
+服务器部署问题排查和修复
+========================================
+
+【问题】部署命令执行失败，出现 Exit 1
+
+【排查步骤】
+
+步骤1: 检查服务是否在运行
+ps aux | grep uvicorn
+
+步骤2: 查看详细错误日志
+cd ~/Google-Data-Analysis/backend
+tail -n 50 run.log
+
+步骤3: 查看应用日志
+tail -n 50 logs/app.log
+tail -n 50 logs/error.log
+
+步骤4: 检查端口是否被占用
+netstat -tlnp | grep 8000
+或
+lsof -i:8000
+
+步骤5: 检查Python环境和依赖
+cd ~/Google-Data-Analysis/backend
+source venv/bin/activate
+python --version
+pip list | grep -E "(fastapi|uvicorn)"
+
+【修复步骤】
+
+如果服务没有运行，手动启动：
+
+步骤1: 进入后端目录
+cd ~/Google-Data-Analysis/backend
+
+步骤2: 激活虚拟环境
+source venv/bin/activate
+
+步骤3: 确保停止旧进程
+pkill -f 'uvicorn.*app.main'
+sleep 3
+
+步骤4: 检查是否有残留进程
+ps aux | grep uvicorn
+
+步骤5: 启动服务（前台运行，查看错误）
+uvicorn app.main:app --host 0.0.0.0 --port 8000
+
+如果前台运行正常，按 Ctrl+C 停止，然后后台运行：
+nohup uvicorn app.main:app --host 0.0.0.0 --port 8000 > run.log 2>&1 &
+
+步骤6: 等待并检查
+sleep 5
+curl http://127.0.0.1:8000/health
+tail -n 20 run.log
+
+【常见问题】
+
+1. 端口被占用：
+   lsof -ti:8000 | xargs kill -9
+
+2. 虚拟环境问题：
+   cd ~/Google-Data-Analysis/backend
+   python3 -m venv venv
+   source venv/bin/activate
+   pip install -r requirements.txt
+
+3. 依赖缺失：
+   pip install -r requirements.txt
+
+4. 数据库连接问题：
+   检查 backend/.env 文件中的 DATABASE_URL
+
+
+

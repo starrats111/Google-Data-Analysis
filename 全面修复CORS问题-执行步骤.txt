@@ -1,0 +1,104 @@
+# 全面修复CORS问题 - 执行步骤
+
+# 问题：多个API端点出现CORS错误
+# - /api/affiliate/platforms
+# - /api/platform-data/detail  
+# - /api/affiliate/accounts
+
+# ============================================
+# 步骤1: 确认代码已更新到服务器
+# ============================================
+cd ~/Google-Data-Analysis
+git pull origin main
+
+# ============================================
+# 步骤2: 验证代码修复
+# ============================================
+cd backend
+python -c "import ast; ast.parse(open('app/api/mcc.py').read())" && echo "✓ MCC代码语法正确"
+
+# ============================================
+# 步骤3: 完全重启服务（确保所有代码重新加载）
+# ============================================
+source venv/bin/activate
+
+# 停止所有相关进程
+pkill -f 'uvicorn.*app.main'
+pkill -f 'python.*uvicorn'
+sleep 5
+
+# 确认进程已停止
+ps aux | grep uvicorn | grep -v grep || echo "✓ 所有uvicorn进程已停止"
+
+# 启动服务
+cd ~/Google-Data-Analysis/backend
+nohup uvicorn app.main:app --host 0.0.0.0 --port 8000 > run.log 2>&1 &
+
+# 等待服务启动
+sleep 5
+
+# ============================================
+# 步骤4: 验证服务状态
+# ============================================
+echo "=== 检查服务健康状态 ==="
+curl -s http://127.0.0.1:8000/health
+
+echo ""
+echo "=== 检查进程状态 ==="
+ps aux | grep uvicorn | grep -v grep
+
+echo ""
+echo "=== 查看启动日志 ==="
+tail -n 20 run.log
+
+# ============================================
+# 步骤5: 测试所有出现CORS错误的端点
+# ============================================
+echo ""
+echo "=== 测试 /api/affiliate/platforms ==="
+curl -X OPTIONS \
+  -H "Origin: https://google-data-analysis.top" \
+  -H "Access-Control-Request-Method: GET" \
+  -H "Access-Control-Request-Headers: Content-Type,Authorization" \
+  -v https://api.google-data-analysis.top/api/affiliate/platforms 2>&1 | grep -i "access-control"
+
+echo ""
+echo "=== 测试 /api/platform-data/detail ==="
+curl -X OPTIONS \
+  -H "Origin: https://google-data-analysis.top" \
+  -H "Access-Control-Request-Method: GET" \
+  -H "Access-Control-Request-Headers: Content-Type,Authorization" \
+  -v "https://api.google-data-analysis.top/api/platform-data/detail?begin_date=2026-01-01&end_date=2026-01-31" 2>&1 | grep -i "access-control"
+
+echo ""
+echo "=== 测试 /api/affiliate/accounts ==="
+curl -X OPTIONS \
+  -H "Origin: https://google-data-analysis.top" \
+  -H "Access-Control-Request-Method: GET" \
+  -H "Access-Control-Request-Headers: Content-Type,Authorization" \
+  -v https://api.google-data-analysis.top/api/affiliate/accounts 2>&1 | grep -i "access-control"
+
+# ============================================
+# 步骤6: 检查CORS日志
+# ============================================
+echo ""
+echo "=== 查看CORS相关日志 ==="
+grep -i "cors" run.log | tail -n 10 || echo "暂无CORS日志"
+
+# ============================================
+# 步骤7: 如果还有问题，检查nginx配置（如果有）
+# ============================================
+echo ""
+echo "=== 检查nginx配置（如果使用nginx） ==="
+if command -v nginx &> /dev/null; then
+    echo "nginx已安装，检查配置..."
+    sudo nginx -t 2>&1 | head -n 5
+else
+    echo "未检测到nginx"
+fi
+
+echo ""
+echo "=== 完成 ==="
+echo "如果所有测试都显示 access-control-allow-origin，说明CORS配置正常"
+echo "请在浏览器中刷新页面并重新测试"
+

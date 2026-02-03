@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useCallback, useRef } from 'react'
 import { Card, Button, Form, Select, DatePicker, message, Space, Radio, Statistic, Row, Col, Table, Tag, Input } from 'antd'
 import { SearchOutlined, DownloadOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
@@ -94,7 +94,21 @@ export default function GoogleAdsData() {
     }
   }
 
-  const handleSearch = async (values) => {
+  // 使用ref存储请求取消函数，防止重复请求
+  const abortControllerRef = useRef(null)
+  
+  const handleSearch = useCallback(async (values) => {
+    // 取消之前的请求
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort()
+    }
+    
+    // 防止重复请求
+    if (loading) return
+    
+    // 创建新的AbortController
+    abortControllerRef.current = new AbortController()
+    
     setLoading(true)
     try {
       const params = {
@@ -124,7 +138,10 @@ export default function GoogleAdsData() {
       // 根据视图模式选择不同的API
       if (viewMode === 'campaign') {
         // 按广告系列分组的数据
-        const campaignResponse = await api.get('/api/google-ads-aggregate/by-campaign', { params })
+        const campaignResponse = await api.get('/api/google-ads-aggregate/by-campaign', { 
+          params,
+          signal: abortControllerRef.current.signal
+        })
         setCampaignData(campaignResponse.data.campaigns || [])
         setSummaryData(null)
         setDetailData([])
@@ -136,7 +153,10 @@ export default function GoogleAdsData() {
         }
       } else {
         // 时间范围级别的汇总数据
-        const response = await api.get('/api/google-ads-aggregate', { params })
+        const response = await api.get('/api/google-ads-aggregate', { 
+          params,
+          signal: abortControllerRef.current.signal
+        })
         setSummaryData(response.data)
         setCampaignData([])
         setDetailData([])
@@ -147,16 +167,23 @@ export default function GoogleAdsData() {
           message.info('未找到数据')
         }
       }
-      } catch (error) {
-      console.error('查询失败:', error)
+    } catch (error) {
+      // 忽略取消的请求
+      if (error.name === 'CanceledError' || error.name === 'AbortError') {
+        return
+      }
+      if (import.meta.env.DEV) {
+        console.error('查询失败:', error)
+      }
       message.error(error.response?.data?.detail || '查询失败')
       setSummaryData(null)
       setCampaignData([])
       setDetailData([])
     } finally {
       setLoading(false)
+      abortControllerRef.current = null
     }
-  }
+  }, [dateRangeType, viewMode, loading])
 
 
   return (
@@ -286,7 +313,14 @@ export default function GoogleAdsData() {
           
           <Table
             dataSource={campaignData}
-            pagination={{ pageSize: 20 }}
+            pagination={{ 
+              pageSize: 20,
+              showSizeChanger: true,
+              showQuickJumper: true,
+              showTotal: (total) => `共 ${total} 条`,
+              defaultPageSize: 20,
+              pageSizeOptions: ['10', '20', '50', '100'],
+            }}
             rowKey="campaign_id"
             scroll={{ x: 1200 }}
             columns={[

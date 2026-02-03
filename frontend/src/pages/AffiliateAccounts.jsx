@@ -56,21 +56,30 @@ const AffiliateAccounts = () => {
   }, [isManager])
 
   const fetchPlatforms = async () => {
+    // 防止重复请求
+    if (loading) return
+    
     try {
-      console.log('[平台账号] 开始获取平台列表...')
+      if (import.meta.env.DEV) {
+        console.log('[平台账号] 开始获取平台列表...')
+      }
       const response = await api.get('/api/affiliate/platforms', {
         timeout: 30000 // 30秒超时（增加超时时间）
       })
-      console.log('[平台账号] 成功获取平台列表:', response.data?.length || 0, '个平台')
+      if (import.meta.env.DEV) {
+        console.log('[平台账号] 成功获取平台列表:', response.data?.length || 0, '个平台')
+      }
       setPlatforms(response.data || [])
     } catch (error) {
       console.error('获取平台列表失败:', error)
-      console.error('错误详情:', {
-        message: error.message,
-        code: error.code,
-        response: error.response,
-        request: error.request
-      })
+      if (import.meta.env.DEV) {
+        console.error('错误详情:', {
+          message: error.message,
+          code: error.code,
+          response: error.response,
+          request: error.request
+        })
+      }
       if (error.code !== 'ECONNABORTED') {
         const errorMsg = error.response?.data?.detail || error.message || '获取平台列表失败'
         message.error(`获取平台列表失败: ${errorMsg}`)

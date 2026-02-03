@@ -51,9 +51,11 @@ api.interceptors.request.use((config) => {
     }
   }
   
-  // 调试：记录最终请求URL
-  const fullUrl = (config.baseURL || '') + config.url
-  console.log('[API请求]', config.method?.toUpperCase(), config.url, '→', fullUrl)
+  // 调试：记录最终请求URL（仅开发环境）
+  if (import.meta.env.DEV) {
+    const fullUrl = (config.baseURL || '') + config.url
+    console.log('[API请求]', config.method?.toUpperCase(), config.url, '→', fullUrl)
+  }
   
   return config
 })
