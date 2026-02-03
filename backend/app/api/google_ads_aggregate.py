@@ -130,12 +130,10 @@ async def get_campaign_data(
         begin, end, _ = get_date_range_from_type(date_range_type)
     
     # 按广告系列分组查询
-    # 注意：预算(budget)是每日预算，应该使用平均值或最大值，而不是求和
-    # 使用MAX获取每日预算（因为同一广告系列的每日预算通常是相同的）
+    # 注意：预算(budget)是每日预算，使用最近一天的预算作为每日预算
     query = db.query(
         GoogleAdsApiData.campaign_id,
         GoogleAdsApiData.campaign_name,
-        func.max(GoogleAdsApiData.budget).label('daily_budget'),  # 使用MAX获取每日预算
         func.sum(GoogleAdsApiData.cost).label('total_cost'),
         func.sum(GoogleAdsApiData.impressions).label('total_impressions'),
         func.sum(GoogleAdsApiData.clicks).label('total_clicks'),
@@ -164,6 +162,42 @@ async def get_campaign_data(
     
     results = query.all()
     
+    # 获取每个广告系列最近一天的预算（批量查询，提高性能）
+    campaign_ids = [row.campaign_id for row in results]
+    latest_budgets = {}
+    if campaign_ids:
+        # 批量查询：为每个广告系列获取最近一天的预算
+        # 使用子查询找到每个广告系列的最大日期，然后JOIN获取对应的预算
+        from sqlalchemy import select, and_
+        
+        # 子查询：每个广告系列的最大日期
+        max_date_subq = db.query(
+            GoogleAdsApiData.campaign_id,
+            func.max(GoogleAdsApiData.date).label('max_date')
+        ).filter(
+            GoogleAdsApiData.user_id == current_user.id,
+            GoogleAdsApiData.campaign_id.in_(campaign_ids),
+            GoogleAdsApiData.date >= begin,
+            GoogleAdsApiData.date <= end
+        ).group_by(GoogleAdsApiData.campaign_id).subquery()
+        
+        # 主查询：获取每个广告系列在最大日期那天的预算
+        latest_budget_query = db.query(
+            GoogleAdsApiData.campaign_id,
+            GoogleAdsApiData.budget
+        ).join(
+            max_date_subq,
+            and_(
+                GoogleAdsApiData.campaign_id == max_date_subq.c.campaign_id,
+                GoogleAdsApiData.date == max_date_subq.c.max_date
+            )
+        ).filter(
+            GoogleAdsApiData.user_id == current_user.id
+        )
+        
+        for row in latest_budget_query.all():
+            latest_budgets[row.campaign_id] = float(row.budget or 0)
+    
     # 格式化日期范围显示
     begin_str = begin.strftime("%m月%d日")
     end_str = end.strftime("%m月%d日")
@@ -176,11 +210,14 @@ async def get_campaign_data(
         total_clicks = float(row.total_clicks or 0)
         ctr = (total_clicks / total_impressions * 100) if total_impressions > 0 else 0
         
+        # 获取该广告系列最近一天的预算
+        daily_budget = latest_budgets.get(row.campaign_id, 0)
+        
         campaign_data.append({
             "date_range": date_range_display,
             "campaign_name": row.campaign_name,
             "campaign_id": row.campaign_id,
-            "budget": round(float(row.daily_budget or 0), 2),  # 使用每日预算，而不是总预算
+            "budget": round(daily_budget, 2),  # 使用最近一天的预算作为每日预算
             "cost": round(float(row.total_cost or 0), 2),
             "impressions": int(total_impressions),
             "clicks": int(total_clicks),
