@@ -46,6 +46,7 @@ class UnifiedTransactionService:
         "under_review": "pending",
         "processing": "pending",
         "waiting": "pending",
+        "untreated": "pending",  # LinkHaitao的默认状态
         
         # Rejected
         "rejected": "rejected",
