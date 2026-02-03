@@ -107,7 +107,19 @@ async def get_platform_data_detail(
         if platform:
             # 统一转换为小写，因为数据库中存储的是小写（如 'rw', 'cg', 'linkhaitao'）
             platform_lower = platform.lower().strip()
-            query = query.filter(AffiliateTransaction.platform == platform_lower)
+            # 平台代码别名映射（前端可能传递 'lh'，但数据库中存储的是 'linkhaitao'）
+            platform_code_map = {
+                'lh': 'linkhaitao',
+                'link-haitao': 'linkhaitao',
+                'link_haitao': 'linkhaitao',
+                'rw': 'rw',
+                'rewardoo': 'rw',
+                'cg': 'cg',
+                'collabglow': 'cg',
+            }
+            # 如果存在映射，使用映射后的值；否则使用原始值
+            platform_final = platform_code_map.get(platform_lower, platform_lower)
+            query = query.filter(AffiliateTransaction.platform == platform_final)
         
         if merchant:
             query = query.filter(AffiliateTransaction.merchant.like(f"%{merchant}%"))
@@ -205,7 +217,19 @@ async def get_platform_data_summary(
         if platform:
             # 统一转换为小写，因为数据库中存储的是小写（如 'rw', 'cg', 'linkhaitao'）
             platform_lower = platform.lower().strip()
-            base_query = base_query.filter(AffiliateTransaction.platform == platform_lower)
+            # 平台代码别名映射（前端可能传递 'lh'，但数据库中存储的是 'linkhaitao'）
+            platform_code_map = {
+                'lh': 'linkhaitao',
+                'link-haitao': 'linkhaitao',
+                'link_haitao': 'linkhaitao',
+                'rw': 'rw',
+                'rewardoo': 'rw',
+                'cg': 'cg',
+                'collabglow': 'cg',
+            }
+            # 如果存在映射，使用映射后的值；否则使用原始值
+            platform_final = platform_code_map.get(platform_lower, platform_lower)
+            base_query = base_query.filter(AffiliateTransaction.platform == platform_final)
         
         # 总体汇总
         total_query = base_query.with_entities(
