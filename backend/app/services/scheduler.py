@@ -29,7 +29,13 @@ scheduler = BackgroundScheduler(timezone=BEIJING_TZ)
 
 
 def sync_platform_data_job():
-    """同步平台数据任务（每天北京时间4点和16点执行，逐天同步过去1周数据：MID、商家、订单数、佣金、拒付佣金）"""
+    """同步平台数据任务（每天北京时间4点和16点执行，逐天同步过去1周数据：MID、商家、订单数、佣金、拒付佣金）
+    
+    注意：
+    - 总佣金：包含所有状态的佣金（approved + pending + rejected）
+    - 拒付佣金：只包含rejected状态的佣金
+    - 已付佣金：只包含approved状态的佣金（每月1号和15号单独同步）
+    """
     db: Session = SessionLocal()
     try:
         logger.info("=" * 60)
@@ -103,7 +109,7 @@ def sync_platform_data_job():
         logger.info(f"  - 总成功次数: {total_success_count} 次")
         logger.info(f"  - 总失败次数: {total_fail_count} 次")
         logger.info(f"  - 共保存: {total_saved} 条记录")
-        logger.info(f"  - 提取字段: MID、商家、订单数、佣金、拒付佣金")
+        logger.info(f"  - 提取字段: MID、商家、订单数、佣金（所有状态）、拒付佣金（rejected状态）")
         logger.info("=" * 60)
         
     except Exception as e:
@@ -221,6 +227,91 @@ def weekly_l7d_analysis_job():
 
     except Exception as e:
         logger.error("✗ 每周L7D分析任务执行失败: %s", e, exc_info=True)
+    finally:
+        db.close()
+
+
+def sync_approved_commission_job():
+    """同步已付佣金任务（每月1号和15号北京时间00:00执行，同步所有状态的订单，更新已付佣金字段）"""
+    db: Session = SessionLocal()
+    try:
+        logger.info("=" * 60)
+        logger.info("开始执行已付佣金同步任务...")
+        
+        sync_service = PlatformDataSyncService(db)
+        
+        # 获取所有活跃的联盟账号
+        active_accounts = db.query(AffiliateAccount).filter(
+            AffiliateAccount.is_active == True
+        ).all()
+        
+        logger.info(f"找到 {len(active_accounts)} 个活跃账号")
+        
+        # 同步最近30天的数据（确保覆盖可能状态变化的订单）
+        end_date = date.today() - timedelta(days=1)  # 昨天
+        begin_date = end_date - timedelta(days=29)  # 30天前
+        
+        logger.info(f"时间范围: {begin_date.isoformat()} 至 {end_date.isoformat()} (共30天)")
+        logger.info("同步所有状态的订单，更新已付佣金（approved状态）")
+        
+        total_success_count = 0
+        total_fail_count = 0
+        total_saved = 0
+        
+        # 逐天同步
+        current_date = begin_date
+        while current_date <= end_date:
+            logger.info("-" * 60)
+            logger.info(f"正在同步日期: {current_date.isoformat()}")
+            
+            day_success_count = 0
+            day_fail_count = 0
+            day_saved = 0
+            
+            # 为每一天同步所有账号
+            for account in active_accounts:
+                try:
+                    logger.info(f"  同步账号: {account.account_name} (平台: {account.platform.platform_name if account.platform else '未知'})")
+                    # 逐天同步，每次只同步一天的数据
+                    result = sync_service.sync_account_data(
+                        account.id,
+                        current_date.isoformat(),
+                        current_date.isoformat()  # 开始和结束日期相同，只同步一天
+                    )
+                    
+                    if result.get("success"):
+                        day_success_count += 1
+                        saved_count = result.get("saved_count", 0)
+                        day_saved += saved_count
+                        logger.info(f"  ✓ 账号 {account.account_name} 同步成功: 保存 {saved_count} 条记录")
+                    else:
+                        day_fail_count += 1
+                        error_msg = result.get('message', '未知错误')
+                        logger.error(f"  ✗ 账号 {account.account_name} 同步失败: {error_msg}")
+                except Exception as e:
+                    day_fail_count += 1
+                    logger.error(f"  ✗ 账号 {account.account_name} 同步异常: {e}", exc_info=True)
+            
+            logger.info(f"日期 {current_date.isoformat()} 同步完成: 成功 {day_success_count} 个账号, 失败 {day_fail_count} 个账号, 保存 {day_saved} 条记录")
+            
+            total_success_count += day_success_count
+            total_fail_count += day_fail_count
+            total_saved += day_saved
+            
+            # 移动到下一天
+            current_date += timedelta(days=1)
+        
+        logger.info("=" * 60)
+        logger.info(f"已付佣金同步任务完成:")
+        logger.info(f"  - 同步日期数: 30 天")
+        logger.info(f"  - 总成功次数: {total_success_count} 次")
+        logger.info(f"  - 总失败次数: {total_fail_count} 次")
+        logger.info(f"  - 共保存: {total_saved} 条记录")
+        logger.info(f"  - 更新字段: 已付佣金（approved状态的佣金）")
+        logger.info("=" * 60)
+        
+    except Exception as e:
+        logger.error(f"已付佣金同步任务执行失败: {e}", exc_info=True)
     finally:
         db.close()
 
@@ -430,6 +521,15 @@ def start_scheduler():
             trigger=CronTrigger(day=1, hour=8, minute=20),
             id='monthly_summary',
             name='月度总结',
+            replace_existing=True
+        )
+        
+        # 已付佣金同步：每月1号和15号北京时间00:00执行
+        scheduler.add_job(
+            sync_approved_commission_job,
+            trigger=CronTrigger(day="1,15", hour=0, minute=0),
+            id='sync_approved_commission',
+            name='同步已付佣金',
             replace_existing=True
         )
         

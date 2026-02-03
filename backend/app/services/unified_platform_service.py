@@ -124,9 +124,11 @@ class UnifiedPlatformService:
         approved_orders = 0
         # 佣金口径：
         # - total_commission：所有状态的佣金总和（approved + pending + rejected）
-        # - rejected_commission：拒付佣金（rejected）
+        # - approved_commission：已付佣金（approved状态）
+        # - rejected_commission：拒付佣金（rejected状态）
         # 这样净佣金可用 total_commission - rejected_commission（效仿平台数据页口径）
         total_commission = 0.0
+        approved_commission = 0.0
         rejected_orders = 0
         rejected_commission = 0.0
         total_order_amount = 0.0
@@ -146,6 +148,7 @@ class UnifiedPlatformService:
 
             if normalized_status == 'approved':
                 approved_orders += 1
+                approved_commission += commission_amount
             elif normalized_status == 'rejected':
                 rejected_orders += 1
                 rejected_commission += commission_amount
@@ -158,7 +161,7 @@ class UnifiedPlatformService:
             "total_orders": total_orders,
             # 指标2: 已确认订单数
             "approved_orders": approved_orders,
-            # 指标3: 总佣金（已确认）
+            # 指标3: 总佣金（所有状态）
             "total_commission": round(total_commission, 2),
             # 指标4: 拒付订单数
             "rejected_orders": rejected_orders,
@@ -166,6 +169,8 @@ class UnifiedPlatformService:
             "rejected_commission": round(rejected_commission, 2),
             # 指标6: 拒付率（百分比）
             "rejected_rate": round(rejected_rate, 2),
+            # 已付佣金（approved状态）
+            "approved_commission": round(approved_commission, 2),
             # 辅助数据
             "total_order_amount": round(total_order_amount, 2),
             "unique_transaction_count": len(seen_transactions)
