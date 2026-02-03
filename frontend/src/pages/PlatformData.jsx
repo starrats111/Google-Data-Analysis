@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react'
-import { Card, Table, Button, Form, Select, DatePicker, message, Tag, Space, Input, Radio, Statistic, Row, Col } from 'antd'
-import { SearchOutlined, DownloadOutlined, EyeOutlined } from '@ant-design/icons'
+import { Card, Table, Button, Form, Select, DatePicker, message, Tag, Space, Input, Radio, Statistic, Row, Col, Tabs, Modal } from 'antd'
+import { SearchOutlined, DownloadOutlined, EyeOutlined, CheckCircleOutlined, ClockCircleOutlined, CloseCircleOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import { useNavigate } from 'react-router-dom'
 import api from '../services/api'
@@ -19,6 +19,8 @@ export default function PlatformData() {
   const [form] = Form.useForm()
   const [viewMode, setViewMode] = useState('detail') // 'detail' 或 'summary'
   const [searchText, setSearchText] = useState('')
+  const [statusFilter, setStatusFilter] = useState('all') // 'all', 'approved', 'pending', 'rejected'
+  const [selectedMerchant, setSelectedMerchant] = useState(null) // 选中的商家，用于显示详情
 
   useEffect(() => {
     fetchPlatforms()
@@ -234,6 +236,20 @@ export default function PlatformData() {
     }
   ]
 
+  // 根据状态过滤获取佣金字段
+  const getCommissionField = (status) => {
+    switch(status) {
+      case 'approved':
+        return 'approved_commission'
+      case 'pending':
+        return 'pending_commission'
+      case 'rejected':
+        return 'rejected_commission'
+      default:
+        return 'total_commission'
+    }
+  }
+
   // 汇总模式表格列（按商家聚合：MID、商家、订单数、销售额、佣金）
   const summaryColumns = [
     {
@@ -266,7 +282,7 @@ export default function PlatformData() {
       render: (val) => (val || 0).toLocaleString()
     },
     {
-      title: '销售额',
+      title: '销售额($)',
       dataIndex: 'gmv',
       key: 'gmv',
       width: 150,
@@ -274,15 +290,41 @@ export default function PlatformData() {
       render: (val) => `$${(val || 0).toFixed(2)}`
     },
     {
-      title: '佣金',
-      dataIndex: 'total_commission',
-      key: 'total_commission',
+      title: '佣金($)',
+      dataIndex: getCommissionField(statusFilter),
+      key: 'commission',
       width: 150,
       align: 'right',
-      render: (val) => (
-        <span style={{ color: '#52c41a', fontWeight: 'bold' }}>
-          ${(val || 0).toFixed(2)}
-        </span>
+      render: (val, record) => {
+        const commission = val || 0
+        let color = '#52c41a'
+        if (statusFilter === 'rejected') {
+          color = '#ff4d4f'
+        } else if (statusFilter === 'pending') {
+          color = '#faad14'
+        }
+        return (
+          <span 
+            style={{ color, fontWeight: 'bold', cursor: 'pointer' }}
+            onClick={() => setSelectedMerchant(record)}
+          >
+            ${commission.toFixed(2)}
+          </span>
+        )
+      }
+    },
+    {
+      title: '操作',
+      key: 'action',
+      width: 100,
+      render: (_, record) => (
+        <Button 
+          type="link" 
+          size="small"
+          onClick={() => setSelectedMerchant(record)}
+        >
+          查看详情
+        </Button>
       )
     }
   ]
@@ -397,11 +439,29 @@ export default function PlatformData() {
               </Col>
               <Col xs={12} sm={8} md={6}>
                 <Statistic
-                  title="佣金"
-                  value={summaryData.total_commission || summaryData.total_approved_commission}
+                  title="总佣金"
+                  value={summaryData.total_commission || 0}
                   prefix="$"
                   precision={2}
                   valueStyle={{ color: '#52c41a' }}
+                />
+              </Col>
+              <Col xs={12} sm={8} md={6}>
+                <Statistic
+                  title="已付佣金"
+                  value={summaryData.total_approved_commission || 0}
+                  prefix="$"
+                  precision={2}
+                  valueStyle={{ color: '#52c41a' }}
+                />
+              </Col>
+              <Col xs={12} sm={8} md={6}>
+                <Statistic
+                  title="审核佣金"
+                  value={summaryData.total_pending_commission || 0}
+                  prefix="$"
+                  precision={2}
+                  valueStyle={{ color: '#faad14' }}
                 />
               </Col>
               <Col xs={12} sm={8} md={6}>
@@ -438,8 +498,47 @@ export default function PlatformData() {
           </Card>
 
           <Card>
-            <div style={{ marginBottom: 16 }}>
+            <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <h3 style={{ margin: 0 }}>按商家汇总（MID、商家、订单数、销售额、佣金）</h3>
+              <Tabs
+                activeKey={statusFilter}
+                onChange={setStatusFilter}
+                items={[
+                  {
+                    key: 'all',
+                    label: (
+                      <span>
+                        <Tag color="blue">All</Tag>
+                        总佣金
+                      </span>
+                    )
+                  },
+                  {
+                    key: 'approved',
+                    label: (
+                      <span>
+                        <CheckCircleOutlined style={{ color: '#52c41a' }} /> 已付佣金
+                      </span>
+                    )
+                  },
+                  {
+                    key: 'pending',
+                    label: (
+                      <span>
+                        <ClockCircleOutlined style={{ color: '#faad14' }} /> 审核佣金
+                      </span>
+                    )
+                  },
+                  {
+                    key: 'rejected',
+                    label: (
+                      <span>
+                        <CloseCircleOutlined style={{ color: '#ff4d4f' }} /> 拒付佣金
+                      </span>
+                    )
+                  }
+                ]}
+              />
             </div>
             <Table
               columns={summaryColumns}
@@ -449,6 +548,61 @@ export default function PlatformData() {
               pagination={{ pageSize: 20, showSizeChanger: true }}
             />
           </Card>
+
+          {/* 商家详情Modal */}
+          <Modal
+            title={`商家详情 - ${selectedMerchant?.merchant || ''}`}
+            open={!!selectedMerchant}
+            onCancel={() => setSelectedMerchant(null)}
+            footer={null}
+            width={1000}
+          >
+            {selectedMerchant && (
+              <div>
+                <Row gutter={[16, 16]} style={{ marginBottom: 24 }}>
+                  <Col span={6}>
+                    <Statistic title="MID" value={selectedMerchant.mid || '-'} />
+                  </Col>
+                  <Col span={6}>
+                    <Statistic title="商家" value={selectedMerchant.merchant || '-'} />
+                  </Col>
+                  <Col span={6}>
+                    <Statistic title="平台" value={<Tag color="blue">{selectedMerchant.platform}</Tag>} />
+                  </Col>
+                  <Col span={6}>
+                    <Statistic title="订单数" value={selectedMerchant.orders || 0} />
+                  </Col>
+                  <Col span={6}>
+                    <Statistic title="销售额" value={selectedMerchant.gmv || 0} prefix="$" precision={2} />
+                  </Col>
+                  <Col span={6}>
+                    <Statistic title="总佣金" value={selectedMerchant.total_commission || 0} prefix="$" precision={2} valueStyle={{ color: '#52c41a' }} />
+                  </Col>
+                  <Col span={6}>
+                    <Statistic title="已付佣金" value={selectedMerchant.approved_commission || 0} prefix="$" precision={2} valueStyle={{ color: '#52c41a' }} />
+                  </Col>
+                  <Col span={6}>
+                    <Statistic title="审核佣金" value={selectedMerchant.pending_commission || 0} prefix="$" precision={2} valueStyle={{ color: '#faad14' }} />
+                  </Col>
+                  <Col span={6}>
+                    <Statistic title="拒付佣金" value={selectedMerchant.rejected_commission || 0} prefix="$" precision={2} valueStyle={{ color: '#ff4d4f' }} />
+                  </Col>
+                </Row>
+                <Button 
+                  type="primary" 
+                  onClick={() => {
+                    // 切换到明细模式并筛选该商家
+                    setViewMode('detail')
+                    form.setFieldsValue({ merchant: selectedMerchant.merchant })
+                    setSelectedMerchant(null)
+                    handleSearch({ ...form.getFieldsValue(), merchant: selectedMerchant.merchant })
+                  }}
+                >
+                  查看明细数据
+                </Button>
+              </div>
+            )}
+          </Modal>
         </>
       )}
 

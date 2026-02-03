@@ -35,6 +35,19 @@ class PlatformDataDetailResponse(BaseModel):
     net_commission: float
 
 
+class MerchantBreakdownItem(BaseModel):
+    """商家聚合数据项"""
+    mid: str
+    merchant: str
+    platform: str
+    orders: int
+    gmv: float
+    total_commission: float  # 总佣金（所有状态，对应Est. Commission）
+    approved_commission: float  # 已付佣金
+    pending_commission: float  # 审核佣金
+    rejected_commission: float  # 拒付佣金
+
+
 class PlatformDataSummaryResponse(BaseModel):
     """平台数据汇总响应（时间范围级别聚合）"""
     date_range_label: str
@@ -43,11 +56,12 @@ class PlatformDataSummaryResponse(BaseModel):
     total_orders: int
     total_gmv: float
     total_commission: float  # 总佣金（所有状态，对应Est. Commission）
-    total_approved_commission: float  # 已确认佣金（保留用于兼容）
-    total_rejected_commission: float
+    total_approved_commission: float  # 已付佣金
+    total_pending_commission: float  # 审核佣金
+    total_rejected_commission: float  # 拒付佣金
     total_rejected_rate: float
     total_net_commission: float
-    merchant_breakdown: List[dict]  # 按商家聚合（MID、商家、订单数、销售额、佣金）
+    merchant_breakdown: List[MerchantBreakdownItem]  # 按商家聚合（MID、商家、订单数、销售额、佣金）
     platform_breakdown: List[dict]  # 按平台分组的数据（保留用于兼容）
 
 
@@ -374,19 +388,51 @@ async def get_platform_data_summary(
         total_orders = int(total_result.total_orders or 0)
         total_gmv = float(total_result.gmv or 0)
         total_commission = float(total_result.total_commission or 0)  # 总佣金（所有状态）
-        total_approved_commission = float(total_result.approved_commission or 0)
-        total_rejected_commission = float(total_result.rejected_commission or 0)
+        total_approved_commission = float(total_result.approved_commission or 0)  # 已付佣金
+        total_rejected_commission = float(total_result.rejected_commission or 0)  # 拒付佣金
+        
+        # 计算审核佣金（pending状态）
+        pending_query = base_query.with_entities(
+            func.sum(
+                case(
+                    (AffiliateTransaction.status == "pending", AffiliateTransaction.commission_amount),
+                    else_=0
+                )
+            ).label('pending_commission')
+        )
+        pending_result = pending_query.first()
+        total_pending_commission = float(pending_result.pending_commission or 0)  # 审核佣金
+        
         # 拒付率基于总佣金计算（效仿CollabGlow）
         total_rejected_rate = (total_rejected_commission / total_commission * 100) if total_commission > 0 else 0
         total_net_commission = total_commission - total_rejected_commission  # 净佣金 = 总佣金 - 拒付佣金
         
         # 按平台+商家聚合（汇总模式：MID、商家、订单数、销售额、佣金）
+        # 需要统计不同状态的佣金：total（所有状态）、approved（已付）、pending（审核）、rejected（拒付）
         merchant_query = base_query.with_entities(
             AffiliateTransaction.platform,
             AffiliateTransaction.merchant,
             func.count(AffiliateTransaction.id).label('orders'),
             func.sum(AffiliateTransaction.order_amount).label('gmv'),
-            func.sum(AffiliateTransaction.commission_amount).label('total_commission')  # 总佣金（所有状态）
+            func.sum(AffiliateTransaction.commission_amount).label('total_commission'),  # 总佣金（所有状态）
+            func.sum(
+                case(
+                    (AffiliateTransaction.status == "approved", AffiliateTransaction.commission_amount),
+                    else_=0
+                )
+            ).label('approved_commission'),  # 已付佣金
+            func.sum(
+                case(
+                    (AffiliateTransaction.status == "pending", AffiliateTransaction.commission_amount),
+                    else_=0
+                )
+            ).label('pending_commission'),  # 审核佣金
+            func.sum(
+                case(
+                    (AffiliateTransaction.status == "rejected", AffiliateTransaction.commission_amount),
+                    else_=0
+                )
+            ).label('rejected_commission')  # 拒付佣金
         ).group_by(
             AffiliateTransaction.platform,
             AffiliateTransaction.merchant
@@ -405,7 +451,10 @@ async def get_platform_data_summary(
         for r in merchant_results:
             orders = int(r.orders or 0)
             gmv = float(r.gmv or 0)
-            total_comm = float(r.total_commission or 0)
+            total_comm = float(r.total_commission or 0)  # 总佣金（所有状态）
+            approved_comm = float(r.approved_commission or 0)  # 已付佣金
+            pending_comm = float(r.pending_commission or 0)  # 审核佣金
+            rejected_comm = float(r.rejected_commission or 0)  # 拒付佣金
             
             # 尝试查找MID：从GoogleAdsApiData中查找匹配的广告系列，提取MID
             mid = None
@@ -432,7 +481,10 @@ async def get_platform_data_summary(
                 "platform": r.platform,
                 "orders": orders,
                 "gmv": round(gmv, 2),
-                "total_commission": round(total_comm, 2)
+                "total_commission": round(total_comm, 2),  # 总佣金（所有状态，对应Est. Commission）
+                "approved_commission": round(approved_comm, 2),  # 已付佣金
+                "pending_commission": round(pending_comm, 2),  # 审核佣金
+                "rejected_commission": round(rejected_comm, 2)  # 拒付佣金
             })
         
         # 按平台分组汇总（保留用于兼容）
@@ -490,9 +542,10 @@ async def get_platform_data_summary(
             "end_date": end,
             "total_orders": total_orders,
             "total_gmv": round(total_gmv, 2),
-            "total_commission": round(total_commission, 2),  # 总佣金（对应Est. Commission）
-            "total_approved_commission": round(total_approved_commission, 2),  # 保留用于兼容
-            "total_rejected_commission": round(total_rejected_commission, 2),
+            "total_commission": round(total_commission, 2),  # 总佣金（所有状态，对应Est. Commission）
+            "total_approved_commission": round(total_approved_commission, 2),  # 已付佣金
+            "total_pending_commission": round(total_pending_commission, 2),  # 审核佣金
+            "total_rejected_commission": round(total_rejected_commission, 2),  # 拒付佣金
             "total_rejected_rate": round(total_rejected_rate, 2),
             "total_net_commission": round(total_net_commission, 2),
             "merchant_breakdown": merchant_breakdown,  # 按商家聚合（MID、商家、订单数、销售额、佣金）
