@@ -13,6 +13,10 @@ from app.models.affiliate_account import AffiliateAccount
 from app.services.collabglow_service import CollabGlowService
 from app.services.linkhaitao_service import LinkHaitaoService
 from app.services.rewardoo_service import RewardooService
+from app.services.creatorflare_service import CreatorFlareService
+from app.services.linkbux_service import LinkBuxService
+from app.services.partnerboost_service import PartnerBoostService
+from app.services.partnermatic_service import PartnerMaticService
 from app.services.unified_platform_service import UnifiedPlatformService
 from app.services.unified_transaction_service import UnifiedTransactionService
 
@@ -95,10 +99,11 @@ class PlatformDataSyncService:
         )
         
         # 识别其他平台（LB, PM, BSH, CF等）
-        is_lb = platform_code_normalized == "lb" or platform_name_normalized == "lb"
-        is_pm = platform_code_normalized == "pm" or platform_name_normalized == "pm"
+        is_lb = platform_code_normalized in ["lb", "linkbux", "link-bux"] or platform_name_normalized in ["lb", "linkbux"]
+        is_pm = platform_code_normalized in ["pm", "partnermatic", "partner-matic"] or platform_name_normalized in ["pm", "partnermatic"]
+        is_pb = platform_code_normalized in ["pb", "partnerboost", "partner-boost"] or platform_name_normalized in ["pb", "partnerboost"]
         is_bsh = platform_code_normalized == "bsh" or platform_name_normalized == "bsh"
-        is_cf = platform_code_normalized == "cf" or platform_name_normalized == "cf"
+        is_cf = platform_code_normalized in ["cf", "creatorflare", "creator-flare"] or platform_name_normalized in ["cf", "creatorflare"]
         
         if is_collabglow:
             logger.info(f"✓ 识别为CollabGlow平台，开始同步...")
@@ -109,7 +114,19 @@ class PlatformDataSyncService:
         elif is_linkhaitao:
             logger.info(f"✓ 识别为LinkHaitao平台，开始同步...")
             return self._sync_linkhaitao_data(account, begin_date, end_date, token)
-        elif is_lb or is_pm or is_bsh or is_cf:
+        elif is_cf:
+            logger.info(f"✓ 识别为CreatorFlare平台，开始同步...")
+            return self._sync_creatorflare_data(account, begin_date, end_date, token)
+        elif is_lb:
+            logger.info(f"✓ 识别为LinkBux平台，开始同步...")
+            return self._sync_linkbux_data(account, begin_date, end_date, token)
+        elif is_pb:
+            logger.info(f"✓ 识别为PartnerBoost平台，开始同步...")
+            return self._sync_partnerboost_data(account, begin_date, end_date, token)
+        elif is_pm:
+            logger.info(f"✓ 识别为PartnerMatic平台，开始同步...")
+            return self._sync_partnermatic_data(account, begin_date, end_date, token)
+        elif is_bsh:
             # 使用通用平台服务
             platform_code_for_service = platform_code_normalized
             logger.info(f"✓ 识别为{platform_code_for_service.upper()}平台，使用通用服务...")
@@ -807,6 +824,586 @@ class PlatformDataSyncService:
             self.db.rollback()
             logger.error(f"同步LinkHaitao数据失败: {e}")
             return {"success": False, "message": f"同步失败: {str(e)}"}
+    
+    def _sync_creatorflare_data(
+        self,
+        account: AffiliateAccount,
+        begin_date: str,
+        end_date: str,
+        token: Optional[str] = None
+    ) -> Dict:
+        """同步CreatorFlare数据"""
+        try:
+            if not token:
+                return {"success": False, "message": "未配置CreatorFlare Token"}
+            
+            service = CreatorFlareService(token=token)
+            result = service.sync_transactions(begin_date, end_date)
+            
+            if not result.get("success"):
+                return result
+            
+            data = result.get("data", {})
+            transactions_raw = service.extract_transaction_data({
+                "data": {"list": data.get("transactions", [])}
+            })
+            
+            if not transactions_raw:
+                return {
+                    "success": True,
+                    "message": f"同步完成，但该日期范围（{begin_date} ~ {end_date}）内没有数据",
+                    "saved_count": 0
+                }
+            
+            # 先按订单ID分组，对于重复订单，将佣金求和
+            transactions_by_id = {}
+            for tx in transactions_raw:
+                tx_id = tx.get("transaction_id")
+                if not tx_id:
+                    continue
+                
+                if tx_id not in transactions_by_id:
+                    transactions_by_id[tx_id] = {
+                        "tx": tx,
+                        "total_commission": 0,
+                        "count": 0
+                    }
+                
+                commission_amount = float(tx.get("commission_amount", 0) or 0)
+                transactions_by_id[tx_id]["total_commission"] += commission_amount
+                transactions_by_id[tx_id]["count"] += 1
+            
+            # 保存明细交易
+            transaction_service = UnifiedTransactionService(self.db)
+            transaction_saved_count = 0
+            for tx_id, tx_data in transactions_by_id.items():
+                tx = tx_data["tx"]
+                total_commission = tx_data["total_commission"]
+                
+                try:
+                    transaction_time = tx.get('transaction_time')
+                    if isinstance(transaction_time, str):
+                        try:
+                            transaction_time = datetime.strptime(transaction_time, "%Y-%m-%d %H:%M:%S")
+                        except:
+                            try:
+                                transaction_time = datetime.strptime(transaction_time, "%Y-%m-%d")
+                            except:
+                                continue
+                    elif not isinstance(transaction_time, datetime):
+                        continue
+                    
+                    tx_data_dict = {
+                        "transaction_id": tx_id,
+                        "transaction_time": transaction_time,
+                        "status": tx.get("status", "pending"),
+                        "commission_amount": total_commission,
+                        "order_amount": float(tx.get("order_amount", 0) or 0),
+                        "merchant": tx.get("merchant"),
+                    }
+                    
+                    transaction_service.normalize_and_save(
+                        tx=tx_data_dict,
+                        platform='cf',
+                        affiliate_account_id=account.id,
+                        user_id=account.user_id
+                    )
+                    transaction_saved_count += 1
+                except Exception as e:
+                    logger.warning(f"[CF同步] 保存明细交易失败: {e}")
+                    continue
+            
+            # 使用统一服务聚合数据
+            date_data = UnifiedPlatformService.aggregate_by_date(
+                transactions_raw,
+                platform='cf',
+                date_field='transaction_time'
+            )
+            
+            saved_count = 0
+            for comm_date, data_item in date_data.items():
+                try:
+                    platform_data_dict = UnifiedPlatformService.prepare_platform_data(
+                        transactions_raw,
+                        platform='cf',
+                        target_date=comm_date,
+                        date_field='transaction_time'
+                    )
+                    
+                    platform_data = self.db.query(PlatformData).filter(
+                        PlatformData.affiliate_account_id == account.id,
+                        PlatformData.date == comm_date
+                    ).first()
+                    
+                    filtered_dict = {k: v for k, v in platform_data_dict.items() if k != 'rejected_rate'}
+                    
+                    if not platform_data:
+                        platform_data = PlatformData(
+                            affiliate_account_id=account.id,
+                            user_id=account.user_id,
+                            date=comm_date,
+                            **filtered_dict
+                        )
+                        self.db.add(platform_data)
+                    else:
+                        for key, value in filtered_dict.items():
+                            setattr(platform_data, key, value)
+                        platform_data.last_sync_at = datetime.now()
+                    
+                    saved_count += 1
+                except Exception as e:
+                    logger.error(f"保存CreatorFlare数据失败: {e}")
+                    continue
+            
+            self.db.commit()
+            
+            return {
+                "success": True,
+                "message": f"成功同步 {saved_count} 条记录",
+                "saved_count": saved_count
+            }
+            
+        except Exception as e:
+            self.db.rollback()
+            logger.error(f"同步CreatorFlare数据失败: {e}")
+            from app.services.api_config_service import ApiConfigService
+            error_message = ApiConfigService.format_error_message(e, account, "CF API")
+            return {"success": False, "message": f"同步失败: {error_message}"}
+    
+    def _sync_linkbux_data(
+        self,
+        account: AffiliateAccount,
+        begin_date: str,
+        end_date: str,
+        token: Optional[str] = None
+    ) -> Dict:
+        """同步LinkBux数据"""
+        try:
+            if not token:
+                return {"success": False, "message": "未配置LinkBux Token"}
+            
+            service = LinkBuxService(token=token)
+            result = service.sync_transactions(begin_date, end_date)
+            
+            if not result.get("success"):
+                return result
+            
+            data = result.get("data", {})
+            transactions_raw = service.extract_transaction_data({
+                "data": {"list": data.get("transactions", [])}
+            })
+            
+            if not transactions_raw:
+                return {
+                    "success": True,
+                    "message": f"同步完成，但该日期范围（{begin_date} ~ {end_date}）内没有数据",
+                    "saved_count": 0
+                }
+            
+            # 先按订单ID分组，对于重复订单，将佣金求和
+            transactions_by_id = {}
+            for tx in transactions_raw:
+                tx_id = tx.get("transaction_id")
+                if not tx_id:
+                    continue
+                
+                if tx_id not in transactions_by_id:
+                    transactions_by_id[tx_id] = {
+                        "tx": tx,
+                        "total_commission": 0,
+                        "count": 0
+                    }
+                
+                commission_amount = float(tx.get("commission_amount", 0) or 0)
+                transactions_by_id[tx_id]["total_commission"] += commission_amount
+                transactions_by_id[tx_id]["count"] += 1
+            
+            # 保存明细交易
+            transaction_service = UnifiedTransactionService(self.db)
+            transaction_saved_count = 0
+            for tx_id, tx_data in transactions_by_id.items():
+                tx = tx_data["tx"]
+                total_commission = tx_data["total_commission"]
+                
+                try:
+                    transaction_time = tx.get('transaction_time')
+                    if isinstance(transaction_time, str):
+                        try:
+                            transaction_time = datetime.strptime(transaction_time, "%Y-%m-%d %H:%M:%S")
+                        except:
+                            try:
+                                transaction_time = datetime.strptime(transaction_time, "%Y-%m-%d")
+                            except:
+                                continue
+                    elif not isinstance(transaction_time, datetime):
+                        continue
+                    
+                    tx_data_dict = {
+                        "transaction_id": tx_id,
+                        "transaction_time": transaction_time,
+                        "status": tx.get("status", "pending"),
+                        "commission_amount": total_commission,
+                        "order_amount": float(tx.get("order_amount", 0) or 0),
+                        "merchant": tx.get("merchant"),
+                    }
+                    
+                    transaction_service.normalize_and_save(
+                        tx=tx_data_dict,
+                        platform='lb',
+                        affiliate_account_id=account.id,
+                        user_id=account.user_id
+                    )
+                    transaction_saved_count += 1
+                except Exception as e:
+                    logger.warning(f"[LB同步] 保存明细交易失败: {e}")
+                    continue
+            
+            # 使用统一服务聚合数据
+            date_data = UnifiedPlatformService.aggregate_by_date(
+                transactions_raw,
+                platform='lb',
+                date_field='transaction_time'
+            )
+            
+            saved_count = 0
+            for comm_date, data_item in date_data.items():
+                try:
+                    platform_data_dict = UnifiedPlatformService.prepare_platform_data(
+                        transactions_raw,
+                        platform='lb',
+                        target_date=comm_date,
+                        date_field='transaction_time'
+                    )
+                    
+                    platform_data = self.db.query(PlatformData).filter(
+                        PlatformData.affiliate_account_id == account.id,
+                        PlatformData.date == comm_date
+                    ).first()
+                    
+                    filtered_dict = {k: v for k, v in platform_data_dict.items() if k != 'rejected_rate'}
+                    
+                    if not platform_data:
+                        platform_data = PlatformData(
+                            affiliate_account_id=account.id,
+                            user_id=account.user_id,
+                            date=comm_date,
+                            **filtered_dict
+                        )
+                        self.db.add(platform_data)
+                    else:
+                        for key, value in filtered_dict.items():
+                            setattr(platform_data, key, value)
+                        platform_data.last_sync_at = datetime.now()
+                    
+                    saved_count += 1
+                except Exception as e:
+                    logger.error(f"保存LinkBux数据失败: {e}")
+                    continue
+            
+            self.db.commit()
+            
+            return {
+                "success": True,
+                "message": f"成功同步 {saved_count} 条记录",
+                "saved_count": saved_count
+            }
+            
+        except Exception as e:
+            self.db.rollback()
+            logger.error(f"同步LinkBux数据失败: {e}")
+            from app.services.api_config_service import ApiConfigService
+            error_message = ApiConfigService.format_error_message(e, account, "LB API")
+            return {"success": False, "message": f"同步失败: {error_message}"}
+    
+    def _sync_partnerboost_data(
+        self,
+        account: AffiliateAccount,
+        begin_date: str,
+        end_date: str,
+        token: Optional[str] = None
+    ) -> Dict:
+        """同步PartnerBoost数据"""
+        try:
+            if not token:
+                return {"success": False, "message": "未配置PartnerBoost Token"}
+            
+            service = PartnerBoostService(token=token)
+            result = service.sync_transactions(begin_date, end_date)
+            
+            if not result.get("success"):
+                return result
+            
+            data = result.get("data", {})
+            transactions_raw = service.extract_transaction_data({
+                "data": {"list": data.get("transactions", [])}
+            })
+            
+            if not transactions_raw:
+                return {
+                    "success": True,
+                    "message": f"同步完成，但该日期范围（{begin_date} ~ {end_date}）内没有数据",
+                    "saved_count": 0
+                }
+            
+            # 先按订单ID分组，对于重复订单，将佣金求和
+            transactions_by_id = {}
+            for tx in transactions_raw:
+                tx_id = tx.get("transaction_id")
+                if not tx_id:
+                    continue
+                
+                if tx_id not in transactions_by_id:
+                    transactions_by_id[tx_id] = {
+                        "tx": tx,
+                        "total_commission": 0,
+                        "count": 0
+                    }
+                
+                commission_amount = float(tx.get("commission_amount", 0) or 0)
+                transactions_by_id[tx_id]["total_commission"] += commission_amount
+                transactions_by_id[tx_id]["count"] += 1
+            
+            # 保存明细交易
+            transaction_service = UnifiedTransactionService(self.db)
+            transaction_saved_count = 0
+            for tx_id, tx_data in transactions_by_id.items():
+                tx = tx_data["tx"]
+                total_commission = tx_data["total_commission"]
+                
+                try:
+                    transaction_time = tx.get('transaction_time')
+                    if isinstance(transaction_time, str):
+                        try:
+                            transaction_time = datetime.strptime(transaction_time, "%Y-%m-%d %H:%M:%S")
+                        except:
+                            try:
+                                transaction_time = datetime.strptime(transaction_time, "%Y-%m-%d")
+                            except:
+                                continue
+                    elif not isinstance(transaction_time, datetime):
+                        continue
+                    
+                    tx_data_dict = {
+                        "transaction_id": tx_id,
+                        "transaction_time": transaction_time,
+                        "status": tx.get("status", "pending"),
+                        "commission_amount": total_commission,
+                        "order_amount": float(tx.get("order_amount", 0) or 0),
+                        "merchant": tx.get("merchant"),
+                    }
+                    
+                    transaction_service.normalize_and_save(
+                        tx=tx_data_dict,
+                        platform='pb',
+                        affiliate_account_id=account.id,
+                        user_id=account.user_id
+                    )
+                    transaction_saved_count += 1
+                except Exception as e:
+                    logger.warning(f"[PB同步] 保存明细交易失败: {e}")
+                    continue
+            
+            # 使用统一服务聚合数据
+            date_data = UnifiedPlatformService.aggregate_by_date(
+                transactions_raw,
+                platform='pb',
+                date_field='transaction_time'
+            )
+            
+            saved_count = 0
+            for comm_date, data_item in date_data.items():
+                try:
+                    platform_data_dict = UnifiedPlatformService.prepare_platform_data(
+                        transactions_raw,
+                        platform='pb',
+                        target_date=comm_date,
+                        date_field='transaction_time'
+                    )
+                    
+                    platform_data = self.db.query(PlatformData).filter(
+                        PlatformData.affiliate_account_id == account.id,
+                        PlatformData.date == comm_date
+                    ).first()
+                    
+                    filtered_dict = {k: v for k, v in platform_data_dict.items() if k != 'rejected_rate'}
+                    
+                    if not platform_data:
+                        platform_data = PlatformData(
+                            affiliate_account_id=account.id,
+                            user_id=account.user_id,
+                            date=comm_date,
+                            **filtered_dict
+                        )
+                        self.db.add(platform_data)
+                    else:
+                        for key, value in filtered_dict.items():
+                            setattr(platform_data, key, value)
+                        platform_data.last_sync_at = datetime.now()
+                    
+                    saved_count += 1
+                except Exception as e:
+                    logger.error(f"保存PartnerBoost数据失败: {e}")
+                    continue
+            
+            self.db.commit()
+            
+            return {
+                "success": True,
+                "message": f"成功同步 {saved_count} 条记录",
+                "saved_count": saved_count
+            }
+            
+        except Exception as e:
+            self.db.rollback()
+            logger.error(f"同步PartnerBoost数据失败: {e}")
+            from app.services.api_config_service import ApiConfigService
+            error_message = ApiConfigService.format_error_message(e, account, "PB API")
+            return {"success": False, "message": f"同步失败: {error_message}"}
+    
+    def _sync_partnermatic_data(
+        self,
+        account: AffiliateAccount,
+        begin_date: str,
+        end_date: str,
+        token: Optional[str] = None
+    ) -> Dict:
+        """同步PartnerMatic数据"""
+        try:
+            if not token:
+                return {"success": False, "message": "未配置PartnerMatic Token"}
+            
+            service = PartnerMaticService(token=token)
+            result = service.sync_transactions(begin_date, end_date)
+            
+            if not result.get("success"):
+                return result
+            
+            data = result.get("data", {})
+            transactions_raw = service.extract_transaction_data({
+                "data": {"list": data.get("transactions", [])}
+            })
+            
+            if not transactions_raw:
+                return {
+                    "success": True,
+                    "message": f"同步完成，但该日期范围（{begin_date} ~ {end_date}）内没有数据",
+                    "saved_count": 0
+                }
+            
+            # 先按订单ID分组，对于重复订单，将佣金求和
+            transactions_by_id = {}
+            for tx in transactions_raw:
+                tx_id = tx.get("transaction_id")
+                if not tx_id:
+                    continue
+                
+                if tx_id not in transactions_by_id:
+                    transactions_by_id[tx_id] = {
+                        "tx": tx,
+                        "total_commission": 0,
+                        "count": 0
+                    }
+                
+                commission_amount = float(tx.get("commission_amount", 0) or 0)
+                transactions_by_id[tx_id]["total_commission"] += commission_amount
+                transactions_by_id[tx_id]["count"] += 1
+            
+            # 保存明细交易
+            transaction_service = UnifiedTransactionService(self.db)
+            transaction_saved_count = 0
+            for tx_id, tx_data in transactions_by_id.items():
+                tx = tx_data["tx"]
+                total_commission = tx_data["total_commission"]
+                
+                try:
+                    transaction_time = tx.get('transaction_time')
+                    if isinstance(transaction_time, str):
+                        try:
+                            transaction_time = datetime.strptime(transaction_time, "%Y-%m-%d %H:%M:%S")
+                        except:
+                            try:
+                                transaction_time = datetime.strptime(transaction_time, "%Y-%m-%d")
+                            except:
+                                continue
+                    elif not isinstance(transaction_time, datetime):
+                        continue
+                    
+                    tx_data_dict = {
+                        "transaction_id": tx_id,
+                        "transaction_time": transaction_time,
+                        "status": tx.get("status", "pending"),
+                        "commission_amount": total_commission,
+                        "order_amount": float(tx.get("order_amount", 0) or 0),
+                        "merchant": tx.get("merchant"),
+                    }
+                    
+                    transaction_service.normalize_and_save(
+                        tx=tx_data_dict,
+                        platform='pm',
+                        affiliate_account_id=account.id,
+                        user_id=account.user_id
+                    )
+                    transaction_saved_count += 1
+                except Exception as e:
+                    logger.warning(f"[PM同步] 保存明细交易失败: {e}")
+                    continue
+            
+            # 使用统一服务聚合数据
+            date_data = UnifiedPlatformService.aggregate_by_date(
+                transactions_raw,
+                platform='pm',
+                date_field='transaction_time'
+            )
+            
+            saved_count = 0
+            for comm_date, data_item in date_data.items():
+                try:
+                    platform_data_dict = UnifiedPlatformService.prepare_platform_data(
+                        transactions_raw,
+                        platform='pm',
+                        target_date=comm_date,
+                        date_field='transaction_time'
+                    )
+                    
+                    platform_data = self.db.query(PlatformData).filter(
+                        PlatformData.affiliate_account_id == account.id,
+                        PlatformData.date == comm_date
+                    ).first()
+                    
+                    filtered_dict = {k: v for k, v in platform_data_dict.items() if k != 'rejected_rate'}
+                    
+                    if not platform_data:
+                        platform_data = PlatformData(
+                            affiliate_account_id=account.id,
+                            user_id=account.user_id,
+                            date=comm_date,
+                            **filtered_dict
+                        )
+                        self.db.add(platform_data)
+                    else:
+                        for key, value in filtered_dict.items():
+                            setattr(platform_data, key, value)
+                        platform_data.last_sync_at = datetime.now()
+                    
+                    saved_count += 1
+                except Exception as e:
+                    logger.error(f"保存PartnerMatic数据失败: {e}")
+                    continue
+            
+            self.db.commit()
+            
+            return {
+                "success": True,
+                "message": f"成功同步 {saved_count} 条记录",
+                "saved_count": saved_count
+            }
+            
+        except Exception as e:
+            self.db.rollback()
+            logger.error(f"同步PartnerMatic数据失败: {e}")
+            from app.services.api_config_service import ApiConfigService
+            error_message = ApiConfigService.format_error_message(e, account, "PM API")
+            return {"success": False, "message": f"同步失败: {error_message}"}
     
     def _sync_generic_platform_data(
         self,
