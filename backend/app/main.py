@@ -204,6 +204,9 @@ async def options_handler(request: Request, full_path: str):
     origin = request.headers.get("origin")
     headers = get_cors_headers(origin)
     
+    # 确保返回所有允许的头部（使用*而不是只返回请求的头部）
+    headers["Access-Control-Allow-Headers"] = "*"
+    
     # 添加调试日志
     logger.info(f"[CORS] OPTIONS请求: {full_path}, Origin: {origin}")
     logger.debug(f"[CORS] OPTIONS响应头: {headers}")
