@@ -1272,8 +1272,11 @@ class PlatformDataSyncService:
                 return result
             
             data = result.get("data", {})
+            # PartnerMatic API返回的数据格式是 {"data": {"transactions": [...]}}
+            # 但extract_transaction_data期望的是 {"data": {"list": [...]}}
+            transactions = data.get("transactions", [])
             transactions_raw = service.extract_transaction_data({
-                "data": {"list": data.get("transactions", [])}
+                "data": {"list": transactions}
             })
             
             if not transactions_raw:
@@ -1393,7 +1396,9 @@ class PlatformDataSyncService:
             
         except Exception as e:
             self.db.rollback()
-            logger.error(f"同步PartnerMatic数据失败: {e}")
+            logger.error(f"同步PartnerMatic数据失败: {e}", exc_info=True)
+            import traceback
+            logger.debug(f"[PM同步] 错误堆栈: {traceback.format_exc()}")
             from app.services.api_config_service import ApiConfigService
             error_message = ApiConfigService.format_error_message(e, account, "PM API")
             return {"success": False, "message": f"同步失败: {error_message}"}
