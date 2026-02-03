@@ -174,9 +174,6 @@ async def get_campaign_data(
     if mcc_id:
         query = query.filter(GoogleAdsApiData.mcc_id == mcc_id)
     
-    if platform_code:
-        query = query.filter(GoogleAdsApiData.extracted_platform_code == platform_code)
-    
     results = query.all()
     
     # 获取每个广告系列最近一天的预算和状态（批量查询，提高性能）
@@ -245,7 +242,8 @@ async def get_campaign_data(
         status = latest_statuses.get(row.campaign_id, "未知")
         
         # 获取平台信息
-        platform_code = row.extracted_platform_code or _infer_platform_code_from_campaign_name(row.campaign_name)
+        inferred_platform_code = row.extracted_platform_code or _infer_platform_code_from_campaign_name(row.campaign_name)
+        platform_code = inferred_platform_code
         platform_name = platform_code_map.get(platform_code, platform_code) if platform_code else None
         
         campaign_data.append({
@@ -264,6 +262,11 @@ async def get_campaign_data(
             "is_budget_lost": round(float(row.avg_is_budget_lost or 0), 2),
             "is_rank_lost": round(float(row.avg_is_rank_lost or 0), 2)
         })
+
+    # 平台筛选兜底：同时支持 extracted_platform_code 和从 campaign_name 推断的平台
+    if platform_code:
+        want = platform_code.upper()
+        campaign_data = [c for c in campaign_data if (c.get("platform_code") or "").upper() == want]
     
     return {
         "begin_date": begin.strftime("%Y-%m-%d"),
