@@ -107,21 +107,28 @@ async def get_platform_data_detail(
         if platform:
             # 统一转换为小写，因为数据库中存储的是小写（如 'rw', 'cg', 'linkhaitao'）
             platform_lower = platform.lower().strip()
-            # 平台代码别名映射（前端可能传递缩写或全称，但数据库中存储的是标准格式）
+            
+            # 平台代码别名映射（前端可能传递缩写、全称或URL，但数据库中存储的是标准格式）
             platform_code_map = {
                 # CG (CollabGlow)
                 'cg': 'cg',
                 'collabglow': 'cg',
                 'collab-glow': 'cg',
+                'https://www.collabglow.com': 'cg',
+                'https://www.collabglow.com/': 'cg',
                 # RW (Rewardoo)
                 'rw': 'rw',
                 'rewardoo': 'rw',
                 'reward-oo': 'rw',
+                'https://www.rewardoo.com': 'rw',
+                'https://www.rewardoo.com/': 'rw',
                 # LinkHaitao
                 'lh': 'linkhaitao',
                 'linkhaitao': 'linkhaitao',
                 'link-haitao': 'linkhaitao',
                 'link_haitao': 'linkhaitao',
+                'https://www.linkhaitao.com': 'linkhaitao',
+                'https://www.linkhaitao.com/': 'linkhaitao',
                 # PartnerBoost
                 'pb': 'partnerboost',
                 'partnerboost': 'partnerboost',
@@ -143,8 +150,35 @@ async def get_platform_data_detail(
                 'creatorflare': 'creatorflare',
                 'creator-flare': 'creatorflare',
             }
-            # 如果存在映射，使用映射后的值；否则使用原始值
+            
+            # 如果存在映射，使用映射后的值；否则尝试从URL中提取域名
             platform_final = platform_code_map.get(platform_lower, platform_lower)
+            
+            # 如果仍然不匹配，尝试从URL中提取平台代码
+            if platform_final == platform_lower and ('http://' in platform_lower or 'https://' in platform_lower):
+                # 从URL中提取域名
+                import re
+                domain_match = re.search(r'://([^/]+)', platform_lower)
+                if domain_match:
+                    domain = domain_match.group(1).lower()
+                    # 尝试匹配域名
+                    if 'linkhaitao' in domain:
+                        platform_final = 'linkhaitao'
+                    elif 'rewardoo' in domain:
+                        platform_final = 'rw'
+                    elif 'collabglow' in domain:
+                        platform_final = 'cg'
+                    elif 'linkbux' in domain:
+                        platform_final = 'linkbux'
+                    elif 'partnermatic' in domain:
+                        platform_final = 'partnermatic'
+                    elif 'partnerboost' in domain:
+                        platform_final = 'partnerboost'
+                    elif 'brandsparkhub' in domain:
+                        platform_final = 'brandsparkhub'
+                    elif 'creatorflare' in domain:
+                        platform_final = 'creatorflare'
+            
             query = query.filter(AffiliateTransaction.platform == platform_final)
         
         if merchant:
@@ -243,21 +277,28 @@ async def get_platform_data_summary(
         if platform:
             # 统一转换为小写，因为数据库中存储的是小写（如 'rw', 'cg', 'linkhaitao'）
             platform_lower = platform.lower().strip()
-            # 平台代码别名映射（前端可能传递缩写或全称，但数据库中存储的是标准格式）
+            
+            # 平台代码别名映射（前端可能传递缩写、全称或URL，但数据库中存储的是标准格式）
             platform_code_map = {
                 # CG (CollabGlow)
                 'cg': 'cg',
                 'collabglow': 'cg',
                 'collab-glow': 'cg',
+                'https://www.collabglow.com': 'cg',
+                'https://www.collabglow.com/': 'cg',
                 # RW (Rewardoo)
                 'rw': 'rw',
                 'rewardoo': 'rw',
                 'reward-oo': 'rw',
+                'https://www.rewardoo.com': 'rw',
+                'https://www.rewardoo.com/': 'rw',
                 # LinkHaitao
                 'lh': 'linkhaitao',
                 'linkhaitao': 'linkhaitao',
                 'link-haitao': 'linkhaitao',
                 'link_haitao': 'linkhaitao',
+                'https://www.linkhaitao.com': 'linkhaitao',
+                'https://www.linkhaitao.com/': 'linkhaitao',
                 # PartnerBoost
                 'pb': 'partnerboost',
                 'partnerboost': 'partnerboost',
@@ -279,8 +320,35 @@ async def get_platform_data_summary(
                 'creatorflare': 'creatorflare',
                 'creator-flare': 'creatorflare',
             }
-            # 如果存在映射，使用映射后的值；否则使用原始值
+            
+            # 如果存在映射，使用映射后的值；否则尝试从URL中提取域名
             platform_final = platform_code_map.get(platform_lower, platform_lower)
+            
+            # 如果仍然不匹配，尝试从URL中提取平台代码
+            if platform_final == platform_lower and ('http://' in platform_lower or 'https://' in platform_lower):
+                # 从URL中提取域名
+                import re
+                domain_match = re.search(r'://([^/]+)', platform_lower)
+                if domain_match:
+                    domain = domain_match.group(1).lower()
+                    # 尝试匹配域名
+                    if 'linkhaitao' in domain:
+                        platform_final = 'linkhaitao'
+                    elif 'rewardoo' in domain:
+                        platform_final = 'rw'
+                    elif 'collabglow' in domain:
+                        platform_final = 'cg'
+                    elif 'linkbux' in domain:
+                        platform_final = 'linkbux'
+                    elif 'partnermatic' in domain:
+                        platform_final = 'partnermatic'
+                    elif 'partnerboost' in domain:
+                        platform_final = 'partnerboost'
+                    elif 'brandsparkhub' in domain:
+                        platform_final = 'brandsparkhub'
+                    elif 'creatorflare' in domain:
+                        platform_final = 'creatorflare'
+            
             base_query = base_query.filter(AffiliateTransaction.platform == platform_final)
         
         # 总体汇总
