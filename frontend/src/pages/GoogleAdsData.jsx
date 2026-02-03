@@ -291,11 +291,28 @@ export default function GoogleAdsData() {
             scroll={{ x: 1200 }}
             columns={[
               {
-                title: '时间范围',
-                dataIndex: 'date_range',
-                key: 'date_range',
-                width: 150,
-                fixed: 'left'
+                title: '状态',
+                dataIndex: 'status',
+                key: 'status',
+                width: 120,
+                fixed: 'left',
+                render: (status) => {
+                  const statusColors = {
+                    '已启用': '#52c41a',
+                    '已暂停': '#faad14',
+                    '已移除': '#ff4d4f',
+                    '未知': '#999'
+                  }
+                  return <span style={{ color: statusColors[status] || '#999' }}>{status || '未知'}</span>
+                }
+              },
+              {
+                title: '平台',
+                dataIndex: 'platform_name',
+                key: 'platform_name',
+                width: 100,
+                fixed: 'left',
+                render: (text) => text || '-'
               },
               {
                 title: '广告系列',

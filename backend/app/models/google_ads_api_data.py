@@ -26,6 +26,7 @@ class GoogleAdsApiData(Base):
     extracted_account_code = Column(String(50), nullable=True, index=True)  # 从广告系列名提取的账号代码
     
     # 谷歌广告数据
+    status = Column(String(50), nullable=True)  # 广告系列状态（已启用、已暂停、已移除等）
     budget = Column(Float, default=0.0, nullable=False)  # 预算
     cost = Column(Float, default=0.0, nullable=False)  # 费用
     impressions = Column(Float, default=0.0, nullable=False)  # 展示

@@ -83,6 +83,7 @@ class GoogleAdsApiSyncService:
                     if existing:
                         # 更新现有记录
                         existing.campaign_name = campaign_name
+                        existing.status = campaign_data.get("status", "未知")
                         existing.budget = campaign_data.get("budget", 0)
                         existing.cost = campaign_data.get("cost", 0)
                         existing.impressions = campaign_data.get("impressions", 0)
@@ -101,6 +102,7 @@ class GoogleAdsApiSyncService:
                             campaign_id=campaign_data.get("campaign_id"),
                             campaign_name=campaign_name,
                             date=target_date,
+                            status=campaign_data.get("status", "未知"),
                             budget=campaign_data.get("budget", 0),
                             cost=campaign_data.get("cost", 0),
                             impressions=campaign_data.get("impressions", 0),
@@ -286,6 +288,7 @@ class GoogleAdsApiSyncService:
                         SELECT
                             campaign.id,
                             campaign.name,
+                            campaign.status,
                             campaign_budget.amount_micros,
                             metrics.cost_micros,
                             metrics.impressions,
@@ -335,9 +338,20 @@ class GoogleAdsApiSyncService:
                         cost_micros = row.metrics.cost_micros if row.metrics.cost_micros else 0
                         cpc_micros = row.metrics.average_cpc if row.metrics.average_cpc else 0
                         
+                        # 获取状态并转换为中文
+                        status = row.campaign.status.name if hasattr(row.campaign.status, 'name') else str(row.campaign.status)
+                        status_map = {
+                            'ENABLED': '已启用',
+                            'PAUSED': '已暂停',
+                            'REMOVED': '已移除',
+                            'UNKNOWN': '未知'
+                        }
+                        status_cn = status_map.get(status, status)
+                        
                         all_campaigns.append({
                             "campaign_id": str(row.campaign.id),
                             "campaign_name": row.campaign.name,
+                            "status": status_cn,
                             "budget": budget_micros / 1_000_000,  # 从微单位转换为标准单位
                             "cost": cost_micros / 1_000_000,
                             "impressions": row.metrics.impressions if row.metrics.impressions else 0,

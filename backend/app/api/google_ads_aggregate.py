@@ -131,9 +131,11 @@ async def get_campaign_data(
     
     # 按广告系列分组查询
     # 注意：预算(budget)是每日预算，使用最近一天的预算作为每日预算
+    from app.models.affiliate_account import AffiliatePlatform
     query = db.query(
         GoogleAdsApiData.campaign_id,
         GoogleAdsApiData.campaign_name,
+        GoogleAdsApiData.extracted_platform_code,
         func.sum(GoogleAdsApiData.cost).label('total_cost'),
         func.sum(GoogleAdsApiData.impressions).label('total_impressions'),
         func.sum(GoogleAdsApiData.clicks).label('total_clicks'),
@@ -146,7 +148,8 @@ async def get_campaign_data(
         GoogleAdsApiData.date <= end
     ).group_by(
         GoogleAdsApiData.campaign_id,
-        GoogleAdsApiData.campaign_name
+        GoogleAdsApiData.campaign_name,
+        GoogleAdsApiData.extracted_platform_code
     )
     
     # 权限检查
@@ -162,9 +165,10 @@ async def get_campaign_data(
     
     results = query.all()
     
-    # 获取每个广告系列最近一天的预算（批量查询，提高性能）
+    # 获取每个广告系列最近一天的预算和状态（批量查询，提高性能）
     campaign_ids = [row.campaign_id for row in results]
     latest_budgets = {}
+    latest_statuses = {}
     if campaign_ids:
         # 批量查询：为每个广告系列获取最近一天的预算
         # 使用子查询找到每个广告系列的最大日期，然后JOIN获取对应的预算
@@ -181,10 +185,11 @@ async def get_campaign_data(
             GoogleAdsApiData.date <= end
         ).group_by(GoogleAdsApiData.campaign_id).subquery()
         
-        # 主查询：获取每个广告系列在最大日期那天的预算
+        # 主查询：获取每个广告系列在最大日期那天的预算和状态
         latest_budget_query = db.query(
             GoogleAdsApiData.campaign_id,
-            GoogleAdsApiData.budget
+            GoogleAdsApiData.budget,
+            GoogleAdsApiData.status
         ).join(
             max_date_subq,
             and_(
@@ -197,11 +202,22 @@ async def get_campaign_data(
         
         for row in latest_budget_query.all():
             latest_budgets[row.campaign_id] = float(row.budget or 0)
+            latest_statuses[row.campaign_id] = row.status or "未知"
     
     # 格式化日期范围显示
     begin_str = begin.strftime("%m月%d日")
     end_str = end.strftime("%m月%d日")
     date_range_display = f"{begin_str}-{end_str}"
+    
+    # 获取平台信息映射
+    platform_code_map = {}
+    if results:
+        platform_codes = [row.extracted_platform_code for row in results if row.extracted_platform_code]
+        if platform_codes:
+            platforms = db.query(AffiliatePlatform).filter(
+                AffiliatePlatform.platform_code.in_(platform_codes)
+            ).all()
+            platform_code_map = {p.platform_code: p.platform_name for p in platforms}
     
     # 格式化数据
     campaign_data = []
@@ -210,13 +226,21 @@ async def get_campaign_data(
         total_clicks = float(row.total_clicks or 0)
         ctr = (total_clicks / total_impressions * 100) if total_impressions > 0 else 0
         
-        # 获取该广告系列最近一天的预算
+        # 获取该广告系列最近一天的预算和状态
         daily_budget = latest_budgets.get(row.campaign_id, 0)
+        status = latest_statuses.get(row.campaign_id, "未知")
+        
+        # 获取平台信息
+        platform_code = row.extracted_platform_code
+        platform_name = platform_code_map.get(platform_code, platform_code) if platform_code else None
         
         campaign_data.append({
             "date_range": date_range_display,
             "campaign_name": row.campaign_name,
             "campaign_id": row.campaign_id,
+            "platform_code": platform_code,
+            "platform_name": platform_name,
+            "status": status,
             "budget": round(daily_budget, 2),  # 使用最近一天的预算作为每日预算
             "cost": round(float(row.total_cost or 0), 2),
             "impressions": int(total_impressions),
