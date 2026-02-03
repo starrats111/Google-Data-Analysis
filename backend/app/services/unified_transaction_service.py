@@ -145,18 +145,20 @@ class UnifiedTransactionService:
         
         if transaction:
             # 更新现有记录（状态允许覆盖：pending → approved / rejected）
-            # 对于佣金，如果新值更大则更新（可能是状态变化导致的佣金增加）
-            # 如果原佣金为0但新佣金大于0，则更新（可能是佣金字段解析修复）
+            # 对于佣金，使用"求和"策略：将新佣金累加到现有佣金上
+            # 这样可以处理重复订单的情况（平台会将重复订单的佣金相加）
             for key, value in data.items():
                 if key not in ["platform", "transaction_id"]:  # 不更新唯一键
                     if key == "commission_amount":
-                        # 佣金更新策略：
-                        # 1. 如果原佣金为0但新佣金>0，更新（修复佣金解析问题）
-                        # 2. 如果新佣金更大，更新（状态变化可能导致佣金增加）
-                        # 3. 否则保持原佣金（避免重复订单覆盖正确的佣金）
+                        # 佣金更新策略：求和（累加）
+                        # 这样可以处理重复订单的情况，与平台的计算方式一致
                         old_commission = getattr(transaction, key, 0) or 0
                         new_commission = float(value or 0)
-                        if (old_commission == 0 and new_commission > 0) or (new_commission > old_commission):
+                        # 如果新佣金大于0，累加到现有佣金上
+                        if new_commission > 0:
+                            setattr(transaction, key, old_commission + new_commission)
+                        # 如果原佣金为0但新佣金>0，直接设置（首次保存）
+                        elif old_commission == 0 and new_commission > 0:
                             setattr(transaction, key, new_commission)
                         # 否则保持原佣金不变
                     else:
