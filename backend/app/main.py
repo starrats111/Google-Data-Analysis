@@ -83,34 +83,18 @@ app.add_middleware(
 
 # 辅助函数：获取CORS头（必须在CORS配置之后定义）
 def get_cors_headers(origin: str = None) -> dict:
-    """获取CORS响应头"""
-    import re
+    """获取CORS响应头
+    
+    注意：当CORS中间件配置为allow_origins=["*"]时，这里也应该返回"*"
+    因为allow_credentials=False，所以可以安全地使用"*"
+    """
     headers = {
+        "Access-Control-Allow-Origin": "*",  # 始终返回*，因为中间件已配置allow_origins=["*"]
         "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS, PATCH, HEAD",
         "Access-Control-Allow-Headers": "*",
+        "Access-Control-Expose-Headers": "*",
         "Access-Control-Max-Age": "3600",
     }
-    
-    if origin:
-        # 检查origin是否在允许列表中
-        if origin in ALLOWED_ORIGINS:
-            headers["Access-Control-Allow-Origin"] = origin
-            headers["Access-Control-Allow-Credentials"] = "true"
-        elif re.match(ALLOWED_ORIGIN_REGEX, origin):
-            # 使用正则表达式匹配
-            headers["Access-Control-Allow-Origin"] = origin
-            headers["Access-Control-Allow-Credentials"] = "true"
-        else:
-            # 对于google-data-analysis相关域名，也允许（更宽松的策略）
-            if "google-data-analysis" in origin:
-                headers["Access-Control-Allow-Origin"] = origin
-                headers["Access-Control-Allow-Credentials"] = "true"
-            else:
-                # 开发环境：允许所有来源（仅用于调试）
-                headers["Access-Control-Allow-Origin"] = "*"
-    else:
-        # 没有origin，允许所有（用于调试）
-        headers["Access-Control-Allow-Origin"] = "*"
     
     return headers
 
@@ -134,12 +118,19 @@ async def cors_logging_middleware(request: Request, call_next):
     # 处理请求
     response = await call_next(request)
     
+    # 确保所有响应都包含CORS头（即使CORS中间件已经添加，这里作为双重保险）
+    if "Access-Control-Allow-Origin" not in response.headers:
+        cors_headers = get_cors_headers(origin)
+        for key, value in cors_headers.items():
+            response.headers[key] = value
+        logger.warning(f"[CORS修复] {method} {path} 响应缺少CORS头，已添加")
+    
     # 检查响应头
     cors_header = response.headers.get("Access-Control-Allow-Origin")
     if origin and not cors_header:
         logger.warning(f"[CORS警告] {method} {path} 响应缺少CORS头, Origin: {origin}")
     elif origin and cors_header:
-        logger.info(f"[CORS成功] {method} {path}, CORS头: {cors_header}")
+        logger.debug(f"[CORS成功] {method} {path}, CORS头: {cors_header}")
     
     return response
 
