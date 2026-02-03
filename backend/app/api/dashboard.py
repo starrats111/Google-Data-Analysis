@@ -7,18 +7,22 @@
 from typing import List, Optional, Dict, Any
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-from sqlalchemy import func
-from datetime import date, timedelta
+from sqlalchemy import func, and_
+from datetime import date, timedelta, datetime
 
 from app.database import get_db
 from app.middleware.auth import get_current_manager, get_current_user
 from app.models.user import User, UserRole
-from app.models.analysis_result import AnalysisResult
 from app.models.affiliate_account import AffiliateAccount, AffiliatePlatform
-from app.models.data_upload import DataUpload
-from app.config import settings
+from app.models.analysis_result import AnalysisResult
+from app.models.google_ads_api_data import GoogleAdsApiData, GoogleMccAccount
+from app.models.affiliate_transaction import AffiliateTransaction
+import re
 
 router = APIRouter(prefix="/api/dashboard", tags=["dashboard"])
+
+# 注意：/platform-summary 与 /account-details 仍使用旧的 AnalysisResult 历史分析数据，
+# 目前未被“数据总览”页面使用。若后续需要，也应整体迁移到实时来源。
 
 
 @router.get("/overview")
@@ -26,27 +30,53 @@ async def get_overview(
     current_user: User = Depends(get_current_manager),
     db: Session = Depends(get_db)
 ):
-    """获取总览数据"""
-    # 总上传数
-    total_uploads = db.query(DataUpload).count()
-    
-    # 总分析数
-    total_analyses = db.query(AnalysisResult).count()
-    
-    # 活跃员工数
-    active_employees = db.query(func.distinct(AnalysisResult.user_id)).count()
-    
-    # 今日上传数
-    from datetime import date
-    today_uploads = db.query(DataUpload).filter(
-        func.date(DataUpload.uploaded_at) == date.today()
-    ).count()
-    
+    """经理总览：全部改为实时来源（Google Ads 同步 + 联盟交易）"""
+    today = date.today()
+    start_7d = today - timedelta(days=6)
+
+    total_employees = db.query(User).filter(User.role == UserRole.EMPLOYEE).count()
+    total_mcc_accounts = db.query(GoogleMccAccount).count()
+
+    campaigns_7d = db.query(func.count(func.distinct(GoogleAdsApiData.campaign_id))).filter(
+        GoogleAdsApiData.date >= start_7d,
+        GoogleAdsApiData.date <= today,
+    ).scalar() or 0
+
+    cost_7d = db.query(func.sum(GoogleAdsApiData.cost)).filter(
+        GoogleAdsApiData.date >= start_7d,
+        GoogleAdsApiData.date <= today,
+    ).scalar() or 0.0
+
+    # 佣金：按交易时间窗口（所有状态计入总佣金）
+    start_dt = datetime.combine(start_7d, datetime.min.time())
+    end_dt = datetime.combine(today, datetime.max.time())
+    commission_7d = db.query(func.sum(AffiliateTransaction.commission_amount)).filter(
+        AffiliateTransaction.transaction_time >= start_dt,
+        AffiliateTransaction.transaction_time <= end_dt,
+    ).scalar() or 0.0
+
+    # 活跃员工：近7天有Google Ads数据或有交易数据的员工
+    active_ads_users = db.query(func.distinct(GoogleAdsApiData.user_id)).filter(
+        GoogleAdsApiData.date >= start_7d,
+        GoogleAdsApiData.date <= today,
+    ).all()
+    active_tx_users = db.query(func.distinct(AffiliateTransaction.user_id)).filter(
+        AffiliateTransaction.user_id.isnot(None),
+        AffiliateTransaction.transaction_time >= start_dt,
+        AffiliateTransaction.transaction_time <= end_dt,
+    ).all()
+    active_user_ids = {r[0] for r in active_ads_users if r and r[0]} | {r[0] for r in active_tx_users if r and r[0]}
+
+    last_sync_at = db.query(func.max(GoogleAdsApiData.last_sync_at)).scalar()
+
     return {
-        "total_uploads": total_uploads,
-        "total_analyses": total_analyses,
-        "active_employees": active_employees,
-        "today_uploads": today_uploads
+        "total_employees": int(total_employees or 0),
+        "active_employees_7d": int(len(active_user_ids)),
+        "total_mcc_accounts": int(total_mcc_accounts or 0),
+        "campaigns_7d": int(campaigns_7d or 0),
+        "cost_7d": float(cost_7d or 0.0),
+        "commission_7d": float(commission_7d or 0.0),
+        "last_google_sync_at": last_sync_at.isoformat() if last_sync_at else None,
     }
 
 
@@ -55,32 +85,79 @@ async def get_employees_data(
     current_user: User = Depends(get_current_manager),
     db: Session = Depends(get_db)
 ):
-    """获取所有员工数据"""
+    """经理员工列表：实时来源（Google Ads 同步 + 联盟交易）"""
+    today = date.today()
+    start_7d = today - timedelta(days=6)
+    start_dt = datetime.combine(start_7d, datetime.min.time())
+    end_dt = datetime.combine(today, datetime.max.time())
+
     employees = db.query(User).filter(User.role == UserRole.EMPLOYEE).all()
-    
+    employee_ids = [e.id for e in employees]
+
+    # MCC数
+    mcc_rows = db.query(
+        GoogleMccAccount.user_id,
+        func.count(GoogleMccAccount.id).label("mcc_count"),
+    ).filter(
+        GoogleMccAccount.user_id.in_(employee_ids)
+    ).group_by(GoogleMccAccount.user_id).all()
+    mcc_map = {r.user_id: int(r.mcc_count or 0) for r in mcc_rows}
+
+    # Google Ads 聚合（近7天）
+    ads_rows = db.query(
+        GoogleAdsApiData.user_id,
+        func.count(func.distinct(GoogleAdsApiData.campaign_id)).label("campaigns_7d"),
+        func.sum(GoogleAdsApiData.cost).label("cost_7d"),
+        func.max(GoogleAdsApiData.last_sync_at).label("last_sync_at"),
+    ).filter(
+        GoogleAdsApiData.user_id.in_(employee_ids),
+        GoogleAdsApiData.date >= start_7d,
+        GoogleAdsApiData.date <= today,
+    ).group_by(GoogleAdsApiData.user_id).all()
+    ads_map = {
+        r.user_id: {
+            "campaigns_7d": int(r.campaigns_7d or 0),
+            "cost_7d": float(r.cost_7d or 0.0),
+            "last_sync_at": r.last_sync_at.isoformat() if r.last_sync_at else None,
+        }
+        for r in ads_rows
+    }
+
+    # 交易聚合（近7天）
+    tx_rows = db.query(
+        AffiliateTransaction.user_id,
+        func.sum(AffiliateTransaction.commission_amount).label("commission_7d"),
+        func.count(AffiliateTransaction.id).label("orders_7d"),
+    ).filter(
+        AffiliateTransaction.user_id.in_(employee_ids),
+        AffiliateTransaction.transaction_time >= start_dt,
+        AffiliateTransaction.transaction_time <= end_dt,
+    ).group_by(AffiliateTransaction.user_id).all()
+    tx_map = {
+        r.user_id: {
+            "commission_7d": float(r.commission_7d or 0.0),
+            "orders_7d": int(r.orders_7d or 0),
+        }
+        for r in tx_rows
+    }
+
     result = []
-    for employee in employees:
-        # 统计该员工的数据
-        upload_count = db.query(DataUpload).filter(
-            DataUpload.user_id == employee.id
-        ).count()
-        
-        analysis_count = db.query(AnalysisResult).filter(
-            AnalysisResult.user_id == employee.id
-        ).count()
-        
-        last_upload = db.query(DataUpload).filter(
-            DataUpload.user_id == employee.id
-        ).order_by(DataUpload.uploaded_at.desc()).first()
-        
+    for e in employees:
+        a = ads_map.get(e.id, {})
+        t = tx_map.get(e.id, {})
         result.append({
-            "employee_id": employee.employee_id,
-            "username": employee.username,
-            "upload_count": upload_count,
-            "analysis_count": analysis_count,
-            "last_upload": last_upload.uploaded_at.isoformat() if last_upload else None
+            "employee_id": e.employee_id,
+            "username": e.username,
+            "mcc_count": mcc_map.get(e.id, 0),
+            "campaigns_7d": a.get("campaigns_7d", 0),
+            "cost_7d": a.get("cost_7d", 0.0),
+            "commission_7d": t.get("commission_7d", 0.0),
+            "orders_7d": t.get("orders_7d", 0),
+            "last_google_sync_at": a.get("last_sync_at"),
         })
-    
+
+    # 默认按 cost_7d 降序
+    result.sort(key=lambda x: float(x.get("cost_7d") or 0.0), reverse=True)
     return result
 
 
@@ -140,98 +217,23 @@ def _ai_commentary(c: dict) -> str:
         parts.append(f"平均CPC约{cpc:.2f}。")
     return "".join(parts)
 
+def _infer_platform_code_from_campaign_name(campaign_name: str) -> Optional[str]:
+    """支持：001-LB1-xxx / 001_LB1_xxx / 001-LB-xxx"""
+    if not campaign_name:
+        return None
+    m = re.match(r"^\d+[_-]([A-Za-z]{2,3})\d*[_-]", campaign_name)
+    return m.group(1).upper() if m else None
 
-def _call_openai_for_comments(campaigns: List[dict]) -> Dict[str, str]:
-    """
-    调用 OpenAI(ChatGPT) 对 6 条广告进行点评，返回：campaign_name -> comment
-    - 若未配置 OPENAI_API_KEY 或调用失败，抛异常由上层兜底为规则点评
-    """
-    import json
-    import urllib.request
-    import urllib.error
 
-    api_key = (getattr(settings, "OPENAI_API_KEY", "") or "").strip()
-    if not api_key:
-        raise RuntimeError("OPENAI_API_KEY not set")
-
-    model = (getattr(settings, "OPENAI_MODEL", "") or "gpt-4o-mini").strip()
-    base_url = (getattr(settings, "OPENAI_BASE_URL", "") or "https://api.openai.com/v1").strip().rstrip("/")
-
-    # 只给高信号字段，减少 token
-    payload_rows = []
-    for c in campaigns:
-        payload_rows.append({
-            "campaign_name": c.get("campaign_name"),
-            "roi": c.get("roi"),
-            "orders": c.get("orders"),
-            "commission": c.get("commission"),
-            "cost": c.get("cost"),
-            "clicks": c.get("clicks"),
-            "cpc": c.get("cpc"),
-        })
-
-    system = (
-        "你是资深Google广告投手。你将收到6条广告系列的汇总指标。"
-        "请分别给出每条广告的点评与建议动作，要求简洁、可执行、中文。"
-        "不要输出多余解释，严格输出JSON对象：key为campaign_name，value为点评字符串。"
-        "点评建议要结合ROI、订单、成本，给出明确动作（加预算/不动/减停/优化方向）。"
-    )
-    user = {
-        "range_note": "这些数据来自指定区间的汇总（Top3/Bottom3按ROI排序）",
-        "campaigns": payload_rows,
-    }
-
-    body = {
-        "model": model,
-        "messages": [
-            {"role": "system", "content": system},
-            {"role": "user", "content": json.dumps(user, ensure_ascii=False)},
-        ],
-        "temperature": 0.2,
-        "max_tokens": 700,
-    }
-
-    req = urllib.request.Request(
-        url=f"{base_url}/chat/completions",
-        data=json.dumps(body).encode("utf-8"),
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        },
-        method="POST",
-    )
-
-    try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            raw = resp.read().decode("utf-8")
-    except urllib.error.HTTPError as e:
-        raise RuntimeError(f"OpenAI HTTPError: {e.code} {e.read().decode('utf-8', errors='ignore')}")
-    except Exception as e:
-        raise RuntimeError(f"OpenAI request failed: {str(e)}")
-
-    data = json.loads(raw)
-    content = (((data.get("choices") or [{}])[0]).get("message") or {}).get("content") or ""
-    content = content.strip()
-    # 解析 JSON
-    try:
-        parsed = json.loads(content)
-        if isinstance(parsed, dict):
-            return {str(k): str(v) for k, v in parsed.items()}
-    except Exception:
-        pass
-
-    # 兜底：尝试从文本里截取 JSON（模型有时会包裹 ```json）
-    if "{" in content and "}" in content:
-        try:
-            start = content.index("{")
-            end = content.rindex("}") + 1
-            parsed = json.loads(content[start:end])
-            if isinstance(parsed, dict):
-                return {str(k): str(v) for k, v in parsed.items()}
-        except Exception:
-            pass
-
-    raise RuntimeError("OpenAI response is not valid JSON")
+def _infer_merchant_id_from_campaign_name(campaign_name: str) -> Optional[str]:
+    """商家ID：广告系列名最后一段纯数字"""
+    if not campaign_name:
+        return None
+    parts = [p for p in re.split(r"[_-]", campaign_name) if p]
+    if len(parts) < 2:
+        return None
+    last = parts[-1]
+    return last if re.match(r"^\d+$", last) else None
 
 
 @router.get("/employee-insights")
@@ -248,9 +250,6 @@ async def get_employee_insights(
     - 费用趋势（按日）
     - “AI点评”（规则版）
     """
-    from app.models.ad_campaign_daily_metric import AdCampaignDailyMetric
-    from app.models.ad_campaign import AdCampaign
-
     target_user_id = current_user.id
     if user_id is not None:
         if current_user.role != UserRole.MANAGER:
@@ -259,60 +258,114 @@ async def get_employee_insights(
 
     start_d, end_d = _calc_range_dates(range)
 
-    # 趋势：按天汇总
-    trend_rows = db.query(
-        AdCampaignDailyMetric.date.label("date"),
-        func.sum(AdCampaignDailyMetric.commission).label("commission"),
-        func.sum(AdCampaignDailyMetric.cost).label("cost"),
+    # 时间窗口
+    start_dt = datetime.combine(start_d, datetime.min.time())
+    end_dt = datetime.combine(end_d, datetime.max.time())
+
+    # 1) 趋势：Google Ads 费用（按天）
+    cost_rows = db.query(
+        GoogleAdsApiData.date.label("date"),
+        func.sum(GoogleAdsApiData.cost).label("cost"),
     ).filter(
-        AdCampaignDailyMetric.user_id == target_user_id,
-        AdCampaignDailyMetric.date >= start_d,
-        AdCampaignDailyMetric.date <= end_d,
-    ).group_by(
-        AdCampaignDailyMetric.date
-    ).order_by(
-        AdCampaignDailyMetric.date.asc()
-    ).all()
+        GoogleAdsApiData.user_id == target_user_id,
+        GoogleAdsApiData.date >= start_d,
+        GoogleAdsApiData.date <= end_d,
+    ).group_by(GoogleAdsApiData.date).all()
+    cost_map = {r.date.strftime("%Y-%m-%d"): float(r.cost or 0.0) for r in cost_rows}
 
-    trend = [
-        {
-            "date": r.date.strftime("%Y-%m-%d"),
-            "commission": float(r.commission or 0.0),
-            "cost": float(r.cost or 0.0),
-        }
-        for r in trend_rows
-    ]
+    # 2) 趋势：联盟佣金（所有状态计入总佣金）（按天）
+    comm_rows = db.query(
+        func.date(AffiliateTransaction.transaction_time).label("d"),
+        func.sum(AffiliateTransaction.commission_amount).label("commission"),
+    ).filter(
+        AffiliateTransaction.user_id == target_user_id,
+        AffiliateTransaction.transaction_time >= start_dt,
+        AffiliateTransaction.transaction_time <= end_dt,
+    ).group_by(func.date(AffiliateTransaction.transaction_time)).all()
+    comm_map = {
+        (r.d.strftime("%Y-%m-%d") if hasattr(r.d, "strftime") else str(r.d)): float(r.commission or 0.0)
+        for r in comm_rows
+    }
 
-    # 广告系列聚合：按 campaign_id
-    camp_rows = db.query(
-        AdCampaign.id.label("campaign_id"),
-        AdCampaign.campaign_name.label("campaign_name"),
-        func.sum(AdCampaignDailyMetric.commission).label("commission"),
-        func.sum(AdCampaignDailyMetric.cost).label("cost"),
-        func.sum(AdCampaignDailyMetric.orders).label("orders"),
-        func.sum(AdCampaignDailyMetric.clicks).label("clicks"),
-        func.sum(AdCampaignDailyMetric.impressions).label("impressions"),
+    # 生成完整日期序列
+    trend = []
+    d = start_d
+    while d <= end_d:
+        ds = d.strftime("%Y-%m-%d")
+        trend.append({
+            "date": ds,
+            "commission": float(comm_map.get(ds, 0.0)),
+            "cost": float(cost_map.get(ds, 0.0)),
+        })
+        d += timedelta(days=1)
+
+    # 3) 预加载：用户的联盟账号映射 (platform_code, account_code)->affiliate_account_id
+    account_rows = db.query(
+        AffiliateAccount.id,
+        AffiliateAccount.account_code,
+        AffiliatePlatform.platform_code,
     ).join(
-        AdCampaign, AdCampaign.id == AdCampaignDailyMetric.campaign_id
+        AffiliatePlatform, AffiliatePlatform.id == AffiliateAccount.platform_id
     ).filter(
-        AdCampaignDailyMetric.user_id == target_user_id,
-        AdCampaignDailyMetric.date >= start_d,
-        AdCampaignDailyMetric.date <= end_d,
+        AffiliateAccount.user_id == target_user_id,
+        AffiliateAccount.is_active == True,
+    ).all()
+    acct_map = {}
+    for r in account_rows:
+        pcode = (r.platform_code or "").upper()
+        acode = (r.account_code or "").strip()
+        if pcode and acode:
+            acct_map[(pcode, acode)] = int(r.id)
+
+    # 4) 预加载：近区间内按 affiliate_account_id 聚合佣金/订单
+    tx_by_acct = db.query(
+        AffiliateTransaction.affiliate_account_id.label("aid"),
+        func.sum(AffiliateTransaction.commission_amount).label("commission"),
+        func.count(AffiliateTransaction.id).label("orders"),
+    ).filter(
+        AffiliateTransaction.user_id == target_user_id,
+        AffiliateTransaction.affiliate_account_id.isnot(None),
+        AffiliateTransaction.transaction_time >= start_dt,
+        AffiliateTransaction.transaction_time <= end_dt,
+    ).group_by(AffiliateTransaction.affiliate_account_id).all()
+    comm_by_aid = {int(r.aid): float(r.commission or 0.0) for r in tx_by_acct if r.aid is not None}
+    orders_by_aid = {int(r.aid): int(r.orders or 0) for r in tx_by_acct if r.aid is not None}
+
+    # 5) 广告系列聚合（按 campaign_id）：费用/点击/展示（实时）
+    camp_rows = db.query(
+        GoogleAdsApiData.campaign_id.label("campaign_id"),
+        GoogleAdsApiData.campaign_name.label("campaign_name"),
+        func.sum(GoogleAdsApiData.cost).label("cost"),
+        func.sum(GoogleAdsApiData.clicks).label("clicks"),
+        func.sum(GoogleAdsApiData.impressions).label("impressions"),
+    ).filter(
+        GoogleAdsApiData.user_id == target_user_id,
+        GoogleAdsApiData.date >= start_d,
+        GoogleAdsApiData.date <= end_d,
     ).group_by(
-        AdCampaign.id, AdCampaign.campaign_name
+        GoogleAdsApiData.campaign_id, GoogleAdsApiData.campaign_name
     ).all()
 
     campaigns = []
     for r in camp_rows:
-        commission = float(r.commission or 0.0)
         cost = float(r.cost or 0.0)
-        orders = float(r.orders or 0.0)
         clicks = float(r.clicks or 0.0)
         impressions = float(r.impressions or 0.0)
+        platform_code = _infer_platform_code_from_campaign_name(r.campaign_name)
+        merchant_id = _infer_merchant_id_from_campaign_name(r.campaign_name)
+
+        affiliate_account_id = None
+        if platform_code and merchant_id:
+            affiliate_account_id = acct_map.get((platform_code.upper(), str(merchant_id).strip()))
+
+        commission = float(comm_by_aid.get(int(affiliate_account_id), 0.0)) if affiliate_account_id else 0.0
+        orders = int(orders_by_aid.get(int(affiliate_account_id), 0)) if affiliate_account_id else 0
+
         roi = ((commission - cost) / cost) if cost > 0 else None
         cpc = (cost / clicks) if clicks > 0 else None
+
         campaigns.append({
-            "campaign_id": int(r.campaign_id),
+            "campaign_id": str(r.campaign_id),
             "campaign_name": r.campaign_name,
             "commission": commission,
             "cost": cost,
@@ -329,22 +382,26 @@ async def get_employee_insights(
     top3 = valid_sorted[:3]
     bottom3 = list(reversed(valid_sorted[-3:])) if len(valid_sorted) >= 3 else list(reversed(valid_sorted))
 
-    # 追加点评：优先 ChatGPT（若未配置Key/失败则回退规则点评）
-    try:
-        comments = _call_openai_for_comments(top3 + bottom3)
-    except Exception:
-        comments = {}
-
     for c in top3:
-        c["ai_commentary"] = comments.get(c.get("campaign_name") or "", "") or _ai_commentary(c)
+        c["ai_commentary"] = _ai_commentary(c)
     for c in bottom3:
-        c["ai_commentary"] = comments.get(c.get("campaign_name") or "", "") or _ai_commentary(c)
+        c["ai_commentary"] = _ai_commentary(c)
+
+    total_cost = float(sum([t.get("cost", 0.0) for t in trend]) or 0.0)
+    total_commission = float(sum([t.get("commission", 0.0) for t in trend]) or 0.0)
+    total_roi = ((total_commission - total_cost) / total_cost) if total_cost > 0 else None
 
     return {
         "user_id": target_user_id,
         "range": range,
         "start_date": start_d.strftime("%Y-%m-%d"),
         "end_date": end_d.strftime("%Y-%m-%d"),
+        "summary": {
+            "total_commission": round(total_commission, 2),
+            "total_cost": round(total_cost, 2),
+            "roi": round(float(total_roi), 4) if total_roi is not None else None,
+            "campaigns": len(campaigns),
+        },
         "top3": top3,
         "bottom3": bottom3,
         "trend": trend,

@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react'
-import { Card, Row, Col, Table, message, Segmented, Tag, Typography, Space } from 'antd'
+import { Card, Row, Col, Table, message, Segmented, Tag, Typography, Space, Statistic } from 'antd'
 import { useAuth } from '../store/authStore'
 import api from '../services/api'
 import ReactECharts from 'echarts-for-react'
@@ -53,14 +53,10 @@ const Dashboard = () => {
   }
 
   const fetchEmployeeData = async () => {
-    // 员工个人数据
     setLoading(true)
     try {
-      const [statRes, insightRes] = await Promise.all([
-        api.get('/api/user/statistics'),
-        api.get('/api/dashboard/employee-insights', { params: { range: insightRange === '过去15天' ? '15d' : insightRange === '本月' ? 'month' : '7d' } }),
-      ])
-      setOverviewData(statRes.data)
+      const insightRes = await api.get('/api/dashboard/employee-insights', { params: { range: insightRange === '过去15天' ? '15d' : insightRange === '本月' ? 'month' : '7d' } })
+      setOverviewData(null)
       setInsights(insightRes.data)
     } catch (error) {
       message.error('获取数据失败')
@@ -73,9 +69,12 @@ const Dashboard = () => {
     const columns = [
       { title: '员工编号', dataIndex: 'employee_id', key: 'employee_id' },
       { title: '用户名', dataIndex: 'username', key: 'username' },
-      { title: '上传次数', dataIndex: 'upload_count', key: 'upload_count' },
-      { title: '分析次数', dataIndex: 'analysis_count', key: 'analysis_count' },
-      { title: '最后上传时间', dataIndex: 'last_upload', key: 'last_upload' },
+      { title: 'MCC数', dataIndex: 'mcc_count', key: 'mcc_count', align: 'right' },
+      { title: '近7天广告系列数', dataIndex: 'campaigns_7d', key: 'campaigns_7d', align: 'right' },
+      { title: '近7天费用', dataIndex: 'cost_7d', key: 'cost_7d', align: 'right', render: (v) => Number(v || 0).toFixed(2) },
+      { title: '近7天佣金', dataIndex: 'commission_7d', key: 'commission_7d', align: 'right', render: (v) => Number(v || 0).toFixed(2) },
+      { title: '近7天订单', dataIndex: 'orders_7d', key: 'orders_7d', align: 'right' },
+      { title: '最后同步时间', dataIndex: 'last_google_sync_at', key: 'last_google_sync_at' },
     ]
 
     return (
@@ -83,23 +82,23 @@ const Dashboard = () => {
         <h2>数据总览</h2>
         <Row gutter={16} style={{ marginBottom: 24 }}>
           <Col span={6}>
-            <Card title="总上传数" bordered={false}>
-              {overviewData?.total_uploads || 0}
+            <Card bordered={false}>
+              <Statistic title="总员工数" value={overviewData?.total_employees || 0} />
             </Card>
           </Col>
           <Col span={6}>
-            <Card title="总分析数" bordered={false}>
-              {overviewData?.total_analyses || 0}
+            <Card bordered={false}>
+              <Statistic title="活跃员工(近7天)" value={overviewData?.active_employees_7d || 0} />
             </Card>
           </Col>
           <Col span={6}>
-            <Card title="活跃员工" bordered={false}>
-              {overviewData?.active_employees || 0}
+            <Card bordered={false}>
+              <Statistic title="近7天广告费用" value={overviewData?.cost_7d || 0} precision={2} />
             </Card>
           </Col>
           <Col span={6}>
-            <Card title="今日上传" bordered={false}>
-              {overviewData?.today_uploads || 0}
+            <Card bordered={false}>
+              <Statistic title="近7天总佣金" value={overviewData?.commission_7d || 0} precision={2} />
             </Card>
           </Col>
         </Row>
@@ -178,6 +177,24 @@ const Dashboard = () => {
         <Col span={12}>
           <Card title="费用走向">
             <ReactECharts option={costOption} style={{ height: 260 }} />
+          </Card>
+        </Col>
+      </Row>
+
+      <Row gutter={16} style={{ marginBottom: 16 }}>
+        <Col span={8}>
+          <Card bordered={false}>
+            <Statistic title="区间总佣金" value={insights?.summary?.total_commission || 0} precision={2} />
+          </Card>
+        </Col>
+        <Col span={8}>
+          <Card bordered={false}>
+            <Statistic title="区间总费用" value={insights?.summary?.total_cost || 0} precision={2} />
+          </Card>
+        </Col>
+        <Col span={8}>
+          <Card bordered={false}>
+            <Statistic title="区间ROI" value={insights?.summary?.roi ?? 0} precision={4} />
           </Card>
         </Col>
       </Row>
