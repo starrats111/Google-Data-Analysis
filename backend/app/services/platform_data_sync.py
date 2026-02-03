@@ -411,14 +411,6 @@ class PlatformDataSyncService:
             logger.info(f"[RW同步] TransactionDetails API返回 {len(transactions_raw)} 笔交易（订单）")
             print(f"[RW同步] TransactionDetails API返回 {len(transactions_raw)} 笔交易（订单）")
             
-            # 先保存明细交易到AffiliateTransaction表（用于查询）
-            transaction_service = UnifiedTransactionService(self.db)
-            transaction_saved_count = 0
-            logger.info(f"[RW同步] 开始保存 {len(transactions_raw)} 条明细交易到AffiliateTransaction表")
-            
-            for idx, tx in enumerate(transactions_raw):
-                try:
-                    # 转换时间格式
             # 先按订单ID分组，对于重复订单，将佣金求和（与平台计算方式一致）
             transactions_by_id = {}
             for tx in transactions_raw:
@@ -441,6 +433,7 @@ class PlatformDataSyncService:
             # 先保存明细交易到AffiliateTransaction表（用于查询）
             transaction_service = UnifiedTransactionService(self.db)
             transaction_saved_count = 0
+            logger.info(f"[RW同步] 开始保存 {len(transactions_by_id)} 条去重后的明细交易到AffiliateTransaction表")
             for tx_id, tx_data_grouped in transactions_by_id.items():
                 tx = tx_data_grouped["tx"]
                 total_commission = tx_data_grouped["total_commission"]
