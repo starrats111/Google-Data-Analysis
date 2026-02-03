@@ -1262,8 +1262,18 @@ class PlatformDataSyncService:
     ) -> Dict:
         """同步PartnerMatic数据"""
         try:
+            # 获取token：优先使用传入的token，如果没有则从账号备注中读取
+            import json
             if not token:
-                return {"success": False, "message": "未配置PartnerMatic Token"}
+                if account.notes:
+                    try:
+                        notes_data = json.loads(account.notes)
+                        token = notes_data.get("partnermatic_token") or notes_data.get("pm_token") or notes_data.get("api_token")
+                    except:
+                        pass
+            
+            if not token:
+                return {"success": False, "message": "未配置PartnerMatic Token。请在同步对话框中输入Token，或在账号编辑页面的备注中配置。"}
             
             service = PartnerMaticService(token=token)
             result = service.sync_transactions(begin_date, end_date)
