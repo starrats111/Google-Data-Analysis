@@ -158,8 +158,8 @@ export default function GoogleAdsData() {
         return 2
       }
       campaigns.sort((a, b) => {
-        const ra = statusRank(a.status)
-        const rb = statusRank(b.status)
+        const ra = statusRank(a.status_code || a.status)
+        const rb = statusRank(b.status_code || b.status)
         if (ra !== rb) return ra - rb
         // 同状态下按花费降序
         return (Number(b.cost || 0) - Number(a.cost || 0))

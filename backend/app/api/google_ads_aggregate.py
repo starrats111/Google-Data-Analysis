@@ -121,6 +121,41 @@ def _infer_merchant_id_from_campaign_name(campaign_name: str) -> Optional[str]:
     return last if re.match(r"^\d+$", last) else None
 
 
+def _normalize_status(status_value: Optional[str]) -> tuple[str, str]:
+    """
+    统一状态：返回 (status_code, status_label)
+    - status_code：ENABLED/PAUSED/REMOVED/UNKNOWN（用于筛选/排序）
+    - status_label：已启用/已暂停/已移除/未知（用于展示）
+    """
+    raw = (status_value or "").strip()
+    upper = raw.upper()
+
+    # 已经是中文（历史数据可能存中文）
+    zh_to_code = {
+        "已启用": "ENABLED",
+        "已暂停": "PAUSED",
+        "已停用": "PAUSED",
+        "已移除": "REMOVED",
+        "未知": "UNKNOWN",
+    }
+    if raw in zh_to_code:
+        code = zh_to_code[raw]
+        label = raw if raw != "已停用" else "已暂停"
+        return code, label
+
+    # 英文/枚举
+    code_to_label = {
+        "ENABLED": "已启用",
+        "PAUSED": "已暂停",
+        "REMOVED": "已移除",
+        "UNKNOWN": "未知",
+    }
+    if upper in code_to_label:
+        return upper, code_to_label[upper]
+
+    return "UNKNOWN", (raw or "未知")
+
+
 @router.get("/by-campaign")
 async def get_campaign_data(
     date_range_type: str = Query(..., description="日期范围类型: past7days, thisWeek, thisMonth, today, yesterday, custom"),
@@ -256,7 +291,8 @@ async def get_campaign_data(
         
         # 获取该广告系列最近一天的预算和状态
         daily_budget = latest_budgets.get(row.campaign_id, 0)
-        status = latest_statuses.get(row.campaign_id, "未知")
+        raw_status = latest_statuses.get(row.campaign_id, "未知")
+        status_code, status_label = _normalize_status(raw_status)
         
         # 获取平台信息
         inferred_platform_code = row.extracted_platform_code or _infer_platform_code_from_campaign_name(row.campaign_name)
@@ -270,7 +306,8 @@ async def get_campaign_data(
             "campaign_id": row.campaign_id,
             "platform_code": platform_code,
             "platform_name": platform_name,
-            "status": status,
+            "status": status_label,
+            "status_code": status_code,
             "merchant_id": inferred_mid,
             "budget": round(daily_budget, 2),  # 使用最近一天的预算作为每日预算
             "cost": round(float(row.total_cost or 0), 2),
@@ -289,7 +326,7 @@ async def get_campaign_data(
 
     if status:
         want_s = status.upper()
-        campaign_data = [c for c in campaign_data if (c.get("status") or "").upper() == want_s]
+        campaign_data = [c for c in campaign_data if (c.get("status_code") or "").upper() == want_s]
 
     if merchant_id:
         want_mid = str(merchant_id).strip()
