@@ -3,10 +3,13 @@
 从谷歌广告系列名中提取平台名和账号代码
 """
 import re
+import logging
 from typing import Optional, Dict, Tuple
 from sqlalchemy.orm import Session
 from app.models.google_ads_api_data import CampaignPlatformMapping
 from app.models.affiliate_account import AffiliatePlatform
+
+logger = logging.getLogger(__name__)
 
 
 class CampaignMatcher:
@@ -56,10 +59,35 @@ class CampaignMatcher:
                 continue
         
         # 2. 尝试从广告系列名中自动提取（常见格式）
-        # 格式1: "序号-平台-商家-投放国家-投放时间-MID" (新格式)
-        # 例如: "001-RW-bofrost-US-0126-126966" -> 提取 "RW"
-        new_format_pattern = r"^\d+[_-]([a-z]{2,})[_-]"  # 序号-平台- 或 序号_平台_
-        match = re.match(new_format_pattern, campaign_name, re.IGNORECASE)
+        # 格式1: "序号-平台-商家-投放国家-投放时间-商家ID" (标准格式)
+        # 例如: "001-RW-bofrost-US-0126-126966" -> 提取 "RW" 和 "126966"
+        # 格式: 序号(数字)-平台(2-3字母)-商家-国家-时间-商家ID
+        new_format_pattern = r"^(\d+)[_-]([A-Za-z]{2,3})[_-]([A-Za-z0-9]+)[_-]([A-Za-z]{2})[_-](\d+)[_-](\d+)$"
+        match = re.match(new_format_pattern, campaign_name)
+        if match:
+            # 提取平台代码（第2个字段）
+            platform_code = match.group(2).upper()  # 转换为大写（RW, CG, LH等）
+            # 提取商家ID（最后一个字段，第6个字段）
+            account_code = match.group(6)
+            
+            # 验证平台代码是否存在（支持大小写不敏感）
+            platform = self.db.query(AffiliatePlatform).filter(
+                AffiliatePlatform.platform_code.ilike(platform_code)
+            ).first()
+            
+            if platform:
+                logger.debug(f"从广告系列名 '{campaign_name}' 提取平台代码: {platform.platform_code}, 账号代码: {account_code}")
+                return {
+                    "platform_code": platform.platform_code,
+                    "account_code": account_code
+                }
+            else:
+                logger.debug(f"广告系列名 '{campaign_name}' 匹配标准格式，但平台代码 '{platform_code}' 不存在")
+        
+        # 格式1的简化版本：如果标准格式不匹配，尝试只匹配前两个字段
+        # "序号-平台-..." -> 提取平台代码
+        simple_format_pattern = r"^\d+[_-]([A-Za-z]{2,3})[_-]"  # 序号-平台- 或 序号_平台_
+        match = re.match(simple_format_pattern, campaign_name, re.IGNORECASE)
         if match:
             platform_code = match.group(1).upper()  # 转换为大写（RW, CG, LH等）
             
@@ -72,10 +100,13 @@ class CampaignMatcher:
                 # 尝试提取账号代码（MID部分，最后一个字段）
                 parts = re.split(r'[_-]', campaign_name)
                 account_code = parts[-1] if len(parts) > 1 else None
+                logger.debug(f"从广告系列名 '{campaign_name}' 提取平台代码: {platform.platform_code}, 账号代码: {account_code} (简化格式)")
                 return {
                     "platform_code": platform.platform_code,
                     "account_code": account_code
                 }
+            else:
+                logger.debug(f"广告系列名 '{campaign_name}' 匹配简化格式，但平台代码 '{platform_code}' 不存在")
         
         # 格式2: "平台名_账号名_其他" 或 "平台名-账号名-其他" (旧格式)
         patterns = [
