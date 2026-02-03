@@ -78,10 +78,20 @@ async def get_user_statistics(
             DataUpload.user_id == current_user.id
         ).count()
         
-        # 统计分析结果
-        total_analyses = db.query(AnalysisResult).filter(
-            AnalysisResult.user_id == current_user.id
-        ).count()
+        # 统计分析结果（使用原始SQL避免列不存在的问题）
+        try:
+            total_analyses = db.query(AnalysisResult).filter(
+                AnalysisResult.user_id == current_user.id
+            ).count()
+        except Exception as e:
+            # 如果查询失败（可能是列不存在），使用原始SQL查询
+            logger.warning(f"使用ORM查询分析结果失败: {e}，改用原始SQL查询")
+            from sqlalchemy import text
+            result = db.execute(
+                text("SELECT COUNT(*) FROM analysis_results WHERE user_id = :user_id"),
+                {"user_id": current_user.id}
+            )
+            total_analyses = result.scalar() or 0
         
         # 统计联盟账号数
         total_accounts = db.query(AffiliateAccount).filter(
