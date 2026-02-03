@@ -130,10 +130,12 @@ async def get_campaign_data(
         begin, end, _ = get_date_range_from_type(date_range_type)
     
     # 按广告系列分组查询
+    # 注意：预算(budget)是每日预算，应该使用平均值或最大值，而不是求和
+    # 使用MAX获取每日预算（因为同一广告系列的每日预算通常是相同的）
     query = db.query(
         GoogleAdsApiData.campaign_id,
         GoogleAdsApiData.campaign_name,
-        func.sum(GoogleAdsApiData.budget).label('total_budget'),
+        func.max(GoogleAdsApiData.budget).label('daily_budget'),  # 使用MAX获取每日预算
         func.sum(GoogleAdsApiData.cost).label('total_cost'),
         func.sum(GoogleAdsApiData.impressions).label('total_impressions'),
         func.sum(GoogleAdsApiData.clicks).label('total_clicks'),
@@ -178,7 +180,7 @@ async def get_campaign_data(
             "date_range": date_range_display,
             "campaign_name": row.campaign_name,
             "campaign_id": row.campaign_id,
-            "budget": round(float(row.total_budget or 0), 2),
+            "budget": round(float(row.daily_budget or 0), 2),  # 使用每日预算，而不是总预算
             "cost": round(float(row.total_cost or 0), 2),
             "impressions": int(total_impressions),
             "clicks": int(total_clicks),
