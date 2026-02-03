@@ -36,13 +36,6 @@ try:
         print("❌ 未找到用户 wj05")
         sys.exit(1)
     
-    account = db.query(AffiliateAccount).filter(
-        AffiliateAccount.user_id == user.id,
-        AffiliateAccount.platform_id.in_(
-            db.query().filter_by(name="LinkHaitao").first().id if db.query().filter_by(name="LinkHaitao").first() else []
-        )
-    ).first()
-    
     # 直接查询数据库
     conn = sqlite3.connect("google_analysis.db")
     cur = conn.cursor()
