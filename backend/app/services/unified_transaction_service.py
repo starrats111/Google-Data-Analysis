@@ -56,6 +56,7 @@ class UnifiedTransactionService:
         "adjusted": "rejected",
         "cancelled": "rejected",
         "voided": "rejected",
+        "expired": "rejected",  # LinkHaitao的expired状态（过期/失效）应该映射为rejected
     }
     
     def __init__(self, db: Session):

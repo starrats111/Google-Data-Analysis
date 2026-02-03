@@ -69,12 +69,13 @@ class UnifiedPlatformService:
         
         # LinkHaitao平台状态映射
         elif platform.lower() in ['lh', 'linkhaitao', 'link-haitao']:
-            # LinkHaitao可能的状态值：untreated, pending, approved, rejected, cancelled等
+            # LinkHaitao可能的状态值：untreated, pending, approved, rejected, cancelled, expired等
             if raw_status_lower in ['approved', 'confirmed', 'paid', 'settled', 'locked']:
                 return 'approved'
             elif raw_status_lower in ['pending', 'processing', 'waiting', 'untreated']:
                 return 'pending'
-            elif raw_status_lower in ['rejected', 'declined', 'reversed', 'cancelled', 'invalid', 'adjusted', 'voided']:
+            elif raw_status_lower in ['rejected', 'declined', 'reversed', 'cancelled', 'invalid', 'adjusted', 'voided', 'expired']:
+                # expired（过期/失效）应该映射为rejected
                 return 'rejected'
         
         # 默认映射
