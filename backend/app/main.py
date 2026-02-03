@@ -74,11 +74,10 @@ ALLOWED_ORIGIN_REGEX = r"^(https://([a-z0-9-]+\.)?google-data-analysis\.(pages\.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],  # 临时允许所有来源，确保CORS正常工作
-    allow_origin_regex=ALLOWED_ORIGIN_REGEX,
-    allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH", "HEAD"],
-    allow_headers=["*"],
-    expose_headers=["*"],
+    allow_credentials=False,  # 当allow_origins=["*"]时，allow_credentials必须为False
+    allow_methods=["*"],  # 允许所有HTTP方法
+    allow_headers=["*"],  # 允许所有请求头
+    expose_headers=["*"],  # 暴露所有响应头
     max_age=3600,
 )
 
