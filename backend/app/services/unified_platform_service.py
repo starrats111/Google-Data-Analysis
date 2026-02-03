@@ -67,12 +67,22 @@ class UnifiedPlatformService:
             elif raw_status_lower in ['rejected', 'declined']:
                 return 'rejected'
         
+        # LinkHaitao平台状态映射
+        elif platform.lower() in ['lh', 'linkhaitao', 'link-haitao']:
+            # LinkHaitao可能的状态值：untreated, pending, approved, rejected, cancelled等
+            if raw_status_lower in ['approved', 'confirmed', 'paid', 'settled', 'locked']:
+                return 'approved'
+            elif raw_status_lower in ['pending', 'processing', 'waiting', 'untreated']:
+                return 'pending'
+            elif raw_status_lower in ['rejected', 'declined', 'reversed', 'cancelled', 'invalid', 'adjusted', 'voided']:
+                return 'rejected'
+        
         # 默认映射
-        if raw_status_lower in ['approved', 'locked', 'confirmed']:
+        if raw_status_lower in ['approved', 'locked', 'confirmed', 'paid', 'settled']:
             return 'approved'
-        elif raw_status_lower in ['pending', 'processing', 'waiting']:
+        elif raw_status_lower in ['pending', 'processing', 'waiting', 'untreated']:
             return 'pending'
-        elif raw_status_lower in ['rejected', 'declined', 'reversed', 'cancelled']:
+        elif raw_status_lower in ['rejected', 'declined', 'reversed', 'cancelled', 'invalid', 'adjusted', 'voided']:
             return 'rejected'
         
         # 未知状态，默认pending
