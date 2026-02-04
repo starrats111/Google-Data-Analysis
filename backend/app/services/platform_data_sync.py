@@ -640,7 +640,7 @@ class PlatformDataSyncService:
                     logger.info(f"[LinkHaitao同步] 清理历史重复佣金明细 {dup_count} 条（lh_comm_*）")
                     dup_q.delete(synchronize_session=False)
                     self.db.commit()
-                    except Exception as e:
+            except Exception as e:
                 logger.warning(f"[LinkHaitao同步] 清理历史重复佣金明细失败（忽略，不影响继续同步）: {e}")
             
             # 将订单数据转换为交易格式
