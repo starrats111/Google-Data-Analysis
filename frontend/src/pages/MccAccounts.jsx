@@ -34,11 +34,28 @@ export default function MccAccounts() {
       if (import.meta.env.DEV) {
         console.log('[MCC Accounts] 开始获取MCC账号列表，API URL: /api/mcc/accounts')
       }
-      const response = await api.get('/api/mcc/accounts')
-      if (import.meta.env.DEV) {
-        console.log('获取到的MCC账号数据:', response.data)
+      
+      // 添加超时控制
+      const controller = new AbortController()
+      const timeoutId = setTimeout(() => controller.abort(), 30000) // 30秒超时
+      
+      try {
+        const response = await api.get('/api/mcc/accounts', {
+          signal: controller.signal
+        })
+        clearTimeout(timeoutId)
+        
+        if (import.meta.env.DEV) {
+          console.log('获取到的MCC账号数据:', response.data)
+        }
+        setMccAccounts(response.data || [])
+      } catch (fetchError) {
+        clearTimeout(timeoutId)
+        if (fetchError.name === 'AbortError') {
+          throw new Error('请求超时，请稍后重试')
+        }
+        throw fetchError
       }
-      setMccAccounts(response.data || [])
     } catch (error) {
       console.error('获取MCC账号列表失败:', error)
       if (import.meta.env.DEV) {
@@ -49,7 +66,18 @@ export default function MccAccounts() {
           config: error.config
         })
       }
-      message.error('获取MCC账号列表失败: ' + (error.response?.data?.detail || error.message))
+      
+      // 更友好的错误提示
+      let errorMessage = '获取MCC账号列表失败'
+      if (error.message) {
+        errorMessage += ': ' + error.message
+      } else if (error.response?.data?.detail) {
+        errorMessage += ': ' + error.response.data.detail
+      }
+      
+      message.error(errorMessage)
+      // 即使失败也设置空数组，避免一直显示加载状态
+      setMccAccounts([])
     } finally {
       setLoading(false)
     }

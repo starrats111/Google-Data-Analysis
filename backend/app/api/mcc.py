@@ -112,13 +112,23 @@ async def create_mcc_account(
 @router.get("/accounts", response_model=List[MccAccountResponse])
 @router.get("/accounts/", response_model=List[MccAccountResponse])  # 兼容带斜杠的URL
 async def get_mcc_accounts(
+    request: Request,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """获取MCC账号列表"""
+    """获取MCC账号列表（优化版本：使用聚合查询避免N+1问题）"""
+    import time
+    start_time = time.time()
+    
     try:
         logger.info(f"用户 {current_user.username} (ID: {current_user.id}) 请求MCC账号列表")
         
+        # 获取CORS头（提前准备，确保所有响应都包含）
+        origin = request.headers.get("origin")
+        from app.main import get_cors_headers
+        cors_headers = get_cors_headers(origin)
+        
+        # 查询MCC账号
         query = db.query(GoogleMccAccount).filter(
             GoogleMccAccount.user_id == current_user.id
         )
@@ -130,13 +140,32 @@ async def get_mcc_accounts(
         mcc_accounts = query.order_by(GoogleMccAccount.created_at.desc()).all()
         logger.info(f"查询到 {len(mcc_accounts)} 个MCC账号")
         
-        # 获取每个MCC的数据条数
+        if not mcc_accounts:
+            # 如果没有MCC账号，直接返回空列表（包含CORS头）
+            from fastapi.responses import JSONResponse
+            return JSONResponse(content=[], headers=cors_headers)
+        
+        # 优化：使用一次聚合查询获取所有MCC的数据条数，避免N+1查询
+        from sqlalchemy import func
+        mcc_ids = [mcc.id for mcc in mcc_accounts]
+        
+        # 使用 GROUP BY 一次性获取所有MCC的数据条数
+        data_counts = db.query(
+            GoogleAdsApiData.mcc_id,
+            func.count(GoogleAdsApiData.id).label('count')
+        ).filter(
+            GoogleAdsApiData.mcc_id.in_(mcc_ids)
+        ).group_by(GoogleAdsApiData.mcc_id).all()
+        
+        # 转换为字典，方便快速查找
+        data_count_map = {mcc_id: count for mcc_id, count in data_counts}
+        
+        # 构建结果列表
         result = []
         for mcc in mcc_accounts:
             try:
-                data_count = db.query(GoogleAdsApiData).filter(
-                    GoogleAdsApiData.mcc_id == mcc.id
-                ).count()
+                # 从字典中获取数据条数，如果没有则默认为0
+                data_count = data_count_map.get(mcc.id, 0)
                 
                 result.append({
                     "id": mcc.id,
@@ -156,19 +185,39 @@ async def get_mcc_accounts(
                 logger.error(f"处理MCC账号 {mcc.id} 时出错: {str(e)}", exc_info=True)
                 continue
         
-        logger.info(f"成功返回 {len(result)} 个MCC账号")
-        return result
-    except HTTPException:
-        # 重新抛出HTTP异常
-        raise
+        elapsed_time = time.time() - start_time
+        logger.info(f"成功返回 {len(result)} 个MCC账号，耗时 {elapsed_time:.2f} 秒")
+        
+        # 返回结果，确保包含CORS头
+        from fastapi.responses import JSONResponse
+        return JSONResponse(content=result, headers=cors_headers)
+        
+    except HTTPException as e:
+        # HTTP异常需要手动添加CORS头
+        origin = request.headers.get("origin")
+        from app.main import get_cors_headers
+        cors_headers = get_cors_headers(origin)
+        from fastapi.responses import JSONResponse
+        return JSONResponse(
+            status_code=e.status_code,
+            content={"detail": e.detail},
+            headers=cors_headers
+        )
     except Exception as e:
         # 记录完整的错误信息
         import traceback
         error_trace = traceback.format_exc()
         logger.error(f"获取MCC账号列表失败: {str(e)}\n{error_trace}")
-        raise HTTPException(
-            status_code=500, 
-            detail=f"获取MCC账号列表失败: {str(e)}"
+        
+        # 确保错误响应也包含CORS头
+        origin = request.headers.get("origin")
+        from app.main import get_cors_headers
+        cors_headers = get_cors_headers(origin)
+        from fastapi.responses import JSONResponse
+        return JSONResponse(
+            status_code=500,
+            content={"detail": f"获取MCC账号列表失败: {str(e)}"},
+            headers=cors_headers
         )
 
 

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react'
-import { Card, Button, Form, Select, DatePicker, message, Space, Radio, Row, Col, Table, Input } from 'antd'
+import { Card, Button, Form, Select, DatePicker, message, Space, Radio, Row, Col, Table, Input, Statistic } from 'antd'
 import { SearchOutlined, DownloadOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import api from '../services/api'
@@ -311,17 +311,50 @@ export default function GoogleAdsData() {
 
       {/* 按广告系列分组的数据 */}
       {campaignData.length > 0 && (
-        <Card style={{ marginBottom: 16 }}>
-          <div style={{ marginBottom: 16, paddingBottom: 16, borderBottom: '1px solid #e8e8e8' }}>
-            <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 500 }}>
-              广告系列数据
-            </h3>
-            <div style={{ fontSize: '12px', color: '#999', marginTop: '4px' }}>
-              {campaignData[0]?.date_range || ''}
+        <>
+          {/* 汇总统计 */}
+          <Card style={{ marginBottom: 16 }}>
+            <div style={{ marginBottom: 16 }}>
+              <h3 style={{ margin: 0 }}>{campaignData[0]?.date_range || ''}</h3>
             </div>
-          </div>
-          
-          <Table
+            <Row gutter={[16, 16]}>
+              <Col xs={12} sm={8} md={8}>
+                <Statistic
+                  title="总展示"
+                  value={campaignData.reduce((sum, item) => sum + (item.impressions || 0), 0)}
+                  valueStyle={{ color: '#1890ff' }}
+                />
+              </Col>
+              <Col xs={12} sm={8} md={8}>
+                <Statistic
+                  title="总点击"
+                  value={campaignData.reduce((sum, item) => sum + (item.clicks || 0), 0)}
+                  valueStyle={{ color: '#1890ff' }}
+                />
+              </Col>
+              <Col xs={12} sm={8} md={8}>
+                <Statistic
+                  title="总费用"
+                  value={campaignData.reduce((sum, item) => sum + (item.cost || 0), 0)}
+                  prefix="$"
+                  precision={2}
+                  valueStyle={{ color: '#1890ff' }}
+                />
+              </Col>
+            </Row>
+          </Card>
+
+          <Card style={{ marginBottom: 16 }}>
+            <div style={{ marginBottom: 16, paddingBottom: 16, borderBottom: '1px solid #e8e8e8' }}>
+              <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 500 }}>
+                广告系列数据
+              </h3>
+              <div style={{ fontSize: '12px', color: '#999', marginTop: '4px' }}>
+                {campaignData[0]?.date_range || ''}
+              </div>
+            </div>
+            
+            <Table
             dataSource={campaignData}
             pagination={{ 
               pageSize: 20,
@@ -440,6 +473,7 @@ export default function GoogleAdsData() {
             ]}
           />
         </Card>
+        </>
       )}
 
       {/* 时间范围级别汇总（一行）- 完全对齐Google Ads */}

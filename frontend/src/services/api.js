@@ -21,6 +21,7 @@ const API_BASE_URL = getApiBaseUrl()
 
 const api = axios.create({
   baseURL: API_BASE_URL,
+  timeout: 30000, // 30秒超时，避免请求卡住
   headers: {
     'Content-Type': 'application/json',
   },
@@ -64,11 +65,25 @@ api.interceptors.request.use((config) => {
 api.interceptors.response.use(
   (response) => response,
   (error) => {
+    // 处理超时错误
+    if (error.code === 'ECONNABORTED' || error.message.includes('timeout')) {
+      console.error('请求超时:', error.config?.url)
+      error.message = '请求超时，请检查网络连接或稍后重试'
+    }
+    
+    // 处理网络错误
+    if (!error.response && error.request) {
+      console.error('网络错误:', error.config?.url)
+      error.message = '网络错误，请检查网络连接'
+    }
+    
+    // 处理401未授权
     if (error.response?.status === 401) {
       localStorage.removeItem('token')
       localStorage.removeItem('user')
       window.location.href = '/login'
     }
+    
     return Promise.reject(error)
   }
 )
