@@ -1,0 +1,43 @@
+# 分步执行命令（如果单行命令有问题，可以分步执行）
+
+# 步骤1：拉取最新代码
+cd ~/Google-Data-Analysis
+git pull origin main
+
+# 步骤2：进入backend目录并激活虚拟环境
+cd backend
+source venv/bin/activate
+
+# 步骤3：安装依赖（如果需要）
+pip install -q -r requirements.txt
+
+# 步骤4：停止旧进程
+pkill -9 -f "uvicorn.*app.main" || true
+
+# 步骤5：启动新进程
+nohup uvicorn app.main:app --host 0.0.0.0 --port 8000 > run.log 2>&1 &
+
+# 步骤6：等待2秒
+sleep 2
+
+# 步骤7：测试OPTIONS预检请求
+curl -i -X OPTIONS "http://127.0.0.1:8000/api/mcc/accounts/9/sync" \
+  -H "Origin: https://google-data-analysis.top" \
+  -H "Access-Control-Request-Method: POST" \
+  -H "Access-Control-Request-Headers: authorization,content-type,access-control-allow-origin"
+
+# 步骤8：查看启动日志
+echo ""
+echo "=== 启动日志 ==="
+tail -n 30 run.log
+
+# 步骤9：检查服务是否运行
+echo ""
+echo "=== 检查服务状态 ==="
+ps aux | grep uvicorn | grep -v grep
+
+# 步骤10：测试健康检查端点
+echo ""
+echo "=== 测试健康检查 ==="
+curl -i http://127.0.0.1:8000/health
+

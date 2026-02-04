@@ -437,7 +437,7 @@ class PlatformDataSyncService:
             for tx_id, tx_data_grouped in transactions_by_id.items():
                 tx = tx_data_grouped["tx"]
                 total_commission = tx_data_grouped["total_commission"]
-                
+            
                 if tx_data_grouped["count"] > 1:
                     logger.debug(f"[RW同步] 订单 {tx_id} 有 {tx_data_grouped['count']} 条重复记录，佣金求和: ${total_commission:.2f}")
                 
@@ -617,7 +617,7 @@ class PlatformDataSyncService:
             
             # 合并佣金和订单数据，转换为统一格式的交易列表
             all_transactions = []
-
+            
             # 重要：LinkHaitaoService 返回的 orders 已包含 commission（cashback）信息。
             # commissions 与 orders 来自同一批订单，若两者都写入会导致“重复计入”（订单数/佣金翻倍）。
             # 因此这里以 orders 为准，不再把 commissions 写入交易明细。
@@ -640,7 +640,7 @@ class PlatformDataSyncService:
                     logger.info(f"[LinkHaitao同步] 清理历史重复佣金明细 {dup_count} 条（lh_comm_*）")
                     dup_q.delete(synchronize_session=False)
                     self.db.commit()
-            except Exception as e:
+                    except Exception as e:
                 logger.warning(f"[LinkHaitao同步] 清理历史重复佣金明细失败（忽略，不影响继续同步）: {e}")
             
             # 将订单数据转换为交易格式

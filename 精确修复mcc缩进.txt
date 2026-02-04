@@ -1,0 +1,117 @@
+# 精确修复mcc.py的缩进
+# 在服务器上执行以下Python脚本
+
+cd ~/Google-Data-Analysis/backend
+
+python3 << 'PYTHON_SCRIPT'
+with open('app/api/mcc.py', 'r', encoding='utf-8') as f:
+    lines = f.readlines()
+
+# 精确修复每一行的缩进（基于本地正确的文件结构）
+# 第409行：while - 16空格
+# 第410行：while内 - 20空格
+# 第411行：while内if - 20空格
+# 第412-414行：if内 - 24空格
+# 第415行：if内if - 24空格
+# 第416行：嵌套if内 - 28空格
+# 第417行：while内else - 20空格
+# 第418行：else内 - 24空格
+# 第419行：while内 - 20空格
+# 第421行：try内注释 - 16空格
+# 第422行：try内if - 16空格
+# 第424行：if内return - 20空格
+# 第425-429行：return字典 - 24空格
+
+fixes = {
+    408: 16,  # while行
+    409: 20,  # while内
+    410: 20,  # while内if
+    411: 24,  # if内
+    412: 24,  # if内
+    413: 24,  # if内
+    414: 24,  # if内if
+    415: 28,  # 嵌套if内
+    416: 20,  # while内else
+    417: 24,  # else内
+    418: 20,  # while内
+}
+
+# 修复第409-419行（while循环部分）
+for i in range(408, 419):
+    if i >= len(lines):
+        break
+    line = lines[i]
+    stripped = line.lstrip()
+    if not stripped:
+        continue
+    
+    # 根据行号设置目标缩进
+    if i == 408:  # while行
+        target = 16
+    elif i == 409:  # result =
+        target = 20
+    elif i == 410:  # if result.get
+        target = 20
+    elif i in [411, 412, 413]:  # if块内
+        target = 24
+    elif i == 414:  # if saved_count
+        target = 24
+    elif i == 415:  # warnings.append
+        target = 28
+    elif i == 416:  # else
+        target = 20
+    elif i == 417:  # errors.append
+        target = 24
+    elif i == 418:  # current_date +=
+        target = 20
+    else:
+        target = len(line) - len(stripped)  # 保持原样
+    
+    current = len(line) - len(stripped)
+    if current != target:
+        lines[i] = ' ' * target + stripped
+        print(f"修复第{i+1}行: {current}→{target} ({stripped[:35]})")
+
+# 修复第421-456行（return部分）
+# 第421行：注释 - 16空格
+# 第422行：if - 16空格
+# 第424行：return - 20空格
+# 第425-429行：字典 - 24空格
+
+for i in range(420, 456):
+    if i >= len(lines):
+        break
+    line = lines[i]
+    stripped = line.lstrip()
+    if not stripped:
+        continue
+    
+    # 判断缩进级别
+    if stripped.startswith('#') and '构建返回消息' in stripped:
+        target = 16
+    elif stripped.startswith('if ') or stripped.startswith('elif ') or stripped.startswith('else:'):
+        target = 16
+    elif stripped.startswith('return {'):
+        target = 20
+    elif stripped.startswith('"') or stripped.startswith("'"):
+        target = 24
+    elif stripped.startswith('error_summary') or stripped.startswith('warning_summary'):
+        target = 20
+    else:
+        target = len(line) - len(stripped)
+    
+    current = len(line) - len(stripped)
+    if current != target:
+        lines[i] = ' ' * target + stripped
+        print(f"修复第{i+1}行: {current}→{target} ({stripped[:35]})")
+
+# 写回文件
+with open('app/api/mcc.py', 'w', encoding='utf-8') as f:
+    f.writelines(lines)
+
+print("✓ 修复完成")
+PYTHON_SCRIPT
+
+# 验证语法
+python -m py_compile app/api/mcc.py && echo "✓ 语法正确" || (echo "✗ 仍有错误" && python -m py_compile app/api/mcc.py 2>&1 | head -n 5)
+

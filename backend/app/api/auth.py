@@ -80,9 +80,9 @@ async def get_user_statistics(
         
         # 统计分析结果（使用原始SQL避免列不存在的问题）
         try:
-            total_analyses = db.query(AnalysisResult).filter(
-                AnalysisResult.user_id == current_user.id
-            ).count()
+        total_analyses = db.query(AnalysisResult).filter(
+            AnalysisResult.user_id == current_user.id
+        ).count()
         except Exception as e:
             # 如果查询失败（可能是列不存在），使用原始SQL查询
             logger.warning(f"使用ORM查询分析结果失败: {e}，改用原始SQL查询")

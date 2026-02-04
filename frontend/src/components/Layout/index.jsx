@@ -8,7 +8,6 @@ import {
   UserOutlined,
   LogoutOutlined,
   AccountBookOutlined,
-  AppstoreOutlined,
   WalletOutlined,
 } from '@ant-design/icons'
 import { useAuth } from '../../store/authStore'
