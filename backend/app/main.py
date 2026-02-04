@@ -79,8 +79,6 @@ app.add_middleware(
     allow_headers=["*"],  # 允许所有请求头
     expose_headers=["*"],  # 暴露所有响应头
     max_age=3600,
-    # 确保OPTIONS请求被正确处理
-    automatic_options=True,
 )
 
 # 辅助函数：获取CORS头（必须在CORS配置之后定义）
@@ -247,9 +245,22 @@ app.include_router(stage_label.router)
 @app.get("/health")
 async def health(request: Request):
     """健康检查端点，确保包含CORS头"""
-    origin = request.headers.get("origin")
-    headers = get_cors_headers(origin)
-    return JSONResponse(content={"status": "ok"}, headers=headers)
+    try:
+        origin = request.headers.get("origin")
+        headers = get_cors_headers(origin)
+        return JSONResponse(content={"status": "ok"}, headers=headers)
+    except Exception as e:
+        # 如果出错，至少返回基本的CORS头
+        headers = {
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+            "Access-Control-Allow-Headers": "*",
+        }
+        return JSONResponse(
+            content={"status": "error", "message": str(e)},
+            headers=headers,
+            status_code=500
+        )
 
 
 # OPTIONS请求由CORS中间件自动处理，不需要手动处理
