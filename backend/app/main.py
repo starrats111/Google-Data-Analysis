@@ -79,6 +79,8 @@ app.add_middleware(
     allow_headers=["*"],  # 允许所有请求头
     expose_headers=["*"],  # 暴露所有响应头
     max_age=3600,
+    # 确保OPTIONS请求被正确处理
+    automatic_options=True,
 )
 
 # 辅助函数：获取CORS头（必须在CORS配置之后定义）
@@ -209,20 +211,16 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 # 注意：FastAPI的CORS中间件应该自动处理OPTIONS，但为了确保，我们显式添加
 @app.options("/{full_path:path}")
 async def options_handler(request: Request, full_path: str):
-    """处理所有OPTIONS请求，返回CORS头"""
-    import logging
-    logger = logging.getLogger(__name__)
-    
+    """处理所有OPTIONS请求，返回CORS头（快速响应，避免超时）"""
+    # 快速生成CORS头，不进行日志记录（避免性能问题）
     origin = request.headers.get("origin")
     headers = get_cors_headers(origin)
     
-    # 确保返回所有允许的头部（使用*而不是只返回请求的头部）
+    # 确保返回所有允许的头部
     headers["Access-Control-Allow-Headers"] = "*"
+    headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS, PATCH, HEAD"
     
-    # 添加调试日志
-    logger.info(f"[CORS] OPTIONS请求: {full_path}, Origin: {origin}")
-    logger.debug(f"[CORS] OPTIONS响应头: {headers}")
-    
+    # 直接返回响应，不记录日志（提高性能）
     return JSONResponse(content={}, headers=headers, status_code=200)
 
 # API routes
