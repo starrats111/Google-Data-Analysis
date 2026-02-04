@@ -79,8 +79,6 @@ app.add_middleware(
     allow_headers=["*"],  # 允许所有请求头
     expose_headers=["*"],  # 暴露所有响应头
     max_age=3600,
-    # 确保OPTIONS请求被正确处理
-    automatic_options=True,
 )
 
 # 辅助函数：获取CORS头（必须在CORS配置之后定义）
