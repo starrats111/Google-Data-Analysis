@@ -16,7 +16,10 @@ const Login = () => {
       message.success('登录成功！')
       navigate('/')
     } catch (error) {
-      message.error(error.response?.data?.detail || '登录失败，请检查用户名和密码')
+      // 显示详细的错误信息
+      const errorMessage = error.message || error.response?.data?.detail || '登录失败，请检查用户名和密码'
+      message.error(errorMessage)
+      console.error('登录错误详情:', error)
     } finally {
       setLoading(false)
     }
