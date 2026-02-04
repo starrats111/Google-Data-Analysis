@@ -1,0 +1,21 @@
+# 检查同步请求的错误日志
+
+# 在服务器上执行以下命令：
+
+# 1. 查看最近的错误日志
+tail -n 50 ~/Google-Data-Analysis/backend/run.log | grep -i "sync\|error\|exception\|mcc"
+
+# 2. 查看应用日志（如果有）
+tail -n 50 ~/Google-Data-Analysis/backend/logs/app.log 2>/dev/null | grep -i "sync\|error\|mcc"
+
+# 3. 实时监控日志
+tail -f ~/Google-Data-Analysis/backend/run.log
+
+# 4. 测试同步端点（模拟请求）
+curl -X POST \
+  -H "Origin: https://google-data-analysis.top" \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -d '{"begin_date": "2026-01-01", "end_date": "2026-01-07"}' \
+  -v https://api.google-data-analysis.top/api/mcc/accounts/9/sync 2>&1 | grep -i "access-control\|error\|failed"
+

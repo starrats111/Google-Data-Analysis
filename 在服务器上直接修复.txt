@@ -1,0 +1,26 @@
+# 在服务器上直接修复rewardoo_service.py
+
+# 步骤1: 检查当前文件内容
+cd ~/Google-Data-Analysis/backend
+grep -n "if not transactions:" app/services/rewardoo_service.py
+sed -n '465,468p' app/services/rewardoo_service.py
+
+# 步骤2: 修复缩进错误（如果还存在）
+cd ~/Google-Data-Analysis/backend
+sed -i '467s/^            transactions/                transactions/' app/services/rewardoo_service.py
+
+# 步骤3: 验证修复
+sed -n '465,468p' app/services/rewardoo_service.py
+
+# 步骤4: 验证语法
+python -m py_compile app/services/rewardoo_service.py && echo "✓ 语法正确"
+
+# 步骤5: 启动服务
+pkill -9 -f 'uvicorn.*app.main'
+sleep 3
+nohup uvicorn app.main:app --host 0.0.0.0 --port 8000 > run.log 2>&1 &
+sleep 8
+
+# 步骤6: 验证服务
+curl -s http://127.0.0.1:8000/health && echo " ✓ 服务启动成功" || (echo " ✗ 服务启动失败，查看日志:" && tail -n 20 run.log)
+

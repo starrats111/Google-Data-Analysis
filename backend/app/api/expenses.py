@@ -587,7 +587,7 @@ async def _get_manager_expense_summary(start: date, end: date, today: date, db: 
         # 按平台汇总该员工的数据
         platform_map: Dict[int, Dict[str, object]] = {}
         day_set = set()
-
+        
         for r in metric_rows:
             pid = int(r.platform_id) if r.platform_id is not None else None
             d = r.d
@@ -595,7 +595,7 @@ async def _get_manager_expense_summary(start: date, end: date, today: date, db: 
                 continue
             day_set.add(d)
             all_day_set.add(d)
-
+            
             if pid not in platform_map:
                 platform_map[pid] = {
                     "platform_id": pid,

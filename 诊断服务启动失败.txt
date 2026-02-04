@@ -1,0 +1,26 @@
+# 诊断服务启动失败
+
+# 步骤1: 查看启动日志中的错误
+tail -n 50 ~/Google-Data-Analysis/backend/run.log
+
+# 步骤2: 检查Python语法错误
+cd ~/Google-Data-Analysis/backend
+python -m py_compile app/main.py
+python -m py_compile app/api/mcc.py
+
+# 步骤3: 尝试前台运行查看实时错误
+cd ~/Google-Data-Analysis/backend
+source venv/bin/activate
+python -c "from app.main import app; print('导入成功')"
+
+# 步骤4: 如果导入失败，查看具体错误
+cd ~/Google-Data-Analysis/backend
+source venv/bin/activate
+uvicorn app.main:app --host 0.0.0.0 --port 8000
+
+# 步骤5: 检查依赖是否完整
+pip list | grep -E "(fastapi|uvicorn|pydantic|sqlalchemy)"
+
+# 步骤6: 检查端口是否被占用
+lsof -i:8000 || netstat -tuln | grep 8000
+
