@@ -23,15 +23,27 @@ export default function PlatformData() {
   const [selectedMerchant, setSelectedMerchant] = useState(null) // 选中的商家，用于显示详情
 
   useEffect(() => {
-    fetchPlatforms()
-    // 默认查询最近7天的数据
-    const endDate = dayjs()
-    const beginDate = endDate.subtract(7, 'day')
-    form.setFieldsValue({
-      dateRange: [beginDate, endDate]
-    })
-    handleSearch({ dateRange: [beginDate, endDate] })
-  }, [])
+    let cancelled = false
+    
+    const initData = async () => {
+      await fetchPlatforms()
+      // 默认查询最近7天的数据
+      const endDate = dayjs()
+      const beginDate = endDate.subtract(7, 'day')
+      form.setFieldsValue({
+        dateRange: [beginDate, endDate]
+      })
+      if (!cancelled) {
+        handleSearch({ dateRange: [beginDate, endDate] })
+      }
+    }
+    
+    initData()
+    
+    return () => {
+      cancelled = true
+    }
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   const fetchPlatforms = async () => {
     try {
@@ -42,8 +54,9 @@ export default function PlatformData() {
     }
   }
 
-  // 使用ref存储请求取消函数，防止重复请求
+  // 使用ref存储请求取消函数和loading状态，防止重复请求和无限循环
   const abortControllerRef = useRef(null)
+  const loadingRef = useRef(false)
   
   const handleSearch = useCallback(async (values) => {
     // 取消之前的请求
@@ -51,12 +64,13 @@ export default function PlatformData() {
       abortControllerRef.current.abort()
     }
     
-    // 防止重复请求
-    if (loading) return
+    // 防止重复请求（使用ref而不是state，避免依赖项问题）
+    if (loadingRef.current) return
     
     // 创建新的AbortController
     abortControllerRef.current = new AbortController()
     
+    loadingRef.current = true
     setLoading(true)
     try {
       const params = {}
@@ -114,10 +128,11 @@ export default function PlatformData() {
       setDetailData([])
       setSummaryData(null)
     } finally {
+      loadingRef.current = false
       setLoading(false)
       abortControllerRef.current = null
     }
-  }, [viewMode, loading])
+  }, [viewMode])
 
   const handleViewModeChange = async (e) => {
     const newMode = e.target.value
