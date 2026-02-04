@@ -2,7 +2,7 @@
 数据分析API
 """
 from typing import List, Optional
-from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form
+from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form, Query
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -625,9 +625,9 @@ async def generate_l7d_from_daily_with_google(
     return {"id": analysis_result.id, "status": "completed", "total_rows": len(rows)}
 
 
-@router.post("/api/daily")
+@router.post("/daily")
 async def generate_daily_analysis_from_api(
-    target_date: str,
+    target_date: str = Query(..., description="目标日期 YYYY-MM-DD"),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
@@ -656,9 +656,9 @@ async def generate_daily_analysis_from_api(
     return result
 
 
-@router.post("/api/l7d")
+@router.post("/l7d")
 async def generate_l7d_analysis_from_api(
-    end_date: Optional[str] = None,
+    end_date: Optional[str] = Query(None, description="结束日期 YYYY-MM-DD（默认为昨天）"),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
