@@ -4,7 +4,7 @@ import atexit
 import traceback
 
 from fastapi import FastAPI, Request, status, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.cors import CORSMiddleware  # 直接使用 Starlette 的 CORS 中间件，避免 FastAPI 包装的兼容性问题
 from fastapi.responses import JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.exceptions import RequestValidationError
@@ -71,11 +71,13 @@ ALLOWED_ORIGINS = [
     # 正则表达式匹配所有google-data-analysis相关域名和本地开发环境
 ALLOWED_ORIGIN_REGEX = r"^(https://([a-z0-9-]+\.)?google-data-analysis\.(pages\.dev|top)|https://www\.google-data-analysis\.top|https://api\.google-data-analysis\.top|https?://(localhost|127\.0\.0\.1)(:\d+)?)$"
 
+# CORS配置 - 使用 Starlette 的 CORSMiddleware 直接配置，避免 FastAPI 包装的兼容性问题
+# 修复 TypeError: CORSMiddleware.__init__() got an unexpected keyword argument 'automatic_options'
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],  # 临时允许所有来源，确保CORS正常工作
     allow_credentials=False,  # 当allow_origins=["*"]时，allow_credentials必须为False
-    allow_methods=["*"],  # 允许所有HTTP方法
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH", "HEAD"],  # 明确指定方法
     allow_headers=["*"],  # 允许所有请求头
     expose_headers=["*"],  # 暴露所有响应头
     max_age=3600,
