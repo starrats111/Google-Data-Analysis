@@ -3,8 +3,7 @@ MCC管理API
 用于管理Google MCC账号和数据聚合
 """
 import logging
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
-from fastapi.responses import JSONResponse
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from typing import Optional, List
 from pydantic import BaseModel
@@ -19,35 +18,6 @@ from app.models.affiliate_account import AffiliateAccount
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/mcc", tags=["mcc"])
-
-
-def _sync_mcc_range_in_background(
-    *,
-    mcc_id: int,
-    begin: date,
-    end: date,
-) -> None:
-    """
-    后台同步：避免HTTP请求长时间阻塞导致 Cloudflare/Nginx 504。
-    注意：后台任务必须自己创建/关闭 DB session。
-    """
-    from app.database import SessionLocal
-    from app.services.google_ads_api_sync import GoogleAdsApiSyncService
-
-    db = SessionLocal()
-    try:
-        sync_service = GoogleAdsApiSyncService(db)
-        current_date = begin
-        while current_date <= end:
-            try:
-                sync_service.sync_mcc_data(mcc_id, current_date)
-            except Exception:
-                # 后台任务不影响HTTP响应；错误写日志即可
-                logger.exception(f"[后台同步] MCC {mcc_id} 同步 {current_date} 失败")
-            current_date += timedelta(days=1)
-        logger.info(f"[后台同步] MCC {mcc_id} 同步完成：{begin.isoformat()} ~ {end.isoformat()}")
-    finally:
-        db.close()
 
 
 class MccAccountCreate(BaseModel):
@@ -385,8 +355,6 @@ async def delete_mcc_account(
 async def sync_mcc_data(
     mcc_id: int,
     request_data: Optional[dict] = None,
-    request: Request,
-    background_tasks: BackgroundTasks,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
@@ -409,16 +377,7 @@ async def sync_mcc_data(
         
         if not mcc_account:
             logger.error(f"MCC同步失败: 账号 {mcc_id} 不存在或不属于用户 {current_user.id}")
-            # 确保404错误也包含CORS头
-            origin = request.headers.get("origin")
-            from app.main import get_cors_headers
-            cors_headers = get_cors_headers(origin)
-            from fastapi.responses import JSONResponse
-            return JSONResponse(
-                status_code=404,
-                content={"detail": "MCC账号不存在"},
-                headers=cors_headers
-            )
+            raise HTTPException(status_code=404, detail="MCC账号不存在")
         
         # 解析请求数据
         if request_data is None:
@@ -437,32 +396,64 @@ async def sync_mcc_data(
             try:
                 begin = datetime.strptime(begin_date, "%Y-%m-%d").date()
                 end = datetime.strptime(end_date, "%Y-%m-%d").date()
-                
+            
                 if begin > end:
                     raise HTTPException(status_code=400, detail="开始日期不能晚于结束日期")
-
-                # 获取CORS头（无论同步结果如何，都确保响应带CORS，避免浏览器误报CORS）
-                origin = request.headers.get("origin")
-                from app.main import get_cors_headers
-                cors_headers = get_cors_headers(origin)
-
-                # 日期范围同步改为后台任务：避免504超时
-                background_tasks.add_task(
-                    _sync_mcc_range_in_background,
-                    mcc_id=mcc_id,
-                    begin=begin,
-                    end=end,
-                )
-
-                return JSONResponse(
-                    status_code=202,
-                    content={
+            
+                # 同步日期范围内的每一天
+                total_saved = 0
+                current_date = begin
+                errors = []
+                warnings = []  # 记录警告信息（如没有数据但同步成功）
+            
+                while current_date <= end:
+                    result = sync_service.sync_mcc_data(mcc_id, current_date)
+                    if result.get("success"):
+                        saved_count = result.get("saved_count", 0)
+                        total_saved += saved_count
+                    # 如果同步成功但没有保存数据，记录警告
+                        if saved_count == 0:
+                            warnings.append(f"{current_date.isoformat()}: 同步成功但该日期没有广告系列数据")
+                    else:
+                        errors.append(f"{current_date.isoformat()}: {result.get('message', '同步失败')}")
+                    current_date += timedelta(days=1)
+            
+                # 构建返回消息
+                if errors and total_saved > 0:
+                    # 有错误但保存了部分数据
+                    return {
                         "success": True,
-                        "async": True,
-                        "message": f"已开始后台同步：{begin.isoformat()} ~ {end.isoformat()}（请稍后刷新查看结果）",
-                    },
-                    headers=cors_headers,
-                )
+                        "message": f"同步完成，成功保存 {total_saved} 条记录，部分日期同步失败",
+                        "saved_count": total_saved,
+                        "errors": errors,
+                        "warnings": warnings if warnings else None
+                }
+                elif errors and total_saved == 0:
+                    # 全部失败
+                    error_summary = errors[0] if len(errors) == 1 else f"{len(errors)} 个日期同步失败"
+                    return {
+                "success": False,
+                "message": f"同步失败：{error_summary}",
+                "saved_count": 0,
+                "errors": errors,
+                "warnings": warnings if warnings else None
+                }
+                elif total_saved == 0 and warnings:
+                    # 同步成功但没有数据
+                    warning_summary = warnings[0] if len(warnings) == 1 else f"所有日期都没有广告系列数据"
+                    return {
+                "success": True,
+                "message": f"同步完成，但没有保存任何数据。{warning_summary}",
+                "saved_count": 0,
+                "warnings": warnings
+                }
+                else:
+                    # 完全成功
+                    return {
+                "success": True,
+                "message": f"成功同步 {total_saved} 条广告系列数据",
+                "saved_count": total_saved
+                }
             except ValueError:
                 raise HTTPException(status_code=400, detail="日期格式错误，应为 YYYY-MM-DD")
         
@@ -476,22 +467,9 @@ async def sync_mcc_data(
             result = sync_service.sync_mcc_data(mcc_id, sync_date)
             
             if not result.get("success"):
-                # 确保错误响应也包含CORS头
-                origin = request.headers.get("origin")
-                from app.main import get_cors_headers
-                cors_headers = get_cors_headers(origin)
-                from fastapi.responses import JSONResponse
-                return JSONResponse(
-                    status_code=500,
-                    content={"detail": result.get("message", "同步失败")},
-                    headers=cors_headers
-                )
+                raise HTTPException(status_code=500, detail=result.get("message", "同步失败"))
             
-            # 获取CORS头
-            origin = request.headers.get("origin")
-            from app.main import get_cors_headers
-            cors_headers = get_cors_headers(origin)
-            return JSONResponse(content=result, headers=cors_headers)
+            return result
         
         # 如果没有提供日期，默认同步昨天
         else:
@@ -499,51 +477,22 @@ async def sync_mcc_data(
             
             if not result.get("success"):
                 logger.error(f"MCC {mcc_id} 同步失败: {result.get('message', '未知错误')}")
-                # 确保错误响应也包含CORS头
-                origin = request.headers.get("origin")
-                from app.main import get_cors_headers
-                cors_headers = get_cors_headers(origin)
-                from fastapi.responses import JSONResponse
-                return JSONResponse(
-                    status_code=500,
-                    content={"detail": result.get("message", "同步失败")},
-                    headers=cors_headers
-                )
+                raise HTTPException(status_code=500, detail=result.get("message", "同步失败"))
             
             logger.info(f"MCC {mcc_id} 同步成功: {result.get('message', '')}")
-            
-            # 获取CORS头
-            origin = request.headers.get("origin")
-            from app.main import get_cors_headers
-            cors_headers = get_cors_headers(origin)
-            return JSONResponse(content=result, headers=cors_headers)
-    except HTTPException as e:
-        # HTTP异常需要手动添加CORS头
-        origin = request.headers.get("origin")
-        from app.main import get_cors_headers
-        cors_headers = get_cors_headers(origin)
-        # 创建新的响应，包含CORS头
-        from fastapi.responses import JSONResponse
-        return JSONResponse(
-            status_code=e.status_code,
-            content={"detail": e.detail},
-            headers=cors_headers
-        )
+            return result
+    except HTTPException:
+        # 重新抛出HTTP异常（已经包含CORS头）
+        raise
     except Exception as e:
         # 捕获所有其他异常，记录日志并返回友好的错误信息
         logger.error(f"MCC {mcc_id} 同步异常: {str(e)}", exc_info=True)
         import traceback
         error_detail = f"同步失败: {str(e)}"
         logger.error(f"完整错误堆栈:\n{traceback.format_exc()}")
-        # 确保错误响应也包含CORS头
-        origin = request.headers.get("origin")
-        from app.main import get_cors_headers
-        cors_headers = get_cors_headers(origin)
-        from fastapi.responses import JSONResponse
-        return JSONResponse(
+        raise HTTPException(
             status_code=500,
-            content={"detail": error_detail},
-            headers=cors_headers
+            detail=error_detail
         )
 
 
