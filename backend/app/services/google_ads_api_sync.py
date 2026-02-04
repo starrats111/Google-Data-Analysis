@@ -298,7 +298,7 @@ class GoogleAdsApiSyncService:
                             metrics.search_rank_lost_impression_share
                         FROM campaign
                         WHERE segments.date = '{date_str}'
-                        AND campaign.status != 'REMOVED'
+                        -- 移除状态过滤，同步所有状态的广告系列（包括REMOVED，以便完整显示历史数据）
                     """
                     
                     ga_service = client.get_service("GoogleAdsService")
