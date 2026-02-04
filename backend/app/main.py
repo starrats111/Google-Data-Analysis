@@ -3,7 +3,7 @@ from pathlib import Path
 import atexit
 import traceback
 
-from fastapi import FastAPI, Request, status
+from fastapi import FastAPI, Request, status, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -170,6 +170,18 @@ async def global_exception_handler(request: Request, exc: Exception):
 @app.exception_handler(StarletteHTTPException)
 async def http_exception_handler(request: Request, exc: StarletteHTTPException):
     """HTTP异常处理器，确保包含CORS头"""
+    origin = request.headers.get("origin")
+    headers = get_cors_headers(origin)
+    
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"detail": exc.detail},
+        headers=headers,
+    )
+
+@app.exception_handler(HTTPException)
+async def fastapi_http_exception_handler(request: Request, exc: HTTPException):
+    """FastAPI HTTPException处理器，确保包含CORS头"""
     origin = request.headers.get("origin")
     headers = get_cors_headers(origin)
     

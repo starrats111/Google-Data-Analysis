@@ -409,7 +409,16 @@ async def sync_mcc_data(
         
         if not mcc_account:
             logger.error(f"MCC同步失败: 账号 {mcc_id} 不存在或不属于用户 {current_user.id}")
-            raise HTTPException(status_code=404, detail="MCC账号不存在")
+            # 确保404错误也包含CORS头
+            origin = request.headers.get("origin")
+            from app.main import get_cors_headers
+            cors_headers = get_cors_headers(origin)
+            from fastapi.responses import JSONResponse
+            return JSONResponse(
+                status_code=404,
+                content={"detail": "MCC账号不存在"},
+                headers=cors_headers
+            )
         
         # 解析请求数据
         if request_data is None:
@@ -467,7 +476,16 @@ async def sync_mcc_data(
             result = sync_service.sync_mcc_data(mcc_id, sync_date)
             
             if not result.get("success"):
-                raise HTTPException(status_code=500, detail=result.get("message", "同步失败"))
+                # 确保错误响应也包含CORS头
+                origin = request.headers.get("origin")
+                from app.main import get_cors_headers
+                cors_headers = get_cors_headers(origin)
+                from fastapi.responses import JSONResponse
+                return JSONResponse(
+                    status_code=500,
+                    content={"detail": result.get("message", "同步失败")},
+                    headers=cors_headers
+                )
             
             # 获取CORS头
             origin = request.headers.get("origin")
@@ -481,7 +499,16 @@ async def sync_mcc_data(
             
             if not result.get("success"):
                 logger.error(f"MCC {mcc_id} 同步失败: {result.get('message', '未知错误')}")
-                raise HTTPException(status_code=500, detail=result.get("message", "同步失败"))
+                # 确保错误响应也包含CORS头
+                origin = request.headers.get("origin")
+                from app.main import get_cors_headers
+                cors_headers = get_cors_headers(origin)
+                from fastapi.responses import JSONResponse
+                return JSONResponse(
+                    status_code=500,
+                    content={"detail": result.get("message", "同步失败")},
+                    headers=cors_headers
+                )
             
             logger.info(f"MCC {mcc_id} 同步成功: {result.get('message', '')}")
             
@@ -490,18 +517,33 @@ async def sync_mcc_data(
             from app.main import get_cors_headers
             cors_headers = get_cors_headers(origin)
             return JSONResponse(content=result, headers=cors_headers)
-    except HTTPException:
-        # 重新抛出HTTP异常（已经包含CORS头）
-        raise
+    except HTTPException as e:
+        # HTTP异常需要手动添加CORS头
+        origin = request.headers.get("origin")
+        from app.main import get_cors_headers
+        cors_headers = get_cors_headers(origin)
+        # 创建新的响应，包含CORS头
+        from fastapi.responses import JSONResponse
+        return JSONResponse(
+            status_code=e.status_code,
+            content={"detail": e.detail},
+            headers=cors_headers
+        )
     except Exception as e:
         # 捕获所有其他异常，记录日志并返回友好的错误信息
         logger.error(f"MCC {mcc_id} 同步异常: {str(e)}", exc_info=True)
         import traceback
         error_detail = f"同步失败: {str(e)}"
         logger.error(f"完整错误堆栈:\n{traceback.format_exc()}")
-        raise HTTPException(
+        # 确保错误响应也包含CORS头
+        origin = request.headers.get("origin")
+        from app.main import get_cors_headers
+        cors_headers = get_cors_headers(origin)
+        from fastapi.responses import JSONResponse
+        return JSONResponse(
             status_code=500,
-            detail=error_detail
+            content={"detail": error_detail},
+            headers=cors_headers
         )
 
 
