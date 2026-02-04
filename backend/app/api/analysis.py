@@ -16,6 +16,7 @@ from app.models.data_upload import DataUpload
 from app.schemas.analysis import AnalysisRequest, AnalysisResultResponse, AnalysisSummary, DailyL7DRequest
 from app.services.analysis_service import AnalysisService
 from app.services.api_analysis_service import ApiAnalysisService
+from app.services.api_only_analysis_service import ApiOnlyAnalysisService
 
 router = APIRouter(prefix="/api/analysis", tags=["analysis"])
 
@@ -26,129 +27,69 @@ async def process_analysis(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """触发数据分析"""
-    # 获取上传记录
-    google_upload = db.query(DataUpload).filter(
-        DataUpload.id == request.google_ads_upload_id
-    ).first()
-    affiliate_upload = db.query(DataUpload).filter(
-        DataUpload.id == request.affiliate_upload_id
-    ).first()
+    """
+    触发数据分析（已废弃 - 手动上传功能）
     
-    if not google_upload or not affiliate_upload:
-        raise HTTPException(status_code=404, detail="上传记录不存在")
+    此端点已废弃，请使用 /api/analysis/generate 从API数据生成分析结果
+    """
+    raise HTTPException(
+        status_code=410,
+        detail="此端点已废弃。请使用 /api/analysis/generate 从API数据生成分析结果"
+    )
+
+
+@router.post("/generate")
+async def generate_analysis_from_api(
+    begin_date: str = Query(..., description="开始日期 YYYY-MM-DD"),
+    end_date: str = Query(..., description="结束日期 YYYY-MM-DD"),
+    account_id: Optional[int] = Query(None, description="账号ID（可选）"),
+    platform_id: Optional[int] = Query(None, description="平台ID（可选）"),
+    analysis_type: str = Query("l7d", description="分析类型：daily 或 l7d"),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    从API数据生成分析结果（符合表6格式）
     
-    # 权限控制
-    if current_user.role == "employee":
-        if google_upload.user_id != current_user.id or affiliate_upload.user_id != current_user.id:
-            raise HTTPException(status_code=403, detail="无权访问此数据")
+    完全基于API数据，无需手动上传文件
+    输出格式符合表6模板要求
     
-    # 验证平台匹配：谷歌广告数据和联盟数据必须属于同一平台
-    from app.models.affiliate_account import AffiliateAccount
-    affiliate_account_id = request.affiliate_account_id or affiliate_upload.affiliate_account_id
-    if not affiliate_account_id:
-        raise HTTPException(status_code=400, detail="必须指定联盟账号")
-    
-    affiliate_account = db.query(AffiliateAccount).filter(
-        AffiliateAccount.id == affiliate_account_id
-    ).first()
-    if not affiliate_account:
-        raise HTTPException(status_code=404, detail="联盟账号不存在")
-    
-    # 检查平台匹配
-    if google_upload.platform_id and google_upload.platform_id != affiliate_account.platform_id:
-        raise HTTPException(
-            status_code=400,
-            detail=f"平台不匹配：谷歌广告数据属于平台ID {google_upload.platform_id}，但联盟账号属于平台ID {affiliate_account.platform_id}"
-        )
-    
-    # 如果谷歌广告数据没有指定平台，自动设置为联盟账号的平台
-    if not google_upload.platform_id:
-        google_upload.platform_id = affiliate_account.platform_id
-        db.commit()
-    
-    # 执行分析
-    import logging
-    logger = logging.getLogger(__name__)
+    Args:
+        begin_date: 开始日期 YYYY-MM-DD
+        end_date: 结束日期 YYYY-MM-DD
+        account_id: 账号ID（可选）
+        platform_id: 平台ID（可选）
+        analysis_type: 分析类型 'daily' 或 'l7d'
+    """
+    from datetime import datetime
     
     try:
-        logger.info(f"开始分析: Google Ads文件={google_upload.file_path}, Affiliate文件={affiliate_upload.file_path}")
-        analysis_service = AnalysisService()
-        result = analysis_service.process_analysis(
-            google_ads_file=google_upload.file_path,
-            affiliate_file=affiliate_upload.file_path,
-            user_id=current_user.id,
-            platform_id=affiliate_account.platform_id,
-            analysis_date=affiliate_upload.upload_date,
-            db=db,
-            affiliate_account_id=affiliate_account_id,
-            analysis_type=(request.analysis_type or "l7d"),
-            # 传递操作指令相关参数
-            past_seven_days_orders_global=request.past_seven_days_orders_global,
-            max_cpc_global=request.max_cpc_global
-        )
-        
-        if result["status"] == "failed":
-            error_msg = result.get("error", "分析失败")
-            logger.error(f"分析失败: {error_msg}")
-            raise HTTPException(status_code=500, detail=f"分析失败: {error_msg}")
-        
-        total_rows = result.get('total_rows', 0)
-        logger.info(f"分析完成: 处理了 {total_rows} 行数据")
-        
-        # 如果结果为0行，记录诊断信息
-        if total_rows == 0 and "diagnosis" in result:
-            logger.warning(f"分析结果为0行，诊断信息: {result.get('diagnosis', {})}")
-            logger.warning(f"警告信息: {result.get('warning', '')}")
-    except HTTPException:
-        # 重新抛出HTTP异常，不记录
-        raise
-    except Exception as e:
-        import traceback
-        error_detail = str(e)
-        error_traceback = traceback.format_exc()
-        
-        # 记录详细错误信息
-        logger.error(f"分析过程出错: {error_detail}")
-        logger.error(f"错误堆栈:\n{error_traceback}")
-        
-        # 打印到控制台（开发环境）
-        print(f"\n{'='*60}")
-        print(f"分析错误详情:")
-        print(f"{'='*60}")
-        print(f"错误信息: {error_detail}")
-        print(f"\n完整堆栈跟踪:")
-        print(error_traceback)
-        print(f"{'='*60}\n")
-        
-        raise HTTPException(status_code=500, detail=f"分析过程出错: {error_detail}")
+        begin = datetime.strptime(begin_date, "%Y-%m-%d").date()
+        end = datetime.strptime(end_date, "%Y-%m-%d").date()
+    except ValueError:
+        raise HTTPException(status_code=400, detail="日期格式错误，应为 YYYY-MM-DD")
     
-    # 保存分析结果
-    analysis_result = AnalysisResult(
-        user_id=current_user.id,
-        affiliate_account_id=affiliate_account_id,
-        upload_id_google=google_upload.id,
-        upload_id_affiliate=affiliate_upload.id,
-        analysis_date=affiliate_upload.upload_date,
-        result_data=result
+    if begin > end:
+        raise HTTPException(status_code=400, detail="开始日期不能晚于结束日期")
+    
+    # 权限检查：员工只能分析自己的数据
+    user_id = current_user.id if current_user.role == "employee" else None
+    
+    # 使用新的纯API分析服务
+    api_only_service = ApiOnlyAnalysisService(db)
+    result = api_only_service.generate_analysis_from_api(
+        begin_date=begin,
+        end_date=end,
+        user_id=user_id,
+        account_id=account_id,
+        platform_id=platform_id,
+        analysis_type=analysis_type
     )
-    db.add(analysis_result)
-    db.commit()
-    db.refresh(analysis_result)
     
-    response_data = {
-        "id": analysis_result.id,
-        "status": "completed",
-        "summary": result.get("summary", {}),
-        "total_rows": result.get("total_rows", 0)
-    }
+    if not result.get("success"):
+        raise HTTPException(status_code=500, detail=result.get("message", "生成分析失败"))
     
-    # 如果结果为0行，包含诊断信息
-    if result.get("total_rows", 0) == 0 and "diagnosis" in result:
-        response_data["diagnosis"] = result.get("diagnosis", {})
-        response_data["warning"] = result.get("warning", "")
-    
-    return response_data
+    return result
 
 
 @router.get("/results", response_model=List[AnalysisResultResponse])
