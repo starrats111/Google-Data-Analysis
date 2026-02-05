@@ -414,6 +414,20 @@ class GoogleAdsApiSyncService:
                         "Resource has been exhausted" in error_message
                     )
                     
+                    # 检查是否是开发者令牌被禁止错误
+                    is_developer_token_prohibited = (
+                        "DEVELOPER_TOKEN_PROHIBITED" in error_code or
+                        "Developer token is not allowed" in error_message or
+                        "not allowed with project" in error_message
+                    )
+                    
+                    # 检查是否是开发者令牌被禁止错误
+                    is_developer_token_prohibited = (
+                        "DEVELOPER_TOKEN_PROHIBITED" in error_code or
+                        "Developer token is not allowed" in error_message or
+                        "not allowed with project" in error_message
+                    )
+                    
                     # 检查是否是客户账号未启用错误
                     is_customer_not_enabled = (
                         "CUSTOMER_NOT_ENABLED" in error_code or
@@ -422,6 +436,20 @@ class GoogleAdsApiSyncService:
                         "not yet enabled" in error_message.lower() or
                         "has been deactivated" in error_message.lower()
                     )
+                    
+                    if is_developer_token_prohibited:
+                        # 开发者令牌被禁止，返回明确的错误信息
+                        logger.error(
+                            f"查询客户账号 {customer_id} 失败: 开发者令牌不允许使用。"
+                            f"新令牌可能需要等待Google审核（通常需要1-3个工作日），"
+                            f"或者需要与正确的Google Cloud项目关联。"
+                        )
+                        return {
+                            "success": False,
+                            "message": "⚠️ 开发者令牌不允许使用。新令牌可能需要等待Google审核（通常需要1-3个工作日），或者需要与正确的Google Cloud项目关联。请联系管理员确认令牌状态。",
+                            "developer_token_prohibited": True,
+                            "error_code": error_code
+                        }
                     
                     if is_quota_exhausted:
                         # 尝试从错误消息中提取重试时间
@@ -641,9 +669,20 @@ class GoogleAdsApiSyncService:
                 else:
                     logger.warning(f"通过CustomerClient查询没有找到客户账号（MCC下可能没有客户账号或客户账号未启用）")
             except Exception as e:
-                logger.warning(f"使用CustomerClient查询失败: {e}")
-                import traceback
-                logger.debug(traceback.format_exc())
+                error_str = str(e)
+                # 检查是否是开发者令牌被禁止错误
+                is_developer_token_prohibited = (
+                    "DEVELOPER_TOKEN_PROHIBITED" in error_str or
+                    "Developer token is not allowed" in error_str or
+                    "not allowed with project" in error_str
+                )
+                
+                if is_developer_token_prohibited:
+                    logger.error(f"使用CustomerClient查询失败: 开发者令牌不允许使用。新令牌可能需要等待Google审核（通常需要1-3个工作日）。")
+                else:
+                    logger.warning(f"使用CustomerClient查询失败: {e}")
+                    import traceback
+                    logger.debug(traceback.format_exc())
             
             # 方法2：使用 CustomerService.list_accessible_customers() 作为备选
             try:
@@ -664,7 +703,20 @@ class GoogleAdsApiSyncService:
                 else:
                     logger.warning(f"通过CustomerService没有找到客户账号（只有MCC本身）")
             except Exception as e:
-                logger.warning(f"使用CustomerService获取客户列表失败: {e}")
+                error_str = str(e)
+                # 检查是否是开发者令牌被禁止错误
+                is_developer_token_prohibited = (
+                    "DEVELOPER_TOKEN_PROHIBITED" in error_str or
+                    "Developer token is not allowed" in error_str or
+                    "not allowed with project" in error_str
+                )
+                
+                if is_developer_token_prohibited:
+                    logger.error(f"使用CustomerService获取客户列表失败: 开发者令牌不允许使用。新令牌可能需要等待Google审核（通常需要1-3个工作日）。")
+                    # 返回特殊错误，让上层知道是令牌问题
+                    raise Exception("DEVELOPER_TOKEN_PROHIBITED: 开发者令牌不允许使用。新令牌可能需要等待Google审核（通常需要1-3个工作日）。")
+                else:
+                    logger.warning(f"使用CustomerService获取客户列表失败: {e}")
             
             # 如果两种方法都失败，返回空列表（而不是MCC ID本身）
             logger.error(f"无法获取MCC {mcc_customer_id} 下的客户账号列表。可能的原因：1) MCC下没有客户账号 2) 客户账号未启用 3) API权限不足")
