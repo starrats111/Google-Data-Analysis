@@ -3,7 +3,9 @@ MCC管理API
 用于管理Google MCC账号和数据聚合
 """
 import logging
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
+from fastapi.responses import JSONResponse
+from starlette.requests import Request
 from sqlalchemy.orm import Session
 from typing import Optional, List
 from pydantic import BaseModel
@@ -18,6 +20,64 @@ from app.models.affiliate_account import AffiliateAccount
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/mcc", tags=["mcc"])
+
+
+def _sync_mcc_range_in_background(mcc_id: int, begin: date, end: date, user_id: int):
+    """后台任务：同步MCC日期范围数据"""
+    import logging
+    from app.database import SessionLocal
+    from app.services.google_ads_api_sync import GoogleAdsApiSyncService
+    from datetime import timedelta
+    
+    logger = logging.getLogger(__name__)
+    db = SessionLocal()
+    
+    try:
+        sync_service = GoogleAdsApiSyncService(db)
+        current_date = begin
+        total_saved = 0
+        errors = []
+        
+        while current_date <= end:
+            try:
+                result = sync_service.sync_mcc_data(mcc_id, current_date)
+                if result.get("success"):
+                    total_saved += result.get("saved_count", 0)
+                else:
+                    errors.append(f"{current_date.isoformat()}: {result.get('message', '同步失败')}")
+            except Exception as e:
+                errors.append(f"{current_date.isoformat()}: {str(e)}")
+            current_date += timedelta(days=1)
+        
+        logger.info(f"MCC {mcc_id} 后台同步完成: 保存 {total_saved} 条，错误 {len(errors)} 个")
+    except Exception as e:
+        logger.error(f"MCC {mcc_id} 后台同步异常: {e}", exc_info=True)
+    finally:
+        db.close()
+
+
+def _sync_mcc_single_date_in_background(mcc_id: int, sync_date: date, user_id: int):
+    """后台任务：同步MCC单个日期数据"""
+    import logging
+    from app.database import SessionLocal
+    from app.services.google_ads_api_sync import GoogleAdsApiSyncService
+    
+    logger = logging.getLogger(__name__)
+    db = SessionLocal()
+    
+    try:
+        sync_service = GoogleAdsApiSyncService(db)
+        result = sync_service.sync_mcc_data(mcc_id, sync_date)
+        
+        if result.get("success"):
+            saved_count = result.get("saved_count", 0)
+            logger.info(f"MCC {mcc_id} 后台同步完成 ({sync_date.isoformat()}): 保存 {saved_count} 条")
+        else:
+            logger.error(f"MCC {mcc_id} 后台同步失败 ({sync_date.isoformat()}): {result.get('message', '未知错误')}")
+    except Exception as e:
+        logger.error(f"MCC {mcc_id} 后台同步异常 ({sync_date.isoformat()}): {e}", exc_info=True)
+    finally:
+        db.close()
 
 
 class MccAccountCreate(BaseModel):
@@ -120,45 +180,50 @@ async def get_mcc_accounts(
     import time
     start_time = time.time()
     
+    # 提前准备CORS头，确保所有响应都包含
+    origin = request.headers.get("origin")
+    from app.main import get_cors_headers
+    cors_headers = get_cors_headers(origin)
+    from fastapi.responses import JSONResponse
+    
     try:
         logger.info(f"用户 {current_user.username} (ID: {current_user.id}) 请求MCC账号列表")
         
-        # 获取CORS头（提前准备，确保所有响应都包含）
-        origin = request.headers.get("origin")
-        from app.main import get_cors_headers
-        cors_headers = get_cors_headers(origin)
-        
-        # 查询MCC账号
-        query = db.query(GoogleMccAccount).filter(
+        # 查询MCC账号（简化查询，移除重复的权限检查）
+        mcc_accounts = db.query(GoogleMccAccount).filter(
             GoogleMccAccount.user_id == current_user.id
-        )
+        ).order_by(GoogleMccAccount.created_at.desc()).all()
         
-        # 权限检查：员工只能查看自己的MCC
-        if current_user.role == "employee":
-            query = query.filter(GoogleMccAccount.user_id == current_user.id)
-        
-        mcc_accounts = query.order_by(GoogleMccAccount.created_at.desc()).all()
         logger.info(f"查询到 {len(mcc_accounts)} 个MCC账号")
         
         if not mcc_accounts:
             # 如果没有MCC账号，直接返回空列表（包含CORS头）
-            from fastapi.responses import JSONResponse
+            logger.info("用户没有MCC账号，返回空列表")
             return JSONResponse(content=[], headers=cors_headers)
         
         # 优化：使用一次聚合查询获取所有MCC的数据条数，避免N+1查询
         from sqlalchemy import func
         mcc_ids = [mcc.id for mcc in mcc_accounts]
         
-        # 使用 GROUP BY 一次性获取所有MCC的数据条数
-        data_counts = db.query(
-            GoogleAdsApiData.mcc_id,
-            func.count(GoogleAdsApiData.id).label('count')
-        ).filter(
-            GoogleAdsApiData.mcc_id.in_(mcc_ids)
-        ).group_by(GoogleAdsApiData.mcc_id).all()
+        # 如果MCC账号列表为空，直接返回
+        if not mcc_ids:
+            return JSONResponse(content=[], headers=cors_headers)
         
-        # 转换为字典，方便快速查找
-        data_count_map = {mcc_id: count for mcc_id, count in data_counts}
+        # 使用 GROUP BY 一次性获取所有MCC的数据条数（添加异常处理）
+        try:
+            data_counts = db.query(
+                GoogleAdsApiData.mcc_id,
+                func.count(GoogleAdsApiData.id).label('count')
+            ).filter(
+                GoogleAdsApiData.mcc_id.in_(mcc_ids)
+            ).group_by(GoogleAdsApiData.mcc_id).all()
+            
+            # 转换为字典，方便快速查找
+            data_count_map = {mcc_id: count for mcc_id, count in data_counts}
+        except Exception as e:
+            # 如果查询失败，使用空字典，避免整个接口失败
+            logger.warning(f"获取MCC数据条数失败: {e}，使用默认值0")
+            data_count_map = {}
         
         # 构建结果列表
         result = []
@@ -189,15 +254,11 @@ async def get_mcc_accounts(
         logger.info(f"成功返回 {len(result)} 个MCC账号，耗时 {elapsed_time:.2f} 秒")
         
         # 返回结果，确保包含CORS头
-        from fastapi.responses import JSONResponse
         return JSONResponse(content=result, headers=cors_headers)
         
     except HTTPException as e:
         # HTTP异常需要手动添加CORS头
-        origin = request.headers.get("origin")
-        from app.main import get_cors_headers
-        cors_headers = get_cors_headers(origin)
-        from fastapi.responses import JSONResponse
+        logger.error(f"获取MCC账号列表HTTP异常: {e.detail}")
         return JSONResponse(
             status_code=e.status_code,
             content={"detail": e.detail},
@@ -210,10 +271,6 @@ async def get_mcc_accounts(
         logger.error(f"获取MCC账号列表失败: {str(e)}\n{error_trace}")
         
         # 确保错误响应也包含CORS头
-        origin = request.headers.get("origin")
-        from app.main import get_cors_headers
-        cors_headers = get_cors_headers(origin)
-        from fastapi.responses import JSONResponse
         return JSONResponse(
             status_code=500,
             content={"detail": f"获取MCC账号列表失败: {str(e)}"},
@@ -403,7 +460,8 @@ async def delete_mcc_account(
 @router.post("/accounts/{mcc_id}/sync")
 async def sync_mcc_data(
     mcc_id: int,
-    request_data: Optional[dict] = None,
+    request: Request,
+    background_tasks: BackgroundTasks,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
@@ -414,31 +472,46 @@ async def sync_mcc_data(
     2. 日期范围：begin_date 和 end_date (YYYY-MM-DD)
     """
     import logging
+    import time
+    import json
     logger = logging.getLogger(__name__)
+    start_time = time.time()
+    
+    # 提前准备CORS头，确保所有响应都包含
+    origin = request.headers.get("origin")
+    from app.main import get_cors_headers
+    cors_headers = get_cors_headers(origin)
+    from fastapi.responses import JSONResponse
     
     try:
-        from app.services.google_ads_api_sync import GoogleAdsApiSyncService
+        logger.info(f"[MCC同步] 开始处理请求: mcc_id={mcc_id}, user={current_user.username}")
         
+        # 快速验证MCC账号是否存在
         mcc_account = db.query(GoogleMccAccount).filter(
             GoogleMccAccount.id == mcc_id,
             GoogleMccAccount.user_id == current_user.id
         ).first()
         
         if not mcc_account:
-            logger.error(f"MCC同步失败: 账号 {mcc_id} 不存在或不属于用户 {current_user.id}")
+            logger.error(f"[MCC同步] 账号不存在: mcc_id={mcc_id}, user_id={current_user.id}")
             raise HTTPException(status_code=404, detail="MCC账号不存在")
         
-        # 解析请求数据
-        if request_data is None:
+        # 解析请求数据（从请求体中获取JSON）
+        try:
+            body = await request.body()
+            if body:
+                request_data = json.loads(body)
+            else:
+                request_data = {}
+        except (json.JSONDecodeError, Exception) as e:
+            logger.warning(f"[MCC同步] 解析请求体失败: {e}，使用空字典")
             request_data = {}
         
         target_date = request_data.get("target_date")
         begin_date = request_data.get("begin_date")
         end_date = request_data.get("end_date")
         
-        logger.info(f"开始同步MCC账号 {mcc_id} ({mcc_account.mcc_name}), 用户: {current_user.username}")
-        
-        sync_service = GoogleAdsApiSyncService(db)
+        logger.info(f"[MCC同步] 账号验证完成: {mcc_account.mcc_name}, 耗时: {time.time() - start_time:.2f}s")
         
         # 如果提供了日期范围，同步范围内的所有日期
         if begin_date and end_date:
@@ -449,99 +522,101 @@ async def sync_mcc_data(
                 if begin > end:
                     raise HTTPException(status_code=400, detail="开始日期不能晚于结束日期")
             
-                # 同步日期范围内的每一天
-                total_saved = 0
-                current_date = begin
-                errors = []
-                warnings = []  # 记录警告信息（如没有数据但同步成功）
-            
-                while current_date <= end:
-                    result = sync_service.sync_mcc_data(mcc_id, current_date)
-                    if result.get("success"):
-                        saved_count = result.get("saved_count", 0)
-                        total_saved += saved_count
-                    # 如果同步成功但没有保存数据，记录警告
-                        if saved_count == 0:
-                            warnings.append(f"{current_date.isoformat()}: 同步成功但该日期没有广告系列数据")
-                    else:
-                        errors.append(f"{current_date.isoformat()}: {result.get('message', '同步失败')}")
-                    current_date += timedelta(days=1)
-            
-                # 构建返回消息
-                if errors and total_saved > 0:
-                    # 有错误但保存了部分数据
-                    return {
+                # 使用后台任务处理日期范围同步，避免超时
+                background_tasks.add_task(
+                    _sync_mcc_range_in_background,
+                    mcc_id=mcc_id,
+                    begin=begin,
+                    end=end,
+                    user_id=current_user.id
+                )
+                
+                logger.info(f"[MCC同步] 后台任务已添加，总耗时: {time.time() - start_time:.2f}s")
+                
+                return JSONResponse(
+                    status_code=202,
+                    content={
                         "success": True,
-                        "message": f"同步完成，成功保存 {total_saved} 条记录，部分日期同步失败",
-                        "saved_count": total_saved,
-                        "errors": errors,
-                        "warnings": warnings if warnings else None
-                }
-                elif errors and total_saved == 0:
-                    # 全部失败
-                    error_summary = errors[0] if len(errors) == 1 else f"{len(errors)} 个日期同步失败"
-                    return {
-                "success": False,
-                "message": f"同步失败：{error_summary}",
-                "saved_count": 0,
-                "errors": errors,
-                "warnings": warnings if warnings else None
-                }
-                elif total_saved == 0 and warnings:
-                    # 同步成功但没有数据
-                    warning_summary = warnings[0] if len(warnings) == 1 else f"所有日期都没有广告系列数据"
-                    return {
-                "success": True,
-                "message": f"同步完成，但没有保存任何数据。{warning_summary}",
-                "saved_count": 0,
-                "warnings": warnings
-                }
-                else:
-                    # 完全成功
-                    return {
-                "success": True,
-                "message": f"成功同步 {total_saved} 条广告系列数据",
-                "saved_count": total_saved
-                }
+                        "async": True,
+                        "message": f"已开始后台同步：{begin.isoformat()} ~ {end.isoformat()}（请稍后刷新查看结果）",
+                        "begin_date": begin.isoformat(),
+                        "end_date": end.isoformat()
+                    },
+                    headers=cors_headers
+                )
             except ValueError:
                 raise HTTPException(status_code=400, detail="日期格式错误，应为 YYYY-MM-DD")
         
-        # 如果提供了单个日期，同步该日期
+        # 如果提供了单个日期，使用后台任务同步该日期
         elif target_date:
             try:
                 sync_date = datetime.strptime(target_date, "%Y-%m-%d").date()
             except ValueError:
                 raise HTTPException(status_code=400, detail="日期格式错误，应为 YYYY-MM-DD")
             
-            result = sync_service.sync_mcc_data(mcc_id, sync_date)
+            # 使用后台任务处理，避免超时
+            background_tasks.add_task(
+                _sync_mcc_single_date_in_background,
+                mcc_id=mcc_id,
+                sync_date=sync_date,
+                user_id=current_user.id
+            )
             
-            if not result.get("success"):
-                raise HTTPException(status_code=500, detail=result.get("message", "同步失败"))
+            logger.info(f"[MCC同步] 后台任务已添加（单个日期），总耗时: {time.time() - start_time:.2f}s")
             
-            return result
+            return JSONResponse(
+                status_code=202,
+                content={
+                    "success": True,
+                    "async": True,
+                    "message": f"已开始后台同步：{sync_date.isoformat()}（请稍后刷新查看结果）",
+                    "target_date": sync_date.isoformat()
+                },
+                headers=cors_headers
+            )
         
-        # 如果没有提供日期，默认同步昨天
+        # 如果没有提供日期，默认同步昨天，也使用后台任务
         else:
-            result = sync_service.sync_mcc_data(mcc_id, None)
+            from datetime import timedelta
+            yesterday = (datetime.now() - timedelta(days=1)).date()
             
-            if not result.get("success"):
-                logger.error(f"MCC {mcc_id} 同步失败: {result.get('message', '未知错误')}")
-                raise HTTPException(status_code=500, detail=result.get("message", "同步失败"))
+            # 使用后台任务处理，避免超时
+            background_tasks.add_task(
+                _sync_mcc_single_date_in_background,
+                mcc_id=mcc_id,
+                sync_date=yesterday,
+                user_id=current_user.id
+            )
             
-            logger.info(f"MCC {mcc_id} 同步成功: {result.get('message', '')}")
-            return result
-    except HTTPException:
-        # 重新抛出HTTP异常（已经包含CORS头）
-        raise
+            logger.info(f"[MCC同步] 后台任务已添加（默认昨天），总耗时: {time.time() - start_time:.2f}s")
+            
+            return JSONResponse(
+                status_code=202,
+                content={
+                    "success": True,
+                    "async": True,
+                    "message": f"已开始后台同步：{yesterday.isoformat()}（请稍后刷新查看结果）",
+                    "target_date": yesterday.isoformat()
+                },
+                headers=cors_headers
+            )
+    except HTTPException as e:
+        # HTTP异常需要手动添加CORS头
+        logger.error(f"[MCC同步] HTTP异常: {e.detail}, 耗时: {time.time() - start_time:.2f}s")
+        return JSONResponse(
+            status_code=e.status_code,
+            content={"detail": e.detail},
+            headers=cors_headers
+        )
     except Exception as e:
         # 捕获所有其他异常，记录日志并返回友好的错误信息
-        logger.error(f"MCC {mcc_id} 同步异常: {str(e)}", exc_info=True)
         import traceback
         error_detail = f"同步失败: {str(e)}"
-        logger.error(f"完整错误堆栈:\n{traceback.format_exc()}")
-        raise HTTPException(
+        logger.error(f"[MCC同步] 异常: {error_detail}, 耗时: {time.time() - start_time:.2f}s\n{traceback.format_exc()}")
+        return JSONResponse(
             status_code=500,
-            detail=error_detail
+            content={"detail": error_detail},
+            headers=cors_headers
         )
 
 
