@@ -19,3 +19,12 @@ curl -X POST \
   -d '{"begin_date": "2026-01-01", "end_date": "2026-01-07"}' \
   -v https://api.google-data-analysis.top/api/mcc/accounts/9/sync 2>&1 | grep -i "access-control\|error\|failed"
 
+
+
+
+
+
+
+
+
+

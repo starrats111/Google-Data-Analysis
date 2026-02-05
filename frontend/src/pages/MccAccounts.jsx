@@ -1,123 +1,103 @@
 import React, { useState, useEffect } from 'react'
-import { Card, Table, Button, Modal, Form, Input, message, Popconfirm, Tag, Space, Switch, Steps, Alert } from 'antd'
-import { PlusOutlined, EditOutlined, DeleteOutlined, SyncOutlined, LinkOutlined, CheckCircleOutlined } from '@ant-design/icons'
+import { 
+  Card, Table, Button, Modal, Form, Input, message, Popconfirm, Tag, Space, 
+  Switch, Steps, Alert, Upload, Tabs, Progress, Tooltip, DatePicker, Divider,
+  Typography, Badge, Descriptions, Row, Col
+} from 'antd'
+import { 
+  PlusOutlined, EditOutlined, DeleteOutlined, SyncOutlined, LinkOutlined, 
+  CheckCircleOutlined, UploadOutlined, CloudSyncOutlined, HistoryOutlined,
+  ApiOutlined, InfoCircleOutlined, WarningOutlined, ClockCircleOutlined,
+  FileTextOutlined
+} from '@ant-design/icons'
 import api from '../services/api'
 import { useAuth } from '../store/authStore'
 
+const { TextArea } = Input
+const { RangePicker } = DatePicker
+const { Text, Paragraph } = Typography
+
 export default function MccAccounts() {
   const { user } = useAuth()
-  const isManager = user?.role === 'manager'
+  const isManager = user?.role === 'manager' || user?.username === 'wenjun123'
   
   const [mccAccounts, setMccAccounts] = useState([])
   const [loading, setLoading] = useState(false)
   const [modalVisible, setModalVisible] = useState(false)
   const [editingMcc, setEditingMcc] = useState(null)
-  const [originalApiValues, setOriginalApiValues] = useState({}) // 保存原始API配置值
   const [form] = Form.useForm()
   const [syncLoading, setSyncLoading] = useState({})
-  const [oauthModalVisible, setOauthModalVisible] = useState(false)
-  const [oauthStep, setOauthStep] = useState(0) // 0: 输入信息, 1: 授权, 2: 完成
-  const [authorizationUrl, setAuthorizationUrl] = useState('')
-  const [oauthForm] = Form.useForm()
-  const [obtainedRefreshToken, setObtainedRefreshToken] = useState('') // 保存获取到的Refresh Token
+  const [testLoading, setTestLoading] = useState({})
+  
+  // 批量导入
+  const [batchModalVisible, setBatchModalVisible] = useState(false)
+  const [batchForm] = Form.useForm()
+  const [batchLoading, setBatchLoading] = useState(false)
+  
+  // 历史数据同步
+  const [historyModalVisible, setHistoryModalVisible] = useState(false)
+  const [historyMcc, setHistoryMcc] = useState(null)
+  const [historyLoading, setHistoryLoading] = useState(false)
+  
+  // 服务账号配置
+  const [serviceAccountStatus, setServiceAccountStatus] = useState(null)
+  const [saModalVisible, setSaModalVisible] = useState(false)
+  const [saForm] = Form.useForm()
+  const [saLoading, setSaLoading] = useState(false)
+  
+  // 同步状态
+  const [syncStatusVisible, setSyncStatusVisible] = useState(false)
+  const [syncStatusData, setSyncStatusData] = useState([])
 
   useEffect(() => {
     fetchMccAccounts()
+    fetchServiceAccountStatus()
   }, [])
 
   const fetchMccAccounts = async () => {
-    // 防止重复请求
     if (loading) return
     
     setLoading(true)
     try {
-      if (import.meta.env.DEV) {
-        console.log('[MCC Accounts] 开始获取MCC账号列表，API URL: /api/mcc/accounts')
-      }
-      
-      // 添加超时控制
       const controller = new AbortController()
-      const timeoutId = setTimeout(() => controller.abort(), 30000) // 30秒超时
+      const timeoutId = setTimeout(() => controller.abort(), 30000)
       
-      try {
-        const response = await api.get('/api/mcc/accounts', {
-          signal: controller.signal
-        })
-        clearTimeout(timeoutId)
-        
-        if (import.meta.env.DEV) {
-          console.log('获取到的MCC账号数据:', response.data)
-        }
-        setMccAccounts(response.data || [])
-      } catch (fetchError) {
-        clearTimeout(timeoutId)
-        if (fetchError.name === 'AbortError') {
-          throw new Error('请求超时，请稍后重试')
-        }
-        throw fetchError
-      }
+      const response = await api.get('/api/mcc/accounts', { signal: controller.signal })
+      clearTimeout(timeoutId)
+      
+      setMccAccounts(response.data || [])
     } catch (error) {
       console.error('获取MCC账号列表失败:', error)
-      if (import.meta.env.DEV) {
-        console.error('错误详情:', {
-          message: error.message,
-          response: error.response,
-          request: error.request,
-          config: error.config
-        })
-      }
-      
-      // 更友好的错误提示
-      let errorMessage = '获取MCC账号列表失败'
-      if (error.message) {
-        errorMessage += ': ' + error.message
-      } else if (error.response?.data?.detail) {
-        errorMessage += ': ' + error.response.data.detail
-      }
-      
-      message.error(errorMessage)
-      // 即使失败也设置空数组，避免一直显示加载状态
+      message.error('获取MCC账号列表失败')
       setMccAccounts([])
     } finally {
       setLoading(false)
     }
   }
 
+  const fetchServiceAccountStatus = async () => {
+    try {
+      const response = await api.get('/api/mcc/service-account/status')
+      setServiceAccountStatus(response.data)
+    } catch (error) {
+      console.error('获取服务账号状态失败:', error)
+    }
+  }
+
   const handleCreate = () => {
     setEditingMcc(null)
     form.resetFields()
+    form.setFieldsValue({ use_service_account: true })
     setModalVisible(true)
   }
 
   const handleEdit = (mcc) => {
-    console.log('编辑MCC账号，原始数据:', {
-      id: mcc.id,
-      mcc_id: mcc.mcc_id,
-      client_id: mcc.client_id ? '已配置' : '未配置',
-      client_secret: mcc.client_secret ? '已配置' : '未配置',
-      refresh_token: mcc.refresh_token ? '已配置' : '未配置'
-    })
     setEditingMcc(mcc)
-    // 保存原始API配置值（保留null/undefined，用于判断是否需要更新）
-    const originalValues = {
-      client_id: mcc.client_id,
-      client_secret: mcc.client_secret,
-      refresh_token: mcc.refresh_token
-    }
-    console.log('保存的原始API值:', {
-      client_id: originalValues.client_id ? '有值' : '无值',
-      client_secret: originalValues.client_secret ? '有值' : '无值',
-      refresh_token: originalValues.refresh_token ? '有值' : '无值'
-    })
-    setOriginalApiValues(originalValues)
     form.setFieldsValue({
       mcc_id: mcc.mcc_id,
       mcc_name: mcc.mcc_name,
-      email: mcc.email,
-      // 不设置这些字段的值，留空表示不修改
-      client_id: undefined,
-      client_secret: undefined,
-      refresh_token: undefined,
+      email: mcc.email || '',
+      use_service_account: mcc.use_service_account !== false,
       is_active: mcc.is_active
     })
     setModalVisible(true)
@@ -127,142 +107,234 @@ export default function MccAccounts() {
     try {
       const submitData = { ...values }
       
-      // 简化逻辑：编辑时，如果字段为空字符串或undefined/null，则删除该字段（不发送，保留原值）
-      // 如果字段有值（非空字符串），则发送（更新为新值）
-      if (editingMcc) {
-        // 编辑模式：只处理API字段
-        const apiFields = ['client_id', 'client_secret', 'refresh_token']
-        apiFields.forEach(field => {
-          const value = submitData[field]
-          // 如果值为空字符串、undefined或null，删除该字段（不发送，保留原值）
-          if (!value || (typeof value === 'string' && value.trim() === '')) {
-            delete submitData[field]
-          }
-        })
-      } else {
-        // 创建模式：空字符串不发送
-        if (!submitData.client_id || submitData.client_id.trim() === '') {
-          delete submitData.client_id
+      // 清理空值
+      Object.keys(submitData).forEach(key => {
+        if (submitData[key] === '' || submitData[key] === undefined) {
+          delete submitData[key]
         }
-        if (!submitData.client_secret || submitData.client_secret.trim() === '') {
-          delete submitData.client_secret
-        }
-        if (!submitData.refresh_token || submitData.refresh_token.trim() === '') {
-          delete submitData.refresh_token
-        }
-      }
+      })
       
       if (editingMcc) {
-        const response = await api.put(`/api/mcc/accounts/${editingMcc.id}`, submitData)
+        await api.put(`/api/mcc/accounts/${editingMcc.id}`, submitData)
         message.success('更新成功')
       } else {
-        const response = await api.post('/api/mcc/accounts', submitData)
+        await api.post('/api/mcc/accounts', submitData)
         message.success('创建成功')
       }
       setModalVisible(false)
       form.resetFields()
-      setOriginalApiValues({})
       fetchMccAccounts()
     } catch (error) {
       console.error('保存失败:', error)
-      const errorMessage = error.response?.data?.detail || error.message || '操作失败'
-      message.error(errorMessage)
+      message.error(error.response?.data?.detail || '操作失败')
     }
   }
 
   const handleDelete = async (id, record) => {
     try {
-      // 确保id是数字类型，处理可能的字符串格式（如 "1:1"）
-      let mccId
-      if (typeof id === 'number') {
-        mccId = id
-      } else if (typeof id === 'string') {
-        // 如果包含冒号，只取第一部分
-        const cleanId = id.split(':')[0].split('/')[0]
-        mccId = parseInt(cleanId, 10)
-      } else {
-        mccId = parseInt(id, 10)
-      }
+      const mccId = typeof id === 'number' ? id : parseInt(id.toString().split(':')[0], 10)
       
       if (isNaN(mccId) || mccId <= 0) {
-        console.error('无效的MCC账号ID:', id)
         message.error('无效的MCC账号ID')
         return
       }
       
-      console.log('删除MCC账号，ID:', mccId, '原始ID:', id)
       const response = await api.delete(`/api/mcc/accounts/${mccId}`)
       const deletedCount = response.data?.deleted_data_count || 0
       const mccName = response.data?.mcc_name || record?.mcc_name || 'MCC账号'
       
       if (deletedCount > 0) {
-        message.success(`已删除MCC账号"${mccName}"，同时删除了 ${deletedCount} 条关联的Google Ads数据`)
+        message.success(`已删除MCC账号"${mccName}"，同时删除了 ${deletedCount} 条关联数据`)
       } else {
         message.success(`已删除MCC账号"${mccName}"`)
       }
       fetchMccAccounts()
     } catch (error) {
       console.error('删除失败:', error)
-      console.error('错误详情:', {
-        message: error.message,
-        response: error.response?.data,
-        config: error.config
-      })
-      const errorMsg = error.response?.data?.detail || error.message || '删除失败'
-      message.error(errorMsg)
+      message.error(error.response?.data?.detail || '删除失败')
     }
   }
 
   const handleSync = async (mccId) => {
-    // 获取当前日期范围（默认最近7天）
-    const endDate = new Date()
-    const beginDate = new Date()
-    beginDate.setDate(endDate.getDate() - 7)
-    
-    const beginDateStr = beginDate.toISOString().split('T')[0]
-    const endDateStr = endDate.toISOString().split('T')[0]
-    
     setSyncLoading({ ...syncLoading, [mccId]: true })
     try {
+      const yesterday = new Date()
+      yesterday.setDate(yesterday.getDate() - 1)
+      const targetDate = yesterday.toISOString().split('T')[0]
+      
       const response = await api.post(`/api/mcc/accounts/${mccId}/sync`, {
-        begin_date: beginDateStr,
-        end_date: endDateStr
+        target_date: targetDate
       })
       
-      const data = response.data
-      
-      // 显示详细的结果信息
-      if (data.errors && data.errors.length > 0) {
-        // 如果有错误，显示错误详情
-        const errorCount = data.errors.length
-        const errorPreview = data.errors.slice(0, 3).join('; ')
-        const errorMsg = errorCount > 3 
-          ? `同步完成，成功保存 ${data.saved_count || 0} 条记录，${errorCount} 个日期同步失败。失败详情：${errorPreview}...`
-          : `同步完成，成功保存 ${data.saved_count || 0} 条记录，部分日期同步失败：${errorPreview}`
-        
-        if (data.saved_count > 0) {
-          message.warning(errorMsg, 8) // 显示8秒
-        } else {
-          message.error(errorMsg, 10) // 显示10秒
-        }
-        
-        // 在控制台输出完整错误信息
-        console.error('同步错误详情:', data.errors)
-      } else if (data.saved_count === 0) {
-        // 没有保存任何数据，可能是没有数据或配置问题
-        message.warning('同步完成，但没有保存任何数据。可能原因：1) 该日期范围内没有广告系列数据 2) MCC下没有客户账号 3) API配置不正确', 8)
+      if (response.data.async) {
+        message.info(response.data.message)
+      } else if (response.data.success) {
+        message.success(response.data.message || '同步成功')
       } else {
-        message.success(data.message || `同步成功，保存了 ${data.saved_count} 条记录`)
+        message.warning(response.data.message || '同步完成，但可能没有数据')
       }
       
-      fetchMccAccounts()
+      // 延迟刷新，等待后台任务开始
+      setTimeout(() => fetchMccAccounts(), 2000)
     } catch (error) {
       console.error('同步失败:', error)
-      const errorDetail = error.response?.data?.detail || error.message || '同步失败'
-      message.error(`同步失败: ${errorDetail}`, 8)
+      message.error(error.response?.data?.detail || '同步失败')
     } finally {
       setSyncLoading({ ...syncLoading, [mccId]: false })
     }
+  }
+
+  const handleTestConnection = async (mccId) => {
+    setTestLoading({ ...testLoading, [mccId]: true })
+    try {
+      const response = await api.post(`/api/mcc/accounts/${mccId}/test-connection`)
+      
+      if (response.data.success) {
+        message.success(`✓ 连接成功！找到 ${response.data.customers_count} 个客户账号`)
+      } else {
+        message.error(response.data.message || '连接测试失败')
+      }
+    } catch (error) {
+      console.error('测试连接失败:', error)
+      message.error(error.response?.data?.detail || '测试连接失败')
+    } finally {
+      setTestLoading({ ...testLoading, [mccId]: false })
+    }
+  }
+
+  const handleSyncHistory = async (values) => {
+    if (!historyMcc) return
+    
+    setHistoryLoading(true)
+    try {
+      const [beginDate, endDate] = values.dateRange
+      
+      const response = await api.post(`/api/mcc/accounts/${historyMcc.id}/sync-history`, {
+        begin_date: beginDate.format('YYYY-MM-DD'),
+        end_date: endDate.format('YYYY-MM-DD'),
+        force_refresh: values.force_refresh || false
+      })
+      
+      if (response.data.async) {
+        message.info(response.data.message)
+        setHistoryModalVisible(false)
+      } else {
+        message.success('历史数据同步已开始')
+      }
+    } catch (error) {
+      console.error('同步历史数据失败:', error)
+      message.error(error.response?.data?.detail || '同步历史数据失败')
+    } finally {
+      setHistoryLoading(false)
+    }
+  }
+
+  const handleBatchImport = async (values) => {
+    setBatchLoading(true)
+    try {
+      // 解析CSV或JSON格式的MCC列表
+      const lines = values.mccList.trim().split('\n').filter(line => line.trim())
+      const mccs = []
+      
+      for (const line of lines) {
+        const parts = line.split(',').map(s => s.trim())
+        if (parts.length >= 2) {
+          mccs.push({
+            mcc_id: parts[0],
+            mcc_name: parts[1],
+            email: parts[2] || '',
+            use_service_account: true
+          })
+        } else if (parts.length === 1 && parts[0]) {
+          // 只有MCC ID的情况
+          mccs.push({
+            mcc_id: parts[0],
+            mcc_name: parts[0],
+            use_service_account: true
+          })
+        }
+      }
+      
+      if (mccs.length === 0) {
+        message.warning('没有找到有效的MCC信息')
+        return
+      }
+      
+      const response = await api.post('/api/mcc/accounts/batch', { mccs })
+      
+      const created = response.data.length
+      message.success(`成功导入 ${created} 个MCC账号`)
+      
+      setBatchModalVisible(false)
+      batchForm.resetFields()
+      fetchMccAccounts()
+    } catch (error) {
+      console.error('批量导入失败:', error)
+      message.error(error.response?.data?.detail || '批量导入失败')
+    } finally {
+      setBatchLoading(false)
+    }
+  }
+
+  const handleUploadServiceAccount = async (values) => {
+    setSaLoading(true)
+    try {
+      const response = await api.post('/api/mcc/service-account', {
+        json_content: values.json_content,
+        is_base64: false
+      })
+      
+      if (response.data.success) {
+        message.success(`服务账号配置成功！邮箱: ${response.data.service_account_email}`)
+        setSaModalVisible(false)
+        saForm.resetFields()
+        fetchServiceAccountStatus()
+      }
+    } catch (error) {
+      console.error('上传服务账号失败:', error)
+      message.error(error.response?.data?.detail || '上传失败')
+    } finally {
+      setSaLoading(false)
+    }
+  }
+
+  const handleSyncAll = async () => {
+    try {
+      const response = await api.post('/api/mcc/sync-all', {})
+      
+      if (response.data.async) {
+        message.info(response.data.message)
+      } else {
+        message.success('批量同步已开始')
+      }
+      
+      setTimeout(() => fetchMccAccounts(), 3000)
+    } catch (error) {
+      console.error('批量同步失败:', error)
+      message.error(error.response?.data?.detail || '批量同步失败')
+    }
+  }
+
+  const fetchSyncStatus = async () => {
+    try {
+      const response = await api.get('/api/mcc/sync-status')
+      setSyncStatusData(response.data.data || [])
+      setSyncStatusVisible(true)
+    } catch (error) {
+      console.error('获取同步状态失败:', error)
+      message.error('获取同步状态失败')
+    }
+  }
+
+  const getSyncStatusTag = (status) => {
+    const statusMap = {
+      'success': { color: 'green', text: '成功', icon: <CheckCircleOutlined /> },
+      'failed': { color: 'red', text: '失败', icon: <WarningOutlined /> },
+      'warning': { color: 'orange', text: '警告', icon: <InfoCircleOutlined /> },
+      'pending': { color: 'blue', text: '等待中', icon: <ClockCircleOutlined /> }
+    }
+    const config = statusMap[status] || { color: 'default', text: status || '未同步' }
+    return <Tag color={config.color} icon={config.icon}>{config.text}</Tag>
   }
 
   const columns = [
@@ -270,57 +342,123 @@ export default function MccAccounts() {
       title: 'MCC ID',
       dataIndex: 'mcc_id',
       key: 'mcc_id',
+      width: 140,
     },
     {
       title: 'MCC名称',
       dataIndex: 'mcc_name',
       key: 'mcc_name',
-    },
-    {
-      title: '邮箱',
-      dataIndex: 'email',
-      key: 'email',
+      ellipsis: true,
     },
     {
       title: '状态',
       dataIndex: 'is_active',
       key: 'is_active',
+      width: 80,
       render: (val) => <Tag color={val ? 'green' : 'red'}>{val ? '激活' : '停用'}</Tag>
+    },
+    {
+      title: '认证模式',
+      key: 'auth_mode',
+      width: 100,
+      render: (_, record) => (
+        <Tag color={record.use_service_account !== false ? 'blue' : 'purple'}>
+          {record.use_service_account !== false ? '服务账号' : 'OAuth'}
+        </Tag>
+      )
+    },
+    {
+      title: '同步状态',
+      key: 'sync_status',
+      width: 120,
+      render: (_, record) => (
+        <Tooltip title={record.last_sync_message || '暂无同步记录'}>
+          {getSyncStatusTag(record.last_sync_status)}
+        </Tooltip>
+      )
+    },
+    {
+      title: '客户/系列',
+      key: 'counts',
+      width: 100,
+      render: (_, record) => (
+        <span>
+          {record.total_customers || 0} / {record.total_campaigns || 0}
+        </span>
+      )
     },
     {
       title: '数据条数',
       dataIndex: 'data_count',
       key: 'data_count',
+      width: 80,
+    },
+    {
+      title: '最后同步',
+      key: 'last_sync',
+      width: 120,
+      render: (_, record) => (
+        record.last_sync_at ? (
+          <Tooltip title={record.last_sync_at}>
+            <Text type="secondary" style={{ fontSize: 12 }}>
+              {new Date(record.last_sync_at).toLocaleDateString('zh-CN')}
+            </Text>
+          </Tooltip>
+        ) : <Text type="secondary">-</Text>
+      )
     },
     {
       title: '操作',
       key: 'action',
+      width: 280,
       render: (_, record) => (
-        <Space>
-          <Button
-            type="link"
-            icon={<SyncOutlined />}
-            onClick={() => handleSync(record.id)}
-            loading={syncLoading[record.id]}
-          >
-            同步数据
-          </Button>
-          <Button
-            type="link"
-            icon={<EditOutlined />}
-            onClick={() => handleEdit(record)}
-          >
-            编辑
-          </Button>
+        <Space size="small" wrap>
+          <Tooltip title="测试连接">
+            <Button
+              type="link"
+              size="small"
+              icon={<ApiOutlined />}
+              onClick={() => handleTestConnection(record.id)}
+              loading={testLoading[record.id]}
+            />
+          </Tooltip>
+          <Tooltip title="同步昨日数据">
+            <Button
+              type="link"
+              size="small"
+              icon={<SyncOutlined />}
+              onClick={() => handleSync(record.id)}
+              loading={syncLoading[record.id]}
+            />
+          </Tooltip>
+          <Tooltip title="同步历史数据">
+            <Button
+              type="link"
+              size="small"
+              icon={<HistoryOutlined />}
+              onClick={() => {
+                setHistoryMcc(record)
+                setHistoryModalVisible(true)
+              }}
+            />
+          </Tooltip>
+          <Tooltip title="编辑">
+            <Button
+              type="link"
+              size="small"
+              icon={<EditOutlined />}
+              onClick={() => handleEdit(record)}
+            />
+          </Tooltip>
           <Popconfirm
             title={
               <div>
-                <div style={{ marginBottom: 8 }}>确定要删除这个MCC账号吗？</div>
-                <div style={{ fontSize: '12px', color: '#ff4d4f' }}>
-                  {record.data_count > 0 && (
-                    <span>⚠️ 删除后将同时删除 {record.data_count} 条关联的Google Ads数据，此操作不可恢复！</span>
-                  )}
-                </div>
+                <div>确定要删除这个MCC账号吗？</div>
+                {record.data_count > 0 && (
+                  <div style={{ fontSize: 12, color: '#ff4d4f', marginTop: 4 }}>
+                    ⚠️ 将同时删除 {record.data_count} 条关联数据
+                  </div>
+                )}
               </div>
             }
             onConfirm={() => handleDelete(record.id, record)}
@@ -328,13 +466,9 @@ export default function MccAccounts() {
             cancelText="取消"
             okButtonProps={{ danger: true }}
           >
-            <Button
-              type="link"
-              danger
-              icon={<DeleteOutlined />}
-            >
-              删除
-            </Button>
+            <Tooltip title="删除">
+              <Button type="link" size="small" danger icon={<DeleteOutlined />} />
+            </Tooltip>
           </Popconfirm>
         </Space>
       )
@@ -343,45 +477,88 @@ export default function MccAccounts() {
 
   return (
     <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16 }}>
-        <h2>MCC账号管理</h2>
-        <Button
-          type="primary"
-          icon={<PlusOutlined />}
-          onClick={handleCreate}
-        >
-          添加MCC账号
-        </Button>
-      </div>
+      {/* 服务账号状态提示 */}
+      {serviceAccountStatus && !serviceAccountStatus.configured && (
+        <Alert
+          message="服务账号未配置"
+          description={
+            <span>
+              请先配置全局服务账号，才能使用服务账号模式同步数据。
+              <Button type="link" onClick={() => setSaModalVisible(true)}>
+                点击配置
+              </Button>
+            </span>
+          }
+          type="warning"
+          showIcon
+          style={{ marginBottom: 16 }}
+        />
+      )}
 
+      {/* 头部操作栏 */}
+      <Card style={{ marginBottom: 16 }}>
+        <Row justify="space-between" align="middle">
+          <Col>
+            <Space>
+              <h2 style={{ margin: 0 }}>MCC账号管理</h2>
+              {serviceAccountStatus?.configured && (
+                <Tag color="green" icon={<CheckCircleOutlined />}>
+                  服务账号已配置
+                </Tag>
+              )}
+            </Space>
+          </Col>
+          <Col>
+            <Space>
+              <Button icon={<CloudSyncOutlined />} onClick={handleSyncAll}>
+                同步所有MCC
+              </Button>
+              <Button icon={<InfoCircleOutlined />} onClick={fetchSyncStatus}>
+                同步状态
+              </Button>
+              {isManager && (
+                <Button icon={<UploadOutlined />} onClick={() => setSaModalVisible(true)}>
+                  配置服务账号
+                </Button>
+              )}
+              <Button icon={<FileTextOutlined />} onClick={() => setBatchModalVisible(true)}>
+                批量导入
+              </Button>
+              <Button type="primary" icon={<PlusOutlined />} onClick={handleCreate}>
+                添加MCC
+              </Button>
+            </Space>
+          </Col>
+        </Row>
+      </Card>
+
+      {/* MCC列表 */}
       <Card>
         <Table
           columns={columns}
           dataSource={mccAccounts}
           loading={loading}
           rowKey="id"
-          locale={{
-            emptyText: '暂无MCC账号，请点击"添加MCC账号"按钮添加'
-          }}
+          size="middle"
+          pagination={{ pageSize: 20, showSizeChanger: true, showTotal: (total) => `共 ${total} 个MCC` }}
+          locale={{ emptyText: '暂无MCC账号，请点击"添加MCC"或"批量导入"按钮添加' }}
         />
       </Card>
 
+      {/* 添加/编辑MCC模态框 */}
       <Modal
         title={editingMcc ? '编辑MCC账号' : '添加MCC账号'}
         open={modalVisible}
         onCancel={() => setModalVisible(false)}
         onOk={() => form.submit()}
-        width={600}
+        width={500}
       >
-        <Form
-          form={form}
-          layout="vertical"
-          onFinish={handleSubmit}
-        >
+        <Form form={form} layout="vertical" onFinish={handleSubmit}>
           <Form.Item
             name="mcc_id"
             label="MCC ID"
             rules={[{ required: !editingMcc, message: '请输入MCC ID' }]}
+            help="格式：123-456-7890 或 1234567890"
           >
             <Input placeholder="请输入MCC ID" disabled={!!editingMcc} />
           </Form.Item>
@@ -394,337 +571,219 @@ export default function MccAccounts() {
             <Input placeholder="请输入MCC名称" />
           </Form.Item>
 
-          <Form.Item
-            name="email"
-            label="邮箱"
-            rules={[{ required: true, message: '请输入邮箱' }, { type: 'email', message: '请输入有效的邮箱地址' }]}
-          >
-            <Input placeholder="请输入邮箱地址" />
+          <Form.Item name="email" label="邮箱（可选）">
+            <Input placeholder="关联的邮箱地址（仅用于记录）" />
           </Form.Item>
 
           <Form.Item
-            name="client_id"
-            label="Client ID（可选）"
-            help={editingMcc ? (originalApiValues.client_id ? "已配置，留空则不修改，填写新值则更新" : "留空则不设置，填写新值则更新") : undefined}
+            name="use_service_account"
+            label="认证模式"
+            valuePropName="checked"
+            initialValue={true}
           >
-            <Input placeholder={editingMcc && originalApiValues.client_id ? "已配置，留空则不修改" : "Google Ads API Client ID"} />
-          </Form.Item>
-
-          <Form.Item
-            name="client_secret"
-            label="Client Secret（可选）"
-            help={editingMcc ? (originalApiValues.client_secret ? "已配置，留空则不修改，填写新值则更新" : "留空则不设置，填写新值则更新") : undefined}
-          >
-            <Input.Password placeholder={editingMcc && originalApiValues.client_secret ? "已配置，留空则不修改" : "Google Ads API Client Secret"} />
-          </Form.Item>
-
-          <Form.Item
-            name="refresh_token"
-            label="Refresh Token（可选）"
-            help={editingMcc ? (originalApiValues.refresh_token ? "已配置，留空则不修改，填写新值则更新" : "留空则不设置，填写新值则更新") : undefined}
-          >
-            <Input.Group compact>
-              <Input.Password 
-                style={{ width: 'calc(100% - 120px)' }}
-                placeholder={editingMcc && originalApiValues.refresh_token ? "已配置，留空则不修改" : "Google Ads API Refresh Token"} 
-              />
-              <Button 
-                type="link" 
-                icon={<LinkOutlined />}
-                onClick={() => {
-                  if (!form.getFieldValue('client_id') || !form.getFieldValue('client_secret')) {
-                    message.warning('请先填写Client ID和Client Secret')
-                    return
-                  }
-                  oauthForm.setFieldsValue({
-                    client_id: form.getFieldValue('client_id'),
-                    client_secret: form.getFieldValue('client_secret')
-                  })
-                  setOauthStep(0)
-                  setOauthModalVisible(true)
-                }}
-              >
-                在线获取
-              </Button>
-            </Input.Group>
+            <Switch 
+              checkedChildren="服务账号" 
+              unCheckedChildren="OAuth" 
+              defaultChecked
+            />
           </Form.Item>
 
           {editingMcc && (
-            <Form.Item
-              name="is_active"
-              label="状态"
-              valuePropName="checked"
-            >
+            <Form.Item name="is_active" label="状态" valuePropName="checked">
               <Switch checkedChildren="激活" unCheckedChildren="停用" />
             </Form.Item>
           )}
         </Form>
       </Modal>
 
-      {/* OAuth获取Refresh Token模态框 */}
+      {/* 批量导入模态框 */}
       <Modal
-        title="获取Google Ads API Refresh Token"
-        open={oauthModalVisible}
+        title="批量导入MCC账号"
+        open={batchModalVisible}
+        onCancel={() => setBatchModalVisible(false)}
+        onOk={() => batchForm.submit()}
+        confirmLoading={batchLoading}
+        width={600}
+      >
+        <Alert
+          message="导入格式说明"
+          description={
+            <div>
+              <p>每行一个MCC，格式：<code>MCC_ID,MCC名称,邮箱(可选)</code></p>
+              <p>示例：</p>
+              <pre style={{ background: '#f5f5f5', padding: 8, borderRadius: 4 }}>
+{`123-456-7890,我的MCC账号1
+234-567-8901,我的MCC账号2,test@example.com
+345-678-9012,我的MCC账号3`}
+              </pre>
+            </div>
+          }
+          type="info"
+          style={{ marginBottom: 16 }}
+        />
+        
+        <Form form={batchForm} layout="vertical" onFinish={handleBatchImport}>
+          <Form.Item
+            name="mccList"
+            label="MCC列表"
+            rules={[{ required: true, message: '请输入MCC列表' }]}
+          >
+            <TextArea 
+              rows={10} 
+              placeholder="每行一个MCC，格式：MCC_ID,MCC名称,邮箱(可选)"
+            />
+          </Form.Item>
+        </Form>
+      </Modal>
+
+      {/* 历史数据同步模态框 */}
+      <Modal
+        title={`同步历史数据 - ${historyMcc?.mcc_name || ''}`}
+        open={historyModalVisible}
         onCancel={() => {
-          setOauthModalVisible(false)
-          setOauthStep(0)
-          setAuthorizationUrl('')
-          setObtainedRefreshToken('')
+          setHistoryModalVisible(false)
+          setHistoryMcc(null)
         }}
+        footer={null}
+        width={500}
+      >
+        <Form layout="vertical" onFinish={handleSyncHistory}>
+          <Form.Item
+            name="dateRange"
+            label="日期范围"
+            rules={[{ required: true, message: '请选择日期范围' }]}
+          >
+            <RangePicker style={{ width: '100%' }} />
+          </Form.Item>
+
+          <Form.Item
+            name="force_refresh"
+            label="强制刷新"
+            valuePropName="checked"
+            help="如果勾选，将重新同步已存在的数据"
+          >
+            <Switch />
+          </Form.Item>
+
+          <Form.Item>
+            <Button type="primary" htmlType="submit" loading={historyLoading} block>
+              开始同步
+            </Button>
+          </Form.Item>
+        </Form>
+      </Modal>
+
+      {/* 服务账号配置模态框 */}
+      <Modal
+        title="配置全局服务账号"
+        open={saModalVisible}
+        onCancel={() => setSaModalVisible(false)}
         footer={null}
         width={700}
       >
-        <Steps
-          current={oauthStep}
-          items={[
-            { title: '输入信息' },
-            { title: '授权' },
-            { title: '完成' }
-          ]}
-          style={{ marginBottom: 24 }}
+        <Alert
+          message="服务账号配置说明"
+          description={
+            <ol style={{ margin: 0, paddingLeft: 20 }}>
+              <li>在 Google Cloud Console 创建服务账号</li>
+              <li>下载 JSON 密钥文件</li>
+              <li>将 JSON 内容粘贴到下方</li>
+              <li>在每个 MCC 账号中添加服务账号邮箱为用户</li>
+            </ol>
+          }
+          type="info"
+          style={{ marginBottom: 16 }}
         />
 
-        {oauthStep === 0 && (
-          <Form
-            form={oauthForm}
-            layout="vertical"
-            onFinish={async (values) => {
-              try {
-                // 生成回调URL
-                const redirectUri = `${window.location.origin}/google-oauth-callback`
-                
-                // 获取授权URL
-                const response = await api.get('/api/google-oauth/authorize', {
-                  params: {
-                    client_id: values.client_id,
-                    redirect_uri: redirectUri
-                  }
-                })
-                
-                setAuthorizationUrl(response.data.authorization_url)
-                setOauthStep(1)
-              } catch (error) {
-                message.error(error.response?.data?.detail || '获取授权URL失败')
-              }
-            }}
+        {serviceAccountStatus?.configured && (
+          <Descriptions bordered size="small" style={{ marginBottom: 16 }}>
+            <Descriptions.Item label="配置来源" span={3}>
+              {serviceAccountStatus.source === 'file' ? '文件' : 
+               serviceAccountStatus.source === 'environment_base64' ? '环境变量' : '默认文件'}
+            </Descriptions.Item>
+            <Descriptions.Item label="服务账号邮箱" span={3}>
+              {serviceAccountStatus.service_account_email || '-'}
+            </Descriptions.Item>
+            <Descriptions.Item label="项目ID" span={3}>
+              {serviceAccountStatus.project_id || '-'}
+            </Descriptions.Item>
+          </Descriptions>
+        )}
+
+        <Form form={saForm} layout="vertical" onFinish={handleUploadServiceAccount}>
+          <Form.Item
+            name="json_content"
+            label="服务账号 JSON 密钥"
+            rules={[{ required: true, message: '请粘贴JSON密钥内容' }]}
           >
-            <Alert
-              message="获取Refresh Token步骤"
-              description={
-                <ol style={{ margin: 0, paddingLeft: 20 }}>
-                  <li>填写Client ID和Client Secret（如果已填写会自动填充）</li>
-                  <li>点击"获取授权URL"按钮</li>
-                  <li>在新窗口中完成Google授权</li>
-                  <li>授权完成后，Refresh Token会自动填充到表单中</li>
-                </ol>
-              }
-              type="info"
-              style={{ marginBottom: 24 }}
+            <TextArea 
+              rows={12}
+              placeholder='粘贴服务账号 JSON 密钥内容，格式如：
+{
+  "type": "service_account",
+  "project_id": "your-project-id",
+  "private_key_id": "...",
+  "private_key": "-----BEGIN PRIVATE KEY-----\n...",
+  "client_email": "xxx@your-project.iam.gserviceaccount.com",
+  ...
+}'
             />
+          </Form.Item>
 
-            <Form.Item
-              name="client_id"
-              label="Client ID"
-              rules={[{ required: true, message: '请输入Client ID' }]}
-            >
-              <Input placeholder="Google Ads API Client ID" />
-            </Form.Item>
+          <Form.Item>
+            <Button type="primary" htmlType="submit" loading={saLoading} block>
+              保存服务账号配置
+            </Button>
+          </Form.Item>
+        </Form>
+      </Modal>
 
-            <Form.Item
-              name="client_secret"
-              label="Client Secret"
-              rules={[{ required: true, message: '请输入Client Secret' }]}
-            >
-              <Input.Password placeholder="Google Ads API Client Secret" />
-            </Form.Item>
-
-            <Form.Item
-              name="redirect_uri"
-              label="回调URL（Redirect URI）"
-              help="必须在Google Cloud Console中配置此URL为授权重定向URI"
-              initialValue={`${window.location.origin}/google-oauth-callback`}
-            >
-              <Input disabled />
-            </Form.Item>
-
-            <Form.Item>
-              <Button type="primary" htmlType="submit" block>
-                获取授权URL
-              </Button>
-            </Form.Item>
-          </Form>
-        )}
-
-        {oauthStep === 1 && (
-          <div>
-            <Alert
-              message="请完成以下步骤"
-              description={
-                <ol style={{ margin: 0, paddingLeft: 20 }}>
-                  <li>点击下面的"打开授权页面"按钮</li>
-                  <li>在新窗口中登录Google账号并完成授权</li>
-                  <li>授权完成后，页面会跳转并显示授权码</li>
-                  <li>复制授权码（URL参数中的code值）</li>
-                  <li>回到此页面，粘贴授权码并点击"获取Token"</li>
-                </ol>
-              }
-              type="warning"
-              style={{ marginBottom: 24 }}
-            />
-
-            <Form
-              layout="vertical"
-              onFinish={async (values) => {
-                try {
-                  const redirectUri = `${window.location.origin}/google-oauth-callback`
-                  const response = await api.get('/api/google-oauth/callback', {
-                    params: {
-                      code: values.code,
-                      client_id: oauthForm.getFieldValue('client_id'),
-                      client_secret: oauthForm.getFieldValue('client_secret'),
-                      redirect_uri: redirectUri
-                    }
-                  })
-
-                  if (response.data.success) {
-                    const refreshToken = response.data.refresh_token
-                    // 保存获取到的Refresh Token
-                    setObtainedRefreshToken(refreshToken)
-                    // 自动填充Refresh Token到主表单
-                    form.setFieldsValue({
-                      refresh_token: refreshToken
-                    })
-                    // 强制更新表单显示
-                    setTimeout(() => {
-                      form.setFieldsValue({
-                        refresh_token: refreshToken
-                      })
-                    }, 100)
-                    setOauthStep(2)
-                    message.success('成功获取Refresh Token！已自动填充到表单中')
-                  }
-                } catch (error) {
-                  message.error(error.response?.data?.detail || '获取Token失败')
-                }
-              }}
-            >
-              <Form.Item
-                name="code"
-                label="授权码（Authorization Code）"
-                rules={[{ required: true, message: '请输入授权码' }]}
-                help="从授权页面的回调URL中复制code参数的值"
-              >
-                <Input.TextArea 
-                  rows={3}
-                  placeholder="粘贴授权码（从回调URL的code参数中获取）"
-                />
-              </Form.Item>
-
-              <Form.Item>
-                <Space>
-                  <Button 
-                    type="primary"
-                    icon={<LinkOutlined />}
-                    onClick={() => {
-                      window.open(authorizationUrl, '_blank')
-                    }}
-                  >
-                    打开授权页面
-                  </Button>
-                  <Button htmlType="submit">
-                    获取Token
-                  </Button>
-                  <Button onClick={() => setOauthStep(0)}>
-                    返回
-                  </Button>
-                </Space>
-              </Form.Item>
-            </Form>
-          </div>
-        )}
-
-        {oauthStep === 2 && (
-          <div style={{ textAlign: 'center', padding: '40px 0' }}>
-            <CheckCircleOutlined style={{ fontSize: 64, color: '#52c41a', marginBottom: 16 }} />
-            <h3>成功获取Refresh Token！</h3>
-            <p>Refresh Token已自动填充到表单中。</p>
-            {obtainedRefreshToken && (
-              <div style={{ marginTop: 16, padding: '12px', backgroundColor: '#f5f5f5', borderRadius: '4px', fontSize: '12px', wordBreak: 'break-all' }}>
-                <strong>Token预览：</strong>{obtainedRefreshToken.substring(0, 50)}...
-              </div>
-            )}
-            <div style={{ marginTop: 24 }}>
-              <Space>
-                <Button 
-                  type="primary" 
-                  onClick={() => {
-                    // 再次确保表单值被设置
-                    if (obtainedRefreshToken) {
-                      form.setFieldsValue({
-                        refresh_token: obtainedRefreshToken
-                      })
-                    }
-                    setOauthModalVisible(false)
-                    setOauthStep(0)
-                    setAuthorizationUrl('')
-                    setObtainedRefreshToken('')
-                    // 提示用户点击主表单的确定按钮
-                    message.info('请点击主表单的"确定"按钮保存MCC账号配置')
-                  }}
-                >
-                  完成并返回
-                </Button>
-                <Button
-                  onClick={async () => {
-                    // 直接保存MCC账号，使用获取到的Refresh Token
-                    try {
-                      const refreshToken = obtainedRefreshToken || form.getFieldValue('refresh_token')
-                      
-                      if (!refreshToken) {
-                        message.error('Refresh Token为空，无法保存')
-                        return
-                      }
-                      
-                      if (editingMcc) {
-                        // 更新现有MCC账号
-                        const submitData = {
-                          refresh_token: refreshToken
-                        }
-                        
-                        await api.put(`/api/mcc/accounts/${editingMcc.id}`, submitData)
-                        message.success('Refresh Token已保存！')
-                        setOauthModalVisible(false)
-                        setOauthStep(0)
-                        setAuthorizationUrl('')
-                        setObtainedRefreshToken('')
-                        fetchMccAccounts()
-                        setModalVisible(false)
-                      } else {
-                        // 如果是新建，确保表单中有值，然后提示用户
-                        if (refreshToken) {
-                          form.setFieldsValue({
-                            refresh_token: refreshToken
-                          })
-                        }
-                        message.warning('请先填写MCC ID、名称和邮箱，然后点击主表单的"确定"按钮保存')
-                        setOauthModalVisible(false)
-                        setOauthStep(0)
-                        setAuthorizationUrl('')
-                        setObtainedRefreshToken('')
-                      }
-                    } catch (error) {
-                      message.error(error.response?.data?.detail || '保存失败')
-                    }
-                  }}
-                >
-                  直接保存Refresh Token
-                </Button>
-              </Space>
-            </div>
-          </div>
-        )}
+      {/* 同步状态模态框 */}
+      <Modal
+        title="MCC同步状态"
+        open={syncStatusVisible}
+        onCancel={() => setSyncStatusVisible(false)}
+        footer={null}
+        width={800}
+      >
+        <Table
+          dataSource={syncStatusData}
+          rowKey="id"
+          size="small"
+          pagination={false}
+          columns={[
+            { title: 'MCC ID', dataIndex: 'mcc_id', width: 120 },
+            { title: 'MCC名称', dataIndex: 'mcc_name', ellipsis: true },
+            { 
+              title: '状态', 
+              dataIndex: 'last_sync_status',
+              width: 80,
+              render: (val) => getSyncStatusTag(val)
+            },
+            { 
+              title: '最后同步', 
+              dataIndex: 'last_sync_at',
+              width: 120,
+              render: (val) => val ? new Date(val).toLocaleString('zh-CN') : '-'
+            },
+            { 
+              title: '同步日期', 
+              dataIndex: 'last_sync_date',
+              width: 100,
+            },
+            {
+              title: '客户/系列',
+              width: 80,
+              render: (_, r) => `${r.total_customers || 0}/${r.total_campaigns || 0}`
+            },
+            { 
+              title: '消息', 
+              dataIndex: 'last_sync_message',
+              ellipsis: true,
+            },
+          ]}
+        />
       </Modal>
     </div>
   )
 }
-

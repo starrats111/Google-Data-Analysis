@@ -24,3 +24,12 @@ pip list | grep -E "(fastapi|uvicorn|pydantic|sqlalchemy)"
 # 步骤6: 检查端口是否被占用
 lsof -i:8000 || netstat -tuln | grep 8000
 
+
+
+
+
+
+
+
+
+

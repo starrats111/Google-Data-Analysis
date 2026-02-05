@@ -1,0 +1,129 @@
+# ==========================================
+# 服务器端部署指令 - 纯API分析功能
+# ==========================================
+
+# 方法1: 使用部署脚本（最简单）
+cd ~/Google-Data-Analysis/backend && source venv/bin/activate && chmod +x scripts/deploy_api_only_analysis.sh && ./scripts/deploy_api_only_analysis.sh
+
+# ==========================================
+# 方法2: 手动执行（如果脚本不可用）
+# ==========================================
+
+# 1. 进入目录
+cd ~/Google-Data-Analysis/backend
+source venv/bin/activate
+
+# 2. 创建新服务文件（需要先创建文件，然后复制内容）
+# 文件路径: app/services/api_only_analysis_service.py
+# 内容较长，建议使用部署脚本自动创建
+
+# 3. 修复 analysis.py - 添加导入
+python3 << 'EOF'
+import re
+file_path = 'app/api/analysis.py'
+with open(file_path, 'r', encoding='utf-8') as f:
+    content = f.read()
+
+# 添加导入
+if 'ApiOnlyAnalysisService' not in content:
+    content = content.replace(
+        'from app.services.api_analysis_service import ApiAnalysisService',
+        'from app.services.api_analysis_service import ApiAnalysisService\nfrom app.services.api_only_analysis_service import ApiOnlyAnalysisService'
+    )
+
+# 替换 /process 端点
+old_pattern = r'@router\.post\("/process"\).*?return response_data'
+new_code = '''@router.post("/process")
+async def process_analysis(
+    request: AnalysisRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """触发数据分析（已废弃 - 手动上传功能）"""
+    raise HTTPException(
+        status_code=410,
+        detail="此端点已废弃。请使用 /api/analysis/generate 从API数据生成分析结果"
+    )'''
+content = re.sub(old_pattern, new_code, content, flags=re.DOTALL)
+
+# 添加 /generate 端点
+if '@router.post("/generate")' not in content:
+    generate_code = '''
+
+@router.post("/generate")
+async def generate_analysis_from_api(
+    begin_date: str = Query(..., description="开始日期 YYYY-MM-DD"),
+    end_date: str = Query(..., description="结束日期 YYYY-MM-DD"),
+    account_id: Optional[int] = Query(None, description="账号ID（可选）"),
+    platform_id: Optional[int] = Query(None, description="平台ID（可选）"),
+    analysis_type: str = Query("l7d", description="分析类型：daily 或 l7d"),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """从API数据生成分析结果（符合表6格式）"""
+    from datetime import datetime
+    
+    try:
+        begin = datetime.strptime(begin_date, "%Y-%m-%d").date()
+        end = datetime.strptime(end_date, "%Y-%m-%d").date()
+    except ValueError:
+        raise HTTPException(status_code=400, detail="日期格式错误，应为 YYYY-MM-DD")
+    
+    if begin > end:
+        raise HTTPException(status_code=400, detail="开始日期不能晚于结束日期")
+    
+    user_id = current_user.id if current_user.role == "employee" else None
+    
+    from app.services.api_only_analysis_service import ApiOnlyAnalysisService
+    api_only_service = ApiOnlyAnalysisService(db)
+    result = api_only_service.generate_analysis_from_api(
+        begin_date=begin,
+        end_date=end,
+        user_id=user_id,
+        account_id=account_id,
+        platform_id=platform_id,
+        analysis_type=analysis_type
+    )
+    
+    if not result.get("success"):
+        raise HTTPException(status_code=500, detail=result.get("message", "生成分析失败"))
+    
+    return result
+'''
+    content = content.replace('    raise HTTPException(\n        status_code=410,', '    raise HTTPException(\n        status_code=410,' + generate_code)
+
+with open(file_path, 'w', encoding='utf-8') as f:
+    f.write(content)
+print("✓ 已修复 analysis.py")
+EOF
+
+# 4. 重启服务
+pkill -9 -f "uvicorn.*app.main" || true
+sleep 2
+nohup uvicorn app.main:app --host 0.0.0.0 --port 8000 > run.log 2>&1 &
+sleep 3
+curl -s http://127.0.0.1:8000/health && echo "" && echo "✓ 服务运行正常"
+
+# ==========================================
+# 测试新功能
+# ==========================================
+
+# 获取token
+TOKEN=$(curl -s -X POST "http://127.0.0.1:8000/api/auth/login" \
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  -d "username=wj07&password=wj123456" | \
+  python3 -c "import sys, json; print(json.load(sys.stdin)['access_token'])")
+
+# 测试生成L7D分析
+curl -X POST "http://127.0.0.1:8000/api/analysis/generate?begin_date=2026-01-28&end_date=2026-02-04&analysis_type=l7d" \
+  -H "Authorization: Bearer $TOKEN" | python3 -m json.tool
+
+
+
+
+
+
+
+
+
+

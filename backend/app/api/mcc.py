@@ -2,12 +2,14 @@
 MCC管理API
 用于管理Google MCC账号和数据聚合
 """
+import json
 import logging
+from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
 from fastapi.responses import JSONResponse
 from starlette.requests import Request
 from sqlalchemy.orm import Session
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
 from pydantic import BaseModel
 from datetime import date, datetime, timedelta
 
@@ -174,19 +176,30 @@ class MccAccountCreate(BaseModel):
     """创建MCC账号请求"""
     mcc_id: str
     mcc_name: str
-    email: str
+    email: Optional[str] = None  # 可选，用于记录
+    use_service_account: bool = True  # 默认使用服务账号模式
+    # OAuth配置（旧版兼容）
     client_id: Optional[str] = None
     client_secret: Optional[str] = None
     refresh_token: Optional[str] = None
+    # 服务账号配置（可选，优先使用全局配置）
+    service_account_json: Optional[str] = None
+
+
+class MccAccountBatchCreate(BaseModel):
+    """批量创建MCC账号请求"""
+    mccs: List[MccAccountCreate]
 
 
 class MccAccountUpdate(BaseModel):
     """更新MCC账号请求"""
     mcc_name: Optional[str] = None
     email: Optional[str] = None
+    use_service_account: Optional[bool] = None
     client_id: Optional[str] = None
     client_secret: Optional[str] = None
     refresh_token: Optional[str] = None
+    service_account_json: Optional[str] = None
     is_active: Optional[bool] = None
 
 
@@ -195,17 +208,55 @@ class MccAccountResponse(BaseModel):
     id: int
     mcc_id: str
     mcc_name: str
-    email: str
+    email: Optional[str] = None
     is_active: bool
+    use_service_account: bool = True
     created_at: str
-    updated_at: Optional[str]
-    data_count: int  # 该MCC的数据条数
+    updated_at: Optional[str] = None
+    data_count: int = 0  # 该MCC的数据条数
+    # 同步状态
+    last_sync_status: Optional[str] = None
+    last_sync_message: Optional[str] = None
+    last_sync_at: Optional[str] = None
+    last_sync_date: Optional[str] = None
+    total_campaigns: int = 0
+    total_customers: int = 0
+    # OAuth配置（保留兼容）
     client_id: Optional[str] = None
     client_secret: Optional[str] = None
     refresh_token: Optional[str] = None
+    has_service_account: bool = False  # 是否配置了单独的服务账号
     
     class Config:
         from_attributes = True
+
+
+def _build_mcc_response(mcc_account: GoogleMccAccount, data_count: int = 0) -> Dict[str, Any]:
+    """构建MCC账号响应数据"""
+    return {
+        "id": mcc_account.id,
+        "mcc_id": mcc_account.mcc_id,
+        "mcc_name": mcc_account.mcc_name,
+        "email": mcc_account.email,
+        "is_active": mcc_account.is_active,
+        "use_service_account": mcc_account.use_service_account if hasattr(mcc_account, 'use_service_account') else True,
+        "created_at": mcc_account.created_at.isoformat() if mcc_account.created_at else datetime.now().isoformat(),
+        "updated_at": mcc_account.updated_at.isoformat() if mcc_account.updated_at else None,
+        "data_count": data_count,
+        # 同步状态
+        "last_sync_status": mcc_account.last_sync_status if hasattr(mcc_account, 'last_sync_status') else None,
+        "last_sync_message": mcc_account.last_sync_message if hasattr(mcc_account, 'last_sync_message') else None,
+        "last_sync_at": mcc_account.last_sync_at.isoformat() if hasattr(mcc_account, 'last_sync_at') and mcc_account.last_sync_at else None,
+        "last_sync_date": mcc_account.last_sync_date.isoformat() if hasattr(mcc_account, 'last_sync_date') and mcc_account.last_sync_date else None,
+        "total_campaigns": mcc_account.total_campaigns if hasattr(mcc_account, 'total_campaigns') else 0,
+        "total_customers": mcc_account.total_customers if hasattr(mcc_account, 'total_customers') else 0,
+        # OAuth配置
+        "client_id": mcc_account.client_id,
+        "client_secret": mcc_account.client_secret,
+        "refresh_token": mcc_account.refresh_token,
+        # 服务账号
+        "has_service_account": bool(mcc_account.service_account_json) if hasattr(mcc_account, 'service_account_json') else False,
+    }
 
 
 @router.post("/accounts", response_model=MccAccountResponse)
@@ -228,10 +279,12 @@ async def create_mcc_account(
         user_id=current_user.id,
         mcc_id=mcc_data.mcc_id,
         mcc_name=mcc_data.mcc_name,
-        email=mcc_data.email,
+        email=mcc_data.email or "",
+        use_service_account=mcc_data.use_service_account,
         client_id=mcc_data.client_id,
         client_secret=mcc_data.client_secret,
         refresh_token=mcc_data.refresh_token,
+        service_account_json=mcc_data.service_account_json,
         is_active=True
     )
     
@@ -244,19 +297,58 @@ async def create_mcc_account(
         GoogleAdsApiData.mcc_id == mcc_account.id
     ).count()
     
-    return {
-        "id": mcc_account.id,
-        "mcc_id": mcc_account.mcc_id,
-        "mcc_name": mcc_account.mcc_name,
-        "email": mcc_account.email,
-        "is_active": mcc_account.is_active,
-        "created_at": mcc_account.created_at.isoformat(),
-        "updated_at": mcc_account.updated_at.isoformat() if mcc_account.updated_at else None,
-        "data_count": data_count,
-        "client_id": mcc_account.client_id,
-        "client_secret": mcc_account.client_secret,
-        "refresh_token": mcc_account.refresh_token
-    }
+    return _build_mcc_response(mcc_account, data_count)
+
+
+@router.post("/accounts/batch", response_model=List[MccAccountResponse])
+async def batch_create_mcc_accounts(
+    batch_data: MccAccountBatchCreate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """批量创建MCC账号"""
+    created_accounts = []
+    errors = []
+    
+    for mcc_data in batch_data.mccs:
+        try:
+            # 检查MCC ID是否已存在
+            existing = db.query(GoogleMccAccount).filter(
+                GoogleMccAccount.mcc_id == mcc_data.mcc_id
+            ).first()
+            
+            if existing:
+                errors.append(f"MCC {mcc_data.mcc_id} 已存在，跳过")
+                continue
+            
+            # 创建MCC账号
+            mcc_account = GoogleMccAccount(
+                user_id=current_user.id,
+                mcc_id=mcc_data.mcc_id,
+                mcc_name=mcc_data.mcc_name,
+                email=mcc_data.email or "",
+                use_service_account=mcc_data.use_service_account,
+                client_id=mcc_data.client_id,
+                client_secret=mcc_data.client_secret,
+                refresh_token=mcc_data.refresh_token,
+                service_account_json=mcc_data.service_account_json,
+                is_active=True
+            )
+            
+            db.add(mcc_account)
+            created_accounts.append(mcc_account)
+            
+        except Exception as e:
+            errors.append(f"MCC {mcc_data.mcc_id} 创建失败: {str(e)}")
+    
+    if created_accounts:
+        db.commit()
+        for acc in created_accounts:
+            db.refresh(acc)
+    
+    logger.info(f"批量创建MCC账号: 成功 {len(created_accounts)} 个, 失败/跳过 {len(errors)} 个")
+    
+    return [_build_mcc_response(acc, 0) for acc in created_accounts]
 
 
 @router.get("/accounts", response_model=List[MccAccountResponse])
@@ -321,20 +413,7 @@ async def get_mcc_accounts(
             try:
                 # 从字典中获取数据条数，如果没有则默认为0
                 data_count = data_count_map.get(mcc.id, 0)
-                
-                result.append({
-                    "id": mcc.id,
-                    "mcc_id": mcc.mcc_id,
-                    "mcc_name": mcc.mcc_name,
-                    "email": mcc.email,
-                    "is_active": mcc.is_active,
-                    "created_at": mcc.created_at.isoformat() if mcc.created_at else datetime.now().isoformat(),
-                    "updated_at": mcc.updated_at.isoformat() if mcc.updated_at else None,
-                    "data_count": data_count,
-                    "client_id": mcc.client_id,  # 返回实际值，前端会用占位符显示
-                    "client_secret": mcc.client_secret,
-                    "refresh_token": mcc.refresh_token
-                })
+                result.append(_build_mcc_response(mcc, data_count))
             except Exception as e:
                 # 如果单个MCC处理失败，记录错误但继续处理其他MCC
                 logger.error(f"处理MCC账号 {mcc.id} 时出错: {str(e)}", exc_info=True)
@@ -848,5 +927,357 @@ async def aggregate_mcc_data(
         "aggregated_records": len(aggregated),
         "data": list(aggregated.values())
     }
+
+
+# ============== 服务账号相关API ==============
+
+@router.post("/accounts/{mcc_id}/test-connection")
+async def test_mcc_connection(
+    mcc_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    测试MCC连接
+    
+    验证服务账号配置是否正确，能否访问MCC下的客户账号
+    """
+    from app.services.google_ads_service_account_sync import GoogleAdsServiceAccountSync
+    
+    # 验证MCC账号存在且属于当前用户
+    mcc_account = db.query(GoogleMccAccount).filter(
+        GoogleMccAccount.id == mcc_id,
+        GoogleMccAccount.user_id == current_user.id
+    ).first()
+    
+    if not mcc_account:
+        raise HTTPException(status_code=404, detail="MCC账号不存在")
+    
+    try:
+        sync_service = GoogleAdsServiceAccountSync(db)
+        result = sync_service.test_connection(mcc_id)
+        return result
+    except Exception as e:
+        return {
+            "success": False,
+            "message": f"测试连接失败: {str(e)}"
+        }
+
+
+@router.post("/accounts/{mcc_id}/sync-history")
+async def sync_mcc_historical_data(
+    mcc_id: int,
+    request: Request,
+    background_tasks: BackgroundTasks,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    同步MCC历史数据
+    
+    请求体参数：
+    - begin_date: 开始日期 (YYYY-MM-DD)
+    - end_date: 结束日期 (YYYY-MM-DD)
+    - force_refresh: 是否强制刷新 (可选，默认false)
+    """
+    import json
+    
+    # 验证MCC账号
+    mcc_account = db.query(GoogleMccAccount).filter(
+        GoogleMccAccount.id == mcc_id,
+        GoogleMccAccount.user_id == current_user.id
+    ).first()
+    
+    if not mcc_account:
+        raise HTTPException(status_code=404, detail="MCC账号不存在")
+    
+    # 解析请求参数
+    try:
+        body = await request.body()
+        request_data = json.loads(body) if body else {}
+    except Exception:
+        request_data = {}
+    
+    begin_date_str = request_data.get("begin_date", "2026-01-01")
+    end_date_str = request_data.get("end_date")
+    force_refresh = request_data.get("force_refresh", False)
+    
+    if not end_date_str:
+        end_date_str = (date.today() - timedelta(days=1)).isoformat()
+    
+    try:
+        begin_date = datetime.strptime(begin_date_str, "%Y-%m-%d").date()
+        end_date = datetime.strptime(end_date_str, "%Y-%m-%d").date()
+    except ValueError:
+        raise HTTPException(status_code=400, detail="日期格式错误，应为 YYYY-MM-DD")
+    
+    if begin_date > end_date:
+        raise HTTPException(status_code=400, detail="开始日期不能晚于结束日期")
+    
+    # 在后台执行历史数据同步
+    def sync_historical_task():
+        from app.database import SessionLocal
+        from app.services.google_ads_service_account_sync import GoogleAdsServiceAccountSync
+        
+        task_db = SessionLocal()
+        try:
+            sync_service = GoogleAdsServiceAccountSync(task_db)
+            result = sync_service.sync_historical_data(
+                mcc_id,
+                begin_date,
+                end_date,
+                force_refresh=force_refresh
+            )
+            logger.info(f"MCC {mcc_account.mcc_id} 历史数据同步完成: {result}")
+        except Exception as e:
+            logger.error(f"MCC {mcc_account.mcc_id} 历史数据同步失败: {e}", exc_info=True)
+        finally:
+            task_db.close()
+    
+    background_tasks.add_task(sync_historical_task)
+    
+    total_days = (end_date - begin_date).days + 1
+    
+    return {
+        "success": True,
+        "async": True,
+        "message": f"🔄 已开始后台同步历史数据: {begin_date_str} ~ {end_date_str}（共 {total_days} 天）",
+        "begin_date": begin_date_str,
+        "end_date": end_date_str,
+        "total_days": total_days
+    }
+
+
+@router.post("/sync-all")
+async def sync_all_mccs(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    手动触发同步所有活跃MCC的数据
+    
+    请求体参数：
+    - target_date: 目标日期 (YYYY-MM-DD，可选，默认昨天)
+    """
+    import json
+    
+    # 解析请求参数
+    try:
+        body = await request.body()
+        request_data = json.loads(body) if body else {}
+    except Exception:
+        request_data = {}
+    
+    target_date_str = request_data.get("target_date")
+    
+    if target_date_str:
+        try:
+            target_date = datetime.strptime(target_date_str, "%Y-%m-%d").date()
+        except ValueError:
+            raise HTTPException(status_code=400, detail="日期格式错误")
+    else:
+        target_date = date.today() - timedelta(days=1)
+    
+    # 获取活跃MCC数量
+    active_count = db.query(GoogleMccAccount).filter(
+        GoogleMccAccount.is_active == True,
+        GoogleMccAccount.user_id == current_user.id
+    ).count()
+    
+    if active_count == 0:
+        return {
+            "success": False,
+            "message": "没有活跃的MCC账号"
+        }
+    
+    # 在后台执行同步
+    def sync_all_task():
+        from app.database import SessionLocal
+        from app.services.google_ads_service_account_sync import GoogleAdsServiceAccountSync
+        
+        task_db = SessionLocal()
+        try:
+            sync_service = GoogleAdsServiceAccountSync(task_db)
+            result = sync_service.sync_all_mccs(target_date=target_date)
+            logger.info(f"批量同步完成: {result}")
+        except Exception as e:
+            logger.error(f"批量同步失败: {e}", exc_info=True)
+        finally:
+            task_db.close()
+    
+    background_tasks.add_task(sync_all_task)
+    
+    return {
+        "success": True,
+        "async": True,
+        "message": f"🔄 已开始后台同步 {active_count} 个MCC账号（{target_date.isoformat()}）",
+        "target_date": target_date.isoformat(),
+        "mcc_count": active_count
+    }
+
+
+@router.get("/sync-status")
+async def get_sync_status(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """获取所有MCC的同步状态"""
+    mcc_accounts = db.query(GoogleMccAccount).filter(
+        GoogleMccAccount.user_id == current_user.id
+    ).all()
+    
+    status_list = []
+    for mcc in mcc_accounts:
+        status_list.append({
+            "id": mcc.id,
+            "mcc_id": mcc.mcc_id,
+            "mcc_name": mcc.mcc_name,
+            "is_active": mcc.is_active,
+            "last_sync_status": getattr(mcc, 'last_sync_status', None),
+            "last_sync_message": getattr(mcc, 'last_sync_message', None),
+            "last_sync_at": mcc.last_sync_at.isoformat() if getattr(mcc, 'last_sync_at', None) else None,
+            "last_sync_date": mcc.last_sync_date.isoformat() if getattr(mcc, 'last_sync_date', None) else None,
+            "total_campaigns": getattr(mcc, 'total_campaigns', 0),
+            "total_customers": getattr(mcc, 'total_customers', 0)
+        })
+    
+    return {
+        "success": True,
+        "total": len(status_list),
+        "data": status_list
+    }
+
+
+class ServiceAccountUpload(BaseModel):
+    """服务账号上传请求"""
+    json_content: str  # JSON内容（字符串或Base64编码）
+    is_base64: bool = False
+
+
+@router.post("/service-account")
+async def upload_global_service_account(
+    upload_data: ServiceAccountUpload,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    上传全局服务账号配置
+    
+    将服务账号JSON保存到配置文件中
+    """
+    import base64
+    
+    # 只有管理员可以上传全局服务账号
+    if current_user.role != "admin" and current_user.username != "wenjun123":
+        raise HTTPException(status_code=403, detail="只有管理员可以上传全局服务账号")
+    
+    try:
+        # 解析JSON内容
+        if upload_data.is_base64:
+            json_str = base64.b64decode(upload_data.json_content).decode('utf-8')
+        else:
+            json_str = upload_data.json_content
+        
+        # 验证JSON格式
+        sa_data = json.loads(json_str)
+        
+        # 检查必要字段
+        required_fields = ['type', 'project_id', 'private_key', 'client_email']
+        for field in required_fields:
+            if field not in sa_data:
+                raise HTTPException(status_code=400, detail=f"服务账号JSON缺少必要字段: {field}")
+        
+        if sa_data.get('type') != 'service_account':
+            raise HTTPException(status_code=400, detail="JSON文件不是有效的服务账号密钥")
+        
+        # 保存到文件
+        import os
+        config_dir = Path(__file__).parent.parent.parent / "config"
+        config_dir.mkdir(exist_ok=True)
+        
+        sa_file = config_dir / "service_account.json"
+        with open(sa_file, 'w', encoding='utf-8') as f:
+            json.dump(sa_data, f, indent=2)
+        
+        logger.info(f"全局服务账号已保存: {sa_file}")
+        
+        return {
+            "success": True,
+            "message": "服务账号配置已保存",
+            "service_account_email": sa_data.get('client_email'),
+            "project_id": sa_data.get('project_id')
+        }
+        
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=400, detail="无效的JSON格式")
+    except Exception as e:
+        logger.error(f"保存服务账号失败: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"保存失败: {str(e)}")
+
+
+@router.get("/service-account/status")
+async def get_service_account_status(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """获取全局服务账号配置状态"""
+    from app.config import settings
+    
+    status = {
+        "configured": False,
+        "source": None,
+        "service_account_email": None,
+        "project_id": None,
+        "developer_token_configured": bool(settings.google_ads_shared_developer_token)
+    }
+    
+    # 检查Base64配置
+    if settings.google_ads_service_account_json_base64:
+        try:
+            import base64
+            json_str = base64.b64decode(settings.google_ads_service_account_json_base64).decode('utf-8')
+            sa_data = json.loads(json_str)
+            status["configured"] = True
+            status["source"] = "environment_base64"
+            status["service_account_email"] = sa_data.get('client_email')
+            status["project_id"] = sa_data.get('project_id')
+            return status
+        except Exception:
+            pass
+    
+    # 检查文件配置
+    if settings.google_ads_service_account_file:
+        file_path = Path(settings.google_ads_service_account_file)
+        if not file_path.is_absolute():
+            file_path = Path(__file__).parent.parent.parent / file_path
+        
+        if file_path.exists():
+            try:
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    sa_data = json.load(f)
+                status["configured"] = True
+                status["source"] = "file"
+                status["service_account_email"] = sa_data.get('client_email')
+                status["project_id"] = sa_data.get('project_id')
+                return status
+            except Exception:
+                pass
+    
+    # 检查默认配置文件
+    default_path = Path(__file__).parent.parent.parent / "config" / "service_account.json"
+    if default_path.exists():
+        try:
+            with open(default_path, 'r', encoding='utf-8') as f:
+                sa_data = json.load(f)
+            status["configured"] = True
+            status["source"] = "default_file"
+            status["service_account_email"] = sa_data.get('client_email')
+            status["project_id"] = sa_data.get('project_id')
+        except Exception:
+            pass
+    
+    return status
 
 

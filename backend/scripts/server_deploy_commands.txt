@@ -1,0 +1,71 @@
+# 服务器端部署命令（纯API分析功能）
+
+# ==========================================
+# 方法1: 使用部署脚本（推荐）
+# ==========================================
+
+cd ~/Google-Data-Analysis/backend
+chmod +x scripts/deploy_api_only_analysis.sh
+./scripts/deploy_api_only_analysis.sh
+
+# ==========================================
+# 方法2: 手动执行（如果脚本失败）
+# ==========================================
+
+# 1. 进入项目目录
+cd ~/Google-Data-Analysis/backend
+source venv/bin/activate
+
+# 2. 创建新服务文件（如果不存在）
+# 注意：需要手动创建 app/services/api_only_analysis_service.py
+# 文件内容见 deploy_api_only_analysis.sh 脚本
+
+# 3. 修复 analysis.py
+# 需要：
+# - 添加导入：from app.services.api_only_analysis_service import ApiOnlyAnalysisService
+# - 替换 /process 端点为废弃提示
+# - 添加 /generate 端点
+
+# 4. 验证代码
+python3 -c "from app.services.api_only_analysis_service import ApiOnlyAnalysisService; print('OK')"
+
+# 5. 重启服务
+pkill -9 -f "uvicorn.*app.main" || true
+sleep 2
+nohup uvicorn app.main:app --host 0.0.0.0 --port 8000 > run.log 2>&1 &
+sleep 3
+curl -s http://127.0.0.1:8000/health && echo "" && echo "✓ 服务运行正常"
+
+# ==========================================
+# 测试新功能
+# ==========================================
+
+# 1. 登录获取token
+TOKEN=$(curl -s -X POST "http://127.0.0.1:8000/api/auth/login" \
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  -d "username=wj07&password=wj123456" | \
+  python3 -c "import sys, json; print(json.load(sys.stdin)['access_token'])")
+
+# 2. 测试生成L7D分析
+curl -X POST "http://127.0.0.1:8000/api/analysis/generate?begin_date=2026-01-28&end_date=2026-02-04&analysis_type=l7d" \
+  -H "Authorization: Bearer $TOKEN" | python3 -m json.tool
+
+# 3. 测试生成每日分析
+curl -X POST "http://127.0.0.1:8000/api/analysis/generate?begin_date=2026-02-04&end_date=2026-02-04&analysis_type=daily" \
+  -H "Authorization: Bearer $TOKEN" | python3 -m json.tool
+
+# ==========================================
+# 查看服务日志
+# ==========================================
+
+tail -f ~/Google-Data-Analysis/backend/run.log
+
+
+
+
+
+
+
+
+
+

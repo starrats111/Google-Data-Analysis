@@ -31,3 +31,12 @@ nohup uvicorn app.main:app --host 0.0.0.0 --port 8000 > run.log 2>&1 &
 sleep 2
 curl -s http://127.0.0.1:8000/health && echo "✓ 后端服务运行正常" || echo "✗ 后端服务启动失败，请查看 run.log"
 
+
+
+
+
+
+
+
+
+

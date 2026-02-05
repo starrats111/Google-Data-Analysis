@@ -49,3 +49,12 @@ PYTHON_SCRIPT
 # 验证语法
 python -m py_compile app/api/mcc.py && echo "✓ 语法正确" || echo "✗ 仍有语法错误"
 
+
+
+
+
+
+
+
+
+

@@ -680,9 +680,9 @@ class GoogleAdsApiSyncService:
                 if is_developer_token_prohibited:
                     logger.error(f"使用CustomerClient查询失败: 开发者令牌不允许使用。新令牌可能需要等待Google审核（通常需要1-3个工作日）。")
                 else:
-                    logger.warning(f"使用CustomerClient查询失败: {e}")
-                    import traceback
-                    logger.debug(traceback.format_exc())
+                logger.warning(f"使用CustomerClient查询失败: {e}")
+                import traceback
+                logger.debug(traceback.format_exc())
             
             # 方法2：使用 CustomerService.list_accessible_customers() 作为备选
             try:
@@ -716,7 +716,7 @@ class GoogleAdsApiSyncService:
                     # 返回特殊错误，让上层知道是令牌问题
                     raise Exception("DEVELOPER_TOKEN_PROHIBITED: 开发者令牌不允许使用。新令牌可能需要等待Google审核（通常需要1-3个工作日）。")
                 else:
-                    logger.warning(f"使用CustomerService获取客户列表失败: {e}")
+                logger.warning(f"使用CustomerService获取客户列表失败: {e}")
             
             # 如果两种方法都失败，返回空列表（而不是MCC ID本身）
             logger.error(f"无法获取MCC {mcc_customer_id} 下的客户账号列表。可能的原因：1) MCC下没有客户账号 2) 客户账号未启用 3) API权限不足")

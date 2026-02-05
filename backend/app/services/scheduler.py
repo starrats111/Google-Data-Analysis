@@ -119,46 +119,110 @@ def sync_platform_data_job():
 
 
 def sync_google_ads_data_job():
-    """同步Google Ads数据任务（每天北京时间早上8点执行，同步前7天数据）"""
+    """
+    同步Google Ads数据任务（每天北京时间凌晨4点执行）
+    
+    使用服务账号模式同步所有活跃MCC的广告数据
+    只同步昨天的数据（当天数据可能不完整）
+    """
     db: Session = SessionLocal()
     try:
-        logger.info("开始执行Google Ads数据同步任务（前7天）...")
+        logger.info("=" * 60)
+        logger.info("开始执行Google Ads数据同步任务（服务账号模式）...")
         
-        sync_service = GoogleAdsApiSyncService(db)
+        from app.services.google_ads_service_account_sync import GoogleAdsServiceAccountSync
         
-        # 同步前7天的数据（从7天前到昨天）
-        end_date = date.today() - timedelta(days=1)  # 昨天
-        begin_date = end_date - timedelta(days=6)  # 7天前
+        sync_service = GoogleAdsServiceAccountSync(db)
         
-        total_saved = 0
-        success_days = 0
-        fail_days = 0
+        # 只同步昨天的数据
+        target_date = date.today() - timedelta(days=1)
         
-        # 逐天同步
-        current_date = begin_date
-        while current_date <= end_date:
-            try:
-                logger.info(f"正在同步 {current_date.isoformat()} 的Google Ads数据...")
-                result = sync_service.sync_all_active_mccs(target_date=current_date)
-                
-                if result.get("success"):
-                    saved_count = result.get("total_saved", 0)
-                    total_saved += saved_count
-                    success_days += 1
-                    logger.info(f"{current_date.isoformat()} 同步成功: 保存 {saved_count} 条记录")
-                else:
-                    fail_days += 1
-                    logger.error(f"{current_date.isoformat()} 同步失败: {result.get('message')}")
-            except Exception as e:
-                fail_days += 1
-                logger.error(f"{current_date.isoformat()} 同步异常: {e}")
+        logger.info(f"同步日期: {target_date.isoformat()}")
+        logger.info(f"同步模式: 服务账号")
+        
+        # 批量同步所有活跃MCC
+        result = sync_service.sync_all_mccs(
+            target_date=target_date,
+            only_enabled=True  # 只同步启用状态的广告系列
+        )
+        
+        if result.get("success"):
+            logger.info(f"✓ Google Ads数据同步完成:")
+            logger.info(f"  - MCC总数: {result.get('total_mccs', 0)}")
+            logger.info(f"  - 成功: {result.get('success_count', 0)} 个MCC")
+            logger.info(f"  - 失败: {result.get('fail_count', 0)} 个MCC")
+            logger.info(f"  - 保存记录: {result.get('total_saved', 0)} 条")
             
-            current_date += timedelta(days=1)
+            if result.get("quota_exhausted"):
+                logger.warning("⚠️ 同步过程中遇到API配额限制，部分MCC未完成同步")
+        else:
+            logger.error(f"✗ Google Ads数据同步失败: {result.get('message')}")
         
-        logger.info(f"Google Ads数据同步完成: 成功 {success_days} 天，失败 {fail_days} 天，共保存 {total_saved} 条记录")
+        logger.info("=" * 60)
         
     except Exception as e:
-        logger.error(f"Google Ads数据同步任务执行失败: {e}", exc_info=True)
+        logger.error(f"✗ Google Ads数据同步任务异常: {e}", exc_info=True)
+    finally:
+        db.close()
+
+
+def sync_google_ads_historical_job():
+    """
+    同步Google Ads历史数据任务（手动触发或首次部署时执行）
+    
+    同步从2026年1月1日至昨天的所有数据
+    """
+    db: Session = SessionLocal()
+    try:
+        logger.info("=" * 60)
+        logger.info("开始执行Google Ads历史数据同步任务...")
+        
+        from app.services.google_ads_service_account_sync import GoogleAdsServiceAccountSync
+        
+        sync_service = GoogleAdsServiceAccountSync(db)
+        
+        # 历史数据范围：2026年1月1日至昨天
+        begin_date = date(2026, 1, 1)
+        end_date = date.today() - timedelta(days=1)
+        
+        logger.info(f"同步日期范围: {begin_date.isoformat()} ~ {end_date.isoformat()}")
+        
+        # 获取所有活跃MCC
+        active_mccs = db.query(GoogleMccAccount).filter(
+            GoogleMccAccount.is_active == True
+        ).all()
+        
+        logger.info(f"待同步MCC数量: {len(active_mccs)}")
+        
+        total_saved = 0
+        
+        for mcc in active_mccs:
+            logger.info(f"同步MCC: {mcc.mcc_name} ({mcc.mcc_id})")
+            
+            result = sync_service.sync_historical_data(
+                mcc.id,
+                begin_date,
+                end_date,
+                force_refresh=False
+            )
+            
+            if result.get("success"):
+                saved = result.get("total_saved", 0)
+                total_saved += saved
+                logger.info(f"  ✓ 完成: 成功{result.get('success_days')}天, "
+                           f"失败{result.get('fail_days')}天, 保存{saved}条")
+            else:
+                logger.error(f"  ✗ 失败: {result.get('message')}")
+            
+            if result.get("quota_exhausted"):
+                logger.warning("⚠️ 遇到配额限制，停止同步")
+                break
+        
+        logger.info(f"历史数据同步完成，共保存 {total_saved} 条记录")
+        logger.info("=" * 60)
+        
+    except Exception as e:
+        logger.error(f"✗ Google Ads历史数据同步任务异常: {e}", exc_info=True)
     finally:
         db.close()
 
@@ -488,12 +552,14 @@ def start_scheduler():
             replace_existing=True
         )
         
-        # Google Ads数据同步：每天北京时间早上8点
+        # Google Ads数据同步：每天北京时间凌晨4点（使用服务账号模式）
+        from app.config import settings
+        sync_hour = settings.google_ads_sync_hour
         scheduler.add_job(
             sync_google_ads_data_job,
-            trigger=CronTrigger(hour=8, minute=0),
+            trigger=CronTrigger(hour=sync_hour, minute=0),
             id='sync_google_ads_data',
-            name='同步Google Ads数据',
+            name='同步Google Ads数据（服务账号）',
             replace_existing=True
         )
         

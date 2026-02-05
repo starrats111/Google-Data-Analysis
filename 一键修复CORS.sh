@@ -94,3 +94,12 @@ echo ""
 echo "如果还有问题，查看完整日志："
 echo "  tail -f ~/Google-Data-Analysis/backend/run.log"
 
+
+
+
+
+
+
+
+
+

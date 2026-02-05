@@ -34,3 +34,12 @@ echo ""
 echo "=== 检查服务状态 ==="
 curl -s http://127.0.0.1:8000/health && echo "" && echo "✓ 后端服务运行正常" || (echo "✗ 后端服务启动失败，查看日志：" && tail -n 30 run.log)
 
+
+
+
+
+
+
+
+
+

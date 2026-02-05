@@ -94,11 +94,25 @@ class Settings(BaseSettings):
         "https://google-data-analysis.pages.dev",
     ]
 
-    # ===== Google Ads 共享配置（当前阶段可选，避免因 .env 中残留字段报错）=====
-    # 这三个字段主要给未来 Google Ads API 使用，现在先留空也可以
+    # ===== Google Ads API 配置 =====
+    # 开发者令牌（必需）
+    google_ads_shared_developer_token: str = ""
+    
+    # OAuth配置（旧版，保留兼容）
     google_ads_shared_client_id: str = ""
     google_ads_shared_client_secret: str = ""
-    google_ads_shared_developer_token: str = ""
+    
+    # 服务账号配置（新版推荐）
+    # 方式1：JSON密钥文件路径
+    google_ads_service_account_file: str = ""
+    # 方式2：JSON密钥内容（Base64编码，适合云部署）
+    google_ads_service_account_json_base64: str = ""
+    
+    # 同步配置
+    google_ads_sync_batch_size: int = 10  # 每批同步的MCC数量
+    google_ads_sync_delay_seconds: float = 2.0  # 批次间延迟秒数
+    google_ads_request_delay_seconds: float = 1.0  # 单个请求间延迟秒数
+    google_ads_sync_hour: int = 4  # 每日同步时间（小时，北京时间）
     
     # 汇率配置
     # 用于当谷歌广告表1为人民币(CNY/RMB)时，将费用/CPC等换算为美元(USD)

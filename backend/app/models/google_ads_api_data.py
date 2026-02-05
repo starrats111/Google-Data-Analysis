@@ -63,16 +63,28 @@ class GoogleMccAccount(Base):
     # MCC信息
     mcc_id = Column(String(100), nullable=False, unique=True, index=True)  # Google MCC ID
     mcc_name = Column(String(255), nullable=False)  # MCC名称
-    email = Column(String(255), nullable=False, index=True)  # 关联的邮箱
+    email = Column(String(255), nullable=True, index=True)  # 关联的邮箱（可选，用于记录）
     
-    # API配置
-    refresh_token = Column(Text, nullable=True)  # OAuth刷新token
-    access_token = Column(Text, nullable=True)  # 当前访问token
-    client_id = Column(String(255), nullable=True)
-    client_secret = Column(Text, nullable=True)
+    # API配置（保留兼容旧版OAuth方式）
+    refresh_token = Column(Text, nullable=True)  # OAuth刷新token（旧版）
+    access_token = Column(Text, nullable=True)  # 当前访问token（旧版）
+    client_id = Column(String(255), nullable=True)  # OAuth客户端ID（旧版）
+    client_secret = Column(Text, nullable=True)  # OAuth客户端密钥（旧版）
+    
+    # 服务账号配置（新版推荐）
+    service_account_json = Column(Text, nullable=True)  # 单独的服务账号JSON（可选，优先使用全局配置）
+    use_service_account = Column(Boolean, default=True, nullable=False)  # 是否使用服务账号模式
     
     # 状态
     is_active = Column(Boolean, default=True, nullable=False, index=True)
+    
+    # 同步状态追踪
+    last_sync_status = Column(String(50), nullable=True)  # success/failed/pending
+    last_sync_message = Column(Text, nullable=True)  # 最后同步消息
+    last_sync_at = Column(DateTime(timezone=True), nullable=True)  # 最后同步时间
+    last_sync_date = Column(Date, nullable=True)  # 最后同步的数据日期
+    total_campaigns = Column(Integer, default=0)  # 该MCC下的广告系列总数
+    total_customers = Column(Integer, default=0)  # 该MCC下的客户账号数
     
     # 元数据
     created_at = Column(DateTime(timezone=True), server_default=func.now())

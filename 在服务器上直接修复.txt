@@ -24,3 +24,12 @@ sleep 8
 # 步骤6: 验证服务
 curl -s http://127.0.0.1:8000/health && echo " ✓ 服务启动成功" || (echo " ✗ 服务启动失败，查看日志:" && tail -n 20 run.log)
 
+
+
+
+
+
+
+
+
+
