@@ -680,9 +680,9 @@ class GoogleAdsApiSyncService:
                 if is_developer_token_prohibited:
                     logger.error(f"使用CustomerClient查询失败: 开发者令牌不允许使用。新令牌可能需要等待Google审核（通常需要1-3个工作日）。")
                 else:
-                logger.warning(f"使用CustomerClient查询失败: {e}")
-                import traceback
-                logger.debug(traceback.format_exc())
+                    logger.warning(f"使用CustomerClient查询失败: {e}")
+                    import traceback
+                    logger.debug(traceback.format_exc())
             
             # 方法2：使用 CustomerService.list_accessible_customers() 作为备选
             try:
