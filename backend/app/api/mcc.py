@@ -38,27 +38,44 @@ def _sync_mcc_range_in_background(mcc_id: int, begin: date, end: date, user_id: 
         total_saved = 0
         errors = []
         
+        quota_exhausted = False
         while current_date <= end:
             try:
                 result = sync_service.sync_mcc_data(mcc_id, current_date)
                 if result.get("success"):
                     saved_count = result.get("saved_count", 0)
                     total_saved += saved_count
+                    message = result.get('message', '')
                     if saved_count == 0:
-                        logger.warning(f"MCC {mcc_id} 日期 {current_date.isoformat()} 同步成功但未保存数据: {result.get('message', '')}")
+                        # 检查是否是配额限制导致的
+                        if "配额" in message or "quota" in message.lower() or "429" in message:
+                            quota_exhausted = True
+                            logger.warning(f"MCC {mcc_id} 日期 {current_date.isoformat()} 同步失败: Google Ads API配额已用完")
+                            errors.append(f"{current_date.isoformat()}: API配额已用完")
+                        else:
+                            logger.warning(f"MCC {mcc_id} 日期 {current_date.isoformat()} 同步成功但未保存数据: {message}")
                     else:
                         logger.info(f"MCC {mcc_id} 日期 {current_date.isoformat()} 同步成功: 保存 {saved_count} 条")
                 else:
                     error_msg = result.get('message', '同步失败')
+                    # 检查是否是配额限制
+                    if "配额" in error_msg or "quota" in error_msg.lower() or "429" in error_msg or "Resource has been exhausted" in error_msg:
+                        quota_exhausted = True
+                        logger.warning(f"MCC {mcc_id} 日期 {current_date.isoformat()} 同步失败: Google Ads API配额已用完")
                     errors.append(f"{current_date.isoformat()}: {error_msg}")
                     logger.warning(f"MCC {mcc_id} 日期 {current_date.isoformat()} 同步失败: {error_msg}")
             except Exception as e:
                 error_msg = str(e)
+                if "配额" in error_msg or "quota" in error_msg.lower() or "429" in error_msg or "Resource has been exhausted" in error_msg:
+                    quota_exhausted = True
                 errors.append(f"{current_date.isoformat()}: {error_msg}")
                 logger.error(f"MCC {mcc_id} 日期 {current_date.isoformat()} 同步异常: {error_msg}", exc_info=True)
             current_date += timedelta(days=1)
         
-        logger.info(f"MCC {mcc_id} 后台同步完成: 日期范围 {begin.isoformat()} ~ {end.isoformat()}, 保存 {total_saved} 条，错误 {len(errors)} 个")
+        if quota_exhausted:
+            logger.error(f"MCC {mcc_id} 后台同步失败: Google Ads API配额已用完，请等待配额恢复（通常需要等待几小时到24小时）")
+        else:
+            logger.info(f"MCC {mcc_id} 后台同步完成: 日期范围 {begin.isoformat()} ~ {end.isoformat()}, 保存 {total_saved} 条，错误 {len(errors)} 个")
         if errors:
             logger.warning(f"MCC {mcc_id} 同步错误详情: {errors[:5]}")  # 只显示前5个错误
     except Exception as e:
