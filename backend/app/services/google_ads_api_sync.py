@@ -26,14 +26,16 @@ class GoogleAdsApiSyncService:
     def sync_mcc_data(
         self,
         mcc_id: int,
-        target_date: Optional[date] = None
+        target_date: Optional[date] = None,
+        force_refresh: bool = False
     ) -> Dict:
         """
-        同步指定MCC的Google Ads数据
+        同步指定MCC的Google Ads数据（增量同步）
         
         Args:
             mcc_id: MCC账号ID
             target_date: 目标日期，默认为昨天（因为今天的数据可能不完整）
+            force_refresh: 是否强制刷新（即使数据已存在也重新同步）
         
         Returns:
             同步结果
@@ -49,12 +51,48 @@ class GoogleAdsApiSyncService:
         if not mcc_account:
             return {"success": False, "message": "MCC账号不存在或已停用"}
         
+        # 增量同步检查：如果数据已存在且不是强制刷新，检查是否需要同步
+        if not force_refresh:
+            existing_count = self.db.query(GoogleAdsApiData).filter(
+                GoogleAdsApiData.mcc_id == mcc_id,
+                GoogleAdsApiData.date == target_date
+            ).count()
+            
+            if existing_count > 0:
+                # 检查数据是否是最新的（今天同步的）
+                latest_sync = self.db.query(GoogleAdsApiData).filter(
+                    GoogleAdsApiData.mcc_id == mcc_id,
+                    GoogleAdsApiData.date == target_date
+                ).order_by(GoogleAdsApiData.last_sync_at.desc()).first()
+                
+                if latest_sync and latest_sync.last_sync_at:
+                    # 如果数据是今天同步的，跳过API调用
+                    sync_date = latest_sync.last_sync_at.date()
+                    if sync_date == date.today():
+                        logger.info(f"MCC {mcc_account.mcc_id} 日期 {target_date.isoformat()} 数据已存在且是最新的，跳过同步（已有 {existing_count} 条记录）")
+                        return {
+                            "success": True,
+                            "message": f"数据已存在且是最新的，跳过同步（已有 {existing_count} 条记录）",
+                            "saved_count": existing_count,
+                            "skipped": True
+                        }
+        
         try:
             # 调用Google Ads API获取数据
             api_data = self._fetch_google_ads_data(
                 mcc_account,
                 target_date
             )
+            
+            # 检查是否是配额限制
+            if api_data.get("quota_exhausted"):
+                logger.error(f"MCC {mcc_account.mcc_id} 同步失败: Google Ads API配额已用完")
+                return {
+                    "success": False,
+                    "message": api_data.get("message", "Google Ads API配额已用完"),
+                    "quota_exhausted": True,
+                    "retry_after_seconds": api_data.get("retry_after_seconds")
+                }
             
             if not api_data.get("success"):
                 logger.error(f"MCC {mcc_account.mcc_id} 同步失败: {api_data.get('message')}")
