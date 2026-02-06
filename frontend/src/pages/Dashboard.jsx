@@ -1,6 +1,6 @@
-import React, { useEffect, useMemo, useState } from 'react'
-import { Card, Row, Col, Table, message, Segmented, Tag, Typography, Space, Statistic, Input, Button, Spin, Select } from 'antd'
-import { SearchOutlined, RocketOutlined, CalendarOutlined, GlobalOutlined } from '@ant-design/icons'
+import React, { useEffect, useMemo, useState, useRef } from 'react'
+import { Card, Row, Col, Table, message, Segmented, Tag, Typography, Space, Statistic, Input, Button, Spin, Select, Upload, Divider } from 'antd'
+import { SearchOutlined, RocketOutlined, CalendarOutlined, GlobalOutlined, UploadOutlined, PictureOutlined } from '@ant-design/icons'
 import { useAuth } from '../store/authStore'
 import api from '../services/api'
 import ReactECharts from 'echarts-for-react'
@@ -24,6 +24,10 @@ const Dashboard = () => {
   const [adCopyLoading, setAdCopyLoading] = useState(false)
   const [adCopyData, setAdCopyData] = useState(null)
   const [targetCountry, setTargetCountry] = useState('US')
+  
+  // 截图上传状态
+  const [keywordImageLoading, setKeywordImageLoading] = useState(false)
+  const fileInputRef = useRef(null)
 
   useEffect(() => {
     // 防止重复请求
@@ -151,6 +155,43 @@ const Dashboard = () => {
     }
   }
 
+  // 上传截图识别关键词
+  const handleImageUpload = async (file) => {
+    if (!file) return
+    
+    setKeywordImageLoading(true)
+    try {
+      const formData = new FormData()
+      formData.append('file', file)
+      formData.append('prompt', `请仔细分析这张关键词工具截图，提取所有可见的关键词。
+
+要求：
+1. 只提取关键词本身，不要搜索量、竞争度等数据
+2. 每个关键词用逗号分隔
+3. 直接输出关键词列表，不要任何解释
+
+例如输出格式：wireless earbuds, bluetooth headphones, earphones wireless, tws earbuds`)
+      
+      const res = await api.post('/api/gemini/analyze-image', formData, {
+        headers: { 'Content-Type': 'multipart/form-data' }
+      })
+      
+      if (res.data.success) {
+        // 提取的关键词填入输入框
+        setKeywords(res.data.analysis)
+        message.success('关键词识别成功！')
+      } else {
+        message.error(res.data.message || '识别失败')
+      }
+    } catch (error) {
+      message.error('识别失败: ' + (error.response?.data?.detail || error.message))
+    } finally {
+      setKeywordImageLoading(false)
+    }
+    
+    return false // 阻止默认上传行为
+  }
+
   // 生成广告词
   const generateAdCopy = async () => {
     if (!productUrl.trim()) {
@@ -158,12 +199,12 @@ const Dashboard = () => {
       return
     }
     if (!keywords.trim()) {
-      message.warning('请输入关键词')
+      message.warning('请输入关键词（或上传截图识别）')
       return
     }
     setAdCopyLoading(true)
     try {
-      const keywordList = keywords.split(/[,，\s]+/).filter(k => k.trim())
+      const keywordList = keywords.split(/[,，\s\n]+/).filter(k => k.trim())
       const res = await api.post('/api/gemini/recommend-keywords', {
         keywords: keywordList,
         product_url: productUrl,
@@ -339,12 +380,31 @@ const Dashboard = () => {
                 prefix={<GlobalOutlined />}
                 status={!productUrl.trim() ? 'warning' : ''}
               />
+              <div style={{ marginBottom: 8 }}>
+                <Space style={{ width: '100%', justifyContent: 'space-between' }}>
+                  <Text type="secondary">关键词（手动输入或截图识别）：</Text>
+                  <Upload
+                    accept="image/*"
+                    showUploadList={false}
+                    beforeUpload={handleImageUpload}
+                    disabled={keywordImageLoading}
+                  >
+                    <Button 
+                      icon={<PictureOutlined />} 
+                      size="small"
+                      loading={keywordImageLoading}
+                    >
+                      {keywordImageLoading ? '识别中...' : '上传截图识别'}
+                    </Button>
+                  </Upload>
+                </Space>
+              </div>
               <Input.TextArea
-                placeholder="输入关键词（用逗号或空格分隔），例如：wireless earbuds, bluetooth headphones"
+                placeholder="输入关键词（用逗号或空格分隔）&#10;或点击上方按钮上传 sem.3ue.co 的截图自动识别"
                 value={keywords}
                 onChange={(e) => setKeywords(e.target.value)}
-                rows={2}
-                style={{ marginBottom: 16 }}
+                rows={3}
+                style={{ marginBottom: 12 }}
               />
               {adCopyData ? (
                 <div style={{ maxHeight: 400, overflow: 'auto' }}>
