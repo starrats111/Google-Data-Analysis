@@ -81,6 +81,28 @@ class MarketingCalendarRequest(BaseModel):
     year: Optional[int] = None
 
 
+class L7DCampaignData(BaseModel):
+    """L7D 广告系列数据"""
+    campaign_name: str
+    cost: float = 0
+    clicks: int = 0
+    impressions: int = 0
+    cpc: float = 0
+    budget: float = 0
+    conservative_epc: float = 0  # 保守EPC（已含0.72系数）
+    is_budget_lost: float = 0    # Budget丢失比例（0-1）
+    is_rank_lost: float = 0      # Rank丢失比例（0-1）
+    orders: int = 0
+    order_days: int = 0          # 出单天数
+    commission: float = 0
+
+
+class L7DAnalysisRequest(BaseModel):
+    """L7D 分析请求"""
+    campaigns: List[L7DCampaignData]
+    model_type: Optional[str] = "thinking"  # L7D分析默认用thinking模型
+
+
 @router.post("/analyze-campaign")
 async def analyze_campaign(
     request: CampaignAnalysisRequest,
@@ -252,6 +274,51 @@ async def batch_analyze_campaigns(
         }
         
         result = service.analyze_campaign_data(summary)
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/analyze-l7d")
+async def analyze_l7d_campaigns(
+    request: L7DAnalysisRequest,
+    current_user: User = Depends(get_current_user)
+):
+    """
+    L7D 广告系列审计分析
+    
+    基于品牌词套利审计提示词 v5 版本，对广告系列进行：
+    - 全量审计与 S/B/D 分级
+    - 输出可执行的操作方案
+    - 效果预测与可行性判定
+    
+    model_type 参数（默认 thinking）：
+    - default: gemini-2.5-flash-lite（最便宜）
+    - advanced: gemini-3-flash-preview（最新模型）
+    - thinking: gemini-3-flash-preview-thinking（深度分析，推荐）
+    """
+    try:
+        model_type = request.model_type or "thinking"
+        service = get_gemini_service(model_type)
+        
+        # 准备数据
+        campaigns_data = [c.dict() for c in request.campaigns]
+        
+        result = service.analyze_l7d_campaigns(campaigns_data)
+        
+        # 如果失败，自动尝试备用模型
+        if not result.get("success"):
+            for fallback_type in ["advanced", "default"]:
+                if fallback_type != model_type:
+                    try:
+                        service = get_gemini_service(fallback_type)
+                        result = service.analyze_l7d_campaigns(campaigns_data)
+                        if result.get("success"):
+                            result["used_model"] = fallback_type
+                            break
+                    except:
+                        continue
+        
         return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

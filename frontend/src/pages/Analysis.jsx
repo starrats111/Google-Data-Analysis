@@ -1,6 +1,6 @@
 import React, { useMemo, useState, useEffect, useRef } from 'react'
-import { Card, Table, Select, DatePicker, Space, message, Tag, Badge, Typography, Tooltip, Button, Popconfirm, Collapse, Modal, Upload } from 'antd'
-import { UploadOutlined } from '@ant-design/icons'
+import { Card, Table, Select, DatePicker, Space, message, Tag, Badge, Typography, Tooltip, Button, Popconfirm, Collapse, Modal, Upload, Spin } from 'antd'
+import { UploadOutlined, RobotOutlined } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
 import dayjs from 'dayjs'
 import api from '../services/api'
@@ -40,6 +40,12 @@ const Analysis = ({ mode }) => {
   const [googleModalOpen, setGoogleModalOpen] = useState(false)
   const [googleFile, setGoogleFile] = useState(null)
   const [generatingFromApi, setGeneratingFromApi] = useState(false)
+  
+  // AI 分析状态
+  const [aiAnalyzing, setAiAnalyzing] = useState(false)
+  const [aiModalOpen, setAiModalOpen] = useState(false)
+  const [aiAnalysisResult, setAiAnalysisResult] = useState(null)
+  const [selectedResultForAi, setSelectedResultForAi] = useState(null)
 
   const fetchAccounts = async () => {
     try {
@@ -271,6 +277,60 @@ const Analysis = ({ mode }) => {
     }
   }
 
+  // AI 分析 L7D 数据
+  const handleAiAnalyze = async (record) => {
+    const data = record?.result_data?.data
+    if (!Array.isArray(data) || data.length === 0) {
+      message.warning('该记录没有可分析的数据')
+      return
+    }
+    
+    setSelectedResultForAi(record)
+    setAiAnalyzing(true)
+    setAiModalOpen(true)
+    setAiAnalysisResult(null)
+    
+    try {
+      // 将数据转换为 API 需要的格式
+      const campaigns = data.map(row => ({
+        campaign_name: row['广告系列名'] || row['广告系列'] || row['系列名'] || '',
+        cost: parseFloat(row['L7D花费'] || row['费用'] || row['花费'] || 0),
+        clicks: parseInt(row['L7D点击'] || row['点击'] || 0),
+        impressions: parseInt(row['L7D展示'] || row['展示'] || 0),
+        cpc: parseFloat(row['CPC'] || row['L7D_CPC'] || 0),
+        budget: parseFloat(row['预算'] || row['日预算'] || 0),
+        conservative_epc: parseFloat(row['保守EPC'] || row['L7D保守EPC'] || 0),
+        is_budget_lost: parseFloat(row['Budget丢失'] || row['IS Budget丢失'] || row['预算丢失'] || 0),
+        is_rank_lost: parseFloat(row['Rank丢失'] || row['IS Rank丢失'] || row['排名丢失'] || 0),
+        orders: parseInt(row['L7D订单'] || row['订单'] || row['出单'] || 0),
+        order_days: parseInt(row['L7D出单天数'] || row['出单天数'] || 0),
+        commission: parseFloat(row['L7D佣金'] || row['佣金'] || 0)
+      })).filter(c => c.campaign_name)  // 过滤掉没有名称的
+      
+      if (campaigns.length === 0) {
+        message.warning('没有找到有效的广告系列数据')
+        setAiAnalyzing(false)
+        return
+      }
+      
+      const response = await api.post('/api/gemini/analyze-l7d', {
+        campaigns,
+        model_type: 'thinking'  // 使用深度分析模型
+      })
+      
+      if (response.data.success) {
+        setAiAnalysisResult(response.data)
+        message.success('AI 分析完成')
+      } else {
+        message.error(response.data.message || 'AI 分析失败')
+      }
+    } catch (error) {
+      message.error('AI 分析失败: ' + (error.response?.data?.detail || error.message))
+    } finally {
+      setAiAnalyzing(false)
+    }
+  }
+
   const handleDeleteResult = async (resultId) => {
     try {
       // 乐观更新：立即从UI中移除，提升用户体验
@@ -389,18 +449,33 @@ const Analysis = ({ mode }) => {
       {
         title: '操作',
         key: 'action',
-        width: 110,
+        width: 160,
         fixed: 'right',
         render: (_, record) => (
-          <Popconfirm
-            title="确定删除该分析结果吗？"
-            description="删除后无法恢复"
-            okText="确定"
-            cancelText="取消"
-            onConfirm={() => handleDeleteResult(record.id)}
-          >
-            <Button danger size="small">删除</Button>
-          </Popconfirm>
+          <Space size="small">
+            {analysisMode === 'l7d' && (
+              <Tooltip title="AI 智能分析">
+                <Button 
+                  type="primary"
+                  ghost
+                  size="small"
+                  icon={<RobotOutlined />}
+                  onClick={() => handleAiAnalyze(record)}
+                >
+                  AI
+                </Button>
+              </Tooltip>
+            )}
+            <Popconfirm
+              title="确定删除该分析结果吗？"
+              description="删除后无法恢复"
+              okText="确定"
+              cancelText="取消"
+              onConfirm={() => handleDeleteResult(record.id)}
+            >
+              <Button danger size="small">删除</Button>
+            </Popconfirm>
+          </Space>
         ),
       },
     ],
@@ -464,6 +539,78 @@ const Analysis = ({ mode }) => {
         <div style={{ marginTop: 10, color: '#999', fontSize: 12 }}>
           需要包含列：<b>在搜索网络中因预算而错失的展示次数份额</b>、<b>在搜索网络中因评级而错失的展示次数份额</b>（或对应英文列）。
         </div>
+      </Modal>
+
+      {/* AI 分析结果 Modal */}
+      <Modal
+        title={
+          <Space>
+            <RobotOutlined />
+            <span>AI 智能分析 - L7D 审计报告</span>
+            {aiAnalysisResult && (
+              <Tag color={aiAnalysisResult.is_analysis_day ? 'green' : 'orange'}>
+                {aiAnalysisResult.weekday} {aiAnalysisResult.is_analysis_day ? '✅ 分析日' : '⚠️ 非分析日'}
+              </Tag>
+            )}
+          </Space>
+        }
+        open={aiModalOpen}
+        onCancel={() => setAiModalOpen(false)}
+        width={1200}
+        footer={[
+          <Button key="close" onClick={() => setAiModalOpen(false)}>
+            关闭
+          </Button>,
+          <Button 
+            key="copy" 
+            type="primary"
+            onClick={() => {
+              if (aiAnalysisResult?.analysis) {
+                navigator.clipboard.writeText(aiAnalysisResult.analysis)
+                message.success('已复制到剪贴板')
+              }
+            }}
+            disabled={!aiAnalysisResult?.analysis}
+          >
+            复制报告
+          </Button>
+        ]}
+        styles={{ body: { maxHeight: '70vh', overflow: 'auto' } }}
+      >
+        {aiAnalyzing ? (
+          <div style={{ textAlign: 'center', padding: 60 }}>
+            <Spin size="large" />
+            <p style={{ marginTop: 16, fontSize: 16 }}>AI 正在分析 {selectedResultForAi?.result_data?.data?.length || 0} 个广告系列...</p>
+            <p style={{ color: '#999' }}>使用 Gemini 深度分析模型，预计需要 30-60 秒</p>
+          </div>
+        ) : aiAnalysisResult ? (
+          <div>
+            <div style={{ marginBottom: 16 }}>
+              <Space>
+                <Tag color="blue">📊 分析系列数: {aiAnalysisResult.campaign_count}</Tag>
+                <Tag color="green">📅 分析日期: {aiAnalysisResult.analysis_date}</Tag>
+              </Space>
+            </div>
+            <div 
+              style={{ 
+                background: '#f5f5f5', 
+                padding: 16, 
+                borderRadius: 8,
+                whiteSpace: 'pre-wrap',
+                fontFamily: 'monospace',
+                fontSize: 13,
+                lineHeight: 1.6
+              }}
+            >
+              {aiAnalysisResult.analysis}
+            </div>
+          </div>
+        ) : (
+          <div style={{ textAlign: 'center', padding: 60, color: '#999' }}>
+            <RobotOutlined style={{ fontSize: 48, marginBottom: 16 }} />
+            <p>选择一条 L7D 分析结果，点击 AI 按钮开始智能分析</p>
+          </div>
+        )}
       </Modal>
 
       <Card className="analysis-table" styles={{ body: { paddingTop: 14 } }}>
