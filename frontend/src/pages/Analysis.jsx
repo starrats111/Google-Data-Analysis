@@ -191,7 +191,7 @@ const Analysis = ({ mode }) => {
       setGeneratingFromApi(true)
       try {
         const targetDate = dateRange[1].format('YYYY-MM-DD')  // 使用结束日期
-        const response = await api.post('/api/analysis/api/daily', null, {
+        const response = await api.post('/api/analysis/daily', null, {
           params: { target_date: targetDate }
         })
         
@@ -220,7 +220,7 @@ const Analysis = ({ mode }) => {
           params.end_date = endDate
         }
         
-        const response = await api.post('/api/analysis/api/l7d', null, { params })
+        const response = await api.post('/api/analysis/l7d', null, { params })
         
         if (response.data.success) {
           message.success(`成功生成 ${response.data.total_records} 条L7D分析记录`)
