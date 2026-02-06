@@ -296,15 +296,15 @@ async def get_campaign_data(
         
         # 获取平台信息
         inferred_platform_code = row.extracted_platform_code or _infer_platform_code_from_campaign_name(row.campaign_name)
-        platform_code = inferred_platform_code
-        platform_name = platform_code_map.get(platform_code, platform_code) if platform_code else None
+        row_platform_code = inferred_platform_code
+        platform_name = platform_code_map.get(row_platform_code, row_platform_code) if row_platform_code else None
         inferred_mid = _infer_merchant_id_from_campaign_name(row.campaign_name)
         
         campaign_data.append({
             "date_range": date_range_display,
             "campaign_name": row.campaign_name,
             "campaign_id": row.campaign_id,
-            "platform_code": platform_code,
+            "platform_code": row_platform_code,
             "platform_name": platform_name,
             "status": status_label,
             "status_code": status_code,
