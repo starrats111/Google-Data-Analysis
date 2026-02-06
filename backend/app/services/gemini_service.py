@@ -58,8 +58,14 @@ class GeminiService:
             "max_tokens": 8192
         }
         
-        # 调用 API
-        url = f"{self.base_url}/v1/chat/completions"
+        # 调用 API（哈基米使用 OpenAI 兼容格式）
+        # base_url 应该是 https://api.gemai.cc（不带 /v1beta）
+        base = self.base_url.rstrip('/')
+        if base.endswith('/v1beta'):
+            base = base[:-7]  # 移除 /v1beta
+        if base.endswith('/v1'):
+            base = base[:-3]  # 移除 /v1
+        url = f"{base}/v1/chat/completions"
         response = requests.post(url, headers=headers, json=payload, timeout=120)
         
         if response.status_code != 200:
