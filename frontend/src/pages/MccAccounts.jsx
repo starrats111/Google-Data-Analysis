@@ -350,6 +350,14 @@ export default function MccAccounts() {
       key: 'mcc_name',
       ellipsis: true,
     },
+    // 管理员可见：归属员工列
+    isManager && {
+      title: '归属员工',
+      dataIndex: 'owner_username',
+      key: 'owner_username',
+      width: 100,
+      render: (val) => <Tag color="cyan">{val || '未知'}</Tag>
+    },
     {
       title: '状态',
       dataIndex: 'is_active',
@@ -535,7 +543,7 @@ export default function MccAccounts() {
       {/* MCC列表 */}
       <Card>
         <Table
-          columns={columns}
+          columns={columns.filter(Boolean)}
           dataSource={mccAccounts}
           loading={loading}
           rowKey="id"

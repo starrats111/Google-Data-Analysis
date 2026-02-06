@@ -214,6 +214,9 @@ class MccAccountResponse(BaseModel):
     created_at: str
     updated_at: Optional[str] = None
     data_count: int = 0  # 该MCC的数据条数
+    # 归属员工信息
+    owner_id: Optional[int] = None
+    owner_username: Optional[str] = None
     # 同步状态
     last_sync_status: Optional[str] = None
     last_sync_message: Optional[str] = None
@@ -231,7 +234,7 @@ class MccAccountResponse(BaseModel):
         from_attributes = True
 
 
-def _build_mcc_response(mcc_account: GoogleMccAccount, data_count: int = 0) -> Dict[str, Any]:
+def _build_mcc_response(mcc_account: GoogleMccAccount, data_count: int = 0, owner_username: str = None) -> Dict[str, Any]:
     """构建MCC账号响应数据"""
     return {
         "id": mcc_account.id,
@@ -243,6 +246,9 @@ def _build_mcc_response(mcc_account: GoogleMccAccount, data_count: int = 0) -> D
         "created_at": mcc_account.created_at.isoformat() if mcc_account.created_at else datetime.now().isoformat(),
         "updated_at": mcc_account.updated_at.isoformat() if mcc_account.updated_at else None,
         "data_count": data_count,
+        # 归属员工信息
+        "owner_id": mcc_account.user_id,
+        "owner_username": owner_username,
         # 同步状态
         "last_sync_status": mcc_account.last_sync_status if hasattr(mcc_account, 'last_sync_status') else None,
         "last_sync_message": mcc_account.last_sync_message if hasattr(mcc_account, 'last_sync_message') else None,
@@ -396,19 +402,31 @@ async def get_mcc_accounts(
     from fastapi.responses import JSONResponse
     
     try:
-        logger.info(f"用户 {current_user.username} (ID: {current_user.id}) 请求MCC账号列表")
+        logger.info(f"用户 {current_user.username} (ID: {current_user.id}, 角色: {current_user.role}) 请求MCC账号列表")
         
-        # 查询当前用户的MCC账号（数据隔离，员工只能看到自己的MCC）
-        mcc_accounts = db.query(GoogleMccAccount).filter(
-            GoogleMccAccount.user_id == current_user.id
-        ).order_by(GoogleMccAccount.created_at.desc()).all()
-        
-        logger.info(f"查询到 {len(mcc_accounts)} 个MCC账号")
+        # 管理员可以看到所有MCC，员工只能看到自己的MCC
+        if current_user.role == 'manager':
+            # 管理员看到所有MCC
+            mcc_accounts = db.query(GoogleMccAccount).order_by(
+                GoogleMccAccount.user_id,
+                GoogleMccAccount.created_at.desc()
+            ).all()
+            logger.info(f"管理员查询到所有 {len(mcc_accounts)} 个MCC账号")
+        else:
+            # 员工只看到自己的MCC
+            mcc_accounts = db.query(GoogleMccAccount).filter(
+                GoogleMccAccount.user_id == current_user.id
+            ).order_by(GoogleMccAccount.created_at.desc()).all()
+            logger.info(f"员工查询到 {len(mcc_accounts)} 个MCC账号")
         
         if not mcc_accounts:
-            # 如果没有MCC账号，直接返回空列表（包含CORS头）
             logger.info("用户没有MCC账号，返回空列表")
             return JSONResponse(content=[], headers=cors_headers)
+        
+        # 获取所有相关用户的用户名映射
+        user_ids = list(set(mcc.user_id for mcc in mcc_accounts))
+        users = db.query(User).filter(User.id.in_(user_ids)).all()
+        user_map = {u.id: u.username for u in users}
         
         # 优化：使用一次聚合查询获取所有MCC的数据条数，避免N+1查询
         from sqlalchemy import func
@@ -440,7 +458,8 @@ async def get_mcc_accounts(
             try:
                 # 从字典中获取数据条数，如果没有则默认为0
                 data_count = data_count_map.get(mcc.id, 0)
-                result.append(_build_mcc_response(mcc, data_count))
+                owner_username = user_map.get(mcc.user_id, "未知")
+                result.append(_build_mcc_response(mcc, data_count, owner_username))
             except Exception as e:
                 # 如果单个MCC处理失败，记录错误但继续处理其他MCC
                 logger.error(f"处理MCC账号 {mcc.id} 时出错: {str(e)}", exc_info=True)
