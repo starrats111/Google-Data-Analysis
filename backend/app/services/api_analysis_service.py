@@ -102,7 +102,7 @@ class ApiAnalysisService:
         
         # 3. 按用户分组处理
         user_campaigns = {}
-            for data in google_ads_data:
+        for data in google_ads_data:
             data_user_id = data.user_id
             if data_user_id not in user_campaigns:
                 user_campaigns[data_user_id] = []
@@ -134,11 +134,11 @@ class ApiAnalysisService:
                 if acc:
                     affiliate_account = acc
                     break
-                
-                if not affiliate_account:
+            
+            if not affiliate_account:
                 skipped += 1
-                    continue
-                
+                continue
+            
             # 检查是否已存在
             existing = self.db.query(AnalysisResult).filter(
                 AnalysisResult.user_id == data_user_id,
