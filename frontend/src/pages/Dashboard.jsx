@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react'
-import { Card, Row, Col, Table, message, Segmented, Tag, Typography, Space, Statistic } from 'antd'
+import { Card, Row, Col, Table, message, Segmented, Tag, Typography, Space, Statistic, Input, Button, Spin, Select } from 'antd'
+import { SearchOutlined, RocketOutlined, CalendarOutlined, GlobalOutlined } from '@ant-design/icons'
 import { useAuth } from '../store/authStore'
 import api from '../services/api'
 import ReactECharts from 'echarts-for-react'
@@ -11,6 +12,17 @@ const Dashboard = () => {
   const [loading, setLoading] = useState(false)
   const [insightRange, setInsightRange] = useState('过去7天')
   const [insights, setInsights] = useState(null)
+  
+  // 节日日历状态
+  const [calendarCountry, setCalendarCountry] = useState('US')
+  const [calendarLoading, setCalendarLoading] = useState(false)
+  const [calendarData, setCalendarData] = useState(null)
+  
+  // 广告词生成状态
+  const [keywords, setKeywords] = useState('')
+  const [adCopyLoading, setAdCopyLoading] = useState(false)
+  const [adCopyData, setAdCopyData] = useState(null)
+  const [targetCountry, setTargetCountry] = useState('US')
 
   useEffect(() => {
     // 防止重复请求
@@ -115,20 +127,66 @@ const Dashboard = () => {
     )
   }
 
-  const { Text } = Typography
+  const { Text, Paragraph } = Typography
 
-  const campaignColumns = [
-    { title: '广告系列名', dataIndex: 'campaign_name', key: 'campaign_name', ellipsis: true },
-    { title: '佣金', dataIndex: 'commission', key: 'commission', align: 'right', render: (v) => Number(v || 0).toFixed(2) },
-    { title: '费用', dataIndex: 'cost', key: 'cost', align: 'right', render: (v) => Number(v || 0).toFixed(2) },
-    { title: '订单', dataIndex: 'orders', key: 'orders', align: 'right', render: (v) => Number(v || 0).toFixed(0) },
-    { title: 'ROI', dataIndex: 'roi', key: 'roi', align: 'right', render: (v) => (v === null || v === undefined ? '-' : Number(v).toFixed(2)) },
-    {
-      title: 'AI点评',
-      dataIndex: 'ai_commentary',
-      key: 'ai_commentary',
-      render: (v) => <Text type="secondary">{v || '-'}</Text>,
-    },
+  // 获取节日日历
+  const fetchCalendar = async () => {
+    if (!calendarCountry) {
+      message.warning('请输入国家代码')
+      return
+    }
+    setCalendarLoading(true)
+    try {
+      const res = await api.get(`/api/gemini/marketing-calendar/${calendarCountry.toUpperCase()}`)
+      if (res.data.success) {
+        setCalendarData(res.data)
+      } else {
+        message.error(res.data.message || '获取日历失败')
+      }
+    } catch (error) {
+      message.error('获取日历失败: ' + (error.response?.data?.detail || error.message))
+    } finally {
+      setCalendarLoading(false)
+    }
+  }
+
+  // 生成广告词
+  const generateAdCopy = async () => {
+    if (!keywords.trim()) {
+      message.warning('请输入关键词')
+      return
+    }
+    setAdCopyLoading(true)
+    try {
+      const keywordList = keywords.split(/[,，\s]+/).filter(k => k.trim())
+      const res = await api.post('/api/gemini/recommend-keywords', {
+        keywords: keywordList,
+        target_country: targetCountry
+      })
+      if (res.data.success) {
+        setAdCopyData(res.data)
+      } else {
+        message.error(res.data.message || '生成失败')
+      }
+    } catch (error) {
+      message.error('生成失败: ' + (error.response?.data?.detail || error.message))
+    } finally {
+      setAdCopyLoading(false)
+    }
+  }
+
+  // 国家选项
+  const countryOptions = [
+    { value: 'US', label: '🇺🇸 美国 (US)' },
+    { value: 'UK', label: '🇬🇧 英国 (UK)' },
+    { value: 'DE', label: '🇩🇪 德国 (DE)' },
+    { value: 'FR', label: '🇫🇷 法国 (FR)' },
+    { value: 'ES', label: '🇪🇸 西班牙 (ES)' },
+    { value: 'IT', label: '🇮🇹 意大利 (IT)' },
+    { value: 'AU', label: '🇦🇺 澳大利亚 (AU)' },
+    { value: 'CA', label: '🇨🇦 加拿大 (CA)' },
+    { value: 'JP', label: '🇯🇵 日本 (JP)' },
+    { value: 'KR', label: '🇰🇷 韩国 (KR)' },
   ]
 
   const trend = insights?.trend || []
@@ -201,29 +259,99 @@ const Dashboard = () => {
 
       <Row gutter={16}>
         <Col span={12}>
-          <Card title="数据最好的广告系列 Top3（按 ROI）" extra={<Text type="secondary">{insights?.start_date} ~ {insights?.end_date}</Text>}>
-            <Table
-              columns={campaignColumns}
-              dataSource={insights?.top3 || []}
-              rowKey="campaign_id"
-              loading={loading}
-              pagination={false}
-              size="small"
-              scroll={{ x: 900 }}
-            />
+          <Card 
+            title={<span><CalendarOutlined style={{ marginRight: 8 }} />营销节日日历</span>}
+            extra={
+              <Space>
+                <Select
+                  value={calendarCountry}
+                  onChange={setCalendarCountry}
+                  options={countryOptions}
+                  style={{ width: 150 }}
+                  placeholder="选择国家"
+                />
+                <Button 
+                  type="primary" 
+                  icon={<SearchOutlined />} 
+                  onClick={fetchCalendar}
+                  loading={calendarLoading}
+                >
+                  查询
+                </Button>
+              </Space>
+            }
+          >
+            <Spin spinning={calendarLoading}>
+              {calendarData ? (
+                <div style={{ maxHeight: 400, overflow: 'auto' }}>
+                  <Paragraph>
+                    <Text strong>📅 {calendarData.current_month} ~ {calendarData.next_month}</Text>
+                  </Paragraph>
+                  <div style={{ whiteSpace: 'pre-wrap', fontSize: 13, lineHeight: 1.8 }}>
+                    {calendarData.calendar}
+                  </div>
+                </div>
+              ) : (
+                <div style={{ textAlign: 'center', padding: 40, color: '#999' }}>
+                  <GlobalOutlined style={{ fontSize: 48, marginBottom: 16 }} />
+                  <p>选择国家并点击查询，获取该国家的营销节日日历</p>
+                  <p style={{ fontSize: 12 }}>支持：US, UK, DE, FR, ES, IT, AU, CA, JP, KR</p>
+                </div>
+              )}
+            </Spin>
           </Card>
         </Col>
         <Col span={12}>
-          <Card title="数据最差的广告系列 Bottom3（按 ROI）" extra={<Text type="secondary">{insights?.start_date} ~ {insights?.end_date}</Text>}>
-            <Table
-              columns={campaignColumns}
-              dataSource={insights?.bottom3 || []}
-              rowKey="campaign_id"
-              loading={loading}
-              pagination={false}
-              size="small"
-              scroll={{ x: 900 }}
-            />
+          <Card 
+            title={<span><RocketOutlined style={{ marginRight: 8 }} />AI 广告词生成</span>}
+            extra={
+              <Space>
+                <Select
+                  value={targetCountry}
+                  onChange={setTargetCountry}
+                  options={countryOptions}
+                  style={{ width: 120 }}
+                  placeholder="目标国家"
+                />
+                <Button 
+                  type="primary" 
+                  icon={<RocketOutlined />} 
+                  onClick={generateAdCopy}
+                  loading={adCopyLoading}
+                >
+                  生成
+                </Button>
+              </Space>
+            }
+          >
+            <Spin spinning={adCopyLoading}>
+              <Input.TextArea
+                placeholder="输入关键词（用逗号或空格分隔），例如：wireless earbuds, bluetooth headphones"
+                value={keywords}
+                onChange={(e) => setKeywords(e.target.value)}
+                rows={2}
+                style={{ marginBottom: 16 }}
+              />
+              {adCopyData ? (
+                <div style={{ maxHeight: 300, overflow: 'auto' }}>
+                  <Paragraph>
+                    <Text strong>🎯 关键词：</Text> {adCopyData.keywords?.join(', ')}
+                  </Paragraph>
+                  <Paragraph>
+                    <Text strong>🌍 目标国家：</Text> {adCopyData.target_country}
+                  </Paragraph>
+                  <div style={{ whiteSpace: 'pre-wrap', fontSize: 13, lineHeight: 1.8, background: '#f5f5f5', padding: 12, borderRadius: 8 }}>
+                    {adCopyData.recommendations}
+                  </div>
+                </div>
+              ) : (
+                <div style={{ textAlign: 'center', padding: 20, color: '#999' }}>
+                  <RocketOutlined style={{ fontSize: 32, marginBottom: 8 }} />
+                  <p>输入关键词，AI 将生成：</p>
+                  <p style={{ fontSize: 12 }}>推荐预算 · 建议CPC · 广告标题/描述 · 投放建议</p>
+                </div>
+              )}
+            </Spin>
           </Card>
         </Col>
       </Row>

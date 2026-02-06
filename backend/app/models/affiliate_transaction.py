@@ -24,6 +24,7 @@ class AffiliateTransaction(Base):
     # 平台和商户信息
     platform = Column(String(32), nullable=False, index=True)  # CG / RW / Linkhaitao / ...
     merchant = Column(String(128), nullable=True, index=True)
+    merchant_id = Column(String(32), nullable=True, index=True)  # 平台商家ID(MID)，如 154253
     
     # 交易标识
     transaction_id = Column(String(128), nullable=False)  # 平台唯一交易ID

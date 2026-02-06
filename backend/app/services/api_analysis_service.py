@@ -85,11 +85,11 @@ class ApiAnalysisService:
         
         # 1. 查询Google Ads数据
         query = self.db.query(GoogleAdsApiData).filter(
-            GoogleAdsApiData.date == target_date
-        )
-        if user_id:
+                GoogleAdsApiData.date == target_date
+            )
+            if user_id:
             query = query.filter(GoogleAdsApiData.user_id == user_id)
-        
+            
         google_ads_data = query.all()
         
         if not google_ads_data:
@@ -102,7 +102,7 @@ class ApiAnalysisService:
         
         # 3. 按用户分组处理
         user_campaigns = {}
-        for data in google_ads_data:
+            for data in google_ads_data:
             data_user_id = data.user_id
             if data_user_id not in user_campaigns:
                 user_campaigns[data_user_id] = []
@@ -134,11 +134,11 @@ class ApiAnalysisService:
                 if acc:
                     affiliate_account = acc
                     break
-            
-            if not affiliate_account:
+                
+                if not affiliate_account:
                 skipped += 1
-                continue
-            
+                    continue
+                
             # 检查是否已存在
             existing = self.db.query(AnalysisResult).filter(
                 AnalysisResult.user_id == data_user_id,

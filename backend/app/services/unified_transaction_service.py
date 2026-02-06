@@ -121,10 +121,16 @@ class UnifiedTransactionService:
         elif not isinstance(transaction_time, datetime):
             transaction_time = datetime.now()
         
+        # 提取merchant_id (MID)：各平台字段名不同
+        merchant_id = (
+            str(tx.get("merchant_id") or tx.get("brand_id") or tx.get("mcid") or "")
+        ).strip() or None
+        
         # 准备数据
         data = {
             "platform": platform,
             "merchant": tx.get("merchant") or tx.get("brand") or tx.get("brand_name"),
+            "merchant_id": merchant_id,
             "transaction_id": str(tx["transaction_id"]),
             "transaction_time": transaction_time,
             "order_amount": float(tx.get("order_amount", 0) or tx.get("sale_amount", 0) or 0),

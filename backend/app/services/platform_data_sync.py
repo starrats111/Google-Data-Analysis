@@ -271,6 +271,7 @@ class PlatformDataSyncService:
                         "commission_amount": total_commission,
                         "order_amount": float(tx.get("order_amount", 0) or tx.get("saleAmount", 0) or 0),
                         "merchant": tx.get("merchant") or tx.get("merchantName") or tx.get("mcid") or None,
+                        "brand_id": tx.get("brand_id") or tx.get("brandId") or tx.get("mcid") or None,
                     }
                     
                     transaction_service.normalize_and_save(
