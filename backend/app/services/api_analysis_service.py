@@ -337,7 +337,7 @@ class ApiAnalysisService:
         end_date: date,
         user_id: Optional[int] = None
     ) -> Dict:
-        """生成L7D分析"""
+        """生成L7D分析 - 按广告系列展示"""
         begin_date = end_date - timedelta(days=6)
         logger.info(f"=== 开始生成L7D分析 === 范围: {begin_date} ~ {end_date}")
         
@@ -354,86 +354,110 @@ class ApiAnalysisService:
             if not google_ads_data:
                 return {"success": True, "total_records": 0, "message": "没有数据"}
             
-            # 按平台分组
-            platform_data = {}
+            # 按广告系列分组（而不是按平台）
+            campaign_data = {}
             for data in google_ads_data:
-                if not data.extracted_platform_code:
-                    continue
-                key = (data.extracted_platform_code, data.user_id)
-                if key not in platform_data:
-                    platform_data[key] = {
-                        "platform_code": data.extracted_platform_code,
+                key = (data.campaign_id, data.user_id)
+                if key not in campaign_data:
+                    # 从广告系列名解析CID、MID、投放国家
+                    cid, mid, country = self._parse_campaign_name(data.campaign_name)
+                    campaign_data[key] = {
+                        "campaign_id": data.campaign_id,
+                        "campaign_name": data.campaign_name,
                         "user_id": data.user_id,
-                        "dates": set(),
-                        "campaigns": set(),
+                        "cid": cid,
+                        "mid": mid,
+                        "country": country,
+                        "dates_with_orders": set(),
                         "total_cost": 0.0,
                         "total_clicks": 0,
-                        "total_impressions": 0,
+                        "total_commission": 0.0,
+                        "total_orders": 0,
                         "max_cpc": 0.0,
                         "is_budget_lost": 0.0,
                         "is_rank_lost": 0.0,
                     }
-                platform_data[key]["dates"].add(data.date)
-                platform_data[key]["campaigns"].add(data.campaign_name)
-                platform_data[key]["total_cost"] += (data.cost or 0)
-                platform_data[key]["total_clicks"] += int(data.clicks or 0)
-                platform_data[key]["total_impressions"] += int(data.impressions or 0)
-                platform_data[key]["max_cpc"] = max(platform_data[key]["max_cpc"], (data.cpc or 0))
-                platform_data[key]["is_budget_lost"] = max(platform_data[key]["is_budget_lost"], (data.is_budget_lost or 0))
-                platform_data[key]["is_rank_lost"] = max(platform_data[key]["is_rank_lost"], (data.is_rank_lost or 0))
+                campaign_data[key]["total_cost"] += (data.cost or 0)
+                campaign_data[key]["total_clicks"] += int(data.clicks or 0)
+                campaign_data[key]["max_cpc"] = max(campaign_data[key]["max_cpc"], (data.cpc or 0))
+                campaign_data[key]["is_budget_lost"] = max(campaign_data[key]["is_budget_lost"], (data.is_budget_lost or 0))
+                campaign_data[key]["is_rank_lost"] = max(campaign_data[key]["is_rank_lost"], (data.is_rank_lost or 0))
             
-            results = []
-            for key, pdata in platform_data.items():
-                affiliate_account = self.db.query(AffiliateAccount).join(
-                    AffiliatePlatform
-                ).filter(
-                    AffiliateAccount.user_id == pdata["user_id"],
-                    AffiliatePlatform.platform_name == pdata["platform_code"],
+            # 按用户分组生成结果
+            user_results = {}
+            for key, cdata in campaign_data.items():
+                data_user_id = cdata["user_id"]
+                
+                # 计算保守EPC和保守ROI
+                cost = cdata["total_cost"]
+                clicks = cdata["total_clicks"]
+                commission = cdata["total_commission"]
+                orders = cdata["total_orders"]
+                order_days = len(cdata["dates_with_orders"])
+                
+                conservative_epc = (commission * 0.72 / clicks) if clicks > 0 else 0
+                conservative_roi = ((commission * 0.72 - cost) / cost) if cost > 0 else None
+                
+                # 生成操作指令
+                operation = self._generate_l7d_operation(
+                    conservative_roi, cdata["is_budget_lost"], cdata["is_rank_lost"], 
+                    order_days, cdata["max_cpc"], orders
+                )
+                
+                row = {
+                    "账号=CID": cdata["cid"],
+                    "广告系列名": cdata["campaign_name"],
+                    "MID": cdata["mid"],
+                    "投放国家": cdata["country"],
+                    "L7D点击": clicks,
+                    "L7D佣金": round(commission, 2),
+                    "L7D花费": round(cost, 2),
+                    "L7D出单天数": order_days,
+                    "当前Max CPC": round(cdata["max_cpc"], 4),
+                    "IS Budget丢失": f"{cdata['is_budget_lost'] * 100:.1f}%" if cdata['is_budget_lost'] > 0 else "-",
+                    "IS Rank丢失": f"{cdata['is_rank_lost'] * 100:.1f}%" if cdata['is_rank_lost'] > 0 else "-",
+                    "保守EPC": round(conservative_epc, 4),
+                    "保守ROI": f"{conservative_roi * 100:.1f}%" if conservative_roi is not None else "-",
+                    "操作指令": operation,
+                }
+                
+                if data_user_id not in user_results:
+                    user_results[data_user_id] = []
+                user_results[data_user_id].append(row)
+            
+            # 保存到数据库
+            total_saved = 0
+            for data_user_id, rows in user_results.items():
+                # 找一个联盟账号用于关联
+                affiliate_account = self.db.query(AffiliateAccount).filter(
+                    AffiliateAccount.user_id == data_user_id,
                     AffiliateAccount.is_active == True
                 ).first()
                 
                 if not affiliate_account:
                     continue
                 
-                cost = pdata["total_cost"]
-                clicks = pdata["total_clicks"]
-                cpc = (cost / clicks) if clicks > 0 else 0
-                
-                results.append({
-                    "广告系列名": ", ".join(list(pdata["campaigns"])[:3]) + ("..." if len(pdata["campaigns"]) > 3 else ""),
-                    "平台": pdata["platform_code"],
-                    "账号": affiliate_account.account_name,
-                    "数据天数": len(pdata["dates"]),
-                    "广告系列数": len(pdata["campaigns"]),
-                    "L7D费用": round(cost, 2),
-                    "L7D点击": clicks,
-                    "L7D展示": pdata["total_impressions"],
-                    "平均CPC": round(cpc, 4),
-                    "当前Max CPC": round(pdata["max_cpc"], 4),
-                    "IS Budget丢失": f"{pdata['is_budget_lost'] * 100:.1f}%",
-                    "IS Rank丢失": f"{pdata['is_rank_lost'] * 100:.1f}%",
-                })
-                
-                # 保存到数据库
-                result_data = {"data": results[-1:]}  # 只保存当前这条
-                
                 # 检查是否已存在
                 existing = self.db.query(AnalysisResult).filter(
-                    AnalysisResult.user_id == pdata["user_id"],
-                    AnalysisResult.affiliate_account_id == affiliate_account.id,
+                    AnalysisResult.user_id == data_user_id,
                     AnalysisResult.analysis_date == end_date,
                     AnalysisResult.analysis_type == "l7d"
                 ).first()
                 
-                if not existing:
+                if existing:
+                    # 更新现有记录
+                    existing.result_data = {"data": rows}
+                else:
+                    # 创建新记录
                     analysis_result = AnalysisResult(
-                        user_id=pdata["user_id"],
+                        user_id=data_user_id,
                         affiliate_account_id=affiliate_account.id,
                         analysis_date=end_date,
                         analysis_type="l7d",
-                        result_data={"data": results}
+                        result_data={"data": rows}
                     )
                     self.db.add(analysis_result)
+                total_saved += len(rows)
             
             # 提交数据库
             try:
@@ -446,10 +470,71 @@ class ApiAnalysisService:
                 "success": True,
                 "begin_date": begin_date.isoformat(),
                 "end_date": end_date.isoformat(),
-                "total_records": len(results),
-                "results": results
+                "total_records": total_saved
             }
             
         except Exception as e:
             logger.error(f"L7D分析失败: {e}", exc_info=True)
             return {"success": False, "message": str(e)}
+    
+    def _parse_campaign_name(self, campaign_name: str) -> tuple:
+        """从广告系列名解析CID、MID、投放国家"""
+        import re
+        # 示例格式: 001-RW-bofrost-US-0126-126966
+        # 或: 002-RW-revisionskincare-US-0126-116022
+        parts = campaign_name.split("-") if campaign_name else []
+        
+        cid = ""
+        mid = ""
+        country = ""
+        
+        if len(parts) >= 4:
+            # 尝试提取国家代码（2个大写字母）
+            for p in parts:
+                if re.match(r'^[A-Z]{2}$', p):
+                    country = p
+                    break
+            
+            # 尝试提取MID（最后的数字）
+            for p in reversed(parts):
+                if p.isdigit():
+                    mid = p
+                    break
+        
+        return cid, mid, country
+    
+    def _generate_l7d_operation(
+        self,
+        conservative_roi: Optional[float],
+        is_budget_lost: float,
+        is_rank_lost: float,
+        order_days: int,
+        max_cpc: float,
+        orders: int
+    ) -> str:
+        """生成L7D操作指令"""
+        instructions = []
+        
+        # ROI判断
+        if conservative_roi is not None:
+            if conservative_roi < -0.5:
+                return "关停"
+            elif conservative_roi < 0:
+                instructions.append("ROI为负")
+        
+        # 预算丢失
+        if is_budget_lost > 0.2:
+            instructions.append("加预算")
+        
+        # 排名丢失
+        if is_rank_lost > 0.3:
+            instructions.append("提高CPC")
+        
+        # 出单情况
+        if order_days == 0 and orders == 0:
+            if instructions:
+                instructions.append("观察")
+            else:
+                return "样本不足"
+        
+        return "；".join(instructions) if instructions else "稳定运行"
