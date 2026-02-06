@@ -87,9 +87,9 @@ class ApiAnalysisService:
         query = self.db.query(GoogleAdsApiData).filter(
                 GoogleAdsApiData.date == target_date
             )
-            if user_id:
+        if user_id:
             query = query.filter(GoogleAdsApiData.user_id == user_id)
-            
+        
         google_ads_data = query.all()
         
         if not google_ads_data:
