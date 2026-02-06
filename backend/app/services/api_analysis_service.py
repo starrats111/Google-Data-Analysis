@@ -517,6 +517,7 @@ class ApiAnalysisService:
         import re
         # 示例格式: 001-RW-bofrost-US-0126-126966
         # 或: 002-RW-revisionskincare-US-0126-116022
+        # 格式: 序号-平台-商家名-国家-日期-MID
         parts = campaign_name.split("-") if campaign_name else []
         
         cid = ""
@@ -524,15 +525,17 @@ class ApiAnalysisService:
         country = ""
         
         if len(parts) >= 4:
-            # 尝试提取国家代码（2个大写字母）
-            for p in parts:
-                if re.match(r'^[A-Z]{2}$', p):
+            # 国家代码通常在平台代码之后（跳过前两个：序号和平台）
+            # 遍历找到2个大写字母的国家代码，但排除平台代码(RW, CG等)
+            platform_codes = {"RW", "CG", "PM", "LH", "LS"}  # 已知平台代码
+            for p in parts[2:]:  # 从第3个元素开始找
+                if re.match(r'^[A-Z]{2}$', p) and p not in platform_codes:
                     country = p
                     break
             
-            # 尝试提取MID（最后的数字）
+            # 尝试提取MID（最后的纯数字部分，通常6位）
             for p in reversed(parts):
-                if p.isdigit():
+                if p.isdigit() and len(p) >= 5:
                     mid = p
                     break
         
