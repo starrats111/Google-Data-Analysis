@@ -400,6 +400,7 @@ class ApiAnalysisService:
                 cpc = (cost / clicks) if clicks > 0 else 0
                 
                 results.append({
+                    "广告系列名": ", ".join(list(pdata["campaigns"])[:3]) + ("..." if len(pdata["campaigns"]) > 3 else ""),
                     "平台": pdata["platform_code"],
                     "账号": affiliate_account.account_name,
                     "数据天数": len(pdata["dates"]),
@@ -408,10 +409,38 @@ class ApiAnalysisService:
                     "L7D点击": clicks,
                     "L7D展示": pdata["total_impressions"],
                     "平均CPC": round(cpc, 4),
-                    "最高CPC": round(pdata["max_cpc"], 4),
+                    "当前Max CPC": round(pdata["max_cpc"], 4),
                     "IS Budget丢失": f"{pdata['is_budget_lost'] * 100:.1f}%",
                     "IS Rank丢失": f"{pdata['is_rank_lost'] * 100:.1f}%",
                 })
+                
+                # 保存到数据库
+                result_data = {"data": results[-1:]}  # 只保存当前这条
+                
+                # 检查是否已存在
+                existing = self.db.query(AnalysisResult).filter(
+                    AnalysisResult.user_id == pdata["user_id"],
+                    AnalysisResult.affiliate_account_id == affiliate_account.id,
+                    AnalysisResult.analysis_date == end_date,
+                    AnalysisResult.analysis_type == "l7d"
+                ).first()
+                
+                if not existing:
+                    analysis_result = AnalysisResult(
+                        user_id=pdata["user_id"],
+                        affiliate_account_id=affiliate_account.id,
+                        analysis_date=end_date,
+                        analysis_type="l7d",
+                        result_data={"data": results}
+                    )
+                    self.db.add(analysis_result)
+            
+            # 提交数据库
+            try:
+                self.db.commit()
+            except Exception as e:
+                logger.error(f"保存L7D分析失败: {e}")
+                self.db.rollback()
             
             return {
                 "success": True,
