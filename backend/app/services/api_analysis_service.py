@@ -418,36 +418,39 @@ class ApiAnalysisService:
             for key, cdata in campaign_data.items():
                 data_user_id = cdata["user_id"]
                 platform_code = cdata.get("platform_code")
+                mid = cdata.get("mid")  # 商家ID
                 
-                # 从PlatformData获取佣金和订单数
+                # 从AffiliateTransaction获取佣金和订单数（按MID匹配）
                 commission = 0.0
                 orders = 0
                 order_days = 0  # 有订单的天数
                 
-                if platform_code:
-                    # 找到对应的联盟账号
-                    affiliate_account = self.db.query(AffiliateAccount).join(
-                        AffiliatePlatform
-                    ).filter(
-                        AffiliateAccount.user_id == data_user_id,
-                        AffiliatePlatform.platform_name == platform_code,
-                        AffiliateAccount.is_active == True
-                    ).first()
+                if platform_code and mid:
+                    # 从AffiliateTransaction表按商家ID(MID)获取数据
+                    from app.models.affiliate_transaction import AffiliateTransaction
+                    from sqlalchemy import func, and_, cast, Date
                     
-                    if affiliate_account:
-                        # 查询L7D期间的PlatformData
-                        platform_data_list = self.db.query(PlatformData).filter(
-                            PlatformData.affiliate_account_id == affiliate_account.id,
-                            PlatformData.date >= begin_date,
-                            PlatformData.date <= end_date
-                        ).all()
-                        
-                        for pd in platform_data_list:
-                            commission += (pd.commission or 0)
-                            orders += (pd.orders or 0)
-                            # 统计有订单的天数
-                            if pd.orders and pd.orders > 0:
-                                order_days += 1
+                    # 查询该商家在L7D期间的交易
+                    # merchant字段可能包含MID或商家名称
+                    txn_query = self.db.query(
+                        func.sum(AffiliateTransaction.commission_amount).label('total_commission'),
+                        func.count(AffiliateTransaction.id).label('total_orders'),
+                        func.count(func.distinct(func.date(AffiliateTransaction.transaction_time))).label('order_days')
+                    ).filter(
+                        AffiliateTransaction.user_id == data_user_id,
+                        AffiliateTransaction.platform == platform_code,
+                        AffiliateTransaction.status == "approved",
+                        func.date(AffiliateTransaction.transaction_time) >= begin_date,
+                        func.date(AffiliateTransaction.transaction_time) <= end_date,
+                        # 按MID匹配商家（MID可能在merchant字段中）
+                        AffiliateTransaction.merchant.like(f"%{mid}%")
+                    )
+                    
+                    result = txn_query.first()
+                    if result:
+                        commission = float(result.total_commission or 0)
+                        orders = int(result.total_orders or 0)
+                        order_days = int(result.order_days or 0)
                 
                 # 计算保守EPC和保守ROI
                 cost = cdata["total_cost"]
