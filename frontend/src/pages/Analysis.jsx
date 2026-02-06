@@ -292,19 +292,29 @@ const Analysis = ({ mode }) => {
     
     try {
       // 将数据转换为 API 需要的格式
+      // 辅助函数：安全解析数字
+      const safeFloat = (val) => {
+        const num = parseFloat(val)
+        return isNaN(num) ? 0 : num
+      }
+      const safeInt = (val) => {
+        const num = parseInt(val)
+        return isNaN(num) ? 0 : num
+      }
+      
       const campaigns = data.map(row => ({
-        campaign_name: row['广告系列名'] || row['广告系列'] || row['系列名'] || '',
-        cost: parseFloat(row['L7D花费'] || row['费用'] || row['花费'] || 0),
-        clicks: parseInt(row['L7D点击'] || row['点击'] || 0),
-        impressions: parseInt(row['L7D展示'] || row['展示'] || 0),
-        cpc: parseFloat(row['CPC'] || row['L7D_CPC'] || 0),
-        budget: parseFloat(row['预算'] || row['日预算'] || 0),
-        conservative_epc: parseFloat(row['保守EPC'] || row['L7D保守EPC'] || 0),
-        is_budget_lost: parseFloat(row['Budget丢失'] || row['IS Budget丢失'] || row['预算丢失'] || 0),
-        is_rank_lost: parseFloat(row['Rank丢失'] || row['IS Rank丢失'] || row['排名丢失'] || 0),
-        orders: parseInt(row['L7D订单'] || row['订单'] || row['出单'] || 0),
-        order_days: parseInt(row['L7D出单天数'] || row['出单天数'] || 0),
-        commission: parseFloat(row['L7D佣金'] || row['佣金'] || 0)
+        campaign_name: String(row['广告系列名'] || row['广告系列'] || row['系列名'] || ''),
+        cost: safeFloat(row['L7D花费'] || row['费用'] || row['花费']),
+        clicks: safeInt(row['L7D点击'] || row['点击']),
+        impressions: safeInt(row['L7D展示'] || row['展示']),
+        cpc: safeFloat(row['CPC'] || row['L7D_CPC']),
+        budget: safeFloat(row['预算'] || row['日预算']),
+        conservative_epc: safeFloat(row['保守EPC'] || row['L7D保守EPC']),
+        is_budget_lost: safeFloat(row['Budget丢失'] || row['IS Budget丢失'] || row['预算丢失']),
+        is_rank_lost: safeFloat(row['Rank丢失'] || row['IS Rank丢失'] || row['排名丢失']),
+        orders: safeInt(row['L7D订单'] || row['订单'] || row['出单']),
+        order_days: safeInt(row['L7D出单天数'] || row['出单天数']),
+        commission: safeFloat(row['L7D佣金'] || row['佣金'])
       })).filter(c => c.campaign_name)  // 过滤掉没有名称的
       
       if (campaigns.length === 0) {
@@ -325,7 +335,18 @@ const Analysis = ({ mode }) => {
         message.error(response.data.message || 'AI 分析失败')
       }
     } catch (error) {
-      message.error('AI 分析失败: ' + (error.response?.data?.detail || error.message))
+      console.error('AI 分析错误:', error)
+      // 更好地处理错误信息
+      let errMsg = 'AI 分析失败'
+      if (error.response?.data?.detail) {
+        const detail = error.response.data.detail
+        errMsg = typeof detail === 'string' ? detail : JSON.stringify(detail)
+      } else if (error.response?.data?.message) {
+        errMsg = error.response.data.message
+      } else if (error.message) {
+        errMsg = error.message
+      }
+      message.error(errMsg)
     } finally {
       setAiAnalyzing(false)
     }
