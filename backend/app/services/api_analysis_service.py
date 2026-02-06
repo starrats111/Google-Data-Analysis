@@ -420,31 +420,45 @@ class ApiAnalysisService:
                 platform_code = cdata.get("platform_code")
                 mid = cdata.get("mid")  # 商家ID
                 
-                # 从AffiliateTransaction获取佣金和订单数（按MID匹配）
+                # 从AffiliateTransaction获取佣金和订单数
                 commission = 0.0
                 orders = 0
                 order_days = 0  # 有订单的天数
                 
-                if platform_code and mid:
-                    # 从AffiliateTransaction表按商家ID(MID)获取数据
+                # 从广告系列名提取商家名（格式: 序号-平台-商家名-国家-日期-MID）
+                campaign_name = cdata.get("campaign_name", "")
+                merchant_name = self._extract_merchant_from_campaign(campaign_name)
+                
+                if merchant_name:
                     from app.models.affiliate_transaction import AffiliateTransaction
-                    from sqlalchemy import func, and_, cast, Date
+                    from sqlalchemy import func
                     
-                    # 查询该商家在L7D期间的交易
-                    # merchant字段可能包含MID或商家名称
+                    # 平台代码映射
+                    platform_map = {
+                        "LH": "linkhaitao", "LH1": "linkhaitao",
+                        "PM": "pepperjam", "PM1": "pepperjam",
+                        "CG": "collabglow", "CG1": "collabglow",
+                        "RW": "rakuten", "RW1": "rakuten",
+                    }
+                    txn_platform = platform_map.get(platform_code, platform_code.lower() if platform_code else "")
+                    
+                    # 查询该商家在L7D期间的交易（用商家名模糊匹配）
                     txn_query = self.db.query(
                         func.sum(AffiliateTransaction.commission_amount).label('total_commission'),
                         func.count(AffiliateTransaction.id).label('total_orders'),
                         func.count(func.distinct(func.date(AffiliateTransaction.transaction_time))).label('order_days')
                     ).filter(
                         AffiliateTransaction.user_id == data_user_id,
-                        AffiliateTransaction.platform == platform_code,
                         AffiliateTransaction.status == "approved",
                         func.date(AffiliateTransaction.transaction_time) >= begin_date,
                         func.date(AffiliateTransaction.transaction_time) <= end_date,
-                        # 按MID匹配商家（MID可能在merchant字段中）
-                        AffiliateTransaction.merchant.like(f"%{mid}%")
+                        # 商家名模糊匹配（忽略大小写和空格）
+                        func.lower(func.replace(AffiliateTransaction.merchant, ' ', '')).like(f"%{merchant_name.lower()}%")
                     )
+                    
+                    # 如果有平台信息，加上平台过滤
+                    if txn_platform:
+                        txn_query = txn_query.filter(AffiliateTransaction.platform == txn_platform)
                     
                     result = txn_query.first()
                     if result:
@@ -554,7 +568,7 @@ class ApiAnalysisService:
         if len(parts) >= 4:
             # 国家代码通常在平台代码之后（跳过前两个：序号和平台）
             # 遍历找到2个大写字母的国家代码，但排除平台代码(RW, CG等)
-            platform_codes = {"RW", "CG", "PM", "LH", "LS"}  # 已知平台代码
+            platform_codes = {"RW", "CG", "PM", "LH", "LS", "RW1", "CG1", "PM1", "LH1"}  # 已知平台代码
             for p in parts[2:]:  # 从第3个元素开始找
                 if re.match(r'^[A-Z]{2}$', p) and p not in platform_codes:
                     country = p
@@ -567,6 +581,23 @@ class ApiAnalysisService:
                     break
         
         return cid, mid, country
+    
+    def _extract_merchant_from_campaign(self, campaign_name: str) -> str:
+        """
+        从广告系列名提取商家名
+        格式: 序号-平台-商家名-国家-日期-MID
+        示例: 117-LH1-hotelcollection-US-1226-154253 -> hotelcollection
+        """
+        if not campaign_name:
+            return ""
+        
+        parts = campaign_name.split("-")
+        if len(parts) >= 3:
+            # 第3个部分是商家名（索引2）
+            merchant = parts[2]
+            return merchant
+        
+        return ""
     
     def _generate_l7d_operation(
         self,
