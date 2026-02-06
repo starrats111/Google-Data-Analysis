@@ -289,7 +289,7 @@ class ApiOnlyAnalysisService:
         user_id: int,
         account_id: Optional[int] = None
     ) -> Optional[AffiliateAccount]:
-        """查找对应的联盟账号"""
+        """查找对应的联盟账号 - 使用platform_name匹配（如PM、LH、CG等）"""
         if not platform_code:
             return None
         
@@ -301,17 +301,17 @@ class ApiOnlyAnalysisService:
                 AffiliateAccount.is_active == True
             ).first()
             if account:
-                # 验证平台代码是否匹配
-                if account.platform and account.platform.platform_code == platform_code.upper():
+                # 验证平台名称是否匹配（用platform_name而不是platform_code）
+                if account.platform and account.platform.platform_name == platform_code.upper():
                     return account
             return None
         
-        # 否则按平台代码和商家ID查找
+        # 按平台名称查找（platform_name = "PM"/"LH" 等，而不是platform_code = URL）
         query = self.db.query(AffiliateAccount).join(
             AffiliatePlatform
         ).filter(
             AffiliateAccount.user_id == user_id,
-            AffiliatePlatform.platform_code == platform_code.upper(),
+            AffiliatePlatform.platform_name == platform_code.upper(),
             AffiliateAccount.is_active == True
         )
         
@@ -324,12 +324,14 @@ class ApiOnlyAnalysisService:
             return account
         
         # 如果没找到匹配的账号代码，返回该平台下的第一个账号
-        if not merchant_id:
-            account = query.first()
-            if account:
-                return account
-        
-        return None
+        base_query = self.db.query(AffiliateAccount).join(
+            AffiliatePlatform
+        ).filter(
+            AffiliateAccount.user_id == user_id,
+            AffiliatePlatform.platform_name == platform_code.upper(),
+            AffiliateAccount.is_active == True
+        )
+        return base_query.first()
     
     def _generate_operation_instruction(
         self,

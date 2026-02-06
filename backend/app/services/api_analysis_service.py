@@ -170,7 +170,7 @@ class ApiAnalysisService:
                 # 这里需要为每个广告系列创建记录，但为了简化，我们先创建汇总记录
                 # 实际应用中可能需要更细粒度的处理
                 
-                analysis_results.append({
+                result_row = {
                     "date": target_date.isoformat(),
                     "account_id": account_id,
                     "account_name": account.account_name,
@@ -192,7 +192,32 @@ class ApiAnalysisService:
                     "is_budget_lost": google_data["is_budget_lost"],
                     "is_rank_lost": google_data["is_rank_lost"],
                     "operation_instruction": operation_instruction,
-                })
+                }
+                analysis_results.append(result_row)
+                
+                # 保存到数据库
+                from app.models.analysis_result import AnalysisResult
+                
+                # 检查是否已存在相同记录
+                existing = self.db.query(AnalysisResult).filter(
+                    AnalysisResult.user_id == account.user_id,
+                    AnalysisResult.affiliate_account_id == account_id,
+                    AnalysisResult.analysis_date == target_date,
+                    AnalysisResult.analysis_type == 'daily'
+                ).first()
+                
+                if not existing:
+                    analysis_result = AnalysisResult(
+                        user_id=account.user_id,
+                        affiliate_account_id=account_id,
+                        analysis_date=target_date,
+                        analysis_type='daily',
+                        result_data={"data": [result_row]}
+                    )
+                    self.db.add(analysis_result)
+            
+            # 提交数据库更改
+            self.db.commit()
             
             return {
                 "success": True,
