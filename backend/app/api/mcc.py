@@ -1102,35 +1102,17 @@ async def sync_all_mccs(
     db: Session = Depends(get_db)
 ):
     """
-    手动触发同步所有活跃MCC的数据
-    
-    请求体参数：
-    - target_date: 目标日期 (YYYY-MM-DD，可选，默认昨天)
+    手动触发同步所有活跃MCC的数据（默认同步最近7天）
     """
     import json
     
-    # 解析请求参数
-    try:
-        body = await request.body()
-        request_data = json.loads(body) if body else {}
-    except Exception:
-        request_data = {}
-    
-    target_date_str = request_data.get("target_date")
-    
-    if target_date_str:
-        try:
-            target_date = datetime.strptime(target_date_str, "%Y-%m-%d").date()
-        except ValueError:
-            raise HTTPException(status_code=400, detail="日期格式错误")
-    else:
-        target_date = date.today() - timedelta(days=1)
-    
-    # 获取活跃MCC数量
-    active_count = db.query(GoogleMccAccount).filter(
+    # 获取当前用户的活跃MCC
+    active_mccs = db.query(GoogleMccAccount).filter(
         GoogleMccAccount.is_active == True,
         GoogleMccAccount.user_id == current_user.id
-    ).count()
+    ).all()
+    
+    active_count = len(active_mccs)
     
     if active_count == 0:
         return {
@@ -1138,16 +1120,40 @@ async def sync_all_mccs(
             "message": "没有活跃的MCC账号"
         }
     
-    # 在后台执行同步
+    # 同步最近7天
+    end_date = date.today() - timedelta(days=1)
+    begin_date = date.today() - timedelta(days=7)
+    
+    # 在后台执行同步（每个MCC同步7天）
     def sync_all_task():
         from app.database import SessionLocal
-        from app.services.google_ads_service_account_sync import GoogleAdsServiceAccountSync
+        from app.services.google_ads_api_sync import GoogleAdsApiSyncService
+        import time
         
         task_db = SessionLocal()
         try:
-            sync_service = GoogleAdsServiceAccountSync(task_db)
-            result = sync_service.sync_all_mccs(target_date=target_date)
-            logger.info(f"批量同步完成: {result}")
+            sync_service = GoogleAdsApiSyncService(task_db)
+            
+            # 重新获取MCC列表
+            mccs = task_db.query(GoogleMccAccount).filter(
+                GoogleMccAccount.is_active == True,
+                GoogleMccAccount.user_id == current_user.id
+            ).all()
+            
+            for mcc in mccs:
+                logger.info(f"开始同步 MCC {mcc.mcc_id} 的7天数据")
+                current_date = begin_date
+                while current_date <= end_date:
+                    try:
+                        result = sync_service.sync_mcc_data(mcc.id, current_date, force_refresh=False)
+                        if result.get("quota_exhausted"):
+                            logger.warning(f"配额限制，停止同步")
+                            break
+                    except Exception as e:
+                        logger.error(f"同步 {mcc.mcc_id} {current_date} 失败: {e}")
+                    current_date += timedelta(days=1)
+                    time.sleep(0.3)
+                logger.info(f"MCC {mcc.mcc_id} 同步完成")
         except Exception as e:
             logger.error(f"批量同步失败: {e}", exc_info=True)
         finally:
@@ -1158,8 +1164,9 @@ async def sync_all_mccs(
     return {
         "success": True,
         "async": True,
-        "message": f"🔄 已开始后台同步 {active_count} 个MCC账号（{target_date.isoformat()}）",
-        "target_date": target_date.isoformat(),
+        "message": f"🔄 已开始后台同步 {active_count} 个MCC账号（最近7天: {begin_date.isoformat()} ~ {end_date.isoformat()}）",
+        "begin_date": begin_date.isoformat(),
+        "end_date": end_date.isoformat(),
         "mcc_count": active_count
     }
 
