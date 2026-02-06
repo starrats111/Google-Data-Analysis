@@ -392,11 +392,12 @@ class ApiAnalysisService:
         user_id: int
     ) -> Optional[AffiliateAccount]:
         """查找对应的联盟账号"""
+        # 使用 platform_name 匹配（如 PM, LH, CG 等），而不是 platform_code（URL）
         query = self.db.query(AffiliateAccount).join(
             AffiliateAccount.platform
         ).filter(
             AffiliateAccount.user_id == user_id,
-            AffiliateAccount.platform.has(platform_code=platform_code),
+            AffiliateAccount.platform.has(platform_name=platform_code),
             AffiliateAccount.is_active == True
         )
         
