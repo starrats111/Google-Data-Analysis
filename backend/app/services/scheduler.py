@@ -143,7 +143,7 @@ def sync_google_ads_data_job():
         # 批量同步所有活跃MCC
         result = sync_service.sync_all_mccs(
             target_date=target_date,
-            only_enabled=True  # 只同步启用状态的广告系列
+            only_enabled=False  # 同步所有状态的广告系列（包括已暂停）
         )
         
         if result.get("success"):
@@ -164,6 +164,66 @@ def sync_google_ads_data_job():
         logger.error(f"✗ Google Ads数据同步任务异常: {e}", exc_info=True)
     finally:
         db.close()
+
+
+def daily_auto_sync_and_analysis_job():
+    """
+    每天早上4:00自动执行的统一任务：
+    1. 拉取Google Ads数据
+    2. 拉取广告平台数据
+    3. 生成每日分析
+    4. 如果是分析日（周一、三、五），生成L7D分析
+    """
+    logger.info("=" * 60)
+    logger.info("【每日自动任务开始】")
+    logger.info(f"当前时间: {datetime.now(BEIJING_TZ).strftime('%Y-%m-%d %H:%M:%S')} (北京时间)")
+    
+    today = date.today()
+    weekday = today.weekday()  # 0=周一, 1=周二, ..., 6=周日
+    is_analysis_day = weekday in [0, 2, 4]  # 周一、三、五
+    
+    logger.info(f"今天是: 星期{['一','二','三','四','五','六','日'][weekday]}")
+    logger.info(f"是否分析日: {'是' if is_analysis_day else '否'}")
+    logger.info("=" * 60)
+    
+    # 步骤1: 同步Google Ads数据
+    logger.info("\n【步骤1/4】同步Google Ads数据...")
+    try:
+        sync_google_ads_data_job()
+        logger.info("✓ Google Ads数据同步完成")
+    except Exception as e:
+        logger.error(f"✗ Google Ads数据同步失败: {e}")
+    
+    # 步骤2: 同步平台数据
+    logger.info("\n【步骤2/4】同步广告平台数据...")
+    try:
+        sync_platform_data_job()
+        logger.info("✓ 广告平台数据同步完成")
+    except Exception as e:
+        logger.error(f"✗ 广告平台数据同步失败: {e}")
+    
+    # 步骤3: 生成每日分析
+    logger.info("\n【步骤3/4】生成每日分析...")
+    try:
+        daily_analysis_job()
+        logger.info("✓ 每日分析生成完成")
+    except Exception as e:
+        logger.error(f"✗ 每日分析生成失败: {e}")
+    
+    # 步骤4: 如果是分析日，生成L7D分析
+    if is_analysis_day:
+        logger.info("\n【步骤4/4】今天是分析日，生成L7D分析...")
+        try:
+            weekly_l7d_analysis_job()
+            logger.info("✓ L7D分析生成完成")
+        except Exception as e:
+            logger.error(f"✗ L7D分析生成失败: {e}")
+    else:
+        logger.info("\n【步骤4/4】今天不是分析日，跳过L7D分析")
+    
+    logger.info("\n" + "=" * 60)
+    logger.info("【每日自动任务完成】")
+    logger.info("=" * 60)
 
 
 def sync_google_ads_historical_job():
@@ -543,41 +603,22 @@ def start_scheduler():
         return
     
     try:
-        # 平台数据同步：每天北京时间4点和16点
+        # 【核心任务】每天早上4:00 - 自动同步数据并生成分析
+        # 包含：Google Ads同步 + 平台数据同步 + 每日分析 + L7D分析（周一三五）
+        scheduler.add_job(
+            daily_auto_sync_and_analysis_job,
+            trigger=CronTrigger(hour=4, minute=0),
+            id='daily_auto_sync_and_analysis',
+            name='每日自动同步与分析（4:00）',
+            replace_existing=True
+        )
+        
+        # 平台数据补充同步：每天北京时间16点（下午再同步一次，确保数据完整）
         scheduler.add_job(
             sync_platform_data_job,
-            trigger=CronTrigger(hour="4,16", minute=0),
-            id='sync_platform_data',
-            name='同步平台数据',
-            replace_existing=True
-        )
-        
-        # Google Ads数据同步：每天北京时间凌晨4点（使用服务账号模式）
-        from app.config import settings
-        sync_hour = settings.google_ads_sync_hour
-        scheduler.add_job(
-            sync_google_ads_data_job,
-            trigger=CronTrigger(hour=sync_hour, minute=0),
-            id='sync_google_ads_data',
-            name='同步Google Ads数据（服务账号）',
-            replace_existing=True
-        )
-        
-        # 每日分析：每天北京时间早上8点05分（在Google Ads数据同步之后）
-        scheduler.add_job(
-            daily_analysis_job,
-            trigger=CronTrigger(hour=8, minute=5),  # 延迟5分钟，确保数据同步完成
-            id='daily_analysis',
-            name='每日分析',
-            replace_existing=True
-        )
-
-        # 每周L7D分析：每周一/三/五北京时间早上8点10分
-        scheduler.add_job(
-            weekly_l7d_analysis_job,
-            trigger=CronTrigger(day_of_week="mon,wed,fri", hour=8, minute=10),
-            id='weekly_l7d_analysis',
-            name='每周L7D分析',
+            trigger=CronTrigger(hour=16, minute=0),
+            id='sync_platform_data_afternoon',
+            name='平台数据补充同步（16:00）',
             replace_existing=True
         )
 
@@ -600,7 +641,15 @@ def start_scheduler():
         )
         
         scheduler.start()
+        logger.info("=" * 60)
         logger.info("定时任务调度器已启动")
+        logger.info("已注册任务:")
+        logger.info("  - 每日自动同步与分析: 每天 04:00")
+        logger.info("    (Google Ads + 平台数据 + 每日分析 + L7D分析[周一三五])")
+        logger.info("  - 平台数据补充同步: 每天 16:00")
+        logger.info("  - 月度总结: 每月1号 08:20")
+        logger.info("  - 已付佣金同步: 每月1/15号 00:00")
+        logger.info("=" * 60)
         
     except Exception as e:
         logger.error(f"启动定时任务调度器失败: {e}")
