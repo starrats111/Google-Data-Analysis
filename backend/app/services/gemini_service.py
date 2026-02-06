@@ -26,7 +26,8 @@ class GeminiService:
     def __init__(self, api_key: Optional[str] = None, base_url: Optional[str] = None, model: Optional[str] = None):
         self.api_key = api_key
         self.base_url = base_url or "https://api.gemai.cc"
-        self.model = model or "gemini-2.5-flash-lite"
+        # 哈基米模型名称需要带前缀，如 [福利]gemini-2.5-flash-lite
+        self.model = model or "[福利]gemini-2.5-flash-lite"
         logger.info(f"Gemini API 配置: base_url={self.base_url}, model={self.model}")
     
     def _call_api(self, prompt: str, image_data: bytes = None) -> str:

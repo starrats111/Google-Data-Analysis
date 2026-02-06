@@ -127,13 +127,13 @@ class Settings(BaseSettings):
     # ===== Gemini AI 配置（哈基米中转）=====
     # 哈基米API站: https://api.gemai.cc
     gemini_api_key: str = ""
-    gemini_base_url: str = "https://api.gemai.cc/v1beta"
-    # 主模型（日常使用，最便宜）
-    gemini_model: str = "gemini-2.5-flash-lite"
+    gemini_base_url: str = "https://api.gemai.cc"
+    # 主模型（日常使用，最便宜）- 注意哈基米模型需要带前缀
+    gemini_model: str = "[福利]gemini-2.5-flash-lite"
     # 备用模型1（最新模型）
-    gemini_model_advanced: str = "gemini-3-flash-preview"
+    gemini_model_advanced: str = "[福利]gemini-3-flash-preview"
     # 备用模型2（带思考链，复杂分析）
-    gemini_model_thinking: str = "gemini-3-flash-preview-thinking"
+    gemini_model_thinking: str = "[福利]gemini-3-flash-preview-thinking"
     
     OPENAI_BASE_URL: str = "https://api.openai.com/v1"
     
