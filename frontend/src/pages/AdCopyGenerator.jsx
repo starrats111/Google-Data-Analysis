@@ -200,12 +200,23 @@ const AdCopyGenerator = () => {
         }
       }
       
-      // 提取附加链接
-      if (currentSection === 'sitelinks' && trimmed.startsWith('|') && !trimmed.includes('---') && !trimmed.includes('附加链接')) {
+      // 提取附加链接（新格式：标题 | URL | 描述1 | 描述2）
+      if (currentSection === 'sitelinks' && trimmed.startsWith('|') && !trimmed.includes('---') && !trimmed.includes('附加链接') && !trimmed.includes('标题')) {
         const parts = trimmed.split('|').map(p => p.trim()).filter(p => p)
-        if (parts.length >= 3 && parts[0] && !parts[0].includes('#')) {
+        // 新格式：4列（标题、URL、描述1、描述2）
+        if (parts.length >= 4 && parts[0] && !parts[0].includes('#') && !parts[0].includes('分类')) {
           result.sitelinks.push({
             title: parts[0],
+            url: parts[1],
+            desc1: parts[2],
+            desc2: parts[3] || ''
+          })
+        } 
+        // 兼容旧格式：3列（标题、描述1、描述2）
+        else if (parts.length >= 3 && parts[0] && !parts[0].includes('#') && !parts[0].includes('分类')) {
+          result.sitelinks.push({
+            title: parts[0],
+            url: '',
             desc1: parts[1],
             desc2: parts[2] || ''
           })
@@ -482,26 +493,47 @@ const AdCopyGenerator = () => {
                   }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
                       <Text strong style={{ fontSize: 16 }}>{s.title}</Text>
-                      <Button 
-                        size="small" 
-                        icon={<CopyOutlined />}
-                        onClick={() => copyToClipboard(s.title, `sitelink-title-${idx}`)}
-                      >
-                        复制标题
-                      </Button>
+                      <Space size="small">
+                        <Button 
+                          size="small" 
+                          icon={<CopyOutlined />}
+                          onClick={() => copyToClipboard(s.title, `sitelink-title-${idx}`)}
+                        >
+                          复制标题
+                        </Button>
+                        {s.url && (
+                          <Button 
+                            size="small" 
+                            type="link"
+                            icon={<CopyOutlined />}
+                            onClick={() => copyToClipboard(s.url, `sitelink-url-${idx}`)}
+                          >
+                            复制链接
+                          </Button>
+                        )}
+                      </Space>
                     </div>
-                    <div style={{ display: 'flex', gap: 8 }}>
+                    {/* 显示真实链接 URL */}
+                    {s.url && (
+                      <div style={{ marginBottom: 8 }}>
+                        <a href={s.url} target="_blank" rel="noreferrer" style={{ fontSize: 12, color: '#1890ff' }}>
+                          🔗 {s.url}
+                        </a>
+                        {copiedItems[`sitelink-url-${idx}`] && <Tag color="success" style={{ marginLeft: 8 }}>✓ 已复制</Tag>}
+                      </div>
+                    )}
+                    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                       <Tag 
                         style={{ cursor: 'pointer' }}
                         onClick={() => copyToClipboard(s.desc1, `sitelink-desc1-${idx}`)}
                       >
-                        {s.desc1} {copiedItems[`sitelink-desc1-${idx}`] && '✓'}
+                        描述1: {s.desc1} {copiedItems[`sitelink-desc1-${idx}`] && '✓'}
                       </Tag>
                       <Tag 
                         style={{ cursor: 'pointer' }}
                         onClick={() => copyToClipboard(s.desc2, `sitelink-desc2-${idx}`)}
                       >
-                        {s.desc2} {copiedItems[`sitelink-desc2-${idx}`] && '✓'}
+                        描述2: {s.desc2} {copiedItems[`sitelink-desc2-${idx}`] && '✓'}
                       </Tag>
                     </div>
                   </div>
