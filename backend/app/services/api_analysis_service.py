@@ -175,18 +175,30 @@ class ApiAnalysisService:
                 week_campaign_data[cname]["clicks"] += int(d.clicks or 0)
             
             # 获取本周平台数据（订单和佣金）
-            for acc in platform_accounts.values():
+            platform_daily_data = {}  # {platform_code: {date: {orders, commission}}}
+            platform_week_totals = {}  # {platform_code: {orders, commission, order_days}}
+            
+            for platform_code, acc in platform_accounts.items():
                 if not acc:
                     continue
+                platform_daily_data[platform_code] = {}
+                platform_week_totals[platform_code] = {"orders": 0, "commission": 0.0, "order_days": 0}
+                
                 week_platform_data = self.db.query(PlatformData).filter(
                     PlatformData.affiliate_account_id == acc.id,
                     PlatformData.date >= week_start,
                     PlatformData.date <= target_date
                 ).all()
+                
                 for pd in week_platform_data:
-                    # 按日期聚合订单（用于统计出单天数）
-                    # 这里简化处理，假设平台数据是按账号汇总的
-                    pass
+                    platform_daily_data[platform_code][pd.date] = {
+                        "orders": pd.orders or 0,
+                        "commission": pd.commission or 0.0
+                    }
+                    platform_week_totals[platform_code]["orders"] += (pd.orders or 0)
+                    platform_week_totals[platform_code]["commission"] += (pd.commission or 0.0)
+                    if pd.orders and pd.orders > 0:
+                        platform_week_totals[platform_code]["order_days"] += 1
             
             # 4. 生成每个广告系列的数据行
             rows = []
@@ -202,17 +214,29 @@ class ApiAnalysisService:
                 is_budget_lost = campaign.is_budget_lost or 0
                 is_rank_lost = campaign.is_rank_lost or 0
                 status = campaign.status or "ENABLED"
+                platform_code = campaign.extracted_platform_code
                 
-                # 简化处理：订单和佣金暂设为0（需要从平台数据关联）
+                # 从PlatformData获取当天的订单和佣金
                 orders = 0
                 commission = 0.0
+                if platform_code and platform_code in platform_daily_data:
+                    daily_pd = platform_daily_data[platform_code].get(target_date, {})
+                    orders = daily_pd.get("orders", 0)
+                    commission = daily_pd.get("commission", 0.0)
                 
                 # 本周数据
                 week_cost = week_info.get("cost", cost)
                 week_clicks = week_info.get("clicks", clicks)
-                week_orders = week_info.get("orders", 0)
-                week_order_days = len(week_info.get("order_days", set()))
-                week_commission = week_info.get("commission", 0.0)
+                
+                # 从平台周数据获取订单和佣金
+                week_orders = 0
+                week_order_days = 0
+                week_commission = 0.0
+                if platform_code and platform_code in platform_week_totals:
+                    week_totals = platform_week_totals[platform_code]
+                    week_orders = week_totals.get("orders", 0)
+                    week_order_days = week_totals.get("order_days", 0)
+                    week_commission = week_totals.get("commission", 0.0)
                 
                 # ROI计算
                 conservative_commission = commission * 0.72
