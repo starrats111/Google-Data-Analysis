@@ -153,6 +153,10 @@ const Dashboard = () => {
 
   // 生成广告词
   const generateAdCopy = async () => {
+    if (!productUrl.trim()) {
+      message.warning('请输入产品链接URL（必填，用于获取真实折扣和物流信息）')
+      return
+    }
     if (!keywords.trim()) {
       message.warning('请输入关键词')
       return
@@ -162,7 +166,7 @@ const Dashboard = () => {
       const keywordList = keywords.split(/[,，\s]+/).filter(k => k.trim())
       const res = await api.post('/api/gemini/recommend-keywords', {
         keywords: keywordList,
-        product_url: productUrl || null,
+        product_url: productUrl,
         target_country: targetCountry
       })
       if (res.data.success) {
@@ -328,11 +332,12 @@ const Dashboard = () => {
           >
             <Spin spinning={adCopyLoading}>
               <Input
-                placeholder="产品链接 URL（可选），例如：https://www.example.com"
+                placeholder="产品链接 URL（必填），例如：https://www.tous.com"
                 value={productUrl}
                 onChange={(e) => setProductUrl(e.target.value)}
                 style={{ marginBottom: 8 }}
                 prefix={<GlobalOutlined />}
+                status={!productUrl.trim() ? 'warning' : ''}
               />
               <Input.TextArea
                 placeholder="输入关键词（用逗号或空格分隔），例如：wireless earbuds, bluetooth headphones"
@@ -344,6 +349,11 @@ const Dashboard = () => {
               {adCopyData ? (
                 <div style={{ maxHeight: 400, overflow: 'auto' }}>
                   <Row gutter={8} style={{ marginBottom: 12 }}>
+                    <Col span={24}>
+                      <Text strong>🔗 产品链接：</Text> <a href={adCopyData.product_url} target="_blank" rel="noreferrer">{adCopyData.product_url}</a>
+                    </Col>
+                  </Row>
+                  <Row gutter={8} style={{ marginBottom: 12 }}>
                     <Col span={12}>
                       <Text strong>🎯 关键词：</Text> {adCopyData.keywords?.join(', ')}
                     </Col>
@@ -351,9 +361,6 @@ const Dashboard = () => {
                       <Text strong>🌍 {adCopyData.country_name}</Text> · {adCopyData.language} · {adCopyData.currency}
                     </Col>
                   </Row>
-                  <Paragraph>
-                    <Text type="secondary">🚚 {adCopyData.shipping_info}</Text>
-                  </Paragraph>
                   <div style={{ whiteSpace: 'pre-wrap', fontSize: 13, lineHeight: 1.8, background: '#f5f5f5', padding: 12, borderRadius: 8 }}>
                     {adCopyData.recommendations}
                   </div>
@@ -361,9 +368,9 @@ const Dashboard = () => {
               ) : (
                 <div style={{ textAlign: 'center', padding: 20, color: '#999' }}>
                   <RocketOutlined style={{ fontSize: 32, marginBottom: 8 }} />
-                  <p>输入产品链接和关键词，AI 将生成：</p>
-                  <p style={{ fontSize: 12 }}>17条广告标题 · 6条广告描述 · 6条附加链接</p>
-                  <p style={{ fontSize: 12 }}>自动适配该国语言、物流、折扣信息</p>
+                  <p><b>⚠️ 产品链接必填</b></p>
+                  <p style={{ fontSize: 12 }}>AI 会从链接中抓取<b>真实的</b>折扣和物流信息</p>
+                  <p style={{ fontSize: 12 }}>生成：17条广告标题 · 6条广告描述 · 6条附加链接</p>
                 </div>
               )}
             </Spin>

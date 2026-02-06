@@ -162,7 +162,7 @@ class GeminiService:
         
         Args:
             keywords: 关键词列表
-            product_url: 产品链接（可选）
+            product_url: 产品链接（必须提供，用于抓取真实折扣和物流信息）
             target_country: 目标国家
         
         Returns:
@@ -171,37 +171,57 @@ class GeminiService:
         if not self.model:
             return {"success": False, "message": "Gemini 模型未配置"}
         
-        # 国家配置：语言、物流、货币
+        if not product_url:
+            return {"success": False, "message": "请提供产品链接URL，用于获取真实的折扣和物流信息"}
+        
+        # 国家配置：语言、货币
         country_config = {
-            "US": {"lang": "英语", "lang_code": "English", "shipping": "美国境内免费配送/Free US Shipping", "currency": "USD", "name": "美国"},
-            "UK": {"lang": "英语", "lang_code": "English", "shipping": "英国境内免费配送/Free UK Delivery", "currency": "GBP", "name": "英国"},
-            "DE": {"lang": "德语", "lang_code": "German", "shipping": "德国境内免费配送/Kostenloser Versand in DE", "currency": "EUR", "name": "德国"},
-            "FR": {"lang": "法语", "lang_code": "French", "shipping": "法国境内免费配送/Livraison gratuite en France", "currency": "EUR", "name": "法国"},
-            "ES": {"lang": "西班牙语", "lang_code": "Spanish", "shipping": "西班牙境内免费配送/Envío gratis en España", "currency": "EUR", "name": "西班牙"},
-            "IT": {"lang": "意大利语", "lang_code": "Italian", "shipping": "意大利境内免费配送/Spedizione gratuita in Italia", "currency": "EUR", "name": "意大利"},
-            "AU": {"lang": "英语", "lang_code": "English", "shipping": "澳大利亚境内免费配送/Free AU Shipping", "currency": "AUD", "name": "澳大利亚"},
-            "CA": {"lang": "英语", "lang_code": "English", "shipping": "加拿大境内免费配送/Free CA Shipping", "currency": "CAD", "name": "加拿大"},
-            "JP": {"lang": "日语", "lang_code": "Japanese", "shipping": "日本境内免费配送/日本国内送料無料", "currency": "JPY", "name": "日本"},
-            "KR": {"lang": "韩语", "lang_code": "Korean", "shipping": "韩国境内免费配送/한국 내 무료 배송", "currency": "KRW", "name": "韩国"},
+            "US": {"lang": "英语", "lang_code": "English", "currency": "USD", "name": "美国"},
+            "UK": {"lang": "英语", "lang_code": "English", "currency": "GBP", "name": "英国"},
+            "DE": {"lang": "德语", "lang_code": "German", "currency": "EUR", "name": "德国"},
+            "FR": {"lang": "法语", "lang_code": "French", "currency": "EUR", "name": "法国"},
+            "ES": {"lang": "西班牙语", "lang_code": "Spanish", "currency": "EUR", "name": "西班牙"},
+            "IT": {"lang": "意大利语", "lang_code": "Italian", "currency": "EUR", "name": "意大利"},
+            "AU": {"lang": "英语", "lang_code": "English", "currency": "AUD", "name": "澳大利亚"},
+            "CA": {"lang": "英语", "lang_code": "English", "currency": "CAD", "name": "加拿大"},
+            "JP": {"lang": "日语", "lang_code": "Japanese", "currency": "JPY", "name": "日本"},
+            "KR": {"lang": "韩语", "lang_code": "Korean", "currency": "KRW", "name": "韩国"},
         }
         
         config = country_config.get(target_country, country_config["US"])
         
         prompt = f"""你是一位谷歌广告投放专家，特别擅长关键词筛选和广告文案撰写，对谷歌搜索广告各种指标及作用了如指掌。
 
-**最主要规则**：真实、严谨、不误导消费者、严格遵守Google Ads平台规范。
+**最最最重要的规则**：真实、严谨、不误导消费者！所有折扣和物流信息必须从我提供的URL中查找真实存在的证据，绝对不能编造！
 
-**输入信息**：
-- 关键词：{', '.join(keywords)}
-- 目标国家：{config['name']} ({target_country})
-- 广告语言：{config['lang']} ({config['lang_code']})
-- 物流信息：{config['shipping']}
-- 货币：{config['currency']}
-{'- 产品链接：' + product_url if product_url else ''}
+---
+
+## 前置任务：访问并分析产品链接
+
+**产品链接**：{product_url}
+
+请先访问该链接，仔细查找并提取以下真实信息：
+
+1. **网站主营业务**：该网站是卖什么的？
+2. **真实折扣信息**：
+   - 网站上实际存在的折扣（如 20% OFF, Buy 1 Get 1 等）
+   - 优惠码（如果有）
+   - 促销活动（如果有）
+   - ⚠️ 如果网站没有折扣，就不要在广告中提及折扣！
+3. **真实物流信息**：
+   - 该网站对{config['name']}的配送政策
+   - 是否免运费？运费多少？
+   - 配送时间
+   - ⚠️ 如果找不到物流信息，就不要编造！
+4. **站内链接**：网站的主要分类/页面
 
 ---
 
 ## 第一步：关键词筛选与基础配置
+
+**输入关键词**：{', '.join(keywords)}
+**目标国家**：{config['name']} ({target_country})
+**广告语言**：{config['lang']} ({config['lang_code']})
 
 1. **筛选关键词**（输出可直接复制的格式）
 2. **推荐预算**：日预算 4{config['currency']}
@@ -214,35 +234,37 @@ class GeminiService:
 
 **广告标题要求**（共17条）：
 - 字数：每条不超过25个字符（含标点和空格）
-- 第1条：包含折扣信息（优选最大折扣）
-- 第2条：包含物流信息（针对{config['name']}）
+- 第1条：包含**真实的**折扣信息（从网站找到的，优选最大折扣）
+- 第2条：包含**真实的**物流信息（针对{config['name']}，从网站找到的）
 - 第3条起：其他吸引顾客的标题
-- 第4条起：可包含次要折扣
+- 第4条起：可包含次要折扣（必须真实存在）
 - 语言：用{config['lang_code']}输出，每条后面用中文翻译
 - 避免过多大写字符
+- ⚠️ 如果网站没有折扣/免运费，不要在标题中提及！
 
 **广告描述要求**（共6条）：
-- 字数：每条50-80个字符（含空格和标点）
-- 其中1条必须包含折扣+物流信息
+- 字数：每条50-80个字符（含空格和标点），绝对不少于50个字符
+- 其中1条包含**真实的**折扣+物流信息（仅当网站确实有时）
 - 语言：用{config['lang_code']}输出，每条后面用中文翻译
 - 具有品牌特色，符合Google Ads规范
 
 ---
 
-## 第三步：附加链接
+## 第三步：附加链接（基于网站真实页面）
 
-生成6条站内链接，每条：
+根据网站的**真实站内链接**生成6条，每条：
 - 链接标题：不超过25字符
 - 链接描述：2条，每条不超过28字符
-- 信息真实无误，不涉及欺骗消费者
+- ⚠️ 必须是网站上真实存在的页面/分类！
 
 ---
 
 **输出格式要求**：
-1. 标题和描述单独列行，醒目清晰
-2. 每条后标注字符数
-3. 生成后核实字数是否符合标准
-4. 确保信息真实，规避敏感词"""
+1. 首先列出从网站找到的真实信息（折扣、物流、分类）
+2. 标题和描述单独列行，醒目清晰
+3. 每条后标注字符数
+4. 生成后核实字数是否符合标准
+5. ⚠️ 如果某些信息在网站上找不到，明确标注"未找到"，不要编造！"""
 
         try:
             response = self.model.generate_content(prompt)
@@ -250,10 +272,10 @@ class GeminiService:
                 "success": True,
                 "recommendations": response.text,
                 "keywords": keywords,
+                "product_url": product_url,
                 "target_country": target_country,
                 "country_name": config['name'],
                 "language": config['lang'],
-                "shipping_info": config['shipping'],
                 "currency": config['currency'],
                 "timestamp": datetime.now().isoformat()
             }
