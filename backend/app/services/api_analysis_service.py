@@ -143,10 +143,16 @@ class ApiAnalysisService:
                 week_start = target_date - timedelta(days=target_date.weekday())
                 week_end = week_start + timedelta(days=6)
                 
-                week_cost = self.db.query(func.sum(PlatformData.commission)).filter(
+                week_commission = self.db.query(func.sum(PlatformData.commission)).filter(
                     PlatformData.affiliate_account_id == account_id,
                     PlatformData.date >= week_start,
                     PlatformData.date <= week_end
+                ).scalar() or 0
+                
+                week_cost_google = self.db.query(func.sum(GoogleAdsApiData.cost)).filter(
+                    GoogleAdsApiData.user_id == account.user_id,
+                    GoogleAdsApiData.date >= week_start,
+                    GoogleAdsApiData.date <= week_end
                 ).scalar() or 0
                 
                 # 计算保守EPC和保守ROI
