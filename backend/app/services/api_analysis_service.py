@@ -227,9 +227,14 @@ class ApiAnalysisService:
                     is_budget_lost, is_rank_lost, roi, orders
                 )
                 
+                # 根据表现判断状态：健康/观察/暂停
+                health_status = self._calculate_health_status(
+                    status, roi, is_budget_lost, is_rank_lost, orders, clicks
+                )
+                
                 rows.append({
                     "广告系列名": cname,
-                    "状态": self._format_status(status),
+                    "状态": health_status,
                     "预算": round(budget, 2),
                     "点击": clicks,
                     "订单": orders,
@@ -260,14 +265,46 @@ class ApiAnalysisService:
         
         return {"created": created, "skipped": skipped}
     
-    def _format_status(self, status: str) -> str:
-        """格式化状态显示"""
-        status_map = {
-            "ENABLED": "已启用",
-            "PAUSED": "已暂停",
-            "REMOVED": "已删除",
-        }
-        return status_map.get(status, status)
+    def _calculate_health_status(
+        self,
+        google_status: str,
+        roi: float,
+        is_budget_lost: float,
+        is_rank_lost: float,
+        orders: int,
+        clicks: int
+    ) -> str:
+        """
+        根据广告表现计算健康状态
+        
+        Returns:
+            健康 / 观察 / 暂停
+        """
+        # 如果Google Ads状态是暂停或删除
+        if google_status in ["PAUSED", "REMOVED"]:
+            return "暂停"
+        
+        # ROI为负或很低
+        if roi < -50:
+            return "暂停"
+        
+        # 有问题需要观察
+        issues = 0
+        if roi < 0:
+            issues += 1
+        if is_budget_lost > 0.2:  # 预算丢失超过20%
+            issues += 1
+        if is_rank_lost > 0.3:  # 排名丢失超过30%
+            issues += 1
+        if clicks > 50 and orders == 0:  # 点击多但无订单
+            issues += 1
+        
+        if issues >= 2:
+            return "观察"
+        elif issues == 1:
+            return "观察"
+        
+        return "健康"
     
     def _generate_operation_instruction(
         self,

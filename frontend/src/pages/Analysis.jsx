@@ -359,17 +359,22 @@ const Analysis = ({ mode }) => {
             },
           ]
         : []),
-      {
-        title: '联盟账号',
-        dataIndex: 'affiliate_account_id',
-        key: 'affiliate_account_id',
-        ellipsis: true,
-        render: (id) => (
-          <Tooltip title={accountNameMap.get(id) || `账号ID: ${id}`}>
-            <span>{accountNameMap.get(id) || `账号ID: ${id}`}</span>
-          </Tooltip>
-        ),
-      },
+      // 每日分析不显示联盟账号列
+      ...(analysisMode !== 'daily'
+        ? [
+            {
+              title: '联盟账号',
+              dataIndex: 'affiliate_account_id',
+              key: 'affiliate_account_id',
+              ellipsis: true,
+              render: (id) => (
+                <Tooltip title={accountNameMap.get(id) || `账号ID: ${id}`}>
+                  <span>{accountNameMap.get(id) || `账号ID: ${id}`}</span>
+                </Tooltip>
+              ),
+            },
+          ]
+        : []),
       {
         title: '数据行数',
         key: 'rows',
@@ -399,7 +404,7 @@ const Analysis = ({ mode }) => {
         ),
       },
     ],
-    [accountNameMap, isManager]
+    [accountNameMap, isManager, analysisMode]
   )
 
   return (
@@ -548,6 +553,21 @@ const Analysis = ({ mode }) => {
                             if (text === null || text === undefined || text === '') return '-'
                             return <Tooltip title={String(text)}>{String(text)}</Tooltip>
                           },
+                        }
+
+                        // 为"状态"列添加颜色渲染（健康/观察/暂停）
+                        if (key === '状态') {
+                          column.width = 80
+                          column.ellipsis = false
+                          column.render = (text) => {
+                            if (!text) return '-'
+                            const t = String(text)
+                            let color = 'default'
+                            if (t === '健康') color = 'green'
+                            else if (t === '观察') color = 'orange'
+                            else if (t === '暂停') color = 'red'
+                            return <Tag color={color}>{t}</Tag>
+                          }
                         }
 
                         // 为处理动作列添加特殊渲染
@@ -757,6 +777,21 @@ const Analysis = ({ mode }) => {
                     if (text === null || text === undefined || text === '') return '-'
                     return <Tooltip title={String(text)}>{String(text)}</Tooltip>
                   },
+                }
+
+                // 为"状态"列添加颜色渲染（健康/观察/暂停）
+                if (key === '状态') {
+                  column.width = 80
+                  column.ellipsis = false
+                  column.render = (text) => {
+                    if (!text) return '-'
+                    const t = String(text)
+                    let color = 'default'
+                    if (t === '健康') color = 'green'
+                    else if (t === '观察') color = 'orange'
+                    else if (t === '暂停') color = 'red'
+                    return <Tag color={color}>{t}</Tag>
+                  }
                 }
 
                 // 为处理动作列添加特殊渲染
