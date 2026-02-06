@@ -425,46 +425,68 @@ class ApiAnalysisService:
                 orders = 0
                 order_days = 0  # 有订单的天数
                 
-                # 从广告系列名提取商家名（格式: 序号-平台-商家名-国家-日期-MID）
+                # 从广告系列名提取MID和商家名（格式: 序号-平台-商家名-国家-日期-MID）
                 campaign_name = cdata.get("campaign_name", "")
                 merchant_name = self._extract_merchant_from_campaign(campaign_name)
                 
-                if merchant_name:
-                    from app.models.affiliate_transaction import AffiliateTransaction
-                    from sqlalchemy import func
-                    
-                    # 平台代码映射
-                    platform_map = {
-                        "LH": "linkhaitao", "LH1": "linkhaitao",
-                        "PM": "pepperjam", "PM1": "pepperjam",
-                        "CG": "collabglow", "CG1": "collabglow",
-                        "RW": "rakuten", "RW1": "rakuten",
-                    }
-                    txn_platform = platform_map.get(platform_code, platform_code.lower() if platform_code else "")
-                    
-                    # 查询该商家在L7D期间的交易（用商家名模糊匹配）
+                from app.models.affiliate_transaction import AffiliateTransaction
+                from sqlalchemy import func
+                
+                # 平台代码映射
+                platform_map = {
+                    "LH": "linkhaitao", "LH1": "linkhaitao",
+                    "PM": "pepperjam", "PM1": "pepperjam",
+                    "CG": "cg", "CG1": "cg",
+                    "RW": "rw", "RW1": "rw",
+                }
+                txn_platform = platform_map.get(platform_code, platform_code.lower() if platform_code else "")
+                
+                # 策略1：优先用MID精准匹配
+                matched = False
+                if mid:
                     txn_query = self.db.query(
                         func.sum(AffiliateTransaction.commission_amount).label('total_commission'),
                         func.count(AffiliateTransaction.id).label('total_orders'),
                         func.count(func.distinct(func.date(AffiliateTransaction.transaction_time))).label('order_days')
                     ).filter(
                         AffiliateTransaction.user_id == data_user_id,
-                        AffiliateTransaction.status == "approved",
+                        func.date(AffiliateTransaction.transaction_time) >= begin_date,
+                        func.date(AffiliateTransaction.transaction_time) <= end_date,
+                        AffiliateTransaction.merchant_id == str(mid)
+                    )
+                    if txn_platform:
+                        txn_query = txn_query.filter(AffiliateTransaction.platform == txn_platform)
+                    
+                    result = txn_query.first()
+                    if result and result.total_orders:
+                        commission = float(result.total_commission or 0)
+                        orders = int(result.total_orders or 0)
+                        order_days = int(result.order_days or 0)
+                        matched = True
+                        logger.info(f"L7D MID精准匹配成功: MID={mid}, 平台={txn_platform}, 佣金={commission}, 订单={orders}")
+                
+                # 策略2：MID没匹配到，用商家名模糊匹配
+                if not matched and merchant_name:
+                    txn_query = self.db.query(
+                        func.sum(AffiliateTransaction.commission_amount).label('total_commission'),
+                        func.count(AffiliateTransaction.id).label('total_orders'),
+                        func.count(func.distinct(func.date(AffiliateTransaction.transaction_time))).label('order_days')
+                    ).filter(
+                        AffiliateTransaction.user_id == data_user_id,
                         func.date(AffiliateTransaction.transaction_time) >= begin_date,
                         func.date(AffiliateTransaction.transaction_time) <= end_date,
                         # 商家名模糊匹配（忽略大小写和空格）
                         func.lower(func.replace(AffiliateTransaction.merchant, ' ', '')).like(f"%{merchant_name.lower()}%")
                     )
-                    
-                    # 如果有平台信息，加上平台过滤
                     if txn_platform:
                         txn_query = txn_query.filter(AffiliateTransaction.platform == txn_platform)
                     
                     result = txn_query.first()
-                    if result:
+                    if result and result.total_orders:
                         commission = float(result.total_commission or 0)
                         orders = int(result.total_orders or 0)
                         order_days = int(result.order_days or 0)
+                        logger.info(f"L7D 商家名匹配成功: merchant={merchant_name}, 平台={txn_platform}, 佣金={commission}, 订单={orders}")
                 
                 # 计算保守EPC和保守ROI
                 cost = cdata["total_cost"]
