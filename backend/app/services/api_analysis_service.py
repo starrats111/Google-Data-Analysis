@@ -359,8 +359,13 @@ class ApiAnalysisService:
             for data in google_ads_data:
                 key = (data.campaign_id, data.user_id)
                 if key not in campaign_data:
-                    # 从广告系列名解析CID、MID、投放国家
-                    cid, mid, country = self._parse_campaign_name(data.campaign_name)
+                    # 从广告系列名解析MID、投放国家
+                    _, mid, country = self._parse_campaign_name(data.campaign_name)
+                    # CID直接从Google Ads数据获取（customer_id字段）
+                    cid = data.customer_id or ""
+                    # 格式化CID为 xxx-xxx-xxxx 格式
+                    if cid and len(cid) == 10:
+                        cid = f"{cid[:3]}-{cid[3:6]}-{cid[6:]}"
                     campaign_data[key] = {
                         "campaign_id": data.campaign_id,
                         "campaign_name": data.campaign_name,
@@ -368,7 +373,7 @@ class ApiAnalysisService:
                         "cid": cid,
                         "mid": mid,
                         "country": country,
-                        "dates_with_orders": set(),
+                        "data_dates": set(),  # 有数据的天数
                         "total_cost": 0.0,
                         "total_clicks": 0,
                         "total_commission": 0.0,
@@ -377,6 +382,8 @@ class ApiAnalysisService:
                         "is_budget_lost": 0.0,
                         "is_rank_lost": 0.0,
                     }
+                # 记录有数据的日期
+                campaign_data[key]["data_dates"].add(data.date)
                 campaign_data[key]["total_cost"] += (data.cost or 0)
                 campaign_data[key]["total_clicks"] += int(data.clicks or 0)
                 campaign_data[key]["max_cpc"] = max(campaign_data[key]["max_cpc"], (data.cpc or 0))
@@ -393,7 +400,7 @@ class ApiAnalysisService:
                 clicks = cdata["total_clicks"]
                 commission = cdata["total_commission"]
                 orders = cdata["total_orders"]
-                order_days = len(cdata["dates_with_orders"])
+                data_days = len(cdata["data_dates"])  # 有数据的天数（L7D出单天数）
                 
                 conservative_epc = (commission * 0.72 / clicks) if clicks > 0 else 0
                 conservative_roi = ((commission * 0.72 - cost) / cost) if cost > 0 else None
@@ -401,7 +408,7 @@ class ApiAnalysisService:
                 # 生成操作指令
                 operation = self._generate_l7d_operation(
                     conservative_roi, cdata["is_budget_lost"], cdata["is_rank_lost"], 
-                    order_days, cdata["max_cpc"], orders
+                    data_days, cdata["max_cpc"], orders
                 )
                 
                 row = {
@@ -412,7 +419,7 @@ class ApiAnalysisService:
                     "L7D点击": clicks,
                     "L7D佣金": round(commission, 2),
                     "L7D花费": round(cost, 2),
-                    "L7D出单天数": order_days,
+                    "L7D出单天数": data_days,
                     "当前Max CPC": round(cdata["max_cpc"], 4),
                     "IS Budget丢失": f"{cdata['is_budget_lost'] * 100:.1f}%" if cdata['is_budget_lost'] > 0 else "-",
                     "IS Rank丢失": f"{cdata['is_rank_lost'] * 100:.1f}%" if cdata['is_rank_lost'] > 0 else "-",

@@ -309,6 +309,7 @@ class GoogleAdsServiceAccountSync:
                 status_cn = status_map.get(status, status)
                 
                 campaigns.append({
+                    "customer_id": customer_id,  # 保存CID
                     "campaign_id": str(row.campaign.id),
                     "campaign_name": row.campaign.name,
                     "status": status_cn,
@@ -509,6 +510,7 @@ class GoogleAdsServiceAccountSync:
                 
                 if existing:
                     # 更新现有记录
+                    existing.customer_id = campaign_data.get("customer_id")  # CID
                     existing.campaign_name = campaign_name
                     existing.status = campaign_data.get("status", "未知")
                     existing.budget = campaign_data.get("budget", 0)
@@ -526,6 +528,7 @@ class GoogleAdsServiceAccountSync:
                     new_data = GoogleAdsApiData(
                         mcc_id=mcc_account.id,
                         user_id=mcc_account.user_id,
+                        customer_id=campaign_data.get("customer_id"),  # CID
                         campaign_id=campaign_data.get("campaign_id"),
                         campaign_name=campaign_name,
                         date=target_date,

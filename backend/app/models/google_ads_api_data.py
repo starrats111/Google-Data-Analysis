@@ -17,6 +17,7 @@ class GoogleAdsApiData(Base):
     # 关联信息
     mcc_id = Column(Integer, ForeignKey("google_mcc_accounts.id", ondelete="CASCADE"), nullable=False, index=True)
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    customer_id = Column(String(20), nullable=True, index=True)  # Google Ads Customer ID (CID)
     campaign_id = Column(String(100), nullable=False, index=True)  # Google Ads Campaign ID
     campaign_name = Column(String(255), nullable=False, index=True)  # 广告系列名称
     date = Column(Date, nullable=False, index=True)
