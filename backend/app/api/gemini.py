@@ -21,7 +21,12 @@ def get_gemini_service() -> GeminiService:
     api_key = getattr(settings, 'gemini_api_key', None)
     if not api_key:
         raise HTTPException(status_code=500, detail="Gemini API 密钥未配置")
-    return GeminiService(api_key)
+    
+    # 获取可选的中转地址和模型配置
+    base_url = getattr(settings, 'gemini_base_url', None) or None
+    model = getattr(settings, 'gemini_model', None) or "gemini-2.0-flash"
+    
+    return GeminiService(api_key, base_url, model)
 
 
 class CampaignAnalysisRequest(BaseModel):

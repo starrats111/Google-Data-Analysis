@@ -1,6 +1,7 @@
 """
 Gemini AI 服务
 提供广告分析、优化建议、节日营销等AI功能
+支持官方API和哈基米等中转API
 """
 import logging
 from typing import Optional, List, Dict
@@ -11,38 +12,68 @@ logger = logging.getLogger(__name__)
 
 # Gemini API 配置
 GEMINI_API_KEY = None
+GEMINI_BASE_URL = None
+GEMINI_MODEL = "gemini-2.0-flash"
 
-def configure_gemini(api_key: str):
-    """配置 Gemini API 密钥"""
-    global GEMINI_API_KEY
+def configure_gemini(api_key: str, base_url: str = None, model: str = None):
+    """配置 Gemini API
+    
+    Args:
+        api_key: API密钥
+        base_url: API基础地址（留空使用官方，填写中转地址如 https://burn.hair/v1beta）
+        model: 模型名称（默认 gemini-2.0-flash）
+    """
+    global GEMINI_API_KEY, GEMINI_BASE_URL, GEMINI_MODEL
     GEMINI_API_KEY = api_key
+    GEMINI_BASE_URL = base_url
+    if model:
+        GEMINI_MODEL = model
+    
     try:
         import google.generativeai as genai
-        genai.configure(api_key=api_key)
-        logger.info("Gemini API 配置成功")
+        
+        # 配置API密钥
+        if base_url:
+            # 使用中转API（如哈基米）
+            from google.generativeai import configure
+            # 设置自定义端点
+            genai.configure(api_key=api_key, transport='rest')
+            # 注意：google-generativeai 库需要通过环境变量设置自定义URL
+            import os
+            os.environ['GOOGLE_API_BASE_URL'] = base_url
+            logger.info(f"Gemini API 配置成功 (中转: {base_url}, 模型: {GEMINI_MODEL})")
+        else:
+            # 使用官方API
+            genai.configure(api_key=api_key)
+            logger.info(f"Gemini API 配置成功 (官方, 模型: {GEMINI_MODEL})")
+        
         return True
     except Exception as e:
         logger.error(f"Gemini API 配置失败: {e}")
         return False
 
 
-def get_model():
+def get_model(model_name: str = None):
     """获取 Gemini 模型"""
     try:
         import google.generativeai as genai
-        return genai.GenerativeModel('gemini-1.5-flash')
+        name = model_name or GEMINI_MODEL
+        return genai.GenerativeModel(name)
     except Exception as e:
         logger.error(f"获取 Gemini 模型失败: {e}")
         return None
 
 
 class GeminiService:
-    """Gemini AI 服务类"""
+    """Gemini AI 服务类
     
-    def __init__(self, api_key: Optional[str] = None):
+    支持官方API和哈基米等中转API
+    """
+    
+    def __init__(self, api_key: Optional[str] = None, base_url: Optional[str] = None, model: Optional[str] = None):
         if api_key:
-            configure_gemini(api_key)
-        self.model = get_model()
+            configure_gemini(api_key, base_url, model)
+        self.model = get_model(model)
     
     def analyze_campaign_data(self, campaign_data: Dict) -> Dict:
         """
@@ -271,7 +302,7 @@ class GeminiService:
             import io
             
             # 使用支持多模态的模型
-            vision_model = genai.GenerativeModel('gemini-1.5-flash')
+            vision_model = genai.GenerativeModel(GEMINI_MODEL)
             
             # 将bytes转为PIL Image
             image = PIL.Image.open(io.BytesIO(image_data))

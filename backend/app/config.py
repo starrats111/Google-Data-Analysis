@@ -125,8 +125,15 @@ class Settings(BaseSettings):
     OPENAI_MODEL: str = "gpt-4o-mini"
     
     # ===== Gemini AI 配置 =====
-    # 从 https://aistudio.google.com/ 获取API密钥
+    # 支持官方API或哈基米中转API
+    # 官方: https://aistudio.google.com/
+    # 哈基米: https://burn.hair 或其他中转站
     gemini_api_key: str = ""
+    # API 基础地址（留空使用官方，填写中转地址如 https://burn.hair/v1beta）
+    gemini_base_url: str = ""
+    # 模型名称（推荐: gemini-2.0-flash, gemini-1.5-pro, gemini-2.0-pro）
+    gemini_model: str = "gemini-2.0-flash"
+    
     OPENAI_BASE_URL: str = "https://api.openai.com/v1"
     
     if SettingsConfigDict is not None:
