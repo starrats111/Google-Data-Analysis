@@ -37,6 +37,7 @@ from app.api import (
     dashboard,
     expenses,
     export,
+    gemini,
     google_ads_aggregate,
     google_ads_data,
     google_oauth,
@@ -242,6 +243,7 @@ app.include_router(google_ads_data.router)
 app.include_router(google_ads_aggregate.router)
 app.include_router(google_oauth.router)
 app.include_router(stage_label.router)
+app.include_router(gemini.router)
 
 
 @app.get("/health")

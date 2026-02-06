@@ -123,6 +123,10 @@ class Settings(BaseSettings):
     # 若不配置 OPENAI_API_KEY，则系统自动使用规则版点评（不影响功能）
     OPENAI_API_KEY: str = ""
     OPENAI_MODEL: str = "gpt-4o-mini"
+    
+    # ===== Gemini AI 配置 =====
+    # 从 https://aistudio.google.com/ 获取API密钥
+    gemini_api_key: str = ""
     OPENAI_BASE_URL: str = "https://api.openai.com/v1"
     
     if SettingsConfigDict is not None:
