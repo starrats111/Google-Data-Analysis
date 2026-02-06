@@ -551,38 +551,59 @@ async def update_account(
 @router.delete("/accounts/{account_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_account(
     account_id: int,
+    force: bool = False,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """删除联盟账号"""
+    """删除联盟账号（支持强制删除，会级联删除所有关联数据）"""
     account = db.query(AffiliateAccount).filter(AffiliateAccount.id == account_id).first()
     if not account:
         raise HTTPException(status_code=404, detail="账号不存在")
     
-    # 权限控制：只能删除自己的账号
-    if account.user_id != current_user.id:
+    # 权限控制：只能删除自己的账号（管理员可删除任何账号）
+    if account.user_id != current_user.id and getattr(current_user, 'role', '') != 'manager':
         raise HTTPException(status_code=403, detail="无权删除此账号")
     
-    # 检查是否有关联数据
+    # 级联删除所有关联数据
     from app.models.data_upload import DataUpload
     from app.models.analysis_result import AnalysisResult
+    from app.models.platform_data import PlatformData
+    from app.models.ad_campaign import AdCampaign
+    from app.models.affiliate_transaction import AffiliateTransaction
     
-    uploads_count = db.query(DataUpload).filter(
-        DataUpload.affiliate_account_id == account_id
-    ).count()
+    try:
+        # 删除关联的交易记录
+        db.query(AffiliateTransaction).filter(
+            AffiliateTransaction.affiliate_account_id == account_id
+        ).delete(synchronize_session=False)
+        
+        # 删除关联的平台数据
+        db.query(PlatformData).filter(
+            PlatformData.affiliate_account_id == account_id
+        ).delete(synchronize_session=False)
+        
+        # 删除关联的广告系列
+        db.query(AdCampaign).filter(
+            AdCampaign.affiliate_account_id == account_id
+        ).delete(synchronize_session=False)
+        
+        # 删除关联的数据上传
+        db.query(DataUpload).filter(
+            DataUpload.affiliate_account_id == account_id
+        ).delete(synchronize_session=False)
+        
+        # 删除关联的分析结果
+        db.query(AnalysisResult).filter(
+            AnalysisResult.affiliate_account_id == account_id
+        ).delete(synchronize_session=False)
+        
+        # 删除账号本身
+        db.delete(account)
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"删除失败: {str(e)}")
     
-    results_count = db.query(AnalysisResult).filter(
-        AnalysisResult.affiliate_account_id == account_id
-    ).count()
-    
-    if uploads_count > 0 or results_count > 0:
-        raise HTTPException(
-            status_code=400,
-            detail="该账号有关联的数据上传或分析结果，无法删除。请先停用账号。"
-        )
-    
-    db.delete(account)
-    db.commit()
     return None
 
 

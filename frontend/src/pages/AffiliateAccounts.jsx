@@ -539,9 +539,11 @@ const AffiliateAccounts = () => {
           </Button>
           <Popconfirm
             title="确定要删除此账号吗？"
+            description="将同时删除该账号的所有关联数据（交易记录、平台数据等），不可恢复！"
             onConfirm={() => handleDeleteAccount(record.id)}
-            okText="确定"
+            okText="确定删除"
             cancelText="取消"
+            okButtonProps={{ danger: true }}
           >
             <Button
               type="link"
