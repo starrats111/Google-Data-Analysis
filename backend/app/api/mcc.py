@@ -266,13 +266,14 @@ async def create_mcc_account(
     db: Session = Depends(get_db)
 ):
     """创建MCC账号"""
-    # 检查MCC ID是否已存在
+    # 检查当前用户是否已添加该MCC ID（按用户隔离）
     existing = db.query(GoogleMccAccount).filter(
-        GoogleMccAccount.mcc_id == mcc_data.mcc_id
+        GoogleMccAccount.mcc_id == mcc_data.mcc_id,
+        GoogleMccAccount.user_id == current_user.id
     ).first()
     
     if existing:
-        raise HTTPException(status_code=400, detail="MCC ID已存在")
+        raise HTTPException(status_code=400, detail="您已添加过该MCC ID")
     
     # 创建MCC账号
     mcc_account = GoogleMccAccount(
@@ -312,13 +313,14 @@ async def batch_create_mcc_accounts(
     
     for mcc_data in batch_data.mccs:
         try:
-            # 检查MCC ID是否已存在
+            # 检查当前用户是否已添加该MCC ID（按用户隔离）
             existing = db.query(GoogleMccAccount).filter(
-                GoogleMccAccount.mcc_id == mcc_data.mcc_id
+                GoogleMccAccount.mcc_id == mcc_data.mcc_id,
+                GoogleMccAccount.user_id == current_user.id
             ).first()
             
             if existing:
-                errors.append(f"MCC {mcc_data.mcc_id} 已存在，跳过")
+                errors.append(f"MCC {mcc_data.mcc_id} 您已添加过，跳过")
                 continue
             
             # 创建MCC账号
