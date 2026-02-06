@@ -1,6 +1,6 @@
-import React, { useEffect, useMemo, useState, useRef } from 'react'
-import { Card, Row, Col, Table, message, Segmented, Tag, Typography, Space, Statistic, Input, Button, Spin, Select, Upload, Divider } from 'antd'
-import { SearchOutlined, RocketOutlined, CalendarOutlined, GlobalOutlined, UploadOutlined, PictureOutlined } from '@ant-design/icons'
+import React, { useEffect, useMemo, useState } from 'react'
+import { Card, Row, Col, Table, message, Segmented, Tag, Typography, Space, Statistic, Input, Button, Spin, Select } from 'antd'
+import { SearchOutlined, RocketOutlined, CalendarOutlined, GlobalOutlined, PictureOutlined } from '@ant-design/icons'
 import { useAuth } from '../store/authStore'
 import api from '../services/api'
 import ReactECharts from 'echarts-for-react'
@@ -25,9 +25,9 @@ const Dashboard = () => {
   const [adCopyData, setAdCopyData] = useState(null)
   const [targetCountry, setTargetCountry] = useState('US')
   
-  // 截图上传状态
+  // 截图粘贴状态
   const [keywordImageLoading, setKeywordImageLoading] = useState(false)
-  const fileInputRef = useRef(null)
+  const [pastedImage, setPastedImage] = useState(null)
 
   useEffect(() => {
     // 防止重复请求
@@ -155,11 +155,28 @@ const Dashboard = () => {
     }
   }
 
-  // 上传截图识别关键词
-  const handleImageUpload = async (file) => {
-    if (!file) return
+  // 处理粘贴截图
+  const handlePaste = async (e) => {
+    const items = e.clipboardData?.items
+    if (!items) return
     
+    for (let i = 0; i < items.length; i++) {
+      if (items[i].type.indexOf('image') !== -1) {
+        const file = items[i].getAsFile()
+        if (file) {
+          e.preventDefault()
+          await recognizeImage(file)
+          break
+        }
+      }
+    }
+  }
+
+  // 识别图片中的关键词
+  const recognizeImage = async (file) => {
     setKeywordImageLoading(true)
+    setPastedImage(URL.createObjectURL(file))
+    
     try {
       const formData = new FormData()
       formData.append('file', file)
@@ -177,7 +194,6 @@ const Dashboard = () => {
       })
       
       if (res.data.success) {
-        // 提取的关键词填入输入框
         setKeywords(res.data.analysis)
         message.success('关键词识别成功！')
       } else {
@@ -188,8 +204,11 @@ const Dashboard = () => {
     } finally {
       setKeywordImageLoading(false)
     }
-    
-    return false // 阻止默认上传行为
+  }
+
+  // 清除粘贴的图片
+  const clearPastedImage = () => {
+    setPastedImage(null)
   }
 
   // 生成广告词
@@ -381,29 +400,51 @@ const Dashboard = () => {
                 status={!productUrl.trim() ? 'warning' : ''}
               />
               <div style={{ marginBottom: 8 }}>
-                <Space style={{ width: '100%', justifyContent: 'space-between' }}>
-                  <Text type="secondary">关键词（手动输入或截图识别）：</Text>
-                  <Upload
-                    accept="image/*"
-                    showUploadList={false}
-                    beforeUpload={handleImageUpload}
-                    disabled={keywordImageLoading}
-                  >
-                    <Button 
-                      icon={<PictureOutlined />} 
-                      size="small"
-                      loading={keywordImageLoading}
-                    >
-                      {keywordImageLoading ? '识别中...' : '上传截图识别'}
-                    </Button>
-                  </Upload>
-                </Space>
+                <Text type="secondary">关键词（直接粘贴截图或手动输入）：</Text>
               </div>
+              
+              {/* 粘贴区域 */}
+              <div
+                onPaste={handlePaste}
+                style={{
+                  border: pastedImage ? '2px solid #52c41a' : '2px dashed #d9d9d9',
+                  borderRadius: 8,
+                  padding: 12,
+                  marginBottom: 12,
+                  background: pastedImage ? '#f6ffed' : '#fafafa',
+                  cursor: 'pointer',
+                  minHeight: 80,
+                  position: 'relative'
+                }}
+                tabIndex={0}
+              >
+                {keywordImageLoading ? (
+                  <div style={{ textAlign: 'center', padding: 20 }}>
+                    <Spin />
+                    <p style={{ marginTop: 8, color: '#1890ff' }}>AI 正在识别关键词...</p>
+                  </div>
+                ) : pastedImage ? (
+                  <div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                      <Text type="success">✅ 截图已识别</Text>
+                      <Button size="small" onClick={clearPastedImage}>清除</Button>
+                    </div>
+                    <img src={pastedImage} alt="截图" style={{ maxWidth: '100%', maxHeight: 100, borderRadius: 4 }} />
+                  </div>
+                ) : (
+                  <div style={{ textAlign: 'center', color: '#999' }}>
+                    <PictureOutlined style={{ fontSize: 24, marginBottom: 8 }} />
+                    <p style={{ margin: 0 }}>📋 <b>Ctrl+V 粘贴截图</b></p>
+                    <p style={{ margin: 0, fontSize: 12 }}>从 sem.3ue.co 截图后直接粘贴到这里</p>
+                  </div>
+                )}
+              </div>
+
               <Input.TextArea
-                placeholder="输入关键词（用逗号或空格分隔）&#10;或点击上方按钮上传 sem.3ue.co 的截图自动识别"
+                placeholder="关键词会自动填入这里，也可手动输入"
                 value={keywords}
                 onChange={(e) => setKeywords(e.target.value)}
-                rows={3}
+                rows={2}
                 style={{ marginBottom: 12 }}
               />
               {adCopyData ? (
