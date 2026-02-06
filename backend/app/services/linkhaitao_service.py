@@ -235,6 +235,7 @@ class LinkHaitaoService:
                     "commission": cashback,
                     "status": item.get("status", "untreated"),
                     "merchant": item.get("advertiser_name") or item.get("mcid"),
+                    "mcid": item.get("mcid") or item.get("m_id"),
                 })
             
             logger.info(f"[LinkHaitao API] 汇总结果: 佣金记录 {len(commission_records)} 条，订单 {len(order_records)} 条，总佣金 {total_commission}")

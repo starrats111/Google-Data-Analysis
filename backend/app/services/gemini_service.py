@@ -171,33 +171,78 @@ class GeminiService:
         if not self.model:
             return {"success": False, "message": "Gemini 模型未配置"}
         
-        prompt = f"""你是一位Google Ads广告策划专家。请根据以下信息生成广告投放建议。
+        # 国家配置：语言、物流、货币
+        country_config = {
+            "US": {"lang": "英语", "lang_code": "English", "shipping": "美国境内免费配送/Free US Shipping", "currency": "USD", "name": "美国"},
+            "UK": {"lang": "英语", "lang_code": "English", "shipping": "英国境内免费配送/Free UK Delivery", "currency": "GBP", "name": "英国"},
+            "DE": {"lang": "德语", "lang_code": "German", "shipping": "德国境内免费配送/Kostenloser Versand in DE", "currency": "EUR", "name": "德国"},
+            "FR": {"lang": "法语", "lang_code": "French", "shipping": "法国境内免费配送/Livraison gratuite en France", "currency": "EUR", "name": "法国"},
+            "ES": {"lang": "西班牙语", "lang_code": "Spanish", "shipping": "西班牙境内免费配送/Envío gratis en España", "currency": "EUR", "name": "西班牙"},
+            "IT": {"lang": "意大利语", "lang_code": "Italian", "shipping": "意大利境内免费配送/Spedizione gratuita in Italia", "currency": "EUR", "name": "意大利"},
+            "AU": {"lang": "英语", "lang_code": "English", "shipping": "澳大利亚境内免费配送/Free AU Shipping", "currency": "AUD", "name": "澳大利亚"},
+            "CA": {"lang": "英语", "lang_code": "English", "shipping": "加拿大境内免费配送/Free CA Shipping", "currency": "CAD", "name": "加拿大"},
+            "JP": {"lang": "日语", "lang_code": "Japanese", "shipping": "日本境内免费配送/日本国内送料無料", "currency": "JPY", "name": "日本"},
+            "KR": {"lang": "韩语", "lang_code": "Korean", "shipping": "韩国境内免费配送/한국 내 무료 배송", "currency": "KRW", "name": "韩国"},
+        }
+        
+        config = country_config.get(target_country, country_config["US"])
+        
+        prompt = f"""你是一位谷歌广告投放专家，特别擅长关键词筛选和广告文案撰写，对谷歌搜索广告各种指标及作用了如指掌。
 
-关键词：{', '.join(keywords)}
-目标国家：{target_country}
-{'产品链接：' + product_url if product_url else ''}
+**最主要规则**：真实、严谨、不误导消费者、严格遵守Google Ads平台规范。
 
-请提供以下建议：
+**输入信息**：
+- 关键词：{', '.join(keywords)}
+- 目标国家：{config['name']} ({target_country})
+- 广告语言：{config['lang']} ({config['lang_code']})
+- 物流信息：{config['shipping']}
+- 货币：{config['currency']}
+{'- 产品链接：' + product_url if product_url else ''}
 
-1. **推荐预算**
-   - 日预算范围（美元）
-   - 预算分配建议
+---
 
-2. **推荐CPC**
-   - 建议Max CPC范围（美元）
-   - 不同关键词的CPC建议
+## 第一步：关键词筛选与基础配置
 
-3. **广告词建议**
-   - 标题（3个选项，每个30字符以内）
-   - 描述（2个选项，每个90字符以内）
-   - 行动号召语
+1. **筛选关键词**（输出可直接复制的格式）
+2. **推荐预算**：日预算 4{config['currency']}
+3. **推荐CPC**：Max CPC 0.3{config['currency']}
+4. **核查**：确认广告词不会触发谷歌广告政策中心提醒
 
-4. **投放建议**
-   - 最佳投放时段
-   - 设备定向建议
-   - 受众定向建议
+---
 
-请用中文回答，预算和CPC用美元。"""
+## 第二步：生成广告标题和描述
+
+**广告标题要求**（共17条）：
+- 字数：每条不超过25个字符（含标点和空格）
+- 第1条：包含折扣信息（优选最大折扣）
+- 第2条：包含物流信息（针对{config['name']}）
+- 第3条起：其他吸引顾客的标题
+- 第4条起：可包含次要折扣
+- 语言：用{config['lang_code']}输出，每条后面用中文翻译
+- 避免过多大写字符
+
+**广告描述要求**（共6条）：
+- 字数：每条50-80个字符（含空格和标点）
+- 其中1条必须包含折扣+物流信息
+- 语言：用{config['lang_code']}输出，每条后面用中文翻译
+- 具有品牌特色，符合Google Ads规范
+
+---
+
+## 第三步：附加链接
+
+生成6条站内链接，每条：
+- 链接标题：不超过25字符
+- 链接描述：2条，每条不超过28字符
+- 信息真实无误，不涉及欺骗消费者
+
+---
+
+**输出格式要求**：
+1. 标题和描述单独列行，醒目清晰
+2. 每条后标注字符数
+3. 生成后核实字数是否符合标准
+4. 确保信息真实，规避敏感词"""
 
         try:
             response = self.model.generate_content(prompt)
@@ -206,6 +251,10 @@ class GeminiService:
                 "recommendations": response.text,
                 "keywords": keywords,
                 "target_country": target_country,
+                "country_name": config['name'],
+                "language": config['lang'],
+                "shipping_info": config['shipping'],
+                "currency": config['currency'],
                 "timestamp": datetime.now().isoformat()
             }
         except Exception as e:

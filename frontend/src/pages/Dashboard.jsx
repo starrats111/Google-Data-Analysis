@@ -20,6 +20,7 @@ const Dashboard = () => {
   
   // 广告词生成状态
   const [keywords, setKeywords] = useState('')
+  const [productUrl, setProductUrl] = useState('')
   const [adCopyLoading, setAdCopyLoading] = useState(false)
   const [adCopyData, setAdCopyData] = useState(null)
   const [targetCountry, setTargetCountry] = useState('US')
@@ -161,6 +162,7 @@ const Dashboard = () => {
       const keywordList = keywords.split(/[,，\s]+/).filter(k => k.trim())
       const res = await api.post('/api/gemini/recommend-keywords', {
         keywords: keywordList,
+        product_url: productUrl || null,
         target_country: targetCountry
       })
       if (res.data.success) {
@@ -325,6 +327,13 @@ const Dashboard = () => {
             }
           >
             <Spin spinning={adCopyLoading}>
+              <Input
+                placeholder="产品链接 URL（可选），例如：https://www.example.com"
+                value={productUrl}
+                onChange={(e) => setProductUrl(e.target.value)}
+                style={{ marginBottom: 8 }}
+                prefix={<GlobalOutlined />}
+              />
               <Input.TextArea
                 placeholder="输入关键词（用逗号或空格分隔），例如：wireless earbuds, bluetooth headphones"
                 value={keywords}
@@ -333,12 +342,17 @@ const Dashboard = () => {
                 style={{ marginBottom: 16 }}
               />
               {adCopyData ? (
-                <div style={{ maxHeight: 300, overflow: 'auto' }}>
+                <div style={{ maxHeight: 400, overflow: 'auto' }}>
+                  <Row gutter={8} style={{ marginBottom: 12 }}>
+                    <Col span={12}>
+                      <Text strong>🎯 关键词：</Text> {adCopyData.keywords?.join(', ')}
+                    </Col>
+                    <Col span={12}>
+                      <Text strong>🌍 {adCopyData.country_name}</Text> · {adCopyData.language} · {adCopyData.currency}
+                    </Col>
+                  </Row>
                   <Paragraph>
-                    <Text strong>🎯 关键词：</Text> {adCopyData.keywords?.join(', ')}
-                  </Paragraph>
-                  <Paragraph>
-                    <Text strong>🌍 目标国家：</Text> {adCopyData.target_country}
+                    <Text type="secondary">🚚 {adCopyData.shipping_info}</Text>
                   </Paragraph>
                   <div style={{ whiteSpace: 'pre-wrap', fontSize: 13, lineHeight: 1.8, background: '#f5f5f5', padding: 12, borderRadius: 8 }}>
                     {adCopyData.recommendations}
@@ -347,8 +361,9 @@ const Dashboard = () => {
               ) : (
                 <div style={{ textAlign: 'center', padding: 20, color: '#999' }}>
                   <RocketOutlined style={{ fontSize: 32, marginBottom: 8 }} />
-                  <p>输入关键词，AI 将生成：</p>
-                  <p style={{ fontSize: 12 }}>推荐预算 · 建议CPC · 广告标题/描述 · 投放建议</p>
+                  <p>输入产品链接和关键词，AI 将生成：</p>
+                  <p style={{ fontSize: 12 }}>17条广告标题 · 6条广告描述 · 6条附加链接</p>
+                  <p style={{ fontSize: 12 }}>自动适配该国语言、物流、折扣信息</p>
                 </div>
               )}
             </Spin>
