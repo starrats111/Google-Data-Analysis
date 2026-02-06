@@ -18,6 +18,25 @@ import re
 
 router = APIRouter(prefix="/api/google-ads-aggregate", tags=["google-ads-aggregate"])
 
+# 货币汇率配置
+CNY_TO_USD_RATE = 7.2  # 人民币兑美元汇率
+
+
+def get_mcc_currency_map(db: Session, user_id: int) -> dict:
+    """获取用户所有MCC的货币映射"""
+    mccs = db.query(GoogleMccAccount).filter(
+        GoogleMccAccount.user_id == user_id,
+        GoogleMccAccount.is_active == True
+    ).all()
+    return {mcc.id: getattr(mcc, 'currency', 'USD') or 'USD' for mcc in mccs}
+
+
+def convert_to_usd(amount: float, currency: str) -> float:
+    """将金额转换为美元"""
+    if currency == "CNY":
+        return amount / CNY_TO_USD_RATE
+    return amount
+
 
 class DateRangeAggregateResponse(BaseModel):
     """日期范围聚合响应"""
@@ -198,10 +217,15 @@ async def get_campaign_data(
     # 按广告系列分组查询
     # 注意：预算(budget)是每日预算，使用最近一天的预算作为每日预算
     from app.models.affiliate_account import AffiliatePlatform
+    
+    # 获取用户所有MCC的货币映射
+    mcc_currency_map = get_mcc_currency_map(db, current_user.id)
+    
     query = db.query(
         GoogleAdsApiData.campaign_id,
         GoogleAdsApiData.campaign_name,
         GoogleAdsApiData.extracted_platform_code,
+        GoogleAdsApiData.mcc_id,
         func.sum(GoogleAdsApiData.cost).label('total_cost'),
         func.sum(GoogleAdsApiData.impressions).label('total_impressions'),
         func.sum(GoogleAdsApiData.clicks).label('total_clicks'),
@@ -215,7 +239,8 @@ async def get_campaign_data(
     ).group_by(
         GoogleAdsApiData.campaign_id,
         GoogleAdsApiData.campaign_name,
-        GoogleAdsApiData.extracted_platform_code
+        GoogleAdsApiData.extracted_platform_code,
+        GoogleAdsApiData.mcc_id
     )
     
     # 权限检查
@@ -300,6 +325,16 @@ async def get_campaign_data(
         platform_name = platform_code_map.get(row_platform_code, row_platform_code) if row_platform_code else None
         inferred_mid = _infer_merchant_id_from_campaign_name(row.campaign_name)
         
+        # 货币转换：如果是CNY则转换为USD
+        currency = mcc_currency_map.get(row.mcc_id, "USD")
+        raw_cost = float(row.total_cost or 0)
+        raw_budget = daily_budget
+        raw_cpc = float(row.avg_cpc or 0)
+        
+        display_cost = convert_to_usd(raw_cost, currency)
+        display_budget = convert_to_usd(raw_budget, currency)
+        display_cpc = convert_to_usd(raw_cpc, currency)
+        
         campaign_data.append({
             "date_range": date_range_display,
             "campaign_name": row.campaign_name,
@@ -309,11 +344,11 @@ async def get_campaign_data(
             "status": status_label,
             "status_code": status_code,
             "merchant_id": inferred_mid,
-            "budget": round(daily_budget, 2),  # 使用最近一天的预算作为每日预算
-            "cost": round(float(row.total_cost or 0), 2),
+            "budget": round(display_budget, 2),  # 使用最近一天的预算作为每日预算（已转换货币）
+            "cost": round(display_cost, 2),  # 费用（已转换货币）
             "impressions": int(total_impressions),
             "clicks": int(total_clicks),
-            "cpc": round(float(row.avg_cpc or 0), 4),
+            "cpc": round(display_cpc, 4),  # CPC（已转换货币）
             "ctr": round(ctr, 2),
             "is_budget_lost": round(float(row.avg_is_budget_lost or 0), 2),
             "is_rank_lost": round(float(row.avg_is_rank_lost or 0), 2)

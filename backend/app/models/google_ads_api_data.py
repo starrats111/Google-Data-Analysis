@@ -75,6 +75,9 @@ class GoogleMccAccount(Base):
     service_account_json = Column(Text, nullable=True)  # 单独的服务账号JSON（可选，优先使用全局配置）
     use_service_account = Column(Boolean, default=True, nullable=False)  # 是否使用服务账号模式
     
+    # 货币设置
+    currency = Column(String(10), default="USD", nullable=False)  # 账号货币：USD/CNY
+    
     # 状态
     is_active = Column(Boolean, default=True, nullable=False, index=True)
     
