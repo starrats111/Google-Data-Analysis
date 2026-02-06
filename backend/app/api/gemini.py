@@ -29,7 +29,7 @@ def get_gemini_service(model_type: str = "default") -> GeminiService:
     if not api_key:
         raise HTTPException(status_code=500, detail="Gemini API 密钥未配置")
     
-    base_url = getattr(settings, 'gemini_base_url', None) or "https://api.hajimi.ai/v1beta"
+    base_url = getattr(settings, 'gemini_base_url', None) or "https://api.gemai.cc/v1beta"
     
     # 根据类型选择模型
     if model_type == "advanced":

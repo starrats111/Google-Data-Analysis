@@ -125,9 +125,9 @@ class Settings(BaseSettings):
     OPENAI_MODEL: str = "gpt-4o-mini"
     
     # ===== Gemini AI 配置（哈基米中转）=====
-    # 哈基米API站: https://api.hajimi.ai
+    # 哈基米API站: https://api.gemai.cc
     gemini_api_key: str = ""
-    gemini_base_url: str = "https://api.hajimi.ai/v1beta"
+    gemini_base_url: str = "https://api.gemai.cc/v1beta"
     # 主模型（日常使用，最便宜）
     gemini_model: str = "gemini-2.5-flash-lite"
     # 备用模型1（最新模型）
