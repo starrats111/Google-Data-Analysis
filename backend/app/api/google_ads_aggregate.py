@@ -140,13 +140,21 @@ def _infer_merchant_id_from_campaign_name(campaign_name: str) -> Optional[str]:
     return last if re.match(r"^\d+$", last) else None
 
 
-def _normalize_status(status_value: Optional[str]) -> tuple[str, str]:
+def _normalize_status(status_value) -> tuple[str, str]:
     """
     统一状态：返回 (status_code, status_label)
     - status_code：ENABLED/PAUSED/REMOVED/UNKNOWN（用于筛选/排序）
     - status_label：已启用/已暂停/已移除/未知（用于展示）
     """
-    raw = (status_value or "").strip()
+    # 处理数字状态（Google Ads API 枚举值）
+    if isinstance(status_value, int) or (isinstance(status_value, str) and status_value.isdigit()):
+        int_val = int(status_value)
+        int_to_code = {2: "ENABLED", 3: "PAUSED", 4: "REMOVED"}
+        code = int_to_code.get(int_val, "UNKNOWN")
+        code_to_label = {"ENABLED": "已启用", "PAUSED": "已暂停", "REMOVED": "已移除", "UNKNOWN": "未知"}
+        return code, code_to_label[code]
+    
+    raw = (str(status_value) if status_value else "").strip()
     upper = raw.upper()
 
     # 已经是中文（历史数据可能存中文）

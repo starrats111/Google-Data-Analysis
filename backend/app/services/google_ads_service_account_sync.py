@@ -250,7 +250,7 @@ class GoogleAdsServiceAccountSync:
         client,
         customer_id: str,
         target_date: date,
-        only_enabled: bool = True
+        only_enabled: bool = False
     ) -> List[Dict]:
         """
         获取指定客户账号的广告系列数据
@@ -259,7 +259,7 @@ class GoogleAdsServiceAccountSync:
             client: GoogleAdsClient实例
             customer_id: 客户账号ID
             target_date: 目标日期
-            only_enabled: 是否只获取启用状态的广告系列
+            only_enabled: 是否只获取启用状态的广告系列（默认False=获取所有状态）
             
         Returns:
             广告系列数据列表
@@ -298,8 +298,17 @@ class GoogleAdsServiceAccountSync:
                 cost_micros = row.metrics.cost_micros if row.metrics.cost_micros else 0
                 cpc_micros = row.metrics.average_cpc if row.metrics.average_cpc else 0
                 
-                # 状态转换
-                status = row.campaign.status.name if hasattr(row.campaign.status, 'name') else str(row.campaign.status)
+                # 状态转换（支持枚举名称、整数值、字符串）
+                raw_status = row.campaign.status
+                if hasattr(raw_status, 'name'):
+                    status = raw_status.name
+                elif isinstance(raw_status, int):
+                    # Google Ads API 状态枚举值：2=ENABLED, 3=PAUSED, 4=REMOVED
+                    int_status_map = {2: 'ENABLED', 3: 'PAUSED', 4: 'REMOVED'}
+                    status = int_status_map.get(raw_status, 'UNKNOWN')
+                else:
+                    status = str(raw_status)
+                
                 status_map = {
                     'ENABLED': '已启用',
                     'PAUSED': '已暂停',
@@ -333,7 +342,7 @@ class GoogleAdsServiceAccountSync:
         mcc_id: int,
         target_date: Optional[date] = None,
         force_refresh: bool = False,
-        only_enabled: bool = True
+        only_enabled: bool = False
     ) -> Dict:
         """
         同步指定MCC的Google Ads数据
@@ -342,7 +351,7 @@ class GoogleAdsServiceAccountSync:
             mcc_id: MCC账号ID（数据库ID）
             target_date: 目标日期，默认为昨天
             force_refresh: 是否强制刷新
-            only_enabled: 是否只同步启用状态的广告系列
+            only_enabled: 是否只同步启用状态的广告系列（默认False=所有状态）
             
         Returns:
             同步结果
@@ -669,7 +678,7 @@ class GoogleAdsServiceAccountSync:
         self,
         target_date: Optional[date] = None,
         batch_size: Optional[int] = None,
-        only_enabled: bool = True
+        only_enabled: bool = False
     ) -> Dict:
         """
         批量同步所有活跃MCC的数据
@@ -677,7 +686,7 @@ class GoogleAdsServiceAccountSync:
         Args:
             target_date: 目标日期
             batch_size: 每批MCC数量
-            only_enabled: 是否只同步启用状态的广告系列
+            only_enabled: 是否只同步启用状态的广告系列（默认False=所有状态）
             
         Returns:
             同步结果汇总
