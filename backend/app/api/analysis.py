@@ -568,28 +568,34 @@ async def generate_l7d_from_daily_with_google(
 
 @router.post("/daily")
 async def generate_daily_analysis_from_api(
-    target_date: str = Query(..., description="目标日期 YYYY-MM-DD"),
+    begin_date: str = Query(..., description="开始日期 YYYY-MM-DD"),
+    end_date: str = Query(..., description="结束日期 YYYY-MM-DD"),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """
-    从API数据生成每日分析
+    从API数据生成每日分析（日期范围内每天一条）
     
     Args:
-        target_date: 目标日期 YYYY-MM-DD
+        begin_date: 开始日期 YYYY-MM-DD
+        end_date: 结束日期 YYYY-MM-DD
     """
     from datetime import datetime
     
     try:
-        target = datetime.strptime(target_date, "%Y-%m-%d").date()
+        begin = datetime.strptime(begin_date, "%Y-%m-%d").date()
+        end = datetime.strptime(end_date, "%Y-%m-%d").date()
     except ValueError:
         raise HTTPException(status_code=400, detail="日期格式错误，应为 YYYY-MM-DD")
+    
+    if begin > end:
+        raise HTTPException(status_code=400, detail="开始日期不能晚于结束日期")
     
     # 权限检查：员工只能分析自己的数据
     user_id = current_user.id if current_user.role == "employee" else None
     
     api_analysis_service = ApiAnalysisService(db)
-    result = api_analysis_service.generate_daily_analysis(target, user_id)
+    result = api_analysis_service.generate_daily_analysis(begin, end, user_id)
     
     if not result.get("success"):
         raise HTTPException(status_code=500, detail=result.get("message", "生成分析失败"))

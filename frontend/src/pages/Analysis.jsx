@@ -190,9 +190,10 @@ const Analysis = ({ mode }) => {
       
       setGeneratingFromApi(true)
       try {
-        const targetDate = dateRange[1].format('YYYY-MM-DD')  // 使用结束日期
+        const beginDate = dateRange[0].format('YYYY-MM-DD')
+        const endDate = dateRange[1].format('YYYY-MM-DD')
         const response = await api.post('/api/analysis/daily', null, {
-          params: { target_date: targetDate }
+          params: { begin_date: beginDate, end_date: endDate }
         })
         
         if (response.data.success) {
