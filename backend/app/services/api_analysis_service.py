@@ -370,14 +370,13 @@ class ApiAnalysisService:
                         "campaign_id": data.campaign_id,
                         "campaign_name": data.campaign_name,
                         "user_id": data.user_id,
+                        "platform_code": data.extracted_platform_code,
                         "cid": cid,
                         "mid": mid,
                         "country": country,
                         "data_dates": set(),  # 有数据的天数
                         "total_cost": 0.0,
                         "total_clicks": 0,
-                        "total_commission": 0.0,
-                        "total_orders": 0,
                         "max_cpc": 0.0,
                         "is_budget_lost": 0.0,
                         "is_rank_lost": 0.0,
@@ -394,13 +393,42 @@ class ApiAnalysisService:
             user_results = {}
             for key, cdata in campaign_data.items():
                 data_user_id = cdata["user_id"]
+                platform_code = cdata.get("platform_code")
+                
+                # 从PlatformData获取佣金和订单数
+                commission = 0.0
+                orders = 0
+                order_days = 0  # 有订单的天数
+                
+                if platform_code:
+                    # 找到对应的联盟账号
+                    affiliate_account = self.db.query(AffiliateAccount).join(
+                        AffiliatePlatform
+                    ).filter(
+                        AffiliateAccount.user_id == data_user_id,
+                        AffiliatePlatform.platform_name == platform_code,
+                        AffiliateAccount.is_active == True
+                    ).first()
+                    
+                    if affiliate_account:
+                        # 查询L7D期间的PlatformData
+                        platform_data_list = self.db.query(PlatformData).filter(
+                            PlatformData.affiliate_account_id == affiliate_account.id,
+                            PlatformData.date >= begin_date,
+                            PlatformData.date <= end_date
+                        ).all()
+                        
+                        for pd in platform_data_list:
+                            commission += (pd.commission or 0)
+                            orders += (pd.orders or 0)
+                            # 统计有订单的天数
+                            if pd.orders and pd.orders > 0:
+                                order_days += 1
                 
                 # 计算保守EPC和保守ROI
                 cost = cdata["total_cost"]
                 clicks = cdata["total_clicks"]
-                commission = cdata["total_commission"]
-                orders = cdata["total_orders"]
-                data_days = len(cdata["data_dates"])  # 有数据的天数（L7D出单天数）
+                data_days = len(cdata["data_dates"])  # 有Google Ads数据的天数
                 
                 conservative_epc = (commission * 0.72 / clicks) if clicks > 0 else 0
                 conservative_roi = ((commission * 0.72 - cost) / cost) if cost > 0 else None
@@ -408,7 +436,7 @@ class ApiAnalysisService:
                 # 生成操作指令
                 operation = self._generate_l7d_operation(
                     conservative_roi, cdata["is_budget_lost"], cdata["is_rank_lost"], 
-                    data_days, cdata["max_cpc"], orders
+                    order_days, cdata["max_cpc"], orders
                 )
                 
                 row = {
@@ -419,7 +447,7 @@ class ApiAnalysisService:
                     "L7D点击": clicks,
                     "L7D佣金": round(commission, 2),
                     "L7D花费": round(cost, 2),
-                    "L7D出单天数": data_days,
+                    "L7D出单天数": order_days,
                     "当前Max CPC": round(cdata["max_cpc"], 4),
                     "IS Budget丢失": f"{cdata['is_budget_lost'] * 100:.1f}%" if cdata['is_budget_lost'] > 0 else "-",
                     "IS Rank丢失": f"{cdata['is_rank_lost'] * 100:.1f}%" if cdata['is_rank_lost'] > 0 else "-",
