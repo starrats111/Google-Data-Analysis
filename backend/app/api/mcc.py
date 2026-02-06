@@ -371,8 +371,10 @@ async def get_mcc_accounts(
     try:
         logger.info(f"用户 {current_user.username} (ID: {current_user.id}) 请求MCC账号列表")
         
-        # 查询所有MCC账号（团队共享，所有用户都能看到所有MCC）
-        mcc_accounts = db.query(GoogleMccAccount).order_by(GoogleMccAccount.created_at.desc()).all()
+        # 查询当前用户的MCC账号（数据隔离，员工只能看到自己的MCC）
+        mcc_accounts = db.query(GoogleMccAccount).filter(
+            GoogleMccAccount.user_id == current_user.id
+        ).order_by(GoogleMccAccount.created_at.desc()).all()
         
         logger.info(f"查询到 {len(mcc_accounts)} 个MCC账号")
         
