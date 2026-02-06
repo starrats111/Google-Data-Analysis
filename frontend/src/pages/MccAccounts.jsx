@@ -158,12 +158,15 @@ export default function MccAccounts() {
   const handleSync = async (mccId) => {
     setSyncLoading({ ...syncLoading, [mccId]: true })
     try {
-      const yesterday = new Date()
-      yesterday.setDate(yesterday.getDate() - 1)
-      const targetDate = yesterday.toISOString().split('T')[0]
+      // 同步最近7天的数据
+      const endDate = new Date()
+      endDate.setDate(endDate.getDate() - 1)  // 昨天
+      const beginDate = new Date()
+      beginDate.setDate(beginDate.getDate() - 7)  // 7天前
       
       const response = await api.post(`/api/mcc/accounts/${mccId}/sync`, {
-        target_date: targetDate
+        begin_date: beginDate.toISOString().split('T')[0],
+        end_date: endDate.toISOString().split('T')[0]
       })
       
       if (response.data.async) {
