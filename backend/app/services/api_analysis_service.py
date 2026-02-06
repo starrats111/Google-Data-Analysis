@@ -1,19 +1,16 @@
 """
-基于API数据的分析服务
-从平台数据和Google Ads API数据自动生成每日分析和L7D分析
+基于API数据的分析服务（简化版）
+直接从Google Ads数据生成每日分析，保存到数据库
 """
-from datetime import datetime, date, timedelta
-from typing import Dict, List, Optional
+from datetime import date, timedelta
+from typing import Dict, Optional
 from sqlalchemy.orm import Session
-from sqlalchemy import func, and_, or_
+from sqlalchemy import func
 import logging
 
-from app.models.platform_data import PlatformData
 from app.models.google_ads_api_data import GoogleAdsApiData
-from app.models.affiliate_account import AffiliateAccount
-from app.models.ad_campaign_daily_metric import AdCampaignDailyMetric
-from app.models.ad_campaign import AdCampaign
-from app.services.campaign_matcher import CampaignMatcher
+from app.models.affiliate_account import AffiliateAccount, AffiliatePlatform
+from app.models.analysis_result import AnalysisResult
 
 logger = logging.getLogger(__name__)
 
@@ -23,7 +20,6 @@ class ApiAnalysisService:
     
     def __init__(self, db: Session):
         self.db = db
-        self.matcher = CampaignMatcher(db)
     
     def generate_daily_analysis(
         self,
@@ -33,201 +29,171 @@ class ApiAnalysisService:
         """
         生成指定日期的每日分析
         
-        Args:
-            target_date: 目标日期
-            user_id: 用户ID（可选，如果提供则只分析该用户的数据）
-        
-        Returns:
-            分析结果
+        简化逻辑：
+        1. 查询当天的Google Ads数据
+        2. 按联盟账号分组
+        3. 生成分析记录并保存
         """
+        logger.info(f"=== 开始生成每日分析 === 日期: {target_date}, 用户ID: {user_id}")
+        
         try:
-            # 1. 获取该日期的Google Ads数据
-            google_ads_query = self.db.query(GoogleAdsApiData).filter(
+            # 1. 查询Google Ads数据
+            query = self.db.query(GoogleAdsApiData).filter(
                 GoogleAdsApiData.date == target_date
             )
             
             if user_id:
-                google_ads_query = google_ads_query.filter(
-                    GoogleAdsApiData.user_id == user_id
-                )
+                query = query.filter(GoogleAdsApiData.user_id == user_id)
             
-            google_ads_data = google_ads_query.all()
+            google_ads_data = query.all()
+            logger.info(f"找到 {len(google_ads_data)} 条Google Ads数据")
             
-            # 2. 按平台和账号分组聚合Google Ads数据
-            google_ads_by_account = {}
+            if not google_ads_data:
+                return {
+                    "success": True,
+                    "date": target_date.isoformat(),
+                    "total_records": 0,
+                    "message": "没有找到Google Ads数据"
+                }
+            
+            # 2. 按平台分组聚合数据
+            platform_data = {}
             for data in google_ads_data:
                 platform_code = data.extracted_platform_code
-                account_code = data.extracted_account_code
-                
                 if not platform_code:
+                    logger.debug(f"广告系列 {data.campaign_name} 没有平台代码，跳过")
                     continue
                 
-                # 查找对应的联盟账号
-                affiliate_account = self._find_affiliate_account(
-                    platform_code,
-                    account_code,
-                    data.user_id
-                )
+                data_user_id = data.user_id
+                key = (platform_code, data_user_id)
                 
-                if not affiliate_account:
-                    continue
-                
-                key = affiliate_account.id
-                
-                if key not in google_ads_by_account:
-                    google_ads_by_account[key] = {
-                        "account": affiliate_account,
+                if key not in platform_data:
+                    platform_data[key] = {
+                        "platform_code": platform_code,
+                        "user_id": data_user_id,
                         "campaigns": [],
-                        "total_budget": 0,
-                        "total_cost": 0,
-                        "total_impressions": 0,
+                        "total_cost": 0.0,
                         "total_clicks": 0,
-                        "max_cpc": 0,
-                        "is_budget_lost": 0,
-                        "is_rank_lost": 0,
+                        "total_impressions": 0,
+                        "total_budget": 0.0,
+                        "max_cpc": 0.0,
+                        "is_budget_lost": 0.0,
+                        "is_rank_lost": 0.0,
                     }
                 
-                google_ads_by_account[key]["campaigns"].append(data)
-                google_ads_by_account[key]["total_budget"] += data.budget
-                google_ads_by_account[key]["total_cost"] += data.cost
-                google_ads_by_account[key]["total_impressions"] += data.impressions
-                google_ads_by_account[key]["total_clicks"] += data.clicks
-                google_ads_by_account[key]["max_cpc"] = max(
-                    google_ads_by_account[key]["max_cpc"],
-                    data.cpc
-                )
-                google_ads_by_account[key]["is_budget_lost"] = max(
-                    google_ads_by_account[key]["is_budget_lost"],
-                    data.is_budget_lost
-                )
-                google_ads_by_account[key]["is_rank_lost"] = max(
-                    google_ads_by_account[key]["is_rank_lost"],
-                    data.is_rank_lost
-                )
+                platform_data[key]["campaigns"].append(data.campaign_name)
+                platform_data[key]["total_cost"] += (data.cost or 0)
+                platform_data[key]["total_clicks"] += int(data.clicks or 0)
+                platform_data[key]["total_impressions"] += int(data.impressions or 0)
+                platform_data[key]["total_budget"] += (data.budget or 0)
+                platform_data[key]["max_cpc"] = max(platform_data[key]["max_cpc"], (data.cpc or 0))
+                platform_data[key]["is_budget_lost"] = max(platform_data[key]["is_budget_lost"], (data.is_budget_lost or 0))
+                platform_data[key]["is_rank_lost"] = max(platform_data[key]["is_rank_lost"], (data.is_rank_lost or 0))
             
-            # 3. 获取该日期的平台数据
-            platform_data_query = self.db.query(PlatformData).filter(
-                PlatformData.date == target_date
-            )
+            logger.info(f"按平台分组后有 {len(platform_data)} 组数据")
             
-            if user_id:
-                platform_data_query = platform_data_query.filter(
-                    PlatformData.user_id == user_id
-                )
+            # 3. 为每组数据匹配联盟账号并生成分析
+            created_count = 0
+            skipped_count = 0
             
-            platform_data_list = platform_data_query.all()
-            
-            # 4. 合并数据并生成分析结果
-            analysis_results = []
-            
-            for account_id, google_data in google_ads_by_account.items():
-                # 查找对应的平台数据
-                platform_data = next(
-                    (pd for pd in platform_data_list if pd.affiliate_account_id == account_id),
-                    None
-                )
+            for key, pdata in platform_data.items():
+                platform_code = pdata["platform_code"]
+                data_user_id = pdata["user_id"]
                 
-                account = google_data["account"]
-                
-                # 计算指标
-                cost = google_data["total_cost"]
-                clicks = google_data["total_clicks"]
-                impressions = google_data["total_impressions"]
-                cpc = clicks > 0 and cost / clicks or 0
-                
-                commission = platform_data.commission if platform_data else 0
-                orders = platform_data.orders if platform_data else 0
-                order_days_this_week = platform_data.order_days_this_week if platform_data else 0
-                
-                # 计算本周对比（需要查询本周其他日期的数据）
-                week_start = target_date - timedelta(days=target_date.weekday())
-                week_end = week_start + timedelta(days=6)
-                
-                week_commission = self.db.query(func.sum(PlatformData.commission)).filter(
-                    PlatformData.affiliate_account_id == account_id,
-                    PlatformData.date >= week_start,
-                    PlatformData.date <= week_end
-                ).scalar() or 0
-                
-                week_cost_google = self.db.query(func.sum(GoogleAdsApiData.cost)).filter(
-                    GoogleAdsApiData.user_id == account.user_id,
-                    GoogleAdsApiData.date >= week_start,
-                    GoogleAdsApiData.date <= week_end
-                ).scalar() or 0
-                
-                # 计算保守EPC和保守ROI
-                conservative_epc = clicks > 0 and (commission * 0.72) / clicks or 0
-                conservative_roi = cost > 0 and ((commission * 0.72 - cost) / cost) * 100 or 0
-                
-                # 生成操作指令
-                operation_instruction = self._generate_operation_instruction(
-                    cost, clicks, commission, orders, 
-                    google_data["is_budget_lost"], google_data["is_rank_lost"],
-                    order_days_this_week
-                )
-                
-                # 保存到AdCampaignDailyMetric表（用于每日分析）
-                # 这里需要为每个广告系列创建记录，但为了简化，我们先创建汇总记录
-                # 实际应用中可能需要更细粒度的处理
-                
-                result_row = {
-                    "date": target_date.isoformat(),
-                    "account_id": account_id,
-                    "account_name": account.account_name,
-                    "platform_name": account.platform.platform_name,
-                    "campaign_count": len(google_data["campaigns"]),
-                    "budget": google_data["total_budget"],
-                    "cost": cost,
-                    "impressions": impressions,
-                    "clicks": clicks,
-                    "cpc": cpc,
-                    "max_cpc": google_data["max_cpc"],
-                    "orders": orders,
-                    "commission": commission,
-                    "order_days_this_week": order_days_this_week,
-                    "week_commission": week_commission,
-                    "week_cost": week_cost_google,
-                    "conservative_epc": conservative_epc,
-                    "conservative_roi": conservative_roi,
-                    "is_budget_lost": google_data["is_budget_lost"],
-                    "is_rank_lost": google_data["is_rank_lost"],
-                    "operation_instruction": operation_instruction,
-                }
-                analysis_results.append(result_row)
-                
-                # 保存到数据库
-                from app.models.analysis_result import AnalysisResult
-                
-                # 检查是否已存在相同记录
-                existing = self.db.query(AnalysisResult).filter(
-                    AnalysisResult.user_id == account.user_id,
-                    AnalysisResult.affiliate_account_id == account_id,
-                    AnalysisResult.analysis_date == target_date,
-                    AnalysisResult.analysis_type == 'daily'
+                # 查找联盟账号（用platform_name匹配，如PM、LH、CG）
+                affiliate_account = self.db.query(AffiliateAccount).join(
+                    AffiliatePlatform
+                ).filter(
+                    AffiliateAccount.user_id == data_user_id,
+                    AffiliatePlatform.platform_name == platform_code,
+                    AffiliateAccount.is_active == True
                 ).first()
                 
-                if not existing:
-                    analysis_result = AnalysisResult(
-                        user_id=account.user_id,
-                        affiliate_account_id=account_id,
-                        analysis_date=target_date,
-                        analysis_type='daily',
-                        result_data={"data": [result_row]}
-                    )
-                    self.db.add(analysis_result)
+                if not affiliate_account:
+                    logger.warning(f"用户 {data_user_id} 的平台 {platform_code} 没有找到联盟账号")
+                    skipped_count += 1
+                    continue
+                
+                logger.info(f"平台 {platform_code} 匹配到联盟账号: {affiliate_account.account_name}")
+                
+                # 检查是否已存在
+                existing = self.db.query(AnalysisResult).filter(
+                    AnalysisResult.user_id == data_user_id,
+                    AnalysisResult.affiliate_account_id == affiliate_account.id,
+                    AnalysisResult.analysis_date == target_date,
+                    AnalysisResult.analysis_type == "daily"
+                ).first()
+                
+                if existing:
+                    logger.info(f"分析记录已存在，跳过: 用户{data_user_id} 账号{affiliate_account.id}")
+                    skipped_count += 1
+                    continue
+                
+                # 计算指标
+                cost = pdata["total_cost"]
+                clicks = pdata["total_clicks"]
+                impressions = pdata["total_impressions"]
+                cpc = (cost / clicks) if clicks > 0 else 0
+                
+                # 保守佣金相关（没有平台数据时默认为0）
+                conservative_epc = 0
+                conservative_roi = 0
+                
+                # 生成操作指令
+                instructions = []
+                if pdata["is_budget_lost"] > 0.1:
+                    instructions.append(f"预算丢失{pdata['is_budget_lost']*100:.1f}%")
+                if pdata["is_rank_lost"] > 0.1:
+                    instructions.append(f"排名丢失{pdata['is_rank_lost']*100:.1f}%")
+                operation = "；".join(instructions) if instructions else "正常"
+                
+                # 创建分析结果
+                result_data = {
+                    "data": [{
+                        "date": target_date.isoformat(),
+                        "platform": platform_code,
+                        "account_name": affiliate_account.account_name,
+                        "campaign_count": len(pdata["campaigns"]),
+                        "cost": round(cost, 2),
+                        "clicks": clicks,
+                        "impressions": impressions,
+                        "cpc": round(cpc, 4),
+                        "max_cpc": round(pdata["max_cpc"], 4),
+                        "budget": round(pdata["total_budget"], 2),
+                        "is_budget_lost": round(pdata["is_budget_lost"] * 100, 2),
+                        "is_rank_lost": round(pdata["is_rank_lost"] * 100, 2),
+                        "operation": operation,
+                    }]
+                }
+                
+                analysis_result = AnalysisResult(
+                    user_id=data_user_id,
+                    affiliate_account_id=affiliate_account.id,
+                    analysis_date=target_date,
+                    analysis_type="daily",
+                    result_data=result_data
+                )
+                
+                self.db.add(analysis_result)
+                created_count += 1
+                logger.info(f"创建分析记录: 用户{data_user_id} 账号{affiliate_account.account_name} 费用${cost:.2f}")
             
-            # 提交数据库更改
+            # 提交数据库
             self.db.commit()
+            
+            logger.info(f"=== 每日分析完成 === 创建: {created_count}, 跳过: {skipped_count}")
             
             return {
                 "success": True,
                 "date": target_date.isoformat(),
-                "total_records": len(analysis_results),
-                "results": analysis_results
+                "total_records": created_count,
+                "skipped_records": skipped_count,
+                "message": f"成功创建 {created_count} 条分析记录"
             }
             
         except Exception as e:
-            logger.error(f"生成每日分析失败: {e}")
+            logger.error(f"生成每日分析失败: {e}", exc_info=True)
+            self.db.rollback()
             return {
                 "success": False,
                 "message": f"生成分析失败: {str(e)}"
@@ -240,249 +206,121 @@ class ApiAnalysisService:
     ) -> Dict:
         """
         生成过去7天的L7D分析
-        
-        Args:
-            end_date: 结束日期（通常是昨天）
-            user_id: 用户ID（可选）
-        
-        Returns:
-            L7D分析结果
         """
+        logger.info(f"=== 开始生成L7D分析 === 结束日期: {end_date}, 用户ID: {user_id}")
+        
         try:
-            begin_date = end_date - timedelta(days=6)  # 过去7天
+            begin_date = end_date - timedelta(days=6)
             
-            # 1. 获取过去7天的Google Ads数据
-            google_ads_query = self.db.query(GoogleAdsApiData).filter(
+            # 查询过去7天的Google Ads数据
+            query = self.db.query(GoogleAdsApiData).filter(
                 GoogleAdsApiData.date >= begin_date,
                 GoogleAdsApiData.date <= end_date
             )
             
             if user_id:
-                google_ads_query = google_ads_query.filter(
-                    GoogleAdsApiData.user_id == user_id
-                )
+                query = query.filter(GoogleAdsApiData.user_id == user_id)
             
-            google_ads_data = google_ads_query.all()
+            google_ads_data = query.all()
+            logger.info(f"找到 {len(google_ads_data)} 条Google Ads数据 ({begin_date} ~ {end_date})")
             
-            # 2. 按平台和账号分组聚合
-            google_ads_by_account = {}
+            if not google_ads_data:
+                return {
+                    "success": True,
+                    "begin_date": begin_date.isoformat(),
+                    "end_date": end_date.isoformat(),
+                    "total_records": 0,
+                    "message": "没有找到Google Ads数据"
+                }
+            
+            # 按平台和用户分组
+            platform_data = {}
             for data in google_ads_data:
                 platform_code = data.extracted_platform_code
-                account_code = data.extracted_account_code
-                
                 if not platform_code:
                     continue
                 
-                affiliate_account = self._find_affiliate_account(
-                    platform_code,
-                    account_code,
-                    data.user_id
-                )
+                data_user_id = data.user_id
+                key = (platform_code, data_user_id)
+                
+                if key not in platform_data:
+                    platform_data[key] = {
+                        "platform_code": platform_code,
+                        "user_id": data_user_id,
+                        "dates": set(),
+                        "campaigns": set(),
+                        "total_cost": 0.0,
+                        "total_clicks": 0,
+                        "total_impressions": 0,
+                        "max_cpc": 0.0,
+                        "is_budget_lost": 0.0,
+                        "is_rank_lost": 0.0,
+                    }
+                
+                platform_data[key]["dates"].add(data.date)
+                platform_data[key]["campaigns"].add(data.campaign_name)
+                platform_data[key]["total_cost"] += (data.cost or 0)
+                platform_data[key]["total_clicks"] += int(data.clicks or 0)
+                platform_data[key]["total_impressions"] += int(data.impressions or 0)
+                platform_data[key]["max_cpc"] = max(platform_data[key]["max_cpc"], (data.cpc or 0))
+                platform_data[key]["is_budget_lost"] = max(platform_data[key]["is_budget_lost"], (data.is_budget_lost or 0))
+                platform_data[key]["is_rank_lost"] = max(platform_data[key]["is_rank_lost"], (data.is_rank_lost or 0))
+            
+            logger.info(f"按平台分组后有 {len(platform_data)} 组数据")
+            
+            # 生成L7D分析
+            results = []
+            
+            for key, pdata in platform_data.items():
+                platform_code = pdata["platform_code"]
+                data_user_id = pdata["user_id"]
+                
+                # 查找联盟账号
+                affiliate_account = self.db.query(AffiliateAccount).join(
+                    AffiliatePlatform
+                ).filter(
+                    AffiliateAccount.user_id == data_user_id,
+                    AffiliatePlatform.platform_name == platform_code,
+                    AffiliateAccount.is_active == True
+                ).first()
                 
                 if not affiliate_account:
+                    logger.warning(f"用户 {data_user_id} 的平台 {platform_code} 没有找到联盟账号")
                     continue
                 
-                key = affiliate_account.id
+                cost = pdata["total_cost"]
+                clicks = pdata["total_clicks"]
+                cpc = (cost / clicks) if clicks > 0 else 0
                 
-                if key not in google_ads_by_account:
-                    google_ads_by_account[key] = {
-                        "account": affiliate_account,
-                        "campaigns": [],
-                        "dates": set(),
-                        "total_budget": 0,
-                        "total_cost": 0,
-                        "total_impressions": 0,
-                        "total_clicks": 0,
-                        "max_cpc": 0,
-                        "is_budget_lost": 0,
-                        "is_rank_lost": 0,
-                    }
-                
-                google_ads_by_account[key]["campaigns"].append(data)
-                google_ads_by_account[key]["dates"].add(data.date)
-                google_ads_by_account[key]["total_budget"] += data.budget
-                google_ads_by_account[key]["total_cost"] += data.cost
-                google_ads_by_account[key]["total_impressions"] += data.impressions
-                google_ads_by_account[key]["total_clicks"] += data.clicks
-                google_ads_by_account[key]["max_cpc"] = max(
-                    google_ads_by_account[key]["max_cpc"],
-                    data.cpc
-                )
-                google_ads_by_account[key]["is_budget_lost"] = max(
-                    google_ads_by_account[key]["is_budget_lost"],
-                    data.is_budget_lost
-                )
-                google_ads_by_account[key]["is_rank_lost"] = max(
-                    google_ads_by_account[key]["is_rank_lost"],
-                    data.is_rank_lost
-                )
-            
-            # 3. 获取过去7天的平台数据
-            platform_data_query = self.db.query(PlatformData).filter(
-                PlatformData.date >= begin_date,
-                PlatformData.date <= end_date
-            )
-            
-            if user_id:
-                platform_data_query = platform_data_query.filter(
-                    PlatformData.user_id == user_id
-                )
-            
-            platform_data_list = platform_data_query.all()
-            
-            # 4. 按账号聚合平台数据
-            platform_data_by_account = {}
-            for pd in platform_data_list:
-                account_id = pd.affiliate_account_id
-                if account_id not in platform_data_by_account:
-                    platform_data_by_account[account_id] = {
-                        "total_commission": 0,
-                        "total_orders": 0,
-                        "order_days": set(),
-                    }
-                
-                platform_data_by_account[account_id]["total_commission"] += pd.commission
-                platform_data_by_account[account_id]["total_orders"] += pd.orders
-                if pd.orders > 0:
-                    platform_data_by_account[account_id]["order_days"].add(pd.date)
-            
-            # 5. 生成L7D分析结果
-            analysis_results = []
-            
-            for account_id, google_data in google_ads_by_account.items():
-                platform_data = platform_data_by_account.get(account_id, {
-                    "total_commission": 0,
-                    "total_orders": 0,
-                    "order_days": set(),
-                })
-                
-                account = google_data["account"]
-                
-                # L7D指标
-                l7d_cost = google_data["total_cost"]
-                l7d_clicks = google_data["total_clicks"]
-                l7d_impressions = google_data["total_impressions"]
-                l7d_cpc = l7d_clicks > 0 and l7d_cost / l7d_clicks or 0
-                l7d_commission = platform_data["total_commission"]
-                l7d_orders = platform_data["total_orders"]
-                l7d_order_days = len(platform_data["order_days"])
-                
-                # 计算保守EPC和保守ROI
-                conservative_epc = l7d_clicks > 0 and (l7d_commission * 0.72) / l7d_clicks or 0
-                conservative_roi = l7d_cost > 0 and ((l7d_commission * 0.72 - l7d_cost) / l7d_cost) * 100 or 0
-                
-                # 生成操作指令
-                operation_instruction = self._generate_operation_instruction(
-                    l7d_cost, l7d_clicks, l7d_commission, l7d_orders,
-                    google_data["is_budget_lost"], google_data["is_rank_lost"],
-                    l7d_order_days
-                )
-                
-                analysis_results.append({
+                results.append({
                     "begin_date": begin_date.isoformat(),
                     "end_date": end_date.isoformat(),
-                    "account_id": account_id,
-                    "account_name": account.account_name,
-                    "platform_name": account.platform.platform_name,
-                    "campaign_count": len(set(c.campaign_id for c in google_data["campaigns"])),
-                    "l7d_budget": google_data["total_budget"],
-                    "l7d_cost": l7d_cost,
-                    "l7d_impressions": l7d_impressions,
-                    "l7d_clicks": l7d_clicks,
-                    "l7d_cpc": l7d_cpc,
-                    "max_cpc_7d": google_data["max_cpc"],
-                    "l7d_orders": l7d_orders,
-                    "l7d_order_days": l7d_order_days,
-                    "l7d_commission": l7d_commission,
-                    "conservative_epc": conservative_epc,
-                    "conservative_roi": conservative_roi,
-                    "is_budget_lost": google_data["is_budget_lost"],
-                    "is_rank_lost": google_data["is_rank_lost"],
-                    "operation_instruction": operation_instruction,
+                    "platform": platform_code,
+                    "account_name": affiliate_account.account_name,
+                    "campaign_count": len(pdata["campaigns"]),
+                    "days_with_data": len(pdata["dates"]),
+                    "l7d_cost": round(cost, 2),
+                    "l7d_clicks": clicks,
+                    "l7d_impressions": pdata["total_impressions"],
+                    "l7d_cpc": round(cpc, 4),
+                    "max_cpc": round(pdata["max_cpc"], 4),
+                    "is_budget_lost": round(pdata["is_budget_lost"] * 100, 2),
+                    "is_rank_lost": round(pdata["is_rank_lost"] * 100, 2),
                 })
+            
+            logger.info(f"=== L7D分析完成 === 生成: {len(results)} 条")
             
             return {
                 "success": True,
                 "begin_date": begin_date.isoformat(),
                 "end_date": end_date.isoformat(),
-                "total_records": len(analysis_results),
-                "results": analysis_results
+                "total_records": len(results),
+                "results": results
             }
             
         except Exception as e:
-            logger.error(f"生成L7D分析失败: {e}")
+            logger.error(f"生成L7D分析失败: {e}", exc_info=True)
             return {
                 "success": False,
                 "message": f"生成分析失败: {str(e)}"
             }
-    
-    def _find_affiliate_account(
-        self,
-        platform_code: str,
-        account_code: Optional[str],
-        user_id: int
-    ) -> Optional[AffiliateAccount]:
-        """查找对应的联盟账号"""
-        # 使用 platform_name 匹配（如 PM, LH, CG 等），而不是 platform_code（URL）
-        query = self.db.query(AffiliateAccount).join(
-            AffiliateAccount.platform
-        ).filter(
-            AffiliateAccount.user_id == user_id,
-            AffiliateAccount.platform.has(platform_name=platform_code),
-            AffiliateAccount.is_active == True
-        )
-        
-        if account_code:
-            query = query.filter(AffiliateAccount.account_code == account_code)
-        
-        account = query.first()
-        
-        if account:
-            return account
-        
-        # 如果没找到匹配的账号代码，返回该平台下的第一个账号
-        if not account_code:
-            account = query.first()
-            if account:
-                return account
-        
-        return None
-    
-    def _generate_operation_instruction(
-        self,
-        cost: float,
-        clicks: float,
-        commission: float,
-        orders: int,
-        is_budget_lost: float,
-        is_rank_lost: float,
-        order_days: int
-    ) -> str:
-        """生成操作指令"""
-        instructions = []
-        
-        # 预算丢失判断
-        if is_budget_lost > 0.1:  # 超过10%
-            instructions.append(f"预算丢失{is_budget_lost*100:.1f}%，建议增加预算")
-        
-        # Rank丢失判断
-        if is_rank_lost > 0.1:  # 超过10%
-            instructions.append(f"排名丢失{is_rank_lost*100:.1f}%，建议提高出价")
-        
-        # ROI判断
-        if clicks > 0:
-            roi = cost > 0 and ((commission * 0.72 - cost) / cost) * 100 or 0
-            if roi < 0:
-                instructions.append("ROI为负，建议暂停或优化")
-            elif roi < 20:
-                instructions.append("ROI较低，建议优化")
-        
-        # 出单天数判断
-        if order_days < 3:
-            instructions.append("出单天数较少，建议优化")
-        
-        if not instructions:
-            return "数据正常，保持现状"
-        
-        return "；".join(instructions)
-
