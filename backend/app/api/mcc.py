@@ -275,17 +275,30 @@ async def create_mcc_account(
     if existing:
         raise HTTPException(status_code=400, detail="您已添加过该MCC ID")
     
+    # 自动继承全局服务账号配置（从已有MCC复制）
+    service_account_json = mcc_data.service_account_json
+    use_service_account = mcc_data.use_service_account
+    if not service_account_json:
+        existing_mcc_with_sa = db.query(GoogleMccAccount).filter(
+            GoogleMccAccount.service_account_json.isnot(None),
+            GoogleMccAccount.service_account_json != ""
+        ).first()
+        if existing_mcc_with_sa:
+            service_account_json = existing_mcc_with_sa.service_account_json
+            use_service_account = True
+            logger.info(f"新MCC {mcc_data.mcc_id} 自动继承全局服务账号配置")
+    
     # 创建MCC账号
     mcc_account = GoogleMccAccount(
         user_id=current_user.id,
         mcc_id=mcc_data.mcc_id,
         mcc_name=mcc_data.mcc_name,
         email=mcc_data.email or "",
-        use_service_account=mcc_data.use_service_account,
+        use_service_account=use_service_account,
         client_id=mcc_data.client_id,
         client_secret=mcc_data.client_secret,
         refresh_token=mcc_data.refresh_token,
-        service_account_json=mcc_data.service_account_json,
+        service_account_json=service_account_json,
         is_active=True
     )
     
@@ -323,17 +336,29 @@ async def batch_create_mcc_accounts(
                 errors.append(f"MCC {mcc_data.mcc_id} 您已添加过，跳过")
                 continue
             
+            # 自动继承全局服务账号配置
+            service_account_json = mcc_data.service_account_json
+            use_service_account = mcc_data.use_service_account
+            if not service_account_json:
+                existing_mcc_with_sa = db.query(GoogleMccAccount).filter(
+                    GoogleMccAccount.service_account_json.isnot(None),
+                    GoogleMccAccount.service_account_json != ""
+                ).first()
+                if existing_mcc_with_sa:
+                    service_account_json = existing_mcc_with_sa.service_account_json
+                    use_service_account = True
+            
             # 创建MCC账号
             mcc_account = GoogleMccAccount(
                 user_id=current_user.id,
                 mcc_id=mcc_data.mcc_id,
                 mcc_name=mcc_data.mcc_name,
                 email=mcc_data.email or "",
-                use_service_account=mcc_data.use_service_account,
+                use_service_account=use_service_account,
                 client_id=mcc_data.client_id,
                 client_secret=mcc_data.client_secret,
                 refresh_token=mcc_data.refresh_token,
-                service_account_json=mcc_data.service_account_json,
+                service_account_json=service_account_json,
                 is_active=True
             )
             
