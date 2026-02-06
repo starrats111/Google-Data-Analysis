@@ -124,15 +124,16 @@ class Settings(BaseSettings):
     OPENAI_API_KEY: str = ""
     OPENAI_MODEL: str = "gpt-4o-mini"
     
-    # ===== Gemini AI 配置 =====
-    # 支持官方API或哈基米中转API
-    # 官方: https://aistudio.google.com/
-    # 哈基米: https://burn.hair 或其他中转站
+    # ===== Gemini AI 配置（哈基米中转）=====
+    # 哈基米API站: https://api.hajimi.ai
     gemini_api_key: str = ""
-    # API 基础地址（留空使用官方，填写中转地址如 https://burn.hair/v1beta）
-    gemini_base_url: str = ""
-    # 模型名称（推荐: gemini-2.0-flash, gemini-1.5-pro, gemini-2.0-pro）
-    gemini_model: str = "gemini-2.0-flash"
+    gemini_base_url: str = "https://api.hajimi.ai/v1beta"
+    # 主模型（日常使用，最便宜）
+    gemini_model: str = "gemini-2.5-flash-lite"
+    # 备用模型1（最新模型）
+    gemini_model_advanced: str = "gemini-3-flash-preview"
+    # 备用模型2（带思考链，复杂分析）
+    gemini_model_thinking: str = "gemini-3-flash-preview-thinking"
     
     OPENAI_BASE_URL: str = "https://api.openai.com/v1"
     

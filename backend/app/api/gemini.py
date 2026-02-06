@@ -16,17 +16,38 @@ from app.config import settings
 router = APIRouter(prefix="/api/gemini", tags=["Gemini AI"])
 
 
-def get_gemini_service() -> GeminiService:
-    """获取 Gemini 服务实例"""
+def get_gemini_service(model_type: str = "default") -> GeminiService:
+    """获取 Gemini 服务实例
+    
+    Args:
+        model_type: 模型类型
+            - "default": 默认模型（gemini-2.5-flash-lite，最便宜）
+            - "advanced": 高级模型（gemini-3-flash-preview，最新）
+            - "thinking": 思考模型（gemini-3-flash-preview-thinking，深度分析）
+    """
     api_key = getattr(settings, 'gemini_api_key', None)
     if not api_key:
         raise HTTPException(status_code=500, detail="Gemini API 密钥未配置")
     
-    # 获取可选的中转地址和模型配置
-    base_url = getattr(settings, 'gemini_base_url', None) or None
-    model = getattr(settings, 'gemini_model', None) or "gemini-2.0-flash"
+    base_url = getattr(settings, 'gemini_base_url', None) or "https://api.hajimi.ai/v1beta"
+    
+    # 根据类型选择模型
+    if model_type == "advanced":
+        model = getattr(settings, 'gemini_model_advanced', "gemini-3-flash-preview")
+    elif model_type == "thinking":
+        model = getattr(settings, 'gemini_model_thinking', "gemini-3-flash-preview-thinking")
+    else:
+        model = getattr(settings, 'gemini_model', "gemini-2.5-flash-lite")
     
     return GeminiService(api_key, base_url, model)
+
+
+# 模型列表，用于自动降级
+MODEL_FALLBACK_ORDER = [
+    "gemini-2.5-flash-lite",        # 最便宜，优先
+    "gemini-3-flash-preview",        # 备用1
+    "gemini-3-flash-preview-thinking" # 备用2
+]
 
 
 class CampaignAnalysisRequest(BaseModel):
@@ -42,6 +63,8 @@ class CampaignAnalysisRequest(BaseModel):
     orders: Optional[int] = 0
     commission: Optional[float] = 0
     roi: Optional[float] = None
+    # 可选：指定使用的模型 (default/advanced/thinking)
+    model_type: Optional[str] = "default"
 
 
 class KeywordsRecommendRequest(BaseModel):
@@ -65,18 +88,38 @@ async def analyze_campaign(
 ):
     """
     A. 分析广告数据，生成优化建议
+    
+    model_type 参数：
+    - default: gemini-2.5-flash-lite（最便宜，日常用）
+    - advanced: gemini-3-flash-preview（最新模型）
+    - thinking: gemini-3-flash-preview-thinking（深度分析）
     """
     try:
-        service = get_gemini_service()
+        model_type = request.model_type or "default"
+        service = get_gemini_service(model_type)
         
         # 计算ROI（如果没有提供）
         campaign_data = request.dict()
+        campaign_data.pop("model_type", None)  # 移除model_type字段
         if campaign_data.get("roi") is None and campaign_data.get("cost", 0) > 0:
             commission = campaign_data.get("commission", 0)
             cost = campaign_data.get("cost", 0)
             campaign_data["roi"] = ((commission * 0.72 - cost) / cost * 100) if cost > 0 else 0
         
         result = service.analyze_campaign_data(campaign_data)
+        
+        # 如果失败，自动尝试备用模型
+        if not result.get("success") and model_type == "default":
+            for fallback_type in ["advanced", "thinking"]:
+                try:
+                    service = get_gemini_service(fallback_type)
+                    result = service.analyze_campaign_data(campaign_data)
+                    if result.get("success"):
+                        result["used_model"] = fallback_type
+                        break
+                except:
+                    continue
+        
         return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
