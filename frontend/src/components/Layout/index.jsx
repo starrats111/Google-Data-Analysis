@@ -9,6 +9,7 @@ import {
   LogoutOutlined,
   AccountBookOutlined,
   WalletOutlined,
+  RocketOutlined,
 } from '@ant-design/icons'
 import { useAuth } from '../../store/authStore'
 
@@ -31,6 +32,11 @@ const Layout = () => {
       key: '/my-analysis',
       icon: <BarChartOutlined />,
       label: '我的分析',
+    },
+    {
+      key: '/ad-copy',
+      icon: <RocketOutlined />,
+      label: 'AI广告词生成',
     },
     {
       key: '/google-ads-data',
