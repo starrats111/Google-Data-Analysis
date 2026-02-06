@@ -1,79 +1,74 @@
 """
 Gemini AI 服务
 提供广告分析、优化建议、节日营销等AI功能
-支持官方API和哈基米等中转API
+支持官方API和哈基米等中转API（OpenAI兼容格式）
 """
 import logging
 from typing import Optional, List, Dict
 from datetime import date, datetime
 import json
+import requests
 
 logger = logging.getLogger(__name__)
 
 # Gemini API 配置
 GEMINI_API_KEY = None
 GEMINI_BASE_URL = None
-GEMINI_MODEL = "gemini-2.0-flash"
-
-def configure_gemini(api_key: str, base_url: str = None, model: str = None):
-    """配置 Gemini API
-    
-    Args:
-        api_key: API密钥
-        base_url: API基础地址（留空使用官方，填写中转地址如 https://burn.hair/v1beta）
-        model: 模型名称（默认 gemini-2.0-flash）
-    """
-    global GEMINI_API_KEY, GEMINI_BASE_URL, GEMINI_MODEL
-    GEMINI_API_KEY = api_key
-    GEMINI_BASE_URL = base_url
-    if model:
-        GEMINI_MODEL = model
-    
-    try:
-        import google.generativeai as genai
-        
-        # 配置API密钥
-        if base_url:
-            # 使用中转API（如哈基米）
-            from google.generativeai import configure
-            # 设置自定义端点
-            genai.configure(api_key=api_key, transport='rest')
-            # 注意：google-generativeai 库需要通过环境变量设置自定义URL
-            import os
-            os.environ['GOOGLE_API_BASE_URL'] = base_url
-            logger.info(f"Gemini API 配置成功 (中转: {base_url}, 模型: {GEMINI_MODEL})")
-        else:
-            # 使用官方API
-            genai.configure(api_key=api_key)
-            logger.info(f"Gemini API 配置成功 (官方, 模型: {GEMINI_MODEL})")
-        
-        return True
-    except Exception as e:
-        logger.error(f"Gemini API 配置失败: {e}")
-        return False
-
-
-def get_model(model_name: str = None):
-    """获取 Gemini 模型"""
-    try:
-        import google.generativeai as genai
-        name = model_name or GEMINI_MODEL
-        return genai.GenerativeModel(name)
-    except Exception as e:
-        logger.error(f"获取 Gemini 模型失败: {e}")
-        return None
+GEMINI_MODEL = "gemini-2.5-flash-lite"
 
 
 class GeminiService:
     """Gemini AI 服务类
     
-    支持官方API和哈基米等中转API
+    支持哈基米等中转API（OpenAI兼容格式）
     """
     
     def __init__(self, api_key: Optional[str] = None, base_url: Optional[str] = None, model: Optional[str] = None):
-        if api_key:
-            configure_gemini(api_key, base_url, model)
-        self.model = get_model(model)
+        self.api_key = api_key
+        self.base_url = base_url or "https://api.gemai.cc"
+        self.model = model or "gemini-2.5-flash-lite"
+        logger.info(f"Gemini API 配置: base_url={self.base_url}, model={self.model}")
+    
+    def _call_api(self, prompt: str, image_data: bytes = None) -> str:
+        """调用哈基米 API（OpenAI兼容格式）"""
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json"
+        }
+        
+        # 构建消息
+        if image_data:
+            # 图片分析请求
+            import base64
+            image_base64 = base64.b64encode(image_data).decode('utf-8')
+            messages = [{
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": prompt},
+                    {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{image_base64}"}}
+                ]
+            }]
+        else:
+            # 纯文本请求
+            messages = [{"role": "user", "content": prompt}]
+        
+        payload = {
+            "model": self.model,
+            "messages": messages,
+            "max_tokens": 8192
+        }
+        
+        # 调用 API
+        url = f"{self.base_url}/v1/chat/completions"
+        response = requests.post(url, headers=headers, json=payload, timeout=120)
+        
+        if response.status_code != 200:
+            error_msg = response.text
+            logger.error(f"API 调用失败: {response.status_code} - {error_msg}")
+            raise Exception(f"API 调用失败: {error_msg}")
+        
+        result = response.json()
+        return result["choices"][0]["message"]["content"]
     
     def analyze_campaign_data(self, campaign_data: Dict) -> Dict:
         """
@@ -85,9 +80,6 @@ class GeminiService:
         Returns:
             分析结果和优化建议
         """
-        if not self.model:
-            return {"success": False, "message": "Gemini 模型未配置"}
-        
         prompt = f"""你是一位资深的Google Ads广告优化专家。请分析以下广告数据并提供详细的优化建议。
 
 广告数据：
@@ -103,10 +95,10 @@ class GeminiService:
 请用中文回答，格式清晰易读。"""
 
         try:
-            response = self.model.generate_content(prompt)
+            analysis = self._call_api(prompt)
             return {
                 "success": True,
-                "analysis": response.text,
+                "analysis": analysis,
                 "timestamp": datetime.now().isoformat()
             }
         except Exception as e:
@@ -123,9 +115,6 @@ class GeminiService:
         Returns:
             操作指令列表
         """
-        if not self.model:
-            return {"success": False, "message": "Gemini 模型未配置"}
-        
         prompt = f"""你是一位Google Ads操作专家。根据以下广告数据，生成具体的操作指令。
 
 广告数据：
@@ -141,10 +130,10 @@ class GeminiService:
 请只输出最重要的3-5条操作指令，按优先级排序。用中文回答。"""
 
         try:
-            response = self.model.generate_content(prompt)
+            instructions = self._call_api(prompt)
             return {
                 "success": True,
-                "instructions": response.text,
+                "instructions": instructions,
                 "timestamp": datetime.now().isoformat()
             }
         except Exception as e:
@@ -168,9 +157,6 @@ class GeminiService:
         Returns:
             推荐配置和广告词
         """
-        if not self.model:
-            return {"success": False, "message": "Gemini 模型未配置"}
-        
         if not product_url:
             return {"success": False, "message": "请提供产品链接URL，用于获取真实的折扣和物流信息"}
         
@@ -312,10 +298,10 @@ class GeminiService:
 ⚠️ 如果网站没有折扣或免运费信息，请在对应位置标注"未找到"，不要编造！"""
 
         try:
-            response = self.model.generate_content(prompt)
+            recommendations = self._call_api(prompt)
             return {
                 "success": True,
-                "recommendations": response.text,
+                "recommendations": recommendations,
                 "keywords": keywords,
                 "product_url": product_url,
                 "target_country": target_country,
@@ -345,9 +331,6 @@ class GeminiService:
         Returns:
             节日列表和商家推荐
         """
-        if not self.model:
-            return {"success": False, "message": "Gemini 模型未配置"}
-        
         today = date.today()
         if not month:
             month = today.month
@@ -385,10 +368,10 @@ class GeminiService:
 请按日期顺序排列，重点标注对电商最重要的节日。用中文回答。"""
 
         try:
-            response = self.model.generate_content(prompt)
+            calendar = self._call_api(prompt)
             return {
                 "success": True,
-                "calendar": response.text,
+                "calendar": calendar,
                 "country": country,
                 "current_month": f"{year}年{month}月",
                 "next_month": f"{next_year}年{next_month}月",
@@ -409,20 +392,7 @@ class GeminiService:
         Returns:
             图片分析结果
         """
-        if not self.model:
-            return {"success": False, "message": "Gemini 模型未配置"}
-        
         try:
-            import google.generativeai as genai
-            import PIL.Image
-            import io
-            
-            # 使用支持多模态的模型
-            vision_model = genai.GenerativeModel(GEMINI_MODEL)
-            
-            # 将bytes转为PIL Image
-            image = PIL.Image.open(io.BytesIO(image_data))
-            
             if not prompt:
                 prompt = """请分析这张截图中的关键词数据，提取以下信息：
 1. 关键词列表
@@ -435,11 +405,11 @@ class GeminiService:
 - 建议的Max CPC范围
 - 日预算建议"""
             
-            response = vision_model.generate_content([prompt, image])
+            analysis = self._call_api(prompt, image_data)
             
             return {
                 "success": True,
-                "analysis": response.text,
+                "analysis": analysis,
                 "timestamp": datetime.now().isoformat()
             }
         except Exception as e:
