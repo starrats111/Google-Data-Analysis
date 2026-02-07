@@ -55,7 +55,7 @@ else:
     print(f"\n✅ Developer Token: 已配置")
     print(f"✅ 服务账号: {service_account_path}")
 
-# 初始化 Google Ads 客户端
+# 准备 Google Ads 客户端配置
 try:
     from google.ads.googleads.client import GoogleAdsClient
     from google.ads.googleads.errors import GoogleAdsException
@@ -63,29 +63,31 @@ try:
     import json
     import tempfile
     
-    # 构建配置
-    credentials_config = {
-        "developer_token": settings.google_ads_shared_developer_token,
-        "use_proto_plus": True,
-    }
+    # 确定服务账号路径
+    json_key_path = service_account_path
+    temp_file_path = None
     
-    # 服务账号配置
-    if service_account_path:
-        credentials_config["json_key_file_path"] = service_account_path
-    elif settings.google_ads_service_account_json_base64:
+    if not json_key_path and settings.google_ads_service_account_json_base64:
         # 从 Base64 解码并写入临时文件
         json_content = base64.b64decode(settings.google_ads_service_account_json_base64).decode('utf-8')
         temp_file = tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False)
         temp_file.write(json_content)
         temp_file.close()
-        credentials_config["json_key_file_path"] = temp_file.name
+        json_key_path = temp_file.name
+        temp_file_path = temp_file.name
     
-    # 添加登录客户 ID（如果有）
-    if settings.google_ads_login_customer_id:
-        credentials_config["login_customer_id"] = settings.google_ads_login_customer_id
+    print("✅ Google Ads 客户端配置准备完成")
     
-    google_client = GoogleAdsClient.load_from_dict(credentials_config)
-    print("✅ Google Ads 客户端初始化成功")
+    def create_client_for_mcc(mcc_customer_id: str) -> GoogleAdsClient:
+        """为特定 MCC 创建客户端"""
+        config = {
+            "developer_token": settings.google_ads_shared_developer_token,
+            "use_proto_plus": True,
+            "json_key_file_path": json_key_path,
+            "login_customer_id": mcc_customer_id,  # 设置 MCC 作为登录客户
+        }
+        return GoogleAdsClient.load_from_dict(config)
+        
 except Exception as e:
     print(f"\n❌ 初始化 Google Ads 客户端失败: {e}")
     sys.exit(1)
@@ -105,6 +107,9 @@ for mcc in mcc_accounts:
     print(f"🔍 检查 MCC: {mcc.mcc_name} (ID: {mcc_customer_id})")
     
     try:
+        # 为该 MCC 创建客户端
+        google_client = create_client_for_mcc(mcc_customer_id)
+        
         # 查询子账号的货币代码
         query = """
             SELECT
@@ -117,8 +122,6 @@ for mcc in mcc_accounts:
         """
         
         ga_service = google_client.get_service("GoogleAdsService")
-        
-        # 设置登录客户 ID
         response = ga_service.search(customer_id=mcc_customer_id, query=query)
         
         # 收集所有子账号的货币代码
