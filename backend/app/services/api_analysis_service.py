@@ -464,83 +464,51 @@ class ApiAnalysisService:
             # 获取所有涉及的用户ID
             user_ids = set(cdata["user_id"] for cdata in campaign_data.values())
             
-            # 收集所有 MID 和商家名
+            # 收集所有 MID
             mids = set(str(cdata.get("mid")) for cdata in campaign_data.values() if cdata.get("mid"))
-            # 从广告系列名提取商家名（格式: 序号-平台-商家名-国家-日期-MID）
-            merchant_names = set()
-            for cdata in campaign_data.values():
-                campaign_name = cdata.get("campaign_name", "")
-                merchant = self._extract_merchant_from_campaign(campaign_name)
-                if merchant:
-                    merchant_names.add(merchant.lower())
+            logger.info(f"用户IDs: {user_ids}, 商家MIDs: {mids}")
             
-            logger.info(f"用户IDs: {user_ids}, 商家MIDs: {mids}, 商家名: {merchant_names}")
-            
-            # 预查询：获取该用户所有商家的 L7D 佣金和订单
-            merchant_l7d_data = {}  # {(user_id, key): {commission, orders, order_days}}
-            # key 可以是 MID 或 商家名（小写）
+            # 预查询：获取该用户所有商家的 L7D 佣金和订单（只按 MID 分组）
+            merchant_l7d_data = {}  # {(user_id, mid): {commission, orders, order_days}}
             
             for uid in user_ids:
-                # 查询该用户的所有交易，按商家分组
+                # 查询该用户的所有交易，只按 merchant_id (MID) 分组
                 txn_results = self.db.query(
                     AffiliateTransaction.merchant_id,
-                    AffiliateTransaction.merchant,
                     func.sum(AffiliateTransaction.commission_amount).label('total_commission'),
                     func.count(AffiliateTransaction.id).label('total_orders'),
                     func.count(func.distinct(func.date(AffiliateTransaction.transaction_time))).label('order_days')
                 ).filter(
                     AffiliateTransaction.user_id == uid,
+                    AffiliateTransaction.merchant_id.isnot(None),  # 只查有 MID 的
+                    AffiliateTransaction.merchant_id != 'None',
                     func.date(AffiliateTransaction.transaction_time) >= begin_date,
                     func.date(AffiliateTransaction.transaction_time) <= end_date
                 ).group_by(
-                    AffiliateTransaction.merchant_id,
-                    AffiliateTransaction.merchant
+                    AffiliateTransaction.merchant_id
                 ).all()
                 
                 for txn in txn_results:
-                    data = {
+                    mid = str(txn.merchant_id).strip()
+                    merchant_l7d_data[(uid, mid)] = {
                         "commission": float(txn.total_commission or 0),
                         "orders": int(txn.total_orders or 0),
                         "order_days": int(txn.order_days or 0)
                     }
-                    
-                    # 如果有 MID，用 MID 作为 key
-                    if txn.merchant_id and txn.merchant_id != 'None':
-                        merchant_l7d_data[(uid, str(txn.merchant_id))] = data
-                        logger.info(f"L7D 商家数据(MID): user={uid}, MID={txn.merchant_id}, 商家={txn.merchant}, 佣金={txn.total_commission}")
-                    
-                    # 同时用商家名（小写）作为 key，用于 PM 等没有 MID 的平台
-                    if txn.merchant:
-                        merchant_name_key = txn.merchant.lower().replace(' ', '')
-                        merchant_l7d_data[(uid, merchant_name_key)] = data
-                        logger.info(f"L7D 商家数据(名称): user={uid}, 商家={txn.merchant}, 佣金={txn.total_commission}")
+                    logger.info(f"L7D 商家数据: user={uid}, MID={mid}, 佣金={txn.total_commission}, 订单={txn.total_orders}")
             
             # 按用户分组生成结果
             user_results = {}
             for key, cdata in campaign_data.items():
                 data_user_id = cdata["user_id"]
-                mid = cdata.get("mid")  # 商家ID
-                campaign_name = cdata.get("campaign_name", "")
+                mid = cdata.get("mid")  # 商家ID（从广告系列名提取）
                 
-                # 策略1：先用 MID 匹配
+                # 只用 MID 匹配，不用商家名匹配
                 merchant_info = {}
                 if mid:
                     merchant_info = merchant_l7d_data.get((data_user_id, str(mid)), {})
-                
-                # 策略2：如果 MID 没匹配到，用商家名模糊匹配
-                if not merchant_info.get("commission"):
-                    merchant_name = self._extract_merchant_from_campaign(campaign_name)
-                    if merchant_name:
-                        merchant_name_lower = merchant_name.lower().replace(' ', '')
-                        # 遍历所有商家数据，进行模糊匹配
-                        for (uid, mk), minfo in merchant_l7d_data.items():
-                            if uid != data_user_id:
-                                continue
-                            # 模糊匹配：广告系列商家名包含在交易商家名中，或反过来
-                            if merchant_name_lower in mk or mk in merchant_name_lower:
-                                merchant_info = minfo
-                                logger.info(f"商家名模糊匹配成功: {campaign_name} -> {merchant_name} -> {mk} -> 佣金={minfo.get('commission')}")
-                                break
+                    if merchant_info:
+                        logger.info(f"MID匹配成功: 广告系列MID={mid}, 佣金={merchant_info.get('commission')}")
                 
                 commission = merchant_info.get("commission", 0.0)
                 orders = merchant_info.get("orders", 0)
@@ -666,22 +634,6 @@ class ApiAnalysisService:
         
         return cid, mid, country
     
-    def _extract_merchant_from_campaign(self, campaign_name: str) -> str:
-        """
-        从广告系列名提取商家名
-        格式: 序号-平台-商家名-国家-日期-MID
-        示例: 117-LH1-hotelcollection-US-1226-154253 -> hotelcollection
-        """
-        if not campaign_name:
-            return ""
-        
-        parts = campaign_name.split("-")
-        if len(parts) >= 3:
-            # 第3个部分是商家名（索引2）
-            merchant = parts[2]
-            return merchant
-        
-        return ""
     
     def _generate_l7d_operation(
         self,

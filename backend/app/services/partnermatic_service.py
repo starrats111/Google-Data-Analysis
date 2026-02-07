@@ -263,14 +263,10 @@ class PartnerMaticService:
                 item.get("commission_amount") or item.get("commission") or 0
             )
             
-            # 提取商家ID（MID）：尝试多个可能的字段名
-            merchant_id = (
-                item.get("mcid") or item.get("merchantId") or item.get("merchant_id") or 
-                item.get("brandId") or item.get("brand_id") or item.get("mid") or
-                item.get("programId") or item.get("program_id") or None
-            )
-            if merchant_id:
-                merchant_id = str(merchant_id).strip()
+            # 提取商家ID（MID）：PM 平台的 MID 是 brand_id 字段
+            # 优先使用 brand_id，这是和广告系列名中 MID 匹配的字段
+            brand_id = item.get("brand_id") or item.get("brandId")
+            merchant_id = str(brand_id).strip() if brand_id else None
             
             transactions.append({
                 "transaction_id": item.get("orderId") or item.get("order_id") or item.get("partnermaticId") or item.get("partnermatic_id"),
