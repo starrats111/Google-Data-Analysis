@@ -472,14 +472,6 @@ const Analysis = ({ mode }) => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [analysisMode])
 
-  const accountNameMap = useMemo(() => {
-    const map = new Map()
-    for (const acc of accounts) {
-      map.set(acc.id, `${acc.platform?.platform_name || '-'} - ${acc.account_name || '-'}`)
-    }
-    return map
-  }, [accounts])
-
   const columns = useMemo(
     () => [
       {
@@ -545,7 +537,7 @@ const Analysis = ({ mode }) => {
         ),
       },
     ],
-    [accountNameMap, isManager, analysisMode]
+    [isManager, analysisMode]
   )
 
   return (

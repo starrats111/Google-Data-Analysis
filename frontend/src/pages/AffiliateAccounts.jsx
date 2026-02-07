@@ -400,7 +400,7 @@ const AffiliateAccounts = () => {
               </div>
             ))}
             <div style={{ marginTop: '8px', fontSize: '12px', color: '#999' }}>
-              提示：查看 <a href="/平台API配置文档.md" target="_blank" style={{ color: '#1890ff' }}>平台API配置文档</a> 获取帮助
+              提示：请联系管理员获取平台 API 配置帮助
             </div>
           </div>
         ),
