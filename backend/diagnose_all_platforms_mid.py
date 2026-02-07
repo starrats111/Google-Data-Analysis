@@ -9,7 +9,8 @@ sys.path.insert(0, '.')
 from datetime import datetime, timedelta
 from app.database import SessionLocal
 from app.models.user import User
-from app.models.affiliate import AffiliatePlatform, AffiliateAccount, AffiliateTransaction
+from app.models.affiliate_account import AffiliatePlatform, AffiliateAccount
+from app.models.affiliate_transaction import AffiliateTransaction
 
 db = SessionLocal()
 
