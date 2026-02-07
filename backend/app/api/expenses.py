@@ -376,9 +376,16 @@ def _build_ga_cost_maps(
 
     关键点：
     - 先在数据库里按 (mcc_id, date, extracted_platform_code) 聚合，避免拉取明细导致慢/内存大
-    - MCC 手动费用是“按 MCC + 日期”覆盖总费用，不能在明细循环中重复累加
+    - MCC 手动费用是"按 MCC + 日期"覆盖总费用，不能在明细循环中重复累加
+    - 自动进行CNY→USD货币转换
     """
     from app.models.google_ads_api_data import GoogleAdsApiData
+
+    # 获取MCC货币映射，用于CNY→USD转换
+    CNY_TO_USD_RATE = 7.2
+    mcc_currency_map: Dict[int, str] = {}
+    for mcc in db.query(GoogleMccAccount).filter(GoogleMccAccount.user_id == user_id).all():
+        mcc_currency_map[mcc.id] = getattr(mcc, 'currency', 'USD') or 'USD'
 
     # (mcc_id, date, platform_code) -> api_cost_sum
     api_cost_by_mcc_date_code: Dict[Tuple[int, date, Optional[str]], float] = {}
@@ -411,6 +418,10 @@ def _build_ga_cost_maps(
         if not platform_code:
             platform_code = _infer_platform_code_from_campaign_name(getattr(r, "campaign_name", "") or "")
         cost_sum = float(r.cost_sum or 0.0)
+        # CNY→USD货币转换
+        currency = mcc_currency_map.get(mcc_id, 'USD')
+        if currency == 'CNY':
+            cost_sum = cost_sum / CNY_TO_USD_RATE
         day_set.add(d)
         api_cost_by_mcc_date_code[(mcc_id, d, platform_code)] = cost_sum
         api_total_by_mcc_date[(mcc_id, d)] = api_total_by_mcc_date.get((mcc_id, d), 0.0) + cost_sum
