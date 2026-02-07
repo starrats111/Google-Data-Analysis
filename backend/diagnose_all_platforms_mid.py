@@ -1,21 +1,23 @@
+#!/usr/bin/env python
 """
 诊断所有平台的 MID 字段
-通过对比广告系列名中的 MID 和各平台 API 返回的 ID 字段，找到正确的 MID 字段名
+检查 PM, CG, RW, LH 四个平台的交易数据中是否正确提取了 MID
 """
 import sys
 sys.path.insert(0, '.')
 
-from datetime import date, timedelta
+from datetime import datetime, timedelta
 from app.database import SessionLocal
 from app.models.user import User
-from app.models.google_ads_api_data import GoogleAdsApiData
-from app.models.affiliate_account import AffiliateAccount, AffiliatePlatform
-from app.models.affiliate_transaction import AffiliateTransaction
-import json
+from app.models.affiliate import AffiliatePlatform, AffiliateAccount, AffiliateTransaction
 
 db = SessionLocal()
 
-# 查找用户
+print("=" * 70)
+print("诊断所有平台的 MID 字段")
+print("=" * 70)
+
+# 获取用户
 user = db.query(User).filter(User.username == "wj02").first()
 if not user:
     print("❌ 用户 wj02 不存在")
@@ -23,138 +25,85 @@ if not user:
 
 print(f"✅ 用户: {user.username} (ID: {user.id})")
 
-# 获取日期范围
-end_date = date.today() - timedelta(days=1)
-begin_date = end_date - timedelta(days=6)
+# 获取所有平台
+platforms = db.query(AffiliatePlatform).all()
+print(f"\n共 {len(platforms)} 个平台\n")
 
-print(f"\n📅 日期范围: {begin_date} ~ {end_date}")
+# 日期范围
+end_date = datetime.now().date()
+begin_date = end_date - timedelta(days=7)
 
-# 1. 从广告系列名提取 MID
-print("\n" + "="*70)
-print("📊 步骤1: 从广告系列名提取 MID 和平台代码")
-print("="*70)
-
-google_ads = db.query(GoogleAdsApiData).filter(
-    GoogleAdsApiData.user_id == user.id,
-    GoogleAdsApiData.date >= begin_date,
-    GoogleAdsApiData.date <= end_date
-).all()
-
-# 按平台分组提取 MID
-# 格式: {platform_code: {mid: merchant_name}}
-platform_mids = {}  # {platform: {mid: merchant}}
-
-for ad in google_ads:
-    parts = ad.campaign_name.split("-")
-    mid = ""
-    platform = ""
-    merchant = ""
+for platform in platforms:
+    platform_code = platform.platform_name or platform.platform_code
+    print(f"\n{'='*50}")
+    print(f"平台: {platform.platform_name} ({platform.platform_code})")
+    print(f"{'='*50}")
     
-    # 提取平台代码（第2部分，索引1）
-    if len(parts) >= 2:
-        platform = parts[1].upper()
-        # 标准化平台代码
-        import re
-        match = re.match(r'^([A-Z]+)\d*$', platform)
-        if match:
-            platform = match.group(1)
+    # 查询该平台该用户的交易
+    transactions = db.query(AffiliateTransaction).filter(
+        AffiliateTransaction.user_id == user.id,
+        AffiliateTransaction.platform == platform.platform_name.lower()
+    ).order_by(AffiliateTransaction.transaction_time.desc()).limit(5).all()
     
-    # 提取商家名（第3部分，索引2）
-    if len(parts) >= 3:
-        merchant = parts[2].lower()
+    if not transactions:
+        # 也尝试用平台代码
+        transactions = db.query(AffiliateTransaction).filter(
+            AffiliateTransaction.user_id == user.id,
+            AffiliateTransaction.platform.ilike(f"%{platform.platform_name[:2]}%")
+        ).order_by(AffiliateTransaction.transaction_time.desc()).limit(5).all()
     
-    # 提取 MID（最后的纯数字，5-6位以上）
-    for p in reversed(parts):
-        if p.isdigit() and len(p) >= 5:
-            mid = p
-            break
+    if not transactions:
+        print(f"  ⚠️ 无交易数据")
+        continue
     
-    if platform and mid:
-        if platform not in platform_mids:
-            platform_mids[platform] = {}
-        if mid not in platform_mids[platform]:
-            platform_mids[platform][mid] = merchant
+    print(f"  找到 {len(transactions)} 条交易记录（最多显示5条）:")
+    
+    has_mid = False
+    for tx in transactions:
+        mid_status = "✅" if tx.merchant_id else "❌ None"
+        if tx.merchant_id:
+            has_mid = True
+        print(f"    - ID: {tx.transaction_id[:30] if tx.transaction_id else 'N/A'}")
+        print(f"      商家: {tx.merchant}")
+        print(f"      MID: {mid_status} {tx.merchant_id if tx.merchant_id else ''}")
+        print(f"      佣金: ${tx.commission_amount:.2f}")
+        print()
+    
+    if has_mid:
+        print(f"  ✅ 该平台 MID 已正确提取")
+    else:
+        print(f"  ❌ 该平台 MID 未提取，需要修复！")
 
-# 显示各平台的 MID
-for platform, mids in sorted(platform_mids.items()):
-    print(f"\n平台 {platform}: 共 {len(mids)} 个 MID")
-    for mid, merchant in list(mids.items())[:5]:  # 只显示前5个
-        print(f"    MID={mid}, 商家={merchant}")
-    if len(mids) > 5:
-        print(f"    ... 还有 {len(mids) - 5} 个")
+# 汇总各平台状态
+print("\n" + "=" * 70)
+print("MID 提取状态汇总")
+print("=" * 70)
 
-# 2. 检查交易数据中的 merchant_id
-print("\n" + "="*70)
-print("📊 步骤2: 检查交易数据中的 merchant_id")
-print("="*70)
-
-transactions = db.query(AffiliateTransaction).filter(
-    AffiliateTransaction.user_id == user.id,
-    AffiliateTransaction.transaction_time >= begin_date,
-    AffiliateTransaction.transaction_time <= end_date
-).all()
-
-# 按平台分组
-platform_txn = {}  # {platform: [{merchant_id, merchant, commission}]}
-for txn in transactions:
-    platform = txn.platform.upper() if txn.platform else "UNKNOWN"
-    if platform not in platform_txn:
-        platform_txn[platform] = []
-    platform_txn[platform].append({
-        "merchant_id": txn.merchant_id,
-        "merchant": txn.merchant,
-        "commission": float(txn.commission_amount or 0)
-    })
-
-for platform, txns in sorted(platform_txn.items()):
-    print(f"\n平台 {platform}: 共 {len(txns)} 条交易")
-    # 去重
-    seen = set()
-    for txn in txns[:10]:
-        key = (txn['merchant_id'], txn['merchant'])
-        if key in seen:
-            continue
-        seen.add(key)
-        print(f"    merchant_id={txn['merchant_id']}, merchant={txn['merchant']}, commission={txn['commission']:.2f}")
-
-# 3. 匹配分析
-print("\n" + "="*70)
-print("📊 步骤3: MID 匹配分析")
-print("="*70)
-
-for platform, mids in sorted(platform_mids.items()):
-    print(f"\n🔍 平台 {platform}:")
+for platform in platforms:
+    # 统计有 MID 和无 MID 的交易数
+    with_mid = db.query(AffiliateTransaction).filter(
+        AffiliateTransaction.user_id == user.id,
+        AffiliateTransaction.platform.ilike(f"%{platform.platform_name[:2]}%"),
+        AffiliateTransaction.merchant_id.isnot(None),
+        AffiliateTransaction.merchant_id != 'None',
+        AffiliateTransaction.merchant_id != ''
+    ).count()
     
-    # 获取该平台的交易 merchant_id
-    txn_mids = set()
-    for txn in platform_txn.get(platform, []) + platform_txn.get(platform.lower(), []) + platform_txn.get("PARTNERMATIC" if platform == "PM" else platform, []):
-        if txn.get('merchant_id') and txn['merchant_id'] != 'None':
-            txn_mids.add(str(txn['merchant_id']))
+    without_mid = db.query(AffiliateTransaction).filter(
+        AffiliateTransaction.user_id == user.id,
+        AffiliateTransaction.platform.ilike(f"%{platform.platform_name[:2]}%"),
+        (AffiliateTransaction.merchant_id.is_(None) | 
+         (AffiliateTransaction.merchant_id == 'None') |
+         (AffiliateTransaction.merchant_id == ''))
+    ).count()
     
-    ad_mids = set(mids.keys())
-    
-    matched = ad_mids & txn_mids
-    ad_only = ad_mids - txn_mids
-    txn_only = txn_mids - ad_mids
-    
-    print(f"    广告系列 MID 数量: {len(ad_mids)}")
-    print(f"    交易 merchant_id 数量: {len(txn_mids)}")
-    print(f"    ✅ 匹配成功: {len(matched)} 个")
-    
-    if matched:
-        for mid in list(matched)[:3]:
-            print(f"        {mid} (商家: {mids.get(mid, '?')})")
-    
-    if ad_only and len(ad_only) <= 10:
-        print(f"    ❌ 广告有但交易没有: {ad_only}")
-    elif ad_only:
-        print(f"    ❌ 广告有但交易没有: {len(ad_only)} 个")
-    
-    if txn_only and len(txn_only) <= 10:
-        print(f"    ❌ 交易有但广告没有: {txn_only}")
-    elif txn_only:
-        print(f"    ❌ 交易有但广告没有: {len(txn_only)} 个")
+    total = with_mid + without_mid
+    if total > 0:
+        pct = (with_mid / total) * 100
+        status = "✅" if pct >= 90 else ("⚠️" if pct >= 50 else "❌")
+        print(f"  {status} {platform.platform_name}: {with_mid}/{total} ({pct:.1f}%) 有 MID")
+    else:
+        print(f"  ⚠️ {platform.platform_name}: 无交易数据")
 
 db.close()
 print("\n诊断完成")
-

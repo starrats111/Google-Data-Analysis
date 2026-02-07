@@ -101,12 +101,6 @@ const MyReports = () => {
   const renderFormattedReport = (content) => {
     if (!content) return null
 
-    // 按广告系列分割（以 ### 开头的行）
-    const sections = content.split(/(?=###\s)/g).filter(s => s.trim())
-    
-    // 第一部分是概述
-    const overview = sections[0]?.startsWith('###') ? null : sections.shift()
-    
     // 图标映射
     const sectionIcons = {
       '阶段评价': <TrophyOutlined style={{ color: '#faad14' }} />,
@@ -115,6 +109,13 @@ const MyReports = () => {
       '节日': <CalendarOutlined style={{ color: '#eb2f96' }} />,
       '优化建议': <BulbOutlined style={{ color: '#722ed1' }} />,
       '风险': <WarningOutlined style={{ color: '#ff4d4f' }} />,
+      '诊断': <SettingOutlined style={{ color: '#13c2c2' }} />,
+      '动作': <RocketOutlined style={{ color: '#52c41a' }} />,
+      '效果': <LineChartOutlined style={{ color: '#1890ff' }} />,
+      '验证': <CalendarOutlined style={{ color: '#722ed1' }} />,
+      '升降': <TrophyOutlined style={{ color: '#fa8c16' }} />,
+      '检验': <SettingOutlined style={{ color: '#1890ff' }} />,
+      '级别': <TrophyOutlined style={{ color: '#52c41a' }} />,
     }
 
     const getIcon = (title) => {
@@ -124,35 +125,104 @@ const MyReports = () => {
       return <RocketOutlined style={{ color: '#1890ff' }} />
     }
 
+    // 按广告系列分割
+    // 支持 ###【系列名】 或 ### 系列名 或 ---\n【系列名】 格式
+    const campaignPattern = /(?=###\s*【)|(?=###\s*\d)|(?=---\s*\n【)|(?=【[^\n]+】\s*\n级别)/g
+    let sections = content.split(campaignPattern).filter(s => s.trim())
+    
+    // 如果没有找到分隔符，尝试按 --- 分割
+    if (sections.length <= 1 && content.includes('---')) {
+      sections = content.split(/---/).filter(s => s.trim() && s.length > 50)
+    }
+    
+    // 提取概述部分（在第一个广告系列之前的内容）
+    let overview = ''
+    const firstCampaignIdx = content.search(/###\s*【|【[^\n]+】\s*\n级别/)
+    if (firstCampaignIdx > 50) {
+      overview = content.substring(0, firstCampaignIdx).trim()
+      sections = sections.filter(s => !overview.includes(s.trim()))
+    }
+
     // 解析单个广告系列的内容
     const parseCampaignContent = (text) => {
-      const lines = text.split('\n')
+      const lines = text.split('\n').filter(l => l.trim())
       const result = []
-      let currentSection = null
-      let currentContent = []
-
-      lines.forEach((line, idx) => {
-        if (line.startsWith('####')) {
-          // 保存之前的section
-          if (currentSection) {
-            result.push({ title: currentSection, content: currentContent.join('\n') })
-          }
-          currentSection = line.replace(/^#+\s*/, '').trim()
-          currentContent = []
-        } else if (currentSection) {
-          currentContent.push(line)
-        } else if (line.trim() && !line.startsWith('###')) {
-          // 广告系列描述
-          result.push({ title: '_intro', content: line })
+      
+      // 提取标题
+      const titleMatch = text.match(/【([^\n】]+)】/)
+      if (titleMatch) {
+        result.push({ title: '系列名称', content: titleMatch[1], isTitle: true })
+      }
+      
+      // 解析各个字段
+      lines.forEach((line) => {
+        const trimmedLine = line.trim()
+        // 匹配 "字段：内容" 或 "字段: 内容" 格式
+        const fieldMatch = trimmedLine.match(/^(级别|检验|D级检查|诊断|动作|效果|验证|升降)[：:]\s*(.+)$/i)
+        if (fieldMatch) {
+          result.push({
+            title: fieldMatch[1],
+            content: fieldMatch[2],
+            isField: true
+          })
         }
       })
       
-      // 保存最后一个section
-      if (currentSection) {
-        result.push({ title: currentSection, content: currentContent.join('\n') })
+      // 如果没有解析出字段，返回原始内容
+      if (result.length <= 1) {
+        return [{ title: '详情', content: text, isRaw: true }]
       }
-
+      
       return result
+    }
+
+    // 渲染单个字段内容
+    const renderFieldContent = (content, title) => {
+      if (!content) return null
+      
+      // 高亮特定内容
+      const highlightPatterns = [
+        { pattern: /\[✓\]/g, color: '#52c41a', bg: '#f6ffed' },
+        { pattern: /\[✗\]/g, color: '#ff4d4f', bg: '#fff2f0' },
+        { pattern: /✅/g, color: '#52c41a', bg: '#f6ffed' },
+        { pattern: /⚠️/g, color: '#fa8c16', bg: '#fffbe6' },
+        { pattern: /❌/g, color: '#ff4d4f', bg: '#fff2f0' },
+        { pattern: /🔴/g, color: '#ff4d4f', bg: '' },
+        { pattern: /🟡/g, color: '#fa8c16', bg: '' },
+        { pattern: /🟢/g, color: '#52c41a', bg: '' },
+      ]
+      
+      // 特殊处理动作行（CPC/预算调整）
+      if (title === '动作' && (content.includes('CPC') || content.includes('预算'))) {
+        return (
+          <div style={{ 
+            background: 'linear-gradient(135deg, #e6f7ff 0%, #bae7ff 100%)', 
+            padding: '12px 16px', 
+            borderRadius: 8,
+            border: '1px solid #91d5ff',
+            fontWeight: 500
+          }}>
+            {content}
+          </div>
+        )
+      }
+      
+      // 格式化内容
+      let formattedContent = content
+      highlightPatterns.forEach(({ pattern }) => {
+        formattedContent = formattedContent.replace(pattern, (match) => match)
+      })
+      
+      return (
+        <div style={{ 
+          fontSize: 13, 
+          lineHeight: 1.8, 
+          color: '#262626',
+          wordBreak: 'break-word'
+        }}>
+          {formattedContent}
+        </div>
+      )
     }
 
     return (
@@ -160,114 +230,115 @@ const MyReports = () => {
         {/* 概述部分 */}
         {overview && (
           <Card 
-            style={{ marginBottom: 20, borderRadius: 12 }}
+            style={{ marginBottom: 20, borderRadius: 12, background: '#fafafa' }}
             styles={{ body: { padding: '16px 20px' } }}
           >
-            <Text style={{ fontSize: 15, lineHeight: 1.8, whiteSpace: 'pre-wrap' }}>
-              {overview.trim()}
+            <Text style={{ fontSize: 14, lineHeight: 1.8, whiteSpace: 'pre-wrap' }}>
+              {overview}
             </Text>
           </Card>
         )}
 
         {/* 广告系列分析 */}
-        <Collapse 
-          accordion 
-          defaultActiveKey={['0']}
-          style={{ background: 'transparent', border: 'none' }}
-          items={sections.map((section, idx) => {
-            const titleMatch = section.match(/^###\s*(.+)/)
-            const campaignTitle = titleMatch ? titleMatch[1].trim() : `广告系列 ${idx + 1}`
-            const campaignContent = section.replace(/^###\s*.+\n?/, '')
-            const parsedContent = parseCampaignContent(campaignContent)
+        {sections.length > 0 ? (
+          <Collapse 
+            defaultActiveKey={['0']}
+            style={{ background: 'transparent', border: 'none' }}
+            items={sections.map((section, idx) => {
+              const parsedContent = parseCampaignContent(section)
+              const titleItem = parsedContent.find(p => p.isTitle)
+              const campaignTitle = titleItem?.content || `广告系列 ${idx + 1}`
+              const levelItem = parsedContent.find(p => p.title === '级别')
+              
+              // 根据级别设置颜色
+              let levelColor = 'blue'
+              if (levelItem?.content?.includes('S')) levelColor = 'green'
+              else if (levelItem?.content?.includes('D')) levelColor = 'red'
+              else if (levelItem?.content?.includes('B')) levelColor = 'orange'
 
-            return {
-              key: String(idx),
-              label: (
-                <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                  <Tag color="blue" style={{ margin: 0 }}>{idx + 1}</Tag>
-                  <Text strong style={{ fontSize: 15 }}>{campaignTitle}</Text>
-                </div>
-              ),
-              children: (
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 16 }}>
-                  {parsedContent.filter(p => p.title !== '_intro').map((part, pIdx) => (
-                    <Card 
-                      key={pIdx}
-                      size="small"
-                      title={
-                        <Space>
-                          {getIcon(part.title)}
-                          <span>{part.title}</span>
-                        </Space>
+              return {
+                key: String(idx),
+                label: (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '4px 0' }}>
+                    <Tag color="blue" style={{ margin: 0, fontWeight: 600 }}>{idx + 1}</Tag>
+                    <Text strong style={{ fontSize: 14, flex: 1 }}>{campaignTitle}</Text>
+                    {levelItem && (
+                      <Tag color={levelColor} style={{ margin: 0 }}>
+                        {levelItem.content}
+                      </Tag>
+                    )}
+                  </div>
+                ),
+                children: (
+                  <div style={{ padding: '8px 0' }}>
+                    {parsedContent.filter(p => !p.isTitle).map((part, pIdx) => {
+                      // 原始内容直接显示
+                      if (part.isRaw) {
+                        return (
+                          <div key={pIdx} style={{ 
+                            whiteSpace: 'pre-wrap', 
+                            lineHeight: 1.8,
+                            fontSize: 13,
+                            color: '#595959',
+                            padding: '8px 12px',
+                            background: '#fafafa',
+                            borderRadius: 8
+                          }}>
+                            {part.content}
+                          </div>
+                        )
                       }
-                      style={{ 
-                        borderRadius: 10,
-                        gridColumn: part.title.includes('数据') || part.title.includes('优化') ? 'span 2' : 'auto'
-                      }}
-                      styles={{ 
-                        header: { borderBottom: '1px solid #f0f0f0', minHeight: 40 },
-                        body: { padding: '12px 16px' }
-                      }}
-                    >
-                      <div style={{ 
-                        fontSize: 13, 
-                        lineHeight: 1.8, 
-                        whiteSpace: 'pre-wrap',
-                        color: '#595959'
-                      }}>
-                        {part.content.split('\n').map((line, lIdx) => {
-                          // 高亮关键信息
-                          if (line.includes('推荐预算') || line.includes('推荐CPC')) {
-                            return (
-                              <div key={lIdx} style={{ 
-                                background: '#e6f7ff', 
-                                padding: '4px 8px', 
-                                borderRadius: 4,
-                                marginBottom: 4,
-                                borderLeft: '3px solid #1890ff'
-                              }}>
-                                {line.replace(/^\*\s*/, '').replace(/\*\*/g, '')}
-                              </div>
-                            )
-                          }
-                          if (line.includes('风险') || line.includes('注意') || line.includes('警告')) {
-                            return (
-                              <div key={lIdx} style={{ 
-                                background: '#fff2e8', 
-                                padding: '4px 8px', 
-                                borderRadius: 4,
-                                marginBottom: 4,
-                                borderLeft: '3px solid #fa8c16'
-                              }}>
-                                {line.replace(/^\*\s*/, '').replace(/\*\*/g, '')}
-                              </div>
-                            )
-                          }
-                          return <div key={lIdx}>{line.replace(/^\*\s*/, '• ').replace(/\*\*/g, '')}</div>
-                        })}
-                      </div>
-                    </Card>
-                  ))}
-                  {/* 如果只有intro，显示整体内容 */}
-                  {parsedContent.length === 0 && (
-                    <Card size="small" style={{ gridColumn: 'span 2', borderRadius: 10 }}>
-                      <Text style={{ whiteSpace: 'pre-wrap', lineHeight: 1.8 }}>
-                        {campaignContent.trim()}
-                      </Text>
-                    </Card>
-                  )}
-                </div>
-              ),
-              style: {
-                marginBottom: 12,
-                background: 'white',
-                borderRadius: 12,
-                border: '1px solid #e8e8e8',
-                overflow: 'hidden'
+                      
+                      return (
+                        <div key={pIdx} style={{ 
+                          display: 'flex', 
+                          marginBottom: 12,
+                          alignItems: 'flex-start',
+                          gap: 12
+                        }}>
+                          <div style={{ 
+                            minWidth: 80, 
+                            display: 'flex', 
+                            alignItems: 'center', 
+                            gap: 6,
+                            paddingTop: 2
+                          }}>
+                            {getIcon(part.title)}
+                            <Text strong style={{ fontSize: 13, color: '#595959' }}>
+                              {part.title}
+                            </Text>
+                          </div>
+                          <div style={{ flex: 1 }}>
+                            {renderFieldContent(part.content, part.title)}
+                          </div>
+                        </div>
+                      )
+                    })}
+                  </div>
+                ),
+                style: {
+                  marginBottom: 12,
+                  background: 'white',
+                  borderRadius: 12,
+                  border: '1px solid #e8e8e8',
+                  overflow: 'hidden'
+                }
               }
-            }
-          })}
-        />
+            })}
+          />
+        ) : (
+          // 如果没有解析出广告系列，直接显示原始内容
+          <Card style={{ borderRadius: 12 }}>
+            <div style={{ 
+              whiteSpace: 'pre-wrap', 
+              lineHeight: 1.8, 
+              fontSize: 13,
+              color: '#595959'
+            }}>
+              {content}
+            </div>
+          </Card>
+        )}
       </div>
     )
   }
@@ -331,42 +402,63 @@ const MyReports = () => {
     },
   ]
 
-  // 默认提示词模板
-  const defaultPromptTemplate = `你是一位资深的跨境电商 Google Ads 投放专家，拥有10年+品牌词套利经验。请对以下广告系列数据进行深度分析，生成一份专业的广告投放分析报告。
+  // 默认提示词模板（基于 excel/分析提示词.txt）
+  const defaultPromptTemplate = `# Google Ads 品牌词套利审计提示词（v5 强制完整版）
 
-## 报告结构要求
+你是资深 Google Ads 品牌词直连套利操盘手。对表格中每个广告系列做全量审计与分级，输出可执行方案。
 
-对于每个广告系列，请输出以下内容：
+══════════════════════════════════════
+【口径】
+══════════════════════════════════════
+- 保守EPC/ROI 已含0.72系数，禁止重复乘
+- L7D = D-1至D-8滚动累计
+- 日均点击 = L7D点击 ÷ 7
+- 红线CPC = 保守EPC × 0.7
 
-### 1. 阶段评价
-- 该广告系列目前处于什么阶段（冷启动/成长期/成熟期/衰退期）
-- 过去7天的整体表现总结
+══════════════════════════════════════
+【样本量判定】
+══════════════════════════════════════
+| 日均点击 | 判定 | 约束 |
+|---------|------|------|
+| < 10 | 🔴 | 禁判D（除非EPC=0） |
+| 10-25 | 🟡 | 禁判S |
+| > 25 | 🟢 | 正常判定 |
 
-### 2. 市场洞察
-- 该商家在投放国家的市场竞争情况
-- 同类品牌词的竞价强度分析
+══════════════════════════════════════
+【分级规则】
+══════════════════════════════════════
+▶ S级：必须同时满足
+  ① ROI ≥ 3.0  ② 不倒挂  ③ 出单天数 ≥ 5  ④ 样本🟢
 
-### 3. 数据深度分析
-- CPC变化原因分析（为什么上升/下降）
-- 费用变化原因分析
-- 点击率和转化率趋势
-- ROI健康度评估
+▶ D级：满足任一
+  ① ROI ≤ 0 且 样本🟢
+  ② 倒挂幅度 ≥ 0.05 且 ROI < 1.0 且 样本🟢
+  ③ L7D点击 ≥ 100 且 出单 = 0
+  ④ 保守EPC = 0
 
-### 4. 节日营销预判
-- 未来2-4周是否有重要节日
-- 是否需要提前布局节日营销
-- 是否需要优化头图/广告素材
+▶ B级：不满足S也不触发D
 
-### 5. 优化建议
-- 推荐预算：$XX（原因说明）
-- 推荐CPC：$X.XX（原因说明）
-- 其他优化建议
+══════════════════════════════════════
+【动作规则】
+══════════════════════════════════════
+▶ S级：Budget丢失>60%预算×2.0，40-60%预算×1.3，Rank丢失>60%加CPC至红线×0.9
+▶ B级：倒挂→降CPC至红线；样本🔴🟡→预算×1.3
+▶ D级：立即PAUSE
 
-### 6. 风险提示
-- 需要关注的潜在风险
-- 建议的监控指标
+══════════════════════════════════════
+【输出格式】
+══════════════════════════════════════
+对每个系列输出以下字段：
+---
+【系列名称】
+级别：S / B / D
+检验：ROI=X.XX[✓/✗] | 不倒挂[✓/✗] | 出单≥5[✓/✗] | 样本🟢[✓/✗]
+诊断：日均X.X(🔴/🟡/🟢) | 红线$X.XX | 倒挂幅度$X.XX | Budget丢失X%/Rank丢失X%
+动作：CPC $X.XX→$X.XX | 预算 $X.XX→$X.XX(+X%)
+效果：预期日点击=X | 预期ROI:X.XX
+---
 
-请用专业、详实的语言输出报告，不要输出简单的操作指令。`
+上图表格是待审计的广告系列数据，请开始审计：`
 
   return (
     <div className="analysis-page">

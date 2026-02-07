@@ -351,7 +351,10 @@ class ApiOnlyAnalysisService:
         budget: float = 0,
         conservative_roi: float = None
     ) -> str:
-        """生成操作指令（带具体数值）"""
+        """
+        生成操作指令（简洁格式）
+        格式: CPC $X.XX→$X.XX | 预算 $X.XX→$X.XX(+X%)
+        """
         
         # 计算 ROI（如果没传入）
         if conservative_roi is None:
@@ -361,31 +364,54 @@ class ApiOnlyAnalysisService:
         if conservative_roi < -0.4:
             return "关停"
         
+        instructions = []
+        
         # ROI 为负，降价
         if conservative_roi < 0:
             if cpc > 0:
                 new_cpc = max(0.01, cpc - 0.05)
-                return f"CPC ${cpc:.2f}→${new_cpc:.2f}"
-            return "降价"
+                instructions.append(f"CPC ${cpc:.2f}→${new_cpc:.2f}")
+            else:
+                instructions.append("降CPC")
         
         # ROI 优秀且有预算瓶颈，加预算
-        if conservative_roi > 1.5 and is_budget_lost and is_budget_lost > 0.2 and order_days >= 4:
+        elif conservative_roi > 1.5 and is_budget_lost and is_budget_lost > 0.2 and order_days >= 4:
             if budget > 0:
                 new_budget = budget * 1.3
-                return f"预算 ${budget:.0f}→${new_budget:.0f}(+30%)"
-            return "加预算；提高CPC"
+                pct = 30
+                instructions.append(f"预算 ${budget:.2f}→${new_budget:.2f}(+{pct}%)")
+            else:
+                instructions.append("加预算")
+            # 同时可能需要提高CPC抢占排名
+            if is_rank_lost and is_rank_lost > 0.15 and cpc > 0:
+                new_cpc = cpc + 0.02
+                instructions.append(f"CPC ${cpc:.2f}→${new_cpc:.2f}")
         
         # ROI 良好且有排名瓶颈，提高CPC
-        if conservative_roi > 1.0 and is_rank_lost and is_rank_lost > 0.15:
+        elif conservative_roi > 1.0 and is_rank_lost and is_rank_lost > 0.15:
             if cpc > 0:
                 new_cpc = cpc + 0.02
-                return f"CPC ${cpc:.2f}→${new_cpc:.2f}"
-            return "提高CPC"
+                instructions.append(f"CPC ${cpc:.2f}→${new_cpc:.2f}")
+            else:
+                instructions.append("提高CPC")
+        
+        # ROI 中等，有预算瓶颈，考虑加预算
+        elif conservative_roi >= 0.8 and is_budget_lost and is_budget_lost > 0.3:
+            if budget > 0:
+                new_budget = budget * 1.2
+                pct = 20
+                instructions.append(f"预算 ${budget:.2f}→${new_budget:.2f}(+{pct}%)")
         
         # ROI 正常，维持
-        if conservative_roi >= 0.5:
+        elif conservative_roi >= 0.5:
             return "维持"
         
         # 样本不足
-        return "样本不足"
+        else:
+            return "样本不足"
+        
+        # 组合指令
+        if instructions:
+            return " | ".join(instructions)
+        return "维持"
 
