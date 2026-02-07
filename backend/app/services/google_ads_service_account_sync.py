@@ -83,20 +83,62 @@ class GoogleAdsServiceAccountSync:
         
         return None
     
+    @staticmethod
+    def _safe_parse_service_account_json(raw: str) -> Optional[Dict]:
+        """
+        安全解析服务账号JSON，处理各种格式问题：
+        - 正常JSON字符串
+        - 双重JSON编码（json.dumps后再存了一次）
+        - 带BOM的UTF-8
+        - 首尾有多余引号/空白
+        """
+        if not raw or not raw.strip():
+            return None
+        
+        text = raw.strip()
+        # 去掉BOM
+        if text.startswith('\ufeff'):
+            text = text[1:]
+        
+        # 尝试直接解析
+        try:
+            result = json.loads(text)
+            if isinstance(result, dict) and 'type' in result:
+                return result
+            # 如果解析出来是字符串，说明是双重编码
+            if isinstance(result, str):
+                result2 = json.loads(result)
+                if isinstance(result2, dict) and 'type' in result2:
+                    return result2
+        except (json.JSONDecodeError, TypeError):
+            pass
+        
+        # 尝试去掉首尾引号后解析（处理 '"{ ... }"' 的情况）
+        if (text.startswith('"') and text.endswith('"')) or (text.startswith("'") and text.endswith("'")):
+            try:
+                inner = text[1:-1].replace('\\"', '"').replace("\\'", "'")
+                result = json.loads(inner)
+                if isinstance(result, dict) and 'type' in result:
+                    return result
+            except (json.JSONDecodeError, TypeError):
+                pass
+        
+        return None
+
     def _get_service_account_credentials(self, mcc_account: GoogleMccAccount) -> Optional[Dict]:
         """
         获取服务账号凭证
         
         优先级：
         1. MCC账号级别的服务账号配置
-        2. 全局服务账号配置
+        2. 全局服务账号配置（环境变量 / 文件）
         """
         # 优先使用MCC级别配置
         if mcc_account.service_account_json:
-            try:
-                return json.loads(mcc_account.service_account_json)
-            except Exception as e:
-                logger.warning(f"MCC {mcc_account.mcc_id} 的服务账号配置解析失败: {e}，将使用全局配置")
+            parsed = self._safe_parse_service_account_json(mcc_account.service_account_json)
+            if parsed:
+                return parsed
+            logger.warning(f"MCC {mcc_account.mcc_id} 的服务账号JSON解析失败（长度={len(mcc_account.service_account_json)}，前50字符={mcc_account.service_account_json[:50]!r}），将使用全局配置")
         
         # 使用全局配置
         return self._load_global_service_account()
@@ -394,6 +436,19 @@ class GoogleAdsServiceAccountSync:
                     }
         
         try:
+            # 自动修复：如果MCC的服务账号JSON无法解析，尝试用全局配置修复并更新DB
+            if mcc_account.service_account_json:
+                parsed = self._safe_parse_service_account_json(mcc_account.service_account_json)
+                if not parsed:
+                    global_creds = self._load_global_service_account()
+                    if global_creds:
+                        fixed_json = json.dumps(global_creds, ensure_ascii=False)
+                        mcc_account.service_account_json = fixed_json
+                        mcc_account.use_service_account = True
+                        self.db.add(mcc_account)
+                        self.db.commit()
+                        logger.info(f"MCC {mcc_account.mcc_id} 的服务账号JSON已自动修复（从全局配置）")
+
             # 创建客户端
             client, mcc_customer_id = self._create_client(mcc_account)
             

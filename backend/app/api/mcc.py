@@ -24,6 +24,47 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/mcc", tags=["mcc"])
 
 
+def _normalize_service_account_json(raw: Optional[str]) -> Optional[str]:
+    """
+    规范化服务账号JSON字符串，确保存入数据库的是干净的JSON。
+    处理：双重编码、带BOM、首尾多余引号等问题。
+    返回：规范化后的JSON字符串（可直接json.loads），或None。
+    """
+    if not raw or not raw.strip():
+        return None
+    
+    text = raw.strip()
+    # 去BOM
+    if text.startswith('\ufeff'):
+        text = text[1:]
+    
+    # 尝试直接解析
+    try:
+        result = json.loads(text)
+        if isinstance(result, dict) and 'type' in result:
+            return json.dumps(result, ensure_ascii=False)
+        # 双重编码：解析出来是字符串
+        if isinstance(result, str):
+            result2 = json.loads(result)
+            if isinstance(result2, dict) and 'type' in result2:
+                return json.dumps(result2, ensure_ascii=False)
+    except (json.JSONDecodeError, TypeError):
+        pass
+    
+    # 尝试去掉首尾引号
+    if (text.startswith('"') and text.endswith('"')) or (text.startswith("'") and text.endswith("'")):
+        try:
+            inner = text[1:-1].replace('\\"', '"').replace("\\'", "'")
+            result = json.loads(inner)
+            if isinstance(result, dict) and 'type' in result:
+                return json.dumps(result, ensure_ascii=False)
+        except (json.JSONDecodeError, TypeError):
+            pass
+    
+    logger.warning(f"服务账号JSON规范化失败，前80字符: {text[:80]!r}")
+    return None
+
+
 def _sync_mcc_range_in_background(mcc_id: int, begin: date, end: date, user_id: int):
     """后台任务：同步MCC日期范围数据"""
     import logging
@@ -281,18 +322,36 @@ async def create_mcc_account(
     if existing:
         raise HTTPException(status_code=400, detail="您已添加过该MCC ID")
     
-    # 自动继承全局服务账号配置（从已有MCC复制）
-    service_account_json = mcc_data.service_account_json
+    # 自动继承全局服务账号配置（从已有MCC复制 → 规范化 → 或从全局文件读取）
+    service_account_json = _normalize_service_account_json(mcc_data.service_account_json)
     use_service_account = mcc_data.use_service_account
+    
     if not service_account_json:
+        # 从已有MCC继承
         existing_mcc_with_sa = db.query(GoogleMccAccount).filter(
             GoogleMccAccount.service_account_json.isnot(None),
             GoogleMccAccount.service_account_json != ""
         ).first()
         if existing_mcc_with_sa:
-            service_account_json = existing_mcc_with_sa.service_account_json
-            use_service_account = True
-            logger.info(f"新MCC {mcc_data.mcc_id} 自动继承全局服务账号配置")
+            service_account_json = _normalize_service_account_json(existing_mcc_with_sa.service_account_json)
+            if service_account_json:
+                use_service_account = True
+                logger.info(f"新MCC {mcc_data.mcc_id} 自动继承全局服务账号配置（从已有MCC）")
+    
+    if not service_account_json:
+        # 从全局文件读取
+        from app.config import settings
+        if settings.google_ads_service_account_file:
+            file_path = Path(settings.google_ads_service_account_file)
+            if file_path.exists():
+                try:
+                    with open(file_path, 'r', encoding='utf-8') as f:
+                        sa_data = json.load(f)
+                    service_account_json = json.dumps(sa_data, ensure_ascii=False)
+                    use_service_account = True
+                    logger.info(f"新MCC {mcc_data.mcc_id} 自动继承全局服务账号配置（从文件 {file_path}）")
+                except Exception as e:
+                    logger.warning(f"读取全局服务账号文件失败: {e}")
     
     # 创建MCC账号
     mcc_account = GoogleMccAccount(
@@ -300,7 +359,7 @@ async def create_mcc_account(
         mcc_id=mcc_data.mcc_id,
         mcc_name=mcc_data.mcc_name,
         email=mcc_data.email or "",
-        use_service_account=use_service_account,
+        use_service_account=use_service_account if service_account_json else False,
         client_id=mcc_data.client_id,
         client_secret=mcc_data.client_secret,
         refresh_token=mcc_data.refresh_token,
@@ -342,17 +401,32 @@ async def batch_create_mcc_accounts(
                 errors.append(f"MCC {mcc_data.mcc_id} 您已添加过，跳过")
                 continue
             
-            # 自动继承全局服务账号配置
-            service_account_json = mcc_data.service_account_json
+            # 自动继承全局服务账号配置（规范化JSON）
+            service_account_json = _normalize_service_account_json(mcc_data.service_account_json)
             use_service_account = mcc_data.use_service_account
+            
             if not service_account_json:
                 existing_mcc_with_sa = db.query(GoogleMccAccount).filter(
                     GoogleMccAccount.service_account_json.isnot(None),
                     GoogleMccAccount.service_account_json != ""
                 ).first()
                 if existing_mcc_with_sa:
-                    service_account_json = existing_mcc_with_sa.service_account_json
-                    use_service_account = True
+                    service_account_json = _normalize_service_account_json(existing_mcc_with_sa.service_account_json)
+                    if service_account_json:
+                        use_service_account = True
+            
+            if not service_account_json:
+                from app.config import settings
+                if settings.google_ads_service_account_file:
+                    file_path = Path(settings.google_ads_service_account_file)
+                    if file_path.exists():
+                        try:
+                            with open(file_path, 'r', encoding='utf-8') as f:
+                                sa_data = json.load(f)
+                            service_account_json = json.dumps(sa_data, ensure_ascii=False)
+                            use_service_account = True
+                        except Exception as e:
+                            logger.warning(f"读取全局服务账号文件失败: {e}")
             
             # 创建MCC账号
             mcc_account = GoogleMccAccount(
@@ -360,7 +434,7 @@ async def batch_create_mcc_accounts(
                 mcc_id=mcc_data.mcc_id,
                 mcc_name=mcc_data.mcc_name,
                 email=mcc_data.email or "",
-                use_service_account=use_service_account,
+                use_service_account=use_service_account if service_account_json else False,
                 client_id=mcc_data.client_id,
                 client_secret=mcc_data.client_secret,
                 refresh_token=mcc_data.refresh_token,
