@@ -298,7 +298,8 @@ async def generate_l7d_from_daily(
     from sqlalchemy import func as sqlfunc
     
     # 获取该用户所有平台的 L7D 佣金/订单数据
-    platform_l7d_cache = {}  # {platform_code: {commission, orders, order_days}}
+    # 注意：使用 platform_name（简码：PM, CG, RW）作为缓存键，与广告系列中的平台代码匹配
+    platform_l7d_cache = {}  # {platform_name: {commission, orders, order_days}}
     
     # 查询用户的所有联盟账号
     user_accounts = db.query(AffiliateAccount).filter(
@@ -310,7 +311,8 @@ async def generate_l7d_from_daily(
         platform = db.query(AffiliatePlatform).filter(AffiliatePlatform.id == acc.platform_id).first()
         if not platform:
             continue
-        pcode = platform.platform_code
+        # 使用 platform_name 作为缓存键（PM, CG, RW 等），与广告系列中的平台代码匹配
+        pcode = platform.platform_name
         
         # 查询该账号在日期范围内的平台数据
         pd_query = db.query(
@@ -558,7 +560,8 @@ async def generate_l7d_from_daily_with_google(
     from sqlalchemy import func as sqlfunc
     
     # 获取该用户所有平台的 L7D 佣金/订单数据
-    platform_l7d_cache = {}  # {platform_code: {commission, orders, order_days}}
+    # 注意：使用 platform_name（简码：PM, CG, RW）作为缓存键，与广告系列中的平台代码匹配
+    platform_l7d_cache = {}  # {platform_name: {commission, orders, order_days}}
     
     # 查询用户的所有联盟账号
     user_accounts = db.query(AffiliateAccount).filter(
@@ -570,7 +573,8 @@ async def generate_l7d_from_daily_with_google(
         platform = db.query(AffiliatePlatform).filter(AffiliatePlatform.id == acc.platform_id).first()
         if not platform:
             continue
-        pcode = platform.platform_code
+        # 使用 platform_name 作为缓存键（PM, CG, RW 等），与广告系列中的平台代码匹配
+        pcode = platform.platform_name
         
         # 查询该账号在日期范围内的平台数据
         pd_query = db.query(

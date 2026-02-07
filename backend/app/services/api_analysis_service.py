@@ -473,10 +473,17 @@ class ApiAnalysisService:
             
             for uid in user_ids:
                 for norm_pcode in normalized_codes:
-                    # 查找该用户该平台的联盟账号（使用标准化的平台代码）
+                    # 查找该用户该平台的联盟账号
+                    # 注意：数据库中 platform_code 是 URL，platform_name 才是简码（PM, CG, RW 等）
                     platform = self.db.query(AffiliatePlatform).filter(
-                        AffiliatePlatform.platform_code == norm_pcode
+                        AffiliatePlatform.platform_name == norm_pcode
                     ).first()
+                    
+                    if not platform:
+                        # 如果 platform_name 找不到，尝试用 platform_code
+                        platform = self.db.query(AffiliatePlatform).filter(
+                            AffiliatePlatform.platform_code == norm_pcode
+                        ).first()
                     
                     if not platform:
                         logger.warning(f"未找到平台: {norm_pcode}")
