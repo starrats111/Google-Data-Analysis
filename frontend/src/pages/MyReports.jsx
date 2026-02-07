@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react'
 import { Card, Table, Space, message, Tag, Typography, Button, Modal, Spin, Empty, Tooltip, Input, Collapse, Divider } from 'antd'
-import { FileTextOutlined, RobotOutlined, DeleteOutlined, CopyOutlined, SettingOutlined, RocketOutlined, LineChartOutlined, BulbOutlined, CalendarOutlined, WarningOutlined, TrophyOutlined } from '@ant-design/icons'
+import { FileTextOutlined, RobotOutlined, DeleteOutlined, CopyOutlined, SettingOutlined, RocketOutlined, LineChartOutlined, BulbOutlined, CalendarOutlined, WarningOutlined, TrophyOutlined, ArrowLeftOutlined, CloseOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import api from '../services/api'
 import './Analysis.css'
@@ -531,29 +531,61 @@ const MyReports = () => {
               color: 'white'
             }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <div>
-                  <Title level={3} style={{ color: 'white', margin: 0, marginBottom: 8 }}>
-                    <RobotOutlined style={{ marginRight: 12 }} />
-                    AI 智能分析报告
-                  </Title>
-                  <Space size="middle">
-                    <Tag color="rgba(255,255,255,0.2)" style={{ color: 'white', border: 'none' }}>
-                      📊 {selectedReport.campaign_count} 个广告系列
-                    </Tag>
-                    <Tag color="rgba(255,255,255,0.2)" style={{ color: 'white', border: 'none' }}>
-                      📅 {dayjs(selectedReport.created_at).format('YYYY-MM-DD HH:mm')}
-                    </Tag>
-                  </Space>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+                  {/* 返回按钮 */}
+                  <Button 
+                    type="text"
+                    icon={<ArrowLeftOutlined style={{ fontSize: 20 }} />}
+                    onClick={() => setReportModalOpen(false)}
+                    style={{ 
+                      color: 'white', 
+                      width: 40, 
+                      height: 40,
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center'
+                    }}
+                  />
+                  <div>
+                    <Title level={3} style={{ color: 'white', margin: 0, marginBottom: 8 }}>
+                      <RobotOutlined style={{ marginRight: 12 }} />
+                      AI 智能分析报告
+                    </Title>
+                    <Space size="middle">
+                      <Tag color="rgba(255,255,255,0.2)" style={{ color: 'white', border: 'none' }}>
+                        📊 {selectedReport.campaign_count} 个广告系列
+                      </Tag>
+                      <Tag color="rgba(255,255,255,0.2)" style={{ color: 'white', border: 'none' }}>
+                        📅 {dayjs(selectedReport.created_at).format('YYYY-MM-DD HH:mm')}
+                      </Tag>
+                    </Space>
+                  </div>
                 </div>
-                <Button 
-                  type="primary"
-                  ghost
-                  icon={<CopyOutlined />}
-                  onClick={copyReport}
-                  style={{ borderColor: 'white', color: 'white' }}
-                >
-                  复制报告
-                </Button>
+                <Space>
+                  <Button 
+                    type="primary"
+                    ghost
+                    icon={<CopyOutlined />}
+                    onClick={copyReport}
+                    style={{ borderColor: 'white', color: 'white' }}
+                  >
+                    复制报告
+                  </Button>
+                  {/* 关闭按钮 */}
+                  <Button 
+                    type="text"
+                    icon={<CloseOutlined style={{ fontSize: 18 }} />}
+                    onClick={() => setReportModalOpen(false)}
+                    style={{ 
+                      color: 'white', 
+                      width: 40, 
+                      height: 40,
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center'
+                    }}
+                  />
+                </Space>
               </div>
             </div>
 
@@ -573,11 +605,30 @@ const MyReports = () => {
               background: 'white',
               borderTop: '1px solid #f0f0f0',
               display: 'flex',
-              justifyContent: 'flex-end'
+              justifyContent: 'space-between',
+              alignItems: 'center'
             }}>
-              <Button onClick={() => setReportModalOpen(false)}>
-                关闭
+              <Button 
+                type="primary"
+                icon={<ArrowLeftOutlined />}
+                onClick={() => setReportModalOpen(false)}
+                size="large"
+              >
+                返回列表
               </Button>
+              <Space>
+                <Button 
+                  icon={<CopyOutlined />}
+                  onClick={copyReport}
+                >
+                  复制报告
+                </Button>
+                <Button 
+                  onClick={() => setReportModalOpen(false)}
+                >
+                  关闭
+                </Button>
+              </Space>
             </div>
           </div>
         ) : (
