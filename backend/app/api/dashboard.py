@@ -17,6 +17,7 @@ from app.models.affiliate_account import AffiliateAccount, AffiliatePlatform
 from app.models.analysis_result import AnalysisResult
 from app.models.google_ads_api_data import GoogleAdsApiData, GoogleMccAccount
 from app.models.affiliate_transaction import AffiliateTransaction
+from app.api.google_ads_aggregate import convert_to_usd
 import re
 
 router = APIRouter(prefix="/api/dashboard", tags=["dashboard"])
@@ -42,10 +43,21 @@ async def get_overview(
         GoogleAdsApiData.date <= today,
     ).scalar() or 0
 
-    cost_7d = db.query(func.sum(GoogleAdsApiData.cost)).filter(
+    # 按MCC分组汇总费用，再做货币转换
+    cost_by_mcc = db.query(
+        GoogleAdsApiData.mcc_id,
+        func.sum(GoogleAdsApiData.cost).label("cost"),
+    ).filter(
         GoogleAdsApiData.date >= start_7d,
         GoogleAdsApiData.date <= today,
-    ).scalar() or 0.0
+    ).group_by(GoogleAdsApiData.mcc_id).all()
+    # 获取所有MCC的货币映射
+    all_mccs = db.query(GoogleMccAccount).all()
+    mcc_currency_map = {mcc.id: getattr(mcc, 'currency', 'USD') or 'USD' for mcc in all_mccs}
+    cost_7d = sum(
+        convert_to_usd(float(r.cost or 0.0), mcc_currency_map.get(r.mcc_id, 'USD'))
+        for r in cost_by_mcc
+    )
 
     # 佣金：按交易时间窗口（所有状态计入总佣金）
     start_dt = datetime.combine(start_7d, datetime.min.time())
@@ -103,9 +115,10 @@ async def get_employees_data(
     ).group_by(GoogleMccAccount.user_id).all()
     mcc_map = {r.user_id: int(r.mcc_count or 0) for r in mcc_rows}
 
-    # Google Ads 聚合（近7天）
+    # Google Ads 聚合（近7天），按user_id+mcc_id分组以便做货币转换
     ads_rows = db.query(
         GoogleAdsApiData.user_id,
+        GoogleAdsApiData.mcc_id,
         func.count(func.distinct(GoogleAdsApiData.campaign_id)).label("campaigns_7d"),
         func.sum(GoogleAdsApiData.cost).label("cost_7d"),
         func.max(GoogleAdsApiData.last_sync_at).label("last_sync_at"),
@@ -113,15 +126,24 @@ async def get_employees_data(
         GoogleAdsApiData.user_id.in_(employee_ids),
         GoogleAdsApiData.date >= start_7d,
         GoogleAdsApiData.date <= today,
-    ).group_by(GoogleAdsApiData.user_id).all()
-    ads_map = {
-        r.user_id: {
-            "campaigns_7d": int(r.campaigns_7d or 0),
-            "cost_7d": float(r.cost_7d or 0.0),
-            "last_sync_at": r.last_sync_at.isoformat() if r.last_sync_at else None,
-        }
-        for r in ads_rows
-    }
+    ).group_by(GoogleAdsApiData.user_id, GoogleAdsApiData.mcc_id).all()
+    # MCC货币映射
+    all_mccs_emp = db.query(GoogleMccAccount).all()
+    mcc_currency_map_emp = {mcc.id: getattr(mcc, 'currency', 'USD') or 'USD' for mcc in all_mccs_emp}
+    ads_map: Dict[int, dict] = {}
+    for r in ads_rows:
+        uid = r.user_id
+        currency = mcc_currency_map_emp.get(r.mcc_id, 'USD')
+        cost_usd = convert_to_usd(float(r.cost_7d or 0.0), currency)
+        if uid not in ads_map:
+            ads_map[uid] = {"campaigns_7d": 0, "cost_7d": 0.0, "last_sync_at": None}
+        ads_map[uid]["campaigns_7d"] += int(r.campaigns_7d or 0)
+        ads_map[uid]["cost_7d"] += cost_usd
+        if r.last_sync_at:
+            existing = ads_map[uid]["last_sync_at"]
+            new_ts = r.last_sync_at.isoformat()
+            if existing is None or new_ts > existing:
+                ads_map[uid]["last_sync_at"] = new_ts
 
     # 交易聚合（近7天）
     tx_rows = db.query(
@@ -262,16 +284,25 @@ async def get_employee_insights(
     start_dt = datetime.combine(start_d, datetime.min.time())
     end_dt = datetime.combine(end_d, datetime.max.time())
 
-    # 1) 趋势：Google Ads 费用（按天）
+    # 1) 趋势：Google Ads 费用（按天），带货币转换
     cost_rows = db.query(
         GoogleAdsApiData.date.label("date"),
+        GoogleAdsApiData.mcc_id,
         func.sum(GoogleAdsApiData.cost).label("cost"),
     ).filter(
         GoogleAdsApiData.user_id == target_user_id,
         GoogleAdsApiData.date >= start_d,
         GoogleAdsApiData.date <= end_d,
-    ).group_by(GoogleAdsApiData.date).all()
-    cost_map = {r.date.strftime("%Y-%m-%d"): float(r.cost or 0.0) for r in cost_rows}
+    ).group_by(GoogleAdsApiData.date, GoogleAdsApiData.mcc_id).all()
+    # MCC货币映射
+    user_mccs = db.query(GoogleMccAccount).filter(GoogleMccAccount.user_id == target_user_id).all()
+    insight_currency_map = {mcc.id: getattr(mcc, 'currency', 'USD') or 'USD' for mcc in user_mccs}
+    cost_map: Dict[str, float] = {}
+    for r in cost_rows:
+        ds = r.date.strftime("%Y-%m-%d")
+        currency = insight_currency_map.get(r.mcc_id, 'USD')
+        cost_usd = convert_to_usd(float(r.cost or 0.0), currency)
+        cost_map[ds] = cost_map.get(ds, 0.0) + cost_usd
 
     # 2) 趋势：联盟佣金（所有状态计入总佣金）（按天）
     comm_rows = db.query(
@@ -331,10 +362,11 @@ async def get_employee_insights(
     comm_by_aid = {int(r.aid): float(r.commission or 0.0) for r in tx_by_acct if r.aid is not None}
     orders_by_aid = {int(r.aid): int(r.orders or 0) for r in tx_by_acct if r.aid is not None}
 
-    # 5) 广告系列聚合（按 campaign_id）：费用/点击/展示（实时）
+    # 5) 广告系列聚合（按 campaign_id）：费用/点击/展示（实时），带货币转换
     camp_rows = db.query(
         GoogleAdsApiData.campaign_id.label("campaign_id"),
         GoogleAdsApiData.campaign_name.label("campaign_name"),
+        GoogleAdsApiData.mcc_id.label("mcc_id"),
         func.sum(GoogleAdsApiData.cost).label("cost"),
         func.sum(GoogleAdsApiData.clicks).label("clicks"),
         func.sum(GoogleAdsApiData.impressions).label("impressions"),
@@ -343,12 +375,14 @@ async def get_employee_insights(
         GoogleAdsApiData.date >= start_d,
         GoogleAdsApiData.date <= end_d,
     ).group_by(
-        GoogleAdsApiData.campaign_id, GoogleAdsApiData.campaign_name
+        GoogleAdsApiData.campaign_id, GoogleAdsApiData.campaign_name, GoogleAdsApiData.mcc_id
     ).all()
 
     campaigns = []
     for r in camp_rows:
-        cost = float(r.cost or 0.0)
+        raw_cost = float(r.cost or 0.0)
+        currency = insight_currency_map.get(r.mcc_id, 'USD')
+        cost = convert_to_usd(raw_cost, currency)
         clicks = float(r.clicks or 0.0)
         impressions = float(r.impressions or 0.0)
         platform_code = _infer_platform_code_from_campaign_name(r.campaign_name)
