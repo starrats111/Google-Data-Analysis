@@ -12,6 +12,7 @@ from app.models.mcc_cost_adjustment import MccCostAdjustment
 from app.models.platform_data import PlatformData
 from app.models.google_ads_api_data import GoogleAdsApiData, GoogleMccAccount, CampaignPlatformMapping
 from app.models.affiliate_transaction import AffiliateTransaction, AffiliateRejection
+from app.models.ai_report import AIReport, UserPrompt
 
 __all__ = [
     "User",
@@ -32,6 +33,8 @@ __all__ = [
     "CampaignPlatformMapping",
     "AffiliateTransaction",
     "AffiliateRejection",
+    "AIReport",
+    "UserPrompt",
 ]
 
 

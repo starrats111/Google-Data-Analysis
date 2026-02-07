@@ -620,10 +620,10 @@ const Analysis = ({ mode }) => {
         title={
           <Space>
             <RobotOutlined />
-            <span>AI 智能分析 - L7D 审计报告</span>
+            <span>AI 分析报告</span>
             {aiAnalysisResult && (
-              <Tag color={aiAnalysisResult.is_analysis_day ? 'green' : 'orange'}>
-                {aiAnalysisResult.weekday} {aiAnalysisResult.is_analysis_day ? '✅ 分析日' : '⚠️ 非分析日'}
+              <Tag color="blue">
+                📊 {aiAnalysisResult.campaign_count} 个广告系列
               </Tag>
             )}
           </Space>
@@ -682,7 +682,7 @@ const Analysis = ({ mode }) => {
         ) : (
           <div style={{ textAlign: 'center', padding: 60, color: '#999' }}>
             <RobotOutlined style={{ fontSize: 48, marginBottom: 16 }} />
-            <p>选择一条 L7D 分析结果，点击 AI 按钮开始智能分析</p>
+            <p>选择一条 L7D 分析结果，点击"生成报告"按钮</p>
           </div>
         )}
       </Modal>

@@ -3,14 +3,14 @@ Gemini AI API 端点
 """
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
 from sqlalchemy.orm import Session
-from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey
 from typing import Optional, List
 from pydantic import BaseModel
 from datetime import date, datetime
 import logging
 
-from app.database import get_db, Base
+from app.database import get_db
 from app.models.user import User
+from app.models.ai_report import AIReport, UserPrompt
 from app.api.auth import get_current_user
 from app.services.gemini_service import GeminiService
 from app.config import settings
@@ -117,28 +117,6 @@ class GenerateReportRequest(BaseModel):
 class UserPromptRequest(BaseModel):
     """用户自定义提示词"""
     prompt: str
-
-
-# 数据库模型：AI 报告
-class AIReport(Base):
-    __tablename__ = "ai_reports"
-    
-    id = Column(Integer, primary_key=True, index=True)
-    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
-    analysis_result_id = Column(Integer, nullable=True)
-    content = Column(Text, nullable=False)
-    campaign_count = Column(Integer, default=0)
-    created_at = Column(DateTime, default=datetime.utcnow)
-
-
-# 数据库模型：用户自定义提示词
-class UserPrompt(Base):
-    __tablename__ = "user_prompts"
-    
-    id = Column(Integer, primary_key=True, index=True)
-    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, unique=True)
-    prompt = Column(Text, nullable=False)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
 @router.post("/analyze-campaign")
