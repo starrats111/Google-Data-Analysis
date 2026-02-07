@@ -419,10 +419,11 @@ async def get_platform_data_summary(
         total_rejected_rate = (total_rejected_commission / total_commission * 100) if total_commission > 0 else 0
         total_net_commission = total_commission - total_rejected_commission  # 净佣金 = 总佣金 - 拒付佣金
         
-        # 按平台+商家聚合（汇总模式：MID、商家、订单数、销售额、佣金）
+        # 按平台+MID+商家聚合（汇总模式：参考CG，按MID聚合）
         # 需要统计不同状态的佣金：total（所有状态）、approved（已付）、pending（审核）、rejected（拒付）
         merchant_query = base_query.with_entities(
             AffiliateTransaction.platform,
+            AffiliateTransaction.merchant_id,  # 直接使用MID字段
             AffiliateTransaction.merchant,
             func.count(AffiliateTransaction.id).label('orders'),
             func.sum(AffiliateTransaction.order_amount).label('gmv'),
@@ -447,6 +448,7 @@ async def get_platform_data_summary(
             ).label('rejected_commission')  # 拒付佣金
         ).group_by(
             AffiliateTransaction.platform,
+            AffiliateTransaction.merchant_id,  # 按MID分组
             AffiliateTransaction.merchant
         ).order_by(
             AffiliateTransaction.platform,
@@ -454,10 +456,6 @@ async def get_platform_data_summary(
         )
         
         merchant_results = merchant_query.all()
-        
-        # 尝试从广告系列名中提取MID（从GoogleAdsApiData中查找）
-        from app.models.google_ads_api_data import GoogleAdsApiData
-        from app.models.ad_campaign import AdCampaign
         
         merchant_breakdown = []
         for r in merchant_results:
@@ -468,27 +466,11 @@ async def get_platform_data_summary(
             pending_comm = float(r.pending_commission or 0)  # 审核佣金
             rejected_comm = float(r.rejected_commission or 0)  # 拒付佣金
             
-            # 尝试查找MID：从GoogleAdsApiData中查找匹配的广告系列，提取MID
-            mid = None
-            if r.merchant:
-                # 查找该平台该商家的广告系列，从广告系列名中提取MID
-                # 格式：序号-平台-商家-投放国家-投放时间-MID
-                ga_data = db.query(GoogleAdsApiData).filter(
-                    GoogleAdsApiData.user_id == current_user.id if current_user.role == "employee" else True,
-                    GoogleAdsApiData.extracted_platform_code == r.platform,
-                    GoogleAdsApiData.date >= begin,
-                    GoogleAdsApiData.date <= end,
-                    GoogleAdsApiData.campaign_name.contains(r.merchant)
-                ).first()
-                
-                if ga_data and ga_data.campaign_name:
-                    # 从广告系列名提取MID（最后一个字段）
-                    parts = ga_data.campaign_name.split('-')
-                    if len(parts) >= 6:  # 序号-平台-商家-国家-时间-MID
-                        mid = parts[-1]  # 最后一个字段是MID
+            # MID直接从交易记录获取
+            mid = r.merchant_id or ""
             
             merchant_breakdown.append({
-                "mid": mid or "",
+                "mid": mid,
                 "merchant": r.merchant or "",
                 "platform": r.platform,
                 "orders": orders,

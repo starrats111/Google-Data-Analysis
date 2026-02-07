@@ -889,29 +889,42 @@ const Analysis = ({ mode }) => {
                           }
                         }
 
-                        // 为操作指令列添加特殊渲染
+                        // 为操作指令列添加特殊渲染 - 可点击查看AI报告
                         if (key === '操作指令') {
-                          column.width = 200
+                          column.width = 220
                           column.ellipsis = false
-                          column.render = (text) => {
+                          column.render = (text, row) => {
                             if (!text || text === '-') return '-'
                             const t = String(text)
                             let color = 'default'
                             // 根据操作指令内容设置颜色
                             if (t.includes('关停') || t.includes('PAUSE')) {
                               color = 'red'
-                            } else if (t.includes('降价')) {
+                            } else if (t.includes('降') || t.includes('降价')) {
                               color = 'orange'
-                            } else if (t.includes('预算') || t.includes('加产')) {
+                            } else if (t.includes('预算') || t.includes('加')) {
                               color = 'green'
-                            } else if (t.includes('CPC+') || t.includes('抢占')) {
+                            } else if (t.includes('CPC') && t.includes('→')) {
                               color = 'cyan'
-                            } else if (t.includes('稳定') || t.includes('维持')) {
+                            } else if (t.includes('维持')) {
                               color = 'blue'
                             } else if (t.includes('样本不足') || t.includes('观察')) {
                               color = 'default'
                             }
-                            return <Tag color={color} style={{ fontSize: '13px' }}>{t}</Tag>
+                            return (
+                              <Tooltip title="点击查看 AI 分析报告">
+                                <Tag 
+                                  color={color} 
+                                  style={{ fontSize: '13px', cursor: 'pointer' }}
+                                  onClick={() => {
+                                    // 跳转到我的报告页面
+                                    navigate('/my-reports')
+                                  }}
+                                >
+                                  {t}
+                                </Tag>
+                              </Tooltip>
+                            )
                           }
                         }
 
