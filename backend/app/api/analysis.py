@@ -292,6 +292,52 @@ async def generate_l7d_from_daily(
     for m in metrics:
         grouped[m.campaign_id].append(m)
 
+    # 3.5）预加载 PlatformData 数据（用于补齐佣金和订单）
+    from app.models.platform_data import PlatformData
+    from app.models.affiliate_account import AffiliateAccount, AffiliatePlatform
+    from sqlalchemy import func as sqlfunc
+    
+    # 获取该用户所有平台的 L7D 佣金/订单数据
+    platform_l7d_cache = {}  # {platform_code: {commission, orders, order_days}}
+    
+    # 查询用户的所有联盟账号
+    user_accounts = db.query(AffiliateAccount).filter(
+        AffiliateAccount.user_id == current_user.id,
+        AffiliateAccount.is_active == True
+    ).all()
+    
+    for acc in user_accounts:
+        platform = db.query(AffiliatePlatform).filter(AffiliatePlatform.id == acc.platform_id).first()
+        if not platform:
+            continue
+        pcode = platform.platform_code
+        
+        # 查询该账号在日期范围内的平台数据
+        pd_query = db.query(
+            sqlfunc.sum(PlatformData.commission).label('total_commission'),
+            sqlfunc.sum(PlatformData.orders).label('total_orders')
+        ).filter(
+            PlatformData.affiliate_account_id == acc.id,
+            PlatformData.date >= start,
+            PlatformData.date <= end
+        ).first()
+        
+        # 计算出单天数
+        order_days_count = db.query(sqlfunc.count(PlatformData.id)).filter(
+            PlatformData.affiliate_account_id == acc.id,
+            PlatformData.date >= start,
+            PlatformData.date <= end,
+            PlatformData.orders > 0
+        ).scalar() or 0
+        
+        if pcode not in platform_l7d_cache:
+            platform_l7d_cache[pcode] = {"commission": 0, "orders": 0, "order_days": 0}
+        
+        if pd_query:
+            platform_l7d_cache[pcode]["commission"] += float(pd_query.total_commission or 0)
+            platform_l7d_cache[pcode]["orders"] += int(pd_query.total_orders or 0)
+            platform_l7d_cache[pcode]["order_days"] += order_days_count
+
     rows = []
     # 导入分析服务用于生成操作指令
     from app.services.analysis_service import AnalysisService
@@ -304,6 +350,20 @@ async def generate_l7d_from_daily(
         comm = sum(m.commission or 0 for m in items)
         orders = sum(m.orders or 0 for m in items)
         order_days = sum(1 for m in items if (m.orders or 0) > 0)
+        
+        # 如果 daily metrics 中没有佣金/订单数据，尝试从 PlatformData 获取
+        campaign = items[0].campaign if items else None
+        if campaign and (comm == 0 or orders == 0):
+            # 从广告系列名中提取平台代码
+            platform_code = campaign.extracted_platform_code
+            if platform_code and platform_code in platform_l7d_cache:
+                cached = platform_l7d_cache[platform_code]
+                if comm == 0:
+                    comm = cached.get("commission", 0)
+                if orders == 0:
+                    orders = cached.get("orders", 0)
+                if order_days == 0:
+                    order_days = cached.get("order_days", 0)
         # 修复：MAX CPC应该是过去7天中CPC的最大值，而不是最高CPC的最大值
         max_cpc_7d = max((m.cpc or 0) for m in items) if items else 0
 
@@ -490,6 +550,52 @@ async def generate_l7d_from_daily_with_google(
     if not metrics:
         return {"status": "completed", "total_rows": 0, "data": [], "summary": {}}
 
+    # 3.5）预加载 PlatformData 数据（用于补齐佣金和订单）
+    from app.models.platform_data import PlatformData
+    from app.models.affiliate_account import AffiliateAccount, AffiliatePlatform
+    from sqlalchemy import func as sqlfunc
+    
+    # 获取该用户所有平台的 L7D 佣金/订单数据
+    platform_l7d_cache = {}  # {platform_code: {commission, orders, order_days}}
+    
+    # 查询用户的所有联盟账号
+    user_accounts = db.query(AffiliateAccount).filter(
+        AffiliateAccount.user_id == current_user.id,
+        AffiliateAccount.is_active == True
+    ).all()
+    
+    for acc in user_accounts:
+        platform = db.query(AffiliatePlatform).filter(AffiliatePlatform.id == acc.platform_id).first()
+        if not platform:
+            continue
+        pcode = platform.platform_code
+        
+        # 查询该账号在日期范围内的平台数据
+        pd_query = db.query(
+            sqlfunc.sum(PlatformData.commission).label('total_commission'),
+            sqlfunc.sum(PlatformData.orders).label('total_orders')
+        ).filter(
+            PlatformData.affiliate_account_id == acc.id,
+            PlatformData.date >= start,
+            PlatformData.date <= end
+        ).first()
+        
+        # 计算出单天数
+        order_days_count = db.query(sqlfunc.count(PlatformData.id)).filter(
+            PlatformData.affiliate_account_id == acc.id,
+            PlatformData.date >= start,
+            PlatformData.date <= end,
+            PlatformData.orders > 0
+        ).scalar() or 0
+        
+        if pcode not in platform_l7d_cache:
+            platform_l7d_cache[pcode] = {"commission": 0, "orders": 0, "order_days": 0}
+        
+        if pd_query:
+            platform_l7d_cache[pcode]["commission"] += float(pd_query.total_commission or 0)
+            platform_l7d_cache[pcode]["orders"] += int(pd_query.total_orders or 0)
+            platform_l7d_cache[pcode]["order_days"] += order_days_count
+
     # 4）按 campaign_id 聚合 + 合并 IS 两列
     grouped = defaultdict(list)
     for m in metrics:
@@ -507,6 +613,20 @@ async def generate_l7d_from_daily_with_google(
         comm = sum(m.commission or 0 for m in items)
         orders = sum(m.orders or 0 for m in items)
         order_days = sum(1 for m in items if (m.orders or 0) > 0)
+        
+        # 如果 daily metrics 中没有佣金/订单数据，尝试从 PlatformData 获取
+        campaign = items[0].campaign if items else None
+        if campaign and (comm == 0 or orders == 0):
+            # 从广告系列名中提取平台代码
+            platform_code = campaign.extracted_platform_code
+            if platform_code and platform_code in platform_l7d_cache:
+                cached = platform_l7d_cache[platform_code]
+                if comm == 0:
+                    comm = cached.get("commission", 0)
+                if orders == 0:
+                    orders = cached.get("orders", 0)
+                if order_days == 0:
+                    order_days = cached.get("order_days", 0)
         # 修复：MAX CPC应该是过去7天中CPC的最大值，而不是最高CPC的最大值
         max_cpc_7d = max((m.cpc or 0) for m in items) if items else 0
         roi = ((comm - cost) / cost) if cost > 0 else None
