@@ -218,6 +218,10 @@ class LinkHaitaoService:
                 
                 total_commission += cashback
                 
+                # 提取商家ID（MID）：LH 平台尝试多个可能的字段
+                brand_id = item.get("m_id") or item.get("mcid") or item.get("brand_id") or item.get("merchant_id")
+                merchant_id = str(brand_id).strip() if brand_id else None
+                
                 # 佣金记录
                 commission_records.append({
                     "settlement_date": order_date,
@@ -225,6 +229,7 @@ class LinkHaitaoService:
                     "mcid": item.get("mcid") or item.get("m_id"),
                     "transaction_id": item.get("order_id") or item.get("sign_id"),
                     "merchant": item.get("advertiser_name") or item.get("mcid"),
+                    "merchant_id": merchant_id,  # MID - 用于和广告系列名匹配
                 })
                 
                 # 订单记录
@@ -236,6 +241,7 @@ class LinkHaitaoService:
                     "status": item.get("status", "untreated"),
                     "merchant": item.get("advertiser_name") or item.get("mcid"),
                     "mcid": item.get("mcid") or item.get("m_id"),
+                    "merchant_id": merchant_id,  # MID - 用于和广告系列名匹配
                 })
             
             logger.info(f"[LinkHaitao API] 汇总结果: 佣金记录 {len(commission_records)} 条，订单 {len(order_records)} 条，总佣金 {total_commission}")

@@ -543,6 +543,10 @@ class CollabGlowService(PlatformServiceBase):
                 0
             )
             
+            # 提取商家ID（MID）：CG 平台的 MID 是 brand_id 字段
+            brand_id = item.get("brandId") or item.get("brand_id")
+            merchant_id = str(brand_id).strip() if brand_id else None
+            
             extracted.append({
                 "transaction_id": transaction_id,
                 "transaction_time": transaction_time,
@@ -550,9 +554,10 @@ class CollabGlowService(PlatformServiceBase):
                 "order_amount": order_amount,
                 "commission_amount": commission_amount,
                 "status": raw_status,  # 保持原始状态，由统一服务处理映射
+                "merchant_id": merchant_id,  # MID - 用于和广告系列名匹配
                 # 保留原始字段用于兼容
                 "settlement_date": item.get("settlementDate") or item.get("settlement_date"),
-                "brand_id": item.get("brandId") or item.get("brand_id", 0),
+                "brand_id": brand_id,
                 "mcid": item.get("mcid"),
                 "note": item.get("note"),
                 "order_id": item.get("orderId") or item.get("order_id")

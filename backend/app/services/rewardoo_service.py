@@ -526,6 +526,10 @@ class RewardooService(PlatformServiceBase):
                         # 如果转换失败，保持原值
                         pass
                 
+                # 提取商家ID（MID）：RW 平台尝试多个可能的字段
+                brand_id = item.get("brand_id") or item.get("brandId") or item.get("m_id") or item.get("mcid") or item.get("merchant_id")
+                merchant_id = str(brand_id).strip() if brand_id else None
+                
                 extracted.append({
                     "transaction_id": item.get("order_id") or item.get("transaction_id") or item.get("rewardoo_id") or item.get("id") or f"rw_{idx}",
                     "transaction_time": order_time,
@@ -552,6 +556,7 @@ class RewardooService(PlatformServiceBase):
                         or 0
                     ),
                     "status": status_lower,  # 转换为小写：approved/pending/rejected
+                    "merchant_id": merchant_id,  # MID - 用于和广告系列名匹配
                     # 保留原始字段（用于调试和扩展）
                     "raw_data": item
                 })

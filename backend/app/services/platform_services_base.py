@@ -108,6 +108,10 @@ class PlatformServiceBase(ABC):
         
         extracted = []
         for item in transactions:
+            # 提取商家ID（MID）：尝试多个可能的字段
+            brand_id = item.get("brand_id") or item.get("brandId") or item.get("m_id") or item.get("mcid") or item.get("merchant_id")
+            merchant_id = str(brand_id).strip() if brand_id else None
+            
             extracted.append({
                 "transaction_id": item.get("transaction_id") or item.get("id") or item.get("action_id"),
                 "transaction_time": item.get("transaction_time") or item.get("order_date") or item.get("date") or item.get("settlement_date"),
@@ -116,7 +120,8 @@ class PlatformServiceBase(ABC):
                 "commission_amount": float(item.get("commission_amount", 0) or item.get("commission", 0) or item.get("sale_comm", 0) or 0),
                 "status": item.get("status", "").strip(),
                 "reject_reason": item.get("reject_reason") or item.get("rejection_reason") or item.get("reason"),
-                "currency": item.get("currency", "USD")
+                "currency": item.get("currency", "USD"),
+                "merchant_id": merchant_id  # MID - 用于和广告系列名匹配
             })
         
         return extracted
