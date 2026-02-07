@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react'
-import { Card, Table, Space, message, Tag, Typography, Button, Modal, Spin, Empty, Tooltip, Input, Collapse, Divider } from 'antd'
-import { FileTextOutlined, RobotOutlined, DeleteOutlined, CopyOutlined, SettingOutlined, RocketOutlined, LineChartOutlined, BulbOutlined, CalendarOutlined, WarningOutlined, TrophyOutlined, ArrowLeftOutlined, CloseOutlined } from '@ant-design/icons'
+import { Card, Table, Space, message, Tag, Typography, Button, Modal, Spin, Empty, Tooltip, Input } from 'antd'
+import { FileTextOutlined, DeleteOutlined, CopyOutlined, SettingOutlined, ArrowLeftOutlined, CloseOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import api from '../services/api'
 import './Analysis.css'
@@ -97,71 +97,27 @@ const MyReports = () => {
     fetchReports()
   }, [])
 
-  // 渲染格式化的报告内容 - 简洁版
+  // 渲染报告内容 - 纯文本格式，保持原样
   const renderFormattedReport = (content) => {
     if (!content) return null
 
-    // 简单的格式化渲染
-    const formatContent = (text) => {
-      // 处理标题行（# 开头）
-      let formatted = text
-        // 大标题
-        .replace(/^### (.+)$/gm, '<div style="font-size:16px;font-weight:bold;color:#1890ff;margin:16px 0 8px;padding-bottom:8px;border-bottom:1px solid #e8e8e8">$1</div>')
-        .replace(/^## (.+)$/gm, '<div style="font-size:17px;font-weight:bold;color:#262626;margin:20px 0 12px">$1</div>')
-        .replace(/^# (.+)$/gm, '<div style="font-size:18px;font-weight:bold;color:#141414;margin:24px 0 16px">$1</div>')
-        // 分隔线
-        .replace(/^═+$/gm, '<div style="border-top:2px solid #e8e8e8;margin:16px 0"></div>')
-        .replace(/^---$/gm, '<div style="border-top:1px dashed #d9d9d9;margin:12px 0"></div>')
-        // 表格行（简化处理）
-        .replace(/^\|(.+)\|$/gm, (match, content) => {
-          const cells = content.split('|').map(c => c.trim())
-          return `<div style="display:flex;gap:8px;padding:4px 0;font-size:13px;border-bottom:1px solid #f0f0f0">${cells.map(c => `<span style="flex:1">${c}</span>`).join('')}</div>`
-        })
-        // 【标题】格式
-        .replace(/【([^】]+)】/g, '<span style="font-weight:bold;color:#1890ff">【$1】</span>')
-        // 高亮标记
-        .replace(/✅/g, '<span style="color:#52c41a">✅</span>')
-        .replace(/❌/g, '<span style="color:#ff4d4f">❌</span>')
-        .replace(/⚠️/g, '<span style="color:#fa8c16">⚠️</span>')
-        .replace(/🔴/g, '<span style="color:#ff4d4f">🔴</span>')
-        .replace(/🟡/g, '<span style="color:#fa8c16">🟡</span>')
-        .replace(/🟢/g, '<span style="color:#52c41a">🟢</span>')
-        .replace(/🏆/g, '<span style="color:#faad14">🏆</span>')
-        .replace(/\[✓\]/g, '<span style="color:#52c41a;font-weight:bold">[✓]</span>')
-        .replace(/\[✗\]/g, '<span style="color:#ff4d4f;font-weight:bold">[✗]</span>')
-        // 级别标签
-        .replace(/级别[：:]\s*(S)/g, '<span>级别：</span><span style="background:#52c41a;color:white;padding:2px 8px;border-radius:4px;font-weight:bold">S</span>')
-        .replace(/级别[：:]\s*(B)/g, '<span>级别：</span><span style="background:#fa8c16;color:white;padding:2px 8px;border-radius:4px;font-weight:bold">B</span>')
-        .replace(/级别[：:]\s*(D)/g, '<span>级别：</span><span style="background:#ff4d4f;color:white;padding:2px 8px;border-radius:4px;font-weight:bold">D</span>')
-        // 动作高亮（CPC/预算调整）
-        .replace(/动作[：:]\s*(.+)/g, (match, action) => {
-          if (action.includes('PAUSE') || action.includes('关停')) {
-            return `<div style="background:#fff2f0;border:1px solid #ffccc7;padding:8px 12px;border-radius:6px;margin:4px 0"><strong style="color:#ff4d4f">动作：</strong>${action}</div>`
-          } else if (action.includes('CPC') || action.includes('预算')) {
-            return `<div style="background:#e6f7ff;border:1px solid #91d5ff;padding:8px 12px;border-radius:6px;margin:4px 0"><strong style="color:#1890ff">动作：</strong>${action}</div>`
-          }
-          return `<div style="margin:4px 0"><strong>动作：</strong>${action}</div>`
-        })
-        // 字段标签
-        .replace(/^(检验|诊断|效果|验证|升降|D级检查)[：:]/gm, '<strong style="color:#595959">$1：</strong>')
-        // 换行
-        .replace(/\n/g, '<br/>')
-
-      return formatted
-    }
-
     return (
-      <div 
-        style={{ 
-          fontSize: 14, 
-          lineHeight: 1.9, 
-          color: '#333',
-          maxHeight: 'calc(100vh - 300px)',
-          overflowY: 'auto',
-          padding: '0 4px'
-        }}
-        dangerouslySetInnerHTML={{ __html: formatContent(content) }}
-      />
+      <pre style={{ 
+        fontSize: 14, 
+        lineHeight: 1.8, 
+        color: '#333',
+        whiteSpace: 'pre-wrap',
+        wordBreak: 'break-word',
+        fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif',
+        margin: 0,
+        padding: '12px 16px',
+        background: '#fafafa',
+        borderRadius: 8,
+        maxHeight: 'calc(100vh - 280px)',
+        overflowY: 'auto'
+      }}>
+        {content}
+      </pre>
     )
   }
 
