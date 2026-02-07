@@ -457,51 +457,91 @@ class ApiAnalysisService:
                 campaign_data[key]["is_budget_lost"] = max(campaign_data[key]["is_budget_lost"], (data.is_budget_lost or 0))
                 campaign_data[key]["is_rank_lost"] = max(campaign_data[key]["is_rank_lost"], (data.is_rank_lost or 0))
             
-            # 预加载商家佣金数据（按 MID 匹配）
-            from sqlalchemy import func
+            # 预加载商家佣金数据（支持 MID 匹配 和 商家名匹配）
+            from sqlalchemy import func, or_
             from app.models.affiliate_transaction import AffiliateTransaction
             
-            # 获取所有涉及的用户ID和MID
+            # 获取所有涉及的用户ID
             user_ids = set(cdata["user_id"] for cdata in campaign_data.values())
-            mids = set(cdata.get("mid") for cdata in campaign_data.values() if cdata.get("mid"))
             
-            logger.info(f"用户IDs: {user_ids}, 商家MIDs: {mids}")
+            # 收集所有 MID 和商家名
+            mids = set(str(cdata.get("mid")) for cdata in campaign_data.values() if cdata.get("mid"))
+            # 从广告系列名提取商家名（格式: 序号-平台-商家名-国家-日期-MID）
+            merchant_names = set()
+            for cdata in campaign_data.values():
+                campaign_name = cdata.get("campaign_name", "")
+                merchant = self._extract_merchant_from_campaign(campaign_name)
+                if merchant:
+                    merchant_names.add(merchant.lower())
             
-            # 预查询：按 MID 获取每个商家的 L7D 佣金和订单
-            merchant_l7d_data = {}  # {(user_id, mid): {commission, orders, order_days}}
+            logger.info(f"用户IDs: {user_ids}, 商家MIDs: {mids}, 商家名: {merchant_names}")
+            
+            # 预查询：获取该用户所有商家的 L7D 佣金和订单
+            merchant_l7d_data = {}  # {(user_id, key): {commission, orders, order_days}}
+            # key 可以是 MID 或 商家名（小写）
             
             for uid in user_ids:
-                for mid in mids:
-                    # 从 AffiliateTransaction 按 merchant_id (MID) 获取佣金数据
-                    txn_query = self.db.query(
-                        func.sum(AffiliateTransaction.commission_amount).label('total_commission'),
-                        func.count(AffiliateTransaction.id).label('total_orders'),
-                        func.count(func.distinct(func.date(AffiliateTransaction.transaction_time))).label('order_days')
-                    ).filter(
-                        AffiliateTransaction.user_id == uid,
-                        func.date(AffiliateTransaction.transaction_time) >= begin_date,
-                        func.date(AffiliateTransaction.transaction_time) <= end_date,
-                        AffiliateTransaction.merchant_id == str(mid)
-                    )
+                # 查询该用户的所有交易，按商家分组
+                txn_results = self.db.query(
+                    AffiliateTransaction.merchant_id,
+                    AffiliateTransaction.merchant,
+                    func.sum(AffiliateTransaction.commission_amount).label('total_commission'),
+                    func.count(AffiliateTransaction.id).label('total_orders'),
+                    func.count(func.distinct(func.date(AffiliateTransaction.transaction_time))).label('order_days')
+                ).filter(
+                    AffiliateTransaction.user_id == uid,
+                    func.date(AffiliateTransaction.transaction_time) >= begin_date,
+                    func.date(AffiliateTransaction.transaction_time) <= end_date
+                ).group_by(
+                    AffiliateTransaction.merchant_id,
+                    AffiliateTransaction.merchant
+                ).all()
+                
+                for txn in txn_results:
+                    data = {
+                        "commission": float(txn.total_commission or 0),
+                        "orders": int(txn.total_orders or 0),
+                        "order_days": int(txn.order_days or 0)
+                    }
                     
-                    result = txn_query.first()
+                    # 如果有 MID，用 MID 作为 key
+                    if txn.merchant_id and txn.merchant_id != 'None':
+                        merchant_l7d_data[(uid, str(txn.merchant_id))] = data
+                        logger.info(f"L7D 商家数据(MID): user={uid}, MID={txn.merchant_id}, 商家={txn.merchant}, 佣金={txn.total_commission}")
                     
-                    if result and (result.total_commission or result.total_orders):
-                        merchant_l7d_data[(uid, str(mid))] = {
-                            "commission": float(result.total_commission or 0),
-                            "orders": int(result.total_orders or 0),
-                            "order_days": int(result.order_days or 0)
-                        }
-                        logger.info(f"L7D 商家数据: user={uid}, MID={mid}, 佣金={result.total_commission}, 订单={result.total_orders}, 出单天数={result.order_days}")
+                    # 同时用商家名（小写）作为 key，用于 PM 等没有 MID 的平台
+                    if txn.merchant:
+                        merchant_name_key = txn.merchant.lower().replace(' ', '')
+                        merchant_l7d_data[(uid, merchant_name_key)] = data
+                        logger.info(f"L7D 商家数据(名称): user={uid}, 商家={txn.merchant}, 佣金={txn.total_commission}")
             
             # 按用户分组生成结果
             user_results = {}
             for key, cdata in campaign_data.items():
                 data_user_id = cdata["user_id"]
                 mid = cdata.get("mid")  # 商家ID
+                campaign_name = cdata.get("campaign_name", "")
                 
-                # 从预加载的商家数据获取佣金和订单（使用 MID 匹配）
-                merchant_info = merchant_l7d_data.get((data_user_id, str(mid) if mid else ""), {})
+                # 策略1：先用 MID 匹配
+                merchant_info = {}
+                if mid:
+                    merchant_info = merchant_l7d_data.get((data_user_id, str(mid)), {})
+                
+                # 策略2：如果 MID 没匹配到，用商家名模糊匹配
+                if not merchant_info.get("commission"):
+                    merchant_name = self._extract_merchant_from_campaign(campaign_name)
+                    if merchant_name:
+                        merchant_name_lower = merchant_name.lower().replace(' ', '')
+                        # 遍历所有商家数据，进行模糊匹配
+                        for (uid, mk), minfo in merchant_l7d_data.items():
+                            if uid != data_user_id:
+                                continue
+                            # 模糊匹配：广告系列商家名包含在交易商家名中，或反过来
+                            if merchant_name_lower in mk or mk in merchant_name_lower:
+                                merchant_info = minfo
+                                logger.info(f"商家名模糊匹配成功: {campaign_name} -> {merchant_name} -> {mk} -> 佣金={minfo.get('commission')}")
+                                break
+                
                 commission = merchant_info.get("commission", 0.0)
                 orders = merchant_info.get("orders", 0)
                 order_days = merchant_info.get("order_days", 0)
