@@ -19,6 +19,34 @@ logger = logging.getLogger(__name__)
 class ApiAnalysisService:
     """基于API数据的分析服务"""
     
+    # 平台代码标准化映射（PM1 → PM，CG1 → CG 等）
+    PLATFORM_CODE_MAP = {
+        "PM": "PM", "PM1": "PM", "PM2": "PM", "PM3": "PM",
+        "CG": "CG", "CG1": "CG", "CG2": "CG", "CG3": "CG",
+        "RW": "RW", "RW1": "RW", "RW2": "RW", "RW3": "RW",
+        "LH": "LH", "LH1": "LH", "LH2": "LH", "LH3": "LH",
+        "LS": "LS", "LS1": "LS", "LS2": "LS", "LS3": "LS",
+    }
+    
+    @classmethod
+    def normalize_platform_code(cls, code: str) -> str:
+        """
+        标准化平台代码
+        PM1 → PM, CG1 → CG, RW1 → RW 等
+        """
+        if not code:
+            return code
+        code_upper = code.upper().strip()
+        # 先检查映射表
+        if code_upper in cls.PLATFORM_CODE_MAP:
+            return cls.PLATFORM_CODE_MAP[code_upper]
+        # 如果不在映射表，尝试去除尾部数字
+        import re
+        match = re.match(r'^([A-Z]+)\d*$', code_upper)
+        if match:
+            return match.group(1)
+        return code_upper
+    
     def __init__(self, db: Session):
         self.db = db
     
@@ -432,21 +460,26 @@ class ApiAnalysisService:
             # 预加载平台数据（按用户和平台分组）
             from sqlalchemy import func
             
-            # 获取所有涉及的用户ID和平台代码
+            # 获取所有涉及的用户ID和平台代码（标准化后）
             user_ids = set(cdata["user_id"] for cdata in campaign_data.values())
-            platform_codes = set(cdata.get("platform_code") for cdata in campaign_data.values() if cdata.get("platform_code"))
+            # 收集原始平台代码并标准化
+            raw_platform_codes = set(cdata.get("platform_code") for cdata in campaign_data.values() if cdata.get("platform_code"))
+            normalized_codes = set(self.normalize_platform_code(pc) for pc in raw_platform_codes)
+            
+            logger.info(f"原始平台代码: {raw_platform_codes}, 标准化后: {normalized_codes}")
             
             # 预查询：每个用户每个平台的 L7D 佣金和订单
-            platform_l7d_data = {}  # {(user_id, platform_code): {commission, orders, order_days}}
+            platform_l7d_data = {}  # {(user_id, normalized_platform_code): {commission, orders, order_days}}
             
             for uid in user_ids:
-                for pcode in platform_codes:
-                    # 查找该用户该平台的联盟账号
+                for norm_pcode in normalized_codes:
+                    # 查找该用户该平台的联盟账号（使用标准化的平台代码）
                     platform = self.db.query(AffiliatePlatform).filter(
-                        AffiliatePlatform.platform_code == pcode
+                        AffiliatePlatform.platform_code == norm_pcode
                     ).first()
                     
                     if not platform:
+                        logger.warning(f"未找到平台: {norm_pcode}")
                         continue
                     
                     account = self.db.query(AffiliateAccount).filter(
@@ -481,23 +514,25 @@ class ApiAnalysisService:
                         PlatformData.orders > 0
                     ).scalar() or 0
                     
-                    platform_l7d_data[(uid, pcode)] = {
+                    platform_l7d_data[(uid, norm_pcode)] = {
                         "commission": float(result.total_commission or 0) if result else 0,
                         "orders": int(result.total_orders or 0) if result else 0,
                         "order_days": order_days_query
                     }
                     
                     if result and result.total_commission:
-                        logger.info(f"L7D 平台数据: user={uid}, platform={pcode}, 佣金={result.total_commission}, 订单={result.total_orders}, 出单天数={order_days_query}")
+                        logger.info(f"L7D 平台数据: user={uid}, platform={norm_pcode}, 佣金={result.total_commission}, 订单={result.total_orders}, 出单天数={order_days_query}")
             
             # 按用户分组生成结果
             user_results = {}
             for key, cdata in campaign_data.items():
                 data_user_id = cdata["user_id"]
                 platform_code = cdata.get("platform_code")
+                # 标准化平台代码用于匹配
+                norm_platform_code = self.normalize_platform_code(platform_code) if platform_code else None
                 
-                # 从预加载的平台数据获取佣金和订单
-                platform_info = platform_l7d_data.get((data_user_id, platform_code), {})
+                # 从预加载的平台数据获取佣金和订单（使用标准化的平台代码）
+                platform_info = platform_l7d_data.get((data_user_id, norm_platform_code), {})
                 commission = platform_info.get("commission", 0.0)
                 orders = platform_info.get("orders", 0)
                 order_days = platform_info.get("order_days", 0)

@@ -354,8 +354,10 @@ async def generate_l7d_from_daily(
         # 如果 daily metrics 中没有佣金/订单数据，尝试从 PlatformData 获取
         campaign = items[0].campaign if items else None
         if campaign and (comm == 0 or orders == 0):
-            # 从广告系列名中提取平台代码
-            platform_code = campaign.extracted_platform_code
+            # 从广告系列名中提取平台代码并标准化（PM1 → PM, CG1 → CG 等）
+            import re
+            raw_platform_code = campaign.extracted_platform_code
+            platform_code = re.sub(r'\d+$', '', raw_platform_code) if raw_platform_code else None
             if platform_code and platform_code in platform_l7d_cache:
                 cached = platform_l7d_cache[platform_code]
                 if comm == 0:
@@ -617,8 +619,10 @@ async def generate_l7d_from_daily_with_google(
         # 如果 daily metrics 中没有佣金/订单数据，尝试从 PlatformData 获取
         campaign = items[0].campaign if items else None
         if campaign and (comm == 0 or orders == 0):
-            # 从广告系列名中提取平台代码
-            platform_code = campaign.extracted_platform_code
+            # 从广告系列名中提取平台代码并标准化（PM1 → PM, CG1 → CG 等）
+            import re
+            raw_platform_code = campaign.extracted_platform_code
+            platform_code = re.sub(r'\d+$', '', raw_platform_code) if raw_platform_code else None
             if platform_code and platform_code in platform_l7d_cache:
                 cached = platform_l7d_cache[platform_code]
                 if comm == 0:
