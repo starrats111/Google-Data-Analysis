@@ -29,14 +29,14 @@ def _sync_mcc_range_in_background(mcc_id: int, begin: date, end: date, user_id: 
     import logging
     import time
     from app.database import SessionLocal
-    from app.services.google_ads_api_sync import GoogleAdsApiSyncService
+    from app.services.google_ads_service_account_sync import GoogleAdsServiceAccountSync
     from datetime import timedelta
     
     logger = logging.getLogger(__name__)
     db = SessionLocal()
     
     try:
-        sync_service = GoogleAdsApiSyncService(db)
+        sync_service = GoogleAdsServiceAccountSync(db)
         current_date = begin
         total_saved = 0
         errors = []
@@ -127,13 +127,13 @@ def _sync_mcc_single_date_in_background(mcc_id: int, sync_date: date, user_id: i
     """后台任务：同步MCC单个日期数据"""
     import logging
     from app.database import SessionLocal
-    from app.services.google_ads_api_sync import GoogleAdsApiSyncService
+    from app.services.google_ads_service_account_sync import GoogleAdsServiceAccountSync
     
     logger = logging.getLogger(__name__)
     db = SessionLocal()
     
     try:
-        sync_service = GoogleAdsApiSyncService(db)
+        sync_service = GoogleAdsServiceAccountSync(db)
         result = sync_service.sync_mcc_data(mcc_id, sync_date, force_refresh=False)
         
         # 检查是否是配额限制
@@ -1127,12 +1127,12 @@ async def sync_all_mccs(
     # 在后台执行同步（每个MCC同步7天）
     def sync_all_task():
         from app.database import SessionLocal
-        from app.services.google_ads_api_sync import GoogleAdsApiSyncService
+        from app.services.google_ads_service_account_sync import GoogleAdsServiceAccountSync
         import time
         
         task_db = SessionLocal()
         try:
-            sync_service = GoogleAdsApiSyncService(task_db)
+            sync_service = GoogleAdsServiceAccountSync(task_db)
             
             # 重新获取MCC列表
             mccs = task_db.query(GoogleMccAccount).filter(
