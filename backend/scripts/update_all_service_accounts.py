@@ -11,7 +11,7 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app.models.google_ads_api_data import GoogleMccAccount
-from app.models.database import SessionLocal
+from app.database import SessionLocal
 
 
 def main():
