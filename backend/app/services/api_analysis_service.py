@@ -457,92 +457,54 @@ class ApiAnalysisService:
                 campaign_data[key]["is_budget_lost"] = max(campaign_data[key]["is_budget_lost"], (data.is_budget_lost or 0))
                 campaign_data[key]["is_rank_lost"] = max(campaign_data[key]["is_rank_lost"], (data.is_rank_lost or 0))
             
-            # 预加载平台数据（按用户和平台分组）
+            # 预加载商家佣金数据（按 MID 匹配）
             from sqlalchemy import func
+            from app.models.affiliate_transaction import AffiliateTransaction
             
-            # 获取所有涉及的用户ID和平台代码（标准化后）
+            # 获取所有涉及的用户ID和MID
             user_ids = set(cdata["user_id"] for cdata in campaign_data.values())
-            # 收集原始平台代码并标准化
-            raw_platform_codes = set(cdata.get("platform_code") for cdata in campaign_data.values() if cdata.get("platform_code"))
-            normalized_codes = set(self.normalize_platform_code(pc) for pc in raw_platform_codes)
+            mids = set(cdata.get("mid") for cdata in campaign_data.values() if cdata.get("mid"))
             
-            logger.info(f"原始平台代码: {raw_platform_codes}, 标准化后: {normalized_codes}")
+            logger.info(f"用户IDs: {user_ids}, 商家MIDs: {mids}")
             
-            # 预查询：每个用户每个平台的 L7D 佣金和订单
-            platform_l7d_data = {}  # {(user_id, normalized_platform_code): {commission, orders, order_days}}
+            # 预查询：按 MID 获取每个商家的 L7D 佣金和订单
+            merchant_l7d_data = {}  # {(user_id, mid): {commission, orders, order_days}}
             
             for uid in user_ids:
-                for norm_pcode in normalized_codes:
-                    # 查找该用户该平台的联盟账号
-                    # 注意：数据库中 platform_code 是 URL，platform_name 才是简码（PM, CG, RW 等）
-                    platform = self.db.query(AffiliatePlatform).filter(
-                        AffiliatePlatform.platform_name == norm_pcode
-                    ).first()
-                    
-                    if not platform:
-                        # 如果 platform_name 找不到，尝试用 platform_code
-                        platform = self.db.query(AffiliatePlatform).filter(
-                            AffiliatePlatform.platform_code == norm_pcode
-                        ).first()
-                    
-                    if not platform:
-                        logger.warning(f"未找到平台: {norm_pcode}")
-                        continue
-                    
-                    account = self.db.query(AffiliateAccount).filter(
-                        AffiliateAccount.user_id == uid,
-                        AffiliateAccount.platform_id == platform.id,
-                        AffiliateAccount.is_active == True
-                    ).first()
-                    
-                    if not account:
-                        continue
-                    
-                    # 从 PlatformData 获取 L7D 数据
-                    platform_data_query = self.db.query(
-                        func.sum(PlatformData.commission).label('total_commission'),
-                        func.sum(PlatformData.orders).label('total_orders'),
-                        func.count(func.distinct(PlatformData.date)).label('data_days')
+                for mid in mids:
+                    # 从 AffiliateTransaction 按 merchant_id (MID) 获取佣金数据
+                    txn_query = self.db.query(
+                        func.sum(AffiliateTransaction.commission_amount).label('total_commission'),
+                        func.count(AffiliateTransaction.id).label('total_orders'),
+                        func.count(func.distinct(func.date(AffiliateTransaction.transaction_time))).label('order_days')
                     ).filter(
-                        PlatformData.affiliate_account_id == account.id,
-                        PlatformData.date >= begin_date,
-                        PlatformData.date <= end_date
+                        AffiliateTransaction.user_id == uid,
+                        func.date(AffiliateTransaction.transaction_time) >= begin_date,
+                        func.date(AffiliateTransaction.transaction_time) <= end_date,
+                        AffiliateTransaction.merchant_id == str(mid)
                     )
                     
-                    result = platform_data_query.first()
+                    result = txn_query.first()
                     
-                    # 计算出单天数（有订单的天数）
-                    order_days_query = self.db.query(
-                        func.count(PlatformData.id)
-                    ).filter(
-                        PlatformData.affiliate_account_id == account.id,
-                        PlatformData.date >= begin_date,
-                        PlatformData.date <= end_date,
-                        PlatformData.orders > 0
-                    ).scalar() or 0
-                    
-                    platform_l7d_data[(uid, norm_pcode)] = {
-                        "commission": float(result.total_commission or 0) if result else 0,
-                        "orders": int(result.total_orders or 0) if result else 0,
-                        "order_days": order_days_query
-                    }
-                    
-                    if result and result.total_commission:
-                        logger.info(f"L7D 平台数据: user={uid}, platform={norm_pcode}, 佣金={result.total_commission}, 订单={result.total_orders}, 出单天数={order_days_query}")
+                    if result and (result.total_commission or result.total_orders):
+                        merchant_l7d_data[(uid, str(mid))] = {
+                            "commission": float(result.total_commission or 0),
+                            "orders": int(result.total_orders or 0),
+                            "order_days": int(result.order_days or 0)
+                        }
+                        logger.info(f"L7D 商家数据: user={uid}, MID={mid}, 佣金={result.total_commission}, 订单={result.total_orders}, 出单天数={result.order_days}")
             
             # 按用户分组生成结果
             user_results = {}
             for key, cdata in campaign_data.items():
                 data_user_id = cdata["user_id"]
-                platform_code = cdata.get("platform_code")
-                # 标准化平台代码用于匹配
-                norm_platform_code = self.normalize_platform_code(platform_code) if platform_code else None
+                mid = cdata.get("mid")  # 商家ID
                 
-                # 从预加载的平台数据获取佣金和订单（使用标准化的平台代码）
-                platform_info = platform_l7d_data.get((data_user_id, norm_platform_code), {})
-                commission = platform_info.get("commission", 0.0)
-                orders = platform_info.get("orders", 0)
-                order_days = platform_info.get("order_days", 0)
+                # 从预加载的商家数据获取佣金和订单（使用 MID 匹配）
+                merchant_info = merchant_l7d_data.get((data_user_id, str(mid) if mid else ""), {})
+                commission = merchant_info.get("commission", 0.0)
+                orders = merchant_info.get("orders", 0)
+                order_days = merchant_info.get("order_days", 0)
                 
                 # 计算保守EPC和保守ROI
                 cost = cdata["total_cost"]
