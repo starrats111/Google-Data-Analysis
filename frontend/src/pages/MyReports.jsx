@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react'
-import { Card, Table, Space, message, Tag, Typography, Button, Modal, Spin, Empty, Tooltip, Input } from 'antd'
-import { FileTextOutlined, RobotOutlined, DeleteOutlined, CopyOutlined, SearchOutlined, SettingOutlined } from '@ant-design/icons'
+import { Card, Table, Space, message, Tag, Typography, Button, Modal, Spin, Empty, Tooltip, Input, Collapse, Divider } from 'antd'
+import { FileTextOutlined, RobotOutlined, DeleteOutlined, CopyOutlined, SettingOutlined, RocketOutlined, LineChartOutlined, BulbOutlined, CalendarOutlined, WarningOutlined, TrophyOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import api from '../services/api'
 import './Analysis.css'
@@ -96,6 +96,181 @@ const MyReports = () => {
   useEffect(() => {
     fetchReports()
   }, [])
+
+  // 渲染格式化的报告内容
+  const renderFormattedReport = (content) => {
+    if (!content) return null
+
+    // 按广告系列分割（以 ### 开头的行）
+    const sections = content.split(/(?=###\s)/g).filter(s => s.trim())
+    
+    // 第一部分是概述
+    const overview = sections[0]?.startsWith('###') ? null : sections.shift()
+    
+    // 图标映射
+    const sectionIcons = {
+      '阶段评价': <TrophyOutlined style={{ color: '#faad14' }} />,
+      '市场洞察': <LineChartOutlined style={{ color: '#1890ff' }} />,
+      '数据': <LineChartOutlined style={{ color: '#52c41a' }} />,
+      '节日': <CalendarOutlined style={{ color: '#eb2f96' }} />,
+      '优化建议': <BulbOutlined style={{ color: '#722ed1' }} />,
+      '风险': <WarningOutlined style={{ color: '#ff4d4f' }} />,
+    }
+
+    const getIcon = (title) => {
+      for (const [key, icon] of Object.entries(sectionIcons)) {
+        if (title.includes(key)) return icon
+      }
+      return <RocketOutlined style={{ color: '#1890ff' }} />
+    }
+
+    // 解析单个广告系列的内容
+    const parseCampaignContent = (text) => {
+      const lines = text.split('\n')
+      const result = []
+      let currentSection = null
+      let currentContent = []
+
+      lines.forEach((line, idx) => {
+        if (line.startsWith('####')) {
+          // 保存之前的section
+          if (currentSection) {
+            result.push({ title: currentSection, content: currentContent.join('\n') })
+          }
+          currentSection = line.replace(/^#+\s*/, '').trim()
+          currentContent = []
+        } else if (currentSection) {
+          currentContent.push(line)
+        } else if (line.trim() && !line.startsWith('###')) {
+          // 广告系列描述
+          result.push({ title: '_intro', content: line })
+        }
+      })
+      
+      // 保存最后一个section
+      if (currentSection) {
+        result.push({ title: currentSection, content: currentContent.join('\n') })
+      }
+
+      return result
+    }
+
+    return (
+      <div>
+        {/* 概述部分 */}
+        {overview && (
+          <Card 
+            style={{ marginBottom: 20, borderRadius: 12 }}
+            styles={{ body: { padding: '16px 20px' } }}
+          >
+            <Text style={{ fontSize: 15, lineHeight: 1.8, whiteSpace: 'pre-wrap' }}>
+              {overview.trim()}
+            </Text>
+          </Card>
+        )}
+
+        {/* 广告系列分析 */}
+        <Collapse 
+          accordion 
+          defaultActiveKey={['0']}
+          style={{ background: 'transparent', border: 'none' }}
+          items={sections.map((section, idx) => {
+            const titleMatch = section.match(/^###\s*(.+)/)
+            const campaignTitle = titleMatch ? titleMatch[1].trim() : `广告系列 ${idx + 1}`
+            const campaignContent = section.replace(/^###\s*.+\n?/, '')
+            const parsedContent = parseCampaignContent(campaignContent)
+
+            return {
+              key: String(idx),
+              label: (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                  <Tag color="blue" style={{ margin: 0 }}>{idx + 1}</Tag>
+                  <Text strong style={{ fontSize: 15 }}>{campaignTitle}</Text>
+                </div>
+              ),
+              children: (
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 16 }}>
+                  {parsedContent.filter(p => p.title !== '_intro').map((part, pIdx) => (
+                    <Card 
+                      key={pIdx}
+                      size="small"
+                      title={
+                        <Space>
+                          {getIcon(part.title)}
+                          <span>{part.title}</span>
+                        </Space>
+                      }
+                      style={{ 
+                        borderRadius: 10,
+                        gridColumn: part.title.includes('数据') || part.title.includes('优化') ? 'span 2' : 'auto'
+                      }}
+                      styles={{ 
+                        header: { borderBottom: '1px solid #f0f0f0', minHeight: 40 },
+                        body: { padding: '12px 16px' }
+                      }}
+                    >
+                      <div style={{ 
+                        fontSize: 13, 
+                        lineHeight: 1.8, 
+                        whiteSpace: 'pre-wrap',
+                        color: '#595959'
+                      }}>
+                        {part.content.split('\n').map((line, lIdx) => {
+                          // 高亮关键信息
+                          if (line.includes('推荐预算') || line.includes('推荐CPC')) {
+                            return (
+                              <div key={lIdx} style={{ 
+                                background: '#e6f7ff', 
+                                padding: '4px 8px', 
+                                borderRadius: 4,
+                                marginBottom: 4,
+                                borderLeft: '3px solid #1890ff'
+                              }}>
+                                {line.replace(/^\*\s*/, '').replace(/\*\*/g, '')}
+                              </div>
+                            )
+                          }
+                          if (line.includes('风险') || line.includes('注意') || line.includes('警告')) {
+                            return (
+                              <div key={lIdx} style={{ 
+                                background: '#fff2e8', 
+                                padding: '4px 8px', 
+                                borderRadius: 4,
+                                marginBottom: 4,
+                                borderLeft: '3px solid #fa8c16'
+                              }}>
+                                {line.replace(/^\*\s*/, '').replace(/\*\*/g, '')}
+                              </div>
+                            )
+                          }
+                          return <div key={lIdx}>{line.replace(/^\*\s*/, '• ').replace(/\*\*/g, '')}</div>
+                        })}
+                      </div>
+                    </Card>
+                  ))}
+                  {/* 如果只有intro，显示整体内容 */}
+                  {parsedContent.length === 0 && (
+                    <Card size="small" style={{ gridColumn: 'span 2', borderRadius: 10 }}>
+                      <Text style={{ whiteSpace: 'pre-wrap', lineHeight: 1.8 }}>
+                        {campaignContent.trim()}
+                      </Text>
+                    </Card>
+                  )}
+                </div>
+              ),
+              style: {
+                marginBottom: 12,
+                background: 'white',
+                borderRadius: 12,
+                border: '1px solid #e8e8e8',
+                overflow: 'hidden'
+              }
+            }
+          })}
+        />
+      </div>
+    )
+  }
 
   const columns = [
     {
@@ -245,62 +420,76 @@ const MyReports = () => {
 
       {/* 报告详情 Modal */}
       <Modal
-        title={
-          <Space>
-            <FileTextOutlined />
-            <span>AI 分析报告</span>
-            {selectedReport && (
-              <Tag color="blue">
-                {dayjs(selectedReport.created_at).format('YYYY-MM-DD HH:mm')}
-              </Tag>
-            )}
-          </Space>
-        }
+        title={null}
         open={reportModalOpen}
         onCancel={() => setReportModalOpen(false)}
-        width={1000}
-        footer={[
-          <Button key="close" onClick={() => setReportModalOpen(false)}>
-            关闭
-          </Button>,
-          <Button 
-            key="copy" 
-            type="primary"
-            icon={<CopyOutlined />}
-            onClick={copyReport}
-          >
-            复制报告
-          </Button>
-        ]}
-        styles={{ body: { maxHeight: '70vh', overflow: 'auto' } }}
+        width={1100}
+        footer={null}
+        styles={{ 
+          body: { padding: 0 },
+          content: { borderRadius: 16, overflow: 'hidden' }
+        }}
       >
         {selectedReport ? (
           <div>
-            <div style={{ marginBottom: 16 }}>
-              <Space>
-                <Tag color="blue">📊 共 {selectedReport.campaign_count} 个广告系列</Tag>
-                <Tag color="green">📅 {dayjs(selectedReport.created_at).format('YYYY-MM-DD HH:mm')}</Tag>
-              </Space>
+            {/* 报告头部 */}
+            <div style={{ 
+              background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+              padding: '24px 32px',
+              color: 'white'
+            }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <div>
+                  <Title level={3} style={{ color: 'white', margin: 0, marginBottom: 8 }}>
+                    <RobotOutlined style={{ marginRight: 12 }} />
+                    AI 智能分析报告
+                  </Title>
+                  <Space size="middle">
+                    <Tag color="rgba(255,255,255,0.2)" style={{ color: 'white', border: 'none' }}>
+                      📊 {selectedReport.campaign_count} 个广告系列
+                    </Tag>
+                    <Tag color="rgba(255,255,255,0.2)" style={{ color: 'white', border: 'none' }}>
+                      📅 {dayjs(selectedReport.created_at).format('YYYY-MM-DD HH:mm')}
+                    </Tag>
+                  </Space>
+                </div>
+                <Button 
+                  type="primary"
+                  ghost
+                  icon={<CopyOutlined />}
+                  onClick={copyReport}
+                  style={{ borderColor: 'white', color: 'white' }}
+                >
+                  复制报告
+                </Button>
+              </div>
             </div>
 
-            {/* 完整报告 */}
-            <div 
-              style={{ 
-                background: 'linear-gradient(135deg, #667eea05 0%, #764ba205 100%)',
-                border: '1px solid #e8e8e8',
-                padding: 20, 
-                borderRadius: 12,
-                whiteSpace: 'pre-wrap',
-                fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif',
-                fontSize: 14,
-                lineHeight: 1.8
-              }}
-            >
-              {selectedReport.content}
+            {/* 报告内容 */}
+            <div style={{ 
+              padding: '24px 32px', 
+              maxHeight: '65vh', 
+              overflow: 'auto',
+              background: '#fafafa'
+            }}>
+              {renderFormattedReport(selectedReport.content)}
+            </div>
+
+            {/* 底部操作栏 */}
+            <div style={{ 
+              padding: '16px 32px', 
+              background: 'white',
+              borderTop: '1px solid #f0f0f0',
+              display: 'flex',
+              justifyContent: 'flex-end'
+            }}>
+              <Button onClick={() => setReportModalOpen(false)}>
+                关闭
+              </Button>
             </div>
           </div>
         ) : (
-          <Empty description="暂无报告内容" />
+          <Empty description="暂无报告内容" style={{ padding: 60 }} />
         )}
       </Modal>
 
