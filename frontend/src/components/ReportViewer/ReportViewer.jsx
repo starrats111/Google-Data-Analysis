@@ -7,8 +7,13 @@ import './ReportViewer.css'
 /**
  * AI 分析报告查看器
  * 支持 Markdown 渲染，带有漂亮的排版和样式
+ * 
+ * @param {string} content - 报告内容
+ * @param {number} campaignCount - 广告系列数量
+ * @param {string} analysisDate - 分析日期
+ * @param {boolean} singleMode - 单条广告系列模式，不拆分卡片
  */
-const ReportViewer = ({ content, campaignCount, analysisDate }) => {
+const ReportViewer = ({ content, campaignCount, analysisDate, singleMode = false }) => {
   if (!content) return null
   
   // 展开状态 - 默认展开第一个卡片
@@ -190,6 +195,22 @@ const ReportViewer = ({ content, campaignCount, analysisDate }) => {
 
   // 判断是否成功解析出了结构化内容
   const hasStructuredContent = sections.campaigns.length > 0
+
+  // 单条模式：直接渲染全部内容，不拆分卡片
+  if (singleMode) {
+    return (
+      <div className="report-viewer">
+        <div className="report-single-content">
+          <ReactMarkdown
+            remarkPlugins={[remarkGfm]}
+            components={markdownComponents}
+          >
+            {processedContent}
+          </ReactMarkdown>
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div className="report-viewer">

@@ -461,13 +461,26 @@ const Analysis = ({ mode }) => {
     if (!row) return
     
     const campaignName = String(row['广告系列名'] || row['广告系列'] || row['系列名'] || '')
-    const aiReport = row['ai_report'] || ''
+    let aiReport = row['ai_report'] || ''
     
     setSelectedCampaignRow(row)
     setSingleCampaignAnalyzing(false)
     setSingleCampaignModalOpen(true)
     
     if (aiReport) {
+      // 清理报告：如果报告以"该广告系列的分析报告可能包含在完整报告中"开头，说明匹配失败
+      // 尝试从完整报告中提取该广告系列的部分
+      if (aiReport.includes('该广告系列的分析报告可能包含在完整报告中')) {
+        // 尝试从报告中找到该广告系列的段落
+        const extractedReport = extractCampaignSection(aiReport, campaignName)
+        if (extractedReport) {
+          aiReport = extractedReport
+        } else {
+          // 如果还是找不到，显示简化的提示
+          aiReport = `### 📊 ${campaignName}\n\n该广告系列的详细分析暂时无法单独提取。\n\n请点击主表格上方的「生成报告」按钮查看完整的 AI 分析报告。`
+        }
+      }
+      
       setSingleCampaignResult({
         campaign_name: campaignName,
         analysis: aiReport,
@@ -477,10 +490,37 @@ const Analysis = ({ mode }) => {
       // 没有 AI 报告，显示提示
       setSingleCampaignResult({
         campaign_name: campaignName,
-        analysis: `### ${campaignName}\n\n该广告系列暂无 AI 分析报告。\n\n可能的原因：\n- 该分析是在 AI 报告功能上线前生成的\n- AI 报告生成过程中出现错误\n\n**建议**：点击"从API数据生成L7D分析"按钮重新生成分析，系统会自动为每条广告系列生成 AI 报告。`,
+        analysis: `### 📊 ${campaignName}\n\n该广告系列暂无 AI 分析报告。\n\n**可能的原因：**\n- 该分析是在 AI 报告功能上线前生成的\n- AI 报告生成过程中出现错误\n\n**建议：** 点击"从API数据生成L7D分析"按钮重新生成分析。`,
         analysis_date: dayjs().format('YYYY-MM-DD')
       })
     }
+  }
+  
+  // 从完整报告中提取特定广告系列的段落
+  const extractCampaignSection = (fullReport, campaignName) => {
+    if (!fullReport || !campaignName) return null
+    
+    // 简化广告系列名用于匹配
+    const simpleName = campaignName.toLowerCase().replace(/[^a-z0-9\-]/g, '')
+    
+    // 按 ### 分割报告
+    const sections = fullReport.split(/(?=###\s)/)
+    
+    for (const section of sections) {
+      const sectionLower = section.toLowerCase()
+      // 检查该段落是否包含广告系列名
+      if (sectionLower.includes(campaignName.toLowerCase()) || 
+          sectionLower.replace(/[^a-z0-9\-]/g, '').includes(simpleName)) {
+        // 检查是否是子标题（如 "### 1. 阶段评价"）
+        const firstLine = section.split('\n')[0] || ''
+        if (/###\s*\d+\./.test(firstLine)) continue
+        // 检查是否是概览类标题
+        if (/概览|总览|执行清单|综述|专项名单/.test(firstLine)) continue
+        
+        return section.trim()
+      }
+    }
+    return null
   }
 
   const handleDeleteResult = async (resultId) => {
@@ -939,6 +979,7 @@ const Analysis = ({ mode }) => {
                 content={singleCampaignResult.analysis}
                 campaignCount={1}
                 analysisDate={singleCampaignResult.analysis_date}
+                singleMode={true}
               />
             </div>
 
@@ -1046,11 +1087,11 @@ const Analysis = ({ mode }) => {
                       const data = record.result_data?.data || []
                       if (!Array.isArray(data) || data.length === 0) return <Text type="secondary">暂无数据</Text>
 
-                      // 获取所有键，但在L7D分析中过滤掉"ROI"、"点击"、"订单"（操作指令之后的列）
+                      // 获取所有键，过滤掉不需要显示的列
                       const allKeys = Object.keys(data[0])
                       const keysToShow = analysisMode === 'l7d' 
-                        ? allKeys.filter(key => !['ROI', '点击', '订单'].includes(key))
-                        : allKeys
+                        ? allKeys.filter(key => !['ROI', '点击', '订单', 'ai_report'].includes(key))
+                        : allKeys.filter(key => key !== 'ai_report')
                       
                       const dataColumns = keysToShow.map((key) => {
                         const column = {
@@ -1283,11 +1324,11 @@ const Analysis = ({ mode }) => {
               const data = record.result_data?.data || []
               if (!Array.isArray(data) || data.length === 0) return <Text type="secondary">暂无数据</Text>
 
-              // 获取所有键，但在L7D分析中过滤掉"ROI"、"点击"、"订单"（操作指令之后的列）
+              // 获取所有键，过滤掉不需要显示的列
               const allKeys = Object.keys(data[0])
               const keysToShow = analysisMode === 'l7d' 
-                ? allKeys.filter(key => !['ROI', '点击', '订单'].includes(key))
-                : allKeys
+                ? allKeys.filter(key => !['ROI', '点击', '订单', 'ai_report'].includes(key))
+                : allKeys.filter(key => key !== 'ai_report')
 
               const dataColumns = keysToShow.map((key) => {
                 const column = {

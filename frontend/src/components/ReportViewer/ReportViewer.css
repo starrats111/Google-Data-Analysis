@@ -27,6 +27,15 @@
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
 }
 
+/* ---- 单条广告系列报告样式 ---- */
+.report-single-content {
+  background: #ffffff;
+  border-radius: 12px;
+  padding: 24px 28px;
+  border: 1px solid #e8ecf1;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+}
+
 /* ---- 广告系列卡片容器 ---- */
 .report-campaigns {
   display: flex;
