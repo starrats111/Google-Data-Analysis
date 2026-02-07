@@ -36,26 +36,49 @@ if not settings.google_ads_shared_developer_token:
     sys.exit(1)
 
 # 检查服务账号配置
-service_account_path = settings.google_ads_service_account_path
-if not service_account_path or not os.path.exists(service_account_path):
+service_account_path = settings.google_ads_service_account_file
+if not service_account_path:
+    # 尝试 Base64 配置
+    if settings.google_ads_service_account_json_base64:
+        print(f"\n✅ Developer Token: 已配置")
+        print(f"✅ 服务账号: Base64 配置")
+        service_account_path = None  # 使用 Base64
+    else:
+        print(f"\n❌ 错误：未配置服务账号")
+        print("请配置 GOOGLE_ADS_SERVICE_ACCOUNT_FILE 或 GOOGLE_ADS_SERVICE_ACCOUNT_JSON_BASE64")
+        sys.exit(1)
+elif not os.path.exists(service_account_path):
     print(f"\n❌ 错误：服务账号配置文件不存在: {service_account_path}")
-    print("请确保 GOOGLE_ADS_SERVICE_ACCOUNT_PATH 配置正确")
+    print("请确保 GOOGLE_ADS_SERVICE_ACCOUNT_FILE 配置正确")
     sys.exit(1)
-
-print(f"\n✅ Developer Token: 已配置")
-print(f"✅ 服务账号: {service_account_path}")
+else:
+    print(f"\n✅ Developer Token: 已配置")
+    print(f"✅ 服务账号: {service_account_path}")
 
 # 初始化 Google Ads 客户端
 try:
     from google.ads.googleads.client import GoogleAdsClient
     from google.ads.googleads.errors import GoogleAdsException
+    import base64
+    import json
+    import tempfile
     
     # 构建配置
     credentials_config = {
         "developer_token": settings.google_ads_shared_developer_token,
         "use_proto_plus": True,
-        "json_key_file_path": service_account_path,
     }
+    
+    # 服务账号配置
+    if service_account_path:
+        credentials_config["json_key_file_path"] = service_account_path
+    elif settings.google_ads_service_account_json_base64:
+        # 从 Base64 解码并写入临时文件
+        json_content = base64.b64decode(settings.google_ads_service_account_json_base64).decode('utf-8')
+        temp_file = tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False)
+        temp_file.write(json_content)
+        temp_file.close()
+        credentials_config["json_key_file_path"] = temp_file.name
     
     # 添加登录客户 ID（如果有）
     if settings.google_ads_login_customer_id:
