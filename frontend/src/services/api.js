@@ -7,9 +7,14 @@ const getApiBaseUrl = () => {
     return import.meta.env.VITE_API_URL
   }
   
+  const hostname = window.location.hostname
+  
   // 生产环境：使用API子域名
-  if (window.location.hostname === 'google-data-analysis.top' || 
-      window.location.hostname === 'www.google-data-analysis.top') {
+  // 包括自定义域名和 Cloudflare Pages 域名
+  if (hostname === 'google-data-analysis.top' || 
+      hostname === 'www.google-data-analysis.top' ||
+      hostname.endsWith('.google-data-analysis.pages.dev') ||
+      hostname === 'google-data-analysis.pages.dev') {
     return 'https://api.google-data-analysis.top'
   }
   
@@ -21,7 +26,7 @@ const API_BASE_URL = getApiBaseUrl()
 
 const api = axios.create({
   baseURL: API_BASE_URL,
-  timeout: 30000, // 30秒超时，避免请求卡住
+  timeout: 120000, // 120秒超时，AI分析可能需要较长时间
   headers: {
     'Content-Type': 'application/json',
   },
