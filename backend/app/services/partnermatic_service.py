@@ -263,6 +263,15 @@ class PartnerMaticService:
                 item.get("commission_amount") or item.get("commission") or 0
             )
             
+            # 提取商家ID（MID）：尝试多个可能的字段名
+            merchant_id = (
+                item.get("mcid") or item.get("merchantId") or item.get("merchant_id") or 
+                item.get("brandId") or item.get("brand_id") or item.get("mid") or
+                item.get("programId") or item.get("program_id") or None
+            )
+            if merchant_id:
+                merchant_id = str(merchant_id).strip()
+            
             transactions.append({
                 "transaction_id": item.get("orderId") or item.get("order_id") or item.get("partnermaticId") or item.get("partnermatic_id"),
                 "transaction_time": transaction_time,
@@ -270,6 +279,7 @@ class PartnerMaticService:
                 "commission_amount": commission_amount,
                 "status": item.get("status", "Pending"),
                 "merchant": item.get("merchantName") or item.get("merchant_name") or item.get("mcid"),
+                "merchant_id": merchant_id,  # 添加 MID
                 "raw_data": item
             })
         
