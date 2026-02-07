@@ -194,7 +194,8 @@ class GoogleAdsServiceAccountSync:
                     customer_client.id,
                     customer_client.descriptive_name,
                     customer_client.manager,
-                    customer_client.status
+                    customer_client.status,
+                    customer_client.currency_code
                 FROM customer_client
                 WHERE customer_client.manager = FALSE
                 AND customer_client.status = 'ENABLED'
@@ -209,7 +210,8 @@ class GoogleAdsServiceAccountSync:
                     customers.append({
                         "id": client_id,
                         "name": row.customer_client.descriptive_name or "未命名",
-                        "status": "ENABLED"
+                        "status": "ENABLED",
+                        "currency_code": row.customer_client.currency_code or "USD"
                     })
             
             if customers:
@@ -409,6 +411,18 @@ class GoogleAdsServiceAccountSync:
             
             # 更新MCC的客户账号数
             mcc_account.total_customers = len(customers)
+            
+            # 自动检测货币类型：如果子账号中有CNY，则标记MCC为CNY
+            detected_currencies = set(c.get("currency_code", "USD") for c in customers)
+            if "CNY" in detected_currencies:
+                if getattr(mcc_account, 'currency', 'USD') != 'CNY':
+                    mcc_account.currency = 'CNY'
+                    logger.info(f"MCC {mcc_account.mcc_id} 检测到人民币账户，已自动标记为CNY")
+            elif detected_currencies and "CNY" not in detected_currencies:
+                dominant_currency = max(detected_currencies, key=lambda c: sum(1 for x in customers if x.get("currency_code") == c))
+                if getattr(mcc_account, 'currency', None) != dominant_currency:
+                    mcc_account.currency = dominant_currency
+                    logger.info(f"MCC {mcc_account.mcc_id} 检测到货币类型: {dominant_currency}")
             
             # 逐个客户账号查询广告系列数据
             all_campaigns = []
