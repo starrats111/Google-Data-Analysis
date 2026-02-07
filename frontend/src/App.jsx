@@ -17,6 +17,7 @@ import StageLabelDetail from './pages/StageLabelDetail'
 import GoogleOAuthCallback from './pages/GoogleOAuthCallback'
 import RejectionDetails from './pages/RejectionDetails'
 import AdCopyGenerator from './pages/AdCopyGenerator'
+import MyReports from './pages/MyReports'
 import { useAuth } from './store/authStore'
 
 function PrivateRoute({ children }) {
@@ -62,6 +63,7 @@ function App() {
           <Route path="rejections" element={<RejectionDetails />} />
           <Route path="stage-label/:label" element={<StageLabelDetail />} />
           <Route path="ad-copy" element={<AdCopyGenerator />} />
+          <Route path="my-reports" element={<MyReports />} />
         </Route>
       </Routes>
     </Router>

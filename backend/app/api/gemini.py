@@ -3,15 +3,19 @@ Gemini AI API 端点
 """
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
 from sqlalchemy.orm import Session
+from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey
 from typing import Optional, List
 from pydantic import BaseModel
-from datetime import date
+from datetime import date, datetime
+import logging
 
-from app.database import get_db
+from app.database import get_db, Base
 from app.models.user import User
 from app.api.auth import get_current_user
 from app.services.gemini_service import GeminiService
 from app.config import settings
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/gemini", tags=["Gemini AI"])
 
@@ -101,6 +105,40 @@ class L7DAnalysisRequest(BaseModel):
     """L7D 分析请求"""
     campaigns: List[L7DCampaignData]
     model_type: Optional[str] = "thinking"  # L7D分析默认用thinking模型
+
+
+class GenerateReportRequest(BaseModel):
+    """生成报告请求"""
+    campaigns: List[L7DCampaignData]
+    analysis_result_id: Optional[int] = None
+    model_type: Optional[str] = "thinking"
+
+
+class UserPromptRequest(BaseModel):
+    """用户自定义提示词"""
+    prompt: str
+
+
+# 数据库模型：AI 报告
+class AIReport(Base):
+    __tablename__ = "ai_reports"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    analysis_result_id = Column(Integer, nullable=True)
+    content = Column(Text, nullable=False)
+    campaign_count = Column(Integer, default=0)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+# 数据库模型：用户自定义提示词
+class UserPrompt(Base):
+    __tablename__ = "user_prompts"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, unique=True)
+    prompt = Column(Text, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
 @router.post("/analyze-campaign")
@@ -321,5 +359,149 @@ async def analyze_l7d_campaigns(
         
         return result
     except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/generate-report")
+async def generate_report(
+    request: GenerateReportRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    生成 AI 分析报告并保存
+    
+    返回包含可执行操作指令的报告，格式如：
+    - CPC 0.10→0.08
+    - 预算 $10.00→$15.00(+50%)
+    """
+    try:
+        model_type = request.model_type or "thinking"
+        service = get_gemini_service(model_type)
+        
+        campaigns_data = [c.dict() for c in request.campaigns]
+        
+        # 获取用户自定义提示词
+        user_prompt = db.query(UserPrompt).filter(UserPrompt.user_id == current_user.id).first()
+        custom_prompt = user_prompt.prompt if user_prompt else None
+        
+        # 生成报告
+        result = service.generate_operation_report(campaigns_data, custom_prompt)
+        
+        if result.get("success"):
+            # 保存报告到数据库
+            report = AIReport(
+                user_id=current_user.id,
+                analysis_result_id=request.analysis_result_id,
+                content=result.get("analysis", ""),
+                campaign_count=len(campaigns_data)
+            )
+            db.add(report)
+            db.commit()
+            db.refresh(report)
+            
+            result["report_id"] = report.id
+        
+        return result
+    except Exception as e:
+        logger.error(f"生成报告失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/reports")
+async def get_reports(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """获取当前用户的所有报告"""
+    try:
+        reports = db.query(AIReport).filter(
+            AIReport.user_id == current_user.id
+        ).order_by(AIReport.created_at.desc()).all()
+        
+        return [
+            {
+                "id": r.id,
+                "content": r.content,
+                "campaign_count": r.campaign_count,
+                "created_at": r.created_at.isoformat() if r.created_at else None
+            }
+            for r in reports
+        ]
+    except Exception as e:
+        logger.error(f"获取报告列表失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.delete("/reports/{report_id}")
+async def delete_report(
+    report_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """删除报告"""
+    try:
+        report = db.query(AIReport).filter(
+            AIReport.id == report_id,
+            AIReport.user_id == current_user.id
+        ).first()
+        
+        if not report:
+            raise HTTPException(status_code=404, detail="报告不存在")
+        
+        db.delete(report)
+        db.commit()
+        
+        return {"success": True, "message": "删除成功"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"删除报告失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/user-prompt")
+async def get_user_prompt(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """获取用户自定义提示词"""
+    try:
+        user_prompt = db.query(UserPrompt).filter(
+            UserPrompt.user_id == current_user.id
+        ).first()
+        
+        return {"prompt": user_prompt.prompt if user_prompt else ""}
+    except Exception as e:
+        logger.error(f"获取提示词失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/user-prompt")
+async def save_user_prompt(
+    request: UserPromptRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """保存用户自定义提示词"""
+    try:
+        user_prompt = db.query(UserPrompt).filter(
+            UserPrompt.user_id == current_user.id
+        ).first()
+        
+        if user_prompt:
+            user_prompt.prompt = request.prompt
+        else:
+            user_prompt = UserPrompt(
+                user_id=current_user.id,
+                prompt=request.prompt
+            )
+            db.add(user_prompt)
+        
+        db.commit()
+        
+        return {"success": True, "message": "保存成功"}
+    except Exception as e:
+        logger.error(f"保存提示词失败: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 

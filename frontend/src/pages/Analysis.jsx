@@ -1,6 +1,6 @@
 import React, { useMemo, useState, useEffect, useRef } from 'react'
-import { Card, Table, Select, DatePicker, Space, message, Tag, Badge, Typography, Tooltip, Button, Popconfirm, Collapse, Modal, Upload, Spin } from 'antd'
-import { UploadOutlined, RobotOutlined } from '@ant-design/icons'
+import { Card, Table, Select, DatePicker, Space, message, Tag, Badge, Typography, Tooltip, Button, Popconfirm, Collapse, Modal, Upload, Spin, Input } from 'antd'
+import { UploadOutlined, RobotOutlined, SettingOutlined } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
 import dayjs from 'dayjs'
 import api from '../services/api'
@@ -46,6 +46,12 @@ const Analysis = ({ mode }) => {
   const [aiModalOpen, setAiModalOpen] = useState(false)
   const [aiAnalysisResult, setAiAnalysisResult] = useState(null)
   const [selectedResultForAi, setSelectedResultForAi] = useState(null)
+  
+  // 提示词编辑状态
+  const [promptModalOpen, setPromptModalOpen] = useState(false)
+  const [customPrompt, setCustomPrompt] = useState('')
+  const [savingPrompt, setSavingPrompt] = useState(false)
+  const [loadingPrompt, setLoadingPrompt] = useState(false)
 
   const fetchAccounts = async () => {
     try {
@@ -277,8 +283,8 @@ const Analysis = ({ mode }) => {
     }
   }
 
-  // AI 分析 L7D 数据
-  const handleAiAnalyze = async (record) => {
+  // 生成 AI 分析报告
+  const handleGenerateReport = async (record) => {
     const data = record?.result_data?.data
     if (!Array.isArray(data) || data.length === 0) {
       message.warning('该记录没有可分析的数据')
@@ -291,7 +297,6 @@ const Analysis = ({ mode }) => {
     setAiAnalysisResult(null)
     
     try {
-      // 将数据转换为 API 需要的格式
       // 辅助函数：安全解析数字
       const safeFloat = (val) => {
         const num = parseFloat(val)
@@ -315,7 +320,7 @@ const Analysis = ({ mode }) => {
         orders: safeInt(row['L7D订单'] || row['订单'] || row['出单']),
         order_days: safeInt(row['L7D出单天数'] || row['出单天数']),
         commission: safeFloat(row['L7D佣金'] || row['佣金'])
-      })).filter(c => c.campaign_name)  // 过滤掉没有名称的
+      })).filter(c => c.campaign_name)
       
       if (campaigns.length === 0) {
         message.warning('没有找到有效的广告系列数据')
@@ -323,21 +328,22 @@ const Analysis = ({ mode }) => {
         return
       }
       
-      const response = await api.post('/api/gemini/analyze-l7d', {
+      // 生成报告并保存
+      const response = await api.post('/api/gemini/generate-report', {
         campaigns,
-        model_type: 'thinking'  // 使用深度分析模型
+        analysis_result_id: record.id,
+        model_type: 'thinking'
       })
       
       if (response.data.success) {
         setAiAnalysisResult(response.data)
-        message.success('AI 分析完成')
+        message.success('报告生成成功！已保存到"我的报告"')
       } else {
-        message.error(response.data.message || 'AI 分析失败')
+        message.error(response.data.message || '报告生成失败')
       }
     } catch (error) {
-      console.error('AI 分析错误:', error)
-      // 更好地处理错误信息
-      let errMsg = 'AI 分析失败'
+      console.error('报告生成错误:', error)
+      let errMsg = '报告生成失败'
       if (error.response?.data?.detail) {
         const detail = error.response.data.detail
         errMsg = typeof detail === 'string' ? detail : JSON.stringify(detail)
@@ -350,6 +356,60 @@ const Analysis = ({ mode }) => {
     } finally {
       setAiAnalyzing(false)
     }
+  }
+
+  // 默认提示词模板
+  const defaultPromptTemplate = `你是一位资深的 Google Ads 品牌词套利专家。请根据以下广告系列数据生成操作报告。
+
+## 输出格式要求
+
+对于每个广告系列，输出以下格式的执行指令：
+
+**[广告系列名]**
+- CPC 当前值→建议值
+- 预算 $当前值→$建议值(变化%)
+- 状态: 维持/暂停/加预算
+
+## 分析规则
+
+1. ROI < 0.8 → 考虑降低CPC或暂停
+2. ROI > 1.5 且 Budget丢失 > 30% → 加预算
+3. Rank丢失 > 20% → 考虑提高CPC
+4. 连续7天无订单 → 暂停
+
+请基于数据生成简洁、可执行的操作指令。`
+
+  // 加载用户自定义提示词
+  const loadCustomPrompt = async () => {
+    setLoadingPrompt(true)
+    try {
+      const response = await api.get('/api/gemini/user-prompt')
+      setCustomPrompt(response.data?.prompt || '')
+    } catch (error) {
+      setCustomPrompt('')
+    } finally {
+      setLoadingPrompt(false)
+    }
+  }
+
+  // 保存自定义提示词
+  const saveCustomPrompt = async () => {
+    setSavingPrompt(true)
+    try {
+      await api.post('/api/gemini/user-prompt', { prompt: customPrompt })
+      message.success('提示词保存成功')
+      setPromptModalOpen(false)
+    } catch (error) {
+      message.error('保存失败: ' + (error.response?.data?.detail || error.message))
+    } finally {
+      setSavingPrompt(false)
+    }
+  }
+
+  // 打开提示词编辑
+  const openPromptEditor = () => {
+    loadCustomPrompt()
+    setPromptModalOpen(true)
   }
 
   const handleDeleteResult = async (resultId) => {
@@ -440,22 +500,7 @@ const Analysis = ({ mode }) => {
             },
           ]
         : []),
-      // 每日分析不显示联盟账号列
-      ...(analysisMode !== 'daily'
-        ? [
-            {
-              title: '联盟账号',
-              dataIndex: 'affiliate_account_id',
-              key: 'affiliate_account_id',
-              ellipsis: true,
-              render: (id) => (
-                <Tooltip title={accountNameMap.get(id) || `账号ID: ${id}`}>
-                  <span>{accountNameMap.get(id) || `账号ID: ${id}`}</span>
-                </Tooltip>
-              ),
-            },
-          ]
-        : []),
+      // 联盟账号列已移除
       {
         title: '数据行数',
         key: 'rows',
@@ -475,15 +520,15 @@ const Analysis = ({ mode }) => {
         render: (_, record) => (
           <Space size="small">
             {analysisMode === 'l7d' && (
-              <Tooltip title="AI 智能分析">
+              <Tooltip title="生成 AI 分析报告">
                 <Button 
                   type="primary"
                   ghost
                   size="small"
                   icon={<RobotOutlined />}
-                  onClick={() => handleAiAnalyze(record)}
+                  onClick={() => handleGenerateReport(record)}
                 >
-                  AI
+                  生成报告
                 </Button>
               </Tooltip>
             )}
@@ -517,6 +562,14 @@ const Analysis = ({ mode }) => {
           </Text>
         </div>
         <Space>
+          {analysisMode === 'l7d' && (
+            <Button 
+              icon={<SettingOutlined />} 
+              onClick={openPromptEditor}
+            >
+              自定义提示词
+            </Button>
+          )}
           <Button
             type="primary"
             onClick={handleGenerateFromApi}
@@ -632,6 +685,60 @@ const Analysis = ({ mode }) => {
             <p>选择一条 L7D 分析结果，点击 AI 按钮开始智能分析</p>
           </div>
         )}
+      </Modal>
+
+      {/* 提示词编辑 Modal */}
+      <Modal
+        title={
+          <Space>
+            <SettingOutlined />
+            <span>自定义分析提示词</span>
+          </Space>
+        }
+        open={promptModalOpen}
+        onCancel={() => setPromptModalOpen(false)}
+        width={800}
+        footer={[
+          <Button key="reset" onClick={() => setCustomPrompt(defaultPromptTemplate)}>
+            恢复默认
+          </Button>,
+          <Button key="cancel" onClick={() => setPromptModalOpen(false)}>
+            取消
+          </Button>,
+          <Button 
+            key="save" 
+            type="primary"
+            loading={savingPrompt}
+            onClick={saveCustomPrompt}
+          >
+            保存
+          </Button>
+        ]}
+        styles={{ body: { padding: '16px 24px' } }}
+      >
+        <Spin spinning={loadingPrompt}>
+          <div style={{ marginBottom: 12 }}>
+            <Text type="secondary">
+              自定义 AI 分析提示词，用于生成广告优化报告。留空则使用默认提示词。
+            </Text>
+          </div>
+          <Input.TextArea
+            value={customPrompt}
+            onChange={(e) => setCustomPrompt(e.target.value)}
+            placeholder={defaultPromptTemplate}
+            rows={18}
+            style={{ 
+              fontFamily: 'monospace', 
+              fontSize: 13,
+              lineHeight: 1.5
+            }}
+          />
+          <div style={{ marginTop: 12 }}>
+            <Text type="secondary" style={{ fontSize: 12 }}>
+              提示：生成报告时会自动附上广告系列数据。你可以自定义分析规则和输出格式。
+            </Text>
+          </div>
+        </Spin>
       </Modal>
 
       <Card className="analysis-table" styles={{ body: { paddingTop: 14 } }}>

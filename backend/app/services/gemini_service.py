@@ -698,4 +698,95 @@ G) 综述
         except Exception as e:
             logger.error(f"L7D 分析失败: {e}")
             return {"success": False, "message": str(e)}
+    
+    def generate_operation_report(self, campaigns_data: List[Dict], custom_prompt: str = None) -> Dict:
+        """
+        生成可执行的操作报告
+        
+        输出格式如：
+        - CPC 0.10→0.08
+        - 预算 $10.00→$15.00(+50%)
+        
+        Args:
+            campaigns_data: 广告系列数据
+            custom_prompt: 用户自定义提示词（可选）
+        
+        Returns:
+            操作报告
+        """
+        today = datetime.now()
+        
+        # 转换数据为表格格式
+        table_rows = []
+        for c in campaigns_data:
+            roi = 0
+            if c.get('cost', 0) > 0:
+                roi = (c.get('commission', 0) * 0.72 - c.get('cost', 0)) / c.get('cost', 0)
+            table_rows.append(
+                f"| {c.get('campaign_name', '')} | ${c.get('cost', 0):.2f} | "
+                f"${c.get('budget', 0):.2f} | ${c.get('cpc', 0):.2f} | "
+                f"{c.get('orders', 0)} | {c.get('order_days', 0)} | "
+                f"{c.get('is_budget_lost', 0)*100:.0f}% | {c.get('is_rank_lost', 0)*100:.0f}% | "
+                f"{roi:.2f} |"
+            )
+        
+        table_header = "| 系列名 | L7D花费 | 预算 | CPC | 订单 | 出单天数 | Budget丢失 | Rank丢失 | ROI |"
+        table_divider = "|--------|---------|------|-----|------|---------|-----------|----------|-----|"
+        table_data = "\n".join([table_header, table_divider] + table_rows)
+        
+        # 默认提示词
+        default_prompt = """你是一位资深的 Google Ads 品牌词套利专家。请根据以下广告系列数据生成操作报告。
+
+## 输出格式要求
+
+对于每个广告系列，输出以下格式的执行指令：
+
+**[广告系列名]**
+- CPC 当前值→建议值
+- 预算 $当前值→$建议值(变化%)
+- 状态: 维持/暂停/加预算
+- 原因: 简要说明
+
+## 分析规则
+
+1. ROI < 0.8 → 考虑降低CPC或暂停
+2. ROI > 1.5 且 Budget丢失 > 30% → 加预算
+3. Rank丢失 > 20% → 考虑提高CPC
+4. 连续7天无订单 → 暂停
+5. 出单天数 ≥ 5 且 ROI > 2 → 表现优秀，可加预算
+
+## 注意事项
+
+- 所有数值变化用箭头 → 表示
+- 预算变化需显示百分比，如 $10→$15(+50%)
+- CPC变化需精确到小数点后2位
+- 保持简洁，每个系列最多4行
+
+请基于数据生成简洁、可执行的操作指令。"""
+
+        prompt_text = custom_prompt if custom_prompt and custom_prompt.strip() else default_prompt
+        
+        full_prompt = f"""{prompt_text}
+
+══════════════════════════════════════
+【今日日期】{today.strftime('%Y-%m-%d')}
+══════════════════════════════════════
+
+【广告系列数据】
+{table_data}
+
+请开始生成操作报告。"""
+
+        try:
+            analysis = self._call_api(full_prompt)
+            return {
+                "success": True,
+                "analysis": analysis,
+                "campaign_count": len(campaigns_data),
+                "analysis_date": today.strftime('%Y-%m-%d'),
+                "timestamp": datetime.now().isoformat()
+            }
+        except Exception as e:
+            logger.error(f"生成操作报告失败: {e}")
+            return {"success": False, "message": str(e)}
 
