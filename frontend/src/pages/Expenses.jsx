@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState, useCallback, useRef } from 'react'
-import { Card, DatePicker, Select, Space, Table, Statistic, Row, Col, Button, message, Segmented, Collapse, Modal } from 'antd'
+import { Card, DatePicker, Select, Space, Table, Statistic, Row, Col, Button, message, Segmented, Collapse, Modal, Tag, Tooltip } from 'antd'
+import { SyncOutlined, ClockCircleOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import api from '../services/api'
 import { useAuth } from '../store/authStore'
@@ -36,6 +37,11 @@ const Expenses = () => {
   const [mccModalVisible, setMccModalVisible] = useState(false)
   const [mccCostLoading, setMccCostLoading] = useState(false)
   const [mccCostData, setMccCostData] = useState(null)
+  const [lastUpdated, setLastUpdated] = useState(null)
+  const [autoRefresh, setAutoRefresh] = useState(true)
+  const [countdown, setCountdown] = useState(300) // 5分钟=300秒
+  const autoRefreshRef = useRef(null)
+  const countdownRef = useRef(null)
 
   useEffect(() => {
     const r = getPresetRange(preset)
@@ -112,6 +118,8 @@ const Expenses = () => {
     } finally {
       setLoading(false)
       loadingRef.current = false
+      setLastUpdated(dayjs())
+      setCountdown(300) // 重置倒计时
       // 仅清理由本次请求创建的 controller，避免并发/竞态导致把新请求的 controller 清掉
       if (abortControllerRef.current === controller) {
         abortControllerRef.current = null
@@ -139,6 +147,28 @@ const Expenses = () => {
       }
     }
   }, [startDate, endDate, todayDate, fetchAll])
+
+  // 自动刷新定时器（每5分钟）
+  useEffect(() => {
+    if (autoRefreshRef.current) clearInterval(autoRefreshRef.current)
+    if (countdownRef.current) clearInterval(countdownRef.current)
+    
+    if (autoRefresh) {
+      // 倒计时每秒更新
+      countdownRef.current = setInterval(() => {
+        setCountdown(prev => (prev <= 1 ? 300 : prev - 1))
+      }, 1000)
+      // 每5分钟自动刷新
+      autoRefreshRef.current = setInterval(() => {
+        fetchAll()
+      }, 300000) // 5分钟
+    }
+    
+    return () => {
+      if (autoRefreshRef.current) clearInterval(autoRefreshRef.current)
+      if (countdownRef.current) clearInterval(countdownRef.current)
+    }
+  }, [autoRefresh, fetchAll])
 
   const handleShowMccCostDetail = async () => {
     if (!startDate || !endDate) {
@@ -171,8 +201,11 @@ const Expenses = () => {
     { title: '累计净利润', dataIndex: 'range_net_profit', key: 'range_net_profit', align: 'right' },
   ]
 
+  const todayStr = dayjs().format('YYYY-MM-DD')
   const dailyColumns = [
-    { title: '日期', dataIndex: 'date', key: 'date', width: 110 },
+    { title: '日期', dataIndex: 'date', key: 'date', width: 150, render: (v) => (
+      <span>{v} {v === todayStr && <Tag color="processing" style={{ fontSize: 10, marginLeft: 4 }}><SyncOutlined spin /> 更新中</Tag>}</span>
+    )},
     { title: '平台', dataIndex: 'platform_name', key: 'platform_name', width: 140 },
     { title: '佣金', dataIndex: 'commission', key: 'commission', align: 'right', render: (v) => Number(v || 0).toFixed(4) },
     { title: '广告费用', dataIndex: 'ad_cost', key: 'ad_cost', align: 'right', render: (v) => Number(v || 0).toFixed(4) },
@@ -198,7 +231,22 @@ const Expenses = () => {
             allowClear
             placeholder="选择某一天(可选)"
           />
-          <Button onClick={fetchAll} loading={loading}>刷新</Button>
+          <Button onClick={fetchAll} loading={loading} icon={<SyncOutlined spin={loading} />}>刷新</Button>
+          <Tooltip title={autoRefresh ? '点击关闭自动刷新' : '点击开启自动刷新（每5分钟）'}>
+            <Tag 
+              color={autoRefresh ? 'processing' : 'default'} 
+              style={{ cursor: 'pointer', fontSize: 12 }}
+              onClick={() => setAutoRefresh(!autoRefresh)}
+            >
+              {autoRefresh ? <><SyncOutlined spin /> 自动刷新 {Math.floor(countdown / 60)}:{String(countdown % 60).padStart(2, '0')}</> : '自动刷新已关闭'}
+            </Tag>
+          </Tooltip>
+          {lastUpdated && (
+            <span style={{ color: '#999', fontSize: 12 }}>
+              <ClockCircleOutlined style={{ marginRight: 4 }} />
+              最后更新: {lastUpdated.format('HH:mm:ss')}
+            </span>
+          )}
         </Space>
       </Card>
 

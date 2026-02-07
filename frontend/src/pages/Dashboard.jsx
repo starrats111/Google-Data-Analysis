@@ -1,9 +1,10 @@
-import React, { useEffect, useMemo, useState } from 'react'
-import { Card, Row, Col, Table, message, Segmented, Tag, Typography, Space, Statistic, Input, Button, Spin, Select } from 'antd'
-import { SearchOutlined, RocketOutlined, CalendarOutlined, GlobalOutlined, PictureOutlined } from '@ant-design/icons'
+import React, { useEffect, useMemo, useState, useCallback, useRef } from 'react'
+import { Card, Row, Col, Table, message, Segmented, Tag, Typography, Space, Statistic, Input, Button, Spin, Select, Tooltip } from 'antd'
+import { SearchOutlined, RocketOutlined, CalendarOutlined, GlobalOutlined, PictureOutlined, SyncOutlined, ClockCircleOutlined } from '@ant-design/icons'
 import { useAuth } from '../store/authStore'
 import api from '../services/api'
 import ReactECharts from 'echarts-for-react'
+import dayjs from 'dayjs'
 
 const Dashboard = () => {
   const { user } = useAuth()
@@ -28,32 +29,18 @@ const Dashboard = () => {
   // 截图粘贴状态
   const [keywordImageLoading, setKeywordImageLoading] = useState(false)
   const [pastedImage, setPastedImage] = useState(null)
+  
+  // 自动刷新状态
+  const [lastUpdated, setLastUpdated] = useState(null)
+  const [autoRefresh, setAutoRefresh] = useState(true)
+  const [countdown, setCountdown] = useState(300)
+  const autoRefreshTimerRef = useRef(null)
+  const countdownTimerRef = useRef(null)
+  const loadingRef = useRef(false)
 
-  useEffect(() => {
-    // 防止重复请求
-    if (loading) return
-    
-    let cancelled = false
-    
-    const doFetch = async () => {
-      if (!cancelled) {
-        if (user?.role === 'manager') {
-          await fetchManagerData()
-        } else {
-          await fetchEmployeeData()
-        }
-      }
-    }
-    
-    doFetch()
-    
-    return () => {
-      cancelled = true
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user?.role, insightRange])
-
-  const fetchManagerData = async () => {
+  const fetchManagerData = useCallback(async () => {
+    if (loadingRef.current) return
+    loadingRef.current = true
     setLoading(true)
     try {
       const [overviewRes, employeesRes] = await Promise.all([
@@ -66,10 +53,15 @@ const Dashboard = () => {
       message.error('获取数据失败')
     } finally {
       setLoading(false)
+      loadingRef.current = false
+      setLastUpdated(dayjs())
+      setCountdown(300)
     }
-  }
+  }, [])
 
-  const fetchEmployeeData = async () => {
+  const fetchEmployeeData = useCallback(async () => {
+    if (loadingRef.current) return
+    loadingRef.current = true
     setLoading(true)
     try {
       const insightRes = await api.get('/api/dashboard/employee-insights', { params: { range: insightRange === '过去15天' ? '15d' : insightRange === '本月' ? 'month' : '7d' } })
@@ -79,8 +71,48 @@ const Dashboard = () => {
       message.error('获取数据失败')
     } finally {
       setLoading(false)
+      loadingRef.current = false
+      setLastUpdated(dayjs())
+      setCountdown(300)
     }
-  }
+  }, [insightRange])
+
+  const doRefresh = useCallback(() => {
+    if (user?.role === 'manager') {
+      fetchManagerData()
+    } else {
+      fetchEmployeeData()
+    }
+  }, [user?.role, fetchManagerData, fetchEmployeeData])
+
+  useEffect(() => {
+    let cancelled = false
+    const doFetch = async () => {
+      if (!cancelled) doRefresh()
+    }
+    doFetch()
+    return () => { cancelled = true }
+  }, [doRefresh])
+
+  // 自动刷新定时器（每5分钟）
+  useEffect(() => {
+    if (autoRefreshTimerRef.current) clearInterval(autoRefreshTimerRef.current)
+    if (countdownTimerRef.current) clearInterval(countdownTimerRef.current)
+    
+    if (autoRefresh) {
+      countdownTimerRef.current = setInterval(() => {
+        setCountdown(prev => (prev <= 1 ? 300 : prev - 1))
+      }, 1000)
+      autoRefreshTimerRef.current = setInterval(() => {
+        doRefresh()
+      }, 300000)
+    }
+    
+    return () => {
+      if (autoRefreshTimerRef.current) clearInterval(autoRefreshTimerRef.current)
+      if (countdownTimerRef.current) clearInterval(countdownTimerRef.current)
+    }
+  }, [autoRefresh, doRefresh])
 
   if (user?.role === 'manager') {
     const columns = [
@@ -96,7 +128,27 @@ const Dashboard = () => {
 
     return (
       <div>
-        <h2>数据总览</h2>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+          <h2 style={{ margin: 0 }}>数据总览</h2>
+          <Space>
+            <Button onClick={doRefresh} loading={loading} icon={<SyncOutlined spin={loading} />} size="small">刷新</Button>
+            <Tooltip title={autoRefresh ? '点击关闭自动刷新' : '点击开启自动刷新（每5分钟）'}>
+              <Tag 
+                color={autoRefresh ? 'processing' : 'default'} 
+                style={{ cursor: 'pointer', fontSize: 12 }}
+                onClick={() => setAutoRefresh(!autoRefresh)}
+              >
+                {autoRefresh ? <><SyncOutlined spin /> {Math.floor(countdown / 60)}:{String(countdown % 60).padStart(2, '0')}</> : '自动刷新已关闭'}
+              </Tag>
+            </Tooltip>
+            {lastUpdated && (
+              <span style={{ color: '#999', fontSize: 12 }}>
+                <ClockCircleOutlined style={{ marginRight: 4 }} />
+                {lastUpdated.format('HH:mm:ss')}
+              </span>
+            )}
+          </Space>
+        </div>
         <Row gutter={16} style={{ marginBottom: 24 }}>
           <Col span={6}>
             <Card bordered={false}>
@@ -277,10 +329,30 @@ const Dashboard = () => {
       <h2>我的数据总览</h2>
 
       <Card style={{ marginBottom: 16 }}>
-        <Space wrap>
-          <Text>欢迎，<b>{user?.username}</b></Text>
-          <Tag color="blue">{user?.role === 'manager' ? '经理' : '员工'}</Tag>
-        </Space>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <Space wrap>
+            <Text>欢迎，<b>{user?.username}</b></Text>
+            <Tag color="blue">{user?.role === 'manager' ? '经理' : '员工'}</Tag>
+          </Space>
+          <Space>
+            <Button onClick={doRefresh} loading={loading} icon={<SyncOutlined spin={loading} />} size="small">刷新</Button>
+            <Tooltip title={autoRefresh ? '点击关闭自动刷新' : '点击开启自动刷新（每5分钟）'}>
+              <Tag 
+                color={autoRefresh ? 'processing' : 'default'} 
+                style={{ cursor: 'pointer', fontSize: 12 }}
+                onClick={() => setAutoRefresh(!autoRefresh)}
+              >
+                {autoRefresh ? <><SyncOutlined spin /> {Math.floor(countdown / 60)}:{String(countdown % 60).padStart(2, '0')}</> : '自动刷新已关闭'}
+              </Tag>
+            </Tooltip>
+            {lastUpdated && (
+              <span style={{ color: '#999', fontSize: 12 }}>
+                <ClockCircleOutlined style={{ marginRight: 4 }} />
+                {lastUpdated.format('HH:mm:ss')}
+              </span>
+            )}
+          </Space>
+        </div>
         <div style={{ marginTop: 8 }}>
           <Text type="secondary">区间选择：</Text>
           <Segmented
