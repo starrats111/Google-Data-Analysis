@@ -87,10 +87,15 @@ async def get_cost_detail(
     # 按MCC账号汇总费用（包含手动上传的费用）
     # 注意：手动上传可能发生在“该区间没有任何API数据”的MCC上，也需要展示出来
     from sqlalchemy import and_
+    
+    # 货币转换配置
+    CNY_TO_USD_RATE = 7.2
+    
     mcc_results = db.query(
         GoogleMccAccount.id,
         GoogleMccAccount.mcc_name,
         GoogleMccAccount.email,
+        GoogleMccAccount.currency,
         func.coalesce(func.sum(GoogleAdsApiData.cost), 0.0).label("api_cost"),
     ).outerjoin(
         GoogleAdsApiData,
@@ -105,6 +110,7 @@ async def get_cost_detail(
         GoogleMccAccount.id,
         GoogleMccAccount.mcc_name,
         GoogleMccAccount.email,
+        GoogleMccAccount.currency,
     ).all()
     
     mcc_breakdown = []
@@ -115,6 +121,12 @@ async def get_cost_detail(
             if mcc_id == r.id and start <= d <= end
         )
         api_cost = float(r.api_cost or 0.0)
+        
+        # 货币转换：CNY → USD
+        mcc_currency = getattr(r, 'currency', 'USD') or 'USD'
+        if mcc_currency == 'CNY':
+            api_cost = api_cost / CNY_TO_USD_RATE
+        
         # 如果存在手动费用，优先使用手动费用；否则使用API费用
         total_cost = manual_cost_total if manual_cost_total > 0 else api_cost
 
@@ -131,9 +143,15 @@ async def get_cost_detail(
             "total_cost": round(total_cost, 2)
         })
     
-    # 按平台汇总费用
+    # 构建MCC货币映射
+    mcc_currency_map = {}
+    for mcc in db.query(GoogleMccAccount).filter(GoogleMccAccount.user_id == current_user.id).all():
+        mcc_currency_map[mcc.id] = getattr(mcc, 'currency', 'USD') or 'USD'
+    
+    # 按平台+MCC汇总费用（需要区分货币）
     platform_query = db.query(
         GoogleAdsApiData.extracted_platform_code,
+        GoogleAdsApiData.mcc_id,
         func.sum(GoogleAdsApiData.cost).label('total_cost')
     ).filter(
         GoogleAdsApiData.user_id == current_user.id,
@@ -141,38 +159,58 @@ async def get_cost_detail(
         GoogleAdsApiData.date <= end,
         GoogleAdsApiData.extracted_platform_code.isnot(None)
     ).group_by(
-        GoogleAdsApiData.extracted_platform_code
+        GoogleAdsApiData.extracted_platform_code,
+        GoogleAdsApiData.mcc_id
     )
     
     platform_results = platform_query.all()
-    platform_breakdown = []
+    # 按平台聚合（含货币转换）
+    platform_cost_map = {}
     for r in platform_results:
-        platform = platform_code_map.get(r.extracted_platform_code)
+        code = r.extracted_platform_code
+        cost = float(r.total_cost or 0)
+        currency = mcc_currency_map.get(r.mcc_id, 'USD')
+        if currency == 'CNY':
+            cost = cost / CNY_TO_USD_RATE
+        platform_cost_map[code] = platform_cost_map.get(code, 0) + cost
+    
+    platform_breakdown = []
+    for code, cost in platform_cost_map.items():
+        platform = platform_code_map.get(code)
         platform_breakdown.append({
-            "platform_code": r.extracted_platform_code,
-            "platform_name": platform.platform_name if platform else r.extracted_platform_code,
-            "total_cost": round(float(r.total_cost or 0), 2)
+            "platform_code": code,
+            "platform_name": platform.platform_name if platform else code,
+            "total_cost": round(cost, 2)
         })
     
-    # 未匹配平台的费用
+    # 未匹配平台的费用（含货币转换）
     unmatched_query = db.query(
+        GoogleAdsApiData.mcc_id,
         func.sum(GoogleAdsApiData.cost).label('total_cost')
     ).filter(
         GoogleAdsApiData.user_id == current_user.id,
         GoogleAdsApiData.date >= start,
         GoogleAdsApiData.date <= end,
         GoogleAdsApiData.extracted_platform_code.is_(None)
-    )
-    unmatched_result = unmatched_query.first()
-    unmatched_cost = round(float(unmatched_result.total_cost or 0), 2)
+    ).group_by(GoogleAdsApiData.mcc_id)
+    
+    unmatched_cost = 0.0
+    for r in unmatched_query.all():
+        cost = float(r.total_cost or 0)
+        currency = mcc_currency_map.get(r.mcc_id, 'USD')
+        if currency == 'CNY':
+            cost = cost / CNY_TO_USD_RATE
+        unmatched_cost += cost
+    unmatched_cost = round(unmatched_cost, 2)
     
     # 总费用
     total_cost = sum(m.get('total_cost', 0) for m in mcc_breakdown)
     
-    # 按平台+日期明细（细分）
+    # 按平台+日期+MCC明细（细分，含货币转换）
     platform_detail_query = db.query(
         GoogleAdsApiData.extracted_platform_code,
         GoogleAdsApiData.date,
+        GoogleAdsApiData.mcc_id,
         func.sum(GoogleAdsApiData.cost).label('total_cost'),
         func.count(GoogleAdsApiData.id).label('campaign_count')
     ).filter(
@@ -182,22 +220,36 @@ async def get_cost_detail(
         GoogleAdsApiData.extracted_platform_code.isnot(None)
     ).group_by(
         GoogleAdsApiData.extracted_platform_code,
-        GoogleAdsApiData.date
+        GoogleAdsApiData.date,
+        GoogleAdsApiData.mcc_id
     ).order_by(
         GoogleAdsApiData.extracted_platform_code,
         GoogleAdsApiData.date.desc()
     )
     
     platform_detail_results = platform_detail_query.all()
-    platform_details = []
+    # 按平台+日期聚合（含货币转换）
+    detail_agg = {}
     for r in platform_detail_results:
-        platform = platform_code_map.get(r.extracted_platform_code)
+        key = (r.extracted_platform_code, r.date)
+        cost = float(r.total_cost or 0)
+        currency = mcc_currency_map.get(r.mcc_id, 'USD')
+        if currency == 'CNY':
+            cost = cost / CNY_TO_USD_RATE
+        if key not in detail_agg:
+            detail_agg[key] = {"cost": 0.0, "count": 0}
+        detail_agg[key]["cost"] += cost
+        detail_agg[key]["count"] += int(r.campaign_count or 0)
+    
+    platform_details = []
+    for (code, d), vals in detail_agg.items():
+        platform = platform_code_map.get(code)
         platform_details.append({
-            "platform_code": r.extracted_platform_code,
-            "platform_name": platform.platform_name if platform else r.extracted_platform_code,
-            "date": r.date.isoformat() if isinstance(r.date, date) else str(r.date),
-            "total_cost": round(float(r.total_cost or 0), 2),
-            "campaign_count": int(r.campaign_count or 0)
+            "platform_code": code,
+            "platform_name": platform.platform_name if platform else code,
+            "date": d.isoformat() if isinstance(d, date) else str(d),
+            "total_cost": round(vals["cost"], 2),
+            "campaign_count": vals["count"]
         })
     
     return {
