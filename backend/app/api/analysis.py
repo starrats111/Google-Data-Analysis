@@ -204,6 +204,7 @@ async def generate_l7d_from_daily(
     from app.models.ad_campaign import AdCampaign
     from app.models.ad_campaign_daily_metric import AdCampaignDailyMetric
     from app.models.data_upload import DataUpload, UploadType
+    from app.models.google_ads_api_data import GoogleAdsApiData
     from app.services.analysis_service import AnalysisService
 
     # 1）确定日期范围：end = 请求里的日期，默认今天；start = end - 6 天
@@ -317,6 +318,16 @@ async def generate_l7d_from_daily(
         campaign = items[0].campaign  # 关联的 AdCampaign 记录
         is_vals = is_map.get(campaign.campaign_name, {}) if is_map else {}
         
+        # 从 GoogleAdsApiData 获取 CID
+        cid_from_api = db.query(GoogleAdsApiData.customer_id).filter(
+            GoogleAdsApiData.campaign_name == campaign.campaign_name,
+            GoogleAdsApiData.user_id == current_user.id
+        ).order_by(GoogleAdsApiData.date.desc()).first()
+        cid = cid_from_api[0] if cid_from_api and cid_from_api[0] else campaign.cid_account
+        # 格式化 CID 为 xxx-xxx-xxxx
+        if cid and len(str(cid)) == 10 and '-' not in str(cid):
+            cid = f"{cid[:3]}-{cid[3:6]}-{cid[6:]}"
+        
         # 构建用于生成操作指令的行数据
         # 注意：is_vals中的"IS Budget丢失"和"IS Rank丢失"需要转换为"预算错失份额"和"排名错失份额"
         is_budget_lost = is_vals.get("IS Budget丢失")
@@ -339,7 +350,7 @@ async def generate_l7d_from_daily(
 
         rows.append({
             "广告系列名": campaign.campaign_name,
-            "账号=CID": campaign.cid_account,
+            "账号=CID": cid,
             "MID": campaign.merchant_id,
             "投放国家": campaign.country,
             "L7D点击": clicks,
@@ -401,6 +412,7 @@ async def generate_l7d_from_daily_with_google(
     from tempfile import NamedTemporaryFile
     from app.models.ad_campaign import AdCampaign
     from app.models.ad_campaign_daily_metric import AdCampaignDailyMetric
+    from app.models.google_ads_api_data import GoogleAdsApiData
     from app.services.analysis_service import AnalysisService
 
     # 1）日期范围
@@ -504,6 +516,16 @@ async def generate_l7d_from_daily_with_google(
         campaign = items[0].campaign
         is_vals = is_map.get(campaign.campaign_name, {}) if is_map else {}
         
+        # 从 GoogleAdsApiData 获取 CID
+        cid_from_api = db.query(GoogleAdsApiData.customer_id).filter(
+            GoogleAdsApiData.campaign_name == campaign.campaign_name,
+            GoogleAdsApiData.user_id == current_user.id
+        ).order_by(GoogleAdsApiData.date.desc()).first()
+        cid = cid_from_api[0] if cid_from_api and cid_from_api[0] else campaign.cid_account
+        # 格式化 CID 为 xxx-xxx-xxxx
+        if cid and len(str(cid)) == 10 and '-' not in str(cid):
+            cid = f"{cid[:3]}-{cid[3:6]}-{cid[6:]}"
+        
         # 构建用于生成操作指令的行数据
         # 注意：is_vals中的"IS Budget丢失"和"IS Rank丢失"需要转换为"预算错失份额"和"排名错失份额"
         is_budget_lost = is_vals.get("IS Budget丢失")
@@ -526,7 +548,7 @@ async def generate_l7d_from_daily_with_google(
 
         rows.append({
             "广告系列名": campaign.campaign_name,
-            "账号=CID": campaign.cid_account,
+            "账号=CID": cid,
             "MID": campaign.merchant_id,
             "投放国家": campaign.country,
             "L7D点击": clicks,
