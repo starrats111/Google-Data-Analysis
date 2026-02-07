@@ -31,18 +31,34 @@ const ReportViewer = ({ content, campaignCount, analysisDate }) => {
   const isCampaignTitle = (line) => {
     const trimmed = line.trim()
     if (!trimmed.startsWith('### ')) return false
-    const titleContent = trimmed.replace(/^###\s*/, '').replace(/[📊🔶🔷💎⭐🎯📈📉✅❌⚠️🔴🟡🟢💰☕▲🏆✨]/g, '').trim()
+    const titleContent = trimmed.replace(/^###\s*/, '').replace(/[📊🔶🔷💎⭐🎯📈📉✅❌⚠️🔴🟡🟢💰☕▲🏆✨🌱🔥⛔💡🎉]/g, '').trim()
     
-    // 子标题特征：以数字+点开头，如 "1. 阶段评价"
+    // 子标题特征：以数字+点开头，如 "1. 阶段评价" 或 "#### 1."
     if (/^\d+\.\s/.test(titleContent)) return false
     
-    // 广告系列名特征：
-    // 1. 包含连字符和数字组合（如 181-CG1-uaudio-US）
-    // 2. 或包含平台代码（PM1, CG1, LH1 等）
-    // 3. 或包含国家代码（-US, -UK, -DE 等）
-    const hasCampaignPattern = /\d+-[A-Z]{2,}\d?-/.test(titleContent) ||  // 181-CG1-
-                               /-[A-Z]{2}-\d/.test(titleContent) ||       // -US-123
-                               /^[A-Z]{2,}\d?-/.test(titleContent)        // CG1-开头
+    // 常见的子标题关键词（这些不是广告系列名）
+    const subTitleKeywords = [
+      '阶段评价', '市场洞察', '数据深度分析', '节日营销预判', '优化建议', '风险提示',
+      '概览', '总览', '总结', '节奏', '执行清单', '综述', '专项名单',
+      'CPC分析', '费用效率', '点击率', '转化情况', 'ROI', '流量瓶颈',
+      '推荐预算', '推荐CPC', '其他建议', '关键发现', '下次重点'
+    ]
+    for (const keyword of subTitleKeywords) {
+      if (titleContent.includes(keyword)) return false
+    }
+    
+    // 广告系列名特征（更宽松的匹配）：
+    // 1. 包含数字-字母-组合（如 181-CG1-uaudio-US, 001-RW-brand-US）
+    // 2. 或包含平台代码后跟连字符（PM1-, CG1-, LH1-, RW-, LS- 等）
+    // 3. 或包含国家代码结尾（-US, -UK, -DE, -FR, -AU 等）
+    // 4. 或者标题中有多个连字符分隔的部分（看起来像广告系列命名结构）
+    const hasCampaignPattern = 
+      /\d+-[A-Z]{2,}\d?-/i.test(titleContent) ||     // 181-CG1- 或 001-RW-
+      /-(PM|CG|RW|LH|LS)\d?-/i.test(titleContent) || // 包含平台代码
+      /-[A-Z]{2}(-\d+)?$/i.test(titleContent) ||     // 以国家代码结尾 (-US, -UK-123)
+      /-[A-Z]{2}-\d/i.test(titleContent) ||          // -US-123
+      /^[A-Z]{2,}\d?-/i.test(titleContent) ||        // CG1-开头
+      (titleContent.split('-').length >= 3 && /\d/.test(titleContent))  // 至少3个连字符分隔且包含数字
     
     return hasCampaignPattern
   }
@@ -172,10 +188,13 @@ const ReportViewer = ({ content, campaignCount, analysisDate }) => {
     td: ({ children }) => <td className="report-td">{children}</td>,
   }
 
+  // 判断是否成功解析出了结构化内容
+  const hasStructuredContent = sections.campaigns.length > 0
+
   return (
     <div className="report-viewer">
-      {/* 报告概述区域 */}
-      {sections.overview && (
+      {/* 如果有结构化内容（广告系列卡片），先显示概述 */}
+      {hasStructuredContent && sections.overview && (
         <div className="report-overview">
           <ReactMarkdown
             remarkPlugins={[remarkGfm]}
@@ -187,7 +206,7 @@ const ReportViewer = ({ content, campaignCount, analysisDate }) => {
       )}
 
       {/* 广告系列卡片 */}
-      {sections.campaigns.length > 0 && (
+      {hasStructuredContent && (
         <div className="report-campaigns">
           {sections.campaigns.map((campaign, idx) => {
             const level = extractLevel(campaign.content)
@@ -273,9 +292,9 @@ const ReportViewer = ({ content, campaignCount, analysisDate }) => {
         </div>
       )}
 
-      {/* 如果没有找到结构化段落，直接渲染全部内容 */}
-      {sections.campaigns.length === 0 && !sections.overview && (
-        <div className="report-overview">
+      {/* 如果没有识别出广告系列卡片结构，直接渲染全部内容 */}
+      {!hasStructuredContent && processedContent && (
+        <div className="report-full-content">
           <ReactMarkdown
             remarkPlugins={[remarkGfm]}
             components={markdownComponents}

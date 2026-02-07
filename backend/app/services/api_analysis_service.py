@@ -812,6 +812,11 @@ class ApiAnalysisService:
         """
         解析 AI 报告，按广告系列名拆分
         
+        解析策略：
+        1. 使用 "###" 分割报告段落
+        2. 对每个段落提取广告系列名（考虑各种格式变体）
+        3. 用模糊匹配找到对应的原始广告系列名
+        
         Args:
             full_report: AI 生成的完整报告
             rows: 广告系列数据列表
@@ -827,41 +832,126 @@ class ApiAnalysisService:
         if not campaign_names or not full_report:
             return reports
         
-        # 尝试按 "### " 分割报告（Markdown 三级标题）
-        sections = re.split(r'(?=###\s)', full_report)
+        # 创建广告系列名的简化版本用于匹配（去除常见变体）
+        def simplify_name(name: str) -> str:
+            """简化广告系列名用于匹配"""
+            if not name:
+                return ""
+            # 去除空白、表情符号，转小写
+            import unicodedata
+            simplified = name.strip().lower()
+            # 移除表情符号
+            simplified = re.sub(r'[📊🔶🔷💎⭐🎯📈📉✅❌⚠️🔴🟡🟢💰☕▲🏆✨🌱📉]', '', simplified)
+            # 移除括号及其内容（如 (成熟期)）
+            simplified = re.sub(r'\s*[\(（][^)）]*[\)）]\s*', '', simplified)
+            # 保留字母数字和连字符
+            simplified = re.sub(r'[^a-z0-9\-]', '', simplified)
+            return simplified.strip()
+        
+        # 建立简化名 -> 原始名的映射
+        name_map = {}
+        for name in campaign_names:
+            simple = simplify_name(name)
+            if simple:
+                name_map[simple] = name
+        
+        # 按 "###" 分割报告，保留每个段落直到下一个 "###"
+        # 使用正则匹配 ### 开头的行（三级标题）
+        sections = re.split(r'(?=^###\s|\n###\s)', full_report)
+        
+        # 跳过第一个段落（通常是概述/总览）
+        overview_content = ""
+        campaign_sections = []
         
         for section in sections:
             section = section.strip()
             if not section:
                 continue
             
-            # 查找这个 section 属于哪个广告系列
-            for name in campaign_names:
-                # 广告系列名可能在标题中出现（部分匹配）
-                # 例如 "### 📊 181-CG1-uaudio-US (成熟期 🏆)"
-                if name in section[:200]:  # 只在前200字符中查找
-                    # 如果已经有了，跳过（可能是更完整的匹配）
-                    if name not in reports or len(section) > len(reports[name]):
-                        reports[name] = section
-                    break
-        
-        # 如果没有按 ### 分割成功，尝试其他方式
-        if not reports:
-            # 尝试按 "---" 分割
-            sections = full_report.split("---")
-            for section in sections:
-                section = section.strip()
-                if not section:
+            # 检查是否是广告系列标题（以 ### 开头）
+            if section.startswith('###'):
+                # 提取第一行（标题行）
+                first_line = section.split('\n')[0] if '\n' in section else section
+                title_text = first_line.replace('###', '').strip()
+                
+                # 检查是否是数字开头的子标题（如 "### 1. 阶段评价"）
+                if re.match(r'^\d+\.\s', title_text):
+                    # 这是子标题，附加到上一个广告系列
+                    if campaign_sections:
+                        campaign_sections[-1]['content'] += '\n\n' + section
                     continue
-                for name in campaign_names:
-                    if name in section[:200]:
-                        if name not in reports:
-                            reports[name] = section
-                        break
+                
+                # 检查是否是总览/概览类标题
+                if any(keyword in title_text for keyword in ['概览', '总览', '总结', '节奏', '执行清单', '综述', '专项名单']):
+                    overview_content += '\n\n' + section
+                    continue
+                
+                # 这是一个新的广告系列段落
+                campaign_sections.append({
+                    'title_text': title_text,
+                    'content': section
+                })
+            else:
+                # 非 ### 开头的内容属于概述
+                if not campaign_sections:
+                    overview_content += section + '\n'
         
-        # 如果仍然没有成功解析，给每个广告系列返回完整报告
-        if not reports and full_report:
+        # 将每个段落匹配到对应的广告系列
+        for cs in campaign_sections:
+            title_text = cs['title_text']
+            content = cs['content']
+            
+            # 尝试找到匹配的广告系列名
+            matched_name = None
+            
+            # 方法1: 直接匹配（广告系列名完整出现在标题中）
             for name in campaign_names:
-                reports[name] = full_report
+                if name in title_text:
+                    matched_name = name
+                    break
+            
+            # 方法2: 简化匹配
+            if not matched_name:
+                simple_title = simplify_name(title_text)
+                if simple_title in name_map:
+                    matched_name = name_map[simple_title]
+                else:
+                    # 尝试部分匹配
+                    for simple, original in name_map.items():
+                        # 如果标题包含简化的广告系列名（至少10个字符匹配）
+                        if len(simple) >= 10 and simple in simple_title:
+                            matched_name = original
+                            break
+                        if len(simple_title) >= 10 and simple_title in simple:
+                            matched_name = original
+                            break
+            
+            # 方法3: 更宽松的匹配 - 提取广告系列名中的核心部分
+            if not matched_name:
+                # 提取标题中看起来像广告系列名的部分（如 181-CG1-uaudio-US）
+                campaign_pattern = re.search(r'\d+-[A-Z0-9]+-[a-zA-Z0-9]+-[A-Z]{2}', title_text, re.IGNORECASE)
+                if campaign_pattern:
+                    extracted = campaign_pattern.group()
+                    for name in campaign_names:
+                        if extracted.lower() in name.lower() or name.lower().startswith(extracted.lower()):
+                            matched_name = name
+                            break
+            
+            if matched_name:
+                # 如果已有内容，合并（处理分成多段的情况）
+                if matched_name in reports:
+                    reports[matched_name] += '\n\n' + content
+                else:
+                    reports[matched_name] = content
+        
+        # 对于没有匹配上的广告系列，返回完整报告
+        # 但先标记一下，加个提示
+        if full_report:
+            for name in campaign_names:
+                if name not in reports:
+                    # 生成一个带提示的报告
+                    reports[name] = f"### 📊 {name}\n\n该广告系列的分析报告可能包含在完整报告中。\n\n---\n\n{full_report}"
+        
+        logger.info(f"AI报告解析完成: 共{len(campaign_names)}个广告系列, 成功匹配{len([n for n in campaign_names if n in reports and '该广告系列的分析报告可能包含在完整报告中' not in reports.get(n, '')])}个")
         
         return reports
