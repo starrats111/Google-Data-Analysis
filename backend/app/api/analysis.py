@@ -309,6 +309,10 @@ async def generate_l7d_from_daily(
 
         roi = ((comm - cost) / cost) if cost > 0 else None
         
+        # 过滤掉没有数据的广告系列（点击=0 且 花费=0 且 佣金=0）
+        if clicks == 0 and cost == 0 and comm == 0:
+            continue
+        
         # 计算保守EPC和保守ROI
         # 保守EPC = L7D佣金*0.72/L7D点击
         conservative_epc = (comm * 0.72 / clicks) if clicks > 0 else 0
@@ -506,6 +510,10 @@ async def generate_l7d_from_daily_with_google(
         # 修复：MAX CPC应该是过去7天中CPC的最大值，而不是最高CPC的最大值
         max_cpc_7d = max((m.cpc or 0) for m in items) if items else 0
         roi = ((comm - cost) / cost) if cost > 0 else None
+        
+        # 过滤掉没有数据的广告系列（点击=0 且 花费=0 且 佣金=0）
+        if clicks == 0 and cost == 0 and comm == 0:
+            continue
         
         # 计算保守EPC和保守ROI
         # 保守EPC = L7D佣金*0.72/L7D点击

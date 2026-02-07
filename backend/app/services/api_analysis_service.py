@@ -509,6 +509,10 @@ class ApiAnalysisService:
                 clicks = cdata["total_clicks"]
                 data_days = len(cdata["data_dates"])  # 有Google Ads数据的天数
                 
+                # 过滤掉没有数据的广告系列（点击=0 且 花费=0 且 佣金=0）
+                if clicks == 0 and cost == 0 and commission == 0:
+                    continue
+                
                 conservative_epc = (commission * 0.72 / clicks) if clicks > 0 else 0
                 conservative_roi = ((commission * 0.72 - cost) / cost) if cost > 0 else None
                 

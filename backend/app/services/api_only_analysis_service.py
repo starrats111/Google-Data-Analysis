@@ -204,6 +204,10 @@ class ApiOnlyAnalysisService:
                 orders = total_orders
                 order_days_count = len(order_days)
                 
+                # 过滤掉没有数据的广告系列（点击=0 且 花费=0 且 佣金=0）
+                if clicks == 0 and cost == 0 and commission == 0:
+                    continue
+                
                 # 计算保守指标
                 conservative_commission = commission * 0.72
                 conservative_epc = clicks > 0 and conservative_commission / clicks or 0
