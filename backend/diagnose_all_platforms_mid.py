@@ -19,7 +19,7 @@ print("诊断所有平台的 MID 字段")
 print("=" * 70)
 
 # 获取用户
-user = db.query(User).filter(User.username == "wj02").first()
+user = db.query(User).filter(User.username == "wj07").first()
 if not user:
     print("❌ 用户 wj02 不存在")
     sys.exit(1)
