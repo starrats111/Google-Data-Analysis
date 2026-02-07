@@ -7,11 +7,13 @@ from typing import Dict, Optional, List
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 import logging
+import re
 
 from app.models.google_ads_api_data import GoogleAdsApiData
 from app.models.platform_data import PlatformData
 from app.models.affiliate_account import AffiliateAccount, AffiliatePlatform
 from app.models.analysis_result import AnalysisResult
+from app.models.ai_report import UserPrompt
 
 logger = logging.getLogger(__name__)
 
@@ -580,11 +582,34 @@ class ApiAnalysisService:
                     "保守EPC": round(conservative_epc, 4),
                     "保守ROI": f"{conservative_roi * 100:.1f}%" if conservative_roi is not None else "-",
                     "操作指令": operation,
+                    "ai_report": "",  # 将在后面批量生成
                 }
                 
                 if data_user_id not in user_results:
                     user_results[data_user_id] = []
                 user_results[data_user_id].append(row)
+            
+            # 为每个用户批量生成 AI 分析报告
+            for data_user_id, rows in user_results.items():
+                if not rows:
+                    continue
+                try:
+                    # 获取用户自定义提示词
+                    user_prompt = self.db.query(UserPrompt).filter(
+                        UserPrompt.user_id == data_user_id
+                    ).first()
+                    custom_prompt = user_prompt.prompt if user_prompt else None
+                    
+                    # 批量调用 AI 生成分析报告
+                    ai_reports = self._generate_batch_ai_reports(rows, custom_prompt)
+                    
+                    # 将 AI 报告分配到每条记录
+                    for row in rows:
+                        campaign_name = row.get("广告系列名", "")
+                        row["ai_report"] = ai_reports.get(campaign_name, "")
+                except Exception as e:
+                    logger.error(f"为用户 {data_user_id} 生成 AI 报告失败: {e}")
+                    # AI 报告生成失败不影响主流程，继续保存
             
             # 保存到数据库
             total_saved = 0
@@ -703,3 +728,140 @@ class ApiAnalysisService:
                 return "样本不足"
         
         return "；".join(instructions) if instructions else "稳定运行"
+    
+    def _generate_batch_ai_reports(
+        self,
+        rows: List[Dict],
+        custom_prompt: Optional[str] = None
+    ) -> Dict[str, str]:
+        """
+        批量生成 AI 分析报告
+        
+        Args:
+            rows: 广告系列数据列表
+            custom_prompt: 用户自定义提示词
+        
+        Returns:
+            {campaign_name: ai_report} 的字典
+        """
+        from app.services.gemini_service import GeminiService
+        from app.config import settings
+        
+        # 获取 Gemini 配置
+        api_key = getattr(settings, 'gemini_api_key', None)
+        if not api_key:
+            logger.warning("Gemini API 密钥未配置，跳过 AI 报告生成")
+            return {}
+        
+        base_url = getattr(settings, 'gemini_base_url', None) or "https://api.gemai.cc/v1beta"
+        model = getattr(settings, 'gemini_model_thinking', "gemini-3-flash-preview-thinking")
+        
+        try:
+            service = GeminiService(api_key, base_url, model)
+            
+            # 准备数据
+            campaigns_data = []
+            for row in rows:
+                # 解析百分比格式
+                budget_lost = row.get("IS Budget丢失", "0")
+                rank_lost = row.get("IS Rank丢失", "0")
+                roi = row.get("保守ROI", "0")
+                
+                if isinstance(budget_lost, str):
+                    budget_lost = float(budget_lost.replace("%", "").replace("-", "0") or 0) / 100
+                if isinstance(rank_lost, str):
+                    rank_lost = float(rank_lost.replace("%", "").replace("-", "0") or 0) / 100
+                if isinstance(roi, str):
+                    roi = float(roi.replace("%", "").replace("-", "0") or 0) / 100
+                
+                campaigns_data.append({
+                    "campaign_name": row.get("广告系列名", ""),
+                    "cost": row.get("L7D花费", 0),
+                    "clicks": row.get("L7D点击", 0),
+                    "impressions": 0,  # L7D 分析中没有展示数据
+                    "cpc": row.get("当前Max CPC", 0),
+                    "budget": 0,  # 需要从其他地方获取
+                    "conservative_epc": row.get("保守EPC", 0),
+                    "is_budget_lost": budget_lost,
+                    "is_rank_lost": rank_lost,
+                    "orders": 0,  # L7D 分析中没有单独的订单字段
+                    "order_days": row.get("L7D出单天数", 0),
+                    "commission": row.get("L7D佣金", 0)
+                })
+            
+            # 调用 AI 生成报告
+            result = service.generate_operation_report(campaigns_data, custom_prompt)
+            
+            if not result.get("success"):
+                logger.error(f"AI 报告生成失败: {result.get('message')}")
+                return {}
+            
+            # 解析 AI 返回的报告，按广告系列名拆分
+            full_report = result.get("analysis", "")
+            return self._parse_ai_report_by_campaign(full_report, rows)
+            
+        except Exception as e:
+            logger.error(f"批量生成 AI 报告异常: {e}", exc_info=True)
+            return {}
+    
+    def _parse_ai_report_by_campaign(
+        self,
+        full_report: str,
+        rows: List[Dict]
+    ) -> Dict[str, str]:
+        """
+        解析 AI 报告，按广告系列名拆分
+        
+        Args:
+            full_report: AI 生成的完整报告
+            rows: 广告系列数据列表
+        
+        Returns:
+            {campaign_name: ai_report} 的字典
+        """
+        reports = {}
+        
+        # 收集所有广告系列名
+        campaign_names = [row.get("广告系列名", "") for row in rows if row.get("广告系列名")]
+        
+        if not campaign_names or not full_report:
+            return reports
+        
+        # 尝试按 "### " 分割报告（Markdown 三级标题）
+        sections = re.split(r'(?=###\s)', full_report)
+        
+        for section in sections:
+            section = section.strip()
+            if not section:
+                continue
+            
+            # 查找这个 section 属于哪个广告系列
+            for name in campaign_names:
+                # 广告系列名可能在标题中出现（部分匹配）
+                # 例如 "### 📊 181-CG1-uaudio-US (成熟期 🏆)"
+                if name in section[:200]:  # 只在前200字符中查找
+                    # 如果已经有了，跳过（可能是更完整的匹配）
+                    if name not in reports or len(section) > len(reports[name]):
+                        reports[name] = section
+                    break
+        
+        # 如果没有按 ### 分割成功，尝试其他方式
+        if not reports:
+            # 尝试按 "---" 分割
+            sections = full_report.split("---")
+            for section in sections:
+                section = section.strip()
+                if not section:
+                    continue
+                for name in campaign_names:
+                    if name in section[:200]:
+                        if name not in reports:
+                            reports[name] = section
+                        break
+        
+        # 如果仍然没有成功解析，给每个广告系列返回完整报告
+        if not reports and full_report:
+            for name in campaign_names:
+                reports[name] = full_report
+        
+        return reports

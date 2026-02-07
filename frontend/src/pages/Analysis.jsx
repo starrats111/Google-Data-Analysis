@@ -1,10 +1,11 @@
 import React, { useMemo, useState, useEffect, useRef } from 'react'
 import { Card, Table, Select, DatePicker, Space, message, Tag, Badge, Typography, Tooltip, Button, Popconfirm, Collapse, Modal, Upload, Spin, Input } from 'antd'
-import { UploadOutlined, RobotOutlined, SettingOutlined } from '@ant-design/icons'
+import { UploadOutlined, RobotOutlined, SettingOutlined, CopyOutlined, ArrowLeftOutlined, CloseOutlined } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
 import dayjs from 'dayjs'
 import api from '../services/api'
 import ExportButton from '../components/Export/ExportButton'
+import ReportViewer from '../components/ReportViewer/ReportViewer'
 import { useAuth } from '../store/authStore'
 import './Analysis.css'
 
@@ -52,6 +53,12 @@ const Analysis = ({ mode }) => {
   const [customPrompt, setCustomPrompt] = useState('')
   const [savingPrompt, setSavingPrompt] = useState(false)
   const [loadingPrompt, setLoadingPrompt] = useState(false)
+  
+  // 单条广告系列分析状态
+  const [singleCampaignModalOpen, setSingleCampaignModalOpen] = useState(false)
+  const [singleCampaignAnalyzing, setSingleCampaignAnalyzing] = useState(false)
+  const [singleCampaignResult, setSingleCampaignResult] = useState(null)
+  const [selectedCampaignRow, setSelectedCampaignRow] = useState(null)
 
   const fetchAccounts = async () => {
     try {
@@ -448,6 +455,33 @@ const Analysis = ({ mode }) => {
     loadCustomPrompt()
     setPromptModalOpen(true)
   }
+  
+  // 查看单条广告系列的 AI 分析报告（从已存储的数据中读取）
+  const handleViewCampaignReport = (row) => {
+    if (!row) return
+    
+    const campaignName = String(row['广告系列名'] || row['广告系列'] || row['系列名'] || '')
+    const aiReport = row['ai_report'] || ''
+    
+    setSelectedCampaignRow(row)
+    setSingleCampaignAnalyzing(false)
+    setSingleCampaignModalOpen(true)
+    
+    if (aiReport) {
+      setSingleCampaignResult({
+        campaign_name: campaignName,
+        analysis: aiReport,
+        analysis_date: dayjs().format('YYYY-MM-DD')
+      })
+    } else {
+      // 没有 AI 报告，显示提示
+      setSingleCampaignResult({
+        campaign_name: campaignName,
+        analysis: `### ${campaignName}\n\n该广告系列暂无 AI 分析报告。\n\n可能的原因：\n- 该分析是在 AI 报告功能上线前生成的\n- AI 报告生成过程中出现错误\n\n**建议**：点击"从API数据生成L7D分析"按钮重新生成分析，系统会自动为每条广告系列生成 AI 报告。`,
+        analysis_date: dayjs().format('YYYY-MM-DD')
+      })
+    }
+  }
 
   const handleDeleteResult = async (resultId) => {
     try {
@@ -646,72 +680,133 @@ const Analysis = ({ mode }) => {
 
       {/* AI 分析结果 Modal */}
       <Modal
-        title={
-          <Space>
-            <RobotOutlined />
-            <span>AI 分析报告</span>
-            {aiAnalysisResult && (
-              <Tag color="blue">
-                📊 {aiAnalysisResult.campaign_count} 个广告系列
-              </Tag>
-            )}
-          </Space>
-        }
+        title={null}
         open={aiModalOpen}
         onCancel={() => setAiModalOpen(false)}
-        width={1200}
-        footer={[
-          <Button key="close" onClick={() => setAiModalOpen(false)}>
-            关闭
-          </Button>,
-          <Button 
-            key="copy" 
-            type="primary"
-            onClick={() => {
-              if (aiAnalysisResult?.analysis) {
-                navigator.clipboard.writeText(aiAnalysisResult.analysis)
-                message.success('已复制到剪贴板')
-              }
-            }}
-            disabled={!aiAnalysisResult?.analysis}
-          >
-            复制报告
-          </Button>
-        ]}
-        styles={{ body: { maxHeight: '70vh', overflow: 'auto' } }}
+        width={1100}
+        footer={null}
+        styles={{ 
+          body: { padding: 0 },
+          content: { borderRadius: 16, overflow: 'hidden' }
+        }}
       >
         {aiAnalyzing ? (
-          <div style={{ textAlign: 'center', padding: 60 }}>
+          <div style={{ textAlign: 'center', padding: 80 }}>
             <Spin size="large" />
-            <p style={{ marginTop: 16, fontSize: 16 }}>AI 正在分析 {selectedResultForAi?.result_data?.data?.length || 0} 个广告系列...</p>
-            <p style={{ color: '#999' }}>使用 Gemini 深度分析模型，预计需要 30-60 秒</p>
+            <p style={{ marginTop: 20, fontSize: 16, color: '#1a1a2e', fontWeight: 500 }}>
+              AI 正在分析 {selectedResultForAi?.result_data?.data?.length || 0} 个广告系列...
+            </p>
+            <p style={{ color: '#8c8c8c', fontSize: 14 }}>使用 Gemini 深度分析模型，预计需要 30-60 秒</p>
           </div>
         ) : aiAnalysisResult ? (
           <div>
-            <div style={{ marginBottom: 16 }}>
-              <Space>
-                <Tag color="blue">📊 分析系列数: {aiAnalysisResult.campaign_count}</Tag>
-                <Tag color="green">📅 分析日期: {aiAnalysisResult.analysis_date}</Tag>
-              </Space>
+            {/* 报告头部 */}
+            <div style={{ 
+              background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+              padding: '24px 32px',
+              color: 'white'
+            }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+                  <Button 
+                    type="text"
+                    icon={<ArrowLeftOutlined style={{ fontSize: 20 }} />}
+                    onClick={() => setAiModalOpen(false)}
+                    style={{ color: 'white', width: 40, height: 40, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                  />
+                  <div>
+                    <Title level={3} style={{ color: 'white', margin: 0, marginBottom: 8 }}>
+                      <RobotOutlined style={{ marginRight: 12 }} />
+                      AI 智能分析报告
+                    </Title>
+                    <Space size="middle">
+                      <Tag color="rgba(255,255,255,0.2)" style={{ color: 'white', border: 'none' }}>
+                        📊 {aiAnalysisResult.campaign_count} 个广告系列
+                      </Tag>
+                      <Tag color="rgba(255,255,255,0.2)" style={{ color: 'white', border: 'none' }}>
+                        📅 {aiAnalysisResult.analysis_date}
+                      </Tag>
+                    </Space>
+                  </div>
+                </div>
+                <Space>
+                  <Button 
+                    type="primary"
+                    ghost
+                    icon={<CopyOutlined />}
+                    onClick={() => {
+                      if (aiAnalysisResult?.analysis) {
+                        navigator.clipboard.writeText(aiAnalysisResult.analysis)
+                        message.success('已复制到剪贴板')
+                      }
+                    }}
+                    style={{ borderColor: 'white', color: 'white' }}
+                  >
+                    复制报告
+                  </Button>
+                  <Button 
+                    type="text"
+                    icon={<CloseOutlined style={{ fontSize: 18 }} />}
+                    onClick={() => setAiModalOpen(false)}
+                    style={{ color: 'white', width: 40, height: 40, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                  />
+                </Space>
+              </div>
             </div>
-            <div 
-              style={{ 
-                background: '#f5f5f5', 
-                padding: 16, 
-                borderRadius: 8,
-                whiteSpace: 'pre-wrap',
-                fontFamily: 'monospace',
-                fontSize: 13,
-                lineHeight: 1.6
-              }}
-            >
-              {aiAnalysisResult.analysis}
+
+            {/* 报告内容 */}
+            <div style={{ 
+              padding: '24px 32px', 
+              maxHeight: '65vh', 
+              overflow: 'auto',
+              background: '#f5f7fa'
+            }}>
+              <ReportViewer 
+                content={aiAnalysisResult.analysis}
+                campaignCount={aiAnalysisResult.campaign_count}
+                analysisDate={aiAnalysisResult.analysis_date}
+              />
+            </div>
+
+            {/* 底部操作栏 */}
+            <div style={{ 
+              padding: '16px 32px', 
+              background: 'white',
+              borderTop: '1px solid #f0f0f0',
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center'
+            }}>
+              <Button 
+                type="primary"
+                icon={<ArrowLeftOutlined />}
+                onClick={() => setAiModalOpen(false)}
+                size="large"
+              >
+                返回列表
+              </Button>
+              <Space>
+                <Button 
+                  icon={<CopyOutlined />}
+                  onClick={() => {
+                    if (aiAnalysisResult?.analysis) {
+                      navigator.clipboard.writeText(aiAnalysisResult.analysis)
+                      message.success('已复制到剪贴板')
+                    }
+                  }}
+                >
+                  复制报告
+                </Button>
+                <Button onClick={() => setAiModalOpen(false)}>
+                  关闭
+                </Button>
+              </Space>
             </div>
           </div>
         ) : (
-          <div style={{ textAlign: 'center', padding: 60, color: '#999' }}>
-            <RobotOutlined style={{ fontSize: 48, marginBottom: 16 }} />
-            <p>选择一条 L7D 分析结果，点击"生成报告"按钮</p>
+          <div style={{ textAlign: 'center', padding: 80, color: '#999' }}>
+            <RobotOutlined style={{ fontSize: 56, marginBottom: 16, color: '#d9d9d9' }} />
+            <p style={{ fontSize: 15 }}>选择一条 L7D 分析结果，点击"生成报告"按钮</p>
           </div>
         )}
       </Modal>
@@ -768,6 +863,116 @@ const Analysis = ({ mode }) => {
             </Text>
           </div>
         </Spin>
+      </Modal>
+
+      {/* 单条广告系列分析 Modal */}
+      <Modal
+        title={null}
+        open={singleCampaignModalOpen}
+        onCancel={() => setSingleCampaignModalOpen(false)}
+        width={1000}
+        footer={null}
+        styles={{ 
+          body: { padding: 0 },
+          content: { borderRadius: 16, overflow: 'hidden' }
+        }}
+      >
+        {singleCampaignResult ? (
+          <div>
+            {/* 报告头部 */}
+            <div style={{ 
+              background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+              padding: '20px 28px',
+              color: 'white'
+            }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+                  <Button 
+                    type="text"
+                    icon={<ArrowLeftOutlined style={{ fontSize: 18 }} />}
+                    onClick={() => setSingleCampaignModalOpen(false)}
+                    style={{ color: 'white', width: 36, height: 36, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                  />
+                  <div>
+                    <Title level={4} style={{ color: 'white', margin: 0, marginBottom: 4 }}>
+                      <RobotOutlined style={{ marginRight: 10 }} />
+                      广告系列分析报告
+                    </Title>
+                    <Text style={{ color: 'rgba(255,255,255,0.85)', fontSize: 13 }}>
+                      {singleCampaignResult.campaign_name}
+                    </Text>
+                  </div>
+                </div>
+                <Space>
+                  <Button 
+                    type="primary"
+                    ghost
+                    icon={<CopyOutlined />}
+                    onClick={() => {
+                      if (singleCampaignResult?.analysis) {
+                        navigator.clipboard.writeText(singleCampaignResult.analysis)
+                        message.success('已复制到剪贴板')
+                      }
+                    }}
+                    style={{ borderColor: 'white', color: 'white' }}
+                  >
+                    复制
+                  </Button>
+                  <Button 
+                    type="text"
+                    icon={<CloseOutlined style={{ fontSize: 16 }} />}
+                    onClick={() => setSingleCampaignModalOpen(false)}
+                    style={{ color: 'white', width: 36, height: 36, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                  />
+                </Space>
+              </div>
+            </div>
+
+            {/* 报告内容 */}
+            <div style={{ 
+              padding: '20px 28px', 
+              maxHeight: '60vh', 
+              overflow: 'auto',
+              background: '#f5f7fa'
+            }}>
+              <ReportViewer 
+                content={singleCampaignResult.analysis}
+                campaignCount={1}
+                analysisDate={singleCampaignResult.analysis_date}
+              />
+            </div>
+
+            {/* 底部操作栏 */}
+            <div style={{ 
+              padding: '12px 28px', 
+              background: 'white',
+              borderTop: '1px solid #f0f0f0',
+              display: 'flex',
+              justifyContent: 'flex-end',
+              gap: 12
+            }}>
+              <Button 
+                icon={<CopyOutlined />}
+                onClick={() => {
+                  if (singleCampaignResult?.analysis) {
+                    navigator.clipboard.writeText(singleCampaignResult.analysis)
+                    message.success('已复制到剪贴板')
+                  }
+                }}
+              >
+                复制报告
+              </Button>
+              <Button onClick={() => setSingleCampaignModalOpen(false)}>
+                关闭
+              </Button>
+            </div>
+          </div>
+        ) : (
+          <div style={{ textAlign: 'center', padding: 60, color: '#999' }}>
+            <RobotOutlined style={{ fontSize: 48, marginBottom: 16, color: '#d9d9d9' }} />
+            <p>点击操作指令查看 AI 分析报告</p>
+          </div>
+        )}
       </Modal>
 
       <Card className="analysis-table" styles={{ body: { paddingTop: 14 } }}>
@@ -912,13 +1117,13 @@ const Analysis = ({ mode }) => {
                               color = 'default'
                             }
                             return (
-                              <Tooltip title="点击查看 AI 分析报告">
+                              <Tooltip title="点击查看该广告系列的 AI 分析报告">
                                 <Tag 
                                   color={color} 
                                   style={{ fontSize: '13px', cursor: 'pointer' }}
-                                  onClick={() => {
-                                    // 跳转到我的报告页面
-                                    navigate('/my-reports')
+                                  onClick={(e) => {
+                                    e.stopPropagation() // 阻止冒泡到行展开
+                                    handleViewCampaignReport(row)
                                   }}
                                 >
                                   {t}
@@ -1126,29 +1331,42 @@ const Analysis = ({ mode }) => {
                   }
                 }
 
-                // 为操作指令列添加特殊渲染
+                // 为操作指令列添加特殊渲染 - 可点击查看AI报告
                 if (key === '操作指令') {
-                  column.width = 200
+                  column.width = 220
                   column.ellipsis = false
-                  column.render = (text) => {
+                  column.render = (text, row) => {
                     if (!text || text === '-') return '-'
                     const t = String(text)
                     let color = 'default'
                     // 根据操作指令内容设置颜色
                     if (t.includes('关停') || t.includes('PAUSE')) {
                       color = 'red'
-                    } else if (t.includes('降价')) {
+                    } else if (t.includes('降') || t.includes('降价')) {
                       color = 'orange'
-                    } else if (t.includes('预算') || t.includes('加产')) {
+                    } else if (t.includes('预算') || t.includes('加')) {
                       color = 'green'
-                    } else if (t.includes('CPC+') || t.includes('抢占')) {
+                    } else if (t.includes('CPC') && t.includes('→')) {
                       color = 'cyan'
-                    } else if (t.includes('稳定') || t.includes('维持')) {
+                    } else if (t.includes('维持')) {
                       color = 'blue'
                     } else if (t.includes('样本不足') || t.includes('观察')) {
                       color = 'default'
                     }
-                    return <Tag color={color} style={{ fontSize: '13px' }}>{t}</Tag>
+                    return (
+                      <Tooltip title="点击查看该广告系列的 AI 分析报告">
+                        <Tag 
+                          color={color} 
+                          style={{ fontSize: '13px', cursor: 'pointer' }}
+                          onClick={(e) => {
+                            e.stopPropagation() // 阻止冒泡到行展开
+                            handleViewCampaignReport(row)
+                          }}
+                        >
+                          {t}
+                        </Tag>
+                      </Tooltip>
+                    )
                   }
                 }
 
