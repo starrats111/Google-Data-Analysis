@@ -526,9 +526,10 @@ class RewardooService(PlatformServiceBase):
                         # 如果转换失败，保持原值
                         pass
                 
-                # 提取商家ID（MID）：RW 平台尝试多个可能的字段
-                brand_id = item.get("brand_id") or item.get("brandId") or item.get("m_id") or item.get("mcid") or item.get("merchant_id")
-                merchant_id = str(brand_id).strip() if brand_id else None
+                # 提取商家ID（MID）：RW 平台的 MID 是 mid 字段（数字ID）
+                # mid 是广告系列名中的 MID（如 116022），mcid 是商家标识符（如 revisionskincare）
+                mid_value = item.get("mid") or item.get("brand_id") or item.get("brandId") or item.get("m_id") or item.get("merchant_id")
+                merchant_id = str(mid_value).strip() if mid_value else None
                 
                 extracted.append({
                     "transaction_id": item.get("order_id") or item.get("transaction_id") or item.get("rewardoo_id") or item.get("id") or f"rw_{idx}",
