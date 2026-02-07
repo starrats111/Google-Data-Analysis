@@ -701,81 +701,124 @@ G) 综述
     
     def generate_operation_report(self, campaigns_data: List[Dict], custom_prompt: str = None) -> Dict:
         """
-        生成可执行的操作报告
+        生成专业广告分析报告
         
-        输出格式如：
-        - CPC 0.10→0.08
-        - 预算 $10.00→$15.00(+50%)
+        包含阶段评价、市场洞察、数据深度分析、节日营销预判和优化建议
         
         Args:
             campaigns_data: 广告系列数据
             custom_prompt: 用户自定义提示词（可选）
         
         Returns:
-            操作报告
+            专业分析报告
         """
         today = datetime.now()
+        weekday_names = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
+        weekday_name = weekday_names[today.weekday()]
         
-        # 转换数据为表格格式
+        # 转换数据为详细表格格式
         table_rows = []
         for c in campaigns_data:
-            roi = 0
-            if c.get('cost', 0) > 0:
-                roi = (c.get('commission', 0) * 0.72 - c.get('cost', 0)) / c.get('cost', 0)
+            # 计算关键指标
+            cost = c.get('cost', 0) or 0
+            clicks = c.get('clicks', 0) or 0
+            impressions = c.get('impressions', 0) or 0
+            commission = c.get('commission', 0) or 0
+            conservative_commission = commission * 0.72
+            roi = (conservative_commission - cost) / cost if cost > 0 else 0
+            ctr = (clicks / impressions * 100) if impressions > 0 else 0
+            epc = conservative_commission / clicks if clicks > 0 else 0
+            
             table_rows.append(
-                f"| {c.get('campaign_name', '')} | ${c.get('cost', 0):.2f} | "
-                f"${c.get('budget', 0):.2f} | ${c.get('cpc', 0):.2f} | "
-                f"{c.get('orders', 0)} | {c.get('order_days', 0)} | "
-                f"{c.get('is_budget_lost', 0)*100:.0f}% | {c.get('is_rank_lost', 0)*100:.0f}% | "
-                f"{roi:.2f} |"
+                f"| {c.get('campaign_name', '')} | "
+                f"${cost:.2f} | ${c.get('budget', 0):.2f} | ${c.get('cpc', 0):.4f} | "
+                f"{clicks} | {impressions} | {ctr:.2f}% | "
+                f"{c.get('orders', 0)} | {c.get('order_days', 0)}/7天 | "
+                f"${commission:.2f} | ${epc:.4f} | {roi*100:.1f}% | "
+                f"{c.get('is_budget_lost', 0)*100:.0f}% | {c.get('is_rank_lost', 0)*100:.0f}% |"
             )
         
-        table_header = "| 系列名 | L7D花费 | 预算 | CPC | 订单 | 出单天数 | Budget丢失 | Rank丢失 | ROI |"
-        table_divider = "|--------|---------|------|-----|------|---------|-----------|----------|-----|"
+        table_header = "| 系列名 | L7D花费 | 预算 | CPC | 点击 | 展示 | CTR | 订单 | 出单天数 | 佣金 | EPC | ROI | Budget丢失 | Rank丢失 |"
+        table_divider = "|--------|---------|------|-----|------|------|-----|------|---------|------|-----|-----|-----------|----------|"
         table_data = "\n".join([table_header, table_divider] + table_rows)
         
-        # 默认提示词
-        default_prompt = """你是一位资深的 Google Ads 品牌词套利专家。请根据以下广告系列数据生成操作报告。
+        # 默认提示词 - 专业广告分析报告
+        default_prompt = """你是一位拥有10年以上经验的跨境电商 Google Ads 投放专家，精通品牌词套利策略。请对以下广告系列数据进行深度分析，生成一份专业的广告投放分析报告。
 
-## 输出格式要求
+## 报告结构要求
 
-对于每个广告系列，输出以下格式的执行指令：
+对于每个广告系列，请输出以下内容：
 
-**[广告系列名]**
-- CPC 当前值→建议值
-- 预算 $当前值→$建议值(变化%)
-- 状态: 维持/暂停/加预算
-- 原因: 简要说明
+### 📊 [广告系列名称]
 
-## 分析规则
+#### 1. 阶段评价
+分析该广告系列目前处于什么阶段：
+- 🌱 冷启动期（数据不足，需要观察）
+- 📈 成长期（数据向好，值得投入）
+- 🏆 成熟期（稳定盈利，优化细节）
+- 📉 衰退期（效果下滑，需要调整）
 
-1. ROI < 0.8 → 考虑降低CPC或暂停
-2. ROI > 1.5 且 Budget丢失 > 30% → 加预算
-3. Rank丢失 > 20% → 考虑提高CPC
-4. 连续7天无订单 → 暂停
-5. 出单天数 ≥ 5 且 ROI > 2 → 表现优秀，可加预算
+总结过去7天的整体表现。
 
-## 注意事项
+#### 2. 市场洞察
+- 从系列名称解析商家信息和投放国家
+- 分析该商家在投放国家的市场竞争情况
+- 评估同类品牌词的竞价强度
 
-- 所有数值变化用箭头 → 表示
-- 预算变化需显示百分比，如 $10→$15(+50%)
-- CPC变化需精确到小数点后2位
-- 保持简洁，每个系列最多4行
+#### 3. 数据深度分析
+- **CPC 分析**: 当前CPC是否合理？与EPC对比如何？是否存在倒挂风险？
+- **费用效率**: L7D花费与产出比是否健康？
+- **点击率趋势**: CTR表现如何？是否需要优化广告素材？
+- **转化情况**: 订单数和出单天数说明了什么？
+- **ROI 健康度**: ROI是否达标？与行业基准对比如何？
+- **流量瓶颈**: Budget丢失和Rank丢失分别说明什么问题？
 
-请基于数据生成简洁、可执行的操作指令。"""
+#### 4. 节日营销预判
+- 该投放国家未来2-4周是否有重要节日？
+- 是否需要提前调整预算布局？
+- 头图/广告素材是否需要节日化优化？
+
+#### 5. 优化建议
+- **推荐预算**: $XX（说明调整原因）
+- **推荐CPC**: $X.XX（说明定价逻辑，如红线CPC计算）
+- **其他建议**: 关键词优化、广告素材、投放时段等
+
+#### 6. 风险提示
+- 需要关注的潜在风险
+- 建议监控的关键指标
+- 触发预警的条件
+
+---
+
+## 分析规则参考
+
+- 保守EPC = 佣金 × 0.72 ÷ 点击数
+- 保守ROI = (保守佣金 - 花费) ÷ 花费
+- 红线CPC = 保守EPC × 0.7（CPC不应超过此值）
+- 日均点击 = L7D点击 ÷ 7
+- Budget瓶颈: Budget丢失 ≥ 40% 说明预算不足
+- Rank瓶颈: Rank丢失 ≥ 40% 说明出价不够
+
+## 输出要求
+
+1. 使用专业、详实的语言
+2. 每个分析点要有数据支撑
+3. 建议要具体可执行
+4. 不要输出简单的操作指令表格"""
 
         prompt_text = custom_prompt if custom_prompt and custom_prompt.strip() else default_prompt
         
         full_prompt = f"""{prompt_text}
 
 ══════════════════════════════════════
-【今日日期】{today.strftime('%Y-%m-%d')}
+【今日日期】{today.strftime('%Y-%m-%d')} {weekday_name}
+【广告系列数量】{len(campaigns_data)} 个
 ══════════════════════════════════════
 
-【广告系列数据】
+【广告系列详细数据】
 {table_data}
 
-请开始生成操作报告。"""
+请开始生成专业分析报告。"""
 
         try:
             analysis = self._call_api(full_prompt)
@@ -787,6 +830,6 @@ G) 综述
                 "timestamp": datetime.now().isoformat()
             }
         except Exception as e:
-            logger.error(f"生成操作报告失败: {e}")
+            logger.error(f"生成专业分析报告失败: {e}")
             return {"success": False, "message": str(e)}
 

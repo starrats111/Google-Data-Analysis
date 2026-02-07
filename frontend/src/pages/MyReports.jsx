@@ -97,73 +97,42 @@ const MyReports = () => {
     fetchReports()
   }, [])
 
-  // 解析操作指令
-  const parseInstructions = (content) => {
-    if (!content) return []
-    
-    // 匹配类似 "CPC 0.10→0.08" 或 "预算 $10.00→$15.00(+50%)" 的模式
-    const regex = /(\w+)\s*([\d$.]+)\s*→\s*([\d$.]+)(\([+-]?\d+%\))?/g
-    const instructions = []
-    let match
-    
-    while ((match = regex.exec(content)) !== null) {
-      instructions.push({
-        type: match[1],
-        from: match[2],
-        to: match[3],
-        change: match[4] || ''
-      })
-    }
-    
-    return instructions
-  }
-
   const columns = [
     {
       title: '日期',
       dataIndex: 'created_at',
       key: 'created_at',
-      width: 120,
-      render: (v) => v ? dayjs(v).format('YYYY-MM-DD') : '-',
+      width: 150,
+      render: (v) => v ? dayjs(v).format('YYYY-MM-DD HH:mm') : '-',
     },
     {
       title: '广告系列数',
       dataIndex: 'campaign_count',
       key: 'campaign_count',
-      width: 100,
+      width: 120,
       align: 'center',
-      render: (v) => <Tag color="blue">{v || 0}</Tag>
+      render: (v) => <Tag color="blue">{v || 0} 个系列</Tag>
     },
     {
-      title: '执行指令预览',
-      dataIndex: 'summary',
-      key: 'summary',
+      title: '报告摘要',
+      dataIndex: 'content',
+      key: 'content',
       ellipsis: true,
-      render: (_, record) => {
-        const instructions = parseInstructions(record.content)
-        if (instructions.length === 0) {
-          return <Text type="secondary">-</Text>
-        }
-        return (
-          <Space size={4} wrap>
-            {instructions.slice(0, 3).map((inst, idx) => (
-              <Tag key={idx} color={inst.type === 'CPC' ? 'orange' : 'green'}>
-                {inst.type} {inst.from}→{inst.to}{inst.change}
-              </Tag>
-            ))}
-            {instructions.length > 3 && <Text type="secondary">+{instructions.length - 3}条</Text>}
-          </Space>
-        )
+      render: (content) => {
+        if (!content) return <Text type="secondary">-</Text>
+        // 提取第一段作为摘要
+        const firstLine = content.split('\n').find(line => line.trim() && !line.startsWith('#'))
+        return <Text type="secondary">{firstLine?.substring(0, 80) || '-'}...</Text>
       }
     },
     {
       title: '操作',
       key: 'action',
-      width: 120,
+      width: 150,
       fixed: 'right',
       render: (_, record) => (
         <Space size="small">
-          <Tooltip title="查看报告">
+          <Tooltip title="查看完整报告">
             <Button 
               type="primary" 
               ghost 
@@ -188,25 +157,41 @@ const MyReports = () => {
   ]
 
   // 默认提示词模板
-  const defaultPromptTemplate = `你是一位资深的 Google Ads 品牌词套利专家。请根据以下广告系列数据生成操作报告。
+  const defaultPromptTemplate = `你是一位资深的跨境电商 Google Ads 投放专家，拥有10年+品牌词套利经验。请对以下广告系列数据进行深度分析，生成一份专业的广告投放分析报告。
 
-## 输出格式要求
+## 报告结构要求
 
-对于每个广告系列，输出以下格式的执行指令：
+对于每个广告系列，请输出以下内容：
 
-**[广告系列名]**
-- CPC 当前值→建议值
-- 预算 $当前值→$建议值(变化%)
-- 状态: 维持/暂停/加预算
+### 1. 阶段评价
+- 该广告系列目前处于什么阶段（冷启动/成长期/成熟期/衰退期）
+- 过去7天的整体表现总结
 
-## 分析规则
+### 2. 市场洞察
+- 该商家在投放国家的市场竞争情况
+- 同类品牌词的竞价强度分析
 
-1. ROI < 0.8 → 考虑降低CPC或暂停
-2. ROI > 1.5 且 Budget丢失 > 30% → 加预算
-3. Rank丢失 > 20% → 考虑提高CPC
-4. 连续7天无订单 → 暂停
+### 3. 数据深度分析
+- CPC变化原因分析（为什么上升/下降）
+- 费用变化原因分析
+- 点击率和转化率趋势
+- ROI健康度评估
 
-请基于数据生成简洁、可执行的操作指令。`
+### 4. 节日营销预判
+- 未来2-4周是否有重要节日
+- 是否需要提前布局节日营销
+- 是否需要优化头图/广告素材
+
+### 5. 优化建议
+- 推荐预算：$XX（原因说明）
+- 推荐CPC：$X.XX（原因说明）
+- 其他优化建议
+
+### 6. 风险提示
+- 需要关注的潜在风险
+- 建议的监控指标
+
+请用专业、详实的语言输出报告，不要输出简单的操作指令。`
 
   return (
     <div className="analysis-page">
@@ -217,7 +202,7 @@ const MyReports = () => {
             我的报告
           </Title>
           <Text className="analysis-page__subtitle">
-            查看 AI 生成的广告分析报告，包含可执行的操作指令
+            查看 AI 生成的专业广告分析报告，包含阶段评价、市场洞察和优化建议
           </Text>
         </div>
         <Space>
@@ -293,40 +278,22 @@ const MyReports = () => {
           <div>
             <div style={{ marginBottom: 16 }}>
               <Space>
-                <Tag color="blue">📊 广告系列: {selectedReport.campaign_count}</Tag>
+                <Tag color="blue">📊 共 {selectedReport.campaign_count} 个广告系列</Tag>
+                <Tag color="green">📅 {dayjs(selectedReport.created_at).format('YYYY-MM-DD HH:mm')}</Tag>
               </Space>
             </div>
-            
-            {/* 执行指令摘要 */}
-            <Card 
-              title="📋 执行指令摘要" 
-              size="small" 
-              style={{ marginBottom: 16 }}
-              styles={{ body: { padding: 12 } }}
-            >
-              <Space wrap>
-                {parseInstructions(selectedReport.content).map((inst, idx) => (
-                  <Tag 
-                    key={idx} 
-                    color={inst.type === 'CPC' ? 'orange' : inst.type === '预算' ? 'green' : 'blue'}
-                    style={{ fontSize: 13, padding: '4px 8px' }}
-                  >
-                    {inst.type} {inst.from}→{inst.to}{inst.change}
-                  </Tag>
-                ))}
-              </Space>
-            </Card>
 
             {/* 完整报告 */}
             <div 
               style={{ 
-                background: '#f5f5f5', 
-                padding: 16, 
-                borderRadius: 8,
+                background: 'linear-gradient(135deg, #667eea05 0%, #764ba205 100%)',
+                border: '1px solid #e8e8e8',
+                padding: 20, 
+                borderRadius: 12,
                 whiteSpace: 'pre-wrap',
-                fontFamily: 'monospace',
-                fontSize: 13,
-                lineHeight: 1.6
+                fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif',
+                fontSize: 14,
+                lineHeight: 1.8
               }}
             >
               {selectedReport.content}
