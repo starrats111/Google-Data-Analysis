@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react'
 import { Card, Table, Space, message, Tag, Typography, Button, Modal, Spin, Empty, Tooltip, Input } from 'antd'
-import { FileTextOutlined, DeleteOutlined, CopyOutlined, SettingOutlined, ArrowLeftOutlined, CloseOutlined } from '@ant-design/icons'
+import { FileTextOutlined, DeleteOutlined, CopyOutlined, SettingOutlined, ArrowLeftOutlined, CloseOutlined, RobotOutlined } from '@ant-design/icons'
+import { useNavigate } from 'react-router-dom'
 import dayjs from 'dayjs'
 import api from '../services/api'
 import './Analysis.css'
@@ -8,6 +9,7 @@ import './Analysis.css'
 const { Title, Text, Paragraph } = Typography
 
 const MyReports = () => {
+  const navigate = useNavigate()
   const [reports, setReports] = useState([])
   const [loading, setLoading] = useState(false)
   const [selectedReport, setSelectedReport] = useState(null)
@@ -240,6 +242,18 @@ const MyReports = () => {
 
   return (
     <div className="analysis-page">
+      {/* 顶部返回按钮 */}
+      <div style={{ marginBottom: 16 }}>
+        <Button 
+          type="link" 
+          icon={<ArrowLeftOutlined />} 
+          onClick={() => navigate(-1)}
+          style={{ padding: 0, fontSize: 14 }}
+        >
+          返回上一页
+        </Button>
+      </div>
+      
       <div className="analysis-page__header">
         <div>
           <Title level={3} className="analysis-page__title">
