@@ -99,27 +99,178 @@ const MyReports = () => {
     fetchReports()
   }, [])
 
-  // 渲染报告内容 - 纯文本格式，保持原样
+  // 渲染报告内容 - 清晰排版，减少特殊字符
   const renderFormattedReport = (content) => {
     if (!content) return null
 
+    // 解析报告内容，按广告系列分段
+    const sections = content.split(/(?=###\s)/g).filter(s => s.trim())
+    
     return (
-      <pre style={{ 
-        fontSize: 14, 
-        lineHeight: 1.8, 
-        color: '#333',
-        whiteSpace: 'pre-wrap',
-        wordBreak: 'break-word',
-        fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif',
-        margin: 0,
-        padding: '12px 16px',
-        background: '#fafafa',
-        borderRadius: 8,
+      <div style={{ 
         maxHeight: 'calc(100vh - 280px)',
-        overflowY: 'auto'
+        overflowY: 'auto',
+        padding: '0 8px'
       }}>
-        {content}
-      </pre>
+        {sections.map((section, idx) => {
+          // 解析每个系列的内容
+          const lines = section.split('\n').filter(l => l.trim())
+          const titleLine = lines.find(l => l.startsWith('###'))
+          const campaignName = titleLine ? titleLine.replace(/^#+\s*/, '').replace(/[📊🔶🔷💎⭐🎯📈📉✅❌⚠️🔴🟡🟢💰☕▲]/g, '').trim() : `系列 ${idx + 1}`
+          
+          // 提取关键信息
+          let level = ''
+          let levelColor = '#1890ff'
+          const contentLines = lines.filter(l => !l.startsWith('###'))
+          
+          // 查找级别
+          const levelMatch = section.match(/级别[：:]\s*(S|B|D)/i) || section.match(/(S级|B级|D级)/i)
+          if (levelMatch) {
+            level = levelMatch[1].toUpperCase().replace('级', '')
+            if (level === 'S') levelColor = '#52c41a'
+            else if (level === 'D') levelColor = '#ff4d4f'
+            else levelColor = '#faad14'
+          }
+          
+          // 查找阶段评价
+          const phaseMatch = section.match(/阶段评价[：:]\s*([^\n]+)/i)
+          const phase = phaseMatch ? phaseMatch[1].replace(/[🏆📈📉⚠️🎯💎✨]/g, '').trim() : ''
+          
+          // 查找动作/操作建议
+          const actionMatch = section.match(/动作[：:]\s*([^\n]+)/i) || section.match(/操作[：:]\s*([^\n]+)/i)
+          const action = actionMatch ? actionMatch[1].trim() : ''
+          
+          return (
+            <div 
+              key={idx} 
+              style={{ 
+                marginBottom: 20,
+                background: '#fff',
+                border: '1px solid #e8e8e8',
+                borderRadius: 8,
+                overflow: 'hidden'
+              }}
+            >
+              {/* 系列标题栏 */}
+              <div style={{ 
+                background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+                padding: '12px 16px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between'
+              }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                  <span style={{ 
+                    color: '#fff', 
+                    fontWeight: 600, 
+                    fontSize: 15 
+                  }}>
+                    {campaignName}
+                  </span>
+                  {level && (
+                    <span style={{ 
+                      background: levelColor,
+                      color: '#fff',
+                      padding: '2px 10px',
+                      borderRadius: 4,
+                      fontSize: 12,
+                      fontWeight: 600
+                    }}>
+                      {level}级
+                    </span>
+                  )}
+                </div>
+                {action && (
+                  <span style={{ 
+                    background: 'rgba(255,255,255,0.2)',
+                    color: '#fff',
+                    padding: '4px 12px',
+                    borderRadius: 4,
+                    fontSize: 13
+                  }}>
+                    {action}
+                  </span>
+                )}
+              </div>
+              
+              {/* 内容区域 */}
+              <div style={{ padding: '16px' }}>
+                {contentLines.map((line, lineIdx) => {
+                  // 清理行内容
+                  let cleanLine = line
+                    .replace(/^#+\s*/, '')
+                    .replace(/^\*+\s*/, '')
+                    .replace(/^-+\s*/, '')
+                    .replace(/\*\*/g, '')
+                    .replace(/[📊🔶🔷💎⭐🎯📈📉✅❌⚠️🔴🟡🟢💰☕▲✓✗]/g, '')
+                    .trim()
+                  
+                  if (!cleanLine) return null
+                  
+                  // 识别小标题 (数字开头或关键词)
+                  const isSubTitle = /^\d+\.\s*\w/.test(cleanLine) || 
+                    /^(阶段评价|市场洞察|数据深度分析|节日营销预判|优化建议|风险提示|检验|诊断|动作|效果)/i.test(cleanLine)
+                  
+                  // 识别关键数据行
+                  const isDataLine = /ROI|EPC|CPC|预算|Budget|Rank|点击|佣金|\$\d/.test(cleanLine)
+                  
+                  if (isSubTitle) {
+                    return (
+                      <div 
+                        key={lineIdx} 
+                        style={{ 
+                          fontWeight: 600,
+                          fontSize: 14,
+                          color: '#1a1a2e',
+                          marginTop: lineIdx > 0 ? 16 : 0,
+                          marginBottom: 8,
+                          paddingBottom: 6,
+                          borderBottom: '1px solid #f0f0f0'
+                        }}
+                      >
+                        {cleanLine}
+                      </div>
+                    )
+                  }
+                  
+                  if (isDataLine) {
+                    return (
+                      <div 
+                        key={lineIdx} 
+                        style={{ 
+                          background: '#f6f8fa',
+                          padding: '8px 12px',
+                          borderRadius: 4,
+                          marginBottom: 6,
+                          fontSize: 13,
+                          color: '#24292e',
+                          fontFamily: 'Monaco, Consolas, monospace'
+                        }}
+                      >
+                        {cleanLine}
+                      </div>
+                    )
+                  }
+                  
+                  return (
+                    <div 
+                      key={lineIdx} 
+                      style={{ 
+                        fontSize: 14,
+                        color: '#333',
+                        lineHeight: 1.7,
+                        marginBottom: 6
+                      }}
+                    >
+                      {cleanLine}
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+          )
+        })}
+      </div>
     )
   }
 
