@@ -2110,31 +2110,57 @@ class AnalysisService:
                 budget = 0
             
             # 按照公式逻辑生成操作指令（带具体数值）
-            # 1. 如果保守ROI < -0.4，立即关停
+            # 注意：conservative_roi 是小数形式（如 0.589 = 58.9%）
+            # 将阈值转换为小数形式：-40% = -0.4, 300% = 3.0, 200% = 2.0, 100% = 1.0
+            
+            instructions = []
+            
+            # 1. 如果保守ROI < -40%，立即关停
             if conservative_roi < -0.4:
                 return "关停"
             
-            # 2. 如果保守ROI < 0（但不小于-0.4），CPC降价0.05
+            # 2. 如果保守ROI < 0（负ROI），CPC降价
             if conservative_roi < 0:
-                new_cpc = max(0.01, cpc - 0.05)
-                return f"CPC ${cpc:.2f}→${new_cpc:.2f}"
+                if cpc > 0:
+                    new_cpc = max(0.01, cpc - 0.05)
+                    return f"CPC ${cpc:.2f}→${new_cpc:.2f}"
+                else:
+                    return "ROI为负；降CPC"
             
-            # 3. 如果保守ROI > 3 且 预算错失份额 > 0.2 且 过去七天出单天数 >= 4，预算*1.3
-            if conservative_roi > 3 and budget_lost_share > 0.2 and past_seven_days_orders >= 4:
-                new_budget = budget * 1.3
-                change_pct = 30
-                return f"加预算；提高CPC" if budget == 0 else f"预算 ${budget:.0f}→${new_budget:.0f}(+{change_pct}%)"
-            
-            # 4. 如果保守ROI > 2 且 排名错失份额 > 0.15 且 最高CPC < (CPC*0.8)，CPC+0.02
-            if conservative_roi > 2 and rank_lost_share > 0.15 and max_cpc < (cpc * 0.8):
-                new_cpc = cpc + 0.02
-                return f"CPC ${cpc:.2f}→${new_cpc:.2f}"
-            
-            # 5. 如果保守ROI >= 1，状态稳定
-            if conservative_roi >= 1:
+            # 3. 如果保守ROI >= 100%（ROI优秀）
+            if conservative_roi >= 1.0:
+                # 有预算瓶颈，加预算
+                if budget_lost_share > 0.2 and past_seven_days_orders >= 4:
+                    if budget > 0:
+                        new_budget = budget * 1.3
+                        instructions.append(f"预算 ${budget:.0f}→${new_budget:.0f}(+30%)")
+                    else:
+                        instructions.append("加预算")
+                
+                # 有排名瓶颈，提高CPC
+                if rank_lost_share > 0.15:
+                    if cpc > 0:
+                        new_cpc = cpc + 0.02
+                        instructions.append(f"CPC ${cpc:.2f}→${new_cpc:.2f}")
+                    else:
+                        instructions.append("提高CPC")
+                
+                if instructions:
+                    return " | ".join(instructions)
                 return "维持"
             
-            # 6. 其他情况，样本不足
+            # 4. 如果保守ROI >= 50%（中等ROI）
+            if conservative_roi >= 0.5:
+                # 只有预算瓶颈时加预算
+                if budget_lost_share > 0.3:
+                    if budget > 0:
+                        new_budget = budget * 1.2
+                        return f"预算 ${budget:.0f}→${new_budget:.0f}(+20%)"
+                    else:
+                        return "加预算"
+                return "维持"
+            
+            # 5. ROI较低但为正，样本不足
             return "样本不足"
             
         except Exception as e:

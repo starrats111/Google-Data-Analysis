@@ -370,6 +370,8 @@ async def generate_l7d_from_daily(
                     order_days = cached.get("order_days", 0)
         # 修复：MAX CPC应该是过去7天中CPC的最大值，而不是最高CPC的最大值
         max_cpc_7d = max((m.cpc or 0) for m in items) if items else 0
+        # 获取最新的预算
+        budget_7d = max((m.budget or 0) for m in items) if items else 0
 
         roi = ((comm - cost) / cost) if cost > 0 else None
         
@@ -408,6 +410,7 @@ async def generate_l7d_from_daily(
             "最高CPC": max_cpc_7d,
             "CPC": max_cpc_7d,  # 使用MAX CPC作为CPC值
             "订单": orders,
+            "预算": budget_7d,  # 添加预算字段
         }
         # 生成操作指令
         operation_instruction = analysis_service._generate_operation_instruction(
@@ -426,6 +429,7 @@ async def generate_l7d_from_daily(
             "L7D花费": cost,
             "L7D出单天数": order_days,
             "当前Max CPC": max_cpc_7d,
+            "预算": budget_7d,
             "IS Budget丢失": is_budget_lost,
             "IS Rank丢失": is_rank_lost,
             "保守EPC": conservative_epc,
@@ -637,6 +641,8 @@ async def generate_l7d_from_daily_with_google(
                     order_days = cached.get("order_days", 0)
         # 修复：MAX CPC应该是过去7天中CPC的最大值，而不是最高CPC的最大值
         max_cpc_7d = max((m.cpc or 0) for m in items) if items else 0
+        # 获取最新的预算
+        budget_7d = max((m.budget or 0) for m in items) if items else 0
         roi = ((comm - cost) / cost) if cost > 0 else None
         
         # 过滤掉没有数据的广告系列（点击=0 且 花费=0 且 佣金=0）
@@ -674,6 +680,7 @@ async def generate_l7d_from_daily_with_google(
             "最高CPC": max_cpc_7d,
             "CPC": max_cpc_7d,  # 使用MAX CPC作为CPC值
             "订单": orders,
+            "预算": budget_7d,  # 添加预算字段
         }
         # 生成操作指令
         operation_instruction = analysis_service._generate_operation_instruction(
@@ -692,6 +699,7 @@ async def generate_l7d_from_daily_with_google(
             "L7D花费": cost,
             "L7D出单天数": order_days,
             "当前Max CPC": max_cpc_7d,
+            "预算": budget_7d,
             "IS Budget丢失": is_budget_lost,
             "IS Rank丢失": is_rank_lost,
             "保守EPC": conservative_epc,
