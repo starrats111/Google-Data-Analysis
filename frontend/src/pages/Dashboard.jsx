@@ -349,13 +349,61 @@ const Dashboard = () => {
           >
             <Spin spinning={calendarLoading}>
               {calendarData ? (
-                <div style={{ maxHeight: 400, overflow: 'auto' }}>
-                  <Paragraph>
-                    <Text strong>📅 {calendarData.current_month} ~ {calendarData.next_month}</Text>
-                  </Paragraph>
-                  <div style={{ whiteSpace: 'pre-wrap', fontSize: 13, lineHeight: 1.8 }}>
-                    {calendarData.calendar}
-                  </div>
+                <div style={{ maxHeight: 420, overflow: 'auto' }}>
+                  {calendarData.holidays && calendarData.holidays.length > 0 ? (
+                    <div>
+                      <div style={{ marginBottom: 12 }}>
+                        <Text type="secondary">📅 {calendarData.country_name} · 未来节日（{calendarData.holidays.length}个）</Text>
+                      </div>
+                      {calendarData.holidays.map((holiday, idx) => (
+                        <div key={idx} style={{ 
+                          padding: 12, 
+                          marginBottom: 12, 
+                          background: '#fafafa', 
+                          borderRadius: 8,
+                          borderLeft: '4px solid #1890ff'
+                        }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 8 }}>
+                            <div>
+                              <Text strong style={{ fontSize: 15 }}>{holiday.name_cn}</Text>
+                              <Text type="secondary" style={{ marginLeft: 8 }}>({holiday.name_en})</Text>
+                            </div>
+                            <Tag color="blue">{holiday.date}</Tag>
+                          </div>
+                          <div style={{ marginBottom: 6 }}>
+                            <Text type="warning">{holiday.importance}</Text>
+                            <Text style={{ marginLeft: 8 }}>{holiday.meaning}</Text>
+                          </div>
+                          <div style={{ marginBottom: 6 }}>
+                            <Text type="secondary">适用品类：</Text>
+                            {holiday.categories?.map((cat, i) => (
+                              <Tag key={i} style={{ marginBottom: 4 }}>{cat}</Tag>
+                            ))}
+                          </div>
+                          {holiday.brands && holiday.brands.length > 0 && (
+                            <div style={{ marginBottom: 6 }}>
+                              <Text type="secondary">适用品牌：</Text>
+                              {holiday.brands.map((brand, i) => (
+                                <Tag key={i} color="green" style={{ marginBottom: 4 }}>{brand}</Tag>
+                              ))}
+                            </div>
+                          )}
+                          <div style={{ background: '#e6f7ff', padding: '6px 10px', borderRadius: 4, marginTop: 6 }}>
+                            <Text style={{ fontSize: 12 }}>💡 {holiday.tips}</Text>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : calendarData.calendar ? (
+                    // 备用：如果JSON解析失败，显示原始文本
+                    <div style={{ whiteSpace: 'pre-wrap', fontSize: 13, lineHeight: 1.8 }}>
+                      {calendarData.calendar}
+                    </div>
+                  ) : (
+                    <div style={{ textAlign: 'center', padding: 40, color: '#999' }}>
+                      <Text>暂无未来节日数据</Text>
+                    </div>
+                  )}
                 </div>
               ) : (
                 <div style={{ textAlign: 'center', padding: 40, color: '#999' }}>

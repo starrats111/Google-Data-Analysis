@@ -330,7 +330,7 @@ class GeminiService:
         year: Optional[int] = None
     ) -> Dict:
         """
-        D. 获取热门节日和推荐商家
+        D. 获取热门节日和推荐商家（返回结构化JSON）
         
         Args:
             country: 国家代码（US/UK/DE/FR等）
@@ -338,7 +338,7 @@ class GeminiService:
             year: 年份（默认今年）
         
         Returns:
-            节日列表和商家推荐
+            节日列表和商家推荐（JSON结构）
         """
         today = date.today()
         if not month:
@@ -357,35 +357,85 @@ class GeminiService:
         }
         country_name = country_names.get(country, country)
         
-        prompt = f"""你是一位跨境电商营销专家。请提供{country_name}的营销日历信息。
+        prompt = f"""你是一位跨境电商营销专家。请提供{country_name}未来2个月（{year}年{month}月和{next_year}年{next_month}月）的营销日历信息。
 
-请列出以下内容：
+今天是 {today.strftime('%Y-%m-%d')}，只返回今天及以后的节日，已过去的节日不要返回。
 
-## {year}年{month}月 - {country_name}热门节日/营销节点
+请严格按以下JSON格式返回，不要添加任何其他文字：
+```json
+{{
+  "holidays": [
+    {{
+      "name_en": "Valentine's Day",
+      "name_cn": "情人节",
+      "date": "2026-02-14",
+      "importance": "⭐⭐⭐⭐⭐",
+      "meaning": "极其重要的电商节点，礼品销售高峰期",
+      "categories": ["珠宝", "巧克力", "鲜花", "服装", "香水", "家居装饰"],
+      "brands": ["Norma Kamali", "B&W/Polk"],
+      "tips": "1月中下旬开始进入礼品搜索期，提前预热"
+    }}
+  ]
+}}
+```
 
-对于每个节日，请提供：
-- **节日名称**（英文+中文）
-- **日期**：具体日期
-- **营销意义**：这个节日对电商的意义
-- **适用品牌/品类**：哪些类型的商家适合在这个节日营销
-- **营销建议**：简短的营销策略建议
+字段说明：
+- name_en: 英文名称
+- name_cn: 中文名称  
+- date: 日期格式 YYYY-MM-DD
+- importance: 重要性（1-5个⭐）
+- meaning: 对电商的营销意义（一句话）
+- categories: 适用品类数组
+- brands: 适用品牌示例数组
+- tips: 简短营销建议
 
-## {next_year}年{next_month}月 - {country_name}热门节日/营销节点
-
-（同样格式）
-
-请按日期顺序排列，重点标注对电商最重要的节日。用中文回答。"""
+请按日期升序排列，返回8-15个节日/营销节点。只返回JSON，不要markdown代码块标记。"""
 
         try:
-            calendar = self._call_api(prompt)
-            return {
-                "success": True,
-                "calendar": calendar,
-                "country": country,
-                "current_month": f"{year}年{month}月",
-                "next_month": f"{next_year}年{next_month}月",
-                "timestamp": datetime.now().isoformat()
-            }
+            response = self._call_api(prompt)
+            
+            # 尝试解析JSON
+            try:
+                # 清理响应：移除可能的markdown代码块标记
+                clean_response = response.strip()
+                if clean_response.startswith('```json'):
+                    clean_response = clean_response[7:]
+                if clean_response.startswith('```'):
+                    clean_response = clean_response[3:]
+                if clean_response.endswith('```'):
+                    clean_response = clean_response[:-3]
+                clean_response = clean_response.strip()
+                
+                data = json.loads(clean_response)
+                holidays = data.get('holidays', [])
+                
+                # 过滤已过去的节日
+                today_str = today.strftime('%Y-%m-%d')
+                future_holidays = [h for h in holidays if h.get('date', '') >= today_str]
+                
+                return {
+                    "success": True,
+                    "holidays": future_holidays,
+                    "country": country,
+                    "country_name": country_name,
+                    "current_month": f"{year}年{month}月",
+                    "next_month": f"{next_year}年{next_month}月",
+                    "today": today_str,
+                    "timestamp": datetime.now().isoformat()
+                }
+            except json.JSONDecodeError as je:
+                logger.warning(f"JSON解析失败，返回原始文本: {je}")
+                # 如果解析失败，返回原始文本作为备用
+                return {
+                    "success": True,
+                    "calendar": response,
+                    "holidays": [],
+                    "country": country,
+                    "country_name": country_name,
+                    "current_month": f"{year}年{month}月",
+                    "next_month": f"{next_year}年{next_month}月",
+                    "timestamp": datetime.now().isoformat()
+                }
         except Exception as e:
             logger.error(f"获取营销日历失败: {e}")
             return {"success": False, "message": str(e)}
