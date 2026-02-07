@@ -60,11 +60,17 @@ async def get_overview(
     )
 
     # 佣金：按交易时间窗口（所有状态计入总佣金）
+    # 排除已删除/停用账号的交易
     start_dt = datetime.combine(start_7d, datetime.min.time())
     end_dt = datetime.combine(today, datetime.max.time())
-    commission_7d = db.query(func.sum(AffiliateTransaction.commission_amount)).filter(
+    commission_7d = db.query(func.sum(AffiliateTransaction.commission_amount)).outerjoin(
+        AffiliateAccount,
+        AffiliateTransaction.affiliate_account_id == AffiliateAccount.id
+    ).filter(
         AffiliateTransaction.transaction_time >= start_dt,
         AffiliateTransaction.transaction_time <= end_dt,
+        # 排除已停用账号的交易（账号不存在或已激活）
+        (AffiliateAccount.id.is_(None)) | (AffiliateAccount.is_active == True)
     ).scalar() or 0.0
 
     # 活跃员工：近7天有Google Ads数据或有交易数据的员工
@@ -145,15 +151,19 @@ async def get_employees_data(
             if existing is None or new_ts > existing:
                 ads_map[uid]["last_sync_at"] = new_ts
 
-    # 交易聚合（近7天）
+    # 交易聚合（近7天）- 排除已停用账号
     tx_rows = db.query(
         AffiliateTransaction.user_id,
         func.sum(AffiliateTransaction.commission_amount).label("commission_7d"),
         func.count(AffiliateTransaction.id).label("orders_7d"),
+    ).outerjoin(
+        AffiliateAccount,
+        AffiliateTransaction.affiliate_account_id == AffiliateAccount.id
     ).filter(
         AffiliateTransaction.user_id.in_(employee_ids),
         AffiliateTransaction.transaction_time >= start_dt,
         AffiliateTransaction.transaction_time <= end_dt,
+        (AffiliateAccount.id.is_(None)) | (AffiliateAccount.is_active == True)
     ).group_by(AffiliateTransaction.user_id).all()
     tx_map = {
         r.user_id: {
@@ -304,14 +314,18 @@ async def get_employee_insights(
         cost_usd = convert_to_usd(float(r.cost or 0.0), currency)
         cost_map[ds] = cost_map.get(ds, 0.0) + cost_usd
 
-    # 2) 趋势：联盟佣金（所有状态计入总佣金）（按天）
+    # 2) 趋势：联盟佣金（所有状态计入总佣金）（按天）- 排除已停用账号
     comm_rows = db.query(
         func.date(AffiliateTransaction.transaction_time).label("d"),
         func.sum(AffiliateTransaction.commission_amount).label("commission"),
+    ).outerjoin(
+        AffiliateAccount,
+        AffiliateTransaction.affiliate_account_id == AffiliateAccount.id
     ).filter(
         AffiliateTransaction.user_id == target_user_id,
         AffiliateTransaction.transaction_time >= start_dt,
         AffiliateTransaction.transaction_time <= end_dt,
+        (AffiliateAccount.id.is_(None)) | (AffiliateAccount.is_active == True)
     ).group_by(func.date(AffiliateTransaction.transaction_time)).all()
     comm_map = {
         (r.d.strftime("%Y-%m-%d") if hasattr(r.d, "strftime") else str(r.d)): float(r.commission or 0.0)
@@ -348,16 +362,20 @@ async def get_employee_insights(
         if pcode and acode:
             acct_map[(pcode, acode)] = int(r.id)
 
-    # 4) 预加载：近区间内按 affiliate_account_id 聚合佣金/订单
+    # 4) 预加载：近区间内按 affiliate_account_id 聚合佣金/订单 - 排除已停用账号
     tx_by_acct = db.query(
         AffiliateTransaction.affiliate_account_id.label("aid"),
         func.sum(AffiliateTransaction.commission_amount).label("commission"),
         func.count(AffiliateTransaction.id).label("orders"),
+    ).join(
+        AffiliateAccount,
+        AffiliateTransaction.affiliate_account_id == AffiliateAccount.id
     ).filter(
         AffiliateTransaction.user_id == target_user_id,
         AffiliateTransaction.affiliate_account_id.isnot(None),
         AffiliateTransaction.transaction_time >= start_dt,
         AffiliateTransaction.transaction_time <= end_dt,
+        AffiliateAccount.is_active == True  # 只计入活跃账号
     ).group_by(AffiliateTransaction.affiliate_account_id).all()
     comm_by_aid = {int(r.aid): float(r.commission or 0.0) for r in tx_by_acct if r.aid is not None}
     orders_by_aid = {int(r.aid): int(r.orders or 0) for r in tx_by_acct if r.aid is not None}

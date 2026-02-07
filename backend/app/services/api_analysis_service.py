@@ -500,17 +500,23 @@ class ApiAnalysisService:
             
             for uid in user_ids:
                 # 查询该用户的所有交易，只按 merchant_id (MID) 分组
+                # 排除已删除/停用账号的交易
                 txn_results = self.db.query(
                     AffiliateTransaction.merchant_id,
                     func.sum(AffiliateTransaction.commission_amount).label('total_commission'),
                     func.count(AffiliateTransaction.id).label('total_orders'),
                     func.count(func.distinct(func.date(AffiliateTransaction.transaction_time))).label('order_days')
+                ).outerjoin(
+                    AffiliateAccount,
+                    AffiliateTransaction.affiliate_account_id == AffiliateAccount.id
                 ).filter(
                     AffiliateTransaction.user_id == uid,
                     AffiliateTransaction.merchant_id.isnot(None),  # 只查有 MID 的
                     AffiliateTransaction.merchant_id != 'None',
                     func.date(AffiliateTransaction.transaction_time) >= begin_date,
-                    func.date(AffiliateTransaction.transaction_time) <= end_date
+                    func.date(AffiliateTransaction.transaction_time) <= end_date,
+                    # 排除已删除/停用账号的交易（账号不存在或已停用）
+                    (AffiliateAccount.id.is_(None)) | (AffiliateAccount.is_active == True)
                 ).group_by(
                     AffiliateTransaction.merchant_id
                 ).all()

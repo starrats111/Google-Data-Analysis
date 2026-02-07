@@ -15,6 +15,7 @@ from app.database import get_db
 from app.middleware.auth import get_current_user
 from app.models.user import User
 from app.models.affiliate_transaction import AffiliateTransaction
+from app.models.affiliate_account import AffiliateAccount
 
 logger = logging.getLogger(__name__)
 
@@ -88,6 +89,7 @@ async def get_platform_data_detail(
         
         # 基础查询：按日期+平台+商户聚合
         # SQLite使用date()函数提取日期
+        # 排除已删除/停用账号的交易
         from sqlalchemy import func as sql_func
         query = db.query(
             func.date(AffiliateTransaction.transaction_time).label('date'),
@@ -108,9 +110,14 @@ async def get_platform_data_detail(
                     else_=0
                 )
             ).label('rejected_commission')
+        ).outerjoin(
+            AffiliateAccount,
+            AffiliateTransaction.affiliate_account_id == AffiliateAccount.id
         ).filter(
             AffiliateTransaction.transaction_time >= begin_datetime,
-            AffiliateTransaction.transaction_time <= end_datetime
+            AffiliateTransaction.transaction_time <= end_datetime,
+            # 排除已停用账号的交易
+            (AffiliateAccount.id.is_(None)) | (AffiliateAccount.is_active == True)
         )
         
         # 权限控制：员工只能看自己的数据
@@ -277,10 +284,15 @@ async def get_platform_data_summary(
         begin_datetime = datetime.combine(begin, datetime.min.time())
         end_datetime = datetime.combine(end, datetime.max.time())
         
-        # 基础查询
-        base_query = db.query(AffiliateTransaction).filter(
+        # 基础查询 - 排除已停用账号的交易
+        base_query = db.query(AffiliateTransaction).outerjoin(
+            AffiliateAccount,
+            AffiliateTransaction.affiliate_account_id == AffiliateAccount.id
+        ).filter(
             AffiliateTransaction.transaction_time >= begin_datetime,
-            AffiliateTransaction.transaction_time <= end_datetime
+            AffiliateTransaction.transaction_time <= end_datetime,
+            # 排除已停用账号的交易
+            (AffiliateAccount.id.is_(None)) | (AffiliateAccount.is_active == True)
         )
         
         # 权限控制

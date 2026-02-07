@@ -13,6 +13,7 @@ from app.database import get_db
 from app.middleware.auth import get_current_user, get_current_manager
 from app.models.user import User
 from app.models.affiliate_transaction import AffiliateTransaction, AffiliateRejection
+from app.models.affiliate_account import AffiliateAccount
 from app.schemas.affiliate_transaction import (
     TransactionSummaryResponse,
     RejectionDetailResponse
@@ -37,10 +38,15 @@ async def get_transaction_summary(
     3. 已确认佣金
     4. 拒付佣金
     """
-    # 构建查询条件
-    query = db.query(AffiliateTransaction).filter(
+    # 构建查询条件 - 排除已停用账号的交易
+    query = db.query(AffiliateTransaction).outerjoin(
+        AffiliateAccount,
+        AffiliateTransaction.affiliate_account_id == AffiliateAccount.id
+    ).filter(
         AffiliateTransaction.transaction_time >= datetime.combine(start_date, datetime.min.time()),
-        AffiliateTransaction.transaction_time <= datetime.combine(end_date, datetime.max.time())
+        AffiliateTransaction.transaction_time <= datetime.combine(end_date, datetime.max.time()),
+        # 排除已停用账号的交易
+        (AffiliateAccount.id.is_(None)) | (AffiliateAccount.is_active == True)
     )
     
     # 权限控制：员工只能看自己的数据
