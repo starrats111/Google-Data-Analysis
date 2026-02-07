@@ -3,6 +3,12 @@ import { Card, Table, Space, message, Tag, Typography, Button, Modal, Spin, Empt
 import { FileTextOutlined, DeleteOutlined, CopyOutlined, SettingOutlined, ArrowLeftOutlined, CloseOutlined, RobotOutlined } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
 import dayjs from 'dayjs'
+import utc from 'dayjs/plugin/utc'
+import timezone from 'dayjs/plugin/timezone'
+
+// 启用时区插件，确保使用本地时间
+dayjs.extend(utc)
+dayjs.extend(timezone)
 import api from '../services/api'
 import './Analysis.css'
 
@@ -280,7 +286,7 @@ const MyReports = () => {
       dataIndex: 'created_at',
       key: 'created_at',
       width: 150,
-      render: (v) => v ? dayjs(v).format('YYYY-MM-DD HH:mm') : '-',
+      render: (v) => v ? dayjs.utc(v).local().format('YYYY-MM-DD HH:mm') : '-',
     },
     {
       title: '广告系列数',
@@ -499,7 +505,7 @@ const MyReports = () => {
                         📊 {selectedReport.campaign_count} 个广告系列
                       </Tag>
                       <Tag color="rgba(255,255,255,0.2)" style={{ color: 'white', border: 'none' }}>
-                        📅 {dayjs(selectedReport.created_at).format('YYYY-MM-DD HH:mm')}
+                        📅 {dayjs.utc(selectedReport.created_at).local().format('YYYY-MM-DD HH:mm')}
                       </Tag>
                     </Space>
                   </div>

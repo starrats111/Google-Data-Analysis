@@ -2,6 +2,11 @@ import React, { useState, useEffect } from 'react'
 import { Card, Table, message, Tag, Space } from 'antd'
 import { useSearchParams, useNavigate } from 'react-router-dom'
 import dayjs from 'dayjs'
+import utc from 'dayjs/plugin/utc'
+import timezone from 'dayjs/plugin/timezone'
+
+dayjs.extend(utc)
+dayjs.extend(timezone)
 import api from '../services/api'
 
 export default function RejectionDetails() {
@@ -74,7 +79,7 @@ export default function RejectionDetails() {
       dataIndex: 'transaction_time',
       key: 'transaction_time',
       width: 180,
-      render: (val) => val ? dayjs(val).format('YYYY-MM-DD HH:mm:ss') : '-'
+      render: (val) => val ? dayjs.utc(val).local().format('YYYY-MM-DD HH:mm:ss') : '-'
     },
     {
       title: '订单金额',
@@ -108,7 +113,7 @@ export default function RejectionDetails() {
       dataIndex: 'reject_time',
       key: 'reject_time',
       width: 180,
-      render: (val) => val ? dayjs(val).format('YYYY-MM-DD HH:mm:ss') : '-'
+      render: (val) => val ? dayjs.utc(val).local().format('YYYY-MM-DD HH:mm:ss') : '-'
     }
   ]
 
