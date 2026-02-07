@@ -4,6 +4,7 @@
 找到正确的 MID 字段
 """
 import sys
+import json
 sys.path.insert(0, '.')
 
 from datetime import datetime, timedelta
@@ -11,6 +12,7 @@ from app.database import SessionLocal
 from app.models.user import User
 from app.models.affiliate_account import AffiliatePlatform, AffiliateAccount
 from app.services.rewardoo_service import RewardooService
+from app.services.api_config_service import ApiConfigService
 
 db = SessionLocal()
 
@@ -54,14 +56,31 @@ begin_date = end_date - timedelta(days=7)
 for account in rw_accounts[:1]:  # 只检查第一个账号
     print(f"\n{'='*50}")
     print(f"账号: {account.account_name}")
-    print(f"Token 前20位: {account.api_token[:20] if account.api_token else 'N/A'}...")
+    
+    # 从 notes 中获取 token
+    token = None
+    api_url = None
+    if account.notes:
+        try:
+            notes_data = json.loads(account.notes)
+            token = notes_data.get("rewardoo_token") or notes_data.get("rw_token") or notes_data.get("api_token")
+            api_url = notes_data.get("rewardoo_api_url") or notes_data.get("rw_api_url") or notes_data.get("api_url")
+        except:
+            pass
+    
+    print(f"Token: {'已配置' if token else '❌ 未配置'}")
+    print(f"API URL: {api_url or '使用默认'}")
     print(f"{'='*50}")
+    
+    if not token:
+        print("❌ 未找到 API token，跳过")
+        continue
     
     try:
         # 初始化服务
         service = RewardooService(
-            token=account.api_token,
-            base_url=account.api_url
+            token=token,
+            base_url=api_url
         )
         
         # 获取交易数据
