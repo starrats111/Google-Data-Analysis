@@ -209,11 +209,12 @@ class ApiOnlyAnalysisService:
                 conservative_epc = clicks > 0 and conservative_commission / clicks or 0
                 conservative_roi = cost > 0 and ((conservative_commission - cost) / cost) or None
                 
-                # 生成操作指令
+                # 生成操作指令（带具体数值）
+                budget = campaign_data["total_budget"]
                 operation_instruction = self._generate_operation_instruction(
                     cost, clicks, commission, orders,
                     campaign_data["is_budget_lost"], campaign_data["is_rank_lost"],
-                    order_days_count
+                    order_days_count, cpc, budget, conservative_roi
                 )
                 
                 # 构建符合表6格式的分析结果
@@ -341,33 +342,46 @@ class ApiOnlyAnalysisService:
         orders: int,
         is_budget_lost: float,
         is_rank_lost: float,
-        order_days: int
+        order_days: int,
+        cpc: float = 0,
+        budget: float = 0,
+        conservative_roi: float = None
     ) -> str:
-        """生成操作指令"""
-        instructions = []
+        """生成操作指令（带具体数值）"""
         
-        # 预算丢失判断
-        if is_budget_lost and is_budget_lost > 0.1:  # 超过10%
-            instructions.append(f"预算丢失{is_budget_lost*100:.1f}%，建议增加预算")
+        # 计算 ROI（如果没传入）
+        if conservative_roi is None:
+            conservative_roi = cost > 0 and ((commission * 0.72 - cost) / cost) or 0
         
-        # Rank丢失判断
-        if is_rank_lost and is_rank_lost > 0.1:  # 超过10%
-            instructions.append(f"排名丢失{is_rank_lost*100:.1f}%，建议提高出价")
+        # ROI 严重为负，关停
+        if conservative_roi < -0.4:
+            return "关停"
         
-        # ROI判断
-        if clicks > 0:
-            roi = cost > 0 and ((commission * 0.72 - cost) / cost) * 100 or 0
-            if roi < 0:
-                instructions.append("ROI为负，建议暂停或优化")
-            elif roi < 20:
-                instructions.append("ROI较低，建议优化")
+        # ROI 为负，降价
+        if conservative_roi < 0:
+            if cpc > 0:
+                new_cpc = max(0.01, cpc - 0.05)
+                return f"CPC ${cpc:.2f}→${new_cpc:.2f}"
+            return "降价"
         
-        # 出单天数判断
-        if order_days < 3:
-            instructions.append("出单天数较少，建议优化")
+        # ROI 优秀且有预算瓶颈，加预算
+        if conservative_roi > 1.5 and is_budget_lost and is_budget_lost > 0.2 and order_days >= 4:
+            if budget > 0:
+                new_budget = budget * 1.3
+                return f"预算 ${budget:.0f}→${new_budget:.0f}(+30%)"
+            return "加预算；提高CPC"
         
-        if not instructions:
-            return "数据正常，保持现状"
+        # ROI 良好且有排名瓶颈，提高CPC
+        if conservative_roi > 1.0 and is_rank_lost and is_rank_lost > 0.15:
+            if cpc > 0:
+                new_cpc = cpc + 0.02
+                return f"CPC ${cpc:.2f}→${new_cpc:.2f}"
+            return "提高CPC"
         
-        return "；".join(instructions)
+        # ROI 正常，维持
+        if conservative_roi >= 0.5:
+            return "维持"
+        
+        # 样本不足
+        return "样本不足"
 

@@ -2102,29 +2102,40 @@ class AnalysisService:
             if max_cpc is None:
                 max_cpc = cpc
             
-            # 按照公式逻辑生成操作指令
+            # 获取预算
+            budget = row.get('预算', 0) or row.get('日预算', 0) or 0
+            try:
+                budget = float(budget)
+            except:
+                budget = 0
+            
+            # 按照公式逻辑生成操作指令（带具体数值）
             # 1. 如果保守ROI < -0.4，立即关停
             if conservative_roi < -0.4:
-                return "立即关停(PAUSE)"
+                return "关停"
             
             # 2. 如果保守ROI < 0（但不小于-0.4），CPC降价0.05
             if conservative_roi < 0:
-                return "▲ CPC降价0.05"
+                new_cpc = max(0.01, cpc - 0.05)
+                return f"CPC ${cpc:.2f}→${new_cpc:.2f}"
             
             # 3. 如果保守ROI > 3 且 预算错失份额 > 0.2 且 过去七天出单天数 >= 4，预算*1.3
             if conservative_roi > 3 and budget_lost_share > 0.2 and past_seven_days_orders >= 4:
-                return "💰 预算*1.3 (稳健加产)"
+                new_budget = budget * 1.3
+                change_pct = 30
+                return f"加预算；提高CPC" if budget == 0 else f"预算 ${budget:.0f}→${new_budget:.0f}(+{change_pct}%)"
             
             # 4. 如果保守ROI > 2 且 排名错失份额 > 0.15 且 最高CPC < (CPC*0.8)，CPC+0.02
             if conservative_roi > 2 and rank_lost_share > 0.15 and max_cpc < (cpc * 0.8):
-                return "📈 CPC+0.02 (抢占排名)"
+                new_cpc = cpc + 0.02
+                return f"CPC ${cpc:.2f}→${new_cpc:.2f}"
             
             # 5. 如果保守ROI >= 1，状态稳定
             if conservative_roi >= 1:
-                return "✅ 状态稳定-维持现状"
+                return "维持"
             
             # 6. 其他情况，样本不足
-            return "☕ 样本不足-继续观察"
+            return "样本不足"
             
         except Exception as e:
             import logging

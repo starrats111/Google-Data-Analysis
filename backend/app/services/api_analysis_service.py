@@ -246,9 +246,9 @@ class ApiAnalysisService:
                 week_conservative_commission = week_commission * 0.72
                 week_roi = ((week_conservative_commission - week_cost) / week_cost * 100) if week_cost > 0 else 0
                 
-                # 操作指令
+                # 操作指令（带具体数值）
                 operation = self._generate_operation_instruction(
-                    is_budget_lost, is_rank_lost, roi, orders
+                    is_budget_lost, is_rank_lost, roi, orders, cpc, budget
                 )
                 
                 # 根据表现判断状态：健康/观察/暂停
@@ -335,26 +335,42 @@ class ApiAnalysisService:
         is_budget_lost: float,
         is_rank_lost: float,
         roi: float,
-        orders: int
+        orders: int,
+        cpc: float = 0,
+        budget: float = 0
     ) -> str:
-        """生成操作指令"""
-        instructions = []
+        """生成操作指令（带具体数值）"""
         
-        if is_budget_lost > 0.1:
-            instructions.append(f"预算丢失{is_budget_lost*100:.0f}%，增加预算")
-        
-        if is_rank_lost > 0.1:
-            instructions.append(f"排名丢失{is_rank_lost*100:.0f}%，提高出价")
+        # ROI 为负，降价或关停
+        if roi < -40:
+            return "关停"
         
         if roi < 0:
-            instructions.append("ROI为负，建议暂停")
-        elif roi < 20:
-            instructions.append("ROI较低，优化广告")
+            new_cpc = max(0.01, cpc - 0.05)
+            if cpc > 0:
+                return f"CPC ${cpc:.2f}→${new_cpc:.2f}"
+            return "降价"
         
-        if orders == 0:
-            instructions.append("无订单，检查转化")
+        # ROI 优秀且有预算瓶颈，加预算
+        if roi > 150 and is_budget_lost > 0.2:
+            if budget > 0:
+                new_budget = budget * 1.3
+                return f"预算 ${budget:.0f}→${new_budget:.0f}(+30%)"
+            return "加预算；提高CPC"
         
-        return "；".join(instructions) if instructions else "正常运行"
+        # ROI 良好且有排名瓶颈，提高CPC
+        if roi > 100 and is_rank_lost > 0.15:
+            if cpc > 0:
+                new_cpc = cpc + 0.02
+                return f"CPC ${cpc:.2f}→${new_cpc:.2f}"
+            return "提高CPC"
+        
+        # ROI 正常，维持
+        if roi >= 50:
+            return "维持"
+        
+        # 样本不足
+        return "样本不足"
     
     def generate_l7d_analysis(
         self,
