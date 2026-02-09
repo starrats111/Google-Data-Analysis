@@ -566,10 +566,14 @@ const Analysis = ({ mode }) => {
 
   useEffect(() => {
     fetchAccounts()
+    // 初始加载时不使用缓存，确保获取最新数据
+    fetchResults(false)
   }, [])
 
-  // 当筛选条件变化时，重新获取数据
+  // 当筛选条件变化时，重新获取数据（非初始加载时使用缓存）
   useEffect(() => {
+    // 跳过初始加载
+    if (isInitialMount.current) return
     fetchResults(true)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedAccount, dateRange])
