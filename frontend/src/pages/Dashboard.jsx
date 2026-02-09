@@ -20,7 +20,7 @@ const Dashboard = () => {
   const [employeeData, setEmployeeData] = useState([])
   const [trendData, setTrendData] = useState([])
   const [loading, setLoading] = useState(false)
-  const [insightRange, setInsightRange] = useState('过去7天')
+  const [insightRange, setInsightRange] = useState('本月')
   const [insights, setInsights] = useState(null)
   
   // 节日日历状态
