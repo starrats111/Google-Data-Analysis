@@ -493,7 +493,8 @@ class ApiAnalysisService:
             
             query = self.db.query(GoogleAdsApiData).filter(
                 GoogleAdsApiData.date >= begin_date,
-                GoogleAdsApiData.date <= end_date
+                GoogleAdsApiData.date <= end_date,
+                GoogleAdsApiData.status == "ENABLED"  # 只分析已启用的广告
             )
             if user_id:
                 query = query.filter(GoogleAdsApiData.user_id == user_id)
