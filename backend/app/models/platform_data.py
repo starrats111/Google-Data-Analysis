@@ -52,6 +52,6 @@ class PlatformData(Base):
     )
     
     affiliate_account = relationship("AffiliateAccount", back_populates="platform_data")
-    user = relationship("User")
+    user = relationship("User", overlaps="platform_data")
 
 

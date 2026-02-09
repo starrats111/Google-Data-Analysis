@@ -49,7 +49,7 @@ class GoogleAdsApiData(Base):
     )
     
     mcc_account = relationship("GoogleMccAccount", back_populates="google_ads_data")
-    user = relationship("User")
+    user = relationship("User", overlaps="google_ads_data")
 
 
 class GoogleMccAccount(Base):
@@ -122,6 +122,6 @@ class CampaignPlatformMapping(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
     
-    user = relationship("User")
+    user = relationship("User", overlaps="campaign_mappings")
 
 

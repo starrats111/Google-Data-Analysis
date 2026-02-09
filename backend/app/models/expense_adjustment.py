@@ -27,7 +27,7 @@ class ExpenseAdjustment(Base):
         UniqueConstraint("user_id", "platform_id", "date", name="uq_expense_adj_user_platform_date"),
     )
 
-    user = relationship("User")
+    user = relationship("User", overlaps="expense_adjustments")
     platform = relationship("AffiliatePlatform")
 
 
