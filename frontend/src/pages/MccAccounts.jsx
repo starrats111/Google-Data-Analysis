@@ -10,8 +10,15 @@ import {
   ApiOutlined, InfoCircleOutlined, WarningOutlined, ClockCircleOutlined,
   FileTextOutlined
 } from '@ant-design/icons'
+import dayjs from 'dayjs'
+import utc from 'dayjs/plugin/utc'
+import timezone from 'dayjs/plugin/timezone'
 import api from '../services/api'
 import { useAuth } from '../store/authStore'
+
+// 启用时区插件
+dayjs.extend(utc)
+dayjs.extend(timezone)
 
 const { TextArea } = Input
 const { RangePicker } = DatePicker
@@ -412,7 +419,7 @@ export default function MccAccounts() {
         record.last_sync_at ? (
           <Tooltip title={record.last_sync_at}>
             <Text type="secondary" style={{ fontSize: 12 }}>
-              {new Date(record.last_sync_at).toLocaleDateString('zh-CN')}
+              {dayjs.utc(record.last_sync_at).local().format('YYYY-MM-DD')}
             </Text>
           </Tooltip>
         ) : <Text type="secondary">-</Text>
@@ -775,7 +782,7 @@ export default function MccAccounts() {
               title: '最后同步', 
               dataIndex: 'last_sync_at',
               width: 120,
-              render: (val) => val ? new Date(val).toLocaleString('zh-CN') : '-'
+              render: (val) => val ? dayjs.utc(val).local().format('YYYY-MM-DD HH:mm:ss') : '-'
             },
             { 
               title: '同步日期', 

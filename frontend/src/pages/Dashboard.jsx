@@ -5,6 +5,12 @@ import { useAuth } from '../store/authStore'
 import api from '../services/api'
 import ReactECharts from 'echarts-for-react'
 import dayjs from 'dayjs'
+import utc from 'dayjs/plugin/utc'
+import timezone from 'dayjs/plugin/timezone'
+
+// 启用时区插件
+dayjs.extend(utc)
+dayjs.extend(timezone)
 
 const Dashboard = () => {
   const { user } = useAuth()
@@ -123,7 +129,7 @@ const Dashboard = () => {
       { title: '近7天费用', dataIndex: 'cost_7d', key: 'cost_7d', align: 'right', render: (v) => Number(v || 0).toFixed(2) },
       { title: '近7天佣金', dataIndex: 'commission_7d', key: 'commission_7d', align: 'right', render: (v) => Number(v || 0).toFixed(2) },
       { title: '近7天订单', dataIndex: 'orders_7d', key: 'orders_7d', align: 'right' },
-      { title: '最后同步时间', dataIndex: 'last_google_sync_at', key: 'last_google_sync_at' },
+      { title: '最后同步时间', dataIndex: 'last_google_sync_at', key: 'last_google_sync_at', render: (v) => v ? dayjs.utc(v).local().format('YYYY-MM-DD HH:mm') : '-' },
     ]
 
     return (
