@@ -761,37 +761,37 @@ const Analysis = ({ mode }) => {
                     </Title>
                     <Space size="middle">
                       <Tag color="rgba(255,255,255,0.2)" style={{ color: 'white', border: 'none' }}>
-                        📊 {aiAnalysisResult.campaign_count} 个广告系列
-                      </Tag>
+                📊 {aiAnalysisResult.campaign_count} 个广告系列
+              </Tag>
                       <Tag color="rgba(255,255,255,0.2)" style={{ color: 'white', border: 'none' }}>
                         📅 {aiAnalysisResult.analysis_date}
                       </Tag>
-                    </Space>
+          </Space>
                   </div>
                 </div>
                 <Space>
-                  <Button 
-                    type="primary"
+          <Button 
+            type="primary"
                     ghost
                     icon={<CopyOutlined />}
-                    onClick={() => {
-                      if (aiAnalysisResult?.analysis) {
-                        navigator.clipboard.writeText(aiAnalysisResult.analysis)
-                        message.success('已复制到剪贴板')
-                      }
-                    }}
+            onClick={() => {
+              if (aiAnalysisResult?.analysis) {
+                navigator.clipboard.writeText(aiAnalysisResult.analysis)
+                message.success('已复制到剪贴板')
+              }
+            }}
                     style={{ borderColor: 'white', color: 'white' }}
-                  >
-                    复制报告
-                  </Button>
+          >
+            复制报告
+          </Button>
                   <Button 
                     type="text"
                     icon={<CloseOutlined style={{ fontSize: 18 }} />}
                     onClick={() => setAiModalOpen(false)}
                     style={{ color: 'white', width: 40, height: 40, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
                   />
-                </Space>
-              </div>
+              </Space>
+            </div>
             </div>
 
             {/* 报告内容 */}

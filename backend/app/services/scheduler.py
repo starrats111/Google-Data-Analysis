@@ -172,7 +172,7 @@ def daily_auto_sync_and_analysis_job():
     1. 拉取Google Ads数据
     2. 拉取广告平台数据
     3. 生成每日分析
-    4. 如果是分析日（周一、三、五），生成L7D分析
+    4. 生成L7D分析（每天执行）
     """
     logger.info("=" * 60)
     logger.info("【每日自动任务开始】")
@@ -180,10 +180,8 @@ def daily_auto_sync_and_analysis_job():
     
     today = date.today()
     weekday = today.weekday()  # 0=周一, 1=周二, ..., 6=周日
-    is_analysis_day = weekday in [0, 2, 4]  # 周一、三、五
     
     logger.info(f"今天是: 星期{['一','二','三','四','五','六','日'][weekday]}")
-    logger.info(f"是否分析日: {'是' if is_analysis_day else '否'}")
     logger.info("=" * 60)
     
     # 步骤1: 同步Google Ads数据
@@ -210,16 +208,13 @@ def daily_auto_sync_and_analysis_job():
     except Exception as e:
         logger.error(f"✗ 每日分析生成失败: {e}")
     
-    # 步骤4: 如果是分析日，生成L7D分析
-    if is_analysis_day:
-        logger.info("\n【步骤4/4】今天是分析日，生成L7D分析...")
-        try:
-            weekly_l7d_analysis_job()
-            logger.info("✓ L7D分析生成完成")
-        except Exception as e:
-            logger.error(f"✗ L7D分析生成失败: {e}")
-    else:
-        logger.info("\n【步骤4/4】今天不是分析日，跳过L7D分析")
+    # 步骤4: 生成L7D分析（每天执行）
+    logger.info("\n【步骤4/4】生成L7D分析...")
+    try:
+        weekly_l7d_analysis_job()
+        logger.info("✓ L7D分析生成完成")
+    except Exception as e:
+        logger.error(f"✗ L7D分析生成失败: {e}")
     
     logger.info("\n" + "=" * 60)
     logger.info("【每日自动任务完成】")
@@ -645,7 +640,7 @@ def start_scheduler():
         logger.info("定时任务调度器已启动")
         logger.info("已注册任务:")
         logger.info("  - 每日自动同步与分析: 每天 04:00")
-        logger.info("    (Google Ads + 平台数据 + 每日分析 + L7D分析[周一三五])")
+        logger.info("    (Google Ads + 平台数据 + 每日分析 + L7D分析)")
         logger.info("  - 平台数据补充同步: 每天 16:00")
         logger.info("  - 月度总结: 每月1号 08:20")
         logger.info("  - 已付佣金同步: 每月1/15号 00:00")
