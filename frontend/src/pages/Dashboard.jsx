@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState, useCallback, useRef, lazy, Suspense } from 'react'
-import { Card, Row, Col, Table, message, Segmented, Tag, Typography, Space, Statistic, Input, Button, Spin, Select, Tooltip } from 'antd'
+import { Card, Row, Col, Table, message, Segmented, Tag, Typography, Space, Statistic, Input, Button, Spin, Select } from 'antd'
 import { SearchOutlined, RocketOutlined, CalendarOutlined, GlobalOutlined, PictureOutlined, SyncOutlined, ClockCircleOutlined } from '@ant-design/icons'
 import { useAuth } from '../store/authStore'
 import api from '../services/api'
@@ -39,12 +39,8 @@ const Dashboard = () => {
   const [keywordImageLoading, setKeywordImageLoading] = useState(false)
   const [pastedImage, setPastedImage] = useState(null)
   
-  // 自动刷新状态
+  // 刷新状态
   const [lastUpdated, setLastUpdated] = useState(null)
-  const [autoRefresh, setAutoRefresh] = useState(true)
-  const [countdown, setCountdown] = useState(300)
-  const autoRefreshTimerRef = useRef(null)
-  const countdownTimerRef = useRef(null)
   const loadingRef = useRef(false)
 
   const fetchManagerData = useCallback(async () => {
@@ -66,7 +62,6 @@ const Dashboard = () => {
       setLoading(false)
       loadingRef.current = false
       setLastUpdated(dayjs())
-      setCountdown(300)
     }
   }, [])
 
@@ -84,7 +79,6 @@ const Dashboard = () => {
       setLoading(false)
       loadingRef.current = false
       setLastUpdated(dayjs())
-      setCountdown(300)
     }
   }, [insightRange])
 
@@ -104,26 +98,6 @@ const Dashboard = () => {
     doFetch()
     return () => { cancelled = true }
   }, [doRefresh])
-
-  // 自动刷新定时器（每5分钟）
-  useEffect(() => {
-    if (autoRefreshTimerRef.current) clearInterval(autoRefreshTimerRef.current)
-    if (countdownTimerRef.current) clearInterval(countdownTimerRef.current)
-    
-    if (autoRefresh) {
-      countdownTimerRef.current = setInterval(() => {
-        setCountdown(prev => (prev <= 1 ? 300 : prev - 1))
-      }, 1000)
-      autoRefreshTimerRef.current = setInterval(() => {
-        doRefresh()
-      }, 300000)
-    }
-    
-    return () => {
-      if (autoRefreshTimerRef.current) clearInterval(autoRefreshTimerRef.current)
-      if (countdownTimerRef.current) clearInterval(countdownTimerRef.current)
-    }
-  }, [autoRefresh, doRefresh])
 
   // 经理视角的费用佣金走向图配置
   const managerTrendOption = useMemo(() => ({
@@ -180,15 +154,6 @@ const Dashboard = () => {
           <h2 style={{ margin: 0 }}>数据总览</h2>
           <Space>
             <Button onClick={doRefresh} loading={loading} icon={<SyncOutlined spin={loading} />} size="small">刷新</Button>
-            <Tooltip title={autoRefresh ? '点击关闭自动刷新' : '点击开启自动刷新（每5分钟）'}>
-              <Tag 
-                color={autoRefresh ? 'processing' : 'default'} 
-                style={{ cursor: 'pointer', fontSize: 12 }}
-                onClick={() => setAutoRefresh(!autoRefresh)}
-              >
-                {autoRefresh ? <><SyncOutlined spin /> {Math.floor(countdown / 60)}:{String(countdown % 60).padStart(2, '0')}</> : '自动刷新已关闭'}
-              </Tag>
-            </Tooltip>
             {lastUpdated && (
               <span style={{ color: '#999', fontSize: 12 }}>
                 <ClockCircleOutlined style={{ marginRight: 4 }} />
@@ -429,15 +394,6 @@ const Dashboard = () => {
           </Space>
           <Space>
             <Button onClick={doRefresh} loading={loading} icon={<SyncOutlined spin={loading} />} size="small">刷新</Button>
-            <Tooltip title={autoRefresh ? '点击关闭自动刷新' : '点击开启自动刷新（每5分钟）'}>
-              <Tag 
-                color={autoRefresh ? 'processing' : 'default'} 
-                style={{ cursor: 'pointer', fontSize: 12 }}
-                onClick={() => setAutoRefresh(!autoRefresh)}
-              >
-                {autoRefresh ? <><SyncOutlined spin /> {Math.floor(countdown / 60)}:{String(countdown % 60).padStart(2, '0')}</> : '自动刷新已关闭'}
-              </Tag>
-            </Tooltip>
             {lastUpdated && (
               <span style={{ color: '#999', fontSize: 12 }}>
                 <ClockCircleOutlined style={{ marginRight: 4 }} />
