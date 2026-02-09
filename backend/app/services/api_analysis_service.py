@@ -113,6 +113,24 @@ class ApiAnalysisService:
     ) -> Dict:
         """生成单天的分析 - 按广告系列展示"""
         
+        # 预加载MCC货币配置（用于人民币转美金）
+        from app.models.google_ads_api_data import GoogleMccAccount
+        from app.config import settings
+        
+        CNY_TO_USD_RATE = float(getattr(settings, "CNY_TO_USD_RATE", 7.2) or 7.2)
+        
+        # 获取所有MCC的货币配置
+        mcc_currency_map = {}  # {mcc_id: currency}
+        all_mccs = self.db.query(GoogleMccAccount).all()
+        for mcc in all_mccs:
+            mcc_currency_map[mcc.id] = getattr(mcc, 'currency', 'USD') or 'USD'
+        
+        def convert_to_usd(amount: float, currency: str) -> float:
+            """将金额转换为美元"""
+            if currency and currency.upper() == "CNY":
+                return amount / CNY_TO_USD_RATE
+            return amount
+        
         # 1. 查询Google Ads数据
         query = self.db.query(GoogleAdsApiData).filter(
                 GoogleAdsApiData.date == target_date
@@ -189,10 +207,11 @@ class ApiAnalysisService:
             )
             week_data = week_query.all()
             
-            # 按广告系列聚合本周数据
+            # 按广告系列聚合本周数据（包含货币转换）
             week_campaign_data = {}
             for d in week_data:
                 cname = d.campaign_name
+                mcc_currency = mcc_currency_map.get(d.mcc_id, "USD")
                 if cname not in week_campaign_data:
                     week_campaign_data[cname] = {
                         "cost": 0.0,
@@ -201,7 +220,8 @@ class ApiAnalysisService:
                         "orders": 0,
                         "commission": 0.0,
                     }
-                week_campaign_data[cname]["cost"] += (d.cost or 0)
+                # 费用需要进行货币转换
+                week_campaign_data[cname]["cost"] += convert_to_usd(d.cost or 0, mcc_currency)
                 week_campaign_data[cname]["clicks"] += int(d.clicks or 0)
             
             # 获取本周平台数据（订单和佣金）
@@ -236,11 +256,14 @@ class ApiAnalysisService:
                 cname = campaign.campaign_name
                 week_info = week_campaign_data.get(cname, {})
                 
-                # 当天数据
-                cost = campaign.cost or 0
+                # 获取当前广告系列的MCC货币类型
+                campaign_currency = mcc_currency_map.get(campaign.mcc_id, "USD")
+                
+                # 当天数据（费用、CPC、预算需要货币转换）
+                cost = convert_to_usd(campaign.cost or 0, campaign_currency)
                 clicks = int(campaign.clicks or 0)
-                budget = campaign.budget or 0
-                cpc = campaign.cpc or 0
+                budget = convert_to_usd(campaign.budget or 0, campaign_currency)
+                cpc = convert_to_usd(campaign.cpc or 0, campaign_currency)
                 is_budget_lost = campaign.is_budget_lost or 0
                 is_rank_lost = campaign.is_rank_lost or 0
                 status = campaign.status or "ENABLED"
@@ -450,6 +473,24 @@ class ApiAnalysisService:
         logger.info(f"=== 开始生成L7D分析 === 范围: {begin_date} ~ {end_date}")
         
         try:
+            # 预加载MCC货币配置（用于人民币转美金）
+            from app.models.google_ads_api_data import GoogleMccAccount
+            from app.config import settings
+            
+            CNY_TO_USD_RATE = float(getattr(settings, "CNY_TO_USD_RATE", 7.2) or 7.2)
+            
+            # 获取所有MCC的货币配置
+            mcc_currency_map = {}  # {mcc_id: currency}
+            all_mccs = self.db.query(GoogleMccAccount).all()
+            for mcc in all_mccs:
+                mcc_currency_map[mcc.id] = getattr(mcc, 'currency', 'USD') or 'USD'
+            
+            def convert_to_usd(amount: float, currency: str) -> float:
+                """将金额转换为美元"""
+                if currency and currency.upper() == "CNY":
+                    return amount / CNY_TO_USD_RATE
+                return amount
+            
             query = self.db.query(GoogleAdsApiData).filter(
                 GoogleAdsApiData.date >= begin_date,
                 GoogleAdsApiData.date <= end_date
@@ -466,6 +507,10 @@ class ApiAnalysisService:
             campaign_data = {}
             for data in google_ads_data:
                 key = (data.campaign_id, data.user_id)
+                
+                # 获取该MCC的货币类型
+                mcc_currency = mcc_currency_map.get(data.mcc_id, "USD")
+                
                 if key not in campaign_data:
                     # 从广告系列名解析MID、投放国家
                     _, mid, country = self._parse_campaign_name(data.campaign_name)
@@ -482,6 +527,7 @@ class ApiAnalysisService:
                         "cid": cid,
                         "mid": mid,
                         "country": country,
+                        "currency": mcc_currency,  # 记录货币类型
                         "data_dates": set(),  # 有数据的天数
                         "total_cost": 0.0,
                         "total_clicks": 0,
@@ -492,10 +538,11 @@ class ApiAnalysisService:
                     }
                 # 记录有数据的日期
                 campaign_data[key]["data_dates"].add(data.date)
-                campaign_data[key]["total_cost"] += (data.cost or 0)
+                # 费用、CPC、预算需要进行货币转换（人民币转美金）
+                campaign_data[key]["total_cost"] += convert_to_usd(data.cost or 0, mcc_currency)
                 campaign_data[key]["total_clicks"] += int(data.clicks or 0)
-                campaign_data[key]["max_cpc"] = max(campaign_data[key]["max_cpc"], (data.cpc or 0))
-                campaign_data[key]["max_budget"] = max(campaign_data[key]["max_budget"], (data.budget or 0))
+                campaign_data[key]["max_cpc"] = max(campaign_data[key]["max_cpc"], convert_to_usd(data.cpc or 0, mcc_currency))
+                campaign_data[key]["max_budget"] = max(campaign_data[key]["max_budget"], convert_to_usd(data.budget or 0, mcc_currency))
                 campaign_data[key]["is_budget_lost"] = max(campaign_data[key]["is_budget_lost"], (data.is_budget_lost or 0))
                 campaign_data[key]["is_rank_lost"] = max(campaign_data[key]["is_rank_lost"], (data.is_rank_lost or 0))
             
