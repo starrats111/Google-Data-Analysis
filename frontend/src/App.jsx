@@ -13,6 +13,7 @@ const MccAccounts = lazy(() => import('./pages/MccAccounts'))
 const MccDataAggregate = lazy(() => import('./pages/MccDataAggregate'))
 const PlatformData = lazy(() => import('./pages/PlatformData'))
 const GoogleAdsData = lazy(() => import('./pages/GoogleAdsData'))
+const DataCenter = lazy(() => import('./pages/DataCenter'))
 const Expenses = lazy(() => import('./pages/Expenses'))
 const ExpenseCostDetail = lazy(() => import('./pages/ExpenseCostDetail'))
 const MyAnalysis = lazy(() => import('./pages/MyAnalysis'))
@@ -21,6 +22,8 @@ const GoogleOAuthCallback = lazy(() => import('./pages/GoogleOAuthCallback'))
 const RejectionDetails = lazy(() => import('./pages/RejectionDetails'))
 const AdCopyGenerator = lazy(() => import('./pages/AdCopyGenerator'))
 const MyReports = lazy(() => import('./pages/MyReports'))
+const EmployeeList = lazy(() => import('./pages/EmployeeList'))
+const EmployeeDetail = lazy(() => import('./pages/EmployeeDetail'))
 
 // 加载中的占位组件
 const PageLoading = () => (
@@ -67,6 +70,9 @@ function App() {
             <Route path="mcc-aggregate" element={<MccDataAggregate />} />
             <Route path="platform-data" element={<PlatformData />} />
             <Route path="google-ads-data" element={<GoogleAdsData />} />
+            <Route path="data-center" element={<DataCenter />} />
+            <Route path="employees" element={<EmployeeList />} />
+            <Route path="employees/:id" element={<EmployeeDetail />} />
             <Route path="expenses" element={<Expenses />} />
             <Route path="expense-cost-detail" element={<ExpenseCostDetail />} />
             <Route path="rejections" element={<RejectionDetails />} />

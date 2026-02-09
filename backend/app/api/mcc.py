@@ -569,6 +569,23 @@ async def get_mcc_accounts(
         )
 
 
+@router.get("/by-user/{user_id}")
+async def get_mcc_by_user(
+    user_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """获取指定用户的MCC账号列表（经理专用）"""
+    if current_user.role != "manager":
+        raise HTTPException(status_code=403, detail="只有经理可以查看其他用户的MCC账号")
+    
+    mcc_accounts = db.query(GoogleMccAccount).filter(
+        GoogleMccAccount.user_id == user_id
+    ).all()
+    
+    return [_build_mcc_response(acc, 0) for acc in mcc_accounts]
+
+
 @router.get("/accounts/{mcc_id}", response_model=MccAccountResponse)
 async def get_mcc_account(
     mcc_id: int,

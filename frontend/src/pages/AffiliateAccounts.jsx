@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react'
 import { Card, Table, Button, Modal, Form, Input, Select, Switch, message, Popconfirm, Collapse, Tag, Space, DatePicker, Statistic, Row, Col, Spin, Checkbox } from 'antd'
-import { PlusOutlined, EditOutlined, DeleteOutlined, SyncOutlined } from '@ant-design/icons'
+import { PlusOutlined, EditOutlined, DeleteOutlined, SyncOutlined, SearchOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import api from '../services/api'
 import { useAuth } from '../store/authStore'
@@ -33,6 +33,9 @@ const AffiliateAccounts = () => {
   // 一键同步所有平台状态
   const [syncAllLoading, setSyncAllLoading] = useState(false)
   const [syncAllResult, setSyncAllResult] = useState(null)
+  
+  // 搜索状态
+  const [searchText, setSearchText] = useState('')
 
   useEffect(() => {
     let isMounted = true
@@ -558,7 +561,7 @@ const AffiliateAccounts = () => {
   const employeeColumns = [
     { title: '账号名称', dataIndex: 'account_name', key: 'account_name' },
     { title: '联盟平台', key: 'platform', render: (_, record) => record.platform?.platform_name },
-    { title: '账号代码', dataIndex: 'account_code', key: 'account_code' },
+    { title: '渠道ID', dataIndex: 'account_code', key: 'account_code' },
     { title: '邮箱', dataIndex: 'email', key: 'email' },
     { 
       title: '状态', 
@@ -610,20 +613,43 @@ const AffiliateAccounts = () => {
   const renderManagerView = () => {
     return (
       <div>
-        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16 }}>
-          <h2>联盟账号管理</h2>
-          <Button
-            type="primary"
-            icon={<PlusOutlined />}
-            onClick={handleCreatePlatform}
-          >
-            添加联盟平台
-          </Button>
+        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16, flexWrap: 'wrap', gap: 12 }}>
+          <h2 style={{ margin: 0 }}>联盟账号管理</h2>
+          <Space wrap>
+            <Input
+              placeholder="搜索账号名称"
+              prefix={<SearchOutlined />}
+              value={searchText}
+              onChange={(e) => setSearchText(e.target.value)}
+              style={{ width: 200 }}
+              allowClear
+            />
+            <Button
+              type="primary"
+              icon={<PlusOutlined />}
+              onClick={handleCreatePlatform}
+            >
+              添加联盟平台
+            </Button>
+          </Space>
         </div>
 
         <Card>
           <Collapse
-            items={employeesData.map((employee) => ({
+            items={employeesData
+              .filter(employee => {
+                if (!searchText) return true
+                // 搜索员工名或账号名
+                const matchEmployee = employee.employee_username?.toLowerCase().includes(searchText.toLowerCase())
+                const matchAccount = employee.platforms?.some(p => 
+                  p.accounts?.some(a => 
+                    a.account_name?.toLowerCase().includes(searchText.toLowerCase()) ||
+                    a.account_code?.toLowerCase().includes(searchText.toLowerCase())
+                  )
+                )
+                return matchEmployee || matchAccount
+              })
+              .map((employee) => ({
               key: employee.employee_username,
               label: (
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -650,10 +676,10 @@ const AffiliateAccounts = () => {
                     style={{ marginBottom: 16 }}
                     size="small"
                   >
-                    <Table
-                      columns={[
-                        { title: '账号名称', dataIndex: 'account_name', key: 'account_name' },
-                        { title: '账号代码', dataIndex: 'account_code', key: 'account_code' },
+<Table
+                                      columns={[
+                                        { title: '账号名称', dataIndex: 'account_name', key: 'account_name' },
+                                        { title: '渠道ID', dataIndex: 'account_code', key: 'account_code' },
                         { title: '邮箱', dataIndex: 'email', key: 'email' },
                         { 
                           title: '状态', 
@@ -1000,9 +1026,9 @@ const AffiliateAccounts = () => {
 
             <Form.Item
               name="account_code"
-              label="账号代码"
+              label="渠道ID"
             >
-              <Input placeholder="可选：账号代码" />
+              <Input placeholder="可选：渠道ID（Channel ID）" />
             </Form.Item>
 
             <Form.Item

@@ -78,6 +78,88 @@
   border-color: #f0f0f0 !important;
 }
 
+/* ============ 移动端适配 ============ */
+@media screen and (max-width: 768px) {
+  .analysis-page__header {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  
+  .analysis-page__title {
+    font-size: 18px !important;
+  }
+  
+  .analysis-filters {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  
+  .analysis-filters > * {
+    width: 100% !important;
+  }
+  
+  /* 表格水平滚动提示 */
+  .analysis-subtable {
+    position: relative;
+  }
+  
+  .analysis-subtable::after {
+    content: '← 左右滑动查看更多 →';
+    display: block;
+    text-align: center;
+    color: #999;
+    font-size: 12px;
+    padding: 8px 0;
+    background: linear-gradient(to bottom, rgba(255,255,255,0), rgba(255,255,255,1));
+  }
+  
+  /* 确保所有列都可见 - 强制最小宽度 */
+  .analysis-subtable :global(.ant-table) {
+    min-width: 1200px;
+  }
+  
+  /* 固定列在移动端保持 */
+  .analysis-subtable :global(.ant-table-cell-fix-left),
+  .analysis-subtable :global(.ant-table-cell-fix-right) {
+    background: #fff !important;
+  }
+  
+  /* 表头紧凑 */
+  .analysis-subtable :global(.ant-table-thead > tr > th) {
+    padding: 6px 8px;
+    font-size: 12px;
+  }
+  
+  .analysis-subtable :global(.ant-table-tbody > tr > td) {
+    padding: 6px 8px;
+    font-size: 12px;
+  }
+  
+  /* 按钮堆叠 */
+  .analysis-page__header :global(.ant-space) {
+    width: 100%;
+  }
+  
+  .analysis-page__header :global(.ant-space-item) {
+    width: 100%;
+  }
+  
+  .analysis-page__header :global(.ant-btn) {
+    width: 100%;
+  }
+}
+
+/* 小屏幕进一步优化 */
+@media screen and (max-width: 480px) {
+  .analysis-subtable :global(.ant-table) {
+    min-width: 1000px;
+  }
+  
+  .analysis-page__title {
+    font-size: 16px !important;
+  }
+}
+
 
 
 

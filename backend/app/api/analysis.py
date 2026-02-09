@@ -149,6 +149,30 @@ async def get_analysis_results(
     return response_list
 
 
+@router.get("/by-user/{user_id}")
+async def get_analysis_by_user(
+    user_id: int,
+    limit: int = 10,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """获取指定用户的分析结果（经理专用）"""
+    if current_user.role != "manager":
+        raise HTTPException(status_code=403, detail="只有经理可以查看其他用户的分析结果")
+    
+    results = db.query(AnalysisResult).filter(
+        AnalysisResult.user_id == user_id
+    ).order_by(AnalysisResult.analysis_date.desc()).limit(limit).all()
+    
+    return [{
+        "id": r.id,
+        "analysis_date": r.analysis_date.isoformat() if r.analysis_date else None,
+        "analysis_type": r.analysis_type,
+        "result_data": r.result_data,
+        "created_at": r.created_at.isoformat() if r.created_at else None,
+    } for r in results]
+
+
 @router.get("/results/{result_id}", response_model=AnalysisResultResponse)
 async def get_analysis_result(
     result_id: int,

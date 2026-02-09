@@ -47,6 +47,7 @@ from app.api import (
     platform_data,
     stage_label,
     upload,
+    users,
 )
 
 
@@ -245,6 +246,7 @@ app.include_router(google_ads_aggregate.router)
 app.include_router(google_oauth.router)
 app.include_router(stage_label.router)
 app.include_router(gemini.router)
+app.include_router(users.router)
 
 
 @app.get("/health")

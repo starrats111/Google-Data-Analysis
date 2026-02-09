@@ -452,6 +452,37 @@ async def get_accounts_by_employees(
     return result
 
 
+@router.get("/accounts/by-user/{user_id}")
+async def get_accounts_by_user(
+    user_id: int,
+    current_user: User = Depends(get_current_manager),
+    db: Session = Depends(get_db)
+):
+    """获取指定用户的联盟账号列表（经理专用）"""
+    from sqlalchemy.orm import joinedload
+    
+    accounts = db.query(AffiliateAccount).options(
+        joinedload(AffiliateAccount.platform)
+    ).filter(
+        AffiliateAccount.user_id == user_id
+    ).all()
+    
+    return [{
+        "id": acc.id,
+        "account_name": acc.account_name,
+        "account_code": acc.account_code,
+        "email": acc.email,
+        "is_active": acc.is_active,
+        "notes": acc.notes,
+        "platform": {
+            "id": acc.platform.id,
+            "platform_name": acc.platform.platform_name,
+            "platform_code": acc.platform.platform_code,
+        } if acc.platform else None,
+        "created_at": acc.created_at.isoformat() if acc.created_at else None,
+    } for acc in accounts]
+
+
 @router.get("/accounts", response_model=List[AffiliateAccountResponse])
 async def get_accounts(
     platform_id: Optional[int] = None,

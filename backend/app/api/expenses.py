@@ -813,6 +813,85 @@ async def _get_manager_expense_summary(start: date, end: date, today: date, db: 
     )
 
 
+@router.get("/by-user/{user_id}")
+async def get_expense_by_user(
+    user_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """获取指定用户的费用汇总（经理专用）"""
+    from datetime import timedelta
+    from app.config import settings
+    
+    if current_user.role != "manager":
+        raise HTTPException(status_code=403, detail="只有经理可以查看其他用户的费用")
+    
+    CNY_TO_USD_RATE = float(getattr(settings, "CNY_TO_USD_RATE", 7.2) or 7.2)
+    today = date.today()
+    
+    # 本月
+    month_start = today.replace(day=1)
+    month_end = today - timedelta(days=1)
+    
+    # 本季度
+    quarter_month = ((today.month - 1) // 3) * 3 + 1
+    quarter_start = today.replace(month=quarter_month, day=1)
+    
+    # 本年度
+    year_start = today.replace(month=1, day=1)
+    
+    # 获取用户的MCC货币映射
+    mcc_accounts = db.query(GoogleMccAccount).filter(GoogleMccAccount.user_id == user_id).all()
+    mcc_currency_map = {mcc.id: getattr(mcc, 'currency', 'USD') or 'USD' for mcc in mcc_accounts}
+    
+    def get_period_stats(start_dt: date, end_dt: date):
+        # 费用
+        cost_rows = db.query(
+            GoogleAdsApiData.mcc_id,
+            func.sum(GoogleAdsApiData.cost).label('cost')
+        ).filter(
+            GoogleAdsApiData.user_id == user_id,
+            GoogleAdsApiData.date >= start_dt,
+            GoogleAdsApiData.date <= end_dt,
+        ).group_by(GoogleAdsApiData.mcc_id).all()
+        
+        total_cost = 0.0
+        for row in cost_rows:
+            cost = float(row.cost or 0)
+            currency = mcc_currency_map.get(row.mcc_id, 'USD')
+            if currency == 'CNY':
+                cost = cost / CNY_TO_USD_RATE
+            total_cost += cost
+        
+        # 佣金
+        from app.models.affiliate_transaction import AffiliateTransaction
+        commission = db.query(
+            func.sum(AffiliateTransaction.commission_amount)
+        ).filter(
+            AffiliateTransaction.user_id == user_id,
+            func.date(AffiliateTransaction.transaction_time) >= start_dt,
+            func.date(AffiliateTransaction.transaction_time) <= end_dt,
+        ).scalar() or 0
+        
+        return total_cost, float(commission)
+    
+    cost_month, commission_month = get_period_stats(month_start, month_end)
+    cost_quarter, commission_quarter = get_period_stats(quarter_start, today - timedelta(days=1))
+    cost_year, commission_year = get_period_stats(year_start, today - timedelta(days=1))
+    
+    roi_month = commission_month / cost_month if cost_month > 0 else 0
+    
+    return {
+        "cost_month": cost_month,
+        "commission_month": commission_month,
+        "roi_month": roi_month,
+        "cost_quarter": cost_quarter,
+        "commission_quarter": commission_quarter,
+        "cost_year": cost_year,
+        "commission_year": commission_year,
+    }
+
+
 @router.get("/summary")
 async def get_expense_summary(
     start_date: str,
