@@ -27,9 +27,9 @@ export default function PlatformData() {
     
     const initData = async () => {
       await fetchPlatforms()
-      // 默认查询最近7天的数据
-      const endDate = dayjs()
-      const beginDate = endDate.subtract(7, 'day')
+      // 默认查询最近7天的数据（数据是每天凌晨4点同步的，只有到昨天的数据）
+      const endDate = dayjs().subtract(1, 'day')
+      const beginDate = endDate.subtract(6, 'day')
       form.setFieldsValue({
         dateRange: [beginDate, endDate]
       })
@@ -452,7 +452,7 @@ export default function PlatformData() {
           >
             <RangePicker
               format="YYYY-MM-DD"
-              disabledDate={(current) => current && current > dayjs().endOf('day')}
+              disabledDate={(current) => current && current > dayjs().subtract(1, 'day').endOf('day')}
             />
           </Form.Item>
 

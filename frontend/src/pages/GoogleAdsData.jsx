@@ -29,38 +29,35 @@ export default function GoogleAdsData() {
   }, [])
 
   // 处理时间范围类型变化
+  // 注意：数据是每天凌晨4点定时同步的，所以只有到昨天的数据
   const handleDateRangeChange = (type) => {
     setDateRangeType(type)
     let beginDate, endDate
     
-    const today = dayjs()
+    const yesterday = dayjs().subtract(1, 'day')
     switch(type) {
-      case 'today':
-        beginDate = today
-        endDate = today
-        break
       case 'yesterday':
-        beginDate = today.subtract(1, 'day')
-        endDate = today.subtract(1, 'day')
+        beginDate = yesterday
+        endDate = yesterday
         break
       case 'past7days':
-        beginDate = today.subtract(7, 'day')
-        endDate = today
+        beginDate = yesterday.subtract(6, 'day')
+        endDate = yesterday
         break
       case 'thisWeek':
-        beginDate = today.startOf('week')
-        endDate = today
+        beginDate = dayjs().startOf('week')
+        endDate = yesterday
         break
       case 'thisMonth':
-        beginDate = today.startOf('month')
-        endDate = today
+        beginDate = dayjs().startOf('month')
+        endDate = yesterday
         break
       case 'custom':
         // 自定义时不清空日期选择器
         return
       default:
-        beginDate = today.subtract(7, 'day')
-        endDate = today
+        beginDate = yesterday.subtract(6, 'day')
+        endDate = yesterday
     }
     
     form.setFieldsValue({
@@ -212,7 +209,6 @@ export default function GoogleAdsData() {
                   onChange={(e) => handleDateRangeChange(e.target.value)}
                   buttonStyle="solid"
                 >
-                  <Radio.Button value="today">今天</Radio.Button>
                   <Radio.Button value="yesterday">昨天</Radio.Button>
                   <Radio.Button value="past7days">过去七天</Radio.Button>
                   <Radio.Button value="thisWeek">本周</Radio.Button>
@@ -232,7 +228,7 @@ export default function GoogleAdsData() {
                   <RangePicker
                     format="YYYY-MM-DD"
                     style={{ width: '100%' }}
-                    disabledDate={(current) => current && current > dayjs().endOf('day')}
+                    disabledDate={(current) => current && current > dayjs().subtract(1, 'day').endOf('day')}
                   />
                 </Form.Item>
               </Col>

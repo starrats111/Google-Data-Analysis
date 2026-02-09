@@ -8,20 +8,21 @@ import { useAuth } from '../store/authStore'
 const { RangePicker } = DatePicker
 const { Option } = Select
 
+// 数据是每天凌晨4点定时同步的，所以只有到昨天的数据
 function getPresetRange(preset) {
-  const today = dayjs()
-  if (preset === '过去7天') return [today.subtract(6, 'day'), today]
-  if (preset === '本周') return [today.startOf('week'), today.endOf('week')]
+  const yesterday = dayjs().subtract(1, 'day')
+  if (preset === '过去7天') return [yesterday.subtract(6, 'day'), yesterday]
+  if (preset === '本周') return [dayjs().startOf('week'), yesterday]
   if (preset === '上周') {
-    const start = today.subtract(1, 'week').startOf('week')
+    const start = dayjs().subtract(1, 'week').startOf('week')
     return [start, start.endOf('week')]
   }
-  if (preset === '本月') return [today.startOf('month'), today.endOf('month')]
+  if (preset === '本月') return [dayjs().startOf('month'), yesterday]
   if (preset === '上月') {
-    const start = today.subtract(1, 'month').startOf('month')
+    const start = dayjs().subtract(1, 'month').startOf('month')
     return [start, start.endOf('month')]
   }
-  return [today.subtract(6, 'day'), today]
+  return [yesterday.subtract(6, 'day'), yesterday]
 }
 
 const Expenses = () => {
