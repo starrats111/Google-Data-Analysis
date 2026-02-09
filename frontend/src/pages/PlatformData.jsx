@@ -17,7 +17,7 @@ export default function PlatformData() {
   const [summaryData, setSummaryData] = useState(null) // 汇总数据
   const [platforms, setPlatforms] = useState([])
   const [form] = Form.useForm()
-  const [viewMode, setViewMode] = useState('detail') // 'detail' 或 'summary'
+  const [viewMode, setViewMode] = useState('summary') // 'summary' 或 'detail'
   const [searchText, setSearchText] = useState('')
   const [statusFilter, setStatusFilter] = useState('all') // 'all', 'approved', 'pending', 'rejected'
   const [selectedMerchant, setSelectedMerchant] = useState(null) // 选中的商家，用于显示详情
@@ -353,6 +353,22 @@ export default function PlatformData() {
         )
       }
     },
+    // 在"All总佣金"模式下显示拒付佣金列
+    ...(statusFilter === 'all' ? [{
+      title: '拒付佣金($)',
+      dataIndex: 'rejected_commission',
+      key: 'rejected_commission',
+      width: 120,
+      align: 'right',
+      render: (val) => {
+        const amount = val || 0
+        return (
+          <span style={{ color: amount > 0 ? '#ff4d4f' : '#666' }}>
+            ${amount.toFixed(2)}
+          </span>
+        )
+      }
+    }] : []),
     {
       title: '操作',
       key: 'action',
