@@ -29,6 +29,10 @@ const AffiliateAccounts = () => {
   const [syncing, setSyncing] = useState(false)
   const [syncResult, setSyncResult] = useState(null)
   const [syncForm] = Form.useForm()
+  
+  // 一键同步所有平台状态
+  const [syncAllLoading, setSyncAllLoading] = useState(false)
+  const [syncAllResult, setSyncAllResult] = useState(null)
 
   useEffect(() => {
     let isMounted = true
@@ -495,6 +499,50 @@ const AffiliateAccounts = () => {
            platformCode.toLowerCase() === 'collabglow'
   }
 
+  // 一键同步所有平台
+  const handleSyncAll = async () => {
+    setSyncAllLoading(true)
+    setSyncAllResult(null)
+    
+    try {
+      // 默认同步本月数据
+      const today = dayjs()
+      const beginDate = today.startOf('month').format('YYYY-MM-DD')
+      const endDate = today.subtract(1, 'day').format('YYYY-MM-DD')
+      
+      const response = await api.post('/api/affiliate/accounts/sync-all', {
+        begin_date: beginDate,
+        end_date: endDate
+      })
+      
+      setSyncAllResult(response.data)
+      
+      if (response.data.synced > 0) {
+        message.success(`成功同步 ${response.data.total_records} 条记录`)
+      } else if (response.data.total === 0) {
+        message.info('没有需要同步的账号')
+      } else {
+        message.warning(`同步完成，但有 ${response.data.failed} 个账号失败`)
+      }
+      
+      // 刷新账号列表
+      if (isManager) {
+        await fetchAccountsByEmployees()
+      } else {
+        await fetchAccounts()
+      }
+    } catch (error) {
+      const errorMsg = error.response?.data?.detail || error.message || '同步失败'
+      message.error(errorMsg)
+      setSyncAllResult({
+        success: false,
+        message: errorMsg
+      })
+    } finally {
+      setSyncAllLoading(false)
+    }
+  }
+
   // 检查是否为 LinkHaitao 平台
   const isLinkHaitaoPlatform = (account) => {
     const platform = account.platform || account
@@ -860,14 +908,48 @@ const AffiliateAccounts = () => {
       <div>
         <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16 }}>
           <h2>我的联盟账号</h2>
-          <Button
-            type="primary"
-            icon={<PlusOutlined />}
-            onClick={handleCreateAccount}
-          >
-            添加账号
-          </Button>
+          <Space>
+            <Button
+              type="default"
+              icon={<SyncOutlined spin={syncAllLoading} />}
+              onClick={handleSyncAll}
+              loading={syncAllLoading}
+            >
+              一键同步所有平台
+            </Button>
+            <Button
+              type="primary"
+              icon={<PlusOutlined />}
+              onClick={handleCreateAccount}
+            >
+              添加账号
+            </Button>
+          </Space>
         </div>
+        
+        {/* 一键同步结果提示 */}
+        {syncAllResult && syncAllResult.results && (
+          <Card size="small" style={{ marginBottom: 16 }}>
+            <div style={{ marginBottom: 8 }}>
+              <Tag color={syncAllResult.failed === 0 ? 'green' : 'orange'}>
+                {syncAllResult.message}
+              </Tag>
+            </div>
+            {syncAllResult.results.length > 0 && (
+              <div style={{ maxHeight: 200, overflow: 'auto' }}>
+                {syncAllResult.results.map((r, idx) => (
+                  <div key={idx} style={{ marginBottom: 4 }}>
+                    <Tag color={r.success ? 'green' : 'red'}>{r.success ? '✓' : '✗'}</Tag>
+                    <span>{r.platform} - {r.account_name}: </span>
+                    <span style={{ color: r.success ? '#52c41a' : '#ff4d4f' }}>
+                      {r.success ? `${r.saved_count} 条记录` : r.message}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </Card>
+        )}
 
         <Card>
           <Table

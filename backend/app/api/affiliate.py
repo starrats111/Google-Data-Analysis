@@ -2,7 +2,7 @@
 联盟账号管理API
 """
 from typing import List, Optional
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status, BackgroundTasks
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -737,5 +737,105 @@ async def sync_account_data(
         )
 
 
-
-
+@router.post("/accounts/sync-all")
+async def sync_all_accounts(
+    request_data: dict,
+    background_tasks: BackgroundTasks,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    一键同步所有平台账号数据
+    
+    Args:
+        request_data: 请求数据，包含 begin_date, end_date
+    """
+    from datetime import date, timedelta
+    from sqlalchemy.orm import joinedload
+    from app.services.platform_data_sync import PlatformDataSyncService
+    import logging
+    
+    logger = logging.getLogger(__name__)
+    
+    # 默认同步本月数据
+    today = date.today()
+    default_begin = today.replace(day=1)
+    default_end = today - timedelta(days=1)
+    
+    begin_date = request_data.get("begin_date", default_begin.strftime("%Y-%m-%d"))
+    end_date = request_data.get("end_date", default_end.strftime("%Y-%m-%d"))
+    
+    # 获取当前用户的所有激活账号
+    accounts = db.query(AffiliateAccount).options(
+        joinedload(AffiliateAccount.platform)
+    ).filter(
+        AffiliateAccount.user_id == current_user.id,
+        AffiliateAccount.is_active == True
+    ).all()
+    
+    if not accounts:
+        return {
+            "success": True,
+            "message": "没有需要同步的账号",
+            "total": 0,
+            "synced": 0,
+            "failed": 0,
+            "results": []
+        }
+    
+    # 同步所有账号
+    results = []
+    synced = 0
+    failed = 0
+    total_records = 0
+    
+    sync_service = PlatformDataSyncService(db)
+    
+    for account in accounts:
+        try:
+            logger.info(f"同步账号 {account.account_name} (ID={account.id})")
+            result = sync_service.sync_account_data(account.id, begin_date, end_date)
+            
+            if result.get("success"):
+                synced += 1
+                saved_count = result.get("saved_count", 0)
+                total_records += saved_count
+                results.append({
+                    "account_id": account.id,
+                    "account_name": account.account_name,
+                    "platform": account.platform.platform_name if account.platform else "未知",
+                    "success": True,
+                    "saved_count": saved_count,
+                    "message": result.get("message", "同步成功")
+                })
+            else:
+                failed += 1
+                results.append({
+                    "account_id": account.id,
+                    "account_name": account.account_name,
+                    "platform": account.platform.platform_name if account.platform else "未知",
+                    "success": False,
+                    "saved_count": 0,
+                    "message": result.get("message", "同步失败")
+                })
+        except Exception as e:
+            failed += 1
+            logger.error(f"同步账号 {account.id} 失败: {e}")
+            results.append({
+                "account_id": account.id,
+                "account_name": account.account_name,
+                "platform": account.platform.platform_name if account.platform else "未知",
+                "success": False,
+                "saved_count": 0,
+                "message": str(e)
+            })
+    
+    return {
+        "success": True,
+        "message": f"同步完成：成功 {synced} 个，失败 {failed} 个，共 {total_records} 条记录",
+        "total": len(accounts),
+        "synced": synced,
+        "failed": failed,
+        "total_records": total_records,
+        "results": results
+    }
