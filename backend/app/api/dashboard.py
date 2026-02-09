@@ -34,6 +34,8 @@ async def get_overview(
     """经理总览：全部改为实时来源（Google Ads 同步 + 联盟交易）"""
     today = date.today()
     start_7d = today - timedelta(days=6)
+    # 本月起始日期
+    start_month = today.replace(day=1)
 
     total_employees = db.query(User).filter(User.role == UserRole.EMPLOYEE).count()
     total_mcc_accounts = db.query(GoogleMccAccount).count()
@@ -43,35 +45,68 @@ async def get_overview(
         GoogleAdsApiData.date <= today,
     ).scalar() or 0
 
-    # 按MCC分组汇总费用，再做货币转换
-    cost_by_mcc = db.query(
+    # 获取所有MCC的货币映射
+    all_mccs = db.query(GoogleMccAccount).all()
+    mcc_currency_map = {mcc.id: getattr(mcc, 'currency', 'USD') or 'USD' for mcc in all_mccs}
+
+    # 按MCC分组汇总费用（近7天），再做货币转换
+    cost_by_mcc_7d = db.query(
         GoogleAdsApiData.mcc_id,
         func.sum(GoogleAdsApiData.cost).label("cost"),
     ).filter(
         GoogleAdsApiData.date >= start_7d,
         GoogleAdsApiData.date <= today,
     ).group_by(GoogleAdsApiData.mcc_id).all()
-    # 获取所有MCC的货币映射
-    all_mccs = db.query(GoogleMccAccount).all()
-    mcc_currency_map = {mcc.id: getattr(mcc, 'currency', 'USD') or 'USD' for mcc in all_mccs}
     cost_7d = sum(
         convert_to_usd(float(r.cost or 0.0), mcc_currency_map.get(r.mcc_id, 'USD'))
-        for r in cost_by_mcc
+        for r in cost_by_mcc_7d
+    )
+
+    # 按MCC分组汇总费用（本月），再做货币转换
+    cost_by_mcc_month = db.query(
+        GoogleAdsApiData.mcc_id,
+        func.sum(GoogleAdsApiData.cost).label("cost"),
+    ).filter(
+        GoogleAdsApiData.date >= start_month,
+        GoogleAdsApiData.date <= today,
+    ).group_by(GoogleAdsApiData.mcc_id).all()
+    cost_month = sum(
+        convert_to_usd(float(r.cost or 0.0), mcc_currency_map.get(r.mcc_id, 'USD'))
+        for r in cost_by_mcc_month
     )
 
     # 佣金：按交易时间窗口（所有状态计入总佣金）
     # 排除已删除/停用账号的交易
-    start_dt = datetime.combine(start_7d, datetime.min.time())
+    start_dt_7d = datetime.combine(start_7d, datetime.min.time())
     end_dt = datetime.combine(today, datetime.max.time())
     commission_7d = db.query(func.sum(AffiliateTransaction.commission_amount)).outerjoin(
         AffiliateAccount,
         AffiliateTransaction.affiliate_account_id == AffiliateAccount.id
     ).filter(
-        AffiliateTransaction.transaction_time >= start_dt,
+        AffiliateTransaction.transaction_time >= start_dt_7d,
         AffiliateTransaction.transaction_time <= end_dt,
         # 排除已停用账号的交易（账号不存在或已激活）
         (AffiliateAccount.id.is_(None)) | (AffiliateAccount.is_active == True)
     ).scalar() or 0.0
+
+    # 本月佣金和订单
+    start_dt_month = datetime.combine(start_month, datetime.min.time())
+    commission_orders_month = db.query(
+        func.sum(AffiliateTransaction.commission_amount).label("commission"),
+        func.count(AffiliateTransaction.id).label("orders")
+    ).outerjoin(
+        AffiliateAccount,
+        AffiliateTransaction.affiliate_account_id == AffiliateAccount.id
+    ).filter(
+        AffiliateTransaction.transaction_time >= start_dt_month,
+        AffiliateTransaction.transaction_time <= end_dt,
+        (AffiliateAccount.id.is_(None)) | (AffiliateAccount.is_active == True)
+    ).first()
+    commission_month = float(commission_orders_month.commission or 0.0) if commission_orders_month else 0.0
+    orders_month = int(commission_orders_month.orders or 0) if commission_orders_month else 0
+
+    # 本月ROI计算
+    roi_month = ((commission_month - cost_month) / cost_month * 100) if cost_month > 0 else 0.0
 
     # 活跃员工：近7天有Google Ads数据或有交易数据的员工
     active_ads_users = db.query(func.distinct(GoogleAdsApiData.user_id)).filter(
@@ -80,7 +115,7 @@ async def get_overview(
     ).all()
     active_tx_users = db.query(func.distinct(AffiliateTransaction.user_id)).filter(
         AffiliateTransaction.user_id.isnot(None),
-        AffiliateTransaction.transaction_time >= start_dt,
+        AffiliateTransaction.transaction_time >= start_dt_7d,
         AffiliateTransaction.transaction_time <= end_dt,
     ).all()
     active_user_ids = {r[0] for r in active_ads_users if r and r[0]} | {r[0] for r in active_tx_users if r and r[0]}
@@ -94,6 +129,10 @@ async def get_overview(
         "campaigns_7d": int(campaigns_7d or 0),
         "cost_7d": float(cost_7d or 0.0),
         "commission_7d": float(commission_7d or 0.0),
+        "cost_month": float(cost_month or 0.0),
+        "commission_month": float(commission_month or 0.0),
+        "orders_month": orders_month,
+        "roi_month": round(roi_month, 2),
         "last_google_sync_at": last_sync_at.isoformat() if last_sync_at else None,
     }
 
@@ -106,7 +145,9 @@ async def get_employees_data(
     """经理员工列表：实时来源（Google Ads 同步 + 联盟交易）"""
     today = date.today()
     start_7d = today - timedelta(days=6)
-    start_dt = datetime.combine(start_7d, datetime.min.time())
+    start_month = today.replace(day=1)
+    start_dt_7d = datetime.combine(start_7d, datetime.min.time())
+    start_dt_month = datetime.combine(start_month, datetime.min.time())
     end_dt = datetime.combine(today, datetime.max.time())
 
     employees = db.query(User).filter(User.role == UserRole.EMPLOYEE).all()
@@ -121,8 +162,12 @@ async def get_employees_data(
     ).group_by(GoogleMccAccount.user_id).all()
     mcc_map = {r.user_id: int(r.mcc_count or 0) for r in mcc_rows}
 
+    # MCC货币映射
+    all_mccs_emp = db.query(GoogleMccAccount).all()
+    mcc_currency_map_emp = {mcc.id: getattr(mcc, 'currency', 'USD') or 'USD' for mcc in all_mccs_emp}
+
     # Google Ads 聚合（近7天），按user_id+mcc_id分组以便做货币转换
-    ads_rows = db.query(
+    ads_rows_7d = db.query(
         GoogleAdsApiData.user_id,
         GoogleAdsApiData.mcc_id,
         func.count(func.distinct(GoogleAdsApiData.campaign_id)).label("campaigns_7d"),
@@ -133,11 +178,9 @@ async def get_employees_data(
         GoogleAdsApiData.date >= start_7d,
         GoogleAdsApiData.date <= today,
     ).group_by(GoogleAdsApiData.user_id, GoogleAdsApiData.mcc_id).all()
-    # MCC货币映射
-    all_mccs_emp = db.query(GoogleMccAccount).all()
-    mcc_currency_map_emp = {mcc.id: getattr(mcc, 'currency', 'USD') or 'USD' for mcc in all_mccs_emp}
+    
     ads_map: Dict[int, dict] = {}
-    for r in ads_rows:
+    for r in ads_rows_7d:
         uid = r.user_id
         currency = mcc_currency_map_emp.get(r.mcc_id, 'USD')
         cost_usd = convert_to_usd(float(r.cost_7d or 0.0), currency)
@@ -151,8 +194,26 @@ async def get_employees_data(
             if existing is None or new_ts > existing:
                 ads_map[uid]["last_sync_at"] = new_ts
 
+    # Google Ads 聚合（本月），按user_id+mcc_id分组
+    ads_rows_month = db.query(
+        GoogleAdsApiData.user_id,
+        GoogleAdsApiData.mcc_id,
+        func.sum(GoogleAdsApiData.cost).label("cost_month"),
+    ).filter(
+        GoogleAdsApiData.user_id.in_(employee_ids),
+        GoogleAdsApiData.date >= start_month,
+        GoogleAdsApiData.date <= today,
+    ).group_by(GoogleAdsApiData.user_id, GoogleAdsApiData.mcc_id).all()
+    
+    ads_map_month: Dict[int, float] = {}
+    for r in ads_rows_month:
+        uid = r.user_id
+        currency = mcc_currency_map_emp.get(r.mcc_id, 'USD')
+        cost_usd = convert_to_usd(float(r.cost_month or 0.0), currency)
+        ads_map_month[uid] = ads_map_month.get(uid, 0.0) + cost_usd
+
     # 交易聚合（近7天）- 排除已停用账号
-    tx_rows = db.query(
+    tx_rows_7d = db.query(
         AffiliateTransaction.user_id,
         func.sum(AffiliateTransaction.commission_amount).label("commission_7d"),
         func.count(AffiliateTransaction.id).label("orders_7d"),
@@ -161,35 +222,61 @@ async def get_employees_data(
         AffiliateTransaction.affiliate_account_id == AffiliateAccount.id
     ).filter(
         AffiliateTransaction.user_id.in_(employee_ids),
-        AffiliateTransaction.transaction_time >= start_dt,
+        AffiliateTransaction.transaction_time >= start_dt_7d,
         AffiliateTransaction.transaction_time <= end_dt,
         (AffiliateAccount.id.is_(None)) | (AffiliateAccount.is_active == True)
     ).group_by(AffiliateTransaction.user_id).all()
-    tx_map = {
+    tx_map_7d = {
         r.user_id: {
             "commission_7d": float(r.commission_7d or 0.0),
             "orders_7d": int(r.orders_7d or 0),
         }
-        for r in tx_rows
+        for r in tx_rows_7d
+    }
+
+    # 交易聚合（本月）- 排除已停用账号
+    tx_rows_month = db.query(
+        AffiliateTransaction.user_id,
+        func.sum(AffiliateTransaction.commission_amount).label("commission_month"),
+        func.count(AffiliateTransaction.id).label("orders_month"),
+    ).outerjoin(
+        AffiliateAccount,
+        AffiliateTransaction.affiliate_account_id == AffiliateAccount.id
+    ).filter(
+        AffiliateTransaction.user_id.in_(employee_ids),
+        AffiliateTransaction.transaction_time >= start_dt_month,
+        AffiliateTransaction.transaction_time <= end_dt,
+        (AffiliateAccount.id.is_(None)) | (AffiliateAccount.is_active == True)
+    ).group_by(AffiliateTransaction.user_id).all()
+    tx_map_month = {
+        r.user_id: {
+            "commission_month": float(r.commission_month or 0.0),
+            "orders_month": int(r.orders_month or 0),
+        }
+        for r in tx_rows_month
     }
 
     result = []
     for e in employees:
         a = ads_map.get(e.id, {})
-        t = tx_map.get(e.id, {})
+        t7d = tx_map_7d.get(e.id, {})
+        tm = tx_map_month.get(e.id, {})
         result.append({
             "employee_id": e.employee_id,
             "username": e.username,
             "mcc_count": mcc_map.get(e.id, 0),
             "campaigns_7d": a.get("campaigns_7d", 0),
             "cost_7d": a.get("cost_7d", 0.0),
-            "commission_7d": t.get("commission_7d", 0.0),
-            "orders_7d": t.get("orders_7d", 0),
+            "commission_7d": t7d.get("commission_7d", 0.0),
+            "orders_7d": t7d.get("orders_7d", 0),
+            "cost_month": ads_map_month.get(e.id, 0.0),
+            "commission_month": tm.get("commission_month", 0.0),
+            "orders_month": tm.get("orders_month", 0),
             "last_google_sync_at": a.get("last_sync_at"),
         })
 
-    # 默认按 cost_7d 降序
-    result.sort(key=lambda x: float(x.get("cost_7d") or 0.0), reverse=True)
+    # 默认按 cost_month 降序
+    result.sort(key=lambda x: float(x.get("cost_month") or 0.0), reverse=True)
     return result
 
 

@@ -124,14 +124,16 @@ const Dashboard = () => {
 
   if (user?.role === 'manager') {
     const columns = [
-      { title: '员工编号', dataIndex: 'employee_id', key: 'employee_id' },
-      { title: '用户名', dataIndex: 'username', key: 'username' },
-      { title: 'MCC数', dataIndex: 'mcc_count', key: 'mcc_count', align: 'right' },
-      { title: '近7天广告系列数', dataIndex: 'campaigns_7d', key: 'campaigns_7d', align: 'right' },
-      { title: '近7天费用', dataIndex: 'cost_7d', key: 'cost_7d', align: 'right', render: (v) => Number(v || 0).toFixed(2) },
-      { title: '近7天佣金', dataIndex: 'commission_7d', key: 'commission_7d', align: 'right', render: (v) => Number(v || 0).toFixed(2) },
-      { title: '近7天订单', dataIndex: 'orders_7d', key: 'orders_7d', align: 'right' },
-      { title: '最后同步时间', dataIndex: 'last_google_sync_at', key: 'last_google_sync_at', render: (v) => v ? dayjs.utc(v).local().format('YYYY-MM-DD HH:mm') : '-' },
+      { title: '员工编号', dataIndex: 'employee_id', key: 'employee_id', width: 80 },
+      { title: '用户名', dataIndex: 'username', key: 'username', width: 80 },
+      { title: 'MCC数', dataIndex: 'mcc_count', key: 'mcc_count', align: 'right', width: 70 },
+      { title: '近7天费用', dataIndex: 'cost_7d', key: 'cost_7d', align: 'right', width: 100, render: (v) => Number(v || 0).toFixed(2) },
+      { title: '近7天佣金', dataIndex: 'commission_7d', key: 'commission_7d', align: 'right', width: 100, render: (v) => Number(v || 0).toFixed(2) },
+      { title: '近7天订单', dataIndex: 'orders_7d', key: 'orders_7d', align: 'right', width: 80 },
+      { title: '本月费用', dataIndex: 'cost_month', key: 'cost_month', align: 'right', width: 100, render: (v) => <span style={{ color: '#cf1322' }}>{Number(v || 0).toFixed(2)}</span> },
+      { title: '本月佣金', dataIndex: 'commission_month', key: 'commission_month', align: 'right', width: 100, render: (v) => <span style={{ color: '#3f8600' }}>{Number(v || 0).toFixed(2)}</span> },
+      { title: '本月订单', dataIndex: 'orders_month', key: 'orders_month', align: 'right', width: 80 },
+      { title: '最后同步', dataIndex: 'last_google_sync_at', key: 'last_google_sync_at', width: 140, render: (v) => v ? dayjs.utc(v).local().format('YYYY-MM-DD HH:mm') : '-' },
     ]
 
     return (
@@ -157,7 +159,7 @@ const Dashboard = () => {
             )}
           </Space>
         </div>
-        <Row gutter={16} style={{ marginBottom: 24 }}>
+        <Row gutter={16} style={{ marginBottom: 16 }}>
           <Col span={6}>
             <Card bordered={false}>
               <Statistic title="总员工数" value={overviewData?.total_employees || 0} />
@@ -176,6 +178,47 @@ const Dashboard = () => {
           <Col span={6}>
             <Card bordered={false}>
               <Statistic title="近7天总佣金" value={overviewData?.commission_7d || 0} precision={2} />
+            </Card>
+          </Col>
+        </Row>
+        <Row gutter={16} style={{ marginBottom: 24 }}>
+          <Col span={6}>
+            <Card bordered={false}>
+              <Statistic 
+                title="本月广告费用" 
+                value={overviewData?.cost_month || 0} 
+                precision={2}
+                valueStyle={{ color: '#cf1322' }}
+              />
+            </Card>
+          </Col>
+          <Col span={6}>
+            <Card bordered={false}>
+              <Statistic 
+                title="本月总佣金" 
+                value={overviewData?.commission_month || 0} 
+                precision={2}
+                valueStyle={{ color: '#3f8600' }}
+              />
+            </Card>
+          </Col>
+          <Col span={6}>
+            <Card bordered={false}>
+              <Statistic 
+                title="本月订单数" 
+                value={overviewData?.orders_month || 0}
+              />
+            </Card>
+          </Col>
+          <Col span={6}>
+            <Card bordered={false}>
+              <Statistic 
+                title="本月ROI" 
+                value={overviewData?.roi_month || 0} 
+                precision={2}
+                suffix="%"
+                valueStyle={{ color: (overviewData?.roi_month || 0) >= 0 ? '#3f8600' : '#cf1322' }}
+              />
             </Card>
           </Col>
         </Row>
