@@ -108,12 +108,15 @@ class ExportService:
                 if '展示' in row and not has_l7d_fields:
                     continue
                 
+                # 过滤掉ai_report字段（只在网站查看，不导出）
+                filtered_row = {k: v for k, v in row.items() if k != 'ai_report'}
+                
                 export_row = {
                     '日期': result.analysis_date.strftime('%Y-%m-%d') if result.analysis_date else '',
                     '员工': user.username if user.role == 'employee' else result.user.username,
                     '联盟平台': account.platform.platform_name if account and account.platform else '',
                     '联盟账号': account.account_name if account else '',
-                    **row  # 展开分析结果数据
+                    **filtered_row  # 展开分析结果数据（已过滤ai_report）
                 }
                 data_list.append(export_row)
         

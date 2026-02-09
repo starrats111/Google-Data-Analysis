@@ -1281,7 +1281,15 @@ const Analysis = ({ mode }) => {
                     columns={dataColumns}
                     dataSource={dataWithKeys}
                     rowKey="__rowKey"
-                    pagination={{ 
+                    pagination={dataWithKeys.length > 100 ? { 
+                      pageSize: 50, 
+                      size: 'small', 
+                      hideOnSinglePage: false,
+                      showQuickJumper: true,
+                      showSizeChanger: true,
+                      pageSizeOptions: ['20', '50', '100'],
+                      showTotal: (total) => `共 ${total} 条`
+                    } : { 
                       pageSize: 20, 
                       size: 'small', 
                       hideOnSinglePage: true,
@@ -1291,8 +1299,8 @@ const Analysis = ({ mode }) => {
                     size="small"
                     bordered
                     sticky
-                    scroll={{ x: 'max-content', y: 420 }}
-                    virtual={false}
+                    scroll={{ x: 'max-content', y: 500 }}
+                    virtual={dataWithKeys.length > 200}
                   />
                         </div>
                       )

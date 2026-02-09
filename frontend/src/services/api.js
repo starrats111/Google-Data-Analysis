@@ -1,4 +1,13 @@
 import axios from 'axios'
+import { generateCacheKey, getCachedData, setCacheData } from './apiCache'
+
+// 正在进行的请求（用于取消重复请求）
+const pendingRequests = new Map()
+
+// 生成请求唯一标识
+const getRequestKey = (config) => {
+  return `${config.method}:${config.url}:${JSON.stringify(config.params || {})}:${JSON.stringify(config.data || {})}`
+}
 
 // 获取API基础URL
 const getApiBaseUrl = () => {
@@ -32,7 +41,7 @@ const api = axios.create({
   },
 })
 
-// 请求拦截器：添加Token和URL修复
+// 请求拦截器：添加Token、URL修复、取消重复请求
 api.interceptors.request.use((config) => {
   const token = localStorage.getItem('token')
   if (token) {
@@ -57,6 +66,36 @@ api.interceptors.request.use((config) => {
     }
   }
   
+  // 取消重复的GET请求（同一个GET请求如果正在进行中，取消之前的）
+  if (config.method?.toLowerCase() === 'get' && !config.skipDuplicateCancel) {
+    const requestKey = getRequestKey(config)
+    
+    // 如果有相同的请求正在进行，取消它
+    if (pendingRequests.has(requestKey)) {
+      const controller = pendingRequests.get(requestKey)
+      controller.abort()
+    }
+    
+    // 创建新的AbortController
+    const controller = new AbortController()
+    config.signal = controller.signal
+    pendingRequests.set(requestKey, controller)
+    
+    // 保存key到config用于响应后清理
+    config._requestKey = requestKey
+  }
+  
+  // GET请求缓存检查（仅对标记为可缓存的请求）
+  if (config.method?.toLowerCase() === 'get' && config.useCache) {
+    const cacheKey = generateCacheKey(config.url, config.params)
+    const cached = getCachedData(cacheKey)
+    if (cached) {
+      // 返回一个特殊的已取消请求，但带有缓存数据
+      config._cachedResponse = cached
+    }
+    config._cacheKey = cacheKey
+  }
+  
   // 调试：记录最终请求URL（仅开发环境）
   if (import.meta.env.DEV) {
     const fullUrl = (config.baseURL || '') + config.url
@@ -66,12 +105,38 @@ api.interceptors.request.use((config) => {
   return config
 })
 
-// 响应拦截器：处理错误
+// 响应拦截器：处理错误、清理pending请求、缓存响应
 api.interceptors.response.use(
-  (response) => response,
+  (response) => {
+    // 清理pending请求
+    const requestKey = response.config._requestKey
+    if (requestKey && pendingRequests.has(requestKey)) {
+      pendingRequests.delete(requestKey)
+    }
+    
+    // 缓存GET请求响应
+    const cacheKey = response.config._cacheKey
+    if (cacheKey && response.config.useCache) {
+      const cacheTTL = response.config.cacheTTL || 5 * 60 * 1000 // 默认5分钟
+      setCacheData(cacheKey, response, cacheTTL)
+    }
+    
+    return response
+  },
   (error) => {
+    // 清理pending请求
+    const requestKey = error.config?._requestKey
+    if (requestKey && pendingRequests.has(requestKey)) {
+      pendingRequests.delete(requestKey)
+    }
+    
+    // 忽略取消的请求
+    if (axios.isCancel(error) || error.name === 'CanceledError' || error.name === 'AbortError') {
+      return Promise.reject({ isCanceled: true, message: '请求已取消' })
+    }
+    
     // 处理超时错误
-    if (error.code === 'ECONNABORTED' || error.message.includes('timeout')) {
+    if (error.code === 'ECONNABORTED' || error.message?.includes('timeout')) {
       console.error('请求超时:', error.config?.url)
       error.message = '请求超时，请检查网络连接或稍后重试'
     }

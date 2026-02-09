@@ -175,7 +175,7 @@ export default function GoogleAdsData() {
       }
     } catch (error) {
       // 忽略取消的请求
-      if (error.name === 'CanceledError' || error.name === 'AbortError') {
+      if (error.isCanceled || error.name === 'CanceledError' || error.name === 'AbortError') {
         return
       }
       if (import.meta.env.DEV) {
@@ -275,12 +275,13 @@ export default function GoogleAdsData() {
             </Col>
 
             <Col span={12}>
-              <Form.Item name="status" label="状态（可选）">
-                <Select placeholder="选择状态" allowClear>
+              <Form.Item name="status" label="状态" initialValue="ENABLED">
+                <Select placeholder="选择状态">
                   <Select.Option value="ENABLED">已启用</Select.Option>
                   <Select.Option value="PAUSED">已暂停</Select.Option>
                   <Select.Option value="REMOVED">已移除</Select.Option>
                   <Select.Option value="UNKNOWN">未知</Select.Option>
+                  <Select.Option value="ALL">全部</Select.Option>
                 </Select>
               </Form.Item>
             </Col>
@@ -357,15 +358,16 @@ export default function GoogleAdsData() {
             <Table
             dataSource={campaignData}
             pagination={{ 
-              pageSize: 20,
+              pageSize: 50,
               showSizeChanger: true,
               showQuickJumper: true,
               showTotal: (total) => `共 ${total} 条`,
-              defaultPageSize: 20,
-              pageSizeOptions: ['10', '20', '50', '100'],
+              defaultPageSize: 50,
+              pageSizeOptions: ['20', '50', '100', '200'],
             }}
             rowKey="campaign_id"
-            scroll={{ x: 1200 }}
+            scroll={{ x: 1200, y: 600 }}
+            virtual={campaignData.length > 200}
             columns={[
               {
                 title: '状态',

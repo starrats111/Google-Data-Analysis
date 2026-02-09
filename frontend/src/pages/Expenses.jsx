@@ -103,7 +103,7 @@ const Expenses = () => {
       }
     } catch (e) {
       // 忽略取消的请求
-      if (e.name === 'CanceledError' || e.name === 'AbortError') {
+      if (e.isCanceled || e.name === 'CanceledError' || e.name === 'AbortError') {
         return
       }
       // 如果是网络错误，不要显示错误消息，避免刷屏

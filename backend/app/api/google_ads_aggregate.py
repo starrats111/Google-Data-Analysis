@@ -190,7 +190,7 @@ async def get_campaign_data(
     end_date: Optional[str] = Query(None, description="自定义结束日期 YYYY-MM-DD（仅custom时使用）"),
     mcc_id: Optional[int] = Query(None, description="MCC ID（可选）"),
     platform_code: Optional[str] = Query(None, description="平台代码（可选）"),
-    status: Optional[str] = Query(None, description="广告系列状态（可选）：ENABLED/PAUSED/REMOVED/UNKNOWN"),
+    status: Optional[str] = Query("ENABLED", description="广告系列状态（默认只显示已启用）：ENABLED/PAUSED/REMOVED/UNKNOWN/ALL"),
     merchant_id: Optional[str] = Query(None, description="商家ID（可选）：广告系列名最后一段ID"),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
@@ -367,7 +367,8 @@ async def get_campaign_data(
         want = platform_code.upper()
         campaign_data = [c for c in campaign_data if (c.get("platform_code") or "").upper() == want]
 
-    if status:
+    # 状态筛选：默认只显示ENABLED，传ALL显示所有状态
+    if status and status.upper() != "ALL":
         want_s = status.upper()
         campaign_data = [c for c in campaign_data if (c.get("status_code") or "").upper() == want_s]
 

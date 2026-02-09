@@ -121,7 +121,7 @@ export default function PlatformData() {
       }
     } catch (error) {
       // 忽略取消的请求
-      if (error.name === 'CanceledError' || error.name === 'AbortError') {
+      if (error.isCanceled || error.name === 'CanceledError' || error.name === 'AbortError') {
         return
       }
       message.error(error.response?.data?.detail || '查询失败')

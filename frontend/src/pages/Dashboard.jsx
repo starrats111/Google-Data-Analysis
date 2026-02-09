@@ -1,12 +1,14 @@
-import React, { useEffect, useMemo, useState, useCallback, useRef } from 'react'
+import React, { useEffect, useMemo, useState, useCallback, useRef, lazy, Suspense } from 'react'
 import { Card, Row, Col, Table, message, Segmented, Tag, Typography, Space, Statistic, Input, Button, Spin, Select, Tooltip } from 'antd'
 import { SearchOutlined, RocketOutlined, CalendarOutlined, GlobalOutlined, PictureOutlined, SyncOutlined, ClockCircleOutlined } from '@ant-design/icons'
 import { useAuth } from '../store/authStore'
 import api from '../services/api'
-import ReactECharts from 'echarts-for-react'
 import dayjs from 'dayjs'
 import utc from 'dayjs/plugin/utc'
 import timezone from 'dayjs/plugin/timezone'
+
+// 懒加载ECharts组件，减少初始加载时间
+const ReactECharts = lazy(() => import('echarts-for-react'))
 
 // 启用时区插件
 dayjs.extend(utc)
@@ -373,12 +375,16 @@ const Dashboard = () => {
       <Row gutter={16} style={{ marginBottom: 16 }}>
         <Col span={12}>
           <Card title="佣金走向">
-            <ReactECharts option={commissionOption} style={{ height: 260 }} />
+            <Suspense fallback={<div style={{ height: 260, display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Spin /></div>}>
+              <ReactECharts option={commissionOption} style={{ height: 260 }} lazyUpdate={true} notMerge={true} />
+            </Suspense>
           </Card>
         </Col>
         <Col span={12}>
           <Card title="费用走向">
-            <ReactECharts option={costOption} style={{ height: 260 }} />
+            <Suspense fallback={<div style={{ height: 260, display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Spin /></div>}>
+              <ReactECharts option={costOption} style={{ height: 260 }} lazyUpdate={true} notMerge={true} />
+            </Suspense>
           </Card>
         </Col>
       </Row>

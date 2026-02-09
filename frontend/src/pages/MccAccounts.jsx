@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react'
 import { 
   Card, Table, Button, Modal, Form, Input, message, Popconfirm, Tag, Space, 
   Switch, Steps, Alert, Upload, Tabs, Progress, Tooltip, DatePicker, Divider,
-  Typography, Badge, Descriptions, Row, Col
+  Typography, Badge, Descriptions, Row, Col, Select
 } from 'antd'
 import { 
   PlusOutlined, EditOutlined, DeleteOutlined, SyncOutlined, LinkOutlined, 
@@ -104,6 +104,7 @@ export default function MccAccounts() {
       mcc_id: mcc.mcc_id,
       mcc_name: mcc.mcc_name,
       email: mcc.email || '',
+      currency: mcc.currency || 'USD',
       use_service_account: mcc.use_service_account !== false,
       is_active: mcc.is_active
     })
@@ -376,6 +377,13 @@ export default function MccAccounts() {
       render: (val) => <Tag color={val ? 'green' : 'red'}>{val ? '激活' : '停用'}</Tag>
     },
     {
+      title: '货币',
+      dataIndex: 'currency',
+      key: 'currency',
+      width: 70,
+      render: (val) => <Tag color={val === 'CNY' ? 'red' : 'green'}>{val || 'USD'}</Tag>
+    },
+    {
       title: '认证模式',
       key: 'auth_mode',
       width: 100,
@@ -591,6 +599,18 @@ export default function MccAccounts() {
 
           <Form.Item name="email" label="邮箱（可选）">
             <Input placeholder="关联的邮箱地址（仅用于记录）" />
+          </Form.Item>
+
+          <Form.Item
+            name="currency"
+            label="货币类型"
+            initialValue="USD"
+            help="如果是人民币账户请选择CNY，系统会自动将费用转换为美元显示"
+          >
+            <Select>
+              <Select.Option value="USD">美元 (USD)</Select.Option>
+              <Select.Option value="CNY">人民币 (CNY)</Select.Option>
+            </Select>
           </Form.Item>
 
           <Form.Item

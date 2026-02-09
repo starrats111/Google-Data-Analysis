@@ -236,6 +236,7 @@ class MccAccountUpdate(BaseModel):
     """更新MCC账号请求"""
     mcc_name: Optional[str] = None
     email: Optional[str] = None
+    currency: Optional[str] = None  # 货币类型：USD/CNY
     use_service_account: Optional[bool] = None
     client_id: Optional[str] = None
     client_secret: Optional[str] = None
@@ -282,6 +283,7 @@ def _build_mcc_response(mcc_account: GoogleMccAccount, data_count: int = 0, owne
         "mcc_id": mcc_account.mcc_id,
         "mcc_name": mcc_account.mcc_name,
         "email": mcc_account.email,
+        "currency": getattr(mcc_account, 'currency', 'USD') or 'USD',  # 货币类型
         "is_active": mcc_account.is_active,
         "use_service_account": mcc_account.use_service_account if hasattr(mcc_account, 'use_service_account') else True,
         "created_at": mcc_account.created_at.isoformat() if mcc_account.created_at else datetime.now().isoformat(),
@@ -622,6 +624,12 @@ async def update_mcc_account(
         mcc_account.mcc_name = mcc_data.mcc_name
     if mcc_data.email is not None:
         mcc_account.email = mcc_data.email
+    # 更新货币类型（用于费用转换）
+    if mcc_data.currency is not None:
+        currency_value = mcc_data.currency.strip().upper() if isinstance(mcc_data.currency, str) else mcc_data.currency
+        if currency_value in ['USD', 'CNY']:
+            mcc_account.currency = currency_value
+            logger.info(f"更新MCC {mcc_account.mcc_id} 的货币类型为: {currency_value}")
     # 对于敏感字段，只有明确提供且非空字符串才更新（None或空字符串表示不修改）
     import logging
     logger = logging.getLogger(__name__)
