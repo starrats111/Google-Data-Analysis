@@ -194,18 +194,12 @@ async def get_cost_detail(
         GoogleAdsApiData.extracted_platform_code.is_(None)
     ).group_by(GoogleAdsApiData.mcc_id)
     
+    # 未匹配平台的费用不再计入总费用（这些是不需要的数据）
+    # unmatched_cost 保留为0，仅用于兼容前端
     unmatched_cost = 0.0
-    for r in unmatched_query.all():
-        cost = float(r.total_cost or 0)
-        currency = mcc_currency_map.get(r.mcc_id, 'USD')
-        if currency == 'CNY':
-            cost = cost / CNY_TO_USD_RATE
-        unmatched_cost += cost
-    unmatched_cost = round(unmatched_cost, 2)
     
-    # 总费用 = MCC费用 + 未匹配平台费用
-    mcc_total_cost = sum(m.get('total_cost', 0) for m in mcc_breakdown)
-    total_cost = round(mcc_total_cost + unmatched_cost, 4)
+    # 总费用 = 仅MCC费用（不含未匹配平台费用）
+    total_cost = sum(m.get('total_cost', 0) for m in mcc_breakdown)
     
     # 按平台+日期+MCC明细（细分，含货币转换）
     platform_detail_query = db.query(
@@ -1073,12 +1067,9 @@ async def get_expense_summary(
         else:
             by_date[d][1] = ga_cost  # 使用Google Ads API费用
     
-    # 将未匹配平台的费用也计入总费用（但不分配到具体平台）
-    # 这些费用会在总费用中体现，但不会出现在按平台汇总中
-    for d, unmatched_cost in ga_unmatched_cost_map.items():
-        day_set.add(d)
-        # 未匹配的费用计入总费用，但不分配到具体平台
-        # 这样总费用就能与Google Ads数据页面对上了
+    # 未匹配平台的费用不再计入（这些是不需要的数据）
+    # for d, unmatched_cost in ga_unmatched_cost_map.items():
+    #     day_set.add(d)
 
     # 拉取拒付佣金调整、手动费用和手动佣金（区间内）
     adjustments = db.query(ExpenseAdjustment).filter(
@@ -1171,9 +1162,9 @@ async def get_expense_summary(
             range_net_profit=round(range_net, 4),
         ))
 
-    # 将未匹配平台的费用也计入总费用
-    unmatched_total_cost = sum(ga_unmatched_cost_map.values())
-    total_cost += unmatched_total_cost
+    # 未匹配平台的费用不再计入总费用（这些是不需要的数据）
+    # unmatched_total_cost = sum(ga_unmatched_cost_map.values())
+    # total_cost += unmatched_total_cost
     
     day_count = len(day_set) if len(day_set) > 0 else 0
     net_profit = total_commission - total_rejected - total_cost
@@ -1399,17 +1390,9 @@ async def get_expense_daily(
             logger.error(f"查询分析结果失败: {e}", exc_info=True)
             # 继续执行，返回空列表而不是崩溃
 
-    # 添加未匹配平台的费用行
-    for d, unmatched_cost in ga_unmatched_cost_map.items():
-        rows.append(ExpenseDailyRow(
-            date=d.strftime("%Y-%m-%d"),
-            platform_id=-1,  # 使用-1表示未匹配
-            platform_name="未匹配",
-            commission=0.0,
-            ad_cost=round(unmatched_cost, 4),
-            rejected_commission=0.0,
-            net_profit=round(-unmatched_cost, 4),
-        ))
+    # 未匹配平台的费用不再显示（这些是不需要的数据）
+    # for d, unmatched_cost in ga_unmatched_cost_map.items():
+    #     rows.append(ExpenseDailyRow(...))
     
     # 排序：日期 desc, 平台 asc
     rows.sort(key=lambda x: (x.date, x.platform_id), reverse=True)
