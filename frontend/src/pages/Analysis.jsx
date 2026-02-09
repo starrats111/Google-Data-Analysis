@@ -1,4 +1,4 @@
-import React, { useMemo, useState, useEffect, useRef } from 'react'
+import React, { useMemo, useState, useEffect, useRef, useCallback } from 'react'
 import { Card, Table, Select, DatePicker, Space, message, Tag, Badge, Typography, Tooltip, Button, Popconfirm, Collapse, Modal, Upload, Spin, Input } from 'antd'
 import { UploadOutlined, RobotOutlined, SettingOutlined, CopyOutlined, ArrowLeftOutlined, CloseOutlined } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
@@ -457,7 +457,7 @@ const Analysis = ({ mode }) => {
   }
   
   // 查看单条广告系列的 AI 分析报告（从已存储的数据中读取）
-  const handleViewCampaignReport = (row) => {
+  const handleViewCampaignReport = useCallback((row) => {
     if (!row) return
     
     const campaignName = String(row['广告系列名'] || row['广告系列'] || row['系列名'] || '')
@@ -494,7 +494,7 @@ const Analysis = ({ mode }) => {
         analysis_date: dayjs().format('YYYY-MM-DD')
       })
     }
-  }
+  }, [])
   
   // 从完整报告中提取特定广告系列的段落
   const extractCampaignSection = (fullReport, campaignName) => {
@@ -1137,31 +1137,39 @@ const Analysis = ({ mode }) => {
 
                         // 为操作指令列添加特殊渲染 - 可点击查看AI报告
                         if (key === '操作指令') {
-                          column.width = 220
+                          column.width = 260
                           column.ellipsis = false
                           column.render = (text, row) => {
                             if (!text || text === '-') return '-'
                             const t = String(text)
                             let color = 'default'
-                            // 根据操作指令内容设置颜色
-                            if (t.includes('关停') || t.includes('PAUSE')) {
+                            // 根据操作指令内容设置颜色（支持新格式：CPC $X.XX→$X.XX | 预算 $X.XX→$X.XX(+X%)）
+                            if (t.includes('关停') || t === 'PAUSE') {
                               color = 'red'
-                            } else if (t.includes('降') || t.includes('降价')) {
-                              color = 'orange'
-                            } else if (t.includes('预算') || t.includes('加')) {
-                              color = 'green'
-                            } else if (t.includes('CPC') && t.includes('→')) {
-                              color = 'cyan'
-                            } else if (t.includes('维持')) {
-                              color = 'blue'
-                            } else if (t.includes('样本不足') || t.includes('观察')) {
+                            } else if (t.includes('样本不足')) {
                               color = 'default'
+                            } else if (t.includes('稳定运行') || (t.includes('(+0%)') && !t.includes('(+2') && !t.includes('(+3'))) {
+                              color = 'blue'
+                            } else if (t.includes('(+30%)') || t.includes('(+20%)')) {
+                              color = 'green'
+                            } else if (t.includes('→') && t.includes('CPC') && !t.includes('预算')) {
+                              // 只有CPC变化，可能是降价
+                              const cpcMatch = t.match(/CPC \$(\d+\.?\d*)\u2192\$(\d+\.?\d*)/)
+                              if (cpcMatch) {
+                                const oldCpc = parseFloat(cpcMatch[1])
+                                const newCpc = parseFloat(cpcMatch[2])
+                                color = newCpc < oldCpc ? 'orange' : 'cyan'
+                              } else {
+                                color = 'cyan'
+                              }
+                            } else if (t.includes('→')) {
+                              color = 'cyan'
                             }
                             return (
                               <Tooltip title="点击查看该广告系列的 AI 分析报告">
                                 <Tag 
                                   color={color} 
-                                  style={{ fontSize: '13px', cursor: 'pointer' }}
+                                  style={{ fontSize: '12px', cursor: 'pointer', maxWidth: '240px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}
                                   onClick={(e) => {
                                     e.stopPropagation() // 阻止冒泡到行展开
                                     handleViewCampaignReport(row)
@@ -1374,31 +1382,39 @@ const Analysis = ({ mode }) => {
 
                 // 为操作指令列添加特殊渲染 - 可点击查看AI报告
                 if (key === '操作指令') {
-                  column.width = 220
+                  column.width = 260
                   column.ellipsis = false
                   column.render = (text, row) => {
                     if (!text || text === '-') return '-'
                     const t = String(text)
                     let color = 'default'
-                    // 根据操作指令内容设置颜色
-                    if (t.includes('关停') || t.includes('PAUSE')) {
+                    // 根据操作指令内容设置颜色（支持新格式：CPC $X.XX→$X.XX | 预算 $X.XX→$X.XX(+X%)）
+                    if (t.includes('关停') || t === 'PAUSE') {
                       color = 'red'
-                    } else if (t.includes('降') || t.includes('降价')) {
-                      color = 'orange'
-                    } else if (t.includes('预算') || t.includes('加')) {
-                      color = 'green'
-                    } else if (t.includes('CPC') && t.includes('→')) {
-                      color = 'cyan'
-                    } else if (t.includes('维持')) {
-                      color = 'blue'
-                    } else if (t.includes('样本不足') || t.includes('观察')) {
+                    } else if (t.includes('样本不足')) {
                       color = 'default'
+                    } else if (t.includes('稳定运行') || (t.includes('(+0%)') && !t.includes('(+2') && !t.includes('(+3'))) {
+                      color = 'blue'
+                    } else if (t.includes('(+30%)') || t.includes('(+20%)')) {
+                      color = 'green'
+                    } else if (t.includes('→') && t.includes('CPC') && !t.includes('预算')) {
+                      // 只有CPC变化，可能是降价
+                      const cpcMatch = t.match(/CPC \$(\d+\.?\d*)\u2192\$(\d+\.?\d*)/)
+                      if (cpcMatch) {
+                        const oldCpc = parseFloat(cpcMatch[1])
+                        const newCpc = parseFloat(cpcMatch[2])
+                        color = newCpc < oldCpc ? 'orange' : 'cyan'
+                      } else {
+                        color = 'cyan'
+                      }
+                    } else if (t.includes('→')) {
+                      color = 'cyan'
                     }
                     return (
                       <Tooltip title="点击查看该广告系列的 AI 分析报告">
                         <Tag 
                           color={color} 
-                          style={{ fontSize: '13px', cursor: 'pointer' }}
+                          style={{ fontSize: '12px', cursor: 'pointer', maxWidth: '240px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}
                           onClick={(e) => {
                             e.stopPropagation() // 阻止冒泡到行展开
                             handleViewCampaignReport(row)

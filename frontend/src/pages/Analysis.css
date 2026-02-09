@@ -51,6 +51,33 @@
   padding-bottom: 8px;
 }
 
+/* 性能优化：减少重绘 */
+.analysis-subtable {
+  contain: layout style;
+  will-change: transform;
+}
+
+/* 操作指令标签优化 */
+.analysis-subtable :global(.ant-tag) {
+  transition: none;
+  cursor: pointer;
+}
+
+.analysis-subtable :global(.ant-tag:hover) {
+  opacity: 0.85;
+}
+
+/* 表格滚动优化 */
+.analysis-table :global(.ant-table-body) {
+  scroll-behavior: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* 减少表格边框渲染开销 */
+.analysis-subtable :global(.ant-table-cell) {
+  border-color: #f0f0f0 !important;
+}
+
 
 
 

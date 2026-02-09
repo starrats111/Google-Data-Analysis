@@ -386,26 +386,32 @@ class ApiAnalysisService:
                 new_cpc = max(0.01, cpc - 0.05)
                 instructions.append(f"CPC ${cpc:.2f}→${new_cpc:.2f}")
             else:
-                instructions.append("降CPC")
+                instructions.append("关停")
         
         # ROI 优秀且有预算瓶颈，加预算
         elif roi > 150 and is_budget_lost > 0.2:
-            if budget > 0:
+            if budget > 0 and cpc > 0:
                 new_budget = budget * 1.3
                 pct = 30
-                instructions.append(f"预算 ${budget:.2f}→${new_budget:.2f}(+{pct}%)")
+                instructions.append(f"CPC ${cpc:.2f}→${cpc:.2f} | 预算 ${budget:.2f}→${new_budget:.2f}(+{pct}%)")
+            elif budget > 0:
+                new_budget = budget * 1.3
+                instructions.append(f"预算 ${budget:.2f}→${new_budget:.2f}(+30%)")
             else:
                 instructions.append("加预算")
             # 同时可能需要提高CPC
-            if is_rank_lost > 0.15 and cpc > 0:
+            if is_rank_lost > 0.15 and cpc > 0 and len(instructions) > 0 and "CPC" not in instructions[0]:
                 new_cpc = cpc + 0.02
-                instructions.append(f"CPC ${cpc:.2f}→${new_cpc:.2f}")
+                instructions.insert(0, f"CPC ${cpc:.2f}→${new_cpc:.2f}")
         
         # ROI 良好且有排名瓶颈，提高CPC
         elif roi > 100 and is_rank_lost > 0.15:
             if cpc > 0:
                 new_cpc = cpc + 0.02
-                instructions.append(f"CPC ${cpc:.2f}→${new_cpc:.2f}")
+                if budget > 0:
+                    instructions.append(f"CPC ${cpc:.2f}→${new_cpc:.2f} | 预算 ${budget:.2f}→${budget:.2f}(+0%)")
+                else:
+                    instructions.append(f"CPC ${cpc:.2f}→${new_cpc:.2f}")
             else:
                 instructions.append("提高CPC")
         
@@ -414,11 +420,16 @@ class ApiAnalysisService:
             if budget > 0:
                 new_budget = budget * 1.2
                 pct = 20
-                instructions.append(f"预算 ${budget:.2f}→${new_budget:.2f}(+{pct}%)")
+                if cpc > 0:
+                    instructions.append(f"CPC ${cpc:.2f}→${cpc:.2f} | 预算 ${budget:.2f}→${new_budget:.2f}(+{pct}%)")
+                else:
+                    instructions.append(f"预算 ${budget:.2f}→${new_budget:.2f}(+{pct}%)")
         
         # ROI 正常，维持
         elif roi >= 50:
-            return "维持"
+            if cpc > 0 and budget > 0:
+                return f"CPC ${cpc:.2f}→${cpc:.2f} | 预算 ${budget:.2f}→${budget:.2f}(+0%)"
+            return "稳定运行"
         
         # 样本不足
         else:
@@ -427,7 +438,7 @@ class ApiAnalysisService:
         # 组合指令
         if instructions:
             return " | ".join(instructions)
-        return "维持"
+        return "稳定运行"
     
     def generate_l7d_analysis(
         self,
@@ -475,6 +486,7 @@ class ApiAnalysisService:
                         "total_cost": 0.0,
                         "total_clicks": 0,
                         "max_cpc": 0.0,
+                        "max_budget": 0.0,  # 预算
                         "is_budget_lost": 0.0,
                         "is_rank_lost": 0.0,
                     }
@@ -483,6 +495,7 @@ class ApiAnalysisService:
                 campaign_data[key]["total_cost"] += (data.cost or 0)
                 campaign_data[key]["total_clicks"] += int(data.clicks or 0)
                 campaign_data[key]["max_cpc"] = max(campaign_data[key]["max_cpc"], (data.cpc or 0))
+                campaign_data[key]["max_budget"] = max(campaign_data[key]["max_budget"], (data.budget or 0))
                 campaign_data[key]["is_budget_lost"] = max(campaign_data[key]["is_budget_lost"], (data.is_budget_lost or 0))
                 campaign_data[key]["is_rank_lost"] = max(campaign_data[key]["is_rank_lost"], (data.is_rank_lost or 0))
             
@@ -564,7 +577,7 @@ class ApiAnalysisService:
                 # 生成操作指令
                 operation = self._generate_l7d_operation(
                     conservative_roi, cdata["is_budget_lost"], cdata["is_rank_lost"], 
-                    order_days, cdata["max_cpc"], orders
+                    order_days, cdata["max_cpc"], orders, cdata["max_budget"]
                 )
                 
                 row = {
@@ -577,6 +590,7 @@ class ApiAnalysisService:
                     "L7D花费": round(cost, 2),
                     "L7D出单天数": order_days,
                     "当前Max CPC": round(cdata["max_cpc"], 4),
+                    "预算": round(cdata["max_budget"], 2),
                     "IS Budget丢失": f"{cdata['is_budget_lost'] * 100:.1f}%" if cdata['is_budget_lost'] > 0 else "-",
                     "IS Rank丢失": f"{cdata['is_rank_lost'] * 100:.1f}%" if cdata['is_rank_lost'] > 0 else "-",
                     "保守EPC": round(conservative_epc, 4),
@@ -700,34 +714,76 @@ class ApiAnalysisService:
         is_rank_lost: float,
         order_days: int,
         max_cpc: float,
-        orders: int
+        orders: int,
+        budget: float = 0
     ) -> str:
-        """生成L7D操作指令"""
-        instructions = []
+        """
+        生成L7D操作指令
+        格式: CPC $X.XX→$X.XX | 预算 $X.XX→$X.XX(+X%)
+        """
+        cpc = max_cpc
         
-        # ROI判断
-        if conservative_roi is not None:
-            if conservative_roi < -0.5:
-                return "关停"
-            elif conservative_roi < 0:
-                instructions.append("ROI为负")
+        # ROI判断 - 严重亏损直接关停
+        if conservative_roi is not None and conservative_roi < -0.4:
+            return "关停"
         
-        # 预算丢失
-        if is_budget_lost > 0.2:
-            instructions.append("加预算")
+        # ROI为负，降价
+        if conservative_roi is not None and conservative_roi < 0:
+            if cpc > 0:
+                new_cpc = max(0.01, cpc - 0.05)
+                return f"CPC ${cpc:.2f}→${new_cpc:.2f}"
+            return "关停"
         
-        # 排名丢失
-        if is_rank_lost > 0.3:
-            instructions.append("提高CPC")
-        
-        # 出单情况
-        if order_days == 0 and orders == 0:
+        # ROI优秀（>=100%）且有预算瓶颈，加预算
+        if conservative_roi is not None and conservative_roi >= 1.0:
+            instructions = []
+            
+            # 预算瓶颈 - 加预算
+            if is_budget_lost > 0.2 and order_days >= 4:
+                if budget > 0 and cpc > 0:
+                    new_budget = budget * 1.3
+                    instructions.append(f"CPC ${cpc:.2f}→${cpc:.2f} | 预算 ${budget:.2f}→${new_budget:.2f}(+30%)")
+                elif budget > 0:
+                    new_budget = budget * 1.3
+                    instructions.append(f"预算 ${budget:.2f}→${new_budget:.2f}(+30%)")
+                else:
+                    instructions.append("加预算")
+            
+            # 排名瓶颈 - 提高CPC
+            elif is_rank_lost > 0.15:
+                if cpc > 0:
+                    new_cpc = cpc + 0.02
+                    if budget > 0:
+                        instructions.append(f"CPC ${cpc:.2f}→${new_cpc:.2f} | 预算 ${budget:.2f}→${budget:.2f}(+0%)")
+                    else:
+                        instructions.append(f"CPC ${cpc:.2f}→${new_cpc:.2f}")
+                else:
+                    instructions.append("提高CPC")
+            
             if instructions:
-                instructions.append("观察")
-            else:
-                return "样本不足"
+                return " | ".join(instructions)
+            
+            # 状态稳定
+            if cpc > 0 and budget > 0:
+                return f"CPC ${cpc:.2f}→${cpc:.2f} | 预算 ${budget:.2f}→${budget:.2f}(+0%)"
+            return "稳定运行"
         
-        return "；".join(instructions) if instructions else "稳定运行"
+        # ROI中等（50%-100%），有预算瓶颈时加预算
+        if conservative_roi is not None and conservative_roi >= 0.5:
+            if is_budget_lost > 0.3 and budget > 0:
+                new_budget = budget * 1.2
+                if cpc > 0:
+                    return f"CPC ${cpc:.2f}→${cpc:.2f} | 预算 ${budget:.2f}→${new_budget:.2f}(+20%)"
+                return f"预算 ${budget:.2f}→${new_budget:.2f}(+20%)"
+            if cpc > 0 and budget > 0:
+                return f"CPC ${cpc:.2f}→${cpc:.2f} | 预算 ${budget:.2f}→${budget:.2f}(+0%)"
+            return "稳定运行"
+        
+        # 出单情况 - 无出单则样本不足
+        if order_days == 0 and orders == 0:
+            return "样本不足"
+        
+        return "稳定运行"
     
     def _generate_batch_ai_reports(
         self,
