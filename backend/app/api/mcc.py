@@ -631,8 +631,6 @@ async def update_mcc_account(
             mcc_account.currency = currency_value
             logger.info(f"更新MCC {mcc_account.mcc_id} 的货币类型为: {currency_value}")
     # 对于敏感字段，只有明确提供且非空字符串才更新（None或空字符串表示不修改）
-    import logging
-    logger = logging.getLogger(__name__)
     
     if mcc_data.client_id is not None:
         client_id_value = mcc_data.client_id.strip() if isinstance(mcc_data.client_id, str) else mcc_data.client_id
