@@ -378,20 +378,43 @@ const Dashboard = () => {
   ]
 
   const trend = insights?.trend || []
-  const commissionOption = useMemo(() => ({
-    tooltip: { trigger: 'axis' },
-    grid: { left: 40, right: 20, top: 20, bottom: 30 },
+  
+  // 员工视角的费用佣金走向图配置（合并为一个图表）
+  const employeeTrendOption = useMemo(() => ({
+    tooltip: { 
+      trigger: 'axis',
+      formatter: (params) => {
+        let result = `${params[0].axisValue}<br/>`
+        params.forEach(p => {
+          result += `${p.marker} ${p.seriesName}: ${Number(p.value || 0).toFixed(2)}<br/>`
+        })
+        return result
+      }
+    },
+    legend: { data: ['费用', '佣金'], top: 0 },
+    grid: { left: 50, right: 20, top: 40, bottom: 30 },
     xAxis: { type: 'category', data: trend.map(t => t.date) },
     yAxis: { type: 'value' },
-    series: [{ type: 'line', data: trend.map(t => Number(t.commission || 0)), smooth: true, name: '佣金' }],
-  }), [trend])
-
-  const costOption = useMemo(() => ({
-    tooltip: { trigger: 'axis' },
-    grid: { left: 40, right: 20, top: 20, bottom: 30 },
-    xAxis: { type: 'category', data: trend.map(t => t.date) },
-    yAxis: { type: 'value' },
-    series: [{ type: 'line', data: trend.map(t => Number(t.cost || 0)), smooth: true, name: '费用' }],
+    series: [
+      { 
+        name: '费用', 
+        type: 'line', 
+        data: trend.map(t => Number(t.cost || 0)), 
+        smooth: true,
+        lineStyle: { color: '#cf1322', width: 2 },
+        itemStyle: { color: '#cf1322' },
+        areaStyle: { color: 'rgba(207, 19, 34, 0.1)' }
+      },
+      { 
+        name: '佣金', 
+        type: 'line', 
+        data: trend.map(t => Number(t.commission || 0)), 
+        smooth: true,
+        lineStyle: { color: '#3f8600', width: 2 },
+        itemStyle: { color: '#3f8600' },
+        areaStyle: { color: 'rgba(63, 134, 0, 0.1)' }
+      }
+    ],
   }), [trend])
 
   return (
@@ -434,22 +457,11 @@ const Dashboard = () => {
         </div>
       </Card>
 
-      <Row gutter={16} style={{ marginBottom: 16 }}>
-        <Col span={12}>
-          <Card title="佣金走向">
-            <Suspense fallback={<div style={{ height: 260, display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Spin /></div>}>
-              <ReactECharts option={commissionOption} style={{ height: 260 }} lazyUpdate={true} notMerge={true} />
-            </Suspense>
-          </Card>
-        </Col>
-        <Col span={12}>
-          <Card title="费用走向">
-            <Suspense fallback={<div style={{ height: 260, display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Spin /></div>}>
-              <ReactECharts option={costOption} style={{ height: 260 }} lazyUpdate={true} notMerge={true} />
-            </Suspense>
-          </Card>
-        </Col>
-      </Row>
+      <Card title="费用佣金走向" style={{ marginBottom: 16 }}>
+        <Suspense fallback={<div style={{ height: 300, display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Spin /></div>}>
+          <ReactECharts option={employeeTrendOption} style={{ height: 300 }} lazyUpdate={true} notMerge={true} />
+        </Suspense>
+      </Card>
 
       <Row gutter={16} style={{ marginBottom: 16 }}>
         <Col span={8}>
