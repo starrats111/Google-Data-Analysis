@@ -1182,7 +1182,7 @@ async def sync_all_mccs(
     db: Session = Depends(get_db)
 ):
     """
-    手动触发同步所有活跃MCC的数据（默认同步最近7天）
+    手动触发同步所有活跃MCC的数据（默认同步本月）
     """
     import json
     
@@ -1200,11 +1200,14 @@ async def sync_all_mccs(
             "message": "没有活跃的MCC账号"
         }
     
-    # 同步最近7天
+    # 同步本月数据
     end_date = date.today() - timedelta(days=1)
-    begin_date = date.today() - timedelta(days=7)
+    begin_date = date.today().replace(day=1)  # 本月第一天
     
-    # 在后台执行同步（每个MCC同步7天）
+    # 计算总天数
+    total_days = (end_date - begin_date).days + 1
+    
+    # 在后台执行同步（每个MCC同步本月数据）
     def sync_all_task():
         from app.database import SessionLocal
         from app.services.google_ads_service_account_sync import GoogleAdsServiceAccountSync
@@ -1221,7 +1224,7 @@ async def sync_all_mccs(
             ).all()
             
             for mcc in mccs:
-                logger.info(f"开始同步 MCC {mcc.mcc_id} 的7天数据")
+                logger.info(f"开始同步 MCC {mcc.mcc_id} 的本月数据（{begin_date} ~ {end_date}）")
                 current_date = begin_date
                 while current_date <= end_date:
                     try:
@@ -1244,9 +1247,10 @@ async def sync_all_mccs(
     return {
         "success": True,
         "async": True,
-        "message": f"🔄 已开始后台同步 {active_count} 个MCC账号（最近7天: {begin_date.isoformat()} ~ {end_date.isoformat()}）",
+        "message": f"🔄 已开始后台同步 {active_count} 个MCC账号（本月: {begin_date.isoformat()} ~ {end_date.isoformat()}，共 {total_days} 天）",
         "begin_date": begin_date.isoformat(),
         "end_date": end_date.isoformat(),
+        "total_days": total_days,
         "mcc_count": active_count
     }
 
