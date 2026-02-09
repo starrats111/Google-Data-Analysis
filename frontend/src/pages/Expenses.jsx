@@ -397,6 +397,29 @@ const Expenses = () => {
             { title: '手动费用', dataIndex: 'manual_cost', key: 'manual_cost', align: 'right', render: (v) => Number(v || 0).toFixed(2) },
             { title: '总费用', dataIndex: 'total_cost', key: 'total_cost', align: 'right', render: (v) => Number(v || 0).toFixed(2) },
           ]}
+          summary={() => {
+            const mccTotal = (mccCostData?.mcc_breakdown || []).reduce((sum, m) => sum + (m.total_cost || 0), 0)
+            const unmatchedCost = mccCostData?.unmatched_cost || 0
+            const grandTotal = mccTotal + unmatchedCost
+            return (
+              <Table.Summary fixed>
+                <Table.Summary.Row>
+                  <Table.Summary.Cell index={0} colSpan={4}><strong>MCC费用小计</strong></Table.Summary.Cell>
+                  <Table.Summary.Cell index={4} align="right"><strong>{mccTotal.toFixed(2)}</strong></Table.Summary.Cell>
+                </Table.Summary.Row>
+                {unmatchedCost > 0 && (
+                  <Table.Summary.Row>
+                    <Table.Summary.Cell index={0} colSpan={4}><span style={{ color: '#999' }}>未匹配平台费用（广告系列名未能识别平台）</span></Table.Summary.Cell>
+                    <Table.Summary.Cell index={4} align="right"><span style={{ color: '#999' }}>{unmatchedCost.toFixed(2)}</span></Table.Summary.Cell>
+                  </Table.Summary.Row>
+                )}
+                <Table.Summary.Row style={{ background: '#fafafa' }}>
+                  <Table.Summary.Cell index={0} colSpan={4}><strong>总广告费用</strong></Table.Summary.Cell>
+                  <Table.Summary.Cell index={4} align="right"><strong style={{ color: '#1890ff' }}>{grandTotal.toFixed(2)}</strong></Table.Summary.Cell>
+                </Table.Summary.Row>
+              </Table.Summary>
+            )
+          }}
         />
       </Modal>
     </div>

@@ -203,8 +203,9 @@ async def get_cost_detail(
         unmatched_cost += cost
     unmatched_cost = round(unmatched_cost, 2)
     
-    # 总费用
-    total_cost = sum(m.get('total_cost', 0) for m in mcc_breakdown)
+    # 总费用 = MCC费用 + 未匹配平台费用
+    mcc_total_cost = sum(m.get('total_cost', 0) for m in mcc_breakdown)
+    total_cost = round(mcc_total_cost + unmatched_cost, 4)
     
     # 按平台+日期+MCC明细（细分，含货币转换）
     platform_detail_query = db.query(
