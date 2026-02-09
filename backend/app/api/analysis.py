@@ -104,8 +104,12 @@ async def get_analysis_results(
     """获取分析结果列表"""
     from app.models.affiliate_account import AffiliateAccount
     from app.models.user import User as UserModel
+    from sqlalchemy.orm import joinedload
     
-    query = db.query(AnalysisResult).join(UserModel, AnalysisResult.user_id == UserModel.id)
+    # 使用joinedload预加载用户信息，避免N+1查询问题
+    query = db.query(AnalysisResult).options(
+        joinedload(AnalysisResult.user)
+    ).join(UserModel, AnalysisResult.user_id == UserModel.id)
     
     # 权限控制
     if current_user.role == "employee":
@@ -123,25 +127,19 @@ async def get_analysis_results(
     if end_date:
         query = query.filter(AnalysisResult.analysis_date <= end_date)
     
-    results = query.order_by(AnalysisResult.analysis_date.desc()).all()
+    # 限制返回数量，避免数据量过大导致慢查询
+    results = query.order_by(AnalysisResult.analysis_date.desc()).limit(100).all()
     
-    # 调试日志：记录查询结果
-    import logging
-    logger = logging.getLogger(__name__)
     logger.info(f"查询分析结果: 用户={current_user.username}({current_user.id}), 角色={current_user.role}, "
                 f"账号ID={account_id}, 日期范围={start_date}~{end_date}, 结果数={len(results)}")
     
-    # 构建响应，包含用户名
+    # 构建响应，直接使用预加载的用户信息
     response_list = []
     for result in results:
-        user = db.query(UserModel).filter(UserModel.id == result.user_id).first()
-        data_rows = result.result_data.get('data', []) if isinstance(result.result_data, dict) else []
-        logger.debug(f"分析结果 {result.id}: 用户={user.username if user else result.user_id}, "
-                    f"日期={result.analysis_date}, 数据行数={len(data_rows)}")
         response_list.append(AnalysisResultResponse(
             id=result.id,
             user_id=result.user_id,
-            username=user.username if user else None,
+            username=result.user.username if result.user else None,
             affiliate_account_id=result.affiliate_account_id,
             analysis_date=result.analysis_date,
             result_data=result.result_data,

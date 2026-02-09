@@ -460,7 +460,12 @@ async def get_accounts(
     db: Session = Depends(get_db)
 ):
     """获取联盟账号列表"""
-    query = db.query(AffiliateAccount)
+    from sqlalchemy.orm import joinedload
+    
+    # 使用joinedload预加载platform信息，避免N+1查询
+    query = db.query(AffiliateAccount).options(
+        joinedload(AffiliateAccount.platform)
+    )
     
     # 权限控制：员工只能看自己的账号
     if current_user.role == "employee":
