@@ -747,7 +747,8 @@ class GoogleAdsServiceAccountSync:
         self,
         target_date: Optional[date] = None,
         batch_size: Optional[int] = None,
-        only_enabled: bool = False
+        only_enabled: bool = False,
+        force_refresh: bool = False
     ) -> Dict:
         """
         批量同步所有活跃MCC的数据
@@ -756,6 +757,7 @@ class GoogleAdsServiceAccountSync:
             target_date: 目标日期
             batch_size: 每批MCC数量
             only_enabled: 是否只同步启用状态的广告系列（默认False=所有状态）
+            force_refresh: 是否强制刷新（即使数据已存在也重新同步，确保数据精准）
             
         Returns:
             同步结果汇总
@@ -807,7 +809,7 @@ class GoogleAdsServiceAccountSync:
                     result = self.sync_mcc_data(
                         mcc.id,
                         target_date,
-                        force_refresh=False,
+                        force_refresh=force_refresh,
                         only_enabled=only_enabled
                     )
                     

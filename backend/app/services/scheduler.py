@@ -123,7 +123,9 @@ def sync_google_ads_data_job():
     同步Google Ads数据任务（每天北京时间凌晨4点执行）
     
     使用服务账号模式同步所有活跃MCC的广告数据
-    只同步昨天的数据（当天数据可能不完整）
+    同步过去3天的数据（强制刷新），确保数据精准：
+    - 昨天的数据：当天最终数据
+    - 前天和大前天：覆盖可能的延迟费用更新
     """
     db: Session = SessionLocal()
     try:
@@ -134,30 +136,40 @@ def sync_google_ads_data_job():
         
         sync_service = GoogleAdsServiceAccountSync(db)
         
-        # 只同步昨天的数据
-        target_date = date.today() - timedelta(days=1)
+        # 同步过去3天的数据（强制刷新确保精准）
+        total_saved = 0
+        total_mccs = 0
         
-        logger.info(f"同步日期: {target_date.isoformat()}")
-        logger.info(f"同步模式: 服务账号")
-        
-        # 批量同步所有活跃MCC
-        result = sync_service.sync_all_mccs(
-            target_date=target_date,
-            only_enabled=False  # 同步所有状态的广告系列（包括已暂停）
-        )
-        
-        if result.get("success"):
-            logger.info(f"✓ Google Ads数据同步完成:")
-            logger.info(f"  - MCC总数: {result.get('total_mccs', 0)}")
-            logger.info(f"  - 成功: {result.get('success_count', 0)} 个MCC")
-            logger.info(f"  - 失败: {result.get('fail_count', 0)} 个MCC")
-            logger.info(f"  - 保存记录: {result.get('total_saved', 0)} 条")
+        for days_ago in range(1, 4):  # 1, 2, 3 天前
+            target_date = date.today() - timedelta(days=days_ago)
+            force_refresh = True  # 强制刷新确保数据精准
             
-            if result.get("quota_exhausted"):
-                logger.warning("⚠️ 同步过程中遇到API配额限制，部分MCC未完成同步")
-        else:
-            logger.error(f"✗ Google Ads数据同步失败: {result.get('message')}")
+            logger.info(f"同步日期: {target_date.isoformat()} (强制刷新: {force_refresh})")
+            
+            # 批量同步所有活跃MCC
+            result = sync_service.sync_all_mccs(
+                target_date=target_date,
+                only_enabled=False,  # 同步所有状态的广告系列（包括已暂停）
+                force_refresh=force_refresh
+            )
+            
+            if result.get("success"):
+                saved = result.get('total_saved', 0)
+                mccs = result.get('total_mccs', 0)
+                total_saved += saved
+                total_mccs = max(total_mccs, mccs)
+                logger.info(f"  ✓ {target_date}: 保存 {saved} 条")
+                
+                if result.get("quota_exhausted"):
+                    logger.warning("⚠️ 遇到API配额限制，停止同步")
+                    break
+            else:
+                logger.error(f"  ✗ {target_date}: {result.get('message')}")
         
+        logger.info(f"✓ Google Ads数据同步完成:")
+        logger.info(f"  - MCC总数: {total_mccs}")
+        logger.info(f"  - 同步日期数: 3 天")
+        logger.info(f"  - 总保存记录: {total_saved} 条")
         logger.info("=" * 60)
         
     except Exception as e:
