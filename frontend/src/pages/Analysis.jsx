@@ -1,6 +1,6 @@
 import React, { useMemo, useState, useEffect, useRef, useCallback } from 'react'
-import { Card, Table, Select, DatePicker, Space, message, Tag, Badge, Typography, Tooltip, Button, Popconfirm, Collapse, Modal, Upload, Spin, Input } from 'antd'
-import { UploadOutlined, RobotOutlined, SettingOutlined, CopyOutlined, ArrowLeftOutlined, CloseOutlined } from '@ant-design/icons'
+import { Card, Table, Select, DatePicker, Space, message, Tag, Badge, Typography, Tooltip, Button, Popconfirm, Collapse, Modal, Spin, Input } from 'antd'
+import { RobotOutlined, SettingOutlined, CopyOutlined, ArrowLeftOutlined, CloseOutlined } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
 import dayjs from 'dayjs'
 import api from '../services/api'
@@ -14,21 +14,18 @@ const { Option } = Select
 const { Title, Text } = Typography
 
 // 缓存key生成函数
-const getCacheKey = (mode, accountId, dateRange) => {
+const getCacheKey = (accountId, dateRange) => {
   const dateStr = dateRange && dateRange.length === 2 
     ? `${dateRange[0].format('YYYY-MM-DD')}_${dateRange[1].format('YYYY-MM-DD')}`
     : 'all'
-  return `analysis_cache_${mode}_${accountId || 'all'}_${dateStr}`
+  return `analysis_cache_l7d_${accountId || 'all'}_${dateStr}`
 }
 
-// props:
-// - mode: 'l7d' | 'daily'
-//   默认使用 'l7d'，用于 L7D 分析页面；'daily' 用于每日分析页面
-const Analysis = ({ mode }) => {
+// L7D 分析页面
+const Analysis = () => {
   const navigate = useNavigate()
   const { user } = useAuth()
   const isManager = user?.role === 'manager'
-  const analysisMode = mode || 'l7d'
   const isInitialMount = useRef(true)
   const lastFetchParams = useRef(null)
 
@@ -37,9 +34,6 @@ const Analysis = ({ mode }) => {
   const [accounts, setAccounts] = useState([])
   const [selectedAccount, setSelectedAccount] = useState(null)
   const [dateRange, setDateRange] = useState(null)
-  const [generatingL7D, setGeneratingL7D] = useState(false)
-  const [googleModalOpen, setGoogleModalOpen] = useState(false)
-  const [googleFile, setGoogleFile] = useState(null)
   const [generatingFromApi, setGeneratingFromApi] = useState(false)
   
   // AI 分析状态
@@ -73,72 +67,12 @@ const Analysis = ({ mode }) => {
     }
   }
 
-  // 优化：使用useMemo缓存检测函数，避免每次渲染都重新创建
-  const detectResultType = useMemo(() => {
-    return (result) => {
-      const data = result?.result_data?.data
-      if (!Array.isArray(data) || data.length === 0) {
-        return 'unknown'
-      }
-      
-      // 只检查第一行（性能优化），如果第一行为空再检查其他行
-      const firstRow = data[0]
-      if (!firstRow || typeof firstRow !== 'object') {
-        // 如果第一行无效，快速检查前几行
-        for (let i = 1; i < Math.min(5, data.length); i++) {
-          if (data[i] && typeof data[i] === 'object') {
-            const keys = Object.keys(data[i])
-            const hasL7D = keys.some(k => k.startsWith('L7D') || ['L7D点击', 'L7D佣金', 'L7D花费', 'L7D出单天数'].includes(k))
-            const hasDailyWeekCols = keys.includes('本周ROI') || keys.includes('本周费用') || keys.includes('本周佣金')
-            if (hasDailyWeekCols && !hasL7D) return 'daily'
-            if (hasL7D && !hasDailyWeekCols) return 'l7d'
-            if (hasDailyWeekCols && hasL7D) return 'daily'
-          }
-        }
-        return 'unknown'
-      }
-      
-      const keys = Object.keys(firstRow)
-      const hasL7D = keys.some(k =>
-        k.startsWith('L7D') ||
-        ['L7D点击', 'L7D佣金', 'L7D花费', 'L7D出单天数'].includes(k)
-      )
-      const hasDailyWeekCols = keys.includes('本周ROI') || keys.includes('本周费用') || keys.includes('本周佣金')
-      
-      // 优先判断：如果有本周列且没有L7D列，肯定是每日分析
-      if (hasDailyWeekCols && !hasL7D) return 'daily'
-      // 如果有L7D列且没有本周列，肯定是L7D分析
-      if (hasL7D && !hasDailyWeekCols) return 'l7d'
-      // 如果同时有，优先判断为每日分析
-      if (hasDailyWeekCols && hasL7D) return 'daily'
-      
-      return 'unknown'
-    }
-  }, [])
-
-  // 使用useMemo缓存过滤结果，避免每次渲染都重新过滤
-  const filteredResults = useMemo(() => {
-    // 如果results为空，直接返回
-    if (!results || results.length === 0) return []
-    if (!analysisMode) return results || []
-    return (results || []).filter(r => {
-      const t = detectResultType(r)
-      if (analysisMode === 'l7d') {
-        return t === 'l7d' || t === 'unknown'
-      }
-      if (analysisMode === 'daily') {
-        return t === 'daily' || t === 'unknown'
-      }
-      return true
-    })
-  }, [results, analysisMode])
 
   const fetchResults = async (useCache = true) => {
     // 生成当前请求的参数key
     const paramsKey = JSON.stringify({
       account: selectedAccount,
-      dateRange: dateRange ? [dateRange[0].format('YYYY-MM-DD'), dateRange[1].format('YYYY-MM-DD')] : null,
-      mode: analysisMode
+      dateRange: dateRange ? [dateRange[0].format('YYYY-MM-DD'), dateRange[1].format('YYYY-MM-DD')] : null
     })
 
     // 如果参数没变化且不是初始挂载，跳过请求
@@ -147,7 +81,7 @@ const Analysis = ({ mode }) => {
     }
 
     // 检查缓存
-    const cacheKey = getCacheKey(analysisMode, selectedAccount, dateRange)
+    const cacheKey = getCacheKey(selectedAccount, dateRange)
     if (useCache) {
       try {
         const cached = sessionStorage.getItem(cacheKey)
@@ -206,95 +140,32 @@ const Analysis = ({ mode }) => {
     }
   }
 
-  // 从API数据生成分析
+  // 从API数据生成L7D分析
   const handleGenerateFromApi = async () => {
-    if (analysisMode === 'daily') {
-      // 生成每日分析
-      if (!dateRange || dateRange.length !== 2) {
-        message.warning('请选择日期范围')
-        return
+    setGeneratingFromApi(true)
+    try {
+      const endDate = dateRange && dateRange.length === 2 
+        ? dateRange[1].format('YYYY-MM-DD')
+        : null
+      
+      const params = {}
+      if (endDate) {
+        params.end_date = endDate
       }
       
-      setGeneratingFromApi(true)
-      try {
-        const beginDate = dateRange[0].format('YYYY-MM-DD')
-        const endDate = dateRange[1].format('YYYY-MM-DD')
-        const response = await api.post('/api/analysis/daily', null, {
-          params: { begin_date: beginDate, end_date: endDate }
-        })
-        
-        if (response.data.success) {
-          message.success(`成功生成 ${response.data.total_records} 条每日分析记录`)
-          // 刷新数据
-          fetchResults(false)
-        } else {
-          message.error(response.data.message || '生成失败')
-        }
-      } catch (error) {
-        message.error(error.response?.data?.detail || '生成失败')
-      } finally {
-        setGeneratingFromApi(false)
+      const response = await api.post('/api/analysis/l7d', null, { params })
+      
+      if (response.data.success) {
+        message.success(`成功生成 ${response.data.total_records} 条L7D分析记录`)
+        // 刷新数据
+        fetchResults(false)
+      } else {
+        message.error(response.data.message || '生成失败')
       }
-    } else {
-      // 生成L7D分析
-      setGeneratingFromApi(true)
-      try {
-        const endDate = dateRange && dateRange.length === 2 
-          ? dateRange[1].format('YYYY-MM-DD')
-          : null
-        
-        const params = {}
-        if (endDate) {
-          params.end_date = endDate
-        }
-        
-        const response = await api.post('/api/analysis/l7d', null, { params })
-        
-        if (response.data.success) {
-          message.success(`成功生成 ${response.data.total_records} 条L7D分析记录`)
-          // 刷新数据
-          fetchResults(false)
-        } else {
-          message.error(response.data.message || '生成失败')
-        }
-      } catch (error) {
-        message.error(error.response?.data?.detail || '生成失败')
-      } finally {
-        setGeneratingFromApi(false)
-      }
-    }
-  }
-
-  // 仅在“每日分析”页提供：上传谷歌表（过去7天）+ 从每日数据生成 L7D
-  const handleOpenGenerate = () => {
-    setGoogleFile(null)
-    setGoogleModalOpen(true)
-  }
-
-  const handleGenerateL7DFromDaily = async () => {
-    try {
-      setGeneratingL7D(true)
-      if (!googleFile) {
-        message.error('请先上传过去7天的谷歌表1（含预算/排名错失份额两列）')
-        return
-      }
-
-      const form = new FormData()
-      if (selectedAccount) form.append('affiliate_account_id', String(selectedAccount))
-      if (dateRange && dateRange.length === 2) {
-        form.append('end_date', dateRange[1].format('YYYY-MM-DD'))
-      }
-      form.append('google_file', googleFile)
-
-      await api.post('/api/analysis/from-daily-with-google', form, {
-        headers: { 'Content-Type': 'multipart/form-data' },
-      })
-      message.success('已基于每日数据生成一份 L7D 分析')
-      setGoogleModalOpen(false)
     } catch (error) {
-      message.error(error.response?.data?.detail || '生成 L7D 分析失败')
+      message.error(error.response?.data?.detail || '生成失败')
     } finally {
-      setGeneratingL7D(false)
+      setGeneratingFromApi(false)
     }
   }
 
@@ -578,27 +449,6 @@ const Analysis = ({ mode }) => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedAccount, dateRange])
 
-  // 当mode切换时，先尝试从缓存加载，如果没有缓存再请求
-  useEffect(() => {
-    const cacheKey = getCacheKey(analysisMode, selectedAccount, dateRange)
-    try {
-      const cached = sessionStorage.getItem(cacheKey)
-      if (cached) {
-        const { data, timestamp } = JSON.parse(cached)
-        // 缓存有效期5分钟
-        if (Date.now() - timestamp < 5 * 60 * 1000) {
-          setResults(data)
-          return
-        }
-      }
-    } catch (e) {
-      // 缓存读取失败，继续请求
-    }
-    // 如果没有缓存，才请求数据
-    fetchResults(false)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [analysisMode])
-
   const columns = useMemo(
     () => [
       {
@@ -638,19 +488,17 @@ const Analysis = ({ mode }) => {
         fixed: 'right',
         render: (_, record) => (
           <Space size="small">
-            {analysisMode === 'l7d' && (
-              <Tooltip title="生成 AI 分析报告">
-                <Button 
-                  type="primary"
-                  ghost
-                  size="small"
-                  icon={<RobotOutlined />}
-                  onClick={() => handleGenerateReport(record)}
-                >
-                  生成报告
-                </Button>
-              </Tooltip>
-            )}
+            <Tooltip title="生成 AI 分析报告">
+              <Button 
+                type="primary"
+                ghost
+                size="small"
+                icon={<RobotOutlined />}
+                onClick={() => handleGenerateReport(record)}
+              >
+                生成报告
+              </Button>
+            </Tooltip>
             <Popconfirm
               title="确定删除该分析结果吗？"
               description="删除后无法恢复"
@@ -664,7 +512,7 @@ const Analysis = ({ mode }) => {
         ),
       },
     ],
-    [isManager, analysisMode]
+    [isManager]
   )
 
   return (
@@ -672,67 +520,28 @@ const Analysis = ({ mode }) => {
       <div className="analysis-page__header">
         <div>
           <Title level={3} className="analysis-page__title">
-            {analysisMode === 'daily' ? '每日数据分析' : 'L7D分析结果'}
+            L7D分析结果
           </Title>
           <Text className="analysis-page__subtitle">
-            {analysisMode === 'daily'
-              ? '仅展示“每日分析”产生的结果：按日期 + 联盟账号展开查看每个广告系列的每日表现'
-              : '仅展示 L7D 分析结果：支持按联盟账号与日期筛选；展开行可查看每条分析明细'}
+            每天自动生成的 L7D 分析结果；支持按联盟账号与日期筛选；展开行可查看每条分析明细
           </Text>
         </div>
         <Space>
-          {analysisMode === 'l7d' && (
-            <Button 
-              icon={<SettingOutlined />} 
-              onClick={openPromptEditor}
-            >
-              自定义提示词
-            </Button>
-          )}
+          <Button 
+            icon={<SettingOutlined />} 
+            onClick={openPromptEditor}
+          >
+            自定义提示词
+          </Button>
           <Button
             type="primary"
             onClick={handleGenerateFromApi}
             loading={generatingFromApi}
           >
-            {analysisMode === 'daily' ? '从API数据生成每日分析' : '从API数据生成L7D分析'}
+            从API数据生成L7D分析
           </Button>
-          {analysisMode === 'daily' && (
-            <Button
-              onClick={handleOpenGenerate}
-              loading={generatingL7D}
-            >
-              生成L7D分析（上传文件）
-            </Button>
-          )}
         </Space>
       </div>
-
-      <Modal
-        title="生成L7D：请上传过去7天谷歌表1"
-        open={googleModalOpen}
-        onCancel={() => setGoogleModalOpen(false)}
-        onOk={handleGenerateL7DFromDaily}
-        okText="开始生成"
-        confirmLoading={generatingL7D}
-      >
-        <div style={{ marginBottom: 12, color: '#666' }}>
-          说明：系统会从该表中提取 <b>IS Budget丢失 / IS Rank丢失</b> 两列，其余L7D字段仍从每日分析数据聚合。
-        </div>
-        <Upload
-          beforeUpload={(file) => {
-            setGoogleFile(file)
-            return false
-          }}
-          maxCount={1}
-          onRemove={() => setGoogleFile(null)}
-          accept=".xlsx,.csv"
-        >
-          <Button icon={<UploadOutlined />}>选择谷歌表文件</Button>
-        </Upload>
-        <div style={{ marginTop: 10, color: '#999', fontSize: 12 }}>
-          需要包含列：<b>在搜索网络中因预算而错失的展示次数份额</b>、<b>在搜索网络中因评级而错失的展示次数份额</b>（或对应英文列）。
-        </div>
-      </Modal>
 
       {/* AI 分析结果 Modal */}
       <Modal
@@ -1065,7 +874,7 @@ const Analysis = ({ mode }) => {
         {isManager ? (
           // 经理账号：按员工分组显示
           (() => {
-            const groupedByUser = filteredResults.reduce((acc, result) => {
+            const groupedByUser = results.reduce((acc, result) => {
               const username = result.username || `用户ID: ${result.user_id}`
               if (!acc[username]) {
                 acc[username] = []
@@ -1105,9 +914,7 @@ const Analysis = ({ mode }) => {
 
                       // 获取所有键，过滤掉不需要显示的列
                       const allKeys = Object.keys(data[0])
-                      const keysToShow = analysisMode === 'l7d' 
-                        ? allKeys.filter(key => !['ROI', '点击', '订单', 'ai_report'].includes(key))
-                        : allKeys.filter(key => key !== 'ai_report')
+                      const keysToShow = allKeys.filter(key => !['ROI', '点击', '订单', 'ai_report'].includes(key))
                       
                       const dataColumns = keysToShow.map((key) => {
                         const column = {
@@ -1338,7 +1145,7 @@ const Analysis = ({ mode }) => {
           // 员工账号：直接显示表格
           <Table
             columns={columns}
-            dataSource={filteredResults}
+            dataSource={results}
             loading={loading}
             rowKey="id"
             size="middle"
@@ -1358,9 +1165,7 @@ const Analysis = ({ mode }) => {
 
               // 获取所有键，过滤掉不需要显示的列
               const allKeys = Object.keys(data[0])
-              const keysToShow = analysisMode === 'l7d' 
-                ? allKeys.filter(key => !['ROI', '点击', '订单', 'ai_report'].includes(key))
-                : allKeys.filter(key => key !== 'ai_report')
+              const keysToShow = allKeys.filter(key => !['ROI', '点击', '订单', 'ai_report'].includes(key))
 
               const dataColumns = keysToShow.map((key) => {
                 const column = {

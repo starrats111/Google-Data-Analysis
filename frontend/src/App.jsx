@@ -55,13 +55,13 @@ function App() {
             }
           >
             <Route index element={<Dashboard />} />
-            {/* 我的分析：先进入总入口，再从里面点 L7D / 每日分析 */}
+            {/* 我的分析入口 */}
             <Route path="my-analysis" element={<MyAnalysis />} />
-            {/* L7D 分析 & 每日分析 分开路由 */}
-            <Route path="analysis-l7d" element={<Analysis mode="l7d" />} />
-            <Route path="analysis-daily" element={<Analysis mode="daily" />} />
-            {/* 兼容老链接：/analysis 默认跳到 L7D 分析页 */}
+            {/* L7D 分析 */}
+            <Route path="analysis-l7d" element={<Analysis />} />
+            {/* 兼容老链接 */}
             <Route path="analysis" element={<Navigate to="/analysis-l7d" replace />} />
+            <Route path="analysis-daily" element={<Navigate to="/analysis-l7d" replace />} />
             <Route path="accounts" element={<AffiliateAccounts />} />
             <Route path="mcc-accounts" element={<MccAccounts />} />
             <Route path="mcc-aggregate" element={<MccDataAggregate />} />
