@@ -20,6 +20,13 @@ export const useAuth = create((set) => ({
       const { access_token, user } = response.data
       localStorage.setItem('token', access_token)
       localStorage.setItem('user', JSON.stringify(user))
+      
+      // 清理之前用户的缓存数据
+      try {
+        sessionStorage.clear()
+      } catch (e) {
+        // 忽略缓存清除错误
+      }
 
       set({ user, token: access_token, isAuthenticated: true })
       return user
@@ -41,6 +48,12 @@ export const useAuth = create((set) => ({
   logout: () => {
     localStorage.removeItem('token')
     localStorage.removeItem('user')
+    // 清理所有缓存数据，避免用户切换后看到其他用户的数据
+    try {
+      sessionStorage.clear()
+    } catch (e) {
+      // 忽略缓存清除错误
+    }
     set({ user: null, token: null, isAuthenticated: false })
   },
 

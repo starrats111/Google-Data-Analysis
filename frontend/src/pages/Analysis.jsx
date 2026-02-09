@@ -554,6 +554,10 @@ const Analysis = ({ mode }) => {
       // 强制刷新数据（不使用缓存）
       fetchResults(false)
     } catch (error) {
+      // 如果是请求被取消，不显示错误提示
+      if (error.isCanceled || error.name === 'CanceledError' || error.name === 'AbortError') {
+        return
+      }
       // 如果删除失败，恢复数据
       fetchResults(false)
       message.error(error.response?.data?.detail || '删除失败')
