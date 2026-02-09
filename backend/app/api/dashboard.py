@@ -137,6 +137,71 @@ async def get_overview(
     }
 
 
+@router.get("/trend")
+async def get_manager_trend(
+    current_user: User = Depends(get_current_manager),
+    db: Session = Depends(get_db)
+):
+    """经理视角的费用佣金每日走向（本月）"""
+    today = date.today()
+    start_month = today.replace(day=1)
+    
+    # 获取所有MCC的货币映射
+    all_mccs = db.query(GoogleMccAccount).all()
+    mcc_currency_map = {mcc.id: getattr(mcc, 'currency', 'USD') or 'USD' for mcc in all_mccs}
+    
+    # 按日期和MCC分组获取费用
+    cost_by_date_mcc = db.query(
+        GoogleAdsApiData.date,
+        GoogleAdsApiData.mcc_id,
+        func.sum(GoogleAdsApiData.cost).label("cost"),
+    ).filter(
+        GoogleAdsApiData.date >= start_month,
+        GoogleAdsApiData.date <= today,
+    ).group_by(GoogleAdsApiData.date, GoogleAdsApiData.mcc_id).all()
+    
+    # 按日期汇总费用（转换货币）
+    cost_by_date: Dict[date, float] = {}
+    for r in cost_by_date_mcc:
+        d = r.date
+        cost_usd = convert_to_usd(float(r.cost or 0.0), mcc_currency_map.get(r.mcc_id, 'USD'))
+        cost_by_date[d] = cost_by_date.get(d, 0.0) + cost_usd
+    
+    # 按日期获取佣金
+    start_dt = datetime.combine(start_month, datetime.min.time())
+    end_dt = datetime.combine(today, datetime.max.time())
+    
+    commission_by_date_rows = db.query(
+        func.date(AffiliateTransaction.transaction_time).label("d"),
+        func.sum(AffiliateTransaction.commission_amount).label("commission"),
+    ).outerjoin(
+        AffiliateAccount,
+        AffiliateTransaction.affiliate_account_id == AffiliateAccount.id
+    ).filter(
+        AffiliateTransaction.transaction_time >= start_dt,
+        AffiliateTransaction.transaction_time <= end_dt,
+        (AffiliateAccount.id.is_(None)) | (AffiliateAccount.is_active == True)
+    ).group_by(func.date(AffiliateTransaction.transaction_time)).all()
+    
+    commission_by_date: Dict[date, float] = {}
+    for r in commission_by_date_rows:
+        d = r.d if isinstance(r.d, date) else datetime.strptime(str(r.d), "%Y-%m-%d").date()
+        commission_by_date[d] = float(r.commission or 0.0)
+    
+    # 合并所有日期
+    all_dates = sorted(set(cost_by_date.keys()) | set(commission_by_date.keys()))
+    
+    trend = []
+    for d in all_dates:
+        trend.append({
+            "date": d.strftime("%m-%d"),
+            "cost": round(cost_by_date.get(d, 0.0), 2),
+            "commission": round(commission_by_date.get(d, 0.0), 2),
+        })
+    
+    return {"trend": trend}
+
+
 @router.get("/employees")
 async def get_employees_data(
     current_user: User = Depends(get_current_manager),

@@ -18,6 +18,7 @@ const Dashboard = () => {
   const { user } = useAuth()
   const [overviewData, setOverviewData] = useState(null)
   const [employeeData, setEmployeeData] = useState([])
+  const [trendData, setTrendData] = useState([])
   const [loading, setLoading] = useState(false)
   const [insightRange, setInsightRange] = useState('过去7天')
   const [insights, setInsights] = useState(null)
@@ -51,12 +52,14 @@ const Dashboard = () => {
     loadingRef.current = true
     setLoading(true)
     try {
-      const [overviewRes, employeesRes] = await Promise.all([
+      const [overviewRes, employeesRes, trendRes] = await Promise.all([
         api.get('/api/dashboard/overview'),
         api.get('/api/dashboard/employees'),
+        api.get('/api/dashboard/trend'),
       ])
       setOverviewData(overviewRes.data)
       setEmployeeData(employeesRes.data)
+      setTrendData(trendRes.data?.trend || [])
     } catch (error) {
       message.error('获取数据失败')
     } finally {
@@ -122,14 +125,49 @@ const Dashboard = () => {
     }
   }, [autoRefresh, doRefresh])
 
+  // 经理视角的费用佣金走向图配置
+  const managerTrendOption = useMemo(() => ({
+    tooltip: { 
+      trigger: 'axis',
+      formatter: (params) => {
+        let result = `${params[0].axisValue}<br/>`
+        params.forEach(p => {
+          result += `${p.marker} ${p.seriesName}: ${Number(p.value || 0).toFixed(2)}<br/>`
+        })
+        return result
+      }
+    },
+    legend: { data: ['费用', '佣金'], top: 0 },
+    grid: { left: 50, right: 20, top: 40, bottom: 30 },
+    xAxis: { type: 'category', data: trendData.map(t => t.date) },
+    yAxis: { type: 'value' },
+    series: [
+      { 
+        name: '费用', 
+        type: 'line', 
+        data: trendData.map(t => t.cost), 
+        smooth: true,
+        lineStyle: { color: '#cf1322', width: 2 },
+        itemStyle: { color: '#cf1322' },
+        areaStyle: { color: 'rgba(207, 19, 34, 0.1)' }
+      },
+      { 
+        name: '佣金', 
+        type: 'line', 
+        data: trendData.map(t => t.commission), 
+        smooth: true,
+        lineStyle: { color: '#3f8600', width: 2 },
+        itemStyle: { color: '#3f8600' },
+        areaStyle: { color: 'rgba(63, 134, 0, 0.1)' }
+      }
+    ],
+  }), [trendData])
+
   if (user?.role === 'manager') {
     const columns = [
       { title: '员工编号', dataIndex: 'employee_id', key: 'employee_id', width: 80 },
       { title: '用户名', dataIndex: 'username', key: 'username', width: 80 },
       { title: 'MCC数', dataIndex: 'mcc_count', key: 'mcc_count', align: 'right', width: 70 },
-      { title: '近7天费用', dataIndex: 'cost_7d', key: 'cost_7d', align: 'right', width: 100, render: (v) => Number(v || 0).toFixed(2) },
-      { title: '近7天佣金', dataIndex: 'commission_7d', key: 'commission_7d', align: 'right', width: 100, render: (v) => Number(v || 0).toFixed(2) },
-      { title: '近7天订单', dataIndex: 'orders_7d', key: 'orders_7d', align: 'right', width: 80 },
       { title: '本月费用', dataIndex: 'cost_month', key: 'cost_month', align: 'right', width: 100, render: (v) => <span style={{ color: '#cf1322' }}>{Number(v || 0).toFixed(2)}</span> },
       { title: '本月佣金', dataIndex: 'commission_month', key: 'commission_month', align: 'right', width: 100, render: (v) => <span style={{ color: '#3f8600' }}>{Number(v || 0).toFixed(2)}</span> },
       { title: '本月订单', dataIndex: 'orders_month', key: 'orders_month', align: 'right', width: 80 },
@@ -167,23 +205,6 @@ const Dashboard = () => {
           </Col>
           <Col span={6}>
             <Card bordered={false}>
-              <Statistic title="活跃员工(近7天)" value={overviewData?.active_employees_7d || 0} />
-            </Card>
-          </Col>
-          <Col span={6}>
-            <Card bordered={false}>
-              <Statistic title="近7天广告费用" value={overviewData?.cost_7d || 0} precision={2} />
-            </Card>
-          </Col>
-          <Col span={6}>
-            <Card bordered={false}>
-              <Statistic title="近7天总佣金" value={overviewData?.commission_7d || 0} precision={2} />
-            </Card>
-          </Col>
-        </Row>
-        <Row gutter={16} style={{ marginBottom: 24 }}>
-          <Col span={6}>
-            <Card bordered={false}>
               <Statistic 
                 title="本月广告费用" 
                 value={overviewData?.cost_month || 0} 
@@ -205,14 +226,6 @@ const Dashboard = () => {
           <Col span={6}>
             <Card bordered={false}>
               <Statistic 
-                title="本月订单数" 
-                value={overviewData?.orders_month || 0}
-              />
-            </Card>
-          </Col>
-          <Col span={6}>
-            <Card bordered={false}>
-              <Statistic 
                 title="本月ROI" 
                 value={overviewData?.roi_month || 0} 
                 precision={2}
@@ -222,6 +235,12 @@ const Dashboard = () => {
             </Card>
           </Col>
         </Row>
+
+        <Card title="本月费用佣金走向" style={{ marginBottom: 16 }}>
+          <Suspense fallback={<div style={{ height: 300, display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Spin /></div>}>
+            <ReactECharts option={managerTrendOption} style={{ height: 300 }} lazyUpdate={true} notMerge={true} />
+          </Suspense>
+        </Card>
 
         <Card title="员工数据总览">
           <Table
