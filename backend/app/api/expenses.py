@@ -365,9 +365,15 @@ def _build_ga_cost_maps(
     end: date,
     platform_code_map: Dict[str, int],
     mcc_manual_cost_map: Dict[Tuple[int, date], float],
-) -> Tuple[Dict[Tuple[int, date], float], Dict[date, float], set]:
+) -> Tuple[Dict[Tuple[int, date], float], Dict[date, float], set, float]:
     """
     构建 Google Ads API 广告费用映射（按 platform_id + date 汇总），并返回未匹配平台的费用（按 date 汇总）。
+
+    返回值:
+    - ga_cost_map: (platform_id, date) -> cost (匹配到平台的费用)
+    - ga_unmatched_cost_map: date -> cost (未匹配平台的费用，但不再使用)
+    - day_set: 出现的日期集合
+    - mcc_total_cost: 所有MCC的总费用（用于显示"总广告费用"）
 
     关键点：
     - 先在数据库里按 (mcc_id, date, extracted_platform_code) 聚合，避免拉取明细导致慢/内存大
@@ -423,7 +429,8 @@ def _build_ga_cost_maps(
 
     # 输出
     ga_cost_map: Dict[Tuple[int, date], float] = {}         # (platform_id, date) -> cost
-    ga_unmatched_cost_map: Dict[date, float] = {}           # date -> cost
+    ga_unmatched_cost_map: Dict[date, float] = {}           # date -> cost (不再使用，保留兼容)
+    mcc_total_cost: float = 0.0                              # MCC总费用
 
     # 处理所有出现过的 (mcc_id, date)
     all_mcc_dates = set(api_total_by_mcc_date.keys()) | set(mcc_manual_cost_map.keys())
@@ -433,6 +440,12 @@ def _build_ga_cost_maps(
         day_set.add(d)
         manual_cost = mcc_manual_cost_map.get(mcc_key, None)
         api_total = api_total_by_mcc_date.get(mcc_key, 0.0)
+
+        # 计算该MCC当天的实际费用（用于总费用统计）
+        if manual_cost is not None:
+            mcc_total_cost += float(manual_cost or 0.0)
+        else:
+            mcc_total_cost += api_total
 
         # 取出该 mcc/date 下所有 platform_code 的 api 成本（含 None）
         code_cost_pairs = [
@@ -478,7 +491,7 @@ def _build_ga_cost_maps(
                 else:
                     ga_unmatched_cost_map[d] = ga_unmatched_cost_map.get(d, 0.0) + float(api_cost or 0.0)
 
-    return ga_cost_map, ga_unmatched_cost_map, day_set
+    return ga_cost_map, ga_unmatched_cost_map, day_set, mcc_total_cost
 
 
 def _extract_commission_cost(result_data: dict) -> Tuple[float, float]:
@@ -603,10 +616,12 @@ async def _get_manager_expense_summary(start: date, end: date, today: date, db: 
     # 获取所有平台
     platform_rows = db.query(AffiliatePlatform).all()
     platform_name_map = {p.id: p.platform_name for p in platform_rows}
+    platform_code_map = {p.platform_code: p.id for p in platform_rows}
     
     # 所有员工的总计
     all_total_commission = 0.0
     all_total_cost = 0.0
+    all_total_mcc_cost = 0.0  # MCC实际总费用
     all_total_rejected = 0.0
     all_day_set = set()
     
@@ -614,6 +629,26 @@ async def _get_manager_expense_summary(start: date, end: date, today: date, db: 
     user_summaries: List[ExpenseUserSummary] = []
     
     for employee in employees:
+        # 获取该员工的 MCC 手动费用调整
+        mcc_manual_costs = db.query(MccCostAdjustment).filter(
+            MccCostAdjustment.user_id == employee.id,
+            MccCostAdjustment.date >= start,
+            MccCostAdjustment.date <= end
+        ).all()
+        mcc_manual_cost_map: Dict[Tuple[int, date], float] = {}
+        for adj in mcc_manual_costs:
+            mcc_manual_cost_map[(adj.mcc_id, adj.date)] = float(adj.manual_cost or 0.0)
+        
+        # 获取该员工的 MCC 总费用
+        _, _, _, user_mcc_total_cost = _build_ga_cost_maps(
+            db=db,
+            user_id=employee.id,
+            start=start,
+            end=end,
+            platform_code_map=platform_code_map,
+            mcc_manual_cost_map=mcc_manual_cost_map,
+        )
+        
         # 获取该员工的每日指标（先按平台/日期聚合，避免 N+1 + 全量拉取）
         metric_rows = db.query(
             AdCampaign.platform_id.label("platform_id"),
@@ -739,26 +774,30 @@ async def _get_manager_expense_summary(start: date, end: date, today: date, db: 
         
         all_total_commission += user_total_commission
         all_total_cost += user_total_cost
+        all_total_mcc_cost += user_mcc_total_cost
         all_total_rejected += user_total_rejected
         
+        # 员工的总广告费用使用MCC实际费用（如果有的话）
+        user_display_cost = user_mcc_total_cost if user_mcc_total_cost > 0 else user_total_cost
         user_summaries.append(ExpenseUserSummary(
             user_id=employee.id,
             username=employee.username,
             total_commission=round(user_total_commission, 4),
-            total_ad_cost=round(user_total_cost, 4),
+            total_ad_cost=round(user_display_cost, 4),
             total_rejected_commission=round(user_total_rejected, 4),
-            net_profit=round(user_total_commission - user_total_rejected - user_total_cost, 4),
+            net_profit=round(user_total_commission - user_total_rejected - user_display_cost, 4),
             platforms=user_platforms,
         ))
     
-    # 计算总计
+    # 计算总计（使用MCC实际总费用）
+    all_display_cost = all_total_mcc_cost if all_total_mcc_cost > 0 else all_total_cost
     day_count = len(all_day_set) if len(all_day_set) > 0 else 0
-    net_profit = all_total_commission - all_total_rejected - all_total_cost
+    net_profit = all_total_commission - all_total_rejected - all_display_cost
     avg_daily = (net_profit / day_count) if day_count > 0 else 0.0
     
     totals = ExpenseTotals(
         total_commission=round(all_total_commission, 4),
-        total_ad_cost=round(all_total_cost, 4),
+        total_ad_cost=round(all_display_cost, 4),
         total_rejected_commission=round(all_total_rejected, 4),
         net_profit=round(net_profit, 4),
         avg_daily_profit=round(avg_daily, 4),
@@ -955,8 +994,8 @@ async def get_expense_summary(
     for adj in mcc_manual_costs:
         mcc_manual_cost_map[(adj.mcc_id, adj.date)] = float(adj.manual_cost or 0.0)
     
-    # ===== 从 Google Ads API 数据中统计“广告费用”（聚合后再计算，避免全量拉取与重复累加）=====
-    ga_cost_map, ga_unmatched_cost_map, ga_day_set = _build_ga_cost_maps(
+    # ===== 从 Google Ads API 数据中统计"广告费用"（聚合后再计算，避免全量拉取与重复累加）=====
+    ga_cost_map, ga_unmatched_cost_map, ga_day_set, mcc_total_cost = _build_ga_cost_maps(
         db=db,
         user_id=current_user.id,
         start=start,
@@ -1162,17 +1201,17 @@ async def get_expense_summary(
             range_net_profit=round(range_net, 4),
         ))
 
-    # 未匹配平台的费用不再计入总费用（这些是不需要的数据）
-    # unmatched_total_cost = sum(ga_unmatched_cost_map.values())
-    # total_cost += unmatched_total_cost
+    # 总广告费用使用MCC实际总费用（而非只计算匹配到平台的费用）
+    # 这样可以确保"总广告费用"与"MCC费用明细"中的总费用一致
+    total_ad_cost = mcc_total_cost if mcc_total_cost > 0 else total_cost
     
     day_count = len(day_set) if len(day_set) > 0 else 0
-    net_profit = total_commission - total_rejected - total_cost
+    net_profit = total_commission - total_rejected - total_ad_cost
     avg_daily = (net_profit / day_count) if day_count > 0 else 0.0
 
     totals = ExpenseTotals(
         total_commission=round(total_commission, 4),
-        total_ad_cost=round(total_cost, 4),
+        total_ad_cost=round(total_ad_cost, 4),
         total_rejected_commission=round(total_rejected, 4),
         net_profit=round(net_profit, 4),
         avg_daily_profit=round(avg_daily, 4),
@@ -1246,8 +1285,8 @@ async def get_expense_daily(
     for adj in mcc_manual_costs:
         mcc_manual_cost_map[(adj.mcc_id, adj.date)] = float(adj.manual_cost or 0.0)
     
-    # 从 Google Ads API 统计每日“广告费用”（聚合后再计算，避免全量拉取与重复累加）
-    ga_cost_map, ga_unmatched_cost_map, _ = _build_ga_cost_maps(
+    # 从 Google Ads API 统计每日"广告费用"（聚合后再计算，避免全量拉取与重复累加）
+    ga_cost_map, ga_unmatched_cost_map, _, _ = _build_ga_cost_maps(
         db=db,
         user_id=current_user.id,
         start=start,
