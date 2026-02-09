@@ -65,6 +65,10 @@ const Analysis = ({ mode }) => {
       const response = await api.get('/api/affiliate/accounts')
       setAccounts(response.data)
     } catch (error) {
+      // 如果是请求被取消，不显示错误
+      if (error.isCanceled || error.name === 'CanceledError' || error.name === 'AbortError') {
+        return
+      }
       console.error('获取账号列表失败', error)
     }
   }
@@ -191,6 +195,10 @@ const Analysis = ({ mode }) => {
       setResults(all)
       lastFetchParams.current = paramsKey
     } catch (error) {
+      // 如果是请求被取消，不显示错误提示
+      if (error.isCanceled || error.name === 'CanceledError' || error.name === 'AbortError') {
+        return
+      }
       message.error('获取分析结果失败')
     } finally {
       setLoading(false)
