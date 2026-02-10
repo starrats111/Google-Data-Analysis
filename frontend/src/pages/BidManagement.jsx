@@ -26,7 +26,7 @@ import {
   QuestionCircleOutlined,
   RightOutlined,
 } from '@ant-design/icons'
-import api from '../utils/api'
+import api from '../services/api'
 import './BidManagement.css'
 
 const { Title, Text, Paragraph } = Typography
