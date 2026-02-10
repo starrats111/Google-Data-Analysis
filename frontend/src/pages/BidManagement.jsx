@@ -403,7 +403,7 @@ const BidManagement = () => {
         {strategies.length === 0 && !loading && (
           <Alert
             message="暂无出价数据"
-            description="请点击"同步出价数据"按钮从Google Ads获取最新的出价策略和关键词CPC数据"
+            description="请点击【同步出价数据】按钮从Google Ads获取最新的出价策略和关键词CPC数据"
             type="info"
             showIcon
             style={{ marginBottom: 16 }}
