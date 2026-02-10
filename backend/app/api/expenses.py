@@ -258,6 +258,75 @@ async def get_cost_detail(
     }
 
 
+@router.get("/mcc-cost-detail")
+async def get_mcc_cost_detail(
+    begin_date: str = Query(None, description="开始日期"),
+    end_date: str = Query(None, description="结束日期"),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    获取MCC费用明细（用于数据中心的总费用点击展开）
+    """
+    from datetime import date as date_type, timedelta
+    
+    # 解析日期
+    if begin_date:
+        start = _parse_date(begin_date)
+    else:
+        start = date_type.today() - timedelta(days=30)
+    
+    if end_date:
+        end = _parse_date(end_date)
+    else:
+        end = date_type.today() - timedelta(days=1)
+    
+    CNY_TO_USD_RATE = 7.2
+    
+    # 查询当前用户的所有MCC账号
+    mcc_accounts = db.query(GoogleMccAccount).filter(
+        GoogleMccAccount.user_id == current_user.id
+    ).all()
+    
+    mcc_details = []
+    total_cost_usd = 0.0
+    
+    for mcc in mcc_accounts:
+        # 查询该MCC在日期范围内的费用
+        cost = db.query(func.sum(GoogleAdsApiData.cost)).filter(
+            GoogleAdsApiData.mcc_id == mcc.id,
+            GoogleAdsApiData.date >= start,
+            GoogleAdsApiData.date <= end
+        ).scalar() or 0.0
+        
+        cost_original = float(cost)
+        currency = mcc.currency or 'USD'
+        
+        # 货币转换
+        if currency == 'CNY':
+            cost_usd = cost_original / CNY_TO_USD_RATE
+        else:
+            cost_usd = cost_original
+        
+        # 只添加有费用的MCC
+        if cost_original > 0:
+            mcc_details.append({
+                "mcc_id": mcc.mcc_id,
+                "mcc_name": mcc.mcc_name,
+                "currency": currency,
+                "cost_original": round(cost_original, 2),
+                "cost_usd": round(cost_usd, 2),
+            })
+            total_cost_usd += cost_usd
+    
+    return {
+        "begin_date": start.isoformat(),
+        "end_date": end.isoformat(),
+        "mcc_details": mcc_details,
+        "total_cost_usd": round(total_cost_usd, 2),
+    }
+
+
 @router.post("/clean-duplicate-costs", status_code=status.HTTP_200_OK)
 async def clean_duplicate_costs(
     payload: CleanDuplicateCostsPayload = Body(default=CleanDuplicateCostsPayload()),

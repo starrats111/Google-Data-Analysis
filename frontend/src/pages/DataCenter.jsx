@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react'
-import { Card, Table, DatePicker, Select, Tabs, Space, Statistic, Row, Col, message, Skeleton, Tag, Input } from 'antd'
-import { SearchOutlined } from '@ant-design/icons'
+import { Card, Table, DatePicker, Select, Tabs, Space, Statistic, Row, Col, message, Skeleton, Tag, Input, Modal, Spin } from 'antd'
+import { SearchOutlined, DollarOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import api from '../services/api'
 import { useAuth } from '../store/authStore'
@@ -34,6 +34,11 @@ const DataCenter = () => {
   // 筛选
   const [statusFilter, setStatusFilter] = useState('ENABLED')
   const [searchText, setSearchText] = useState('')
+  
+  // MCC费用明细Modal
+  const [mccModalVisible, setMccModalVisible] = useState(false)
+  const [mccCostData, setMccCostData] = useState([])
+  const [mccCostLoading, setMccCostLoading] = useState(false)
   
   // 请求取消
   const abortControllerRef = useRef(null)
@@ -141,6 +146,26 @@ const DataCenter = () => {
   // 禁用今天及以后的日期
   const disabledDate = (current) => {
     return current && current >= dayjs().startOf('day')
+  }
+
+  // 获取MCC费用明细
+  const fetchMccCostDetail = async () => {
+    setMccCostLoading(true)
+    setMccModalVisible(true)
+    try {
+      const response = await api.get('/api/expenses/mcc-cost-detail', {
+        params: {
+          begin_date: dateRange[0].format('YYYY-MM-DD'),
+          end_date: dateRange[1].format('YYYY-MM-DD'),
+        }
+      })
+      setMccCostData(response.data?.mcc_details || [])
+    } catch (error) {
+      console.error('获取MCC费用明细失败:', error)
+      message.error('获取MCC费用明细失败')
+    } finally {
+      setMccCostLoading(false)
+    }
   }
 
   // Google Ads 表格列
@@ -372,14 +397,25 @@ const DataCenter = () => {
           {/* 统计卡片 */}
           <Row gutter={16} style={{ marginBottom: 16 }}>
             <Col xs={12} sm={6}>
-              <Card size="small">
+              <Card 
+                size="small" 
+                hoverable 
+                onClick={fetchMccCostDetail}
+                style={{ cursor: 'pointer' }}
+              >
                 <Statistic
-                  title="总费用"
+                  title={
+                    <Space>
+                      <span>总费用</span>
+                      <DollarOutlined style={{ color: '#1890ff', fontSize: 12 }} />
+                    </Space>
+                  }
                   value={googleStats.totalCost}
                   precision={2}
                   prefix="$"
                   valueStyle={{ color: '#cf1322' }}
                 />
+                <div style={{ fontSize: 12, color: '#999', marginTop: 4 }}>点击查看MCC明细</div>
               </Card>
             </Col>
             <Col xs={12} sm={6}>
@@ -497,6 +533,48 @@ const DataCenter = () => {
     },
   ]
 
+  // MCC费用明细表格列
+  const mccCostColumns = [
+    {
+      title: 'MCC账号',
+      dataIndex: 'mcc_name',
+      key: 'mcc_name',
+      width: 200,
+    },
+    {
+      title: 'MCC ID',
+      dataIndex: 'mcc_id',
+      key: 'mcc_id',
+      width: 150,
+    },
+    {
+      title: '货币',
+      dataIndex: 'currency',
+      key: 'currency',
+      width: 80,
+      render: (val) => <Tag>{val || 'USD'}</Tag>,
+    },
+    {
+      title: '费用(原币)',
+      dataIndex: 'cost_original',
+      key: 'cost_original',
+      width: 120,
+      align: 'right',
+      render: (val, record) => {
+        const symbol = record.currency === 'CNY' ? '¥' : '$'
+        return `${symbol}${(val || 0).toFixed(2)}`
+      },
+    },
+    {
+      title: '费用(USD)',
+      dataIndex: 'cost_usd',
+      key: 'cost_usd',
+      width: 120,
+      align: 'right',
+      render: (val) => <span style={{ color: '#cf1322', fontWeight: 'bold' }}>${(val || 0).toFixed(2)}</span>,
+    },
+  ]
+
   return (
     <div>
       <Card
@@ -519,6 +597,38 @@ const DataCenter = () => {
           items={tabItems}
         />
       </Card>
+
+      {/* MCC费用明细Modal */}
+      <Modal
+        title={`MCC费用明细 (${dateRange[0]?.format('YYYY-MM-DD')} ~ ${dateRange[1]?.format('YYYY-MM-DD')})`}
+        open={mccModalVisible}
+        onCancel={() => setMccModalVisible(false)}
+        footer={null}
+        width={800}
+      >
+        <Spin spinning={mccCostLoading}>
+          <Table
+            columns={mccCostColumns}
+            dataSource={mccCostData}
+            rowKey={(record) => record.mcc_id}
+            pagination={false}
+            size="small"
+            summary={(pageData) => {
+              const totalUsd = pageData.reduce((sum, item) => sum + (item.cost_usd || 0), 0)
+              return (
+                <Table.Summary fixed>
+                  <Table.Summary.Row>
+                    <Table.Summary.Cell index={0} colSpan={4}><strong>总计</strong></Table.Summary.Cell>
+                    <Table.Summary.Cell index={4} align="right">
+                      <strong style={{ color: '#cf1322' }}>${totalUsd.toFixed(2)}</strong>
+                    </Table.Summary.Cell>
+                  </Table.Summary.Row>
+                </Table.Summary>
+              )
+            }}
+          />
+        </Spin>
+      </Modal>
     </div>
   )
 }

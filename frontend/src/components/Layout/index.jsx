@@ -7,7 +7,6 @@ import {
   UserOutlined,
   LogoutOutlined,
   AccountBookOutlined,
-  WalletOutlined,
   RocketOutlined,
   TeamOutlined,
   FileTextOutlined,
@@ -52,7 +51,6 @@ const Layout = () => {
         { key: '/', icon: <DashboardOutlined />, label: '数据总览' },
         { key: '/analysis-l7d', icon: <BarChartOutlined />, label: 'L7D分析' },
         { key: '/bid-management', icon: <SettingOutlined />, label: '出价管理' },
-        { key: '/expenses', icon: <WalletOutlined />, label: '我的收益' },
       ],
     },
     {
