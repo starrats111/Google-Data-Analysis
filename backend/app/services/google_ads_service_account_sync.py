@@ -607,30 +607,33 @@ class GoogleAdsServiceAccountSync:
         Returns:
             操作结果
         """
+        from google.protobuf import field_mask_pb2
+        
         try:
             campaign_service = client.get_service("CampaignService")
-            campaign_operation = client.get_type("CampaignOperation")
             
             # 构建资源名称
             campaign_resource = f"customers/{customer_id}/campaigns/{campaign_id}"
             
-            # 设置更新
-            campaign = campaign_operation.update
+            # 创建 campaign 对象
+            campaign = client.get_type("Campaign")
             campaign.resource_name = campaign_resource
             
             # 设置为人工CPC，关闭智能点击付费
             campaign.manual_cpc.enhanced_cpc_enabled = False
             
-            # 设置 update_mask
-            client.copy_from(
-                campaign_operation.update_mask,
-                client.get_type("FieldMask")(paths=["manual_cpc.enhanced_cpc_enabled"])
-            )
+            # 使用 protobuf 的 FieldMask
+            field_mask = field_mask_pb2.FieldMask(paths=["manual_cpc.enhanced_cpc_enabled"])
+            
+            # 创建操作
+            operation = client.get_type("CampaignOperation")
+            operation.update_mask.CopyFrom(field_mask)
+            operation.update.CopyFrom(campaign)
             
             # 执行更新
             response = campaign_service.mutate_campaigns(
                 customer_id=customer_id,
-                operations=[campaign_operation]
+                operations=[operation]
             )
             
             logger.info(f"广告系列 {campaign_id} 已切换为人工CPC出价")
@@ -669,28 +672,31 @@ class GoogleAdsServiceAccountSync:
         Returns:
             操作结果
         """
+        from google.protobuf import field_mask_pb2
+        
         try:
             criterion_service = client.get_service("AdGroupCriterionService")
-            criterion_operation = client.get_type("AdGroupCriterionOperation")
             
             # 构建资源名称
             criterion_resource = f"customers/{customer_id}/adGroupCriteria/{ad_group_id}~{criterion_id}"
             
-            # 设置更新
-            criterion = criterion_operation.update
+            # 创建 criterion 对象
+            criterion = client.get_type("AdGroupCriterion")
             criterion.resource_name = criterion_resource
             criterion.cpc_bid_micros = cpc_bid_micros
             
-            # 设置 update_mask
-            client.copy_from(
-                criterion_operation.update_mask,
-                client.get_type("FieldMask")(paths=["cpc_bid_micros"])
-            )
+            # 使用 protobuf 的 FieldMask
+            field_mask = field_mask_pb2.FieldMask(paths=["cpc_bid_micros"])
+            
+            # 创建操作
+            operation = client.get_type("AdGroupCriterionOperation")
+            operation.update_mask.CopyFrom(field_mask)
+            operation.update.CopyFrom(criterion)
             
             # 执行更新
             response = criterion_service.mutate_ad_group_criteria(
                 customer_id=customer_id,
-                operations=[criterion_operation]
+                operations=[operation]
             )
             
             logger.info(f"关键词 {criterion_id} CPC已设置为 {cpc_bid_micros / 1_000_000}")
