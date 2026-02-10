@@ -25,6 +25,8 @@ const MyReports = lazy(() => import('./pages/MyReports'))
 const EmployeeList = lazy(() => import('./pages/EmployeeList'))
 const EmployeeDetail = lazy(() => import('./pages/EmployeeDetail'))
 const BidManagement = lazy(() => import('./pages/BidManagement'))
+const FinancialReport = lazy(() => import('./pages/FinancialReport'))
+const ReportMonthly = lazy(() => import('./pages/ReportMonthly'))
 
 // 加载中的占位组件
 const PageLoading = () => (
@@ -81,6 +83,8 @@ function App() {
             <Route path="stage-label/:label" element={<StageLabelDetail />} />
             <Route path="ad-copy" element={<AdCopyGenerator />} />
             <Route path="my-reports" element={<MyReports />} />
+            <Route path="financial-report" element={<FinancialReport />} />
+            <Route path="report-monthly" element={<ReportMonthly />} />
           </Route>
         </Routes>
       </Suspense>

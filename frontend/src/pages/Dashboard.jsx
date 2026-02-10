@@ -13,6 +13,8 @@ const ReactECharts = lazy(() => import('echarts-for-react'))
 // 启用时区插件
 dayjs.extend(utc)
 dayjs.extend(timezone)
+// 设置默认时区为中国时区
+dayjs.tz.setDefault('Asia/Shanghai')
 
 const Dashboard = () => {
   const { user } = useAuth()
@@ -145,7 +147,7 @@ const Dashboard = () => {
       { title: '本月费用', dataIndex: 'cost_month', key: 'cost_month', align: 'right', width: 100, render: (v) => <span style={{ color: '#cf1322' }}>{Number(v || 0).toFixed(2)}</span> },
       { title: '本月佣金', dataIndex: 'commission_month', key: 'commission_month', align: 'right', width: 100, render: (v) => <span style={{ color: '#3f8600' }}>{Number(v || 0).toFixed(2)}</span> },
       { title: '本月订单', dataIndex: 'orders_month', key: 'orders_month', align: 'right', width: 80 },
-      { title: '最后同步', dataIndex: 'last_google_sync_at', key: 'last_google_sync_at', width: 140, render: (v) => v ? dayjs.utc(v).local().format('YYYY-MM-DD HH:mm') : '-' },
+      { title: '最后同步', dataIndex: 'last_google_sync_at', key: 'last_google_sync_at', width: 140, render: (v) => v ? dayjs.utc(v).tz('Asia/Shanghai').format('YYYY-MM-DD HH:mm') : '-' },
     ]
 
     return (
