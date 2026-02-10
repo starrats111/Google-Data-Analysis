@@ -1,31 +1,62 @@
-import React from 'react'
-import { RobotOutlined } from '@ant-design/icons'
+import React, { useState } from 'react'
+import { RobotOutlined, CloseOutlined, LoadingOutlined } from '@ant-design/icons'
 import './style.css'
 
 /**
- * AI生成中的全屏遮罩组件
- * 用于AI报告生成时显示友好的loading状态
+ * AI生成中的顶部悬浮进度条组件
+ * 用于AI报告生成时显示友好的loading状态，不阻塞页面操作
  */
 const AiGeneratingOverlay = ({ 
   visible = false, 
   title = 'AI 分析中...', 
-  description = '正在使用 Gemini AI 生成分析报告，请稍候' 
+  campaignCount = 0,
+  onMinimize
 }) => {
+  const [minimized, setMinimized] = useState(false)
+
   if (!visible) return null
 
+  const handleMinimize = () => {
+    setMinimized(true)
+    onMinimize?.()
+  }
+
+  // 最小化时显示小图标
+  if (minimized) {
+    return (
+      <div 
+        className="ai-progress-minimized"
+        onClick={() => setMinimized(false)}
+        title="点击展开"
+      >
+        <RobotOutlined spin />
+      </div>
+    )
+  }
+
   return (
-    <div className="ai-overlay">
-      <div className="ai-overlay-content">
-        <div className="ai-overlay-icon pulse-animation">
-          <RobotOutlined />
+    <div className="ai-progress-bar">
+      <div className="ai-progress-bar__content">
+        <div className="ai-progress-bar__left">
+          <RobotOutlined className="ai-progress-bar__icon" />
+          <span className="ai-progress-bar__title">{title}</span>
+          {campaignCount > 0 && (
+            <span className="ai-progress-bar__count">
+              正在分析 {campaignCount} 个广告系列
+            </span>
+          )}
         </div>
-        <div className="ai-overlay-title">{title}</div>
-        <div className="ai-overlay-description">{description}</div>
-        <div className="ai-overlay-progress">
-          <div className="ai-overlay-progress-bar"></div>
-        </div>
-        <div className="ai-overlay-tips">
-          💡 AI正在分析广告数据，生成优化建议...
+        <div className="ai-progress-bar__right">
+          <div className="ai-progress-bar__track">
+            <div className="ai-progress-bar__fill"></div>
+          </div>
+          <button 
+            className="ai-progress-bar__close"
+            onClick={handleMinimize}
+            title="最小化"
+          >
+            <CloseOutlined />
+          </button>
         </div>
       </div>
     </div>
@@ -33,4 +64,3 @@ const AiGeneratingOverlay = ({
 }
 
 export default AiGeneratingOverlay
-

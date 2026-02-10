@@ -429,7 +429,9 @@ G) 综述
   const loadCustomPrompt = async () => {
     setLoadingPrompt(true)
     try {
-      const response = await api.get('/api/gemini/user-prompt')
+      const response = await api.get('/api/gemini/user-prompt', {
+        params: { prompt_type: 'analysis' }
+      })
       setCustomPrompt(response.data?.prompt || '')
     } catch (error) {
       setCustomPrompt('')
@@ -442,7 +444,10 @@ G) 综述
   const saveCustomPrompt = async () => {
     setSavingPrompt(true)
     try {
-      await api.post('/api/gemini/user-prompt', { prompt: customPrompt })
+      await api.post('/api/gemini/user-prompt', { 
+        prompt: customPrompt,
+        prompt_type: 'analysis'
+      })
       message.success('提示词保存成功')
       setPromptModalOpen(false)
     } catch (error) {

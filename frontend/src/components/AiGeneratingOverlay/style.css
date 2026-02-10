@@ -1,62 +1,46 @@
-.ai-overlay {
+/* AI生成进度条 - 顶部悬浮 */
+.ai-progress-bar {
   position: fixed;
   top: 0;
   left: 0;
   right: 0;
-  bottom: 0;
-  background: rgba(15, 23, 42, 0.85);
-  display: flex;
-  justify-content: center;
-  align-items: center;
   z-index: 10000;
-  backdrop-filter: blur(8px);
-  animation: fadeIn 0.3s ease-out;
+  background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
+  border-bottom: 1px solid rgba(102, 126, 234, 0.4);
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+  animation: slideDown 0.3s ease-out;
 }
 
-@keyframes fadeIn {
+@keyframes slideDown {
   from {
+    transform: translateY(-100%);
     opacity: 0;
   }
   to {
+    transform: translateY(0);
     opacity: 1;
   }
 }
 
-.ai-overlay-content {
-  background: linear-gradient(145deg, #1e293b 0%, #0f172a 100%);
-  padding: 48px 64px;
-  border-radius: 24px;
-  text-align: center;
-  box-shadow: 
-    0 25px 80px rgba(0, 0, 0, 0.5),
-    0 0 100px rgba(102, 126, 234, 0.2);
-  border: 1px solid rgba(102, 126, 234, 0.3);
-  animation: popIn 0.4s ease-out;
-  max-width: 90vw;
+.ai-progress-bar__content {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 24px;
+  max-width: 1400px;
+  margin: 0 auto;
 }
 
-@keyframes popIn {
-  from {
-    opacity: 0;
-    transform: scale(0.85) translateY(20px);
-  }
-  to {
-    opacity: 1;
-    transform: scale(1) translateY(0);
-  }
+.ai-progress-bar__left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
 }
 
-.ai-overlay-icon {
-  font-size: 64px;
-  margin-bottom: 24px;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  background-clip: text;
-}
-
-.pulse-animation {
-  animation: pulse 2s ease-in-out infinite;
+.ai-progress-bar__icon {
+  font-size: 20px;
+  color: #667eea;
+  animation: pulse 1.5s ease-in-out infinite;
 }
 
 @keyframes pulse {
@@ -64,34 +48,39 @@
     transform: scale(1);
   }
   50% {
-    transform: scale(1.15);
+    transform: scale(1.2);
   }
 }
 
-.ai-overlay-title {
-  font-size: 24px;
+.ai-progress-bar__title {
+  font-size: 14px;
   font-weight: 600;
   color: #fff;
-  margin-bottom: 12px;
-  letter-spacing: 1px;
 }
 
-.ai-overlay-description {
-  font-size: 14px;
-  color: rgba(255, 255, 255, 0.7);
-  margin-bottom: 32px;
+.ai-progress-bar__count {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.6);
+  padding: 2px 10px;
+  background: rgba(102, 126, 234, 0.2);
+  border-radius: 12px;
 }
 
-.ai-overlay-progress {
+.ai-progress-bar__right {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.ai-progress-bar__track {
   width: 200px;
   height: 4px;
   background: rgba(255, 255, 255, 0.1);
   border-radius: 4px;
   overflow: hidden;
-  margin: 0 auto 24px;
 }
 
-.ai-overlay-progress-bar {
+.ai-progress-bar__fill {
   height: 100%;
   width: 30%;
   background: linear-gradient(90deg, #667eea, #764ba2, #667eea);
@@ -114,44 +103,82 @@
   }
 }
 
-.ai-overlay-tips {
-  font-size: 13px;
+.ai-progress-bar__close {
+  background: transparent;
+  border: none;
   color: rgba(255, 255, 255, 0.5);
-  animation: blink 2s ease-in-out infinite;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 4px;
+  transition: all 0.2s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
-@keyframes blink {
+.ai-progress-bar__close:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
+}
+
+/* 最小化状态 - 右下角小图标 */
+.ai-progress-minimized {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  z-index: 10000;
+  width: 48px;
+  height: 48px;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  box-shadow: 0 4px 20px rgba(102, 126, 234, 0.4);
+  animation: bounce 2s ease-in-out infinite;
+  transition: transform 0.2s;
+}
+
+.ai-progress-minimized:hover {
+  transform: scale(1.1);
+}
+
+.ai-progress-minimized .anticon {
+  font-size: 24px;
+  color: #fff;
+}
+
+@keyframes bounce {
   0%, 100% {
-    opacity: 0.5;
+    transform: translateY(0);
   }
   50% {
-    opacity: 1;
+    transform: translateY(-5px);
   }
 }
 
 /* 移动端适配 */
-@media screen and (max-width: 480px) {
-  .ai-overlay-content {
-    padding: 32px 24px;
-    margin: 16px;
+@media screen and (max-width: 768px) {
+  .ai-progress-bar__content {
+    padding: 10px 16px;
   }
 
-  .ai-overlay-icon {
-    font-size: 48px;
-    margin-bottom: 16px;
+  .ai-progress-bar__count {
+    display: none;
   }
 
-  .ai-overlay-title {
-    font-size: 18px;
+  .ai-progress-bar__track {
+    width: 100px;
   }
 
-  .ai-overlay-description {
-    font-size: 12px;
-    margin-bottom: 24px;
-  }
-
-  .ai-overlay-progress {
-    width: 160px;
+  .ai-progress-bar__title {
+    font-size: 13px;
   }
 }
 
+@media screen and (max-width: 480px) {
+  .ai-progress-bar__track {
+    width: 60px;
+  }
+}

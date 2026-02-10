@@ -24,7 +24,10 @@ class UserPrompt(Base):
     __tablename__ = "user_prompts"
     
     id = Column(Integer, primary_key=True, index=True)
-    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, unique=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    prompt_type = Column(String(20), nullable=False, default="analysis", index=True)  # 'analysis' 或 'report'
     prompt = Column(Text, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    # user_id + prompt_type 组合唯一
 

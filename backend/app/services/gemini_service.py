@@ -4,12 +4,27 @@ Gemini AI 服务
 支持官方API和哈基米等中转API（OpenAI兼容格式）
 """
 import logging
+import os
 from typing import Optional, List, Dict
 from datetime import date, datetime
 import json
 import requests
 
 logger = logging.getLogger(__name__)
+
+# 报告生成词文件路径
+REPORT_PROMPT_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "excel", "报告生成词.txt")
+
+
+def load_report_prompt_from_file() -> str:
+    """从文件加载报告生成提示词"""
+    try:
+        if os.path.exists(REPORT_PROMPT_FILE):
+            with open(REPORT_PROMPT_FILE, 'r', encoding='utf-8') as f:
+                return f.read().strip()
+    except Exception as e:
+        logger.warning(f"读取报告生成词文件失败: {e}")
+    return None
 
 # Gemini API 配置
 GEMINI_API_KEY = None
@@ -744,71 +759,29 @@ G) 综述
         table_divider = "|--------|---------|------|-----|------|------|-----|------|---------|------|-----|-----|-----------|----------|"
         table_data = "\n".join([table_header, table_divider] + table_rows)
         
-        # 默认提示词 - 专业广告分析报告
-        default_prompt = """你是一位拥有10年以上经验的跨境电商 Google Ads 投放专家，精通品牌词套利策略。请对以下广告系列数据进行深度分析，生成一份专业的广告投放分析报告。
+        # 优先使用用户自定义提示词，其次使用文件中的提示词
+        if custom_prompt and custom_prompt.strip():
+            prompt_text = custom_prompt
+        else:
+            # 从文件加载报告生成提示词
+            file_prompt = load_report_prompt_from_file()
+            if file_prompt:
+                prompt_text = file_prompt
+                logger.info("使用 excel/报告生成词.txt 作为默认提示词")
+            else:
+                # 文件不存在时的备用提示词
+                prompt_text = """你是一位拥有10年以上经验的跨境电商 Google Ads 投放专家。
+请对以下广告系列数据进行深度分析，生成一份专业的广告投放分析报告。
 
-## 报告结构要求
+对于每个广告系列，请输出：
+1. 阶段评价（冷启动期/成长期/成熟期/衰退期）
+2. 市场洞察（商家情况、竞争分析）
+3. 数据深度分析（CPC、费用、转化、ROI）
+4. 节日与季节性分析
+5. 优化建议（预算、出价、创意）
+6. 风险预警
 
-对于每个广告系列，请输出以下内容：
-
-### 📊 [广告系列名称]
-
-#### 1. 阶段评价
-分析该广告系列目前处于什么阶段：
-- 🌱 冷启动期（数据不足，需要观察）
-- 📈 成长期（数据向好，值得投入）
-- 🏆 成熟期（稳定盈利，优化细节）
-- 📉 衰退期（效果下滑，需要调整）
-
-总结过去7天的整体表现。
-
-#### 2. 市场洞察
-- 从系列名称解析商家信息和投放国家
-- 分析该商家在投放国家的市场竞争情况
-- 评估同类品牌词的竞价强度
-
-#### 3. 数据深度分析
-- **CPC 分析**: 当前CPC是否合理？与EPC对比如何？是否存在倒挂风险？
-- **费用效率**: L7D花费与产出比是否健康？
-- **点击率趋势**: CTR表现如何？是否需要优化广告素材？
-- **转化情况**: 订单数和出单天数说明了什么？
-- **ROI 健康度**: ROI是否达标？与行业基准对比如何？
-- **流量瓶颈**: Budget丢失和Rank丢失分别说明什么问题？
-
-#### 4. 节日营销预判
-- 该投放国家未来2-4周是否有重要节日？
-- 是否需要提前调整预算布局？
-- 头图/广告素材是否需要节日化优化？
-
-#### 5. 优化建议
-- **推荐预算**: $XX（说明调整原因）
-- **推荐CPC**: $X.XX（说明定价逻辑，如红线CPC计算）
-- **其他建议**: 关键词优化、广告素材、投放时段等
-
-#### 6. 风险提示
-- 需要关注的潜在风险
-- 建议监控的关键指标
-- 触发预警的条件
-
----
-
-## 分析规则参考
-
-- 保守EPC = 佣金 × 0.72 ÷ 点击数
-- 保守ROI = (保守佣金 - 花费) ÷ 花费
-- 红线CPC = 保守EPC × 0.7（CPC不应超过此值）
-- 日均点击 = L7D点击 ÷ 7
-- Budget瓶颈: Budget丢失 ≥ 40% 说明预算不足
-- Rank瓶颈: Rank丢失 ≥ 40% 说明出价不够
-
-## 输出要求
-
-1. 使用专业、详实的语言
-2. 每个分析点要有数据支撑
-3. 建议要具体可执行
-4. 不要输出简单的操作指令表格"""
-
-        prompt_text = custom_prompt if custom_prompt and custom_prompt.strip() else default_prompt
+请以专业、清晰、可执行的方式输出报告。"""
         
         full_prompt = f"""{prompt_text}
 

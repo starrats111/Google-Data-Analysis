@@ -117,6 +117,7 @@ class GenerateReportRequest(BaseModel):
 class UserPromptRequest(BaseModel):
     """用户自定义提示词"""
     prompt: str
+    prompt_type: str = "analysis"  # 'analysis' 或 'report'
 
 
 @router.post("/analyze-campaign")
@@ -440,16 +441,24 @@ async def delete_report(
 
 @router.get("/user-prompt")
 async def get_user_prompt(
+    prompt_type: str = "analysis",  # 'analysis' 或 'report'
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """获取用户自定义提示词"""
+    """获取用户自定义提示词
+    
+    Args:
+        prompt_type: 提示词类型
+            - 'analysis': L7D分析提示词
+            - 'report': 报告生成提示词
+    """
     try:
         user_prompt = db.query(UserPrompt).filter(
-            UserPrompt.user_id == current_user.id
+            UserPrompt.user_id == current_user.id,
+            UserPrompt.prompt_type == prompt_type
         ).first()
         
-        return {"prompt": user_prompt.prompt if user_prompt else ""}
+        return {"prompt": user_prompt.prompt if user_prompt else "", "type": prompt_type}
     except Exception as e:
         logger.error(f"获取提示词失败: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -461,10 +470,19 @@ async def save_user_prompt(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """保存用户自定义提示词"""
+    """保存用户自定义提示词
+    
+    Args:
+        request.prompt_type: 提示词类型
+            - 'analysis': L7D分析提示词
+            - 'report': 报告生成提示词
+    """
     try:
+        prompt_type = request.prompt_type or "analysis"
+        
         user_prompt = db.query(UserPrompt).filter(
-            UserPrompt.user_id == current_user.id
+            UserPrompt.user_id == current_user.id,
+            UserPrompt.prompt_type == prompt_type
         ).first()
         
         if user_prompt:
@@ -472,14 +490,188 @@ async def save_user_prompt(
         else:
             user_prompt = UserPrompt(
                 user_id=current_user.id,
-                prompt=request.prompt
+                prompt=request.prompt,
+                prompt_type=prompt_type
             )
             db.add(user_prompt)
         
         db.commit()
         
-        return {"success": True, "message": "保存成功"}
+        return {"success": True, "message": "保存成功", "type": prompt_type}
     except Exception as e:
         logger.error(f"保存提示词失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/l7d-data")
+async def get_l7d_data_for_report(
+    start_date: str,
+    end_date: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    获取指定日期范围的L7D数据（供报告生成使用）
+    
+    Args:
+        start_date: 开始日期 (YYYY-MM-DD)
+        end_date: 结束日期 (YYYY-MM-DD)
+    
+    Returns:
+        广告系列数据列表，与L7D分析格式相同
+    """
+    from datetime import datetime
+    from app.models.google_ads_api_data import GoogleAdsApiData, GoogleMccAccount
+    from app.models.affiliate_transaction import AffiliateTransaction
+    from sqlalchemy import func
+    
+    try:
+        # 解析日期
+        begin = datetime.strptime(start_date, "%Y-%m-%d").date()
+        end = datetime.strptime(end_date, "%Y-%m-%d").date()
+        
+        # 获取用户的MCC货币映射
+        user_mccs = db.query(GoogleMccAccount).filter(
+            GoogleMccAccount.user_id == current_user.id
+        ).all()
+        mcc_currency_map = {mcc.id: getattr(mcc, 'currency', 'USD') or 'USD' for mcc in user_mccs}
+        
+        CNY_TO_USD_RATE = 7.2
+        
+        def convert_to_usd(amount: float, currency: str) -> float:
+            if currency and currency.upper() == "CNY":
+                return amount / CNY_TO_USD_RATE
+            return amount
+        
+        # 查询广告数据（只查询已启用的）
+        google_ads_data = db.query(GoogleAdsApiData).filter(
+            GoogleAdsApiData.user_id == current_user.id,
+            GoogleAdsApiData.date >= begin,
+            GoogleAdsApiData.date <= end,
+            GoogleAdsApiData.status == "已启用"
+        ).all()
+        
+        if not google_ads_data:
+            return {"campaigns": [], "summary": {}, "message": "该日期范围内没有数据"}
+        
+        # 按广告系列分组
+        campaign_data = {}
+        for data in google_ads_data:
+            key = data.campaign_id
+            mcc_currency = mcc_currency_map.get(data.mcc_id, "USD")
+            
+            if key not in campaign_data:
+                campaign_data[key] = {
+                    "campaign_id": data.campaign_id,
+                    "campaign_name": data.campaign_name,
+                    "platform_code": data.extracted_platform_code,
+                    "currency": mcc_currency,
+                    "data_dates": set(),
+                    "total_cost": 0.0,
+                    "total_clicks": 0,
+                    "total_impressions": 0,
+                    "max_cpc": 0.0,
+                    "max_budget": 0.0,
+                    "is_budget_lost": 0.0,
+                    "is_rank_lost": 0.0,
+                }
+            
+            campaign_data[key]["data_dates"].add(data.date)
+            campaign_data[key]["total_cost"] += convert_to_usd(data.cost or 0, mcc_currency)
+            campaign_data[key]["total_clicks"] += int(data.clicks or 0)
+            campaign_data[key]["total_impressions"] += int(data.impressions or 0)
+            
+            cpc = convert_to_usd(data.cpc or 0, mcc_currency)
+            if cpc > campaign_data[key]["max_cpc"]:
+                campaign_data[key]["max_cpc"] = cpc
+            
+            budget = convert_to_usd(data.budget or 0, mcc_currency)
+            if budget > campaign_data[key]["max_budget"]:
+                campaign_data[key]["max_budget"] = budget
+            
+            campaign_data[key]["is_budget_lost"] = max(
+                campaign_data[key]["is_budget_lost"],
+                data.is_budget_lost or 0
+            )
+            campaign_data[key]["is_rank_lost"] = max(
+                campaign_data[key]["is_rank_lost"],
+                data.is_rank_lost or 0
+            )
+        
+        # 获取佣金数据
+        commission_data = db.query(
+            AffiliateTransaction.campaign_name,
+            func.sum(AffiliateTransaction.commission).label("total_commission"),
+            func.count(AffiliateTransaction.id).label("order_count")
+        ).filter(
+            AffiliateTransaction.user_id == current_user.id,
+            AffiliateTransaction.transaction_date >= begin,
+            AffiliateTransaction.transaction_date <= end,
+            AffiliateTransaction.status == "confirmed"
+        ).group_by(AffiliateTransaction.campaign_name).all()
+        
+        commission_map = {c.campaign_name: {"commission": c.total_commission or 0, "orders": c.order_count or 0} for c in commission_data}
+        
+        # 构建返回数据
+        campaigns = []
+        total_cost = 0
+        total_clicks = 0
+        total_commission = 0
+        total_orders = 0
+        
+        for campaign_id, data in campaign_data.items():
+            days = len(data["data_dates"])
+            clicks = data["total_clicks"]
+            cost = data["total_cost"]
+            
+            # 获取佣金
+            comm_info = commission_map.get(data["campaign_name"], {"commission": 0, "orders": 0})
+            commission = comm_info["commission"]
+            orders = comm_info["orders"]
+            
+            # 计算指标
+            cpc = cost / clicks if clicks > 0 else 0
+            conservative_epc = (commission * 0.72) / clicks if clicks > 0 else 0
+            roi = ((commission * 0.72) - cost) / cost if cost > 0 else 0
+            
+            campaigns.append({
+                "campaign_name": data["campaign_name"],
+                "campaign_id": campaign_id,
+                "cost": round(cost, 2),
+                "clicks": clicks,
+                "impressions": data["total_impressions"],
+                "cpc": round(cpc, 4),
+                "budget": round(data["max_budget"], 2),
+                "commission": round(commission, 2),
+                "orders": orders,
+                "order_days": days if orders > 0 else 0,
+                "conservative_epc": round(conservative_epc, 4),
+                "roi": round(roi, 4),
+                "is_budget_lost": round(data["is_budget_lost"], 4),
+                "is_rank_lost": round(data["is_rank_lost"], 4),
+            })
+            
+            total_cost += cost
+            total_clicks += clicks
+            total_commission += commission
+            total_orders += orders
+        
+        # 按花费降序排列
+        campaigns.sort(key=lambda x: x["cost"], reverse=True)
+        
+        return {
+            "campaigns": campaigns,
+            "summary": {
+                "total_campaigns": len(campaigns),
+                "total_cost": round(total_cost, 2),
+                "total_clicks": total_clicks,
+                "total_commission": round(total_commission, 2),
+                "total_orders": total_orders,
+                "date_range": f"{start_date} ~ {end_date}"
+            }
+        }
+        
+    except Exception as e:
+        logger.error(f"获取L7D数据失败: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 

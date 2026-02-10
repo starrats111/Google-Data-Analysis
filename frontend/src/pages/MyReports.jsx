@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react'
-import { Card, Table, Space, message, Tag, Typography, Button, Modal, Spin, Empty, Tooltip, Input } from 'antd'
-import { FileTextOutlined, DeleteOutlined, CopyOutlined, SettingOutlined, ArrowLeftOutlined, CloseOutlined, RobotOutlined } from '@ant-design/icons'
+import { Card, Table, Space, message, Tag, Typography, Button, Modal, Spin, Empty, Tooltip, Input, DatePicker, Alert } from 'antd'
+import { FileTextOutlined, DeleteOutlined, CopyOutlined, SettingOutlined, ArrowLeftOutlined, CloseOutlined, RobotOutlined, CalendarOutlined } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
 import dayjs from 'dayjs'
 import utc from 'dayjs/plugin/utc'
@@ -15,6 +15,7 @@ import AiGeneratingOverlay from '../components/AiGeneratingOverlay'
 import './Analysis.css'
 
 const { Title, Text, Paragraph } = Typography
+const { RangePicker } = DatePicker
 
 const MyReports = () => {
   const navigate = useNavigate()
@@ -22,6 +23,11 @@ const MyReports = () => {
   const [loading, setLoading] = useState(false)
   const [selectedReport, setSelectedReport] = useState(null)
   const [reportModalOpen, setReportModalOpen] = useState(false)
+  
+  // 生成报告
+  const [dateRange, setDateRange] = useState(null)
+  const [generating, setGenerating] = useState(false)
+  const [l7dData, setL7dData] = useState(null)
   
   // 提示词编辑
   const [promptModalOpen, setPromptModalOpen] = useState(false)
@@ -69,11 +75,60 @@ const MyReports = () => {
     }
   }
 
-  // 加载用户自定义提示词
+  // 生成报告
+  const handleGenerateReport = async () => {
+    if (!dateRange || dateRange.length !== 2) {
+      message.warning('请先选择日期范围')
+      return
+    }
+    
+    const startDate = dateRange[0].format('YYYY-MM-DD')
+    const endDate = dateRange[1].format('YYYY-MM-DD')
+    
+    setGenerating(true)
+    try {
+      // 1. 获取L7D数据
+      const dataResponse = await api.get('/api/gemini/l7d-data', {
+        params: { start_date: startDate, end_date: endDate }
+      })
+      
+      const campaigns = dataResponse.data?.campaigns || []
+      if (campaigns.length === 0) {
+        message.warning('该日期范围内没有广告数据')
+        setGenerating(false)
+        return
+      }
+      
+      setL7dData(dataResponse.data)
+      
+      // 2. 调用报告生成API
+      const reportResponse = await api.post('/api/gemini/generate-report', {
+        campaigns: campaigns,
+        model_type: 'thinking'
+      })
+      
+      if (reportResponse.data?.success) {
+        message.success('报告生成成功！')
+        fetchReports()  // 刷新报告列表
+      } else {
+        message.error('报告生成失败: ' + (reportResponse.data?.message || '未知错误'))
+      }
+    } catch (error) {
+      console.error('生成报告失败:', error)
+      message.error('生成报告失败: ' + (error.response?.data?.detail || error.message))
+    } finally {
+      setGenerating(false)
+      setL7dData(null)
+    }
+  }
+
+  // 加载用户自定义提示词（报告类型）
   const loadCustomPrompt = async () => {
     setLoadingPrompt(true)
     try {
-      const response = await api.get('/api/gemini/user-prompt')
+      const response = await api.get('/api/gemini/user-prompt', {
+        params: { prompt_type: 'report' }
+      })
       setCustomPrompt(response.data?.prompt || '')
     } catch (error) {
       // 如果没有自定义提示词，使用默认的
@@ -83,11 +138,14 @@ const MyReports = () => {
     }
   }
 
-  // 保存自定义提示词
+  // 保存自定义提示词（报告类型）
   const saveCustomPrompt = async () => {
     setSavingPrompt(true)
     try {
-      await api.post('/api/gemini/user-prompt', { prompt: customPrompt })
+      await api.post('/api/gemini/user-prompt', { 
+        prompt: customPrompt,
+        prompt_type: 'report'
+      })
       message.success('提示词保存成功')
       setPromptModalOpen(false)
     } catch (error) {
@@ -199,6 +257,12 @@ const MyReports = () => {
 
   return (
     <div className="analysis-page">
+      {/* AI生成中的遮罩 */}
+      <AiGeneratingOverlay 
+        visible={generating} 
+        campaignCount={l7dData?.campaigns?.length || 0}
+      />
+      
       {/* 顶部返回按钮 */}
       <div style={{ marginBottom: 16 }}>
         <Button 
@@ -230,6 +294,34 @@ const MyReports = () => {
           </Button>
         </Space>
       </div>
+      
+      {/* 生成报告区域 */}
+      <Card style={{ marginBottom: 16 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <CalendarOutlined style={{ color: '#1677ff' }} />
+            <Text strong>选择日期范围：</Text>
+          </div>
+          <RangePicker 
+            value={dateRange}
+            onChange={setDateRange}
+            style={{ width: 280 }}
+            placeholder={['开始日期', '结束日期']}
+          />
+          <Button 
+            type="primary"
+            icon={<RobotOutlined />}
+            loading={generating}
+            onClick={handleGenerateReport}
+            disabled={!dateRange}
+          >
+            生成报告
+          </Button>
+          <Text type="secondary" style={{ fontSize: 12 }}>
+            选择日期范围后，系统将获取该时间段的广告数据并生成专业分析报告
+          </Text>
+        </div>
+      </Card>
 
       <Card styles={{ body: { paddingTop: 14 } }}>
         {reports.length === 0 && !loading ? (
