@@ -403,7 +403,6 @@ class GoogleAdsServiceAccountSync:
                 campaign.status,
                 campaign.bidding_strategy_type,
                 campaign.manual_cpc.enhanced_cpc_enabled,
-                campaign.maximize_clicks.cpc_bid_ceiling_micros,
                 metrics.average_cpc
             FROM campaign
             WHERE campaign.status = 'ENABLED'
@@ -449,13 +448,8 @@ class GoogleAdsServiceAccountSync:
                 
                 is_manual = strategy_type == 'MANUAL_CPC'
                 
-                # 获取出价上限（如果是最大化点击策略）
+                # 出价上限（暂不获取，API字段不稳定）
                 cpc_ceiling = 0
-                try:
-                    if hasattr(row.campaign, 'maximize_clicks') and row.campaign.maximize_clicks.cpc_bid_ceiling_micros:
-                        cpc_ceiling = row.campaign.maximize_clicks.cpc_bid_ceiling_micros / 1_000_000
-                except:
-                    pass
                 
                 # 获取智能点击付费设置
                 enhanced_cpc = False
