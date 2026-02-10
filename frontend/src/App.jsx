@@ -27,6 +27,8 @@ const EmployeeDetail = lazy(() => import('./pages/EmployeeDetail'))
 const BidManagement = lazy(() => import('./pages/BidManagement'))
 const FinancialReport = lazy(() => import('./pages/FinancialReport'))
 const ReportMonthly = lazy(() => import('./pages/ReportMonthly'))
+const ReportQuarterly = lazy(() => import('./pages/ReportQuarterly'))
+const ReportYearly = lazy(() => import('./pages/ReportYearly'))
 
 function PrivateRoute({ children }) {
   const { isAuthenticated } = useAuth()
@@ -78,6 +80,8 @@ function App() {
             <Route path="my-reports" element={<MyReports />} />
             <Route path="financial-report" element={<FinancialReport />} />
             <Route path="report-monthly" element={<ReportMonthly />} />
+            <Route path="report-quarterly" element={<ReportQuarterly />} />
+            <Route path="report-yearly" element={<ReportYearly />} />
           </Route>
         </Routes>
       </Suspense>
