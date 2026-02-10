@@ -699,13 +699,15 @@ async def export_financial_report(
     output.seek(0)
     
     # 返回文件
+    from urllib.parse import quote
     filename = f"财务报表_{year}年{month:02d}月.xlsx"
+    encoded_filename = quote(filename)
     
     return StreamingResponse(
         output,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={
-            "Content-Disposition": f"attachment; filename*=UTF-8''{filename}"
+            "Content-Disposition": f"attachment; filename*=UTF-8''{encoded_filename}"
         }
     )
 
