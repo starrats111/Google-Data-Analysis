@@ -88,7 +88,7 @@ const DataCenter = () => {
             date_range_type: 'custom',
             begin_date: params.start_date,
             end_date: params.end_date,
-            status: params.status === 'ALL' ? undefined : params.status,
+            status: params.status,  // 后端支持 ALL 参数，直接传递
           },
           signal: abortControllerRef.current.signal,
         })
@@ -231,7 +231,30 @@ const DataCenter = () => {
       dataIndex: 'platform',
       key: 'platform',
       width: 100,
-      render: (val) => val?.toUpperCase() || '-',
+      render: (val) => {
+        // 不同平台使用不同颜色
+        const platformColors = {
+          'cg': { bg: '#e6f7ff', color: '#1890ff', name: 'CG' },       // 蓝色
+          'rw': { bg: '#fff7e6', color: '#fa8c16', name: 'RW' },       // 橙色
+          'lh': { bg: '#f6ffed', color: '#52c41a', name: 'LH' },       // 绿色
+          'linkhaitao': { bg: '#f6ffed', color: '#52c41a', name: 'LH' },
+          'pm': { bg: '#fff0f6', color: '#eb2f96', name: 'PM' },       // 粉色
+          'partnermatic': { bg: '#fff0f6', color: '#eb2f96', name: 'PM' },
+          'lb': { bg: '#f9f0ff', color: '#722ed1', name: 'LB' },       // 紫色
+          'linkbux': { bg: '#f9f0ff', color: '#722ed1', name: 'LB' },
+          'bsh': { bg: '#fcffe6', color: '#a0d911', name: 'BSH' },     // 青柠色
+          'brandsparkhub': { bg: '#fcffe6', color: '#a0d911', name: 'BSH' },
+          'cf': { bg: '#e6fffb', color: '#13c2c2', name: 'CF' },       // 青色
+          'creatorflare': { bg: '#e6fffb', color: '#13c2c2', name: 'CF' },
+        }
+        const key = val?.toLowerCase()
+        const style = platformColors[key] || { bg: '#f5f5f5', color: '#666', name: val?.toUpperCase() || '-' }
+        return (
+          <Tag style={{ backgroundColor: style.bg, color: style.color, border: `1px solid ${style.color}` }}>
+            {style.name}
+          </Tag>
+        )
+      },
     },
     {
       title: '商家ID',
