@@ -85,7 +85,8 @@ const DataCenter = () => {
       if (activeTab === 'google') {
         const response = await api.get('/api/google-ads-aggregate/by-campaign', {
           params: {
-            start_date: params.start_date,
+            date_range_type: 'custom',
+            begin_date: params.start_date,
             end_date: params.end_date,
             status: params.status === 'ALL' ? undefined : params.status,
           },
