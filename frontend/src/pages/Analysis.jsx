@@ -7,6 +7,7 @@ import api from '../services/api'
 import ExportButton from '../components/Export/ExportButton'
 import ReportViewer from '../components/ReportViewer/ReportViewer'
 import CpcDeployModal from '../components/CpcDeployModal'
+import AiGeneratingOverlay from '../components/AiGeneratingOverlay'
 import { useAuth } from '../store/authStore'
 import './Analysis.css'
 
@@ -640,6 +641,13 @@ G) 综述
 
   return (
     <div className="analysis-page">
+      {/* AI 分析全屏loading */}
+      <AiGeneratingOverlay 
+        visible={aiAnalyzing && !aiModalOpen}
+        title="AI 分析中..."
+        description={`正在分析 ${selectedResultForAi?.result_data?.data?.length || 0} 个广告系列，请稍候`}
+      />
+      
       <div className="analysis-page__header">
         <div>
           <Title level={3} className="analysis-page__title">
@@ -665,6 +673,9 @@ G) 综述
           </Button>
         </Space>
       </div>
+
+      {/* 移动端表格滚动提示 */}
+      <div className="table-scroll-hint">👆 左右滑动查看完整表格 👆</div>
 
       {/* AI 分析结果 Modal */}
       <Modal

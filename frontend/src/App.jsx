@@ -1,8 +1,8 @@
 import React, { Suspense, lazy } from 'react'
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom'
-import { Spin } from 'antd'
 import Layout from './components/Layout'
 import Login from './pages/Login'
+import PageLoading from './components/PageLoading'
 import { useAuth } from './store/authStore'
 
 // 懒加载页面组件，减少初始加载时间
@@ -28,13 +28,6 @@ const BidManagement = lazy(() => import('./pages/BidManagement'))
 const FinancialReport = lazy(() => import('./pages/FinancialReport'))
 const ReportMonthly = lazy(() => import('./pages/ReportMonthly'))
 
-// 加载中的占位组件
-const PageLoading = () => (
-  <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh' }}>
-    <Spin size="large" tip="加载中..." />
-  </div>
-)
-
 function PrivateRoute({ children }) {
   const { isAuthenticated } = useAuth()
   return isAuthenticated ? children : <Navigate to="/login" />
@@ -48,7 +41,7 @@ function App() {
         v7_relativeSplatPath: true,
       }}
     >
-      <Suspense fallback={<PageLoading />}>
+      <Suspense fallback={<PageLoading tip="页面加载中..." />}>
         <Routes>
           <Route path="/login" element={<Login />} />
           <Route path="/google-oauth-callback" element={<GoogleOAuthCallback />} />

@@ -241,6 +241,9 @@ const FinancialReport = () => {
           </Row>
         )}
 
+        {/* 移动端表格滚动提示 */}
+        <div className="table-scroll-hint">👆 左右滑动查看完整表格 👆</div>
+
         <Spin spinning={loading}>
           <Table
             columns={columns}
@@ -248,7 +251,7 @@ const FinancialReport = () => {
             pagination={false}
             bordered
             size="middle"
-            scroll={{ x: 700 }}
+            scroll={{ x: 800 }}
             summary={() => data?.summary ? (
               <Table.Summary fixed>
                 <Table.Summary.Row>

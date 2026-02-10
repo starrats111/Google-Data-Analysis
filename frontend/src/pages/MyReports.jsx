@@ -11,6 +11,7 @@ dayjs.extend(utc)
 dayjs.extend(timezone)
 import api from '../services/api'
 import ReportViewer from '../components/ReportViewer/ReportViewer'
+import AiGeneratingOverlay from '../components/AiGeneratingOverlay'
 import './Analysis.css'
 
 const { Title, Text, Paragraph } = Typography

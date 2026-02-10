@@ -16,6 +16,207 @@ body {
   min-height: 100vh;
 }
 
+/* ============ 全局页面过渡动画 ============ */
+.page-enter {
+  opacity: 0;
+  transform: translateY(10px);
+}
+
+.page-enter-active {
+  opacity: 1;
+  transform: translateY(0);
+  transition: opacity 0.3s ease-out, transform 0.3s ease-out;
+}
+
+.page-exit {
+  opacity: 1;
+}
+
+.page-exit-active {
+  opacity: 0;
+  transition: opacity 0.2s ease-in;
+}
+
+/* ============ 全局表格移动端适配 ============ */
+@media screen and (max-width: 768px) {
+  /* 所有表格容器启用横向滚动 */
+  .ant-table-wrapper {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+  
+  /* 表格最小宽度，保证所有列可见 */
+  .ant-table {
+    min-width: 800px;
+  }
+  
+  /* 固定列背景色 */
+  .ant-table-cell-fix-left,
+  .ant-table-cell-fix-right {
+    background: #fff !important;
+  }
+  
+  /* 表头紧凑 */
+  .ant-table-thead > tr > th {
+    padding: 8px 10px !important;
+    font-size: 13px !important;
+    white-space: nowrap;
+  }
+  
+  /* 单元格紧凑 */
+  .ant-table-tbody > tr > td {
+    padding: 8px 10px !important;
+    font-size: 13px !important;
+  }
+  
+  /* 卡片内边距减少 */
+  .ant-card-body {
+    padding: 12px !important;
+  }
+  
+  /* 页面容器内边距减少 */
+  .ant-layout-content {
+    padding: 12px !important;
+  }
+  
+  /* 统计卡片响应式 */
+  .ant-statistic-title {
+    font-size: 12px !important;
+  }
+  
+  .ant-statistic-content {
+    font-size: 18px !important;
+  }
+  
+  /* 按钮组堆叠 */
+  .ant-space-horizontal {
+    flex-wrap: wrap;
+  }
+  
+  /* 选择器全宽 */
+  .ant-select {
+    min-width: 100% !important;
+  }
+  
+  /* 日期选择器全宽 */
+  .ant-picker {
+    width: 100% !important;
+  }
+  
+  /* 表格滚动提示 */
+  .table-scroll-hint {
+    display: block;
+    text-align: center;
+    color: #999;
+    font-size: 12px;
+    padding: 8px 0;
+    background: linear-gradient(to right, rgba(102, 126, 234, 0.1), transparent, rgba(102, 126, 234, 0.1));
+    border-radius: 4px;
+    margin-bottom: 8px;
+  }
+}
+
+@media screen and (min-width: 769px) {
+  .table-scroll-hint {
+    display: none;
+  }
+}
+
+/* 小屏幕进一步优化 */
+@media screen and (max-width: 480px) {
+  .ant-table {
+    min-width: 600px;
+  }
+  
+  .ant-table-thead > tr > th,
+  .ant-table-tbody > tr > td {
+    padding: 6px 8px !important;
+    font-size: 12px !important;
+  }
+  
+  .ant-card-head-title {
+    font-size: 14px !important;
+  }
+  
+  /* 统计数值更小 */
+  .ant-statistic-content {
+    font-size: 16px !important;
+  }
+  
+  /* 按钮更紧凑 */
+  .ant-btn {
+    padding: 4px 12px !important;
+    font-size: 13px !important;
+  }
+}
+
+/* ============ AI报告生成loading优化 ============ */
+.ai-generating-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  z-index: 10000;
+  backdrop-filter: blur(4px);
+}
+
+.ai-generating-content {
+  background: white;
+  padding: 40px 60px;
+  border-radius: 16px;
+  text-align: center;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+  animation: popIn 0.3s ease-out;
+}
+
+@keyframes popIn {
+  from {
+    opacity: 0;
+    transform: scale(0.8);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.ai-generating-content .anticon {
+  font-size: 48px;
+  color: #667eea;
+  margin-bottom: 16px;
+}
+
+.ai-generating-content h3 {
+  margin: 0 0 8px 0;
+  font-size: 18px;
+  color: #333;
+}
+
+.ai-generating-content p {
+  margin: 0;
+  color: #666;
+  font-size: 14px;
+}
+
+/* 脉冲动画 */
+.pulse-animation {
+  animation: pulse 2s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.1);
+  }
+}
+
 
 
 
