@@ -464,11 +464,13 @@ G) 综述
   }
   
   // 查看单条广告系列的 AI 分析报告（从已存储的数据中读取）
-  const handleViewCampaignReport = useCallback((row) => {
+  const handleViewCampaignReport = useCallback((row, analysisDate) => {
     if (!row) return
     
     const campaignName = String(row['广告系列名'] || row['广告系列'] || row['系列名'] || '')
     let aiReport = row['ai_report'] || ''
+    // 使用传入的分析日期，如果没有则使用当前日期
+    const reportDate = analysisDate || dayjs().format('YYYY-MM-DD')
     
     setSelectedCampaignRow(row)
     setSingleCampaignAnalyzing(false)
@@ -478,27 +480,31 @@ G) 综述
       // 清理报告：如果报告以"该广告系列的分析报告可能包含在完整报告中"开头，说明匹配失败
       // 尝试从完整报告中提取该广告系列的部分
       if (aiReport.includes('该广告系列的分析报告可能包含在完整报告中')) {
-        // 尝试从报告中找到该广告系列的段落
-        const extractedReport = extractCampaignSection(aiReport, campaignName)
+        // 先提取"---"后面的完整报告内容
+        const fullReportMatch = aiReport.split(/\n---\n/)
+        const fullReportContent = fullReportMatch.length > 1 ? fullReportMatch.slice(1).join('\n---\n') : aiReport
+        
+        // 尝试从完整报告中找到该广告系列的段落
+        const extractedReport = extractCampaignSection(fullReportContent, campaignName)
         if (extractedReport) {
           aiReport = extractedReport
         } else {
-          // 如果还是找不到，显示简化的提示
-          aiReport = `### 📊 ${campaignName}\n\n该广告系列的详细分析暂时无法单独提取。\n\n请点击主表格上方的「生成报告」按钮查看完整的 AI 分析报告。`
+          // 如果还是找不到，直接显示完整报告内容（去掉提示语）
+          aiReport = fullReportContent || `### 📊 ${campaignName}\n\n该广告系列的详细分析暂时无法单独提取。\n\n请点击主表格上方的「生成报告」按钮查看完整的 AI 分析报告。`
         }
       }
       
       setSingleCampaignResult({
         campaign_name: campaignName,
         analysis: aiReport,
-        analysis_date: dayjs().format('YYYY-MM-DD')
+        analysis_date: reportDate
       })
     } else {
       // 没有 AI 报告，显示提示
       setSingleCampaignResult({
         campaign_name: campaignName,
         analysis: `### 📊 ${campaignName}\n\n该广告系列暂无 AI 分析报告。\n\n**可能的原因：**\n- 该分析是在 AI 报告功能上线前生成的\n- AI 报告生成过程中出现错误\n\n**建议：** 点击"从API数据生成L7D分析"按钮重新生成分析。`,
-        analysis_date: dayjs().format('YYYY-MM-DD')
+        analysis_date: reportDate
       })
     }
   }, [])
@@ -1142,7 +1148,7 @@ G) 综述
                                   style={{ fontSize: '12px', cursor: 'pointer', maxWidth: '240px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}
                                   onClick={(e) => {
                                     e.stopPropagation() // 阻止冒泡到行展开
-                                    handleViewCampaignReport(row)
+                                    handleViewCampaignReport(row, record.analysis_date)
                                   }}
                                 >
                                   {t}
@@ -1393,7 +1399,7 @@ G) 综述
                           style={{ fontSize: '12px', cursor: 'pointer', maxWidth: '240px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}
                           onClick={(e) => {
                             e.stopPropagation() // 阻止冒泡到行展开
-                            handleViewCampaignReport(row)
+                            handleViewCampaignReport(row, record.analysis_date)
                           }}
                         >
                           {t}
