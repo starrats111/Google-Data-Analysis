@@ -702,14 +702,50 @@ const BidManagement = () => {
               dataSource={strategies}
               rowKey="id"
               loading={loading}
-              pagination={{ pageSize: 10 }}
+              pagination={{ 
+                pageSize: 50,
+                showSizeChanger: true,
+                pageSizeOptions: ['10', '20', '50', '100'],
+                showTotal: (total) => `共 ${total} 个广告系列`
+              }}
               scroll={{ x: 1100 }}
               size="small"
               rowSelection={{
                 selectedRowKeys: selectedStrategies.map(s => s.id),
-                onChange: (selectedRowKeys, selectedRows) => {
-                  setSelectedStrategies(selectedRows)
-                }
+                onChange: (selectedRowKeys, selectedRows, info) => {
+                  // 当使用全选时，需要从 strategies 中获取完整数据
+                  if (info.type === 'all') {
+                    // 全选：根据 selectedRowKeys 从 strategies 中找到所有匹配的行
+                    const allSelected = strategies.filter(s => selectedRowKeys.includes(s.id))
+                    setSelectedStrategies(allSelected)
+                  } else {
+                    // 单选：直接更新
+                    setSelectedStrategies(selectedRows)
+                  }
+                },
+                selections: [
+                  {
+                    key: 'all-data',
+                    text: '选择全部广告系列',
+                    onSelect: () => {
+                      setSelectedStrategies([...strategies])
+                    }
+                  },
+                  {
+                    key: 'smart-bidding',
+                    text: '只选智能出价',
+                    onSelect: () => {
+                      setSelectedStrategies(strategies.filter(s => !s.is_manual_cpc))
+                    }
+                  },
+                  {
+                    key: 'clear',
+                    text: '取消全部选择',
+                    onSelect: () => {
+                      setSelectedStrategies([])
+                    }
+                  }
+                ]
               }}
             />
           </Panel>
