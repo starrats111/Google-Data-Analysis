@@ -198,18 +198,30 @@ const BidManagement = () => {
     const newStatus = record.status === 'ENABLED' ? 'PAUSED' : 'ENABLED'
     setToggleStatusLoading({ ...toggleStatusLoading, [record.criterion_id]: true })
     try {
-      await api.post('/api/bids/toggle-keyword-status', {
+      const response = await api.post('/api/bids/toggle-keyword-status', {
         mcc_id: selectedMcc,
         customer_id: record.customer_id,
         ad_group_id: record.ad_group_id,
         criterion_id: record.criterion_id,
         new_status: newStatus
       })
-      message.success(`关键词已${newStatus === 'ENABLED' ? '启用' : '暂停'}`)
-      loadKeywords(selectedCampaign)
+      
+      if (response.data.success) {
+        message.success(`关键词已${newStatus === 'ENABLED' ? '启用' : '暂停'}`)
+        loadKeywords(selectedCampaign)
+      } else {
+        // 处理否定关键词等特殊情况
+        message.warning(response.data.message || '操作失败')
+      }
     } catch (error) {
       console.error('切换状态失败:', error)
-      message.error('切换状态失败: ' + (error.response?.data?.detail || error.message))
+      const errorMsg = error.response?.data?.detail || error.message
+      // 对常见错误给出友好提示
+      if (errorMsg.includes('CANT_UPDATE_NEGATIVE') || errorMsg.includes('Negative')) {
+        message.error('否定关键词不能更改状态，只能删除后重新添加')
+      } else {
+        message.error('切换状态失败: ' + errorMsg)
+      }
     } finally {
       setToggleStatusLoading({ ...toggleStatusLoading, [record.criterion_id]: false })
     }

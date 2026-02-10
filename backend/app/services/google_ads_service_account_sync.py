@@ -724,10 +724,34 @@ class GoogleAdsServiceAccountSync:
     ) -> Dict:
         """
         切换关键词状态（启用/暂停）
+        注意：否定关键词（Negative Keywords）不能更新状态
         """
         from google.protobuf import field_mask_pb2
         
         try:
+            # 首先查询该关键词是否为否定关键词
+            ga_service = client.get_service("GoogleAdsService")
+            query = f"""
+                SELECT
+                    ad_group_criterion.criterion_id,
+                    ad_group_criterion.negative
+                FROM ad_group_criterion
+                WHERE ad_group_criterion.criterion_id = {criterion_id}
+                  AND ad_group.id = {ad_group_id}
+            """
+            
+            try:
+                response = ga_service.search(customer_id=customer_id, query=query)
+                for row in response:
+                    if row.ad_group_criterion.negative:
+                        return {
+                            "success": False,
+                            "message": "否定关键词不能更改状态，只能删除后重新添加"
+                        }
+            except Exception as query_error:
+                logger.warning(f"查询关键词类型失败: {query_error}")
+                # 继续尝试更新，让API返回具体错误
+            
             criterion_service = client.get_service("AdGroupCriterionService")
             
             # 构建资源名称
@@ -767,10 +791,17 @@ class GoogleAdsServiceAccountSync:
             }
             
         except Exception as e:
+            error_msg = str(e)
+            # 处理否定关键词错误
+            if "CANT_UPDATE_NEGATIVE" in error_msg or "Negative" in error_msg:
+                return {
+                    "success": False,
+                    "message": "否定关键词不能更改状态"
+                }
             logger.error(f"切换关键词 {criterion_id} 状态失败: {e}")
             return {
                 "success": False,
-                "message": str(e)
+                "message": error_msg
             }
     
     def add_keyword(
