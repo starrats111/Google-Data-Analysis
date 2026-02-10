@@ -1,0 +1,86 @@
+.bid-management {
+  max-width: 1400px;
+}
+
+.bid-management .page-header-card {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  border: none;
+  border-radius: 12px;
+}
+
+.bid-management .page-header-card h3 {
+  color: #fff !important;
+  margin-bottom: 4px;
+}
+
+.bid-management .page-header-card .ant-typography-secondary {
+  color: rgba(255, 255, 255, 0.85) !important;
+}
+
+.bid-management .ant-collapse {
+  background: transparent;
+  border: 1px solid #e8e8e8;
+  border-radius: 8px;
+}
+
+.bid-management .ant-collapse-item {
+  border-bottom: 1px solid #e8e8e8;
+}
+
+.bid-management .ant-collapse-item:last-child {
+  border-bottom: none;
+}
+
+.bid-management .ant-collapse-header {
+  font-size: 14px;
+  padding: 12px 16px !important;
+}
+
+.bid-management .ant-collapse-content {
+  background: #fafafa;
+}
+
+.bid-management .tutorial-content {
+  padding: 8px 0;
+}
+
+.bid-management .tutorial-content ol {
+  padding-left: 20px;
+  margin: 12px 0;
+}
+
+.bid-management .tutorial-content li {
+  margin-bottom: 8px;
+  line-height: 1.8;
+}
+
+.bid-management .ant-table {
+  font-size: 13px;
+}
+
+.bid-management .ant-table-thead > tr > th {
+  background: #f5f5f5;
+  font-weight: 600;
+}
+
+.bid-management .ant-tag {
+  margin-right: 0;
+}
+
+/* 响应式 */
+@media (max-width: 768px) {
+  .bid-management .page-header-card {
+    border-radius: 8px;
+  }
+  
+  .bid-management .ant-table {
+    font-size: 12px;
+  }
+  
+  .bid-management .ant-btn {
+    font-size: 12px;
+    padding: 2px 8px;
+    height: auto;
+  }
+}
+

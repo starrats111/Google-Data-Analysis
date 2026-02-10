@@ -638,6 +638,7 @@ class ApiAnalysisService:
                     "L7D花费": round(cost, 2),
                     "L7D出单天数": order_days,
                     "当前Max CPC": round(cdata["max_cpc"], 4),
+                    "campaign_id": cdata["campaign_id"],  # 用于前端查询出价策略
                     "预算": round(cdata["max_budget"], 2),
                     "IS Budget丢失": f"{cdata['is_budget_lost'] * 100:.1f}%" if cdata['is_budget_lost'] > 0 else "-",
                     "IS Rank丢失": f"{cdata['is_rank_lost'] * 100:.1f}%" if cdata['is_rank_lost'] > 0 else "-",

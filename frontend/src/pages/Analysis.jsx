@@ -1,6 +1,6 @@
 import React, { useMemo, useState, useEffect, useRef, useCallback } from 'react'
-import { Card, Table, Select, DatePicker, Space, message, Tag, Badge, Typography, Tooltip, Button, Popconfirm, Collapse, Modal, Spin, Input } from 'antd'
-import { RobotOutlined, SettingOutlined, CopyOutlined, ArrowLeftOutlined, CloseOutlined } from '@ant-design/icons'
+import { Card, Table, Select, DatePicker, Space, message, Tag, Badge, Typography, Tooltip, Button, Popconfirm, Collapse, Modal, Spin, Input, Alert } from 'antd'
+import { RobotOutlined, SettingOutlined, CopyOutlined, ArrowLeftOutlined, CloseOutlined, DollarOutlined, ThunderboltOutlined } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
 import dayjs from 'dayjs'
 import api from '../services/api'
@@ -53,6 +53,10 @@ const Analysis = () => {
   const [singleCampaignAnalyzing, setSingleCampaignAnalyzing] = useState(false)
   const [singleCampaignResult, setSingleCampaignResult] = useState(null)
   const [selectedCampaignRow, setSelectedCampaignRow] = useState(null)
+  
+  // 出价策略状态
+  const [bidStrategies, setBidStrategies] = useState({})  // {campaign_id: strategy_info}
+  const [changingToManual, setChangingToManual] = useState({})  // {campaign_id: loading}
 
   const fetchAccounts = async () => {
     try {
@@ -64,6 +68,60 @@ const Analysis = () => {
         return
       }
       console.error('获取账号列表失败', error)
+    }
+  }
+  
+  // 获取出价策略信息
+  const fetchBidStrategies = async () => {
+    try {
+      const response = await api.get('/api/bids/strategies')
+      const strategiesMap = {}
+      for (const s of response.data || []) {
+        strategiesMap[s.campaign_id] = s
+      }
+      setBidStrategies(strategiesMap)
+    } catch (error) {
+      console.error('获取出价策略失败', error)
+    }
+  }
+  
+  // 改为人工出价
+  const handleChangeToManualCpc = async (row) => {
+    const campaignId = row['campaign_id'] || row['广告系列ID']
+    if (!campaignId) {
+      message.warning('无法获取广告系列ID')
+      return
+    }
+    
+    const strategy = bidStrategies[campaignId]
+    if (!strategy) {
+      message.warning('请先同步出价数据')
+      return
+    }
+    
+    setChangingToManual({ ...changingToManual, [campaignId]: true })
+    try {
+      await api.post('/api/bids/change-to-manual', {
+        mcc_id: strategy.mcc_id,
+        customer_id: strategy.customer_id,
+        campaign_id: campaignId
+      })
+      message.success('出价策略已切换为人工CPC')
+      // 更新本地状态
+      setBidStrategies({
+        ...bidStrategies,
+        [campaignId]: {
+          ...strategy,
+          is_manual_cpc: true,
+          bidding_strategy_type: 'MANUAL_CPC',
+          bidding_strategy_name: '每次点击费用人工出价'
+        }
+      })
+    } catch (error) {
+      console.error('切换失败:', error)
+      message.error('切换失败: ' + (error.response?.data?.detail || error.message))
+    } finally {
+      setChangingToManual({ ...changingToManual, [campaignId]: false })
     }
   }
 
@@ -497,6 +555,7 @@ G) 综述
 
   useEffect(() => {
     fetchAccounts()
+    fetchBidStrategies()
     // 初始加载时不使用缓存，确保获取最新数据
     fetchResults(false)
   }, [])
@@ -1018,7 +1077,7 @@ G) 综述
                           }
                         }
 
-                        // 为操作指令列添加特殊渲染 - 可点击查看AI报告
+                        // 为操作指令列添加特殊渲染 - 可点击查看AI报告（经理视图）
                         if (key === '操作指令') {
                           column.width = 260
                           column.ellipsis = false
@@ -1312,6 +1371,49 @@ G) 综述
                           {t}
                         </Tag>
                       </Tooltip>
+                    )
+                  }
+                }
+                
+                // 为当前Max CPC列添加出价策略显示和操作按钮
+                if (key === '当前Max CPC') {
+                  column.width = 180
+                  column.render = (text, row) => {
+                    const campaignId = row['campaign_id']
+                    const strategy = campaignId ? bidStrategies[campaignId] : null
+                    const isManual = strategy?.is_manual_cpc
+                    const isLoading = changingToManual[campaignId]
+                    
+                    return (
+                      <Space size={4} direction="vertical" style={{ width: '100%' }}>
+                        <Text strong>${(parseFloat(text) || 0).toFixed(2)}</Text>
+                        {strategy ? (
+                          isManual ? (
+                            <Tag color="green" style={{ fontSize: 11 }}>人工出价</Tag>
+                          ) : (
+                            <Popconfirm
+                              title="确认切换为人工CPC出价？"
+                              description="切换后需手动设置每个关键词的出价"
+                              onConfirm={() => handleChangeToManualCpc(row)}
+                              okText="确认"
+                              cancelText="取消"
+                            >
+                              <Button 
+                                size="small" 
+                                type="primary" 
+                                danger
+                                loading={isLoading}
+                                icon={<ThunderboltOutlined />}
+                                style={{ fontSize: 11, padding: '0 6px', height: 22 }}
+                              >
+                                改人工
+                              </Button>
+                            </Popconfirm>
+                          )
+                        ) : (
+                          <Tag color="default" style={{ fontSize: 10 }}>-</Tag>
+                        )}
+                      </Space>
                     )
                   }
                 }

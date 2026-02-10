@@ -24,6 +24,7 @@ const AdCopyGenerator = lazy(() => import('./pages/AdCopyGenerator'))
 const MyReports = lazy(() => import('./pages/MyReports'))
 const EmployeeList = lazy(() => import('./pages/EmployeeList'))
 const EmployeeDetail = lazy(() => import('./pages/EmployeeDetail'))
+const BidManagement = lazy(() => import('./pages/BidManagement'))
 
 // 加载中的占位组件
 const PageLoading = () => (
@@ -58,13 +59,14 @@ function App() {
             }
           >
             <Route index element={<Dashboard />} />
-            {/* 我的分析入口 */}
-            <Route path="my-analysis" element={<MyAnalysis />} />
-            {/* L7D 分析 */}
+            {/* L7D 分析 - 直接进入 */}
             <Route path="analysis-l7d" element={<Analysis />} />
             {/* 兼容老链接 */}
             <Route path="analysis" element={<Navigate to="/analysis-l7d" replace />} />
             <Route path="analysis-daily" element={<Navigate to="/analysis-l7d" replace />} />
+            <Route path="my-analysis" element={<Navigate to="/analysis-l7d" replace />} />
+            {/* 出价管理 */}
+            <Route path="bid-management" element={<BidManagement />} />
             <Route path="accounts" element={<AffiliateAccounts />} />
             <Route path="mcc-accounts" element={<MccAccounts />} />
             <Route path="mcc-aggregate" element={<MccDataAggregate />} />

@@ -381,6 +381,339 @@ class GoogleAdsServiceAccountSync:
         
         return campaigns
     
+    def fetch_campaign_bid_strategies(
+        self,
+        client,
+        customer_id: str
+    ) -> List[Dict]:
+        """
+        获取广告系列的出价策略信息
+        
+        Args:
+            client: GoogleAdsClient实例
+            customer_id: 客户账号ID
+            
+        Returns:
+            出价策略列表
+        """
+        query = """
+            SELECT
+                campaign.id,
+                campaign.name,
+                campaign.status,
+                campaign.bidding_strategy_type,
+                campaign.manual_cpc.enhanced_cpc_enabled,
+                campaign.maximize_clicks.cpc_bid_ceiling_micros,
+                metrics.average_cpc
+            FROM campaign
+            WHERE campaign.status = 'ENABLED'
+        """
+        
+        strategies = []
+        
+        try:
+            ga_service = client.get_service("GoogleAdsService")
+            response = ga_service.search(customer_id=customer_id, query=query)
+            
+            # 出价策略类型映射
+            strategy_name_map = {
+                'MANUAL_CPC': '每次点击费用人工出价',
+                'MAXIMIZE_CLICKS': '尽可能争取更多点击次数',
+                'MAXIMIZE_CONVERSIONS': '尽可能提高转化次数',
+                'MAXIMIZE_CONVERSION_VALUE': '尽可能提高转化价值',
+                'TARGET_CPA': '目标每次转化费用',
+                'TARGET_ROAS': '目标广告支出回报率',
+                'TARGET_IMPRESSION_SHARE': '目标展示次数份额',
+                'ENHANCED_CPC': '智能点击付费',
+            }
+            
+            for row in response:
+                # 获取出价策略类型
+                raw_strategy = row.campaign.bidding_strategy_type
+                if hasattr(raw_strategy, 'name'):
+                    strategy_type = raw_strategy.name
+                elif isinstance(raw_strategy, int):
+                    # 枚举值映射
+                    int_map = {
+                        0: 'UNSPECIFIED', 1: 'UNKNOWN', 2: 'COMMISSION',
+                        3: 'ENHANCED_CPC', 4: 'INVALID', 5: 'MANUAL_CPC',
+                        6: 'MANUAL_CPM', 7: 'MANUAL_CPV', 8: 'MAXIMIZE_CONVERSIONS',
+                        9: 'MAXIMIZE_CONVERSION_VALUE', 10: 'PAGE_ONE_PROMOTED',
+                        11: 'PERCENT_CPC', 12: 'TARGET_CPA', 13: 'TARGET_CPM',
+                        14: 'TARGET_IMPRESSION_SHARE', 15: 'TARGET_OUTRANK_SHARE',
+                        16: 'TARGET_ROAS', 17: 'TARGET_SPEND', 18: 'MAXIMIZE_CLICKS'
+                    }
+                    strategy_type = int_map.get(raw_strategy, 'UNKNOWN')
+                else:
+                    strategy_type = str(raw_strategy)
+                
+                is_manual = strategy_type == 'MANUAL_CPC'
+                
+                # 获取出价上限（如果是最大化点击策略）
+                cpc_ceiling = 0
+                try:
+                    if hasattr(row.campaign, 'maximize_clicks') and row.campaign.maximize_clicks.cpc_bid_ceiling_micros:
+                        cpc_ceiling = row.campaign.maximize_clicks.cpc_bid_ceiling_micros / 1_000_000
+                except:
+                    pass
+                
+                # 获取智能点击付费设置
+                enhanced_cpc = False
+                try:
+                    if hasattr(row.campaign, 'manual_cpc') and row.campaign.manual_cpc.enhanced_cpc_enabled:
+                        enhanced_cpc = row.campaign.manual_cpc.enhanced_cpc_enabled
+                except:
+                    pass
+                
+                avg_cpc = (row.metrics.average_cpc or 0) / 1_000_000
+                
+                strategies.append({
+                    "customer_id": customer_id,
+                    "campaign_id": str(row.campaign.id),
+                    "campaign_name": row.campaign.name,
+                    "bidding_strategy_type": strategy_type,
+                    "bidding_strategy_name": strategy_name_map.get(strategy_type, strategy_type),
+                    "is_manual_cpc": is_manual,
+                    "enhanced_cpc_enabled": enhanced_cpc,
+                    "max_cpc_limit": cpc_ceiling,
+                    "avg_cpc": avg_cpc,
+                })
+                
+        except Exception as e:
+            logger.error(f"查询客户账号 {customer_id} 出价策略失败: {e}")
+            raise
+        
+        return strategies
+    
+    def fetch_keyword_bids(
+        self,
+        client,
+        customer_id: str,
+        campaign_id: Optional[str] = None
+    ) -> List[Dict]:
+        """
+        获取关键词的CPC出价数据
+        
+        Args:
+            client: GoogleAdsClient实例
+            customer_id: 客户账号ID
+            campaign_id: 可选，指定广告系列ID
+            
+        Returns:
+            关键词出价列表
+        """
+        campaign_filter = f"AND campaign.id = {campaign_id}" if campaign_id else ""
+        
+        query = f"""
+            SELECT
+                campaign.id,
+                campaign.name,
+                ad_group.id,
+                ad_group.name,
+                ad_group_criterion.criterion_id,
+                ad_group_criterion.keyword.text,
+                ad_group_criterion.keyword.match_type,
+                ad_group_criterion.cpc_bid_micros,
+                ad_group_criterion.effective_cpc_bid_micros,
+                ad_group_criterion.status,
+                ad_group_criterion.quality_info.quality_score,
+                metrics.average_cpc
+            FROM keyword_view
+            WHERE campaign.status = 'ENABLED'
+              AND ad_group.status = 'ENABLED'
+              AND ad_group_criterion.status != 'REMOVED'
+              {campaign_filter}
+        """
+        
+        keywords = []
+        
+        try:
+            ga_service = client.get_service("GoogleAdsService")
+            response = ga_service.search(customer_id=customer_id, query=query)
+            
+            match_type_map = {
+                'EXACT': '完全匹配',
+                'PHRASE': '词组匹配',
+                'BROAD': '广泛匹配',
+            }
+            
+            for row in response:
+                # 获取匹配类型
+                raw_match = row.ad_group_criterion.keyword.match_type
+                if hasattr(raw_match, 'name'):
+                    match_type = raw_match.name
+                elif isinstance(raw_match, int):
+                    int_map = {0: 'UNSPECIFIED', 1: 'UNKNOWN', 2: 'EXACT', 3: 'PHRASE', 4: 'BROAD'}
+                    match_type = int_map.get(raw_match, 'UNKNOWN')
+                else:
+                    match_type = str(raw_match)
+                
+                # 获取状态
+                raw_status = row.ad_group_criterion.status
+                if hasattr(raw_status, 'name'):
+                    status = raw_status.name
+                elif isinstance(raw_status, int):
+                    int_map = {0: 'UNSPECIFIED', 1: 'UNKNOWN', 2: 'ENABLED', 3: 'PAUSED', 4: 'REMOVED'}
+                    status = int_map.get(raw_status, 'UNKNOWN')
+                else:
+                    status = str(raw_status)
+                
+                # CPC数据（微单位转标准单位）
+                max_cpc = (row.ad_group_criterion.cpc_bid_micros or 0) / 1_000_000
+                effective_cpc = (row.ad_group_criterion.effective_cpc_bid_micros or 0) / 1_000_000
+                avg_cpc = (row.metrics.average_cpc or 0) / 1_000_000
+                
+                # 质量得分
+                quality_score = None
+                try:
+                    if hasattr(row.ad_group_criterion, 'quality_info') and row.ad_group_criterion.quality_info.quality_score:
+                        quality_score = row.ad_group_criterion.quality_info.quality_score
+                except:
+                    pass
+                
+                keywords.append({
+                    "customer_id": customer_id,
+                    "campaign_id": str(row.campaign.id),
+                    "campaign_name": row.campaign.name,
+                    "ad_group_id": str(row.ad_group.id),
+                    "ad_group_name": row.ad_group.name,
+                    "criterion_id": str(row.ad_group_criterion.criterion_id),
+                    "keyword_text": row.ad_group_criterion.keyword.text,
+                    "match_type": match_type,
+                    "match_type_cn": match_type_map.get(match_type, match_type),
+                    "max_cpc": max_cpc,
+                    "effective_cpc": effective_cpc,
+                    "avg_cpc": avg_cpc,
+                    "status": status,
+                    "quality_score": quality_score,
+                })
+                
+        except Exception as e:
+            logger.error(f"查询客户账号 {customer_id} 关键词出价失败: {e}")
+            raise
+        
+        return keywords
+    
+    def change_to_manual_cpc(
+        self,
+        client,
+        customer_id: str,
+        campaign_id: str,
+        cpc_bid_ceiling_micros: Optional[int] = None
+    ) -> Dict:
+        """
+        将广告系列出价策略改为人工CPC
+        
+        Args:
+            client: GoogleAdsClient实例
+            customer_id: 客户账号ID
+            campaign_id: 广告系列ID
+            cpc_bid_ceiling_micros: 可选，CPC出价上限（微单位）
+            
+        Returns:
+            操作结果
+        """
+        try:
+            campaign_service = client.get_service("CampaignService")
+            campaign_operation = client.get_type("CampaignOperation")
+            
+            # 构建资源名称
+            campaign_resource = f"customers/{customer_id}/campaigns/{campaign_id}"
+            
+            # 设置更新
+            campaign = campaign_operation.update
+            campaign.resource_name = campaign_resource
+            
+            # 设置为人工CPC，关闭智能点击付费
+            campaign.manual_cpc.enhanced_cpc_enabled = False
+            
+            # 设置 update_mask
+            client.copy_from(
+                campaign_operation.update_mask,
+                client.get_type("FieldMask")(paths=["manual_cpc.enhanced_cpc_enabled"])
+            )
+            
+            # 执行更新
+            response = campaign_service.mutate_campaigns(
+                customer_id=customer_id,
+                operations=[campaign_operation]
+            )
+            
+            logger.info(f"广告系列 {campaign_id} 已切换为人工CPC出价")
+            
+            return {
+                "success": True,
+                "message": "出价策略已切换为人工CPC",
+                "resource_name": response.results[0].resource_name
+            }
+            
+        except Exception as e:
+            logger.error(f"切换广告系列 {campaign_id} 出价策略失败: {e}")
+            return {
+                "success": False,
+                "message": str(e)
+            }
+    
+    def set_keyword_cpc(
+        self,
+        client,
+        customer_id: str,
+        ad_group_id: str,
+        criterion_id: str,
+        cpc_bid_micros: int
+    ) -> Dict:
+        """
+        设置关键词的最高CPC出价
+        
+        Args:
+            client: GoogleAdsClient实例
+            customer_id: 客户账号ID
+            ad_group_id: 广告组ID
+            criterion_id: 关键词 criterion ID
+            cpc_bid_micros: CPC出价（微单位）
+            
+        Returns:
+            操作结果
+        """
+        try:
+            criterion_service = client.get_service("AdGroupCriterionService")
+            criterion_operation = client.get_type("AdGroupCriterionOperation")
+            
+            # 构建资源名称
+            criterion_resource = f"customers/{customer_id}/adGroupCriteria/{ad_group_id}~{criterion_id}"
+            
+            # 设置更新
+            criterion = criterion_operation.update
+            criterion.resource_name = criterion_resource
+            criterion.cpc_bid_micros = cpc_bid_micros
+            
+            # 设置 update_mask
+            client.copy_from(
+                criterion_operation.update_mask,
+                client.get_type("FieldMask")(paths=["cpc_bid_micros"])
+            )
+            
+            # 执行更新
+            response = criterion_service.mutate_ad_group_criteria(
+                customer_id=customer_id,
+                operations=[criterion_operation]
+            )
+            
+            logger.info(f"关键词 {criterion_id} CPC已设置为 {cpc_bid_micros / 1_000_000}")
+            
+            return {
+                "success": True,
+                "message": f"CPC已设置为 {cpc_bid_micros / 1_000_000}",
+                "resource_name": response.results[0].resource_name
+            }
+            
+        except Exception as e:
+            logger.error(f"设置关键词 {criterion_id} CPC失败: {e}")
+            return {
+                "success": False,
+                "message": str(e)
+            }
+    
     def sync_mcc_data(
         self,
         mcc_id: int,

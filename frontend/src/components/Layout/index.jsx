@@ -50,7 +50,8 @@ const Layout = () => {
       label: '工作台',
       children: [
         { key: '/', icon: <DashboardOutlined />, label: '数据总览' },
-        { key: '/my-analysis', icon: <BarChartOutlined />, label: 'L7D分析' },
+        { key: '/analysis-l7d', icon: <BarChartOutlined />, label: 'L7D分析' },
+        { key: '/bid-management', icon: <SettingOutlined />, label: '出价管理' },
         { key: '/expenses', icon: <WalletOutlined />, label: '我的收益' },
       ],
     },
@@ -130,6 +131,9 @@ const Layout = () => {
     // 兼容老路径
     if (path === '/google-ads-data' || path === '/platform-data') {
       return ['/data-center']
+    }
+    if (path === '/my-analysis') {
+      return ['/analysis-l7d']
     }
     return [path]
   }

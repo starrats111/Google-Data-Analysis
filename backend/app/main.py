@@ -34,6 +34,7 @@ from app.api import (
     affiliate_transactions,
     analysis,
     auth,
+    bid_management,
     collabglow,
     dashboard,
     expenses,
@@ -247,6 +248,7 @@ app.include_router(google_oauth.router)
 app.include_router(stage_label.router)
 app.include_router(gemini.router)
 app.include_router(users.router)
+app.include_router(bid_management.router)
 
 
 @app.get("/health")
