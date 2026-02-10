@@ -92,7 +92,8 @@ const DataCenter = () => {
           },
           signal: abortControllerRef.current.signal,
         })
-        const data = response.data || []
+        // 确保返回的是数组
+        const data = Array.isArray(response.data) ? response.data : []
         setGoogleData(data)
         dataCache.google = { data, timestamp: Date.now(), params: cacheKey }
       } else {
@@ -104,7 +105,8 @@ const DataCenter = () => {
             },
             signal: abortControllerRef.current.signal,
           })
-          const data = response.data || []
+          // 确保返回的是数组
+          const data = Array.isArray(response.data) ? response.data : []
           setPlatformSummary(data)
           dataCache.platform = { data, timestamp: Date.now(), params: cacheKey }
         } else {
@@ -115,7 +117,8 @@ const DataCenter = () => {
             },
             signal: abortControllerRef.current.signal,
           })
-          const data = response.data || []
+          // 确保返回的是数组
+          const data = Array.isArray(response.data) ? response.data : []
           setPlatformData(data)
           dataCache.platform = { data, timestamp: Date.now(), params: cacheKey }
         }
@@ -301,19 +304,22 @@ const DataCenter = () => {
     },
   ]
 
-  // 计算汇总统计
+  // 计算汇总统计（确保数据是数组）
+  const safeGoogleData = Array.isArray(googleData) ? googleData : []
+  const safePlatformData = Array.isArray(viewMode === 'summary' ? platformSummary : platformData) 
+    ? (viewMode === 'summary' ? platformSummary : platformData) 
+    : []
+  
   const googleStats = {
-    totalCost: googleData.reduce((sum, item) => sum + (item.cost || 0), 0),
-    totalClicks: googleData.reduce((sum, item) => sum + (item.clicks || 0), 0),
-    totalImpressions: googleData.reduce((sum, item) => sum + (item.impressions || 0), 0),
-    campaignCount: googleData.length,
+    totalCost: safeGoogleData.reduce((sum, item) => sum + (item.cost || 0), 0),
+    totalClicks: safeGoogleData.reduce((sum, item) => sum + (item.clicks || 0), 0),
+    totalImpressions: safeGoogleData.reduce((sum, item) => sum + (item.impressions || 0), 0),
+    campaignCount: safeGoogleData.length,
   }
 
   const platformStats = {
-    totalCommission: (viewMode === 'summary' ? platformSummary : platformData)
-      .reduce((sum, item) => sum + (item.total_commission || item.commission || 0), 0),
-    totalOrders: (viewMode === 'summary' ? platformSummary : platformData)
-      .reduce((sum, item) => sum + (item.total_orders || item.orders || 0), 0),
+    totalCommission: safePlatformData.reduce((sum, item) => sum + (item.total_commission || item.commission || 0), 0),
+    totalOrders: safePlatformData.reduce((sum, item) => sum + (item.total_orders || item.orders || 0), 0),
   }
 
   const tabItems = [
