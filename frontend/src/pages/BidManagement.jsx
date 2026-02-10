@@ -65,6 +65,10 @@ const BidManagement = () => {
   const [adGroupsLoading, setAdGroupsLoading] = useState(false)
   const [addKeywordForm] = Form.useForm()
   const [editKeywordForm] = Form.useForm()
+  
+  // 批量操作状态
+  const [selectedStrategies, setSelectedStrategies] = useState([])
+  const [batchChangeLoading, setBatchChangeLoading] = useState(false)
 
   // 加载MCC列表
   const loadMccList = useCallback(async () => {
@@ -303,6 +307,50 @@ const BidManagement = () => {
     } finally {
       setEditKeywordLoading(false)
     }
+  }
+
+  // 批量改为人工出价
+  const handleBatchChangeToManual = async () => {
+    if (selectedStrategies.length === 0) {
+      message.warning('请先选择需要转换的广告系列')
+      return
+    }
+    
+    // 过滤出非人工出价的广告系列
+    const toConvert = selectedStrategies.filter(s => !s.is_manual_cpc)
+    if (toConvert.length === 0) {
+      message.info('所选广告系列已全部是人工出价')
+      return
+    }
+    
+    setBatchChangeLoading(true)
+    let successCount = 0
+    let failCount = 0
+    
+    for (const strategy of toConvert) {
+      try {
+        await api.post('/api/bids/change-to-manual', {
+          mcc_id: selectedMcc,
+          customer_id: strategy.customer_id,
+          campaign_id: strategy.campaign_id
+        })
+        successCount++
+      } catch (error) {
+        console.error(`转换 ${strategy.campaign_name} 失败:`, error)
+        failCount++
+      }
+    }
+    
+    setBatchChangeLoading(false)
+    setSelectedStrategies([])
+    
+    if (failCount === 0) {
+      message.success(`成功将 ${successCount} 个广告系列转为人工出价`)
+    } else {
+      message.warning(`转换完成: ${successCount} 成功, ${failCount} 失败`)
+    }
+    
+    loadStrategies()
   }
 
   // 出价策略表格列
@@ -585,6 +633,37 @@ const BidManagement = () => {
               showIcon
               style={{ marginBottom: 16 }}
             />
+            
+            {/* 批量操作栏 */}
+            <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <Space>
+                {selectedStrategies.length > 0 && (
+                  <Text type="secondary">
+                    已选择 {selectedStrategies.length} 个广告系列
+                    ({selectedStrategies.filter(s => !s.is_manual_cpc).length} 个需要转换)
+                  </Text>
+                )}
+              </Space>
+              <Popconfirm
+                title="批量转为人工出价"
+                description={`确定要将 ${selectedStrategies.filter(s => !s.is_manual_cpc).length} 个智能出价广告系列转为人工出价吗？`}
+                onConfirm={handleBatchChangeToManual}
+                okText="确定"
+                cancelText="取消"
+                disabled={selectedStrategies.filter(s => !s.is_manual_cpc).length === 0}
+              >
+                <Button
+                  type="primary"
+                  icon={<SettingOutlined />}
+                  loading={batchChangeLoading}
+                  disabled={selectedStrategies.filter(s => !s.is_manual_cpc).length === 0}
+                  style={{ background: '#722ed1', borderColor: '#722ed1' }}
+                >
+                  批量改人工出价 {selectedStrategies.filter(s => !s.is_manual_cpc).length > 0 && `(${selectedStrategies.filter(s => !s.is_manual_cpc).length})`}
+                </Button>
+              </Popconfirm>
+            </div>
+            
             <Table
               columns={strategyColumns}
               dataSource={strategies}
@@ -593,6 +672,15 @@ const BidManagement = () => {
               pagination={{ pageSize: 10 }}
               scroll={{ x: 1100 }}
               size="small"
+              rowSelection={{
+                selectedRowKeys: selectedStrategies.map(s => s.id),
+                onChange: (selectedRowKeys, selectedRows) => {
+                  setSelectedStrategies(selectedRows)
+                },
+                getCheckboxProps: (record) => ({
+                  disabled: record.is_manual_cpc // 已是人工出价的不能选择
+                })
+              }}
             />
           </Panel>
 
