@@ -788,3 +788,265 @@ async def apply_cpc_changes(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+class ToggleKeywordStatusRequest(BaseModel):
+    mcc_id: int
+    customer_id: str
+    ad_group_id: str
+    criterion_id: str
+    new_status: str  # ENABLED or PAUSED
+
+
+class AddKeywordRequest(BaseModel):
+    mcc_id: int
+    customer_id: str
+    ad_group_id: str
+    keyword_text: str
+    match_type: str  # EXACT, PHRASE, BROAD
+    cpc_bid_micros: Optional[int] = None
+
+
+class UpdateKeywordRequest(BaseModel):
+    mcc_id: int
+    customer_id: str
+    ad_group_id: str
+    criterion_id: str
+    keyword_text: Optional[str] = None
+    match_type: Optional[str] = None
+    cpc_bid_micros: Optional[int] = None
+
+
+@router.post("/toggle-keyword-status")
+async def toggle_keyword_status(
+    request: ToggleKeywordStatusRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """暂停/启用关键词"""
+    from app.services.google_ads_service_account_sync import GoogleAdsServiceAccountSync
+    
+    mcc = db.query(GoogleMccAccount).filter(
+        GoogleMccAccount.id == request.mcc_id,
+        GoogleMccAccount.user_id == current_user.id
+    ).first()
+    
+    if not mcc:
+        raise HTTPException(status_code=404, detail="MCC账号不存在")
+    
+    try:
+        sync_service = GoogleAdsServiceAccountSync(db)
+        client_result = sync_service._create_client(mcc)
+        
+        if not client_result:
+            raise HTTPException(status_code=500, detail="无法创建Google Ads客户端")
+        
+        client, _ = client_result
+        result = sync_service.toggle_keyword_status(
+            client,
+            request.customer_id,
+            request.ad_group_id,
+            request.criterion_id,
+            request.new_status
+        )
+        
+        if result["success"]:
+            # 更新本地记录
+            keyword = db.query(KeywordBid).filter(
+                KeywordBid.criterion_id == request.criterion_id
+            ).first()
+            if keyword:
+                keyword.status = request.new_status
+                db.commit()
+            
+            return {
+                "success": True,
+                "message": f"关键词已{'启用' if request.new_status == 'ENABLED' else '暂停'}"
+            }
+        else:
+            raise HTTPException(status_code=500, detail=result["message"])
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/add-keyword")
+async def add_keyword(
+    request: AddKeywordRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """添加关键词"""
+    from app.services.google_ads_service_account_sync import GoogleAdsServiceAccountSync
+    
+    mcc = db.query(GoogleMccAccount).filter(
+        GoogleMccAccount.id == request.mcc_id,
+        GoogleMccAccount.user_id == current_user.id
+    ).first()
+    
+    if not mcc:
+        raise HTTPException(status_code=404, detail="MCC账号不存在")
+    
+    try:
+        sync_service = GoogleAdsServiceAccountSync(db)
+        client_result = sync_service._create_client(mcc)
+        
+        if not client_result:
+            raise HTTPException(status_code=500, detail="无法创建Google Ads客户端")
+        
+        client, _ = client_result
+        result = sync_service.add_keyword(
+            client,
+            request.customer_id,
+            request.ad_group_id,
+            request.keyword_text,
+            request.match_type,
+            request.cpc_bid_micros
+        )
+        
+        if result["success"]:
+            return {
+                "success": True,
+                "message": f"关键词 '{request.keyword_text}' 添加成功",
+                "criterion_id": result.get("criterion_id")
+            }
+        else:
+            raise HTTPException(status_code=500, detail=result["message"])
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/update-keyword")
+async def update_keyword(
+    request: UpdateKeywordRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """修改关键词（注意：Google Ads不支持直接修改关键词文本，需要删除后重新添加）"""
+    from app.services.google_ads_service_account_sync import GoogleAdsServiceAccountSync
+    
+    mcc = db.query(GoogleMccAccount).filter(
+        GoogleMccAccount.id == request.mcc_id,
+        GoogleMccAccount.user_id == current_user.id
+    ).first()
+    
+    if not mcc:
+        raise HTTPException(status_code=404, detail="MCC账号不存在")
+    
+    try:
+        sync_service = GoogleAdsServiceAccountSync(db)
+        client_result = sync_service._create_client(mcc)
+        
+        if not client_result:
+            raise HTTPException(status_code=500, detail="无法创建Google Ads客户端")
+        
+        client, _ = client_result
+        
+        # 如果只是修改CPC，直接调用set_keyword_cpc
+        if request.cpc_bid_micros and not request.keyword_text and not request.match_type:
+            result = sync_service.set_keyword_cpc(
+                client,
+                request.customer_id,
+                request.ad_group_id,
+                request.criterion_id,
+                request.cpc_bid_micros
+            )
+        else:
+            # 修改关键词文本或匹配类型需要删除后重新添加
+            # 先获取当前关键词信息
+            keyword = db.query(KeywordBid).filter(
+                KeywordBid.criterion_id == request.criterion_id
+            ).first()
+            
+            if not keyword:
+                raise HTTPException(status_code=404, detail="关键词不存在")
+            
+            # 删除旧关键词
+            delete_result = sync_service.remove_keyword(
+                client,
+                request.customer_id,
+                request.ad_group_id,
+                request.criterion_id
+            )
+            
+            if not delete_result["success"]:
+                raise HTTPException(status_code=500, detail=f"删除旧关键词失败: {delete_result['message']}")
+            
+            # 添加新关键词
+            new_keyword_text = request.keyword_text or keyword.keyword_text
+            new_match_type = request.match_type or keyword.match_type
+            new_cpc = request.cpc_bid_micros or (int(keyword.max_cpc * 1_000_000) if keyword.max_cpc else None)
+            
+            result = sync_service.add_keyword(
+                client,
+                request.customer_id,
+                request.ad_group_id,
+                new_keyword_text,
+                new_match_type,
+                new_cpc
+            )
+            
+            if result["success"]:
+                # 删除本地旧记录
+                db.delete(keyword)
+                db.commit()
+        
+        if result["success"]:
+            return {
+                "success": True,
+                "message": "关键词修改成功"
+            }
+        else:
+            raise HTTPException(status_code=500, detail=result["message"])
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/ad-groups")
+async def get_ad_groups(
+    mcc_id: int,
+    campaign_id: Optional[str] = None,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """获取广告组列表（用于添加关键词时选择）"""
+    from app.services.google_ads_service_account_sync import GoogleAdsServiceAccountSync
+    
+    mcc = db.query(GoogleMccAccount).filter(
+        GoogleMccAccount.id == mcc_id,
+        GoogleMccAccount.user_id == current_user.id
+    ).first()
+    
+    if not mcc:
+        raise HTTPException(status_code=404, detail="MCC账号不存在")
+    
+    try:
+        sync_service = GoogleAdsServiceAccountSync(db)
+        client_result = sync_service._create_client(mcc)
+        
+        if not client_result:
+            raise HTTPException(status_code=500, detail="无法创建Google Ads客户端")
+        
+        client, mcc_customer_id = client_result
+        
+        # 获取客户账号列表
+        customers = sync_service.get_accessible_customers(client, mcc_customer_id)
+        
+        all_ad_groups = []
+        for customer in customers:
+            customer_id = customer["id"]
+            ad_groups = sync_service.fetch_ad_groups(client, customer_id, campaign_id)
+            all_ad_groups.extend(ad_groups)
+        
+        return all_ad_groups
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+

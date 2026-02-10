@@ -306,12 +306,27 @@ const CpcDeployModal = ({ visible, onClose, aiReport, onSuccess }) => {
           <p style={{ marginTop: 16 }}>正在解析AI报告中的CPC建议...</p>
         </div>
       ) : !hasSuggestions ? (
-        <Alert
-          type="info"
-          message="未检测到CPC调整建议"
-          description="AI报告中没有包含结构化的CPC调整建议。请确保使用了最新的分析提示词，并且AI在报告末尾输出了JSON格式的调整建议。"
-          showIcon
-        />
+        <div>
+          <Alert
+            type="warning"
+            message="未检测到CPC调整建议"
+            description="AI报告中没有包含结构化的CPC调整建议。请确保使用了最新的分析提示词，并且AI在报告末尾输出了JSON格式的调整建议。"
+            showIcon
+            style={{ marginBottom: 16 }}
+          />
+          <Alert
+            type="info"
+            message="如何获取CPC建议？"
+            description={
+              <ol style={{ paddingLeft: 16, margin: '8px 0' }}>
+                <li>先在「出价管理」页面点击「同步出价数据」</li>
+                <li>返回L7D分析页面，重新生成AI分析报告</li>
+                <li>AI报告末尾会包含JSON格式的CPC调整建议</li>
+              </ol>
+            }
+            showIcon
+          />
+        </div>
       ) : deployResults ? (
         <div>
           <Alert

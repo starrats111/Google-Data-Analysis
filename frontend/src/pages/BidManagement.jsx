@@ -16,6 +16,9 @@ import {
   Popconfirm,
   Collapse,
   Badge,
+  Switch,
+  Input,
+  Form,
 } from 'antd'
 import {
   SyncOutlined,
@@ -25,6 +28,11 @@ import {
   CheckCircleOutlined,
   QuestionCircleOutlined,
   RightOutlined,
+  PlusOutlined,
+  EditOutlined,
+  PauseCircleOutlined,
+  PlayCircleOutlined,
+  DeleteOutlined,
 } from '@ant-design/icons'
 import api from '../services/api'
 import './BidManagement.css'
@@ -45,6 +53,18 @@ const BidManagement = () => {
   const [selectedKeyword, setSelectedKeyword] = useState(null)
   const [newCpcValue, setNewCpcValue] = useState(null)
   const [setCpcLoading, setSetCpcLoading] = useState(false)
+  
+  // 新增功能状态
+  const [addKeywordModalVisible, setAddKeywordModalVisible] = useState(false)
+  const [editKeywordModalVisible, setEditKeywordModalVisible] = useState(false)
+  const [keywordToEdit, setKeywordToEdit] = useState(null)
+  const [toggleStatusLoading, setToggleStatusLoading] = useState({})
+  const [addKeywordLoading, setAddKeywordLoading] = useState(false)
+  const [editKeywordLoading, setEditKeywordLoading] = useState(false)
+  const [adGroups, setAdGroups] = useState([])
+  const [adGroupsLoading, setAdGroupsLoading] = useState(false)
+  const [addKeywordForm] = Form.useForm()
+  const [editKeywordForm] = Form.useForm()
 
   // 加载MCC列表
   const loadMccList = useCallback(async () => {
@@ -166,6 +186,122 @@ const BidManagement = () => {
       message.error('设置CPC失败: ' + (error.response?.data?.detail || error.message))
     } finally {
       setSetCpcLoading(false)
+    }
+  }
+
+  // 切换关键词状态（启用/暂停）
+  const handleToggleKeywordStatus = async (record) => {
+    const newStatus = record.status === 'ENABLED' ? 'PAUSED' : 'ENABLED'
+    setToggleStatusLoading({ ...toggleStatusLoading, [record.criterion_id]: true })
+    try {
+      await api.post('/api/bids/toggle-keyword-status', {
+        mcc_id: selectedMcc,
+        customer_id: record.customer_id,
+        ad_group_id: record.ad_group_id,
+        criterion_id: record.criterion_id,
+        new_status: newStatus
+      })
+      message.success(`关键词已${newStatus === 'ENABLED' ? '启用' : '暂停'}`)
+      loadKeywords(selectedCampaign)
+    } catch (error) {
+      console.error('切换状态失败:', error)
+      message.error('切换状态失败: ' + (error.response?.data?.detail || error.message))
+    } finally {
+      setToggleStatusLoading({ ...toggleStatusLoading, [record.criterion_id]: false })
+    }
+  }
+
+  // 加载广告组列表
+  const loadAdGroups = async () => {
+    if (!selectedMcc) return
+    setAdGroupsLoading(true)
+    try {
+      const response = await api.get('/api/bids/ad-groups', {
+        params: { mcc_id: selectedMcc }
+      })
+      setAdGroups(response.data || [])
+    } catch (error) {
+      console.error('加载广告组失败:', error)
+    } finally {
+      setAdGroupsLoading(false)
+    }
+  }
+
+  // 打开添加关键词弹窗
+  const handleOpenAddKeywordModal = () => {
+    loadAdGroups()
+    addKeywordForm.resetFields()
+    setAddKeywordModalVisible(true)
+  }
+
+  // 添加关键词
+  const handleAddKeyword = async () => {
+    try {
+      const values = await addKeywordForm.validateFields()
+      setAddKeywordLoading(true)
+      
+      // 找到选中的广告组信息
+      const selectedAdGroup = adGroups.find(ag => ag.ad_group_id === values.ad_group_id)
+      if (!selectedAdGroup) {
+        message.error('请选择广告组')
+        return
+      }
+      
+      await api.post('/api/bids/add-keyword', {
+        mcc_id: selectedMcc,
+        customer_id: selectedAdGroup.customer_id,
+        ad_group_id: values.ad_group_id,
+        keyword_text: values.keyword_text,
+        match_type: values.match_type,
+        cpc_bid_micros: values.cpc_bid ? Math.round(values.cpc_bid * 1000000) : null
+      })
+      message.success(`关键词 "${values.keyword_text}" 添加成功`)
+      setAddKeywordModalVisible(false)
+      loadKeywords(selectedCampaign)
+    } catch (error) {
+      console.error('添加关键词失败:', error)
+      message.error('添加关键词失败: ' + (error.response?.data?.detail || error.message))
+    } finally {
+      setAddKeywordLoading(false)
+    }
+  }
+
+  // 打开编辑关键词弹窗
+  const handleOpenEditKeywordModal = (record) => {
+    setKeywordToEdit(record)
+    editKeywordForm.setFieldsValue({
+      keyword_text: record.keyword_text,
+      match_type: record.match_type,
+      cpc_bid: record.max_cpc || 0.10
+    })
+    setEditKeywordModalVisible(true)
+  }
+
+  // 修改关键词
+  const handleEditKeyword = async () => {
+    if (!keywordToEdit) return
+    try {
+      const values = await editKeywordForm.validateFields()
+      setEditKeywordLoading(true)
+      
+      await api.post('/api/bids/update-keyword', {
+        mcc_id: selectedMcc,
+        customer_id: keywordToEdit.customer_id,
+        ad_group_id: keywordToEdit.ad_group_id,
+        criterion_id: keywordToEdit.criterion_id,
+        keyword_text: values.keyword_text !== keywordToEdit.keyword_text ? values.keyword_text : null,
+        match_type: values.match_type !== keywordToEdit.match_type ? values.match_type : null,
+        cpc_bid_micros: Math.round(values.cpc_bid * 1000000)
+      })
+      message.success('关键词修改成功')
+      setEditKeywordModalVisible(false)
+      setKeywordToEdit(null)
+      loadKeywords(selectedCampaign)
+    } catch (error) {
+      console.error('修改关键词失败:', error)
+      message.error('修改关键词失败: ' + (error.response?.data?.detail || error.message))
+    } finally {
+      setEditKeywordLoading(false)
     }
   }
 
@@ -336,33 +472,44 @@ const BidManagement = () => {
       title: '状态',
       dataIndex: 'status',
       key: 'status',
-      width: 80,
-      render: (status) => (
-        status === 'ENABLED' ? (
-          <Tag color="green">启用</Tag>
-        ) : (
-          <Tag>{status}</Tag>
-        )
+      width: 100,
+      render: (status, record) => (
+        <Switch
+          checked={status === 'ENABLED'}
+          loading={toggleStatusLoading[record.criterion_id]}
+          checkedChildren={<PlayCircleOutlined />}
+          unCheckedChildren={<PauseCircleOutlined />}
+          onChange={() => handleToggleKeywordStatus(record)}
+        />
       )
     },
     {
       title: '操作',
       key: 'action',
-      width: 100,
+      width: 180,
       fixed: 'right',
       render: (_, record) => (
-        <Button
-          size="small"
-          type="primary"
-          icon={<DollarOutlined />}
-          onClick={() => {
-            setSelectedKeyword(record)
-            setNewCpcValue(record.max_cpc || record.avg_cpc || 0.10)
-            setSetCpcModalVisible(true)
-          }}
-        >
-          设置CPC
-        </Button>
+        <Space size="small">
+          <Tooltip title="设置CPC">
+            <Button
+              size="small"
+              type="primary"
+              icon={<DollarOutlined />}
+              onClick={() => {
+                setSelectedKeyword(record)
+                setNewCpcValue(record.max_cpc || record.avg_cpc || 0.10)
+                setSetCpcModalVisible(true)
+              }}
+            />
+          </Tooltip>
+          <Tooltip title="编辑关键词">
+            <Button
+              size="small"
+              icon={<EditOutlined />}
+              onClick={() => handleOpenEditKeywordModal(record)}
+            />
+          </Tooltip>
+        </Space>
       )
     }
   ]
@@ -472,6 +619,17 @@ const BidManagement = () => {
                     </Button>
                   </Tag>
                 )}
+                <Button
+                  type="primary"
+                  size="small"
+                  icon={<PlusOutlined />}
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    handleOpenAddKeywordModal()
+                  }}
+                >
+                  添加关键词
+                </Button>
               </Space>
             }
             key="keywords"
@@ -574,6 +732,148 @@ const BidManagement = () => {
                 style={{ width: 150, marginLeft: 8 }}
               />
             </div>
+          </div>
+        )}
+      </Modal>
+
+      {/* 添加关键词弹窗 */}
+      <Modal
+        title={
+          <Space>
+            <PlusOutlined />
+            <span>添加关键词</span>
+          </Space>
+        }
+        open={addKeywordModalVisible}
+        onCancel={() => setAddKeywordModalVisible(false)}
+        onOk={handleAddKeyword}
+        confirmLoading={addKeywordLoading}
+        okText="添加"
+        cancelText="取消"
+        width={600}
+      >
+        <Form
+          form={addKeywordForm}
+          layout="vertical"
+        >
+          <Form.Item
+            name="ad_group_id"
+            label="选择广告组"
+            rules={[{ required: true, message: '请选择广告组' }]}
+          >
+            <Select
+              placeholder="选择广告组"
+              loading={adGroupsLoading}
+              showSearch
+              optionFilterProp="children"
+            >
+              {adGroups.map(ag => (
+                <Select.Option key={ag.ad_group_id} value={ag.ad_group_id}>
+                  {ag.campaign_name} / {ag.ad_group_name}
+                </Select.Option>
+              ))}
+            </Select>
+          </Form.Item>
+          <Form.Item
+            name="keyword_text"
+            label="关键词"
+            rules={[{ required: true, message: '请输入关键词' }]}
+          >
+            <Input placeholder="输入关键词文本" />
+          </Form.Item>
+          <Form.Item
+            name="match_type"
+            label="匹配类型"
+            rules={[{ required: true, message: '请选择匹配类型' }]}
+            initialValue="BROAD"
+          >
+            <Select>
+              <Select.Option value="EXACT">完全匹配 [keyword]</Select.Option>
+              <Select.Option value="PHRASE">词组匹配 "keyword"</Select.Option>
+              <Select.Option value="BROAD">广泛匹配 keyword</Select.Option>
+            </Select>
+          </Form.Item>
+          <Form.Item
+            name="cpc_bid"
+            label="最高CPC出价 (可选)"
+          >
+            <InputNumber
+              prefix="$"
+              min={0.01}
+              max={100}
+              step={0.01}
+              precision={2}
+              placeholder="留空则使用广告组默认出价"
+              style={{ width: '100%' }}
+            />
+          </Form.Item>
+        </Form>
+      </Modal>
+
+      {/* 编辑关键词弹窗 */}
+      <Modal
+        title={
+          <Space>
+            <EditOutlined />
+            <span>编辑关键词</span>
+          </Space>
+        }
+        open={editKeywordModalVisible}
+        onCancel={() => {
+          setEditKeywordModalVisible(false)
+          setKeywordToEdit(null)
+        }}
+        onOk={handleEditKeyword}
+        confirmLoading={editKeywordLoading}
+        okText="保存"
+        cancelText="取消"
+        width={600}
+      >
+        {keywordToEdit && (
+          <div>
+            <Alert
+              type="warning"
+              message="注意：修改关键词文本或匹配类型会删除原关键词并重新创建"
+              style={{ marginBottom: 16 }}
+              showIcon
+            />
+            <Form
+              form={editKeywordForm}
+              layout="vertical"
+            >
+              <Form.Item
+                name="keyword_text"
+                label="关键词"
+                rules={[{ required: true, message: '请输入关键词' }]}
+              >
+                <Input placeholder="输入关键词文本" />
+              </Form.Item>
+              <Form.Item
+                name="match_type"
+                label="匹配类型"
+                rules={[{ required: true, message: '请选择匹配类型' }]}
+              >
+                <Select>
+                  <Select.Option value="EXACT">完全匹配 [keyword]</Select.Option>
+                  <Select.Option value="PHRASE">词组匹配 "keyword"</Select.Option>
+                  <Select.Option value="BROAD">广泛匹配 keyword</Select.Option>
+                </Select>
+              </Form.Item>
+              <Form.Item
+                name="cpc_bid"
+                label="最高CPC出价"
+                rules={[{ required: true, message: '请输入CPC出价' }]}
+              >
+                <InputNumber
+                  prefix="$"
+                  min={0.01}
+                  max={100}
+                  step={0.01}
+                  precision={2}
+                  style={{ width: '100%' }}
+                />
+              </Form.Item>
+            </Form>
           </div>
         )}
       </Modal>

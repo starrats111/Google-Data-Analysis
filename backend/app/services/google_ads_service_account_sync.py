@@ -714,6 +714,215 @@ class GoogleAdsServiceAccountSync:
                 "message": str(e)
             }
     
+    def toggle_keyword_status(
+        self,
+        client,
+        customer_id: str,
+        ad_group_id: str,
+        criterion_id: str,
+        new_status: str  # ENABLED or PAUSED
+    ) -> Dict:
+        """
+        切换关键词状态（启用/暂停）
+        """
+        from google.protobuf import field_mask_pb2
+        
+        try:
+            criterion_service = client.get_service("AdGroupCriterionService")
+            
+            # 构建资源名称
+            criterion_resource = f"customers/{customer_id}/adGroupCriteria/{ad_group_id}~{criterion_id}"
+            
+            # 创建 criterion 对象
+            criterion = client.get_type("AdGroupCriterion")
+            criterion.resource_name = criterion_resource
+            
+            # 设置状态
+            status_enum = client.enums.AdGroupCriterionStatusEnum
+            if new_status == "ENABLED":
+                criterion.status = status_enum.ENABLED
+            else:
+                criterion.status = status_enum.PAUSED
+            
+            # 使用 protobuf 的 FieldMask
+            field_mask = field_mask_pb2.FieldMask(paths=["status"])
+            
+            # 创建操作
+            operation = client.get_type("AdGroupCriterionOperation")
+            operation.update_mask.CopyFrom(field_mask)
+            operation.update.CopyFrom(criterion)
+            
+            # 执行更新
+            response = criterion_service.mutate_ad_group_criteria(
+                customer_id=customer_id,
+                operations=[operation]
+            )
+            
+            logger.info(f"关键词 {criterion_id} 状态已更改为 {new_status}")
+            
+            return {
+                "success": True,
+                "message": f"状态已更改为 {new_status}",
+                "resource_name": response.results[0].resource_name
+            }
+            
+        except Exception as e:
+            logger.error(f"切换关键词 {criterion_id} 状态失败: {e}")
+            return {
+                "success": False,
+                "message": str(e)
+            }
+    
+    def add_keyword(
+        self,
+        client,
+        customer_id: str,
+        ad_group_id: str,
+        keyword_text: str,
+        match_type: str,  # EXACT, PHRASE, BROAD
+        cpc_bid_micros: Optional[int] = None
+    ) -> Dict:
+        """
+        添加关键词
+        """
+        try:
+            criterion_service = client.get_service("AdGroupCriterionService")
+            
+            # 创建关键词
+            criterion = client.get_type("AdGroupCriterion")
+            criterion.ad_group = f"customers/{customer_id}/adGroups/{ad_group_id}"
+            criterion.status = client.enums.AdGroupCriterionStatusEnum.ENABLED
+            
+            # 设置关键词信息
+            criterion.keyword.text = keyword_text
+            match_type_enum = client.enums.KeywordMatchTypeEnum
+            if match_type.upper() == "EXACT":
+                criterion.keyword.match_type = match_type_enum.EXACT
+            elif match_type.upper() == "PHRASE":
+                criterion.keyword.match_type = match_type_enum.PHRASE
+            else:
+                criterion.keyword.match_type = match_type_enum.BROAD
+            
+            # 设置CPC出价（如果提供）
+            if cpc_bid_micros:
+                criterion.cpc_bid_micros = cpc_bid_micros
+            
+            # 创建操作
+            operation = client.get_type("AdGroupCriterionOperation")
+            operation.create.CopyFrom(criterion)
+            
+            # 执行创建
+            response = criterion_service.mutate_ad_group_criteria(
+                customer_id=customer_id,
+                operations=[operation]
+            )
+            
+            resource_name = response.results[0].resource_name
+            # 从资源名称中提取 criterion_id
+            criterion_id = resource_name.split("~")[-1] if "~" in resource_name else None
+            
+            logger.info(f"关键词 '{keyword_text}' 添加成功")
+            
+            return {
+                "success": True,
+                "message": f"关键词 '{keyword_text}' 添加成功",
+                "resource_name": resource_name,
+                "criterion_id": criterion_id
+            }
+            
+        except Exception as e:
+            logger.error(f"添加关键词 '{keyword_text}' 失败: {e}")
+            return {
+                "success": False,
+                "message": str(e)
+            }
+    
+    def remove_keyword(
+        self,
+        client,
+        customer_id: str,
+        ad_group_id: str,
+        criterion_id: str
+    ) -> Dict:
+        """
+        删除关键词
+        """
+        try:
+            criterion_service = client.get_service("AdGroupCriterionService")
+            
+            # 构建资源名称
+            criterion_resource = f"customers/{customer_id}/adGroupCriteria/{ad_group_id}~{criterion_id}"
+            
+            # 创建删除操作
+            operation = client.get_type("AdGroupCriterionOperation")
+            operation.remove = criterion_resource
+            
+            # 执行删除
+            response = criterion_service.mutate_ad_group_criteria(
+                customer_id=customer_id,
+                operations=[operation]
+            )
+            
+            logger.info(f"关键词 {criterion_id} 已删除")
+            
+            return {
+                "success": True,
+                "message": "关键词已删除",
+                "resource_name": response.results[0].resource_name
+            }
+            
+        except Exception as e:
+            logger.error(f"删除关键词 {criterion_id} 失败: {e}")
+            return {
+                "success": False,
+                "message": str(e)
+            }
+    
+    def fetch_ad_groups(
+        self,
+        client,
+        customer_id: str,
+        campaign_id: Optional[str] = None
+    ) -> List[Dict]:
+        """
+        获取广告组列表
+        """
+        campaign_filter = f"AND campaign.id = {campaign_id}" if campaign_id else ""
+        
+        query = f"""
+            SELECT
+                campaign.id,
+                campaign.name,
+                ad_group.id,
+                ad_group.name,
+                ad_group.status
+            FROM ad_group
+            WHERE campaign.status = 'ENABLED'
+              AND ad_group.status != 'REMOVED'
+              {campaign_filter}
+        """
+        
+        ad_groups = []
+        
+        try:
+            ga_service = client.get_service("GoogleAdsService")
+            response = ga_service.search(customer_id=customer_id, query=query)
+            
+            for row in response:
+                ad_groups.append({
+                    "customer_id": customer_id,
+                    "campaign_id": str(row.campaign.id),
+                    "campaign_name": row.campaign.name,
+                    "ad_group_id": str(row.ad_group.id),
+                    "ad_group_name": row.ad_group.name,
+                    "status": str(row.ad_group.status.name) if hasattr(row.ad_group.status, 'name') else str(row.ad_group.status)
+                })
+                
+        except Exception as e:
+            logger.error(f"获取客户账号 {customer_id} 广告组失败: {e}")
+        
+        return ad_groups
+    
     def sync_mcc_data(
         self,
         mcc_id: int,
