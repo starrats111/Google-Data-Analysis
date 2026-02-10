@@ -6,11 +6,14 @@
 - 本年度报表
 """
 from fastapi import APIRouter, Depends, Query
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import func, and_, extract
 from typing import Optional
 from datetime import date, datetime
 from decimal import Decimal
+import io
+import calendar
 
 from app.database import get_db
 from app.models.user import User
@@ -489,4 +492,220 @@ async def _get_summary_report(db: Session, start_date: date, end_date: date, per
             'total_active_campaigns': total_active_campaigns
         }
     }
+
+
+@router.get("/financial/export")
+async def export_financial_report(
+    year: int = Query(..., description="年份"),
+    month: int = Query(..., description="月份"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    导出财务报表为Excel格式
+    格式与2026年丰度收支统计表一致
+    """
+    try:
+        from openpyxl import Workbook
+        from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
+        from openpyxl.utils import get_column_letter
+    except ImportError:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=500, detail="服务器未安装openpyxl库")
+    
+    # 获取数据
+    start_date = date(year, month, 1)
+    last_day = calendar.monthrange(year, month)[1]
+    end_date = date(year, month, last_day)
+    
+    # 获取所有员工
+    employees = db.query(User).filter(User.role == 'employee').order_by(User.username).all()
+    
+    # 平台列表
+    PLATFORMS = ['RW', 'LH', 'CG', 'LB', 'PM', 'CF', 'BSH']
+    
+    # 创建工作簿
+    wb = Workbook()
+    ws = wb.active
+    ws.title = f"财务报表_{year}年{month:02d}月"
+    
+    # 样式定义
+    header_fill = PatternFill(start_color="FFFF00", end_color="FFFF00", fill_type="solid")
+    header_font = Font(bold=True)
+    center_align = Alignment(horizontal='center', vertical='center')
+    thin_border = Border(
+        left=Side(style='thin'),
+        right=Side(style='thin'),
+        top=Side(style='thin'),
+        bottom=Side(style='thin')
+    )
+    
+    # 行1: 月份
+    ws['A1'] = '月份'
+    ws['A1'].fill = header_fill
+    ws['A1'].font = header_font
+    
+    # 计算每个员工需要的列数（基于平台数）
+    col_offset = 2  # A列是标题，B列开始是数据
+    
+    # 行2: MCC（员工名）
+    ws['A2'] = 'MCC'
+    
+    # 行3: 币种
+    ws['A3'] = '币种'
+    
+    # 行4: 广告费
+    ws['A4'] = '广告费'
+    
+    # 行5: 广告联盟（平台）
+    ws['A5'] = '广告联盟'
+    
+    # 行6: 账号名称
+    ws['A6'] = '账号名称'
+    
+    # 行7: 账面佣金（美金）
+    ws['A7'] = '账面佣金（美金）'
+    
+    # 行8: 失效佣金（美金）
+    ws['A8'] = '失效佣金（美金）'
+    
+    current_col = 2  # 从B列开始
+    
+    for emp in employees:
+        emp_display_name = emp.display_name or emp.username
+        
+        # 获取员工广告费
+        emp_ad_cost = db.query(func.sum(GoogleAdsApiData.cost)).filter(
+            GoogleAdsApiData.user_id == emp.id,
+            GoogleAdsApiData.date >= start_date,
+            GoogleAdsApiData.date <= end_date
+        ).scalar() or Decimal('0')
+        
+        # 货币转换
+        mcc_accounts = db.query(GoogleMccAccount).filter(GoogleMccAccount.user_id == emp.id).all()
+        cny_mcc_ids = [m.id for m in mcc_accounts if m.currency == 'CNY']
+        cny_cost = Decimal('0')
+        
+        if cny_mcc_ids:
+            cny_cost = db.query(func.sum(GoogleAdsApiData.cost)).filter(
+                GoogleAdsApiData.user_id == emp.id,
+                GoogleAdsApiData.mcc_id.in_(cny_mcc_ids),
+                GoogleAdsApiData.date >= start_date,
+                GoogleAdsApiData.date <= end_date
+            ).scalar() or Decimal('0')
+            
+            usd_cost = db.query(func.sum(GoogleAdsApiData.cost)).filter(
+                GoogleAdsApiData.user_id == emp.id,
+                GoogleAdsApiData.mcc_id.notin_(cny_mcc_ids),
+                GoogleAdsApiData.date >= start_date,
+                GoogleAdsApiData.date <= end_date
+            ).scalar() or Decimal('0')
+            
+            emp_ad_cost = Decimal(str(usd_cost)) + Decimal(str(cny_cost)) / Decimal('7.2')
+        
+        # 获取在跑广告量
+        active_campaigns = db.query(func.count(func.distinct(GoogleAdsApiData.campaign_id))).filter(
+            GoogleAdsApiData.user_id == emp.id,
+            GoogleAdsApiData.status == '已启用',
+            GoogleAdsApiData.date == end_date
+        ).scalar() or 0
+        
+        # 获取员工的平台账号
+        accounts = db.query(AffiliateAccount).join(AffiliatePlatform).filter(
+            AffiliateAccount.user_id == emp.id,
+            AffiliateAccount.is_active == True
+        ).all()
+        
+        # 按平台分组账号
+        platform_accounts = {p: [] for p in PLATFORMS}
+        for acc in accounts:
+            platform_code = get_platform_short_code(acc.platform.platform_code) if acc.platform else None
+            if platform_code in platform_accounts:
+                # 获取账户佣金数据
+                book_commission = db.query(func.sum(AffiliateTransaction.commission_amount)).filter(
+                    AffiliateTransaction.affiliate_account_id == acc.id,
+                    AffiliateTransaction.transaction_time >= datetime.combine(start_date, datetime.min.time()),
+                    AffiliateTransaction.transaction_time <= datetime.combine(end_date, datetime.max.time())
+                ).scalar() or Decimal('0')
+                
+                rejected_commission = db.query(func.sum(AffiliateTransaction.commission_amount)).filter(
+                    AffiliateTransaction.affiliate_account_id == acc.id,
+                    AffiliateTransaction.status == 'rejected',
+                    AffiliateTransaction.transaction_time >= datetime.combine(start_date, datetime.min.time()),
+                    AffiliateTransaction.transaction_time <= datetime.combine(end_date, datetime.max.time())
+                ).scalar() or Decimal('0')
+                
+                platform_accounts[platform_code].append({
+                    'name': acc.account_name,
+                    'book': float(book_commission),
+                    'rejected': float(rejected_commission)
+                })
+        
+        # 计算该员工需要的列数
+        max_accounts = max(len(accs) for accs in platform_accounts.values()) if platform_accounts else 1
+        emp_cols = len(PLATFORMS)  # 每个平台一列
+        
+        # 写入员工名（行2）
+        ws.cell(row=2, column=current_col, value=emp_display_name)
+        ws.merge_cells(start_row=2, start_column=current_col, end_row=2, end_column=current_col + emp_cols - 1)
+        ws.cell(row=2, column=current_col).alignment = center_align
+        
+        # 写入币种（行3）- 美金
+        for i, platform in enumerate(PLATFORMS):
+            ws.cell(row=3, column=current_col + i, value='美金')
+        
+        # 写入人民币广告费和在跑广告量
+        # 找到合适的位置写入人民币费用
+        
+        # 写入广告费（行4）- 只在第一列写
+        ws.cell(row=4, column=current_col, value=float(emp_ad_cost))
+        
+        # 写入平台（行5）
+        for i, platform in enumerate(PLATFORMS):
+            ws.cell(row=5, column=current_col + i, value=platform)
+        
+        # 写入账号名称和佣金（行6-8）
+        for i, platform in enumerate(PLATFORMS):
+            col = current_col + i
+            accs = platform_accounts.get(platform, [])
+            if accs:
+                # 取第一个账号（如果有多个账号，合并显示）
+                acc = accs[0]
+                ws.cell(row=6, column=col, value=acc['name'])
+                ws.cell(row=7, column=col, value=acc['book'])
+                ws.cell(row=8, column=col, value=acc['rejected'])
+                
+                # 如果有多个账号，累加佣金
+                if len(accs) > 1:
+                    total_book = sum(a['book'] for a in accs)
+                    total_rejected = sum(a['rejected'] for a in accs)
+                    ws.cell(row=7, column=col, value=total_book)
+                    ws.cell(row=8, column=col, value=total_rejected)
+                    # 账号名用逗号分隔
+                    ws.cell(row=6, column=col, value=','.join(a['name'] for a in accs))
+        
+        current_col += emp_cols
+    
+    # 设置列宽
+    for col in range(1, current_col + 1):
+        ws.column_dimensions[get_column_letter(col)].width = 12
+    
+    # 第一列宽一些
+    ws.column_dimensions['A'].width = 18
+    
+    # 保存到内存
+    output = io.BytesIO()
+    wb.save(output)
+    output.seek(0)
+    
+    # 返回文件
+    filename = f"财务报表_{year}年{month:02d}月.xlsx"
+    
+    return StreamingResponse(
+        output,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={
+            "Content-Disposition": f"attachment; filename*=UTF-8''{filename}"
+        }
+    )
 

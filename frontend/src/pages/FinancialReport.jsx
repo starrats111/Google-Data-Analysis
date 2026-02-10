@@ -127,46 +127,41 @@ const FinancialReport = () => {
     }
   ]
 
-  const handleExport = () => {
+  const handleExport = async () => {
     if (!data || !data.data) {
       message.warning('没有数据可导出')
       return
     }
 
-    // 构建CSV数据
-    const tableData = getTableData()
-    const headers = ['员工', '广告费($)', '平台', '账号', '账面佣金($)', '失效佣金($)']
+    const year = selectedDate.year()
+    const month = selectedDate.month() + 1
     
-    let csvContent = '\uFEFF' // UTF-8 BOM
-    csvContent += headers.join(',') + '\n'
-    
-    tableData.forEach(row => {
-      const rowData = [
-        row.isFirst ? row.employee : '',
-        row.isFirst ? row.ad_cost?.toFixed(2) : '',
-        row.platform,
-        row.account_name,
-        row.book_commission?.toFixed(2),
-        row.rejected_commission?.toFixed(2)
-      ]
-      csvContent += rowData.map(cell => `"${cell || ''}"`).join(',') + '\n'
-    })
-    
-    // 添加合计行
-    csvContent += `"合计","${data.summary.total_ad_cost?.toFixed(2)}","","","${data.summary.total_book_commission?.toFixed(2)}","${data.summary.total_rejected_commission?.toFixed(2)}"\n`
-    
-    // 下载文件
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' })
-    const link = document.createElement('a')
-    const url = URL.createObjectURL(blob)
-    link.setAttribute('href', url)
-    link.setAttribute('download', `财务报表_${selectedDate.format('YYYY年MM月')}.csv`)
-    link.style.visibility = 'hidden'
-    document.body.appendChild(link)
-    link.click()
-    document.body.removeChild(link)
-    
-    message.success('导出成功')
+    try {
+      message.loading({ content: '正在生成Excel...', key: 'export' })
+      
+      // 调用后端API下载Excel
+      const response = await api.get(`/api/reports/financial/export?year=${year}&month=${month}`, {
+        responseType: 'blob'
+      })
+      
+      // 创建下载链接
+      const blob = new Blob([response.data], { 
+        type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' 
+      })
+      const url = window.URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = `财务报表_${year}年${month.toString().padStart(2, '0')}月.xlsx`
+      document.body.appendChild(link)
+      link.click()
+      document.body.removeChild(link)
+      window.URL.revokeObjectURL(url)
+      
+      message.success({ content: '导出成功', key: 'export' })
+    } catch (error) {
+      console.error('导出失败:', error)
+      message.error({ content: '导出失败: ' + (error.response?.data?.detail || error.message), key: 'export' })
+    }
   }
 
   return (
