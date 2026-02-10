@@ -2,7 +2,8 @@
 查询员工平台账号数据
 """
 import sys
-sys.path.insert(0, '/root/Google-Data-Analysis/backend')
+import os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app.database import SessionLocal
 from app.models.user import User
