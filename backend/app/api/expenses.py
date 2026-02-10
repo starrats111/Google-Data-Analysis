@@ -1076,82 +1076,8 @@ async def get_expense_summary(
         key = (pid, pd.date)
         api_commission_map[key] = api_commission_map.get(key, 0.0) + float(pd.commission or 0.0)
 
-    # 兜底：PlatformData 可能为空，使用交易明细按天聚合"所有状态总佣金"
-    # 使用 outerjoin 以确保没有关联账户的交易也能被统计
-    total_comm_map: Dict[Tuple[int, date], float] = {}
-    try:
-        from app.models.affiliate_transaction import AffiliateTransaction
-        begin_dt = datetime.combine(start, datetime.min.time())
-        end_dt = datetime.combine(end, datetime.max.time())
-        
-        # 1. 统计有关联账户的交易（按平台分组）
-        tx_rows = db.query(
-            AffiliateAccount.platform_id.label("platform_id"),
-            func.date(AffiliateTransaction.transaction_time).label("d"),
-            func.sum(AffiliateTransaction.commission_amount).label("total_comm"),
-        ).outerjoin(
-            AffiliateAccount, AffiliateAccount.id == AffiliateTransaction.affiliate_account_id
-        ).filter(
-            AffiliateTransaction.user_id == current_user.id,
-            AffiliateTransaction.transaction_time >= begin_dt,
-            AffiliateTransaction.transaction_time <= end_dt,
-            AffiliateAccount.platform_id.isnot(None),  # 有平台关联的
-        ).group_by(
-            AffiliateAccount.platform_id,
-            func.date(AffiliateTransaction.transaction_time),
-        ).all()
-        
-        for r in tx_rows:
-            pid = int(r.platform_id) if r.platform_id is not None else None
-            if pid is None:
-                continue
-            d_raw = r.d
-            if isinstance(d_raw, date):
-                d = d_raw
-            else:
-                d = datetime.strptime(str(d_raw), "%Y-%m-%d").date()
-            total_comm_map[(pid, d)] = float(r.total_comm or 0.0)
-        
-        # 2. 统计没有关联账户的交易（根据platform字段推断平台）
-        # 这些交易可能因为 affiliate_account_id 为空而被漏掉
-        unlinked_tx = db.query(
-            AffiliateTransaction.platform.label("platform_code"),
-            func.date(AffiliateTransaction.transaction_time).label("d"),
-            func.sum(AffiliateTransaction.commission_amount).label("total_comm"),
-        ).filter(
-            AffiliateTransaction.user_id == current_user.id,
-            AffiliateTransaction.transaction_time >= begin_dt,
-            AffiliateTransaction.transaction_time <= end_dt,
-            (AffiliateTransaction.affiliate_account_id.is_(None)) | 
-            (~AffiliateTransaction.affiliate_account_id.in_(
-                db.query(AffiliateAccount.id).filter(AffiliateAccount.platform_id.isnot(None))
-            ))
-        ).group_by(
-            AffiliateTransaction.platform,
-            func.date(AffiliateTransaction.transaction_time),
-        ).all()
-        
-        for r in unlinked_tx:
-            platform_code = r.platform_code
-            if not platform_code:
-                continue
-            # 根据 platform_code 找到对应的 platform_id
-            pid = platform_code_map.get(platform_code.lower()) or platform_code_map.get(platform_code.upper())
-            if pid is None:
-                continue
-            d_raw = r.d
-            if isinstance(d_raw, date):
-                d = d_raw
-            else:
-                d = datetime.strptime(str(d_raw), "%Y-%m-%d").date()
-            # 累加到对应平台
-            existing = total_comm_map.get((pid, d), 0.0)
-            total_comm_map[(pid, d)] = existing + float(r.total_comm or 0.0)
-            
-    except Exception as e:
-        import logging
-        logging.getLogger(__name__).error(f"统计交易佣金失败: {e}")
-        total_comm_map = {}
+    # 注意：total_comm_map 已在上面的代码块中构建完成（包含 approved/rejected/total 佣金统计）
+    # 这里不再重复统计，直接使用上面的 total_comm_map
 
     for (pid, d), comm in total_comm_map.items():
         if (pid, d) not in api_commission_map:
