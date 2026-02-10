@@ -26,10 +26,10 @@ const DataCenter = () => {
   const [platformSummary, setPlatformSummary] = useState([])
   const [viewMode, setViewMode] = useState('summary') // summary | detail
   
-  // 日期默认为过去7天（到昨天）
+  // 日期默认为本月1日到昨天
   const yesterday = dayjs().subtract(1, 'day')
-  const defaultStartDate = yesterday.subtract(6, 'day')
-  const [dateRange, setDateRange] = useState([defaultStartDate, yesterday])
+  const monthStart = dayjs().startOf('month')
+  const [dateRange, setDateRange] = useState([monthStart, yesterday])
   
   // 筛选
   const [statusFilter, setStatusFilter] = useState('ENABLED')
@@ -106,9 +106,12 @@ const DataCenter = () => {
             },
             signal: abortControllerRef.current.signal,
           })
-          // API 返回的是对象 {by_platform: [...], total: {...}}，取 by_platform 数组
+          // API 返回的是对象 {merchant_breakdown: [...], platform_breakdown: [...], total_xxx...}
           const responseData = response.data
-          const data = Array.isArray(responseData?.by_platform) ? responseData.by_platform : []
+          // 优先使用 merchant_breakdown（按商家聚合），否则用 platform_breakdown
+          const data = Array.isArray(responseData?.merchant_breakdown) 
+            ? responseData.merchant_breakdown 
+            : (Array.isArray(responseData?.platform_breakdown) ? responseData.platform_breakdown : [])
           setPlatformSummary(data)
           dataCache.platform = { data, timestamp: Date.now(), params: cacheKey }
         } else {
@@ -158,11 +161,16 @@ const DataCenter = () => {
       dataIndex: 'status',
       key: 'status',
       width: 80,
-      render: (status) => (
-        <Tag color={status === 'ENABLED' ? 'green' : status === 'PAUSED' ? 'orange' : 'red'}>
-          {status === 'ENABLED' ? '启用' : status === 'PAUSED' ? '暂停' : status}
-        </Tag>
-      ),
+      render: (status) => {
+        // 后端返回的可能是中文"已启用"/"已暂停"或英文"ENABLED"/"PAUSED"
+        const isEnabled = status === 'ENABLED' || status === '已启用'
+        const isPaused = status === 'PAUSED' || status === '已暂停'
+        return (
+          <Tag color={isEnabled ? 'green' : isPaused ? 'orange' : 'red'}>
+            {isEnabled ? '已启用' : isPaused ? '已暂停' : status}
+          </Tag>
+        )
+      },
     },
     {
       title: '费用($)',
@@ -216,19 +224,27 @@ const DataCenter = () => {
     },
   ]
 
-  // 平台数据汇总列
+  // 平台数据汇总列（匹配后端 merchant_breakdown 格式）
   const platformSummaryColumns = [
     {
       title: '平台',
-      dataIndex: 'platform_name',
-      key: 'platform_name',
-      width: 120,
+      dataIndex: 'platform',
+      key: 'platform',
+      width: 100,
+      render: (val) => val?.toUpperCase() || '-',
     },
     {
-      title: '账号',
-      dataIndex: 'account_name',
-      key: 'account_name',
+      title: '商家ID',
+      dataIndex: 'mid',
+      key: 'mid',
+      width: 100,
+    },
+    {
+      title: '商家',
+      dataIndex: 'merchant',
+      key: 'merchant',
       width: 150,
+      ellipsis: true,
     },
     {
       title: '总佣金($)',
@@ -236,29 +252,29 @@ const DataCenter = () => {
       key: 'total_commission',
       width: 120,
       sorter: (a, b) => (a.total_commission || 0) - (b.total_commission || 0),
-      render: (val) => `$${(val || 0).toFixed(2)}`,
+      render: (val) => <span style={{ color: '#3f8600' }}>${(val || 0).toFixed(2)}</span>,
     },
     {
-      title: '总订单',
-      dataIndex: 'total_orders',
-      key: 'total_orders',
-      width: 100,
-      sorter: (a, b) => (a.total_orders || 0) - (b.total_orders || 0),
+      title: '订单数',
+      dataIndex: 'orders',
+      key: 'orders',
+      width: 80,
+      sorter: (a, b) => (a.orders || 0) - (b.orders || 0),
     },
     {
       title: '拒付佣金($)',
       dataIndex: 'rejected_commission',
       key: 'rejected_commission',
-      width: 120,
-      render: (val) => val ? `$${val.toFixed(2)}` : '-',
+      width: 110,
+      render: (val) => val ? <span style={{ color: '#cf1322' }}>${val.toFixed(2)}</span> : '-',
     },
     {
       title: '净佣金($)',
       key: 'net_commission',
-      width: 120,
+      width: 110,
       render: (_, record) => {
         const net = (record.total_commission || 0) - (record.rejected_commission || 0)
-        return `$${net.toFixed(2)}`
+        return <span style={{ fontWeight: 'bold' }}>${net.toFixed(2)}</span>
       },
     },
   ]
@@ -320,8 +336,8 @@ const DataCenter = () => {
   }
 
   const platformStats = {
-    totalCommission: safePlatformData.reduce((sum, item) => sum + (item.total_commission || item.commission || 0), 0),
-    totalOrders: safePlatformData.reduce((sum, item) => sum + (item.total_orders || item.orders || 0), 0),
+    totalCommission: safePlatformData.reduce((sum, item) => sum + (item.total_commission || 0), 0),
+    totalOrders: safePlatformData.reduce((sum, item) => sum + (item.orders || 0), 0),
   }
 
   const tabItems = [
