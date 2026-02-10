@@ -360,8 +360,11 @@ async def generate_report(
         
         campaigns_data = [c.dict() for c in request.campaigns]
         
-        # 获取用户自定义提示词
-        user_prompt = db.query(UserPrompt).filter(UserPrompt.user_id == current_user.id).first()
+        # 获取用户自定义提示词（分析类型，用于L7D分析报告）
+        user_prompt = db.query(UserPrompt).filter(
+            UserPrompt.user_id == current_user.id,
+            UserPrompt.prompt_type == "analysis"
+        ).first()
         custom_prompt = user_prompt.prompt if user_prompt else None
         
         # 生成报告

@@ -11,6 +11,9 @@ import 'dayjs/locale/zh-cn'
 dayjs.extend(utc)
 dayjs.extend(timezone)
 
+// 设置默认时区为中国时区
+dayjs.tz.setDefault('Asia/Shanghai')
+
 // 设置默认语言为中文
 dayjs.locale('zh-cn')
 
