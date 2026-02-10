@@ -620,49 +620,82 @@ const BidManagement = () => {
             }
             key="strategies"
           >
-            <Alert
-              message="智能出价 vs 人工出价"
-              description={
-                <ul style={{ margin: '8px 0', paddingLeft: 20 }}>
-                  <li><strong>人工CPC出价</strong>：您完全控制每个关键词的最高CPC，可逐个设置</li>
-                  <li><strong>智能出价（最大化点击）</strong>：Google自动调整出价，无法手动设置关键词CPC</li>
-                  <li>如需手动调整CPC，请先将广告系列改为"人工CPC出价"</li>
-                </ul>
-              }
-              type="info"
-              showIcon
-              style={{ marginBottom: 16 }}
-            />
-            
-            {/* 批量操作栏 */}
-            <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <Space>
-                {selectedStrategies.length > 0 && (
-                  <Text type="secondary">
-                    已选择 {selectedStrategies.length} 个广告系列
-                    ({selectedStrategies.filter(s => !s.is_manual_cpc).length} 个需要转换)
+            {/* 批量操作栏 - 选中时显示 */}
+            {selectedStrategies.length > 0 && (
+              <div style={{ 
+                marginBottom: 16, 
+                padding: '12px 16px',
+                background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+                borderRadius: 8,
+                display: 'flex', 
+                justifyContent: 'space-between', 
+                alignItems: 'center',
+                boxShadow: '0 4px 12px rgba(102, 126, 234, 0.4)'
+              }}>
+                <Space>
+                  <CheckCircleOutlined style={{ color: '#fff', fontSize: 18 }} />
+                  <Text style={{ color: '#fff', fontWeight: 500 }}>
+                    已选择 <span style={{ fontSize: 18, fontWeight: 700 }}>{selectedStrategies.length}</span> 个广告系列
+                    {selectedStrategies.filter(s => !s.is_manual_cpc).length > 0 && (
+                      <span style={{ marginLeft: 8, opacity: 0.9 }}>
+                        · {selectedStrategies.filter(s => !s.is_manual_cpc).length} 个需转换
+                      </span>
+                    )}
                   </Text>
-                )}
-              </Space>
-              <Popconfirm
-                title="批量转为人工出价"
-                description={`确定要将 ${selectedStrategies.filter(s => !s.is_manual_cpc).length} 个智能出价广告系列转为人工出价吗？`}
-                onConfirm={handleBatchChangeToManual}
-                okText="确定"
-                cancelText="取消"
-                disabled={selectedStrategies.filter(s => !s.is_manual_cpc).length === 0}
-              >
-                <Button
-                  type="primary"
-                  icon={<SettingOutlined />}
-                  loading={batchChangeLoading}
-                  disabled={selectedStrategies.filter(s => !s.is_manual_cpc).length === 0}
-                  style={{ background: '#722ed1', borderColor: '#722ed1' }}
-                >
-                  批量改人工出价 {selectedStrategies.filter(s => !s.is_manual_cpc).length > 0 && `(${selectedStrategies.filter(s => !s.is_manual_cpc).length})`}
-                </Button>
-              </Popconfirm>
-            </div>
+                </Space>
+                <Space>
+                  <Button
+                    size="small"
+                    ghost
+                    style={{ color: '#fff', borderColor: 'rgba(255,255,255,0.5)' }}
+                    onClick={() => setSelectedStrategies([])}
+                  >
+                    取消选择
+                  </Button>
+                  <Popconfirm
+                    title="批量转为人工出价"
+                    description={`确定要将 ${selectedStrategies.filter(s => !s.is_manual_cpc).length} 个智能出价广告系列转为人工出价吗？`}
+                    onConfirm={handleBatchChangeToManual}
+                    okText="确定转换"
+                    cancelText="取消"
+                    disabled={selectedStrategies.filter(s => !s.is_manual_cpc).length === 0}
+                  >
+                    <Button
+                      type="primary"
+                      icon={<RightOutlined />}
+                      loading={batchChangeLoading}
+                      disabled={selectedStrategies.filter(s => !s.is_manual_cpc).length === 0}
+                      style={{ 
+                        background: '#fff', 
+                        color: '#764ba2',
+                        border: 'none',
+                        fontWeight: 600,
+                        boxShadow: '0 2px 8px rgba(0,0,0,0.15)'
+                      }}
+                    >
+                      一键转人工出价
+                    </Button>
+                  </Popconfirm>
+                </Space>
+              </div>
+            )}
+
+            {/* 提示信息 - 未选中时显示 */}
+            {selectedStrategies.length === 0 && (
+              <Alert
+                message="智能出价 vs 人工出价"
+                description={
+                  <ul style={{ margin: '8px 0', paddingLeft: 20 }}>
+                    <li><strong>人工CPC出价</strong>：您完全控制每个关键词的最高CPC，可逐个设置</li>
+                    <li><strong>智能出价（最大化点击）</strong>：Google自动调整出价，无法手动设置关键词CPC</li>
+                    <li>勾选广告系列后可<strong>批量转换</strong>为人工出价</li>
+                  </ul>
+                }
+                type="info"
+                showIcon
+                style={{ marginBottom: 16 }}
+              />
+            )}
             
             <Table
               columns={strategyColumns}
@@ -676,10 +709,7 @@ const BidManagement = () => {
                 selectedRowKeys: selectedStrategies.map(s => s.id),
                 onChange: (selectedRowKeys, selectedRows) => {
                   setSelectedStrategies(selectedRows)
-                },
-                getCheckboxProps: (record) => ({
-                  disabled: record.is_manual_cpc // 已是人工出价的不能选择
-                })
+                }
               }}
             />
           </Panel>
