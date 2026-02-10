@@ -177,14 +177,16 @@ def _sync_bid_data_task(mcc_id: int, user_id: int):
             return
         
         sync_service = GoogleAdsServiceAccountSync(db)
-        client = sync_service._create_client(mcc)
+        result = sync_service._create_client(mcc)
         
-        if not client:
+        if not result:
             logger.error(f"无法创建 MCC {mcc_id} 的 Google Ads 客户端")
             return
         
+        # _create_client 返回 (client, mcc_customer_id) 元组
+        client, mcc_customer_id = result
+        
         # 获取客户账号列表
-        mcc_customer_id = mcc.mcc_id.replace("-", "")
         customers = sync_service.get_accessible_customers(client, mcc_customer_id)
         
         for customer in customers:
@@ -305,13 +307,15 @@ async def change_to_manual_cpc(
     
     try:
         sync_service = GoogleAdsServiceAccountSync(db)
-        client = sync_service._create_client(mcc)
+        client_result = sync_service._create_client(mcc)
         
-        if not client:
+        if not client_result:
             change_record.status = "failed"
             change_record.error_message = "无法创建Google Ads客户端"
             db.commit()
             raise HTTPException(status_code=500, detail="无法创建Google Ads客户端")
+        
+        client, _ = client_result
         
         # 执行切换
         cpc_ceiling = int(request.cpc_bid_ceiling * 1_000_000) if request.cpc_bid_ceiling else None
@@ -375,11 +379,12 @@ async def set_keyword_cpc(
     
     try:
         sync_service = GoogleAdsServiceAccountSync(db)
-        client = sync_service._create_client(mcc)
+        client_result = sync_service._create_client(mcc)
         
-        if not client:
+        if not client_result:
             raise HTTPException(status_code=500, detail="无法创建Google Ads客户端")
         
+        client, _ = client_result
         cpc_micros = int(request.cpc_amount * 1_000_000)
         result = sync_service.set_keyword_cpc(
             client,
@@ -431,11 +436,12 @@ async def batch_set_keyword_cpc(
     
     try:
         sync_service = GoogleAdsServiceAccountSync(db)
-        client = sync_service._create_client(mcc)
+        client_result = sync_service._create_client(mcc)
         
-        if not client:
+        if not client_result:
             raise HTTPException(status_code=500, detail="无法创建Google Ads客户端")
         
+        client, _ = client_result
         results = []
         success_count = 0
         failed_count = 0
@@ -670,11 +676,12 @@ async def apply_cpc_changes(
     
     try:
         sync_service = GoogleAdsServiceAccountSync(db)
-        client = sync_service._create_client(mcc)
+        client_result = sync_service._create_client(mcc)
         
-        if not client:
+        if not client_result:
             raise HTTPException(status_code=500, detail="无法创建Google Ads客户端")
         
+        client, _ = client_result
         results = []
         success_count = 0
         failed_count = 0
