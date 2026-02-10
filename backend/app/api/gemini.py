@@ -598,19 +598,21 @@ async def get_l7d_data_for_report(
                 data.is_rank_lost or 0
             )
         
-        # 获取佣金数据
-        commission_data = db.query(
-            AffiliateTransaction.campaign_name,
-            func.sum(AffiliateTransaction.commission).label("total_commission"),
+        # 获取佣金数据 - 按用户汇总（因为AffiliateTransaction没有campaign_name字段）
+        # 注意：交易数据通过 merchant_id 关联，而不是 campaign_name
+        # 这里简化处理，只获取用户总佣金和订单数
+        commission_summary = db.query(
+            func.sum(AffiliateTransaction.commission_amount).label("total_commission"),
             func.count(AffiliateTransaction.id).label("order_count")
         ).filter(
             AffiliateTransaction.user_id == current_user.id,
-            AffiliateTransaction.transaction_date >= begin,
-            AffiliateTransaction.transaction_date <= end,
-            AffiliateTransaction.status == "confirmed"
-        ).group_by(AffiliateTransaction.campaign_name).all()
+            AffiliateTransaction.transaction_time >= begin,
+            AffiliateTransaction.transaction_time <= end,
+            AffiliateTransaction.status == "approved"
+        ).first()
         
-        commission_map = {c.campaign_name: {"commission": c.total_commission or 0, "orders": c.order_count or 0} for c in commission_data}
+        user_total_commission = float(commission_summary.total_commission or 0) if commission_summary else 0
+        user_total_orders = commission_summary.order_count or 0 if commission_summary else 0
         
         # 构建返回数据
         campaigns = []
@@ -619,15 +621,22 @@ async def get_l7d_data_for_report(
         total_commission = 0
         total_orders = 0
         
+        # 按广告花费比例分配佣金（简化逻辑）
+        total_all_cost = sum(d["total_cost"] for d in campaign_data.values())
+        
         for campaign_id, data in campaign_data.items():
             days = len(data["data_dates"])
             clicks = data["total_clicks"]
             cost = data["total_cost"]
             
-            # 获取佣金
-            comm_info = commission_map.get(data["campaign_name"], {"commission": 0, "orders": 0})
-            commission = comm_info["commission"]
-            orders = comm_info["orders"]
+            # 按花费比例分配佣金（因为交易数据没有campaign_name无法精确匹配）
+            if total_all_cost > 0:
+                cost_ratio = cost / total_all_cost
+                commission = user_total_commission * cost_ratio
+                orders = int(user_total_orders * cost_ratio)
+            else:
+                commission = 0
+                orders = 0
             
             # 计算指标
             cpc = cost / clicks if clicks > 0 else 0
