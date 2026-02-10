@@ -511,7 +511,7 @@ const BidManagement = () => {
               </ol>
               <Alert
                 message="注意"
-                description="只有使用"人工CPC出价"策略的广告系列，才会显示关键词级别的最高CPC。智能出价策略下，CPC由Google自动调整。"
+                description="只有使用【人工CPC出价】策略的广告系列，才会显示关键词级别的最高CPC。智能出价策略下，CPC由Google自动调整。"
                 type="warning"
                 showIcon
                 style={{ marginTop: 16 }}
