@@ -513,22 +513,44 @@ G) 综述
   const extractCampaignSection = (fullReport, campaignName) => {
     if (!fullReport || !campaignName) return null
     
-    // 简化广告系列名用于匹配
+    // 简化广告系列名用于匹配（去除特殊字符，保留字母数字和连字符）
     const simpleName = campaignName.toLowerCase().replace(/[^a-z0-9\-]/g, '')
     
-    // 按 ### 分割报告
-    const sections = fullReport.split(/(?=###\s)/)
+    // 尝试多种分割方式
+    // 方式1: 按 "### " 分割（标准 Markdown 三级标题）
+    // 方式2: 按 "数字. 广告系列名" 分割（如 "1. 001-CG-uaudio-US"）
+    // 方式3: 按 "**广告系列名**" 分割（加粗标题）
+    
+    // 先尝试按编号格式分割（1. xxx, 2. xxx）
+    const numberedPattern = /(?=\n\d+\.\s+\d{3}-[A-Z])/gi
+    let sections = fullReport.split(numberedPattern)
+    
+    // 如果没有找到编号格式，尝试按 ### 分割
+    if (sections.length <= 1) {
+      sections = fullReport.split(/(?=###\s)/)
+    }
+    
+    // 如果还是只有一个段落，尝试按 ** 加粗标题分割
+    if (sections.length <= 1) {
+      sections = fullReport.split(/(?=\*\*\d{3}-[A-Z])/)
+    }
     
     for (const section of sections) {
+      if (!section.trim()) continue
+      
       const sectionLower = section.toLowerCase()
+      const sectionSimple = sectionLower.replace(/[^a-z0-9\-]/g, '')
+      
       // 检查该段落是否包含广告系列名
       if (sectionLower.includes(campaignName.toLowerCase()) || 
-          sectionLower.replace(/[^a-z0-9\-]/g, '').includes(simpleName)) {
-        // 检查是否是子标题（如 "### 1. 阶段评价"）
+          sectionSimple.includes(simpleName)) {
+        // 检查是否是子标题（如 "### 1. 阶段评价" 或仅包含通用标题）
         const firstLine = section.split('\n')[0] || ''
-        if (/###\s*\d+\./.test(firstLine)) continue
-        // 检查是否是概览类标题
-        if (/概览|总览|执行清单|综述|专项名单/.test(firstLine)) continue
+        // 跳过概览类标题
+        if (/概览|总览|执行清单|综述|专项名单|当前整体观察|数据周期/.test(firstLine)) continue
+        // 跳过不包含广告系列名的行
+        if (!firstLine.toLowerCase().includes(campaignName.substring(0, 10).toLowerCase()) &&
+            !firstLine.toLowerCase().replace(/[^a-z0-9\-]/g, '').includes(simpleName.substring(0, 10))) continue
         
         return section.trim()
       }
