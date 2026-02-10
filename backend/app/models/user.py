@@ -21,6 +21,7 @@ class User(Base):
     password_hash = Column(String(255), nullable=False)
     role = Column(Enum(UserRole), nullable=False)
     employee_id = Column(Integer, nullable=True)  # 1-10 for employees
+    display_name = Column(String(50), nullable=True)  # 显示姓名（中文名）
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
     

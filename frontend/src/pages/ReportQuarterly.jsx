@@ -1,26 +1,26 @@
 import React, { useState, useEffect } from 'react'
-import { Card, Table, DatePicker, Space, Spin, message, Button, Typography, Row, Col, Statistic } from 'antd'
+import { Card, Table, Select, Space, Spin, message, Button, Typography, Row, Col, Statistic } from 'antd'
 import { DownloadOutlined, ReloadOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import api from '../services/api'
 
 const { Title } = Typography
+const { Option } = Select
 
-const ReportMonthly = () => {
+const ReportQuarterly = () => {
   const [loading, setLoading] = useState(false)
   const [data, setData] = useState(null)
-  const [selectedDate, setSelectedDate] = useState(dayjs())
+  const [selectedYear, setSelectedYear] = useState(dayjs().year())
+  const [selectedQuarter, setSelectedQuarter] = useState(Math.ceil((dayjs().month() + 1) / 3))
 
   const fetchData = async () => {
     setLoading(true)
     try {
-      const year = selectedDate.year()
-      const month = selectedDate.month() + 1
-      const response = await api.get(`/api/reports/monthly?year=${year}&month=${month}`)
+      const response = await api.get(`/api/reports/quarterly?year=${selectedYear}&quarter=${selectedQuarter}`)
       setData(response.data)
     } catch (error) {
-      console.error('获取月报失败:', error)
-      message.error('获取月报失败')
+      console.error('获取季报失败:', error)
+      message.error('获取季报失败')
     } finally {
       setLoading(false)
     }
@@ -28,7 +28,7 @@ const ReportMonthly = () => {
 
   useEffect(() => {
     fetchData()
-  }, [selectedDate])
+  }, [selectedYear, selectedQuarter])
 
   const columns = [
     {
@@ -90,6 +90,13 @@ const ReportMonthly = () => {
     message.info('导出功能开发中...')
   }
 
+  // 生成年份选项
+  const years = []
+  const currentYear = dayjs().year()
+  for (let y = currentYear; y >= 2024; y--) {
+    years.push(y)
+  }
+
   return (
     <div style={{ padding: '24px' }}>
       <Card>
@@ -97,17 +104,20 @@ const ReportMonthly = () => {
           <Row justify="space-between" align="middle">
             <Col>
               <Title level={4} style={{ margin: 0 }}>
-                {data?.period || '本月报表'}
+                {data?.period || '本季度报表'}
               </Title>
             </Col>
             <Col>
               <Space>
-                <DatePicker 
-                  picker="month" 
-                  value={selectedDate}
-                  onChange={(date) => setSelectedDate(date || dayjs())}
-                  allowClear={false}
-                />
+                <Select value={selectedYear} onChange={setSelectedYear} style={{ width: 100 }}>
+                  {years.map(y => <Option key={y} value={y}>{y}年</Option>)}
+                </Select>
+                <Select value={selectedQuarter} onChange={setSelectedQuarter} style={{ width: 100 }}>
+                  <Option value={1}>Q1</Option>
+                  <Option value={2}>Q2</Option>
+                  <Option value={3}>Q3</Option>
+                  <Option value={4}>Q4</Option>
+                </Select>
                 <Button icon={<ReloadOutlined />} onClick={fetchData}>
                   刷新
                 </Button>
@@ -227,4 +237,5 @@ const ReportMonthly = () => {
   )
 }
 
-export default ReportMonthly
+export default ReportQuarterly
+

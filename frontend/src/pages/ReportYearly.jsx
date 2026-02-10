@@ -1,26 +1,25 @@
 import React, { useState, useEffect } from 'react'
-import { Card, Table, DatePicker, Space, Spin, message, Button, Typography, Row, Col, Statistic } from 'antd'
+import { Card, Table, Select, Space, Spin, message, Button, Typography, Row, Col, Statistic } from 'antd'
 import { DownloadOutlined, ReloadOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import api from '../services/api'
 
 const { Title } = Typography
+const { Option } = Select
 
-const FinancialReport = () => {
+const ReportYearly = () => {
   const [loading, setLoading] = useState(false)
   const [data, setData] = useState(null)
-  const [selectedDate, setSelectedDate] = useState(dayjs())
+  const [selectedYear, setSelectedYear] = useState(dayjs().year())
 
   const fetchData = async () => {
     setLoading(true)
     try {
-      const year = selectedDate.year()
-      const month = selectedDate.month() + 1
-      const response = await api.get(`/api/reports/financial?year=${year}&month=${month}`)
+      const response = await api.get(`/api/reports/yearly?year=${selectedYear}`)
       setData(response.data)
     } catch (error) {
-      console.error('获取财务报表失败:', error)
-      message.error('获取财务报表失败')
+      console.error('获取年报失败:', error)
+      message.error('获取年报失败')
     } finally {
       setLoading(false)
     }
@@ -28,50 +27,7 @@ const FinancialReport = () => {
 
   useEffect(() => {
     fetchData()
-  }, [selectedDate])
-
-  // 将数据转换为表格格式（支持合并单元格）
-  const getTableData = () => {
-    if (!data || !data.data) return []
-    
-    const tableData = []
-    let rowIndex = 0
-    
-    data.data.forEach((emp) => {
-      const accountCount = emp.accounts.length || 1
-      
-      if (emp.accounts.length === 0) {
-        // 没有账号的员工
-        tableData.push({
-          key: rowIndex++,
-          employee: emp.employee,
-          ad_cost: emp.ad_cost,
-          platform: '-',
-          account_name: '-',
-          book_commission: 0,
-          rejected_commission: 0,
-          rowSpan: 1,
-          isFirst: true
-        })
-      } else {
-        emp.accounts.forEach((acc, idx) => {
-          tableData.push({
-            key: rowIndex++,
-            employee: emp.employee,
-            ad_cost: emp.ad_cost,
-            platform: acc.platform,
-            account_name: acc.account_name,
-            book_commission: acc.book_commission,
-            rejected_commission: acc.rejected_commission,
-            rowSpan: idx === 0 ? accountCount : 0,
-            isFirst: idx === 0
-          })
-        })
-      }
-    })
-    
-    return tableData
-  }
+  }, [selectedYear])
 
   const columns = [
     {
@@ -79,11 +35,7 @@ const FinancialReport = () => {
       dataIndex: 'employee',
       key: 'employee',
       width: 100,
-      fixed: 'left',
-      onCell: (record) => ({
-        rowSpan: record.rowSpan
-      }),
-      render: (text, record) => record.isFirst ? text : null
+      fixed: 'left'
     },
     {
       title: '广告费($)',
@@ -91,23 +43,7 @@ const FinancialReport = () => {
       key: 'ad_cost',
       width: 120,
       align: 'right',
-      onCell: (record) => ({
-        rowSpan: record.rowSpan
-      }),
-      render: (value, record) => record.isFirst ? value?.toFixed(2) : null
-    },
-    {
-      title: '平台',
-      dataIndex: 'platform',
-      key: 'platform',
-      width: 80,
-      align: 'center'
-    },
-    {
-      title: '账号',
-      dataIndex: 'account_name',
-      key: 'account_name',
-      width: 150
+      render: (value) => <span style={{ color: '#cf1322' }}>{value?.toFixed(2)}</span>
     },
     {
       title: '账面佣金($)',
@@ -115,7 +51,7 @@ const FinancialReport = () => {
       key: 'book_commission',
       width: 120,
       align: 'right',
-      render: (value) => value?.toFixed(2)
+      render: (value) => <span style={{ color: '#3f8600' }}>{value?.toFixed(2)}</span>
     },
     {
       title: '失效佣金($)',
@@ -123,12 +59,41 @@ const FinancialReport = () => {
       key: 'rejected_commission',
       width: 120,
       align: 'right',
-      render: (value) => <span style={{ color: value > 0 ? '#ff4d4f' : 'inherit' }}>{value?.toFixed(2)}</span>
+      render: (value) => <span style={{ color: '#ff4d4f' }}>{value?.toFixed(2)}</span>
+    },
+    {
+      title: '有效佣金($)',
+      dataIndex: 'valid_commission',
+      key: 'valid_commission',
+      width: 120,
+      align: 'right',
+      render: (value) => <span style={{ color: '#1677ff' }}>{value?.toFixed(2)}</span>
+    },
+    {
+      title: '订单数',
+      dataIndex: 'orders',
+      key: 'orders',
+      width: 80,
+      align: 'center'
+    },
+    {
+      title: '在跑广告量',
+      dataIndex: 'active_campaigns',
+      key: 'active_campaigns',
+      width: 100,
+      align: 'center'
     }
   ]
 
   const handleExport = () => {
     message.info('导出功能开发中...')
+  }
+
+  // 生成年份选项
+  const years = []
+  const currentYear = dayjs().year()
+  for (let y = currentYear; y >= 2024; y--) {
+    years.push(y)
   }
 
   return (
@@ -137,16 +102,15 @@ const FinancialReport = () => {
         <div style={{ marginBottom: 24 }}>
           <Row justify="space-between" align="middle">
             <Col>
-              <Title level={4} style={{ margin: 0 }}>财务报表</Title>
+              <Title level={4} style={{ margin: 0 }}>
+                {data?.period || '本年度报表'}
+              </Title>
             </Col>
             <Col>
               <Space>
-                <DatePicker 
-                  picker="month" 
-                  value={selectedDate}
-                  onChange={(date) => setSelectedDate(date || dayjs())}
-                  allowClear={false}
-                />
+                <Select value={selectedYear} onChange={setSelectedYear} style={{ width: 100 }}>
+                  {years.map(y => <Option key={y} value={y}>{y}年</Option>)}
+                </Select>
                 <Button icon={<ReloadOutlined />} onClick={fetchData}>
                   刷新
                 </Button>
@@ -161,47 +125,65 @@ const FinancialReport = () => {
         {/* 汇总统计 */}
         {data?.summary && (
           <Row gutter={16} style={{ marginBottom: 24 }}>
-            <Col span={6}>
+            <Col span={4}>
               <Card size="small">
                 <Statistic 
                   title="总广告费" 
                   value={data.summary.total_ad_cost} 
                   precision={2} 
                   prefix="$"
-                  valueStyle={{ color: '#cf1322' }}
+                  valueStyle={{ color: '#cf1322', fontSize: 18 }}
                 />
               </Card>
             </Col>
-            <Col span={6}>
+            <Col span={4}>
               <Card size="small">
                 <Statistic 
                   title="总账面佣金" 
                   value={data.summary.total_book_commission} 
                   precision={2} 
                   prefix="$"
-                  valueStyle={{ color: '#3f8600' }}
+                  valueStyle={{ color: '#3f8600', fontSize: 18 }}
                 />
               </Card>
             </Col>
-            <Col span={6}>
+            <Col span={4}>
               <Card size="small">
                 <Statistic 
                   title="总失效佣金" 
                   value={data.summary.total_rejected_commission} 
                   precision={2} 
                   prefix="$"
-                  valueStyle={{ color: '#ff4d4f' }}
+                  valueStyle={{ color: '#ff4d4f', fontSize: 18 }}
                 />
               </Card>
             </Col>
-            <Col span={6}>
+            <Col span={4}>
               <Card size="small">
                 <Statistic 
                   title="总有效佣金" 
                   value={data.summary.total_valid_commission} 
                   precision={2} 
                   prefix="$"
-                  valueStyle={{ color: '#1677ff' }}
+                  valueStyle={{ color: '#1677ff', fontSize: 18 }}
+                />
+              </Card>
+            </Col>
+            <Col span={4}>
+              <Card size="small">
+                <Statistic 
+                  title="总订单数" 
+                  value={data.summary.total_orders}
+                  valueStyle={{ fontSize: 18 }}
+                />
+              </Card>
+            </Col>
+            <Col span={4}>
+              <Card size="small">
+                <Statistic 
+                  title="总在跑广告" 
+                  value={data.summary.total_active_campaigns}
+                  valueStyle={{ fontSize: 18 }}
                 />
               </Card>
             </Col>
@@ -211,25 +193,32 @@ const FinancialReport = () => {
         <Spin spinning={loading}>
           <Table
             columns={columns}
-            dataSource={getTableData()}
+            dataSource={data?.data?.map((item, index) => ({ ...item, key: index }))}
             pagination={false}
             bordered
             size="middle"
-            scroll={{ x: 700 }}
+            scroll={{ x: 800 }}
             summary={() => data?.summary ? (
               <Table.Summary fixed>
                 <Table.Summary.Row>
                   <Table.Summary.Cell index={0}><strong>合计</strong></Table.Summary.Cell>
                   <Table.Summary.Cell index={1} align="right">
-                    <strong>${data.summary.total_ad_cost?.toFixed(2)}</strong>
+                    <strong style={{ color: '#cf1322' }}>${data.summary.total_ad_cost?.toFixed(2)}</strong>
                   </Table.Summary.Cell>
-                  <Table.Summary.Cell index={2} />
-                  <Table.Summary.Cell index={3} />
-                  <Table.Summary.Cell index={4} align="right">
-                    <strong>${data.summary.total_book_commission?.toFixed(2)}</strong>
+                  <Table.Summary.Cell index={2} align="right">
+                    <strong style={{ color: '#3f8600' }}>${data.summary.total_book_commission?.toFixed(2)}</strong>
                   </Table.Summary.Cell>
-                  <Table.Summary.Cell index={5} align="right">
+                  <Table.Summary.Cell index={3} align="right">
                     <strong style={{ color: '#ff4d4f' }}>${data.summary.total_rejected_commission?.toFixed(2)}</strong>
+                  </Table.Summary.Cell>
+                  <Table.Summary.Cell index={4} align="right">
+                    <strong style={{ color: '#1677ff' }}>${data.summary.total_valid_commission?.toFixed(2)}</strong>
+                  </Table.Summary.Cell>
+                  <Table.Summary.Cell index={5} align="center">
+                    <strong>{data.summary.total_orders}</strong>
+                  </Table.Summary.Cell>
+                  <Table.Summary.Cell index={6} align="center">
+                    <strong>{data.summary.total_active_campaigns}</strong>
                   </Table.Summary.Cell>
                 </Table.Summary.Row>
               </Table.Summary>
@@ -241,4 +230,5 @@ const FinancialReport = () => {
   )
 }
 
-export default FinancialReport
+export default ReportYearly
+

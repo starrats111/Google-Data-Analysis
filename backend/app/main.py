@@ -46,6 +46,7 @@ from app.api import (
     linkhaitao,
     mcc,
     platform_data,
+    reports,
     stage_label,
     upload,
     users,
@@ -249,6 +250,7 @@ app.include_router(stage_label.router)
 app.include_router(gemini.router)
 app.include_router(users.router)
 app.include_router(bid_management.router)
+app.include_router(reports.router)
 
 
 @app.get("/health")
