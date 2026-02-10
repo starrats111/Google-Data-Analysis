@@ -1,6 +1,6 @@
 """
-修复 wj07 (朱文欣) 的重复RW账号
-将3个RW账号合并为1个: wenjun
+查看 wj07 (朱文欣) 的RW账号详细信息
+了解渠道ID/API Token的存储情况
 """
 import sys
 import os
@@ -36,51 +36,20 @@ rw_accounts = db.query(AffiliateAccount).filter(
     AffiliateAccount.platform_id == rw_platform.id
 ).all()
 
-print(f"\nwj07 在 RW 平台的账号 ({len(rw_accounts)} 个):")
+print(f"\nwj07 在 RW 平台的账号详情 ({len(rw_accounts)} 个):")
+print("-" * 80)
 for acc in rw_accounts:
-    print(f"  ID={acc.id}, account_name={acc.account_name}, is_active={acc.is_active}")
-
-# 保留 wenjun，删除其他的
-keep_account = None
-delete_accounts = []
-
-for acc in rw_accounts:
-    if acc.account_name == 'wenjun':
-        keep_account = acc
-    else:
-        delete_accounts.append(acc)
-
-if not keep_account:
-    print("\n没有找到 'wenjun' 账号，创建一个新的...")
-    # 如果没有 wenjun，就把第一个改名
-    if rw_accounts:
-        rw_accounts[0].account_name = 'wenjun'
-        keep_account = rw_accounts[0]
-        delete_accounts = rw_accounts[1:]
-        db.commit()
-        print(f"  已将 ID={keep_account.id} 改名为 'wenjun'")
-
-print(f"\n保留账号: ID={keep_account.id}, account_name={keep_account.account_name}")
-print(f"删除账号: {[acc.id for acc in delete_accounts]}")
-
-# 确认删除
-confirm = input("\n确认删除这些重复账号? (yes/no): ")
-if confirm.lower() == 'yes':
-    for acc in delete_accounts:
-        db.delete(acc)
-    db.commit()
-    print("删除完成！")
-else:
-    print("取消操作")
-
-# 验证结果
-print("\n验证结果:")
-rw_accounts_after = db.query(AffiliateAccount).filter(
-    AffiliateAccount.user_id == user.id,
-    AffiliateAccount.platform_id == rw_platform.id
-).all()
-for acc in rw_accounts_after:
-    print(f"  ID={acc.id}, account_name={acc.account_name}")
+    print(f"  ID: {acc.id}")
+    print(f"  account_name: {acc.account_name}")
+    print(f"  account_code (渠道ID): {acc.account_code}")
+    print(f"  email: {acc.email}")
+    print(f"  notes: {acc.notes}")
+    print(f"  is_active: {acc.is_active}")
+    print("-" * 80)
 
 db.close()
+
+print("\n请告诉我：")
+print("1. 这3个账号的渠道ID (account_code) 分别是什么？")
+print("2. 是否需要新建一个表来支持'一个账号多个渠道ID'的结构？")
 
