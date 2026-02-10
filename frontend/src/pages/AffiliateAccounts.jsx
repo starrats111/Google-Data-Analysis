@@ -563,6 +563,8 @@ const AffiliateAccounts = () => {
     { title: '联盟平台', key: 'platform', render: (_, record) => record.platform?.platform_name },
     { title: '渠道ID', dataIndex: 'account_code', key: 'account_code' },
     { title: '邮箱', dataIndex: 'email', key: 'email' },
+    { title: '收款人', dataIndex: 'payee_name', key: 'payee_name', render: (v) => v || '-' },
+    { title: '收款卡号', dataIndex: 'payee_card', key: 'payee_card', render: (v) => v || '-' },
     { 
       title: '状态', 
       dataIndex: 'is_active', 
@@ -1037,6 +1039,20 @@ const AffiliateAccounts = () => {
               rules={[{ type: 'email', message: '请输入有效的邮箱地址' }]}
             >
               <Input placeholder="可选：邮箱地址" />
+            </Form.Item>
+
+            <Form.Item
+              name="payee_name"
+              label="收款人"
+            >
+              <Input placeholder="可选：收款人姓名" />
+            </Form.Item>
+
+            <Form.Item
+              name="payee_card"
+              label="收款卡号"
+            >
+              <Input placeholder="可选：收款银行卡号" />
             </Form.Item>
 
             <Form.Item

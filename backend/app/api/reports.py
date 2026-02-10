@@ -509,6 +509,7 @@ async def export_financial_report(
         from openpyxl import Workbook
         from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
         from openpyxl.utils import get_column_letter
+        from urllib.parse import quote
     except ImportError:
         from fastapi import HTTPException
         raise HTTPException(status_code=500, detail="服务器未安装openpyxl库")
@@ -523,15 +524,18 @@ async def export_financial_report(
     
     # 平台列表
     PLATFORMS = ['RW', 'LH', 'CG', 'LB', 'PM', 'CF', 'BSH']
+    NUM_PLATFORMS = len(PLATFORMS)
     
     # 创建工作簿
     wb = Workbook()
     ws = wb.active
-    ws.title = f"财务报表_{year}年{month:02d}月"
+    ws.title = f"{year}年{month:02d}月"
     
     # 样式定义
-    header_fill = PatternFill(start_color="FFFF00", end_color="FFFF00", fill_type="solid")
-    header_font = Font(bold=True)
+    yellow_fill = PatternFill(start_color="FFFF00", end_color="FFFF00", fill_type="solid")
+    green_fill = PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid")
+    bold_font = Font(bold=True)
+    red_font = Font(color="FF0000")
     center_align = Alignment(horizontal='center', vertical='center')
     thin_border = Border(
         left=Side(style='thin'),
@@ -540,41 +544,47 @@ async def export_financial_report(
         bottom=Side(style='thin')
     )
     
-    # 行1: 月份
-    ws['A1'] = '月份'
-    ws['A1'].fill = header_fill
-    ws['A1'].font = header_font
+    # 行标题定义
+    ROW_LABELS = [
+        '月份',           # 1
+        'MCC',            # 2  
+        '币种',           # 3
+        '广告费',         # 4
+        '广告联盟',       # 5
+        '账号名称',       # 6
+        '账面佣金（美金）',  # 7
+        '失效佣金（美金）',  # 8
+        '在跑广告量',      # 9
+        '应收佣金（美金）-5号',   # 10
+        '应收佣金（美金）-15号',  # 11
+        '应收佣金（美金）-合计',  # 12
+        '实收佣金（人民币）-10号', # 13
+        '实收佣金（人民币）-20号', # 14
+        '实收佣金（人民币）-合计', # 15
+        '收款人',          # 16
+        '收款卡号',        # 17
+        '可分配利润（实收佣金-广告费）', # 18
+    ]
     
-    # 计算每个员工需要的列数（基于平台数）
-    col_offset = 2  # A列是标题，B列开始是数据
+    # 写入A列标题
+    for i, label in enumerate(ROW_LABELS, start=1):
+        cell = ws.cell(row=i, column=1, value=label)
+        cell.border = thin_border
+        if i <= 2:
+            cell.fill = yellow_fill
+            cell.font = bold_font
     
-    # 行2: MCC（员工名）
-    ws['A2'] = 'MCC'
-    
-    # 行3: 币种
-    ws['A3'] = '币种'
-    
-    # 行4: 广告费
-    ws['A4'] = '广告费'
-    
-    # 行5: 广告联盟（平台）
-    ws['A5'] = '广告联盟'
-    
-    # 行6: 账号名称
-    ws['A6'] = '账号名称'
-    
-    # 行7: 账面佣金（美金）
-    ws['A7'] = '账面佣金（美金）'
-    
-    # 行8: 失效佣金（美金）
-    ws['A8'] = '失效佣金（美金）'
-    
-    current_col = 2  # 从B列开始
+    # 收集所有员工数据
+    all_emp_data = []
+    total_ad_cost = Decimal('0')
+    total_active_campaigns = 0
+    platform_totals_book = {p: Decimal('0') for p in PLATFORMS}
+    platform_totals_rejected = {p: Decimal('0') for p in PLATFORMS}
     
     for emp in employees:
         emp_display_name = emp.display_name or emp.username
         
-        # 获取员工广告费
+        # 广告费
         emp_ad_cost = db.query(func.sum(GoogleAdsApiData.cost)).filter(
             GoogleAdsApiData.user_id == emp.id,
             GoogleAdsApiData.date >= start_date,
@@ -584,7 +594,6 @@ async def export_financial_report(
         # 货币转换
         mcc_accounts = db.query(GoogleMccAccount).filter(GoogleMccAccount.user_id == emp.id).all()
         cny_mcc_ids = [m.id for m in mcc_accounts if m.currency == 'CNY']
-        cny_cost = Decimal('0')
         
         if cny_mcc_ids:
             cny_cost = db.query(func.sum(GoogleAdsApiData.cost)).filter(
@@ -603,95 +612,214 @@ async def export_financial_report(
             
             emp_ad_cost = Decimal(str(usd_cost)) + Decimal(str(cny_cost)) / Decimal('7.2')
         
-        # 获取在跑广告量
+        emp_ad_cost = Decimal(str(emp_ad_cost))
+        total_ad_cost += emp_ad_cost
+        
+        # 在跑广告量
         active_campaigns = db.query(func.count(func.distinct(GoogleAdsApiData.campaign_id))).filter(
             GoogleAdsApiData.user_id == emp.id,
             GoogleAdsApiData.status == '已启用',
             GoogleAdsApiData.date == end_date
         ).scalar() or 0
         
-        # 获取员工的平台账号
+        if active_campaigns == 0:
+            latest_date = db.query(func.max(GoogleAdsApiData.date)).filter(
+                GoogleAdsApiData.user_id == emp.id,
+                GoogleAdsApiData.date <= end_date
+            ).scalar()
+            if latest_date:
+                active_campaigns = db.query(func.count(func.distinct(GoogleAdsApiData.campaign_id))).filter(
+                    GoogleAdsApiData.user_id == emp.id,
+                    GoogleAdsApiData.status == '已启用',
+                    GoogleAdsApiData.date == latest_date
+                ).scalar() or 0
+        
+        total_active_campaigns += active_campaigns
+        
+        # 平台账号数据
         accounts = db.query(AffiliateAccount).join(AffiliatePlatform).filter(
             AffiliateAccount.user_id == emp.id,
             AffiliateAccount.is_active == True
         ).all()
         
-        # 按平台分组账号
-        platform_accounts = {p: [] for p in PLATFORMS}
+        platform_data = {p: {'names': [], 'book': Decimal('0'), 'rejected': Decimal('0'), 'payee_name': '', 'payee_card': ''} for p in PLATFORMS}
+        
         for acc in accounts:
             platform_code = get_platform_short_code(acc.platform.platform_code) if acc.platform else None
-            if platform_code in platform_accounts:
-                # 获取账户佣金数据
-                book_commission = db.query(func.sum(AffiliateTransaction.commission_amount)).filter(
-                    AffiliateTransaction.affiliate_account_id == acc.id,
-                    AffiliateTransaction.transaction_time >= datetime.combine(start_date, datetime.min.time()),
-                    AffiliateTransaction.transaction_time <= datetime.combine(end_date, datetime.max.time())
-                ).scalar() or Decimal('0')
-                
-                rejected_commission = db.query(func.sum(AffiliateTransaction.commission_amount)).filter(
-                    AffiliateTransaction.affiliate_account_id == acc.id,
-                    AffiliateTransaction.status == 'rejected',
-                    AffiliateTransaction.transaction_time >= datetime.combine(start_date, datetime.min.time()),
-                    AffiliateTransaction.transaction_time <= datetime.combine(end_date, datetime.max.time())
-                ).scalar() or Decimal('0')
-                
-                platform_accounts[platform_code].append({
-                    'name': acc.account_name,
-                    'book': float(book_commission),
-                    'rejected': float(rejected_commission)
-                })
+            if platform_code not in PLATFORMS:
+                continue
+            
+            book_commission = db.query(func.sum(AffiliateTransaction.commission_amount)).filter(
+                AffiliateTransaction.affiliate_account_id == acc.id,
+                AffiliateTransaction.transaction_time >= datetime.combine(start_date, datetime.min.time()),
+                AffiliateTransaction.transaction_time <= datetime.combine(end_date, datetime.max.time())
+            ).scalar() or Decimal('0')
+            
+            rejected_commission = db.query(func.sum(AffiliateTransaction.commission_amount)).filter(
+                AffiliateTransaction.affiliate_account_id == acc.id,
+                AffiliateTransaction.status == 'rejected',
+                AffiliateTransaction.transaction_time >= datetime.combine(start_date, datetime.min.time()),
+                AffiliateTransaction.transaction_time <= datetime.combine(end_date, datetime.max.time())
+            ).scalar() or Decimal('0')
+            
+            platform_data[platform_code]['names'].append(acc.account_name)
+            platform_data[platform_code]['book'] += Decimal(str(book_commission))
+            platform_data[platform_code]['rejected'] += Decimal(str(rejected_commission))
+            if acc.payee_name:
+                platform_data[platform_code]['payee_name'] = acc.payee_name
+            if acc.payee_card:
+                platform_data[platform_code]['payee_card'] = acc.payee_card
+            
+            # 累加到总计
+            platform_totals_book[platform_code] += Decimal(str(book_commission))
+            platform_totals_rejected[platform_code] += Decimal(str(rejected_commission))
         
-        # 计算该员工需要的列数
-        max_accounts = max(len(accs) for accs in platform_accounts.values()) if platform_accounts else 1
-        emp_cols = len(PLATFORMS)  # 每个平台一列
-        
-        # 写入员工名（行2）
-        ws.cell(row=2, column=current_col, value=emp_display_name)
-        ws.merge_cells(start_row=2, start_column=current_col, end_row=2, end_column=current_col + emp_cols - 1)
+        all_emp_data.append({
+            'name': emp_display_name,
+            'ad_cost': emp_ad_cost,
+            'active_campaigns': active_campaigns,
+            'platform_data': platform_data
+        })
+    
+    # === 写入数据 ===
+    # 合计列在前（B-H列，共7个平台）
+    current_col = 2
+    
+    # 行2: 合计
+    ws.cell(row=2, column=current_col, value='合计')
+    ws.merge_cells(start_row=2, start_column=current_col, end_row=2, end_column=current_col + NUM_PLATFORMS - 1)
+    ws.cell(row=2, column=current_col).alignment = center_align
+    ws.cell(row=2, column=current_col).fill = yellow_fill
+    ws.cell(row=2, column=current_col).font = bold_font
+    
+    # 行3: 美金
+    for i in range(NUM_PLATFORMS):
+        cell = ws.cell(row=3, column=current_col + i, value='美金')
+        cell.fill = green_fill
+        cell.alignment = center_align
+    
+    # 行4: 总广告费（只在第一列）
+    ws.cell(row=4, column=current_col, value=round(float(total_ad_cost), 2))
+    
+    # 行5: 平台名称
+    for i, platform in enumerate(PLATFORMS):
+        cell = ws.cell(row=5, column=current_col + i, value=platform)
+        cell.fill = green_fill
+        cell.alignment = center_align
+    
+    # 行6: 账号名称（合计列为空）
+    # 行7: 账面佣金汇总
+    for i, platform in enumerate(PLATFORMS):
+        ws.cell(row=7, column=current_col + i, value=round(float(platform_totals_book[platform]), 2))
+    
+    # 行8: 失效佣金汇总
+    for i, platform in enumerate(PLATFORMS):
+        ws.cell(row=8, column=current_col + i, value=round(float(platform_totals_rejected[platform]), 2))
+    
+    # 行9: 总在跑广告量
+    ws.cell(row=9, column=current_col, value=total_active_campaigns)
+    
+    # 行10-15: 应收/实收佣金（预留占位，写0）
+    for row in range(10, 16):
+        for i in range(NUM_PLATFORMS):
+            ws.cell(row=row, column=current_col + i, value=0)
+    
+    # 行18: 可分配利润
+    total_book = sum(platform_totals_book.values())
+    # 可分配利润 = 实收佣金 - 广告费（目前实收为0，所以是负数）
+    profit = -float(total_ad_cost)  # 暂时用负广告费
+    cell = ws.cell(row=18, column=current_col, value=round(profit, 2))
+    if profit < 0:
+        cell.font = red_font
+    
+    # 应用绿色背景到数据区
+    for row in range(3, 19):
+        for i in range(NUM_PLATFORMS):
+            cell = ws.cell(row=row, column=current_col + i)
+            if cell.value is None:
+                cell.value = ''
+            cell.fill = green_fill
+            cell.border = thin_border
+    
+    current_col += NUM_PLATFORMS
+    
+    # === 写入各员工数据 ===
+    for emp_data in all_emp_data:
+        # 行2: 员工名
+        ws.cell(row=2, column=current_col, value=emp_data['name'])
+        ws.merge_cells(start_row=2, start_column=current_col, end_row=2, end_column=current_col + NUM_PLATFORMS - 1)
         ws.cell(row=2, column=current_col).alignment = center_align
+        ws.cell(row=2, column=current_col).fill = yellow_fill
+        ws.cell(row=2, column=current_col).font = bold_font
         
-        # 写入币种（行3）- 美金
+        # 行3: 美金
+        for i in range(NUM_PLATFORMS):
+            cell = ws.cell(row=3, column=current_col + i, value='美金')
+            cell.fill = green_fill
+            cell.alignment = center_align
+        
+        # 行4: 广告费
+        ws.cell(row=4, column=current_col, value=round(float(emp_data['ad_cost']), 2))
+        
+        # 行5: 平台名称
         for i, platform in enumerate(PLATFORMS):
-            ws.cell(row=3, column=current_col + i, value='美金')
+            cell = ws.cell(row=5, column=current_col + i, value=platform)
+            cell.fill = green_fill
+            cell.alignment = center_align
         
-        # 写入人民币广告费和在跑广告量
-        # 找到合适的位置写入人民币费用
-        
-        # 写入广告费（行4）- 只在第一列写
-        ws.cell(row=4, column=current_col, value=float(emp_ad_cost))
-        
-        # 写入平台（行5）
+        # 行6-8: 账号、佣金
         for i, platform in enumerate(PLATFORMS):
-            ws.cell(row=5, column=current_col + i, value=platform)
-        
-        # 写入账号名称和佣金（行6-8）
-        for i, platform in enumerate(PLATFORMS):
+            pdata = emp_data['platform_data'][platform]
             col = current_col + i
-            accs = platform_accounts.get(platform, [])
-            if accs:
-                # 取第一个账号（如果有多个账号，合并显示）
-                acc = accs[0]
-                ws.cell(row=6, column=col, value=acc['name'])
-                ws.cell(row=7, column=col, value=acc['book'])
-                ws.cell(row=8, column=col, value=acc['rejected'])
-                
-                # 如果有多个账号，累加佣金
-                if len(accs) > 1:
-                    total_book = sum(a['book'] for a in accs)
-                    total_rejected = sum(a['rejected'] for a in accs)
-                    ws.cell(row=7, column=col, value=total_book)
-                    ws.cell(row=8, column=col, value=total_rejected)
-                    # 账号名用逗号分隔
-                    ws.cell(row=6, column=col, value=','.join(a['name'] for a in accs))
+            
+            # 账号名
+            ws.cell(row=6, column=col, value=','.join(pdata['names']) if pdata['names'] else '')
+            # 账面佣金
+            ws.cell(row=7, column=col, value=round(float(pdata['book']), 2))
+            # 失效佣金
+            ws.cell(row=8, column=col, value=round(float(pdata['rejected']), 2))
         
-        current_col += emp_cols
+        # 行9: 在跑广告量
+        ws.cell(row=9, column=current_col, value=emp_data['active_campaigns'])
+        
+        # 行10-15: 预留占位
+        for row in range(10, 16):
+            for i in range(NUM_PLATFORMS):
+                ws.cell(row=row, column=current_col + i, value=0)
+        
+        # 行16-17: 收款人/卡号（取第一个有值的平台）
+        payee_name = ''
+        payee_card = ''
+        for platform in PLATFORMS:
+            pdata = emp_data['platform_data'][platform]
+            if pdata['payee_name'] and not payee_name:
+                payee_name = pdata['payee_name']
+            if pdata['payee_card'] and not payee_card:
+                payee_card = pdata['payee_card']
+        ws.cell(row=16, column=current_col, value=payee_name)
+        ws.cell(row=17, column=current_col, value=payee_card)
+        
+        # 行18: 可分配利润
+        emp_profit = -float(emp_data['ad_cost'])  # 暂时用负广告费
+        cell = ws.cell(row=18, column=current_col, value=round(emp_profit, 2))
+        if emp_profit < 0:
+            cell.font = red_font
+        
+        # 应用绿色背景
+        for row in range(3, 19):
+            for i in range(NUM_PLATFORMS):
+                cell = ws.cell(row=row, column=current_col + i)
+                if cell.value is None:
+                    cell.value = ''
+                cell.fill = green_fill
+                cell.border = thin_border
+        
+        current_col += NUM_PLATFORMS
     
     # 设置列宽
-    for col in range(1, current_col + 1):
+    ws.column_dimensions['A'].width = 28
+    for col in range(2, current_col + 1):
         ws.column_dimensions[get_column_letter(col)].width = 12
-    
-    # 第一列宽一些
-    ws.column_dimensions['A'].width = 18
     
     # 保存到内存
     output = io.BytesIO()
@@ -699,7 +827,6 @@ async def export_financial_report(
     output.seek(0)
     
     # 返回文件
-    from urllib.parse import quote
     filename = f"财务报表_{year}年{month:02d}月.xlsx"
     encoded_filename = quote(filename)
     

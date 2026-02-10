@@ -33,6 +33,8 @@ class AffiliateAccount(Base):
     email = Column(String(255), nullable=True, index=True)  # 邮箱地址
     is_active = Column(Boolean, default=True, nullable=False, index=True)
     notes = Column(Text, nullable=True)
+    payee_name = Column(String(100), nullable=True)  # 收款人
+    payee_card = Column(String(50), nullable=True)   # 收款卡号
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
     

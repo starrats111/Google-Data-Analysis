@@ -578,6 +578,10 @@ async def update_account(
         account.is_active = account_data.is_active
     if account_data.notes is not None:
         account.notes = account_data.notes
+    if account_data.payee_name is not None:
+        account.payee_name = account_data.payee_name
+    if account_data.payee_card is not None:
+        account.payee_card = account_data.payee_card
     
     db.commit()
     db.refresh(account)

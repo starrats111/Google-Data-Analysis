@@ -31,6 +31,8 @@ class AffiliateAccountBase(BaseModel):
     email: Optional[EmailStr] = None  # 邮箱地址
     is_active: bool = True
     notes: Optional[str] = None
+    payee_name: Optional[str] = None  # 收款人
+    payee_card: Optional[str] = None  # 收款卡号
 
 
 class AffiliateAccountCreate(AffiliateAccountBase):
@@ -43,6 +45,8 @@ class AffiliateAccountUpdate(BaseModel):
     email: Optional[EmailStr] = None  # 邮箱地址
     is_active: Optional[bool] = None
     notes: Optional[str] = None
+    payee_name: Optional[str] = None  # 收款人
+    payee_card: Optional[str] = None  # 收款卡号
 
 
 class AffiliateAccountResponse(AffiliateAccountBase):
@@ -51,6 +55,8 @@ class AffiliateAccountResponse(AffiliateAccountBase):
     platform: AffiliatePlatformResponse
     created_at: datetime
     updated_at: Optional[datetime]
+    payee_name: Optional[str] = None
+    payee_card: Optional[str] = None
     
     class Config:
         from_attributes = True
