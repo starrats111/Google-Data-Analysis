@@ -128,7 +128,45 @@ const FinancialReport = () => {
   ]
 
   const handleExport = () => {
-    message.info('导出功能开发中...')
+    if (!data || !data.data) {
+      message.warning('没有数据可导出')
+      return
+    }
+
+    // 构建CSV数据
+    const tableData = getTableData()
+    const headers = ['员工', '广告费($)', '平台', '账号', '账面佣金($)', '失效佣金($)']
+    
+    let csvContent = '\uFEFF' // UTF-8 BOM
+    csvContent += headers.join(',') + '\n'
+    
+    tableData.forEach(row => {
+      const rowData = [
+        row.isFirst ? row.employee : '',
+        row.isFirst ? row.ad_cost?.toFixed(2) : '',
+        row.platform,
+        row.account_name,
+        row.book_commission?.toFixed(2),
+        row.rejected_commission?.toFixed(2)
+      ]
+      csvContent += rowData.map(cell => `"${cell || ''}"`).join(',') + '\n'
+    })
+    
+    // 添加合计行
+    csvContent += `"合计","${data.summary.total_ad_cost?.toFixed(2)}","","","${data.summary.total_book_commission?.toFixed(2)}","${data.summary.total_rejected_commission?.toFixed(2)}"\n`
+    
+    // 下载文件
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' })
+    const link = document.createElement('a')
+    const url = URL.createObjectURL(blob)
+    link.setAttribute('href', url)
+    link.setAttribute('download', `财务报表_${selectedDate.format('YYYY年MM月')}.csv`)
+    link.style.visibility = 'hidden'
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+    
+    message.success('导出成功')
   }
 
   return (

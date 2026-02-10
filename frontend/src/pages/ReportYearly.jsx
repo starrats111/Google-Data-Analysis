@@ -86,7 +86,46 @@ const ReportYearly = () => {
   ]
 
   const handleExport = () => {
-    message.info('导出功能开发中...')
+    if (!data || !data.data) {
+      message.warning('没有数据可导出')
+      return
+    }
+
+    // 构建CSV数据
+    const headers = ['员工', '广告费($)', '账面佣金($)', '失效佣金($)', '有效佣金($)', '订单数', '在跑广告量']
+    
+    let csvContent = '\uFEFF' // UTF-8 BOM
+    csvContent += headers.join(',') + '\n'
+    
+    data.data.forEach(row => {
+      const rowData = [
+        row.employee,
+        row.ad_cost?.toFixed(2),
+        row.book_commission?.toFixed(2),
+        row.rejected_commission?.toFixed(2),
+        row.valid_commission?.toFixed(2),
+        row.orders,
+        row.active_campaigns
+      ]
+      csvContent += rowData.map(cell => `"${cell || ''}"`).join(',') + '\n'
+    })
+    
+    // 添加合计行
+    const s = data.summary
+    csvContent += `"合计","${s.total_ad_cost?.toFixed(2)}","${s.total_book_commission?.toFixed(2)}","${s.total_rejected_commission?.toFixed(2)}","${s.total_valid_commission?.toFixed(2)}","${s.total_orders}","${s.total_active_campaigns}"\n`
+    
+    // 下载文件
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' })
+    const link = document.createElement('a')
+    const url = URL.createObjectURL(blob)
+    link.setAttribute('href', url)
+    link.setAttribute('download', `年度报表_${data.period || selectedYear + '年'}.csv`)
+    link.style.visibility = 'hidden'
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+    
+    message.success('导出成功')
   }
 
   // 生成年份选项
