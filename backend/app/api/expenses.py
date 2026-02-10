@@ -7,7 +7,7 @@ from __future__ import annotations
 from typing import Optional, Dict, Tuple, List
 from datetime import datetime, date
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Query
 from fastapi import Body
 from sqlalchemy.orm import Session
 from sqlalchemy import func, case
