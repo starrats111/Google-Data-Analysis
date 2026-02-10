@@ -92,27 +92,29 @@ const DataCenter = () => {
           },
           signal: abortControllerRef.current.signal,
         })
-        // 确保返回的是数组
-        const data = Array.isArray(response.data) ? response.data : []
+        // API 返回的是对象 {campaigns: [...], begin_date, end_date, ...}，取 campaigns 数组
+        const responseData = response.data
+        const data = Array.isArray(responseData?.campaigns) ? responseData.campaigns : []
         setGoogleData(data)
         dataCache.google = { data, timestamp: Date.now(), params: cacheKey }
       } else {
         if (viewMode === 'summary') {
           const response = await api.get('/api/platform-data/summary', {
             params: {
-              start_date: params.start_date,
+              begin_date: params.start_date,
               end_date: params.end_date,
             },
             signal: abortControllerRef.current.signal,
           })
-          // 确保返回的是数组
-          const data = Array.isArray(response.data) ? response.data : []
+          // API 返回的是对象 {by_platform: [...], total: {...}}，取 by_platform 数组
+          const responseData = response.data
+          const data = Array.isArray(responseData?.by_platform) ? responseData.by_platform : []
           setPlatformSummary(data)
           dataCache.platform = { data, timestamp: Date.now(), params: cacheKey }
         } else {
           const response = await api.get('/api/platform-data', {
             params: {
-              start_date: params.start_date,
+              begin_date: params.start_date,
               end_date: params.end_date,
             },
             signal: abortControllerRef.current.signal,
