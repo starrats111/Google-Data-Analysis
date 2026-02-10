@@ -544,7 +544,7 @@ async def export_financial_report(
         bottom=Side(style='thin')
     )
     
-    # 行标题定义
+    # 行标题定义（不包含在跑广告量，它在列中）
     ROW_LABELS = [
         '月份',           # 1
         'MCC',            # 2  
@@ -554,16 +554,15 @@ async def export_financial_report(
         '账号名称',       # 6
         '账面佣金（美金）',  # 7
         '失效佣金（美金）',  # 8
-        '在跑广告量',      # 9
-        '应收佣金（美金）-5号',   # 10
-        '应收佣金（美金）-15号',  # 11
-        '应收佣金（美金）-合计',  # 12
-        '实收佣金（人民币）-10号', # 13
-        '实收佣金（人民币）-20号', # 14
-        '实收佣金（人民币）-合计', # 15
-        '收款人',          # 16
-        '收款卡号',        # 17
-        '可分配利润（实收佣金-广告费）', # 18
+        '应收佣金（美金）-5号',   # 9
+        '应收佣金（美金）-15号',  # 10
+        '应收佣金（美金）-合计',  # 11
+        '实收佣金（人民币）-10号', # 12
+        '实收佣金（人民币）-20号', # 13
+        '实收佣金（人民币）-合计', # 14
+        '收款人',          # 15
+        '收款卡号',        # 16
+        '可分配利润（实收佣金-广告费）', # 17
     ]
     
     # 写入A列标题
@@ -682,32 +681,45 @@ async def export_financial_report(
         })
     
     # === 写入数据 ===
-    # 合计列在前（B-H列，共7个平台）
+    # 每个员工区块 = 7个平台 + 1个"在跑广告量"列 = 8列
+    EMP_COLS = NUM_PLATFORMS + 1  # 8列
     current_col = 2
     
-    # 行2: 合计
+    # ========== 合计区块 ==========
+    # 行2: 合计（合并7个平台列）
     ws.cell(row=2, column=current_col, value='合计')
     ws.merge_cells(start_row=2, start_column=current_col, end_row=2, end_column=current_col + NUM_PLATFORMS - 1)
     ws.cell(row=2, column=current_col).alignment = center_align
     ws.cell(row=2, column=current_col).fill = yellow_fill
     ws.cell(row=2, column=current_col).font = bold_font
     
-    # 行3: 美金
+    # 行2: 在跑广告量列标题
+    active_col = current_col + NUM_PLATFORMS
+    cell = ws.cell(row=2, column=active_col, value='在跑广告量')
+    cell.fill = yellow_fill
+    cell.font = bold_font
+    cell.alignment = center_align
+    
+    # 行3: 美金（7列）+ 在跑广告量列空白
     for i in range(NUM_PLATFORMS):
         cell = ws.cell(row=3, column=current_col + i, value='美金')
         cell.fill = green_fill
         cell.alignment = center_align
+    ws.cell(row=3, column=active_col, value='').fill = green_fill
     
-    # 行4: 总广告费（只在第一列）
+    # 行4: 总广告费 + 总在跑广告量
     ws.cell(row=4, column=current_col, value=round(float(total_ad_cost), 2))
+    ws.cell(row=4, column=active_col, value=total_active_campaigns)
     
     # 行5: 平台名称
     for i, platform in enumerate(PLATFORMS):
         cell = ws.cell(row=5, column=current_col + i, value=platform)
         cell.fill = green_fill
         cell.alignment = center_align
+    ws.cell(row=5, column=active_col, value='').fill = green_fill
     
     # 行6: 账号名称（合计列为空）
+    
     # 行7: 账面佣金汇总
     for i, platform in enumerate(PLATFORMS):
         ws.cell(row=7, column=current_col + i, value=round(float(platform_totals_book[platform]), 2))
@@ -716,56 +728,61 @@ async def export_financial_report(
     for i, platform in enumerate(PLATFORMS):
         ws.cell(row=8, column=current_col + i, value=round(float(platform_totals_rejected[platform]), 2))
     
-    # 行9: 总在跑广告量
-    ws.cell(row=9, column=current_col, value=total_active_campaigns)
-    
-    # 行10-15: 应收/实收佣金（预留占位，写0）
-    for row in range(10, 16):
+    # 行9-14: 应收/实收佣金（预留占位，写0）
+    for row in range(9, 15):
         for i in range(NUM_PLATFORMS):
             ws.cell(row=row, column=current_col + i, value=0)
     
-    # 行18: 可分配利润
-    total_book = sum(platform_totals_book.values())
-    # 可分配利润 = 实收佣金 - 广告费（目前实收为0，所以是负数）
+    # 行17: 可分配利润
     profit = -float(total_ad_cost)  # 暂时用负广告费
-    cell = ws.cell(row=18, column=current_col, value=round(profit, 2))
+    cell = ws.cell(row=17, column=current_col, value=round(profit, 2))
     if profit < 0:
         cell.font = red_font
     
-    # 应用绿色背景到数据区
-    for row in range(3, 19):
-        for i in range(NUM_PLATFORMS):
+    # 应用绿色背景到数据区（包括在跑广告量列）
+    for row in range(3, 18):
+        for i in range(EMP_COLS):
             cell = ws.cell(row=row, column=current_col + i)
             if cell.value is None:
                 cell.value = ''
             cell.fill = green_fill
             cell.border = thin_border
     
-    current_col += NUM_PLATFORMS
+    current_col += EMP_COLS
     
-    # === 写入各员工数据 ===
+    # ========== 各员工数据 ==========
     for emp_data in all_emp_data:
-        # 行2: 员工名
+        # 行2: 员工名（合并7个平台列）
         ws.cell(row=2, column=current_col, value=emp_data['name'])
         ws.merge_cells(start_row=2, start_column=current_col, end_row=2, end_column=current_col + NUM_PLATFORMS - 1)
         ws.cell(row=2, column=current_col).alignment = center_align
         ws.cell(row=2, column=current_col).fill = yellow_fill
         ws.cell(row=2, column=current_col).font = bold_font
         
+        # 行2: 在跑广告量列标题
+        active_col = current_col + NUM_PLATFORMS
+        cell = ws.cell(row=2, column=active_col, value='在跑广告量')
+        cell.fill = yellow_fill
+        cell.font = bold_font
+        cell.alignment = center_align
+        
         # 行3: 美金
         for i in range(NUM_PLATFORMS):
             cell = ws.cell(row=3, column=current_col + i, value='美金')
             cell.fill = green_fill
             cell.alignment = center_align
+        ws.cell(row=3, column=active_col, value='').fill = green_fill
         
-        # 行4: 广告费
+        # 行4: 广告费 + 在跑广告量
         ws.cell(row=4, column=current_col, value=round(float(emp_data['ad_cost']), 2))
+        ws.cell(row=4, column=active_col, value=emp_data['active_campaigns'])
         
         # 行5: 平台名称
         for i, platform in enumerate(PLATFORMS):
             cell = ws.cell(row=5, column=current_col + i, value=platform)
             cell.fill = green_fill
             cell.alignment = center_align
+        ws.cell(row=5, column=active_col, value='').fill = green_fill
         
         # 行6-8: 账号、佣金
         for i, platform in enumerate(PLATFORMS):
@@ -779,15 +796,12 @@ async def export_financial_report(
             # 失效佣金
             ws.cell(row=8, column=col, value=round(float(pdata['rejected']), 2))
         
-        # 行9: 在跑广告量
-        ws.cell(row=9, column=current_col, value=emp_data['active_campaigns'])
-        
-        # 行10-15: 预留占位
-        for row in range(10, 16):
+        # 行9-14: 预留占位
+        for row in range(9, 15):
             for i in range(NUM_PLATFORMS):
                 ws.cell(row=row, column=current_col + i, value=0)
         
-        # 行16-17: 收款人/卡号（取第一个有值的平台）
+        # 行15-16: 收款人/卡号（取第一个有值的平台）
         payee_name = ''
         payee_card = ''
         for platform in PLATFORMS:
@@ -796,25 +810,25 @@ async def export_financial_report(
                 payee_name = pdata['payee_name']
             if pdata['payee_card'] and not payee_card:
                 payee_card = pdata['payee_card']
-        ws.cell(row=16, column=current_col, value=payee_name)
-        ws.cell(row=17, column=current_col, value=payee_card)
+        ws.cell(row=15, column=current_col, value=payee_name)
+        ws.cell(row=16, column=current_col, value=payee_card)
         
-        # 行18: 可分配利润
+        # 行17: 可分配利润
         emp_profit = -float(emp_data['ad_cost'])  # 暂时用负广告费
-        cell = ws.cell(row=18, column=current_col, value=round(emp_profit, 2))
+        cell = ws.cell(row=17, column=current_col, value=round(emp_profit, 2))
         if emp_profit < 0:
             cell.font = red_font
         
-        # 应用绿色背景
-        for row in range(3, 19):
-            for i in range(NUM_PLATFORMS):
+        # 应用绿色背景（包括在跑广告量列）
+        for row in range(3, 18):
+            for i in range(EMP_COLS):
                 cell = ws.cell(row=row, column=current_col + i)
                 if cell.value is None:
                     cell.value = ''
                 cell.fill = green_fill
                 cell.border = thin_border
         
-        current_col += NUM_PLATFORMS
+        current_col += EMP_COLS
     
     # 设置列宽
     ws.column_dimensions['A'].width = 28
