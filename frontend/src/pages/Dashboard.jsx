@@ -141,13 +141,13 @@ const Dashboard = () => {
 
   if (user?.role === 'manager') {
     const columns = [
-      { title: '员工编号', dataIndex: 'employee_id', key: 'employee_id', width: 80 },
+      { title: '员工编号', dataIndex: 'employee_id', key: 'employee_id', width: 80, sorter: (a, b) => (a.employee_id || 0) - (b.employee_id || 0) },
       { title: '用户名', dataIndex: 'username', key: 'username', width: 80 },
-      { title: 'MCC数', dataIndex: 'mcc_count', key: 'mcc_count', align: 'right', width: 70 },
-      { title: '本月费用', dataIndex: 'cost_month', key: 'cost_month', align: 'right', width: 100, render: (v) => <span style={{ color: '#cf1322' }}>{Number(v || 0).toFixed(2)}</span> },
-      { title: '本月佣金', dataIndex: 'commission_month', key: 'commission_month', align: 'right', width: 100, render: (v) => <span style={{ color: '#3f8600' }}>{Number(v || 0).toFixed(2)}</span> },
-      { title: '本月订单', dataIndex: 'orders_month', key: 'orders_month', align: 'right', width: 80 },
-      { title: '最后同步', dataIndex: 'last_google_sync_at', key: 'last_google_sync_at', width: 140, render: (v) => v ? dayjs.utc(v).tz('Asia/Shanghai').format('YYYY-MM-DD HH:mm') : '-' },
+      { title: 'MCC数', dataIndex: 'mcc_count', key: 'mcc_count', align: 'right', width: 70, sorter: (a, b) => (a.mcc_count || 0) - (b.mcc_count || 0) },
+      { title: '本月费用', dataIndex: 'cost_month', key: 'cost_month', align: 'right', width: 100, sorter: (a, b) => (a.cost_month || 0) - (b.cost_month || 0), render: (v) => <span style={{ color: '#cf1322' }}>{Number(v || 0).toFixed(2)}</span> },
+      { title: '本月佣金', dataIndex: 'commission_month', key: 'commission_month', align: 'right', width: 100, sorter: (a, b) => (a.commission_month || 0) - (b.commission_month || 0), render: (v) => <span style={{ color: '#3f8600' }}>{Number(v || 0).toFixed(2)}</span> },
+      { title: '本月订单', dataIndex: 'orders_month', key: 'orders_month', align: 'right', width: 80, sorter: (a, b) => (a.orders_month || 0) - (b.orders_month || 0) },
+      { title: '最后同步', dataIndex: 'last_google_sync_at', key: 'last_google_sync_at', width: 140, sorter: (a, b) => new Date(a.last_google_sync_at || 0) - new Date(b.last_google_sync_at || 0), render: (v) => v ? dayjs.utc(v).tz('Asia/Shanghai').format('YYYY-MM-DD HH:mm') : '-' },
     ]
 
     return (
