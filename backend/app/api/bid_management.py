@@ -44,6 +44,26 @@ class BatchSetKeywordCpcRequest(BaseModel):
     keywords: List[dict]  # [{"ad_group_id": "", "criterion_id": "", "cpc_amount": 0.0}]
 
 
+class ParseCpcSuggestionsRequest(BaseModel):
+    ai_report: str  # AI生成的报告文本
+
+
+class CpcAdjustmentItem(BaseModel):
+    campaign_name: str
+    campaign_id: Optional[str] = None
+    current_cpc: float
+    target_cpc: float
+    change_percent: float
+    reason: str
+    priority: str = "medium"
+
+
+class ApplyCpcChangesRequest(BaseModel):
+    mcc_id: int
+    customer_id: str
+    adjustments: List[dict]  # 从预览返回的调整列表
+
+
 @router.get("/strategies")
 async def get_bid_strategies(
     mcc_id: Optional[int] = None,
@@ -496,5 +516,268 @@ async def get_campaign_max_cpc(
         "bidding_strategy_type": strategy.bidding_strategy_type if strategy else None,
         "bidding_strategy_name": strategy.bidding_strategy_name if strategy else None,
     }
+
+
+@router.post("/parse-suggestions")
+async def parse_cpc_suggestions(
+    request: ParseCpcSuggestionsRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    解析AI报告中的CPC调整建议
+    从AI报告文本中提取JSON格式的cpc_adjustments
+    """
+    import json
+    import re
+    
+    ai_report = request.ai_report
+    
+    # 尝试从报告中提取JSON块
+    json_pattern = r'```json\s*([\s\S]*?)\s*```'
+    matches = re.findall(json_pattern, ai_report)
+    
+    cpc_adjustments = []
+    pause_campaigns = []
+    budget_adjustments = []
+    
+    for match in matches:
+        try:
+            data = json.loads(match)
+            if "cpc_adjustments" in data:
+                cpc_adjustments.extend(data["cpc_adjustments"])
+            if "pause_campaigns" in data:
+                pause_campaigns.extend(data["pause_campaigns"])
+            if "budget_adjustments" in data:
+                budget_adjustments.extend(data["budget_adjustments"])
+        except json.JSONDecodeError:
+            continue
+    
+    # 为每个CPC调整查找对应的广告系列信息
+    enriched_adjustments = []
+    for adj in cpc_adjustments:
+        campaign_name = adj.get("campaign_name", "")
+        
+        # 尝试在数据库中查找匹配的广告系列
+        strategy = db.query(CampaignBidStrategy).filter(
+            CampaignBidStrategy.user_id == current_user.id,
+            CampaignBidStrategy.campaign_name.contains(campaign_name)
+        ).first()
+        
+        enriched = {
+            **adj,
+            "found_in_db": strategy is not None,
+            "db_campaign_id": strategy.campaign_id if strategy else None,
+            "db_customer_id": strategy.customer_id if strategy else None,
+            "db_mcc_id": strategy.mcc_id if strategy else None,
+            "is_manual_cpc": strategy.is_manual_cpc if strategy else None,
+            "bidding_strategy_type": strategy.bidding_strategy_type if strategy else None,
+        }
+        enriched_adjustments.append(enriched)
+    
+    return {
+        "success": True,
+        "cpc_adjustments": enriched_adjustments,
+        "pause_campaigns": pause_campaigns,
+        "budget_adjustments": budget_adjustments,
+        "total_cpc_changes": len(enriched_adjustments),
+        "total_pause": len(pause_campaigns),
+        "total_budget_changes": len(budget_adjustments)
+    }
+
+
+@router.post("/preview-changes")
+async def preview_cpc_changes(
+    mcc_id: int,
+    campaign_names: List[str],
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    预览CPC变更
+    根据广告系列名称列表，返回可调整的关键词列表
+    """
+    from sqlalchemy import func
+    
+    result = []
+    
+    for campaign_name in campaign_names:
+        # 查找广告系列
+        strategy = db.query(CampaignBidStrategy).filter(
+            CampaignBidStrategy.user_id == current_user.id,
+            CampaignBidStrategy.mcc_id == mcc_id,
+            CampaignBidStrategy.campaign_name.contains(campaign_name)
+        ).first()
+        
+        if not strategy:
+            result.append({
+                "campaign_name": campaign_name,
+                "found": False,
+                "message": "未找到匹配的广告系列"
+            })
+            continue
+        
+        # 获取该广告系列下的关键词
+        keywords = db.query(KeywordBid).filter(
+            KeywordBid.user_id == current_user.id,
+            KeywordBid.campaign_id == strategy.campaign_id,
+            KeywordBid.status == "ENABLED"
+        ).all()
+        
+        result.append({
+            "campaign_name": strategy.campaign_name,
+            "campaign_id": strategy.campaign_id,
+            "customer_id": strategy.customer_id,
+            "mcc_id": strategy.mcc_id,
+            "found": True,
+            "is_manual_cpc": strategy.is_manual_cpc,
+            "bidding_strategy_type": strategy.bidding_strategy_type,
+            "keywords": [{
+                "criterion_id": k.criterion_id,
+                "ad_group_id": k.ad_group_id,
+                "keyword_text": k.keyword_text,
+                "match_type": k.match_type,
+                "current_cpc": k.max_cpc,
+                "avg_cpc": k.avg_cpc
+            } for k in keywords]
+        })
+    
+    return {
+        "success": True,
+        "campaigns": result
+    }
+
+
+@router.post("/apply-cpc-changes")
+async def apply_cpc_changes(
+    request: ApplyCpcChangesRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    应用CPC变更到Google Ads
+    批量修改多个广告系列的关键词CPC
+    """
+    from app.services.google_ads_service_account_sync import GoogleAdsServiceAccountSync
+    
+    mcc = db.query(GoogleMccAccount).filter(
+        GoogleMccAccount.id == request.mcc_id,
+        GoogleMccAccount.user_id == current_user.id
+    ).first()
+    
+    if not mcc:
+        raise HTTPException(status_code=404, detail="MCC账号不存在")
+    
+    try:
+        sync_service = GoogleAdsServiceAccountSync(db)
+        client = sync_service._get_google_ads_client(mcc)
+        
+        if not client:
+            raise HTTPException(status_code=500, detail="无法创建Google Ads客户端")
+        
+        results = []
+        success_count = 0
+        failed_count = 0
+        needs_manual_conversion = []
+        
+        for adj in request.adjustments:
+            campaign_name = adj.get("campaign_name", "")
+            campaign_id = adj.get("campaign_id", "")
+            target_cpc = adj.get("target_cpc", 0)
+            
+            # 查找广告系列策略
+            strategy = None
+            if campaign_id:
+                strategy = db.query(CampaignBidStrategy).filter(
+                    CampaignBidStrategy.user_id == current_user.id,
+                    CampaignBidStrategy.campaign_id == campaign_id
+                ).first()
+            else:
+                strategy = db.query(CampaignBidStrategy).filter(
+                    CampaignBidStrategy.user_id == current_user.id,
+                    CampaignBidStrategy.campaign_name.contains(campaign_name)
+                ).first()
+            
+            if not strategy:
+                results.append({
+                    "campaign_name": campaign_name,
+                    "success": False,
+                    "message": "未找到广告系列"
+                })
+                failed_count += 1
+                continue
+            
+            # 检查是否是人工出价
+            if not strategy.is_manual_cpc:
+                needs_manual_conversion.append({
+                    "campaign_name": strategy.campaign_name,
+                    "campaign_id": strategy.campaign_id,
+                    "customer_id": strategy.customer_id,
+                    "bidding_strategy_type": strategy.bidding_strategy_type
+                })
+                results.append({
+                    "campaign_name": strategy.campaign_name,
+                    "success": False,
+                    "message": f"需要先转为人工出价（当前: {strategy.bidding_strategy_type}）"
+                })
+                failed_count += 1
+                continue
+            
+            # 获取该广告系列的关键词并批量更新CPC
+            keywords = db.query(KeywordBid).filter(
+                KeywordBid.user_id == current_user.id,
+                KeywordBid.campaign_id == strategy.campaign_id,
+                KeywordBid.status == "ENABLED"
+            ).all()
+            
+            keyword_success = 0
+            keyword_failed = 0
+            
+            for kw in keywords:
+                cpc_micros = int(target_cpc * 1_000_000)
+                result = sync_service.set_keyword_cpc(
+                    client,
+                    strategy.customer_id,
+                    kw.ad_group_id,
+                    kw.criterion_id,
+                    cpc_micros
+                )
+                
+                if result["success"]:
+                    keyword_success += 1
+                    kw.max_cpc = target_cpc
+                    kw.last_sync_at = datetime.utcnow()
+                else:
+                    keyword_failed += 1
+            
+            db.commit()
+            
+            if keyword_failed == 0:
+                success_count += 1
+                results.append({
+                    "campaign_name": strategy.campaign_name,
+                    "success": True,
+                    "message": f"已更新 {keyword_success} 个关键词的CPC为 ${target_cpc}"
+                })
+            else:
+                failed_count += 1
+                results.append({
+                    "campaign_name": strategy.campaign_name,
+                    "success": False,
+                    "message": f"部分失败: {keyword_success} 成功, {keyword_failed} 失败"
+                })
+        
+        return {
+            "success": failed_count == 0,
+            "message": f"处理完成: {success_count} 成功, {failed_count} 失败",
+            "results": results,
+            "needs_manual_conversion": needs_manual_conversion
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"应用CPC变更失败: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
 
 

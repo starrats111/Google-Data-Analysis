@@ -1,11 +1,12 @@
 import React, { useMemo, useState, useEffect, useRef, useCallback } from 'react'
 import { Card, Table, Select, DatePicker, Space, message, Tag, Badge, Typography, Tooltip, Button, Popconfirm, Collapse, Modal, Spin, Input, Alert } from 'antd'
-import { RobotOutlined, SettingOutlined, CopyOutlined, ArrowLeftOutlined, CloseOutlined, DollarOutlined, ThunderboltOutlined } from '@ant-design/icons'
+import { RobotOutlined, SettingOutlined, CopyOutlined, ArrowLeftOutlined, CloseOutlined, DollarOutlined, ThunderboltOutlined, RocketOutlined } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
 import dayjs from 'dayjs'
 import api from '../services/api'
 import ExportButton from '../components/Export/ExportButton'
 import ReportViewer from '../components/ReportViewer/ReportViewer'
+import CpcDeployModal from '../components/CpcDeployModal'
 import { useAuth } from '../store/authStore'
 import './Analysis.css'
 
@@ -57,6 +58,9 @@ const Analysis = () => {
   // 出价策略状态
   const [bidStrategies, setBidStrategies] = useState({})  // {campaign_id: strategy_info}
   const [changingToManual, setChangingToManual] = useState({})  // {campaign_id: loading}
+  
+  // CPC部署弹窗状态
+  const [cpcDeployModalOpen, setCpcDeployModalOpen] = useState(false)
 
   const fetchAccounts = async () => {
     try {
@@ -770,6 +774,14 @@ G) 综述
                 返回列表
               </Button>
               <Space>
+                <Button 
+                  type="primary"
+                  icon={<RocketOutlined />}
+                  onClick={() => setCpcDeployModalOpen(true)}
+                  style={{ background: '#52c41a', borderColor: '#52c41a' }}
+                >
+                  一键部署CPC
+                </Button>
                 <Button 
                   icon={<CopyOutlined />}
                   onClick={() => {
@@ -1537,6 +1549,17 @@ G) 综述
         />
         )}
       </Card>
+
+      {/* CPC部署弹窗 */}
+      <CpcDeployModal
+        visible={cpcDeployModalOpen}
+        onClose={() => setCpcDeployModalOpen(false)}
+        aiReport={aiAnalysisResult?.analysis || ''}
+        onSuccess={() => {
+          setCpcDeployModalOpen(false)
+          message.success('CPC部署成功！')
+        }}
+      />
     </div>
   )
 }

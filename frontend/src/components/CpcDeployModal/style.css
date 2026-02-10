@@ -1,0 +1,13 @@
+.cpc-deploy-modal .ant-table-thead > tr > th {
+  background: #fafafa;
+  font-weight: 600;
+}
+
+.cpc-deploy-modal .ant-table-tbody > tr:hover > td {
+  background: #e6f7ff;
+}
+
+.cpc-deploy-modal .campaign-disabled {
+  opacity: 0.6;
+}
+
