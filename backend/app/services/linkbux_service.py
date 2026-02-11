@@ -255,6 +255,18 @@ class LinkBuxService:
                 item.get("sale_comm") or item.get("commission_amount") or item.get("commission") or 0
             )
             
+            # 提取商家ID（MID）：尝试多个可能的字段
+            # LinkBux API可能返回: mcid, merchant_id, brand_id, m_id 等
+            mid_value = (
+                item.get("mcid") or 
+                item.get("merchant_id") or 
+                item.get("brand_id") or 
+                item.get("m_id") or
+                item.get("program_id") or
+                item.get("advertiser_id")
+            )
+            merchant_id = str(mid_value).strip() if mid_value else None
+            
             transactions.append({
                 "transaction_id": item.get("order_id") or item.get("linkbux_id"),
                 "transaction_time": transaction_time,
@@ -262,6 +274,7 @@ class LinkBuxService:
                 "commission_amount": commission_amount,
                 "status": item.get("status", "Pending"),
                 "merchant": item.get("merchant_name") or item.get("mcid"),
+                "merchant_id": merchant_id,  # 添加MID提取
                 "raw_data": item
             })
         
