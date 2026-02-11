@@ -19,6 +19,22 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/bids", tags=["bids"])
 
 
+def dollars_to_micros(amount: float) -> int:
+    """
+    将美元金额转换为 micros（微单位）
+    确保结果是 10000 的倍数（Google Ads 要求 CPC 必须是 $0.01 的倍数）
+    
+    Args:
+        amount: 美元金额（如 0.37）
+    Returns:
+        micros 值（如 370000）
+    """
+    # 先四舍五入到最近的 0.01 美元
+    rounded_cents = round(amount * 100)
+    # 转换为 micros（1 美分 = 10000 micros）
+    return rounded_cents * 10000
+
+
 class SyncBidDataRequest(BaseModel):
     mcc_id: int
 
@@ -318,7 +334,7 @@ async def change_to_manual_cpc(
         client, _ = client_result
         
         # 执行切换
-        cpc_ceiling = int(request.cpc_bid_ceiling * 1_000_000) if request.cpc_bid_ceiling else None
+        cpc_ceiling = dollars_to_micros(request.cpc_bid_ceiling) if request.cpc_bid_ceiling else None
         result = sync_service.change_to_manual_cpc(
             client,
             request.customer_id,
@@ -385,7 +401,7 @@ async def set_keyword_cpc(
             raise HTTPException(status_code=500, detail="无法创建Google Ads客户端")
         
         client, _ = client_result
-        cpc_micros = int(request.cpc_amount * 1_000_000)
+        cpc_micros = dollars_to_micros(request.cpc_amount)
         result = sync_service.set_keyword_cpc(
             client,
             request.customer_id,
@@ -447,7 +463,7 @@ async def batch_set_keyword_cpc(
         failed_count = 0
         
         for kw in request.keywords:
-            cpc_micros = int(kw["cpc_amount"] * 1_000_000)
+            cpc_micros = dollars_to_micros(kw["cpc_amount"])
             result = sync_service.set_keyword_cpc(
                 client,
                 request.customer_id,
@@ -741,7 +757,7 @@ async def apply_cpc_changes(
             keyword_failed = 0
             
             for kw in keywords:
-                cpc_micros = int(target_cpc * 1_000_000)
+                cpc_micros = dollars_to_micros(target_cpc)
                 result = sync_service.set_keyword_cpc(
                     client,
                     strategy.customer_id,
@@ -978,7 +994,7 @@ async def update_keyword(
             # 添加新关键词
             new_keyword_text = request.keyword_text or keyword.keyword_text
             new_match_type = request.match_type or keyword.match_type
-            new_cpc = request.cpc_bid_micros or (int(keyword.max_cpc * 1_000_000) if keyword.max_cpc else None)
+            new_cpc = request.cpc_bid_micros or (dollars_to_micros(keyword.max_cpc) if keyword.max_cpc else None)
             
             result = sync_service.add_keyword(
                 client,
