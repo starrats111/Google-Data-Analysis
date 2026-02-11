@@ -656,7 +656,7 @@ async def get_platform_transactions(
                 "platform": txn.platform,
                 "merchant_id": txn.merchant_id,
                 "merchant": txn.merchant,
-                "order_id": txn.order_id,
+                "transaction_id": txn.transaction_id,  # 交易ID
                 "order_amount": round(float(txn.order_amount or 0), 2),
                 "commission_amount": round(float(txn.commission_amount or 0), 2),
                 "status": txn.status,

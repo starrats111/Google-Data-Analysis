@@ -379,10 +379,10 @@ const DataCenter = () => {
       ellipsis: true,
     },
     {
-      title: '订单号',
-      dataIndex: 'order_id',
-      key: 'order_id',
-      width: 120,
+      title: '交易ID',
+      dataIndex: 'transaction_id',
+      key: 'transaction_id',
+      width: 150,
       ellipsis: true,
     },
     {
