@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react'
-import { Card, Table, DatePicker, Select, Tabs, Space, Statistic, Row, Col, message, Skeleton, Tag, Input, Modal, Spin } from 'antd'
-import { SearchOutlined, DollarOutlined } from '@ant-design/icons'
+import { Card, Table, DatePicker, Select, Tabs, Space, Statistic, Row, Col, message, Skeleton, Tag, Input, Modal, Spin, Button } from 'antd'
+import { SearchOutlined, DollarOutlined, ReloadOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import api from '../services/api'
 import { useAuth } from '../store/authStore'
@@ -388,6 +388,21 @@ const DataCenter = () => {
     totalOrders: safePlatformData.reduce((sum, item) => sum + (item.orders || 0), 0),
   }
 
+  // 计算 ROI (佣金/费用)
+  const roi = googleStats.totalCost > 0 
+    ? (platformStats.totalCommission / googleStats.totalCost).toFixed(2) 
+    : '0.00'
+
+  // 强制刷新（清除缓存）
+  const handleRefresh = () => {
+    // 清除缓存
+    dataCache.google = { data: null, timestamp: 0, params: null }
+    dataCache.platform = { data: null, timestamp: 0, params: null }
+    // 重新获取数据
+    fetchData()
+    message.success('正在刷新数据...')
+  }
+
   const tabItems = [
     {
       key: 'google',
@@ -481,7 +496,7 @@ const DataCenter = () => {
         <div>
           {/* 统计卡片 */}
           <Row gutter={16} style={{ marginBottom: 16 }}>
-            <Col xs={12} sm={8}>
+            <Col xs={12} sm={6}>
               <Card size="small">
                 <Statistic
                   title="总佣金"
@@ -492,12 +507,21 @@ const DataCenter = () => {
                 />
               </Card>
             </Col>
-            <Col xs={12} sm={8}>
+            <Col xs={12} sm={6}>
               <Card size="small">
                 <Statistic title="总订单" value={platformStats.totalOrders} />
               </Card>
             </Col>
-            <Col xs={24} sm={8}>
+            <Col xs={12} sm={6}>
+              <Card size="small">
+                <Statistic 
+                  title="ROI (佣金/费用)" 
+                  value={roi} 
+                  valueStyle={{ color: parseFloat(roi) >= 1 ? '#3f8600' : '#cf1322' }}
+                />
+              </Card>
+            </Col>
+            <Col xs={12} sm={6}>
               <Card size="small">
                 <Space>
                   <span>视图模式：</span>
@@ -581,6 +605,13 @@ const DataCenter = () => {
         title="数据中心"
         extra={
           <Space wrap>
+            <Button
+              icon={<ReloadOutlined spin={loading} />}
+              onClick={handleRefresh}
+              loading={loading}
+            >
+              刷新数据
+            </Button>
             <RangePicker
               value={dateRange}
               onChange={setDateRange}
