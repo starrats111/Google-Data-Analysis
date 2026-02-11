@@ -314,7 +314,14 @@ const DataCenter = () => {
       dataIndex: 'rejected_commission',
       key: 'rejected_commission',
       width: 110,
-      render: (val) => val ? <span style={{ color: '#cf1322' }}>${val.toFixed(2)}</span> : '-',
+      sorter: (a, b) => (a.rejected_commission || 0) - (b.rejected_commission || 0),
+      render: (val) => {
+        const amount = val || 0
+        if (amount > 0) {
+          return <span style={{ color: '#cf1322', fontWeight: 'bold' }}>${amount.toFixed(2)}</span>
+        }
+        return <span style={{ color: '#999' }}>$0.00</span>
+      },
     },
     {
       title: '净佣金($)',
@@ -386,6 +393,7 @@ const DataCenter = () => {
   const platformStats = {
     totalCommission: safePlatformData.reduce((sum, item) => sum + (item.total_commission || 0), 0),
     totalOrders: safePlatformData.reduce((sum, item) => sum + (item.orders || 0), 0),
+    totalRejected: safePlatformData.reduce((sum, item) => sum + (item.rejected_commission || 0), 0),
   }
 
   // 计算 ROI (佣金/费用)
@@ -496,7 +504,7 @@ const DataCenter = () => {
         <div>
           {/* 统计卡片 */}
           <Row gutter={16} style={{ marginBottom: 16 }}>
-            <Col xs={12} sm={6}>
+            <Col xs={12} sm={4}>
               <Card size="small">
                 <Statistic
                   title="总佣金"
@@ -507,12 +515,34 @@ const DataCenter = () => {
                 />
               </Card>
             </Col>
-            <Col xs={12} sm={6}>
+            <Col xs={12} sm={4}>
+              <Card size="small">
+                <Statistic 
+                  title="拒付佣金" 
+                  value={platformStats.totalRejected} 
+                  precision={2}
+                  prefix="$"
+                  valueStyle={{ color: platformStats.totalRejected > 0 ? '#cf1322' : '#999' }}
+                />
+              </Card>
+            </Col>
+            <Col xs={12} sm={4}>
+              <Card size="small">
+                <Statistic 
+                  title="净佣金" 
+                  value={platformStats.totalCommission - platformStats.totalRejected} 
+                  precision={2}
+                  prefix="$"
+                  valueStyle={{ color: '#1890ff', fontWeight: 'bold' }}
+                />
+              </Card>
+            </Col>
+            <Col xs={12} sm={4}>
               <Card size="small">
                 <Statistic title="总订单" value={platformStats.totalOrders} />
               </Card>
             </Col>
-            <Col xs={12} sm={6}>
+            <Col xs={12} sm={4}>
               <Card size="small">
                 <Statistic 
                   title="ROI (佣金/费用)" 
@@ -521,14 +551,14 @@ const DataCenter = () => {
                 />
               </Card>
             </Col>
-            <Col xs={12} sm={6}>
+            <Col xs={12} sm={4}>
               <Card size="small">
                 <Space>
-                  <span>视图模式：</span>
+                  <span>视图：</span>
                   <Select
                     value={viewMode}
                     onChange={setViewMode}
-                    style={{ width: 100 }}
+                    style={{ width: 80 }}
                     size="small"
                   >
                     <Option value="summary">汇总</Option>
