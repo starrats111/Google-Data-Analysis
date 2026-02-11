@@ -597,14 +597,35 @@ async def parse_cpc_suggestions(
         }
         enriched_adjustments.append(enriched)
     
+    # 为每个预算调整查找对应的广告系列信息
+    enriched_budget_adjustments = []
+    for adj in budget_adjustments:
+        campaign_name = adj.get("campaign_name", "")
+        
+        # 尝试在数据库中查找匹配的广告系列
+        strategy = db.query(CampaignBidStrategy).filter(
+            CampaignBidStrategy.user_id == current_user.id,
+            CampaignBidStrategy.campaign_name.contains(campaign_name)
+        ).first()
+        
+        enriched = {
+            **adj,
+            "found_in_db": strategy is not None,
+            "db_campaign_id": strategy.campaign_id if strategy else None,
+            "db_customer_id": strategy.customer_id if strategy else None,
+            "db_mcc_id": strategy.mcc_id if strategy else None,
+            "current_budget": strategy.daily_budget if strategy else None,
+        }
+        enriched_budget_adjustments.append(enriched)
+    
     return {
         "success": True,
         "cpc_adjustments": enriched_adjustments,
         "pause_campaigns": pause_campaigns,
-        "budget_adjustments": budget_adjustments,
+        "budget_adjustments": enriched_budget_adjustments,
         "total_cpc_changes": len(enriched_adjustments),
         "total_pause": len(pause_campaigns),
-        "total_budget_changes": len(budget_adjustments)
+        "total_budget_changes": len(enriched_budget_adjustments)
     }
 
 
