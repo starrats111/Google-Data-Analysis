@@ -9,8 +9,7 @@ import json
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app.database import SessionLocal
-from app.models.affiliate_account import AffiliateAccount
-from app.models.affiliate_platform import AffiliatePlatform
+from app.models.affiliate_account import AffiliateAccount, AffiliatePlatform
 from app.models.user import User
 
 db = SessionLocal()
@@ -24,7 +23,7 @@ platforms = db.query(AffiliatePlatform).all()
 print(f"\n已配置平台 ({len(platforms)} 个):")
 print("-" * 80)
 for p in platforms:
-    print(f"  ID={p.id}, name={p.name}, code={p.code}")
+    print(f"  ID={p.id}, name={p.platform_name}, code={p.platform_code}")
     if hasattr(p, 'api_url') and p.api_url:
         print(f"    API URL: {p.api_url}")
     if hasattr(p, 'api_config') and p.api_config:
@@ -50,7 +49,7 @@ for user in users:
     
     for acc in accounts:
         platform = db.query(AffiliatePlatform).filter(AffiliatePlatform.id == acc.platform_id).first()
-        platform_name = platform.name if platform else "未知"
+        platform_name = platform.platform_name if platform else "未知"
         
         # 检查 API Token
         token = None
@@ -83,14 +82,14 @@ print("特别检查：BSH 平台配置")
 print("=" * 80)
 
 bsh_platform = db.query(AffiliatePlatform).filter(
-    AffiliatePlatform.name.ilike('%bsh%') | 
-    AffiliatePlatform.name.ilike('%brandspark%') |
-    AffiliatePlatform.code.ilike('%brandspark%')
+    AffiliatePlatform.platform_name.ilike('%bsh%') | 
+    AffiliatePlatform.platform_name.ilike('%brandspark%') |
+    AffiliatePlatform.platform_code.ilike('%brandspark%')
 ).first()
 
 if bsh_platform:
-    print(f"BSH 平台: ID={bsh_platform.id}, name={bsh_platform.name}")
-    print(f"  code: {bsh_platform.code}")
+    print(f"BSH 平台: ID={bsh_platform.id}, name={bsh_platform.platform_name}")
+    print(f"  code: {bsh_platform.platform_code}")
     if hasattr(bsh_platform, 'api_url'):
         print(f"  api_url: {bsh_platform.api_url}")
     if hasattr(bsh_platform, 'api_config'):
@@ -121,8 +120,8 @@ print("=" * 80)
 wj02 = db.query(User).filter(User.username == 'wj02').first()
 if wj02:
     cg_platform = db.query(AffiliatePlatform).filter(
-        AffiliatePlatform.name.ilike('%cg%') | 
-        AffiliatePlatform.code.ilike('%collabglow%')
+        AffiliatePlatform.platform_name.ilike('%cg%') | 
+        AffiliatePlatform.platform_code.ilike('%collabglow%')
     ).first()
     
     if cg_platform:
