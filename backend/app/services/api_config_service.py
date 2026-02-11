@@ -81,11 +81,12 @@ PLATFORM_DEFAULT_CONFIGS = {
         "retry_delay": 2
     },
     "bsh": {
-        "base_url": "",  # 需要从账号备注中配置
+        "base_url": "https://api.brandsparkhub.com/api",
         "transaction_endpoint": "/transaction",
         "timeout": 60,
         "max_retries": 3,
-        "retry_delay": 2
+        "retry_delay": 2,
+        "source": "brandsparkhub"  # BSH API 需要的 source 参数
     },
     "cf": {
         "base_url": "",  # 需要从账号备注中配置
@@ -132,8 +133,16 @@ class ApiConfigService:
             合并后的API配置字典
         """
         # 获取平台默认配置
+        # 优先使用 platform_name（如 BSH），其次使用 platform_code
+        platform_name = account.platform.platform_name if account.platform else None
         platform_code = account.platform.platform_code if account.platform else None
-        default_config = ApiConfigService.get_platform_config(platform_code)
+        
+        # 尝试通过 platform_name 获取配置（如 "BSH" -> "bsh"）
+        default_config = ApiConfigService.get_platform_config(platform_name)
+        
+        # 如果通过 name 没找到，尝试通过 code
+        if not default_config:
+            default_config = ApiConfigService.get_platform_config(platform_code)
         
         # 从账号备注中读取自定义配置
         custom_config = {}
@@ -142,7 +151,8 @@ class ApiConfigService:
                 notes_data = json.loads(account.notes)
                 
                 # 根据平台类型提取相关配置
-                platform_code_lower = (platform_code or "").lower()
+                # 优先使用 platform_name 进行匹配
+                platform_code_lower = (platform_name or platform_code or "").lower()
                 
                 if platform_code_lower in ["rewardoo", "rw"]:
                     # Rewardoo配置

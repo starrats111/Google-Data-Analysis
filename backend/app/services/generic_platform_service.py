@@ -68,8 +68,20 @@ class GenericPlatformService(PlatformServiceBase):
             "Authorization": f"Bearer {self.token}"
         }
         
+        # 获取平台特定的source参数（用于BSH等平台）
+        source = self.api_config.get("source", self.platform_code)
+        
         # 尝试多种payload格式
         payloads = [
+            # BSH 格式（最先尝试）
+            {
+                "source": source,
+                "token": self.token,
+                "beginDate": begin_date,
+                "endDate": end_date,
+                "curPage": 1,
+                "perPage": 2000  # 最大每页数量
+            },
             {
                 "token": self.token,
                 "begin_date": begin_date,
@@ -196,17 +208,31 @@ class GenericPlatformService(PlatformServiceBase):
                 continue
             
             # 提取商家ID（MID）：尝试多个可能的字段
+            # BSH 使用 brand_id 和 mcid
             brand_id = item.get("brand_id") or item.get("brandId") or item.get("m_id") or item.get("mcid") or item.get("merchant_id")
             merchant_id = str(brand_id).strip() if brand_id else None
             
+            # BSH 使用 order_time (Unix timestamp) 作为交易时间
+            transaction_time = item.get("transaction_time") or item.get("order_date") or item.get("date") or item.get("settlement_date")
+            if not transaction_time:
+                # BSH 格式：order_time 是 Unix 时间戳
+                order_time = item.get("order_time")
+                if order_time and isinstance(order_time, (int, float)):
+                    from datetime import datetime
+                    transaction_time = datetime.fromtimestamp(order_time).strftime("%Y-%m-%d %H:%M:%S")
+            
+            # BSH 状态映射：Pending -> pending, Approved -> approved, Rejected -> rejected
+            raw_status = str(item.get("status", "") or item.get("transaction_status", "") or "").strip()
+            status = raw_status.lower() if raw_status else "pending"
+            
             extracted.append({
-                "transaction_id": item.get("transaction_id") or item.get("id") or item.get("order_id") or f"{self.platform_code}_{len(extracted)}",
-                "transaction_time": item.get("transaction_time") or item.get("order_date") or item.get("date") or item.get("settlement_date"),
-                "merchant": item.get("merchant") or item.get("brand") or item.get("brand_name") or item.get("mcid") or "",
+                "transaction_id": item.get("transaction_id") or item.get("brandsparkhub_id") or item.get("id") or item.get("order_id") or f"{self.platform_code}_{len(extracted)}",
+                "transaction_time": transaction_time,
+                "merchant": item.get("merchant") or item.get("merchant_name") or item.get("brand") or item.get("brand_name") or item.get("mcid") or "",
                 "order_amount": float(item.get("order_amount", 0) or item.get("sale_amount", 0) or item.get("amount", 0) or 0),
                 "commission_amount": float(item.get("commission_amount", 0) or item.get("commission", 0) or item.get("sale_comm", 0) or 0),
-                "status": str(item.get("status", "") or item.get("transaction_status", "") or "").strip(),
-                "reject_reason": item.get("reject_reason") or item.get("rejection_reason") or item.get("reason") or "",
+                "status": status,
+                "reject_reason": item.get("reject_reason") or item.get("rejection_reason") or item.get("reason") or item.get("note") or "",
                 "merchant_id": merchant_id  # MID - 用于和广告系列名匹配
             })
         
