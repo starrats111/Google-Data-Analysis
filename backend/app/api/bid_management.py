@@ -1066,3 +1066,208 @@ async def get_ad_groups(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# ============ 预算管理 API ============
+
+class SetBudgetRequest(BaseModel):
+    mcc_id: int
+    customer_id: str
+    campaign_id: str
+    new_budget: float  # 新的每日预算（美元）
+
+
+class BatchSetBudgetRequest(BaseModel):
+    mcc_id: int
+    customer_id: str
+    campaigns: List[dict]  # [{"campaign_id": "xxx", "new_budget": 50.0}]
+
+
+@router.get("/campaign-budget/{mcc_id}/{customer_id}/{campaign_id}")
+async def get_campaign_budget(
+    mcc_id: int,
+    customer_id: str,
+    campaign_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """获取广告系列的当前预算"""
+    mcc = db.query(GoogleMccAccount).filter(
+        GoogleMccAccount.id == mcc_id,
+        GoogleMccAccount.user_id == current_user.id
+    ).first()
+    
+    if not mcc:
+        raise HTTPException(status_code=404, detail="MCC账号不存在")
+    
+    try:
+        sync_service = GoogleAdsServiceAccountSync(db)
+        client_result = sync_service._create_client(mcc)
+        
+        if not client_result:
+            raise HTTPException(status_code=500, detail="无法创建Google Ads客户端")
+        
+        client, _ = client_result
+        result = sync_service.get_campaign_budget(client, customer_id, campaign_id)
+        
+        if not result["success"]:
+            raise HTTPException(status_code=400, detail=result["message"])
+        
+        return result
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/set-budget")
+async def set_campaign_budget(
+    request: SetBudgetRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """设置广告系列的每日预算"""
+    mcc = db.query(GoogleMccAccount).filter(
+        GoogleMccAccount.id == request.mcc_id,
+        GoogleMccAccount.user_id == current_user.id
+    ).first()
+    
+    if not mcc:
+        raise HTTPException(status_code=404, detail="MCC账号不存在")
+    
+    try:
+        sync_service = GoogleAdsServiceAccountSync(db)
+        client_result = sync_service._create_client(mcc)
+        
+        if not client_result:
+            raise HTTPException(status_code=500, detail="无法创建Google Ads客户端")
+        
+        client, _ = client_result
+        
+        # 先获取当前预算信息（包括budget_id）
+        budget_info = sync_service.get_campaign_budget(client, request.customer_id, request.campaign_id)
+        if not budget_info["success"]:
+            raise HTTPException(status_code=400, detail=f"获取预算信息失败: {budget_info['message']}")
+        
+        budget_id = budget_info["budget_id"]
+        new_budget_micros = dollars_to_micros(request.new_budget)
+        
+        # 设置新预算
+        result = sync_service.set_campaign_budget(client, request.customer_id, budget_id, new_budget_micros)
+        
+        if not result["success"]:
+            raise HTTPException(status_code=400, detail=result["message"])
+        
+        # 更新本地数据库中的记录（如果有）
+        strategy = db.query(CampaignBidStrategy).filter(
+            CampaignBidStrategy.campaign_id == request.campaign_id,
+            CampaignBidStrategy.mcc_id == request.mcc_id
+        ).first()
+        
+        if strategy:
+            # 如果模型有daily_budget字段，更新它
+            if hasattr(strategy, 'daily_budget'):
+                strategy.daily_budget = request.new_budget
+                strategy.updated_at = datetime.utcnow()
+                db.commit()
+        
+        return {
+            "success": True,
+            "message": f"每日预算已设置为 ${request.new_budget:.2f}",
+            "campaign_id": request.campaign_id,
+            "new_budget": request.new_budget
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/batch-set-budget")
+async def batch_set_campaign_budget(
+    request: BatchSetBudgetRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """批量设置广告系列的每日预算"""
+    mcc = db.query(GoogleMccAccount).filter(
+        GoogleMccAccount.id == request.mcc_id,
+        GoogleMccAccount.user_id == current_user.id
+    ).first()
+    
+    if not mcc:
+        raise HTTPException(status_code=404, detail="MCC账号不存在")
+    
+    try:
+        sync_service = GoogleAdsServiceAccountSync(db)
+        client_result = sync_service._create_client(mcc)
+        
+        if not client_result:
+            raise HTTPException(status_code=500, detail="无法创建Google Ads客户端")
+        
+        client, _ = client_result
+        
+        results = []
+        success_count = 0
+        
+        for campaign in request.campaigns:
+            campaign_id = campaign.get("campaign_id")
+            new_budget = campaign.get("new_budget")
+            
+            if not campaign_id or new_budget is None:
+                results.append({
+                    "campaign_id": campaign_id,
+                    "success": False,
+                    "message": "缺少campaign_id或new_budget"
+                })
+                continue
+            
+            try:
+                # 获取预算ID
+                budget_info = sync_service.get_campaign_budget(client, request.customer_id, campaign_id)
+                if not budget_info["success"]:
+                    results.append({
+                        "campaign_id": campaign_id,
+                        "success": False,
+                        "message": budget_info["message"]
+                    })
+                    continue
+                
+                budget_id = budget_info["budget_id"]
+                new_budget_micros = dollars_to_micros(new_budget)
+                
+                # 设置预算
+                result = sync_service.set_campaign_budget(client, request.customer_id, budget_id, new_budget_micros)
+                
+                if result["success"]:
+                    success_count += 1
+                    results.append({
+                        "campaign_id": campaign_id,
+                        "success": True,
+                        "new_budget": new_budget
+                    })
+                else:
+                    results.append({
+                        "campaign_id": campaign_id,
+                        "success": False,
+                        "message": result["message"]
+                    })
+                    
+            except Exception as e:
+                results.append({
+                    "campaign_id": campaign_id,
+                    "success": False,
+                    "message": str(e)
+                })
+        
+        return {
+            "success": True,
+            "message": f"批量设置完成: {success_count}/{len(request.campaigns)} 个成功",
+            "results": results
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+

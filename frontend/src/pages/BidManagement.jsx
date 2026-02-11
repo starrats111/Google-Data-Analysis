@@ -69,6 +69,14 @@ const BidManagement = () => {
   // 批量操作状态
   const [selectedStrategies, setSelectedStrategies] = useState([])
   const [batchChangeLoading, setBatchChangeLoading] = useState(false)
+  
+  // 预算管理状态
+  const [setBudgetModalVisible, setSetBudgetModalVisible] = useState(false)
+  const [selectedCampaignForBudget, setSelectedCampaignForBudget] = useState(null)
+  const [newBudgetValue, setNewBudgetValue] = useState(null)
+  const [setBudgetLoading, setSetBudgetLoading] = useState(false)
+  const [batchBudgetModalVisible, setBatchBudgetModalVisible] = useState(false)
+  const [batchBudgetValue, setBatchBudgetValue] = useState(null)
 
   // 加载MCC列表
   const loadMccList = useCallback(async () => {
@@ -190,6 +198,59 @@ const BidManagement = () => {
       message.error('设置CPC失败: ' + (error.response?.data?.detail || error.message))
     } finally {
       setSetCpcLoading(false)
+    }
+  }
+
+  // 设置广告系列预算
+  const handleSetBudget = async () => {
+    if (!selectedCampaignForBudget || !newBudgetValue) return
+    setSetBudgetLoading(true)
+    try {
+      await api.post('/api/bids/set-budget', {
+        mcc_id: selectedMcc,
+        customer_id: selectedCampaignForBudget.customer_id,
+        campaign_id: selectedCampaignForBudget.campaign_id,
+        new_budget: newBudgetValue
+      })
+      message.success(`每日预算已设置为 $${newBudgetValue.toFixed(2)}`)
+      setSetBudgetModalVisible(false)
+      setSelectedCampaignForBudget(null)
+      setNewBudgetValue(null)
+      loadStrategies()
+    } catch (error) {
+      console.error('设置预算失败:', error)
+      message.error('设置预算失败: ' + (error.response?.data?.detail || error.message))
+    } finally {
+      setSetBudgetLoading(false)
+    }
+  }
+
+  // 批量设置预算
+  const handleBatchSetBudget = async () => {
+    if (selectedStrategies.length === 0 || !batchBudgetValue) return
+    setSetBudgetLoading(true)
+    try {
+      const campaigns = selectedStrategies.map(s => ({
+        campaign_id: s.campaign_id,
+        new_budget: batchBudgetValue
+      }))
+      
+      const response = await api.post('/api/bids/batch-set-budget', {
+        mcc_id: selectedMcc,
+        customer_id: selectedStrategies[0].customer_id,
+        campaigns
+      })
+      
+      message.success(response.data.message)
+      setBatchBudgetModalVisible(false)
+      setBatchBudgetValue(null)
+      setSelectedStrategies([])
+      loadStrategies()
+    } catch (error) {
+      console.error('批量设置预算失败:', error)
+      message.error('批量设置预算失败: ' + (error.response?.data?.detail || error.message))
+    } finally {
+      setSetBudgetLoading(false)
     }
   }
 
@@ -434,6 +495,17 @@ const BidManagement = () => {
             }}
           >
             查看关键词
+          </Button>
+          <Button
+            size="small"
+            icon={<DollarOutlined />}
+            onClick={() => {
+              setSelectedCampaignForBudget(record)
+              setNewBudgetValue(record.daily_budget || 50)
+              setSetBudgetModalVisible(true)
+            }}
+          >
+            改预算
           </Button>
           {!record.is_manual_cpc && (
             <Popconfirm
@@ -688,6 +760,22 @@ const BidManagement = () => {
                       一键转人工出价
                     </Button>
                   </Popconfirm>
+                  <Button
+                    type="primary"
+                    icon={<DollarOutlined />}
+                    onClick={() => {
+                      setBatchBudgetValue(50)
+                      setBatchBudgetModalVisible(true)
+                    }}
+                    style={{ 
+                      background: '#52c41a',
+                      border: 'none',
+                      fontWeight: 600,
+                      boxShadow: '0 2px 8px rgba(0,0,0,0.15)'
+                    }}
+                  >
+                    批量改预算
+                  </Button>
                 </Space>
               </div>
             )}
@@ -900,6 +988,95 @@ const BidManagement = () => {
             </div>
           </div>
         )}
+      </Modal>
+
+      {/* 设置预算弹窗 */}
+      <Modal
+        title="设置每日预算"
+        open={setBudgetModalVisible}
+        onCancel={() => {
+          setSetBudgetModalVisible(false)
+          setSelectedCampaignForBudget(null)
+          setNewBudgetValue(null)
+        }}
+        onOk={handleSetBudget}
+        confirmLoading={setBudgetLoading}
+        okText="确认设置"
+        cancelText="取消"
+      >
+        {selectedCampaignForBudget && (
+          <div>
+            <Paragraph>
+              <Text type="secondary">广告系列：</Text>
+              <Text strong>{selectedCampaignForBudget.campaign_name}</Text>
+            </Paragraph>
+            <Paragraph>
+              <Text type="secondary">当前预算：</Text>
+              <Text>
+                {selectedCampaignForBudget.daily_budget
+                  ? `$${selectedCampaignForBudget.daily_budget.toFixed(2)}/天`
+                  : '未设置'}
+              </Text>
+            </Paragraph>
+            <div style={{ marginTop: 16 }}>
+              <Text>新的每日预算：</Text>
+              <InputNumber
+                prefix="$"
+                suffix="/天"
+                value={newBudgetValue}
+                onChange={setNewBudgetValue}
+                min={1}
+                max={10000}
+                step={5}
+                precision={2}
+                style={{ width: 180, marginLeft: 8 }}
+              />
+            </div>
+          </div>
+        )}
+      </Modal>
+
+      {/* 批量设置预算弹窗 */}
+      <Modal
+        title={`批量设置预算 (${selectedStrategies.length} 个广告系列)`}
+        open={batchBudgetModalVisible}
+        onCancel={() => {
+          setBatchBudgetModalVisible(false)
+          setBatchBudgetValue(null)
+        }}
+        onOk={handleBatchSetBudget}
+        confirmLoading={setBudgetLoading}
+        okText="确认设置"
+        cancelText="取消"
+      >
+        <Alert
+          message="将为选中的所有广告系列设置相同的每日预算"
+          type="info"
+          showIcon
+          style={{ marginBottom: 16 }}
+        />
+        <div>
+          <Text>新的每日预算：</Text>
+          <InputNumber
+            prefix="$"
+            suffix="/天"
+            value={batchBudgetValue}
+            onChange={setBatchBudgetValue}
+            min={1}
+            max={10000}
+            step={5}
+            precision={2}
+            style={{ width: 180, marginLeft: 8 }}
+          />
+        </div>
+        <div style={{ marginTop: 16 }}>
+          <Text type="secondary">将应用于：</Text>
+          <ul style={{ marginTop: 8, maxHeight: 200, overflow: 'auto' }}>
+            {selectedStrategies.map(s => (
+              <li key={s.id}>{s.campaign_name}</li>
+            ))}
+          </ul>
+        </div>
       </Modal>
 
       {/* 添加关键词弹窗 */}

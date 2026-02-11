@@ -26,10 +26,10 @@ const DataCenter = () => {
   const [platformSummary, setPlatformSummary] = useState([])
   const [viewMode, setViewMode] = useState('summary') // summary | detail
   
-  // 日期默认为本月1日到昨天
-  const yesterday = dayjs().subtract(1, 'day')
+  // 日期默认为本月1日到今天
+  const today = dayjs()
   const monthStart = dayjs().startOf('month')
-  const [dateRange, setDateRange] = useState([monthStart, yesterday])
+  const [dateRange, setDateRange] = useState([monthStart, today])
   
   // 筛选
   const [statusFilter, setStatusFilter] = useState('ENABLED')
@@ -454,14 +454,42 @@ const DataCenter = () => {
     ? (platformStats.totalCommission / googleStats.totalCost).toFixed(2) 
     : '0.00'
 
-  // 强制刷新（清除缓存）
-  const handleRefresh = () => {
-    // 清除缓存
-    dataCache.google = { data: null, timestamp: 0, params: null }
-    dataCache.platform = { data: null, timestamp: 0, params: null }
-    // 重新获取数据
-    fetchData()
-    message.success('正在刷新数据...')
+  // 同步状态
+  const [syncing, setSyncing] = useState(false)
+  
+  // 实时同步（从API获取最新数据）
+  const handleRefresh = async () => {
+    setSyncing(true)
+    message.loading({ content: '正在从平台同步最新数据（最近3天）...', key: 'sync', duration: 0 })
+    
+    try {
+      // 根据当前tab调用对应的同步API
+      if (activeTab === 'google') {
+        const response = await api.post('/api/google-ads-aggregate/sync-realtime')
+        message.success({ 
+          content: `Google Ads同步完成: ${response.data.synced_mccs}/${response.data.total_mccs} 个MCC, ${response.data.total_records} 条记录`, 
+          key: 'sync' 
+        })
+      } else {
+        const response = await api.post('/api/platform-data/sync-realtime')
+        message.success({ 
+          content: `平台数据同步完成: ${response.data.synced_accounts}/${response.data.total_accounts} 个账号, ${response.data.total_records} 条记录`, 
+          key: 'sync' 
+        })
+      }
+      
+      // 清除缓存
+      dataCache.google = { data: null, timestamp: 0, params: null }
+      dataCache.platform = { data: null, timestamp: 0, params: null }
+      // 重新获取数据
+      await fetchData()
+      
+    } catch (error) {
+      console.error('同步失败:', error)
+      message.error({ content: `同步失败: ${error.response?.data?.detail || error.message}`, key: 'sync' })
+    } finally {
+      setSyncing(false)
+    }
   }
 
   const tabItems = [
@@ -689,11 +717,12 @@ const DataCenter = () => {
         extra={
           <Space wrap>
             <Button
-              icon={<ReloadOutlined spin={loading} />}
+              type="primary"
+              icon={<ReloadOutlined spin={syncing} />}
               onClick={handleRefresh}
-              loading={loading}
+              loading={syncing}
             >
-              刷新数据
+              {syncing ? '同步中...' : '同步最新数据'}
             </Button>
             <RangePicker
               value={dateRange}

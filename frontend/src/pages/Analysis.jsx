@@ -513,48 +513,90 @@ G) 综述
   const extractCampaignSection = (fullReport, campaignName) => {
     if (!fullReport || !campaignName) return null
     
-    // 简化广告系列名用于匹配（去除特殊字符，保留字母数字和连字符）
-    const simpleName = campaignName.toLowerCase().replace(/[^a-z0-9\-]/g, '')
+    // 提取广告系列名的核心部分（如 "001-CG-uaudio" 从 "001-CG-uaudio-US-0129-18683107"）
+    const nameParts = campaignName.split('-')
+    // 取前3-4个部分作为核心匹配（如 "001-CG-uaudio" 或 "002-RW-revisionskincare"）
+    const coreNameParts = nameParts.slice(0, Math.min(4, nameParts.length))
+    const coreName = coreNameParts.join('-').toLowerCase()
     
-    // 尝试多种分割方式
-    // 方式1: 按 "### " 分割（标准 Markdown 三级标题）
-    // 方式2: 按 "数字. 广告系列名" 分割（如 "1. 001-CG-uaudio-US"）
-    // 方式3: 按 "**广告系列名**" 分割（加粗标题）
+    // 方法1: 按 "---" 或 "___" 分隔符分割（AI常用的分隔方式）
+    let sections = fullReport.split(/\n[-_]{3,}\n/)
     
-    // 先尝试按编号格式分割（1. xxx, 2. xxx）
-    const numberedPattern = /(?=\n\d+\.\s+\d{3}-[A-Z])/gi
-    let sections = fullReport.split(numberedPattern)
-    
-    // 如果没有找到编号格式，尝试按 ### 分割
+    // 方法2: 按 "## " 或 "### " 二/三级标题分割
     if (sections.length <= 1) {
-      sections = fullReport.split(/(?=###\s)/)
+      sections = fullReport.split(/(?=\n##[#]?\s)/)
     }
     
-    // 如果还是只有一个段落，尝试按 ** 加粗标题分割
+    // 方法3: 按编号格式分割（"1. xxx", "2. xxx" 开头的段落）
     if (sections.length <= 1) {
-      sections = fullReport.split(/(?=\*\*\d{3}-[A-Z])/)
+      sections = fullReport.split(/(?=\n\d+\.\s+\*?\*?[0-9]{3}-[A-Z])/)
     }
     
+    // 方法4: 按加粗的广告系列名分割
+    if (sections.length <= 1) {
+      sections = fullReport.split(/(?=\*\*[0-9]{3}-[A-Z])/)
+    }
+    
+    // 遍历所有段落，找到包含目标广告系列名的段落
     for (const section of sections) {
       if (!section.trim()) continue
       
       const sectionLower = section.toLowerCase()
-      const sectionSimple = sectionLower.replace(/[^a-z0-9\-]/g, '')
       
-      // 检查该段落是否包含广告系列名
-      if (sectionLower.includes(campaignName.toLowerCase()) || 
-          sectionSimple.includes(simpleName)) {
-        // 检查是否是子标题（如 "### 1. 阶段评价" 或仅包含通用标题）
-        const firstLine = section.split('\n')[0] || ''
-        // 跳过概览类标题
-        if (/概览|总览|执行清单|综述|专项名单|当前整体观察|数据周期/.test(firstLine)) continue
-        // 跳过不包含广告系列名的行
-        if (!firstLine.toLowerCase().includes(campaignName.substring(0, 10).toLowerCase()) &&
-            !firstLine.toLowerCase().replace(/[^a-z0-9\-]/g, '').includes(simpleName.substring(0, 10))) continue
+      // 检查该段落是否包含广告系列名（核心部分匹配）
+      if (sectionLower.includes(coreName)) {
+        // 获取第一行作为标题
+        const firstLine = section.split('\n').find(line => line.trim()) || ''
+        const firstLineLower = firstLine.toLowerCase()
         
-        return section.trim()
+        // 跳过概览/总结类标题
+        if (/概览|总览|执行清单|综述|总结|观察|周期|数据摘要/.test(firstLine)) continue
+        
+        // 确认第一行包含广告系列名（至少前缀匹配）
+        const prefix = coreNameParts[0]?.toLowerCase() // 如 "001"
+        if (prefix && firstLineLower.includes(prefix) && firstLineLower.includes(coreNameParts[1]?.toLowerCase() || '')) {
+          // 清理段落，移除开头的分隔符
+          let cleanSection = section.trim()
+          cleanSection = cleanSection.replace(/^[-_=]{3,}\s*\n/, '')
+          cleanSection = cleanSection.replace(/\n[-_=]{3,}\s*$/, '')
+          
+          return cleanSection.trim()
+        }
       }
     }
+    
+    // 如果以上方法都找不到，尝试更宽松的匹配
+    // 直接在报告中搜索广告系列名出现的位置，然后截取一段
+    const reportLower = fullReport.toLowerCase()
+    const idx = reportLower.indexOf(coreName)
+    if (idx !== -1) {
+      // 从该位置向前找到段落开始（换行符 + 标题符号）
+      let start = fullReport.lastIndexOf('\n', idx)
+      // 向前找到段落开始标志
+      for (let i = start - 1; i >= 0; i--) {
+        if (fullReport[i] === '\n' && /^[#\d\*]/.test(fullReport.substring(i + 1, i + 3))) {
+          start = i + 1
+          break
+        }
+        if (i < start - 200) break // 最多向前200字符
+      }
+      
+      // 从该位置向后找到下一个段落开始或报告结束
+      let end = fullReport.length
+      const nextSectionPatterns = [/\n##/, /\n\d+\.\s+\*?\*?[0-9]{3}/, /\n[-_]{3,}\n/, /\n\*\*[0-9]{3}/]
+      for (const pattern of nextSectionPatterns) {
+        const match = fullReport.substring(idx + coreName.length).match(pattern)
+        if (match && match.index) {
+          const possibleEnd = idx + coreName.length + match.index
+          if (possibleEnd < end) end = possibleEnd
+        }
+      }
+      
+      if (end > start) {
+        return fullReport.substring(start, end).trim()
+      }
+    }
+    
     return null
   }
 

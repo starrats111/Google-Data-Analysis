@@ -343,10 +343,10 @@ async def startup_event():
     """应用启动时执行"""
     try:
         start_scheduler()
-        print("✓ 定时任务调度器已启动")
+        print("[OK] 定时任务调度器已启动")
     except Exception as e:
         import traceback
-        print(f"⚠ 定时任务调度器启动失败: {e}")
+        print(f"[WARN] 定时任务调度器启动失败: {e}")
         print(traceback.format_exc())
         # 即使调度器启动失败，也不应该阻止应用启动
         logger = logging.getLogger(__name__)

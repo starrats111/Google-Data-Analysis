@@ -1535,4 +1535,101 @@ class GoogleAdsServiceAccountSync:
                 "success": False,
                 "message": f"连接失败: {str(e)}"
             }
+    
+    def get_campaign_budget(
+        self,
+        client,
+        customer_id: str,
+        campaign_id: str
+    ) -> Dict:
+        """
+        获取广告系列的预算信息
+        """
+        try:
+            ga_service = client.get_service("GoogleAdsService")
+            
+            query = f"""
+                SELECT
+                    campaign.id,
+                    campaign.name,
+                    campaign_budget.id,
+                    campaign_budget.amount_micros,
+                    campaign_budget.delivery_method
+                FROM campaign
+                WHERE campaign.id = {campaign_id}
+            """
+            
+            response = ga_service.search(customer_id=customer_id, query=query)
+            
+            for row in response:
+                budget_micros = row.campaign_budget.amount_micros or 0
+                return {
+                    "success": True,
+                    "campaign_id": str(row.campaign.id),
+                    "campaign_name": row.campaign.name,
+                    "budget_id": str(row.campaign_budget.id),
+                    "daily_budget": budget_micros / 1_000_000,
+                    "daily_budget_micros": budget_micros
+                }
+            
+            return {"success": False, "message": "未找到广告系列"}
+            
+        except Exception as e:
+            logger.error(f"获取广告系列 {campaign_id} 预算失败: {e}")
+            return {"success": False, "message": str(e)}
+    
+    def set_campaign_budget(
+        self,
+        client,
+        customer_id: str,
+        budget_id: str,
+        new_budget_micros: int
+    ) -> Dict:
+        """
+        设置广告系列的每日预算
+        
+        Args:
+            client: Google Ads客户端
+            customer_id: 客户ID
+            budget_id: 预算ID（从get_campaign_budget获取）
+            new_budget_micros: 新预算（微单位）
+        """
+        from google.protobuf import field_mask_pb2
+        
+        try:
+            budget_service = client.get_service("CampaignBudgetService")
+            
+            # 构建预算资源名称
+            budget_resource = f"customers/{customer_id}/campaignBudgets/{budget_id}"
+            
+            # 创建预算对象
+            budget = client.get_type("CampaignBudget")
+            budget.resource_name = budget_resource
+            budget.amount_micros = new_budget_micros
+            
+            # 创建更新操作
+            operation = client.get_type("CampaignBudgetOperation")
+            operation.update.CopyFrom(budget)
+            operation.update_mask.CopyFrom(
+                field_mask_pb2.FieldMask(paths=["amount_micros"])
+            )
+            
+            # 执行更新
+            response = budget_service.mutate_campaign_budgets(
+                customer_id=customer_id,
+                operations=[operation]
+            )
+            
+            new_budget = new_budget_micros / 1_000_000
+            logger.info(f"预算 {budget_id} 已设置为 ${new_budget}")
+            
+            return {
+                "success": True,
+                "message": f"每日预算已设置为 ${new_budget:.2f}",
+                "resource_name": response.results[0].resource_name
+            }
+            
+        except Exception as e:
+            logger.error(f"设置预算 {budget_id} 失败: {e}")
+            return {"success": False, "message": str(e)}
 

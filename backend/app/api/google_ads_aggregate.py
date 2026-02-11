@@ -508,3 +508,80 @@ async def get_date_range_aggregate(
         "net_commission": round(net_commission, 2)
     }
 
+
+@router.post("/sync-realtime")
+async def sync_google_ads_realtime(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    实时同步Google Ads数据（最近3天）
+    触发从Google Ads API获取最新数据
+    """
+    import logging
+    from app.services.google_ads_service_account_sync import GoogleAdsServiceAccountSync
+    
+    logger = logging.getLogger(__name__)
+    
+    try:
+        # 计算最近3天的日期范围
+        end_date = date.today()
+        start_date = end_date - timedelta(days=2)  # 今天 + 前2天 = 3天
+        
+        logger.info(f"用户 {current_user.username} 触发Google Ads实时同步，日期范围: {start_date} ~ {end_date}")
+        
+        # 获取用户的所有MCC账号
+        mccs = db.query(GoogleMccAccount).filter(
+            GoogleMccAccount.user_id == current_user.id,
+            GoogleMccAccount.is_active == True
+        ).all()
+        
+        if not mccs:
+            return {
+                "success": True,
+                "message": "没有找到活跃的MCC账号",
+                "synced_mccs": 0,
+                "total_records": 0
+            }
+        
+        sync_service = GoogleAdsServiceAccountSync(db)
+        total_synced = 0
+        synced_mccs = 0
+        errors = []
+        
+        # 逐天同步最近3天
+        for mcc in mccs:
+            try:
+                mcc_synced = 0
+                current_date = start_date
+                while current_date <= end_date:
+                    result = sync_service.sync_mcc_data(
+                        mcc_id=mcc.id,
+                        target_date=current_date,
+                        force_refresh=True  # 强制刷新
+                    )
+                    if result.get("success"):
+                        mcc_synced += result.get("campaigns_synced", 0)
+                    current_date += timedelta(days=1)
+                
+                synced_mccs += 1
+                total_synced += mcc_synced
+                logger.info(f"MCC {mcc.mcc_name} 同步完成: {mcc_synced} 条记录")
+                
+            except Exception as e:
+                errors.append(f"{mcc.mcc_name}: {str(e)}")
+                logger.error(f"同步MCC {mcc.mcc_name} 失败: {e}")
+        
+        return {
+            "success": True,
+            "message": f"同步完成: {synced_mccs}/{len(mccs)} 个MCC",
+            "synced_mccs": synced_mccs,
+            "total_mccs": len(mccs),
+            "total_records": total_synced,
+            "date_range": f"{start_date} ~ {end_date}",
+            "errors": errors if errors else None
+        }
+        
+    except Exception as e:
+        logger.error(f"Google Ads实时同步失败: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"同步失败: {str(e)}")

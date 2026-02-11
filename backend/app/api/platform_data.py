@@ -677,3 +677,72 @@ async def get_platform_transactions(
         logger.error(f"获取交易记录失败: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"查询失败: {str(e)}")
 
+
+@router.post("/sync-realtime")
+async def sync_platform_data_realtime(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    实时同步平台数据（最近3天）
+    触发从各平台API获取最新数据
+    """
+    from datetime import timedelta
+    from app.services.platform_data_sync import PlatformDataSyncService
+    
+    try:
+        # 计算最近3天的日期范围
+        end_date = date.today()
+        start_date = end_date - timedelta(days=2)  # 今天 + 前2天 = 3天
+        
+        logger.info(f"用户 {current_user.username} 触发实时同步，日期范围: {start_date} ~ {end_date}")
+        
+        # 获取用户的所有平台账号
+        accounts = db.query(AffiliateAccount).filter(
+            AffiliateAccount.user_id == current_user.id,
+            AffiliateAccount.is_active == True
+        ).all()
+        
+        if not accounts:
+            return {
+                "success": True,
+                "message": "没有找到活跃的平台账号",
+                "synced_accounts": 0,
+                "total_records": 0
+            }
+        
+        sync_service = PlatformDataSyncService(db)
+        total_synced = 0
+        synced_accounts = 0
+        errors = []
+        
+        for account in accounts:
+            try:
+                result = sync_service.sync_account(
+                    account_id=account.id,
+                    start_date=start_date,
+                    end_date=end_date
+                )
+                if result.get("success"):
+                    synced_accounts += 1
+                    total_synced += result.get("saved_count", 0)
+                else:
+                    errors.append(f"{account.account_name}: {result.get('message', '未知错误')}")
+            except Exception as e:
+                errors.append(f"{account.account_name}: {str(e)}")
+                logger.error(f"同步账号 {account.account_name} 失败: {e}")
+        
+        return {
+            "success": True,
+            "message": f"同步完成: {synced_accounts}/{len(accounts)} 个账号",
+            "synced_accounts": synced_accounts,
+            "total_accounts": len(accounts),
+            "total_records": total_synced,
+            "date_range": f"{start_date} ~ {end_date}",
+            "errors": errors if errors else None
+        }
+        
+    except Exception as e:
+        logger.error(f"实时同步失败: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"同步失败: {str(e)}")
+
