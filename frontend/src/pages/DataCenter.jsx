@@ -433,11 +433,21 @@ const DataCenter = () => {
     campaignCount: safeGoogleData.length,
   }
 
-  const platformStats = {
-    totalCommission: safePlatformData.reduce((sum, item) => sum + (item.total_commission || 0), 0),
-    totalOrders: safePlatformData.reduce((sum, item) => sum + (item.orders || 0), 0),
-    totalRejected: safePlatformData.reduce((sum, item) => sum + (item.rejected_commission || 0), 0),
-  }
+  // 根据视图模式使用不同的字段名
+  const platformStats = viewMode === 'summary' 
+    ? {
+        totalCommission: safePlatformData.reduce((sum, item) => sum + (item.total_commission || 0), 0),
+        totalOrders: safePlatformData.reduce((sum, item) => sum + (item.orders || 0), 0),
+        totalRejected: safePlatformData.reduce((sum, item) => sum + (item.rejected_commission || 0), 0),
+      }
+    : {
+        // 明细模式：使用 commission_amount 字段，按状态计算
+        totalCommission: safePlatformData.reduce((sum, item) => sum + (item.commission_amount || 0), 0),
+        totalOrders: safePlatformData.length,
+        totalRejected: safePlatformData
+          .filter(item => item.status === 'rejected')
+          .reduce((sum, item) => sum + (item.commission_amount || 0), 0),
+      }
 
   // 计算 ROI (佣金/费用)
   const roi = googleStats.totalCost > 0 
