@@ -120,15 +120,18 @@ const DataCenter = () => {
           setPlatformSummary(data)
           dataCache.platform = { data, timestamp: Date.now(), params: cacheKey }
         } else {
-          const response = await api.get('/api/platform-data/detail', {
+          // 明细模式：获取每条交易记录
+          const response = await api.get('/api/platform-data/transactions', {
             params: {
               begin_date: params.start_date,
               end_date: params.end_date,
+              page: 1,
+              page_size: 200,  // 获取更多记录
             },
             signal: abortControllerRef.current.signal,
           })
-          // 确保返回的是数组
-          const data = Array.isArray(response.data) ? response.data : []
+          // API 返回 {total, page, page_size, pages, transactions: [...]}
+          const data = Array.isArray(response.data?.transactions) ? response.data.transactions : []
           setPlatformData(data)
           dataCache.platform = { data, timestamp: Date.now(), params: cacheKey }
         }
@@ -143,9 +146,9 @@ const DataCenter = () => {
     }
   }
 
-  // 禁用今天及以后的日期
+  // 禁用明天及以后的日期（允许选择今天）
   const disabledDate = (current) => {
-    return current && current >= dayjs().startOf('day')
+    return current && current > dayjs().endOf('day')
   }
 
   // 获取MCC费用明细
@@ -334,46 +337,86 @@ const DataCenter = () => {
     },
   ]
 
-  // 平台数据明细列
+  // 平台数据明细列（每条交易记录）
   const platformDetailColumns = [
     {
-      title: '日期',
-      dataIndex: 'date',
-      key: 'date',
-      width: 110,
-      sorter: (a, b) => new Date(a.date) - new Date(b.date),
+      title: '交易时间',
+      dataIndex: 'transaction_time',
+      key: 'transaction_time',
+      width: 160,
+      sorter: (a, b) => new Date(a.transaction_time) - new Date(b.transaction_time),
+      render: (val) => val ? dayjs(val).format('YYYY-MM-DD HH:mm') : '-',
     },
     {
       title: '平台',
-      dataIndex: 'platform_name',
-      key: 'platform_name',
-      width: 100,
+      dataIndex: 'platform',
+      key: 'platform',
+      width: 80,
+      render: (val) => {
+        const platformColors = {
+          'cg': { bg: '#e6f7ff', color: '#1890ff', name: 'CG' },
+          'rw': { bg: '#fff7e6', color: '#fa8c16', name: 'RW' },
+          'linkhaitao': { bg: '#f6ffed', color: '#52c41a', name: 'LH' },
+          'partnermatic': { bg: '#fff0f6', color: '#eb2f96', name: 'PM' },
+          'linkbux': { bg: '#f9f0ff', color: '#722ed1', name: 'LB' },
+          'brandsparkhub': { bg: '#fcffe6', color: '#a0d911', name: 'BSH' },
+          'creatorflare': { bg: '#e6fffb', color: '#13c2c2', name: 'CF' },
+        }
+        const key = val?.toLowerCase()
+        const style = platformColors[key] || { bg: '#f5f5f5', color: '#666', name: val?.toUpperCase() || '-' }
+        return (
+          <Tag style={{ backgroundColor: style.bg, color: style.color, border: `1px solid ${style.color}` }}>
+            {style.name}
+          </Tag>
+        )
+      },
     },
     {
-      title: '商家ID',
-      dataIndex: 'merchant_id',
-      key: 'merchant_id',
-      width: 100,
-    },
-    {
-      title: '商家名称',
-      dataIndex: 'merchant_name',
-      key: 'merchant_name',
+      title: '商家',
+      dataIndex: 'merchant',
+      key: 'merchant',
       width: 150,
+      ellipsis: true,
     },
     {
-      title: '佣金($)',
-      dataIndex: 'commission',
-      key: 'commission',
-      width: 100,
-      sorter: (a, b) => (a.commission || 0) - (b.commission || 0),
+      title: '订单号',
+      dataIndex: 'order_id',
+      key: 'order_id',
+      width: 120,
+      ellipsis: true,
+    },
+    {
+      title: '订单金额($)',
+      dataIndex: 'order_amount',
+      key: 'order_amount',
+      width: 110,
+      align: 'right',
+      sorter: (a, b) => (a.order_amount || 0) - (b.order_amount || 0),
       render: (val) => `$${(val || 0).toFixed(2)}`,
     },
     {
-      title: '订单数',
-      dataIndex: 'orders',
-      key: 'orders',
+      title: '佣金($)',
+      dataIndex: 'commission_amount',
+      key: 'commission_amount',
+      width: 100,
+      align: 'right',
+      sorter: (a, b) => (a.commission_amount || 0) - (b.commission_amount || 0),
+      render: (val) => <span style={{ color: '#3f8600' }}>${(val || 0).toFixed(2)}</span>,
+    },
+    {
+      title: '状态',
+      dataIndex: 'status',
+      key: 'status',
       width: 80,
+      render: (val) => {
+        const statusMap = {
+          'pending': { color: 'processing', text: '审核中' },
+          'approved': { color: 'success', text: '已确认' },
+          'rejected': { color: 'error', text: '已拒付' },
+        }
+        const s = statusMap[val?.toLowerCase()] || { color: 'default', text: val }
+        return <Tag color={s.color}>{s.text}</Tag>
+      },
     },
   ]
 

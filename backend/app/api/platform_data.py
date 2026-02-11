@@ -577,3 +577,103 @@ async def get_platform_data(
     )
 
 
+@router.get("/transactions")
+async def get_platform_transactions(
+    begin_date: str = Query(..., description="开始日期 YYYY-MM-DD"),
+    end_date: str = Query(..., description="结束日期 YYYY-MM-DD"),
+    platform: Optional[str] = Query(None, description="平台代码（可选）"),
+    status: Optional[str] = Query(None, description="状态筛选: pending/approved/rejected"),
+    merchant: Optional[str] = Query(None, description="商户名称（可选，支持模糊匹配）"),
+    page: int = Query(1, ge=1, description="页码"),
+    page_size: int = Query(50, ge=1, le=200, description="每页数量"),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    获取原始交易记录（每条交易一行）
+    
+    返回分页的交易记录列表
+    """
+    try:
+        # 解析日期
+        begin = datetime.strptime(begin_date, "%Y-%m-%d").date()
+        end = datetime.strptime(end_date, "%Y-%m-%d").date()
+        begin_datetime = datetime.combine(begin, datetime.min.time())
+        end_datetime = datetime.combine(end, datetime.max.time())
+        
+        # 基础查询
+        query = db.query(AffiliateTransaction).outerjoin(
+            AffiliateAccount,
+            AffiliateTransaction.affiliate_account_id == AffiliateAccount.id
+        ).filter(
+            AffiliateTransaction.transaction_time >= begin_datetime,
+            AffiliateTransaction.transaction_time <= end_datetime,
+            (AffiliateAccount.id.is_(None)) | (AffiliateAccount.is_active == True)
+        )
+        
+        # 权限控制
+        if current_user.role == "employee":
+            query = query.filter(AffiliateTransaction.user_id == current_user.id)
+        
+        # 平台筛选
+        if platform:
+            platform_lower = platform.lower().strip()
+            platform_code_map = {
+                'cg': 'cg', 'collabglow': 'cg',
+                'rw': 'rw', 'rewardoo': 'rw',
+                'lh': 'linkhaitao', 'linkhaitao': 'linkhaitao',
+                'pb': 'partnerboost', 'partnerboost': 'partnerboost',
+                'lb': 'linkbux', 'linkbux': 'linkbux',
+                'pm': 'partnermatic', 'partnermatic': 'partnermatic',
+                'bsh': 'brandsparkhub', 'brandsparkhub': 'brandsparkhub',
+                'cf': 'creatorflare', 'creatorflare': 'creatorflare',
+            }
+            platform_final = platform_code_map.get(platform_lower, platform_lower)
+            query = query.filter(AffiliateTransaction.platform == platform_final)
+        
+        # 状态筛选
+        if status and status.lower() != 'all':
+            query = query.filter(AffiliateTransaction.status == status.lower())
+        
+        # 商户筛选
+        if merchant:
+            query = query.filter(AffiliateTransaction.merchant.ilike(f"%{merchant}%"))
+        
+        # 获取总数
+        total = query.count()
+        
+        # 分页和排序
+        query = query.order_by(AffiliateTransaction.transaction_time.desc())
+        offset = (page - 1) * page_size
+        transactions = query.offset(offset).limit(page_size).all()
+        
+        # 转换为响应格式
+        result = []
+        for txn in transactions:
+            result.append({
+                "id": txn.id,
+                "transaction_time": txn.transaction_time.isoformat() if txn.transaction_time else None,
+                "platform": txn.platform,
+                "merchant_id": txn.merchant_id,
+                "merchant": txn.merchant,
+                "order_id": txn.order_id,
+                "order_amount": round(float(txn.order_amount or 0), 2),
+                "commission_amount": round(float(txn.commission_amount or 0), 2),
+                "status": txn.status,
+                "currency": txn.currency or "USD",
+            })
+        
+        return {
+            "total": total,
+            "page": page,
+            "page_size": page_size,
+            "pages": (total + page_size - 1) // page_size,
+            "transactions": result
+        }
+        
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=f"日期格式错误: {str(e)}")
+    except Exception as e:
+        logger.error(f"获取交易记录失败: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"查询失败: {str(e)}")
+
