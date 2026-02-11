@@ -3,6 +3,7 @@ import { Card, Table, DatePicker, Space, Spin, message, Button, Typography, Row,
 import { DownloadOutlined, ReloadOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import api from '../services/api'
+import './Analysis.css' // 导入样式以使用 .table-scroll-hint
 
 const { Title } = Typography
 

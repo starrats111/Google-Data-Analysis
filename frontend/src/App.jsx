@@ -30,6 +30,7 @@ const FinancialReport = lazyWithRetry(() => import('./pages/FinancialReport'))
 const ReportMonthly = lazyWithRetry(() => import('./pages/ReportMonthly'))
 const ReportQuarterly = lazyWithRetry(() => import('./pages/ReportQuarterly'))
 const ReportYearly = lazyWithRetry(() => import('./pages/ReportYearly'))
+const SystemLogs = lazyWithRetry(() => import('./pages/SystemLogs'))
 
 function PrivateRoute({ children }) {
   const { isAuthenticated } = useAuth()
@@ -83,6 +84,7 @@ function App() {
               <Route path="report-monthly" element={<ReportMonthly />} />
               <Route path="report-quarterly" element={<ReportQuarterly />} />
               <Route path="report-yearly" element={<ReportYearly />} />
+              <Route path="system-logs" element={<SystemLogs />} />
             </Route>
           </Routes>
         </Suspense>

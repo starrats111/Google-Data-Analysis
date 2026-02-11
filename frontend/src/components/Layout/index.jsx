@@ -14,6 +14,7 @@ import {
   DatabaseOutlined,
   MenuOutlined,
   BankOutlined,
+  FileSearchOutlined,
 } from '@ant-design/icons'
 import { useAuth } from '../../store/authStore'
 
@@ -117,6 +118,7 @@ const Layout = () => {
       children: [
         { key: '/mcc-accounts', icon: <AccountBookOutlined />, label: '所有MCC账号' },
         { key: '/accounts', icon: <AccountBookOutlined />, label: '所有平台账号' },
+        { key: '/system-logs', icon: <FileSearchOutlined />, label: '系统日志' },
       ],
     },
   ]

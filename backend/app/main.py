@@ -48,6 +48,7 @@ from app.api import (
     platform_data,
     reports,
     stage_label,
+    system,
     upload,
     users,
 )
@@ -251,6 +252,7 @@ app.include_router(gemini.router)
 app.include_router(users.router)
 app.include_router(bid_management.router)
 app.include_router(reports.router)
+app.include_router(system.router)
 
 
 @app.get("/health")
