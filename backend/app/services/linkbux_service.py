@@ -255,16 +255,10 @@ class LinkBuxService:
                 item.get("sale_comm") or item.get("commission_amount") or item.get("commission") or 0
             )
             
-            # 提取商家ID（MID）：尝试多个可能的字段
-            # LinkBux API可能返回: mcid, merchant_id, brand_id, m_id 等
-            mid_value = (
-                item.get("mcid") or 
-                item.get("merchant_id") or 
-                item.get("brand_id") or 
-                item.get("m_id") or
-                item.get("program_id") or
-                item.get("advertiser_id")
-            )
+            # 提取商家ID（MID）：优先使用 mid 字段（5-6位数字）
+            # Linkbux API 返回的 mid 字段是数字格式的商家ID，如 160007
+            # mcid 是文本格式的商家代码，如 baobabcollection，不是我们需要的MID
+            mid_value = item.get("mid")  # 优先使用 mid 字段（数字MID）
             merchant_id = str(mid_value).strip() if mid_value else None
             
             transactions.append({
