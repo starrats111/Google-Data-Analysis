@@ -494,6 +494,194 @@ async def _get_summary_report(db: Session, start_date: date, end_date: date, per
     }
 
 
+@router.get("/monthly/export")
+async def export_monthly_report(
+    year: int = Query(None, description="年份"),
+    month: int = Query(None, description="月份"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    导出月度报表为Excel
+    """
+    today = date.today()
+    year = year or today.year
+    month = month or today.month
+    
+    start_date = date(year, month, 1)
+    last_day = calendar.monthrange(year, month)[1]
+    end_date = date(year, month, last_day)
+    
+    report_data = await _get_summary_report(db, start_date, end_date, f"{year}年{month}月")
+    
+    return _generate_summary_excel(report_data, f"月度报表_{year}年{month}月.xlsx")
+
+
+@router.get("/quarterly/export")
+async def export_quarterly_report(
+    year: int = Query(None, description="年份"),
+    quarter: int = Query(None, description="季度 (1-4)"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    导出季度报表为Excel
+    """
+    today = date.today()
+    year = year or today.year
+    quarter = quarter or ((today.month - 1) // 3 + 1)
+    
+    start_month = (quarter - 1) * 3 + 1
+    end_month = quarter * 3
+    
+    start_date = date(year, start_month, 1)
+    last_day = calendar.monthrange(year, end_month)[1]
+    end_date = date(year, end_month, last_day)
+    
+    report_data = await _get_summary_report(db, start_date, end_date, f"{year}年Q{quarter}")
+    
+    return _generate_summary_excel(report_data, f"季度报表_{year}年Q{quarter}.xlsx")
+
+
+@router.get("/yearly/export")
+async def export_yearly_report(
+    year: int = Query(None, description="年份"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    导出年度报表为Excel
+    """
+    today = date.today()
+    year = year or today.year
+    
+    start_date = date(year, 1, 1)
+    end_date = date(year, 12, 31)
+    
+    report_data = await _get_summary_report(db, start_date, end_date, f"{year}年")
+    
+    return _generate_summary_excel(report_data, f"年度报表_{year}年.xlsx")
+
+
+def _generate_summary_excel(report_data: dict, filename: str) -> StreamingResponse:
+    """
+    生成汇总报表Excel
+    """
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
+    from urllib.parse import quote
+    
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "报表"
+    
+    # 样式
+    header_fill = PatternFill(start_color="FFEB3B", end_color="FFEB3B", fill_type="solid")
+    header_font = Font(bold=True, size=12)
+    center_align = Alignment(horizontal='center', vertical='center')
+    thin_border = Border(
+        left=Side(style='thin'),
+        right=Side(style='thin'),
+        top=Side(style='thin'),
+        bottom=Side(style='thin')
+    )
+    
+    # 标题行
+    ws.merge_cells('A1:G1')
+    ws['A1'] = f"{report_data.get('period', '')} 报表"
+    ws['A1'].font = Font(bold=True, size=16)
+    ws['A1'].alignment = center_align
+    
+    # 日期范围
+    ws.merge_cells('A2:G2')
+    ws['A2'] = f"日期范围: {report_data.get('start_date', '')} ~ {report_data.get('end_date', '')}"
+    ws['A2'].alignment = center_align
+    
+    # 表头
+    headers = ['员工', '广告费($)', '账面佣金($)', '失效佣金($)', '有效佣金($)', '订单数', '在跑广告量']
+    for col, header in enumerate(headers, 1):
+        cell = ws.cell(row=4, column=col, value=header)
+        cell.fill = header_fill
+        cell.font = header_font
+        cell.alignment = center_align
+        cell.border = thin_border
+    
+    # 数据行
+    data = report_data.get('data', [])
+    for row_idx, row_data in enumerate(data, 5):
+        ws.cell(row=row_idx, column=1, value=row_data.get('employee', '')).border = thin_border
+        ws.cell(row=row_idx, column=2, value=round(row_data.get('ad_cost', 0), 2)).border = thin_border
+        ws.cell(row=row_idx, column=3, value=round(row_data.get('book_commission', 0), 2)).border = thin_border
+        ws.cell(row=row_idx, column=4, value=round(row_data.get('rejected_commission', 0), 2)).border = thin_border
+        ws.cell(row=row_idx, column=5, value=round(row_data.get('valid_commission', 0), 2)).border = thin_border
+        ws.cell(row=row_idx, column=6, value=row_data.get('orders', 0)).border = thin_border
+        ws.cell(row=row_idx, column=7, value=row_data.get('active_campaigns', 0)).border = thin_border
+        
+        # 居中数字
+        for col in range(2, 8):
+            ws.cell(row=row_idx, column=col).alignment = center_align
+    
+    # 合计行
+    summary = report_data.get('summary', {})
+    summary_row = 5 + len(data)
+    summary_fill = PatternFill(start_color="C8E6C9", end_color="C8E6C9", fill_type="solid")
+    
+    ws.cell(row=summary_row, column=1, value="合计").font = Font(bold=True)
+    ws.cell(row=summary_row, column=1).fill = summary_fill
+    ws.cell(row=summary_row, column=1).border = thin_border
+    
+    ws.cell(row=summary_row, column=2, value=round(summary.get('total_ad_cost', 0), 2)).fill = summary_fill
+    ws.cell(row=summary_row, column=2).border = thin_border
+    ws.cell(row=summary_row, column=2).font = Font(bold=True)
+    
+    ws.cell(row=summary_row, column=3, value=round(summary.get('total_book_commission', 0), 2)).fill = summary_fill
+    ws.cell(row=summary_row, column=3).border = thin_border
+    ws.cell(row=summary_row, column=3).font = Font(bold=True)
+    
+    ws.cell(row=summary_row, column=4, value=round(summary.get('total_rejected_commission', 0), 2)).fill = summary_fill
+    ws.cell(row=summary_row, column=4).border = thin_border
+    ws.cell(row=summary_row, column=4).font = Font(bold=True)
+    
+    ws.cell(row=summary_row, column=5, value=round(summary.get('total_valid_commission', 0), 2)).fill = summary_fill
+    ws.cell(row=summary_row, column=5).border = thin_border
+    ws.cell(row=summary_row, column=5).font = Font(bold=True)
+    
+    ws.cell(row=summary_row, column=6, value=summary.get('total_orders', 0)).fill = summary_fill
+    ws.cell(row=summary_row, column=6).border = thin_border
+    ws.cell(row=summary_row, column=6).font = Font(bold=True)
+    
+    ws.cell(row=summary_row, column=7, value=summary.get('total_active_campaigns', 0)).fill = summary_fill
+    ws.cell(row=summary_row, column=7).border = thin_border
+    ws.cell(row=summary_row, column=7).font = Font(bold=True)
+    
+    for col in range(2, 8):
+        ws.cell(row=summary_row, column=col).alignment = center_align
+    
+    # 设置列宽
+    ws.column_dimensions['A'].width = 15
+    ws.column_dimensions['B'].width = 15
+    ws.column_dimensions['C'].width = 15
+    ws.column_dimensions['D'].width = 15
+    ws.column_dimensions['E'].width = 15
+    ws.column_dimensions['F'].width = 12
+    ws.column_dimensions['G'].width = 15
+    
+    # 保存到内存
+    output = io.BytesIO()
+    wb.save(output)
+    output.seek(0)
+    
+    encoded_filename = quote(filename)
+    
+    return StreamingResponse(
+        output,
+        media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        headers={
+            'Content-Disposition': f"attachment; filename*=UTF-8''{encoded_filename}"
+        }
+    )
+
+
 @router.get("/financial/export")
 async def export_financial_report(
     year: int = Query(..., description="年份"),

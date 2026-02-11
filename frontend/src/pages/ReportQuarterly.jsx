@@ -86,47 +86,39 @@ const ReportQuarterly = () => {
     }
   ]
 
-  const handleExport = () => {
+  const handleExport = async () => {
     if (!data || !data.data) {
       message.warning('没有数据可导出')
       return
     }
 
-    // 构建CSV数据
-    const headers = ['员工', '广告费($)', '账面佣金($)', '失效佣金($)', '有效佣金($)', '订单数', '在跑广告量']
-    
-    let csvContent = '\uFEFF' // UTF-8 BOM
-    csvContent += headers.join(',') + '\n'
-    
-    data.data.forEach(row => {
-      const rowData = [
-        row.employee,
-        row.ad_cost?.toFixed(2),
-        row.book_commission?.toFixed(2),
-        row.rejected_commission?.toFixed(2),
-        row.valid_commission?.toFixed(2),
-        row.orders,
-        row.active_campaigns
-      ]
-      csvContent += rowData.map(cell => `"${cell || ''}"`).join(',') + '\n'
-    })
-    
-    // 添加合计行
-    const s = data.summary
-    csvContent += `"合计","${s.total_ad_cost?.toFixed(2)}","${s.total_book_commission?.toFixed(2)}","${s.total_rejected_commission?.toFixed(2)}","${s.total_valid_commission?.toFixed(2)}","${s.total_orders}","${s.total_active_campaigns}"\n`
-    
-    // 下载文件
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' })
-    const link = document.createElement('a')
-    const url = URL.createObjectURL(blob)
-    link.setAttribute('href', url)
-    link.setAttribute('download', `季度报表_${data.period || selectedYear + 'Q' + selectedQuarter}.csv`)
-    link.style.visibility = 'hidden'
-    document.body.appendChild(link)
-    link.click()
-    document.body.removeChild(link)
-    
-    message.success('导出成功')
+    try {
+      const response = await api.get('/api/reports/quarterly/export', {
+        params: {
+          year: selectedYear,
+          quarter: selectedQuarter
+        },
+        responseType: 'blob'
+      })
+      
+      // 下载文件
+      const blob = new Blob([response.data], { 
+        type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' 
+      })
+      const url = URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = `季度报表_${selectedYear}年Q${selectedQuarter}.xlsx`
+      document.body.appendChild(link)
+      link.click()
+      document.body.removeChild(link)
+      URL.revokeObjectURL(url)
+      
+      message.success('导出成功')
+    } catch (error) {
+      console.error('导出失败:', error)
+      message.error('导出失败')
+    }
   }
 
   // 生成年份选项
@@ -161,7 +153,7 @@ const ReportQuarterly = () => {
                   刷新
                 </Button>
                 <Button type="primary" icon={<DownloadOutlined />} onClick={handleExport}>
-                  导出CSV
+                  导出Excel
                 </Button>
               </Space>
             </Col>
