@@ -37,6 +37,9 @@ const TeamManagement = () => {
   
   const [userForm] = Form.useForm()
   const [teamForm] = Form.useForm()
+  
+  // 跟踪是否是首次加载
+  const [isInitialLoad, setIsInitialLoad] = useState(true)
 
   // 本月日期范围
   const monthDateRange = useMemo(() => {
@@ -48,7 +51,7 @@ const TeamManagement = () => {
   }, [])
 
   // 加载数据
-  const loadData = async () => {
+  const loadData = async (sortBy = rankingSortBy) => {
     setLoading(true)
     try {
       // 统计数据使用本月日期范围
@@ -56,7 +59,7 @@ const TeamManagement = () => {
         api.get('/api/team/teams'),
         api.get('/api/team/users'),
         api.get('/api/team/stats/teams', { params: monthDateRange }),
-        api.get('/api/team/stats/ranking', { params: { limit: 10, sort_by: rankingSortBy, ...monthDateRange } })
+        api.get('/api/team/stats/ranking', { params: { limit: 10, sort_by: sortBy, ...monthDateRange } })
       ])
       setTeams(teamsRes.data)
       setUsers(usersRes.data)
@@ -67,6 +70,7 @@ const TeamManagement = () => {
       message.error('加载数据失败')
     } finally {
       setLoading(false)
+      setIsInitialLoad(false)
     }
   }
 
@@ -74,8 +78,13 @@ const TeamManagement = () => {
     loadData()
   }, [])
 
-  // 排序变化时重新加载排行榜
+  // 排序变化时重新加载排行榜（跳过首次加载）
   useEffect(() => {
+    // 跳过首次加载，避免重复请求
+    if (isInitialLoad) {
+      return
+    }
+    
     const loadRanking = async () => {
       try {
         const rankingRes = await api.get('/api/team/stats/ranking', { 
