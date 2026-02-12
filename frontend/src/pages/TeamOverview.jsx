@@ -245,6 +245,7 @@ const TeamOverview = () => {
                   dataIndex: 'cost',
                   key: 'cost',
                   align: 'right',
+                  sorter: (a, b) => (a.cost || 0) - (b.cost || 0),
                   render: (v) => <Text type="danger">${(v || 0).toFixed(2)}</Text>
                 },
                 {
@@ -252,13 +253,15 @@ const TeamOverview = () => {
                   dataIndex: 'commission',
                   key: 'commission',
                   align: 'right',
-                  render: (v) => <Text style={{ color: '#1890ff' }}>${(v || 0).toFixed(2)}</Text>
+                  sorter: (a, b) => (a.commission || 0) - (b.commission || 0),
+                  render: (v) => <Text type="success">${(v || 0).toFixed(2)}</Text>
                 },
                 {
                   title: '拒付',
                   dataIndex: 'rejected_commission',
                   key: 'rejected_commission',
                   align: 'right',
+                  sorter: (a, b) => (a.rejected_commission || 0) - (b.rejected_commission || 0),
                   render: (v) => <Text type="danger">${(v || 0).toFixed(2)}</Text>
                 },
                 {
@@ -266,13 +269,7 @@ const TeamOverview = () => {
                   dataIndex: 'net_commission',
                   key: 'net_commission',
                   align: 'right',
-                  render: (v) => <Text type="success">${(v || 0).toFixed(2)}</Text>
-                },
-                {
-                  title: '利润',
-                  dataIndex: 'profit',
-                  key: 'profit',
-                  align: 'right',
+                  sorter: (a, b) => (a.net_commission || 0) - (b.net_commission || 0),
                   render: (v) => (
                     <Text style={{ color: (v || 0) >= 0 ? '#52c41a' : '#ff4d4f', fontWeight: 600 }}>
                       {(v || 0) >= 0 ? '+' : ''}${(v || 0).toFixed(2)}
@@ -284,6 +281,8 @@ const TeamOverview = () => {
                   dataIndex: 'roi',
                   key: 'roi',
                   align: 'right',
+                  sorter: (a, b) => (a.roi || 0) - (b.roi || 0),
+                  defaultSortOrder: 'descend',
                   render: (v) => (
                     <Tag color={(v || 0) >= 20 ? 'success' : (v || 0) >= 0 ? 'processing' : 'error'} style={{ fontSize: 14 }}>
                       {(v || 0) >= 0 ? '+' : ''}{(v || 0).toFixed(1)}%
