@@ -3,7 +3,28 @@
  * 定义每个平台需要的API字段
  */
 export const PLATFORM_API_CONFIG = {
-  // CollabGlow 平台
+  // ========== CG (CollabGlow) ==========
+  cg: {
+    fields: [
+      {
+        name: 'collabglow_token',
+        label: 'CollabGlow API Token',
+        type: 'password',
+        placeholder: '请输入 CollabGlow API Token',
+        help: '用于同步 CollabGlow 佣金数据',
+        required: false
+      },
+      {
+        name: 'collabglow_api_url',
+        label: 'CollabGlow API URL（可选，用于不同渠道）',
+        type: 'text',
+        placeholder: '例如: https://api.collabglow.com/api',
+        help: '如果CollabGlow有多个渠道，每个渠道可能有不同的API地址。留空则使用默认地址。',
+        required: false
+      }
+    ]
+  },
+  // CollabGlow 平台（别名，兼容旧格式）
   collabglow: {
     fields: [
       {
@@ -25,7 +46,20 @@ export const PLATFORM_API_CONFIG = {
     ]
   },
   
-  // LinkHaitao 平台
+  // ========== LH (LinkHaitao) ==========
+  lh: {
+    fields: [
+      {
+        name: 'linkhaitao_token',
+        label: 'LinkHaitao API Token',
+        type: 'password',
+        placeholder: '请输入 LinkHaitao API Token',
+        help: '用于同步 LinkHaitao 佣金和订单数据',
+        required: false
+      }
+    ]
+  },
+  // LinkHaitao 平台（别名，兼容旧格式）
   linkhaitao: {
     fields: [
       {
@@ -38,7 +72,6 @@ export const PLATFORM_API_CONFIG = {
       }
     ]
   },
-  
   // Link-Haitao 平台（别名）
   'link-haitao': {
     fields: [
@@ -53,7 +86,7 @@ export const PLATFORM_API_CONFIG = {
     ]
   },
   
-  // Rewardoo 平台
+  // ========== RW (Rewardoo) ==========
   rewardoo: {
     fields: [
       {
@@ -97,89 +130,111 @@ export const PLATFORM_API_CONFIG = {
     ]
   },
   
-  // LB 平台
+  // ========== LB (Linkbux) ==========
   lb: {
     fields: [
       {
         name: 'lb_token',
-        label: 'LB API Token',
+        label: 'Linkbux API Token',
         type: 'password',
-        placeholder: '请输入 LB API Token',
-        help: '用于同步 LB 交易数据',
+        placeholder: '请输入 Linkbux API Token',
+        help: '用于同步 Linkbux 交易数据',
         required: false
       },
       {
         name: 'lb_api_url',
-        label: 'LB API URL（必填）',
+        label: 'Linkbux API URL（必填）',
         type: 'text',
-        placeholder: '例如: https://api.lb.com/api',
-        help: 'LB平台的API基础URL，必须配置',
+        placeholder: '例如: https://www.linkbux.com/api',
+        help: 'Linkbux平台的API基础URL，必须配置',
         required: true
       }
     ]
   },
   
-  // PM 平台
+  // ========== PB (PartnerBoost) ==========
+  pb: {
+    fields: [
+      {
+        name: 'pb_token',
+        label: 'PartnerBoost API Token',
+        type: 'password',
+        placeholder: '请输入 PartnerBoost API Token',
+        help: '用于同步 PartnerBoost 交易数据',
+        required: false
+      },
+      {
+        name: 'pb_api_url',
+        label: 'PartnerBoost API URL（必填）',
+        type: 'text',
+        placeholder: '例如: https://app.partnerboost.com/api',
+        help: 'PartnerBoost平台的API基础URL，必须配置',
+        required: true
+      }
+    ]
+  },
+  
+  // ========== PM (Partnermatic) ==========
   pm: {
     fields: [
       {
         name: 'pm_token',
-        label: 'PM API Token',
+        label: 'Partnermatic API Token',
         type: 'password',
-        placeholder: '请输入 PM API Token',
-        help: '用于同步 PM 交易数据',
+        placeholder: '请输入 Partnermatic API Token',
+        help: '用于同步 Partnermatic 交易数据',
         required: false
       },
       {
         name: 'pm_api_url',
-        label: 'PM API URL（必填）',
+        label: 'Partnermatic API URL（必填）',
         type: 'text',
-        placeholder: '例如: https://api.pm.com/api',
-        help: 'PM平台的API基础URL，必须配置',
+        placeholder: '例如: https://app.partnermatic.com/api',
+        help: 'Partnermatic平台的API基础URL，必须配置',
         required: true
       }
     ]
   },
   
-  // BSH 平台
+  // ========== BSH (BrandSparkHub) ==========
   bsh: {
     fields: [
       {
         name: 'bsh_token',
-        label: 'BSH API Token',
+        label: 'BrandSparkHub API Token',
         type: 'password',
-        placeholder: '请输入 BSH API Token',
-        help: '用于同步 BSH 交易数据',
+        placeholder: '请输入 BrandSparkHub API Token',
+        help: '用于同步 BrandSparkHub 交易数据',
         required: false
       },
       {
         name: 'bsh_api_url',
-        label: 'BSH API URL（必填）',
+        label: 'BrandSparkHub API URL（必填）',
         type: 'text',
-        placeholder: '例如: https://api.bsh.com/api',
-        help: 'BSH平台的API基础URL，必须配置',
+        placeholder: '例如: https://www.brandsparkhub.com/api',
+        help: 'BrandSparkHub平台的API基础URL，必须配置',
         required: true
       }
     ]
   },
   
-  // CF 平台
+  // ========== CF (CreatorFlare) ==========
   cf: {
     fields: [
       {
         name: 'cf_token',
-        label: 'CF API Token',
+        label: 'CreatorFlare API Token',
         type: 'password',
-        placeholder: '请输入 CF API Token',
-        help: '用于同步 CF 交易数据',
+        placeholder: '请输入 CreatorFlare API Token',
+        help: '用于同步 CreatorFlare 交易数据',
         required: false
       },
       {
         name: 'cf_api_url',
-        label: 'CF API URL（必填）',
+        label: 'CreatorFlare API URL（必填）',
         type: 'text',
-        placeholder: '例如: https://api.cf.com/api',
-        help: 'CF平台的API基础URL，必须配置',
+        placeholder: '例如: https://www.creatorflare.com/api',
+        help: 'CreatorFlare平台的API基础URL，必须配置',
         required: true
       }
     ]
@@ -236,19 +291,33 @@ export const getPlatformApiConfig = (platformCode) => {
     return PLATFORM_API_CONFIG[code]
   }
   
-  // 别名匹配（支持多种格式）
+  // 别名匹配（支持多种格式：小写缩写和全称）
   const aliasMap = {
-    'rw': 'rewardoo',
-    'rewardoo': 'rewardoo',
-    'cg': 'collabglow',
-    'collabglow': 'collabglow',
-    'lh': 'linkhaitao',
-    'linkhaitao': 'linkhaitao',
-    'link-haitao': 'linkhaitao',
+    // CG
+    'cg': 'cg',
+    'collabglow': 'cg',
+    // RW
+    'rw': 'rw',
+    'rewardoo': 'rw',
+    // LH
+    'lh': 'lh',
+    'linkhaitao': 'lh',
+    'link-haitao': 'lh',
+    // LB
     'lb': 'lb',
+    'linkbux': 'lb',
+    // PB
+    'pb': 'pb',
+    'partnerboost': 'pb',
+    // PM
     'pm': 'pm',
+    'partnermatic': 'pm',
+    // BSH
     'bsh': 'bsh',
-    'cf': 'cf'
+    'brandsparkhub': 'bsh',
+    // CF
+    'cf': 'cf',
+    'creatorflare': 'cf'
   }
   
   if (aliasMap[code]) {

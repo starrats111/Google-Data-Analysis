@@ -722,7 +722,7 @@ async def export_financial_report(
     employees = db.query(User).filter(User.role == 'employee').order_by(User.username).all()
     
     # 平台列表
-    PLATFORMS = ['RW', 'LH', 'CG', 'LB', 'PM', 'CF', 'BSH']
+    PLATFORMS = ['CG', 'RW', 'LH', 'PM', 'LB', 'PB', 'BSH', 'CF']
     NUM_PLATFORMS = len(PLATFORMS)
     
     # 创建工作簿

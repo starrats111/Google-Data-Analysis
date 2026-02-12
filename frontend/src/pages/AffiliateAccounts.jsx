@@ -272,7 +272,7 @@ const AffiliateAccounts = () => {
         } else if (platformCode === 'cg' || platformCode === 'collabglow' || platformName.includes('collabglow')) {
           existingToken = notesData.collabglow_token || notesData.cg_token || notesData.api_token || ''
           existingApiUrl = notesData.collabglow_api_url || notesData.cg_api_url || notesData.api_url || ''
-        } else if (['lb', 'pm', 'bsh', 'cf'].includes(platformCode)) {
+        } else if (['lb', 'pb', 'pm', 'bsh', 'cf'].includes(platformCode)) {
           existingToken = notesData[`${platformCode}_token`] || notesData.api_token || notesData.token || ''
           existingApiUrl = notesData[`${platformCode}_api_url`] || notesData.api_url || ''
         } else {
@@ -355,7 +355,7 @@ const AffiliateAccounts = () => {
               notesData.cg_api_url = api_url
               notesData.api_url = api_url  // 通用字段
             }
-          } else if (['lb', 'pm', 'bsh', 'cf'].includes(platformCode)) {
+          } else if (['lb', 'pb', 'pm', 'bsh', 'cf'].includes(platformCode)) {
             if (token) {
               notesData[`${platformCode}_token`] = token
               notesData.api_token = token  // 通用字段
@@ -492,14 +492,15 @@ const AffiliateAccounts = () => {
     }
   }
 
-  // 检查是否为 CollabGlow 平台
+  // 检查是否为 CollabGlow 平台（支持 cg 和 collabglow 两种格式）
   const isCollabGlowPlatform = (account) => {
     const platform = account.platform || account
     const platformName = platform.platform_name || platform.platformName || ''
     const platformCode = platform.platform_code || platform.platformCode || ''
-    return platformName.toLowerCase().includes('collabglow') || 
-           platformName.toLowerCase().includes('collab') ||
-           platformCode.toLowerCase() === 'collabglow'
+    const code = platformCode.toLowerCase()
+    const name = platformName.toLowerCase()
+    return code === 'cg' || code === 'collabglow' ||
+           name.includes('collabglow') || name.includes('collab')
   }
 
   // 一键同步所有平台
@@ -546,15 +547,15 @@ const AffiliateAccounts = () => {
     }
   }
 
-  // 检查是否为 LinkHaitao 平台
+  // 检查是否为 LinkHaitao 平台（支持 lh 和 linkhaitao 两种格式）
   const isLinkHaitaoPlatform = (account) => {
     const platform = account.platform || account
     const platformName = platform.platform_name || platform.platformName || ''
     const platformCode = platform.platform_code || platform.platformCode || ''
-    return platformName.toLowerCase().includes('linkhaitao') || 
-           platformName.toLowerCase().includes('link-haitao') ||
-           platformCode.toLowerCase() === 'linkhaitao' ||
-           platformCode.toLowerCase() === 'link-haitao'
+    const code = platformCode.toLowerCase()
+    const name = platformName.toLowerCase()
+    return code === 'lh' || code === 'linkhaitao' || code === 'link-haitao' ||
+           name.includes('linkhaitao') || name.includes('link-haitao')
   }
 
   // 员工视图：显示自己的账号列表
@@ -823,8 +824,8 @@ const AffiliateAccounts = () => {
                                    platformName.includes('collabglow') || platformName.includes('cg')
               
               // 也支持LB、PM、BSH、CF等通用平台
-              const isGenericPlatform = ['lb', 'pm', 'bsh', 'cf'].includes(platformCode) || 
-                                       ['lb', 'pm', 'bsh', 'cf'].includes(platformName)
+              const isGenericPlatform = ['lb', 'pb', 'pm', 'bsh', 'cf'].includes(platformCode) || 
+                                       ['lb', 'pb', 'pm', 'bsh', 'cf'].includes(platformName)
               
               if (isRewardoo || isCollabGlow || isGenericPlatform) {
                 // 尝试使用platform_code，如果失败则使用platform_name
@@ -1199,8 +1200,8 @@ const AffiliateAccounts = () => {
                                    platformName.includes('collabglow') || platformName.includes('cg')
               
               // 也支持LB、PM、BSH、CF等通用平台
-              const isGenericPlatform = ['lb', 'pm', 'bsh', 'cf'].includes(platformCode) || 
-                                       ['lb', 'pm', 'bsh', 'cf'].includes(platformName)
+              const isGenericPlatform = ['lb', 'pb', 'pm', 'bsh', 'cf'].includes(platformCode) || 
+                                       ['lb', 'pb', 'pm', 'bsh', 'cf'].includes(platformName)
               
               if (isRewardoo || isCollabGlow || isGenericPlatform) {
                 // 尝试使用platform_code，如果失败则使用platform_name

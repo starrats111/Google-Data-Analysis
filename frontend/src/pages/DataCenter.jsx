@@ -266,19 +266,23 @@ const DataCenter = () => {
       key: 'platform',
       width: 100,
       render: (val) => {
-        // 不同平台使用不同颜色
+        // 平台代码映射（支持新旧两种格式：小写缩写和全称）
         const platformColors = {
-          'cg': { bg: '#e6f7ff', color: '#1890ff', name: 'CG' },       // 蓝色
-          'rw': { bg: '#fff7e6', color: '#fa8c16', name: 'RW' },       // 橙色
-          'lh': { bg: '#f6ffed', color: '#52c41a', name: 'LH' },       // 绿色
+          // 新格式（小写缩写）- 数据库统一存储格式
+          'cg': { bg: '#e6f7ff', color: '#1890ff', name: 'CG' },       // CollabGlow
+          'rw': { bg: '#fff7e6', color: '#fa8c16', name: 'RW' },       // Rewardoo
+          'lh': { bg: '#f6ffed', color: '#52c41a', name: 'LH' },       // LinkHaitao
+          'pm': { bg: '#fff0f6', color: '#eb2f96', name: 'PM' },       // Partnermatic
+          'lb': { bg: '#f9f0ff', color: '#722ed1', name: 'LB' },       // Linkbux
+          'pb': { bg: '#fff1f0', color: '#f5222d', name: 'PB' },       // PartnerBoost
+          'bsh': { bg: '#fcffe6', color: '#a0d911', name: 'BSH' },     // BrandSparkHub
+          'cf': { bg: '#e6fffb', color: '#13c2c2', name: 'CF' },       // CreatorFlare
+          // 旧格式（全称）- 兼容历史数据
           'linkhaitao': { bg: '#f6ffed', color: '#52c41a', name: 'LH' },
-          'pm': { bg: '#fff0f6', color: '#eb2f96', name: 'PM' },       // 粉色
           'partnermatic': { bg: '#fff0f6', color: '#eb2f96', name: 'PM' },
-          'lb': { bg: '#f9f0ff', color: '#722ed1', name: 'LB' },       // 紫色
           'linkbux': { bg: '#f9f0ff', color: '#722ed1', name: 'LB' },
-          'bsh': { bg: '#fcffe6', color: '#a0d911', name: 'BSH' },     // 青柠色
+          'partnerboost': { bg: '#fff1f0', color: '#f5222d', name: 'PB' },
           'brandsparkhub': { bg: '#fcffe6', color: '#a0d911', name: 'BSH' },
-          'cf': { bg: '#e6fffb', color: '#13c2c2', name: 'CF' },       // 青色
           'creatorflare': { bg: '#e6fffb', color: '#13c2c2', name: 'CF' },
         }
         const key = val?.toLowerCase()
@@ -359,12 +363,22 @@ const DataCenter = () => {
       key: 'platform',
       width: 80,
       render: (val) => {
+        // 平台代码映射（支持新旧两种格式：小写缩写和全称）
         const platformColors = {
-          'cg': { bg: '#e6f7ff', color: '#1890ff', name: 'CG' },
-          'rw': { bg: '#fff7e6', color: '#fa8c16', name: 'RW' },
+          // 新格式（小写缩写）- 数据库统一存储格式
+          'cg': { bg: '#e6f7ff', color: '#1890ff', name: 'CG' },       // CollabGlow
+          'rw': { bg: '#fff7e6', color: '#fa8c16', name: 'RW' },       // Rewardoo
+          'lh': { bg: '#f6ffed', color: '#52c41a', name: 'LH' },       // LinkHaitao
+          'pm': { bg: '#fff0f6', color: '#eb2f96', name: 'PM' },       // Partnermatic
+          'lb': { bg: '#f9f0ff', color: '#722ed1', name: 'LB' },       // Linkbux
+          'pb': { bg: '#fff1f0', color: '#f5222d', name: 'PB' },       // PartnerBoost
+          'bsh': { bg: '#fcffe6', color: '#a0d911', name: 'BSH' },     // BrandSparkHub
+          'cf': { bg: '#e6fffb', color: '#13c2c2', name: 'CF' },       // CreatorFlare
+          // 旧格式（全称）- 兼容历史数据
           'linkhaitao': { bg: '#f6ffed', color: '#52c41a', name: 'LH' },
           'partnermatic': { bg: '#fff0f6', color: '#eb2f96', name: 'PM' },
           'linkbux': { bg: '#f9f0ff', color: '#722ed1', name: 'LB' },
+          'partnerboost': { bg: '#fff1f0', color: '#f5222d', name: 'PB' },
           'brandsparkhub': { bg: '#fcffe6', color: '#a0d911', name: 'BSH' },
           'creatorflare': { bg: '#e6fffb', color: '#13c2c2', name: 'CF' },
         }
