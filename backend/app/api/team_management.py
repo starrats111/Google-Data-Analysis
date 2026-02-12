@@ -80,8 +80,10 @@ class TeamStatsResponse(BaseModel):
     team_name: str
     member_count: int
     total_cost: float
-    total_commission: float
-    total_profit: float
+    total_commission: float  # 总佣金（所有状态）
+    rejected_commission: float  # 拒付佣金
+    net_commission: float  # 净佣金（总佣金 - 拒付佣金）
+    total_profit: float  # 利润（净佣金 - 费用）
     avg_roi: float
 
 class MemberRankingResponse(BaseModel):
@@ -91,8 +93,10 @@ class MemberRankingResponse(BaseModel):
     team_code: Optional[str]
     team_name: Optional[str]
     cost: float
-    commission: float
-    profit: float
+    commission: float  # 总佣金
+    rejected_commission: float  # 拒付佣金
+    net_commission: float  # 净佣金
+    profit: float  # 利润（基于净佣金）
     roi: float
 
 
@@ -473,6 +477,8 @@ async def get_team_stats(
                 member_count=0,
                 total_cost=0,
                 total_commission=0,
+                rejected_commission=0,
+                net_commission=0,
                 total_profit=0,
                 avg_roi=0
             ))
@@ -488,18 +494,32 @@ async def get_team_stats(
             cost_query = cost_query.filter(GoogleAdsApiData.date <= end_date)
         total_cost = float(cost_query.scalar() or 0)
         
-        # 计算佣金（平台交易）
-        commission_query = db.query(func.sum(AffiliateTransaction.commission_amount)).filter(
-            AffiliateTransaction.user_id.in_(member_ids),
-            AffiliateTransaction.status != 'rejected'
+        # 计算总佣金（所有状态）
+        total_commission_query = db.query(func.sum(AffiliateTransaction.commission_amount)).filter(
+            AffiliateTransaction.user_id.in_(member_ids)
         )
         if start_date:
-            commission_query = commission_query.filter(AffiliateTransaction.transaction_time >= start_date)
+            total_commission_query = total_commission_query.filter(AffiliateTransaction.transaction_time >= start_date)
         if end_date:
-            commission_query = commission_query.filter(AffiliateTransaction.transaction_time <= end_date)
-        total_commission = float(commission_query.scalar() or 0)
+            total_commission_query = total_commission_query.filter(AffiliateTransaction.transaction_time <= end_date)
+        total_commission = float(total_commission_query.scalar() or 0)
         
-        total_profit = total_commission - total_cost
+        # 计算拒付佣金
+        rejected_query = db.query(func.sum(AffiliateTransaction.commission_amount)).filter(
+            AffiliateTransaction.user_id.in_(member_ids),
+            AffiliateTransaction.status == 'rejected'
+        )
+        if start_date:
+            rejected_query = rejected_query.filter(AffiliateTransaction.transaction_time >= start_date)
+        if end_date:
+            rejected_query = rejected_query.filter(AffiliateTransaction.transaction_time <= end_date)
+        rejected_commission = float(rejected_query.scalar() or 0)
+        
+        # 净佣金 = 总佣金 - 拒付佣金
+        net_commission = total_commission - rejected_commission
+        
+        # 利润基于净佣金计算
+        total_profit = net_commission - total_cost
         avg_roi = (total_profit / total_cost * 100) if total_cost > 0 else 0
         
         result.append(TeamStatsResponse(
@@ -508,6 +528,8 @@ async def get_team_stats(
             member_count=member_count,
             total_cost=round(total_cost, 2),
             total_commission=round(total_commission, 2),
+            rejected_commission=round(rejected_commission, 2),
+            net_commission=round(net_commission, 2),
             total_profit=round(total_profit, 2),
             avg_roi=round(avg_roi, 1)
         ))
@@ -550,18 +572,32 @@ async def get_member_ranking(
             cost_query = cost_query.filter(GoogleAdsApiData.date <= end_date)
         cost = float(cost_query.scalar() or 0)
         
-        # 计算佣金
-        commission_query = db.query(func.sum(AffiliateTransaction.commission_amount)).filter(
-            AffiliateTransaction.user_id == user.id,
-            AffiliateTransaction.status != 'rejected'
+        # 计算总佣金（所有状态）
+        total_commission_query = db.query(func.sum(AffiliateTransaction.commission_amount)).filter(
+            AffiliateTransaction.user_id == user.id
         )
         if start_date:
-            commission_query = commission_query.filter(AffiliateTransaction.transaction_time >= start_date)
+            total_commission_query = total_commission_query.filter(AffiliateTransaction.transaction_time >= start_date)
         if end_date:
-            commission_query = commission_query.filter(AffiliateTransaction.transaction_time <= end_date)
-        commission = float(commission_query.scalar() or 0)
+            total_commission_query = total_commission_query.filter(AffiliateTransaction.transaction_time <= end_date)
+        commission = float(total_commission_query.scalar() or 0)
         
-        profit = commission - cost
+        # 计算拒付佣金
+        rejected_query = db.query(func.sum(AffiliateTransaction.commission_amount)).filter(
+            AffiliateTransaction.user_id == user.id,
+            AffiliateTransaction.status == 'rejected'
+        )
+        if start_date:
+            rejected_query = rejected_query.filter(AffiliateTransaction.transaction_time >= start_date)
+        if end_date:
+            rejected_query = rejected_query.filter(AffiliateTransaction.transaction_time <= end_date)
+        rejected_commission = float(rejected_query.scalar() or 0)
+        
+        # 净佣金 = 总佣金 - 拒付佣金
+        net_commission = commission - rejected_commission
+        
+        # 利润基于净佣金计算
+        profit = net_commission - cost
         roi = (profit / cost * 100) if cost > 0 else 0
         
         team_code = None
@@ -580,6 +616,8 @@ async def get_member_ranking(
             team_name=team_name,
             cost=round(cost, 2),
             commission=round(commission, 2),
+            rejected_commission=round(rejected_commission, 2),
+            net_commission=round(net_commission, 2),
             profit=round(profit, 2),
             roi=round(roi, 1)
         ))

@@ -141,8 +141,8 @@ const TeamOverview = () => {
               borderLeft: `4px solid ${currentTeamStats.avg_roi >= 0 ? '#52c41a' : '#ff4d4f'}`
             }}
           >
-            <Row gutter={24}>
-              <Col xs={24} sm={12} md={6}>
+            <Row gutter={16}>
+              <Col xs={12} sm={8} md={4}>
                 <Statistic 
                   title="小组成员" 
                   value={currentTeamStats.member_count} 
@@ -150,7 +150,7 @@ const TeamOverview = () => {
                   prefix={<TeamOutlined />}
                 />
               </Col>
-              <Col xs={24} sm={12} md={6}>
+              <Col xs={12} sm={8} md={4}>
                 <Statistic 
                   title="总费用" 
                   value={currentTeamStats.total_cost} 
@@ -159,16 +159,34 @@ const TeamOverview = () => {
                   valueStyle={{ color: '#cf1322' }}
                 />
               </Col>
-              <Col xs={24} sm={12} md={6}>
+              <Col xs={12} sm={8} md={4}>
                 <Statistic 
                   title="总佣金" 
                   value={currentTeamStats.total_commission} 
                   precision={2} 
                   prefix="$"
-                  valueStyle={{ color: '#3f8600' }}
+                  valueStyle={{ color: '#1890ff' }}
                 />
               </Col>
-              <Col xs={24} sm={12} md={6}>
+              <Col xs={12} sm={8} md={4}>
+                <Statistic 
+                  title="拒付佣金" 
+                  value={currentTeamStats.rejected_commission || 0} 
+                  precision={2} 
+                  prefix="$"
+                  valueStyle={{ color: '#ff4d4f' }}
+                />
+              </Col>
+              <Col xs={12} sm={8} md={4}>
+                <Statistic 
+                  title="净佣金" 
+                  value={currentTeamStats.net_commission || 0} 
+                  precision={2} 
+                  prefix="$"
+                  valueStyle={{ color: '#52c41a' }}
+                />
+              </Col>
+              <Col xs={12} sm={8} md={4}>
                 <Statistic 
                   title="总利润" 
                   value={currentTeamStats.total_profit} 
@@ -227,14 +245,28 @@ const TeamOverview = () => {
                   dataIndex: 'cost',
                   key: 'cost',
                   align: 'right',
-                  render: (v) => <Text type="danger">${v.toFixed(2)}</Text>
+                  render: (v) => <Text type="danger">${(v || 0).toFixed(2)}</Text>
                 },
                 {
-                  title: '佣金',
+                  title: '总佣金',
                   dataIndex: 'commission',
                   key: 'commission',
                   align: 'right',
-                  render: (v) => <Text type="success">${v.toFixed(2)}</Text>
+                  render: (v) => <Text style={{ color: '#1890ff' }}>${(v || 0).toFixed(2)}</Text>
+                },
+                {
+                  title: '拒付',
+                  dataIndex: 'rejected_commission',
+                  key: 'rejected_commission',
+                  align: 'right',
+                  render: (v) => <Text type="danger">${(v || 0).toFixed(2)}</Text>
+                },
+                {
+                  title: '净佣金',
+                  dataIndex: 'net_commission',
+                  key: 'net_commission',
+                  align: 'right',
+                  render: (v) => <Text type="success">${(v || 0).toFixed(2)}</Text>
                 },
                 {
                   title: '利润',
@@ -242,8 +274,8 @@ const TeamOverview = () => {
                   key: 'profit',
                   align: 'right',
                   render: (v) => (
-                    <Text style={{ color: v >= 0 ? '#52c41a' : '#ff4d4f', fontWeight: 600 }}>
-                      {v >= 0 ? '+' : ''}${v.toFixed(2)}
+                    <Text style={{ color: (v || 0) >= 0 ? '#52c41a' : '#ff4d4f', fontWeight: 600 }}>
+                      {(v || 0) >= 0 ? '+' : ''}${(v || 0).toFixed(2)}
                     </Text>
                   )
                 },
@@ -253,8 +285,8 @@ const TeamOverview = () => {
                   key: 'roi',
                   align: 'right',
                   render: (v) => (
-                    <Tag color={v >= 20 ? 'success' : v >= 0 ? 'processing' : 'error'} style={{ fontSize: 14 }}>
-                      {v >= 0 ? '+' : ''}{v.toFixed(1)}%
+                    <Tag color={(v || 0) >= 20 ? 'success' : (v || 0) >= 0 ? 'processing' : 'error'} style={{ fontSize: 14 }}>
+                      {(v || 0) >= 0 ? '+' : ''}{(v || 0).toFixed(1)}%
                     </Tag>
                   )
                 }

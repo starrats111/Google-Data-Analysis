@@ -408,23 +408,52 @@ const TeamManagement = () => {
                 </Title>
                 <Tag color="blue">{stat.member_count} 人</Tag>
               </div>
-              <Row gutter={16}>
-                <Col span={12}>
+              <Row gutter={8}>
+                <Col span={8}>
                   <Statistic 
                     title="费用" 
                     value={stat.total_cost} 
                     precision={2} 
                     prefix="$"
-                    valueStyle={{ fontSize: 18 }}
+                    valueStyle={{ fontSize: 14, color: '#cf1322' }}
                   />
                 </Col>
-                <Col span={12}>
+                <Col span={8}>
                   <Statistic 
-                    title="佣金" 
+                    title="总佣金" 
                     value={stat.total_commission} 
                     precision={2} 
                     prefix="$"
-                    valueStyle={{ fontSize: 18, color: '#52c41a' }}
+                    valueStyle={{ fontSize: 14, color: '#1890ff' }}
+                  />
+                </Col>
+                <Col span={8}>
+                  <Statistic 
+                    title="净佣金" 
+                    value={stat.net_commission || 0} 
+                    precision={2} 
+                    prefix="$"
+                    valueStyle={{ fontSize: 14, color: '#52c41a' }}
+                  />
+                </Col>
+              </Row>
+              <Row gutter={8} style={{ marginTop: 8 }}>
+                <Col span={8}>
+                  <Statistic 
+                    title="拒付" 
+                    value={stat.rejected_commission || 0} 
+                    precision={2} 
+                    prefix="$"
+                    valueStyle={{ fontSize: 14, color: '#ff4d4f' }}
+                  />
+                </Col>
+                <Col span={16}>
+                  <Statistic 
+                    title="利润" 
+                    value={stat.total_profit} 
+                    precision={2} 
+                    prefix="$"
+                    valueStyle={{ fontSize: 14, color: stat.total_profit >= 0 ? '#52c41a' : '#ff4d4f' }}
                   />
                 </Col>
               </Row>
@@ -489,23 +518,39 @@ const TeamManagement = () => {
                 title: '费用',
                 dataIndex: 'cost',
                 key: 'cost',
-                width: 120,
+                width: 100,
                 sorter: (a, b) => (a.cost || 0) - (b.cost || 0),
-                render: (v) => `$${(v || 0).toFixed(2)}`
+                render: (v) => <Text type="danger">${(v || 0).toFixed(2)}</Text>
               },
               {
-                title: '佣金',
+                title: '总佣金',
                 dataIndex: 'commission',
                 key: 'commission',
-                width: 120,
+                width: 100,
                 sorter: (a, b) => (a.commission || 0) - (b.commission || 0),
-                render: (v) => <Text style={{ color: '#52c41a' }}>${(v || 0).toFixed(2)}</Text>
+                render: (v) => <Text style={{ color: '#1890ff' }}>${(v || 0).toFixed(2)}</Text>
+              },
+              {
+                title: '拒付',
+                dataIndex: 'rejected_commission',
+                key: 'rejected_commission',
+                width: 90,
+                sorter: (a, b) => (a.rejected_commission || 0) - (b.rejected_commission || 0),
+                render: (v) => <Text type="danger">${(v || 0).toFixed(2)}</Text>
+              },
+              {
+                title: '净佣金',
+                dataIndex: 'net_commission',
+                key: 'net_commission',
+                width: 100,
+                sorter: (a, b) => (a.net_commission || 0) - (b.net_commission || 0),
+                render: (v) => <Text type="success">${(v || 0).toFixed(2)}</Text>
               },
               {
                 title: '利润',
                 dataIndex: 'profit',
                 key: 'profit',
-                width: 120,
+                width: 100,
                 sorter: (a, b) => (a.profit || 0) - (b.profit || 0),
                 render: (v) => (
                   <Text style={{ color: (v || 0) >= 0 ? '#52c41a' : '#ff4d4f' }}>
@@ -517,7 +562,7 @@ const TeamManagement = () => {
                 title: 'ROI',
                 dataIndex: 'roi',
                 key: 'roi',
-                width: 100,
+                width: 90,
                 sorter: (a, b) => (a.roi || 0) - (b.roi || 0),
                 defaultSortOrder: 'descend',
                 render: (v) => (
