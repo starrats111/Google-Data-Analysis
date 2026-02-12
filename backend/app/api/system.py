@@ -31,11 +31,11 @@ async def get_system_logs(
 ):
     """
     获取系统日志
-    仅经理可访问
+    经理和组长可访问
     """
     # 权限检查
-    if current_user.role != 'manager':
-        raise HTTPException(status_code=403, detail="仅经理可查看系统日志")
+    if current_user.role not in ('manager', 'leader'):
+        raise HTTPException(status_code=403, detail="仅经理和组长可查看系统日志")
     
     try:
         # 解析时间范围
@@ -162,10 +162,10 @@ async def get_system_stats(
 ):
     """
     获取系统统计信息
-    仅经理可访问
+    经理和组长可访问
     """
-    if current_user.role != 'manager':
-        raise HTTPException(status_code=403, detail="仅经理可查看系统统计")
+    if current_user.role not in ('manager', 'leader'):
+        raise HTTPException(status_code=403, detail="仅经理和组长可查看系统统计")
     
     from app.models.user import User
     from app.models.google_ads_api_data import GoogleMccAccount, GoogleAdsApiData
