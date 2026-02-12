@@ -94,91 +94,84 @@ const Layout = () => {
     },
   ]
 
-  // 组长菜单 - 增加小组总览
+  // 组长菜单 - 类似经理菜单格式，但用小组总览
   const leaderMenuItems = [
     {
-      key: 'workspace',
+      key: 'overview',
       icon: <DashboardOutlined />,
-      label: '工作台',
+      label: '总览',
       children: [
         { key: '/team-overview', icon: <TeamOutlined />, label: '小组总览' },
-        { key: '/', icon: <DashboardOutlined />, label: '数据总览' },
-        { key: '/analysis-l7d', icon: <BarChartOutlined />, label: 'L7D分析' },
-        { key: '/bid-management', icon: <SettingOutlined />, label: '出价管理' },
       ],
     },
     {
-      key: 'ai-tools',
-      icon: <RocketOutlined />,
-      label: 'AI工具',
+      key: 'employee-manage',
+      icon: <TeamOutlined />,
+      label: '员工管理',
       children: [
-        { key: '/ad-copy', icon: <RocketOutlined />, label: 'AI广告词生成' },
-        { key: '/my-reports', icon: <FileTextOutlined />, label: '我的报告' },
+        { key: '/employees', icon: <UserOutlined />, label: '员工列表' },
       ],
     },
     {
-      key: 'data-center',
-      icon: <DatabaseOutlined />,
-      label: '数据查看',
+      key: 'report-center',
+      icon: <FileTextOutlined />,
+      label: '报表中心',
       children: [
-        { key: '/data-center', icon: <DatabaseOutlined />, label: '数据中心' },
+        { key: '/financial-report', icon: <AccountBookOutlined />, label: '财务报表' },
+        { key: '/report-monthly', icon: <FileTextOutlined />, label: '本月报表' },
+        { key: '/report-quarterly', icon: <FileTextOutlined />, label: '本季度报表' },
+        { key: '/report-yearly', icon: <FileTextOutlined />, label: '本年度报表' },
       ],
     },
     {
-      key: 'account-manage',
+      key: 'system-manage',
       icon: <SettingOutlined />,
-      label: '账号管理',
+      label: '系统管理',
       children: [
-        { key: '/mcc-accounts', icon: <AccountBookOutlined />, label: 'MCC账号' },
-        { key: '/accounts', icon: <AccountBookOutlined />, label: '平台账号' },
+        { key: '/mcc-accounts', icon: <AccountBookOutlined />, label: '所有MCC账号' },
+        { key: '/accounts', icon: <AccountBookOutlined />, label: '所有平台账号' },
+        { key: '/system-logs', icon: <FileSearchOutlined />, label: '系统日志' },
       ],
     },
   ]
 
-  // 经理菜单 - 团队管理 + 所有功能
+  // 经理菜单 - 和截图格式一致，把「总览>团队总览」改为「团队管理」
   const managerMenuItems = [
     {
-      key: 'team-manage',
-      icon: <CrownOutlined />,
-      label: '团队管理',
+      key: 'overview',
+      icon: <DashboardOutlined />,
+      label: '总览',
       children: [
         { key: '/team-management', icon: <TeamOutlined />, label: '团队管理' },
       ],
     },
     {
-      key: 'workspace',
-      icon: <DashboardOutlined />,
-      label: '工作台',
+      key: 'employee-manage',
+      icon: <TeamOutlined />,
+      label: '员工管理',
       children: [
-        { key: '/', icon: <DashboardOutlined />, label: '数据总览' },
-        { key: '/analysis-l7d', icon: <BarChartOutlined />, label: 'L7D分析' },
-        { key: '/bid-management', icon: <SettingOutlined />, label: '出价管理' },
+        { key: '/employees', icon: <UserOutlined />, label: '员工列表' },
       ],
     },
     {
-      key: 'ai-tools',
-      icon: <RocketOutlined />,
-      label: 'AI工具',
+      key: 'report-center',
+      icon: <FileTextOutlined />,
+      label: '报表中心',
       children: [
-        { key: '/ad-copy', icon: <RocketOutlined />, label: 'AI广告词生成' },
-        { key: '/my-reports', icon: <FileTextOutlined />, label: '我的报告' },
+        { key: '/financial-report', icon: <AccountBookOutlined />, label: '财务报表' },
+        { key: '/report-monthly', icon: <FileTextOutlined />, label: '本月报表' },
+        { key: '/report-quarterly', icon: <FileTextOutlined />, label: '本季度报表' },
+        { key: '/report-yearly', icon: <FileTextOutlined />, label: '本年度报表' },
       ],
     },
     {
-      key: 'data-center',
-      icon: <DatabaseOutlined />,
-      label: '数据查看',
-      children: [
-        { key: '/data-center', icon: <DatabaseOutlined />, label: '数据中心' },
-      ],
-    },
-    {
-      key: 'account-manage',
+      key: 'system-manage',
       icon: <SettingOutlined />,
-      label: '账号管理',
+      label: '系统管理',
       children: [
-        { key: '/mcc-accounts', icon: <AccountBookOutlined />, label: 'MCC账号' },
-        { key: '/accounts', icon: <AccountBookOutlined />, label: '平台账号' },
+        { key: '/mcc-accounts', icon: <AccountBookOutlined />, label: '所有MCC账号' },
+        { key: '/accounts', icon: <AccountBookOutlined />, label: '所有平台账号' },
+        { key: '/system-logs', icon: <FileSearchOutlined />, label: '系统日志' },
       ],
     },
   ]
