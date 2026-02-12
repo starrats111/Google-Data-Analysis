@@ -154,9 +154,9 @@ def diagnose_and_fix_missing_mid():
     else:
         print(f"\n⚠️ 没有自动修复的记录")
     
-    # 对于无法自动修复的，尝试从商家名推断
+    # 对于无法自动修复的，尝试从商家名推断（扩大搜索范围）
     print("\n" + "=" * 80)
-    print("尝试从商家名映射MID...")
+    print("尝试从商家名映射MID（全库搜索）...")
     print("=" * 80)
     
     # 重新查询仍然缺失的记录
@@ -165,27 +165,76 @@ def diagnose_and_fix_missing_mid():
         AffiliateTransaction.merchant_id == None
     ).all()
     
+    additional_fixed = 0
+    
     if still_missing:
         print(f"\n仍有 {len(still_missing)} 条记录缺失MID:")
         
-        # 查找同商家名有MID的记录
+        from sqlalchemy import func
+        
+        # 查找同商家名有MID的记录（全库搜索，不限日期）
         for tx in still_missing:
-            # 查找同商家名的其他记录
+            merchant_lower = (tx.merchant or "").lower().strip()
+            
+            # 方法1：精确匹配商家名
             same_merchant = db.query(AffiliateTransaction).filter(
                 AffiliateTransaction.merchant == tx.merchant,
                 AffiliateTransaction.merchant_id != None
             ).first()
             
             if same_merchant:
-                print(f"  [{tx.merchant}] 从同商家记录获取: MID={same_merchant.merchant_id}")
+                print(f"  ✅ [{tx.merchant}] 精确匹配: MID={same_merchant.merchant_id}")
                 tx.merchant_id = same_merchant.merchant_id
-                fixed_count += 1
-            else:
-                print(f"  [{tx.merchant}] 未找到同商家的MID记录")
+                additional_fixed += 1
+                continue
+            
+            # 方法2：模糊匹配商家名（忽略大小写）
+            similar_merchant = db.query(AffiliateTransaction).filter(
+                func.lower(AffiliateTransaction.merchant) == merchant_lower,
+                AffiliateTransaction.merchant_id != None
+            ).first()
+            
+            if similar_merchant:
+                print(f"  ✅ [{tx.merchant}] 模糊匹配: MID={similar_merchant.merchant_id}")
+                tx.merchant_id = similar_merchant.merchant_id
+                additional_fixed += 1
+                continue
+            
+            # 方法3：包含匹配
+            like_merchant = db.query(AffiliateTransaction).filter(
+                func.lower(AffiliateTransaction.merchant).contains(merchant_lower),
+                AffiliateTransaction.merchant_id != None
+            ).first()
+            
+            if like_merchant:
+                print(f"  ✅ [{tx.merchant}] 包含匹配 [{like_merchant.merchant}]: MID={like_merchant.merchant_id}")
+                tx.merchant_id = like_merchant.merchant_id
+                additional_fixed += 1
+                continue
+            
+            # 方法4：反向包含匹配（同平台）
+            all_with_mid = db.query(AffiliateTransaction.merchant, AffiliateTransaction.merchant_id).filter(
+                AffiliateTransaction.merchant_id != None,
+                AffiliateTransaction.platform == tx.platform
+            ).distinct().limit(1000).all()
+            
+            found_reverse = False
+            for m_name, m_id in all_with_mid:
+                if m_name and merchant_lower in m_name.lower():
+                    print(f"  ✅ [{tx.merchant}] 反向匹配 [{m_name}]: MID={m_id}")
+                    tx.merchant_id = m_id
+                    additional_fixed += 1
+                    found_reverse = True
+                    break
+            
+            if not found_reverse:
+                print(f"  ❌ [{tx.merchant}] 全库搜索未找到MID")
         
-        if fixed_count > 0:
+        if additional_fixed > 0:
             db.commit()
-            print(f"\n✅ 通过商家名映射修复了记录")
+            print(f"\n✅ 通过商家名映射修复了 {additional_fixed} 条记录")
+        
+        fixed_count += additional_fixed
     
     # 最终检查
     final_missing = db.query(AffiliateTransaction).filter(
