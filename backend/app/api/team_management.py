@@ -483,7 +483,7 @@ async def get_team_stats(
             cost_query = cost_query.filter(GoogleAdsApiData.date >= start_date)
         if end_date:
             cost_query = cost_query.filter(GoogleAdsApiData.date <= end_date)
-        total_cost = cost_query.scalar() or 0
+        total_cost = float(cost_query.scalar() or 0)
         
         # 计算佣金（平台交易）
         commission_query = db.query(func.sum(AffiliateTransaction.commission_amount)).filter(
@@ -494,7 +494,7 @@ async def get_team_stats(
             commission_query = commission_query.filter(AffiliateTransaction.transaction_time >= start_date)
         if end_date:
             commission_query = commission_query.filter(AffiliateTransaction.transaction_time <= end_date)
-        total_commission = commission_query.scalar() or 0
+        total_commission = float(commission_query.scalar() or 0)
         
         total_profit = total_commission - total_cost
         avg_roi = (total_profit / total_cost * 100) if total_cost > 0 else 0
@@ -541,7 +541,7 @@ async def get_member_ranking(
             cost_query = cost_query.filter(GoogleAdsApiData.date >= start_date)
         if end_date:
             cost_query = cost_query.filter(GoogleAdsApiData.date <= end_date)
-        cost = cost_query.scalar() or 0
+        cost = float(cost_query.scalar() or 0)
         
         # 计算佣金
         commission_query = db.query(func.sum(AffiliateTransaction.commission_amount)).filter(
@@ -552,7 +552,7 @@ async def get_member_ranking(
             commission_query = commission_query.filter(AffiliateTransaction.transaction_time >= start_date)
         if end_date:
             commission_query = commission_query.filter(AffiliateTransaction.transaction_time <= end_date)
-        commission = commission_query.scalar() or 0
+        commission = float(commission_query.scalar() or 0)
         
         profit = commission - cost
         roi = (profit / cost * 100) if cost > 0 else 0
