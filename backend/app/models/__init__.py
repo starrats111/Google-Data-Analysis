@@ -2,6 +2,7 @@
 数据模型
 """
 from app.models.user import User, UserRole
+from app.models.team import Team
 from app.models.affiliate_account import AffiliatePlatform, AffiliateAccount
 from app.models.data_upload import DataUpload, UploadType, UploadStatus
 from app.models.analysis_result import AnalysisResult
@@ -17,6 +18,7 @@ from app.models.ai_report import AIReport, UserPrompt
 __all__ = [
     "User",
     "UserRole",
+    "Team",
     "AffiliatePlatform",
     "AffiliateAccount",
     "DataUpload",

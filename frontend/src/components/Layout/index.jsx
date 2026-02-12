@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react'
-import { Layout as AntLayout, Menu, Avatar, Dropdown, Space, Drawer, Button } from 'antd'
+import { Layout as AntLayout, Menu, Avatar, Dropdown, Space, Drawer, Button, Tag } from 'antd'
 import { Outlet, useNavigate, useLocation } from 'react-router-dom'
 import {
   DashboardOutlined,
@@ -15,6 +15,7 @@ import {
   MenuOutlined,
   BankOutlined,
   FileSearchOutlined,
+  CrownOutlined,
 } from '@ant-design/icons'
 import { useAuth } from '../../store/authStore'
 
@@ -26,9 +27,20 @@ const Layout = () => {
   const [isMobile, setIsMobile] = useState(window.innerWidth < 768)
   const navigate = useNavigate()
   const location = useLocation()
-  const { user, logout } = useAuth()
+  const { user, logout, permissions, fetchPermissions } = useAuth()
   
-  const isManager = user?.role === 'manager'
+  // 角色判断
+  const userRole = permissions?.role || user?.role || 'member'
+  const isManager = userRole === 'manager'
+  const isLeader = userRole === 'leader'
+  const teamInfo = permissions?.team
+  
+  // 首次加载时获取权限
+  useEffect(() => {
+    if (!permissions && user) {
+      fetchPermissions()
+    }
+  }, [user])
 
   // 响应式检测
   useEffect(() => {
@@ -42,8 +54,8 @@ const Layout = () => {
     return () => window.removeEventListener('resize', handleResize)
   }, [])
 
-  // 员工菜单 - 分组折叠
-  const employeeMenuItems = [
+  // 普通组员菜单
+  const memberMenuItems = [
     {
       key: 'workspace',
       icon: <DashboardOutlined />,
@@ -82,48 +94,103 @@ const Layout = () => {
     },
   ]
 
-  // 经理菜单 - 完全重设计
-  const managerMenuItems = [
+  // 组长菜单 - 增加小组总览
+  const leaderMenuItems = [
     {
-      key: 'overview',
+      key: 'workspace',
       icon: <DashboardOutlined />,
-      label: '总览',
+      label: '工作台',
       children: [
-        { key: '/', icon: <DashboardOutlined />, label: '团队总览' },
+        { key: '/team-overview', icon: <TeamOutlined />, label: '小组总览' },
+        { key: '/', icon: <DashboardOutlined />, label: '数据总览' },
+        { key: '/analysis-l7d', icon: <BarChartOutlined />, label: 'L7D分析' },
+        { key: '/bid-management', icon: <SettingOutlined />, label: '出价管理' },
       ],
     },
     {
-      key: 'employee-manage',
-      icon: <TeamOutlined />,
-      label: '员工管理',
+      key: 'ai-tools',
+      icon: <RocketOutlined />,
+      label: 'AI工具',
       children: [
-        { key: '/employees', icon: <TeamOutlined />, label: '员工列表' },
+        { key: '/ad-copy', icon: <RocketOutlined />, label: 'AI广告词生成' },
+        { key: '/my-reports', icon: <FileTextOutlined />, label: '我的报告' },
       ],
     },
     {
-      key: 'reports',
-      icon: <FileTextOutlined />,
-      label: '报表中心',
+      key: 'data-center',
+      icon: <DatabaseOutlined />,
+      label: '数据查看',
       children: [
-        { key: '/financial-report', icon: <BankOutlined />, label: '财务报表' },
-        { key: '/report-monthly', icon: <FileTextOutlined />, label: '本月报表' },
-        { key: '/report-quarterly', icon: <FileTextOutlined />, label: '本季度报表' },
-        { key: '/report-yearly', icon: <FileTextOutlined />, label: '本年度报表' },
+        { key: '/data-center', icon: <DatabaseOutlined />, label: '数据中心' },
       ],
     },
     {
-      key: 'system-manage',
+      key: 'account-manage',
       icon: <SettingOutlined />,
-      label: '系统管理',
+      label: '账号管理',
       children: [
-        { key: '/mcc-accounts', icon: <AccountBookOutlined />, label: '所有MCC账号' },
-        { key: '/accounts', icon: <AccountBookOutlined />, label: '所有平台账号' },
-        { key: '/system-logs', icon: <FileSearchOutlined />, label: '系统日志' },
+        { key: '/mcc-accounts', icon: <AccountBookOutlined />, label: 'MCC账号' },
+        { key: '/accounts', icon: <AccountBookOutlined />, label: '平台账号' },
       ],
     },
   ]
 
-  const menuItems = isManager ? managerMenuItems : employeeMenuItems
+  // 经理菜单 - 团队管理 + 所有功能
+  const managerMenuItems = [
+    {
+      key: 'team-manage',
+      icon: <CrownOutlined />,
+      label: '团队管理',
+      children: [
+        { key: '/team-management', icon: <TeamOutlined />, label: '团队管理' },
+      ],
+    },
+    {
+      key: 'workspace',
+      icon: <DashboardOutlined />,
+      label: '工作台',
+      children: [
+        { key: '/', icon: <DashboardOutlined />, label: '数据总览' },
+        { key: '/analysis-l7d', icon: <BarChartOutlined />, label: 'L7D分析' },
+        { key: '/bid-management', icon: <SettingOutlined />, label: '出价管理' },
+      ],
+    },
+    {
+      key: 'ai-tools',
+      icon: <RocketOutlined />,
+      label: 'AI工具',
+      children: [
+        { key: '/ad-copy', icon: <RocketOutlined />, label: 'AI广告词生成' },
+        { key: '/my-reports', icon: <FileTextOutlined />, label: '我的报告' },
+      ],
+    },
+    {
+      key: 'data-center',
+      icon: <DatabaseOutlined />,
+      label: '数据查看',
+      children: [
+        { key: '/data-center', icon: <DatabaseOutlined />, label: '数据中心' },
+      ],
+    },
+    {
+      key: 'account-manage',
+      icon: <SettingOutlined />,
+      label: '账号管理',
+      children: [
+        { key: '/mcc-accounts', icon: <AccountBookOutlined />, label: 'MCC账号' },
+        { key: '/accounts', icon: <AccountBookOutlined />, label: '平台账号' },
+      ],
+    },
+  ]
+
+  // 根据角色选择菜单
+  const getMenuItems = () => {
+    if (isManager) return managerMenuItems
+    if (isLeader) return leaderMenuItems
+    return memberMenuItems
+  }
+  
+  const menuItems = getMenuItems()
 
   // 计算当前选中的菜单项和展开的子菜单
   const getSelectedKeys = () => {
@@ -291,7 +358,10 @@ const Layout = () => {
             <Space style={{ cursor: 'pointer' }}>
               <Avatar icon={<UserOutlined />} />
               <span style={{ display: isMobile ? 'none' : 'inline' }}>
-                {user?.username} ({isManager ? '经理' : '员工'})
+                {user?.display_name || user?.username} 
+                {isManager && <Tag color="gold" style={{ marginLeft: 8 }}>经理</Tag>}
+                {isLeader && <Tag color="blue" style={{ marginLeft: 8 }}>{teamInfo?.name || '组长'}</Tag>}
+                {!isManager && !isLeader && <Tag color="default" style={{ marginLeft: 8 }}>员工</Tag>}
               </span>
             </Space>
           </Dropdown>

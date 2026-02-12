@@ -49,6 +49,7 @@ from app.api import (
     reports,
     stage_label,
     system,
+    team_management,
     upload,
     users,
 )
@@ -253,6 +254,7 @@ app.include_router(users.router)
 app.include_router(bid_management.router)
 app.include_router(reports.router)
 app.include_router(system.router)
+app.include_router(team_management.router)
 
 
 @app.get("/health")

@@ -1,10 +1,11 @@
 import { create } from 'zustand'
 import api from '../services/api'
 
-export const useAuth = create((set) => ({
+export const useAuth = create((set, get) => ({
   user: JSON.parse(localStorage.getItem('user') || 'null'),
   token: localStorage.getItem('token'),
   isAuthenticated: !!localStorage.getItem('token'),
+  permissions: JSON.parse(localStorage.getItem('permissions') || 'null'),
 
   login: async (username, password) => {
     try {
@@ -29,6 +30,10 @@ export const useAuth = create((set) => ({
       }
 
       set({ user, token: access_token, isAuthenticated: true })
+      
+      // 获取用户权限信息
+      await get().fetchPermissions()
+      
       return user
     } catch (error) {
       // 提供更详细的错误信息
@@ -48,13 +53,14 @@ export const useAuth = create((set) => ({
   logout: () => {
     localStorage.removeItem('token')
     localStorage.removeItem('user')
+    localStorage.removeItem('permissions')
     // 清理所有缓存数据，避免用户切换后看到其他用户的数据
     try {
       sessionStorage.clear()
     } catch (e) {
       // 忽略缓存清除错误
     }
-    set({ user: null, token: null, isAuthenticated: false })
+    set({ user: null, token: null, isAuthenticated: false, permissions: null })
   },
 
   getCurrentUser: async () => {
@@ -68,6 +74,42 @@ export const useAuth = create((set) => ({
       console.error('获取用户信息失败', error)
     }
   },
+  
+  fetchPermissions: async () => {
+    try {
+      const response = await api.get('/api/team/me/info')
+      const data = response.data
+      const permissions = {
+        ...data.permissions,
+        role: data.role,
+        team: data.team
+      }
+      localStorage.setItem('permissions', JSON.stringify(permissions))
+      set({ permissions })
+      return permissions
+    } catch (error) {
+      console.error('获取权限信息失败', error)
+      // 设置默认权限（普通成员）
+      const defaultPerms = {
+        is_manager: false,
+        is_leader: false,
+        can_view_all_teams: false,
+        can_view_team: false,
+        can_manage_users: false,
+        can_edit_team_members: false,
+        role: 'member',
+        team: null
+      }
+      set({ permissions: defaultPerms })
+      return defaultPerms
+    }
+  },
+  
+  // 便捷方法
+  isManager: () => get().permissions?.is_manager || false,
+  isLeader: () => get().permissions?.is_leader || false,
+  canViewTeam: () => get().permissions?.can_view_team || false,
+  canManageUsers: () => get().permissions?.can_manage_users || false,
 }))
 
 
