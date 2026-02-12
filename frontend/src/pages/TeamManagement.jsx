@@ -528,7 +528,7 @@ const TeamManagement = () => {
                 key: 'commission',
                 width: 100,
                 sorter: (a, b) => (a.commission || 0) - (b.commission || 0),
-                render: (v) => <Text style={{ color: '#1890ff' }}>${(v || 0).toFixed(2)}</Text>
+                render: (v) => <Text type="success">${(v || 0).toFixed(2)}</Text>
               },
               {
                 title: '拒付',
@@ -544,17 +544,9 @@ const TeamManagement = () => {
                 key: 'net_commission',
                 width: 100,
                 sorter: (a, b) => (a.net_commission || 0) - (b.net_commission || 0),
-                render: (v) => <Text type="success">${(v || 0).toFixed(2)}</Text>
-              },
-              {
-                title: '利润',
-                dataIndex: 'profit',
-                key: 'profit',
-                width: 100,
-                sorter: (a, b) => (a.profit || 0) - (b.profit || 0),
                 render: (v) => (
-                  <Text style={{ color: (v || 0) >= 0 ? '#52c41a' : '#ff4d4f' }}>
-                    ${(v || 0).toFixed(2)}
+                  <Text style={{ color: (v || 0) >= 0 ? '#52c41a' : '#ff4d4f', fontWeight: 600 }}>
+                    {(v || 0) >= 0 ? '+' : ''}${(v || 0).toFixed(2)}
                   </Text>
                 )
               },
@@ -566,8 +558,8 @@ const TeamManagement = () => {
                 sorter: (a, b) => (a.roi || 0) - (b.roi || 0),
                 defaultSortOrder: 'descend',
                 render: (v) => (
-                  <Tag color={(v || 0) >= 0 ? 'success' : 'error'}>
-                    {(v || 0).toFixed(1)}%
+                  <Tag color={(v || 0) >= 20 ? 'success' : (v || 0) >= 0 ? 'processing' : 'error'} style={{ fontSize: 14 }}>
+                    {(v || 0) >= 0 ? '+' : ''}{(v || 0).toFixed(1)}%
                   </Tag>
                 )
               }
