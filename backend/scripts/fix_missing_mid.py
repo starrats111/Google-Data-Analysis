@@ -90,14 +90,16 @@ def diagnose_and_fix_missing_mid():
                             # 调用CG API获取该交易的详情
                             service = CollabGlowService(token)
                             tx_date = tx.transaction_time.strftime("%Y-%m-%d")
-                            result = service._get_transactions_paginated(tx_date, tx_date, page=1, per_page=100)
+                            result = service.get_transactions(tx_date, tx_date)
                             
                             if result.get('success'):
-                                transactions = result.get('data', {}).get('list', [])
+                                # CG返回格式: {"data": {"transactions": [...]}} 或 {"data": {"list": [...]}}
+                                data = result.get('data', {})
+                                transactions = data.get('transactions', []) or data.get('list', [])
                                 
                                 # 查找匹配的交易
                                 for api_tx in transactions:
-                                    api_order_id = api_tx.get('orderId') or api_tx.get('order_id')
+                                    api_order_id = api_tx.get('orderId') or api_tx.get('order_id') or api_tx.get('transactionId') or api_tx.get('transaction_id')
                                     if str(api_order_id) == str(tx.transaction_id):
                                         # 找到了，提取MID
                                         brand_id = api_tx.get('brandId') or api_tx.get('brand_id') or api_tx.get('mid')
@@ -109,12 +111,23 @@ def diagnose_and_fix_missing_mid():
                                         else:
                                             print(f"  API返回数据中也没有brandId/mid字段")
                                             print(f"  API数据字段: {list(api_tx.keys())}")
+                                            # 打印一条示例数据帮助调试
+                                            if api_tx:
+                                                print(f"  示例数据: {api_tx}")
                                 else:
-                                    print(f"  在API返回数据中未找到匹配的交易ID")
+                                    print(f"  在API返回数据中未找到匹配的交易ID: {tx.transaction_id}")
+                                    # 打印前几条交易ID帮助调试
+                                    if transactions[:3]:
+                                        print(f"  API返回的交易ID示例:")
+                                        for t in transactions[:3]:
+                                            tid = t.get('orderId') or t.get('order_id') or t.get('transactionId')
+                                            print(f"    - {tid}")
                             else:
                                 print(f"  API调用失败: {result.get('message')}")
                     except Exception as e:
+                        import traceback
                         print(f"  处理异常: {e}")
+                        traceback.print_exc()
         
         # 如果还是没有MID，标记为需要手动处理
         if not tx.merchant_id:
