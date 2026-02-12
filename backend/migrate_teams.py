@@ -61,19 +61,13 @@ for i in range(1, 11):
 
 
 def get_team_names():
-    """交互式获取小组中文名"""
-    print("\n请输入小组中文名：")
-    print(f"  wj组 中文名: 文俊组 (已设置)")
+    """获取小组中文名 - jy/yz组使用默认名，可稍后在管理页面修改"""
+    print("\n小组中文名设置：")
+    print(f"  wj组: 文俊组")
+    print(f"  jy组: jy组 (可稍后在团队管理页面修改)")
+    print(f"  yz组: yz组 (可稍后在团队管理页面修改)")
     
-    jy_name = input("  jy组 中文名: ").strip()
-    if not jy_name:
-        jy_name = "jy组"
-    
-    yz_name = input("  yz组 中文名: ").strip()
-    if not yz_name:
-        yz_name = "yz组"
-    
-    return {"wj": "文俊组", "jy": jy_name, "yz": yz_name}
+    return {"wj": "文俊组", "jy": "jy组", "yz": "yz组"}
 
 
 def create_teams_table(conn, dry_run=False):
@@ -154,15 +148,24 @@ def create_teams(conn, team_names, dry_run=False):
     print("步骤4: 创建小组")
     print("=" * 60)
     
+    # 先检查 teams 表是否存在
+    inspector = inspect(conn)
+    if "teams" not in inspector.get_table_names():
+        print("  错误: teams 表不存在，请先执行步骤1")
+        return False
+    
     for code, name in team_names.items():
         # 检查是否已存在
-        result = conn.execute(
-            text("SELECT id FROM teams WHERE team_code = :code"),
-            {"code": code}
-        )
-        if result.fetchone():
-            print(f"  {code}组 ({name}) 已存在，跳过")
-            continue
+        try:
+            result = conn.execute(
+                text("SELECT id FROM teams WHERE team_code = :code"),
+                {"code": code}
+            )
+            if result.fetchone():
+                print(f"  {code}组 ({name}) 已存在，跳过")
+                continue
+        except Exception as e:
+            print(f"  检查小组 {code} 时出错: {e}")
         
         if dry_run:
             print(f"  [DRY RUN] 将创建小组: {code} - {name}")
