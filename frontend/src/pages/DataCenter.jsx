@@ -26,10 +26,10 @@ const DataCenter = () => {
   const [platformSummary, setPlatformSummary] = useState([])
   const [viewMode, setViewMode] = useState('summary') // summary | detail
   
-  // 日期默认为本月1日到今天
-  const today = dayjs()
+  // 日期默认为本月
   const monthStart = dayjs().startOf('month')
-  const [dateRange, setDateRange] = useState([monthStart, today])
+  const monthEnd = dayjs().endOf('month')
+  const [dateRange, setDateRange] = useState([monthStart, monthEnd])
   
   // 筛选
   const [statusFilter, setStatusFilter] = useState('ENABLED')

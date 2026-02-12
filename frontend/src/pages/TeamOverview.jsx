@@ -21,9 +21,10 @@ const TeamOverview = () => {
   const [memberRanking, setMemberRanking] = useState([])
   const [loading, setLoading] = useState(false)
   const [syncing, setSyncing] = useState(false)
+  // 默认日期范围：本月
   const [dateRange, setDateRange] = useState([
-    dayjs().subtract(7, 'day'),
-    dayjs()
+    dayjs().startOf('month'),
+    dayjs().endOf('month')
   ])
 
   // 加载数据
