@@ -13,17 +13,17 @@ logger = logging.getLogger(__name__)
 # 平台默认API配置
 PLATFORM_DEFAULT_CONFIGS = {
     "rewardoo": {
-        "base_url": "https://api.rewardoo.com/api",
-        "transaction_details_endpoint": "/transaction_details",
-        "commission_details_endpoint": "/commission_details",
+        "base_url": "https://admin.rewardoo.com",
+        "transaction_details_endpoint": "/api.php?mod=medium&op=transaction_details",
+        "commission_details_endpoint": "/api.php?mod=medium&op=commission_details",
         "timeout": 30,
         "max_retries": 3,
         "retry_delay": 2
     },
     "rw": {
-        "base_url": "https://api.rewardoo.com/api",
-        "transaction_details_endpoint": "/transaction_details",
-        "commission_details_endpoint": "/commission_details",
+        "base_url": "https://admin.rewardoo.com",
+        "transaction_details_endpoint": "/api.php?mod=medium&op=transaction_details",
+        "commission_details_endpoint": "/api.php?mod=medium&op=commission_details",
         "timeout": 30,
         "max_retries": 3,
         "retry_delay": 2
@@ -156,33 +156,18 @@ class ApiConfigService:
                 
                 if platform_code_lower in ["rewardoo", "rw"]:
                     # Rewardoo配置
-                    if notes_data.get("rewardoo_api_url") or notes_data.get("rw_api_url") or notes_data.get("api_url"):
-                        raw_url = (
-                            notes_data.get("rewardoo_api_url") or 
-                            notes_data.get("rw_api_url") or 
-                            notes_data.get("api_url")
-                        )
-                        # 自动修正常见的URL格式错误
-                        # 如果URL包含 /apidoc，替换为 /api
-                        if "/apidoc" in raw_url:
-                            raw_url = raw_url.replace("/apidoc", "/api")
-                        # 如果URL以 /api 结尾，保持不变；如果没有 /api，尝试添加
-                        if not raw_url.endswith("/api") and not raw_url.endswith("/api/"):
-                            # 如果URL包含 /creator，尝试在 /creator 后添加 /api
-                            if "/creator" in raw_url:
-                                raw_url = raw_url.replace("/creator", "/creator/api")
-                            elif "/parcelandplate" in raw_url:
-                                raw_url = raw_url.replace("/parcelandplate", "/parcelandplate/api")
-                            else:
-                                # 否则在域名后添加 /api
-                                if "://" in raw_url:
-                                    parts = raw_url.split("://", 1)
-                                    if "/" in parts[1]:
-                                        domain = parts[1].split("/")[0]
-                                        raw_url = f"{parts[0]}://{domain}/api"
-                                    else:
-                                        raw_url = f"{raw_url}/api"
+                    # 根据官方API文档，正确的URL是: https://admin.rewardoo.com/api.php?mod=medium&op=transaction_details
+                    # 忽略用户配置的错误URL，始终使用默认的正确URL
+                    # 用户如果配置了自定义URL，只有当它包含 admin.rewardoo.com 时才使用
+                    raw_url = (
+                        notes_data.get("rewardoo_api_url") or 
+                        notes_data.get("rw_api_url") or 
+                        notes_data.get("api_url")
+                    )
+                    if raw_url and "admin.rewardoo.com" in raw_url:
+                        # 用户配置了正确的admin域名，使用用户配置
                         custom_config["base_url"] = raw_url.rstrip("/")
+                    # 否则不设置custom_config，使用默认的正确URL
                 
                 elif platform_code_lower in ["collabglow", "cg"]:
                     # CollabGlow配置

@@ -46,21 +46,33 @@ class RewardooService(PlatformServiceBase):
             token: Rewardoo API token
             base_url: 自定义API基础URL（可选，用于支持不同渠道）
                      如果未提供或为空字符串，使用默认的DEFAULT_BASE_URL
+                     注意：只有包含 admin.rewardoo.com 的URL才会被使用，其他错误URL会被忽略
         """
         self.token = token
-        # 如果base_url是None或空字符串，使用默认值
+        
+        # 验证并设置API URL
+        # 只有当用户提供的URL包含正确的域名时才使用，否则使用默认值
         if base_url and base_url.strip():
-            self.base_url = base_url.strip().rstrip('/')
-            # 如果提供的是完整URL，直接使用；否则构建完整URL
-            if base_url.startswith('http'):
-                self.transaction_details_api = base_url
+            cleaned_url = base_url.strip().rstrip('/')
+            # 只接受包含 admin.rewardoo.com 的URL
+            if "admin.rewardoo.com" in cleaned_url:
+                self.base_url = cleaned_url
+                # 如果URL已经是完整的API端点，直接使用
+                if "api.php" in cleaned_url:
+                    self.transaction_details_api = cleaned_url
+                else:
+                    self.transaction_details_api = f"{self.base_url}/api.php?mod=medium&op=transaction_details"
+                logger.info(f"[RW Service] 使用自定义URL: {self.transaction_details_api}")
             else:
-                self.transaction_details_api = f"{self.base_url}/api.php?mod=medium&op=transaction_details"
+                # 错误的URL，使用默认值并记录警告
+                logger.warning(f"[RW Service] 忽略无效的API URL '{cleaned_url}'，使用默认URL。正确的URL应包含 admin.rewardoo.com")
+                self.base_url = DEFAULT_BASE_URL
+                self.transaction_details_api = DEFAULT_TRANSACTION_DETAILS_API
         else:
             self.base_url = DEFAULT_BASE_URL
             self.transaction_details_api = DEFAULT_TRANSACTION_DETAILS_API
         
-        logger.info(f"[RW Service] 初始化，base_url={self.base_url}, transaction_api={self.transaction_details_api}")
+        logger.info(f"[RW Service] 初始化完成，transaction_api={self.transaction_details_api}")
     
     def get_transactions(
         self,

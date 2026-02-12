@@ -13,27 +13,15 @@ logger = logging.getLogger(__name__)
 class ApiEndpointDetector:
     """API端点自动检测器"""
     
-    # Rewardoo可能的API端点列表
+    # Rewardoo官方API端点（根据官方文档）
+    # 正确的URL: https://admin.rewardoo.com/api.php?mod=medium&op=transaction_details
     REWARDOO_POSSIBLE_ENDPOINTS = [
-        "https://api.rewardoo.com/api",
-        "https://api.rewardoo.com",
-        "https://rewardoo.com/api",
-        "https://www.rewardoo.com/api",
-        "https://www.rewardoo.com/parcelandplate/creator/api",
-        "https://www.rewardoo.com/parcelandplate/api",
-        "https://api.rewardoo.net/api",
-        "https://api.rewardoo.io/api",
+        "https://admin.rewardoo.com/api.php?mod=medium&op=transaction_details",
     ]
     
-    # Rewardoo可能的API路径
+    # Rewardoo API不需要额外路径，完整URL已包含在端点中
     REWARDOO_POSSIBLE_PATHS = [
-        "/transaction_details",
-        "/transaction",
-        "/transactions",
-        "/api/transaction_details",
-        "/api/transaction",
-        "/v1/transaction_details",
-        "/v1/transaction",
+        "",  # 不需要额外路径
     ]
     
     # CollabGlow可能的API端点列表
