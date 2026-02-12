@@ -14,6 +14,7 @@ from app.models.platform_data import PlatformData
 from app.models.affiliate_account import AffiliateAccount, AffiliatePlatform
 from app.models.analysis_result import AnalysisResult
 from app.models.ai_report import UserPrompt
+from app.models.keyword_bid import CampaignBidStrategy
 
 logger = logging.getLogger(__name__)
 
@@ -622,10 +623,19 @@ class ApiAnalysisService:
                 conservative_epc = (commission * 0.72 / clicks) if clicks > 0 else 0
                 conservative_roi = ((commission * 0.72 - cost) / cost) if cost > 0 else None
                 
+                # 当前Max CPC：从 CampaignBidStrategy 获取人工出价上限
+                bid_strategy = self.db.query(CampaignBidStrategy).filter(
+                    CampaignBidStrategy.user_id == data_user_id,
+                    CampaignBidStrategy.campaign_name == cdata["campaign_name"]
+                ).first()
+                max_cpc_limit = bid_strategy.max_cpc_limit if bid_strategy and bid_strategy.max_cpc_limit else None
+                # 如果没有人工出价上限，回退到过去7天CPC最大值
+                current_max_cpc = max_cpc_limit if max_cpc_limit else cdata["max_cpc"]
+                
                 # 生成操作指令
                 operation = self._generate_l7d_operation(
                     conservative_roi, cdata["is_budget_lost"], cdata["is_rank_lost"], 
-                    order_days, cdata["max_cpc"], orders, cdata["max_budget"]
+                    order_days, current_max_cpc, orders, cdata["max_budget"]
                 )
                 
                 row = {
@@ -637,7 +647,7 @@ class ApiAnalysisService:
                     "L7D佣金": round(commission, 2),
                     "L7D花费": round(cost, 2),
                     "L7D出单天数": order_days,
-                    "当前Max CPC": round(cdata["max_cpc"], 4),
+                    "当前Max CPC": round(current_max_cpc, 4),
                     "campaign_id": cdata["campaign_id"],  # 用于前端查询出价策略
                     "预算": round(cdata["max_budget"], 2),
                     "IS Budget丢失": f"{cdata['is_budget_lost'] * 100:.1f}%" if cdata['is_budget_lost'] > 0 else "-",

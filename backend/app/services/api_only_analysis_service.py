@@ -13,6 +13,7 @@ from app.models.platform_data import PlatformData
 from app.models.google_ads_api_data import GoogleAdsApiData
 from app.models.affiliate_account import AffiliateAccount, AffiliatePlatform
 from app.models.analysis_result import AnalysisResult
+from app.models.keyword_bid import CampaignBidStrategy
 
 logger = logging.getLogger(__name__)
 
@@ -213,6 +214,15 @@ class ApiOnlyAnalysisService:
                 conservative_epc = clicks > 0 and conservative_commission / clicks or 0
                 conservative_roi = cost > 0 and ((conservative_commission - cost) / cost) or None
                 
+                # 当前Max CPC：从 CampaignBidStrategy 获取人工出价上限
+                bid_strategy = self.db.query(CampaignBidStrategy).filter(
+                    CampaignBidStrategy.user_id == user_id,
+                    CampaignBidStrategy.campaign_name == campaign_data["campaign_name"]
+                ).first()
+                max_cpc_limit = bid_strategy.max_cpc_limit if bid_strategy and bid_strategy.max_cpc_limit else None
+                # 如果没有人工出价上限，回退到过去7天CPC最大值
+                current_max_cpc = max_cpc_limit if max_cpc_limit else campaign_data["max_cpc"]
+                
                 # 生成操作指令（带具体数值）
                 budget = campaign_data["total_budget"]
                 operation_instruction = self._generate_operation_instruction(
@@ -259,7 +269,7 @@ class ApiOnlyAnalysisService:
                     "L7D出单天数": order_days_count if analysis_type == "l7d" else None,
                     
                     # 其他
-                    "当前Max CPC": round(campaign_data["max_cpc"], 4),
+                    "当前Max CPC": round(current_max_cpc, 4),
                     "操作指令": operation_instruction,
                     "异常类型": None,  # 需要额外逻辑检测
                 }

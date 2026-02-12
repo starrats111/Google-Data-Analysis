@@ -216,11 +216,12 @@ class AnalysisService:
                         from sqlalchemy.orm import Session
                         from app.models.ad_campaign import AdCampaign
                         from app.models.ad_campaign_daily_metric import AdCampaignDailyMetric
+                        from app.models.keyword_bid import CampaignBidStrategy
                         if isinstance(db, Session):
                             d = _dt.strptime(str(analysis_date), "%Y-%m-%d").date()
                             # 本周口径：按自然周（周一 ~ 今天）
                             start_week = d - _td(days=d.weekday())
-                            # 过去7天口径（用于“当前Max CPC”自动读取）
+                            # 过去7天口径（用于回退计算"当前Max CPC"）
                             start_7d = d - _td(days=6)
 
                             if '本周费用' not in output_df.columns:
@@ -256,19 +257,28 @@ class AnalysisService:
                                 week_comm = sum(float(m.commission or 0) for m in week_metrics)
                                 week_roi = ((week_comm - week_cost) / week_cost) if week_cost > 0 else None
 
-                                # 过去7天最高 CPC：用于“当前Max CPC”（应该是CPC的最大值，不是最高CPC的最大值）
-                                metrics_7d = db.query(AdCampaignDailyMetric).filter(
-                                    AdCampaignDailyMetric.user_id == user_id,
-                                    AdCampaignDailyMetric.campaign_id == campaign.id,
-                                    AdCampaignDailyMetric.date >= start_7d,
-                                    AdCampaignDailyMetric.date <= d,
-                                ).all()
-                                max_cpc_7d = max([float(m.cpc or 0) for m in metrics_7d], default=0.0)
+                                # 当前Max CPC：从 CampaignBidStrategy 获取人工出价上限
+                                bid_strategy = db.query(CampaignBidStrategy).filter(
+                                    CampaignBidStrategy.user_id == user_id,
+                                    CampaignBidStrategy.campaign_name == campaign_name
+                                ).first()
+                                max_cpc_limit = bid_strategy.max_cpc_limit if bid_strategy and bid_strategy.max_cpc_limit else None
+                                # 如果没有人工出价上限，回退到过去7天CPC最大值
+                                if max_cpc_limit:
+                                    current_max_cpc = max_cpc_limit
+                                else:
+                                    metrics_7d = db.query(AdCampaignDailyMetric).filter(
+                                        AdCampaignDailyMetric.user_id == user_id,
+                                        AdCampaignDailyMetric.campaign_id == campaign.id,
+                                        AdCampaignDailyMetric.date >= start_7d,
+                                        AdCampaignDailyMetric.date <= d,
+                                    ).all()
+                                    current_max_cpc = max([float(m.cpc or 0) for m in metrics_7d], default=0.0)
 
                                 output_df.at[idx, '本周费用'] = week_cost
                                 output_df.at[idx, '本周佣金'] = week_comm
                                 output_df.at[idx, '本周ROI'] = week_roi
-                                output_df.at[idx, '当前Max CPC'] = max_cpc_7d
+                                output_df.at[idx, '当前Max CPC'] = current_max_cpc
 
                                 # 异常类型：用过去7天(不含当天)作为基线，对比今天
                                 baseline = db.query(AdCampaignDailyMetric).filter(
@@ -1443,7 +1453,7 @@ class AnalysisService:
             result_df['L7D出单天数'] = merged['过去七天出单天数'].fillna(0)
         else:
             result_df['L7D出单天数'] = result_df.get('出单天数', 0)
-        # 当前Max CPC：最高CPC
+        # 当前Max CPC：人工出价上限（如未设置，回退到最高CPC）
         result_df['当前Max CPC'] = result_df.get('最高CPC', result_df.get('CPC', 0))
         # IS Budget丢失 / IS Rank丢失
         result_df['IS Budget丢失'] = result_df.get('预算错失份额', None)

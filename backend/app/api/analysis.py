@@ -13,6 +13,7 @@ import logging
 
 logger = logging.getLogger(__name__)
 from app.models.data_upload import DataUpload
+from app.models.keyword_bid import CampaignBidStrategy
 from app.schemas.analysis import AnalysisRequest, AnalysisResultResponse, AnalysisSummary, DailyL7DRequest
 from app.services.analysis_service import AnalysisService
 from app.services.api_analysis_service import ApiAnalysisService
@@ -390,8 +391,20 @@ async def generate_l7d_from_daily(
                     orders = cached.get("orders", 0)
                 if order_days == 0:
                     order_days = cached.get("order_days", 0)
-        # 修复：MAX CPC应该是过去7天中CPC的最大值，而不是最高CPC的最大值
-        max_cpc_7d = max((m.cpc or 0) for m in items) if items else 0
+        
+        # 当前Max CPC：从 CampaignBidStrategy 获取人工出价上限 (max_cpc_limit)
+        campaign_for_cpc = items[0].campaign if items else None
+        max_cpc_limit = None
+        if campaign_for_cpc:
+            bid_strategy = db.query(CampaignBidStrategy).filter(
+                CampaignBidStrategy.user_id == current_user.id,
+                CampaignBidStrategy.campaign_name == campaign_for_cpc.campaign_name
+            ).first()
+            if bid_strategy and bid_strategy.max_cpc_limit:
+                max_cpc_limit = bid_strategy.max_cpc_limit
+        
+        # 如果没有人工出价上限，回退到过去7天CPC最大值
+        max_cpc_7d = max_cpc_limit if max_cpc_limit else (max((m.cpc or 0) for m in items) if items else 0)
         # 获取最新的预算
         budget_7d = max((m.budget or 0) for m in items) if items else 0
 
@@ -661,8 +674,20 @@ async def generate_l7d_from_daily_with_google(
                     orders = cached.get("orders", 0)
                 if order_days == 0:
                     order_days = cached.get("order_days", 0)
-        # 修复：MAX CPC应该是过去7天中CPC的最大值，而不是最高CPC的最大值
-        max_cpc_7d = max((m.cpc or 0) for m in items) if items else 0
+        
+        # 当前Max CPC：从 CampaignBidStrategy 获取人工出价上限 (max_cpc_limit)
+        campaign_for_cpc = items[0].campaign if items else None
+        max_cpc_limit = None
+        if campaign_for_cpc:
+            bid_strategy = db.query(CampaignBidStrategy).filter(
+                CampaignBidStrategy.user_id == current_user.id,
+                CampaignBidStrategy.campaign_name == campaign_for_cpc.campaign_name
+            ).first()
+            if bid_strategy and bid_strategy.max_cpc_limit:
+                max_cpc_limit = bid_strategy.max_cpc_limit
+        
+        # 如果没有人工出价上限，回退到过去7天CPC最大值
+        max_cpc_7d = max_cpc_limit if max_cpc_limit else (max((m.cpc or 0) for m in items) if items else 0)
         # 获取最新的预算
         budget_7d = max((m.budget or 0) for m in items) if items else 0
         roi = ((comm - cost) / cost) if cost > 0 else None
