@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useMemo } from 'react'
 import { 
   Card, Tabs, Table, Button, Space, Tag, Modal, Form, Input, Select, 
   message, Popconfirm, Statistic, Row, Col, Progress, Typography, Spin, Empty
@@ -7,6 +7,7 @@ import {
   TeamOutlined, UserOutlined, PlusOutlined, EditOutlined, DeleteOutlined,
   ReloadOutlined, CrownOutlined, TrophyOutlined, DollarOutlined
 } from '@ant-design/icons'
+import dayjs from 'dayjs'
 import api from '../services/api'
 import { useAuth } from '../store/authStore'
 
@@ -36,15 +37,25 @@ const TeamManagement = () => {
   const [userForm] = Form.useForm()
   const [teamForm] = Form.useForm()
 
+  // 本月日期范围
+  const monthDateRange = useMemo(() => {
+    const now = dayjs()
+    return {
+      start_date: now.startOf('month').format('YYYY-MM-DD'),
+      end_date: now.endOf('month').format('YYYY-MM-DD')
+    }
+  }, [])
+
   // 加载数据
   const loadData = async () => {
     setLoading(true)
     try {
+      // 统计数据使用本月日期范围
       const [teamsRes, usersRes, statsRes, rankingRes] = await Promise.all([
         api.get('/api/team/teams'),
         api.get('/api/team/users'),
-        api.get('/api/team/stats/teams'),
-        api.get('/api/team/stats/ranking', { params: { limit: 10 } })
+        api.get('/api/team/stats/teams', { params: monthDateRange }),
+        api.get('/api/team/stats/ranking', { params: { limit: 10, ...monthDateRange } })
       ])
       setTeams(teamsRes.data)
       setUsers(usersRes.data)
@@ -296,20 +307,30 @@ const TeamManagement = () => {
     <div>
       {/* 筛选栏 */}
       <Card size="small" style={{ marginBottom: 16 }}>
-        <Space>
-          <Text>筛选小组：</Text>
-          <Select 
-            style={{ width: 150 }} 
-            value={selectedTeamFilter}
-            onChange={setSelectedTeamFilter}
-            allowClear
-            placeholder="全部小组"
-          >
-            {teams.map(t => (
-              <Option key={t.id} value={t.id}>{t.team_name}</Option>
-            ))}
-          </Select>
-          <Button icon={<ReloadOutlined />} onClick={loadData}>刷新</Button>
+        <Space style={{ width: '100%', justifyContent: 'space-between' }}>
+          <Space>
+            <Text strong style={{ fontSize: 16 }}>
+              📅 {dayjs().format('YYYY年M月')} 数据
+            </Text>
+            <Text type="secondary">
+              ({monthDateRange.start_date} ~ {monthDateRange.end_date})
+            </Text>
+          </Space>
+          <Space>
+            <Text>筛选小组：</Text>
+            <Select 
+              style={{ width: 150 }} 
+              value={selectedTeamFilter}
+              onChange={setSelectedTeamFilter}
+              allowClear
+              placeholder="全部小组"
+            >
+              {teams.map(t => (
+                <Option key={t.id} value={t.id}>{t.team_name}</Option>
+              ))}
+            </Select>
+            <Button icon={<ReloadOutlined />} onClick={loadData}>刷新</Button>
+          </Space>
         </Space>
       </Card>
 
