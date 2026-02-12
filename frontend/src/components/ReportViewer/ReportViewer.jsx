@@ -30,42 +30,70 @@ const ReportViewer = ({ content, campaignCount, analysisDate, singleMode = false
   }, [content])
 
   // 判断是否为广告系列标题行（而不是普通的子标题）
-  // 广告系列名通常是: "### 📊 181-CG1-uaudio-US (成熟期 🏆)" 这种格式
-  // 或者: "### 181-CG1-uaudio-US"
-  // 子标题通常是: "### 1. 阶段评价：🏆 成熟期" 这种数字开头的格式
+  // 支持多种格式：
+  // 1. "### 📊 181-CG1-uaudio-US (成熟期 🏆)" 
+  // 2. "### 181-CG1-uaudio-US"
+  // 3. "1. 002-RW-revisionskincare-US-0126-116022 (美妆/护肤)" - 数字列表格式
+  // 4. "**1. 002-RW-revisionskincare-US**" - 加粗数字列表格式
   const isCampaignTitle = (line) => {
     const trimmed = line.trim()
-    if (!trimmed.startsWith('### ')) return false
-    const titleContent = trimmed.replace(/^###\s*/, '').replace(/[📊🔶🔷💎⭐🎯📈📉✅❌⚠️🔴🟡🟢💰☕▲🏆✨🌱🔥⛔💡🎉]/g, '').trim()
     
-    // 子标题特征：以数字+点开头，如 "1. 阶段评价" 或 "#### 1."
-    if (/^\d+\.\s/.test(titleContent)) return false
-    
-    // 常见的子标题关键词（这些不是广告系列名）
-    const subTitleKeywords = [
-      '阶段评价', '市场洞察', '数据深度分析', '节日营销预判', '优化建议', '风险提示',
-      '概览', '总览', '总结', '节奏', '执行清单', '综述', '专项名单',
-      'CPC分析', '费用效率', '点击率', '转化情况', 'ROI', '流量瓶颈',
-      '推荐预算', '推荐CPC', '其他建议', '关键发现', '下次重点'
-    ]
-    for (const keyword of subTitleKeywords) {
-      if (titleContent.includes(keyword)) return false
+    // 格式1和2：以 ### 开头
+    if (trimmed.startsWith('### ')) {
+      const titleContent = trimmed.replace(/^###\s*/, '').replace(/[📊🔶🔷💎⭐🎯📈📉✅❌⚠️🔴🟡🟢💰☕▲🏆✨🌱🔥⛔💡🎉]/g, '').trim()
+      
+      // 子标题特征：以数字+点开头，如 "1. 阶段评价" 或 "#### 1."
+      if (/^\d+\.\s/.test(titleContent)) return false
+      
+      // 常见的子标题关键词（这些不是广告系列名）
+      const subTitleKeywords = [
+        '阶段评价', '市场洞察', '数据深度分析', '节日营销预判', '优化建议', '风险提示',
+        '概览', '总览', '总结', '节奏', '执行清单', '综述', '专项名单',
+        'CPC分析', '费用效率', '点击率', '转化情况', 'ROI', '流量瓶颈',
+        '推荐预算', '推荐CPC', '其他建议', '关键发现', '下次重点'
+      ]
+      for (const keyword of subTitleKeywords) {
+        if (titleContent.includes(keyword)) return false
+      }
+      
+      return hasCampaignNamePattern(titleContent)
     }
     
+    // 格式3和4：数字列表格式（如 "1. 002-RW-..." 或 "**1. 002-RW-...**"）
+    // 匹配 "数字. 广告系列名" 格式，广告系列名包含连字符和平台代码
+    const numberedListMatch = trimmed.match(/^(\*\*)?(\d+)\.\s+(.+?)(\s*\(.*\))?(\*\*)?$/)
+    if (numberedListMatch) {
+      const campaignName = numberedListMatch[3].replace(/\*\*/g, '').trim()
+      // 确保这是广告系列名而不是普通的子标题
+      const subTitleKeywords = [
+        '阶段评价', '市场洞察', '数据深度分析', '优化建议', '风险提示', '风险预警',
+        '概览', '总结', '节奏', '执行清单', '瓶颈点', '提价', '释放预算'
+      ]
+      for (const keyword of subTitleKeywords) {
+        if (campaignName.includes(keyword)) return false
+      }
+      return hasCampaignNamePattern(campaignName)
+    }
+    
+    return false
+  }
+  
+  // 检查是否符合广告系列命名模式
+  const hasCampaignNamePattern = (text) => {
     // 广告系列名特征（更宽松的匹配）：
     // 1. 包含数字-字母-组合（如 181-CG1-uaudio-US, 001-RW-brand-US）
     // 2. 或包含平台代码后跟连字符（PM1-, CG1-, LH1-, RW-, LS- 等）
     // 3. 或包含国家代码结尾（-US, -UK, -DE, -FR, -AU 等）
     // 4. 或者标题中有多个连字符分隔的部分（看起来像广告系列命名结构）
-    const hasCampaignPattern = 
-      /\d+-[A-Z]{2,}\d?-/i.test(titleContent) ||     // 181-CG1- 或 001-RW-
-      /-(PM|CG|RW|LH|LS)\d?-/i.test(titleContent) || // 包含平台代码
-      /-[A-Z]{2}(-\d+)?$/i.test(titleContent) ||     // 以国家代码结尾 (-US, -UK-123)
-      /-[A-Z]{2}-\d/i.test(titleContent) ||          // -US-123
-      /^[A-Z]{2,}\d?-/i.test(titleContent) ||        // CG1-开头
-      (titleContent.split('-').length >= 3 && /\d/.test(titleContent))  // 至少3个连字符分隔且包含数字
-    
-    return hasCampaignPattern
+    return (
+      /\d+-[A-Z]{2,}\d?-/i.test(text) ||     // 181-CG1- 或 001-RW-
+      /-(PM|CG|RW|LH|LS|LB)\d?-/i.test(text) || // 包含平台代码
+      /-[A-Z]{2}(-\d+)?$/i.test(text) ||     // 以国家代码结尾 (-US, -UK-123)
+      /-[A-Z]{2}-\d/i.test(text) ||          // -US-123
+      /^[A-Z]{2,}\d?-/i.test(text) ||        // CG1-开头
+      /^\d+-[A-Z]{2,}-/i.test(text) ||       // 001-RW- 或 002-CG- 开头
+      (text.split('-').length >= 3 && /\d/.test(text))  // 至少3个连字符分隔且包含数字
+    )
   }
 
   // 按广告系列分段
@@ -137,7 +165,16 @@ const ReportViewer = ({ content, campaignCount, analysisDate, singleMode = false
 
   // 提取广告系列名称
   const extractCampaignName = (titleLine) => {
-    return titleLine.replace(/^###\s*/, '').replace(/\*\*/g, '').trim()
+    let name = titleLine.trim()
+    // 移除 ### 前缀
+    name = name.replace(/^###\s*/, '')
+    // 移除加粗标记
+    name = name.replace(/\*\*/g, '')
+    // 移除数字列表前缀 "1. ", "2. " 等
+    name = name.replace(/^\d+\.\s*/, '')
+    // 移除表情符号
+    name = name.replace(/[📊🔶🔷💎⭐🎯📈📉✅❌⚠️🔴🟡🟢💰☕▲🏆✨🌱🔥⛔💡🎉]/g, '')
+    return name.trim()
   }
   
   // 从内容中提取阶段评价
