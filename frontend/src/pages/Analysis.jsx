@@ -84,12 +84,24 @@ const Analysis = () => {
   
   // 打开全量部署弹窗
   const handleDeployAll = () => {
-    const campaignsWithData = results.filter(r => r['部署数据'])
-    if (campaignsWithData.length === 0) {
+    // 从所有分析结果中提取有部署数据的广告系列
+    const allCampaigns = []
+    results.forEach(record => {
+      const data = record.result_data?.data || []
+      if (Array.isArray(data)) {
+        data.forEach(row => {
+          if (row['部署数据']) {
+            allCampaigns.push(row)
+          }
+        })
+      }
+    })
+    
+    if (allCampaigns.length === 0) {
       message.warning('没有可部署的广告系列')
       return
     }
-    setSelectedCampaignsForDeploy(campaignsWithData)
+    setSelectedCampaignsForDeploy(allCampaigns)
     setCpcDeployModalOpen(true)
   }
 
@@ -1169,7 +1181,7 @@ G) 综述
 
                       // 获取所有键，过滤掉不需要显示的列
                       const allKeys = Object.keys(data[0])
-                      const keysToShow = allKeys.filter(key => !['ROI', '点击', '订单', 'ai_report'].includes(key))
+                      const keysToShow = allKeys.filter(key => !['ROI', '点击', '订单', 'ai_report', '部署数据'].includes(key))
                       
                       const dataColumns = keysToShow.map((key) => {
                         const column = {
@@ -1434,7 +1446,7 @@ G) 综述
 
               // 获取所有键，过滤掉不需要显示的列
               const allKeys = Object.keys(data[0])
-              const keysToShow = allKeys.filter(key => !['ROI', '点击', '订单', 'ai_report'].includes(key))
+              const keysToShow = allKeys.filter(key => !['ROI', '点击', '订单', 'ai_report', '部署数据'].includes(key))
 
               const dataColumns = keysToShow.map((key) => {
                 const column = {
