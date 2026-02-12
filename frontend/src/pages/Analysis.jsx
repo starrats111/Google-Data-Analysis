@@ -1181,7 +1181,7 @@ G) 综述
 
                       // 获取所有键，过滤掉不需要显示的列
                       const allKeys = Object.keys(data[0])
-                      const keysToShow = allKeys.filter(key => !['ROI', '点击', '订单', 'ai_report', '部署数据'].includes(key))
+                      const keysToShow = allKeys.filter(key => !['ROI', '点击', '订单', 'ai_report', '部署数据', 'campaign_id'].includes(key))
                       
                       const dataColumns = keysToShow.map((key) => {
                         const column = {
@@ -1446,7 +1446,7 @@ G) 综述
 
               // 获取所有键，过滤掉不需要显示的列
               const allKeys = Object.keys(data[0])
-              const keysToShow = allKeys.filter(key => !['ROI', '点击', '订单', 'ai_report', '部署数据'].includes(key))
+              const keysToShow = allKeys.filter(key => !['ROI', '点击', '订单', 'ai_report', '部署数据', 'campaign_id'].includes(key))
 
               const dataColumns = keysToShow.map((key) => {
                 const column = {
