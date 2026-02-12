@@ -1142,6 +1142,14 @@ class GoogleAdsServiceAccountSync:
         """保存广告系列数据到数据库"""
         saved_count = 0
         
+        # 货币转换汇率（CNY -> USD）
+        # 如果 MCC 是人民币账号，需要转换为美元
+        currency = getattr(mcc_account, 'currency', 'USD') or 'USD'
+        currency_rate = 1.0
+        if currency == 'CNY':
+            currency_rate = 7.2  # 人民币兑美元汇率
+            logger.info(f"MCC {mcc_account.mcc_id} 为人民币账号，应用汇率 1/{currency_rate}")
+        
         for campaign_data in campaigns:
             try:
                 campaign_name = campaign_data.get("campaign_name", "")
@@ -1159,23 +1167,32 @@ class GoogleAdsServiceAccountSync:
                     GoogleAdsApiData.date == target_date
                 ).first()
                 
+                # 应用货币转换
+                raw_cost = campaign_data.get("cost", 0)
+                raw_budget = campaign_data.get("budget", 0)
+                raw_cpc = campaign_data.get("cpc", 0)
+                
+                converted_cost = raw_cost / currency_rate
+                converted_budget = raw_budget / currency_rate
+                converted_cpc = raw_cpc / currency_rate
+                
                 if existing:
                     # 更新现有记录
                     existing.customer_id = campaign_data.get("customer_id")  # CID
                     existing.campaign_name = campaign_name
                     existing.status = campaign_data.get("status", "未知")
-                    existing.budget = campaign_data.get("budget", 0)
-                    existing.cost = campaign_data.get("cost", 0)
+                    existing.budget = converted_budget
+                    existing.cost = converted_cost
                     existing.impressions = campaign_data.get("impressions", 0)
                     existing.clicks = campaign_data.get("clicks", 0)
-                    existing.cpc = campaign_data.get("cpc", 0)
+                    existing.cpc = converted_cpc
                     existing.is_budget_lost = campaign_data.get("is_budget_lost", 0)
                     existing.is_rank_lost = campaign_data.get("is_rank_lost", 0)
                     existing.extracted_platform_code = platform_info.get("platform_code") if platform_info else None
                     existing.extracted_account_code = platform_info.get("account_code") if platform_info else None
                     existing.last_sync_at = datetime.now()
                 else:
-                    # 创建新记录
+                    # 创建新记录（使用已转换的货币值）
                     new_data = GoogleAdsApiData(
                         mcc_id=mcc_account.id,
                         user_id=mcc_account.user_id,
@@ -1184,11 +1201,11 @@ class GoogleAdsServiceAccountSync:
                         campaign_name=campaign_name,
                         date=target_date,
                         status=campaign_data.get("status", "未知"),
-                        budget=campaign_data.get("budget", 0),
-                        cost=campaign_data.get("cost", 0),
+                        budget=converted_budget,
+                        cost=converted_cost,
                         impressions=campaign_data.get("impressions", 0),
                         clicks=campaign_data.get("clicks", 0),
-                        cpc=campaign_data.get("cpc", 0),
+                        cpc=converted_cpc,
                         is_budget_lost=campaign_data.get("is_budget_lost", 0),
                         is_rank_lost=campaign_data.get("is_rank_lost", 0),
                         extracted_platform_code=platform_info.get("platform_code") if platform_info else None,
