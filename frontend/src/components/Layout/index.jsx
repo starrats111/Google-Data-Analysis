@@ -22,7 +22,11 @@ import { useAuth } from '../../store/authStore'
 const { Header, Sider, Content } = AntLayout
 
 const Layout = () => {
-  const [collapsed, setCollapsed] = useState(false)
+  // 从 localStorage 读取持久化的 collapsed 状态
+  const [collapsed, setCollapsed] = useState(() => {
+    const saved = localStorage.getItem('sider_collapsed')
+    return saved === 'true'
+  })
   const [mobileDrawerVisible, setMobileDrawerVisible] = useState(false)
   const [isMobile, setIsMobile] = useState(window.innerWidth < 768)
   const navigate = useNavigate()
@@ -213,11 +217,33 @@ const Layout = () => {
     return [menuItems[0]?.key]
   }
 
-  const [openKeys, setOpenKeys] = useState(getOpenKeys())
+  // 从 localStorage 读取持久化的 collapsed 状态
+  const [openKeys, setOpenKeys] = useState(() => {
+    const saved = localStorage.getItem('sider_open_keys')
+    if (saved) {
+      try {
+        return JSON.parse(saved)
+      } catch {
+        return getOpenKeys()
+      }
+    }
+    return getOpenKeys()
+  })
 
+  // 确保当前路径对应的菜单组是展开的（合并到现有的 openKeys 中）
+  useEffect(() => {
+    const currentGroupKey = getOpenKeys()[0]
+    if (currentGroupKey && !openKeys.includes(currentGroupKey)) {
+      const newOpenKeys = [...openKeys, currentGroupKey]
+      setOpenKeys(newOpenKeys)
+      localStorage.setItem('sider_open_keys', JSON.stringify(newOpenKeys))
+    }
+  }, [location.pathname])
+  
+  // 角色变化时重新初始化菜单
   useEffect(() => {
     setOpenKeys(getOpenKeys())
-  }, [location.pathname, isManager])
+  }, [isManager, isLeader])
 
   const userMenuItems = [
     {
@@ -249,6 +275,8 @@ const Layout = () => {
 
   const handleOpenChange = (keys) => {
     setOpenKeys(keys)
+    // 持久化展开状态
+    localStorage.setItem('sider_open_keys', JSON.stringify(keys))
   }
 
   const renderMenu = () => (
@@ -288,7 +316,10 @@ const Layout = () => {
         <Sider
           collapsible
           collapsed={collapsed}
-          onCollapse={setCollapsed}
+          onCollapse={(value) => {
+            setCollapsed(value)
+            localStorage.setItem('sider_collapsed', value.toString())
+          }}
           theme="dark"
           width={220}
           style={{
