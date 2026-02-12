@@ -480,22 +480,38 @@ const DataCenter = () => {
   // 实时同步（从API获取最新数据）
   const handleRefresh = async () => {
     setSyncing(true)
-    message.loading({ content: '正在从平台同步最新数据（最近3天）...', key: 'sync', duration: 0 })
+    message.loading({ content: '正在启动数据同步...', key: 'sync', duration: 0 })
     
     try {
       // 根据当前tab调用对应的同步API
       if (activeTab === 'google') {
         const response = await api.post('/api/google-ads-aggregate/sync-realtime')
-        message.success({ 
-          content: `Google Ads同步完成: ${response.data.synced_mccs}/${response.data.total_mccs} 个MCC, ${response.data.total_records} 条记录`, 
-          key: 'sync' 
-        })
+        if (response.data.background) {
+          message.success({ 
+            content: `Google Ads 同步已在后台开始，正在同步 ${response.data.total_mccs} 个MCC，请稍后刷新页面`, 
+            key: 'sync',
+            duration: 5
+          })
+        } else {
+          message.success({ 
+            content: `Google Ads同步完成: ${response.data.synced_mccs}/${response.data.total_mccs} 个MCC`, 
+            key: 'sync' 
+          })
+        }
       } else {
         const response = await api.post('/api/platform-data/sync-realtime')
-        message.success({ 
-          content: `平台数据同步完成: ${response.data.synced_accounts}/${response.data.total_accounts} 个账号, ${response.data.total_records} 条记录`, 
-          key: 'sync' 
-        })
+        if (response.data.background) {
+          message.success({ 
+            content: `平台数据同步已在后台开始，正在同步 ${response.data.total_accounts} 个账号，请稍后刷新页面`, 
+            key: 'sync',
+            duration: 5
+          })
+        } else {
+          message.success({ 
+            content: `平台数据同步完成: ${response.data.synced_accounts}/${response.data.total_accounts} 个账号`, 
+            key: 'sync' 
+          })
+        }
       }
       
       // 清除缓存

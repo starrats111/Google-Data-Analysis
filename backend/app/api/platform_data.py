@@ -3,7 +3,7 @@
 使用affiliate_transactions表，按日期+平台+商户聚合
 支持汇总模式和明细模式
 """
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, BackgroundTasks
 from sqlalchemy.orm import Session
 from sqlalchemy import func, and_, case
 from typing import Optional, List
@@ -702,24 +702,55 @@ async def get_platform_transactions(
         raise HTTPException(status_code=500, detail=f"查询失败: {str(e)}")
 
 
+def _do_platform_sync_background(user_id: int, account_ids: list, start_date: str, end_date: str):
+    """后台执行平台数据同步（在独立线程中运行）"""
+    from app.database import SessionLocal
+    from app.services.platform_data_sync import PlatformDataSyncService
+    
+    db = SessionLocal()
+    try:
+        sync_service = PlatformDataSyncService(db)
+        synced = 0
+        for account_id in account_ids:
+            try:
+                result = sync_service.sync_account_data(
+                    account_id=account_id,
+                    begin_date=start_date,
+                    end_date=end_date
+                )
+                if result.get("success"):
+                    synced += 1
+                    logger.info(f"[后台同步] 账号 {account_id} 同步成功: {result.get('saved_count', 0)} 条记录")
+                else:
+                    logger.warning(f"[后台同步] 账号 {account_id} 同步失败: {result.get('message')}")
+            except Exception as e:
+                logger.error(f"[后台同步] 账号 {account_id} 同步异常: {e}")
+        
+        logger.info(f"[后台同步] 用户 {user_id} 完成同步: {synced}/{len(account_ids)} 个账号")
+    except Exception as e:
+        logger.error(f"[后台同步] 用户 {user_id} 同步失败: {e}", exc_info=True)
+    finally:
+        db.close()
+
+
 @router.post("/sync-realtime")
 async def sync_platform_data_realtime(
+    background_tasks: BackgroundTasks,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """
-    实时同步平台数据（最近3天）
-    触发从各平台API获取最新数据
+    实时同步平台数据（最近3天）- 后台任务模式
+    立即返回，同步在后台执行
     """
     from datetime import timedelta
-    from app.services.platform_data_sync import PlatformDataSyncService
     
     try:
         # 计算最近3天的日期范围
         end_date = date.today()
         start_date = end_date - timedelta(days=2)  # 今天 + 前2天 = 3天
         
-        logger.info(f"用户 {current_user.username} 触发实时同步，日期范围: {start_date} ~ {end_date}")
+        logger.info(f"用户 {current_user.username} 触发实时同步（后台模式），日期范围: {start_date} ~ {end_date}")
         
         # 获取用户的所有平台账号
         accounts = db.query(AffiliateAccount).filter(
@@ -732,42 +763,32 @@ async def sync_platform_data_realtime(
                 "success": True,
                 "message": "没有找到活跃的平台账号",
                 "synced_accounts": 0,
+                "total_accounts": 0,
                 "total_records": 0
             }
         
-        sync_service = PlatformDataSyncService(db)
-        total_synced = 0
-        synced_accounts = 0
-        errors = []
+        account_ids = [acc.id for acc in accounts]
         
-        for account in accounts:
-            try:
-                # 正确的方法名是 sync_account_data，参数是字符串格式的日期
-                result = sync_service.sync_account_data(
-                    account_id=account.id,
-                    begin_date=start_date.strftime("%Y-%m-%d"),
-                    end_date=end_date.strftime("%Y-%m-%d")
-                )
-                if result.get("success"):
-                    synced_accounts += 1
-                    total_synced += result.get("saved_count", 0)
-                else:
-                    errors.append(f"{account.account_name}: {result.get('message', '未知错误')}")
-            except Exception as e:
-                errors.append(f"{account.account_name}: {str(e)}")
-                logger.error(f"同步账号 {account.account_name} 失败: {e}")
+        # 使用线程池在后台执行同步（避免阻塞）
+        import threading
+        sync_thread = threading.Thread(
+            target=_do_platform_sync_background,
+            args=(current_user.id, account_ids, start_date.strftime("%Y-%m-%d"), end_date.strftime("%Y-%m-%d"))
+        )
+        sync_thread.daemon = True
+        sync_thread.start()
         
         return {
             "success": True,
-            "message": f"同步完成: {synced_accounts}/{len(accounts)} 个账号",
-            "synced_accounts": synced_accounts,
+            "message": f"同步已在后台开始，正在同步 {len(accounts)} 个账号，请稍后刷新页面查看结果",
+            "synced_accounts": 0,  # 后台执行，暂时返回0
             "total_accounts": len(accounts),
-            "total_records": total_synced,
+            "total_records": 0,
             "date_range": f"{start_date} ~ {end_date}",
-            "errors": errors if errors else None
+            "background": True  # 标记为后台任务
         }
         
     except Exception as e:
-        logger.error(f"实时同步失败: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"同步失败: {str(e)}")
+        logger.error(f"启动后台同步失败: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"启动同步失败: {str(e)}")
 
