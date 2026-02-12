@@ -742,10 +742,11 @@ async def sync_platform_data_realtime(
         
         for account in accounts:
             try:
-                result = sync_service.sync_account(
+                # 正确的方法名是 sync_account_data，参数是字符串格式的日期
+                result = sync_service.sync_account_data(
                     account_id=account.id,
-                    start_date=start_date,
-                    end_date=end_date
+                    begin_date=start_date.strftime("%Y-%m-%d"),
+                    end_date=end_date.strftime("%Y-%m-%d")
                 )
                 if result.get("success"):
                     synced_accounts += 1
