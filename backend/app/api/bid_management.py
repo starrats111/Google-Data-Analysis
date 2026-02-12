@@ -80,6 +80,30 @@ class ApplyCpcChangesRequest(BaseModel):
     adjustments: List[dict]  # 从预览返回的调整列表
 
 
+class KeywordCpcItem(BaseModel):
+    keyword_id: str  # criterion_id
+    keyword_text: str
+    current_cpc: float
+    target_cpc: float
+    ad_group_id: str
+    selected: bool = True  # 是否选中执行
+
+
+class CampaignDeployment(BaseModel):
+    campaign_name: str
+    campaign_id: Optional[str] = None
+    customer_id: Optional[str] = None
+    mcc_id: Optional[int] = None
+    keywords: List[KeywordCpcItem] = []
+    budget_current: Optional[float] = None
+    budget_target: Optional[float] = None
+    budget_selected: bool = True
+
+
+class OneClickDeployRequest(BaseModel):
+    campaigns: List[CampaignDeployment]
+
+
 @router.get("/strategies")
 async def get_bid_strategies(
     mcc_id: Optional[int] = None,
@@ -1291,4 +1315,213 @@ async def batch_set_campaign_budget(
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/one-click-deploy")
+async def one_click_deploy(
+    request: OneClickDeployRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    一键部署CPC和预算修改
+    
+    接收前端确认后的部署请求，批量执行：
+    1. 关键词CPC修改
+    2. 广告系列预算修改
+    """
+    from app.services.google_ads_service_account_sync import GoogleAdsServiceAccountSync
+    
+    results = []
+    total_keywords_success = 0
+    total_keywords_failed = 0
+    total_budget_success = 0
+    total_budget_failed = 0
+    
+    # 按 mcc_id 分组处理
+    mcc_campaigns = {}
+    for campaign in request.campaigns:
+        mcc_id = campaign.mcc_id
+        if mcc_id not in mcc_campaigns:
+            mcc_campaigns[mcc_id] = []
+        mcc_campaigns[mcc_id].append(campaign)
+    
+    for mcc_id, campaigns in mcc_campaigns.items():
+        # 获取MCC账号
+        mcc = db.query(GoogleMccAccount).filter(
+            GoogleMccAccount.id == mcc_id,
+            GoogleMccAccount.user_id == current_user.id
+        ).first()
+        
+        if not mcc:
+            for campaign in campaigns:
+                results.append({
+                    "campaign_name": campaign.campaign_name,
+                    "success": False,
+                    "message": f"MCC账号 {mcc_id} 不存在"
+                })
+            continue
+        
+        try:
+            sync_service = GoogleAdsServiceAccountSync(db)
+            client_result = sync_service._create_client(mcc)
+            
+            if not client_result:
+                for campaign in campaigns:
+                    results.append({
+                        "campaign_name": campaign.campaign_name,
+                        "success": False,
+                        "message": "无法创建Google Ads客户端"
+                    })
+                continue
+            
+            client, _ = client_result
+            
+            for campaign in campaigns:
+                campaign_result = {
+                    "campaign_name": campaign.campaign_name,
+                    "keyword_results": [],
+                    "budget_result": None
+                }
+                
+                customer_id = campaign.customer_id
+                
+                # 1. 处理关键词CPC修改
+                for kw in campaign.keywords:
+                    if not kw.selected:
+                        continue
+                    
+                    try:
+                        cpc_micros = dollars_to_micros(kw.target_cpc)
+                        result = sync_service.set_keyword_cpc(
+                            client,
+                            customer_id,
+                            kw.ad_group_id,
+                            kw.keyword_id,
+                            cpc_micros
+                        )
+                        
+                        if result["success"]:
+                            total_keywords_success += 1
+                            campaign_result["keyword_results"].append({
+                                "keyword_text": kw.keyword_text,
+                                "success": True,
+                                "new_cpc": kw.target_cpc
+                            })
+                            
+                            # 更新数据库
+                            db_kw = db.query(KeywordBid).filter(
+                                KeywordBid.criterion_id == kw.keyword_id,
+                                KeywordBid.user_id == current_user.id
+                            ).first()
+                            if db_kw:
+                                db_kw.max_cpc = kw.target_cpc
+                                db_kw.last_sync_at = datetime.utcnow()
+                        else:
+                            total_keywords_failed += 1
+                            campaign_result["keyword_results"].append({
+                                "keyword_text": kw.keyword_text,
+                                "success": False,
+                                "message": result.get("message", "未知错误")
+                            })
+                    except Exception as e:
+                        total_keywords_failed += 1
+                        campaign_result["keyword_results"].append({
+                            "keyword_text": kw.keyword_text,
+                            "success": False,
+                            "message": str(e)
+                        })
+                
+                # 2. 处理预算修改
+                if campaign.budget_selected and campaign.budget_target and campaign.budget_target > 0:
+                    try:
+                        # 获取预算ID
+                        budget_info = sync_service.get_campaign_budget_id(
+                            client, customer_id, campaign.campaign_id
+                        )
+                        
+                        if budget_info and budget_info.get("budget_id"):
+                            budget_id = budget_info["budget_id"]
+                            budget_micros = dollars_to_micros(campaign.budget_target)
+                            
+                            result = sync_service.set_campaign_budget(
+                                client, customer_id, budget_id, budget_micros
+                            )
+                            
+                            if result["success"]:
+                                total_budget_success += 1
+                                campaign_result["budget_result"] = {
+                                    "success": True,
+                                    "new_budget": campaign.budget_target
+                                }
+                            else:
+                                total_budget_failed += 1
+                                campaign_result["budget_result"] = {
+                                    "success": False,
+                                    "message": result.get("message", "未知错误")
+                                }
+                        else:
+                            total_budget_failed += 1
+                            campaign_result["budget_result"] = {
+                                "success": False,
+                                "message": "无法获取预算ID"
+                            }
+                    except Exception as e:
+                        total_budget_failed += 1
+                        campaign_result["budget_result"] = {
+                            "success": False,
+                            "message": str(e)
+                        }
+                
+                results.append(campaign_result)
+                db.commit()
+                
+        except Exception as e:
+            for campaign in campaigns:
+                results.append({
+                    "campaign_name": campaign.campaign_name,
+                    "success": False,
+                    "message": str(e)
+                })
+    
+    return {
+        "success": True,
+        "summary": {
+            "keywords_success": total_keywords_success,
+            "keywords_failed": total_keywords_failed,
+            "budget_success": total_budget_success,
+            "budget_failed": total_budget_failed
+        },
+        "results": results
+    }
+
+
+@router.post("/get-keyword-suggestions")
+async def get_keyword_suggestions(
+    campaign_name: str,
+    conservative_epc: float,
+    is_rank_lost: float = 0,
+    current_budget: float = 0,
+    conservative_roi: float = None,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    获取广告系列的关键词CPC建议
+    
+    用于前端显示部署预览
+    """
+    from app.services.cpc_deployment_service import CPCDeploymentService
+    
+    service = CPCDeploymentService(db)
+    suggestions = service.calculate_keyword_cpc_suggestions(
+        user_id=current_user.id,
+        campaign_name=campaign_name,
+        conservative_epc=conservative_epc,
+        is_rank_lost=is_rank_lost,
+        current_budget=current_budget,
+        conservative_roi=conservative_roi
+    )
+    
+    return suggestions
 

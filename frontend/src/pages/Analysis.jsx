@@ -62,6 +62,36 @@ const Analysis = () => {
   
   // CPC部署弹窗状态
   const [cpcDeployModalOpen, setCpcDeployModalOpen] = useState(false)
+  const [selectedCampaignsForDeploy, setSelectedCampaignsForDeploy] = useState([])
+  const [selectedRowKeys, setSelectedRowKeys] = useState([])
+  
+  // 打开单行部署弹窗
+  const handleSingleDeploy = (row) => {
+    setSelectedCampaignsForDeploy([row])
+    setCpcDeployModalOpen(true)
+  }
+  
+  // 打开批量部署弹窗
+  const handleBatchDeploy = () => {
+    const selectedRows = results.filter((_, index) => selectedRowKeys.includes(index))
+    if (selectedRows.length === 0) {
+      message.warning('请先选择要部署的广告系列')
+      return
+    }
+    setSelectedCampaignsForDeploy(selectedRows.filter(r => r['部署数据']))
+    setCpcDeployModalOpen(true)
+  }
+  
+  // 打开全量部署弹窗
+  const handleDeployAll = () => {
+    const campaignsWithData = results.filter(r => r['部署数据'])
+    if (campaignsWithData.length === 0) {
+      message.warning('没有可部署的广告系列')
+      return
+    }
+    setSelectedCampaignsForDeploy(campaignsWithData)
+    setCpcDeployModalOpen(true)
+  }
 
   const fetchAccounts = async () => {
     try {
@@ -863,10 +893,10 @@ G) 综述
                 <Button 
                   type="primary"
                   icon={<RocketOutlined />}
-                  onClick={() => setCpcDeployModalOpen(true)}
+                  onClick={handleDeployAll}
                   style={{ background: '#52c41a', borderColor: '#52c41a' }}
                 >
-                  一键部署CPC
+                  一键部署全部
                 </Button>
                 <Button 
                   icon={<CopyOutlined />}
@@ -1086,6 +1116,14 @@ G) 综述
             accountId={selectedAccount}
             dateRange={dateRange}
           />
+          <Button 
+            type="primary"
+            icon={<RocketOutlined />}
+            onClick={handleDeployAll}
+            style={{ background: '#52c41a', borderColor: '#52c41a' }}
+          >
+            一键部署全部
+          </Button>
         </div>
 
         {isManager ? (
@@ -1177,47 +1215,61 @@ G) 综述
 
                         // 为操作指令列添加特殊渲染 - 可点击查看AI报告（经理视图）
                         if (key === '操作指令') {
-                          column.width = 260
+                          column.width = 320
                           column.ellipsis = false
                           column.render = (text, row) => {
                             if (!text || text === '-') return '-'
                             const t = String(text)
                             let color = 'default'
-                            // 根据操作指令内容设置颜色（支持新格式：CPC $X.XX→$X.XX | 预算 $X.XX→$X.XX(+X%)）
-                            if (t.includes('关停') || t === 'PAUSE') {
+                            // 根据操作指令内容设置颜色（支持新格式：[关键词] $X.XX→$X.XX | 预算 $X.XX→$X.XX(+X%)）
+                            if (t.includes('暂停') || t.includes('关停') || t === 'PAUSE') {
                               color = 'red'
                             } else if (t.includes('样本不足')) {
                               color = 'default'
-                            } else if (t.includes('稳定运行') || (t.includes('(+0%)') && !t.includes('(+2') && !t.includes('(+3'))) {
+                            } else if (t === '维持' || t.includes('稳定运行')) {
                               color = 'blue'
-                            } else if (t.includes('(+30%)') || t.includes('(+20%)')) {
+                            } else if (t.includes('(+30%)') || t.includes('(+20%)') || t.includes('(+100%)')) {
                               color = 'green'
-                            } else if (t.includes('→') && t.includes('CPC') && !t.includes('预算')) {
-                              // 只有CPC变化，可能是降价
-                              const cpcMatch = t.match(/CPC \$(\d+\.?\d*)\u2192\$(\d+\.?\d*)/)
-                              if (cpcMatch) {
-                                const oldCpc = parseFloat(cpcMatch[1])
-                                const newCpc = parseFloat(cpcMatch[2])
-                                color = newCpc < oldCpc ? 'orange' : 'cyan'
-                              } else {
-                                color = 'cyan'
-                              }
                             } else if (t.includes('→')) {
                               color = 'cyan'
                             }
+                            
+                            const hasDeployData = row['部署数据'] && 
+                              (row['部署数据'].action !== 'maintain' || 
+                               (row['部署数据'].keyword_suggestions && row['部署数据'].keyword_suggestions.length > 0) ||
+                               row['部署数据'].budget_suggestion)
+                            
                             return (
-                              <Tooltip title="点击查看该广告系列的 AI 分析报告">
-                                <Tag 
-                                  color={color} 
-                                  style={{ fontSize: '12px', cursor: 'pointer', maxWidth: '240px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}
-                                  onClick={(e) => {
-                                    e.stopPropagation() // 阻止冒泡到行展开
-                                    handleViewCampaignReport(row, record.analysis_date)
-                                  }}
-                                >
-                                  {t}
-                                </Tag>
-                              </Tooltip>
+                              <Space size={4}>
+                                <Tooltip title={t.length > 30 ? t : '点击查看AI分析报告'}>
+                                  <Tag 
+                                    color={color} 
+                                    style={{ fontSize: '11px', cursor: 'pointer', maxWidth: '200px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}
+                                    onClick={(e) => {
+                                      e.stopPropagation()
+                                      handleViewCampaignReport(row, record.analysis_date)
+                                    }}
+                                  >
+                                    {t.length > 25 ? t.substring(0, 25) + '...' : t}
+                                  </Tag>
+                                </Tooltip>
+                                {hasDeployData && (
+                                  <Tooltip title="部署此广告系列">
+                                    <Button
+                                      type="primary"
+                                      size="small"
+                                      icon={<RocketOutlined />}
+                                      style={{ background: '#52c41a', borderColor: '#52c41a', fontSize: '11px', padding: '0 6px' }}
+                                      onClick={(e) => {
+                                        e.stopPropagation()
+                                        handleSingleDeploy(row)
+                                      }}
+                                    >
+                                      部署
+                                    </Button>
+                                  </Tooltip>
+                                )}
+                              </Space>
                             )
                           }
                         }
@@ -1428,47 +1480,61 @@ G) 综述
 
                 // 为操作指令列添加特殊渲染 - 可点击查看AI报告
                 if (key === '操作指令') {
-                  column.width = 260
+                  column.width = 320
                   column.ellipsis = false
                   column.render = (text, row) => {
                     if (!text || text === '-') return '-'
                     const t = String(text)
                     let color = 'default'
-                    // 根据操作指令内容设置颜色（支持新格式：CPC $X.XX→$X.XX | 预算 $X.XX→$X.XX(+X%)）
-                    if (t.includes('关停') || t === 'PAUSE') {
+                    // 根据操作指令内容设置颜色（支持新格式：[关键词] $X.XX→$X.XX | 预算 $X.XX→$X.XX(+X%)）
+                    if (t.includes('暂停') || t.includes('关停') || t === 'PAUSE') {
                       color = 'red'
                     } else if (t.includes('样本不足')) {
                       color = 'default'
-                    } else if (t.includes('稳定运行') || (t.includes('(+0%)') && !t.includes('(+2') && !t.includes('(+3'))) {
+                    } else if (t === '维持' || t.includes('稳定运行')) {
                       color = 'blue'
-                    } else if (t.includes('(+30%)') || t.includes('(+20%)')) {
+                    } else if (t.includes('(+30%)') || t.includes('(+20%)') || t.includes('(+100%)')) {
                       color = 'green'
-                    } else if (t.includes('→') && t.includes('CPC') && !t.includes('预算')) {
-                      // 只有CPC变化，可能是降价
-                      const cpcMatch = t.match(/CPC \$(\d+\.?\d*)\u2192\$(\d+\.?\d*)/)
-                      if (cpcMatch) {
-                        const oldCpc = parseFloat(cpcMatch[1])
-                        const newCpc = parseFloat(cpcMatch[2])
-                        color = newCpc < oldCpc ? 'orange' : 'cyan'
-                      } else {
-                        color = 'cyan'
-                      }
                     } else if (t.includes('→')) {
                       color = 'cyan'
                     }
+                    
+                    const hasDeployData = row['部署数据'] && 
+                      (row['部署数据'].action !== 'maintain' || 
+                       (row['部署数据'].keyword_suggestions && row['部署数据'].keyword_suggestions.length > 0) ||
+                       row['部署数据'].budget_suggestion)
+                    
                     return (
-                      <Tooltip title="点击查看该广告系列的 AI 分析报告">
-                        <Tag 
-                          color={color} 
-                          style={{ fontSize: '12px', cursor: 'pointer', maxWidth: '240px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}
-                          onClick={(e) => {
-                            e.stopPropagation() // 阻止冒泡到行展开
-                            handleViewCampaignReport(row, record.analysis_date)
-                          }}
-                        >
-                          {t}
-                        </Tag>
-                      </Tooltip>
+                      <Space size={4}>
+                        <Tooltip title={t.length > 30 ? t : '点击查看AI分析报告'}>
+                          <Tag 
+                            color={color} 
+                            style={{ fontSize: '11px', cursor: 'pointer', maxWidth: '200px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              handleViewCampaignReport(row, record.analysis_date)
+                            }}
+                          >
+                            {t.length > 25 ? t.substring(0, 25) + '...' : t}
+                          </Tag>
+                        </Tooltip>
+                        {hasDeployData && (
+                          <Tooltip title="部署此广告系列">
+                            <Button
+                              type="primary"
+                              size="small"
+                              icon={<RocketOutlined />}
+                              style={{ background: '#52c41a', borderColor: '#52c41a', fontSize: '11px', padding: '0 6px' }}
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                handleSingleDeploy(row)
+                              }}
+                            >
+                              部署
+                            </Button>
+                          </Tooltip>
+                        )}
+                      </Space>
                     )
                   }
                 }
@@ -1639,11 +1705,18 @@ G) 综述
       {/* CPC部署弹窗 */}
       <CpcDeployModal
         visible={cpcDeployModalOpen}
-        onClose={() => setCpcDeployModalOpen(false)}
-        aiReport={aiAnalysisResult?.analysis || ''}
+        onClose={() => {
+          setCpcDeployModalOpen(false)
+          setSelectedCampaignsForDeploy([])
+        }}
+        campaigns={selectedCampaignsForDeploy}
         onSuccess={() => {
           setCpcDeployModalOpen(false)
+          setSelectedCampaignsForDeploy([])
+          setSelectedRowKeys([])
           message.success('CPC部署成功！')
+          // 刷新数据
+          fetchResults()
         }}
       />
     </div>

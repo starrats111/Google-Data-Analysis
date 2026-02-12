@@ -14,7 +14,7 @@ from app.models.platform_data import PlatformData
 from app.models.affiliate_account import AffiliateAccount, AffiliatePlatform
 from app.models.analysis_result import AnalysisResult
 from app.models.ai_report import UserPrompt
-from app.models.keyword_bid import CampaignBidStrategy
+from app.models.keyword_bid import CampaignBidStrategy, KeywordBid
 
 logger = logging.getLogger(__name__)
 
@@ -464,6 +464,172 @@ class ApiAnalysisService:
             return " | ".join(instructions)
         return "稳定运行"
     
+    def _generate_operation_with_keywords(
+        self,
+        user_id: int,
+        campaign_name: str,
+        conservative_epc: float,
+        conservative_roi: float,
+        is_budget_lost: float,
+        is_rank_lost: float,
+        current_budget: float,
+        order_days: int,
+        campaign_id: str = None,
+        customer_id: str = None
+    ) -> tuple:
+        """
+        生成包含关键词级别CPC的操作指令
+        
+        规则：
+        1. 上限：不超过 保守EPC × 0.7（红线CPC）
+        2. 修改区间：avg_cpc × 1.3 ~ avg_cpc × 1.5
+        3. 周1、3、5 且 Rank丢失 > 15%：在修改区间基础上 +$0.02
+        
+        Returns:
+            Tuple[操作指令字符串, 部署数据字典]
+        """
+        from datetime import datetime
+        
+        # D级判定：ROI严重为负
+        if conservative_roi is not None and conservative_roi < -0.4:
+            return "暂停", {
+                "action": "pause",
+                "campaign_name": campaign_name,
+                "campaign_id": campaign_id,
+                "customer_id": customer_id,
+                "keyword_suggestions": [],
+                "budget_suggestion": None
+            }
+        
+        # 计算红线CPC
+        redline_cpc = conservative_epc * 0.7 if conservative_epc > 0 else 0
+        
+        # 检查今天是否为周1/3/5
+        today = datetime.now()
+        weekday = today.weekday()  # 0=周一, 2=周三, 4=周五
+        is_boost_day = weekday in [0, 2, 4]
+        should_boost = is_boost_day and is_rank_lost > 0.15
+        
+        # 查询该广告系列下的所有关键词
+        keywords = self.db.query(KeywordBid).filter(
+            KeywordBid.user_id == user_id,
+            KeywordBid.campaign_name == campaign_name,
+            KeywordBid.status == "ENABLED"
+        ).all()
+        
+        keyword_suggestions = []
+        instruction_parts = []
+        
+        for kw in keywords:
+            current_cpc = kw.max_cpc or 0
+            avg_cpc = kw.avg_cpc or current_cpc
+            
+            if avg_cpc <= 0:
+                continue
+            
+            # 计算目标CPC（修改区间中间值）
+            target_cpc = avg_cpc * 1.4  # 中间值
+            
+            # 周1/3/5 且 Rank丢失 > 15%：+0.02
+            if should_boost:
+                target_cpc += 0.02
+            
+            # 不超过红线CPC
+            if redline_cpc > 0:
+                target_cpc = min(target_cpc, redline_cpc)
+            
+            # 确保最小值为 $0.01
+            target_cpc = max(target_cpc, 0.01)
+            
+            # 计算变化百分比
+            if current_cpc > 0:
+                change_percent = ((target_cpc - current_cpc) / current_cpc) * 100
+            else:
+                change_percent = 0
+            
+            # 只有当变化超过1%时才建议修改
+            if abs(change_percent) > 1:
+                keyword_text = kw.keyword_text
+                # 截断过长的关键词用于显示
+                display_text = keyword_text[:12] + "..." if len(keyword_text) > 15 else keyword_text
+                
+                instruction_parts.append(
+                    f"[{display_text}] ${current_cpc:.2f}→${target_cpc:.2f}"
+                )
+                
+                keyword_suggestions.append({
+                    "keyword_id": kw.criterion_id,
+                    "keyword_text": keyword_text,
+                    "match_type": kw.match_type,
+                    "current_cpc": round(current_cpc, 2),
+                    "target_cpc": round(target_cpc, 2),
+                    "change_percent": round(change_percent, 1),
+                    "quality_score": kw.quality_score,
+                    "ad_group_id": kw.ad_group_id,
+                    "campaign_id": kw.campaign_id or campaign_id,
+                    "customer_id": kw.customer_id or customer_id,
+                    "mcc_id": kw.mcc_id
+                })
+        
+        # 计算预算建议
+        budget_suggestion = None
+        
+        # S级判定（简化：ROI > 3）
+        is_s_level = conservative_roi is not None and conservative_roi > 3 and order_days >= 5
+        
+        if current_budget > 0:
+            target_budget = current_budget
+            change_percent = 0
+            reason = ""
+            
+            if is_s_level:
+                if is_budget_lost > 0.6:
+                    target_budget = current_budget * 2.0
+                    change_percent = 100
+                    reason = "S级，Budget丢失>60%"
+                elif is_budget_lost > 0.4:
+                    target_budget = current_budget * 1.3
+                    change_percent = 30
+                    reason = "S级，Budget丢失40-60%"
+            else:
+                if is_budget_lost > 0.3 and conservative_roi and conservative_roi > 0.5:
+                    target_budget = current_budget * 1.2
+                    change_percent = 20
+                    reason = "有预算瓶颈，适当增加"
+            
+            if change_percent > 0:
+                sign = "+"
+                instruction_parts.append(
+                    f"预算 ${current_budget:.2f}→${target_budget:.2f}({sign}{change_percent:.0f}%)"
+                )
+                budget_suggestion = {
+                    "action": "adjust",
+                    "current_budget": round(current_budget, 2),
+                    "target_budget": round(target_budget, 2),
+                    "change_percent": round(change_percent, 1),
+                    "reason": reason
+                }
+        
+        # 生成操作指令字符串
+        if not instruction_parts:
+            instruction_str = "维持"
+        else:
+            instruction_str = " | ".join(instruction_parts)
+        
+        deployment_data = {
+            "action": "adjust" if keyword_suggestions or budget_suggestion else "maintain",
+            "campaign_name": campaign_name,
+            "campaign_id": campaign_id,
+            "customer_id": customer_id,
+            "mcc_id": keywords[0].mcc_id if keywords else None,
+            "redline_cpc": round(redline_cpc, 2),
+            "is_boost_day": is_boost_day,
+            "keyword_suggestions": keyword_suggestions,
+            "budget_suggestion": budget_suggestion
+        }
+        
+        return instruction_str, deployment_data
+    
     def generate_l7d_analysis(
         self,
         end_date: date,
@@ -632,10 +798,18 @@ class ApiAnalysisService:
                 # 如果没有人工出价上限，回退到过去7天CPC最大值
                 current_max_cpc = max_cpc_limit if max_cpc_limit else cdata["max_cpc"]
                 
-                # 生成操作指令
-                operation = self._generate_l7d_operation(
-                    conservative_roi, cdata["is_budget_lost"], cdata["is_rank_lost"], 
-                    order_days, current_max_cpc, orders, cdata["max_budget"]
+                # 生成操作指令（包含关键词级别CPC建议）
+                operation, deployment_data = self._generate_operation_with_keywords(
+                    user_id=data_user_id,
+                    campaign_name=cdata["campaign_name"],
+                    conservative_epc=conservative_epc,
+                    conservative_roi=conservative_roi,
+                    is_budget_lost=cdata["is_budget_lost"],
+                    is_rank_lost=cdata["is_rank_lost"],
+                    current_budget=cdata["max_budget"],
+                    order_days=order_days,
+                    campaign_id=cdata["campaign_id"],
+                    customer_id=cdata.get("cid", "").replace("-", "")
                 )
                 
                 row = {
@@ -655,6 +829,7 @@ class ApiAnalysisService:
                     "保守EPC": round(conservative_epc, 4),
                     "保守ROI": f"{conservative_roi * 100:.1f}%" if conservative_roi is not None else "-",
                     "操作指令": operation,
+                    "部署数据": deployment_data,  # 新增：用于一键部署
                     "ai_report": "",  # 将在后面批量生成
                 }
                 
