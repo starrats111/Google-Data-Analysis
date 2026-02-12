@@ -41,12 +41,22 @@ class MerchantBreakdownItem(BaseModel):
     mid: str
     merchant: str
     platform: str
+    account_label: Optional[str] = None  # 账号标签，如 "RW-1"、"RW-2"，无序号时为 "RW"
     orders: int
     gmv: float
     total_commission: float  # 总佣金（所有状态，对应Est. Commission）
     approved_commission: float  # 已付佣金
     pending_commission: float  # 审核佣金
     rejected_commission: float  # 拒付佣金
+
+
+class AccountBreakdownItem(BaseModel):
+    """账号聚合数据项（用于筛选器）"""
+    account_label: str  # 账号标签，如 "RW-1"、"RW-2"
+    platform: str
+    account_id: int
+    orders: int
+    total_commission: float
 
 
 class PlatformDataSummaryResponse(BaseModel):
@@ -64,6 +74,7 @@ class PlatformDataSummaryResponse(BaseModel):
     total_net_commission: float
     merchant_breakdown: List[MerchantBreakdownItem]  # 按商家聚合（MID、商家、订单数、销售额、佣金）
     platform_breakdown: List[dict]  # 按平台分组的数据（保留用于兼容）
+    account_breakdown: Optional[List[AccountBreakdownItem]] = None  # 按账号分组（用于筛选器）
 
 
 @router.get("/detail", response_model=List[PlatformDataDetailResponse])
@@ -443,10 +454,11 @@ async def get_platform_data_summary(
         total_rejected_rate = (total_rejected_commission / total_commission * 100) if total_commission > 0 else 0
         total_net_commission = total_commission - total_rejected_commission  # 净佣金 = 总佣金 - 拒付佣金
         
-        # 按平台+MID+商家聚合（汇总模式：参考CG，按MID聚合）
+        # 按平台+账号+MID+商家聚合（汇总模式：参考CG，按MID聚合，区分同平台多账号）
         # 需要统计不同状态的佣金：total（所有状态）、approved（已付）、pending（审核）、rejected（拒付）
         merchant_query = base_query.with_entities(
             AffiliateTransaction.platform,
+            AffiliateTransaction.affiliate_account_id,  # 账号ID，用于获取account_index
             AffiliateTransaction.merchant_id,  # 直接使用MID字段
             AffiliateTransaction.merchant,
             func.count(AffiliateTransaction.id).label('orders'),
@@ -472,6 +484,7 @@ async def get_platform_data_summary(
             ).label('rejected_commission')  # 拒付佣金
         ).group_by(
             AffiliateTransaction.platform,
+            AffiliateTransaction.affiliate_account_id,  # 按账号分组（区分同平台多账号）
             AffiliateTransaction.merchant_id,  # 按MID分组
             AffiliateTransaction.merchant
         ).order_by(
@@ -480,6 +493,16 @@ async def get_platform_data_summary(
         )
         
         merchant_results = merchant_query.all()
+        
+        # 获取所有相关账号的 account_index
+        account_ids = list(set(r.affiliate_account_id for r in merchant_results if r.affiliate_account_id))
+        account_index_map = {}
+        if account_ids:
+            accounts = db.query(
+                AffiliateAccount.id, 
+                AffiliateAccount.account_index
+            ).filter(AffiliateAccount.id.in_(account_ids)).all()
+            account_index_map = {acc.id: acc.account_index for acc in accounts}
         
         merchant_breakdown = []
         for r in merchant_results:
@@ -493,10 +516,19 @@ async def get_platform_data_summary(
             # MID直接从交易记录获取
             mid = r.merchant_id or ""
             
+            # 生成账号标签（如 RW-1, RW-2, 无序号时为 RW）
+            platform_code = (r.platform or "").upper()
+            account_index = account_index_map.get(r.affiliate_account_id)
+            if account_index:
+                account_label = f"{platform_code}-{account_index}"
+            else:
+                account_label = platform_code
+            
             merchant_breakdown.append({
                 "mid": mid,
                 "merchant": r.merchant or "",
                 "platform": r.platform,
+                "account_label": account_label,
                 "orders": orders,
                 "gmv": round(gmv, 2),
                 "total_commission": round(total_comm, 2),  # 总佣金（所有状态，对应Est. Commission）
@@ -548,6 +580,51 @@ async def get_platform_data_summary(
                 "net_commission": round(net, 2)
             })
         
+        # 按账号聚合（用于筛选器，区分同平台多账号）
+        account_query = base_query.with_entities(
+            AffiliateTransaction.platform,
+            AffiliateTransaction.affiliate_account_id,
+            func.count(AffiliateTransaction.id).label('orders'),
+            func.sum(AffiliateTransaction.commission_amount).label('total_commission')
+        ).filter(
+            AffiliateTransaction.affiliate_account_id.isnot(None)
+        ).group_by(
+            AffiliateTransaction.platform,
+            AffiliateTransaction.affiliate_account_id
+        ).order_by(
+            AffiliateTransaction.platform,
+            func.sum(AffiliateTransaction.commission_amount).desc()
+        )
+        
+        account_results = account_query.all()
+        
+        # 获取账号信息
+        account_ids_for_breakdown = list(set(r.affiliate_account_id for r in account_results if r.affiliate_account_id))
+        account_info_map = {}
+        if account_ids_for_breakdown:
+            accounts_info = db.query(
+                AffiliateAccount.id,
+                AffiliateAccount.account_index
+            ).filter(AffiliateAccount.id.in_(account_ids_for_breakdown)).all()
+            account_info_map = {acc.id: acc.account_index for acc in accounts_info}
+        
+        account_breakdown = []
+        for r in account_results:
+            platform_code = (r.platform or "").upper()
+            account_index = account_info_map.get(r.affiliate_account_id)
+            if account_index:
+                account_label = f"{platform_code}-{account_index}"
+            else:
+                account_label = platform_code
+            
+            account_breakdown.append({
+                "account_label": account_label,
+                "platform": r.platform,
+                "account_id": r.affiliate_account_id,
+                "orders": int(r.orders or 0),
+                "total_commission": round(float(r.total_commission or 0), 2)
+            })
+        
         # 生成日期范围标签
         if begin == end:
             date_range_label = begin.strftime("%Y-%m-%d")
@@ -567,7 +644,8 @@ async def get_platform_data_summary(
             "total_rejected_rate": round(total_rejected_rate, 2),
             "total_net_commission": round(total_net_commission, 2),
             "merchant_breakdown": merchant_breakdown,  # 按商家聚合（MID、商家、订单数、销售额、佣金）
-            "platform_breakdown": platform_breakdown  # 按平台聚合（保留用于兼容）
+            "platform_breakdown": platform_breakdown,  # 按平台聚合（保留用于兼容）
+            "account_breakdown": account_breakdown  # 按账号聚合（用于筛选器）
         }
         
     except ValueError as e:

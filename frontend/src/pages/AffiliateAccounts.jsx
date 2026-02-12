@@ -173,6 +173,7 @@ const AffiliateAccounts = () => {
       platform_id: account.platform_id,
       account_name: account.account_name,
       account_code: account.account_code,
+      account_index: account.account_index,
       email: account.email,
       is_active: account.is_active,
       notes: account.notes,
@@ -561,7 +562,12 @@ const AffiliateAccounts = () => {
   // 员工视图：显示自己的账号列表
   const employeeColumns = [
     { title: '账号名称', dataIndex: 'account_name', key: 'account_name' },
-    { title: '联盟平台', key: 'platform', render: (_, record) => record.platform?.platform_name },
+    { title: '联盟平台', key: 'platform', render: (_, record) => {
+      const platformCode = (record.platform?.platform_code || '').toUpperCase()
+      const index = record.account_index
+      const label = index ? `${platformCode}-${index}` : platformCode
+      return <span>{record.platform?.platform_name} <Tag color="blue">{label}</Tag></span>
+    }},
     { title: '渠道ID', dataIndex: 'account_code', key: 'account_code' },
     { title: '邮箱', dataIndex: 'email', key: 'email' },
     { title: '收款人', dataIndex: 'payee_name', key: 'payee_name', render: (v) => v || '-' },
@@ -682,6 +688,11 @@ const AffiliateAccounts = () => {
 <Table
                                       columns={[
                                         { title: '账号名称', dataIndex: 'account_name', key: 'account_name' },
+                                        { title: '序号', dataIndex: 'account_index', key: 'account_index', width: 60, render: (v, record) => {
+                                          if (!v) return '-'
+                                          const code = (platform.platform_code || '').toUpperCase()
+                                          return <Tag color="blue">{code}-{v}</Tag>
+                                        }},
                                         { title: '渠道ID', dataIndex: 'account_code', key: 'account_code' },
                         { title: '邮箱', dataIndex: 'email', key: 'email' },
                         { 
@@ -1032,6 +1043,32 @@ const AffiliateAccounts = () => {
               label="渠道ID"
             >
               <Input placeholder="可选：渠道ID（Channel ID）" />
+            </Form.Item>
+
+            <Form.Item
+              name="account_index"
+              label="账号序号"
+              tooltip="用于区分同平台多账号，如设置为1则显示为 RW-1，留空则仅显示 RW"
+              rules={[
+                { type: 'number', transform: (value) => value ? Number(value) : undefined, message: '请输入数字' },
+                { validator: (_, value) => {
+                  if (value !== undefined && value !== null && value !== '') {
+                    const num = Number(value)
+                    if (num < 1 || num > 9) {
+                      return Promise.reject('序号范围为 1-9')
+                    }
+                  }
+                  return Promise.resolve()
+                }}
+              ]}
+            >
+              <Input 
+                type="number" 
+                min={1} 
+                max={9} 
+                placeholder="可选：1-9，用于区分同平台多账号" 
+                style={{ width: 200 }}
+              />
             </Form.Item>
 
             <Form.Item

@@ -30,6 +30,7 @@ class AffiliateAccount(Base):
     platform_id = Column(Integer, ForeignKey("affiliate_platforms.id"), nullable=False, index=True)
     account_name = Column(String(100), nullable=False)
     account_code = Column(String(50), nullable=True)
+    account_index = Column(Integer, nullable=True)  # 账号序号，用于区分同平台多账号，如 RW-1, RW-2
     email = Column(String(255), nullable=True, index=True)  # 邮箱地址
     is_active = Column(Boolean, default=True, nullable=False, index=True)
     notes = Column(Text, nullable=True)

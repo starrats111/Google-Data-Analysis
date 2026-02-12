@@ -24,6 +24,7 @@ const DataCenter = () => {
   const [googleData, setGoogleData] = useState([])
   const [platformData, setPlatformData] = useState([])
   const [platformSummary, setPlatformSummary] = useState([])
+  const [accountBreakdown, setAccountBreakdown] = useState([])  // 账号聚合数据（用于筛选器）
   const [viewMode, setViewMode] = useState('summary') // summary | detail
   
   // 日期默认为本月
@@ -117,13 +118,15 @@ const DataCenter = () => {
             },
             signal: abortControllerRef.current.signal,
           })
-          // API 返回的是对象 {merchant_breakdown: [...], platform_breakdown: [...], total_xxx...}
+          // API 返回的是对象 {merchant_breakdown: [...], platform_breakdown: [...], account_breakdown: [...], total_xxx...}
           const responseData = response.data
           // 优先使用 merchant_breakdown（按商家聚合），否则用 platform_breakdown
           const data = Array.isArray(responseData?.merchant_breakdown) 
             ? responseData.merchant_breakdown 
             : (Array.isArray(responseData?.platform_breakdown) ? responseData.platform_breakdown : [])
           setPlatformSummary(data)
+          // 保存账号聚合数据（用于筛选器）
+          setAccountBreakdown(Array.isArray(responseData?.account_breakdown) ? responseData.account_breakdown : [])
           dataCache.platform = { data, timestamp: Date.now(), params: cacheKey }
         } else {
           // 明细模式：获取每条交易记录
@@ -156,6 +159,16 @@ const DataCenter = () => {
   const disabledDate = (current) => {
     return current && current > dayjs().endOf('day')
   }
+
+  // 从 accountBreakdown 生成账号筛选器选项
+  const accountFilters = React.useMemo(() => {
+    if (!accountBreakdown || accountBreakdown.length === 0) {
+      return []
+    }
+    // 去重并排序
+    const labels = [...new Set(accountBreakdown.map(item => item.account_label))].sort()
+    return labels.map(label => ({ text: label, value: label }))
+  }, [accountBreakdown])
 
   // 获取MCC费用明细
   const fetchMccCostDetail = async () => {
@@ -261,10 +274,28 @@ const DataCenter = () => {
   // 平台数据汇总列（匹配后端 merchant_breakdown 格式）
   const platformSummaryColumns = [
     {
+      title: '账号',
+      dataIndex: 'account_label',
+      key: 'account_label',
+      width: 80,
+      filters: accountFilters,
+      onFilter: (value, record) => record.account_label === value,
+      render: (val, record) => {
+        // 平台代码映射颜色
+        const platformColors = {
+          'cg': '#1890ff', 'rw': '#fa8c16', 'lh': '#52c41a', 'pm': '#eb2f96',
+          'lb': '#722ed1', 'pb': '#f5222d', 'bsh': '#a0d911', 'cf': '#13c2c2',
+        }
+        const key = record.platform?.toLowerCase()
+        const color = platformColors[key] || '#666'
+        return <Tag color={color}>{val || record.platform?.toUpperCase() || '-'}</Tag>
+      },
+    },
+    {
       title: '平台',
       dataIndex: 'platform',
       key: 'platform',
-      width: 100,
+      width: 80,
       render: (val) => {
         // 平台代码映射（支持新旧两种格式：小写缩写和全称）
         const platformColors = {

@@ -28,6 +28,7 @@ class AffiliateAccountBase(BaseModel):
     platform_id: int
     account_name: str
     account_code: Optional[str] = None
+    account_index: Optional[int] = None  # 账号序号，用于区分同平台多账号
     email: Optional[EmailStr] = None  # 邮箱地址
     is_active: bool = True
     notes: Optional[str] = None
@@ -42,6 +43,7 @@ class AffiliateAccountCreate(AffiliateAccountBase):
 class AffiliateAccountUpdate(BaseModel):
     account_name: Optional[str] = None
     account_code: Optional[str] = None
+    account_index: Optional[int] = None  # 账号序号
     email: Optional[EmailStr] = None  # 邮箱地址
     is_active: Optional[bool] = None
     notes: Optional[str] = None
@@ -57,6 +59,7 @@ class AffiliateAccountResponse(AffiliateAccountBase):
     updated_at: Optional[datetime]
     payee_name: Optional[str] = None
     payee_card: Optional[str] = None
+    account_index: Optional[int] = None  # 账号序号
     
     class Config:
         from_attributes = True
