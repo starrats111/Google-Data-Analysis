@@ -1,9 +1,9 @@
 import React, { useState, useEffect } from 'react'
 import { 
-  Card, Table, Tag, Statistic, Row, Col, Progress, Typography, Spin, Empty, Space, Select, DatePicker, Button
+  Card, Table, Tag, Statistic, Row, Col, Progress, Typography, Spin, Empty, Space, Select, DatePicker, Button, message, Dropdown
 } from 'antd'
 import { 
-  TeamOutlined, UserOutlined, TrophyOutlined, DollarOutlined, ReloadOutlined
+  TeamOutlined, UserOutlined, TrophyOutlined, DollarOutlined, ReloadOutlined, SyncOutlined, CloudSyncOutlined, DownOutlined
 } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import api from '../services/api'
@@ -20,6 +20,7 @@ const TeamOverview = () => {
   const [teamStats, setTeamStats] = useState([])
   const [memberRanking, setMemberRanking] = useState([])
   const [loading, setLoading] = useState(false)
+  const [syncing, setSyncing] = useState(false)
   const [dateRange, setDateRange] = useState([
     dayjs().subtract(7, 'day'),
     dayjs()
@@ -52,6 +53,50 @@ const TeamOverview = () => {
     loadData()
   }, [dateRange])
 
+  // 同步团队数据
+  const handleSync = async (syncType = 'all') => {
+    setSyncing(true)
+    message.loading({ content: '正在启动数据同步...', key: 'sync', duration: 0 })
+    
+    try {
+      const response = await api.post('/api/team/sync-team-data', null, {
+        params: { sync_type: syncType }
+      })
+      
+      if (response.data.background) {
+        message.success({
+          content: `${response.data.message}`,
+          key: 'sync',
+          duration: 5
+        })
+      } else {
+        message.success({
+          content: response.data.message,
+          key: 'sync'
+        })
+      }
+      
+      // 延迟刷新数据
+      setTimeout(() => loadData(), 2000)
+      
+    } catch (error) {
+      console.error('同步失败:', error)
+      message.error({
+        content: `同步失败: ${error.response?.data?.detail || error.message}`,
+        key: 'sync'
+      })
+    } finally {
+      setSyncing(false)
+    }
+  }
+
+  // 同步菜单项
+  const syncMenuItems = [
+    { key: 'all', label: '同步全部数据', icon: <CloudSyncOutlined /> },
+    { key: 'platform', label: '仅同步平台数据', icon: <SyncOutlined /> },
+    { key: 'google', label: '仅同步广告数据', icon: <SyncOutlined /> }
+  ]
+
   // 获取当前组的统计
   const currentTeamStats = teamStats.length > 0 ? teamStats[0] : null
 
@@ -71,7 +116,18 @@ const TeamOverview = () => {
             onChange={setDateRange}
             allowClear={false}
           />
-          <Button icon={<ReloadOutlined />} onClick={loadData}>刷新</Button>
+          <Button icon={<ReloadOutlined />} onClick={loadData} loading={loading}>刷新</Button>
+          <Dropdown
+            menu={{
+              items: syncMenuItems,
+              onClick: ({ key }) => handleSync(key)
+            }}
+            disabled={syncing}
+          >
+            <Button type="primary" icon={<CloudSyncOutlined />} loading={syncing}>
+              同步最新数据 <DownOutlined />
+            </Button>
+          </Dropdown>
         </Space>
       </Card>
 

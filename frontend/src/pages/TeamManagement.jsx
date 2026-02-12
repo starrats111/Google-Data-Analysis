@@ -1,11 +1,11 @@
 import React, { useState, useEffect, useMemo } from 'react'
 import { 
   Card, Tabs, Table, Button, Space, Tag, Modal, Form, Input, Select, 
-  message, Popconfirm, Statistic, Row, Col, Progress, Typography, Spin, Empty
+  message, Popconfirm, Statistic, Row, Col, Progress, Typography, Spin, Empty, Dropdown
 } from 'antd'
 import { 
   TeamOutlined, UserOutlined, PlusOutlined, EditOutlined, DeleteOutlined,
-  ReloadOutlined, CrownOutlined, TrophyOutlined, DollarOutlined
+  ReloadOutlined, CrownOutlined, TrophyOutlined, DollarOutlined, CloudSyncOutlined, SyncOutlined, DownOutlined
 } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import api from '../services/api'
@@ -33,6 +33,7 @@ const TeamManagement = () => {
   
   // 筛选状态
   const [selectedTeamFilter, setSelectedTeamFilter] = useState(null)
+  const [syncing, setSyncing] = useState(false)
   
   const [userForm] = Form.useForm()
   const [teamForm] = Form.useForm()
@@ -81,6 +82,50 @@ const TeamManagement = () => {
       default: return <Tag color="default">组员</Tag>
     }
   }
+
+  // 同步团队数据
+  const handleSync = async (syncType = 'all') => {
+    setSyncing(true)
+    message.loading({ content: '正在启动数据同步...', key: 'sync', duration: 0 })
+    
+    try {
+      const response = await api.post('/api/team/sync-team-data', null, {
+        params: { sync_type: syncType }
+      })
+      
+      if (response.data.background) {
+        message.success({
+          content: `${response.data.message}`,
+          key: 'sync',
+          duration: 5
+        })
+      } else {
+        message.success({
+          content: response.data.message,
+          key: 'sync'
+        })
+      }
+      
+      // 延迟刷新数据
+      setTimeout(() => loadData(), 2000)
+      
+    } catch (error) {
+      console.error('同步失败:', error)
+      message.error({
+        content: `同步失败: ${error.response?.data?.detail || error.message}`,
+        key: 'sync'
+      })
+    } finally {
+      setSyncing(false)
+    }
+  }
+
+  // 同步菜单项
+  const syncMenuItems = [
+    { key: 'all', label: '同步全部数据', icon: <CloudSyncOutlined /> },
+    { key: 'platform', label: '仅同步平台数据', icon: <SyncOutlined /> },
+    { key: 'google', label: '仅同步广告数据', icon: <SyncOutlined /> }
+  ]
 
   // ========== 用户管理 ==========
   const handleAddUser = () => {
@@ -329,7 +374,18 @@ const TeamManagement = () => {
                 <Option key={t.id} value={t.id}>{t.team_name}</Option>
               ))}
             </Select>
-            <Button icon={<ReloadOutlined />} onClick={loadData}>刷新</Button>
+            <Button icon={<ReloadOutlined />} onClick={loadData} loading={loading}>刷新</Button>
+            <Dropdown
+              menu={{
+                items: syncMenuItems,
+                onClick: ({ key }) => handleSync(key)
+              }}
+              disabled={syncing}
+            >
+              <Button type="primary" icon={<CloudSyncOutlined />} loading={syncing}>
+                同步最新数据 <DownOutlined />
+              </Button>
+            </Dropdown>
           </Space>
         </Space>
       </Card>

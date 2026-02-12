@@ -627,3 +627,148 @@ async def get_my_info(
         }
     }
 
+
+# ========== 团队数据同步 ==========
+
+def _do_team_sync_background(user_ids: list, sync_type: str):
+    """在后台线程中执行团队数据同步"""
+    import logging
+    import threading
+    from datetime import date, timedelta
+    from app.database import SessionLocal
+    from app.models.affiliate_account import AffiliateAccount
+    from app.models.google_mcc_account import GoogleMccAccount
+    
+    logger = logging.getLogger(__name__)
+    logger.info(f"[后台同步] 开始团队数据同步，用户数量: {len(user_ids)}, 类型: {sync_type}")
+    
+    db = SessionLocal()
+    try:
+        end_date = date.today()
+        start_date = end_date - timedelta(days=2)  # 最近3天
+        
+        if sync_type in ('platform', 'all'):
+            # 同步平台数据
+            from app.services.platform_data_sync import PlatformDataSyncService
+            sync_service = PlatformDataSyncService(db)
+            
+            accounts = db.query(AffiliateAccount).filter(
+                AffiliateAccount.user_id.in_(user_ids),
+                AffiliateAccount.is_active == True
+            ).all()
+            
+            synced_count = 0
+            for account in accounts:
+                try:
+                    result = sync_service.sync_account_data(
+                        account_id=account.id,
+                        begin_date=start_date.strftime("%Y-%m-%d"),
+                        end_date=end_date.strftime("%Y-%m-%d")
+                    )
+                    if result.get("success"):
+                        synced_count += 1
+                except Exception as e:
+                    logger.error(f"[后台同步] 同步账号 {account.id} 失败: {e}")
+            
+            logger.info(f"[后台同步] 平台数据同步完成: {synced_count}/{len(accounts)} 个账号")
+        
+        if sync_type in ('google', 'all'):
+            # 同步Google Ads数据
+            from app.services.google_ads_service_account_sync import GoogleAdsServiceAccountSync
+            sync_service = GoogleAdsServiceAccountSync(db)
+            
+            mccs = db.query(GoogleMccAccount).filter(
+                GoogleMccAccount.user_id.in_(user_ids),
+                GoogleMccAccount.is_active == True
+            ).all()
+            
+            synced_count = 0
+            for mcc in mccs:
+                try:
+                    current_date = start_date
+                    while current_date <= end_date:
+                        sync_service.sync_mcc_data(
+                            mcc_id=mcc.id,
+                            target_date=current_date,
+                            force_refresh=True
+                        )
+                        current_date += timedelta(days=1)
+                    synced_count += 1
+                except Exception as e:
+                    logger.error(f"[后台同步] 同步MCC {mcc.id} 失败: {e}")
+            
+            logger.info(f"[后台同步] Google Ads同步完成: {synced_count}/{len(mccs)} 个MCC")
+        
+        logger.info(f"[后台同步] 团队数据同步全部完成")
+        
+    except Exception as e:
+        logger.error(f"[后台同步] 团队同步出错: {e}", exc_info=True)
+    finally:
+        db.close()
+
+
+@router.post("/sync-team-data")
+async def sync_team_data(
+    sync_type: str = "all",  # platform, google, all
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    同步团队数据（仅限组长和经理）
+    - 组长：同步本组所有成员的数据
+    - 经理：同步所有用户的数据
+    """
+    import threading
+    import logging
+    
+    logger = logging.getLogger(__name__)
+    
+    # 权限检查
+    if current_user.role not in (UserRole.LEADER, UserRole.MANAGER):
+        raise HTTPException(status_code=403, detail="仅限组长和经理使用此功能")
+    
+    # 获取需要同步的用户列表
+    if current_user.role == UserRole.MANAGER:
+        # 经理：获取所有用户
+        users = db.query(User).filter(User.role == UserRole.MEMBER).all()
+        user_ids = [u.id for u in users]
+        scope = "全部团队"
+    else:
+        # 组长：获取本组成员
+        users = db.query(User).filter(
+            User.team_id == current_user.team_id,
+            User.role == UserRole.MEMBER
+        ).all()
+        user_ids = [u.id for u in users]
+        
+        # 获取组名
+        team = db.query(Team).filter(Team.id == current_user.team_id).first()
+        scope = team.team_name if team else "本组"
+    
+    if not user_ids:
+        return {
+            "success": True,
+            "message": "没有找到需要同步的用户",
+            "user_count": 0,
+            "background": False
+        }
+    
+    logger.info(f"用户 {current_user.username} 触发团队数据同步，范围: {scope}, 用户数: {len(user_ids)}")
+    
+    # 在后台线程中执行同步
+    sync_thread = threading.Thread(
+        target=_do_team_sync_background,
+        args=(user_ids, sync_type)
+    )
+    sync_thread.daemon = True
+    sync_thread.start()
+    
+    return {
+        "success": True,
+        "message": f"同步已在后台开始，正在同步 {scope} 的 {len(user_ids)} 个用户数据，请稍后刷新页面",
+        "user_count": len(user_ids),
+        "scope": scope,
+        "sync_type": sync_type,
+        "background": True
+    }
+
