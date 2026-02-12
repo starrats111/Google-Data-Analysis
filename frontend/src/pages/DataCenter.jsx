@@ -40,6 +40,12 @@ const DataCenter = () => {
   const [mccCostData, setMccCostData] = useState([])
   const [mccCostLoading, setMccCostLoading] = useState(false)
   
+  // 分页状态
+  const [pagination, setPagination] = useState({
+    current: 1,
+    pageSize: 20,
+  })
+  
   // 请求取消
   const abortControllerRef = useRef(null)
 
@@ -571,7 +577,19 @@ const DataCenter = () => {
               )}
               rowKey={(record) => `${record.campaign_id}-${record.date}`}
               scroll={{ x: 1200 }}
-              pagination={{ pageSize: 20, showSizeChanger: true, showTotal: (total) => `共 ${total} 条` }}
+              pagination={{
+                current: pagination.current,
+                pageSize: pagination.pageSize,
+                showSizeChanger: true,
+                pageSizeOptions: ['10', '20', '50', '100'],
+                showTotal: (total) => `共 ${total} 条`,
+                onChange: (page, pageSize) => {
+                  setPagination({ current: page, pageSize })
+                },
+                onShowSizeChange: (current, size) => {
+                  setPagination({ current: 1, pageSize: size })
+                },
+              }}
               size="small"
             />
           )}
@@ -659,7 +677,19 @@ const DataCenter = () => {
               dataSource={viewMode === 'summary' ? platformSummary : platformData}
               rowKey={(record, index) => `${record.id || index}`}
               scroll={{ x: 800 }}
-              pagination={{ pageSize: 20, showSizeChanger: true, showTotal: (total) => `共 ${total} 条` }}
+              pagination={{
+                current: pagination.current,
+                pageSize: pagination.pageSize,
+                showSizeChanger: true,
+                pageSizeOptions: ['10', '20', '50', '100'],
+                showTotal: (total) => `共 ${total} 条`,
+                onChange: (page, pageSize) => {
+                  setPagination({ current: page, pageSize })
+                },
+                onShowSizeChange: (current, size) => {
+                  setPagination({ current: 1, pageSize: size })
+                },
+              }}
               size="small"
             />
           )}
