@@ -630,7 +630,7 @@ class PlatformDataSyncService:
                 begin_dt = datetime.strptime(begin_date, "%Y-%m-%d")
                 end_dt = datetime.strptime(end_date, "%Y-%m-%d") + timedelta(days=1)
                 dup_q = self.db.query(AffiliateTransaction).filter(
-                    AffiliateTransaction.platform == "linkhaitao",
+                    AffiliateTransaction.platform == "lh",  # 统一使用小写缩写
                     AffiliateTransaction.affiliate_account_id == account.id,
                     AffiliateTransaction.user_id == account.user_id,
                     AffiliateTransaction.transaction_time >= begin_dt,
@@ -738,7 +738,7 @@ class PlatformDataSyncService:
                 try:
                     transaction_service.normalize_and_save(
                         tx=tx,
-                        platform='linkhaitao',
+                        platform='lh',  # 统一使用小写缩写
                         affiliate_account_id=account.id,
                         user_id=account.user_id
                     )
@@ -761,7 +761,7 @@ class PlatformDataSyncService:
             # 使用UnifiedPlatformService按日期聚合数据（静态方法）
             date_data = UnifiedPlatformService.aggregate_by_date(
                 transactions=all_transactions,
-                platform='linkhaitao',
+                platform='lh',  # 统一使用小写缩写
                 date_field='transaction_time'
             )
             
@@ -775,7 +775,7 @@ class PlatformDataSyncService:
                     date_transactions = data_item.get("transactions", [])
                     platform_data_dict = UnifiedPlatformService.prepare_platform_data(
                         transactions=date_transactions,
-                        platform='linkhaitao',
+                        platform='lh',  # 统一使用小写缩写
                         target_date=trans_date,
                         date_field='transaction_time'
                     )
@@ -914,7 +914,7 @@ class PlatformDataSyncService:
                     
                     transaction_service.normalize_and_save(
                         tx=tx_data_dict,
-                        platform='creatorflare',  # 使用标准平台代码，与查询时的映射一致
+                        platform='cf',  # 统一使用小写缩写
                         affiliate_account_id=account.id,
                         user_id=account.user_id
                     )
@@ -926,7 +926,7 @@ class PlatformDataSyncService:
             # 使用统一服务聚合数据
             date_data = UnifiedPlatformService.aggregate_by_date(
                 transactions_raw,
-                platform='creatorflare',  # 使用标准平台代码，与查询时的映射一致
+                platform='cf',  # 统一使用小写缩写
                 date_field='transaction_time'
             )
             
@@ -935,7 +935,7 @@ class PlatformDataSyncService:
                 try:
                     platform_data_dict = UnifiedPlatformService.prepare_platform_data(
                         transactions_raw,
-                        platform='creatorflare',  # 使用标准平台代码，与查询时的映射一致
+                        platform='cf',  # 统一使用小写缩写
                         target_date=comm_date,
                         date_field='transaction_time'
                     )
@@ -1075,7 +1075,7 @@ class PlatformDataSyncService:
                     
                     transaction_service.normalize_and_save(
                         tx=tx_data_dict,
-                        platform='linkbux',  # 使用标准平台代码，与查询时的映射一致
+                        platform='lb',  # 统一使用小写缩写
                         affiliate_account_id=account.id,
                         user_id=account.user_id
                     )
@@ -1087,7 +1087,7 @@ class PlatformDataSyncService:
             # 使用统一服务聚合数据
             date_data = UnifiedPlatformService.aggregate_by_date(
                 transactions_raw,
-                platform='linkbux',  # 使用标准平台代码，与查询时的映射一致
+                platform='lb',  # 统一使用小写缩写
                 date_field='transaction_time'
             )
             
@@ -1096,7 +1096,7 @@ class PlatformDataSyncService:
                 try:
                     platform_data_dict = UnifiedPlatformService.prepare_platform_data(
                         transactions_raw,
-                        platform='linkbux',  # 使用标准平台代码，与查询时的映射一致
+                        platform='lb',  # 统一使用小写缩写
                         target_date=comm_date,
                         date_field='transaction_time'
                     )
@@ -1236,7 +1236,7 @@ class PlatformDataSyncService:
                     
                     transaction_service.normalize_and_save(
                         tx=tx_data_dict,
-                        platform='partnerboost',  # 使用标准平台代码，与查询时的映射一致
+                        platform='pb',  # 统一使用小写缩写
                         affiliate_account_id=account.id,
                         user_id=account.user_id
                     )
@@ -1248,7 +1248,7 @@ class PlatformDataSyncService:
             # 使用统一服务聚合数据
             date_data = UnifiedPlatformService.aggregate_by_date(
                 transactions_raw,
-                platform='partnerboost',  # 使用标准平台代码，与查询时的映射一致
+                platform='pb',  # 统一使用小写缩写
                 date_field='transaction_time'
             )
             
@@ -1257,7 +1257,7 @@ class PlatformDataSyncService:
                 try:
                     platform_data_dict = UnifiedPlatformService.prepare_platform_data(
                         transactions_raw,
-                        platform='partnerboost',  # 使用标准平台代码，与查询时的映射一致
+                        platform='pb',  # 统一使用小写缩写
                         target_date=comm_date,
                         date_field='transaction_time'
                     )
@@ -1397,7 +1397,7 @@ class PlatformDataSyncService:
                     
                     transaction_service.normalize_and_save(
                         tx=tx_data_dict,
-                        platform='partnermatic',  # 使用标准平台代码，与查询时的映射一致
+                        platform='pm',  # 统一使用小写缩写
                         affiliate_account_id=account.id,
                         user_id=account.user_id
                     )
@@ -1409,7 +1409,7 @@ class PlatformDataSyncService:
             # 使用统一服务聚合数据
             date_data = UnifiedPlatformService.aggregate_by_date(
                 transactions_raw,
-                platform='partnermatic',  # 使用标准平台代码，与查询时的映射一致
+                platform='pm',  # 统一使用小写缩写
                 date_field='transaction_time'
             )
             
@@ -1418,7 +1418,7 @@ class PlatformDataSyncService:
                 try:
                     platform_data_dict = UnifiedPlatformService.prepare_platform_data(
                         transactions_raw,
-                        platform='partnermatic',  # 使用标准平台代码，与查询时的映射一致
+                        platform='pm',  # 统一使用小写缩写
                         target_date=comm_date,
                         date_field='transaction_time'
                     )

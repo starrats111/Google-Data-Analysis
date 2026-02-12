@@ -24,14 +24,25 @@ from app.api.auth import get_current_user
 
 router = APIRouter(prefix="/api/reports", tags=["reports"])
 
-# 平台代码映射
+# 平台代码映射（支持新旧两种格式：小写缩写和全称）
 PLATFORM_SHORT = {
+    # 新格式（小写缩写）
+    'cg': 'CG',
+    'rw': 'RW',
+    'lh': 'LH',
+    'pb': 'PB',
+    'lb': 'LB',
+    'pm': 'PM',
+    'bsh': 'BSH',
+    'cf': 'CF',
+    # 旧格式（全称，兼容历史数据）
     'collabglow': 'CG',
-    'brandsparkhub': 'BSH',
+    'rewardoo': 'RW',
+    'linkhaitao': 'LH',
+    'partnerboost': 'PB',
     'linkbux': 'LB',
     'partnermatic': 'PM',
-    'linkhaitao': 'LH',
-    'rewardoo': 'RW',
+    'brandsparkhub': 'BSH',
     'creatorflare': 'CF',
 }
 

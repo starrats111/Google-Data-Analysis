@@ -129,7 +129,7 @@ async def get_platform_data_detail(
             # 统一转换为小写，因为数据库中存储的是小写（如 'rw', 'cg', 'linkhaitao'）
             platform_lower = platform.lower().strip()
             
-            # 平台代码别名映射（前端可能传递缩写、全称或URL，但数据库中存储的是标准格式）
+            # 平台代码别名映射（前端可能传递缩写、全称或URL，数据库统一存储小写缩写）
             platform_code_map = {
                 # CG (CollabGlow)
                 'cg': 'cg',
@@ -137,39 +137,51 @@ async def get_platform_data_detail(
                 'collab-glow': 'cg',
                 'https://www.collabglow.com': 'cg',
                 'https://www.collabglow.com/': 'cg',
+                'https://app.collabglow.com': 'cg',
+                'https://app.collabglow.com/': 'cg',
                 # RW (Rewardoo)
                 'rw': 'rw',
                 'rewardoo': 'rw',
                 'reward-oo': 'rw',
                 'https://www.rewardoo.com': 'rw',
                 'https://www.rewardoo.com/': 'rw',
-                # LinkHaitao
-                'lh': 'linkhaitao',
-                'linkhaitao': 'linkhaitao',
-                'link-haitao': 'linkhaitao',
-                'link_haitao': 'linkhaitao',
-                'https://www.linkhaitao.com': 'linkhaitao',
-                'https://www.linkhaitao.com/': 'linkhaitao',
-                # PartnerBoost
-                'pb': 'partnerboost',
-                'partnerboost': 'partnerboost',
-                'partner-boost': 'partnerboost',
-                # Linkbux
-                'lb': 'linkbux',
-                'linkbux': 'linkbux',
-                'link-bux': 'linkbux',
-                # Partnermatic
-                'pm': 'partnermatic',
-                'partnermatic': 'partnermatic',
-                'partner-matic': 'partnermatic',
-                # BrandSparkHub
-                'bsh': 'brandsparkhub',
-                'brandsparkhub': 'brandsparkhub',
-                'brand-spark-hub': 'brandsparkhub',
-                # CreatorFlare
-                'cf': 'creatorflare',
-                'creatorflare': 'creatorflare',
-                'creator-flare': 'creatorflare',
+                # LH (LinkHaitao)
+                'lh': 'lh',
+                'linkhaitao': 'lh',
+                'link-haitao': 'lh',
+                'link_haitao': 'lh',
+                'https://www.linkhaitao.com': 'lh',
+                'https://www.linkhaitao.com/': 'lh',
+                # PB (PartnerBoost)
+                'pb': 'pb',
+                'partnerboost': 'pb',
+                'partner-boost': 'pb',
+                'https://app.partnerboost.com': 'pb',
+                'https://app.partnerboost.com/': 'pb',
+                # LB (Linkbux)
+                'lb': 'lb',
+                'linkbux': 'lb',
+                'link-bux': 'lb',
+                'https://www.linkbux.com': 'lb',
+                'https://www.linkbux.com/': 'lb',
+                # PM (Partnermatic)
+                'pm': 'pm',
+                'partnermatic': 'pm',
+                'partner-matic': 'pm',
+                'https://app.partnermatic.com': 'pm',
+                'https://app.partnermatic.com/': 'pm',
+                # BSH (BrandSparkHub)
+                'bsh': 'bsh',
+                'brandsparkhub': 'bsh',
+                'brand-spark-hub': 'bsh',
+                'https://www.brandsparkhub.com': 'bsh',
+                'https://www.brandsparkhub.com/': 'bsh',
+                # CF (CreatorFlare)
+                'cf': 'cf',
+                'creatorflare': 'cf',
+                'creator-flare': 'cf',
+                'https://www.creatorflare.com': 'cf',
+                'https://www.creatorflare.com/': 'cf',
             }
             
             # 如果存在映射，使用映射后的值；否则尝试从URL中提取域名
@@ -182,23 +194,23 @@ async def get_platform_data_detail(
                 domain_match = re.search(r'://([^/]+)', platform_lower)
                 if domain_match:
                     domain = domain_match.group(1).lower()
-                    # 尝试匹配域名
+                    # 尝试匹配域名（统一映射到小写缩写）
                     if 'linkhaitao' in domain:
-                        platform_final = 'linkhaitao'
+                        platform_final = 'lh'
                     elif 'rewardoo' in domain:
                         platform_final = 'rw'
                     elif 'collabglow' in domain:
                         platform_final = 'cg'
                     elif 'linkbux' in domain:
-                        platform_final = 'linkbux'
+                        platform_final = 'lb'
                     elif 'partnermatic' in domain:
-                        platform_final = 'partnermatic'
+                        platform_final = 'pm'
                     elif 'partnerboost' in domain:
-                        platform_final = 'partnerboost'
+                        platform_final = 'pb'
                     elif 'brandsparkhub' in domain:
-                        platform_final = 'brandsparkhub'
+                        platform_final = 'bsh'
                     elif 'creatorflare' in domain:
-                        platform_final = 'creatorflare'
+                        platform_final = 'cf'
             
             query = query.filter(AffiliateTransaction.platform == platform_final)
         
@@ -301,10 +313,10 @@ async def get_platform_data_summary(
         
         # 平台筛选
         if platform:
-            # 统一转换为小写，因为数据库中存储的是小写（如 'rw', 'cg', 'linkhaitao'）
+            # 统一转换为小写，数据库中统一存储小写缩写（如 'rw', 'cg', 'lh'）
             platform_lower = platform.lower().strip()
             
-            # 平台代码别名映射（前端可能传递缩写、全称或URL，但数据库中存储的是标准格式）
+            # 平台代码别名映射（前端可能传递缩写、全称或URL，数据库统一存储小写缩写）
             platform_code_map = {
                 # CG (CollabGlow)
                 'cg': 'cg',
@@ -312,39 +324,51 @@ async def get_platform_data_summary(
                 'collab-glow': 'cg',
                 'https://www.collabglow.com': 'cg',
                 'https://www.collabglow.com/': 'cg',
+                'https://app.collabglow.com': 'cg',
+                'https://app.collabglow.com/': 'cg',
                 # RW (Rewardoo)
                 'rw': 'rw',
                 'rewardoo': 'rw',
                 'reward-oo': 'rw',
                 'https://www.rewardoo.com': 'rw',
                 'https://www.rewardoo.com/': 'rw',
-                # LinkHaitao
-                'lh': 'linkhaitao',
-                'linkhaitao': 'linkhaitao',
-                'link-haitao': 'linkhaitao',
-                'link_haitao': 'linkhaitao',
-                'https://www.linkhaitao.com': 'linkhaitao',
-                'https://www.linkhaitao.com/': 'linkhaitao',
-                # PartnerBoost
-                'pb': 'partnerboost',
-                'partnerboost': 'partnerboost',
-                'partner-boost': 'partnerboost',
-                # Linkbux
-                'lb': 'linkbux',
-                'linkbux': 'linkbux',
-                'link-bux': 'linkbux',
-                # Partnermatic
-                'pm': 'partnermatic',
-                'partnermatic': 'partnermatic',
-                'partner-matic': 'partnermatic',
-                # BrandSparkHub
-                'bsh': 'brandsparkhub',
-                'brandsparkhub': 'brandsparkhub',
-                'brand-spark-hub': 'brandsparkhub',
-                # CreatorFlare
-                'cf': 'creatorflare',
-                'creatorflare': 'creatorflare',
-                'creator-flare': 'creatorflare',
+                # LH (LinkHaitao)
+                'lh': 'lh',
+                'linkhaitao': 'lh',
+                'link-haitao': 'lh',
+                'link_haitao': 'lh',
+                'https://www.linkhaitao.com': 'lh',
+                'https://www.linkhaitao.com/': 'lh',
+                # PB (PartnerBoost)
+                'pb': 'pb',
+                'partnerboost': 'pb',
+                'partner-boost': 'pb',
+                'https://app.partnerboost.com': 'pb',
+                'https://app.partnerboost.com/': 'pb',
+                # LB (Linkbux)
+                'lb': 'lb',
+                'linkbux': 'lb',
+                'link-bux': 'lb',
+                'https://www.linkbux.com': 'lb',
+                'https://www.linkbux.com/': 'lb',
+                # PM (Partnermatic)
+                'pm': 'pm',
+                'partnermatic': 'pm',
+                'partner-matic': 'pm',
+                'https://app.partnermatic.com': 'pm',
+                'https://app.partnermatic.com/': 'pm',
+                # BSH (BrandSparkHub)
+                'bsh': 'bsh',
+                'brandsparkhub': 'bsh',
+                'brand-spark-hub': 'bsh',
+                'https://www.brandsparkhub.com': 'bsh',
+                'https://www.brandsparkhub.com/': 'bsh',
+                # CF (CreatorFlare)
+                'cf': 'cf',
+                'creatorflare': 'cf',
+                'creator-flare': 'cf',
+                'https://www.creatorflare.com': 'cf',
+                'https://www.creatorflare.com/': 'cf',
             }
             
             # 如果存在映射，使用映射后的值；否则尝试从URL中提取域名
@@ -357,23 +381,23 @@ async def get_platform_data_summary(
                 domain_match = re.search(r'://([^/]+)', platform_lower)
                 if domain_match:
                     domain = domain_match.group(1).lower()
-                    # 尝试匹配域名
+                    # 尝试匹配域名（统一映射到小写缩写）
                     if 'linkhaitao' in domain:
-                        platform_final = 'linkhaitao'
+                        platform_final = 'lh'
                     elif 'rewardoo' in domain:
                         platform_final = 'rw'
                     elif 'collabglow' in domain:
                         platform_final = 'cg'
                     elif 'linkbux' in domain:
-                        platform_final = 'linkbux'
+                        platform_final = 'lb'
                     elif 'partnermatic' in domain:
-                        platform_final = 'partnermatic'
+                        platform_final = 'pm'
                     elif 'partnerboost' in domain:
-                        platform_final = 'partnerboost'
+                        platform_final = 'pb'
                     elif 'brandsparkhub' in domain:
-                        platform_final = 'brandsparkhub'
+                        platform_final = 'bsh'
                     elif 'creatorflare' in domain:
-                        platform_final = 'creatorflare'
+                        platform_final = 'cf'
             
             base_query = base_query.filter(AffiliateTransaction.platform == platform_final)
         
@@ -615,18 +639,18 @@ async def get_platform_transactions(
         if current_user.role == "employee":
             query = query.filter(AffiliateTransaction.user_id == current_user.id)
         
-        # 平台筛选
+        # 平台筛选（数据库统一存储小写缩写）
         if platform:
             platform_lower = platform.lower().strip()
             platform_code_map = {
                 'cg': 'cg', 'collabglow': 'cg',
                 'rw': 'rw', 'rewardoo': 'rw',
-                'lh': 'linkhaitao', 'linkhaitao': 'linkhaitao',
-                'pb': 'partnerboost', 'partnerboost': 'partnerboost',
-                'lb': 'linkbux', 'linkbux': 'linkbux',
-                'pm': 'partnermatic', 'partnermatic': 'partnermatic',
-                'bsh': 'brandsparkhub', 'brandsparkhub': 'brandsparkhub',
-                'cf': 'creatorflare', 'creatorflare': 'creatorflare',
+                'lh': 'lh', 'linkhaitao': 'lh',
+                'pb': 'pb', 'partnerboost': 'pb',
+                'lb': 'lb', 'linkbux': 'lb',
+                'pm': 'pm', 'partnermatic': 'pm',
+                'bsh': 'bsh', 'brandsparkhub': 'bsh',
+                'cf': 'cf', 'creatorflare': 'cf',
             }
             platform_final = platform_code_map.get(platform_lower, platform_lower)
             query = query.filter(AffiliateTransaction.platform == platform_final)
