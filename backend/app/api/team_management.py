@@ -447,7 +447,7 @@ async def get_team_stats(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_leader_or_manager)
 ):
-    """获取小组统计数据"""
+    """获取小组统计数据（仅统计普通组员，排除组长和经理）"""
     teams = db.query(Team).all()
     
     perm = PermissionService(db, current_user)
@@ -459,8 +459,11 @@ async def get_team_stats(
         if accessible_team_ids is not None and team.id not in accessible_team_ids:
             continue
         
-        # 获取组内成员
-        member_ids = [u.id for u in db.query(User.id).filter(User.team_id == team.id).all()]
+        # 获取组内成员 - 排除 manager 和 leader 角色
+        member_ids = [u.id for u in db.query(User.id).filter(
+            User.team_id == team.id,
+            User.role.notin_([UserRole.MANAGER, UserRole.LEADER])
+        ).all()]
         member_count = len(member_ids)
         
         if not member_ids:
