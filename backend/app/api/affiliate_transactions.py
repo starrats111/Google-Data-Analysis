@@ -50,7 +50,7 @@ async def get_transaction_summary(
     )
     
     # 权限控制：员工只能看自己的数据
-    if current_user.role == "employee":
+    if current_user.role in ("employee", "member", "leader"):
         query = query.filter(AffiliateTransaction.user_id == current_user.id)
     
     # 平台筛选
@@ -129,7 +129,7 @@ async def get_rejection_details(
     )
     
     # 权限控制：员工只能看自己的数据
-    if current_user.role == "employee":
+    if current_user.role in ("employee", "member", "leader"):
         query = query.filter(AffiliateTransaction.user_id == current_user.id)
     
     # 平台筛选

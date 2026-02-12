@@ -60,7 +60,7 @@ async def get_google_ads_data(
     )
     
     # 权限检查：员工只能查看自己的数据
-    if current_user.role == "employee":
+    if current_user.role in ("employee", "member", "leader"):
         query = query.filter(GoogleAdsApiData.user_id == current_user.id)
     
     # 筛选条件
@@ -138,7 +138,7 @@ async def get_google_ads_data_summary(
     )
     
     # 权限检查：员工只能查看自己的数据
-    if current_user.role == "employee":
+    if current_user.role in ("employee", "member", "leader"):
         query = query.filter(GoogleAdsApiData.user_id == current_user.id)
     
     # 筛选条件

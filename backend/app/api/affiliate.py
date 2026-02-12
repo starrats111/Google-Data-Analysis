@@ -498,8 +498,8 @@ async def get_accounts(
         joinedload(AffiliateAccount.platform)
     )
     
-    # 权限控制：员工只能看自己的账号
-    if current_user.role == "employee":
+    # 权限控制：非经理只能看自己的账号（member/employee/leader都只看自己的）
+    if current_user.role not in ("manager",):
         query = query.filter(AffiliateAccount.user_id == current_user.id)
     
     # 筛选条件

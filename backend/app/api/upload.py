@@ -173,7 +173,7 @@ async def get_upload_history(
         query = db.query(DataUpload)
         
         # 权限控制：员工只能看自己的
-        if current_user.role == "employee":
+        if current_user.role in ("employee", "member", "leader"):
             query = query.filter(DataUpload.user_id == current_user.id)
         
         # 筛选条件
@@ -202,7 +202,7 @@ async def get_upload_columns(
         raise HTTPException(status_code=404, detail="上传记录不存在")
     
     # 权限控制
-    if current_user.role == "employee" and upload.user_id != current_user.id:
+    if current_user.role in ("employee", "member", "leader") and upload.user_id != current_user.id:
         raise HTTPException(status_code=403, detail="无权访问此记录")
     
     try:
@@ -235,7 +235,7 @@ async def delete_upload(
         raise HTTPException(status_code=404, detail="上传记录不存在")
     
     # 权限控制：员工只能删除自己的上传
-    if current_user.role == "employee" and upload.user_id != current_user.id:
+    if current_user.role in ("employee", "member", "leader") and upload.user_id != current_user.id:
         raise HTTPException(status_code=403, detail="无权删除此记录")
     
     # 删除相关的分析结果（级联删除）
@@ -295,7 +295,7 @@ async def get_upload(
         raise HTTPException(status_code=404, detail="上传记录不存在")
     
     # 权限控制
-    if current_user.role == "employee" and upload.user_id != current_user.id:
+    if current_user.role in ("employee", "member", "leader") and upload.user_id != current_user.id:
         raise HTTPException(status_code=403, detail="无权访问此记录")
     
     return upload
@@ -310,7 +310,7 @@ async def get_upload_columns(
         raise HTTPException(status_code=404, detail="上传记录不存在")
     
     # 权限控制
-    if current_user.role == "employee" and upload.user_id != current_user.id:
+    if current_user.role in ("employee", "member", "leader") and upload.user_id != current_user.id:
         raise HTTPException(status_code=403, detail="无权访问此记录")
     
     try:

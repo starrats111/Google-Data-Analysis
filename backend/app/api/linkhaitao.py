@@ -47,7 +47,7 @@ async def sync_commissions_orders(
         raise HTTPException(status_code=404, detail="联盟账号不存在")
     
     # 权限检查：员工只能同步自己的账号
-    if current_user.role == "employee" and account.user_id != current_user.id:
+    if current_user.role in ("employee", "member", "leader") and account.user_id != current_user.id:
         raise HTTPException(status_code=403, detail="无权访问此账号")
     
     # 检查平台是否为 LinkHaitao
@@ -125,7 +125,7 @@ async def test_connection(
         raise HTTPException(status_code=404, detail="联盟账号不存在")
     
     # 权限检查
-    if current_user.role == "employee" and account.user_id != current_user.id:
+    if current_user.role in ("employee", "member", "leader") and account.user_id != current_user.id:
         raise HTTPException(status_code=403, detail="无权访问此账号")
     
     # 检查平台

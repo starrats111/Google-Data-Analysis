@@ -59,7 +59,7 @@ class ExportService:
         query = db.query(AnalysisResult)
         
         # 权限控制：员工只能看自己的数据
-        if user.role == 'employee':
+        if user.role in ('employee', 'member', 'leader'):
             query = query.filter(AnalysisResult.user_id == user.id)
         
         # 筛选条件

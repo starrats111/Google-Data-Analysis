@@ -74,7 +74,7 @@ async def generate_analysis_from_api(
         raise HTTPException(status_code=400, detail="开始日期不能晚于结束日期")
     
     # 权限检查：员工只能分析自己的数据
-    user_id = current_user.id if current_user.role == "employee" else None
+    user_id = current_user.id if current_user.role in ("employee", "member", "leader") else None
     
     # 使用新的纯API分析服务
     api_only_service = ApiOnlyAnalysisService(db)
@@ -113,7 +113,7 @@ async def get_analysis_results(
     ).join(UserModel, AnalysisResult.user_id == UserModel.id)
     
     # 权限控制
-    if current_user.role == "employee":
+    if current_user.role in ("employee", "member", "leader"):
         query = query.filter(AnalysisResult.user_id == current_user.id)
     
     # 筛选条件
@@ -805,7 +805,7 @@ async def generate_daily_analysis_from_api(
         raise HTTPException(status_code=400, detail="开始日期不能晚于结束日期")
     
     # 权限检查：员工只能分析自己的数据
-    user_id = current_user.id if current_user.role == "employee" else None
+    user_id = current_user.id if current_user.role in ("employee", "member", "leader") else None
     
     api_analysis_service = ApiAnalysisService(db)
     result = api_analysis_service.generate_daily_analysis(begin, end, user_id)
@@ -839,7 +839,7 @@ async def generate_l7d_analysis_from_api(
         end = date.today() - timedelta(days=1)  # 默认昨天
     
     # 权限检查：员工只能分析自己的数据
-    user_id = current_user.id if current_user.role == "employee" else None
+    user_id = current_user.id if current_user.role in ("employee", "member", "leader") else None
     
     api_analysis_service = ApiAnalysisService(db)
     result = api_analysis_service.generate_l7d_analysis(end, user_id)

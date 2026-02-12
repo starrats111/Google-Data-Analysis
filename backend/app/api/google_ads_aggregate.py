@@ -252,7 +252,7 @@ async def get_campaign_data(
     )
     
     # 权限检查
-    if current_user.role == "employee":
+    if current_user.role in ("employee", "member", "leader"):
         query = query.filter(GoogleAdsApiData.user_id == current_user.id)
     
     # 筛选条件
@@ -432,7 +432,7 @@ async def get_date_range_aggregate(
     )
     
     # 权限检查
-    if current_user.role == "employee":
+    if current_user.role in ("employee", "member", "leader"):
         google_ads_query = google_ads_query.filter(GoogleAdsApiData.user_id == current_user.id)
     
     # 筛选条件
@@ -461,7 +461,7 @@ async def get_date_range_aggregate(
     )
     
     # 权限检查
-    if current_user.role == "employee":
+    if current_user.role in ("employee", "member", "leader"):
         base_filter = and_(base_filter, AffiliateTransaction.user_id == current_user.id)
     
     # 筛选条件

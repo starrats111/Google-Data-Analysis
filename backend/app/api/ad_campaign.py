@@ -43,7 +43,7 @@ async def get_ad_campaigns(
     query = db.query(AdCampaign)
     
     # 权限控制：员工只能看自己的广告
-    if current_user.role == "employee":
+    if current_user.role in ("employee", "member", "leader"):
         query = query.filter(AdCampaign.user_id == current_user.id)
     
     # 筛选条件
@@ -115,7 +115,7 @@ async def create_ad_campaign(
         raise HTTPException(status_code=404, detail="联盟账号不存在")
     
     # 权限控制
-    if current_user.role == "employee" and account.user_id != current_user.id:
+    if current_user.role in ("employee", "member", "leader") and account.user_id != current_user.id:
         raise HTTPException(status_code=403, detail="无权访问此联盟账号")
     
     # 创建广告系列
@@ -154,7 +154,7 @@ async def update_ad_campaign(
         raise HTTPException(status_code=404, detail="广告系列不存在")
     
     # 权限控制
-    if current_user.role == "employee" and db_campaign.user_id != current_user.id:
+    if current_user.role in ("employee", "member", "leader") and db_campaign.user_id != current_user.id:
         raise HTTPException(status_code=403, detail="无权修改此广告系列")
     
     # 更新字段
@@ -181,7 +181,7 @@ async def delete_ad_campaign(
         raise HTTPException(status_code=404, detail="广告系列不存在")
     
     # 权限控制
-    if current_user.role == "employee" and db_campaign.user_id != current_user.id:
+    if current_user.role in ("employee", "member", "leader") and db_campaign.user_id != current_user.id:
         raise HTTPException(status_code=403, detail="无权删除此广告系列")
     
     db.delete(db_campaign)
@@ -200,7 +200,7 @@ async def batch_update_campaigns(
     query = db.query(AdCampaign).filter(AdCampaign.id.in_(batch_update.campaign_ids))
     
     # 权限控制
-    if current_user.role == "employee":
+    if current_user.role in ("employee", "member", "leader"):
         query = query.filter(AdCampaign.user_id == current_user.id)
     
     campaigns = query.all()
@@ -244,7 +244,7 @@ async def import_ad_campaigns(
             raise HTTPException(status_code=404, detail="联盟账号不存在")
         
         # 权限控制
-        if current_user.role == "employee" and account.user_id != current_user.id:
+        if current_user.role in ("employee", "member", "leader") and account.user_id != current_user.id:
             raise HTTPException(status_code=403, detail="无权访问此联盟账号")
         
         # 保存上传的文件到临时目录
