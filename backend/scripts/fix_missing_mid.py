@@ -102,33 +102,42 @@ def diagnose_and_fix_missing_mid():
                                 print(f"  API返回数据为空，尝试打印完整结果:")
                                 print(f"  {result}")
                             
-                            # 查找匹配的交易
+                            # 先尝试通过交易ID匹配
                             found = False
                             for api_tx in transactions:
                                 api_order_id = api_tx.get('orderId') or api_tx.get('order_id') or api_tx.get('transactionId') or api_tx.get('transaction_id')
                                 if str(api_order_id) == str(tx.transaction_id):
                                     found = True
-                                    # 找到了，提取MID
                                     brand_id = api_tx.get('brandId') or api_tx.get('brand_id') or api_tx.get('mid')
                                     if brand_id:
-                                        print(f"  ✅ 从API重新获取: brandId={brand_id}")
+                                        print(f"  ✅ 通过交易ID匹配: brandId={brand_id}")
                                         tx.merchant_id = str(brand_id).strip()
                                         fixed_count += 1
-                                    else:
-                                        print(f"  API返回数据中没有brandId/mid字段")
-                                        print(f"  API数据字段: {list(api_tx.keys())}")
-                                        # 打印一条示例数据帮助调试
-                                        print(f"  完整数据: {api_tx}")
                                     break
                             
+                            # 如果交易ID匹配失败，尝试通过商家名匹配
                             if not found:
-                                print(f"  在API返回数据中未找到匹配的交易ID: {tx.transaction_id}")
-                                # 打印前几条交易ID帮助调试
-                                if transactions[:3]:
-                                    print(f"  API返回的交易ID示例:")
-                                    for t in transactions[:3]:
-                                        tid = t.get('orderId') or t.get('order_id') or t.get('transactionId')
-                                        print(f"    - {tid}")
+                                merchant_lower = (tx.merchant or "").lower().strip()
+                                for api_tx in transactions:
+                                    api_merchant = (api_tx.get('merchantName') or api_tx.get('merchant_name') or api_tx.get('merchant') or api_tx.get('brand') or "").lower().strip()
+                                    if merchant_lower and api_merchant and merchant_lower in api_merchant or api_merchant in merchant_lower:
+                                        brand_id = api_tx.get('brandId') or api_tx.get('brand_id') or api_tx.get('mid')
+                                        if brand_id:
+                                            print(f"  ✅ 通过商家名匹配 [{api_merchant}]: brandId={brand_id}")
+                                            tx.merchant_id = str(brand_id).strip()
+                                            fixed_count += 1
+                                            found = True
+                                            break
+                            
+                            if not found:
+                                print(f"  未找到匹配 (交易ID: {tx.transaction_id}, 商家: {tx.merchant})")
+                                # 打印API返回的商家名列表帮助调试
+                                merchants_in_api = set()
+                                for t in transactions:
+                                    m = t.get('merchantName') or t.get('merchant_name') or t.get('merchant') or t.get('brand')
+                                    if m:
+                                        merchants_in_api.add(m.lower())
+                                print(f"  API返回的商家名: {list(merchants_in_api)[:10]}")
                     except Exception as e:
                         import traceback
                         print(f"  处理异常: {e}")
