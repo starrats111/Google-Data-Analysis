@@ -23,13 +23,28 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from sqlalchemy import create_engine, text, inspect
 from sqlalchemy.orm import sessionmaker
+import hashlib
 
 # 数据库路径
 DB_PATH = os.path.join(os.path.dirname(__file__), "google_analysis.db")
 DATABASE_URL = f"sqlite:///{DB_PATH}"
 
-# 密码加密
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+# 密码加密 - 使用 bcrypt，如果失败则使用备用方案
+def hash_password(password: str) -> str:
+    """加密密码，兼容多种环境"""
+    try:
+        pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+        return pwd_context.hash(password)
+    except Exception as e:
+        print(f"  警告: bcrypt 加密失败 ({e})，使用备用方案")
+        # 备用方案：使用与项目中相同的 passlib 配置
+        try:
+            from passlib.hash import bcrypt
+            return bcrypt.using(rounds=12).hash(password)
+        except Exception:
+            # 最后备用：SHA256 (不推荐，但能工作)
+            print(f"  使用 SHA256 备用方案")
+            return "$sha256$" + hashlib.sha256(password.encode()).hexdigest()
 
 # 小组配置
 TEAMS_CONFIG = [
@@ -204,7 +219,7 @@ def migrate_manager_account(conn, dry_run=False):
         print("  manager 账号已存在，跳过迁移")
         return True
     
-    password_hash = pwd_context.hash("m123456")
+    password_hash = hash_password("m123456")
     
     if old_user:
         # 重命名 wenjun123 -> manager
@@ -259,7 +274,7 @@ def create_or_update_accounts(conn, team_id_map, dry_run=False):
         
         team_code = config.get("team")
         team_id = team_id_map.get(team_code) if team_code else None
-        password_hash = pwd_context.hash(config["password"])
+        password_hash = hash_password(config["password"])
         role = config["role"]
         display_name = config.get("display_name", username)
         
