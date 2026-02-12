@@ -33,13 +33,9 @@ const TeamManagement = () => {
   
   // 筛选状态
   const [selectedTeamFilter, setSelectedTeamFilter] = useState(null)
-  const [rankingSortBy, setRankingSortBy] = useState('roi') // roi, cost, commission
   
   const [userForm] = Form.useForm()
   const [teamForm] = Form.useForm()
-  
-  // 跟踪是否是首次加载
-  const [isInitialLoad, setIsInitialLoad] = useState(true)
 
   // 本月日期范围
   const monthDateRange = useMemo(() => {
@@ -51,7 +47,7 @@ const TeamManagement = () => {
   }, [])
 
   // 加载数据
-  const loadData = async (sortBy = rankingSortBy) => {
+  const loadData = async () => {
     setLoading(true)
     try {
       // 统计数据使用本月日期范围
@@ -59,7 +55,7 @@ const TeamManagement = () => {
         api.get('/api/team/teams'),
         api.get('/api/team/users'),
         api.get('/api/team/stats/teams', { params: monthDateRange }),
-        api.get('/api/team/stats/ranking', { params: { limit: 10, sort_by: sortBy, ...monthDateRange } })
+        api.get('/api/team/stats/ranking', { params: { limit: 50, ...monthDateRange } })
       ])
       setTeams(teamsRes.data)
       setUsers(usersRes.data)
@@ -70,33 +66,12 @@ const TeamManagement = () => {
       message.error('加载数据失败')
     } finally {
       setLoading(false)
-      setIsInitialLoad(false)
     }
   }
 
   useEffect(() => {
     loadData()
   }, [])
-
-  // 排序变化时重新加载排行榜（跳过首次加载）
-  useEffect(() => {
-    // 跳过首次加载，避免重复请求
-    if (isInitialLoad) {
-      return
-    }
-    
-    const loadRanking = async () => {
-      try {
-        const rankingRes = await api.get('/api/team/stats/ranking', { 
-          params: { limit: 10, sort_by: rankingSortBy, ...monthDateRange } 
-        })
-        setMemberRanking(rankingRes.data)
-      } catch (error) {
-        console.error('加载排行榜失败:', error)
-      }
-    }
-    loadRanking()
-  }, [rankingSortBy])
 
   // 角色显示
   const getRoleTag = (role) => {
@@ -413,20 +388,6 @@ const TeamManagement = () => {
       {/* 成员排行榜 */}
       <Card 
         title={<><TrophyOutlined style={{ marginRight: 8, color: '#faad14' }} />成员排行榜</>}
-        extra={
-          <Space>
-            <Text>排序：</Text>
-            <Select 
-              value={rankingSortBy} 
-              onChange={(v) => setRankingSortBy(v)}
-              style={{ width: 100 }}
-            >
-              <Option value="roi">ROI</Option>
-              <Option value="cost">费用</Option>
-              <Option value="commission">佣金</Option>
-            </Select>
-          </Space>
-        }
       >
         {memberRanking.length > 0 ? (
           <Table
@@ -437,18 +398,21 @@ const TeamManagement = () => {
               {
                 title: '排名',
                 key: 'rank',
-                width: 60,
-                render: (_, __, index) => {
-                  if (index === 0) return <Tag color="gold">🥇 1</Tag>
-                  if (index === 1) return <Tag color="default">🥈 2</Tag>
-                  if (index === 2) return <Tag color="orange">🥉 3</Tag>
-                  return index + 1
+                width: 80,
+                render: (_, record, index) => {
+                  // 根据当前排序找出排名（使用原始索引）
+                  const rank = index + 1
+                  if (rank === 1) return <Tag color="gold">🥇 1</Tag>
+                  if (rank === 2) return <Tag color="default">🥈 2</Tag>
+                  if (rank === 3) return <Tag color="orange">🥉 3</Tag>
+                  return rank
                 }
               },
               {
                 title: '用户',
                 dataIndex: 'username',
                 key: 'username',
+                width: 150,
                 render: (text, record) => (
                   <Space>
                     <UserOutlined />
@@ -460,27 +424,36 @@ const TeamManagement = () => {
                 title: '小组',
                 dataIndex: 'team_name',
                 key: 'team_name',
+                width: 120,
+                filters: teams.map(t => ({ text: t.team_name, value: t.team_name })),
+                onFilter: (value, record) => record.team_name === value,
                 render: (text) => text ? <Tag color="processing">{text}</Tag> : '-'
               },
               {
                 title: '费用',
                 dataIndex: 'cost',
                 key: 'cost',
-                render: (v) => `$${v.toFixed(2)}`
+                width: 120,
+                sorter: (a, b) => (a.cost || 0) - (b.cost || 0),
+                render: (v) => `$${(v || 0).toFixed(2)}`
               },
               {
                 title: '佣金',
                 dataIndex: 'commission',
                 key: 'commission',
-                render: (v) => <Text style={{ color: '#52c41a' }}>${v.toFixed(2)}</Text>
+                width: 120,
+                sorter: (a, b) => (a.commission || 0) - (b.commission || 0),
+                render: (v) => <Text style={{ color: '#52c41a' }}>${(v || 0).toFixed(2)}</Text>
               },
               {
                 title: '利润',
                 dataIndex: 'profit',
                 key: 'profit',
+                width: 120,
+                sorter: (a, b) => (a.profit || 0) - (b.profit || 0),
                 render: (v) => (
-                  <Text style={{ color: v >= 0 ? '#52c41a' : '#ff4d4f' }}>
-                    ${v.toFixed(2)}
+                  <Text style={{ color: (v || 0) >= 0 ? '#52c41a' : '#ff4d4f' }}>
+                    ${(v || 0).toFixed(2)}
                   </Text>
                 )
               },
@@ -488,9 +461,12 @@ const TeamManagement = () => {
                 title: 'ROI',
                 dataIndex: 'roi',
                 key: 'roi',
+                width: 100,
+                sorter: (a, b) => (a.roi || 0) - (b.roi || 0),
+                defaultSortOrder: 'descend',
                 render: (v) => (
-                  <Tag color={v >= 0 ? 'success' : 'error'}>
-                    {v.toFixed(1)}%
+                  <Tag color={(v || 0) >= 0 ? 'success' : 'error'}>
+                    {(v || 0).toFixed(1)}%
                   </Tag>
                 )
               }
