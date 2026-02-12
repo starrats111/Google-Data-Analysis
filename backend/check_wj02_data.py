@@ -30,14 +30,14 @@ with engine.connect() as conn:
     print("2. wj02 关联的平台账号")
     print("=" * 60)
     result = conn.execute(text("""
-        SELECT aa.id, aa.account_name, aa.username, ap.platform_code, ap.platform_name
+        SELECT aa.id, aa.account_name, ap.platform_code, ap.platform_name
         FROM affiliate_accounts aa
         LEFT JOIN affiliate_platforms ap ON aa.platform_id = ap.id
         WHERE aa.user_id = :user_id
     """), {"user_id": user_id})
     accounts = list(result)
     for acc in accounts:
-        print(f"  账号ID: {acc[0]}, 名称: {acc[1]}, 用户名: {acc[2]}, 平台: {acc[3]} ({acc[4]})")
+        print(f"  账号ID: {acc[0]}, 名称: {acc[1]}, 平台: {acc[2]} ({acc[3]})")
     
     account_ids = [acc[0] for acc in accounts]
     
