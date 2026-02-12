@@ -521,12 +521,15 @@ async def get_member_ranking(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_leader_or_manager)
 ):
-    """获取成员排行榜"""
+    """获取成员排行榜（仅包含普通组员，排除组长和经理）"""
     perm = PermissionService(db, current_user)
     accessible_ids = perm.get_accessible_user_ids()
     
-    # 筛选用户
-    query = db.query(User).filter(User.id.in_(accessible_ids))
+    # 筛选用户 - 排除 manager 和 leader 角色
+    query = db.query(User).filter(
+        User.id.in_(accessible_ids),
+        User.role.notin_([UserRole.MANAGER, UserRole.LEADER])
+    )
     if team_id:
         query = query.filter(User.team_id == team_id)
     users = query.all()
