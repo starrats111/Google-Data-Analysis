@@ -79,11 +79,6 @@ const Login = () => {
           </Form.Item>
         </Form>
 
-        <div style={{ marginTop: 16, fontSize: 12, color: '#999' }}>
-          <p>默认账户：</p>
-          <p>经理：wenjun123 / wj123456</p>
-          <p>员工：wj01 / wj123456</p>
-        </div>
       </Card>
     </div>
   )

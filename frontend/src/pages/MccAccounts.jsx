@@ -26,7 +26,7 @@ const { Text, Paragraph } = Typography
 
 export default function MccAccounts() {
   const { user } = useAuth()
-  const isManager = user?.role === 'manager' || user?.username === 'wenjun123'
+  const isManager = user?.role === 'manager'
   
   const [mccAccounts, setMccAccounts] = useState([])
   const [loading, setLoading] = useState(false)

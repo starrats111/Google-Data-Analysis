@@ -22,7 +22,7 @@ class User(Base):
     id = Column(Integer, primary_key=True, index=True)
     username = Column(String(50), unique=True, nullable=False, index=True)
     password_hash = Column(String(255), nullable=False)
-    role = Column(Enum(UserRole), nullable=False, default=UserRole.MEMBER)
+    role = Column(Enum(UserRole, values_callable=lambda x: [e.value for e in x]), nullable=False, default=UserRole.MEMBER)
     team_id = Column(Integer, ForeignKey("teams.id"), nullable=True)  # 所属小组
     employee_id = Column(Integer, nullable=True)  # 保留兼容
     display_name = Column(String(50), nullable=True)  # 显示姓名（中文名）
