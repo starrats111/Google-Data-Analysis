@@ -520,6 +520,7 @@ async def get_member_ranking(
     team_id: Optional[int] = None,
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
+    sort_by: str = "roi",  # roi, cost, commission
     limit: int = 10,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_leader_or_manager)
@@ -583,8 +584,13 @@ async def get_member_ranking(
             roi=round(roi, 1)
         ))
     
-    # 按 ROI 排序
-    rankings.sort(key=lambda x: x.roi, reverse=True)
+    # 根据 sort_by 参数排序
+    if sort_by == "cost":
+        rankings.sort(key=lambda x: x.cost, reverse=True)
+    elif sort_by == "commission":
+        rankings.sort(key=lambda x: x.commission, reverse=True)
+    else:  # 默认按 ROI
+        rankings.sort(key=lambda x: x.roi, reverse=True)
     
     return rankings[:limit]
 

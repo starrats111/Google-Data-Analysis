@@ -33,6 +33,7 @@ const TeamManagement = () => {
   
   // 筛选状态
   const [selectedTeamFilter, setSelectedTeamFilter] = useState(null)
+  const [rankingSortBy, setRankingSortBy] = useState('roi') // roi, cost, commission
   
   const [userForm] = Form.useForm()
   const [teamForm] = Form.useForm()
@@ -55,7 +56,7 @@ const TeamManagement = () => {
         api.get('/api/team/teams'),
         api.get('/api/team/users'),
         api.get('/api/team/stats/teams', { params: monthDateRange }),
-        api.get('/api/team/stats/ranking', { params: { limit: 10, ...monthDateRange } })
+        api.get('/api/team/stats/ranking', { params: { limit: 10, sort_by: rankingSortBy, ...monthDateRange } })
       ])
       setTeams(teamsRes.data)
       setUsers(usersRes.data)
@@ -72,6 +73,21 @@ const TeamManagement = () => {
   useEffect(() => {
     loadData()
   }, [])
+
+  // 排序变化时重新加载排行榜
+  useEffect(() => {
+    const loadRanking = async () => {
+      try {
+        const rankingRes = await api.get('/api/team/stats/ranking', { 
+          params: { limit: 10, sort_by: rankingSortBy, ...monthDateRange } 
+        })
+        setMemberRanking(rankingRes.data)
+      } catch (error) {
+        console.error('加载排行榜失败:', error)
+      }
+    }
+    loadRanking()
+  }, [rankingSortBy])
 
   // 角色显示
   const getRoleTag = (role) => {
@@ -387,7 +403,21 @@ const TeamManagement = () => {
 
       {/* 成员排行榜 */}
       <Card 
-        title={<><TrophyOutlined style={{ marginRight: 8, color: '#faad14' }} />成员排行榜 (按ROI)</>}
+        title={<><TrophyOutlined style={{ marginRight: 8, color: '#faad14' }} />成员排行榜</>}
+        extra={
+          <Space>
+            <Text>排序：</Text>
+            <Select 
+              value={rankingSortBy} 
+              onChange={(v) => setRankingSortBy(v)}
+              style={{ width: 100 }}
+            >
+              <Option value="roi">ROI</Option>
+              <Option value="cost">费用</Option>
+              <Option value="commission">佣金</Option>
+            </Select>
+          </Space>
+        }
       >
         {memberRanking.length > 0 ? (
           <Table
