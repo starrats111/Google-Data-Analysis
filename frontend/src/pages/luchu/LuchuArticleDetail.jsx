@@ -18,8 +18,7 @@ import {
   submitArticle, 
   getArticleVersions,
   restoreVersion,
-  selfCheckArticle,
-  getProxyImageUrl
+  selfCheckArticle
 } from '../../services/luchuApi'
 import dayjs from 'dayjs'
 
@@ -218,15 +217,9 @@ const LuchuArticleDetail = () => {
             {images.hero && (
               <div style={{ marginBottom: 24 }}>
                 <img
-                  src={images.hero.url}
+                  src={images.hero.base64 || images.hero.url}
                   alt={images.hero.alt || '主图'}
                   style={{ maxWidth: '100%', maxHeight: 400, objectFit: 'cover' }}
-                  onError={(e) => {
-                    const proxyUrl = getProxyImageUrl(images.hero.url)
-                    if (e.target.src !== proxyUrl) {
-                      e.target.src = proxyUrl
-                    }
-                  }}
                 />
               </div>
             )}
@@ -292,17 +285,11 @@ const LuchuArticleDetail = () => {
                 {images.content.map((img, index) => (
                   <img
                     key={index}
-                    src={img.url}
+                    src={img.base64 || img.url}
                     alt={img.alt || `配图${index + 1}`}
                     width={80}
                     height={80}
                     style={{ objectFit: 'cover' }}
-                    onError={(e) => {
-                      const proxyUrl = getProxyImageUrl(img.url)
-                      if (e.target.src !== proxyUrl) {
-                        e.target.src = proxyUrl
-                      }
-                    }}
                   />
                 ))}
               </Space>

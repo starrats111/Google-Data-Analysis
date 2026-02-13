@@ -17,9 +17,7 @@ import {
   generateArticle, 
   createArticle,
   getWebsites,
-  getPromptTemplates,
-  getProxyImageUrl,
-  preloadImages
+  getPromptTemplates
 } from '../../services/luchuApi'
 import dayjs from 'dayjs'
 
@@ -106,17 +104,9 @@ const LuchuCreate = () => {
       
       setMerchantData(response.data)
       
-      // 默认选中所有图片
+      // 默认选中所有图片（Base64 已内嵌，无需预加载）
       if (response.data.images) {
         setSelectedImages(response.data.images.map((_, i) => i))
-        
-        // 后台预加载图片到缓存，加快显示速度
-        const imageUrls = response.data.images
-          .map(img => img.url || img.src)
-          .filter(url => url)
-        if (imageUrls.length > 0) {
-          preloadImages(imageUrls).catch(() => {})  // 静默失败
-        }
       }
       
       // 预填充表单
@@ -346,10 +336,8 @@ const LuchuCreate = () => {
               
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
                 {merchantData.images?.map((img, index) => {
-                  // 兼容处理：支持 url 和 src 两种字段名
-                  const originalUrl = img.url || img.src || '';
-                  // 先尝试原始 URL，如果加载失败再用代理（用户浏览器通常可以直接访问）
-                  const imageUrl = originalUrl;
+                  // 优先使用 Base64 数据（最可靠），否则使用 URL
+                  const imageUrl = img.base64 || img.url || img.src || '';
                   
                   return (
                     <div 
@@ -371,15 +359,6 @@ const LuchuCreate = () => {
                           height={100}
                           style={{ objectFit: 'cover', display: 'block' }}
                           alt={img.alt || '商家图片'}
-                          loading="lazy"
-                          onError={(e) => {
-                            // 原始 URL 加载失败时，尝试使用代理
-                            const proxyUrl = getProxyImageUrl(imageUrl)
-                            if (e.target.src !== proxyUrl) {
-                              console.warn(`图片加载失败，尝试代理: ${imageUrl}`)
-                              e.target.src = proxyUrl
-                            }
-                          }}
                         />
                       ) : (
                         <div style={{ 
@@ -558,15 +537,9 @@ const LuchuCreate = () => {
                   <div style={{ marginTop: 16 }}>
                     <Text strong>主图：</Text>
                     <img
-                      src={articleData.images.hero.url}
+                      src={articleData.images.hero.base64 || articleData.images.hero.url}
                       alt="主图"
                       style={{ width: '100%', marginTop: 8, maxHeight: 300, objectFit: 'cover' }}
-                      onError={(e) => {
-                        const proxyUrl = getProxyImageUrl(articleData.images.hero.url)
-                        if (e.target.src !== proxyUrl) {
-                          e.target.src = proxyUrl
-                        }
-                      }}
                     />
                   </div>
                 )}

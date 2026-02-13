@@ -610,34 +610,76 @@ Write the article in natural English appropriate for {country_name} readers.
                 # 等待图片加载
                 await page.wait_for_timeout(2000)
                 
-                # 提取所有图片信息
+                # 提取所有图片并转换为 Base64（直接在浏览器中完成）
                 images_data = await page.evaluate("""
-                    () => {
+                    async () => {
                         const images = [];
-                        // 获取所有 img 标签
-                        document.querySelectorAll('img').forEach(img => {
+                        const imgElements = Array.from(document.querySelectorAll('img'));
+                        
+                        // 过滤有效图片（大于 50x50 像素，排除小图标）
+                        const validImgs = imgElements.filter(img => {
                             const src = img.src || img.dataset.src || img.dataset.lazySrc || '';
-                            if (src && src.startsWith('http') && !src.includes('data:')) {
-                                const rect = img.getBoundingClientRect();
-                                images.push({
-                                    url: src,
-                                    src: src,
-                                    alt: img.alt || '',
-                                    width: img.naturalWidth || rect.width,
-                                    height: img.naturalHeight || rect.height
-                                });
-                            }
+                            if (!src || !src.startsWith('http') || src.includes('data:')) return false;
+                            const w = img.naturalWidth || img.width || 0;
+                            const h = img.naturalHeight || img.height || 0;
+                            return w >= 50 && h >= 50;
                         });
-                        // 获取 picture 标签中的图片
-                        document.querySelectorAll('picture source').forEach(source => {
-                            const srcset = source.srcset || '';
-                            const urls = srcset.split(',').map(s => s.trim().split(' ')[0]).filter(u => u.startsWith('http'));
-                            urls.forEach(url => {
-                                if (!images.some(i => i.url === url)) {
-                                    images.push({ url: url, src: url, alt: '', width: 0, height: 0 });
+                        
+                        // 按图片面积排序，取最大的 10 张
+                        validImgs.sort((a, b) => {
+                            const areaA = (a.naturalWidth || a.width || 0) * (a.naturalHeight || a.height || 0);
+                            const areaB = (b.naturalWidth || b.width || 0) * (b.naturalHeight || b.height || 0);
+                            return areaB - areaA;
+                        });
+                        
+                        const topImgs = validImgs.slice(0, 10);
+                        
+                        // 将每张图片转换为 Base64
+                        for (const img of topImgs) {
+                            try {
+                                const src = img.src || img.dataset.src || img.dataset.lazySrc || '';
+                                const w = img.naturalWidth || img.width || 200;
+                                const h = img.naturalHeight || img.height || 200;
+                                
+                                // 使用 canvas 将图片转换为 Base64
+                                const canvas = document.createElement('canvas');
+                                // 限制最大尺寸为 800px（节省传输）
+                                const maxSize = 800;
+                                let newW = w, newH = h;
+                                if (w > maxSize || h > maxSize) {
+                                    if (w > h) {
+                                        newW = maxSize;
+                                        newH = Math.round(h * maxSize / w);
+                                    } else {
+                                        newH = maxSize;
+                                        newW = Math.round(w * maxSize / h);
+                                    }
                                 }
-                            });
-                        });
+                                canvas.width = newW;
+                                canvas.height = newH;
+                                
+                                const ctx = canvas.getContext('2d');
+                                ctx.drawImage(img, 0, 0, newW, newH);
+                                
+                                // 转换为 JPEG Base64（压缩质量 0.8）
+                                const base64 = canvas.toDataURL('image/jpeg', 0.8);
+                                
+                                if (base64 && base64.length > 100) {
+                                    images.push({
+                                        url: src,
+                                        src: src,
+                                        base64: base64,
+                                        alt: img.alt || '',
+                                        width: newW,
+                                        height: newH
+                                    });
+                                }
+                            } catch (e) {
+                                // 跨域图片无法转换，跳过
+                                console.warn('无法转换图片:', e);
+                            }
+                        }
+                        
                         return images;
                     }
                 """)
