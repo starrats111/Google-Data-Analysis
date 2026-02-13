@@ -139,7 +139,7 @@ class Settings(BaseSettings):
     # Claude API Key（从哈基米读取，与 Gemini 相同方式）
     CLAUDE_API_KEY: str = ""
     CLAUDE_BASE_URL: str = "https://api.gemai.cc"  # 哈基米代理地址
-    CLAUDE_MODEL: str = "claude-sonnet-4-20250514"  # 哈基米Sonnet模型（性价比高）
+    CLAUDE_MODEL: str = "[特价8]claude-sonnet-4-20250514"  # 哈基米Sonnet模型（需带特价前缀）
     
     # ===== GitHub 配置（露出功能发布）=====
     GITHUB_TOKEN: str = ""
