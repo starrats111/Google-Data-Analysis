@@ -34,6 +34,15 @@ const SystemLogs = lazyWithRetry(() => import('./pages/SystemLogs'))
 const TeamManagement = lazyWithRetry(() => import('./pages/TeamManagement'))
 const TeamOverview = lazyWithRetry(() => import('./pages/TeamOverview'))
 
+// 露出功能页面
+const LuchuDashboard = lazyWithRetry(() => import('./pages/luchu/LuchuDashboard'))
+const LuchuCreate = lazyWithRetry(() => import('./pages/luchu/LuchuCreate'))
+const LuchuArticles = lazyWithRetry(() => import('./pages/luchu/LuchuArticles'))
+const LuchuArticleDetail = lazyWithRetry(() => import('./pages/luchu/LuchuArticleDetail'))
+const LuchuReviews = lazyWithRetry(() => import('./pages/luchu/LuchuReviews'))
+const LuchuPublish = lazyWithRetry(() => import('./pages/luchu/LuchuPublish'))
+const LuchuNotifications = lazyWithRetry(() => import('./pages/luchu/LuchuNotifications'))
+
 function PrivateRoute({ children }) {
   const { isAuthenticated } = useAuth()
   return isAuthenticated ? children : <Navigate to="/login" />
@@ -89,6 +98,14 @@ function App() {
               <Route path="system-logs" element={<SystemLogs />} />
               <Route path="team-management" element={<TeamManagement />} />
               <Route path="team-overview" element={<TeamOverview />} />
+              {/* 露出功能路由 */}
+              <Route path="luchu" element={<LuchuDashboard />} />
+              <Route path="luchu/create" element={<LuchuCreate />} />
+              <Route path="luchu/articles" element={<LuchuArticles />} />
+              <Route path="luchu/articles/:id" element={<LuchuArticleDetail />} />
+              <Route path="luchu/reviews" element={<LuchuReviews />} />
+              <Route path="luchu/publish" element={<LuchuPublish />} />
+              <Route path="luchu/notifications" element={<LuchuNotifications />} />
             </Route>
           </Routes>
         </Suspense>

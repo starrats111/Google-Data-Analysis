@@ -14,6 +14,20 @@ from app.models.platform_data import PlatformData
 from app.models.google_ads_api_data import GoogleAdsApiData, GoogleMccAccount, CampaignPlatformMapping
 from app.models.affiliate_transaction import AffiliateTransaction, AffiliateRejection
 from app.models.ai_report import AIReport, UserPrompt
+# 露出功能模型
+from app.models.luchu import (
+    LuchuWebsite,
+    LuchuArticle,
+    LuchuArticleVersion,
+    LuchuReview,
+    LuchuPublishLog,
+    LuchuImageCheck,
+    LuchuImageAlert,
+    LuchuPromptTemplate,
+    LuchuNotification,
+    LuchuCrawlCache,
+    LuchuOperationLog,
+)
 
 __all__ = [
     "User",
@@ -37,6 +51,18 @@ __all__ = [
     "AffiliateRejection",
     "AIReport",
     "UserPrompt",
+    # 露出功能
+    "LuchuWebsite",
+    "LuchuArticle",
+    "LuchuArticleVersion",
+    "LuchuReview",
+    "LuchuPublishLog",
+    "LuchuImageCheck",
+    "LuchuImageAlert",
+    "LuchuPromptTemplate",
+    "LuchuNotification",
+    "LuchuCrawlCache",
+    "LuchuOperationLog",
 ]
 
 

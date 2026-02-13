@@ -52,6 +52,16 @@ from app.api import (
     team_management,
     upload,
     users,
+    # 露出功能模块
+    luchu_articles,
+    luchu_ai,
+    luchu_reviews,
+    luchu_publish,
+    luchu_websites,
+    luchu_stats,
+    luchu_notifications,
+    luchu_prompts,
+    luchu_logs,
 )
 
 
@@ -255,6 +265,17 @@ app.include_router(bid_management.router)
 app.include_router(reports.router)
 app.include_router(system.router)
 app.include_router(team_management.router)
+
+# 露出功能路由
+app.include_router(luchu_articles.router)
+app.include_router(luchu_ai.router)
+app.include_router(luchu_reviews.router)
+app.include_router(luchu_publish.router)
+app.include_router(luchu_websites.router)
+app.include_router(luchu_stats.router)
+app.include_router(luchu_notifications.router)
+app.include_router(luchu_prompts.router)
+app.include_router(luchu_logs.router)
 
 
 @app.get("/health")

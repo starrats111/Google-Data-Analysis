@@ -16,6 +16,10 @@ import {
   BankOutlined,
   FileSearchOutlined,
   CrownOutlined,
+  EditOutlined,
+  SendOutlined,
+  CheckCircleOutlined,
+  BellOutlined,
 } from '@ant-design/icons'
 import { useAuth } from '../../store/authStore'
 
@@ -96,6 +100,18 @@ const Layout = () => {
         { key: '/accounts', icon: <AccountBookOutlined />, label: '平台账号' },
       ],
     },
+    {
+      key: 'luchu',
+      icon: <EditOutlined />,
+      label: '露出管理',
+      children: [
+        { key: '/luchu', icon: <DashboardOutlined />, label: '露出总览' },
+        { key: '/luchu/create', icon: <EditOutlined />, label: '创建内容' },
+        { key: '/luchu/articles', icon: <FileTextOutlined />, label: '我的文章' },
+        { key: '/luchu/publish', icon: <SendOutlined />, label: '待发布' },
+        { key: '/luchu/notifications', icon: <BellOutlined />, label: '通知中心' },
+      ],
+    },
   ]
 
   // 组长菜单 - 类似经理菜单格式，但用小组总览
@@ -125,6 +141,18 @@ const Layout = () => {
         { key: '/report-monthly', icon: <FileTextOutlined />, label: '本月报表' },
         { key: '/report-quarterly', icon: <FileTextOutlined />, label: '本季度报表' },
         { key: '/report-yearly', icon: <FileTextOutlined />, label: '本年度报表' },
+      ],
+    },
+    {
+      key: 'luchu',
+      icon: <EditOutlined />,
+      label: '露出管理',
+      children: [
+        { key: '/luchu', icon: <DashboardOutlined />, label: '露出总览' },
+        { key: '/luchu/create', icon: <EditOutlined />, label: '创建内容' },
+        { key: '/luchu/articles', icon: <FileTextOutlined />, label: '全部文章' },
+        { key: '/luchu/reviews', icon: <CheckCircleOutlined />, label: '审核管理' },
+        { key: '/luchu/publish', icon: <SendOutlined />, label: '发布管理' },
       ],
     },
     {
@@ -166,6 +194,18 @@ const Layout = () => {
         { key: '/report-monthly', icon: <FileTextOutlined />, label: '本月报表' },
         { key: '/report-quarterly', icon: <FileTextOutlined />, label: '本季度报表' },
         { key: '/report-yearly', icon: <FileTextOutlined />, label: '本年度报表' },
+      ],
+    },
+    {
+      key: 'luchu',
+      icon: <EditOutlined />,
+      label: '露出管理',
+      children: [
+        { key: '/luchu', icon: <DashboardOutlined />, label: '露出总览' },
+        { key: '/luchu/create', icon: <EditOutlined />, label: '创建内容' },
+        { key: '/luchu/articles', icon: <FileTextOutlined />, label: '全部文章' },
+        { key: '/luchu/reviews', icon: <CheckCircleOutlined />, label: '审核管理' },
+        { key: '/luchu/publish', icon: <SendOutlined />, label: '发布管理' },
       ],
     },
     {
