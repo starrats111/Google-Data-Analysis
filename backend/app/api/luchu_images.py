@@ -4,14 +4,14 @@
 import httpx
 import hashlib
 import logging
-from typing import Optional
+import asyncio
+from typing import Optional, List
 from urllib.parse import unquote
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, BackgroundTasks
 from fastapi.responses import Response
-from sqlalchemy.orm import Session
+from pydantic import BaseModel
 
-from app.database import get_db
 from app.models.user import User
 from app.middleware.auth import get_current_user
 
@@ -21,7 +21,11 @@ router = APIRouter(prefix="/api/luchu/images", tags=["luchu-images"])
 
 # 图片缓存（简单内存缓存，生产环境可用 Redis）
 _image_cache = {}
-_CACHE_MAX_SIZE = 100  # 最多缓存100张图片
+_CACHE_MAX_SIZE = 200  # 最多缓存200张图片
+
+
+class PreloadRequest(BaseModel):
+    urls: List[str]
 
 
 @router.get("/proxy")
@@ -240,4 +244,95 @@ def _get_placeholder_image() -> bytes:
         </text>
     </svg>'''
     return svg.encode('utf-8')
+
+
+async def _fetch_and_cache_image(url: str) -> bool:
+    """
+    获取并缓存单张图片
+    返回是否成功
+    """
+    if not url or not url.startswith(('http://', 'https://')):
+        return False
+    
+    cache_key = hashlib.md5(url.encode()).hexdigest()
+    
+    # 已缓存则跳过
+    if cache_key in _image_cache:
+        return True
+    
+    try:
+        async with httpx.AsyncClient(timeout=8.0, follow_redirects=True) as client:
+            response = await client.get(
+                url,
+                headers={
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                    "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+                    "Accept-Language": "en-US,en;q=0.9",
+                    "Referer": url.split('/')[0] + '//' + url.split('/')[2] + '/',
+                }
+            )
+            
+            if response.status_code != 200:
+                return False
+            
+            content_type = response.headers.get("content-type", "image/jpeg")
+            if not content_type.startswith("image/"):
+                return False
+            
+            content = response.content
+            if len(content) > 10 * 1024 * 1024:
+                return False
+            
+            # 添加到缓存
+            if len(_image_cache) >= _CACHE_MAX_SIZE:
+                first_key = next(iter(_image_cache))
+                del _image_cache[first_key]
+            
+            _image_cache[cache_key] = {
+                'content': content,
+                'content_type': content_type
+            }
+            
+            logger.debug(f"[Image Preload] 缓存成功: {url[:50]}... ({len(content)} bytes)")
+            return True
+            
+    except Exception as e:
+        logger.debug(f"[Image Preload] 缓存失败: {url[:50]}... - {e}")
+        return False
+
+
+@router.post("/preload")
+async def preload_images(
+    request: PreloadRequest,
+    current_user: User = Depends(get_current_user)
+):
+    """
+    批量预加载图片到缓存
+    在分析商家URL后调用，提前缓存所有图片
+    """
+    if not request.urls:
+        return {"success": True, "cached": 0, "total": 0}
+    
+    urls = [unquote(url) for url in request.urls if url]
+    
+    logger.info(f"[Image Preload] 开始预加载 {len(urls)} 张图片")
+    
+    # 并发获取所有图片（最多同时5个）
+    semaphore = asyncio.Semaphore(5)
+    
+    async def fetch_with_limit(url):
+        async with semaphore:
+            return await _fetch_and_cache_image(url)
+    
+    results = await asyncio.gather(*[fetch_with_limit(url) for url in urls])
+    
+    cached_count = sum(1 for r in results if r)
+    
+    logger.info(f"[Image Preload] 完成: {cached_count}/{len(urls)} 张图片已缓存")
+    
+    return {
+        "success": True,
+        "cached": cached_count,
+        "total": len(urls)
+    }
 

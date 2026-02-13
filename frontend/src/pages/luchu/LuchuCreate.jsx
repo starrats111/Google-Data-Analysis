@@ -18,7 +18,8 @@ import {
   createArticle,
   getWebsites,
   getPromptTemplates,
-  getProxyImageUrl
+  getProxyImageUrl,
+  preloadImages
 } from '../../services/luchuApi'
 import dayjs from 'dayjs'
 
@@ -108,6 +109,14 @@ const LuchuCreate = () => {
       // 默认选中所有图片
       if (response.data.images) {
         setSelectedImages(response.data.images.map((_, i) => i))
+        
+        // 后台预加载图片到缓存，加快显示速度
+        const imageUrls = response.data.images
+          .map(img => img.url || img.src)
+          .filter(url => url)
+        if (imageUrls.length > 0) {
+          preloadImages(imageUrls).catch(() => {})  // 静默失败
+        }
       }
       
       // 预填充表单

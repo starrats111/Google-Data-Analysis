@@ -200,6 +200,17 @@ export const getProxyImageUrl = (originalUrl) => {
   return `${apiBaseUrl}/api/luchu/images/proxy-public?url=${encodeURIComponent(originalUrl)}`
 }
 
+/**
+ * 批量预加载图片到后端缓存
+ * 在分析商家URL后调用，提前缓存所有图片，加快显示速度
+ * @param {string[]} urls - 图片URL数组
+ */
+export const preloadImages = (urls) => {
+  if (!urls || urls.length === 0) return Promise.resolve({ cached: 0, total: 0 })
+  
+  return api.post('/api/luchu/images/preload', { urls }, { timeout: 30000 })
+}
+
 export default {
   // 文章
   getArticles,
@@ -250,5 +261,6 @@ export default {
   getResourceTypes,
   // 图片代理
   getProxyImageUrl,
+  preloadImages,
 }
 
