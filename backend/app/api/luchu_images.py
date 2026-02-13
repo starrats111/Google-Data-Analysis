@@ -143,9 +143,43 @@ async def proxy_image(
         raise HTTPException(status_code=500, detail=f"代理图片失败: {str(e)}")
 
 
+async def _fetch_image_with_playwright(url: str) -> Optional[tuple]:
+    """
+    使用 Playwright 获取图片（绕过严格防盗链）
+    返回 (content, content_type) 或 None
+    """
+    try:
+        from playwright.async_api import async_playwright
+        
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(headless=True)
+            context = await browser.new_context(
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            )
+            page = await context.new_page()
+            
+            try:
+                response = await page.request.get(url, timeout=10000)
+                if response.ok:
+                    content = await response.body()
+                    if len(content) > 500:  # 有效图片应该大于 500 字节
+                        content_type = response.headers.get('content-type', 'image/jpeg')
+                        await browser.close()
+                        return (content, content_type)
+            except Exception as e:
+                logger.warning(f"[Image Proxy] Playwright 获取失败: {e}")
+            finally:
+                await browser.close()
+    except Exception as e:
+        logger.warning(f"[Image Proxy] Playwright 不可用: {e}")
+    
+    return None
+
+
 @router.get("/proxy-public")
 async def proxy_image_public(
-    url: str = Query(..., description="要代理的图片URL")
+    url: str = Query(..., description="要代理的图片URL"),
+    force_playwright: bool = Query(False, description="强制使用 Playwright")
 ):
     """
     公开的图片代理接口（无需登录）
@@ -167,7 +201,7 @@ async def proxy_image_public(
     cache_key = hashlib.md5(url.encode()).hexdigest()
     
     # 检查缓存
-    if cache_key in _image_cache:
+    if cache_key in _image_cache and not force_playwright:
         cached = _image_cache[cache_key]
         return Response(
             content=cached['content'],
@@ -178,70 +212,79 @@ async def proxy_image_public(
             }
         )
     
-    try:
-        async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
-            response = await client.get(
-                url,
-                headers={
-                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                    "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
-                    "Accept-Language": "en-US,en;q=0.9",
-                    "Referer": url.split('/')[0] + '//' + url.split('/')[2] + '/',
-                }
-            )
-            
-            if response.status_code != 200:
-                # 返回一个占位图
-                return Response(
-                    content=_get_placeholder_image(),
-                    media_type="image/svg+xml",
-                    headers={"Cache-Control": "public, max-age=300"}
+    content = None
+    content_type = "image/jpeg"
+    
+    # 方法1: httpx 直接请求（快速）
+    if not force_playwright:
+        try:
+            async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
+                response = await client.get(
+                    url,
+                    headers={
+                        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                        "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+                        "Accept-Language": "en-US,en;q=0.9",
+                        "Referer": url.split('/')[0] + '//' + url.split('/')[2] + '/',
+                    }
                 )
-            
-            content_type = response.headers.get("content-type", "image/jpeg")
-            
-            if not content_type.startswith("image/"):
-                return Response(
-                    content=_get_placeholder_image(),
-                    media_type="image/svg+xml",
-                    headers={"Cache-Control": "public, max-age=300"}
-                )
-            
-            content = response.content
-            
-            if len(content) > 10 * 1024 * 1024:
-                return Response(
-                    content=_get_placeholder_image(),
-                    media_type="image/svg+xml",
-                    headers={"Cache-Control": "public, max-age=300"}
-                )
-            
-            # 添加到缓存
-            if len(_image_cache) >= _CACHE_MAX_SIZE:
-                first_key = next(iter(_image_cache))
-                del _image_cache[first_key]
-            
-            _image_cache[cache_key] = {
-                'content': content,
-                'content_type': content_type
-            }
-            
+                
+                if response.status_code == 200:
+                    ct = response.headers.get("content-type", "image/jpeg")
+                    if ct.startswith("image/"):
+                        img_content = response.content
+                        # 验证图片有效性（至少 1KB）
+                        if len(img_content) > 1000:
+                            content = img_content
+                            content_type = ct
+                            logger.info(f"[Image Proxy] httpx 成功: {url[:50]}... ({len(content)} bytes)")
+        except Exception as e:
+            logger.warning(f"[Image Proxy] httpx 失败: {url[:50]}... - {e}")
+    
+    # 方法2: 如果 httpx 失败，使用 Playwright（绕过更严格的防盗链）
+    if content is None:
+        logger.info(f"[Image Proxy] 尝试 Playwright: {url[:50]}...")
+        result = await _fetch_image_with_playwright(url)
+        if result:
+            content, content_type = result
+            logger.info(f"[Image Proxy] Playwright 成功: {url[:50]}... ({len(content)} bytes)")
+    
+    # 如果成功获取到图片
+    if content and len(content) > 500:
+        # 限制大小
+        if len(content) > 10 * 1024 * 1024:
             return Response(
-                content=content,
-                media_type=content_type,
-                headers={
-                    "Cache-Control": "public, max-age=86400",
-                    "X-Proxy-Cache": "MISS"
-                }
+                content=_get_placeholder_image("图片过大"),
+                media_type="image/svg+xml",
+                headers={"Cache-Control": "public, max-age=300"}
             )
-            
-    except Exception:
-        # 任何错误都返回占位图
+        
+        # 添加到缓存
+        if len(_image_cache) >= _CACHE_MAX_SIZE:
+            first_key = next(iter(_image_cache))
+            del _image_cache[first_key]
+        
+        _image_cache[cache_key] = {
+            'content': content,
+            'content_type': content_type
+        }
+        
         return Response(
-            content=_get_placeholder_image(),
-            media_type="image/svg+xml",
-            headers={"Cache-Control": "public, max-age=300"}
+            content=content,
+            media_type=content_type,
+            headers={
+                "Cache-Control": "public, max-age=86400",
+                "X-Proxy-Cache": "MISS"
+            }
         )
+    
+    # 所有方法都失败，返回占位图
+    logger.warning(f"[Image Proxy] 所有方法失败: {url[:50]}...")
+    return Response(
+        content=_get_placeholder_image("无法加载"),
+        media_type="image/svg+xml",
+        headers={"Cache-Control": "public, max-age=60"}  # 短缓存，方便重试
+    )
 
 
 def _get_placeholder_image(text: str = "暂无图片") -> bytes:
