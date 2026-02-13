@@ -17,7 +17,8 @@ import {
   generateArticle, 
   createArticle,
   getWebsites,
-  getPromptTemplates
+  getPromptTemplates,
+  getProxyImageUrl
 } from '../../services/luchuApi'
 import dayjs from 'dayjs'
 
@@ -337,7 +338,9 @@ const LuchuCreate = () => {
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
                 {merchantData.images?.map((img, index) => {
                   // 兼容处理：支持 url 和 src 两种字段名
-                  const imageUrl = img.url || img.src || '';
+                  const originalUrl = img.url || img.src || '';
+                  // 使用代理 URL 绕过防盗链
+                  const imageUrl = originalUrl ? getProxyImageUrl(originalUrl) : '';
                   
                   return (
                     <div 
@@ -555,9 +558,10 @@ const LuchuCreate = () => {
                   <div style={{ marginTop: 16 }}>
                     <Text strong>主图：</Text>
                     <Image
-                      src={articleData.images.hero.url}
+                      src={getProxyImageUrl(articleData.images.hero.url)}
                       width="100%"
                       style={{ marginTop: 8 }}
+                      fallback="data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMjAwIiBoZWlnaHQ9IjIwMCIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48cmVjdCB3aWR0aD0iMTAwJSIgaGVpZ2h0PSIxMDAlIiBmaWxsPSIjZjBmMGYwIi8+PHRleHQgeD0iNTAlIiB5PSI1MCUiIGRvbWluYW50LWJhc2VsaW5lPSJtaWRkbGUiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGZvbnQtc2l6ZT0iMTQiIGZpbGw9IiM5OTkiPuWKoOi9veS4rS4uLjwvdGV4dD48L3N2Zz4="
                     />
                   </div>
                 )}

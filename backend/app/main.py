@@ -62,6 +62,7 @@ from app.api import (
     luchu_notifications,
     luchu_prompts,
     luchu_logs,
+    luchu_images,
 )
 
 
@@ -276,6 +277,7 @@ app.include_router(luchu_stats.router)
 app.include_router(luchu_notifications.router)
 app.include_router(luchu_prompts.router)
 app.include_router(luchu_logs.router)
+app.include_router(luchu_images.router)
 
 
 @app.get("/health")

@@ -177,6 +177,29 @@ export const getResourceTypes = () => {
   return api.get('/api/luchu/logs/resource-types')
 }
 
+// ============ 图片代理 ============
+
+/**
+ * 获取图片代理 URL
+ * 用于绕过商家网站的防盗链限制
+ * @param {string} originalUrl - 原始图片 URL
+ * @returns {string} 代理后的图片 URL
+ */
+export const getProxyImageUrl = (originalUrl) => {
+  if (!originalUrl) return ''
+  
+  // 如果已经是相对路径或本地图片，直接返回
+  if (originalUrl.startsWith('/') || originalUrl.startsWith('data:')) {
+    return originalUrl
+  }
+  
+  // 获取 API 基础 URL
+  const apiBaseUrl = import.meta.env.VITE_API_BASE_URL || 'https://api.google-data-analysis.top'
+  
+  // 返回代理 URL
+  return `${apiBaseUrl}/api/luchu/images/proxy-public?url=${encodeURIComponent(originalUrl)}`
+}
+
 export default {
   // 文章
   getArticles,
@@ -225,5 +248,7 @@ export default {
   getOperationLogs,
   getActionTypes,
   getResourceTypes,
+  // 图片代理
+  getProxyImageUrl,
 }
 

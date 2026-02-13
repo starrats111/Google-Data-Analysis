@@ -18,7 +18,8 @@ import {
   submitArticle, 
   getArticleVersions,
   restoreVersion,
-  selfCheckArticle
+  selfCheckArticle,
+  getProxyImageUrl
 } from '../../services/luchuApi'
 import dayjs from 'dayjs'
 
@@ -217,9 +218,10 @@ const LuchuArticleDetail = () => {
             {images.hero && (
               <div style={{ marginBottom: 24 }}>
                 <Image
-                  src={images.hero.url}
+                  src={getProxyImageUrl(images.hero.url)}
                   alt={images.hero.alt}
                   style={{ maxWidth: '100%', maxHeight: 400, objectFit: 'cover' }}
+                  fallback="data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMjAwIiBoZWlnaHQ9IjIwMCIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48cmVjdCB3aWR0aD0iMTAwJSIgaGVpZ2h0PSIxMDAlIiBmaWxsPSIjZjBmMGYwIi8+PHRleHQgeD0iNTAlIiB5PSI1MCUiIGRvbWluYW50LWJhc2VsaW5lPSJtaWRkbGUiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGZvbnQtc2l6ZT0iMTQiIGZpbGw9IiM5OTkiPuWKoOi9veWksei0pTwvdGV4dD48L3N2Zz4="
                 />
               </div>
             )}
@@ -285,11 +287,12 @@ const LuchuArticleDetail = () => {
                 {images.content.map((img, index) => (
                   <Image
                     key={index}
-                    src={img.url}
+                    src={getProxyImageUrl(img.url)}
                     alt={img.alt}
                     width={80}
                     height={80}
                     style={{ objectFit: 'cover' }}
+                    fallback="data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iODAiIGhlaWdodD0iODAiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+PHJlY3Qgd2lkdGg9IjEwMCUiIGhlaWdodD0iMTAwJSIgZmlsbD0iI2YwZjBmMCIvPjx0ZXh0IHg9IjUwJSIgeT0iNTAlIiBkb21pbmFudC1iYXNlbGluZT0ibWlkZGxlIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmb250LXNpemU9IjEwIiBmaWxsPSIjOTk5Ij7lpLHotKU8L3RleHQ+PC9zdmc+"
                   />
                 ))}
               </Space>
