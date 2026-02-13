@@ -11,7 +11,7 @@ from app.database import get_db
 from app.models.user import User
 from app.models.luchu import LuchuWebsite
 from app.schemas.luchu import LuchuWebsiteCreate, LuchuWebsiteResponse
-from app.middleware.auth import get_current_user
+from app.middleware.auth import get_current_user, get_luchu_authorized_user
 
 logger = logging.getLogger(__name__)
 
@@ -20,7 +20,7 @@ router = APIRouter(prefix="/api/luchu/websites", tags=["luchu-websites"])
 
 @router.get("", response_model=List[LuchuWebsiteResponse])
 async def list_websites(
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_luchu_authorized_user),
     db: Session = Depends(get_db)
 ):
     """获取网站列表"""
@@ -49,7 +49,7 @@ async def list_websites(
 @router.get("/{website_id}", response_model=LuchuWebsiteResponse)
 async def get_website(
     website_id: int,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_luchu_authorized_user),
     db: Session = Depends(get_db)
 ):
     """获取网站详情"""
@@ -75,7 +75,7 @@ async def get_website(
 async def update_website(
     website_id: int,
     data: LuchuWebsiteCreate,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_luchu_authorized_user),
     db: Session = Depends(get_db)
 ):
     """更新网站配置（仅管理员）"""
@@ -119,7 +119,7 @@ async def update_website(
 @router.post("", response_model=LuchuWebsiteResponse)
 async def create_website(
     data: LuchuWebsiteCreate,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_luchu_authorized_user),
     db: Session = Depends(get_db)
 ):
     """创建网站配置（仅管理员）"""

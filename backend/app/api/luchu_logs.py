@@ -12,7 +12,7 @@ from sqlalchemy import desc
 from app.database import get_db
 from app.models.user import User
 from app.models.luchu import LuchuOperationLog
-from app.middleware.auth import get_current_user
+from app.middleware.auth import get_current_user, get_luchu_authorized_user
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +31,7 @@ async def list_operation_logs(
     days: int = Query(7, ge=1, le=90, description="最近天数"),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_luchu_authorized_user),
     db: Session = Depends(get_db)
 ):
     """获取操作日志（仅 wj02, wj07 可查看）"""
@@ -89,7 +89,7 @@ async def list_operation_logs(
 
 @router.get("/actions")
 async def get_action_types(
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_luchu_authorized_user),
     db: Session = Depends(get_db)
 ):
     """获取所有操作类型（用于筛选下拉框）"""
@@ -121,7 +121,7 @@ async def get_action_types(
 
 @router.get("/resource-types")
 async def get_resource_types(
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_luchu_authorized_user),
     db: Session = Depends(get_db)
 ):
     """获取所有资源类型（用于筛选下拉框）"""

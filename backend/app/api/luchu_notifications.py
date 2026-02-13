@@ -13,7 +13,7 @@ from app.database import get_db
 from app.models.user import User
 from app.models.luchu import LuchuNotification
 from app.schemas.luchu import NotificationResponse
-from app.middleware.auth import get_current_user
+from app.middleware.auth import get_current_user, get_luchu_authorized_user
 
 logger = logging.getLogger(__name__)
 
@@ -25,7 +25,7 @@ async def list_notifications(
     unread_only: bool = Query(False, description="只显示未读"),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_luchu_authorized_user),
     db: Session = Depends(get_db)
 ):
     """获取通知列表"""
@@ -55,7 +55,7 @@ async def list_notifications(
 
 @router.get("/unread-count")
 async def get_unread_count(
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_luchu_authorized_user),
     db: Session = Depends(get_db)
 ):
     """获取未读通知数量"""
@@ -72,7 +72,7 @@ async def get_unread_count(
 @router.post("/{notification_id}/read")
 async def mark_as_read(
     notification_id: int,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_luchu_authorized_user),
     db: Session = Depends(get_db)
 ):
     """标记通知为已读"""
@@ -92,7 +92,7 @@ async def mark_as_read(
 
 @router.post("/read-all")
 async def mark_all_as_read(
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_luchu_authorized_user),
     db: Session = Depends(get_db)
 ):
     """标记所有通知为已读"""

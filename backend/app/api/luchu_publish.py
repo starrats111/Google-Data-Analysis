@@ -17,7 +17,7 @@ from app.models.luchu import (
     LuchuNotification, LuchuOperationLog
 )
 from app.schemas.luchu import PublishRequest, PublishResponse, LuchuArticleListResponse
-from app.middleware.auth import get_current_user
+from app.middleware.auth import get_current_user, get_luchu_authorized_user
 from app.config import settings
 
 logger = logging.getLogger(__name__)
@@ -29,7 +29,7 @@ router = APIRouter(prefix="/api/luchu/publish", tags=["luchu-publish"])
 async def list_ready_to_publish(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_luchu_authorized_user),
     db: Session = Depends(get_db)
 ):
     """获取待发布列表"""
@@ -68,7 +68,7 @@ async def list_ready_to_publish(
 async def publish_article(
     article_id: int,
     data: PublishRequest = None,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_luchu_authorized_user),
     db: Session = Depends(get_db)
 ):
     """发布文章到 GitHub"""
@@ -236,7 +236,7 @@ async def get_publish_logs(
     article_id: int = Query(None),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_luchu_authorized_user),
     db: Session = Depends(get_db)
 ):
     """获取发布日志"""

@@ -15,7 +15,7 @@ from app.models.luchu import (
     LuchuArticle, LuchuNotification, LuchuImageAlert
 )
 from app.schemas.luchu import LuchuDashboardStats, LuchuPublishTrend
-from app.middleware.auth import get_current_user
+from app.middleware.auth import get_current_user, get_luchu_authorized_user
 
 logger = logging.getLogger(__name__)
 
@@ -24,7 +24,7 @@ router = APIRouter(prefix="/api/luchu/stats", tags=["luchu-stats"])
 
 @router.get("/dashboard", response_model=LuchuDashboardStats)
 async def get_dashboard_stats(
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_luchu_authorized_user),
     db: Session = Depends(get_db)
 ):
     """获取仪表盘统计数据"""
@@ -84,7 +84,7 @@ async def get_dashboard_stats(
 
 @router.get("/publish-trend", response_model=List[LuchuPublishTrend])
 async def get_publish_trend(
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_luchu_authorized_user),
     db: Session = Depends(get_db)
 ):
     """获取本月发布趋势"""
@@ -118,7 +118,7 @@ async def get_publish_trend(
 
 @router.get("/category-stats")
 async def get_category_stats(
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_luchu_authorized_user),
     db: Session = Depends(get_db)
 ):
     """获取按分类统计"""
@@ -148,7 +148,7 @@ async def get_category_stats(
 
 @router.get("/review-efficiency")
 async def get_review_efficiency(
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_luchu_authorized_user),
     db: Session = Depends(get_db)
 ):
     """获取审核效率统计（仅管理员/组长）"""

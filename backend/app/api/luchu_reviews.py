@@ -17,7 +17,7 @@ from app.models.luchu import (
     LuchuNotification, LuchuOperationLog
 )
 from app.schemas.luchu import ReviewRequest, ReviewResponse, LuchuArticleListResponse
-from app.middleware.auth import get_current_user
+from app.middleware.auth import get_current_user, get_luchu_authorized_user
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +28,7 @@ router = APIRouter(prefix="/api/luchu/reviews", tags=["luchu-reviews"])
 async def list_pending_reviews(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_luchu_authorized_user),
     db: Session = Depends(get_db)
 ):
     """获取待审核列表（仅管理员/组长可见）"""
@@ -67,7 +67,7 @@ async def list_pending_reviews(
 async def approve_article(
     article_id: int,
     data: ReviewRequest = None,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_luchu_authorized_user),
     db: Session = Depends(get_db)
 ):
     """审核通过"""
@@ -134,7 +134,7 @@ async def approve_article(
 async def reject_article(
     article_id: int,
     data: ReviewRequest,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_luchu_authorized_user),
     db: Session = Depends(get_db)
 ):
     """审核驳回"""
@@ -218,7 +218,7 @@ async def reject_article(
 @router.post("/{article_id}/self-check")
 async def self_check_article(
     article_id: int,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_luchu_authorized_user),
     db: Session = Depends(get_db)
 ):
     """自检通过（仅 wj02, wj07 可用）"""

@@ -15,7 +15,7 @@ from app.schemas.luchu import (
     AnalyzeMerchantRequest, AnalyzeMerchantResponse,
     GenerateArticleRequest, GenerateArticleResponse
 )
-from app.middleware.auth import get_current_user
+from app.middleware.auth import get_current_user, get_luchu_authorized_user
 from app.config import settings
 
 logger = logging.getLogger(__name__)
@@ -26,7 +26,7 @@ router = APIRouter(prefix="/api/luchu/ai", tags=["luchu-ai"])
 @router.post("/analyze", response_model=AnalyzeMerchantResponse)
 async def analyze_merchant_url(
     data: AnalyzeMerchantRequest,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_luchu_authorized_user),
     db: Session = Depends(get_db)
 ):
     """
@@ -98,7 +98,7 @@ async def analyze_merchant_url(
 @router.post("/generate", response_model=GenerateArticleResponse)
 async def generate_article_content(
     data: GenerateArticleRequest,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_luchu_authorized_user),
     db: Session = Depends(get_db)
 ):
     """
@@ -174,7 +174,7 @@ async def regenerate_section(
     article_id: int,
     section: str,
     instructions: str,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_luchu_authorized_user),
     db: Session = Depends(get_db)
 ):
     """

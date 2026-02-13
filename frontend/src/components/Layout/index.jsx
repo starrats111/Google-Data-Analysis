@@ -43,6 +43,10 @@ const Layout = () => {
   const isLeader = userRole === 'leader'
   const teamInfo = permissions?.team
   
+  // 露出功能授权用户列表 (wj01-wj10)
+  const LUCHU_AUTHORIZED_USERS = ['wj01', 'wj02', 'wj03', 'wj04', 'wj05', 'wj06', 'wj07', 'wj08', 'wj09', 'wj10']
+  const hasLuchuAccess = user?.username && LUCHU_AUTHORIZED_USERS.includes(user.username)
+  
   // 首次加载时获取权限
   useEffect(() => {
     if (!permissions && user) {
@@ -220,11 +224,19 @@ const Layout = () => {
     },
   ]
 
-  // 根据角色选择菜单
+  // 根据角色选择菜单，并根据权限过滤露出菜单
   const getMenuItems = () => {
-    if (isManager) return managerMenuItems
-    if (isLeader) return leaderMenuItems
-    return memberMenuItems
+    let items
+    if (isManager) items = managerMenuItems
+    else if (isLeader) items = leaderMenuItems
+    else items = memberMenuItems
+    
+    // 如果用户没有露出功能权限，过滤掉露出菜单
+    if (!hasLuchuAccess) {
+      items = items.filter(item => item.key !== 'luchu')
+    }
+    
+    return items
   }
   
   const menuItems = getMenuItems()

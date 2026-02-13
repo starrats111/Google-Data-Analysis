@@ -20,7 +20,7 @@ from app.schemas.luchu import (
     LuchuArticleCreate, LuchuArticleUpdate, LuchuArticleResponse,
     LuchuArticleListResponse, ArticleVersionResponse
 )
-from app.middleware.auth import get_current_user
+from app.middleware.auth import get_current_user, get_luchu_authorized_user
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +33,7 @@ async def list_articles(
     website_id: Optional[int] = Query(None, description="网站筛选"),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_luchu_authorized_user),
     db: Session = Depends(get_db)
 ):
     """获取文章列表"""
@@ -79,7 +79,7 @@ async def list_articles(
 @router.post("", response_model=LuchuArticleResponse)
 async def create_article(
     data: LuchuArticleCreate,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_luchu_authorized_user),
     db: Session = Depends(get_db)
 ):
     """创建文章"""
@@ -149,7 +149,7 @@ async def create_article(
 @router.get("/{article_id}", response_model=LuchuArticleResponse)
 async def get_article(
     article_id: int,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_luchu_authorized_user),
     db: Session = Depends(get_db)
 ):
     """获取文章详情"""
@@ -168,7 +168,7 @@ async def get_article(
 async def update_article(
     article_id: int,
     data: LuchuArticleUpdate,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_luchu_authorized_user),
     db: Session = Depends(get_db)
 ):
     """更新文章"""
@@ -234,7 +234,7 @@ async def update_article(
 @router.delete("/{article_id}")
 async def delete_article(
     article_id: int,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_luchu_authorized_user),
     db: Session = Depends(get_db)
 ):
     """删除文章"""
@@ -276,7 +276,7 @@ async def delete_article(
 @router.post("/{article_id}/submit")
 async def submit_for_review(
     article_id: int,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_luchu_authorized_user),
     db: Session = Depends(get_db)
 ):
     """提交审核"""
@@ -312,7 +312,7 @@ async def submit_for_review(
 @router.get("/{article_id}/versions", response_model=List[ArticleVersionResponse])
 async def get_article_versions(
     article_id: int,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_luchu_authorized_user),
     db: Session = Depends(get_db)
 ):
     """获取文章版本历史"""
@@ -350,7 +350,7 @@ async def get_article_versions(
 async def restore_version(
     article_id: int,
     version_number: int,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_luchu_authorized_user),
     db: Session = Depends(get_db)
 ):
     """恢复到某个版本"""

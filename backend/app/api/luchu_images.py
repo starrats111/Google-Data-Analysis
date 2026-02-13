@@ -13,7 +13,7 @@ from fastapi.responses import Response
 from pydantic import BaseModel
 
 from app.models.user import User
-from app.middleware.auth import get_current_user
+from app.middleware.auth import get_current_user, get_luchu_authorized_user
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +31,7 @@ class PreloadRequest(BaseModel):
 @router.get("/proxy")
 async def proxy_image(
     url: str = Query(..., description="要代理的图片URL"),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_luchu_authorized_user)
 ):
     """
     代理获取外部图片，绕过防盗链限制
@@ -304,7 +304,7 @@ async def _fetch_and_cache_image(url: str) -> bool:
 @router.post("/preload")
 async def preload_images(
     request: PreloadRequest,
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_luchu_authorized_user)
 ):
     """
     批量预加载图片到缓存

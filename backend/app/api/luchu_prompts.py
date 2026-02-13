@@ -14,7 +14,7 @@ from app.database import get_db
 from app.models.user import User
 from app.models.luchu import LuchuPromptTemplate, LuchuOperationLog
 from app.schemas.luchu import PromptTemplateCreate, PromptTemplateResponse
-from app.middleware.auth import get_current_user
+from app.middleware.auth import get_current_user, get_luchu_authorized_user
 
 logger = logging.getLogger(__name__)
 
@@ -23,7 +23,7 @@ router = APIRouter(prefix="/api/luchu/prompts", tags=["luchu-prompts"])
 
 @router.get("", response_model=List[PromptTemplateResponse])
 async def list_prompt_templates(
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_luchu_authorized_user),
     db: Session = Depends(get_db)
 ):
     """获取提示词模板列表"""
@@ -49,7 +49,7 @@ async def list_prompt_templates(
 @router.get("/{template_id}", response_model=PromptTemplateResponse)
 async def get_prompt_template(
     template_id: int,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_luchu_authorized_user),
     db: Session = Depends(get_db)
 ):
     """获取提示词模板详情"""
@@ -77,7 +77,7 @@ async def get_prompt_template(
 @router.post("", response_model=PromptTemplateResponse)
 async def create_prompt_template(
     data: PromptTemplateCreate,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_luchu_authorized_user),
     db: Session = Depends(get_db)
 ):
     """创建提示词模板（仅管理员）"""
@@ -136,7 +136,7 @@ async def create_prompt_template(
 async def update_prompt_template(
     template_id: int,
     data: PromptTemplateCreate,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_luchu_authorized_user),
     db: Session = Depends(get_db)
 ):
     """更新提示词模板（仅管理员）"""
@@ -200,7 +200,7 @@ async def update_prompt_template(
 @router.delete("/{template_id}")
 async def delete_prompt_template(
     template_id: int,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_luchu_authorized_user),
     db: Session = Depends(get_db)
 ):
     """删除提示词模板（仅管理员）"""

@@ -84,5 +84,24 @@ async def get_current_manager(
     return current_user
 
 
+# 露出功能授权用户列表 (wj01-wj10)
+LUCHU_AUTHORIZED_USERS = [f"wj{str(i).zfill(2)}" for i in range(1, 11)]  # wj01, wj02, ..., wj10
+
+
+async def get_luchu_authorized_user(
+    current_user: User = Depends(get_current_user)
+) -> User:
+    """
+    获取有露出功能权限的用户
+    只有 wj01-wj10 可以使用露出功能
+    """
+    if current_user.username not in LUCHU_AUTHORIZED_USERS:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="您没有露出功能的使用权限"
+        )
+    return current_user
+
+
 
 
