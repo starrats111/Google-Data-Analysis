@@ -587,8 +587,11 @@ Write the article in natural English appropriate for {country_name} readers.
                 )
                 page = await context.new_page()
                 
-                # 访问页面，等待网络空闲
-                await page.goto(url, wait_until="networkidle", timeout=30000)
+                # 访问页面，使用 domcontentloaded 更快完成（不等待所有网络请求）
+                await page.goto(url, wait_until="domcontentloaded", timeout=60000)
+                
+                # 等待页面稳定
+                await page.wait_for_load_state("load", timeout=30000)
                 
                 # 等待图片加载
                 await page.wait_for_timeout(2000)
@@ -596,16 +599,16 @@ Write the article in natural English appropriate for {country_name} readers.
                 # 滚动页面以触发懒加载
                 await page.evaluate("""
                     async () => {
-                        for (let i = 0; i < 3; i++) {
+                        for (let i = 0; i < 5; i++) {
                             window.scrollBy(0, window.innerHeight);
-                            await new Promise(r => setTimeout(r, 500));
+                            await new Promise(r => setTimeout(r, 300));
                         }
                         window.scrollTo(0, 0);
                     }
                 """)
                 
-                # 再等待图片加载
-                await page.wait_for_timeout(1000)
+                # 等待图片加载
+                await page.wait_for_timeout(2000)
                 
                 # 提取所有图片信息
                 images_data = await page.evaluate("""
