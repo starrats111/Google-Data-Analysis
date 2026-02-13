@@ -17,7 +17,7 @@ class ClaudeService:
     # 哈基米代理 base_url
     HAGIMI_BASE_URL = "https://api.gemai.cc"
     # 默认模型
-    DEFAULT_MODEL = "claude-opus-4-5-20251101"
+    DEFAULT_MODEL = "claude-sonnet-4-20250514"
     
     def __init__(self, api_key: str, base_url: str = None, model: str = None):
         self.model = model or self.DEFAULT_MODEL
