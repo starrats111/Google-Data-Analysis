@@ -15,17 +15,24 @@ class ClaudeService:
     """Claude API 服务，支持 Tool Use"""
     
     # 哈基米代理 base_url
-    HAGIMI_BASE_URL = "https://api.hagimi.com/v1"
+    HAGIMI_BASE_URL = "https://api.gemai.cc"
+    # 默认模型
+    DEFAULT_MODEL = "claude-opus-4-5-20251101"
     
-    def __init__(self, api_key: str, base_url: str = None):
+    def __init__(self, api_key: str, base_url: str = None, model: str = None):
+        self.model = model or self.DEFAULT_MODEL
+        
         # 如果是哈基米的 API Key（以 sk- 开头），使用哈基米代理
         if api_key.startswith("sk-"):
             base_url = base_url or self.HAGIMI_BASE_URL
+            # 移除末尾的 /v1，Anthropic SDK 会自动添加正确的路径
+            if base_url.endswith("/v1"):
+                base_url = base_url[:-3]
             self.client = Anthropic(api_key=api_key, base_url=base_url)
-            logger.info(f"[Claude] 使用哈基米代理: {base_url}")
+            logger.info(f"[Claude] 使用哈基米代理: {base_url}, 模型: {self.model}")
         else:
             self.client = Anthropic(api_key=api_key)
-            logger.info("[Claude] 使用 Anthropic 官方 API")
+            logger.info(f"[Claude] 使用 Anthropic 官方 API, 模型: {self.model}")
         self.tools = self._define_tools()
     
     def _define_tools(self) -> List[Dict]:
@@ -107,7 +114,7 @@ class ClaudeService:
         
         try:
             response = self.client.messages.create(
-                model="claude-sonnet-4-20250514",
+                model=self.model,
                 max_tokens=4096,
                 tools=self.tools,
                 messages=messages
@@ -132,7 +139,7 @@ class ClaudeService:
                 messages.append({"role": "user", "content": tool_results})
                 
                 response = self.client.messages.create(
-                    model="claude-sonnet-4-20250514",
+                    model=self.model,
                     max_tokens=4096,
                     tools=self.tools,
                     messages=messages
@@ -203,7 +210,7 @@ class ClaudeService:
         
         try:
             response = self.client.messages.create(
-                model="claude-sonnet-4-20250514",
+                model=self.model,
                 max_tokens=8192,
                 messages=[{"role": "user", "content": prompt}]
             )
@@ -256,7 +263,7 @@ class ClaudeService:
         
         try:
             response = self.client.messages.create(
-                model="claude-sonnet-4-20250514",
+                model=self.model,
                 max_tokens=4096,
                 messages=[{"role": "user", "content": prompt}]
             )
@@ -579,7 +586,7 @@ Write the article in natural English appropriate for {country_name} readers.
 _claude_service: Optional[ClaudeService] = None
 
 
-def get_claude_service(api_key: str = None, base_url: str = None) -> ClaudeService:
+def get_claude_service(api_key: str = None, base_url: str = None, model: str = None) -> ClaudeService:
     """获取 Claude 服务实例"""
     global _claude_service
     
@@ -591,7 +598,9 @@ def get_claude_service(api_key: str = None, base_url: str = None) -> ClaudeServi
                 raise ValueError("CLAUDE_API_KEY 未配置")
         if base_url is None:
             base_url = getattr(settings, 'CLAUDE_BASE_URL', None)
-        _claude_service = ClaudeService(api_key, base_url)
+        if model is None:
+            model = getattr(settings, 'CLAUDE_MODEL', None)
+        _claude_service = ClaudeService(api_key, base_url, model)
     
     return _claude_service
 

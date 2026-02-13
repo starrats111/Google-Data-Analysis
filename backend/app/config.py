@@ -138,8 +138,8 @@ class Settings(BaseSettings):
     # ===== Claude AI 配置（露出功能）=====
     # Claude API Key（从哈基米读取，与 Gemini 相同方式）
     CLAUDE_API_KEY: str = ""
-    CLAUDE_BASE_URL: str = "https://api.hagimi.com/v1"  # 哈基米代理地址
-    CLAUDE_MODEL: str = "claude-sonnet-4-20250514"
+    CLAUDE_BASE_URL: str = "https://api.gemai.cc"  # 哈基米代理地址
+    CLAUDE_MODEL: str = "claude-opus-4-5-20251101"  # 哈基米支持的模型
     
     # ===== GitHub 配置（露出功能发布）=====
     GITHUB_TOKEN: str = ""
