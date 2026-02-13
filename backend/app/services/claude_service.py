@@ -112,33 +112,30 @@ class ClaudeService:
             "role": "user",
             "content": f"""请分析以下商家网站，提取品牌信息和产品图片。
 
-**重要：图片提取步骤**
-1. 首先获取主页 {url}
-2. 如果主页图片不够，请继续访问产品页面（如 /products, /collections, /shop 等）
-3. 在HTML中查找以下图片来源：
-   - <img src="..."> 标签
-   - <picture><source srcset="..."></picture> 标签  
-   - CSS background-image: url(...)
-   - data-src, data-lazy-src 等懒加载属性
-   - OpenGraph meta标签 (og:image)
-4. 图片URL可能是相对路径，请转换为完整URL
+**分析步骤：**
+1. 获取商家网站首页
+2. 在网页末尾查找 <!-- EXTRACTED_IMAGES: [...] --> 注释，这里包含已通过浏览器渲染提取的图片列表（JSON格式）
+3. 从 EXTRACTED_IMAGES 中选择最适合做博客配图的图片
+
+**图片选择标准：**
+- 优先选择：尺寸大于 300x300 的产品图、场景图、生活方式图
+- 排除：logo、图标、小于200px的缩略图、按钮图片、社交媒体图标
+- 第一张设为 hero（主图），其余为 content（内容图）
 
 **需要提取的信息：**
 1. 品牌名称 (brand_name)
-2. 品牌描述（简短，brand_description）
+2. 品牌描述（简短，brand_description）  
 3. 主营产品类型 (product_type)
 4. 当前促销活动或热门产品 (promotions)
-5. 选取5张高质量产品图片URL（1张主图hero + 4张内容图content）
-   - 优先选择：产品展示图、生活场景图、使用效果图
-   - 过滤掉：logo、图标、按钮、小于200px的图片
-6. 为每张图片生成英文alt描述
+5. 5张高质量图片（优先从 EXTRACTED_IMAGES 中选择大尺寸图片）
+6. 为每张图片生成英文 alt 描述
 
 商家网址: {url}
 
 **返回JSON格式：**
 {{
   "brand_name": "品牌名称",
-  "brand_description": "品牌描述",
+  "brand_description": "品牌简短描述",
   "product_type": "产品类型",
   "promotions": ["促销活动1", "促销活动2"],
   "products": [
@@ -146,12 +143,15 @@ class ClaudeService:
   ],
   "images": [
     {{"url": "完整图片URL", "type": "hero", "alt": "英文描述"}},
+    {{"url": "完整图片URL", "type": "content", "alt": "英文描述"}},
+    {{"url": "完整图片URL", "type": "content", "alt": "英文描述"}},
+    {{"url": "完整图片URL", "type": "content", "alt": "英文描述"}},
     {{"url": "完整图片URL", "type": "content", "alt": "英文描述"}}
   ],
   "category_suggestion": "建议分类代码"
 }}
 
-如果无法找到足够图片，请在images数组中尽可能多地返回找到的图片，即使只有1-2张。"""
+重要：必须返回至少1张图片，尽可能返回5张高质量产品图片。"""
         }]
         
         try:
@@ -534,7 +534,16 @@ Write the article in natural English appropriate for {country_name} readers.
             return f"未知工具: {tool_name}"
     
     async def _fetch_webpage(self, url: str) -> str:
-        """获取网页内容"""
+        """获取网页内容（使用 Playwright 渲染 JavaScript）"""
+        try:
+            # 尝试使用 Playwright 渲染
+            html = await self._fetch_with_playwright(url)
+            if html:
+                return html
+        except Exception as e:
+            logger.warning(f"[Claude] Playwright 渲染失败，降级到 httpx: {e}")
+        
+        # 降级到 httpx（静态获取）
         try:
             async with httpx.AsyncClient(timeout=15.0) as client:
                 response = await client.get(
@@ -546,7 +555,6 @@ Write the article in natural English appropriate for {country_name} readers.
                 )
                 response.raise_for_status()
                 html = response.text
-                # 限制长度，避免 token 超限
                 if len(html) > 50000:
                     logger.warning(f"[Claude] 网页内容过长，截断至 50000 字符")
                     html = html[:50000]
@@ -560,6 +568,94 @@ Write the article in natural English appropriate for {country_name} readers.
         except Exception as e:
             logger.error(f"[Claude] 获取网页失败: {e}")
             return f"Error: {str(e)}"
+    
+    async def _fetch_with_playwright(self, url: str) -> str:
+        """使用 Playwright 渲染网页并提取内容"""
+        try:
+            from playwright.async_api import async_playwright
+        except ImportError:
+            logger.warning("[Claude] Playwright 未安装，跳过 JS 渲染")
+            return None
+        
+        logger.info(f"[Claude] 使用 Playwright 渲染: {url}")
+        
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(headless=True)
+            try:
+                context = await browser.new_context(
+                    user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+                )
+                page = await context.new_page()
+                
+                # 访问页面，等待网络空闲
+                await page.goto(url, wait_until="networkidle", timeout=30000)
+                
+                # 等待图片加载
+                await page.wait_for_timeout(2000)
+                
+                # 滚动页面以触发懒加载
+                await page.evaluate("""
+                    async () => {
+                        for (let i = 0; i < 3; i++) {
+                            window.scrollBy(0, window.innerHeight);
+                            await new Promise(r => setTimeout(r, 500));
+                        }
+                        window.scrollTo(0, 0);
+                    }
+                """)
+                
+                # 再等待图片加载
+                await page.wait_for_timeout(1000)
+                
+                # 提取所有图片信息
+                images_data = await page.evaluate("""
+                    () => {
+                        const images = [];
+                        // 获取所有 img 标签
+                        document.querySelectorAll('img').forEach(img => {
+                            const src = img.src || img.dataset.src || img.dataset.lazySrc || '';
+                            if (src && src.startsWith('http') && !src.includes('data:')) {
+                                const rect = img.getBoundingClientRect();
+                                images.push({
+                                    src: src,
+                                    alt: img.alt || '',
+                                    width: img.naturalWidth || rect.width,
+                                    height: img.naturalHeight || rect.height
+                                });
+                            }
+                        });
+                        // 获取 picture 标签中的图片
+                        document.querySelectorAll('picture source').forEach(source => {
+                            const srcset = source.srcset || '';
+                            const urls = srcset.split(',').map(s => s.trim().split(' ')[0]).filter(u => u.startsWith('http'));
+                            urls.forEach(url => {
+                                if (!images.some(i => i.src === url)) {
+                                    images.push({ src: url, alt: '', width: 0, height: 0 });
+                                }
+                            });
+                        });
+                        return images;
+                    }
+                """)
+                
+                # 获取页面 HTML
+                html = await page.content()
+                
+                # 将图片信息附加到 HTML 末尾，便于 Claude 分析
+                if images_data:
+                    images_json = json.dumps(images_data, ensure_ascii=False)
+                    html += f"\n<!-- EXTRACTED_IMAGES: {images_json} -->"
+                    logger.info(f"[Claude] Playwright 提取到 {len(images_data)} 张图片")
+                
+                # 限制长度
+                if len(html) > 80000:
+                    logger.warning(f"[Claude] 网页内容过长，截断至 80000 字符")
+                    html = html[:80000]
+                
+                return html
+                
+            finally:
+                await browser.close()
     
     async def _fetch_image_info(self, url: str) -> Dict[str, Any]:
         """获取图片信息"""
