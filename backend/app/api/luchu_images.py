@@ -234,13 +234,13 @@ async def proxy_image_public(
         )
 
 
-def _get_placeholder_image() -> bytes:
+def _get_placeholder_image(text: str = "暂无图片") -> bytes:
     """生成占位图 SVG"""
-    svg = '''<svg width="200" height="200" xmlns="http://www.w3.org/2000/svg">
-        <rect width="100%" height="100%" fill="#f0f0f0"/>
+    svg = f'''<svg width="200" height="200" xmlns="http://www.w3.org/2000/svg">
+        <rect width="100%" height="100%" fill="#f5f5f5"/>
         <text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle" 
-              font-family="Arial, sans-serif" font-size="14" fill="#999">
-            图片加载中...
+              font-family="Arial, sans-serif" font-size="14" fill="#bbb">
+            {text}
         </text>
     </svg>'''
     return svg.encode('utf-8')
