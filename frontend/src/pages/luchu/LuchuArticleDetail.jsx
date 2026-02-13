@@ -217,11 +217,16 @@ const LuchuArticleDetail = () => {
             {/* 主图 */}
             {images.hero && (
               <div style={{ marginBottom: 24 }}>
-                <Image
-                  src={getProxyImageUrl(images.hero.url)}
-                  alt={images.hero.alt}
+                <img
+                  src={images.hero.url}
+                  alt={images.hero.alt || '主图'}
                   style={{ maxWidth: '100%', maxHeight: 400, objectFit: 'cover' }}
-                  fallback="data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMjAwIiBoZWlnaHQ9IjIwMCIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48cmVjdCB3aWR0aD0iMTAwJSIgaGVpZ2h0PSIxMDAlIiBmaWxsPSIjZjBmMGYwIi8+PHRleHQgeD0iNTAlIiB5PSI1MCUiIGRvbWluYW50LWJhc2VsaW5lPSJtaWRkbGUiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGZvbnQtc2l6ZT0iMTQiIGZpbGw9IiM5OTkiPuWKoOi9veWksei0pTwvdGV4dD48L3N2Zz4="
+                  onError={(e) => {
+                    const proxyUrl = getProxyImageUrl(images.hero.url)
+                    if (e.target.src !== proxyUrl) {
+                      e.target.src = proxyUrl
+                    }
+                  }}
                 />
               </div>
             )}
@@ -285,14 +290,19 @@ const LuchuArticleDetail = () => {
             <Card title="内容配图" style={{ marginBottom: 16 }}>
               <Space wrap>
                 {images.content.map((img, index) => (
-                  <Image
+                  <img
                     key={index}
-                    src={getProxyImageUrl(img.url)}
-                    alt={img.alt}
+                    src={img.url}
+                    alt={img.alt || `配图${index + 1}`}
                     width={80}
                     height={80}
                     style={{ objectFit: 'cover' }}
-                    fallback="data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iODAiIGhlaWdodD0iODAiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+PHJlY3Qgd2lkdGg9IjEwMCUiIGhlaWdodD0iMTAwJSIgZmlsbD0iI2YwZjBmMCIvPjx0ZXh0IHg9IjUwJSIgeT0iNTAlIiBkb21pbmFudC1iYXNlbGluZT0ibWlkZGxlIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmb250LXNpemU9IjEwIiBmaWxsPSIjOTk5Ij7lpLHotKU8L3RleHQ+PC9zdmc+"
+                    onError={(e) => {
+                      const proxyUrl = getProxyImageUrl(img.url)
+                      if (e.target.src !== proxyUrl) {
+                        e.target.src = proxyUrl
+                      }
+                    }}
                   />
                 ))}
               </Space>

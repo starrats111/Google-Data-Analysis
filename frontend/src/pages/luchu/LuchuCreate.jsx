@@ -348,8 +348,8 @@ const LuchuCreate = () => {
                 {merchantData.images?.map((img, index) => {
                   // 兼容处理：支持 url 和 src 两种字段名
                   const originalUrl = img.url || img.src || '';
-                  // 使用代理 URL 绕过防盗链
-                  const imageUrl = originalUrl ? getProxyImageUrl(originalUrl) : '';
+                  // 先尝试原始 URL，如果加载失败再用代理（用户浏览器通常可以直接访问）
+                  const imageUrl = originalUrl;
                   
                   return (
                     <div 
@@ -365,29 +365,20 @@ const LuchuCreate = () => {
                       }}
                     >
                       {imageUrl ? (
-                        <Image
+                        <img
                           src={imageUrl}
                           width={100}
                           height={100}
-                          style={{ objectFit: 'cover' }}
-                          preview={false}
-                          placeholder={
-                            <div style={{ 
-                              width: 100, 
-                              height: 100, 
-                              display: 'flex', 
-                              alignItems: 'center', 
-                              justifyContent: 'center',
-                              background: '#f0f0f0',
-                              color: '#999',
-                              fontSize: 12
-                            }}>
-                              加载中...
-                            </div>
-                          }
-                          fallback="data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMTAwIiBoZWlnaHQ9IjEwMCIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48cmVjdCB3aWR0aD0iMTAwJSIgaGVpZ2h0PSIxMDAlIiBmaWxsPSIjZjBmMGYwIi8+PHRleHQgeD0iNTAlIiB5PSI1MCUiIGRvbWluYW50LWJhc2VsaW5lPSJtaWRkbGUiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGZvbnQtc2l6ZT0iMTIiIGZpbGw9IiM5OTkiPuWbvueJh+Wksei0pTwvdGV4dD48L3N2Zz4="
+                          style={{ objectFit: 'cover', display: 'block' }}
+                          alt={img.alt || '商家图片'}
+                          loading="lazy"
                           onError={(e) => {
-                            console.warn(`图片加载失败: ${imageUrl}`)
+                            // 原始 URL 加载失败时，尝试使用代理
+                            const proxyUrl = getProxyImageUrl(imageUrl)
+                            if (e.target.src !== proxyUrl) {
+                              console.warn(`图片加载失败，尝试代理: ${imageUrl}`)
+                              e.target.src = proxyUrl
+                            }
                           }}
                         />
                       ) : (
@@ -566,11 +557,16 @@ const LuchuCreate = () => {
                 {articleData.images?.hero && (
                   <div style={{ marginTop: 16 }}>
                     <Text strong>主图：</Text>
-                    <Image
-                      src={getProxyImageUrl(articleData.images.hero.url)}
-                      width="100%"
-                      style={{ marginTop: 8 }}
-                      fallback="data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMjAwIiBoZWlnaHQ9IjIwMCIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48cmVjdCB3aWR0aD0iMTAwJSIgaGVpZ2h0PSIxMDAlIiBmaWxsPSIjZjBmMGYwIi8+PHRleHQgeD0iNTAlIiB5PSI1MCUiIGRvbWluYW50LWJhc2VsaW5lPSJtaWRkbGUiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGZvbnQtc2l6ZT0iMTQiIGZpbGw9IiM5OTkiPuWKoOi9veS4rS4uLjwvdGV4dD48L3N2Zz4="
+                    <img
+                      src={articleData.images.hero.url}
+                      alt="主图"
+                      style={{ width: '100%', marginTop: 8, maxHeight: 300, objectFit: 'cover' }}
+                      onError={(e) => {
+                        const proxyUrl = getProxyImageUrl(articleData.images.hero.url)
+                        if (e.target.src !== proxyUrl) {
+                          e.target.src = proxyUrl
+                        }
+                      }}
                     />
                   </div>
                 )}
