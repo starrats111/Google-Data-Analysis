@@ -143,8 +143,15 @@ const LuchuCreate = () => {
 
     setGenerating(true)
     try {
-      // 构建选中的图片
-      const images = selectedImages.map(i => merchantData.images[i])
+      // 构建选中的图片，确保 url 字段存在
+      const images = selectedImages.map(i => {
+        const img = merchantData.images[i]
+        return {
+          ...img,
+          url: img.url || img.src || '',  // 兼容处理
+          type: img.type || (i === 0 ? 'hero' : 'content')
+        }
+      })
       
       // 获取目标国家信息
       const targetCountry = TARGET_COUNTRIES.find(c => c.code === values.target_country) || TARGET_COUNTRIES[0]
@@ -317,41 +324,89 @@ const LuchuCreate = () => {
               
               <Divider>选择配图 (点击选择/取消)</Divider>
               
+              {(!merchantData.images || merchantData.images.length === 0) && (
+                <Alert 
+                  message="未能获取到商家图片" 
+                  description="请检查商家网站是否可访问，或尝试重新分析"
+                  type="warning" 
+                  showIcon 
+                  style={{ marginBottom: 16 }}
+                />
+              )}
+              
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-                {merchantData.images?.map((img, index) => (
-                  <div 
-                    key={index} 
-                    onClick={() => toggleImageSelection(index)}
-                    style={{ 
-                      cursor: 'pointer',
-                      border: selectedImages.includes(index) ? '3px solid #1890ff' : '1px solid #d9d9d9',
-                      borderRadius: 4,
-                      padding: 4,
-                      position: 'relative'
-                    }}
-                  >
-                    <Image
-                      src={img.url}
-                      width={100}
-                      height={100}
-                      style={{ objectFit: 'cover' }}
-                      preview={false}
-                      fallback="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII="
-                    />
-                    {selectedImages.includes(index) && (
-                      <CheckOutlined style={{ 
-                        position: 'absolute', 
-                        top: 4, 
-                        right: 4, 
-                        color: '#1890ff',
-                        fontSize: 16,
-                        background: 'white',
-                        borderRadius: '50%',
-                        padding: 2
-                      }} />
-                    )}
-                  </div>
-                ))}
+                {merchantData.images?.map((img, index) => {
+                  // 兼容处理：支持 url 和 src 两种字段名
+                  const imageUrl = img.url || img.src || '';
+                  
+                  return (
+                    <div 
+                      key={index} 
+                      onClick={() => toggleImageSelection(index)}
+                      style={{ 
+                        cursor: 'pointer',
+                        border: selectedImages.includes(index) ? '3px solid #1890ff' : '1px solid #d9d9d9',
+                        borderRadius: 4,
+                        padding: 4,
+                        position: 'relative',
+                        background: '#f5f5f5'
+                      }}
+                    >
+                      {imageUrl ? (
+                        <Image
+                          src={imageUrl}
+                          width={100}
+                          height={100}
+                          style={{ objectFit: 'cover' }}
+                          preview={false}
+                          placeholder={
+                            <div style={{ 
+                              width: 100, 
+                              height: 100, 
+                              display: 'flex', 
+                              alignItems: 'center', 
+                              justifyContent: 'center',
+                              background: '#f0f0f0',
+                              color: '#999',
+                              fontSize: 12
+                            }}>
+                              加载中...
+                            </div>
+                          }
+                          fallback="data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMTAwIiBoZWlnaHQ9IjEwMCIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48cmVjdCB3aWR0aD0iMTAwJSIgaGVpZ2h0PSIxMDAlIiBmaWxsPSIjZjBmMGYwIi8+PHRleHQgeD0iNTAlIiB5PSI1MCUiIGRvbWluYW50LWJhc2VsaW5lPSJtaWRkbGUiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGZvbnQtc2l6ZT0iMTIiIGZpbGw9IiM5OTkiPuWbvueJh+Wksei0pTwvdGV4dD48L3N2Zz4="
+                          onError={(e) => {
+                            console.warn(`图片加载失败: ${imageUrl}`)
+                          }}
+                        />
+                      ) : (
+                        <div style={{ 
+                          width: 100, 
+                          height: 100, 
+                          display: 'flex', 
+                          alignItems: 'center', 
+                          justifyContent: 'center',
+                          background: '#f0f0f0',
+                          color: '#999',
+                          fontSize: 12
+                        }}>
+                          无图片
+                        </div>
+                      )}
+                      {selectedImages.includes(index) && (
+                        <CheckOutlined style={{ 
+                          position: 'absolute', 
+                          top: 4, 
+                          right: 4, 
+                          color: '#1890ff',
+                          fontSize: 16,
+                          background: 'white',
+                          borderRadius: '50%',
+                          padding: 2
+                        }} />
+                      )}
+                    </div>
+                  )
+                })}
               </div>
             </Card>
           </Col>

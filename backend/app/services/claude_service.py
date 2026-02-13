@@ -620,6 +620,7 @@ Write the article in natural English appropriate for {country_name} readers.
                             if (src && src.startsWith('http') && !src.includes('data:')) {
                                 const rect = img.getBoundingClientRect();
                                 images.push({
+                                    url: src,
                                     src: src,
                                     alt: img.alt || '',
                                     width: img.naturalWidth || rect.width,
@@ -632,8 +633,8 @@ Write the article in natural English appropriate for {country_name} readers.
                             const srcset = source.srcset || '';
                             const urls = srcset.split(',').map(s => s.trim().split(' ')[0]).filter(u => u.startsWith('http'));
                             urls.forEach(url => {
-                                if (!images.some(i => i.src === url)) {
-                                    images.push({ src: url, alt: '', width: 0, height: 0 });
+                                if (!images.some(i => i.url === url)) {
+                                    images.push({ url: url, src: url, alt: '', width: 0, height: 0 });
                                 }
                             });
                         });
