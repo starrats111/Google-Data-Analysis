@@ -184,14 +184,6 @@ export const PLATFORM_API_CONFIG = {
         placeholder: '请输入 Partnermatic API Token',
         help: '用于同步 Partnermatic 交易数据',
         required: false
-      },
-      {
-        name: 'pm_api_url',
-        label: 'Partnermatic API URL（必填）',
-        type: 'text',
-        placeholder: '例如: https://app.partnermatic.com/api',
-        help: 'Partnermatic平台的API基础URL，必须配置',
-        required: true
       }
     ]
   },
