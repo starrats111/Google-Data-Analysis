@@ -14,8 +14,18 @@ logger = logging.getLogger(__name__)
 class ClaudeService:
     """Claude API 服务，支持 Tool Use"""
     
-    def __init__(self, api_key: str):
-        self.client = Anthropic(api_key=api_key)
+    # 哈基米代理 base_url
+    HAGIMI_BASE_URL = "https://api.hagimi.com/v1"
+    
+    def __init__(self, api_key: str, base_url: str = None):
+        # 如果是哈基米的 API Key（以 sk- 开头），使用哈基米代理
+        if api_key.startswith("sk-"):
+            base_url = base_url or self.HAGIMI_BASE_URL
+            self.client = Anthropic(api_key=api_key, base_url=base_url)
+            logger.info(f"[Claude] 使用哈基米代理: {base_url}")
+        else:
+            self.client = Anthropic(api_key=api_key)
+            logger.info("[Claude] 使用 Anthropic 官方 API")
         self.tools = self._define_tools()
     
     def _define_tools(self) -> List[Dict]:
@@ -569,17 +579,19 @@ Write the article in natural English appropriate for {country_name} readers.
 _claude_service: Optional[ClaudeService] = None
 
 
-def get_claude_service(api_key: str = None) -> ClaudeService:
+def get_claude_service(api_key: str = None, base_url: str = None) -> ClaudeService:
     """获取 Claude 服务实例"""
     global _claude_service
     
     if _claude_service is None:
+        from app.config import settings
         if api_key is None:
-            from app.config import settings
             api_key = getattr(settings, 'CLAUDE_API_KEY', None)
             if not api_key:
                 raise ValueError("CLAUDE_API_KEY 未配置")
-        _claude_service = ClaudeService(api_key)
+        if base_url is None:
+            base_url = getattr(settings, 'CLAUDE_BASE_URL', None)
+        _claude_service = ClaudeService(api_key, base_url)
     
     return _claude_service
 
