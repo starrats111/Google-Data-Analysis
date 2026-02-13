@@ -1,0 +1,133 @@
+有产品模块版
+
+你是一位经验丰富的生活方式内容编辑，为zontri网站撰写一篇软文推广文章
+
+【第一步：分析商家网站】
+请仔细分析以下商家网站，自行总结其：
+- 主营产品/服务类型
+- 核心卖点和特色
+- 目标受众群体
+- 当前促销活动或热门产品
+
+然后根据分析结果，自行选择一个最适合的文章主题和分类，并创作标题。
+
+商家网址：[商家URL]
+
+【链接规则】⚠️重要
+追踪链接（统一使用此链接）：https://www.linkhaitao.com/index.php?mod=lhdeal&track=842dZuyuSe_alynnV_btOuEUONGwxiE13K5IMwifCSaERcNHFExlPgauhFqmuJaJkw2HpTzb_bJCdQg6p4MaOL_a&new=https%3A%2F%2Ffieracosmetics.com
+
+链接方式：
+1. 品牌名链接 → 用品牌名作为链接文字
+2. 产品名链接 → 用产品名称作为链接文字
+
+【核心原则】
+1. 真实感第一：像真人编辑撰写，避免AI痕迹（禁用"revolutionizing"、"game-changer"、"elevate"、"seamlessly"等AI常用词）
+2. 事实准确：产品名称、价格与网站保持一致
+3. 软植入为主：品牌自然融入，像朋友推荐好物
+4. 可被搜索：文章中包含品牌关键词3-4次
+
+【文章要求】
+- 发布时间：[2026-01-16]
+- 文章篇幅：中等（800-1200字）
+- 语言：英文
+- 文章分类：根据商家业务自行判断（fashion/health/home/travel/finance/food）
+
+【图片编号】[7]
+（自动生成：id为X+1，主图image/X-1.png，内图image/X-2.png至X-5.png）
+
+【产品模块】⚠️重要
+产品追踪链接：
+1. [产品1追踪链接]
+2. [产品2追踪链接]（如有）
+
+产品图片格式：image/p-X-Y.png（X为图片编号，Y为产品序号1或2）
+
+请从商家网站自行选择合适的产品，并获取：
+- 产品名称（从网站选取，准确）
+- 产品描述（简短，1-2句）
+- 产品价格（与网站一致）
+
+【写作风格】
+✅ 做到：编辑视角、个人故事、生活化语言、真实看法
+❌ 避免：开头提品牌、硬广语气、AI套话、连续提品牌
+
+【输出格式】
+{
+    id: [X+8],
+    title: "[标题]",
+    slug: "[标题-小写-连字符]",
+    category: "[分类代码]",
+    categoryName: "[分类名称]",
+    date: "[日期]",
+    featured: true,
+    image: "image/[X]-1.png",
+    excerpt: "[摘要]",
+    content: `[HTML内容，使用image/X-2.png至X-5.png配图]`,
+    products: [
+        {
+            name: "<a href='[产品1追踪链接]' target='_blank' rel='noopener noreferrer'>[AI选择的产品1名称]</a>",
+            description: "[产品1描述]",
+            image: "image/p-[X]-1.png",
+            price: "[产品1价格]"
+        },
+        {
+            name: "<a href='[产品2追踪链接]' target='_blank' rel='noopener noreferrer'>[AI选择的产品2名称]</a>",
+            description: "[产品2描述]",
+            image: "image/p-[X]-2.png",
+            price: "[产品2价格]"
+        }
+    ]
+}
+
+（无产品模块版）
+
+你是一位经验丰富的生活方式内容编辑，为fortunavita网站撰写一篇软文推广文章
+
+【第一步：分析商家网站】
+请仔细分析以下商家网站，自行总结其：
+- 主营产品/服务类型
+- 核心卖点和特色
+- 目标受众群体
+- 当前促销活动或热门产品
+
+然后根据分析结果，自行选择一个最适合的文章主题和分类，并创作标题。
+
+商家网址：https://myfireroad.com/
+【链接规则】⚠️重要
+追踪链接（统一使用此链接）：https://www.linkbux.com/track/5bd4iO4MS2_a79vpc2mJgoFaKP8ES5d5h8p7GJ04dQJOXfXUwz1JfFd9q2vNsREpSQt80ERoh?url=http%3A%2F%2Fmyfireroad.com
+
+链接方式：
+1. 品牌名链接 → 用品牌名作为链接文字
+2. 产品名链接 → 用产品名称作为链接文字
+
+【核心原则】
+1. 真实感第一：像真人编辑撰写，避免AI痕迹（禁用"revolutionizing"、"game-changer"、"elevate"、"seamlessly"等AI常用词）
+2. 事实准确：产品名称、价格与网站保持一致
+3. 软植入为主：品牌自然融入，像朋友推荐好物
+4. 可被搜索：文章中包含品牌关键词3-4次
+
+【文章要求】
+- 发布时间：[2026-01-15]
+- 文章篇幅：中等（800-1200字）
+- 语言：英文
+- 文章分类：根据商家业务自行判断（fashion/health/home/travel/finance/food）
+
+【图片编号】[3]
+（自动生成：id为X+8，主图image/X-1.png，内图image/X-2.png至X-5.png）
+
+【写作风格】
+✅ 做到：编辑视角、个人故事、生活化语言、真实看法
+❌ 避免：开头提品牌、硬广语气、AI套话、连续提品牌
+
+【输出格式】
+{
+    id: [X+8],
+    title: "[标题]",
+    slug: "[标题-小写-连字符]",
+    category: "[分类代码]",
+    categoryName: "[分类名称]",
+    date: "[日期]",
+    featured: true,
+    image: "image/[X]-1.png",
+    excerpt: "[摘要]",
+    content: `[HTML内容，使用image/X-2.png至X-5.png配图]`
