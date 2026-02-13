@@ -237,9 +237,7 @@ async def get_campaign_data(
         func.sum(GoogleAdsApiData.cost).label('total_cost'),
         func.sum(GoogleAdsApiData.impressions).label('total_impressions'),
         func.sum(GoogleAdsApiData.clicks).label('total_clicks'),
-        func.avg(GoogleAdsApiData.cpc).label('avg_cpc'),
-        func.avg(GoogleAdsApiData.is_budget_lost).label('avg_is_budget_lost'),
-        func.avg(GoogleAdsApiData.is_rank_lost).label('avg_is_rank_lost')
+        func.avg(GoogleAdsApiData.cpc).label('avg_cpc')
     ).filter(
         GoogleAdsApiData.user_id == current_user.id,
         GoogleAdsApiData.date >= begin,
@@ -261,13 +259,15 @@ async def get_campaign_data(
     
     results = query.all()
     
-    # 获取每个广告系列最近一天的预算和状态（批量查询，提高性能）
+    # 获取每个广告系列最近一天的预算、状态、IS Budget丢失、IS Rank丢失（批量查询，提高性能）
     campaign_ids = [row.campaign_id for row in results]
     latest_budgets = {}
     latest_statuses = {}
+    latest_is_budget_lost = {}
+    latest_is_rank_lost = {}
     if campaign_ids:
-        # 批量查询：为每个广告系列获取最近一天的预算
-        # 使用子查询找到每个广告系列的最大日期，然后JOIN获取对应的预算
+        # 批量查询：为每个广告系列获取最近一天的数据
+        # 使用子查询找到每个广告系列的最大日期，然后JOIN获取对应的数据
         from sqlalchemy import select, and_
         
         # 子查询：每个广告系列的最大日期
@@ -281,11 +281,13 @@ async def get_campaign_data(
             GoogleAdsApiData.date <= end
         ).group_by(GoogleAdsApiData.campaign_id).subquery()
         
-        # 主查询：获取每个广告系列在最大日期那天的预算和状态
-        latest_budget_query = db.query(
+        # 主查询：获取每个广告系列在最大日期那天的预算、状态、IS丢失数据
+        latest_data_query = db.query(
             GoogleAdsApiData.campaign_id,
             GoogleAdsApiData.budget,
-            GoogleAdsApiData.status
+            GoogleAdsApiData.status,
+            GoogleAdsApiData.is_budget_lost,
+            GoogleAdsApiData.is_rank_lost
         ).join(
             max_date_subq,
             and_(
@@ -296,9 +298,11 @@ async def get_campaign_data(
             GoogleAdsApiData.user_id == current_user.id
         )
         
-        for row in latest_budget_query.all():
+        for row in latest_data_query.all():
             latest_budgets[row.campaign_id] = float(row.budget or 0)
             latest_statuses[row.campaign_id] = row.status or "未知"
+            latest_is_budget_lost[row.campaign_id] = float(row.is_budget_lost or 0)
+            latest_is_rank_lost[row.campaign_id] = float(row.is_rank_lost or 0)
     
     # 格式化日期范围显示
     begin_str = begin.strftime("%m月%d日")
@@ -358,8 +362,8 @@ async def get_campaign_data(
             "clicks": int(total_clicks),
             "cpc": round(display_cpc, 4),  # CPC（已转换货币）
             "ctr": round(ctr, 2),
-            "is_budget_lost": round(float(row.avg_is_budget_lost or 0), 2),
-            "is_rank_lost": round(float(row.avg_is_rank_lost or 0), 2)
+            "is_budget_lost": round(latest_is_budget_lost.get(row.campaign_id, 0), 4),  # 使用最近一天的值
+            "is_rank_lost": round(latest_is_rank_lost.get(row.campaign_id, 0), 4)  # 使用最近一天的值
         })
 
     # 平台筛选兜底：同时支持 extracted_platform_code 和从 campaign_name 推断的平台
