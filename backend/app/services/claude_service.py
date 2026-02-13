@@ -25,6 +25,9 @@ class ClaudeService:
         self.fallback_model = fallback_model or self.DEFAULT_FALLBACK_MODEL
         self.current_model = self.model  # 当前使用的模型
         
+        # 存储最后一次 Playwright 提取的图片数据（含 base64）
+        self._last_playwright_images: List[Dict] = []
+        
         # 如果是哈基米的 API Key（以 sk- 开头），使用哈基米代理
         if api_key.startswith("sk-"):
             base_url = base_url or self.HAGIMI_BASE_URL
@@ -191,6 +194,10 @@ class ClaudeService:
             for content in response.content:
                 if hasattr(content, 'text'):
                     result = self._parse_json_response(content.text)
+                    
+                    # 关键：将 Claude 选择的图片与 Playwright 提取的 Base64 数据合并
+                    result = self._merge_images_with_base64(result)
+                    
                     logger.info(f"[Claude] 分析完成: {result.get('brand_name', 'Unknown')} (使用模型: {self.current_model})")
                     return result
             
@@ -678,12 +685,22 @@ Write the article in natural English appropriate for {country_name} readers.
                 
                 logger.info(f"[Claude] 共成功转换 {len(images_data)} 张图片为 Base64")
                 
+                # 保存图片数据到实例变量，供后续使用
+                self._last_playwright_images = images_data
+                
                 # 获取页面 HTML
                 html = await page.content()
                 
-                # 将图片信息附加到 HTML 末尾，便于 Claude 分析
+                # 将图片信息（不含 base64，避免内容过长）附加到 HTML 末尾，便于 Claude 分析
                 if images_data:
-                    images_json = json.dumps(images_data, ensure_ascii=False)
+                    # Claude 只需要 url, alt, width, height 来选择图片
+                    images_for_claude = [{
+                        'url': img['url'],
+                        'alt': img.get('alt', ''),
+                        'width': img.get('width', 0),
+                        'height': img.get('height', 0)
+                    } for img in images_data]
+                    images_json = json.dumps(images_for_claude, ensure_ascii=False)
                     html += f"\n<!-- EXTRACTED_IMAGES: {images_json} -->"
                     logger.info(f"[Claude] Playwright 提取到 {len(images_data)} 张图片")
                 
@@ -731,8 +748,47 @@ Write the article in natural English appropriate for {country_name} readers.
         
         raise Exception("无法解析 JSON 响应")
     
+    def _merge_images_with_base64(self, result: Dict) -> Dict:
+        """
+        将 Claude 选择的图片与 Playwright 提取的 Base64 数据合并
+        
+        Claude 只返回了图片的 URL，但 Playwright 已经下载并转换为 Base64
+        这里将两者匹配，让前端可以直接显示 Base64 图片
+        """
+        if not result.get('images') or not self._last_playwright_images:
+            logger.info(f"[Claude] 无需合并图片数据: images={len(result.get('images', []))}, playwright={len(self._last_playwright_images)}")
+            return result
+        
+        # 创建 URL -> Base64 映射
+        url_to_base64 = {}
+        for img in self._last_playwright_images:
+            url = img.get('url', '')
+            base64 = img.get('base64', '')
+            if url and base64:
+                url_to_base64[url] = base64
+                # 也处理可能的 URL 变体（去掉协议前缀）
+                if url.startswith('https://'):
+                    url_to_base64[url.replace('https://', 'http://')] = base64
+                elif url.startswith('http://'):
+                    url_to_base64[url.replace('http://', 'https://')] = base64
+        
+        logger.info(f"[Claude] Base64 映射表大小: {len(url_to_base64)}")
+        
+        # 合并 Base64 到结果图片
+        merged_count = 0
+        for img in result.get('images', []):
+            img_url = img.get('url', '')
+            if img_url in url_to_base64:
+                img['base64'] = url_to_base64[img_url]
+                merged_count += 1
+                logger.debug(f"[Claude] 图片已合并 Base64: {img_url[:50]}...")
+        
+        logger.info(f"[Claude] 成功合并 {merged_count}/{len(result.get('images', []))} 张图片的 Base64 数据")
+        
+        return result
+    
     def _format_images(self, images: List[Dict]) -> Dict[str, Any]:
-        """格式化图片数据"""
+        """格式化图片数据（保留 base64 字段）"""
         if not images:
             return {"hero": None, "content": []}
         
@@ -740,16 +796,18 @@ Write the article in natural English appropriate for {country_name} readers.
         content = []
         
         for img in images:
+            img_data = {
+                "url": img.get('url'),
+                "alt": img.get('alt', '')
+            }
+            # 保留 base64 字段（如果有）
+            if img.get('base64'):
+                img_data['base64'] = img.get('base64')
+            
             if img.get('type') == 'hero' and not hero:
-                hero = {
-                    "url": img.get('url'),
-                    "alt": img.get('alt', '')
-                }
+                hero = img_data
             else:
-                content.append({
-                    "url": img.get('url'),
-                    "alt": img.get('alt', '')
-                })
+                content.append(img_data)
         
         # 如果没有标记 hero，使用第一张作为 hero
         if not hero and content:
