@@ -237,3 +237,29 @@ class LuchuOperationLog(Base):
     # 关系
     user = relationship("User", foreign_keys=[user_id])
 
+
+class LuchuAnalyzeTask(Base):
+    """商家分析异步任务"""
+    __tablename__ = "luchu_analyze_tasks"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    task_id = Column(String(64), unique=True, nullable=False, index=True)  # UUID
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    url = Column(String(500), nullable=False)
+    
+    # 任务状态: pending/processing/completed/failed
+    status = Column(String(20), default="pending")
+    progress = Column(Integer, default=0)  # 0-100
+    stage = Column(String(50))  # 当前阶段描述
+    
+    # 结果数据
+    result_data = Column(Text)  # JSON: 分析结果
+    error_message = Column(Text)  # 错误信息
+    
+    # 时间戳
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    started_at = Column(DateTime(timezone=True))
+    completed_at = Column(DateTime(timezone=True))
+    
+    # 关系
+    user = relationship("User", foreign_keys=[user_id])

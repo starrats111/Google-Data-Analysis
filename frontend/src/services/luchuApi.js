@@ -39,9 +39,57 @@ export const restoreVersion = (articleId, versionNumber) => {
 
 // ============ AI 相关 ============
 
+/**
+ * 分析商家网站（异步模式）
+ * 返回 task_id，需要轮询 getAnalyzeTaskStatus 获取结果
+ */
 export const analyzeMerchant = (url) => {
-  // 分析商家网站可能需要较长时间（Playwright渲染），设置2分钟超时
-  return api.post('/api/luchu/ai/analyze', { url }, { timeout: 120000 })
+  return api.post('/api/luchu/ai/analyze', { url }, { timeout: 30000 })
+}
+
+/**
+ * 获取分析任务状态
+ * @param {string} taskId - 任务ID
+ * @returns {Promise<{task_id, status, progress, stage, data, error}>}
+ */
+export const getAnalyzeTaskStatus = (taskId) => {
+  return api.get(`/api/luchu/ai/task/${taskId}/status`, { timeout: 10000 })
+}
+
+/**
+ * 轮询分析任务直到完成
+ * @param {string} taskId - 任务ID
+ * @param {function} onProgress - 进度回调 (progress, stage)
+ * @param {number} interval - 轮询间隔（毫秒）
+ * @param {number} maxTime - 最大等待时间（毫秒）
+ * @returns {Promise<object>} - 分析结果
+ */
+export const pollAnalyzeTask = async (taskId, onProgress, interval = 2000, maxTime = 180000) => {
+  const startTime = Date.now()
+  
+  while (Date.now() - startTime < maxTime) {
+    const response = await getAnalyzeTaskStatus(taskId)
+    const { status, progress, stage, data, error } = response.data
+    
+    // 回调进度
+    if (onProgress) {
+      onProgress(progress, stage)
+    }
+    
+    // 检查状态
+    if (status === 'completed') {
+      return data
+    }
+    
+    if (status === 'failed') {
+      throw new Error(error || '分析失败')
+    }
+    
+    // 等待后继续轮询
+    await new Promise(resolve => setTimeout(resolve, interval))
+  }
+  
+  throw new Error('分析超时，请稍后重试')
 }
 
 export const generateArticle = (data) => {
@@ -211,6 +259,24 @@ export const preloadImages = (urls) => {
   return api.post('/api/luchu/images/preload', { urls }, { timeout: 30000 })
 }
 
+/**
+ * 上传图片到服务器
+ * 用于手动上传图片，替代 AI 无法提取的图片
+ * @param {File} file - 图片文件
+ * @returns {Promise<{url: string, base64: string, filename: string}>}
+ */
+export const uploadImage = (file) => {
+  const formData = new FormData()
+  formData.append('file', file)
+  
+  return api.post('/api/luchu/images/upload', formData, {
+    headers: {
+      'Content-Type': 'multipart/form-data'
+    },
+    timeout: 30000
+  })
+}
+
 export default {
   // 文章
   getArticles,
@@ -223,6 +289,8 @@ export default {
   restoreVersion,
   // AI
   analyzeMerchant,
+  getAnalyzeTaskStatus,
+  pollAnalyzeTask,
   generateArticle,
   regenerateSection,
   // 审核
@@ -262,5 +330,6 @@ export default {
   // 图片代理
   getProxyImageUrl,
   preloadImages,
+  uploadImage,
 }
 

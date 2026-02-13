@@ -5,21 +5,23 @@ import React, { useState, useEffect, useCallback } from 'react'
 import { 
   Card, Steps, Form, Input, Select, Button, Row, Col, 
   Spin, message, DatePicker, InputNumber, Image, Space,
-  Typography, Alert, Divider, List, Checkbox
+  Typography, Alert, Divider, List, Checkbox, Upload, Progress
 } from 'antd'
 import { 
   LinkOutlined, RobotOutlined, EditOutlined, 
   CheckOutlined, LoadingOutlined, ReloadOutlined,
-  PictureOutlined
+  PictureOutlined, PlusOutlined, DeleteOutlined, UploadOutlined
 } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
 import { 
   analyzeMerchant, 
+  pollAnalyzeTask,
   generateArticle, 
   createArticle,
   getWebsites,
   getPromptTemplates,
-  getProxyImageUrl
+  getProxyImageUrl,
+  uploadImage
 } from '../../services/luchuApi'
 import dayjs from 'dayjs'
 
@@ -149,6 +151,10 @@ const LuchuCreate = () => {
   const [selectedImages, setSelectedImages] = useState([])
   const [articleData, setArticleData] = useState(null)
   
+  // 手动上传的图片
+  const [uploadedImages, setUploadedImages] = useState([])
+  const [uploading, setUploading] = useState(false)
+  
   // 表单
   const [step1Form] = Form.useForm()
   const [step2Form] = Form.useForm()
@@ -172,56 +178,79 @@ const LuchuCreate = () => {
 
   // 分析状态提示
   const [analyzeStatus, setAnalyzeStatus] = useState('')
+  const [analyzeProgress, setAnalyzeProgress] = useState(0)
 
-  // 步骤1：分析商家URL
+  // 步骤1：分析商家URL（异步任务 + 轮询模式）
   const handleAnalyze = async (values) => {
     setAnalyzing(true)
-    setAnalyzeStatus('正在连接商家网站...')
+    setAnalyzeStatus('正在创建分析任务...')
+    setAnalyzeProgress(0)
     
     try {
-      // 设置状态提示
-      const statusTimer = setTimeout(() => {
-        setAnalyzeStatus('正在渲染页面并提取图片，请耐心等待（约30-60秒）...')
-      }, 3000)
-      
-      const longWaitTimer = setTimeout(() => {
-        setAnalyzeStatus('正在深度分析商家信息，首次访问较慢，请稍候...')
-      }, 15000)
-      
+      // 1. 创建分析任务
       const response = await analyzeMerchant(values.merchant_url)
+      const { task_id, status: initialStatus, message: taskMessage } = response.data
       
-      clearTimeout(statusTimer)
-      clearTimeout(longWaitTimer)
+      // 如果任务直接完成（使用缓存）
+      if (initialStatus === 'completed') {
+        setAnalyzeProgress(100)
+        setAnalyzeStatus('分析完成（使用缓存）')
+        
+        // 获取完整结果
+        const { data: statusData } = await import('../../services/luchuApi').then(m => m.getAnalyzeTaskStatus(task_id))
+        const resultData = statusData.data
+        
+        setMerchantData(resultData)
+        if (resultData.images) {
+          setSelectedImages(resultData.images.map((_, i) => i))
+        }
+        step2Form.setFieldsValue({
+          brand_name: resultData.brand_name,
+          keyword_count: 10,
+          target_country: 'US'
+        })
+        
+        message.success('分析完成')
+        setCurrentStep(1)
+        return
+      }
       
-      setMerchantData(response.data)
+      // 2. 轮询等待任务完成
+      const resultData = await pollAnalyzeTask(
+        task_id,
+        (progress, stage) => {
+          setAnalyzeProgress(progress)
+          setAnalyzeStatus(stage || '正在分析中...')
+        },
+        2000,  // 2秒轮询间隔
+        180000 // 最长等待3分钟
+      )
       
-      // 默认选中所有图片（Base64 已内嵌，无需预加载）
-      if (response.data.images) {
-        setSelectedImages(response.data.images.map((_, i) => i))
+      // 3. 处理结果
+      setMerchantData(resultData)
+      
+      // 默认选中所有图片
+      if (resultData.images) {
+        setSelectedImages(resultData.images.map((_, i) => i))
       }
       
       // 预填充表单
       step2Form.setFieldsValue({
-        brand_name: response.data.brand_name,
+        brand_name: resultData.brand_name,
         keyword_count: 10,
-        target_country: 'US'  // 默认美国
+        target_country: 'US'
       })
       
       message.success('分析完成')
       setCurrentStep(1)
+      
     } catch (error) {
       console.error('分析失败:', error)
-      // 更友好的错误提示
-      if (error.code === 'ECONNABORTED' || error.message?.includes('timeout')) {
-        message.error('分析超时，请稍后重试。首次分析某网站可能需要较长时间。')
-      } else if (error.response?.status === 504) {
-        message.warning('分析时间较长，请稍后刷新页面查看结果，或重新尝试。')
-      } else {
-        message.error(error.response?.data?.detail || '分析失败，请检查URL是否正确')
-      }
+      message.error(error.message || error.response?.data?.detail || '分析失败，请检查URL是否正确')
     } finally {
       setAnalyzing(false)
       setAnalyzeStatus('')
+      setAnalyzeProgress(0)
     }
   }
 
@@ -234,15 +263,25 @@ const LuchuCreate = () => {
 
     setGenerating(true)
     try {
-      // 构建选中的图片，确保 url 字段存在
-      const images = selectedImages.map(i => {
+      // 构建选中的 AI 提取图片
+      const aiImages = selectedImages.map(i => {
         const img = merchantData.images[i]
         return {
           ...img,
-          url: img.url || img.src || '',  // 兼容处理
-          type: img.type || (i === 0 ? 'hero' : 'content')
+          url: img.url || img.src || '',
+          type: img.type || (i === 0 ? 'hero' : 'content'),
+          source: 'ai'
         }
       })
+      
+      // 合并手动上传的图片
+      const allImages = [...aiImages, ...uploadedImages]
+      
+      // 确保至少有一张图片时，第一张为 hero
+      const images = allImages.map((img, i) => ({
+        ...img,
+        type: i === 0 ? 'hero' : 'content'
+      }))
       
       // 获取目标国家信息
       const targetCountry = TARGET_COUNTRIES.find(c => c.code === values.target_country) || TARGET_COUNTRIES[0]
@@ -329,6 +368,54 @@ const LuchuCreate = () => {
     })
   }
 
+  // 手动上传图片处理
+  const handleUploadImage = async (options) => {
+    const { file, onSuccess, onError } = options
+    
+    // 验证文件类型
+    const allowedTypes = ['image/jpeg', 'image/png', 'image/webp', 'image/gif']
+    if (!allowedTypes.includes(file.type)) {
+      message.error('仅支持 JPG/PNG/WebP/GIF 格式')
+      onError(new Error('不支持的文件类型'))
+      return
+    }
+    
+    // 验证文件大小（5MB）
+    if (file.size > 5 * 1024 * 1024) {
+      message.error('图片大小不能超过 5MB')
+      onError(new Error('文件太大'))
+      return
+    }
+    
+    setUploading(true)
+    try {
+      const response = await uploadImage(file)
+      const imgData = {
+        url: response.data.url,
+        base64: response.data.base64,
+        alt: file.name.replace(/\.[^.]+$/, ''),
+        type: uploadedImages.length === 0 && (!merchantData?.images?.length) ? 'hero' : 'content',
+        source: 'upload',
+        filename: response.data.filename
+      }
+      
+      setUploadedImages(prev => [...prev, imgData])
+      message.success('图片上传成功')
+      onSuccess(response.data)
+    } catch (error) {
+      console.error('上传失败:', error)
+      message.error(error.response?.data?.detail || '上传失败')
+      onError(error)
+    } finally {
+      setUploading(false)
+    }
+  }
+
+  // 删除已上传的图片
+  const handleRemoveUploadedImage = (index) => {
+    setUploadedImages(prev => prev.filter((_, i) => i !== index))
+  }
+
   return (
     <div style={{ padding: '24px', maxWidth: 1200, margin: '0 auto' }}>
       <Title level={3}>创建露出内容</Title>
@@ -362,13 +449,37 @@ const LuchuCreate = () => {
               />
             </Form.Item>
             
-            <Alert
-              message={analyzing ? analyzeStatus || "正在分析中..." : "AI 将自动分析商家网站，提取品牌信息和适合的配图"}
-              description={analyzing ? "首次分析新网站可能需要30-90秒，请耐心等待" : null}
-              type={analyzing ? "warning" : "info"}
-              showIcon
-              style={{ marginBottom: 16 }}
-            />
+            {analyzing ? (
+              <div style={{ marginBottom: 16 }}>
+                <Alert
+                  message={analyzeStatus || "正在分析中..."}
+                  description={
+                    <div style={{ marginTop: 8 }}>
+                      <Progress 
+                        percent={analyzeProgress} 
+                        status="active"
+                        strokeColor={{
+                          '0%': '#108ee9',
+                          '100%': '#87d068',
+                        }}
+                      />
+                      <Text type="secondary" style={{ fontSize: 12 }}>
+                        异步任务处理中，无超时风险，请耐心等待...
+                      </Text>
+                    </div>
+                  }
+                  type="warning"
+                  showIcon
+                />
+              </div>
+            ) : (
+              <Alert
+                message="AI 将自动分析商家网站，提取品牌信息和适合的配图"
+                type="info"
+                showIcon
+                style={{ marginBottom: 16 }}
+              />
+            )}
             
             <Form.Item>
               <Button 
@@ -459,6 +570,112 @@ const LuchuCreate = () => {
                   </div>
                 ))}
               </div>
+              
+              {/* 手动上传图片区域 */}
+              <Divider>手动上传图片</Divider>
+              
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 16 }}>
+                {/* 显示已上传的图片 */}
+                {uploadedImages.map((img, index) => (
+                  <div 
+                    key={`uploaded-${index}`}
+                    style={{ 
+                      position: 'relative',
+                      border: '2px solid #52c41a',
+                      borderRadius: 4,
+                      padding: 4,
+                      background: '#f6ffed'
+                    }}
+                  >
+                    <SmartImage 
+                      img={img} 
+                      width={100} 
+                      height={100}
+                    />
+                    <div
+                      onClick={() => handleRemoveUploadedImage(index)}
+                      style={{
+                        position: 'absolute',
+                        top: -8,
+                        right: -8,
+                        width: 20,
+                        height: 20,
+                        borderRadius: '50%',
+                        background: '#ff4d4f',
+                        color: 'white',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        cursor: 'pointer',
+                        fontSize: 12
+                      }}
+                    >
+                      <DeleteOutlined />
+                    </div>
+                    <div style={{
+                      position: 'absolute',
+                      bottom: 4,
+                      left: 4,
+                      right: 4,
+                      background: 'rgba(82, 196, 26, 0.9)',
+                      color: 'white',
+                      fontSize: 10,
+                      textAlign: 'center',
+                      borderRadius: 2,
+                      padding: '1px 4px'
+                    }}>
+                      已上传
+                    </div>
+                  </div>
+                ))}
+                
+                {/* 上传按钮 */}
+                <Upload
+                  customRequest={handleUploadImage}
+                  showUploadList={false}
+                  accept=".jpg,.jpeg,.png,.webp,.gif"
+                  disabled={uploading}
+                >
+                  <div 
+                    style={{ 
+                      width: 100, 
+                      height: 100, 
+                      display: 'flex',
+                      flexDirection: 'column',
+                      alignItems: 'center', 
+                      justifyContent: 'center',
+                      border: '2px dashed #d9d9d9',
+                      borderRadius: 4,
+                      cursor: uploading ? 'not-allowed' : 'pointer',
+                      background: '#fafafa',
+                      transition: 'all 0.3s'
+                    }}
+                    onMouseEnter={(e) => {
+                      if (!uploading) e.currentTarget.style.borderColor = '#1890ff'
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.borderColor = '#d9d9d9'
+                    }}
+                  >
+                    {uploading ? (
+                      <LoadingOutlined style={{ fontSize: 24, color: '#1890ff' }} />
+                    ) : (
+                      <>
+                        <PlusOutlined style={{ fontSize: 20, color: '#999' }} />
+                        <span style={{ fontSize: 12, color: '#999', marginTop: 4 }}>上传图片</span>
+                      </>
+                    )}
+                  </div>
+                </Upload>
+              </div>
+              
+              <Alert
+                message="提示"
+                description="如果自动提取的图片无法显示或不满意，可手动上传本地图片。支持 JPG/PNG/WebP/GIF，单张最大 5MB。"
+                type="info"
+                showIcon
+                style={{ marginBottom: 0 }}
+              />
             </Card>
           </Col>
           

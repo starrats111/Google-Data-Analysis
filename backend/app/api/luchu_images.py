@@ -1,21 +1,31 @@
 """
-露出图片代理 API - 绕过商家网站防盗链
+露出图片代理 API - 绕过商家网站防盗链 + 图片上传
 """
 import httpx
 import hashlib
 import logging
 import asyncio
+import os
+import uuid
+import base64
+from datetime import datetime
 from typing import Optional, List
 from urllib.parse import unquote
 
-from fastapi import APIRouter, Depends, HTTPException, Query, BackgroundTasks
-from fastapi.responses import Response
+from fastapi import APIRouter, Depends, HTTPException, Query, BackgroundTasks, UploadFile, File
+from fastapi.responses import Response, FileResponse
 from pydantic import BaseModel
 
 from app.models.user import User
 from app.middleware.auth import get_current_user, get_luchu_authorized_user
 
 logger = logging.getLogger(__name__)
+
+# 图片上传配置
+UPLOAD_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "uploads", "images")
+os.makedirs(UPLOAD_DIR, exist_ok=True)
+MAX_FILE_SIZE = 5 * 1024 * 1024  # 5MB
+ALLOWED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
 
 router = APIRouter(prefix="/api/luchu/images", tags=["luchu-images"])
 
@@ -349,4 +359,114 @@ async def preload_images(
         "cached": cached_count,
         "total": len(urls)
     }
+
+
+@router.post("/upload")
+async def upload_image(
+    file: UploadFile = File(...),
+    current_user: User = Depends(get_luchu_authorized_user)
+):
+    """
+    上传图片到服务器
+    
+    返回图片的 URL 和 Base64 数据
+    用于手动上传替代 AI 无法提取的图片
+    """
+    # 验证文件类型
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="文件名为空")
+    
+    ext = os.path.splitext(file.filename)[1].lower()
+    if ext not in ALLOWED_EXTENSIONS:
+        raise HTTPException(
+            status_code=400, 
+            detail=f"不支持的文件类型: {ext}，仅支持 {', '.join(ALLOWED_EXTENSIONS)}"
+        )
+    
+    # 读取文件内容
+    content = await file.read()
+    
+    # 验证文件大小
+    if len(content) > MAX_FILE_SIZE:
+        raise HTTPException(
+            status_code=400, 
+            detail=f"文件太大: {len(content) / 1024 / 1024:.1f}MB，最大支持 5MB"
+        )
+    
+    # 验证是否为有效图片
+    content_type = file.content_type or "image/jpeg"
+    if not content_type.startswith("image/"):
+        raise HTTPException(status_code=400, detail="上传的文件不是有效图片")
+    
+    # 生成唯一文件名
+    date_str = datetime.now().strftime("%Y%m%d")
+    unique_id = uuid.uuid4().hex[:8]
+    filename = f"{date_str}_{unique_id}{ext}"
+    filepath = os.path.join(UPLOAD_DIR, filename)
+    
+    # 保存文件
+    try:
+        with open(filepath, "wb") as f:
+            f.write(content)
+        logger.info(f"[Image Upload] 成功保存: {filename} ({len(content)} bytes)")
+    except Exception as e:
+        logger.error(f"[Image Upload] 保存失败: {e}")
+        raise HTTPException(status_code=500, detail="保存图片失败")
+    
+    # 生成 Base64
+    mime_type = content_type
+    if ext == ".png":
+        mime_type = "image/png"
+    elif ext in [".jpg", ".jpeg"]:
+        mime_type = "image/jpeg"
+    elif ext == ".webp":
+        mime_type = "image/webp"
+    elif ext == ".gif":
+        mime_type = "image/gif"
+    
+    base64_data = f"data:{mime_type};base64,{base64.b64encode(content).decode('utf-8')}"
+    
+    # 返回图片信息
+    return {
+        "success": True,
+        "filename": filename,
+        "url": f"/api/luchu/images/uploaded/{filename}",
+        "base64": base64_data,
+        "size": len(content),
+        "content_type": mime_type
+    }
+
+
+@router.get("/uploaded/{filename}")
+async def get_uploaded_image(filename: str):
+    """
+    获取已上传的图片
+    """
+    # 安全检查：防止路径遍历
+    if ".." in filename or "/" in filename or "\\" in filename:
+        raise HTTPException(status_code=400, detail="无效的文件名")
+    
+    filepath = os.path.join(UPLOAD_DIR, filename)
+    
+    if not os.path.exists(filepath):
+        raise HTTPException(status_code=404, detail="图片不存在")
+    
+    # 确定 MIME 类型
+    ext = os.path.splitext(filename)[1].lower()
+    mime_types = {
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".png": "image/png",
+        ".webp": "image/webp",
+        ".gif": "image/gif"
+    }
+    media_type = mime_types.get(ext, "image/jpeg")
+    
+    return FileResponse(
+        filepath,
+        media_type=media_type,
+        headers={
+            "Cache-Control": "public, max-age=86400"
+        }
+    )
 
