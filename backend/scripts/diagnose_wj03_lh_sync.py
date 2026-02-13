@@ -73,57 +73,56 @@ lh_platform = db.query(AffiliatePlatform).filter(
     AffiliatePlatform.platform_code == "lh"
 ).first()
 
-if lh_platform:
-    # 方法1: 通过 platform_id 查找
-    lh_transactions = db.query(AffiliateTransaction).filter(
-        AffiliateTransaction.affiliate_account_id.in_(wj03_account_ids),
-        AffiliateTransaction.platform_id == lh_platform.id,
-        AffiliateTransaction.transaction_date >= begin_date,
-        AffiliateTransaction.transaction_date <= end_date
-    ).all()
+# 方法1: 通过 platform 字段查找 (platform 是字符串，如 "lh", "LH", "LinkHaiTao")
+lh_transactions = db.query(AffiliateTransaction).filter(
+    AffiliateTransaction.affiliate_account_id.in_(wj03_account_ids),
+    AffiliateTransaction.platform.in_(["lh", "LH", "LinkHaiTao", "linkhaitao"]),
+    AffiliateTransaction.transaction_time >= begin_date,
+    AffiliateTransaction.transaction_time <= end_date
+).all()
+
+print(f"   找到 {len(lh_transactions)} 条 LH 交易")
     
-    print(f"   通过 platform_id={lh_platform.id} 找到 {len(lh_transactions)} 条 LH 交易")
-    
-    # 按商家分组统计
-    merchant_stats = {}
-    for t in lh_transactions:
-        mid = t.merchant_id or "未知"
-        if mid not in merchant_stats:
-            merchant_stats[mid] = {"count": 0, "commission": 0}
-        merchant_stats[mid]["count"] += 1
-        merchant_stats[mid]["commission"] += float(t.commission or 0)
-    
-    print(f"\n   按商家(MID)统计:")
-    for mid, stats in sorted(merchant_stats.items()):
-        print(f"   - MID {mid}: {stats['count']} 订单, ${stats['commission']:.2f} 佣金")
+# 按商家分组统计
+merchant_stats = {}
+for t in lh_transactions:
+    mid = t.merchant_id or "未知"
+    if mid not in merchant_stats:
+        merchant_stats[mid] = {"count": 0, "commission": 0}
+    merchant_stats[mid]["count"] += 1
+    merchant_stats[mid]["commission"] += float(t.commission_amount or 0)
+
+print(f"\n   按商家(MID)统计:")
+for mid, stats in sorted(merchant_stats.items()):
+    print(f"   - MID {mid}: {stats['count']} 订单, ${stats['commission']:.2f} 佣金")
 
 # 5. 特别检查 MID 154253
 print(f"\n5. 特别检查 MID 154253 的交易:")
 mid_154253_transactions = db.query(AffiliateTransaction).filter(
     AffiliateTransaction.affiliate_account_id.in_(wj03_account_ids),
     AffiliateTransaction.merchant_id == "154253",
-    AffiliateTransaction.transaction_date >= begin_date,
-    AffiliateTransaction.transaction_date <= end_date
+    AffiliateTransaction.transaction_time >= begin_date,
+    AffiliateTransaction.transaction_time <= end_date
 ).all()
 
 print(f"   找到 {len(mid_154253_transactions)} 条 MID 154253 的交易")
 if mid_154253_transactions:
-    total_commission = sum(float(t.commission or 0) for t in mid_154253_transactions)
+    total_commission = sum(float(t.commission_amount or 0) for t in mid_154253_transactions)
     print(f"   总佣金: ${total_commission:.2f}")
     print(f"   最近5条交易:")
     for t in mid_154253_transactions[:5]:
-        print(f"   - 日期: {t.transaction_date}, 订单: {t.order_id}, 佣金: ${t.commission}, 状态: {t.status}")
+        print(f"   - 日期: {t.transaction_time}, 订单: {t.transaction_id}, 佣金: ${t.commission_amount}, 状态: {t.status}")
 
 # 6. 检查是否有其他用户的 MID 154253 数据
 print(f"\n6. 检查系统中所有 MID 154253 的交易:")
 all_mid_154253 = db.query(
     AffiliateTransaction.affiliate_account_id,
     func.count(AffiliateTransaction.id).label("count"),
-    func.sum(AffiliateTransaction.commission).label("total_commission")
+    func.sum(AffiliateTransaction.commission_amount).label("total_commission")
 ).filter(
     AffiliateTransaction.merchant_id == "154253",
-    AffiliateTransaction.transaction_date >= begin_date,
-    AffiliateTransaction.transaction_date <= end_date
+    AffiliateTransaction.transaction_time >= begin_date,
+    AffiliateTransaction.transaction_time <= end_date
 ).group_by(AffiliateTransaction.affiliate_account_id).all()
 
 for row in all_mid_154253:
