@@ -246,42 +246,47 @@ def _get_placeholder_image(text: str = "暂无图片") -> bytes:
     return svg.encode('utf-8')
 
 
-async def _fetch_and_cache_image(url: str) -> bool:
+async def _fetch_and_cache_image(url: str) -> tuple:
     """
     获取并缓存单张图片
-    返回是否成功
+    返回 (是否成功, 错误信息)
     """
     if not url or not url.startswith(('http://', 'https://')):
-        return False
+        return False, "无效URL"
     
     cache_key = hashlib.md5(url.encode()).hexdigest()
     
     # 已缓存则跳过
     if cache_key in _image_cache:
-        return True
+        return True, "已缓存"
     
     try:
-        async with httpx.AsyncClient(timeout=8.0, follow_redirects=True) as client:
+        async with httpx.AsyncClient(timeout=10.0, follow_redirects=True, verify=False) as client:
             response = await client.get(
                 url,
                 headers={
                     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
                     "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
                     "Accept-Language": "en-US,en;q=0.9",
+                    "Accept-Encoding": "gzip, deflate, br",
+                    "Connection": "keep-alive",
                     "Referer": url.split('/')[0] + '//' + url.split('/')[2] + '/',
                 }
             )
             
             if response.status_code != 200:
-                return False
+                return False, f"HTTP {response.status_code}"
             
             content_type = response.headers.get("content-type", "image/jpeg")
             if not content_type.startswith("image/"):
-                return False
+                return False, f"非图片类型: {content_type}"
             
             content = response.content
             if len(content) > 10 * 1024 * 1024:
-                return False
+                return False, "图片过大"
+            
+            if len(content) < 100:
+                return False, f"内容过小: {len(content)} bytes"
             
             # 添加到缓存
             if len(_image_cache) >= _CACHE_MAX_SIZE:
@@ -293,12 +298,15 @@ async def _fetch_and_cache_image(url: str) -> bool:
                 'content_type': content_type
             }
             
-            logger.debug(f"[Image Preload] 缓存成功: {url[:50]}... ({len(content)} bytes)")
-            return True
+            logger.info(f"[Image Preload] ✓ 成功: {url[:60]}... ({len(content)} bytes)")
+            return True, "成功"
             
+    except httpx.TimeoutException:
+        return False, "超时"
+    except httpx.ConnectError as e:
+        return False, f"连接失败: {str(e)[:50]}"
     except Exception as e:
-        logger.debug(f"[Image Preload] 缓存失败: {url[:50]}... - {e}")
-        return False
+        return False, f"错误: {str(e)[:50]}"
 
 
 @router.post("/preload")
@@ -322,11 +330,17 @@ async def preload_images(
     
     async def fetch_with_limit(url):
         async with semaphore:
-            return await _fetch_and_cache_image(url)
+            return url, await _fetch_and_cache_image(url)
     
     results = await asyncio.gather(*[fetch_with_limit(url) for url in urls])
     
-    cached_count = sum(1 for r in results if r)
+    # 统计并记录每个URL的结果
+    cached_count = 0
+    for url, (success, msg) in results:
+        if success:
+            cached_count += 1
+        else:
+            logger.warning(f"[Image Preload] ✗ 失败: {url[:60]}... - {msg}")
     
     logger.info(f"[Image Preload] 完成: {cached_count}/{len(urls)} 张图片已缓存")
     
