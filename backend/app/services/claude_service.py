@@ -610,10 +610,9 @@ Write the article in natural English appropriate for {country_name} readers.
                 # 等待图片加载
                 await page.wait_for_timeout(2000)
                 
-                # 提取所有图片并转换为 Base64（直接在浏览器中完成）
-                images_data = await page.evaluate("""
-                    async () => {
-                        const images = [];
+                # 提取所有图片 URL 信息
+                image_urls = await page.evaluate("""
+                    () => {
                         const imgElements = Array.from(document.querySelectorAll('img'));
                         
                         // 过滤有效图片（大于 50x50 像素，排除小图标）
@@ -625,64 +624,59 @@ Write the article in natural English appropriate for {country_name} readers.
                             return w >= 50 && h >= 50;
                         });
                         
-                        // 按图片面积排序，取最大的 10 张
+                        // 按图片面积排序，取最大的 8 张
                         validImgs.sort((a, b) => {
                             const areaA = (a.naturalWidth || a.width || 0) * (a.naturalHeight || a.height || 0);
                             const areaB = (b.naturalWidth || b.width || 0) * (b.naturalHeight || b.height || 0);
                             return areaB - areaA;
                         });
                         
-                        const topImgs = validImgs.slice(0, 10);
-                        
-                        // 将每张图片转换为 Base64
-                        for (const img of topImgs) {
-                            try {
-                                const src = img.src || img.dataset.src || img.dataset.lazySrc || '';
-                                const w = img.naturalWidth || img.width || 200;
-                                const h = img.naturalHeight || img.height || 200;
-                                
-                                // 使用 canvas 将图片转换为 Base64
-                                const canvas = document.createElement('canvas');
-                                // 限制最大尺寸为 800px（节省传输）
-                                const maxSize = 800;
-                                let newW = w, newH = h;
-                                if (w > maxSize || h > maxSize) {
-                                    if (w > h) {
-                                        newW = maxSize;
-                                        newH = Math.round(h * maxSize / w);
-                                    } else {
-                                        newH = maxSize;
-                                        newW = Math.round(w * maxSize / h);
-                                    }
-                                }
-                                canvas.width = newW;
-                                canvas.height = newH;
-                                
-                                const ctx = canvas.getContext('2d');
-                                ctx.drawImage(img, 0, 0, newW, newH);
-                                
-                                // 转换为 JPEG Base64（压缩质量 0.8）
-                                const base64 = canvas.toDataURL('image/jpeg', 0.8);
-                                
-                                if (base64 && base64.length > 100) {
-                                    images.push({
-                                        url: src,
-                                        src: src,
-                                        base64: base64,
-                                        alt: img.alt || '',
-                                        width: newW,
-                                        height: newH
-                                    });
-                                }
-                            } catch (e) {
-                                // 跨域图片无法转换，跳过
-                                console.warn('无法转换图片:', e);
-                            }
-                        }
-                        
-                        return images;
+                        return validImgs.slice(0, 8).map(img => ({
+                            url: img.src || img.dataset.src || img.dataset.lazySrc || '',
+                            alt: img.alt || '',
+                            width: img.naturalWidth || img.width || 0,
+                            height: img.naturalHeight || img.height || 0
+                        }));
                     }
                 """)
+                
+                # 使用 Playwright 的 page.goto 方式下载每张图片并转为 Base64
+                images_data = []
+                for img_info in image_urls[:8]:
+                    try:
+                        img_url = img_info['url']
+                        # 使用 Playwright 请求图片（自动带上正确的 Cookie 和 Referer）
+                        response = await page.request.get(img_url, timeout=10000)
+                        if response.ok:
+                            img_bytes = await response.body()
+                            if len(img_bytes) > 1000:  # 至少 1KB
+                                import base64
+                                # 检测图片类型
+                                content_type = response.headers.get('content-type', 'image/jpeg')
+                                if 'png' in content_type:
+                                    mime = 'image/png'
+                                elif 'gif' in content_type:
+                                    mime = 'image/gif'
+                                elif 'webp' in content_type:
+                                    mime = 'image/webp'
+                                else:
+                                    mime = 'image/jpeg'
+                                
+                                b64_str = base64.b64encode(img_bytes).decode('utf-8')
+                                images_data.append({
+                                    'url': img_url,
+                                    'src': img_url,
+                                    'base64': f'data:{mime};base64,{b64_str}',
+                                    'alt': img_info['alt'],
+                                    'width': img_info['width'],
+                                    'height': img_info['height']
+                                })
+                                logger.info(f"[Claude] 图片下载成功: {img_url[:50]}... ({len(img_bytes)} bytes)")
+                    except Exception as e:
+                        logger.warning(f"[Claude] 图片下载失败: {img_info['url'][:50]}... - {e}")
+                        continue
+                
+                logger.info(f"[Claude] 共成功转换 {len(images_data)} 张图片为 Base64")
                 
                 # 获取页面 HTML
                 html = await page.content()
