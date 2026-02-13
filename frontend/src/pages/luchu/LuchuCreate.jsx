@@ -16,6 +16,7 @@ import { useNavigate } from 'react-router-dom'
 import { 
   analyzeMerchant, 
   pollAnalyzeTask,
+  getAnalyzeTaskStatus,
   generateArticle, 
   createArticle,
   getWebsites,
@@ -197,8 +198,8 @@ const LuchuCreate = () => {
         setAnalyzeStatus('分析完成（使用缓存）')
         
         // 获取完整结果
-        const { data: statusData } = await import('../../services/luchuApi').then(m => m.getAnalyzeTaskStatus(task_id))
-        const resultData = statusData.data
+        const statusResponse = await getAnalyzeTaskStatus(task_id)
+        const resultData = statusResponse.data.data
         
         setMerchantData(resultData)
         if (resultData.images) {
