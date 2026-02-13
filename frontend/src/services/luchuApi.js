@@ -40,11 +40,13 @@ export const restoreVersion = (articleId, versionNumber) => {
 // ============ AI 相关 ============
 
 export const analyzeMerchant = (url) => {
-  return api.post('/api/luchu/ai/analyze', { url })
+  // 分析商家网站可能需要较长时间（Playwright渲染），设置2分钟超时
+  return api.post('/api/luchu/ai/analyze', { url }, { timeout: 120000 })
 }
 
 export const generateArticle = (data) => {
-  return api.post('/api/luchu/ai/generate', data)
+  // 生成文章也可能需要较长时间，设置2分钟超时
+  return api.post('/api/luchu/ai/generate', data, { timeout: 120000 })
 }
 
 export const regenerateSection = (articleId, section, instructions) => {

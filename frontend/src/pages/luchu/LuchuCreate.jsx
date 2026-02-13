@@ -79,11 +79,29 @@ const LuchuCreate = () => {
     }
   }
 
+  // 分析状态提示
+  const [analyzeStatus, setAnalyzeStatus] = useState('')
+
   // 步骤1：分析商家URL
   const handleAnalyze = async (values) => {
     setAnalyzing(true)
+    setAnalyzeStatus('正在连接商家网站...')
+    
     try {
+      // 设置状态提示
+      const statusTimer = setTimeout(() => {
+        setAnalyzeStatus('正在渲染页面并提取图片，请耐心等待（约30-60秒）...')
+      }, 3000)
+      
+      const longWaitTimer = setTimeout(() => {
+        setAnalyzeStatus('正在深度分析商家信息，首次访问较慢，请稍候...')
+      }, 15000)
+      
       const response = await analyzeMerchant(values.merchant_url)
+      
+      clearTimeout(statusTimer)
+      clearTimeout(longWaitTimer)
+      
       setMerchantData(response.data)
       
       // 默认选中所有图片
@@ -102,9 +120,17 @@ const LuchuCreate = () => {
       setCurrentStep(1)
     } catch (error) {
       console.error('分析失败:', error)
-      message.error(error.response?.data?.detail || '分析失败，请检查URL是否正确')
+      // 更友好的错误提示
+      if (error.code === 'ECONNABORTED' || error.message?.includes('timeout')) {
+        message.error('分析超时，请稍后重试。首次分析某网站可能需要较长时间。')
+      } else if (error.response?.status === 504) {
+        message.warning('分析时间较长，请稍后刷新页面查看结果，或重新尝试。')
+      } else {
+        message.error(error.response?.data?.detail || '分析失败，请检查URL是否正确')
+      }
     } finally {
       setAnalyzing(false)
+      setAnalyzeStatus('')
     }
   }
 
@@ -239,8 +265,9 @@ const LuchuCreate = () => {
             </Form.Item>
             
             <Alert
-              message="AI 将自动分析商家网站，提取品牌信息和适合的配图"
-              type="info"
+              message={analyzing ? analyzeStatus || "正在分析中..." : "AI 将自动分析商家网站，提取品牌信息和适合的配图"}
+              description={analyzing ? "首次分析新网站可能需要30-90秒，请耐心等待" : null}
+              type={analyzing ? "warning" : "info"}
               showIcon
               style={{ marginBottom: 16 }}
             />
@@ -253,7 +280,7 @@ const LuchuCreate = () => {
                 icon={<RobotOutlined />}
                 size="large"
               >
-                开始分析
+                {analyzing ? '分析中...' : '开始分析'}
               </Button>
             </Form.Item>
           </Form>
