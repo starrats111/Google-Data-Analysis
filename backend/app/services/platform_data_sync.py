@@ -715,8 +715,12 @@ class PlatformDataSyncService:
                             "status": order.get("status", "pending"),
                             "commission_amount": commission_amount,
                             "order_amount": order_amount,
-                            "merchant": order.get("merchant") or order.get("merchant_name") or order.get("mcid") or None,
-                            "mcid": order.get("mcid") or order.get("m_id") or None,
+                            "merchant": order.get("merchant") or order.get("merchant_name") or order.get("advertiser_name") or order.get("mcid") or None,
+                            # m_id 是数字ID（如154253），mcid 是slug（如hotelcollectiona）
+                            # 优先使用 m_id，便于与广告系列名（包含数字MID）匹配
+                            "m_id": order.get("m_id") or None,
+                            "mcid": order.get("mcid") or None,
+                            "merchant_id": order.get("m_id") or order.get("mcid") or None,
                         })
                     except Exception as e:
                         logger.warning(f"[LinkHaitao同步] 处理订单交易失败: {e}, 数据: {order}")

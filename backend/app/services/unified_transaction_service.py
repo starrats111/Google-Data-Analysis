@@ -122,8 +122,10 @@ class UnifiedTransactionService:
             transaction_time = datetime.now()
         
         # 提取merchant_id (MID)：各平台字段名不同
+        # LinkHaiTao: m_id 是数字ID（如154253），mcid 是slug（如hotelcollectiona）
+        # 优先使用数字ID（m_id），便于与广告系列名匹配
         merchant_id = (
-            str(tx.get("merchant_id") or tx.get("brand_id") or tx.get("mcid") or "")
+            str(tx.get("merchant_id") or tx.get("m_id") or tx.get("brand_id") or tx.get("mcid") or "")
         ).strip() or None
         
         # 准备数据
