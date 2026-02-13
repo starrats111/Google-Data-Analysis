@@ -144,7 +144,10 @@ async def generate_article_content(
             tracking_link=data.tracking_link,
             keyword_count=data.keyword_count,
             prompt_template=prompt_template,
-            images=data.images
+            images=data.images,
+            target_country=data.target_country,
+            target_language=data.target_language,
+            target_country_name=data.target_country_name or data.target_country
         )
         
         logger.info(f"[Luchu AI] 文章生成完成: {result.get('title', 'Untitled')}")

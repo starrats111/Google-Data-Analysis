@@ -52,6 +52,10 @@ class LuchuArticle(Base):
     brand_keyword = Column(String(200))
     keyword_count = Column(Integer, default=10)
     
+    # 目标国家/语言（本地化）
+    target_country = Column(String(10), default="US")
+    target_language = Column(String(10), default="en-US")
+    
     status = Column(String(20), default="draft")  # draft/pending/approved/rejected/ready/published
     
     publish_date = Column(Date)

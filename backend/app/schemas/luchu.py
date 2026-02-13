@@ -46,6 +46,9 @@ class LuchuArticleBase(BaseModel):
     brand_keyword: Optional[str] = None
     keyword_count: int = 10
     publish_date: Optional[date] = None
+    # 目标国家/语言
+    target_country: Optional[str] = "US"
+    target_language: Optional[str] = "en-US"
 
 
 class LuchuArticleCreate(LuchuArticleBase):
@@ -77,6 +80,8 @@ class LuchuArticleResponse(LuchuArticleBase):
     images: Optional[Dict[str, Any]] = None
     products: Optional[List[Dict[str, Any]]] = None
     version: int
+    target_country: Optional[str] = "US"
+    target_language: Optional[str] = "en-US"
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
     published_at: Optional[datetime] = None
@@ -124,6 +129,10 @@ class GenerateArticleRequest(BaseModel):
     publish_date: Optional[date] = None
     prompt_template_id: Optional[int] = None
     images: Optional[List[Dict[str, Any]]] = None
+    # 目标国家/语言（本地化）
+    target_country: str = "US"
+    target_language: str = "en-US"
+    target_country_name: Optional[str] = "美国"
 
 
 class GenerateArticleResponse(BaseModel):

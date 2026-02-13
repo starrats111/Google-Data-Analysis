@@ -105,6 +105,8 @@ async def create_article(
         brand_name=data.brand_name,
         brand_keyword=data.brand_keyword,
         keyword_count=data.keyword_count,
+        target_country=data.target_country or "US",
+        target_language=data.target_language or "en-US",
         publish_date=data.publish_date,
         status="draft",
         version=1
@@ -441,6 +443,8 @@ def _article_to_response(article: LuchuArticle) -> LuchuArticleResponse:
         brand_name=article.brand_name,
         brand_keyword=article.brand_keyword,
         keyword_count=article.keyword_count,
+        target_country=article.target_country or "US",
+        target_language=article.target_language or "en-US",
         status=article.status,
         publish_date=article.publish_date,
         version=article.version,

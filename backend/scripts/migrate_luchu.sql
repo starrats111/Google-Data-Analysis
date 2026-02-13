@@ -41,6 +41,10 @@ CREATE TABLE IF NOT EXISTS luchu_articles (
   brand_keyword TEXT,
   keyword_count INTEGER DEFAULT 10,
   
+  -- 目标国家/语言（本地化）
+  target_country TEXT DEFAULT 'US',
+  target_language TEXT DEFAULT 'en-US',
+  
   status TEXT DEFAULT 'draft',  -- draft/pending/approved/rejected/ready/published
   
   publish_date DATE,

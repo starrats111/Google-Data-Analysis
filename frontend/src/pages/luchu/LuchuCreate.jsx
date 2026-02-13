@@ -25,6 +25,25 @@ const { Title, Text, Paragraph } = Typography
 const { TextArea } = Input
 const { Step } = Steps
 
+// 支持的目标国家/语言配置
+const TARGET_COUNTRIES = [
+  { code: 'US', name: '美国', language: 'en-US', languageName: 'English (US)', flag: '🇺🇸' },
+  { code: 'GB', name: '英国', language: 'en-GB', languageName: 'English (UK)', flag: '🇬🇧' },
+  { code: 'CA', name: '加拿大', language: 'en-CA', languageName: 'English (CA)', flag: '🇨🇦' },
+  { code: 'AU', name: '澳大利亚', language: 'en-AU', languageName: 'English (AU)', flag: '🇦🇺' },
+  { code: 'DE', name: '德国', language: 'de', languageName: 'Deutsch', flag: '🇩🇪' },
+  { code: 'FR', name: '法国', language: 'fr', languageName: 'Français', flag: '🇫🇷' },
+  { code: 'ES', name: '西班牙', language: 'es', languageName: 'Español', flag: '🇪🇸' },
+  { code: 'IT', name: '意大利', language: 'it', languageName: 'Italiano', flag: '🇮🇹' },
+  { code: 'JP', name: '日本', language: 'ja', languageName: '日本語', flag: '🇯🇵' },
+  { code: 'KR', name: '韩国', language: 'ko', languageName: '한국어', flag: '🇰🇷' },
+  { code: 'BR', name: '巴西', language: 'pt-BR', languageName: 'Português (BR)', flag: '🇧🇷' },
+  { code: 'MX', name: '墨西哥', language: 'es-MX', languageName: 'Español (MX)', flag: '🇲🇽' },
+  { code: 'NL', name: '荷兰', language: 'nl', languageName: 'Nederlands', flag: '🇳🇱' },
+  { code: 'PL', name: '波兰', language: 'pl', languageName: 'Polski', flag: '🇵🇱' },
+  { code: 'SE', name: '瑞典', language: 'sv', languageName: 'Svenska', flag: '🇸🇪' },
+]
+
 const LuchuCreate = () => {
   const navigate = useNavigate()
   const [currentStep, setCurrentStep] = useState(0)
@@ -75,7 +94,8 @@ const LuchuCreate = () => {
       // 预填充表单
       step2Form.setFieldsValue({
         brand_name: response.data.brand_name,
-        keyword_count: 10
+        keyword_count: 10,
+        target_country: 'US'  // 默认美国
       })
       
       message.success('分析完成')
@@ -100,6 +120,9 @@ const LuchuCreate = () => {
       // 构建选中的图片
       const images = selectedImages.map(i => merchantData.images[i])
       
+      // 获取目标国家信息
+      const targetCountry = TARGET_COUNTRIES.find(c => c.code === values.target_country) || TARGET_COUNTRIES[0]
+      
       const response = await generateArticle({
         merchant_data: merchantData,
         tracking_link: values.tracking_link,
@@ -107,7 +130,10 @@ const LuchuCreate = () => {
         keyword_count: values.keyword_count,
         publish_date: values.publish_date?.format('YYYY-MM-DD'),
         prompt_template_id: values.prompt_template_id,
-        images: images
+        images: images,
+        target_country: targetCountry.code,
+        target_language: targetCountry.language,
+        target_country_name: targetCountry.name
       })
       
       setArticleData({
@@ -117,7 +143,9 @@ const LuchuCreate = () => {
         merchant_url: step1Form.getFieldValue('merchant_url'),
         brand_name: values.brand_name,
         keyword_count: values.keyword_count,
-        publish_date: values.publish_date?.format('YYYY-MM-DD')
+        publish_date: values.publish_date?.format('YYYY-MM-DD'),
+        target_country: targetCountry.code,
+        target_language: targetCountry.language
       })
       
       message.success('文章生成完成')
@@ -317,6 +345,26 @@ const LuchuCreate = () => {
                     {websites.map(w => (
                       <Select.Option key={w.id} value={w.id}>
                         {w.name} ({w.domain})
+                      </Select.Option>
+                    ))}
+                  </Select>
+                </Form.Item>
+                
+                <Form.Item
+                  name="target_country"
+                  label="目标国家/语言"
+                  rules={[{ required: true, message: '请选择目标国家' }]}
+                  tooltip="文章将使用该国家的语言和本地化表达方式"
+                  initialValue="US"
+                >
+                  <Select 
+                    placeholder="选择目标国家"
+                    showSearch
+                    optionFilterProp="children"
+                  >
+                    {TARGET_COUNTRIES.map(c => (
+                      <Select.Option key={c.code} value={c.code}>
+                        {c.flag} {c.name} - {c.languageName}
                       </Select.Option>
                     ))}
                   </Select>
