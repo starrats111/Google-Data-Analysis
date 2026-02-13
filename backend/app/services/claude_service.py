@@ -17,10 +17,13 @@ class ClaudeService:
     # 哈基米代理 base_url
     HAGIMI_BASE_URL = "https://api.gemai.cc"
     # 默认模型
-    DEFAULT_MODEL = "claude-sonnet-4-20250514"
+    DEFAULT_MODEL = "[特价B]claude-sonnet-4-20250514"
+    DEFAULT_FALLBACK_MODEL = "[特价B]claude-opus-4-5-20251101"
     
-    def __init__(self, api_key: str, base_url: str = None, model: str = None):
+    def __init__(self, api_key: str, base_url: str = None, model: str = None, fallback_model: str = None):
         self.model = model or self.DEFAULT_MODEL
+        self.fallback_model = fallback_model or self.DEFAULT_FALLBACK_MODEL
+        self.current_model = self.model  # 当前使用的模型
         
         # 如果是哈基米的 API Key（以 sk- 开头），使用哈基米代理
         if api_key.startswith("sk-"):
@@ -29,11 +32,36 @@ class ClaudeService:
             if base_url.endswith("/v1"):
                 base_url = base_url[:-3]
             self.client = Anthropic(api_key=api_key, base_url=base_url)
-            logger.info(f"[Claude] 使用哈基米代理: {base_url}, 模型: {self.model}")
+            logger.info(f"[Claude] 使用哈基米代理: {base_url}, 主模型: {self.model}, 备用: {self.fallback_model}")
         else:
             self.client = Anthropic(api_key=api_key)
             logger.info(f"[Claude] 使用 Anthropic 官方 API, 模型: {self.model}")
         self.tools = self._define_tools()
+    
+    def _call_api_with_fallback(self, **kwargs):
+        """调用 API，主模型失败时自动切换到备用模型"""
+        # 尝试主模型
+        try:
+            kwargs['model'] = self.model
+            response = self.client.messages.create(**kwargs)
+            self.current_model = self.model
+            return response
+        except Exception as e:
+            error_msg = str(e)
+            # 检查是否是模型不可用的错误
+            if "无权访问" in error_msg or "forbidden" in error_msg.lower() or "not allowed" in error_msg.lower():
+                logger.warning(f"[Claude] 主模型 {self.model} 不可用，切换到备用模型: {self.fallback_model}")
+                try:
+                    kwargs['model'] = self.fallback_model
+                    response = self.client.messages.create(**kwargs)
+                    self.current_model = self.fallback_model
+                    logger.info(f"[Claude] 使用备用模型成功: {self.fallback_model}")
+                    return response
+                except Exception as fallback_error:
+                    logger.error(f"[Claude] 备用模型也失败: {fallback_error}")
+                    raise fallback_error
+            else:
+                raise e
     
     def _define_tools(self) -> List[Dict]:
         """定义可用的工具"""
@@ -113,8 +141,7 @@ class ClaudeService:
         }]
         
         try:
-            response = self.client.messages.create(
-                model=self.model,
+            response = self._call_api_with_fallback(
                 max_tokens=4096,
                 tools=self.tools,
                 messages=messages
@@ -138,8 +165,9 @@ class ClaudeService:
                 messages.append({"role": "assistant", "content": response.content})
                 messages.append({"role": "user", "content": tool_results})
                 
+                # 后续调用使用当前已确定可用的模型
                 response = self.client.messages.create(
-                    model=self.model,
+                    model=self.current_model,
                     max_tokens=4096,
                     tools=self.tools,
                     messages=messages
@@ -149,7 +177,7 @@ class ClaudeService:
             for content in response.content:
                 if hasattr(content, 'text'):
                     result = self._parse_json_response(content.text)
-                    logger.info(f"[Claude] 分析完成: {result.get('brand_name', 'Unknown')}")
+                    logger.info(f"[Claude] 分析完成: {result.get('brand_name', 'Unknown')} (使用模型: {self.current_model})")
                     return result
             
             raise Exception("分析失败：无法获取结果")
@@ -209,8 +237,7 @@ class ClaudeService:
             prompt = f"{prompt}\n\n## 重要：本地化要求\n{localization_instruction}"
         
         try:
-            response = self.client.messages.create(
-                model=self.model,
+            response = self._call_api_with_fallback(
                 max_tokens=8192,
                 messages=[{"role": "user", "content": prompt}]
             )
@@ -220,7 +247,7 @@ class ClaudeService:
                     result = self._parse_json_response(content.text)
                     # 添加图片信息
                     result['images'] = self._format_images(article_images)
-                    logger.info(f"[Claude] 文章生成完成: {result.get('title', 'Untitled')}")
+                    logger.info(f"[Claude] 文章生成完成: {result.get('title', 'Untitled')} (使用模型: {self.current_model})")
                     return result
             
             raise Exception("生成失败")
@@ -262,8 +289,7 @@ class ClaudeService:
 请只返回修改后的 {section} 内容，不需要其他解释。"""
         
         try:
-            response = self.client.messages.create(
-                model=self.model,
+            response = self._call_api_with_fallback(
                 max_tokens=4096,
                 messages=[{"role": "user", "content": prompt}]
             )
@@ -586,7 +612,7 @@ Write the article in natural English appropriate for {country_name} readers.
 _claude_service: Optional[ClaudeService] = None
 
 
-def get_claude_service(api_key: str = None, base_url: str = None, model: str = None) -> ClaudeService:
+def get_claude_service(api_key: str = None, base_url: str = None, model: str = None, fallback_model: str = None) -> ClaudeService:
     """获取 Claude 服务实例"""
     global _claude_service
     
@@ -600,7 +626,9 @@ def get_claude_service(api_key: str = None, base_url: str = None, model: str = N
             base_url = getattr(settings, 'CLAUDE_BASE_URL', None)
         if model is None:
             model = getattr(settings, 'CLAUDE_MODEL', None)
-        _claude_service = ClaudeService(api_key, base_url, model)
+        if fallback_model is None:
+            fallback_model = getattr(settings, 'CLAUDE_MODEL_FALLBACK', None)
+        _claude_service = ClaudeService(api_key, base_url, model, fallback_model)
     
     return _claude_service
 
