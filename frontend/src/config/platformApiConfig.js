@@ -1,6 +1,7 @@
 /**
  * 平台API配置
  * 定义每个平台需要的API字段
+ * 所有平台统一只需要 API Token，使用后端默认的 API URL
  */
 export const PLATFORM_API_CONFIG = {
   // ========== CG (CollabGlow) ==========
@@ -12,14 +13,6 @@ export const PLATFORM_API_CONFIG = {
         type: 'password',
         placeholder: '请输入 CollabGlow API Token',
         help: '用于同步 CollabGlow 佣金数据',
-        required: false
-      },
-      {
-        name: 'collabglow_api_url',
-        label: 'CollabGlow API URL（可选，用于不同渠道）',
-        type: 'text',
-        placeholder: '例如: https://api.collabglow.com/api',
-        help: '如果CollabGlow有多个渠道，每个渠道可能有不同的API地址。留空则使用默认地址。',
         required: false
       }
     ]
@@ -33,14 +26,6 @@ export const PLATFORM_API_CONFIG = {
         type: 'password',
         placeholder: '请输入 CollabGlow API Token',
         help: '用于同步 CollabGlow 佣金数据',
-        required: false
-      },
-      {
-        name: 'collabglow_api_url',
-        label: 'CollabGlow API URL（可选，用于不同渠道）',
-        type: 'text',
-        placeholder: '例如: https://api.collabglow.com/api',
-        help: '如果CollabGlow有多个渠道，每个渠道可能有不同的API地址。留空则使用默认地址。',
         required: false
       }
     ]
@@ -94,15 +79,7 @@ export const PLATFORM_API_CONFIG = {
         label: 'Rewardoo API Token',
         type: 'password',
         placeholder: '请输入 Rewardoo API Token',
-        help: '用于同步 Rewardoo 交易数据（TransactionDetails API）',
-        required: false
-      },
-      {
-        name: 'rewardoo_api_url',
-        label: 'Rewardoo API URL（可选，用于不同渠道）',
-        type: 'text',
-        placeholder: '例如: https://api.rewardoo.com/api 或 https://api-channel1.rewardoo.com/api',
-        help: '如果Rewardoo有多个渠道，每个渠道可能有不同的API地址。留空则使用默认地址。',
+        help: '用于同步 Rewardoo 交易数据',
         required: false
       }
     ]
@@ -116,15 +93,7 @@ export const PLATFORM_API_CONFIG = {
         label: 'Rewardoo API Token',
         type: 'password',
         placeholder: '请输入 Rewardoo API Token',
-        help: '用于同步 Rewardoo 交易数据（TransactionDetails API）',
-        required: false
-      },
-      {
-        name: 'rewardoo_api_url',
-        label: 'Rewardoo API URL（可选，用于不同渠道）',
-        type: 'text',
-        placeholder: '例如: https://api.rewardoo.com/api 或 https://api-channel1.rewardoo.com/api',
-        help: '如果Rewardoo有多个渠道，每个渠道可能有不同的API地址。留空则使用默认地址。',
+        help: '用于同步 Rewardoo 交易数据',
         required: false
       }
     ]
@@ -140,14 +109,6 @@ export const PLATFORM_API_CONFIG = {
         placeholder: '请输入 Linkbux API Token',
         help: '用于同步 Linkbux 交易数据',
         required: false
-      },
-      {
-        name: 'lb_api_url',
-        label: 'Linkbux API URL（必填）',
-        type: 'text',
-        placeholder: '例如: https://www.linkbux.com/api',
-        help: 'Linkbux平台的API基础URL，必须配置',
-        required: true
       }
     ]
   },
@@ -162,14 +123,6 @@ export const PLATFORM_API_CONFIG = {
         placeholder: '请输入 PartnerBoost API Token',
         help: '用于同步 PartnerBoost 交易数据',
         required: false
-      },
-      {
-        name: 'pb_api_url',
-        label: 'PartnerBoost API URL（必填）',
-        type: 'text',
-        placeholder: '例如: https://app.partnerboost.com/api',
-        help: 'PartnerBoost平台的API基础URL，必须配置',
-        required: true
       }
     ]
   },
@@ -198,14 +151,6 @@ export const PLATFORM_API_CONFIG = {
         placeholder: '请输入 BrandSparkHub API Token',
         help: '用于同步 BrandSparkHub 交易数据',
         required: false
-      },
-      {
-        name: 'bsh_api_url',
-        label: 'BrandSparkHub API URL（必填）',
-        type: 'text',
-        placeholder: '例如: https://www.brandsparkhub.com/api',
-        help: 'BrandSparkHub平台的API基础URL，必须配置',
-        required: true
       }
     ]
   },
@@ -220,40 +165,9 @@ export const PLATFORM_API_CONFIG = {
         placeholder: '请输入 CreatorFlare API Token',
         help: '用于同步 CreatorFlare 交易数据',
         required: false
-      },
-      {
-        name: 'cf_api_url',
-        label: 'CreatorFlare API URL（必填）',
-        type: 'text',
-        placeholder: '例如: https://www.creatorflare.com/api',
-        help: 'CreatorFlare平台的API基础URL，必须配置',
-        required: true
       }
     ]
   },
-  
-  // 可以添加更多平台配置
-  // 例如：
-  // amazon: {
-  //   fields: [
-  //     {
-  //       name: 'amazon_access_key',
-  //       label: 'Amazon Access Key',
-  //       type: 'text',
-  //       placeholder: '请输入 Amazon Access Key',
-  //       help: '用于访问 Amazon Associates API',
-  //       required: true
-  //     },
-  //     {
-  //       name: 'amazon_secret_key',
-  //       label: 'Amazon Secret Key',
-  //       type: 'password',
-  //       placeholder: '请输入 Amazon Secret Key',
-  //       help: '用于访问 Amazon Associates API',
-  //       required: true
-  //     }
-  //   ]
-  // },
   
   // 默认配置（如果平台没有特定配置，使用这个）
   default: {
@@ -353,4 +267,3 @@ export const mergeApiConfigToNotes = (notes, apiConfig) => {
   
   return JSON.stringify(notesData)
 }
-
