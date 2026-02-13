@@ -647,17 +647,26 @@ Write the article in natural English appropriate for {country_name} readers.
                     }
                 """)
                 
-                # 并行下载图片并转为 Base64（优化性能）
-                import asyncio
+                # 串行下载图片并转为 Base64（更可靠）
                 import base64 as base64_module
                 
-                async def download_single_image(img_info, page_request):
-                    """下载单张图片"""
+                images_data = []
+                # 限制只处理前 5 张图片，提高速度
+                for img_info in image_urls[:5]:
+                    img_url = img_info['url']
+                    img_result = {
+                        'url': img_url,
+                        'src': img_url,
+                        'base64': '',  # 空字符串而非 None，前端可以用代理
+                        'alt': img_info.get('alt', ''),
+                        'width': img_info.get('width', 0),
+                        'height': img_info.get('height', 0)
+                    }
+                    
                     try:
-                        img_url = img_info['url']
                         # 使用 Playwright 请求图片（自动带上正确的 Cookie 和 Referer）
-                        # 缩短超时时间到 5 秒
-                        response = await page_request.get(img_url, timeout=5000)
+                        # 超时时间 8 秒，确保更多图片能下载成功
+                        response = await page.request.get(img_url, timeout=8000)
                         if response.ok:
                             img_bytes = await response.body()
                             if len(img_bytes) > 500:  # 至少 500 字节
@@ -673,39 +682,17 @@ Write the article in natural English appropriate for {country_name} readers.
                                     mime = 'image/jpeg'
                                 
                                 b64_str = base64_module.b64encode(img_bytes).decode('utf-8')
+                                img_result['base64'] = f'data:{mime};base64,{b64_str}'
                                 logger.info(f"[Claude] 图片下载成功: {img_url[:50]}... ({len(img_bytes)} bytes)")
-                                return {
-                                    'url': img_url,
-                                    'src': img_url,
-                                    'base64': f'data:{mime};base64,{b64_str}',
-                                    'alt': img_info.get('alt', ''),
-                                    'width': img_info.get('width', 0),
-                                    'height': img_info.get('height', 0)
-                                }
+                            else:
+                                logger.warning(f"[Claude] 图片太小跳过: {img_url[:50]}... ({len(img_bytes)} bytes)")
+                        else:
+                            logger.warning(f"[Claude] 图片请求失败: {img_url[:50]}... (status={response.status})")
                     except Exception as e:
-                        logger.warning(f"[Claude] 图片下载失败: {img_info['url'][:50]}... - {e}")
-                    # 下载失败时返回只有 URL 的数据（前端可以用代理加载）
-                    return {
-                        'url': img_info['url'],
-                        'src': img_info['url'],
-                        'base64': None,
-                        'alt': img_info.get('alt', ''),
-                        'width': img_info.get('width', 0),
-                        'height': img_info.get('height', 0)
-                    }
-                
-                # 并行下载前 6 张图片（减少数量，提高速度）
-                download_tasks = [
-                    download_single_image(img_info, page.request) 
-                    for img_info in image_urls[:6]
-                ]
-                images_results = await asyncio.gather(*download_tasks, return_exceptions=True)
-                
-                # 过滤有效结果
-                images_data = []
-                for result in images_results:
-                    if isinstance(result, dict):
-                        images_data.append(result)
+                        logger.warning(f"[Claude] 图片下载失败: {img_url[:50]}... - {e}")
+                    
+                    # 无论成功与否都添加（保留 URL 供代理使用）
+                    images_data.append(img_result)
                 
                 # 统计成功下载的数量
                 success_count = sum(1 for img in images_data if img.get('base64'))
@@ -842,16 +829,18 @@ Write the article in natural English appropriate for {country_name} readers.
             return result
         
         # 创建多级 URL 映射
-        url_to_data = {}  # 完整图片数据（包含 base64）
+        url_to_data = {}  # 完整图片数据（包含 base64 和 url）
         normalized_to_data = {}  # 规范化 URL -> 数据
         path_to_data = {}  # 路径 -> 数据
         
         for img in self._last_playwright_images:
             url = img.get('url', '')
             base64_data = img.get('base64', '')
-            if url and base64_data:
+            # 只要有 URL 就加入映射，即使没有 Base64（前端可用代理加载）
+            if url:
                 img_data = {
-                    'base64': base64_data,
+                    'base64': base64_data if base64_data else '',  # 确保是空字符串而非 None
+                    'url': url,  # 保留原始 URL，前端可用于代理
                     'alt': img.get('alt', ''),
                     'width': img.get('width', 0),
                     'height': img.get('height', 0)
@@ -909,9 +898,13 @@ Write the article in natural English appropriate for {country_name} readers.
                         break
             
             if matched_data:
-                img['base64'] = matched_data['base64']
+                # 合并 base64 数据（可能为空）
+                img['base64'] = matched_data.get('base64', '')
+                # 确保 URL 存在（前端代理需要）
+                if not img.get('url') and matched_data.get('url'):
+                    img['url'] = matched_data['url']
                 merged_count += 1
-                logger.debug(f"[Claude] 图片已合并 ({match_type}): {img_url[:50]}...")
+                logger.debug(f"[Claude] 图片已合并 ({match_type}): {img_url[:50]}... (有base64={bool(matched_data.get('base64'))})")
         
         # 如果匹配失败的图片太多，直接将 Playwright 的数据按顺序附加
         unmerged_count = len(result.get('images', [])) - merged_count
