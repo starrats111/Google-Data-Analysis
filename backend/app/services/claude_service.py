@@ -748,40 +748,158 @@ Write the article in natural English appropriate for {country_name} readers.
         
         raise Exception("无法解析 JSON 响应")
     
+    def _normalize_url(self, url: str) -> str:
+        """
+        规范化 URL，用于模糊匹配
+        - 移除协议前缀
+        - 移除查询参数
+        - 移除末尾斜杠
+        - 转小写
+        """
+        if not url:
+            return ''
+        # 移除协议
+        normalized = url.replace('https://', '').replace('http://', '')
+        # 移除查询参数
+        if '?' in normalized:
+            normalized = normalized.split('?')[0]
+        # 移除末尾斜杠
+        normalized = normalized.rstrip('/')
+        # 转小写
+        return normalized.lower()
+    
+    def _extract_image_path(self, url: str) -> str:
+        """
+        提取图片路径的核心部分（文件名+扩展名）
+        用于更宽松的匹配
+        """
+        if not url:
+            return ''
+        # 移除协议和域名，获取路径
+        path = url.replace('https://', '').replace('http://', '')
+        if '/' in path:
+            path = path.split('/', 1)[1] if '/' in path else path
+        # 移除查询参数
+        if '?' in path:
+            path = path.split('?')[0]
+        return path.lower()
+    
     def _merge_images_with_base64(self, result: Dict) -> Dict:
         """
         将 Claude 选择的图片与 Playwright 提取的 Base64 数据合并
         
         Claude 只返回了图片的 URL，但 Playwright 已经下载并转换为 Base64
         这里将两者匹配，让前端可以直接显示 Base64 图片
+        
+        匹配策略（按优先级）：
+        1. 完全匹配 URL
+        2. 协议互换匹配（http <-> https）
+        3. 规范化匹配（忽略查询参数、协议、大小写）
+        4. 路径匹配（只比较图片路径部分）
         """
         if not result.get('images') or not self._last_playwright_images:
+            # 如果 Claude 没有返回图片但 Playwright 有，直接使用 Playwright 的图片
+            if not result.get('images') and self._last_playwright_images:
+                logger.info(f"[Claude] Claude 未返回图片，使用 Playwright 提取的 {len(self._last_playwright_images)} 张图片")
+                result['images'] = []
+                for i, img in enumerate(self._last_playwright_images[:5]):  # 最多5张
+                    result['images'].append({
+                        'url': img.get('url', ''),
+                        'base64': img.get('base64', ''),
+                        'alt': img.get('alt', f'Product image {i+1}'),
+                        'type': 'hero' if i == 0 else 'content'
+                    })
+                return result
+            
             logger.info(f"[Claude] 无需合并图片数据: images={len(result.get('images', []))}, playwright={len(self._last_playwright_images)}")
             return result
         
-        # 创建 URL -> Base64 映射
-        url_to_base64 = {}
+        # 创建多级 URL 映射
+        url_to_data = {}  # 完整图片数据（包含 base64）
+        normalized_to_data = {}  # 规范化 URL -> 数据
+        path_to_data = {}  # 路径 -> 数据
+        
         for img in self._last_playwright_images:
             url = img.get('url', '')
-            base64 = img.get('base64', '')
-            if url and base64:
-                url_to_base64[url] = base64
-                # 也处理可能的 URL 变体（去掉协议前缀）
+            base64_data = img.get('base64', '')
+            if url and base64_data:
+                img_data = {
+                    'base64': base64_data,
+                    'alt': img.get('alt', ''),
+                    'width': img.get('width', 0),
+                    'height': img.get('height', 0)
+                }
+                # 完全匹配
+                url_to_data[url] = img_data
+                # 协议互换
                 if url.startswith('https://'):
-                    url_to_base64[url.replace('https://', 'http://')] = base64
+                    url_to_data[url.replace('https://', 'http://')] = img_data
                 elif url.startswith('http://'):
-                    url_to_base64[url.replace('http://', 'https://')] = base64
+                    url_to_data[url.replace('http://', 'https://')] = img_data
+                # 规范化匹配
+                normalized = self._normalize_url(url)
+                if normalized:
+                    normalized_to_data[normalized] = img_data
+                # 路径匹配
+                path = self._extract_image_path(url)
+                if path:
+                    path_to_data[path] = img_data
         
-        logger.info(f"[Claude] Base64 映射表大小: {len(url_to_base64)}")
+        logger.info(f"[Claude] URL 映射表: 完全={len(url_to_data)}, 规范化={len(normalized_to_data)}, 路径={len(path_to_data)}")
         
         # 合并 Base64 到结果图片
         merged_count = 0
         for img in result.get('images', []):
             img_url = img.get('url', '')
-            if img_url in url_to_base64:
-                img['base64'] = url_to_base64[img_url]
+            matched_data = None
+            match_type = None
+            
+            # 策略1：完全匹配
+            if img_url in url_to_data:
+                matched_data = url_to_data[img_url]
+                match_type = '完全匹配'
+            
+            # 策略2：规范化匹配
+            if not matched_data:
+                normalized = self._normalize_url(img_url)
+                if normalized in normalized_to_data:
+                    matched_data = normalized_to_data[normalized]
+                    match_type = '规范化匹配'
+            
+            # 策略3：路径匹配
+            if not matched_data:
+                path = self._extract_image_path(img_url)
+                if path in path_to_data:
+                    matched_data = path_to_data[path]
+                    match_type = '路径匹配'
+            
+            # 策略4：包含匹配（URL 是否包含某个路径）
+            if not matched_data:
+                for p_path, p_data in path_to_data.items():
+                    if p_path and len(p_path) > 10 and p_path in img_url.lower():
+                        matched_data = p_data
+                        match_type = '包含匹配'
+                        break
+            
+            if matched_data:
+                img['base64'] = matched_data['base64']
                 merged_count += 1
-                logger.debug(f"[Claude] 图片已合并 Base64: {img_url[:50]}...")
+                logger.debug(f"[Claude] 图片已合并 ({match_type}): {img_url[:50]}...")
+        
+        # 如果匹配失败的图片太多，直接将 Playwright 的 base64 按顺序附加
+        unmerged_count = len(result.get('images', [])) - merged_count
+        if unmerged_count > 0 and self._last_playwright_images:
+            logger.warning(f"[Claude] {unmerged_count} 张图片未能匹配，尝试按顺序填充")
+            playwright_idx = 0
+            for img in result.get('images', []):
+                if not img.get('base64') and playwright_idx < len(self._last_playwright_images):
+                    pw_img = self._last_playwright_images[playwright_idx]
+                    if pw_img.get('base64'):
+                        img['base64'] = pw_img.get('base64')
+                        img['url'] = img.get('url') or pw_img.get('url', '')
+                        merged_count += 1
+                        logger.debug(f"[Claude] 图片按顺序填充: idx={playwright_idx}")
+                    playwright_idx += 1
         
         logger.info(f"[Claude] 成功合并 {merged_count}/{len(result.get('images', []))} 张图片的 Base64 数据")
         

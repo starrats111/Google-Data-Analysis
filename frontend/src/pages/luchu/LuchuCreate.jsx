@@ -1,7 +1,7 @@
 /**
  * 露出内容创建页面
  */
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useCallback } from 'react'
 import { 
   Card, Steps, Form, Input, Select, Button, Row, Col, 
   Spin, message, DatePicker, InputNumber, Image, Space,
@@ -9,7 +9,8 @@ import {
 } from 'antd'
 import { 
   LinkOutlined, RobotOutlined, EditOutlined, 
-  CheckOutlined, LoadingOutlined, ReloadOutlined
+  CheckOutlined, LoadingOutlined, ReloadOutlined,
+  PictureOutlined
 } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
 import { 
@@ -17,13 +18,103 @@ import {
   generateArticle, 
   createArticle,
   getWebsites,
-  getPromptTemplates
+  getPromptTemplates,
+  getProxyImageUrl
 } from '../../services/luchuApi'
 import dayjs from 'dayjs'
 
 const { Title, Text, Paragraph } = Typography
 const { TextArea } = Input
 const { Step } = Steps
+
+/**
+ * SmartImage 组件 - 三重保障确保图片显示
+ * 1. 优先使用 Base64（最可靠，无需网络请求）
+ * 2. Base64 缺失时，使用后端图片代理（绕过防盗链）
+ * 3. 加载失败时，显示友好占位符
+ */
+const SmartImage = ({ img, width = 100, height = 100, style = {}, onClick }) => {
+  const [loadError, setLoadError] = useState(false)
+  const [currentSrc, setCurrentSrc] = useState('')
+  const [retryCount, setRetryCount] = useState(0)
+  
+  // 计算图片源
+  useEffect(() => {
+    setLoadError(false)
+    setRetryCount(0)
+    
+    // 优先使用 Base64
+    if (img.base64 && img.base64.startsWith('data:')) {
+      setCurrentSrc(img.base64)
+      return
+    }
+    
+    // 其次使用代理 URL
+    const originalUrl = img.url || img.src || ''
+    if (originalUrl) {
+      setCurrentSrc(getProxyImageUrl(originalUrl))
+      return
+    }
+    
+    // 没有任何图片源
+    setLoadError(true)
+  }, [img])
+  
+  // 处理加载错误
+  const handleError = useCallback(() => {
+    const originalUrl = img.url || img.src || ''
+    
+    // 如果当前是代理 URL 且失败，尝试直接加载原图（某些图片可能不需要代理）
+    if (retryCount === 0 && originalUrl && currentSrc.includes('proxy-public')) {
+      setRetryCount(1)
+      setCurrentSrc(originalUrl)
+      return
+    }
+    
+    // 所有尝试都失败，显示占位符
+    setLoadError(true)
+  }, [img, retryCount, currentSrc])
+  
+  // 显示占位符
+  if (loadError || !currentSrc) {
+    return (
+      <div 
+        onClick={onClick}
+        style={{ 
+          width, 
+          height, 
+          display: 'flex', 
+          flexDirection: 'column',
+          alignItems: 'center', 
+          justifyContent: 'center',
+          background: 'linear-gradient(135deg, #f5f5f5 0%, #e8e8e8 100%)',
+          color: '#999',
+          fontSize: 11,
+          borderRadius: 4,
+          cursor: onClick ? 'pointer' : 'default',
+          ...style
+        }}
+      >
+        <PictureOutlined style={{ fontSize: 24, marginBottom: 4, color: '#bbb' }} />
+        <span style={{ textAlign: 'center', padding: '0 4px', lineHeight: 1.2 }}>
+          {img.alt ? (img.alt.length > 20 ? img.alt.substring(0, 20) + '...' : img.alt) : '暂无图片'}
+        </span>
+      </div>
+    )
+  }
+  
+  return (
+    <img
+      src={currentSrc}
+      width={width}
+      height={height}
+      style={{ objectFit: 'cover', display: 'block', ...style }}
+      alt={img.alt || '商家图片'}
+      onError={handleError}
+      onClick={onClick}
+    />
+  )
+}
 
 // 支持的目标国家/语言配置
 const TARGET_COUNTRIES = [
@@ -335,60 +426,38 @@ const LuchuCreate = () => {
               )}
               
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-                {merchantData.images?.map((img, index) => {
-                  // 优先使用 Base64 数据（最可靠），否则使用 URL
-                  const imageUrl = img.base64 || img.url || img.src || '';
-                  
-                  return (
-                    <div 
-                      key={index} 
-                      onClick={() => toggleImageSelection(index)}
-                      style={{ 
-                        cursor: 'pointer',
-                        border: selectedImages.includes(index) ? '3px solid #1890ff' : '1px solid #d9d9d9',
-                        borderRadius: 4,
-                        padding: 4,
-                        position: 'relative',
-                        background: '#f5f5f5'
-                      }}
-                    >
-                      {imageUrl ? (
-                        <img
-                          src={imageUrl}
-                          width={100}
-                          height={100}
-                          style={{ objectFit: 'cover', display: 'block' }}
-                          alt={img.alt || '商家图片'}
-                        />
-                      ) : (
-                        <div style={{ 
-                          width: 100, 
-                          height: 100, 
-                          display: 'flex', 
-                          alignItems: 'center', 
-                          justifyContent: 'center',
-                          background: '#f0f0f0',
-                          color: '#999',
-                          fontSize: 12
-                        }}>
-                          无图片
-                        </div>
-                      )}
-                      {selectedImages.includes(index) && (
-                        <CheckOutlined style={{ 
-                          position: 'absolute', 
-                          top: 4, 
-                          right: 4, 
-                          color: '#1890ff',
-                          fontSize: 16,
-                          background: 'white',
-                          borderRadius: '50%',
-                          padding: 2
-                        }} />
-                      )}
-                    </div>
-                  )
-                })}
+                {merchantData.images?.map((img, index) => (
+                  <div 
+                    key={index} 
+                    onClick={() => toggleImageSelection(index)}
+                    style={{ 
+                      cursor: 'pointer',
+                      border: selectedImages.includes(index) ? '3px solid #1890ff' : '1px solid #d9d9d9',
+                      borderRadius: 4,
+                      padding: 4,
+                      position: 'relative',
+                      background: '#f5f5f5'
+                    }}
+                  >
+                    <SmartImage 
+                      img={img} 
+                      width={100} 
+                      height={100}
+                    />
+                    {selectedImages.includes(index) && (
+                      <CheckOutlined style={{ 
+                        position: 'absolute', 
+                        top: 4, 
+                        right: 4, 
+                        color: '#1890ff',
+                        fontSize: 16,
+                        background: 'white',
+                        borderRadius: '50%',
+                        padding: 2
+                      }} />
+                    )}
+                  </div>
+                ))}
               </div>
             </Card>
           </Col>
@@ -536,10 +605,11 @@ const LuchuCreate = () => {
                 {articleData.images?.hero && (
                   <div style={{ marginTop: 16 }}>
                     <Text strong>主图：</Text>
-                    <img
-                      src={articleData.images.hero.base64 || articleData.images.hero.url}
-                      alt="主图"
-                      style={{ width: '100%', marginTop: 8, maxHeight: 300, objectFit: 'cover' }}
+                    <SmartImage 
+                      img={articleData.images.hero}
+                      width="100%"
+                      height={200}
+                      style={{ marginTop: 8, maxHeight: 300, borderRadius: 4 }}
                     />
                   </div>
                 )}
