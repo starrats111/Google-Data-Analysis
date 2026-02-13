@@ -110,20 +110,32 @@ class ClaudeService:
         
         messages = [{
             "role": "user",
-            "content": f"""请分析以下商家网站，提取：
+            "content": f"""请分析以下商家网站，提取品牌信息和产品图片。
+
+**重要：图片提取步骤**
+1. 首先获取主页 {url}
+2. 如果主页图片不够，请继续访问产品页面（如 /products, /collections, /shop 等）
+3. 在HTML中查找以下图片来源：
+   - <img src="..."> 标签
+   - <picture><source srcset="..."></picture> 标签  
+   - CSS background-image: url(...)
+   - data-src, data-lazy-src 等懒加载属性
+   - OpenGraph meta标签 (og:image)
+4. 图片URL可能是相对路径，请转换为完整URL
+
+**需要提取的信息：**
 1. 品牌名称 (brand_name)
 2. 品牌描述（简短，brand_description）
 3. 主营产品类型 (product_type)
 4. 当前促销活动或热门产品 (promotions)
-5. 从网页中选取5张最适合做博客配图的高质量图片URL（1张主图+4张内容图）
-   - 优先选择产品图、场景图
-   - 过滤掉logo、小图标、banner广告
-   - 图片尺寸应大于400x400
-6. 为每张图片生成简短的alt描述
+5. 选取5张高质量产品图片URL（1张主图hero + 4张内容图content）
+   - 优先选择：产品展示图、生活场景图、使用效果图
+   - 过滤掉：logo、图标、按钮、小于200px的图片
+6. 为每张图片生成英文alt描述
 
 商家网址: {url}
 
-请以JSON格式返回结果，格式如下：
+**返回JSON格式：**
 {{
   "brand_name": "品牌名称",
   "brand_description": "品牌描述",
@@ -133,11 +145,13 @@ class ClaudeService:
     {{"name": "产品名", "price": "$XX.XX", "description": "描述"}}
   ],
   "images": [
-    {{"url": "图片URL", "type": "hero", "alt": "图片描述"}},
-    {{"url": "图片URL", "type": "content", "alt": "图片描述"}}
+    {{"url": "完整图片URL", "type": "hero", "alt": "英文描述"}},
+    {{"url": "完整图片URL", "type": "content", "alt": "英文描述"}}
   ],
   "category_suggestion": "建议分类代码"
-}}"""
+}}
+
+如果无法找到足够图片，请在images数组中尽可能多地返回找到的图片，即使只有1-2张。"""
         }]
         
         try:
