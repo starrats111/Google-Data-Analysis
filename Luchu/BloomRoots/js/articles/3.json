@@ -1,0 +1,30 @@
+{
+  "id": 3,
+  "title": "Modern Minimalist Home Design",
+  "category": "home",
+  "categoryName": "Home & Garden",
+  "excerpt": "Transform your living space with these minimalist design principles and tips.",
+  "image": "🏠",
+  "heroImage": "https://images.unsplash.com/photo-1586023492125-27b2c045efd7?w=1200&h=600&fit=crop",
+  "inlineImage1": "https://images.unsplash.com/photo-1583847268964-b28dc8f51f92?w=800&h=600&fit=crop",
+  "inlineImage2": "image/1.png",
+  "date": "July 5, 2025",
+  "author": "Michael Chen",
+  "products": [
+    "Wall Art",
+    "Plant Pot",
+    "Cushion"
+  ],
+  "content": [
+    "Minimalist home design has evolved from a simple aesthetic choice to a lifestyle philosophy that emphasizes intentional living, reduced clutter, and mindful consumption. This approach to interior design creates spaces that are not only visually appealing but also promote mental clarity and well-being.",
+    "The core principle of minimalist design is 'less is more.' This doesn't mean your home should be stark or empty, but rather that every element serves a purpose and brings joy. The goal is to create a serene environment where you can relax, focus, and thrive without visual distractions.",
+    "IMAGE1",
+    "Color plays a crucial role in minimalist interiors. A neutral palette of whites, beiges, grays, and soft earth tones creates a calming foundation. These colors allow architectural details and carefully chosen furniture pieces to take center stage. Accent colors, when used, are typically muted and appear sparingly to maintain the peaceful atmosphere.",
+    "Furniture selection in minimalist design prioritizes quality over quantity. Each piece should be functional, well-crafted, and beautiful in its simplicity. Clean lines, natural materials like wood and stone, and comfortable proportions create spaces that feel both modern and timeless. Multi-functional furniture helps maximize space while maintaining the uncluttered aesthetic.",
+    "IMAGE2",
+    "Lighting is essential in minimalist spaces. Natural light is maximized through large windows and minimal window treatments. When artificial lighting is needed, simple fixtures with clean designs provide ambient, task, and accent lighting without overwhelming the space. The interplay of light and shadow becomes a design element itself.",
+    "Storage solutions are key to maintaining a minimalist home. Built-in storage, hidden compartments, and furniture with integrated storage help keep belongings organized and out of sight. The philosophy extends to decluttering regularly, keeping only items that serve a purpose or bring genuine joy.",
+    "Plants and natural elements bring life to minimalist spaces without adding visual clutter. A few well-chosen plants, natural textures like wood and stone, and perhaps a single piece of meaningful art create warmth and personality while maintaining the clean aesthetic.",
+    "Embracing minimalist design is about creating a home that supports your lifestyle and values. It's a journey of letting go of the unnecessary and focusing on what truly matters. The result is a space that feels spacious, peaceful, and uniquely yours."
+  ]
+}

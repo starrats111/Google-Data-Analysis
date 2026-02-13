@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="icon" type="image/svg+xml" href="favicon.svg">
+    <link rel="alternate icon" href="favicon.ico">
+    <title>Contact Us - VitaHaven</title>
+    <link rel="stylesheet" href="css/style.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body>
+    <!-- Header -->
+    <header class="header">
+        <div class="container">
+            <div class="logo">
+                <a href="index.html" style="text-decoration: none; color: inherit;">
+                    <h1>VitaHaven</h1>
+                    <p class="tagline">Your Lifestyle Guide</p>
+                </a>
+            </div>
+            <nav class="nav">
+                <ul class="nav-list">
+                    <li><a href="index.html">Home</a></li>
+                    <li><a href="about.html">About</a></li>
+                    <li class="dropdown">
+                        <a href="#" class="dropdown-toggle">Categories <i class="fas fa-chevron-down"></i></a>
+                        <ul class="dropdown-menu">
+                            <li><a href="category.html?cat=fashion">Fashion & Accessories</a></li>
+                            <li><a href="category.html?cat=health">Health & Beauty</a></li>
+                            <li><a href="category.html?cat=home">Home & Garden</a></li>
+                            <li><a href="category.html?cat=travel">Travel & Accommodation</a></li>
+                            <li><a href="category.html?cat=finance">Finance & Insurance</a></li>
+                            <li><a href="category.html?cat=food">Food & Beverage</a></li>
+                        </ul>
+                    </li>
+                    <li><a href="contact.html" class="active">Contact</a></li>
+                </ul>
+            </nav>
+            <div class="search-toggle">
+                <i class="fas fa-search"></i>
+            </div>
+            <div class="mobile-menu-toggle">
+                <i class="fas fa-bars"></i>
+            </div>
+        </div>
+    </header>
+
+    <!-- Search Bar -->
+    <div class="search-overlay">
+        <div class="search-container">
+            <input type="text" id="searchInput" placeholder="Search articles, products, and more...">
+            <button class="search-close"><i class="fas fa-times"></i></button>
+        </div>
+        <div class="search-results" id="searchResults"></div>
+    </div>
+
+    <!-- Page Header -->
+    <section class="page-header">
+        <div class="container">
+            <h1>Get in Touch</h1>
+            <p>We'd love to hear from you</p>
+        </div>
+    </section>
+
+    <!-- Contact Content -->
+    <section class="page-content">
+        <div class="container">
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: var(--spacing-lg); margin-bottom: var(--spacing-xl);">
+                <div style="background: var(--color-white); padding: var(--spacing-xl); border-radius: var(--radius-lg); box-shadow: var(--shadow-sm);">
+                    <div style="width: 60px; height: 60px; background: var(--color-primary); border-radius: var(--radius-full); display: flex; align-items: center; justify-content: center; margin-bottom: var(--spacing-md);">
+                        <i class="fas fa-envelope" style="font-size: 1.5rem; color: var(--color-white);"></i>
+                    </div>
+                    <h3 style="color: var(--color-text-dark); margin-bottom: var(--spacing-sm);">Email Us</h3>
+                    <p style="color: var(--color-text-light); margin-bottom: var(--spacing-sm);">Send us an email anytime</p>
+                    <a href="mailto:hello@vitahaven.com" style="color: var(--color-primary); text-decoration: none; font-weight: 500;">hello@vitahaven.com</a>
+                </div>
+                
+                <div style="background: var(--color-white); padding: var(--spacing-xl); border-radius: var(--radius-lg); box-shadow: var(--shadow-sm);">
+                    <div style="width: 60px; height: 60px; background: var(--color-secondary); border-radius: var(--radius-full); display: flex; align-items: center; justify-content: center; margin-bottom: var(--spacing-md);">
+                        <i class="fas fa-phone" style="font-size: 1.5rem; color: var(--color-white);"></i>
+                    </div>
+                    <h3 style="color: var(--color-text-dark); margin-bottom: var(--spacing-sm);">Call Us</h3>
+                    <p style="color: var(--color-text-light); margin-bottom: var(--spacing-sm);">Mon-Fri from 9am to 6pm</p>
+                    <a href="tel:+1234567890" style="color: var(--color-primary); text-decoration: none; font-weight: 500;">+1 (234) 567-890</a>
+                </div>
+                
+                <div style="background: var(--color-white); padding: var(--spacing-xl); border-radius: var(--radius-lg); box-shadow: var(--shadow-sm);">
+                    <div style="width: 60px; height: 60px; background: var(--color-accent); border-radius: var(--radius-full); display: flex; align-items: center; justify-content: center; margin-bottom: var(--spacing-md);">
+                        <i class="fas fa-map-marker-alt" style="font-size: 1.5rem; color: var(--color-white);"></i>
+                    </div>
+                    <h3 style="color: var(--color-text-dark); margin-bottom: var(--spacing-sm);">Visit Us</h3>
+                    <p style="color: var(--color-text-light); margin-bottom: var(--spacing-sm);">Our office location</p>
+                    <p style="color: var(--color-text); font-weight: 500;">123 Lifestyle Street<br>New York, NY 10001</p>
+                </div>
+            </div>
+            
+            <div class="contact-form">
+                <h2 style="color: var(--color-text-dark); margin-bottom: var(--spacing-md); text-align: center;">Send us a Message</h2>
+                <form>
+                    <div class="form-group">
+                        <label for="name">Your Name</label>
+                        <input type="text" id="name" name="name" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="email">Your Email</label>
+                        <input type="email" id="email" name="email" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="subject">Subject</label>
+                        <input type="text" id="subject" name="subject" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="message">Message</label>
+                        <textarea id="message" name="message" required></textarea>
+                    </div>
+                    <div style="text-align: center;">
+                        <button type="submit" class="submit-btn">Send Message</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </section>
+
+    <!-- Footer -->
+    <footer class="footer">
+        <div class="container">
+            <div class="footer-content">
+                <div class="footer-section">
+                    <h3>VitaHaven</h3>
+                    <p>Your trusted guide to a better lifestyle. Discover curated recommendations across fashion, beauty, home, travel, finance, and food.</p>
+                    <div class="social-links">
+                        <a href="https://www.facebook.com/vitahaven" target="_blank" rel="noopener noreferrer" aria-label="Facebook"><i class="fab fa-facebook"></i></a>
+                        <a href="https://www.instagram.com/vitahaven" target="_blank" rel="noopener noreferrer" aria-label="Instagram"><i class="fab fa-instagram"></i></a>
+                        <a href="https://www.twitter.com/vitahaven" target="_blank" rel="noopener noreferrer" aria-label="Twitter"><i class="fab fa-twitter"></i></a>
+                        <a href="https://www.pinterest.com/vitahaven" target="_blank" rel="noopener noreferrer" aria-label="Pinterest"><i class="fab fa-pinterest"></i></a>
+                        <a href="https://www.youtube.com/vitahaven" target="_blank" rel="noopener noreferrer" aria-label="YouTube"><i class="fab fa-youtube"></i></a>
+                    </div>
+                </div>
+                <div class="footer-section">
+                    <h4>Categories</h4>
+                    <ul>
+                        <li><a href="category.html?cat=fashion">Fashion & Accessories</a></li>
+                        <li><a href="category.html?cat=health">Health & Beauty</a></li>
+                        <li><a href="category.html?cat=home">Home & Garden</a></li>
+                        <li><a href="category.html?cat=travel">Travel & Accommodation</a></li>
+                        <li><a href="category.html?cat=finance">Finance & Insurance</a></li>
+                        <li><a href="category.html?cat=food">Food & Beverage</a></li>
+                    </ul>
+                </div>
+                <div class="footer-section">
+                    <h4>Quick Links</h4>
+                    <ul>
+                        <li><a href="about.html">About Us</a></li>
+                        <li><a href="contact.html">Contact</a></li>
+                        <li><a href="#">Privacy Policy</a></li>
+                        <li><a href="#">Terms of Service</a></li>
+                    </ul>
+                </div>
+                <div class="footer-section">
+                    <h4>Newsletter</h4>
+                    <p>Subscribe to get the latest articles and recommendations</p>
+                    <form class="newsletter-form">
+                        <input type="email" placeholder="Your email address">
+                        <button type="submit">Subscribe</button>
+                    </form>
+                </div>
+            </div>
+            <div class="footer-bottom">
+                <p>&copy; 2025 VitaHaven. All rights reserved.</p>
+            </div>
+        </div>
+    </footer>
+
+    <script src="js/articles-index.js"></script>
+    <script src="js/main.js"></script>
+</body>
+</html>
+

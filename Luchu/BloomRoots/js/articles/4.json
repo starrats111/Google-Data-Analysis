@@ -1,0 +1,29 @@
+{
+  "id": 4,
+  "title": "Hidden Gems of Europe",
+  "category": "travel",
+  "categoryName": "Travel & Accommodation",
+  "excerpt": "Explore the most beautiful and less-known destinations across Europe.",
+  "image": "✈️",
+  "heroImage": "https://images.unsplash.com/photo-1469854523086-cc02fe5d8800?w=1200&h=600&fit=crop",
+  "inlineImage1": "https://images.unsplash.com/photo-1502602898657-3e91760cbb34?w=800&h=600&fit=crop",
+  "inlineImage2": "https://images.unsplash.com/photo-1516483638261-f4dbaf036963?w=800&h=600&fit=crop",
+  "date": "July 18, 2025",
+  "author": "David Wilson",
+  "products": [
+    "Travel Guide",
+    "Luggage",
+    "Camera"
+  ],
+  "content": [
+    "While Paris, Rome, and London attract millions of visitors each year, Europe is home to countless hidden gems that offer equally stunning experiences without the crowds. These lesser-known destinations provide authentic cultural experiences, breathtaking landscapes, and the opportunity to discover Europe's true charm.",
+    "Venturing off the beaten path rewards travelers with unique experiences and memories that last a lifetime. From medieval villages frozen in time to coastal towns with pristine beaches, these hidden gems showcase Europe's diverse beauty and rich history.",
+    "IMAGE1",
+    "The Algarve region in Portugal, while gaining popularity, still offers secluded coves and charming fishing villages that feel worlds away from tourist hotspots. The dramatic cliffs, golden beaches, and traditional whitewashed buildings create a picturesque setting perfect for relaxation and exploration.",
+    "Slovenia's Lake Bled is a fairytale destination that often gets overlooked. The emerald-green lake, medieval castle perched on a cliff, and the island church in the center create a scene straight from a storybook. The surrounding Julian Alps offer excellent hiking opportunities for nature enthusiasts.",
+    "IMAGE2",
+    "The Faroe Islands, located between Iceland and Norway, provide a raw, untouched beauty that's increasingly rare in Europe. The dramatic landscapes, traditional grass-roofed houses, and friendly locals make this archipelago a unique destination for adventurous travelers seeking something truly different.",
+    "Romania's Transylvania region offers more than just Dracula legends. The fortified churches, medieval towns like Sighișoara, and the Carpathian Mountains provide a rich cultural and natural experience. The region's traditional villages maintain centuries-old customs and architecture.",
+    "These hidden gems remind us that travel is about discovery and connection. By exploring beyond the well-trodden paths, we not only support local communities but also create more meaningful travel experiences. Each destination has its own story, waiting to be discovered by curious travelers willing to venture off the map."
+  ]
+}

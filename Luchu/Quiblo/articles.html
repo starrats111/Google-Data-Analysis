@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Articles - Quiblo</title>
+    <link rel="stylesheet" href="styles.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body>
+    <!-- Header -->
+    <header class="header">
+        <div class="container">
+            <div class="logo">
+                <h1>Quiblo</h1>
+                <p class="tagline">Your Lifestyle Companion</p>
+            </div>
+            <nav class="nav">
+                <ul class="nav-list">
+                    <li><a href="index.html">Home</a></li>
+                    <li><a href="articles.html" class="active">Article</a></li>
+                    <li><a href="products.html">Product</a></li>
+                    <li><a href="about.html">About</a></li>
+                    <li><a href="contact.html">Contact</a></li>
+                </ul>
+            </nav>
+            <button class="mobile-menu-toggle" aria-label="Toggle menu">
+                <i class="fas fa-bars"></i>
+            </button>
+        </div>
+    </header>
+
+    <!-- Page Header -->
+    <section class="page-header">
+        <div class="container">
+            <h1>All Articles</h1>
+            <p>Explore our latest lifestyle articles and recommendations</p>
+        </div>
+    </section>
+
+    <!-- Search Bar -->
+    <section class="search-section">
+        <div class="container">
+            <div class="search-box">
+                <i class="fas fa-search"></i>
+                <input type="text" id="searchInput" placeholder="Search articles...">
+            </div>
+        </div>
+    </section>
+
+    <!-- Category Filter -->
+    <section class="categories">
+        <div class="container">
+            <div class="category-filters">
+                <button class="category-btn active" data-category="all">All</button>
+                <button class="category-btn" data-category="fashion">Fashion & Accessories</button>
+                <button class="category-btn" data-category="beauty">Health & Beauty</button>
+                <button class="category-btn" data-category="home">Home & Garden</button>
+                <button class="category-btn" data-category="travel">Travel & Accommodation</button>
+                <button class="category-btn" data-category="finance">Finance & Insurance</button>
+                <button class="category-btn" data-category="food">Food & Beverage</button>
+            </div>
+        </div>
+    </section>
+
+    <!-- Blog Posts -->
+    <main class="main-content">
+        <div class="container">
+            <div id="blogPosts" class="blog-grid">
+                <!-- Posts will be dynamically loaded -->
+            </div>
+            <div class="pagination" id="pagination">
+                <!-- Pagination will be dynamically generated -->
+            </div>
+        </div>
+    </main>
+
+    <!-- Social Media Widget -->
+    <aside class="social-widget">
+        <a href="https://www.facebook.com/quiblo" target="_blank" class="social-icon" aria-label="Facebook">
+            <i class="fab fa-facebook-f"></i>
+        </a>
+        <a href="https://www.instagram.com/quiblo" target="_blank" class="social-icon" aria-label="Instagram">
+            <i class="fab fa-instagram"></i>
+        </a>
+        <a href="https://www.twitter.com/quiblo" target="_blank" class="social-icon" aria-label="Twitter">
+            <i class="fab fa-twitter"></i>
+        </a>
+        <a href="https://www.pinterest.com/quiblo" target="_blank" class="social-icon" aria-label="Pinterest">
+            <i class="fab fa-pinterest-p"></i>
+        </a>
+    </aside>
+
+    <!-- Footer -->
+    <footer class="footer">
+        <div class="container">
+            <div class="footer-content">
+                <div class="footer-section">
+                    <h3>Quiblo</h3>
+                    <p>Your trusted source for lifestyle inspiration and recommendations.</p>
+                </div>
+                <div class="footer-section">
+                    <h4>Categories</h4>
+                    <ul>
+                        <li><a href="articles.html">Fashion & Accessories</a></li>
+                        <li><a href="articles.html">Health & Beauty</a></li>
+                        <li><a href="articles.html">Home & Garden</a></li>
+                        <li><a href="articles.html">Travel & Accommodation</a></li>
+                        <li><a href="articles.html">Finance & Insurance</a></li>
+                        <li><a href="articles.html">Food & Beverage</a></li>
+                    </ul>
+                </div>
+                <div class="footer-section">
+                    <h4>Quick Links</h4>
+                    <ul>
+                        <li><a href="index.html">Home</a></li>
+                        <li><a href="about.html">About</a></li>
+                        <li><a href="contact.html">Contact</a></li>
+                    </ul>
+                </div>
+            </div>
+            <div class="footer-bottom">
+                <p>&copy; 2025 Quiblo. All rights reserved.</p>
+            </div>
+        </div>
+    </footer>
+
+    <script src="js/articles-index.js"></script>
+    <script src="script.js"></script>
+</body>
+</html>
+

@@ -1,0 +1,55 @@
+========================================
+VitaHaven 推送到GitHub - 快速指南
+========================================
+
+方法一：使用批处理脚本（推荐）
+----------------------------------------
+1. 确保已安装Git（如未安装，访问：https://git-scm.com/download/win）
+2. 双击运行 push_to_github.bat
+3. 按照提示操作
+4. 如需认证，输入GitHub用户名和Personal Access Token
+
+方法二：手动执行命令
+----------------------------------------
+打开命令提示符（CMD）或PowerShell，执行：
+
+cd D:\VitaHaven
+git init
+git remote add origin https://github.com/starrats111/VitaHaven.git
+git add .
+git commit -m "Initial commit: VitaHaven lifestyle blog website"
+git branch -M main
+git push -u origin main
+
+方法三：使用GitHub Desktop（最简单）
+----------------------------------------
+1. 下载安装：https://desktop.github.com/
+2. 打开GitHub Desktop，登录账号
+3. File → Add Local Repository → 选择 D:\VitaHaven
+4. 点击 "Publish repository"
+
+========================================
+重要提示：GitHub认证
+========================================
+
+GitHub已不再支持密码认证，需要使用Personal Access Token：
+
+1. 登录GitHub
+2. 点击右上角头像 → Settings
+3. Developer settings → Personal access tokens → Tokens (classic)
+4. Generate new token
+5. 选择权限：至少勾选 "repo"
+6. 生成后复制token（只显示一次！）
+7. 推送时：
+   - 用户名：你的GitHub用户名
+   - 密码：粘贴刚才复制的token
+
+========================================
+推送成功后
+========================================
+访问：https://github.com/starrats111/VitaHaven
+查看你的代码是否已成功上传
+
+========================================
+
+

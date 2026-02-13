@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Quiblo - Your Lifestyle Blog</title>
+    <link rel="stylesheet" href="styles.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body>
+    <!-- Header -->
+    <header class="header">
+        <div class="container">
+            <div class="logo">
+                <h1>Quiblo</h1>
+                <p class="tagline">Your Lifestyle Companion</p>
+            </div>
+            <nav class="nav">
+                <ul class="nav-list">
+                    <li><a href="index.html" class="active">Home</a></li>
+                    <li><a href="articles.html">Article</a></li>
+                    <li><a href="products.html">Product</a></li>
+                    <li><a href="about.html">About</a></li>
+                    <li><a href="contact.html">Contact</a></li>
+                </ul>
+            </nav>
+            <button class="mobile-menu-toggle" aria-label="Toggle menu">
+                <i class="fas fa-bars"></i>
+            </button>
+        </div>
+    </header>
+
+    <!-- Hero Section -->
+    <section class="hero">
+        <div class="container">
+            <h2 class="hero-title">Discover Your Perfect Lifestyle</h2>
+            <p class="hero-subtitle">Explore curated recommendations across fashion, beauty, home, travel, finance, and food</p>
+        </div>
+    </section>
+
+    <!-- Featured Articles Section -->
+    <section class="featured-section">
+        <div class="container">
+            <h2 class="section-title">Featured Articles</h2>
+            <div id="featuredArticles" class="blog-grid">
+                <!-- Featured articles will be dynamically loaded -->
+            </div>
+        </div>
+    </section>
+
+    <!-- Featured Products Section -->
+    <section class="featured-section">
+        <div class="container">
+            <h2 class="section-title">Featured Products</h2>
+            <div id="featuredProducts" class="blog-grid">
+                <!-- Featured products will be dynamically loaded -->
+            </div>
+        </div>
+    </section>
+
+    <!-- Social Media Widget -->
+    <aside class="social-widget">
+        <a href="https://www.facebook.com/quiblo" target="_blank" class="social-icon" aria-label="Facebook">
+            <i class="fab fa-facebook-f"></i>
+        </a>
+        <a href="https://www.instagram.com/quiblo" target="_blank" class="social-icon" aria-label="Instagram">
+            <i class="fab fa-instagram"></i>
+        </a>
+        <a href="https://www.twitter.com/quiblo" target="_blank" class="social-icon" aria-label="Twitter">
+            <i class="fab fa-twitter"></i>
+        </a>
+        <a href="https://www.pinterest.com/quiblo" target="_blank" class="social-icon" aria-label="Pinterest">
+            <i class="fab fa-pinterest-p"></i>
+        </a>
+    </aside>
+
+    <!-- Footer -->
+    <footer class="footer">
+        <div class="container">
+            <div class="footer-content">
+                <div class="footer-section">
+                    <h3>Quiblo</h3>
+                    <p>Your trusted source for lifestyle inspiration and recommendations.</p>
+                </div>
+                <div class="footer-section">
+                    <h4>Categories</h4>
+                    <ul>
+                        <li><a href="articles.html">Fashion & Accessories</a></li>
+                        <li><a href="articles.html">Health & Beauty</a></li>
+                        <li><a href="articles.html">Home & Garden</a></li>
+                        <li><a href="articles.html">Travel & Accommodation</a></li>
+                        <li><a href="articles.html">Finance & Insurance</a></li>
+                        <li><a href="articles.html">Food & Beverage</a></li>
+                    </ul>
+                </div>
+                <div class="footer-section">
+                    <h4>Quick Links</h4>
+                    <ul>
+                        <li><a href="index.html">Home</a></li>
+                        <li><a href="about.html">About</a></li>
+                        <li><a href="contact.html">Contact</a></li>
+                    </ul>
+                </div>
+            </div>
+            <div class="footer-bottom">
+                <p>&copy; 2025 Quiblo. All rights reserved.</p>
+            </div>
+        </div>
+    </footer>
+
+    <script src="js/articles-index.js"></script>
+    <script src="script.js"></script>
+</body>
+</html>
+

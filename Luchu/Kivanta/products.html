@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Products - Kivanta</title>
+    <link rel="stylesheet" href="css/style.css">
+    <link rel="stylesheet" href="css/product.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body>
+    <header class="header">
+        <nav class="nav-container">
+            <div class="logo">
+                <a href="index.html"><h1>KIVANTA</h1></a>
+            </div>
+            <button class="mobile-menu-toggle" aria-label="Toggle menu">
+                <span></span>
+                <span></span>
+                <span></span>
+            </button>
+            <ul class="nav-menu">
+                <li><a href="index.html">Home</a></li>
+                <li class="dropdown">
+                    <a href="#" class="dropdown-toggle">Categories <i class="fas fa-chevron-down"></i></a>
+                    <ul class="dropdown-menu">
+                        <li><a href="category.html?cat=food">Food & Beverage</a></li>
+                        <li><a href="category.html?cat=fashion">Fashion & Accessories</a></li>
+                        <li><a href="category.html?cat=beauty">Health & Beauty</a></li>
+                        <li><a href="category.html?cat=home">Home & Garden</a></li>
+                        <li><a href="category.html?cat=travel">Travel & Accommodation</a></li>
+                        <li><a href="category.html?cat=finance">Finance & Insurance</a></li>
+                    </ul>
+                </li>
+                <li><a href="products.html" class="active">Products</a></li>
+                <li><a href="about.html">About</a></li>
+                <li><a href="contact.html">Contact</a></li>
+            </ul>
+            <div class="search-wrapper">
+                <div class="search-icon">
+                    <i class="fas fa-search"></i>
+                </div>
+                <!-- Search Panel -->
+                <div class="search-panel">
+                    <div class="search-container">
+                        <input type="text" id="searchInput" placeholder="Search articles..." class="search-input">
+                        <button class="search-close" aria-label="Close search"><i class="fas fa-times"></i></button>
+                    </div>
+                    <div id="searchResults" class="search-results"></div>
+                </div>
+            </div>
+        </nav>
+    </header>
+
+
+    <main class="products-page">
+        <div class="products-header">
+            <div class="container">
+                <h1 class="page-title">Recommended Products</h1>
+                <p class="page-subtitle">Curated selections from our articles</p>
+            </div>
+        </div>
+
+        <div class="container">
+            <div class="products-grid-full">
+                <a href="fellow-stagg-ekg-electric-kettle.html" class="product-card-full">
+                    <div class="product-card-image">
+                        <img src="image/p-2.png" alt="Fellow Stagg EKG Kettle">
+                    </div>
+                    <div class="product-card-content">
+                        <span class="product-card-category">Food & Beverage</span>
+                        <h3 class="product-card-title">Fellow Stagg EKG Electric Pour-Over Kettle</h3>
+                        <p class="product-card-desc">The gold standard for pour-over coffee enthusiasts. With precise temperature control and a stunning minimalist design.</p>
+                        <div class="product-card-footer">
+                            <span class="product-card-price">$165.00</span>
+                            <span class="product-card-link">View Details <i class="fas fa-arrow-right"></i></span>
+                        </div>
+                    </div>
+                </a>
+
+                <a href="everlane-the-renew-long-liner.html" class="product-card-full">
+                    <div class="product-card-image">
+                        <img src="image/p-3.png" alt="Everlane Coat">
+                    </div>
+                    <div class="product-card-content">
+                        <span class="product-card-category">Fashion & Accessories</span>
+                        <h3 class="product-card-title">Everlane ReNew Long Liner Coat</h3>
+                        <p class="product-card-desc">The ultimate minimalist coat. Made from recycled polyester, this lightweight yet warm layer features a clean silhouette.</p>
+                        <div class="product-card-footer">
+                            <span class="product-card-price">$178.00</span>
+                            <span class="product-card-link">View Details <i class="fas fa-arrow-right"></i></span>
+                        </div>
+                    </div>
+                </a>
+
+                <a href="sk-ii-facial-treatment-essence.html" class="product-card-full">
+                    <div class="product-card-image">
+                        <img src="image/p-1.png" alt="SK-II Essence">
+                    </div>
+                    <div class="product-card-content">
+                        <span class="product-card-category">Health & Beauty</span>
+                        <h3 class="product-card-title">SK-II Facial Treatment Essence</h3>
+                        <p class="product-card-desc">The legendary "Miracle Water" that has transformed millions of complexions worldwide.</p>
+                        <div class="product-card-footer">
+                            <span class="product-card-price">$185.00</span>
+                            <span class="product-card-link">View Details <i class="fas fa-arrow-right"></i></span>
+                        </div>
+                    </div>
+                </a>
+
+                <a href="muuto-around-coffee-table.html" class="product-card-full">
+                    <div class="product-card-image">
+                        <img src="image/p-4.png" alt="Muuto Coffee Table">
+                    </div>
+                    <div class="product-card-content">
+                        <span class="product-card-category">Home & Garden</span>
+                        <h3 class="product-card-title">Muuto Around Coffee Table Large</h3>
+                        <p class="product-card-desc">Embodies Scandinavian design philosophy with its soft, rounded edges and natural ash wood construction.</p>
+                        <div class="product-card-footer">
+                            <span class="product-card-price">$519.00</span>
+                            <span class="product-card-link">View Details <i class="fas fa-arrow-right"></i></span>
+                        </div>
+                    </div>
+                </a>
+
+                <a href="away-the-carry-on.html" class="product-card-full">
+                    <div class="product-card-image">
+                        <img src="image/p-5.png" alt="Away Carry-On">
+                    </div>
+                    <div class="product-card-content">
+                        <span class="product-card-category">Travel & Accommodation</span>
+                        <h3 class="product-card-title">Away The Carry-On</h3>
+                        <p class="product-card-desc">Designed with an unbreakable polycarbonate shell, 360° spinner wheels, and a built-in compression system.</p>
+                        <div class="product-card-footer">
+                            <span class="product-card-price">$275.00</span>
+                            <span class="product-card-link">View Details <i class="fas fa-arrow-right"></i></span>
+                        </div>
+                    </div>
+                </a>
+            </div>
+        </div>
+    </main>
+
+    <footer class="footer">
+        <div class="container">
+            <div class="footer-content">
+                <div class="footer-section">
+                    <h3 class="footer-logo">KIVANTA</h3>
+                    <p class="footer-desc">Explore life, share the beauty</p>
+                </div>
+                <div class="footer-section">
+                    <h4>Quick Links</h4>
+                    <ul class="footer-links">
+                        <li><a href="index.html">Home</a></li>
+                        <li><a href="about.html">About Us</a></li>
+                        <li><a href="contact.html">Contact Us</a></li>
+                    </ul>
+                </div>
+                <div class="footer-section">
+                    <h4>Follow Us</h4>
+                    <div class="social-icons">
+                        <a href="https://twitter.com" target="_blank" aria-label="Twitter"><i class="fab fa-twitter"></i></a>
+                        <a href="https://facebook.com" target="_blank" aria-label="Facebook"><i class="fab fa-facebook"></i></a>
+                        <a href="https://instagram.com" target="_blank" aria-label="Instagram"><i class="fab fa-instagram"></i></a>
+                        <a href="https://pinterest.com" target="_blank" aria-label="Pinterest"><i class="fab fa-pinterest"></i></a>
+                        <a href="https://youtube.com" target="_blank" aria-label="YouTube"><i class="fab fa-youtube"></i></a>
+                    </div>
+                </div>
+            </div>
+            <div class="footer-bottom">
+                <p>&copy; 2026 Kivanta. All rights reserved.</p>
+            </div>
+        </div>
+    </footer>
+
+    <script src="js/main.js"></script>
+</body>
+</html>
+

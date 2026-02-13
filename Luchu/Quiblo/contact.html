@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Contact Us - Quiblo</title>
+    <link rel="stylesheet" href="styles.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body>
+    <!-- Header -->
+    <header class="header">
+        <div class="container">
+            <div class="logo">
+                <h1>Quiblo</h1>
+                <p class="tagline">Your Lifestyle Companion</p>
+            </div>
+            <nav class="nav">
+                <ul class="nav-list">
+                    <li><a href="index.html">Home</a></li>
+                    <li><a href="articles.html">Article</a></li>
+                    <li><a href="products.html">Product</a></li>
+                    <li><a href="about.html">About</a></li>
+                    <li><a href="contact.html" class="active">Contact</a></li>
+                </ul>
+            </nav>
+            <button class="mobile-menu-toggle" aria-label="Toggle menu">
+                <i class="fas fa-bars"></i>
+            </button>
+        </div>
+    </header>
+
+    <!-- Page Header -->
+    <section class="page-header">
+        <div class="container">
+            <h1>Get in Touch</h1>
+            <p>We'd love to hear from you</p>
+        </div>
+    </section>
+
+    <!-- Contact Content -->
+    <main class="main-content">
+        <div class="page-content">
+            <h2>Contact Quiblo</h2>
+            <p>Have a question, suggestion, or just want to say hello? We're here to help! Fill out the form below, and we'll get back to you as soon as possible.</p>
+            
+            <form class="contact-form" id="contactForm">
+                <div class="form-group">
+                    <label for="name">Name *</label>
+                    <input type="text" id="name" name="name" required>
+                </div>
+                
+                <div class="form-group">
+                    <label for="email">Email *</label>
+                    <input type="email" id="email" name="email" required>
+                </div>
+                
+                <div class="form-group">
+                    <label for="subject">Subject</label>
+                    <input type="text" id="subject" name="subject">
+                </div>
+                
+                <div class="form-group">
+                    <label for="message">Message *</label>
+                    <textarea id="message" name="message" required></textarea>
+                </div>
+                
+                <button type="submit" class="submit-btn">
+                    <i class="fas fa-paper-plane"></i> Send Message
+                </button>
+            </form>
+            
+            <div style="margin-top: 40px; padding-top: 40px; border-top: 2px solid var(--soft-lavender);">
+                <h2>Other Ways to Reach Us</h2>
+                <div class="product-section" style="margin-top: 20px;">
+                    <p><strong><i class="fas fa-envelope" style="color: var(--primary-pink); margin-right: 10px;"></i>Email:</strong> hello@quiblo.com</p>
+                </div>
+            </div>
+            
+            <div style="margin-top: 40px; padding: 30px; background: var(--mint-cream); border-radius: 20px;">
+                <h3 style="color: var(--primary-pink); margin-bottom: 15px;">Follow Us</h3>
+                <p>Stay connected with us on social media for the latest updates, tips, and lifestyle inspiration!</p>
+                <div style="display: flex; gap: 15px; margin-top: 20px; flex-wrap: wrap;">
+                    <a href="https://www.facebook.com/quiblo" target="_blank" class="social-icon" style="position: relative; width: 50px; height: 50px;">
+                        <i class="fab fa-facebook-f"></i>
+                    </a>
+                    <a href="https://www.instagram.com/quiblo" target="_blank" class="social-icon" style="position: relative; width: 50px; height: 50px;">
+                        <i class="fab fa-instagram"></i>
+                    </a>
+                    <a href="https://www.twitter.com/quiblo" target="_blank" class="social-icon" style="position: relative; width: 50px; height: 50px;">
+                        <i class="fab fa-twitter"></i>
+                    </a>
+                    <a href="https://www.pinterest.com/quiblo" target="_blank" class="social-icon" style="position: relative; width: 50px; height: 50px;">
+                        <i class="fab fa-pinterest-p"></i>
+                    </a>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <!-- Social Media Widget -->
+    <aside class="social-widget">
+        <a href="https://www.facebook.com/quiblo" target="_blank" class="social-icon" aria-label="Facebook">
+            <i class="fab fa-facebook-f"></i>
+        </a>
+        <a href="https://www.instagram.com/quiblo" target="_blank" class="social-icon" aria-label="Instagram">
+            <i class="fab fa-instagram"></i>
+        </a>
+        <a href="https://www.twitter.com/quiblo" target="_blank" class="social-icon" aria-label="Twitter">
+            <i class="fab fa-twitter"></i>
+        </a>
+        <a href="https://www.pinterest.com/quiblo" target="_blank" class="social-icon" aria-label="Pinterest">
+            <i class="fab fa-pinterest-p"></i>
+        </a>
+    </aside>
+
+    <!-- Footer -->
+    <footer class="footer">
+        <div class="container">
+            <div class="footer-content">
+                <div class="footer-section">
+                    <h3>Quiblo</h3>
+                    <p>Your trusted source for lifestyle inspiration and recommendations.</p>
+                </div>
+                <div class="footer-section">
+                    <h4>Categories</h4>
+                    <ul>
+                        <li><a href="articles.html">Fashion & Accessories</a></li>
+                        <li><a href="articles.html">Health & Beauty</a></li>
+                        <li><a href="articles.html">Home & Garden</a></li>
+                        <li><a href="articles.html">Travel & Accommodation</a></li>
+                        <li><a href="articles.html">Finance & Insurance</a></li>
+                        <li><a href="articles.html">Food & Beverage</a></li>
+                    </ul>
+                </div>
+                <div class="footer-section">
+                    <h4>Quick Links</h4>
+                    <ul>
+                        <li><a href="index.html">Home</a></li>
+                        <li><a href="about.html">About</a></li>
+                        <li><a href="contact.html">Contact</a></li>
+                    </ul>
+                </div>
+            </div>
+            <div class="footer-bottom">
+                <p>&copy; 2025 Quiblo. All rights reserved.</p>
+            </div>
+        </div>
+    </footer>
+
+    <script src="script.js"></script>
+    <script>
+        // Contact form handling
+        document.getElementById('contactForm').addEventListener('submit', function(e) {
+            e.preventDefault();
+            alert('Thank you for your message! We\'ll get back to you soon.');
+            this.reset();
+        });
+    </script>
+</body>
+</html>
+

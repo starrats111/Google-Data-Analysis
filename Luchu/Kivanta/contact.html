@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Contact Us - Kivanta</title>
+    <link rel="stylesheet" href="css/style.css">
+    <link rel="stylesheet" href="css/page.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body>
+    <header class="header">
+        <nav class="nav-container">
+            <div class="logo">
+                <a href="index.html"><h1>KIVANTA</h1></a>
+            </div>
+            <button class="mobile-menu-toggle" aria-label="Toggle menu">
+                <span></span>
+                <span></span>
+                <span></span>
+            </button>
+            <ul class="nav-menu">
+                <li><a href="index.html">Home</a></li>
+                <li class="dropdown">
+                    <a href="#" class="dropdown-toggle">Categories <i class="fas fa-chevron-down"></i></a>
+                    <ul class="dropdown-menu">
+                        <li><a href="category.html?cat=food">Food & Beverage</a></li>
+                        <li><a href="category.html?cat=fashion">Fashion & Accessories</a></li>
+                        <li><a href="category.html?cat=beauty">Health & Beauty</a></li>
+                        <li><a href="category.html?cat=home">Home & Garden</a></li>
+                        <li><a href="category.html?cat=travel">Travel & Accommodation</a></li>
+                        <li><a href="category.html?cat=finance">Finance & Insurance</a></li>
+                    </ul>
+                </li>
+                <li><a href="products.html">Products</a></li>
+                <li><a href="about.html">About</a></li>
+                <li><a href="contact.html" class="active">Contact</a></li>
+            </ul>
+            <div class="search-wrapper">
+                <div class="search-icon">
+                    <i class="fas fa-search"></i>
+                </div>
+                <!-- Search Panel -->
+                <div class="search-panel">
+                    <div class="search-container">
+                        <input type="text" id="searchInput" placeholder="Search articles..." class="search-input">
+                        <button class="search-close" aria-label="Close search"><i class="fas fa-times"></i></button>
+                    </div>
+                    <div id="searchResults" class="search-results"></div>
+                </div>
+            </div>
+        </nav>
+    </header>
+
+    <div class="page-content">
+        <div class="page-hero">
+            <div class="container-narrow">
+                <h1 class="page-title">Contact Us</h1>
+                <p class="page-subtitle">We'd love to hear from you</p>
+            </div>
+        </div>
+
+        <div class="container-narrow">
+            <section class="content-section">
+                <p>Whether you have content suggestions, collaboration inquiries, or feedback, we warmly welcome your message. Please fill out the form below, and we'll respond within 24 hours.</p>
+            </section>
+
+            <section class="contact-form-section">
+                <form id="contactForm" class="contact-form">
+                    <div class="form-group">
+                        <label for="name">Name *</label>
+                        <input type="text" id="name" name="name" required placeholder="Enter your name">
+                    </div>
+
+                    <div class="form-group">
+                        <label for="email">Email *</label>
+                        <input type="email" id="email" name="email" required placeholder="your@email.com">
+                    </div>
+
+                    <div class="form-group">
+                        <label for="subject">Subject *</label>
+                        <select id="subject" name="subject" required>
+                            <option value="">Please select</option>
+                            <option value="feedback">Content Feedback</option>
+                            <option value="cooperation">Business Cooperation</option>
+                            <option value="suggestion">Suggestions</option>
+                            <option value="question">Questions</option>
+                            <option value="other">Other</option>
+                        </select>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="message">Message *</label>
+                        <textarea id="message" name="message" rows="8" required placeholder="Enter your message..."></textarea>
+                    </div>
+
+                    <button type="submit" class="submit-btn">Send Message</button>
+                </form>
+
+                <div id="formMessage" class="form-message" style="display: none;"></div>
+            </section>
+
+            <section class="content-section">
+                <h2>Other Ways to Reach Us</h2>
+                <div class="contact-methods">
+                    <div class="contact-method">
+                        <div class="method-icon">
+                            <i class="fas fa-envelope"></i>
+                        </div>
+                        <div class="method-info">
+                            <h3>Email</h3>
+                            <p>hello@kivanta.com</p>
+                            <p class="method-desc">We'll respond within 24 hours</p>
+                        </div>
+                    </div>
+
+                    <div class="contact-method">
+                        <div class="method-icon">
+                            <i class="fas fa-map-marker-alt"></i>
+                        </div>
+                        <div class="method-info">
+                            <h3>Location</h3>
+                            <p>New York, NY</p>
+                            <p class="method-desc">Business hours: Mon-Fri 9:00 AM - 6:00 PM</p>
+                        </div>
+                    </div>
+
+                    <div class="contact-method">
+                        <div class="method-icon">
+                            <i class="fas fa-comment-dots"></i>
+                        </div>
+                        <div class="method-info">
+                            <h3>Social Media</h3>
+                            <p>Follow us on social media</p>
+                            <div class="social-icons-inline">
+                                <a href="https://twitter.com" target="_blank" aria-label="Twitter"><i class="fab fa-twitter"></i></a>
+                                <a href="https://facebook.com" target="_blank" aria-label="Facebook"><i class="fab fa-facebook"></i></a>
+                                <a href="https://instagram.com" target="_blank" aria-label="Instagram"><i class="fab fa-instagram"></i></a>
+                                <a href="https://youtube.com" target="_blank" aria-label="YouTube"><i class="fab fa-youtube"></i></a>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <section class="content-section faq-section">
+                <h2>Frequently Asked Questions</h2>
+                <div class="faq-list">
+                    <div class="faq-item">
+                        <h3>How can I submit an article?</h3>
+                        <p>We welcome quality original content submissions. Please send your article outline and bio via email, and we'll get back to you soon.</p>
+                    </div>
+                    <div class="faq-item">
+                        <h3>Can I republish your articles?</h3>
+                        <p>For republishing, please contact us via email for authorization first. When republishing, please include the source and author information.</p>
+                    </div>
+                    <div class="faq-item">
+                        <h3>How can I partner with Kivanta?</h3>
+                        <p>We're open to brand partnerships, product reviews, and other forms of collaboration. Please send your proposal via email, and we'll carefully evaluate and respond.</p>
+                    </div>
+                    <div class="faq-item">
+                        <h3>Where can I buy the products you recommend?</h3>
+                        <p>We try to include purchase links in our articles when possible. If you have questions, feel free to ask via the contact form.</p>
+                    </div>
+                </div>
+            </section>
+        </div>
+    </div>
+
+    <footer class="footer">
+        <div class="container">
+            <div class="footer-content">
+                <div class="footer-section">
+                    <h3 class="footer-logo">KIVANTA</h3>
+                    <p class="footer-desc">Explore life, share the beauty</p>
+                </div>
+                <div class="footer-section">
+                    <h4>Quick Links</h4>
+                    <ul class="footer-links">
+                        <li><a href="index.html">Home</a></li>
+                        <li><a href="about.html">About Us</a></li>
+                        <li><a href="contact.html">Contact Us</a></li>
+                    </ul>
+                </div>
+                <div class="footer-section">
+                    <h4>Follow Us</h4>
+                    <div class="social-icons">
+                        <a href="https://twitter.com" target="_blank" aria-label="Twitter"><i class="fab fa-twitter"></i></a>
+                        <a href="https://facebook.com" target="_blank" aria-label="Facebook"><i class="fab fa-facebook"></i></a>
+                        <a href="https://instagram.com" target="_blank" aria-label="Instagram"><i class="fab fa-instagram"></i></a>
+                        <a href="https://pinterest.com" target="_blank" aria-label="Pinterest"><i class="fab fa-pinterest"></i></a>
+                        <a href="https://youtube.com" target="_blank" aria-label="YouTube"><i class="fab fa-youtube"></i></a>
+                    </div>
+                </div>
+            </div>
+            <div class="footer-bottom">
+                <p>&copy; 2026 Kivanta. All rights reserved.</p>
+            </div>
+        </div>
+    </footer>
+
+    <script src="js/main.js"></script>
+    <script src="js/contact.js"></script>
+</body>
+</html>

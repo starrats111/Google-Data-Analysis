@@ -1,0 +1,29 @@
+{
+  "id": 2,
+  "title": "Natural Skincare Routine",
+  "category": "health",
+  "categoryName": "Health & Beauty",
+  "excerpt": "Learn how to create an effective natural skincare routine for glowing, healthy skin.",
+  "image": "💆",
+  "heroImage": "https://images.unsplash.com/photo-1556228578-0d85b1a4d571?w=1200&h=600&fit=crop",
+  "inlineImage1": "https://images.unsplash.com/photo-1556229010-6c3f2c9ca5f8?w=800&h=600&fit=crop",
+  "inlineImage2": "https://images.unsplash.com/photo-1571875257727-256c39da42af?w=800&h=600&fit=crop",
+  "date": "June 20, 2025",
+  "author": "Emma Davis",
+  "products": [
+    "Face Serum",
+    "Moisturizer",
+    "Cleanser"
+  ],
+  "content": [
+    "Achieving radiant, healthy skin doesn't require expensive products or complicated routines. A natural skincare approach focuses on nourishing your skin with gentle, plant-based ingredients that work in harmony with your body's natural processes. This comprehensive guide will help you build an effective skincare routine that promotes long-term skin health.",
+    "Understanding your skin type is the foundation of any successful skincare routine. Whether you have oily, dry, combination, or sensitive skin, natural ingredients can address your specific concerns. The key is consistency and patience, as natural skincare often takes time to show results but provides lasting benefits without harsh side effects.",
+    "IMAGE1",
+    "A proper natural skincare routine begins with gentle cleansing. Look for cleansers containing ingredients like chamomile, green tea extract, or aloe vera, which remove impurities without stripping your skin's natural oils. Cleansing twice daily—morning and evening—helps maintain a clean canvas for other products to work effectively.",
+    "Exfoliation is crucial for removing dead skin cells and promoting cell turnover. Natural exfoliants like oatmeal, sugar, or finely ground coffee provide gentle physical exfoliation. Chemical exfoliants derived from fruits, such as alpha-hydroxy acids from citrus fruits or lactic acid from milk, offer deeper exfoliation for more advanced routines.",
+    "IMAGE2",
+    "Hydration is essential for maintaining skin's elasticity and preventing premature aging. Natural moisturizers containing hyaluronic acid, jojoba oil, or shea butter provide deep hydration without clogging pores. For those with oily skin, lightweight serums with natural ingredients like niacinamide or tea tree oil can balance oil production while maintaining moisture.",
+    "Sun protection remains the most important step in any skincare routine. Natural mineral sunscreens containing zinc oxide or titanium dioxide provide broad-spectrum protection without chemical filters. Remember to reapply throughout the day, especially if you're spending extended time outdoors.",
+    "Building a natural skincare routine is a journey of self-discovery. Listen to your skin, adjust products as needed, and remember that true beauty comes from healthy, well-cared-for skin. With patience and the right natural ingredients, you can achieve a glowing complexion that reflects your inner vitality."
+  ]
+}

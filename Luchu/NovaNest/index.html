@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>NovaNest · Blog & Reviews</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="page-wrap">
+    <header class="nv-header">
+      <div class="nv-logo">
+        <div class="nv-logo-mark"></div>
+        <div class="nv-logo-text">
+          <span class="nv-logo-title">NovaNest</span>
+          <span class="nv-logo-sub">Clean Insight Hub</span>
+        </div>
+      </div>
+      <nav class="nv-nav">
+        <a href="index.html" class="active">Blog</a>
+        <a href="products.html">Products</a>
+        <a href="about.html">About</a>
+        <a href="contact.html">Contact</a>
+      </nav>
+    </header>
+
+    <main class="nv-main">
+      <section class="nv-hero">
+        <div>
+          <h1>NovaNest Journal</h1>
+          <p>Clean, focused notes on everyday choices across six themes — from food and style to home, travel and finance.</p>
+        </div>
+      </section>
+
+      <section class="nv-section">
+        <div class="nv-chip-row" id="quickCategories">
+          <button class="nv-chip nv-chip-btn" data-cat="food">Food &amp; Drinks</button>
+          <button class="nv-chip nv-chip-btn" data-cat="fashion">Apparel &amp; Accessories</button>
+          <button class="nv-chip nv-chip-btn" data-cat="health">Health &amp; Beauty</button>
+          <button class="nv-chip nv-chip-btn" data-cat="home">Home &amp; Garden</button>
+          <button class="nv-chip nv-chip-btn" data-cat="travel">Travel &amp; Stays</button>
+          <button class="nv-chip nv-chip-btn" data-cat="finance">Finance &amp; Insurance</button>
+        </div>
+      </section>
+
+      <section class="nv-filters">
+        <div class="nv-filter-group">
+          <label for="categoryFilter">Category</label>
+          <select id="categoryFilter">
+            <option value="all">All topics</option>
+            <option value="food">Food & Drinks</option>
+            <option value="fashion">Apparel & Accessories</option>
+            <option value="health">Health & Beauty</option>
+            <option value="home">Home & Garden</option>
+            <option value="travel">Travel & Stays</option>
+            <option value="finance">Finance & Insurance</option>
+          </select>
+        </div>
+        <div class="nv-filter-group nv-search-group">
+          <label for="searchInput">Search</label>
+          <input id="searchInput" type="search" placeholder="Search by title, summary or product name…" />
+        </div>
+      </section>
+
+      <section class="nv-list-section">
+        <div id="postsContainer" class="nv-post-list"></div>
+        <div class="nv-pagination">
+          <button id="prevPage" disabled>Prev</button>
+          <span id="pageInfo">1 / 1</span>
+          <button id="nextPage" disabled>Next</button>
+        </div>
+      </section>
+    </main>
+
+    <footer class="nv-footer">
+      <div class="nv-footer-main">
+        <div>
+          <div class="nv-logo small">
+            <div class="nv-logo-mark"></div>
+            <div class="nv-logo-text">
+              <span class="nv-logo-title">NovaNest</span>
+            </div>
+          </div>
+          <p class="nv-footer-text">Keep a clean perspective so everyday and financial decisions stay clear and grounded.</p>
+        </div>
+        <div class="nv-footer-social">
+          <span>Social</span>
+          <div class="nv-social-icons">
+            <a href="https://twitter.com" target="_blank" aria-label="Twitter" class="nv-social-icon">X</a>
+            <a href="https://instagram.com" target="_blank" aria-label="Instagram" class="nv-social-icon">IG</a>
+            <a href="https://www.linkedin.com" target="_blank" aria-label="LinkedIn" class="nv-social-icon">in</a>
+          </div>
+        </div>
+      </div>
+      <div class="nv-footer-meta">
+        <span>© 2025 NovaNest</span>
+      </div>
+    </footer>
+  </div>
+  <script src="scripts.js"></script>
+</body>
+</html>
+
+

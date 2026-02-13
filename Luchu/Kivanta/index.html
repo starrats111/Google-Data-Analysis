@@ -1,0 +1,360 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Kivanta - Lifestyle Blog</title>
+    <link rel="stylesheet" href="css/style.css">
+    <link rel="stylesheet" href="css/product.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body>
+    <!-- Navigation -->
+    <header class="header">
+        <nav class="nav-container">
+            <div class="logo">
+                <h1>KIVANTA</h1>
+            </div>
+            <button class="mobile-menu-toggle" aria-label="Toggle menu">
+                <span></span>
+                <span></span>
+                <span></span>
+            </button>
+            <ul class="nav-menu">
+                <li><a href="index.html" class="active">Home</a></li>
+                <li class="dropdown">
+                    <a href="#" class="dropdown-toggle">Categories <i class="fas fa-chevron-down"></i></a>
+                    <ul class="dropdown-menu">
+                        <li><a href="category.html?cat=food">Food & Beverage</a></li>
+                        <li><a href="category.html?cat=fashion">Fashion & Accessories</a></li>
+                        <li><a href="category.html?cat=beauty">Health & Beauty</a></li>
+                        <li><a href="category.html?cat=home">Home & Garden</a></li>
+                        <li><a href="category.html?cat=travel">Travel & Accommodation</a></li>
+                        <li><a href="category.html?cat=finance">Finance & Insurance</a></li>
+                    </ul>
+                </li>
+                <li><a href="products.html">Products</a></li>
+                <li><a href="about.html">About</a></li>
+                <li><a href="contact.html">Contact</a></li>
+            </ul>
+            <div class="search-wrapper">
+                <div class="search-icon">
+                    <i class="fas fa-search"></i>
+                </div>
+                <!-- Search Panel -->
+                <div class="search-panel">
+                    <div class="search-container">
+                        <input type="text" id="searchInput" placeholder="Search articles..." class="search-input">
+                        <button class="search-close" aria-label="Close search"><i class="fas fa-times"></i></button>
+                    </div>
+                    <div id="searchResults" class="search-results"></div>
+                </div>
+            </div>
+        </nav>
+    </header>
+
+    <!-- Hero Section -->
+    <section class="hero">
+        <div class="audio-waves">
+            <div class="wave-bar" style="--delay: 0s; --duration: 1.8s;"></div>
+            <div class="wave-bar" style="--delay: 0.1s; --duration: 2.1s;"></div>
+            <div class="wave-bar" style="--delay: 0.2s; --duration: 1.5s;"></div>
+            <div class="wave-bar" style="--delay: 0.3s; --duration: 2.3s;"></div>
+            <div class="wave-bar" style="--delay: 0.4s; --duration: 1.9s;"></div>
+            <div class="wave-bar" style="--delay: 0.5s; --duration: 2.0s;"></div>
+            <div class="wave-bar" style="--delay: 0.6s; --duration: 1.7s;"></div>
+            <div class="wave-bar" style="--delay: 0.7s; --duration: 2.2s;"></div>
+            <div class="wave-bar" style="--delay: 0.8s; --duration: 1.6s;"></div>
+            <div class="wave-bar" style="--delay: 0.9s; --duration: 2.4s;"></div>
+            <div class="wave-bar" style="--delay: 1s; --duration: 1.8s;"></div>
+            <div class="wave-bar" style="--delay: 1.1s; --duration: 2.1s;"></div>
+            <div class="wave-bar" style="--delay: 1.2s; --duration: 1.9s;"></div>
+            <div class="wave-bar" style="--delay: 1.3s; --duration: 2.0s;"></div>
+            <div class="wave-bar" style="--delay: 1.4s; --duration: 1.7s;"></div>
+            <div class="wave-bar" style="--delay: 1.5s; --duration: 2.3s;"></div>
+            <div class="wave-bar" style="--delay: 1.6s; --duration: 1.6s;"></div>
+            <div class="wave-bar" style="--delay: 1.7s; --duration: 2.2s;"></div>
+            <div class="wave-bar" style="--delay: 1.8s; --duration: 1.8s;"></div>
+            <div class="wave-bar" style="--delay: 1.9s; --duration: 2.1s;"></div>
+            <div class="wave-bar" style="--delay: 2s; --duration: 1.9s;"></div>
+            <div class="wave-bar" style="--delay: 2.1s; --duration: 2.0s;"></div>
+            <div class="wave-bar" style="--delay: 2.2s; --duration: 1.7s;"></div>
+            <div class="wave-bar" style="--delay: 2.3s; --duration: 2.3s;"></div>
+            <div class="wave-bar" style="--delay: 2.4s; --duration: 1.5s;"></div>
+            <div class="wave-bar" style="--delay: 2.5s; --duration: 2.2s;"></div>
+            <div class="wave-bar" style="--delay: 2.6s; --duration: 1.8s;"></div>
+            <div class="wave-bar" style="--delay: 2.7s; --duration: 2.0s;"></div>
+            <div class="wave-bar" style="--delay: 2.8s; --duration: 1.6s;"></div>
+            <div class="wave-bar" style="--delay: 2.9s; --duration: 2.4s;"></div>
+            <div class="wave-bar" style="--delay: 3s; --duration: 1.9s;"></div>
+            <div class="wave-bar" style="--delay: 3.1s; --duration: 2.1s;"></div>
+            <div class="wave-bar" style="--delay: 3.2s; --duration: 1.7s;"></div>
+            <div class="wave-bar" style="--delay: 3.3s; --duration: 2.3s;"></div>
+            <div class="wave-bar" style="--delay: 3.4s; --duration: 1.8s;"></div>
+            <div class="wave-bar" style="--delay: 3.5s; --duration: 2.0s;"></div>
+            <div class="wave-bar" style="--delay: 3.6s; --duration: 1.6s;"></div>
+            <div class="wave-bar" style="--delay: 3.7s; --duration: 2.2s;"></div>
+            <div class="wave-bar" style="--delay: 3.8s; --duration: 1.9s;"></div>
+            <div class="wave-bar" style="--delay: 3.9s; --duration: 2.1s;"></div>
+            <div class="wave-bar" style="--delay: 4s; --duration: 1.5s;"></div>
+            <div class="wave-bar" style="--delay: 4.1s; --duration: 2.3s;"></div>
+            <div class="wave-bar" style="--delay: 4.2s; --duration: 1.8s;"></div>
+            <div class="wave-bar" style="--delay: 4.3s; --duration: 2.0s;"></div>
+            <div class="wave-bar" style="--delay: 4.4s; --duration: 1.7s;"></div>
+            <div class="wave-bar" style="--delay: 4.5s; --duration: 2.4s;"></div>
+            <div class="wave-bar" style="--delay: 4.6s; --duration: 1.6s;"></div>
+            <div class="wave-bar" style="--delay: 4.7s; --duration: 2.1s;"></div>
+            <div class="wave-bar" style="--delay: 4.8s; --duration: 1.9s;"></div>
+            <div class="wave-bar" style="--delay: 4.9s; --duration: 2.2s;"></div>
+            <div class="wave-bar" style="--delay: 5s; --duration: 1.8s;"></div>
+            <div class="wave-bar" style="--delay: 5.1s; --duration: 2.0s;"></div>
+            <div class="wave-bar" style="--delay: 5.2s; --duration: 1.5s;"></div>
+            <div class="wave-bar" style="--delay: 5.3s; --duration: 2.3s;"></div>
+            <div class="wave-bar" style="--delay: 5.4s; --duration: 1.7s;"></div>
+            <div class="wave-bar" style="--delay: 5.5s; --duration: 2.1s;"></div>
+            <div class="wave-bar" style="--delay: 5.6s; --duration: 1.9s;"></div>
+            <div class="wave-bar" style="--delay: 5.7s; --duration: 2.4s;"></div>
+            <div class="wave-bar" style="--delay: 5.8s; --duration: 1.6s;"></div>
+            <div class="wave-bar" style="--delay: 5.9s; --duration: 2.2s;"></div>
+            <div class="wave-bar" style="--delay: 6s; --duration: 1.8s;"></div>
+            <div class="wave-bar" style="--delay: 6.1s; --duration: 2.0s;"></div>
+            <div class="wave-bar" style="--delay: 6.2s; --duration: 1.5s;"></div>
+            <div class="wave-bar" style="--delay: 6.3s; --duration: 2.3s;"></div>
+            <div class="wave-bar" style="--delay: 6.4s; --duration: 1.9s;"></div>
+            <div class="wave-bar" style="--delay: 6.5s; --duration: 2.1s;"></div>
+            <div class="wave-bar" style="--delay: 6.6s; --duration: 1.7s;"></div>
+            <div class="wave-bar" style="--delay: 6.7s; --duration: 2.2s;"></div>
+            <div class="wave-bar" style="--delay: 6.8s; --duration: 1.8s;"></div>
+            <div class="wave-bar" style="--delay: 6.9s; --duration: 2.4s;"></div>
+            <div class="wave-bar" style="--delay: 7s; --duration: 1.6s;"></div>
+        </div>
+        <div class="hero-content">
+            <h2 class="hero-title">Discover the Beauty of Life</h2>
+            <p class="hero-subtitle">Explore, Share, Experience</p>
+        </div>
+    </section>
+
+    <!-- Categories - Compact -->
+    <section class="categories-compact">
+        <div class="container">
+            <div class="categories-inline">
+                <a href="category.html?cat=food" class="category-tag">
+                    <i class="fas fa-coffee"></i>
+                    <span>Food & Beverage</span>
+                </a>
+                <a href="category.html?cat=fashion" class="category-tag">
+                    <i class="fas fa-tshirt"></i>
+                    <span>Fashion</span>
+                </a>
+                <a href="category.html?cat=beauty" class="category-tag">
+                    <i class="fas fa-spa"></i>
+                    <span>Beauty</span>
+                </a>
+                <a href="category.html?cat=home" class="category-tag">
+                    <i class="fas fa-home"></i>
+                    <span>Home & Garden</span>
+                </a>
+                <a href="category.html?cat=travel" class="category-tag">
+                    <i class="fas fa-plane"></i>
+                    <span>Travel</span>
+                </a>
+                <a href="category.html?cat=finance" class="category-tag">
+                    <i class="fas fa-chart-line"></i>
+                    <span>Finance</span>
+                </a>
+            </div>
+        </div>
+    </section>
+
+    <!-- Featured Articles -->
+    <section class="featured-section">
+        <div class="container">
+            <h2 class="section-title">Featured</h2>
+            <div class="featured-grid">
+                <article class="featured-card large">
+                    <a href="rise-pro-apparel-your-new-silent-partner-in-the-field.html">
+                        <div class="card-image">
+                            <img src="image/2-1.png" alt="Rise Pro Apparel: Your New Silent Partner in the Field">
+                            <span class="category-badge">Fashion & Accessories</span>
+                        </div>
+                        <div class="card-content">
+                            <time class="card-date">January 5, 2026</time>
+                            <h3 class="card-title">Rise Pro Apparel: Your New Silent Partner in the Field</h3>
+                            <p class="card-excerpt">Build a quiet, weather-ready hunting apparel system that works as your silent partner in the field.</p>
+                        </div>
+                    </a>
+                </article>
+                <article class="featured-card">
+                    <a href="best-specialty-coffee-to-try-in-2026.html">
+                        <div class="card-image">
+                            <img src="https://images.unsplash.com/photo-1495474472287-4d71bcdd2085?w=800&q=80" alt="Specialty Coffee">
+                            <span class="category-badge">Food & Beverage</span>
+                        </div>
+                        <div class="card-content">
+                            <time class="card-date">January 15, 2026</time>
+                            <h3 class="card-title">Best Specialty Coffee to Try in 2026</h3>
+                            <p class="card-excerpt">Explore premium coffee beans from around the world and discover the story behind every cup...</p>
+                        </div>
+                    </a>
+                </article>
+                <article class="featured-card">
+                    <a href="minimalist-winter-style-guide.html">
+                        <div class="card-image">
+                            <img src="https://images.unsplash.com/photo-1490481651871-ab68de25d43d?w=800&q=80" alt="Winter Fashion">
+                            <span class="category-badge">Fashion & Accessories</span>
+                        </div>
+                        <div class="card-content">
+                            <time class="card-date">December 20, 2025</time>
+                            <h3 class="card-title">Minimalist Winter Style Guide</h3>
+                            <p class="card-excerpt">Less is more – build your own minimalist wardrobe...</p>
+                        </div>
+                    </a>
+                </article>
+                <article class="featured-card">
+                    <a href="essential-winter-skincare-product-reviews.html">
+                        <div class="card-image">
+                            <img src="https://images.unsplash.com/photo-1556228578-0d85b1a4d571?w=800&q=80" alt="Skincare Products">
+                            <span class="category-badge">Health & Beauty</span>
+                        </div>
+                        <div class="card-content">
+                            <time class="card-date">November 28, 2025</time>
+                            <h3 class="card-title">Essential Winter Skincare Product Reviews</h3>
+                            <p class="card-excerpt">In-depth reviews of five popular moisturizing serums to find your perfect match...</p>
+                        </div>
+                    </a>
+                </article>
+            </div>
+        </div>
+    </section>
+
+    <!-- Latest Articles -->
+    <section class="articles-section">
+        <div class="container">
+            <h2 class="section-title">Latest Articles</h2>
+            <div class="articles-grid" id="articlesGrid">
+                <article class="article-card">
+                    <a href="10-tips-for-creating-a-nordic-style-home.html">
+                        <div class="card-image">
+                            <img src="https://images.unsplash.com/photo-1616486338812-3dadae4b4ace?w=800&q=80" alt="Home Decor">
+                            <span class="category-badge">Home & Garden</span>
+                        </div>
+                        <div class="card-content">
+                            <time class="card-date">November 10, 2025</time>
+                            <h3 class="card-title">10 Tips for Creating a Nordic-Style Home</h3>
+                            <p class="card-excerpt">A complete guide from color schemes to furniture selection...</p>
+                        </div>
+                    </a>
+                </article>
+                <article class="article-card">
+                    <a href="best-asian-destinations-to-visit-in-2026.html">
+                        <div class="card-image">
+                            <img src="https://images.unsplash.com/photo-1436491865332-7a61a109cc05?w=800&q=80" alt="Travel">
+                            <span class="category-badge">Travel & Accommodation</span>
+                        </div>
+                        <div class="card-content">
+                            <time class="card-date">October 25, 2025</time>
+                            <h3 class="card-title">Best Asian Destinations to Visit in 2026</h3>
+                            <p class="card-excerpt">Discover hidden paradises and plan your next adventure...</p>
+                        </div>
+                    </a>
+                </article>
+            </div>
+        </div>
+    </section>
+
+    <!-- Product Recommendations -->
+    <section class="products-section">
+        <div class="container">
+            <h2 class="section-title">Recommended Products</h2>
+            <div class="products-grid">
+                <a href="fellow-stagg-ekg-electric-kettle.html" class="product-card">
+                    <div class="product-card-image">
+                        <img src="image/p-2.png" alt="Fellow Stagg EKG Kettle">
+                    </div>
+                    <div class="product-card-content">
+                        <span class="product-card-category">Food & Beverage</span>
+                        <h3 class="product-card-title">Fellow Stagg EKG Electric Kettle</h3>
+                        <span class="product-card-price">$165.00</span>
+                    </div>
+                </a>
+                <a href="everlane-the-renew-long-liner.html" class="product-card">
+                    <div class="product-card-image">
+                        <img src="image/p-3.png" alt="Everlane Coat">
+                    </div>
+                    <div class="product-card-content">
+                        <span class="product-card-category">Fashion</span>
+                        <h3 class="product-card-title">Everlane ReNew Long Liner Coat</h3>
+                        <span class="product-card-price">$178.00</span>
+                    </div>
+                </a>
+                <a href="sk-ii-facial-treatment-essence.html" class="product-card">
+                    <div class="product-card-image">
+                        <img src="image/p-1.png" alt="SK-II Essence">
+                    </div>
+                    <div class="product-card-content">
+                        <span class="product-card-category">Beauty</span>
+                        <h3 class="product-card-title">SK-II Facial Treatment Essence</h3>
+                        <span class="product-card-price">$185.00</span>
+                    </div>
+                </a>
+                <a href="muuto-around-coffee-table.html" class="product-card">
+                    <div class="product-card-image">
+                        <img src="image/p-4.png" alt="Muuto Coffee Table">
+                    </div>
+                    <div class="product-card-content">
+                        <span class="product-card-category">Home & Garden</span>
+                        <h3 class="product-card-title">Muuto Around Coffee Table</h3>
+                        <span class="product-card-price">$519.00</span>
+                    </div>
+                </a>
+                <a href="away-the-carry-on.html" class="product-card">
+                    <div class="product-card-image">
+                        <img src="image/p-5.png" alt="Away Carry-On">
+                    </div>
+                    <div class="product-card-content">
+                        <span class="product-card-category">Travel</span>
+                        <h3 class="product-card-title">Away The Carry-On Luggage</h3>
+                        <span class="product-card-price">$275.00</span>
+                    </div>
+                </a>
+            </div>
+        </div>
+    </section>
+
+    <!-- Footer -->
+    <footer class="footer">
+        <div class="container">
+            <div class="footer-content">
+                <div class="footer-section">
+                    <h3 class="footer-logo">KIVANTA</h3>
+                    <p class="footer-desc">Explore life, share the beauty</p>
+                </div>
+                <div class="footer-section">
+                    <h4>Quick Links</h4>
+                    <ul class="footer-links">
+                        <li><a href="index.html">Home</a></li>
+                        <li><a href="about.html">About Us</a></li>
+                        <li><a href="contact.html">Contact Us</a></li>
+                    </ul>
+                </div>
+                <div class="footer-section">
+                    <h4>Follow Us</h4>
+                    <div class="social-icons">
+                        <a href="https://twitter.com" target="_blank" aria-label="Twitter"><i class="fab fa-twitter"></i></a>
+                        <a href="https://facebook.com" target="_blank" aria-label="Facebook"><i class="fab fa-facebook"></i></a>
+                        <a href="https://instagram.com" target="_blank" aria-label="Instagram"><i class="fab fa-instagram"></i></a>
+                        <a href="https://pinterest.com" target="_blank" aria-label="Pinterest"><i class="fab fa-pinterest"></i></a>
+                        <a href="https://youtube.com" target="_blank" aria-label="YouTube"><i class="fab fa-youtube"></i></a>
+                    </div>
+                </div>
+            </div>
+            <div class="footer-bottom">
+                <p>&copy; 2026 Kivanta. All rights reserved.</p>
+            </div>
+        </div>
+    </footer>
+
+    <script src="js/main.js"></script>
+</body>
+</html>
+Discover the Beauty of Life

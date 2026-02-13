@@ -1,0 +1,28 @@
+{
+  "id": 1,
+  "title": "Spring Fashion Trends 2024",
+  "category": "fashion",
+  "categoryName": "Fashion & Accessories",
+  "excerpt": "Discover the latest spring fashion trends that will define your wardrobe this season.",
+  "image": "🌸",
+  "heroImage": "https://images.unsplash.com/photo-1441986300917-64674bd600d8?w=1200&h=600&fit=crop",
+  "inlineImage1": "https://images.unsplash.com/photo-1469334031218-e382a71b716b?w=800&h=600&fit=crop",
+  "inlineImage2": "https://images.unsplash.com/photo-1515886657613-9f3515b0c78f?w=800&h=600&fit=crop",
+  "date": "June 15, 2025",
+  "author": "Sarah Johnson",
+  "products": [
+    "Silk Scarf",
+    "Leather Bag",
+    "Sunglasses"
+  ],
+  "content": [
+    "As the winter chill fades away and nature begins to bloom, fashion enthusiasts eagerly anticipate the arrival of spring collections. This season brings a refreshing palette of colors, innovative silhouettes, and sustainable fashion choices that reflect our evolving lifestyle needs.",
+    "The 2024 spring fashion landscape is characterized by a harmonious blend of comfort and elegance. Designers have embraced softer fabrics, flowing lines, and versatile pieces that transition seamlessly from day to night. Pastel hues dominate the color spectrum, with lavender, mint green, and soft peach making strong appearances across runways and street style alike.",
+    "IMAGE1",
+    "One of the most notable trends this season is the revival of romantic aesthetics. Floral prints, delicate lace details, and billowy sleeves create a dreamy, feminine appeal. These elements are being paired with modern accessories like chunky platform sandals and structured handbags, creating an interesting contrast between soft and hard elements.",
+    "Sustainability continues to be a driving force in fashion. Many brands are introducing eco-friendly materials and production methods, making it easier for consumers to make conscious choices without sacrificing style. Organic cotton, recycled polyester, and innovative plant-based fabrics are becoming mainstream options.",
+    "IMAGE2",
+    "Accessories play a crucial role in completing the spring look. Statement jewelry, particularly layered necklaces and oversized earrings, add personality to minimalist outfits. Scarves in silk and chiffon provide both warmth and style during transitional weather, while sunglasses with unique frame shapes protect and enhance your aesthetic.",
+    "The key to mastering spring 2024 fashion lies in versatility. Invest in pieces that can be layered, mixed, and matched to create multiple looks. A well-curated spring wardrobe should include lightweight jackets, flowy dresses, comfortable trousers, and timeless accessories that reflect your personal style while embracing the season's trends."
+  ]
+}

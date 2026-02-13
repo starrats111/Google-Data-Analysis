@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>About Us - AlluraHub</title>
+    <link rel="stylesheet" href="css/style.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Crimson+Text:ital,wght@0,400;0,600;1,400&family=Dancing+Script:wght@400;600&family=Playfair+Display:ital,wght@0,400;0,700;1,400&display=swap" rel="stylesheet">
+</head>
+<body>
+    <!-- Top Navigation -->
+    <header class="main-header">
+        <div class="header-container">
+            <div class="logo">
+                <h1><a href="index.html" style="text-decoration: none; color: inherit;">AlluraHub</a></h1>
+            </div>
+            <nav class="main-nav">
+                <ul class="nav-menu">
+                    <li><a href="index.html">Home</a></li>
+                    <li><a href="category.html?cat=fashion">Fashion & Accessories</a></li>
+                    <li><a href="category.html?cat=health">Health & Beauty</a></li>
+                    <li><a href="category.html?cat=home">Home & Garden</a></li>
+                    <li><a href="category.html?cat=travel">Travel & Accommodation</a></li>
+                    <li><a href="category.html?cat=finance">Finance & Insurance</a></li>
+                    <li><a href="category.html?cat=food">Food & Beverage</a></li>
+                </ul>
+            </nav>
+            <div class="header-actions">
+                <div class="search-container">
+                    <input type="text" id="searchInput" placeholder="Search articles..." class="search-box">
+                    <button class="search-btn" onclick="performSearch()" title="Search">
+                        <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                            <path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/>
+                        </svg>
+                    </button>
+                </div>
+                <div class="social-icons">
+                    <a href="https://www.facebook.com/AlluraHub" target="_blank" rel="noopener noreferrer" class="social-icon" title="Facebook">
+                        <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                            <path d="M24 12.073c0-6.627-5.373-12-12-12s-12 5.373-12 12c0 5.99 4.388 10.954 10.125 11.854v-8.385H7.078v-3.47h3.047V9.43c0-3.007 1.792-4.669 4.533-4.669 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.925-1.956 1.874v2.25h3.328l-.532 3.47h-2.796v8.385C19.612 23.027 24 18.062 24 12.073z"/>
+                        </svg>
+                    </a>
+                    <a href="https://www.instagram.com/AlluraHub" target="_blank" rel="noopener noreferrer" class="social-icon" title="Instagram">
+                        <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                            <path d="M12 2.163c3.204 0 3.584.012 4.85.07 3.252.148 4.771 1.691 4.919 4.919.058 1.265.069 1.645.069 4.849 0 3.205-.012 3.584-.069 4.849-.149 3.225-1.664 4.771-4.919 4.919-1.266.058-1.644.07-4.85.07-3.204 0-3.584-.012-4.849-.07-3.26-.149-4.771-1.699-4.919-4.92-.058-1.265-.07-1.644-.07-4.849 0-3.204.013-3.583.07-4.849.149-3.227 1.664-4.771 4.919-4.919 1.266-.057 1.645-.069 4.849-.069zm0-2.163c-3.259 0-3.667.014-4.947.072-4.358.2-6.78 2.618-6.98 6.98-.059 1.281-.073 1.689-.073 4.948 0 3.259.014 3.668.072 4.948.2 4.358 2.618 6.78 6.98 6.98 1.281.058 1.689.072 4.948.072 3.259 0 3.668-.014 4.948-.072 4.354-.2 6.782-2.618 6.979-6.98.059-1.28.073-1.689.073-4.948 0-3.259-.014-3.667-.072-4.947-.196-4.354-2.617-6.78-6.979-6.98-1.281-.059-1.69-.073-4.949-.073zm0 5.838c-3.403 0-6.162 2.759-6.162 6.162s2.759 6.163 6.162 6.163 6.162-2.759 6.162-6.163c0-3.403-2.759-6.162-6.162-6.162zm0 10.162c-2.209 0-4-1.79-4-4 0-2.209 1.791-4 4-4s4 1.791 4 4c0 2.21-1.791 4-4 4zm6.406-11.845c-.796 0-1.441.645-1.441 1.44s.645 1.44 1.441 1.44c.795 0 1.439-.645 1.439-1.44s-.644-1.44-1.439-1.44z"/>
+                        </svg>
+                    </a>
+                    <a href="https://twitter.com/AlluraHub" target="_blank" rel="noopener noreferrer" class="social-icon" title="Twitter">
+                        <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                            <path d="M23.953 4.57a10 10 0 01-2.825.775 4.958 4.958 0 002.163-2.723c-.951.555-2.005.959-3.127 1.184a4.92 4.92 0 00-8.384 4.482C7.69 8.095 4.067 6.13 1.64 3.162a4.822 4.822 0 00-.666 2.475c0 1.71.87 3.213 2.188 4.096a4.904 4.904 0 01-2.228-.616v.06a4.923 4.923 0 003.946 4.827 4.996 4.996 0 01-2.212.085 4.936 4.936 0 004.604 3.417 9.867 9.867 0 01-6.102 2.105c-.39 0-.779-.023-1.17-.067a13.995 13.995 0 007.557 2.209c9.053 0 13.998-7.496 13.998-13.985 0-.21 0-.42-.015-.63A9.935 9.935 0 0024 4.59z"/>
+                        </svg>
+                    </a>
+                    <a href="https://www.pinterest.com/AlluraHub" target="_blank" rel="noopener noreferrer" class="social-icon" title="Pinterest">
+                        <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                            <path d="M12 0C5.373 0 0 5.372 0 12c0 5.084 3.163 9.426 7.627 11.174-.105-.949-.2-2.403.041-3.439.219-.937 1.406-5.957 1.406-5.957s-.359-.72-.359-1.781c0-1.663.967-2.911 2.168-2.911 1.024 0 1.518.769 1.518 1.688 0 1.029-.653 2.567-.992 3.992-.285 1.193.6 2.165 1.775 2.165 2.128 0 3.768-2.245 3.768-5.487 0-2.861-2.063-4.869-5.008-4.869-3.41 0-5.409 2.562-5.409 5.199 0 1.033.394 2.143.889 2.741.099.12.112.225.085.345-.09.375-.293 1.199-.334 1.363-.053.225-.172.271-.401.165-1.495-.69-2.433-2.878-2.433-4.646 0-3.776 2.748-7.252 7.92-7.252 4.158 0 7.392 2.967 7.392 6.923 0 4.135-2.607 7.462-6.233 7.462-1.214 0-2.357-.629-2.75-1.378l-.748 2.853c-.271 1.043-1.002 2.35-1.492 3.146C9.57 23.812 10.763 24 12 24c6.627 0 12-5.373 12-12S18.627 0 12 0z"/>
+                        </svg>
+                    </a>
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <!-- Main Content -->
+    <div class="page-container">
+        <div class="page-content">
+            <h1>About AlluraHub</h1>
+            
+            <p>Welcome to AlluraHub, a curated lifestyle blog dedicated to celebrating the art of living well. In a world that moves at breakneck speed, we believe in the power of slowing down, appreciating quality, and making intentional choices that enrich our daily lives.</p>
+            
+            <h2>Our Mission</h2>
+            <p>AlluraHub was born from a simple yet profound belief: that life's greatest pleasures come from thoughtful curation, not accumulation. We explore six essential aspects of modern living—fashion and accessories, health and beauty, home and garden, travel and accommodation, finance and insurance, and food and beverage—through the lens of quality, authenticity, and timeless elegance.</p>
+            
+            <p>Our mission is to provide you with carefully researched, beautifully written content that goes beyond surface-level trends. We dive deep into the stories behind products, the craftsmanship that creates them, and the experiences that make life meaningful. Every article, every recommendation, every piece of advice is selected with intention and care.</p>
+            
+            <h2>What Sets Us Apart</h2>
+            <p>In an age of endless content and fleeting trends, AlluraHub stands apart through our commitment to depth over breadth. We don't chase every new fad or publish content for the sake of volume. Instead, we take time to understand, to research, and to craft stories that resonate.</p>
+            
+            <p>Our editorial approach combines the rigor of journalism with the warmth of personal storytelling. We believe that the best recommendations come from genuine experience and thorough understanding. When we feature a product, a destination, or a practice, it's because we've explored it deeply and believe it offers real value to our readers.</p>
+            
+            <h2>Our Values</h2>
+            <p><strong>Quality over Quantity:</strong> We believe in fewer, better things. Whether it's a piece of clothing, a skincare product, or a travel experience, we focus on items and experiences that offer lasting value.</p>
+            
+            <p><strong>Authenticity:</strong> In a world of sponsored content and paid promotions, we maintain editorial independence. Our recommendations come from genuine appreciation, not commercial obligation.</p>
+            
+            <p><strong>Sustainability:</strong> We're mindful of our impact on the planet and on communities. We celebrate brands and practices that prioritize ethical production, environmental responsibility, and social consciousness.</p>
+            
+            <p><strong>Timelessness:</strong> While we appreciate innovation, we're drawn to things that endure. Our content focuses on choices that will serve you well not just today, but for years to come.</p>
+            
+            <h2>Our Story</h2>
+            <p>AlluraHub began as a personal project—a way to document and share discoveries about living intentionally. What started as a small collection of thoughts on quality and curation has grown into a community of readers who share our appreciation for the finer things in life, thoughtfully chosen.</p>
+            
+            <p>Today, AlluraHub reaches readers around the world who are seeking more than just information—they're seeking inspiration, guidance, and a sense of connection to a community that values quality, authenticity, and the art of living well.</p>
+            
+            <h2>Join Our Community</h2>
+            <p>We invite you to explore our articles, discover new perspectives, and join us in celebrating the art of intentional living. Whether you're looking for advice on building a timeless wardrobe, creating a peaceful home sanctuary, planning an authentic travel experience, or making informed financial decisions, AlluraHub is here to guide and inspire.</p>
+            
+            <p>Thank you for being part of our community. We're honored to share this journey with you.</p>
+            
+            <p style="margin-top: 3rem; font-style: italic; text-align: center; color: var(--accent-brown);">
+                With gratitude,<br>
+                The AlluraHub Team
+            </p>
+        </div>
+    </div>
+
+    <!-- Footer -->
+    <footer class="main-footer">
+        <div class="footer-content">
+            <div class="footer-section">
+                <h3>About AlluraHub</h3>
+                <p>AlluraHub is a curated lifestyle blog dedicated to bringing you the finest insights across fashion, health, home, travel, finance, and culinary arts. We celebrate the art of living well.</p>
+            </div>
+            <div class="footer-section">
+                <h3>Categories</h3>
+                <ul class="footer-links">
+                    <li><a href="category.html?cat=fashion">Fashion & Accessories</a></li>
+                    <li><a href="category.html?cat=health">Health & Beauty</a></li>
+                    <li><a href="category.html?cat=home">Home & Garden</a></li>
+                    <li><a href="category.html?cat=travel">Travel & Accommodation</a></li>
+                    <li><a href="category.html?cat=finance">Finance & Insurance</a></li>
+                    <li><a href="category.html?cat=food">Food & Beverage</a></li>
+                </ul>
+            </div>
+            <div class="footer-section">
+                <h3>Connect</h3>
+                <ul class="footer-links">
+                    <li><a href="about.html">About Us</a></li>
+                    <li><a href="contact.html">Contact</a></li>
+                </ul>
+                <div class="footer-social">
+                    <a href="https://www.facebook.com/AlluraHub" target="_blank" rel="noopener noreferrer" class="footer-social-icon" title="Facebook">
+                        <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                            <path d="M24 12.073c0-6.627-5.373-12-12-12s-12 5.373-12 12c0 5.99 4.388 10.954 10.125 11.854v-8.385H7.078v-3.47h3.047V9.43c0-3.007 1.792-4.669 4.533-4.669 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.925-1.956 1.874v2.25h3.328l-.532 3.47h-2.796v8.385C19.612 23.027 24 18.062 24 12.073z"/>
+                        </svg>
+                    </a>
+                    <a href="https://www.instagram.com/AlluraHub" target="_blank" rel="noopener noreferrer" class="footer-social-icon" title="Instagram">
+                        <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                            <path d="M12 2.163c3.204 0 3.584.012 4.85.07 3.252.148 4.771 1.691 4.919 4.919.058 1.265.069 1.645.069 4.849 0 3.205-.012 3.584-.069 4.849-.149 3.225-1.664 4.771-4.919 4.919-1.266.058-1.644.07-4.85.07-3.204 0-3.584-.012-4.849-.07-3.26-.149-4.771-1.699-4.919-4.92-.058-1.265-.07-1.644-.07-4.849 0-3.204.013-3.583.07-4.849.149-3.227 1.664-4.771 4.919-4.919 1.266-.057 1.645-.069 4.849-.069zm0-2.163c-3.259 0-3.667.014-4.947.072-4.358.2-6.78 2.618-6.98 6.98-.059 1.281-.073 1.689-.073 4.948 0 3.259.014 3.668.072 4.948.2 4.358 2.618 6.78 6.98 6.98 1.281.058 1.689.072 4.948.072 3.259 0 3.668-.014 4.948-.072 4.354-.2 6.782-2.618 6.979-6.98.059-1.28.073-1.689.073-4.948 0-3.259-.014-3.667-.072-4.947-.196-4.354-2.617-6.78-6.979-6.98-1.281-.059-1.69-.073-4.949-.073zm0 5.838c-3.403 0-6.162 2.759-6.162 6.162s2.759 6.163 6.162 6.163 6.162-2.759 6.162-6.163c0-3.403-2.759-6.162-6.162-6.162zm0 10.162c-2.209 0-4-1.79-4-4 0-2.209 1.791-4 4-4s4 1.791 4 4c0 2.21-1.791 4-4 4zm6.406-11.845c-.796 0-1.441.645-1.441 1.44s.645 1.44 1.441 1.44c.795 0 1.439-.645 1.439-1.44s-.644-1.44-1.439-1.44z"/>
+                        </svg>
+                    </a>
+                    <a href="https://twitter.com/AlluraHub" target="_blank" rel="noopener noreferrer" class="footer-social-icon" title="Twitter">
+                        <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                            <path d="M23.953 4.57a10 10 0 01-2.825.775 4.958 4.958 0 002.163-2.723c-.951.555-2.005.959-3.127 1.184a4.92 4.92 0 00-8.384 4.482C7.69 8.095 4.067 6.13 1.64 3.162a4.822 4.822 0 00-.666 2.475c0 1.71.87 3.213 2.188 4.096a4.904 4.904 0 01-2.228-.616v.06a4.923 4.923 0 003.946 4.827 4.996 4.996 0 01-2.212.085 4.936 4.936 0 004.604 3.417 9.867 9.867 0 01-6.102 2.105c-.39 0-.779-.023-1.17-.067a13.995 13.995 0 007.557 2.209c9.053 0 13.998-7.496 13.998-13.985 0-.21 0-.42-.015-.63A9.935 9.935 0 0024 4.59z"/>
+                        </svg>
+                    </a>
+                    <a href="https://www.pinterest.com/AlluraHub" target="_blank" rel="noopener noreferrer" class="footer-social-icon" title="Pinterest">
+                        <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                            <path d="M12 0C5.373 0 0 5.372 0 12c0 5.084 3.163 9.426 7.627 11.174-.105-.949-.2-2.403.041-3.439.219-.937 1.406-5.957 1.406-5.957s-.359-.72-.359-1.781c0-1.663.967-2.911 2.168-2.911 1.024 0 1.518.769 1.518 1.688 0 1.029-.653 2.567-.992 3.992-.285 1.193.6 2.165 1.775 2.165 2.128 0 3.768-2.245 3.768-5.487 0-2.861-2.063-4.869-5.008-4.869-3.41 0-5.409 2.562-5.409 5.199 0 1.033.394 2.143.889 2.741.099.12.112.225.085.345-.09.375-.293 1.199-.334 1.363-.053.225-.172.271-.401.165-1.495-.69-2.433-2.878-2.433-4.646 0-3.776 2.748-7.252 7.92-7.252 4.158 0 7.392 2.967 7.392 6.923 0 4.135-2.607 7.462-6.233 7.462-1.214 0-2.357-.629-2.75-1.378l-.748 2.853c-.271 1.043-1.002 2.35-1.492 3.146C9.57 23.812 10.763 24 12 24c6.627 0 12-5.373 12-12S18.627 0 12 0z"/>
+                        </svg>
+                    </a>
+                </div>
+            </div>
+        </div>
+        <div class="footer-bottom">
+            <p>&copy; 2025 AlluraHub. All rights reserved.</p>
+        </div>
+    </footer>
+
+    <script src="js/articles-index.js"></script>
+    <script src="js/main.js"></script>
+</body>
+</html>
+

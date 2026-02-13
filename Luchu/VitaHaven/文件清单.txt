@@ -1,0 +1,43 @@
+需要上传到GitHub的文件清单
+========================================
+
+根目录文件：
+- index.html
+- about.html
+- article.html
+- category.html
+- contact.html
+- README.md
+- .gitignore
+- push_to_github.bat (可选)
+- 快速推送说明.txt (可选)
+- 推送指南.md (可选)
+
+css文件夹：
+- css/style.css
+
+js文件夹：
+- js/data.js
+- js/main.js
+
+image文件夹：
+- image/1.png
+- image/2.png
+- image/3.png
+
+========================================
+上传步骤（GitHub网页）：
+========================================
+
+1. 访问：https://github.com/starrats111/VitaHaven
+2. 点击 "uploading an existing file" 或 "Add file" → "Upload files"
+3. 拖拽所有文件到页面
+4. 输入提交信息："Initial commit"
+5. 点击 "Commit changes"
+
+注意：需要分别上传每个文件夹中的文件
+或者：可以一次性选择整个文件夹上传
+
+========================================
+
+

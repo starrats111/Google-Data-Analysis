@@ -1,0 +1,30 @@
+{
+  "id": 6,
+  "title": "Artisan Coffee Brewing Techniques",
+  "category": "food",
+  "categoryName": "Food & Beverage",
+  "excerpt": "Master the art of brewing perfect coffee at home with these professional techniques.",
+  "image": "☕",
+  "heroImage": "https://images.unsplash.com/photo-1517487881594-2787fef5ebf7?w=1200&h=600&fit=crop",
+  "inlineImage1": "https://images.unsplash.com/photo-1510591509098-f4fdc6d0ff04?w=800&h=600&fit=crop",
+  "inlineImage2": "https://images.unsplash.com/photo-1497935586351-b67a49e012bf?w=800&h=600&fit=crop",
+  "date": "August 15, 2025",
+  "author": "James Brown",
+  "products": [
+    "Coffee Beans",
+    "French Press",
+    "Grinder"
+  ],
+  "content": [
+    "Brewing exceptional coffee at home is both an art and a science. While it may seem complex, understanding a few key principles and techniques can transform your daily cup from ordinary to extraordinary. This guide will help you master the fundamentals of artisan coffee brewing.",
+    "The foundation of great coffee starts with quality beans. Freshly roasted, high-quality beans make the most significant difference in flavor. Look for beans roasted within the past two weeks, and consider buying from local roasters who can provide information about origin, roast date, and flavor profiles.",
+    "IMAGE1",
+    "Grinding your beans just before brewing is crucial for optimal flavor. Coffee begins to lose its aromatic compounds immediately after grinding, so investing in a good burr grinder is essential. Burr grinders provide consistent particle size, which is key to even extraction. The grind size should match your brewing method—finer for espresso, medium for drip, and coarser for French press.",
+    "Water quality and temperature significantly impact your coffee's taste. Use filtered water free from strong odors or flavors. The ideal brewing temperature is between 195°F and 205°F (90°C to 96°C). Water that's too hot will extract bitter compounds, while water that's too cool will result in under-extracted, sour coffee.",
+    "IMAGE2",
+    "The coffee-to-water ratio is another critical factor. A general starting point is 1:15 to 1:17 (coffee to water by weight). For example, 20 grams of coffee to 300 grams of water. However, this can be adjusted based on your taste preferences. Stronger coffee requires a higher ratio, while lighter coffee uses less.",
+    "Different brewing methods extract flavors differently. The French press offers full-bodied coffee with rich oils. Pour-over methods like V60 or Chemex provide clean, bright cups with clarity of flavor. Espresso machines create concentrated, intense shots, while AeroPress offers versatility and portability.",
+    "Mastering the pour-over technique involves a consistent, controlled pour in a spiral pattern, starting from the center and moving outward. This ensures even saturation of the coffee grounds. The bloom—pouring a small amount of water to let the coffee degas—is essential for fresh beans and should last 30-45 seconds.",
+    "Patience and practice are key to perfecting your brewing technique. Keep a brewing journal to track variables like grind size, water temperature, brew time, and ratios. Small adjustments can make significant differences in flavor. With time and experimentation, you'll develop the skills to consistently brew coffee that rivals your favorite café."
+  ]
+}
