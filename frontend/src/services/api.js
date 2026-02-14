@@ -178,6 +178,7 @@ api.interceptors.response.use(
           originalRequest.url?.includes('/api/auth/login')) {
         localStorage.removeItem('token')
         localStorage.removeItem('user')
+        localStorage.removeItem('permissions')
         window.location.href = '/login'
         return Promise.reject(error)
       }
@@ -186,6 +187,7 @@ api.interceptors.response.use(
       if (originalRequest._retry) {
         localStorage.removeItem('token')
         localStorage.removeItem('user')
+        localStorage.removeItem('permissions')
         window.location.href = '/login'
         return Promise.reject(error)
       }
@@ -228,6 +230,7 @@ api.interceptors.response.use(
         isRefreshing = false
         localStorage.removeItem('token')
         localStorage.removeItem('user')
+        localStorage.removeItem('permissions')
         window.location.href = '/login'
         return Promise.reject(refreshError)
       }

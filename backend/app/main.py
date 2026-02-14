@@ -355,28 +355,9 @@ if _dist_dir:
         # 确保API路由不被拦截
         if full_path.startswith("api/"):
             # 让API路由处理，返回404
-            from fastapi.responses import JSONResponse
+            # 复用全局 ALLOWED_ORIGINS 和正则，避免重复定义
             origin = request.headers.get("origin")
-            allowed_origins = [
-                "https://google-data-analysis.top",
-                "https://www.google-data-analysis.top",
-                "https://api.google-data-analysis.top",
-                "https://google-data-analysis.pages.dev",
-            ]
-            cors_origin = origin if origin in allowed_origins else None
-            if not cors_origin and origin:
-                import re
-                if re.match(r"^https://([a-z0-9-]+\.)?google-data-analysis\.(pages\.dev|top)$", origin):
-                    cors_origin = origin
-            
-            headers = {
-                "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS, PATCH, HEAD",
-                "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Requested-With, Accept, Origin",
-            }
-            if cors_origin:
-                headers["Access-Control-Allow-Origin"] = cors_origin
-                headers["Access-Control-Allow-Credentials"] = "true"
-            # 不设置 "*"，如果不在白名单就不返回 CORS 头（安全做法）
+            headers = get_cors_headers(origin)
             
             return JSONResponse(
                 status_code=404,
