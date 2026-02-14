@@ -1,5 +1,9 @@
 """
 露出图片代理 API - 绕过商家网站防盗链 + 图片上传
+
+安全改进:
+- 公开接口添加速率限制（60次/分钟/IP）
+- Referer 校验
 """
 import httpx
 import hashlib
@@ -12,12 +16,17 @@ from datetime import datetime
 from typing import Optional, List
 from urllib.parse import unquote
 
-from fastapi import APIRouter, Depends, HTTPException, Query, BackgroundTasks, UploadFile, File
+from fastapi import APIRouter, Depends, HTTPException, Query, BackgroundTasks, UploadFile, File, Request
 from fastapi.responses import Response, FileResponse
 from pydantic import BaseModel
+from slowapi import Limiter
+from slowapi.util import get_remote_address
 
 from app.models.user import User
 from app.middleware.auth import get_current_user, get_luchu_authorized_user
+
+# 速率限制器
+limiter = Limiter(key_func=get_remote_address)
 
 logger = logging.getLogger(__name__)
 
@@ -177,7 +186,9 @@ async def _fetch_image_with_playwright(url: str) -> Optional[tuple]:
 
 
 @router.get("/proxy-public")
+@limiter.limit("60/minute")  # 每分钟最多 60 次请求
 async def proxy_image_public(
+    request: Request,  # 速率限制需要 Request 对象
     url: str = Query(..., description="要代理的图片URL"),
     force_playwright: bool = Query(False, description="强制使用 Playwright")
 ):
@@ -185,10 +196,27 @@ async def proxy_image_public(
     公开的图片代理接口（无需登录）
     用于前端直接在 img src 中使用
     
-    注意：此接口不需要认证，但有速率限制
+    安全措施:
+    - 速率限制: 60次/分钟/IP
+    - Referer 校验: 仅允许来自白名单域名的请求
     """
     if not url:
         raise HTTPException(status_code=400, detail="缺少图片URL参数")
+    
+    # Referer 校验 - 防止被外部网站滥用
+    referer = request.headers.get("referer", "")
+    if referer:
+        # 检查 Referer 是否来自允许的域名
+        allowed_referers = [
+            "google-data-analysis.top",
+            "google-data-analysis.pages.dev",
+            "localhost",
+            "127.0.0.1"
+        ]
+        is_allowed = any(domain in referer for domain in allowed_referers)
+        if not is_allowed:
+            logger.warning(f"[Image Proxy] 非法 Referer 被拒绝: {referer[:100]}")
+            raise HTTPException(status_code=403, detail="非法请求来源")
     
     # URL 解码
     url = unquote(url)
@@ -237,17 +265,45 @@ async def proxy_image_public(
                         if len(img_content) > 1000:
                             content = img_content
                             content_type = ct
-                            logger.info(f"[Image Proxy] httpx 成功: {url[:50]}... ({len(content)} bytes)")
+                            logger.info(
+                                "[Image Proxy] httpx 成功",
+                                extra={
+                                    "action": "proxy_image",
+                                    "method": "httpx",
+                                    "success": True,
+                                    "url": url[:100],
+                                    "size_bytes": len(content),
+                                    "content_type": ct
+                                }
+                            )
         except Exception as e:
-            logger.warning(f"[Image Proxy] httpx 失败: {url[:50]}... - {e}")
+            logger.warning(
+                "[Image Proxy] httpx 失败",
+                extra={
+                    "action": "proxy_image",
+                    "method": "httpx",
+                    "success": False,
+                    "url": url[:100],
+                    "error": str(e)
+                }
+            )
     
     # 方法2: 如果 httpx 失败，使用 Playwright（绕过更严格的防盗链）
     if content is None:
-        logger.info(f"[Image Proxy] 尝试 Playwright: {url[:50]}...")
+        logger.info("[Image Proxy] 尝试 Playwright", extra={"action": "proxy_image", "method": "playwright", "url": url[:100]})
         result = await _fetch_image_with_playwright(url)
         if result:
             content, content_type = result
-            logger.info(f"[Image Proxy] Playwright 成功: {url[:50]}... ({len(content)} bytes)")
+            logger.info(
+                "[Image Proxy] Playwright 成功",
+                extra={
+                    "action": "proxy_image",
+                    "method": "playwright",
+                    "success": True,
+                    "url": url[:100],
+                    "size_bytes": len(content)
+                }
+            )
     
     # 如果成功获取到图片
     if content and len(content) > 500:
@@ -279,7 +335,15 @@ async def proxy_image_public(
         )
     
     # 所有方法都失败，返回占位图
-    logger.warning(f"[Image Proxy] 所有方法失败: {url[:50]}...")
+    logger.warning(
+        "[Image Proxy] 所有方法失败",
+        extra={
+            "action": "proxy_image",
+            "success": False,
+            "url": url[:100],
+            "methods_tried": ["httpx", "playwright"]
+        }
+    )
     return Response(
         content=_get_placeholder_image("无法加载"),
         media_type="image/svg+xml",

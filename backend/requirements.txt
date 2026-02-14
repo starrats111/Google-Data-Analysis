@@ -19,3 +19,5 @@ anthropic>=0.18.0
 httpx>=0.27.0
 # 无头浏览器 (JavaScript渲染)
 playwright>=1.40.0
+# 速率限制
+slowapi>=0.1.9

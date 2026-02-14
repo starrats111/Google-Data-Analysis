@@ -1,10 +1,15 @@
 """
 认证API
+
+安全改进:
+- 登录接口添加速率限制（5次/分钟/IP），防止暴力破解
 """
 from datetime import timedelta
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Request
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
+from slowapi import Limiter
+from slowapi.util import get_remote_address
 
 from app.database import get_db
 from app.models.user import User
@@ -16,6 +21,9 @@ from app.middleware.auth import (
 )
 from app.config import settings
 
+# 速率限制器
+limiter = Limiter(key_func=get_remote_address)
+
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
 # 用户相关路由
@@ -23,11 +31,18 @@ user_router = APIRouter(prefix="/api/user", tags=["user"])
 
 
 @router.post("/login", response_model=Token)
+@limiter.limit("5/minute")  # 登录接口: 每分钟最多 5 次，防止暴力破解
 async def login(
+    request: Request,  # 速率限制需要 Request 对象
     form_data: OAuth2PasswordRequestForm = Depends(),
     db: Session = Depends(get_db)
 ):
-    """用户登录"""
+    """用户登录
+    
+    安全措施:
+    - 速率限制: 5次/分钟/IP，防止暴力破解
+    - JWT Token 有效期: 24小时
+    """
     user = db.query(User).filter(User.username == form_data.username).first()
     
     if not user or not verify_password(form_data.password, user.password_hash):

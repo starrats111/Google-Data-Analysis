@@ -11,6 +11,11 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.exceptions import RequestValidationError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+# 速率限制
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
+
 from app.config import settings
 from app.services.scheduler import start_scheduler, shutdown_scheduler
 
@@ -68,6 +73,12 @@ from app.api import (
 
 app = FastAPI(title="Google Analysis Platform API")
 
+# 速率限制配置
+# 使用客户端 IP 作为限制键，防止单个 IP 过度请求
+limiter = Limiter(key_func=get_remote_address)
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
 # CORS配置 - 必须在所有路由之前添加
 # 配置允许跨域请求，解决前端Cloudflare部署访问后端阿里云API的CORS问题
 # 使用最宽松的配置确保所有请求都能通过，包括错误响应
@@ -89,15 +100,16 @@ ALLOWED_ORIGINS = [
     # 正则表达式匹配所有google-data-analysis相关域名和本地开发环境
 ALLOWED_ORIGIN_REGEX = r"^(https://([a-z0-9-]+\.)?google-data-analysis\.(pages\.dev|top)|https://www\.google-data-analysis\.top|https://api\.google-data-analysis\.top|https?://(localhost|127\.0\.0\.1)(:\d+)?)$"
 
-# CORS配置 - 使用 Starlette 的 CORSMiddleware 直接配置，避免 FastAPI 包装的兼容性问题
-# 修复 TypeError: CORSMiddleware.__init__() got an unexpected keyword argument 'automatic_options'
+# CORS配置 - 使用 Starlette 的 CORSMiddleware 直接配置
+# 安全改进: 使用白名单替代 ["*"]，支持动态子域名（如 Cloudflare Pages 预览部署）
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # 临时允许所有来源，确保CORS正常工作
-    allow_credentials=False,  # 当allow_origins=["*"]时，allow_credentials必须为False
-    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH", "HEAD"],  # 明确指定方法
-    allow_headers=["*"],  # 允许所有请求头
-    expose_headers=["*"],  # 暴露所有响应头
+    allow_origins=ALLOWED_ORIGINS,  # 使用白名单，不再是 ["*"]
+    allow_origin_regex=ALLOWED_ORIGIN_REGEX,  # 支持动态子域名匹配
+    allow_credentials=True,  # 允许携带认证信息（Cookie、Authorization）
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH", "HEAD"],
+    allow_headers=["Authorization", "Content-Type", "X-Requested-With", "Accept", "Origin"],
+    expose_headers=["Content-Disposition", "X-Request-Id"],
     max_age=3600,
 )
 
@@ -105,16 +117,32 @@ app.add_middleware(
 def get_cors_headers(origin: str = None) -> dict:
     """获取CORS响应头
     
-    注意：当CORS中间件配置为allow_origins=["*"]时，这里也应该返回"*"
-    因为allow_credentials=False，所以可以安全地使用"*"
+    安全改进: 根据请求来源动态返回对应的 Origin，而不是 "*"
+    这样可以配合 allow_credentials=True 使用
     """
+    import re
+    
+    # 默认不允许
+    allowed_origin = None
+    
+    if origin:
+        # 检查是否在白名单中
+        if origin in ALLOWED_ORIGINS:
+            allowed_origin = origin
+        # 检查是否匹配正则表达式
+        elif re.match(ALLOWED_ORIGIN_REGEX, origin):
+            allowed_origin = origin
+    
     headers = {
-        "Access-Control-Allow-Origin": "*",  # 始终返回*，因为中间件已配置allow_origins=["*"]
         "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS, PATCH, HEAD",
-        "Access-Control-Allow-Headers": "*",
-        "Access-Control-Expose-Headers": "*",
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Requested-With, Accept, Origin",
+        "Access-Control-Expose-Headers": "Content-Disposition, X-Request-Id",
         "Access-Control-Max-Age": "3600",
+        "Access-Control-Allow-Credentials": "true",
     }
+    
+    if allowed_origin:
+        headers["Access-Control-Allow-Origin"] = allowed_origin
     
     return headers
 
