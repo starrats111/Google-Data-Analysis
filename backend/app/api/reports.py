@@ -20,7 +20,7 @@ from app.models.user import User
 from app.models.affiliate_account import AffiliateAccount, AffiliatePlatform
 from app.models.affiliate_transaction import AffiliateTransaction
 from app.models.google_ads_api_data import GoogleAdsApiData, GoogleMccAccount
-from app.api.auth import get_current_user
+from app.middleware.auth import get_current_user, get_current_manager_or_leader
 
 router = APIRouter(prefix="/api/reports", tags=["reports"])
 

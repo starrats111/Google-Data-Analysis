@@ -113,6 +113,30 @@ app.add_middleware(
     max_age=3600,
 )
 
+# 安全头部中间件
+@app.middleware("http")
+async def security_headers_middleware(request: Request, call_next):
+    """添加安全响应头"""
+    response = await call_next(request)
+    
+    # 防止点击劫持
+    response.headers["X-Frame-Options"] = "DENY"
+    
+    # 防止 MIME 类型嗅探
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    
+    # XSS 过滤器（现代浏览器内置，作为额外保护层）
+    response.headers["X-XSS-Protection"] = "1; mode=block"
+    
+    # Referrer 策略：仅在同源时发送完整 Referrer
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    
+    # 权限策略：禁用不需要的浏览器功能
+    response.headers["Permissions-Policy"] = "geolocation=(), microphone=(), camera=()"
+    
+    return response
+
+
 # 辅助函数：获取CORS头（必须在CORS配置之后定义）
 def get_cors_headers(origin: str = None) -> dict:
     """获取CORS响应头

@@ -4,9 +4,9 @@
 """
 from sqlalchemy import Column, Integer, String, Float, DateTime, ForeignKey, Text, Boolean
 from sqlalchemy.orm import relationship
-from datetime import datetime
 
 from app.database import Base
+from app.middleware.auth import utc_now
 
 
 class KeywordBid(Base):
@@ -29,9 +29,9 @@ class KeywordBid(Base):
     avg_cpc = Column(Float)             # 平均CPC（用于计算建议值）
     status = Column(String(20))         # ENABLED, PAUSED, REMOVED
     quality_score = Column(Integer)     # 质量得分 1-10
-    last_sync_at = Column(DateTime, default=datetime.utcnow)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    last_sync_at = Column(DateTime, default=utc_now)
+    created_at = Column(DateTime, default=utc_now)
+    updated_at = Column(DateTime, default=utc_now, onupdate=utc_now)
     
     # 关系
     user = relationship("User", backref="keyword_bids")
@@ -59,9 +59,9 @@ class CampaignBidStrategy(Base):
     max_cpc_limit = Column(Float)  # 出价上限（如果设置）
     avg_cpc = Column(Float)        # 平均CPC
     
-    last_sync_at = Column(DateTime, default=datetime.utcnow)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    last_sync_at = Column(DateTime, default=utc_now)
+    created_at = Column(DateTime, default=utc_now)
+    updated_at = Column(DateTime, default=utc_now, onupdate=utc_now)
     
     # 关系
     user = relationship("User", backref="campaign_bid_strategies")
@@ -84,7 +84,7 @@ class BidStrategyChange(Base):
     status = Column(String(20), default='pending')  # pending, success, failed
     error_message = Column(Text)
     
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=utc_now)
     completed_at = Column(DateTime)
     
     # 关系

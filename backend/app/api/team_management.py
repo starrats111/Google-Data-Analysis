@@ -16,7 +16,7 @@ from app.models.user import User, UserRole
 from app.models.team import Team
 from app.models.google_ads_api_data import GoogleAdsApiData
 from app.models.affiliate_transaction import AffiliateTransaction
-from app.api.auth import get_current_user
+from app.middleware.auth import get_current_user
 from app.services.permission_service import PermissionService
 
 router = APIRouter(prefix="/api/team", tags=["团队管理"])

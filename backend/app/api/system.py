@@ -9,7 +9,7 @@ import os
 import logging
 
 from app.database import get_db
-from app.api.auth import get_current_user
+from app.middleware.auth import get_current_user
 from app.models.user import User
 
 router = APIRouter(prefix="/api/system", tags=["system"])

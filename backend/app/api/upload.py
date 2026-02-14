@@ -1,5 +1,10 @@
 """
 文件上传API
+
+安全改进:
+- 文件扩展名白名单验证
+- MIME 类型验证（警告级别）
+- 文件大小限制
 """
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, status
@@ -7,6 +12,7 @@ from sqlalchemy.orm import Session
 from pathlib import Path
 from datetime import datetime, date
 import shutil
+import logging
 
 from app.database import get_db
 from app.middleware.auth import get_current_user
@@ -16,7 +22,51 @@ from app.models.affiliate_account import AffiliateAccount
 from app.schemas.upload import DataUploadResponse
 from app.config import settings
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/api/upload", tags=["upload"])
+
+# MIME 类型白名单映射
+ALLOWED_MIME_TYPES = {
+    '.xlsx': ['application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'],
+    '.xls': ['application/vnd.ms-excel'],
+    '.csv': ['text/csv', 'application/csv', 'text/plain'],  # CSV 可能有多种 MIME
+}
+
+
+def validate_upload_file(file: UploadFile) -> str:
+    """验证上传文件的扩展名和 MIME 类型
+    
+    Returns:
+        文件扩展名
+    
+    Raises:
+        HTTPException: 文件类型不合法
+    """
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="文件名不能为空")
+    
+    # 1. 验证扩展名（严格）
+    file_ext = Path(file.filename).suffix.lower()
+    if file_ext not in settings.ALLOWED_EXTENSIONS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"不支持的文件格式: {file_ext}，允许: {', '.join(settings.ALLOWED_EXTENSIONS)}"
+        )
+    
+    # 2. 验证 MIME 类型（警告级别，不阻断）
+    expected_mimes = ALLOWED_MIME_TYPES.get(file_ext, [])
+    if file.content_type and expected_mimes:
+        if file.content_type not in expected_mimes:
+            # 记录警告但不阻断（浏览器可能发送不准确的 MIME）
+            logger.warning(
+                f"MIME类型不匹配: 文件={file.filename}, "
+                f"扩展名={file_ext}, "
+                f"实际MIME={file.content_type}, "
+                f"预期MIME={expected_mimes}"
+            )
+    
+    return file_ext
 
 
 def save_upload_file(file: UploadFile, user_id: int, upload_type: str) -> str:
@@ -44,13 +94,8 @@ async def upload_google_ads(
     db: Session = Depends(get_db)
 ):
     """上传谷歌广告数据（表1）"""
-    # 验证文件类型
-    file_ext = Path(file.filename).suffix.lower()
-    if file_ext not in settings.ALLOWED_EXTENSIONS:
-        raise HTTPException(
-            status_code=400,
-            detail=f"不支持的文件格式。支持格式：{', '.join(settings.ALLOWED_EXTENSIONS)}"
-        )
+    # 验证文件类型（扩展名 + MIME）
+    validate_upload_file(file)
     
     # 验证文件大小
     file.file.seek(0, 2)  # 移动到文件末尾
@@ -116,13 +161,8 @@ async def upload_affiliate(
     if account.user_id != current_user.id:
         raise HTTPException(status_code=403, detail="无权使用此联盟账号")
     
-    # 验证文件类型
-    file_ext = Path(file.filename).suffix.lower()
-    if file_ext not in settings.ALLOWED_EXTENSIONS:
-        raise HTTPException(
-            status_code=400,
-            detail=f"不支持的文件格式。支持格式：{', '.join(settings.ALLOWED_EXTENSIONS)}"
-        )
+    # 验证文件类型（扩展名 + MIME）
+    validate_upload_file(file)
     
     # 验证文件大小
     file.file.seek(0, 2)

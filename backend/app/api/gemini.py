@@ -11,7 +11,7 @@ import logging
 from app.database import get_db
 from app.models.user import User
 from app.models.ai_report import AIReport, UserPrompt
-from app.api.auth import get_current_user
+from app.middleware.auth import get_current_user
 from app.services.gemini_service import GeminiService
 from app.config import settings
 
