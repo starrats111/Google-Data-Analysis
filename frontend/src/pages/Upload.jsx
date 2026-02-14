@@ -523,7 +523,7 @@ const UploadPage = () => {
                   onChange={(value) => setMaxCpcValue(value)}
                 />
               </div>
-              <div style={{ padding: '8px', background: '#e6f7ff', borderRadius: '4px', fontSize: '12px', color: '#666' }}>
+              <div style={{ padding: '8px', background: '#EBF5FF', borderRadius: '4px', fontSize: '12px', color: '#666' }}>
                 <strong>说明：</strong>系统会优先从每日分析数据中自动读取“过去七天出单天数/当前Max CPC”。只有当表格里缺失这些字段时，才需要在这里手动输入作为兜底。
               </div>
             </Space>

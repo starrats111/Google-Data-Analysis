@@ -6,6 +6,8 @@ import App from './App'
 import './index.css'
 // 全局 dayjs 配置（设置默认时区为中国）
 import './utils/dayjs'
+// 天际蓝主题配置
+import themeConfig from './styles/themeConfig'
 
 // 隐藏初始 loading 状态
 function hideInitialLoading() {
@@ -21,7 +23,7 @@ function hideInitialLoading() {
 // React 渲染完成后隐藏初始 loading
 ReactDOM.createRoot(document.getElementById('root')).render(
   <React.StrictMode>
-    <ConfigProvider locale={zhCN}>
+    <ConfigProvider locale={zhCN} theme={themeConfig}>
       <App />
     </ConfigProvider>
   </React.StrictMode>

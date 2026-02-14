@@ -85,7 +85,7 @@ const StageLabelDetail = () => {
                 {labelInfo.when_to_use || '-'}
               </Descriptions.Item>
               <Descriptions.Item label="投放动作（投放组）">
-                <Text strong style={{ color: '#1890ff' }}>
+                <Text strong style={{ color: '#4DA6FF' }}>
                   {labelInfo.action_ad || '-'}
                 </Text>
               </Descriptions.Item>

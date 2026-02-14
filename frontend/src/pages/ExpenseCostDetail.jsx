@@ -181,7 +181,7 @@ export default function ExpenseCostDetail() {
                   value={data.total_cost}
                   prefix="$"
                   precision={2}
-                  valueStyle={{ color: '#1890ff', fontSize: '24px' }}
+                  valueStyle={{ color: '#4DA6FF', fontSize: '24px' }}
                 />
               </Col>
               <Col span={8}>

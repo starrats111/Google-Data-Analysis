@@ -566,7 +566,7 @@ const BidManagement = () => {
       align: 'right',
       render: (value) => (
         value > 0 ? (
-          <Text strong style={{ color: '#1890ff' }}>${value.toFixed(2)}</Text>
+          <Text strong style={{ color: '#4DA6FF' }}>${value.toFixed(2)}</Text>
         ) : (
           <Text type="secondary">自动出价</Text>
         )
@@ -709,12 +709,12 @@ const BidManagement = () => {
               <div style={{ 
                 marginBottom: 16, 
                 padding: '12px 16px',
-                background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+                background: 'linear-gradient(135deg, #4DA6FF 0%, #7B68EE 100%)',
                 borderRadius: 8,
                 display: 'flex', 
                 justifyContent: 'space-between', 
                 alignItems: 'center',
-                boxShadow: '0 4px 12px rgba(102, 126, 234, 0.4)'
+                boxShadow: '0 4px 12px rgba(77, 166, 255, 0.4)'
               }}>
                 <Space>
                   <CheckCircleOutlined style={{ color: '#fff', fontSize: 18 }} />
@@ -751,7 +751,7 @@ const BidManagement = () => {
                       disabled={selectedStrategies.filter(s => !s.is_manual_cpc).length === 0}
                       style={{ 
                         background: '#fff', 
-                        color: '#764ba2',
+                        color: '#7B68EE',
                         border: 'none',
                         fontWeight: 600,
                         boxShadow: '0 2px 8px rgba(0,0,0,0.15)'

@@ -481,7 +481,7 @@ export default function PlatformData() {
                 <Statistic
                   title="总订单数"
                   value={summaryData.total_orders}
-                  valueStyle={{ color: '#1890ff' }}
+                  valueStyle={{ color: '#4DA6FF' }}
                 />
               </Col>
               <Col xs={12} sm={8} md={6}>
@@ -490,7 +490,7 @@ export default function PlatformData() {
                   value={summaryData.total_gmv}
                   prefix="$"
                   precision={2}
-                  valueStyle={{ color: '#1890ff' }}
+                  valueStyle={{ color: '#4DA6FF' }}
                 />
               </Col>
               <Col xs={12} sm={8} md={6}>
@@ -677,13 +677,13 @@ export default function PlatformData() {
               <Space size="large">
                 <div>
                   <span style={{ color: '#666' }}>总订单数：</span>
-                  <span style={{ fontSize: '18px', fontWeight: 'bold', color: '#1890ff' }}>
+                  <span style={{ fontSize: '18px', fontWeight: 'bold', color: '#4DA6FF' }}>
                     {totalOrders.toLocaleString()}
                   </span>
                 </div>
                 <div>
                   <span style={{ color: '#666' }}>总交易金额(GMV)：</span>
-                  <span style={{ fontSize: '18px', fontWeight: 'bold', color: '#1890ff' }}>
+                  <span style={{ fontSize: '18px', fontWeight: 'bold', color: '#4DA6FF' }}>
                     ${totalGmv.toFixed(2)}
                   </span>
                 </div>

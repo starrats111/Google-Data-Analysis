@@ -395,7 +395,7 @@ const Layout = () => {
         onClose={() => setMobileDrawerVisible(false)}
         open={mobileDrawerVisible}
         width={220}
-        styles={{ body: { padding: 0, background: '#001529' } }}
+        styles={{ body: { padding: 0, background: '#0C2D48' } }}
       >
         {siderContent}
       </Drawer>

@@ -141,7 +141,7 @@ const SmartImage = ({ img, width = 100, height = 100, style = {}, onClick }) => 
             onClick={(e) => e.stopPropagation()}
             style={{ 
               fontSize: 10, 
-              color: '#1890ff', 
+              color: '#4DA6FF', 
               marginTop: 2,
               textDecoration: 'underline'
             }}
@@ -167,7 +167,7 @@ const SmartImage = ({ img, width = 100, height = 100, style = {}, onClick }) => 
           justifyContent: 'center',
           background: '#f5f5f5'
         }}>
-          <LoadingOutlined style={{ fontSize: 20, color: '#1890ff' }} />
+          <LoadingOutlined style={{ fontSize: 20, color: '#4DA6FF' }} />
         </div>
       )}
       <img
@@ -614,7 +614,7 @@ const LuchuCreate = () => {
                     onClick={() => toggleImageSelection(index)}
                     style={{ 
                       cursor: 'pointer',
-                      border: selectedImages.includes(index) ? '3px solid #1890ff' : '1px solid #d9d9d9',
+                      border: selectedImages.includes(index) ? '3px solid #4DA6FF' : '1px solid #d9d9d9',
                       borderRadius: 4,
                       padding: 4,
                       position: 'relative',
@@ -631,7 +631,7 @@ const LuchuCreate = () => {
                         position: 'absolute', 
                         top: 4, 
                         right: 4, 
-                        color: '#1890ff',
+                        color: '#4DA6FF',
                         fontSize: 16,
                         background: 'white',
                         borderRadius: '50%',
@@ -722,14 +722,14 @@ const LuchuCreate = () => {
                       transition: 'all 0.3s'
                     }}
                     onMouseEnter={(e) => {
-                      if (!uploading) e.currentTarget.style.borderColor = '#1890ff'
+                      if (!uploading) e.currentTarget.style.borderColor = '#4DA6FF'
                     }}
                     onMouseLeave={(e) => {
                       e.currentTarget.style.borderColor = '#d9d9d9'
                     }}
                   >
                     {uploading ? (
-                      <LoadingOutlined style={{ fontSize: 24, color: '#1890ff' }} />
+                      <LoadingOutlined style={{ fontSize: 24, color: '#4DA6FF' }} />
                     ) : (
                       <>
                         <PlusOutlined style={{ fontSize: 20, color: '#999' }} />

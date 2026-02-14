@@ -403,7 +403,7 @@ const Expenses = () => {
               <Table.Summary fixed>
                 <Table.Summary.Row style={{ background: '#fafafa' }}>
                   <Table.Summary.Cell index={0} colSpan={4}><strong>总广告费用</strong></Table.Summary.Cell>
-                  <Table.Summary.Cell index={4} align="right"><strong style={{ color: '#1890ff' }}>{mccTotal.toFixed(2)}</strong></Table.Summary.Cell>
+                  <Table.Summary.Cell index={4} align="right"><strong style={{ color: '#4DA6FF' }}>{mccTotal.toFixed(2)}</strong></Table.Summary.Cell>
                 </Table.Summary.Row>
               </Table.Summary>
             )

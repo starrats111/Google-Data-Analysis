@@ -318,7 +318,7 @@ const AdCopyGenerator = () => {
               {imageLoading ? (
                 <div>
                   <Spin />
-                  <p style={{ marginTop: 8, color: '#1890ff' }}>AI 正在识别关键词...</p>
+                  <p style={{ marginTop: 8, color: '#4DA6FF' }}>AI 正在识别关键词...</p>
                 </div>
               ) : pastedImage ? (
                 <div>
@@ -516,7 +516,7 @@ const AdCopyGenerator = () => {
                     {/* 显示真实链接 URL */}
                     {s.url && (
                       <div style={{ marginBottom: 8 }}>
-                        <a href={s.url} target="_blank" rel="noreferrer" style={{ fontSize: 12, color: '#1890ff' }}>
+                        <a href={s.url} target="_blank" rel="noreferrer" style={{ fontSize: 12, color: '#4DA6FF' }}>
                           🔗 {s.url}
                         </a>
                         {copiedItems[`sitelink-url-${idx}`] && <Tag color="success" style={{ marginLeft: 8 }}>✓ 已复制</Tag>}

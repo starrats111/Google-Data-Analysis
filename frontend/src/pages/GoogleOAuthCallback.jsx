@@ -85,7 +85,7 @@ export default function GoogleOAuthCallback() {
               </Button>
             </Space>
 
-            <div style={{ marginTop: 24, padding: '16px', backgroundColor: '#e6f7ff', borderRadius: '4px' }}>
+            <div style={{ marginTop: 24, padding: '16px', backgroundColor: '#EBF5FF', borderRadius: '4px' }}>
               <strong>下一步：</strong>
               <ol style={{ margin: '8px 0 0 0', paddingLeft: '20px' }}>
                 <li>复制上面的授权码</li>

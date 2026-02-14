@@ -69,7 +69,7 @@ const LuchuDashboard = () => {
       case 'review_rejected':
         return <WarningOutlined style={{ color: '#ff4d4f' }} />
       case 'publish_success':
-        return <SendOutlined style={{ color: '#1890ff' }} />
+        return <SendOutlined style={{ color: '#4DA6FF' }} />
       default:
         return <BellOutlined />
     }
@@ -123,7 +123,7 @@ const LuchuDashboard = () => {
               title="待发布"
               value={stats.ready_to_publish}
               prefix={<SendOutlined />}
-              valueStyle={{ color: stats.ready_to_publish > 0 ? '#1890ff' : undefined }}
+              valueStyle={{ color: stats.ready_to_publish > 0 ? '#4DA6FF' : undefined }}
             />
           </Card>
         </Col>

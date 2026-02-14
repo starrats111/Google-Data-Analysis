@@ -33,7 +33,7 @@ const getNotificationIcon = (type) => {
     case 'review_rejected':
       return <CloseCircleOutlined style={{ color: '#ff4d4f', fontSize: 24 }} />
     case 'publish_success':
-      return <SendOutlined style={{ color: '#1890ff', fontSize: 24 }} />
+      return <SendOutlined style={{ color: '#4DA6FF', fontSize: 24 }} />
     case 'image_alert':
       return <WarningOutlined style={{ color: '#faad14', fontSize: 24 }} />
     default:

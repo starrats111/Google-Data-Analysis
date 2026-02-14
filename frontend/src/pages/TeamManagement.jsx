@@ -424,7 +424,7 @@ const TeamManagement = () => {
                     value={stat.total_commission} 
                     precision={2} 
                     prefix="$"
-                    valueStyle={{ fontSize: 14, color: '#1890ff' }}
+                    valueStyle={{ fontSize: 14, color: '#4DA6FF' }}
                   />
                 </Col>
                 <Col span={8}>

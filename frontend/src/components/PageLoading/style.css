@@ -3,7 +3,7 @@
   justify-content: center;
   align-items: center;
   min-height: 100vh;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  background: linear-gradient(135deg, #4DA6FF 0%, #7B68EE 100%);
   position: fixed;
   top: 0;
   left: 0;
@@ -95,21 +95,21 @@
 }
 
 .page-loading-inline .page-loading-content {
-  background: rgba(102, 126, 234, 0.1);
+  background: rgba(77, 166, 255, 0.1);
   padding: 40px 60px;
   border-radius: 16px;
   backdrop-filter: blur(10px);
 }
 
 .page-loading-inline .page-loading-spinner :global(.anticon) {
-  color: #667eea;
+  color: #4DA6FF;
 }
 
 .page-loading-inline .page-loading-text {
-  color: #667eea;
+  color: #4DA6FF;
 }
 
 .page-loading-inline .page-loading-dots span {
-  background-color: #667eea;
+  background-color: #4DA6FF;
 }
 

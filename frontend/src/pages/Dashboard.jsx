@@ -477,7 +477,7 @@ const Dashboard = () => {
                           marginBottom: 12, 
                           background: '#fafafa', 
                           borderRadius: 8,
-                          borderLeft: '4px solid #1890ff'
+                          borderLeft: '4px solid #4DA6FF'
                         }}>
                           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 8 }}>
                             <div>
@@ -504,7 +504,7 @@ const Dashboard = () => {
                               ))}
                             </div>
                           )}
-                          <div style={{ background: '#e6f7ff', padding: '6px 10px', borderRadius: 4, marginTop: 6 }}>
+                          <div style={{ background: '#EBF5FF', padding: '6px 10px', borderRadius: 4, marginTop: 6 }}>
                             <Text style={{ fontSize: 12 }}>💡 {holiday.tips}</Text>
                           </div>
                         </div>
@@ -585,7 +585,7 @@ const Dashboard = () => {
                 {keywordImageLoading ? (
                   <div style={{ textAlign: 'center', padding: 20 }}>
                     <Spin />
-                    <p style={{ marginTop: 8, color: '#1890ff' }}>AI 正在识别关键词...</p>
+                    <p style={{ marginTop: 8, color: '#4DA6FF' }}>AI 正在识别关键词...</p>
                   </div>
                 ) : pastedImage ? (
                   <div>

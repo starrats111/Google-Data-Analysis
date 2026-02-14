@@ -319,14 +319,14 @@ export default function GoogleAdsData() {
                 <Statistic
                   title="总展示"
                   value={campaignData.reduce((sum, item) => sum + (item.impressions || 0), 0)}
-                  valueStyle={{ color: '#1890ff' }}
+                  valueStyle={{ color: '#4DA6FF' }}
                 />
               </Col>
               <Col xs={12} sm={8} md={8}>
                 <Statistic
                   title="总点击"
                   value={campaignData.reduce((sum, item) => sum + (item.clicks || 0), 0)}
-                  valueStyle={{ color: '#1890ff' }}
+                  valueStyle={{ color: '#4DA6FF' }}
                 />
               </Col>
               <Col xs={12} sm={8} md={8}>
@@ -335,7 +335,7 @@ export default function GoogleAdsData() {
                   value={campaignData.reduce((sum, item) => sum + (item.cost || 0), 0)}
                   prefix="$"
                   precision={2}
-                  valueStyle={{ color: '#1890ff' }}
+                  valueStyle={{ color: '#4DA6FF' }}
                 />
               </Col>
             </Row>

@@ -818,7 +818,7 @@ G) 综述
           <div>
             {/* 报告头部 */}
             <div style={{ 
-              background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+              background: 'linear-gradient(135deg, #4DA6FF 0%, #7B68EE 100%)',
               padding: '24px 32px',
               color: 'white'
             }}>
@@ -1005,7 +1005,7 @@ G) 综述
           <div>
             {/* 报告头部 */}
             <div style={{ 
-              background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+              background: 'linear-gradient(135deg, #4DA6FF 0%, #7B68EE 100%)',
               padding: '20px 28px',
               color: 'white'
             }}>

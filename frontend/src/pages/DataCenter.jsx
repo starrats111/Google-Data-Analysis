@@ -283,7 +283,7 @@ const DataCenter = () => {
       render: (val, record) => {
         // 平台代码映射颜色
         const platformColors = {
-          'cg': '#1890ff', 'rw': '#fa8c16', 'lh': '#52c41a', 'pm': '#eb2f96',
+          'cg': '#4DA6FF', 'rw': '#fa8c16', 'lh': '#52c41a', 'pm': '#eb2f96',
           'lb': '#722ed1', 'pb': '#f5222d', 'bsh': '#a0d911', 'cf': '#13c2c2',
         }
         const key = record.platform?.toLowerCase()
@@ -300,7 +300,7 @@ const DataCenter = () => {
         // 平台代码映射（支持新旧两种格式：小写缩写和全称）
         const platformColors = {
           // 新格式（小写缩写）- 数据库统一存储格式
-          'cg': { bg: '#e6f7ff', color: '#1890ff', name: 'CG' },       // CollabGlow
+          'cg': { bg: '#EBF5FF', color: '#4DA6FF', name: 'CG' },       // CollabGlow
           'rw': { bg: '#fff7e6', color: '#fa8c16', name: 'RW' },       // Rewardoo
           'lh': { bg: '#f6ffed', color: '#52c41a', name: 'LH' },       // LinkHaitao
           'pm': { bg: '#fff0f6', color: '#eb2f96', name: 'PM' },       // Partnermatic
@@ -397,7 +397,7 @@ const DataCenter = () => {
         // 平台代码映射（支持新旧两种格式：小写缩写和全称）
         const platformColors = {
           // 新格式（小写缩写）- 数据库统一存储格式
-          'cg': { bg: '#e6f7ff', color: '#1890ff', name: 'CG' },       // CollabGlow
+          'cg': { bg: '#EBF5FF', color: '#4DA6FF', name: 'CG' },       // CollabGlow
           'rw': { bg: '#fff7e6', color: '#fa8c16', name: 'RW' },       // Rewardoo
           'lh': { bg: '#f6ffed', color: '#52c41a', name: 'LH' },       // LinkHaitao
           'pm': { bg: '#fff0f6', color: '#eb2f96', name: 'PM' },       // Partnermatic
@@ -578,7 +578,7 @@ const DataCenter = () => {
                   title={
                     <Space>
                       <span>总费用</span>
-                      <DollarOutlined style={{ color: '#1890ff', fontSize: 12 }} />
+                      <DollarOutlined style={{ color: '#4DA6FF', fontSize: 12 }} />
                     </Space>
                   }
                   value={googleStats.totalCost}
@@ -693,7 +693,7 @@ const DataCenter = () => {
                   value={platformStats.totalCommission - platformStats.totalRejected} 
                   precision={2}
                   prefix="$"
-                  valueStyle={{ color: '#1890ff', fontWeight: 'bold' }}
+                  valueStyle={{ color: '#4DA6FF', fontWeight: 'bold' }}
                 />
               </Card>
             </Col>

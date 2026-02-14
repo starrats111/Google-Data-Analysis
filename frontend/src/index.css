@@ -110,7 +110,7 @@ body {
     color: #999;
     font-size: 12px;
     padding: 8px 0;
-    background: linear-gradient(to right, rgba(102, 126, 234, 0.1), transparent, rgba(102, 126, 234, 0.1));
+    background: linear-gradient(to right, rgba(77, 166, 255, 0.1), transparent, rgba(77, 166, 255, 0.1));
     border-radius: 4px;
     margin-bottom: 8px;
   }
@@ -187,7 +187,7 @@ body {
 
 .ai-generating-content .anticon {
   font-size: 48px;
-  color: #667eea;
+  color: #4DA6FF;
   margin-bottom: 16px;
 }
 

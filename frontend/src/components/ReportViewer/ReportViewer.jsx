@@ -155,7 +155,7 @@ const ReportViewer = ({ content, campaignCount, analysisDate, singleMode = false
   const getLevelStyle = (level) => {
     switch (level) {
       case 'S': return { color: '#52c41a', bg: '#f6ffed', border: '#b7eb8f', label: 'S级 · 优质' }
-      case 'A': return { color: '#1890ff', bg: '#e6f7ff', border: '#91d5ff', label: 'A级 · 良好' }
+      case 'A': return { color: '#4DA6FF', bg: '#EBF5FF', border: '#91d5ff', label: 'A级 · 良好' }
       case 'B': return { color: '#faad14', bg: '#fffbe6', border: '#ffe58f', label: 'B级 · 观察' }
       case 'C': return { color: '#fa8c16', bg: '#fff7e6', border: '#ffd591', label: 'C级 · 注意' }
       case 'D': return { color: '#ff4d4f', bg: '#fff2f0', border: '#ffccc7', label: 'D级 · 暂停' }
@@ -189,7 +189,7 @@ const ReportViewer = ({ content, campaignCount, analysisDate, singleMode = false
   const getPhaseStyle = (phase) => {
     switch (phase) {
       case '成熟期': return { color: '#52c41a', bg: '#f6ffed', border: '#b7eb8f', icon: '🏆' }
-      case '成长期': return { color: '#1890ff', bg: '#e6f7ff', border: '#91d5ff', icon: '📈' }
+      case '成长期': return { color: '#4DA6FF', bg: '#EBF5FF', border: '#91d5ff', icon: '📈' }
       case '观察期': return { color: '#faad14', bg: '#fffbe6', border: '#ffe58f', icon: '👀' }
       case '试水期': return { color: '#13c2c2', bg: '#e6fffb', border: '#87e8de', icon: '🌊' }
       case '候选期': return { color: '#722ed1', bg: '#f9f0ff', border: '#d3adf7', icon: '⭐' }

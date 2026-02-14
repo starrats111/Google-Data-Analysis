@@ -165,7 +165,7 @@ const TeamOverview = () => {
                   value={currentTeamStats.total_commission} 
                   precision={2} 
                   prefix="$"
-                  valueStyle={{ color: '#1890ff' }}
+                  valueStyle={{ color: '#4DA6FF' }}
                 />
               </Col>
               <Col xs={12} sm={8} md={4}>

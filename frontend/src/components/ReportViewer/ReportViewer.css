@@ -48,7 +48,7 @@
   background: #ffffff;
   border-radius: 12px;
   border: 1px solid #e8ecf1;
-  border-left: 4px solid #1890ff;
+  border-left: 4px solid #4DA6FF;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
   overflow: hidden;
   transition: box-shadow 0.2s ease, transform 0.2s ease;
@@ -121,7 +121,7 @@
   width: 28px;
   height: 28px;
   border-radius: 8px;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  background: linear-gradient(135deg, #4DA6FF 0%, #7B68EE 100%);
   color: #fff;
   font-size: 13px;
   font-weight: 700;
@@ -166,7 +166,7 @@
   color: #1a1a2e;
   margin: 0 0 16px;
   padding-bottom: 12px;
-  border-bottom: 2px solid #667eea;
+  border-bottom: 2px solid #4DA6FF;
   line-height: 1.4;
 }
 
@@ -249,11 +249,11 @@
 }
 
 .report-ul .report-li::marker {
-  color: #667eea;
+  color: #4DA6FF;
 }
 
 .report-ol .report-li::marker {
-  color: #667eea;
+  color: #4DA6FF;
   font-weight: 600;
 }
 
@@ -261,7 +261,7 @@
 .report-blockquote {
   margin: 12px 0;
   padding: 12px 16px;
-  border-left: 4px solid #667eea;
+  border-left: 4px solid #4DA6FF;
   background: #f8f9fc;
   border-radius: 0 8px 8px 0;
   color: #4a5568;

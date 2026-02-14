@@ -224,7 +224,7 @@ const SystemLogs = () => {
             </Card>
           </Col>
           <Col span={6}>
-            <Card size="small" style={{ background: '#e6f7ff', borderColor: '#91d5ff' }}>
+            <Card size="small" style={{ background: '#EBF5FF', borderColor: '#91d5ff' }}>
               <Statistic 
                 title="INFO" 
                 value={stats.info}
