@@ -333,7 +333,7 @@ const Layout = () => {
 
   const renderMenu = () => (
     <Menu
-      theme="dark"
+      theme="light"
       selectedKeys={getSelectedKeys()}
       openKeys={openKeys}
       onOpenChange={handleOpenChange}
@@ -345,17 +345,10 @@ const Layout = () => {
 
   const siderContent = (
     <>
-      <div style={{
-        height: 64,
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        color: 'white',
-        fontSize: collapsed ? 16 : 18,
-        fontWeight: 'bold',
-        background: 'rgba(255,255,255,0.1)',
-      }}>
-        {collapsed ? 'GA' : '数据分析平台'}
+      <div className="sidebar-logo">
+        <span className={`sidebar-logo-text ${collapsed ? 'sidebar-logo-collapsed' : ''}`}>
+          {collapsed ? 'GA' : '数据分析平台'}
+        </span>
       </div>
       {renderMenu()}
     </>
@@ -372,7 +365,6 @@ const Layout = () => {
             setCollapsed(value)
             localStorage.setItem('sider_collapsed', value.toString())
           }}
-          theme="dark"
           width={220}
           style={{
             overflow: 'auto',
@@ -382,6 +374,8 @@ const Layout = () => {
             top: 0,
             bottom: 0,
             zIndex: 100,
+            background: '#FFFFFF',
+            borderRight: '1px solid #E8EAED',
           }}
         >
           {siderContent}
@@ -395,19 +389,19 @@ const Layout = () => {
         onClose={() => setMobileDrawerVisible(false)}
         open={mobileDrawerVisible}
         width={220}
-        styles={{ body: { padding: 0, background: '#0C2D48' } }}
+        styles={{ body: { padding: 0, background: '#FFFFFF' } }}
       >
         {siderContent}
       </Drawer>
 
-      <AntLayout style={{ marginLeft: isMobile ? 0 : (collapsed ? 80 : 220), transition: 'margin-left 0.2s' }}>
+      <AntLayout style={{ marginLeft: isMobile ? 0 : (collapsed ? 80 : 220), transition: 'margin-left 0.2s', background: '#F0F5FA' }}>
         <Header style={{
           background: '#fff',
           padding: '0 16px',
           display: 'flex',
           justifyContent: 'space-between',
           alignItems: 'center',
-          boxShadow: '0 2px 8px rgba(0,0,0,0.1)',
+          boxShadow: '0 1px 4px rgba(0,0,0,0.08)',
           position: 'sticky',
           top: 0,
           zIndex: 99,
@@ -447,7 +441,8 @@ const Layout = () => {
           padding: isMobile ? 12 : 24,
           background: '#fff',
           minHeight: 280,
-          borderRadius: 8,
+          borderRadius: 16,
+          boxShadow: '0 1px 3px rgba(0,0,0,0.08)',
         }}>
           <Outlet />
         </Content>

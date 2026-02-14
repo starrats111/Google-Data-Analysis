@@ -1,0 +1,71 @@
+/**
+ * 全局自定义样式
+ * 仅用于 AntD themeConfig 无法实现的场景
+ */
+
+/* ============================================
+   侧边栏菜单：左侧蓝色指示条
+   说明：AntD 内置 activeBarWidth 在右侧，需自定义左侧
+   ============================================ */
+.ant-menu-inline .ant-menu-item-selected::before,
+.ant-menu-inline .ant-menu-submenu-selected > .ant-menu-submenu-title::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 4px;
+  bottom: 4px;
+  width: 4px;
+  background: #4DA6FF;
+  border-radius: 0 4px 4px 0;
+}
+
+/* 确保菜单项有相对定位 */
+.ant-menu-inline .ant-menu-item,
+.ant-menu-inline .ant-menu-submenu-title {
+  position: relative;
+}
+
+/* ============================================
+   渐变统计卡片（后续迭代：Dashboard 渐变卡片使用）
+   说明：本期不使用，预留给 Phase 2 Dashboard 改造
+   ============================================ */
+.stat-card-gradient {
+  background: linear-gradient(135deg, #4DA6FF 0%, #1A7FDB 100%);
+  border-radius: 16px;
+  padding: 24px;
+  color: #FFFFFF;
+  box-shadow: 0 4px 20px rgba(77, 166, 255, 0.3);
+}
+
+.stat-card-gradient .stat-label {
+  font-size: 14px;
+  opacity: 0.9;
+  margin-bottom: 8px;
+}
+
+.stat-card-gradient .stat-value {
+  font-size: 32px;
+  font-weight: 700;
+}
+
+/* ============================================
+   Logo 区域（白色侧边栏适配）
+   ============================================ */
+.sidebar-logo {
+  height: 64px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-bottom: 1px solid #E8EAED;
+}
+
+.sidebar-logo-text {
+  color: #202124;
+  font-size: 18px;
+  font-weight: bold;
+}
+
+.sidebar-logo-collapsed {
+  font-size: 16px;
+}
+
