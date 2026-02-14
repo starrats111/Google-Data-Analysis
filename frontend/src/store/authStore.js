@@ -50,16 +50,28 @@ export const useAuth = create((set, get) => ({
     }
   },
 
-  logout: () => {
+  logout: async () => {
+    // 第一步：调用后端接口清除 httpOnly Cookie
+    try {
+      await api.post('/api/auth/logout')
+    } catch (error) {
+      // 即使后端调用失败（如网络断开），也继续清理前端状态
+      console.warn('登出接口调用失败:', error.message)
+    }
+    
+    // 第二步：清理 localStorage
     localStorage.removeItem('token')
     localStorage.removeItem('user')
     localStorage.removeItem('permissions')
-    // 清理所有缓存数据，避免用户切换后看到其他用户的数据
+    
+    // 第三步：清理所有缓存数据
     try {
       sessionStorage.clear()
     } catch (e) {
       // 忽略缓存清除错误
     }
+    
+    // 第四步：重置状态
     set({ user: null, token: null, isAuthenticated: false, permissions: null })
   },
 

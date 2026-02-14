@@ -39,6 +39,7 @@ const api = axios.create({
   headers: {
     'Content-Type': 'application/json',
   },
+  withCredentials: true, // 允许跨域请求携带 Cookie（Refresh Token）
 })
 
 // 请求拦截器：添加Token、URL修复、取消重复请求
@@ -105,6 +106,27 @@ api.interceptors.request.use((config) => {
   return config
 })
 
+// 刷新 Token 的并发控制
+let isRefreshing = false
+let refreshSubscribers = []
+
+// 订阅刷新完成事件
+const subscribeTokenRefresh = (callback) => {
+  refreshSubscribers.push(callback)
+}
+
+// 通知所有订阅者刷新完成
+const onTokenRefreshed = (newToken) => {
+  refreshSubscribers.forEach(callback => callback(newToken))
+  refreshSubscribers = []
+}
+
+// 通知所有订阅者刷新失败
+const onTokenRefreshFailed = () => {
+  refreshSubscribers.forEach(callback => callback(null))
+  refreshSubscribers = []
+}
+
 // 响应拦截器：处理错误、清理pending请求、缓存响应
 api.interceptors.response.use(
   (response) => {
@@ -123,7 +145,7 @@ api.interceptors.response.use(
     
     return response
   },
-  (error) => {
+  async (error) => {
     // 清理pending请求
     const requestKey = error.config?._requestKey
     if (requestKey && pendingRequests.has(requestKey)) {
@@ -147,11 +169,68 @@ api.interceptors.response.use(
       error.message = '网络错误，请检查网络连接'
     }
     
-    // 处理401未授权
+    // 处理401未授权 - 尝试刷新 Token
     if (error.response?.status === 401) {
-      localStorage.removeItem('token')
-      localStorage.removeItem('user')
-      window.location.href = '/login'
+      const originalRequest = error.config
+      
+      // 避免刷新接口本身401时无限循环
+      if (originalRequest.url?.includes('/api/auth/refresh') || 
+          originalRequest.url?.includes('/api/auth/login')) {
+        localStorage.removeItem('token')
+        localStorage.removeItem('user')
+        window.location.href = '/login'
+        return Promise.reject(error)
+      }
+      
+      // 避免重复请求
+      if (originalRequest._retry) {
+        localStorage.removeItem('token')
+        localStorage.removeItem('user')
+        window.location.href = '/login'
+        return Promise.reject(error)
+      }
+      
+      // 如果正在刷新，等待刷新完成后重试
+      if (isRefreshing) {
+        return new Promise((resolve, reject) => {
+          subscribeTokenRefresh((newToken) => {
+            if (newToken) {
+              originalRequest.headers.Authorization = `Bearer ${newToken}`
+              resolve(api(originalRequest))
+            } else {
+              reject(error)
+            }
+          })
+        })
+      }
+      
+      // 开始刷新
+      originalRequest._retry = true
+      isRefreshing = true
+      
+      try {
+        const response = await api.post('/api/auth/refresh')
+        const newToken = response.data.access_token
+        
+        // 保存新 Token
+        localStorage.setItem('token', newToken)
+        
+        // 通知所有等待的请求
+        onTokenRefreshed(newToken)
+        isRefreshing = false
+        
+        // 重试原请求
+        originalRequest.headers.Authorization = `Bearer ${newToken}`
+        return api(originalRequest)
+      } catch (refreshError) {
+        // 刷新失败，清除登录状态
+        onTokenRefreshFailed()
+        isRefreshing = false
+        localStorage.removeItem('token')
+        localStorage.removeItem('user')
+        window.location.href = '/login'
+        return Promise.reject(refreshError)
+      }
     }
     
     return Promise.reject(error)

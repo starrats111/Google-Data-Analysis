@@ -3,9 +3,11 @@
 
 安全改进:
 - 登录接口添加速率限制（5次/分钟/IP），防止暴力破解
+- 支持 Refresh Token 机制，httpOnly Cookie 存储
+- logout 端点清除 Cookie
 """
 from datetime import timedelta
-from fastapi import APIRouter, Depends, HTTPException, status, Request
+from fastapi import APIRouter, Depends, HTTPException, status, Request, Response
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
 from slowapi import Limiter
@@ -17,6 +19,8 @@ from app.schemas.user import Token, UserResponse
 from app.middleware.auth import (
     verify_password,
     create_access_token,
+    create_refresh_token,
+    verify_refresh_token,
     get_current_user
 )
 from app.config import settings
@@ -34,6 +38,7 @@ user_router = APIRouter(prefix="/api/user", tags=["user"])
 @limiter.limit("5/minute")  # 登录接口: 每分钟最多 5 次，防止暴力破解
 async def login(
     request: Request,  # 速率限制需要 Request 对象
+    response: Response,  # 用于设置 Cookie
     form_data: OAuth2PasswordRequestForm = Depends(),
     db: Session = Depends(get_db)
 ):
@@ -41,7 +46,8 @@ async def login(
     
     安全措施:
     - 速率限制: 5次/分钟/IP，防止暴力破解
-    - JWT Token 有效期: 24小时
+    - Access Token 有效期: 24小时（通过响应体返回）
+    - Refresh Token 有效期: 7天（通过 httpOnly Cookie 存储）
     """
     user = db.query(User).filter(User.username == form_data.username).first()
     
@@ -52,9 +58,26 @@ async def login(
             headers={"WWW-Authenticate": "Bearer"},
         )
     
+    # 创建 Access Token
     access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
     access_token = create_access_token(
         data={"sub": user.username}, expires_delta=access_token_expires
+    )
+    
+    # 创建 Refresh Token
+    refresh_token = create_refresh_token(data={"sub": user.username})
+    
+    # 设置 Refresh Token 到 httpOnly Cookie
+    # secure: 生产环境 True (HTTPS)，开发环境 False (HTTP)
+    is_production = settings.ENVIRONMENT == "production"
+    response.set_cookie(
+        key="refresh_token",
+        value=refresh_token,
+        max_age=settings.REFRESH_TOKEN_EXPIRE_DAYS * 24 * 60 * 60,  # 秒
+        path="/",
+        secure=is_production,
+        httponly=True,
+        samesite="lax"
     )
     
     return {
@@ -182,4 +205,67 @@ async def get_user_statistics(
             "last_analysis": None,
             "error": str(e)
         }
+
+
+@router.post("/refresh")
+async def refresh_token(request: Request, response: Response, db: Session = Depends(get_db)):
+    """刷新 Access Token
+    
+    使用 httpOnly Cookie 中的 Refresh Token 获取新的 Access Token
+    """
+    # 从 Cookie 获取 Refresh Token
+    refresh_token = request.cookies.get("refresh_token")
+    
+    if not refresh_token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Refresh token not found"
+        )
+    
+    # 验证 Refresh Token
+    username = verify_refresh_token(refresh_token)
+    if not username:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired refresh token"
+        )
+    
+    # 查找用户
+    user = db.query(User).filter(User.username == username).first()
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="User not found"
+        )
+    
+    # 创建新的 Access Token
+    access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
+    new_access_token = create_access_token(
+        data={"sub": user.username}, expires_delta=access_token_expires
+    )
+    
+    return {
+        "access_token": new_access_token,
+        "token_type": "bearer"
+    }
+
+
+@router.post("/logout")
+async def logout(request: Request, response: Response):
+    """用户退出登录
+    
+    清除 httpOnly Refresh Token Cookie
+    注意：delete_cookie 的参数必须与 set_cookie 完全一致
+    """
+    is_production = settings.ENVIRONMENT == "production"
+    
+    response.delete_cookie(
+        key="refresh_token",
+        path="/",
+        secure=is_production,
+        httponly=True,
+        samesite="lax"
+    )
+    
+    return {"detail": "退出登录成功", "success": True}
 

@@ -318,9 +318,9 @@ const Layout = () => {
     }
   }
 
-  const handleUserMenuClick = ({ key }) => {
+  const handleUserMenuClick = async ({ key }) => {
     if (key === 'logout') {
-      logout()
+      await logout()
       navigate('/login')
     }
   }

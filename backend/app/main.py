@@ -262,8 +262,8 @@ async def options_handler(request: Request, full_path: str):
     origin = request.headers.get("origin")
     headers = get_cors_headers(origin)
     
-    # 确保返回所有允许的头部
-    headers["Access-Control-Allow-Headers"] = "*"
+    # 使用与 CORSMiddleware 一致的配置，不用 "*"（与 credentials 冲突）
+    headers["Access-Control-Allow-Headers"] = "Authorization, Content-Type, X-Requested-With, Accept, Origin"
     headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS, PATCH, HEAD"
     
     # 直接返回响应，不记录日志（提高性能）
@@ -316,12 +316,11 @@ async def health(request: Request):
         headers = get_cors_headers(origin)
         return JSONResponse(content={"status": "ok"}, headers=headers)
     except Exception as e:
-        # 如果出错，至少返回基本的CORS头
-        headers = {
-            "Access-Control-Allow-Origin": "*",
-            "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
-            "Access-Control-Allow-Headers": "*",
-        }
+        # 出错时也使用安全的 CORS 头（不用 "*"，与 credentials 冲突）
+        origin = request.headers.get("origin")
+        headers = get_cors_headers(origin) if origin else {}
+        headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS"
+        headers["Access-Control-Allow-Headers"] = "Authorization, Content-Type"
         return JSONResponse(
             content={"status": "error", "message": str(e)},
             headers=headers,
@@ -372,13 +371,12 @@ if _dist_dir:
             
             headers = {
                 "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS, PATCH, HEAD",
-                "Access-Control-Allow-Headers": "*",
+                "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Requested-With, Accept, Origin",
             }
             if cors_origin:
                 headers["Access-Control-Allow-Origin"] = cors_origin
                 headers["Access-Control-Allow-Credentials"] = "true"
-            else:
-                headers["Access-Control-Allow-Origin"] = "*"
+            # 不设置 "*"，如果不在白名单就不返回 CORS 头（安全做法）
             
             return JSONResponse(
                 status_code=404,

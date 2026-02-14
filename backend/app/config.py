@@ -49,13 +49,22 @@ def _parse_str_list(value: Any) -> List[str]:
 
 
 class Settings(BaseSettings):
+    # 环境配置
+    ENVIRONMENT: str = "development"  # development / production
+    
     # 数据库配置
     DATABASE_URL: str = "sqlite:///./google_analysis.db"
     
     # JWT配置
     SECRET_KEY: str = "your-secret-key-change-in-production"
+    REFRESH_SECRET_KEY: str = ""  # Refresh Token 专用密钥，从环境变量读取
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 1440  # 24小时
+    REFRESH_TOKEN_EXPIRE_DAYS: int = 7  # Refresh Token 有效期
+    
+    # Cookie 配置
+    COOKIE_SECURE: bool = True  # 生产环境 True，开发环境自动降级
+    COOKIE_SAMESITE: str = "lax"  # lax / strict / none
     
     # 文件上传配置
     UPLOAD_FOLDER: str = "uploads"
