@@ -69,12 +69,15 @@ async def login(
     
     # 设置 Refresh Token 到 httpOnly Cookie
     # secure: 生产环境 True (HTTPS)，开发环境 False (HTTP)
+    # domain: 设置为主域名，允许前端和API子域名共享Cookie
     is_production = settings.ENVIRONMENT == "production"
+    cookie_domain = ".google-data-analysis.top" if is_production else None
     response.set_cookie(
         key="refresh_token",
         value=refresh_token,
         max_age=settings.REFRESH_TOKEN_EXPIRE_DAYS * 24 * 60 * 60,  # 秒
         path="/",
+        domain=cookie_domain,  # 生产环境设置主域名，开发环境不设置
         secure=is_production,
         httponly=True,
         samesite="lax"
@@ -258,10 +261,12 @@ async def logout(request: Request, response: Response):
     注意：delete_cookie 的参数必须与 set_cookie 完全一致
     """
     is_production = settings.ENVIRONMENT == "production"
+    cookie_domain = ".google-data-analysis.top" if is_production else None
     
     response.delete_cookie(
         key="refresh_token",
         path="/",
+        domain=cookie_domain,  # 必须与 set_cookie 一致
         secure=is_production,
         httponly=True,
         samesite="lax"
