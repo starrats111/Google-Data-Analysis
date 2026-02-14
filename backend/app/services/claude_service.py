@@ -600,47 +600,105 @@ Write the article in natural English appropriate for {country_name} readers.
                 # 等待页面稳定
                 await page.wait_for_load_state("load", timeout=30000)
                 
-                # 等待图片加载
+                # 等待初始图片加载
                 await page.wait_for_timeout(2000)
                 
-                # 滚动页面以触发懒加载
+                # 滚动页面以触发懒加载（增加滚动次数和等待时间）
                 await page.evaluate("""
                     async () => {
-                        for (let i = 0; i < 5; i++) {
-                            window.scrollBy(0, window.innerHeight);
-                            await new Promise(r => setTimeout(r, 300));
+                        // 多次滚动，每次等待更长时间让懒加载图片加载
+                        for (let i = 0; i < 8; i++) {
+                            window.scrollBy(0, window.innerHeight * 0.8);
+                            await new Promise(r => setTimeout(r, 500));
                         }
+                        // 滚动到底部
+                        window.scrollTo(0, document.body.scrollHeight);
+                        await new Promise(r => setTimeout(r, 1000));
+                        // 返回顶部
                         window.scrollTo(0, 0);
                     }
                 """)
                 
-                # 等待图片加载
-                await page.wait_for_timeout(2000)
+                # 等待懒加载图片加载完成（增加等待时间）
+                await page.wait_for_timeout(3000)
                 
-                # 提取所有图片 URL 信息
+                # 提取所有图片 URL 信息（修复：支持相对路径转绝对路径）
                 image_urls = await page.evaluate("""
                     () => {
                         const imgElements = Array.from(document.querySelectorAll('img'));
+                        const baseUrl = window.location.origin;
                         
-                        // 过滤有效图片（大于 50x50 像素，排除小图标）
+                        // 将相对路径转换为绝对路径
+                        function toAbsoluteUrl(src) {
+                            if (!src) return '';
+                            // 已经是绝对路径
+                            if (src.startsWith('http://') || src.startsWith('https://')) {
+                                return src;
+                            }
+                            // 协议相对路径 (//example.com/image.jpg)
+                            if (src.startsWith('//')) {
+                                return window.location.protocol + src;
+                            }
+                            // 根路径 (/images/xxx.jpg)
+                            if (src.startsWith('/')) {
+                                return baseUrl + src;
+                            }
+                            // 相对路径 (images/xxx.jpg)
+                            return baseUrl + '/' + src;
+                        }
+                        
+                        // 获取图片 src（优先级：src > data-src > data-lazy-src > srcset 第一个）
+                        function getImageSrc(img) {
+                            let src = img.src || img.dataset.src || img.dataset.lazySrc || img.dataset.original || '';
+                            
+                            // 如果 src 是 data: 开头，尝试其他属性
+                            if (src.startsWith('data:') || !src) {
+                                src = img.dataset.src || img.dataset.lazySrc || img.dataset.original || '';
+                            }
+                            
+                            // 尝试从 srcset 获取
+                            if (!src && img.srcset) {
+                                const firstSrc = img.srcset.split(',')[0].trim().split(' ')[0];
+                                if (firstSrc) src = firstSrc;
+                            }
+                            
+                            return toAbsoluteUrl(src);
+                        }
+                        
+                        // 过滤有效图片
                         const validImgs = imgElements.filter(img => {
-                            const src = img.src || img.dataset.src || img.dataset.lazySrc || '';
-                            if (!src || !src.startsWith('http') || src.includes('data:')) return false;
-                            const w = img.naturalWidth || img.width || 0;
-                            const h = img.naturalHeight || img.height || 0;
+                            const src = getImageSrc(img);
+                            // 排除无效 URL、data URL、SVG 占位图、常见广告/追踪图片
+                            if (!src || src.startsWith('data:') || src.includes('placeholder') || 
+                                src.includes('tracking') || src.includes('pixel') || 
+                                src.includes('spacer') || src.includes('blank')) {
+                                return false;
+                            }
+                            // 检查尺寸（至少 50x50，但对于懒加载可能获取不到尺寸）
+                            const w = img.naturalWidth || img.width || parseInt(img.getAttribute('width')) || 100;
+                            const h = img.naturalHeight || img.height || parseInt(img.getAttribute('height')) || 100;
                             return w >= 50 && h >= 50;
                         });
                         
-                        // 按图片面积排序，取最大的 8 张
+                        // 按图片面积排序，取最大的 10 张
                         validImgs.sort((a, b) => {
-                            const areaA = (a.naturalWidth || a.width || 0) * (a.naturalHeight || a.height || 0);
-                            const areaB = (b.naturalWidth || b.width || 0) * (b.naturalHeight || b.height || 0);
+                            const areaA = (a.naturalWidth || a.width || 100) * (a.naturalHeight || a.height || 100);
+                            const areaB = (b.naturalWidth || b.width || 100) * (b.naturalHeight || b.height || 100);
                             return areaB - areaA;
                         });
                         
-                        return validImgs.slice(0, 8).map(img => ({
-                            url: img.src || img.dataset.src || img.dataset.lazySrc || '',
-                            alt: img.alt || '',
+                        // 去重（基于 URL）
+                        const seen = new Set();
+                        const uniqueImgs = validImgs.filter(img => {
+                            const src = getImageSrc(img);
+                            if (seen.has(src)) return false;
+                            seen.add(src);
+                            return true;
+                        });
+                        
+                        return uniqueImgs.slice(0, 10).map(img => ({
+                            url: getImageSrc(img),
+                            alt: img.alt || img.title || '',
                             width: img.naturalWidth || img.width || 0,
                             height: img.naturalHeight || img.height || 0
                         }));
@@ -650,10 +708,38 @@ Write the article in natural English appropriate for {country_name} readers.
                 # 串行下载图片并转为 Base64（更可靠）
                 import base64 as base64_module
                 
+                # 有效的图片 MIME 类型
+                VALID_IMAGE_MIMES = {'image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/svg+xml', 'image/bmp'}
+                
+                # 图片文件头魔数（用于验证真实格式）
+                IMAGE_SIGNATURES = {
+                    b'\xff\xd8\xff': 'image/jpeg',      # JPEG
+                    b'\x89PNG\r\n\x1a\n': 'image/png',  # PNG
+                    b'GIF87a': 'image/gif',             # GIF87a
+                    b'GIF89a': 'image/gif',             # GIF89a
+                    b'RIFF': 'image/webp',              # WebP (需要进一步检查)
+                }
+                
+                def detect_image_type(data: bytes) -> str:
+                    """通过文件头检测真实图片格式"""
+                    for sig, mime in IMAGE_SIGNATURES.items():
+                        if data[:len(sig)] == sig:
+                            return mime
+                    # WebP 特殊检查
+                    if data[:4] == b'RIFF' and data[8:12] == b'WEBP':
+                        return 'image/webp'
+                    return None
+                
                 images_data = []
-                # 限制只处理前 5 张图片，提高速度
-                for img_info in image_urls[:5]:
+                # 限制只处理前 6 张图片
+                for img_info in image_urls[:6]:
                     img_url = img_info['url']
+                    
+                    # 跳过无效 URL
+                    if not img_url or not img_url.startswith('http'):
+                        logger.warning(f"[Claude] 跳过无效 URL: {img_url[:50] if img_url else 'empty'}")
+                        continue
+                    
                     img_result = {
                         'url': img_url,
                         'src': img_url,
@@ -665,13 +751,24 @@ Write the article in natural English appropriate for {country_name} readers.
                     
                     try:
                         # 使用 Playwright 请求图片（自动带上正确的 Cookie 和 Referer）
-                        # 超时时间 8 秒，确保更多图片能下载成功
-                        response = await page.request.get(img_url, timeout=8000)
+                        response = await page.request.get(img_url, timeout=10000)
                         if response.ok:
                             img_bytes = await response.body()
-                            if len(img_bytes) > 500:  # 至少 500 字节
-                                # 检测图片类型
-                                content_type = response.headers.get('content-type', 'image/jpeg')
+                            
+                            # 检查大小（至少 1KB，有效图片通常大于 1KB）
+                            if len(img_bytes) < 1000:
+                                logger.warning(f"[Claude] 图片太小跳过: {img_url[:50]}... ({len(img_bytes)} bytes)")
+                                images_data.append(img_result)
+                                continue
+                            
+                            # 通过文件头检测真实格式（比 Content-Type 更可靠）
+                            detected_mime = detect_image_type(img_bytes)
+                            content_type = response.headers.get('content-type', '')
+                            
+                            # 优先使用检测到的格式，否则使用 Content-Type
+                            if detected_mime:
+                                mime = detected_mime
+                            elif content_type and any(m in content_type for m in ['jpeg', 'png', 'gif', 'webp']):
                                 if 'png' in content_type:
                                     mime = 'image/png'
                                 elif 'gif' in content_type:
@@ -680,12 +777,14 @@ Write the article in natural English appropriate for {country_name} readers.
                                     mime = 'image/webp'
                                 else:
                                     mime = 'image/jpeg'
-                                
-                                b64_str = base64_module.b64encode(img_bytes).decode('utf-8')
-                                img_result['base64'] = f'data:{mime};base64,{b64_str}'
-                                logger.info(f"[Claude] 图片下载成功: {img_url[:50]}... ({len(img_bytes)} bytes)")
                             else:
-                                logger.warning(f"[Claude] 图片太小跳过: {img_url[:50]}... ({len(img_bytes)} bytes)")
+                                # 无法确定格式，但文件较大，尝试作为 JPEG
+                                logger.warning(f"[Claude] 无法确定图片格式，尝试作为 JPEG: {img_url[:50]}... (Content-Type: {content_type})")
+                                mime = 'image/jpeg'
+                            
+                            b64_str = base64_module.b64encode(img_bytes).decode('utf-8')
+                            img_result['base64'] = f'data:{mime};base64,{b64_str}'
+                            logger.info(f"[Claude] 图片下载成功: {img_url[:50]}... ({len(img_bytes)} bytes, {mime})")
                         else:
                             logger.warning(f"[Claude] 图片请求失败: {img_url[:50]}... (status={response.status})")
                     except Exception as e:
