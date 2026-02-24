@@ -597,8 +597,11 @@ Write the article in natural English appropriate for {country_name} readers.
                 # P1 修复：访问页面，增加超时时间
                 await page.goto(url, wait_until="domcontentloaded", timeout=120000)
                 
-                # P1 修复：等待页面稳定，增加超时时间
-                await page.wait_for_load_state("load", timeout=60000)
+                # P1 修复：等待页面稳定，增加超时时间；即使超时也继续（DOM 已加载）
+                try:
+                    await page.wait_for_load_state("load", timeout=60000)
+                except Exception as e:
+                    logger.warning(f"[Claude] load 事件超时，但 DOM 已加载，继续提取图片: {e}")
                 
                 # 等待初始图片加载
                 await page.wait_for_timeout(2000)

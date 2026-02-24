@@ -1,5 +1,5 @@
-import React, { useMemo, useState, useEffect, useRef, useCallback } from 'react'
-import { Card, Table, Select, DatePicker, Space, message, Tag, Badge, Typography, Tooltip, Button, Popconfirm, Collapse, Modal, Spin, Input, Alert } from 'antd'
+﻿import React, { useMemo, useState, useEffect, useRef, useCallback } from 'react'
+import { Card, Table, Select, DatePicker, Space, message, Tag, Badge, Typography, Tooltip, Button, Popconfirm, Collapse, Modal, Spin, Input, Alert, Checkbox } from 'antd'
 import { RobotOutlined, SettingOutlined, CopyOutlined, ArrowLeftOutlined, CloseOutlined, DollarOutlined, ThunderboltOutlined, RocketOutlined } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
 import dayjs from 'dayjs'
@@ -48,6 +48,9 @@ const Analysis = () => {
   const [promptModalOpen, setPromptModalOpen] = useState(false)
   const [customPrompt, setCustomPrompt] = useState('')
   const [savingPrompt, setSavingPrompt] = useState(false)
+  
+  // 显示无数据广告系列
+  const [showEmptyCampaigns, setShowEmptyCampaigns] = useState(false)
   const [loadingPrompt, setLoadingPrompt] = useState(false)
   
   // 单条广告系列分析状态
@@ -257,6 +260,7 @@ const Analysis = () => {
       if (endDate) {
         params.end_date = endDate
       }
+      params.include_empty = showEmptyCampaigns
       
       const response = await api.post('/api/analysis/l7d', null, { params })
       
@@ -775,6 +779,12 @@ G) 综述
           </Text>
         </div>
         <Space>
+          <Checkbox 
+            checked={showEmptyCampaigns} 
+            onChange={(e) => setShowEmptyCampaigns(e.target.checked)}
+          >
+            显示无数据的广告系列
+          </Checkbox>
           <Button 
             icon={<SettingOutlined />} 
             onClick={openPromptEditor}
@@ -1357,27 +1367,41 @@ G) 综述
                         return column
                       })
 
-                      // 将"账号=CID、广告系列名、阶段标签"置于前三列并冻结在左侧（兼容旧字段"广告系列"）
-                      const pinnedLeft = ['账号=CID', '广告系列名', '广告系列', '阶段标签']
-                      const leftCols = []
-                      for (const colName of pinnedLeft) {
-                        const idx = dataColumns.findIndex((c) => c.key === colName)
-                        if (idx > -1) {
-                          const col = dataColumns.splice(idx, 1)[0]
-                          col.fixed = 'left'
-                          // 合理列宽
-                          if (colName === '账号=CID') col.width = col.width || 140
-                          if (colName === '广告系列名' || colName === '广告系列') col.width = col.width || 260
-                          if (colName === '阶段标签') col.width = col.width || 120
-                          leftCols.push(col)
-                        }
-                      }
-                      dataColumns.unshift(...leftCols)
+              // U2: 移除"账号=CID"列
+              const cidIdx = dataColumns.findIndex((c) => c.key === '账号=CID')
+              if (cidIdx > -1) {
+                dataColumns.splice(cidIdx, 1)
+              }
 
-                      const dataWithKeys = data.map((r, idx) => ({
-                        ...r,
-                        __rowKey: `${record.id}-${idx}`,
-                      }))
+              // 将"广告系列名、阶段标签"置于前两列并冻结在左侧（兼容旧字段"广告系列"）
+              const pinnedLeft = ['广告系列名', '广告系列', '阶段标签']
+              const leftCols = []
+              for (const colName of pinnedLeft) {
+                const idx = dataColumns.findIndex((c) => c.key === colName)
+                if (idx > -1) {
+                  const col = dataColumns.splice(idx, 1)[0]
+                  col.fixed = 'left'
+                  // 合理列宽
+                  if (colName === '广告系列名' || colName === '广告系列') col.width = col.width || 260
+                  if (colName === '阶段标签') col.width = col.width || 120
+                  leftCols.push(col)
+                }
+              }
+              dataColumns.unshift(...leftCols)
+
+              // U1: 默认按"状态"和"费用"排序（健康→观察→暂停，费用降序）
+              const statusOrder = { '健康': 1, '观察': 2, '暂停': 3 }
+              const sortedData = [...data].sort((a, b) => {
+                const statusA = statusOrder[a['状态']] || 99
+                const statusB = statusOrder[b['状态']] || 99
+                if (statusA !== statusB) return statusA - statusB
+                return (parseFloat(b['费用'] || b['费用($)']) || 0) - (parseFloat(a['费用'] || a['费用($)']) || 0)
+              })
+
+              const dataWithKeys = sortedData.map((r, idx) => ({
+                ...r,
+                __rowKey: `${record.id}-${idx}`,
+              }))
 
                       return (
                         <div className="analysis-subtable">
@@ -1551,7 +1575,7 @@ G) 综述
                   }
                 }
                 
-                // 为当前Max CPC列添加出价策略显示和操作按钮
+                // U3: 为当前Max CPC列添加出价策略显示和操作按钮，并用颜色突出显示
                 if (key === '当前Max CPC') {
                   column.width = 180
                   column.render = (text, row) => {
@@ -1559,10 +1583,22 @@ G) 综述
                     const strategy = campaignId ? bidStrategies[campaignId] : null
                     const isManual = strategy?.is_manual_cpc
                     const isLoading = changingToManual[campaignId]
+                    const cpcValue = parseFloat(text) || 0
+                    
+                    // U3: 根据CPC值设置颜色（高CPC红色、中等橙色、低绿色）
+                    let cpcColor = '#52c41a' // 绿色：低CPC
+                    let cpcBg = '#f6ffed'
+                    if (cpcValue >= 1.0) {
+                      cpcColor = '#f5222d' // 红色：高CPC
+                      cpcBg = '#fff1f0'
+                    } else if (cpcValue >= 0.5) {
+                      cpcColor = '#fa8c16' // 橙色：中等CPC
+                      cpcBg = '#fff7e6'
+                    }
                     
                     return (
                       <Space size={4} direction="vertical" style={{ width: '100%' }}>
-                        <Text strong>${(parseFloat(text) || 0).toFixed(2)}</Text>
+                        <Text strong style={{ color: cpcColor, backgroundColor: cpcBg, padding: '2px 8px', borderRadius: 4, fontSize: 13 }}>${cpcValue.toFixed(2)}</Text>
                         {strategy ? (
                           isManual ? (
                             <Tag color="green" style={{ fontSize: 11 }}>人工出价</Tag>
@@ -1643,6 +1679,29 @@ G) 综述
                   column.title = '谷歌状态'
                 }
 
+                // U3: 为当前Max CPC列添加醒目的颜色显示
+                if (key === '当前Max CPC') {
+                  column.width = 120
+                  column.align = 'right'
+                  column.render = (text) => {
+                    const cpcValue = parseFloat(text) || 0
+                    let cpcColor = '#52c41a' // 绿色：低CPC
+                    let cpcBg = '#f6ffed'
+                    if (cpcValue >= 1.0) {
+                      cpcColor = '#f5222d' // 红色：高CPC
+                      cpcBg = '#fff1f0'
+                    } else if (cpcValue >= 0.5) {
+                      cpcColor = '#fa8c16' // 橙色：中等CPC
+                      cpcBg = '#fff7e6'
+                    }
+                    return (
+                      <span style={{ color: cpcColor, backgroundColor: cpcBg, padding: '2px 8px', borderRadius: 4, fontWeight: 'bold' }}>
+                        ${cpcValue.toFixed(2)}
+                      </span>
+                    )
+                  }
+                }
+
                 // 动作相关列更宽 + tooltip
                 if (['投放动作', '数据动作', '风控动作', '使用场景', '动作原因'].includes(key)) {
                   column.width = 260
@@ -1666,23 +1725,38 @@ G) 综述
               })
 
               // 将“账号=CID、广告系列名、阶段标签”置于前三列并冻结在左侧（兼容旧字段“广告系列”）
-              const pinnedLeft = ['账号=CID', '广告系列名', '广告系列', '阶段标签']
-              const leftCols = []
-              for (const colName of pinnedLeft) {
+              // U2: 将"账号=CID"重命名为"CID"，更清晰
+              const cidIdx2 = dataColumns.findIndex((c) => c.key === '账号=CID')
+              if (cidIdx2 > -1) {
+                dataColumns.splice(cidIdx2, 1)
+              }
+
+              // 将"广告系列名、阶段标签"置于前两列并冻结在左侧
+              const pinnedLeft2 = ['广告系列名', '广告系列', '阶段标签']
+              const leftCols2 = []
+              for (const colName of pinnedLeft2) {
                 const idx = dataColumns.findIndex((c) => c.key === colName)
                 if (idx > -1) {
                   const col = dataColumns.splice(idx, 1)[0]
                   col.fixed = 'left'
                   // 合理列宽
-                  if (colName === '账号=CID') col.width = col.width || 140
                   if (colName === '广告系列名' || colName === '广告系列') col.width = col.width || 260
                   if (colName === '阶段标签') col.width = col.width || 120
-                  leftCols.push(col)
+                  leftCols2.push(col)
                 }
               }
-              dataColumns.unshift(...leftCols)
+              dataColumns.unshift(...leftCols2)
 
-              const dataWithKeys = data.map((r, idx) => ({
+              // U1: 默认按"状态"和"费用"排序（健康→观察→暂停，费用降序）
+              const statusOrder2 = { '健康': 1, '观察': 2, '暂停': 3 }
+              const sortedData2 = [...data].sort((a, b) => {
+                const statusA = statusOrder2[a['状态']] || 99
+                const statusB = statusOrder2[b['状态']] || 99
+                if (statusA !== statusB) return statusA - statusB
+                return (parseFloat(b['费用'] || b['费用($)']) || 0) - (parseFloat(a['费用'] || a['费用($)']) || 0)
+              })
+
+              const dataWithKeys = sortedData2.map((r, idx) => ({
                 ...r,
                 __rowKey: `${record.id}-${idx}`,
               }))

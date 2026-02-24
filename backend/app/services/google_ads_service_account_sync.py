@@ -1142,14 +1142,6 @@ class GoogleAdsServiceAccountSync:
         """保存广告系列数据到数据库"""
         saved_count = 0
         
-        # 货币转换汇率（CNY -> USD）
-        # 如果 MCC 是人民币账号，需要转换为美元
-        currency = getattr(mcc_account, 'currency', 'USD') or 'USD'
-        currency_rate = 1.0
-        if currency == 'CNY':
-            currency_rate = 7.2  # 人民币兑美元汇率
-            logger.info(f"MCC {mcc_account.mcc_id} 为人民币账号，应用汇率 1/{currency_rate}")
-        
         for campaign_data in campaigns:
             try:
                 campaign_name = campaign_data.get("campaign_name", "")

@@ -15,12 +15,48 @@ const dataCache = {
 }
 const CACHE_DURATION = 5 * 60 * 1000 // 5分钟
 
-// D5 修复：IS Budget/Rank 格式化函数，>90% 时显示 ">90%"
+// D5+U4 修复：IS Budget/Rank 格式化函数，>90% 时显示 ">90%"，并用颜色突出显示
 const formatIsLost = (value) => {
   if (value === null || value === undefined) return '-'
   if (value === 0) return '-'
   if (value > 0.9) return '>90%'
   return `${(value * 100).toFixed(1)}%`
+}
+
+// U4: IS 丢失数据带颜色渲染（严重红色、警告橙色、正常绿色）
+const renderIsLost = (value) => {
+  if (value === null || value === undefined || value === 0) {
+    return <span style={{ color: '#999' }}>-</span>
+  }
+  
+  let color = '#52c41a' // 绿色：低丢失
+  let bg = '#f6ffed'
+  let text = `${(value * 100).toFixed(1)}%`
+  
+  if (value > 0.9) {
+    color = '#f5222d' // 红色：严重丢失
+    bg = '#fff1f0'
+    text = '>90%'
+  } else if (value > 0.5) {
+    color = '#fa8c16' // 橙色：中等丢失
+    bg = '#fff7e6'
+  } else if (value > 0.2) {
+    color = '#faad14' // 黄色：轻微丢失
+    bg = '#fffbe6'
+  }
+  
+  return (
+    <span style={{ 
+      color, 
+      backgroundColor: bg, 
+      padding: '2px 6px', 
+      borderRadius: 4, 
+      fontWeight: value > 0.5 ? 'bold' : 'normal',
+      fontSize: 12
+    }}>
+      {text}
+    </span>
+  )
 }
 
 const DataCenter = () => {
@@ -268,14 +304,14 @@ const DataCenter = () => {
       dataIndex: 'is_budget_lost',
       key: 'is_budget_lost',
       width: 120,
-      render: (val) => formatIsLost(val),
+      render: (val) => renderIsLost(val),
     },
     {
       title: 'IS Rank丢失',
       dataIndex: 'is_rank_lost',
       key: 'is_rank_lost',
       width: 120,
-      render: (val) => formatIsLost(val),
+      render: (val) => renderIsLost(val),
     },
   ]
 
