@@ -1172,9 +1172,10 @@ class GoogleAdsServiceAccountSync:
                 raw_budget = campaign_data.get("budget", 0)
                 raw_cpc = campaign_data.get("cpc", 0)
                 
-                converted_cost = raw_cost / currency_rate
-                converted_budget = raw_budget / currency_rate
-                converted_cpc = raw_cpc / currency_rate
+                # D1 修复：存储原始货币值，不做转换（读取时统一转换）
+                converted_cost = raw_cost
+                converted_budget = raw_budget
+                converted_cpc = raw_cpc
                 
                 if existing:
                     # 更新现有记录

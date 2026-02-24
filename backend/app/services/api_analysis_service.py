@@ -633,9 +633,16 @@ class ApiAnalysisService:
     def generate_l7d_analysis(
         self,
         end_date: date,
-        user_id: Optional[int] = None
+        user_id: Optional[int] = None,
+        include_empty: bool = False
     ) -> Dict:
-        """生成L7D分析 - 按广告系列展示"""
+        """生成L7D分析 - 按广告系列展示
+        
+        Args:
+            end_date: 结束日期
+            user_id: 用户ID（员工只能查看自己的数据）
+            include_empty: 是否显示无数据的广告系列（D3 修复）
+        """
         begin_date = end_date - timedelta(days=6)
         logger.info(f"=== 开始生成L7D分析 === 范围: {begin_date} ~ {end_date}")
         
@@ -782,21 +789,26 @@ class ApiAnalysisService:
                 clicks = cdata["total_clicks"]
                 data_days = len(cdata["data_dates"])  # 有Google Ads数据的天数
                 
-                # 过滤掉没有数据的广告系列（点击=0 且 花费=0 且 佣金=0）
-                if clicks == 0 and cost == 0 and commission == 0:
+                # D3 修复：过滤掉没有数据的广告系列（点击=0 且 花费=0 且 佣金=0），除非 include_empty=True
+                if not include_empty and clicks == 0 and cost == 0 and commission == 0:
                     continue
                 
                 conservative_epc = (commission * 0.72 / clicks) if clicks > 0 else 0
                 conservative_roi = ((commission * 0.72 - cost) / cost) if cost > 0 else None
                 
-                # 当前Max CPC：从 CampaignBidStrategy 获取人工出价上限
-                bid_strategy = self.db.query(CampaignBidStrategy).filter(
-                    CampaignBidStrategy.user_id == data_user_id,
-                    CampaignBidStrategy.campaign_name == cdata["campaign_name"]
-                ).first()
-                max_cpc_limit = bid_strategy.max_cpc_limit if bid_strategy and bid_strategy.max_cpc_limit else None
-                # 如果没有人工出价上限，回退到过去7天CPC最大值
-                current_max_cpc = max_cpc_limit if max_cpc_limit else cdata["max_cpc"]
+                # D6 修复：当前Max CPC 从 KeywordBid 获取关键字级别最高 CPC
+                keyword_max_cpc_raw = self.db.query(func.max(KeywordBid.max_cpc)).filter(
+                    KeywordBid.user_id == data_user_id,
+                    KeywordBid.campaign_id == cdata["campaign_id"],
+                    KeywordBid.status == "ENABLED"
+                ).scalar()
+                
+                if keyword_max_cpc_raw:
+                    # KeywordBid 存原始货币，需转换为 USD
+                    current_max_cpc = convert_to_usd(keyword_max_cpc_raw, cdata["currency"])
+                else:
+                    # 无关键词数据时，回退到广告系列级别 CPC 最大值
+                    current_max_cpc = cdata["max_cpc"]
                 
                 # 生成操作指令（包含关键词级别CPC建议）
                 operation, deployment_data = self._generate_operation_with_keywords(

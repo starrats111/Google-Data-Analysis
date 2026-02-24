@@ -312,7 +312,7 @@ async def proxy_image_public(
             return Response(
                 content=_get_placeholder_image("图片过大"),
                 media_type="image/svg+xml",
-                headers={"Cache-Control": "public, max-age=300"}
+                headers={"Cache-Control": "no-store"}  # P2 修复：SVG 占位图不缓存
             )
         
         # 添加到缓存
@@ -347,7 +347,7 @@ async def proxy_image_public(
     return Response(
         content=_get_placeholder_image("无法加载"),
         media_type="image/svg+xml",
-        headers={"Cache-Control": "public, max-age=60"}  # 短缓存，方便重试
+        headers={"Cache-Control": "no-store"}  # P2 修复：SVG 占位图不缓存，方便重试
     )
 
 

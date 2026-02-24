@@ -819,6 +819,7 @@ async def generate_daily_analysis_from_api(
 @router.post("/l7d")
 async def generate_l7d_analysis_from_api(
     end_date: Optional[str] = Query(None, description="结束日期 YYYY-MM-DD（默认为昨天）"),
+    include_empty: bool = Query(False, description="是否显示无数据的广告系列"),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
@@ -827,6 +828,7 @@ async def generate_l7d_analysis_from_api(
     
     Args:
         end_date: 结束日期 YYYY-MM-DD（默认为昨天）
+        include_empty: 是否显示无数据的广告系列（D3 修复）
     """
     from datetime import datetime, date, timedelta
     
@@ -842,7 +844,7 @@ async def generate_l7d_analysis_from_api(
     user_id = current_user.id if current_user.role in ("employee", "member", "leader") else None
     
     api_analysis_service = ApiAnalysisService(db)
-    result = api_analysis_service.generate_l7d_analysis(end, user_id)
+    result = api_analysis_service.generate_l7d_analysis(end, user_id, include_empty=include_empty)
     
     if not result.get("success"):
         raise HTTPException(status_code=500, detail=result.get("message", "生成分析失败"))

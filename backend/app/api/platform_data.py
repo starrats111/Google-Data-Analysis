@@ -537,6 +537,24 @@ async def get_platform_data_summary(
                 "rejected_commission": round(rejected_comm, 2)  # 拒付佣金
             })
         
+        # D2 修复：用差值法追加"未归类拒付"行，保证 total = sum(breakdown)
+        breakdown_rejected_sum = sum(item.get("rejected_commission", 0) for item in merchant_breakdown)
+        missing_rejected = round(float(total_rejected_commission) - breakdown_rejected_sum, 2)
+        
+        if missing_rejected > 0.01:
+            merchant_breakdown.append({
+                "mid": "N/A",
+                "merchant": "(未归类拒付)",
+                "platform": "mixed",
+                "account_label": "-",
+                "orders": 0,
+                "gmv": 0,
+                "total_commission": 0,
+                "approved_commission": 0,
+                "pending_commission": 0,
+                "rejected_commission": missing_rejected
+            })
+        
         # 按平台分组汇总（保留用于兼容）
         platform_query = base_query.with_entities(
             AffiliateTransaction.platform,

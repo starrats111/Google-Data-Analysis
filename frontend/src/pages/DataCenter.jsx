@@ -15,6 +15,14 @@ const dataCache = {
 }
 const CACHE_DURATION = 5 * 60 * 1000 // 5分钟
 
+// D5 修复：IS Budget/Rank 格式化函数，>90% 时显示 ">90%"
+const formatIsLost = (value) => {
+  if (value === null || value === undefined) return '-'
+  if (value === 0) return '-'
+  if (value > 0.9) return '>90%'
+  return `${(value * 100).toFixed(1)}%`
+}
+
 const DataCenter = () => {
   const { user } = useAuth()
   const isManager = user?.role === 'manager'
@@ -260,14 +268,14 @@ const DataCenter = () => {
       dataIndex: 'is_budget_lost',
       key: 'is_budget_lost',
       width: 120,
-      render: (val) => val ? `${(val * 100).toFixed(1)}%` : '-',
+      render: (val) => formatIsLost(val),
     },
     {
       title: 'IS Rank丢失',
       dataIndex: 'is_rank_lost',
       key: 'is_rank_lost',
       width: 120,
-      render: (val) => val ? `${(val * 100).toFixed(1)}%` : '-',
+      render: (val) => formatIsLost(val),
     },
   ]
 

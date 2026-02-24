@@ -64,7 +64,8 @@ export const getAnalyzeTaskStatus = (taskId) => {
  * @param {number} maxTime - 最大等待时间（毫秒）
  * @returns {Promise<object>} - 分析结果
  */
-export const pollAnalyzeTask = async (taskId, onProgress, interval = 2000, maxTime = 180000) => {
+// P1 修复：增加最大等待时间到 360000ms（6分钟）
+export const pollAnalyzeTask = async (taskId, onProgress, interval = 2000, maxTime = 360000) => {
   const startTime = Date.now()
   
   while (Date.now() - startTime < maxTime) {

@@ -7,6 +7,14 @@ import { useAuth } from '../store/authStore'
 
 const { RangePicker } = DatePicker
 
+// D5 修复：IS Budget/Rank 格式化函数，>90% 时显示 ">90%"
+const formatIsLost = (value) => {
+  if (value === null || value === undefined) return '-'
+  if (value === 0) return '-'
+  if (value > 0.9) return '>90%'
+  return `${(value * 100).toFixed(1)}%`
+}
+
 export default function GoogleAdsData() {
   const { user } = useAuth()
   
@@ -458,7 +466,7 @@ export default function GoogleAdsData() {
                 key: 'is_budget_lost',
                 width: 130,
                 align: 'right',
-                render: (val) => `${(val || 0).toFixed(2)}%`
+                render: (val) => formatIsLost(val)
               },
               {
                 title: 'IS Rank丢失',
@@ -466,7 +474,7 @@ export default function GoogleAdsData() {
                 key: 'is_rank_lost',
                 width: 130,
                 align: 'right',
-                render: (val) => `${(val || 0).toFixed(2)}%`
+                render: (val) => formatIsLost(val)
               }
             ]}
           />

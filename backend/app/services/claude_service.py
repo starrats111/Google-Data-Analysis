@@ -594,11 +594,11 @@ Write the article in natural English appropriate for {country_name} readers.
                 )
                 page = await context.new_page()
                 
-                # 访问页面，使用 domcontentloaded 更快完成（不等待所有网络请求）
-                await page.goto(url, wait_until="domcontentloaded", timeout=60000)
+                # P1 修复：访问页面，增加超时时间
+                await page.goto(url, wait_until="domcontentloaded", timeout=120000)
                 
-                # 等待页面稳定
-                await page.wait_for_load_state("load", timeout=30000)
+                # P1 修复：等待页面稳定，增加超时时间
+                await page.wait_for_load_state("load", timeout=60000)
                 
                 # 等待初始图片加载
                 await page.wait_for_timeout(2000)
