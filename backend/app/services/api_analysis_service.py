@@ -633,15 +633,15 @@ class ApiAnalysisService:
     def generate_l7d_analysis(
         self,
         end_date: date,
-        user_id: Optional[int] = None,
-        include_empty: bool = False
+        user_id: Optional[int] = None
     ) -> Dict:
         """生成L7D分析 - 按广告系列展示
+        
+        只分析已启用(ENABLED)的广告系列，始终包含双0数据（前端负责过滤显示）
         
         Args:
             end_date: 结束日期
             user_id: 用户ID（员工只能查看自己的数据）
-            include_empty: 是否显示无数据的广告系列（D3 修复）
         """
         begin_date = end_date - timedelta(days=6)
         logger.info(f"=== 开始生成L7D分析 === 范围: {begin_date} ~ {end_date}")
@@ -789,9 +789,7 @@ class ApiAnalysisService:
                 clicks = cdata["total_clicks"]
                 data_days = len(cdata["data_dates"])  # 有Google Ads数据的天数
                 
-                # D3 修复：过滤掉没有数据的广告系列（点击=0 且 花费=0 且 佣金=0），除非 include_empty=True
-                if not include_empty and clicks == 0 and cost == 0 and commission == 0:
-                    continue
+                # 始终包含所有已启用广告系列（包括双0数据），前端负责根据用户选择过滤显示
                 
                 conservative_epc = (commission * 0.72 / clicks) if clicks > 0 else 0
                 conservative_roi = ((commission * 0.72 - cost) / cost) if cost > 0 else None

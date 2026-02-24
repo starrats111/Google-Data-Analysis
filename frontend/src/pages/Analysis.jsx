@@ -1,4 +1,4 @@
-﻿import React, { useMemo, useState, useEffect, useRef, useCallback } from 'react'
+import React, { useMemo, useState, useEffect, useRef, useCallback } from 'react'
 import { Card, Table, Select, DatePicker, Space, message, Tag, Badge, Typography, Tooltip, Button, Popconfirm, Collapse, Modal, Spin, Input, Alert, Checkbox } from 'antd'
 import { RobotOutlined, SettingOutlined, CopyOutlined, ArrowLeftOutlined, CloseOutlined, DollarOutlined, ThunderboltOutlined, RocketOutlined } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
@@ -260,7 +260,6 @@ const Analysis = () => {
       if (endDate) {
         params.end_date = endDate
       }
-      params.include_empty = showEmptyCampaigns
       
       const response = await api.post('/api/analysis/l7d', null, { params })
       
@@ -278,11 +277,25 @@ const Analysis = () => {
     }
   }
 
-  // 生成 AI 分析报告
+  // 生成 AI 分析报告（只使用当前显示的数据，即过滤后的数据）
   const handleGenerateReport = async (record) => {
-    const data = record?.result_data?.data
-    if (!Array.isArray(data) || data.length === 0) {
+    const rawData = record?.result_data?.data
+    if (!Array.isArray(rawData) || rawData.length === 0) {
       message.warning('该记录没有可分析的数据')
+      return
+    }
+    
+    // 根据 showEmptyCampaigns 过滤双0数据（与展示逻辑一致）
+    const data = showEmptyCampaigns 
+      ? rawData 
+      : rawData.filter(row => {
+          const cost = parseFloat(row['费用'] || row['费用($)'] || row['L7D花费'] || 0)
+          const commission = parseFloat(row['佣金'] || row['L7D佣金'] || row['回传佣金'] || 0)
+          return cost > 0 || commission > 0
+        })
+    
+    if (data.length === 0) {
+      message.warning('过滤后没有可分析的数据（可勾选"显示无数据的广告系列"）')
       return
     }
     
@@ -1186,8 +1199,19 @@ G) 综述
                   }}
                   expandable={{
                     expandedRowRender: (record) => {
-                      const data = record.result_data?.data || []
-                      if (!Array.isArray(data) || data.length === 0) return <Text type="secondary">暂无数据</Text>
+                      const rawData = record.result_data?.data || []
+                      if (!Array.isArray(rawData) || rawData.length === 0) return <Text type="secondary">暂无数据</Text>
+
+                      // 根据 showEmptyCampaigns 过滤双0数据（费用=0 且 佣金=0）
+                      const data = showEmptyCampaigns 
+                        ? rawData 
+                        : rawData.filter(row => {
+                            const cost = parseFloat(row['费用'] || row['费用($)'] || row['L7D花费'] || 0)
+                            const commission = parseFloat(row['佣金'] || row['L7D佣金'] || row['回传佣金'] || 0)
+                            return cost > 0 || commission > 0
+                          })
+                      
+                      if (data.length === 0) return <Text type="secondary">无符合条件的数据（可勾选"显示无数据的广告系列"查看全部）</Text>
 
                       // 获取所有键，过滤掉不需要显示的列
                       const allKeys = Object.keys(data[0])
@@ -1465,8 +1489,19 @@ G) 综述
             }}
             expandable={{
             expandedRowRender: (record) => {
-              const data = record.result_data?.data || []
-              if (!Array.isArray(data) || data.length === 0) return <Text type="secondary">暂无数据</Text>
+              const rawData = record.result_data?.data || []
+              if (!Array.isArray(rawData) || rawData.length === 0) return <Text type="secondary">暂无数据</Text>
+
+              // 根据 showEmptyCampaigns 过滤双0数据（费用=0 且 佣金=0）
+              const data = showEmptyCampaigns 
+                ? rawData 
+                : rawData.filter(row => {
+                    const cost = parseFloat(row['费用'] || row['费用($)'] || row['L7D花费'] || 0)
+                    const commission = parseFloat(row['佣金'] || row['L7D佣金'] || row['回传佣金'] || 0)
+                    return cost > 0 || commission > 0
+                  })
+              
+              if (data.length === 0) return <Text type="secondary">无符合条件的数据（可勾选"显示无数据的广告系列"查看全部）</Text>
 
               // 获取所有键，过滤掉不需要显示的列
               const allKeys = Object.keys(data[0])
