@@ -29,17 +29,17 @@ scheduler = BackgroundScheduler(timezone=BEIJING_TZ)
 
 
 def sync_platform_data_job():
-    """同步平台数据任务（每天北京时间4点和16点执行，逐天同步过去1周数据：MID、商家、订单数、佣金、拒付佣金）
+    """同步平台数据任务（每天北京时间4点执行，逐天同步过去5天数据：MID、商家、订单数、佣金、拒付佣金）
     
     注意：
     - 总佣金：包含所有状态的佣金（approved + pending + rejected）
     - 拒付佣金：只包含rejected状态的佣金
-    - 已付佣金：只包含approved状态的佣金（每月1号和15号单独同步）
+    - 已付佣金：只包含approved状态的佣金（每周一同步90天）
     """
     db: Session = SessionLocal()
     try:
         logger.info("=" * 60)
-        logger.info("开始执行平台数据同步任务（过去1周，逐天同步）...")
+        logger.info("开始执行平台数据同步任务（过去5天，逐天同步）...")
         
         sync_service = PlatformDataSyncService(db)
         
@@ -50,11 +50,11 @@ def sync_platform_data_job():
         
         logger.info(f"找到 {len(active_accounts)} 个活跃账号")
         
-        # 同步最近7天的数据（确保覆盖可能变化的佣金）
+        # 同步最近5天的数据（确保覆盖可能变化的佣金）
         end_date = date.today() - timedelta(days=1)  # 昨天
-        begin_date = end_date - timedelta(days=6)  # 7天前
+        begin_date = end_date - timedelta(days=4)  # 5天前
         
-        logger.info(f"时间范围: {begin_date.isoformat()} 至 {end_date.isoformat()} (共7天)")
+        logger.info(f"时间范围: {begin_date.isoformat()} 至 {end_date.isoformat()} (共5天)")
         
         total_success_count = 0
         total_fail_count = 0
@@ -105,7 +105,7 @@ def sync_platform_data_job():
         
         logger.info("=" * 60)
         logger.info(f"平台数据同步任务完成（逐天同步）:")
-        logger.info(f"  - 同步日期数: 7 天")
+        logger.info(f"  - 同步日期数: 5 天")
         logger.info(f"  - 总成功次数: {total_success_count} 次")
         logger.info(f"  - 总失败次数: {total_fail_count} 次")
         logger.info(f"  - 共保存: {total_saved} 条记录")
@@ -123,9 +123,7 @@ def sync_google_ads_data_job():
     同步Google Ads数据任务（每天北京时间凌晨4点执行）
     
     使用服务账号模式同步所有活跃MCC的广告数据
-    同步过去3天的数据（强制刷新），确保数据精准：
-    - 昨天的数据：当天最终数据
-    - 前天和大前天：覆盖可能的延迟费用更新
+    仅同步昨天的数据，确保数据精准且节省API配额
     """
     db: Session = SessionLocal()
     try:
@@ -136,39 +134,35 @@ def sync_google_ads_data_job():
         
         sync_service = GoogleAdsServiceAccountSync(db)
         
-        # 同步过去3天的数据（强制刷新确保精准）
+        # 仅同步昨天的数据
+        target_date = date.today() - timedelta(days=1)
+        force_refresh = True  # 强制刷新确保数据精准
+        
+        logger.info(f"同步日期: {target_date.isoformat()} (仅昨天)")
+        
+        # 批量同步所有活跃MCC
+        result = sync_service.sync_all_mccs(
+            target_date=target_date,
+            only_enabled=False,  # 同步所有状态的广告系列（包括已暂停）
+            force_refresh=force_refresh
+        )
+        
         total_saved = 0
         total_mccs = 0
         
-        for days_ago in range(1, 4):  # 1, 2, 3 天前
-            target_date = date.today() - timedelta(days=days_ago)
-            force_refresh = True  # 强制刷新确保数据精准
+        if result.get("success"):
+            total_saved = result.get('total_saved', 0)
+            total_mccs = result.get('total_mccs', 0)
+            logger.info(f"  ✓ {target_date}: 保存 {total_saved} 条")
             
-            logger.info(f"同步日期: {target_date.isoformat()} (强制刷新: {force_refresh})")
-            
-            # 批量同步所有活跃MCC
-            result = sync_service.sync_all_mccs(
-                target_date=target_date,
-                only_enabled=False,  # 同步所有状态的广告系列（包括已暂停）
-                force_refresh=force_refresh
-            )
-            
-            if result.get("success"):
-                saved = result.get('total_saved', 0)
-                mccs = result.get('total_mccs', 0)
-                total_saved += saved
-                total_mccs = max(total_mccs, mccs)
-                logger.info(f"  ✓ {target_date}: 保存 {saved} 条")
-                
-                if result.get("quota_exhausted"):
-                    logger.warning("⚠️ 遇到API配额限制，停止同步")
-                    break
-            else:
-                logger.error(f"  ✗ {target_date}: {result.get('message')}")
+            if result.get("quota_exhausted"):
+                logger.warning("⚠️ 遇到API配额限制")
+        else:
+            logger.error(f"  ✗ {target_date}: {result.get('message')}")
         
         logger.info(f"✓ Google Ads数据同步完成:")
         logger.info(f"  - MCC总数: {total_mccs}")
-        logger.info(f"  - 同步日期数: 3 天")
+        logger.info(f"  - 同步日期: 仅昨天 ({target_date.isoformat()})")
         logger.info(f"  - 总保存记录: {total_saved} 条")
         logger.info("=" * 60)
         
@@ -181,10 +175,11 @@ def sync_google_ads_data_job():
 def daily_auto_sync_and_analysis_job():
     """
     每天早上4:00自动执行的统一任务：
-    1. 拉取Google Ads数据
-    2. 拉取广告平台数据
-    3. 生成每日分析
-    4. 生成L7D分析（每天执行）
+    1. 拉取Google Ads数据（仅昨天）
+    2. 拉取广告平台数据（过去5天）
+    3. 周一额外：同步过去90天平台数据（含已付/拒付佣金）
+    4. 生成每日分析
+    5. 生成L7D分析（每天执行）
     """
     logger.info("=" * 60)
     logger.info("【每日自动任务开始】")
@@ -192,36 +187,50 @@ def daily_auto_sync_and_analysis_job():
     
     today = date.today()
     weekday = today.weekday()  # 0=周一, 1=周二, ..., 6=周日
+    is_monday = (weekday == 0)
     
     logger.info(f"今天是: 星期{['一','二','三','四','五','六','日'][weekday]}")
+    if is_monday:
+        logger.info("📅 周一：将额外同步过去90天平台佣金数据")
     logger.info("=" * 60)
     
-    # 步骤1: 同步Google Ads数据
-    logger.info("\n【步骤1/4】同步Google Ads数据...")
+    # 步骤1: 同步Google Ads数据（仅昨天）
+    logger.info("\n【步骤1/5】同步Google Ads数据（仅昨天）...")
     try:
         sync_google_ads_data_job()
         logger.info("✓ Google Ads数据同步完成")
     except Exception as e:
         logger.error(f"✗ Google Ads数据同步失败: {e}")
     
-    # 步骤2: 同步平台数据
-    logger.info("\n【步骤2/4】同步广告平台数据...")
+    # 步骤2: 同步平台数据（过去5天）
+    logger.info("\n【步骤2/5】同步广告平台数据（过去5天）...")
     try:
         sync_platform_data_job()
         logger.info("✓ 广告平台数据同步完成")
     except Exception as e:
         logger.error(f"✗ 广告平台数据同步失败: {e}")
     
-    # 步骤3: 生成每日分析
-    logger.info("\n【步骤3/4】生成每日分析...")
+    # 步骤3: 周一额外同步过去90天平台数据
+    if is_monday:
+        logger.info("\n【步骤3/5】周一额外：同步过去90天平台佣金数据...")
+        try:
+            sync_platform_data_90days_job()
+            logger.info("✓ 90天平台佣金数据同步完成")
+        except Exception as e:
+            logger.error(f"✗ 90天平台佣金数据同步失败: {e}")
+    else:
+        logger.info("\n【步骤3/5】跳过（仅周一执行90天同步）")
+    
+    # 步骤4: 生成每日分析
+    logger.info("\n【步骤4/5】生成每日分析...")
     try:
         daily_analysis_job()
         logger.info("✓ 每日分析生成完成")
     except Exception as e:
         logger.error(f"✗ 每日分析生成失败: {e}")
     
-    # 步骤4: 生成L7D分析（每天执行）
-    logger.info("\n【步骤4/4】生成L7D分析...")
+    # 步骤5: 生成L7D分析（每天执行）
+    logger.info("\n【步骤5/5】生成L7D分析...")
     try:
         weekly_l7d_analysis_job()
         logger.info("✓ L7D分析生成完成")
@@ -358,6 +367,92 @@ def weekly_l7d_analysis_job():
 
     except Exception as e:
         logger.error("✗ 每周L7D分析任务执行失败: %s", e, exc_info=True)
+    finally:
+        db.close()
+
+
+def sync_platform_data_90days_job():
+    """周一同步过去90天平台佣金任务（包含已付佣金和拒付佣金）
+    
+    每周一早上4点执行，同步过去90天的所有佣金数据，
+    确保长周期内的佣金状态变化（如从pending变为approved/rejected）被正确更新
+    """
+    db: Session = SessionLocal()
+    try:
+        logger.info("=" * 60)
+        logger.info("开始执行90天平台佣金同步任务（周一专用）...")
+        
+        sync_service = PlatformDataSyncService(db)
+        
+        # 获取所有活跃的联盟账号
+        active_accounts = db.query(AffiliateAccount).filter(
+            AffiliateAccount.is_active == True
+        ).all()
+        
+        logger.info(f"找到 {len(active_accounts)} 个活跃账号")
+        
+        # 同步过去90天的数据
+        end_date = date.today() - timedelta(days=1)  # 昨天
+        begin_date = end_date - timedelta(days=89)  # 90天前
+        
+        logger.info(f"时间范围: {begin_date.isoformat()} 至 {end_date.isoformat()} (共90天)")
+        logger.info("同步所有状态的佣金（含已付佣金和拒付佣金）")
+        
+        total_success_count = 0
+        total_fail_count = 0
+        total_saved = 0
+        
+        # 逐天同步
+        current_date = begin_date
+        while current_date <= end_date:
+            logger.info("-" * 60)
+            logger.info(f"正在同步日期: {current_date.isoformat()}")
+            
+            day_success_count = 0
+            day_fail_count = 0
+            day_saved = 0
+            
+            for account in active_accounts:
+                try:
+                    logger.info(f"  同步账号: {account.account_name} (平台: {account.platform.platform_name if account.platform else '未知'})")
+                    result = sync_service.sync_account_data(
+                        account.id,
+                        current_date.isoformat(),
+                        current_date.isoformat()
+                    )
+                    
+                    if result.get("success"):
+                        day_success_count += 1
+                        saved_count = result.get("saved_count", 0)
+                        day_saved += saved_count
+                        logger.info(f"    ✓ 成功，保存 {saved_count} 条")
+                    else:
+                        day_fail_count += 1
+                        logger.warning(f"    ✗ 失败: {result.get('message')}")
+                        
+                except Exception as e:
+                    day_fail_count += 1
+                    logger.error(f"    ✗ 异常: {e}")
+            
+            total_success_count += day_success_count
+            total_fail_count += day_fail_count
+            total_saved += day_saved
+            
+            logger.info(f"日期 {current_date.isoformat()} 完成: 成功 {day_success_count}, 失败 {day_fail_count}, 保存 {day_saved} 条")
+            
+            current_date += timedelta(days=1)
+        
+        logger.info("=" * 60)
+        logger.info(f"90天平台佣金同步任务完成（周一专用）:")
+        logger.info(f"  - 同步日期数: 90 天")
+        logger.info(f"  - 总成功次数: {total_success_count} 次")
+        logger.info(f"  - 总失败次数: {total_fail_count} 次")
+        logger.info(f"  - 共保存: {total_saved} 条记录")
+        logger.info(f"  - 包含: 已付佣金（approved）、拒付佣金（rejected）、待审核佣金（pending）")
+        logger.info("=" * 60)
+        
+    except Exception as e:
+        logger.error(f"✗ 90天平台佣金同步任务异常: {e}", exc_info=True)
     finally:
         db.close()
 

@@ -836,15 +836,15 @@ async def sync_platform_data_realtime(
     db: Session = Depends(get_db)
 ):
     """
-    实时同步平台数据（最近3天）- 后台任务模式
+    实时同步平台数据（最近5天）- 后台任务模式
     立即返回，同步在后台执行
     """
     from datetime import timedelta
     
     try:
-        # 计算最近3天的日期范围
+        # 计算最近5天的日期范围
         end_date = date.today()
-        start_date = end_date - timedelta(days=2)  # 今天 + 前2天 = 3天
+        start_date = end_date - timedelta(days=4)  # 今天 + 前4天 = 5天
         
         logger.info(f"用户 {current_user.username} 触发实时同步（后台模式），日期范围: {start_date} ~ {end_date}")
         
