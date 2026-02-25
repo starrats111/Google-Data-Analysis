@@ -49,7 +49,7 @@ def main():
 
     # 2. 检查开发者令牌
     print("\n[2/6] 检查开发者令牌...")
-    dev_token = settings.GOOGLE_ADS_SHARED_DEVELOPER_TOKEN
+    dev_token = settings.google_ads_shared_developer_token
     if dev_token:
         print(f"  ✅ 开发者令牌已配置 (前6位: {dev_token[:6]}...)")
     else:
