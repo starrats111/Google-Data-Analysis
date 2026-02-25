@@ -1,5 +1,6 @@
 import axios from 'axios'
 import { generateCacheKey, getCachedData, setCacheData } from './apiCache'
+import { getToken, setToken, clearToken } from './tokenHolder'
 
 // 正在进行的请求（用于取消重复请求）
 const pendingRequests = new Map()
@@ -44,7 +45,7 @@ const api = axios.create({
 
 // 请求拦截器：添加Token、URL修复、取消重复请求
 api.interceptors.request.use((config) => {
-  const token = localStorage.getItem('token')
+  const token = getToken()
   if (token) {
     config.headers.Authorization = `Bearer ${token}`
   }
@@ -173,19 +174,17 @@ api.interceptors.response.use(
     if (error.response?.status === 401) {
       const originalRequest = error.config
       
-      // 避免刷新接口本身401时无限循环
       if (originalRequest.url?.includes('/api/auth/refresh') || 
           originalRequest.url?.includes('/api/auth/login')) {
-        localStorage.removeItem('token')
+        clearToken()
         localStorage.removeItem('user')
         localStorage.removeItem('permissions')
         window.location.href = '/login'
         return Promise.reject(error)
       }
       
-      // 避免重复请求
       if (originalRequest._retry) {
-        localStorage.removeItem('token')
+        clearToken()
         localStorage.removeItem('user')
         localStorage.removeItem('permissions')
         window.location.href = '/login'
@@ -213,9 +212,7 @@ api.interceptors.response.use(
       try {
         const response = await api.post('/api/auth/refresh')
         const newToken = response.data.access_token
-        
-        // 保存新 Token
-        localStorage.setItem('token', newToken)
+        setToken(newToken)
         
         // 通知所有等待的请求
         onTokenRefreshed(newToken)
@@ -225,10 +222,9 @@ api.interceptors.response.use(
         originalRequest.headers.Authorization = `Bearer ${newToken}`
         return api(originalRequest)
       } catch (refreshError) {
-        // 刷新失败，清除登录状态
         onTokenRefreshFailed()
         isRefreshing = false
-        localStorage.removeItem('token')
+        clearToken()
         localStorage.removeItem('user')
         localStorage.removeItem('permissions')
         window.location.href = '/login'

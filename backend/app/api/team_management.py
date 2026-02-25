@@ -412,34 +412,29 @@ async def delete_user(
     return {"success": True, "message": "用户已删除"}
 
 
+class ResetPasswordRequest(BaseModel):
+    new_password: str
+
+
 @router.post("/users/{user_id}/reset-password")
 async def reset_password(
     user_id: int,
+    body: ResetPasswordRequest,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_manager)
 ):
-    """重置用户密码为默认密码"""
+    """重置用户密码（经理指定新密码）"""
+    if len(body.new_password) < 6:
+        raise HTTPException(status_code=400, detail="密码长度不能少于6位")
+
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="用户不存在")
-    
-    # 根据用户名确定默认密码
-    username = user.username
-    if username.startswith("wj"):
-        default_password = "wj123456"
-    elif username.startswith("jy"):
-        default_password = "jy123456"
-    elif username.startswith("yz"):
-        default_password = "yz123456"
-    elif username == "manager":
-        default_password = "m123456"
-    else:
-        default_password = "123456"
-    
-    user.password_hash = pwd_context.hash(default_password)
+
+    user.password_hash = pwd_context.hash(body.new_password)
     db.commit()
-    
-    return {"success": True, "message": f"密码已重置为默认密码"}
+
+    return {"success": True, "message": f"用户 {user.username} 的密码已重置"}
 
 
 # ========== Statistics APIs ==========

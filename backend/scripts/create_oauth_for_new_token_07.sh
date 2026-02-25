@@ -5,7 +5,7 @@ echo "=== 新令牌关联OAuth配置 ==="
 echo ""
 
 # 新令牌
-NEW_TOKEN="hWBTxgYlOiWB4XfXQl_UfA"
+NEW_TOKEN="<DEVELOPER_TOKEN_FROM_ENV>"
 
 echo "步骤1: 检查当前配置..."
 cd ~/Google-Data-Analysis/backend || exit 1
@@ -87,7 +87,7 @@ echo "=== 新令牌关联OAuth配置 ==="
 echo ""
 
 # 新令牌
-NEW_TOKEN="hWBTxgYlOiWB4XfXQl_UfA"
+NEW_TOKEN="<DEVELOPER_TOKEN_FROM_ENV>"
 
 echo "步骤1: 检查当前配置..."
 cd ~/Google-Data-Analysis/backend || exit 1
@@ -161,6 +161,7 @@ echo "=== 完成 ==="
 echo ""
 echo "下一步: 重启服务并测试"
 echo "运行: pkill -9 -f 'uvicorn.*app.main' && sleep 2 && nohup uvicorn app.main:app --host 0.0.0.0 --port 8000 > run.log 2>&1 &"
+
 
 
 

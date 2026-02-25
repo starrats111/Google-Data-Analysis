@@ -3,17 +3,21 @@
 使用affiliate_transactions表，按日期+平台+商户聚合
 支持汇总模式和明细模式
 """
-from fastapi import APIRouter, Depends, HTTPException, Query, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, Query, BackgroundTasks, Request
 from sqlalchemy.orm import Session
 from sqlalchemy import func, and_, case
 from typing import Optional, List
 from datetime import date, datetime
 from pydantic import BaseModel
 import logging
+from slowapi import Limiter
+from slowapi.util import get_remote_address
 
 from app.database import get_db
 from app.middleware.auth import get_current_user
 from app.models.user import User
+
+_limiter = Limiter(key_func=get_remote_address)
 from app.models.affiliate_transaction import AffiliateTransaction
 from app.models.affiliate_account import AffiliateAccount
 
@@ -830,7 +834,9 @@ def _do_platform_sync_background(user_id: int, account_ids: list, start_date: st
 
 
 @router.post("/sync-realtime")
+@_limiter.limit("3/minute")
 async def sync_platform_data_realtime(
+    request: Request,
     background_tasks: BackgroundTasks,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)

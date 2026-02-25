@@ -211,10 +211,12 @@ async def get_user_statistics(
 
 
 @router.post("/refresh")
+@limiter.limit("10/minute")
 async def refresh_token(request: Request, response: Response, db: Session = Depends(get_db)):
     """刷新 Access Token
     
     使用 httpOnly Cookie 中的 Refresh Token 获取新的 Access Token
+    速率限制: 10次/分钟/IP，防止 refresh storm
     """
     # 从 Cookie 获取 Refresh Token
     refresh_token = request.cookies.get("refresh_token")

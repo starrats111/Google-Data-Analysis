@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 
 # 新令牌（07提供的正式访问权限令牌）
-NEW_TOKEN = "hWBTxgYlOiWB4XfXQl_UfA"
+NEW_TOKEN = "<DEVELOPER_TOKEN_FROM_ENV>"
 
 def main():
     print("=== 07的开发者令牌更新 ===")
@@ -91,7 +91,7 @@ import sys
 from pathlib import Path
 
 # 新令牌（07提供的正式访问权限令牌）
-NEW_TOKEN = "hWBTxgYlOiWB4XfXQl_UfA"
+NEW_TOKEN = "<DEVELOPER_TOKEN_FROM_ENV>"
 
 def main():
     print("=== 07的开发者令牌更新 ===")
@@ -163,6 +163,7 @@ if __name__ == "__main__":
     else:
         print("✗ 更新失败")
         sys.exit(1)
+
 
 
 

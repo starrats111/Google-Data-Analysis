@@ -79,28 +79,29 @@ class Settings(BaseSettings):
     ANOMALY_TEMPLATE_FILE: str = "excel/表5.xlsx"  # 异常类型模板路径
     
     # 用户配置
-    MANAGER_USERNAME: str = "wenjun123"
+    MANAGER_USERNAME: str = ""
     EMPLOYEE_COUNT: int = 10
+    
+    # 同步安全限制
+    MAX_SYNC_DATE_RANGE_DAYS: int = 180
+    
+    # 露出功能配置
+    LUCHU_REVIEWERS: str = "wj07,wj02"
+    LUCHU_SELF_REVIEW_ENABLED: bool = False
+    LUCHU_AUTHORIZED_USERS: str = "wj01,wj02,wj03,wj04,wj05,wj06,wj07,wj08,wj09,wj10"
     
     # CORS配置
     CORS_ORIGINS: List[str] = [
-        # 生产环境域名
         "https://google-data-analysis.top",
-        "https://api.google-data-analysis.top",
         "https://www.google-data-analysis.top",
-        # Cloudflare Pages
+        "https://api.google-data-analysis.top",
         "https://google-data-analysis.pages.dev",
-        # Local dev (Vite/React)
         "http://localhost:3000",
         "http://127.0.0.1:3000",
         "http://localhost:5173",
         "http://127.0.0.1:5173",
-        # Local API
         "http://localhost:8000",
         "http://127.0.0.1:8000",
-        "https://google-data-analysis.top",
-        # Cloudflare Pages production domain
-        "https://google-data-analysis.pages.dev",
     ]
 
     # ===== Google Ads API 配置 =====
@@ -186,5 +187,44 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+
+_INSECURE_DEFAULTS = {
+    "your-secret-key-change-in-production",
+    "change-me",
+    "secret",
+    "",
+}
+
+
+def validate_critical_config():
+    """启动时校验关键配置，不合格则立即终止进程（SEC-5b）"""
+    errors: list[str] = []
+
+    if settings.SECRET_KEY in _INSECURE_DEFAULTS:
+        errors.append(
+            "SECRET_KEY 仍为默认值或空值，请在 .env 中设置安全的随机密钥。"
+            "生成方法: python3 -c \"import secrets; print(secrets.token_urlsafe(48))\""
+        )
+
+    if not settings.REFRESH_SECRET_KEY or settings.REFRESH_SECRET_KEY in _INSECURE_DEFAULTS:
+        errors.append(
+            "REFRESH_SECRET_KEY 未配置或为默认值，请在 .env 中设置。"
+        )
+
+    if settings.SECRET_KEY == settings.REFRESH_SECRET_KEY:
+        errors.append(
+            "SECRET_KEY 与 REFRESH_SECRET_KEY 不能相同，请分别设置不同的密钥。"
+        )
+
+    if errors:
+        import sys
+        msg = "\n".join(f"  [{i+1}] {e}" for i, e in enumerate(errors))
+        print(f"\n{'='*60}")
+        print(f"  FATAL: 关键配置校验失败，服务拒绝启动")
+        print(f"{'='*60}")
+        print(msg)
+        print(f"{'='*60}\n")
+        sys.exit(1)
 
 

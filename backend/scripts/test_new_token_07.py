@@ -20,7 +20,7 @@ def test_token():
     
     # 1. 检查当前配置的令牌
     current_token = settings.google_ads_shared_developer_token
-    new_token = "hWBTxgYlOiWB4XfXQl_UfA"
+    new_token = "<DEVELOPER_TOKEN_FROM_ENV>"
     
     print(f"当前配置的令牌: {current_token[:10]}... (长度: {len(current_token)})")
     print(f"要测试的新令牌: {new_token[:10]}... (长度: {len(new_token)})")
@@ -187,7 +187,7 @@ def test_token():
     
     # 1. 检查当前配置的令牌
     current_token = settings.google_ads_shared_developer_token
-    new_token = "hWBTxgYlOiWB4XfXQl_UfA"
+    new_token = "<DEVELOPER_TOKEN_FROM_ENV>"
     
     print(f"当前配置的令牌: {current_token[:10]}... (长度: {len(current_token)})")
     print(f"要测试的新令牌: {new_token[:10]}... (长度: {len(new_token)})")
@@ -331,6 +331,7 @@ def test_token():
 
 if __name__ == "__main__":
     test_token()
+
 
 
 

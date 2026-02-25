@@ -1,4 +1,4 @@
-import React, { Suspense } from 'react'
+import React, { Suspense, useEffect, useState } from 'react'
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom'
 import Layout from './components/Layout'
 import Login from './pages/Login'
@@ -49,6 +49,17 @@ function PrivateRoute({ children }) {
 }
 
 function App() {
+  const [ready, setReady] = useState(false)
+  const initAuth = useAuth(s => s.initAuth)
+
+  useEffect(() => {
+    initAuth().finally(() => setReady(true))
+  }, [initAuth])
+
+  if (!ready) {
+    return <PageLoading tip="正在恢复登录状态..." />
+  }
+
   return (
     <ErrorBoundary>
       <Router

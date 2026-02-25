@@ -26,6 +26,10 @@ BEIJING_TZ = timezone(timedelta(hours=8))
 # 使用北京时间作为调度器的默认时区
 scheduler = BackgroundScheduler(timezone=BEIJING_TZ)
 
+# ARCH-2: 全局互斥锁，防止定时任务和手动触发同时操作数据库
+import threading
+_sync_lock = threading.Lock()
+
 
 def sync_platform_data_job():
     """同步平台数据任务（每天北京时间4点执行，逐天同步过去5天数据：MID、商家、订单数、佣金、拒付佣金）
@@ -180,6 +184,16 @@ def daily_auto_sync_and_analysis_job():
     4. 生成每日分析
     5. 生成L7D分析（每天执行）
     """
+    if not _sync_lock.acquire(blocking=False):
+        logger.warning("【每日自动任务跳过】上一轮尚未完成")
+        return
+    try:
+        _daily_auto_sync_and_analysis_inner()
+    finally:
+        _sync_lock.release()
+
+
+def _daily_auto_sync_and_analysis_inner():
     logger.info("=" * 60)
     logger.info("【每日自动任务开始】")
     logger.info(f"当前时间: {datetime.now(BEIJING_TZ).strftime('%Y-%m-%d %H:%M:%S')} (北京时间)")
@@ -680,6 +694,22 @@ def sync_approved_commission_job():
 
 
 
+def database_backup_job():
+    """数据库自动备份任务（每天北京时间 03:00 执行）"""
+    try:
+        from app.services.backup_service import backup_database
+        logger.info("=" * 60)
+        logger.info("开始执行数据库自动备份...")
+        result = backup_database()
+        if result.get("success"):
+            logger.info(f"数据库备份完成: {result.get('path')} ({result.get('size_mb')} MB)")
+        else:
+            logger.error(f"数据库备份失败: {result.get('message')}")
+        logger.info("=" * 60)
+    except Exception as e:
+        logger.error(f"数据库备份任务异常: {e}", exc_info=True)
+
+
 def start_scheduler():
     """启动定时任务调度器"""
     if scheduler.running:
@@ -693,7 +723,8 @@ def start_scheduler():
             trigger=CronTrigger(hour=4, minute=0),
             id='daily_auto_sync_and_analysis',
             name='每日自动同步与分析（4:00）',
-            replace_existing=True
+            replace_existing=True,
+            max_instances=1
         )
         
         # 2. 每天 05:00 - 历史数据自动补齐（配额感知，全部补完后零开销）
@@ -702,7 +733,8 @@ def start_scheduler():
             trigger=CronTrigger(hour=5, minute=0),
             id='backfill_missing_data',
             name='历史数据自动补齐（5:00）',
-            replace_existing=True
+            replace_existing=True,
+            max_instances=1
         )
         
         # 3. 每天 16:00 - 平台数据补充同步
@@ -711,7 +743,8 @@ def start_scheduler():
             trigger=CronTrigger(hour=16, minute=0),
             id='sync_platform_data_afternoon',
             name='平台数据补充同步（16:00）',
-            replace_existing=True
+            replace_existing=True,
+            max_instances=1
         )
         
         # 4. 每月 1/15 号 00:00 - 已付佣金同步
@@ -720,7 +753,18 @@ def start_scheduler():
             trigger=CronTrigger(day="1,15", hour=0, minute=0),
             id='sync_approved_commission',
             name='同步已付佣金',
-            replace_existing=True
+            replace_existing=True,
+            max_instances=1
+        )
+        
+        # 5. 每天 03:00 - 数据库自动备份（SEC-8）
+        scheduler.add_job(
+            database_backup_job,
+            trigger=CronTrigger(hour=3, minute=0),
+            id='database_backup',
+            name='数据库自动备份（3:00）',
+            replace_existing=True,
+            max_instances=1
         )
         
         scheduler.start()
@@ -733,6 +777,7 @@ def start_scheduler():
         logger.info("     (CNY优先, 每次最多3MCC x 10天, 全部补完后零开销)")
         logger.info("  3. 平台数据补充同步: 每天 16:00")
         logger.info("  4. 已付佣金同步: 每月1/15号 00:00")
+        logger.info("  5. 数据库自动备份: 每天 03:00")
         logger.info("=" * 60)
         
     except Exception as e:

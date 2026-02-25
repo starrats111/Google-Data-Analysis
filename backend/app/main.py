@@ -16,7 +16,7 @@ from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 
-from app.config import settings
+from app.config import settings, validate_critical_config
 from app.services.scheduler import start_scheduler, shutdown_scheduler
 
 # 确保日志目录存在（在导入logging_config之前）
@@ -211,30 +211,25 @@ async def cors_logging_middleware(request: Request, call_next):
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
     """全局异常处理器，确保所有错误都返回CORS头"""
-    import traceback
+    import traceback as tb
     
-    # 获取请求的Origin并生成CORS头
     origin = request.headers.get("origin")
     headers = get_cors_headers(origin)
     
-    # 记录错误详情（用于调试）
-    error_detail = str(exc)
-    if hasattr(exc, "detail"):
-        error_detail = exc.detail
-    elif hasattr(exc, "args") and exc.args:
-        error_detail = str(exc.args[0])
+    _logger = logging.getLogger(__name__)
+    _logger.error(f"Unhandled exception on {request.method} {request.url.path}: {exc}", exc_info=True)
     
-    # 打印错误到控制台（用于调试）
-    print(f"❌ 全局异常捕获: {type(exc).__name__}: {error_detail}")
-    traceback.print_exc()
+    if settings.ENVIRONMENT == "production":
+        body = {"detail": "Internal Server Error"}
+    else:
+        error_detail = str(exc)
+        if hasattr(exc, "detail"):
+            error_detail = exc.detail
+        body = {"detail": error_detail, "type": type(exc).__name__}
     
-    # 返回JSON响应，包含CORS头
     return JSONResponse(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-        content={
-            "detail": error_detail,
-            "type": type(exc).__name__,
-        },
+        content=body,
         headers=headers,
     )
 
@@ -399,6 +394,7 @@ if _dist_dir:
 @app.on_event("startup")
 async def startup_event():
     """应用启动时执行"""
+    validate_critical_config()
     try:
         start_scheduler()
         print("[OK] 定时任务调度器已启动")
@@ -406,7 +402,6 @@ async def startup_event():
         import traceback
         print(f"[WARN] 定时任务调度器启动失败: {e}")
         print(traceback.format_exc())
-        # 即使调度器启动失败，也不应该阻止应用启动
         logger = logging.getLogger(__name__)
         logger.error(f"定时任务调度器启动失败: {e}", exc_info=True)
 

@@ -76,8 +76,11 @@ async def publish_article(
     if not article:
         raise HTTPException(status_code=404, detail="文章不存在")
     
-    # 权限检查：只能发布自己的文章，或者管理员/组长可以发布所有
-    if current_user.role not in ['manager', 'leader'] and article.author_id != current_user.id:
+    from app.middleware.auth import _get_luchu_reviewers
+    reviewers = _get_luchu_reviewers()
+    is_reviewer = current_user.username in reviewers or current_user.role == "manager"
+    is_author = article.author_id == current_user.id
+    if not is_reviewer and not is_author:
         raise HTTPException(status_code=403, detail="无权发布此文章")
     
     if article.status != "ready":

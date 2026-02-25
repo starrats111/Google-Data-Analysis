@@ -19,8 +19,29 @@ from app.models.google_ads_api_data import GoogleAdsApiData, GoogleMccAccount
 from app.models.affiliate_transaction import AffiliateTransaction
 from app.api.google_ads_aggregate import convert_to_usd
 import re
+import math
 
 router = APIRouter(prefix="/api/dashboard", tags=["dashboard"])
+
+
+def safe_number(val, default=0):
+    """安全地将各种格式转为数值，防止 platform-summary 500 错误"""
+    if val is None:
+        return default
+    if isinstance(val, (int, float)):
+        return default if (isinstance(val, float) and math.isnan(val)) else val
+    if isinstance(val, str):
+        s = val.strip()
+        if not s or s in ("N/A", "null", "None", "-", "--", "n/a"):
+            return default
+        s = s.replace(",", "")
+        if s.startswith("(") and s.endswith(")"):
+            s = "-" + s[1:-1]
+        try:
+            return float(s)
+        except (ValueError, TypeError):
+            return default
+    return default
 
 # 注意：/platform-summary 与 /account-details 仍使用旧的 AnalysisResult 历史分析数据，
 # 目前未被“数据总览”页面使用。若后续需要，也应整体迁移到实时来源。
@@ -645,13 +666,15 @@ async def get_platform_summary(
             result_data = analysis.result_data
             if isinstance(result_data, dict) and "data" in result_data:
                 for row in result_data["data"]:
-                    total_clicks += row.get("点击", 0) or 0
-                    total_orders += row.get("订单数", 0) or 0
-                    total_commission += row.get("保守佣金", 0) or 0
-                    if row.get("保守EPC"):
-                        epc_list.append(row["保守EPC"])
-                    if row.get("保守ROI"):
-                        roi_list.append(row["保守ROI"])
+                    total_clicks += safe_number(row.get("点击"))
+                    total_orders += safe_number(row.get("订单数"))
+                    total_commission += safe_number(row.get("保守佣金"))
+                    epc_val = safe_number(row.get("保守EPC"))
+                    if epc_val:
+                        epc_list.append(epc_val)
+                    roi_val = safe_number(row.get("保守ROI"))
+                    if roi_val:
+                        roi_list.append(roi_val)
         
         avg_epc = sum(epc_list) / len(epc_list) if epc_list else 0
         avg_roi = sum(roi_list) / len(roi_list) if roi_list else 0

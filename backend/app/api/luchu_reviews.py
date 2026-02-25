@@ -17,7 +17,7 @@ from app.models.luchu import (
     LuchuNotification, LuchuOperationLog
 )
 from app.schemas.luchu import ReviewRequest, ReviewResponse, LuchuArticleListResponse
-from app.middleware.auth import get_current_user, get_luchu_authorized_user
+from app.middleware.auth import get_current_user, get_luchu_authorized_user, get_luchu_reviewer
 
 logger = logging.getLogger(__name__)
 
@@ -28,12 +28,10 @@ router = APIRouter(prefix="/api/luchu/reviews", tags=["luchu-reviews"])
 async def list_pending_reviews(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
-    current_user: User = Depends(get_luchu_authorized_user),
+    current_user: User = Depends(get_luchu_reviewer),
     db: Session = Depends(get_db)
 ):
-    """获取待审核列表（仅管理员/组长可见）"""
-    if current_user.role not in ['manager', 'leader']:
-        raise HTTPException(status_code=403, detail="无权访问审核列表")
+    """获取待审核列表（仅审核员/经理可见）"""
     
     query = db.query(LuchuArticle).filter(LuchuArticle.status == "pending")
     query = query.order_by(desc(LuchuArticle.created_at))
@@ -67,12 +65,10 @@ async def list_pending_reviews(
 async def approve_article(
     article_id: int,
     data: ReviewRequest = None,
-    current_user: User = Depends(get_luchu_authorized_user),
+    current_user: User = Depends(get_luchu_reviewer),
     db: Session = Depends(get_db)
 ):
     """审核通过"""
-    if current_user.role not in ['manager', 'leader']:
-        raise HTTPException(status_code=403, detail="无权审核")
     
     article = db.query(LuchuArticle).filter(LuchuArticle.id == article_id).first()
     if not article:
@@ -85,16 +81,15 @@ async def approve_article(
     article.status = "ready"  # 待发布
     article.updated_at = datetime.utcnow()
     
-    # 创建审核记录
     review = LuchuReview(
         article_id=article_id,
         reviewer_id=current_user.id,
         status="approved",
+        review_type="peer",
         comment=data.comment if data else None
     )
     db.add(review)
     
-    # 发送通知给作者
     notification = LuchuNotification(
         user_id=article.author_id,
         type="review_approved",
@@ -134,12 +129,10 @@ async def approve_article(
 async def reject_article(
     article_id: int,
     data: ReviewRequest,
-    current_user: User = Depends(get_luchu_authorized_user),
+    current_user: User = Depends(get_luchu_reviewer),
     db: Session = Depends(get_db)
 ):
     """审核驳回"""
-    if current_user.role not in ['manager', 'leader']:
-        raise HTTPException(status_code=403, detail="无权审核")
     
     article = db.query(LuchuArticle).filter(LuchuArticle.id == article_id).first()
     if not article:
@@ -170,11 +163,11 @@ async def reject_article(
     )
     db.add(version)
     
-    # 创建审核记录
     review = LuchuReview(
         article_id=article_id,
         reviewer_id=current_user.id,
         status="rejected",
+        review_type="peer",
         comment=data.comment
     )
     db.add(review)
@@ -221,37 +214,39 @@ async def self_check_article(
     current_user: User = Depends(get_luchu_authorized_user),
     db: Session = Depends(get_db)
 ):
-    """自检通过（仅 wj02, wj07 可用）"""
-    # 检查是否有自检权限
-    allowed_users = ['wj02', 'wj07']
-    if current_user.username not in allowed_users and current_user.role != 'manager':
-        raise HTTPException(status_code=403, detail="您没有自检权限")
-    
+    """自审通过（自审开关开启时，审核员可对自己的文章自审直接发布）"""
+    from app.config import settings
+    from app.middleware.auth import _get_luchu_reviewers
+
+    if not settings.LUCHU_SELF_REVIEW_ENABLED:
+        raise HTTPException(status_code=403, detail="自审功能尚未开启，请联系管理员")
+
+    reviewers = _get_luchu_reviewers()
+    if current_user.username not in reviewers and current_user.role != "manager":
+        raise HTTPException(status_code=403, detail="您没有自审权限")
+
     article = db.query(LuchuArticle).filter(LuchuArticle.id == article_id).first()
     if not article:
         raise HTTPException(status_code=404, detail="文章不存在")
-    
-    # 只能自检自己的文章
+
     if article.author_id != current_user.id:
-        raise HTTPException(status_code=403, detail="只能自检自己的文章")
-    
-    if article.status not in ['draft', 'rejected']:
-        raise HTTPException(status_code=400, detail="只有草稿或被驳回的文章可以自检")
-    
-    # 直接进入待发布状态
+        raise HTTPException(status_code=403, detail="只能自审自己的文章")
+
+    if article.status not in ["draft", "rejected"]:
+        raise HTTPException(status_code=400, detail="只有草稿或被驳回的文章可以自审")
+
     article.status = "ready"
     article.updated_at = datetime.utcnow()
-    
-    # 创建审核记录
+
     review = LuchuReview(
         article_id=article_id,
         reviewer_id=current_user.id,
         status="self_checked",
-        comment="自检通过"
+        review_type="self",
+        comment="自审通过"
     )
     db.add(review)
-    
-    # 操作日志
+
     log = LuchuOperationLog(
         user_id=current_user.id,
         action="self_check",
@@ -259,10 +254,10 @@ async def self_check_article(
         resource_id=article_id
     )
     db.add(log)
-    
+
     db.commit()
-    
-    logger.info(f"[Luchu] 用户 {current_user.username} 自检通过: {article.title}")
-    
-    return {"message": "自检通过，文章已进入待发布状态"}
+
+    logger.info(f"[Luchu] 用户 {current_user.username} 自审通过: {article.title}")
+
+    return {"message": "自审通过，文章已进入待发布状态"}
 

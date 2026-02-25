@@ -1156,7 +1156,15 @@ async def sync_mcc_historical_data(
     
     if begin_date > end_date:
         raise HTTPException(status_code=400, detail="开始日期不能晚于结束日期")
-    
+
+    from app.config import settings as _cfg
+    max_days = _cfg.MAX_SYNC_DATE_RANGE_DAYS
+    if (end_date - begin_date).days > max_days:
+        raise HTTPException(
+            status_code=400,
+            detail=f"同步日期范围不能超过 {max_days} 天"
+        )
+
     # 在后台执行历史数据同步
     def sync_historical_task():
         from app.database import SessionLocal
@@ -1323,8 +1331,8 @@ async def upload_global_service_account(
     """
     import base64
     
-    # 只有管理员可以上传全局服务账号
-    if current_user.role != "admin" and current_user.username != "wenjun123":
+    from app.models.user import UserRole
+    if current_user.role != UserRole.MANAGER:
         raise HTTPException(status_code=403, detail="只有管理员可以上传全局服务账号")
     
     try:

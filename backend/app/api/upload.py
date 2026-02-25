@@ -69,14 +69,23 @@ def validate_upload_file(file: UploadFile) -> str:
     return file_ext
 
 
+def _sanitize_filename(name: str) -> str:
+    """清理文件名：仅保留安全字符，防止路径遍历"""
+    import re
+    base = Path(name).name
+    base = re.sub(r'[^\w\u4e00-\u9fff\.\-]', '_', base)
+    return base or "upload"
+
+
 def save_upload_file(file: UploadFile, user_id: int, upload_type: str) -> str:
     """保存上传的文件"""
     upload_dir = Path(settings.UPLOAD_FOLDER) / str(user_id) / upload_type
     upload_dir.mkdir(parents=True, exist_ok=True)
     
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    file_extension = Path(file.filename).suffix
-    filename = f"{timestamp}_{file.filename}"
+    safe_name = _sanitize_filename(file.filename)
+    file_extension = Path(safe_name).suffix
+    filename = f"{timestamp}_{safe_name}"
     file_path = upload_dir / filename
     
     with open(file_path, "wb") as buffer:

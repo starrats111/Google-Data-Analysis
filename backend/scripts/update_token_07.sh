@@ -5,7 +5,7 @@ echo "=== 07的开发者令牌更新 ==="
 echo ""
 
 # 新令牌
-NEW_TOKEN="hWBTxgYlOiWB4XfXQl_UfA"
+NEW_TOKEN="<DEVELOPER_TOKEN_FROM_ENV>"
 
 # 1. 进入目录
 cd ~/Google-Data-Analysis/backend || exit 1
@@ -87,7 +87,7 @@ echo "=== 07的开发者令牌更新 ==="
 echo ""
 
 # 新令牌
-NEW_TOKEN="hWBTxgYlOiWB4XfXQl_UfA"
+NEW_TOKEN="<DEVELOPER_TOKEN_FROM_ENV>"
 
 # 1. 进入目录
 cd ~/Google-Data-Analysis/backend || exit 1
@@ -161,6 +161,7 @@ else
     tail -n 20 run.log
     exit 1
 fi
+
 
 
 

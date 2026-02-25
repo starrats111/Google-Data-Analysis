@@ -100,11 +100,11 @@ class LuchuReview(Base):
     id = Column(Integer, primary_key=True, index=True)
     article_id = Column(Integer, ForeignKey("luchu_articles.id"), nullable=False)
     reviewer_id = Column(Integer, ForeignKey("users.id"), nullable=False)
-    status = Column(String(20), nullable=False)  # approved/rejected
+    status = Column(String(20), nullable=False)  # approved/rejected/self_checked
+    review_type = Column(String(10), default="peer")  # peer / self
     comment = Column(Text)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     
-    # 关系
     article = relationship("LuchuArticle", back_populates="reviews")
     reviewer = relationship("User", foreign_keys=[reviewer_id])
 

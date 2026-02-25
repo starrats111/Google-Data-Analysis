@@ -178,14 +178,33 @@ const TeamManagement = () => {
     }
   }
 
-  const handleResetPassword = async (userId) => {
-    try {
-      await api.post(`/api/team/users/${userId}/reset-password`)
-      message.success('密码已重置为默认密码')
-    } catch (error) {
-      console.error('重置密码失败:', error)
-      message.error(error.response?.data?.detail || '重置失败')
-    }
+  const handleResetPassword = (userId) => {
+    Modal.confirm({
+      title: '重置密码',
+      content: (
+        <Input.Password
+          id="reset-pwd-input"
+          placeholder="请输入新密码（至少6位）"
+          style={{ marginTop: 12 }}
+        />
+      ),
+      okText: '确认重置',
+      cancelText: '取消',
+      onOk: async () => {
+        const pwd = document.getElementById('reset-pwd-input')?.value
+        if (!pwd || pwd.length < 6) {
+          message.error('密码长度不能少于6位')
+          throw new Error('密码过短')
+        }
+        try {
+          await api.post(`/api/team/users/${userId}/reset-password`, { new_password: pwd })
+          message.success('密码已重置')
+        } catch (error) {
+          message.error(error.response?.data?.detail || '重置失败')
+          throw error
+        }
+      }
+    })
   }
 
   // ========== 小组管理 ==========
@@ -277,12 +296,7 @@ const TeamManagement = () => {
           >
             编辑
           </Button>
-          <Popconfirm
-            title="确定重置密码？"
-            onConfirm={() => handleResetPassword(record.id)}
-          >
-            <Button type="link" size="small">重置密码</Button>
-          </Popconfirm>
+          <Button type="link" size="small" onClick={() => handleResetPassword(record.id)}>重置密码</Button>
           {record.role !== 'manager' && (
             <Popconfirm
               title="确定删除此用户？"

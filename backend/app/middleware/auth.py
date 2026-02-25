@@ -171,21 +171,44 @@ async def get_current_manager_or_leader(
     )
 
 
-# 露出功能授权用户列表 (wj01-wj10)
-LUCHU_AUTHORIZED_USERS = [f"wj{str(i).zfill(2)}" for i in range(1, 11)]  # wj01, wj02, ..., wj10
+def _get_luchu_authorized_list() -> list[str]:
+    from app.config import settings
+    raw = settings.LUCHU_AUTHORIZED_USERS
+    if raw:
+        return [u.strip() for u in raw.split(",") if u.strip()]
+    return [f"wj{str(i).zfill(2)}" for i in range(1, 11)]
+
+
+def _get_luchu_reviewers() -> list[str]:
+    from app.config import settings
+    raw = settings.LUCHU_REVIEWERS
+    if raw:
+        return [u.strip() for u in raw.split(",") if u.strip()]
+    return ["wj07", "wj02"]
 
 
 async def get_luchu_authorized_user(
     current_user: User = Depends(get_current_user)
 ) -> User:
-    """
-    获取有露出功能权限的用户
-    只有 wj01-wj10 可以使用露出功能
-    """
-    if current_user.username not in LUCHU_AUTHORIZED_USERS:
+    """露出功能授权用户校验"""
+    authorized = _get_luchu_authorized_list()
+    if current_user.username not in authorized and current_user.role != "manager":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="您没有露出功能的使用权限"
+        )
+    return current_user
+
+
+async def get_luchu_reviewer(
+    current_user: User = Depends(get_current_user)
+) -> User:
+    """露出审核权限校验：仅配置中的审核员或经理可审核"""
+    reviewers = _get_luchu_reviewers()
+    if current_user.username not in reviewers and current_user.role != "manager":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="您没有审核权限"
         )
     return current_user
 
