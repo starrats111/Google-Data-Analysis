@@ -3,22 +3,20 @@
 用于执行定时数据同步和分析任务
 """
 import logging
-import json
-from datetime import datetime, time, date, timedelta, timezone
+from datetime import datetime, date, timedelta, timezone
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
-from apscheduler.triggers.date import DateTrigger
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.database import SessionLocal
 from app.services.platform_data_sync import PlatformDataSyncService
-from app.services.google_ads_api_sync import GoogleAdsApiSyncService
+
 from app.services.api_analysis_service import ApiAnalysisService
-from app.models.affiliate_account import AffiliateAccount, AffiliatePlatform
+from app.models.affiliate_account import AffiliateAccount
 from app.models.google_ads_api_data import GoogleAdsApiData, GoogleMccAccount
-from app.models.platform_data import PlatformData
+
 
 logger = logging.getLogger(__name__)
 
@@ -340,159 +338,104 @@ def check_mcc_missing_dates(db: Session, mcc_id: int, begin_date: date, end_date
     return missing
 
 
-def sync_mcc_missing_data_job():
+def backfill_missing_data_job():
     """
-    一次性补同步：检查所有MCC的数据完整性，补同步缺失数据
-    
-    优先同步：
-    1. CNY货币的MCC（今天被清空，需要完整重新同步）
-    2. 其他MCC中有数据缺失的日期
-    
-    同步范围：2026-01-01 至 昨天
+    每天 05:00 自动补齐历史缺口（配额感知）
+
+    从 2026-02-01 开始，检查所有 MCC 的缺失日期，
+    每次最多补 MAX_BACKFILL_DAYS 天 x MAX_BACKFILL_MCCS 个 MCC，
+    CNY 优先，遇到配额耗尽立即停止。
+    全部补齐后函数直接 return（零开销）。
     """
+    MAX_BACKFILL_MCCS = 3
+    MAX_BACKFILL_DAYS = 10
+    BACKFILL_BEGIN = date(2026, 2, 1)
+
     db: Session = SessionLocal()
     try:
         logger.info("=" * 60)
-        logger.info("【一次性MCC数据补同步开始】")
+        logger.info("【历史数据自动补齐开始】")
         logger.info(f"当前时间: {datetime.now(BEIJING_TZ).strftime('%Y-%m-%d %H:%M:%S')} (北京时间)")
-        logger.info("=" * 60)
-        
+
         from app.services.google_ads_service_account_sync import GoogleAdsServiceAccountSync
-        
         sync_service = GoogleAdsServiceAccountSync(db)
-        
-        # 同步范围：2026-01-01 至 昨天
-        begin_date = date(2026, 1, 1)
+
         end_date = date.today() - timedelta(days=1)
-        
-        logger.info(f"同步日期范围: {begin_date.isoformat()} ~ {end_date.isoformat()}")
-        
-        # 获取所有活跃MCC，按货币分组
+
         all_mccs = db.query(GoogleMccAccount).filter(
             GoogleMccAccount.is_active == True
         ).all()
-        
-        cny_mccs = [m for m in all_mccs if m.currency == 'CNY']
-        usd_mccs = [m for m in all_mccs if m.currency != 'CNY']
-        
-        logger.info(f"共找到 {len(all_mccs)} 个活跃MCC（CNY: {len(cny_mccs)}个, USD: {len(usd_mccs)}个）")
-        
-        total_synced_days = 0
-        total_saved = 0
-        quota_exhausted = False
-        
-        # 第一阶段：优先同步CNY账号（今天被清空，需要完整重新同步）
-        if cny_mccs:
-            logger.info("\n" + "=" * 60)
-            logger.info(f"【第一阶段】优先同步CNY账号（共{len(cny_mccs)}个）")
+
+        # 为每个 MCC 计算缺失天数，按（CNY优先, 缺口大小降序）排序
+        mcc_gaps = []
+        for mcc in all_mccs:
+            missing = check_mcc_missing_dates(db, mcc.id, BACKFILL_BEGIN, end_date)
+            if missing:
+                is_cny = 1 if mcc.currency == 'CNY' else 0
+                mcc_gaps.append((mcc, missing, is_cny))
+
+        if not mcc_gaps:
+            logger.info("所有 MCC 数据已完整，无需补齐")
             logger.info("=" * 60)
-            
-            for mcc in cny_mccs:
-                if quota_exhausted:
-                    logger.warning(f"⚠️ 配额已耗尽，跳过MCC: {mcc.mcc_name}")
-                    continue
-                
-                logger.info("-" * 60)
-                logger.info(f"MCC: {mcc.mcc_name} ({mcc.mcc_id}) [CNY] - 需同步全部数据")
-                
-                # CNY账号需要完整重新同步
-                missing_dates = check_mcc_missing_dates(db, mcc.id, begin_date, end_date)
-                
-                if not missing_dates:
-                    logger.info(f"  ✓ 数据已完整，无需补同步")
-                    continue
-                
-                logger.info(f"  需同步 {len(missing_dates)} 天数据")
-                
-                for target_date in missing_dates:
-                    try:
-                        result = sync_service.sync_mcc_data(
-                            mcc.id,
-                            target_date,
-                            force_refresh=False
-                        )
-                        
-                        if result.get("success"):
-                            saved = result.get("saved_count", 0)
-                            total_saved += saved
-                            total_synced_days += 1
-                            logger.info(f"  ✓ {target_date.isoformat()}: 保存 {saved} 条")
-                        else:
-                            logger.warning(f"  ✗ {target_date.isoformat()}: {result.get('message')}")
-                        
-                        if result.get("quota_exhausted"):
-                            logger.warning("⚠️ 遇到API配额限制")
-                            quota_exhausted = True
-                            break
-                            
-                    except Exception as e:
-                        logger.error(f"  ✗ {target_date.isoformat()} 异常: {e}")
-                
-                if quota_exhausted:
-                    break
-        
-        # 第二阶段：检查USD账号缺失数据
-        if usd_mccs and not quota_exhausted:
-            logger.info("\n" + "=" * 60)
-            logger.info(f"【第二阶段】检查USD账号缺失数据（共{len(usd_mccs)}个）")
-            logger.info("=" * 60)
-            
-            for mcc in usd_mccs:
-                if quota_exhausted:
-                    logger.warning(f"⚠️ 配额已耗尽，跳过MCC: {mcc.mcc_name}")
-                    continue
-                
-                logger.info("-" * 60)
-                logger.info(f"MCC: {mcc.mcc_name} ({mcc.mcc_id}) [USD]")
-                
-                # 检查缺失日期
-                missing_dates = check_mcc_missing_dates(db, mcc.id, begin_date, end_date)
-                
-                if not missing_dates:
-                    logger.info(f"  ✓ 数据完整，无需补同步")
-                    continue
-                
-                logger.info(f"  检测到 {len(missing_dates)} 天数据缺失")
-                
-                for target_date in missing_dates:
-                    try:
-                        result = sync_service.sync_mcc_data(
-                            mcc.id,
-                            target_date,
-                            force_refresh=False
-                        )
-                        
-                        if result.get("success"):
-                            saved = result.get("saved_count", 0)
-                            total_saved += saved
-                            total_synced_days += 1
-                            logger.info(f"  ✓ {target_date.isoformat()}: 保存 {saved} 条")
-                        else:
-                            logger.warning(f"  ✗ {target_date.isoformat()}: {result.get('message')}")
-                        
-                        if result.get("quota_exhausted"):
-                            logger.warning("⚠️ 遇到API配额限制")
-                            quota_exhausted = True
-                            break
-                            
-                    except Exception as e:
-                        logger.error(f"  ✗ {target_date.isoformat()} 异常: {e}")
-                
-                if quota_exhausted:
-                    break
-        
-        logger.info("\n" + "=" * 60)
-        logger.info("【一次性MCC数据补同步完成】")
-        logger.info(f"  - CNY MCC: {len(cny_mccs)} 个")
-        logger.info(f"  - USD MCC: {len(usd_mccs)} 个")
-        logger.info(f"  - 总补同步天数: {total_synced_days} 天")
-        logger.info(f"  - 总保存记录: {total_saved} 条")
-        if quota_exhausted:
-            logger.warning("  - 注意: 由于配额限制，部分数据未能同步")
+            return
+
+        mcc_gaps.sort(key=lambda x: (-x[2], -len(x[1])))
+
+        total_missing = sum(len(g[1]) for g in mcc_gaps)
+        logger.info(f"共 {len(mcc_gaps)} 个 MCC 有数据缺口，总缺失 {total_missing} 天")
+        logger.info(f"本次最多补齐: {MAX_BACKFILL_MCCS} 个 MCC x {MAX_BACKFILL_DAYS} 天")
         logger.info("=" * 60)
-        
+
+        total_saved = 0
+        total_synced = 0
+        mccs_processed = 0
+        quota_exhausted = False
+
+        for mcc, missing_dates, is_cny in mcc_gaps:
+            if mccs_processed >= MAX_BACKFILL_MCCS or quota_exhausted:
+                break
+
+            currency_tag = "CNY" if is_cny else "USD"
+            dates_this_round = missing_dates[:MAX_BACKFILL_DAYS]
+
+            logger.info(f"\nMCC {mcc.mcc_id} ({mcc.mcc_name}) [{currency_tag}]")
+            logger.info(f"  缺失 {len(missing_dates)} 天，本次补 {len(dates_this_round)} 天")
+
+            for target_date in dates_this_round:
+                try:
+                    result = sync_service.sync_mcc_data(
+                        mcc.id, target_date, force_refresh=False
+                    )
+                    if result.get("success"):
+                        saved = result.get("saved_count", 0)
+                        total_saved += saved
+                        total_synced += 1
+                        logger.info(f"  {target_date}: {saved} 条")
+                    else:
+                        logger.warning(f"  {target_date}: {result.get('message', '')[:80]}")
+
+                    if result.get("quota_exhausted"):
+                        logger.warning("配额耗尽，停止补齐")
+                        quota_exhausted = True
+                        break
+                except Exception as e:
+                    logger.error(f"  {target_date} 异常: {e}")
+
+            mccs_processed += 1
+
+        remaining = total_missing - total_synced
+        logger.info("\n" + "=" * 60)
+        logger.info("【历史数据自动补齐完成】")
+        logger.info(f"  本次补齐: {total_synced} 天, {total_saved} 条")
+        logger.info(f"  剩余缺口: {remaining} 天")
+        if remaining > 0:
+            logger.info(f"  将在明天 05:00 继续补齐")
+        if quota_exhausted:
+            logger.warning("  注意: 遇到配额限制，提前终止")
+        logger.info("=" * 60)
+
     except Exception as e:
-        logger.error(f"✗ 一次性MCC数据补同步任务异常: {e}", exc_info=True)
+        logger.error(f"历史数据自动补齐任务异常: {e}", exc_info=True)
     finally:
         db.close()
 
@@ -736,161 +679,6 @@ def sync_approved_commission_job():
         db.close()
 
 
-def monthly_summary_job():
-    """
-    月度总结任务（每月1号北京时间早上8点20分执行）
-    统计上月的：
-    - 总花费（以及每个MCC的花费）
-    - 总佣金（以及每个平台的佣金）
-    - 总拒付佣金（以及每个平台的拒付佣金，目前占位为0，后续有字段后再完善）
-    """
-    db: Session = SessionLocal()
-    try:
-        logger.info("开始执行月度总结任务...")
-
-        today = date.today()
-        # 本月1号
-        first_day_this_month = today.replace(day=1)
-        # 上月最后一天
-        last_day_last_month = first_day_this_month - timedelta(days=1)
-        # 上月1号
-        first_day_last_month = last_day_last_month.replace(day=1)
-
-        start_date = first_day_last_month
-        end_date = last_day_last_month
-
-        # 1. Google Ads总花费和按MCC拆分
-        total_cost = (
-            db.query(func.coalesce(func.sum(GoogleAdsApiData.cost), 0))
-            .filter(
-                GoogleAdsApiData.date >= start_date,
-                GoogleAdsApiData.date <= end_date,
-            )
-            .scalar()
-            or 0.0
-        )
-
-        mcc_cost_rows = (
-            db.query(
-                GoogleMccAccount.mcc_name,
-                func.sum(GoogleAdsApiData.cost),
-            )
-            .join(GoogleAdsApiData, GoogleAdsApiData.mcc_id == GoogleMccAccount.id)
-            .filter(
-                GoogleAdsApiData.date >= start_date,
-                GoogleAdsApiData.date <= end_date,
-            )
-            .group_by(GoogleMccAccount.id, GoogleMccAccount.mcc_name)
-            .all()
-        )
-
-        mcc_cost_details = [
-            {
-                "mcc_name": mcc_name,
-                "cost": float(cost or 0),
-            }
-            for mcc_name, cost in mcc_cost_rows
-        ]
-
-        # 2. 平台总佣金和按平台拆分
-        total_commission = (
-            db.query(func.coalesce(func.sum(PlatformData.commission), 0))
-            .filter(
-                PlatformData.date >= start_date,
-                PlatformData.date <= end_date,
-            )
-            .scalar()
-            or 0.0
-        )
-
-        platform_rows = (
-            db.query(
-                AffiliatePlatform.platform_name,
-                func.sum(PlatformData.commission),
-            )
-            .join(
-                AffiliateAccount,
-                AffiliateAccount.id == PlatformData.affiliate_account_id,
-            )
-            .join(
-                AffiliatePlatform,
-                AffiliatePlatform.id == AffiliateAccount.platform_id,
-            )
-            .filter(
-                PlatformData.date >= start_date,
-                PlatformData.date <= end_date,
-            )
-            .group_by(AffiliatePlatform.id, AffiliatePlatform.platform_name)
-            .all()
-        )
-
-        platform_commission_details = [
-            {
-                "platform_name": platform_name,
-                "commission": float(commission or 0),
-            }
-            for platform_name, commission in platform_rows
-        ]
-
-        # 3. 拒付佣金（从PlatformData.rejected_commission字段获取）
-        total_rejected_commission = (
-            db.query(func.coalesce(func.sum(PlatformData.rejected_commission), 0))
-            .filter(
-                PlatformData.date >= start_date,
-                PlatformData.date <= end_date,
-            )
-            .scalar()
-            or 0.0
-        )
-
-        platform_rejected_rows = (
-            db.query(
-                AffiliatePlatform.platform_name,
-                func.sum(PlatformData.rejected_commission),
-            )
-            .join(
-                AffiliateAccount,
-                AffiliateAccount.id == PlatformData.affiliate_account_id,
-            )
-            .join(
-                AffiliatePlatform,
-                AffiliatePlatform.id == AffiliateAccount.platform_id,
-            )
-            .filter(
-                PlatformData.date >= start_date,
-                PlatformData.date <= end_date,
-            )
-            .group_by(AffiliatePlatform.id, AffiliatePlatform.platform_name)
-            .all()
-        )
-
-        platform_rejected_details = [
-            {
-                "platform_name": platform_name,
-                "rejected_commission": float(rejected_commission or 0),
-            }
-            for platform_name, rejected_commission in platform_rejected_rows
-        ]
-
-        summary = {
-            "start_date": start_date.isoformat(),
-            "end_date": end_date.isoformat(),
-            "total_cost": float(total_cost),
-            "total_commission": float(total_commission),
-            "total_rejected_commission": float(total_rejected_commission),
-            "mcc_cost_details": mcc_cost_details,
-            "platform_commission_details": platform_commission_details,
-            "platform_rejected_details": platform_rejected_details,
-        }
-
-        # 目前先写入日志，后续如果需要可以存入专门的月度总结表
-        logger.info("上月总结结果: %s", json.dumps(summary, ensure_ascii=False))
-
-    except Exception as e:
-        logger.error("月度总结任务执行失败: %s", e, exc_info=True)
-    finally:
-        db.close()
-
 
 def start_scheduler():
     """启动定时任务调度器"""
@@ -899,8 +687,7 @@ def start_scheduler():
         return
     
     try:
-        # 【核心任务】每天早上4:00 - 自动同步数据并生成分析
-        # 包含：Google Ads同步 + 平台数据同步 + 每日分析 + L7D分析（周一三五）
+        # 1. 每天 04:00 - 核心同步：Google Ads 昨日 + 平台数据 + 分析
         scheduler.add_job(
             daily_auto_sync_and_analysis_job,
             trigger=CronTrigger(hour=4, minute=0),
@@ -909,7 +696,16 @@ def start_scheduler():
             replace_existing=True
         )
         
-        # 平台数据补充同步：每天北京时间16点（下午再同步一次，确保数据完整）
+        # 2. 每天 05:00 - 历史数据自动补齐（配额感知，全部补完后零开销）
+        scheduler.add_job(
+            backfill_missing_data_job,
+            trigger=CronTrigger(hour=5, minute=0),
+            id='backfill_missing_data',
+            name='历史数据自动补齐（5:00）',
+            replace_existing=True
+        )
+        
+        # 3. 每天 16:00 - 平台数据补充同步
         scheduler.add_job(
             sync_platform_data_job,
             trigger=CronTrigger(hour=16, minute=0),
@@ -917,17 +713,8 @@ def start_scheduler():
             name='平台数据补充同步（16:00）',
             replace_existing=True
         )
-
-        # 月度总结：每月1号北京时间早上8点20分，统计上月数据
-        scheduler.add_job(
-            monthly_summary_job,
-            trigger=CronTrigger(day=1, hour=8, minute=20),
-            id='monthly_summary',
-            name='月度总结',
-            replace_existing=True
-        )
         
-        # 已付佣金同步：每月1号和15号北京时间00:00执行
+        # 4. 每月 1/15 号 00:00 - 已付佣金同步
         scheduler.add_job(
             sync_approved_commission_job,
             trigger=CronTrigger(day="1,15", hour=0, minute=0),
@@ -936,35 +723,16 @@ def start_scheduler():
             replace_existing=True
         )
         
-        # 【一次性任务】今天16:00 - MCC数据补同步（CNY账号优先）
-        # 用于补同步今天清空的CNY数据和其他MCC缺失数据
-        now_beijing = datetime.now(BEIJING_TZ)
-        target_time_today = now_beijing.replace(hour=16, minute=0, second=0, microsecond=0)
-        
-        # 如果当前时间已超过16:00，则不添加该任务（避免立即执行）
-        if now_beijing < target_time_today:
-            scheduler.add_job(
-                sync_mcc_missing_data_job,
-                trigger=DateTrigger(run_date=target_time_today),
-                id='one_time_mcc_sync',
-                name='一次性MCC数据补同步（16:00）',
-                replace_existing=True
-            )
-            logger.info(f"📅 已添加一次性任务: MCC数据补同步 @ {target_time_today.strftime('%Y-%m-%d %H:%M')}")
-        else:
-            logger.info(f"⏰ 当前时间 {now_beijing.strftime('%H:%M')} 已超过16:00，跳过一次性补同步任务")
-        
         scheduler.start()
         logger.info("=" * 60)
         logger.info("定时任务调度器已启动")
         logger.info("已注册任务:")
-        logger.info("  - 每日自动同步与分析: 每天 04:00")
-        logger.info("    (Google Ads + 平台数据 + 每日分析 + L7D分析)")
-        logger.info("  - 平台数据补充同步: 每天 16:00")
-        logger.info("  - 月度总结: 每月1号 08:20")
-        logger.info("  - 已付佣金同步: 每月1/15号 00:00")
-        if now_beijing < target_time_today:
-            logger.info(f"  - 【一次性】MCC数据补同步: 今天 16:00")
+        logger.info("  1. 每日自动同步与分析: 每天 04:00")
+        logger.info("     (Google Ads昨日 + 平台数据5天 + 周一90天佣金 + 分析 + L7D)")
+        logger.info("  2. 历史数据自动补齐: 每天 05:00")
+        logger.info("     (CNY优先, 每次最多3MCC x 10天, 全部补完后零开销)")
+        logger.info("  3. 平台数据补充同步: 每天 16:00")
+        logger.info("  4. 已付佣金同步: 每月1/15号 00:00")
         logger.info("=" * 60)
         
     except Exception as e:
