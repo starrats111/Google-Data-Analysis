@@ -228,6 +228,7 @@ class GoogleAdsServiceAccountSync:
             raise ImportError("Google Ads API库未安装")
         
         customers = []
+        errors_collected = []
         
         try:
             # 方法1：使用 CustomerClient 查询（推荐）
@@ -261,9 +262,13 @@ class GoogleAdsServiceAccountSync:
                 return customers
                 
         except GoogleAdsException as ex:
-            logger.warning(f"通过CustomerClient查询失败: {ex}")
+            error_detail = str(ex)[:200]
+            logger.error(f"通过CustomerClient查询失败: {error_detail}")
+            errors_collected.append(f"CustomerClient: {error_detail}")
         except Exception as e:
-            logger.warning(f"通过CustomerClient查询异常: {e}")
+            error_detail = str(e)[:200]
+            logger.error(f"通过CustomerClient查询异常: {error_detail}")
+            errors_collected.append(f"CustomerClient异常: {error_detail}")
         
         # 方法2：使用 CustomerService.list_accessible_customers 作为备选
         try:
@@ -284,9 +289,13 @@ class GoogleAdsServiceAccountSync:
                 return customers
                 
         except Exception as e:
-            logger.warning(f"通过CustomerService查询失败: {e}")
+            error_detail = str(e)[:200]
+            logger.error(f"通过CustomerService查询失败: {error_detail}")
+            errors_collected.append(f"CustomerService: {error_detail}")
         
-        logger.warning(f"MCC {mcc_customer_id} 未找到任何客户账号")
+        # 将收集到的错误信息保存到实例变量，供调用方使用
+        self._last_customer_errors = errors_collected
+        logger.error(f"MCC {mcc_customer_id} 未找到任何客户账号，错误: {'; '.join(errors_collected)}")
         return customers
     
     def fetch_campaign_data(
@@ -1029,10 +1038,15 @@ class GoogleAdsServiceAccountSync:
             customers = self.get_accessible_customers(client, mcc_customer_id)
             
             if not customers:
-                self._update_mcc_sync_status(mcc_account, "warning", "MCC下没有找到有效的客户账号")
+                error_details = getattr(self, '_last_customer_errors', [])
+                if error_details:
+                    msg = f"MCC下没有找到有效的客户账号。原因: {'; '.join(error_details)}"
+                else:
+                    msg = "MCC下没有找到有效的客户账号（API返回空列表，请检查服务账号权限）"
+                self._update_mcc_sync_status(mcc_account, "warning", msg[:500])
                 return {
                     "success": True,
-                    "message": "MCC下没有找到有效的客户账号",
+                    "message": msg,
                     "saved_count": 0,
                     "customers_count": 0
                 }
