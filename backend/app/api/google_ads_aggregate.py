@@ -319,51 +319,87 @@ async def get_campaign_data(
             ).all()
             platform_code_map = {p.platform_code: p.platform_name for p in platforms}
     
-    # 格式化数据
-    campaign_data = []
+    # 格式化数据（先按 mcc 维度转换货币，再按 campaign_id 合并去重）
+    _campaign_buckets: dict = {}  # campaign_id -> merged dict
     for row in results:
         total_impressions = float(row.total_impressions or 0)
         total_clicks = float(row.total_clicks or 0)
-        ctr = (total_clicks / total_impressions * 100) if total_impressions > 0 else 0
-        
-        # 获取该广告系列最近一天的预算和状态
-        daily_budget = latest_budgets.get(row.campaign_id, 0)
-        raw_status = latest_statuses.get(row.campaign_id, "未知")
-        status_code, status_label = _normalize_status(raw_status)
-        
+
         # 获取平台信息
         inferred_platform_code = row.extracted_platform_code or _infer_platform_code_from_campaign_name(row.campaign_name)
         row_platform_code = inferred_platform_code
-        platform_name = platform_code_map.get(row_platform_code, row_platform_code) if row_platform_code else None
-        inferred_mid = _infer_merchant_id_from_campaign_name(row.campaign_name)
-        
+
         # 货币转换：如果是CNY则转换为USD
         currency = mcc_currency_map.get(row.mcc_id, "USD")
         raw_cost = float(row.total_cost or 0)
-        raw_budget = daily_budget
         raw_cpc = float(row.avg_cpc or 0)
-        
         display_cost = convert_to_usd(raw_cost, currency)
-        display_budget = convert_to_usd(raw_budget, currency)
         display_cpc = convert_to_usd(raw_cpc, currency)
-        
+
+        cid = row.campaign_id
+        if cid in _campaign_buckets:
+            b = _campaign_buckets[cid]
+            b["_cost"] += display_cost
+            b["_impressions"] += total_impressions
+            b["_clicks"] += total_clicks
+            b["_cpc_sum"] += display_cpc * total_clicks
+            b["_currencies"].add(currency)
+        else:
+            _campaign_buckets[cid] = {
+                "campaign_id": cid,
+                "campaign_name": row.campaign_name,
+                "platform_code": row_platform_code,
+                "_cost": display_cost,
+                "_impressions": total_impressions,
+                "_clicks": total_clicks,
+                "_cpc_sum": display_cpc * total_clicks,
+                "_currencies": {currency},
+            }
+
+    # 组装最终返回列表
+    campaign_data = []
+    for cid, b in _campaign_buckets.items():
+        total_clicks = b["_clicks"]
+        total_impressions = b["_impressions"]
+        ctr = (total_clicks / total_impressions * 100) if total_impressions > 0 else 0
+        avg_cpc = (b["_cpc_sum"] / total_clicks) if total_clicks > 0 else 0
+
+        daily_budget = latest_budgets.get(cid, 0)
+        raw_status = latest_statuses.get(cid, "未知")
+        status_code, status_label = _normalize_status(raw_status)
+
+        platform_name = platform_code_map.get(b["platform_code"], b["platform_code"]) if b["platform_code"] else None
+        inferred_mid = _infer_merchant_id_from_campaign_name(b["campaign_name"])
+
+        # 预算也需要按其 MCC 货币转换；latest_budgets 存的是原始值
+        # 这里使用第一个出现的货币做转换（绝大多数 campaign 只属于一个 MCC）
+        budget_currency = next(iter(b["_currencies"]))
+        display_budget = convert_to_usd(daily_budget, budget_currency)
+
+        currencies = b["_currencies"]
+        if len(currencies) == 1:
+            out_currency = next(iter(currencies))
+        else:
+            out_currency = "MIXED"
+
         campaign_data.append({
             "date_range": date_range_display,
-            "campaign_name": row.campaign_name,
-            "campaign_id": row.campaign_id,
-            "platform_code": row_platform_code,
+            "campaign_name": b["campaign_name"],
+            "campaign_id": cid,
+            "platform_code": b["platform_code"],
             "platform_name": platform_name,
             "status": status_label,
             "status_code": status_code,
             "merchant_id": inferred_mid,
-            "budget": round(display_budget, 2),  # 使用最近一天的预算作为每日预算（已转换货币）
-            "cost": round(display_cost, 2),  # 费用（已转换货币）
+            "budget": round(display_budget, 2),
+            "cost": round(b["_cost"], 2),
             "impressions": int(total_impressions),
             "clicks": int(total_clicks),
-            "cpc": round(display_cpc, 4),  # CPC（已转换货币）
+            "cpc": round(avg_cpc, 4),
             "ctr": round(ctr, 2),
-            "is_budget_lost": round(latest_is_budget_lost.get(row.campaign_id, 0), 4),  # 使用最近一天的值
-            "is_rank_lost": round(latest_is_rank_lost.get(row.campaign_id, 0), 4)  # 使用最近一天的值
+            "is_budget_lost": round(latest_is_budget_lost.get(cid, 0), 4),
+            "is_rank_lost": round(latest_is_rank_lost.get(cid, 0), 4),
+            "currency": out_currency,
         })
 
     # 平台筛选兜底：同时支持 extracted_platform_code 和从 campaign_name 推断的平台

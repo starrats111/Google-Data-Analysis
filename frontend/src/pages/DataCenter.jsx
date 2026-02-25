@@ -269,7 +269,10 @@ const DataCenter = () => {
       key: 'cost',
       width: 100,
       sorter: (a, b) => (a.cost || 0) - (b.cost || 0),
-      render: (val) => `$${(val || 0).toFixed(2)}`,
+      render: (val, record) => {
+        const color = record.currency === 'CNY' ? '#cf1322' : '#3f8600'
+        return <span style={{ color, fontWeight: 500 }}>${(val || 0).toFixed(2)}</span>
+      },
     },
     {
       title: '点击',
@@ -290,14 +293,21 @@ const DataCenter = () => {
       dataIndex: 'cpc',
       key: 'cpc',
       width: 80,
-      render: (val) => `$${(val || 0).toFixed(2)}`,
+      render: (val, record) => {
+        const color = record.currency === 'CNY' ? '#cf1322' : '#3f8600'
+        return <span style={{ color }}>${(val || 0).toFixed(2)}</span>
+      },
     },
     {
       title: '预算($)',
       dataIndex: 'budget',
       key: 'budget',
       width: 100,
-      render: (val) => val ? `$${val.toFixed(2)}` : '-',
+      render: (val, record) => {
+        if (!val) return '-'
+        const color = record.currency === 'CNY' ? '#cf1322' : '#3f8600'
+        return <span style={{ color }}>${val.toFixed(2)}</span>
+      },
     },
     {
       title: 'IS Budget丢失',
@@ -680,7 +690,7 @@ const DataCenter = () => {
               dataSource={googleData.filter(item => 
                 !searchText || item.campaign_name?.toLowerCase().includes(searchText.toLowerCase())
               )}
-              rowKey={(record) => `${record.campaign_id}-${record.date}`}
+              rowKey={(record) => record.campaign_id}
               scroll={{ x: 1200 }}
               pagination={{
                 current: pagination.current,
