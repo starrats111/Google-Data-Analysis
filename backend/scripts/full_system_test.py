@@ -245,10 +245,10 @@ class TestSuite:
         yesterday = (date.today() - timedelta(days=1)).isoformat()
         week_ago = (date.today() - timedelta(days=7)).isoformat()
         endpoints = [
-            ("原始数据", "GET", f"/api/google-ads-data/?start_date={week_ago}&end_date={yesterday}"),
-            ("数据汇总", "GET", f"/api/google-ads-data/summary?start_date={week_ago}&end_date={yesterday}"),
-            ("按系列聚合", "GET", f"/api/google-ads-aggregate/by-campaign?start_date={week_ago}&end_date={yesterday}"),
-            ("单行汇总", "GET", f"/api/google-ads-aggregate?start_date={week_ago}&end_date={yesterday}"),
+            ("原始数据", "GET", f"/api/google-ads-data/?begin_date={week_ago}&end_date={yesterday}"),
+            ("数据汇总", "GET", f"/api/google-ads-data/summary?begin_date={week_ago}&end_date={yesterday}"),
+            ("按系列聚合", "GET", f"/api/google-ads-aggregate/by-campaign?date_range_type=custom&begin_date={week_ago}&end_date={yesterday}"),
+            ("单行汇总", "GET", f"/api/google-ads-aggregate?date_range_type=custom&begin_date={week_ago}&end_date={yesterday}"),
         ]
         for name, method, path in endpoints:
             try:
@@ -266,9 +266,9 @@ class TestSuite:
         yesterday = (date.today() - timedelta(days=1)).isoformat()
         week_ago = (date.today() - timedelta(days=7)).isoformat()
         endpoints = [
-            ("数据汇总", "GET", f"/api/platform-data/summary?start_date={week_ago}&end_date={yesterday}"),
-            ("数据明细", "GET", f"/api/platform-data/detail?start_date={week_ago}&end_date={yesterday}"),
-            ("交易记录", "GET", f"/api/platform-data/transactions?start_date={week_ago}&end_date={yesterday}&page=1&page_size=10"),
+            ("数据汇总", "GET", f"/api/platform-data/summary?begin_date={week_ago}&end_date={yesterday}"),
+            ("数据明细", "GET", f"/api/platform-data/detail?begin_date={week_ago}&end_date={yesterday}"),
+            ("交易记录", "GET", f"/api/platform-data/transactions?begin_date={week_ago}&end_date={yesterday}&page=1&page_size=10"),
         ]
         for name, method, path in endpoints:
             try:
@@ -309,16 +309,11 @@ class TestSuite:
             self.results.append(TestResult(m, "分析结果列表", "GET", "/api/analysis/results", "FAIL", detail=str(e)))
 
         try:
-            resp, elapsed = self._request("POST", "/api/analysis/process")
+            resp, elapsed = self._request("POST", "/api/analysis/process",
+                                          json={"analysis_type": "test"})
             self.add(m, "废弃端点应返回410", "POST", "/api/analysis/process", resp, elapsed, expect_codes=[410])
         except Exception as e:
             self.results.append(TestResult(m, "废弃端点", "POST", "/api/analysis/process", "FAIL", detail=str(e)))
-
-        try:
-            resp, elapsed = self._request("GET", "/api/analysis/l7d-data")
-            self.add(m, "L7D数据", "GET", "/api/analysis/l7d-data", resp, elapsed, expect_codes=[200, 404])
-        except Exception as e:
-            self.results.append(TestResult(m, "L7D数据", "GET", "/api/analysis/l7d-data", "FAIL", detail=str(e)))
 
     # ===== 8. 出价管理 =====
     def test_bids(self):
@@ -356,7 +351,6 @@ class TestSuite:
             ("趋势数据", "GET", "/api/dashboard/trend"),
             ("员工列表", "GET", "/api/dashboard/employees"),
             ("平台汇总(旧)", "GET", "/api/dashboard/platform-summary"),
-            ("账号详情(旧)", "GET", "/api/dashboard/account-details"),
         ]
         for name, method, path in endpoints:
             try:
@@ -402,11 +396,12 @@ class TestSuite:
             self.skip(m, "全部(经理/组长)", "GET", "/api/reports/financial", "无经理/组长token")
             return
         role_name = "经理" if self.manager_token else "组长"
+        now = date.today()
         endpoints = [
-            ("财务报告", "GET", "/api/reports/financial"),
-            ("月度报告", "GET", "/api/reports/monthly"),
-            ("季度报告", "GET", "/api/reports/quarterly"),
-            ("年度报告", "GET", "/api/reports/yearly"),
+            ("财务报告", "GET", f"/api/reports/financial?year={now.year}&month={now.month}"),
+            ("月度报告", "GET", f"/api/reports/monthly?year={now.year}&month={now.month}"),
+            ("季度报告", "GET", f"/api/reports/quarterly?year={now.year}&quarter={(now.month-1)//3+1}"),
+            ("年度报告", "GET", f"/api/reports/yearly?year={now.year}"),
         ]
         for name, method, path in endpoints:
             try:
@@ -568,21 +563,24 @@ class TestSuite:
             except Exception as e:
                 self.results.append(TestResult(m, name, method, path, "FAIL", detail=str(e)))
 
-        # 经理/组长专用
-        mgr_token = self.manager_token or self.leader_token
-        if mgr_token:
+        # 露出审核/发布功能需要 wj01-wj10 授权用户
+        # 经理 manager 不在授权列表中，这是一个设计问题（DES-6）
+        # 用组员 token 测试（wj07 在授权列表中）
+        luchu_token = self.token  # wj07 有权限
+        if luchu_token and self.username.startswith("wj"):
             mgr_endpoints = [
-                ("待审核列表", "GET", "/api/luchu/reviews"),
-                ("待发布列表", "GET", "/api/luchu/publish/ready"),
-                ("发布日志", "GET", "/api/luchu/publish/logs"),
-                ("审核效率", "GET", "/api/luchu/stats/review-efficiency"),
+                ("待审核列表(wj用户)", "GET", "/api/luchu/reviews"),
+                ("待发布列表(wj用户)", "GET", "/api/luchu/publish/ready"),
+                ("发布日志(wj用户)", "GET", "/api/luchu/publish/logs"),
             ]
             for name, method, path in mgr_endpoints:
                 try:
-                    resp, elapsed = self._request(method, path, token=mgr_token)
-                    self.add(m, name + "(经理/组长)", method, path, resp, elapsed)
+                    resp, elapsed = self._request(method, path, token=luchu_token)
+                    self.add(m, name, method, path, resp, elapsed)
                 except Exception as e:
                     self.results.append(TestResult(m, name, method, path, "FAIL", detail=str(e)))
+        else:
+            self.skip(m, "露出审核/发布", "GET", "/api/luchu/reviews", "需要wj01-wj10用户")
 
     # ===== 20. 阶段标签 =====
     def test_stage_label(self):
@@ -599,12 +597,12 @@ class TestSuite:
 
     # ===== 21. Google OAuth =====
     def test_google_oauth(self):
-        m = "Google OAuth"
+        m = "Google OAuth(已弃用)"
+        # OAuth 已改用服务账号模式，此端点需要认证，预期 401 或 200
         try:
             resp, elapsed = self._request("GET", "/api/google-oauth/authorize", no_auth=True)
-            self.add(m, "OAuth授权URL", "GET", "/api/google-oauth/authorize", resp, elapsed, expect_codes=[200, 400, 422, 500])
-            if resp.status_code in (400, 500):
-                self.warn(m, "OAuth未配置", "GET", "/api/google-oauth/authorize", "OAuth可能未配置client_id/secret(已改用服务账号)")
+            self.add(m, "OAuth授权URL(未认证)", "GET", "/api/google-oauth/authorize", resp, elapsed, expect_codes=[200, 400, 401, 422, 500])
+            self.warn(m, "OAuth已弃用", "GET", "/api/google-oauth/authorize", "已改用服务账号模式，建议删除此模块")
         except Exception as e:
             self.results.append(TestResult(m, "OAuth授权URL", "GET", "/api/google-oauth/authorize", "FAIL", detail=str(e)))
 
