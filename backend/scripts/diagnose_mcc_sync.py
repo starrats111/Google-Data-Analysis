@@ -33,7 +33,7 @@ def main():
         return
 
     for mcc in mccs:
-        print(f"\n  MCC #{mcc.id}: {mcc.mcc_id} ({mcc.name or 'N/A'})")
+        print(f"\n  MCC #{mcc.id}: {mcc.mcc_id} ({mcc.mcc_name or 'N/A'})")
         print(f"    活跃: {mcc.is_active}")
         print(f"    货币: {getattr(mcc, 'currency', 'N/A')}")
         print(f"    客户数: {getattr(mcc, 'total_customers', 'N/A')}")
@@ -80,7 +80,7 @@ def main():
             print(f"\n  MCC {mcc.mcc_id}: 已停用，跳过")
             continue
 
-        print(f"\n  MCC {mcc.mcc_id} ({mcc.name}):")
+        print(f"\n  MCC {mcc.mcc_id} ({mcc.mcc_name}):")
 
         # 4a. 检查凭证
         try:
