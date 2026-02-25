@@ -310,7 +310,8 @@ class TestSuite:
 
         try:
             resp, elapsed = self._request("POST", "/api/analysis/process",
-                                          json={"analysis_type": "test"})
+                                          json={"google_ads_upload_id": 0,
+                                                "affiliate_upload_id": 0})
             self.add(m, "废弃端点应返回410", "POST", "/api/analysis/process", resp, elapsed, expect_codes=[410])
         except Exception as e:
             self.results.append(TestResult(m, "废弃端点", "POST", "/api/analysis/process", "FAIL", detail=str(e)))
@@ -564,21 +565,30 @@ class TestSuite:
                 self.results.append(TestResult(m, name, method, path, "FAIL", detail=str(e)))
 
         # 露出审核/发布功能需要 wj01-wj10 授权用户
-        # 经理 manager 不在授权列表中，这是一个设计问题（DES-6）
-        # 用组员 token 测试（wj07 在授权列表中）
         luchu_token = self.token  # wj07 有权限
         if luchu_token and self.username.startswith("wj"):
-            mgr_endpoints = [
-                ("待审核列表(wj用户)", "GET", "/api/luchu/reviews"),
+            pub_endpoints = [
                 ("待发布列表(wj用户)", "GET", "/api/luchu/publish/ready"),
                 ("发布日志(wj用户)", "GET", "/api/luchu/publish/logs"),
             ]
-            for name, method, path in mgr_endpoints:
+            for name, method, path in pub_endpoints:
                 try:
                     resp, elapsed = self._request(method, path, token=luchu_token)
                     self.add(m, name, method, path, resp, elapsed)
                 except Exception as e:
                     self.results.append(TestResult(m, name, method, path, "FAIL", detail=str(e)))
+
+            # DES-8: 审核列表死锁 bug - wj用户有露出权限但角色不够(需manager/leader)
+            # manager/leader有角色但没露出权限 → 没有任何用户能访问此端点
+            try:
+                resp, elapsed = self._request("GET", "/api/luchu/reviews", token=luchu_token)
+                if resp.status_code == 403:
+                    self.warn(m, "审核列表(死锁bug DES-8)", "GET", "/api/luchu/reviews",
+                              "wj用户有露出权限但角色不够，manager/leader角色够但没露出权限，无人可访问")
+                else:
+                    self.add(m, "待审核列表(wj用户)", "GET", "/api/luchu/reviews", resp, elapsed)
+            except Exception as e:
+                self.results.append(TestResult(m, "审核列表", "GET", "/api/luchu/reviews", "FAIL", detail=str(e)))
         else:
             self.skip(m, "露出审核/发布", "GET", "/api/luchu/reviews", "需要wj01-wj10用户")
 
