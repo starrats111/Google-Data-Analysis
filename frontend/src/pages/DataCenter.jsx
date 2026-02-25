@@ -15,6 +15,17 @@ const dataCache = {
 }
 const CACHE_DURATION = 5 * 60 * 1000 // 5分钟
 
+const parseCampaignSeq = (name) => {
+  const parts = (name || '').split('-')
+  return parseInt(parts[0]) || 0
+}
+
+const parseCampaignDate = (name) => {
+  const parts = (name || '').split('-')
+  const datePart = parts[4] || '0000'
+  return parseInt(datePart) || 0
+}
+
 // D5+U4 修复：IS Budget/Rank 格式化函数，>90% 时显示 ">90%"，并用颜色突出显示
 const formatIsLost = (value) => {
   if (value === null || value === undefined) return '-'
@@ -79,7 +90,8 @@ const DataCenter = () => {
   // 筛选
   const [statusFilter, setStatusFilter] = useState('ENABLED')
   const [searchText, setSearchText] = useState('')
-  
+  const [campaignSortMode, setCampaignSortMode] = useState('seq')
+
   // MCC费用明细Modal
   const [mccModalVisible, setMccModalVisible] = useState(false)
   const [mccCostData, setMccCostData] = useState([])
@@ -237,11 +249,32 @@ const DataCenter = () => {
   // Google Ads 表格列
   const googleColumns = [
     {
-      title: '广告系列',
+      title: (
+        <Space size={4}>
+          <span>广告系列</span>
+          <Select
+            size="small"
+            value={campaignSortMode}
+            onChange={setCampaignSortMode}
+            style={{ width: 80 }}
+            options={[
+              { value: 'seq', label: '按序号' },
+              { value: 'date', label: '按日期' },
+            ]}
+            onClick={(e) => e.stopPropagation()}
+          />
+        </Space>
+      ),
       dataIndex: 'campaign_name',
       key: 'campaign_name',
       fixed: 'left',
-      width: 250,
+      width: 280,
+      sorter: (a, b) => {
+        if (campaignSortMode === 'date') {
+          return parseCampaignDate(a.campaign_name) - parseCampaignDate(b.campaign_name)
+        }
+        return parseCampaignSeq(a.campaign_name) - parseCampaignSeq(b.campaign_name)
+      },
       filteredValue: searchText ? [searchText] : null,
       onFilter: (value, record) => {
         return record.campaign_name?.toLowerCase().includes(value.toLowerCase())
