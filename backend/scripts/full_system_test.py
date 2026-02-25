@@ -66,12 +66,15 @@ class TestSuite:
             h["Authorization"] = f"Bearer {t}"
         return h
 
-    def _request(self, method, path, token=None, no_auth=False, **kwargs):
+    def _request(self, method, path, token=None, no_auth=False, form_data=None, **kwargs):
         url = f"{self.base_url}{path}"
         if no_auth:
-            headers = {"Content-Type": "application/json"}
+            headers = {}
         else:
             headers = self._headers(token)
+        if form_data:
+            headers.pop("Content-Type", None)
+            kwargs["data"] = form_data
         kwargs.setdefault("timeout", 30)
         kwargs.setdefault("headers", headers)
         start = time.time()
@@ -133,7 +136,7 @@ class TestSuite:
         # 组员登录
         try:
             resp, elapsed = self._request("POST", "/api/auth/login", no_auth=True,
-                                          json={"username": self.username, "password": self.password})
+                                          form_data={"username": self.username, "password": self.password})
             ok = self.add(m, f"组员登录 ({self.username})", "POST", "/api/auth/login", resp, elapsed)
             if ok:
                 self.token = resp.json().get("access_token", "")
@@ -144,7 +147,7 @@ class TestSuite:
         if self.manager_username and self.manager_password:
             try:
                 resp, elapsed = self._request("POST", "/api/auth/login", no_auth=True,
-                                              json={"username": self.manager_username, "password": self.manager_password})
+                                              form_data={"username": self.manager_username, "password": self.manager_password})
                 ok = self.add(m, f"经理登录 ({self.manager_username})", "POST", "/api/auth/login", resp, elapsed)
                 if ok:
                     self.manager_token = resp.json().get("access_token", "")
@@ -157,7 +160,7 @@ class TestSuite:
         if self.leader_username and self.leader_password:
             try:
                 resp, elapsed = self._request("POST", "/api/auth/login", no_auth=True,
-                                              json={"username": self.leader_username, "password": self.leader_password})
+                                              form_data={"username": self.leader_username, "password": self.leader_password})
                 ok = self.add(m, f"组长登录 ({self.leader_username})", "POST", "/api/auth/login", resp, elapsed)
                 if ok:
                     self.leader_token = resp.json().get("access_token", "")
