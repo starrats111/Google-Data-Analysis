@@ -333,7 +333,8 @@ class GoogleAdsServiceAccountSync:
                 metrics.clicks,
                 metrics.average_cpc,
                 metrics.search_budget_lost_impression_share,
-                metrics.search_rank_lost_impression_share
+                metrics.search_rank_lost_impression_share,
+                metrics.search_impression_share
             FROM campaign
             WHERE segments.date = '{date_str}'
             {status_filter}
@@ -382,6 +383,7 @@ class GoogleAdsServiceAccountSync:
                     "cpc": cpc_micros / 1_000_000,
                     "is_budget_lost": row.metrics.search_budget_lost_impression_share or 0.0,
                     "is_rank_lost": row.metrics.search_rank_lost_impression_share or 0.0,
+                    "search_impression_share": row.metrics.search_impression_share or None,
                 })
                 
         except Exception as e:
@@ -1219,6 +1221,7 @@ class GoogleAdsServiceAccountSync:
                     existing.cpc = converted_cpc
                     existing.is_budget_lost = campaign_data.get("is_budget_lost", 0)
                     existing.is_rank_lost = campaign_data.get("is_rank_lost", 0)
+                    existing.search_impression_share = campaign_data.get("search_impression_share")
                     existing.extracted_platform_code = platform_info.get("platform_code") if platform_info else None
                     existing.extracted_account_code = platform_info.get("account_code") if platform_info else None
                     existing.last_sync_at = datetime.now()
@@ -1239,6 +1242,7 @@ class GoogleAdsServiceAccountSync:
                         cpc=converted_cpc,
                         is_budget_lost=campaign_data.get("is_budget_lost", 0),
                         is_rank_lost=campaign_data.get("is_rank_lost", 0),
+                        search_impression_share=campaign_data.get("search_impression_share"),
                         extracted_platform_code=platform_info.get("platform_code") if platform_info else None,
                         extracted_account_code=platform_info.get("account_code") if platform_info else None
                     )

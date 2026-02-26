@@ -35,6 +35,7 @@ class GoogleAdsApiData(Base):
     cpc = Column(Float, default=0.0, nullable=False)  # CPC
     is_budget_lost = Column(Float, default=0.0, nullable=False)  # IS Budget丢失
     is_rank_lost = Column(Float, default=0.0, nullable=False)  # IS Rank丢失
+    search_impression_share = Column(Float, nullable=True)  # 搜索展示份额（0~1），用于精确计算 eligible_impressions
     
     # 元数据
     last_sync_at = Column(DateTime(timezone=True), server_default=func.now())  # 最后同步时间

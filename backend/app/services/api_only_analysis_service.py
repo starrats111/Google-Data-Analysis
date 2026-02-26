@@ -100,10 +100,10 @@ class ApiOnlyAnalysisService:
                         "total_impressions": 0,
                         "total_clicks": 0,
                         "max_cpc": 0,
-                        "is_budget_lost_wsum": 0,   # Σ(is_budget_lost × impressions)
-                        "is_rank_lost_wsum": 0,     # Σ(is_rank_lost × impressions)
-                        "is_imp_budget": 0,          # 参与budget加权的展示次数
-                        "is_imp_rank": 0,            # 参与rank加权的展示次数
+                        "is_budget_lost_wsum": 0,   # Σ(is_budget_lost × eligible_impressions)
+                        "is_rank_lost_wsum": 0,     # Σ(is_rank_lost × eligible_impressions)
+                        "eligible_imp_budget": 0,    # 参与budget加权的合格展示次数
+                        "eligible_imp_rank": 0,      # 参与rank加权的合格展示次数
                         "user_id": data.user_id,
                     }
                 
@@ -117,12 +117,27 @@ class ApiOnlyAnalysisService:
                     data.cpc or 0
                 )
                 day_imp = data.impressions or 0
+                # 计算 eligible_impressions：
+                # 优先用精确值（Phase 2: search_impression_share 字段）
+                # 降级用反推值（Phase 1: 1 - budget_lost - rank_lost）
+                bl = data.is_budget_lost or 0
+                rl = data.is_rank_lost or 0
+                sis_precise = getattr(data, 'search_impression_share', None)
+                if day_imp > 0 and (bl > 0 or rl > 0):
+                    if sis_precise and sis_precise > 0:
+                        eligible_imp = day_imp / sis_precise  # 精确值
+                    else:
+                        sis = max(1.0 - bl - rl, 0.01)  # 反推近似值
+                        eligible_imp = day_imp / sis
+                else:
+                    eligible_imp = day_imp  # 无丢失数据时退化为 impressions
+
                 if data.is_budget_lost is not None:
-                    campaigns_data[campaign_id]["is_budget_lost_wsum"] += data.is_budget_lost * day_imp
-                    campaigns_data[campaign_id]["is_imp_budget"] += day_imp
+                    campaigns_data[campaign_id]["is_budget_lost_wsum"] += data.is_budget_lost * eligible_imp
+                    campaigns_data[campaign_id]["eligible_imp_budget"] += eligible_imp
                 if data.is_rank_lost is not None:
-                    campaigns_data[campaign_id]["is_rank_lost_wsum"] += data.is_rank_lost * day_imp
-                    campaigns_data[campaign_id]["is_imp_rank"] += day_imp
+                    campaigns_data[campaign_id]["is_rank_lost_wsum"] += data.is_rank_lost * eligible_imp
+                    campaigns_data[campaign_id]["eligible_imp_rank"] += eligible_imp
             
             # 3. 获取平台数据
             platform_data_query = self.db.query(PlatformData).filter(
@@ -226,9 +241,9 @@ class ApiOnlyAnalysisService:
                 
                 # 生成操作指令（带具体数值）
                 budget = campaign_data["total_budget"]
-                # 计算展示次数加权平均 IS 丢失
-                imp_b = campaign_data["is_imp_budget"]
-                imp_r = campaign_data["is_imp_rank"]
+                # 计算 eligible_impressions 加权平均 IS 丢失
+                imp_b = campaign_data["eligible_imp_budget"]
+                imp_r = campaign_data["eligible_imp_rank"]
                 is_budget_lost = (campaign_data["is_budget_lost_wsum"] / imp_b) if imp_b > 0 else 0
                 is_rank_lost = (campaign_data["is_rank_lost_wsum"] / imp_r) if imp_r > 0 else 0
                 operation_instruction = self._generate_operation_instruction(
