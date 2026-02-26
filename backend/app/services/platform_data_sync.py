@@ -811,7 +811,18 @@ class PlatformDataSyncService:
                     import traceback
                     logger.debug(f"[LinkHaitao同步] 错误堆栈: {traceback.format_exc()}")
                     continue
-            
+
+            # 自动修正 LH 账号的 account_code（slug -> 数字 m_id）
+            if all_transactions and account.account_code and not account.account_code.isdigit():
+                for tx in all_transactions:
+                    m_id = tx.get("m_id")
+                    mcid = tx.get("mcid")
+                    if m_id and mcid and str(mcid).strip() == account.account_code.strip():
+                        old_code = account.account_code
+                        account.account_code = str(m_id).strip()
+                        logger.info(f"[LinkHaitao同步] 自动修正 account_code: {old_code} -> {account.account_code}")
+                        break
+
             self.db.commit()
             
             return {
