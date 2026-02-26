@@ -68,6 +68,10 @@ const Analysis = () => {
   const [selectedCampaignsForDeploy, setSelectedCampaignsForDeploy] = useState([])
   const [selectedRowKeys, setSelectedRowKeys] = useState([])
   
+  // 详情弹窗状态
+  const [detailModalOpen, setDetailModalOpen] = useState(false)
+  const [detailRecord, setDetailRecord] = useState(null)
+
   // 打开单行部署弹窗
   const handleSingleDeploy = (row) => {
     setSelectedCampaignsForDeploy([row])
@@ -707,6 +711,118 @@ G) 综述
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedAccount, dateRange])
 
+  const processDetailData = useCallback((record) => {
+    const rawData = record?.result_data?.data || []
+    if (!Array.isArray(rawData) || rawData.length === 0) return []
+    const data = showEmptyCampaigns
+      ? rawData
+      : rawData.filter(row => {
+          const cost = parseFloat(row['费用'] || row['费用($)'] || row['L7D花费'] || 0)
+          const commission = parseFloat(row['佣金'] || row['L7D佣金'] || row['回传佣金'] || 0)
+          return cost > 0 || commission > 0
+        })
+    const statusOrder = { '健康': 1, '观察': 2, '暂停': 3 }
+    return [...data].sort((a, b) => {
+      const sA = statusOrder[a['状态']] || 99
+      const sB = statusOrder[b['状态']] || 99
+      if (sA !== sB) return sA - sB
+      return (parseFloat(b['费用'] || b['费用($)']) || 0) - (parseFloat(a['费用'] || a['费用($)']) || 0)
+    }).map((r, idx) => ({ ...r, __rowKey: `detail-${record.id}-${idx}` }))
+  }, [showEmptyCampaigns])
+
+  const buildDetailColumns = useCallback((analysisDate) => {
+    const DETAIL_KEYS = [
+      '广告系列名', '预算', 'L7D点击', 'L7D佣金', 'L7D花费', 'L7D出单天数',
+      '当前Max CPC', 'IS Budget丢失', 'IS Rank丢失', '保守EPC', '保守ROI', '操作指令', 'MID',
+    ]
+    const WIDTH_MAP = {
+      '广告系列名': 260, '预算': 80, 'L7D点击': 80, 'L7D佣金': 90,
+      'L7D花费': 90, 'L7D出单天数': 90, '当前Max CPC': 110,
+      'IS Budget丢失': 110, 'IS Rank丢失': 110, '保守EPC': 80, '保守ROI': 80, 'MID': 100,
+    }
+    return DETAIL_KEYS.map(key => {
+      const col = { title: key, dataIndex: key, key, width: WIDTH_MAP[key], ellipsis: true }
+
+      if (key === '广告系列名') {
+        col.fixed = 'left'
+        col.ellipsis = false
+        col.render = (text) => text ? <Tooltip title={String(text)}><span style={{ wordBreak: 'break-all' }}>{String(text)}</span></Tooltip> : '-'
+      } else if (key === '当前Max CPC') {
+        col.align = 'right'
+        col.render = (text) => {
+          const v = parseFloat(text) || 0
+          let color = '#52c41a', bg = '#f6ffed'
+          if (v >= 1.0) { color = '#f5222d'; bg = '#fff1f0' }
+          else if (v >= 0.5) { color = '#fa8c16'; bg = '#fff7e6' }
+          return <span style={{ color, backgroundColor: bg, padding: '2px 8px', borderRadius: 4, fontWeight: 'bold' }}>${v.toFixed(2)}</span>
+        }
+      } else if (key === 'IS Budget丢失' || key === 'IS Rank丢失') {
+        col.align = 'right'
+        col.render = (text) => {
+          if (text === null || text === undefined || text === '') return '-'
+          const v = parseFloat(text)
+          if (isNaN(v)) return String(text)
+          if (v > 90) return <span style={{ color: '#f5222d', fontWeight: 'bold' }}>&gt;90%</span>
+          return `${v.toFixed(1)}%`
+        }
+      } else if (key === '操作指令') {
+        col.width = undefined
+        col.ellipsis = false
+        col.render = (text, row) => {
+          if (!text || text === '-') return '-'
+          const t = String(text)
+          let color = 'default'
+          if (t.includes('暂停') || t.includes('关停') || t === 'PAUSE') color = 'red'
+          else if (t.includes('样本不足')) color = 'default'
+          else if (t === '维持' || t.includes('稳定运行')) color = 'blue'
+          else if (t.includes('(+30%)') || t.includes('(+20%)') || t.includes('(+100%)')) color = 'green'
+          else if (t.includes('→')) color = 'cyan'
+          const hasDeployData = row['部署数据'] &&
+            (row['部署数据'].action !== 'maintain' ||
+             (row['部署数据'].keyword_suggestions && row['部署数据'].keyword_suggestions.length > 0) ||
+             row['部署数据'].budget_suggestion)
+          return (
+            <Space size={4}>
+              <Tooltip title={t.length > 30 ? t : '点击查看AI分析报告'}>
+                <Tag
+                  color={color}
+                  style={{ fontSize: '11px', cursor: 'pointer', maxWidth: '200px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}
+                  onClick={(e) => { e.stopPropagation(); handleViewCampaignReport(row, analysisDate) }}
+                >
+                  {t.length > 25 ? t.substring(0, 25) + '...' : t}
+                </Tag>
+              </Tooltip>
+              {hasDeployData && (
+                <Tooltip title="部署此广告系列">
+                  <Button type="primary" size="small" icon={<RocketOutlined />}
+                    style={{ background: '#52c41a', borderColor: '#52c41a', fontSize: '11px', padding: '0 6px' }}
+                    onClick={(e) => { e.stopPropagation(); handleSingleDeploy(row) }}
+                  >部署</Button>
+                </Tooltip>
+              )}
+            </Space>
+          )
+        }
+      } else if (['保守ROI', '保守EPC', '预算', 'L7D点击', 'L7D佣金', 'L7D花费', 'L7D出单天数'].includes(key)) {
+        col.align = 'right'
+        col.render = (text) => {
+          if (text === null || text === undefined || text === '') return '-'
+          const num = Number(text)
+          if (Number.isNaN(num)) return String(text)
+          if (key.includes('ROI')) return num.toFixed(2)
+          if (key.includes('点击') || key.includes('天数')) return num.toFixed(0)
+          return num.toFixed(2)
+        }
+      } else {
+        col.render = (text) => {
+          if (text === null || text === undefined || text === '') return '-'
+          return <Tooltip title={String(text)}>{String(text)}</Tooltip>
+        }
+      }
+      return col
+    })
+  }, [])
+
   const columns = useMemo(
     () => [
       {
@@ -734,10 +850,34 @@ G) 综述
         width: 110,
         align: 'right',
         render: (_, record) => {
-          const data = record.result_data?.data || []
-          const count = Array.isArray(data) ? data.length : 0
+          const rawData = record.result_data?.data || []
+          if (!Array.isArray(rawData)) return <Badge count={0} color="#d9d9d9" />
+          const count = showEmptyCampaigns
+            ? rawData.length
+            : rawData.filter(row => {
+                const cost = parseFloat(row['费用'] || row['费用($)'] || row['L7D花费'] || 0)
+                const commission = parseFloat(row['佣金'] || row['L7D佣金'] || row['回传佣金'] || 0)
+                return cost > 0 || commission > 0
+              }).length
           return <Badge count={count} color={count > 0 ? '#1677ff' : '#d9d9d9'} />
         },
+      },
+      {
+        title: '详情',
+        key: 'detail',
+        width: 100,
+        render: (_, record) => (
+          <Button
+            type="primary"
+            size="small"
+            onClick={() => {
+              setDetailRecord(record)
+              setDetailModalOpen(true)
+            }}
+          >
+            查看详情
+          </Button>
+        ),
       },
       {
         title: '操作',
@@ -770,7 +910,7 @@ G) 综述
         ),
       },
     ],
-    [isManager]
+    [isManager, showEmptyCampaigns]
   )
 
   return (
@@ -1197,267 +1337,6 @@ G) 综述
                     showQuickJumper: false,
                     showTotal: (total) => `共 ${total} 条`
                   }}
-                  expandable={{
-                    expandedRowRender: (record) => {
-                      const rawData = record.result_data?.data || []
-                      if (!Array.isArray(rawData) || rawData.length === 0) return <Text type="secondary">暂无数据</Text>
-
-                      // 根据 showEmptyCampaigns 过滤双0数据（费用=0 且 佣金=0）
-                      const data = showEmptyCampaigns 
-                        ? rawData 
-                        : rawData.filter(row => {
-                            const cost = parseFloat(row['费用'] || row['费用($)'] || row['L7D花费'] || 0)
-                            const commission = parseFloat(row['佣金'] || row['L7D佣金'] || row['回传佣金'] || 0)
-                            return cost > 0 || commission > 0
-                          })
-                      
-                      if (data.length === 0) return <Text type="secondary">无符合条件的数据（可勾选"显示无数据的广告系列"查看全部）</Text>
-
-                      // 获取所有键，过滤掉不需要显示的列
-                      const allKeys = Object.keys(data[0])
-                      const keysToShow = allKeys.filter(key => !['ROI', '点击', '订单', 'ai_report', '部署数据', 'campaign_id'].includes(key))
-                      
-                      const dataColumns = keysToShow.map((key) => {
-                        const column = {
-                          title: key,
-                          dataIndex: key,
-                          key,
-                          ellipsis: true,
-                          render: (text) => {
-                            if (text === null || text === undefined || text === '') return '-'
-                            return <Tooltip title={String(text)}>{String(text)}</Tooltip>
-                          },
-                        }
-
-                        // 为"状态"列添加颜色渲染（健康/观察/暂停）
-                        if (key === '状态') {
-                          column.width = 80
-                          column.ellipsis = false
-                          column.render = (text) => {
-                            if (!text) return '-'
-                            const t = String(text)
-                            let color = 'default'
-                            if (t === '健康') color = 'green'
-                            else if (t === '观察') color = 'orange'
-                            else if (t === '暂停') color = 'red'
-                            return <Tag color={color}>{t}</Tag>
-                          }
-                        }
-
-                        // 为处理动作列添加特殊渲染
-                        if (key === '处理动作') {
-                          column.width = 110
-                          column.ellipsis = false
-                          column.render = (text) => {
-                            if (!text) return '-'
-                            const t = String(text)
-                            let color = 'default'
-                            if (t.includes('暂停')) color = 'red'
-                            else if (t.includes('加预算') || t.includes('增加')) color = 'green'
-                            else if (t.includes('维持') || t.includes('保持')) color = 'blue'
-                            return <Tag color={color}>{t}</Tag>
-                          }
-                        }
-
-                        // 为操作指令列添加特殊渲染 - 可点击查看AI报告（经理视图）
-                        if (key === '操作指令') {
-                          column.width = 320
-                          column.ellipsis = false
-                          column.render = (text, row) => {
-                            if (!text || text === '-') return '-'
-                            const t = String(text)
-                            let color = 'default'
-                            // 根据操作指令内容设置颜色（支持新格式：[关键词] $X.XX→$X.XX | 预算 $X.XX→$X.XX(+X%)）
-                            if (t.includes('暂停') || t.includes('关停') || t === 'PAUSE') {
-                              color = 'red'
-                            } else if (t.includes('样本不足')) {
-                              color = 'default'
-                            } else if (t === '维持' || t.includes('稳定运行')) {
-                              color = 'blue'
-                            } else if (t.includes('(+30%)') || t.includes('(+20%)') || t.includes('(+100%)')) {
-                              color = 'green'
-                            } else if (t.includes('→')) {
-                              color = 'cyan'
-                            }
-                            
-                            const hasDeployData = row['部署数据'] && 
-                              (row['部署数据'].action !== 'maintain' || 
-                               (row['部署数据'].keyword_suggestions && row['部署数据'].keyword_suggestions.length > 0) ||
-                               row['部署数据'].budget_suggestion)
-                            
-                            return (
-                              <Space size={4}>
-                                <Tooltip title={t.length > 30 ? t : '点击查看AI分析报告'}>
-                                  <Tag 
-                                    color={color} 
-                                    style={{ fontSize: '11px', cursor: 'pointer', maxWidth: '200px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}
-                                    onClick={(e) => {
-                                      e.stopPropagation()
-                                      handleViewCampaignReport(row, record.analysis_date)
-                                    }}
-                                  >
-                                    {t.length > 25 ? t.substring(0, 25) + '...' : t}
-                                  </Tag>
-                                </Tooltip>
-                                {hasDeployData && (
-                                  <Tooltip title="部署此广告系列">
-                                    <Button
-                                      type="primary"
-                                      size="small"
-                                      icon={<RocketOutlined />}
-                                      style={{ background: '#52c41a', borderColor: '#52c41a', fontSize: '11px', padding: '0 6px' }}
-                                      onClick={(e) => {
-                                        e.stopPropagation()
-                                        handleSingleDeploy(row)
-                                      }}
-                                    >
-                                      部署
-                                    </Button>
-                                  </Tooltip>
-                                )}
-                              </Space>
-                            )
-                          }
-                        }
-
-                        // 为阶段标签列添加特殊渲染（可点击跳转）
-                        if (key === '阶段标签') {
-                          column.width = 120
-                          column.ellipsis = false
-                          column.render = (text) => {
-                            if (!text) return '-'
-                            const t = String(text)
-                            let color = 'default'
-                            if (t.includes('K1') || t.includes('关停')) color = 'red'
-                            else if (t.includes('S1') || t.includes('成熟')) color = 'green'
-                            else if (t.includes('P1') || t.includes('候选')) color = 'cyan'
-                            else if (t.includes('T2') || t.includes('观察')) color = 'orange'
-                            else if (t.includes('T1') || t.includes('试水')) color = 'blue'
-                            return (
-                              <Tag 
-                                color={color}
-                                style={{ cursor: 'pointer' }}
-                                onClick={() => navigate(`/stage-label/${encodeURIComponent(t)}`)}
-                              >
-                                {t}
-                              </Tag>
-                            )
-                          }
-                        }
-
-                        // 为异常类型列添加特殊渲染（P0红色，P1黄色）
-                        if (key === '异常类型') {
-                          column.width = 120
-                          column.ellipsis = false
-                          column.render = (text) => {
-                            if (!text || text === '-' || text === null || text === undefined) return '-'
-                            const t = String(text).trim()
-                            if (!t) return '-'
-                            // 检查优先级：P0显示红色，P1显示黄色
-                            let color = 'default'
-                            if (t.startsWith('P0') || t.includes('P0-') || /^P0\s/.test(t)) {
-                              color = 'red'
-                            } else if (t.startsWith('P1') || t.includes('P1-') || /^P1\s/.test(t)) {
-                              color = 'gold'
-                            }
-                            return <Tag color={color} style={{ fontWeight: color !== 'default' ? 'bold' : 'normal' }}>{t}</Tag>
-                          }
-                        }
-
-                        // 将"表1状态"列名改为"谷歌状态"（兼容旧数据）
-                        if (key === '表1状态') {
-                          column.title = '谷歌状态'
-                        }
-
-                        // 动作相关列更宽 + tooltip
-                        if (['投放动作', '数据动作', '风控动作', '使用场景', '动作原因'].includes(key)) {
-                          column.width = 260
-                        }
-
-                        // 数值列格式化：默认保留两位小数（点击/订单保持整数）
-                        if (['保守ROI', '保守EPC', 'CPC', '费用', '费用($)', '佣金', '回传佣金', '回传佣金($)', '保守佣金', '保守佣金($)', '预算', '点击', '订单'].some(col => key.includes(col))) {
-                          column.align = 'right'
-                          column.render = (text) => {
-                            if (text === null || text === undefined || text === '') return '-'
-                            const num = Number(text)
-                            if (Number.isNaN(num)) return String(text)
-                            // 后端按"原始值"返回保守ROI（如 0.4838），这里不做 *100 或加% 等转换
-                            if (key.includes('ROI')) return num.toFixed(2)
-                            if (key.includes('点击') || key.includes('订单')) return num.toFixed(0)
-                            return num.toFixed(2)
-                          }
-                        }
-
-                        return column
-                      })
-
-              // U2: 移除"账号=CID"列
-              const cidIdx = dataColumns.findIndex((c) => c.key === '账号=CID')
-              if (cidIdx > -1) {
-                dataColumns.splice(cidIdx, 1)
-              }
-
-              // 将"广告系列名、阶段标签"置于前两列并冻结在左侧（兼容旧字段"广告系列"）
-              const pinnedLeft = ['广告系列名', '广告系列', '阶段标签']
-              const leftCols = []
-              for (const colName of pinnedLeft) {
-                const idx = dataColumns.findIndex((c) => c.key === colName)
-                if (idx > -1) {
-                  const col = dataColumns.splice(idx, 1)[0]
-                  col.fixed = 'left'
-                  // 合理列宽
-                  if (colName === '广告系列名' || colName === '广告系列') col.width = col.width || 260
-                  if (colName === '阶段标签') col.width = col.width || 120
-                  leftCols.push(col)
-                }
-              }
-              dataColumns.unshift(...leftCols)
-
-              // U1: 默认按"状态"和"费用"排序（健康→观察→暂停，费用降序）
-              const statusOrder = { '健康': 1, '观察': 2, '暂停': 3 }
-              const sortedData = [...data].sort((a, b) => {
-                const statusA = statusOrder[a['状态']] || 99
-                const statusB = statusOrder[b['状态']] || 99
-                if (statusA !== statusB) return statusA - statusB
-                return (parseFloat(b['费用'] || b['费用($)']) || 0) - (parseFloat(a['费用'] || a['费用($)']) || 0)
-              })
-
-              const dataWithKeys = sortedData.map((r, idx) => ({
-                ...r,
-                __rowKey: `${record.id}-${idx}`,
-              }))
-
-                      return (
-                        <div className="analysis-subtable">
-                  <Table
-                    columns={dataColumns}
-                    dataSource={dataWithKeys}
-                    rowKey="__rowKey"
-                    pagination={dataWithKeys.length > 100 ? { 
-                      pageSize: 50, 
-                      size: 'small', 
-                      hideOnSinglePage: false,
-                      showQuickJumper: true,
-                      showSizeChanger: true,
-                      pageSizeOptions: ['20', '50', '100'],
-                      showTotal: (total) => `共 ${total} 条`
-                    } : { 
-                      pageSize: 20, 
-                      size: 'small', 
-                      hideOnSinglePage: true,
-                      showQuickJumper: false,
-                      showSizeChanger: false
-                    }}
-                    size="small"
-                    bordered
-                    sticky
-                    scroll={{ x: 'max-content', y: 500 }}
-                    virtual={dataWithKeys.length > 200}
-                  />
-                        </div>
-                      )
-                    },
-                  }}
                 />
               ),
             }))
@@ -1487,338 +1366,6 @@ G) 综述
               showQuickJumper: false,
               showTotal: (total) => `共 ${total} 条`
             }}
-            expandable={{
-            expandedRowRender: (record) => {
-              const rawData = record.result_data?.data || []
-              if (!Array.isArray(rawData) || rawData.length === 0) return <Text type="secondary">暂无数据</Text>
-
-              // 根据 showEmptyCampaigns 过滤双0数据（费用=0 且 佣金=0）
-              const data = showEmptyCampaigns 
-                ? rawData 
-                : rawData.filter(row => {
-                    const cost = parseFloat(row['费用'] || row['费用($)'] || row['L7D花费'] || 0)
-                    const commission = parseFloat(row['佣金'] || row['L7D佣金'] || row['回传佣金'] || 0)
-                    return cost > 0 || commission > 0
-                  })
-              
-              if (data.length === 0) return <Text type="secondary">无符合条件的数据（可勾选"显示无数据的广告系列"查看全部）</Text>
-
-              // 获取所有键，过滤掉不需要显示的列
-              const allKeys = Object.keys(data[0])
-              const keysToShow = allKeys.filter(key => !['ROI', '点击', '订单', 'ai_report', '部署数据', 'campaign_id'].includes(key))
-
-              const dataColumns = keysToShow.map((key) => {
-                const column = {
-                  title: key,
-                  dataIndex: key,
-                  key,
-                  ellipsis: true,
-                  render: (text) => {
-                    if (text === null || text === undefined || text === '') return '-'
-                    return <Tooltip title={String(text)}>{String(text)}</Tooltip>
-                  },
-                }
-
-                // 为"状态"列添加颜色渲染（健康/观察/暂停）
-                if (key === '状态') {
-                  column.width = 80
-                  column.ellipsis = false
-                  column.render = (text) => {
-                    if (!text) return '-'
-                    const t = String(text)
-                    let color = 'default'
-                    if (t === '健康') color = 'green'
-                    else if (t === '观察') color = 'orange'
-                    else if (t === '暂停') color = 'red'
-                    return <Tag color={color}>{t}</Tag>
-                  }
-                }
-
-                // 为处理动作列添加特殊渲染
-                if (key === '处理动作') {
-                  column.width = 110
-                  column.ellipsis = false
-                  column.render = (text) => {
-                    if (!text) return '-'
-                    const t = String(text)
-                    let color = 'default'
-                    if (t.includes('暂停')) color = 'red'
-                    else if (t.includes('加预算') || t.includes('增加')) color = 'green'
-                    else if (t.includes('维持') || t.includes('保持')) color = 'blue'
-                    return <Tag color={color}>{t}</Tag>
-                  }
-                }
-
-                // 为操作指令列添加特殊渲染 - 可点击查看AI报告
-                if (key === '操作指令') {
-                  column.width = 320
-                  column.ellipsis = false
-                  column.render = (text, row) => {
-                    if (!text || text === '-') return '-'
-                    const t = String(text)
-                    let color = 'default'
-                    // 根据操作指令内容设置颜色（支持新格式：[关键词] $X.XX→$X.XX | 预算 $X.XX→$X.XX(+X%)）
-                    if (t.includes('暂停') || t.includes('关停') || t === 'PAUSE') {
-                      color = 'red'
-                    } else if (t.includes('样本不足')) {
-                      color = 'default'
-                    } else if (t === '维持' || t.includes('稳定运行')) {
-                      color = 'blue'
-                    } else if (t.includes('(+30%)') || t.includes('(+20%)') || t.includes('(+100%)')) {
-                      color = 'green'
-                    } else if (t.includes('→')) {
-                      color = 'cyan'
-                    }
-                    
-                    const hasDeployData = row['部署数据'] && 
-                      (row['部署数据'].action !== 'maintain' || 
-                       (row['部署数据'].keyword_suggestions && row['部署数据'].keyword_suggestions.length > 0) ||
-                       row['部署数据'].budget_suggestion)
-                    
-                    return (
-                      <Space size={4}>
-                        <Tooltip title={t.length > 30 ? t : '点击查看AI分析报告'}>
-                          <Tag 
-                            color={color} 
-                            style={{ fontSize: '11px', cursor: 'pointer', maxWidth: '200px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}
-                            onClick={(e) => {
-                              e.stopPropagation()
-                              handleViewCampaignReport(row, record.analysis_date)
-                            }}
-                          >
-                            {t.length > 25 ? t.substring(0, 25) + '...' : t}
-                          </Tag>
-                        </Tooltip>
-                        {hasDeployData && (
-                          <Tooltip title="部署此广告系列">
-                            <Button
-                              type="primary"
-                              size="small"
-                              icon={<RocketOutlined />}
-                              style={{ background: '#52c41a', borderColor: '#52c41a', fontSize: '11px', padding: '0 6px' }}
-                              onClick={(e) => {
-                                e.stopPropagation()
-                                handleSingleDeploy(row)
-                              }}
-                            >
-                              部署
-                            </Button>
-                          </Tooltip>
-                        )}
-                      </Space>
-                    )
-                  }
-                }
-                
-                // U3: 为当前Max CPC列添加出价策略显示和操作按钮，并用颜色突出显示
-                if (key === '当前Max CPC') {
-                  column.width = 180
-                  column.render = (text, row) => {
-                    const campaignId = row['campaign_id']
-                    const strategy = campaignId ? bidStrategies[campaignId] : null
-                    const isManual = strategy?.is_manual_cpc
-                    const isLoading = changingToManual[campaignId]
-                    const cpcValue = parseFloat(text) || 0
-                    
-                    // U3: 根据CPC值设置颜色（高CPC红色、中等橙色、低绿色）
-                    let cpcColor = '#52c41a' // 绿色：低CPC
-                    let cpcBg = '#f6ffed'
-                    if (cpcValue >= 1.0) {
-                      cpcColor = '#f5222d' // 红色：高CPC
-                      cpcBg = '#fff1f0'
-                    } else if (cpcValue >= 0.5) {
-                      cpcColor = '#fa8c16' // 橙色：中等CPC
-                      cpcBg = '#fff7e6'
-                    }
-                    
-                    return (
-                      <Space size={4} direction="vertical" style={{ width: '100%' }}>
-                        <Text strong style={{ color: cpcColor, backgroundColor: cpcBg, padding: '2px 8px', borderRadius: 4, fontSize: 13 }}>${cpcValue.toFixed(2)}</Text>
-                        {strategy ? (
-                          isManual ? (
-                            <Tag color="green" style={{ fontSize: 11 }}>人工出价</Tag>
-                          ) : (
-                            <Popconfirm
-                              title="确认切换为人工CPC出价？"
-                              description="切换后需手动设置每个关键词的出价"
-                              onConfirm={() => handleChangeToManualCpc(row)}
-                              okText="确认"
-                              cancelText="取消"
-                            >
-                              <Button 
-                                size="small" 
-                                type="primary" 
-                                danger
-                                loading={isLoading}
-                                icon={<ThunderboltOutlined />}
-                                style={{ fontSize: 11, padding: '0 6px', height: 22 }}
-                              >
-                                改人工
-                              </Button>
-                            </Popconfirm>
-                          )
-                        ) : (
-                          <Tag color="default" style={{ fontSize: 10 }}>-</Tag>
-                        )}
-                      </Space>
-                    )
-                  }
-                }
-
-                // 为阶段标签列添加特殊渲染（可点击跳转）
-                if (key === '阶段标签') {
-                  column.width = 120
-                  column.ellipsis = false
-                  column.render = (text) => {
-                    if (!text) return '-'
-                    const t = String(text)
-                    let color = 'default'
-                    if (t.includes('K1') || t.includes('关停')) color = 'red'
-                    else if (t.includes('S1') || t.includes('成熟')) color = 'green'
-                    else if (t.includes('P1') || t.includes('候选')) color = 'cyan'
-                    else if (t.includes('T2') || t.includes('观察')) color = 'orange'
-                    else if (t.includes('T1') || t.includes('试水')) color = 'blue'
-                    return (
-                      <Tag 
-                        color={color}
-                        style={{ cursor: 'pointer' }}
-                        onClick={() => navigate(`/stage-label/${encodeURIComponent(t)}`)}
-                      >
-                        {t}
-                      </Tag>
-                    )
-                  }
-                }
-
-                // 为异常类型列添加特殊渲染（P0红色，P1黄色）
-                if (key === '异常类型') {
-                  column.width = 120
-                  column.ellipsis = false
-                  column.render = (text) => {
-                    if (!text || text === '-' || text === null || text === undefined) return '-'
-                    const t = String(text).trim()
-                    if (!t) return '-'
-                    // 检查优先级：P0显示红色，P1显示黄色
-                    let color = 'default'
-                    if (t.startsWith('P0') || t.includes('P0-') || /^P0\s/.test(t)) {
-                      color = 'red'
-                    } else if (t.startsWith('P1') || t.includes('P1-') || /^P1\s/.test(t)) {
-                      color = 'gold'
-                    }
-                    return <Tag color={color} style={{ fontWeight: color !== 'default' ? 'bold' : 'normal' }}>{t}</Tag>
-                  }
-                }
-
-                // 将"表1状态"列名改为"谷歌状态"（兼容旧数据）
-                if (key === '表1状态') {
-                  column.title = '谷歌状态'
-                }
-
-                // U3: 为当前Max CPC列添加醒目的颜色显示
-                if (key === '当前Max CPC') {
-                  column.width = 120
-                  column.align = 'right'
-                  column.render = (text) => {
-                    const cpcValue = parseFloat(text) || 0
-                    let cpcColor = '#52c41a' // 绿色：低CPC
-                    let cpcBg = '#f6ffed'
-                    if (cpcValue >= 1.0) {
-                      cpcColor = '#f5222d' // 红色：高CPC
-                      cpcBg = '#fff1f0'
-                    } else if (cpcValue >= 0.5) {
-                      cpcColor = '#fa8c16' // 橙色：中等CPC
-                      cpcBg = '#fff7e6'
-                    }
-                    return (
-                      <span style={{ color: cpcColor, backgroundColor: cpcBg, padding: '2px 8px', borderRadius: 4, fontWeight: 'bold' }}>
-                        ${cpcValue.toFixed(2)}
-                      </span>
-                    )
-                  }
-                }
-
-                // 动作相关列更宽 + tooltip
-                if (['投放动作', '数据动作', '风控动作', '使用场景', '动作原因'].includes(key)) {
-                  column.width = 260
-                }
-
-                // 数值列格式化：默认保留两位小数（点击/订单保持整数）
-                if (['保守ROI', '保守EPC', 'CPC', '费用', '费用($)', '佣金', '回传佣金', '回传佣金($)', '保守佣金', '保守佣金($)', '预算', '点击', '订单'].some(col => key.includes(col))) {
-                  column.align = 'right'
-                  column.render = (text) => {
-                    if (text === null || text === undefined || text === '') return '-'
-                    const num = Number(text)
-                    if (Number.isNaN(num)) return String(text)
-                    // 后端按“原始值”返回保守ROI（如 0.4838），这里不做 *100 或加% 等转换
-                    if (key.includes('ROI')) return num.toFixed(2)
-                    if (key.includes('点击') || key.includes('订单')) return num.toFixed(0)
-                    return num.toFixed(2)
-                  }
-                }
-
-                return column
-              })
-
-              // 将“账号=CID、广告系列名、阶段标签”置于前三列并冻结在左侧（兼容旧字段“广告系列”）
-              // U2: 将"账号=CID"重命名为"CID"，更清晰
-              const cidIdx2 = dataColumns.findIndex((c) => c.key === '账号=CID')
-              if (cidIdx2 > -1) {
-                dataColumns.splice(cidIdx2, 1)
-              }
-
-              // 将"广告系列名、阶段标签"置于前两列并冻结在左侧
-              const pinnedLeft2 = ['广告系列名', '广告系列', '阶段标签']
-              const leftCols2 = []
-              for (const colName of pinnedLeft2) {
-                const idx = dataColumns.findIndex((c) => c.key === colName)
-                if (idx > -1) {
-                  const col = dataColumns.splice(idx, 1)[0]
-                  col.fixed = 'left'
-                  // 合理列宽
-                  if (colName === '广告系列名' || colName === '广告系列') col.width = col.width || 260
-                  if (colName === '阶段标签') col.width = col.width || 120
-                  leftCols2.push(col)
-                }
-              }
-              dataColumns.unshift(...leftCols2)
-
-              // U1: 默认按"状态"和"费用"排序（健康→观察→暂停，费用降序）
-              const statusOrder2 = { '健康': 1, '观察': 2, '暂停': 3 }
-              const sortedData2 = [...data].sort((a, b) => {
-                const statusA = statusOrder2[a['状态']] || 99
-                const statusB = statusOrder2[b['状态']] || 99
-                if (statusA !== statusB) return statusA - statusB
-                return (parseFloat(b['费用'] || b['费用($)']) || 0) - (parseFloat(a['费用'] || a['费用($)']) || 0)
-              })
-
-              const dataWithKeys = sortedData2.map((r, idx) => ({
-                ...r,
-                __rowKey: `${record.id}-${idx}`,
-              }))
-
-              return (
-                <div className="analysis-subtable">
-                  <Table
-                    columns={dataColumns}
-                    dataSource={dataWithKeys}
-                    rowKey="__rowKey"
-                    pagination={{ 
-                      pageSize: 20, 
-                      size: 'small', 
-                      hideOnSinglePage: true,
-                      showQuickJumper: false,
-                      showSizeChanger: false
-                    }}
-                    size="small"
-                    bordered
-                    sticky
-                    scroll={{ x: 'max-content', y: 420 }}
-                    virtual={false}
-                  />
-                </div>
-              )
-            },
-          }}
         />
         )}
       </Card>
@@ -1840,6 +1387,43 @@ G) 综述
           fetchResults()
         }}
       />
+
+      {/* 详情弹窗 */}
+      <Modal
+        title={detailRecord ? `${detailRecord.username || user?.username || ''} - ${String(detailRecord.analysis_date || '').slice(0, 10)}（${processDetailData(detailRecord).length}条）` : '详情'}
+        open={detailModalOpen}
+        onCancel={() => { setDetailModalOpen(false); setDetailRecord(null) }}
+        footer={null}
+        width="90vw"
+        destroyOnClose
+      >
+        {detailRecord && (() => {
+          const detailData = processDetailData(detailRecord)
+          if (detailData.length === 0) return <Text type="secondary">暂无数据</Text>
+          const detailCols = buildDetailColumns(detailRecord.analysis_date)
+          return (
+            <Table
+              columns={detailCols}
+              dataSource={detailData}
+              rowKey="__rowKey"
+              size="small"
+              bordered
+              scroll={{ y: 600 }}
+              pagination={detailData.length > 50 ? {
+                pageSize: 50,
+                size: 'small',
+                showTotal: (total) => `共 ${total} 条`,
+                showSizeChanger: true,
+                pageSizeOptions: ['20', '50', '100'],
+              } : {
+                pageSize: 50,
+                size: 'small',
+                hideOnSinglePage: true,
+              }}
+            />
+          )
+        })()}
+      </Modal>
     </div>
   )
 }
