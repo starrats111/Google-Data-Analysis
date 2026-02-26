@@ -22,23 +22,6 @@ from app.services.api_only_analysis_service import ApiOnlyAnalysisService
 router = APIRouter(prefix="/api/analysis", tags=["analysis"])
 
 
-@router.post("/process")
-async def process_analysis(
-    request: AnalysisRequest,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    """
-    触发数据分析（已废弃 - 手动上传功能）
-    
-    此端点已废弃，请使用 /api/analysis/generate 从API数据生成分析结果
-    """
-    raise HTTPException(
-        status_code=410,
-        detail="此端点已废弃。请使用 /api/analysis/generate 从API数据生成分析结果"
-    )
-
-
 @router.post("/generate")
 async def generate_analysis_from_api(
     begin_date: str = Query(..., description="开始日期 YYYY-MM-DD"),

@@ -2,13 +2,14 @@
 Rewardoo TransactionDetails API 测试脚本
 根据官方API文档测试数据获取功能
 """
+import os
 import requests
 import json
 from datetime import datetime, timedelta
 
 # API配置
 API_URL = "https://admin.rewardoo.com/api.php?mod=medium&op=transaction_details"
-TOKEN = "41df7906743fceacaa16ca25abfa1ce4"  # 测试Token
+TOKEN = os.environ.get("REWARDOO_TOKEN", "")  # 从环境变量读取
 
 def test_transaction_details_api():
     """测试TransactionDetails API"""

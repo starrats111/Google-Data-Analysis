@@ -47,7 +47,6 @@ from app.api import (
     gemini,
     google_ads_aggregate,
     google_ads_data,
-    google_oauth,
     linkhaitao,
     mcc,
     platform_data,
@@ -137,74 +136,26 @@ async def security_headers_middleware(request: Request, call_next):
     return response
 
 
-# 辅助函数：获取CORS头（必须在CORS配置之后定义）
-def get_cors_headers(origin: str = None) -> dict:
-    """获取CORS响应头
-    
-    安全改进: 根据请求来源动态返回对应的 Origin，而不是 "*"
-    这样可以配合 allow_credentials=True 使用
-    """
+# 辅助函数：获取CORS头（用于异常处理器，确保错误响应也包含CORS头）
+def _get_cors_headers(origin: str = None) -> dict:
+    """为异常响应生成 CORS 头（CORSMiddleware 不覆盖异常响应）"""
     import re
-    
-    # 默认不允许
+
     allowed_origin = None
-    
     if origin:
-        # 检查是否在白名单中
         if origin in ALLOWED_ORIGINS:
             allowed_origin = origin
-        # 检查是否匹配正则表达式
         elif re.match(ALLOWED_ORIGIN_REGEX, origin):
             allowed_origin = origin
-    
+
     headers = {
         "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS, PATCH, HEAD",
         "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Requested-With, Accept, Origin",
-        "Access-Control-Expose-Headers": "Content-Disposition, X-Request-Id",
-        "Access-Control-Max-Age": "3600",
         "Access-Control-Allow-Credentials": "true",
     }
-    
     if allowed_origin:
         headers["Access-Control-Allow-Origin"] = allowed_origin
-    
     return headers
-
-
-# 添加请求日志中间件（用于调试CORS问题）
-# 注意：中间件按添加顺序的逆序执行，所以这个中间件会在CORS中间件之后执行
-@app.middleware("http")
-async def cors_logging_middleware(request: Request, call_next):
-    """记录CORS相关信息，用于调试"""
-    import logging
-    logger = logging.getLogger(__name__)
-    
-    origin = request.headers.get("origin")
-    method = request.method
-    path = request.url.path
-    
-    # 记录请求信息（仅记录带Origin的请求）
-    if origin:
-        logger.info(f"[CORS请求] {method} {path}, Origin: {origin}")
-    
-    # 处理请求
-    response = await call_next(request)
-    
-    # 确保所有响应都包含CORS头（即使CORS中间件已经添加，这里作为双重保险）
-    if "Access-Control-Allow-Origin" not in response.headers:
-        cors_headers = get_cors_headers(origin)
-        for key, value in cors_headers.items():
-            response.headers[key] = value
-        logger.warning(f"[CORS修复] {method} {path} 响应缺少CORS头，已添加")
-    
-    # 检查响应头
-    cors_header = response.headers.get("Access-Control-Allow-Origin")
-    if origin and not cors_header:
-        logger.warning(f"[CORS警告] {method} {path} 响应缺少CORS头, Origin: {origin}")
-    elif origin and cors_header:
-        logger.debug(f"[CORS成功] {method} {path}, CORS头: {cors_header}")
-    
-    return response
 
 
 # 全局异常处理器 - 确保所有错误响应都包含CORS头
@@ -214,7 +165,7 @@ async def global_exception_handler(request: Request, exc: Exception):
     import traceback as tb
     
     origin = request.headers.get("origin")
-    headers = get_cors_headers(origin)
+    headers = _get_cors_headers(origin)
     
     _logger = logging.getLogger(__name__)
     _logger.error(f"Unhandled exception on {request.method} {request.url.path}: {exc}", exc_info=True)
@@ -238,7 +189,7 @@ async def global_exception_handler(request: Request, exc: Exception):
 async def http_exception_handler(request: Request, exc: StarletteHTTPException):
     """HTTP异常处理器，确保包含CORS头"""
     origin = request.headers.get("origin")
-    headers = get_cors_headers(origin)
+    headers = _get_cors_headers(origin)
     
     return JSONResponse(
         status_code=exc.status_code,
@@ -250,7 +201,7 @@ async def http_exception_handler(request: Request, exc: StarletteHTTPException):
 async def fastapi_http_exception_handler(request: Request, exc: HTTPException):
     """FastAPI HTTPException处理器，确保包含CORS头"""
     origin = request.headers.get("origin")
-    headers = get_cors_headers(origin)
+    headers = _get_cors_headers(origin)
     
     return JSONResponse(
         status_code=exc.status_code,
@@ -263,7 +214,7 @@ async def fastapi_http_exception_handler(request: Request, exc: HTTPException):
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
     """请求验证异常处理器，确保包含CORS头"""
     origin = request.headers.get("origin")
-    headers = get_cors_headers(origin)
+    headers = _get_cors_headers(origin)
     
     return JSONResponse(
         status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -272,21 +223,6 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
     )
 
 
-# 全局OPTIONS处理器 - 确保所有OPTIONS请求都返回CORS头
-# 注意：FastAPI的CORS中间件应该自动处理OPTIONS，但为了确保，我们显式添加
-@app.options("/{full_path:path}")
-async def options_handler(request: Request, full_path: str):
-    """处理所有OPTIONS请求，返回CORS头（快速响应，避免超时）"""
-    # 快速生成CORS头，不进行日志记录（避免性能问题）
-    origin = request.headers.get("origin")
-    headers = get_cors_headers(origin)
-    
-    # 使用与 CORSMiddleware 一致的配置，不用 "*"（与 credentials 冲突）
-    headers["Access-Control-Allow-Headers"] = "Authorization, Content-Type, X-Requested-With, Accept, Origin"
-    headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS, PATCH, HEAD"
-    
-    # 直接返回响应，不记录日志（提高性能）
-    return JSONResponse(content={}, headers=headers, status_code=200)
 
 # API routes
 app.include_router(auth.router)
@@ -305,7 +241,6 @@ app.include_router(mcc.router)
 app.include_router(platform_data.router)
 app.include_router(google_ads_data.router)
 app.include_router(google_ads_aggregate.router)
-app.include_router(google_oauth.router)
 app.include_router(stage_label.router)
 app.include_router(gemini.router)
 app.include_router(users.router)
@@ -328,26 +263,10 @@ app.include_router(luchu_images.router)
 
 
 @app.get("/health")
-async def health(request: Request):
-    """健康检查端点，确保包含CORS头"""
-    try:
-        origin = request.headers.get("origin")
-        headers = get_cors_headers(origin)
-        return JSONResponse(content={"status": "ok"}, headers=headers)
-    except Exception as e:
-        # 出错时也使用安全的 CORS 头（不用 "*"，与 credentials 冲突）
-        origin = request.headers.get("origin")
-        headers = get_cors_headers(origin) if origin else {}
-        headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS"
-        headers["Access-Control-Allow-Headers"] = "Authorization, Content-Type"
-        return JSONResponse(
-            content={"status": "error", "message": str(e)},
-            headers=headers,
-            status_code=500
-        )
+async def health():
+    """健康检查端点"""
+    return {"status": "ok"}
 
-
-# OPTIONS请求由CORS中间件自动处理，不需要手动处理
 
 
 @app.get("/")
@@ -374,9 +293,8 @@ if _dist_dir:
         # 确保API路由不被拦截
         if full_path.startswith("api/"):
             # 让API路由处理，返回404
-            # 复用全局 ALLOWED_ORIGINS 和正则，避免重复定义
             origin = request.headers.get("origin")
-            headers = get_cors_headers(origin)
+            headers = _get_cors_headers(origin)
             
             return JSONResponse(
                 status_code=404,

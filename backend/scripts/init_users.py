@@ -18,21 +18,21 @@ def init_users():
     
     try:
         # 创建或更新经理账户
-        manager = db.query(User).filter(User.username == "wenjun123").first()
+        manager = db.query(User).filter(User.username == "manager").first()
         if manager:
             # 更新现有经理密码
             manager.password_hash = get_password_hash("wj123456")
-            print("更新经理账户密码：wenjun123")
+            print("更新经理账户密码：manager")
         else:
             # 创建新经理账户
             manager = User(
-                username="wenjun123",
+                username="manager",
                 password_hash=get_password_hash("wj123456"),
                 role=UserRole.MANAGER,
                 employee_id=None
             )
             db.add(manager)
-            print("创建经理账户：wenjun123 / wj123456")
+            print("创建经理账户：manager")
         
         # 创建或更新10个员工账户
         for i in range(1, 11):

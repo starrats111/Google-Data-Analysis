@@ -12,7 +12,7 @@ import json
 BASE_URL = "http://localhost:8000"
 USERNAME = "wj08"
 PASSWORD = "wj123456"
-MANAGER_USERNAME = "wenjun123"
+MANAGER_USERNAME = "manager"
 MANAGER_PASSWORD = "wj123456"
 
 def get_token(username: str, password: str) -> str:

@@ -129,11 +129,6 @@ class Settings(BaseSettings):
     # 含义：1 USD = CNY_TO_USD_RATE CNY，因此 CNY -> USD 需要除以该值
     CNY_TO_USD_RATE: float = 7.2
 
-    # ===== AI 点评（可选）=====
-    # 若不配置 OPENAI_API_KEY，则系统自动使用规则版点评（不影响功能）
-    OPENAI_API_KEY: str = ""
-    OPENAI_MODEL: str = "gpt-4o-mini"
-    
     # ===== Gemini AI 配置（哈基米中转）=====
     # 哈基米API站: https://api.gemai.cc
     gemini_api_key: str = ""
@@ -155,8 +150,9 @@ class Settings(BaseSettings):
     # ===== GitHub 配置（露出功能发布）=====
     GITHUB_TOKEN: str = ""
     GITHUB_OWNER: str = "starrats111"
-    
-    OPENAI_BASE_URL: str = "https://api.openai.com/v1"
+
+    # ===== 以下配置已废弃（DES-4），保留空值兼容旧 .env =====
+    # OpenAI 已不再使用，系统使用 Gemini/Claude
     
     if SettingsConfigDict is not None:
         # Pydantic v2

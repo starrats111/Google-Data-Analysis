@@ -31,19 +31,19 @@ def update_users():
                 print(f"删除旧员工账户：employee{i}")
         
         # 确保新经理账户存在且密码正确
-        manager = db.query(User).filter(User.username == "wenjun123").first()
+        manager = db.query(User).filter(User.username == "manager").first()
         if manager:
             manager.password_hash = get_password_hash("wj123456")
-            print("更新经理账户密码：wenjun123")
+            print("更新经理账户密码：manager")
         else:
             manager = User(
-                username="wenjun123",
+                username="manager",
                 password_hash=get_password_hash("wj123456"),
                 role=UserRole.MANAGER,
                 employee_id=None
             )
             db.add(manager)
-            print("创建经理账户：wenjun123")
+            print("创建经理账户：manager")
         
         # 确保新员工账户存在且密码正确
         for i in range(1, 11):

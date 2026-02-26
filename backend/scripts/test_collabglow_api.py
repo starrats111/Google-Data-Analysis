@@ -4,6 +4,7 @@ CollabGlow API 测试脚本
 用于测试佣金验证 API 并提取订单和佣金数据
 """
 
+import os
 import requests
 import json
 from datetime import datetime, timedelta
@@ -12,7 +13,7 @@ from typing import Dict, List, Optional
 # API 配置
 API_URL = "https://api.collabglow.com/api/commission_validation"
 SOURCE = "collabglow"
-TOKEN = "916a0dbbfe6c3e7fb19fb5ee119b82a2"  # 请替换为你的实际 token
+TOKEN = os.environ.get("COLLABGLOW_TOKEN", "")  # 从环境变量读取
 
 
 def test_commission_validation(begin_date: str, end_date: str) -> Optional[Dict]:

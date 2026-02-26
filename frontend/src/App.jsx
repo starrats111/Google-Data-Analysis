@@ -19,7 +19,6 @@ const DataCenter = lazyWithRetry(() => import('./pages/DataCenter'))
 const ExpenseCostDetail = lazyWithRetry(() => import('./pages/ExpenseCostDetail'))
 const MyAnalysis = lazyWithRetry(() => import('./pages/MyAnalysis'))
 const StageLabelDetail = lazyWithRetry(() => import('./pages/StageLabelDetail'))
-const GoogleOAuthCallback = lazyWithRetry(() => import('./pages/GoogleOAuthCallback'))
 const RejectionDetails = lazyWithRetry(() => import('./pages/RejectionDetails'))
 const AdCopyGenerator = lazyWithRetry(() => import('./pages/AdCopyGenerator'))
 const MyReports = lazyWithRetry(() => import('./pages/MyReports'))
@@ -71,7 +70,6 @@ function App() {
         <Suspense fallback={<PageLoading tip="页面加载中..." />}>
           <Routes>
             <Route path="/login" element={<Login />} />
-            <Route path="/google-oauth-callback" element={<GoogleOAuthCallback />} />
             <Route
               path="/"
               element={

@@ -1091,18 +1091,42 @@ class GoogleAdsServiceAccountSync:
                 except Exception as e:
                     error_str = str(e)
                     
-                    # 检查是否是配额限制
+                    # 检查是否是配额限制 — ARCH-4: 指数退避重试
                     if self._is_quota_error(error_str):
-                        logger.error(f"客户账号 {customer_id} 遇到配额限制")
-                        # 返回部分结果
-                        if all_campaigns:
-                            break
-                        else:
-                            return {
-                                "success": False,
-                                "message": "API配额已用完，请稍后重试",
-                                "quota_exhausted": True
-                            }
+                        retry_delays = [60, 300, 900]  # 1分钟, 5分钟, 15分钟
+                        retried = False
+                        for attempt, delay in enumerate(retry_delays, 1):
+                            logger.warning(
+                                f"客户账号 {customer_id} 配额限制，"
+                                f"第 {attempt}/{len(retry_delays)} 次退避，等待 {delay}s"
+                            )
+                            time.sleep(delay)
+                            try:
+                                campaigns = self.fetch_campaign_data(
+                                    client, customer_id, target_date,
+                                    mcc_account.mcc_id
+                                )
+                                all_campaigns.extend(campaigns)
+                                retried = True
+                                logger.info(
+                                    f"客户账号 {customer_id} 退避重试成功（第 {attempt} 次）"
+                                )
+                                break
+                            except Exception as retry_e:
+                                if not self._is_quota_error(str(retry_e)):
+                                    logger.error(f"退避重试遇到非配额错误: {retry_e}")
+                                    break
+                        if not retried:
+                            logger.error(f"客户账号 {customer_id} 配额限制，退避重试全部失败")
+                            if all_campaigns:
+                                break
+                            else:
+                                return {
+                                    "success": False,
+                                    "message": "API配额已用完，退避重试后仍失败",
+                                    "quota_exhausted": True
+                                }
+                        continue
                     
                     # 检查是否是账号未启用
                     if self._is_customer_not_enabled(error_str):

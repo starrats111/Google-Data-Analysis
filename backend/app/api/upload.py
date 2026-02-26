@@ -78,14 +78,13 @@ def _sanitize_filename(name: str) -> str:
 
 
 def save_upload_file(file: UploadFile, user_id: int, upload_type: str) -> str:
-    """保存上传的文件"""
+    """保存上传的文件（使用 uuid 重命名，防止路径遍历）"""
+    import uuid
     upload_dir = Path(settings.UPLOAD_FOLDER) / str(user_id) / upload_type
     upload_dir.mkdir(parents=True, exist_ok=True)
     
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    safe_name = _sanitize_filename(file.filename)
-    file_extension = Path(safe_name).suffix
-    filename = f"{timestamp}_{safe_name}"
+    file_extension = Path(file.filename or "upload").suffix.lower()
+    filename = f"{uuid.uuid4().hex}{file_extension}"
     file_path = upload_dir / filename
     
     with open(file_path, "wb") as buffer:
@@ -348,37 +347,4 @@ async def get_upload(
         raise HTTPException(status_code=403, detail="无权访问此记录")
     
     return upload
-async def get_upload_columns(
-    upload_id: int,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    """获取上传文件的列名（用于调试）"""
-    upload = db.query(DataUpload).filter(DataUpload.id == upload_id).first()
-    if not upload:
-        raise HTTPException(status_code=404, detail="上传记录不存在")
-    
-    # 权限控制
-    if current_user.role in ("employee", "member", "leader") and upload.user_id != current_user.id:
-        raise HTTPException(status_code=403, detail="无权访问此记录")
-    
-    try:
-        from app.services.analysis_service import AnalysisService
-        service = AnalysisService()
-        df = service._read_file(upload.file_path)
-        
-        return {
-            "upload_id": upload_id,
-            "file_name": upload.file_name,
-            "upload_type": upload.upload_type,
-            "columns": df.columns.tolist(),
-            "column_count": len(df.columns),
-            "row_count": len(df),
-            "sample_data": df.head(3).to_dict('records') if not df.empty else []
-        }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"读取文件失败: {str(e)}")
-
-
-
 
