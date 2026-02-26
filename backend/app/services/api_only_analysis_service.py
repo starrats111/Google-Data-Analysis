@@ -100,8 +100,10 @@ class ApiOnlyAnalysisService:
                         "total_impressions": 0,
                         "total_clicks": 0,
                         "max_cpc": 0,
-                        "is_budget_lost": 0,
-                        "is_rank_lost": 0,
+                        "is_budget_lost_wsum": 0,   # Σ(is_budget_lost × impressions)
+                        "is_rank_lost_wsum": 0,     # Σ(is_rank_lost × impressions)
+                        "is_imp_budget": 0,          # 参与budget加权的展示次数
+                        "is_imp_rank": 0,            # 参与rank加权的展示次数
                         "user_id": data.user_id,
                     }
                 
@@ -114,14 +116,13 @@ class ApiOnlyAnalysisService:
                     campaigns_data[campaign_id]["max_cpc"],
                     data.cpc or 0
                 )
-                campaigns_data[campaign_id]["is_budget_lost"] = max(
-                    campaigns_data[campaign_id]["is_budget_lost"],
-                    data.is_budget_lost or 0
-                )
-                campaigns_data[campaign_id]["is_rank_lost"] = max(
-                    campaigns_data[campaign_id]["is_rank_lost"],
-                    data.is_rank_lost or 0
-                )
+                day_imp = data.impressions or 0
+                if data.is_budget_lost is not None:
+                    campaigns_data[campaign_id]["is_budget_lost_wsum"] += data.is_budget_lost * day_imp
+                    campaigns_data[campaign_id]["is_imp_budget"] += day_imp
+                if data.is_rank_lost is not None:
+                    campaigns_data[campaign_id]["is_rank_lost_wsum"] += data.is_rank_lost * day_imp
+                    campaigns_data[campaign_id]["is_imp_rank"] += day_imp
             
             # 3. 获取平台数据
             platform_data_query = self.db.query(PlatformData).filter(
@@ -225,9 +226,14 @@ class ApiOnlyAnalysisService:
                 
                 # 生成操作指令（带具体数值）
                 budget = campaign_data["total_budget"]
+                # 计算展示次数加权平均 IS 丢失
+                imp_b = campaign_data["is_imp_budget"]
+                imp_r = campaign_data["is_imp_rank"]
+                is_budget_lost = (campaign_data["is_budget_lost_wsum"] / imp_b) if imp_b > 0 else 0
+                is_rank_lost = (campaign_data["is_rank_lost_wsum"] / imp_r) if imp_r > 0 else 0
                 operation_instruction = self._generate_operation_instruction(
                     cost, clicks, commission, orders,
-                    campaign_data["is_budget_lost"], campaign_data["is_rank_lost"],
+                    is_budget_lost, is_rank_lost,
                     order_days_count, cpc, budget, conservative_roi
                 )
                 
@@ -248,8 +254,8 @@ class ApiOnlyAnalysisService:
                     "点击": int(clicks),
                     "CPC": round(cpc, 4),
                     "最高CPC": round(campaign_data["max_cpc"], 4),
-                    "IS Budget丢失": round(campaign_data["is_budget_lost"] * 100, 2) if campaign_data["is_budget_lost"] else None,
-                    "IS Rank丢失": round(campaign_data["is_rank_lost"] * 100, 2) if campaign_data["is_rank_lost"] else None,
+                    "IS Budget丢失": round(is_budget_lost * 100, 2) if imp_b > 0 else None,
+                    "IS Rank丢失": round(is_rank_lost * 100, 2) if imp_r > 0 else None,
                     "谷歌状态": campaign_data["status"],
                     
                     # 平台数据指标
