@@ -708,8 +708,11 @@ class ApiAnalysisService:
                         "total_clicks": 0,
                         "max_cpc": 0.0,
                         "max_budget": 0.0,  # 预算
-                        "is_budget_lost": 0.0,
-                        "is_rank_lost": 0.0,
+                        "is_budget_lost_wsum": 0.0,   # Σ(bl × weight)
+                        "is_rank_lost_wsum": 0.0,     # Σ(rl × weight)
+                        "eligible_imp_budget": 0.0,   # Σ(weight) for budget
+                        "eligible_imp_rank": 0.0,     # Σ(weight) for rank
+                        "has_all_sis": True,           # 7天是否全部有精确 search_impression_share
                     }
                 # 记录有数据的日期
                 campaign_data[key]["data_dates"].add(data.date)
@@ -718,8 +721,24 @@ class ApiAnalysisService:
                 campaign_data[key]["total_clicks"] += int(data.clicks or 0)
                 campaign_data[key]["max_cpc"] = max(campaign_data[key]["max_cpc"], convert_to_usd(data.cpc or 0, mcc_currency))
                 campaign_data[key]["max_budget"] = max(campaign_data[key]["max_budget"], convert_to_usd(data.budget or 0, mcc_currency))
-                campaign_data[key]["is_budget_lost"] = max(campaign_data[key]["is_budget_lost"], (data.is_budget_lost or 0))
-                campaign_data[key]["is_rank_lost"] = max(campaign_data[key]["is_rank_lost"], (data.is_rank_lost or 0))
+                # IS 加权累加（Phase 1: impressions 做权重; Phase 2: eligible_impressions 做权重）
+                day_imp = data.impressions or 0
+                bl = data.is_budget_lost or 0
+                rl = data.is_rank_lost or 0
+                sis = getattr(data, 'search_impression_share', None)
+
+                if sis and sis > 0:
+                    weight = day_imp / sis  # Phase 2: 精确 eligible_impressions
+                else:
+                    weight = day_imp        # Phase 1: 用 impressions 近似
+                    campaign_data[key]["has_all_sis"] = False
+
+                if data.is_budget_lost is not None and weight > 0:
+                    campaign_data[key]["is_budget_lost_wsum"] += bl * weight
+                    campaign_data[key]["eligible_imp_budget"] += weight
+                if data.is_rank_lost is not None and weight > 0:
+                    campaign_data[key]["is_rank_lost_wsum"] += rl * weight
+                    campaign_data[key]["eligible_imp_rank"] += weight
             
             # 预加载商家佣金数据（支持 MID 匹配 和 商家名匹配）
             from sqlalchemy import func, or_
@@ -809,13 +828,19 @@ class ApiAnalysisService:
                     current_max_cpc = cdata["max_cpc"]
                 
                 # 生成操作指令（包含关键词级别CPC建议）
+                # 从加权累加器计算 IS 加权平均
+                imp_b = cdata["eligible_imp_budget"]
+                imp_r = cdata["eligible_imp_rank"]
+                is_budget_lost = (cdata["is_budget_lost_wsum"] / imp_b) if imp_b > 0 else 0
+                is_rank_lost = (cdata["is_rank_lost_wsum"] / imp_r) if imp_r > 0 else 0
+
                 operation, deployment_data = self._generate_operation_with_keywords(
                     user_id=data_user_id,
                     campaign_name=cdata["campaign_name"],
                     conservative_epc=conservative_epc,
                     conservative_roi=conservative_roi,
-                    is_budget_lost=cdata["is_budget_lost"],
-                    is_rank_lost=cdata["is_rank_lost"],
+                    is_budget_lost=is_budget_lost,
+                    is_rank_lost=is_rank_lost,
                     current_budget=cdata["max_budget"],
                     order_days=order_days,
                     campaign_id=cdata["campaign_id"],
@@ -834,8 +859,8 @@ class ApiAnalysisService:
                     "当前Max CPC": round(current_max_cpc, 4),
                     "campaign_id": cdata["campaign_id"],  # 用于前端查询出价策略
                     "预算": round(cdata["max_budget"], 2),
-                    "IS Budget丢失": f"{cdata['is_budget_lost'] * 100:.1f}%" if cdata['is_budget_lost'] > 0 else "-",
-                    "IS Rank丢失": f"{cdata['is_rank_lost'] * 100:.1f}%" if cdata['is_rank_lost'] > 0 else "-",
+                    "IS Budget丢失": f"{is_budget_lost * 100:.1f}%" if is_budget_lost > 0 else "-",
+                    "IS Rank丢失": f"{is_rank_lost * 100:.1f}%" if is_rank_lost > 0 else "-",
                     "保守EPC": round(conservative_epc, 4),
                     "保守ROI": f"{conservative_roi * 100:.1f}%" if conservative_roi is not None else "-",
                     "操作指令": operation,
