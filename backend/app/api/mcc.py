@@ -473,8 +473,8 @@ async def get_mcc_accounts(
     
     # 提前准备CORS头，确保所有响应都包含
     origin = request.headers.get("origin")
-    from app.main import get_cors_headers
-    cors_headers = get_cors_headers(origin)
+    from app.main import _get_cors_headers
+    cors_headers = _get_cors_headers(origin)
     from fastapi.responses import JSONResponse
     
     try:
@@ -791,8 +791,8 @@ async def sync_mcc_data(
     
     # 提前准备CORS头，确保所有响应都包含
     origin = request.headers.get("origin")
-    from app.main import get_cors_headers
-    cors_headers = get_cors_headers(origin)
+    from app.main import _get_cors_headers
+    cors_headers = _get_cors_headers(origin)
     from fastapi.responses import JSONResponse
     
     try:
