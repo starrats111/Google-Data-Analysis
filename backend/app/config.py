@@ -120,9 +120,13 @@ class Settings(BaseSettings):
     
     # 同步配置
     google_ads_sync_batch_size: int = 10  # 每批同步的MCC数量
-    google_ads_sync_delay_seconds: float = 2.0  # 批次间延迟秒数
-    google_ads_request_delay_seconds: float = 1.0  # 单个请求间延迟秒数
+    google_ads_sync_delay_seconds: float = 5.0  # 批次间延迟秒数（MCC之间）
+    google_ads_request_delay_seconds: float = 1.5  # 单个请求间延迟秒数（每分钟最多40次，留33%余量）
     google_ads_sync_hour: int = 4  # 每日同步时间（小时，北京时间）
+    
+    # API 配额限制（Basic Access）
+    google_ads_max_requests_per_minute: int = 50  # 每分钟上限（官方60，留17%余量）
+    google_ads_daily_quota: int = 15000  # 每日配额上限
     
     # 汇率配置
     # 用于当谷歌广告表1为人民币(CNY/RMB)时，将费用/CPC等换算为美元(USD)

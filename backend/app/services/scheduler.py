@@ -361,8 +361,8 @@ def backfill_missing_data_job():
     CNY 优先，遇到配额耗尽立即停止。
     全部补齐后函数直接 return（零开销）。
     """
-    MAX_BACKFILL_MCCS = 3
-    MAX_BACKFILL_DAYS = 10
+    MAX_BACKFILL_MCCS = 2
+    MAX_BACKFILL_DAYS = 5
     BACKFILL_BEGIN = date(2026, 2, 1)
 
     db: Session = SessionLocal()

@@ -23,6 +23,7 @@ from app.models.google_ads_api_data import GoogleAdsApiData, GoogleMccAccount
 from app.models.ad_campaign import AdCampaign
 from app.models.affiliate_account import AffiliateAccount, AffiliatePlatform
 from app.services.campaign_matcher import CampaignMatcher
+from app.services.rate_limiter import get_rate_limiter
 
 logger = logging.getLogger(__name__)
 
@@ -1076,9 +1077,11 @@ class GoogleAdsServiceAccountSync:
                 customer_id = customer["id"]
                 
                 try:
-                    # 请求延迟
-                    if idx > 0 and request_delay > 0:
-                        time.sleep(request_delay)
+                    # 请求限速（通过全局速率限制器控制）
+                    if idx > 0:
+                        if not get_rate_limiter().acquire():
+                            logger.warning("每日配额已耗尽，停止同步")
+                            break
                     
                     campaigns = self.fetch_campaign_data(
                         client,
@@ -1462,10 +1465,12 @@ class GoogleAdsServiceAccountSync:
                     })
                     logger.error(f"MCC {mcc.mcc_id} 同步异常: {e}")
             
-            # 批次间延迟
+            # 批次间限速（通过全局速率限制器控制）
             if i + batch_size < len(active_mccs) and not quota_exhausted:
-                logger.info(f"批次间延迟 {batch_delay} 秒...")
-                time.sleep(batch_delay)
+                if not get_rate_limiter().acquire():
+                    logger.warning("每日配额已耗尽，停止批量同步")
+                    quota_exhausted = True
+                    break
         
         return {
             "success": True,
@@ -1539,9 +1544,11 @@ class GoogleAdsServiceAccountSync:
             
             current_date += timedelta(days=1)
             
-            # 每天同步后延迟
+            # 每天同步后限速（通过全局速率限制器控制）
             if current_date <= end_date and not quota_exhausted:
-                time.sleep(settings.google_ads_request_delay_seconds)
+                if not get_rate_limiter().acquire():
+                    logger.warning("每日配额已耗尽，停止历史数据同步")
+                    quota_exhausted = True
         
         return {
             "success": True,

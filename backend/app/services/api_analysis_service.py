@@ -172,7 +172,7 @@ class ApiAnalysisService:
                         AffiliatePlatform
                     ).filter(
                         AffiliateAccount.user_id == data_user_id,
-                        AffiliatePlatform.platform_name == platform_code,
+                        AffiliatePlatform.platform_code == platform_code.lower(),
                         AffiliateAccount.is_active == True
                     ).first()
                     platform_accounts[platform_code] = acc

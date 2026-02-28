@@ -338,16 +338,16 @@ class ApiOnlyAnalysisService:
             ).first()
             if account:
                 # 验证平台名称是否匹配（用platform_name而不是platform_code）
-                if account.platform and account.platform.platform_name == platform_code.upper():
+                if account.platform and account.platform.platform_code == platform_code.lower():
                     return account
             return None
         
-        # 按平台名称查找（platform_name = "PM"/"LH" 等，而不是platform_code = URL）
+        # 按平台代码查找（platform_code = "rw"/"pm"/"lh" 等）
         query = self.db.query(AffiliateAccount).join(
             AffiliatePlatform
         ).filter(
             AffiliateAccount.user_id == user_id,
-            AffiliatePlatform.platform_name == platform_code.upper(),
+            AffiliatePlatform.platform_code == platform_code.lower(),
             AffiliateAccount.is_active == True
         )
         
@@ -364,7 +364,7 @@ class ApiOnlyAnalysisService:
             AffiliatePlatform
         ).filter(
             AffiliateAccount.user_id == user_id,
-            AffiliatePlatform.platform_name == platform_code.upper(),
+            AffiliatePlatform.platform_code == platform_code.lower(),
             AffiliateAccount.is_active == True
         )
         return base_query.first()
