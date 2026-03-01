@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react'
-import { Layout as AntLayout, Menu, Avatar, Dropdown, Space, Drawer, Button, Tag } from 'antd'
+import { Layout as AntLayout, Menu, Avatar, Dropdown, Space, Drawer, Button, Tag, Badge, Tooltip } from 'antd'
 import { Outlet, useNavigate, useLocation } from 'react-router-dom'
 import {
   DashboardOutlined,
@@ -20,8 +20,10 @@ import {
   SendOutlined,
   CheckCircleOutlined,
   BellOutlined,
+  GiftOutlined,
 } from '@ant-design/icons'
 import { useAuth } from '../../store/authStore'
+import ChangelogModal, { hasUnreadChangelog } from '../ChangelogModal'
 
 const { Header, Sider, Content } = AntLayout
 
@@ -33,6 +35,8 @@ const Layout = () => {
   })
   const [mobileDrawerVisible, setMobileDrawerVisible] = useState(false)
   const [isMobile, setIsMobile] = useState(window.innerWidth < 768)
+  const [changelogVisible, setChangelogVisible] = useState(false)
+  const [changelogUnread, setChangelogUnread] = useState(false)
   const navigate = useNavigate()
   const location = useLocation()
   const { user, logout, permissions, fetchPermissions } = useAuth()
@@ -51,6 +55,17 @@ const Layout = () => {
   useEffect(() => {
     if (!permissions && user) {
       fetchPermissions()
+    }
+  }, [user])
+
+  // 更新日志：登录后检查是否有未读版本
+  useEffect(() => {
+    if (user) {
+      const unread = hasUnreadChangelog()
+      setChangelogUnread(unread)
+      if (unread) {
+        setChangelogVisible(true)
+      }
     }
   }, [user])
 
@@ -418,7 +433,18 @@ const Layout = () => {
               谷歌广告数据分析平台
             </h2>
           </div>
-          <Dropdown
+          <Space size={12} align="center">
+            <Tooltip title="更新日志">
+              <Badge dot={changelogUnread} offset={[-2, 2]}>
+                <Button
+                  type="text"
+                  icon={<GiftOutlined style={{ fontSize: 18 }} />}
+                  onClick={() => setChangelogVisible(true)}
+                  style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                />
+              </Badge>
+            </Tooltip>
+            <Dropdown
             menu={{
               items: userMenuItems,
               onClick: handleUserMenuClick,
@@ -435,6 +461,14 @@ const Layout = () => {
               </span>
             </Space>
           </Dropdown>
+          </Space>
+          <ChangelogModal
+            open={changelogVisible}
+            onClose={() => {
+              setChangelogVisible(false)
+              setChangelogUnread(false)
+            }}
+          />
         </Header>
         <Content style={{
           margin: isMobile ? '12px' : '24px',
