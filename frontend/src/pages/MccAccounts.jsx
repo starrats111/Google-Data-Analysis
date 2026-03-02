@@ -35,6 +35,7 @@ export default function MccAccounts() {
   const [form] = Form.useForm()
   const [syncLoading, setSyncLoading] = useState({})
   const [testLoading, setTestLoading] = useState({})
+  const [syncSheetLoading, setSyncSheetLoading] = useState({})
   
   // 批量导入
   const [batchModalVisible, setBatchModalVisible] = useState(false)
@@ -94,7 +95,7 @@ export default function MccAccounts() {
   const handleCreate = () => {
     setEditingMcc(null)
     form.resetFields()
-    form.setFieldsValue({ use_service_account: true })
+    form.setFieldsValue({ use_service_account: true, sync_mode: 'api', sheet_sync_hour: 4, sheet_sync_minute: 0 })
     setModalVisible(true)
   }
 
@@ -106,7 +107,11 @@ export default function MccAccounts() {
       email: mcc.email || '',
       currency: mcc.currency || 'USD',
       use_service_account: mcc.use_service_account !== false,
-      is_active: mcc.is_active
+      is_active: mcc.is_active,
+      sync_mode: mcc.sync_mode || 'api',
+      google_sheet_url: mcc.google_sheet_url || '',
+      sheet_sync_hour: mcc.sheet_sync_hour ?? 4,
+      sheet_sync_minute: mcc.sheet_sync_minute ?? 0
     })
     setModalVisible(true)
   }
@@ -394,6 +399,16 @@ export default function MccAccounts() {
       )
     },
     {
+      title: '同步模式',
+      key: 'sync_mode',
+      width: 90,
+      render: (_, record) => (
+        <Tag color={record.sync_mode === 'script' ? 'blue' : 'default'}>
+          {record.sync_mode === 'script' ? '脚本' : 'API'}
+        </Tag>
+      )
+    },
+    {
       title: '同步状态',
       key: 'sync_status',
       width: 120,
@@ -448,15 +463,67 @@ export default function MccAccounts() {
               loading={testLoading[record.id]}
             />
           </Tooltip>
-          <Tooltip title="同步昨日数据">
-            <Button
-              type="link"
-              size="small"
-              icon={<SyncOutlined />}
-              onClick={() => handleSync(record.id)}
-              loading={syncLoading[record.id]}
-            />
-          </Tooltip>
+          {record.sync_mode === 'script' ? (
+            <>
+              <Tooltip title="测试 Sheet 连接">
+                <Button
+                  type="link"
+                  size="small"
+                  icon={<LinkOutlined />}
+                  onClick={async () => {
+                    try {
+                      setTestLoading({ ...testLoading, [record.id]: true })
+                      const res = await api.post(`/api/mcc/accounts/${record.id}/test-sheet`)
+                      if (res.data?.status === 'ok') {
+                        message.success(`连接正常，共 ${res.data?.row_count ?? 0} 行，最新日期: ${res.data?.last_date || '-'}`)
+                      } else {
+                        message.warning(res.data?.message || '连接失败')
+                      }
+                    } catch (e) {
+                      message.error(e.response?.data?.detail || e.message || '测试失败')
+                    } finally {
+                      setTestLoading({ ...testLoading, [record.id]: false })
+                    }
+                  }}
+                  loading={testLoading[record.id]}
+                />
+              </Tooltip>
+              <Tooltip title="同步 Sheet 数据">
+                <Button
+                  type="link"
+                  size="small"
+                  icon={<CloudSyncOutlined />}
+                  onClick={async () => {
+                    try {
+                      setSyncSheetLoading({ ...syncSheetLoading, [record.id]: true })
+                      const res = await api.post(`/api/mcc/accounts/${record.id}/sync-sheet`)
+                      if (res.data?.success) {
+                        message.success(`同步完成：插入 ${res.data?.inserted ?? 0}，更新 ${res.data?.updated ?? 0}`)
+                        fetchMccAccounts()
+                      } else {
+                        message.error(res.data?.message || '同步失败')
+                      }
+                    } catch (e) {
+                      message.error(e.response?.data?.detail || e.message || '同步失败')
+                    } finally {
+                      setSyncSheetLoading({ ...syncSheetLoading, [record.id]: false })
+                    }
+                  }}
+                  loading={syncSheetLoading[record.id]}
+                />
+              </Tooltip>
+            </>
+          ) : (
+            <Tooltip title="同步昨日数据">
+              <Button
+                type="link"
+                size="small"
+                icon={<SyncOutlined />}
+                onClick={() => handleSync(record.id)}
+                loading={syncLoading[record.id]}
+              />
+            </Tooltip>
+          )}
           <Tooltip title="同步历史数据">
             <Button
               type="link"
@@ -611,6 +678,44 @@ export default function MccAccounts() {
               <Select.Option value="USD">美元 (USD)</Select.Option>
               <Select.Option value="CNY">人民币 (CNY)</Select.Option>
             </Select>
+          </Form.Item>
+
+          <Form.Item name="sync_mode" label="同步模式" initialValue="api">
+            <Select>
+              <Select.Option value="api">API 模式（默认，直接调用 Google Ads API）</Select.Option>
+              <Select.Option value="script">脚本模式（从 Google Sheet 读取，需配置 Sheet URL）</Select.Option>
+            </Select>
+          </Form.Item>
+
+          <Form.Item noStyle shouldUpdate={(prev, curr) => prev.sync_mode !== curr.sync_mode}>
+            {({ getFieldValue }) =>
+              getFieldValue('sync_mode') === 'script' ? (
+                <>
+                  <Form.Item
+                    name="google_sheet_url"
+                    label="Google Sheet URL"
+                    rules={[{ required: true, message: '脚本模式请填写 Sheet URL' }]}
+                    help="MCC 脚本将数据导出到此表格，表名为 DailyData"
+                  >
+                    <Input placeholder="https://docs.google.com/spreadsheets/d/xxx/edit" />
+                  </Form.Item>
+                  <Form.Item name="sheet_sync_hour" label="Sheet 读取时间（时）" initialValue={4}>
+                    <Select>
+                      {Array.from({ length: 24 }, (_, i) => (
+                        <Select.Option key={i} value={i}>{i} 时</Select.Option>
+                      ))}
+                    </Select>
+                  </Form.Item>
+                  <Form.Item name="sheet_sync_minute" label="Sheet 读取时间（分）" initialValue={0}>
+                    <Select>
+                      {[0, 15, 30, 45].map((m) => (
+                        <Select.Option key={m} value={m}>{m} 分</Select.Option>
+                      ))}
+                    </Select>
+                  </Form.Item>
+                </>
+              ) : null
+            }
           </Form.Item>
 
           <Form.Item

@@ -3,6 +3,7 @@
 用于执行定时数据同步和分析任务
 """
 import logging
+import time
 from datetime import datetime, date, timedelta, timezone
 
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -16,7 +17,11 @@ from app.services.platform_data_sync import PlatformDataSyncService
 from app.services.api_analysis_service import ApiAnalysisService
 from app.models.affiliate_account import AffiliateAccount
 from app.models.google_ads_api_data import GoogleAdsApiData, GoogleMccAccount
-
+from app.models.user import User
+from app.models.affiliate_transaction import AffiliateTransaction
+from app.models.notification import Notification
+from app.models.commission_snapshot import CommissionSnapshot
+from app.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -124,29 +129,42 @@ def sync_platform_data_job():
 def sync_google_ads_data_job():
     """
     同步Google Ads数据任务（每天北京时间凌晨4点执行）
-    
-    使用服务账号模式同步所有活跃MCC的广告数据
-    仅同步昨天的数据，确保数据精准且节省API配额
+    1. 先同步脚本模式 MCC（从 Google Sheet 读取）
+    2. 再同步 API 模式 MCC（现有逻辑）
     """
     db: Session = SessionLocal()
     try:
         logger.info("=" * 60)
-        logger.info("开始执行Google Ads数据同步任务（服务账号模式）...")
-        
+        logger.info("开始执行Google Ads数据同步任务...")
+
+        # OPT-005：先同步脚本模式 MCC（2s 间隔）
+        from app.models.google_ads_api_data import GoogleMccAccount
+        from app.services.google_sheet_sync import GoogleSheetSyncService
+        script_mccs = db.query(GoogleMccAccount).filter(
+            GoogleMccAccount.is_active == True,
+            GoogleMccAccount.sync_mode == "script",
+            GoogleMccAccount.google_sheet_url.isnot(None),
+            GoogleMccAccount.google_sheet_url != "",
+        ).all()
+        if script_mccs:
+            logger.info("同步 %d 个脚本模式 MCC（Google Sheet）...", len(script_mccs))
+            sheet_service = GoogleSheetSyncService(db)
+            for mcc in script_mccs:
+                try:
+                    sheet_service.sync_mcc_from_sheet(mcc)
+                except Exception as e:
+                    logger.error("脚本模式 MCC %s Sheet 同步失败: %s", mcc.mcc_name, e)
+                time.sleep(2)
+            logger.info("脚本模式 MCC 同步完成")
+
         from app.services.google_ads_service_account_sync import GoogleAdsServiceAccountSync
-        
         sync_service = GoogleAdsServiceAccountSync(db)
-        
-        # 仅同步昨天的数据
         target_date = date.today() - timedelta(days=1)
-        force_refresh = True  # 强制刷新确保数据精准
-        
-        logger.info(f"同步日期: {target_date.isoformat()} (仅昨天)")
-        
-        # 批量同步所有活跃MCC
+        force_refresh = True
+        logger.info("同步日期: %s (仅昨天)", target_date.isoformat())
         result = sync_service.sync_all_mccs(
             target_date=target_date,
-            only_enabled=False,  # 同步所有状态的广告系列（包括已暂停）
+            only_enabled=False,
             force_refresh=force_refresh
         )
         
@@ -360,11 +378,15 @@ def backfill_missing_data_job():
     每次最多补 MAX_BACKFILL_DAYS 天 x MAX_BACKFILL_MCCS 个 MCC，
     CNY 优先，遇到配额耗尽立即停止。
     全部补齐后函数直接 return（零开销）。
+    使用 _sync_lock，便于 06:00 拒付检测判断 backfill 是否仍在运行。
     """
     MAX_BACKFILL_MCCS = 2
     MAX_BACKFILL_DAYS = 5
     BACKFILL_BEGIN = date(2026, 2, 1)
 
+    if not _sync_lock.acquire(blocking=False):
+        logger.warning("【历史数据自动补齐跳过】其他同步任务正在运行")
+        return
     db: Session = SessionLocal()
     try:
         logger.info("=" * 60)
@@ -452,6 +474,220 @@ def backfill_missing_data_job():
         logger.error(f"历史数据自动补齐任务异常: {e}", exc_info=True)
     finally:
         db.close()
+        _sync_lock.release()
+
+
+# 拒付佣金检测补跑次数（06:00 首次 + 最多 3 次补跑）
+_rejected_check_retry_count = 0
+REJECTED_CHECK_MAX_RETRIES = 3
+
+
+def _run_check_rejected_commission_inner(db: Session, today: date):
+    """执行拒付佣金检测核心逻辑（本月日变动 + 上月变动）"""
+    from sqlalchemy import and_, or_
+    from decimal import Decimal
+
+    month_start = today.replace(day=1)
+    yesterday = today - timedelta(days=1)
+    last_month_end = month_start - timedelta(days=1)
+    last_month_start = last_month_end.replace(day=1)
+
+    # 本月 00:00:00 ~ 昨天 23:59:59
+    begin_current = datetime.combine(month_start, datetime.min.time()).replace(tzinfo=BEIJING_TZ)
+    end_current = datetime.combine(yesterday, datetime.max.time()).replace(tzinfo=BEIJING_TZ)
+    # 上月
+    begin_prev = datetime.combine(last_month_start, datetime.min.time()).replace(tzinfo=BEIJING_TZ)
+    end_prev = datetime.combine(last_month_end, datetime.max.time()).replace(tzinfo=BEIJING_TZ)
+
+    period_current = today.strftime("%Y-%m")
+    period_prev = last_month_start.strftime("%Y-%m")
+    threshold = float(getattr(settings, "REJECTED_COMMISSION_DAILY_THRESHOLD", 100.0))
+
+    # 有 user_id 或可通过 affiliate_account 关联到 user 的用户
+    users_with_id = db.query(User.id).filter(User.id.isnot(None)).all()
+    user_ids = [r[0] for r in users_with_id]
+
+    for uid in user_ids:
+        try:
+            # 规则 A：本月日变动
+            sum_current = (
+                db.query(func.coalesce(func.sum(AffiliateTransaction.commission_amount), 0))
+                .filter(
+                    AffiliateTransaction.status == "rejected",
+                    AffiliateTransaction.transaction_time >= begin_current,
+                    AffiliateTransaction.transaction_time <= end_current,
+                    or_(
+                        AffiliateTransaction.user_id == uid,
+                        and_(
+                            AffiliateTransaction.affiliate_account_id.isnot(None),
+                            AffiliateTransaction.affiliate_account_id.in_(
+                                db.query(AffiliateAccount.id).filter(AffiliateAccount.user_id == uid)
+                            ),
+                        ),
+                    ),
+                )
+                .scalar()
+            )
+            total_current = float(sum_current) if sum_current is not None else 0.0
+
+            snap_current = (
+                db.query(CommissionSnapshot)
+                .filter(
+                    CommissionSnapshot.user_id == uid,
+                    CommissionSnapshot.snapshot_type == "current_month",
+                    CommissionSnapshot.period == period_current,
+                )
+                .order_by(CommissionSnapshot.checked_at.desc())
+                .first()
+            )
+            prev_snap_total = float(snap_current.total_rejected) if snap_current else 0.0
+            diff = total_current - prev_snap_total
+
+            if diff > threshold:
+                title = "本月拒付佣金异常"
+                content = f"本月拒付佣金日增 ${diff:.2f}（从 ${prev_snap_total:.2f} 增至 ${total_current:.2f}），超过 ${threshold:.0f} 阈值"
+                notif = Notification(
+                    user_id=uid,
+                    type="rejected_daily",
+                    title=title,
+                    content=content,
+                    is_read=False,
+                )
+                db.add(notif)
+            # 更新/插入本月快照
+            if snap_current:
+                snap_current.total_rejected = Decimal(str(total_current))
+                snap_current.checked_at = datetime.now(BEIJING_TZ)
+            else:
+                snap_current = CommissionSnapshot(
+                    user_id=uid,
+                    snapshot_type="current_month",
+                    period=period_current,
+                    total_rejected=Decimal(str(total_current)),
+                )
+                db.add(snap_current)
+
+            # 规则 B：上月变动
+            sum_prev = (
+                db.query(func.coalesce(func.sum(AffiliateTransaction.commission_amount), 0))
+                .filter(
+                    AffiliateTransaction.status == "rejected",
+                    AffiliateTransaction.transaction_time >= begin_prev,
+                    AffiliateTransaction.transaction_time <= end_prev,
+                    or_(
+                        AffiliateTransaction.user_id == uid,
+                        and_(
+                            AffiliateTransaction.affiliate_account_id.isnot(None),
+                            AffiliateTransaction.affiliate_account_id.in_(
+                                db.query(AffiliateAccount.id).filter(AffiliateAccount.user_id == uid)
+                            ),
+                        ),
+                    ),
+                )
+                .scalar()
+            )
+            total_prev = float(sum_prev) if sum_prev is not None else 0.0
+
+            snap_prev = (
+                db.query(CommissionSnapshot)
+                .filter(
+                    CommissionSnapshot.user_id == uid,
+                    CommissionSnapshot.snapshot_type == "previous_month",
+                    CommissionSnapshot.period == period_prev,
+                )
+                .order_by(CommissionSnapshot.checked_at.desc())
+                .first()
+            )
+            old_prev = float(snap_prev.total_rejected) if snap_prev else None
+
+            if old_prev is not None and abs(total_prev - old_prev) < 1e-2:
+                # 无变化，不操作
+                pass
+            else:
+                month_name = last_month_start.strftime("%Y年%m月").replace("年0", "年").replace("月0", "月")
+                if old_prev is not None:
+                    title = "上月拒付佣金变动"
+                    content = f"{month_name}拒付佣金从 ${old_prev:.2f} 增至 ${total_prev:.2f}（变动 ${total_prev - old_prev:+.2f}）"
+                else:
+                    title = "上月拒付佣金变动"
+                    content = f"{month_name}拒付佣金为 ${total_prev:.2f}"
+                notif = Notification(
+                    user_id=uid,
+                    type="rejected_monthly",
+                    title=title,
+                    content=content,
+                    is_read=False,
+                )
+                db.add(notif)
+                if snap_prev:
+                    snap_prev.total_rejected = Decimal(str(total_prev))
+                    snap_prev.checked_at = datetime.now(BEIJING_TZ)
+                else:
+                    db.add(
+                        CommissionSnapshot(
+                            user_id=uid,
+                            snapshot_type="previous_month",
+                            period=period_prev,
+                            total_rejected=Decimal(str(total_prev)),
+                        )
+                    )
+            elif old_prev is None and total_prev > 0:
+                # 首次记录上月快照，便于下次比较
+                db.add(
+                    CommissionSnapshot(
+                        user_id=uid,
+                        snapshot_type="previous_month",
+                        period=period_prev,
+                        total_rejected=Decimal(str(total_prev)),
+                    )
+                )
+        except Exception as e:
+            logger.exception("拒付检测用户 %s 异常: %s", uid, e)
+    db.commit()
+
+
+def check_rejected_commission_job():
+    """
+    每天 06:00 拒付佣金变动检测（OPT-002）。
+    前置检查：若 backfill 仍在运行（_sync_lock 被占用）则跳过并触发补跑（06:30/07:00/07:30，最多 3 次）。
+    任务本身在 _sync_lock 内执行，避免与 backfill 并发写库。
+    """
+    global _rejected_check_retry_count
+    if not _sync_lock.acquire(blocking=False):
+        run_at = [
+            datetime.now(BEIJING_TZ) + timedelta(minutes=30),
+            datetime.now(BEIJING_TZ) + timedelta(minutes=60),
+            datetime.now(BEIJING_TZ) + timedelta(minutes=90),
+        ]
+        if _rejected_check_retry_count < REJECTED_CHECK_MAX_RETRIES:
+            next_time = run_at[_rejected_check_retry_count]
+            _rejected_check_retry_count += 1
+            scheduler.add_job(
+                check_rejected_commission_job,
+                trigger="date",
+                run_date=next_time,
+                id=f"rejected_commission_retry_{next_time.strftime('%H%M')}",
+                replace_existing=True,
+            )
+            logger.warning("拒付佣金检测：backfill/同步仍在运行，跳过本次，已调度 %s 补跑", next_time.strftime("%H:%M"))
+        else:
+            logger.warning("拒付佣金检测：连续 %d 次补跑均因 backfill 未完成而跳过，放弃本日检测", REJECTED_CHECK_MAX_RETRIES + 1)
+            _rejected_check_retry_count = 0
+        return
+    _rejected_check_retry_count = 0
+    db = SessionLocal()
+    try:
+        logger.info("=" * 60)
+        logger.info("【拒付佣金变动检测开始】")
+        today = date.today()
+        _run_check_rejected_commission_inner(db, today)
+        logger.info("【拒付佣金变动检测完成】")
+        logger.info("=" * 60)
+    except Exception as e:
+        logger.error("拒付佣金检测任务异常: %s", e, exc_info=True)
+    finally:
+        db.close()
+        _sync_lock.release()
 
 
 def daily_analysis_job():
@@ -737,6 +973,16 @@ def start_scheduler():
             max_instances=1
         )
         
+        # 2b. 每天 06:00 - 拒付佣金变动检测（OPT-002）
+        scheduler.add_job(
+            check_rejected_commission_job,
+            trigger=CronTrigger(hour=6, minute=0),
+            id='check_rejected_commission',
+            name='拒付佣金变动检测（6:00）',
+            replace_existing=True,
+            max_instances=1
+        )
+        
         # 3. 每天 16:00 - 平台数据补充同步
         scheduler.add_job(
             sync_platform_data_job,
@@ -775,6 +1021,7 @@ def start_scheduler():
         logger.info("     (Google Ads昨日 + 平台数据5天 + 周一90天佣金 + 分析 + L7D)")
         logger.info("  2. 历史数据自动补齐: 每天 05:00")
         logger.info("     (CNY优先, 每次最多3MCC x 10天, 全部补完后零开销)")
+        logger.info("  2b. 拒付佣金变动检测: 每天 06:00")
         logger.info("  3. 平台数据补充同步: 每天 16:00")
         logger.info("  4. 已付佣金同步: 每月1/15号 00:00")
         logger.info("  5. 数据库自动备份: 每天 03:00")

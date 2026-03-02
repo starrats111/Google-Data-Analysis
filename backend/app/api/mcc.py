@@ -225,6 +225,11 @@ class MccAccountCreate(BaseModel):
     refresh_token: Optional[str] = None
     # 服务账号配置（可选，优先使用全局配置）
     service_account_json: Optional[str] = None
+    # OPT-005 脚本模式
+    sync_mode: Optional[str] = "api"
+    google_sheet_url: Optional[str] = None
+    sheet_sync_hour: Optional[int] = 4
+    sheet_sync_minute: Optional[int] = 0
 
 
 class MccAccountBatchCreate(BaseModel):
@@ -243,6 +248,11 @@ class MccAccountUpdate(BaseModel):
     refresh_token: Optional[str] = None
     service_account_json: Optional[str] = None
     is_active: Optional[bool] = None
+    # OPT-005 脚本模式
+    sync_mode: Optional[str] = None  # api / script
+    google_sheet_url: Optional[str] = None
+    sheet_sync_hour: Optional[int] = None  # 0-23
+    sheet_sync_minute: Optional[int] = None  # 0-59
 
 
 class MccAccountResponse(BaseModel):
@@ -271,6 +281,12 @@ class MccAccountResponse(BaseModel):
     client_secret: Optional[str] = None
     refresh_token: Optional[str] = None
     has_service_account: bool = False  # 是否配置了单独的服务账号
+    # OPT-005 脚本模式
+    sync_mode: str = "api"
+    google_sheet_url: Optional[str] = None
+    sheet_sync_hour: int = 4
+    sheet_sync_minute: int = 0
+    last_sheet_sync_at: Optional[str] = None  # 只读，系统维护
     
     class Config:
         from_attributes = True
@@ -305,6 +321,12 @@ def _build_mcc_response(mcc_account: GoogleMccAccount, data_count: int = 0, owne
         "refresh_token": mcc_account.refresh_token,
         # 服务账号
         "has_service_account": bool(mcc_account.service_account_json) if hasattr(mcc_account, 'service_account_json') else False,
+        # OPT-005 脚本模式
+        "sync_mode": getattr(mcc_account, "sync_mode", "api") or "api",
+        "google_sheet_url": getattr(mcc_account, "google_sheet_url", None),
+        "sheet_sync_hour": getattr(mcc_account, "sheet_sync_hour", 4),
+        "sheet_sync_minute": getattr(mcc_account, "sheet_sync_minute", 0),
+        "last_sheet_sync_at": mcc_account.last_sheet_sync_at.isoformat() if getattr(mcc_account, "last_sheet_sync_at", None) else None,
     }
 
 
@@ -355,6 +377,12 @@ async def create_mcc_account(
                 except Exception as e:
                     logger.warning(f"读取全局服务账号文件失败: {e}")
     
+    sync_mode = (mcc_data.sync_mode or "api").strip() if mcc_data.sync_mode else "api"
+    if sync_mode not in ("api", "script"):
+        sync_mode = "api"
+    sheet_url = (mcc_data.google_sheet_url or "").strip() or None
+    sheet_hour = max(0, min(23, mcc_data.sheet_sync_hour or 4))
+    sheet_minute = max(0, min(59, mcc_data.sheet_sync_minute or 0))
     # 创建MCC账号
     mcc_account = GoogleMccAccount(
         user_id=current_user.id,
@@ -366,7 +394,11 @@ async def create_mcc_account(
         client_secret=mcc_data.client_secret,
         refresh_token=mcc_data.refresh_token,
         service_account_json=service_account_json,
-        is_active=True
+        is_active=True,
+        sync_mode=sync_mode,
+        google_sheet_url=sheet_url,
+        sheet_sync_hour=sheet_hour,
+        sheet_sync_minute=sheet_minute,
     )
     
     db.add(mcc_account)
@@ -680,6 +712,16 @@ async def update_mcc_account(
         logger.debug(f"MCC {mcc_account.mcc_id} 的 refresh_token 为 None，不更新")
     if mcc_data.is_active is not None:
         mcc_account.is_active = mcc_data.is_active
+    # OPT-005 脚本模式
+    if mcc_data.sync_mode is not None:
+        if mcc_data.sync_mode in ("api", "script"):
+            mcc_account.sync_mode = mcc_data.sync_mode
+    if mcc_data.google_sheet_url is not None:
+        mcc_account.google_sheet_url = mcc_data.google_sheet_url.strip() or None
+    if mcc_data.sheet_sync_hour is not None:
+        mcc_account.sheet_sync_hour = max(0, min(23, mcc_data.sheet_sync_hour))
+    if mcc_data.sheet_sync_minute is not None:
+        mcc_account.sheet_sync_minute = max(0, min(59, mcc_data.sheet_sync_minute))
     
     db.commit()
     db.refresh(mcc_account)
@@ -687,20 +729,106 @@ async def update_mcc_account(
     data_count = db.query(GoogleAdsApiData).filter(
         GoogleAdsApiData.mcc_id == mcc_account.id
     ).count()
-    
-    return {
-        "id": mcc_account.id,
-        "mcc_id": mcc_account.mcc_id,
-        "mcc_name": mcc_account.mcc_name,
-        "email": mcc_account.email,
-        "is_active": mcc_account.is_active,
-        "created_at": mcc_account.created_at.isoformat(),
-        "updated_at": mcc_account.updated_at.isoformat() if mcc_account.updated_at else None,
-        "data_count": data_count,
-        "client_id": mcc_account.client_id,
-        "client_secret": mcc_account.client_secret,
-        "refresh_token": mcc_account.refresh_token
-    }
+    owner_username = db.query(User).filter(User.id == mcc_account.user_id).first()
+    owner_username = owner_username.username if owner_username else None
+    return _build_mcc_response(mcc_account, data_count=data_count, owner_username=owner_username)
+
+
+@router.get("/accounts/{mcc_id}/script-template", response_model=dict)
+async def get_mcc_script_template(
+    mcc_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """获取 MCC 脚本模板（OPT-005：用于在 Google Ads 中导出到 Sheet）"""
+    mcc = db.query(GoogleMccAccount).filter(
+        GoogleMccAccount.id == mcc_id,
+        GoogleMccAccount.user_id == current_user.id,
+    ).first()
+    if not mcc:
+        raise HTTPException(status_code=404, detail="MCC账号不存在")
+    sheet_url = (mcc.google_sheet_url or "").strip()
+    if not sheet_url:
+        raise HTTPException(status_code=400, detail="请先配置 Google Sheet URL")
+    from datetime import datetime
+    ts = datetime.now().strftime("%Y-%m-%d %H:%M")
+    script = f"""// Google Ads MCC 脚本 - 自动导出到 Google Sheets
+// MCC: {mcc.mcc_name} ({mcc.mcc_id})
+// 生成时间: {ts}
+
+function main() {{
+  var spreadsheet = SpreadsheetApp.openByUrl('{sheet_url}');
+  var sheet = spreadsheet.getSheetByName('DailyData') || spreadsheet.insertSheet('DailyData');
+  sheet.clear();
+  var headers = ['Date', 'Account', 'AccountName', 'CampaignId', 'CampaignName', 'Impressions', 'Clicks', 'Cost', 'Conversions', 'ConversionValue', 'Currency'];
+  sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
+  var allRows = [];
+  var accountIterator = AdsManagerApp.accounts().withCondition("manager_customer.status = ENABLED").get();
+  while (accountIterator.hasNext()) {{
+    var account = accountIterator.next();
+    AdsManagerApp.select(account);
+    try {{
+      var report = AdsApp.report(
+        'SELECT segments.date, customer.id, customer.descriptive_name, campaign.id, campaign.name, metrics.impressions, metrics.clicks, metrics.cost_micros, metrics.conversions, metrics.conversions_value, customer.currency_code FROM campaign WHERE segments.date DURING LAST_30_DAYS'
+      );
+      var rows = report.rows();
+      while (rows.hasNext()) {{
+        var row = rows.next();
+        allRows.push([row['segments.date'], row['customer.id'], row['customer.descriptive_name'], row['campaign.id'], row['campaign.name'], row['metrics.impressions'], row['metrics.clicks'], row['metrics.cost_micros'], row['metrics.conversions'], row['metrics.conversions_value'], row['customer.currency_code']]);
+      }}
+    }} catch (e) {{ Logger.log('Account ' + account.getName() + ' error: ' + e.message); }}
+  }}
+  if (allRows.length > 0) {{
+    sheet.getRange(2, 1, allRows.length + 1, headers.length).setValues(allRows);
+  }}
+  Logger.log('Exported ' + allRows.length + ' rows');
+}}
+"""
+    return {"script": script, "mcc_name": mcc.mcc_name, "mcc_id": mcc.mcc_id}
+
+
+@router.post("/accounts/{mcc_id}/sync-sheet", response_model=dict)
+async def sync_mcc_sheet(
+    mcc_id: int,
+    background_tasks: BackgroundTasks,
+    force_full_sync: bool = False,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """手动触发单个 MCC 的 Sheet 同步（OPT-005）"""
+    mcc = db.query(GoogleMccAccount).filter(
+        GoogleMccAccount.id == mcc_id,
+        GoogleMccAccount.user_id == current_user.id,
+    ).first()
+    if not mcc:
+        raise HTTPException(status_code=404, detail="MCC账号不存在")
+    if getattr(mcc, "sync_mode", "api") != "script":
+        raise HTTPException(status_code=400, detail="该 MCC 未启用脚本模式")
+    from app.services.google_sheet_sync import GoogleSheetSyncService
+    svc = GoogleSheetSyncService(db)
+    result = svc.sync_mcc_from_sheet(mcc, force_refresh=True, force_full_sync=force_full_sync)
+    return result
+
+
+@router.post("/accounts/{mcc_id}/test-sheet", response_model=dict)
+async def test_mcc_sheet(
+    mcc_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """测试 MCC 的 Google Sheet 连接（OPT-005）"""
+    mcc = db.query(GoogleMccAccount).filter(
+        GoogleMccAccount.id == mcc_id,
+        GoogleMccAccount.user_id == current_user.id,
+    ).first()
+    if not mcc:
+        raise HTTPException(status_code=404, detail="MCC账号不存在")
+    sheet_url = (mcc.google_sheet_url or "").strip()
+    if not sheet_url:
+        return {"status": "error", "message": "未配置 Google Sheet URL"}
+    from app.services.google_sheet_sync import GoogleSheetSyncService
+    svc = GoogleSheetSyncService(db)
+    return svc.test_sheet_connection(sheet_url)
 
 
 @router.delete("/accounts/{mcc_id}")

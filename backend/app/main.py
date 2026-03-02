@@ -49,6 +49,7 @@ from app.api import (
     google_ads_data,
     linkhaitao,
     mcc,
+    notifications,
     platform_data,
     reports,
     stage_label,
@@ -248,6 +249,7 @@ app.include_router(bid_management.router)
 app.include_router(reports.router)
 app.include_router(system.router)
 app.include_router(team_management.router)
+app.include_router(notifications.router)
 
 # 露出功能路由
 app.include_router(luchu_articles.router)

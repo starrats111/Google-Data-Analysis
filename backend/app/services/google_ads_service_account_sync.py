@@ -1398,10 +1398,11 @@ class GoogleAdsServiceAccountSync:
         
         batch_delay = settings.google_ads_sync_delay_seconds
         
-        # 获取所有活跃MCC
+        # 获取所有活跃且为 API 模式的 MCC（脚本模式在 04:00 任务中先单独同步）
         active_mccs = self.db.query(GoogleMccAccount).filter(
             GoogleMccAccount.is_active == True
         ).all()
+        active_mccs = [m for m in active_mccs if getattr(m, "sync_mode", "api") == "api"]
         
         if not active_mccs:
             return {

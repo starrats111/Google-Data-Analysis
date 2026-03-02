@@ -14,6 +14,8 @@ from app.models.platform_data import PlatformData
 from app.models.google_ads_api_data import GoogleAdsApiData, GoogleMccAccount, CampaignPlatformMapping
 from app.models.affiliate_transaction import AffiliateTransaction, AffiliateRejection
 from app.models.ai_report import AIReport, UserPrompt
+from app.models.notification import Notification
+from app.models.commission_snapshot import CommissionSnapshot
 # 露出功能模型
 from app.models.luchu import (
     LuchuWebsite,
@@ -51,6 +53,8 @@ __all__ = [
     "AffiliateRejection",
     "AIReport",
     "UserPrompt",
+    "Notification",
+    "CommissionSnapshot",
     # 露出功能
     "LuchuWebsite",
     "LuchuArticle",

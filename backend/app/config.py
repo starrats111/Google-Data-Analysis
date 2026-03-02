@@ -133,6 +133,13 @@ class Settings(BaseSettings):
     # 含义：1 USD = CNY_TO_USD_RATE CNY，因此 CNY -> USD 需要除以该值
     CNY_TO_USD_RATE: float = 7.2
 
+    # 拒付佣金日变动检测阈值（USD）（OPT-002）
+    REJECTED_COMMISSION_DAILY_THRESHOLD: float = 100.0
+
+    # ===== Google Sheets 同步（OPT-005 脚本模式）=====
+    google_sheets_service_account_file: str = ""
+    google_sheets_service_account_json_base64: str = ""
+
     # ===== Gemini AI 配置（哈基米中转）=====
     # 哈基米API站: https://api.gemai.cc
     gemini_api_key: str = ""

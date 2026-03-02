@@ -1,6 +1,7 @@
-import React, { useState, useEffect } from 'react'
-import { Layout as AntLayout, Menu, Avatar, Dropdown, Space, Drawer, Button, Tag, Badge, Tooltip } from 'antd'
+import React, { useState, useEffect, useCallback } from 'react'
+import { Layout as AntLayout, Menu, Avatar, Dropdown, Space, Drawer, Button, Tag, Badge, Tooltip, List, Typography, Spin, Popover, Modal } from 'antd'
 import { Outlet, useNavigate, useLocation } from 'react-router-dom'
+import api from '../../services/api'
 import {
   DashboardOutlined,
   BarChartOutlined,
@@ -27,6 +28,11 @@ import ChangelogModal, { hasUnreadChangelog } from '../ChangelogModal'
 
 const { Header, Sider, Content } = AntLayout
 
+// 新手引导：仅展示一次，可跳过（localStorage）
+const NEW_FEATURE_GUIDE_KEY = 'new_feature_guide_2026_03'
+const getGuideSkipped = () => !!localStorage.getItem(NEW_FEATURE_GUIDE_KEY)
+const setGuideSkipped = () => localStorage.setItem(NEW_FEATURE_GUIDE_KEY, '1')
+
 const Layout = () => {
   // 从 localStorage 读取持久化的 collapsed 状态
   const [collapsed, setCollapsed] = useState(() => {
@@ -37,6 +43,11 @@ const Layout = () => {
   const [isMobile, setIsMobile] = useState(window.innerWidth < 768)
   const [changelogVisible, setChangelogVisible] = useState(false)
   const [changelogUnread, setChangelogUnread] = useState(false)
+  const [notificationUnreadCount, setNotificationUnreadCount] = useState(0)
+  const [notificationList, setNotificationList] = useState([])
+  const [notificationLoading, setNotificationLoading] = useState(false)
+  const [notificationDropdownOpen, setNotificationDropdownOpen] = useState(false)
+  const [guideVisible, setGuideVisible] = useState(false)
   const navigate = useNavigate()
   const location = useLocation()
   const { user, logout, permissions, fetchPermissions } = useAuth()
@@ -68,6 +79,63 @@ const Layout = () => {
       }
     }
   }, [user])
+
+  // 新手引导：登录后若未跳过则展示一次（可跳过）
+  useEffect(() => {
+    if (user && !getGuideSkipped()) {
+      setGuideVisible(true)
+    }
+  }, [user])
+
+  // OPT-001：消息通知未读数量（首次 + 每 60 秒轮询）
+  const fetchNotificationUnreadCount = useCallback(async () => {
+    if (!user) return
+    try {
+      const res = await api.get('/api/notifications/unread-count')
+      setNotificationUnreadCount(res.data?.count ?? 0)
+    } catch (_) {
+      // 未登录或接口失败静默
+    }
+  }, [user])
+  useEffect(() => {
+    if (!user) return
+    fetchNotificationUnreadCount()
+    const timer = setInterval(fetchNotificationUnreadCount, 60000)
+    return () => clearInterval(timer)
+  }, [user, fetchNotificationUnreadCount])
+
+  // OPT-001：打开铃铛时拉取通知列表
+  const fetchNotificationList = useCallback(async () => {
+    if (!user) return
+    setNotificationLoading(true)
+    try {
+      const res = await api.get('/api/notifications', { params: { page: 1, page_size: 20 } })
+      setNotificationList(res.data?.items ?? [])
+    } catch (_) {
+      setNotificationList([])
+    } finally {
+      setNotificationLoading(false)
+    }
+  }, [user])
+  const handleNotificationOpenChange = (open) => {
+    setNotificationDropdownOpen(open)
+    if (open) fetchNotificationList()
+  }
+  const handleMarkNotificationRead = async (id) => {
+    try {
+      await api.put(`/api/notifications/${id}/read`)
+      setNotificationList((prev) => prev.map((n) => (n.id === id ? { ...n, is_read: true } : n)))
+      fetchNotificationUnreadCount()
+    } catch (_) {}
+  }
+  const handleMarkAllNotificationsRead = async () => {
+    try {
+      await api.put('/api/notifications/read-all')
+      setNotificationList((prev) => prev.map((n) => ({ ...n, is_read: true })))
+      setNotificationUnreadCount(0)
+      fetchNotificationUnreadCount()
+    } catch (_) {}
+  }
 
   // 响应式检测
   useEffect(() => {
@@ -434,6 +502,69 @@ const Layout = () => {
             </h2>
           </div>
           <Space size={12} align="center">
+            {/* OPT-001 消息通知铃铛 */}
+            <Popover
+              open={notificationDropdownOpen}
+              onOpenChange={handleNotificationOpenChange}
+              trigger="click"
+              placement="bottomRight"
+              content={
+                <div style={{ width: 360, maxWidth: '90vw' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+                    <Typography.Text strong>消息通知</Typography.Text>
+                    {notificationUnreadCount > 0 && (
+                      <Button type="link" size="small" onClick={handleMarkAllNotificationsRead}>
+                        全部已读
+                      </Button>
+                    )}
+                  </div>
+                  <Spin spinning={notificationLoading}>
+                    <List
+                      size="small"
+                      dataSource={notificationList}
+                      locale={{ emptyText: '暂无通知' }}
+                      style={{ maxHeight: 400, overflow: 'auto' }}
+                      renderItem={(item) => (
+                        <List.Item
+                          key={item.id}
+                          style={{ cursor: item.is_read ? 'default' : 'pointer', opacity: item.is_read ? 0.85 : 1 }}
+                          onClick={() => !item.is_read && handleMarkNotificationRead(item.id)}
+                        >
+                          <List.Item.Meta
+                            avatar={
+                              <span style={{ width: 8, height: 8, borderRadius: '50%', background: item.is_read ? '#d9d9d9' : '#ff4d4f', flexShrink: 0, marginTop: 6 }} />
+                            }
+                            title={<Typography.Text ellipsis style={{ fontSize: 13 }}>{item.title}</Typography.Text>}
+                            description={
+                              <Typography.Text type="secondary" style={{ fontSize: 12 }} ellipsis={{ rows: 2 }}>
+                                {item.content}
+                                <br />
+                                {item.created_at ? new Date(item.created_at).toLocaleString('zh-CN') : ''}
+                              </Typography.Text>
+                            }
+                          />
+                        </List.Item>
+                      )}
+                    />
+                  </Spin>
+                  <div style={{ textAlign: 'center', marginTop: 8, borderTop: '1px solid #f0f0f0', paddingTop: 8 }}>
+                    <Typography.Link type="secondary" style={{ fontSize: 12 }} onClick={() => setNotificationDropdownOpen(false)}>
+                      关闭
+                    </Typography.Link>
+                  </div>
+                </div>
+              }
+            >
+              <Tooltip title="消息通知">
+                <Badge count={notificationUnreadCount} offset={[-2, 2]} size="small">
+                  <Button
+                    type="text"
+                    icon={<BellOutlined style={{ fontSize: 18 }} />}
+                    style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                  />
+                </Badge>
+              </Tooltip>
+            </Popover>
             <Tooltip title="更新日志">
               <Badge dot={changelogUnread} offset={[-2, 2]}>
                 <Button
@@ -469,6 +600,56 @@ const Layout = () => {
               setChangelogUnread(false)
             }}
           />
+          <Modal
+            title="新功能引导"
+            open={guideVisible}
+            onCancel={() => {
+              setGuideSkipped()
+              setGuideVisible(false)
+            }}
+            footer={[
+              <Button key="skip" type="link" onClick={() => { setGuideSkipped(); setGuideVisible(false) }}>
+                跳过
+              </Button>,
+              <Button
+                key="ok"
+                type="primary"
+                onClick={() => {
+                  setGuideSkipped()
+                  setGuideVisible(false)
+                }}
+              >
+                开始使用
+              </Button>,
+            ]}
+            closable
+            width={480}
+          >
+            <Typography.Paragraph type="secondary" style={{ marginBottom: 16 }}>
+              本次更新带来以下功能，帮助您更好地使用平台：
+            </Typography.Paragraph>
+            <div style={{ marginBottom: 12 }}>
+              <Typography.Text strong>🔔 消息通知</Typography.Text>
+              <br />
+              <Typography.Text type="secondary" style={{ fontSize: 13 }}>
+                Header 右侧铃铛可查看拒付佣金变动等系统提醒，支持未读角标与一键已读。
+              </Typography.Text>
+            </div>
+            <div style={{ marginBottom: 12 }}>
+              <Typography.Text strong>📋 MCC 脚本模式</Typography.Text>
+              <br />
+              <Typography.Text type="secondary" style={{ fontSize: 13 }}>
+                在「账号管理 → MCC账号」编辑时可选择「脚本模式」，通过 Google Sheet 同步广告数据，节省 API 配额。
+              </Typography.Text>
+            </div>
+            <div>
+              <Typography.Text strong>📦 更新日志</Typography.Text>
+              <br />
+              <Typography.Text type="secondary" style={{ fontSize: 13 }}>
+                点击铃铛旁的礼物图标可随时查看版本更新与维护说明。
+              </Typography.Text>
+            </div>
+          </Modal>
         </Header>
         <Content style={{
           margin: isMobile ? '12px' : '24px',

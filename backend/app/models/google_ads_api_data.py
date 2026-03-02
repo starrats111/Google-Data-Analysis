@@ -90,6 +90,13 @@ class GoogleMccAccount(Base):
     last_sync_date = Column(Date, nullable=True)  # 最后同步的数据日期
     total_campaigns = Column(Integer, default=0)  # 该MCC下的广告系列总数
     total_customers = Column(Integer, default=0)  # 该MCC下的客户账号数
+
+    # OPT-005 脚本模式：同步模式与 Google Sheet 配置
+    sync_mode = Column(String(10), default="api", nullable=False)  # api / script
+    google_sheet_url = Column(String(500), nullable=True)  # 脚本模式必填
+    sheet_sync_hour = Column(Integer, default=4, nullable=False)  # 0-23
+    sheet_sync_minute = Column(Integer, default=0, nullable=False)  # 0-59
+    last_sheet_sync_at = Column(DateTime(timezone=True), nullable=True)  # 最近一次 Sheet 同步完成时间（只读，系统维护）
     
     # 元数据
     created_at = Column(DateTime(timezone=True), server_default=func.now())
