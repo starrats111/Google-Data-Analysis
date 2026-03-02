@@ -603,14 +603,11 @@ def _run_check_rejected_commission_inner(db: Session, today: date):
             if old_prev is not None and abs(total_prev - old_prev) < 1e-2:
                 # 无变化，不操作
                 pass
-            else:
+            elif old_prev is not None:
+                # 有变动，生成通知并更新快照
                 month_name = last_month_start.strftime("%Y年%m月").replace("年0", "年").replace("月0", "月")
-                if old_prev is not None:
-                    title = "上月拒付佣金变动"
-                    content = f"{month_name}拒付佣金从 ${old_prev:.2f} 增至 ${total_prev:.2f}（变动 ${total_prev - old_prev:+.2f}）"
-                else:
-                    title = "上月拒付佣金变动"
-                    content = f"{month_name}拒付佣金为 ${total_prev:.2f}"
+                title = "上月拒付佣金变动"
+                content = f"{month_name}拒付佣金从 ${old_prev:.2f} 增至 ${total_prev:.2f}（变动 ${total_prev - old_prev:+.2f}）"
                 notif = Notification(
                     user_id=uid,
                     type="rejected_monthly",
