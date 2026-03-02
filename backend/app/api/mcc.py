@@ -779,7 +779,7 @@ function main() {{
     }} catch (e) {{ Logger.log('Account ' + account.getName() + ' error: ' + e.message); }}
   }}
   if (allRows.length > 0) {{
-    sheet.getRange(2, 1, allRows.length + 1, headers.length).setValues(allRows);
+    sheet.getRange(2, 1, allRows.length, headers.length).setValues(allRows);
   }}
   Logger.log('Exported ' + allRows.length + ' rows');
 }}
