@@ -1,94 +1,66 @@
 """
 Google Sheets 同步服务（OPT-005 脚本模式）
 从 MCC 脚本导出的 Google Sheet 读取广告数据并写入 google_ads_api_data 表
+
+读取方式：通过公开 CSV 导出链接（HTTP GET），无需 Sheets API 或服务账号。
+前提：Sheet 需设置为「知道链接的任何人都可以查看/编辑」。
 """
-import base64
-import json
+import csv
+import io
 import logging
 import time
 from datetime import date, datetime, timedelta
-from pathlib import Path
 from typing import Any, Dict, List, Optional
+from urllib.parse import quote
 
+import requests
 from sqlalchemy.orm import Session
 
-from app.config import settings
 from app.models.google_ads_api_data import GoogleAdsApiData, GoogleMccAccount
 from app.services.campaign_matcher import CampaignMatcher
 
 logger = logging.getLogger(__name__)
 
-SHEET_READ_INTERVAL = 2  # 每个 MCC 读取间隔（秒）
+SHEET_READ_INTERVAL = 2
 SHEET_MAX_RETRIES = 3
 SHEET_NAME = "DailyData"
-
-
-def _get_sheets_credentials():
-    """加载 Sheets 用服务账号（独立于 Google Ads）"""
-    creds = None
-    # 优先 Base64
-    if getattr(settings, "google_sheets_service_account_json_base64", ""):
-        try:
-            raw = base64.b64decode(settings.google_sheets_service_account_json_base64).decode("utf-8")
-            info = json.loads(raw)
-            from google.oauth2 import service_account
-            creds = service_account.Credentials.from_service_account_info(
-                info,
-                scopes=["https://www.googleapis.com/auth/spreadsheets.readonly"],
-            )
-            return creds
-        except Exception as e:
-            logger.error("Sheets 服务账号 Base64 解析失败: %s", e)
-    # 文件
-    path = getattr(settings, "google_sheets_service_account_file", "") or ""
-    if path:
-        p = Path(path)
-        if not p.is_absolute():
-            p = Path(__file__).resolve().parents[2] / p
-        if p.exists():
-            try:
-                from google.oauth2 import service_account
-                creds = service_account.Credentials.from_service_account_file(
-                    str(p),
-                    scopes=["https://www.googleapis.com/auth/spreadsheets.readonly"],
-                )
-                return creds
-            except Exception as e:
-                logger.error("Sheets 服务账号文件加载失败: %s", e)
-    return None
 
 
 def _extract_sheet_id_from_url(url: str) -> Optional[str]:
     """从 Google Sheet URL 提取 spreadsheetId"""
     if not url:
         return None
-    # https://docs.google.com/spreadsheets/d/SPREADSHEET_ID/edit...
     if "/d/" in url:
         part = url.split("/d/")[1]
         return part.split("/")[0].strip()
     return None
 
 
-def _read_sheet_with_retry(spreadsheet_id: str, range_name: str) -> List[List[Any]]:
-    """读取 Sheet 指定范围，429 时指数退避重试"""
-    creds = _get_sheets_credentials()
-    if not creds:
-        raise RuntimeError("未配置 Google Sheets 服务账号")
-    from googleapiclient.discovery import build
-    from googleapiclient.errors import HttpError
-    service = build("sheets", "v4", credentials=creds, cache_discovery=False)
-    sheet = service.spreadsheets()
+def _read_sheet_csv(spreadsheet_id: str, sheet_name: str = SHEET_NAME) -> List[List[str]]:
+    """通过公开 CSV 导出链接读取 Sheet 数据（无需认证）。
+
+    要求 Sheet 已设置为「知道链接的任何人都可以查看」。
+    失败时指数退避重试，最多 3 次。
+    """
+    url = (
+        f"https://docs.google.com/spreadsheets/d/{spreadsheet_id}"
+        f"/gviz/tq?tqx=out:csv&sheet={quote(sheet_name)}"
+    )
     for attempt in range(SHEET_MAX_RETRIES):
         try:
-            result = sheet.values().get(spreadsheetId=spreadsheet_id, range=range_name).execute()
-            return result.get("values", [])
-        except HttpError as e:
-            if e.resp.status == 429 and attempt < SHEET_MAX_RETRIES - 1:
+            resp = requests.get(url, timeout=30)
+            if resp.status_code == 400:
+                return []
+            resp.raise_for_status()
+            reader = csv.reader(io.StringIO(resp.text))
+            return [row for row in reader]
+        except Exception as e:
+            if attempt < SHEET_MAX_RETRIES - 1:
                 wait = 5 * (2 ** attempt)
-                logger.warning("Sheets API 限流，%ds 后重试", wait)
+                logger.warning("读取 Sheet CSV 失败（第 %d 次），%ds 后重试: %s", attempt + 1, wait, e)
                 time.sleep(wait)
             else:
-                raise
+                raise RuntimeError(f"读取 Sheet 失败（重试 {SHEET_MAX_RETRIES} 次后放弃）: {e}") from e
     return []
 
 
@@ -117,20 +89,18 @@ class GoogleSheetSyncService:
         if not sid:
             return {"success": False, "message": "无效的 Sheet URL"}
         try:
-            values = _read_sheet_with_retry(sid, f"{SHEET_NAME}!A:K")
+            values = _read_sheet_csv(sid, SHEET_NAME)
         except Exception as e:
             logger.exception("读取 Sheet 失败: %s", e)
             return {"success": False, "message": str(e)}
         if not values:
             self._update_last_sheet_sync_at(mcc)
             return {"success": True, "inserted": 0, "updated": 0, "skipped": 0}
-        # 首行为表头
         headers = [str(h).strip() for h in values[0]]
         col = {h: i for i, h in enumerate(headers)}
         for key in ("Date", "CampaignId", "CampaignName", "Cost", "Impressions", "Clicks"):
             if key not in col:
                 return {"success": False, "message": f"Sheet 缺少列: {key}"}
-        # 日期范围
         is_first = self._is_first_sheet_sync(mcc) or force_full_sync
         today = date.today()
         yesterday = today - timedelta(days=1)
@@ -220,11 +190,12 @@ class GoogleSheetSyncService:
         if not sid:
             return {"status": "error", "message": "无效的 Sheet URL"}
         try:
-            values = _read_sheet_with_retry(sid, f"{SHEET_NAME}!A:K")
+            values = _read_sheet_csv(sid, SHEET_NAME)
         except Exception as e:
             return {"status": "error", "message": str(e)}
         if not values:
-            return {"status": "ok", "row_count": 0, "last_date": None, "sample_columns": []}
+            return {"status": "ok", "row_count": 0, "last_date": None, "sample_columns": [],
+                    "message": "Sheet 中 DailyData 标签页为空或不存在，请先在 Google Ads 中运行脚本"}
         headers = values[0]
         row_count = len(values) - 1
         last_date = None

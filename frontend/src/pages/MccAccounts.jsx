@@ -713,27 +713,35 @@ export default function MccAccounts() {
             {({ getFieldValue }) =>
               getFieldValue('sync_mode') === 'script' ? (
                 <>
+                  <Alert
+                    message="脚本模式使用步骤"
+                    description={
+                      <ol style={{ margin: 0, paddingLeft: 18, lineHeight: '2em' }}>
+                        <li>新建一个 Google Sheet（名称随意）</li>
+                        <li>点击右上角「共享」，将权限设为 <Text strong>「知道链接的任何人 — 编辑者」</Text></li>
+                        <li>复制共享链接，粘贴到下方输入框并保存</li>
+                        <li>在 MCC 列表操作栏点击「获取脚本」，复制脚本内容</li>
+                        <li>到 Google Ads MCC →「工具与设置 → 批量操作 → 脚本」中新建脚本，粘贴并运行</li>
+                        <li>脚本运行完毕后（日志显示 Exported N rows），回到本页点击「同步 Sheet 数据」</li>
+                      </ol>
+                    }
+                    type="info"
+                    showIcon
+                    style={{ marginBottom: 16 }}
+                  />
                   <Form.Item
                     name="google_sheet_url"
                     label="Sheet 共享链接"
                     rules={[{ required: true, message: '请粘贴 Sheet 共享链接' }]}
-                    help="将 Sheet 共享链接粘贴在此；点击操作栏「获取脚本」复制到 MCC 中运行，数据写入后系统通过共享读取"
+                    help="请确保 Sheet 已设置为「知道链接的任何人都可以编辑」"
                   >
-                    <Input placeholder="粘贴 Sheet 共享链接，如 https://docs.google.com/spreadsheets/d/xxx/edit" />
+                    <Input placeholder="https://docs.google.com/spreadsheets/d/xxx/edit" />
                   </Form.Item>
-                  <Form.Item name="sheet_sync_hour" label="Sheet 读取时间（时）" initialValue={4} help="当前系统在每天 04:00 统一读取，此配置保留供未来扩展">
-                    <Select>
-                      {Array.from({ length: 24 }, (_, i) => (
-                        <Select.Option key={i} value={i}>{i} 时</Select.Option>
-                      ))}
-                    </Select>
+                  <Form.Item name="sheet_sync_hour" label="Sheet 读取时间（时）" initialValue={4} hidden>
+                    <Input type="hidden" />
                   </Form.Item>
-                  <Form.Item name="sheet_sync_minute" label="Sheet 读取时间（分）" initialValue={0} help="当前系统在每天 04:00 统一读取，此配置保留供未来扩展">
-                    <Select>
-                      {[0, 15, 30, 45].map((m) => (
-                        <Select.Option key={m} value={m}>{m} 分</Select.Option>
-                      ))}
-                    </Select>
+                  <Form.Item name="sheet_sync_minute" label="Sheet 读取时间（分）" initialValue={0} hidden>
+                    <Input type="hidden" />
                   </Form.Item>
                 </>
               ) : null
@@ -862,15 +870,29 @@ export default function MccAccounts() {
         width={700}
       >
         <Alert
-          message="使用说明"
-          description="将下方脚本复制到 Google Ads MCC 的「工具与设置 → 批量操作 → 脚本」中创建并运行。脚本会将数据写入您配置的 Sheet，系统通过共享读取。"
+          message="使用步骤"
+          description={
+            <ol style={{ margin: 0, paddingLeft: 18, lineHeight: '2em' }}>
+              <li>点击下方「复制脚本」按钮</li>
+              <li>打开 Google Ads MCC →「工具与设置 → 批量操作 → 脚本」→ 新建脚本</li>
+              <li>粘贴脚本内容 → 点击「运行」（首次运行需授权）</li>
+              <li>运行完毕后日志会显示 <Text code>Exported N rows</Text>，数据写入 Sheet 底部的 <Text strong>DailyData</Text> 标签页</li>
+              <li>回到本页面，在 MCC 操作栏点击「同步 Sheet 数据」按钮即可导入</li>
+            </ol>
+          }
           type="info"
+          style={{ marginBottom: 12 }}
+        />
+        <Alert
+          message="请确认 Sheet 已设为「知道链接的任何人都可以编辑」，否则脚本无法写入、系统无法读取。"
+          type="warning"
+          showIcon
           style={{ marginBottom: 12 }}
         />
         <TextArea
           value={scriptModalContent}
           readOnly
-          rows={18}
+          rows={16}
           style={{ fontFamily: 'monospace', fontSize: 12 }}
         />
       </Modal>
