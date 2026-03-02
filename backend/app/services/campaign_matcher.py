@@ -102,9 +102,13 @@ class CampaignMatcher:
         if match:
             platform_code = _normalize_platform_code(match.group(1))
 
-            # 尝试提取账号代码（MID部分，最后一个字段）
+            # 尝试提取账号代码（MID 部分）：从末尾向前找第一个纯数字段
             parts = re.split(r'[_-]', campaign_name)
-            account_code = parts[-1] if len(parts) > 1 else None
+            account_code = None
+            for p in reversed(parts):
+                if p.isdigit() and len(p) >= 4:
+                    account_code = p
+                    break
 
             platform = self.db.query(AffiliatePlatform).filter(
                 AffiliatePlatform.platform_code.ilike(platform_code)

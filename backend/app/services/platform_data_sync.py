@@ -271,7 +271,7 @@ class PlatformDataSyncService:
                         "commission_amount": total_commission,
                         "order_amount": float(tx.get("order_amount", 0) or tx.get("saleAmount", 0) or 0),
                         "merchant": tx.get("merchant") or tx.get("merchantName") or tx.get("mcid") or None,
-                        "brand_id": tx.get("brand_id") or tx.get("brandId") or tx.get("mcid") or None,
+                        "brand_id": tx.get("brand_id") or tx.get("brandId") or None,
                     }
                     
                     transaction_service.normalize_and_save(
@@ -716,11 +716,9 @@ class PlatformDataSyncService:
                             "commission_amount": commission_amount,
                             "order_amount": order_amount,
                             "merchant": order.get("merchant") or order.get("merchant_name") or order.get("advertiser_name") or order.get("mcid") or None,
-                            # m_id 是数字ID（如154253），mcid 是slug（如hotelcollectiona）
-                            # 优先使用 m_id，便于与广告系列名（包含数字MID）匹配
                             "m_id": order.get("m_id") or None,
                             "mcid": order.get("mcid") or None,
-                            "merchant_id": order.get("m_id") or order.get("mcid") or None,
+                            "merchant_id": str(order["m_id"]).strip() if order.get("m_id") else None,
                         })
                     except Exception as e:
                         logger.warning(f"[LinkHaitao同步] 处理订单交易失败: {e}, 数据: {order}")
@@ -924,7 +922,7 @@ class PlatformDataSyncService:
                         "commission_amount": total_commission,
                         "order_amount": float(tx.get("order_amount", 0) or 0),
                         "merchant": tx.get("merchant"),
-                        "merchant_id": tx.get("merchant_id") or tx.get("brand_id") or tx.get("mcid") or None,
+                        "merchant_id": tx.get("merchant_id") or tx.get("brand_id") or None,
                     }
                     
                     transaction_service.normalize_and_save(
@@ -1085,7 +1083,7 @@ class PlatformDataSyncService:
                         "commission_amount": total_commission,
                         "order_amount": float(tx.get("order_amount", 0) or 0),
                         "merchant": tx.get("merchant"),
-                        "merchant_id": tx.get("merchant_id") or tx.get("brand_id") or tx.get("mcid") or None,
+                        "merchant_id": tx.get("merchant_id") or tx.get("brand_id") or None,
                     }
                     
                     transaction_service.normalize_and_save(
@@ -1246,7 +1244,7 @@ class PlatformDataSyncService:
                         "commission_amount": total_commission,
                         "order_amount": float(tx.get("order_amount", 0) or 0),
                         "merchant": tx.get("merchant"),
-                        "merchant_id": tx.get("merchant_id") or tx.get("brand_id") or tx.get("mcid") or None,
+                        "merchant_id": tx.get("merchant_id") or tx.get("brand_id") or None,
                     }
                     
                     transaction_service.normalize_and_save(
@@ -1407,7 +1405,7 @@ class PlatformDataSyncService:
                         "commission_amount": total_commission,
                         "order_amount": float(tx.get("order_amount", 0) or 0),
                         "merchant": tx.get("merchant"),
-                        "merchant_id": tx.get("merchant_id") or tx.get("brand_id") or tx.get("mcid") or None,
+                        "merchant_id": tx.get("merchant_id") or tx.get("brand_id") or None,
                     }
                     
                     transaction_service.normalize_and_save(
@@ -1589,7 +1587,7 @@ class PlatformDataSyncService:
                         "commission_amount": float(tx.get("commission_amount", 0) or tx.get("commission", 0) or 0),
                         "order_amount": float(tx.get("order_amount", 0) or tx.get("sale_amount", 0) or 0),
                         "merchant": tx.get("merchant") or tx.get("merchant_name") or tx.get("mcid") or None,
-                        "merchant_id": tx.get("merchant_id") or tx.get("brand_id") or tx.get("mcid") or None,
+                        "merchant_id": tx.get("merchant_id") or tx.get("brand_id") or None,
                     }
                     
                     transaction_service.normalize_and_save(

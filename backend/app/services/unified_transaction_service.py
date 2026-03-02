@@ -121,12 +121,12 @@ class UnifiedTransactionService:
         elif not isinstance(transaction_time, datetime):
             transaction_time = datetime.now()
         
-        # 提取merchant_id (MID)：各平台字段名不同
-        # LinkHaiTao: m_id 是数字ID（如154253），mcid 是slug（如hotelcollectiona）
-        # 优先使用数字ID（m_id），便于与广告系列名匹配
-        merchant_id = (
-            str(tx.get("merchant_id") or tx.get("m_id") or tx.get("brand_id") or tx.get("mcid") or "")
-        ).strip() or None
+        # 提取 merchant_id (MID)：优先使用数字 m_id，避免 slug（如 hotelcollections）
+        raw_mid = tx.get("m_id") or tx.get("merchant_id") or tx.get("brand_id") or None
+        if raw_mid and str(raw_mid).strip():
+            merchant_id = str(raw_mid).strip()
+        else:
+            merchant_id = None
         
         # 准备数据
         data = {
