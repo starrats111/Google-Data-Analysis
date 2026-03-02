@@ -763,7 +763,7 @@ function main() {{
   var headers = ['Date', 'Account', 'AccountName', 'CampaignId', 'CampaignName', 'Impressions', 'Clicks', 'Cost', 'Conversions', 'ConversionValue', 'Currency'];
   sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
   var allRows = [];
-  var accountIterator = AdsManagerApp.accounts().withCondition("manager_customer.status = ENABLED").get();
+  var accountIterator = AdsManagerApp.accounts().get();
   while (accountIterator.hasNext()) {{
     var account = accountIterator.next();
     AdsManagerApp.select(account);
