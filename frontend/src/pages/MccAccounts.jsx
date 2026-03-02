@@ -721,14 +721,14 @@ export default function MccAccounts() {
                   >
                     <Input placeholder="粘贴 Sheet 共享链接，如 https://docs.google.com/spreadsheets/d/xxx/edit" />
                   </Form.Item>
-                  <Form.Item name="sheet_sync_hour" label="Sheet 读取时间（时）" initialValue={4}>
+                  <Form.Item name="sheet_sync_hour" label="Sheet 读取时间（时）" initialValue={4} help="当前系统在每天 04:00 统一读取，此配置保留供未来扩展">
                     <Select>
                       {Array.from({ length: 24 }, (_, i) => (
                         <Select.Option key={i} value={i}>{i} 时</Select.Option>
                       ))}
                     </Select>
                   </Form.Item>
-                  <Form.Item name="sheet_sync_minute" label="Sheet 读取时间（分）" initialValue={0}>
+                  <Form.Item name="sheet_sync_minute" label="Sheet 读取时间（分）" initialValue={0} help="当前系统在每天 04:00 统一读取，此配置保留供未来扩展">
                     <Select>
                       {[0, 15, 30, 45].map((m) => (
                         <Select.Option key={m} value={m}>{m} 分</Select.Option>
@@ -740,17 +740,19 @@ export default function MccAccounts() {
             }
           </Form.Item>
 
-          <Form.Item
-            name="use_service_account"
-            label="认证模式"
-            valuePropName="checked"
-            initialValue={true}
-          >
-            <Switch 
-              checkedChildren="服务账号" 
-              unCheckedChildren="OAuth" 
-              defaultChecked
-            />
+          <Form.Item noStyle shouldUpdate={(prev, curr) => prev.sync_mode !== curr.sync_mode}>
+            {({ getFieldValue }) =>
+              getFieldValue('sync_mode') !== 'script' ? (
+                <Form.Item
+                  name="use_service_account"
+                  label="认证模式"
+                  valuePropName="checked"
+                  initialValue={true}
+                >
+                  <Switch checkedChildren="服务账号" unCheckedChildren="OAuth" defaultChecked />
+                </Form.Item>
+              ) : null
+            }
           </Form.Item>
 
           {editingMcc && (

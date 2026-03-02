@@ -74,17 +74,18 @@ const Layout = () => {
     if (user) {
       const unread = hasUnreadChangelog()
       setChangelogUnread(unread)
-      if (unread) {
+      if (unread && getGuideSkipped()) {
         setChangelogVisible(true)
       }
     }
   }, [user])
 
-  // 新手引导：登录后若未跳过则展示一次（可跳过）
+  // 新手引导：登录后若未跳过则展示一次（可跳过），优先于更新日志
   useEffect(() => {
-    if (user && !getGuideSkipped()) {
-      setGuideVisible(true)
-    }
+    if (!user) return
+    if (getGuideSkipped()) return
+    const t = setTimeout(() => setGuideVisible(true), 600)
+    return () => clearTimeout(t)
   }, [user])
 
   // OPT-001：消息通知未读数量（首次 + 每 60 秒轮询）
@@ -387,6 +388,11 @@ const Layout = () => {
       label: '个人资料',
     },
     {
+      key: 'guide',
+      icon: <GiftOutlined />,
+      label: '新功能引导',
+    },
+    {
       key: 'logout',
       icon: <LogoutOutlined />,
       label: '退出登录',
@@ -402,6 +408,10 @@ const Layout = () => {
   }
 
   const handleUserMenuClick = async ({ key }) => {
+    if (key === 'guide') {
+      setGuideVisible(true)
+      return
+    }
     if (key === 'logout') {
       await logout()
       navigate('/login')
@@ -606,9 +616,10 @@ const Layout = () => {
             onCancel={() => {
               setGuideSkipped()
               setGuideVisible(false)
+              if (hasUnreadChangelog()) setChangelogVisible(true)
             }}
             footer={[
-              <Button key="skip" type="link" onClick={() => { setGuideSkipped(); setGuideVisible(false) }}>
+              <Button key="skip" type="link" onClick={() => { setGuideSkipped(); setGuideVisible(false); if (hasUnreadChangelog()) setChangelogVisible(true) }}>
                 跳过
               </Button>,
               <Button
@@ -617,6 +628,7 @@ const Layout = () => {
                 onClick={() => {
                   setGuideSkipped()
                   setGuideVisible(false)
+                  if (hasUnreadChangelog()) setChangelogVisible(true)
                 }}
               >
                 开始使用
