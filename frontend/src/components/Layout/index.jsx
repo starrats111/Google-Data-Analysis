@@ -639,7 +639,7 @@ const Layout = () => {
               <Typography.Text strong>📋 MCC 脚本模式</Typography.Text>
               <br />
               <Typography.Text type="secondary" style={{ fontSize: 13 }}>
-                在「账号管理 → MCC账号」编辑时可选择「脚本模式」，通过 Google Sheet 同步广告数据，节省 API 配额。
+                在「账号管理 → MCC账号」编辑时选择「脚本模式」，将 Sheet 共享链接粘贴进框，复制脚本在 MCC 中运行，系统通过共享读取数据（不依赖 Google Ads API）。
               </Typography.Text>
             </div>
             <div>

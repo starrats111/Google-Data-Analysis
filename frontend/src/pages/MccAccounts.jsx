@@ -57,6 +57,11 @@ export default function MccAccounts() {
   const [syncStatusVisible, setSyncStatusVisible] = useState(false)
   const [syncStatusData, setSyncStatusData] = useState([])
 
+  // 脚本模式：获取脚本弹窗
+  const [scriptModalVisible, setScriptModalVisible] = useState(false)
+  const [scriptModalContent, setScriptModalContent] = useState('')
+  const [scriptModalMcc, setScriptModalMcc] = useState(null)
+
   useEffect(() => {
     fetchMccAccounts()
     fetchServiceAccountStatus()
@@ -465,6 +470,23 @@ export default function MccAccounts() {
           </Tooltip>
           {record.sync_mode === 'script' ? (
             <>
+              <Tooltip title="获取脚本">
+                <Button
+                  type="link"
+                  size="small"
+                  icon={<FileTextOutlined />}
+                  onClick={async () => {
+                    try {
+                      const res = await api.get(`/api/mcc/accounts/${record.id}/script-template`)
+                      setScriptModalContent(res.data?.script || '')
+                      setScriptModalMcc(record)
+                      setScriptModalVisible(true)
+                    } catch (e) {
+                      message.error(e.response?.data?.detail || '获取脚本失败')
+                    }
+                  }}
+                />
+              </Tooltip>
               <Tooltip title="测试 Sheet 连接">
                 <Button
                   type="link"
@@ -683,7 +705,7 @@ export default function MccAccounts() {
           <Form.Item name="sync_mode" label="同步模式" initialValue="api">
             <Select>
               <Select.Option value="api">API 模式（默认，直接调用 Google Ads API）</Select.Option>
-              <Select.Option value="script">脚本模式（从 Google Sheet 读取，需配置 Sheet URL）</Select.Option>
+              <Select.Option value="script">脚本模式（不依赖 API：将 Sheet 共享链接粘贴进框，复制脚本在 MCC 运行）</Select.Option>
             </Select>
           </Form.Item>
 
@@ -693,11 +715,11 @@ export default function MccAccounts() {
                 <>
                   <Form.Item
                     name="google_sheet_url"
-                    label="Google Sheet URL"
-                    rules={[{ required: true, message: '脚本模式请填写 Sheet URL' }]}
-                    help="MCC 脚本将数据导出到此表格，表名为 DailyData"
+                    label="Sheet 共享链接"
+                    rules={[{ required: true, message: '请粘贴 Sheet 共享链接' }]}
+                    help="将 Sheet 共享链接粘贴在此；点击操作栏「获取脚本」复制到 MCC 中运行，数据写入后系统通过共享读取"
                   >
-                    <Input placeholder="https://docs.google.com/spreadsheets/d/xxx/edit" />
+                    <Input placeholder="粘贴 Sheet 共享链接，如 https://docs.google.com/spreadsheets/d/xxx/edit" />
                   </Form.Item>
                   <Form.Item name="sheet_sync_hour" label="Sheet 读取时间（时）" initialValue={4}>
                     <Select>
@@ -814,6 +836,41 @@ export default function MccAccounts() {
             </Button>
           </Form.Item>
         </Form>
+      </Modal>
+
+      {/* 脚本模式：获取脚本弹窗 */}
+      <Modal
+        title={`获取脚本 - ${scriptModalMcc?.mcc_name || ''}`}
+        open={scriptModalVisible}
+        onCancel={() => { setScriptModalVisible(false); setScriptModalContent(''); setScriptModalMcc(null) }}
+        footer={[
+          <Button key="close" onClick={() => { setScriptModalVisible(false); setScriptModalContent(''); setScriptModalMcc(null) }}>
+            关闭
+          </Button>,
+          <Button
+            key="copy"
+            type="primary"
+            onClick={() => {
+              navigator.clipboard.writeText(scriptModalContent).then(() => message.success('已复制到剪贴板，请粘贴到 MCC 脚本中运行'))
+            }}
+          >
+            复制脚本
+          </Button>,
+        ]}
+        width={700}
+      >
+        <Alert
+          message="使用说明"
+          description="将下方脚本复制到 Google Ads MCC 的「工具与设置 → 批量操作 → 脚本」中创建并运行。脚本会将数据写入您配置的 Sheet，系统通过共享读取。"
+          type="info"
+          style={{ marginBottom: 12 }}
+        />
+        <TextArea
+          value={scriptModalContent}
+          readOnly
+          rows={18}
+          style={{ fontFamily: 'monospace', fontSize: 12 }}
+        />
       </Modal>
 
       {/* 服务账号配置模态框 */}
