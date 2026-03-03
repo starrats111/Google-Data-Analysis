@@ -11,6 +11,7 @@ const { Option } = Select
 const MerchantPerformance = () => {
   const { user, permissions } = useAuth()
   const role = permissions?.role || user?.role || 'member'
+  const isEmployee = role === 'member' || role === 'employee'
 
   const [loading, setLoading] = useState(false)
   const [ranking, setRanking] = useState([])
@@ -30,12 +31,15 @@ const MerchantPerformance = () => {
 
   const fetchMeta = async () => {
     try {
-      const [userResp, statsResp] = await Promise.all([
-        api.get('/api/team/users'),
-        api.get('/api/merchants/stats'),
-      ])
-      setUsers(userResp.data || [])
-      setPlatforms(Object.keys(statsResp.data?.by_platform || {}))
+      const requests = [api.get('/api/merchants/stats')]
+      if (!isEmployee) {
+        requests.push(api.get('/api/team/users'))
+      }
+      const results = await Promise.all(requests)
+      setPlatforms(Object.keys(results[0].data?.by_platform || {}))
+      if (!isEmployee && results[1]) {
+        setUsers(results[1].data || [])
+      }
     } catch (error) {
       console.error('获取绩效筛选信息失败', error)
     }
@@ -191,7 +195,7 @@ const MerchantPerformance = () => {
   ]
 
   const detailColumns = [
-    {
+    !isEmployee && {
       title: '员工',
       key: 'user',
       width: 120,
@@ -247,7 +251,7 @@ const MerchantPerformance = () => {
       align: 'right',
       render: (v) => (v ? `$${Number(v).toFixed(2)}` : '-'),
     },
-  ]
+  ].filter(Boolean)
 
   return (
     <div>
@@ -259,18 +263,19 @@ const MerchantPerformance = () => {
             allowClear={false}
           />
 
-          <Select
-            allowClear
-            placeholder="员工"
-            style={{ width: 180 }}
-            value={filters.userId}
-            onChange={(v) => setFilters((s) => ({ ...s, userId: v }))}
-            disabled={role === 'member' || role === 'employee'}
-          >
-            {users.map((u) => (
-              <Option key={u.id} value={u.id}>{u.display_name || u.username}</Option>
-            ))}
-          </Select>
+          {!isEmployee && (
+            <Select
+              allowClear
+              placeholder="员工"
+              style={{ width: 180 }}
+              value={filters.userId}
+              onChange={(v) => setFilters((s) => ({ ...s, userId: v }))}
+            >
+              {users.map((u) => (
+                <Option key={u.id} value={u.id}>{u.display_name || u.username}</Option>
+              ))}
+            </Select>
+          )}
 
           <Select
             allowClear
@@ -291,41 +296,43 @@ const MerchantPerformance = () => {
       <Row gutter={16} style={{ marginBottom: 16 }}>
         <Col xs={24} sm={12} md={6}>
           <Card>
-            <Statistic title="总商家数" value={summary.totalMerchants} />
+            <Statistic title={isEmployee ? '我的商家数' : '总商家数'} value={summary.totalMerchants} />
           </Card>
         </Col>
         <Col xs={24} sm={12} md={6}>
           <Card>
-            <Statistic title="已分配商家" value={summary.assignedMerchants} valueStyle={{ color: '#1677ff' }} />
+            <Statistic title={isEmployee ? '已分配给我' : '已分配商家'} value={summary.assignedMerchants} valueStyle={{ color: '#1677ff' }} />
           </Card>
         </Col>
         <Col xs={24} sm={12} md={6}>
           <Card>
-            <Statistic title="活跃商家" value={summary.activeMerchants} valueStyle={{ color: '#13c2c2' }} />
+            <Statistic title={isEmployee ? '我的活跃商家' : '活跃商家'} value={summary.activeMerchants} valueStyle={{ color: '#13c2c2' }} />
           </Card>
         </Col>
         <Col xs={24} sm={12} md={6}>
           <Card>
-            <Statistic title="总佣金" value={summary.totalCommission} precision={2} prefix="$" valueStyle={{ color: '#3f8600' }} />
+            <Statistic title={isEmployee ? '我的佣金' : '总佣金'} value={summary.totalCommission} precision={2} prefix="$" valueStyle={{ color: '#3f8600' }} />
           </Card>
         </Col>
       </Row>
 
       <Row gutter={16} style={{ marginBottom: 16 }}>
-        <Col xs={24} lg={12}>
+        <Col xs={24} lg={isEmployee ? 24 : 12}>
           <Card title="平台佣金分布" style={{ minHeight: 360 }}>
             <Suspense fallback={<Spin />}>
               <ReactECharts option={trendOption} style={{ height: 300 }} lazyUpdate notMerge />
             </Suspense>
           </Card>
         </Col>
-        <Col xs={24} lg={12}>
-          <Card title="员工佣金占比" style={{ minHeight: 360 }}>
-            <Suspense fallback={<Spin />}>
-              <ReactECharts option={pieOption} style={{ height: 300 }} lazyUpdate notMerge />
-            </Suspense>
-          </Card>
-        </Col>
+        {!isEmployee && (
+          <Col xs={24} lg={12}>
+            <Card title="员工佣金占比" style={{ minHeight: 360 }}>
+              <Suspense fallback={<Spin />}>
+                <ReactECharts option={pieOption} style={{ height: 300 }} lazyUpdate notMerge />
+              </Suspense>
+            </Card>
+          </Col>
+        )}
       </Row>
 
       {!(role === 'member' || role === 'employee') && (
@@ -341,7 +348,7 @@ const MerchantPerformance = () => {
         </Card>
       )}
 
-      <Card title="商家绩效明细">
+      <Card title={isEmployee ? '我的商家绩效' : '商家绩效明细'}>
         <Table
           rowKey={(row) => `${row.user_id}-${row.merchant_id}`}
           loading={loading}

@@ -111,8 +111,12 @@ const MerchantManagement = () => {
 
   useEffect(() => {
     fetchUsers()
-    fetchStats()
-    fetchMerchants(1, merchantPageSize)
+    if (canManage) {
+      fetchStats()
+      fetchMerchants(1, merchantPageSize)
+    } else {
+      fetchAssignments(1, assignmentPageSize)
+    }
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
@@ -426,7 +430,7 @@ const MerchantManagement = () => {
         </Space>
       ),
     },
-    {
+    canManage && {
       title: '负责人',
       key: 'owner',
       width: 140,
@@ -475,14 +479,14 @@ const MerchantManagement = () => {
       width: 180,
       render: (val) => val || '-',
     },
-    {
+    canManage && {
       title: '操作',
       key: 'action',
       width: 190,
       fixed: 'right',
       render: (_, record) => (
         <Space>
-          <Button size="small" disabled={!canManage} onClick={() => openEditAssignmentModal(record)}>
+          <Button size="small" onClick={() => openEditAssignmentModal(record)}>
             编辑
           </Button>
           <Popconfirm
@@ -490,16 +494,15 @@ const MerchantManagement = () => {
             onConfirm={() => handleCancelAssignment(record.id)}
             okText="确认"
             cancelText="取消"
-            disabled={!canManage}
           >
-            <Button size="small" danger disabled={!canManage}>
+            <Button size="small" danger>
               取消
             </Button>
           </Popconfirm>
         </Space>
       ),
     },
-  ]
+  ].filter(Boolean)
 
   const merchantRowSelection = canManage
     ? {
@@ -515,63 +518,73 @@ const MerchantManagement = () => {
       }
     : undefined
 
+  // 员工视角的简化统计
+  const myAssignmentStats = useMemo(() => {
+    const activeCount = assignments.filter(a => a.status === 'active').length
+    return { activeCount }
+  }, [assignments])
+
   return (
     <div>
-      <Row gutter={16} style={{ marginBottom: 16 }}>
-        <Col xs={24} sm={12} md={6}>
-          <Card>
-            <Statistic title="商家总数" value={stats.total || 0} />
-          </Card>
-        </Col>
-        <Col xs={24} sm={12} md={6}>
-          <Card>
-            <Statistic title="已分配商家" value={stats.assigned || 0} valueStyle={{ color: '#1677ff' }} />
-          </Card>
-        </Col>
-        <Col xs={24} sm={12} md={6}>
-          <Card>
-            <Statistic title="未分配商家" value={stats.unassigned || 0} valueStyle={{ color: '#fa8c16' }} />
-          </Card>
-        </Col>
-        <Col xs={24} sm={12} md={6}>
-          <Card>
-            <Statistic title="待补MID" value={stats.missing_mid_total || 0} valueStyle={{ color: '#d46b08' }} />
-          </Card>
-        </Col>
-      </Row>
+      {canManage && (
+        <>
+          <Row gutter={16} style={{ marginBottom: 16 }}>
+            <Col xs={24} sm={12} md={6}>
+              <Card>
+                <Statistic title="商家总数" value={stats.total || 0} />
+              </Card>
+            </Col>
+            <Col xs={24} sm={12} md={6}>
+              <Card>
+                <Statistic title="已分配商家" value={stats.assigned || 0} valueStyle={{ color: '#1677ff' }} />
+              </Card>
+            </Col>
+            <Col xs={24} sm={12} md={6}>
+              <Card>
+                <Statistic title="未分配商家" value={stats.unassigned || 0} valueStyle={{ color: '#fa8c16' }} />
+              </Card>
+            </Col>
+            <Col xs={24} sm={12} md={6}>
+              <Card>
+                <Statistic title="待补MID" value={stats.missing_mid_total || 0} valueStyle={{ color: '#d46b08' }} />
+              </Card>
+            </Col>
+          </Row>
 
-      <Row gutter={16} style={{ marginBottom: 16 }}>
-        <Col xs={24} md={8}>
-          <Card>
-            <Statistic title="商家发现成功率" value={stats.discovery_rate || 0} precision={2} suffix="%" valueStyle={{ color: '#389e0d' }} />
-          </Card>
-        </Col>
-        <Col xs={24} md={8}>
-          <Card>
-            <Statistic title="MID缺失率" value={stats.missing_mid_rate || 0} precision={2} suffix="%" valueStyle={{ color: '#cf1322' }} />
-          </Card>
-        </Col>
-        <Col xs={24} md={8}>
-          <Card>
-            <Space direction="vertical" size={4}>
-              <Space wrap>
-                <Tag color="processing">平台分布</Tag>
-                <span>{byPlatformText}</span>
-              </Space>
-              <Space wrap>
-                <Tag color="orange">待补MID分布</Tag>
-                <span>{missingMidByPlatformText}</span>
-              </Space>
-            </Space>
-          </Card>
-        </Col>
-      </Row>
+          <Row gutter={16} style={{ marginBottom: 16 }}>
+            <Col xs={24} md={8}>
+              <Card>
+                <Statistic title="商家发现成功率" value={stats.discovery_rate || 0} precision={2} suffix="%" valueStyle={{ color: '#389e0d' }} />
+              </Card>
+            </Col>
+            <Col xs={24} md={8}>
+              <Card>
+                <Statistic title="MID缺失率" value={stats.missing_mid_rate || 0} precision={2} suffix="%" valueStyle={{ color: '#cf1322' }} />
+              </Card>
+            </Col>
+            <Col xs={24} md={8}>
+              <Card>
+                <Space direction="vertical" size={4}>
+                  <Space wrap>
+                    <Tag color="processing">平台分布</Tag>
+                    <span>{byPlatformText}</span>
+                  </Space>
+                  <Space wrap>
+                    <Tag color="orange">待补MID分布</Tag>
+                    <span>{missingMidByPlatformText}</span>
+                  </Space>
+                </Space>
+              </Card>
+            </Col>
+          </Row>
+        </>
+      )}
 
       <Tabs
-        activeKey={tabKey}
+        activeKey={canManage ? tabKey : 'assignments'}
         onChange={setTabKey}
         items={[
-          {
+          canManage && {
             key: 'merchants',
             label: '商家目录',
             children: (
@@ -694,10 +707,10 @@ const MerchantManagement = () => {
           },
           {
             key: 'assignments',
-            label: '分配记录',
+            label: canManage ? '分配记录' : '我的商家',
             children: (
               <Card
-                title="分配记录"
+                title={canManage ? '分配记录' : '我的商家'}
                 extra={
                   <Space>
                     <Button icon={<ReloadOutlined />} onClick={() => fetchAssignments(assignmentPage, assignmentPageSize)} />
@@ -714,19 +727,21 @@ const MerchantManagement = () => {
                 }
               >
                 <Space wrap style={{ marginBottom: 12 }}>
-                  <Select
-                    allowClear
-                    placeholder="负责人"
-                    style={{ width: 180 }}
-                    value={assignmentFilters.user_id}
-                    onChange={(v) => setAssignmentFilters((s) => ({ ...s, user_id: v }))}
-                  >
-                    {userOptions.map((u) => (
-                      <Option key={u.id} value={u.id}>
-                        {u.display_name || u.username}
-                      </Option>
-                    ))}
-                  </Select>
+                  {canManage && (
+                    <Select
+                      allowClear
+                      placeholder="负责人"
+                      style={{ width: 180 }}
+                      value={assignmentFilters.user_id}
+                      onChange={(v) => setAssignmentFilters((s) => ({ ...s, user_id: v }))}
+                    >
+                      {userOptions.map((u) => (
+                        <Option key={u.id} value={u.id}>
+                          {u.display_name || u.username}
+                        </Option>
+                      ))}
+                    </Select>
+                  )}
 
                   <Select
                     allowClear
@@ -756,8 +771,8 @@ const MerchantManagement = () => {
                   loading={loading && tabKey === 'assignments'}
                   columns={assignmentColumns}
                   dataSource={assignments}
-                  rowSelection={assignmentRowSelection}
-                  scroll={{ x: 1400 }}
+                  rowSelection={canManage ? assignmentRowSelection : undefined}
+                  scroll={{ x: canManage ? 1400 : 1000 }}
                   pagination={{
                     current: assignmentPage,
                     pageSize: assignmentPageSize,
@@ -770,7 +785,7 @@ const MerchantManagement = () => {
               </Card>
             ),
           },
-        ]}
+        ].filter(Boolean)}
       />
 
       <Modal

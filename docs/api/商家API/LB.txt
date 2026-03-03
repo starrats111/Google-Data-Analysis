@@ -1,0 +1,180 @@
+Monetization API
+Summary
+You can use this API to check merchant details status and acquire campaign links to monetize your traffic.
+
+Request Information
+URL
+https://www.linkbux.com/api.php?mod=medium&op=monetization_api
+Return Format
+JSON
+HTTP Request
+GET
+Required Parameters
+token
+Select Channel
+Optional Parameters to Filter
+type
+Return Format
+Available Filter:
+json (default)
+
+approval_type
+Filter by approval type
+Available Filter:
+AutoManual
+
+mid
+Merchant ID (Number)
+mcid
+Merchant ID (Letter)
+offer_type
+Filter by merchant pricing model
+Available Filter:
+CPSCPACPC
+
+avg_payment_cycle
+Filter by merchant average payment cycle
+Available Filter:
+Under 90 Days (Inclusive)91-120 DaysMore Than 120 Days
+
+relationship
+Filter by your current merchant relationship
+Available Filter:
+JoinedPendingRejectedNo Relationship
+
+merchant_status
+Merchant Status: Online(default) or Offline
+Available Filter:
+OnlineOffline
+
+categories
+Filter by merchant categories. Please download the file below to use category codes to filter. Filter more than one categories separated by ","
+ Merchant Category Codes.csv 
+
+primary_region
+Filter by primary_region. Please enter two-letter primary_region code. Example: US, CA, FR, UK, AU
+page
+Current page index
+limit
+Number of campaigns shown per page - max 1,000 campaigns per page
+Return Parameters
+total_mcid
+Total number of merchants called
+total_page
+Total number of pages
+mcid
+Merchant ID
+mid
+MID
+merchant_name
+Merchant Name
+comm_rate
+Base Commission Rate
+comm_detail
+Commission Details.
+site_url
+Merchant homepage url
+logo
+Merchant Logo
+categories
+Merchant categories
+tags
+Subcategories and keywords of the merchant
+offer_type
+Merchant pricing model
+network_partner
+Network of the affiliate program
+avg_payment_cycle
+The average days it takes for commissions approved and paid by the merchants
+avg_payout
+Average commission rate on Linkbux. Formula: (Commission)/(Sale Amount)
+support_deeplink
+Support Deep Link (Y or N)
+primary_region
+Primary Region
+support_region
+Support Region
+merchant_status
+Merchant Status (Online or Offline)
+datetime
+Date joined/removed from the program
+relationship
+Your merchant relationship
+tracking_url
+Your campaign tracking link
+tracking_url_short
+Your campaign short link
+tracking_url_smart
+Your campaign smart link
+promotional_methods
+
+Content
+Coupon/Deal
+Subnetwork
+E-mail
+Cashback
+App
+Price Comparison
+Web Portal
+Influencer
+TM+ Bidding
+Media Buyer
+Comparison Shopping
+Service (CSS)
+Loyalty
+Plug-In
+Social Media Group
+1 = allowed. 0 = not allowed. "-" = unknown
+rd
+Cookie expiration date
+Result Code
+0
+Success
+4001
+Start date format is wrong
+4002
+End date format is wrong
+9999
+API limit
+GET
+https://www.linkbux.com/api.php?mod=medium&op=monetization_api&token={token}
+Response Samples:
+Content Type
+application/json; charset=utf-8
+Copy
+Expand All
+Collapse All
+{
+
+"status": {
+
+"code":
+0,
+
+"msg":
+"Success"
+
+},
+
+"data": {
+
+"total_mcid":
+"13",
+
+"total_page":
+7,
+
+"limit":
+2,
+
+"list": [
+
+{...}, 24 items
+
+{...} 24 items
+
+]
+
+}
+
+}

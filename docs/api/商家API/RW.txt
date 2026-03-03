@@ -1,0 +1,121 @@
+MerchantDetails API
+Summary
+You can use this API to check merchant details status and acquire campaign links to monetize your traffic.
+Request Information
+URL:
+https://admin.rewardoo.com/api.php?mod=medium&op=merchant_details
+Return Format:
+JSON
+HTTP Request:
+POST application/x-www-form-urlencoded
+Required Post Parameters
+Required Post Parameters
+Name
+Description
+token
+
+
+Select Channel
+
+Optional Parametrts to Filter
+Optional Parametrts to Filter
+Name
+Description
+offer_type
+Filter by merchant pricing model
+(Available filters: CPS/CPA)
+relationship
+Filter by your current merchant relationship
+(Available filters: Joined/Pending/Rejected/No Relationship)
+primary_region
+Filter by merchant location
+(Please enter two-letter primary_region code.)
+page
+Current page index
+limit
+Number of campaigns shown per page - Max 1,000 campaigns per page
+Example Curl Command
+ Copy
+Return Parameters
+Return Parameters
+Name
+Description
+total_mcid
+Total number of merchants called
+total_page
+Total number of pages
+mcid
+Advertisers mcid
+mid
+The primary key ID of the merchant stored in the Rewardoo system
+merchant_name
+Merchant name
+comm_rate
+Commission rate
+site_url
+Merchant homepage URL
+logo
+Merchant logo
+categories
+Merchant categories
+tags
+Subcategories and keywords of the merchant
+offer_type
+Merchant pricing model
+support_deeplink
+Support deep link (Y or N)
+primary_region
+Primary region
+support_region
+Support region
+support_couponordeal
+Whether this merchant allows traffic from coupon or deal sites.
+1 = allowed.
+0 = not allowed.
+"-" = unknown
+merchant_status
+Merchant status (Online or Offline)
+datetime
+Date joined/removed from the program
+relationship
+Your merchant relationship
+tracking_url
+Your campaign tracking link
+tracking_url_short
+Your campaign shortlink
+tracking_url_smart
+Your campaign smartlink
+promotional_methods
+1 = allowed
+0 = not allowed
+" - " = unknown
+Result Code
+Result Code
+Name
+Description
+0
+Success
+1000
+Invalid token
+Response Samples
+ Copy
+{
+"data" :
+{
+"limit" :
+10,
+"list" :
+[ … ],
+"total_mcid" :
+"41135",
+"total_page" :
+4114
+},
+"status" :
+{
+"code" :
+0,
+"msg" :
+"Success"
+}
+}
