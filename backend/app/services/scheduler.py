@@ -642,6 +642,45 @@ def _run_check_rejected_commission_inner(db: Session, today: date):
             logger.exception("拒付检测用户 %s 异常: %s", uid, e)
     db.commit()
 
+    # G-03: NULL user_id 交易汇总并通知 manager
+    try:
+        from sqlalchemy import and_, or_
+        from decimal import Decimal as _Dec
+
+        null_uid_sum = (
+            db.query(func.coalesce(func.sum(AffiliateTransaction.commission_amount), 0))
+            .filter(
+                AffiliateTransaction.status == "rejected",
+                AffiliateTransaction.transaction_time >= begin_current,
+                AffiliateTransaction.transaction_time <= end_current,
+                AffiliateTransaction.user_id.is_(None),
+                or_(
+                    AffiliateTransaction.affiliate_account_id.is_(None),
+                    ~AffiliateTransaction.affiliate_account_id.in_(
+                        db.query(AffiliateAccount.id).filter(AffiliateAccount.user_id.isnot(None))
+                    ),
+                ),
+            )
+            .scalar()
+        )
+        null_total = float(null_uid_sum) if null_uid_sum else 0.0
+
+        if null_total > 0:
+            managers = db.query(User).filter(User.role == "manager").all()
+            for mgr in managers:
+                notif = Notification(
+                    user_id=mgr.id,
+                    type="rejected_unassigned",
+                    title="未分配交易拒付佣金汇总",
+                    content=f"本月有 ${null_total:.2f} 拒付佣金来自未分配用户的交易，请关注",
+                    is_read=False,
+                )
+                db.add(notif)
+            db.commit()
+            logger.info("[拒付检测] 未分配交易拒付佣金 $%.2f，已通知 %d 位 manager", null_total, len(managers))
+    except Exception as e:
+        logger.exception("拒付检测 NULL user_id 汇总异常: %s", e)
+
 
 def check_rejected_commission_job():
     """
@@ -927,6 +966,103 @@ def sync_approved_commission_job():
 
 
 
+def merchant_discover_job():
+    """商家自动发现任务（每天北京时间 07:00 执行）：扫描交易表注册新商家"""
+    db: Session = SessionLocal()
+    try:
+        logger.info("=" * 60)
+        logger.info("【商家自动发现开始】")
+        from app.services.merchant_service import MerchantService
+        count = MerchantService.discover_merchants(db)
+        logger.info(f"【商家自动发现完成】新增 {count} 个商家")
+        logger.info("=" * 60)
+    except Exception as e:
+        logger.error(f"商家自动发现任务异常: {e}", exc_info=True)
+    finally:
+        db.close()
+
+
+def merchant_mid_repair_job():
+    """MID 自动补偿任务（每天北京时间 07:10 执行）：
+    按同平台同商家名反查唯一数字MID回填，缺失率 > 1% 时告警 manager (G-08/G-09)
+    """
+    db: Session = SessionLocal()
+    try:
+        logger.info("=" * 60)
+        logger.info("【MID自动补偿开始】")
+        from app.services.merchant_service import MerchantService
+        result = MerchantService.auto_repair_mid(db)
+        logger.info(f"【MID自动补偿完成】修复 {result['repaired']} 条，失败 {result['failed']} 条")
+
+        # G-09: 缺失率 > 1% 告警 manager
+        alerts = []
+        for platform, stats in result.get("missing_rate_by_platform", {}).items():
+            if stats["rate"] > 1.0:
+                alerts.append(f"{platform}: 缺失率 {stats['rate']}% ({stats['missing']}/{stats['total']})")
+
+        if alerts:
+            managers = db.query(User).filter(User.role == "manager").all()
+            content = "以下平台MID缺失率超过1%:\n" + "\n".join(alerts)
+            for mgr in managers:
+                notif = Notification(
+                    user_id=mgr.id,
+                    type="mid_missing_alert",
+                    title="MID缺失率告警",
+                    content=content,
+                    is_read=False,
+                )
+                db.add(notif)
+            db.commit()
+            logger.warning("[MID告警] %d 个平台缺失率超标，已通知 %d 位 manager", len(alerts), len(managers))
+
+        logger.info("=" * 60)
+    except Exception as e:
+        logger.error(f"MID自动补偿任务异常: {e}", exc_info=True)
+    finally:
+        db.close()
+
+
+def notification_cleanup_job():
+    """通知清理任务（每月1号 01:00 执行）(G-02)：
+    - 删除 90 天前的已读通知
+    - 将 180 天前的未读通知标记为已读
+    """
+    db: Session = SessionLocal()
+    try:
+        logger.info("=" * 60)
+        logger.info("【通知清理任务开始】")
+        now = datetime.now(BEIJING_TZ)
+        cutoff_90d = now - timedelta(days=90)
+        cutoff_180d = now - timedelta(days=180)
+
+        deleted = (
+            db.query(Notification)
+            .filter(
+                Notification.is_read == True,
+                Notification.created_at < cutoff_90d,
+            )
+            .delete(synchronize_session=False)
+        )
+
+        marked = (
+            db.query(Notification)
+            .filter(
+                Notification.is_read == False,
+                Notification.created_at < cutoff_180d,
+            )
+            .update({"is_read": True}, synchronize_session=False)
+        )
+
+        db.commit()
+        logger.info("[通知清理] 删除 %d 条90天前已读通知，标记 %d 条180天前未读为已读", deleted, marked)
+        logger.info("【通知清理任务完成】")
+        logger.info("=" * 60)
+    except Exception as e:
+        logger.error(f"通知清理任务异常: {e}", exc_info=True)
+    finally:
+        db.close()
+
+
 def database_backup_job():
     """数据库自动备份任务（每天北京时间 03:00 执行）"""
     try:
@@ -1000,7 +1136,17 @@ def start_scheduler():
             max_instances=1
         )
         
-        # 5. 每天 03:00 - 数据库自动备份（SEC-8）
+        # 5. 每天 07:00 - 商家自动发现
+        scheduler.add_job(
+            merchant_discover_job,
+            trigger=CronTrigger(hour=7, minute=0),
+            id='merchant_discover',
+            name='商家自动发现（7:00）',
+            replace_existing=True,
+            max_instances=1
+        )
+        
+        # 6. 每天 03:00 - 数据库自动备份（SEC-8）
         scheduler.add_job(
             database_backup_job,
             trigger=CronTrigger(hour=3, minute=0),
@@ -1009,7 +1155,27 @@ def start_scheduler():
             replace_existing=True,
             max_instances=1
         )
-        
+
+        # 7. 每天 07:10 - MID自动补偿（G-08/G-09）
+        scheduler.add_job(
+            merchant_mid_repair_job,
+            trigger=CronTrigger(hour=7, minute=10),
+            id='merchant_mid_repair',
+            name='MID自动补偿（7:10）',
+            replace_existing=True,
+            max_instances=1
+        )
+
+        # 8. 每月1号 01:00 - 通知清理（G-02）
+        scheduler.add_job(
+            notification_cleanup_job,
+            trigger=CronTrigger(day=1, hour=1, minute=0),
+            id='notification_cleanup',
+            name='通知清理（每月1号 1:00）',
+            replace_existing=True,
+            max_instances=1
+        )
+
         scheduler.start()
         logger.info("=" * 60)
         logger.info("定时任务调度器已启动")
@@ -1021,7 +1187,10 @@ def start_scheduler():
         logger.info("  2b. 拒付佣金变动检测: 每天 06:00")
         logger.info("  3. 平台数据补充同步: 每天 16:00")
         logger.info("  4. 已付佣金同步: 每月1/15号 00:00")
-        logger.info("  5. 数据库自动备份: 每天 03:00")
+        logger.info("  5. 商家自动发现: 每天 07:00")
+        logger.info("  6. 数据库自动备份: 每天 03:00")
+        logger.info("  7. MID自动补偿: 每天 07:10")
+        logger.info("  8. 通知清理: 每月1号 01:00")
         logger.info("=" * 60)
         
     except Exception as e:

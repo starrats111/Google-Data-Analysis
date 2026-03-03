@@ -121,12 +121,21 @@ class UnifiedTransactionService:
         elif not isinstance(transaction_time, datetime):
             transaction_time = datetime.now()
         
-        # 提取 merchant_id (MID)：优先使用数字 m_id，避免 slug（如 hotelcollections）
-        raw_mid = tx.get("m_id") or tx.get("merchant_id") or tx.get("brand_id") or None
-        if raw_mid and str(raw_mid).strip():
-            merchant_id = str(raw_mid).strip()
-        else:
-            merchant_id = None
+        # 提取 merchant_id (MID)：只接受纯数字，避免把 slug 当成 MID
+        mid_candidates = [
+            tx.get("m_id"),
+            tx.get("merchant_id"),
+            tx.get("brand_id"),
+            tx.get("mid"),
+        ]
+        merchant_id = None
+        for candidate in mid_candidates:
+            if candidate is None:
+                continue
+            candidate_str = str(candidate).strip()
+            if candidate_str and candidate_str.isdigit():
+                merchant_id = candidate_str
+                break
         
         # 准备数据
         data = {

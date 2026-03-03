@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react'
-import { Layout as AntLayout, Menu, Avatar, Dropdown, Space, Drawer, Button, Tag, Badge, Tooltip, List, Typography, Spin, Popover, Modal } from 'antd'
+import { Layout as AntLayout, Menu, Avatar, Dropdown, Space, Drawer, Button, Tag, Badge, Tooltip, List, Typography, Spin, Popover, Modal, Form, Select, Input, message } from 'antd'
 import { Outlet, useNavigate, useLocation } from 'react-router-dom'
 import api from '../../services/api'
 import {
@@ -22,6 +22,8 @@ import {
   CheckCircleOutlined,
   BellOutlined,
   GiftOutlined,
+  ShopOutlined,
+  FundViewOutlined,
 } from '@ant-design/icons'
 import { useAuth } from '../../store/authStore'
 import ChangelogModal, { hasUnreadChangelog } from '../ChangelogModal'
@@ -45,23 +47,29 @@ const Layout = () => {
   const [changelogUnread, setChangelogUnread] = useState(false)
   const [notificationUnreadCount, setNotificationUnreadCount] = useState(0)
   const [notificationList, setNotificationList] = useState([])
+  const [notificationTotal, setNotificationTotal] = useState(0)
+  const [notificationPage, setNotificationPage] = useState(1)
   const [notificationLoading, setNotificationLoading] = useState(false)
+  const [notificationLoadingMore, setNotificationLoadingMore] = useState(false)
   const [notificationDropdownOpen, setNotificationDropdownOpen] = useState(false)
   const [guideVisible, setGuideVisible] = useState(false)
+  const [feedbackVisible, setFeedbackVisible] = useState(false)
+  const [feedbackSubmitting, setFeedbackSubmitting] = useState(false)
+  const [feedbackForm] = Form.useForm()
   const navigate = useNavigate()
   const location = useLocation()
   const { user, logout, permissions, fetchPermissions } = useAuth()
-  
+
   // 角色判断
   const userRole = permissions?.role || user?.role || 'member'
   const isManager = userRole === 'manager'
   const isLeader = userRole === 'leader'
   const teamInfo = permissions?.team
-  
+
   // 露出功能授权用户列表 (wj01-wj10)
   const LUCHU_AUTHORIZED_USERS = ['wj01', 'wj02', 'wj03', 'wj04', 'wj05', 'wj06', 'wj07', 'wj08', 'wj09', 'wj10']
   const hasLuchuAccess = user?.username && LUCHU_AUTHORIZED_USERS.includes(user.username)
-  
+
   // 首次加载时获取权限
   useEffect(() => {
     if (!permissions && user) {
@@ -105,19 +113,40 @@ const Layout = () => {
     return () => clearInterval(timer)
   }, [user, fetchNotificationUnreadCount])
 
-  // OPT-001：打开铃铛时拉取通知列表
+  const NOTIFICATION_PAGE_SIZE = 20
+  // OPT-001：打开铃铛时拉取通知列表（首页）
   const fetchNotificationList = useCallback(async () => {
     if (!user) return
     setNotificationLoading(true)
+    setNotificationPage(1)
     try {
-      const res = await api.get('/api/notifications', { params: { page: 1, page_size: 20 } })
+      const res = await api.get('/api/notifications', { params: { page: 1, page_size: NOTIFICATION_PAGE_SIZE } })
       setNotificationList(res.data?.items ?? [])
+      setNotificationTotal(res.data?.total ?? 0)
     } catch (_) {
       setNotificationList([])
+      setNotificationTotal(0)
     } finally {
       setNotificationLoading(false)
     }
   }, [user])
+  // G-01：加载更多通知
+  const fetchMoreNotifications = useCallback(async () => {
+    if (!user) return
+    const nextPage = notificationPage + 1
+    setNotificationLoadingMore(true)
+    try {
+      const res = await api.get('/api/notifications', { params: { page: nextPage, page_size: NOTIFICATION_PAGE_SIZE } })
+      const newItems = res.data?.items ?? []
+      setNotificationList((prev) => [...prev, ...newItems])
+      setNotificationPage(nextPage)
+      setNotificationTotal(res.data?.total ?? notificationTotal)
+    } catch (_) {
+      // ignore
+    } finally {
+      setNotificationLoadingMore(false)
+    }
+  }, [user, notificationPage, notificationTotal])
   const handleNotificationOpenChange = (open) => {
     setNotificationDropdownOpen(open)
     if (open) fetchNotificationList()
@@ -180,6 +209,15 @@ const Layout = () => {
       ],
     },
     {
+      key: 'merchant-manage',
+      icon: <ShopOutlined />,
+      label: '商家管理',
+      children: [
+        { key: '/merchant-management', icon: <ShopOutlined />, label: '商家目录与分配' },
+        { key: '/merchant-performance', icon: <FundViewOutlined />, label: '绩效看板' },
+      ],
+    },
+    {
       key: 'account-manage',
       icon: <SettingOutlined />,
       label: '账号管理',
@@ -229,6 +267,15 @@ const Layout = () => {
         { key: '/report-monthly', icon: <FileTextOutlined />, label: '本月报表' },
         { key: '/report-quarterly', icon: <FileTextOutlined />, label: '本季度报表' },
         { key: '/report-yearly', icon: <FileTextOutlined />, label: '本年度报表' },
+      ],
+    },
+    {
+      key: 'merchant-manage',
+      icon: <ShopOutlined />,
+      label: '商家管理',
+      children: [
+        { key: '/merchant-management', icon: <ShopOutlined />, label: '商家目录与分配' },
+        { key: '/merchant-performance', icon: <FundViewOutlined />, label: '绩效看板' },
       ],
     },
     {
@@ -285,6 +332,15 @@ const Layout = () => {
       ],
     },
     {
+      key: 'merchant-manage',
+      icon: <ShopOutlined />,
+      label: '商家管理',
+      children: [
+        { key: '/merchant-management', icon: <ShopOutlined />, label: '商家目录与分配' },
+        { key: '/merchant-performance', icon: <FundViewOutlined />, label: '绩效看板' },
+      ],
+    },
+    {
       key: 'luchu',
       icon: <EditOutlined />,
       label: '露出管理',
@@ -314,15 +370,15 @@ const Layout = () => {
     if (isManager) items = managerMenuItems
     else if (isLeader) items = leaderMenuItems
     else items = memberMenuItems
-    
+
     // 如果用户没有露出功能权限，过滤掉露出菜单
     if (!hasLuchuAccess) {
       items = items.filter(item => item.key !== 'luchu')
     }
-    
+
     return items
   }
-  
+
   const menuItems = getMenuItems()
 
   // 计算当前选中的菜单项和展开的子菜单
@@ -375,7 +431,7 @@ const Layout = () => {
       localStorage.setItem('sider_open_keys', JSON.stringify(newOpenKeys))
     }
   }, [location.pathname])
-  
+
   // 角色变化时重新初始化菜单
   useEffect(() => {
     setOpenKeys(getOpenKeys())
@@ -391,6 +447,11 @@ const Layout = () => {
       key: 'guide',
       icon: <GiftOutlined />,
       label: '新功能引导',
+    },
+    {
+      key: 'feedback',
+      icon: <EditOutlined />,
+      label: '提交反馈',
     },
     {
       key: 'logout',
@@ -412,6 +473,15 @@ const Layout = () => {
       setGuideVisible(true)
       return
     }
+    if (key === 'feedback') {
+      feedbackForm.setFieldsValue({
+        feedback_type: 'data_issue',
+        subject: '',
+        content: '',
+      })
+      setFeedbackVisible(true)
+      return
+    }
     if (key === 'logout') {
       await logout()
       navigate('/login')
@@ -422,6 +492,27 @@ const Layout = () => {
     setOpenKeys(keys)
     // 持久化展开状态
     localStorage.setItem('sider_open_keys', JSON.stringify(keys))
+  }
+
+  const submitFeedback = async () => {
+    try {
+      const values = await feedbackForm.validateFields()
+      setFeedbackSubmitting(true)
+      await api.post('/api/feedback', {
+        feedback_type: values.feedback_type,
+        subject: values.subject,
+        content: values.content,
+        page_path: location.pathname,
+      })
+      message.success('反馈已提交给维护人员 wj07')
+      setFeedbackVisible(false)
+      feedbackForm.resetFields()
+    } catch (error) {
+      if (error?.errorFields) return
+      message.error(error.response?.data?.detail || '反馈提交失败')
+    } finally {
+      setFeedbackSubmitting(false)
+    }
   }
 
   const renderMenu = () => (
@@ -557,7 +648,12 @@ const Layout = () => {
                       )}
                     />
                   </Spin>
-                  <div style={{ textAlign: 'center', marginTop: 8, borderTop: '1px solid #f0f0f0', paddingTop: 8 }}>
+                  <div style={{ textAlign: 'center', marginTop: 8, borderTop: '1px solid #f0f0f0', paddingTop: 8, display: 'flex', justifyContent: 'center', gap: 16 }}>
+                    {notificationList.length < notificationTotal && (
+                      <Button type="link" size="small" loading={notificationLoadingMore} onClick={fetchMoreNotifications}>
+                        查看更多
+                      </Button>
+                    )}
                     <Typography.Link type="secondary" style={{ fontSize: 12 }} onClick={() => setNotificationDropdownOpen(false)}>
                       关闭
                     </Typography.Link>
@@ -595,7 +691,7 @@ const Layout = () => {
             <Space style={{ cursor: 'pointer' }}>
               <Avatar icon={<UserOutlined />} />
               <span style={{ display: isMobile ? 'none' : 'inline' }}>
-                {user?.display_name || user?.username} 
+                {user?.display_name || user?.username}
                 {isManager && <Tag color="gold" style={{ marginLeft: 8 }}>经理</Tag>}
                 {isLeader && <Tag color="blue" style={{ marginLeft: 8 }}>{teamInfo?.name || '组长'}</Tag>}
                 {!isManager && !isLeader && <Tag color="default" style={{ marginLeft: 8 }}>员工</Tag>}
@@ -619,7 +715,14 @@ const Layout = () => {
               if (hasUnreadChangelog()) setChangelogVisible(true)
             }}
             footer={[
-              <Button key="skip" type="link" onClick={() => { setGuideSkipped(); setGuideVisible(false); if (hasUnreadChangelog()) setChangelogVisible(true) }}>
+              <Button
+                key="skip"
+                onClick={() => {
+                  setGuideSkipped()
+                  setGuideVisible(false)
+                  if (hasUnreadChangelog()) setChangelogVisible(true)
+                }}
+              >
                 跳过
               </Button>,
               <Button
@@ -628,49 +731,82 @@ const Layout = () => {
                 onClick={() => {
                   setGuideSkipped()
                   setGuideVisible(false)
-                  if (hasUnreadChangelog()) setChangelogVisible(true)
+                  setChangelogVisible(true)
                 }}
               >
-                开始使用
+                查看更新日志
               </Button>,
             ]}
-            closable
-            width={480}
           >
-            <Typography.Paragraph type="secondary" style={{ marginBottom: 16 }}>
-              本次更新带来以下功能，帮助您更好地使用平台：
-            </Typography.Paragraph>
-            <div style={{ marginBottom: 12 }}>
-              <Typography.Text strong>🔔 消息通知</Typography.Text>
-              <br />
-              <Typography.Text type="secondary" style={{ fontSize: 13 }}>
-                Header 右侧铃铛可查看拒付佣金变动等系统提醒，支持未读角标与一键已读。
-              </Typography.Text>
-            </div>
-            <div style={{ marginBottom: 12 }}>
-              <Typography.Text strong>📋 MCC 脚本模式</Typography.Text>
-              <br />
-              <Typography.Text type="secondary" style={{ fontSize: 13 }}>
-                在「账号管理 → MCC账号」编辑时选择「脚本模式」：新建 Google Sheet 并设为公开可编辑 → 粘贴共享链接 → 获取脚本并在 MCC 中运行 → 点击「同步 Sheet 数据」导入。无需 API 配额，详细步骤见编辑页引导。
-              </Typography.Text>
-            </div>
-            <div>
-              <Typography.Text strong>📦 更新日志</Typography.Text>
-              <br />
-              <Typography.Text type="secondary" style={{ fontSize: 13 }}>
-                点击铃铛旁的礼物图标可随时查看版本更新与维护说明。
-              </Typography.Text>
+            <div style={{ lineHeight: 1.8 }}>
+              <p><b>欢迎使用新版平台</b>，已为你准备好以下能力：</p>
+              <ul style={{ paddingLeft: 20 }}>
+                <li>脚本模式支持公开 CSV 链接读取，无需 Google API 授权</li>
+                <li>MCC 配置新增新手引导，按步骤完成即可稳定同步</li>
+                <li>错误提示更清晰，数据校验更严格，避免常见填错</li>
+                <li>新增商家管理模块：商家目录与分配、绩效看板</li>
+              </ul>
+              <p style={{ color: '#666', marginTop: 8 }}>
+                你可以随时在右上角“礼物”图标再次查看更新日志。
+              </p>
             </div>
           </Modal>
+
+          <Modal
+            title="提交反馈"
+            open={feedbackVisible}
+            onCancel={() => {
+              setFeedbackVisible(false)
+              feedbackForm.resetFields()
+            }}
+            onOk={submitFeedback}
+            confirmLoading={feedbackSubmitting}
+            okText="提交反馈"
+            cancelText="取消"
+            destroyOnHidden
+          >
+            <Form form={feedbackForm} layout="vertical">
+              <Form.Item
+                label="反馈类型"
+                name="feedback_type"
+                rules={[{ required: true, message: '请选择反馈类型' }]}
+              >
+                <Select>
+                  <Select.Option value="data_issue">数据误差</Select.Option>
+                  <Select.Option value="feature_experience">功能体验不理想</Select.Option>
+                  <Select.Option value="bug_report">功能异常/报错</Select.Option>
+                  <Select.Option value="feature_request">新功能建议</Select.Option>
+                  <Select.Option value="other">其他</Select.Option>
+                </Select>
+              </Form.Item>
+
+              <Form.Item label="反馈标题" name="subject" rules={[{ required: true, message: '请输入反馈标题' }]}>
+                <Input maxLength={120} placeholder="例如：LH 商家佣金与后台不一致" />
+              </Form.Item>
+
+              <Form.Item
+                label="详细描述"
+                name="content"
+                rules={[
+                  { required: true, message: '请描述具体问题' },
+                  { min: 5, message: '至少输入 5 个字符' },
+                ]}
+              >
+                <Input.TextArea
+                  rows={6}
+                  maxLength={3000}
+                  placeholder="请尽量写清楚：\n1) 问题现象\n2) 出现页面/时间范围\n3) 期望结果"
+                />
+              </Form.Item>
+
+              <Typography.Text type="secondary">
+                反馈将直接发送给维护人员 wj07。当前页面：{location.pathname}
+              </Typography.Text>
+            </Form>
+          </Modal>
         </Header>
-        <Content style={{
-          margin: isMobile ? '12px' : '24px',
-          padding: isMobile ? 12 : 24,
-          background: '#fff',
-          minHeight: 280,
-          borderRadius: 16,
-          boxShadow: '0 1px 3px rgba(0,0,0,0.08)',
-        }}>
+
+        <Content style={{ margin: isMobile ? '12px' : '16px', minHeight: 280 }}>
           <Outlet />
         </Content>
       </AntLayout>

@@ -239,7 +239,7 @@ class PartnerBoostService:
                 transaction_time = order_time
             else:
                 transaction_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            
+
             # 解析佣金金额
             def _safe_float(value):
                 if value is None:
@@ -250,18 +250,28 @@ class PartnerBoostService:
                     return float(value)
                 except (ValueError, TypeError):
                     return 0.0
-            
+
             commission_amount = _safe_float(
                 item.get("sale_comm") or item.get("commission_amount") or item.get("commission") or 0
             )
-            
+
+            mid_value = (
+                item.get("merchant_id")
+                or item.get("mid")
+                or item.get("brand_id")
+                or item.get("brandId")
+                or item.get("m_id")
+            )
+            merchant_id = str(mid_value).strip() if mid_value not in (None, "") else None
+
             transactions.append({
                 "transaction_id": item.get("order_id") or item.get("partnerboost_id"),
                 "transaction_time": transaction_time,
                 "order_amount": _safe_float(item.get("sale_amount") or item.get("amount") or 0),
                 "commission_amount": commission_amount,
                 "status": item.get("status", "Pending"),
-                "merchant": item.get("merchant_name") or item.get("mcid"),
+                "merchant": item.get("merchant") or item.get("merchant_name") or item.get("mcid"),
+                "merchant_id": merchant_id,
                 "raw_data": item
             })
         

@@ -16,6 +16,14 @@ from app.models.affiliate_transaction import AffiliateTransaction, AffiliateReje
 from app.models.ai_report import AIReport, UserPrompt
 from app.models.notification import Notification
 from app.models.commission_snapshot import CommissionSnapshot
+# 商家任务分配
+from app.models.merchant import AffiliateMerchant, MerchantAssignment
+from app.models.merchant_discovery_run import MerchantDiscoveryRun
+from app.models.merchant_mid_repair_queue import MerchantMidRepairQueue
+from app.models.merchant_alias import MerchantAlias
+from app.models.platform_field_contract import PlatformFieldContract
+from app.models.merchant_source_snapshot import MerchantSourceSnapshot
+from app.models.merchant_assignment_event import MerchantAssignmentEvent
 # 露出功能模型
 from app.models.luchu import (
     LuchuWebsite,
@@ -55,6 +63,15 @@ __all__ = [
     "UserPrompt",
     "Notification",
     "CommissionSnapshot",
+    # 商家任务分配
+    "AffiliateMerchant",
+    "MerchantAssignment",
+    "MerchantDiscoveryRun",
+    "MerchantMidRepairQueue",
+    "MerchantAlias",
+    "PlatformFieldContract",
+    "MerchantSourceSnapshot",
+    "MerchantAssignmentEvent",
     # 露出功能
     "LuchuWebsite",
     "LuchuArticle",

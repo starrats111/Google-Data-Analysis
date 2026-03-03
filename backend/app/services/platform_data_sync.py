@@ -194,7 +194,10 @@ class PlatformDataSyncService:
                     {
                         "transaction_id": item.get("settlement_id") or f"cg_{item.get('mcid')}_{item.get('settlement_date')}",
                         "transaction_time": item.get("settlement_date"),
-                        "merchant": item.get("mcid"),
+                        "merchant": item.get("merchant") or item.get("mcid"),
+                        "merchant_id": item.get("merchant_id"),
+                        "brand_id": item.get("brand_id"),
+                        "mcid": item.get("mcid"),
                         "order_amount": 0,
                         "commission_amount": item.get("sale_commission", 0),
                         "status": "approved"  # Commission Validation API默认是已确认的
@@ -271,6 +274,7 @@ class PlatformDataSyncService:
                         "commission_amount": total_commission,
                         "order_amount": float(tx.get("order_amount", 0) or tx.get("saleAmount", 0) or 0),
                         "merchant": tx.get("merchant") or tx.get("merchantName") or tx.get("mcid") or None,
+                        "merchant_id": tx.get("merchant_id") or None,
                         "brand_id": tx.get("brand_id") or tx.get("brandId") or None,
                     }
                     
@@ -473,7 +477,7 @@ class PlatformDataSyncService:
                         "commission_amount": total_commission,
                         "order_amount": float(tx.get("order_amount", 0) or tx.get("sale_amount", 0) or 0),
                         "merchant": tx.get("merchant") or tx.get("merchant_name") or None,
-                        "merchant_id": tx.get("merchant_id") or tx.get("brand_id") or None,
+                        "merchant_id": tx.get("merchant_id") or None,
                     }
                     
                     transaction_service.normalize_and_save(
@@ -922,7 +926,7 @@ class PlatformDataSyncService:
                         "commission_amount": total_commission,
                         "order_amount": float(tx.get("order_amount", 0) or 0),
                         "merchant": tx.get("merchant"),
-                        "merchant_id": tx.get("merchant_id") or tx.get("brand_id") or None,
+                        "merchant_id": tx.get("merchant_id") or None,
                     }
                     
                     transaction_service.normalize_and_save(
@@ -1083,7 +1087,7 @@ class PlatformDataSyncService:
                         "commission_amount": total_commission,
                         "order_amount": float(tx.get("order_amount", 0) or 0),
                         "merchant": tx.get("merchant"),
-                        "merchant_id": tx.get("merchant_id") or tx.get("brand_id") or None,
+                        "merchant_id": tx.get("merchant_id") or None,
                     }
                     
                     transaction_service.normalize_and_save(
@@ -1244,7 +1248,7 @@ class PlatformDataSyncService:
                         "commission_amount": total_commission,
                         "order_amount": float(tx.get("order_amount", 0) or 0),
                         "merchant": tx.get("merchant"),
-                        "merchant_id": tx.get("merchant_id") or tx.get("brand_id") or None,
+                        "merchant_id": tx.get("merchant_id") or None,
                     }
                     
                     transaction_service.normalize_and_save(
@@ -1405,7 +1409,7 @@ class PlatformDataSyncService:
                         "commission_amount": total_commission,
                         "order_amount": float(tx.get("order_amount", 0) or 0),
                         "merchant": tx.get("merchant"),
-                        "merchant_id": tx.get("merchant_id") or tx.get("brand_id") or None,
+                        "merchant_id": tx.get("merchant_id") or None,
                     }
                     
                     transaction_service.normalize_and_save(
@@ -1562,7 +1566,7 @@ class PlatformDataSyncService:
             # 先保存明细交易到AffiliateTransaction表（用于查询）
             transaction_service = UnifiedTransactionService(self.db)
             transaction_saved_count = 0
-            for tx in transactions_raw:
+            for idx, tx in enumerate(transactions_raw):
                 try:
                     # 转换时间格式
                     transaction_time = tx.get('transaction_time')
@@ -1587,7 +1591,7 @@ class PlatformDataSyncService:
                         "commission_amount": float(tx.get("commission_amount", 0) or tx.get("commission", 0) or 0),
                         "order_amount": float(tx.get("order_amount", 0) or tx.get("sale_amount", 0) or 0),
                         "merchant": tx.get("merchant") or tx.get("merchant_name") or tx.get("mcid") or None,
-                        "merchant_id": tx.get("merchant_id") or tx.get("brand_id") or None,
+                        "merchant_id": tx.get("merchant_id") or None,
                     }
                     
                     transaction_service.normalize_and_save(

@@ -50,6 +50,7 @@ from app.api import (
     linkhaitao,
     mcc,
     notifications,
+    feedback,
     platform_data,
     reports,
     stage_label,
@@ -57,6 +58,8 @@ from app.api import (
     team_management,
     upload,
     users,
+    # 商家任务分配
+    merchants,
     # 露出功能模块
     luchu_articles,
     luchu_ai,
@@ -250,6 +253,12 @@ app.include_router(reports.router)
 app.include_router(system.router)
 app.include_router(team_management.router)
 app.include_router(notifications.router)
+app.include_router(feedback.router)
+
+# 商家任务分配路由
+app.include_router(merchants.router)
+app.include_router(merchants.assignment_router)
+app.include_router(merchants.performance_router)
 
 # 露出功能路由
 app.include_router(luchu_articles.router)

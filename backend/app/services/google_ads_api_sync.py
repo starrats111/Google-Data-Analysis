@@ -189,8 +189,10 @@ class GoogleAdsApiSyncService:
                             # 从广告系列名提取商家ID（格式：序号-平台-商家-国家-时间-MID）
                             merchant_id = None
                             parts = campaign_name.split('-')
-                            if len(parts) >= 3:
-                                merchant_id = parts[2]  # 第三个字段是商家
+                            for p in reversed(parts):
+                                if p.isdigit() and len(p) >= 4:
+                                    merchant_id = p
+                                    break
                             
                             # 查找或创建AdCampaign记录
                             if affiliate_account_id and merchant_id:

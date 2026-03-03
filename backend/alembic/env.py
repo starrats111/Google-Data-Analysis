@@ -19,6 +19,15 @@ from app.models import affiliate_account  # noqa
 from app.models import affiliate_transaction  # noqa
 from app.models import google_ads_api_data  # noqa
 from app.models import luchu  # noqa
+from app.models import notification  # noqa
+from app.models import commission_snapshot  # noqa
+from app.models import merchant  # noqa
+from app.models import merchant_discovery_run  # noqa
+from app.models import merchant_mid_repair_queue  # noqa
+from app.models import merchant_alias  # noqa
+from app.models import platform_field_contract  # noqa
+from app.models import merchant_source_snapshot  # noqa
+from app.models import merchant_assignment_event  # noqa
 
 config = context.config
 config.set_main_option("sqlalchemy.url", settings.DATABASE_URL)

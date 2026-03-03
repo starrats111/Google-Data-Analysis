@@ -538,15 +538,19 @@ class RewardooService(PlatformServiceBase):
                         # 如果转换失败，保持原值
                         pass
                 
-                # 提取商家ID（MID）：RW 平台的 MID 是 mid 字段（数字ID）
-                # mid 是广告系列名中的 MID（如 116022），mcid 是商家标识符（如 revisionskincare）
-                mid_value = item.get("mid") or item.get("brand_id") or item.get("brandId") or item.get("m_id") or item.get("merchant_id")
-                merchant_id = str(mid_value).strip() if mid_value else None
+                # 提取商家ID（MID）：RW 优先 merchant_id，再回退 mid/brand_id/brandId
+                mid_value = (
+                    item.get("merchant_id")
+                    or item.get("mid")
+                    or item.get("brand_id")
+                    or item.get("brandId")
+                )
+                merchant_id = str(mid_value).strip() if mid_value not in (None, "") else None
                 
                 extracted.append({
                     "transaction_id": item.get("order_id") or item.get("transaction_id") or item.get("rewardoo_id") or item.get("id") or f"rw_{idx}",
                     "transaction_time": order_time,
-                    "merchant": item.get("merchant_name") or item.get("merchant") or item.get("brand") or item.get("brand_name") or "",
+                    "merchant": item.get("merchant") or item.get("merchant_name") or item.get("brand_name") or "",
                     "order_amount": _to_float(
                         item.get("sale_amount", 0)
                         or item.get("saleAmount", 0)

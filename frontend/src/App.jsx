@@ -33,6 +33,10 @@ const SystemLogs = lazyWithRetry(() => import('./pages/SystemLogs'))
 const TeamManagement = lazyWithRetry(() => import('./pages/TeamManagement'))
 const TeamOverview = lazyWithRetry(() => import('./pages/TeamOverview'))
 
+// 商家管理
+const MerchantManagement = lazyWithRetry(() => import('./pages/MerchantManagement'))
+const MerchantPerformance = lazyWithRetry(() => import('./pages/MerchantPerformance'))
+
 // 露出功能页面
 const LuchuDashboard = lazyWithRetry(() => import('./pages/luchu/LuchuDashboard'))
 const LuchuCreate = lazyWithRetry(() => import('./pages/luchu/LuchuCreate'))
@@ -107,6 +111,9 @@ function App() {
               <Route path="system-logs" element={<SystemLogs />} />
               <Route path="team-management" element={<TeamManagement />} />
               <Route path="team-overview" element={<TeamOverview />} />
+              {/* 商家任务分配 */}
+              <Route path="merchant-management" element={<MerchantManagement />} />
+              <Route path="merchant-performance" element={<MerchantPerformance />} />
               {/* 露出功能路由 */}
               <Route path="luchu" element={<LuchuDashboard />} />
               <Route path="luchu/create" element={<LuchuCreate />} />

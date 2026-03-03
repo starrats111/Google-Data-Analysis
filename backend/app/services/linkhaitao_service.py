@@ -218,9 +218,9 @@ class LinkHaitaoService:
                 
                 total_commission += cashback
                 
-                # 提取商家ID（MID）：LH 平台尝试多个可能的字段
-                brand_id = item.get("m_id") or item.get("mcid") or item.get("brand_id") or item.get("merchant_id")
-                merchant_id = str(brand_id).strip() if brand_id else None
+                # 提取商家ID（MID）：LH 平台优先使用 m_id（数字 MID）
+                brand_id = item.get("m_id") or item.get("brand_id") or item.get("merchant_id")
+                merchant_id = str(brand_id).strip() if brand_id not in (None, "") else None
                 
                 # 佣金记录
                 commission_records.append({

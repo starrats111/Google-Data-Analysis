@@ -263,10 +263,9 @@ class PartnerMaticService:
                 item.get("commission_amount") or item.get("commission") or 0
             )
             
-            # 提取商家ID（MID）：PM 平台的 MID 是 brand_id 字段
-            # 优先使用 brand_id，这是和广告系列名中 MID 匹配的字段
-            brand_id = item.get("brand_id") or item.get("brandId")
-            merchant_id = str(brand_id).strip() if brand_id else None
+            # 提取商家ID（MID）：PM 优先 merchant_id，再回退 brand_id/brandId
+            mid_value = item.get("merchant_id") or item.get("brand_id") or item.get("brandId")
+            merchant_id = str(mid_value).strip() if mid_value not in (None, "") else None
             
             transactions.append({
                 "transaction_id": item.get("orderId") or item.get("order_id") or item.get("partnermaticId") or item.get("partnermatic_id"),
@@ -274,8 +273,8 @@ class PartnerMaticService:
                 "order_amount": _safe_float(item.get("saleAmount") or item.get("sale_amount") or item.get("amount") or 0),
                 "commission_amount": commission_amount,
                 "status": item.get("status", "Pending"),
-                "merchant": item.get("merchantName") or item.get("merchant_name") or item.get("mcid"),
-                "merchant_id": merchant_id,  # 添加 MID
+                "merchant": item.get("merchant") or item.get("merchantName") or item.get("merchant_name") or item.get("mcid"),
+                "merchant_id": merchant_id,
                 "raw_data": item
             })
         
