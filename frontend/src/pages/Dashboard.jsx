@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState, useCallback, useRef, lazy, Suspense } from 'react'
 import { Card, Row, Col, Table, message, Segmented, Tag, Typography, Space, Statistic, Input, Button, Spin, Select } from 'antd'
-import { SearchOutlined, RocketOutlined, CalendarOutlined, GlobalOutlined, PictureOutlined, SyncOutlined, ClockCircleOutlined } from '@ant-design/icons'
+import { SearchOutlined, RocketOutlined, CalendarOutlined, GlobalOutlined, SyncOutlined, ClockCircleOutlined, ShopOutlined } from '@ant-design/icons'
+import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../store/authStore'
 import api from '../services/api'
 import dayjs from 'dayjs'
@@ -17,6 +18,7 @@ dayjs.extend(timezone)
 dayjs.tz.setDefault('Asia/Shanghai')
 
 const Dashboard = () => {
+  const navigate = useNavigate()
   const { user } = useAuth()
   const [overviewData, setOverviewData] = useState(null)
   const [employeeData, setEmployeeData] = useState([])
@@ -30,16 +32,9 @@ const Dashboard = () => {
   const [calendarLoading, setCalendarLoading] = useState(false)
   const [calendarData, setCalendarData] = useState(null)
   
-  // 广告词生成状态
-  const [keywords, setKeywords] = useState('')
-  const [productUrl, setProductUrl] = useState('')
-  const [adCopyLoading, setAdCopyLoading] = useState(false)
-  const [adCopyData, setAdCopyData] = useState(null)
-  const [targetCountry, setTargetCountry] = useState('US')
-  
-  // 截图粘贴状态
-  const [keywordImageLoading, setKeywordImageLoading] = useState(false)
-  const [pastedImage, setPastedImage] = useState(null)
+  // 商家待完成状态
+  const [myAssignments, setMyAssignments] = useState([])
+  const [myAssignmentsLoading, setMyAssignmentsLoading] = useState(false)
   
   // 刷新状态
   const [lastUpdated, setLastUpdated] = useState(null)
@@ -95,11 +90,14 @@ const Dashboard = () => {
   useEffect(() => {
     let cancelled = false
     const doFetch = async () => {
-      if (!cancelled) doRefresh()
+      if (!cancelled) {
+        doRefresh()
+        fetchMyAssignments()
+      }
     }
     doFetch()
     return () => { cancelled = true }
-  }, [doRefresh])
+  }, [doRefresh, fetchMyAssignments])
 
   // 经理视角的费用佣金走向图配置
   const managerTrendOption = useMemo(() => ({
@@ -244,91 +242,18 @@ const Dashboard = () => {
     }
   }
 
-  // 处理粘贴截图
-  const handlePaste = async (e) => {
-    const items = e.clipboardData?.items
-    if (!items) return
-    
-    for (let i = 0; i < items.length; i++) {
-      if (items[i].type.indexOf('image') !== -1) {
-        const file = items[i].getAsFile()
-        if (file) {
-          e.preventDefault()
-          await recognizeImage(file)
-          break
-        }
-      }
-    }
-  }
-
-  // 识别图片中的关键词
-  const recognizeImage = async (file) => {
-    setKeywordImageLoading(true)
-    setPastedImage(URL.createObjectURL(file))
-    
+  // 获取我的待完成商家
+  const fetchMyAssignments = useCallback(async () => {
+    setMyAssignmentsLoading(true)
     try {
-      const formData = new FormData()
-      formData.append('file', file)
-      formData.append('prompt', `请仔细分析这张关键词工具截图，提取所有可见的关键词。
-
-要求：
-1. 只提取关键词本身，不要搜索量、竞争度等数据
-2. 每个关键词用逗号分隔
-3. 直接输出关键词列表，不要任何解释
-
-例如输出格式：wireless earbuds, bluetooth headphones, earphones wireless, tws earbuds`)
-      
-      const res = await api.post('/api/gemini/analyze-image', formData, {
-        headers: { 'Content-Type': 'multipart/form-data' }
-      })
-      
-      if (res.data.success) {
-        setKeywords(res.data.analysis)
-        message.success('关键词识别成功！')
-      } else {
-        message.error(res.data.message || '识别失败')
-      }
-    } catch (error) {
-      message.error('识别失败: ' + (error.response?.data?.detail || error.message))
+      const res = await api.get('/api/merchant-assignments', { params: { status: 'active', page: 1, page_size: 10 } })
+      setMyAssignments(res.data?.items || [])
+    } catch (_) {
+      setMyAssignments([])
     } finally {
-      setKeywordImageLoading(false)
+      setMyAssignmentsLoading(false)
     }
-  }
-
-  // 清除粘贴的图片
-  const clearPastedImage = () => {
-    setPastedImage(null)
-  }
-
-  // 生成广告词
-  const generateAdCopy = async () => {
-    if (!productUrl.trim()) {
-      message.warning('请输入产品链接URL（必填，用于获取真实折扣和物流信息）')
-      return
-    }
-    if (!keywords.trim()) {
-      message.warning('请输入关键词（或上传截图识别）')
-      return
-    }
-    setAdCopyLoading(true)
-    try {
-      const keywordList = keywords.split(/[,，\s\n]+/).filter(k => k.trim())
-      const res = await api.post('/api/gemini/recommend-keywords', {
-        keywords: keywordList,
-        product_url: productUrl,
-        target_country: targetCountry
-      })
-      if (res.data.success) {
-        setAdCopyData(res.data)
-      } else {
-        message.error(res.data.message || '生成失败')
-      }
-    } catch (error) {
-      message.error('生成失败: ' + (error.response?.data?.detail || error.message))
-    } finally {
-      setAdCopyLoading(false)
-    }
-  }
+  }, [])
 
   // 国家选项
   const countryOptions = [
@@ -532,110 +457,63 @@ const Dashboard = () => {
           </Card>
         </Col>
         <Col span={12}>
-          <Card 
-            title={<span><RocketOutlined style={{ marginRight: 8 }} />AI 广告词生成</span>}
+          <Card
+            title={<span><ShopOutlined style={{ marginRight: 8 }} />商家待完成</span>}
             extra={
-              <Space>
-                <Select
-                  value={targetCountry}
-                  onChange={setTargetCountry}
-                  options={countryOptions}
-                  style={{ width: 120 }}
-                  placeholder="目标国家"
-                />
-                <Button 
-                  type="primary" 
-                  icon={<RocketOutlined />} 
-                  onClick={generateAdCopy}
-                  loading={adCopyLoading}
-                >
-                  生成
-                </Button>
-              </Space>
+              <Button type="link" onClick={() => navigate('/merchant-management')}>
+                查看全部
+              </Button>
             }
           >
-            <Spin spinning={adCopyLoading}>
-              <Input
-                placeholder="产品链接 URL（必填），例如：https://www.tous.com"
-                value={productUrl}
-                onChange={(e) => setProductUrl(e.target.value)}
-                style={{ marginBottom: 8 }}
-                prefix={<GlobalOutlined />}
-                status={!productUrl.trim() ? 'warning' : ''}
-              />
-              <div style={{ marginBottom: 8 }}>
-                <Text type="secondary">关键词（直接粘贴截图或手动输入）：</Text>
-              </div>
-              
-              {/* 粘贴区域 */}
-              <div
-                onPaste={handlePaste}
-                style={{
-                  border: pastedImage ? '2px solid #52c41a' : '2px dashed #d9d9d9',
-                  borderRadius: 8,
-                  padding: 12,
-                  marginBottom: 12,
-                  background: pastedImage ? '#f6ffed' : '#fafafa',
-                  cursor: 'pointer',
-                  minHeight: 80,
-                  position: 'relative'
-                }}
-                tabIndex={0}
-              >
-                {keywordImageLoading ? (
-                  <div style={{ textAlign: 'center', padding: 20 }}>
-                    <Spin />
-                    <p style={{ marginTop: 8, color: '#4DA6FF' }}>AI 正在识别关键词...</p>
-                  </div>
-                ) : pastedImage ? (
-                  <div>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-                      <Text type="success">✅ 截图已识别</Text>
-                      <Button size="small" onClick={clearPastedImage}>清除</Button>
+            <Spin spinning={myAssignmentsLoading}>
+              {myAssignments.length > 0 ? (
+                <div style={{ maxHeight: 460, overflow: 'auto' }}>
+                  {myAssignments.map((item) => (
+                    <div
+                      key={item.id}
+                      style={{
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        alignItems: 'center',
+                        padding: '10px 12px',
+                        marginBottom: 8,
+                        background: '#fafafa',
+                        borderRadius: 8,
+                        border: '1px solid #f0f0f0',
+                      }}
+                    >
+                      <div style={{ flex: 1 }}>
+                        <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 2 }}>
+                          {item.merchant?.merchant_name || '-'}
+                        </div>
+                        <Space size={8}>
+                          <Tag color="blue">{item.merchant?.platform || '-'}</Tag>
+                          <Text type="secondary" style={{ fontSize: 12 }}>
+                            MID: {item.merchant?.merchant_id || '待补'}
+                          </Text>
+                          <Tag color={item.priority === 'high' ? 'red' : item.priority === 'low' ? 'default' : 'blue'}>
+                            {item.priority || 'normal'}
+                          </Tag>
+                        </Space>
+                      </div>
+                      <div style={{ textAlign: 'right' }}>
+                        {item.monthly_target ? (
+                          <div style={{ fontSize: 13, color: '#389e0d', fontWeight: 600 }}>
+                            ${Number(item.monthly_target).toFixed(0)}
+                          </div>
+                        ) : null}
+                        <Text type="secondary" style={{ fontSize: 11 }}>
+                          {item.assigned_at ? new Date(item.assigned_at).toLocaleDateString('zh-CN') : ''}
+                        </Text>
+                      </div>
                     </div>
-                    <img src={pastedImage} alt="截图" style={{ maxWidth: '100%', maxHeight: 100, borderRadius: 4 }} />
-                  </div>
-                ) : (
-                  <div style={{ textAlign: 'center', color: '#999' }}>
-                    <PictureOutlined style={{ fontSize: 24, marginBottom: 8 }} />
-                    <p style={{ margin: 0 }}>📋 <b>Ctrl+V 粘贴截图</b></p>
-                    <p style={{ margin: 0, fontSize: 12 }}>从 sem.3ue.co 截图后直接粘贴到这里</p>
-                  </div>
-                )}
-              </div>
-
-              <Input.TextArea
-                placeholder="关键词会自动填入这里，也可手动输入"
-                value={keywords}
-                onChange={(e) => setKeywords(e.target.value)}
-                rows={2}
-                style={{ marginBottom: 12 }}
-              />
-              {adCopyData ? (
-                <div style={{ maxHeight: 400, overflow: 'auto' }}>
-                  <Row gutter={8} style={{ marginBottom: 12 }}>
-                    <Col span={24}>
-                      <Text strong>🔗 产品链接：</Text> <a href={adCopyData.product_url} target="_blank" rel="noreferrer">{adCopyData.product_url}</a>
-                    </Col>
-                  </Row>
-                  <Row gutter={8} style={{ marginBottom: 12 }}>
-                    <Col span={12}>
-                      <Text strong>🎯 关键词：</Text> {adCopyData.keywords?.join(', ')}
-                    </Col>
-                    <Col span={12}>
-                      <Text strong>🌍 {adCopyData.country_name}</Text> · {adCopyData.language} · {adCopyData.currency}
-                    </Col>
-                  </Row>
-                  <div style={{ whiteSpace: 'pre-wrap', fontSize: 13, lineHeight: 1.8, background: '#f5f5f5', padding: 12, borderRadius: 8 }}>
-                    {adCopyData.recommendations}
-                  </div>
+                  ))}
                 </div>
               ) : (
-                <div style={{ textAlign: 'center', padding: 20, color: '#999' }}>
-                  <RocketOutlined style={{ fontSize: 32, marginBottom: 8 }} />
-                  <p><b>⚠️ 产品链接必填</b></p>
-                  <p style={{ fontSize: 12 }}>AI 会从链接中抓取<b>真实的</b>折扣和物流信息</p>
-                  <p style={{ fontSize: 12 }}>生成：17条广告标题 · 6条广告描述 · 6条附加链接</p>
+                <div style={{ textAlign: 'center', padding: 40, color: '#999' }}>
+                  <ShopOutlined style={{ fontSize: 48, marginBottom: 16 }} />
+                  <p>暂无分配的商家任务</p>
+                  <p style={{ fontSize: 12 }}>经理分配商家后将在此显示</p>
                 </div>
               )}
             </Spin>

@@ -18,7 +18,7 @@ import {
   Col,
   Tooltip,
 } from 'antd'
-import { ReloadOutlined, SearchOutlined, UserSwitchOutlined } from '@ant-design/icons'
+import { ReloadOutlined, SearchOutlined, UserSwitchOutlined, SyncOutlined } from '@ant-design/icons'
 import api from '../services/api'
 import { useAuth } from '../store/authStore'
 
@@ -202,17 +202,18 @@ const MerchantManagement = () => {
     }
   }
 
+  const [discoverLoading, setDiscoverLoading] = useState(false)
+
   const handleDiscover = async () => {
-    if (!isManager) {
-      message.warning('仅经理可手动触发商家发现')
-      return
-    }
+    setDiscoverLoading(true)
     try {
       const resp = await api.post('/api/merchants/discover')
-      message.success(resp.data?.message || '商家发现完成')
+      message.success(resp.data?.message || '商家同步完成')
       await Promise.all([fetchStats(), fetchMerchants(1, merchantPageSize)])
     } catch (error) {
-      message.error(error.response?.data?.detail || '商家发现失败')
+      message.error(error.response?.data?.detail || '商家同步失败')
+    } finally {
+      setDiscoverLoading(false)
     }
   }
 
@@ -581,9 +582,7 @@ const MerchantManagement = () => {
                     <Tooltip title="重新加载数据">
                       <Button icon={<ReloadOutlined />} onClick={() => fetchMerchants(merchantPage, merchantPageSize)} />
                     </Tooltip>
-                    {isManager && (
-                      <Button onClick={handleDiscover}>手动发现商家</Button>
-                    )}
+                    <Button icon={<SyncOutlined />} loading={discoverLoading} onClick={handleDiscover}>同步商家</Button>
                     {canManage && (
                       <Button
                         type="primary"

@@ -87,10 +87,11 @@ async def update_merchant(
 
 @router.post("/discover")
 async def discover_merchants(
-    current_user: User = Depends(get_current_manager),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    count = MerchantService.discover_merchants(db)
+    trigger = "manual"
+    count = MerchantService.discover_merchants(db, trigger_type=trigger)
     return {"message": f"发现并注册了 {count} 个新商家", "new_count": count}
 
 
