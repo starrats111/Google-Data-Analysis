@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react'
-import { Card, Table, DatePicker, Select, Tabs, Space, Statistic, Row, Col, message, Skeleton, Tag, Input, Modal, Spin, Button } from 'antd'
-import { SearchOutlined, DollarOutlined, ReloadOutlined } from '@ant-design/icons'
+import { Card, Table, DatePicker, Select, Tabs, Space, Statistic, Row, Col, message, Skeleton, Tag, Input, Modal, Spin, Button, Tooltip } from 'antd'
+import { SearchOutlined, DollarOutlined, ReloadOutlined, InfoCircleOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import api from '../services/api'
 import { useAuth } from '../store/authStore'
@@ -434,6 +434,14 @@ const DataCenter = () => {
       render: (val) => <span style={{ color: '#3f8600' }}>${(val || 0).toFixed(2)}</span>,
     },
     {
+      title: '已付佣金($)',
+      dataIndex: 'approved_commission',
+      key: 'approved_commission',
+      width: 110,
+      sorter: (a, b) => (a.approved_commission || 0) - (b.approved_commission || 0),
+      render: (val) => <span style={{ color: '#52c41a' }}>${(val || 0).toFixed(2)}</span>,
+    },
+    {
       title: '订单数',
       dataIndex: 'orders',
       key: 'orders',
@@ -542,6 +550,24 @@ const DataCenter = () => {
       render: (val) => <span style={{ color: '#3f8600' }}>${(val || 0).toFixed(2)}</span>,
     },
     {
+      title: '已付佣金($)',
+      key: 'approved_commission',
+      width: 110,
+      align: 'right',
+      sorter: (a, b) => {
+        const aApproved = (a.status || '').toLowerCase() === 'approved' ? (a.commission_amount || 0) : 0
+        const bApproved = (b.status || '').toLowerCase() === 'approved' ? (b.commission_amount || 0) : 0
+        return aApproved - bApproved
+      },
+      render: (_, record) => {
+        const isApproved = (record.status || '').toLowerCase() === 'approved'
+        const approvedAmount = isApproved ? (record.commission_amount || 0) : 0
+        return isApproved
+          ? <span style={{ color: '#52c41a' }}>${approvedAmount.toFixed(2)}</span>
+          : <span style={{ color: '#999' }}>$0.00</span>
+      },
+    },
+    {
       title: '状态',
       dataIndex: 'status',
       key: 'status',
@@ -575,22 +601,26 @@ const DataCenter = () => {
   const platformStats = viewMode === 'summary' 
     ? {
         totalCommission: safePlatformData.reduce((sum, item) => sum + (item.total_commission || 0), 0),
+        totalApproved: safePlatformData.reduce((sum, item) => sum + (item.approved_commission || 0), 0),
         totalOrders: safePlatformData.reduce((sum, item) => sum + (item.orders || 0), 0),
         totalRejected: safePlatformData.reduce((sum, item) => sum + (item.rejected_commission || 0), 0),
       }
     : {
         // 明细模式：使用 commission_amount 字段，按状态计算
         totalCommission: safePlatformData.reduce((sum, item) => sum + (item.commission_amount || 0), 0),
+        totalApproved: safePlatformData
+          .filter(item => (item.status || '').toLowerCase() === 'approved')
+          .reduce((sum, item) => sum + (item.commission_amount || 0), 0),
         totalOrders: safePlatformData.length,
         totalRejected: safePlatformData
-          .filter(item => item.status === 'rejected')
+          .filter(item => (item.status || '').toLowerCase() === 'rejected')
           .reduce((sum, item) => sum + (item.commission_amount || 0), 0),
       }
 
-  // 计算 ROI (佣金/费用)
-  const roi = googleStats.totalCost > 0 
-    ? (platformStats.totalCommission / googleStats.totalCost).toFixed(2) 
-    : '0.00'
+  // 计算 ROI = (佣金 - 费用) / 费用
+  const roi = googleStats.totalCost === 0
+    ? null
+    : ((platformStats.totalCommission - googleStats.totalCost) / googleStats.totalCost)
 
   // 同步状态
   const [syncing, setSyncing] = useState(false)
@@ -765,6 +795,17 @@ const DataCenter = () => {
             <Col xs={12} sm={4}>
               <Card size="small">
                 <Statistic 
+                  title="已付佣金" 
+                  value={platformStats.totalApproved} 
+                  precision={2}
+                  prefix="$"
+                  valueStyle={{ color: '#52c41a' }}
+                />
+              </Card>
+            </Col>
+            <Col xs={12} sm={4}>
+              <Card size="small">
+                <Statistic 
                   title="拒付佣金" 
                   value={platformStats.totalRejected} 
                   precision={2}
@@ -792,9 +833,18 @@ const DataCenter = () => {
             <Col xs={12} sm={4}>
               <Card size="small">
                 <Statistic 
-                  title="ROI (佣金/费用)" 
-                  value={roi} 
-                  valueStyle={{ color: parseFloat(roi) >= 1 ? '#3f8600' : '#cf1322' }}
+                  title={
+                    <Space size={4}>
+                      <span>ROI</span>
+                      <Tooltip title="ROI = (佣金 - 费用) ÷ 费用">
+                        <InfoCircleOutlined style={{ color: '#999' }} />
+                      </Tooltip>
+                    </Space>
+                  }
+                  value={roi === null ? '-' : roi.toFixed(2)}
+                  valueStyle={{
+                    color: roi === null ? '#999' : (roi >= 0 ? '#3f8600' : '#cf1322')
+                  }}
                 />
               </Card>
             </Col>
