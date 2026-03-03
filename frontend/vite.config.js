@@ -10,16 +10,21 @@ export default defineConfig({
         entryFileNames: 'assets/[name].[hash].js',
         chunkFileNames: 'assets/[name].[hash].js',
         assetFileNames: 'assets/[name].[hash].[ext]',
-        // 手动代码分割，将第三方库分离
-        manualChunks: {
-          // React核心
-          'react-vendor': ['react', 'react-dom', 'react-router-dom'],
-          // Ant Design
-          'antd-vendor': ['antd', '@ant-design/icons'],
-          // 图表库
-          'chart-vendor': ['echarts', 'echarts-for-react'],
-          // 工具库
-          'utils-vendor': ['axios', 'dayjs'],
+        manualChunks(id) {
+          if (id.includes('node_modules')) {
+            if (id.includes('/react/') || id.includes('/react-dom/') || id.includes('/react-router') || id.includes('/scheduler/')) {
+              return 'react-vendor'
+            }
+            if (id.includes('/antd/') || id.includes('/@ant-design/') || id.includes('/@rc-component/') || id.includes('/rc-')) {
+              return 'antd-vendor'
+            }
+            if (id.includes('/echarts/') || id.includes('/echarts-for-react/') || id.includes('/zrender/')) {
+              return 'chart-vendor'
+            }
+            if (id.includes('/axios/') || id.includes('/dayjs/')) {
+              return 'utils-vendor'
+            }
+          }
         }
       }
     },
