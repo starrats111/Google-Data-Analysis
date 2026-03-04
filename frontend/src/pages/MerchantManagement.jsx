@@ -78,7 +78,7 @@ const MerchantManagement = () => {
   })
   const [assignmentFilters, setAssignmentFilters] = useState({
     user_id: undefined,
-    status: undefined,
+    status: canManage ? undefined : 'active',
   })
 
   const [selectedMerchantIds, setSelectedMerchantIds] = useState([])
@@ -758,7 +758,7 @@ const MerchantManagement = () => {
                   <Button type="primary" onClick={() => fetchAssignments(1, assignmentPageSize)}>查询</Button>
                   <Button
                     onClick={() => {
-                      setAssignmentFilters({ user_id: undefined, status: undefined })
+                      setAssignmentFilters({ user_id: undefined, status: canManage ? undefined : 'active' })
                       setTimeout(() => fetchAssignments(1, assignmentPageSize), 0)
                     }}
                   >
