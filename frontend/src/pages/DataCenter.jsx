@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react'
-import { Card, Table, DatePicker, Select, Tabs, Space, Statistic, Row, Col, message, Skeleton, Tag, Input, Modal, Spin, Button, Tooltip } from 'antd'
-import { SearchOutlined, DollarOutlined, ReloadOutlined, InfoCircleOutlined } from '@ant-design/icons'
+import { Card, Table, DatePicker, Select, Tabs, Space, Statistic, Row, Col, message, Skeleton, Tag, Input, Modal, Spin, Button, Tooltip, Popconfirm, Alert } from 'antd'
+import { SearchOutlined, DollarOutlined, ReloadOutlined, InfoCircleOutlined, PauseCircleOutlined, PlayCircleOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import api from '../services/api'
 import { useAuth } from '../store/authStore'
@@ -356,6 +356,36 @@ const DataCenter = () => {
       width: 120,
       render: (val) => renderIsLost(val),
     },
+    {
+      title: '操作',
+      key: 'action',
+      width: 100,
+      fixed: 'right',
+      render: (_, record) => {
+        if (record.sync_mode === 'script') {
+          return <Tooltip title="脚本模式不支持远程操作"><Button disabled size="small">不可用</Button></Tooltip>
+        }
+        const isEnabled = record.status_code === 'ENABLED'
+        return (
+          <Popconfirm
+            title={`确定要${isEnabled ? '暂停' : '启用'}广告系列「${record.campaign_name}」吗？`}
+            onConfirm={() => handleToggleCampaign(record.campaign_id, isEnabled ? 'pause' : 'enable')}
+            okText="确定"
+            cancelText="取消"
+          >
+            <Button
+              size="small"
+              type={isEnabled ? 'default' : 'primary'}
+              danger={isEnabled}
+              loading={togglingCampaigns[record.campaign_id]}
+              icon={isEnabled ? <PauseCircleOutlined /> : <PlayCircleOutlined />}
+            >
+              {isEnabled ? '暂停' : '启用'}
+            </Button>
+          </Popconfirm>
+        )
+      },
+    },
   ]
 
   // 平台数据汇总列（匹配后端 merchant_breakdown 格式）
@@ -622,6 +652,66 @@ const DataCenter = () => {
     ? null
     : ((platformStats.totalCommission - googleStats.totalCost) / googleStats.totalCost)
 
+  // OPT-008: 广告系列暂停/启用状态
+  const [togglingCampaigns, setTogglingCampaigns] = useState({})
+  const [selectedCampaignIds, setSelectedCampaignIds] = useState([])
+  const [batchLoading, setBatchLoading] = useState(false)
+
+  const handleToggleCampaign = async (campaignId, action) => {
+    setTogglingCampaigns(prev => ({ ...prev, [campaignId]: true }))
+    try {
+      const res = await api.post('/api/bids/toggle-status', { campaign_id: campaignId, action })
+      message.success(res.data.message || `广告系列已${action === 'pause' ? '暂停' : '启用'}`)
+      dataCache.google = { data: null, timestamp: 0, params: null }
+      await fetchData()
+    } catch (err) {
+      message.error(`操作失败: ${err.response?.data?.detail || err.message}`)
+    } finally {
+      setTogglingCampaigns(prev => ({ ...prev, [campaignId]: false }))
+    }
+  }
+
+  const handleBatchToggle = async (action) => {
+    if (!selectedCampaignIds.length) return
+    setBatchLoading(true)
+    try {
+      const res = await api.post('/api/bids/batch-toggle-status', {
+        campaign_ids: selectedCampaignIds,
+        action,
+      })
+      const { success, failed, results } = res.data
+      if (failed > 0) {
+        const failedItems = results.filter(r => !r.success).map(r => `${r.campaign_id}: ${r.message}`).join('\n')
+        Modal.info({
+          title: '批量操作结果',
+          content: (
+            <div>
+              <p>成功 {success} 个，失败 {failed} 个</p>
+              {failed > 0 && <pre style={{ fontSize: 12, maxHeight: 200, overflow: 'auto' }}>{failedItems}</pre>}
+            </div>
+          ),
+        })
+      } else {
+        message.success(`已成功${action === 'pause' ? '暂停' : '启用'} ${success} 个广告系列`)
+      }
+      setSelectedCampaignIds([])
+      dataCache.google = { data: null, timestamp: 0, params: null }
+      await fetchData()
+    } catch (err) {
+      message.error(`批量操作失败: ${err.response?.data?.detail || err.message}`)
+    } finally {
+      setBatchLoading(false)
+    }
+  }
+
+  const campaignRowSelection = {
+    selectedRowKeys: selectedCampaignIds,
+    onChange: (keys) => setSelectedCampaignIds(keys),
+    getCheckboxProps: (record) => ({
+      disabled: record.sync_mode === 'script' || record.status_code === 'REMOVED',
+    }),
+  }
+
   // 同步状态
   const [syncing, setSyncing] = useState(false)
   
@@ -744,6 +834,26 @@ const DataCenter = () => {
             </Select>
           </Space>
 
+          {selectedCampaignIds.length > 0 && (
+            <Alert
+              type="info"
+              showIcon
+              style={{ marginBottom: 16 }}
+              message={
+                <Space>
+                  <span>已选 {selectedCampaignIds.length} 个广告系列</span>
+                  <Popconfirm title={`确定批量暂停 ${selectedCampaignIds.length} 个广告系列？`} onConfirm={() => handleBatchToggle('pause')}>
+                    <Button size="small" danger loading={batchLoading} icon={<PauseCircleOutlined />}>批量暂停</Button>
+                  </Popconfirm>
+                  <Popconfirm title={`确定批量启用 ${selectedCampaignIds.length} 个广告系列？`} onConfirm={() => handleBatchToggle('enable')}>
+                    <Button size="small" type="primary" loading={batchLoading} icon={<PlayCircleOutlined />}>批量启用</Button>
+                  </Popconfirm>
+                  <Button size="small" onClick={() => setSelectedCampaignIds([])}>取消选择</Button>
+                </Space>
+              }
+            />
+          )}
+
           {/* 表格 */}
           {loading ? (
             <Skeleton active paragraph={{ rows: 10 }} />
@@ -754,7 +864,8 @@ const DataCenter = () => {
                 !searchText || item.campaign_name?.toLowerCase().includes(searchText.toLowerCase())
               )}
               rowKey={(record) => record.campaign_id}
-              scroll={{ x: 1200 }}
+              rowSelection={campaignRowSelection}
+              scroll={{ x: 1400 }}
               pagination={{
                 current: pagination.current,
                 pageSize: pagination.pageSize,

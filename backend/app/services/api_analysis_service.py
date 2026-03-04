@@ -22,28 +22,46 @@ logger = logging.getLogger(__name__)
 class ApiAnalysisService:
     """基于API数据的分析服务"""
     
-    # 平台代码标准化映射（PM1 → PM，CG1 → CG 等）
     PLATFORM_CODE_MAP = {
         "PM": "PM", "PM1": "PM", "PM2": "PM", "PM3": "PM",
         "CG": "CG", "CG1": "CG", "CG2": "CG", "CG3": "CG",
         "RW": "RW", "RW1": "RW", "RW2": "RW", "RW3": "RW",
         "LH": "LH", "LH1": "LH", "LH2": "LH", "LH3": "LH",
+        "LB": "LB", "LB1": "LB", "LB2": "LB", "LB3": "LB",
+        "BSH": "BSH", "BSH1": "BSH", "BSH2": "BSH",
+        "CF": "CF", "CF1": "CF", "CF2": "CF",
         "LS": "LS", "LS1": "LS", "LS2": "LS", "LS3": "LS",
     }
-    
+
+    URL_TO_PLATFORM_MAP = {
+        "brandsparkhub.com": "BSH",
+        "collabglow.com": "CG",
+        "rewardoo.com": "RW",
+        "linkhaitao.com": "LH",
+        "linkbux.com": "LB",
+        "partnermatic.com": "PM",
+        "creatorflare.com": "CF",
+    }
+
     @classmethod
     def normalize_platform_code(cls, code: str) -> str:
-        """
-        标准化平台代码
-        PM1 → PM, CG1 → CG, RW1 → RW 等
+        """标准化平台代码：代码后缀数字剥离 + URL 域名映射。
+        PM1 → PM, CG1 → CG, https://www.brandsparkhub.com/ → BSH 等。
         """
         if not code:
             return code
-        code_upper = code.upper().strip()
-        # 先检查映射表
+        stripped = code.strip()
+        code_upper = stripped.upper()
         if code_upper in cls.PLATFORM_CODE_MAP:
             return cls.PLATFORM_CODE_MAP[code_upper]
-        # 如果不在映射表，尝试去除尾部数字
+
+        if "://" in stripped or "." in stripped:
+            domain = stripped.lower().replace("https://", "").replace("http://", "")
+            domain = domain.rstrip("/").lstrip("www.")
+            for url_key, platform in cls.URL_TO_PLATFORM_MAP.items():
+                if url_key in domain:
+                    return platform
+
         import re
         match = re.match(r'^([A-Z]+)\d*$', code_upper)
         if match:

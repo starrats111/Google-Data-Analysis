@@ -319,6 +319,28 @@ async def get_campaign_data(
             ).all()
             platform_code_map = {p.platform_code: p.platform_name for p in platforms}
     
+    # OPT-008: 预加载 MCC sync_mode 映射
+    mcc_sync_mode_map = {}
+    mcc_ids_in_results = {row.mcc_id for row in results if row.mcc_id}
+    if mcc_ids_in_results:
+        mcc_rows = db.query(GoogleMccAccount.id, GoogleMccAccount.sync_mode).filter(
+            GoogleMccAccount.id.in_(mcc_ids_in_results)
+        ).all()
+        mcc_sync_mode_map = {r.id: (r.sync_mode or "api") for r in mcc_rows}
+
+    # OPT-008: 预加载 campaign -> customer_id 映射（取最近一条记录的 customer_id）
+    campaign_customer_map = {}
+    if campaign_ids:
+        cust_rows = db.query(
+            GoogleAdsApiData.campaign_id,
+            GoogleAdsApiData.customer_id,
+        ).filter(
+            GoogleAdsApiData.campaign_id.in_(campaign_ids),
+            GoogleAdsApiData.customer_id.isnot(None),
+        ).group_by(GoogleAdsApiData.campaign_id, GoogleAdsApiData.customer_id).all()
+        for cr in cust_rows:
+            campaign_customer_map[cr.campaign_id] = cr.customer_id
+
     # 格式化数据（先按 mcc 维度转换货币，再按 campaign_id 合并去重）
     _campaign_buckets: dict = {}  # campaign_id -> merged dict
     for row in results:
@@ -349,6 +371,7 @@ async def get_campaign_data(
                 "campaign_id": cid,
                 "campaign_name": row.campaign_name,
                 "platform_code": row_platform_code,
+                "mcc_id": row.mcc_id,
                 "_cost": display_cost,
                 "_impressions": total_impressions,
                 "_clicks": total_clicks,
@@ -382,6 +405,7 @@ async def get_campaign_data(
         else:
             out_currency = "MIXED"
 
+        row_mcc_id = b.get("mcc_id")
         campaign_data.append({
             "date_range": date_range_display,
             "campaign_name": b["campaign_name"],
@@ -400,6 +424,9 @@ async def get_campaign_data(
             "is_budget_lost": round(latest_is_budget_lost.get(cid, 0), 4),
             "is_rank_lost": round(latest_is_rank_lost.get(cid, 0), 4),
             "currency": out_currency,
+            "mcc_id": row_mcc_id,
+            "sync_mode": mcc_sync_mode_map.get(row_mcc_id, "api"),
+            "customer_id": campaign_customer_map.get(cid),
         })
 
     # 平台筛选兜底：同时支持 extracted_platform_code 和从 campaign_name 推断的平台

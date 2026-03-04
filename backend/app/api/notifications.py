@@ -30,6 +30,26 @@ def _visible_user_ids(db: Session, current_user: User):
     return [current_user.id]
 
 
+def _can_view_user_feedback(current_user: User) -> bool:
+    """user_feedback 类型通知的可见性判定（S-11R）：仅 wj07 + manager 可见。"""
+    role_val = _role_value(current_user.role)
+    if role_val == "manager":
+        return True
+    if current_user.username == "wj07":
+        return True
+    return False
+
+
+def _apply_feedback_privacy(query, current_user: User):
+    """对查询叠加 user_feedback 类型级隐私过滤。
+    非授权角色的查询结果中排除 type=user_feedback 的通知。"""
+    if not _can_view_user_feedback(current_user):
+        query = query.filter(
+            or_(Notification.type != "user_feedback", Notification.type.is_(None))
+        )
+    return query
+
+
 @router.get("", response_model=dict)
 def list_notifications(
     page: int = Query(1, ge=1),
@@ -37,13 +57,14 @@ def list_notifications(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """获取通知列表（分页，按角色权限过滤）"""
+    """获取通知列表（分页，按角色权限过滤，含 user_feedback 类型级隐私过滤）"""
     visible = _visible_user_ids(db, current_user)
     query = db.query(Notification)
     if visible is not None:
         if not visible:
             return {"items": [], "total": 0, "page": page, "page_size": page_size, "total_pages": 0}
         query = query.filter(Notification.user_id.in_(visible))
+    query = _apply_feedback_privacy(query, current_user)
     query = query.order_by(Notification.created_at.desc())
     total = query.count()
     total_pages = (total + page_size - 1) // page_size if page_size else 0
@@ -73,13 +94,14 @@ def get_unread_count(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """获取未读数量（铃铛角标）"""
+    """获取未读数量（铃铛角标，含 user_feedback 类型级隐私过滤）"""
     visible = _visible_user_ids(db, current_user)
     query = db.query(func.count(Notification.id)).filter(Notification.is_read == False)
     if visible is not None:
         if not visible:
             return {"count": 0}
         query = query.filter(Notification.user_id.in_(visible))
+    query = _apply_feedback_privacy(query, current_user)
     count = query.scalar() or 0
     return {"count": count}
 
@@ -90,7 +112,7 @@ def mark_read(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """标记单条为已读（仅限可见范围内的通知）"""
+    """标记单条为已读（仅限可见范围内的通知，含 user_feedback 隐私校验）"""
     visible = _visible_user_ids(db, current_user)
     n = db.query(Notification).filter(Notification.id == notification_id).first()
     if not n:
@@ -98,6 +120,8 @@ def mark_read(
     if visible is not None:
         if n.user_id not in visible:
             raise HTTPException(status_code=403, detail="Forbidden")
+    if n.type == "user_feedback" and not _can_view_user_feedback(current_user):
+        raise HTTPException(status_code=403, detail="Forbidden")
     n.is_read = True
     db.commit()
     return None
@@ -108,13 +132,14 @@ def mark_read_all(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """全部标记已读（仅标记当前用户有权查看的通知）"""
+    """全部标记已读（仅标记当前用户有权查看的通知，含 user_feedback 隐私过滤）"""
     visible = _visible_user_ids(db, current_user)
     query = db.query(Notification).filter(Notification.is_read == False)
     if visible is not None:
         if not visible:
             return None
         query = query.filter(Notification.user_id.in_(visible))
+    query = _apply_feedback_privacy(query, current_user)
     for n in query.all():
         n.is_read = True
     db.commit()

@@ -11,8 +11,8 @@ from pydantic import BaseModel
 
 from app.database import get_db
 from app.middleware.auth import get_current_user
-from app.models.user import User
-from app.models.google_ads_api_data import GoogleMccAccount
+from app.models.user import User, UserRole
+from app.models.google_ads_api_data import GoogleMccAccount, GoogleAdsApiData
 from app.models.keyword_bid import KeywordBid, CampaignBidStrategy, BidStrategyChange
 
 logger = logging.getLogger(__name__)
@@ -874,6 +874,145 @@ class UpdateKeywordRequest(BaseModel):
     keyword_text: Optional[str] = None
     match_type: Optional[str] = None
     cpc_bid_micros: Optional[int] = None
+
+
+class ToggleCampaignStatusRequest(BaseModel):
+    campaign_id: str
+    action: str  # "pause" or "enable"
+
+
+class BatchToggleCampaignStatusRequest(BaseModel):
+    campaign_ids: List[str]
+    action: str  # "pause" or "enable"
+
+
+def _get_role_value(role) -> str:
+    return getattr(role, "value", str(role))
+
+
+@router.post("/toggle-status")
+async def toggle_campaign_status(
+    request: ToggleCampaignStatusRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """暂停/启用单条广告系列（OPT-008）"""
+    from app.services.google_ads_service_account_sync import GoogleAdsServiceAccountSync
+
+    new_status = "PAUSED" if request.action == "pause" else "ENABLED"
+
+    record = (
+        db.query(GoogleAdsApiData)
+        .filter(GoogleAdsApiData.campaign_id == request.campaign_id)
+        .first()
+    )
+    if not record:
+        raise HTTPException(status_code=404, detail="广告系列不存在")
+
+    role_val = _get_role_value(current_user.role)
+    if role_val != "manager" and record.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="无权操作该广告系列")
+
+    mcc = db.query(GoogleMccAccount).filter(GoogleMccAccount.id == record.mcc_id).first()
+    if not mcc:
+        raise HTTPException(status_code=404, detail="MCC账号不存在")
+    if mcc.sync_mode == "script":
+        raise HTTPException(status_code=400, detail="脚本模式MCC不支持远程操作")
+
+    try:
+        sync_service = GoogleAdsServiceAccountSync(db)
+        client, _ = sync_service._create_client(mcc)
+        result = sync_service.toggle_campaign_status(
+            client, record.customer_id, request.campaign_id, new_status
+        )
+
+        if result["success"]:
+            db.query(GoogleAdsApiData).filter(
+                GoogleAdsApiData.campaign_id == request.campaign_id
+            ).update({"status": "已暂停" if new_status == "PAUSED" else "已启用"})
+            db.commit()
+            logger.info(
+                f"用户 {current_user.username} 将广告系列 {request.campaign_id} 状态改为 {new_status}"
+            )
+            return {"success": True, "message": result["message"]}
+        else:
+            raise HTTPException(status_code=500, detail=result["message"])
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"toggle_campaign_status 失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/batch-toggle-status")
+async def batch_toggle_campaign_status(
+    request: BatchToggleCampaignStatusRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """批量暂停/启用广告系列（OPT-008）"""
+    from app.services.google_ads_service_account_sync import GoogleAdsServiceAccountSync
+
+    new_status = "PAUSED" if request.action == "pause" else "ENABLED"
+    role_val = _get_role_value(current_user.role)
+    results_list = []
+    success_count = 0
+    client_cache: dict = {}
+
+    for cid in request.campaign_ids:
+        record = (
+            db.query(GoogleAdsApiData)
+            .filter(GoogleAdsApiData.campaign_id == cid)
+            .first()
+        )
+        if not record:
+            results_list.append({"campaign_id": cid, "success": False, "message": "广告系列不存在"})
+            continue
+
+        if role_val != "manager" and record.user_id != current_user.id:
+            results_list.append({"campaign_id": cid, "success": False, "message": "无权操作"})
+            continue
+
+        mcc = db.query(GoogleMccAccount).filter(GoogleMccAccount.id == record.mcc_id).first()
+        if not mcc:
+            results_list.append({"campaign_id": cid, "success": False, "message": "MCC不存在"})
+            continue
+        if mcc.sync_mode == "script":
+            results_list.append({"campaign_id": cid, "success": False, "message": "脚本模式MCC不支持远程操作"})
+            continue
+
+        try:
+            if mcc.id not in client_cache:
+                sync_service = GoogleAdsServiceAccountSync(db)
+                client, _ = sync_service._create_client(mcc)
+                client_cache[mcc.id] = (sync_service, client)
+            else:
+                sync_service, client = client_cache[mcc.id]
+
+            result = sync_service.toggle_campaign_status(
+                client, record.customer_id, cid, new_status
+            )
+            if result["success"]:
+                db.query(GoogleAdsApiData).filter(
+                    GoogleAdsApiData.campaign_id == cid
+                ).update({"status": "已暂停" if new_status == "PAUSED" else "已启用"})
+                success_count += 1
+            results_list.append({"campaign_id": cid, "success": result["success"], "message": result["message"]})
+        except Exception as e:
+            results_list.append({"campaign_id": cid, "success": False, "message": str(e)})
+
+    db.commit()
+    logger.info(
+        f"用户 {current_user.username} 批量操作 {len(request.campaign_ids)} 个广告系列: "
+        f"成功 {success_count}, 失败 {len(request.campaign_ids) - success_count}"
+    )
+
+    return {
+        "total": len(request.campaign_ids),
+        "success": success_count,
+        "failed": len(request.campaign_ids) - success_count,
+        "results": results_list,
+    }
 
 
 @router.post("/toggle-keyword-status")

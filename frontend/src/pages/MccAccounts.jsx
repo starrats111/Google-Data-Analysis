@@ -731,7 +731,7 @@ export default function MccAccounts() {
                     description={
                       <ol style={{ margin: 0, paddingLeft: 18, lineHeight: '2em' }}>
                         <li>新建一个 Google Sheet（名称随意）</li>
-                        <li>点击右上角「共享」，将权限设为 <Text strong>「知道链接的任何人 — 编辑者」</Text></li>
+                        <li>点击右上角「共享」，将权限设为 <Text strong>「知道链接的任何人 — 查看者」</Text>（严禁使用编辑者）；同时确保脚本执行主体拥有该 Sheet 编辑权限（非公开编辑，由脚本执行账号单独授予）</li>
                         <li>复制共享链接，粘贴到下方输入框并保存</li>
                         <li>在 MCC 列表操作栏点击「获取脚本」，复制脚本内容</li>
                         <li>到 Google Ads MCC →「工具与设置 → 批量操作 → 脚本」中新建脚本，粘贴并运行</li>
@@ -746,7 +746,7 @@ export default function MccAccounts() {
                     name="google_sheet_url"
                     label="Sheet 共享链接"
                     rules={[{ required: true, message: '请粘贴 Sheet 共享链接' }]}
-                    help="请确保 Sheet 已设置为「知道链接的任何人都可以编辑」"
+                    help="请确保 Sheet 已设置为「知道链接的任何人都可以查看」（只读共享）；脚本执行主体需单独授予编辑权限"
                   >
                     <Input placeholder="https://docs.google.com/spreadsheets/d/xxx/edit" />
                   </Form.Item>
@@ -897,7 +897,7 @@ export default function MccAccounts() {
           style={{ marginBottom: 12 }}
         />
         <Alert
-          message="请确认 Sheet 已设为「知道链接的任何人都可以编辑」，否则脚本无法写入、系统无法读取。"
+          message="请确认 Sheet 已设为「知道链接的任何人都可以查看」（只读共享）。脚本执行主体需单独授予编辑权限，严禁使用公开编辑。"
           type="warning"
           showIcon
           style={{ marginBottom: 12 }}

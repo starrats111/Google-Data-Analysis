@@ -145,51 +145,38 @@ class GoogleAdsServiceAccountSync:
         return self._load_global_service_account()
     
     def _create_client(self, mcc_account: GoogleMccAccount):
-        """
-        创建 Google Ads 客户端（使用服务账号）
-        
-        Args:
-            mcc_account: MCC账号对象
-            
-        Returns:
-            GoogleAdsClient 实例
+        """创建 Google Ads 客户端（M-007 改造：优先 service account，回退 OAuth）。
+
+        凭证选择优先级：
+        1. MCC 级别 service account（service_account_json）
+        2. 全局 service account（env 配置）
+        3. OAuth（client_id / client_secret / refresh_token）
+        三者皆不可用时抛出明确错误。
         """
         try:
             from google.ads.googleads.client import GoogleAdsClient
         except ImportError:
             raise ImportError("Google Ads API库未安装，请执行: pip install google-ads")
-        
+
         if not self.developer_token:
             raise ValueError("缺少开发者令牌（GOOGLE_ADS_SHARED_DEVELOPER_TOKEN）")
-        
-        # MCC ID格式处理：去掉横线，只保留数字
+
         mcc_customer_id = mcc_account.mcc_id.replace("-", "").strip()
-        
-        # 验证MCC ID格式
         if not mcc_customer_id.isdigit() or len(mcc_customer_id) != 10:
             raise ValueError(f"MCC ID格式错误: {mcc_account.mcc_id}，去掉横线后必须是10位数字")
-        
-        # 判断使用哪种认证方式
-        use_service_account = getattr(mcc_account, 'use_service_account', True)
-        
-        if use_service_account:
-            # 服务账号模式
-            credentials = self._get_service_account_credentials(mcc_account)
-            if not credentials:
-                raise ValueError(f"MCC {mcc_account.mcc_id} 未配置服务账号，请先配置全局服务账号或MCC级别服务账号")
-            
-            # 使用服务账号创建客户端
+
+        credentials = self._get_service_account_credentials(mcc_account)
+        if credentials:
             sa_credentials = self._create_credentials_from_dict(credentials)
             client = GoogleAdsClient(
                 credentials=sa_credentials,
                 developer_token=self.developer_token,
                 login_customer_id=mcc_customer_id
             )
-        else:
-            # OAuth模式（兼容旧版）
-            if not mcc_account.client_id or not mcc_account.client_secret or not mcc_account.refresh_token:
-                raise ValueError(f"MCC {mcc_account.mcc_id} 缺少OAuth配置")
-            
+            return client, mcc_customer_id
+
+        if mcc_account.client_id and mcc_account.client_secret and mcc_account.refresh_token:
+            logger.info(f"MCC {mcc_account.mcc_id} 无可用 service account，回退 OAuth")
             client = GoogleAdsClient.load_from_dict({
                 "developer_token": self.developer_token,
                 "client_id": mcc_account.client_id,
@@ -198,8 +185,14 @@ class GoogleAdsServiceAccountSync:
                 "login_customer_id": mcc_customer_id,
                 "use_proto_plus": True
             })
-        
-        return client, mcc_customer_id
+            return client, mcc_customer_id
+
+        raise ValueError(
+            f"MCC {mcc_account.mcc_id} 无可用的 API 凭证。"
+            "请检查：1) 全局 service account 是否配置；"
+            "2) 该 MCC 是否已授权给 service account；"
+            "3) 或提供 OAuth 配置（client_id/secret/refresh_token）"
+        )
     
     def _create_credentials_from_dict(self, credentials_dict: Dict):
         """
@@ -662,7 +655,62 @@ class GoogleAdsServiceAccountSync:
                 "success": False,
                 "message": str(e)
             }
-    
+
+    def toggle_campaign_status(
+        self,
+        client,
+        customer_id: str,
+        campaign_id: str,
+        new_status: str
+    ) -> Dict:
+        """暂停或启用广告系列（OPT-008）
+
+        Args:
+            client: GoogleAdsClient 实例
+            customer_id: 客户账号 ID（CID）
+            campaign_id: 广告系列 ID
+            new_status: "ENABLED" 或 "PAUSED"
+        """
+        from google.protobuf import field_mask_pb2
+
+        try:
+            campaign_service = client.get_service("CampaignService")
+            campaign_resource = f"customers/{customer_id}/campaigns/{campaign_id}"
+
+            campaign = client.get_type("Campaign")
+            campaign.resource_name = campaign_resource
+
+            status_enum = client.enums.CampaignStatusEnum
+            if new_status == "ENABLED":
+                campaign.status = status_enum.ENABLED
+            elif new_status == "PAUSED":
+                campaign.status = status_enum.PAUSED
+            else:
+                return {"success": False, "message": f"不支持的状态: {new_status}"}
+
+            field_mask = field_mask_pb2.FieldMask(paths=["status"])
+
+            operation = client.get_type("CampaignOperation")
+            operation.update_mask.CopyFrom(field_mask)
+            operation.update.CopyFrom(campaign)
+
+            response = campaign_service.mutate_campaigns(
+                customer_id=customer_id,
+                operations=[operation]
+            )
+
+            status_label = "暂停" if new_status == "PAUSED" else "启用"
+            logger.info(f"广告系列 {campaign_id} 已{status_label}")
+            return {
+                "success": True,
+                "message": f"已{status_label}",
+                "resource_name": response.results[0].resource_name,
+            }
+
+        except Exception as e:
+            logger.error(f"切换广告系列 {campaign_id} 状态失败: {e}")
+            return {"success": False, "message": str(e)}
+
     def set_keyword_cpc(
         self,
         client,

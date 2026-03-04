@@ -3,7 +3,7 @@ Google Sheets 同步服务（OPT-005 脚本模式）
 从 MCC 脚本导出的 Google Sheet 读取广告数据并写入 google_ads_api_data 表
 
 读取方式：通过公开 CSV 导出链接（HTTP GET），无需 Sheets API 或服务账号。
-前提：Sheet 需设置为「知道链接的任何人都可以查看/编辑」。
+前提：Sheet 需设置为「知道链接的任何人都可以查看」（公开可查看，只读共享）。
 """
 import csv
 import io
