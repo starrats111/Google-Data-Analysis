@@ -21,15 +21,12 @@ def _role_value(role) -> str:
 def _visible_user_ids(db: Session, current_user: User):
     """返回当前用户有权查看的通知对应的 user_id 列表（用于 WHERE user_id IN (...)）。"""
     role_val = _role_value(current_user.role)
-    if role_val == "manager":
-        return None  # 全部
     if role_val == "leader":
         if current_user.team_id is None:
-            return []  # 无组则看不到任何人的
+            return [current_user.id]
         from app.models.user import User
         rows = db.query(User.id).filter(User.team_id == current_user.team_id).all()
         return [r[0] for r in rows]
-    # member / employee
     return [current_user.id]
 
 
