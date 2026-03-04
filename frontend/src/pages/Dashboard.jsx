@@ -79,6 +79,18 @@ const Dashboard = () => {
     }
   }, [insightRange])
 
+  const fetchMyAssignments = useCallback(async () => {
+    setMyAssignmentsLoading(true)
+    try {
+      const res = await api.get('/api/merchant-assignments', { params: { status: 'active', page: 1, page_size: 10 } })
+      setMyAssignments(res.data?.items || [])
+    } catch (_) {
+      setMyAssignments([])
+    } finally {
+      setMyAssignmentsLoading(false)
+    }
+  }, [])
+
   const doRefresh = useCallback(() => {
     if (user?.role === 'manager') {
       fetchManagerData()
@@ -136,6 +148,45 @@ const Dashboard = () => {
       }
     ],
   }), [trendData])
+
+  const trend = insights?.trend || []
+  
+  const employeeTrendOption = useMemo(() => ({
+    tooltip: { 
+      trigger: 'axis',
+      formatter: (params) => {
+        let result = `${params[0].axisValue}<br/>`
+        params.forEach(p => {
+          result += `${p.marker} ${p.seriesName}: ${Number(p.value || 0).toFixed(2)}<br/>`
+        })
+        return result
+      }
+    },
+    legend: { data: ['费用', '佣金'], top: 0 },
+    grid: { left: 50, right: 20, top: 40, bottom: 30 },
+    xAxis: { type: 'category', data: trend.map(t => t.date) },
+    yAxis: { type: 'value' },
+    series: [
+      { 
+        name: '费用', 
+        type: 'line', 
+        data: trend.map(t => Number(t.cost || 0)), 
+        smooth: true,
+        lineStyle: { color: '#cf1322', width: 2 },
+        itemStyle: { color: '#cf1322' },
+        areaStyle: { color: 'rgba(207, 19, 34, 0.1)' }
+      },
+      { 
+        name: '佣金', 
+        type: 'line', 
+        data: trend.map(t => Number(t.commission || 0)), 
+        smooth: true,
+        lineStyle: { color: '#3f8600', width: 2 },
+        itemStyle: { color: '#3f8600' },
+        areaStyle: { color: 'rgba(63, 134, 0, 0.1)' }
+      }
+    ],
+  }), [trend])
 
   if (user?.role === 'manager') {
     const columns = [
@@ -242,19 +293,6 @@ const Dashboard = () => {
     }
   }
 
-  // 获取我的待完成商家
-  const fetchMyAssignments = useCallback(async () => {
-    setMyAssignmentsLoading(true)
-    try {
-      const res = await api.get('/api/merchant-assignments', { params: { status: 'active', page: 1, page_size: 10 } })
-      setMyAssignments(res.data?.items || [])
-    } catch (_) {
-      setMyAssignments([])
-    } finally {
-      setMyAssignmentsLoading(false)
-    }
-  }, [])
-
   // 国家选项
   const countryOptions = [
     { value: 'US', label: '🇺🇸 美国 (US)' },
@@ -268,46 +306,6 @@ const Dashboard = () => {
     { value: 'JP', label: '🇯🇵 日本 (JP)' },
     { value: 'KR', label: '🇰🇷 韩国 (KR)' },
   ]
-
-  const trend = insights?.trend || []
-  
-  // 员工视角的费用佣金走向图配置（合并为一个图表）
-  const employeeTrendOption = useMemo(() => ({
-    tooltip: { 
-      trigger: 'axis',
-      formatter: (params) => {
-        let result = `${params[0].axisValue}<br/>`
-        params.forEach(p => {
-          result += `${p.marker} ${p.seriesName}: ${Number(p.value || 0).toFixed(2)}<br/>`
-        })
-        return result
-      }
-    },
-    legend: { data: ['费用', '佣金'], top: 0 },
-    grid: { left: 50, right: 20, top: 40, bottom: 30 },
-    xAxis: { type: 'category', data: trend.map(t => t.date) },
-    yAxis: { type: 'value' },
-    series: [
-      { 
-        name: '费用', 
-        type: 'line', 
-        data: trend.map(t => Number(t.cost || 0)), 
-        smooth: true,
-        lineStyle: { color: '#cf1322', width: 2 },
-        itemStyle: { color: '#cf1322' },
-        areaStyle: { color: 'rgba(207, 19, 34, 0.1)' }
-      },
-      { 
-        name: '佣金', 
-        type: 'line', 
-        data: trend.map(t => Number(t.commission || 0)), 
-        smooth: true,
-        lineStyle: { color: '#3f8600', width: 2 },
-        itemStyle: { color: '#3f8600' },
-        areaStyle: { color: 'rgba(63, 134, 0, 0.1)' }
-      }
-    ],
-  }), [trend])
 
   return (
     <div>
