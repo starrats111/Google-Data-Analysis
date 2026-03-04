@@ -49,6 +49,7 @@ class ErrorBoundary extends React.Component {
       return (
         <div style={{ 
           display: 'flex', 
+          flexDirection: 'column',
           justifyContent: 'center', 
           alignItems: 'center', 
           minHeight: '100vh',
@@ -67,7 +68,8 @@ class ErrorBoundary extends React.Component {
               background: 'white', 
               borderRadius: '16px', 
               padding: '40px',
-              boxShadow: '0 8px 32px rgba(0,0,0,0.1)'
+              boxShadow: '0 8px 32px rgba(0,0,0,0.1)',
+              maxWidth: '90vw'
             }}
             extra={[
               <Button 
@@ -88,6 +90,34 @@ class ErrorBoundary extends React.Component {
               </Button>,
             ]}
           />
+          {this.state.error && (
+            <div style={{
+              background: '#1a1a2e',
+              color: '#e94560',
+              padding: '16px 24px',
+              borderRadius: '8px',
+              marginTop: '16px',
+              maxWidth: '90vw',
+              maxHeight: '300px',
+              overflow: 'auto',
+              fontFamily: 'monospace',
+              fontSize: '12px',
+              whiteSpace: 'pre-wrap',
+              wordBreak: 'break-all',
+            }}>
+              <div style={{ color: '#fff', marginBottom: '8px', fontWeight: 'bold' }}>
+                {this.state.error?.name}: {this.state.error?.message}
+              </div>
+              <div style={{ color: '#aaa' }}>
+                {this.state.error?.stack}
+              </div>
+              {this.state.errorInfo?.componentStack && (
+                <div style={{ color: '#888', marginTop: '8px', borderTop: '1px solid #333', paddingTop: '8px' }}>
+                  {this.state.errorInfo.componentStack}
+                </div>
+              )}
+            </div>
+          )}
         </div>
       )
     }
