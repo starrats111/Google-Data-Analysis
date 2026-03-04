@@ -116,6 +116,17 @@ async def list_feedback(
         users = db.query(User).filter(User.id.in_(sender_ids)).all()
         sender_map = {u.id: (u.display_name or u.username) for u in users}
 
+    import re
+    for n in items:
+        if not n.sender_id and n.content:
+            m = re.search(r'提交人:\s*\S+\s*\((\w+)\)', n.content)
+            if m:
+                fallback_user = db.query(User).filter(User.username == m.group(1)).first()
+                if fallback_user:
+                    n.sender_id = fallback_user.id
+                    sender_map[fallback_user.id] = fallback_user.display_name or fallback_user.username
+    db.flush()
+
     reply_parent_ids = {n.reply_to_id for n in items if n.reply_to_id}
     reply_counts = {}
     if reply_parent_ids:
@@ -289,6 +300,14 @@ async def reply_feedback(
 
     if is_manager_reply:
         recipient_id = parent.sender_id
+        if not recipient_id:
+            import re
+            m = re.search(r'提交人:\s*\S+\s*\((\w+)\)', parent.content or '')
+            if m:
+                sender_user = db.query(User).filter(User.username == m.group(1)).first()
+                if sender_user:
+                    recipient_id = sender_user.id
+                    parent.sender_id = sender_user.id
         if not recipient_id:
             raise HTTPException(status_code=400, detail="该反馈无提交人记录，无法回复")
     else:
