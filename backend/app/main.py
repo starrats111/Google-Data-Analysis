@@ -320,10 +320,27 @@ if _dist_dir:
         return {"detail": "Frontend not built"}
 
 
+def _ensure_notification_columns():
+    """SQLite 兼容：为 notifications 表补齐 sender_id / reply_to_id 列。"""
+    from app.database import engine
+    from sqlalchemy import text, inspect as sa_inspect
+    insp = sa_inspect(engine)
+    existing = {c["name"] for c in insp.get_columns("notifications")}
+    with engine.begin() as conn:
+        if "sender_id" not in existing:
+            conn.execute(text("ALTER TABLE notifications ADD COLUMN sender_id INTEGER REFERENCES users(id) ON DELETE SET NULL"))
+        if "reply_to_id" not in existing:
+            conn.execute(text("ALTER TABLE notifications ADD COLUMN reply_to_id INTEGER"))
+
+
 @app.on_event("startup")
 async def startup_event():
     """应用启动时执行"""
     validate_critical_config()
+    try:
+        _ensure_notification_columns()
+    except Exception as e:
+        print(f"[WARN] 补齐 notification 列失败（首次部署可忽略）: {e}")
     try:
         start_scheduler()
         print("[OK] 定时任务调度器已启动")

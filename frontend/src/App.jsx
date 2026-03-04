@@ -37,6 +37,9 @@ const TeamOverview = lazyWithRetry(() => import('./pages/TeamOverview'))
 const MerchantManagement = lazyWithRetry(() => import('./pages/MerchantManagement'))
 const MerchantPerformance = lazyWithRetry(() => import('./pages/MerchantPerformance'))
 
+// 反馈管理（wj07）
+const FeedbackManage = lazyWithRetry(() => import('./pages/FeedbackManage'))
+
 // 露出功能页面
 const LuchuDashboard = lazyWithRetry(() => import('./pages/luchu/LuchuDashboard'))
 const LuchuCreate = lazyWithRetry(() => import('./pages/luchu/LuchuCreate'))
@@ -114,6 +117,8 @@ function App() {
               {/* 商家任务分配 */}
               <Route path="merchant-management" element={<MerchantManagement />} />
               <Route path="merchant-performance" element={<MerchantPerformance />} />
+              {/* 反馈管理 */}
+              <Route path="feedback-manage" element={<FeedbackManage />} />
               {/* 露出功能路由 */}
               <Route path="luchu" element={<LuchuDashboard />} />
               <Route path="luchu/create" element={<LuchuCreate />} />

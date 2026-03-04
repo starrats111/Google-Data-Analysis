@@ -11,10 +11,12 @@ class Notification(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
-    type = Column(String(50), nullable=False, index=True)  # rejected_monthly / rejected_daily / system_announcement / sync_error
+    type = Column(String(50), nullable=False, index=True)
     title = Column(String(200), nullable=False)
     content = Column(Text, nullable=True)
     is_read = Column(Boolean, default=False, nullable=False)
+    sender_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    reply_to_id = Column(Integer, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     __table_args__ = (

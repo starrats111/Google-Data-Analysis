@@ -24,6 +24,7 @@ import {
   GiftOutlined,
   ShopOutlined,
   FundViewOutlined,
+  CommentOutlined,
 } from '@ant-design/icons'
 import { useAuth } from '../../store/authStore'
 import ChangelogModal, { hasUnreadChangelog } from '../ChangelogModal'
@@ -227,6 +228,14 @@ const Layout = () => {
       ],
     },
     {
+      key: 'feedback-manage',
+      icon: <CommentOutlined />,
+      label: '反馈管理',
+      children: [
+        { key: '/feedback-manage', icon: <CommentOutlined />, label: '反馈列表' },
+      ],
+    },
+    {
       key: 'luchu',
       icon: <EditOutlined />,
       label: '露出管理',
@@ -239,6 +248,8 @@ const Layout = () => {
       ],
     },
   ]
+
+  const isFeedbackManager = user?.username === 'wj07'
 
   // 组长菜单 - 类似经理菜单格式，但用小组总览
   const leaderMenuItems = [
@@ -371,9 +382,12 @@ const Layout = () => {
     else if (isLeader) items = leaderMenuItems
     else items = memberMenuItems
 
-    // 如果用户没有露出功能权限，过滤掉露出菜单
     if (!hasLuchuAccess) {
       items = items.filter(item => item.key !== 'luchu')
+    }
+
+    if (!isFeedbackManager) {
+      items = items.filter(item => item.key !== 'feedback-manage')
     }
 
     return items
