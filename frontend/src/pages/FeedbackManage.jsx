@@ -87,19 +87,43 @@ export default function FeedbackManage() {
     return parts.length >= 2 ? parts[1] : '其他'
   }
 
+  const handleMarkRead = async (id) => {
+    try {
+      await api.patch(`/api/feedback/${id}/mark-read`)
+      message.success('已标记为已处理')
+      fetchFeedback(pagination.current, pagination.pageSize)
+    } catch (err) {
+      message.error(err.response?.data?.detail || '操作失败')
+    }
+  }
+
+  const handleMarkUnread = async (id) => {
+    try {
+      await api.patch(`/api/feedback/${id}/mark-unread`)
+      message.success('已标记为待处理')
+      fetchFeedback(pagination.current, pagination.pageSize)
+    } catch (err) {
+      message.error(err.response?.data?.detail || '操作失败')
+    }
+  }
+
+  const isFeedbackManager = user?.username === 'wj07' || user?.role === 'manager'
+
   const columns = [
     {
       title: '状态',
       dataIndex: 'is_read',
-      width: 70,
+      width: 90,
+      align: 'center',
       render: (read) => read
-        ? <Tag icon={<CheckCircleOutlined />} color="default">已处理</Tag>
-        : <Badge status="processing" text={<Text type="warning">待处理</Text>} />,
+        ? <Tag icon={<CheckCircleOutlined />} color="success">已处理</Tag>
+        : <Tag icon={<ClockCircleOutlined />} color="warning">待处理</Tag>,
     },
     {
       title: '类型',
       key: 'type',
-      width: 100,
+      width: 90,
+      align: 'center',
       render: (_, r) => {
         const t = extractType(r.title)
         return <Tag color={FEEDBACK_TYPE_COLORS[t] || 'default'}>{t}</Tag>
@@ -108,37 +132,49 @@ export default function FeedbackManage() {
     {
       title: '提交人',
       dataIndex: 'sender_name',
-      width: 100,
+      width: 90,
+      align: 'center',
     },
     {
-      title: '标题',
+      title: '反馈内容',
       dataIndex: 'title',
       ellipsis: true,
+      render: (title, record) => (
+        <Space direction="vertical" size={0}>
+          <Text strong ellipsis={{ tooltip: title }}>{title || '-'}</Text>
+          {record.reply_count > 0 && <Text type="secondary" style={{ fontSize: 12 }}>{record.reply_count} 条回复</Text>}
+        </Space>
+      ),
     },
     {
-      title: '回复数',
-      dataIndex: 'reply_count',
-      width: 80,
-      render: (c) => c > 0 ? <Tag color="blue">{c} 条回复</Tag> : <Text type="secondary">-</Text>,
-    },
-    {
-      title: '时间',
+      title: '提交时间',
       dataIndex: 'created_at',
-      width: 170,
+      width: 160,
+      align: 'center',
       render: (v) => v ? dayjs(v).format('YYYY-MM-DD HH:mm') : '-',
     },
     {
       title: '操作',
       key: 'action',
-      width: 100,
+      width: 200,
+      align: 'center',
       render: (_, record) => (
-        <Button
-          type="link"
-          icon={<MessageOutlined />}
-          onClick={() => openReplyModal(record)}
-        >
-          查看/回复
-        </Button>
+        <Space size={4}>
+          <Button type="link" size="small" icon={<MessageOutlined />} onClick={() => openReplyModal(record)}>
+            查看
+          </Button>
+          {isFeedbackManager && (
+            record.is_read ? (
+              <Button type="link" size="small" onClick={() => handleMarkUnread(record.id)} style={{ color: '#faad14' }}>
+                撤回处理
+              </Button>
+            ) : (
+              <Button type="link" size="small" onClick={() => handleMarkRead(record.id)} style={{ color: '#52c41a' }}>
+                <CheckCircleOutlined /> 确认处理
+              </Button>
+            )
+          )}
+        </Space>
       ),
     },
   ]

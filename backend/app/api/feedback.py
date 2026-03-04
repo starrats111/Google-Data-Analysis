@@ -220,6 +220,50 @@ async def get_feedback_replies(
     }
 
 
+@router.patch("/{feedback_id}/mark-read")
+async def mark_feedback_read(
+    feedback_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """标记反馈为已处理（仅 wj07/manager）"""
+    if not _is_feedback_manager(current_user):
+        raise HTTPException(status_code=403, detail="无权操作")
+
+    fb = db.query(Notification).filter(
+        Notification.id == feedback_id,
+        Notification.type == "user_feedback",
+    ).first()
+    if not fb:
+        raise HTTPException(status_code=404, detail="反馈不存在")
+
+    fb.is_read = True
+    db.commit()
+    return {"message": "已标记为已处理"}
+
+
+@router.patch("/{feedback_id}/mark-unread")
+async def mark_feedback_unread(
+    feedback_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """标记反馈为待处理（仅 wj07/manager）"""
+    if not _is_feedback_manager(current_user):
+        raise HTTPException(status_code=403, detail="无权操作")
+
+    fb = db.query(Notification).filter(
+        Notification.id == feedback_id,
+        Notification.type == "user_feedback",
+    ).first()
+    if not fb:
+        raise HTTPException(status_code=404, detail="反馈不存在")
+
+    fb.is_read = False
+    db.commit()
+    return {"message": "已标记为待处理"}
+
+
 @router.post("/{feedback_id}/reply")
 async def reply_feedback(
     feedback_id: int,
