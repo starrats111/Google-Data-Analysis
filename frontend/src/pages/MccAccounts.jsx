@@ -478,10 +478,30 @@ export default function MccAccounts() {
                   onClick={async () => {
                     try {
                       const res = await api.get(`/api/mcc/accounts/${record.id}/script-template`)
+                      if (window.__agentLog) {
+                        // #region agent log
+                        window.__agentLog('H4', 'src/pages/MccAccounts.jsx:get-script-template', 'script template loaded', {
+                          mccId: record.id,
+                          mccName: record.mcc_name,
+                          hasAuthUserInScript: (res.data?.script || '').includes('authuser='),
+                          hasContinueUrlInScript: (res.data?.script || '').includes('continueUrl='),
+                          scriptLength: (res.data?.script || '').length,
+                        })
+                        // #endregion
+                      }
                       setScriptModalContent(res.data?.script || '')
                       setScriptModalMcc(record)
                       setScriptModalVisible(true)
                     } catch (e) {
+                      if (window.__agentLog) {
+                        // #region agent log
+                        window.__agentLog('H4', 'src/pages/MccAccounts.jsx:get-script-template:error', 'script template load failed', {
+                          mccId: record.id,
+                          message: e?.response?.data?.detail || e?.message,
+                          status: e?.response?.status,
+                        })
+                        // #endregion
+                      }
                       message.error(e.response?.data?.detail || '获取脚本失败')
                     }
                   }}
