@@ -870,6 +870,52 @@ class MerchantService:
         if not end_date:
             end_date = datetime.now(timezone.utc)
 
+        # #region agent log H-A/H-B: check if assigned_at is used in the query
+        import json as _json, pathlib as _pl
+        _log_path = _pl.Path(__file__).resolve().parents[3] / "debug-74288c.log"
+        _assignments_raw = db.query(
+            MerchantAssignment.id, MerchantAssignment.user_id,
+            MerchantAssignment.merchant_id, MerchantAssignment.assigned_at,
+            AffiliateMerchant.merchant_name, AffiliateMerchant.platform,
+            AffiliateMerchant.merchant_id.label("mid_str"),
+        ).join(AffiliateMerchant, MerchantAssignment.merchant_id == AffiliateMerchant.id
+        ).filter(MerchantAssignment.status == "active").all()
+        for _a in _assignments_raw:
+            _tx_before = db.query(func.count(), func.coalesce(func.sum(AffiliateTransaction.commission_amount), 0)).filter(
+                AffiliateTransaction.platform == _a.platform,
+                AffiliateTransaction.merchant_id == _a.mid_str,
+                AffiliateTransaction.transaction_time >= start_date,
+                AffiliateTransaction.transaction_time <= end_date,
+                AffiliateTransaction.transaction_time < _a.assigned_at,
+            ).first()
+            _tx_after = db.query(func.count(), func.coalesce(func.sum(AffiliateTransaction.commission_amount), 0)).filter(
+                AffiliateTransaction.platform == _a.platform,
+                AffiliateTransaction.merchant_id == _a.mid_str,
+                AffiliateTransaction.transaction_time >= start_date,
+                AffiliateTransaction.transaction_time <= end_date,
+                AffiliateTransaction.transaction_time >= _a.assigned_at,
+            ).first()
+            _tx_total = db.query(func.count(), func.coalesce(func.sum(AffiliateTransaction.commission_amount), 0)).filter(
+                AffiliateTransaction.platform == _a.platform,
+                AffiliateTransaction.merchant_id == _a.mid_str,
+                AffiliateTransaction.transaction_time >= start_date,
+                AffiliateTransaction.transaction_time <= end_date,
+            ).first()
+            with open(_log_path, "a", encoding="utf-8") as _f:
+                _f.write(_json.dumps({"sessionId": "74288c", "hypothesisId": "H-A,H-B",
+                    "location": "merchant_service.py:get_performance",
+                    "message": "assignment_vs_transaction_timing",
+                    "data": {
+                        "assignment_id": _a.id, "user_id": _a.user_id,
+                        "merchant_name": _a.merchant_name, "platform": _a.platform, "mid": _a.mid_str,
+                        "assigned_at": str(_a.assigned_at),
+                        "query_start": str(start_date), "query_end": str(end_date),
+                        "pre_assign_tx_count": _tx_before[0], "pre_assign_commission": float(_tx_before[1]),
+                        "post_assign_tx_count": _tx_after[0], "post_assign_commission": float(_tx_after[1]),
+                        "total_tx_count": _tx_total[0], "total_commission": float(_tx_total[1]),
+                    }, "timestamp": int(datetime.now().timestamp() * 1000)}, ensure_ascii=False) + "\n")
+        # #endregion
+
         q = (
             db.query(
                 MerchantAssignment.user_id,
