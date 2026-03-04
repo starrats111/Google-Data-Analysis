@@ -36,6 +36,8 @@ class AffiliateAccount(Base):
     notes = Column(Text, nullable=True)
     payee_name = Column(String(100), nullable=True)  # 收款人
     payee_card = Column(String(50), nullable=True)   # 收款卡号
+    api_token_encrypted = Column(Text, nullable=True)  # OPT-009: 平台 API Token（AES-256 加密存储）
+    token_updated_at = Column(DateTime(timezone=True), nullable=True)  # OPT-009: Token 最后更新时间
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
     

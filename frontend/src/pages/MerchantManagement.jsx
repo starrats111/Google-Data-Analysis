@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react'
+import React, { useEffect, useMemo, useState, useCallback } from 'react'
 import {
   Card,
   Table,
@@ -17,12 +17,17 @@ import {
   Row,
   Col,
   Tooltip,
+  Badge,
+  DatePicker,
+  Spin,
 } from 'antd'
-import { ReloadOutlined, SearchOutlined, UserSwitchOutlined, SyncOutlined } from '@ant-design/icons'
+import { ReloadOutlined, SearchOutlined, UserSwitchOutlined, SyncOutlined, CheckCircleOutlined, CloudSyncOutlined } from '@ant-design/icons'
 import api from '../services/api'
 import { useAuth } from '../store/authStore'
+import dayjs from 'dayjs'
 
 const { Option } = Select
+const { RangePicker } = DatePicker
 
 const statusColorMap = {
   active: 'green',
@@ -35,6 +40,18 @@ const priorityColorMap = {
   high: 'red',
   normal: 'blue',
   low: 'default',
+}
+
+const relationshipStatusMap = {
+  joined: { color: 'green', label: '通过' },
+  pending: { color: 'orange', label: '审核' },
+  rejected: { color: 'red', label: '拒绝' },
+  unknown: { color: 'default', label: '未知' },
+}
+
+const PLATFORM_COLORS = {
+  CG: '#1890ff', RW: '#52c41a', LH: '#722ed1', LB: '#fa8c16',
+  PM: '#13c2c2', BSH: '#eb2f96', CF: '#faad14',
 }
 
 const MerchantManagement = () => {
@@ -74,7 +91,9 @@ const MerchantManagement = () => {
     status: undefined,
     assigned: undefined,
     missing_mid: undefined,
+    relationship_status: undefined,
     search: '',
+    dateRange: null,
   })
   const [assignmentFilters, setAssignmentFilters] = useState({
     user_id: undefined,
@@ -88,25 +107,47 @@ const MerchantManagement = () => {
   const [transferModalOpen, setTransferModalOpen] = useState(false)
   const [editMerchantModalOpen, setEditMerchantModalOpen] = useState(false)
   const [editAssignmentModalOpen, setEditAssignmentModalOpen] = useState(false)
+  const [commissionModalOpen, setCommissionModalOpen] = useState(false)
+  const [commissionData, setCommissionData] = useState(null)
+  const [commissionMerchant, setCommissionMerchant] = useState(null)
+  const [commissionType, setCommissionType] = useState('self_run')
+  const [commissionLoading, setCommissionLoading] = useState(false)
 
   const [currentMerchant, setCurrentMerchant] = useState(null)
   const [currentAssignment, setCurrentAssignment] = useState(null)
+
+  const [platformSyncLoading, setPlatformSyncLoading] = useState(false)
+  const [editingMidId, setEditingMidId] = useState(null)
+  const [editingMidValue, setEditingMidValue] = useState('')
+  const [midSaving, setMidSaving] = useState(false)
 
   const [assignForm] = Form.useForm()
   const [transferForm] = Form.useForm()
   const [editMerchantForm] = Form.useForm()
   const [editAssignmentForm] = Form.useForm()
 
-  const byPlatformText = useMemo(() => {
+  const platformTags = useMemo(() => {
     const entries = Object.entries(stats.by_platform || {})
-    if (!entries.length) return '暂无'
-    return entries.map(([k, v]) => `${k}: ${v}`).join(' | ')
+    if (!entries.length) return <Tag>暂无</Tag>
+    return entries
+      .sort((a, b) => b[1] - a[1])
+      .map(([k, v]) => (
+        <Tag key={k} color={PLATFORM_COLORS[k] || 'blue'} style={{ cursor: 'default' }}>
+          {k} <Badge count={v} style={{ backgroundColor: PLATFORM_COLORS[k] || '#1890ff', marginLeft: 4, boxShadow: 'none' }} overflowCount={99999} />
+        </Tag>
+      ))
   }, [stats.by_platform])
 
-  const missingMidByPlatformText = useMemo(() => {
+  const missingMidTags = useMemo(() => {
     const entries = Object.entries(stats.missing_mid_by_platform || {})
-    if (!entries.length) return '暂无'
-    return entries.map(([k, v]) => `${k}: ${v}`).join(' | ')
+    if (!entries.length) return <Tag>暂无</Tag>
+    return entries
+      .sort((a, b) => b[1] - a[1])
+      .map(([k, v]) => (
+        <Tag key={k} color="orange" style={{ cursor: 'default' }}>
+          {k} <Badge count={v} style={{ backgroundColor: '#fa8c16', marginLeft: 4, boxShadow: 'none' }} overflowCount={99999} />
+        </Tag>
+      ))
   }, [stats.missing_mid_by_platform])
 
   useEffect(() => {
@@ -122,6 +163,9 @@ const MerchantManagement = () => {
   useEffect(() => {
     if (tabKey === 'assignments') {
       fetchAssignments(1, assignmentPageSize)
+    } else if (tabKey === 'missing_mid') {
+      setMerchantFilters((s) => ({ ...s, missing_mid: true }))
+      setTimeout(() => fetchMerchants(1, merchantPageSize), 0)
     }
   }, [tabKey]) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -166,7 +210,10 @@ const MerchantManagement = () => {
       if (merchantFilters.status) params.status = merchantFilters.status
       if (merchantFilters.assigned !== undefined) params.assigned = merchantFilters.assigned
       if (merchantFilters.missing_mid !== undefined) params.missing_mid = merchantFilters.missing_mid
+      if (merchantFilters.relationship_status) params.relationship_status = merchantFilters.relationship_status
       if (merchantFilters.search) params.search = merchantFilters.search
+      if (merchantFilters.dateRange?.[0]) params.start_date = merchantFilters.dateRange[0].format('YYYY-MM-DD')
+      if (merchantFilters.dateRange?.[1]) params.end_date = merchantFilters.dateRange[1].format('YYYY-MM-DD')
 
       const resp = await api.get('/api/merchants', { params })
       const data = resp.data || {}
@@ -218,6 +265,59 @@ const MerchantManagement = () => {
       message.error(error.response?.data?.detail || '商家同步失败')
     } finally {
       setDiscoverLoading(false)
+    }
+  }
+
+  const handlePlatformSync = async () => {
+    setPlatformSyncLoading(true)
+    try {
+      const resp = await api.post('/api/merchants/sync-platforms')
+      const d = resp.data || {}
+      message.success(`平台同步完成：同步 ${d.synced_accounts || 0}/${d.total_accounts || 0} 账号，新增 ${d.new_merchants || 0} 商家，状态变更 ${d.status_changes || 0}`)
+      await Promise.all([fetchStats(), fetchMerchants(1, merchantPageSize)])
+    } catch (error) {
+      message.error(error.response?.data?.detail || '平台同步失败')
+    } finally {
+      setPlatformSyncLoading(false)
+    }
+  }
+
+  const handleCommissionClick = async (record, type) => {
+    setCommissionMerchant(record)
+    setCommissionType(type)
+    setCommissionLoading(true)
+    setCommissionModalOpen(true)
+    try {
+      const dr = merchantFilters.dateRange
+      const sd = dr?.[0]?.format('YYYY-MM-DD') || dayjs().subtract(30, 'day').format('YYYY-MM-DD')
+      const ed = dr?.[1]?.format('YYYY-MM-DD') || dayjs().format('YYYY-MM-DD')
+      const resp = await api.get(`/api/merchants/${record.id}/commission-breakdown`, { params: { start_date: sd, end_date: ed } })
+      setCommissionData(resp.data)
+    } catch (error) {
+      message.error(error.response?.data?.detail || '获取佣金明细失败')
+      setCommissionModalOpen(false)
+    } finally {
+      setCommissionLoading(false)
+    }
+  }
+
+  const handleInlineMidSave = async (merchantId) => {
+    const val = editingMidValue.trim()
+    if (val && !/^\d+$/.test(val)) {
+      message.error('MID 仅支持纯数字')
+      return
+    }
+    setMidSaving(true)
+    try {
+      await api.put(`/api/merchants/${merchantId}`, { merchant_id: val || null })
+      message.success('MID 更新成功')
+      setEditingMidId(null)
+      setEditingMidValue('')
+      await fetchMerchants(merchantPage, merchantPageSize)
+    } catch (error) {
+      message.error(error.response?.data?.detail || 'MID 更新失败')
+    } finally {
+      setMidSaving(false)
     }
   }
 
@@ -339,8 +439,38 @@ const MerchantManagement = () => {
         <Space direction="vertical" size={0}>
           <span style={{ fontWeight: 600 }}>{text || '-'}</span>
           <Space size={6}>
-            <span style={{ color: '#8c8c8c', fontSize: 12 }}>{record.merchant_id || '待补MID'}</span>
-            {record.missing_mid ? <Tag color="orange">待补MID</Tag> : null}
+            {editingMidId === record.id ? (
+              <Space size={4}>
+                <Input
+                  size="small"
+                  style={{ width: 100 }}
+                  value={editingMidValue}
+                  onChange={(e) => setEditingMidValue(e.target.value)}
+                  onPressEnter={() => handleInlineMidSave(record.id)}
+                  placeholder="输入MID"
+                />
+                <Button type="link" size="small" loading={midSaving} onClick={() => handleInlineMidSave(record.id)}>
+                  <CheckCircleOutlined />
+                </Button>
+                <Button type="link" size="small" onClick={() => { setEditingMidId(null); setEditingMidValue('') }}>
+                  取消
+                </Button>
+              </Space>
+            ) : (
+              <>
+                <span style={{ color: '#8c8c8c', fontSize: 12 }}>{record.merchant_id || '待补MID'}</span>
+                {record.missing_mid && isManager ? (
+                  <Button
+                    type="link"
+                    size="small"
+                    style={{ padding: 0, fontSize: 12 }}
+                    onClick={() => { setEditingMidId(record.id); setEditingMidValue(record.merchant_id || '') }}
+                  >
+                    补录
+                  </Button>
+                ) : record.missing_mid ? <Tag color="orange">待补MID</Tag> : null}
+              </>
+            )}
           </Space>
         </Space>
       ),
@@ -349,28 +479,31 @@ const MerchantManagement = () => {
       title: '平台',
       dataIndex: 'platform',
       key: 'platform',
-      width: 120,
-      render: (val) => <Tag color="blue">{val || '-'}</Tag>,
+      width: 90,
+      render: (val) => <Tag color={PLATFORM_COLORS[val] || 'blue'}>{val || '-'}</Tag>,
+    },
+    {
+      title: '申请状态',
+      dataIndex: 'relationship_status',
+      key: 'relationship_status',
+      width: 90,
+      render: (val) => {
+        const cfg = relationshipStatusMap[val] || relationshipStatusMap.unknown
+        return <Tag color={cfg.color}>{cfg.label}</Tag>
+      },
     },
     {
       title: '类别',
       dataIndex: 'category',
       key: 'category',
-      width: 120,
-      render: (val) => val || '-',
-    },
-    {
-      title: '状态',
-      dataIndex: 'status',
-      key: 'status',
       width: 100,
-      render: (val) => <Tag color={statusColorMap[val] || 'default'}>{val || '-'}</Tag>,
+      render: (val) => val || '-',
     },
     {
       title: '当前负责人',
       dataIndex: 'assigned_users',
       key: 'assigned_users',
-      width: 260,
+      width: 200,
       render: (assignedUsers) => {
         if (!assignedUsers?.length) return <Tag>未分配</Tag>
         return (
@@ -385,27 +518,53 @@ const MerchantManagement = () => {
       },
     },
     {
-      title: '近30天订单',
+      title: '订单',
       dataIndex: 'orders_30d',
       key: 'orders_30d',
-      width: 120,
+      width: 80,
       align: 'right',
       sorter: (a, b) => (a.orders_30d || 0) - (b.orders_30d || 0),
       render: (val) => (val || 0).toLocaleString(),
     },
     {
-      title: '近30天佣金',
+      title: '佣金',
       dataIndex: 'commission_30d',
       key: 'commission_30d',
-      width: 140,
+      width: 110,
       align: 'right',
       sorter: (a, b) => (a.commission_30d || 0) - (b.commission_30d || 0),
       render: (val) => `$${(val || 0).toFixed(2)}`,
     },
     {
+      title: '自跑佣金',
+      dataIndex: 'self_run_commission',
+      key: 'self_run_commission',
+      width: 110,
+      align: 'right',
+      sorter: (a, b) => (a.self_run_commission || 0) - (b.self_run_commission || 0),
+      render: (val, record) => (
+        <a style={{ color: '#1890ff' }} onClick={() => handleCommissionClick(record, 'self_run')}>
+          ${(val || 0).toFixed(2)}
+        </a>
+      ),
+    },
+    {
+      title: '分配佣金',
+      dataIndex: 'assigned_commission',
+      key: 'assigned_commission',
+      width: 110,
+      align: 'right',
+      sorter: (a, b) => (a.assigned_commission || 0) - (b.assigned_commission || 0),
+      render: (val, record) => (
+        <a style={{ color: '#52c41a' }} onClick={() => handleCommissionClick(record, 'assigned')}>
+          ${(val || 0).toFixed(2)}
+        </a>
+      ),
+    },
+    {
       title: '操作',
       key: 'action',
-      width: 100,
+      width: 80,
       fixed: 'right',
       render: (_, record) => (
         <Button size="small" disabled={!canManage} onClick={() => openEditMerchantModal(record)}>
@@ -563,17 +722,15 @@ const MerchantManagement = () => {
               </Card>
             </Col>
             <Col xs={24} md={8}>
-              <Card>
-                <Space direction="vertical" size={4}>
-                  <Space wrap>
-                    <Tag color="processing">平台分布</Tag>
-                    <span>{byPlatformText}</span>
-                  </Space>
-                  <Space wrap>
-                    <Tag color="orange">待补MID分布</Tag>
-                    <span>{missingMidByPlatformText}</span>
-                  </Space>
-                </Space>
+              <Card size="small">
+                <div style={{ marginBottom: 8 }}>
+                  <span style={{ fontWeight: 500, marginRight: 8 }}>平台分布</span>
+                  <Space wrap size={4}>{platformTags}</Space>
+                </div>
+                <div>
+                  <span style={{ fontWeight: 500, marginRight: 8 }}>待补MID</span>
+                  <Space wrap size={4}>{missingMidTags}</Space>
+                </div>
               </Card>
             </Col>
           </Row>
@@ -595,7 +752,10 @@ const MerchantManagement = () => {
                     <Tooltip title="重新加载数据">
                       <Button icon={<ReloadOutlined />} onClick={() => fetchMerchants(merchantPage, merchantPageSize)} />
                     </Tooltip>
-                    <Button icon={<SyncOutlined />} loading={discoverLoading} onClick={handleDiscover}>同步商家</Button>
+                    <Button icon={<SyncOutlined />} loading={discoverLoading} onClick={handleDiscover}>交易同步</Button>
+                    {isManager && (
+                      <Button icon={<CloudSyncOutlined />} loading={platformSyncLoading} onClick={handlePlatformSync}>平台同步</Button>
+                    )}
                     {canManage && (
                       <Button
                         type="primary"
@@ -660,13 +820,32 @@ const MerchantManagement = () => {
                   <Select
                     allowClear
                     placeholder="MID状态"
-                    style={{ width: 140 }}
+                    style={{ width: 120 }}
                     value={merchantFilters.missing_mid}
                     onChange={(v) => setMerchantFilters((s) => ({ ...s, missing_mid: v }))}
                   >
                     <Option value={true}>待补MID</Option>
                     <Option value={false}>MID完整</Option>
                   </Select>
+
+                  <Select
+                    allowClear
+                    placeholder="申请状态"
+                    style={{ width: 120 }}
+                    value={merchantFilters.relationship_status}
+                    onChange={(v) => setMerchantFilters((s) => ({ ...s, relationship_status: v }))}
+                  >
+                    <Option value="joined">通过</Option>
+                    <Option value="pending">审核中</Option>
+                    <Option value="rejected">已拒绝</Option>
+                  </Select>
+
+                  <RangePicker
+                    value={merchantFilters.dateRange}
+                    onChange={(v) => setMerchantFilters((s) => ({ ...s, dateRange: v }))}
+                    style={{ width: 240 }}
+                    placeholder={['佣金开始', '佣金结束']}
+                  />
 
                   <Button type="primary" onClick={() => fetchMerchants(1, merchantPageSize)}>查询</Button>
                   <Button
@@ -677,7 +856,9 @@ const MerchantManagement = () => {
                         status: undefined,
                         assigned: undefined,
                         missing_mid: undefined,
+                        relationship_status: undefined,
                         search: '',
+                        dateRange: null,
                       })
                       setTimeout(() => fetchMerchants(1, merchantPageSize), 0)
                     }}
@@ -692,7 +873,7 @@ const MerchantManagement = () => {
                   columns={merchantColumns}
                   dataSource={merchants}
                   rowSelection={merchantRowSelection}
-                  scroll={{ x: 1350 }}
+                  scroll={{ x: 1600 }}
                   pagination={{
                     current: merchantPage,
                     pageSize: merchantPageSize,
@@ -785,8 +966,124 @@ const MerchantManagement = () => {
               </Card>
             ),
           },
+          canManage && {
+            key: 'missing_mid',
+            label: '待补MID',
+            children: (
+              <Card
+                title="待补 MID 商家"
+                extra={
+                  <Button icon={<ReloadOutlined />} onClick={() => {
+                    setMerchantFilters((s) => ({ ...s, missing_mid: true }))
+                    setTimeout(() => fetchMerchants(1, merchantPageSize), 0)
+                  }}>
+                    刷新
+                  </Button>
+                }
+              >
+                <Table
+                  rowKey="id"
+                  loading={loading}
+                  dataSource={merchants.filter((m) => m.missing_mid)}
+                  scroll={{ x: 1000 }}
+                  pagination={false}
+                  columns={[
+                    {
+                      title: '平台', dataIndex: 'platform', key: 'platform', width: 80,
+                      render: (val) => <Tag color={PLATFORM_COLORS[val] || 'blue'}>{val}</Tag>,
+                    },
+                    { title: '商家名', dataIndex: 'merchant_name', key: 'merchant_name', width: 200 },
+                    { title: 'Slug', dataIndex: 'slug', key: 'slug', width: 200, render: (v) => v || '-' },
+                    {
+                      title: '申请状态', dataIndex: 'relationship_status', key: 'rs', width: 90,
+                      render: (val) => {
+                        const cfg = relationshipStatusMap[val] || relationshipStatusMap.unknown
+                        return <Tag color={cfg.color}>{cfg.label}</Tag>
+                      },
+                    },
+                    {
+                      title: '操作', key: 'action', width: 220,
+                      render: (_, record) => {
+                        if (editingMidId === record.id) {
+                          return (
+                            <Space>
+                              <Input
+                                size="small"
+                                style={{ width: 120 }}
+                                value={editingMidValue}
+                                onChange={(e) => setEditingMidValue(e.target.value)}
+                                onPressEnter={() => handleInlineMidSave(record.id)}
+                                placeholder="输入MID"
+                              />
+                              <Button type="primary" size="small" loading={midSaving} onClick={() => handleInlineMidSave(record.id)}>确认</Button>
+                              <Button size="small" onClick={() => { setEditingMidId(null); setEditingMidValue('') }}>取消</Button>
+                            </Space>
+                          )
+                        }
+                        return isManager ? (
+                          <Button size="small" onClick={() => { setEditingMidId(record.id); setEditingMidValue('') }}>填写 MID</Button>
+                        ) : <span style={{ color: '#aaa' }}>—</span>
+                      },
+                    },
+                  ]}
+                />
+              </Card>
+            ),
+          },
         ].filter(Boolean)}
       />
+
+      {/* OPT-009: 佣金拆分明细弹窗 */}
+      <Modal
+        title={`${commissionType === 'self_run' ? '自跑' : '分配'}佣金明细 — ${commissionMerchant?.merchant_name || ''}`}
+        open={commissionModalOpen}
+        onCancel={() => { setCommissionModalOpen(false); setCommissionData(null) }}
+        footer={null}
+        width={600}
+        destroyOnHidden
+      >
+        {commissionLoading ? (
+          <div style={{ textAlign: 'center', padding: 32 }}><Spin /></div>
+        ) : commissionData ? (
+          <>
+            <Row gutter={16} style={{ marginBottom: 16 }}>
+              <Col span={12}>
+                <Statistic title="自跑佣金" value={commissionData.self_run_total || 0} prefix="$" precision={2} valueStyle={{ color: '#1890ff' }} />
+              </Col>
+              <Col span={12}>
+                <Statistic title="分配佣金" value={commissionData.assigned_total || 0} prefix="$" precision={2} valueStyle={{ color: '#52c41a' }} />
+              </Col>
+            </Row>
+            <Table
+              rowKey="user_id"
+              size="small"
+              pagination={false}
+              dataSource={commissionType === 'self_run' ? commissionData.self_run_details : commissionData.assigned_details}
+              columns={[
+                { title: '员工', dataIndex: 'display_name', key: 'name', render: (v, r) => v || r.username || '-' },
+                ...(commissionType === 'assigned' ? [{
+                  title: '分配时间', dataIndex: 'assigned_at', key: 'at',
+                  render: (v) => v ? new Date(v).toLocaleDateString('zh-CN') : '-',
+                }] : []),
+                { title: '佣金', dataIndex: 'commission', key: 'commission', align: 'right', render: (v) => `$${(v || 0).toFixed(2)}` },
+                { title: '订单数', dataIndex: 'order_count', key: 'orders', align: 'right' },
+              ]}
+              summary={(data) => {
+                const totalComm = data.reduce((s, r) => s + (r.commission || 0), 0)
+                const totalOrders = data.reduce((s, r) => s + (r.order_count || 0), 0)
+                return (
+                  <Table.Summary.Row>
+                    <Table.Summary.Cell index={0}><strong>合计</strong></Table.Summary.Cell>
+                    {commissionType === 'assigned' && <Table.Summary.Cell index={1} />}
+                    <Table.Summary.Cell index={commissionType === 'assigned' ? 2 : 1} align="right"><strong>${totalComm.toFixed(2)}</strong></Table.Summary.Cell>
+                    <Table.Summary.Cell index={commissionType === 'assigned' ? 3 : 2} align="right"><strong>{totalOrders}</strong></Table.Summary.Cell>
+                  </Table.Summary.Row>
+                )
+              }}
+            />
+          </>
+        ) : null}
+      </Modal>
 
       <Modal
         title={`批量分配商家（${selectedMerchantIds.length}个）`}

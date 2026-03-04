@@ -136,6 +136,9 @@ class Settings(BaseSettings):
     # 拒付佣金日变动检测阈值（USD）（OPT-002）
     REJECTED_COMMISSION_DAILY_THRESHOLD: float = 100.0
 
+    # OPT-009: 联盟账号 API Token 加密密钥（AES-256）
+    TOKEN_ENCRYPT_KEY: str = ""
+
     # ===== Gemini AI 配置（哈基米中转）=====
     # 哈基米API站: https://api.gemai.cc
     gemini_api_key: str = ""

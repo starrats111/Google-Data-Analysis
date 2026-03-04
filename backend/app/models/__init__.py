@@ -24,6 +24,7 @@ from app.models.merchant_alias import MerchantAlias
 from app.models.platform_field_contract import PlatformFieldContract
 from app.models.merchant_source_snapshot import MerchantSourceSnapshot
 from app.models.merchant_assignment_event import MerchantAssignmentEvent
+from app.models.merchant_account_relationship import MerchantAccountRelationship
 # 露出功能模型
 from app.models.luchu import (
     LuchuWebsite,
@@ -72,6 +73,7 @@ __all__ = [
     "PlatformFieldContract",
     "MerchantSourceSnapshot",
     "MerchantAssignmentEvent",
+    "MerchantAccountRelationship",
     # 露出功能
     "LuchuWebsite",
     "LuchuArticle",

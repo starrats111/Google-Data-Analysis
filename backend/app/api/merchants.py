@@ -1,7 +1,8 @@
 """
 商家目录与任务分配 API
 """
-from datetime import datetime, timezone
+import time
+from datetime import date, datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -29,12 +30,17 @@ async def list_merchants(
     status: Optional[str] = None,
     assigned: Optional[bool] = None,
     missing_mid: Optional[bool] = None,
+    relationship_status: Optional[str] = None,
     search: Optional[str] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=200),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    sd = date.fromisoformat(start_date) if start_date else None
+    ed = date.fromisoformat(end_date) if end_date else None
     return MerchantService.list_merchants(
         db,
         platform=platform,
@@ -42,7 +48,10 @@ async def list_merchants(
         status=status,
         assigned=assigned,
         missing_mid=missing_mid,
+        relationship_status=relationship_status,
         search=search,
+        start_date=sd,
+        end_date=ed,
         page=page,
         page_size=page_size,
     )
@@ -93,6 +102,45 @@ async def discover_merchants(
     trigger = "manual"
     count = MerchantService.discover_merchants(db, trigger_type=trigger)
     return {"message": f"发现并注册了 {count} 个新商家", "new_count": count}
+
+
+# OPT-009: 手动触发平台商家同步（每 10 分钟限 1 次）
+_last_sync_ts: float = 0.0
+
+@router.post("/sync-platforms")
+async def sync_platforms(
+    current_user: User = Depends(get_current_manager),
+    db: Session = Depends(get_db),
+):
+    global _last_sync_ts
+    now = time.time()
+    if now - _last_sync_ts < 600:
+        remaining = int(600 - (now - _last_sync_ts))
+        raise HTTPException(status_code=429, detail=f"同步冷却中，请 {remaining} 秒后再试")
+    _last_sync_ts = now
+
+    from app.services.merchant_platform_sync import MerchantPlatformSyncService
+    svc = MerchantPlatformSyncService(db)
+    return svc.sync_all()
+
+
+# OPT-009: 商家佣金拆分明细
+@router.get("/{merchant_pk}/commission-breakdown")
+async def commission_breakdown(
+    merchant_pk: int,
+    start_date: str = Query(..., description="YYYY-MM-DD"),
+    end_date: str = Query(..., description="YYYY-MM-DD"),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    sd = date.fromisoformat(start_date)
+    ed = date.fromisoformat(end_date)
+    result = MerchantService.get_commission_breakdown(
+        db, merchant_pk, sd, ed, current_user=current_user,
+    )
+    if result is None:
+        raise HTTPException(status_code=404, detail="商家不存在")
+    return result
 
 
 # ==================================================================

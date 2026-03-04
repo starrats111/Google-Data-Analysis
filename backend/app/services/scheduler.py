@@ -982,6 +982,30 @@ def merchant_discover_job():
         db.close()
 
 
+def merchant_platform_sync_job():
+    """商家平台 API 同步任务（OPT-009，每天 16:00 执行）"""
+    db: Session = SessionLocal()
+    try:
+        logger.info("=" * 60)
+        logger.info("【商家平台同步开始】")
+        from app.services.merchant_platform_sync import MerchantPlatformSyncService
+        svc = MerchantPlatformSyncService(db)
+        result = svc.sync_all()
+        logger.info(
+            "【商家平台同步完成】同步 %d/%d 账号，新增 %d 商家，状态变更 %d",
+            result["synced_accounts"], result["total_accounts"],
+            result["new_merchants"], result["status_changes"],
+        )
+        if result["errors"]:
+            for err in result["errors"]:
+                logger.warning("  同步错误: %s", err)
+        logger.info("=" * 60)
+    except Exception as e:
+        logger.error(f"商家平台同步任务异常: {e}", exc_info=True)
+    finally:
+        db.close()
+
+
 def merchant_mid_repair_job():
     """MID 自动补偿任务（每天北京时间 07:10 执行）：
     按同平台同商家名反查唯一数字MID回填，缺失率 > 1% 时告警 manager (G-08/G-09)
@@ -1176,6 +1200,16 @@ def start_scheduler():
             max_instances=1
         )
 
+        # 9. 每天 16:00 - 商家平台 API 同步（OPT-009）
+        scheduler.add_job(
+            merchant_platform_sync_job,
+            trigger=CronTrigger(hour=16, minute=0),
+            id='merchant_platform_sync',
+            name='商家平台API同步（16:00）',
+            replace_existing=True,
+            max_instances=1
+        )
+
         scheduler.start()
         logger.info("=" * 60)
         logger.info("定时任务调度器已启动")
@@ -1191,6 +1225,7 @@ def start_scheduler():
         logger.info("  6. 数据库自动备份: 每天 03:00")
         logger.info("  7. MID自动补偿: 每天 07:10")
         logger.info("  8. 通知清理: 每月1号 01:00")
+        logger.info("  9. 商家平台API同步: 每天 16:00 (OPT-009)")
         logger.info("=" * 60)
         
     except Exception as e:

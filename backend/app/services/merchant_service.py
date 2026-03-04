@@ -395,7 +395,9 @@ class MerchantService:
             assign_map.setdefault(a.merchant_id, []).append(a)
 
         now = datetime.now(timezone.utc)
-        start_30d = now - timedelta(days=30)
+        range_start = datetime.combine(start_date, datetime.min.time()).replace(tzinfo=timezone.utc) if start_date else (now - timedelta(days=30))
+        range_end = datetime.combine(end_date, datetime.max.time()).replace(tzinfo=timezone.utc) if end_date else now
+
         commission_rows = (
             db.query(
                 AffiliateMerchant.id,
@@ -407,7 +409,8 @@ class MerchantService:
                 and_(
                     AffiliateTransaction.platform == AffiliateMerchant.platform,
                     AffiliateTransaction.merchant_id == AffiliateMerchant.merchant_id,
-                    AffiliateTransaction.transaction_time >= start_30d,
+                    AffiliateTransaction.transaction_time >= range_start,
+                    AffiliateTransaction.transaction_time <= range_end,
                 ),
             )
             .filter(AffiliateMerchant.id.in_(merchant_ids))
@@ -416,10 +419,13 @@ class MerchantService:
         ) if merchant_ids else []
         perf_map = {r.id: {"commission_30d": float(r.commission_30d), "orders_30d": r.orders_30d} for r in commission_rows}
 
+        split_map = MerchantService._batch_commission_split(db, items, assign_map, range_start, range_end) if merchant_ids else {}
+
         result = []
         for m in items:
             assigns = assign_map.get(m.id, [])
             perf = perf_map.get(m.id, {"commission_30d": 0, "orders_30d": 0})
+            split = split_map.get(m.id, {"self_run_commission": 0, "assigned_commission": 0})
             result.append({
                 "id": m.id,
                 "merchant_id": m.merchant_id,
@@ -429,6 +435,7 @@ class MerchantService:
                 "category": m.category,
                 "commission_rate": m.commission_rate,
                 "status": m.status,
+                "relationship_status": m.relationship_status or "unknown",
                 "missing_mid": bool(m.missing_mid),
                 "notes": m.notes,
                 "created_at": m.created_at.isoformat() if m.created_at else None,
@@ -444,6 +451,7 @@ class MerchantService:
                     for a in assigns
                 ],
                 **perf,
+                **split,
             })
 
         return {"total": total, "page": page, "page_size": page_size, "items": result}
@@ -532,6 +540,18 @@ class MerchantService:
                     raise ValueError("merchant_id 必须为纯数字 MID")
                 m.merchant_id = mid_str
                 m.missing_mid = 0
+                m.id_confidence = "manual"
+                repair = (
+                    db.query(MerchantMidRepairQueue)
+                    .filter(
+                        MerchantMidRepairQueue.merchant_id == m.id,
+                        MerchantMidRepairQueue.repair_status.in_(["pending", "auto_matched"]),
+                    )
+                    .all()
+                )
+                for r in repair:
+                    r.repair_status = "manual_fixed"
+                    r.repaired_mid = mid_str
         db.commit()
         db.refresh(m)
         return m
@@ -1049,3 +1069,151 @@ class MerchantService:
             }
             for r in rows
         ]
+
+    # ------------------------------------------------------------------
+    # OPT-009: 佣金拆分
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _batch_commission_split(
+        db: Session,
+        merchants: list,
+        assign_map: dict,
+        range_start: datetime,
+        range_end: datetime,
+    ) -> dict:
+        """批量计算列表页每个商家的自跑/分配佣金汇总。"""
+        result = {}
+        for m in merchants:
+            if not m.merchant_id:
+                result[m.id] = {"self_run_commission": 0, "assigned_commission": 0}
+                continue
+
+            txs = (
+                db.query(
+                    AffiliateTransaction.user_id,
+                    AffiliateTransaction.transaction_time,
+                    AffiliateTransaction.commission_amount,
+                )
+                .filter(
+                    AffiliateTransaction.platform == m.platform,
+                    AffiliateTransaction.merchant_id == m.merchant_id,
+                    AffiliateTransaction.transaction_time >= range_start,
+                    AffiliateTransaction.transaction_time <= range_end,
+                )
+                .all()
+            )
+
+            assigns = assign_map.get(m.id, [])
+            assigned_map = {a.user_id: a.assigned_at for a in assigns if a.assigned_at}
+
+            self_run = 0.0
+            assigned = 0.0
+            for tx in txs:
+                amt = float(tx.commission_amount or 0)
+                assigned_at = assigned_map.get(tx.user_id)
+                if assigned_at and tx.transaction_time and tx.transaction_time >= assigned_at:
+                    assigned += amt
+                else:
+                    self_run += amt
+
+            result[m.id] = {
+                "self_run_commission": round(self_run, 2),
+                "assigned_commission": round(assigned, 2),
+            }
+        return result
+
+    @staticmethod
+    def get_commission_breakdown(
+        db: Session,
+        merchant_pk: int,
+        start_date: date,
+        end_date: date,
+        current_user=None,
+    ) -> dict:
+        """获取单个商家的佣金拆分明细（OPT-009 §10.5）。"""
+        m = db.query(AffiliateMerchant).get(merchant_pk)
+        if not m:
+            return None
+
+        range_start = datetime.combine(start_date, datetime.min.time()).replace(tzinfo=timezone.utc)
+        range_end = datetime.combine(end_date, datetime.max.time()).replace(tzinfo=timezone.utc)
+
+        tx_query = (
+            db.query(
+                AffiliateTransaction.user_id,
+                AffiliateTransaction.transaction_time,
+                AffiliateTransaction.commission_amount,
+                AffiliateTransaction.transaction_id,
+            )
+            .filter(
+                AffiliateTransaction.platform == m.platform,
+                AffiliateTransaction.merchant_id == m.merchant_id,
+                AffiliateTransaction.transaction_time >= range_start,
+                AffiliateTransaction.transaction_time <= range_end,
+            )
+        )
+
+        if current_user:
+            role = current_user.role if isinstance(current_user.role, str) else current_user.role.value
+            if role in ("member", "employee"):
+                tx_query = tx_query.filter(AffiliateTransaction.user_id == current_user.id)
+            elif role == "leader" and current_user.team_id:
+                team_uids = [u.id for u in db.query(User.id).filter(User.team_id == current_user.team_id).all()]
+                tx_query = tx_query.filter(AffiliateTransaction.user_id.in_(team_uids))
+
+        txs = tx_query.all()
+
+        active_assigns = (
+            db.query(MerchantAssignment)
+            .filter(MerchantAssignment.merchant_id == m.id, MerchantAssignment.status == "active")
+            .all()
+        )
+        assigned_map = {a.user_id: a.assigned_at for a in active_assigns if a.assigned_at}
+
+        user_ids = set(tx.user_id for tx in txs if tx.user_id)
+        users = {u.id: u for u in db.query(User).filter(User.id.in_(user_ids)).all()} if user_ids else {}
+
+        self_run_agg: dict = {}
+        assigned_agg: dict = {}
+
+        for tx in txs:
+            uid = tx.user_id
+            amt = float(tx.commission_amount or 0)
+            assigned_at = assigned_map.get(uid)
+
+            if assigned_at and tx.transaction_time and tx.transaction_time >= assigned_at:
+                bucket = assigned_agg
+            else:
+                bucket = self_run_agg
+
+            if uid not in bucket:
+                bucket[uid] = {"commission": 0.0, "order_count": 0}
+            bucket[uid]["commission"] += amt
+            bucket[uid]["order_count"] += 1
+
+        def _build_details(agg, include_assigned_at=False):
+            details = []
+            for uid, data in agg.items():
+                u = users.get(uid)
+                entry = {
+                    "user_id": uid,
+                    "username": u.username if u else None,
+                    "display_name": u.display_name if u else None,
+                    "commission": round(data["commission"], 2),
+                    "order_count": data["order_count"],
+                }
+                if include_assigned_at:
+                    entry["assigned_at"] = assigned_map.get(uid, "").isoformat() if assigned_map.get(uid) else None
+                details.append(entry)
+            return sorted(details, key=lambda x: x["commission"], reverse=True)
+
+        self_run_total = round(sum(d["commission"] for d in self_run_agg.values()), 2)
+        assigned_total = round(sum(d["commission"] for d in assigned_agg.values()), 2)
+
+        return {
+            "self_run_total": self_run_total,
+            "assigned_total": assigned_total,
+            "self_run_details": _build_details(self_run_agg),
+            "assigned_details": _build_details(assigned_agg, include_assigned_at=True),
+        }
