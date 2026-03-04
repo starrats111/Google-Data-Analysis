@@ -1274,6 +1274,8 @@ async def get_campaign_budget(
     db: Session = Depends(get_db)
 ):
     """获取广告系列的当前预算"""
+    from app.services.google_ads_service_account_sync import GoogleAdsServiceAccountSync
+
     mcc = db.query(GoogleMccAccount).filter(
         GoogleMccAccount.id == mcc_id,
         GoogleMccAccount.user_id == current_user.id
@@ -1310,6 +1312,8 @@ async def set_campaign_budget(
     db: Session = Depends(get_db)
 ):
     """设置广告系列的每日预算"""
+    from app.services.google_ads_service_account_sync import GoogleAdsServiceAccountSync
+
     mcc = db.query(GoogleMccAccount).filter(
         GoogleMccAccount.id == request.mcc_id,
         GoogleMccAccount.user_id == current_user.id
@@ -1374,6 +1378,8 @@ async def batch_set_campaign_budget(
     db: Session = Depends(get_db)
 ):
     """批量设置广告系列的每日预算"""
+    from app.services.google_ads_service_account_sync import GoogleAdsServiceAccountSync
+
     mcc = db.query(GoogleMccAccount).filter(
         GoogleMccAccount.id == request.mcc_id,
         GoogleMccAccount.user_id == current_user.id
