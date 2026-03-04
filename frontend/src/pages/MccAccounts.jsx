@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react'
 import { 
   Card, Table, Button, Modal, Form, Input, message, Popconfirm, Tag, Space, 
   Switch, Steps, Alert, Upload, Tabs, Progress, Tooltip, DatePicker, Divider,
-  Typography, Badge, Descriptions, Row, Col, Select
+  Typography, Badge, Descriptions, Row, Col, Select, Dropdown
 } from 'antd'
 import { 
   PlusOutlined, EditOutlined, DeleteOutlined, SyncOutlined, LinkOutlined, 
@@ -478,30 +478,10 @@ export default function MccAccounts() {
                   onClick={async () => {
                     try {
                       const res = await api.get(`/api/mcc/accounts/${record.id}/script-template`)
-                      if (window.__agentLog) {
-                        // #region agent log
-                        window.__agentLog('H4', 'src/pages/MccAccounts.jsx:get-script-template', 'script template loaded', {
-                          mccId: record.id,
-                          mccName: record.mcc_name,
-                          hasAuthUserInScript: (res.data?.script || '').includes('authuser='),
-                          hasContinueUrlInScript: (res.data?.script || '').includes('continueUrl='),
-                          scriptLength: (res.data?.script || '').length,
-                        })
-                        // #endregion
-                      }
                       setScriptModalContent(res.data?.script || '')
                       setScriptModalMcc(record)
                       setScriptModalVisible(true)
                     } catch (e) {
-                      if (window.__agentLog) {
-                        // #region agent log
-                        window.__agentLog('H4', 'src/pages/MccAccounts.jsx:get-script-template:error', 'script template load failed', {
-                          mccId: record.id,
-                          message: e?.response?.data?.detail || e?.message,
-                          status: e?.response?.status,
-                        })
-                        // #endregion
-                      }
                       message.error(e.response?.data?.detail || '获取脚本失败')
                     }
                   }}
@@ -530,15 +510,19 @@ export default function MccAccounts() {
                   loading={testLoading[record.id]}
                 />
               </Tooltip>
-              <Tooltip title="同步 Sheet 数据">
-                <Button
-                  type="link"
-                  size="small"
-                  icon={<CloudSyncOutlined />}
-                  onClick={async () => {
+              <Dropdown
+                menu={{
+                  items: [
+                    { key: 'incremental', label: '增量同步' },
+                    { key: 'full', label: '全量同步（整个Sheet）' },
+                  ],
+                  onClick: async ({ key }) => {
                     try {
                       setSyncSheetLoading({ ...syncSheetLoading, [record.id]: true })
-                      const res = await api.post(`/api/mcc/accounts/${record.id}/sync-sheet`)
+                      const url = key === 'full'
+                        ? `/api/mcc/accounts/${record.id}/sync-sheet?force_full_sync=true`
+                        : `/api/mcc/accounts/${record.id}/sync-sheet`
+                      const res = await api.post(url)
                       if (res.data?.success) {
                         message.success(`同步完成：插入 ${res.data?.inserted ?? 0}，更新 ${res.data?.updated ?? 0}`)
                         fetchMccAccounts()
@@ -550,10 +534,19 @@ export default function MccAccounts() {
                     } finally {
                       setSyncSheetLoading({ ...syncSheetLoading, [record.id]: false })
                     }
-                  }}
-                  loading={syncSheetLoading[record.id]}
-                />
-              </Tooltip>
+                  }
+                }}
+                trigger={['click']}
+              >
+                <Tooltip title="同步 Sheet 数据（点击选择同步方式）">
+                  <Button
+                    type="link"
+                    size="small"
+                    icon={<CloudSyncOutlined />}
+                    loading={syncSheetLoading[record.id]}
+                  />
+                </Tooltip>
+              </Dropdown>
             </>
           ) : (
             <Tooltip title="同步昨日数据">

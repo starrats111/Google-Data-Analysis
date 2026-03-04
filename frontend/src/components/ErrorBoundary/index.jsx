@@ -22,17 +22,7 @@ class ErrorBoundary extends React.Component {
   }
 
   componentDidCatch(error, errorInfo) {
-    // 可以将错误日志上报给服务器
     console.error('ErrorBoundary caught an error:', error, errorInfo)
-    // #region agent log
-    if (window.__agentLog) {
-      window.__agentLog('H2', 'src/components/ErrorBoundary/index.jsx:componentDidCatch', 'error boundary caught runtime error', {
-        message: error?.message,
-        stack: error?.stack,
-        componentStack: errorInfo?.componentStack,
-      })
-    }
-    // #endregion
     this.setState({ errorInfo })
   }
 
