@@ -4,6 +4,7 @@
 对 7 个联盟平台（CF / CG / BSH / PM / LB / LH / RW）拉取商家列表和申请状态，
 写入 AffiliateMerchant + MerchantAccountRelationship，并在状态变更时生成通知。
 """
+import json
 import logging
 from datetime import datetime, timezone
 from typing import Dict, List, Optional, Tuple
@@ -157,20 +158,18 @@ class MerchantPlatformSyncService:
     # ------------------------------------------------------------------
 
     def sync_all(self) -> dict:
-        """全量同步所有有 token 的活跃账号，返回同步统计。"""
+        """全量同步所有活跃账号，返回同步统计。"""
         accounts = (
             self.db.query(AffiliateAccount)
             .join(AffiliatePlatform)
-            .filter(
-                AffiliateAccount.is_active.is_(True),
-                AffiliateAccount.api_token_encrypted.isnot(None),
-            )
+            .filter(AffiliateAccount.is_active.is_(True))
             .all()
         )
 
         total = len(accounts)
         synced = 0
         failed = 0
+        skipped = 0
         new_merchants = 0
         errors: List[str] = []
 
@@ -182,7 +181,11 @@ class MerchantPlatformSyncService:
                     failed += 1
                     continue
 
-                token = decrypt_token(acct.api_token_encrypted)
+                token = self._resolve_token(acct, platform_code)
+                if not token:
+                    skipped += 1
+                    continue
+
                 count = self._sync_single_account(acct, platform_code, token)
                 new_merchants += count
                 synced += 1
@@ -198,6 +201,7 @@ class MerchantPlatformSyncService:
             "total_accounts": total,
             "synced_accounts": synced,
             "failed_accounts": failed,
+            "skipped_no_token": skipped,
             "new_merchants": new_merchants,
             "status_changes": status_changes,
             "errors": errors,
@@ -459,3 +463,35 @@ class MerchantPlatformSyncService:
         if acct.platform and acct.platform.platform_code:
             return ApiAnalysisService.normalize_platform_code(acct.platform.platform_code)
         return ""
+
+    @staticmethod
+    def _resolve_token(acct: AffiliateAccount, platform_code: str) -> Optional[str]:
+        """优先 api_token_encrypted，回退到 notes 中的交易 Token（两者相同）。"""
+        if acct.api_token_encrypted:
+            try:
+                return decrypt_token(acct.api_token_encrypted)
+            except Exception:
+                pass
+
+        if not acct.notes:
+            return None
+        try:
+            notes_data = json.loads(acct.notes)
+        except (json.JSONDecodeError, TypeError):
+            return None
+
+        key_map = {
+            "CG": ["collabglow_token", "api_token"],
+            "RW": ["rewardoo_token", "rw_token", "api_token"],
+            "LH": ["linkhaitao_token", "token"],
+            "CF": ["creatorflare_token", "cf_token", "api_token"],
+            "LB": ["linkbux_token", "lb_token", "api_token"],
+            "PM": ["partnermatic_token", "pm_token", "api_token"],
+            "BSH": ["bsh_token", "api_token", "token"],
+        }
+        candidates = key_map.get(platform_code, [platform_code.lower() + "_token", "api_token", "token"])
+        for k in candidates:
+            val = notes_data.get(k)
+            if val and isinstance(val, str) and val.strip():
+                return val.strip()
+        return None
