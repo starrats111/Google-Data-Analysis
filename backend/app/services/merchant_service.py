@@ -22,6 +22,42 @@ logger = logging.getLogger(__name__)
 
 class MerchantService:
 
+    PLATFORM_NORM = {
+        "pm": "PM", "pm1": "PM", "pm2": "PM", "pm3": "PM",
+        "cg": "CG", "cg1": "CG", "cg2": "CG", "cg3": "CG",
+        "rw": "RW", "rw1": "RW", "rw2": "RW", "rw3": "RW",
+        "lh": "LH", "lh1": "LH", "lh2": "LH", "lh3": "LH",
+        "lb": "LB", "lb1": "LB", "lb2": "LB", "lb3": "LB",
+        "ls": "LS", "ls1": "LS", "ls2": "LS", "ls3": "LS",
+        "bsh": "BSH", "bsh1": "BSH", "bsh2": "BSH",
+        "cf": "CF", "cf1": "CF", "cf2": "CF",
+        "ui": "UI", "ui1": "UI", "ui2": "UI",
+    }
+    URL_PLATFORM = {
+        "brandsparkhub.com": "BSH",
+        "collabglow.com": "CG",
+        "rewardoo.com": "RW",
+        "linkhaitao.com": "LH",
+        "linkbux.com": "LB",
+        "partnermatic.com": "PM",
+        "creatorflare.com": "CF",
+    }
+
+    @staticmethod
+    def normalize_platform(raw: str) -> str:
+        if not raw:
+            return raw
+        s = raw.strip()
+        low = s.lower()
+        if low in MerchantService.PLATFORM_NORM:
+            return MerchantService.PLATFORM_NORM[low]
+        if "://" in s or "." in s:
+            domain = low.replace("https://", "").replace("http://", "").rstrip("/").lstrip("www.")
+            for url_key, code in MerchantService.URL_PLATFORM.items():
+                if url_key in domain:
+                    return code
+        return s.upper() if s.isalpha() and len(s) <= 5 else s
+
     # ------------------------------------------------------------------
     # 商家自动发现
     # ------------------------------------------------------------------
@@ -91,7 +127,7 @@ class MerchantService:
                     continue
 
                 merchant = AffiliateMerchant(
-                    platform=row.platform,
+                    platform=MerchantService.normalize_platform(row.platform),
                     merchant_id=row.merchant_id,
                     merchant_name=name,
                     missing_mid=0,
@@ -328,7 +364,10 @@ class MerchantService:
         status: Optional[str] = None,
         assigned: Optional[bool] = None,
         missing_mid: Optional[bool] = None,
+        relationship_status: Optional[str] = None,
         search: Optional[str] = None,
+        start_date: Optional[date] = None,
+        end_date: Optional[date] = None,
         page: int = 1,
         page_size: int = 50,
     ) -> dict:
@@ -341,6 +380,8 @@ class MerchantService:
             q = q.filter(AffiliateMerchant.category == category)
         if status:
             q = q.filter(AffiliateMerchant.status == status)
+        if relationship_status:
+            q = q.filter(AffiliateMerchant.relationship_status == relationship_status)
         if search:
             q = q.filter(
                 or_(
@@ -430,7 +471,7 @@ class MerchantService:
                 "id": m.id,
                 "merchant_id": m.merchant_id,
                 "merchant_name": m.merchant_name,
-                "platform": m.platform,
+                "platform": MerchantService.normalize_platform(m.platform),
                 "slug": m.slug,
                 "category": m.category,
                 "commission_rate": m.commission_rate,
@@ -610,6 +651,16 @@ class MerchantService:
             .all()
         )
 
+        norm_platform: dict = {}
+        for p, c in platform_dist:
+            key = MerchantService.normalize_platform(p) if p else (p or "UNKNOWN")
+            norm_platform[key] = norm_platform.get(key, 0) + c
+
+        norm_missing: dict = {}
+        for p, c in missing_mid_by_platform:
+            key = MerchantService.normalize_platform(p) if p else (p or "UNKNOWN")
+            norm_missing[key] = norm_missing.get(key, 0) + c
+
         return {
             "total": total,
             "assigned": assigned,
@@ -617,8 +668,8 @@ class MerchantService:
             "missing_mid_total": missing_mid_total,
             "discovery_rate": discovery_rate,
             "missing_mid_rate": missing_mid_rate,
-            "by_platform": {p: c for p, c in platform_dist},
-            "missing_mid_by_platform": {p: c for p, c in missing_mid_by_platform},
+            "by_platform": norm_platform,
+            "missing_mid_by_platform": norm_missing,
         }
 
     # ------------------------------------------------------------------
