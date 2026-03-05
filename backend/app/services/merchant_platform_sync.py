@@ -332,6 +332,12 @@ class MerchantPlatformSyncService:
                 merchant.merchant_id = mid
                 merchant.missing_mid = 0
                 merchant.id_confidence = "api"
+            api_name = (mapped.get("merchant_name") or "").strip()[:200]
+            if api_name:
+                if merchant.source_type != "merchant_api":
+                    merchant.merchant_name = api_name
+                elif merchant.merchant_name in (merchant.merchant_id, "Unknown", "", None):
+                    merchant.merchant_name = api_name
             merchant.source_type = "merchant_api"
         else:
             merchant = AffiliateMerchant(

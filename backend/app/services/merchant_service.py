@@ -139,14 +139,14 @@ class MerchantService:
                 db.add(merchant)
                 db.flush()
 
-                # 自动创建别名记录
+                # 自动创建别名记录（M-018-B / ML-03：使用归一化后的平台代码）
                 existing_alias = db.query(MerchantAlias.id).filter(
-                    MerchantAlias.platform == row.platform,
+                    MerchantAlias.platform == norm_plat,
                     MerchantAlias.alias_name == name,
                 ).first()
                 if not existing_alias:
                     db.add(MerchantAlias(
-                        platform=row.platform,
+                        platform=norm_plat,
                         alias_name=name,
                         normalized_name=normalized,
                         merchant_id_ref=merchant.id,
@@ -177,14 +177,16 @@ class MerchantService:
                 if not merchant_name:
                     continue
 
+                norm_plat_missing = MerchantService.normalize_platform(row.platform)
+
                 exists_missing = db.query(AffiliateMerchant.id).filter(
-                    AffiliateMerchant.platform == row.platform,
+                    AffiliateMerchant.platform == norm_plat_missing,
                     AffiliateMerchant.merchant_name == merchant_name,
                     AffiliateMerchant.missing_mid == 1,
                 ).first()
                 if not exists_missing:
                     merchant = AffiliateMerchant(
-                        platform=row.platform,
+                        platform=norm_plat_missing,
                         merchant_id=None,
                         merchant_name=merchant_name,
                         missing_mid=1,
@@ -197,14 +199,14 @@ class MerchantService:
 
                 # G-07: 生成 merchant_mid_repair_queue 补偿条目
                 existing_repair = db.query(MerchantMidRepairQueue.id).filter(
-                    MerchantMidRepairQueue.platform == row.platform,
+                    MerchantMidRepairQueue.platform == norm_plat_missing,
                     MerchantMidRepairQueue.merchant_name == merchant_name,
                     MerchantMidRepairQueue.repair_status.in_(["pending", "retrying"]),
                 ).first()
                 if not existing_repair:
-                    candidate = MerchantService._find_candidate_mid(db, row.platform, merchant_name)
+                    candidate = MerchantService._find_candidate_mid(db, norm_plat_missing, merchant_name)
                     repair = MerchantMidRepairQueue(
-                        platform=row.platform,
+                        platform=norm_plat_missing,
                         merchant_name=merchant_name,
                         latest_tx_time=row.latest_tx,
                         candidate_mid=candidate,

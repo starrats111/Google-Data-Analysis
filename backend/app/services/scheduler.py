@@ -1200,12 +1200,12 @@ def start_scheduler():
             max_instances=1
         )
 
-        # 9. 每天 16:00 - 商家平台 API 同步（OPT-009）
+        # 9. 每天 06:30 - 商家平台 API 同步（M-018-A：提前到交易发现 07:00 前，API 数据优先入库）
         scheduler.add_job(
             merchant_platform_sync_job,
-            trigger=CronTrigger(hour=16, minute=0),
+            trigger=CronTrigger(hour=6, minute=30),
             id='merchant_platform_sync',
-            name='商家平台API同步（16:00）',
+            name='商家平台API同步（06:30）',
             replace_existing=True,
             max_instances=1
         )
