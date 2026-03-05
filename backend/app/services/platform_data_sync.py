@@ -722,7 +722,7 @@ class PlatformDataSyncService:
                             "merchant": order.get("merchant") or order.get("merchant_name") or order.get("advertiser_name") or order.get("mcid") or None,
                             "m_id": order.get("m_id") or None,
                             "mcid": order.get("mcid") or None,
-                            "merchant_id": str(order["m_id"]).strip() if order.get("m_id") else None,
+                            "merchant_id": str(order["m_id"]).strip() if order.get("m_id") and str(order["m_id"]).strip().isdigit() and str(order["m_id"]).strip() != "0" else None,
                         })
                     except Exception as e:
                         logger.warning(f"[LinkHaitao同步] 处理订单交易失败: {e}, 数据: {order}")
