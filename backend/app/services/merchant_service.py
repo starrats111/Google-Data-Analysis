@@ -85,7 +85,8 @@ class MerchantService:
             tx_missing_mid = total_tx - tx_with_mid
 
             existing = set(
-                db.query(AffiliateMerchant.platform, AffiliateMerchant.merchant_id)
+                (MerchantService.normalize_platform(p), mid)
+                for p, mid in db.query(AffiliateMerchant.platform, AffiliateMerchant.merchant_id)
                 .filter(AffiliateMerchant.merchant_id.isnot(None))
                 .all()
             )
@@ -106,7 +107,8 @@ class MerchantService:
 
             count = 0
             for row in new_merchants:
-                key = (row.platform, row.merchant_id)
+                norm_plat = MerchantService.normalize_platform(row.platform)
+                key = (norm_plat, row.merchant_id)
                 if key in existing:
                     continue
 
@@ -117,7 +119,7 @@ class MerchantService:
                 alias_match = (
                     db.query(MerchantAlias)
                     .filter(
-                        MerchantAlias.platform == row.platform,
+                        MerchantAlias.platform.in_([row.platform, norm_plat]),
                         MerchantAlias.normalized_name == normalized,
                     )
                     .first()
