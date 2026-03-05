@@ -20,6 +20,16 @@ dayjs.tz.setDefault('Asia/Shanghai')
 const Dashboard = () => {
   const navigate = useNavigate()
   const { user } = useAuth()
+
+  // 组长和经理重定向到对应的管理页面
+  useEffect(() => {
+    if (user?.role === 'leader') {
+      navigate('/team-overview', { replace: true })
+    } else if (user?.role === 'manager') {
+      navigate('/team-management', { replace: true })
+    }
+  }, [user?.role, navigate])
+
   const [overviewData, setOverviewData] = useState(null)
   const [employeeData, setEmployeeData] = useState([])
   const [trendData, setTrendData] = useState([])
