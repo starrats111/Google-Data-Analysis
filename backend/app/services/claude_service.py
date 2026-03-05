@@ -51,8 +51,8 @@ class ClaudeService:
             return response
         except Exception as e:
             error_msg = str(e)
-            # 检查是否是模型不可用的错误
-            if "无权访问" in error_msg or "forbidden" in error_msg.lower() or "not allowed" in error_msg.lower():
+            # 检查是否是模型不可用的错误（含 403 / no access / forbidden）
+            if "无权访问" in error_msg or "forbidden" in error_msg.lower() or "not allowed" in error_msg.lower() or "no access" in error_msg.lower() or "403" in error_msg:
                 logger.warning(f"[Claude] 主模型 {self.model} 不可用，切换到备用模型: {self.fallback_model}")
                 try:
                     kwargs['model'] = self.fallback_model
