@@ -21,18 +21,6 @@ from app.api.google_ads_aggregate import convert_to_usd
 import re
 import math
 
-# #region agent log
-def _dbg_log(location: str, message: str, data: dict):
-    import json
-    from pathlib import Path
-    try:
-        log_path = Path(__file__).resolve().parent.parent.parent / "debug-6b95b2.log"
-        with open(log_path, "a", encoding="utf-8") as f:
-            f.write(json.dumps({"sessionId": "6b95b2", "location": location, "message": message, "data": data, "timestamp": __import__("time").time() * 1000}, ensure_ascii=False) + "\n")
-    except Exception:
-        pass
-# #endregion
-
 router = APIRouter(prefix="/api/dashboard", tags=["dashboard"])
 
 
@@ -264,25 +252,6 @@ async def get_employees_data(
     all_mccs_emp = db.query(GoogleMccAccount).all()
     mcc_currency_map_emp = {mcc.id: getattr(mcc, 'currency', 'USD') or 'USD' for mcc in all_mccs_emp}
 
-    # #region agent log
-    wj02_user = next((e for e in employees if e.username == "wj02"), None)
-    wj02_uid = wj02_user.id if wj02_user else None
-    _dbg_log("dashboard.py:employees:mcc_map", "MCC currency map + wj02 info", {
-        "hypothesisId": "H1,H2,H5",
-        "mcc_map": {str(k): v for k, v in mcc_currency_map_emp.items()},
-        "mcc_details": [{
-            "id": mcc.id,
-            "mcc_code": getattr(mcc, 'mcc_code', None) or getattr(mcc, 'mcc_account_id', None),
-            "user_id": mcc.user_id,
-            "currency_raw": mcc.currency if hasattr(mcc, 'currency') else "NO_ATTR",
-            "currency_repr": repr(getattr(mcc, 'currency', 'MISSING')),
-            "name": getattr(mcc, 'name', None) or getattr(mcc, 'mcc_name', None),
-        } for mcc in all_mccs_emp],
-        "wj02_uid": wj02_uid,
-        "employee_ids": employee_ids,
-    })
-    # #endregion
-
     # Google Ads 聚合（近7天），按user_id+mcc_id分组以便做货币转换
     ads_rows_7d = db.query(
         GoogleAdsApiData.user_id,
@@ -323,33 +292,11 @@ async def get_employees_data(
     ).group_by(GoogleAdsApiData.user_id, GoogleAdsApiData.mcc_id).all()
     
     ads_map_month: Dict[int, float] = {}
-    wj02_month_details = []
     for r in ads_rows_month:
         uid = r.user_id
         currency = mcc_currency_map_emp.get(r.mcc_id, 'USD')
         cost_usd = convert_to_usd(float(r.cost_month or 0.0), currency)
         ads_map_month[uid] = ads_map_month.get(uid, 0.0) + cost_usd
-        # #region agent log
-        if uid == wj02_uid:
-            wj02_month_details.append({
-                "mcc_id": r.mcc_id,
-                "mcc_id_type": type(r.mcc_id).__name__,
-                "raw_cost": float(r.cost_month or 0.0),
-                "currency_from_map": currency,
-                "mcc_id_in_map": r.mcc_id in mcc_currency_map_emp,
-                "cost_usd": cost_usd,
-            })
-        # #endregion
-
-    # #region agent log
-    _dbg_log("dashboard.py:employees:wj02_month_cost", "wj02 month cost breakdown", {
-        "hypothesisId": "H1,H2,H3",
-        "wj02_uid": wj02_uid,
-        "wj02_total_cost_month": ads_map_month.get(wj02_uid, "NOT_FOUND"),
-        "wj02_mcc_details": wj02_month_details,
-        "ads_rows_month_count": len(ads_rows_month),
-    })
-    # #endregion
 
     # 交易聚合（近7天）- 排除已停用账号
     tx_rows_7d = db.query(
@@ -533,45 +480,12 @@ async def get_employee_insights(
     # MCC货币映射
     user_mccs = db.query(GoogleMccAccount).filter(GoogleMccAccount.user_id == target_user_id).all()
     insight_currency_map = {mcc.id: getattr(mcc, 'currency', 'USD') or 'USD' for mcc in user_mccs}
-    # #region agent log
-    target_username = current_user.username if target_user_id == current_user.id else f"uid:{target_user_id}"
-    if target_username == "wj02":
-        _dbg_log("dashboard.py:insights:mcc_map", "employee-insights MCC map for wj02", {
-            "hypothesisId": "H1,H2",
-            "target_user_id": target_user_id,
-            "insight_currency_map": {str(k): v for k, v in insight_currency_map.items()},
-            "user_mccs_details": [{
-                "id": mcc.id,
-                "currency_raw": mcc.currency if hasattr(mcc, 'currency') else "NO_ATTR",
-                "currency_repr": repr(getattr(mcc, 'currency', 'MISSING')),
-                "user_id": mcc.user_id,
-            } for mcc in user_mccs],
-        })
-    # #endregion
     cost_map: Dict[str, float] = {}
-    insight_wj02_details = []
     for r in cost_rows:
         ds = r.date.strftime("%Y-%m-%d")
         currency = insight_currency_map.get(r.mcc_id, 'USD')
         cost_usd = convert_to_usd(float(r.cost or 0.0), currency)
         cost_map[ds] = cost_map.get(ds, 0.0) + cost_usd
-        # #region agent log
-        if target_username == "wj02":
-            insight_wj02_details.append({"date": ds, "mcc_id": r.mcc_id, "raw_cost": float(r.cost or 0.0), "currency": currency, "cost_usd": cost_usd})
-        # #endregion
-
-    # #region agent log
-    if target_username == "wj02":
-        _dbg_log("dashboard.py:insights:wj02_cost", "employee-insights wj02 cost breakdown", {
-            "hypothesisId": "H1,H3",
-            "total_cost": sum(cost_map.values()),
-            "by_date": dict(cost_map),
-            "mcc_details": insight_wj02_details,
-            "range": range,
-            "start_d": str(start_d),
-            "end_d": str(end_d),
-        })
-    # #endregion
 
     # 2) 趋势：联盟佣金（所有状态计入总佣金）（按天）- 排除已停用账号
     comm_rows = db.query(

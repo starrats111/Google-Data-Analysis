@@ -38,18 +38,6 @@ from pydantic import BaseModel
 router = APIRouter(prefix="/api/expenses", tags=["expenses"])
 
 
-# #region agent log
-def _dbg_log(location: str, message: str, data: dict):
-    import json
-    from pathlib import Path
-    try:
-        log_path = Path(__file__).resolve().parent.parent.parent / "debug-6b95b2.log"
-        with open(log_path, "a", encoding="utf-8") as f:
-            f.write(json.dumps({"sessionId": "6b95b2", "location": location, "message": message, "data": data, "timestamp": __import__("time").time() * 1000}, ensure_ascii=False) + "\n")
-    except Exception:
-        pass
-# #endregion
-
 
 def _infer_platform_code_from_campaign_name(campaign_name: str) -> Optional[str]:
     """兜底：从广告系列名推断平台码，支持 001-LB1-xxx / 001_LB1_xxx / 001-LB-xxx"""
@@ -694,19 +682,6 @@ async def _get_manager_expense_summary(start: date, end: date, today: date, db: 
     
     # 获取所有员工
     employees = db.query(UserModel).filter(UserModel.role == "employee").all()
-    # #region agent log
-    wj02_in = next((e for e in employees if e.username == "wj02"), None)
-    wj02_any = db.query(UserModel).filter(UserModel.username == "wj02").first()
-    _dbg_log("expenses.py:manager:employees", "manager employee list", {
-        "hypothesisId": "H2",
-        "employee_count": len(employees),
-        "usernames": [e.username for e in employees],
-        "wj02_in_list": wj02_in is not None,
-        "wj02_role": str(wj02_in.role) if wj02_in else None,
-        "wj02_actual_role": str(wj02_any.role) if wj02_any else None,
-    })
-    # #endregion
-    
     # 获取所有平台
     platform_rows = db.query(AffiliatePlatform).all()
     platform_name_map = {p.id: p.platform_name for p in platform_rows}
@@ -802,10 +777,6 @@ async def _get_manager_expense_summary(start: date, end: date, today: date, db: 
                 AnalysisResult.analysis_date >= start,
                 AnalysisResult.analysis_date <= end,
             ).all()
-            # #region agent log
-            if employee.username == "wj02":
-                _dbg_log("expenses.py:manager:wj02:fallback", "manager fallback to AnalysisResult", {"hypothesisId": "H1", "results_count": len(results)})
-            # #endregion
             for r in results:
                 platform = r.affiliate_account.platform
                 pid = platform.id if platform else None
@@ -876,16 +847,6 @@ async def _get_manager_expense_summary(start: date, end: date, today: date, db: 
         
         # 员工的总广告费用使用MCC实际费用（如果有的话）
         user_display_cost = user_mcc_total_cost if user_mcc_total_cost > 0 else user_total_cost
-        # #region agent log
-        if employee.username == "wj02":
-            _dbg_log("expenses.py:manager:wj02:final", "manager path wj02 final", {
-                "hypothesisId": "H1,H5",
-                "metric_rows_count": len(metric_rows),
-                "user_total_commission": user_total_commission,
-                "user_display_cost": user_display_cost,
-                "user_total_cost": user_total_cost,
-            })
-        # #endregion
         user_summaries.append(ExpenseUserSummary(
             user_id=employee.id,
             username=employee.username,
@@ -1030,17 +991,6 @@ async def get_expense_summary(
     # 若未写入每日指标，则退回到旧逻辑：从分析结果 JSON 聚合
     from app.models.ad_campaign import AdCampaign
     from app.models.ad_campaign_daily_metric import AdCampaignDailyMetric
-
-    # #region agent log
-    _dbg_log("expenses.py:summary:entry", "expense summary request", {
-        "hypothesisId": "H2",
-        "role": str(current_user.role),
-        "username": current_user.username,
-        "path": "manager" if current_user.role == "manager" else "employee",
-        "start": start.isoformat(),
-        "end": end.isoformat(),
-    })
-    # #endregion
 
     # 如果是经理，返回所有员工的数据
     if current_user.role == "manager":
@@ -1187,14 +1137,6 @@ async def get_expense_summary(
         PlatformData.date >= start,
         PlatformData.date <= end,
     ).all()
-    # #region agent log
-    if current_user.username == "wj02":
-        _dbg_log("expenses.py:employee:wj02:sources", "employee path wj02 data sources", {
-            "hypothesisId": "H1,H5",
-            "platform_data_count": len(platform_data_rows),
-            "total_comm_map_keys": len(total_comm_map),
-        })
-    # #endregion
     for pd in platform_data_rows:
         pid = account_platform_map.get(pd.affiliate_account_id)
         if not pid:
@@ -1449,16 +1391,6 @@ async def get_expense_summary(
         avg_daily_profit=round(avg_daily, 4),
         day_count=day_count,
     )
-
-    # #region agent log
-    if current_user.username == "wj02":
-        _dbg_log("expenses.py:employee:wj02:final", "employee path wj02 final", {
-            "hypothesisId": "H1,H5",
-            "total_commission": total_commission,
-            "total_ad_cost": total_ad_cost,
-            "mcc_total_cost": mcc_total_cost,
-        })
-    # #endregion
 
     return ExpenseSummaryResponse(
         start_date=start.strftime("%Y-%m-%d"),
