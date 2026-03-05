@@ -18,7 +18,8 @@ from app.models import analysis_result  # noqa
 from app.models import affiliate_account  # noqa
 from app.models import affiliate_transaction  # noqa
 from app.models import google_ads_api_data  # noqa
-from app.models import luchu  # noqa
+from app.models import article  # noqa
+from app.models import tracking_link  # noqa
 from app.models import notification  # noqa
 from app.models import commission_snapshot  # noqa
 from app.models import merchant  # noqa
