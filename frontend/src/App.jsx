@@ -118,6 +118,9 @@ function App() {
               <Route path="merchant-performance" element={<MerchantPerformance />} />
               {/* 反馈管理 */}
               <Route path="feedback-manage" element={<FeedbackManage />} />
+              {/* 旧露出路由兼容重定向 */}
+              <Route path="luchu" element={<Navigate to="/articles" replace />} />
+              <Route path="luchu/*" element={<Navigate to="/articles" replace />} />
               {/* 文章发布系统（OPT-011） */}
               <Route path="articles" element={<ArticleList />} />
               <Route path="articles/edit/:id" element={<ArticleEdit />} />
