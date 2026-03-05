@@ -29,17 +29,12 @@ from . import reports  # noqa: F401
 from . import system  # noqa: F401
 from . import gemini  # noqa: F401
 from . import google_ads_aggregate  # noqa: F401
-# 露出功能
-from . import luchu_articles  # noqa: F401
-from . import luchu_ai  # noqa: F401
-from . import luchu_reviews  # noqa: F401
-from . import luchu_publish  # noqa: F401
-from . import luchu_websites  # noqa: F401
-from . import luchu_stats  # noqa: F401
-from . import luchu_notifications  # noqa: F401
-from . import luchu_prompts  # noqa: F401
-from . import luchu_logs  # noqa: F401
-from . import luchu_images  # noqa: F401
+# 文章发布系统（OPT-011）
+from . import articles  # noqa: F401
+from . import article_gen  # noqa: F401
+from . import article_categories  # noqa: F401
+from . import article_tags  # noqa: F401
+from . import article_titles  # noqa: F401
 
 __all__ = [
     "ad_campaign",
@@ -67,16 +62,11 @@ __all__ = [
     "system",
     "gemini",
     "google_ads_aggregate",
-    "luchu_articles",
-    "luchu_ai",
-    "luchu_reviews",
-    "luchu_publish",
-    "luchu_websites",
-    "luchu_stats",
-    "luchu_notifications",
-    "luchu_prompts",
-    "luchu_logs",
-    "luchu_images",
+    "articles",
+    "article_gen",
+    "article_categories",
+    "article_tags",
+    "article_titles",
 ]
 
 
