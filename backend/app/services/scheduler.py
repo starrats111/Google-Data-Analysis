@@ -1217,7 +1217,7 @@ def start_scheduler():
         logger.info("  1. 每日自动同步与分析: 每天 04:00")
         logger.info("     (Google Ads昨日 + 平台数据5天 + 周一90天佣金 + 分析 + L7D)")
         logger.info("  2. 历史数据自动补齐: 每天 05:00")
-        logger.info("     (CNY优先, 每次最多3MCC x 10天, 全部补完后零开销)")
+        logger.info("     (CNY优先, 每次最多2MCC x 5天, 全部补完后零开销)")
         logger.info("  2b. 拒付佣金变动检测: 每天 06:00")
         logger.info("  3. 平台数据补充同步: 每天 16:00")
         logger.info("  4. 已付佣金同步: 每月1/15号 00:00")
@@ -1225,7 +1225,7 @@ def start_scheduler():
         logger.info("  6. 数据库自动备份: 每天 03:00")
         logger.info("  7. MID自动补偿: 每天 07:10")
         logger.info("  8. 通知清理: 每月1号 01:00")
-        logger.info("  9. 商家平台API同步: 每天 16:00 (OPT-009)")
+        logger.info("  9. 商家平台API同步: 每天 06:30 (M-018-A)")
         logger.info("=" * 60)
         
     except Exception as e:
