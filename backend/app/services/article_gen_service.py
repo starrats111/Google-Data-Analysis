@@ -1,13 +1,15 @@
 """
-文章 AI 生成服务（OPT-011，移植自 Ediora）
+文章 AI 生成服务（OPT-011/012，移植自 Ediora）
 使用 settings.gemini_* 配置，fallback 机制
 """
 import json
 import logging
 import httpx
+from datetime import datetime
 from typing import List, Dict, Optional
 
 from app.config import settings
+from app.services.humanizer_service import humanize
 
 logger = logging.getLogger(__name__)
 
@@ -53,8 +55,10 @@ class ArticleGenService:
 
     def generate_titles(self, prompt: str, count: int = 10) -> List[Dict]:
         """AI 生成标题"""
+        current_year = datetime.now().year
         system_msg = (
             "你是一个专业的 SEO 文案写手。根据用户提供的主题，生成吸引人的文章标题。"
+            f"当前年份是 {current_year} 年，标题中如果涉及年份必须使用 {current_year}，不要使用过去的年份。"
             f"请生成 {count} 个标题，以 JSON 数组格式返回，每个元素包含 title（中文）和 title_en（英文）字段。"
             "只返回 JSON 数组，不要其他内容。"
         )
@@ -91,8 +95,10 @@ class ArticleGenService:
         if keywords:
             keyword_instructions = f"\n请在文章中自然融入以下关键词：{', '.join(keywords)}"
 
+        current_year = datetime.now().year
         system_msg = (
             "你是一个专业的内容创作者。请根据标题生成一篇高质量的 HTML 文章。"
+            f"当前年份是 {current_year} 年，文章内容中涉及年份必须使用 {current_year}。"
             "文章需要包含适当的 h2/h3 子标题结构，段落清晰，内容丰富（至少 1500 字）。"
             "以 JSON 格式返回，包含 content（HTML 正文）、excerpt（100字摘要）、meta_title、meta_description、meta_keywords 字段。"
             "只返回 JSON 对象，不要 markdown 代码块。"
@@ -118,6 +124,136 @@ class ArticleGenService:
                 "meta_description": raw[:160],
                 "meta_keywords": title,
             }
+
+    def analyze_merchant(self, crawl_data: Dict, language: str = "zh") -> Dict:
+        """分析商家爬取数据，生成标题和关键词建议"""
+        current_year = datetime.now().year
+        lang_label = "英文" if language == "en" else "中文"
+        system_prompt = (
+            f"你是一位资深内容策划师。分析以下商家网站信息，返回 JSON 格式结果。"
+            f"当前年份是 {current_year}。\n\n"
+            "分析维度：\n"
+            "1. 主营产品/服务类型\n"
+            "2. 核心卖点和特色\n"
+            "3. 目标受众群体\n"
+            "4. 当前促销活动或热门产品\n"
+            "5. 最适合的文章分类（fashion/health/home/travel/finance/food/tech/beauty）\n\n"
+            "然后根据分析结果，生成 5 个适合软文推广的文章标题和 5 个 SEO 关键词。\n\n"
+            f"输出语言：{lang_label}\n\n"
+            "仅返回 JSON，格式如下：\n"
+            '{"category":"travel","products":["产品1"],"selling_points":["卖点1"],'
+            '"target_audience":"目标受众","promotions":"促销信息",'
+            '"titles":[{"title":"中文标题","title_en":"English Title"}],'
+            '"keywords":["keyword1","keyword2"]}'
+        )
+        raw_text = crawl_data.get("raw_text", "")
+        brand = crawl_data.get("brand_name", "")
+        user_msg = f"商家品牌：{brand}\n\n商家网站内容：\n{raw_text[:6000]}"
+
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_msg},
+        ]
+        raw = self._call_with_fallback(messages, max_tokens=4096)
+        try:
+            text = raw.strip()
+            if text.startswith("```"):
+                text = text.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
+            result = json.loads(text)
+            if not result.get("titles"):
+                result["titles"] = [{"title": f"标题 {i+1}", "title_en": f"Title {i+1}"} for i in range(5)]
+            if not result.get("keywords"):
+                result["keywords"] = [brand] if brand else ["keyword"]
+            return result
+        except (json.JSONDecodeError, IndexError):
+            logger.error(f"[ArticleGen] 商家分析解析失败: {raw[:300]}")
+            return {
+                "category": "general",
+                "products": [],
+                "selling_points": [],
+                "target_audience": "",
+                "promotions": "",
+                "titles": [{"title": f"标题 {i+1}", "title_en": f"Title {i+1}"} for i in range(5)],
+                "keywords": [brand] if brand else ["keyword"],
+            }
+
+    def generate_merchant_article(
+        self,
+        title: str,
+        merchant_info: Dict,
+        tracking_link: str,
+        keywords: Optional[List[str]] = None,
+        language: str = "zh",
+    ) -> Dict:
+        """
+        商家推广文章生成（OPT-012）
+        融合07提供的露出提示词规则 + 自动去AI味
+        """
+        current_year = datetime.now().year
+        brand = merchant_info.get("brand_name", "品牌")
+        products = ", ".join(merchant_info.get("products", [])[:5])
+        selling_points = ", ".join(merchant_info.get("selling_points", [])[:5])
+        promotions = merchant_info.get("promotions", "")
+        lang_label = "English" if language == "en" else "中文"
+
+        keyword_str = ""
+        if keywords:
+            keyword_str = f"\nSEO 关键词（自然融入）：{', '.join(keywords)}"
+
+        system_prompt = (
+            f"你是一位真人编辑，正在为一个生活方式网站撰写文章。当前年份是 {current_year}。\n\n"
+            "===== 写作铁律 =====\n"
+            "1. 真实感第一：禁用以下词汇 —— revolutionizing, game-changer, elevate, seamlessly, "
+            "cutting-edge, groundbreaking, transformative, 此外, 充满活力, 至关重要, 值得注意的是, 综上所述\n"
+            "2. 软植入：品牌关键词在全文出现 3~4 次，不得在开头第一段提及品牌名\n"
+            f"3. 链接植入：追踪链接以品牌名或产品名为锚文本，自然嵌入 <a href=\"{tracking_link}\">{brand}</a>，共 2~3 处\n"
+            "4. 编辑视角：像真人编辑撰写，可用个人故事、生活化语言、具体细节\n"
+            "5. 篇幅：800~1200 字\n"
+            "6. 结构：HTML 格式，含 h2/h3 子标题，段落清晰\n"
+            f"7. 语言：{lang_label}\n"
+            "8. 禁止空泛赞美，所有描述必须有具体依据\n"
+            "9. 文章应该像是一篇真正的编辑推荐文章，而不是广告\n\n"
+            "===== 输出格式 =====\n"
+            "仅返回 JSON 对象，包含以下字段：\n"
+            "content（HTML 正文）、excerpt（100字摘要）、meta_title、meta_description、meta_keywords、category\n"
+            "不要 markdown 代码块包裹。"
+        )
+
+        user_msg = (
+            f"文章标题：{title}\n"
+            f"品牌名：{brand}\n"
+            f"主营产品：{products}\n"
+            f"核心卖点：{selling_points}\n"
+            f"当前促销：{promotions}\n"
+            f"追踪链接：{tracking_link}"
+            f"{keyword_str}"
+        )
+
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_msg},
+        ]
+        raw = self._call_with_fallback(messages, max_tokens=8192)
+        try:
+            text = raw.strip()
+            if text.startswith("```"):
+                text = text.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
+            result = json.loads(text)
+        except (json.JSONDecodeError, IndexError):
+            logger.error(f"[ArticleGen] 商家文章解析失败: {raw[:300]}")
+            result = {
+                "content": f"<p>{raw}</p>",
+                "excerpt": raw[:100],
+                "meta_title": title,
+                "meta_description": raw[:160],
+                "meta_keywords": title,
+                "category": "general",
+            }
+
+        if result.get("content"):
+            result["content"] = humanize(result["content"])
+
+        return result
 
     def generate_images(self, title: str, count: int = 5) -> List[Dict]:
         """生成配图建议（返回图片搜索关键词 + Unsplash URL）"""

@@ -36,6 +36,9 @@ class ArticleCreate(BaseModel):
     meta_description: Optional[str] = None
     meta_keywords: Optional[str] = None
     ai_model_used: Optional[str] = None
+    merchant_url: Optional[str] = None
+    tracking_link: Optional[str] = None
+    language: Optional[str] = None
     tag_ids: Optional[list] = Field(default_factory=list)
     links: Optional[list] = Field(default_factory=list)
 
@@ -141,6 +144,9 @@ async def create_article(
         meta_description=data.meta_description,
         meta_keywords=data.meta_keywords,
         ai_model_used=data.ai_model_used,
+        merchant_url=data.merchant_url,
+        tracking_link=data.tracking_link,
+        language=data.language or "zh",
     )
     db.add(article)
     db.flush()

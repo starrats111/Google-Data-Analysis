@@ -30,6 +30,8 @@ from app.models.article import (
     PubArticle, PubCategory, PubTag, PubArticleTag,
     PubArticleLink, PubArticleImage, PubArticleTitle, PubArticleVersion,
 )
+# 追踪链接历史（OPT-012）
+from app.models.tracking_link import PubTrackingLink
 
 __all__ = [
     "User",
@@ -74,6 +76,8 @@ __all__ = [
     "PubArticleImage",
     "PubArticleTitle",
     "PubArticleVersion",
+    # 追踪链接历史
+    "PubTrackingLink",
 ]
 
 

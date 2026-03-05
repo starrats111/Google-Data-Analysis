@@ -29,6 +29,11 @@ const articleApi = {
   getTitles: (params) => api.get('/api/article-titles', { params }),
   batchCreateTitles: (data) => api.post('/api/article-titles/batch', data),
   deleteTitle: (id) => api.delete(`/api/article-titles/${id}`),
+
+  // 商家推广（OPT-012）
+  crawlMerchant: (data) => api.post('/api/article-gen/crawl', data),
+  generateMerchantArticle: (data) => api.post('/api/article-gen/merchant-article', data),
+  getTrackingLinks: (params) => api.get('/api/article-gen/tracking-links', { params }),
 }
 
 export default articleApi
