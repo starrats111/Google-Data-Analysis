@@ -273,6 +273,14 @@ const MerchantManagement = () => {
     try {
       const resp = await api.post('/api/merchants/sync-platforms')
       const d = resp.data || {}
+      if (d.status === 'started') {
+        message.info(d.message || '同步已在后台启动，请稍后刷新查看结果')
+        setTimeout(async () => {
+          setPlatformSyncLoading(false)
+          await Promise.all([fetchStats(), fetchMerchants(1, merchantPageSize)])
+        }, 5000)
+        return
+      }
       message.success(`平台同步完成：同步 ${d.synced_accounts || 0}/${d.total_accounts || 0} 账号，新增 ${d.new_merchants || 0} 商家，状态变更 ${d.status_changes || 0}`)
       await Promise.all([fetchStats(), fetchMerchants(1, merchantPageSize)])
     } catch (error) {

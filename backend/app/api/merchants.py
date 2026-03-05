@@ -5,7 +5,7 @@ import time
 from datetime import date, datetime, timezone
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -104,24 +104,63 @@ async def discover_merchants(
     return {"message": f"发现并注册了 {count} 个新商家", "new_count": count}
 
 
-# OPT-009: 手动触发平台商家同步（每 10 分钟限 1 次）
+# OPT-009: 手动触发平台商家同步（每 10 分钟限 1 次，后台运行）
 _last_sync_ts: float = 0.0
+_sync_running: bool = False
+_sync_result: Optional[dict] = None
+
+
+def _run_sync_background():
+    """在后台线程执行商家同步。"""
+    global _sync_running, _sync_result
+    import logging
+    logger = logging.getLogger(__name__)
+    try:
+        from app.database import SessionLocal
+        from app.services.merchant_platform_sync import MerchantPlatformSyncService
+        db = SessionLocal()
+        try:
+            svc = MerchantPlatformSyncService(db)
+            _sync_result = svc.sync_all()
+            logger.info("[MerchantSync] background sync done: %s", _sync_result)
+        finally:
+            db.close()
+    except Exception as exc:
+        logger.exception("[MerchantSync] background sync failed")
+        _sync_result = {"error": str(exc)}
+    finally:
+        _sync_running = False
+
 
 @router.post("/sync-platforms")
 async def sync_platforms(
+    background_tasks: BackgroundTasks,
     current_user: User = Depends(get_current_manager),
-    db: Session = Depends(get_db),
 ):
-    global _last_sync_ts
+    global _last_sync_ts, _sync_running
+    if _sync_running:
+        raise HTTPException(status_code=429, detail="同步正在进行中，请稍后查看结果")
+
     now = time.time()
     if now - _last_sync_ts < 600:
         remaining = int(600 - (now - _last_sync_ts))
         raise HTTPException(status_code=429, detail=f"同步冷却中，请 {remaining} 秒后再试")
     _last_sync_ts = now
+    _sync_running = True
 
-    from app.services.merchant_platform_sync import MerchantPlatformSyncService
-    svc = MerchantPlatformSyncService(db)
-    return svc.sync_all()
+    background_tasks.add_task(_run_sync_background)
+    return {"message": "同步已在后台启动，预计需要 3-5 分钟完成", "status": "started"}
+
+
+@router.get("/sync-platforms/status")
+async def sync_platforms_status(
+    current_user: User = Depends(get_current_manager),
+):
+    if _sync_running:
+        return {"status": "running", "message": "同步正在进行中..."}
+    if _sync_result is not None:
+        return {"status": "done", **_sync_result}
+    return {"status": "idle", "message": "没有正在进行的同步"}
 
 
 # OPT-009: 商家佣金拆分明细
