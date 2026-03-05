@@ -105,7 +105,7 @@ class GoogleSheetSyncService:
         today = date.today()
         yesterday = today - timedelta(days=1)
         if is_first:
-            start = today.replace(day=1)
+            start = today - timedelta(days=30)
             end = yesterday
         else:
             start = end = yesterday
