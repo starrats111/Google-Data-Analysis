@@ -259,7 +259,13 @@ class MerchantPlatformSyncService:
             if not items:
                 break
 
-            result.extend(items)
+            if isinstance(items, dict):
+                items = items.get("data", items.get("items", []))
+            valid = [it for it in items if isinstance(it, dict)]
+            if not valid:
+                break
+
+            result.extend(valid)
 
             if len(items) < max_size:
                 break
