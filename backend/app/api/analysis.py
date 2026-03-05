@@ -806,24 +806,38 @@ async def generate_l7d_analysis_from_api(
     db: Session = Depends(get_db)
 ):
     """
-    从API数据生成L7D分析
+    从API数据生成L7D分析（OPT-010 增强版：Claude AI 深度分析）
     
     只分析已启用(ENABLED)的广告系列，始终包含双0数据（前端负责过滤显示）
+    频率控制：每用户每小时最多 5 次手动请求
     
     Args:
         end_date: 结束日期 YYYY-MM-DD（默认为昨天）
     """
+    import time
     from datetime import datetime, date, timedelta
-    
+    from app.services.api_analysis_service import _l7d_rate_limits
+
+    # OPT-010: 频率控制 — 每用户每小时最多 5 次
+    now = time.time()
+    uid = current_user.id
+    timestamps = _l7d_rate_limits[uid]
+    _l7d_rate_limits[uid] = [t for t in timestamps if now - t < 3600]
+    if len(_l7d_rate_limits[uid]) >= 5:
+        raise HTTPException(
+            status_code=429,
+            detail="操作过于频繁，每小时最多生成 5 次 L7D 分析，请稍后再试"
+        )
+    _l7d_rate_limits[uid].append(now)
+
     if end_date:
         try:
             end = datetime.strptime(end_date, "%Y-%m-%d").date()
         except ValueError:
             raise HTTPException(status_code=400, detail="日期格式错误，应为 YYYY-MM-DD")
     else:
-        end = date.today() - timedelta(days=1)  # 默认昨天
+        end = date.today() - timedelta(days=1)
     
-    # 权限检查：员工只能分析自己的数据
     user_id = current_user.id if current_user.role in ("employee", "member", "leader") else None
     
     api_analysis_service = ApiAnalysisService(db)

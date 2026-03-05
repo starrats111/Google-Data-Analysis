@@ -9,14 +9,20 @@ from sqlalchemy import func
 import logging
 import re
 
+from collections import defaultdict
+
 from app.models.google_ads_api_data import GoogleAdsApiData
 from app.models.platform_data import PlatformData
 from app.models.affiliate_account import AffiliateAccount, AffiliatePlatform
+from app.models.affiliate_transaction import AffiliateTransaction
 from app.models.analysis_result import AnalysisResult
 from app.models.ai_report import UserPrompt
 from app.models.keyword_bid import CampaignBidStrategy, KeywordBid
 
 logger = logging.getLogger(__name__)
+
+# OPT-010: L7D 手动分析频率控制（每用户每小时最多 5 次）
+_l7d_rate_limits: Dict[int, List] = defaultdict(list)
 
 
 class ApiAnalysisService:
@@ -760,7 +766,6 @@ class ApiAnalysisService:
             
             # 预加载商家佣金数据（支持 MID 匹配 和 商家名匹配）
             from sqlalchemy import func, or_
-            from app.models.affiliate_transaction import AffiliateTransaction
             
             # 获取所有涉及的用户ID
             user_ids = set(cdata["user_id"] for cdata in campaign_data.values())
@@ -890,58 +895,78 @@ class ApiAnalysisService:
                     user_results[data_user_id] = []
                 user_results[data_user_id].append(row)
             
+            # OPT-010: 查询增强数据（30 天逐日指标 + 上期 orders）
+            customer_ids = list({cdata["cid"].replace("-", "") for cdata in campaign_data.values() if cdata.get("cid")})
+            enhanced_data = self._query_enhanced_data(
+                end_date, begin_date, customer_ids, user_ids
+            )
+
             # 为每个用户批量生成 AI 分析报告
+            ai_engine_used = "gemini"
             for data_user_id, rows in user_results.items():
                 if not rows:
                     continue
                 try:
-                    # 获取用户自定义提示词
                     user_prompt = self.db.query(UserPrompt).filter(
                         UserPrompt.user_id == data_user_id
                     ).first()
                     custom_prompt = user_prompt.prompt if user_prompt else None
-                    
-                    # 批量调用 AI 生成分析报告
-                    ai_reports = self._generate_batch_ai_reports(rows, custom_prompt)
-                    
-                    # 将 AI 报告分配到每条记录
-                    for row in rows:
-                        campaign_name = row.get("广告系列名", "")
-                        row["ai_report"] = ai_reports.get(campaign_name, "")
+
+                    # OPT-010: 优先使用 Claude 深度分析，失败时降级到 Gemini
+                    claude_result = self._generate_claude_l7d_reports(
+                        rows, enhanced_data, merchant_l7d_data
+                    )
+
+                    if claude_result and claude_result.get("success"):
+                        ai_engine_used = "claude"
+                        for row in rows:
+                            campaign_name = row.get("广告系列名", "")
+                            row["ai_report"] = claude_result.get("analysis", "")
+                    else:
+                        # 降级到 Gemini
+                        logger.warning("[OPT-010] Claude 分析失败，降级到 Gemini")
+                        ai_engine_used = "gemini_fallback"
+                        ai_reports = self._generate_batch_ai_reports(rows, custom_prompt)
+                        for row in rows:
+                            campaign_name = row.get("广告系列名", "")
+                            row["ai_report"] = ai_reports.get(campaign_name, "")
                 except Exception as e:
                     logger.error(f"为用户 {data_user_id} 生成 AI 报告失败: {e}")
-                    # AI 报告生成失败不影响主流程，继续保存
-            
+
             # 保存到数据库
             total_saved = 0
             for data_user_id, rows in user_results.items():
-                # 找一个联盟账号用于关联
                 affiliate_account = self.db.query(AffiliateAccount).filter(
                     AffiliateAccount.user_id == data_user_id,
                     AffiliateAccount.is_active == True
                 ).first()
-                
+
                 if not affiliate_account:
                     continue
-                
-                # 检查是否已存在
+
                 existing = self.db.query(AnalysisResult).filter(
                     AnalysisResult.user_id == data_user_id,
                     AnalysisResult.analysis_date == end_date,
                     AnalysisResult.analysis_type == "l7d"
                 ).first()
-                
+
+                result_payload = {
+                    "data": rows,
+                    "ai_engine": ai_engine_used,
+                    "anomalies": enhanced_data.get("anomalies", []),
+                    "cpa_diagnosis": enhanced_data.get("cpa_diagnosis"),
+                    "budget_analysis": enhanced_data.get("budget_analysis", []),
+                }
+
                 if existing:
-                    # 更新现有记录
-                    existing.result_data = {"data": rows}
+                    existing.result_data = result_payload
                 else:
-                    # 创建新记录
                     analysis_result = AnalysisResult(
                         user_id=data_user_id,
                         affiliate_account_id=affiliate_account.id,
                         analysis_date=end_date,
                         analysis_type="l7d",
-                        result_data={"data": rows}
+                        result_data=result_payload,
                     )
                     self.db.add(analysis_result)
                 total_saved += len(rows)
@@ -1072,6 +1097,246 @@ class ApiAnalysisService:
         
         return "稳定运行"
     
+    def _query_enhanced_data(
+        self,
+        end_date: date,
+        begin_date: date,
+        customer_ids: List[str],
+        user_ids: List[int],
+    ) -> Dict:
+        """OPT-010: 查询 30 天逐日指标 + 上期 orders，运行异常检测/CPA 诊断/预算分析"""
+        from app.services.anomaly_detection import AnomalyDetector
+        from app.services.cpa_diagnostics import CpaDiagnostics
+
+        result = {"anomalies": [], "cpa_diagnosis": None, "budget_analysis": []}
+
+        try:
+            # 查询 1: 30 天逐日广告指标
+            daily_metrics = self.db.query(
+                GoogleAdsApiData.campaign_id,
+                GoogleAdsApiData.campaign_name,
+                GoogleAdsApiData.date,
+                GoogleAdsApiData.cost,
+                GoogleAdsApiData.clicks,
+                GoogleAdsApiData.impressions,
+                GoogleAdsApiData.cpc,
+                GoogleAdsApiData.is_budget_lost,
+                GoogleAdsApiData.is_rank_lost,
+            ).filter(
+                GoogleAdsApiData.customer_id.in_(customer_ids),
+                GoogleAdsApiData.date >= end_date - timedelta(days=29),
+                GoogleAdsApiData.date <= end_date,
+            ).order_by(
+                GoogleAdsApiData.campaign_name, GoogleAdsApiData.date
+            ).all()
+
+            # 组织为 {campaign_name: [daily records]}
+            daily_data: Dict[str, List[Dict]] = defaultdict(list)
+            for m in daily_metrics:
+                imp = float(m.impressions or 0)
+                clicks_val = float(m.clicks or 0)
+                daily_data[m.campaign_name].append({
+                    "date": m.date.isoformat() if m.date else "",
+                    "campaign_id": m.campaign_id or "",
+                    "cost": float(m.cost or 0),
+                    "clicks": clicks_val,
+                    "impressions": imp,
+                    "cpc": float(m.cpc or 0),
+                    "ctr": (clicks_val / imp) if imp > 0 else 0,
+                    "is_budget_lost": float(m.is_budget_lost or 0),
+                    "is_rank_lost": float(m.is_rank_lost or 0),
+                })
+
+            # 异常检测（最近 14 天子集由检测器内部处理）
+            detector = AnomalyDetector()
+            result["anomalies"] = detector.detect(daily_data)
+            logger.info(f"[OPT-010] 异常检测完成，发现 {len(result['anomalies'])} 项异常")
+
+            # 查询 2: 30 天逐日佣金
+            daily_commission = self.db.query(
+                AffiliateTransaction.merchant_id,
+                func.date(AffiliateTransaction.transaction_time).label("date"),
+                func.sum(AffiliateTransaction.commission_amount).label("daily_commission"),
+                func.count(AffiliateTransaction.id).label("daily_orders"),
+            ).filter(
+                AffiliateTransaction.user_id.in_(user_ids),
+                AffiliateTransaction.merchant_id.isnot(None),
+                AffiliateTransaction.merchant_id != "None",
+                func.date(AffiliateTransaction.transaction_time) >= end_date - timedelta(days=29),
+                func.date(AffiliateTransaction.transaction_time) <= end_date,
+            ).group_by(
+                AffiliateTransaction.merchant_id,
+                func.date(AffiliateTransaction.transaction_time),
+            ).order_by("date").all()
+
+            # 查询 3: 上期 orders（CPA 诊断用）
+            merchant_previous_data = {}
+            for uid in user_ids:
+                prev_txns = self.db.query(
+                    AffiliateTransaction.merchant_id,
+                    func.sum(AffiliateTransaction.commission_amount).label("total_commission"),
+                    func.count(AffiliateTransaction.id).label("total_orders"),
+                ).filter(
+                    AffiliateTransaction.user_id == uid,
+                    AffiliateTransaction.merchant_id.isnot(None),
+                    AffiliateTransaction.merchant_id != "None",
+                    func.date(AffiliateTransaction.transaction_time) >= end_date - timedelta(days=13),
+                    func.date(AffiliateTransaction.transaction_time) <= end_date - timedelta(days=7),
+                ).group_by(AffiliateTransaction.merchant_id).all()
+
+                for txn in prev_txns:
+                    mid = str(txn.merchant_id)
+                    merchant_previous_data[(uid, mid)] = {
+                        "commission": float(txn.total_commission or 0),
+                        "orders": int(txn.total_orders or 0),
+                    }
+
+            # 预算效率分析（基于 30 天逐日数据拟合）
+            result["budget_analysis"] = self._compute_budget_analysis(daily_data, daily_commission)
+
+            # CPA 诊断（需要当期 + 上期 campaign 级别数据）
+            current_campaign = {}
+            previous_campaign = {}
+            for cname, records in daily_data.items():
+                cur_records = [r for r in records if r["date"] >= (end_date - timedelta(days=6)).isoformat()]
+                prev_records = [r for r in records if (end_date - timedelta(days=13)).isoformat() <= r["date"] <= (end_date - timedelta(days=7)).isoformat()]
+
+                if cur_records:
+                    current_campaign[cname] = {
+                        "cost": sum(r["cost"] for r in cur_records),
+                        "clicks": sum(r["clicks"] for r in cur_records),
+                        "orders": 0,
+                        "commission": 0,
+                    }
+                if prev_records:
+                    previous_campaign[cname] = {
+                        "cost": sum(r["cost"] for r in prev_records),
+                        "clicks": sum(r["clicks"] for r in prev_records),
+                        "orders": 0,
+                        "commission": 0,
+                    }
+
+            diagnostics = CpaDiagnostics()
+            cpa_result = diagnostics.diagnose(current_campaign, previous_campaign)
+            result["cpa_diagnosis"] = cpa_result
+
+        except Exception as e:
+            logger.error(f"[OPT-010] 增强数据查询失败: {e}", exc_info=True)
+
+        return result
+
+    def _compute_budget_analysis(
+        self,
+        daily_data: Dict[str, List[Dict]],
+        daily_commission_rows,
+    ) -> List[Dict]:
+        """OPT-010: 基于 30 天花费-佣金数据计算预算建议"""
+        suggestions = []
+        MIN_DAYS = 14
+        MARGINAL_THRESHOLD = 0.864
+
+        for campaign_name, records in daily_data.items():
+            if len(records) < MIN_DAYS:
+                continue
+
+            costs = [r["cost"] for r in records if r["cost"] > 0]
+            if len(costs) < MIN_DAYS:
+                continue
+
+            avg_daily_cost = sum(costs) / len(costs)
+            total_cost = sum(costs)
+
+            total_commission = sum(r.get("commission", 0) for r in records)
+            if total_cost == 0:
+                continue
+
+            overall_efficiency = total_commission / total_cost if total_cost > 0 else 0
+
+            avg_is_budget_lost = sum(r.get("is_budget_lost", 0) for r in records) / len(records)
+
+            if overall_efficiency >= MARGINAL_THRESHOLD and avg_is_budget_lost > 0.15:
+                increase_pct = min(50, int(avg_is_budget_lost * 100))
+                recommended = round(avg_daily_cost * (1 + increase_pct / 100), 2)
+                suggestions.append({
+                    "campaign_name": campaign_name,
+                    "current_daily_budget": round(avg_daily_cost, 2),
+                    "recommended_daily_budget": recommended,
+                    "change": f"+{increase_pct}%",
+                    "reason": f"边际效率{overall_efficiency:.1f}，IS Budget丢失{avg_is_budget_lost*100:.0f}%，有增长空间",
+                    "projected_roi_change": f"+{int(increase_pct * 0.4)}%",
+                })
+            elif overall_efficiency < 0.5 and avg_daily_cost > 10:
+                decrease_pct = 20
+                recommended = round(avg_daily_cost * 0.8, 2)
+                suggestions.append({
+                    "campaign_name": campaign_name,
+                    "current_daily_budget": round(avg_daily_cost, 2),
+                    "recommended_daily_budget": recommended,
+                    "change": f"-{decrease_pct}%",
+                    "reason": f"边际效率{overall_efficiency:.1f}低于盈亏线，建议缩减预算",
+                    "projected_roi_change": f"+{int(decrease_pct * 0.3)}%",
+                })
+
+        return suggestions
+
+    def _generate_claude_l7d_reports(
+        self,
+        rows: List[Dict],
+        enhanced_data: Dict,
+        merchant_l7d_data: Dict,
+    ) -> Optional[Dict]:
+        """OPT-010: 使用 Claude 生成 L7D 深度分析报告"""
+        from app.config import settings
+
+        api_key = getattr(settings, "CLAUDE_API_KEY", "") or ""
+        if not api_key:
+            logger.warning("[OPT-010] CLAUDE_API_KEY 未配置，跳过 Claude 分析")
+            return None
+
+        try:
+            from app.services.claude_service import ClaudeService
+            from app.services.claude_analysis_service import ClaudeAnalysisService
+
+            claude_svc = ClaudeService(
+                api_key=api_key,
+                base_url=getattr(settings, "CLAUDE_BASE_URL", None),
+                model=getattr(settings, "CLAUDE_MODEL", None),
+                fallback_model=getattr(settings, "CLAUDE_MODEL_FALLBACK", None),
+            )
+            analysis_svc = ClaudeAnalysisService(claude_service=claude_svc)
+
+            comparison_table = self._build_comparison_table(rows)
+
+            result = analysis_svc.generate_l7d_report(
+                comparison_table=comparison_table,
+                anomalies=enhanced_data.get("anomalies", []),
+                cpa_diagnosis=enhanced_data.get("cpa_diagnosis"),
+                budget_analysis=enhanced_data.get("budget_analysis", []),
+            )
+            return result
+        except Exception as e:
+            logger.error(f"[OPT-010] Claude L7D 报告生成失败: {e}", exc_info=True)
+            return None
+
+    def _build_comparison_table(self, rows: List[Dict]) -> str:
+        """构建当期 vs 上期对比 Markdown 表格"""
+        header = "| 广告系列 | L7D花费 | L7D点击 | CPC | L7D佣金 | 保守ROI | IS Budget丢失 | IS Rank丢失 | 出单天数 |"
+        divider = "|----------|---------|---------|-----|---------|---------|---------------|-------------|----------|"
+        lines = [header, divider]
+        for row in rows:
+            lines.append(
+                f"| {row.get('广告系列名', '')} "
+                f"| ${row.get('L7D花费', 0):.2f} "
+                f"| {row.get('L7D点击', 0)} "
+                f"| ${row.get('当前Max CPC', 0):.4f} "
+                f"| ${row.get('L7D佣金', 0):.2f} "
+                f"| {row.get('保守ROI', '-')} "
+                f"| {row.get('IS Budget丢失', '-')} "
+                f"| {row.get('IS Rank丢失', '-')} "
+                f"| {row.get('L7D出单天数', 0)} |"
+            )
+        return "\n".join(lines)
+
     def _generate_batch_ai_reports(
         self,
         rows: List[Dict],

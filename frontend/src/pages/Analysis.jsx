@@ -8,6 +8,7 @@ import ExportButton from '../components/Export/ExportButton'
 import ReportViewer from '../components/ReportViewer/ReportViewer'
 import CpcDeployModal from '../components/CpcDeployModal'
 import AiGeneratingOverlay from '../components/AiGeneratingOverlay'
+import StructuredAnalysisCard from '../components/StructuredAnalysisCard'
 import { useAuth } from '../store/authStore'
 import './Analysis.css'
 
@@ -527,12 +528,11 @@ G) 综述
   }
   
   // 查看单条广告系列的 AI 分析报告（从已存储的数据中读取）
-  const handleViewCampaignReport = useCallback((row, analysisDate) => {
+  const handleViewCampaignReport = useCallback((row, analysisDate, resultData) => {
     if (!row) return
     
     const campaignName = String(row['广告系列名'] || row['广告系列'] || row['系列名'] || '')
     let aiReport = row['ai_report'] || ''
-    // 使用传入的分析日期，如果没有则使用当前日期
     const reportDate = analysisDate || dayjs().format('YYYY-MM-DD')
     
     setSelectedCampaignRow(row)
@@ -540,19 +540,14 @@ G) 综述
     setSingleCampaignModalOpen(true)
     
     if (aiReport) {
-      // 清理报告：如果报告以"该广告系列的分析报告可能包含在完整报告中"开头，说明匹配失败
-      // 尝试从完整报告中提取该广告系列的部分
       if (aiReport.includes('该广告系列的分析报告可能包含在完整报告中')) {
-        // 先提取"---"后面的完整报告内容
         const fullReportMatch = aiReport.split(/\n---\n/)
         const fullReportContent = fullReportMatch.length > 1 ? fullReportMatch.slice(1).join('\n---\n') : aiReport
         
-        // 尝试从完整报告中找到该广告系列的段落
         const extractedReport = extractCampaignSection(fullReportContent, campaignName)
         if (extractedReport) {
           aiReport = extractedReport
         } else {
-          // 如果还是找不到，直接显示完整报告内容（去掉提示语）
           aiReport = fullReportContent || `### 📊 ${campaignName}\n\n该广告系列的详细分析暂时无法单独提取。\n\n请点击主表格上方的「生成报告」按钮查看完整的 AI 分析报告。`
         }
       }
@@ -560,14 +555,15 @@ G) 综述
       setSingleCampaignResult({
         campaign_name: campaignName,
         analysis: aiReport,
-        analysis_date: reportDate
+        analysis_date: reportDate,
+        result_data: resultData || null,
       })
     } else {
-      // 没有 AI 报告，显示提示
       setSingleCampaignResult({
         campaign_name: campaignName,
         analysis: `### 📊 ${campaignName}\n\n该广告系列暂无 AI 分析报告。\n\n**可能的原因：**\n- 该分析是在 AI 报告功能上线前生成的\n- AI 报告生成过程中出现错误\n\n**建议：** 点击"从API数据生成L7D分析"按钮重新生成分析。`,
-        analysis_date: reportDate
+        analysis_date: reportDate,
+        result_data: resultData || null,
       })
     }
   }, [])
@@ -730,7 +726,7 @@ G) 综述
     }).map((r, idx) => ({ ...r, __rowKey: `detail-${record.id}-${idx}` }))
   }, [showEmptyCampaigns])
 
-  const buildDetailColumns = useCallback((analysisDate) => {
+  const buildDetailColumns = useCallback((analysisDate, resultData) => {
     const DETAIL_KEYS = [
       '广告系列名', '预算', 'L7D点击', 'L7D佣金', 'L7D花费', 'L7D出单天数',
       '当前Max CPC', 'IS Budget丢失', 'IS Rank丢失', '保守EPC', '保守ROI', '操作指令', 'MID',
@@ -787,7 +783,7 @@ G) 综述
                 <Tag
                   color={color}
                   style={{ fontSize: '11px', cursor: 'pointer', maxWidth: '200px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}
-                  onClick={(e) => { e.stopPropagation(); handleViewCampaignReport(row, analysisDate) }}
+                  onClick={(e) => { e.stopPropagation(); handleViewCampaignReport(row, analysisDate, resultData) }}
                 >
                   {t.length > 25 ? t.substring(0, 25) + '...' : t}
                 </Tag>
@@ -1222,6 +1218,10 @@ G) 综述
               overflow: 'auto',
               background: '#f5f7fa'
             }}>
+              <StructuredAnalysisCard
+                resultData={singleCampaignResult.result_data}
+                campaignName={singleCampaignResult.campaign_name}
+              />
               <ReportViewer 
                 content={singleCampaignResult.analysis}
                 campaignCount={1}
@@ -1400,7 +1400,7 @@ G) 综述
         {detailRecord && (() => {
           const detailData = processDetailData(detailRecord)
           if (detailData.length === 0) return <Text type="secondary">暂无数据</Text>
-          const detailCols = buildDetailColumns(detailRecord.analysis_date)
+          const detailCols = buildDetailColumns(detailRecord.analysis_date, detailRecord.result_data)
           return (
             <Table
               columns={detailCols}
