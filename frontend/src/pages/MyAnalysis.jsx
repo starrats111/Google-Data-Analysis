@@ -30,7 +30,7 @@ const MyAnalysis = () => {
                 <Title level={4} style={{ margin: 0 }}>L7D 分析（最近7天）</Title>
               </Space>
               <Paragraph type="secondary" style={{ marginBottom: 0 }}>
-                看「过去7天」整体表现：花了多少钱、回了多少佣金、出单天数、保守ROI等。每天自动生成。
+                看「过去7天」整体表现：花了多少钱、回了多少佣金、出单天数、ROI等。每天自动生成。
               </Paragraph>
               <Button type="primary" onClick={() => navigate('/analysis-l7d')}>
                 进入 L7D 分析

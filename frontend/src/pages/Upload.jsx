@@ -533,7 +533,7 @@ const UploadPage = () => {
 
           <div style={{ padding: '12px', background: '#f0f0f0', borderRadius: '4px' }}>
             <p style={{ margin: 0, fontSize: '12px', color: '#666' }}>
-              <strong>提示：</strong>分析将合并表1和表2的数据，计算保守EPC和保守ROI。
+              <strong>提示：</strong>分析将合并表1和表2的数据，计算保守EPC和ROI。
               <br />
               <strong>重要：</strong>表1和表2必须属于同一联盟平台才能进行分析。
               <br />

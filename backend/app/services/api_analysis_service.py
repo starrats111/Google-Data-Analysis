@@ -834,7 +834,7 @@ class ApiAnalysisService:
                 # 始终包含所有已启用广告系列（包括双0数据），前端负责根据用户选择过滤显示
                 
                 conservative_epc = (commission * 0.72 / clicks) if clicks > 0 else 0
-                conservative_roi = ((commission * 0.72 - cost) / cost) if cost > 0 else None
+                conservative_roi = ((commission - cost) / cost) if cost > 0 else None
                 
                 # D6 修复：当前Max CPC 从 KeywordBid 获取关键字级别最高 CPC
                 keyword_max_cpc_raw = self.db.query(func.max(KeywordBid.max_cpc)).filter(
@@ -885,7 +885,7 @@ class ApiAnalysisService:
                     "IS Budget丢失": f"{is_budget_lost * 100:.1f}%" if is_budget_lost > 0 else "-",
                     "IS Rank丢失": f"{is_rank_lost * 100:.1f}%" if is_rank_lost > 0 else "-",
                     "保守EPC": round(conservative_epc, 4),
-                    "保守ROI": f"{conservative_roi * 100:.1f}%" if conservative_roi is not None else "-",
+                    "ROI": round(conservative_roi, 2) if conservative_roi is not None else "-",
                     "操作指令": operation,
                     "部署数据": deployment_data,  # 新增：用于一键部署
                     "ai_report": "",  # 将在后面批量生成
@@ -1320,7 +1320,7 @@ class ApiAnalysisService:
 
     def _build_comparison_table(self, rows: List[Dict]) -> str:
         """构建当期 vs 上期对比 Markdown 表格"""
-        header = "| 广告系列 | L7D花费 | L7D点击 | CPC | L7D佣金 | 保守ROI | IS Budget丢失 | IS Rank丢失 | 出单天数 |"
+        header = "| 广告系列 | L7D花费 | L7D点击 | CPC | L7D佣金 | ROI | IS Budget丢失 | IS Rank丢失 | 出单天数 |"
         divider = "|----------|---------|---------|-----|---------|---------|---------------|-------------|----------|"
         lines = [header, divider]
         for row in rows:
@@ -1330,7 +1330,7 @@ class ApiAnalysisService:
                 f"| {row.get('L7D点击', 0)} "
                 f"| ${row.get('当前Max CPC', 0):.4f} "
                 f"| ${row.get('L7D佣金', 0):.2f} "
-                f"| {row.get('保守ROI', '-')} "
+                f"| {row.get('ROI', '-')} "
                 f"| {row.get('IS Budget丢失', '-')} "
                 f"| {row.get('IS Rank丢失', '-')} "
                 f"| {row.get('L7D出单天数', 0)} |"
@@ -1373,7 +1373,7 @@ class ApiAnalysisService:
                 # 解析百分比格式
                 budget_lost = row.get("IS Budget丢失", "0")
                 rank_lost = row.get("IS Rank丢失", "0")
-                roi = row.get("保守ROI", "0")
+                roi = row.get("ROI", "0")
                 
                 if isinstance(budget_lost, str):
                     budget_lost = float(budget_lost.replace("%", "").replace("-", "0") or 0) / 100

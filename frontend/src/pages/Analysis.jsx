@@ -729,12 +729,12 @@ G) 综述
   const buildDetailColumns = useCallback((analysisDate, resultData) => {
     const DETAIL_KEYS = [
       '广告系列名', '预算', 'L7D点击', 'L7D佣金', 'L7D花费', 'L7D出单天数',
-      '当前Max CPC', 'IS Budget丢失', 'IS Rank丢失', '保守EPC', '保守ROI', '操作指令', 'MID',
+      '当前Max CPC', 'IS Budget丢失', 'IS Rank丢失', '保守EPC', 'ROI', '操作指令', 'MID',
     ]
     const WIDTH_MAP = {
       '广告系列名': 260, '预算': 80, 'L7D点击': 80, 'L7D佣金': 90,
       'L7D花费': 90, 'L7D出单天数': 90, '当前Max CPC': 110,
-      'IS Budget丢失': 110, 'IS Rank丢失': 110, '保守EPC': 80, '保守ROI': 80, 'MID': 100,
+      'IS Budget丢失': 110, 'IS Rank丢失': 110, '保守EPC': 80, 'ROI': 80, 'MID': 100,
     }
     return DETAIL_KEYS.map(key => {
       const col = { title: key, dataIndex: key, key, width: WIDTH_MAP[key], ellipsis: true }
@@ -799,7 +799,7 @@ G) 综述
             </Space>
           )
         }
-      } else if (['保守ROI', '保守EPC', '预算', 'L7D点击', 'L7D佣金', 'L7D花费', 'L7D出单天数'].includes(key)) {
+      } else if (['ROI', '保守EPC', '预算', 'L7D点击', 'L7D佣金', 'L7D花费', 'L7D出单天数'].includes(key)) {
         col.align = 'right'
         col.render = (text) => {
           if (text === null || text === undefined || text === '') return '-'
