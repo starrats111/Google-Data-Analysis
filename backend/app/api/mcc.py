@@ -866,8 +866,22 @@ async def delete_mcc_account(
         ).count()
         
         logger.info(f"准备删除MCC账号 {mcc_id} ({mcc_name})，关联数据条数: {data_count}")
-        
-        # 先手动删除所有关联的Google Ads数据（避免SQLite CASCADE问题）
+
+        # 先手动删除所有关联数据（避免SQLite外键约束问题）
+        from app.models.keyword_bid import CampaignBidStrategy, KeywordBid, BidStrategyChange
+
+        del_bsc = db.query(BidStrategyChange).filter(
+            BidStrategyChange.mcc_id == mcc_id
+        ).delete(synchronize_session=False)
+        del_cbs = db.query(CampaignBidStrategy).filter(
+            CampaignBidStrategy.mcc_id == mcc_id
+        ).delete(synchronize_session=False)
+        del_kb = db.query(KeywordBid).filter(
+            KeywordBid.mcc_id == mcc_id
+        ).delete(synchronize_session=False)
+        if del_bsc or del_cbs or del_kb:
+            logger.info(f"已删除出价关联数据: 策略变更{del_bsc}条, 出价策略{del_cbs}条, 关键词出价{del_kb}条")
+
         if data_count > 0:
             deleted_rows = db.query(GoogleAdsApiData).filter(
                 GoogleAdsApiData.mcc_id == mcc_id
