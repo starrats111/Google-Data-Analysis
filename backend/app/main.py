@@ -60,17 +60,12 @@ from app.api import (
     users,
     # 商家任务分配
     merchants,
-    # 露出功能模块
-    luchu_articles,
-    luchu_ai,
-    luchu_reviews,
-    luchu_publish,
-    luchu_websites,
-    luchu_stats,
-    luchu_notifications,
-    luchu_prompts,
-    luchu_logs,
-    luchu_images,
+    # 文章发布系统（OPT-011）
+    articles,
+    article_gen,
+    article_categories,
+    article_tags,
+    article_titles,
 )
 
 
@@ -260,17 +255,14 @@ app.include_router(merchants.router)
 app.include_router(merchants.assignment_router)
 app.include_router(merchants.performance_router)
 
-# 露出功能路由
-app.include_router(luchu_articles.router)
-app.include_router(luchu_ai.router)
-app.include_router(luchu_reviews.router)
-app.include_router(luchu_publish.router)
-app.include_router(luchu_websites.router)
-app.include_router(luchu_stats.router)
-app.include_router(luchu_notifications.router)
-app.include_router(luchu_prompts.router)
-app.include_router(luchu_logs.router)
-app.include_router(luchu_images.router)
+
+
+# 文章发布系统路由（OPT-011）
+app.include_router(articles.router)
+app.include_router(article_gen.router)
+app.include_router(article_categories.router)
+app.include_router(article_tags.router)
+app.include_router(article_titles.router)
 
 
 @app.get("/health")

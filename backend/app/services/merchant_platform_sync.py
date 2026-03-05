@@ -175,10 +175,13 @@ class MerchantPlatformSyncService:
         errors: List[str] = []
 
         for acct in accounts:
+            acct_id = acct.id
+            acct_name = acct.account_name
+            acct_plat = acct.platform.platform_code if acct.platform else "?"
             try:
                 platform_code = self._resolve_platform_code(acct)
                 if platform_code not in PLATFORM_API_CONFIG:
-                    errors.append(f"{platform_code} account {acct.account_name}: unsupported platform")
+                    errors.append(f"{platform_code} account {acct_name}: unsupported platform")
                     failed += 1
                     continue
 
@@ -190,10 +193,11 @@ class MerchantPlatformSyncService:
                 count = self._sync_single_account(acct, platform_code, token)
                 new_merchants += count
                 synced += 1
-                logger.info("[MerchantSync] %s/%s synced, +%d merchants", platform_code, acct.account_name, count)
+                logger.info("[MerchantSync] %s/%s synced, +%d merchants", platform_code, acct_name, count)
             except Exception as exc:
-                logger.exception("sync account %s failed", acct.id)
-                errors.append(f"{acct.platform.platform_code if acct.platform else '?'} account {acct.account_name}: {exc}")
+                self.db.rollback()
+                logger.exception("sync account %s/%s failed", acct_plat, acct_name)
+                errors.append(f"{acct_plat} account {acct_name}: {exc}")
                 failed += 1
 
             time.sleep(1)
@@ -217,22 +221,26 @@ class MerchantPlatformSyncService:
 
     def _sync_single_account(self, acct: AffiliateAccount, platform_code: str, token: str) -> int:
         cfg = PLATFORM_API_CONFIG[platform_code]
-        all_merchants: List[dict] = []
 
+        unique: Dict[str, tuple] = {}
         for rel_value in RELATIONSHIP_VALUES:
-            merchants = self._fetch_platform_merchants(cfg, platform_code, token, rel_value)
-            all_merchants.extend(merchants)
+            for raw in self._fetch_platform_merchants(cfg, platform_code, token, rel_value):
+                mapped = _map_merchant_fields(raw, platform_code, cfg["mode"])
+                mid = _extract_mid(mapped)
+                rel_status = _normalize_relationship(mapped["relationship"])
+                key = mid if mid else (mapped.get("merchant_name") or "").strip().lower()
+                if not key:
+                    continue
+                pri = PRIORITY.get(rel_status, 0)
+                if key not in unique or pri > unique[key][3]:
+                    unique[key] = (mapped, mid, rel_status, pri)
 
         new_count = 0
-        for raw in all_merchants:
-            mapped = _map_merchant_fields(raw, platform_code, cfg["mode"])
-            mid = _extract_mid(mapped)
-            rel_status = _normalize_relationship(mapped["relationship"])
-
+        for mapped, mid, rel_status, _ in unique.values():
             merchant = self._upsert_merchant(platform_code, mapped, mid)
             if merchant._sa_instance_state.pending:
+                self.db.flush()
                 new_count += 1
-
             self._upsert_relationship(merchant, acct, rel_status)
 
         self.db.flush()
@@ -404,14 +412,29 @@ class MerchantPlatformSyncService:
             mar.relationship_status = rel_status
             mar.synced_at = now
         else:
-            mar = MerchantAccountRelationship(
-                merchant_id=merchant.id,
-                affiliate_account_id=acct.id,
-                relationship_status=rel_status,
-                previous_status=None,
-                synced_at=now,
-            )
-            self.db.add(mar)
+            try:
+                mar = MerchantAccountRelationship(
+                    merchant_id=merchant.id,
+                    affiliate_account_id=acct.id,
+                    relationship_status=rel_status,
+                    previous_status=None,
+                    synced_at=now,
+                )
+                self.db.add(mar)
+                self.db.flush()
+            except Exception:
+                self.db.rollback()
+                mar = (
+                    self.db.query(MerchantAccountRelationship)
+                    .filter(
+                        MerchantAccountRelationship.merchant_id == merchant.id,
+                        MerchantAccountRelationship.affiliate_account_id == acct.id,
+                    )
+                    .first()
+                )
+                if mar:
+                    mar.relationship_status = rel_status
+                    mar.synced_at = now
 
     # ------------------------------------------------------------------
     # 聚合 & 通知

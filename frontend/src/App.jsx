@@ -40,14 +40,13 @@ const MerchantPerformance = lazyWithRetry(() => import('./pages/MerchantPerforma
 // 反馈管理（wj07）
 const FeedbackManage = lazyWithRetry(() => import('./pages/FeedbackManage'))
 
-// 露出功能页面
-const LuchuDashboard = lazyWithRetry(() => import('./pages/luchu/LuchuDashboard'))
-const LuchuCreate = lazyWithRetry(() => import('./pages/luchu/LuchuCreate'))
-const LuchuArticles = lazyWithRetry(() => import('./pages/luchu/LuchuArticles'))
-const LuchuArticleDetail = lazyWithRetry(() => import('./pages/luchu/LuchuArticleDetail'))
-const LuchuReviews = lazyWithRetry(() => import('./pages/luchu/LuchuReviews'))
-const LuchuPublish = lazyWithRetry(() => import('./pages/luchu/LuchuPublish'))
-const LuchuNotifications = lazyWithRetry(() => import('./pages/luchu/LuchuNotifications'))
+// 文章发布系统（OPT-011）
+const ArticleList = lazyWithRetry(() => import('./pages/articles/ArticleList'))
+const ArticleEdit = lazyWithRetry(() => import('./pages/articles/ArticleEdit'))
+const ArticleCategories = lazyWithRetry(() => import('./pages/articles/ArticleCategories'))
+const ArticleTitles = lazyWithRetry(() => import('./pages/articles/ArticleTitles'))
+const PublishWizard = lazyWithRetry(() => import('./components/PublishWizard'))
+
 
 function PrivateRoute({ children }) {
   const { isAuthenticated } = useAuth()
@@ -119,14 +118,13 @@ function App() {
               <Route path="merchant-performance" element={<MerchantPerformance />} />
               {/* 反馈管理 */}
               <Route path="feedback-manage" element={<FeedbackManage />} />
-              {/* 露出功能路由 */}
-              <Route path="luchu" element={<LuchuDashboard />} />
-              <Route path="luchu/create" element={<LuchuCreate />} />
-              <Route path="luchu/articles" element={<LuchuArticles />} />
-              <Route path="luchu/articles/:id" element={<LuchuArticleDetail />} />
-              <Route path="luchu/reviews" element={<LuchuReviews />} />
-              <Route path="luchu/publish" element={<LuchuPublish />} />
-              <Route path="luchu/notifications" element={<LuchuNotifications />} />
+              {/* 文章发布系统（OPT-011） */}
+              <Route path="articles" element={<ArticleList />} />
+              <Route path="articles/edit/:id" element={<ArticleEdit />} />
+              <Route path="articles/new" element={<ArticleEdit />} />
+              <Route path="articles/publish" element={<PublishWizard />} />
+              <Route path="articles/categories" element={<ArticleCategories />} />
+              <Route path="articles/titles" element={<ArticleTitles />} />
             </Route>
           </Routes>
         </Suspense>

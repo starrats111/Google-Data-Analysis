@@ -18,8 +18,6 @@ import {
   FileSearchOutlined,
   CrownOutlined,
   EditOutlined,
-  SendOutlined,
-  CheckCircleOutlined,
   BellOutlined,
   GiftOutlined,
   ShopOutlined,
@@ -67,9 +65,6 @@ const Layout = () => {
   const isLeader = userRole === 'leader'
   const teamInfo = permissions?.team
 
-  // 露出功能授权用户列表 (wj01-wj10)
-  const LUCHU_AUTHORIZED_USERS = ['wj01', 'wj02', 'wj03', 'wj04', 'wj05', 'wj06', 'wj07', 'wj08', 'wj09', 'wj10']
-  const hasLuchuAccess = user?.username && LUCHU_AUTHORIZED_USERS.includes(user.username)
 
   // 首次加载时获取权限
   useEffect(() => {
@@ -228,23 +223,22 @@ const Layout = () => {
       ],
     },
     {
+      key: 'article-manage',
+      icon: <FileTextOutlined />,
+      label: '文章管理',
+      children: [
+        { key: '/articles', icon: <FileTextOutlined />, label: '文章列表' },
+        { key: '/articles/publish', icon: <EditOutlined />, label: '发布文章' },
+        { key: '/articles/titles', icon: <FileTextOutlined />, label: '标题库' },
+        { key: '/articles/categories', icon: <DatabaseOutlined />, label: '分类管理' },
+      ],
+    },
+    {
       key: 'feedback-manage',
       icon: <CommentOutlined />,
       label: '反馈管理',
       children: [
         { key: '/feedback-manage', icon: <CommentOutlined />, label: '反馈列表' },
-      ],
-    },
-    {
-      key: 'luchu',
-      icon: <EditOutlined />,
-      label: '露出管理',
-      children: [
-        { key: '/luchu', icon: <DashboardOutlined />, label: '露出总览' },
-        { key: '/luchu/create', icon: <EditOutlined />, label: '创建内容' },
-        { key: '/luchu/articles', icon: <FileTextOutlined />, label: '我的文章' },
-        { key: '/luchu/publish', icon: <SendOutlined />, label: '待发布' },
-        { key: '/luchu/notifications', icon: <BellOutlined />, label: '通知中心' },
       ],
     },
   ]
@@ -290,15 +284,14 @@ const Layout = () => {
       ],
     },
     {
-      key: 'luchu',
-      icon: <EditOutlined />,
-      label: '露出管理',
+      key: 'article-manage',
+      icon: <FileTextOutlined />,
+      label: '文章管理',
       children: [
-        { key: '/luchu', icon: <DashboardOutlined />, label: '露出总览' },
-        { key: '/luchu/create', icon: <EditOutlined />, label: '创建内容' },
-        { key: '/luchu/articles', icon: <FileTextOutlined />, label: '全部文章' },
-        { key: '/luchu/reviews', icon: <CheckCircleOutlined />, label: '审核管理' },
-        { key: '/luchu/publish', icon: <SendOutlined />, label: '发布管理' },
+        { key: '/articles', icon: <FileTextOutlined />, label: '文章列表' },
+        { key: '/articles/publish', icon: <EditOutlined />, label: '发布文章' },
+        { key: '/articles/titles', icon: <FileTextOutlined />, label: '标题库' },
+        { key: '/articles/categories', icon: <DatabaseOutlined />, label: '分类管理' },
       ],
     },
     {
@@ -352,15 +345,14 @@ const Layout = () => {
       ],
     },
     {
-      key: 'luchu',
-      icon: <EditOutlined />,
-      label: '露出管理',
+      key: 'article-manage',
+      icon: <FileTextOutlined />,
+      label: '文章管理',
       children: [
-        { key: '/luchu', icon: <DashboardOutlined />, label: '露出总览' },
-        { key: '/luchu/create', icon: <EditOutlined />, label: '创建内容' },
-        { key: '/luchu/articles', icon: <FileTextOutlined />, label: '全部文章' },
-        { key: '/luchu/reviews', icon: <CheckCircleOutlined />, label: '审核管理' },
-        { key: '/luchu/publish', icon: <SendOutlined />, label: '发布管理' },
+        { key: '/articles', icon: <FileTextOutlined />, label: '文章列表' },
+        { key: '/articles/publish', icon: <EditOutlined />, label: '发布文章' },
+        { key: '/articles/titles', icon: <FileTextOutlined />, label: '标题库' },
+        { key: '/articles/categories', icon: <DatabaseOutlined />, label: '分类管理' },
       ],
     },
     {
@@ -381,10 +373,6 @@ const Layout = () => {
     if (isManager) items = managerMenuItems
     else if (isLeader) items = leaderMenuItems
     else items = memberMenuItems
-
-    if (!hasLuchuAccess) {
-      items = items.filter(item => item.key !== 'luchu')
-    }
 
     if (!isFeedbackManager) {
       items = items.filter(item => item.key !== 'feedback-manage')

@@ -25,19 +25,10 @@ from app.models.platform_field_contract import PlatformFieldContract
 from app.models.merchant_source_snapshot import MerchantSourceSnapshot
 from app.models.merchant_assignment_event import MerchantAssignmentEvent
 from app.models.merchant_account_relationship import MerchantAccountRelationship
-# 露出功能模型
-from app.models.luchu import (
-    LuchuWebsite,
-    LuchuArticle,
-    LuchuArticleVersion,
-    LuchuReview,
-    LuchuPublishLog,
-    LuchuImageCheck,
-    LuchuImageAlert,
-    LuchuPromptTemplate,
-    LuchuNotification,
-    LuchuCrawlCache,
-    LuchuOperationLog,
+# 文章发布系统（OPT-011）
+from app.models.article import (
+    PubArticle, PubCategory, PubTag, PubArticleTag,
+    PubArticleLink, PubArticleImage, PubArticleTitle, PubArticleVersion,
 )
 
 __all__ = [
@@ -74,18 +65,15 @@ __all__ = [
     "MerchantSourceSnapshot",
     "MerchantAssignmentEvent",
     "MerchantAccountRelationship",
-    # 露出功能
-    "LuchuWebsite",
-    "LuchuArticle",
-    "LuchuArticleVersion",
-    "LuchuReview",
-    "LuchuPublishLog",
-    "LuchuImageCheck",
-    "LuchuImageAlert",
-    "LuchuPromptTemplate",
-    "LuchuNotification",
-    "LuchuCrawlCache",
-    "LuchuOperationLog",
+    # 文章发布系统
+    "PubArticle",
+    "PubCategory",
+    "PubTag",
+    "PubArticleTag",
+    "PubArticleLink",
+    "PubArticleImage",
+    "PubArticleTitle",
+    "PubArticleVersion",
 ]
 
 

@@ -945,6 +945,30 @@ def notification_cleanup_job():
         db.close()
 
 
+def publish_scheduled_articles_job():
+    """文章定时发布检查（OPT-011，每5分钟执行）"""
+    db: Session = SessionLocal()
+    try:
+        from app.models.article import PubArticle
+        now = datetime.now()
+        articles = db.query(PubArticle).filter(
+            PubArticle.status == "draft",
+            PubArticle.publish_date.isnot(None),
+            PubArticle.publish_date <= now,
+            PubArticle.deleted_at.is_(None),
+        ).all()
+        if articles:
+            for article in articles:
+                article.status = "published"
+                logger.info(f"[定时发布] 文章已发布: {article.title} (ID={article.id})")
+            db.commit()
+            logger.info(f"[定时发布] 共发布 {len(articles)} 篇文章")
+    except Exception as e:
+        logger.error(f"文章定时发布检查异常: {e}", exc_info=True)
+    finally:
+        db.close()
+
+
 def database_backup_job():
     """数据库自动备份任务（每天北京时间 03:00 执行）"""
     try:
@@ -1058,6 +1082,17 @@ def start_scheduler():
             max_instances=1
         )
 
+        # 10. 每5分钟 - 文章定时发布检查（OPT-011）
+        scheduler.add_job(
+            publish_scheduled_articles_job,
+            trigger='interval',
+            minutes=5,
+            id='auto_publish_articles',
+            name='文章定时发布检查（每5分钟）',
+            replace_existing=True,
+            max_instances=1
+        )
+
         scheduler.start()
         logger.info("=" * 60)
         logger.info("定时任务调度器已启动")
@@ -1073,6 +1108,7 @@ def start_scheduler():
         logger.info("  7. MID自动补偿: 每天 07:10")
         logger.info("  8. 通知清理: 每月1号 01:00")
         logger.info("  9. 商家平台API同步: 每天 06:30 (M-018-A)")
+        logger.info("  10. 文章定时发布: 每5分钟 (OPT-011)")
         logger.info("=" * 60)
         
     except Exception as e:
