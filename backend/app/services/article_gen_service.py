@@ -11,7 +11,7 @@ from app.config import settings
 
 logger = logging.getLogger(__name__)
 
-FALLBACK_MODELS = ["gemini-1.5-flash", "gemini-1.5-pro"]
+FALLBACK_MODELS = ["[福利]gemini-3-flash-preview", "[福利]gemini-3-flash-preview-thinking"]
 
 
 class ArticleGenService:
