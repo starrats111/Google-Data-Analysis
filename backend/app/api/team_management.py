@@ -14,10 +14,11 @@ from passlib.context import CryptContext
 from app.database import get_db
 from app.models.user import User, UserRole
 from app.models.team import Team
-from app.models.google_ads_api_data import GoogleAdsApiData
+from app.models.google_ads_api_data import GoogleAdsApiData, GoogleMccAccount
 from app.models.affiliate_transaction import AffiliateTransaction
 from app.middleware.auth import get_current_user
 from app.services.permission_service import PermissionService
+from app.api.google_ads_aggregate import convert_to_usd
 
 router = APIRouter(prefix="/api/team", tags=["团队管理"])
 
@@ -452,6 +453,11 @@ async def get_team_stats(
     perm = PermissionService(db, current_user)
     accessible_team_ids = perm.get_accessible_team_ids()
     
+    _mcc_currency_map = {
+        mcc.id: getattr(mcc, 'currency', 'USD') or 'USD'
+        for mcc in db.query(GoogleMccAccount).all()
+    }
+    
     result = []
     for team in teams:
         # 权限检查
@@ -479,15 +485,22 @@ async def get_team_stats(
             ))
             continue
         
-        # 计算费用（Google Ads）
-        cost_query = db.query(func.sum(GoogleAdsApiData.cost)).filter(
+        # 计算费用（Google Ads）— 按 MCC 分组做货币转换
+        cost_by_mcc = db.query(
+            GoogleAdsApiData.mcc_id,
+            func.sum(GoogleAdsApiData.cost).label("cost"),
+        ).filter(
             GoogleAdsApiData.user_id.in_(member_ids)
         )
         if start_date:
-            cost_query = cost_query.filter(GoogleAdsApiData.date >= start_date)
+            cost_by_mcc = cost_by_mcc.filter(GoogleAdsApiData.date >= start_date)
         if end_date:
-            cost_query = cost_query.filter(GoogleAdsApiData.date <= end_date)
-        total_cost = float(cost_query.scalar() or 0)
+            cost_by_mcc = cost_by_mcc.filter(GoogleAdsApiData.date <= end_date)
+        cost_by_mcc = cost_by_mcc.group_by(GoogleAdsApiData.mcc_id).all()
+        total_cost = sum(
+            convert_to_usd(float(r.cost or 0), _mcc_currency_map.get(r.mcc_id, 'USD'))
+            for r in cost_by_mcc
+        )
         
         # 计算总佣金（所有状态）
         total_commission_query = db.query(func.sum(AffiliateTransaction.commission_amount)).filter(
@@ -555,17 +568,29 @@ async def get_member_ranking(
         query = query.filter(User.team_id == team_id)
     users = query.all()
     
+    _mcc_currency_map = {
+        mcc.id: getattr(mcc, 'currency', 'USD') or 'USD'
+        for mcc in db.query(GoogleMccAccount).all()
+    }
+    
     rankings = []
     for user in users:
-        # 计算费用
-        cost_query = db.query(func.sum(GoogleAdsApiData.cost)).filter(
+        # 计算费用 — 按 MCC 分组做货币转换
+        cost_by_mcc = db.query(
+            GoogleAdsApiData.mcc_id,
+            func.sum(GoogleAdsApiData.cost).label("cost"),
+        ).filter(
             GoogleAdsApiData.user_id == user.id
         )
         if start_date:
-            cost_query = cost_query.filter(GoogleAdsApiData.date >= start_date)
+            cost_by_mcc = cost_by_mcc.filter(GoogleAdsApiData.date >= start_date)
         if end_date:
-            cost_query = cost_query.filter(GoogleAdsApiData.date <= end_date)
-        cost = float(cost_query.scalar() or 0)
+            cost_by_mcc = cost_by_mcc.filter(GoogleAdsApiData.date <= end_date)
+        cost_by_mcc = cost_by_mcc.group_by(GoogleAdsApiData.mcc_id).all()
+        cost = sum(
+            convert_to_usd(float(r.cost or 0), _mcc_currency_map.get(r.mcc_id, 'USD'))
+            for r in cost_by_mcc
+        )
         
         # 计算总佣金（所有状态）
         total_commission_query = db.query(func.sum(AffiliateTransaction.commission_amount)).filter(
