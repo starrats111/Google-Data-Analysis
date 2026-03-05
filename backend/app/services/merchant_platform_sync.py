@@ -6,6 +6,7 @@
 """
 import json
 import logging
+import time
 from datetime import datetime, timezone
 from typing import Dict, List, Optional, Tuple
 
@@ -189,10 +190,13 @@ class MerchantPlatformSyncService:
                 count = self._sync_single_account(acct, platform_code, token)
                 new_merchants += count
                 synced += 1
+                logger.info("[MerchantSync] %s/%s synced, +%d merchants", platform_code, acct.account_name, count)
             except Exception as exc:
                 logger.exception("sync account %s failed", acct.id)
                 errors.append(f"{acct.platform.platform_code if acct.platform else '?'} account {acct.account_name}: {exc}")
                 failed += 1
+
+            time.sleep(1)
 
         status_changes = self._aggregate_and_notify()
         self.db.commit()
@@ -255,23 +259,37 @@ class MerchantPlatformSyncService:
                 logger.warning("API call %s page %d failed: %s", platform_code, page, exc)
                 break
 
-            items = data if isinstance(data, list) else data.get("data", data.get("items", []))
+            items = self._extract_items(data)
             if not items:
                 break
 
-            if isinstance(items, dict):
-                items = items.get("data", items.get("items", []))
-            valid = [it for it in items if isinstance(it, dict)]
-            if not valid:
-                break
-
-            result.extend(valid)
+            result.extend(items)
 
             if len(items) < max_size:
                 break
             page += 1
+            time.sleep(0.5)
 
         return result
+
+    @staticmethod
+    def _extract_items(data) -> List[dict]:
+        """从 API 响应中提取商家列表，兼容多种嵌套格式。"""
+        if isinstance(data, list):
+            return [it for it in data if isinstance(it, dict)]
+
+        if not isinstance(data, dict):
+            return []
+
+        inner = data.get("data", data.get("items", data.get("list", [])))
+
+        if isinstance(inner, dict):
+            inner = inner.get("list", inner.get("data", inner.get("items", [])))
+
+        if isinstance(inner, list):
+            return [it for it in inner if isinstance(it, dict)]
+
+        return []
 
     def _api_call(self, mode: str, url: str, platform_code: str, token: str,
                   relationship: str, page: int, per_page: int,
