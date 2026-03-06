@@ -18,7 +18,29 @@ SUB_PAGE_KEYWORDS = [
     "collection", "category", "about", "promotion", "new-arrival",
 ]
 
-FILTERED_IMG_KEYWORDS = ["icon", "logo", "svg", "pixel", "spacer", "blank", "1x1"]
+FILTERED_IMG_KEYWORDS = [
+    "icon", "logo", "svg", "pixel", "spacer", "blank", "1x1",
+    "badge", "avatar", "favicon", "sprite", "arrow", "btn", "button",
+    "social", "facebook", "twitter", "instagram", "linkedin", "youtube",
+    "pinterest", "tiktok", "whatsapp", "telegram",
+    "payment", "visa", "mastercard", "paypal", "amex", "stripe",
+    "trust", "secure", "ssl", "verified", "certification",
+    "flag", "rating", "star", "review",
+    "wsj", "nytimes", "forbes", "cnn", "bbc", "reuters",
+    "mens-health", "menshealth", "losangeles", "la-times",
+    "myfitnesspal", "beast", "daily", "gazette", "tribune",
+    "press", "media", "featured-in", "as-seen", "seen-on",
+]
+
+# 产品图优先关键词
+PRODUCT_IMG_KEYWORDS = [
+    "product", "item", "meal", "food", "dish", "menu",
+    "hero", "banner", "feature", "main", "gallery",
+    "collection", "shop", "catalog", "lifestyle",
+    "photo", "image", "pic", "img-large", "img-full",
+]
+
+MIN_IMG_DIMENSION = 200  # 最小宽高像素
 
 HEADERS = {
     "User-Agent": (
@@ -97,13 +119,77 @@ def _extract_page(html: str, url: str) -> Dict:
     og_img = soup.find("meta", attrs={"property": "og:image"})
     if og_img and og_img.get("content"):
         images.append(og_img["content"])
-    for img in soup.find_all("img", src=True)[:15]:
+
+    # 收集所有候选图片并打分
+    candidates = []
+    for img in soup.find_all("img", src=True)[:50]:
         src = img["src"]
-        if any(kw in src.lower() for kw in FILTERED_IMG_KEYWORDS):
+        src_lower = src.lower()
+        # 过滤垃圾图片
+        if any(kw in src_lower for kw in FILTERED_IMG_KEYWORDS):
             continue
         full_url = urljoin(url, src)
-        if full_url not in images:
-            images.append(full_url)
+        if full_url in images:
+            continue
+
+        # 打分：产品图/大图优先
+        score = 0
+        # 尺寸加分
+        w = img.get("width", "")
+        h = img.get("height", "")
+        try:
+            w_val = int(str(w).replace("px", ""))
+            h_val = int(str(h).replace("px", ""))
+            if w_val >= 400 and h_val >= 300:
+                score += 30
+            elif w_val >= MIN_IMG_DIMENSION and h_val >= MIN_IMG_DIMENSION:
+                score += 15
+            elif w_val < 80 or h_val < 80:
+                continue  # 太小，跳过
+        except (ValueError, TypeError):
+            score += 5  # 无尺寸信息，给基础分
+
+        # 产品图关键词加分
+        alt = (img.get("alt") or "").lower()
+        if any(kw in src_lower or kw in alt for kw in PRODUCT_IMG_KEYWORDS):
+            score += 20
+
+        # srcset 大图加分
+        if img.get("srcset"):
+            score += 10
+
+        # 在主内容区域内加分
+        parent = img.parent
+        for _ in range(5):
+            if parent is None:
+                break
+            tag_name = getattr(parent, "name", "")
+            if tag_name in ("main", "article", "section"):
+                score += 15
+                break
+            parent_class = " ".join(parent.get("class", []))
+            if any(kw in parent_class.lower() for kw in ["product", "hero", "gallery", "content", "menu", "meal"]):
+                score += 15
+                break
+            parent = parent.parent
+
+        # 在 nav/footer/header 中扣分
+        parent = img.parent
+        for _ in range(5):
+            if parent is None:
+                break
+            if getattr(parent, "name", "") in ("nav", "footer", "header"):
+                score -= 30
+                break
+            parent = parent.parent
+
+        candidates.append((score, full_url))
+
+    # 按分数排序，取前 10
+    candidates.sort(key=lambda x: x[0], reverse=True)
+    for _, img_url in candidates:
+        if img_url not in images:
+            images.append(img_url)
         if len(images) >= 10:
             break
 
