@@ -198,7 +198,15 @@ const MerchantManagement = () => {
     }
   }
 
+  // #region agent log
+  const _fmCallCount = React.useRef(0)
+  // #endregion
   const fetchMerchants = async (page = merchantPage, pageSize = merchantPageSize) => {
+    // #region agent log
+    const _callId = ++_fmCallCount.current
+    const _caller = new Error().stack?.split('\n')[2]?.trim() || 'unknown'
+    fetch('http://127.0.0.1:7242/ingest/2425e147-b839-4dcc-a908-6c4a4b05caf8',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'6b95b2'},body:JSON.stringify({sessionId:'6b95b2',location:'MerchantManagement.jsx:fetchMerchants',message:'fetchMerchants called',data:{callId:_callId,page,pageSize,caller:_caller},timestamp:Date.now(),hypothesisId:'H2,H3'})}).catch(()=>{});
+    // #endregion
     setLoading(true)
     try {
       const params = {
@@ -222,7 +230,13 @@ const MerchantManagement = () => {
       setMerchantPage(page)
       setMerchantPageSize(pageSize)
       setSelectedMerchantIds([])
+      // #region agent log
+      fetch('http://127.0.0.1:7242/ingest/2425e147-b839-4dcc-a908-6c4a4b05caf8',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'6b95b2'},body:JSON.stringify({sessionId:'6b95b2',location:'MerchantManagement.jsx:fetchMerchants:success',message:'fetchMerchants success',data:{callId:_callId,total:data.total,itemCount:(data.items||[]).length},timestamp:Date.now(),hypothesisId:'H1'})}).catch(()=>{});
+      // #endregion
     } catch (error) {
+      // #region agent log
+      fetch('http://127.0.0.1:7242/ingest/2425e147-b839-4dcc-a908-6c4a4b05caf8',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'6b95b2'},body:JSON.stringify({sessionId:'6b95b2',location:'MerchantManagement.jsx:fetchMerchants:error',message:'fetchMerchants error',data:{callId:_callId,isCanceled:!!error.isCanceled,errorName:error.name,errorMsg:error.message,hasResponse:!!error.response,status:error.response?.status,detail:error.response?.data?.detail},timestamp:Date.now(),hypothesisId:'H1,H2,H4'})}).catch(()=>{});
+      // #endregion
       message.error(error.response?.data?.detail || '获取商家列表失败')
     } finally {
       setLoading(false)

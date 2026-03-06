@@ -41,20 +41,29 @@ async def list_merchants(
 ):
     sd = date.fromisoformat(start_date) if start_date else None
     ed = date.fromisoformat(end_date) if end_date else None
-    return MerchantService.list_merchants(
-        db,
-        platform=platform,
-        category=category,
-        status=status,
-        assigned=assigned,
-        missing_mid=missing_mid,
-        relationship_status=relationship_status,
-        search=search,
-        start_date=sd,
-        end_date=ed,
-        page=page,
-        page_size=page_size,
-    )
+    # region agent log
+    import json as _json, time as _time, pathlib as _pl
+    try:
+        result = MerchantService.list_merchants(
+            db,
+            platform=platform,
+            category=category,
+            status=status,
+            assigned=assigned,
+            missing_mid=missing_mid,
+            relationship_status=relationship_status,
+            search=search,
+            start_date=sd,
+            end_date=ed,
+            page=page,
+            page_size=page_size,
+        )
+        _pl.Path("debug-6b95b2.log").open("a").write(_json.dumps({"sessionId":"6b95b2","location":"merchants.py:list_merchants:ok","message":"list ok","data":{"page":page,"total":result.get("total",0)},"timestamp":_time.time()*1000,"hypothesisId":"H1,H4"})+"\n")
+        return result
+    except Exception as _exc:
+        _pl.Path("debug-6b95b2.log").open("a").write(_json.dumps({"sessionId":"6b95b2","location":"merchants.py:list_merchants:error","message":"list error","data":{"error":str(_exc),"type":type(_exc).__name__},"timestamp":_time.time()*1000,"hypothesisId":"H1,H4"})+"\n")
+        raise
+    # endregion
 
 
 @router.get("/stats")
