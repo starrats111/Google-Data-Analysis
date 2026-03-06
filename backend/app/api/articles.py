@@ -124,7 +124,8 @@ async def create_article(
     publish_dt = None
     if data.publish_date:
         try:
-            publish_dt = datetime.fromisoformat(data.publish_date)
+            date_str = data.publish_date.replace('Z', '+00:00')
+            publish_dt = datetime.fromisoformat(date_str)
         except ValueError:
             raise HTTPException(status_code=400, detail="publish_date 格式无效")
 

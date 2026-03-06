@@ -131,7 +131,7 @@ const PublishWizard = () => {
         title: selectedTitle, content: generatedArticle.content,
         excerpt: generatedArticle.excerpt,
         status: publishDate ? 'draft' : 'published',
-        publish_date: publishDate ? publishDate.toISOString() : null,
+        publish_date: publishDate ? publishDate.toISOString().replace('Z', '+00:00') : null,
         enable_keyword_links: enableLinks,
         meta_title: generatedArticle.meta_title,
         meta_description: generatedArticle.meta_description,
@@ -203,7 +203,7 @@ const PublishWizard = () => {
         content: merchantArticle.content,
         excerpt: merchantArticle.excerpt,
         status: mPublishDate ? 'draft' : 'published',
-        publish_date: mPublishDate ? mPublishDate.toISOString() : null,
+        publish_date: mPublishDate ? mPublishDate.toISOString().replace('Z', '+00:00') : null,
         enable_keyword_links: mEnableLinks,
         meta_title: merchantArticle.meta_title,
         meta_description: merchantArticle.meta_description,
@@ -491,17 +491,20 @@ const PublishWizard = () => {
             <List
               dataSource={merchantTitles}
               renderItem={(item, index) => {
-                const title = typeof item === 'string' ? item : item.title
-                const isSelected = selectedMTitle === title
+                const titleZh = typeof item === 'string' ? item : item.title
+                const titleEn = typeof item === 'string' ? item : (item.title_en || item.title)
+                const displayTitle = language === 'en' ? titleEn : titleZh
+                const subTitle = language === 'en' ? titleZh : titleEn
+                const isSelected = selectedMTitle === displayTitle
                 return (
                   <List.Item
                     style={{ cursor: 'pointer', background: isSelected ? '#e6f7ff' : undefined, borderRadius: 8, padding: '10px 16px', marginBottom: 4 }}
-                    onClick={() => setSelectedMTitle(title)}
+                    onClick={() => setSelectedMTitle(displayTitle)}
                   >
                     <List.Item.Meta
                       avatar={<Tag color={isSelected ? 'blue' : 'default'}>{index + 1}</Tag>}
-                      title={title}
-                      description={typeof item === 'object' ? item.title_en : null}
+                      title={displayTitle}
+                      description={subTitle !== displayTitle ? subTitle : null}
                     />
                   </List.Item>
                 )
@@ -560,6 +563,21 @@ const PublishWizard = () => {
             <Card size="small" style={{ marginBottom: 16, maxHeight: 400, overflow: 'auto' }}>
               <div dangerouslySetInnerHTML={{ __html: merchantArticle.content }} />
             </Card>
+
+            {merchantImages.length > 0 && (
+              <div style={{ marginBottom: 16 }}>
+                <Typography.Title level={5}>商家图片</Typography.Title>
+                <Image.PreviewGroup>
+                  <Space wrap>
+                    {merchantImages.slice(0, 8).map((src, i) => (
+                      <Image key={i} src={src} width={120} height={120} style={{ objectFit: 'cover', borderRadius: 4 }}
+                        fallback="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACklEQVR4nGMAAQAABQABDQottAAAAABJRU5ErkJggg=="
+                      />
+                    ))}
+                  </Space>
+                </Image.PreviewGroup>
+              </div>
+            )}
             <Divider />
             <Space size="large" wrap>
               <div>
