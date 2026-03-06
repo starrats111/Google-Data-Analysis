@@ -34,6 +34,10 @@ const articleApi = {
   crawlMerchant: (data) => api.post('/api/article-gen/crawl', data),
   generateMerchantArticle: (data) => api.post('/api/article-gen/merchant-article', data),
   getTrackingLinks: (params) => api.get('/api/article-gen/tracking-links', { params }),
+
+  // Campaign Links（OPT-015）
+  getCampaignLink: (data) => api.post('/api/article-gen/campaign-link', data),
+  getUserPlatforms: () => api.get('/api/article-gen/user-platforms'),
 }
 
 export default articleApi

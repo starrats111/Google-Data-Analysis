@@ -77,6 +77,17 @@ limiter = Limiter(key_func=get_remote_address)
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
+# 自定义 RateLimitExceeded 处理器（覆盖 slowapi 默认 handler，确保 429 响应包含 CORS 头）
+@app.exception_handler(RateLimitExceeded)
+async def custom_rate_limit_handler(request: Request, exc: RateLimitExceeded):
+    origin = request.headers.get("origin")
+    headers = _get_cors_headers(origin)
+    return JSONResponse(
+        status_code=429,
+        content={"detail": f"请求过于频繁，请稍后再试。{exc.detail}"},
+        headers=headers,
+    )
+
 # CORS配置 - 必须在所有路由之前添加
 # 配置允许跨域请求，解决前端Cloudflare部署访问后端阿里云API的CORS问题
 # 使用最宽松的配置确保所有请求都能通过，包括错误响应
@@ -325,6 +336,19 @@ def _ensure_notification_columns():
             conn.execute(text("ALTER TABLE notifications ADD COLUMN reply_to_id INTEGER"))
 
 
+def _ensure_merchant_columns():
+    """OPT-014: 为 affiliate_merchants 表补齐 last_seen_at / consecutive_misses 列。"""
+    from app.database import engine
+    from sqlalchemy import text, inspect as sa_inspect
+    insp = sa_inspect(engine)
+    existing = {c["name"] for c in insp.get_columns("affiliate_merchants")}
+    with engine.begin() as conn:
+        if "last_seen_at" not in existing:
+            conn.execute(text("ALTER TABLE affiliate_merchants ADD COLUMN last_seen_at DATETIME"))
+        if "consecutive_misses" not in existing:
+            conn.execute(text("ALTER TABLE affiliate_merchants ADD COLUMN consecutive_misses INTEGER DEFAULT 0 NOT NULL"))
+
+
 @app.on_event("startup")
 async def startup_event():
     """应用启动时执行"""
@@ -333,6 +357,10 @@ async def startup_event():
         _ensure_notification_columns()
     except Exception as e:
         print(f"[WARN] 补齐 notification 列失败（首次部署可忽略）: {e}")
+    try:
+        _ensure_merchant_columns()
+    except Exception as e:
+        print(f"[WARN] 补齐 merchant 列失败（首次部署可忽略）: {e}")
     try:
         start_scheduler()
         print("[OK] 定时任务调度器已启动")

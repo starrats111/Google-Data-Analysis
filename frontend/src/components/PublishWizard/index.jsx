@@ -1,11 +1,13 @@
 import React, { useState, useEffect } from 'react'
 import {
   Steps, Card, Input, Button, Space, List, Tag, Checkbox, DatePicker,
-  Switch, message, Spin, Typography, Divider, Radio, Select, AutoComplete, Row, Col, Image,
+  Switch, message, Spin, Typography, Divider, Radio, Select, AutoComplete,
+  Row, Col, Image, Segmented, Descriptions, Alert,
 } from 'antd'
 import {
   RocketOutlined, CheckOutlined, PlusOutlined, DeleteOutlined,
   ShopOutlined, FileTextOutlined, GlobalOutlined, LinkOutlined,
+  SearchOutlined, ThunderboltOutlined,
 } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
 import articleApi from '../../services/articleApi'
@@ -54,10 +56,22 @@ const PublishWizard = () => {
   const [mEnableLinks, setMEnableLinks] = useState(false)
   const [trackingHistory, setTrackingHistory] = useState([])
 
+  // === OPT-015: Campaign Link State ===
+  const [inputMode, setInputMode] = useState('platform')  // 'platform' | 'manual'
+  const [userPlatforms, setUserPlatforms] = useState([])
+  const [selectedPlatform, setSelectedPlatform] = useState(null)
+  const [merchantMid, setMerchantMid] = useState('')
+  const [campaignResult, setCampaignResult] = useState(null)
+  const [selectedRegion, setSelectedRegion] = useState(null)
+  const [fetchingCampaign, setFetchingCampaign] = useState(false)
+
   useEffect(() => {
     if (mode === 'merchant') {
       articleApi.getTrackingLinks({ limit: 50 })
         .then(res => setTrackingHistory(res.data?.items || []))
+        .catch(() => {})
+      articleApi.getUserPlatforms()
+        .then(res => setUserPlatforms(res.data?.platforms || []))
         .catch(() => {})
     }
   }, [mode])
@@ -145,6 +159,58 @@ const PublishWizard = () => {
     } catch (err) {
       message.error('发布失败: ' + (err?.response?.data?.detail || err.message))
     } finally { setSaving(false) }
+  }
+
+  // ==================== OPT-015: Campaign Link Handler ====================
+
+  const handleFetchCampaignLink = async () => {
+    if (!selectedPlatform) { message.warning('请选择平台'); return }
+    if (!merchantMid.trim()) { message.warning('请输入商家 MID'); return }
+    setFetchingCampaign(true)
+    try {
+      const res = await articleApi.getCampaignLink({
+        platform_code: selectedPlatform,
+        merchant_id: merchantMid.trim(),
+      })
+      setCampaignResult(res.data)
+      setSelectedRegion(null)
+      if (res.data?.campaign_link) {
+        setTrackingLink(res.data.campaign_link)
+      }
+      if (res.data?.site_url) {
+        setMerchantUrl(res.data.site_url)
+      }
+      if (!res.data?.campaign_link) {
+        message.warning('该商家未返回 Campaign Link，请切换到手动输入')
+      }
+    } catch (err) {
+      message.error(err?.response?.data?.detail || '获取 Campaign Link 失败')
+    } finally { setFetchingCampaign(false) }
+  }
+
+  const handleRegionSelect = (regionCode) => {
+    setSelectedRegion(regionCode)
+    const region = campaignResult?.support_regions?.find(r => r.code === regionCode)
+    if (region) {
+      setLanguage(region.language_code)
+    }
+  }
+
+  const handlePlatformCrawl = async () => {
+    if (!merchantUrl.trim()) { message.warning('商家网址为空，请先获取 Campaign Link'); return }
+    if (!trackingLink.trim()) { message.warning('追踪链接为空'); return }
+    if (!language) { message.warning('请选择 Support Region 以确定语言'); return }
+    setLoading(true)
+    try {
+      const res = await articleApi.crawlMerchant({ url: merchantUrl, language })
+      setCrawlResult(res.data)
+      setMerchantTitles(res.data?.analysis?.titles || [])
+      setMerchantKeywords(res.data?.analysis?.keywords || [])
+      setMerchantImages(res.data?.images || [])
+      setMStep(1)
+    } catch (err) {
+      message.error('爬取失败: ' + (err?.response?.data?.detail || err.message))
+    } finally { setLoading(false) }
   }
 
   // ==================== Merchant Mode Handlers ====================
@@ -417,37 +483,168 @@ const PublishWizard = () => {
       <Steps current={mStep} items={mSteps} style={{ marginBottom: 32 }} />
       <Spin spinning={loading}>
 
-        {/* Step 0: 输入商家信息 */}
+        {/* Step 0: 输入商家信息（OPT-015 双入口） */}
         {mStep === 0 && (
-          <div style={{ maxWidth: 600, margin: '0 auto' }}>
-            <Typography.Title level={5}><ShopOutlined /> 商家网址</Typography.Title>
-            <Input
-              placeholder="https://www.example.com"
-              value={merchantUrl}
-              onChange={e => setMerchantUrl(e.target.value)}
-              prefix={<GlobalOutlined />}
-              size="large"
-            />
+          <div style={{ maxWidth: 640, margin: '0 auto' }}>
+            <div style={{ textAlign: 'center', marginBottom: 24 }}>
+              <Segmented
+                value={inputMode}
+                onChange={setInputMode}
+                options={[
+                  { value: 'platform', label: '从平台获取', icon: <ThunderboltOutlined /> },
+                  { value: 'manual', label: '手动输入', icon: <FileTextOutlined /> },
+                ]}
+                size="large"
+              />
+            </div>
 
-            <Typography.Title level={5} style={{ marginTop: 24 }}><LinkOutlined /> 追踪链接</Typography.Title>
-            <AutoComplete
-              options={trackingOptions}
-              value={trackingLink}
-              onChange={setTrackingLink}
-              placeholder="输入追踪链接（支持历史记录自动补全）"
-              style={{ width: '100%' }}
-              filterOption={(input, option) =>
-                (option?.label ?? '').toLowerCase().includes(input.toLowerCase())
-              }
-            />
+            {inputMode === 'platform' ? (
+              <>
+                <Row gutter={16}>
+                  <Col span={12}>
+                    <Typography.Title level={5}>选择平台</Typography.Title>
+                    <Select
+                      placeholder="选择平台"
+                      value={selectedPlatform}
+                      onChange={setSelectedPlatform}
+                      options={userPlatforms.map(p => ({ value: p.platform_code, label: p.platform_name }))}
+                      style={{ width: '100%' }}
+                      size="large"
+                      notFoundContent="暂无可用平台账号"
+                    />
+                  </Col>
+                  <Col span={12}>
+                    <Typography.Title level={5}>商家 MID</Typography.Title>
+                    <Input
+                      placeholder="输入商家 MID"
+                      value={merchantMid}
+                      onChange={e => setMerchantMid(e.target.value)}
+                      size="large"
+                    />
+                  </Col>
+                </Row>
 
-            <Typography.Title level={5} style={{ marginTop: 24 }}>文章语言</Typography.Title>
-            <Select value={language} onChange={setLanguage} options={LANGUAGES} style={{ width: 200 }} />
+                <Button
+                  type="primary"
+                  icon={<SearchOutlined />}
+                  onClick={handleFetchCampaignLink}
+                  loading={fetchingCampaign}
+                  style={{ marginTop: 16 }}
+                  block
+                  size="large"
+                >
+                  获取 Campaign Link
+                </Button>
 
-            <Divider />
-            <Button type="primary" icon={<RocketOutlined />} onClick={handleCrawl} size="large" block>
-              开始爬取 & AI 分析
-            </Button>
+                {campaignResult && (
+                  <div style={{ marginTop: 24 }}>
+                    <Card size="small" style={{ background: '#f6ffed', marginBottom: 16 }}>
+                      <Descriptions column={1} size="small">
+                        <Descriptions.Item label="商家名称">{campaignResult.merchant_name || '-'}</Descriptions.Item>
+                        <Descriptions.Item label="Campaign Link">
+                          {campaignResult.campaign_link ? (
+                            <Typography.Text copyable style={{ color: '#52c41a' }}>{campaignResult.campaign_link}</Typography.Text>
+                          ) : (
+                            <Tag color="warning">未返回</Tag>
+                          )}
+                        </Descriptions.Item>
+                        <Descriptions.Item label="商家网址">{campaignResult.site_url || '-'}</Descriptions.Item>
+                        {campaignResult.categories && (
+                          <Descriptions.Item label="品类">{campaignResult.categories}</Descriptions.Item>
+                        )}
+                        {campaignResult.commission_rate && (
+                          <Descriptions.Item label="佣金率">{campaignResult.commission_rate}</Descriptions.Item>
+                        )}
+                      </Descriptions>
+                    </Card>
+
+                    {campaignResult.support_regions?.length > 0 && (
+                      <div style={{ marginBottom: 16 }}>
+                        <Typography.Title level={5}>选择 Support Region</Typography.Title>
+                        <Select
+                          placeholder="选择目标区域"
+                          value={selectedRegion}
+                          onChange={handleRegionSelect}
+                          style={{ width: '100%' }}
+                          options={campaignResult.support_regions.map(r => ({
+                            value: r.code,
+                            label: `${r.code} — ${r.language}`,
+                          }))}
+                        />
+                        {selectedRegion && (
+                          <div style={{ marginTop: 8 }}>
+                            <Typography.Text>文章语言：</Typography.Text>
+                            <Tag color="blue" style={{ marginLeft: 8 }}>
+                              {campaignResult.support_regions.find(r => r.code === selectedRegion)?.language || language}
+                            </Tag>
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {campaignResult.support_regions?.length === 0 && (
+                      <div style={{ marginBottom: 16 }}>
+                        <Typography.Title level={5}>文章语言</Typography.Title>
+                        <Select value={language} onChange={setLanguage} options={LANGUAGES} style={{ width: 200 }} />
+                      </div>
+                    )}
+
+                    {!campaignResult.campaign_link && (
+                      <Alert
+                        type="warning"
+                        message="该商家未返回 Campaign Link"
+                        description="建议切换到"手动输入"模式手动粘贴追踪链接"
+                        showIcon
+                        style={{ marginBottom: 16 }}
+                      />
+                    )}
+
+                    <Divider />
+                    <Button
+                      type="primary"
+                      icon={<RocketOutlined />}
+                      onClick={handlePlatformCrawl}
+                      size="large"
+                      block
+                      disabled={!merchantUrl || !trackingLink}
+                    >
+                      开始爬取 & AI 分析
+                    </Button>
+                  </div>
+                )}
+              </>
+            ) : (
+              <>
+                <Typography.Title level={5}><ShopOutlined /> 商家网址</Typography.Title>
+                <Input
+                  placeholder="https://www.example.com"
+                  value={merchantUrl}
+                  onChange={e => setMerchantUrl(e.target.value)}
+                  prefix={<GlobalOutlined />}
+                  size="large"
+                />
+
+                <Typography.Title level={5} style={{ marginTop: 24 }}><LinkOutlined /> 追踪链接</Typography.Title>
+                <AutoComplete
+                  options={trackingOptions}
+                  value={trackingLink}
+                  onChange={setTrackingLink}
+                  placeholder="输入追踪链接（支持历史记录自动补全）"
+                  style={{ width: '100%' }}
+                  filterOption={(input, option) =>
+                    (option?.label ?? '').toLowerCase().includes(input.toLowerCase())
+                  }
+                />
+
+                <Typography.Title level={5} style={{ marginTop: 24 }}>文章语言</Typography.Title>
+                <Select value={language} onChange={setLanguage} options={LANGUAGES} style={{ width: 200 }} />
+
+                <Divider />
+                <Button type="primary" icon={<RocketOutlined />} onClick={handleCrawl} size="large" block>
+                  开始爬取 & AI 分析
+                </Button>
+              </>
+            )}
           </div>
         )}
 

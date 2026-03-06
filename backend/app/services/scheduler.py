@@ -841,22 +841,26 @@ def merchant_discover_job():
 
 
 def merchant_platform_sync_job():
-    """商家平台 API 同步任务（OPT-009，每天 16:00 执行）"""
+    """商家平台 API 同步任务（OPT-014：每天只同步 1 个平台，7 天轮换）"""
     db: Session = SessionLocal()
     try:
         logger.info("=" * 60)
-        logger.info("【商家平台同步开始】")
+        logger.info("【商家平台同步开始（OPT-014 单平台模式）】")
         from app.services.merchant_platform_sync import MerchantPlatformSyncService
         svc = MerchantPlatformSyncService(db)
-        result = svc.sync_all()
-        logger.info(
-            "【商家平台同步完成】同步 %d/%d 账号，新增 %d 商家，状态变更 %d",
-            result["synced_accounts"], result["total_accounts"],
-            result["new_merchants"], result["status_changes"],
-        )
-        if result["errors"]:
-            for err in result["errors"]:
-                logger.warning("  同步错误: %s", err)
+        result = svc.sync_today_platform()
+
+        if result.get("error"):
+            logger.warning("【商家平台同步跳过】平台 %s: %s", result["platform"], result["error"])
+        else:
+            logger.info(
+                "【商家平台同步完成】平台 %s（账号 %s）：新增 %d 商家，API 可见 %d，状态变更 %d，下架 %d",
+                result["platform"], result.get("account", "?"),
+                result.get("new_merchants", 0),
+                result.get("seen_merchants", 0),
+                result.get("status_changes", 0),
+                result.get("delisted", 0),
+            )
         logger.info("=" * 60)
     except Exception as e:
         logger.error(f"商家平台同步任务异常: {e}", exc_info=True)

@@ -1,5 +1,5 @@
 """
-AI 生成 API（OPT-011/012）
+AI 生成 API（OPT-011/012/015）
 """
 import logging
 from typing import Optional, List
@@ -15,6 +15,7 @@ from app.models.user import User
 from app.models.tracking_link import PubTrackingLink
 from app.services.article_gen_service import ArticleGenService
 from app.services.merchant_crawler import crawl as crawl_merchant
+from app.services.campaign_link_service import CampaignLinkService
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/article-gen", tags=["AI生成"])
@@ -48,6 +49,11 @@ class MerchantArticleRequest(BaseModel):
     tracking_link: str
     keywords: Optional[List[str]] = None
     language: str = "zh"
+
+
+class CampaignLinkRequest(BaseModel):
+    platform_code: str
+    merchant_id: str
 
 
 @router.post("/titles")
@@ -194,3 +200,24 @@ async def get_tracking_links(
             for lk in links
         ]
     }
+
+
+@router.post("/campaign-link")
+async def get_campaign_link(
+    data: CampaignLinkRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """获取 Campaign Link（OPT-015）"""
+    svc = CampaignLinkService(db)
+    return svc.get_campaign_link(current_user.id, data.platform_code, data.merchant_id)
+
+
+@router.get("/user-platforms")
+async def get_user_platforms(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """获取当前用户有账号的平台列表（OPT-015）"""
+    svc = CampaignLinkService(db)
+    return {"platforms": svc.get_user_platforms(current_user.id)}

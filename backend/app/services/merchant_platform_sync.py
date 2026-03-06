@@ -1,14 +1,16 @@
 """
-商家平台 API 同步服务（OPT-009）
+商家平台 API 同步服务（OPT-009 + OPT-014）
 
 对 7 个联盟平台（CF / CG / BSH / PM / LB / LH / RW）拉取商家列表和申请状态，
 写入 AffiliateMerchant + MerchantAccountRelationship，并在状态变更时生成通知。
+
+OPT-014: 每天只同步 1 个平台（7 天轮换），每平台单 Token 拉取，新增下架检测。
 """
 import json
 import logging
 import time
-from datetime import datetime, timezone
-from typing import Dict, List, Optional, Tuple
+from datetime import date, datetime, timezone
+from typing import Dict, List, Optional, Set, Tuple
 
 import httpx
 
@@ -24,6 +26,8 @@ from app.services.api_analysis_service import ApiAnalysisService
 from app.utils.crypto import decrypt_token
 
 logger = logging.getLogger(__name__)
+
+PLATFORM_SCHEDULE = ["CF", "CG", "BSH", "PM", "LB", "LH", "RW"]
 
 PLATFORM_API_CONFIG: Dict[str, dict] = {
     "CF": {
@@ -70,7 +74,9 @@ PLATFORM_API_CONFIG: Dict[str, dict] = {
         "url": "https://www.linkhaitao.com/api.php?mod=medium&op=merchantBasicList3",
         "page_key": "page",
         "size_key": "per_page",
-        "max_size": 40000,
+        "max_size": 100,
+        "skip_relationship_filter": True,  # LH API 不支持 relationship 过滤，一次性拉全部
+        "rate_limit_sleep": 4,  # LH API 限制 3次/10秒
     },
     "RW": {
         "mode": "post_form",
@@ -155,7 +161,60 @@ class MerchantPlatformSyncService:
         self.db = db
 
     # ------------------------------------------------------------------
-    # 入口
+    # OPT-014: 每日单平台同步入口
+    # ------------------------------------------------------------------
+
+    def sync_today_platform(self) -> dict:
+        """根据星期几选取对应平台，使用单 Token 拉取，并执行下架检测。"""
+        weekday = date.today().weekday()  # 0=Mon..6=Sun
+        platform_code = PLATFORM_SCHEDULE[weekday]
+
+        logger.info("[MerchantSync] Today weekday=%d, syncing platform: %s", weekday, platform_code)
+
+        token, acct = self._pick_token_for_platform(platform_code)
+        if not token:
+            logger.warning("[MerchantSync] No valid token for platform %s, skipping", platform_code)
+            return {"platform": platform_code, "error": "no_token"}
+
+        try:
+            new_count, seen_ids = self._sync_single_account(acct, platform_code, token)
+        except Exception as exc:
+            self.db.rollback()
+            logger.exception("[MerchantSync] sync %s/%s failed", platform_code, acct.account_name)
+            return {"platform": platform_code, "error": str(exc)}
+
+        status_changes = self._aggregate_and_notify()
+        delisted_count = self._detect_delisted(platform_code, seen_ids)
+
+        self.db.commit()
+        return {
+            "platform": platform_code,
+            "account": acct.account_name,
+            "new_merchants": new_count,
+            "seen_merchants": len(seen_ids),
+            "status_changes": status_changes,
+            "delisted": delisted_count,
+        }
+
+    def _pick_token_for_platform(self, platform_code: str) -> Tuple[Optional[str], Optional[AffiliateAccount]]:
+        """为指定平台选取一个有效 Token 的活跃账号。"""
+        accounts = (
+            self.db.query(AffiliateAccount)
+            .join(AffiliatePlatform)
+            .filter(
+                AffiliateAccount.is_active.is_(True),
+                AffiliatePlatform.platform_code == platform_code,
+            )
+            .all()
+        )
+        for acct in accounts:
+            token = self._resolve_token(acct, platform_code)
+            if token:
+                return token, acct
+        return None, None
+
+    # ------------------------------------------------------------------
+    # 全量同步入口（保留，手动触发用）
     # ------------------------------------------------------------------
 
     def sync_all(self) -> dict:
@@ -190,7 +249,7 @@ class MerchantPlatformSyncService:
                     skipped += 1
                     continue
 
-                count = self._sync_single_account(acct, platform_code, token)
+                count, _ = self._sync_single_account(acct, platform_code, token)
                 new_merchants += count
                 synced += 1
                 logger.info("[MerchantSync] %s/%s synced, +%d merchants", platform_code, acct_name, count)
@@ -219,32 +278,53 @@ class MerchantPlatformSyncService:
     # 单账号同步
     # ------------------------------------------------------------------
 
-    def _sync_single_account(self, acct: AffiliateAccount, platform_code: str, token: str) -> int:
+    def _sync_single_account(self, acct: AffiliateAccount, platform_code: str, token: str) -> Tuple[int, Set[int]]:
+        """同步单个账号的商家数据。返回 (新增数量, 本次 upsert 的所有 merchant DB id 集合)。"""
         cfg = PLATFORM_API_CONFIG[platform_code]
+        skip_rel = cfg.get("skip_relationship_filter", False)
 
         unique: Dict[str, tuple] = {}
-        for rel_value in RELATIONSHIP_VALUES:
-            for raw in self._fetch_platform_merchants(cfg, platform_code, token, rel_value):
+
+        if skip_rel:
+            for raw in self._fetch_platform_merchants(cfg, platform_code, token, ""):
                 mapped = _map_merchant_fields(raw, platform_code, cfg["mode"])
                 mid = _extract_mid(mapped)
-                rel_status = _normalize_relationship(mapped["relationship"])
+                rel_status = _normalize_relationship(mapped["relationship"]) if mapped.get("relationship") else "unknown"
                 key = mid if mid else (mapped.get("merchant_name") or "").strip().lower()
                 if not key:
                     continue
                 pri = PRIORITY.get(rel_status, 0)
                 if key not in unique or pri > unique[key][3]:
                     unique[key] = (mapped, mid, rel_status, pri)
+        else:
+            for rel_value in RELATIONSHIP_VALUES:
+                for raw in self._fetch_platform_merchants(cfg, platform_code, token, rel_value):
+                    mapped = _map_merchant_fields(raw, platform_code, cfg["mode"])
+                    mid = _extract_mid(mapped)
+                    rel_status = _normalize_relationship(mapped["relationship"])
+                    key = mid if mid else (mapped.get("merchant_name") or "").strip().lower()
+                    if not key:
+                        continue
+                    pri = PRIORITY.get(rel_status, 0)
+                    if key not in unique or pri > unique[key][3]:
+                        unique[key] = (mapped, mid, rel_status, pri)
 
         new_count = 0
+        seen_db_ids: Set[int] = set()
+        batch_idx = 0
         for mapped, mid, rel_status, _ in unique.values():
             merchant = self._upsert_merchant(platform_code, mapped, mid)
             if merchant._sa_instance_state.pending:
                 self.db.flush()
                 new_count += 1
+            seen_db_ids.add(merchant.id)
             self._upsert_relationship(merchant, acct, rel_status)
+            batch_idx += 1
+            if batch_idx % 200 == 0:
+                self.db.flush()
 
         self.db.flush()
-        return new_count
+        return new_count, seen_db_ids
 
     # ------------------------------------------------------------------
     # 平台 API 调用（含分页）
@@ -256,6 +336,7 @@ class MerchantPlatformSyncService:
         page_key = cfg["page_key"]
         size_key = cfg["size_key"]
         max_size = cfg["max_size"]
+        rate_sleep = cfg.get("rate_limit_sleep", 0.5)
 
         result: List[dict] = []
         page = 1
@@ -272,11 +353,12 @@ class MerchantPlatformSyncService:
                 break
 
             result.extend(items)
+            logger.info("[MerchantSync] %s page %d: got %d items (total %d)", platform_code, page, len(items), len(result))
 
             if len(items) < max_size:
                 break
             page += 1
-            time.sleep(0.5)
+            time.sleep(rate_sleep)
 
         return result
 
@@ -308,26 +390,29 @@ class MerchantPlatformSyncService:
             payload = {
                 "source": cfg["source"],
                 "token": token,
-                "relationship": relationship,
                 page_key: page,
                 size_key: per_page,
             }
+            if relationship:
+                payload["relationship"] = relationship
             resp = httpx.post(url, json=payload, timeout=timeout)
         elif mode == "post_form":
             form_data = {
                 "token": token,
-                "relationship": relationship,
                 page_key: str(page),
                 size_key: str(per_page),
             }
+            if relationship:
+                form_data["relationship"] = relationship
             resp = httpx.post(url, data=form_data, timeout=timeout)
         elif mode in ("get", "get_post"):
             params = {
                 "token": token,
-                "relationship": relationship,
                 page_key: str(page),
                 size_key: str(per_page),
             }
+            if relationship:
+                params["relationship"] = relationship
             resp = httpx.get(url, params=params, timeout=timeout)
         else:
             raise ValueError(f"Unknown mode: {mode}")
@@ -394,6 +479,7 @@ class MerchantPlatformSyncService:
             self.db.add(merchant)
             self.db.flush()
 
+        merchant.last_seen_at = datetime.now(timezone.utc)
         return merchant
 
     def _upsert_relationship(self, merchant: AffiliateMerchant, acct: AffiliateAccount, rel_status: str):
@@ -435,6 +521,68 @@ class MerchantPlatformSyncService:
                 if mar:
                     mar.relationship_status = rel_status
                     mar.synced_at = now
+
+    # ------------------------------------------------------------------
+    # OPT-014: 下架检测
+    # ------------------------------------------------------------------
+
+    def _detect_delisted(self, platform_code: str, seen_db_ids: Set[int]) -> int:
+        """检测并标记下架商家。连续 2 次缺席标记为 delisted 并通知。"""
+        canonical = ApiAnalysisService.normalize_platform_code(platform_code)
+        now = datetime.now(timezone.utc)
+
+        db_merchants = (
+            self.db.query(AffiliateMerchant)
+            .filter(
+                AffiliateMerchant.platform == canonical,
+                AffiliateMerchant.status.in_(["active", "delisted"]),
+                AffiliateMerchant.source_type == "merchant_api",
+                AffiliateMerchant.last_seen_at.isnot(None),
+            )
+            .all()
+        )
+
+        newly_delisted = []
+        for m in db_merchants:
+            if m.id in seen_db_ids:
+                m.consecutive_misses = 0
+                m.last_seen_at = now
+                if m.status == "delisted":
+                    m.status = "active"
+                    logger.info("[MerchantSync] Merchant %s (%s) re-listed", m.merchant_name, platform_code)
+            else:
+                m.consecutive_misses = (m.consecutive_misses or 0) + 1
+                if m.consecutive_misses >= 2:
+                    m.status = "delisted"
+                    newly_delisted.append(m)
+
+        if newly_delisted:
+            self._send_delist_notifications(newly_delisted, platform_code)
+            logger.info("[MerchantSync] %d merchants delisted for platform %s", len(newly_delisted), platform_code)
+
+        return len(newly_delisted)
+
+    def _send_delist_notifications(self, merchants: List[AffiliateMerchant], platform_code: str):
+        """为下架商家发送全站通知（manager + leader）。"""
+        recipients = (
+            self.db.query(User)
+            .filter(or_(User.role == UserRole.MANAGER, User.role == UserRole.LEADER))
+            .all()
+        )
+
+        for m in merchants:
+            title = "商家下架提醒"
+            content = (
+                f"商家 {m.merchant_name}（{platform_code}，MID: {m.merchant_id or '无'}）"
+                f"已连续 {m.consecutive_misses} 次未在平台 API 中出现，已标记为下架。"
+            )
+            for user in recipients:
+                self.db.add(Notification(
+                    user_id=user.id,
+                    type="merchant_delisted",
+                    title=title,
+                    content=content,
+                ))
 
     # ------------------------------------------------------------------
     # 聚合 & 通知

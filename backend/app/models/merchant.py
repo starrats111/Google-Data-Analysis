@@ -27,9 +27,13 @@ class AffiliateMerchant(Base):
     missing_mid = Column(Integer, default=0, nullable=False, index=True)
     id_confidence = Column(String(16), default="high", nullable=False, server_default="high")
     source_type = Column(String(16), default="transaction", nullable=False, server_default="transaction")
-    relationship_status = Column(String(20), nullable=True, index=True)  # OPT-009: joined/pending/rejected（平台同步写入）
+    relationship_status = Column(String(20), nullable=True, index=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+    # OPT-014: 平台同步下架检测
+    last_seen_at = Column(DateTime(timezone=True), nullable=True)
+    consecutive_misses = Column(Integer, default=0, nullable=False, server_default="0")
 
     assignments = relationship("MerchantAssignment", back_populates="merchant", cascade="all, delete-orphan")
 
