@@ -212,6 +212,7 @@ const PublishWizard = () => {
         merchant_url: merchantUrl,
         tracking_link: trackingLink,
         language,
+        category_name: merchantArticle.category || crawlResult?.analysis?.category || null,
       }
       await articleApi.createArticle(payload)
       message.success(mPublishDate ? '文章已保存，将定时发布' : '文章已发布')

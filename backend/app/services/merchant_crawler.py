@@ -118,15 +118,18 @@ def _extract_page(html: str, url: str) -> Dict:
     images = []
     og_img = soup.find("meta", attrs={"property": "og:image"})
     if og_img and og_img.get("content"):
-        images.append(og_img["content"])
+        og_url = og_img["content"]
+        og_lower = og_url.lower()
+        if not any(kw in og_lower for kw in FILTERED_IMG_KEYWORDS):
+            images.append(og_url)
 
-    # 收集所有候选图片并打分
     candidates = []
     for img in soup.find_all("img", src=True)[:50]:
         src = img["src"]
         src_lower = src.lower()
-        # 过滤垃圾图片
-        if any(kw in src_lower for kw in FILTERED_IMG_KEYWORDS):
+        alt = (img.get("alt") or "").lower()
+        combined = src_lower + " " + alt
+        if any(kw in combined for kw in FILTERED_IMG_KEYWORDS):
             continue
         full_url = urljoin(url, src)
         if full_url in images:

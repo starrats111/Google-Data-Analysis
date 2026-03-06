@@ -28,6 +28,7 @@ class ArticleCreate(BaseModel):
     excerpt: Optional[str] = None
     status: str = "draft"
     category_id: Optional[int] = None
+    category_name: Optional[str] = None
     author: Optional[str] = None
     featured_image: Optional[str] = None
     publish_date: Optional[str] = None
@@ -129,13 +130,30 @@ async def create_article(
         except ValueError:
             raise HTTPException(status_code=400, detail="publish_date 格式无效")
 
+    category_id = data.category_id
+    if not category_id and data.category_name:
+        cat = (
+            db.query(PubCategory)
+            .filter(PubCategory.name == data.category_name, PubCategory.deleted_at.is_(None))
+            .first()
+        )
+        if not cat:
+            cat = PubCategory(
+                name=data.category_name,
+                slug=generate_slug(data.category_name),
+                auto_created=True,
+            )
+            db.add(cat)
+            db.flush()
+        category_id = cat.id
+
     article = PubArticle(
         title=data.title,
         slug=slug,
         content=data.content,
         excerpt=data.excerpt,
         status=data.status,
-        category_id=data.category_id,
+        category_id=category_id,
         user_id=current_user.id,
         author=data.author or current_user.display_name or current_user.username,
         featured_image=data.featured_image,
