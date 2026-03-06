@@ -227,6 +227,10 @@ const PublishWizard = () => {
     else setSelectedMKeywords([...selectedMKeywords, kw])
   }
 
+  const handleRemoveMerchantImage = (index) => {
+    setMerchantImages(prev => prev.filter((_, i) => i !== index))
+  }
+
   // ==================== Tracking link autocomplete ====================
   const trackingOptions = trackingHistory.map(t => ({
     value: t.tracking_link,
@@ -475,16 +479,21 @@ const PublishWizard = () => {
 
             {merchantImages.length > 0 && (
               <div style={{ marginBottom: 16 }}>
-                <Typography.Title level={5}>商家图片</Typography.Title>
-                <Image.PreviewGroup>
-                  <Space wrap>
-                    {merchantImages.slice(0, 8).map((src, i) => (
-                      <Image key={i} src={src} width={100} height={100} style={{ objectFit: 'cover', borderRadius: 4 }}
+                <Typography.Title level={5}>商家图片 <Typography.Text type="secondary" style={{ fontSize: 12 }}>点击 × 可移除不需要的图片</Typography.Text></Typography.Title>
+                <Space wrap>
+                  {merchantImages.slice(0, 8).map((src, i) => (
+                    <div key={i} style={{ position: 'relative', display: 'inline-block' }}>
+                      <Image src={src} width={100} height={100} style={{ objectFit: 'cover', borderRadius: 4 }}
                         fallback="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACklEQVR4nGMAAQAABQABDQottAAAAABJRU5ErkJggg=="
                       />
-                    ))}
-                  </Space>
-                </Image.PreviewGroup>
+                      <Button
+                        type="text" danger size="small" icon={<DeleteOutlined />}
+                        onClick={() => handleRemoveMerchantImage(i)}
+                        style={{ position: 'absolute', top: -6, right: -6, background: '#fff', borderRadius: '50%', boxShadow: '0 1px 4px rgba(0,0,0,0.2)', width: 22, height: 22, padding: 0, minWidth: 22 }}
+                      />
+                    </div>
+                  ))}
+                </Space>
               </div>
             )}
 
@@ -567,16 +576,21 @@ const PublishWizard = () => {
 
             {merchantImages.length > 0 && (
               <div style={{ marginBottom: 16 }}>
-                <Typography.Title level={5}>商家图片</Typography.Title>
-                <Image.PreviewGroup>
-                  <Space wrap>
-                    {merchantImages.slice(0, 8).map((src, i) => (
-                      <Image key={i} src={src} width={120} height={120} style={{ objectFit: 'cover', borderRadius: 4 }}
+                <Typography.Title level={5}>商家图片 <Typography.Text type="secondary" style={{ fontSize: 12 }}>点击 × 可移除</Typography.Text></Typography.Title>
+                <Space wrap>
+                  {merchantImages.slice(0, 8).map((src, i) => (
+                    <div key={i} style={{ position: 'relative', display: 'inline-block' }}>
+                      <Image src={src} width={120} height={120} style={{ objectFit: 'cover', borderRadius: 4 }}
                         fallback="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACklEQVR4nGMAAQAABQABDQottAAAAABJRU5ErkJggg=="
                       />
-                    ))}
-                  </Space>
-                </Image.PreviewGroup>
+                      <Button
+                        type="text" danger size="small" icon={<DeleteOutlined />}
+                        onClick={() => handleRemoveMerchantImage(i)}
+                        style={{ position: 'absolute', top: -6, right: -6, background: '#fff', borderRadius: '50%', boxShadow: '0 1px 4px rgba(0,0,0,0.2)', width: 22, height: 22, padding: 0, minWidth: 22 }}
+                      />
+                    </div>
+                  ))}
+                </Space>
               </div>
             )}
             <Divider />
