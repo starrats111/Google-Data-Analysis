@@ -25,11 +25,19 @@ FILTERED_IMG_KEYWORDS = [
     "pinterest", "tiktok", "whatsapp", "telegram",
     "payment", "visa", "mastercard", "paypal", "amex", "stripe",
     "trust", "secure", "ssl", "verified", "certification",
-    "flag", "rating", "star", "review",
+    "flag", "rating", "star-rating", "review-star",
     "wsj", "nytimes", "forbes", "cnn", "bbc", "reuters",
     "mens-health", "menshealth", "losangeles", "la-times",
     "myfitnesspal", "beast", "daily", "gazette", "tribune",
     "press", "media", "featured-in", "as-seen", "seen-on",
+    "wall-street", "new-york-times", "time-magazine",
+]
+
+PRESS_SECTION_KEYWORDS = [
+    "press", "media", "featured", "as-seen", "seen-on", "seen-in",
+    "trusted", "logo", "logos", "partners", "endorsement",
+    "publication", "mentions", "coverage", "recognition",
+    "as_seen", "asSeen", "in-the-news", "news-logo",
 ]
 
 # 产品图优先关键词
@@ -124,7 +132,7 @@ def _extract_page(html: str, url: str) -> Dict:
             images.append(og_url)
 
     candidates = []
-    for img in soup.find_all("img", src=True)[:50]:
+    for img in soup.find_all("img", src=True)[:60]:
         src = img["src"]
         src_lower = src.lower()
         alt = (img.get("alt") or "").lower()
@@ -135,9 +143,26 @@ def _extract_page(html: str, url: str) -> Dict:
         if full_url in images:
             continue
 
-        # 打分：产品图/大图优先
         score = 0
-        # 尺寸加分
+        is_in_press_section = False
+
+        # --- 父容器检测：press/media/logo 区域直接跳过 ---
+        ancestor = img.parent
+        for _ in range(8):
+            if ancestor is None:
+                break
+            anc_class = " ".join(ancestor.get("class", [])).lower() if hasattr(ancestor, "get") else ""
+            anc_id = (ancestor.get("id") or "").lower() if hasattr(ancestor, "get") else ""
+            anc_ctx = anc_class + " " + anc_id
+            if any(kw in anc_ctx for kw in PRESS_SECTION_KEYWORDS):
+                is_in_press_section = True
+                break
+            ancestor = ancestor.parent
+
+        if is_in_press_section:
+            continue
+
+        # --- 尺寸评分 ---
         w = img.get("width", "")
         h = img.get("height", "")
         try:
@@ -147,21 +172,20 @@ def _extract_page(html: str, url: str) -> Dict:
                 score += 30
             elif w_val >= MIN_IMG_DIMENSION and h_val >= MIN_IMG_DIMENSION:
                 score += 15
-            elif w_val < 80 or h_val < 80:
-                continue  # 太小，跳过
+            elif w_val < 100 or h_val < 100:
+                continue
         except (ValueError, TypeError):
-            score += 5  # 无尺寸信息，给基础分
+            score += 3
 
-        # 产品图关键词加分
-        alt = (img.get("alt") or "").lower()
+        # --- 产品图关键词加分 ---
         if any(kw in src_lower or kw in alt for kw in PRODUCT_IMG_KEYWORDS):
             score += 20
 
-        # srcset 大图加分
+        # --- srcset 大图加分 ---
         if img.get("srcset"):
             score += 10
 
-        # 在主内容区域内加分
+        # --- 主内容区域加分 ---
         parent = img.parent
         for _ in range(5):
             if parent is None:
@@ -171,12 +195,16 @@ def _extract_page(html: str, url: str) -> Dict:
                 score += 15
                 break
             parent_class = " ".join(parent.get("class", []))
-            if any(kw in parent_class.lower() for kw in ["product", "hero", "gallery", "content", "menu", "meal"]):
+            if any(kw in parent_class.lower() for kw in [
+                "product", "hero", "gallery", "content", "menu", "meal",
+                "recipe", "dish", "item", "card", "grid", "collection",
+                "shop", "catalog", "feature", "banner", "slider",
+            ]):
                 score += 15
                 break
             parent = parent.parent
 
-        # 在 nav/footer/header 中扣分
+        # --- nav/footer/header 扣分 ---
         parent = img.parent
         for _ in range(5):
             if parent is None:
