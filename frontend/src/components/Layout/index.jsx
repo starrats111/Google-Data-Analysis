@@ -23,6 +23,7 @@ import {
   ShopOutlined,
   FundViewOutlined,
   CommentOutlined,
+  GlobalOutlined,
 } from '@ant-design/icons'
 import { useAuth } from '../../store/authStore'
 import ChangelogModal, { hasUnreadChangelog } from '../ChangelogModal'
@@ -231,6 +232,7 @@ const Layout = () => {
         { key: '/articles/publish', icon: <EditOutlined />, label: '发布文章' },
         { key: '/articles/titles', icon: <FileTextOutlined />, label: '标题库' },
         { key: '/articles/categories', icon: <DatabaseOutlined />, label: '分类管理' },
+        { key: '/articles/sites', icon: <GlobalOutlined />, label: '网站管理' },
       ],
     },
     {
@@ -292,6 +294,7 @@ const Layout = () => {
         { key: '/articles/publish', icon: <EditOutlined />, label: '发布文章' },
         { key: '/articles/titles', icon: <FileTextOutlined />, label: '标题库' },
         { key: '/articles/categories', icon: <DatabaseOutlined />, label: '分类管理' },
+        { key: '/articles/sites', icon: <GlobalOutlined />, label: '网站管理' },
       ],
     },
     {
@@ -353,6 +356,7 @@ const Layout = () => {
         { key: '/articles/publish', icon: <EditOutlined />, label: '发布文章' },
         { key: '/articles/titles', icon: <FileTextOutlined />, label: '标题库' },
         { key: '/articles/categories', icon: <DatabaseOutlined />, label: '分类管理' },
+        { key: '/articles/sites', icon: <GlobalOutlined />, label: '网站管理' },
       ],
     },
     {

@@ -16,6 +16,8 @@ from app.models.article import (
     PubArticle, PubCategory, PubTag, PubArticleTag,
     PubArticleLink, PubArticleImage, PubArticleVersion,
 )
+from app.models.site import PubSite
+from app.services import site_publisher
 from app.utils.slug import generate_slug
 
 logger = logging.getLogger(__name__)
@@ -321,6 +323,88 @@ async def get_article_versions(
     ]
 
 
+class PublishToSiteRequest(BaseModel):
+    site_id: int
+
+
+@router.post("/{article_id}/publish-to-site")
+async def publish_to_site(
+    article_id: int,
+    data: PublishToSiteRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """将文章推送到指定网站"""
+    article = db.query(PubArticle).filter(
+        PubArticle.id == article_id,
+        PubArticle.deleted_at.is_(None),
+    ).first()
+    if not article:
+        raise HTTPException(status_code=404, detail="文章不存在")
+    _check_article_permission(article, current_user)
+
+    if article.published_to_site:
+        raise HTTPException(status_code=400, detail="文章已发布到网站，请先移除再重新发布")
+
+    site = db.query(PubSite).filter(PubSite.id == data.site_id).first()
+    if not site:
+        raise HTTPException(status_code=404, detail="网站不存在")
+
+    try:
+        result = site_publisher.publish_article(site, article)
+    except Exception as e:
+        logger.error(f"发布到网站失败: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"发布失败: {e}")
+
+    article.site_id = site.id
+    article.site_article_slug = result["site_article_slug"]
+    article.published_to_site = True
+    db.commit()
+
+    return {
+        "message": "文章已发布到网站",
+        "site_name": site.site_name,
+        "site_article_slug": result["site_article_slug"],
+        "site_article_id": result["site_article_id"],
+    }
+
+
+@router.delete("/{article_id}/unpublish-from-site")
+async def unpublish_from_site(
+    article_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """从网站移除文章"""
+    article = db.query(PubArticle).filter(
+        PubArticle.id == article_id,
+        PubArticle.deleted_at.is_(None),
+    ).first()
+    if not article:
+        raise HTTPException(status_code=404, detail="文章不存在")
+    _check_article_permission(article, current_user)
+
+    if not article.published_to_site or not article.site_id:
+        raise HTTPException(status_code=400, detail="文章未发布到任何网站")
+
+    site = db.query(PubSite).filter(PubSite.id == article.site_id).first()
+    if not site:
+        raise HTTPException(status_code=404, detail="关联的网站配置不存在")
+
+    try:
+        site_publisher.unpublish_article(site, article.site_article_slug)
+    except Exception as e:
+        logger.error(f"从网站移除失败: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"移除失败: {e}")
+
+    article.site_id = None
+    article.site_article_slug = None
+    article.published_to_site = False
+    db.commit()
+
+    return {"message": "文章已从网站移除"}
+
+
 def _article_to_dict(article: PubArticle, db: Session) -> dict:
     tags = db.query(PubArticleTag).filter(PubArticleTag.article_id == article.id).all()
     tag_list = []
@@ -362,6 +446,11 @@ def _article_to_dict(article: PubArticle, db: Session) -> dict:
         "tags": tag_list,
         "links": [{"id": l.id, "keyword": l.keyword, "url": l.url} for l in links],
         "images": [{"id": i.id, "url": i.url, "alt_text": i.alt_text, "position": i.position} for i in images],
+        "site_id": article.site_id,
+        "site_article_slug": article.site_article_slug,
+        "published_to_site": article.published_to_site or False,
+        "site_name": (article.site.site_name if article.site else None),
+        "site_domain": (article.site.domain if article.site else None),
         "created_at": article.created_at.isoformat() if article.created_at else None,
         "updated_at": article.updated_at.isoformat() if article.updated_at else None,
     }

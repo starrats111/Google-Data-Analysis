@@ -66,6 +66,8 @@ from app.api import (
     article_categories,
     article_tags,
     article_titles,
+    # 网站管理（OPT-013）
+    sites,
 )
 
 
@@ -275,6 +277,9 @@ app.include_router(article_categories.router)
 app.include_router(article_tags.router)
 app.include_router(article_titles.router)
 
+# 网站管理路由（OPT-013）
+app.include_router(sites.router)
+
 
 @app.get("/health")
 async def health():
@@ -336,6 +341,44 @@ def _ensure_notification_columns():
             conn.execute(text("ALTER TABLE notifications ADD COLUMN reply_to_id INTEGER"))
 
 
+def _ensure_site_tables():
+    """OPT-013: 创建 pub_sites 表 + pub_articles 新增 site 相关列。"""
+    from app.database import engine
+    from sqlalchemy import text, inspect as sa_inspect
+    insp = sa_inspect(engine)
+    existing_tables = insp.get_table_names()
+
+    with engine.begin() as conn:
+        if "pub_sites" not in existing_tables:
+            conn.execute(text("""
+                CREATE TABLE pub_sites (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    group_id INTEGER NOT NULL,
+                    site_name VARCHAR(100) NOT NULL,
+                    site_path VARCHAR(300) NOT NULL,
+                    domain VARCHAR(200),
+                    data_js_path VARCHAR(200) DEFAULT 'js/articles-index.js',
+                    article_template VARCHAR(200) DEFAULT 'article-1.html',
+                    migrated BOOLEAN DEFAULT 0,
+                    created_by INTEGER NOT NULL REFERENCES users(id),
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+            """))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS idx_pub_sites_group ON pub_sites(group_id)"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS idx_pub_sites_creator ON pub_sites(created_by)"))
+
+    if "pub_articles" in existing_tables:
+        article_cols = {c["name"] for c in insp.get_columns("pub_articles")}
+        with engine.begin() as conn:
+            if "site_id" not in article_cols:
+                conn.execute(text("ALTER TABLE pub_articles ADD COLUMN site_id INTEGER REFERENCES pub_sites(id)"))
+            if "site_article_slug" not in article_cols:
+                conn.execute(text("ALTER TABLE pub_articles ADD COLUMN site_article_slug VARCHAR(200)"))
+            if "published_to_site" not in article_cols:
+                conn.execute(text("ALTER TABLE pub_articles ADD COLUMN published_to_site BOOLEAN DEFAULT 0"))
+
+
 def _ensure_merchant_columns():
     """OPT-014: 为 affiliate_merchants 表补齐 last_seen_at / consecutive_misses 列。"""
     from app.database import engine
@@ -361,6 +404,11 @@ async def startup_event():
         _ensure_merchant_columns()
     except Exception as e:
         print(f"[WARN] 补齐 merchant 列失败（首次部署可忽略）: {e}")
+    try:
+        _ensure_site_tables()
+        print("[OK] OPT-013 pub_sites 表已就绪")
+    except Exception as e:
+        print(f"[WARN] OPT-013 pub_sites 建表失败（首次部署可忽略）: {e}")
     try:
         start_scheduler()
         print("[OK] 定时任务调度器已启动")

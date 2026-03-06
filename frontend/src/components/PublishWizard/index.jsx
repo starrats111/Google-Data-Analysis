@@ -56,6 +56,12 @@ const PublishWizard = () => {
   const [mEnableLinks, setMEnableLinks] = useState(false)
   const [trackingHistory, setTrackingHistory] = useState([])
 
+  // === OPT-013: 发布到网站 State ===
+  const [publishToSite, setPublishToSite] = useState(false)
+  const [siteList, setSiteList] = useState([])
+  const [selectedSiteId, setSelectedSiteId] = useState(null)
+  const [publishingSite, setPublishingSite] = useState(false)
+
   // === OPT-015: Campaign Link State ===
   const [inputMode, setInputMode] = useState('platform')  // 'platform' | 'manual'
   const [userPlatforms, setUserPlatforms] = useState([])
@@ -65,6 +71,12 @@ const PublishWizard = () => {
   const [selectedRegion, setSelectedRegion] = useState(null)
   const [fetchingCampaign, setFetchingCampaign] = useState(false)
 
+  // === OPT-013: 发布到网站 State ===
+  const [publishToSite, setPublishToSite] = useState(false)
+  const [siteList, setSiteList] = useState([])
+  const [selectedSiteId, setSelectedSiteId] = useState(null)
+  const [publishingSite, setPublishingSite] = useState(false)
+
   useEffect(() => {
     if (mode === 'merchant') {
       articleApi.getTrackingLinks({ limit: 50 })
@@ -72,6 +84,15 @@ const PublishWizard = () => {
         .catch(() => {})
       articleApi.getUserPlatforms()
         .then(res => setUserPlatforms(res.data?.platforms || []))
+        .catch(() => {})
+    }
+  }, [mode])
+
+  // OPT-013: 加载网站列表
+  useEffect(() => {
+    if (mode) {
+      articleApi.getSites()
+        .then(res => setSiteList(res.data?.items || []))
         .catch(() => {})
     }
   }, [mode])
@@ -153,8 +174,20 @@ const PublishWizard = () => {
         links: links.filter(l => l.keyword && l.url),
         ai_model_used: 'gemini',
       }
-      await articleApi.createArticle(payload)
-      message.success(publishDate ? '文章已保存，将定时发布' : '文章已发布')
+      const res = await articleApi.createArticle(payload)
+      const articleId = res.data?.id
+
+      // OPT-013: 发布到网站
+      if (publishToSite && selectedSiteId && articleId) {
+        try {
+          await articleApi.publishToSite(articleId, selectedSiteId)
+          message.success('文章已发布，并同步到网站')
+        } catch (siteErr) {
+          message.warning('文章已保存，但发布到网站失败: ' + (siteErr?.response?.data?.detail || siteErr.message))
+        }
+      } else {
+        message.success(publishDate ? '文章已保存，将定时发布' : '文章已发布')
+      }
       navigate('/articles')
     } catch (err) {
       message.error('发布失败: ' + (err?.response?.data?.detail || err.message))
@@ -280,8 +313,20 @@ const PublishWizard = () => {
         language,
         category_name: merchantArticle.category || crawlResult?.analysis?.category || null,
       }
-      await articleApi.createArticle(payload)
-      message.success(mPublishDate ? '文章已保存，将定时发布' : '文章已发布')
+      const res = await articleApi.createArticle(payload)
+      const articleId = res.data?.id
+
+      // OPT-013: 发布到网站
+      if (publishToSite && selectedSiteId && articleId) {
+        try {
+          await articleApi.publishToSite(articleId, selectedSiteId)
+          message.success('文章已发布，并同步到网站')
+        } catch (siteErr) {
+          message.warning('文章已保存，但发布到网站失败: ' + (siteErr?.response?.data?.detail || siteErr.message))
+        }
+      } else {
+        message.success(mPublishDate ? '文章已保存，将定时发布' : '文章已发布')
+      }
       navigate('/articles')
     } catch (err) {
       message.error('发布失败: ' + (err?.response?.data?.detail || err.message))
@@ -452,7 +497,23 @@ const PublishWizard = () => {
                   <Typography.Text>启用关键词链接：</Typography.Text>
                   <Switch checked={enableLinks} onChange={setEnableLinks} style={{ marginLeft: 8 }} />
                 </div>
+                <div>
+                  <Typography.Text>发布到网站：</Typography.Text>
+                  <Switch checked={publishToSite} onChange={(v) => { setPublishToSite(v); if (!v) setSelectedSiteId(null) }} style={{ marginLeft: 8 }} />
+                </div>
               </Space>
+              {publishToSite && (
+                <div style={{ marginTop: 12 }}>
+                  <Select
+                    placeholder="选择目标网站"
+                    value={selectedSiteId}
+                    onChange={setSelectedSiteId}
+                    style={{ width: 300 }}
+                    options={siteList.map(s => ({ value: s.id, label: `${s.site_name}${s.domain ? ` (${s.domain})` : ''}` }))}
+                    notFoundContent="暂无可用网站，请先在网站管理中添加"
+                  />
+                </div>
+              )}
               <Divider />
               <Space>
                 <Button onClick={() => setGStep(2)}>上一步</Button>
@@ -800,7 +861,23 @@ const PublishWizard = () => {
                 <Typography.Text>启用关键词链接：</Typography.Text>
                 <Switch checked={mEnableLinks} onChange={setMEnableLinks} style={{ marginLeft: 8 }} />
               </div>
+              <div>
+                <Typography.Text>发布到网站：</Typography.Text>
+                <Switch checked={publishToSite} onChange={(v) => { setPublishToSite(v); if (!v) setSelectedSiteId(null) }} style={{ marginLeft: 8 }} />
+              </div>
             </Space>
+            {publishToSite && (
+              <div style={{ marginTop: 12 }}>
+                <Select
+                  placeholder="选择目标网站"
+                  value={selectedSiteId}
+                  onChange={setSelectedSiteId}
+                  style={{ width: 300 }}
+                  options={siteList.map(s => ({ value: s.id, label: `${s.site_name}${s.domain ? ` (${s.domain})` : ''}` }))}
+                  notFoundContent="暂无可用网站，请先在网站管理中添加"
+                />
+              </div>
+            )}
             <Divider />
             <Space>
               <Button onClick={() => setMStep(2)}>上一步</Button>

@@ -38,6 +38,15 @@ const articleApi = {
   // Campaign Links（OPT-015）
   getCampaignLink: (data) => api.post('/api/article-gen/campaign-link', data),
   getUserPlatforms: () => api.get('/api/article-gen/user-platforms'),
+
+  // 网站管理（OPT-013）
+  getSites: () => api.get('/api/sites'),
+  createSite: (data) => api.post('/api/sites', data),
+  updateSite: (id, data) => api.put(`/api/sites/${id}`, data),
+  deleteSite: (id) => api.delete(`/api/sites/${id}`),
+  verifySite: (id) => api.post(`/api/sites/${id}/verify`),
+  publishToSite: (articleId, siteId) => api.post(`/api/articles/${articleId}/publish-to-site`, { site_id: siteId }),
+  unpublishFromSite: (articleId) => api.delete(`/api/articles/${articleId}/unpublish-from-site`),
 }
 
 export default articleApi

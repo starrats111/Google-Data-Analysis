@@ -46,6 +46,7 @@ const ArticleEdit = lazyWithRetry(() => import('./pages/articles/ArticleEdit'))
 const ArticleCategories = lazyWithRetry(() => import('./pages/articles/ArticleCategories'))
 const ArticleTitles = lazyWithRetry(() => import('./pages/articles/ArticleTitles'))
 const PublishWizard = lazyWithRetry(() => import('./components/PublishWizard'))
+const SiteManagement = lazyWithRetry(() => import('./pages/articles/SiteManagement'))
 
 
 function PrivateRoute({ children }) {
@@ -128,6 +129,7 @@ function App() {
               <Route path="articles/publish" element={<PublishWizard />} />
               <Route path="articles/categories" element={<ArticleCategories />} />
               <Route path="articles/titles" element={<ArticleTitles />} />
+              <Route path="articles/sites" element={<SiteManagement />} />
             </Route>
           </Routes>
         </Suspense>

@@ -32,6 +32,8 @@ from app.models.article import (
 )
 # 追踪链接历史（OPT-012）
 from app.models.tracking_link import PubTrackingLink
+# 网站发布配置（OPT-013）
+from app.models.site import PubSite
 
 __all__ = [
     "User",
@@ -78,6 +80,8 @@ __all__ = [
     "PubArticleVersion",
     # 追踪链接历史
     "PubTrackingLink",
+    # 网站发布配置
+    "PubSite",
 ]
 
 

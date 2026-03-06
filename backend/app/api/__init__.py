@@ -35,6 +35,8 @@ from . import article_gen  # noqa: F401
 from . import article_categories  # noqa: F401
 from . import article_tags  # noqa: F401
 from . import article_titles  # noqa: F401
+# 网站管理（OPT-013）
+from . import sites  # noqa: F401
 
 __all__ = [
     "ad_campaign",
@@ -67,6 +69,7 @@ __all__ = [
     "article_categories",
     "article_tags",
     "article_titles",
+    "sites",
 ]
 
 

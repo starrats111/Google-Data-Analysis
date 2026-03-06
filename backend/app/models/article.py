@@ -33,12 +33,17 @@ class PubArticle(Base):
     merchant_url = Column(String(500), nullable=True)
     tracking_link = Column(Text, nullable=True)
     language = Column(String(10), default="zh")
+    # OPT-013: 发布到网站
+    site_id = Column(Integer, ForeignKey("pub_sites.id"), nullable=True)
+    site_article_slug = Column(String(200), nullable=True)
+    published_to_site = Column(Boolean, default=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
     deleted_at = Column(DateTime(timezone=True), nullable=True)
 
     category = relationship("PubCategory", back_populates="articles")
     user = relationship("User", backref="pub_articles")
+    site = relationship("PubSite", backref="articles", lazy="joined")
     tags = relationship("PubArticleTag", back_populates="article", cascade="all, delete-orphan")
     links = relationship("PubArticleLink", back_populates="article", cascade="all, delete-orphan")
     images = relationship("PubArticleImage", back_populates="article", cascade="all, delete-orphan")

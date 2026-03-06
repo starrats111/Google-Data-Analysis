@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import { Table, Button, Space, Tag, Input, Select, Modal, message, Card, Tooltip, Popconfirm } from 'antd'
-import { PlusOutlined, EditOutlined, DeleteOutlined, EyeOutlined, SearchOutlined } from '@ant-design/icons'
+import { PlusOutlined, EditOutlined, DeleteOutlined, EyeOutlined, SearchOutlined, GlobalOutlined } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
 import articleApi from '../../services/articleApi'
 
@@ -52,13 +52,38 @@ const ArticleList = () => {
     fetchCategories()
   }, [])
 
-  const handleDelete = async (id) => {
-    try {
-      await articleApi.deleteArticle(id)
-      message.success('文章已删除')
-      fetchArticles()
-    } catch (err) {
-      message.error('删除失败')
+  const handleDelete = async (record) => {
+    // OPT-013: 如果文章已发布到网站，先确认是否同步移除
+    if (record.published_to_site) {
+      Modal.confirm({
+        title: '删除文章',
+        content: `此文章已发布到网站「${record.site_name || ''}」，删除后将同时从网站移除。确定继续？`,
+        okText: '确定删除',
+        okType: 'danger',
+        cancelText: '取消',
+        onOk: async () => {
+          try {
+            await articleApi.unpublishFromSite(record.id)
+          } catch (e) {
+            message.warning('从网站移除失败，但仍将删除平台文章')
+          }
+          try {
+            await articleApi.deleteArticle(record.id)
+            message.success('文章已删除')
+            fetchArticles()
+          } catch {
+            message.error('删除失败')
+          }
+        },
+      })
+    } else {
+      try {
+        await articleApi.deleteArticle(record.id)
+        message.success('文章已删除')
+        fetchArticles()
+      } catch {
+        message.error('删除失败')
+      }
     }
   }
 
@@ -113,6 +138,17 @@ const ArticleList = () => {
       render: (v) => v ? new Date(v).toLocaleString('zh-CN') : '-',
     },
     {
+      title: '网站',
+      dataIndex: 'published_to_site',
+      key: 'site',
+      width: 120,
+      render: (published, record) => published ? (
+        <Tooltip title={record.site_domain ? `https://${record.site_domain}/article-${record.site_article_slug}.html` : record.site_name}>
+          <Tag icon={<GlobalOutlined />} color="cyan">{record.site_name || '已发布'}</Tag>
+        </Tooltip>
+      ) : '-',
+    },
+    {
       title: '操作',
       key: 'actions',
       width: 150,
@@ -126,9 +162,10 @@ const ArticleList = () => {
               onClick={() => navigate(`/articles/edit/${record.id}`)}
             />
           </Tooltip>
-          <Popconfirm title="确定删除此文章？" onConfirm={() => handleDelete(record.id)}>
-            <Button type="link" size="small" danger icon={<DeleteOutlined />} />
-          </Popconfirm>
+          <Tooltip title="删除">
+            <Button type="link" size="small" danger icon={<DeleteOutlined />}
+              onClick={() => handleDelete(record)} />
+          </Tooltip>
         </Space>
       ),
     },
