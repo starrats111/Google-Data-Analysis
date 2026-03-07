@@ -161,6 +161,10 @@ class Settings(BaseSettings):
     GITHUB_TOKEN: str = ""
     GITHUB_OWNER: str = "starrats111"
 
+    # ===== Pexels 免费图库 API（商家图片补充）=====
+    # 注册地址: https://www.pexels.com/api/ （免费，可商用）
+    PEXELS_API_KEY: str = ""
+
     # ===== 以下配置已废弃（DES-4），保留空值兼容旧 .env =====
     # OpenAI 已不再使用，系统使用 Gemini/Claude
     

@@ -311,63 +311,64 @@ def crawl(url: str) -> Dict:
 
 def search_images(query: str, count: int = 12) -> List[str]:
     """
-    通过 Bing Image Search 搜索商家相关图片作为补充。
-    使用 Bing 搜索页面抓取（无需 API Key）。
+    搜索可商用的图片作为补充。
+    优先使用 Pexels API（免费可商用），fallback 到 Unsplash URL 拼接。
+    所有返回图片均可免费商用，无需署名。
     """
+    from app.config import settings
+
     images = []
-    search_url = "https://www.bing.com/images/search"
-    params = {
-        "q": query,
-        "first": 1,
-        "count": count * 2,
-        "qft": "+filterui:imagesize-large",
-    }
-    try:
-        with httpx.Client(timeout=15, follow_redirects=True, headers={
-            **HEADERS,
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        }) as client:
-            resp = client.get(search_url, params=params)
-            resp.raise_for_status()
 
-        soup = BeautifulSoup(resp.text, "lxml")
+    # ===== 方案1: Pexels API（推荐，高质量可商用）=====
+    pexels_key = getattr(settings, "PEXELS_API_KEY", "")
+    if pexels_key:
+        try:
+            with httpx.Client(timeout=15, follow_redirects=True) as client:
+                resp = client.get(
+                    "https://api.pexels.com/v1/search",
+                    params={"query": query, "per_page": min(count * 2, 40), "size": "large"},
+                    headers={"Authorization": pexels_key},
+                )
+                resp.raise_for_status()
+                data = resp.json()
+                for photo in data.get("photos", []):
+                    # 使用 large2x 尺寸（高清但不过大）
+                    src = photo.get("src", {})
+                    url = src.get("large2x") or src.get("large") or src.get("original")
+                    if url and url not in images:
+                        images.append(url)
+            logger.info(f"[ImageSearch] Pexels 搜索 '{query}' 找到 {len(images)} 张可商用图片")
+        except Exception as e:
+            logger.warning(f"[ImageSearch] Pexels 搜索失败 '{query}': {e}")
 
-        # 方法1: 从 <a class="iusc"> 的 m 属性中提取
-        for a_tag in soup.find_all("a", class_="iusc"):
-            m_attr = a_tag.get("m")
-            if m_attr:
-                import json as _json
-                try:
-                    m_data = _json.loads(m_attr)
-                    murl = m_data.get("murl", "")
-                    if murl and murl.startswith("http"):
-                        img_lower = murl.lower()
-                        if not any(kw in img_lower for kw in FILTERED_IMG_KEYWORDS[:10]):
-                            images.append(murl)
-                except (ValueError, KeyError):
-                    pass
+    # ===== 方案2: Unsplash Source URL 拼接（免费可商用，无需 API Key）=====
+    if len(images) < count:
+        try:
+            # Unsplash 搜索页面抓取（所有图片均为 Unsplash License，可免费商用）
+            with httpx.Client(timeout=15, follow_redirects=True, headers=HEADERS) as client:
+                resp = client.get(
+                    "https://unsplash.com/napi/search/photos",
+                    params={"query": query, "per_page": min(count * 2, 30)},
+                )
+                if resp.status_code == 200:
+                    data = resp.json()
+                    for result in data.get("results", []):
+                        urls = result.get("urls", {})
+                        url = urls.get("regular") or urls.get("small")
+                        if url and url not in images:
+                            images.append(url)
+                    logger.info(f"[ImageSearch] Unsplash 补充后共 {len(images)} 张可商用图片")
+        except Exception as e:
+            logger.warning(f"[ImageSearch] Unsplash 搜索失败 '{query}': {e}")
 
-        # 方法2: 从 img[src2] 或 img[data-src] 提取
-        if len(images) < 4:
-            for img in soup.find_all("img"):
-                src = img.get("src2") or img.get("data-src") or ""
-                if src.startswith("http") and "bing.com" not in src:
-                    if src not in images:
-                        images.append(src)
+    # 去重并截取
+    seen = set()
+    unique = []
+    for img in images:
+        if img not in seen:
+            seen.add(img)
+            unique.append(img)
+        if len(unique) >= count:
+            break
 
-        # 去重
-        seen = set()
-        unique = []
-        for img in images:
-            if img not in seen:
-                seen.add(img)
-                unique.append(img)
-            if len(unique) >= count:
-                break
-
-        logger.info(f"[ImageSearch] 搜索 '{query}' 找到 {len(unique)} 张图片")
-        return unique
-
-    except Exception as e:
-        logger.warning(f"[ImageSearch] 搜索图片失败 '{query}': {e}")
-        return []
+    return unique
