@@ -126,7 +126,7 @@ def _extract_page(html: str, url: str) -> Dict:
     images = []
     og_img = soup.find("meta", attrs={"property": "og:image"})
     if og_img and og_img.get("content"):
-        og_url = og_img["content"]
+        og_url = urljoin(url, og_img["content"])
         og_lower = og_url.lower()
         if not any(kw in og_lower for kw in FILTERED_IMG_KEYWORDS):
             images.append(og_url)

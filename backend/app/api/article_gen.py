@@ -6,7 +6,7 @@ import logging
 import asyncio
 from typing import Optional, List
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
@@ -248,6 +248,31 @@ async def get_tracking_links(
             for lk in links
         ]
     }
+
+
+@router.get("/image-proxy")
+async def image_proxy(
+    url: str = Query(..., description="要代理的图片 URL"),
+    current_user: User = Depends(get_current_user),
+):
+    """图片代理：由服务器端请求图片，绕过商家网站防盗链"""
+    import httpx as _httpx
+    try:
+        async with _httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
+            resp = await client.get(url, headers={
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
+                "Referer": url,
+                "Accept": "image/*,*/*;q=0.8",
+            })
+            resp.raise_for_status()
+            content_type = resp.headers.get("content-type", "image/jpeg")
+            return Response(content=resp.content, media_type=content_type,
+                            headers={"Cache-Control": "public, max-age=86400"})
+    except Exception:
+        # 返回 1x1 透明 PNG 作为 fallback
+        import base64
+        pixel = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVQI12NgAAIABQABNjN9GQAAAAlwSFlzAAAWJQAAFiUBSVIk8AAAAA0lEQVQI12P4z8BQDwAEgAF/QualzQAAAABJRU5ErkJggg==")
+        return Response(content=pixel, media_type="image/png")
 
 
 @router.post("/campaign-link")

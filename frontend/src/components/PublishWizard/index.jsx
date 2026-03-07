@@ -14,6 +14,14 @@ import articleApi from '../../services/articleApi'
 
 const { TextArea } = Input
 
+// 图片代理：通过后端转发，绕过商家网站防盗链
+const proxyImg = (url) => {
+  if (!url) return '';
+  // Pexels / Unsplash 等图片库不需要代理
+  if (/pexels\.com|unsplash\.com|images\.pexels/i.test(url)) return url;
+  return `/api/article-gen/image-proxy?url=${encodeURIComponent(url)}`;
+};
+
 const LANGUAGES = [
   { value: 'zh', label: '中文' },
   { value: 'en', label: 'English' },
@@ -847,7 +855,7 @@ const PublishWizard = () => {
                       <Tag color={i === 0 ? 'green' : 'default'} style={{ position: 'absolute', bottom: 4, left: 4, zIndex: 2, margin: 0, fontSize: 11 }}>
                         {i === 0 ? '头图' : `内容${i}`}
                       </Tag>
-                      <Image src={src} width={110} height={110} style={{ objectFit: 'cover', borderRadius: 6 }}
+                      <Image src={proxyImg(src)} width={110} height={110} style={{ objectFit: 'cover', borderRadius: 6 }}
                         preview={false}
                         fallback="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACklEQVR4nGMAAQAABQABDQottAAAAABJRU5ErkJggg=="
                       />
@@ -913,7 +921,7 @@ const PublishWizard = () => {
                       border: '2px solid transparent', borderRadius: 6, padding: 1,
                       opacity: isSelected ? 0.4 : 1, transition: 'opacity 0.2s',
                     }} onClick={() => !isSelected && handleAddToSelected(src)}>
-                      <Image src={src} width={90} height={90} style={{ objectFit: 'cover', borderRadius: 4 }}
+                      <Image src={proxyImg(src)} width={90} height={90} style={{ objectFit: 'cover', borderRadius: 4 }}
                         preview={false}
                         fallback="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACklEQVR4nGMAAQAABQABDQottAAAAABJRU5ErkJggg=="
                       />
@@ -1026,7 +1034,7 @@ const PublishWizard = () => {
                       <Tag color={i === 0 ? 'green' : 'default'} style={{ position: 'absolute', bottom: 4, left: 4, zIndex: 2, margin: 0, fontSize: 11 }}>
                         {i === 0 ? '头图' : `内容${i}`}
                       </Tag>
-                      <Image src={src} width={120} height={120} style={{ objectFit: 'cover', borderRadius: 6 }}
+                      <Image src={proxyImg(src)} width={120} height={120} style={{ objectFit: 'cover', borderRadius: 6 }}
                         preview={false}
                         fallback="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACklEQVR4nGMAAQAABQABDQottAAAAABJRU5ErkJggg=="
                       />
