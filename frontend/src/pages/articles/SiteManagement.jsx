@@ -156,29 +156,32 @@ const SiteManagement = () => {
       title: '操作',
       key: 'actions',
       width: 200,
-      render: (_, record) => (
-        <Space size="small">
-          <Tooltip title="验证目录">
-            <Button
-              type="link" size="small"
-              icon={<SafetyCertificateOutlined />}
-              loading={verifying[record.id]}
-              onClick={() => handleVerify(record.id)}
-            />
-          </Tooltip>
-          {isAdmin && (
-            <>
-              <Tooltip title="编辑">
-                <Button type="link" size="small" icon={<EditOutlined />}
-                  onClick={() => handleEdit(record)} />
-              </Tooltip>
-              <Popconfirm title="确定删除此网站配置？" onConfirm={() => handleDelete(record.id)}>
-                <Button type="link" size="small" danger icon={<DeleteOutlined />} />
-              </Popconfirm>
-            </>
-          )}
-        </Space>
-      ),
+      render: (_, record) => {
+        const canEdit = isAdmin || record.created_by === user?.id
+        return (
+          <Space size="small">
+            <Tooltip title="验证目录">
+              <Button
+                type="link" size="small"
+                icon={<SafetyCertificateOutlined />}
+                loading={verifying[record.id]}
+                onClick={() => handleVerify(record.id)}
+              />
+            </Tooltip>
+            {canEdit && (
+              <>
+                <Tooltip title="编辑">
+                  <Button type="link" size="small" icon={<EditOutlined />}
+                    onClick={() => handleEdit(record)} />
+                </Tooltip>
+                <Popconfirm title="确定删除此网站配置？" onConfirm={() => handleDelete(record.id)}>
+                  <Button type="link" size="small" danger icon={<DeleteOutlined />} />
+                </Popconfirm>
+              </>
+            )}
+          </Space>
+        )
+      },
     },
   ]
 
@@ -186,11 +189,9 @@ const SiteManagement = () => {
     <Card
       title="网站管理"
       extra={
-        isAdmin && (
-          <Button type="primary" icon={<PlusOutlined />} onClick={handleCreate}>
-            新增网站
-          </Button>
-        )
+        <Button type="primary" icon={<PlusOutlined />} onClick={handleCreate}>
+          新增网站
+        </Button>
       }
     >
       <Table
@@ -213,20 +214,23 @@ const SiteManagement = () => {
         <Form form={form} layout="vertical" style={{ marginTop: 16 }}>
           <Form.Item name="site_name" label="网站名称"
             rules={[{ required: true, message: '请输入网站名称' }]}>
-            <Input placeholder="如 AlluraHub" />
+            <Input placeholder="如 AlluraHub、MyBlog" />
+          </Form.Item>
+          <Form.Item name="domain" label="网站域名"
+            rules={[{ required: true, message: '请输入网站域名' }]}>
+            <Input placeholder="如 allurahub.com" />
           </Form.Item>
           <Form.Item name="site_path" label="服务器目录路径"
             rules={[{ required: true, message: '请输入目录路径' }]}
-            extra="必须在 /home/admin/sites/ 下">
-            <Input placeholder="/home/admin/sites/allurahub" />
+            extra="你的网站文件在服务器上的绝对路径，如 /home/admin/sites/allurahub">
+            <Input placeholder="/home/admin/sites/你的网站目录" />
           </Form.Item>
-          <Form.Item name="domain" label="网站域名（选填）">
-            <Input placeholder="allurahub.com" />
-          </Form.Item>
-          <Form.Item name="data_js_path" label="索引文件相对路径">
+          <Form.Item name="data_js_path" label="索引文件相对路径"
+            extra="文章列表数据文件的路径（相对于网站根目录）">
             <Input placeholder="js/articles-index.js" />
           </Form.Item>
-          <Form.Item name="article_template" label="文章模板文件名">
+          <Form.Item name="article_template" label="文章模板文件名"
+            extra="文章页面使用的 HTML 模板文件名">
             <Input placeholder="article-1.html" />
           </Form.Item>
         </Form>

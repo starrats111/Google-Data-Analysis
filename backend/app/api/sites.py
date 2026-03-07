@@ -79,8 +79,7 @@ async def create_site(
     db: Session = Depends(get_db),
 ):
     """新增网站配置，自动触发 slug 迁移"""
-    if current_user.role not in ("manager", "leader"):
-        raise HTTPException(status_code=403, detail="仅管理员可创建网站配置")
+    # 所有员工都可以创建自己的网站配置
 
     try:
         site_publisher.validate_site_path(data.site_path)
