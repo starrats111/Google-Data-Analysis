@@ -139,22 +139,22 @@ async def crawl_merchant_site(
             seen.add(img)
             unique_images.append(img)
 
-    # 图片不足8张时，用品牌名搜索补充
-    MIN_IMAGES = 8
-    if len(unique_images) < MIN_IMAGES:
+    # 只有网站本身图片极少（<= 2 张）时，才用图片库补充
+    if len(unique_images) <= 2:
         brand = crawl_data.get("brand_name", "")
         if brand:
             search_query = f"{brand} products official"
-            extra_images = search_merchant_images(search_query, count=MIN_IMAGES * 2)
+            extra_images = search_merchant_images(search_query, count=12)
             for img in extra_images:
                 if img not in seen:
                     seen.add(img)
                     unique_images.append(img)
+            logger.info(f"[Crawl] 网站仅 {len(unique_images) - len(extra_images)} 张图，已从图片库补充")
 
     return {
         "brand_name": crawl_data.get("brand_name", ""),
         "url": data.url,
-        "images": unique_images[:20],
+        "images": unique_images[:30],
         "analysis": analysis,
     }
 

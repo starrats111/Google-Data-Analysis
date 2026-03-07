@@ -3,6 +3,7 @@
 httpx + BeautifulSoup 爬取商家首页 + 子页面
 """
 import logging
+import re
 import ipaddress
 import socket
 from typing import List, Dict, Optional
@@ -16,28 +17,27 @@ logger = logging.getLogger(__name__)
 SUB_PAGE_KEYWORDS = [
     "product", "shop", "store", "sale", "deal", "offer",
     "collection", "category", "about", "promotion", "new-arrival",
+    "course", "program", "service", "bundle", "package", "pricing",
+    "plan", "feature", "solution", "training", "class",
+    "menu", "gallery", "portfolio", "work", "project",
+    "catalog", "brand", "our-", "best", "popular", "top",
 ]
 
 FILTERED_IMG_KEYWORDS = [
-    "icon", "logo", "svg", "pixel", "spacer", "blank", "1x1",
-    "badge", "avatar", "favicon", "sprite", "arrow", "btn", "button",
-    "social", "facebook", "twitter", "instagram", "linkedin", "youtube",
-    "pinterest", "tiktok", "whatsapp", "telegram",
-    "payment", "visa", "mastercard", "paypal", "amex", "stripe",
-    "trust", "secure", "ssl", "verified", "certification",
-    "flag", "rating", "star-rating", "review-star",
-    "wsj", "nytimes", "forbes", "cnn", "bbc", "reuters",
-    "mens-health", "menshealth", "losangeles", "la-times",
-    "myfitnesspal", "beast", "daily", "gazette", "tribune",
-    "press", "media", "featured-in", "as-seen", "seen-on",
-    "wall-street", "new-york-times", "time-magazine",
+    "icon", "logo", "svg+xml", "pixel", "spacer", "blank", "1x1",
+    "avatar", "favicon", "sprite", "arrow", "btn-", "button-icon",
+    "social-icon", "facebook-icon", "twitter-icon", "instagram-icon",
+    "linkedin-icon", "youtube-icon", "pinterest-icon", "tiktok-icon",
+    "payment-icon", "visa-icon", "mastercard-icon", "paypal-icon",
+    "flag-icon", "star-rating", "review-star",
+    "wsj", "nytimes", "forbes-logo", "cnn-logo", "bbc-logo",
+    "featured-in", "as-seen", "seen-on",
 ]
 
 PRESS_SECTION_KEYWORDS = [
-    "press", "media", "featured", "as-seen", "seen-on", "seen-in",
-    "trusted", "logo", "logos", "partners", "endorsement",
-    "publication", "mentions", "coverage", "recognition",
-    "as_seen", "asSeen", "in-the-news", "news-logo",
+    "press-logo", "media-logo", "as-seen", "seen-on", "seen-in",
+    "trusted-by-logo", "partner-logo", "endorsement",
+    "publication-logo", "as_seen", "asSeen", "in-the-news",
 ]
 
 # 产品图优先关键词
@@ -132,16 +132,52 @@ def _extract_page(html: str, url: str) -> Dict:
             images.append(og_url)
 
     candidates = []
-    for img in soup.find_all("img", src=True)[:60]:
-        src = img["src"]
+    seen_urls = set(images)
+
+    def _get_img_src(tag):
+        """从 img/source 标签中提取最佳图片 URL（支持懒加载和 srcset）"""
+        for attr in ("src", "data-src", "data-lazy-src", "data-original", "data-srcset"):
+            val = tag.get(attr)
+            if val and val.startswith(("http", "/")):
+                return val
+        srcset = tag.get("srcset")
+        if srcset:
+            parts = [p.strip().split()[0] for p in srcset.split(",") if p.strip()]
+            if parts:
+                return parts[-1]  # 取最大尺寸
+        return None
+
+    # 收集所有 <img> 和 <picture><source> 的图片
+    all_img_tags = soup.find_all("img")[:80]
+    for source in soup.find_all("source"):
+        if source.get("srcset") or source.get("data-srcset"):
+            all_img_tags.append(source)
+
+    # 提取 CSS background-image 中的图片 URL
+    bg_re = re.compile(r'url\(["\']?(https?://[^"\')\s]+)["\']?\)', re.IGNORECASE)
+    for el in soup.find_all(style=True)[:60]:
+        style_val = el.get("style", "")
+        for match in bg_re.findall(style_val):
+            match_lower = match.lower()
+            if any(kw in match_lower for kw in FILTERED_IMG_KEYWORDS):
+                continue
+            if match not in seen_urls:
+                seen_urls.add(match)
+                candidates.append((8, match))
+
+    for img in all_img_tags:
+        src = _get_img_src(img)
+        if not src:
+            continue
         src_lower = src.lower()
         alt = (img.get("alt") or "").lower()
         combined = src_lower + " " + alt
         if any(kw in combined for kw in FILTERED_IMG_KEYWORDS):
             continue
         full_url = urljoin(url, src)
-        if full_url in images:
+        if full_url in seen_urls:
             continue
+        seen_urls.add(full_url)
 
         score = 0
         is_in_press_section = False
@@ -216,12 +252,11 @@ def _extract_page(html: str, url: str) -> Dict:
 
         candidates.append((score, full_url))
 
-    # 按分数排序，取前 20（增加上限以确保足够图片）
     candidates.sort(key=lambda x: x[0], reverse=True)
     for _, img_url in candidates:
         if img_url not in images:
             images.append(img_url)
-        if len(images) >= 20:
+        if len(images) >= 30:
             break
 
     return {
@@ -251,7 +286,7 @@ def _find_sub_pages(soup: BeautifulSoup, base_url: str) -> List[str]:
         if any(kw in path_lower for kw in SUB_PAGE_KEYWORDS):
             seen.add(path_lower)
             found.append(full)
-            if len(found) >= 5:
+            if len(found) >= 8:
                 break
     return found
 
@@ -282,7 +317,7 @@ def crawl(url: str) -> Dict:
         home_soup = BeautifulSoup(home_html, "lxml")
         sub_urls = _find_sub_pages(home_soup, url)
 
-        for sub_url in sub_urls[:5]:  # 增加到最多5个子页面
+        for sub_url in sub_urls[:8]:
             try:
                 with httpx.Client(timeout=10, follow_redirects=True, headers=HEADERS) as client:
                     resp = client.get(sub_url)
