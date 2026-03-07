@@ -56,12 +56,6 @@ const PublishWizard = () => {
   const [mEnableLinks, setMEnableLinks] = useState(false)
   const [trackingHistory, setTrackingHistory] = useState([])
 
-  // === OPT-013: 发布到网站 State ===
-  const [publishToSite, setPublishToSite] = useState(false)
-  const [siteList, setSiteList] = useState([])
-  const [selectedSiteId, setSelectedSiteId] = useState(null)
-  const [publishingSite, setPublishingSite] = useState(false)
-
   // === OPT-015: Campaign Link State ===
   const [inputMode, setInputMode] = useState('platform')  // 'platform' | 'manual'
   const [userPlatforms, setUserPlatforms] = useState([])
@@ -654,7 +648,7 @@ const PublishWizard = () => {
                       <Alert
                         type="warning"
                         message="该商家未返回 Campaign Link"
-                        description="建议切换到"手动输入"模式手动粘贴追踪链接"
+                        description="建议切换到「手动输入」模式手动粘贴追踪链接"
                         showIcon
                         style={{ marginBottom: 16 }}
                       />
