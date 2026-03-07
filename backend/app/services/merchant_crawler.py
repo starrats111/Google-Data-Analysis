@@ -305,7 +305,7 @@ def crawl(url: str) -> Dict:
     brand_name = ""
 
     try:
-        with httpx.Client(timeout=15, follow_redirects=True, headers=HEADERS) as client:
+        with httpx.Client(timeout=30, follow_redirects=True, headers=HEADERS) as client:
             resp = client.get(url)
             resp.raise_for_status()
             home_html = resp.text
@@ -319,7 +319,7 @@ def crawl(url: str) -> Dict:
 
         for sub_url in sub_urls[:8]:
             try:
-                with httpx.Client(timeout=10, follow_redirects=True, headers=HEADERS) as client:
+                with httpx.Client(timeout=20, follow_redirects=True, headers=HEADERS) as client:
                     resp = client.get(sub_url)
                     resp.raise_for_status()
                     sub_data = _extract_page(resp.text, sub_url)
@@ -327,6 +327,12 @@ def crawl(url: str) -> Dict:
             except Exception as e:
                 logger.warning(f"[MerchantCrawler] 子页面爬取失败 {sub_url}: {e}")
 
+    except httpx.TimeoutException:
+        logger.error(f"[MerchantCrawler] 爬取超时 {url}")
+        return {"crawl_failed": True, "error": f"商家网站访问超时，该网站可能较慢或服务器无法访问", "url": url}
+    except httpx.ConnectError:
+        logger.error(f"[MerchantCrawler] 连接失败 {url}")
+        return {"crawl_failed": True, "error": f"无法连接到商家网站，请检查网址是否正确", "url": url}
     except Exception as e:
         logger.error(f"[MerchantCrawler] 爬取失败 {url}: {e}")
         return {"crawl_failed": True, "error": str(e), "url": url}
