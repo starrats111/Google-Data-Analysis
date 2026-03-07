@@ -153,17 +153,31 @@ class CampaignLinkService:
         try:
             if mode == "post_json":
                 # CF / CG / BSH / PM — 不支持按 MID 过滤，需分页遍历
+                actual_total_pages = max_pages
                 for page in range(1, max_pages + 1):
                     payload = {
                         "source": cfg.get("source", ""),
                         "token": token,
                         "curPage": page,
                         "perPage": 2000,
-                        "relationship": "Joined",  # 只查已加入的商家（有 tracking_url）
+                        "relationship": "Joined",
                     }
-                    resp = httpx.post(url, json=payload, timeout=timeout)
-                    resp.raise_for_status()
+                    try:
+                        resp = httpx.post(url, json=payload, timeout=timeout)
+                        resp.raise_for_status()
+                    except (httpx.HTTPStatusError, httpx.RequestError) as page_err:
+                        logger.warning("Campaign link %s page %d failed: %s", platform_code, page, page_err)
+                        break
                     data = resp.json()
+
+                    # 利用 API 返回的 total_page 动态调整
+                    if page == 1:
+                        resp_data = data.get("data", data) if isinstance(data, dict) else {}
+                        tp = resp_data.get("total_page") or resp_data.get("totalPage")
+                        if tp and isinstance(tp, int) and tp > 0:
+                            actual_total_pages = min(tp, 50)  # 安全上限 50 页
+                            logger.info("[CampaignLink] %s total_page=%d, will scan up to %d", platform_code, tp, actual_total_pages)
+
                     items = MerchantPlatformSyncService._extract_items(data)
                     if not items:
                         break
@@ -172,8 +186,8 @@ class CampaignLinkService:
                     if found:
                         return found
 
-                    if len(items) < 2000:
-                        break  # 最后一页
+                    if len(items) < 2000 or page >= actual_total_pages:
+                        break
                 return None
 
             elif platform_code == "LB":
@@ -219,23 +233,27 @@ class CampaignLinkService:
 
         except httpx.HTTPStatusError as exc:
             logger.error("Campaign link API error for %s: %s", platform_code, exc)
-            raise HTTPException(502, f"平台 API 返回错误: {exc.response.status_code}")
+            status = exc.response.status_code
+            if status in (502, 503, 504):
+                raise HTTPException(502, f"平台 {platform_code} API 暂时不可用（{status}），请稍后重试")
+            raise HTTPException(502, f"平台 API 返回错误: {status}")
         except httpx.RequestError as exc:
             logger.error("Campaign link API request failed for %s: %s", platform_code, exc)
-            raise HTTPException(502, "平台 API 请求超时，请稍后重试")
+            raise HTTPException(502, f"平台 {platform_code} API 请求超时，请稍后重试")
 
     @staticmethod
     def _match_merchant(items: list, merchant_id: str, platform_code: str) -> Optional[dict]:
         """从返回列表中精确匹配目标商家"""
+        mid_lower = merchant_id.lower().strip()
         for item in items:
-            # 各平台可能的 ID 字段
             candidates = [
-                str(item.get("mid") or ""),
-                str(item.get("brand_id") or ""),
-                str(item.get("brandId") or ""),
-                str(item.get("mcid") or ""),
+                str(item.get("mid") or "").strip(),
+                str(item.get("brand_id") or "").strip(),
+                str(item.get("brandId") or "").strip(),
+                str(item.get("mcid") or "").strip(),
+                str(item.get("id") or "").strip(),
             ]
-            if merchant_id in candidates:
+            if merchant_id in candidates or mid_lower in [c.lower() for c in candidates]:
                 return item
         return None
 
