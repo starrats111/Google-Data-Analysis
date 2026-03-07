@@ -215,7 +215,14 @@ const PublishWizard = () => {
         message.warning('该商家未返回 Campaign Link，请切换到手动输入')
       }
     } catch (err) {
-      message.error(err?.response?.data?.detail || '获取 Campaign Link 失败')
+      const status = err?.response?.status
+      const detail = err?.response?.data?.detail || '获取 Campaign Link 失败'
+      if (status === 404) {
+        message.warning(detail)
+        setInputMode('manual')
+      } else {
+        message.error(detail)
+      }
     } finally { setFetchingCampaign(false) }
   }
 
@@ -590,41 +597,53 @@ const PublishWizard = () => {
 
             {inputMode === 'platform' ? (
               <>
-                <Row gutter={16}>
-                  <Col span={12}>
-                    <Typography.Title level={5}>选择平台</Typography.Title>
-                    <Select
-                      placeholder="选择平台"
-                      value={selectedPlatform}
-                      onChange={setSelectedPlatform}
-                      options={userPlatforms.map(p => ({ value: p.platform_code, label: p.platform_name }))}
-                      style={{ width: '100%' }}
-                      size="large"
-                      notFoundContent="暂无可用平台账号"
-                    />
-                  </Col>
-                  <Col span={12}>
-                    <Typography.Title level={5}>商家 MID</Typography.Title>
-                    <Input
-                      placeholder="输入商家 MID"
-                      value={merchantMid}
-                      onChange={e => setMerchantMid(e.target.value)}
-                      size="large"
-                    />
-                  </Col>
-                </Row>
+                {userPlatforms.length === 0 ? (
+                  <Alert
+                    type="info"
+                    showIcon
+                    message="你还没有已配置的平台账号"
+                    description="请先在「联盟账号管理」中添加平台账号，或切换到「手动输入」模式直接粘贴追踪链接。"
+                    style={{ marginBottom: 16 }}
+                    action={<Button size="small" onClick={() => setInputMode('manual')}>手动输入</Button>}
+                  />
+                ) : (
+                  <>
+                    <Row gutter={16}>
+                      <Col span={12}>
+                        <Typography.Title level={5}>选择平台</Typography.Title>
+                        <Select
+                          placeholder="选择平台"
+                          value={selectedPlatform}
+                          onChange={setSelectedPlatform}
+                          options={userPlatforms.map(p => ({ value: p.platform_code, label: p.platform_name }))}
+                          style={{ width: '100%' }}
+                          size="large"
+                        />
+                      </Col>
+                      <Col span={12}>
+                        <Typography.Title level={5}>商家 MID</Typography.Title>
+                        <Input
+                          placeholder="输入商家 MID"
+                          value={merchantMid}
+                          onChange={e => setMerchantMid(e.target.value)}
+                          size="large"
+                        />
+                      </Col>
+                    </Row>
 
-                <Button
-                  type="primary"
-                  icon={<SearchOutlined />}
-                  onClick={handleFetchCampaignLink}
-                  loading={fetchingCampaign}
-                  style={{ marginTop: 16 }}
-                  block
-                  size="large"
-                >
-                  获取 Campaign Link
-                </Button>
+                    <Button
+                      type="primary"
+                      icon={<SearchOutlined />}
+                      onClick={handleFetchCampaignLink}
+                      loading={fetchingCampaign}
+                      style={{ marginTop: 16 }}
+                      block
+                      size="large"
+                    >
+                      获取 Campaign Link
+                    </Button>
+                  </>
+                )}
 
                 {campaignResult && (
                   <div style={{ marginTop: 24 }}>

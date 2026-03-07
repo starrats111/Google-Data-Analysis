@@ -57,10 +57,11 @@ class CampaignLinkService:
         self.db = db
 
     def get_user_platforms(self, user_id: int) -> List[dict]:
-        """获取用户有活跃账号的平台列表，如果用户自己没有则返回团队可用平台。"""
-        from sqlalchemy import func
-
-        # 先查用户自己的
+        """获取当前用户自己有活跃账号的平台列表。
+        
+        每个人的 campaign link 不同（tracking 归属不同），
+        只能用自己的 Token 获取，因此只返回自己有账号的平台。
+        """
         accounts = (
             self.db.query(AffiliateAccount)
             .join(AffiliatePlatform)
@@ -70,15 +71,6 @@ class CampaignLinkService:
             )
             .all()
         )
-
-        # 如果用户自己没有账号，查所有活跃账号的平台
-        if not accounts:
-            accounts = (
-                self.db.query(AffiliateAccount)
-                .join(AffiliatePlatform)
-                .filter(AffiliateAccount.is_active.is_(True))
-                .all()
-            )
 
         seen = set()
         result = []
@@ -93,15 +85,14 @@ class CampaignLinkService:
         return result
 
     def get_campaign_link(self, user_id: int, platform_code: str, merchant_id: str) -> dict:
-        """根据员工的平台账号 Token 获取指定商家的 campaign link。
+        """根据当前员工自己的 Token 获取指定商家的 campaign link。
         
-        会尝试用户自己的账号，再尝试团队内所有可用账号，直到找到为止。
+        每个人的 campaign link 不同（tracking 归属不同），必须用自己的 Token。
         """
         platform_code = platform_code.upper()
         from sqlalchemy import func
 
-        # 收集所有可用账号：用户自己的优先，再加团队内其他的
-        user_accounts = (
+        account = (
             self.db.query(AffiliateAccount)
             .join(AffiliatePlatform)
             .filter(
@@ -109,38 +100,20 @@ class CampaignLinkService:
                 func.upper(AffiliatePlatform.platform_code) == platform_code,
                 AffiliateAccount.is_active.is_(True),
             )
-            .all()
+            .first()
         )
-        team_accounts = (
-            self.db.query(AffiliateAccount)
-            .join(AffiliatePlatform)
-            .filter(
-                AffiliateAccount.user_id != user_id,
-                func.upper(AffiliatePlatform.platform_code) == platform_code,
-                AffiliateAccount.is_active.is_(True),
-            )
-            .all()
-        )
-        all_accounts = user_accounts + team_accounts
-        if not all_accounts:
-            raise HTTPException(400, "该平台没有可用的账号，请联系管理员")
+        if not account:
+            raise HTTPException(400, "你没有该平台的账号，请先在联盟账号管理中添加")
 
-        # 依次尝试每个账号的 Token，直到找到商家
-        tried = 0
-        for account in all_accounts:
-            token = MerchantPlatformSyncService._resolve_token(account, platform_code)
-            if not token:
-                continue
-            tried += 1
-            logger.info("[CampaignLink] 尝试账号 #%d (user_id=%s) 查找 %s MID=%s",
-                        tried, account.user_id, platform_code, merchant_id)
-            raw = self._fetch_merchant_by_id(platform_code, token, merchant_id)
-            if raw:
-                return self._map_campaign_response(raw, platform_code)
-
-        if tried == 0:
+        token = MerchantPlatformSyncService._resolve_token(account, platform_code)
+        if not token:
             raise HTTPException(400, "Token 无效，请更新平台账号凭证")
-        raise HTTPException(404, f"在 {tried} 个账号中均未找到 MID {merchant_id}，该商家可能未加入")
+
+        raw = self._fetch_merchant_by_id(platform_code, token, merchant_id)
+        if not raw:
+            raise HTTPException(404, "未在你的账号中找到该商家，可能未加入该商家计划，请手动输入追踪链接")
+
+        return self._map_campaign_response(raw, platform_code)
 
     def _fetch_merchant_by_id(self, platform_code: str, token: str, merchant_id: str) -> Optional[dict]:
         """调用 Monetization API 查询指定商家详情（含 campaign link）。
