@@ -51,7 +51,7 @@ const PublishWizard = () => {
   const [selectedMTitle, setSelectedMTitle] = useState('')
   const [selectedMKeywords, setSelectedMKeywords] = useState([])
   const [merchantArticle, setMerchantArticle] = useState(null)
-  const [merchantImages, setMerchantImages] = useState([])
+  // merchantImages removed - replaced by selectedImages + crawledImages + stockImages
   const [mPublishDate, setMPublishDate] = useState(null)
   const [mEnableLinks, setMEnableLinks] = useState(false)
   const [trackingHistory, setTrackingHistory] = useState([])
@@ -71,8 +71,11 @@ const PublishWizard = () => {
   const [selectedSiteId, setSelectedSiteId] = useState(null)
   const [publishingSite, setPublishingSite] = useState(false)
 
-  // === 图片增强 State ===
-  const [featuredImageIndex, setFeaturedImageIndex] = useState(0)  // 默认第一张为头图
+  // === 图片双区域 State ===
+  const [selectedImages, setSelectedImages] = useState([])       // 文章用图（位置0=头图）
+  const [crawledImages, setCrawledImages] = useState([])         // 网站爬取的待选图
+  const [stockImages, setStockImages] = useState([])             // 图片库待选图
+  const [imagePoolMode, setImagePoolMode] = useState('crawl')    // 'crawl' | 'stock'
   const [searchingImages, setSearchingImages] = useState(false)
 
   useEffect(() => {
@@ -244,7 +247,11 @@ const PublishWizard = () => {
       setCrawlResult(res.data)
       setMerchantTitles(res.data?.analysis?.titles || [])
       setMerchantKeywords(res.data?.analysis?.keywords || [])
-      setMerchantImages(res.data?.images || [])
+      const imgs = res.data?.images || []
+      setCrawledImages(imgs)
+      setSelectedImages(imgs.slice(0, 5))
+      setStockImages([])
+      setImagePoolMode('crawl')
       setMStep(1)
     } catch (err) {
       message.error('爬取失败: ' + (err?.response?.data?.detail || err.message))
@@ -262,7 +269,11 @@ const PublishWizard = () => {
       setCrawlResult(res.data)
       setMerchantTitles(res.data?.analysis?.titles || [])
       setMerchantKeywords(res.data?.analysis?.keywords || [])
-      setMerchantImages(res.data?.images || [])
+      const imgs = res.data?.images || []
+      setCrawledImages(imgs)
+      setSelectedImages(imgs.slice(0, 5))
+      setStockImages([])
+      setImagePoolMode('crawl')
       setMStep(1)
     } catch (err) {
       message.error('爬取失败: ' + (err?.response?.data?.detail || err.message))
@@ -317,7 +328,8 @@ const PublishWizard = () => {
         tracking_link: trackingLink,
         language,
         category_name: merchantArticle.category || crawlResult?.analysis?.category || null,
-        featured_image: merchantImages[featuredImageIndex] || merchantImages[0] || null,
+        featured_image: selectedImages[0] || null,
+        content_images: selectedImages.slice(1),
       }
       const res = await articleApi.createArticle(payload)
       const articleId = res.data?.id
@@ -344,38 +356,40 @@ const PublishWizard = () => {
     else setSelectedMKeywords([...selectedMKeywords, kw])
   }
 
-  const handleRemoveMerchantImage = (index) => {
-    setMerchantImages(prev => prev.filter((_, i) => i !== index))
-    // 如果删除的是头图，重置为第一张
-    if (index === featuredImageIndex) setFeaturedImageIndex(0)
-    else if (index < featuredImageIndex) setFeaturedImageIndex(prev => prev - 1)
+  // === 图片选择操作 ===
+  const handleAddToSelected = (src) => {
+    if (selectedImages.includes(src)) { message.info('该图片已在文章用图中'); return }
+    setSelectedImages(prev => [...prev, src])
   }
 
-  const handleSearchMoreImages = async () => {
+  const handleRemoveFromSelected = (index) => {
+    setSelectedImages(prev => prev.filter((_, i) => i !== index))
+  }
+
+  const handleMoveSelected = (fromIndex, toIndex) => {
+    if (toIndex < 0 || toIndex >= selectedImages.length) return
+    setSelectedImages(prev => {
+      const arr = [...prev]
+      const [item] = arr.splice(fromIndex, 1)
+      arr.splice(toIndex, 0, item)
+      return arr
+    })
+  }
+
+  const handleLoadStockImages = async () => {
     const brandName = crawlResult?.brand_name || ''
-    if (!brandName) { message.warning('无法获取品牌名，请手动搜索'); return }
+    if (!brandName) { message.warning('无法获取品牌名'); return }
+    if (stockImages.length > 0) { setImagePoolMode('stock'); return }
     setSearchingImages(true)
     try {
-      const res = await articleApi.searchImages({ query: `${brandName} products official`, count: 12 })
-      const newImages = res.data?.images || []
-      if (newImages.length === 0) { message.info('未搜索到更多图片'); return }
-      setMerchantImages(prev => {
-        const existing = new Set(prev)
-        const merged = [...prev]
-        for (const img of newImages) {
-          if (!existing.has(img)) { merged.push(img); existing.add(img) }
-        }
-        return merged
-      })
-      message.success(`搜索到 ${newImages.length} 张图片`)
+      const res = await articleApi.searchImages({ query: `${brandName} products`, count: 16 })
+      const imgs = res.data?.images || []
+      setStockImages(imgs)
+      setImagePoolMode('stock')
+      if (imgs.length === 0) message.info('图片库未搜索到匹配图片')
     } catch (err) {
-      message.error('搜索图片失败: ' + (err?.response?.data?.detail || err.message))
+      message.error('搜索图片库失败: ' + (err?.response?.data?.detail || err.message))
     } finally { setSearchingImages(false) }
-  }
-
-  const handleSetFeaturedImage = (index) => {
-    setFeaturedImageIndex(index)
-    message.success('已设为头图')
   }
 
   // ==================== Tracking link autocomplete ====================
@@ -783,62 +797,110 @@ const PublishWizard = () => {
               )}
             </Card>
 
-            {merchantImages.length > 0 && (
-              <div style={{ marginBottom: 16 }}>
-                <Typography.Title level={5}>
-                  商家图片
-                  <Typography.Text type="secondary" style={{ fontSize: 12, marginLeft: 8 }}>
-                    点击图片设为头图，点击 × 移除
-                  </Typography.Text>
-                </Typography.Title>
-                <Space wrap size={[8, 8]}>
-                  {merchantImages.map((src, i) => (
-                    <div key={i} style={{
-                      position: 'relative', display: 'inline-block', cursor: 'pointer',
-                      border: i === featuredImageIndex ? '3px solid #1890ff' : '3px solid transparent',
-                      borderRadius: 6, padding: 1,
-                    }} onClick={() => handleSetFeaturedImage(i)}>
-                      {i === featuredImageIndex && (
-                        <Tag color="blue" style={{ position: 'absolute', bottom: 4, left: 4, zIndex: 2, margin: 0, fontSize: 11 }}>头图</Tag>
-                      )}
-                      <Image src={src} width={100} height={100} style={{ objectFit: 'cover', borderRadius: 4 }}
+            {/* ===== 文章用图 ===== */}
+            <div style={{ marginBottom: 20 }}>
+              <Typography.Title level={5} style={{ color: '#52c41a' }}>
+                文章用图
+                <Typography.Text type="secondary" style={{ fontSize: 12, marginLeft: 8 }}>
+                  第一张为头图，其余为内容图。从下方待选图中点击添加，点 × 移除，点箭头调整顺序
+                </Typography.Text>
+              </Typography.Title>
+              {selectedImages.length === 0 ? (
+                <Alert type="info" message="请从下方待选图中点击选择图片" showIcon />
+              ) : (
+                <Space wrap size={[10, 10]}>
+                  {selectedImages.map((src, i) => (
+                    <div key={`sel-${i}`} style={{
+                      position: 'relative', display: 'inline-block',
+                      border: i === 0 ? '3px solid #52c41a' : '2px solid #d9d9d9',
+                      borderRadius: 8, padding: 2, background: '#fff',
+                    }}>
+                      <Tag color={i === 0 ? 'green' : 'default'} style={{ position: 'absolute', bottom: 4, left: 4, zIndex: 2, margin: 0, fontSize: 11 }}>
+                        {i === 0 ? '头图' : `内容${i}`}
+                      </Tag>
+                      <Image src={src} width={110} height={110} style={{ objectFit: 'cover', borderRadius: 6 }}
                         preview={false}
                         fallback="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACklEQVR4nGMAAQAABQABDQottAAAAABJRU5ErkJggg=="
-                        onClick={(e) => { e.stopPropagation(); handleSetFeaturedImage(i) }}
                       />
-                      <Button
-                        type="text" danger size="small" icon={<DeleteOutlined />}
-                        onClick={(e) => { e.stopPropagation(); handleRemoveMerchantImage(i) }}
+                      <Button type="text" danger size="small" icon={<DeleteOutlined />}
+                        onClick={() => handleRemoveFromSelected(i)}
                         style={{ position: 'absolute', top: -6, right: -6, background: '#fff', borderRadius: '50%', boxShadow: '0 1px 4px rgba(0,0,0,0.2)', width: 22, height: 22, padding: 0, minWidth: 22 }}
                       />
+                      <div style={{ position: 'absolute', top: '50%', left: -14, transform: 'translateY(-50%)', display: 'flex', flexDirection: 'column', gap: 2 }}>
+                        {i > 0 && (
+                          <Button type="text" size="small" onClick={() => handleMoveSelected(i, i - 1)}
+                            style={{ fontSize: 10, padding: 0, width: 18, height: 18, minWidth: 18, lineHeight: '18px', background: '#fff', borderRadius: '50%', boxShadow: '0 1px 3px rgba(0,0,0,0.15)' }}>
+                            ←
+                          </Button>
+                        )}
+                      </div>
+                      <div style={{ position: 'absolute', top: '50%', right: -14, transform: 'translateY(-50%)' }}>
+                        {i < selectedImages.length - 1 && (
+                          <Button type="text" size="small" onClick={() => handleMoveSelected(i, i + 1)}
+                            style={{ fontSize: 10, padding: 0, width: 18, height: 18, minWidth: 18, lineHeight: '18px', background: '#fff', borderRadius: '50%', boxShadow: '0 1px 3px rgba(0,0,0,0.15)' }}>
+                            →
+                          </Button>
+                        )}
+                      </div>
                     </div>
                   ))}
                 </Space>
-                {merchantImages.length < 8 && (
-                  <div style={{ marginTop: 8 }}>
-                    <Button icon={<SearchOutlined />} loading={searchingImages} onClick={handleSearchMoreImages} size="small">
-                      搜索更多图片
-                    </Button>
-                    <Typography.Text type="warning" style={{ marginLeft: 8, fontSize: 12 }}>
-                      当前 {merchantImages.length} 张，建议至少 8 张
-                    </Typography.Text>
-                  </div>
-                )}
-              </div>
-            )}
-            {merchantImages.length === 0 && (
-              <div style={{ marginBottom: 16 }}>
-                <Alert
-                  type="warning"
-                  message="未从商家网站获取到图片"
-                  description={
-                    <Button icon={<SearchOutlined />} loading={searchingImages} onClick={handleSearchMoreImages} style={{ marginTop: 8 }}>
-                      搜索商家图片
-                    </Button>
-                  }
+              )}
+            </div>
+
+            {/* ===== 待选用图 ===== */}
+            <div style={{ marginBottom: 20 }}>
+              <div style={{ display: 'flex', alignItems: 'center', marginBottom: 8, gap: 12 }}>
+                <Typography.Title level={5} style={{ margin: 0, color: '#ff4d4f' }}>待选用图</Typography.Title>
+                <Segmented
+                  size="small"
+                  value={imagePoolMode}
+                  onChange={(v) => {
+                    if (v === 'stock') handleLoadStockImages()
+                    else setImagePoolMode('crawl')
+                  }}
+                  options={[
+                    { label: '商家网站', value: 'crawl' },
+                    { label: '图片库', value: 'stock' },
+                  ]}
                 />
+                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                  点击图片添加到文章用图
+                </Typography.Text>
               </div>
-            )}
+              {imagePoolMode === 'crawl' && crawledImages.length === 0 && (
+                <Alert type="warning" message="未从商家网站获取到图片，可切换到图片库" showIcon />
+              )}
+              {imagePoolMode === 'stock' && searchingImages && <Spin tip="搜索图片库中..." />}
+              {imagePoolMode === 'stock' && !searchingImages && stockImages.length === 0 && (
+                <Alert type="info" message="图片库暂无匹配结果" showIcon />
+              )}
+              <Space wrap size={[8, 8]} style={{ marginTop: 8 }}>
+                {(imagePoolMode === 'crawl' ? crawledImages : stockImages).map((src, i) => {
+                  const isSelected = selectedImages.includes(src)
+                  return (
+                    <div key={`pool-${i}`} style={{
+                      position: 'relative', display: 'inline-block', cursor: isSelected ? 'default' : 'pointer',
+                      border: '2px solid transparent', borderRadius: 6, padding: 1,
+                      opacity: isSelected ? 0.4 : 1, transition: 'opacity 0.2s',
+                    }} onClick={() => !isSelected && handleAddToSelected(src)}>
+                      <Image src={src} width={90} height={90} style={{ objectFit: 'cover', borderRadius: 4 }}
+                        preview={false}
+                        fallback="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACklEQVR4nGMAAQAABQABDQottAAAAABJRU5ErkJggg=="
+                      />
+                      {isSelected && (
+                        <Tag color="green" style={{ position: 'absolute', top: 4, left: 4, zIndex: 2, margin: 0, fontSize: 10 }}>已选</Tag>
+                      )}
+                      {!isSelected && (
+                        <div style={{ position: 'absolute', top: 4, right: 4, zIndex: 2, background: 'rgba(0,0,0,0.5)', borderRadius: '50%', width: 20, height: 20, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                          <PlusOutlined style={{ color: '#fff', fontSize: 12 }} />
+                        </div>
+                      )}
+                    </div>
+                  )
+                })}
+              </Space>
+            </div>
 
             <Typography.Title level={5}>选择标题</Typography.Title>
             <List
@@ -917,44 +979,31 @@ const PublishWizard = () => {
               <div dangerouslySetInnerHTML={{ __html: merchantArticle.content }} />
             </Card>
 
-            {merchantImages.length > 0 && (
+            {selectedImages.length > 0 && (
               <div style={{ marginBottom: 16 }}>
-                <Typography.Title level={5}>
-                  商家图片
+                <Typography.Title level={5} style={{ color: '#52c41a' }}>
+                  文章配图预览
                   <Typography.Text type="secondary" style={{ fontSize: 12, marginLeft: 8 }}>
-                    点击图片设为头图，点击 × 移除
+                    返回上一步可修改
                   </Typography.Text>
                 </Typography.Title>
-                <Space wrap size={[8, 8]}>
-                  {merchantImages.map((src, i) => (
-                    <div key={i} style={{
-                      position: 'relative', display: 'inline-block', cursor: 'pointer',
-                      border: i === featuredImageIndex ? '3px solid #1890ff' : '3px solid transparent',
-                      borderRadius: 6, padding: 1,
-                    }} onClick={() => handleSetFeaturedImage(i)}>
-                      {i === featuredImageIndex && (
-                        <Tag color="blue" style={{ position: 'absolute', bottom: 4, left: 4, zIndex: 2, margin: 0, fontSize: 11 }}>头图</Tag>
-                      )}
-                      <Image src={src} width={120} height={120} style={{ objectFit: 'cover', borderRadius: 4 }}
+                <Space wrap size={[10, 10]}>
+                  {selectedImages.map((src, i) => (
+                    <div key={`preview-${i}`} style={{
+                      position: 'relative', display: 'inline-block',
+                      border: i === 0 ? '3px solid #52c41a' : '2px solid #d9d9d9',
+                      borderRadius: 8, padding: 2,
+                    }}>
+                      <Tag color={i === 0 ? 'green' : 'default'} style={{ position: 'absolute', bottom: 4, left: 4, zIndex: 2, margin: 0, fontSize: 11 }}>
+                        {i === 0 ? '头图' : `内容${i}`}
+                      </Tag>
+                      <Image src={src} width={120} height={120} style={{ objectFit: 'cover', borderRadius: 6 }}
                         preview={false}
                         fallback="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACklEQVR4nGMAAQAABQABDQottAAAAABJRU5ErkJggg=="
-                        onClick={(e) => { e.stopPropagation(); handleSetFeaturedImage(i) }}
-                      />
-                      <Button
-                        type="text" danger size="small" icon={<DeleteOutlined />}
-                        onClick={(e) => { e.stopPropagation(); handleRemoveMerchantImage(i) }}
-                        style={{ position: 'absolute', top: -6, right: -6, background: '#fff', borderRadius: '50%', boxShadow: '0 1px 4px rgba(0,0,0,0.2)', width: 22, height: 22, padding: 0, minWidth: 22 }}
                       />
                     </div>
                   ))}
                 </Space>
-                {merchantImages.length < 8 && (
-                  <div style={{ marginTop: 8 }}>
-                    <Button icon={<SearchOutlined />} loading={searchingImages} onClick={handleSearchMoreImages} size="small">
-                      搜索更多图片
-                    </Button>
-                  </div>
-                )}
               </div>
             )}
             <Divider />
