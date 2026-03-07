@@ -20,8 +20,7 @@ router = APIRouter(prefix="/api/sites", tags=["网站管理"])
 
 class SiteCreate(BaseModel):
     site_name: str
-    site_path: str
-    domain: Optional[str] = None
+    domain: str
     data_js_path: str = "js/articles-index.js"
     article_template: str = "article-1.html"
     group_id: Optional[int] = None
@@ -29,10 +28,7 @@ class SiteCreate(BaseModel):
 
 class SiteUpdate(BaseModel):
     site_name: Optional[str] = None
-    site_path: Optional[str] = None
     domain: Optional[str] = None
-    data_js_path: Optional[str] = None
-    article_template: Optional[str] = None
 
 
 def _check_site_permission(site: PubSite, user: User):
@@ -78,47 +74,40 @@ async def create_site(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """新增网站配置，自动触发 slug 迁移"""
-    # 所有员工都可以创建自己的网站配置
+    """新增网站配置，自动创建目录结构"""
+    # 根据域名自动生成路径
+    domain_clean = data.domain.strip().lower().replace("https://", "").replace("http://", "").rstrip("/")
+    dir_name = domain_clean.replace(".", "-")  # allurahub.com -> allurahub-com
+    site_path = f"/home/admin/sites/{dir_name}"
 
+    # 检查是否已存在同域名的网站
+    existing = db.query(PubSite).filter(PubSite.domain == domain_clean).first()
+    if existing:
+        raise HTTPException(status_code=400, detail=f"域名 {domain_clean} 已被注册")
+
+    # 自动创建目录结构
     try:
-        site_publisher.validate_site_path(data.site_path)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
-    checks = site_publisher.verify_site(data.site_path)
-    if not checks["valid"]:
-        failed = [k for k, v in checks.items() if not v and k != "valid"]
-        raise HTTPException(status_code=400, detail=f"网站目录验证失败: {', '.join(failed)}")
+        site_publisher.init_site_directory(site_path)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"创建网站目录失败: {e}")
 
     group_id = data.group_id if (data.group_id and current_user.role in ("manager", "leader")) else current_user.team_id
 
     site = PubSite(
         group_id=group_id,
-        site_name=data.site_name,
-        site_path=data.site_path,
-        domain=data.domain,
+        site_name=data.site_name.strip(),
+        site_path=site_path,
+        domain=domain_clean,
         data_js_path=data.data_js_path,
         article_template=data.article_template,
         created_by=current_user.id,
+        migrated=True,  # 新建的网站不需要迁移
     )
     db.add(site)
-    db.flush()
-
-    migration_result = None
-    try:
-        migration_result = site_publisher.migrate_to_slug(site)
-        site.migrated = True
-    except Exception as e:
-        logger.error(f"Slug 迁移失败: {e}", exc_info=True)
-        migration_result = {"migrated_count": 0, "errors": [str(e)]}
-
     db.commit()
     db.refresh(site)
 
-    result = _site_to_dict(site, db)
-    result["migration"] = migration_result
-    return result
+    return _site_to_dict(site, db)
 
 
 @router.put("/{site_id}")
@@ -134,12 +123,9 @@ async def update_site(
     _check_site_permission(site, current_user)
 
     update_data = data.dict(exclude_unset=True)
-
-    if "site_path" in update_data:
-        try:
-            site_publisher.validate_site_path(update_data["site_path"])
-        except ValueError as e:
-            raise HTTPException(status_code=400, detail=str(e))
+    if "domain" in update_data:
+        domain_clean = update_data["domain"].strip().lower().replace("https://", "").replace("http://", "").rstrip("/")
+        update_data["domain"] = domain_clean
 
     for key, value in update_data.items():
         setattr(site, key, value)

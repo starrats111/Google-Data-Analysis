@@ -16,6 +16,72 @@ logger = logging.getLogger(__name__)
 ALLOWED_BASE = "/home/admin/sites"
 
 
+def init_site_directory(site_path: str) -> None:
+    """自动创建网站目录结构：
+    site_path/
+    ├── index.html          (空壳首页)
+    ├── article-1.html      (文章模板)
+    ├── js/
+    │   ├── main.js         (前端路由)
+    │   ├── articles-index.js (文章索引)
+    │   └── articles/       (文章 JSON 目录)
+    """
+    base = Path(site_path)
+    validate_site_path(site_path)
+
+    base.mkdir(parents=True, exist_ok=True)
+    (base / "js").mkdir(exist_ok=True)
+    (base / "js" / "articles").mkdir(exist_ok=True)
+
+    # articles-index.js — 空数组
+    index_js = base / "js" / "articles-index.js"
+    if not index_js.exists():
+        index_js.write_text(serialize_articles_index([]), encoding="utf-8")
+
+    # main.js — 基础前端路由（slug 模式）
+    main_js = base / "js" / "main.js"
+    if not main_js.exists():
+        main_js.write_text(
+            '// 文章路由 - 由系统自动生成\n'
+            'function loadArticle(slug) {\n'
+            '  fetch("js/articles/" + slug + ".json")\n'
+            '    .then(r => r.json())\n'
+            '    .then(data => { document.title = data.title; })\n'
+            '    .catch(e => console.error("加载文章失败:", e));\n'
+            '}\n',
+            encoding="utf-8",
+        )
+
+    # index.html — 最简首页
+    index_html = base / "index.html"
+    if not index_html.exists():
+        index_html.write_text(
+            '<!DOCTYPE html>\n<html lang="en">\n<head>\n'
+            '  <meta charset="UTF-8">\n  <title>Site</title>\n'
+            '</head>\n<body>\n'
+            '  <script src="js/articles-index.js"></script>\n'
+            '  <script src="js/main.js"></script>\n'
+            '</body>\n</html>\n',
+            encoding="utf-8",
+        )
+
+    # article-1.html — 文章模板
+    tpl = base / "article-1.html"
+    if not tpl.exists():
+        tpl.write_text(
+            '<!DOCTYPE html>\n<html lang="en">\n<head>\n'
+            '  <meta charset="UTF-8">\n  <title>Article</title>\n'
+            '</head>\n<body>\n'
+            '  <article id="article-content"></article>\n'
+            '  <script src="js/articles-index.js"></script>\n'
+            '  <script src="js/main.js"></script>\n'
+            '</body>\n</html>\n',
+            encoding="utf-8",
+        )
+
+    logger.info(f"网站目录已初始化: {site_path}")
+
+
 def validate_site_path(site_path: str) -> None:
     """校验 site_path 在允许范围内，防止路径遍历"""
     resolved = Path(site_path).resolve()
