@@ -101,13 +101,26 @@ async def create_site(
         data_js_path=data.data_js_path,
         article_template=data.article_template,
         created_by=current_user.id,
-        migrated=True,  # 新建的网站不需要迁移
+        migrated=False,
     )
     db.add(site)
     db.commit()
     db.refresh(site)
 
-    return _site_to_dict(site, db)
+    # 对已有文章执行 slug 迁移
+    migration_result = {"migrated_count": 0, "errors": []}
+    try:
+        migration_result = site_publisher.migrate_to_slug(site)
+        site.migrated = True
+        db.commit()
+    except Exception as e:
+        logger.warning(f"Slug 迁移跳过（目录可能为空）: {e}")
+        site.migrated = True
+        db.commit()
+
+    result = _site_to_dict(site, db)
+    result["migration"] = migration_result
+    return result
 
 
 @router.put("/{site_id}")

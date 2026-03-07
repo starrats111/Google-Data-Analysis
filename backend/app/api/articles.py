@@ -7,7 +7,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm import Session, joinedload, selectinload
 
 from app.database import get_db
 from app.middleware.auth import get_current_user
@@ -103,7 +103,19 @@ async def list_articles(
     else:
         query = query.order_by(sort_col.desc())
 
-    items = query.offset((page - 1) * page_size).limit(page_size).all()
+    items = (
+        query.options(
+            selectinload(PubArticle.tags).joinedload(PubArticleTag.tag),
+            selectinload(PubArticle.links),
+            selectinload(PubArticle.images),
+            joinedload(PubArticle.category),
+            joinedload(PubArticle.user),
+            joinedload(PubArticle.site),
+        )
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+        .all()
+    )
 
     return {
         "items": [_article_to_dict(a, db) for a in items],
@@ -204,13 +216,24 @@ async def get_article(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    article = db.query(PubArticle).filter(
-        PubArticle.id == article_id,
-        PubArticle.deleted_at.is_(None),
-    ).first()
+    article = (
+        db.query(PubArticle)
+        .options(
+            selectinload(PubArticle.tags).joinedload(PubArticleTag.tag),
+            selectinload(PubArticle.links),
+            selectinload(PubArticle.images),
+            joinedload(PubArticle.category),
+            joinedload(PubArticle.user),
+            joinedload(PubArticle.site),
+        )
+        .filter(
+            PubArticle.id == article_id,
+            PubArticle.deleted_at.is_(None),
+        ).first()
+    )
     if not article:
         raise HTTPException(status_code=404, detail="文章不存在")
-    return _article_to_dict(article, db)
+    return _article_to_dict(article)
 
 
 @router.put("/{article_id}")
@@ -343,6 +366,9 @@ async def publish_to_site(
         raise HTTPException(status_code=404, detail="文章不存在")
     _check_article_permission(article, current_user)
 
+    if article.status != "published":
+        raise HTTPException(status_code=400, detail="文章状态必须为 published 才能发布到网站，请先发布文章")
+
     if article.published_to_site:
         raise HTTPException(status_code=400, detail="文章已发布到网站，请先移除再重新发布")
 
@@ -405,23 +431,16 @@ async def unpublish_from_site(
     return {"message": "文章已从网站移除"}
 
 
-def _article_to_dict(article: PubArticle, db: Session) -> dict:
-    tags = db.query(PubArticleTag).filter(PubArticleTag.article_id == article.id).all()
+def _article_to_dict(article: PubArticle, db: Session = None) -> dict:
+    # 优先使用已加载的 relationship，避免 N+1 查询
     tag_list = []
-    for at in tags:
-        tag = db.query(PubTag).filter(PubTag.id == at.tag_id).first()
+    for at in (article.tags or []):
+        tag = at.tag
         if tag:
             tag_list.append({"id": tag.id, "name": tag.name, "slug": tag.slug})
 
-    links = db.query(PubArticleLink).filter(PubArticleLink.article_id == article.id).all()
-    images = db.query(PubArticleImage).filter(PubArticleImage.article_id == article.id).all()
-
-    category_name = None
-    if article.category_id:
-        cat = db.query(PubCategory).filter(PubCategory.id == article.category_id).first()
-        category_name = cat.name if cat else None
-
-    user = db.query(User).filter(User.id == article.user_id).first()
+    category_name = article.category.name if article.category else None
+    username = article.user.username if article.user else None
 
     return {
         "id": article.id,
@@ -433,7 +452,7 @@ def _article_to_dict(article: PubArticle, db: Session) -> dict:
         "category_id": article.category_id,
         "category_name": category_name,
         "user_id": article.user_id,
-        "username": user.username if user else None,
+        "username": username,
         "author": article.author,
         "featured_image": article.featured_image,
         "publish_date": article.publish_date.isoformat() if article.publish_date else None,
@@ -444,8 +463,8 @@ def _article_to_dict(article: PubArticle, db: Session) -> dict:
         "views": article.views,
         "ai_model_used": article.ai_model_used,
         "tags": tag_list,
-        "links": [{"id": l.id, "keyword": l.keyword, "url": l.url} for l in links],
-        "images": [{"id": i.id, "url": i.url, "alt_text": i.alt_text, "position": i.position} for i in images],
+        "links": [{"id": l.id, "keyword": l.keyword, "url": l.url} for l in (article.links or [])],
+        "images": [{"id": i.id, "url": i.url, "alt_text": i.alt_text, "position": i.position} for i in (article.images or [])],
         "site_id": article.site_id,
         "site_article_slug": article.site_article_slug,
         "published_to_site": article.published_to_site or False,
