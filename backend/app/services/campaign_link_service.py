@@ -107,7 +107,10 @@ class CampaignLinkService:
         return self._map_campaign_response(raw, platform_code)
 
     def _fetch_merchant_by_id(self, platform_code: str, token: str, merchant_id: str) -> Optional[dict]:
-        """调用 Monetization API 查询指定 MID 的商家详情（含 campaign link）。"""
+        """调用 Monetization API 查询指定商家详情（含 campaign link）。
+
+        merchant_id 可以是数字 MID 或字符串 mcid，按平台文档选择正确的过滤参数。
+        """
         cfg = PLATFORM_API_CONFIG.get(platform_code)
         if not cfg:
             raise HTTPException(400, "该平台暂不支持自动获取 Campaign Link")
@@ -118,23 +121,50 @@ class CampaignLinkService:
 
         try:
             if mode == "post_json":
+                # CF / CG / BSH / PM — POST JSON
+                # 文档支持按 mcid 过滤（字符串slug）或不过滤拉全量再本地匹配
+                # 但 perPage=1 + mcid 过滤效率最高
                 payload = {
                     "source": cfg.get("source", ""),
                     "token": token,
-                    "brand_id": merchant_id,
+                    "curPage": 1,
+                    "perPage": 100,
                 }
+                # 尝试用 mid（数字）精确匹配
+                if merchant_id.isdigit():
+                    # 对于 PM，字段名是 camelCase
+                    if platform_code == "PM":
+                        payload["brandId"] = int(merchant_id)
+                    else:
+                        payload["brand_id"] = int(merchant_id)
+                else:
+                    payload["mcid"] = merchant_id
                 resp = httpx.post(url, json=payload, timeout=timeout)
+
             elif mode in ("get", "get_post"):
+                # LH / LB — GET 请求
                 params = {
                     "token": token,
-                    "mcid": merchant_id,
+                    "page": "1",
+                    "per_page" if platform_code == "LH" else "limit": "100",
                 }
+                if merchant_id.isdigit():
+                    params["mcid"] = merchant_id  # LH: mcid 是数字ID
+                else:
+                    params["mcid"] = merchant_id
                 resp = httpx.get(url, params=params, timeout=timeout)
+
             elif mode == "post_form":
+                # RW — POST form-urlencoded
                 form_data = {
                     "token": token,
-                    "mcid": merchant_id,
+                    "page": "1",
+                    "limit": "100",
                 }
+                if merchant_id.isdigit():
+                    form_data["mid"] = merchant_id  # RW: mid 是数字主键
+                else:
+                    form_data["mcid"] = merchant_id
                 resp = httpx.post(url, data=form_data, timeout=timeout)
             else:
                 raise HTTPException(400, f"不支持的 API 模式: {mode}")
@@ -149,21 +179,41 @@ class CampaignLinkService:
             raise HTTPException(502, "平台 API 请求失败，请稍后重试")
 
         items = MerchantPlatformSyncService._extract_items(data)
-        return items[0] if items else None
+        if not items:
+            return None
+
+        # 从返回列表中精确匹配目标商家
+        for item in items:
+            item_mid = str(item.get("mid") or item.get("brand_id") or item.get("brandId") or "")
+            item_mcid = str(item.get("mcid") or "")
+            if merchant_id == item_mid or merchant_id == item_mcid:
+                return item
+
+        # 如果只返回了一条，直接用
+        if len(items) == 1:
+            return items[0]
+
+        return None
 
     @staticmethod
     def _map_campaign_response(raw: dict, platform_code: str) -> dict:
         """将平台原始响应映射为统一的 campaign link 结果。"""
+        # 各平台 tracking link 字段名统一提取
         campaign_link = (
-            raw.get("campaign_link")
+            raw.get("tracking_url")          # CF/CG/BSH/LH/LB/RW 通用
+            or raw.get("trackingUrl")         # PM (camelCase)
+            or raw.get("campaign_link")
             or raw.get("tracking_link")
             or raw.get("aff_link")
-            or raw.get("tracking_url")
         )
 
-        raw_regions = raw.get("support_region") or raw.get("support_regions") or []
+        # 短链接
+        short_link = raw.get("tracking_url_short") or raw.get("trackingUrlShort")
+        smart_link = raw.get("tracking_url_smart") or raw.get("trackingUrlSmart")
+
+        raw_regions = raw.get("support_region") or raw.get("supportRegion") or raw.get("support_regions") or []
         if isinstance(raw_regions, str):
-            raw_regions = [r.strip() for r in raw_regions.split(",")]
+            raw_regions = [r.strip() for r in raw_regions.split(",") if r.strip()]
 
         support_regions = []
         for r in raw_regions:
@@ -177,6 +227,8 @@ class CampaignLinkService:
 
         return {
             "campaign_link": campaign_link,
+            "short_link": short_link,
+            "smart_link": smart_link,
             "site_url": raw.get("site_url") or raw.get("siteUrl"),
             "merchant_name": raw.get("merchant_name") or raw.get("merchantName"),
             "support_regions": support_regions,
