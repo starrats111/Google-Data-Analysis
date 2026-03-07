@@ -34,6 +34,7 @@ const articleApi = {
   crawlMerchant: (data) => api.post('/api/article-gen/crawl', data),
   generateMerchantArticle: (data) => api.post('/api/article-gen/merchant-article', data),
   getTrackingLinks: (params) => api.get('/api/article-gen/tracking-links', { params }),
+  searchImages: (data) => api.post('/api/article-gen/search-images', data),
 
   // Campaign Links（OPT-015）
   getCampaignLink: (data) => api.post('/api/article-gen/campaign-link', data),

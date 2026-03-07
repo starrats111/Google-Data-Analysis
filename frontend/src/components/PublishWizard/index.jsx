@@ -71,6 +71,10 @@ const PublishWizard = () => {
   const [selectedSiteId, setSelectedSiteId] = useState(null)
   const [publishingSite, setPublishingSite] = useState(false)
 
+  // === 图片增强 State ===
+  const [featuredImageIndex, setFeaturedImageIndex] = useState(0)  // 默认第一张为头图
+  const [searchingImages, setSearchingImages] = useState(false)
+
   useEffect(() => {
     if (mode === 'merchant') {
       articleApi.getTrackingLinks({ limit: 50 })
@@ -306,6 +310,7 @@ const PublishWizard = () => {
         tracking_link: trackingLink,
         language,
         category_name: merchantArticle.category || crawlResult?.analysis?.category || null,
+        featured_image: merchantImages[featuredImageIndex] || merchantImages[0] || null,
       }
       const res = await articleApi.createArticle(payload)
       const articleId = res.data?.id
@@ -334,6 +339,36 @@ const PublishWizard = () => {
 
   const handleRemoveMerchantImage = (index) => {
     setMerchantImages(prev => prev.filter((_, i) => i !== index))
+    // 如果删除的是头图，重置为第一张
+    if (index === featuredImageIndex) setFeaturedImageIndex(0)
+    else if (index < featuredImageIndex) setFeaturedImageIndex(prev => prev - 1)
+  }
+
+  const handleSearchMoreImages = async () => {
+    const brandName = crawlResult?.brand_name || ''
+    if (!brandName) { message.warning('无法获取品牌名，请手动搜索'); return }
+    setSearchingImages(true)
+    try {
+      const res = await articleApi.searchImages({ query: `${brandName} products official`, count: 12 })
+      const newImages = res.data?.images || []
+      if (newImages.length === 0) { message.info('未搜索到更多图片'); return }
+      setMerchantImages(prev => {
+        const existing = new Set(prev)
+        const merged = [...prev]
+        for (const img of newImages) {
+          if (!existing.has(img)) { merged.push(img); existing.add(img) }
+        }
+        return merged
+      })
+      message.success(`搜索到 ${newImages.length} 张图片`)
+    } catch (err) {
+      message.error('搜索图片失败: ' + (err?.response?.data?.detail || err.message))
+    } finally { setSearchingImages(false) }
+  }
+
+  const handleSetFeaturedImage = (index) => {
+    setFeaturedImageIndex(index)
+    message.success('已设为头图')
   }
 
   // ==================== Tracking link autocomplete ====================
@@ -731,21 +766,58 @@ const PublishWizard = () => {
 
             {merchantImages.length > 0 && (
               <div style={{ marginBottom: 16 }}>
-                <Typography.Title level={5}>商家图片 <Typography.Text type="secondary" style={{ fontSize: 12 }}>点击 × 可移除不需要的图片</Typography.Text></Typography.Title>
-                <Space wrap>
-                  {merchantImages.slice(0, 8).map((src, i) => (
-                    <div key={i} style={{ position: 'relative', display: 'inline-block' }}>
+                <Typography.Title level={5}>
+                  商家图片
+                  <Typography.Text type="secondary" style={{ fontSize: 12, marginLeft: 8 }}>
+                    点击图片设为头图，点击 × 移除
+                  </Typography.Text>
+                </Typography.Title>
+                <Space wrap size={[8, 8]}>
+                  {merchantImages.map((src, i) => (
+                    <div key={i} style={{
+                      position: 'relative', display: 'inline-block', cursor: 'pointer',
+                      border: i === featuredImageIndex ? '3px solid #1890ff' : '3px solid transparent',
+                      borderRadius: 6, padding: 1,
+                    }} onClick={() => handleSetFeaturedImage(i)}>
+                      {i === featuredImageIndex && (
+                        <Tag color="blue" style={{ position: 'absolute', bottom: 4, left: 4, zIndex: 2, margin: 0, fontSize: 11 }}>头图</Tag>
+                      )}
                       <Image src={src} width={100} height={100} style={{ objectFit: 'cover', borderRadius: 4 }}
+                        preview={false}
                         fallback="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACklEQVR4nGMAAQAABQABDQottAAAAABJRU5ErkJggg=="
+                        onClick={(e) => { e.stopPropagation(); handleSetFeaturedImage(i) }}
                       />
                       <Button
                         type="text" danger size="small" icon={<DeleteOutlined />}
-                        onClick={() => handleRemoveMerchantImage(i)}
+                        onClick={(e) => { e.stopPropagation(); handleRemoveMerchantImage(i) }}
                         style={{ position: 'absolute', top: -6, right: -6, background: '#fff', borderRadius: '50%', boxShadow: '0 1px 4px rgba(0,0,0,0.2)', width: 22, height: 22, padding: 0, minWidth: 22 }}
                       />
                     </div>
                   ))}
                 </Space>
+                {merchantImages.length < 8 && (
+                  <div style={{ marginTop: 8 }}>
+                    <Button icon={<SearchOutlined />} loading={searchingImages} onClick={handleSearchMoreImages} size="small">
+                      搜索更多图片
+                    </Button>
+                    <Typography.Text type="warning" style={{ marginLeft: 8, fontSize: 12 }}>
+                      当前 {merchantImages.length} 张，建议至少 8 张
+                    </Typography.Text>
+                  </div>
+                )}
+              </div>
+            )}
+            {merchantImages.length === 0 && (
+              <div style={{ marginBottom: 16 }}>
+                <Alert
+                  type="warning"
+                  message="未从商家网站获取到图片"
+                  description={
+                    <Button icon={<SearchOutlined />} loading={searchingImages} onClick={handleSearchMoreImages} style={{ marginTop: 8 }}>
+                      搜索商家图片
+                    </Button>
+                  }
+                />
               </div>
             )}
 
@@ -828,21 +900,42 @@ const PublishWizard = () => {
 
             {merchantImages.length > 0 && (
               <div style={{ marginBottom: 16 }}>
-                <Typography.Title level={5}>商家图片 <Typography.Text type="secondary" style={{ fontSize: 12 }}>点击 × 可移除</Typography.Text></Typography.Title>
-                <Space wrap>
-                  {merchantImages.slice(0, 8).map((src, i) => (
-                    <div key={i} style={{ position: 'relative', display: 'inline-block' }}>
+                <Typography.Title level={5}>
+                  商家图片
+                  <Typography.Text type="secondary" style={{ fontSize: 12, marginLeft: 8 }}>
+                    点击图片设为头图，点击 × 移除
+                  </Typography.Text>
+                </Typography.Title>
+                <Space wrap size={[8, 8]}>
+                  {merchantImages.map((src, i) => (
+                    <div key={i} style={{
+                      position: 'relative', display: 'inline-block', cursor: 'pointer',
+                      border: i === featuredImageIndex ? '3px solid #1890ff' : '3px solid transparent',
+                      borderRadius: 6, padding: 1,
+                    }} onClick={() => handleSetFeaturedImage(i)}>
+                      {i === featuredImageIndex && (
+                        <Tag color="blue" style={{ position: 'absolute', bottom: 4, left: 4, zIndex: 2, margin: 0, fontSize: 11 }}>头图</Tag>
+                      )}
                       <Image src={src} width={120} height={120} style={{ objectFit: 'cover', borderRadius: 4 }}
+                        preview={false}
                         fallback="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACklEQVR4nGMAAQAABQABDQottAAAAABJRU5ErkJggg=="
+                        onClick={(e) => { e.stopPropagation(); handleSetFeaturedImage(i) }}
                       />
                       <Button
                         type="text" danger size="small" icon={<DeleteOutlined />}
-                        onClick={() => handleRemoveMerchantImage(i)}
+                        onClick={(e) => { e.stopPropagation(); handleRemoveMerchantImage(i) }}
                         style={{ position: 'absolute', top: -6, right: -6, background: '#fff', borderRadius: '50%', boxShadow: '0 1px 4px rgba(0,0,0,0.2)', width: 22, height: 22, padding: 0, minWidth: 22 }}
                       />
                     </div>
                   ))}
                 </Space>
+                {merchantImages.length < 8 && (
+                  <div style={{ marginTop: 8 }}>
+                    <Button icon={<SearchOutlined />} loading={searchingImages} onClick={handleSearchMoreImages} size="small">
+                      搜索更多图片
+                    </Button>
+                  </div>
+                )}
               </div>
             )}
             <Divider />

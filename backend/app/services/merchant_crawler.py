@@ -216,12 +216,12 @@ def _extract_page(html: str, url: str) -> Dict:
 
         candidates.append((score, full_url))
 
-    # 按分数排序，取前 10
+    # 按分数排序，取前 20（增加上限以确保足够图片）
     candidates.sort(key=lambda x: x[0], reverse=True)
     for _, img_url in candidates:
         if img_url not in images:
             images.append(img_url)
-        if len(images) >= 10:
+        if len(images) >= 20:
             break
 
     return {
@@ -251,7 +251,7 @@ def _find_sub_pages(soup: BeautifulSoup, base_url: str) -> List[str]:
         if any(kw in path_lower for kw in SUB_PAGE_KEYWORDS):
             seen.add(path_lower)
             found.append(full)
-            if len(found) >= 3:
+            if len(found) >= 5:
                 break
     return found
 
@@ -282,7 +282,7 @@ def crawl(url: str) -> Dict:
         home_soup = BeautifulSoup(home_html, "lxml")
         sub_urls = _find_sub_pages(home_soup, url)
 
-        for sub_url in sub_urls:
+        for sub_url in sub_urls[:5]:  # 增加到最多5个子页面
             try:
                 with httpx.Client(timeout=10, follow_redirects=True, headers=HEADERS) as client:
                     resp = client.get(sub_url)
@@ -307,3 +307,67 @@ def crawl(url: str) -> Dict:
         "pages": pages,
         "raw_text": raw_text,
     }
+
+
+def search_images(query: str, count: int = 12) -> List[str]:
+    """
+    通过 Bing Image Search 搜索商家相关图片作为补充。
+    使用 Bing 搜索页面抓取（无需 API Key）。
+    """
+    images = []
+    search_url = "https://www.bing.com/images/search"
+    params = {
+        "q": query,
+        "first": 1,
+        "count": count * 2,
+        "qft": "+filterui:imagesize-large",
+    }
+    try:
+        with httpx.Client(timeout=15, follow_redirects=True, headers={
+            **HEADERS,
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        }) as client:
+            resp = client.get(search_url, params=params)
+            resp.raise_for_status()
+
+        soup = BeautifulSoup(resp.text, "lxml")
+
+        # 方法1: 从 <a class="iusc"> 的 m 属性中提取
+        for a_tag in soup.find_all("a", class_="iusc"):
+            m_attr = a_tag.get("m")
+            if m_attr:
+                import json as _json
+                try:
+                    m_data = _json.loads(m_attr)
+                    murl = m_data.get("murl", "")
+                    if murl and murl.startswith("http"):
+                        img_lower = murl.lower()
+                        if not any(kw in img_lower for kw in FILTERED_IMG_KEYWORDS[:10]):
+                            images.append(murl)
+                except (ValueError, KeyError):
+                    pass
+
+        # 方法2: 从 img[src2] 或 img[data-src] 提取
+        if len(images) < 4:
+            for img in soup.find_all("img"):
+                src = img.get("src2") or img.get("data-src") or ""
+                if src.startswith("http") and "bing.com" not in src:
+                    if src not in images:
+                        images.append(src)
+
+        # 去重
+        seen = set()
+        unique = []
+        for img in images:
+            if img not in seen:
+                seen.add(img)
+                unique.append(img)
+            if len(unique) >= count:
+                break
+
+        logger.info(f"[ImageSearch] 搜索 '{query}' 找到 {len(unique)} 张图片")
+        return unique
+
+    except Exception as e:
+        logger.warning(f"[ImageSearch] 搜索图片失败 '{query}': {e}")
+        return []

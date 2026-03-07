@@ -14,7 +14,7 @@ from app.middleware.auth import get_current_user
 from app.models.user import User
 from app.models.tracking_link import PubTrackingLink
 from app.services.article_gen_service import ArticleGenService
-from app.services.merchant_crawler import crawl as crawl_merchant
+from app.services.merchant_crawler import crawl as crawl_merchant, search_images as search_merchant_images
 from app.services.campaign_link_service import CampaignLinkService
 
 logger = logging.getLogger(__name__)
@@ -54,6 +54,11 @@ class MerchantArticleRequest(BaseModel):
 class CampaignLinkRequest(BaseModel):
     platform_code: str
     merchant_id: str
+
+
+class ImageSearchRequest(BaseModel):
+    query: str
+    count: int = 12
 
 
 @router.post("/titles")
@@ -134,12 +139,36 @@ async def crawl_merchant_site(
             seen.add(img)
             unique_images.append(img)
 
+    # 图片不足8张时，用品牌名搜索补充
+    MIN_IMAGES = 8
+    if len(unique_images) < MIN_IMAGES:
+        brand = crawl_data.get("brand_name", "")
+        if brand:
+            search_query = f"{brand} products official"
+            extra_images = search_merchant_images(search_query, count=MIN_IMAGES * 2)
+            for img in extra_images:
+                if img not in seen:
+                    seen.add(img)
+                    unique_images.append(img)
+
     return {
         "brand_name": crawl_data.get("brand_name", ""),
         "url": data.url,
-        "images": unique_images[:15],
+        "images": unique_images[:20],
         "analysis": analysis,
     }
+
+
+@router.post("/search-images")
+async def search_images_api(
+    data: ImageSearchRequest,
+    current_user: User = Depends(get_current_user),
+):
+    """搜索商家相关图片（补充爬取不足时使用）"""
+    if not data.query.strip():
+        raise HTTPException(status_code=400, detail="搜索关键词不能为空")
+    images = search_merchant_images(data.query.strip(), count=data.count)
+    return {"images": images, "query": data.query}
 
 
 @router.post("/merchant-article")
