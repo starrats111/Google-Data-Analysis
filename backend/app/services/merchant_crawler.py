@@ -305,7 +305,7 @@ def crawl(url: str) -> Dict:
     brand_name = ""
 
     try:
-        with httpx.Client(timeout=30, follow_redirects=True, headers=HEADERS) as client:
+        with httpx.Client(timeout=15, follow_redirects=True, headers=HEADERS) as client:
             resp = client.get(url)
             resp.raise_for_status()
             home_html = resp.text
@@ -317,9 +317,9 @@ def crawl(url: str) -> Dict:
         home_soup = BeautifulSoup(home_html, "lxml")
         sub_urls = _find_sub_pages(home_soup, url)
 
-        for sub_url in sub_urls[:8]:
+        for sub_url in sub_urls[:3]:
             try:
-                with httpx.Client(timeout=20, follow_redirects=True, headers=HEADERS) as client:
+                with httpx.Client(timeout=10, follow_redirects=True, headers=HEADERS) as client:
                     resp = client.get(sub_url)
                     resp.raise_for_status()
                     sub_data = _extract_page(resp.text, sub_url)

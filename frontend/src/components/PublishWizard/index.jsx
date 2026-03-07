@@ -216,6 +216,12 @@ const PublishWizard = () => {
       }
       if (!res.data?.campaign_link) {
         message.warning('该商家未返回 Campaign Link，请切换到手动输入')
+      } else if (res.data?.site_url) {
+        // 自动开始爬取（如果有 site_url 和 campaign_link）
+        message.success('已获取 Campaign Link，正在自动爬取商家网站...')
+        setFetchingCampaign(false)
+        _autoCrawl(res.data.site_url, res.data.campaign_link)
+        return
       }
     } catch (err) {
       const status = err?.response?.status
@@ -229,6 +235,24 @@ const PublishWizard = () => {
         message.error(detail)
       }
     } finally { setFetchingCampaign(false) }
+  }
+
+  const _autoCrawl = async (siteUrl, link) => {
+    setLoading(true)
+    try {
+      const res = await articleApi.crawlMerchant({ url: siteUrl, language })
+      setCrawlResult(res.data)
+      setMerchantTitles(res.data?.analysis?.titles || [])
+      setMerchantKeywords(res.data?.analysis?.keywords || [])
+      const imgs = res.data?.images || []
+      setCrawledImages(imgs)
+      setSelectedImages(imgs.slice(0, 5))
+      setStockImages([])
+      setImagePoolMode('crawl')
+      setMStep(1)
+    } catch (err) {
+      message.error('爬取失败: ' + (err?.response?.data?.detail || err.message))
+    } finally { setLoading(false) }
   }
 
   const handleRegionSelect = (regionCode) => {

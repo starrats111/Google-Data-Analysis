@@ -116,88 +116,59 @@ class CampaignLinkService:
         return self._map_campaign_response(raw, platform_code)
 
     def _fetch_merchant_by_id(self, platform_code: str, token: str, merchant_id: str) -> Optional[dict]:
-        """调用 Monetization API 查询指定商家详情（含 campaign link）。
-
-        策略：
-        - LB: 支持 mid/mcid 过滤参数，直接精确查询
-        - CF/CG/BSH/PM: 不支持按 MID 过滤，需分页遍历查找（限制最多 5 页）
-        - LH: 按 mcid 过滤
-        - RW: 按 mid/mcid 过滤
+        """调用 Monetization API 查询指定商家（含 campaign link）。
+        优化：mid 精确查 → 分页遍历最多 3 页，超时 15s。
         """
         cfg = PLATFORM_API_CONFIG.get(platform_code)
         if not cfg:
-            raise HTTPException(400, "该平台暂不支持自动获取 Campaign Link")
+            raise HTTPException(400, f"不支持的平台: {platform_code}")
 
         mode = cfg["mode"]
         url = cfg["url"]
-        timeout = httpx.Timeout(60.0, connect=15.0)
-        max_pages = 10  # 最多翻 10 页防止无限循环
+        timeout = httpx.Timeout(15.0, connect=8.0)
 
         try:
             if mode == "post_json":
-                # CF/CG/BSH/PM — 先尝试用 mid 精确查询，再 fallback 到分页遍历
-                # 尝试 1: 用 mid 参数精确过滤（速度快）
-                for mid_key in ("mid", "mcid", "brand_id"):
+                # 精确查询
+                payload = {
+                    "source": cfg.get("source", ""),
+                    "token": token, "curPage": 1, "perPage": 100,
+                    "relationship": "Joined", "mid": merchant_id,
+                }
+                try:
+                    resp = httpx.post(url, json=payload, timeout=timeout)
+                    resp.raise_for_status()
+                    items = MerchantPlatformSyncService._extract_items(resp.json())
+                    if items:
+                        found = self._match_merchant(items, merchant_id, platform_code)
+                        if found:
+                            return found
+                except Exception:
+                    pass
+
+                # 分页遍历兜底（最多 3 页）
+                for page in range(1, 4):
                     payload = {
                         "source": cfg.get("source", ""),
-                        "token": token,
-                        "curPage": 1,
-                        "perPage": 50,
+                        "token": token, "curPage": page, "perPage": 2000,
                         "relationship": "Joined",
-                        mid_key: merchant_id,
                     }
                     try:
                         resp = httpx.post(url, json=payload, timeout=timeout)
                         resp.raise_for_status()
-                        items = MerchantPlatformSyncService._extract_items(resp.json())
-                        if items:
-                            found = self._match_merchant(items, merchant_id, platform_code)
-                            if found:
-                                logger.info("[CampaignLink] %s found via %s=%s", platform_code, mid_key, merchant_id)
-                                return found
                     except Exception:
-                        pass
-
-                # 尝试 2: 分页遍历（兜底，限制最多 5 页避免超时）
-                logger.info("[CampaignLink] %s mid filter failed, falling back to paginated scan", platform_code)
-                actual_total_pages = max_pages
-                for page in range(1, max_pages + 1):
-                    payload = {
-                        "source": cfg.get("source", ""),
-                        "token": token,
-                        "curPage": page,
-                        "perPage": 2000,
-                        "relationship": "Joined",
-                    }
-                    try:
-                        resp = httpx.post(url, json=payload, timeout=timeout)
-                        resp.raise_for_status()
-                    except (httpx.HTTPStatusError, httpx.RequestError) as page_err:
-                        logger.warning("Campaign link %s page %d failed: %s", platform_code, page, page_err)
                         break
-                    data = resp.json()
-
-                    if page == 1:
-                        resp_data = data.get("data", data) if isinstance(data, dict) else {}
-                        tp = resp_data.get("total_page") or resp_data.get("totalPage")
-                        if tp and isinstance(tp, int) and tp > 0:
-                            actual_total_pages = min(tp, 50)
-                            logger.info("[CampaignLink] %s total_page=%d, will scan up to %d", platform_code, tp, actual_total_pages)
-
-                    items = MerchantPlatformSyncService._extract_items(data)
+                    items = MerchantPlatformSyncService._extract_items(resp.json())
                     if not items:
                         break
-
                     found = self._match_merchant(items, merchant_id, platform_code)
                     if found:
                         return found
-
-                    if len(items) < 2000 or page >= actual_total_pages:
+                    if len(items) < 2000:
                         break
                 return None
 
             elif platform_code == "LB":
-                # LB 支持 mid 和 mcid 作为过滤参数
                 params = {"token": token, "limit": "10"}
                 if merchant_id.isdigit():
                     params["mid"] = merchant_id
@@ -209,12 +180,7 @@ class CampaignLinkService:
                 return self._match_merchant(items, merchant_id, platform_code) if items else None
 
             elif platform_code == "LH":
-                # LH — mcid 是数字 ID
-                params = {
-                    "token": token,
-                    "page": "1",
-                    "per_page": "100",
-                }
+                params = {"token": token, "page": "1", "per_page": "100"}
                 if merchant_id.isdigit():
                     params["mcid"] = merchant_id
                 resp = httpx.get(url, params=params, timeout=timeout)
@@ -223,7 +189,6 @@ class CampaignLinkService:
                 return self._match_merchant(items, merchant_id, platform_code) if items else None
 
             elif mode == "post_form":
-                # RW — 支持 mid/mcid 过滤
                 form_data = {"token": token, "page": "1", "limit": "10"}
                 if merchant_id.isdigit():
                     form_data["mid"] = merchant_id
@@ -237,15 +202,15 @@ class CampaignLinkService:
             else:
                 raise HTTPException(400, f"不支持的 API 模式: {mode}")
 
+        except HTTPException:
+            raise
         except httpx.HTTPStatusError as exc:
-            logger.error("Campaign link API error for %s: %s", platform_code, exc)
             status = exc.response.status_code
             if status in (502, 503, 504):
-                raise HTTPException(502, f"平台 {platform_code} API 暂时不可用（{status}），请稍后重试")
+                raise HTTPException(502, f"平台 {platform_code} 暂时不可用，请稍后重试")
             raise HTTPException(502, f"平台 API 返回错误: {status}")
-        except httpx.RequestError as exc:
-            logger.error("Campaign link API request failed for %s: %s", platform_code, exc)
-            raise HTTPException(502, f"平台 {platform_code} API 请求超时，请稍后重试")
+        except httpx.RequestError:
+            raise HTTPException(502, f"平台 {platform_code} 请求超时，请稍后重试")
 
     @staticmethod
     def _match_merchant(items: list, merchant_id: str, platform_code: str) -> Optional[dict]:
