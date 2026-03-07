@@ -11,15 +11,17 @@ import {
 } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
 import articleApi from '../../services/articleApi'
+import api from '../../services/api'
 
 const { TextArea } = Input
 
 // 图片代理：通过后端转发，绕过商家网站防盗链
+// 生产环境必须使用完整 API 域名，否则图片请求会发到 Cloudflare Pages 前端域名
 const proxyImg = (url) => {
   if (!url) return '';
-  // Pexels / Unsplash 等图片库不需要代理
   if (/pexels\.com|unsplash\.com|images\.pexels/i.test(url)) return url;
-  return `/api/article-gen/image-proxy?url=${encodeURIComponent(url)}`;
+  const apiBase = api.defaults?.baseURL || '';
+  return `${apiBase}/api/article-gen/image-proxy?url=${encodeURIComponent(url)}`;
 };
 
 const LANGUAGES = [
@@ -839,6 +841,48 @@ const PublishWizard = () => {
               )}
             </Card>
 
+            {/* ===== Support Region & 语言 ===== */}
+            {campaignResult?.support_regions?.length > 0 && (
+              <Card size="small" style={{ marginBottom: 16, background: '#f0f5ff' }}>
+                <Row gutter={16} align="middle">
+                  <Col span={12}>
+                    <Typography.Text strong>Support Region</Typography.Text>
+                    <Select
+                      placeholder="选择目标区域"
+                      value={selectedRegion}
+                      onChange={handleRegionSelect}
+                      style={{ width: '100%', marginTop: 4 }}
+                      options={campaignResult.support_regions.map(r => ({
+                        value: r.code,
+                        label: `${r.code} — ${r.language}`,
+                      }))}
+                    />
+                  </Col>
+                  <Col span={12}>
+                    <Typography.Text strong>文章语言</Typography.Text>
+                    <Select
+                      value={language}
+                      onChange={setLanguage}
+                      options={LANGUAGES}
+                      style={{ width: '100%', marginTop: 4 }}
+                    />
+                  </Col>
+                </Row>
+              </Card>
+            )}
+
+            {!campaignResult?.support_regions?.length && (
+              <Card size="small" style={{ marginBottom: 16, background: '#f0f5ff' }}>
+                <Typography.Text strong>文章语言</Typography.Text>
+                <Select
+                  value={language}
+                  onChange={setLanguage}
+                  options={LANGUAGES}
+                  style={{ width: 200, marginLeft: 12 }}
+                />
+              </Card>
+            )}
+
             {/* ===== 文章用图 ===== */}
             <div style={{ marginBottom: 20 }}>
               <Typography.Title level={5} style={{ color: '#52c41a' }}>
@@ -981,11 +1025,6 @@ const PublishWizard = () => {
                 </Tag>
               ))}
             </Space>
-
-            <div style={{ marginTop: 16 }}>
-              <Typography.Title level={5}>文章语言</Typography.Title>
-              <Select value={language} onChange={setLanguage} options={LANGUAGES} style={{ width: 200 }} />
-            </div>
 
             <Divider />
             <Space>
