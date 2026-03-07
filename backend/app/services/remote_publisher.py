@@ -221,15 +221,17 @@ class RemotePublisher:
     # ─── 内部方法 ───
 
     def _parse_posts(self, main_js: str) -> list:
-        """解析 main.js 中的 const posts = [...] 数组"""
-        # 匹配 const posts = [ ... ]; 支持多行
+        """解析 main.js 中的 const posts = [...] 数组
+        
+        使用正则逐字段提取，避免 JS->JSON 转换的兼容性问题。
+        """
         pattern = r'const\s+posts\s*=\s*\['
         match = re.search(pattern, main_js)
         if not match:
             raise ValueError("无法在 main.js 中找到 const posts = [")
 
-        start = match.end() - 1  # 回到 [ 位置
-        # 手动匹配括号找到结束位置
+        start = match.end() - 1
+        # 找到数组结束位置
         depth = 0
         i = start
         while i < len(main_js):
@@ -241,7 +243,6 @@ class RemotePublisher:
                 if depth == 0:
                     break
             elif ch in ('"', "'", '`'):
-                # 跳过字符串
                 quote = ch
                 i += 1
                 while i < len(main_js) and main_js[i] != quote:
@@ -252,79 +253,70 @@ class RemotePublisher:
 
         array_str = main_js[start:i + 1]
 
-        # JS 对象转 JSON：给无引号的 key 加引号，处理尾逗号
-        json_str = self._js_array_to_json(array_str)
-        try:
-            return json.loads(json_str)
-        except json.JSONDecodeError as e:
-            logger.error(f"解析 posts 数组失败: {e}")
-            raise ValueError(f"解析 posts 数组失败: {e}")
+        # 提取每个 { ... } 对象
+        posts = []
+        obj_pattern = re.compile(r'\{([^{}]*(?:\{[^{}]*\}[^{}]*)*)\}', re.DOTALL)
+        for obj_match in obj_pattern.finditer(array_str):
+            obj_str = obj_match.group(1)
+            post = self._extract_post_fields(obj_str)
+            if post.get("slug") or post.get("title"):
+                posts.append(post)
 
-    def _js_array_to_json(self, js_str: str) -> str:
-        """将 JS 对象数组转为合法 JSON"""
-        # 移除单行注释
-        result = re.sub(r'//.*?$', '', js_str, flags=re.MULTILINE)
-        # 移除多行注释
-        result = re.sub(r'/\*.*?\*/', '', result, flags=re.DOTALL)
-        # 给无引号的 key 加双引号: word: -> "word":
-        result = re.sub(r'(?<=[{,\n])\s*(\w+)\s*:', r' "\1":', result)
-        # 单引号转双引号（但保留字符串内的转义单引号）
-        result = self._single_to_double_quotes(result)
-        # 移除尾逗号
-        result = re.sub(r',\s*([}\]])', r'\1', result)
-        return result
+        return posts
 
-    def _single_to_double_quotes(self, s: str) -> str:
-        """将 JS 单引号字符串转为双引号"""
-        result = []
-        i = 0
-        while i < len(s):
-            if s[i] == '"':
-                # 已经是双引号字符串，跳过
-                result.append('"')
-                i += 1
-                while i < len(s) and s[i] != '"':
-                    if s[i] == '\\':
-                        result.append(s[i])
-                        i += 1
-                        if i < len(s):
-                            result.append(s[i])
-                            i += 1
-                    else:
-                        result.append(s[i])
-                        i += 1
-                if i < len(s):
-                    result.append('"')
-                    i += 1
-            elif s[i] == "'":
-                # 单引号字符串转双引号
-                result.append('"')
-                i += 1
-                while i < len(s) and s[i] != "'":
-                    if s[i] == '\\':
-                        result.append(s[i])
-                        i += 1
-                        if i < len(s):
-                            # 如果是转义的单引号，改为普通单引号
-                            if s[i] == "'":
-                                result.append("'")
-                            else:
-                                result.append(s[i])
-                            i += 1
-                    elif s[i] == '"':
-                        # 双引号在单引号字符串内需要转义
-                        result.append('\\"')
-                        i += 1
-                    else:
-                        result.append(s[i])
-                        i += 1
-                if i < len(s):
-                    result.append('"')
-                    i += 1
-            else:
-                result.append(s[i])
-                i += 1
-        return ''.join(result)
+    def _extract_post_fields(self, obj_str: str) -> dict:
+        """从 JS 对象字符串中提取字段值"""
+        post = {}
+
+        # 提取数字字段
+        id_m = re.search(r'\bid\s*:\s*(\d+)', obj_str)
+        if id_m:
+            post["id"] = int(id_m.group(1))
+
+        # 提取字符串字段（支持单引号和双引号）
+        str_fields = ["slug", "title", "category", "dateISO", "dateLabel",
+                       "readTime", "heroImage", "primaryProduct", "detailUrl"]
+        for field in str_fields:
+            # 匹配 field: 'value' 或 field: "value"（支持多行 excerpt 等）
+            m = re.search(
+                rf'\b{field}\s*:\s*([\'"])((?:(?!\1)[^\\]|\\.)*?)\1',
+                obj_str, re.DOTALL
+            )
+            if m:
+                val = m.group(2)
+                # 还原 JS 转义
+                val = val.replace("\\'", "'").replace('\\"', '"').replace("\\n", "\n")
+                post[field] = val
+
+        # excerpt 可能跨多行，单独处理
+        if "excerpt" not in post:
+            m = re.search(
+                r'\bexcerpt\s*:\s*([\'"`])((?:(?!\1)[^\\]|\\.)*?)\1',
+                obj_str, re.DOTALL
+            )
+            if m:
+                val = m.group(2).replace("\\'", "'").replace('\\"', '"').replace("\\n", "\n")
+                post["excerpt"] = val
+        else:
+            # 已经提取到了
+            pass
+
+        # 也尝试从 str_fields 中提取 excerpt
+        if "excerpt" not in post:
+            # 尝试匹配多行 excerpt（可能用模板字符串）
+            m = re.search(r'\bexcerpt\s*:\s*`(.*?)`', obj_str, re.DOTALL)
+            if m:
+                post["excerpt"] = m.group(1)
+
+        # 提取 tags 数组
+        tags_m = re.search(r'\btags\s*:\s*\[(.*?)\]', obj_str, re.DOTALL)
+        if tags_m:
+            tags_str = tags_m.group(1)
+            post["tags"] = re.findall(r"['\"]([^'\"]+)['\"]", tags_str)
+        else:
+            post["tags"] = []
+
+        return post
 
     def _rebuild_main_js(self, original: str, posts: list) -> str:
         """用新的 posts 数组重建 main.js，保留其余代码不变"""
