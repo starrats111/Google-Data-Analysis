@@ -202,20 +202,28 @@ class ArticleGenService:
         lang_label = "English" if language == "en" else "中文"
 
         keyword_str = ""
+        keyword_link_rule = ""
         if keywords:
             keyword_str = f"\nSEO 关键词（自然融入）：{', '.join(keywords)}"
+            kw_examples = ", ".join(f'<a href="{tracking_link}">{kw}</a>' for kw in keywords[:3])
+            keyword_link_rule = (
+                f"7)Each SEO keyword should be hyperlinked to {tracking_link} "
+                f"on its FIRST occurrence, e.g. {kw_examples}\n"
+            )
 
         system_prompt = (
             f"You are a lifestyle editor writing in {lang_label}. Year: {current_year}.\n"
             "Rules: 1)No AI buzzwords(revolutionizing,game-changer,elevate,seamlessly,cutting-edge) "
             "2)Brand name appears 3-4 times, NOT in first paragraph "
-            f"3)Insert 2-3 links: <a href=\"{tracking_link}\">{brand}</a> "
+            f"3)Insert 2-3 brand links: <a href=\"{tracking_link}\">{brand}</a> "
             "4)Write like a real editor with personal tone "
             "5)800-1200 words, HTML with h2/h3 "
             "6)No empty praise, be specific\n"
+            f"{keyword_link_rule}"
             "Return ONLY a JSON object: "
             "{\"content\":\"HTML\",\"excerpt\":\"100 chars\",\"meta_title\":\"\","
-            "\"meta_description\":\"\",\"meta_keywords\":\"\",\"category\":\"\"}"
+            "\"meta_description\":\"\",\"meta_keywords\":\"\",\"category\":\"\","
+            "\"author\":\"a realistic pen name matching the article language\"}"
         )
 
         user_msg = (

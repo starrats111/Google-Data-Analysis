@@ -61,7 +61,7 @@ const PublishWizard = () => {
   const [merchantArticle, setMerchantArticle] = useState(null)
   // merchantImages removed - replaced by selectedImages + crawledImages + stockImages
   const [mPublishDate, setMPublishDate] = useState(null)
-  const [mEnableLinks, setMEnableLinks] = useState(false)
+  const [mEnableLinks, setMEnableLinks] = useState(true)
   const [trackingHistory, setTrackingHistory] = useState([])
 
   // === OPT-015: Campaign Link State ===
@@ -74,7 +74,7 @@ const PublishWizard = () => {
   const [fetchingCampaign, setFetchingCampaign] = useState(false)
 
   // === OPT-013: 发布到网站 State ===
-  const [publishToSite, setPublishToSite] = useState(false)
+  const [publishToSite, setPublishToSite] = useState(true)
   const [siteList, setSiteList] = useState([])
   const [selectedSiteId, setSelectedSiteId] = useState(null)
   const [publishingSite, setPublishingSite] = useState(false)
@@ -97,11 +97,15 @@ const PublishWizard = () => {
     }
   }, [mode])
 
-  // OPT-013: 加载网站列表
+  // OPT-013: 加载网站列表，如果只有一个网站自动选中
   useEffect(() => {
     if (mode) {
       articleApi.getSites()
-        .then(res => setSiteList(res.data?.items || []))
+        .then(res => {
+          const items = res.data?.items || []
+          setSiteList(items)
+          if (items.length === 1) setSelectedSiteId(items[0].id)
+        })
         .catch(() => {})
     }
   }, [mode])
@@ -367,6 +371,7 @@ const PublishWizard = () => {
         category_name: merchantArticle.category || crawlResult?.analysis?.category || null,
         featured_image: selectedImages[0] || null,
         content_images: selectedImages.slice(1),
+        author: merchantArticle.author || null,
       }
       const res = await articleApi.createArticle(payload)
       const articleId = res.data?.id
@@ -977,6 +982,11 @@ const PublishWizard = () => {
               ))}
             </Space>
 
+            <div style={{ marginTop: 16 }}>
+              <Typography.Title level={5}>文章语言</Typography.Title>
+              <Select value={language} onChange={setLanguage} options={LANGUAGES} style={{ width: 200 }} />
+            </div>
+
             <Divider />
             <Space>
               <Button onClick={() => setMStep(0)}>上一步</Button>
@@ -1044,6 +1054,12 @@ const PublishWizard = () => {
               </div>
             )}
             <Divider />
+            {merchantArticle.author && (
+              <div style={{ marginBottom: 12 }}>
+                <Typography.Text>作者：</Typography.Text>
+                <Tag color="blue" style={{ marginLeft: 8 }}>{merchantArticle.author}</Tag>
+              </div>
+            )}
             <Space size="large" wrap>
               <div>
                 <Typography.Text>定时发布：</Typography.Text>
