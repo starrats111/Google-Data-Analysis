@@ -165,6 +165,14 @@ class Settings(BaseSettings):
     # 注册地址: https://www.pexels.com/api/ （免费，可商用）
     PEXELS_API_KEY: str = ""
 
+    # ===== 宝塔服务器 SSH 配置（CR-035）=====
+    BT_SSH_HOST: str = ""  # 宝塔服务器 IP
+    BT_SSH_PORT: int = 22
+    BT_SSH_USER: str = "ubuntu"
+    BT_SSH_KEY_PATH: str = ""  # SSH 私钥路径（优先使用）
+    BT_SSH_PASSWORD: str = ""  # SSH 密码（备用）
+    BT_SITE_ROOT: str = "/www/wwwroot"  # 宝塔默认网站根目录
+
     # ===== 以下配置已废弃（DES-4），保留空值兼容旧 .env =====
     # OpenAI 已不再使用，系统使用 Gemini/Claude
     

@@ -18,6 +18,7 @@ from app.models.article import (
 )
 from app.models.site import PubSite
 from app.services import site_publisher
+from app.services.remote_publisher import remote_publisher
 from app.utils.slug import generate_slug
 
 logger = logging.getLogger(__name__)
@@ -357,8 +358,11 @@ async def publish_to_site(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """将文章发布到指定网站（通过公开 API 实时提供给外部网站）"""
-    article = db.query(PubArticle).filter(
+    """将文章发布到指定网站（通过 SSH 推送到宝塔服务器）"""
+    article = db.query(PubArticle).options(
+        joinedload(PubArticle.category),
+        selectinload(PubArticle.tags).joinedload(PubArticleTag.tag),
+    ).filter(
         PubArticle.id == article_id,
         PubArticle.deleted_at.is_(None),
     ).first()
@@ -376,19 +380,27 @@ async def publish_to_site(
     if not site:
         raise HTTPException(status_code=404, detail="网站不存在")
 
+    # 通过 SSH 远程推送到宝塔服务器
+    try:
+        result = remote_publisher.publish_article(site, article)
+    except Exception as e:
+        logger.error(f"远程发布失败: {e}")
+        raise HTTPException(status_code=500, detail=f"远程发布失败: {str(e)}")
+
     article.site_id = site.id
-    article.site_article_slug = article.slug
+    article.site_article_slug = result["site_article_slug"]
     article.published_to_site = True
     db.commit()
 
     logger.info(f"文章已发布到网站: slug={article.slug}, site={site.site_name}, domain={site.domain}")
 
+    article_url = f"https://{site.domain}/post-{article.slug}.html" if site.domain else ""
     return {
         "message": "文章已发布到网站",
         "site_name": site.site_name,
         "site_domain": site.domain,
         "site_article_slug": article.slug,
-        "public_api_url": f"/api/public/articles/{site.domain}",
+        "article_url": article_url,
     }
 
 
@@ -398,7 +410,7 @@ async def unpublish_from_site(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """从网站移除文章"""
+    """从网站移除文章（通过 SSH 从宝塔服务器删除）"""
     article = db.query(PubArticle).filter(
         PubArticle.id == article_id,
         PubArticle.deleted_at.is_(None),
@@ -409,6 +421,18 @@ async def unpublish_from_site(
 
     if not article.published_to_site or not article.site_id:
         raise HTTPException(status_code=400, detail="文章未发布到任何网站")
+
+    site = db.query(PubSite).filter(PubSite.id == article.site_id).first()
+    slug = article.site_article_slug or article.slug
+
+    # 通过 SSH 远程删除
+    if site:
+        try:
+            remote_publisher.unpublish_article(site, slug)
+        except Exception as e:
+            logger.error(f"远程移除失败: {e}")
+            # 即使远程失败也清除本地标记
+            pass
 
     article.site_id = None
     article.site_article_slug = None

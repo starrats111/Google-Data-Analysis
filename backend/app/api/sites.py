@@ -1,5 +1,5 @@
 """
-网站配置管理 API（OPT-013）
+网站配置管理 API（OPT-013 / CR-035）
 """
 import logging
 from typing import Optional
@@ -8,11 +8,13 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+from app.config import settings
 from app.database import get_db
 from app.middleware.auth import get_current_user
 from app.models.user import User
 from app.models.site import PubSite
 from app.services import site_publisher
+from app.services.remote_publisher import remote_publisher
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/sites", tags=["网站管理"])
@@ -21,8 +23,8 @@ router = APIRouter(prefix="/api/sites", tags=["网站管理"])
 class SiteCreate(BaseModel):
     site_name: str
     domain: str
-    data_js_path: str = "js/articles-index.js"
-    article_template: str = "article-1.html"
+    data_js_path: str = "assets/js/main.js"
+    article_template: str = ""
     group_id: Optional[int] = None
 
 
@@ -74,22 +76,29 @@ async def create_site(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """新增网站配置，自动创建目录结构"""
-    # 根据域名自动生成路径
+    """新增网站配置（CR-035：使用宝塔远程路径）"""
     domain_clean = data.domain.strip().lower().replace("https://", "").replace("http://", "").rstrip("/")
-    dir_name = domain_clean.replace(".", "-")  # allurahub.com -> allurahub-com
-    site_path = f"/home/admin/sites/{dir_name}"
 
     # 检查是否已存在同域名的网站
     existing = db.query(PubSite).filter(PubSite.domain == domain_clean).first()
     if existing:
         raise HTTPException(status_code=400, detail=f"域名 {domain_clean} 已被注册")
 
-    # 自动创建目录结构
+    # 宝塔远程路径
+    bt_root = getattr(settings, "BT_SITE_ROOT", "/www/wwwroot")
+    site_path = f"{bt_root}/{domain_clean}"
+
+    # 验证远程连接和目录
     try:
-        site_publisher.init_site_directory(site_path)
+        checks = remote_publisher.verify_connection(site_path)
+        if not checks.get("ssh_connected"):
+            raise HTTPException(status_code=500, detail=f"无法连接宝塔服务器: {checks.get('error', '未知错误')}")
+        if not checks.get("site_dir_exists"):
+            logger.warning(f"宝塔服务器上目录不存在: {site_path}，请先在宝塔面板创建网站")
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"创建网站目录失败: {e}")
+        logger.warning(f"远程验证跳过: {e}")
 
     group_id = data.group_id if (data.group_id and current_user.role in ("manager", "leader")) else current_user.team_id
 
@@ -101,26 +110,13 @@ async def create_site(
         data_js_path=data.data_js_path,
         article_template=data.article_template,
         created_by=current_user.id,
-        migrated=False,
+        migrated=True,  # 宝塔方案不需要迁移
     )
     db.add(site)
     db.commit()
     db.refresh(site)
 
-    # 对已有文章执行 slug 迁移
-    migration_result = {"migrated_count": 0, "errors": []}
-    try:
-        migration_result = site_publisher.migrate_to_slug(site)
-        site.migrated = True
-        db.commit()
-    except Exception as e:
-        logger.warning(f"Slug 迁移跳过（目录可能为空）: {e}")
-        site.migrated = True
-        db.commit()
-
-    result = _site_to_dict(site, db)
-    result["migration"] = migration_result
-    return result
+    return _site_to_dict(site, db)
 
 
 @router.put("/{site_id}")
@@ -174,5 +170,5 @@ async def verify_site(
     if not site:
         raise HTTPException(status_code=404, detail="网站不存在")
 
-    checks = site_publisher.verify_site(site.site_path)
+    checks = remote_publisher.verify_connection(site.site_path)
     return {"site_id": site_id, "site_name": site.site_name, "checks": checks}
