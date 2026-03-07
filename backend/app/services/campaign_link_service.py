@@ -57,7 +57,10 @@ class CampaignLinkService:
         self.db = db
 
     def get_user_platforms(self, user_id: int) -> List[dict]:
-        """获取用户有活跃账号的平台列表（去重）。"""
+        """获取用户有活跃账号的平台列表，如果用户自己没有则返回团队可用平台。"""
+        from sqlalchemy import func
+
+        # 先查用户自己的
         accounts = (
             self.db.query(AffiliateAccount)
             .join(AffiliatePlatform)
@@ -67,6 +70,16 @@ class CampaignLinkService:
             )
             .all()
         )
+
+        # 如果用户自己没有账号，查所有活跃账号的平台
+        if not accounts:
+            accounts = (
+                self.db.query(AffiliateAccount)
+                .join(AffiliatePlatform)
+                .filter(AffiliateAccount.is_active.is_(True))
+                .all()
+            )
+
         seen = set()
         result = []
         for acct in accounts:
@@ -83,18 +96,31 @@ class CampaignLinkService:
         """根据员工的平台账号 Token 获取指定商家的 campaign link。"""
         platform_code = platform_code.upper()
 
+        # 查找用户在该平台的活跃账号（大小写不敏感匹配 platform_code）
+        from sqlalchemy import func
         account = (
             self.db.query(AffiliateAccount)
             .join(AffiliatePlatform)
             .filter(
                 AffiliateAccount.user_id == user_id,
-                AffiliatePlatform.platform_code == platform_code,
+                func.upper(AffiliatePlatform.platform_code) == platform_code,
                 AffiliateAccount.is_active.is_(True),
             )
             .first()
         )
         if not account:
-            raise HTTPException(400, "你没有该平台的账号，请联系管理员")
+            # 回退：尝试用团队内任意可用账号
+            account = (
+                self.db.query(AffiliateAccount)
+                .join(AffiliatePlatform)
+                .filter(
+                    func.upper(AffiliatePlatform.platform_code) == platform_code,
+                    AffiliateAccount.is_active.is_(True),
+                )
+                .first()
+            )
+        if not account:
+            raise HTTPException(400, "该平台没有可用的账号，请联系管理员")
 
         token = MerchantPlatformSyncService._resolve_token(account, platform_code)
         if not token:
