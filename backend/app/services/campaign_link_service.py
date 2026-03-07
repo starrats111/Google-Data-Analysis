@@ -135,7 +135,31 @@ class CampaignLinkService:
 
         try:
             if mode == "post_json":
-                # CF / CG / BSH / PM — 不支持按 MID 过滤，需分页遍历
+                # CF/CG/BSH/PM — 先尝试用 mid 精确查询，再 fallback 到分页遍历
+                # 尝试 1: 用 mid 参数精确过滤（速度快）
+                for mid_key in ("mid", "mcid", "brand_id"):
+                    payload = {
+                        "source": cfg.get("source", ""),
+                        "token": token,
+                        "curPage": 1,
+                        "perPage": 50,
+                        "relationship": "Joined",
+                        mid_key: merchant_id,
+                    }
+                    try:
+                        resp = httpx.post(url, json=payload, timeout=timeout)
+                        resp.raise_for_status()
+                        items = MerchantPlatformSyncService._extract_items(resp.json())
+                        if items:
+                            found = self._match_merchant(items, merchant_id, platform_code)
+                            if found:
+                                logger.info("[CampaignLink] %s found via %s=%s", platform_code, mid_key, merchant_id)
+                                return found
+                    except Exception:
+                        pass
+
+                # 尝试 2: 分页遍历（兜底，限制最多 5 页避免超时）
+                logger.info("[CampaignLink] %s mid filter failed, falling back to paginated scan", platform_code)
                 actual_total_pages = max_pages
                 for page in range(1, max_pages + 1):
                     payload = {
@@ -153,12 +177,11 @@ class CampaignLinkService:
                         break
                     data = resp.json()
 
-                    # 利用 API 返回的 total_page 动态调整
                     if page == 1:
                         resp_data = data.get("data", data) if isinstance(data, dict) else {}
                         tp = resp_data.get("total_page") or resp_data.get("totalPage")
                         if tp and isinstance(tp, int) and tp > 0:
-                            actual_total_pages = min(tp, 50)  # 安全上限 50 页
+                            actual_total_pages = min(tp, 50)
                             logger.info("[CampaignLink] %s total_page=%d, will scan up to %d", platform_code, tp, actual_total_pages)
 
                     items = MerchantPlatformSyncService._extract_items(data)

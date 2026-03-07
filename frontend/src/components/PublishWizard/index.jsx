@@ -223,6 +223,8 @@ const PublishWizard = () => {
       if (status === 404) {
         message.warning(detail)
         setInputMode('manual')
+      } else if (!err?.response || err.code === 'ECONNABORTED' || err.message?.includes('timeout') || err.message?.includes('Network Error')) {
+        message.warning('请求超时，平台响应较慢，请再试一次')
       } else {
         message.error(detail)
       }
@@ -654,7 +656,7 @@ const PublishWizard = () => {
                       block
                       size="large"
                     >
-                      获取 Campaign Link
+                      {fetchingCampaign ? '正在查找商家，请耐心等待...' : '获取 Campaign Link'}
                     </Button>
                   </>
                 )}
