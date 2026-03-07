@@ -253,10 +253,12 @@ async def get_tracking_links(
 @router.get("/image-proxy")
 async def image_proxy(
     url: str = Query(..., description="要代理的图片 URL"),
-    current_user: User = Depends(get_current_user),
 ):
-    """图片代理：由服务器端请求图片，绕过商家网站防盗链"""
+    """图片代理：由服务器端请求图片，绕过商家网站防盗链（无需认证，img标签无法带token）"""
     import httpx as _httpx
+    # 基本安全检查：只允许 http/https
+    if not url.startswith(("http://", "https://")):
+        return Response(content=b"", status_code=400)
     try:
         async with _httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
             resp = await client.get(url, headers={
