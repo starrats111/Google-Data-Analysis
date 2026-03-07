@@ -135,7 +135,11 @@ class CampaignLinkService:
     def _fetch_merchant_by_id(self, platform_code: str, token: str, merchant_id: str) -> Optional[dict]:
         """调用 Monetization API 查询指定商家详情（含 campaign link）。
 
-        merchant_id 可以是数字 MID 或字符串 mcid，按平台文档选择正确的过滤参数。
+        策略：
+        - LB: 支持 mid/mcid 过滤参数，直接精确查询
+        - CF/CG/BSH/PM: 不支持按 MID 过滤，需分页遍历查找（限制最多 5 页）
+        - LH: 按 mcid 过滤
+        - RW: 按 mid/mcid 过滤
         """
         cfg = PLATFORM_API_CONFIG.get(platform_code)
         if not cfg:
@@ -143,82 +147,96 @@ class CampaignLinkService:
 
         mode = cfg["mode"]
         url = cfg["url"]
-        timeout = httpx.Timeout(30.0, connect=10.0)
+        timeout = httpx.Timeout(60.0, connect=15.0)
+        max_pages = 10  # 最多翻 10 页防止无限循环
 
         try:
             if mode == "post_json":
-                # CF / CG / BSH / PM — POST JSON
-                # 文档支持按 mcid 过滤（字符串slug）或不过滤拉全量再本地匹配
-                # 但 perPage=1 + mcid 过滤效率最高
-                payload = {
-                    "source": cfg.get("source", ""),
-                    "token": token,
-                    "curPage": 1,
-                    "perPage": 100,
-                }
-                # 尝试用 mid（数字）精确匹配
-                if merchant_id.isdigit():
-                    # 对于 PM，字段名是 camelCase
-                    if platform_code == "PM":
-                        payload["brandId"] = int(merchant_id)
-                    else:
-                        payload["brand_id"] = int(merchant_id)
-                else:
-                    payload["mcid"] = merchant_id
-                resp = httpx.post(url, json=payload, timeout=timeout)
+                # CF / CG / BSH / PM — 不支持按 MID 过滤，需分页遍历
+                for page in range(1, max_pages + 1):
+                    payload = {
+                        "source": cfg.get("source", ""),
+                        "token": token,
+                        "curPage": page,
+                        "perPage": 2000,
+                        "relationship": "Joined",  # 只查已加入的商家（有 tracking_url）
+                    }
+                    resp = httpx.post(url, json=payload, timeout=timeout)
+                    resp.raise_for_status()
+                    data = resp.json()
+                    items = MerchantPlatformSyncService._extract_items(data)
+                    if not items:
+                        break
 
-            elif mode in ("get", "get_post"):
-                # LH / LB — GET 请求
-                params = {
-                    "token": token,
-                    "page": "1",
-                    "per_page" if platform_code == "LH" else "limit": "100",
-                }
+                    found = self._match_merchant(items, merchant_id, platform_code)
+                    if found:
+                        return found
+
+                    if len(items) < 2000:
+                        break  # 最后一页
+                return None
+
+            elif platform_code == "LB":
+                # LB 支持 mid 和 mcid 作为过滤参数
+                params = {"token": token, "limit": "10"}
                 if merchant_id.isdigit():
-                    params["mcid"] = merchant_id  # LH: mcid 是数字ID
+                    params["mid"] = merchant_id
                 else:
                     params["mcid"] = merchant_id
                 resp = httpx.get(url, params=params, timeout=timeout)
+                resp.raise_for_status()
+                items = MerchantPlatformSyncService._extract_items(resp.json())
+                return self._match_merchant(items, merchant_id, platform_code) if items else None
 
-            elif mode == "post_form":
-                # RW — POST form-urlencoded
-                form_data = {
+            elif platform_code == "LH":
+                # LH — mcid 是数字 ID
+                params = {
                     "token": token,
                     "page": "1",
-                    "limit": "100",
+                    "per_page": "100",
                 }
                 if merchant_id.isdigit():
-                    form_data["mid"] = merchant_id  # RW: mid 是数字主键
+                    params["mcid"] = merchant_id
+                resp = httpx.get(url, params=params, timeout=timeout)
+                resp.raise_for_status()
+                items = MerchantPlatformSyncService._extract_items(resp.json())
+                return self._match_merchant(items, merchant_id, platform_code) if items else None
+
+            elif mode == "post_form":
+                # RW — 支持 mid/mcid 过滤
+                form_data = {"token": token, "page": "1", "limit": "10"}
+                if merchant_id.isdigit():
+                    form_data["mid"] = merchant_id
                 else:
                     form_data["mcid"] = merchant_id
                 resp = httpx.post(url, data=form_data, timeout=timeout)
+                resp.raise_for_status()
+                items = MerchantPlatformSyncService._extract_items(resp.json())
+                return self._match_merchant(items, merchant_id, platform_code) if items else None
+
             else:
                 raise HTTPException(400, f"不支持的 API 模式: {mode}")
 
-            resp.raise_for_status()
-            data = resp.json()
         except httpx.HTTPStatusError as exc:
             logger.error("Campaign link API error for %s: %s", platform_code, exc)
             raise HTTPException(502, f"平台 API 返回错误: {exc.response.status_code}")
         except httpx.RequestError as exc:
             logger.error("Campaign link API request failed for %s: %s", platform_code, exc)
-            raise HTTPException(502, "平台 API 请求失败，请稍后重试")
+            raise HTTPException(502, "平台 API 请求超时，请稍后重试")
 
-        items = MerchantPlatformSyncService._extract_items(data)
-        if not items:
-            return None
-
-        # 从返回列表中精确匹配目标商家
+    @staticmethod
+    def _match_merchant(items: list, merchant_id: str, platform_code: str) -> Optional[dict]:
+        """从返回列表中精确匹配目标商家"""
         for item in items:
-            item_mid = str(item.get("mid") or item.get("brand_id") or item.get("brandId") or "")
-            item_mcid = str(item.get("mcid") or "")
-            if merchant_id == item_mid or merchant_id == item_mcid:
+            # 各平台可能的 ID 字段
+            candidates = [
+                str(item.get("mid") or ""),
+                str(item.get("brand_id") or ""),
+                str(item.get("brandId") or ""),
+                str(item.get("mcid") or ""),
+            ]
+            if merchant_id in candidates:
                 return item
-
-        # 如果只返回了一条，直接用
-        if len(items) == 1:
-            return items[0]
-
         return None
 
     @staticmethod
