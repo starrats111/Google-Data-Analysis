@@ -13,7 +13,7 @@ from app.services.humanizer_service import humanize
 
 logger = logging.getLogger(__name__)
 
-FALLBACK_MODELS = ["[福利]gemini-3-flash-preview-thinking", "[福利]gemini-2.5-flash-lite"]
+FALLBACK_MODELS = ["[premium]gemini-3-flash-preview", "[福利]gemini-3-flash-preview"]
 
 
 class ArticleGenService:

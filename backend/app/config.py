@@ -143,12 +143,12 @@ class Settings(BaseSettings):
     # 哈基米API站: https://api.gemai.cc
     gemini_api_key: str = ""
     gemini_base_url: str = "https://api.gemai.cc"
-    # 主模型（日常使用）- 注意哈基米模型需要带前缀
-    gemini_model: str = "[福利]gemini-3-flash-preview"
-    # 备用模型1（带思考链，复杂分析）
-    gemini_model_advanced: str = "[福利]gemini-3-flash-preview-thinking"
-    # 备用模型2（最便宜，兜底）
-    gemini_model_thinking: str = "[福利]gemini-2.5-flash-lite"
+    # 主模型（Gemini 3 Pro - 写作质量最强）
+    gemini_model: str = "gemini-3-pro-preview"
+    # 备用模型1（Gemini 3 Flash premium - 快速稳定）
+    gemini_model_advanced: str = "[premium]gemini-3-flash-preview"
+    # 备用模型2（免费兜底）
+    gemini_model_thinking: str = "[福利]gemini-3-flash-preview"
     
     # ===== Claude AI 配置（露出功能）=====
     # Claude API Key（从哈基米读取，与 Gemini 相同方式）
