@@ -1,4 +1,5 @@
 import api from './api'
+import { getToken } from './tokenHolder'
 
 const articleApi = {
   // 文章 CRUD
@@ -32,7 +33,41 @@ const articleApi = {
 
   // 商家推广（OPT-012）
   crawlMerchant: (data) => api.post('/api/article-gen/crawl', data),
-  generateMerchantArticle: (data) => api.post('/api/article-gen/merchant-article', data),
+  generateMerchantArticle: async (data, onProgress) => {
+    const baseUrl = api.defaults.baseURL || ''
+    const headers = { 'Content-Type': 'application/json' }
+    const token = getToken()
+    if (token) headers['Authorization'] = `Bearer ${token}`
+    const resp = await fetch(`${baseUrl}/api/article-gen/merchant-article`, {
+      method: 'POST', headers, body: JSON.stringify(data), credentials: 'include',
+    })
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({ detail: '生成失败' }))
+      throw new Error(err.detail || '生成失败')
+    }
+    const reader = resp.body.getReader()
+    const decoder = new TextDecoder()
+    let buffer = ''
+    let result = null
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+      const lines = buffer.split('\n')
+      buffer = lines.pop() || ''
+      for (const line of lines) {
+        if (line.startsWith('data: ')) {
+          try {
+            const parsed = JSON.parse(line.slice(6))
+            if (parsed.status === 'generating' && onProgress) onProgress(parsed.progress)
+            if (parsed.status === 'done') result = parsed.result
+            if (parsed.status === 'error') throw new Error(parsed.detail)
+          } catch (e) { if (e.message !== 'generating') throw e }
+        }
+      }
+    }
+    return { data: result }
+  },
   getTrackingLinks: (params) => api.get('/api/article-gen/tracking-links', { params }),
   searchImages: (data) => api.post('/api/article-gen/search-images', data),
 

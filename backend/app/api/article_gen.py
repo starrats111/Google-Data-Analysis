@@ -1,10 +1,13 @@
 """
 AI 生成 API（OPT-011/012/015）
 """
+import json
 import logging
+import asyncio
 from typing import Optional, List
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 from sqlalchemy import desc
@@ -177,30 +180,46 @@ async def generate_merchant_article(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """生成商家推广文章（OPT-012）"""
-    try:
-        service = ArticleGenService()
-        result = service.generate_merchant_article(
-            title=data.title,
-            merchant_info=data.merchant_info,
-            tracking_link=data.tracking_link,
-            keywords=data.keywords,
-            language=data.language,
-        )
+    """生成商家推广文章（OPT-012）— SSE 流式响应避免网关超时"""
+    async def event_stream():
+        loop = asyncio.get_event_loop()
+        import concurrent.futures
+        executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
 
-        tracking = PubTrackingLink(
-            user_id=current_user.id,
-            merchant_url=data.merchant_info.get("url", ""),
-            tracking_link=data.tracking_link,
-            brand_name=data.merchant_info.get("brand_name", ""),
-        )
-        db.add(tracking)
-        db.commit()
+        future = loop.run_in_executor(executor, _generate_article_sync,
+            data.title, data.merchant_info, data.tracking_link, data.keywords, data.language)
 
-        return result
-    except Exception as e:
-        logger.error(f"商家文章生成失败: {e}")
-        raise HTTPException(status_code=500, detail=f"商家文章生成失败: {str(e)}")
+        while not future.done():
+            yield f"data: {json.dumps({'status': 'generating', 'progress': 'AI 正在撰写文章...'})}\n\n"
+            await asyncio.sleep(3)
+
+        try:
+            result = future.result()
+            tracking = PubTrackingLink(
+                user_id=current_user.id,
+                merchant_url=data.merchant_info.get("url", ""),
+                tracking_link=data.tracking_link,
+                brand_name=data.merchant_info.get("brand_name", ""),
+            )
+            db.add(tracking)
+            db.commit()
+            yield f"data: {json.dumps({'status': 'done', 'result': result})}\n\n"
+        except Exception as e:
+            logger.error(f"商家文章生成失败: {e}")
+            yield f"data: {json.dumps({'status': 'error', 'detail': str(e)})}\n\n"
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+
+def _generate_article_sync(title, merchant_info, tracking_link, keywords, language):
+    service = ArticleGenService()
+    return service.generate_merchant_article(
+        title=title,
+        merchant_info=merchant_info,
+        tracking_link=tracking_link,
+        keywords=keywords,
+        language=language,
+    )
 
 
 @router.get("/tracking-links")

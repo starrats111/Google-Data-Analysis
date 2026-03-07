@@ -13,15 +13,17 @@ from app.services.humanizer_service import humanize
 
 logger = logging.getLogger(__name__)
 
-FALLBACK_MODELS = ["[premium]gemini-3-flash-preview", "[福利]gemini-3-flash-preview"]
+FAST_MODELS = ["[premium]gemini-3-flash-preview", "[福利]gemini-3-flash-preview"]
+SMART_MODELS_FALLBACK = ["[premium]gemini-3-flash-preview", "[福利]gemini-3-flash-preview"]
 
 
 class ArticleGenService:
     def __init__(self):
         self.api_key = settings.gemini_api_key
         self.base_url = settings.gemini_base_url.rstrip("/")
-        self.model = settings.gemini_model
-        self.fallback_models = FALLBACK_MODELS
+        self.model = settings.gemini_model  # pro model for analysis
+        self.fast_models = FAST_MODELS       # flash models for generation (speed)
+        self.fallback_models = SMART_MODELS_FALLBACK
 
     def _call_api(self, messages: List[Dict], model: str, max_tokens: int = 8192) -> str:
         url = f"{self.base_url}/v1/chat/completions"
@@ -41,8 +43,11 @@ class ArticleGenService:
             data = resp.json()
             return data["choices"][0]["message"]["content"]
 
-    def _call_with_fallback(self, messages: List[Dict], max_tokens: int = 8192) -> str:
-        models_to_try = [self.model] + self.fallback_models
+    def _call_with_fallback(self, messages: List[Dict], max_tokens: int = 8192, fast: bool = False) -> str:
+        if fast:
+            models_to_try = self.fast_models + [self.model]
+        else:
+            models_to_try = [self.model] + self.fallback_models
         last_error = None
         for m in models_to_try:
             try:
@@ -201,39 +206,29 @@ class ArticleGenService:
             keyword_str = f"\nSEO 关键词（自然融入）：{', '.join(keywords)}"
 
         system_prompt = (
-            f"你是一位真人编辑，正在为一个生活方式网站撰写文章。当前年份是 {current_year}。\n\n"
-            "===== 写作铁律 =====\n"
-            "1. 真实感第一：禁用以下词汇 —— revolutionizing, game-changer, elevate, seamlessly, "
-            "cutting-edge, groundbreaking, transformative, 此外, 充满活力, 至关重要, 值得注意的是, 综上所述\n"
-            "2. 软植入：品牌关键词在全文出现 3~4 次，不得在开头第一段提及品牌名\n"
-            f"3. 链接植入：追踪链接以品牌名或产品名为锚文本，自然嵌入 <a href=\"{tracking_link}\">{brand}</a>，共 2~3 处\n"
-            "4. 编辑视角：像真人编辑撰写，可用个人故事、生活化语言、具体细节\n"
-            "5. 篇幅：800~1200 字\n"
-            "6. 结构：HTML 格式，含 h2/h3 子标题，段落清晰\n"
-            f"7. 语言：{lang_label}\n"
-            "8. 禁止空泛赞美，所有描述必须有具体依据\n"
-            "9. 文章应该像是一篇真正的编辑推荐文章，而不是广告\n\n"
-            "===== 输出格式 =====\n"
-            "仅返回 JSON 对象，包含以下字段：\n"
-            "content（HTML 正文）、excerpt（100字摘要）、meta_title、meta_description、meta_keywords、category\n"
-            "不要 markdown 代码块包裹。"
+            f"You are a lifestyle editor writing in {lang_label}. Year: {current_year}.\n"
+            "Rules: 1)No AI buzzwords(revolutionizing,game-changer,elevate,seamlessly,cutting-edge) "
+            "2)Brand name appears 3-4 times, NOT in first paragraph "
+            f"3)Insert 2-3 links: <a href=\"{tracking_link}\">{brand}</a> "
+            "4)Write like a real editor with personal tone "
+            "5)800-1200 words, HTML with h2/h3 "
+            "6)No empty praise, be specific\n"
+            "Return ONLY a JSON object: "
+            "{\"content\":\"HTML\",\"excerpt\":\"100 chars\",\"meta_title\":\"\","
+            "\"meta_description\":\"\",\"meta_keywords\":\"\",\"category\":\"\"}"
         )
 
         user_msg = (
-            f"文章标题：{title}\n"
-            f"品牌名：{brand}\n"
-            f"主营产品：{products}\n"
-            f"核心卖点：{selling_points}\n"
-            f"当前促销：{promotions}\n"
-            f"追踪链接：{tracking_link}"
-            f"{keyword_str}"
+            f"Title: {title}\nBrand: {brand}\nProducts: {products}\n"
+            f"Selling points: {selling_points}\nPromo: {promotions}\n"
+            f"Link: {tracking_link}{keyword_str}"
         )
 
         messages = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_msg},
         ]
-        raw = self._call_with_fallback(messages, max_tokens=8192)
+        raw = self._call_with_fallback(messages, max_tokens=4096, fast=True)
         try:
             text = raw.strip()
             if text.startswith("```"):

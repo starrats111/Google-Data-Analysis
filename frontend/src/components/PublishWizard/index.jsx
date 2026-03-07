@@ -288,8 +288,11 @@ const PublishWizard = () => {
     setMStep(2)
   }
 
+  const [genProgress, setGenProgress] = useState('')
+
   const handleMerchantGenerate = async () => {
     setLoading(true)
+    setGenProgress('正在连接 AI...')
     try {
       const res = await articleApi.generateMerchantArticle({
         title: selectedMTitle,
@@ -303,12 +306,12 @@ const PublishWizard = () => {
         tracking_link: trackingLink,
         keywords: selectedMKeywords,
         language,
-      })
+      }, (progress) => setGenProgress(progress))
       setMerchantArticle(res.data)
       setMStep(3)
     } catch (err) {
       message.error('文章生成失败: ' + (err?.response?.data?.detail || err.message))
-    } finally { setLoading(false) }
+    } finally { setLoading(false); setGenProgress('') }
   }
 
   const handleMerchantPublish = async () => {
@@ -963,8 +966,8 @@ const PublishWizard = () => {
             </Card>
             <Space>
               <Button onClick={() => setMStep(1)}>上一步</Button>
-              <Button type="primary" icon={<RocketOutlined />} onClick={handleMerchantGenerate} size="large">
-                生成推广文章
+              <Button type="primary" icon={<RocketOutlined />} onClick={handleMerchantGenerate} loading={loading} size="large">
+                {loading ? (genProgress || 'AI 正在撰写...') : '生成推广文章'}
               </Button>
             </Space>
           </div>
