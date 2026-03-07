@@ -93,12 +93,15 @@ class CampaignLinkService:
         return result
 
     def get_campaign_link(self, user_id: int, platform_code: str, merchant_id: str) -> dict:
-        """根据员工的平台账号 Token 获取指定商家的 campaign link。"""
+        """根据员工的平台账号 Token 获取指定商家的 campaign link。
+        
+        会尝试用户自己的账号，再尝试团队内所有可用账号，直到找到为止。
+        """
         platform_code = platform_code.upper()
-
-        # 查找用户在该平台的活跃账号（大小写不敏感匹配 platform_code）
         from sqlalchemy import func
-        account = (
+
+        # 收集所有可用账号：用户自己的优先，再加团队内其他的
+        user_accounts = (
             self.db.query(AffiliateAccount)
             .join(AffiliatePlatform)
             .filter(
@@ -106,31 +109,38 @@ class CampaignLinkService:
                 func.upper(AffiliatePlatform.platform_code) == platform_code,
                 AffiliateAccount.is_active.is_(True),
             )
-            .first()
+            .all()
         )
-        if not account:
-            # 回退：尝试用团队内任意可用账号
-            account = (
-                self.db.query(AffiliateAccount)
-                .join(AffiliatePlatform)
-                .filter(
-                    func.upper(AffiliatePlatform.platform_code) == platform_code,
-                    AffiliateAccount.is_active.is_(True),
-                )
-                .first()
+        team_accounts = (
+            self.db.query(AffiliateAccount)
+            .join(AffiliatePlatform)
+            .filter(
+                AffiliateAccount.user_id != user_id,
+                func.upper(AffiliatePlatform.platform_code) == platform_code,
+                AffiliateAccount.is_active.is_(True),
             )
-        if not account:
+            .all()
+        )
+        all_accounts = user_accounts + team_accounts
+        if not all_accounts:
             raise HTTPException(400, "该平台没有可用的账号，请联系管理员")
 
-        token = MerchantPlatformSyncService._resolve_token(account, platform_code)
-        if not token:
+        # 依次尝试每个账号的 Token，直到找到商家
+        tried = 0
+        for account in all_accounts:
+            token = MerchantPlatformSyncService._resolve_token(account, platform_code)
+            if not token:
+                continue
+            tried += 1
+            logger.info("[CampaignLink] 尝试账号 #%d (user_id=%s) 查找 %s MID=%s",
+                        tried, account.user_id, platform_code, merchant_id)
+            raw = self._fetch_merchant_by_id(platform_code, token, merchant_id)
+            if raw:
+                return self._map_campaign_response(raw, platform_code)
+
+        if tried == 0:
             raise HTTPException(400, "Token 无效，请更新平台账号凭证")
-
-        raw = self._fetch_merchant_by_id(platform_code, token, merchant_id)
-        if not raw:
-            raise HTTPException(404, "未找到该 MID 对应的商家")
-
-        return self._map_campaign_response(raw, platform_code)
+        raise HTTPException(404, f"在 {tried} 个账号中均未找到 MID {merchant_id}，该商家可能未加入")
 
     def _fetch_merchant_by_id(self, platform_code: str, token: str, merchant_id: str) -> Optional[dict]:
         """调用 Monetization API 查询指定商家详情（含 campaign link）。
