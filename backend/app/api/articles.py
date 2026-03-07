@@ -357,7 +357,7 @@ async def publish_to_site(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """将文章推送到指定网站"""
+    """将文章发布到指定网站（通过公开 API 实时提供给外部网站）"""
     article = db.query(PubArticle).filter(
         PubArticle.id == article_id,
         PubArticle.deleted_at.is_(None),
@@ -376,22 +376,19 @@ async def publish_to_site(
     if not site:
         raise HTTPException(status_code=404, detail="网站不存在")
 
-    try:
-        result = site_publisher.publish_article(site, article)
-    except Exception as e:
-        logger.error(f"发布到网站失败: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"发布失败: {e}")
-
     article.site_id = site.id
-    article.site_article_slug = result["site_article_slug"]
+    article.site_article_slug = article.slug
     article.published_to_site = True
     db.commit()
+
+    logger.info(f"文章已发布到网站: slug={article.slug}, site={site.site_name}, domain={site.domain}")
 
     return {
         "message": "文章已发布到网站",
         "site_name": site.site_name,
-        "site_article_slug": result["site_article_slug"],
-        "site_article_id": result["site_article_id"],
+        "site_domain": site.domain,
+        "site_article_slug": article.slug,
+        "public_api_url": f"/api/public/articles/{site.domain}",
     }
 
 
@@ -412,16 +409,6 @@ async def unpublish_from_site(
 
     if not article.published_to_site or not article.site_id:
         raise HTTPException(status_code=400, detail="文章未发布到任何网站")
-
-    site = db.query(PubSite).filter(PubSite.id == article.site_id).first()
-    if not site:
-        raise HTTPException(status_code=404, detail="关联的网站配置不存在")
-
-    try:
-        site_publisher.unpublish_article(site, article.site_article_slug)
-    except Exception as e:
-        logger.error(f"从网站移除失败: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"移除失败: {e}")
 
     article.site_id = None
     article.site_article_slug = None

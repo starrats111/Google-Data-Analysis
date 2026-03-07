@@ -259,6 +259,8 @@ def _extract_page(html: str, url: str) -> Dict:
         if len(images) >= 30:
             break
 
+    images = _deduplicate_cdn_images(images)
+
     return {
         "url": url,
         "title": title,
@@ -267,6 +269,48 @@ def _extract_page(html: str, url: str) -> Dict:
         "text": main_text,
         "images": images,
     }
+
+
+def _deduplicate_cdn_images(images: List[str]) -> List[str]:
+    """
+    CDN 去重：同一张图的不同尺寸/格式变体只保留一张。
+    例如 nasm.org 的 ?width=2000&format=webply 和 ?width=750&format=jpg 是同一张图。
+    优先保留 JPG > PNG > WebP，优先保留最大尺寸。
+    """
+    from urllib.parse import urlparse, parse_qs
+
+    FORMAT_PRIORITY = {"jpg": 0, "jpeg": 0, "pjpg": 0, "png": 1, "webp": 2, "webply": 2}
+
+    base_map = {}  # base_path -> (priority_score, url)
+    result = []
+
+    for img_url in images:
+        parsed = urlparse(img_url)
+        qs = parse_qs(parsed.query)
+        has_cdn_params = any(k in qs for k in ("width", "format", "w", "h", "quality", "optimize", "fit", "crop"))
+
+        if not has_cdn_params:
+            result.append(img_url)
+            continue
+
+        base_path = parsed.scheme + "://" + parsed.netloc + parsed.path
+
+        fmt = qs.get("format", [""])[0].lower()
+        width = 0
+        try:
+            width = int(qs.get("width", qs.get("w", ["0"]))[0])
+        except (ValueError, IndexError):
+            pass
+        fmt_score = FORMAT_PRIORITY.get(fmt, 1)
+        priority = (fmt_score, -width)
+
+        if base_path not in base_map or priority < base_map[base_path][0]:
+            base_map[base_path] = (priority, img_url)
+
+    for _, img_url in base_map.values():
+        result.append(img_url)
+
+    return result
 
 
 def _find_sub_pages(soup: BeautifulSoup, base_url: str) -> List[str]:

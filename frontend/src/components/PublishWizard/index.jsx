@@ -841,14 +841,14 @@ const PublishWizard = () => {
               )}
             </Card>
 
-            {/* ===== Support Region & 语言 ===== */}
-            {campaignResult?.support_regions?.length > 0 && (
+            {/* ===== Support Region → 语言自动确定 ===== */}
+            {campaignResult?.support_regions?.length > 0 ? (
               <Card size="small" style={{ marginBottom: 16, background: '#f0f5ff' }}>
                 <Row gutter={16} align="middle">
-                  <Col span={12}>
+                  <Col span={14}>
                     <Typography.Text strong>Support Region</Typography.Text>
                     <Select
-                      placeholder="选择目标区域"
+                      placeholder="选择目标区域（自动确定语言）"
                       value={selectedRegion}
                       onChange={handleRegionSelect}
                       style={{ width: '100%', marginTop: 4 }}
@@ -858,20 +858,19 @@ const PublishWizard = () => {
                       }))}
                     />
                   </Col>
-                  <Col span={12}>
+                  <Col span={10}>
                     <Typography.Text strong>文章语言</Typography.Text>
-                    <Select
-                      value={language}
-                      onChange={setLanguage}
-                      options={LANGUAGES}
-                      style={{ width: '100%', marginTop: 4 }}
-                    />
+                    <div style={{ marginTop: 4 }}>
+                      <Tag color="blue" style={{ fontSize: 14, padding: '4px 12px' }}>
+                        {selectedRegion
+                          ? (campaignResult.support_regions.find(r => r.code === selectedRegion)?.language || language)
+                          : '请先选择区域'}
+                      </Tag>
+                    </div>
                   </Col>
                 </Row>
               </Card>
-            )}
-
-            {!campaignResult?.support_regions?.length && (
+            ) : (
               <Card size="small" style={{ marginBottom: 16, background: '#f0f5ff' }}>
                 <Typography.Text strong>文章语言</Typography.Text>
                 <Select

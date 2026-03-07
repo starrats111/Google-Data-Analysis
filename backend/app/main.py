@@ -68,6 +68,8 @@ from app.api import (
     article_titles,
     # 网站管理（OPT-013）
     sites,
+    # 公开文章 API（供外部网站调用）
+    public_articles,
 )
 
 
@@ -279,6 +281,9 @@ app.include_router(article_titles.router)
 
 # 网站管理路由（OPT-013）
 app.include_router(sites.router)
+
+# 公开文章 API（供外部网站实时获取已发布文章）
+app.include_router(public_articles.router)
 
 
 @app.get("/health")
