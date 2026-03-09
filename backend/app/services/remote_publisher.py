@@ -346,6 +346,27 @@ class RemotePublisher:
                 sorted_imgs = sorted(article.images, key=lambda x: (x.position or 0))
                 content_image_urls = [img.url for img in sorted_imgs if img.url]
 
+            # 兜底：如果没有内容图片，自动从标题/商家搜索 4 张
+            if len(content_image_urls) < 4:
+                try:
+                    from app.services.merchant_crawler import search_images as search_merchant_images
+                    search_query = getattr(article, "merchant_url", "") or article.title
+                    # 用标题的英文部分搜索
+                    if hasattr(article, "meta_keywords") and article.meta_keywords:
+                        search_query = article.meta_keywords.split(",")[0].strip()
+                    elif article.title:
+                        search_query = article.title
+                    need = 4 - len(content_image_urls)
+                    extra = search_merchant_images(search_query, count=need + 2)
+                    existing_set = set(content_image_urls)
+                    for img_url in extra:
+                        if img_url not in existing_set and len(content_image_urls) < 4:
+                            content_image_urls.append(img_url)
+                            existing_set.add(img_url)
+                    logger.info(f"[发布] 自动补充内容图片: 需要{need}张, 搜索到{len(extra)}张, 最终{len(content_image_urls)}张")
+                except Exception as e:
+                    logger.warning(f"[发布] 自动搜索内容图片失败: {e}")
+
             image_paths = self._process_images(
                 ssh, sftp, site_root, slug,
                 article.featured_image or "",
@@ -956,6 +977,16 @@ class RemotePublisher:
         excerpt = self._html_escape(article.excerpt or "")
         hero_image = hero_path or article.featured_image or ""
         content_html = article.content or ""
+
+        # 清洗 content：去除 JSON 转义残留、\n 字面文本
+        content_html = content_html.replace("\\n", "\n").replace("\\t", "\t")
+        content_html = content_html.replace('\\"', '"').replace("\\/", "/")
+        content_html = re.sub(r'(?<!\\)\\n', '\n', content_html)
+        # 去掉可能的 JSON 包裹残留
+        content_html = re.sub(r'^\s*\{\s*"content"\s*:\s*"?', '', content_html)
+        content_html = re.sub(r'"?\s*[,}]\s*"excerpt"[\s\S]*$', '', content_html)
+        content_html = re.sub(r'"?\s*\}\s*$', '', content_html)
+        content_html = content_html.strip()
 
         if content_image_paths:
             content_html = self._insert_content_images(content_html, content_image_paths)

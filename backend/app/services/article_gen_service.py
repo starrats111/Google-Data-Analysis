@@ -14,8 +14,8 @@ from app.services.humanizer_service import humanize
 
 logger = logging.getLogger(__name__)
 
-FAST_MODELS = ["claude-sonnet-4-5-20250929", "claude-sonnet-4-6", "gemini-3-pro-preview"]
-SMART_MODELS_FALLBACK = ["claude-sonnet-4-5-20250929", "claude-sonnet-4-6", "gemini-3-pro-preview"]
+FAST_MODELS = ["gpt-5.1", "claude-sonnet-4-6", "claude-opus-4-5-20251101"]
+SMART_MODELS_FALLBACK = ["gpt-5.1", "claude-sonnet-4-6", "claude-opus-4-5-20251101"]
 
 
 class ArticleGenService:
@@ -290,6 +290,7 @@ class ArticleGenService:
         try:
             result = json.loads(text)
             if isinstance(result, dict) and result.get("content"):
+                result["content"] = self._clean_content(result["content"])
                 return result
         except (json.JSONDecodeError, IndexError):
             pass
@@ -300,20 +301,63 @@ class ArticleGenService:
             try:
                 result = json.loads(match.group())
                 if isinstance(result, dict) and result.get("content"):
+                    result["content"] = self._clean_content(result["content"])
                     return result
             except (json.JSONDecodeError, IndexError):
                 pass
 
-        # 4. 如果文本本身包含 HTML 标签，直接当 content 用
+        # 4. 尝试修复截断的 JSON（AI 输出被 max_tokens 截断）
+        if '"content"' in text:
+            # 提取 content 字段值（支持多行 HTML）
+            cm = re.search(r'"content"\s*:\s*"((?:[^"\\]|\\.)*)(?:"|$)', text, re.DOTALL)
+            if cm:
+                content = cm.group(1)
+                content = content.replace("\\n", "\n").replace("\\t", "\t").replace('\\"', '"').replace("\\/", "/")
+                content = self._clean_content(content)
+                if len(content) > 100:
+                    logger.warning("[ArticleGen] JSON 截断，从 content 字段提取 HTML")
+                    # 尝试提取其他字段
+                    excerpt = ""
+                    em = re.search(r'"excerpt"\s*:\s*"((?:[^"\\]|\\.)*)"', text)
+                    if em:
+                        excerpt = em.group(1).replace("\\n", " ").replace('\\"', '"')
+                    category = "general"
+                    catm = re.search(r'"category"\s*:\s*"([^"]*)"', text)
+                    if catm:
+                        category = catm.group(1)
+                    author = ""
+                    am = re.search(r'"author"\s*:\s*"([^"]*)"', text)
+                    if am:
+                        author = am.group(1)
+                    meta_title = title
+                    mtm = re.search(r'"meta_title"\s*:\s*"((?:[^"\\]|\\.)*)"', text)
+                    if mtm:
+                        meta_title = mtm.group(1).replace('\\"', '"')
+                    meta_desc = ""
+                    mdm = re.search(r'"meta_description"\s*:\s*"((?:[^"\\]|\\.)*)"', text)
+                    if mdm:
+                        meta_desc = mdm.group(1).replace('\\"', '"')
+                    meta_kw = title
+                    mkm = re.search(r'"meta_keywords"\s*:\s*"((?:[^"\\]|\\.)*)"', text)
+                    if mkm:
+                        meta_kw = mkm.group(1).replace('\\"', '"')
+                    return {
+                        "content": content,
+                        "excerpt": excerpt or re.sub(r'<[^>]+>', '', content)[:150],
+                        "meta_title": meta_title,
+                        "meta_description": meta_desc or re.sub(r'<[^>]+>', '', content)[:160],
+                        "meta_keywords": meta_kw,
+                        "category": category,
+                        "author": author,
+                    }
+
+        # 5. 如果文本本身包含 HTML 标签，直接当 content 用
         if "<h2" in text or "<p>" in text:
-            # 清理可能的 JSON 包裹
             content = text
-            if '"content"' in content:
-                # 尝试提取 content 字段的值
-                cm = re.search(r'"content"\s*:\s*"([\s\S]*?)"\s*[,}]', content)
-                if cm:
-                    content = cm.group(1).replace("\\n", "\n").replace('\\"', '"')
-            logger.warning(f"[ArticleGen] JSON 解析失败，从原始文本提取 HTML content")
+            # 清理可能的 JSON 包裹残留
+            content = re.sub(r'^[^<]*(?=<)', '', content)  # 去掉 HTML 前的非标签内容
+            content = self._clean_content(content)
+            logger.warning("[ArticleGen] JSON 解析失败，从原始文本提取 HTML content")
             return {
                 "content": content,
                 "excerpt": re.sub(r'<[^>]+>', '', content)[:150],
@@ -323,7 +367,7 @@ class ArticleGenService:
                 "category": "general",
             }
 
-        # 5. 最终 fallback
+        # 6. 最终 fallback
         logger.error(f"[ArticleGen] 商家文章解析完全失败: {raw[:300]}")
         return {
             "content": f"<p>{text}</p>",
@@ -333,3 +377,20 @@ class ArticleGenService:
             "meta_keywords": title,
             "category": "general",
         }
+
+    @staticmethod
+    def _clean_content(html: str) -> str:
+        """清洗 AI 生成的 HTML content，确保无乱码/转义残留。"""
+        if not html:
+            return html
+        # 处理 JSON 转义残留
+        html = html.replace("\\n", "\n").replace("\\t", "\t")
+        html = html.replace('\\"', '"').replace("\\/", "/")
+        # 去掉字面 \n\n 文本（非真正换行）
+        html = re.sub(r'(?<!\\)\\n', '\n', html)
+        # 确保 <p> 标签内没有裸露的 \n
+        html = re.sub(r'\n{3,}', '\n\n', html)
+        # 去掉 JSON 包裹残留
+        html = re.sub(r'^\s*\{\s*"content"\s*:\s*"?', '', html)
+        html = re.sub(r'"?\s*\}\s*$', '', html)
+        return html.strip()

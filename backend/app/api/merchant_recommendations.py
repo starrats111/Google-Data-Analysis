@@ -4,7 +4,6 @@
 import uuid
 import logging
 from datetime import datetime
-from decimal import Decimal, InvalidOperation
 from typing import Optional
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
@@ -21,12 +20,19 @@ router = APIRouter(prefix="/api/merchant-recommendations", tags=["推荐商家"]
 logger = logging.getLogger(__name__)
 
 
-def _safe_decimal(val) -> Optional[Decimal]:
+def _clean(val):
+    if val is None:
+        return None
+    s = str(val).strip()
+    return s if s else None
+
+
+def _to_float(val):
     if val is None:
         return None
     try:
-        return Decimal(str(val))
-    except (InvalidOperation, ValueError):
+        return float(val)
+    except (ValueError, TypeError):
         return None
 
 
@@ -57,11 +63,11 @@ async def upload_recommendations(
     if len(rows) < 2:
         raise HTTPException(status_code=400, detail="Excel 无数据行")
 
-    # 找到表头行（跳过可能的标题行）
+    # 找到表头行（可能第一行是标题，第二行才是表头）
     header_row_idx = 0
-    for i, row in enumerate(rows):
+    for i, row in enumerate(rows[:3]):
         cells = [str(c or "").strip().lower() for c in row]
-        if "mcid" in cells or any("mid" == c for c in cells):
+        if "mcid" in cells or "mid" in cells:
             header_row_idx = i
             break
 
@@ -75,13 +81,11 @@ async def upload_recommendations(
             col["merchant_mid"] = i
         elif "广告主名称" in h or "advertiser name" in hl:
             col["merchant_name"] = i
-        elif "联盟" in h or "affiliate" in hl:
-            col["platform"] = i
         elif "网址" in h or "website" in hl:
             col["merchant_url"] = i
         elif "商家地区" in h or "merchant base" in hl:
             col["merchant_region"] = i
-        elif hl.startswith("epc") or "epc" in hl:
+        elif hl.startswith("epc"):
             col["epc"] = i
         elif "上限" in h or "cap" in hl:
             col["commission_cap"] = i
@@ -114,13 +118,12 @@ async def upload_recommendations(
             mcid=_g("mcid"),
             merchant_mid=_g("merchant_mid"),
             merchant_name=merchant_name,
-            platform=_g("platform") or "",
             merchant_url=_g("merchant_url"),
             merchant_region=_g("merchant_region"),
-            epc=_safe_decimal(row[col["epc"]] if "epc" in col and col["epc"] < len(row) else None),
-            commission_cap=_safe_decimal(row[col["commission_cap"]] if "commission_cap" in col and col["commission_cap"] < len(row) else None),
-            avg_commission_rate=_safe_decimal(row[col["avg_commission_rate"]] if "avg_commission_rate" in col and col["avg_commission_rate"] < len(row) else None),
-            avg_order_commission=_safe_decimal(row[col["avg_order_commission"]] if "avg_order_commission" in col and col["avg_order_commission"] < len(row) else None),
+            epc=_to_float(_g("epc")),
+            commission_cap=_to_float(_g("commission_cap")),
+            avg_commission_rate=_to_float(_g("avg_commission_rate")),
+            avg_order_commission=_to_float(_g("avg_order_commission")),
             upload_batch=batch_id,
         ))
 
@@ -158,8 +161,8 @@ async def upload_recommendations(
 
 @router.get("")
 async def list_recommendations(
-    search: Optional[str] = None,
     batch_id: Optional[str] = None,
+    search: Optional[str] = None,
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=200),
     current_user: User = Depends(get_current_user),
@@ -186,8 +189,8 @@ async def list_recommendations(
         "total": total, "page": page, "page_size": page_size,
         "items": [{
             "id": r.id, "mcid": r.mcid, "merchant_mid": r.merchant_mid,
-            "merchant_name": r.merchant_name, "platform": r.platform,
-            "merchant_url": r.merchant_url, "merchant_region": r.merchant_region,
+            "merchant_name": r.merchant_name, "merchant_url": r.merchant_url,
+            "merchant_region": r.merchant_region,
             "epc": float(r.epc) if r.epc else None,
             "commission_cap": float(r.commission_cap) if r.commission_cap else None,
             "avg_commission_rate": float(r.avg_commission_rate) if r.avg_commission_rate else None,
