@@ -1155,7 +1155,7 @@ class MerchantService:
             db.query(AffiliateAccount)
             .join(AffiliatePlatform)
             .filter(
-                AffiliatePlatform.code.in_(["LH", "lh"]),
+                AffiliatePlatform.platform_code.in_(["LH", "lh"]),
                 AffiliateAccount.is_active.is_(True),
             )
             .all()
