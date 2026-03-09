@@ -45,6 +45,7 @@ class ArticleCreate(BaseModel):
     language: Optional[str] = None
     tag_ids: Optional[list] = Field(default_factory=list)
     links: Optional[list] = Field(default_factory=list)
+    content_images: Optional[list] = Field(default_factory=list)
 
 
 class ArticleUpdate(BaseModel):
@@ -196,6 +197,17 @@ async def create_article(
                 keyword=lnk.get("keyword", ""),
                 url=lnk.get("url", ""),
             ))
+
+    if data.content_images:
+        for idx, img_url in enumerate(data.content_images):
+            if img_url:
+                db.add(PubArticleImage(
+                    article_id=article.id,
+                    url=img_url,
+                    alt_text=f"Content image {idx + 1}",
+                    position=idx + 1,
+                    source="crawl",
+                ))
 
     version = PubArticleVersion(
         article_id=article.id,
@@ -362,6 +374,7 @@ async def publish_to_site(
     article = db.query(PubArticle).options(
         joinedload(PubArticle.category),
         selectinload(PubArticle.tags).joinedload(PubArticleTag.tag),
+        selectinload(PubArticle.images),
     ).filter(
         PubArticle.id == article_id,
         PubArticle.deleted_at.is_(None),

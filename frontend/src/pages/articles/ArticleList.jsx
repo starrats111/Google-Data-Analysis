@@ -143,7 +143,7 @@ const ArticleList = () => {
       key: 'site',
       width: 120,
       render: (published, record) => published ? (
-        <Tooltip title={record.site_domain ? `https://${record.site_domain}/article-${record.site_article_slug}.html` : record.site_name}>
+        <Tooltip title={record.site_domain ? `https://${record.site_domain}/post-${record.site_article_slug}.html` : record.site_name}>
           <Tag icon={<GlobalOutlined />} color="cyan">{record.site_name || '已发布'}</Tag>
         </Tooltip>
       ) : '-',

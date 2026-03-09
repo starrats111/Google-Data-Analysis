@@ -3,14 +3,18 @@
 通过 SSH 连接宝塔服务器，远程写入/删除文章文件。
 适配 AuraBloom 的 main.js posts 数组格式。
 """
+import hashlib
 import json
 import logging
+import os
 import re
 from datetime import datetime
-from io import StringIO
-from typing import Optional
+from io import BytesIO, StringIO
+from typing import Optional, List
+from urllib.parse import urlparse
 
 import paramiko
+import requests
 
 from app.config import settings
 
@@ -62,16 +66,139 @@ class RemotePublisher:
         """确保远程目录存在"""
         ssh.exec_command(f"mkdir -p {path}")
 
+    def _download_image(self, url: str) -> Optional[bytes]:
+        """从外部 URL 下载图片，返回二进制数据"""
+        if not url:
+            return None
+        try:
+            resp = requests.get(url, timeout=15, headers={
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
+                "Referer": url,
+                "Accept": "image/*,*/*;q=0.8",
+            })
+            resp.raise_for_status()
+            if len(resp.content) < 100:
+                logger.warning(f"图片太小，可能无效: {url}")
+                return None
+            return resp.content
+        except Exception as e:
+            logger.warning(f"图片下载失败: {url} -> {e}")
+            return None
+
+    def _upload_image(self, sftp: paramiko.SFTPClient, ssh: paramiko.SSHClient,
+                      data: bytes, remote_path: str):
+        """上传图片到远程服务器"""
+        remote_dir = os.path.dirname(remote_path)
+        ssh.exec_command(f"mkdir -p {remote_dir}")
+        import time
+        time.sleep(0.3)
+        with sftp.open(remote_path, "wb") as f:
+            f.write(data)
+
+    def _get_image_ext(self, url: str, data: bytes) -> str:
+        """根据 URL 或文件头判断图片扩展名"""
+        parsed = urlparse(url)
+        path = parsed.path.lower()
+        for ext in (".jpg", ".jpeg", ".png", ".gif", ".webp", ".svg"):
+            if path.endswith(ext):
+                return ext
+        if data[:8] == b'\x89PNG\r\n\x1a\n':
+            return ".png"
+        if data[:2] == b'\xff\xd8':
+            return ".jpg"
+        if data[:4] == b'RIFF' and data[8:12] == b'WEBP':
+            return ".webp"
+        return ".jpg"
+
+    def _process_images(self, ssh, sftp, site_root: str, slug: str,
+                        featured_image: str, content_images: List[str]) -> dict:
+        """下载并上传所有图片到宝塔服务器，返回本地路径映射"""
+        img_dir = f"{site_root}/image/post-{slug}"
+        result = {"hero": None, "content": []}
+
+        if featured_image:
+            data = self._download_image(featured_image)
+            if data:
+                ext = self._get_image_ext(featured_image, data)
+                remote_path = f"{img_dir}/hero{ext}"
+                self._upload_image(sftp, ssh, data, remote_path)
+                result["hero"] = f"image/post-{slug}/hero{ext}"
+                logger.info(f"头图已上传: {remote_path} ({len(data)} bytes)")
+            else:
+                result["hero"] = featured_image
+
+        for i, img_url in enumerate(content_images):
+            if not img_url:
+                continue
+            data = self._download_image(img_url)
+            if data:
+                ext = self._get_image_ext(img_url, data)
+                remote_path = f"{img_dir}/content-{i+1}{ext}"
+                self._upload_image(sftp, ssh, data, remote_path)
+                result["content"].append(f"image/post-{slug}/content-{i+1}{ext}")
+                logger.info(f"内容图 {i+1} 已上传: {remote_path}")
+            else:
+                result["content"].append(img_url)
+
+        return result
+
+    def _insert_content_images(self, content_html: str, image_paths: List[str]) -> str:
+        """将内容图片分散插入到文章各章节（<h2>）之间"""
+        if not image_paths:
+            return content_html
+
+        h2_positions = [m.start() for m in re.finditer(r'<h2[^>]*>', content_html)]
+
+        if len(h2_positions) <= 1:
+            img_block = "\n".join(
+                f'            <div class="ab-page-hero-img">\n'
+                f'              <img src="{p}" alt="Article image" loading="lazy" />\n'
+                f'            </div>'
+                for p in image_paths
+            )
+            return content_html + "\n" + img_block
+
+        insert_points = []
+        if len(h2_positions) >= 2:
+            step = max(1, len(h2_positions) // (len(image_paths) + 1))
+            for i in range(len(image_paths)):
+                idx = min((i + 1) * step, len(h2_positions) - 1)
+                insert_points.append(h2_positions[idx])
+
+        result_parts = []
+        last_pos = 0
+        img_idx = 0
+        for pos in sorted(set(insert_points)):
+            if img_idx >= len(image_paths):
+                break
+            result_parts.append(content_html[last_pos:pos])
+            img_tag = (
+                f'\n            <div class="ab-page-hero-img">\n'
+                f'              <img\n'
+                f'                src="{image_paths[img_idx]}"\n'
+                f'                alt="Article illustration"\n'
+                f'                loading="lazy"\n'
+                f'              />\n'
+                f'            </div>\n\n'
+            )
+            result_parts.append(img_tag)
+            last_pos = pos
+            img_idx += 1
+
+        result_parts.append(content_html[last_pos:])
+        return "".join(result_parts)
+
     def publish_article(self, site, article) -> dict:
         """
         发布文章到宝塔服务器：
-        1. 读取远程 main.js
-        2. 解析 const posts = [...]
-        3. 追加新文章条目
-        4. 写回 main.js
-        5. 上传文章详情页 HTML
+        1. 下载并上传图片到远程服务器
+        2. 读取远程 main.js
+        3. 解析 const posts = [...]
+        4. 追加新文章条目
+        5. 写回 main.js
+        6. 生成并上传文章详情页 HTML（含嵌入图片）
         """
-        site_root = site.site_path  # e.g. /www/wwwroot/aura-bloom.top
+        site_root = site.site_path
         main_js_path = f"{site_root}/assets/js/main.js"
         slug = article.slug
 
@@ -79,32 +206,35 @@ class RemotePublisher:
         try:
             sftp = ssh.open_sftp()
 
-            # 1. 读取 main.js
-            main_js_content = self._sftp_read(sftp, main_js_path)
+            content_image_urls = []
+            if hasattr(article, "images") and article.images:
+                sorted_imgs = sorted(article.images, key=lambda x: (x.position or 0))
+                content_image_urls = [img.url for img in sorted_imgs if img.url]
 
-            # 2. 解析 posts 数组
+            image_paths = self._process_images(
+                ssh, sftp, site_root, slug,
+                article.featured_image or "",
+                content_image_urls,
+            )
+
+            main_js_content = self._sftp_read(sftp, main_js_path)
             posts = self._parse_posts(main_js_content)
 
-            # 3. 检查 slug 是否已存在
             if any(p.get("slug") == slug for p in posts):
                 raise ValueError(f"slug '{slug}' 已存在于网站 posts 中")
 
-            # 4. 构建新 post 条目
             new_id = max((p.get("id", 0) for p in posts), default=0) + 1
             category_name = "General"
             if article.category and hasattr(article.category, "name"):
                 category_name = article.category.name
 
-            # 计算阅读时间
-            word_count = len(article.content or "") // 5  # 粗略估算
+            word_count = len(article.content or "") // 5
             read_time = max(3, word_count // 200)
 
-            # 日期
             created = article.created_at or datetime.utcnow()
             date_iso = created.strftime("%Y-%m-%d")
             date_label = created.strftime("%b %d, %Y")
 
-            # 标签
             tags = []
             if hasattr(article, "tags") and article.tags:
                 for at in article.tags:
@@ -114,6 +244,7 @@ class RemotePublisher:
                 tags = [category_name.lower()]
 
             detail_url = f"post-{slug}.html"
+            hero_for_index = image_paths["hero"] or article.featured_image or ""
 
             new_post = {
                 "id": new_id,
@@ -124,24 +255,28 @@ class RemotePublisher:
                 "dateLabel": date_label,
                 "readTime": f"{read_time} min read",
                 "excerpt": article.excerpt or "",
-                "heroImage": article.featured_image or "",
+                "heroImage": hero_for_index,
                 "tags": tags,
                 "primaryProduct": "",
                 "detailUrl": detail_url,
             }
 
-            # 5. 追加到 posts 数组并写回
-            posts.insert(0, new_post)  # 新文章放最前面
+            posts.insert(0, new_post)
             new_main_js = self._rebuild_main_js(main_js_content, posts)
             self._sftp_write(sftp, main_js_path, new_main_js)
 
-            # 6. 生成并上传文章详情页 HTML
-            html_content = self._generate_article_html(article, category_name, date_label, read_time)
+            html_content = self._generate_article_html(
+                article, category_name, date_label, read_time,
+                hero_path=image_paths["hero"],
+                content_image_paths=image_paths["content"],
+            )
             html_path = f"{site_root}/{detail_url}"
             self._sftp_write(sftp, html_path, html_content)
 
             sftp.close()
-            logger.info(f"文章已远程发布: slug={slug}, site={site.site_name}")
+            logger.info(f"文章已远程发布: slug={slug}, site={site.site_name}, "
+                        f"images: hero={'yes' if image_paths['hero'] else 'no'}, "
+                        f"content={len(image_paths['content'])}")
             return {"site_article_slug": slug, "site_article_id": new_id}
         finally:
             ssh.close()
@@ -387,27 +522,56 @@ class RemotePublisher:
             return ""
         return s.replace("\\", "\\\\").replace("'", "\\'").replace("\n", "\\n").replace("\r", "")
 
-    def _generate_article_html(self, article, category: str, date_label: str, read_time: int) -> str:
-        """生成 AuraBloom 风格的文章详情页 HTML"""
+    def _generate_article_html(self, article, category: str, date_label: str, read_time: int,
+                               hero_path: str = None, content_image_paths: List[str] = None) -> str:
+        """生成与 AuraBloom 原有文章完全一致的详情页 HTML"""
         title = self._html_escape(article.title)
         excerpt = self._html_escape(article.excerpt or "")
-        hero_image = article.featured_image or ""
+        hero_image = hero_path or article.featured_image or ""
         content_html = article.content or ""
 
-        # 标签
-        tags_html = ""
+        if content_image_paths:
+            content_html = self._insert_content_images(content_html, content_image_paths)
+
+        tags_list = []
         if hasattr(article, "tags") and article.tags:
             for at in article.tags:
                 if hasattr(at, "tag") and at.tag:
-                    tags_html += f'<span class="ab-inline-pill">{self._html_escape(at.tag.name)}</span>\n'
+                    tags_list.append(at.tag.name)
+
+        meta_pills = f'<span class="ab-inline-pill">Category: {self._html_escape(category)}</span>'
+        if tags_list:
+            theme_str = " &middot; ".join(self._html_escape(t) for t in tags_list)
+            meta_pills += f'\n              <span class="ab-inline-pill">Theme: {theme_str}</span>'
+
+        kicker = f'{self._html_escape(category)} &middot; {date_label} &middot; {read_time} min read'
+
+        aside_items = []
+        if tags_list:
+            for t in tags_list[:3]:
+                aside_items.append(f"              <li>{self._html_escape(t)}</li>")
+        aside_list = "\n".join(aside_items) if aside_items else ""
+        aside_section = f"""
+          <aside class="ab-aside-card">
+            <h3>About this story</h3>
+            <ul>
+              <li>Category: {self._html_escape(category)}</li>
+              <li>Reading time: approximately {read_time} minutes</li>
+{aside_list}
+            </ul>
+            <p class="ab-aside-meta">
+              Published on {date_label}. Discover more stories and gentle guides on <a href="index.html">AuraBloom</a>.
+            </p>
+          </aside>"""
 
         html = f'''<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>{title} – AuraBloom</title>
+  <title>{title} &#8211; AuraBloom</title>
   <link rel="stylesheet" href="assets/css/style.css" />
+  <link rel="preconnect" href="https://images.unsplash.com" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@300;400;600;700&display=swap" rel="stylesheet" />
@@ -440,23 +604,30 @@ class RemotePublisher:
     <main class="ab-main">
       <article class="ab-page">
         <header class="ab-page-header">
-          <p class="ab-page-kicker">{self._html_escape(category)} · {date_label} · {read_time} min read</p>
+          <p class="ab-page-kicker">{kicker}</p>
           <h1 class="ab-page-title">{title}</h1>
-          <p class="ab-page-subtitle">{excerpt}</p>
+          <p class="ab-page-subtitle">
+            {excerpt}
+          </p>
         </header>
 
         <div class="ab-page-grid">
           <div class="ab-page-main">
             <div class="ab-page-hero-img">
-              <img src="{hero_image}" alt="{title}" loading="lazy" />
+              <img
+                src="{hero_image}"
+                alt="{title}"
+                loading="lazy"
+              />
             </div>
             <div class="ab-page-meta-row">
-              <span class="ab-inline-pill">Category: {self._html_escape(category)}</span>
-              {tags_html}
+              {meta_pills}
             </div>
 
             {content_html}
+
           </div>
+{aside_section}
         </div>
       </article>
     </main>
@@ -464,15 +635,18 @@ class RemotePublisher:
     <footer class="ab-footer">
       <div class="ab-footer-inner">
         <div class="ab-footer-brand">
-          <div class="ab-logo">
+          <div class="ab-logo ab-logo-footer">
             <div class="ab-logo-mark">AB</div>
             <div class="ab-logo-text">
               <span class="ab-logo-title">AuraBloom</span>
               <span class="ab-logo-subtitle">Soft &amp; Warm Living</span>
             </div>
           </div>
-          <p>Soft stories, calm visuals and gentle routines for every corner of your life.</p>
+          <p class="ab-footer-copy">
+            Soft stories, calm visuals and gentle routines for every corner of your life.
+          </p>
         </div>
+
         <div class="ab-footer-links">
           <div>
             <h3>Explore</h3>
@@ -489,8 +663,35 @@ class RemotePublisher:
             <a href="index.html#categories">Travel &amp; Stays</a>
           </div>
         </div>
+
         <div class="ab-footer-social">
           <h3>Stay connected</h3>
+          <div class="ab-social-widget">
+            <a href="https://www.instagram.com/aurabloom" aria-label="AuraBloom on Instagram" class="ab-social-icon">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <rect x="3" y="3" width="18" height="18" rx="5"></rect>
+                <circle cx="12" cy="12" r="4.2"></circle>
+                <circle cx="17.3" cy="6.7" r="1.1"></circle>
+              </svg>
+            </a>
+            <a href="https://www.pinterest.com/aurabloom" aria-label="AuraBloom on Pinterest" class="ab-social-icon">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <circle cx="12" cy="12" r="9"></circle>
+                <path d="M12 7.5c-2.5 0-4 1.7-4 3.7 0 1.5.9 2.7 2.5 2.7.4 0 .7-.2.8-.6l.3-1.2c.1-.3 0-.5-.2-.7-.4-.3-.6-.8-.6-1.3 0-1 .7-1.8 1.8-1.8 1 0 1.6.7 1.6 1.7 0 1.3-.6 2.3-1.5 2.3-.3 0-.6-.1-.7-.3l-.3 1.1-.2.8c-.1.3-.2.7-.2 1l1 .3c.3-1 .7-2.1.7-2.4.1-.2.1-.3.2-.5.2.3.7.5 1.1.5 1.4 0 2.6-1.4 2.6-3.4 0-2-1.5-3.7-3.9-3.7z" fill="#f8f5f2"></path>
+              </svg>
+            </a>
+            <a href="https://www.tiktok.com/@aurabloom" aria-label="AuraBloom on TikTok" class="ab-social-icon">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M15.5 5.1c.5.7 1.1 1.3 1.8 1.7.6.4 1.3.6 2 .7v2.5c-.8 0-1.6-.2-2.4-.5-.6-.3-1.2-.6-1.7-1.1v6.3c0 2.7-2.2 4.8-4.8 4.8S5.5 17.4 5.5 14.8 7.7 10 10.3 10c.4 0 .7 0 1 .1v2.6c-.3-.1-.6-.1-.9-.1-1.2 0-2.2 1-2.2 2.3s1 2.3 2.3 2.3 2.3-1 2.3-2.3V4.5h2.7v.6z"></path>
+              </svg>
+            </a>
+            <a href="https://www.youtube.com/@aurabloom" aria-label="AuraBloom on YouTube" class="ab-social-icon">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <rect x="3" y="7" width="18" height="10" rx="3"></rect>
+                <path d="M11 10v4l3.5-2z" fill="#f8f5f2"></path>
+              </svg>
+            </a>
+          </div>
           <p class="ab-footer-meta">&copy; 2025 AuraBloom. All rights reserved.</p>
         </div>
       </div>

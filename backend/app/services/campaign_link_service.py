@@ -117,7 +117,7 @@ class CampaignLinkService:
 
     def _fetch_merchant_by_id(self, platform_code: str, token: str, merchant_id: str) -> Optional[dict]:
         """调用 Monetization API 查询指定商家（含 campaign link）。
-        优化：mid 精确查 → 分页遍历最多 3 页，超时 15s。
+        优化：mid 精确查 → 分页遍历最多 1 页兜底，超时 25s。
         """
         cfg = PLATFORM_API_CONFIG.get(platform_code)
         if not cfg:
@@ -125,7 +125,7 @@ class CampaignLinkService:
 
         mode = cfg["mode"]
         url = cfg["url"]
-        timeout = httpx.Timeout(15.0, connect=8.0)
+        timeout = httpx.Timeout(25.0, connect=10.0)
 
         try:
             if mode == "post_json":
@@ -143,29 +143,29 @@ class CampaignLinkService:
                         found = self._match_merchant(items, merchant_id, platform_code)
                         if found:
                             return found
-                except Exception:
-                    pass
+                        logger.warning(f"[CampaignLink] 精确查询返回 {len(items)} 条但未匹配 mid={merchant_id}")
+                    else:
+                        logger.info(f"[CampaignLink] 精确查询无结果，尝试兜底遍历 mid={merchant_id}")
+                except Exception as e:
+                    logger.warning(f"[CampaignLink] 精确查询异常: {e}，尝试兜底遍历")
 
-                # 分页遍历兜底（最多 3 页）
-                for page in range(1, 4):
-                    payload = {
-                        "source": cfg.get("source", ""),
-                        "token": token, "curPage": page, "perPage": 2000,
-                        "relationship": "Joined",
-                    }
-                    try:
-                        resp = httpx.post(url, json=payload, timeout=timeout)
-                        resp.raise_for_status()
-                    except Exception:
-                        break
+                # 分页遍历兜底（仅 1 页，减少等待）
+                payload = {
+                    "source": cfg.get("source", ""),
+                    "token": token, "curPage": 1, "perPage": 2000,
+                    "relationship": "Joined",
+                }
+                try:
+                    resp = httpx.post(url, json=payload, timeout=timeout)
+                    resp.raise_for_status()
                     items = MerchantPlatformSyncService._extract_items(resp.json())
-                    if not items:
-                        break
-                    found = self._match_merchant(items, merchant_id, platform_code)
-                    if found:
-                        return found
-                    if len(items) < 2000:
-                        break
+                    if items:
+                        found = self._match_merchant(items, merchant_id, platform_code)
+                        if found:
+                            return found
+                        logger.warning(f"[CampaignLink] 兜底遍历 {len(items)} 条仍未匹配 mid={merchant_id}")
+                except Exception as e:
+                    logger.warning(f"[CampaignLink] 兜底遍历异常: {e}")
                 return None
 
             elif platform_code == "LB":
