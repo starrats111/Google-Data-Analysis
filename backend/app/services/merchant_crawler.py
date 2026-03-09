@@ -54,10 +54,20 @@ HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
         "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/120.0.0.0 Safari/537.36"
+        "Chrome/124.0.0.0 Safari/537.36"
     ),
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
     "Accept-Language": "en-US,en;q=0.9",
+    "Accept-Encoding": "gzip, deflate, br",
+    "Cache-Control": "no-cache",
+    "Sec-Ch-Ua": '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
+    "Sec-Ch-Ua-Mobile": "?0",
+    "Sec-Ch-Ua-Platform": '"Windows"',
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "none",
+    "Sec-Fetch-User": "?1",
+    "Upgrade-Insecure-Requests": "1",
 }
 
 PRIVATE_NETS = [
@@ -335,6 +345,43 @@ def _find_sub_pages(soup: BeautifulSoup, base_url: str) -> List[str]:
     return found
 
 
+_FALLBACK_UAS = [
+    (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/125.0.0.0 Safari/537.36"
+    ),
+    (
+        "Mozilla/5.0 (X11; Linux x86_64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/123.0.0.0 Safari/537.36"
+    ),
+]
+
+
+def _fetch_with_retry(client_headers: Dict, url: str, timeout: int = 20) -> httpx.Response:
+    """
+    尝试用主 headers 请求；若遇 403 则换 User-Agent 重试。
+    """
+    import copy, time
+    headers = copy.copy(client_headers)
+    attempts = [headers["User-Agent"]] + _FALLBACK_UAS
+    last_resp = None
+    for ua in attempts:
+        headers["User-Agent"] = ua
+        with httpx.Client(timeout=timeout, follow_redirects=True, headers=headers) as client:
+            resp = client.get(url)
+            if resp.status_code != 403:
+                resp.raise_for_status()
+                return resp
+            last_resp = resp
+            time.sleep(0.5)
+    # 所有 UA 都 403，抛出
+    if last_resp is not None:
+        last_resp.raise_for_status()
+    raise httpx.HTTPStatusError("403 Forbidden", request=httpx.Request("GET", url), response=last_resp)
+
+
 def crawl(url: str) -> Dict:
     """
     爬取商家网站。返回结构化数据。
@@ -349,10 +396,8 @@ def crawl(url: str) -> Dict:
     brand_name = ""
 
     try:
-        with httpx.Client(timeout=15, follow_redirects=True, headers=HEADERS) as client:
-            resp = client.get(url)
-            resp.raise_for_status()
-            home_html = resp.text
+        resp = _fetch_with_retry(HEADERS, url)
+        home_html = resp.text
 
         home_data = _extract_page(home_html, url)
         pages.append(home_data)
@@ -363,17 +408,21 @@ def crawl(url: str) -> Dict:
 
         for sub_url in sub_urls[:3]:
             try:
-                with httpx.Client(timeout=10, follow_redirects=True, headers=HEADERS) as client:
-                    resp = client.get(sub_url)
-                    resp.raise_for_status()
-                    sub_data = _extract_page(resp.text, sub_url)
-                    pages.append(sub_data)
+                resp = _fetch_with_retry(HEADERS, sub_url, timeout=12)
+                sub_data = _extract_page(resp.text, sub_url)
+                pages.append(sub_data)
             except Exception as e:
                 logger.warning(f"[MerchantCrawler] 子页面爬取失败 {sub_url}: {e}")
 
     except httpx.TimeoutException:
         logger.error(f"[MerchantCrawler] 爬取超时 {url}")
         return {"crawl_failed": True, "error": f"商家网站访问超时，该网站可能较慢或服务器无法访问", "url": url}
+    except httpx.HTTPStatusError as e:
+        status = e.response.status_code if e.response else 0
+        logger.error(f"[MerchantCrawler] HTTP {status} {url}: {e}")
+        if status == 403:
+            return {"crawl_failed": True, "error": f"商家网站拒绝访问 (403)，该网站有反爬保护。可尝试手动输入商家信息。", "url": url}
+        return {"crawl_failed": True, "error": f"商家网站返回 HTTP {status} 错误", "url": url}
     except httpx.ConnectError:
         logger.error(f"[MerchantCrawler] 连接失败 {url}")
         return {"crawl_failed": True, "error": f"无法连接到商家网站，请检查网址是否正确", "url": url}
