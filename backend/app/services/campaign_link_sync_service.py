@@ -35,8 +35,8 @@ class CampaignLinkSyncService:
         self.db = db
 
     def sync_all_users(self) -> dict:
-        """同步所有活跃用户的所有平台 campaign link。"""
-        users = self.db.query(User).filter(User.is_active.is_(True)).all()
+        """同步所有用户的所有平台 campaign link。"""
+        users = self.db.query(User).all()
         total_cached = 0
         total_errors = 0
         user_results = []
