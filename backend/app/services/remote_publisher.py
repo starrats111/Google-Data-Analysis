@@ -413,12 +413,15 @@ class RemotePublisher:
     # ─── 各架构类型的发布实现 ───
 
     def _publish_posts_type(self, ssh, sftp, site, article, image_paths, site_type) -> dict:
-        """A1/A2/D 类型: 操作 const posts / const POSTS 数组"""
+        """A1/A2/D 类型: 操作 const posts / const POSTS / window.VERVE_POSTS 数组"""
         site_root = site.site_path
         slug = article.slug
 
-        # 确定数据文件路径和变量名
-        if site_type == SITE_TYPE_POSTS_ASSETS_JS:
+        # 优先使用数据库中的配置，回退到硬编码默认值
+        if site.data_js_path and site.article_var_name:
+            data_path = f"{site_root}/{site.data_js_path}"
+            var_name = site.article_var_name
+        elif site_type == SITE_TYPE_POSTS_ASSETS_JS:
             data_path = f"{site_root}/assets/js/main.js"
             var_name = "posts"
         elif site_type == SITE_TYPE_POSTS_ASSETS:
@@ -431,11 +434,12 @@ class RemotePublisher:
         main_js_content = self._sftp_read(sftp, data_path)
         posts = self._parse_js_array(main_js_content, var_name)
 
-        if any(p.get("slug") == slug for p in posts):
+        if any(p.get("slug") == slug or p.get("url", "").endswith(f"{slug}.html") for p in posts):
             raise ValueError(f"slug '{slug}' 已存在于网站 {var_name} 中")
 
         new_id = max((p.get("id", 0) for p in posts), default=0) + 1
-        new_post = self._build_post_entry(article, new_id, image_paths, slug)
+        new_post = self._build_post_entry(article, new_id, image_paths, slug,
+                                          existing_posts=posts)
 
         posts.insert(0, new_post)
         new_content = self._rebuild_js_array(main_js_content, var_name, posts)
@@ -655,9 +659,12 @@ class RemotePublisher:
             ssh.close()
 
     def _unpublish_posts_type(self, sftp, site, slug, site_type):
-        """A1/A2/D: 从 posts/POSTS 数组移除 + 删除 HTML"""
+        """A1/A2/D: 从 posts/POSTS/VERVE_POSTS 数组移除 + 删除 HTML"""
         site_root = site.site_path
-        if site_type == SITE_TYPE_POSTS_ASSETS_JS:
+        if site.data_js_path and site.article_var_name:
+            data_path = f"{site_root}/{site.data_js_path}"
+            var_name = site.article_var_name
+        elif site_type == SITE_TYPE_POSTS_ASSETS_JS:
             data_path = f"{site_root}/assets/js/main.js"
             var_name = "posts"
         elif site_type == SITE_TYPE_POSTS_ASSETS:
@@ -795,8 +802,9 @@ class RemotePublisher:
         read_time = max(3, word_count // 200)
         return date_label, read_time
 
-    def _build_post_entry(self, article, new_id, image_paths, slug) -> dict:
-        """构建 A1/A2/D 类型的 post 条目"""
+    def _build_post_entry(self, article, new_id, image_paths, slug,
+                          existing_posts: list = None) -> dict:
+        """构建 A1/A2/D 类型的 post 条目，自动适配目标站点的字段格式"""
         category_name = self._get_category_name(article)
         date_label, read_time = self._get_date_and_readtime(article)
         created = article.created_at or datetime.utcnow()
@@ -809,6 +817,28 @@ class RemotePublisher:
         if not tags:
             tags = [category_name.lower()]
 
+        hero = image_paths["hero"] or article.featured_image or ""
+
+        # 检测已有文章的字段格式
+        use_url_style = False
+        if existing_posts:
+            sample = existing_posts[0]
+            use_url_style = "url" in sample and "detailUrl" not in sample
+
+        if use_url_style:
+            return {
+                "id": new_id,
+                "title": article.title,
+                "category": category_name,
+                "date": created.strftime("%Y-%m-%d"),
+                "displayDate": date_label,
+                "readingTime": f"{read_time} min read",
+                "excerpt": article.excerpt or "",
+                "url": f"post-{slug}.html",
+                "image": hero,
+                "tags": tags,
+            }
+
         return {
             "id": new_id,
             "slug": slug,
@@ -818,7 +848,7 @@ class RemotePublisher:
             "dateLabel": date_label,
             "readTime": f"{read_time} min read",
             "excerpt": article.excerpt or "",
-            "heroImage": image_paths["hero"] or article.featured_image or "",
+            "heroImage": hero,
             "tags": tags,
             "primaryProduct": "",
             "detailUrl": f"post-{slug}.html",
@@ -827,14 +857,17 @@ class RemotePublisher:
     # ─── 通用 JS 数组解析/重建 ───
 
     def _parse_js_array(self, js_content: str, var_name: str) -> list:
-        """解析 JS 中的 const/let/var {var_name} = [...] 数组。
+        """解析 JS 中的 const/let/var {var_name} = [...] 或 window.{var_name} = [...] 数组。
         
-        支持 const posts, const POSTS, const articlesIndex, const articles,
-        const articlesData, const blogPosts 等。
+        支持 const posts, window.VERVE_POSTS, const articlesIndex 等。
         """
-        # 匹配 const/let/var varName = [
+        # 先尝试 const/let/var 声明
         pattern = rf'(?:const|let|var)\s+{re.escape(var_name)}\s*=\s*\['
         match = re.search(pattern, js_content)
+        if not match:
+            # 再尝试 window.X = [ 赋值
+            pattern2 = rf'window\.{re.escape(var_name)}\s*=\s*\['
+            match = re.search(pattern2, js_content)
         if not match:
             raise ValueError(f"无法在 JS 中找到 {var_name} = [")
 
@@ -877,6 +910,9 @@ class RemotePublisher:
         pattern = rf'(?:const|let|var)\s+{re.escape(var_name)}\s*=\s*\['
         match = re.search(pattern, original)
         if not match:
+            pattern2 = rf'window\.{re.escape(var_name)}\s*=\s*\['
+            match = re.search(pattern2, original)
+        if not match:
             raise ValueError(f"无法在 JS 中找到 {var_name} = [")
 
         decl_start = match.start()
@@ -905,13 +941,17 @@ class RemotePublisher:
         if end < len(original) and original[end] == ';':
             end += 1
 
-        # 生成新的 JS 代码
-        items_js = self._items_to_js(var_name, items)
+        # 检测原始声明是否使用 window.X 格式
+        decl_text = original[decl_start:match.end()]
+        use_window = decl_text.startswith("window.")
+
+        items_js = self._items_to_js(var_name, items, use_window=use_window)
         return original[:decl_start] + items_js + original[end:]
 
-    def _items_to_js(self, var_name: str, items: list) -> str:
+    def _items_to_js(self, var_name: str, items: list, use_window: bool = False) -> str:
         """将数组转为 JS 格式代码"""
-        lines = [f"const {var_name} = ["]
+        decl = f"window.{var_name} = [" if use_window else f"const {var_name} = ["
+        lines = [decl]
         for item in items:
             lines.append("  {")
             for key, value in item.items():
@@ -936,9 +976,10 @@ class RemotePublisher:
         if id_m:
             post["id"] = int(id_m.group(1))
 
-        # 提取字符串字段（支持单引号和双引号）
+        # 提取字符串字段（支持单引号和双引号，兼容多种站点格式）
         str_fields = ["slug", "title", "category", "dateISO", "dateLabel",
-                       "readTime", "heroImage", "primaryProduct", "detailUrl"]
+                       "readTime", "heroImage", "primaryProduct", "detailUrl",
+                       "date", "displayDate", "readingTime", "image", "url"]
         for field in str_fields:
             # 匹配 field: 'value' 或 field: "value"（支持多行 excerpt 等）
             m = re.search(
