@@ -34,6 +34,8 @@ from app.models.article import (
 from app.models.tracking_link import PubTrackingLink
 # 网站发布配置（OPT-013）
 from app.models.site import PubSite
+# Campaign Link 缓存（OPT-016）
+from app.models.campaign_link_cache import CampaignLinkCache
 
 __all__ = [
     "User",
@@ -82,6 +84,8 @@ __all__ = [
     "PubTrackingLink",
     # 网站发布配置
     "PubSite",
+    # Campaign Link 缓存
+    "CampaignLinkCache",
 ]
 
 

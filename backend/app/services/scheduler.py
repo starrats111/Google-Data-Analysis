@@ -973,6 +973,33 @@ def publish_scheduled_articles_job():
         db.close()
 
 
+def campaign_link_sync_job():
+    """Campaign Link 缓存全量同步（OPT-016，每天 05:00 执行）
+    
+    遍历所有活跃用户，对每个用户的每个平台全量分页拉取 Joined 商家的 campaign link，
+    写入 campaign_link_cache 表。商家数量 2000~8000，需多页遍历。
+    """
+    db: Session = SessionLocal()
+    try:
+        logger.info("=" * 60)
+        logger.info("【Campaign Link 缓存同步开始（OPT-016）】")
+        logger.info(f"当前时间: {datetime.now(BEIJING_TZ).strftime('%Y-%m-%d %H:%M:%S')} (北京时间)")
+
+        from app.services.campaign_link_sync_service import CampaignLinkSyncService
+        svc = CampaignLinkSyncService(db)
+        result = svc.sync_all_users()
+
+        logger.info("【Campaign Link 缓存同步完成】")
+        logger.info(f"  - 用户数: {result['total_users']}")
+        logger.info(f"  - 缓存总条数: {result['total_cached']}")
+        logger.info(f"  - 失败用户数: {result['total_errors']}")
+        logger.info("=" * 60)
+    except Exception as e:
+        logger.error(f"Campaign Link 缓存同步任务异常: {e}", exc_info=True)
+    finally:
+        db.close()
+
+
 def database_backup_job():
     """数据库自动备份任务（每天北京时间 03:00 执行）"""
     try:
@@ -1097,6 +1124,16 @@ def start_scheduler():
             max_instances=1
         )
 
+        # 11. 每天 05:00 - Campaign Link 缓存全量同步（OPT-016）
+        scheduler.add_job(
+            campaign_link_sync_job,
+            trigger=CronTrigger(hour=5, minute=0),
+            id='campaign_link_sync',
+            name='Campaign Link缓存同步（05:00）',
+            replace_existing=True,
+            max_instances=1
+        )
+
         scheduler.start()
         logger.info("=" * 60)
         logger.info("定时任务调度器已启动")
@@ -1113,6 +1150,7 @@ def start_scheduler():
         logger.info("  8. 通知清理: 每月1号 01:00")
         logger.info("  9. 商家平台API同步: 每天 06:30 (M-018-A)")
         logger.info("  10. 文章定时发布: 每5分钟 (OPT-011)")
+        logger.info("  11. Campaign Link缓存同步: 每天 05:00 (OPT-016)")
         logger.info("=" * 60)
         
     except Exception as e:

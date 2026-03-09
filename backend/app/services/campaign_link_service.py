@@ -1,10 +1,14 @@
 """
-Campaign Link 获取服务（OPT-015）
+Campaign Link 获取服务（OPT-015 + OPT-016 缓存优先）
 
 从各联盟平台 Monetization API 自动获取 campaign links，
 使用员工自己的 Token，并根据 Support Regions 自动判断语言。
+
+OPT-016: 优先从本地 campaign_link_cache 查询，未命中时 fallback 到实时 API 并回写缓存。
 """
+import json
 import logging
+from datetime import datetime
 from typing import List, Optional
 
 import httpx
@@ -12,6 +16,7 @@ from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from app.models.affiliate_account import AffiliateAccount, AffiliatePlatform
+from app.models.campaign_link_cache import CampaignLinkCache
 from app.services.merchant_platform_sync import (
     MerchantPlatformSyncService,
     PLATFORM_API_CONFIG,
@@ -87,9 +92,20 @@ class CampaignLinkService:
     def get_campaign_link(self, user_id: int, platform_code: str, merchant_id: str) -> dict:
         """根据当前员工自己的 Token 获取指定商家的 campaign link。
         
+        OPT-016: 缓存优先 → fallback 实时 API → 回写缓存。
         每个人的 campaign link 不同（tracking 归属不同），必须用自己的 Token。
         """
         platform_code = platform_code.upper()
+        merchant_id = merchant_id.strip()
+
+        # ① 缓存查询
+        cached = self._lookup_cache(user_id, platform_code, merchant_id)
+        if cached:
+            logger.info("[CampaignLink] 缓存命中: user=%d platform=%s mid=%s", user_id, platform_code, merchant_id)
+            return cached
+
+        # ② 缓存未命中，fallback 到实时 API
+        logger.info("[CampaignLink] 缓存未命中，fallback API: user=%d platform=%s mid=%s", user_id, platform_code, merchant_id)
         from sqlalchemy import func
 
         account = (
@@ -113,7 +129,107 @@ class CampaignLinkService:
         if not raw:
             raise HTTPException(404, "未在你的账号中找到该商家，可能未加入该商家计划，请手动输入追踪链接")
 
-        return self._map_campaign_response(raw, platform_code)
+        result = self._map_campaign_response(raw, platform_code)
+
+        # ③ 回写缓存
+        self._write_cache(user_id, platform_code, merchant_id, result)
+
+        return result
+
+    def _lookup_cache(self, user_id: int, platform_code: str, merchant_id: str) -> Optional[dict]:
+        """从本地缓存查询 campaign link。"""
+        record = (
+            self.db.query(CampaignLinkCache)
+            .filter(
+                CampaignLinkCache.user_id == user_id,
+                CampaignLinkCache.platform_code == platform_code,
+                CampaignLinkCache.merchant_id == merchant_id,
+            )
+            .first()
+        )
+        if not record or not record.campaign_link:
+            return None
+
+        # 解析 support_regions JSON
+        support_regions = []
+        if record.support_regions:
+            try:
+                support_regions = json.loads(record.support_regions)
+            except (json.JSONDecodeError, TypeError):
+                pass
+
+        # 解析 categories
+        categories = None
+        if record.categories:
+            try:
+                categories = json.loads(record.categories)
+            except (json.JSONDecodeError, TypeError):
+                categories = record.categories
+
+        return {
+            "campaign_link": record.campaign_link,
+            "short_link": record.short_link,
+            "smart_link": record.smart_link,
+            "site_url": record.site_url,
+            "merchant_name": record.merchant_name,
+            "support_regions": support_regions,
+            "categories": categories,
+            "commission_rate": record.commission_rate,
+            "logo": record.logo,
+        }
+
+    def _write_cache(self, user_id: int, platform_code: str, merchant_id: str, mapped: dict):
+        """将实时 API 结果回写到缓存。"""
+        try:
+            support_regions_json = json.dumps(mapped.get("support_regions") or [], ensure_ascii=False)
+            categories_val = mapped.get("categories")
+            categories_json = json.dumps(categories_val or "", ensure_ascii=False) if categories_val else None
+
+            existing = (
+                self.db.query(CampaignLinkCache)
+                .filter(
+                    CampaignLinkCache.user_id == user_id,
+                    CampaignLinkCache.platform_code == platform_code,
+                    CampaignLinkCache.merchant_id == merchant_id,
+                )
+                .first()
+            )
+
+            now = datetime.utcnow()
+            if existing:
+                existing.campaign_link = mapped.get("campaign_link")
+                existing.short_link = mapped.get("short_link")
+                existing.smart_link = mapped.get("smart_link")
+                existing.site_url = mapped.get("site_url")
+                existing.merchant_name = mapped.get("merchant_name")
+                existing.support_regions = support_regions_json
+                existing.categories = categories_json
+                existing.commission_rate = mapped.get("commission_rate")
+                existing.logo = mapped.get("logo")
+                existing.synced_at = now
+            else:
+                record = CampaignLinkCache(
+                    user_id=user_id,
+                    platform_code=platform_code,
+                    merchant_id=merchant_id,
+                    campaign_link=mapped.get("campaign_link"),
+                    short_link=mapped.get("short_link"),
+                    smart_link=mapped.get("smart_link"),
+                    site_url=mapped.get("site_url"),
+                    merchant_name=mapped.get("merchant_name"),
+                    support_regions=support_regions_json,
+                    categories=categories_json,
+                    commission_rate=mapped.get("commission_rate"),
+                    logo=mapped.get("logo"),
+                    synced_at=now,
+                )
+                self.db.add(record)
+
+            self.db.commit()
+            logger.info("[CampaignLink] 缓存回写成功: user=%d platform=%s mid=%s", user_id, platform_code, merchant_id)
+        except Exception as e:
+            logger.error("[CampaignLink] 缓存回写失败: %s", e)
+            self.db.rollback()
 
     def _fetch_merchant_by_id(self, platform_code: str, token: str, merchant_id: str) -> Optional[dict]:
         """调用 Monetization API 查询指定商家（含 campaign link）。

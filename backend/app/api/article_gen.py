@@ -19,6 +19,7 @@ from app.models.tracking_link import PubTrackingLink
 from app.services.article_gen_service import ArticleGenService
 from app.services.merchant_crawler import crawl as crawl_merchant, search_images as search_merchant_images
 from app.services.campaign_link_service import CampaignLinkService
+from app.services.campaign_link_sync_service import CampaignLinkSyncService
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/article-gen", tags=["AI生成"])
@@ -296,3 +297,35 @@ async def get_user_platforms(
     """获取当前用户有账号的平台列表（OPT-015）"""
     svc = CampaignLinkService(db)
     return {"platforms": svc.get_user_platforms(current_user.id)}
+
+
+@router.post("/campaign-link/sync")
+async def sync_campaign_links(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """手动触发当前用户的 Campaign Link 缓存同步（OPT-016）"""
+    svc = CampaignLinkSyncService(db)
+    try:
+        cached = svc.sync_user(current_user.id)
+        return {"success": True, "cached": cached, "message": f"已缓存 {cached} 条 Campaign Link"}
+    except Exception as e:
+        logger.error("[CampaignLinkSync] 手动同步失败: %s", e)
+        raise HTTPException(status_code=500, detail=f"同步失败: {str(e)}")
+
+
+@router.post("/campaign-link/sync-all")
+async def sync_all_campaign_links(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """手动触发所有用户的 Campaign Link 缓存全量同步（仅管理员，OPT-016）"""
+    if current_user.role not in ("manager", "admin"):
+        raise HTTPException(status_code=403, detail="仅管理员可执行全量同步")
+    svc = CampaignLinkSyncService(db)
+    try:
+        result = svc.sync_all_users()
+        return {"success": True, **result}
+    except Exception as e:
+        logger.error("[CampaignLinkSync] 全量同步失败: %s", e)
+        raise HTTPException(status_code=500, detail=f"全量同步失败: {str(e)}")
