@@ -221,9 +221,15 @@ class ArticleGenService:
             "5)800-1200 words, HTML with h2/h3 "
             "6)No empty praise, be specific\n"
             f"{keyword_link_rule}"
-            "Return ONLY a JSON object: "
-            "{\"content\":\"HTML\",\"excerpt\":\"100 chars\",\"meta_title\":\"\","
-            "\"meta_description\":\"\",\"meta_keywords\":\"\",\"category\":\"\","
+            "CRITICAL: Output ONLY raw JSON, no markdown, no explanation, no preamble. "
+            "Do NOT say 'I will write' or 'Let me create'. Start directly with {. "
+            "JSON schema: "
+            "{\"content\":\"<full article HTML with h2/h3/p tags>\","
+            "\"excerpt\":\"100-char plain text summary\","
+            "\"meta_title\":\"SEO title\","
+            "\"meta_description\":\"160-char description\","
+            "\"meta_keywords\":\"comma separated\","
+            "\"category\":\"one of: health,tech,lifestyle,fashion,beauty,fitness,food,travel,finance,general\","
             "\"author\":\"a realistic pen name matching the article language\"}"
         )
 
