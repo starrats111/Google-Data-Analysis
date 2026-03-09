@@ -1197,9 +1197,9 @@ class MerchantService:
                     "https://www.linkhaitao.com/api.php",
                     params={
                         "mod": "medium", "op": "merchantBasicList3",
-                        "token": token, "page": page, "per_page": 5000,
+                        "token": token, "page": page, "per_page": 100,
                     },
-                    timeout=30,
+                    timeout=60,
                 )
                 data = resp.json()
                 merchants = data.get("list", data.get("data", []))
@@ -1218,7 +1218,7 @@ class MerchantService:
                             name_to_mid[m_name.lower()] = mcid
 
                 total_fetched += len(merchants)
-                if len(merchants) < 5000:
+                if len(merchants) < 100:
                     break
                 page += 1
                 _time.sleep(4)  # LH rate limit
