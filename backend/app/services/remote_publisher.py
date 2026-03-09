@@ -63,8 +63,9 @@ class RemotePublisher:
             f.write(content.encode("utf-8"))
 
     def _ensure_dir(self, ssh: paramiko.SSHClient, path: str):
-        """确保远程目录存在"""
-        ssh.exec_command(f"mkdir -p {path}")
+        """确保远程目录存在（同步等待完成）"""
+        _, stdout, stderr = ssh.exec_command(f"mkdir -p {path}")
+        stdout.channel.recv_exit_status()  # 阻塞等待命令完成
 
     def _download_image(self, url: str) -> Optional[bytes]:
         """从外部 URL 下载图片，返回二进制数据"""
@@ -89,9 +90,8 @@ class RemotePublisher:
                       data: bytes, remote_path: str):
         """上传图片到远程服务器"""
         remote_dir = os.path.dirname(remote_path)
-        ssh.exec_command(f"mkdir -p {remote_dir}")
-        import time
-        time.sleep(0.3)
+        _, stdout, stderr = ssh.exec_command(f"mkdir -p {remote_dir}")
+        stdout.channel.recv_exit_status()  # 阻塞等待 mkdir 完成
         with sftp.open(remote_path, "wb") as f:
             f.write(data)
 
