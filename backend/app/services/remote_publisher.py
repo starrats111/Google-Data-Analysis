@@ -198,24 +198,33 @@ class RemotePublisher:
             "article_html_pattern": None,
         }
 
-    def _download_image(self, url: str) -> Optional[bytes]:
-        """从外部 URL 下载图片，返回二进制数据"""
+    def _download_image(self, url: str, retries: int = 2) -> Optional[bytes]:
+        """从外部 URL 下载图片，返回二进制数据（带重试）"""
         if not url:
             return None
-        try:
-            resp = requests.get(url, timeout=15, headers={
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
-                "Referer": url,
-                "Accept": "image/*,*/*;q=0.8",
-            })
-            resp.raise_for_status()
-            if len(resp.content) < 100:
-                logger.warning(f"图片太小，可能无效: {url}")
+        for attempt in range(retries + 1):
+            try:
+                resp = requests.get(url, timeout=20, headers={
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
+                    "Referer": url,
+                    "Accept": "image/*,*/*;q=0.8",
+                }, allow_redirects=True)
+                resp.raise_for_status()
+                content_type = resp.headers.get("content-type", "")
+                if len(resp.content) < 500:
+                    logger.warning(f"图片太小 ({len(resp.content)} bytes)，可能无效: {url}")
+                    return None
+                if "text/html" in content_type:
+                    logger.warning(f"图片 URL 返回 HTML 而非图片: {url}")
+                    return None
+                return resp.content
+            except Exception as e:
+                if attempt < retries:
+                    import time
+                    time.sleep(1)
+                    continue
+                logger.warning(f"图片下载失败 (尝试{attempt+1}次): {url} -> {e}")
                 return None
-            return resp.content
-        except Exception as e:
-            logger.warning(f"图片下载失败: {url} -> {e}")
-            return None
 
     def _upload_image(self, sftp: paramiko.SFTPClient, ssh: paramiko.SSHClient,
                       data: bytes, remote_path: str):
@@ -269,7 +278,7 @@ class RemotePublisher:
                 result["content"].append(f"image/post-{slug}/content-{i+1}{ext}")
                 logger.info(f"内容图 {i+1} 已上传: {remote_path}")
             else:
-                result["content"].append(img_url)
+                logger.warning(f"内容图 {i+1} 下载失败，跳过: {img_url}")
 
         return result
 
@@ -357,13 +366,21 @@ class RemotePublisher:
                     elif article.title:
                         search_query = article.title
                     need = 4 - len(content_image_urls)
-                    extra = search_merchant_images(search_query, count=need + 2)
+                    # 多搜一些以确保有足够可下载的图片
+                    extra = search_merchant_images(search_query, count=need + 6)
                     existing_set = set(content_image_urls)
                     for img_url in extra:
                         if img_url not in existing_set and len(content_image_urls) < 4:
                             content_image_urls.append(img_url)
                             existing_set.add(img_url)
-                    logger.info(f"[发布] 自动补充内容图片: 需要{need}张, 搜索到{len(extra)}张, 最终{len(content_image_urls)}张")
+                    # 如果还不够，用标题的其他关键词再搜一次
+                    if len(content_image_urls) < 4 and article.title:
+                        extra2 = search_merchant_images(article.title, count=8)
+                        for img_url in extra2:
+                            if img_url not in existing_set and len(content_image_urls) < 4:
+                                content_image_urls.append(img_url)
+                                existing_set.add(img_url)
+                    logger.info(f"[发布] 自动补充内容图片: 需要{need}张, 最终{len(content_image_urls)}张")
                 except Exception as e:
                     logger.warning(f"[发布] 自动搜索内容图片失败: {e}")
 

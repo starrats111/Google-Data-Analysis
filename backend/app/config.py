@@ -143,19 +143,19 @@ class Settings(BaseSettings):
     # 哈基米API站: https://api.gemai.cc
     gemini_api_key: str = ""
     gemini_base_url: str = "https://api.gemai.cc"
-    # 主模型（Gemini 3 Pro - 写作质量最强）
-    gemini_model: str = "gemini-3-pro-preview"
-    # 备用模型1（Gemini 3 Flash premium - 快速稳定）
-    gemini_model_advanced: str = "[premium]gemini-3-flash-preview"
-    # 备用模型2（免费兜底）
-    gemini_model_thinking: str = "[福利]gemini-3-flash-preview"
+    # 主模型（Claude Sonnet 4.6 - 写作+分析综合最强）
+    gemini_model: str = "claude-sonnet-4-6"
+    # 备用模型1（GPT-5.2 - 强力备选）
+    gemini_model_advanced: str = "gpt-5.2"
+    # 备用模型2（Gemini 3.1 Pro - 兜底）
+    gemini_model_thinking: str = "gemini-3.1-pro-preview"
     
     # ===== Claude AI 配置（露出功能）=====
     # Claude API Key（从哈基米读取，与 Gemini 相同方式）
     CLAUDE_API_KEY: str = ""
     CLAUDE_BASE_URL: str = "https://api.gemai.cc"  # 哈基米代理地址
-    CLAUDE_MODEL: str = "[特价B]claude-sonnet-4-20250514"  # 主模型：哈基米Sonnet（性价比高）
-    CLAUDE_MODEL_FALLBACK: str = "[特价B]claude-opus-4-5-20251101"  # 备用模型：哈基米Opus
+    CLAUDE_MODEL: str = "claude-sonnet-4-6"  # 主模型：Claude Sonnet 4.6（最强分析）
+    CLAUDE_MODEL_FALLBACK: str = "claude-opus-4-5-20251101"  # 备用模型：Claude Opus 4.5
     
     # ===== GitHub 配置（露出功能发布）=====
     GITHUB_TOKEN: str = ""

@@ -14,8 +14,8 @@ from app.services.humanizer_service import humanize
 
 logger = logging.getLogger(__name__)
 
-FAST_MODELS = ["gpt-5.1", "claude-sonnet-4-6", "claude-opus-4-5-20251101"]
-SMART_MODELS_FALLBACK = ["gpt-5.1", "claude-sonnet-4-6", "claude-opus-4-5-20251101"]
+FAST_MODELS = ["claude-sonnet-4-6", "gpt-5.1", "claude-opus-4-5-20251101"]
+SMART_MODELS_FALLBACK = ["claude-sonnet-4-6", "gpt-5.1", "claude-opus-4-5-20251101"]
 
 
 class ArticleGenService:
@@ -243,7 +243,7 @@ class ArticleGenService:
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_msg},
         ]
-        raw = self._call_with_fallback(messages, max_tokens=4096, fast=True)
+        raw = self._call_with_fallback(messages, max_tokens=8192, fast=True)
         result = self._robust_parse_json(raw, title)
 
         if result.get("content"):
@@ -308,19 +308,41 @@ class ArticleGenService:
 
         # 4. 尝试修复截断的 JSON（AI 输出被 max_tokens 截断）
         if '"content"' in text:
-            # 提取 content 字段值（支持多行 HTML）
-            cm = re.search(r'"content"\s*:\s*"((?:[^"\\]|\\.)*)(?:"|$)', text, re.DOTALL)
+            # 方案A: 用更宽松的正则提取 content（处理 HTML 中的引号）
+            # 找到 "content": " 的起始位置，然后向后找到下一个 JSON 字段或结尾
+            cm = re.search(r'"content"\s*:\s*"', text)
             if cm:
-                content = cm.group(1)
-                content = content.replace("\\n", "\n").replace("\\t", "\t").replace('\\"', '"').replace("\\/", "/")
+                start = cm.end()
+                # 从 start 开始，找到 content 值的结尾
+                # 策略：找下一个 JSON 字段 ,"field": 或 JSON 结尾 }
+                end_patterns = [
+                    r'",\s*"excerpt"',
+                    r'",\s*"meta_title"',
+                    r'",\s*"meta_description"',
+                    r'",\s*"meta_keywords"',
+                    r'",\s*"category"',
+                    r'",\s*"author"',
+                    r'"\s*\}',
+                ]
+                end_pos = len(text)
+                for ep in end_patterns:
+                    em = re.search(ep, text[start:])
+                    if em and (start + em.start()) < end_pos:
+                        end_pos = start + em.start()
+
+                content = text[start:end_pos]
+                # 清理 JSON 转义
+                content = content.replace("\\n", "\n").replace("\\t", "\t")
+                content = content.replace('\\"', '"').replace("\\/", "/")
                 content = self._clean_content(content)
+
                 if len(content) > 100:
-                    logger.warning("[ArticleGen] JSON 截断，从 content 字段提取 HTML")
+                    logger.warning("[ArticleGen] JSON 截断，从 content 字段提取 HTML (%d chars)", len(content))
                     # 尝试提取其他字段
                     excerpt = ""
-                    em = re.search(r'"excerpt"\s*:\s*"((?:[^"\\]|\\.)*)"', text)
-                    if em:
-                        excerpt = em.group(1).replace("\\n", " ").replace('\\"', '"')
+                    em2 = re.search(r'"excerpt"\s*:\s*"((?:[^"\\]|\\.)*)"', text)
+                    if em2:
+                        excerpt = em2.group(1).replace("\\n", " ").replace('\\"', '"')
                     category = "general"
                     catm = re.search(r'"category"\s*:\s*"([^"]*)"', text)
                     if catm:
@@ -383,14 +405,21 @@ class ArticleGenService:
         """清洗 AI 生成的 HTML content，确保无乱码/转义残留。"""
         if not html:
             return html
-        # 处理 JSON 转义残留
+        # 处理 JSON 转义残留（多轮清理确保彻底）
         html = html.replace("\\n", "\n").replace("\\t", "\t")
         html = html.replace('\\"', '"').replace("\\/", "/")
-        # 去掉字面 \n\n 文本（非真正换行）
+        # 再次处理可能的双重转义
+        html = html.replace("\\n", "\n").replace("\\t", "\t")
+        # 去掉字面 \n 文本（非真正换行，显示为 \n 的字符串）
         html = re.sub(r'(?<!\\)\\n', '\n', html)
-        # 确保 <p> 标签内没有裸露的 \n
+        # 去掉连续多余空行
         html = re.sub(r'\n{3,}', '\n\n', html)
         # 去掉 JSON 包裹残留
         html = re.sub(r'^\s*\{\s*"content"\s*:\s*"?', '', html)
         html = re.sub(r'"?\s*\}\s*$', '', html)
+        # 去掉开头的非 HTML 内容（如 JSON 字段名残留）
+        if re.search(r'<[a-zA-Z]', html):
+            html = re.sub(r'^[^<]*?(?=<[a-zA-Z])', '', html, count=1)
+        # 去掉结尾的 JSON 字段残留
+        html = re.sub(r',?\s*"(excerpt|meta_title|meta_description|meta_keywords|category|author)"\s*:.*$', '', html, flags=re.DOTALL)
         return html.strip()
