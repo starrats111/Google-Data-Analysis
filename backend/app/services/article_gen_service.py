@@ -4,6 +4,7 @@
 """
 import json
 import logging
+import re
 import httpx
 from datetime import datetime
 from typing import List, Dict, Optional
@@ -13,8 +14,8 @@ from app.services.humanizer_service import humanize
 
 logger = logging.getLogger(__name__)
 
-FAST_MODELS = ["[premium]gemini-3-flash-preview", "[福利]gemini-3-flash-preview"]
-SMART_MODELS_FALLBACK = ["[premium]gemini-3-flash-preview", "[福利]gemini-3-flash-preview"]
+FAST_MODELS = ["claude-sonnet-4-5-20250929", "claude-sonnet-4-6", "gemini-3-pro-preview"]
+SMART_MODELS_FALLBACK = ["claude-sonnet-4-5-20250929", "claude-sonnet-4-6", "gemini-3-pro-preview"]
 
 
 class ArticleGenService:
@@ -237,21 +238,7 @@ class ArticleGenService:
             {"role": "user", "content": user_msg},
         ]
         raw = self._call_with_fallback(messages, max_tokens=4096, fast=True)
-        try:
-            text = raw.strip()
-            if text.startswith("```"):
-                text = text.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
-            result = json.loads(text)
-        except (json.JSONDecodeError, IndexError):
-            logger.error(f"[ArticleGen] 商家文章解析失败: {raw[:300]}")
-            result = {
-                "content": f"<p>{raw}</p>",
-                "excerpt": raw[:100],
-                "meta_title": title,
-                "meta_description": raw[:160],
-                "meta_keywords": title,
-                "category": "general",
-            }
+        result = self._robust_parse_json(raw, title)
 
         if result.get("content"):
             result["content"] = humanize(result["content"])
@@ -284,3 +271,59 @@ class ArticleGenService:
             {"keyword": f"image-{i+1}", "url": f"https://unsplash.com/s/photos/article"}
             for i in range(count)
         ]
+
+    def _robust_parse_json(self, raw: str, title: str) -> dict:
+        """增强的 JSON 解析，多层容错。"""
+        text = raw.strip()
+
+        # 1. 去掉 markdown 代码块
+        if text.startswith("```"):
+            text = text.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
+
+        # 2. 直接解析
+        try:
+            result = json.loads(text)
+            if isinstance(result, dict) and result.get("content"):
+                return result
+        except (json.JSONDecodeError, IndexError):
+            pass
+
+        # 3. 正则提取第一个 JSON 对象 { ... }
+        match = re.search(r'\{[\s\S]*\}', text)
+        if match:
+            try:
+                result = json.loads(match.group())
+                if isinstance(result, dict) and result.get("content"):
+                    return result
+            except (json.JSONDecodeError, IndexError):
+                pass
+
+        # 4. 如果文本本身包含 HTML 标签，直接当 content 用
+        if "<h2" in text or "<p>" in text:
+            # 清理可能的 JSON 包裹
+            content = text
+            if '"content"' in content:
+                # 尝试提取 content 字段的值
+                cm = re.search(r'"content"\s*:\s*"([\s\S]*?)"\s*[,}]', content)
+                if cm:
+                    content = cm.group(1).replace("\\n", "\n").replace('\\"', '"')
+            logger.warning(f"[ArticleGen] JSON 解析失败，从原始文本提取 HTML content")
+            return {
+                "content": content,
+                "excerpt": re.sub(r'<[^>]+>', '', content)[:150],
+                "meta_title": title,
+                "meta_description": re.sub(r'<[^>]+>', '', content)[:160],
+                "meta_keywords": title,
+                "category": "general",
+            }
+
+        # 5. 最终 fallback
+        logger.error(f"[ArticleGen] 商家文章解析完全失败: {raw[:300]}")
+        return {
+            "content": f"<p>{text}</p>",
+            "excerpt": re.sub(r'<[^>]+>', '', text)[:150],
+            "meta_title": title,
+            "meta_description": text[:160],
+            "meta_keywords": title,
+            "category": "general",
+        }
