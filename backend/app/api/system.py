@@ -203,3 +203,68 @@ async def get_system_stats(
         logger.error(f"获取系统统计失败: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+
+@router.post("/reencrypt-tokens")
+async def reencrypt_tokens(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """修复加密 bug 后，重新加密所有平台账号的 API token。
+    从 notes JSON 中读取明文 token，用修复后的 encrypt_token 重新加密。
+    """
+    if current_user.role not in ("admin", "manager"):
+        raise HTTPException(status_code=403, detail="仅管理员可执行")
+
+    from app.models.affiliate_account import AffiliateAccount
+    from app.utils.crypto import encrypt_token, decrypt_token
+    import json as _json
+
+    accounts = db.query(AffiliateAccount).filter(AffiliateAccount.is_active.is_(True)).all()
+    fixed = 0
+    skipped = 0
+    errors_list = []
+
+    for acct in accounts:
+        # 尝试从 notes 中获取明文 token
+        plaintext_token = None
+        if acct.notes:
+            try:
+                notes = _json.loads(acct.notes)
+                for k in ("api_token", "token", "collabglow_token", "rewardoo_token",
+                           "linkhaitao_token", "creatorflare_token", "linkbux_token",
+                           "rw_token", "cf_token", "lb_token", "bsh_token", "pm_token"):
+                    if notes.get(k):
+                        plaintext_token = notes[k]
+                        break
+            except Exception:
+                pass
+
+        if not plaintext_token:
+            # 尝试解密现有的（可能已损坏）
+            if acct.api_token_encrypted:
+                try:
+                    plaintext_token = decrypt_token(acct.api_token_encrypted)
+                except Exception:
+                    pass
+
+        if plaintext_token:
+            try:
+                acct.api_token_encrypted = encrypt_token(plaintext_token)
+                # 验证加密结果
+                verify = decrypt_token(acct.api_token_encrypted)
+                if verify == plaintext_token:
+                    fixed += 1
+                else:
+                    errors_list.append(f"{acct.account_name}: 验证失败")
+            except Exception as e:
+                errors_list.append(f"{acct.account_name}: {e}")
+        else:
+            skipped += 1
+
+    db.commit()
+    return {
+        "fixed": fixed,
+        "skipped": skipped,
+        "errors": errors_list,
+    }
+

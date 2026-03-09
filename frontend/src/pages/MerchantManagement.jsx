@@ -20,8 +20,10 @@ import {
   Badge,
   DatePicker,
   Spin,
+  Upload,
+  Alert,
 } from 'antd'
-import { ReloadOutlined, SearchOutlined, UserSwitchOutlined, SyncOutlined, CheckCircleOutlined, CloudSyncOutlined } from '@ant-design/icons'
+import { ReloadOutlined, SearchOutlined, UserSwitchOutlined, SyncOutlined, CheckCircleOutlined, CloudSyncOutlined, UploadOutlined, WarningOutlined, InboxOutlined } from '@ant-design/icons'
 import api from '../services/api'
 import { useAuth } from '../store/authStore'
 import dayjs from 'dayjs'
@@ -121,6 +123,29 @@ const MerchantManagement = () => {
   const [editingMidValue, setEditingMidValue] = useState('')
   const [midSaving, setMidSaving] = useState(false)
 
+  // 违规商家状态
+  const [violations, setViolations] = useState([])
+  const [violationTotal, setViolationTotal] = useState(0)
+  const [violationPage, setViolationPage] = useState(1)
+  const [violationLoading, setViolationLoading] = useState(false)
+  const [violationSearch, setViolationSearch] = useState('')
+  const [uploadResult, setUploadResult] = useState(null)
+  const [uploading, setUploading] = useState(false)
+  const [affectedAssignments, setAffectedAssignments] = useState([])
+
+  // 推荐商家状态
+  const [recommendations, setRecommendations] = useState([])
+  const [recommendTotal, setRecommendTotal] = useState(0)
+  const [recommendPage, setRecommendPage] = useState(1)
+  const [recommendLoading, setRecommendLoading] = useState(false)
+  const [recommendSearch, setRecommendSearch] = useState('')
+  const [recommendUploadResult, setRecommendUploadResult] = useState(null)
+  const [recommendUploading, setRecommendUploading] = useState(false)
+
+  // 分配弹窗 - 商家详情
+  const [campaignDetails, setCampaignDetails] = useState([])
+  const [campaignDetailsLoading, setCampaignDetailsLoading] = useState(false)
+
   const [assignForm] = Form.useForm()
   const [transferForm] = Form.useForm()
   const [editMerchantForm] = Form.useForm()
@@ -166,6 +191,11 @@ const MerchantManagement = () => {
     } else if (tabKey === 'missing_mid') {
       setMerchantFilters((s) => ({ ...s, missing_mid: true }))
       setTimeout(() => fetchMerchants(1, merchantPageSize), 0)
+    } else if (tabKey === 'violations') {
+      fetchViolations(1)
+      fetchViolationAssignments()
+    } else if (tabKey === 'recommendations') {
+      fetchRecommendations(1)
     }
   }, [tabKey]) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -196,6 +226,90 @@ const MerchantManagement = () => {
     } catch (error) {
       console.error('获取商家统计失败', error)
     }
+  }
+
+  const fetchViolations = async (page = 1) => {
+    setViolationLoading(true)
+    try {
+      const resp = await api.get('/api/merchant-violations', {
+        params: { page, page_size: 50, search: violationSearch || undefined },
+      })
+      setViolations(resp.data?.items || [])
+      setViolationTotal(resp.data?.total || 0)
+      setViolationPage(page)
+    } catch (error) {
+      console.error('获取违规商家失败', error)
+    } finally {
+      setViolationLoading(false)
+    }
+  }
+
+  const fetchViolationAssignments = async () => {
+    try {
+      const resp = await api.get('/api/merchant-violations/check-assignments')
+      setAffectedAssignments(resp.data?.affected_assignments || [])
+    } catch (error) {
+      console.error('获取违规分配失败', error)
+    }
+  }
+
+  const fetchRecommendations = async (page = 1) => {
+    setRecommendLoading(true)
+    try {
+      const resp = await api.get('/api/merchant-recommendations', {
+        params: { page, page_size: 50, search: recommendSearch || undefined },
+      })
+      setRecommendations(resp.data?.items || [])
+      setRecommendTotal(resp.data?.total || 0)
+      setRecommendPage(page)
+    } catch (error) {
+      console.error('获取推荐商家失败', error)
+    } finally {
+      setRecommendLoading(false)
+    }
+  }
+
+  const handleRecommendUpload = async (file) => {
+    setRecommendUploading(true)
+    setRecommendUploadResult(null)
+    const formData = new FormData()
+    formData.append('file', file)
+    try {
+      const resp = await api.post('/api/merchant-recommendations/upload', formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      })
+      setRecommendUploadResult(resp.data)
+      message.success(`上传成功：导入 ${resp.data?.total_records || 0} 条推荐商家`)
+      fetchRecommendations(1)
+      fetchStats()
+    } catch (error) {
+      message.error('上传失败: ' + (error.response?.data?.detail || error.message))
+    } finally {
+      setRecommendUploading(false)
+    }
+    return false
+  }
+
+  const handleViolationUpload = async (file) => {
+    setUploading(true)
+    setUploadResult(null)
+    const formData = new FormData()
+    formData.append('file', file)
+    try {
+      const resp = await api.post('/api/merchant-violations/upload', formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      })
+      setUploadResult(resp.data)
+      message.success(`上传成功：导入 ${resp.data.total_records} 条违规记录，标记 ${resp.data.marked_merchants} 个商家`)
+      fetchViolations(1)
+      fetchViolationAssignments()
+      fetchStats()
+    } catch (error) {
+      message.error('上传失败: ' + (error.response?.data?.detail || error.message))
+    } finally {
+      setUploading(false)
+    }
+    return false // prevent default upload
   }
 
   // #region agent log
@@ -360,6 +474,7 @@ const MerchantManagement = () => {
       message.success('分配成功')
       setAssignModalOpen(false)
       assignForm.resetFields()
+      setCampaignDetails([])
       await Promise.all([fetchStats(), fetchMerchants(merchantPage, merchantPageSize), fetchAssignments(1, assignmentPageSize)])
     } catch (error) {
       if (error?.errorFields) return
@@ -459,7 +574,15 @@ const MerchantManagement = () => {
       fixed: 'left',
       render: (text, record) => (
         <Space direction="vertical" size={0}>
-          <span style={{ fontWeight: 600 }}>{text || '-'}</span>
+          <span style={{ fontWeight: 600 }}>
+            {text || '-'}
+            {record.violation_status === 'violated' && (
+              <Tag color="red" style={{ marginLeft: 6, fontSize: 11 }}>违规</Tag>
+            )}
+            {record.recommendation_status === 'recommended' && (
+              <Tag color="green" style={{ marginLeft: 6, fontSize: 11 }}>推荐</Tag>
+            )}
+          </span>
           <Space size={6}>
             {editingMidId === record.id ? (
               <Space size={4}>
@@ -1052,6 +1175,202 @@ const MerchantManagement = () => {
               </Card>
             ),
           },
+          canManage && {
+            key: 'violations',
+            label: (
+              <span>
+                <WarningOutlined style={{ color: '#ff4d4f', marginRight: 4 }} />
+                违规商家
+                {affectedAssignments.length > 0 && (
+                  <Badge count={affectedAssignments.length} size="small" style={{ marginLeft: 6 }} />
+                )}
+              </span>
+            ),
+            children: (
+              <Card title="违规商家管理">
+                {/* 上传区域 */}
+                <Upload.Dragger
+                  accept=".xlsx,.xls"
+                  showUploadList={false}
+                  beforeUpload={handleViolationUpload}
+                  disabled={uploading}
+                  style={{ marginBottom: 16 }}
+                >
+                  <p className="ant-upload-drag-icon">
+                    <InboxOutlined />
+                  </p>
+                  <p className="ant-upload-text">点击或拖拽 Excel 文件到此区域上传</p>
+                  <p className="ant-upload-hint">支持 .xlsx / .xls 格式，包含列：商家Mcid、Violation Time、商家ID、商家名称、平台、商家URL</p>
+                </Upload.Dragger>
+
+                {uploading && <Spin tip="正在上传并处理..." style={{ display: 'block', margin: '16px 0' }} />}
+
+                {uploadResult && (
+                  <Alert
+                    type={uploadResult.affected_assignments > 0 ? 'warning' : 'success'}
+                    showIcon
+                    closable
+                    style={{ marginBottom: 16 }}
+                    message={`上传完成：导入 ${uploadResult.total_records} 条记录，标记 ${uploadResult.marked_merchants} 个商家`}
+                    description={
+                      uploadResult.affected_assignments > 0
+                        ? `发现 ${uploadResult.affected_assignments} 条员工分配涉及违规商家，已发送通知给 ${uploadResult.notified_users} 位相关人员。`
+                        : '未发现员工分配涉及违规商家。'
+                    }
+                  />
+                )}
+
+                {/* 员工违规告警 */}
+                {affectedAssignments.length > 0 && (
+                  <Alert
+                    type="error"
+                    showIcon
+                    icon={<WarningOutlined />}
+                    style={{ marginBottom: 16 }}
+                    message={`${affectedAssignments.length} 条员工分配涉及违规商家`}
+                    description={
+                      <div style={{ maxHeight: 200, overflow: 'auto' }}>
+                        <Table
+                          size="small"
+                          rowKey={(r, i) => i}
+                          pagination={false}
+                          dataSource={affectedAssignments}
+                          columns={[
+                            { title: '员工', dataIndex: 'user_display_name', key: 'user', width: 120 },
+                            { title: '商家', dataIndex: 'merchant_name', key: 'merchant', width: 200 },
+                            { title: '平台', dataIndex: 'platform', key: 'platform', width: 80,
+                              render: (v) => <Tag color={PLATFORM_COLORS[v] || 'blue'}>{v}</Tag> },
+                            { title: '违规时间', dataIndex: 'violation_time', key: 'vt', width: 160,
+                              render: (v) => v ? new Date(v).toLocaleString('zh-CN') : '-' },
+                          ]}
+                        />
+                      </div>
+                    }
+                  />
+                )}
+
+                {/* 违规商家列表 */}
+                <Space style={{ marginBottom: 12 }}>
+                  <Input
+                    allowClear
+                    placeholder="搜索商家名/MCID/MID"
+                    style={{ width: 260 }}
+                    prefix={<SearchOutlined />}
+                    value={violationSearch}
+                    onChange={(e) => setViolationSearch(e.target.value)}
+                    onPressEnter={() => fetchViolations(1)}
+                  />
+                  <Button type="primary" onClick={() => fetchViolations(1)}>查询</Button>
+                </Space>
+
+                <Table
+                  rowKey="id"
+                  loading={violationLoading}
+                  dataSource={violations}
+                  scroll={{ x: 1000 }}
+                  pagination={{
+                    current: violationPage,
+                    pageSize: 50,
+                    total: violationTotal,
+                    showTotal: (total) => `共 ${total} 条`,
+                    onChange: (page) => fetchViolations(page),
+                  }}
+                  columns={[
+                    { title: '商家名称', dataIndex: 'merchant_name', key: 'name', width: 200 },
+                    { title: 'MCID', dataIndex: 'mcid', key: 'mcid', width: 160, render: (v) => v || '-' },
+                    { title: 'MID', dataIndex: 'merchant_mid', key: 'mid', width: 100, render: (v) => v || '-' },
+                    { title: '平台', dataIndex: 'platform', key: 'platform', width: 80,
+                      render: (v) => <Tag color={PLATFORM_COLORS[v] || 'blue'}>{v || '-'}</Tag> },
+                    { title: '违规时间', dataIndex: 'violation_time', key: 'vt', width: 170,
+                      render: (v) => v ? new Date(v).toLocaleString('zh-CN') : '-' },
+                    { title: '商家URL', dataIndex: 'merchant_url', key: 'url', width: 200, ellipsis: true,
+                      render: (v) => v ? <a href={v} target="_blank" rel="noreferrer">{v}</a> : '-' },
+                    { title: '上传批次', dataIndex: 'upload_batch', key: 'batch', width: 200 },
+                  ]}
+                />
+              </Card>
+            ),
+          },
+          canManage && {
+            key: 'recommendations',
+            label: (
+              <span>
+                <CheckCircleOutlined style={{ color: '#52c41a', marginRight: 4 }} />
+                推荐商家
+              </span>
+            ),
+            children: (
+              <Card title="推荐商家管理">
+                <Upload.Dragger
+                  accept=".xlsx,.xls"
+                  showUploadList={false}
+                  beforeUpload={handleRecommendUpload}
+                  disabled={recommendUploading}
+                  style={{ marginBottom: 16 }}
+                >
+                  <p className="ant-upload-drag-icon">
+                    <InboxOutlined />
+                  </p>
+                  <p className="ant-upload-text">点击或拖拽推荐商家 Excel 文件到此区域上传</p>
+                  <p className="ant-upload-hint">支持 .xlsx / .xls 格式，包含列：mcid、MID、广告主名称、网址、商家地区、EPC、佣金等</p>
+                </Upload.Dragger>
+
+                {recommendUploading && <Spin tip="正在上传并处理..." style={{ display: 'block', margin: '16px 0' }} />}
+
+                {recommendUploadResult && (
+                  <Alert
+                    type="success"
+                    showIcon
+                    closable
+                    style={{ marginBottom: 16 }}
+                    message={`上传完成：导入 ${recommendUploadResult.total_records} 条推荐商家，标记 ${recommendUploadResult.marked_merchants} 个已有商家`}
+                  />
+                )}
+
+                <Space style={{ marginBottom: 12 }}>
+                  <Input
+                    allowClear
+                    placeholder="搜索商家名/MCID/MID"
+                    style={{ width: 260 }}
+                    prefix={<SearchOutlined />}
+                    value={recommendSearch}
+                    onChange={(e) => setRecommendSearch(e.target.value)}
+                    onPressEnter={() => fetchRecommendations(1)}
+                  />
+                  <Button type="primary" onClick={() => fetchRecommendations(1)}>查询</Button>
+                </Space>
+
+                <Table
+                  rowKey="id"
+                  loading={recommendLoading}
+                  dataSource={recommendations}
+                  scroll={{ x: 1200 }}
+                  pagination={{
+                    current: recommendPage,
+                    pageSize: 50,
+                    total: recommendTotal,
+                    showTotal: (total) => `共 ${total} 条`,
+                    onChange: (page) => fetchRecommendations(page),
+                  }}
+                  columns={[
+                    { title: '商家名称', dataIndex: 'merchant_name', key: 'name', width: 200 },
+                    { title: 'MCID', dataIndex: 'mcid', key: 'mcid', width: 140, render: (v) => v || '-' },
+                    { title: 'MID', dataIndex: 'merchant_mid', key: 'mid', width: 100, render: (v) => v || '-' },
+                    { title: '地区', dataIndex: 'merchant_region', key: 'region', width: 120, render: (v) => v || '-' },
+                    { title: 'EPC', dataIndex: 'epc', key: 'epc', width: 90, align: 'right',
+                      render: (v) => v != null ? `$${Number(v).toFixed(2)}` : '-' },
+                    { title: '平均佣金比例', dataIndex: 'avg_commission_rate', key: 'rate', width: 120, align: 'right',
+                      render: (v) => v != null ? `${(Number(v) * 100).toFixed(2)}%` : '-' },
+                    { title: '平均客单佣金', dataIndex: 'avg_order_commission', key: 'aoc', width: 120, align: 'right',
+                      render: (v) => v != null ? `$${Number(v).toFixed(2)}` : '-' },
+                    { title: '网址', dataIndex: 'merchant_url', key: 'url', width: 200, ellipsis: true,
+                      render: (v) => v ? <a href={v} target="_blank" rel="noreferrer">{v}</a> : '-' },
+                    { title: '上传批次', dataIndex: 'upload_batch', key: 'batch', width: 200 },
+                  ]}
+                />
+              </Card>
+            ),
+          },
         ].filter(Boolean)}
       />
 
@@ -1119,12 +1438,51 @@ const MerchantManagement = () => {
       >
         <Form form={assignForm} layout="vertical">
           <Form.Item name="user_id" label="分配给员工" rules={[{ required: true, message: '请选择员工' }]}> 
-            <Select placeholder="选择员工">
+            <Select placeholder="选择员工" onChange={async (uid) => {
+              if (!selectedMerchantIds.length || !uid) return
+              setCampaignDetailsLoading(true)
+              try {
+                const details = await Promise.all(
+                  selectedMerchantIds.slice(0, 10).map(mid =>
+                    api.get(`/api/merchants/${mid}/campaign-detail`, { params: { user_id: uid } }).then(r => r.data).catch(() => null)
+                  )
+                )
+                setCampaignDetails(details.filter(Boolean))
+              } catch { setCampaignDetails([]) }
+              finally { setCampaignDetailsLoading(false) }
+            }}>
               {userOptions.map((u) => (
                 <Option key={u.id} value={u.id}>{u.display_name || u.username}</Option>
               ))}
             </Select>
           </Form.Item>
+
+          {campaignDetailsLoading && <Spin size="small" style={{ marginBottom: 12 }} />}
+          {campaignDetails.length > 0 && (
+            <div style={{ marginBottom: 16, maxHeight: 260, overflowY: 'auto' }}>
+              {campaignDetails.map((d, idx) => (
+                <Card key={idx} size="small" style={{ marginBottom: 8 }} bodyStyle={{ padding: '8px 12px' }}>
+                  <div style={{ fontWeight: 600, marginBottom: 4 }}>
+                    {d.merchant_name || '-'}
+                    <Tag color={PLATFORM_COLORS[d.platform] || 'blue'} style={{ marginLeft: 6 }}>{d.platform}</Tag>
+                    {d.cache_found && <Tag color="green" style={{ fontSize: 10 }}>缓存</Tag>}
+                  </div>
+                  {d.site_url && <div style={{ fontSize: 12, color: '#666' }}>网址: <a href={d.site_url} target="_blank" rel="noreferrer">{d.site_url}</a></div>}
+                  {d.categories && <div style={{ fontSize: 12, color: '#666' }}>品类: {d.categories}</div>}
+                  {d.commission_rate && <div style={{ fontSize: 12, color: '#666' }}>佣金率: {d.commission_rate}</div>}
+                  {d.support_regions?.length > 0 && (
+                    <div style={{ fontSize: 12, color: '#666' }}>区域: {d.support_regions.map(r => r.code || r).join(', ')}</div>
+                  )}
+                  {d.recommendation && (
+                    <div style={{ fontSize: 12, color: '#52c41a', marginTop: 4 }}>
+                      推荐数据 — EPC: {d.recommendation.epc ?? '-'} | 佣金上限: {d.recommendation.commission_cap ?? '-'} | 平均佣金率: {d.recommendation.avg_commission_rate ? (d.recommendation.avg_commission_rate * 100).toFixed(2) + '%' : '-'}
+                    </div>
+                  )}
+                </Card>
+              ))}
+            </div>
+          )}
+
           <Form.Item name="priority" label="优先级">
             <Select>
               <Option value="high">high</Option>

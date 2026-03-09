@@ -103,6 +103,91 @@ async def update_merchant(
     return {"message": "更新成功"}
 
 
+@router.get("/{merchant_pk}/campaign-detail")
+async def get_merchant_campaign_detail(
+    merchant_pk: int,
+    user_id: Optional[int] = Query(None, description="目标员工ID，用于获取该员工的追踪链接"),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """从 campaign_link_cache 获取商家详情（追踪链接、区域、佣金率等）"""
+    from app.models.merchant import AffiliateMerchant
+    from app.models.campaign_link_cache import CampaignLinkCache
+    from app.models.merchant_recommendation import MerchantRecommendation
+    import json
+
+    merchant = db.query(AffiliateMerchant).get(merchant_pk)
+    if not merchant:
+        raise HTTPException(status_code=404, detail="商家不存在")
+
+    mid = merchant.merchant_id
+    platform_map = {
+        "CG": "CG", "RW": "RW", "LH": "LH", "LB": "LB",
+        "PM": "PM", "BSH": "BSH", "CF": "CF",
+    }
+    platform_code = platform_map.get(merchant.platform, merchant.platform)
+
+    # 优先查目标员工的缓存，fallback 任意缓存
+    cache = None
+    if user_id and mid:
+        cache = db.query(CampaignLinkCache).filter(
+            CampaignLinkCache.user_id == user_id,
+            CampaignLinkCache.platform_code == platform_code,
+            CampaignLinkCache.merchant_id == mid,
+        ).first()
+    if not cache and mid:
+        cache = db.query(CampaignLinkCache).filter(
+            CampaignLinkCache.platform_code == platform_code,
+            CampaignLinkCache.merchant_id == mid,
+        ).first()
+
+    # 查推荐数据
+    recommend = None
+    if mid:
+        recommend = db.query(MerchantRecommendation).filter(
+            MerchantRecommendation.merchant_mid == mid
+        ).order_by(MerchantRecommendation.id.desc()).first()
+    if not recommend and merchant.slug:
+        recommend = db.query(MerchantRecommendation).filter(
+            MerchantRecommendation.mcid == merchant.slug
+        ).order_by(MerchantRecommendation.id.desc()).first()
+
+    result = {
+        "merchant_id": mid,
+        "merchant_name": merchant.merchant_name,
+        "platform": merchant.platform,
+    }
+
+    if cache:
+        regions = []
+        if cache.support_regions:
+            try:
+                regions = json.loads(cache.support_regions)
+            except (json.JSONDecodeError, TypeError):
+                regions = []
+        result.update({
+            "campaign_link": cache.campaign_link,
+            "site_url": cache.site_url,
+            "support_regions": regions,
+            "categories": cache.categories,
+            "commission_rate": cache.commission_rate,
+            "cache_found": True,
+        })
+    else:
+        result["cache_found"] = False
+
+    if recommend:
+        result["recommendation"] = {
+            "epc": float(recommend.epc) if recommend.epc else None,
+            "commission_cap": float(recommend.commission_cap) if recommend.commission_cap else None,
+            "avg_commission_rate": float(recommend.avg_commission_rate) if recommend.avg_commission_rate else None,
+            "avg_order_commission": float(recommend.avg_order_commission) if recommend.avg_order_commission else None,
+            "merchant_region": recommend.merchant_region,
+        }
+
+    return result
+
+
 @router.post("/discover")
 async def discover_merchants(
     current_user: User = Depends(get_current_user),
@@ -111,6 +196,18 @@ async def discover_merchants(
     trigger = "manual"
     count = MerchantService.discover_merchants(db, trigger_type=trigger)
     return {"message": f"发现并注册了 {count} 个新商家", "new_count": count}
+
+
+@router.post("/repair-lh-mid")
+async def repair_lh_mid(
+    current_user: User = Depends(get_current_manager),
+    db: Session = Depends(get_db),
+):
+    """一键补齐所有 LH 平台的纯数字 MID"""
+    result = MerchantService.repair_all_lh_mid(db)
+    if not result.get("success"):
+        raise HTTPException(status_code=400, detail=result.get("message", "补齐失败"))
+    return result
 
 
 # OPT-009: 手动触发平台商家同步（每 10 分钟限 1 次，后台运行）

@@ -527,7 +527,14 @@ export default function MccAccounts() {
                         message.success(`同步完成：插入 ${res.data?.inserted ?? 0}，更新 ${res.data?.updated ?? 0}`)
                         fetchMccAccounts()
                       } else {
-                        message.error(res.data?.message || '同步失败')
+                        const msg = res.data?.message || '同步失败'
+                        message.error(msg)
+                        if (msg.includes('权限') || msg.includes('Forbidden') || msg.includes('403')) {
+                          Modal.warning({
+                            title: 'Sheet 权限不足',
+                            content: '请确保 Google Sheet 已设为「知道链接的任何人都可以查看」（只读共享）。操作路径：打开 Sheet → 右上角「共享」→ 常规访问 → 知道链接的任何人 → 查看者。',
+                          })
+                        }
                       }
                     } catch (e) {
                       message.error(e.response?.data?.detail || e.message || '同步失败')

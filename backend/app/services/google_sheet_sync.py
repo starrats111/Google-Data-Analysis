@@ -40,7 +40,7 @@ def _read_sheet_csv(spreadsheet_id: str, sheet_name: str = SHEET_NAME) -> List[L
     """通过公开 CSV 导出链接读取 Sheet 数据（无需认证）。
 
     要求 Sheet 已设置为「知道链接的任何人都可以查看」。
-    失败时指数退避重试，最多 3 次。
+    失败时指数退避重试，最多 3 次。权限错误（403/401）不重试。
     """
     url = (
         f"https://docs.google.com/spreadsheets/d/{spreadsheet_id}"
@@ -51,9 +51,16 @@ def _read_sheet_csv(spreadsheet_id: str, sheet_name: str = SHEET_NAME) -> List[L
             resp = requests.get(url, timeout=30)
             if resp.status_code == 400:
                 return []
+            # 权限错误直接抛出，不重试
+            if resp.status_code in (401, 403):
+                raise RuntimeError(
+                    "Google Sheet 权限不足，请确保 Sheet 已设为「知道链接的任何人都可以查看」"
+                )
             resp.raise_for_status()
             reader = csv.reader(io.StringIO(resp.text))
             return [row for row in reader]
+        except RuntimeError:
+            raise  # 权限错误直接抛出
         except Exception as e:
             if attempt < SHEET_MAX_RETRIES - 1:
                 wait = 5 * (2 ** attempt)
@@ -141,6 +148,19 @@ class GoogleSheetSyncService:
                     GoogleAdsApiData.campaign_id == campaign_id_str,
                     GoogleAdsApiData.date == row_date,
                 ).first()
+                # Sheet 模式：读取 Status / Budget 列（如有），否则默认"已启用"
+                row_status = "已启用"
+                if "Status" in col and col["Status"] < len(row) and row[col["Status"]] not in (None, ""):
+                    raw_st = str(row[col["Status"]]).strip()
+                    status_map = {"ENABLED": "已启用", "PAUSED": "已暂停", "REMOVED": "已移除"}
+                    row_status = status_map.get(raw_st.upper(), raw_st) if raw_st else "已启用"
+                row_budget = 0.0
+                if "Budget" in col and col["Budget"] < len(row) and row[col["Budget"]] not in (None, ""):
+                    try:
+                        row_budget = float(row[col["Budget"]]) / 1_000_000.0
+                    except (ValueError, TypeError):
+                        pass
+
                 if existing:
                     existing.cost = cost
                     existing.impressions = impressions
@@ -148,6 +168,8 @@ class GoogleSheetSyncService:
                     existing.campaign_name = campaign_name
                     existing.extracted_platform_code = (platform_info or {}).get("platform_code")
                     existing.extracted_account_code = (platform_info or {}).get("account_code")
+                    existing.status = row_status
+                    existing.budget = row_budget
                     existing.last_sync_at = now_utc
                     updated += 1
                 else:
@@ -165,6 +187,8 @@ class GoogleSheetSyncService:
                             cpc=clicks and cost / clicks or 0.0,
                             extracted_platform_code=(platform_info or {}).get("platform_code"),
                             extracted_account_code=(platform_info or {}).get("account_code"),
+                            status=row_status,
+                            budget=row_budget,
                         )
                     )
                     inserted += 1

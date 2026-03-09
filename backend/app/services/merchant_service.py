@@ -419,7 +419,12 @@ class MerchantService:
 
         total = q.count()
         items = (
-            q.order_by(AffiliateMerchant.platform, AffiliateMerchant.merchant_name)
+            q.order_by(
+                # 推荐商家优先排序
+                (AffiliateMerchant.recommendation_status == "recommended").desc(),
+                AffiliateMerchant.platform,
+                AffiliateMerchant.merchant_name,
+            )
             .offset((page - 1) * page_size)
             .limit(page_size)
             .all()
@@ -482,6 +487,8 @@ class MerchantService:
                 "status": m.status,
                 "relationship_status": m.relationship_status or "unknown",
                 "missing_mid": bool(m.missing_mid),
+                "violation_status": getattr(m, 'violation_status', 'normal') or 'normal',
+                "recommendation_status": getattr(m, 'recommendation_status', 'normal') or 'normal',
                 "notes": m.notes,
                 "created_at": m.created_at.isoformat() if m.created_at else None,
                 "assigned_users": [
@@ -1128,6 +1135,182 @@ class MerchantService:
     # ------------------------------------------------------------------
     # OPT-009: 佣金拆分
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def repair_all_lh_mid(db: Session) -> dict:
+        """一键补齐所有 LH 平台的纯数字 MID。
+        1. 调用 LH API merchantBasicList3 获取 mcid -> m_id 映射
+        2. 修复 affiliate_transactions 表中 LH 平台 merchant_id 缺失或非数字的记录
+        3. 修复 affiliate_merchants 表中 LH 平台 missing_mid=1 的记录
+        """
+        import httpx
+        import time as _time
+
+        # Step 1: 获取 LH API token
+        from app.models.affiliate_account import AffiliateAccount, AffiliatePlatform
+        from app.utils.crypto import decrypt_token
+        import json as _json
+
+        lh_accounts = (
+            db.query(AffiliateAccount)
+            .join(AffiliatePlatform)
+            .filter(
+                AffiliatePlatform.code.in_(["LH", "lh"]),
+                AffiliateAccount.is_active.is_(True),
+            )
+            .all()
+        )
+
+        token = None
+        for acct in lh_accounts:
+            if acct.api_token_encrypted:
+                try:
+                    token = decrypt_token(acct.api_token_encrypted)
+                    break
+                except Exception:
+                    pass
+            if acct.notes:
+                try:
+                    notes = _json.loads(acct.notes)
+                    for k in ("linkhaitao_token", "token", "api_token"):
+                        if notes.get(k):
+                            token = notes[k]
+                            break
+                except Exception:
+                    pass
+                if token:
+                    break
+
+        if not token:
+            return {"success": False, "message": "未找到有效的 LH API Token，请先配置"}
+
+        # Step 2: 拉取全量商家列表，构建 mcid -> m_id 和 name -> m_id 映射
+        mcid_to_mid = {}
+        name_to_mid = {}
+        page = 1
+        total_fetched = 0
+
+        while True:
+            try:
+                resp = httpx.get(
+                    "https://www.linkhaitao.com/api.php",
+                    params={
+                        "mod": "medium", "op": "merchantBasicList3",
+                        "token": token, "page": page, "per_page": 5000,
+                    },
+                    timeout=30,
+                )
+                data = resp.json()
+                merchants = data.get("data", [])
+                if not merchants:
+                    break
+
+                for m in merchants:
+                    mcid = str(m.get("mcid", "")).strip()
+                    m_id = str(m.get("m_id", "")).strip()
+                    m_name = str(m.get("merchant_name", "")).strip()
+
+                    if m_id and m_id.isdigit() and m_id != "0":
+                        if mcid:
+                            mcid_to_mid[mcid.lower()] = m_id
+                        if m_name:
+                            name_to_mid[m_name.lower()] = m_id
+
+                total_fetched += len(merchants)
+                if len(merchants) < 5000:
+                    break
+                page += 1
+                _time.sleep(4)  # LH rate limit
+            except Exception as e:
+                logger.warning("[LH MID补齐] 拉取商家列表失败 page=%d: %s", page, e)
+                break
+
+        logger.info("[LH MID补齐] 获取 %d 个商家映射 (mcid: %d, name: %d)",
+                    total_fetched, len(mcid_to_mid), len(name_to_mid))
+
+        # Step 3: 修复 affiliate_transactions
+        tx_fixed = 0
+        tx_total_missing = 0
+
+        # 找出 LH 平台 merchant_id 缺失或非纯数字的交易
+        lh_tx_missing = (
+            db.query(AffiliateTransaction)
+            .filter(
+                func.upper(AffiliateTransaction.platform).in_(["LH", "LH1", "LH2", "LH3"]),
+                or_(
+                    AffiliateTransaction.merchant_id.is_(None),
+                    AffiliateTransaction.merchant_id == "",
+                ),
+            )
+            .all()
+        )
+        tx_total_missing = len(lh_tx_missing)
+
+        for tx in lh_tx_missing:
+            merchant_name = (tx.merchant or "").strip().lower()
+            resolved_mid = name_to_mid.get(merchant_name)
+            if resolved_mid:
+                tx.merchant_id = resolved_mid
+                tx_fixed += 1
+
+        # 也修复 merchant_id 存的是 slug 而非数字的情况
+        lh_tx_slug = (
+            db.query(AffiliateTransaction)
+            .filter(
+                func.upper(AffiliateTransaction.platform).in_(["LH", "LH1", "LH2", "LH3"]),
+                AffiliateTransaction.merchant_id.isnot(None),
+                AffiliateTransaction.merchant_id != "",
+            )
+            .all()
+        )
+        slug_fixed = 0
+        for tx in lh_tx_slug:
+            mid = tx.merchant_id.strip()
+            if not mid.isdigit():
+                resolved = mcid_to_mid.get(mid.lower())
+                if resolved:
+                    tx.merchant_id = resolved
+                    slug_fixed += 1
+
+        # Step 4: 修复 affiliate_merchants
+        merchant_fixed = 0
+        lh_merchants_missing = (
+            db.query(AffiliateMerchant)
+            .filter(
+                AffiliateMerchant.platform.in_(["LH"]),
+                or_(
+                    AffiliateMerchant.missing_mid == 1,
+                    AffiliateMerchant.merchant_id.is_(None),
+                    AffiliateMerchant.merchant_id == "",
+                ),
+            )
+            .all()
+        )
+
+        for m in lh_merchants_missing:
+            m_name = (m.merchant_name or "").strip().lower()
+            slug = (m.slug or "").strip().lower()
+            resolved = name_to_mid.get(m_name) or mcid_to_mid.get(slug)
+            if resolved:
+                m.merchant_id = resolved
+                m.missing_mid = 0
+                m.id_confidence = "api_repair"
+                merchant_fixed += 1
+
+        db.commit()
+
+        result = {
+            "success": True,
+            "api_merchants_fetched": total_fetched,
+            "mcid_mappings": len(mcid_to_mid),
+            "name_mappings": len(name_to_mid),
+            "transactions_missing": tx_total_missing,
+            "transactions_fixed": tx_fixed,
+            "transactions_slug_fixed": slug_fixed,
+            "merchants_fixed": merchant_fixed,
+        }
+        logger.info("[LH MID补齐] 完成: %s", result)
+        return result
 
     @staticmethod
     def _batch_commission_split(

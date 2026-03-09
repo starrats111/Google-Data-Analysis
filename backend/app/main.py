@@ -60,6 +60,14 @@ from app.api import (
     users,
     # 商家任务分配
     merchants,
+    # 商家违规
+    merchant_violations,
+    # 推荐商家
+    merchant_recommendations,
+    # 推荐商家
+    merchant_recommendations,
+    # 推荐商家
+    merchant_recommendations,
     # 文章发布系统（OPT-011）
     articles,
     article_gen,
@@ -267,6 +275,10 @@ app.include_router(feedback.router)
 app.include_router(merchants.router)
 app.include_router(merchants.assignment_router)
 app.include_router(merchants.performance_router)
+app.include_router(merchant_violations.router)
+app.include_router(merchant_recommendations.router)
+app.include_router(merchant_recommendations.router)
+app.include_router(merchant_recommendations.router)
 
 
 
@@ -380,7 +392,7 @@ def _ensure_site_tables():
 
 
 def _ensure_merchant_columns():
-    """OPT-014: 为 affiliate_merchants 表补齐 last_seen_at / consecutive_misses 列。"""
+    """OPT-014: 为 affiliate_merchants 表补齐 last_seen_at / consecutive_misses / violation / recommendation 列。"""
     from app.database import engine
     from sqlalchemy import text, inspect as sa_inspect
     insp = sa_inspect(engine)
@@ -390,6 +402,68 @@ def _ensure_merchant_columns():
             conn.execute(text("ALTER TABLE affiliate_merchants ADD COLUMN last_seen_at DATETIME"))
         if "consecutive_misses" not in existing:
             conn.execute(text("ALTER TABLE affiliate_merchants ADD COLUMN consecutive_misses INTEGER DEFAULT 0 NOT NULL"))
+        if "violation_status" not in existing:
+            conn.execute(text("ALTER TABLE affiliate_merchants ADD COLUMN violation_status VARCHAR(20) DEFAULT 'normal' NOT NULL"))
+        if "violation_time" not in existing:
+            conn.execute(text("ALTER TABLE affiliate_merchants ADD COLUMN violation_time DATETIME"))
+        if "recommendation_status" not in existing:
+            conn.execute(text("ALTER TABLE affiliate_merchants ADD COLUMN recommendation_status VARCHAR(20) DEFAULT 'normal' NOT NULL"))
+        if "recommendation_time" not in existing:
+            conn.execute(text("ALTER TABLE affiliate_merchants ADD COLUMN recommendation_time DATETIME"))
+
+
+def _ensure_violation_table():
+    """创建 merchant_violations 表。"""
+    from app.database import engine
+    from sqlalchemy import text, inspect as sa_inspect
+    insp = sa_inspect(engine)
+    if "merchant_violations" not in insp.get_table_names():
+        with engine.begin() as conn:
+            conn.execute(text("""
+                CREATE TABLE merchant_violations (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    mcid VARCHAR(200),
+                    merchant_mid VARCHAR(64),
+                    merchant_name VARCHAR(200) NOT NULL,
+                    platform VARCHAR(32) NOT NULL,
+                    merchant_url VARCHAR(500),
+                    violation_time DATETIME,
+                    upload_batch VARCHAR(64) NOT NULL,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+            """))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS idx_violation_mcid_platform ON merchant_violations(mcid, platform)"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS idx_violation_mid_platform ON merchant_violations(merchant_mid, platform)"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS idx_violation_batch ON merchant_violations(upload_batch)"))
+
+
+def _ensure_recommendation_table():
+    """创建 merchant_recommendations 表。"""
+    from app.database import engine
+    from sqlalchemy import text, inspect as sa_inspect
+    insp = sa_inspect(engine)
+    if "merchant_recommendations" not in insp.get_table_names():
+        with engine.begin() as conn:
+            conn.execute(text("""
+                CREATE TABLE merchant_recommendations (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    mcid VARCHAR(200),
+                    merchant_mid VARCHAR(64),
+                    merchant_name VARCHAR(200) NOT NULL,
+                    platform VARCHAR(32),
+                    merchant_url VARCHAR(500),
+                    merchant_region VARCHAR(100),
+                    epc DECIMAL(12,4),
+                    commission_cap DECIMAL(12,4),
+                    avg_commission_rate DECIMAL(12,10),
+                    avg_order_commission DECIMAL(12,4),
+                    upload_batch VARCHAR(64) NOT NULL,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+            """))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS idx_recommend_mcid ON merchant_recommendations(mcid)"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS idx_recommend_mid ON merchant_recommendations(merchant_mid)"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS idx_recommend_batch ON merchant_recommendations(upload_batch)"))
 
 
 @app.on_event("startup")
@@ -404,6 +478,14 @@ async def startup_event():
         _ensure_merchant_columns()
     except Exception as e:
         print(f"[WARN] 补齐 merchant 列失败（首次部署可忽略）: {e}")
+    try:
+        _ensure_violation_table()
+    except Exception as e:
+        print(f"[WARN] 创建 merchant_violations 表失败（首次部署可忽略）: {e}")
+    try:
+        _ensure_recommendation_table()
+    except Exception as e:
+        print(f"[WARN] 创建 merchant_recommendations 表失败（首次部署可忽略）: {e}")
     try:
         _ensure_site_tables()
         print("[OK] OPT-013 pub_sites 表已就绪")

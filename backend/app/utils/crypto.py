@@ -27,7 +27,8 @@ def encrypt_token(plaintext: str) -> str:
     padder = sym_padding.PKCS7(_BLOCK * 8).padder()
     padded = padder.update(plaintext.encode()) + padder.finalize()
     cipher = Cipher(algorithms.AES(key), modes.CBC(iv), backend=default_backend())
-    ct = cipher.encryptor().update(padded) + cipher.encryptor().finalize()
+    encryptor = cipher.encryptor()
+    ct = encryptor.update(padded) + encryptor.finalize()
     return base64.b64encode(iv + ct).decode()
 
 

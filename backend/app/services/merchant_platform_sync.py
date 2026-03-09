@@ -665,8 +665,9 @@ class MerchantPlatformSyncService:
         if acct.api_token_encrypted:
             try:
                 return decrypt_token(acct.api_token_encrypted)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning("[MerchantSync] Token 解密失败 account=%s platform=%s: %s",
+                               acct.account_name, platform_code, e)
 
         if not acct.notes:
             return None

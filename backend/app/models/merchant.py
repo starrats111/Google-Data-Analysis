@@ -35,6 +35,14 @@ class AffiliateMerchant(Base):
     last_seen_at = Column(DateTime(timezone=True), nullable=True)
     consecutive_misses = Column(Integer, default=0, nullable=False, server_default="0")
 
+    # 违规标记
+    violation_status = Column(String(20), default="normal", nullable=False, server_default="normal")
+    violation_time = Column(DateTime(timezone=True), nullable=True)
+
+    # 推荐标记
+    recommendation_status = Column(String(20), default="normal", nullable=False, server_default="normal")
+    recommendation_time = Column(DateTime(timezone=True), nullable=True)
+
     assignments = relationship("MerchantAssignment", back_populates="merchant", cascade="all, delete-orphan")
 
     __table_args__ = (
