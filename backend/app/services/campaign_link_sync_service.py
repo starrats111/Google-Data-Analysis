@@ -109,50 +109,62 @@ class CampaignLinkSyncService:
             mapped = CampaignLinkService._map_campaign_response(raw, platform_code)
             support_regions_json = json.dumps(mapped.get("support_regions") or [], ensure_ascii=False)
 
-            existing = (
-                self.db.query(CampaignLinkCache)
-                .filter(
-                    CampaignLinkCache.user_id == user_id,
-                    CampaignLinkCache.platform_code == platform_code,
-                    CampaignLinkCache.merchant_id == mid,
+            try:
+                existing = (
+                    self.db.query(CampaignLinkCache)
+                    .filter(
+                        CampaignLinkCache.user_id == user_id,
+                        CampaignLinkCache.platform_code == platform_code,
+                        CampaignLinkCache.merchant_id == mid,
+                    )
+                    .first()
                 )
-                .first()
-            )
 
-            if existing:
-                existing.campaign_link = mapped.get("campaign_link")
-                existing.short_link = mapped.get("short_link")
-                existing.smart_link = mapped.get("smart_link")
-                existing.site_url = mapped.get("site_url")
-                existing.merchant_name = mapped.get("merchant_name")
-                existing.support_regions = support_regions_json
-                existing.categories = json.dumps(mapped.get("categories") or "", ensure_ascii=False) if mapped.get("categories") else None
-                existing.commission_rate = mapped.get("commission_rate")
-                existing.logo = mapped.get("logo")
-                existing.synced_at = now
-            else:
-                record = CampaignLinkCache(
-                    user_id=user_id,
-                    platform_code=platform_code,
-                    merchant_id=mid,
-                    campaign_link=mapped.get("campaign_link"),
-                    short_link=mapped.get("short_link"),
-                    smart_link=mapped.get("smart_link"),
-                    site_url=mapped.get("site_url"),
-                    merchant_name=mapped.get("merchant_name"),
-                    support_regions=support_regions_json,
-                    categories=json.dumps(mapped.get("categories") or "", ensure_ascii=False) if mapped.get("categories") else None,
-                    commission_rate=mapped.get("commission_rate"),
-                    logo=mapped.get("logo"),
-                    synced_at=now,
-                )
-                self.db.add(record)
+                if existing:
+                    existing.campaign_link = mapped.get("campaign_link")
+                    existing.short_link = mapped.get("short_link")
+                    existing.smart_link = mapped.get("smart_link")
+                    existing.site_url = mapped.get("site_url")
+                    existing.merchant_name = mapped.get("merchant_name")
+                    existing.support_regions = support_regions_json
+                    existing.categories = json.dumps(mapped.get("categories") or "", ensure_ascii=False) if mapped.get("categories") else None
+                    existing.commission_rate = mapped.get("commission_rate")
+                    existing.logo = mapped.get("logo")
+                    existing.synced_at = now
+                else:
+                    record = CampaignLinkCache(
+                        user_id=user_id,
+                        platform_code=platform_code,
+                        merchant_id=mid,
+                        campaign_link=mapped.get("campaign_link"),
+                        short_link=mapped.get("short_link"),
+                        smart_link=mapped.get("smart_link"),
+                        site_url=mapped.get("site_url"),
+                        merchant_name=mapped.get("merchant_name"),
+                        support_regions=support_regions_json,
+                        categories=json.dumps(mapped.get("categories") or "", ensure_ascii=False) if mapped.get("categories") else None,
+                        commission_rate=mapped.get("commission_rate"),
+                        logo=mapped.get("logo"),
+                        synced_at=now,
+                    )
+                    self.db.add(record)
 
-            count += 1
-            if count % 500 == 0:
-                self.db.flush()
+                count += 1
+                if count % 200 == 0:
+                    self.db.commit()
+                    time.sleep(0.1)  # 让出 SQLite 锁
+            except Exception as e:
+                logger.warning("[CampaignLinkSync] 写入缓存异常 mid=%s: %s", mid, e)
+                try:
+                    self.db.rollback()
+                except Exception:
+                    pass
 
-        self.db.commit()
+        try:
+            self.db.commit()
+        except Exception as e:
+            logger.warning("[CampaignLinkSync] 最终提交异常: %s", e)
+            self.db.rollback()
         return count
 
     def _fetch_all_joined(self, cfg: dict, platform_code: str, token: str) -> List[dict]:
