@@ -1184,8 +1184,9 @@ class MerchantService:
         if not token:
             return {"success": False, "message": "未找到有效的 LH API Token，请先配置"}
 
-        # Step 2: 拉取全量商家列表，构建 mcid -> m_id 和 name -> m_id 映射
-        mcid_to_mid = {}
+        # Step 2: 拉取全量商家列表，构建 slug(m_id) -> mcid(数字MID) 和 name -> mcid 映射
+        # LH API 中: mcid = 纯数字MID, m_id = slug
+        slug_to_mid = {}
         name_to_mid = {}
         page = 1
         total_fetched = 0
@@ -1201,20 +1202,20 @@ class MerchantService:
                     timeout=30,
                 )
                 data = resp.json()
-                merchants = data.get("data", [])
+                merchants = data.get("list", data.get("data", []))
                 if not merchants:
                     break
 
                 for m in merchants:
-                    mcid = str(m.get("mcid", "")).strip()
-                    m_id = str(m.get("m_id", "")).strip()
+                    mcid = str(m.get("mcid", "")).strip()  # 纯数字 MID
+                    m_id = str(m.get("m_id", "")).strip()  # slug
                     m_name = str(m.get("merchant_name", "")).strip()
 
-                    if m_id and m_id.isdigit() and m_id != "0":
-                        if mcid:
-                            mcid_to_mid[mcid.lower()] = m_id
+                    if mcid and mcid.isdigit() and mcid != "0":
+                        if m_id:
+                            slug_to_mid[m_id.lower()] = mcid
                         if m_name:
-                            name_to_mid[m_name.lower()] = m_id
+                            name_to_mid[m_name.lower()] = mcid
 
                 total_fetched += len(merchants)
                 if len(merchants) < 5000:
@@ -1225,8 +1226,8 @@ class MerchantService:
                 logger.warning("[LH MID补齐] 拉取商家列表失败 page=%d: %s", page, e)
                 break
 
-        logger.info("[LH MID补齐] 获取 %d 个商家映射 (mcid: %d, name: %d)",
-                    total_fetched, len(mcid_to_mid), len(name_to_mid))
+        logger.info("[LH MID补齐] 获取 %d 个商家映射 (slug: %d, name: %d)",
+                    total_fetched, len(slug_to_mid), len(name_to_mid))
 
         # Step 3: 修复 affiliate_transactions
         tx_fixed = 0
@@ -1267,7 +1268,7 @@ class MerchantService:
         for tx in lh_tx_slug:
             mid = tx.merchant_id.strip()
             if not mid.isdigit():
-                resolved = mcid_to_mid.get(mid.lower())
+                resolved = slug_to_mid.get(mid.lower())
                 if resolved:
                     tx.merchant_id = resolved
                     slug_fixed += 1
@@ -1290,7 +1291,7 @@ class MerchantService:
         for m in lh_merchants_missing:
             m_name = (m.merchant_name or "").strip().lower()
             slug = (m.slug or "").strip().lower()
-            resolved = name_to_mid.get(m_name) or mcid_to_mid.get(slug)
+            resolved = name_to_mid.get(m_name) or slug_to_mid.get(slug)
             if resolved:
                 m.merchant_id = resolved
                 m.missing_mid = 0
@@ -1302,7 +1303,7 @@ class MerchantService:
         result = {
             "success": True,
             "api_merchants_fetched": total_fetched,
-            "mcid_mappings": len(mcid_to_mid),
+            "mcid_mappings": len(slug_to_mid),
             "name_mappings": len(name_to_mid),
             "transactions_missing": tx_total_missing,
             "transactions_fixed": tx_fixed,
