@@ -304,14 +304,26 @@ async def sync_campaign_links(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """手动触发当前用户的 Campaign Link 缓存同步（OPT-016）"""
-    svc = CampaignLinkSyncService(db)
-    try:
-        cached = svc.sync_user(current_user.id)
-        return {"success": True, "cached": cached, "message": f"已缓存 {cached} 条 Campaign Link"}
-    except Exception as e:
-        logger.error("[CampaignLinkSync] 手动同步失败: %s", e)
-        raise HTTPException(status_code=500, detail=f"同步失败: {str(e)}")
+    """手动触发当前用户的 Campaign Link 缓存同步（OPT-016，后台执行）"""
+    import threading
+    from app.database import SessionLocal
+
+    user_id = current_user.id
+    username = current_user.username
+
+    def _bg_sync():
+        bg_db = SessionLocal()
+        try:
+            svc = CampaignLinkSyncService(bg_db)
+            cached = svc.sync_user(user_id)
+            logger.info("[CampaignLinkSync] 用户 %s 后台同步完成: %d 条", username, cached)
+        except Exception as e:
+            logger.error("[CampaignLinkSync] 用户 %s 后台同步失败: %s", username, e)
+        finally:
+            bg_db.close()
+
+    threading.Thread(target=_bg_sync, daemon=True).start()
+    return {"success": True, "message": "同步已在后台启动，数据量较大请稍等几分钟"}
 
 
 @router.post("/campaign-link/sync-all")
@@ -319,13 +331,23 @@ async def sync_all_campaign_links(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """手动触发所有用户的 Campaign Link 缓存全量同步（仅管理员，OPT-016）"""
+    """手动触发所有用户的 Campaign Link 缓存全量同步（仅管理员，OPT-016，后台执行）"""
     if current_user.role not in ("manager", "admin"):
         raise HTTPException(status_code=403, detail="仅管理员可执行全量同步")
-    svc = CampaignLinkSyncService(db)
-    try:
-        result = svc.sync_all_users()
-        return {"success": True, **result}
-    except Exception as e:
-        logger.error("[CampaignLinkSync] 全量同步失败: %s", e)
-        raise HTTPException(status_code=500, detail=f"全量同步失败: {str(e)}")
+
+    import threading
+    from app.database import SessionLocal
+
+    def _bg_sync_all():
+        bg_db = SessionLocal()
+        try:
+            svc = CampaignLinkSyncService(bg_db)
+            result = svc.sync_all_users()
+            logger.info("[CampaignLinkSync] 全量同步完成: %d 用户, %d 条缓存", result['total_users'], result['total_cached'])
+        except Exception as e:
+            logger.error("[CampaignLinkSync] 全量同步失败: %s", e)
+        finally:
+            bg_db.close()
+
+    threading.Thread(target=_bg_sync_all, daemon=True).start()
+    return {"success": True, "message": "全量同步已在后台启动，预计需要 10-30 分钟"}
