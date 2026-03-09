@@ -1,7 +1,7 @@
 """
-远程网站发布服务（CR-035）
+远程网站发布服务（CR-035 / CR-037）
 通过 SSH 连接宝塔服务器，远程写入/删除文章文件。
-适配 AuraBloom 的 main.js posts 数组格式。
+自动检测网站架构类型，适配 5 种不同的文章管理方式。
 """
 import hashlib
 import json
@@ -17,6 +17,12 @@ import paramiko
 import requests
 
 from app.config import settings
+from app.models.site import (
+    SITE_TYPE_POSTS_ASSETS_JS, SITE_TYPE_POSTS_ASSETS,
+    SITE_TYPE_ARTICLES_INDEX, SITE_TYPE_ARTICLES_INLINE,
+    SITE_TYPE_ARTICLES_DATA_WINDOW, SITE_TYPE_BLOGPOSTS_DATA,
+    SITE_TYPE_POSTS_SCRIPTS,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -66,6 +72,131 @@ class RemotePublisher:
         """确保远程目录存在（同步等待完成）"""
         _, stdout, stderr = ssh.exec_command(f"mkdir -p {path}")
         stdout.channel.recv_exit_status()  # 阻塞等待命令完成
+
+    # ─── CR-037: 网站架构自动检测 ───
+
+    def _remote_file_exists(self, sftp: paramiko.SFTPClient, path: str) -> bool:
+        """检查远程文件是否存在"""
+        try:
+            sftp.stat(path)
+            return True
+        except FileNotFoundError:
+            return False
+
+    def _remote_file_contains(self, sftp: paramiko.SFTPClient, path: str, keyword: str) -> bool:
+        """检查远程文件是否包含指定关键词"""
+        try:
+            content = self._sftp_read(sftp, path)
+            return keyword in content
+        except Exception:
+            return False
+
+    def detect_site_type(self, site_path: str) -> dict:
+        """
+        SSH 连接宝塔服务器，自动检测网站的文章管理架构。
+        返回 {site_type, data_js_path, article_var_name, article_html_pattern}
+        """
+        ssh = self._connect()
+        try:
+            sftp = ssh.open_sftp()
+            result = self._detect_site_type_inner(sftp, site_path)
+            sftp.close()
+            return result
+        finally:
+            ssh.close()
+
+    def _detect_site_type_inner(self, sftp: paramiko.SFTPClient, site_root: str) -> dict:
+        """内部检测逻辑（已有 sftp 连接时使用）"""
+        # A1: assets/js/main.js + const posts
+        p = f"{site_root}/assets/js/main.js"
+        if self._remote_file_exists(sftp, p) and self._remote_file_contains(sftp, p, "const posts"):
+            return {
+                "site_type": SITE_TYPE_POSTS_ASSETS_JS,
+                "data_js_path": "assets/js/main.js",
+                "article_var_name": "posts",
+                "article_html_pattern": "post-{slug}.html",
+            }
+
+        # A2: assets/main.js + const posts
+        p = f"{site_root}/assets/main.js"
+        if self._remote_file_exists(sftp, p) and self._remote_file_contains(sftp, p, "const posts"):
+            return {
+                "site_type": SITE_TYPE_POSTS_ASSETS,
+                "data_js_path": "assets/main.js",
+                "article_var_name": "posts",
+                "article_html_pattern": "post-{slug}.html",
+            }
+
+        # B1: js/articles-index.js + articlesIndex
+        p = f"{site_root}/js/articles-index.js"
+        if self._remote_file_exists(sftp, p) and self._remote_file_contains(sftp, p, "articlesIndex"):
+            return {
+                "site_type": SITE_TYPE_ARTICLES_INDEX,
+                "data_js_path": "js/articles-index.js",
+                "article_var_name": "articlesIndex",
+                "article_html_pattern": "article-{slug}.html",
+            }
+
+        # B2: js/main.js + const articles / const articlesData (内嵌)
+        p = f"{site_root}/js/main.js"
+        if self._remote_file_exists(sftp, p):
+            content = ""
+            try:
+                content = self._sftp_read(sftp, p)
+            except Exception:
+                pass
+            if "const articles " in content or "const articles=" in content:
+                return {
+                    "site_type": SITE_TYPE_ARTICLES_INLINE,
+                    "data_js_path": "js/main.js",
+                    "article_var_name": "articles",
+                    "article_html_pattern": "article-{slug}.html",
+                }
+            if "const articlesData " in content or "const articlesData=" in content:
+                return {
+                    "site_type": SITE_TYPE_ARTICLES_INLINE,
+                    "data_js_path": "js/main.js",
+                    "article_var_name": "articlesData",
+                    "article_html_pattern": "article-{slug}.html",
+                }
+
+        # C1: articles-data.js + window.__ARTICLES__
+        p = f"{site_root}/articles-data.js"
+        if self._remote_file_exists(sftp, p):
+            return {
+                "site_type": SITE_TYPE_ARTICLES_DATA_WINDOW,
+                "data_js_path": "articles-data.js",
+                "article_var_name": "__ARTICLES__",
+                "article_html_pattern": "article-{slug}.html",
+            }
+
+        # C2: data.js + const blogPosts
+        p = f"{site_root}/data.js"
+        if self._remote_file_exists(sftp, p) and self._remote_file_contains(sftp, p, "blogPosts"):
+            return {
+                "site_type": SITE_TYPE_BLOGPOSTS_DATA,
+                "data_js_path": "data.js",
+                "article_var_name": "blogPosts",
+                "article_html_pattern": "article-{slug}.html",
+            }
+
+        # D: scripts.js + const POSTS
+        p = f"{site_root}/scripts.js"
+        if self._remote_file_exists(sftp, p) and self._remote_file_contains(sftp, p, "const POSTS"):
+            return {
+                "site_type": SITE_TYPE_POSTS_SCRIPTS,
+                "data_js_path": "scripts.js",
+                "article_var_name": "POSTS",
+                "article_html_pattern": "post-{slug}.html",
+            }
+
+        # 未知架构
+        return {
+            "site_type": None,
+            "data_js_path": None,
+            "article_var_name": None,
+            "article_html_pattern": None,
+        }
 
     def _download_image(self, url: str) -> Optional[bytes]:
         """从外部 URL 下载图片，返回二进制数据"""
@@ -190,22 +321,26 @@ class RemotePublisher:
 
     def publish_article(self, site, article) -> dict:
         """
-        发布文章到宝塔服务器：
-        1. 下载并上传图片到远程服务器
-        2. 读取远程 main.js
-        3. 解析 const posts = [...]
-        4. 追加新文章条目
-        5. 写回 main.js
-        6. 生成并上传文章详情页 HTML（含嵌入图片）
+        发布文章到宝塔服务器（CR-037: 按 site_type 分发）。
+        自动检测架构类型并调用对应的发布方法。
         """
         site_root = site.site_path
-        main_js_path = f"{site_root}/assets/js/main.js"
         slug = article.slug
+        site_type = site.site_type
 
         ssh = self._connect()
         try:
             sftp = ssh.open_sftp()
 
+            # 如果 site_type 为空，先自动检测
+            if not site_type:
+                detected = self._detect_site_type_inner(sftp, site_root)
+                site_type = detected.get("site_type")
+                logger.info(f"[发布] 自动检测 {site.domain} 架构: {site_type}")
+                if not site_type:
+                    raise ValueError(f"无法识别网站 {site.domain} 的文章架构，请检查网站目录结构")
+
+            # 处理图片（所有类型通用）
             content_image_urls = []
             if hasattr(article, "images") and article.images:
                 sorted_imgs = sorted(article.images, key=lambda x: (x.position or 0))
@@ -217,107 +352,354 @@ class RemotePublisher:
                 content_image_urls,
             )
 
-            main_js_content = self._sftp_read(sftp, main_js_path)
-            posts = self._parse_posts(main_js_content)
-
-            if any(p.get("slug") == slug for p in posts):
-                raise ValueError(f"slug '{slug}' 已存在于网站 posts 中")
-
-            new_id = max((p.get("id", 0) for p in posts), default=0) + 1
-            category_name = "General"
-            if article.category and hasattr(article.category, "name"):
-                category_name = article.category.name
-
-            word_count = len(article.content or "") // 5
-            read_time = max(3, word_count // 200)
-
-            created = article.created_at or datetime.utcnow()
-            date_iso = created.strftime("%Y-%m-%d")
-            date_label = created.strftime("%b %d, %Y")
-
-            tags = []
-            if hasattr(article, "tags") and article.tags:
-                for at in article.tags:
-                    if hasattr(at, "tag") and at.tag:
-                        tags.append(at.tag.name)
-            if not tags:
-                tags = [category_name.lower()]
-
-            detail_url = f"post-{slug}.html"
-            hero_for_index = image_paths["hero"] or article.featured_image or ""
-
-            new_post = {
-                "id": new_id,
-                "slug": slug,
-                "title": article.title,
-                "category": category_name,
-                "dateISO": date_iso,
-                "dateLabel": date_label,
-                "readTime": f"{read_time} min read",
-                "excerpt": article.excerpt or "",
-                "heroImage": hero_for_index,
-                "tags": tags,
-                "primaryProduct": "",
-                "detailUrl": detail_url,
-            }
-
-            posts.insert(0, new_post)
-            new_main_js = self._rebuild_main_js(main_js_content, posts)
-            self._sftp_write(sftp, main_js_path, new_main_js)
-
-            html_content = self._generate_article_html(
-                article, category_name, date_label, read_time,
-                hero_path=image_paths["hero"],
-                content_image_paths=image_paths["content"],
-            )
-            html_path = f"{site_root}/{detail_url}"
-            self._sftp_write(sftp, html_path, html_content)
+            # 按架构类型分发
+            if site_type in (SITE_TYPE_POSTS_ASSETS_JS, SITE_TYPE_POSTS_ASSETS, SITE_TYPE_POSTS_SCRIPTS):
+                result = self._publish_posts_type(ssh, sftp, site, article, image_paths, site_type)
+            elif site_type == SITE_TYPE_ARTICLES_INDEX:
+                result = self._publish_articles_index_type(ssh, sftp, site, article, image_paths)
+            elif site_type == SITE_TYPE_ARTICLES_INLINE:
+                result = self._publish_articles_inline_type(ssh, sftp, site, article, image_paths)
+            elif site_type in (SITE_TYPE_ARTICLES_DATA_WINDOW, SITE_TYPE_BLOGPOSTS_DATA):
+                result = self._publish_articles_data_type(ssh, sftp, site, article, image_paths, site_type)
+            else:
+                raise ValueError(f"不支持的网站架构类型: {site_type}")
 
             sftp.close()
-            logger.info(f"文章已远程发布: slug={slug}, site={site.site_name}, "
+            logger.info(f"文章已远程发布: slug={slug}, site={site.site_name}, type={site_type}, "
                         f"images: hero={'yes' if image_paths['hero'] else 'no'}, "
                         f"content={len(image_paths['content'])}")
-            return {"site_article_slug": slug, "site_article_id": new_id}
+            return result
         finally:
             ssh.close()
 
+    # ─── 各架构类型的发布实现 ───
+
+    def _publish_posts_type(self, ssh, sftp, site, article, image_paths, site_type) -> dict:
+        """A1/A2/D 类型: 操作 const posts / const POSTS 数组"""
+        site_root = site.site_path
+        slug = article.slug
+
+        # 确定数据文件路径和变量名
+        if site_type == SITE_TYPE_POSTS_ASSETS_JS:
+            data_path = f"{site_root}/assets/js/main.js"
+            var_name = "posts"
+        elif site_type == SITE_TYPE_POSTS_ASSETS:
+            data_path = f"{site_root}/assets/main.js"
+            var_name = "posts"
+        else:  # SITE_TYPE_POSTS_SCRIPTS
+            data_path = f"{site_root}/scripts.js"
+            var_name = "POSTS"
+
+        main_js_content = self._sftp_read(sftp, data_path)
+        posts = self._parse_js_array(main_js_content, var_name)
+
+        if any(p.get("slug") == slug for p in posts):
+            raise ValueError(f"slug '{slug}' 已存在于网站 {var_name} 中")
+
+        new_id = max((p.get("id", 0) for p in posts), default=0) + 1
+        new_post = self._build_post_entry(article, new_id, image_paths, slug)
+
+        posts.insert(0, new_post)
+        new_content = self._rebuild_js_array(main_js_content, var_name, posts)
+        self._sftp_write(sftp, data_path, new_content)
+
+        # 生成文章详情页 HTML
+        category_name = self._get_category_name(article)
+        date_label, read_time = self._get_date_and_readtime(article)
+        html_content = self._generate_article_html(
+            article, category_name, date_label, read_time,
+            hero_path=image_paths["hero"],
+            content_image_paths=image_paths["content"],
+        )
+        html_path = f"{site_root}/post-{slug}.html"
+        self._sftp_write(sftp, html_path, html_content)
+
+        return {"site_article_slug": slug, "site_article_id": new_id}
+
+    def _publish_articles_index_type(self, ssh, sftp, site, article, image_paths) -> dict:
+        """B1 类型: 操作 articlesIndex 数组 + 生成 articles/{slug}.json"""
+        site_root = site.site_path
+        slug = article.slug
+        data_path = f"{site_root}/{site.data_js_path or 'js/articles-index.js'}"
+
+        content = self._sftp_read(sftp, data_path)
+        articles_list = self._parse_js_array(content, "articlesIndex")
+
+        # 检查重复
+        if any(a.get("slug") == slug or str(a.get("id")) == slug for a in articles_list):
+            raise ValueError(f"slug '{slug}' 已存在于 articlesIndex 中")
+
+        new_id = max((a.get("id", 0) for a in articles_list if isinstance(a.get("id"), int)), default=0) + 1
+        category_name = self._get_category_name(article)
+        date_label, read_time = self._get_date_and_readtime(article)
+        created = article.created_at or datetime.utcnow()
+
+        # 索引条目
+        index_entry = {
+            "id": new_id,
+            "slug": slug,
+            "title": article.title,
+            "category": (category_name or "general").lower().replace(" & ", "-").replace(" ", "-"),
+            "categoryName": category_name,
+            "date": created.strftime("%Y-%m-%d"),
+            "image": image_paths["hero"] or article.featured_image or "",
+            "excerpt": article.excerpt or "",
+            "hasProducts": False,
+        }
+
+        articles_list.insert(0, index_entry)
+        new_content = self._rebuild_js_array(content, "articlesIndex", articles_list)
+        self._sftp_write(sftp, data_path, new_content)
+
+        # 生成 articles/{slug}.json 详情文件
+        articles_dir = f"{site_root}/articles"
+        self._ensure_dir(ssh, articles_dir)
+
+        content_html = article.content or ""
+        if image_paths["content"]:
+            content_html = self._insert_content_images(content_html, image_paths["content"])
+
+        detail_json = {
+            "id": new_id,
+            "slug": slug,
+            "title": article.title,
+            "category": index_entry["category"],
+            "categoryName": category_name,
+            "date": index_entry["date"],
+            "author": getattr(article, "author_name", None) or "Editorial Team",
+            "image": index_entry["image"],
+            "excerpt": article.excerpt or "",
+            "content": content_html,
+            "products": [],
+        }
+        json_path = f"{articles_dir}/{slug}.json"
+        self._sftp_write(sftp, json_path, json.dumps(detail_json, ensure_ascii=False, indent=2))
+
+        logger.info(f"[B1] 已写入 articlesIndex + articles/{slug}.json")
+        return {"site_article_slug": slug, "site_article_id": new_id}
+
+    def _publish_articles_inline_type(self, ssh, sftp, site, article, image_paths) -> dict:
+        """B2 类型: 操作 js/main.js 中内嵌的 const articles / const articlesData"""
+        site_root = site.site_path
+        slug = article.slug
+        var_name = site.article_var_name or "articles"
+        data_path = f"{site_root}/{site.data_js_path or 'js/main.js'}"
+
+        content = self._sftp_read(sftp, data_path)
+        articles_list = self._parse_js_array(content, var_name)
+
+        if any(a.get("slug") == slug for a in articles_list):
+            raise ValueError(f"slug '{slug}' 已存在于 {var_name} 中")
+
+        new_id = max((a.get("id", 0) for a in articles_list if isinstance(a.get("id"), int)), default=0) + 1
+        category_name = self._get_category_name(article)
+        date_label, read_time = self._get_date_and_readtime(article)
+        created = article.created_at or datetime.utcnow()
+
+        content_html = article.content or ""
+        if image_paths["content"]:
+            content_html = self._insert_content_images(content_html, image_paths["content"])
+
+        new_entry = {
+            "id": new_id,
+            "slug": slug,
+            "title": article.title,
+            "category": (category_name or "general").lower().replace(" & ", "-").replace(" ", "-"),
+            "date": created.strftime("%B %d, %Y"),
+            "image": image_paths["hero"] or article.featured_image or "",
+            "excerpt": article.excerpt or "",
+            "content": content_html,
+        }
+
+        articles_list.insert(0, new_entry)
+        new_content = self._rebuild_js_array(content, var_name, articles_list)
+        self._sftp_write(sftp, data_path, new_content)
+
+        logger.info(f"[B2] 已写入 {var_name} 内嵌数组")
+        return {"site_article_slug": slug, "site_article_id": new_id}
+
+    def _publish_articles_data_type(self, ssh, sftp, site, article, image_paths, site_type) -> dict:
+        """C 类型: 操作 articles-data.js (window.__ARTICLES__) 或 data.js (blogPosts)"""
+        site_root = site.site_path
+        slug = article.slug
+        category_name = self._get_category_name(article)
+        date_label, read_time = self._get_date_and_readtime(article)
+        created = article.created_at or datetime.utcnow()
+
+        content_html = article.content or ""
+        if image_paths["content"]:
+            content_html = self._insert_content_images(content_html, image_paths["content"])
+
+        if site_type == SITE_TYPE_ARTICLES_DATA_WINDOW:
+            # C1: window.__ARTICLES__ = [...]
+            data_path = f"{site_root}/articles-data.js"
+            raw = self._sftp_read(sftp, data_path)
+
+            # 解析 JSON 数组
+            match = re.search(r'window\.__ARTICLES__\s*=\s*(\[[\s\S]*\])', raw)
+            if not match:
+                raise ValueError("无法解析 articles-data.js 中的 window.__ARTICLES__")
+            arr = json.loads(match.group(1))
+
+            new_id = max((a.get("id", 0) for a in arr), default=0) + 1
+            new_entry = {
+                "id": new_id,
+                "title": article.title,
+                "category": (category_name or "general").lower(),
+                "categoryName": category_name,
+                "date": created.strftime("%Y-%m-%d"),
+                "author": getattr(article, "author_name", None) or "Editorial Team",
+                "image": image_paths["hero"] or article.featured_image or "",
+                "excerpt": article.excerpt or "",
+                "content": content_html,
+            }
+            arr.insert(0, new_entry)
+            new_raw = "window.__ARTICLES__ = " + json.dumps(arr, ensure_ascii=False, indent=2) + ";\n"
+            self._sftp_write(sftp, data_path, new_raw)
+            logger.info(f"[C1] 已写入 window.__ARTICLES__")
+            return {"site_article_slug": slug, "site_article_id": new_id}
+
+        else:
+            # C2: const blogPosts = [...]
+            data_path = f"{site_root}/data.js"
+            raw = self._sftp_read(sftp, data_path)
+            arr = self._parse_js_array(raw, "blogPosts")
+
+            new_id = max((a.get("id", 0) for a in arr if isinstance(a.get("id"), int)), default=0) + 1
+            new_entry = {
+                "id": new_id,
+                "slug": slug,
+                "title": article.title,
+                "category": (category_name or "general").lower(),
+                "date": created.strftime("%Y-%m-%d"),
+                "featured": False,
+                "excerpt": article.excerpt or "",
+                "image": image_paths["hero"] or article.featured_image or "",
+                "content": content_html,
+            }
+            arr.insert(0, new_entry)
+            new_raw = self._rebuild_js_array(raw, "blogPosts", arr)
+            self._sftp_write(sftp, data_path, new_raw)
+            logger.info(f"[C2] 已写入 blogPosts")
+            return {"site_article_slug": slug, "site_article_id": new_id}
+
     def unpublish_article(self, site, slug: str):
         """
-        从宝塔服务器移除文章：
-        1. 读取 main.js，移除对应 post
-        2. 写回 main.js
-        3. 删除文章 HTML 文件
+        从宝塔服务器移除文章（CR-037: 按 site_type 分发）
         """
         site_root = site.site_path
-        main_js_path = f"{site_root}/assets/js/main.js"
+        site_type = site.site_type
 
         ssh = self._connect()
         try:
             sftp = ssh.open_sftp()
 
-            # 1. 读取并移除
-            main_js_content = self._sftp_read(sftp, main_js_path)
-            posts = self._parse_posts(main_js_content)
-            posts = [p for p in posts if p.get("slug") != slug]
+            # 如果 site_type 为空，自动检测
+            if not site_type:
+                detected = self._detect_site_type_inner(sftp, site_root)
+                site_type = detected.get("site_type")
 
-            # 2. 写回
-            new_main_js = self._rebuild_main_js(main_js_content, posts)
-            self._sftp_write(sftp, main_js_path, new_main_js)
-
-            # 3. 删除 HTML
-            html_path = f"{site_root}/post-{slug}.html"
-            try:
-                sftp.remove(html_path)
-            except FileNotFoundError:
-                logger.warning(f"文章 HTML 不存在: {html_path}")
+            if site_type in (SITE_TYPE_POSTS_ASSETS_JS, SITE_TYPE_POSTS_ASSETS, SITE_TYPE_POSTS_SCRIPTS):
+                self._unpublish_posts_type(sftp, site, slug, site_type)
+            elif site_type == SITE_TYPE_ARTICLES_INDEX:
+                self._unpublish_articles_index_type(sftp, site, slug)
+            elif site_type == SITE_TYPE_ARTICLES_INLINE:
+                self._unpublish_articles_inline_type(sftp, site, slug)
+            elif site_type in (SITE_TYPE_ARTICLES_DATA_WINDOW, SITE_TYPE_BLOGPOSTS_DATA):
+                self._unpublish_articles_data_type(sftp, site, slug, site_type)
+            else:
+                logger.warning(f"未知 site_type={site_type}，尝试通用移除")
+                self._unpublish_generic(sftp, site_root, slug)
 
             sftp.close()
-            logger.info(f"文章已远程移除: slug={slug}, site={site.site_name}")
+            logger.info(f"文章已远程移除: slug={slug}, site={site.site_name}, type={site_type}")
         finally:
             ssh.close()
 
+    def _unpublish_posts_type(self, sftp, site, slug, site_type):
+        """A1/A2/D: 从 posts/POSTS 数组移除 + 删除 HTML"""
+        site_root = site.site_path
+        if site_type == SITE_TYPE_POSTS_ASSETS_JS:
+            data_path = f"{site_root}/assets/js/main.js"
+            var_name = "posts"
+        elif site_type == SITE_TYPE_POSTS_ASSETS:
+            data_path = f"{site_root}/assets/main.js"
+            var_name = "posts"
+        else:
+            data_path = f"{site_root}/scripts.js"
+            var_name = "POSTS"
+
+        content = self._sftp_read(sftp, data_path)
+        arr = self._parse_js_array(content, var_name)
+        arr = [p for p in arr if p.get("slug") != slug]
+        new_content = self._rebuild_js_array(content, var_name, arr)
+        self._sftp_write(sftp, data_path, new_content)
+
+        try:
+            sftp.remove(f"{site_root}/post-{slug}.html")
+        except FileNotFoundError:
+            logger.warning(f"文章 HTML 不存在: post-{slug}.html")
+
+    def _unpublish_articles_index_type(self, sftp, site, slug):
+        """B1: 从 articlesIndex 移除 + 删除 articles/{slug}.json"""
+        site_root = site.site_path
+        data_path = f"{site_root}/{site.data_js_path or 'js/articles-index.js'}"
+
+        content = self._sftp_read(sftp, data_path)
+        arr = self._parse_js_array(content, "articlesIndex")
+        arr = [a for a in arr if a.get("slug") != slug and str(a.get("id")) != slug]
+        new_content = self._rebuild_js_array(content, "articlesIndex", arr)
+        self._sftp_write(sftp, data_path, new_content)
+
+        try:
+            sftp.remove(f"{site_root}/articles/{slug}.json")
+        except FileNotFoundError:
+            logger.warning(f"文章 JSON 不存在: articles/{slug}.json")
+
+    def _unpublish_articles_inline_type(self, sftp, site, slug):
+        """B2: 从内嵌数组移除"""
+        site_root = site.site_path
+        var_name = site.article_var_name or "articles"
+        data_path = f"{site_root}/{site.data_js_path or 'js/main.js'}"
+
+        content = self._sftp_read(sftp, data_path)
+        arr = self._parse_js_array(content, var_name)
+        arr = [a for a in arr if a.get("slug") != slug]
+        new_content = self._rebuild_js_array(content, var_name, arr)
+        self._sftp_write(sftp, data_path, new_content)
+
+    def _unpublish_articles_data_type(self, sftp, site, slug, site_type):
+        """C: 从 window.__ARTICLES__ 或 blogPosts 移除"""
+        site_root = site.site_path
+
+        if site_type == SITE_TYPE_ARTICLES_DATA_WINDOW:
+            data_path = f"{site_root}/articles-data.js"
+            raw = self._sftp_read(sftp, data_path)
+            match = re.search(r'window\.__ARTICLES__\s*=\s*(\[[\s\S]*\])', raw)
+            if match:
+                arr = json.loads(match.group(1))
+                arr = [a for a in arr if a.get("title") != slug and str(a.get("id")) != slug]
+                new_raw = "window.__ARTICLES__ = " + json.dumps(arr, ensure_ascii=False, indent=2) + ";\n"
+                self._sftp_write(sftp, data_path, new_raw)
+        else:
+            data_path = f"{site_root}/data.js"
+            raw = self._sftp_read(sftp, data_path)
+            arr = self._parse_js_array(raw, "blogPosts")
+            arr = [a for a in arr if a.get("slug") != slug]
+            new_raw = self._rebuild_js_array(raw, "blogPosts", arr)
+            self._sftp_write(sftp, data_path, new_raw)
+
+    def _unpublish_generic(self, sftp, site_root, slug):
+        """通用移除: 尝试删除常见文件名"""
+        for pattern in [f"post-{slug}.html", f"article-{slug}.html"]:
+            try:
+                sftp.remove(f"{site_root}/{pattern}")
+                logger.info(f"已删除: {pattern}")
+            except FileNotFoundError:
+                pass
+
     def verify_connection(self, site_path: str) -> dict:
-        """验证 SSH 连接和网站目录"""
+        """验证 SSH 连接和网站目录，同时检测架构类型"""
         try:
             ssh = self._connect()
             sftp = ssh.open_sftp()
@@ -326,23 +708,31 @@ class RemotePublisher:
                 "site_dir_exists": False,
                 "main_js_exists": False,
                 "index_html_exists": False,
+                "site_type": None,
             }
             try:
                 sftp.stat(site_path)
                 checks["site_dir_exists"] = True
             except FileNotFoundError:
                 pass
-            try:
-                sftp.stat(f"{site_path}/assets/js/main.js")
-                checks["main_js_exists"] = True
-            except FileNotFoundError:
-                pass
+
+            # 检测架构类型
+            if checks["site_dir_exists"]:
+                detected = self._detect_site_type_inner(sftp, site_path)
+                checks["site_type"] = detected.get("site_type")
+                checks["data_js_path"] = detected.get("data_js_path")
+                checks["article_var_name"] = detected.get("article_var_name")
+                checks["article_html_pattern"] = detected.get("article_html_pattern")
+                # main_js_exists 根据检测到的数据文件判断
+                if detected.get("data_js_path"):
+                    checks["main_js_exists"] = True
+
             try:
                 sftp.stat(f"{site_path}/index.html")
                 checks["index_html_exists"] = True
             except FileNotFoundError:
                 pass
-            checks["valid"] = all(checks.values())
+            checks["valid"] = checks["ssh_connected"] and checks["site_dir_exists"] and checks["index_html_exists"]
             sftp.close()
             ssh.close()
             return checks
@@ -353,24 +743,69 @@ class RemotePublisher:
                 "valid": False,
             }
 
-    # ─── 内部方法 ───
+    # ─── 通用辅助方法 ───
 
-    def _parse_posts(self, main_js: str) -> list:
-        """解析 main.js 中的 const posts = [...] 数组
+    def _get_category_name(self, article) -> str:
+        if article.category and hasattr(article.category, "name"):
+            return article.category.name
+        return "General"
+
+    def _get_date_and_readtime(self, article):
+        created = article.created_at or datetime.utcnow()
+        date_label = created.strftime("%b %d, %Y")
+        word_count = len(article.content or "") // 5
+        read_time = max(3, word_count // 200)
+        return date_label, read_time
+
+    def _build_post_entry(self, article, new_id, image_paths, slug) -> dict:
+        """构建 A1/A2/D 类型的 post 条目"""
+        category_name = self._get_category_name(article)
+        date_label, read_time = self._get_date_and_readtime(article)
+        created = article.created_at or datetime.utcnow()
+
+        tags = []
+        if hasattr(article, "tags") and article.tags:
+            for at in article.tags:
+                if hasattr(at, "tag") and at.tag:
+                    tags.append(at.tag.name)
+        if not tags:
+            tags = [category_name.lower()]
+
+        return {
+            "id": new_id,
+            "slug": slug,
+            "title": article.title,
+            "category": category_name,
+            "dateISO": created.strftime("%Y-%m-%d"),
+            "dateLabel": date_label,
+            "readTime": f"{read_time} min read",
+            "excerpt": article.excerpt or "",
+            "heroImage": image_paths["hero"] or article.featured_image or "",
+            "tags": tags,
+            "primaryProduct": "",
+            "detailUrl": f"post-{slug}.html",
+        }
+
+    # ─── 通用 JS 数组解析/重建 ───
+
+    def _parse_js_array(self, js_content: str, var_name: str) -> list:
+        """解析 JS 中的 const/let/var {var_name} = [...] 数组。
         
-        使用正则逐字段提取，避免 JS->JSON 转换的兼容性问题。
+        支持 const posts, const POSTS, const articlesIndex, const articles,
+        const articlesData, const blogPosts 等。
         """
-        pattern = r'const\s+posts\s*=\s*\['
-        match = re.search(pattern, main_js)
+        # 匹配 const/let/var varName = [
+        pattern = rf'(?:const|let|var)\s+{re.escape(var_name)}\s*=\s*\['
+        match = re.search(pattern, js_content)
         if not match:
-            raise ValueError("无法在 main.js 中找到 const posts = [")
+            raise ValueError(f"无法在 JS 中找到 {var_name} = [")
 
-        start = match.end() - 1
+        start = match.end() - 1  # [ 的位置
         # 找到数组结束位置
         depth = 0
         i = start
-        while i < len(main_js):
-            ch = main_js[i]
+        while i < len(js_content):
+            ch = js_content[i]
             if ch == '[':
                 depth += 1
             elif ch == ']':
@@ -380,24 +815,79 @@ class RemotePublisher:
             elif ch in ('"', "'", '`'):
                 quote = ch
                 i += 1
-                while i < len(main_js) and main_js[i] != quote:
-                    if main_js[i] == '\\':
+                while i < len(js_content) and js_content[i] != quote:
+                    if js_content[i] == '\\':
                         i += 1
                     i += 1
             i += 1
 
-        array_str = main_js[start:i + 1]
+        array_str = js_content[start:i + 1]
 
         # 提取每个 { ... } 对象
-        posts = []
+        items = []
         obj_pattern = re.compile(r'\{([^{}]*(?:\{[^{}]*\}[^{}]*)*)\}', re.DOTALL)
         for obj_match in obj_pattern.finditer(array_str):
             obj_str = obj_match.group(1)
-            post = self._extract_post_fields(obj_str)
-            if post.get("slug") or post.get("title"):
-                posts.append(post)
+            item = self._extract_post_fields(obj_str)
+            if item.get("slug") or item.get("title") or item.get("id"):
+                items.append(item)
 
-        return posts
+        return items
+
+    def _rebuild_js_array(self, original: str, var_name: str, items: list) -> str:
+        """用新的数组重建 JS 文件，保留其余代码不变"""
+        pattern = rf'(?:const|let|var)\s+{re.escape(var_name)}\s*=\s*\['
+        match = re.search(pattern, original)
+        if not match:
+            raise ValueError(f"无法在 JS 中找到 {var_name} = [")
+
+        decl_start = match.start()
+        bracket_start = match.end() - 1
+        depth = 0
+        i = bracket_start
+        while i < len(original):
+            ch = original[i]
+            if ch == '[':
+                depth += 1
+            elif ch == ']':
+                depth -= 1
+                if depth == 0:
+                    break
+            elif ch in ('"', "'", '`'):
+                quote = ch
+                i += 1
+                while i < len(original) and original[i] != quote:
+                    if original[i] == '\\':
+                        i += 1
+                    i += 1
+            i += 1
+        end = i + 1
+
+        # 跳过分号
+        if end < len(original) and original[end] == ';':
+            end += 1
+
+        # 生成新的 JS 代码
+        items_js = self._items_to_js(var_name, items)
+        return original[:decl_start] + items_js + original[end:]
+
+    def _items_to_js(self, var_name: str, items: list) -> str:
+        """将数组转为 JS 格式代码"""
+        lines = [f"const {var_name} = ["]
+        for item in items:
+            lines.append("  {")
+            for key, value in item.items():
+                if isinstance(value, int):
+                    lines.append(f"    {key}: {value},")
+                elif isinstance(value, bool):
+                    lines.append(f"    {key}: {'true' if value else 'false'},")
+                elif isinstance(value, list):
+                    lines.append(f"    {key}: {json.dumps(value, ensure_ascii=False)},")
+                else:
+                    lines.append(f"    {key}: '{self._js_escape(str(value))}',")
+            lines.append("  },")
+        lines.append("];")
+        return "\n".join(lines)
 
     def _extract_post_fields(self, obj_str: str) -> dict:
         """从 JS 对象字符串中提取字段值"""
@@ -452,69 +942,6 @@ class RemotePublisher:
             post["tags"] = []
 
         return post
-
-    def _rebuild_main_js(self, original: str, posts: list) -> str:
-        """用新的 posts 数组重建 main.js，保留其余代码不变"""
-        # 找到原始 posts 数组的位置
-        pattern = r'const\s+posts\s*=\s*\['
-        match = re.search(pattern, original)
-        if not match:
-            raise ValueError("无法在 main.js 中找到 const posts = [")
-
-        start = match.start()
-        # 找到数组结束位置
-        bracket_start = match.end() - 1
-        depth = 0
-        i = bracket_start
-        while i < len(original):
-            ch = original[i]
-            if ch == '[':
-                depth += 1
-            elif ch == ']':
-                depth -= 1
-                if depth == 0:
-                    break
-            elif ch in ('"', "'", '`'):
-                quote = ch
-                i += 1
-                while i < len(original) and original[i] != quote:
-                    if original[i] == '\\':
-                        i += 1
-                    i += 1
-            i += 1
-        end = i + 1  # ] 后面的位置
-
-        # 跳过分号
-        if end < len(original) and original[end] == ';':
-            end += 1
-
-        # 生成新的 posts JS 代码
-        posts_js = self._posts_to_js(posts)
-        new_content = original[:start] + posts_js + original[end:]
-        return new_content
-
-    def _posts_to_js(self, posts: list) -> str:
-        """将 posts 列表转为 JS 格式代码"""
-        lines = ["const posts = ["]
-        for p in posts:
-            lines.append("  {")
-            lines.append(f"    id: {p['id']},")
-            lines.append(f"    slug: '{self._js_escape(p.get('slug', ''))}',")
-            lines.append(f"    title: '{self._js_escape(p.get('title', ''))}',")
-            lines.append(f"    category: '{self._js_escape(p.get('category', ''))}',")
-            lines.append(f"    dateISO: '{p.get('dateISO', '')}',")
-            lines.append(f"    dateLabel: '{self._js_escape(p.get('dateLabel', ''))}',")
-            lines.append(f"    readTime: '{self._js_escape(p.get('readTime', ''))}',")
-            # excerpt 可能很长，用模板字符串
-            lines.append(f"    excerpt: '{self._js_escape(p.get('excerpt', ''))}',")
-            lines.append(f"    heroImage: '{self._js_escape(p.get('heroImage', ''))}',")
-            tags_str = json.dumps(p.get("tags", []), ensure_ascii=False)
-            lines.append(f"    tags: {tags_str},")
-            lines.append(f"    primaryProduct: '{self._js_escape(p.get('primaryProduct', ''))}',")
-            lines.append(f"    detailUrl: '{self._js_escape(p.get('detailUrl', ''))}',")
-            lines.append("  },")
-        lines.append("];")
-        return "\n".join(lines)
 
     def _js_escape(self, s: str) -> str:
         """转义 JS 单引号字符串中的特殊字符"""

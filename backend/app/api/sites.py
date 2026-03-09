@@ -48,7 +48,10 @@ def _site_to_dict(site: PubSite, db: Session) -> dict:
         "site_name": site.site_name,
         "site_path": site.site_path,
         "domain": site.domain,
+        "site_type": site.site_type,
         "data_js_path": site.data_js_path,
+        "article_var_name": site.article_var_name,
+        "article_html_pattern": site.article_html_pattern,
         "article_template": site.article_template,
         "migrated": site.migrated,
         "created_by": site.created_by,
@@ -89,12 +92,23 @@ async def create_site(
     site_path = f"{bt_root}/{domain_clean}"
 
     # 验证远程连接和目录
+    detected_type = None
+    detected_data_js = None
+    detected_var_name = None
+    detected_html_pattern = None
     try:
         checks = remote_publisher.verify_connection(site_path)
         if not checks.get("ssh_connected"):
             raise HTTPException(status_code=500, detail=f"无法连接宝塔服务器: {checks.get('error', '未知错误')}")
         if not checks.get("site_dir_exists"):
             logger.warning(f"宝塔服务器上目录不存在: {site_path}，请先在宝塔面板创建网站")
+        # CR-037: 自动检测网站架构类型
+        detected_type = checks.get("site_type")
+        detected_data_js = checks.get("data_js_path")
+        detected_var_name = checks.get("article_var_name")
+        detected_html_pattern = checks.get("article_html_pattern")
+        if detected_type:
+            logger.info(f"自动检测 {domain_clean} 架构类型: {detected_type}")
     except HTTPException:
         raise
     except Exception as e:
@@ -107,7 +121,10 @@ async def create_site(
         site_name=data.site_name.strip(),
         site_path=site_path,
         domain=domain_clean,
-        data_js_path=data.data_js_path,
+        site_type=detected_type,
+        data_js_path=detected_data_js or data.data_js_path,
+        article_var_name=detected_var_name,
+        article_html_pattern=detected_html_pattern,
         article_template=data.article_template,
         created_by=current_user.id,
         migrated=True,  # 宝塔方案不需要迁移
@@ -171,4 +188,15 @@ async def verify_site(
         raise HTTPException(status_code=404, detail="网站不存在")
 
     checks = remote_publisher.verify_connection(site.site_path)
+
+    # CR-037: 如果检测到架构类型，自动更新
+    detected_type = checks.get("site_type")
+    if detected_type and detected_type != site.site_type:
+        site.site_type = detected_type
+        site.data_js_path = checks.get("data_js_path") or site.data_js_path
+        site.article_var_name = checks.get("article_var_name")
+        site.article_html_pattern = checks.get("article_html_pattern")
+        db.commit()
+        logger.info(f"已更新 {site.domain} 架构类型: {detected_type}")
+
     return {"site_id": site_id, "site_name": site.site_name, "checks": checks}
