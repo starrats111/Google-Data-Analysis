@@ -73,6 +73,34 @@ class RemotePublisher:
         _, stdout, stderr = ssh.exec_command(f"mkdir -p {path}")
         stdout.channel.recv_exit_status()  # 阻塞等待命令完成
 
+    def _bust_cache(self, sftp: paramiko.SFTPClient, site_root: str, site):
+        """更新 HTML 文件中的 JS 缓存参数（?v=timestamp），强制 CDN 加载最新版本"""
+        import time as _time
+        ts = str(int(_time.time()))
+        data_js = site.data_js_path or "js/articles-index.js"
+        js_basename = data_js.rsplit("/", 1)[-1]
+        cache_re = re.compile(re.escape(js_basename) + r"\?v=\d+")
+
+        for html_name in ("article.html", "articles.html", "index.html", "category.html"):
+            html_path = f"{site_root}/{html_name}"
+            try:
+                content = self._sftp_read(sftp, html_path)
+            except Exception:
+                continue
+            if js_basename not in content:
+                continue
+            if cache_re.search(content):
+                new_content = cache_re.sub(f"{js_basename}?v={ts}", content)
+            else:
+                new_content = content.replace(
+                    f'{js_basename}"', f'{js_basename}?v={ts}"'
+                ).replace(
+                    f"{js_basename}'", f"{js_basename}?v={ts}'"
+                )
+            if new_content != content:
+                self._sftp_write(sftp, html_path, new_content)
+                logger.info(f"[Cache] 已更新 {html_name} 缓存参数: v={ts}")
+
     # ─── CR-037: 网站架构自动检测 ───
 
     def _remote_file_exists(self, sftp: paramiko.SFTPClient, path: str) -> bool:
@@ -474,6 +502,9 @@ class RemotePublisher:
             else:
                 raise ValueError(f"不支持的网站架构类型: {site_type}")
 
+            # 更新 HTML 文件的缓存参数，强制 CDN/浏览器加载最新数据
+            self._bust_cache(sftp, site_root, site)
+
             sftp.close()
             logger.info(f"文章已远程发布: slug={slug}, site={site.site_name}, type={site_type}, "
                         f"images: hero={'yes' if image_paths['hero'] else 'no'}, "
@@ -541,7 +572,7 @@ class RemotePublisher:
         return {"site_article_slug": slug, "site_article_id": new_id}
 
     def _publish_articles_index_type(self, ssh, sftp, site, article, image_paths) -> dict:
-        """B1 类型: 操作 articlesIndex 数组 + 生成 articles/{slug}.json"""
+        """B1 类型: 操作 articlesIndex 数组 + 生成 js/articles/{id}.json"""
         site_root = site.site_path
         slug = article.slug
         data_path = f"{site_root}/{site.data_js_path or 'js/articles-index.js'}"
@@ -553,12 +584,27 @@ class RemotePublisher:
         if any(a.get("slug") == slug or str(a.get("id")) == slug for a in articles_list):
             raise ValueError(f"slug '{slug}' 已存在于 articlesIndex 中")
 
-        new_id = max((a.get("id", 0) for a in articles_list if isinstance(a.get("id"), int)), default=0) + 1
+        # 计算新 ID：取 articlesIndex 和已有 JSON 文件中的最大 ID + 1
+        max_index_id = max((a.get("id", 0) for a in articles_list if isinstance(a.get("id"), int)), default=0)
+        max_json_id = 0
+        js_articles_dir = f"{site_root}/js/articles"
+        if self._remote_dir_exists(sftp, js_articles_dir):
+            try:
+                for fname in sftp.listdir(js_articles_dir):
+                    if fname.endswith('.json'):
+                        try:
+                            fid = int(fname.replace('.json', ''))
+                            max_json_id = max(max_json_id, fid)
+                        except ValueError:
+                            pass
+            except Exception:
+                pass
+        new_id = max(max_index_id, max_json_id) + 1
+
         category_name = self._get_category_name(article)
         date_label, read_time = self._get_date_and_readtime(article)
         created = article.created_at or datetime.utcnow()
 
-        # 索引条目
         index_entry = {
             "id": new_id,
             "slug": slug,
@@ -575,16 +621,14 @@ class RemotePublisher:
         new_content = self._rebuild_js_array(content, "articlesIndex", articles_list)
         self._sftp_write(sftp, data_path, new_content)
 
-        # 生成 JSON 详情文件
-        # 检测实际 JSON 目录：优先 js/articles/（大部分 SPA 站点），fallback articles/
-        js_articles_dir = f"{site_root}/js/articles"
+        # 生成 JSON 详情文件（始终使用 js/articles/{id}.json）
         articles_dir = f"{site_root}/articles"
-        if self._remote_dir_exists(sftp, js_articles_dir):
-            target_dir = js_articles_dir
-            json_path = f"{js_articles_dir}/{new_id}.json"
-        else:
+        if not self._remote_dir_exists(sftp, js_articles_dir):
             target_dir = articles_dir
             json_path = f"{articles_dir}/{slug}.json"
+        else:
+            target_dir = js_articles_dir
+            json_path = f"{js_articles_dir}/{new_id}.json"
         self._ensure_dir(ssh, target_dir)
 
         content_html = article.content or ""
