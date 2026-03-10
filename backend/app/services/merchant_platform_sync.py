@@ -60,7 +60,7 @@ PLATFORM_API_CONFIG: Dict[str, dict] = {
         "source": "partnermatic",
         "page_key": "curPage",
         "size_key": "perPage",
-        "max_size": 2000,
+        "max_size": 500,
     },
     "LB": {
         "mode": "get",
@@ -68,6 +68,7 @@ PLATFORM_API_CONFIG: Dict[str, dict] = {
         "page_key": "page",
         "size_key": "limit",
         "max_size": 1000,
+        "extra_params": {"type": "json"},
     },
     "LH": {
         "mode": "get_post",

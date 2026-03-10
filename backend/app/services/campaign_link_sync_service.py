@@ -252,6 +252,9 @@ class CampaignLinkSyncService:
             # LH 不支持 relationship 过滤
             if not cfg.get("skip_relationship_filter"):
                 params["relationship"] = relationship
+            # 额外参数（如 LB 的 type=json）
+            if cfg.get("extra_params"):
+                params.update(cfg["extra_params"])
             resp = httpx.get(url, params=params, timeout=_TIMEOUT)
         else:
             raise ValueError(f"Unknown mode: {mode}")
@@ -261,8 +264,8 @@ class CampaignLinkSyncService:
 
     @staticmethod
     def _extract_mid(raw: dict, platform_code: str) -> Optional[str]:
-        """从原始数据中提取 MID。"""
-        for key in ("mid", "brand_id", "brandId", "mcid", "id"):
+        """从原始数据中提取 MID。优先 brand_id（CG/PM/BSH 推荐），回退 mid/mcid/id。"""
+        for key in ("brand_id", "brandId", "mid", "mcid", "id"):
             val = raw.get(key)
             if val is not None and str(val).strip():
                 return str(val).strip()
