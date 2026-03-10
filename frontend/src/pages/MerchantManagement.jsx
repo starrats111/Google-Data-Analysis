@@ -28,6 +28,37 @@ import api from '../services/api'
 import { useAuth } from '../store/authStore'
 import dayjs from 'dayjs'
 
+/* ── 类别英→中映射 ── */
+const CATEGORY_CN = {
+  'fashion': '时尚', 'beauty': '美妆', 'health': '健康', 'health & wellness': '健康养生',
+  'tech': '科技', 'technology': '科技', 'home': '家居', 'home & garden': '家居园艺',
+  'food & beverage': '食品饮料', 'food & drink': '食品饮料', 'travel': '旅行',
+  'pets': '宠物', 'sports': '运动', 'sports & fitness & outdoors': '运动健身户外',
+  'fitness': '健身', 'outdoors': '户外', 'other': '其他', 'others': '其他',
+  'clothing & accessories': '服饰配件', 'shoes': '鞋类', 'apparel': '服装',
+  'computers & electronics': '电脑电子', 'software': '软件',
+  'internet services': '互联网服务', 'online services & software': '在线服务与软件',
+  'finance & insurance & legal services': '金融保险法律',
+  'gifts & flowers': '礼品鲜花', 'art & entertainment': '艺术娱乐',
+  'toys & kids': '玩具母婴', 'education': '教育', 'automotive': '汽车',
+  'jewelry & watches': '珠宝手表', 'books & media': '图书媒体',
+}
+
+function translateCategory(raw) {
+  if (!raw) return '-'
+  // 清理引号和 "A>A" 冗余格式
+  let cleaned = raw.replace(/^"|"$/g, '')
+  if (cleaned.includes('>')) {
+    const parts = cleaned.split('>')
+    cleaned = [...new Set(parts.map(p => p.trim()))].join(' / ')
+  }
+  // 逐段翻译
+  const segments = cleaned.split(/\s*[/&,]\s*/).filter(Boolean)
+  const translated = segments.map(s => CATEGORY_CN[s.toLowerCase()] || s)
+  // 去重
+  return [...new Set(translated)].join(' / ') || '-'
+}
+
 const { Option } = Select
 const { RangePicker } = DatePicker
 
@@ -652,7 +683,7 @@ const MerchantManagement = () => {
       dataIndex: 'category',
       key: 'category',
       width: 100,
-      render: (val) => val || '-',
+      render: (val) => <Tooltip title={val}>{translateCategory(val)}</Tooltip>,
     },
     {
       title: '当前负责人',
@@ -1523,7 +1554,7 @@ const MerchantManagement = () => {
                     {d.cache_found && <Tag color="green" style={{ fontSize: 10 }}>缓存</Tag>}
                   </div>
                   {d.site_url && <div style={{ fontSize: 12, color: '#666' }}>网址: <a href={d.site_url} target="_blank" rel="noreferrer">{d.site_url}</a></div>}
-                  {d.categories && <div style={{ fontSize: 12, color: '#666' }}>品类: {d.categories}</div>}
+                  {d.categories && <div style={{ fontSize: 12, color: '#666' }}>品类: {translateCategory(d.categories)}</div>}
                   {d.commission_rate && <div style={{ fontSize: 12, color: '#666' }}>佣金率: {d.commission_rate}</div>}
                   {d.support_regions?.length > 0 && (
                     <div style={{ fontSize: 12, color: '#666' }}>区域: {d.support_regions.map(r => r.code || r).join(', ')}</div>

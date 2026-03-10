@@ -457,7 +457,7 @@ class MerchantService:
             .outerjoin(
                 AffiliateTransaction,
                 and_(
-                    AffiliateTransaction.platform == AffiliateMerchant.platform,
+                    func.lower(AffiliateTransaction.platform) == func.lower(AffiliateMerchant.platform),
                     AffiliateTransaction.merchant_id == AffiliateMerchant.merchant_id,
                     AffiliateTransaction.transaction_time >= range_start,
                     AffiliateTransaction.transaction_time <= range_end,
@@ -1464,7 +1464,7 @@ class MerchantService:
                     AffiliateTransaction.commission_amount,
                 )
                 .filter(
-                    AffiliateTransaction.platform == m.platform,
+                    func.lower(AffiliateTransaction.platform) == func.lower(m.platform),
                     AffiliateTransaction.merchant_id == m.merchant_id,
                     AffiliateTransaction.transaction_time >= range_start,
                     AffiliateTransaction.transaction_time <= range_end,
@@ -1515,7 +1515,7 @@ class MerchantService:
                 AffiliateTransaction.transaction_id,
             )
             .filter(
-                AffiliateTransaction.platform == m.platform,
+                func.lower(AffiliateTransaction.platform) == func.lower(m.platform),
                 AffiliateTransaction.merchant_id == m.merchant_id,
                 AffiliateTransaction.transaction_time >= range_start,
                 AffiliateTransaction.transaction_time <= range_end,
