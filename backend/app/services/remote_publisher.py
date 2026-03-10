@@ -731,6 +731,30 @@ class RemotePublisher:
             except Exception as e:
                 logger.warning(f"[B1] 同步 {script_name} 失败: {e}")
 
+        # ── 防止 articles-index.js 与 script.js 变量冲突 ──
+        # 重新读取写入后的 articles-index.js，确保没有重复声明 script.js 中的变量
+        try:
+            final_idx = self._sftp_read(sftp, data_path)
+            needs_rewrite = False
+            for conflict_var in ["articlesData", "blogPosts"]:
+                # 检查 script.js 是否声明了此变量
+                script_path = f"{site_root}/script.js"
+                if self._remote_file_exists(sftp, script_path):
+                    script_content = self._sftp_read(sftp, script_path)
+                    if f"const {conflict_var}" in script_content or f"let {conflict_var}" in script_content:
+                        # articles-index.js 不能再声明同名变量
+                        if f"const {conflict_var}" in final_idx:
+                            final_idx = final_idx.replace(f"const {conflict_var}", f"// const {conflict_var}")
+                            needs_rewrite = True
+                        if f"let {conflict_var}" in final_idx:
+                            final_idx = final_idx.replace(f"let {conflict_var}", f"// let {conflict_var}")
+                            needs_rewrite = True
+            if needs_rewrite:
+                self._sftp_write(sftp, data_path, final_idx)
+                logger.info("[B1] 已修复 articles-index.js 变量冲突")
+        except Exception as e:
+            logger.warning(f"[B1] 变量冲突检查失败: {e}")
+
         return {"site_article_slug": slug, "site_article_id": new_id}
 
     def _publish_articles_inline_type(self, ssh, sftp, site, article, image_paths) -> dict:
