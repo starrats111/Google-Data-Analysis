@@ -397,17 +397,36 @@ async def publish_to_site(
     try:
         result = remote_publisher.publish_article(site, article)
     except Exception as e:
-        logger.error(f"远程发布失败: {e}")
+        import traceback
+        logger.error(f"远程发布失败: {e}\n{traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=f"远程发布失败: {str(e)}")
 
     article.site_id = site.id
     article.site_article_slug = result["site_article_slug"]
     article.published_to_site = True
+
+    # 若首次发布时自动检测到了架构，将配置保存到 PubSite
+    detected = result.get("detected_config")
+    if detected and not site.site_type:
+        site.site_type = detected.get("site_type") or site.site_type
+        site.data_js_path = detected.get("data_js_path") or site.data_js_path
+        site.article_var_name = detected.get("article_var_name") or site.article_var_name
+        site.article_html_pattern = detected.get("article_html_pattern") or site.article_html_pattern
+
     db.commit()
 
     logger.info(f"文章已发布到网站: slug={article.slug}, site={site.site_name}, domain={site.domain}")
 
-    article_url = f"https://{site.domain}/post-{article.slug}.html" if site.domain else ""
+    # 根据站点的 article_html_pattern 构造正确的文章 URL
+    article_url = ""
+    if site.domain:
+        pattern = result.get("article_html_pattern") or site.article_html_pattern
+        if pattern and "{slug}" in pattern:
+            url_path = pattern.replace("{slug}", article.slug)
+            article_url = f"https://{site.domain}/{url_path}"
+        else:
+            article_url = f"https://{site.domain}/post-{article.slug}.html"
+
     return {
         "message": "文章已发布到网站",
         "site_name": site.site_name,

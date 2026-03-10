@@ -83,6 +83,15 @@ class RemotePublisher:
         except FileNotFoundError:
             return False
 
+    def _remote_dir_exists(self, sftp: paramiko.SFTPClient, path: str) -> bool:
+        """检查远程目录是否存在"""
+        try:
+            import stat
+            st = sftp.stat(path)
+            return stat.S_ISDIR(st.st_mode)
+        except (FileNotFoundError, IOError):
+            return False
+
     def _remote_file_contains(self, sftp: paramiko.SFTPClient, path: str, keyword: str) -> bool:
         """检查远程文件是否包含指定关键词"""
         try:
@@ -127,17 +136,73 @@ class RemotePublisher:
                 "article_html_pattern": "post-{slug}.html",
             }
 
-        # B1: js/articles-index.js + articlesIndex
+        # ── SPA 站点检测：article.html + JS 数据文件 ──
+        has_article_html = self._remote_file_exists(sftp, f"{site_root}/article.html")
+        has_articles_json_dir = self._remote_dir_exists(sftp, f"{site_root}/js/articles")
+
+        # 检测 article.html 中的 URL 参数（?title= / ?slug= / ?id=）
+        article_url_param = "title"  # 默认
+        if has_article_html:
+            try:
+                main_js_path = f"{site_root}/js/main.js"
+                if self._remote_file_exists(sftp, main_js_path):
+                    main_content = self._sftp_read(sftp, main_js_path)
+                    # 检测 URL 参数: urlParams.get('title') / get('slug') / get('id')
+                    import re as _re
+                    param_match = _re.search(
+                        r"(?:urlParams|searchParams)\.get\(['\"](\w+)['\"]\).*?(?:article|Article|find|slug|title)",
+                        main_content, _re.DOTALL
+                    )
+                    if not param_match:
+                        # 更宽松的匹配
+                        for candidate in ("slug", "title", "id"):
+                            if f"get('{candidate}')" in main_content or f'get("{candidate}")' in main_content:
+                                # 确认这个参数用于文章详情
+                                idx = main_content.find(f"get('{candidate}')")
+                                if idx < 0:
+                                    idx = main_content.find(f'get("{candidate}")')
+                                context = main_content[max(0, idx-200):idx+200].lower()
+                                if "article" in context or "detail" in context or "slug" in context:
+                                    article_url_param = candidate
+                                    break
+                    else:
+                        article_url_param = param_match.group(1)
+            except Exception:
+                pass
+
+        # B1-SPA: js/articles-index.js + articlesIndex (+ article.html SPA)
         p = f"{site_root}/js/articles-index.js"
         if self._remote_file_exists(sftp, p) and self._remote_file_contains(sftp, p, "articlesIndex"):
+            pattern = f"article.html?{article_url_param}={{slug}}" if has_article_html else "article-{slug}.html"
             return {
                 "site_type": SITE_TYPE_ARTICLES_INDEX,
                 "data_js_path": "js/articles-index.js",
                 "article_var_name": "articlesIndex",
-                "article_html_pattern": "article-{slug}.html",
+                "article_html_pattern": pattern,
+                "has_json_dir": has_articles_json_dir,
+                "url_param": article_url_param,
             }
 
-        # B2: js/main.js + const articles / const articlesData (内嵌)
+        # B2-SPA: js/data.js + const articles (独立数据文件，优先于 main.js)
+        p = f"{site_root}/js/data.js"
+        if self._remote_file_exists(sftp, p):
+            content = ""
+            try:
+                content = self._sftp_read(sftp, p)
+            except Exception:
+                pass
+            if "const articles " in content or "const articles=" in content:
+                pattern = f"article.html?{article_url_param}={{slug}}" if has_article_html else "article-{slug}.html"
+                return {
+                    "site_type": SITE_TYPE_ARTICLES_INLINE,
+                    "data_js_path": "js/data.js",
+                    "article_var_name": "articles",
+                    "article_html_pattern": pattern,
+                    "has_json_dir": has_articles_json_dir,
+                    "url_param": article_url_param,
+                }
+
+        # B2-fallback: js/main.js + const articles (内嵌在 main.js 中)
         p = f"{site_root}/js/main.js"
         if self._remote_file_exists(sftp, p):
             content = ""
@@ -146,18 +211,24 @@ class RemotePublisher:
             except Exception:
                 pass
             if "const articles " in content or "const articles=" in content:
+                pattern = f"article.html?{article_url_param}={{slug}}" if has_article_html else "article-{slug}.html"
                 return {
                     "site_type": SITE_TYPE_ARTICLES_INLINE,
                     "data_js_path": "js/main.js",
                     "article_var_name": "articles",
-                    "article_html_pattern": "article-{slug}.html",
+                    "article_html_pattern": pattern,
+                    "has_json_dir": has_articles_json_dir,
+                    "url_param": article_url_param,
                 }
             if "const articlesData " in content or "const articlesData=" in content:
+                pattern = f"article.html?{article_url_param}={{slug}}" if has_article_html else "article-{slug}.html"
                 return {
                     "site_type": SITE_TYPE_ARTICLES_INLINE,
                     "data_js_path": "js/main.js",
                     "article_var_name": "articlesData",
-                    "article_html_pattern": "article-{slug}.html",
+                    "article_html_pattern": pattern,
+                    "has_json_dir": has_articles_json_dir,
+                    "url_param": article_url_param,
                 }
 
         # C1: articles-data.js + window.__ARTICLES__
@@ -341,10 +412,11 @@ class RemotePublisher:
         try:
             sftp = ssh.open_sftp()
 
-            # 如果 site_type 为空，先自动检测
+            # 如果 site_type 为空，先自动检测并保存
+            detected_config = None
             if not site_type:
-                detected = self._detect_site_type_inner(sftp, site_root)
-                site_type = detected.get("site_type")
+                detected_config = self._detect_site_type_inner(sftp, site_root)
+                site_type = detected_config.get("site_type")
                 logger.info(f"[发布] 自动检测 {site.domain} 架构: {site_type}")
                 if not site_type:
                     raise ValueError(f"无法识别网站 {site.domain} 的文章架构，请检查网站目录结构")
@@ -406,6 +478,16 @@ class RemotePublisher:
             logger.info(f"文章已远程发布: slug={slug}, site={site.site_name}, type={site_type}, "
                         f"images: hero={'yes' if image_paths['hero'] else 'no'}, "
                         f"content={len(image_paths['content'])}")
+
+            # 附带 article_html_pattern 供调用者构造正确 URL
+            pattern = site.article_html_pattern
+            if not pattern and detected_config:
+                pattern = detected_config.get("article_html_pattern")
+            if pattern:
+                result["article_html_pattern"] = pattern
+            if detected_config:
+                result["detected_config"] = detected_config
+
             return result
         finally:
             ssh.close()
@@ -493,9 +575,17 @@ class RemotePublisher:
         new_content = self._rebuild_js_array(content, "articlesIndex", articles_list)
         self._sftp_write(sftp, data_path, new_content)
 
-        # 生成 articles/{slug}.json 详情文件
+        # 生成 JSON 详情文件
+        # 检测实际 JSON 目录：优先 js/articles/（大部分 SPA 站点），fallback articles/
+        js_articles_dir = f"{site_root}/js/articles"
         articles_dir = f"{site_root}/articles"
-        self._ensure_dir(ssh, articles_dir)
+        if self._remote_dir_exists(sftp, js_articles_dir):
+            target_dir = js_articles_dir
+            json_path = f"{js_articles_dir}/{new_id}.json"
+        else:
+            target_dir = articles_dir
+            json_path = f"{articles_dir}/{slug}.json"
+        self._ensure_dir(ssh, target_dir)
 
         content_html = article.content or ""
         if image_paths["content"]:
@@ -514,10 +604,10 @@ class RemotePublisher:
             "content": content_html,
             "products": [],
         }
-        json_path = f"{articles_dir}/{slug}.json"
-        self._sftp_write(sftp, json_path, json.dumps(detail_json, ensure_ascii=False, indent=2))
+        json_path_final = json_path  # 使用上面检测到的正确路径
+        self._sftp_write(sftp, json_path_final, json.dumps(detail_json, ensure_ascii=False, indent=2))
 
-        logger.info(f"[B1] 已写入 articlesIndex + articles/{slug}.json")
+        logger.info(f"[B1] 已写入 articlesIndex + {json_path_final}")
         return {"site_article_slug": slug, "site_article_id": new_id}
 
     def _publish_articles_inline_type(self, ssh, sftp, site, article, image_paths) -> dict:
@@ -686,7 +776,7 @@ class RemotePublisher:
             logger.warning(f"文章 HTML 不存在: post-{slug}.html")
 
     def _unpublish_articles_index_type(self, sftp, site, slug):
-        """B1: 从 articlesIndex 移除 + 删除 articles/{slug}.json"""
+        """B1: 从 articlesIndex 移除 + 删除 JSON 详情文件"""
         site_root = site.site_path
         data_path = f"{site_root}/{site.data_js_path or 'js/articles-index.js'}"
 
@@ -697,9 +787,22 @@ class RemotePublisher:
         self._sftp_write(sftp, data_path, new_content)
 
         try:
+            sftp.remove(f"{site_root}/js/articles/{slug}.json")
+        except FileNotFoundError:
+            pass
+        # Also try by finding the article ID from the removed entry
+        removed = [a for a in self._parse_js_array(content, "articlesIndex") if a.get("slug") == slug]
+        if removed:
+            aid = removed[0].get("id")
+            if aid:
+                try:
+                    sftp.remove(f"{site_root}/js/articles/{aid}.json")
+                except FileNotFoundError:
+                    pass
+        try:
             sftp.remove(f"{site_root}/articles/{slug}.json")
         except FileNotFoundError:
-            logger.warning(f"文章 JSON 不存在: articles/{slug}.json")
+            logger.debug(f"文章 JSON 不存在: articles/{slug}.json")
 
     def _unpublish_articles_inline_type(self, sftp, site, slug):
         """B2: 从内嵌数组移除"""
@@ -955,10 +1058,10 @@ class RemotePublisher:
         for item in items:
             lines.append("  {")
             for key, value in item.items():
-                if isinstance(value, int):
-                    lines.append(f"    {key}: {value},")
-                elif isinstance(value, bool):
+                if isinstance(value, bool):
                     lines.append(f"    {key}: {'true' if value else 'false'},")
+                elif isinstance(value, int):
+                    lines.append(f"    {key}: {value},")
                 elif isinstance(value, list):
                     lines.append(f"    {key}: {json.dumps(value, ensure_ascii=False)},")
                 else:
