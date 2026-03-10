@@ -240,8 +240,9 @@ class CampaignLinkSyncService:
                 "token": token,
                 page_key: str(page),
                 size_key: str(per_page),
-                "relationship": relationship,
             }
+            if not cfg.get("skip_relationship_filter"):
+                form_data["relationship"] = relationship
             resp = httpx.post(url, data=form_data, timeout=_TIMEOUT)
         elif mode in ("get", "get_post"):
             params = {

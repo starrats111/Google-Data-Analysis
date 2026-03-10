@@ -36,7 +36,7 @@ PLATFORM_API_CONFIG: Dict[str, dict] = {
         "source": "creatorflare",
         "page_key": "curPage",
         "size_key": "perPage",
-        "max_size": 2000,
+        "max_size": 500,
     },
     "CG": {
         "mode": "post_json",
@@ -71,7 +71,7 @@ PLATFORM_API_CONFIG: Dict[str, dict] = {
         "extra_params": {"type": "json"},
     },
     "LH": {
-        "mode": "get_post",
+        "mode": "post_form",
         "url": "https://www.linkhaitao.com/api.php?mod=medium&op=merchantBasicList3",
         "page_key": "page",
         "size_key": "per_page",
@@ -341,18 +341,35 @@ class MerchantPlatformSyncService:
 
         result: List[dict] = []
         page = 1
+        max_retries = 3
+        consecutive_empty = 0
 
         while True:
-            try:
-                data = self._api_call(mode, url, platform_code, token, relationship, page, max_size, page_key, size_key, cfg)
-            except Exception as exc:
-                logger.warning("API call %s page %d failed: %s", platform_code, page, exc)
+            items = None
+            for attempt in range(1, max_retries + 1):
+                try:
+                    data = self._api_call(mode, url, platform_code, token, relationship, page, max_size, page_key, size_key, cfg)
+                    items = self._extract_items(data)
+                    break
+                except Exception as exc:
+                    logger.warning("[MerchantSync] %s page %d attempt %d/%d failed: %s",
+                                   platform_code, page, attempt, max_retries, exc)
+                    if attempt < max_retries:
+                        time.sleep(2 * attempt)
+
+            if items is None:
+                logger.error("[MerchantSync] %s page %d all %d retries failed", platform_code, page, max_retries)
                 break
 
-            items = self._extract_items(data)
             if not items:
-                break
+                consecutive_empty += 1
+                if consecutive_empty >= 2:
+                    break
+                page += 1
+                time.sleep(rate_sleep)
+                continue
 
+            consecutive_empty = 0
             result.extend(items)
             logger.info("[MerchantSync] %s page %d: got %d items (total %d)", platform_code, page, len(items), len(result))
 
