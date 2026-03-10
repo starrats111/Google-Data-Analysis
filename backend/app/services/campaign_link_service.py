@@ -233,7 +233,7 @@ class CampaignLinkService:
 
     def _fetch_merchant_by_id(self, platform_code: str, token: str, merchant_id: str) -> Optional[dict]:
         """调用 Monetization API 查询指定商家（含 campaign link）。
-        优化：mid 精确查 → 分页遍历最多 1 页兜底，超时 25s。
+        CG/BSH 等平台不支持 mid 精确搜索，需多页遍历。
         """
         cfg = PLATFORM_API_CONFIG.get(platform_code)
         if not cfg:
@@ -241,47 +241,42 @@ class CampaignLinkService:
 
         mode = cfg["mode"]
         url = cfg["url"]
-        timeout = httpx.Timeout(25.0, connect=10.0)
+        timeout = httpx.Timeout(30.0, connect=10.0)
 
         try:
             if mode == "post_json":
-                # 精确查询
-                payload = {
-                    "source": cfg.get("source", ""),
-                    "token": token, "curPage": 1, "perPage": 100,
-                    "relationship": "Joined", "mid": merchant_id,
-                }
-                try:
-                    resp = httpx.post(url, json=payload, timeout=timeout)
-                    resp.raise_for_status()
-                    items = MerchantPlatformSyncService._extract_items(resp.json())
-                    if items:
-                        found = self._match_merchant(items, merchant_id, platform_code)
-                        if found:
-                            return found
-                        logger.warning(f"[CampaignLink] 精确查询返回 {len(items)} 条但未匹配 mid={merchant_id}")
-                    else:
-                        logger.info(f"[CampaignLink] 精确查询无结果，尝试兜底遍历 mid={merchant_id}")
-                except Exception as e:
-                    logger.warning(f"[CampaignLink] 精确查询异常: {e}，尝试兜底遍历")
+                # CG/BSH 类平台：mid 参数无效，必须分页遍历
+                page_size = min(cfg.get("max_size", 500), 500)
+                max_pages = 20  # 最多遍历 20 页（500*20=10000 条）
 
-                # 分页遍历兜底（仅 1 页，减少等待）
-                payload = {
-                    "source": cfg.get("source", ""),
-                    "token": token, "curPage": 1, "perPage": 2000,
-                    "relationship": "Joined",
-                }
-                try:
-                    resp = httpx.post(url, json=payload, timeout=timeout)
-                    resp.raise_for_status()
-                    items = MerchantPlatformSyncService._extract_items(resp.json())
-                    if items:
-                        found = self._match_merchant(items, merchant_id, platform_code)
-                        if found:
-                            return found
-                        logger.warning(f"[CampaignLink] 兜底遍历 {len(items)} 条仍未匹配 mid={merchant_id}")
-                except Exception as e:
-                    logger.warning(f"[CampaignLink] 兜底遍历异常: {e}")
+                for page in range(1, max_pages + 1):
+                    payload = {
+                        "source": cfg.get("source", ""),
+                        "token": token,
+                        cfg.get("page_key", "curPage"): page,
+                        cfg.get("size_key", "perPage"): page_size,
+                        "relationship": "Joined",
+                    }
+                    try:
+                        resp = httpx.post(url, json=payload, timeout=timeout)
+                        resp.raise_for_status()
+                        items = MerchantPlatformSyncService._extract_items(resp.json())
+                    except Exception as e:
+                        logger.warning("[CampaignLink] %s page %d 请求失败: %s", platform_code, page, e)
+                        break
+
+                    if not items:
+                        break
+
+                    found = self._match_merchant(items, merchant_id, platform_code)
+                    if found:
+                        logger.info("[CampaignLink] 在 %s page %d 找到 mid=%s", platform_code, page, merchant_id)
+                        return found
+
+                    if len(items) < page_size:
+                        break  # 最后一页
+
+                logger.warning("[CampaignLink] %s 遍历完毕仍未匹配 mid=%s", platform_code, merchant_id)
                 return None
 
             elif platform_code == "LB":

@@ -44,7 +44,7 @@ PLATFORM_API_CONFIG: Dict[str, dict] = {
         "source": "collabglow",
         "page_key": "curPage",
         "size_key": "perPage",
-        "max_size": 2000,
+        "max_size": 500,
     },
     "BSH": {
         "mode": "post_json",
@@ -52,7 +52,7 @@ PLATFORM_API_CONFIG: Dict[str, dict] = {
         "source": "brandsparkhub",
         "page_key": "curPage",
         "size_key": "perPage",
-        "max_size": 2000,
+        "max_size": 500,
     },
     "PM": {
         "mode": "post_json",

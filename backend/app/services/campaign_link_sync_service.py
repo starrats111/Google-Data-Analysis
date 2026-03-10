@@ -168,7 +168,10 @@ class CampaignLinkSyncService:
         return count
 
     def _fetch_all_joined(self, cfg: dict, platform_code: str, token: str) -> List[dict]:
-        """全量分页拉取 Joined 商家（处理 2000~8000 条数据）。"""
+        """全量分页拉取 Joined 商家（处理 2000~8000 条数据）。
+        
+        增强：每页最多重试 3 次，用实际返回数量判断是否还有下一页。
+        """
         mode = cfg["mode"]
         url = cfg["url"]
         page_key = cfg["page_key"]
@@ -178,19 +181,37 @@ class CampaignLinkSyncService:
 
         result: List[dict] = []
         page = 1
+        max_retries = 3
+        consecutive_empty = 0
 
         while True:
-            try:
-                data = self._api_call(mode, url, platform_code, token, "Joined",
-                                      page, max_size, page_key, size_key, cfg)
-            except Exception as exc:
-                logger.warning("[CampaignLinkSync] %s page %d 请求失败: %s", platform_code, page, exc)
+            items = None
+            for attempt in range(1, max_retries + 1):
+                try:
+                    data = self._api_call(mode, url, platform_code, token, "Joined",
+                                          page, max_size, page_key, size_key, cfg)
+                    items = MerchantPlatformSyncService._extract_items(data)
+                    break  # 成功
+                except Exception as exc:
+                    logger.warning("[CampaignLinkSync] %s page %d attempt %d/%d 失败: %s",
+                                   platform_code, page, attempt, max_retries, exc)
+                    if attempt < max_retries:
+                        time.sleep(2 * attempt)  # 递增等待
+
+            if items is None:
+                logger.error("[CampaignLinkSync] %s page %d 全部 %d 次重试失败，跳过后续页",
+                             platform_code, page, max_retries)
                 break
 
-            items = MerchantPlatformSyncService._extract_items(data)
             if not items:
-                break
+                consecutive_empty += 1
+                if consecutive_empty >= 2:
+                    break  # 连续 2 页空数据，停止
+                page += 1
+                time.sleep(rate_sleep)
+                continue
 
+            consecutive_empty = 0
             result.extend(items)
             logger.info("[CampaignLinkSync] %s page %d: %d 条 (累计 %d)", platform_code, page, len(items), len(result))
 
