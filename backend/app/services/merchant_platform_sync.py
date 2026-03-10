@@ -68,6 +68,7 @@ PLATFORM_API_CONFIG: Dict[str, dict] = {
         "page_key": "page",
         "size_key": "limit",
         "max_size": 1000,
+        "extra_params": {"type": "json"},
     },
     "LH": {
         "mode": "post_form",
@@ -413,6 +414,7 @@ class MerchantPlatformSyncService:
                   relationship: str, page: int, per_page: int,
                   page_key: str, size_key: str, cfg: dict) -> dict:
         timeout = httpx.Timeout(30.0, connect=10.0)
+        extra = cfg.get("extra_params", {})
 
         if mode == "post_json":
             payload = {
@@ -420,6 +422,7 @@ class MerchantPlatformSyncService:
                 "token": token,
                 page_key: page,
                 size_key: per_page,
+                **extra,
             }
             if relationship:
                 payload["relationship"] = relationship
@@ -429,6 +432,7 @@ class MerchantPlatformSyncService:
                 "token": token,
                 page_key: str(page),
                 size_key: str(per_page),
+                **{k: str(v) for k, v in extra.items()},
             }
             if relationship:
                 form_data["relationship"] = relationship
@@ -438,6 +442,7 @@ class MerchantPlatformSyncService:
                 "token": token,
                 page_key: str(page),
                 size_key: str(per_page),
+                **{k: str(v) for k, v in extra.items()},
             }
             if relationship:
                 params["relationship"] = relationship
