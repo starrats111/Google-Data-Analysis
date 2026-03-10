@@ -14,8 +14,8 @@ from app.services.humanizer_service import humanize
 
 logger = logging.getLogger(__name__)
 
-FAST_MODELS = ["claude-sonnet-4-6", "gpt-5.1", "claude-opus-4-5-20251101"]
-SMART_MODELS_FALLBACK = ["claude-sonnet-4-6", "gpt-5.1", "claude-opus-4-5-20251101"]
+FAST_MODELS = ["claude-sonnet-4-6", "deepseek-chat", "claude-sonnet-4-20250514"]
+SMART_MODELS_FALLBACK = ["claude-sonnet-4-6", "deepseek-chat", "claude-sonnet-4-20250514"]
 
 
 class ArticleGenService:
@@ -42,7 +42,21 @@ class ArticleGenService:
             resp = client.post(url, json=payload, headers=headers)
             resp.raise_for_status()
             data = resp.json()
-            return data["choices"][0]["message"]["content"]
+            content = data["choices"][0]["message"]["content"]
+            # 有些模型会在 JSON 前加描述文字，尝试提取 JSON 部分
+            if content and not content.strip().startswith(("{", "[")):
+                # 尝试找到第一个 { 或 [ 开始的 JSON
+                for ch in ("{", "["):
+                    idx = content.find(ch)
+                    if idx >= 0:
+                        # 找到对应的闭合
+                        close_ch = "}" if ch == "{" else "]"
+                        ridx = content.rfind(close_ch)
+                        if ridx > idx:
+                            extracted = content[idx:ridx + 1]
+                            logger.info("[ArticleGen] 从响应中提取 JSON (%d→%d chars)", len(content), len(extracted))
+                            return extracted
+            return content
 
     def _call_with_fallback(self, messages: List[Dict], max_tokens: int = 8192, fast: bool = False) -> str:
         if fast:
@@ -63,10 +77,11 @@ class ArticleGenService:
         """AI 生成标题"""
         current_year = datetime.now().year
         system_msg = (
-            "你是一个专业的 SEO 文案写手。根据用户提供的主题，生成吸引人的文章标题。"
-            f"当前年份是 {current_year} 年，标题中如果涉及年份必须使用 {current_year}，不要使用过去的年份。"
-            f"请生成 {count} 个标题，以 JSON 数组格式返回，每个元素包含 title（中文）和 title_en（英文）字段。"
-            "只返回 JSON 数组，不要其他内容。"
+            "You are a JSON API. Respond with ONLY a valid JSON array, no other text.\n"
+            f"Generate {count} SEO article titles based on the user's topic. Current year: {current_year}.\n"
+            "Each element must have 'title' (Chinese) and 'title_en' (English) fields.\n"
+            'Example: [{"title":"中文标题","title_en":"English Title"}]\n'
+            "Output the JSON array directly, no markdown, no explanation."
         )
         messages = [
             {"role": "system", "content": system_msg},
@@ -103,11 +118,12 @@ class ArticleGenService:
 
         current_year = datetime.now().year
         system_msg = (
-            "你是一个专业的内容创作者。请根据标题生成一篇高质量的 HTML 文章。"
-            f"当前年份是 {current_year} 年，文章内容中涉及年份必须使用 {current_year}。"
-            "文章需要包含适当的 h2/h3 子标题结构，段落清晰，内容丰富（至少 1500 字）。"
-            "以 JSON 格式返回，包含 content（HTML 正文）、excerpt（100字摘要）、meta_title、meta_description、meta_keywords 字段。"
-            "只返回 JSON 对象，不要 markdown 代码块。"
+            "You are a JSON API. Respond with ONLY a valid JSON object, no other text.\n"
+            f"Generate a high-quality HTML article based on the title. Current year: {current_year}.\n"
+            "Article must have h2/h3 subheadings, clear paragraphs, rich content (1500+ words).\n"
+            "Required JSON fields: content (HTML body), excerpt (100-char summary), "
+            "meta_title, meta_description, meta_keywords.\n"
+            "Output raw JSON only, no markdown code blocks."
         )
         user_msg = f"标题：{title}\n风格：{style}{keyword_instructions}{link_instructions}"
 
@@ -136,21 +152,17 @@ class ArticleGenService:
         current_year = datetime.now().year
         lang_label = "英文" if language == "en" else "中文"
         system_prompt = (
-            f"你是一位资深内容策划师。分析以下商家网站信息，返回 JSON 格式结果。"
-            f"当前年份是 {current_year}。\n\n"
-            "分析维度：\n"
-            "1. 主营产品/服务类型\n"
-            "2. 核心卖点和特色\n"
-            "3. 目标受众群体\n"
-            "4. 当前促销活动或热门产品\n"
-            "5. 最适合的文章分类（fashion/health/home/travel/finance/food/tech/beauty）\n\n"
-            "然后根据分析结果，生成 5 个适合软文推广的文章标题和 5 个 SEO 关键词。\n\n"
-            f"输出语言：{lang_label}\n\n"
-            "仅返回 JSON，格式如下：\n"
-            '{"category":"travel","products":["产品1"],"selling_points":["卖点1"],'
-            '"target_audience":"目标受众","promotions":"促销信息",'
-            '"titles":[{"title":"中文标题","title_en":"English Title"}],'
-            '"keywords":["keyword1","keyword2"]}'
+            "You are a JSON API. You MUST respond with ONLY a valid JSON object, no other text before or after.\n"
+            "Do NOT include any explanation, greeting, or markdown. Output raw JSON only.\n\n"
+            f"Analyze the merchant website info below. Current year: {current_year}.\n"
+            "Analysis dimensions: products/services, selling points, target audience, promotions, "
+            "best article category (fashion/health/home/travel/finance/food/tech/beauty).\n"
+            f"Generate 5 promotional article titles and 5 SEO keywords in {lang_label}.\n\n"
+            "Required JSON format:\n"
+            '{"category":"travel","products":["product1"],"selling_points":["point1"],'
+            '"target_audience":"audience","promotions":"promo info",'
+            '"titles":[{"title":"中文标题","title_en":"English Title"},{"title":"中文标题2","title_en":"English Title 2"}],'
+            '"keywords":["keyword1","keyword2","keyword3","keyword4","keyword5"]}'
         )
         raw_text = crawl_data.get("raw_text", "")
         brand = crawl_data.get("brand_name", "")
