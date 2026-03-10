@@ -50,6 +50,48 @@ PRODUCT_IMG_KEYWORDS = [
 
 MIN_IMG_DIMENSION = 200  # 最小宽高像素
 
+# 内联 JS/JSON 中常见的图片 URL 模式
+_JS_IMG_RE = re.compile(
+    r'(?:src|image|img|photo|poster|thumbnail|hero|banner|background|cover|media)'
+    r'["\s]*[:=]\s*["\']'
+    r'(https?://[^"\'<>\s]{20,}\.(?:jpg|jpeg|png|webp|avif)(?:\?[^"\'<>\s]*)?)',
+    re.IGNORECASE,
+)
+
+
+def _extract_jsonld_images(ld_data, base_url: str, seen_urls: set, candidates: list):
+    """递归提取 JSON-LD 结构化数据中的图片 URL"""
+    if isinstance(ld_data, dict):
+        for key in ("image", "images", "photo", "thumbnail", "logo", "contentUrl"):
+            val = ld_data.get(key)
+            if isinstance(val, str) and val.startswith(("http", "/")):
+                full = urljoin(base_url, val)
+                if full not in seen_urls and not any(kw in full.lower() for kw in FILTERED_IMG_KEYWORDS):
+                    seen_urls.add(full)
+                    candidates.append((25, full))
+            elif isinstance(val, list):
+                for item in val:
+                    if isinstance(item, str) and item.startswith(("http", "/")):
+                        full = urljoin(base_url, item)
+                        if full not in seen_urls and not any(kw in full.lower() for kw in FILTERED_IMG_KEYWORDS):
+                            seen_urls.add(full)
+                            candidates.append((25, full))
+                    elif isinstance(item, dict):
+                        _extract_jsonld_images(item, base_url, seen_urls, candidates)
+            elif isinstance(val, dict):
+                url_in = val.get("url") or val.get("contentUrl") or val.get("src")
+                if isinstance(url_in, str) and url_in.startswith(("http", "/")):
+                    full = urljoin(base_url, url_in)
+                    if full not in seen_urls:
+                        seen_urls.add(full)
+                        candidates.append((25, full))
+        if "@graph" in ld_data:
+            _extract_jsonld_images(ld_data["@graph"], base_url, seen_urls, candidates)
+    elif isinstance(ld_data, list):
+        for item in ld_data:
+            _extract_jsonld_images(item, base_url, seen_urls, candidates)
+
+
 HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -58,7 +100,7 @@ HEADERS = {
     ),
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
     "Accept-Language": "en-US,en;q=0.9",
-    "Accept-Encoding": "gzip, deflate, br",
+    "Accept-Encoding": "gzip, deflate",
     "Cache-Control": "no-cache",
     "Sec-Ch-Ua": '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
     "Sec-Ch-Ua-Mobile": "?0",
@@ -141,12 +183,38 @@ def _extract_page(html: str, url: str) -> Dict:
         if not any(kw in og_lower for kw in FILTERED_IMG_KEYWORDS):
             images.append(og_url)
 
+    # twitter:image 也是高质量图片来源
+    tw_img = soup.find("meta", attrs={"name": "twitter:image"})
+    if not tw_img:
+        tw_img = soup.find("meta", attrs={"property": "twitter:image"})
+    if tw_img and tw_img.get("content"):
+        tw_url = urljoin(url, tw_img["content"])
+        if tw_url not in images and not any(kw in tw_url.lower() for kw in FILTERED_IMG_KEYWORDS):
+            images.append(tw_url)
+
     candidates = []
     seen_urls = set(images)
 
+    # JSON-LD 结构化数据中的图片（高质量产品图）
+    import json as _json
+    for script_tag in soup.find_all("script", type="application/ld+json"):
+        try:
+            ld_data = _json.loads(script_tag.string or "")
+            _extract_jsonld_images(ld_data, url, seen_urls, candidates)
+        except Exception:
+            pass
+
     def _get_img_src(tag):
         """从 img/source 标签中提取最佳图片 URL（支持懒加载和 srcset）"""
-        for attr in ("src", "data-src", "data-lazy-src", "data-original", "data-srcset"):
+        lazy_attrs = (
+            "src", "data-src", "data-lazy-src", "data-original",
+            "data-srcset", "data-lazy", "data-image", "data-bg",
+            "data-hi-res-src", "data-full-src", "data-zoom-image",
+            "data-bg-src", "data-background-image", "data-thumb",
+            "data-poster", "data-retina", "data-large-file",
+            "data-medium-file", "data-unveil", "data-ll-src",
+        )
+        for attr in lazy_attrs:
             val = tag.get(attr)
             if val and val.startswith(("http", "/")):
                 return val
@@ -154,7 +222,7 @@ def _extract_page(html: str, url: str) -> Dict:
         if srcset:
             parts = [p.strip().split()[0] for p in srcset.split(",") if p.strip()]
             if parts:
-                return parts[-1]  # 取最大尺寸
+                return parts[-1]
         return None
 
     # 收集所有 <img> 和 <picture><source> 的图片
@@ -162,6 +230,13 @@ def _extract_page(html: str, url: str) -> Dict:
     for source in soup.find_all("source"):
         if source.get("srcset") or source.get("data-srcset"):
             all_img_tags.append(source)
+
+    # <noscript> 中的图片（lazy-load 的 fallback，通常是高质量图）
+    for noscript in soup.find_all("noscript"):
+        noscript_soup = BeautifulSoup(str(noscript), "lxml")
+        for nimg in noscript_soup.find_all("img"):
+            if nimg not in all_img_tags:
+                all_img_tags.append(nimg)
 
     # 提取 CSS background-image 中的图片 URL
     bg_re = re.compile(r'url\(["\']?(https?://[^"\')\s]+)["\']?\)', re.IGNORECASE)
@@ -174,6 +249,27 @@ def _extract_page(html: str, url: str) -> Dict:
             if match not in seen_urls:
                 seen_urls.add(match)
                 candidates.append((8, match))
+
+    # 内联 <style> 和 <link> 中的 background-image
+    for style_tag in soup.find_all("style"):
+        if style_tag.string:
+            for match in bg_re.findall(style_tag.string):
+                if match not in seen_urls and not any(kw in match.lower() for kw in FILTERED_IMG_KEYWORDS):
+                    seen_urls.add(match)
+                    candidates.append((5, match))
+
+    # 从 <script> 标签中提取嵌入的图片 URL（SPA/现代网站常见）
+    for script_tag in soup.find_all("script"):
+        if script_tag.get("type") == "application/ld+json":
+            continue
+        script_text = script_tag.string or ""
+        if len(script_text) < 50 or len(script_text) > 500000:
+            continue
+        for match in _JS_IMG_RE.findall(script_text):
+            if match not in seen_urls and not any(kw in match.lower() for kw in FILTERED_IMG_KEYWORDS):
+                full = urljoin(url, match)
+                seen_urls.add(full)
+                candidates.append((12, full))
 
     for img in all_img_tags:
         src = _get_img_src(img)
@@ -433,6 +529,12 @@ def crawl(url: str) -> Dict:
     raw_text = "\n\n".join(
         f"[{p['title']}]\n{p['text']}" for p in pages
     )[:8000]
+
+    total_images = sum(len(p.get("images", [])) for p in pages)
+    logger.info(
+        "[MerchantCrawler] 爬取完成 %s: %d 页, %d 张图片, brand=%s",
+        url, len(pages), total_images, brand_name,
+    )
 
     return {
         "crawl_failed": False,

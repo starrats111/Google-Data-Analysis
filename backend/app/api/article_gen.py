@@ -143,17 +143,34 @@ async def crawl_merchant_site(
             seen.add(img)
             unique_images.append(img)
 
-    # 只有网站本身图片极少（<= 2 张）时，才用图片库补充
-    if len(unique_images) <= 2:
+    # 网站图片不足时，用图片库补充
+    crawled_count = len(unique_images)
+    if crawled_count <= 2:
         brand = crawl_data.get("brand_name", "")
+        queries = []
         if brand:
-            search_query = f"{brand} products official"
-            extra_images = search_merchant_images(search_query, count=12)
-            for img in extra_images:
-                if img not in seen:
-                    seen.add(img)
-                    unique_images.append(img)
-            logger.info(f"[Crawl] 网站仅 {len(unique_images) - len(extra_images)} 张图，已从图片库补充")
+            queries.append(f"{brand} products official")
+        if analysis and isinstance(analysis, dict):
+            products = analysis.get("main_products") or analysis.get("products") or ""
+            if products:
+                prod_text = products if isinstance(products, str) else ", ".join(products[:3]) if isinstance(products, list) else str(products)
+                queries.append(prod_text[:60])
+        if not queries:
+            queries.append("online shopping products")
+
+        for q in queries:
+            if len(unique_images) >= 10:
+                break
+            try:
+                extra = search_merchant_images(q, count=12)
+                for img in extra:
+                    if img not in seen:
+                        seen.add(img)
+                        unique_images.append(img)
+            except Exception as e:
+                logger.warning(f"[Crawl] 图片库搜索失败 '{q}': {e}")
+
+        logger.info("[Crawl] 网站 %d 张图 -> 补充后 %d 张", crawled_count, len(unique_images))
 
     return {
         "brand_name": crawl_data.get("brand_name", ""),

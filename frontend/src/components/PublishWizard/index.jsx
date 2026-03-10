@@ -88,6 +88,33 @@ const PublishWizard = () => {
   const [imagePoolMode, setImagePoolMode] = useState('crawl')    // 'crawl' | 'stock'
   const [searchingImages, setSearchingImages] = useState(false)
 
+  const _applyCrawlImages = async (resData) => {
+    setCrawlResult(resData)
+    setMerchantTitles(resData?.analysis?.titles || [])
+    setMerchantKeywords(resData?.analysis?.keywords || [])
+    const imgs = resData?.images || []
+    setCrawledImages(imgs)
+    setSelectedImages(imgs.slice(0, 5))
+    setStockImages([])
+    if (imgs.length === 0) {
+      setImagePoolMode('stock')
+      const brandName = resData?.brand_name || ''
+      if (brandName) {
+        setSearchingImages(true)
+        try {
+          const stockRes = await articleApi.searchImages({ query: `${brandName} products`, count: 16 })
+          const stockImgs = stockRes.data?.images || []
+          setStockImages(stockImgs)
+          if (stockImgs.length > 0) setSelectedImages(stockImgs.slice(0, 5))
+        } catch (_e) { /* ignore */ }
+        finally { setSearchingImages(false) }
+      }
+    } else {
+      setImagePoolMode('crawl')
+    }
+    setMStep(1)
+  }
+
   useEffect(() => {
     if (mode === 'merchant') {
       articleApi.getTrackingLinks({ limit: 50 })
@@ -255,15 +282,7 @@ const PublishWizard = () => {
     setLoading(true)
     try {
       const res = await articleApi.crawlMerchant({ url: siteUrl, language })
-      setCrawlResult(res.data)
-      setMerchantTitles(res.data?.analysis?.titles || [])
-      setMerchantKeywords(res.data?.analysis?.keywords || [])
-      const imgs = res.data?.images || []
-      setCrawledImages(imgs)
-      setSelectedImages(imgs.slice(0, 5))
-      setStockImages([])
-      setImagePoolMode('crawl')
-      setMStep(1)
+      await _applyCrawlImages(res.data)
     } catch (err) {
       message.error('爬取失败: ' + (err?.response?.data?.detail || err.message))
     } finally { setLoading(false) }
@@ -284,15 +303,7 @@ const PublishWizard = () => {
     setLoading(true)
     try {
       const res = await articleApi.crawlMerchant({ url: merchantUrl, language })
-      setCrawlResult(res.data)
-      setMerchantTitles(res.data?.analysis?.titles || [])
-      setMerchantKeywords(res.data?.analysis?.keywords || [])
-      const imgs = res.data?.images || []
-      setCrawledImages(imgs)
-      setSelectedImages(imgs.slice(0, 5))
-      setStockImages([])
-      setImagePoolMode('crawl')
-      setMStep(1)
+      await _applyCrawlImages(res.data)
     } catch (err) {
       message.error('爬取失败: ' + (err?.response?.data?.detail || err.message))
     } finally { setLoading(false) }
@@ -306,15 +317,7 @@ const PublishWizard = () => {
     setLoading(true)
     try {
       const res = await articleApi.crawlMerchant({ url: merchantUrl, language })
-      setCrawlResult(res.data)
-      setMerchantTitles(res.data?.analysis?.titles || [])
-      setMerchantKeywords(res.data?.analysis?.keywords || [])
-      const imgs = res.data?.images || []
-      setCrawledImages(imgs)
-      setSelectedImages(imgs.slice(0, 5))
-      setStockImages([])
-      setImagePoolMode('crawl')
-      setMStep(1)
+      await _applyCrawlImages(res.data)
     } catch (err) {
       message.error('爬取失败: ' + (err?.response?.data?.detail || err.message))
     } finally { setLoading(false) }
