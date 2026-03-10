@@ -1193,28 +1193,49 @@ class MerchantService:
             return {"success": False, "message": "未找到有效的 LH API Token，请先配置"}
 
         # ── Step 2: 拉取全量商家 + cashback2，构建映射 ──
-        # LH API: mcid = slug, m_id = 纯数字 MID
-        slug_to_mid = {}   # mcid(slug) → m_id(数字)
-        name_to_mid = {}   # merchant_name → m_id(数字)
+        # 注意：LH 两个 API 的 mcid/m_id 含义相反！
+        #   merchantBasicList3: mcid = 纯数字, m_id = slug
+        #   cashback2:          mcid = slug,   m_id = 纯数字
+        slug_to_mid = {}   # slug → 纯数字 MID
+        name_to_mid = {}   # merchant_name → 纯数字 MID
         total_fetched = 0
 
         def _parse_items(data):
             """从 LH API 响应中提取列表"""
-            items = data.get("data", data.get("list", []))
+            # merchantBasicList3 返回 {"list": [...]}
+            # cashback2 返回 {"data": {"list": [...]}} 或 {"data": [...]}
+            items = data.get("list") or data.get("data") or []
             if isinstance(items, dict):
                 items = items.get("list", items.get("data", []))
             return items if isinstance(items, list) else []
 
-        def _add_mapping(item):
-            """从单条商家/订单记录中提取映射"""
-            mcid = str(item.get("mcid", "")).strip()
-            m_id = str(item.get("m_id", "")).strip()
+        def _add_merchant_mapping(item):
+            """从 merchantBasicList3 记录中提取映射
+            此 API: mcid = 纯数字, m_id = slug, merchant_name = 商家名
+            """
+            mcid = str(item.get("mcid", "")).strip()   # 纯数字
+            m_id = str(item.get("m_id", "")).strip()    # slug
             m_name = str(item.get("merchant_name", "")).strip()
+            if mcid and mcid.isdigit() and mcid != "0":
+                if m_id:
+                    slug_to_mid[m_id.lower()] = mcid
+                if m_name:
+                    name_to_mid[m_name.lower()] = mcid
+                return True
+            return False
+
+        def _add_order_mapping(item):
+            """从 cashback2 订单记录中提取映射
+            此 API: mcid = slug, m_id = 纯数字, advertiser_name = 商家名
+            """
+            mcid = str(item.get("mcid", "")).strip()   # slug
+            m_id = str(item.get("m_id", "")).strip()    # 纯数字
+            adv_name = str(item.get("advertiser_name", "")).strip()
             if m_id and m_id.isdigit() and m_id != "0":
                 if mcid:
                     slug_to_mid[mcid.lower()] = m_id
-                if m_name:
-                    name_to_mid[m_name.lower()] = m_id
+                if adv_name:
+                    name_to_mid[adv_name.lower()] = m_id
                 return True
             return False
 
@@ -1236,12 +1257,12 @@ class MerchantService:
                     )
                     items = _parse_items(resp.json())
                     for item in items:
-                        _add_mapping(item)
+                        _add_merchant_mapping(item)
                     total_fetched += len(items)
                     logger.info("[LH MID] merchantBasicList3 %s: %d 条", rel, len(items))
                 except Exception as e:
                     logger.warning("[LH MID] merchantBasicList3 %s 失败: %s", rel, e)
-                _time.sleep(1)
+                _time.sleep(4)  # LH rate limit: 3/10s
 
             # 2b. cashback2 - 补充交易中出现但商家目录中没有的
             try:
@@ -1258,11 +1279,11 @@ class MerchantService:
                     timeout=60,
                 )
                 orders = _parse_items(resp.json())
-                extra = sum(1 for o in orders if _add_mapping(o))
+                extra = sum(1 for o in orders if _add_order_mapping(o))
                 logger.info("[LH MID] cashback2: %d 条订单, %d 条新增映射", len(orders), extra)
             except Exception as e:
                 logger.warning("[LH MID] cashback2 失败: %s", e)
-            _time.sleep(1)
+            _time.sleep(4)
 
         logger.info("[LH MID] 总映射: slug=%d, name=%d (拉取 %d 条)",
                     len(slug_to_mid), len(name_to_mid), total_fetched)
