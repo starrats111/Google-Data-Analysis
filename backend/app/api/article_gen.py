@@ -151,12 +151,21 @@ async def crawl_merchant_site(
         if brand:
             queries.append(f"{brand} products official")
         if analysis and isinstance(analysis, dict):
-            products = analysis.get("main_products") or analysis.get("products") or ""
+            products = analysis.get("products") or analysis.get("main_products") or ""
             if products:
                 prod_text = products if isinstance(products, str) else ", ".join(products[:3]) if isinstance(products, list) else str(products)
                 queries.append(prod_text[:60])
+            category = analysis.get("category", "")
+            if category and category != "general":
+                queries.append(f"{category} products lifestyle")
+        if not brand:
+            from urllib.parse import urlparse as _urlparse
+            domain = _urlparse(data.url).hostname or ""
+            domain_name = domain.replace("www.", "").split(".")[0]
+            if domain_name and len(domain_name) > 2:
+                queries.append(f"{domain_name} brand products")
         if not queries:
-            queries.append("online shopping products")
+            queries.append("online shopping products lifestyle")
 
         for q in queries:
             if len(unique_images) >= 10:
@@ -167,8 +176,9 @@ async def crawl_merchant_site(
                     if img not in seen:
                         seen.add(img)
                         unique_images.append(img)
+                logger.info("[Crawl] 图片库搜索 '%s' 返回 %d 张", q, len(extra))
             except Exception as e:
-                logger.warning(f"[Crawl] 图片库搜索失败 '{q}': {e}")
+                logger.warning("[Crawl] 图片库搜索失败 '%s': %s", q, e)
 
         logger.info("[Crawl] 网站 %d 张图 -> 补充后 %d 张", crawled_count, len(unique_images))
 

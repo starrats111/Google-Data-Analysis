@@ -88,6 +88,21 @@ const PublishWizard = () => {
   const [imagePoolMode, setImagePoolMode] = useState('crawl')    // 'crawl' | 'stock'
   const [searchingImages, setSearchingImages] = useState(false)
 
+  const _buildImageSearchQuery = (resData) => {
+    const brand = resData?.brand_name || ''
+    if (brand) return `${brand} products`
+    const products = resData?.analysis?.products
+    if (Array.isArray(products) && products.length > 0) return products.slice(0, 3).join(', ')
+    if (typeof products === 'string' && products) return products.slice(0, 60)
+    const category = resData?.analysis?.category
+    if (category && category !== 'general') return `${category} products lifestyle`
+    try {
+      const domain = new URL(resData?.url || '').hostname.replace('www.', '').split('.')[0]
+      if (domain && domain.length > 2) return `${domain} brand products`
+    } catch (_e) { /* ignore */ }
+    return 'online shopping products'
+  }
+
   const _applyCrawlImages = async (resData) => {
     setCrawlResult(resData)
     setMerchantTitles(resData?.analysis?.titles || [])
@@ -98,17 +113,15 @@ const PublishWizard = () => {
     setStockImages([])
     if (imgs.length === 0) {
       setImagePoolMode('stock')
-      const brandName = resData?.brand_name || ''
-      if (brandName) {
-        setSearchingImages(true)
-        try {
-          const stockRes = await articleApi.searchImages({ query: `${brandName} products`, count: 16 })
-          const stockImgs = stockRes.data?.images || []
-          setStockImages(stockImgs)
-          if (stockImgs.length > 0) setSelectedImages(stockImgs.slice(0, 5))
-        } catch (_e) { /* ignore */ }
-        finally { setSearchingImages(false) }
-      }
+      const query = _buildImageSearchQuery(resData)
+      setSearchingImages(true)
+      try {
+        const stockRes = await articleApi.searchImages({ query, count: 16 })
+        const stockImgs = stockRes.data?.images || []
+        setStockImages(stockImgs)
+        if (stockImgs.length > 0) setSelectedImages(stockImgs.slice(0, 5))
+      } catch (_e) { /* ignore */ }
+      finally { setSearchingImages(false) }
     } else {
       setImagePoolMode('crawl')
     }
@@ -424,12 +437,11 @@ const PublishWizard = () => {
   }
 
   const handleLoadStockImages = async () => {
-    const brandName = crawlResult?.brand_name || ''
-    if (!brandName) { message.warning('无法获取品牌名'); return }
     if (stockImages.length > 0) { setImagePoolMode('stock'); return }
+    const query = _buildImageSearchQuery(crawlResult)
     setSearchingImages(true)
     try {
-      const res = await articleApi.searchImages({ query: `${brandName} products`, count: 16 })
+      const res = await articleApi.searchImages({ query, count: 16 })
       const imgs = res.data?.images || []
       setStockImages(imgs)
       setImagePoolMode('stock')
