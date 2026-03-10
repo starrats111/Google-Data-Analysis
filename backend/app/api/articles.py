@@ -513,6 +513,20 @@ def _article_to_dict(article: PubArticle, db: Session = None) -> dict:
         "published_to_site": article.published_to_site or False,
         "site_name": (article.site.site_name if article.site else None),
         "site_domain": (article.site.domain if article.site else None),
+        "article_url": _build_article_url(article),
         "created_at": article.created_at.isoformat() if article.created_at else None,
         "updated_at": article.updated_at.isoformat() if article.updated_at else None,
     }
+
+
+def _build_article_url(article) -> str:
+    """根据站点配置构造正确的文章外链"""
+    site = article.site
+    if not site or not site.domain or not article.site_article_slug:
+        return ""
+    slug = article.site_article_slug
+    pattern = site.article_html_pattern
+    if pattern and "{slug}" in pattern:
+        url_path = pattern.replace("{slug}", slug)
+        return f"https://{site.domain}/{url_path}"
+    return f"https://{site.domain}/post-{slug}.html"

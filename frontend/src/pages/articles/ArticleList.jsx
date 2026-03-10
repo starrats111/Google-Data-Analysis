@@ -143,8 +143,10 @@ const ArticleList = () => {
       key: 'site',
       width: 120,
       render: (published, record) => published ? (
-        <Tooltip title={record.site_domain ? `https://${record.site_domain}/post-${record.site_article_slug}.html` : record.site_name}>
-          <Tag icon={<GlobalOutlined />} color="cyan">{record.site_name || '已发布'}</Tag>
+        <Tooltip title={record.article_url || record.site_name}>
+          <a href={record.article_url || '#'} target="_blank" rel="noopener noreferrer" onClick={e => !record.article_url && e.preventDefault()}>
+            <Tag icon={<GlobalOutlined />} color="cyan">{record.site_name || '已发布'}</Tag>
+          </a>
         </Tooltip>
       ) : '-',
     },
