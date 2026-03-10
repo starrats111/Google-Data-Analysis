@@ -74,7 +74,7 @@ PLATFORM_API_CONFIG: Dict[str, dict] = {
         "url": "https://www.linkhaitao.com/api.php?mod=medium&op=merchantBasicList3",
         "page_key": "page",
         "size_key": "per_page",
-        "max_size": 5000,  # LH 文档支持 100~40000，用 5000 兼顾速度和完整性
+        "max_size": 2000,  # LH 文档说支持 40000，但实际限制 2000
         "skip_relationship_filter": True,  # LH API 不支持 relationship 过滤，一次性拉全部
         "rate_limit_sleep": 4,  # LH API 限制 3次/10秒
     },
