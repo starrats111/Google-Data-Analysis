@@ -18,6 +18,40 @@ FAST_MODELS = ["deepseek-chat", "claude-sonnet-4-6", "claude-sonnet-4-20250514"]
 SMART_MODELS_FALLBACK = ["deepseek-chat", "claude-sonnet-4-6", "claude-sonnet-4-20250514"]
 
 
+def _extract_json_text(raw: str) -> str:
+    """从 AI 响应中提取纯 JSON 文本，处理 markdown 包裹、前缀描述等"""
+    if not raw or not raw.strip():
+        return raw
+    text = raw.strip()
+
+    # 1) 移除 markdown 代码块: ```json\n...\n``` 或 ```\n...\n```
+    if text.startswith("```"):
+        # 去掉首行 ```json 或 ```
+        first_nl = text.find("\n")
+        if first_nl > 0:
+            text = text[first_nl + 1:]
+        else:
+            text = text[3:]
+        # 去掉尾部 ```
+        if text.rstrip().endswith("```"):
+            text = text.rstrip()[:-3]
+        text = text.strip()
+
+    # 2) 如果已经是 JSON 开头，直接返回
+    if text and text[0] in ('{', '['):
+        return text
+
+    # 3) 尝试从描述文字中提取 JSON
+    for open_ch, close_ch in (('{', '}'), ('[', ']')):
+        idx = text.find(open_ch)
+        if idx >= 0:
+            ridx = text.rfind(close_ch)
+            if ridx > idx:
+                return text[idx:ridx + 1]
+
+    return text
+
+
 class ArticleGenService:
     def __init__(self):
         self.api_key = settings.gemini_api_key
@@ -47,38 +81,23 @@ class ArticleGenService:
             if not content or not content.strip():
                 raise ValueError(f"模型 {model} 返回空内容")
 
-            text = content.strip()
-
-            # 移除 markdown 代码块包裹 (```json ... ``` 或 ``` ... ```)
-            if text.startswith("```"):
-                text = text.split("\n", 1)[-1] if "\n" in text else text[3:]
-                if text.endswith("```"):
-                    text = text[:-3]
-                text = text.strip()
-                if text:
-                    return text
-
-            # 有些模型会在 JSON 前加描述文字，尝试提取 JSON 部分
-            if not text.startswith(("{", "[")):
-                for ch in ("{", "["):
-                    idx = text.find(ch)
-                    if idx >= 0:
-                        close_ch = "}" if ch == "{" else "]"
-                        ridx = text.rfind(close_ch)
-                        if ridx > idx:
-                            extracted = text[idx:ridx + 1]
-                            logger.info("[ArticleGen] 从响应中提取 JSON (%d→%d chars)", len(content), len(extracted))
-                            return extracted
-
-            return text
+            return _extract_json_text(content)
 
     def _call_with_fallback(self, messages: List[Dict], max_tokens: int = 8192, fast: bool = False) -> str:
         if fast:
             models_to_try = self.fast_models
         else:
+            # 优先用稳定的 fallback 模型，gemini 放最后（经常返回空）
             models_to_try = self.fallback_models + [self.model]
-        last_error = None
+        # 去重保持顺序
+        seen = set()
+        unique = []
         for m in models_to_try:
+            if m not in seen:
+                seen.add(m)
+                unique.append(m)
+        last_error = None
+        for m in unique:
             try:
                 logger.info(f"[ArticleGen] 尝试模型: {m}")
                 return self._call_api(messages, m, max_tokens)
@@ -103,10 +122,7 @@ class ArticleGenService:
         ]
         raw = self._call_with_fallback(messages, max_tokens=4096)
         try:
-            text = raw.strip()
-            if text.startswith("```"):
-                text = text.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
-            titles = json.loads(text)
+            titles = json.loads(raw)
             if isinstance(titles, list):
                 return titles[:count]
         except (json.JSONDecodeError, IndexError):
@@ -147,10 +163,7 @@ class ArticleGenService:
         ]
         raw = self._call_with_fallback(messages, max_tokens=8192)
         try:
-            text = raw.strip()
-            if text.startswith("```"):
-                text = text.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
-            return json.loads(text)
+            return json.loads(raw)
         except (json.JSONDecodeError, IndexError):
             logger.error(f"[ArticleGen] 文章解析失败: {raw[:300]}")
             return {
@@ -194,10 +207,7 @@ class ArticleGenService:
         ]
         raw = self._call_with_fallback(messages, max_tokens=4096)
         try:
-            text = raw.strip()
-            if text.startswith("```"):
-                text = text.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
-            result = json.loads(text)
+            result = json.loads(raw)
             if not result.get("titles"):
                 result["titles"] = [{"title": f"标题 {i+1}", "title_en": f"Title {i+1}"} for i in range(5)]
             if not result.get("keywords"):

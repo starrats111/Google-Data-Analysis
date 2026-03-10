@@ -669,6 +669,68 @@ class RemotePublisher:
         self._sftp_write(sftp, json_path_final, json.dumps(detail_json, ensure_ascii=False, indent=2))
 
         logger.info(f"[B1] 已写入 articlesIndex + {json_path_final}")
+
+        # ── 双数据源站点：同步更新 script.js 中的 articlesData / blogPosts ──
+        # BloomRoots: script.js 有 const articlesData（含完整 content 数组）
+        # Quiblo: script.js 有 const blogPosts（含完整 content）
+        for script_name, var_candidates in [("script.js", ["articlesData", "blogPosts"])]:
+            script_path = f"{site_root}/{script_name}"
+            if not self._remote_file_exists(sftp, script_path):
+                continue
+            try:
+                script_content = self._sftp_read(sftp, script_path)
+                for var in var_candidates:
+                    if f"const {var}" not in script_content and f"let {var}" not in script_content:
+                        continue
+                    # 解析现有数组
+                    try:
+                        existing = self._parse_js_array(script_content, var)
+                    except ValueError:
+                        continue
+                    # 检查是否已存在
+                    if any(a.get("title") == article.title for a in existing):
+                        logger.info(f"[B1] {script_name}/{var} 已有此文章，跳过")
+                        continue
+                    # 构建完整条目（含 content 数组）
+                    full_entry = {
+                        "id": new_id,
+                        "title": article.title,
+                        "category": index_entry["category"],
+                        "categoryName": category_name,
+                        "excerpt": article.excerpt or "",
+                        "heroImage": index_entry["image"],
+                        "date": index_entry["date"],
+                        "author": getattr(article, "author_name", None) or "Editorial Team",
+                        "products": [],
+                    }
+                    # 检测已有条目的字段格式来适配
+                    if existing:
+                        sample = existing[0]
+                        if "image" in sample and "heroImage" not in sample:
+                            full_entry["image"] = full_entry.pop("heroImage")
+                        if "featured" in sample:
+                            full_entry["featured"] = True
+                        if "content" in sample and isinstance(sample["content"], list):
+                            # content 是段落数组格式
+                            paragraphs = []
+                            if content_html:
+                                import re as _re
+                                # 从 HTML 提取段落文本
+                                for p_match in _re.finditer(r'<(?:p|h[23])[^>]*>(.*?)</(?:p|h[23])>', content_html, _re.DOTALL):
+                                    text = _re.sub(r'<[^>]+>', '', p_match.group(1)).strip()
+                                    if text:
+                                        paragraphs.append(text)
+                            full_entry["content"] = paragraphs if paragraphs else [content_html]
+                        elif "content" in sample:
+                            full_entry["content"] = content_html
+                    existing.insert(0, full_entry)
+                    new_script = self._rebuild_js_array(script_content, var, existing)
+                    self._sftp_write(sftp, script_path, new_script)
+                    logger.info(f"[B1] 同步更新 {script_name}/{var} (+1 条)")
+                    break  # 只更新第一个匹配的变量
+            except Exception as e:
+                logger.warning(f"[B1] 同步 {script_name} 失败: {e}")
+
         return {"site_article_slug": slug, "site_article_id": new_id}
 
     def _publish_articles_inline_type(self, ssh, sftp, site, article, image_paths) -> dict:
