@@ -298,9 +298,19 @@ class RemotePublisher:
         }
 
     def _download_image(self, url: str, retries: int = 2) -> Optional[bytes]:
-        """从外部 URL 下载图片，返回二进制数据（带重试）"""
+        """从外部 URL 下载图片，返回二进制数据（带重试）。支持 data URL (base64)"""
         if not url:
             return None
+        # 处理 data URL (base64 内联图片)
+        if url.startswith('data:'):
+            try:
+                import base64 as _b64
+                # data:image/png;base64,iVBOR...
+                header, b64data = url.split(',', 1)
+                return _b64.b64decode(b64data)
+            except Exception as e:
+                logger.warning(f"data URL 解码失败: {e}")
+                return None
         for attempt in range(retries + 1):
             try:
                 resp = requests.get(url, timeout=20, headers={
@@ -336,6 +346,13 @@ class RemotePublisher:
 
     def _get_image_ext(self, url: str, data: bytes) -> str:
         """根据 URL 或文件头判断图片扩展名"""
+        # data URL: 从 MIME 类型提取
+        if url.startswith('data:'):
+            if 'image/png' in url: return '.png'
+            if 'image/gif' in url: return '.gif'
+            if 'image/webp' in url: return '.webp'
+            if 'image/svg' in url: return '.svg'
+            # 默认按文件头判断
         parsed = urlparse(url)
         path = parsed.path.lower()
         for ext in (".jpg", ".jpeg", ".png", ".gif", ".webp", ".svg"):

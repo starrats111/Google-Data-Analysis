@@ -14,8 +14,8 @@ from app.services.humanizer_service import humanize
 
 logger = logging.getLogger(__name__)
 
-FAST_MODELS = ["claude-sonnet-4-6", "deepseek-chat", "claude-sonnet-4-20250514"]
-SMART_MODELS_FALLBACK = ["claude-sonnet-4-6", "deepseek-chat", "claude-sonnet-4-20250514"]
+FAST_MODELS = ["deepseek-chat", "claude-sonnet-4-6", "claude-sonnet-4-20250514"]
+SMART_MODELS_FALLBACK = ["deepseek-chat", "claude-sonnet-4-6", "claude-sonnet-4-20250514"]
 
 
 class ArticleGenService:
@@ -43,26 +43,40 @@ class ArticleGenService:
             resp.raise_for_status()
             data = resp.json()
             content = data["choices"][0]["message"]["content"]
+
+            if not content or not content.strip():
+                raise ValueError(f"模型 {model} 返回空内容")
+
+            text = content.strip()
+
+            # 移除 markdown 代码块包裹 (```json ... ``` 或 ``` ... ```)
+            if text.startswith("```"):
+                text = text.split("\n", 1)[-1] if "\n" in text else text[3:]
+                if text.endswith("```"):
+                    text = text[:-3]
+                text = text.strip()
+                if text:
+                    return text
+
             # 有些模型会在 JSON 前加描述文字，尝试提取 JSON 部分
-            if content and not content.strip().startswith(("{", "[")):
-                # 尝试找到第一个 { 或 [ 开始的 JSON
+            if not text.startswith(("{", "[")):
                 for ch in ("{", "["):
-                    idx = content.find(ch)
+                    idx = text.find(ch)
                     if idx >= 0:
-                        # 找到对应的闭合
                         close_ch = "}" if ch == "{" else "]"
-                        ridx = content.rfind(close_ch)
+                        ridx = text.rfind(close_ch)
                         if ridx > idx:
-                            extracted = content[idx:ridx + 1]
+                            extracted = text[idx:ridx + 1]
                             logger.info("[ArticleGen] 从响应中提取 JSON (%d→%d chars)", len(content), len(extracted))
                             return extracted
-            return content
+
+            return text
 
     def _call_with_fallback(self, messages: List[Dict], max_tokens: int = 8192, fast: bool = False) -> str:
         if fast:
-            models_to_try = self.fast_models + [self.model]
+            models_to_try = self.fast_models
         else:
-            models_to_try = [self.model] + self.fallback_models
+            models_to_try = self.fallback_models + [self.model]
         last_error = None
         for m in models_to_try:
             try:
@@ -150,7 +164,13 @@ class ArticleGenService:
     def analyze_merchant(self, crawl_data: Dict, language: str = "zh") -> Dict:
         """分析商家爬取数据，生成标题和关键词建议"""
         current_year = datetime.now().year
-        lang_label = "英文" if language == "en" else "中文"
+        lang_label = {
+            'en': '英文', 'zh': '中文', 'de': '德文', 'fr': '法文',
+            'es': '西班牙文', 'it': '意大利文', 'pt': '葡萄牙文', 'nl': '荷兰文',
+            'pl': '波兰文', 'sv': '瑞典文', 'da': '丹麦文', 'no': '挪威文',
+            'fi': '芬兰文', 'ja': '日文', 'ko': '韩文', 'ru': '俄文',
+            'tr': '土耳其文', 'th': '泰文', 'vi': '越南文',
+        }.get(language, '英文')
         system_prompt = (
             "You are a JSON API. You MUST respond with ONLY a valid JSON object, no other text before or after.\n"
             "Do NOT include any explanation, greeting, or markdown. Output raw JSON only.\n\n"
@@ -212,7 +232,16 @@ class ArticleGenService:
         products = ", ".join(merchant_info.get("products", [])[:5])
         selling_points = ", ".join(merchant_info.get("selling_points", [])[:5])
         promotions = merchant_info.get("promotions", "")
-        lang_label = "English" if language == "en" else "中文"
+        lang_label = {
+            'en': 'English', 'zh': '中文', 'de': 'German', 'fr': 'French',
+            'es': 'Spanish', 'it': 'Italian', 'pt': 'Portuguese', 'nl': 'Dutch',
+            'pl': 'Polish', 'sv': 'Swedish', 'da': 'Danish', 'no': 'Norwegian',
+            'fi': 'Finnish', 'ja': 'Japanese', 'ko': 'Korean', 'ru': 'Russian',
+            'tr': 'Turkish', 'th': 'Thai', 'vi': 'Vietnamese', 'id': 'Indonesian',
+            'hi': 'Hindi', 'ar': 'Arabic', 'cs': 'Czech', 'sk': 'Slovak',
+            'hu': 'Hungarian', 'ro': 'Romanian', 'bg': 'Bulgarian', 'hr': 'Croatian',
+            'el': 'Greek', 'he': 'Hebrew',
+        }.get(language, language)
 
         keyword_str = ""
         keyword_link_rule = ""

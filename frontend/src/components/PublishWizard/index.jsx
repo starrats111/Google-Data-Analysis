@@ -1,25 +1,28 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useRef } from 'react'
 import {
   Steps, Card, Input, Button, Space, List, Tag, Checkbox, DatePicker,
   Switch, message, Spin, Typography, Divider, Radio, Select, AutoComplete,
-  Row, Col, Image, Segmented, Descriptions, Alert,
+  Row, Col, Image, Segmented, Descriptions, Alert, Upload, Tooltip,
 } from 'antd'
 import {
   RocketOutlined, CheckOutlined, PlusOutlined, DeleteOutlined,
   ShopOutlined, FileTextOutlined, GlobalOutlined, LinkOutlined,
-  SearchOutlined, ThunderboltOutlined,
+  SearchOutlined, ThunderboltOutlined, InboxOutlined, UploadOutlined,
+  ClockCircleOutlined,
 } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
 import articleApi from '../../services/articleApi'
 import api from '../../services/api'
 
 const { TextArea } = Input
+const { Dragger } = Upload
 
 // 图片代理：通过后端转发，绕过商家网站防盗链
 // 生产环境必须使用完整 API 域名，否则图片请求会发到 Cloudflare Pages 前端域名
 const proxyImg = (url) => {
   if (!url) return '';
   if (/pexels\.com|unsplash\.com|images\.pexels/i.test(url)) return url;
+  if (url.startsWith('data:') || url.startsWith('blob:')) return url;
   const apiBase = api.defaults?.baseURL || '';
   return `${apiBase}/api/article-gen/image-proxy?url=${encodeURIComponent(url)}`;
 };
@@ -28,6 +31,24 @@ const LANGUAGES = [
   { value: 'zh', label: '中文' },
   { value: 'en', label: 'English' },
 ]
+
+// 常用国家代码 → 语言映射
+const COUNTRY_LANG_MAP = {
+  'de': 'de', 'at': 'de', 'ch': 'de',
+  'fr': 'fr', 'be': 'fr',
+  'es': 'es', 'mx': 'es', 'ar': 'es',
+  'it': 'it',
+  'pt': 'pt', 'br': 'pt',
+  'nl': 'nl',
+  'pl': 'pl',
+  'se': 'sv', 'dk': 'da', 'no': 'no', 'fi': 'fi',
+  'jp': 'ja', 'kr': 'ko', 'cn': 'zh', 'tw': 'zh',
+  'us': 'en', 'gb': 'en', 'uk': 'en', 'au': 'en', 'ca': 'en', 'nz': 'en', 'ie': 'en',
+  'ru': 'ru', 'tr': 'tr', 'th': 'th', 'vn': 'vi', 'id': 'id',
+  'in': 'hi', 'sa': 'ar', 'ae': 'ar', 'eg': 'ar',
+  'cz': 'cs', 'sk': 'sk', 'hu': 'hu', 'ro': 'ro', 'bg': 'bg', 'hr': 'hr',
+  'gr': 'el', 'il': 'he',
+}
 
 const PublishWizard = () => {
   const navigate = useNavigate()
@@ -88,6 +109,13 @@ const PublishWizard = () => {
   const [imagePoolMode, setImagePoolMode] = useState('crawl')    // 'crawl' | 'stock'
   const [searchingImages, setSearchingImages] = useState(false)
 
+  // === 手动上传图片 State ===
+  const [manualHeroFile, setManualHeroFile] = useState(null)       // 头图文件
+  const [manualContentFiles, setManualContentFiles] = useState([]) // 内容图文件列表
+  const [manualHeroPreview, setManualHeroPreview] = useState('')
+  const [manualContentPreviews, setManualContentPreviews] = useState([])
+  const [countryCode, setCountryCode] = useState('')               // 国家代码
+
   const _buildImageSearchQuery = (resData) => {
     const brand = resData?.brand_name || ''
     if (brand) return `${brand} products`
@@ -101,6 +129,88 @@ const PublishWizard = () => {
       if (domain && domain.length > 2) return `${domain} brand products`
     } catch (_e) { /* ignore */ }
     return 'online shopping products'
+  }
+
+  // === 手动上传图片处理 ===
+  const fileToDataUrl = (file) => new Promise((resolve) => {
+    const reader = new FileReader()
+    reader.onload = (e) => resolve(e.target.result)
+    reader.readAsDataURL(file)
+  })
+
+  const handleHeroDrop = async (info) => {
+    const file = info.file?.originFileObj || info.file
+    if (!file) return
+    setManualHeroFile(file)
+    const preview = await fileToDataUrl(file)
+    setManualHeroPreview(preview)
+  }
+
+  const handleContentDrop = async (info) => {
+    const file = info.file?.originFileObj || info.file
+    if (!file) return
+    if (manualContentFiles.length >= 4) {
+      message.warning('最多上传 4 张内容图')
+      return
+    }
+    const newFiles = [...manualContentFiles, file]
+    setManualContentFiles(newFiles)
+    const preview = await fileToDataUrl(file)
+    setManualContentPreviews(prev => [...prev, preview])
+  }
+
+  const handleRemoveContentImg = (index) => {
+    setManualContentFiles(prev => prev.filter((_, i) => i !== index))
+    setManualContentPreviews(prev => prev.filter((_, i) => i !== index))
+  }
+
+  const handleRemoveHeroImg = () => {
+    setManualHeroFile(null)
+    setManualHeroPreview('')
+  }
+
+  // 国家代码 → 语言自动映射
+  const handleCountryCodeChange = (val) => {
+    const code = val.toLowerCase().trim()
+    setCountryCode(code)
+    const lang = COUNTRY_LANG_MAP[code]
+    if (lang) setLanguage(lang)
+  }
+
+  // 手动模式：跳过爬虫，直接进入 AI 分析（用上传的图片）
+  const handleManualSubmit = async () => {
+    if (!merchantUrl.trim()) { message.warning('请输入商家网址'); return }
+    if (!trackingLink.trim()) { message.warning('请输入追踪链接'); return }
+    if (!manualHeroFile) { message.warning('请上传头图（拖入第一个框）'); return }
+    if (!countryCode.trim()) { message.warning('请输入国家代码（如 de, us, fr）'); return }
+
+    // 将上传的图片转为 data URL 放入 selectedImages
+    const heroUrl = manualHeroPreview
+    const contentUrls = [...manualContentPreviews]
+    setSelectedImages([heroUrl, ...contentUrls])
+    setCrawledImages([])
+    setStockImages([])
+
+    // 尝试爬取商家网站获取 AI 分析数据
+    setLoading(true)
+    try {
+      const res = await articleApi.crawlMerchant({ url: merchantUrl, language })
+      const resData = res.data
+      setCrawlResult(resData)
+      setMerchantTitles(resData?.analysis?.titles || [])
+      setMerchantKeywords(resData?.analysis?.keywords || [])
+      // 保留手动上传的图片，不用爬取的图片覆盖
+      setCrawledImages(resData?.images || [])
+      setMStep(1)
+    } catch (_err) {
+      // 爬虫失败也继续，用空分析数据让用户手动填
+      message.info('商家网站爬取失败（反爬保护），将使用手动输入的信息生成文章')
+      setCrawlResult({ brand_name: '', url: merchantUrl, analysis: { titles: [], keywords: [], products: [], selling_points: [], promotions: '' } })
+      setMerchantTitles([])
+      setMerchantKeywords([])
+      setCrawledImages([])
+      setMStep(1)
+    } finally { setLoading(false) }
   }
 
   const _applyCrawlImages = async (resData) => {
@@ -297,7 +407,12 @@ const PublishWizard = () => {
       const res = await articleApi.crawlMerchant({ url: siteUrl, language })
       await _applyCrawlImages(res.data)
     } catch (err) {
-      message.error('爬取失败: ' + (err?.response?.data?.detail || err.message))
+      message.warning('爬取失败（反爬保护），已保留链接信息，请手动输入标题和关键词')
+      setCrawlResult({ brand_name: '', url: siteUrl, analysis: { titles: [], keywords: [], products: [], selling_points: [], promotions: '' } })
+      setMerchantTitles([])
+      setMerchantKeywords([])
+      setCrawledImages([])
+      setMStep(1)
     } finally { setLoading(false) }
   }
 
@@ -318,7 +433,12 @@ const PublishWizard = () => {
       const res = await articleApi.crawlMerchant({ url: merchantUrl, language })
       await _applyCrawlImages(res.data)
     } catch (err) {
-      message.error('爬取失败: ' + (err?.response?.data?.detail || err.message))
+      message.warning('爬取失败（反爬保护），已保留链接信息，请手动输入标题和关键词')
+      setCrawlResult({ brand_name: '', url: merchantUrl, analysis: { titles: [], keywords: [], products: [], selling_points: [], promotions: '' } })
+      setMerchantTitles([])
+      setMerchantKeywords([])
+      setCrawledImages([])
+      setMStep(1)
     } finally { setLoading(false) }
   }
 
@@ -332,13 +452,17 @@ const PublishWizard = () => {
       const res = await articleApi.crawlMerchant({ url: merchantUrl, language })
       await _applyCrawlImages(res.data)
     } catch (err) {
-      message.error('爬取失败: ' + (err?.response?.data?.detail || err.message))
+      message.warning('爬取失败（反爬保护），已保留链接信息，请手动输入标题和关键词')
+      setCrawlResult({ brand_name: '', url: merchantUrl, analysis: { titles: [], keywords: [], products: [], selling_points: [], promotions: '' } })
+      setMerchantTitles([])
+      setMerchantKeywords([])
+      setCrawledImages([])
+      setMStep(1)
     } finally { setLoading(false) }
   }
 
   const handleMerchantConfirmTitle = () => {
-    if (!selectedMTitle) { message.warning('请选择一个标题'); return }
-    if (selectedMKeywords.length === 0) { message.warning('请至少选择一个关键词'); return }
+    if (!selectedMTitle) { message.warning('请选择或输入一个标题'); return }
     setMStep(2)
   }
 
@@ -797,6 +921,7 @@ const PublishWizard = () => {
               </>
             ) : (
               <>
+                {/* 商家网址 */}
                 <Typography.Title level={5}><ShopOutlined /> 商家网址</Typography.Title>
                 <Input
                   placeholder="https://www.example.com"
@@ -806,7 +931,8 @@ const PublishWizard = () => {
                   size="large"
                 />
 
-                <Typography.Title level={5} style={{ marginTop: 24 }}><LinkOutlined /> 追踪链接</Typography.Title>
+                {/* 追踪链接 */}
+                <Typography.Title level={5} style={{ marginTop: 20 }}><LinkOutlined /> 追踪链接</Typography.Title>
                 <AutoComplete
                   options={trackingOptions}
                   value={trackingLink}
@@ -818,12 +944,132 @@ const PublishWizard = () => {
                   }
                 />
 
-                <Typography.Title level={5} style={{ marginTop: 24 }}>文章语言</Typography.Title>
-                <Select value={language} onChange={setLanguage} options={LANGUAGES} style={{ width: 200 }} />
+                {/* 图片上传区域：1头图 + 4内容图 */}
+                <Typography.Title level={5} style={{ marginTop: 20 }}>
+                  📷 文章图片
+                  <Typography.Text type="secondary" style={{ fontSize: 12, marginLeft: 8 }}>
+                    拖拽或点击上传，头图 1 张（必须）+ 内容图最多 4 张
+                  </Typography.Text>
+                </Typography.Title>
+                <Row gutter={16}>
+                  <Col span={8}>
+                    <div style={{ textAlign: 'center', marginBottom: 4 }}>
+                      <Tag color="green">头图（必须）</Tag>
+                    </div>
+                    {manualHeroPreview ? (
+                      <div style={{ position: 'relative', textAlign: 'center' }}>
+                        <Image src={manualHeroPreview} width={160} height={160}
+                          style={{ objectFit: 'cover', borderRadius: 8, border: '3px solid #52c41a' }}
+                          preview={false} />
+                        <Button type="text" danger size="small" icon={<DeleteOutlined />}
+                          onClick={handleRemoveHeroImg}
+                          style={{ position: 'absolute', top: -8, right: 20, background: '#fff', borderRadius: '50%', boxShadow: '0 1px 4px rgba(0,0,0,0.2)' }} />
+                      </div>
+                    ) : (
+                      <Upload.Dragger
+                        accept="image/*"
+                        showUploadList={false}
+                        beforeUpload={() => false}
+                        onChange={handleHeroDrop}
+                        style={{ padding: '20px 8px' }}
+                      >
+                        <p className="ant-upload-drag-icon"><InboxOutlined style={{ fontSize: 32, color: '#52c41a' }} /></p>
+                        <p style={{ fontSize: 13 }}>拖入头图</p>
+                      </Upload.Dragger>
+                    )}
+                  </Col>
+                  <Col span={16}>
+                    <div style={{ textAlign: 'center', marginBottom: 4 }}>
+                      <Tag color="blue">内容图（最多 4 张）</Tag>
+                    </div>
+                    <Row gutter={8}>
+                      {manualContentPreviews.map((src, i) => (
+                        <Col span={6} key={`mc-${i}`}>
+                          <div style={{ position: 'relative', textAlign: 'center', marginBottom: 8 }}>
+                            <Image src={src} width={90} height={90}
+                              style={{ objectFit: 'cover', borderRadius: 6, border: '2px solid #d9d9d9' }}
+                              preview={false} />
+                            <Button type="text" danger size="small" icon={<DeleteOutlined />}
+                              onClick={() => handleRemoveContentImg(i)}
+                              style={{ position: 'absolute', top: -6, right: -2, background: '#fff', borderRadius: '50%', boxShadow: '0 1px 4px rgba(0,0,0,0.2)', width: 20, height: 20, padding: 0, minWidth: 20 }} />
+                            <div><Tag style={{ fontSize: 10 }}>内容{i + 1}</Tag></div>
+                          </div>
+                        </Col>
+                      ))}
+                      {manualContentFiles.length < 4 && (
+                        <Col span={6}>
+                          <Upload.Dragger
+                            accept="image/*"
+                            showUploadList={false}
+                            beforeUpload={() => false}
+                            onChange={handleContentDrop}
+                            style={{ padding: '12px 4px', height: 90 }}
+                          >
+                            <PlusOutlined style={{ fontSize: 20, color: '#1890ff' }} />
+                            <p style={{ fontSize: 11, margin: '4px 0 0' }}>添加</p>
+                          </Upload.Dragger>
+                        </Col>
+                      )}
+                    </Row>
+                  </Col>
+                </Row>
+
+                {/* 网站语言（国家代码输入） */}
+                <Row gutter={16} style={{ marginTop: 20 }}>
+                  <Col span={8}>
+                    <Typography.Title level={5}>🌐 国家代码</Typography.Title>
+                    <Tooltip title="输入目标国家代码，自动映射文章语言。如 de=德语, fr=法语, us=英语">
+                      <Input
+                        placeholder="如 de, us, fr, jp"
+                        value={countryCode}
+                        onChange={e => handleCountryCodeChange(e.target.value)}
+                        size="large"
+                        maxLength={3}
+                        style={{ textTransform: 'lowercase' }}
+                      />
+                    </Tooltip>
+                    {countryCode && COUNTRY_LANG_MAP[countryCode.toLowerCase()] && (
+                      <Tag color="blue" style={{ marginTop: 6 }}>
+                        语言: {COUNTRY_LANG_MAP[countryCode.toLowerCase()]}
+                      </Tag>
+                    )}
+                  </Col>
+                  <Col span={8}>
+                    <Typography.Title level={5}><ClockCircleOutlined /> 发布时间</Typography.Title>
+                    <DatePicker
+                      showTime
+                      placeholder="留空则立即发布"
+                      value={mPublishDate}
+                      onChange={setMPublishDate}
+                      style={{ width: '100%' }}
+                      size="large"
+                    />
+                  </Col>
+                  <Col span={8}>
+                    <Typography.Title level={5}><GlobalOutlined /> 发布网站</Typography.Title>
+                    <Select
+                      placeholder="选择目标网站"
+                      value={selectedSiteId}
+                      onChange={setSelectedSiteId}
+                      style={{ width: '100%' }}
+                      size="large"
+                      options={siteList.map(s => ({ value: s.id, label: `${s.site_name}${s.domain ? ` (${s.domain})` : ''}` }))}
+                      notFoundContent="暂无可用网站"
+                    />
+                  </Col>
+                </Row>
+
+                <Alert
+                  type="info"
+                  showIcon
+                  style={{ marginTop: 16 }}
+                  message="默认设置"
+                  description="文章将自动使用「去AI味」处理 + 「软植入」风格 + 笔名作者。爬虫失败时追踪链接和商家链接将自动保留。"
+                />
 
                 <Divider />
-                <Button type="primary" icon={<RocketOutlined />} onClick={handleCrawl} size="large" block>
-                  开始爬取 & AI 分析
+                <Button type="primary" icon={<RocketOutlined />} onClick={handleManualSubmit} loading={loading} size="large" block>
+                  开始 AI 分析 & 生成文章
                 </Button>
               </>
             )}
@@ -833,9 +1079,28 @@ const PublishWizard = () => {
         {/* Step 1: AI 分析结果 */}
         {mStep === 1 && crawlResult && (
           <div style={{ maxWidth: 700, margin: '0 auto' }}>
+            {/* 商家信息 + 追踪链接（爬虫失败时也显示） */}
             <Card size="small" style={{ marginBottom: 16, background: '#f6ffed' }}>
-              <Typography.Text strong>品牌：</Typography.Text>
-              <Typography.Text>{crawlResult.brand_name}</Typography.Text>
+              {crawlResult.brand_name ? (
+                <>
+                  <Typography.Text strong>品牌：</Typography.Text>
+                  <Typography.Text>{crawlResult.brand_name}</Typography.Text>
+                </>
+              ) : (
+                <Alert type="warning" message="爬虫未获取到品牌信息（反爬保护），请在下方手动输入标题和关键词" showIcon style={{ marginBottom: 8 }} />
+              )}
+              {merchantUrl && (
+                <div style={{ marginTop: 4 }}>
+                  <Typography.Text strong>商家网址：</Typography.Text>
+                  <Typography.Text copyable>{merchantUrl}</Typography.Text>
+                </div>
+              )}
+              {trackingLink && (
+                <div style={{ marginTop: 4 }}>
+                  <Typography.Text strong>追踪链接：</Typography.Text>
+                  <Typography.Text copyable style={{ color: '#52c41a', fontSize: 12 }}>{trackingLink}</Typography.Text>
+                </div>
+              )}
               {crawlResult.analysis?.products && (
                 <div style={{ marginTop: 8 }}>
                   <Typography.Text strong>主营产品：</Typography.Text>
@@ -1003,42 +1268,85 @@ const PublishWizard = () => {
             </div>
 
             <Typography.Title level={5}>选择标题</Typography.Title>
-            <List
-              dataSource={merchantTitles}
-              renderItem={(item, index) => {
-                const titleZh = typeof item === 'string' ? item : item.title
-                const titleEn = typeof item === 'string' ? item : (item.title_en || item.title)
-                const displayTitle = language === 'en' ? titleEn : titleZh
-                const subTitle = language === 'en' ? titleZh : titleEn
-                const isSelected = selectedMTitle === displayTitle
-                return (
-                  <List.Item
-                    style={{ cursor: 'pointer', background: isSelected ? '#e6f7ff' : undefined, borderRadius: 8, padding: '10px 16px', marginBottom: 4 }}
-                    onClick={() => setSelectedMTitle(displayTitle)}
-                  >
-                    <List.Item.Meta
-                      avatar={<Tag color={isSelected ? 'blue' : 'default'}>{index + 1}</Tag>}
-                      title={displayTitle}
-                      description={subTitle !== displayTitle ? subTitle : null}
-                    />
-                  </List.Item>
-                )
-              }}
+            {merchantTitles.length > 0 ? (
+              <List
+                dataSource={merchantTitles}
+                renderItem={(item, index) => {
+                  const titleZh = typeof item === 'string' ? item : item.title
+                  const titleEn = typeof item === 'string' ? item : (item.title_en || item.title)
+                  const displayTitle = language === 'en' ? titleEn : titleZh
+                  const subTitle = language === 'en' ? titleZh : titleEn
+                  const isSelected = selectedMTitle === displayTitle
+                  return (
+                    <List.Item
+                      style={{ cursor: 'pointer', background: isSelected ? '#e6f7ff' : undefined, borderRadius: 8, padding: '10px 16px', marginBottom: 4 }}
+                      onClick={() => setSelectedMTitle(displayTitle)}
+                    >
+                      <List.Item.Meta
+                        avatar={<Tag color={isSelected ? 'blue' : 'default'}>{index + 1}</Tag>}
+                        title={displayTitle}
+                        description={subTitle !== displayTitle ? subTitle : null}
+                      />
+                    </List.Item>
+                  )
+                }}
+              />
+            ) : (
+              <Alert type="info" message="爬虫未获取到标题建议，请手动输入标题" showIcon style={{ marginBottom: 12 }} />
+            )}
+            <Input
+              placeholder="自定义标题（可覆盖上方选择）"
+              value={selectedMTitle}
+              onChange={e => setSelectedMTitle(e.target.value)}
+              size="large"
+              style={{ marginTop: 8 }}
             />
 
             <Typography.Title level={5} style={{ marginTop: 16 }}>选择关键词</Typography.Title>
-            <Space wrap>
-              {merchantKeywords.map((kw, i) => (
-                <Tag
-                  key={i}
-                  color={selectedMKeywords.includes(kw) ? 'green' : 'default'}
-                  style={{ cursor: 'pointer', padding: '4px 12px', fontSize: 14 }}
-                  onClick={() => handleToggleMKeyword(kw)}
-                >
-                  {kw}
-                </Tag>
-              ))}
-            </Space>
+            {merchantKeywords.length > 0 ? (
+              <Space wrap>
+                {merchantKeywords.map((kw, i) => (
+                  <Tag
+                    key={i}
+                    color={selectedMKeywords.includes(kw) ? 'green' : 'default'}
+                    style={{ cursor: 'pointer', padding: '4px 12px', fontSize: 14 }}
+                    onClick={() => handleToggleMKeyword(kw)}
+                  >
+                    {kw}
+                  </Tag>
+                ))}
+              </Space>
+            ) : (
+              <Alert type="info" message="爬虫未获取到关键词，可手动输入（用逗号分隔）" showIcon style={{ marginBottom: 8 }} />
+            )}
+            <Input
+              placeholder="手动输入关键词（逗号分隔，如: skincare, anti-aging, moisturizer）"
+              style={{ marginTop: 8 }}
+              onPressEnter={e => {
+                const kws = e.target.value.split(/[,，]/).map(s => s.trim()).filter(Boolean)
+                setSelectedMKeywords(prev => [...new Set([...prev, ...kws])])
+                e.target.value = ''
+              }}
+              onBlur={e => {
+                const kws = e.target.value.split(/[,，]/).map(s => s.trim()).filter(Boolean)
+                if (kws.length > 0) {
+                  setSelectedMKeywords(prev => [...new Set([...prev, ...kws])])
+                  e.target.value = ''
+                }
+              }}
+            />
+            {selectedMKeywords.length > 0 && (
+              <div style={{ marginTop: 8 }}>
+                <Typography.Text type="secondary" style={{ fontSize: 12 }}>已选关键词：</Typography.Text>
+                <Space wrap size={4} style={{ marginTop: 4 }}>
+                  {selectedMKeywords.map((kw, i) => (
+                    <Tag key={i} color="green" closable onClose={() => setSelectedMKeywords(prev => prev.filter(k => k !== kw))}>
+                      {kw}
+                    </Tag>
+                  ))}
+                </Space>
+              </div>
+            )}
 
             <Divider />
             <Space>
@@ -1054,10 +1362,12 @@ const PublishWizard = () => {
             <Typography.Title level={5}>确认信息</Typography.Title>
             <Card size="small" style={{ textAlign: 'left', marginBottom: 24 }}>
               <p><strong>标题：</strong>{selectedMTitle}</p>
-              <p><strong>关键词：</strong>{selectedMKeywords.join('、')}</p>
-              <p><strong>品牌：</strong>{crawlResult?.brand_name}</p>
+              <p><strong>关键词：</strong>{selectedMKeywords.join('、') || '（无）'}</p>
+              <p><strong>品牌：</strong>{crawlResult?.brand_name || '（爬虫未获取）'}</p>
+              <p><strong>商家网址：</strong>{merchantUrl}</p>
               <p><strong>追踪链接：</strong>{trackingLink}</p>
-              <p><strong>语言：</strong>{language === 'en' ? 'English' : '中文'}</p>
+              <p><strong>语言：</strong>{language}{countryCode ? ` (${countryCode.toUpperCase()})` : ''}</p>
+              <p><strong>图片：</strong>头图 {selectedImages.length > 0 ? '✓' : '✗'} + 内容图 {Math.max(0, selectedImages.length - 1)} 张</p>
             </Card>
             <Space>
               <Button onClick={() => setMStep(1)}>上一步</Button>
