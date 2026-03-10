@@ -63,12 +63,11 @@ PLATFORM_API_CONFIG: Dict[str, dict] = {
         "max_size": 500,
     },
     "LB": {
-        "mode": "get",
+        "mode": "post_form",
         "url": "https://www.linkbux.com/api.php?mod=medium&op=monetization_api",
         "page_key": "page",
         "size_key": "limit",
         "max_size": 1000,
-        "extra_params": {"type": "json"},
     },
     "LH": {
         "mode": "post_form",
@@ -382,14 +381,25 @@ class MerchantPlatformSyncService:
 
     @staticmethod
     def _extract_items(data) -> List[dict]:
-        """从 API 响应中提取商家列表，兼容多种嵌套格式。"""
+        """从 API 响应中提取商家列表，兼容多种嵌套格式。
+        
+        支持的格式：
+        - LB/PM: {"status": {...}, "data": {"list": [...]}}
+        - LH:    {"code": 0, "list": [...]}
+        - CG/CF/BSH: {"code": 0, "data": {"list": [...]}}
+        - RW:    {"data": {"list": [...]}}
+        """
         if isinstance(data, list):
             return [it for it in data if isinstance(it, dict)]
 
         if not isinstance(data, dict):
             return []
 
-        inner = data.get("data", data.get("items", data.get("list", [])))
+        # 优先检查顶层 list（LH 格式）
+        if "list" in data and isinstance(data["list"], list):
+            return [it for it in data["list"] if isinstance(it, dict)]
+
+        inner = data.get("data", data.get("items", []))
 
         if isinstance(inner, dict):
             inner = inner.get("list", inner.get("data", inner.get("items", [])))
