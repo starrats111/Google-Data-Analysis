@@ -18,6 +18,8 @@ class MerchantUpdate(BaseModel):
     notes: Optional[str] = None
     slug: Optional[str] = None
     merchant_id: Optional[str] = None
+    violation_status: Optional[str] = None
+    recommendation_status: Optional[str] = None
 
 
 # ------------------------------------------------------------------

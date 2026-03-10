@@ -513,6 +513,16 @@ const MerchantManagement = () => {
     }
   }
 
+  const handleToggleTag = async (record, field, value) => {
+    try {
+      await api.put(`/api/merchants/${record.id}`, { [field]: value })
+      message.success(value === 'normal' ? '已取消标记' : '标记成功')
+      fetchMerchants()
+    } catch {
+      message.error('操作失败')
+    }
+  }
+
   const openEditMerchantModal = (merchant) => {
     setCurrentMerchant(merchant)
     editMerchantForm.setFieldsValue({
@@ -709,12 +719,57 @@ const MerchantManagement = () => {
     {
       title: '操作',
       key: 'action',
-      width: 80,
+      width: 180,
       fixed: 'right',
       render: (_, record) => (
-        <Button size="small" disabled={!canManage} onClick={() => openEditMerchantModal(record)}>
-          编辑
-        </Button>
+        <Space size={4} wrap>
+          <Button size="small" disabled={!canManage} onClick={() => openEditMerchantModal(record)}>
+            编辑
+          </Button>
+          {record.recommendation_status !== 'recommended' ? (
+            <Button
+              size="small"
+              type="link"
+              style={{ color: '#52c41a', padding: '0 4px' }}
+              disabled={!canManage}
+              onClick={() => handleToggleTag(record, 'recommendation_status', 'recommended')}
+            >
+              推荐
+            </Button>
+          ) : (
+            <Button
+              size="small"
+              type="link"
+              style={{ color: '#999', padding: '0 4px' }}
+              disabled={!canManage}
+              onClick={() => handleToggleTag(record, 'recommendation_status', 'normal')}
+            >
+              取消推荐
+            </Button>
+          )}
+          {record.violation_status !== 'violated' ? (
+            <Button
+              size="small"
+              type="link"
+              danger
+              style={{ padding: '0 4px' }}
+              disabled={!canManage}
+              onClick={() => handleToggleTag(record, 'violation_status', 'violated')}
+            >
+              违规
+            </Button>
+          ) : (
+            <Button
+              size="small"
+              type="link"
+              style={{ color: '#999', padding: '0 4px' }}
+              disabled={!canManage}
+              onClick={() => handleToggleTag(record, 'violation_status', 'normal')}
+            >
+              取消违规
+            </Button>
+          )}
+        </Space>
       ),
     },
   ]

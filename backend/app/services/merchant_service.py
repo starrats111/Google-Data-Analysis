@@ -577,7 +577,8 @@ class MerchantService:
         m = db.query(AffiliateMerchant).get(merchant_pk)
         if not m:
             return None
-        for field in ("category", "commission_rate", "logo_url", "status", "notes", "slug"):
+        for field in ("category", "commission_rate", "logo_url", "status", "notes", "slug",
+                      "violation_status", "recommendation_status"):
             if field in data:
                 setattr(m, field, data[field])
 
