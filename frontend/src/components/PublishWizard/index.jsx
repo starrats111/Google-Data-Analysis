@@ -47,8 +47,33 @@ const getImgSubmitValue = (img) => {
 };
 
 const LANGUAGES = [
-  { value: 'zh', label: '中文' },
-  { value: 'en', label: 'English' },
+  { value: 'en', label: 'English (en)' },
+  { value: 'zh', label: '中文 (zh)' },
+  { value: 'de', label: 'Deutsch (de)' },
+  { value: 'fr', label: 'Français (fr)' },
+  { value: 'es', label: 'Español (es)' },
+  { value: 'it', label: 'Italiano (it)' },
+  { value: 'pt', label: 'Português (pt)' },
+  { value: 'nl', label: 'Nederlands (nl)' },
+  { value: 'pl', label: 'Polski (pl)' },
+  { value: 'ja', label: '日本語 (ja)' },
+  { value: 'ko', label: '한국어 (ko)' },
+  { value: 'ru', label: 'Русский (ru)' },
+  { value: 'tr', label: 'Türkçe (tr)' },
+  { value: 'sv', label: 'Svenska (sv)' },
+  { value: 'da', label: 'Dansk (da)' },
+  { value: 'no', label: 'Norsk (no)' },
+  { value: 'fi', label: 'Suomi (fi)' },
+  { value: 'th', label: 'ไทย (th)' },
+  { value: 'vi', label: 'Tiếng Việt (vi)' },
+  { value: 'id', label: 'Bahasa Indonesia (id)' },
+  { value: 'hi', label: 'हिन्दी (hi)' },
+  { value: 'ar', label: 'العربية (ar)' },
+  { value: 'he', label: 'עברית (he)' },
+  { value: 'el', label: 'Ελληνικά (el)' },
+  { value: 'cs', label: 'Čeština (cs)' },
+  { value: 'hu', label: 'Magyar (hu)' },
+  { value: 'ro', label: 'Română (ro)' },
 ]
 
 // 常用国家代码 → 语言映射
@@ -311,7 +336,7 @@ const PublishWizard = () => {
     if (imgs.length === 0 && backendStockImgs.length > 0) {
       // 爬取 0 张，但后端已补充图库图片
       setImagePoolMode('stock')
-      setSelectedImages(backendStockImgs.slice(0, 5))
+      setSelectedImages([])  // 不自动预选，让员工自己选
     } else if (imgs.length === 0 && backendStockImgs.length === 0) {
       // 爬取 0 张，后端也没补充 → 前端自行搜索图库
       setImagePoolMode('stock')
@@ -323,16 +348,16 @@ const PublishWizard = () => {
           typeof s === 'string' ? { url: s, source: 'stock' } : s
         )
         setStockImages(stockImgs)
-        if (stockImgs.length > 0) setSelectedImages(stockImgs.slice(0, 5))
+        // 不自动预选，让员工自己选
       } catch (_e) { /* ignore */ }
       finally { setSearchingImages(false) }
     } else {
       // 有爬取图片（已缓存）
-      setSelectedImages(imgs.slice(0, 5))
+      setSelectedImages([])  // 不自动预选，让员工自己选
       setImagePoolMode('crawl')
     }
-    // 直接跳到确认信息步骤（跳过标题/关键词选择）
-    setMStep(2)
+    // 跳到图片选择步骤，让员工手动选择图片
+    setMStep(1)
   }
 
   useEffect(() => {
@@ -1010,10 +1035,15 @@ const PublishWizard = () => {
                       <div style={{ marginBottom: 16 }}>
                         <Typography.Title level={5}>选择 Support Region</Typography.Title>
                         <Select
-                          placeholder="选择目标区域"
+                          placeholder="选择目标区域 或 输入国家代码搜索（如 de, us, fr）"
                           value={selectedRegion}
                           onChange={handleRegionSelect}
                           style={{ width: '100%' }}
+                          showSearch
+                          filterOption={(input, option) =>
+                            option.label.toLowerCase().includes(input.toLowerCase()) ||
+                            option.value.toLowerCase().includes(input.toLowerCase())
+                          }
                           options={campaignResult.support_regions.map(r => ({
                             value: r.code,
                             label: `${r.code} — ${r.language}`,
@@ -1027,13 +1057,45 @@ const PublishWizard = () => {
                             </Tag>
                           </div>
                         )}
+                        {/* 手动覆盖语言：输入国家代码 */}
+                        <div style={{ marginTop: 12 }}>
+                          <Typography.Text type="secondary">或手动输入国家代码覆盖语言：</Typography.Text>
+                          <Input
+                            placeholder="如 de, us, fr, jp"
+                            value={countryCode}
+                            onChange={e => handleCountryCodeChange(e.target.value)}
+                            size="small"
+                            maxLength={3}
+                            style={{ width: 120, marginLeft: 8, textTransform: 'lowercase' }}
+                          />
+                          {countryCode && COUNTRY_LANG_MAP[countryCode.toLowerCase()] && (
+                            <Tag color="green" style={{ marginLeft: 6 }}>
+                              语言: {COUNTRY_LANG_MAP[countryCode.toLowerCase()]}
+                            </Tag>
+                          )}
+                        </div>
                       </div>
                     )}
 
                     {campaignResult.support_regions?.length === 0 && (
                       <div style={{ marginBottom: 16 }}>
-                        <Typography.Title level={5}>文章语言</Typography.Title>
-                        <Select value={language} onChange={setLanguage} options={LANGUAGES} style={{ width: 200 }} />
+                        <Typography.Title level={5}>文章语言（输入国家代码）</Typography.Title>
+                        <Input
+                          placeholder="输入国家代码，如 de, us, fr, jp, kr"
+                          value={countryCode}
+                          onChange={e => handleCountryCodeChange(e.target.value)}
+                          size="large"
+                          maxLength={3}
+                          style={{ width: 200, textTransform: 'lowercase' }}
+                        />
+                        {countryCode && COUNTRY_LANG_MAP[countryCode.toLowerCase()] && (
+                          <Tag color="blue" style={{ marginTop: 6, marginLeft: 8 }}>
+                            语言: {COUNTRY_LANG_MAP[countryCode.toLowerCase()]}
+                          </Tag>
+                        )}
+                        {!countryCode && (
+                          <Select value={language} onChange={setLanguage} options={LANGUAGES} style={{ width: 200, marginLeft: 8 }} />
+                        )}
                       </div>
                     )}
 
@@ -1355,7 +1417,19 @@ const PublishWizard = () => {
             <Divider />
             <Space>
               <Button onClick={() => setMStep(0)}>上一步</Button>
-              <Button type="primary" onClick={() => setMStep(2)}>下一步</Button>
+              <Button type="primary" onClick={() => {
+                if (selectedImages.length === 0) {
+                  message.warning('请至少选择 1 张图片作为头图')
+                  return
+                }
+                setMStep(2)
+              }}>下一步</Button>
+              {selectedImages.length === 0 && (
+                <Typography.Text type="danger">请至少选择 1 张图片</Typography.Text>
+              )}
+              {selectedImages.length > 0 && (
+                <Typography.Text type="success">已选 {selectedImages.length} 张图片</Typography.Text>
+              )}
             </Space>
           </div>
         )}
@@ -1433,9 +1507,12 @@ const PublishWizard = () => {
             <Space>
               <Button onClick={() => setMStep(1)}>上一步（修改图片）</Button>
               <Button type="primary" icon={<RocketOutlined />} onClick={handleMerchantGenerate} loading={loading} size="large"
-                disabled={!selectedMTitle}>
+                disabled={!selectedMTitle || selectedImages.length === 0}>
                 {loading ? (genProgress || 'AI 正在撰写...') : '生成推广文章'}
               </Button>
+              {selectedImages.length === 0 && (
+                <Typography.Text type="danger" style={{ marginLeft: 8 }}>请先选择至少 1 张图片</Typography.Text>
+              )}
             </Space>
           </div>
         )}

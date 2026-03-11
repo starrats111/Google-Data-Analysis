@@ -21,6 +21,10 @@ SUB_PAGE_KEYWORDS = [
     "plan", "feature", "solution", "training", "class",
     "menu", "gallery", "portfolio", "work", "project",
     "catalog", "brand", "our-", "best", "popular", "top",
+    "blog", "article", "review", "testimonial", "story",
+    "ingredient", "formula", "organic", "natural", "health",
+    "baby", "kids", "women", "men", "skin", "hair", "beauty",
+    "supplement", "vitamin", "nutrition", "wellness", "fitness",
 ]
 
 FILTERED_IMG_KEYWORDS = [
@@ -454,25 +458,48 @@ def _deduplicate_cdn_images(images: List[str]) -> List[str]:
 
 
 def _find_sub_pages(soup: BeautifulSoup, base_url: str) -> List[str]:
-    """从首页链接中发现关键子页面"""
+    """从首页链接中发现关键子页面 — 深度搜索策略"""
     parsed_base = urlparse(base_url)
-    found = []
+    priority_pages = []   # 关键词匹配的高优先级页面
+    other_pages = []      # 其他同域名内部页面
     seen = set()
+
+    # 排除的路径模式（登录、隐私政策等无用页面）
+    SKIP_PATTERNS = [
+        "login", "signin", "signup", "register", "account", "cart", "checkout",
+        "privacy", "terms", "policy", "cookie", "legal", "disclaimer",
+        "sitemap", "feed", "rss", "xml", "json", "api/", "admin",
+        "cdn-cgi", ".pdf", ".zip", ".mp4", ".mp3",
+        "unsubscribe", "password", "reset", "confirm",
+    ]
+
     for a in soup.find_all("a", href=True):
         href = a["href"]
         full = urljoin(base_url, href)
         parsed = urlparse(full)
         if parsed.netloc != parsed_base.netloc:
             continue
-        path_lower = parsed.path.lower()
-        if path_lower in seen or path_lower == "/" or path_lower == parsed_base.path:
+        path_lower = parsed.path.lower().rstrip("/")
+        if not path_lower or path_lower == "/" or path_lower == parsed_base.path.rstrip("/"):
             continue
+        if path_lower in seen:
+            continue
+        # 跳过无用页面
+        if any(skip in path_lower for skip in SKIP_PATTERNS):
+            continue
+        # 跳过锚点链接和查询参数变体
+        if "#" in href and not parsed.path:
+            continue
+        seen.add(path_lower)
+
         if any(kw in path_lower for kw in SUB_PAGE_KEYWORDS):
-            seen.add(path_lower)
-            found.append(full)
-            if len(found) >= 8:
-                break
-    return found
+            priority_pages.append(full)
+        else:
+            other_pages.append(full)
+
+    # 优先返回关键词匹配的页面，再补充其他内部页面
+    result = priority_pages[:12] + other_pages[:8]
+    return result[:15]
 
 
 _FALLBACK_UAS = [
@@ -767,7 +794,7 @@ def crawl(url: str) -> Dict:
         home_soup = BeautifulSoup(home_html, "lxml")
         sub_urls = _find_sub_pages(home_soup, url)
 
-        for sub_url in sub_urls[:3]:
+        for sub_url in sub_urls[:8]:
             try:
                 # 子页面之间随机延迟，降低反爬触发
                 _time.sleep(_random.uniform(1.0, 2.5))

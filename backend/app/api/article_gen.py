@@ -152,7 +152,7 @@ async def crawl_merchant_site(
     # --- 图片质量预检：下载图片头部验证实际尺寸，过滤低质量图 ---
     # 分两轮：先用宽松标准保留更多商家原生图片，避免过度过滤后用不相关的 stock 图补充
     if unique_images:
-        validated = await _validate_images_batch(unique_images, min_width=300, min_height=200)
+        validated = await _validate_images_batch(unique_images, min_width=200, min_height=150)
         filtered_count = len(unique_images) - len(validated)
         if filtered_count > 0:
             logger.info("[Crawl] 图片质量预检: %d -> %d (过滤 %d 张低质量图)",
@@ -237,8 +237,8 @@ async def crawl_merchant_site(
     # 创建缓存会话，将通过验证的图片下载到本地缓存
     cache_session = image_cache_service.create_session()
     cached_images = image_cache_service.batch_download(
-        cache_session, unique_images[:30], source="crawl",
-        min_width=300, min_height=200, max_count=30,
+        cache_session, unique_images[:50], source="crawl",
+        min_width=200, min_height=150, max_count=50,
     )
 
     # 网站图片完全没有时，才用图片库补充（避免不相关的 stock 图片混入）
