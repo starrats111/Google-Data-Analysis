@@ -170,8 +170,8 @@ const ArticleEdit = () => {
                   <Form.Item label="作者" name="author">
                     <Input placeholder="作者" style={{ width: 140 }} />
                   </Form.Item>
-                  <Form.Item label="定时发布" name="publish_date">
-                    <DatePicker showTime placeholder="留空则立即发布" />
+                  <Form.Item label="发布时间" name="publish_date">
+                    <DatePicker showTime placeholder="留空=当前时间，可选过去" style={{ minWidth: 220 }} />
                   </Form.Item>
                 </Space>
                 <Form.Item label="标签">

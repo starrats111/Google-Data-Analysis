@@ -330,7 +330,7 @@ const PublishWizard = () => {
       const payload = {
         title: selectedTitle, content: generatedArticle.content,
         excerpt: generatedArticle.excerpt,
-        status: publishDate ? 'draft' : 'published',
+        status: (publishDate && publishDate.isAfter(dayjs())) ? 'draft' : 'published',
         publish_date: publishDate ? publishDate.toISOString().replace('Z', '+00:00') : null,
         enable_keyword_links: enableLinks,
         meta_title: generatedArticle.meta_title,
@@ -351,7 +351,8 @@ const PublishWizard = () => {
           message.warning('文章已保存，但发布到网站失败: ' + (siteErr?.response?.data?.detail || siteErr.message))
         }
       } else {
-        message.success(publishDate ? '文章已保存，将定时发布' : '文章已发布')
+        const isPast = publishDate && publishDate.isBefore(dayjs())
+        message.success(publishDate ? (isPast ? '文章已发布（回溯时间）' : '文章已保存，将定时发布') : '文章已发布')
       }
       navigate('/articles')
     } catch (err) {
@@ -500,7 +501,7 @@ const PublishWizard = () => {
         title: selectedMTitle,
         content: merchantArticle.content,
         excerpt: merchantArticle.excerpt,
-        status: mPublishDate ? 'draft' : 'published',
+        status: (mPublishDate && mPublishDate.isAfter(dayjs())) ? 'draft' : 'published',
         publish_date: mPublishDate ? mPublishDate.toISOString().replace('Z', '+00:00') : null,
         enable_keyword_links: mEnableLinks,
         meta_title: merchantArticle.meta_title,
@@ -527,7 +528,8 @@ const PublishWizard = () => {
           message.warning('文章已保存，但发布到网站失败: ' + (siteErr?.response?.data?.detail || siteErr.message))
         }
       } else {
-        message.success(mPublishDate ? '文章已保存，将定时发布' : '文章已发布')
+        const isPast = mPublishDate && mPublishDate.isBefore(dayjs())
+        message.success(mPublishDate ? (isPast ? '文章已发布（回溯时间）' : '文章已保存，将定时发布') : '文章已发布')
       }
       navigate('/articles')
     } catch (err) {
@@ -723,8 +725,8 @@ const PublishWizard = () => {
               <Divider />
               <Space size="large" wrap>
                 <div>
-                  <Typography.Text>定时发布：</Typography.Text>
-                  <DatePicker showTime placeholder="留空则立即发布" value={publishDate} onChange={setPublishDate} style={{ marginLeft: 8 }} />
+                  <Typography.Text>发布时间：</Typography.Text>
+                  <DatePicker showTime placeholder="留空=当前时间，可选过去" value={publishDate} onChange={setPublishDate} style={{ marginLeft: 8, minWidth: 220 }} />
                 </div>
                 <div>
                   <Typography.Text>启用关键词链接：</Typography.Text>
@@ -1038,7 +1040,7 @@ const PublishWizard = () => {
                     <Typography.Title level={5}><ClockCircleOutlined /> 发布时间</Typography.Title>
                     <DatePicker
                       showTime
-                      placeholder="留空则立即发布"
+                      placeholder="留空=立即发布，可选过去"
                       value={mPublishDate}
                       onChange={setMPublishDate}
                       style={{ width: '100%' }}
@@ -1425,8 +1427,8 @@ const PublishWizard = () => {
             )}
             <Space size="large" wrap>
               <div>
-                <Typography.Text>定时发布：</Typography.Text>
-                <DatePicker showTime placeholder="留空则立即发布" value={mPublishDate} onChange={setMPublishDate} style={{ marginLeft: 8 }} />
+                <Typography.Text>发布时间：</Typography.Text>
+                <DatePicker showTime placeholder="留空=立即发布，可选过去" value={mPublishDate} onChange={setMPublishDate} style={{ marginLeft: 8, minWidth: 220 }} />
               </div>
               <div>
                 <Typography.Text>启用关键词链接：</Typography.Text>
