@@ -545,14 +545,53 @@ def crawl(url: str) -> Dict:
     }
 
 
-def search_images(query: str, count: int = 12) -> List[str]:
+def search_images(query: str, count: int = 12,
+                  brand_name: str = "", category: str = "") -> List[str]:
     """
-    搜索可商用的图片作为补充。
+    搜索可商用的高清图片作为补充。
     优先使用 Pexels API（免费可商用），fallback 到 Unsplash URL 拼接。
     所有返回图片均可免费商用，无需署名。
+
+    改进：多轮搜索策略，确保图片与商家高度相关
+    - 第1轮：品牌名 + 产品关键词（最精准）
+    - 第2轮：产品品类 + lifestyle 关键词（软植入风格）
+    - 第3轮：原始 query（兜底）
     """
     from app.config import settings
 
+    # 构建多轮搜索词
+    search_queries = []
+    if brand_name and category:
+        search_queries.append(f"{brand_name} {category} product")
+    if brand_name:
+        search_queries.append(f"{brand_name} lifestyle")
+    if category:
+        search_queries.append(f"{category} high quality product photography")
+    if query and query not in search_queries:
+        search_queries.append(query)
+    if not search_queries:
+        search_queries = [query or "product lifestyle"]
+
+    images = []
+    seen = set()
+
+    for sq in search_queries:
+        if len(images) >= count:
+            break
+        remaining = count - len(images)
+        batch = _search_images_single(sq, remaining + 6, settings)
+        for img in batch:
+            if img not in seen:
+                seen.add(img)
+                images.append(img)
+            if len(images) >= count:
+                break
+
+    return images[:count]
+
+
+def _search_images_single(query: str, count: int, settings) -> List[str]:
+    """单次图库搜索（Pexels + Unsplash）"""
     images = []
 
     # ===== 方案1: Pexels API（推荐，高质量可商用）=====
@@ -562,49 +601,48 @@ def search_images(query: str, count: int = 12) -> List[str]:
             with httpx.Client(timeout=15, follow_redirects=True) as client:
                 resp = client.get(
                     "https://api.pexels.com/v1/search",
-                    params={"query": query, "per_page": min(count * 2, 40), "size": "large"},
+                    params={"query": query, "per_page": min(count * 2, 40),
+                            "size": "large", "orientation": "landscape"},
                     headers={"Authorization": pexels_key},
                 )
                 resp.raise_for_status()
                 data = resp.json()
                 for photo in data.get("photos", []):
-                    # 使用 large2x 尺寸（高清但不过大）
+                    # 只取宽度 >= 1200 的高清图
                     src = photo.get("src", {})
+                    w = photo.get("width", 0)
+                    h = photo.get("height", 0)
+                    if w < 1200 or h < 800:
+                        continue
                     url = src.get("large2x") or src.get("large") or src.get("original")
                     if url and url not in images:
                         images.append(url)
-            logger.info(f"[ImageSearch] Pexels 搜索 '{query}' 找到 {len(images)} 张可商用图片")
+            logger.info(f"[ImageSearch] Pexels '{query}' -> {len(images)} 张高清图")
         except Exception as e:
             logger.warning(f"[ImageSearch] Pexels 搜索失败 '{query}': {e}")
 
     # ===== 方案2: Unsplash Source URL 拼接（免费可商用，无需 API Key）=====
     if len(images) < count:
         try:
-            # Unsplash 搜索页面抓取（所有图片均为 Unsplash License，可免费商用）
             with httpx.Client(timeout=15, follow_redirects=True, headers=HEADERS) as client:
                 resp = client.get(
                     "https://unsplash.com/napi/search/photos",
-                    params={"query": query, "per_page": min(count * 2, 30)},
+                    params={"query": query, "per_page": min(count * 2, 30),
+                            "orientation": "landscape"},
                 )
                 if resp.status_code == 200:
                     data = resp.json()
                     for result in data.get("results", []):
                         urls = result.get("urls", {})
-                        url = urls.get("regular") or urls.get("small")
+                        w = result.get("width", 0)
+                        h = result.get("height", 0)
+                        if w < 1200 or h < 800:
+                            continue
+                        url = urls.get("regular") or urls.get("full")
                         if url and url not in images:
                             images.append(url)
-                    logger.info(f"[ImageSearch] Unsplash 补充后共 {len(images)} 张可商用图片")
+                    logger.info(f"[ImageSearch] Unsplash '{query}' 补充后共 {len(images)} 张")
         except Exception as e:
             logger.warning(f"[ImageSearch] Unsplash 搜索失败 '{query}': {e}")
 
-    # 去重并截取
-    seen = set()
-    unique = []
-    for img in images:
-        if img not in seen:
-            seen.add(img)
-            unique.append(img)
-        if len(unique) >= count:
-            break
-
-    return unique
+    return images

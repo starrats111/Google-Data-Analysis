@@ -171,7 +171,11 @@ async def crawl_merchant_site(
             if len(unique_images) >= 10:
                 break
             try:
-                extra = search_merchant_images(q, count=12)
+                extra = search_merchant_images(
+                    q, count=12,
+                    brand_name=brand,
+                    category=analysis.get("category", "") if isinstance(analysis, dict) else ""
+                )
                 for img in extra:
                     if img not in seen:
                         seen.add(img)

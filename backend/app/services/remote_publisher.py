@@ -297,8 +297,11 @@ class RemotePublisher:
             "article_html_pattern": None,
         }
 
-    def _download_image(self, url: str, retries: int = 2) -> Optional[bytes]:
-        """从外部 URL 下载图片，返回二进制数据（带重试）。支持 data URL (base64)"""
+    def _download_image(self, url: str, retries: int = 2,
+                        min_width: int = 800, min_height: int = 600) -> Optional[bytes]:
+        """从外部 URL 下载图片，返回二进制数据（带重试）。支持 data URL (base64)
+        下载后验证实际分辨率，低于 min_width x min_height 的图片返回 None。
+        """
         if not url:
             return None
         # 处理 data URL (base64 内联图片)
@@ -307,7 +310,10 @@ class RemotePublisher:
                 import base64 as _b64
                 # data:image/png;base64,iVBOR...
                 header, b64data = url.split(',', 1)
-                return _b64.b64decode(b64data)
+                data = _b64.b64decode(b64data)
+                if not self._check_image_quality(data, url, min_width, min_height):
+                    return None
+                return data
             except Exception as e:
                 logger.warning(f"data URL 解码失败: {e}")
                 return None
@@ -320,11 +326,14 @@ class RemotePublisher:
                 }, allow_redirects=True)
                 resp.raise_for_status()
                 content_type = resp.headers.get("content-type", "")
-                if len(resp.content) < 500:
+                if len(resp.content) < 2000:
                     logger.warning(f"图片太小 ({len(resp.content)} bytes)，可能无效: {url}")
                     return None
                 if "text/html" in content_type:
                     logger.warning(f"图片 URL 返回 HTML 而非图片: {url}")
+                    return None
+                # 验证实际分辨率和质量
+                if not self._check_image_quality(resp.content, url, min_width, min_height):
                     return None
                 return resp.content
             except Exception as e:
@@ -334,6 +343,48 @@ class RemotePublisher:
                     continue
                 logger.warning(f"图片下载失败 (尝试{attempt+1}次): {url} -> {e}")
                 return None
+
+    def _check_image_quality(self, data: bytes, url: str,
+                             min_width: int = 800, min_height: int = 600) -> bool:
+        """检查图片实际分辨率和模糊度，拒绝低质量图片"""
+        try:
+            from PIL import Image
+            import io
+            img = Image.open(io.BytesIO(data))
+            w, h = img.size
+            # 分辨率检查
+            if w < min_width or h < min_height:
+                logger.warning(f"图片分辨率过低 ({w}x{h} < {min_width}x{min_height})，跳过: {url}")
+                return False
+            # 文件大小与像素比 — 极低比值说明严重压缩/模糊
+            pixels = w * h
+            bytes_per_pixel = len(data) / pixels if pixels > 0 else 0
+            if bytes_per_pixel < 0.05 and len(data) < 15000:
+                logger.warning(f"图片疑似模糊 (bpp={bytes_per_pixel:.3f}, size={len(data)}B, {w}x{h})，跳过: {url}")
+                return False
+            # 灰度方差检测模糊度（可选，仅对 RGB 图）
+            if img.mode in ('RGB', 'RGBA') and w <= 4000 and h <= 4000:
+                try:
+                    gray = img.convert('L')
+                    import numpy as np
+                    arr = np.array(gray, dtype=np.float64)
+                    # Laplacian 方差 — 值越低越模糊
+                    laplacian = np.array([[0, 1, 0], [1, -4, 1], [0, 1, 0]], dtype=np.float64)
+                    from scipy.signal import convolve2d
+                    lap = convolve2d(arr, laplacian, mode='valid')
+                    variance = lap.var()
+                    if variance < 50:
+                        logger.warning(f"图片模糊度过高 (laplacian_var={variance:.1f})，跳过: {url}")
+                        return False
+                except ImportError:
+                    pass  # numpy/scipy 不可用时跳过模糊检测
+                except Exception:
+                    pass  # 其他异常不阻塞
+            logger.info(f"图片质量通过 ({w}x{h}, {len(data)/1024:.0f}KB): {url[:80]}")
+            return True
+        except Exception as e:
+            logger.warning(f"图片质量检查失败，放行: {url} -> {e}")
+            return True  # 无法检查时放行
 
     def _upload_image(self, sftp: paramiko.SFTPClient, ssh: paramiko.SSHClient,
                       data: bytes, remote_path: str):
@@ -472,32 +523,35 @@ class RemotePublisher:
                 sorted_imgs = sorted(article.images, key=lambda x: (x.position or 0))
                 content_image_urls = [img.url for img in sorted_imgs if img.url]
 
-            # 兜底：如果没有内容图片，自动从标题/商家搜索 4 张
+            # 兜底：如果没有内容图片，自动从标题/商家搜索 4 张高清图
             if len(content_image_urls) < 4:
                 try:
                     from app.services.merchant_crawler import search_images as search_merchant_images
-                    search_query = getattr(article, "merchant_url", "") or article.title
-                    # 用标题的英文部分搜索
+                    # 提取品牌名和品类用于精准搜索
+                    brand = getattr(article, "merchant_url", "") or ""
+                    if brand:
+                        # 从 URL 提取域名作为品牌名
+                        from urllib.parse import urlparse as _urlparse
+                        _parsed = _urlparse(brand)
+                        brand = _parsed.netloc.replace("www.", "").split(".")[0] if _parsed.netloc else brand
+                    category = getattr(article, "category_name", "") or ""
+                    search_query = ""
                     if hasattr(article, "meta_keywords") and article.meta_keywords:
                         search_query = article.meta_keywords.split(",")[0].strip()
                     elif article.title:
                         search_query = article.title
                     need = 4 - len(content_image_urls)
-                    # 多搜一些以确保有足够可下载的图片
-                    extra = search_merchant_images(search_query, count=need + 6)
+                    # 使用改进的多轮搜索策略
+                    extra = search_merchant_images(
+                        search_query, count=need + 8,
+                        brand_name=brand, category=category
+                    )
                     existing_set = set(content_image_urls)
                     for img_url in extra:
                         if img_url not in existing_set and len(content_image_urls) < 4:
                             content_image_urls.append(img_url)
                             existing_set.add(img_url)
-                    # 如果还不够，用标题的其他关键词再搜一次
-                    if len(content_image_urls) < 4 and article.title:
-                        extra2 = search_merchant_images(article.title, count=8)
-                        for img_url in extra2:
-                            if img_url not in existing_set and len(content_image_urls) < 4:
-                                content_image_urls.append(img_url)
-                                existing_set.add(img_url)
-                    logger.info(f"[发布] 自动补充内容图片: 需要{need}张, 最终{len(content_image_urls)}张")
+                    logger.info(f"[发布] 自动补充高清内容图: 需要{need}张, 最终{len(content_image_urls)}张 (brand={brand}, cat={category})")
                 except Exception as e:
                     logger.warning(f"[发布] 自动搜索内容图片失败: {e}")
 
@@ -620,7 +674,7 @@ class RemotePublisher:
 
         category_name = self._get_category_name(article)
         date_label, read_time = self._get_date_and_readtime(article)
-        created = article.created_at or datetime.utcnow()
+        created = self._get_article_date(article)
 
         index_entry = {
             "id": new_id,
@@ -741,13 +795,13 @@ class RemotePublisher:
                 script_path = f"{site_root}/script.js"
                 if self._remote_file_exists(sftp, script_path):
                     script_content = self._sftp_read(sftp, script_path)
-                    if f"const {conflict_var}" in script_content or f"let {conflict_var}" in script_content:
-                        # articles-index.js 不能再声明同名变量
+                    if f"const {conflict_var}" in script_content or f"let {conflict_var}" in script_content or f"var {conflict_var}" in script_content:
+                        # articles-index.js 不能用 const/let 再声明同名变量
                         if f"const {conflict_var}" in final_idx:
-                            final_idx = final_idx.replace(f"const {conflict_var}", f"// const {conflict_var}")
+                            final_idx = final_idx.replace(f"const {conflict_var}", f"var {conflict_var}")
                             needs_rewrite = True
                         if f"let {conflict_var}" in final_idx:
-                            final_idx = final_idx.replace(f"let {conflict_var}", f"// let {conflict_var}")
+                            final_idx = final_idx.replace(f"let {conflict_var}", f"var {conflict_var}")
                             needs_rewrite = True
             if needs_rewrite:
                 self._sftp_write(sftp, data_path, final_idx)
@@ -773,7 +827,7 @@ class RemotePublisher:
         new_id = max((a.get("id", 0) for a in articles_list if isinstance(a.get("id"), int)), default=0) + 1
         category_name = self._get_category_name(article)
         date_label, read_time = self._get_date_and_readtime(article)
-        created = article.created_at or datetime.utcnow()
+        created = self._get_article_date(article)
 
         content_html = article.content or ""
         if image_paths["content"]:
@@ -803,7 +857,7 @@ class RemotePublisher:
         slug = article.slug
         category_name = self._get_category_name(article)
         date_label, read_time = self._get_date_and_readtime(article)
-        created = article.created_at or datetime.utcnow()
+        created = self._get_article_date(article)
 
         content_html = article.content or ""
         if image_paths["content"]:
@@ -1045,8 +1099,14 @@ class RemotePublisher:
             return article.category.name
         return "General"
 
+    def _get_article_date(self, article):
+        """优先使用 publish_date（支持回溯发布），回退到 created_at"""
+        if hasattr(article, "publish_date") and article.publish_date:
+            return article.publish_date
+        return article.created_at or datetime.utcnow()
+
     def _get_date_and_readtime(self, article):
-        created = article.created_at or datetime.utcnow()
+        created = self._get_article_date(article)
         date_label = created.strftime("%b %d, %Y")
         word_count = len(article.content or "") // 5
         read_time = max(3, word_count // 200)
@@ -1057,7 +1117,7 @@ class RemotePublisher:
         """构建 A1/A2/D 类型的 post 条目，自动适配目标站点的字段格式"""
         category_name = self._get_category_name(article)
         date_label, read_time = self._get_date_and_readtime(article)
-        created = article.created_at or datetime.utcnow()
+        created = self._get_article_date(article)
 
         tags = []
         if hasattr(article, "tags") and article.tags:
@@ -1191,16 +1251,24 @@ class RemotePublisher:
         if end < len(original) and original[end] == ';':
             end += 1
 
-        # 检测原始声明是否使用 window.X 格式
+        # 检测原始声明是否使用 window.X 格式，以及 const/let/var
         decl_text = original[decl_start:match.end()]
         use_window = decl_text.startswith("window.")
+        decl_keyword = "const"
+        if decl_text.startswith("var "):
+            decl_keyword = "var"
+        elif decl_text.startswith("let "):
+            decl_keyword = "let"
 
-        items_js = self._items_to_js(var_name, items, use_window=use_window)
+        items_js = self._items_to_js(var_name, items, use_window=use_window, decl_keyword=decl_keyword)
         return original[:decl_start] + items_js + original[end:]
 
-    def _items_to_js(self, var_name: str, items: list, use_window: bool = False) -> str:
+    def _items_to_js(self, var_name: str, items: list, use_window: bool = False, decl_keyword: str = "const") -> str:
         """将数组转为 JS 格式代码"""
-        decl = f"window.{var_name} = [" if use_window else f"const {var_name} = ["
+        if use_window:
+            decl = f"window.{var_name} = ["
+        else:
+            decl = f"{decl_keyword} {var_name} = ["
         lines = [decl]
         for item in items:
             lines.append("  {")
