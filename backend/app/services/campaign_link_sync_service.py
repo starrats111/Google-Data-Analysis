@@ -243,8 +243,6 @@ class CampaignLinkSyncService:
             }
             if not cfg.get("skip_relationship_filter"):
                 form_data["relationship"] = relationship
-            if cfg.get("extra_params"):
-                form_data.update({k: str(v) for k, v in cfg["extra_params"].items()})
             resp = httpx.post(url, data=form_data, timeout=_TIMEOUT)
         elif mode in ("get", "get_post"):
             params = {

@@ -32,12 +32,20 @@ FILTERED_IMG_KEYWORDS = [
     "flag-icon", "star-rating", "review-star",
     "wsj", "nytimes", "forbes-logo", "cnn-logo", "bbc-logo",
     "featured-in", "as-seen", "seen-on",
+    # 第三方 stock 图片平台（不是商家自己的图片）
+    "shutterstock.com", "istockphoto.com", "gettyimages.com",
+    "dreamstime.com", "stock-photo", "stock_photo",
+    # 广告和追踪像素
+    "ad-banner", "advertisement", "tracking-pixel", "analytics",
+    "doubleclick", "googlesyndication", "facebook.com/tr",
 ]
 
 PRESS_SECTION_KEYWORDS = [
     "press-logo", "media-logo", "as-seen", "seen-on", "seen-in",
     "trusted-by-logo", "partner-logo", "endorsement",
     "publication-logo", "as_seen", "asSeen", "in-the-news",
+    "press-section", "media-section", "press-bar", "trust-badge",
+    "certification", "award-logo", "badge-logo",
 ]
 
 # 产品图优先关键词
@@ -299,10 +307,36 @@ def _extract_page(html: str, url: str) -> Dict:
             if any(kw in anc_ctx for kw in PRESS_SECTION_KEYWORDS):
                 is_in_press_section = True
                 break
+            # 检测 testimonial/review/social-proof 区域（通常包含不相关的人物照片）
+            if any(kw in anc_ctx for kw in [
+                "testimonial", "review", "social-proof", "trust",
+                "customer-review", "feedback", "quote", "endorsement",
+                "instagram-feed", "social-feed", "ugc", "user-content",
+            ]):
+                is_in_press_section = True
+                break
             ancestor = ancestor.parent
 
         if is_in_press_section:
             continue
+
+        # --- 同域名图片加分（来自商家自己网站的图片更可能相关）---
+        img_parsed = urlparse(full_url)
+        url_parsed = urlparse(url)
+        if img_parsed.hostname and url_parsed.hostname:
+            # 同域名或同根域名
+            img_root = ".".join((img_parsed.hostname or "").split(".")[-2:])
+            url_root = ".".join((url_parsed.hostname or "").split(".")[-2:])
+            if img_root == url_root:
+                score += 15
+            else:
+                # 第三方域名图片扣分（除非是常见 CDN）
+                cdn_hosts = ["cdn.shopify", "cloudinary", "imgix", "cloudfront",
+                             "akamai", "fastly", "squarespace", "wixstatic",
+                             "bigcommerce", "volusion"]
+                is_cdn = any(h in (img_parsed.hostname or "").lower() for h in cdn_hosts)
+                if not is_cdn:
+                    score -= 10
 
         # --- 尺寸评分 ---
         w = img.get("width", "")
@@ -442,40 +476,271 @@ def _find_sub_pages(soup: BeautifulSoup, base_url: str) -> List[str]:
 
 
 _FALLBACK_UAS = [
+    # Chrome on Windows
+    (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/125.0.0.0 Safari/537.36"
+    ),
+    (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/123.0.0.0 Safari/537.36"
+    ),
+    # Chrome on Mac
     (
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
         "AppleWebKit/537.36 (KHTML, like Gecko) "
         "Chrome/125.0.0.0 Safari/537.36"
     ),
     (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/122.0.0.0 Safari/537.36"
+    ),
+    # Firefox on Windows
+    (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:126.0) "
+        "Gecko/20100101 Firefox/126.0"
+    ),
+    # Firefox on Mac
+    (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:126.0) "
+        "Gecko/20100101 Firefox/126.0"
+    ),
+    # Safari on Mac
+    (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+        "AppleWebKit/605.1.15 (KHTML, like Gecko) "
+        "Version/17.5 Safari/605.1.15"
+    ),
+    # Edge on Windows
+    (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/125.0.0.0 Safari/537.36 Edg/125.0.0.0"
+    ),
+    # Chrome on Linux
+    (
         "Mozilla/5.0 (X11; Linux x86_64) "
         "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/123.0.0.0 Safari/537.36"
+        "Chrome/124.0.0.0 Safari/537.36"
+    ),
+    # Chrome on Android (mobile)
+    (
+        "Mozilla/5.0 (Linux; Android 14; Pixel 8) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/125.0.0.0 Mobile Safari/537.36"
+    ),
+    # Safari on iPhone
+    (
+        "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) "
+        "AppleWebKit/605.1.15 (KHTML, like Gecko) "
+        "Version/17.5 Mobile/15E148 Safari/604.1"
     ),
 ]
+
+# 模拟真实浏览器 Cookie（GA 等常见 cookie）
+import random as _random
+import time as _time
+import string as _string
+
+def _generate_ga_cookies():
+    """生成模拟的 Google Analytics cookie"""
+    ga_id = f"GA1.2.{_random.randint(100000000, 999999999)}.{int(_time.time()) - _random.randint(0, 86400 * 30)}"
+    gid = f"GA1.2.{_random.randint(100000000, 999999999)}.{int(_time.time())}"
+    return f"_ga={ga_id}; _gid={gid}"
+
+def _build_stealth_headers(url: str, ua: str = None) -> Dict:
+    """构建模拟真实浏览器的请求头"""
+    if ua is None:
+        ua = _random.choice(_FALLBACK_UAS)
+
+    parsed = urlparse(url)
+    is_firefox = "Firefox" in ua
+    is_safari = "Safari" in ua and "Chrome" not in ua
+
+    headers = {
+        "User-Agent": ua,
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9,zh-CN;q=0.8,zh;q=0.7",
+        "Accept-Encoding": "gzip, deflate",
+        "Cache-Control": "no-cache",
+        "Upgrade-Insecure-Requests": "1",
+        "Referer": "https://www.google.com/",
+        "DNT": "1",
+        "Connection": "keep-alive",
+    }
+
+    if not is_firefox and not is_safari:
+        # Chrome/Edge specific headers
+        chrome_ver = "125"
+        import re as _re_local
+        m = _re_local.search(r'Chrome/(\d+)', ua)
+        if m:
+            chrome_ver = m.group(1)
+        headers.update({
+            "Sec-Ch-Ua": f'"Chromium";v="{chrome_ver}", "Google Chrome";v="{chrome_ver}", "Not-A.Brand";v="99"',
+            "Sec-Ch-Ua-Mobile": "?0",
+            "Sec-Ch-Ua-Platform": '"Windows"' if "Windows" in ua else '"macOS"',
+            "Sec-Fetch-Dest": "document",
+            "Sec-Fetch-Mode": "navigate",
+            "Sec-Fetch-Site": "cross-site",
+            "Sec-Fetch-User": "?1",
+        })
+    elif is_firefox:
+        headers["TE"] = "trailers"
+
+    # 添加模拟 cookie
+    headers["Cookie"] = _generate_ga_cookies()
+
+    return headers
 
 
 def _fetch_with_retry(client_headers: Dict, url: str, timeout: int = 20) -> httpx.Response:
     """
-    尝试用主 headers 请求；若遇 403 则换 User-Agent 重试。
+    反爬增强版请求：
+    - 随机 UA 轮换（12+ 个 UA）
+    - 随机延迟（1-3 秒）模拟真人
+    - 模拟 Cookie（GA cookie）
+    - Referer: google.com 模拟搜索引擎跳转
+    - 403 后尝试 cloudscraper（绕过 Cloudflare/JS challenge）
+    - 内容太少时也尝试 cloudscraper（SPA 网站壳页面检测）
     """
-    import copy, time
-    headers = copy.copy(client_headers)
-    attempts = [headers["User-Agent"]] + _FALLBACK_UAS
+    import copy
+
+    # 第一轮：用传入的 headers + 增强
+    stealth_headers = _build_stealth_headers(url, client_headers.get("User-Agent"))
+    # 合并原始 headers 中的非冲突项
+    for k, v in client_headers.items():
+        if k not in stealth_headers:
+            stealth_headers[k] = v
+
+    # 随机选择 2 个不同的 UA 尝试（减少尝试次数以加快速度）
+    ua_pool = list(_FALLBACK_UAS)
+    _random.shuffle(ua_pool)
+    attempts_uas = [stealth_headers["User-Agent"]] + ua_pool[:2]
+
     last_resp = None
-    for ua in attempts:
-        headers["User-Agent"] = ua
-        with httpx.Client(timeout=timeout, follow_redirects=True, headers=headers) as client:
-            resp = client.get(url)
-            if resp.status_code != 403:
-                resp.raise_for_status()
-                return resp
-            last_resp = resp
-            time.sleep(0.5)
-    # 所有 UA 都 403，抛出
+    for i, ua in enumerate(attempts_uas):
+        if i > 0:
+            # 随机延迟 1-2 秒
+            delay = _random.uniform(1.0, 2.0)
+            logger.info("[MerchantCrawler] 反爬延迟 %.1f 秒后重试 (UA #%d)", delay, i + 1)
+            _time.sleep(delay)
+
+        headers = _build_stealth_headers(url, ua)
+        try:
+            with httpx.Client(
+                timeout=timeout,
+                follow_redirects=True,
+                headers=headers,
+                http2=False,
+            ) as client:
+                resp = client.get(url)
+                if resp.status_code != 403:
+                    resp.raise_for_status()
+                    # 检查是否是 SPA 壳页面（有 JS 但没有实际内容）
+                    text_lower = resp.text.lower()
+                    has_images = '<img' in text_lower
+                    has_title = bool(re.search(r'<title>[^<]{3,}</title>', resp.text, re.IGNORECASE))
+                    has_body_content = bool(re.search(r'<(?:main|article|section|div[^>]*class="[^"]*(?:product|content|hero))', text_lower))
+                    content_score = (1 if has_images else 0) + (1 if has_title else 0) + (1 if has_body_content else 0)
+                    
+                    if content_score < 2:
+                        logger.info("[MerchantCrawler] httpx 内容质量低 (score=%d, %d bytes, img=%s, title=%s)，尝试 cloudscraper",
+                                    content_score, len(resp.text), has_images, has_title)
+                        cs_resp = _try_cloudscraper(url, timeout)
+                        if cs_resp is not None:
+                            return cs_resp
+                    return resp
+                last_resp = resp
+        except httpx.HTTPStatusError as e:
+            if e.response and e.response.status_code == 403:
+                last_resp = e.response
+                continue
+            raise
+        except Exception:
+            if i < len(attempts_uas) - 1:
+                continue
+            raise
+
+    # 所有常规 UA 都 403，尝试 cloudscraper（绕过 Cloudflare/JS challenge）
+    logger.info("[MerchantCrawler] 所有 UA 均 403，尝试 cloudscraper...")
+    cs_resp = _try_cloudscraper(url, timeout)
+    if cs_resp is not None:
+        return cs_resp
+
+    # 全部失败
     if last_resp is not None:
         last_resp.raise_for_status()
     raise httpx.HTTPStatusError("403 Forbidden", request=httpx.Request("GET", url), response=last_resp)
+
+
+def _try_cloudscraper(url: str, timeout: int = 25):
+    """
+    使用 cloudscraper 绕过 Cloudflare/JS challenge。
+    返回一个伪装成 httpx.Response 的对象，或 None。
+    """
+    try:
+        import cloudscraper
+    except ImportError:
+        logger.warning("[MerchantCrawler] cloudscraper 未安装，跳过")
+        return None
+
+    try:
+        _time.sleep(_random.uniform(0.5, 1.5))
+        scraper = cloudscraper.create_scraper(
+            browser={"browser": "chrome", "platform": "windows", "mobile": False}
+        )
+        # 去掉 brotli 编码，避免某些服务器的解压错误
+        scraper.headers.update({
+            "Accept-Encoding": "gzip, deflate",
+            "Referer": "https://www.google.com/",
+        })
+        resp = scraper.get(url, timeout=timeout)
+        if resp.status_code == 200 and len(resp.text) > 1000:
+            logger.info("[MerchantCrawler] cloudscraper 成功! %d bytes", len(resp.text))
+            # 包装成类似 httpx.Response 的对象
+            fake_resp = httpx.Response(
+                status_code=200,
+                text=resp.text,
+                headers=dict(resp.headers),
+                request=httpx.Request("GET", url),
+            )
+            return fake_resp
+        elif resp.status_code == 403:
+            logger.warning("[MerchantCrawler] cloudscraper 也被 403")
+        else:
+            logger.warning("[MerchantCrawler] cloudscraper 返回 %d, %d bytes", resp.status_code, len(resp.text))
+    except Exception as e:
+        logger.warning("[MerchantCrawler] cloudscraper 失败: %s", e)
+
+    # cloudscraper 失败时，尝试 plain requests（有些网站对 requests 更友好）
+    try:
+        import requests as _requests
+        _time.sleep(_random.uniform(0.5, 1.0))
+        session = _requests.Session()
+        session.headers.update({
+            "User-Agent": _random.choice(_FALLBACK_UAS),
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Referer": "https://www.google.com/",
+        })
+        resp = session.get(url, timeout=timeout, allow_redirects=True)
+        if resp.status_code == 200 and len(resp.text) > 5000:
+            logger.info("[MerchantCrawler] requests fallback 成功! %d bytes", len(resp.text))
+            fake_resp = httpx.Response(
+                status_code=200,
+                text=resp.text,
+                headers=dict(resp.headers),
+                request=httpx.Request("GET", url),
+            )
+            return fake_resp
+    except Exception as e:
+        logger.warning("[MerchantCrawler] requests fallback 也失败: %s", e)
+
+    return None
 
 
 def crawl(url: str) -> Dict:
@@ -504,6 +769,8 @@ def crawl(url: str) -> Dict:
 
         for sub_url in sub_urls[:3]:
             try:
+                # 子页面之间随机延迟，降低反爬触发
+                _time.sleep(_random.uniform(1.0, 2.5))
                 resp = _fetch_with_retry(HEADERS, sub_url, timeout=12)
                 sub_data = _extract_page(resp.text, sub_url)
                 pages.append(sub_data)

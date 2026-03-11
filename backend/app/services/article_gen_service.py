@@ -225,6 +225,67 @@ class ArticleGenService:
                 "keywords": [brand] if brand else ["keyword"],
             }
 
+    def analyze_url_only(self, url: str, language: str = "zh") -> Dict:
+        """仅根据 URL 用 AI 生成标题和关键词（不需要爬虫数据）"""
+        from urllib.parse import urlparse
+        current_year = datetime.now().year
+        parsed = urlparse(url)
+        domain = parsed.hostname or url
+        brand_guess = domain.replace("www.", "").split(".")[0].capitalize()
+
+        lang_label = {
+            'en': '英文', 'zh': '中文', 'de': '德文', 'fr': '法文',
+            'es': '西班牙文', 'it': '意大利文', 'pt': '葡萄牙文', 'nl': '荷兰文',
+            'pl': '波兰文', 'sv': '瑞典文', 'da': '丹麦文', 'no': '挪威文',
+            'fi': '芬兰文', 'ja': '日文', 'ko': '韩文', 'ru': '俄文',
+            'tr': '土耳其文', 'th': '泰文', 'vi': '越南文',
+        }.get(language, '英文')
+
+        system_prompt = (
+            "You are a JSON API. You MUST respond with ONLY a valid JSON object, no other text.\n"
+            "Do NOT include any explanation, greeting, or markdown. Output raw JSON only.\n\n"
+            f"Based on the merchant website URL below, generate promotional content. Current year: {current_year}.\n"
+            "Even though you cannot access the website, use the domain name and URL path to infer:\n"
+            "- What kind of products/services they likely offer\n"
+            "- Their brand positioning\n"
+            "- Target audience\n\n"
+            f"Generate 5 promotional article titles and 5 SEO keywords in {lang_label}.\n"
+            "Titles should be engaging, SEO-friendly, and suitable for affiliate marketing.\n\n"
+            "Required JSON format:\n"
+            '{"brand_name":"BrandName","category":"travel","products":["product1"],'
+            '"selling_points":["point1"],"target_audience":"audience","promotions":"",'
+            '"titles":[{"title":"标题","title_en":"English Title"}],'
+            '"keywords":["keyword1","keyword2","keyword3","keyword4","keyword5"]}'
+        )
+        user_msg = f"商家网站 URL：{url}\n域名：{domain}\n推测品牌名：{brand_guess}"
+
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_msg},
+        ]
+        raw = self._call_with_fallback(messages, max_tokens=4096)
+        try:
+            result = json.loads(raw)
+            if not result.get("titles"):
+                result["titles"] = [{"title": f"{brand_guess} 推荐 {i+1}", "title_en": f"{brand_guess} Recommendation {i+1}"} for i in range(5)]
+            if not result.get("keywords"):
+                result["keywords"] = [brand_guess, "shopping", "deals", "review", "best"]
+            if not result.get("brand_name"):
+                result["brand_name"] = brand_guess
+            return result
+        except (json.JSONDecodeError, IndexError):
+            logger.error(f"[ArticleGen] URL分析解析失败: {raw[:300]}")
+            return {
+                "brand_name": brand_guess,
+                "category": "general",
+                "products": [],
+                "selling_points": [],
+                "target_audience": "",
+                "promotions": "",
+                "titles": [{"title": f"{brand_guess} 推荐 {i+1}", "title_en": f"{brand_guess} Recommendation {i+1}"} for i in range(5)],
+                "keywords": [brand_guess, "shopping", "deals", "review", "best"],
+            }
+
     def generate_merchant_article(
         self,
         title: str,
@@ -235,11 +296,12 @@ class ArticleGenService:
     ) -> Dict:
         """
         商家推广文章生成（OPT-012）
-        融合07提供的露出提示词规则 + 自动去AI味
+        融合露出提示词规则：软植入、编辑视角、10-15个超链接、去AI味
         """
         current_year = datetime.now().year
         brand = merchant_info.get("brand_name", "品牌")
-        products = ", ".join(merchant_info.get("products", [])[:5])
+        products_list = merchant_info.get("products", [])[:5]
+        products = ", ".join(products_list)
         selling_points = ", ".join(merchant_info.get("selling_points", [])[:5])
         promotions = merchant_info.get("promotions", "")
         lang_label = {
@@ -253,29 +315,59 @@ class ArticleGenService:
             'el': 'Greek', 'he': 'Hebrew',
         }.get(language, language)
 
-        keyword_str = ""
-        keyword_link_rule = ""
+        # 构建链接词列表：品牌名 + 产品名 + 关键词 → 都要做超链接
+        link_words = [brand]
+        for p in products_list:
+            if p and p.lower() != brand.lower():
+                link_words.append(p)
         if keywords:
-            keyword_str = f"\nSEO 关键词（自然融入）：{', '.join(keywords)}"
-            kw_examples = ", ".join(f'<a href="{tracking_link}">{kw}</a>' for kw in keywords[:3])
-            keyword_link_rule = (
-                f"7)Each SEO keyword should be hyperlinked to {tracking_link} "
-                f"on its FIRST occurrence, e.g. {kw_examples}\n"
-            )
+            for kw in keywords:
+                if kw and kw.lower() not in [w.lower() for w in link_words]:
+                    link_words.append(kw)
+        link_examples = ", ".join(
+            f'<a href="{tracking_link}">{w}</a>' for w in link_words[:6]
+        )
 
         system_prompt = (
-            f"You are a lifestyle editor writing in {lang_label}. Year: {current_year}.\n"
-            "Rules: 1)No AI buzzwords(revolutionizing,game-changer,elevate,seamlessly,cutting-edge) "
-            "2)Brand name appears 3-4 times, NOT in first paragraph "
-            f"3)Insert 2-3 brand links: <a href=\"{tracking_link}\">{brand}</a> "
-            "4)Write like a real editor with personal tone "
-            "5)2500-4000 words, HTML with h2/h3, at least 5 sections with h2 headings "
-            "6)No empty praise, be specific\n"
-            f"{keyword_link_rule}"
+            f"You are an experienced lifestyle content editor writing a soft-promotion article in {lang_label}. Year: {current_year}.\n\n"
+            "【Core Principles — MUST follow】\n"
+            "1. AUTHENTICITY FIRST: Write like a real human editor, NOT an AI. Use personal anecdotes, "
+            "first-person perspective, casual observations, and genuine opinions. Imagine you are recommending "
+            "something to a friend over coffee.\n"
+            "2. SOFT PLACEMENT: The brand should be woven in naturally — like a friend mentioning a product "
+            "they genuinely like. NEVER open the article with the brand name. The brand should NOT appear "
+            "in the first paragraph at all. Introduce it casually mid-article.\n"
+            "3. FACTUAL ACCURACY: Product names, features, and prices must match the merchant website.\n"
+            "4. NO HARD SELL: No advertising tone, no hype, no pressure language.\n\n"
+            "【BANNED words/phrases — NEVER use these】\n"
+            "revolutionizing, game-changer, elevate, seamlessly, cutting-edge, delve, comprehensive, "
+            "landscape, foster, leverage, harness, robust, streamline, empower, curated, innovative, "
+            "transformative, groundbreaking, it is worth noting, in today's world, without a doubt, "
+            "needless to say, in conclusion, to sum up, furthermore, moreover, incredibly, absolutely, "
+            "undoubtedly, embark, navigate, realm, pivotal, testament, beacon, tapestry, multifaceted, "
+            "holistic, synergy, paradigm, ecosystem\n\n"
+            f"【Link Rules — CRITICAL】\n"
+            f"Tracking link (use this for ALL hyperlinks): {tracking_link}\n"
+            "Link method:\n"
+            f"- Brand name link: use brand name as anchor text → <a href=\"{tracking_link}\">{brand}</a>\n"
+            "- Product name link: use product name as anchor text\n"
+            "- Category/keyword link: use the keyword as anchor text\n"
+            f"- Examples: {link_examples}\n"
+            "- TOTAL hyperlinks in the article: 10-15 (spread evenly across the article, not clustered)\n"
+            "- Every mention of the brand name, product names, and related keywords should be hyperlinked\n"
+            "- All links point to the SAME tracking URL above\n\n"
+            "【Article Requirements】\n"
+            f"- Length: 800-1200 words (medium length)\n"
+            f"- Language: {lang_label}\n"
+            "- Category: judge based on the merchant's business (fashion/health/home/travel/finance/food/beauty/tech/lifestyle)\n"
+            "- Structure: HTML with h2 headings, 4-6 sections, use <p> tags\n"
+            "- Writing style: editor perspective, personal stories, conversational language, genuine views\n"
+            "- DO NOT start with the brand. Start with a relatable scenario, personal experience, or observation.\n"
+            "- DO NOT use consecutive paragraphs that all mention the brand.\n\n"
             "CRITICAL: Output ONLY raw JSON, no markdown, no explanation, no preamble. "
-            "Do NOT say 'I will write' or 'Let me create'. Start directly with {. "
+            "Do NOT say 'I will write' or 'Let me create'. Start directly with {.\n"
             "JSON schema: "
-            "{\"content\":\"<full article HTML with h2/h3/p tags>\","
+            "{\"content\":\"<full article HTML with h2/h3/p tags, 10-15 hyperlinks>\","
             "\"excerpt\":\"100-char plain text summary\","
             "\"meta_title\":\"SEO title\","
             "\"meta_description\":\"160-char description\","
@@ -283,6 +375,10 @@ class ArticleGenService:
             "\"category\":\"one of: health,tech,lifestyle,fashion,beauty,fitness,food,travel,finance,general\","
             "\"author\":\"a realistic pen name matching the article language\"}"
         )
+
+        keyword_str = ""
+        if keywords:
+            keyword_str = f"\nSEO keywords (weave naturally): {', '.join(keywords)}"
 
         user_msg = (
             f"Title: {title}\nBrand: {brand}\nProducts: {products}\n"
@@ -299,8 +395,105 @@ class ArticleGenService:
 
         if result.get("content"):
             result["content"] = humanize(result["content"])
+            # 链接后处理：确保 10-15 个超链接
+            result["content"] = self._ensure_link_count(
+                result["content"], tracking_link, brand, products_list, keywords or []
+            )
 
         return result
+
+    def _ensure_link_count(
+        self, content: str, tracking_link: str, brand: str,
+        products: List[str], keywords: List[str],
+        min_links: int = 10, max_links: int = 15,
+    ) -> str:
+        """后处理：确保文章中超链接数量在 min_links ~ max_links 之间"""
+        import re as _re
+
+        # 统计现有链接
+        existing = list(_re.finditer(r'<a\s+[^>]*href=["\'][^"\']*["\'][^>]*>([^<]+)</a>', content))
+        count = len(existing)
+        logger.info("[LinkPostProcess] 当前链接数: %d (目标: %d-%d)", count, min_links, max_links)
+
+        # 如果链接不足，补充
+        if count < min_links:
+            # 构建要链接的词列表（按优先级）
+            link_candidates = []
+            if brand:
+                link_candidates.append(brand)
+            for p in products:
+                if p and p not in link_candidates:
+                    link_candidates.append(p)
+            for kw in keywords:
+                if kw and kw not in link_candidates:
+                    link_candidates.append(kw)
+
+            # 已经被链接的文本（避免重复）
+            linked_texts = set()
+            for m in existing:
+                linked_texts.add(m.group(1).lower())
+
+            needed = min_links - count
+            added = 0
+            for word in link_candidates:
+                if added >= needed:
+                    break
+                # 查找文章中未被链接的该词出现位置
+                # 用 word boundary 匹配，忽略已在 <a> 标签内的
+                pattern = _re.compile(
+                    r'(?<!</a>)(?<!["\'>])(?<!href=["\'])(\b' + _re.escape(word) + r'\b)(?![^<]*</a>)',
+                    _re.IGNORECASE
+                )
+                matches = list(pattern.finditer(content))
+                for m in matches:
+                    if added >= needed:
+                        break
+                    # 确保不在已有的 <a> 标签内
+                    before = content[max(0, m.start()-50):m.start()]
+                    if '<a ' in before and '</a>' not in before:
+                        continue
+                    replacement = f'<a href="{tracking_link}">{m.group(1)}</a>'
+                    content = content[:m.start()] + replacement + content[m.end():]
+                    added += 1
+                    # 重新计算后续匹配位置（因为内容长度变了）
+                    break  # 每个词每轮只替换一个，下轮继续
+
+            # 如果还不够，再循环一轮
+            if added < needed:
+                for word in link_candidates:
+                    if added >= needed:
+                        break
+                    pattern = _re.compile(
+                        r'(?<!</a>)(?<!["\'>])(\b' + _re.escape(word) + r'\b)(?![^<]*</a>)',
+                        _re.IGNORECASE
+                    )
+                    for m in pattern.finditer(content):
+                        before = content[max(0, m.start()-50):m.start()]
+                        if '<a ' in before and '</a>' not in before:
+                            continue
+                        replacement = f'<a href="{tracking_link}">{m.group(1)}</a>'
+                        content = content[:m.start()] + replacement + content[m.end():]
+                        added += 1
+                        break
+
+            logger.info("[LinkPostProcess] 补充了 %d 个链接", added)
+
+        # 如果链接过多，移除多余的（从后往前移除，保留前面的）
+        elif count > max_links:
+            existing_reversed = list(reversed(existing))
+            to_remove = count - max_links
+            removed = 0
+            for m in existing_reversed:
+                if removed >= to_remove:
+                    break
+                # 保留原文本，去掉 <a> 标签
+                full_match = m.group(0)
+                inner_text = m.group(1)
+                content = content.replace(full_match, inner_text, 1)
+                removed += 1
+            logger.info("[LinkPostProcess] 移除了 %d 个多余链接", removed)
+
+        return content
 
     def generate_images(self, title: str, count: int = 5) -> List[Dict]:
         """生成配图建议（返回图片搜索关键词 + Unsplash URL）"""

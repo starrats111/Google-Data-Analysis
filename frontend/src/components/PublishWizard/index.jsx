@@ -18,13 +18,32 @@ const { TextArea } = Input
 const { Dragger } = Upload
 
 // 图片代理：通过后端转发，绕过商家网站防盗链
-// 生产环境必须使用完整 API 域名，否则图片请求会发到 Cloudflare Pages 前端域名
+// CR-040: 缓存图片直接用 cache_url（已下载到后端），图库图直接用原始 URL
 const proxyImg = (url) => {
   if (!url) return '';
+  // CR-040: 缓存图片 URL（/api/article-gen/image-cache/...）直接拼接后端域名
+  if (url.startsWith('/api/article-gen/image-cache/')) {
+    const apiBase = api.defaults?.baseURL || '';
+    return `${apiBase}${url}`;
+  }
   if (/pexels\.com|unsplash\.com|images\.pexels/i.test(url)) return url;
   if (url.startsWith('data:') || url.startsWith('blob:')) return url;
   const apiBase = api.defaults?.baseURL || '';
   return `${apiBase}/api/article-gen/image-proxy?url=${encodeURIComponent(url)}`;
+};
+
+// CR-040: 从图片对象或字符串中提取显示 URL
+const getImgDisplayUrl = (img) => {
+  if (!img) return '';
+  if (typeof img === 'string') return proxyImg(img);
+  return proxyImg(img.cache_url || img.url || '');
+};
+
+// CR-040: 从图片对象或字符串中提取提交用的值
+const getImgSubmitValue = (img) => {
+  if (!img) return '';
+  if (typeof img === 'string') return img;
+  return img.cache_url || img.url || '';
 };
 
 const LANGUAGES = [
@@ -103,11 +122,12 @@ const PublishWizard = () => {
   const [publishingSite, setPublishingSite] = useState(false)
 
   // === 图片双区域 State ===
-  const [selectedImages, setSelectedImages] = useState([])       // 文章用图（位置0=头图）
-  const [crawledImages, setCrawledImages] = useState([])         // 网站爬取的待选图
-  const [stockImages, setStockImages] = useState([])             // 图片库待选图
+  const [selectedImages, setSelectedImages] = useState([])       // 文章用图（位置0=头图），CR-040: 对象 {url, cache_url, source} 或字符串
+  const [crawledImages, setCrawledImages] = useState([])         // 网站爬取的待选图（CR-040: 对象数组）
+  const [stockImages, setStockImages] = useState([])             // 图片库待选图（字符串或对象）
   const [imagePoolMode, setImagePoolMode] = useState('crawl')    // 'crawl' | 'stock'
   const [searchingImages, setSearchingImages] = useState(false)
+  const [imageCacheSession, setImageCacheSession] = useState('') // CR-040: 缓存会话 ID
 
   // === 手动上传图片 State ===
   const [manualHeroFile, setManualHeroFile] = useState(null)       // 头图文件
@@ -137,6 +157,28 @@ const PublishWizard = () => {
     reader.onload = (e) => resolve(e.target.result)
     reader.readAsDataURL(file)
   })
+
+  // CR-040: 上传图片到缓存 API
+  const uploadToImageCache = async (file) => {
+    if (!imageCacheSession) {
+      // 如果还没有缓存会话（比如没爬虫直接上传），先用 data URL
+      const dataUrl = await fileToDataUrl(file)
+      return { cache_url: dataUrl, url: dataUrl, source: 'upload' }
+    }
+    try {
+      const dataUrl = await fileToDataUrl(file)
+      const res = await api.post('/api/article-gen/image-cache/upload-base64', {
+        session_id: imageCacheSession,
+        filename: file.name || 'upload.jpg',
+        data_base64: dataUrl,
+      })
+      return res.data  // {cache_url, original_url, source, width, height}
+    } catch (e) {
+      // 上传到缓存失败，回退到 data URL
+      const dataUrl = await fileToDataUrl(file)
+      return { cache_url: dataUrl, url: dataUrl, source: 'upload' }
+    }
+  }
 
   const handleHeroDrop = async (info) => {
     const file = info.file?.originFileObj || info.file
@@ -191,51 +233,106 @@ const PublishWizard = () => {
     setCrawledImages([])
     setStockImages([])
 
-    // 尝试爬取商家网站获取 AI 分析数据
+    // 尝试爬取商家网站获取 AI 分析数据；爬虫失败时自动用 AI 分析 URL 生成标题/关键词
     setLoading(true)
     try {
       const res = await articleApi.crawlMerchant({ url: merchantUrl, language })
       const resData = res.data
       setCrawlResult(resData)
-      setMerchantTitles(resData?.analysis?.titles || [])
-      setMerchantKeywords(resData?.analysis?.keywords || [])
+      _autoSelectTitleAndKeywords(resData)
       // 保留手动上传的图片，不用爬取的图片覆盖
       setCrawledImages(resData?.images || [])
-      setMStep(1)
+      setMStep(2)
     } catch (_err) {
-      // 爬虫失败也继续，用空分析数据让用户手动填
-      message.info('商家网站爬取失败（反爬保护），将使用手动输入的信息生成文章')
-      setCrawlResult({ brand_name: '', url: merchantUrl, analysis: { titles: [], keywords: [], products: [], selling_points: [], promotions: '' } })
-      setMerchantTitles([])
-      setMerchantKeywords([])
+      // 爬虫失败 → 调用 AI 分析 URL 生成标题/关键词（不需要爬虫数据）
+      message.info('商家网站爬取失败（反爬保护），正在用 AI 分析生成标题和关键词...')
+      try {
+        const aiRes = await articleApi.analyzeUrl({ url: merchantUrl, language })
+        const aiData = aiRes.data
+        const analysis = aiData?.analysis || {}
+        const crawlData = {
+          brand_name: aiData?.brand_name || '',
+          url: merchantUrl,
+          analysis,
+        }
+        setCrawlResult(crawlData)
+        _autoSelectTitleAndKeywords(crawlData)
+        message.success('AI 分析完成，已自动选择标题和关键词')
+      } catch (_aiErr) {
+        // AI 分析也失败，用空数据让用户手动填
+        message.warning('AI 分析也失败了，请手动输入标题和关键词')
+        setCrawlResult({ brand_name: '', url: merchantUrl, analysis: { titles: [], keywords: [], products: [], selling_points: [], promotions: '' } })
+        setMerchantTitles([])
+        setMerchantKeywords([])
+      }
       setCrawledImages([])
-      setMStep(1)
+      setMStep(2)
     } finally { setLoading(false) }
+  }
+
+  // 自动选择标题和关键词的辅助函数
+  const _autoSelectTitleAndKeywords = (resData) => {
+    const titles = resData?.analysis?.titles || []
+    const keywords = resData?.analysis?.keywords || []
+    setMerchantTitles(titles)
+    setMerchantKeywords(keywords)
+    // 自动选择第一个标题
+    if (titles.length > 0) {
+      const firstTitle = typeof titles[0] === 'string' ? titles[0] : (language === 'en' ? (titles[0].title_en || titles[0].title) : titles[0].title)
+      setSelectedMTitle(firstTitle)
+    }
+    // 自动选择所有关键词
+    if (keywords.length > 0) {
+      setSelectedMKeywords(keywords)
+    }
   }
 
   const _applyCrawlImages = async (resData) => {
     setCrawlResult(resData)
-    setMerchantTitles(resData?.analysis?.titles || [])
-    setMerchantKeywords(resData?.analysis?.keywords || [])
+    _autoSelectTitleAndKeywords(resData)
+
+    // CR-040: 保存缓存会话 ID
+    const cacheSession = resData?.image_cache_session || ''
+    setImageCacheSession(cacheSession)
+
+    // CR-040: images 现在是对象数组 [{cache_url, original_url, source, width, height}]
     const imgs = resData?.images || []
+    // stock_images 是对象数组 [{url, source}] 或字符串数组（不走缓存）
+    const backendStockImgs = (resData?.stock_images || []).map(s =>
+      typeof s === 'string' ? { url: s, source: 'stock' } : s
+    )
     setCrawledImages(imgs)
-    setSelectedImages(imgs.slice(0, 5))
-    setStockImages([])
-    if (imgs.length === 0) {
+    if (backendStockImgs.length > 0) {
+      setStockImages(backendStockImgs)
+    } else {
+      setStockImages([])
+    }
+
+    if (imgs.length === 0 && backendStockImgs.length > 0) {
+      // 爬取 0 张，但后端已补充图库图片
+      setImagePoolMode('stock')
+      setSelectedImages(backendStockImgs.slice(0, 5))
+    } else if (imgs.length === 0 && backendStockImgs.length === 0) {
+      // 爬取 0 张，后端也没补充 → 前端自行搜索图库
       setImagePoolMode('stock')
       const query = _buildImageSearchQuery(resData)
       setSearchingImages(true)
       try {
         const stockRes = await articleApi.searchImages({ query, count: 16 })
-        const stockImgs = stockRes.data?.images || []
+        const stockImgs = (stockRes.data?.images || []).map(s =>
+          typeof s === 'string' ? { url: s, source: 'stock' } : s
+        )
         setStockImages(stockImgs)
         if (stockImgs.length > 0) setSelectedImages(stockImgs.slice(0, 5))
       } catch (_e) { /* ignore */ }
       finally { setSearchingImages(false) }
     } else {
+      // 有爬取图片（已缓存）
+      setSelectedImages(imgs.slice(0, 5))
       setImagePoolMode('crawl')
     }
-    setMStep(1)
+    // 直接跳到确认信息步骤（跳过标题/关键词选择）
+    setMStep(2)
   }
 
   useEffect(() => {
@@ -408,12 +505,12 @@ const PublishWizard = () => {
       const res = await articleApi.crawlMerchant({ url: siteUrl, language })
       await _applyCrawlImages(res.data)
     } catch (err) {
-      message.warning('爬取失败（反爬保护），已保留链接信息，请手动输入标题和关键词')
+      message.warning('爬取失败（反爬保护），已保留链接信息，请在确认页面检查标题')
       setCrawlResult({ brand_name: '', url: siteUrl, analysis: { titles: [], keywords: [], products: [], selling_points: [], promotions: '' } })
       setMerchantTitles([])
       setMerchantKeywords([])
       setCrawledImages([])
-      setMStep(1)
+      setMStep(2)
     } finally { setLoading(false) }
   }
 
@@ -434,12 +531,28 @@ const PublishWizard = () => {
       const res = await articleApi.crawlMerchant({ url: merchantUrl, language })
       await _applyCrawlImages(res.data)
     } catch (err) {
-      message.warning('爬取失败（反爬保护），已保留链接信息，请手动输入标题和关键词')
-      setCrawlResult({ brand_name: '', url: merchantUrl, analysis: { titles: [], keywords: [], products: [], selling_points: [], promotions: '' } })
-      setMerchantTitles([])
-      setMerchantKeywords([])
+      // 爬虫失败 → 自动用 AI 分析 URL 生成品牌信息、标题和关键词
+      message.info('商家网站爬取失败（反爬保护），正在用 AI 分析生成标题和关键词...')
+      try {
+        const aiRes = await articleApi.analyzeUrl({ url: merchantUrl, language })
+        const aiData = aiRes.data
+        const analysis = aiData?.analysis || {}
+        const crawlData = {
+          brand_name: aiData?.brand_name || '',
+          url: merchantUrl,
+          analysis,
+        }
+        setCrawlResult(crawlData)
+        _autoSelectTitleAndKeywords(crawlData)
+        message.success('AI 分析完成，已自动选择标题和关键词')
+      } catch (_aiErr) {
+        message.warning('AI 分析也失败了，请在确认页面手动输入标题和关键词')
+        setCrawlResult({ brand_name: '', url: merchantUrl, analysis: { titles: [], keywords: [], products: [], selling_points: [], promotions: '' } })
+        setMerchantTitles([])
+        setMerchantKeywords([])
+      }
       setCrawledImages([])
-      setMStep(1)
+      setMStep(2)
     } finally { setLoading(false) }
   }
 
@@ -453,12 +566,28 @@ const PublishWizard = () => {
       const res = await articleApi.crawlMerchant({ url: merchantUrl, language })
       await _applyCrawlImages(res.data)
     } catch (err) {
-      message.warning('爬取失败（反爬保护），已保留链接信息，请手动输入标题和关键词')
-      setCrawlResult({ brand_name: '', url: merchantUrl, analysis: { titles: [], keywords: [], products: [], selling_points: [], promotions: '' } })
-      setMerchantTitles([])
-      setMerchantKeywords([])
+      // 爬虫失败 → 自动用 AI 分析 URL 生成品牌信息、标题和关键词
+      message.info('商家网站爬取失败（反爬保护），正在用 AI 分析生成标题和关键词...')
+      try {
+        const aiRes = await articleApi.analyzeUrl({ url: merchantUrl, language })
+        const aiData = aiRes.data
+        const analysis = aiData?.analysis || {}
+        const crawlData = {
+          brand_name: aiData?.brand_name || '',
+          url: merchantUrl,
+          analysis,
+        }
+        setCrawlResult(crawlData)
+        _autoSelectTitleAndKeywords(crawlData)
+        message.success('AI 分析完成，已自动选择标题和关键词')
+      } catch (_aiErr) {
+        message.warning('AI 分析也失败了，请在确认页面手动输入标题和关键词')
+        setCrawlResult({ brand_name: '', url: merchantUrl, analysis: { titles: [], keywords: [], products: [], selling_points: [], promotions: '' } })
+        setMerchantTitles([])
+        setMerchantKeywords([])
+      }
       setCrawledImages([])
-      setMStep(1)
+      setMStep(2)
     } finally { setLoading(false) }
   }
 
@@ -512,8 +641,13 @@ const PublishWizard = () => {
         tracking_link: trackingLink,
         language,
         category_name: merchantArticle.category || crawlResult?.analysis?.category || null,
-        featured_image: selectedImages[0] || null,
-        content_images: selectedImages.slice(1),
+        // CR-040: 图片传递缓存信息
+        featured_image: getImgSubmitValue(selectedImages[0]) || null,
+        content_images: selectedImages.slice(1).map(img => {
+          if (typeof img === 'string') return img
+          return { cache_url: img.cache_url || '', url: img.url || '', source: img.source || 'crawl' }
+        }),
+        image_cache_session: imageCacheSession || null,
         author: merchantArticle.author || null,
       }
       const res = await articleApi.createArticle(payload)
@@ -542,10 +676,13 @@ const PublishWizard = () => {
     else setSelectedMKeywords([...selectedMKeywords, kw])
   }
 
-  // === 图片选择操作 ===
-  const handleAddToSelected = (src) => {
-    if (selectedImages.includes(src)) { message.info('该图片已在文章用图中'); return }
-    setSelectedImages(prev => [...prev, src])
+  // === 图片选择操作（CR-040: 支持对象格式） ===
+  const handleAddToSelected = (imgObj) => {
+    // 去重：比较 cache_url 或 url
+    const newKey = getImgSubmitValue(imgObj)
+    const exists = selectedImages.some(s => getImgSubmitValue(s) === newKey)
+    if (exists) { message.info('该图片已在文章用图中'); return }
+    setSelectedImages(prev => [...prev, imgObj])
   }
 
   const handleRemoveFromSelected = (index) => {
@@ -568,7 +705,10 @@ const PublishWizard = () => {
     setSearchingImages(true)
     try {
       const res = await articleApi.searchImages({ query, count: 16 })
-      const imgs = res.data?.images || []
+      // CR-040: 图库图不走缓存，转为对象格式 {url, source}
+      const imgs = (res.data?.images || []).map(s =>
+        typeof s === 'string' ? { url: s, source: 'stock' } : s
+      )
       setStockImages(imgs)
       setImagePoolMode('stock')
       if (imgs.length === 0) message.info('图片库未搜索到匹配图片')
@@ -766,8 +906,8 @@ const PublishWizard = () => {
   // ==================== Merchant Mode Steps ====================
   const mSteps = [
     { title: '输入商家信息', description: '网址 + 追踪链接' },
-    { title: 'AI 分析结果', description: '选择标题和关键词' },
-    { title: '生成文章', description: 'AI 撰写推广软文' },
+    { title: '图片选择', description: '选择文章配图' },
+    { title: '确认 & 生成', description: 'AI 自动标题/关键词，确认后生成' },
     { title: '预览发布', description: '确认并发布' },
   ]
 
@@ -1078,10 +1218,10 @@ const PublishWizard = () => {
           </div>
         )}
 
-        {/* Step 1: AI 分析结果 */}
+        {/* Step 1: 图片选择 + 商家信息概览 */}
         {mStep === 1 && crawlResult && (
           <div style={{ maxWidth: 700, margin: '0 auto' }}>
-            {/* 商家信息 + 追踪链接（爬虫失败时也显示） */}
+            {/* 商家信息概览 */}
             <Card size="small" style={{ marginBottom: 16, background: '#f6ffed' }}>
               {crawlResult.brand_name ? (
                 <>
@@ -1089,7 +1229,7 @@ const PublishWizard = () => {
                   <Typography.Text>{crawlResult.brand_name}</Typography.Text>
                 </>
               ) : (
-                <Alert type="warning" message="爬虫未获取到品牌信息（反爬保护），请在下方手动输入标题和关键词" showIcon style={{ marginBottom: 8 }} />
+                <Alert type="warning" message="爬虫未获取到品牌信息（反爬保护），AI 已自动生成标题和关键词" showIcon style={{ marginBottom: 8 }} />
               )}
               {merchantUrl && (
                 <div style={{ marginTop: 4 }}>
@@ -1103,66 +1243,7 @@ const PublishWizard = () => {
                   <Typography.Text copyable style={{ color: '#52c41a', fontSize: 12 }}>{trackingLink}</Typography.Text>
                 </div>
               )}
-              {crawlResult.analysis?.products && (
-                <div style={{ marginTop: 8 }}>
-                  <Typography.Text strong>主营产品：</Typography.Text>
-                  <Typography.Text>{crawlResult.analysis.products.join('、')}</Typography.Text>
-                </div>
-              )}
-              {crawlResult.analysis?.selling_points && (
-                <div style={{ marginTop: 4 }}>
-                  <Typography.Text strong>卖点：</Typography.Text>
-                  <Typography.Text>{crawlResult.analysis.selling_points.join('、')}</Typography.Text>
-                </div>
-              )}
-              {crawlResult.analysis?.promotions && (
-                <div style={{ marginTop: 4 }}>
-                  <Typography.Text strong>促销：</Typography.Text>
-                  <Typography.Text>{crawlResult.analysis.promotions}</Typography.Text>
-                </div>
-              )}
             </Card>
-
-            {/* ===== Support Region → 语言自动确定 ===== */}
-            {campaignResult?.support_regions?.length > 0 ? (
-              <Card size="small" style={{ marginBottom: 16, background: '#f0f5ff' }}>
-                <Row gutter={16} align="middle">
-                  <Col span={14}>
-                    <Typography.Text strong>Support Region</Typography.Text>
-                    <Select
-                      placeholder="选择目标区域（自动确定语言）"
-                      value={selectedRegion}
-                      onChange={handleRegionSelect}
-                      style={{ width: '100%', marginTop: 4 }}
-                      options={campaignResult.support_regions.map(r => ({
-                        value: r.code,
-                        label: `${r.code} — ${r.language}`,
-                      }))}
-                    />
-                  </Col>
-                  <Col span={10}>
-                    <Typography.Text strong>文章语言</Typography.Text>
-                    <div style={{ marginTop: 4 }}>
-                      <Tag color="blue" style={{ fontSize: 14, padding: '4px 12px' }}>
-                        {selectedRegion
-                          ? (campaignResult.support_regions.find(r => r.code === selectedRegion)?.language || language)
-                          : '请先选择区域'}
-                      </Tag>
-                    </div>
-                  </Col>
-                </Row>
-              </Card>
-            ) : (
-              <Card size="small" style={{ marginBottom: 16, background: '#f0f5ff' }}>
-                <Typography.Text strong>文章语言</Typography.Text>
-                <Select
-                  value={language}
-                  onChange={setLanguage}
-                  options={LANGUAGES}
-                  style={{ width: 200, marginLeft: 12 }}
-                />
-              </Card>
-            )}
 
             {/* ===== 文章用图 ===== */}
             <div style={{ marginBottom: 20 }}>
@@ -1185,7 +1266,7 @@ const PublishWizard = () => {
                       <Tag color={i === 0 ? 'green' : 'default'} style={{ position: 'absolute', bottom: 4, left: 4, zIndex: 2, margin: 0, fontSize: 11 }}>
                         {i === 0 ? '头图' : `内容${i}`}
                       </Tag>
-                      <Image src={proxyImg(src)} width={110} height={110} style={{ objectFit: 'cover', borderRadius: 6 }}
+                      <Image src={getImgDisplayUrl(src)} width={110} height={110} style={{ objectFit: 'cover', borderRadius: 6 }}
                         preview={false}
                         fallback="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACklEQVR4nGMAAQAABQABDQottAAAAABJRU5ErkJggg=="
                       />
@@ -1243,15 +1324,17 @@ const PublishWizard = () => {
                 <Alert type="info" message="图片库暂无匹配结果" showIcon />
               )}
               <Space wrap size={[8, 8]} style={{ marginTop: 8 }}>
-                {(imagePoolMode === 'crawl' ? crawledImages : stockImages).map((src, i) => {
-                  const isSelected = selectedImages.includes(src)
+                {(imagePoolMode === 'crawl' ? crawledImages : stockImages).map((imgObj, i) => {
+                  // CR-040: 比较对象的 key 值做去重
+                  const imgKey = getImgSubmitValue(imgObj)
+                  const isSelected = selectedImages.some(s => getImgSubmitValue(s) === imgKey)
                   return (
                     <div key={`pool-${i}`} style={{
                       position: 'relative', display: 'inline-block', cursor: isSelected ? 'default' : 'pointer',
                       border: '2px solid transparent', borderRadius: 6, padding: 1,
                       opacity: isSelected ? 0.4 : 1, transition: 'opacity 0.2s',
-                    }} onClick={() => !isSelected && handleAddToSelected(src)}>
-                      <Image src={proxyImg(src)} width={90} height={90} style={{ objectFit: 'cover', borderRadius: 4 }}
+                    }} onClick={() => !isSelected && handleAddToSelected(imgObj)}>
+                      <Image src={getImgDisplayUrl(imgObj)} width={90} height={90} style={{ objectFit: 'cover', borderRadius: 4 }}
                         preview={false}
                         fallback="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACklEQVR4nGMAAQAABQABDQottAAAAABJRU5ErkJggg=="
                       />
@@ -1269,102 +1352,78 @@ const PublishWizard = () => {
               </Space>
             </div>
 
-            <Typography.Title level={5}>选择标题</Typography.Title>
-            {merchantTitles.length > 0 ? (
-              <List
-                dataSource={merchantTitles}
-                renderItem={(item, index) => {
-                  const titleZh = typeof item === 'string' ? item : item.title
-                  const titleEn = typeof item === 'string' ? item : (item.title_en || item.title)
-                  const displayTitle = language === 'en' ? titleEn : titleZh
-                  const subTitle = language === 'en' ? titleZh : titleEn
-                  const isSelected = selectedMTitle === displayTitle
-                  return (
-                    <List.Item
-                      style={{ cursor: 'pointer', background: isSelected ? '#e6f7ff' : undefined, borderRadius: 8, padding: '10px 16px', marginBottom: 4 }}
-                      onClick={() => setSelectedMTitle(displayTitle)}
-                    >
-                      <List.Item.Meta
-                        avatar={<Tag color={isSelected ? 'blue' : 'default'}>{index + 1}</Tag>}
-                        title={displayTitle}
-                        description={subTitle !== displayTitle ? subTitle : null}
-                      />
-                    </List.Item>
-                  )
-                }}
-              />
-            ) : (
-              <Alert type="info" message="爬虫未获取到标题建议，请手动输入标题" showIcon style={{ marginBottom: 12 }} />
-            )}
-            <Input
-              placeholder="自定义标题（可覆盖上方选择）"
-              value={selectedMTitle}
-              onChange={e => setSelectedMTitle(e.target.value)}
-              size="large"
-              style={{ marginTop: 8 }}
-            />
-
-            <Typography.Title level={5} style={{ marginTop: 16 }}>选择关键词</Typography.Title>
-            {merchantKeywords.length > 0 ? (
-              <Space wrap>
-                {merchantKeywords.map((kw, i) => (
-                  <Tag
-                    key={i}
-                    color={selectedMKeywords.includes(kw) ? 'green' : 'default'}
-                    style={{ cursor: 'pointer', padding: '4px 12px', fontSize: 14 }}
-                    onClick={() => handleToggleMKeyword(kw)}
-                  >
-                    {kw}
-                  </Tag>
-                ))}
-              </Space>
-            ) : (
-              <Alert type="info" message="爬虫未获取到关键词，可手动输入（用逗号分隔）" showIcon style={{ marginBottom: 8 }} />
-            )}
-            <Input
-              placeholder="手动输入关键词（逗号分隔，如: skincare, anti-aging, moisturizer）"
-              style={{ marginTop: 8 }}
-              onPressEnter={e => {
-                const kws = e.target.value.split(/[,，]/).map(s => s.trim()).filter(Boolean)
-                setSelectedMKeywords(prev => [...new Set([...prev, ...kws])])
-                e.target.value = ''
-              }}
-              onBlur={e => {
-                const kws = e.target.value.split(/[,，]/).map(s => s.trim()).filter(Boolean)
-                if (kws.length > 0) {
-                  setSelectedMKeywords(prev => [...new Set([...prev, ...kws])])
-                  e.target.value = ''
-                }
-              }}
-            />
-            {selectedMKeywords.length > 0 && (
-              <div style={{ marginTop: 8 }}>
-                <Typography.Text type="secondary" style={{ fontSize: 12 }}>已选关键词：</Typography.Text>
-                <Space wrap size={4} style={{ marginTop: 4 }}>
-                  {selectedMKeywords.map((kw, i) => (
-                    <Tag key={i} color="green" closable onClose={() => setSelectedMKeywords(prev => prev.filter(k => k !== kw))}>
-                      {kw}
-                    </Tag>
-                  ))}
-                </Space>
-              </div>
-            )}
-
             <Divider />
             <Space>
               <Button onClick={() => setMStep(0)}>上一步</Button>
-              <Button type="primary" onClick={handleMerchantConfirmTitle}>下一步</Button>
+              <Button type="primary" onClick={() => setMStep(2)}>下一步</Button>
             </Space>
           </div>
         )}
 
-        {/* Step 2: 生成文章 */}
+        {/* Step 2: 确认信息 & 生成文章（标题/关键词可修改） */}
         {mStep === 2 && (
-          <div style={{ maxWidth: 600, margin: '0 auto', textAlign: 'center', padding: '40px 0' }}>
+          <div style={{ maxWidth: 650, margin: '0 auto', padding: '20px 0' }}>
             <Typography.Title level={5}>确认信息</Typography.Title>
-            <Card size="small" style={{ textAlign: 'left', marginBottom: 24 }}>
-              <p><strong>标题：</strong>{selectedMTitle}</p>
-              <p><strong>关键词：</strong>{selectedMKeywords.join('、') || '（无）'}</p>
+            <Alert
+              type="success"
+              showIcon
+              message="AI 已自动选择标题和关键词，如需修改可直接编辑"
+              style={{ marginBottom: 16 }}
+            />
+            <Card size="small" style={{ textAlign: 'left', marginBottom: 16 }}>
+              <div style={{ marginBottom: 12 }}>
+                <Typography.Text strong>标题：</Typography.Text>
+                <Input
+                  value={selectedMTitle}
+                  onChange={e => setSelectedMTitle(e.target.value)}
+                  size="large"
+                  style={{ marginTop: 4 }}
+                  placeholder="文章标题（AI 已自动选择，可修改）"
+                />
+                {merchantTitles.length > 1 && (
+                  <div style={{ marginTop: 6 }}>
+                    <Typography.Text type="secondary" style={{ fontSize: 12 }}>其他候选标题：</Typography.Text>
+                    <div style={{ marginTop: 4 }}>
+                      {merchantTitles.slice(0, 5).map((item, i) => {
+                        const t = typeof item === 'string' ? item : (language === 'en' ? (item.title_en || item.title) : item.title)
+                        if (t === selectedMTitle) return null
+                        return (
+                          <Tag key={i} color="default" style={{ cursor: 'pointer', marginBottom: 4 }}
+                            onClick={() => setSelectedMTitle(t)}>
+                            {t}
+                          </Tag>
+                        )
+                      })}
+                    </div>
+                  </div>
+                )}
+              </div>
+              <div style={{ marginBottom: 12 }}>
+                <Typography.Text strong>关键词：</Typography.Text>
+                <div style={{ marginTop: 4 }}>
+                  {selectedMKeywords.length > 0 ? (
+                    <Space wrap size={4}>
+                      {selectedMKeywords.map((kw, i) => (
+                        <Tag key={i} color="green" closable onClose={() => setSelectedMKeywords(prev => prev.filter(k => k !== kw))}>
+                          {kw}
+                        </Tag>
+                      ))}
+                    </Space>
+                  ) : (
+                    <Typography.Text type="secondary">（无关键词）</Typography.Text>
+                  )}
+                  <Input
+                    placeholder="添加关键词（逗号分隔，回车确认）"
+                    size="small"
+                    style={{ marginTop: 6, width: '100%' }}
+                    onPressEnter={e => {
+                      const kws = e.target.value.split(/[,，]/).map(s => s.trim()).filter(Boolean)
+                      setSelectedMKeywords(prev => [...new Set([...prev, ...kws])])
+                      e.target.value = ''
+                    }}
+                  />
+                </div>
+              </div>
               <p><strong>品牌：</strong>{crawlResult?.brand_name || '（爬虫未获取）'}</p>
               <p><strong>商家网址：</strong>{merchantUrl}</p>
               <p><strong>追踪链接：</strong>{trackingLink}</p>
@@ -1372,8 +1431,9 @@ const PublishWizard = () => {
               <p><strong>图片：</strong>头图 {selectedImages.length > 0 ? '✓' : '✗'} + 内容图 {Math.max(0, selectedImages.length - 1)} 张</p>
             </Card>
             <Space>
-              <Button onClick={() => setMStep(1)}>上一步</Button>
-              <Button type="primary" icon={<RocketOutlined />} onClick={handleMerchantGenerate} loading={loading} size="large">
+              <Button onClick={() => setMStep(1)}>上一步（修改图片）</Button>
+              <Button type="primary" icon={<RocketOutlined />} onClick={handleMerchantGenerate} loading={loading} size="large"
+                disabled={!selectedMTitle}>
                 {loading ? (genProgress || 'AI 正在撰写...') : '生成推广文章'}
               </Button>
             </Space>
@@ -1409,7 +1469,7 @@ const PublishWizard = () => {
                       <Tag color={i === 0 ? 'green' : 'default'} style={{ position: 'absolute', bottom: 4, left: 4, zIndex: 2, margin: 0, fontSize: 11 }}>
                         {i === 0 ? '头图' : `内容${i}`}
                       </Tag>
-                      <Image src={proxyImg(src)} width={120} height={120} style={{ objectFit: 'cover', borderRadius: 6 }}
+                      <Image src={getImgDisplayUrl(src)} width={120} height={120} style={{ objectFit: 'cover', borderRadius: 6 }}
                         preview={false}
                         fallback="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACklEQVR4nGMAAQAABQABDQottAAAAABJRU5ErkJggg=="
                       />

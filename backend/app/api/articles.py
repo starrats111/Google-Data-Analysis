@@ -46,6 +46,7 @@ class ArticleCreate(BaseModel):
     tag_ids: Optional[list] = Field(default_factory=list)
     links: Optional[list] = Field(default_factory=list)
     content_images: Optional[list] = Field(default_factory=list)
+    image_cache_session: Optional[str] = None
 
 
 class ArticleUpdate(BaseModel):
@@ -182,6 +183,7 @@ async def create_article(
         merchant_url=data.merchant_url,
         tracking_link=data.tracking_link,
         language=data.language or "zh",
+        image_cache_session=data.image_cache_session,
     )
     db.add(article)
     db.flush()
@@ -199,15 +201,23 @@ async def create_article(
             ))
 
     if data.content_images:
-        for idx, img_url in enumerate(data.content_images):
-            if img_url:
-                db.add(PubArticleImage(
-                    article_id=article.id,
-                    url=img_url,
-                    alt_text=f"Content image {idx + 1}",
-                    position=idx + 1,
-                    source="crawl",
-                ))
+        for idx, img_item in enumerate(data.content_images):
+            if img_item:
+                # CR-040: 支持对象格式 {url, source} 或纯字符串 URL
+                if isinstance(img_item, dict):
+                    img_url = img_item.get("cache_url") or img_item.get("url") or ""
+                    img_source = img_item.get("source", "crawl")
+                else:
+                    img_url = str(img_item)
+                    img_source = "crawl"
+                if img_url:
+                    db.add(PubArticleImage(
+                        article_id=article.id,
+                        url=img_url,
+                        alt_text=f"Content image {idx + 1}",
+                        position=idx + 1,
+                        source=img_source,
+                    ))
 
     version = PubArticleVersion(
         article_id=article.id,

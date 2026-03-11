@@ -173,6 +173,10 @@ class Settings(BaseSettings):
     BT_SSH_PASSWORD: str = ""  # SSH 密码（备用）
     BT_SITE_ROOT: str = "/www/wwwroot"  # 宝塔默认网站根目录
 
+    # ===== 图片缓存配置（CR-040）=====
+    IMAGE_CACHE_MAX_AGE_HOURS: int = 24  # 缓存过期时间（小时）
+    IMAGE_CACHE_MAX_PER_SESSION: int = 30  # 单次爬虫缓存上限
+
     # ===== 以下配置已废弃（DES-4），保留空值兼容旧 .env =====
     # OpenAI 已不再使用，系统使用 Gemini/Claude
     

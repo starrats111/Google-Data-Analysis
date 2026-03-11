@@ -70,6 +70,7 @@ const articleApi = {
   },
   getTrackingLinks: (params) => api.get('/api/article-gen/tracking-links', { params }),
   searchImages: (data) => api.post('/api/article-gen/search-images', data),
+  analyzeUrl: (data) => api.post('/api/article-gen/analyze-url', data),
 
   // Campaign Links（OPT-015）
   getCampaignLink: (data) => api.post('/api/article-gen/campaign-link', data),
@@ -83,6 +84,10 @@ const articleApi = {
   verifySite: (id) => api.post(`/api/sites/${id}/verify`),
   publishToSite: (articleId, siteId) => api.post(`/api/articles/${articleId}/publish-to-site`, { site_id: siteId }),
   unpublishFromSite: (articleId) => api.delete(`/api/articles/${articleId}/unpublish-from-site`),
+
+  // 图片缓存（CR-040）
+  uploadImageToCache: (data) => api.post('/api/article-gen/image-cache/upload-base64', data),
+  cleanupImageCache: (sessionId) => api.delete(`/api/article-gen/image-cache/${sessionId}`),
 }
 
 export default articleApi

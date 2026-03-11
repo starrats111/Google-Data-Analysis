@@ -37,6 +37,8 @@ class PubArticle(Base):
     site_id = Column(Integer, ForeignKey("pub_sites.id"), nullable=True)
     site_article_slug = Column(String(200), nullable=True)
     published_to_site = Column(Boolean, default=False)
+    # CR-040: 图片缓存会话 ID
+    image_cache_session = Column(String(50), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
     deleted_at = Column(DateTime(timezone=True), nullable=True)

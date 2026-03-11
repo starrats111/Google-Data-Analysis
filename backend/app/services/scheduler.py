@@ -1000,6 +1000,16 @@ def campaign_link_sync_job():
         db.close()
 
 
+def image_cache_cleanup_job():
+    """图片缓存清理任务（CR-040，每小时执行）：清理超过 24 小时的过期缓存"""
+    try:
+        from app.services.image_cache_service import image_cache_service
+        max_age = int(getattr(settings, "IMAGE_CACHE_MAX_AGE_HOURS", 24))
+        image_cache_service.cleanup_expired(max_age_hours=max_age)
+    except Exception as e:
+        logger.error(f"图片缓存清理任务异常: {e}", exc_info=True)
+
+
 def database_backup_job():
     """数据库自动备份任务（每天北京时间 03:00 执行）"""
     try:
@@ -1134,6 +1144,17 @@ def start_scheduler():
             max_instances=1
         )
 
+        # 12. 每小时 - 图片缓存清理（CR-040）
+        scheduler.add_job(
+            image_cache_cleanup_job,
+            trigger='interval',
+            hours=1,
+            id='image_cache_cleanup',
+            name='图片缓存清理（每小时）',
+            replace_existing=True,
+            max_instances=1
+        )
+
         scheduler.start()
         logger.info("=" * 60)
         logger.info("定时任务调度器已启动")
@@ -1151,6 +1172,7 @@ def start_scheduler():
         logger.info("  9. 商家平台API同步: 每天 06:30 (M-018-A)")
         logger.info("  10. 文章定时发布: 每5分钟 (OPT-011)")
         logger.info("  11. Campaign Link缓存同步: 每天 05:00 (OPT-016)")
+        logger.info("  12. 图片缓存清理: 每小时 (CR-040)")
         logger.info("=" * 60)
         
     except Exception as e:

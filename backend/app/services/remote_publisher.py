@@ -450,6 +450,87 @@ class RemotePublisher:
 
         return result
 
+    def _process_images_v2(self, ssh, sftp, site_root: str, slug: str,
+                           featured_image: str, content_image_urls: List[str],
+                           content_image_sources: List[str],
+                           cache_session_id: str) -> dict:
+        """CR-040: 从缓存读取图片上传到宝塔，图库图从 URL 下载。
+        缓存图（crawl/upload）从本地文件读取 → 零失败风险。
+        图库图（stock）从原始 URL 下载 → 公共 CDN 极少失败。
+        """
+        from app.services.image_cache_service import image_cache_service
+
+        img_dir = f"{site_root}/image/post-{slug}"
+        result = {"hero": None, "content": []}
+
+        def _read_from_cache_or_download(url: str, source: str) -> Optional[bytes]:
+            """优先从缓存读取，缓存没有则从 URL 下载"""
+            # 缓存图片：从本地文件读取
+            if cache_session_id and "/image-cache/" in url:
+                filename = url.rsplit("/", 1)[-1] if "/" in url else ""
+                if filename:
+                    data = image_cache_service.read_file(cache_session_id, filename)
+                    if data:
+                        return data
+            # 图库图或缓存未命中：从 URL 下载
+            if source == "stock" or (url.startswith("http://") or url.startswith("https://")):
+                actual_url = url
+                if url.startswith("/api/"):
+                    # 缓存 URL 但文件不存在，尝试从 manifest 找原始 URL
+                    manifest = image_cache_service.get_manifest(cache_session_id) if cache_session_id else None
+                    if manifest:
+                        filename = url.rsplit("/", 1)[-1]
+                        for img in manifest["images"]:
+                            if img["cache_file"] == filename:
+                                actual_url = img["original_url"]
+                                break
+                    if actual_url.startswith("/"):
+                        return None
+                return self._download_image(actual_url, min_width=300, min_height=200)
+            return None
+
+        # 处理头图
+        if featured_image:
+            hero_source = "crawl"
+            if any(kw in featured_image for kw in ["pexels.com", "unsplash.com", "images.pexels"]):
+                hero_source = "stock"
+            data = _read_from_cache_or_download(featured_image, hero_source)
+            if data:
+                ext = self._get_image_ext(featured_image, data)
+                remote_path = f"{img_dir}/hero{ext}"
+                self._upload_image(sftp, ssh, data, remote_path)
+                result["hero"] = f"image/post-{slug}/hero{ext}"
+                logger.info(f"[CR-040] 头图已上传: {remote_path} ({len(data)} bytes, source={hero_source})")
+            else:
+                if featured_image.startswith("http"):
+                    result["hero"] = featured_image
+                logger.warning(f"[CR-040] 头图获取失败，保留原始URL: {featured_image[:80]}")
+
+        # 处理内容图
+        for i, img_url in enumerate(content_image_urls):
+            if not img_url:
+                continue
+            source = content_image_sources[i] if i < len(content_image_sources) else "crawl"
+            data = _read_from_cache_or_download(img_url, source)
+            if data:
+                ext = self._get_image_ext(img_url, data)
+                remote_path = f"{img_dir}/content-{i+1}{ext}"
+                self._upload_image(sftp, ssh, data, remote_path)
+                result["content"].append(f"image/post-{slug}/content-{i+1}{ext}")
+                logger.info(f"[CR-040] 内容图 {i+1} 已上传: {remote_path} (source={source})")
+            else:
+                logger.warning(f"[CR-040] 内容图 {i+1} 获取失败，跳过: {img_url[:80]} (source={source})")
+
+        # 发布完成后清理缓存
+        if cache_session_id:
+            try:
+                image_cache_service.cleanup_session(cache_session_id)
+                logger.info(f"[CR-040] 发布完成，已清理缓存: {cache_session_id}")
+            except Exception as e:
+                logger.warning(f"[CR-040] 缓存清理失败: {e}")
+
+        return result
+
     def _insert_content_images(self, content_html: str, image_paths: List[str]) -> str:
         """将内容图片分散插入到文章段落之间（优先 h2，不足时用 p/h3 作为插入点）"""
         if not image_paths:
@@ -537,48 +618,35 @@ class RemotePublisher:
                 if not site_type:
                     raise ValueError(f"无法识别网站 {site.domain} 的文章架构，请检查网站目录结构")
 
-            # 处理图片（所有类型通用）
+            # 处理图片（CR-040: 优先从缓存读取，图库图从 URL 下载）
             content_image_urls = []
+            content_image_sources = []
             if hasattr(article, "images") and article.images:
                 sorted_imgs = sorted(article.images, key=lambda x: (x.position or 0))
-                content_image_urls = [img.url for img in sorted_imgs if img.url]
+                for img in sorted_imgs:
+                    if img.url:
+                        content_image_urls.append(img.url)
+                        content_image_sources.append(getattr(img, "source", "crawl") or "crawl")
 
-            # 兜底：如果没有内容图片，自动从标题/商家搜索 4 张高清图
-            if len(content_image_urls) < 4:
-                try:
-                    from app.services.merchant_crawler import search_images as search_merchant_images
-                    # 提取品牌名和品类用于精准搜索
-                    brand = getattr(article, "merchant_url", "") or ""
-                    if brand:
-                        # 从 URL 提取域名作为品牌名
-                        from urllib.parse import urlparse as _urlparse
-                        _parsed = _urlparse(brand)
-                        brand = _parsed.netloc.replace("www.", "").split(".")[0] if _parsed.netloc else brand
-                    category = getattr(article, "category_name", "") or ""
-                    search_query = ""
-                    if hasattr(article, "meta_keywords") and article.meta_keywords:
-                        search_query = article.meta_keywords.split(",")[0].strip()
-                    elif article.title:
-                        search_query = article.title
-                    need = 4 - len(content_image_urls)
-                    # 使用改进的多轮搜索策略
-                    extra = search_merchant_images(
-                        search_query, count=need + 8,
-                        brand_name=brand, category=category
-                    )
-                    existing_set = set(content_image_urls)
-                    for img_url in extra:
-                        if img_url not in existing_set and len(content_image_urls) < 4:
-                            content_image_urls.append(img_url)
-                            existing_set.add(img_url)
-                    logger.info(f"[发布] 自动补充高清内容图: 需要{need}张, 最终{len(content_image_urls)}张 (brand={brand}, cat={category})")
-                except Exception as e:
-                    logger.warning(f"[发布] 自动搜索内容图片失败: {e}")
+            # CR-040: 不再自动补充图库图片，用户选了什么就发什么
 
-            image_paths = self._process_images(
+            # 获取缓存 session_id（从文章的 image_cache_session 字段或从图片 URL 中提取）
+            cache_session_id = getattr(article, "image_cache_session", None) or ""
+            if not cache_session_id and content_image_urls:
+                # 尝试从缓存 URL 中提取 session_id: /api/article-gen/image-cache/{session_id}/{filename}
+                for url in content_image_urls:
+                    if "/image-cache/" in url:
+                        parts = url.split("/image-cache/")
+                        if len(parts) > 1:
+                            cache_session_id = parts[1].split("/")[0]
+                            break
+
+            image_paths = self._process_images_v2(
                 ssh, sftp, site_root, slug,
                 article.featured_image or "",
                 content_image_urls,
+                content_image_sources,
+                cache_session_id,
             )
 
             # 按架构类型分发
