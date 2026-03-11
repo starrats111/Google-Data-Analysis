@@ -295,6 +295,10 @@ app.include_router(article_titles.router)
 # 网站管理路由（OPT-013）
 app.include_router(sites.router)
 
+# 广告创建路由（CR-039）
+from app.api import ad_creation
+app.include_router(ad_creation.router)
+
 
 @app.get("/health")
 async def health():

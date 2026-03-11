@@ -3,7 +3,7 @@
 """
 from sqlalchemy import (
     Column, Integer, String, DateTime, Numeric, Text,
-    ForeignKey, UniqueConstraint, Index
+    ForeignKey, UniqueConstraint, Index, Float
 )
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
@@ -71,6 +71,14 @@ class MerchantAssignment(Base):
     merchant = relationship("AffiliateMerchant", back_populates="assignments")
     user = relationship("User", foreign_keys=[user_id])
     assigner = relationship("User", foreign_keys=[assigned_by])
+
+    # CR-039: 广告创建相关字段
+    mode = Column(String(20), default="normal", nullable=False, server_default="normal")  # normal / test
+    assignment_source = Column(String(20), default="manager_assign", nullable=False, server_default="manager_assign")  # manager_assign / self_claim
+    google_campaign_id = Column(String(50), nullable=True)  # 创建的广告系列 ID
+    google_customer_id = Column(String(20), nullable=True)  # 使用的 CID
+    daily_budget = Column(Numeric(10, 2), nullable=True)  # 日预算
+    target_country = Column(String(10), default="US", nullable=True)  # 投放国家
 
     __table_args__ = (
         UniqueConstraint("merchant_id", "user_id", "status", name="uq_assignment_merchant_user_status"),

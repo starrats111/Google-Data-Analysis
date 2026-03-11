@@ -778,6 +778,15 @@ const MerchantManagement = () => {
               取消推荐
             </Button>
           )}
+          {/* CR-039: 领取按钮 */}
+          <Button
+            size="small"
+            type="link"
+            style={{ padding: '0 4px', color: '#722ed1' }}
+            onClick={() => handleClaimMerchant(record, 'test')}
+          >
+            领取测试
+          </Button>
           {record.violation_status !== 'violated' ? (
             <Button
               size="small"
@@ -804,6 +813,20 @@ const MerchantManagement = () => {
       ),
     },
   ]
+
+  // CR-039: 领取商家
+  const handleClaimMerchant = async (record, mode = 'test') => {
+    try {
+      await api.post('/api/merchant-assignments/claim', {
+        merchant_ids: [record.id],
+        mode,
+      })
+      message.success(`已领取商家: ${record.merchant_name}`)
+      fetchMerchants(merchantPage, merchantPageSize)
+    } catch (err) {
+      message.error('领取失败: ' + (err?.response?.data?.detail || err.message))
+    }
+  }
 
   const assignmentColumns = [
     {

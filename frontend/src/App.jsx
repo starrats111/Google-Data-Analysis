@@ -48,6 +48,10 @@ const ArticleTitles = lazyWithRetry(() => import('./pages/articles/ArticleTitles
 const PublishWizard = lazyWithRetry(() => import('./components/PublishWizard'))
 const SiteManagement = lazyWithRetry(() => import('./pages/articles/SiteManagement'))
 
+// CR-039: 广告管理
+const AdCreationWizard = lazyWithRetry(() => import('./pages/ads/AdCreationWizard'))
+const TestDashboard = lazyWithRetry(() => import('./pages/ads/TestDashboard'))
+
 
 function PrivateRoute({ children }) {
   const { isAuthenticated } = useAuth()
@@ -130,6 +134,9 @@ function App() {
               <Route path="articles/categories" element={<ArticleCategories />} />
               <Route path="articles/titles" element={<ArticleTitles />} />
               <Route path="articles/sites" element={<SiteManagement />} />
+              {/* CR-039: 广告管理 */}
+              <Route path="ads/create" element={<AdCreationWizard />} />
+              <Route path="ads/test-dashboard" element={<TestDashboard />} />
             </Route>
           </Routes>
         </Suspense>

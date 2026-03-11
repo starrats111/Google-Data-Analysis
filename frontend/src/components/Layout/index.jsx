@@ -24,6 +24,8 @@ import {
   FundViewOutlined,
   CommentOutlined,
   GlobalOutlined,
+  ExperimentOutlined,
+  ThunderboltOutlined,
 } from '@ant-design/icons'
 import { useAuth } from '../../store/authStore'
 import ChangelogModal, { hasUnreadChangelog } from '../ChangelogModal'
@@ -236,6 +238,14 @@ const Layout = () => {
       ],
     },
     {
+      key: 'ads-manage',
+      icon: <ThunderboltOutlined />,
+      label: '广告管理',
+      children: [
+        { key: '/ads/test-dashboard', icon: <ExperimentOutlined />, label: '测试看板' },
+      ],
+    },
+    {
       key: 'feedback-manage',
       icon: <CommentOutlined />,
       label: '反馈管理',
@@ -298,6 +308,14 @@ const Layout = () => {
       ],
     },
     {
+      key: 'ads-manage-x',
+      icon: <ThunderboltOutlined />,
+      label: '广告管理',
+      children: [
+        { key: '/ads/test-dashboard', icon: <ExperimentOutlined />, label: '测试看板' },
+      ],
+    },
+    {
       key: 'system-manage',
       icon: <SettingOutlined />,
       label: '系统管理',
@@ -357,6 +375,14 @@ const Layout = () => {
         { key: '/articles/titles', icon: <FileTextOutlined />, label: '标题库' },
         { key: '/articles/categories', icon: <DatabaseOutlined />, label: '分类管理' },
         { key: '/articles/sites', icon: <GlobalOutlined />, label: '网站管理' },
+      ],
+    },
+    {
+      key: 'ads-manage-x',
+      icon: <ThunderboltOutlined />,
+      label: '广告管理',
+      children: [
+        { key: '/ads/test-dashboard', icon: <ExperimentOutlined />, label: '测试看板' },
       ],
     },
     {

@@ -6,6 +6,7 @@ from datetime import date, datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -291,6 +292,54 @@ async def commission_breakdown(
 # ==================================================================
 # 任务分配
 # ==================================================================
+
+
+class ClaimRequest(BaseModel):
+    merchant_ids: list
+    mode: str = "normal"  # normal / test
+
+
+@assignment_router.post("/claim")
+async def claim_merchants(
+    data: ClaimRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """CR-039: 员工自助领取商家（所有登录用户可调用）"""
+    from app.models.merchant import MerchantAssignment, AffiliateMerchant
+    created = []
+    skipped = 0
+    for mid in data.merchant_ids:
+        # 检查商家是否存在
+        merchant = db.query(AffiliateMerchant).filter(AffiliateMerchant.id == mid).first()
+        if not merchant:
+            continue
+        # 检查是否已领取
+        existing = db.query(MerchantAssignment).filter(
+            MerchantAssignment.merchant_id == mid,
+            MerchantAssignment.user_id == current_user.id,
+            MerchantAssignment.status == "active",
+        ).first()
+        if existing:
+            skipped += 1
+            continue
+        assignment = MerchantAssignment(
+            merchant_id=mid,
+            user_id=current_user.id,
+            assigned_by=current_user.id,
+            status="active",
+            mode=data.mode,
+            assignment_source="self_claim",
+        )
+        db.add(assignment)
+        created.append(assignment)
+    db.commit()
+    return {
+        "message": f"成功领取 {len(created)} 个商家" + (f"，{skipped} 个已领取" if skipped else ""),
+        "count": len(created),
+        "skipped": skipped,
+    }
+
 
 @assignment_router.post("")
 async def create_assignments(
