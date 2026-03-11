@@ -149,15 +149,27 @@ async def crawl_merchant_site(
             seen.add(img)
             unique_images.append(img)
 
-    # --- 图片质量预检：下载图片头部验证实际尺寸，过滤低质量图 ---
-    # 分两轮：先用宽松标准保留更多商家原生图片，避免过度过滤后用不相关的 stock 图补充
+    # --- 图片质量预检：放宽标准，尽量保留更多图片让员工自选 ---
+    # 只做 URL 级别快速过滤（icon/logo/svg 等），不做网络下载验证
+    # 实际图片质量由缓存下载阶段验证（能下载成功 = 能使用）
     if unique_images:
-        validated = await _validate_images_batch(unique_images, min_width=200, min_height=150)
-        filtered_count = len(unique_images) - len(validated)
+        url_filtered = []
+        skip_keywords = [
+            "icon", "logo", "favicon", "sprite", "1x1", "pixel", "spacer",
+            "blank", "avatar", "badge", "flag", "rating",
+            "svg+xml", ".svg",
+            "payment", "visa", "mastercard", "paypal", "amex",
+        ]
+        for img_url in unique_images:
+            url_lower = img_url.lower()
+            if any(kw in url_lower for kw in skip_keywords):
+                continue
+            url_filtered.append(img_url)
+        filtered_count = len(unique_images) - len(url_filtered)
         if filtered_count > 0:
-            logger.info("[Crawl] 图片质量预检: %d -> %d (过滤 %d 张低质量图)",
-                        len(unique_images), len(validated), filtered_count)
-        unique_images = validated
+            logger.info("[Crawl] URL 快速过滤: %d -> %d (过滤 %d 张 icon/logo/svg)",
+                        len(unique_images), len(url_filtered), filtered_count)
+        unique_images = url_filtered
         seen = set(unique_images)
 
     # --- 图片相关性过滤：用 AI 分析结果过滤与商家无关的图片 ---
@@ -238,7 +250,7 @@ async def crawl_merchant_site(
     cache_session = image_cache_service.create_session()
     cached_images = image_cache_service.batch_download(
         cache_session, unique_images[:50], source="crawl",
-        min_width=200, min_height=150, max_count=50,
+        min_width=100, min_height=100, max_count=50,
     )
 
     # 网站图片完全没有时，才用图片库补充（避免不相关的 stock 图片混入）
