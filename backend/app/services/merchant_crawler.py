@@ -400,10 +400,11 @@ def _extract_page(html: str, url: str) -> Dict:
     for _, img_url in candidates:
         if img_url not in images:
             images.append(img_url)
-        if len(images) >= 30:
+        if len(images) >= 50:
             break
 
     images = _deduplicate_cdn_images(images)
+    images = _upgrade_cdn_thumbnails(images)
 
     return {
         "url": url,
@@ -454,6 +455,39 @@ def _deduplicate_cdn_images(images: List[str]) -> List[str]:
     for _, img_url in base_map.values():
         result.append(img_url)
 
+    return result
+
+
+def _upgrade_cdn_thumbnails(images: List[str]) -> List[str]:
+    """
+    将 CDN 缩略图 URL 升级为更大尺寸。
+    例如 Shopify 的 ?width=100 → ?width=800
+    """
+    import re
+    upgraded = []
+    for img_url in images:
+        url_lower = img_url.lower()
+        # Shopify CDN: 替换 width=100 为 width=800
+        if "cdn.shopify" in url_lower or "/cdn/shop/" in url_lower:
+            # 替换 width 参数
+            new_url = re.sub(r'[?&]width=\d+', '', img_url)
+            # 替换 Shopify 尺寸后缀 (如 _450x450)
+            new_url = re.sub(r'_\d+x\d+\.', '.', new_url)
+            # 清理多余的 ? 或 &
+            new_url = new_url.rstrip('?&')
+            if new_url != img_url:
+                upgraded.append(new_url)
+            else:
+                upgraded.append(img_url)
+        else:
+            upgraded.append(img_url)
+    # 去重（升级后可能产生重复）
+    seen = set()
+    result = []
+    for url in upgraded:
+        if url not in seen:
+            seen.add(url)
+            result.append(url)
     return result
 
 
