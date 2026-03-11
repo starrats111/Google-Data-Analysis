@@ -240,3 +240,127 @@ async def get_test_dashboard(
         })
 
     return {"items": results, "total": len(results)}
+
+
+# ─── AI 分析（Claude claude-opus-4-6） ───
+
+class AiAnalysisRequest(BaseModel):
+    items: List[dict] = Field(default_factory=list)
+    question: str = ""
+
+
+@router.post("/ai-analysis")
+async def ai_analysis(
+    data: AiAnalysisRequest,
+    current_user: User = Depends(get_current_user),
+):
+    """测试看板 AI 分析 — 使用 Claude claude-opus-4-6 分析广告数据"""
+    import json
+    import requests
+    from app.config import settings
+
+    if not data.items:
+        raise HTTPException(status_code=400, detail="没有数据可分析")
+
+    # 构建数据摘要
+    summary_lines = []
+    for item in data.items:
+        ad = item.get("ad_data") or {}
+        line = (
+            f"商家: {item.get('merchant_name', '?')}, "
+            f"Campaign: {item.get('campaign_id', '?')}, "
+            f"CID: {item.get('customer_id', '?')}, "
+            f"日预算: ${item.get('daily_budget', 0)}, "
+            f"国家: {item.get('target_country', '?')}, "
+            f"花费: ${ad.get('cost', 0)}, "
+            f"点击: {ad.get('clicks', 0)}, "
+            f"展示: {ad.get('impressions', 0)}, "
+            f"转化: {ad.get('conversions', 0)}, "
+            f"状态: {ad.get('status', '未知')}, "
+            f"同步中: {item.get('sync_pending', False)}"
+        )
+        summary_lines.append(line)
+
+    data_text = "\n".join(summary_lines)
+    user_question = data.question or "请分析这些测试广告的整体表现，给出优化建议"
+
+    prompt = f"""你是一位资深的 Google Ads 广告优化专家。以下是用户的测试广告数据：
+
+{data_text}
+
+用户问题：{user_question}
+
+请从以下维度分析：
+1. 整体表现评估（CTR、CPC、转化率等关键指标）
+2. 预算分配是否合理
+3. 表现好的广告系列（值得加大投入）
+4. 表现差的广告系列（需要优化或暂停）
+5. 具体优化建议（出价、关键词、素材、投放地区等）
+6. 下一步行动计划
+
+请用中文回答，结构清晰，给出可执行的建议。如果数据还在同步中（sync_pending=True），请说明需要等数据同步后再做完整分析。"""
+
+    messages = [{"role": "user", "content": prompt}]
+
+    # 调用 Claude claude-opus-4-6（通过 OpenRouter 兼容 API）
+    api_key = getattr(settings, "gemini_api_key", "")
+    base_url = getattr(settings, "gemini_base_url", "").rstrip("/")
+    model = "claude-opus-4-0-20250514"
+
+    if not api_key or not base_url:
+        raise HTTPException(status_code=500, detail="AI 服务未配置")
+
+    try:
+        resp = requests.post(
+            f"{base_url}/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": model,
+                "messages": messages,
+                "max_tokens": 4096,
+                "temperature": 0.3,
+            },
+            timeout=120,
+        )
+        resp.raise_for_status()
+        result = resp.json()
+        content = result["choices"][0]["message"]["content"]
+        return {
+            "analysis": content,
+            "model": model,
+            "items_analyzed": len(data.items),
+        }
+    except requests.exceptions.Timeout:
+        raise HTTPException(status_code=504, detail="AI 分析超时，请稍后重试")
+    except Exception as e:
+        logger.error(f"[AI Analysis] 失败: {e}")
+        # fallback 到 deepseek-chat
+        try:
+            resp = requests.post(
+                f"{base_url}/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": "deepseek-chat",
+                    "messages": messages,
+                    "max_tokens": 4096,
+                    "temperature": 0.3,
+                },
+                timeout=60,
+            )
+            resp.raise_for_status()
+            result = resp.json()
+            content = result["choices"][0]["message"]["content"]
+            return {
+                "analysis": content,
+                "model": "deepseek-chat (fallback)",
+                "items_analyzed": len(data.items),
+            }
+        except Exception as e2:
+            logger.error(f"[AI Analysis] fallback 也失败: {e2}")
+            raise HTTPException(status_code=500, detail=f"AI 分析失败: {str(e)[:200]}")

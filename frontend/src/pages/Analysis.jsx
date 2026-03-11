@@ -869,6 +869,19 @@ G) 综述
         },
       },
       {
+        title: '',
+        key: 'test_flag',
+        width: 50,
+        render: (_, record) => {
+          const rawData = record.result_data?.data || []
+          const hasTest = Array.isArray(rawData) && rawData.some(row => {
+            const name = row['广告系列名'] || row['campaign_name'] || ''
+            return name.includes('_test_')
+          })
+          return hasTest ? <Tag color="gold" style={{ fontSize: 10, padding: '0 4px', margin: 0 }}>测试</Tag> : null
+        },
+      },
+      {
         title: '详情',
         key: 'detail',
         width: 100,

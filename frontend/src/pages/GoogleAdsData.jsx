@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react'
-import { Card, Button, Form, Select, DatePicker, message, Space, Radio, Row, Col, Table, Input, Statistic } from 'antd'
+import { Card, Button, Form, Select, DatePicker, message, Space, Radio, Row, Col, Table, Input, Statistic, Tag } from 'antd'
 import { SearchOutlined, DownloadOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import api from '../services/api'
@@ -408,6 +408,10 @@ export default function GoogleAdsData() {
             rowKey="campaign_id"
             scroll={{ x: 1200, y: 600 }}
             virtual={campaignData.length > 200}
+            rowClassName={(record) => {
+              const name = record.campaign_name || ''
+              return name.includes('_test_') ? 'test-campaign-row' : ''
+            }}
             columns={[
               {
                 title: '状态',
@@ -446,7 +450,15 @@ export default function GoogleAdsData() {
                 key: 'campaign_name',
                 width: 200,
                 fixed: 'left',
-                render: (text) => <strong>{text}</strong>
+                render: (text) => {
+                  const isTest = text && text.includes('_test_')
+                  return (
+                    <strong>
+                      {isTest && <Tag color="gold" style={{ marginRight: 4, fontSize: 10, lineHeight: '16px', padding: '0 4px' }}>测试</Tag>}
+                      {text}
+                    </strong>
+                  )
+                }
               },
               {
                 title: '预算',
