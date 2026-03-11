@@ -424,7 +424,8 @@ class RemotePublisher:
         result = {"hero": None, "content": []}
 
         if featured_image:
-            data = self._download_image(featured_image)
+            # hero 图放宽要求：宽>=600, 高>=300 即可（横幅图高度通常较低）
+            data = self._download_image(featured_image, min_width=600, min_height=300)
             if data:
                 ext = self._get_image_ext(featured_image, data)
                 remote_path = f"{img_dir}/hero{ext}"
@@ -450,50 +451,69 @@ class RemotePublisher:
         return result
 
     def _insert_content_images(self, content_html: str, image_paths: List[str]) -> str:
-        """将内容图片分散插入到文章各章节（<h2>）之间"""
+        """将内容图片分散插入到文章段落之间（优先 h2，不足时用 p/h3 作为插入点）"""
         if not image_paths:
             return content_html
 
-        h2_positions = [m.start() for m in re.finditer(r'<h2[^>]*>', content_html)]
-
-        if len(h2_positions) <= 1:
-            img_block = "\n".join(
-                f'            <div class="ab-page-hero-img">\n'
-                f'              <img src="{p}" alt="Article image" loading="lazy" />\n'
-                f'            </div>'
-                for p in image_paths
-            )
-            return content_html + "\n" + img_block
-
-        insert_points = []
-        if len(h2_positions) >= 2:
-            step = max(1, len(h2_positions) // (len(image_paths) + 1))
-            for i in range(len(image_paths)):
-                idx = min((i + 1) * step, len(h2_positions) - 1)
-                insert_points.append(h2_positions[idx])
-
-        result_parts = []
-        last_pos = 0
-        img_idx = 0
-        for pos in sorted(set(insert_points)):
-            if img_idx >= len(image_paths):
-                break
-            result_parts.append(content_html[last_pos:pos])
-            img_tag = (
+        def _make_img_tag(path):
+            return (
                 f'\n            <div class="ab-page-hero-img">\n'
                 f'              <img\n'
-                f'                src="{image_paths[img_idx]}"\n'
+                f'                src="{path}"\n'
                 f'                alt="Article illustration"\n'
                 f'                loading="lazy"\n'
                 f'              />\n'
                 f'            </div>\n\n'
             )
-            result_parts.append(img_tag)
-            last_pos = pos
-            img_idx += 1
 
-        result_parts.append(content_html[last_pos:])
-        return "".join(result_parts)
+        # 收集所有可用的插入点：h2 > h3 > p（跳过第一个段落）
+        h2_positions = [m.start() for m in re.finditer(r'<h2[^>]*>', content_html)]
+        h3_positions = [m.start() for m in re.finditer(r'<h3[^>]*>', content_html)]
+        p_positions = [m.start() for m in re.finditer(r'</p>', content_html)]
+
+        # 合并插入点：优先 h2，不够用 h3，再不够用段落间
+        all_points = []
+        for pos in h2_positions:
+            all_points.append((pos, 'h2'))
+        for pos in h3_positions:
+            all_points.append((pos, 'h3'))
+        # p 标签只取偶数位（每隔一段插一张，避免太密集）
+        for idx, pos in enumerate(p_positions):
+            if idx > 0 and idx % 2 == 0:  # 跳过第一段，每隔2段
+                all_points.append((pos + 4, 'p'))  # +4 跳过 </p>
+        all_points.sort(key=lambda x: x[0])
+
+        # 去重：相邻 50 字符内的插入点只保留一个
+        filtered = []
+        last = -100
+        for pos, tag in all_points:
+            if pos - last > 50:
+                filtered.append(pos)
+                last = pos
+
+        if not filtered:
+            # 完全没有插入点，追加到末尾
+            img_block = "\n".join(_make_img_tag(p) for p in image_paths)
+            return content_html + "\n" + img_block
+
+        # 均匀分配图片到插入点
+        step = max(1, len(filtered) // (len(image_paths) + 1))
+        insert_map = {}  # pos -> image_path
+        for i, img_path in enumerate(image_paths):
+            idx = min((i + 1) * step, len(filtered) - 1)
+            pos = filtered[idx]
+            # 避免同一位置插入多张
+            while pos in insert_map and idx < len(filtered) - 1:
+                idx += 1
+                pos = filtered[idx]
+            insert_map[pos] = img_path
+
+        # 按位置倒序插入（避免偏移）
+        result = content_html
+        for pos in sorted(insert_map.keys(), reverse=True):
+            result = result[:pos] + _make_img_tag(insert_map[pos]) + result[pos:]
+
+        return result
 
     def publish_article(self, site, article) -> dict:
         """

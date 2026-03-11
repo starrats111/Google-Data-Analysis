@@ -150,7 +150,7 @@ class ArticleGenService:
         system_msg = (
             "You are a JSON API. Respond with ONLY a valid JSON object, no other text.\n"
             f"Generate a high-quality HTML article based on the title. Current year: {current_year}.\n"
-            "Article must have h2/h3 subheadings, clear paragraphs, rich content (1500+ words).\n"
+            "Article must have h2/h3 subheadings (at least 4 h2 sections), clear paragraphs, rich content (1500-2500 words).\n"
             "Required JSON fields: content (HTML body), excerpt (100-char summary), "
             "meta_title, meta_description, meta_keywords.\n"
             "Output raw JSON only, no markdown code blocks."
@@ -269,7 +269,7 @@ class ArticleGenService:
             "2)Brand name appears 3-4 times, NOT in first paragraph "
             f"3)Insert 2-3 brand links: <a href=\"{tracking_link}\">{brand}</a> "
             "4)Write like a real editor with personal tone "
-            "5)800-1200 words, HTML with h2/h3 "
+            "5)1500-2500 words, HTML with h2/h3, at least 4 sections with h2 headings "
             "6)No empty praise, be specific\n"
             f"{keyword_link_rule}"
             "CRITICAL: Output ONLY raw JSON, no markdown, no explanation, no preamble. "
