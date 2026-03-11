@@ -143,6 +143,16 @@ async def crawl_merchant_site(
             seen.add(img)
             unique_images.append(img)
 
+    # --- 图片质量预检：下载图片头部验证实际尺寸，过滤低质量图 ---
+    if unique_images:
+        validated = await _validate_images_batch(unique_images, min_width=600, min_height=400)
+        filtered_count = len(unique_images) - len(validated)
+        if filtered_count > 0:
+            logger.info("[Crawl] 图片质量预检: %d -> %d (过滤 %d 张低质量图)",
+                        len(unique_images), len(validated), filtered_count)
+        unique_images = validated
+        seen = set(unique_images)
+
     # 网站图片不足时，用图片库补充
     crawled_count = len(unique_images)
     if crawled_count <= 2:
@@ -382,3 +392,125 @@ async def sync_all_campaign_links(
 
     threading.Thread(target=_bg_sync_all, daemon=True).start()
     return {"success": True, "message": "全量同步已在后台启动，预计需要 10-30 分钟"}
+
+
+# ==================== 图片质量预检工具 ====================
+
+async def _validate_single_image(url: str, min_width: int, min_height: int) -> Optional[str]:
+    """异步下载图片头部，验证实际分辨率。通过返回 url，不通过返回 None"""
+    import httpx as _httpx
+    import struct
+
+    # URL 级别快速过滤
+    url_lower = url.lower()
+    skip_keywords = [
+        "icon", "logo", "favicon", "sprite", "1x1", "pixel", "spacer",
+        "blank", "avatar", "badge", "flag", "star", "rating", "social",
+        "facebook", "twitter", "instagram", "linkedin", "youtube",
+        "payment", "visa", "mastercard", "paypal", "amex",
+        "svg+xml", ".svg", ".gif",
+    ]
+    if any(kw in url_lower for kw in skip_keywords):
+        return None
+
+    try:
+        async with _httpx.AsyncClient(timeout=8, follow_redirects=True) as client:
+            # 只下载前 32KB 足够读取图片头部尺寸信息
+            resp = await client.get(url, headers={
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                "Range": "bytes=0-32767",
+                "Accept": "image/*,*/*;q=0.8",
+            })
+            if resp.status_code not in (200, 206):
+                return None
+            content_type = resp.headers.get("content-type", "")
+            if "text/html" in content_type or "application/json" in content_type:
+                return None
+            data = resp.content
+            if len(data) < 100:
+                return None
+
+            # 尝试用 PIL 读取尺寸（最可靠）
+            try:
+                from PIL import Image
+                import io
+                img = Image.open(io.BytesIO(data))
+                w, h = img.size
+                if w < min_width or h < min_height:
+                    return None
+                # 检查是否是纯色/渐变占位图（方差极低）
+                if w <= 2000 and h <= 2000:
+                    try:
+                        import numpy as np
+                        arr = np.array(img.convert('L'), dtype=np.float64)
+                        if arr.std() < 10:  # 几乎纯色
+                            return None
+                    except ImportError:
+                        pass
+                return url
+            except Exception:
+                pass
+
+            # PIL 失败时用文件头手动解析
+            w, h = _parse_image_dimensions(data)
+            if w and h and w >= min_width and h >= min_height:
+                return url
+            if w and h:
+                return None  # 尺寸已知但太小
+
+            # 无法判断尺寸时，用 content-length 估算
+            cl = int(resp.headers.get("content-length", 0))
+            if cl > 50000:  # > 50KB 大概率是有效图片
+                return url
+            return None
+    except Exception:
+        return None
+
+
+def _parse_image_dimensions(data: bytes):
+    """从图片文件头解析宽高"""
+    import struct
+    # JPEG
+    if data[:2] == b'\xff\xd8':
+        i = 2
+        while i < len(data) - 9:
+            if data[i] != 0xFF:
+                break
+            marker = data[i + 1]
+            if marker in (0xC0, 0xC1, 0xC2):
+                h = struct.unpack('>H', data[i+5:i+7])[0]
+                w = struct.unpack('>H', data[i+7:i+9])[0]
+                return w, h
+            length = struct.unpack('>H', data[i+2:i+4])[0]
+            i += 2 + length
+    # PNG
+    if data[:8] == b'\x89PNG\r\n\x1a\n' and len(data) >= 24:
+        w = struct.unpack('>I', data[16:20])[0]
+        h = struct.unpack('>I', data[20:24])[0]
+        return w, h
+    # WebP
+    if data[:4] == b'RIFF' and data[8:12] == b'WEBP':
+        if data[12:16] == b'VP8 ' and len(data) >= 30:
+            w = struct.unpack('<H', data[26:28])[0] & 0x3FFF
+            h = struct.unpack('<H', data[28:30])[0] & 0x3FFF
+            return w, h
+        if data[12:16] == b'VP8L' and len(data) >= 25:
+            bits = struct.unpack('<I', data[21:25])[0]
+            w = (bits & 0x3FFF) + 1
+            h = ((bits >> 14) & 0x3FFF) + 1
+            return w, h
+    return None, None
+
+
+async def _validate_images_batch(urls: list, min_width: int = 600,
+                                  min_height: int = 400, max_concurrent: int = 8) -> list:
+    """批量异步验证图片质量，返回通过的 URL 列表"""
+    import asyncio
+    semaphore = asyncio.Semaphore(max_concurrent)
+
+    async def _check(url):
+        async with semaphore:
+            return await _validate_single_image(url, min_width, min_height)
+
+    results = await asyncio.gather(*[_check(u) for u in urls])
+    return [r for r in results if r is not None]

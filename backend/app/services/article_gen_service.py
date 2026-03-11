@@ -150,7 +150,7 @@ class ArticleGenService:
         system_msg = (
             "You are a JSON API. Respond with ONLY a valid JSON object, no other text.\n"
             f"Generate a high-quality HTML article based on the title. Current year: {current_year}.\n"
-            "Article must have h2/h3 subheadings (at least 4 h2 sections), clear paragraphs, rich content (1500-2500 words).\n"
+            "Article must have h2/h3 subheadings (at least 4 h2 sections), clear paragraphs, rich content (2500-4000 words).\n"
             "Required JSON fields: content (HTML body), excerpt (100-char summary), "
             "meta_title, meta_description, meta_keywords.\n"
             "Output raw JSON only, no markdown code blocks."
@@ -161,7 +161,7 @@ class ArticleGenService:
             {"role": "system", "content": system_msg},
             {"role": "user", "content": user_msg},
         ]
-        raw = self._call_with_fallback(messages, max_tokens=8192)
+        raw = self._call_with_fallback(messages, max_tokens=16384)
         try:
             return json.loads(raw)
         except (json.JSONDecodeError, IndexError):
@@ -269,7 +269,7 @@ class ArticleGenService:
             "2)Brand name appears 3-4 times, NOT in first paragraph "
             f"3)Insert 2-3 brand links: <a href=\"{tracking_link}\">{brand}</a> "
             "4)Write like a real editor with personal tone "
-            "5)1500-2500 words, HTML with h2/h3, at least 4 sections with h2 headings "
+            "5)2500-4000 words, HTML with h2/h3, at least 5 sections with h2 headings "
             "6)No empty praise, be specific\n"
             f"{keyword_link_rule}"
             "CRITICAL: Output ONLY raw JSON, no markdown, no explanation, no preamble. "
@@ -294,7 +294,7 @@ class ArticleGenService:
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_msg},
         ]
-        raw = self._call_with_fallback(messages, max_tokens=8192, fast=True)
+        raw = self._call_with_fallback(messages, max_tokens=16384, fast=True)
         result = self._robust_parse_json(raw, title)
 
         if result.get("content"):
