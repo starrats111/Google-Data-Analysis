@@ -217,10 +217,13 @@ body {
   }
 }
 
-
-
-
-
+/* CR-039: 测试商家标黄 */
+.test-campaign-row td {
+  background-color: #fffbe6 !important;
+}
+.test-campaign-row:hover td {
+  background-color: #fff1b8 !important;
+}
 
 
 

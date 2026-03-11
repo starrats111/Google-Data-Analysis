@@ -742,7 +742,17 @@ G) 综述
       if (key === '广告系列名') {
         col.fixed = 'left'
         col.ellipsis = false
-        col.render = (text) => text ? <Tooltip title={String(text)}><span style={{ wordBreak: 'break-all' }}>{String(text)}</span></Tooltip> : '-'
+        col.render = (text) => {
+          const isTest = text && String(text).includes('_test_')
+          return text ? (
+            <Tooltip title={String(text)}>
+              <span style={{ wordBreak: 'break-all' }}>
+                {isTest && <Tag color="gold" style={{ marginRight: 4, fontSize: 10, lineHeight: '16px', padding: '0 4px' }}>测试</Tag>}
+                {String(text)}
+              </span>
+            </Tooltip>
+          ) : '-'
+        }
       } else if (key === '当前Max CPC') {
         col.align = 'right'
         col.render = (text) => {
@@ -1409,6 +1419,11 @@ G) 综述
               size="small"
               bordered
               scroll={{ y: 600 }}
+              rowClassName={(record) => {
+                // CR-039: 测试商家标黄（广告系列名含 _test_）
+                const name = record['广告系列名'] || ''
+                return name.includes('_test_') ? 'test-campaign-row' : ''
+              }}
               pagination={detailData.length > 50 ? {
                 pageSize: 50,
                 size: 'small',
