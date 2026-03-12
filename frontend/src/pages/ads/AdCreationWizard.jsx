@@ -67,14 +67,21 @@ export default function AdCreationWizard() {
     setBusyCids([])
     setLoading(true)
     try {
+      console.log('[AdWizard] 查找CID, mcc_id:', mccId)
       const res = await api.post('/api/ad-creation/find-available-cid', { mcc_id: mccId })
-      const { customer_id, all_cids = [], busy_cids = [] } = res.data
-      setAllCids(all_cids)
-      setBusyCids(busy_cids)
-      setAvailableCid(customer_id)
-      if (mccList.length === 1 && all_cids.length <= 1) setStep(1)
+      console.log('[AdWizard] CID响应:', res.data)
+      const data = res.data || {}
+      const cidList = data.all_cids || []
+      const busyList = data.busy_cids || []
+      const recommended = data.customer_id || cidList[0] || ''
+      setAllCids(cidList)
+      setBusyCids(busyList)
+      setAvailableCid(recommended)
+      if (mccList.length === 1 && cidList.length <= 1 && recommended) setStep(1)
     } catch (err) {
-      message.error(err?.response?.data?.detail || '查找 CID 失败')
+      console.error('[AdWizard] CID查找失败:', err)
+      const detail = err?.response?.data?.detail || err?.message || '查找 CID 失败'
+      message.error(detail)
     } finally { setLoading(false) }
   }
 
