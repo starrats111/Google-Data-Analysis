@@ -29,6 +29,7 @@ export default function AdCreationWizard() {
   const [availableCid, setAvailableCid] = useState('')
   const [allCids, setAllCids] = useState([])
   const [busyCids, setBusyCids] = useState([])
+  const [cidError, setCidError] = useState('')
 
   // Step 1: 关键词研究
   const [keywordUrl, setKeywordUrl] = useState(merchantUrl)
@@ -51,25 +52,20 @@ export default function AdCreationWizard() {
   // 加载 MCC 列表
   useEffect(() => {
     api.get('/api/ad-creation/mcc-accounts').then(res => {
-      const list = res.data || []
-      setMccList(list)
-      if (list.length === 1) {
-        setSelectedMcc(list[0].id)
-      }
+      setMccList(res.data || [])
     }).catch(() => {})
   }, [])
 
-  // Step 0: 选择 MCC 后加载 CID 列表
+  // 选择 MCC 后加载 CID 列表
   const handleSelectMcc = async (mccId) => {
     setSelectedMcc(mccId)
     setAvailableCid('')
     setAllCids([])
     setBusyCids([])
+    setCidError('')
     setLoading(true)
     try {
-      console.log('[AdWizard] 查找CID, mcc_id:', mccId)
       const res = await api.post('/api/ad-creation/find-available-cid', { mcc_id: mccId })
-      console.log('[AdWizard] CID响应:', res.data)
       const data = res.data || {}
       const cidList = data.all_cids || []
       const busyList = data.busy_cids || []
@@ -79,15 +75,14 @@ export default function AdCreationWizard() {
       setAvailableCid(recommended)
       if (mccList.length === 1 && cidList.length <= 1 && recommended) setStep(1)
     } catch (err) {
-      console.error('[AdWizard] CID查找失败:', err)
       const detail = err?.response?.data?.detail || err?.message || '查找 CID 失败'
-      message.error(detail)
+      setCidError(detail)
     } finally { setLoading(false) }
   }
 
-  // 自动触发（只有 1 个 MCC）
+  // 只有 1 个 MCC 时自动触发 CID 查找
   useEffect(() => {
-    if (mccList.length === 1 && mccList[0].id && !selectedMcc) {
+    if (mccList.length === 1 && mccList[0].id) {
       handleSelectMcc(mccList[0].id)
     }
   }, [mccList])
@@ -198,6 +193,14 @@ export default function AdCreationWizard() {
                     options={mccList.map(m => ({ value: m.id, label: `${m.name} (${m.mcc_id})` }))}
                   />
                 </div>
+                {cidError && (
+                  <Alert
+                    type="error"
+                    message="CID 查找失败"
+                    description={cidError}
+                    action={<Button size="small" onClick={() => handleSelectMcc(selectedMcc)}>重试</Button>}
+                  />
+                )}
                 {allCids.length > 0 && (
                   <div>
                     <Typography.Text strong style={{ marginRight: 8 }}>客户账号 (CID)</Typography.Text>
@@ -205,7 +208,7 @@ export default function AdCreationWizard() {
                       style={{ width: 400 }}
                       placeholder="选择客户账号"
                       value={availableCid || undefined}
-                      onChange={setAvailableCid}
+                      onChange={(v) => { setAvailableCid(v); setCidError(''); }}
                       options={allCids.map(cid => ({
                         value: cid,
                         label: busyCids.includes(cid) ? `${cid}（有广告运行中）` : `${cid}（空闲）`,
