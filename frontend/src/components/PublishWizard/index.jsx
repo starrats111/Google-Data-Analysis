@@ -267,7 +267,7 @@ const PublishWizard = () => {
       _autoSelectTitleAndKeywords(resData)
       // 保留手动上传的图片，不用爬取的图片覆盖
       setCrawledImages(resData?.images || [])
-      setMStep(2)
+      setMStep(1)  // 跳到图片选择步骤，让员工确认/修改图片
     } catch (_err) {
       // 爬虫失败 → 调用 AI 分析 URL 生成标题/关键词（不需要爬虫数据）
       message.info('商家网站爬取失败（反爬保护），正在用 AI 分析生成标题和关键词...')
@@ -291,7 +291,7 @@ const PublishWizard = () => {
         setMerchantKeywords([])
       }
       setCrawledImages([])
-      setMStep(2)
+      setMStep(1)  // 跳到图片选择步骤
     } finally { setLoading(false) }
   }
 
@@ -530,12 +530,12 @@ const PublishWizard = () => {
       const res = await articleApi.crawlMerchant({ url: siteUrl, language })
       await _applyCrawlImages(res.data)
     } catch (err) {
-      message.warning('爬取失败（反爬保护），已保留链接信息，请在确认页面检查标题')
+      message.warning('爬取失败（反爬保护），已保留链接信息，请选择图片后继续')
       setCrawlResult({ brand_name: '', url: siteUrl, analysis: { titles: [], keywords: [], products: [], selling_points: [], promotions: '' } })
       setMerchantTitles([])
       setMerchantKeywords([])
       setCrawledImages([])
-      setMStep(2)
+      setMStep(1)  // 跳到图片选择步骤
     } finally { setLoading(false) }
   }
 
@@ -577,7 +577,7 @@ const PublishWizard = () => {
         setMerchantKeywords([])
       }
       setCrawledImages([])
-      setMStep(2)
+      setMStep(1)  // 跳到图片选择步骤
     } finally { setLoading(false) }
   }
 
@@ -612,7 +612,7 @@ const PublishWizard = () => {
         setMerchantKeywords([])
       }
       setCrawledImages([])
-      setMStep(2)
+      setMStep(1)  // 跳到图片选择步骤
     } finally { setLoading(false) }
   }
 
