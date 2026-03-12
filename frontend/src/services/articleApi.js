@@ -32,7 +32,7 @@ const articleApi = {
   deleteTitle: (id) => api.delete(`/api/article-titles/${id}`),
 
   // 商家推广（OPT-012）
-  crawlMerchant: (data) => api.post('/api/article-gen/crawl', data),
+  crawlMerchant: (data) => api.post('/api/article-gen/crawl', data, { timeout: 300000 }),
   generateMerchantArticle: async (data, onProgress) => {
     const baseUrl = api.defaults.baseURL || ''
     const headers = { 'Content-Type': 'application/json' }
