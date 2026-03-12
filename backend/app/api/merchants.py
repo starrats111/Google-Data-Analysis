@@ -454,7 +454,7 @@ async def get_performance(
 async def get_ranking(
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
-    current_user: User = Depends(get_current_manager_or_leader),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     sd = datetime.fromisoformat(start_date) if start_date else None

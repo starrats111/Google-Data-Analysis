@@ -132,7 +132,7 @@ const MerchantManagement = () => {
   })
   const [assignmentFilters, setAssignmentFilters] = useState({
     user_id: undefined,
-    status: canManage ? undefined : 'active',
+    status: undefined,
   })
 
   const [selectedMerchantIds, setSelectedMerchantIds] = useState([])
@@ -210,12 +210,8 @@ const MerchantManagement = () => {
 
   useEffect(() => {
     fetchUsers()
-    if (canManage) {
-      fetchStats()
-      fetchMerchants(1, merchantPageSize)
-    } else {
-      fetchAssignments(1, assignmentPageSize)
-    }
+    fetchStats()
+    fetchMerchants(1, merchantPageSize)
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
@@ -984,63 +980,59 @@ const MerchantManagement = () => {
 
   return (
     <div>
-      {canManage && (
-        <>
-          <Row gutter={16} style={{ marginBottom: 16 }}>
-            <Col xs={24} sm={12} md={6}>
-              <Card>
-                <Statistic title="商家总数" value={stats.total || 0} />
-              </Card>
-            </Col>
-            <Col xs={24} sm={12} md={6}>
-              <Card>
-                <Statistic title="已分配商家" value={stats.assigned || 0} valueStyle={{ color: '#1677ff' }} />
-              </Card>
-            </Col>
-            <Col xs={24} sm={12} md={6}>
-              <Card>
-                <Statistic title="未分配商家" value={stats.unassigned || 0} valueStyle={{ color: '#fa8c16' }} />
-              </Card>
-            </Col>
-            <Col xs={24} sm={12} md={6}>
-              <Card>
-                <Statistic title="待补MID" value={stats.missing_mid_total || 0} valueStyle={{ color: '#d46b08' }} />
-              </Card>
-            </Col>
-          </Row>
+      <Row gutter={16} style={{ marginBottom: 16 }}>
+        <Col xs={24} sm={12} md={6}>
+          <Card>
+            <Statistic title="商家总数" value={stats.total || 0} />
+          </Card>
+        </Col>
+        <Col xs={24} sm={12} md={6}>
+          <Card>
+            <Statistic title="已分配商家" value={stats.assigned || 0} valueStyle={{ color: '#1677ff' }} />
+          </Card>
+        </Col>
+        <Col xs={24} sm={12} md={6}>
+          <Card>
+            <Statistic title="未分配商家" value={stats.unassigned || 0} valueStyle={{ color: '#fa8c16' }} />
+          </Card>
+        </Col>
+        <Col xs={24} sm={12} md={6}>
+          <Card>
+            <Statistic title="待补MID" value={stats.missing_mid_total || 0} valueStyle={{ color: '#d46b08' }} />
+          </Card>
+        </Col>
+      </Row>
 
-          <Row gutter={16} style={{ marginBottom: 16 }}>
-            <Col xs={24} md={8}>
-              <Card>
-                <Statistic title="商家发现成功率" value={stats.discovery_rate || 0} precision={2} suffix="%" valueStyle={{ color: '#389e0d' }} />
-              </Card>
-            </Col>
-            <Col xs={24} md={8}>
-              <Card>
-                <Statistic title="MID缺失率" value={stats.missing_mid_rate || 0} precision={2} suffix="%" valueStyle={{ color: '#cf1322' }} />
-              </Card>
-            </Col>
-            <Col xs={24} md={8}>
-              <Card size="small">
-                <div style={{ marginBottom: 8 }}>
-                  <span style={{ fontWeight: 500, marginRight: 8 }}>平台分布</span>
-                  <Space wrap size={4}>{platformTags}</Space>
-                </div>
-                <div>
-                  <span style={{ fontWeight: 500, marginRight: 8 }}>待补MID</span>
-                  <Space wrap size={4}>{missingMidTags}</Space>
-                </div>
-              </Card>
-            </Col>
-          </Row>
-        </>
-      )}
+      <Row gutter={16} style={{ marginBottom: 16 }}>
+        <Col xs={24} md={8}>
+          <Card>
+            <Statistic title="商家发现成功率" value={stats.discovery_rate || 0} precision={2} suffix="%" valueStyle={{ color: '#389e0d' }} />
+          </Card>
+        </Col>
+        <Col xs={24} md={8}>
+          <Card>
+            <Statistic title="MID缺失率" value={stats.missing_mid_rate || 0} precision={2} suffix="%" valueStyle={{ color: '#cf1322' }} />
+          </Card>
+        </Col>
+        <Col xs={24} md={8}>
+          <Card size="small">
+            <div style={{ marginBottom: 8 }}>
+              <span style={{ fontWeight: 500, marginRight: 8 }}>平台分布</span>
+              <Space wrap size={4}>{platformTags}</Space>
+            </div>
+            <div>
+              <span style={{ fontWeight: 500, marginRight: 8 }}>待补MID</span>
+              <Space wrap size={4}>{missingMidTags}</Space>
+            </div>
+          </Card>
+        </Col>
+      </Row>
 
       <Tabs
-        activeKey={canManage ? tabKey : 'assignments'}
+        activeKey={tabKey}
         onChange={setTabKey}
         items={[
-          canManage && {
+          {
             key: 'merchants',
             label: '商家目录',
             children: (
@@ -1187,10 +1179,10 @@ const MerchantManagement = () => {
           },
           {
             key: 'assignments',
-            label: canManage ? '分配记录' : '我的商家',
+            label: '分配记录',
             children: (
               <Card
-                title={canManage ? '分配记录' : '我的商家'}
+                title="分配记录"
                 extra={
                   <Space>
                     <Button icon={<ReloadOutlined />} onClick={() => fetchAssignments(assignmentPage, assignmentPageSize)} />
@@ -1238,7 +1230,7 @@ const MerchantManagement = () => {
                   <Button type="primary" onClick={() => fetchAssignments(1, assignmentPageSize)}>查询</Button>
                   <Button
                     onClick={() => {
-                      setAssignmentFilters({ user_id: undefined, status: canManage ? undefined : 'active' })
+                      setAssignmentFilters({ user_id: undefined, status: undefined })
                       setTimeout(() => fetchAssignments(1, assignmentPageSize), 0)
                     }}
                   >
@@ -1265,7 +1257,7 @@ const MerchantManagement = () => {
               </Card>
             ),
           },
-          canManage && {
+          {
             key: 'missing_mid',
             label: '待补MID',
             children: (
@@ -1329,7 +1321,7 @@ const MerchantManagement = () => {
               </Card>
             ),
           },
-          canManage && {
+          {
             key: 'violations',
             label: (
               <span>
@@ -1445,7 +1437,7 @@ const MerchantManagement = () => {
               </Card>
             ),
           },
-          canManage && {
+          {
             key: 'recommendations',
             label: (
               <span>

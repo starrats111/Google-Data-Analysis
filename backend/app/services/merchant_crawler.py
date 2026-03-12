@@ -108,13 +108,13 @@ HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
         "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/124.0.0.0 Safari/537.36"
+        "Chrome/135.0.0.0 Safari/537.36"
     ),
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
     "Accept-Language": "en-US,en;q=0.9",
-    "Accept-Encoding": "gzip, deflate",
+    "Accept-Encoding": "gzip, deflate, br",
     "Cache-Control": "no-cache",
-    "Sec-Ch-Ua": '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
+    "Sec-Ch-Ua": '"Chromium";v="135", "Google Chrome";v="135", "Not-A.Brand";v="99"',
     "Sec-Ch-Ua-Mobile": "?0",
     "Sec-Ch-Ua-Platform": '"Windows"',
     "Sec-Fetch-Dest": "document",
@@ -537,27 +537,16 @@ def _find_sub_pages(soup: BeautifulSoup, base_url: str) -> List[str]:
 
 
 _FALLBACK_UAS = [
-    # Chrome 133 on Windows (2026)
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36",
-    # Chrome 132 on Windows
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36",
-    # Chrome 133 on Mac
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36",
-    # Chrome 131 on Mac
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-    # Firefox 134 on Windows
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:134.0) Gecko/20100101 Firefox/134.0",
-    # Firefox 134 on Mac
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:134.0) Gecko/20100101 Firefox/134.0",
-    # Safari 18 on Mac
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:136.0) Gecko/20100101 Firefox/136.0",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:136.0) Gecko/20100101 Firefox/136.0",
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.3 Safari/605.1.15",
-    # Edge 133 on Windows
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36 Edg/133.0.0.0",
-    # Chrome on Linux
-    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36",
-    # Chrome on Android
-    "Mozilla/5.0 (Linux; Android 15; Pixel 9) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Mobile Safari/537.36",
-    # Safari on iPhone (iOS 18)
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36 Edg/135.0.0.0",
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Linux; Android 15; Pixel 9) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Mobile Safari/537.36",
     "Mozilla/5.0 (iPhone; CPU iPhone OS 18_3 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.3 Mobile/15E148 Safari/604.1",
 ]
 
@@ -585,7 +574,7 @@ def _build_stealth_headers(url: str, ua: str = None) -> Dict:
         "User-Agent": ua,
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
         "Accept-Language": "en-US,en;q=0.9,zh-CN;q=0.8,zh;q=0.7",
-        "Accept-Encoding": "gzip, deflate",
+        "Accept-Encoding": "gzip, deflate, br",
         "Cache-Control": "no-cache",
         "Upgrade-Insecure-Requests": "1",
         "Referer": "https://www.google.com/",
@@ -594,8 +583,7 @@ def _build_stealth_headers(url: str, ua: str = None) -> Dict:
     }
 
     if not is_firefox and not is_safari:
-        # Chrome/Edge specific headers
-        chrome_ver = "125"
+        chrome_ver = "135"
         import re as _re_local
         m = _re_local.search(r'Chrome/(\d+)', ua)
         if m:
@@ -606,7 +594,7 @@ def _build_stealth_headers(url: str, ua: str = None) -> Dict:
             "Sec-Ch-Ua-Platform": '"Windows"' if "Windows" in ua else '"macOS"',
             "Sec-Fetch-Dest": "document",
             "Sec-Fetch-Mode": "navigate",
-            "Sec-Fetch-Site": "cross-site",
+            "Sec-Fetch-Site": "none",
             "Sec-Fetch-User": "?1",
         })
     elif is_firefox:
@@ -686,7 +674,7 @@ def _try_curl_cffi(url: str, timeout: int = 20):
         logger.debug("[MerchantCrawler] curl_cffi 未安装，跳过")
         return None
 
-    impersonate_targets = ["chrome124", "chrome120", "chrome110", "edge101", "safari17_0"]
+    impersonate_targets = ["chrome131", "chrome133", "safari18_0", "edge131"]
     _random.shuffle(impersonate_targets)
 
     for target in impersonate_targets[:3]:
@@ -763,14 +751,15 @@ def _try_playwright(url: str, timeout: int = 30):
     import subprocess as _sp
     import shutil
 
-    if not shutil.which("python3"):
-        logger.debug("[MerchantCrawler] python3 不在 PATH 中，跳过 playwright")
+    python_cmd = shutil.which("python3") or shutil.which("python")
+    if not python_cmd:
+        logger.debug("[MerchantCrawler] python3/python 不在 PATH 中，跳过 playwright")
         return None
 
     try:
         ua = _random.choice(_FALLBACK_UAS)
         proc = _sp.run(
-            ["python3", "-c", _PLAYWRIGHT_SCRIPT, url, str(timeout), ua],
+            [python_cmd, "-c", _PLAYWRIGHT_SCRIPT, url, str(timeout), ua],
             capture_output=True, timeout=timeout + 20,
         )
         html = proc.stdout.decode("utf-8", errors="replace")
@@ -966,13 +955,13 @@ def crawl(url: str) -> Dict:
             home_soup = BeautifulSoup(home_html, "lxml")
             sub_urls = _find_sub_pages(home_soup, url)
 
-            for sub_url in sub_urls[:8]:
+            for sub_url in sub_urls[:5]:
                 if _count_unique_images(pages) >= MIN_GOOD_IMAGES:
                     logger.info("[MerchantCrawler] 已达 %d 张图片，停止爬取子页面",
                                 _count_unique_images(pages))
                     break
                 try:
-                    _time.sleep(_random.uniform(0.5, 1.5))
+                    _time.sleep(_random.uniform(2.0, 4.0))
                     resp = _fetch_with_retry(HEADERS, sub_url, timeout=12)
                     sub_data = _extract_page(resp.text, sub_url)
                     pages.append(sub_data)

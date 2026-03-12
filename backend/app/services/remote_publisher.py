@@ -319,10 +319,15 @@ class RemotePublisher:
                 return None
         for attempt in range(retries + 1):
             try:
+                parsed = urlparse(url)
+                referer = f"{parsed.scheme}://{parsed.hostname}/" if parsed.hostname else url
                 resp = requests.get(url, timeout=20, headers={
-                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
-                    "Referer": url,
-                    "Accept": "image/*,*/*;q=0.8",
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36",
+                    "Referer": referer,
+                    "Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
+                    "Sec-Fetch-Dest": "image",
+                    "Sec-Fetch-Mode": "no-cors",
+                    "Sec-Fetch-Site": "same-origin",
                 }, allow_redirects=True)
                 resp.raise_for_status()
                 content_type = resp.headers.get("content-type", "")
@@ -801,7 +806,7 @@ class RemotePublisher:
             "category": index_entry["category"],
             "categoryName": category_name,
             "date": index_entry["date"],
-            "author": getattr(article, "author_name", None) or "Editorial Team",
+            "author": getattr(article, "author", None) or getattr(article, "author_name", None) or "Editorial Team",
             "image": index_entry["image"],
             "excerpt": article.excerpt or "",
             "content": content_html,
@@ -842,7 +847,7 @@ class RemotePublisher:
                         "excerpt": article.excerpt or "",
                         "heroImage": index_entry["image"],
                         "date": index_entry["date"],
-                        "author": getattr(article, "author_name", None) or "Editorial Team",
+                        "author": getattr(article, "author", None) or getattr(article, "author_name", None) or "Editorial Team",
                         "products": [],
                     }
                     # 检测已有条目的字段格式来适配
@@ -1374,52 +1379,60 @@ class RemotePublisher:
         return "\n".join(lines)
 
     def _extract_post_fields(self, obj_str: str) -> dict:
-        """从 JS 对象字符串中提取字段值"""
+        """从 JS/JSON 对象字符串中提取字段值。
+        兼容两种格式：
+          JS:   field: 'value'  /  field: "value"
+          JSON: "field": "value"
+        """
         post = {}
 
+        def _field_re(field_name: str) -> str:
+            """生成同时匹配 key: 和 "key": 的字段前缀"""
+            return rf'["\']?{field_name}["\']?\s*:\s*'
+
         # 提取数字字段
-        id_m = re.search(r'\bid\s*:\s*(\d+)', obj_str)
+        id_m = re.search(_field_re('id') + r'(\d+)', obj_str)
         if id_m:
             post["id"] = int(id_m.group(1))
 
-        # 提取字符串字段（支持单引号和双引号，兼容多种站点格式）
-        str_fields = ["slug", "title", "category", "dateISO", "dateLabel",
-                       "readTime", "heroImage", "primaryProduct", "detailUrl",
+        # 布尔字段
+        for bf in ("hasProducts", "featured"):
+            bm = re.search(_field_re(bf) + r'(true|false)', obj_str)
+            if bm:
+                post[bf] = bm.group(1) == 'true'
+
+        # 提取字符串字段
+        str_fields = ["slug", "title", "category", "categoryName",
+                       "dateISO", "dateLabel", "readTime", "heroImage",
+                       "primaryProduct", "detailUrl", "author",
                        "date", "displayDate", "readingTime", "image", "url"]
         for field in str_fields:
-            # 匹配 field: 'value' 或 field: "value"（支持多行 excerpt 等）
             m = re.search(
-                rf'\b{field}\s*:\s*([\'"])((?:(?!\1)[^\\]|\\.)*?)\1',
+                _field_re(field) + r'([\'"])((?:(?!\1)[^\\]|\\.)*?)\1',
                 obj_str, re.DOTALL
             )
             if m:
                 val = m.group(2)
-                # 还原 JS 转义
                 val = val.replace("\\'", "'").replace('\\"', '"').replace("\\n", "\n")
                 post[field] = val
 
         # excerpt 可能跨多行，单独处理
         if "excerpt" not in post:
             m = re.search(
-                r'\bexcerpt\s*:\s*([\'"`])((?:(?!\1)[^\\]|\\.)*?)\1',
+                _field_re('excerpt') + r'([\'"`])((?:(?!\1)[^\\]|\\.)*?)\1',
                 obj_str, re.DOTALL
             )
             if m:
                 val = m.group(2).replace("\\'", "'").replace('\\"', '"').replace("\\n", "\n")
                 post["excerpt"] = val
-        else:
-            # 已经提取到了
-            pass
 
-        # 也尝试从 str_fields 中提取 excerpt
         if "excerpt" not in post:
-            # 尝试匹配多行 excerpt（可能用模板字符串）
-            m = re.search(r'\bexcerpt\s*:\s*`(.*?)`', obj_str, re.DOTALL)
+            m = re.search(_field_re('excerpt') + r'`(.*?)`', obj_str, re.DOTALL)
             if m:
                 post["excerpt"] = m.group(1)
 
         # 提取 tags 数组
-        tags_m = re.search(r'\btags\s*:\s*\[(.*?)\]', obj_str, re.DOTALL)
+        tags_m = re.search(_field_re('tags') + r'\[(.*?)\]', obj_str, re.DOTALL)
         if tags_m:
             tags_str = tags_m.group(1)
             post["tags"] = re.findall(r"['\"]([^'\"]+)['\"]", tags_str)

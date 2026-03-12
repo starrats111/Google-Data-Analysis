@@ -61,9 +61,7 @@ const MerchantPerformance = () => {
       }
 
       const [rankingResp, detailResp] = await Promise.all([
-        role === 'member' || role === 'employee'
-          ? Promise.resolve({ data: [] })
-          : api.get('/api/merchant-performance/ranking', { params: baseParams }),
+        api.get('/api/merchant-performance/ranking', { params: baseParams }),
         api.get('/api/merchant-performance', { params: detailParams }),
       ])
 
