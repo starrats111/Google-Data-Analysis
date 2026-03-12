@@ -819,6 +819,12 @@ class MerchantService:
                     "notes": a.notes,
                     "assigned_at": a.assigned_at.isoformat() if a.assigned_at else None,
                     "completed_at": a.completed_at.isoformat() if a.completed_at else None,
+                    "mode": a.mode,
+                    "assignment_source": a.assignment_source,
+                    "google_campaign_id": a.google_campaign_id,
+                    "google_customer_id": a.google_customer_id,
+                    "daily_budget": float(a.daily_budget) if a.daily_budget else None,
+                    "target_country": a.target_country,
                 }
                 for a in items
             ],

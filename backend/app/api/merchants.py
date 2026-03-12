@@ -308,13 +308,12 @@ async def claim_merchants(
     """CR-039: 员工自助领取商家（所有登录用户可调用）"""
     from app.models.merchant import MerchantAssignment, AffiliateMerchant
     created = []
+    merchant_names = {}
     skipped = 0
     for mid in data.merchant_ids:
-        # 检查商家是否存在
         merchant = db.query(AffiliateMerchant).filter(AffiliateMerchant.id == mid).first()
         if not merchant:
             continue
-        # 检查是否已领取
         existing = db.query(MerchantAssignment).filter(
             MerchantAssignment.merchant_id == mid,
             MerchantAssignment.user_id == current_user.id,
@@ -333,11 +332,18 @@ async def claim_merchants(
         )
         db.add(assignment)
         created.append(assignment)
+        merchant_names[mid] = merchant.merchant_name
     db.commit()
+    for a in created:
+        db.refresh(a)
     return {
         "message": f"成功领取 {len(created)} 个商家" + (f"，{skipped} 个已领取" if skipped else ""),
         "count": len(created),
         "skipped": skipped,
+        "assignments": [
+            {"id": a.id, "merchant_id": a.merchant_id, "merchant_name": merchant_names.get(a.merchant_id, "")}
+            for a in created
+        ],
     }
 
 

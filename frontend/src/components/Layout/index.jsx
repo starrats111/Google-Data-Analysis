@@ -25,7 +25,6 @@ import {
   CommentOutlined,
   GlobalOutlined,
   ExperimentOutlined,
-  ThunderboltOutlined,
 } from '@ant-design/icons'
 import { useAuth } from '../../store/authStore'
 import ChangelogModal, { hasUnreadChangelog } from '../ChangelogModal'
@@ -214,6 +213,7 @@ const Layout = () => {
       children: [
         { key: '/merchant-management', icon: <ShopOutlined />, label: '商家目录与分配' },
         { key: '/merchant-performance', icon: <FundViewOutlined />, label: '绩效看板' },
+        { key: '/ads/test-dashboard', icon: <ExperimentOutlined />, label: '测试看板' },
       ],
     },
     {
@@ -235,14 +235,6 @@ const Layout = () => {
         { key: '/articles/titles', icon: <FileTextOutlined />, label: '标题库' },
         { key: '/articles/categories', icon: <DatabaseOutlined />, label: '分类管理' },
         { key: '/articles/sites', icon: <GlobalOutlined />, label: '网站管理' },
-      ],
-    },
-    {
-      key: 'ads-manage',
-      icon: <ThunderboltOutlined />,
-      label: '广告管理',
-      children: [
-        { key: '/ads/test-dashboard', icon: <ExperimentOutlined />, label: '测试看板' },
       ],
     },
     {
@@ -293,6 +285,7 @@ const Layout = () => {
       children: [
         { key: '/merchant-management', icon: <ShopOutlined />, label: '商家目录与分配' },
         { key: '/merchant-performance', icon: <FundViewOutlined />, label: '绩效看板' },
+        { key: '/ads/test-dashboard', icon: <ExperimentOutlined />, label: '测试看板' },
       ],
     },
     {
@@ -305,14 +298,6 @@ const Layout = () => {
         { key: '/articles/titles', icon: <FileTextOutlined />, label: '标题库' },
         { key: '/articles/categories', icon: <DatabaseOutlined />, label: '分类管理' },
         { key: '/articles/sites', icon: <GlobalOutlined />, label: '网站管理' },
-      ],
-    },
-    {
-      key: 'ads-manage-x',
-      icon: <ThunderboltOutlined />,
-      label: '广告管理',
-      children: [
-        { key: '/ads/test-dashboard', icon: <ExperimentOutlined />, label: '测试看板' },
       ],
     },
     {
@@ -363,6 +348,7 @@ const Layout = () => {
       children: [
         { key: '/merchant-management', icon: <ShopOutlined />, label: '商家目录与分配' },
         { key: '/merchant-performance', icon: <FundViewOutlined />, label: '绩效看板' },
+        { key: '/ads/test-dashboard', icon: <ExperimentOutlined />, label: '测试看板' },
       ],
     },
     {
@@ -375,14 +361,6 @@ const Layout = () => {
         { key: '/articles/titles', icon: <FileTextOutlined />, label: '标题库' },
         { key: '/articles/categories', icon: <DatabaseOutlined />, label: '分类管理' },
         { key: '/articles/sites', icon: <GlobalOutlined />, label: '网站管理' },
-      ],
-    },
-    {
-      key: 'ads-manage-x',
-      icon: <ThunderboltOutlined />,
-      label: '广告管理',
-      children: [
-        { key: '/ads/test-dashboard', icon: <ExperimentOutlined />, label: '测试看板' },
       ],
     },
     {

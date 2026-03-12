@@ -127,7 +127,7 @@ export default function TestDashboard() {
       <Card>
         <Space style={{ marginBottom: 16 }}>
           <Button onClick={fetchData} icon={<SyncOutlined />}>刷新</Button>
-          <Button type="primary" onClick={() => navigate('/merchants')}>去领取商家</Button>
+          <Button type="primary" onClick={() => navigate('/merchant-management')}>去领取商家</Button>
           <Button
             icon={<RobotOutlined />}
             style={{ background: '#722ed1', borderColor: '#722ed1', color: '#fff' }}

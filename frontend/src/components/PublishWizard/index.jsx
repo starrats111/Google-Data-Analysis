@@ -269,9 +269,10 @@ const PublishWizard = () => {
       // 保留手动上传的图片，不用爬取的图片覆盖
       setCrawledImages(resData?.images || [])
       setMStep(1)  // 跳到图片选择步骤，让员工确认/修改图片
-    } catch (_err) {
-      // 爬虫失败 → 调用 AI 分析 URL 生成标题/关键词（不需要爬虫数据）
-      message.info('商家网站爬取失败（反爬保护），正在用 AI 分析生成标题和关键词...')
+    } catch (err) {
+      const detail = err?.response?.data?.detail || err.message || '未知错误'
+      const isTimeout = err.code === 'ECONNABORTED' || detail.includes('timeout')
+      message.info(isTimeout ? '爬取超时，正在用 AI 分析...' : `爬取失败(${detail.slice(0,50)})，正在用 AI 分析...`)
       try {
         const aiRes = await articleApi.analyzeUrl({ url: merchantUrl, language })
         const aiData = aiRes.data
@@ -285,14 +286,13 @@ const PublishWizard = () => {
         _autoSelectTitleAndKeywords(crawlData)
         message.success('AI 分析完成，已自动选择标题和关键词')
       } catch (_aiErr) {
-        // AI 分析也失败，用空数据让用户手动填
         message.warning('AI 分析也失败了，请手动输入标题和关键词')
         setCrawlResult({ brand_name: '', url: merchantUrl, analysis: { titles: [], keywords: [], products: [], selling_points: [], promotions: '' } })
         setMerchantTitles([])
         setMerchantKeywords([])
       }
       setCrawledImages([])
-      setMStep(1)  // 跳到图片选择步骤
+      setMStep(1)
     } finally { setLoading(false) }
   }
 
@@ -531,12 +531,17 @@ const PublishWizard = () => {
       const res = await articleApi.crawlMerchant({ url: siteUrl, language })
       await _applyCrawlImages(res.data)
     } catch (err) {
-      message.warning('爬取失败（反爬保护），已保留链接信息，请选择图片后继续')
+      const detail = err?.response?.data?.detail || err.message || '未知错误'
+      const isTimeout = err.code === 'ECONNABORTED' || detail.includes('timeout')
+      const msg = isTimeout
+        ? '爬取超时，请稍后手动点击"爬取商家网站"重试'
+        : `爬取失败: ${detail}，请选择图片后继续`
+      message.warning(msg)
       setCrawlResult({ brand_name: '', url: siteUrl, analysis: { titles: [], keywords: [], products: [], selling_points: [], promotions: '' } })
       setMerchantTitles([])
       setMerchantKeywords([])
       setCrawledImages([])
-      setMStep(1)  // 跳到图片选择步骤
+      setMStep(1)
     } finally { setLoading(false) }
   }
 
@@ -557,8 +562,9 @@ const PublishWizard = () => {
       const res = await articleApi.crawlMerchant({ url: merchantUrl, language })
       await _applyCrawlImages(res.data)
     } catch (err) {
-      // 爬虫失败 → 自动用 AI 分析 URL 生成品牌信息、标题和关键词
-      message.info('商家网站爬取失败（反爬保护），正在用 AI 分析生成标题和关键词...')
+      const detail = err?.response?.data?.detail || err.message || '未知错误'
+      const isTimeout = err.code === 'ECONNABORTED' || detail.includes('timeout')
+      message.info(isTimeout ? '爬取超时，正在用 AI 分析...' : `爬取失败(${detail.slice(0,50)})，正在用 AI 分析...`)
       try {
         const aiRes = await articleApi.analyzeUrl({ url: merchantUrl, language })
         const aiData = aiRes.data
@@ -578,7 +584,7 @@ const PublishWizard = () => {
         setMerchantKeywords([])
       }
       setCrawledImages([])
-      setMStep(1)  // 跳到图片选择步骤
+      setMStep(1)
     } finally { setLoading(false) }
   }
 
@@ -592,8 +598,9 @@ const PublishWizard = () => {
       const res = await articleApi.crawlMerchant({ url: merchantUrl, language })
       await _applyCrawlImages(res.data)
     } catch (err) {
-      // 爬虫失败 → 自动用 AI 分析 URL 生成品牌信息、标题和关键词
-      message.info('商家网站爬取失败（反爬保护），正在用 AI 分析生成标题和关键词...')
+      const detail = err?.response?.data?.detail || err.message || '未知错误'
+      const isTimeout = err.code === 'ECONNABORTED' || detail.includes('timeout')
+      message.info(isTimeout ? '爬取超时，正在用 AI 分析...' : `爬取失败(${detail.slice(0,50)})，正在用 AI 分析...`)
       try {
         const aiRes = await articleApi.analyzeUrl({ url: merchantUrl, language })
         const aiData = aiRes.data
@@ -613,7 +620,7 @@ const PublishWizard = () => {
         setMerchantKeywords([])
       }
       setCrawledImages([])
-      setMStep(1)  // 跳到图片选择步骤
+      setMStep(1)
     } finally { setLoading(false) }
   }
 
@@ -1205,7 +1212,7 @@ const PublishWizard = () => {
                   <Typography.Text>{crawlResult.brand_name}</Typography.Text>
                 </>
               ) : (
-                <Alert type="warning" message="爬虫未获取到品牌信息（反爬保护），AI 已自动生成标题和关键词" showIcon style={{ marginBottom: 8 }} />
+                <Alert type="warning" message="爬虫未获取到品牌信息，AI 已自动生成标题和关键词" showIcon style={{ marginBottom: 8 }} />
               )}
               {merchantUrl && (
                 <div style={{ marginTop: 4 }}>

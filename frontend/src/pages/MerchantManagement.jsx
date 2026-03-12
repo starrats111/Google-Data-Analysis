@@ -23,7 +23,8 @@ import {
   Upload,
   Alert,
 } from 'antd'
-import { ReloadOutlined, SearchOutlined, UserSwitchOutlined, SyncOutlined, CheckCircleOutlined, CloudSyncOutlined, UploadOutlined, WarningOutlined, InboxOutlined } from '@ant-design/icons'
+import { ReloadOutlined, SearchOutlined, UserSwitchOutlined, SyncOutlined, CheckCircleOutlined, CloudSyncOutlined, UploadOutlined, WarningOutlined, InboxOutlined, ThunderboltOutlined } from '@ant-design/icons'
+import { useNavigate } from 'react-router-dom'
 import api from '../services/api'
 import { useAuth } from '../store/authStore'
 import dayjs from 'dayjs'
@@ -88,6 +89,7 @@ const PLATFORM_COLORS = {
 }
 
 const MerchantManagement = () => {
+  const navigate = useNavigate()
   const { permissions, user } = useAuth()
   const role = permissions?.role || user?.role || 'member'
   const canManage = role === 'manager' || role === 'leader'
@@ -817,12 +819,32 @@ const MerchantManagement = () => {
   // CR-039: 领取商家
   const handleClaimMerchant = async (record, mode = 'test') => {
     try {
-      await api.post('/api/merchant-assignments/claim', {
+      const res = await api.post('/api/merchant-assignments/claim', {
         merchant_ids: [record.id],
         mode,
       })
-      message.success(`已领取商家: ${record.merchant_name}`)
-      fetchMerchants(merchantPage, merchantPageSize)
+      const created = res.data?.assignments || []
+      if (created.length > 0) {
+        message.success(`已领取商家: ${record.merchant_name}`)
+        fetchMerchants(merchantPage, merchantPageSize)
+        const assignment = created[0]
+        Modal.confirm({
+          title: '领取成功',
+          content: `已领取商家「${record.merchant_name}」，是否立即为该商家创建广告？`,
+          okText: '创建广告',
+          cancelText: '稍后再说',
+          onOk: () => {
+            const params = new URLSearchParams({
+              assignment_id: assignment.id,
+              merchant_name: record.merchant_name || '',
+            })
+            navigate(`/ads/create?${params.toString()}`)
+          },
+        })
+      } else {
+        message.info(res.data?.message || '商家已领取')
+        fetchMerchants(merchantPage, merchantPageSize)
+      }
     } catch (err) {
       message.error('领取失败: ' + (err?.response?.data?.detail || err.message))
     }
@@ -892,26 +914,49 @@ const MerchantManagement = () => {
       width: 180,
       render: (val) => val || '-',
     },
-    canManage && {
+    {
       title: '操作',
       key: 'action',
-      width: 190,
+      width: canManage ? 250 : 120,
       fixed: 'right',
       render: (_, record) => (
         <Space>
-          <Button size="small" onClick={() => openEditAssignmentModal(record)}>
-            编辑
-          </Button>
-          <Popconfirm
-            title="确认取消该分配吗？"
-            onConfirm={() => handleCancelAssignment(record.id)}
-            okText="确认"
-            cancelText="取消"
-          >
-            <Button size="small" danger>
-              取消
+          {!record.google_campaign_id && (
+            <Button
+              size="small"
+              type="primary"
+              icon={<ThunderboltOutlined />}
+              onClick={() => {
+                const params = new URLSearchParams({
+                  assignment_id: record.id,
+                  merchant_name: record.merchant?.merchant_name || '',
+                })
+                navigate(`/ads/create?${params.toString()}`)
+              }}
+            >
+              创建广告
             </Button>
-          </Popconfirm>
+          )}
+          {record.google_campaign_id && (
+            <Tag color="green">已创建</Tag>
+          )}
+          {canManage && (
+            <>
+              <Button size="small" onClick={() => openEditAssignmentModal(record)}>
+                编辑
+              </Button>
+              <Popconfirm
+                title="确认取消该分配吗？"
+                onConfirm={() => handleCancelAssignment(record.id)}
+                okText="确认"
+                cancelText="取消"
+              >
+                <Button size="small" danger>
+                  取消
+                </Button>
+              </Popconfirm>
+            </>
+          )}
         </Space>
       ),
     },

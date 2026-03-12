@@ -537,68 +537,28 @@ def _find_sub_pages(soup: BeautifulSoup, base_url: str) -> List[str]:
 
 
 _FALLBACK_UAS = [
-    # Chrome on Windows
-    (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/125.0.0.0 Safari/537.36"
-    ),
-    (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/123.0.0.0 Safari/537.36"
-    ),
-    # Chrome on Mac
-    (
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/125.0.0.0 Safari/537.36"
-    ),
-    (
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/122.0.0.0 Safari/537.36"
-    ),
-    # Firefox on Windows
-    (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:126.0) "
-        "Gecko/20100101 Firefox/126.0"
-    ),
-    # Firefox on Mac
-    (
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:126.0) "
-        "Gecko/20100101 Firefox/126.0"
-    ),
-    # Safari on Mac
-    (
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-        "AppleWebKit/605.1.15 (KHTML, like Gecko) "
-        "Version/17.5 Safari/605.1.15"
-    ),
-    # Edge on Windows
-    (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/125.0.0.0 Safari/537.36 Edg/125.0.0.0"
-    ),
+    # Chrome 133 on Windows (2026)
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36",
+    # Chrome 132 on Windows
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36",
+    # Chrome 133 on Mac
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36",
+    # Chrome 131 on Mac
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+    # Firefox 134 on Windows
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:134.0) Gecko/20100101 Firefox/134.0",
+    # Firefox 134 on Mac
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:134.0) Gecko/20100101 Firefox/134.0",
+    # Safari 18 on Mac
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.3 Safari/605.1.15",
+    # Edge 133 on Windows
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36 Edg/133.0.0.0",
     # Chrome on Linux
-    (
-        "Mozilla/5.0 (X11; Linux x86_64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/124.0.0.0 Safari/537.36"
-    ),
-    # Chrome on Android (mobile)
-    (
-        "Mozilla/5.0 (Linux; Android 14; Pixel 8) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/125.0.0.0 Mobile Safari/537.36"
-    ),
-    # Safari on iPhone
-    (
-        "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) "
-        "AppleWebKit/605.1.15 (KHTML, like Gecko) "
-        "Version/17.5 Mobile/15E148 Safari/604.1"
-    ),
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36",
+    # Chrome on Android
+    "Mozilla/5.0 (Linux; Android 15; Pixel 9) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Mobile Safari/537.36",
+    # Safari on iPhone (iOS 18)
+    "Mozilla/5.0 (iPhone; CPU iPhone OS 18_3 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.3 Mobile/15E148 Safari/604.1",
 ]
 
 # 模拟真实浏览器 Cookie（GA 等常见 cookie）
@@ -658,37 +618,200 @@ def _build_stealth_headers(url: str, ua: str = None) -> Dict:
     return headers
 
 
+def _make_httpx_response(text: str, url: str, headers: dict = None) -> httpx.Response:
+    """将爬取结果包装成 httpx.Response 兼容对象"""
+    return httpx.Response(
+        status_code=200,
+        text=text,
+        headers=headers or {},
+        request=httpx.Request("GET", url),
+    )
+
+
+def _is_blocked_page(html: str) -> bool:
+    """检测是否是反爬/challenge 拦截页（Cloudflare 5s shield, CAPTCHA 等）"""
+    text_lower = html.lower()
+    block_signals = [
+        "checking your browser",
+        "just a moment",
+        "enable javascript and cookies",
+        "cf-browser-verification",
+        "challenge-platform",
+        "attention required",
+        "access denied",
+        "ray id",
+        "cloudflare",
+        "please verify you are a human",
+        "captcha",
+        "blocked",
+        "bot detection",
+        "are you a robot",
+    ]
+    hit = sum(1 for s in block_signals if s in text_lower)
+    return hit >= 2
+
+def _content_quality_score(html: str) -> int:
+    """检测 HTML 内容质量（0-3）。
+    大响应体（>80KB）几乎肯定是真实内容（SPA 也算），
+    只对小响应做严格检查。
+    """
+    if _is_blocked_page(html):
+        return 0
+
+    content_len = len(html)
+    if content_len > 80000:
+        return 3
+
+    text_lower = html.lower()
+    has_images = '<img' in text_lower
+    has_title = bool(re.search(r'<title>[^<]{3,}</title>', html, re.IGNORECASE))
+    has_body_content = bool(re.search(
+        r'<(?:main|article|section|div[^>]*class="[^"]*(?:product|content|hero|shop|item|card|grid|page))',
+        text_lower
+    ))
+    score = (1 if has_images else 0) + (1 if has_title else 0) + (1 if has_body_content else 0)
+    if content_len > 30000 and score >= 1:
+        score = max(score, 2)
+    return score
+
+
+def _try_curl_cffi(url: str, timeout: int = 20):
+    """
+    Level 1: curl_cffi — 模拟真实浏览器 TLS/JA3 指纹。
+    这是绕过 TLS 指纹检测最有效的方案。
+    """
+    try:
+        from curl_cffi import requests as cffi_requests
+    except ImportError:
+        logger.debug("[MerchantCrawler] curl_cffi 未安装，跳过")
+        return None
+
+    impersonate_targets = ["chrome124", "chrome120", "chrome110", "edge101", "safari17_0"]
+    _random.shuffle(impersonate_targets)
+
+    for target in impersonate_targets[:3]:
+        try:
+            _time.sleep(_random.uniform(0.3, 1.0))
+            resp = cffi_requests.get(
+                url,
+                impersonate=target,
+                timeout=timeout,
+                allow_redirects=True,
+                headers={
+                    "Accept-Language": "en-US,en;q=0.9",
+                    "Referer": "https://www.google.com/",
+                    "DNT": "1",
+                },
+            )
+            if resp.status_code == 200 and len(resp.text) > 500:
+                score = _content_quality_score(resp.text)
+                if score >= 2:
+                    logger.info("[MerchantCrawler] curl_cffi(%s) 成功! %d bytes, quality=%d",
+                                target, len(resp.text), score)
+                    return _make_httpx_response(resp.text, url, dict(resp.headers))
+                logger.info("[MerchantCrawler] curl_cffi(%s) 质量低 (score=%d)", target, score)
+            elif resp.status_code == 403:
+                logger.info("[MerchantCrawler] curl_cffi(%s) 被 403", target)
+            else:
+                logger.info("[MerchantCrawler] curl_cffi(%s) 返回 %d", target, resp.status_code)
+        except Exception as e:
+            logger.debug("[MerchantCrawler] curl_cffi(%s) 失败: %s", target, e)
+
+    return None
+
+
+_PLAYWRIGHT_SCRIPT = r'''
+import sys, json, time, random
+url, timeout_s, ua = sys.argv[1], int(sys.argv[2]), sys.argv[3]
+try:
+    from playwright.sync_api import sync_playwright
+    with sync_playwright() as p:
+        browser = p.chromium.launch(
+            headless=True,
+            args=["--disable-blink-features=AutomationControlled",
+                  "--no-sandbox", "--disable-dev-shm-usage"])
+        ctx = browser.new_context(
+            user_agent=ua,
+            viewport={"width": 1920, "height": 1080},
+            locale="en-US", timezone_id="America/New_York")
+        ctx.add_init_script("""
+            Object.defineProperty(navigator,'webdriver',{get:()=>undefined});
+            Object.defineProperty(navigator,'languages',{get:()=>['en-US','en']});
+            Object.defineProperty(navigator,'plugins',{get:()=>[1,2,3,4,5]});
+        """)
+        page = ctx.new_page()
+        page.goto(url, wait_until="domcontentloaded", timeout=timeout_s*1000)
+        time.sleep(random.uniform(2.0, 4.0))
+        try:
+            page.wait_for_selector("img, main, article, .product", timeout=8000)
+        except Exception:
+            pass
+        html = page.content()
+        browser.close()
+        sys.stdout.buffer.write(html.encode("utf-8"))
+except Exception as e:
+    sys.stderr.write(str(e))
+    sys.exit(1)
+'''
+
+
+def _try_playwright(url: str, timeout: int = 30):
+    """
+    Level 3: Playwright 无头浏览器 — 在独立子进程中运行。
+    使用 subprocess 彻底隔离 asyncio event loop，避免 Sync API 冲突。
+    """
+    import subprocess as _sp
+    import shutil
+
+    if not shutil.which("python3"):
+        logger.debug("[MerchantCrawler] python3 不在 PATH 中，跳过 playwright")
+        return None
+
+    try:
+        ua = _random.choice(_FALLBACK_UAS)
+        proc = _sp.run(
+            ["python3", "-c", _PLAYWRIGHT_SCRIPT, url, str(timeout), ua],
+            capture_output=True, timeout=timeout + 20,
+        )
+        html = proc.stdout.decode("utf-8", errors="replace")
+
+        if proc.returncode != 0:
+            err_msg = proc.stderr.decode("utf-8", errors="replace")[:200]
+            logger.warning("[MerchantCrawler] playwright 子进程失败: %s", err_msg)
+            return None
+
+        if html and len(html) > 1000:
+            score = _content_quality_score(html)
+            logger.info("[MerchantCrawler] playwright 成功! %d bytes, quality=%d",
+                        len(html), score)
+            return _make_httpx_response(html, url)
+        logger.info("[MerchantCrawler] playwright 返回内容过短 (%d bytes)", len(html))
+    except _sp.TimeoutExpired:
+        logger.warning("[MerchantCrawler] playwright 超时 (%ds)", timeout)
+    except Exception as e:
+        logger.warning("[MerchantCrawler] playwright 失败: %s", e)
+
+    return None
+
+
 def _fetch_with_retry(client_headers: Dict, url: str, timeout: int = 20) -> httpx.Response:
     """
-    反爬增强版请求：
-    - 随机 UA 轮换（12+ 个 UA）
-    - 随机延迟（1-3 秒）模拟真人
-    - 模拟 Cookie（GA cookie）
-    - Referer: google.com 模拟搜索引擎跳转
-    - 403 后尝试 cloudscraper（绕过 Cloudflare/JS challenge）
-    - 内容太少时也尝试 cloudscraper（SPA 网站壳页面检测）
+    多级反爬回退请求策略：
+      Level 0: httpx + 隐身 headers（快速，大部分网站可过）
+      Level 1: curl_cffi + TLS 指纹伪装（绕过 TLS/JA3 检测）
+      Level 2: cloudscraper（绕过旧版 Cloudflare）
+      Level 3: Playwright 无头浏览器（最终手段）
     """
-    import copy
 
-    # 第一轮：用传入的 headers + 增强
-    stealth_headers = _build_stealth_headers(url, client_headers.get("User-Agent"))
-    # 合并原始 headers 中的非冲突项
-    for k, v in client_headers.items():
-        if k not in stealth_headers:
-            stealth_headers[k] = v
-
-    # 随机选择 2 个不同的 UA 尝试（减少尝试次数以加快速度）
+    # ── Level 0: httpx stealth ──
     ua_pool = list(_FALLBACK_UAS)
     _random.shuffle(ua_pool)
-    attempts_uas = [stealth_headers["User-Agent"]] + ua_pool[:2]
+    attempts_uas = [client_headers.get("User-Agent", ua_pool[0])] + ua_pool[:2]
 
     last_resp = None
     for i, ua in enumerate(attempts_uas):
         if i > 0:
-            # 随机延迟 1-2 秒
-            delay = _random.uniform(1.0, 2.0)
-            logger.info("[MerchantCrawler] 反爬延迟 %.1f 秒后重试 (UA #%d)", delay, i + 1)
-            _time.sleep(delay)
+            _time.sleep(_random.uniform(0.8, 1.5))
 
         headers = _build_stealth_headers(url, ua)
         try:
@@ -696,26 +819,20 @@ def _fetch_with_retry(client_headers: Dict, url: str, timeout: int = 20) -> http
                 timeout=timeout,
                 follow_redirects=True,
                 headers=headers,
-                http2=False,
+                http2=True,
             ) as client:
                 resp = client.get(url)
-                if resp.status_code != 403:
-                    resp.raise_for_status()
-                    # 检查是否是 SPA 壳页面（有 JS 但没有实际内容）
-                    text_lower = resp.text.lower()
-                    has_images = '<img' in text_lower
-                    has_title = bool(re.search(r'<title>[^<]{3,}</title>', resp.text, re.IGNORECASE))
-                    has_body_content = bool(re.search(r'<(?:main|article|section|div[^>]*class="[^"]*(?:product|content|hero))', text_lower))
-                    content_score = (1 if has_images else 0) + (1 if has_title else 0) + (1 if has_body_content else 0)
-                    
-                    if content_score < 2:
-                        logger.info("[MerchantCrawler] httpx 内容质量低 (score=%d, %d bytes, img=%s, title=%s)，尝试 cloudscraper",
-                                    content_score, len(resp.text), has_images, has_title)
-                        cs_resp = _try_cloudscraper(url, timeout)
-                        if cs_resp is not None:
-                            return cs_resp
+                if resp.status_code == 403:
+                    last_resp = resp
+                    continue
+                resp.raise_for_status()
+                score = _content_quality_score(resp.text)
+                if score >= 2:
                     return resp
+                logger.info("[MerchantCrawler] httpx 内容质量低 (score=%d, %d bytes)，升级方案",
+                            score, len(resp.text))
                 last_resp = resp
+                break
         except httpx.HTTPStatusError as e:
             if e.response and e.response.status_code == 403:
                 last_resp = e.response
@@ -724,29 +841,48 @@ def _fetch_with_retry(client_headers: Dict, url: str, timeout: int = 20) -> http
         except Exception:
             if i < len(attempts_uas) - 1:
                 continue
-            raise
+            break
 
-    # 所有常规 UA 都 403，尝试 cloudscraper（绕过 Cloudflare/JS challenge）
-    logger.info("[MerchantCrawler] 所有 UA 均 403，尝试 cloudscraper...")
-    cs_resp = _try_cloudscraper(url, timeout)
-    if cs_resp is not None:
-        return cs_resp
+    logger.info("[MerchantCrawler] httpx 方案未通过，尝试 curl_cffi (Level 1)...")
 
-    # 全部失败
+    # ── Level 1: curl_cffi ──
+    result = _try_curl_cffi(url, timeout)
+    if result is not None:
+        return result
+
+    logger.info("[MerchantCrawler] curl_cffi 未通过，尝试 cloudscraper (Level 2)...")
+
+    # ── Level 2: cloudscraper ──
+    result = _try_cloudscraper(url, timeout)
+    if result is not None:
+        return result
+
+    logger.info("[MerchantCrawler] cloudscraper 未通过，尝试 Playwright (Level 3)...")
+
+    # ── Level 3: Playwright ──
+    result = _try_playwright(url, timeout + 10)
+    if result is not None:
+        return result
+
+    # 全部失败：返回最后一个有内容的响应，或抛出异常
     if last_resp is not None:
+        score = _content_quality_score(last_resp.text) if hasattr(last_resp, 'text') else 0
+        if score >= 1 and len(getattr(last_resp, 'text', '')) > 2000:
+            logger.warning("[MerchantCrawler] 所有高级方案均失败，使用最佳低质量结果")
+            return last_resp
         last_resp.raise_for_status()
+
     raise httpx.HTTPStatusError("403 Forbidden", request=httpx.Request("GET", url), response=last_resp)
 
 
 def _try_cloudscraper(url: str, timeout: int = 25):
     """
-    使用 cloudscraper 绕过 Cloudflare/JS challenge。
-    返回一个伪装成 httpx.Response 的对象，或 None。
+    Level 2: cloudscraper 绕过 Cloudflare/JS challenge。
     """
     try:
         import cloudscraper
-    except ImportError:
-        logger.warning("[MerchantCrawler] cloudscraper 未安装，跳过")
+    except (ImportError, Exception) as exc:
+        logger.debug("[MerchantCrawler] cloudscraper 不可用: %s", exc)
         return None
 
     try:
@@ -754,30 +890,22 @@ def _try_cloudscraper(url: str, timeout: int = 25):
         scraper = cloudscraper.create_scraper(
             browser={"browser": "chrome", "platform": "windows", "mobile": False}
         )
-        # 去掉 brotli 编码，避免某些服务器的解压错误
         scraper.headers.update({
             "Accept-Encoding": "gzip, deflate",
             "Referer": "https://www.google.com/",
         })
         resp = scraper.get(url, timeout=timeout)
         if resp.status_code == 200 and len(resp.text) > 1000:
-            logger.info("[MerchantCrawler] cloudscraper 成功! %d bytes", len(resp.text))
-            # 包装成类似 httpx.Response 的对象
-            fake_resp = httpx.Response(
-                status_code=200,
-                text=resp.text,
-                headers=dict(resp.headers),
-                request=httpx.Request("GET", url),
-            )
-            return fake_resp
+            score = _content_quality_score(resp.text)
+            if score >= 2:
+                logger.info("[MerchantCrawler] cloudscraper 成功! %d bytes, quality=%d", len(resp.text), score)
+                return _make_httpx_response(resp.text, url, dict(resp.headers))
         elif resp.status_code == 403:
             logger.warning("[MerchantCrawler] cloudscraper 也被 403")
-        else:
-            logger.warning("[MerchantCrawler] cloudscraper 返回 %d, %d bytes", resp.status_code, len(resp.text))
     except Exception as e:
         logger.warning("[MerchantCrawler] cloudscraper 失败: %s", e)
 
-    # cloudscraper 失败时，尝试 plain requests（有些网站对 requests 更友好）
+    # cloudscraper 失败时，尝试 plain requests
     try:
         import requests as _requests
         _time.sleep(_random.uniform(0.5, 1.0))
@@ -790,14 +918,10 @@ def _try_cloudscraper(url: str, timeout: int = 25):
         })
         resp = session.get(url, timeout=timeout, allow_redirects=True)
         if resp.status_code == 200 and len(resp.text) > 5000:
-            logger.info("[MerchantCrawler] requests fallback 成功! %d bytes", len(resp.text))
-            fake_resp = httpx.Response(
-                status_code=200,
-                text=resp.text,
-                headers=dict(resp.headers),
-                request=httpx.Request("GET", url),
-            )
-            return fake_resp
+            score = _content_quality_score(resp.text)
+            if score >= 2:
+                logger.info("[MerchantCrawler] requests fallback 成功! %d bytes", len(resp.text))
+                return _make_httpx_response(resp.text, url, dict(resp.headers))
     except Exception as e:
         logger.warning("[MerchantCrawler] requests fallback 也失败: %s", e)
 
@@ -817,6 +941,15 @@ def crawl(url: str) -> Dict:
     pages = []
     brand_name = ""
 
+    MIN_GOOD_IMAGES = 15
+
+    def _count_unique_images(page_list):
+        seen = set()
+        for p in page_list:
+            for img in p.get("images", []):
+                seen.add(img)
+        return len(seen)
+
     try:
         resp = _fetch_with_retry(HEADERS, url)
         home_html = resp.text
@@ -825,18 +958,26 @@ def crawl(url: str) -> Dict:
         pages.append(home_data)
         brand_name = home_data["og_site_name"] or home_data["title"].split("|")[0].split("-")[0].strip()
 
-        home_soup = BeautifulSoup(home_html, "lxml")
-        sub_urls = _find_sub_pages(home_soup, url)
+        home_img_count = _count_unique_images(pages)
+        if home_img_count >= MIN_GOOD_IMAGES:
+            logger.info("[MerchantCrawler] 首页已有 %d 张图片 (>=%d)，跳过子页面",
+                        home_img_count, MIN_GOOD_IMAGES)
+        else:
+            home_soup = BeautifulSoup(home_html, "lxml")
+            sub_urls = _find_sub_pages(home_soup, url)
 
-        for sub_url in sub_urls[:8]:
-            try:
-                # 子页面之间随机延迟，降低反爬触发
-                _time.sleep(_random.uniform(1.0, 2.5))
-                resp = _fetch_with_retry(HEADERS, sub_url, timeout=12)
-                sub_data = _extract_page(resp.text, sub_url)
-                pages.append(sub_data)
-            except Exception as e:
-                logger.warning(f"[MerchantCrawler] 子页面爬取失败 {sub_url}: {e}")
+            for sub_url in sub_urls[:8]:
+                if _count_unique_images(pages) >= MIN_GOOD_IMAGES:
+                    logger.info("[MerchantCrawler] 已达 %d 张图片，停止爬取子页面",
+                                _count_unique_images(pages))
+                    break
+                try:
+                    _time.sleep(_random.uniform(0.5, 1.5))
+                    resp = _fetch_with_retry(HEADERS, sub_url, timeout=12)
+                    sub_data = _extract_page(resp.text, sub_url)
+                    pages.append(sub_data)
+                except Exception as e:
+                    logger.warning(f"[MerchantCrawler] 子页面爬取失败 {sub_url}: {e}")
 
     except httpx.TimeoutException:
         logger.error(f"[MerchantCrawler] 爬取超时 {url}")
