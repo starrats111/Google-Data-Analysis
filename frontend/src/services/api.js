@@ -52,8 +52,8 @@ api.interceptors.request.use((config) => {
   
   // 强制修复错误的URL格式（处理缓存导致的错误URL）
   if (config.url) {
-    // 修复 mcc-accounts:1 或 mcc-accounts 为 mcc/accounts
-    if (config.url.includes('mcc-accounts')) {
+    // 修复 /api/mcc-accounts:1 → /api/mcc/accounts（仅修复顶层路径，不影响子模块如 /api/ad-creation/mcc-accounts）
+    if (config.url.includes('mcc-accounts') && !config.url.includes('/ad-creation/')) {
       const originalUrl = config.url
       config.url = config.url.replace(/\/api\/mcc-accounts:?\d*/g, '/api/mcc/accounts')
       config.url = config.url.replace(/mcc-accounts:?\d*/g, 'mcc/accounts')

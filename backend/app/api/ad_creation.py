@@ -64,14 +64,20 @@ async def list_mcc_accounts(
     db: Session = Depends(get_db),
 ):
     """获取当前用户的 MCC 账号列表（M-47: Step 0 选择 MCC）"""
-    accounts = db.query(GoogleMccAccount).filter(
-        GoogleMccAccount.user_id == current_user.id
-    ).all()
+    if current_user.role == 'manager':
+        accounts = db.query(GoogleMccAccount).filter(
+            GoogleMccAccount.is_active == True
+        ).all()
+    else:
+        accounts = db.query(GoogleMccAccount).filter(
+            GoogleMccAccount.user_id == current_user.id,
+            GoogleMccAccount.is_active == True
+        ).all()
     return [
         {
             "id": a.id,
             "mcc_id": a.mcc_id,
-            "name": getattr(a, "name", "") or a.mcc_id,
+            "name": a.mcc_name or a.mcc_id,
         }
         for a in accounts
     ]
