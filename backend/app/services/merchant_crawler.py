@@ -943,9 +943,17 @@ def crawl(url: str) -> Dict:
         resp = _fetch_with_retry(HEADERS, url)
         home_html = resp.text
 
+        if _is_blocked_page(home_html):
+            logger.warning("[MerchantCrawler] 首页被反爬拦截 (Cloudflare/CAPTCHA): %s", url)
+            return {"crawl_failed": True, "error": "商家网站触发了反爬保护 (Cloudflare)，无法获取内容。请手动输入商家信息。", "url": url}
+
         home_data = _extract_page(home_html, url)
         pages.append(home_data)
         brand_name = home_data["og_site_name"] or home_data["title"].split("|")[0].split("-")[0].strip()
+
+        if brand_name.lower() in ("just a moment...", "just a moment", "attention required", "access denied"):
+            logger.warning("[MerchantCrawler] 品牌名为反爬标记 '%s': %s", brand_name, url)
+            return {"crawl_failed": True, "error": "商家网站触发了反爬保护，获取到的是挑战页面。请手动输入商家信息。", "url": url}
 
         home_img_count = _count_unique_images(pages)
         if home_img_count >= MIN_GOOD_IMAGES:

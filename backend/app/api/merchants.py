@@ -211,6 +211,74 @@ async def repair_lh_mid(
     return result
 
 
+_mid_repair_running: bool = False
+_mid_repair_result: Optional[dict] = None
+
+
+def _run_mid_repair_background():
+    """后台运行全平台MID补齐：sync_all + repair_lh_mid + auto_repair_mid"""
+    global _mid_repair_running, _mid_repair_result
+    import logging
+    logger = logging.getLogger(__name__)
+    results = {}
+    try:
+        from app.database import SessionLocal
+        from app.services.merchant_platform_sync import MerchantPlatformSyncService
+        db = SessionLocal()
+        try:
+            svc = MerchantPlatformSyncService(db)
+            results["sync"] = svc.sync_all()
+            logger.info("[MID Repair] sync_all done")
+        except Exception as e:
+            results["sync_error"] = str(e)
+            logger.exception("[MID Repair] sync_all failed")
+        try:
+            results["lh_repair"] = MerchantService.repair_all_lh_mid(db)
+            logger.info("[MID Repair] LH repair done")
+        except Exception as e:
+            results["lh_repair_error"] = str(e)
+            logger.exception("[MID Repair] LH repair failed")
+        try:
+            results["auto_repair"] = MerchantService.auto_repair_mid(db)
+            logger.info("[MID Repair] auto_repair done")
+        except Exception as e:
+            results["auto_repair_error"] = str(e)
+            logger.exception("[MID Repair] auto_repair failed")
+        db.close()
+    except Exception as exc:
+        results["fatal_error"] = str(exc)
+    finally:
+        _mid_repair_result = results
+        _mid_repair_running = False
+
+
+@router.post("/repair-all-mid")
+async def repair_all_mid(
+    background_tasks: BackgroundTasks,
+    current_user: User = Depends(get_current_user),
+):
+    """一键补齐所有平台MID（后台运行）"""
+    global _mid_repair_running, _mid_repair_result
+    if _mid_repair_running:
+        raise HTTPException(status_code=429, detail="MID补齐正在进行中，请稍后查看结果")
+    _mid_repair_running = True
+    _mid_repair_result = None
+    background_tasks.add_task(_run_mid_repair_background)
+    return {"status": "started", "message": "MID补齐已在后台启动，预计需要5-10分钟"}
+
+
+@router.get("/repair-all-mid/status")
+async def repair_all_mid_status(
+    current_user: User = Depends(get_current_user),
+):
+    """查询MID补齐进度"""
+    if _mid_repair_running:
+        return {"status": "running", "message": "MID补齐正在进行中..."}
+    if _mid_repair_result is not None:
+        return {"status": "done", "result": _mid_repair_result}
+    return {"status": "idle", "message": "无正在进行的MID补齐任务"}
+
+
 # OPT-009: 手动触发平台商家同步（每 10 分钟限 1 次，后台运行）
 _last_sync_ts: float = 0.0
 _sync_running: bool = False

@@ -152,6 +152,7 @@ const MerchantManagement = () => {
   const [currentAssignment, setCurrentAssignment] = useState(null)
 
   const [platformSyncLoading, setPlatformSyncLoading] = useState(false)
+  const [midRepairLoading, setMidRepairLoading] = useState(false)
   const [editingMidId, setEditingMidId] = useState(null)
   const [editingMidValue, setEditingMidValue] = useState('')
   const [midSaving, setMidSaving] = useState(false)
@@ -425,6 +426,21 @@ const MerchantManagement = () => {
     }
   }
 
+  const handleMidRepair = async () => {
+    setMidRepairLoading(true)
+    try {
+      const resp = await api.post('/api/merchants/repair-all-mid')
+      message.info(resp.data?.message || 'MID补齐已在后台启动')
+      setTimeout(async () => {
+        setMidRepairLoading(false)
+        await Promise.all([fetchStats(), fetchMerchants(1, merchantPageSize)])
+      }, 10000)
+    } catch (error) {
+      message.error(error.response?.data?.detail || 'MID补齐失败')
+      setMidRepairLoading(false)
+    }
+  }
+
   const handlePlatformSync = async () => {
     setPlatformSyncLoading(true)
     try {
@@ -682,6 +698,13 @@ const MerchantManagement = () => {
       key: 'category',
       width: 100,
       render: (val) => <Tooltip title={val}>{translateCategory(val)}</Tooltip>,
+    },
+    {
+      title: '佣金率',
+      dataIndex: 'commission_rate',
+      key: 'commission_rate',
+      width: 100,
+      render: (val) => val || '-',
     },
     {
       title: '当前负责人',
@@ -1044,6 +1067,7 @@ const MerchantManagement = () => {
                       <Button icon={<ReloadOutlined />} onClick={() => fetchMerchants(merchantPage, merchantPageSize)} />
                     </Tooltip>
                     <Button icon={<SyncOutlined />} loading={discoverLoading} onClick={handleDiscover}>交易同步</Button>
+                    <Button loading={midRepairLoading} onClick={handleMidRepair}>补齐MID</Button>
                     {isManager && (
                       <Button icon={<CloudSyncOutlined />} loading={platformSyncLoading} onClick={handlePlatformSync}>平台同步</Button>
                     )}
