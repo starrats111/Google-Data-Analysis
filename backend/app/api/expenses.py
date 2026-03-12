@@ -89,8 +89,8 @@ async def get_cost_detail(
     # 注意：手动上传可能发生在“该区间没有任何API数据”的MCC上，也需要展示出来
     from sqlalchemy import and_
     
-    # 货币转换配置
-    CNY_TO_USD_RATE = 7.2
+    from app.utils.exchange_rate import get_cny_to_usd_rate
+    CNY_TO_USD_RATE = get_cny_to_usd_rate()
     
     mcc_results = db.query(
         GoogleMccAccount.id,
@@ -282,7 +282,8 @@ async def get_mcc_cost_detail(
     else:
         end = date_type.today() - timedelta(days=1)
     
-    CNY_TO_USD_RATE = 7.2
+    from app.utils.exchange_rate import get_cny_to_usd_rate
+    CNY_TO_USD_RATE = get_cny_to_usd_rate()
     
     # 查询当前用户的所有MCC账号
     mcc_accounts = db.query(GoogleMccAccount).filter(
@@ -452,8 +453,8 @@ def _build_ga_cost_maps(
     """
     from app.models.google_ads_api_data import GoogleAdsApiData
 
-    # 获取MCC货币映射，用于CNY→USD转换
-    CNY_TO_USD_RATE = 7.2
+    from app.utils.exchange_rate import get_cny_to_usd_rate
+    CNY_TO_USD_RATE = get_cny_to_usd_rate()
     mcc_currency_map: Dict[int, str] = {}
     for mcc in db.query(GoogleMccAccount).filter(GoogleMccAccount.user_id == user_id).all():
         mcc_currency_map[mcc.id] = getattr(mcc, 'currency', 'USD') or 'USD'
@@ -894,7 +895,8 @@ async def get_expense_by_user(
     if current_user.role != "manager":
         raise HTTPException(status_code=403, detail="只有经理可以查看其他用户的费用")
     
-    CNY_TO_USD_RATE = float(getattr(settings, "CNY_TO_USD_RATE", 7.2) or 7.2)
+    from app.utils.exchange_rate import get_cny_to_usd_rate
+    CNY_TO_USD_RATE = get_cny_to_usd_rate()
     today = date.today()
     
     # 本月

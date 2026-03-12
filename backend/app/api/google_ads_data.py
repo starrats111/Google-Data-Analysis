@@ -188,10 +188,10 @@ async def get_google_ads_data_summary(
     avg_cpc = total_cost / total_clicks if total_clicks > 0 else 0
     
     return {
-        "total_cost": total_cost,
+        "total_cost": round(total_cost, 2),
         "total_impressions": total_impressions,
         "total_clicks": total_clicks,
-        "avg_cpc": avg_cpc,
+        "avg_cpc": round(avg_cpc, 4),
         "record_count": record_count,
         "date_range": {
             "begin_date": begin_date,

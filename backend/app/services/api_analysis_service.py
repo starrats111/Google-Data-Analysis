@@ -5,7 +5,7 @@
 from datetime import date, timedelta
 from typing import Dict, Optional, List
 from sqlalchemy.orm import Session
-from sqlalchemy import func
+from sqlalchemy import func, cast, Date
 import logging
 import re
 
@@ -140,21 +140,13 @@ class ApiAnalysisService:
         
         # 预加载MCC货币配置（用于人民币转美金）
         from app.models.google_ads_api_data import GoogleMccAccount
-        from app.config import settings
-        
-        CNY_TO_USD_RATE = float(getattr(settings, "CNY_TO_USD_RATE", 7.2) or 7.2)
+        from app.utils.exchange_rate import convert_to_usd
         
         # 获取所有MCC的货币配置
         mcc_currency_map = {}  # {mcc_id: currency}
         all_mccs = self.db.query(GoogleMccAccount).all()
         for mcc in all_mccs:
             mcc_currency_map[mcc.id] = getattr(mcc, 'currency', 'USD') or 'USD'
-        
-        def convert_to_usd(amount: float, currency: str) -> float:
-            """将金额转换为美元"""
-            if currency and currency.upper() == "CNY":
-                return amount / CNY_TO_USD_RATE
-            return amount
         
         # 1. 查询Google Ads数据
         query = self.db.query(GoogleAdsApiData).filter(
@@ -673,9 +665,7 @@ class ApiAnalysisService:
         try:
             # 预加载MCC货币配置（用于人民币转美金）
             from app.models.google_ads_api_data import GoogleMccAccount
-            from app.config import settings
-            
-            CNY_TO_USD_RATE = float(getattr(settings, "CNY_TO_USD_RATE", 7.2) or 7.2)
+            from app.utils.exchange_rate import convert_to_usd
             
             # 获取所有MCC的货币配置
             mcc_currency_map = {}  # {mcc_id: currency}
@@ -683,16 +673,12 @@ class ApiAnalysisService:
             for mcc in all_mccs:
                 mcc_currency_map[mcc.id] = getattr(mcc, 'currency', 'USD') or 'USD'
             
-            def convert_to_usd(amount: float, currency: str) -> float:
-                """将金额转换为美元"""
-                if currency and currency.upper() == "CNY":
-                    return amount / CNY_TO_USD_RATE
-                return amount
-            
+            # 兼容多种状态格式：中文、英文、数字
+            ENABLED_STATUSES = ("已启用", "ENABLED", "2")
             query = self.db.query(GoogleAdsApiData).filter(
                 GoogleAdsApiData.date >= begin_date,
                 GoogleAdsApiData.date <= end_date,
-                GoogleAdsApiData.status == "已启用"  # 只分析已启用的广告
+                GoogleAdsApiData.status.in_(ENABLED_STATUSES)
             )
             if user_id:
                 query = query.filter(GoogleAdsApiData.user_id == user_id)
@@ -779,7 +765,7 @@ class ApiAnalysisService:
             
             for uid in user_ids:
                 # 查询该用户的所有交易，只按 merchant_id (MID) 分组
-                # 排除已删除/停用账号的交易
+                # ✅ 修复：只查询活跃账号的交易，排除已停用账号
                 txn_results = self.db.query(
                     AffiliateTransaction.merchant_id,
                     func.sum(AffiliateTransaction.commission_amount).label('total_commission'),
@@ -792,22 +778,47 @@ class ApiAnalysisService:
                     AffiliateTransaction.user_id == uid,
                     AffiliateTransaction.merchant_id.isnot(None),  # 只查有 MID 的
                     AffiliateTransaction.merchant_id != 'None',
-                    func.date(AffiliateTransaction.transaction_time) >= begin_date,
-                    func.date(AffiliateTransaction.transaction_time) <= end_date,
-                    # 排除已删除/停用账号的交易（账号不存在或已停用）
-                    (AffiliateAccount.id.is_(None)) | (AffiliateAccount.is_active == True)
+                    # ✅ 修复：使用 CAST 确保日期查询一致性
+                    cast(AffiliateTransaction.transaction_time, Date) >= begin_date,
+                    cast(AffiliateTransaction.transaction_time, Date) <= end_date,
+                    # ✅ 修复：只查活跃账号的交易（移除了错误的 OR 逻辑）
+                    AffiliateAccount.is_active == True
                 ).group_by(
                     AffiliateTransaction.merchant_id
                 ).all()
                 
                 for txn in txn_results:
-                    mid = str(txn.merchant_id).strip()
+                    # ✅ 修复：标准化 MID（去除前导零）
+                    mid_raw = txn.merchant_id
+                    if isinstance(mid_raw, str):
+                        # 如果是字符串，先转为整数再转回字符串（去除前导零）
+                        try:
+                            mid = str(int(mid_raw)) if mid_raw.isdigit() else mid_raw.strip()
+                        except (ValueError, TypeError):
+                            mid = str(mid_raw).strip()
+                    else:
+                        # 如果是整数，直接转为字符串
+                        mid = str(int(mid_raw)) if mid_raw else None
+                    
+                    if not mid:
+                        continue  # 跳过无效 MID
+                    
+                    commission = float(txn.total_commission or 0)
+                    orders = int(txn.total_orders or 0)
+                    order_days = int(txn.order_days or 0)
+                    
                     merchant_l7d_data[(uid, mid)] = {
-                        "commission": float(txn.total_commission or 0),
-                        "orders": int(txn.total_orders or 0),
-                        "order_days": int(txn.order_days or 0)
+                        "commission": commission,
+                        "orders": orders,
+                        "order_days": order_days
                     }
-                    logger.info(f"L7D 商家数据: user={uid}, MID={mid}, 佣金={txn.total_commission}, 订单={txn.total_orders}")
+                    
+                    # ✅ 添加详细日志便于调试
+                    if commission > 0 or orders > 0:
+                        logger.info(
+                            f"[L7D] 商家数据: user={uid}, MID={mid}, "
+                            f"佣金=${commission:.2f}, 订单={orders}, 出单天数={order_days}"
+                        )
             
             # 按用户分组生成结果
             user_results = {}

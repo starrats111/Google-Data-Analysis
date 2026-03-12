@@ -161,15 +161,70 @@ class GoogleSheetSyncService:
                     except (ValueError, TypeError):
                         pass
 
+                row_cpc = clicks and cost / clicks or 0.0
+                if "CpcBid" in col and col["CpcBid"] < len(row) and row[col["CpcBid"]] not in (None, ""):
+                    try:
+                        row_cpc = int(float(row[col["CpcBid"]])) / 1_000_000.0
+                    except (ValueError, TypeError):
+                        pass
+                elif "MaxCpc" in col and col["MaxCpc"] < len(row) and row[col["MaxCpc"]] not in (None, ""):
+                    try:
+                        row_cpc = int(float(row[col["MaxCpc"]])) / 1_000_000.0
+                    except (ValueError, TypeError):
+                        pass
+                elif "Cpc" in col and col["Cpc"] < len(row) and row[col["Cpc"]] not in (None, ""):
+                    try:
+                        row_cpc = int(float(row[col["Cpc"]])) / 1_000_000.0
+                    except (ValueError, TypeError):
+                        pass
+
+                row_is_budget_lost = 0.0
+                for bl_key in ("SearchBudgetLostImpressionShare", "IsBudgetLost", "BudgetLostImpressionShare"):
+                    if bl_key in col and col[bl_key] < len(row) and row[col[bl_key]] not in (None, "", "--"):
+                        try:
+                            val = str(row[col[bl_key]]).strip().replace('%', '').replace('< ', '').replace('> ', '')
+                            if val and val not in ('--', ' --'):
+                                row_is_budget_lost = float(val) / 100.0 if float(val) > 1 else float(val)
+                        except (ValueError, TypeError):
+                            pass
+                        break
+
+                row_is_rank_lost = 0.0
+                for rl_key in ("SearchRankLostImpressionShare", "IsRankLost", "RankLostImpressionShare"):
+                    if rl_key in col and col[rl_key] < len(row) and row[col[rl_key]] not in (None, "", "--"):
+                        try:
+                            val = str(row[col[rl_key]]).strip().replace('%', '').replace('< ', '').replace('> ', '')
+                            if val and val not in ('--', ' --'):
+                                row_is_rank_lost = float(val) / 100.0 if float(val) > 1 else float(val)
+                        except (ValueError, TypeError):
+                            pass
+                        break
+
+                row_search_imp_share = None
+                for sis_key in ("SearchImpressionShare", "SearchImprShare"):
+                    if sis_key in col and col[sis_key] < len(row) and row[col[sis_key]] not in (None, "", "--"):
+                        try:
+                            val = str(row[col[sis_key]]).strip().replace('%', '').replace('< ', '').replace('> ', '')
+                            if val and val not in ('--', ' --'):
+                                row_search_imp_share = float(val) / 100.0 if float(val) > 1 else float(val)
+                        except (ValueError, TypeError):
+                            pass
+                        break
+
                 if existing:
                     existing.cost = cost
                     existing.impressions = impressions
                     existing.clicks = clicks
+                    existing.cpc = row_cpc
                     existing.campaign_name = campaign_name
                     existing.extracted_platform_code = (platform_info or {}).get("platform_code")
                     existing.extracted_account_code = (platform_info or {}).get("account_code")
                     existing.status = row_status
                     existing.budget = row_budget
+                    existing.is_budget_lost = row_is_budget_lost
+                    existing.is_rank_lost = row_is_rank_lost
+                    if row_search_imp_share is not None:
+                        existing.search_impression_share = row_search_imp_share
                     existing.last_sync_at = now_utc
                     updated += 1
                 else:
@@ -184,11 +239,14 @@ class GoogleSheetSyncService:
                             cost=cost,
                             impressions=impressions,
                             clicks=clicks,
-                            cpc=clicks and cost / clicks or 0.0,
+                            cpc=row_cpc,
                             extracted_platform_code=(platform_info or {}).get("platform_code"),
                             extracted_account_code=(platform_info or {}).get("account_code"),
                             status=row_status,
                             budget=row_budget,
+                            is_budget_lost=row_is_budget_lost,
+                            is_rank_lost=row_is_rank_lost,
+                            search_impression_share=row_search_imp_share,
                         )
                     )
                     inserted += 1

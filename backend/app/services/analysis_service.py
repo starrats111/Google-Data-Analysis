@@ -996,7 +996,8 @@ class AnalysisService:
         # 货币换算：若表1为人民币(CNY/RMB)，将费用/CPC/最高CPC换算为美元再进入计算
         if '货币代码' in df_clean.columns:
             try:
-                rate = float(getattr(settings, "CNY_TO_USD_RATE", 7.2) or 7.2)
+                from app.utils.exchange_rate import get_cny_to_usd_rate
+                rate = get_cny_to_usd_rate()
             except Exception:
                 rate = 7.2
 

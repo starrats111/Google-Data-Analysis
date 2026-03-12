@@ -539,12 +539,7 @@ async def get_l7d_data_for_report(
         ).all()
         mcc_currency_map = {mcc.id: getattr(mcc, 'currency', 'USD') or 'USD' for mcc in user_mccs}
         
-        CNY_TO_USD_RATE = 7.2
-        
-        def convert_to_usd(amount: float, currency: str) -> float:
-            if currency and currency.upper() == "CNY":
-                return amount / CNY_TO_USD_RATE
-            return amount
+        from app.utils.exchange_rate import convert_to_usd
         
         # 查询广告数据（只查询已启用的）
         google_ads_data = db.query(GoogleAdsApiData).filter(

@@ -18,8 +18,7 @@ import re
 
 router = APIRouter(prefix="/api/google-ads-aggregate", tags=["google-ads-aggregate"])
 
-# 货币汇率配置
-CNY_TO_USD_RATE = 7.2  # 人民币兑美元汇率
+from app.utils.exchange_rate import convert_to_usd, get_cny_to_usd_rate
 
 
 def get_mcc_currency_map(db: Session, user_id: int) -> dict:
@@ -29,13 +28,6 @@ def get_mcc_currency_map(db: Session, user_id: int) -> dict:
         GoogleMccAccount.is_active == True
     ).all()
     return {mcc.id: getattr(mcc, 'currency', 'USD') or 'USD' for mcc in mccs}
-
-
-def convert_to_usd(amount: float, currency: str) -> float:
-    """将金额转换为美元"""
-    if currency == "CNY":
-        return amount / CNY_TO_USD_RATE
-    return amount
 
 
 class DateRangeAggregateResponse(BaseModel):
@@ -237,7 +229,7 @@ async def get_campaign_data(
         func.sum(GoogleAdsApiData.cost).label('total_cost'),
         func.sum(GoogleAdsApiData.impressions).label('total_impressions'),
         func.sum(GoogleAdsApiData.clicks).label('total_clicks'),
-        func.avg(GoogleAdsApiData.cpc).label('avg_cpc')
+        func.sum(GoogleAdsApiData.cpc * GoogleAdsApiData.clicks).label('weighted_cpc_sum')
     ).filter(
         GoogleAdsApiData.user_id == current_user.id,
         GoogleAdsApiData.date >= begin,
@@ -354,9 +346,9 @@ async def get_campaign_data(
         # 货币转换：如果是CNY则转换为USD
         currency = mcc_currency_map.get(row.mcc_id, "USD")
         raw_cost = float(row.total_cost or 0)
-        raw_cpc = float(row.avg_cpc or 0)
+        raw_weighted_cpc_sum = float(row.weighted_cpc_sum or 0)
         display_cost = convert_to_usd(raw_cost, currency)
-        display_cpc = convert_to_usd(raw_cpc, currency)
+        display_weighted_cpc_sum = convert_to_usd(raw_weighted_cpc_sum, currency)
 
         cid = row.campaign_id
         if cid in _campaign_buckets:
@@ -364,7 +356,6 @@ async def get_campaign_data(
             b["_cost"] += display_cost
             b["_impressions"] += total_impressions
             b["_clicks"] += total_clicks
-            b["_cpc_sum"] += display_cpc * total_clicks
             b["_currencies"].add(currency)
         else:
             _campaign_buckets[cid] = {
@@ -375,7 +366,6 @@ async def get_campaign_data(
                 "_cost": display_cost,
                 "_impressions": total_impressions,
                 "_clicks": total_clicks,
-                "_cpc_sum": display_cpc * total_clicks,
                 "_currencies": {currency},
             }
 
@@ -385,7 +375,7 @@ async def get_campaign_data(
         total_clicks = b["_clicks"]
         total_impressions = b["_impressions"]
         ctr = (total_clicks / total_impressions * 100) if total_impressions > 0 else 0
-        avg_cpc = (b["_cpc_sum"] / total_clicks) if total_clicks > 0 else 0
+        avg_cpc = (b["_cost"] / total_clicks) if total_clicks > 0 else 0
 
         daily_budget = latest_budgets.get(cid, 0)
         raw_status = latest_statuses.get(cid, "未知")
