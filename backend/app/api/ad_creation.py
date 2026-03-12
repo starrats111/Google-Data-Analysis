@@ -89,12 +89,12 @@ async def find_available_cid(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """查找空闲 CID（零 API 消耗）"""
+    """查找可用 CID，返回推荐CID和全部CID列表"""
     from app.services.keyword_plan_service import KeywordPlanService
     svc = KeywordPlanService(db)
     try:
-        cid = svc.find_available_cid(data.mcc_id)
-        return {"customer_id": cid}
+        result = svc.find_available_cid(data.mcc_id)
+        return result
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 

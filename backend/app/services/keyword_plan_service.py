@@ -20,18 +20,15 @@ class KeywordPlanService:
     def __init__(self, db: Session):
         self.db = db
 
-    def find_available_cid(self, mcc_id: int) -> str:
-        """查找 MCC 下没有已启用广告系列的空闲 CID（零 API 消耗）。
+    def find_available_cid(self, mcc_id: int) -> dict:
+        """查找 MCC 下的可用 CID，优先返回空闲的，全部繁忙时返回第一个。
 
-        MR-01 闭环：latest_date 为 None 时返回第一个 CID。
-        M-45 闭环：只看最新同步日期，移除 ENABLED。
-        M-46 闭环：MCC 不存在时抛出友好错误。
+        返回 {"customer_id": str, "all_cids": list, "busy_cids": list}
         """
         mcc = self.db.query(GoogleMccAccount).filter(GoogleMccAccount.id == mcc_id).first()
         if not mcc:
             raise ValueError("MCC 账号不存在，请先在设置中添加 MCC")
 
-        # 查找该 MCC 下所有 CID
         all_cids = self.db.query(GoogleAdsApiData.customer_id).filter(
             GoogleAdsApiData.mcc_id == mcc_id,
             GoogleAdsApiData.customer_id.isnot(None),
@@ -41,28 +38,38 @@ class KeywordPlanService:
         if not all_cid_list:
             raise ValueError("MCC 下没有 CID 数据，请先执行一次数据同步")
 
-        # 查找最新同步日期
         latest_date = self.db.query(func.max(GoogleAdsApiData.date)).filter(
             GoogleAdsApiData.mcc_id == mcc_id,
         ).scalar()
 
         if latest_date is None:
-            # MR-01: 新用户无数据，所有 CID 都空闲，返回第一个
-            return all_cid_list[0]
+            return {
+                "customer_id": all_cid_list[0],
+                "all_cids": all_cid_list,
+                "busy_cids": [],
+            }
 
-        # M-45: 只看最新同步日期，只用中文状态值
-        busy_cids = self.db.query(GoogleAdsApiData.customer_id).filter(
+        busy_cids_q = self.db.query(GoogleAdsApiData.customer_id).filter(
             GoogleAdsApiData.mcc_id == mcc_id,
             GoogleAdsApiData.status == '已启用',
             GoogleAdsApiData.date == latest_date,
         ).distinct().all()
-        busy_set = {c[0] for c in busy_cids if c[0]}
+        busy_set = {c[0] for c in busy_cids_q if c[0]}
 
+        recommended = None
         for cid in all_cid_list:
             if cid not in busy_set:
-                return cid
+                recommended = cid
+                break
 
-        raise ValueError("所有 CID 都有已启用的广告系列，没有空闲 CID 可用")
+        if not recommended:
+            recommended = all_cid_list[0]
+
+        return {
+            "customer_id": recommended,
+            "all_cids": all_cid_list,
+            "busy_cids": list(busy_set),
+        }
 
     def generate_keyword_ideas(
         self,

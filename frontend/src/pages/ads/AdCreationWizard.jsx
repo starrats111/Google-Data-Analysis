@@ -27,6 +27,8 @@ export default function AdCreationWizard() {
   const [mccList, setMccList] = useState([])
   const [selectedMcc, setSelectedMcc] = useState(null)
   const [availableCid, setAvailableCid] = useState('')
+  const [allCids, setAllCids] = useState([])
+  const [busyCids, setBusyCids] = useState([])
 
   // Step 1: 关键词研究
   const [keywordUrl, setKeywordUrl] = useState(merchantUrl)
@@ -57,15 +59,20 @@ export default function AdCreationWizard() {
     }).catch(() => {})
   }, [])
 
-  // Step 0: 选择 MCC 后自动查找空闲 CID
+  // Step 0: 选择 MCC 后加载 CID 列表
   const handleSelectMcc = async (mccId) => {
     setSelectedMcc(mccId)
+    setAvailableCid('')
+    setAllCids([])
+    setBusyCids([])
     setLoading(true)
     try {
       const res = await api.post('/api/ad-creation/find-available-cid', { mcc_id: mccId })
-      setAvailableCid(res.data.customer_id)
-      // 只有 1 个 MCC 时自动跳到下一步
-      if (mccList.length === 1) setStep(1)
+      const { customer_id, all_cids = [], busy_cids = [] } = res.data
+      setAllCids(all_cids)
+      setBusyCids(busy_cids)
+      setAvailableCid(customer_id)
+      if (mccList.length === 1 && all_cids.length <= 1) setStep(1)
     } catch (err) {
       message.error(err?.response?.data?.detail || '查找 CID 失败')
     } finally { setLoading(false) }
@@ -173,16 +180,37 @@ export default function AdCreationWizard() {
             {mccList.length === 0 ? (
               <Alert type="warning" message="您还没有绑定 MCC 账号，请先在设置中添加" />
             ) : (
-              <Space direction="vertical" style={{ width: '100%' }}>
-                <Select
-                  style={{ width: 400 }}
-                  placeholder="选择 MCC 账号"
-                  value={selectedMcc}
-                  onChange={handleSelectMcc}
-                  options={mccList.map(m => ({ value: m.id, label: `${m.name} (${m.mcc_id})` }))}
-                />
-                {availableCid && (
-                  <Alert type="success" message={`空闲 CID: ${availableCid}`} />
+              <Space direction="vertical" style={{ width: '100%' }} size={12}>
+                <div>
+                  <Typography.Text strong style={{ marginRight: 8 }}>MCC 账号</Typography.Text>
+                  <Select
+                    style={{ width: 400 }}
+                    placeholder="选择 MCC 账号"
+                    value={selectedMcc}
+                    onChange={handleSelectMcc}
+                    options={mccList.map(m => ({ value: m.id, label: `${m.name} (${m.mcc_id})` }))}
+                  />
+                </div>
+                {allCids.length > 0 && (
+                  <div>
+                    <Typography.Text strong style={{ marginRight: 8 }}>客户账号 (CID)</Typography.Text>
+                    <Select
+                      style={{ width: 400 }}
+                      placeholder="选择客户账号"
+                      value={availableCid || undefined}
+                      onChange={setAvailableCid}
+                      options={allCids.map(cid => ({
+                        value: cid,
+                        label: busyCids.includes(cid) ? `${cid}（有广告运行中）` : `${cid}（空闲）`,
+                      }))}
+                    />
+                    {availableCid && busyCids.includes(availableCid) && (
+                      <Alert type="info" message="该 CID 已有广告系列在运行，新广告将在同一客户账号下创建" style={{ marginTop: 8 }} />
+                    )}
+                    {availableCid && !busyCids.includes(availableCid) && (
+                      <Alert type="success" message={`CID ${availableCid} 为空闲状态`} style={{ marginTop: 8 }} />
+                    )}
+                  </div>
                 )}
                 <Button type="primary" disabled={!availableCid} onClick={() => setStep(1)}>下一步</Button>
               </Space>
