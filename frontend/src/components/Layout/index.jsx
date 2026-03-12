@@ -211,9 +211,9 @@ const Layout = () => {
       icon: <ShopOutlined />,
       label: '商家管理',
       children: [
-        { key: '/merchant-management', icon: <ShopOutlined />, label: '商家目录与分配' },
+        { key: '/merchant-management', icon: <ShopOutlined />, label: '商家查找' },
         { key: '/merchant-performance', icon: <FundViewOutlined />, label: '绩效看板' },
-        { key: '/ads/test-dashboard', icon: <ExperimentOutlined />, label: '测试看板' },
+        { key: '/ads/test-dashboard', icon: <ExperimentOutlined />, label: '测试商家' },
       ],
     },
     {
@@ -283,9 +283,9 @@ const Layout = () => {
       icon: <ShopOutlined />,
       label: '商家管理',
       children: [
-        { key: '/merchant-management', icon: <ShopOutlined />, label: '商家目录与分配' },
+        { key: '/merchant-management', icon: <ShopOutlined />, label: '商家查找' },
         { key: '/merchant-performance', icon: <FundViewOutlined />, label: '绩效看板' },
-        { key: '/ads/test-dashboard', icon: <ExperimentOutlined />, label: '测试看板' },
+        { key: '/ads/test-dashboard', icon: <ExperimentOutlined />, label: '测试商家' },
       ],
     },
     {
@@ -346,9 +346,9 @@ const Layout = () => {
       icon: <ShopOutlined />,
       label: '商家管理',
       children: [
-        { key: '/merchant-management', icon: <ShopOutlined />, label: '商家目录与分配' },
+        { key: '/merchant-management', icon: <ShopOutlined />, label: '商家查找' },
         { key: '/merchant-performance', icon: <FundViewOutlined />, label: '绩效看板' },
-        { key: '/ads/test-dashboard', icon: <ExperimentOutlined />, label: '测试看板' },
+        { key: '/ads/test-dashboard', icon: <ExperimentOutlined />, label: '测试商家' },
       ],
     },
     {

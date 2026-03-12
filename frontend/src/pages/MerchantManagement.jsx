@@ -22,6 +22,7 @@ import {
   Spin,
   Upload,
   Alert,
+  Popover,
 } from 'antd'
 import { ReloadOutlined, SearchOutlined, UserSwitchOutlined, SyncOutlined, CheckCircleOutlined, CloudSyncOutlined, UploadOutlined, WarningOutlined, InboxOutlined, ThunderboltOutlined } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
@@ -625,54 +626,18 @@ const MerchantManagement = () => {
       title: '商家名称',
       dataIndex: 'merchant_name',
       key: 'merchant_name',
-      width: 220,
+      width: 200,
       fixed: 'left',
       render: (text, record) => (
-        <Space direction="vertical" size={0}>
-          <span style={{ fontWeight: 600 }}>
-            {text || '-'}
-            {record.violation_status === 'violated' && (
-              <Tag color="red" style={{ marginLeft: 6, fontSize: 11 }}>违规</Tag>
-            )}
-            {record.recommendation_status === 'recommended' && (
-              <Tag color="green" style={{ marginLeft: 6, fontSize: 11 }}>推荐</Tag>
-            )}
-          </span>
-          <Space size={6}>
-            {editingMidId === record.id ? (
-              <Space size={4}>
-                <Input
-                  size="small"
-                  style={{ width: 100 }}
-                  value={editingMidValue}
-                  onChange={(e) => setEditingMidValue(e.target.value)}
-                  onPressEnter={() => handleInlineMidSave(record.id)}
-                  placeholder="输入MID"
-                />
-                <Button type="link" size="small" loading={midSaving} onClick={() => handleInlineMidSave(record.id)}>
-                  <CheckCircleOutlined />
-                </Button>
-                <Button type="link" size="small" onClick={() => { setEditingMidId(null); setEditingMidValue('') }}>
-                  取消
-                </Button>
-              </Space>
-            ) : (
-              <>
-                <span style={{ color: '#8c8c8c', fontSize: 12 }}>{record.merchant_id || '待补MID'}</span>
-                {record.missing_mid && isManager ? (
-                  <Button
-                    type="link"
-                    size="small"
-                    style={{ padding: 0, fontSize: 12 }}
-                    onClick={() => { setEditingMidId(record.id); setEditingMidValue(record.merchant_id || '') }}
-                  >
-                    补录
-                  </Button>
-                ) : record.missing_mid ? <Tag color="orange">待补MID</Tag> : null}
-              </>
-            )}
-          </Space>
-        </Space>
+        <span style={{ fontWeight: 600 }}>
+          {text || '-'}
+          {record.violation_status === 'violated' && (
+            <Tag color="red" style={{ marginLeft: 6, fontSize: 11 }}>违规</Tag>
+          )}
+          {record.recommendation_status === 'recommended' && (
+            <Tag color="green" style={{ marginLeft: 6, fontSize: 11 }}>推荐</Tag>
+          )}
+        </span>
       ),
     },
     {
@@ -681,6 +646,46 @@ const MerchantManagement = () => {
       key: 'platform',
       width: 90,
       render: (val) => <Tag color={PLATFORM_COLORS[val] || 'blue'}>{val || '-'}</Tag>,
+    },
+    {
+      title: 'MID',
+      dataIndex: 'merchant_id',
+      key: 'merchant_id',
+      width: 120,
+      render: (val, record) => (
+        editingMidId === record.id ? (
+          <Space size={4}>
+            <Input
+              size="small"
+              style={{ width: 100 }}
+              value={editingMidValue}
+              onChange={(e) => setEditingMidValue(e.target.value)}
+              onPressEnter={() => handleInlineMidSave(record.id)}
+              placeholder="输入MID"
+            />
+            <Button type="link" size="small" loading={midSaving} onClick={() => handleInlineMidSave(record.id)}>
+              <CheckCircleOutlined />
+            </Button>
+            <Button type="link" size="small" onClick={() => { setEditingMidId(null); setEditingMidValue('') }}>
+              取消
+            </Button>
+          </Space>
+        ) : (
+          <Space size={4}>
+            <span style={{ color: val ? undefined : '#faad14', fontSize: 12 }}>{val || '待补'}</span>
+            {record.missing_mid && isManager && (
+              <Button
+                type="link"
+                size="small"
+                style={{ padding: 0, fontSize: 12 }}
+                onClick={() => { setEditingMidId(record.id); setEditingMidValue(record.merchant_id || '') }}
+              >
+                补录
+              </Button>
+            )}
+          </Space>
+        )
+      ),
     },
     {
       title: '申请状态',
@@ -707,20 +712,36 @@ const MerchantManagement = () => {
       render: (val) => val || '-',
     },
     {
-      title: '当前负责人',
+      title: '在投人数',
       dataIndex: 'assigned_users',
-      key: 'assigned_users',
-      width: 200,
+      key: 'in_tou_count',
+      width: 100,
+      align: 'center',
       render: (assignedUsers) => {
-        if (!assignedUsers?.length) return <Tag>未分配</Tag>
+        if (!assignedUsers?.length) return <Tag>0</Tag>
+        const activeUsers = assignedUsers.filter(u => u.google_campaign_id)
+        const count = activeUsers.length
+        if (count === 0) return <Tag>0</Tag>
         return (
-          <Space wrap>
-            {assignedUsers.map((u) => (
-              <Tag key={u.assignment_id} color="purple">
-                {u.display_name || u.username || `用户${u.user_id}`}
-              </Tag>
-            ))}
-          </Space>
+          <Popover
+            title="在投广告主"
+            trigger="click"
+            content={
+              <div style={{ minWidth: 200 }}>
+                {activeUsers.map(u => (
+                  <div key={u.assignment_id} style={{ padding: '4px 0', borderBottom: '1px solid #f0f0f0' }}>
+                    <div style={{ fontWeight: 500 }}>{u.display_name || u.username || `用户${u.user_id}`}</div>
+                    <div style={{ fontSize: 12, color: '#888' }}>
+                      日预算: ${u.daily_budget != null ? u.daily_budget.toFixed(2) : '-'}
+                      {u.mode === 'test' && <Tag color="orange" style={{ marginLeft: 6, fontSize: 10 }}>测试</Tag>}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            }
+          >
+            <a style={{ color: '#1890ff', cursor: 'pointer' }}>{count}</a>
+          </Popover>
         )
       },
     },
@@ -740,30 +761,8 @@ const MerchantManagement = () => {
       width: 110,
       align: 'right',
       sorter: (a, b) => (a.commission_30d || 0) - (b.commission_30d || 0),
-      render: (val) => `$${(val || 0).toFixed(2)}`,
-    },
-    {
-      title: '自跑佣金',
-      dataIndex: 'self_run_commission',
-      key: 'self_run_commission',
-      width: 110,
-      align: 'right',
-      sorter: (a, b) => (a.self_run_commission || 0) - (b.self_run_commission || 0),
       render: (val, record) => (
         <a style={{ color: '#1890ff' }} onClick={() => handleCommissionClick(record, 'self_run')}>
-          ${(val || 0).toFixed(2)}
-        </a>
-      ),
-    },
-    {
-      title: '分配佣金',
-      dataIndex: 'assigned_commission',
-      key: 'assigned_commission',
-      width: 110,
-      align: 'right',
-      sorter: (a, b) => (a.assigned_commission || 0) - (b.assigned_commission || 0),
-      render: (val, record) => (
-        <a style={{ color: '#52c41a' }} onClick={() => handleCommissionClick(record, 'assigned')}>
           ${(val || 0).toFixed(2)}
         </a>
       ),
