@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useRef } from 'react'
 import { Steps, Card, Button, Space, Table, Input, InputNumber, Select, message, Spin, Typography, Tag, Alert, Row, Col } from 'antd'
 import { ThunderboltOutlined, SearchOutlined, RocketOutlined } from '@ant-design/icons'
 import { useNavigate, useSearchParams } from 'react-router-dom'
@@ -36,6 +36,7 @@ export default function AdCreationWizard() {
   const [seedKeywords, setSeedKeywords] = useState('')
   const [keywordResults, setKeywordResults] = useState([])
   const [selectedKeywords, setSelectedKeywords] = useState([])
+  const autoResearchDone = useRef(false)
 
   // Step 2: AI 素材
   const [adCopy, setAdCopy] = useState({ headlines: [], descriptions: [] })
@@ -87,7 +88,35 @@ export default function AdCreationWizard() {
     }
   }, [mccList])
 
-  // Step 1: 关键词研究
+  // Step 1: 进入时自动获取商家 URL 并触发关键词研究
+  useEffect(() => {
+    if (step !== 1 || !assignmentId || autoResearchDone.current) return
+    const fetchAndResearch = async () => {
+      setLoading(true)
+      try {
+        const detailRes = await api.get(`/api/ad-creation/assignment-detail/${assignmentId}`)
+        const siteUrl = detailRes.data?.site_url || ''
+        if (siteUrl) {
+          setKeywordUrl(siteUrl)
+          const res = await api.post('/api/ad-creation/keyword-ideas', {
+            mcc_id: selectedMcc,
+            customer_id: availableCid,
+            url: siteUrl,
+            keywords: undefined,
+          })
+          setKeywordResults(res.data.keywords || [])
+          const top10 = (res.data.keywords || []).slice(0, 10).map(k => k.keyword)
+          setSelectedKeywords(top10)
+          autoResearchDone.current = true
+        }
+      } catch (err) {
+        message.error(err?.response?.data?.detail || '自动获取商家信息失败')
+      } finally { setLoading(false) }
+    }
+    fetchAndResearch()
+  }, [step, assignmentId])
+
+  // Step 1: 手动关键词研究
   const handleKeywordResearch = async () => {
     if (!keywordUrl && !seedKeywords) { message.warning('请输入网址或关键词'); return }
     setLoading(true)
@@ -99,7 +128,6 @@ export default function AdCreationWizard() {
         keywords: seedKeywords ? seedKeywords.split(',').map(s => s.trim()).filter(Boolean) : undefined,
       })
       setKeywordResults(res.data.keywords || [])
-      // 自动选择前 10 个
       const top10 = (res.data.keywords || []).slice(0, 10).map(k => k.keyword)
       setSelectedKeywords(top10)
     } catch (err) {
@@ -114,7 +142,7 @@ export default function AdCreationWizard() {
       const kwData = keywordResults.filter(k => selectedKeywords.includes(k.keyword))
       const res = await api.post('/api/ad-creation/generate-ad-copy', {
         merchant_name: merchantName,
-        merchant_url: merchantUrl,
+        merchant_url: keywordUrl || merchantUrl,
         keywords: kwData,
         language: 'en',
       })
@@ -135,7 +163,7 @@ export default function AdCreationWizard() {
         mcc_id: selectedMcc,
         customer_id: availableCid,
         merchant_name: merchantName,
-        merchant_url: merchantUrl,
+        merchant_url: keywordUrl || merchantUrl,
         keywords: selectedKeywords,
         headlines: editHeadlines,
         descriptions: editDescriptions,
