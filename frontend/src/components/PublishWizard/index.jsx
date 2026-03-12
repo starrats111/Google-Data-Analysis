@@ -1031,74 +1031,6 @@ const PublishWizard = () => {
                       </Descriptions>
                     </Card>
 
-                    {campaignResult.support_regions?.length > 0 && (
-                      <div style={{ marginBottom: 16 }}>
-                        <Typography.Title level={5}>选择 Support Region</Typography.Title>
-                        <Select
-                          placeholder="选择目标区域 或 输入国家代码搜索（如 de, us, fr）"
-                          value={selectedRegion}
-                          onChange={handleRegionSelect}
-                          style={{ width: '100%' }}
-                          showSearch
-                          filterOption={(input, option) =>
-                            option.label.toLowerCase().includes(input.toLowerCase()) ||
-                            option.value.toLowerCase().includes(input.toLowerCase())
-                          }
-                          options={campaignResult.support_regions.map(r => ({
-                            value: r.code,
-                            label: `${r.code} — ${r.language}`,
-                          }))}
-                        />
-                        {selectedRegion && (
-                          <div style={{ marginTop: 8 }}>
-                            <Typography.Text>文章语言：</Typography.Text>
-                            <Tag color="blue" style={{ marginLeft: 8 }}>
-                              {campaignResult.support_regions.find(r => r.code === selectedRegion)?.language || language}
-                            </Tag>
-                          </div>
-                        )}
-                        {/* 手动覆盖语言：输入国家代码 */}
-                        <div style={{ marginTop: 12 }}>
-                          <Typography.Text type="secondary">或手动输入国家代码覆盖语言：</Typography.Text>
-                          <Input
-                            placeholder="如 de, us, fr, jp"
-                            value={countryCode}
-                            onChange={e => handleCountryCodeChange(e.target.value)}
-                            size="small"
-                            maxLength={3}
-                            style={{ width: 120, marginLeft: 8, textTransform: 'lowercase' }}
-                          />
-                          {countryCode && COUNTRY_LANG_MAP[countryCode.toLowerCase()] && (
-                            <Tag color="green" style={{ marginLeft: 6 }}>
-                              语言: {COUNTRY_LANG_MAP[countryCode.toLowerCase()]}
-                            </Tag>
-                          )}
-                        </div>
-                      </div>
-                    )}
-
-                    {campaignResult.support_regions?.length === 0 && (
-                      <div style={{ marginBottom: 16 }}>
-                        <Typography.Title level={5}>文章语言（输入国家代码）</Typography.Title>
-                        <Input
-                          placeholder="输入国家代码，如 de, us, fr, jp, kr"
-                          value={countryCode}
-                          onChange={e => handleCountryCodeChange(e.target.value)}
-                          size="large"
-                          maxLength={3}
-                          style={{ width: 200, textTransform: 'lowercase' }}
-                        />
-                        {countryCode && COUNTRY_LANG_MAP[countryCode.toLowerCase()] && (
-                          <Tag color="blue" style={{ marginTop: 6, marginLeft: 8 }}>
-                            语言: {COUNTRY_LANG_MAP[countryCode.toLowerCase()]}
-                          </Tag>
-                        )}
-                        {!countryCode && (
-                          <Select value={language} onChange={setLanguage} options={LANGUAGES} style={{ width: 200, marginLeft: 8 }} />
-                        )}
-                      </div>
-                    )}
-
                     {!campaignResult.campaign_link && (
                       <Alert
                         type="warning"
@@ -1218,26 +1150,7 @@ const PublishWizard = () => {
                   </Col>
                 </Row>
 
-                {/* 网站语言（国家代码输入） */}
                 <Row gutter={16} style={{ marginTop: 20 }}>
-                  <Col span={8}>
-                    <Typography.Title level={5}>🌐 国家代码</Typography.Title>
-                    <Tooltip title="输入目标国家代码，自动映射文章语言。如 de=德语, fr=法语, us=英语">
-                      <Input
-                        placeholder="如 de, us, fr, jp"
-                        value={countryCode}
-                        onChange={e => handleCountryCodeChange(e.target.value)}
-                        size="large"
-                        maxLength={3}
-                        style={{ textTransform: 'lowercase' }}
-                      />
-                    </Tooltip>
-                    {countryCode && COUNTRY_LANG_MAP[countryCode.toLowerCase()] && (
-                      <Tag color="blue" style={{ marginTop: 6 }}>
-                        语言: {COUNTRY_LANG_MAP[countryCode.toLowerCase()]}
-                      </Tag>
-                    )}
-                  </Col>
                   <Col span={8}>
                     <Typography.Title level={5}><ClockCircleOutlined /> 发布时间</Typography.Title>
                     <DatePicker
@@ -1412,6 +1325,51 @@ const PublishWizard = () => {
                   )
                 })}
               </Space>
+            </div>
+
+            {/* ===== 文章语言设置 ===== */}
+            <div style={{ marginBottom: 20 }}>
+              <Typography.Title level={5}>🌐 文章语言</Typography.Title>
+              <Row gutter={16} align="middle">
+                {campaignResult?.support_regions?.length > 0 && (
+                  <Col span={12}>
+                    <Select
+                      placeholder="选择目标区域 或 输入国家代码搜索"
+                      value={selectedRegion}
+                      onChange={handleRegionSelect}
+                      style={{ width: '100%' }}
+                      showSearch
+                      filterOption={(input, option) =>
+                        option.label.toLowerCase().includes(input.toLowerCase()) ||
+                        option.value.toLowerCase().includes(input.toLowerCase())
+                      }
+                      options={campaignResult.support_regions.map(r => ({
+                        value: r.code,
+                        label: `${r.code} — ${r.language}`,
+                      }))}
+                    />
+                  </Col>
+                )}
+                <Col span={campaignResult?.support_regions?.length > 0 ? 6 : 8}>
+                  <Tooltip title="输入国家代码，自动映射语言。如 de=德语, fr=法语, us=英语">
+                    <Input
+                      placeholder="国家代码 如 de, us"
+                      value={countryCode}
+                      onChange={e => handleCountryCodeChange(e.target.value)}
+                      maxLength={3}
+                      style={{ textTransform: 'lowercase' }}
+                    />
+                  </Tooltip>
+                </Col>
+                <Col span={campaignResult?.support_regions?.length > 0 ? 6 : 8}>
+                  {!countryCode && (
+                    <Select value={language} onChange={setLanguage} options={LANGUAGES} style={{ width: '100%' }} placeholder="选择语言" />
+                  )}
+                  {countryCode && COUNTRY_LANG_MAP[countryCode.toLowerCase()] && (
+                    <Tag color="blue">语言: {COUNTRY_LANG_MAP[countryCode.toLowerCase()]}</Tag>
+                  )}
+                </Col>
+              </Row>
             </div>
 
             <Divider />
