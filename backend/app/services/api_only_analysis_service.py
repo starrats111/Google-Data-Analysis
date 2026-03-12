@@ -206,7 +206,9 @@ class ApiOnlyAnalysisService:
                 
                 for pd in platform_data_list:
                     if pd.affiliate_account_id == affiliate_account.id:
-                        if pd.date in campaign_data["dates"]:
+                        # ✅ 修复：使用日期范围而非集合匹配，确保完整统计
+                        # 原逻辑只统计有Google Ads数据的日期，导致单边数据丢失
+                        if begin_date <= pd.date <= end_date:
                             total_commission += pd.commission or 0
                             total_orders += pd.orders or 0
                             if pd.orders and pd.orders > 0:
@@ -325,9 +327,12 @@ class ApiOnlyAnalysisService:
         user_id: int,
         account_id: Optional[int] = None
     ) -> Optional[AffiliateAccount]:
-        """查找对应的联盟账号 - 使用platform_name匹配（如PM、LH、CG等）"""
+        """查找对应的联盟账号 - 使用标准化平台代码匹配（大小写不敏感）"""
         if not platform_code:
             return None
+        
+        # ✅ 标准化平台代码（大小写不敏感）
+        normalized_code = platform_code.lower().strip()
         
         # 如果指定了账号ID，直接查找
         if account_id:
@@ -337,34 +342,34 @@ class ApiOnlyAnalysisService:
                 AffiliateAccount.is_active == True
             ).first()
             if account:
-                # 验证平台名称是否匹配（用platform_name而不是platform_code）
-                if account.platform and account.platform.platform_code == platform_code.lower():
+                # ✅ 验证平台代码是否匹配（使用标准化后的代码）
+                if account.platform and account.platform.platform_code.lower() == normalized_code:
                     return account
             return None
         
-        # 按平台代码查找（platform_code = "rw"/"pm"/"lh" 等）
+        # ✅ 按标准化平台代码查找（platform_code = "rw"/"pm"/"lh" 等）
         query = self.db.query(AffiliateAccount).join(
             AffiliatePlatform
         ).filter(
             AffiliateAccount.user_id == user_id,
-            AffiliatePlatform.platform_code == platform_code.lower(),
+            # ✅ 使用 func.lower() 进行数据库级别的大小写不敏感比较
+            func.lower(AffiliatePlatform.platform_code) == normalized_code,
             AffiliateAccount.is_active == True
         )
         
+        # ✅ 如果提供了商家ID，优先按商家ID匹配
         if merchant_id:
             query = query.filter(AffiliateAccount.account_code == merchant_id)
-        
-        account = query.first()
-        
-        if account:
-            return account
+            account = query.first()
+            if account:
+                return account
         
         # 如果没找到匹配的账号代码，返回该平台下的第一个账号
         base_query = self.db.query(AffiliateAccount).join(
             AffiliatePlatform
         ).filter(
             AffiliateAccount.user_id == user_id,
-            AffiliatePlatform.platform_code == platform_code.lower(),
+            func.lower(AffiliatePlatform.platform_code) == normalized_code,
             AffiliateAccount.is_active == True
         )
         return base_query.first()
