@@ -1102,12 +1102,12 @@ const MerchantManagement = () => {
             </Card>
           </Col>
 
-          {/* 绿框：测试广告数量 */}
+          {/* 绿框：测试商家数量 */}
           <Col xs={24} md={4}>
             <Card size="small" style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
               <Statistic
-                title="测试广告"
-                value={stats.test_campaign_count || 0}
+                title="测试商家"
+                value={stats.test_merchant_count || 0}
                 suffix="个"
                 valueStyle={{ fontSize: 24, color: '#52c41a' }}
               />

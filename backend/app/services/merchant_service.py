@@ -700,11 +700,10 @@ class MerchantService:
             key = MerchantService.normalize_platform(p) if p else (p or "UNKNOWN")
             norm_missing[key] = norm_missing.get(key, 0) + c
 
-        test_campaign_count = (
+        test_merchant_count = (
             db.query(func.count(MerchantAssignment.id))
             .filter(
                 MerchantAssignment.mode == "test",
-                MerchantAssignment.google_campaign_id.isnot(None),
                 MerchantAssignment.status == "active",
             )
             .scalar() or 0
@@ -719,7 +718,7 @@ class MerchantService:
             "missing_mid_rate": missing_mid_rate,
             "by_platform": norm_platform,
             "missing_mid_by_platform": norm_missing,
-            "test_campaign_count": test_campaign_count,
+            "test_merchant_count": test_merchant_count,
         }
 
     # ------------------------------------------------------------------
