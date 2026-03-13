@@ -1872,7 +1872,7 @@ const MerchantManagement = () => {
               { value: 'MAXIMIZE_CLICKS', label: '尽可能多获得点击（Maximize Clicks）' },
             ]} />
           </Form.Item>
-          <Form.Item name="enhanced_cpc" label="智能点击付费（eCPC）" valuePropName="checked"
+          <Form.Item name="enhanced_cpc" label="智能点击付费（eCPC）"
             extra="启用后 Google 会自动调整出价以提高转化率"
           >
             <Select options={[
@@ -1892,17 +1892,17 @@ const MerchantManagement = () => {
             description="以下设置决定广告在哪些 Google 网络上展示"
             style={{ marginBottom: 12, fontSize: 12 }}
           />
-          <Form.Item name="target_google_search" label="Google 搜索" valuePropName="checked"
+          <Form.Item name="target_google_search" label="Google 搜索"
             extra="在 Google 搜索结果中展示广告"
           >
             <Select options={[{ value: true, label: '开启' }, { value: false, label: '关闭' }]} />
           </Form.Item>
-          <Form.Item name="target_search_network" label="搜索合作伙伴网络" valuePropName="checked"
+          <Form.Item name="target_search_network" label="搜索合作伙伴网络"
             extra="在 Google 搜索合作伙伴网站上展示广告"
           >
             <Select options={[{ value: true, label: '开启' }, { value: false, label: '关闭' }]} />
           </Form.Item>
-          <Form.Item name="target_content_network" label="展示广告网络" valuePropName="checked"
+          <Form.Item name="target_content_network" label="展示广告网络"
             extra="在 Google 展示广告网络上展示广告（通常不建议搜索广告开启）"
           >
             <Select options={[{ value: true, label: '开启' }, { value: false, label: '关闭' }]} />
