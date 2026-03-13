@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 from sqlalchemy import desc
 
-from app.database import get_db
+from app.database import get_db, SessionLocal
 from app.middleware.auth import get_current_user
 from app.models.user import User
 from app.models.tracking_link import PubTrackingLink
@@ -129,8 +129,39 @@ async def crawl_merchant_site(
 ):
     """爬取商家网站并 AI 分析（OPT-012）"""
     crawl_data = crawl_merchant(data.url)
-    if crawl_data.get("crawl_failed"):
+
+    if crawl_data.get("crawl_failed") and not crawl_data.get("partial"):
         raise HTTPException(status_code=400, detail=crawl_data.get("error", "爬取失败"))
+
+    # 部分失败（反爬保护但能提取 URL 信息）：用 AI 根据 URL 生成内容
+    if crawl_data.get("crawl_failed") and crawl_data.get("partial"):
+        logger.info("[Crawl] 爬取部分失败，使用 AI URL 分析兜底: %s", data.url)
+        try:
+            service = ArticleGenService()
+            analysis = service.analyze_url_only(data.url, data.language)
+            brand_name = crawl_data.get("brand_name") or analysis.get("brand_name", "")
+            stock_images = []
+            category = analysis.get("category", "") if isinstance(analysis, dict) else ""
+            try:
+                stock_images = search_merchant_images(
+                    f"{brand_name} {category} product" if brand_name else "product lifestyle",
+                    count=12, brand_name=brand_name, category=category,
+                )
+            except Exception:
+                pass
+            return {
+                "brand_name": brand_name,
+                "url": data.url,
+                "image_cache_session": None,
+                "images": [],
+                "stock_images": [{"url": img, "source": "stock"} if isinstance(img, str) else img
+                                 for img in stock_images[:20]],
+                "analysis": analysis,
+                "crawl_warning": crawl_data.get("error", ""),
+            }
+        except Exception as e:
+            logger.error("[Crawl] AI URL 分析也失败: %s", e)
+            raise HTTPException(status_code=400, detail=crawl_data.get("error", "爬取失败"))
 
     try:
         service = ArticleGenService()
@@ -246,18 +277,33 @@ async def crawl_merchant_site(
         seen = set(unique_images)
 
     # ── CR-040: 图片缓存机制 ──
-    # 创建缓存会话，将通过验证的图片下载到本地缓存
+    MIN_DISPLAY_IMAGES = 15
+
     cache_session = image_cache_service.create_session()
     cached_images = image_cache_service.batch_download(
-        cache_session, unique_images[:50], source="crawl",
-        min_width=100, min_height=100, max_count=50,
+        cache_session, unique_images[:60], source="crawl",
+        min_width=100, min_height=100, max_count=60,
     )
 
-    # 网站图片完全没有时，才用图片库补充（避免不相关的 stock 图片混入）
-    # 图库图不走缓存，直接返回原始 URL（07 确认：图库图本身就存在，不用缓存）
+    # CR-010: 缓存后不足 15 张时，放宽尺寸限制重试剩余图片
+    if len(cached_images) < MIN_DISPLAY_IMAGES:
+        already_cached = {img["original_url"] for img in cached_images}
+        remaining = [u for u in unique_images if u not in already_cached]
+        if remaining:
+            logger.info("[Crawl] 缓存图片不足 (%d/%d)，放宽尺寸重试 %d 张",
+                        len(cached_images), MIN_DISPLAY_IMAGES, len(remaining))
+            extra = image_cache_service.batch_download(
+                cache_session, remaining[:40], source="crawl",
+                min_width=50, min_height=50, max_count=MIN_DISPLAY_IMAGES - len(cached_images),
+            )
+            cached_images.extend(extra)
+
     crawled_count = len(cached_images)
+    logger.info("[Crawl] 最终缓存图片: %d 张 (目标>=%d)", crawled_count, MIN_DISPLAY_IMAGES)
+
+    # 不足 15 张时用图片库补充（而非仅在 0 张时）
     stock_images = []
-    if crawled_count == 0:
+    if crawled_count < MIN_DISPLAY_IMAGES:
         brand = crawl_data.get("brand_name", "")
         queries = []
         if analysis and isinstance(analysis, dict):
@@ -272,8 +318,9 @@ async def crawl_merchant_site(
         if not queries:
             queries.append("product lifestyle photography")
 
+        stock_target = MIN_DISPLAY_IMAGES - crawled_count
         for q in queries:
-            if len(stock_images) >= 8:
+            if len(stock_images) >= stock_target:
                 break
             try:
                 extra = search_merchant_images(
@@ -290,7 +337,8 @@ async def crawl_merchant_site(
             except Exception as e:
                 logger.warning("[Crawl] 图片库搜索失败 '%s': %s", q, e)
 
-        logger.info("[Crawl] 网站 0 张图 -> 图片库补充 %d 张（不走缓存）", len(stock_images))
+        logger.info("[Crawl] 网站 %d 张图不足 %d → 图片库补充 %d 张",
+                    crawled_count, MIN_DISPLAY_IMAGES, len(stock_images))
 
     return {
         "brand_name": crawl_data.get("brand_name", ""),
@@ -363,20 +411,46 @@ async def generate_merchant_article(
 
         try:
             result = future.result()
-            tracking = PubTrackingLink(
+            _save_tracking_link(
                 user_id=current_user.id,
                 merchant_url=data.merchant_info.get("url", ""),
                 tracking_link=data.tracking_link,
                 brand_name=data.merchant_info.get("brand_name", ""),
             )
-            db.add(tracking)
-            db.commit()
             yield f"data: {json.dumps({'status': 'done', 'result': result})}\n\n"
         except Exception as e:
             logger.error(f"商家文章生成失败: {e}")
             yield f"data: {json.dumps({'status': 'error', 'detail': str(e)})}\n\n"
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+
+def _save_tracking_link(user_id: int, merchant_url: str, tracking_link: str, brand_name: str, max_retries: int = 5):
+    """使用独立的短生命周期会话保存追踪链接，带重试以应对 SQLite 锁竞争"""
+    import time
+    for attempt in range(max_retries):
+        session = SessionLocal()
+        try:
+            tracking = PubTrackingLink(
+                user_id=user_id,
+                merchant_url=merchant_url,
+                tracking_link=tracking_link,
+                brand_name=brand_name,
+            )
+            session.add(tracking)
+            session.commit()
+            return
+        except Exception as e:
+            session.rollback()
+            if attempt < max_retries - 1 and "database is locked" in str(e):
+                delay = 1.0 * (attempt + 1)
+                logger.warning(f"数据库锁定，第 {attempt + 1} 次重试（等待 {delay}s）")
+                time.sleep(delay)
+            else:
+                logger.error(f"保存追踪链接失败（已重试 {attempt + 1} 次）: {e}")
+                raise
+        finally:
+            session.close()
 
 
 def _generate_article_sync(title, merchant_info, tracking_link, keywords, language):

@@ -14,6 +14,12 @@ from bs4 import BeautifulSoup
 
 logger = logging.getLogger(__name__)
 
+PRODUCT_PAGE_KEYWORDS = [
+    "product", "shop", "store", "collection", "collections",
+    "catalog", "item", "new-arrival", "best-seller", "bestseller",
+    "all-products", "featured", "new-in",
+]
+
 SUB_PAGE_KEYWORDS = [
     "product", "shop", "store", "sale", "deal", "offer",
     "collection", "category", "about", "promotion", "new-arrival",
@@ -506,27 +512,60 @@ def _deduplicate_cdn_images(images: List[str]) -> List[str]:
 def _upgrade_cdn_thumbnails(images: List[str]) -> List[str]:
     """
     将 CDN 缩略图 URL 升级为更大尺寸。
-    例如 Shopify 的 ?width=100 → ?width=800
+    Shopify: 移除 height=16/width=100 等小尺寸参数，替换为合理大小
+    其他 CDN: 移除明显的缩略图尺寸参数
     """
     import re
+    from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
+
     upgraded = []
     for img_url in images:
         url_lower = img_url.lower()
-        # Shopify CDN: 替换 width=100 为 width=800
+
         if "cdn.shopify" in url_lower or "/cdn/shop/" in url_lower:
-            # 替换 width 参数
-            new_url = re.sub(r'[?&]width=\d+', '', img_url)
+            parsed = urlparse(img_url)
+            qs = parse_qs(parsed.query, keep_blank_values=False)
+
+            # 移除小尺寸参数，用合理值替代
+            changed = False
+            for size_key in ("width", "height", "w", "h"):
+                if size_key in qs:
+                    try:
+                        val = int(qs[size_key][0])
+                        if val < 400:
+                            del qs[size_key]
+                            changed = True
+                    except (ValueError, IndexError):
+                        pass
+
+            # 移除 crop 参数（会限制图片区域）
+            if "crop" in qs:
+                del qs["crop"]
+                changed = True
+
+            # 确保有合理尺寸
+            if changed and "width" not in qs and "height" not in qs:
+                qs["width"] = ["800"]
+
+            if changed:
+                new_query = urlencode({k: v[0] for k, v in qs.items()})
+                new_url = urlunparse((parsed.scheme, parsed.netloc, parsed.path,
+                                     parsed.params, new_query, parsed.fragment))
+            else:
+                new_url = img_url
+
             # 替换 Shopify 尺寸后缀 (如 _450x450)
             new_url = re.sub(r'_\d+x\d+\.', '.', new_url)
-            # 清理多余的 ? 或 &
+            upgraded.append(new_url)
+
+        elif any(cdn in url_lower for cdn in ["squarespace", "wixstatic", "imgix"]):
+            # 移除其他 CDN 的小尺寸参数
+            new_url = re.sub(r'[?&](?:w|h|width|height)=\d{1,3}(?=&|$)', '', img_url)
             new_url = new_url.rstrip('?&')
-            if new_url != img_url:
-                upgraded.append(new_url)
-            else:
-                upgraded.append(img_url)
+            upgraded.append(new_url if new_url else img_url)
         else:
             upgraded.append(img_url)
-    # 去重（升级后可能产生重复）
+
     seen = set()
     result = []
     for url in upgraded:
@@ -537,9 +576,10 @@ def _upgrade_cdn_thumbnails(images: List[str]) -> List[str]:
 
 
 def _find_sub_pages(soup: BeautifulSoup, base_url: str) -> List[str]:
-    """从首页链接中发现关键子页面 — 深度搜索策略"""
+    """从首页链接中发现关键子页面 — 产品页优先"""
     parsed_base = urlparse(base_url)
-    priority_pages = []   # 关键词匹配的高优先级页面
+    product_pages = []    # 产品/商品页（最高优先级）
+    priority_pages = []   # 其他关键词匹配的高优先级页面
     other_pages = []      # 其他同域名内部页面
     seen = set()
 
@@ -571,14 +611,16 @@ def _find_sub_pages(soup: BeautifulSoup, base_url: str) -> List[str]:
             continue
         seen.add(path_lower)
 
-        if any(kw in path_lower for kw in SUB_PAGE_KEYWORDS):
+        if any(kw in path_lower for kw in PRODUCT_PAGE_KEYWORDS):
+            product_pages.append(full)
+        elif any(kw in path_lower for kw in SUB_PAGE_KEYWORDS):
             priority_pages.append(full)
         else:
             other_pages.append(full)
 
-    # 优先返回关键词匹配的页面，再补充其他内部页面
-    result = priority_pages[:12] + other_pages[:8]
-    return result[:15]
+    # 产品页最优先，其次关键词页，最后其他内部页面
+    result = product_pages[:10] + priority_pages[:8] + other_pages[:5]
+    return result[:20]
 
 
 _FALLBACK_UAS = [
@@ -1319,7 +1361,7 @@ def crawl(url: str) -> Dict:
     pages = []
     brand_name = ""
 
-    MIN_GOOD_IMAGES = 15
+    MIN_GOOD_IMAGES = 20
 
     def _count_unique_images(page_list):
         seen = set()
@@ -1370,7 +1412,7 @@ def crawl(url: str) -> Dict:
             home_soup = BeautifulSoup(home_html, "lxml")
             sub_urls = _find_sub_pages(home_soup, url)
 
-            max_sub = 8 if home_img_count < 5 else 5
+            max_sub = 12 if home_img_count < 5 else 8
             for sub_url in sub_urls[:max_sub]:
                 if _count_unique_images(pages) >= MIN_GOOD_IMAGES:
                     logger.info("[MerchantCrawler] 已达 %d 张图片，停止爬取子页面",
@@ -1452,6 +1494,29 @@ def crawl(url: str) -> Dict:
                     brand_name = pw_data["title"].split("|")[0].split("-")[0].strip()
             logger.info("[MerchantCrawler] Playwright 补爬: %d 图片, %d 字文字",
                         len(rescue_images), len(rescue_text))
+
+            # SPA 站点子页面爬取：首页 Playwright 图片不够时，尝试产品子页面
+            if total_images < MIN_GOOD_IMAGES:
+                pw_soup = BeautifulSoup(pw_resp.text, "lxml")
+                spa_sub_urls = _find_sub_pages(pw_soup, url)
+                if spa_sub_urls:
+                    logger.info("[MerchantCrawler] SPA 子页面补爬: %d 个候选", len(spa_sub_urls))
+                    spa_max = min(6, len(spa_sub_urls))
+                    for sub_url in spa_sub_urls[:spa_max]:
+                        if _count_unique_images(pages) >= MIN_GOOD_IMAGES:
+                            break
+                        try:
+                            _time.sleep(_random.uniform(1.0, 2.0))
+                            sub_resp = _try_playwright(sub_url, timeout=25)
+                            if sub_resp:
+                                sub_data = _extract_page(sub_resp.text, sub_url)
+                                if sub_data.get("images"):
+                                    pages.append(sub_data)
+                                    logger.info("[MerchantCrawler] SPA 子页面 %s: +%d 图片",
+                                                sub_url[:60], len(sub_data["images"]))
+                        except Exception as e:
+                            logger.warning("[MerchantCrawler] SPA 子页面失败 %s: %s", sub_url[:60], e)
+                    total_images = _count_unique_images(pages)
 
     raw_text = "\n\n".join(
         f"[{p['title']}]\n{p['text']}" for p in pages
