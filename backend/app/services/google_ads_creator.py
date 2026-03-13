@@ -174,12 +174,13 @@ class GoogleAdsCreator:
 
         bidding = defaults.get("bidding_strategy", "MANUAL_CPC")
         if bidding == "MAXIMIZE_CLICKS":
+            # Google Ads API v23: "Maximize Clicks" = target_spend
             cpc_ceiling = int(defaults.get("default_cpc_bid", 2.0) * 1_000_000)
             if cpc_ceiling > 0:
-                campaign.maximize_clicks.cpc_bid_ceiling_micros = cpc_ceiling
+                campaign.target_spend.cpc_bid_ceiling_micros = cpc_ceiling
             else:
-                campaign.maximize_clicks.cpc_bid_ceiling_micros = 2_000_000
-            logger.info(f"[AdsCreator] bidding=MAXIMIZE_CLICKS, ceiling={campaign.maximize_clicks.cpc_bid_ceiling_micros}")
+                campaign.target_spend.cpc_bid_ceiling_micros = 2_000_000
+            logger.info(f"[AdsCreator] bidding=MAXIMIZE_CLICKS(target_spend), ceiling={campaign.target_spend.cpc_bid_ceiling_micros}")
         else:
             campaign.manual_cpc.enhanced_cpc_enabled = True
             if not defaults.get("enhanced_cpc", True):
