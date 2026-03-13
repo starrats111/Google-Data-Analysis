@@ -1,5 +1,5 @@
 """
-Google Ads 广告创建服务（CR-039）
+Google Ads 广告创建服务（CR-039 / CR-048）
 使用打包 Mutate 一次 API 调用创建完整广告结构：
 Campaign → AdGroup → AdGroupAd (RSA) → AdGroupCriterion (Keywords) → CampaignAsset (Sitelinks)
 """
@@ -13,6 +13,12 @@ from app.models.google_ads_api_data import GoogleMccAccount
 from app.services.google_ads_client_factory import create_google_ads_client
 
 logger = logging.getLogger(__name__)
+
+
+def _get_ad_defaults() -> dict:
+    """读取广告默认设置"""
+    from app.api.merchants import _load_ad_defaults
+    return _load_ad_defaults()
 
 
 class GoogleAdsCreator:
@@ -91,14 +97,25 @@ class GoogleAdsCreator:
 
         except Exception as e:
             error_msg = str(e)
+            logger.error(f"[AdsCreator] 广告创建失败: {e}")
+
+            failure_details = []
+            if hasattr(e, 'failure') and e.failure:
+                for err in e.failure.errors:
+                    failure_details.append(f"{err.error_code}: {err.message}")
+            detail_str = "; ".join(failure_details) if failure_details else ""
+
             if "QUOTA_EXCEEDED" in error_msg or "RESOURCE_EXHAUSTED" in error_msg:
                 raise ValueError("今日 API 额度已用完，请明天再试")
             if "AUTHENTICATION_ERROR" in error_msg or "AuthenticationError" in error_msg:
                 raise ValueError("MCC 认证失败，请检查服务账号配置")
             if "ALREADY_EXISTS" in error_msg:
                 raise ValueError("广告系列已存在，请勿重复创建")
-            logger.error(f"[AdsCreator] 广告创建失败: {e}")
-            raise ValueError(f"广告创建失败: {error_msg[:200]}")
+            if "DEVELOPER_TOKEN" in error_msg:
+                raise ValueError("开发者令牌未审批，请使用测试 MCC 或申请正式令牌")
+            if detail_str:
+                raise ValueError(f"广告创建失败: {detail_str}")
+            raise ValueError(f"广告创建失败: {error_msg[:300]}")
 
     def _check_existing_campaign(self, client, customer_id: str, campaign_name: str) -> Optional[str]:
         """检查同名广告系列是否已存在"""
@@ -122,10 +139,10 @@ class GoogleAdsCreator:
         keywords: List[str], headlines: List[str], descriptions: List[str],
         daily_budget: float, target_country: str, final_url: str,
     ) -> list:
-        """构建打包 Mutate 操作列表（使用临时 ID）"""
+        """构建打包 Mutate 操作列表（使用临时 ID + 读取默认设置）"""
+        defaults = _get_ad_defaults()
         operations = []
 
-        # 临时 ID（负数）
         BUDGET_TEMP_ID = -1
         CAMPAIGN_TEMP_ID = -2
         AD_GROUP_TEMP_ID = -3
@@ -141,25 +158,43 @@ class GoogleAdsCreator:
         )
         operations.append(budget_op)
 
-        # 2. Campaign
+        # 2. Campaign（使用默认设置）
         campaign_op = client.get_type("MutateOperation")
         campaign = campaign_op.campaign_operation.create
         campaign.name = campaign_name
         campaign.advertising_channel_type = client.enums.AdvertisingChannelTypeEnum.SEARCH
-        campaign.status = client.enums.CampaignStatusEnum.PAUSED  # 创建后暂停，手动启用
+        campaign.status = client.enums.CampaignStatusEnum.PAUSED
         campaign.campaign_budget = client.get_service("CampaignBudgetService").campaign_budget_path(
             customer_id, str(BUDGET_TEMP_ID)
         )
         campaign.resource_name = client.get_service("CampaignService").campaign_path(
             customer_id, str(CAMPAIGN_TEMP_ID)
         )
+
+        bidding = defaults.get("bidding_strategy", "MANUAL_CPC")
+        if bidding == "MAXIMIZE_CLICKS":
+            campaign.maximize_clicks.cpc_bid_ceiling_micros = int(defaults.get("default_cpc_bid", 2.0) * 1_000_000)
+        else:
+            # protobuf3 oneof: setting bool to False (default) won't populate the oneof,
+            # so set True first to force populate, then set the desired value
+            campaign.manual_cpc.enhanced_cpc_enabled = True
+            if not defaults.get("enhanced_cpc", True):
+                campaign.manual_cpc.enhanced_cpc_enabled = False
+
+        campaign.network_settings.target_google_search = defaults.get("target_google_search", True)
+        campaign.network_settings.target_search_network = defaults.get("target_search_network", False)
+        campaign.network_settings.target_content_network = defaults.get("target_content_network", False)
+
         # 投放地区
         campaign_geo_op = client.get_type("MutateOperation")
         geo_target = campaign_geo_op.campaign_criterion_operation.create
         geo_target.campaign = client.get_service("CampaignService").campaign_path(
             customer_id, str(CAMPAIGN_TEMP_ID)
         )
-        geo_country_map = {"US": "2840", "UK": "2826", "CA": "2124", "AU": "2036"}
+        geo_country_map = {
+            "US": "2840", "UK": "2826", "CA": "2124", "AU": "2036",
+            "DE": "2276", "FR": "2250", "JP": "2392", "BR": "2076",
+        }
         geo_id = geo_country_map.get(target_country, "2840")
         geo_target.location.geo_target_constant = f"geoTargetConstants/{geo_id}"
         operations.append(campaign_op)
@@ -173,7 +208,7 @@ class GoogleAdsCreator:
             customer_id, str(CAMPAIGN_TEMP_ID)
         )
         ad_group.type_ = client.enums.AdGroupTypeEnum.SEARCH_STANDARD
-        ad_group.cpc_bid_micros = 1_000_000  # $1.00 默认出价
+        ad_group.cpc_bid_micros = int(defaults.get("default_cpc_bid", 1.0) * 1_000_000)
         ad_group.resource_name = client.get_service("AdGroupService").ad_group_path(
             customer_id, str(AD_GROUP_TEMP_ID)
         )
@@ -195,8 +230,8 @@ class GoogleAdsCreator:
             desc = client.get_type("AdTextAsset")
             desc.text = d[:90]
             rsa.descriptions.append(desc)
-        if final_url:
-            ad_group_ad.ad.final_urls.append(final_url)
+        resolved_url = final_url or "https://example.com"
+        ad_group_ad.ad.final_urls.append(resolved_url)
         operations.append(ad_op)
 
         # 5. AdGroupCriterion (Keywords) — 批量添加
