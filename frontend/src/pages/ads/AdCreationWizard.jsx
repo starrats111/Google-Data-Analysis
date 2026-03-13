@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react'
-import { Steps, Card, Button, Space, Table, Input, InputNumber, Select, message, Spin, Typography, Tag, Alert, Row, Col } from 'antd'
-import { ThunderboltOutlined, SearchOutlined, RocketOutlined } from '@ant-design/icons'
+import { Steps, Card, Button, Space, Table, Input, InputNumber, Select, message, Spin, Typography, Tag, Alert, Row, Col, Divider, Collapse } from 'antd'
+import { ThunderboltOutlined, SearchOutlined, RocketOutlined, LinkOutlined, BulbOutlined } from '@ant-design/icons'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import api from '../../services/api'
 
@@ -33,13 +33,14 @@ export default function AdCreationWizard() {
 
   // Step 1: 关键词研究
   const [keywordUrl, setKeywordUrl] = useState(merchantUrl)
+  const [semrushUrl, setSemrushUrl] = useState('')
   const [seedKeywords, setSeedKeywords] = useState('')
   const [keywordResults, setKeywordResults] = useState([])
   const [selectedKeywords, setSelectedKeywords] = useState([])
   const autoResearchDone = useRef(false)
 
   // Step 2: AI 素材
-  const [adCopy, setAdCopy] = useState({ headlines: [], descriptions: [] })
+  const [adCopy, setAdCopy] = useState({ headlines: [], descriptions: [], thinking: '' })
   const [editHeadlines, setEditHeadlines] = useState([])
   const [editDescriptions, setEditDescriptions] = useState([])
 
@@ -118,7 +119,7 @@ export default function AdCreationWizard() {
 
   // Step 1: 手动关键词研究
   const handleKeywordResearch = async () => {
-    if (!keywordUrl && !seedKeywords) { message.warning('请输入网址或关键词'); return }
+    if (!keywordUrl && !seedKeywords && !semrushUrl) { message.warning('请输入网址、关键词或 SemRush 链接'); return }
     setLoading(true)
     try {
       const res = await api.post('/api/ad-creation/keyword-ideas', {
@@ -126,6 +127,7 @@ export default function AdCreationWizard() {
         customer_id: availableCid,
         url: keywordUrl || undefined,
         keywords: seedKeywords ? seedKeywords.split(',').map(s => s.trim()).filter(Boolean) : undefined,
+        semrush_url: semrushUrl || undefined,
       })
       setKeywordResults(res.data.keywords || [])
       const top10 = (res.data.keywords || []).slice(0, 10).map(k => k.keyword)
@@ -262,12 +264,32 @@ export default function AdCreationWizard() {
             <Space direction="vertical" style={{ width: '100%' }} size={16}>
               <Row gutter={16}>
                 <Col span={12}>
-                  <Input placeholder="商家网址" value={keywordUrl} onChange={e => setKeywordUrl(e.target.value)} />
+                  <Input placeholder="商家网址（如 https://www.trovata.com）" value={keywordUrl} onChange={e => setKeywordUrl(e.target.value)} />
                 </Col>
                 <Col span={12}>
                   <Input placeholder="种子关键词（逗号分隔）" value={seedKeywords} onChange={e => setSeedKeywords(e.target.value)} />
                 </Col>
               </Row>
+              <Collapse
+                ghost
+                items={[{
+                  key: 'semrush',
+                  label: <span><LinkOutlined /> 使用 SemRush 链接（高级）</span>,
+                  children: (
+                    <Space direction="vertical" style={{ width: '100%' }} size={8}>
+                      <Input
+                        placeholder="粘贴 SemRush 链接，如 https://sem.3ue.co/analytics/overview/?q=..."
+                        value={semrushUrl}
+                        onChange={e => setSemrushUrl(e.target.value)}
+                        allowClear
+                      />
+                      <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                        如果自动研究无结果，可将 SemRush 网页上的链接粘贴到这里，系统会自动解析并查询关键词
+                      </Typography.Text>
+                    </Space>
+                  ),
+                }]}
+              />
               <Button type="primary" icon={<SearchOutlined />} onClick={handleKeywordResearch}>研究关键词</Button>
               {keywordResults.length > 0 && (
                 <>
@@ -298,6 +320,27 @@ export default function AdCreationWizard() {
         {step === 2 && (
           <Card title="AI 广告素材">
             <Space direction="vertical" style={{ width: '100%' }} size={16}>
+              {adCopy.thinking && (
+                <Alert
+                  type="info"
+                  icon={<BulbOutlined />}
+                  showIcon
+                  message="AI 分析思路"
+                  description={
+                    <Typography.Paragraph style={{ margin: 0, whiteSpace: 'pre-wrap' }}>
+                      {adCopy.thinking}
+                    </Typography.Paragraph>
+                  }
+                  style={{ background: '#f0f5ff', border: '1px solid #adc6ff' }}
+                />
+              )}
+              <Alert
+                type="warning"
+                message="Google 政策提示"
+                description="以下文案已按照 Google Ads 政策生成：避免夸大宣传、误导性承诺、全大写文字和过度标点。请在编辑时继续遵守这些规则，以防止广告被拒绝。"
+                style={{ fontSize: 12 }}
+              />
+              <Divider style={{ margin: '4px 0' }} />
               <Typography.Text strong>标题（最多 15 个，每个 ≤ 30 字符）</Typography.Text>
               {editHeadlines.map((h, i) => (
                 <Input
