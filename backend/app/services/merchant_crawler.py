@@ -617,49 +617,86 @@ def _make_httpx_response(text: str, url: str, headers: dict = None) -> httpx.Res
 
 
 def _is_blocked_page(html: str) -> bool:
-    """检测是否是反爬/challenge 拦截页（Cloudflare 5s shield, CAPTCHA 等）"""
+    """检测是否是反爬/challenge 拦截页（Cloudflare 5s shield, CAPTCHA 等）
+
+    设计原则：
+    - 大页面（>50KB）且有结构化标签的几乎不可能是拦截页，直接放行
+    - 强信号（Cloudflare challenge 专属文本）只在小页面时才触发
+    - 弱信号（captcha/cloudflare/blocked 等）在正常网站中普遍存在，不应单独触发
+    """
     text_lower = html.lower()
-    block_signals = [
+    page_len = len(html)
+
+    has_main = "<main" in text_lower
+    has_article = "<article" in text_lower
+    has_product = re.search(r'class="[^"]*product', text_lower) is not None
+    has_img = text_lower.count("<img") >= 3
+
+    if page_len > 50000 and (has_main or has_article or has_product) and has_img:
+        return False
+
+    strong_signals = [
         "checking your browser",
         "just a moment",
         "enable javascript and cookies",
         "cf-browser-verification",
         "challenge-platform",
-        "attention required",
-        "access denied",
-        "ray id",
-        "cloudflare",
         "please verify you are a human",
-        "captcha",
-        "blocked",
-        "bot detection",
+        "please complete the security check",
         "are you a robot",
+        "cf-challenge-running",
     ]
-    hit = sum(1 for s in block_signals if s in text_lower)
-    return hit >= 2
+    strong_hits = sum(1 for s in strong_signals if s in text_lower)
+
+    if strong_hits >= 1 and page_len < 30000 and not has_main and not has_article:
+        return True
+
+    if strong_hits >= 2 and page_len < 80000:
+        return True
+
+    return False
 
 def _content_quality_score(html: str) -> int:
-    """检测 HTML 内容质量（0-3）。
-    大响应体（>80KB）几乎肯定是真实内容（SPA 也算），
-    只对小响应做严格检查。
+    """检测 HTML 内容质量（0-4）。
+    放宽标准以适应各类网站，包括 SPA、Shopify、WordPress 等。
     """
     if _is_blocked_page(html):
         return 0
 
     content_len = len(html)
     if content_len > 80000:
-        return 3
+        return 4
 
     text_lower = html.lower()
-    has_images = '<img' in text_lower
-    has_title = bool(re.search(r'<title>[^<]{3,}</title>', html, re.IGNORECASE))
-    has_body_content = bool(re.search(
+    score = 0
+
+    if '<img' in text_lower or 'data-src' in text_lower or 'srcset' in text_lower:
+        score += 1
+    if re.search(r'<title>[^<]{3,}</title>', html, re.IGNORECASE):
+        score += 1
+    if re.search(
         r'<(?:main|article|section|div[^>]*class="[^"]*(?:product|content|hero|shop|item|card|grid|page))',
         text_lower
-    ))
-    score = (1 if has_images else 0) + (1 if has_title else 0) + (1 if has_body_content else 0)
+    ):
+        score += 1
+
+    spa_signals = [
+        'id="app"', 'id="root"', 'id="__next"', 'id="__nuxt"',
+        'data-reactroot', 'ng-app', 'v-app',
+        '"application/json"', '__NEXT_DATA__', '__NUXT__',
+        'window.__INITIAL_STATE__', 'window.__PRELOADED_STATE__',
+    ]
+    if any(sig in html for sig in spa_signals):
+        score += 1
+
     if content_len > 30000 and score >= 1:
         score = max(score, 2)
+    if content_len > 50000:
+        score = max(score, 2)
+
+    if re.search(r'<(?:script|link)[^>]*(?:chunk|bundle|vendor|app\.[a-f0-9])', text_lower):
+        score = max(score, 2)
+
     return score
 
 
@@ -717,23 +754,65 @@ try:
         browser = p.chromium.launch(
             headless=True,
             args=["--disable-blink-features=AutomationControlled",
-                  "--no-sandbox", "--disable-dev-shm-usage"])
+                  "--no-sandbox", "--disable-dev-shm-usage",
+                  "--disable-web-security",
+                  "--disable-features=VizDisplayCompositor"])
         ctx = browser.new_context(
             user_agent=ua,
             viewport={"width": 1920, "height": 1080},
-            locale="en-US", timezone_id="America/New_York")
+            locale="en-US", timezone_id="America/New_York",
+            java_script_enabled=True,
+            bypass_csp=True)
         ctx.add_init_script("""
             Object.defineProperty(navigator,'webdriver',{get:()=>undefined});
             Object.defineProperty(navigator,'languages',{get:()=>['en-US','en']});
             Object.defineProperty(navigator,'plugins',{get:()=>[1,2,3,4,5]});
+            Object.defineProperty(navigator,'maxTouchPoints',{get:()=>0});
+            window.chrome = {runtime: {}};
+            const origQuery = window.navigator.permissions.query;
+            window.navigator.permissions.query = (params) =>
+                params.name === 'notifications'
+                    ? Promise.resolve({state: Notification.permission})
+                    : origQuery(params);
         """)
         page = ctx.new_page()
         page.goto(url, wait_until="domcontentloaded", timeout=timeout_s*1000)
-        time.sleep(random.uniform(2.0, 4.0))
+        time.sleep(random.uniform(1.5, 3.0))
+
+        # dismiss cookie/consent banners
+        consent_selectors = [
+            'button:has-text("Accept")', 'button:has-text("I agree")',
+            'button:has-text("Got it")', 'button:has-text("OK")',
+            'button:has-text("Accept All")', 'button:has-text("Accept Cookies")',
+            'button:has-text("Allow")', 'button:has-text("Agree")',
+            '[id*="accept"]', '[class*="accept"]',
+            '[id*="consent"] button', '[class*="consent"] button',
+            '[id*="cookie"] button', '[class*="cookie"] button',
+        ]
+        for sel in consent_selectors:
+            try:
+                btn = page.locator(sel).first
+                if btn.is_visible(timeout=500):
+                    btn.click(timeout=1000)
+                    time.sleep(0.3)
+                    break
+            except Exception:
+                pass
+
         try:
-            page.wait_for_selector("img, main, article, .product", timeout=8000)
+            page.wait_for_selector("img, main, article, .product, [class*='product'], [class*='hero']", timeout=8000)
         except Exception:
             pass
+
+        # scroll to trigger lazy-loaded images
+        for scroll_pct in [25, 50, 75, 100, 50]:
+            page.evaluate(f"window.scrollTo(0, document.body.scrollHeight * {scroll_pct} / 100)")
+            time.sleep(random.uniform(0.4, 0.8))
+
+        time.sleep(random.uniform(1.0, 2.0))
+        page.evaluate("window.scrollTo(0, 0)")
+        time.sleep(0.5)
+
         html = page.content()
         browser.close()
         sys.stdout.buffer.write(html.encode("utf-8"))
@@ -750,57 +829,135 @@ def _try_playwright(url: str, timeout: int = 30):
     """
     import subprocess as _sp
     import shutil
+    import tempfile
+    import os
 
     python_cmd = shutil.which("python3") or shutil.which("python")
     if not python_cmd:
         logger.debug("[MerchantCrawler] python3/python 不在 PATH 中，跳过 playwright")
         return None
 
+    # 写入临时脚本文件而非用 -c 参数，避免参数长度限制和转义问题
+    script_fd, script_path = tempfile.mkstemp(suffix=".py", prefix="pw_crawl_")
     try:
-        ua = _random.choice(_FALLBACK_UAS)
+        os.write(script_fd, _PLAYWRIGHT_SCRIPT.encode("utf-8"))
+        os.close(script_fd)
+
+        desktop_uas = [ua for ua in _FALLBACK_UAS if "Mobile" not in ua and "iPhone" not in ua]
+        ua = _random.choice(desktop_uas) if desktop_uas else _FALLBACK_UAS[0]
         proc = _sp.run(
-            [python_cmd, "-c", _PLAYWRIGHT_SCRIPT, url, str(timeout), ua],
-            capture_output=True, timeout=timeout + 20,
+            [python_cmd, script_path, url, str(timeout), ua],
+            capture_output=True, timeout=timeout + 30,
         )
         html = proc.stdout.decode("utf-8", errors="replace")
 
         if proc.returncode != 0:
-            err_msg = proc.stderr.decode("utf-8", errors="replace")[:200]
+            err_msg = proc.stderr.decode("utf-8", errors="replace")[:500]
             logger.warning("[MerchantCrawler] playwright 子进程失败: %s", err_msg)
+            if "playwright" in err_msg.lower() and "install" in err_msg.lower():
+                logger.error("[MerchantCrawler] Playwright 浏览器未安装！请在服务器执行: playwright install chromium")
             return None
 
-        if html and len(html) > 1000:
+        if html and len(html) > 500:
             score = _content_quality_score(html)
-            logger.info("[MerchantCrawler] playwright 成功! %d bytes, quality=%d",
-                        len(html), score)
-            return _make_httpx_response(html, url)
+            if score >= 1 or len(html) > 5000:
+                logger.info("[MerchantCrawler] playwright 成功! %d bytes, quality=%d",
+                            len(html), score)
+                return _make_httpx_response(html, url)
         logger.info("[MerchantCrawler] playwright 返回内容过短 (%d bytes)", len(html))
     except _sp.TimeoutExpired:
         logger.warning("[MerchantCrawler] playwright 超时 (%ds)", timeout)
     except Exception as e:
         logger.warning("[MerchantCrawler] playwright 失败: %s", e)
+    finally:
+        try:
+            os.unlink(script_path)
+        except OSError:
+            pass
 
+    return None
+
+
+def _detect_site_difficulty(url: str, html: str = "") -> str:
+    """根据 URL 和初次响应快速判断站点爬取难度。
+    返回: 'easy', 'medium', 'hard'
+    """
+    url_lower = url.lower()
+    hard_platforms = [
+        "shopify.com", "myshopify.com", "squarespace.com",
+        "wix.com", "webflow.io",
+    ]
+    if any(p in url_lower for p in hard_platforms):
+        return "medium"
+
+    if html:
+        html_lower = html.lower()
+        if "cf-ray" in html_lower and len(html) < 5000:
+            return "hard"
+        spa_hints = ['id="app"', 'id="root"', 'id="__next"', '__NEXT_DATA__', 'data-reactroot']
+        if any(h in html for h in spa_hints) and '<img' not in html_lower:
+            return "hard"
+
+    return "easy"
+
+
+def _try_google_cache(url: str, timeout: int = 15):
+    """尝试从 Google 缓存获取页面内容"""
+    from urllib.parse import quote
+    cache_urls = [
+        f"https://webcache.googleusercontent.com/search?q=cache:{quote(url)}",
+        f"https://web.archive.org/web/2024/{url}",
+    ]
+    for cache_url in cache_urls:
+        try:
+            headers = _build_stealth_headers(cache_url)
+            with httpx.Client(timeout=timeout, follow_redirects=True, headers=headers) as client:
+                resp = client.get(cache_url)
+                if resp.status_code == 200 and len(resp.text) > 3000:
+                    if not _is_blocked_page(resp.text):
+                        logger.info("[MerchantCrawler] Google/Archive 缓存命中! %d bytes", len(resp.text))
+                        return _make_httpx_response(resp.text, url)
+        except Exception as e:
+            logger.debug("[MerchantCrawler] 缓存获取失败 %s: %s", cache_url[:60], e)
     return None
 
 
 def _fetch_with_retry(client_headers: Dict, url: str, timeout: int = 20) -> httpx.Response:
     """
-    多级反爬回退请求策略：
+    多级反爬回退请求策略（智能版）：
       Level 0: httpx + 隐身 headers（快速，大部分网站可过）
       Level 1: curl_cffi + TLS 指纹伪装（绕过 TLS/JA3 检测）
       Level 2: cloudscraper（绕过旧版 Cloudflare）
       Level 3: Playwright 无头浏览器（最终手段）
+      Level 4: Google Cache / Wayback Machine（应急）
+
+    智能优化：
+      - 首次请求快速判断站点难度
+      - 难站点跳过中间层直接用 Playwright
+      - 保留所有获得的最佳结果作为兜底
     """
+    best_resp = None
+    best_score = -1
+
+    def _update_best(resp):
+        nonlocal best_resp, best_score
+        if resp and hasattr(resp, 'text'):
+            s = _content_quality_score(resp.text)
+            if s > best_score:
+                best_score = s
+                best_resp = resp
 
     # ── Level 0: httpx stealth ──
     ua_pool = list(_FALLBACK_UAS)
     _random.shuffle(ua_pool)
     attempts_uas = [client_headers.get("User-Agent", ua_pool[0])] + ua_pool[:2]
 
-    last_resp = None
+    difficulty = "easy"
+    got_403 = False
+
     for i, ua in enumerate(attempts_uas):
         if i > 0:
-            _time.sleep(_random.uniform(0.8, 1.5))
+            _time.sleep(_random.uniform(0.5, 1.0))
 
         headers = _build_stealth_headers(url, ua)
         try:
@@ -812,19 +969,26 @@ def _fetch_with_retry(client_headers: Dict, url: str, timeout: int = 20) -> http
             ) as client:
                 resp = client.get(url)
                 if resp.status_code == 403:
-                    last_resp = resp
+                    got_403 = True
+                    _update_best(resp)
                     continue
                 resp.raise_for_status()
                 score = _content_quality_score(resp.text)
+                _update_best(resp)
                 if score >= 2:
                     return resp
-                logger.info("[MerchantCrawler] httpx 内容质量低 (score=%d, %d bytes)，升级方案",
+
+                difficulty = _detect_site_difficulty(url, resp.text)
+                if difficulty == "hard":
+                    logger.info("[MerchantCrawler] 检测到困难站点，跳至 Playwright")
+                    break
+                logger.info("[MerchantCrawler] httpx 质量低 (score=%d, %d bytes)，升级",
                             score, len(resp.text))
-                last_resp = resp
                 break
         except httpx.HTTPStatusError as e:
             if e.response and e.response.status_code == 403:
-                last_resp = e.response
+                got_403 = True
+                _update_best(e.response)
                 continue
             raise
         except Exception:
@@ -832,36 +996,61 @@ def _fetch_with_retry(client_headers: Dict, url: str, timeout: int = 20) -> http
                 continue
             break
 
-    logger.info("[MerchantCrawler] httpx 方案未通过，尝试 curl_cffi (Level 1)...")
+    # 403 几乎肯定是反爬检测，标记为困难
+    if got_403:
+        difficulty = "hard"
 
-    # ── Level 1: curl_cffi ──
-    result = _try_curl_cffi(url, timeout)
+    # 困难站点：跳过 Level 1-2，直接用 Playwright
+    if difficulty == "hard":
+        logger.info("[MerchantCrawler] 困难站点，直接尝试 Playwright (Level 3)...")
+        result = _try_playwright(url, timeout + 15)
+        if result is not None:
+            return result
+        # Playwright 也失败，再尝试 curl_cffi 和 cloudscraper
+        logger.info("[MerchantCrawler] Playwright 失败，回退到 curl_cffi...")
+        result = _try_curl_cffi(url, timeout)
+        if result is not None:
+            return result
+        result = _try_cloudscraper(url, timeout)
+        if result is not None:
+            return result
+    else:
+        # 普通站点：按顺序尝试
+        logger.info("[MerchantCrawler] 尝试 curl_cffi (Level 1)...")
+        result = _try_curl_cffi(url, timeout)
+        if result is not None:
+            return result
+
+        logger.info("[MerchantCrawler] 尝试 cloudscraper (Level 2)...")
+        result = _try_cloudscraper(url, timeout)
+        if result is not None:
+            return result
+
+        logger.info("[MerchantCrawler] 尝试 Playwright (Level 3)...")
+        result = _try_playwright(url, timeout + 10)
+        if result is not None:
+            return result
+
+    # ── Level 4: Google Cache / Wayback Machine ──
+    logger.info("[MerchantCrawler] 所有直接方案失败，尝试 Google Cache (Level 4)...")
+    result = _try_google_cache(url, timeout)
     if result is not None:
         return result
 
-    logger.info("[MerchantCrawler] curl_cffi 未通过，尝试 cloudscraper (Level 2)...")
+    # 全部失败：返回最佳低质量结果而非抛出异常
+    if best_resp is not None and best_score >= 1:
+        logger.warning("[MerchantCrawler] 所有方案失败，使用最佳低质量结果 (score=%d, %d bytes)",
+                       best_score, len(getattr(best_resp, 'text', '')))
+        return best_resp
 
-    # ── Level 2: cloudscraper ──
-    result = _try_cloudscraper(url, timeout)
-    if result is not None:
-        return result
+    if best_resp is not None and hasattr(best_resp, 'text') and len(best_resp.text) > 2000:
+        logger.warning("[MerchantCrawler] 使用低分但有内容的结果 (%d bytes)", len(best_resp.text))
+        return best_resp
 
-    logger.info("[MerchantCrawler] cloudscraper 未通过，尝试 Playwright (Level 3)...")
+    if best_resp is not None:
+        best_resp.raise_for_status()
 
-    # ── Level 3: Playwright ──
-    result = _try_playwright(url, timeout + 10)
-    if result is not None:
-        return result
-
-    # 全部失败：返回最后一个有内容的响应，或抛出异常
-    if last_resp is not None:
-        score = _content_quality_score(last_resp.text) if hasattr(last_resp, 'text') else 0
-        if score >= 1 and len(getattr(last_resp, 'text', '')) > 2000:
-            logger.warning("[MerchantCrawler] 所有高级方案均失败，使用最佳低质量结果")
-            return last_resp
-        last_resp.raise_for_status()
-
-    raise httpx.HTTPStatusError("403 Forbidden", request=httpx.Request("GET", url), response=last_resp)
+    raise httpx.HTTPStatusError("403 Forbidden", request=httpx.Request("GET", url), response=best_resp)
 
 
 def _try_cloudscraper(url: str, timeout: int = 25):
@@ -920,7 +1109,7 @@ def _try_cloudscraper(url: str, timeout: int = 25):
 def crawl(url: str) -> Dict:
     """
     爬取商家网站。返回结构化数据。
-    爬取失败时返回 crawl_failed=True。
+    改进：即使爬取质量不高，也尽量返回有价值的数据而非直接失败。
     """
     try:
         url = _validate_url(url)
@@ -939,21 +1128,38 @@ def crawl(url: str) -> Dict:
                 seen.add(img)
         return len(seen)
 
+    def _extract_brand_from_url(target_url: str) -> str:
+        """从 URL 提取品牌名作为兜底"""
+        parsed = urlparse(target_url)
+        hostname = parsed.hostname or ""
+        name = hostname.replace("www.", "").split(".")[0]
+        return name.title() if name else ""
+
+    blocked_titles = {"just a moment...", "just a moment", "attention required",
+                      "access denied", "you have been blocked", "security check"}
+
     try:
         resp = _fetch_with_retry(HEADERS, url)
         home_html = resp.text
 
-        if _is_blocked_page(home_html):
-            logger.warning("[MerchantCrawler] 首页被反爬拦截 (Cloudflare/CAPTCHA): %s", url)
-            return {"crawl_failed": True, "error": "商家网站触发了反爬保护 (Cloudflare)，无法获取内容。请手动输入商家信息。", "url": url}
+        is_blocked = _is_blocked_page(home_html)
 
         home_data = _extract_page(home_html, url)
         pages.append(home_data)
         brand_name = home_data["og_site_name"] or home_data["title"].split("|")[0].split("-")[0].strip()
 
-        if brand_name.lower() in ("just a moment...", "just a moment", "attention required", "access denied"):
-            logger.warning("[MerchantCrawler] 品牌名为反爬标记 '%s': %s", brand_name, url)
-            return {"crawl_failed": True, "error": "商家网站触发了反爬保护，获取到的是挑战页面。请手动输入商家信息。", "url": url}
+        if brand_name.lower() in blocked_titles:
+            brand_name = _extract_brand_from_url(url)
+
+        if is_blocked and not home_data["images"] and len(home_data["text"]) < 200:
+            logger.warning("[MerchantCrawler] 首页被反爬拦截: %s", url)
+            return {
+                "crawl_failed": True,
+                "partial": True,
+                "error": "商家网站触发了反爬保护，无法获取完整内容。AI 将根据 URL 自动生成标题和关键词。",
+                "url": url,
+                "brand_name": brand_name or _extract_brand_from_url(url),
+            }
 
         home_img_count = _count_unique_images(pages)
         if home_img_count >= MIN_GOOD_IMAGES:
@@ -963,34 +1169,53 @@ def crawl(url: str) -> Dict:
             home_soup = BeautifulSoup(home_html, "lxml")
             sub_urls = _find_sub_pages(home_soup, url)
 
-            for sub_url in sub_urls[:5]:
+            max_sub = 8 if home_img_count < 5 else 5
+            for sub_url in sub_urls[:max_sub]:
                 if _count_unique_images(pages) >= MIN_GOOD_IMAGES:
                     logger.info("[MerchantCrawler] 已达 %d 张图片，停止爬取子页面",
                                 _count_unique_images(pages))
                     break
                 try:
-                    _time.sleep(_random.uniform(2.0, 4.0))
-                    resp = _fetch_with_retry(HEADERS, sub_url, timeout=12)
+                    _time.sleep(_random.uniform(1.0, 2.5))
+                    resp = _fetch_with_retry(HEADERS, sub_url, timeout=15)
                     sub_data = _extract_page(resp.text, sub_url)
                     pages.append(sub_data)
                 except Exception as e:
-                    logger.warning(f"[MerchantCrawler] 子页面爬取失败 {sub_url}: {e}")
+                    logger.warning("[MerchantCrawler] 子页面爬取失败 %s: %s", sub_url, e)
 
     except httpx.TimeoutException:
-        logger.error(f"[MerchantCrawler] 爬取超时 {url}")
-        return {"crawl_failed": True, "error": f"商家网站访问超时，该网站可能较慢或服务器无法访问", "url": url}
+        logger.error("[MerchantCrawler] 爬取超时 %s", url)
+        if pages:
+            logger.info("[MerchantCrawler] 超时但已有 %d 页数据，返回部分结果", len(pages))
+        else:
+            return {"crawl_failed": True, "error": "商家网站访问超时，该网站可能较慢或服务器无法访问",
+                    "url": url, "brand_name": _extract_brand_from_url(url)}
     except httpx.HTTPStatusError as e:
         status = e.response.status_code if e.response else 0
-        logger.error(f"[MerchantCrawler] HTTP {status} {url}: {e}")
-        if status == 403:
-            return {"crawl_failed": True, "error": f"商家网站拒绝访问 (403)，该网站有反爬保护。可尝试手动输入商家信息。", "url": url}
-        return {"crawl_failed": True, "error": f"商家网站返回 HTTP {status} 错误", "url": url}
+        logger.error("[MerchantCrawler] HTTP %d %s: %s", status, url, e)
+        if pages:
+            logger.info("[MerchantCrawler] HTTP错误但已有 %d 页数据，返回部分结果", len(pages))
+        else:
+            if status == 403:
+                return {"crawl_failed": True, "partial": True,
+                        "error": "商家网站拒绝访问 (403)，AI 将根据 URL 自动生成标题和关键词。",
+                        "url": url, "brand_name": _extract_brand_from_url(url)}
+            return {"crawl_failed": True, "error": f"商家网站返回 HTTP {status} 错误",
+                    "url": url, "brand_name": _extract_brand_from_url(url)}
     except httpx.ConnectError:
-        logger.error(f"[MerchantCrawler] 连接失败 {url}")
-        return {"crawl_failed": True, "error": f"无法连接到商家网站，请检查网址是否正确", "url": url}
+        logger.error("[MerchantCrawler] 连接失败 %s", url)
+        return {"crawl_failed": True, "error": "无法连接到商家网站，请检查网址是否正确",
+                "url": url, "brand_name": _extract_brand_from_url(url)}
     except Exception as e:
-        logger.error(f"[MerchantCrawler] 爬取失败 {url}: {e}")
-        return {"crawl_failed": True, "error": str(e), "url": url}
+        logger.error("[MerchantCrawler] 爬取失败 %s: %s", url, e)
+        if pages:
+            logger.info("[MerchantCrawler] 异常但已有 %d 页数据，返回部分结果", len(pages))
+        else:
+            return {"crawl_failed": True, "error": str(e),
+                    "url": url, "brand_name": _extract_brand_from_url(url)}
+
+    if not brand_name:
+        brand_name = _extract_brand_from_url(url)
 
     raw_text = "\n\n".join(
         f"[{p['title']}]\n{p['text']}" for p in pages
