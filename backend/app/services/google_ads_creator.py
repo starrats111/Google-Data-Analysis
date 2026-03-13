@@ -56,8 +56,10 @@ class GoogleAdsCreator:
         cid = customer_id.replace("-", "")
 
         # 幂等性检查：同名广告系列是否已存在
-        date_str = datetime.now().strftime("%Y%m%d")
-        campaign_name = f"{merchant_name}_{mode}_{date_str}"
+        date_str = datetime.now().strftime("%m%d")
+        cid_suffix = cid[-6:] if len(cid) >= 6 else cid
+        mode_tag = "T" if mode == "test" else "F"
+        campaign_name = f"{cid_suffix}-{merchant_name}-{target_country}-{date_str}-{mode_tag}"
         existing = self._check_existing_campaign(client, cid, campaign_name)
         if existing:
             return {
@@ -164,7 +166,7 @@ class GoogleAdsCreator:
         campaign = campaign_op.campaign_operation.create
         campaign.name = campaign_name
         campaign.advertising_channel_type = client.enums.AdvertisingChannelTypeEnum.SEARCH
-        campaign.status = client.enums.CampaignStatusEnum.PAUSED
+        campaign.status = client.enums.CampaignStatusEnum.ENABLED
         campaign.campaign_budget = client.get_service("CampaignBudgetService").campaign_budget_path(
             customer_id, str(BUDGET_TEMP_ID)
         )
