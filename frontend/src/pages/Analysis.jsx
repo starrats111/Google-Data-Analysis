@@ -736,12 +736,27 @@ G) 综述
       'L7D花费': 90, 'L7D出单天数': 90, '当前Max CPC': 110,
       'IS Budget丢失': 110, 'IS Rank丢失': 110, '保守EPC': 80, 'ROI': 80, 'MID': 100,
     }
+    const NUM_SORT_KEYS = ['预算', 'L7D点击', 'L7D佣金', 'L7D花费', 'L7D出单天数', '当前Max CPC', '保守EPC', 'MID']
+    const parseNum = (v) => { const n = parseFloat(v); return Number.isNaN(n) ? -Infinity : n }
+
     return DETAIL_KEYS.map(key => {
       const col = { title: key, dataIndex: key, key, width: WIDTH_MAP[key], ellipsis: true }
+
+      if (NUM_SORT_KEYS.includes(key)) {
+        col.sorter = (a, b) => parseNum(a[key]) - parseNum(b[key])
+      }
+      if (key === 'ROI') {
+        col.sorter = (a, b) => {
+          const va = a[key] === '-' || a[key] === null || a[key] === undefined ? -Infinity : parseFloat(a[key])
+          const vb = b[key] === '-' || b[key] === null || b[key] === undefined ? -Infinity : parseFloat(b[key])
+          return (Number.isNaN(va) ? -Infinity : va) - (Number.isNaN(vb) ? -Infinity : vb)
+        }
+      }
 
       if (key === '广告系列名') {
         col.fixed = 'left'
         col.ellipsis = false
+        col.sorter = (a, b) => String(a[key] || '').localeCompare(String(b[key] || ''))
         col.render = (text) => {
           const isTest = text && String(text).includes('_test_')
           return text ? (

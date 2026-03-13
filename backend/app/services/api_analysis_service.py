@@ -778,9 +778,9 @@ class ApiAnalysisService:
                     AffiliateTransaction.user_id == uid,
                     AffiliateTransaction.merchant_id.isnot(None),  # 只查有 MID 的
                     AffiliateTransaction.merchant_id != 'None',
-                    # ✅ 修复：使用 CAST 确保日期查询一致性
-                    cast(AffiliateTransaction.transaction_time, Date) >= begin_date,
-                    cast(AffiliateTransaction.transaction_time, Date) <= end_date,
+                    # ✅ 修复：使用 func.date() 替代 cast(Date)，SQLite CAST AS DATE 仅返回年份
+                    func.date(AffiliateTransaction.transaction_time) >= begin_date.isoformat(),
+                    func.date(AffiliateTransaction.transaction_time) <= end_date.isoformat(),
                     # ✅ 修复：只查活跃账号的交易（移除了错误的 OR 逻辑）
                     AffiliateAccount.is_active == True
                 ).group_by(
