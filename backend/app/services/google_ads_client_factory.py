@@ -25,7 +25,7 @@ def create_google_ads_client(mcc_account: GoogleMccAccount) -> Tuple:
     except ImportError:
         raise ImportError("Google Ads API 库未安装，请执行: pip install google-ads")
 
-    developer_token = getattr(settings, "GOOGLE_ADS_SHARED_DEVELOPER_TOKEN", "") or ""
+    developer_token = settings.google_ads_shared_developer_token or ""
     if not developer_token:
         raise ValueError("缺少开发者令牌（GOOGLE_ADS_SHARED_DEVELOPER_TOKEN）")
 
@@ -47,7 +47,7 @@ def create_google_ads_client(mcc_account: GoogleMccAccount) -> Tuple:
             return client, mcc_customer_id
 
     # 2. 全局 service account
-    global_sa = getattr(settings, "GOOGLE_ADS_SERVICE_ACCOUNT_JSON", "") or ""
+    global_sa = settings.google_ads_service_account_json or ""
     if global_sa:
         creds = _parse_sa_json(global_sa)
         if creds:
