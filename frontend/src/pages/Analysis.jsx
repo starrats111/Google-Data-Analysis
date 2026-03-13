@@ -72,7 +72,7 @@ const Analysis = () => {
   // 详情弹窗状态
   const [detailModalOpen, setDetailModalOpen] = useState(false)
   const [detailRecord, setDetailRecord] = useState(null)
-  const [roiFilter, setRoiFilter] = useState('all')
+  const [roiSort, setRoiSort] = useState('default')
 
   // 打开单行部署弹窗
   const handleSingleDeploy = (row) => {
@@ -1431,51 +1431,52 @@ G) 综述
       <Modal
         title={detailRecord ? `${detailRecord.username || user?.username || ''} - ${String(detailRecord.analysis_date || '').slice(0, 10)}` : '详情'}
         open={detailModalOpen}
-        onCancel={() => { setDetailModalOpen(false); setDetailRecord(null); setRoiFilter('all') }}
+        onCancel={() => { setDetailModalOpen(false); setDetailRecord(null); setRoiSort('default') }}
         footer={null}
         width="90vw"
         destroyOnClose
       >
         {detailRecord && (() => {
-          const allDetailData = processDetailData(detailRecord)
-          if (allDetailData.length === 0) return <Text type="secondary">暂无数据</Text>
-          const detailData = roiFilter === 'all' ? allDetailData : allDetailData.filter(row => {
-            const roi = row['ROI']
-            if (roi === '-' || roi === null || roi === undefined || roi === '') {
-              return roiFilter === 'none'
-            }
-            const v = parseFloat(roi)
-            if (isNaN(v)) return roiFilter === 'none'
-            switch (roiFilter) {
-              case 'negative': return v < 0
-              case 'low': return v >= 0 && v < 1.0
-              case 'mid': return v >= 1.0 && v < 3.0
-              case 'high': return v >= 3.0
-              case 'none': return false
-              default: return true
-            }
-          })
+          const rawDetailData = processDetailData(detailRecord)
+          if (rawDetailData.length === 0) return <Text type="secondary">暂无数据</Text>
+
+          const parseRoi = (row) => {
+            const v = row['ROI']
+            if (v === '-' || v === null || v === undefined || v === '') return -Infinity
+            const n = parseFloat(v)
+            return isNaN(n) ? -Infinity : n
+          }
+          let detailData = rawDetailData
+          if (roiSort === 'roi_desc') {
+            detailData = [...rawDetailData].sort((a, b) => parseRoi(b) - parseRoi(a))
+          } else if (roiSort === 'roi_asc') {
+            detailData = [...rawDetailData].sort((a, b) => parseRoi(a) - parseRoi(b))
+          } else if (roiSort === 'name_asc') {
+            detailData = [...rawDetailData].sort((a, b) => String(a['广告系列名'] || '').localeCompare(String(b['广告系列名'] || '')))
+          } else if (roiSort === 'name_desc') {
+            detailData = [...rawDetailData].sort((a, b) => String(b['广告系列名'] || '').localeCompare(String(a['广告系列名'] || '')))
+          }
+
           const detailCols = buildDetailColumns(detailRecord.analysis_date, detailRecord.result_data)
           return (
             <>
               <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12, flexWrap: 'wrap' }}>
-                <Text type="secondary" style={{ fontSize: 13 }}>ROI筛选：</Text>
+                <Text type="secondary" style={{ fontSize: 13 }}>排序：</Text>
                 <Select
-                  value={roiFilter}
-                  onChange={setRoiFilter}
-                  style={{ width: 180 }}
+                  value={roiSort}
+                  onChange={setRoiSort}
+                  style={{ width: 220 }}
                   size="small"
                   options={[
-                    { label: `全部（${allDetailData.length}条）`, value: 'all' },
-                    { label: 'ROI < 0（亏损）', value: 'negative' },
-                    { label: '0 ≤ ROI < 1（待优化）', value: 'low' },
-                    { label: '1 ≤ ROI < 3（一般）', value: 'mid' },
-                    { label: 'ROI ≥ 3（优秀）', value: 'high' },
-                    { label: '无ROI数据', value: 'none' },
+                    { label: '默认（按状态排序）', value: 'default' },
+                    { label: 'ROI 从高到低', value: 'roi_desc' },
+                    { label: 'ROI 从低到高', value: 'roi_asc' },
+                    { label: '广告系列名 A→Z', value: 'name_asc' },
+                    { label: '广告系列名 Z→A', value: 'name_desc' },
                   ]}
                 />
                 <Text type="secondary" style={{ fontSize: 12 }}>
-                  筛选后 {detailData.length} 条
+                  共 {detailData.length} 条
                 </Text>
               </div>
               <Table
