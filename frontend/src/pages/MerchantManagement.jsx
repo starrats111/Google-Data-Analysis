@@ -24,7 +24,7 @@ import {
   Alert,
   Popover,
 } from 'antd'
-import { ReloadOutlined, SearchOutlined, UserSwitchOutlined, SyncOutlined, CheckCircleOutlined, CloudSyncOutlined, UploadOutlined, WarningOutlined, InboxOutlined, ThunderboltOutlined } from '@ant-design/icons'
+import { ReloadOutlined, SearchOutlined, UserSwitchOutlined, SyncOutlined, CheckCircleOutlined, CloudSyncOutlined, UploadOutlined, WarningOutlined, InboxOutlined, ThunderboltOutlined, SettingOutlined } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
 import api from '../services/api'
 import { useAuth } from '../store/authStore'
@@ -713,41 +713,15 @@ const MerchantManagement = () => {
     },
     {
       title: '在投人数',
-      dataIndex: 'assigned_users',
+      dataIndex: 'active_advertiser_count',
       key: 'in_tou_count',
       width: 100,
       align: 'center',
-      sorter: (a, b) => {
-        const ca = (a.assigned_users || []).filter(u => u.google_campaign_id).length
-        const cb = (b.assigned_users || []).filter(u => u.google_campaign_id).length
-        return ca - cb
-      },
-      render: (assignedUsers) => {
-        if (!assignedUsers?.length) return <Tag>0</Tag>
-        const activeUsers = assignedUsers.filter(u => u.google_campaign_id)
-        const count = activeUsers.length
-        if (count === 0) return <Tag>0</Tag>
-        return (
-          <Popover
-            title="在投广告主"
-            trigger="click"
-            content={
-              <div style={{ minWidth: 200 }}>
-                {activeUsers.map(u => (
-                  <div key={u.assignment_id} style={{ padding: '4px 0', borderBottom: '1px solid #f0f0f0' }}>
-                    <div style={{ fontWeight: 500 }}>{u.display_name || u.username || `用户${u.user_id}`}</div>
-                    <div style={{ fontSize: 12, color: '#888' }}>
-                      日预算: ${u.daily_budget != null ? u.daily_budget.toFixed(2) : '-'}
-                      {u.mode === 'test' && <Tag color="orange" style={{ marginLeft: 6, fontSize: 10 }}>测试</Tag>}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            }
-          >
-            <a style={{ color: '#1890ff', cursor: 'pointer' }}>{count}</a>
-          </Popover>
-        )
+      sorter: (a, b) => (a.active_advertiser_count || 0) - (b.active_advertiser_count || 0),
+      render: (count) => {
+        const n = count || 0
+        if (n === 0) return <Tag>0</Tag>
+        return <Tag color="blue">{n}</Tag>
       },
     },
     {
@@ -843,6 +817,20 @@ const MerchantManagement = () => {
   const [claimRecord, setClaimRecord] = useState(null)
   const [claimCountry, setClaimCountry] = useState('US')
   const [claimMode, setClaimMode] = useState('test')
+  const [claimLoading, setClaimLoading] = useState(false)
+
+  // 广告默认设置
+  const [adDefaultsModalOpen, setAdDefaultsModalOpen] = useState(false)
+  const [adDefaults, setAdDefaults] = useState({
+    bidding_strategy: 'MANUAL_CPC',
+    enhanced_cpc: false,
+    target_google_search: true,
+    target_search_network: false,
+    target_content_network: false,
+    default_cpc_bid: 1.0,
+    default_daily_budget: 10,
+  })
+  const [adDefaultsForm] = Form.useForm()
 
   const CLAIM_COUNTRIES = [
     { value: 'US', label: '美国 (English)' },
@@ -855,6 +843,27 @@ const MerchantManagement = () => {
     { value: 'BR', label: '巴西 (Portuguese)' },
   ]
 
+  const loadAdDefaults = async () => {
+    try {
+      const res = await api.get('/api/merchants/ad-defaults')
+      setAdDefaults(res.data)
+      adDefaultsForm.setFieldsValue(res.data)
+    } catch {}
+  }
+
+  const saveAdDefaults = async () => {
+    try {
+      const values = await adDefaultsForm.validateFields()
+      await api.put('/api/merchants/ad-defaults', values)
+      setAdDefaults(values)
+      setAdDefaultsModalOpen(false)
+      message.success('广告默认设置已保存')
+    } catch (err) {
+      if (err?.errorFields) return
+      message.error('保存失败')
+    }
+  }
+
   const openClaimModal = (record) => {
     setClaimRecord(record)
     setClaimCountry('US')
@@ -864,6 +873,7 @@ const MerchantManagement = () => {
 
   const handleClaimConfirm = async () => {
     if (!claimRecord) return
+    setClaimLoading(true)
     try {
       const res = await api.post('/api/merchant-assignments/claim', {
         merchant_ids: [claimRecord.id],
@@ -875,6 +885,7 @@ const MerchantManagement = () => {
         message.success(`已领取商家: ${claimRecord.merchant_name}`)
         setClaimModalOpen(false)
         fetchMerchants(merchantPage, merchantPageSize)
+        fetchAssignments(assignmentPage, assignmentPageSize)
         const assignment = created[0]
         Modal.confirm({
           title: '领取成功',
@@ -890,12 +901,15 @@ const MerchantManagement = () => {
           },
         })
       } else {
-        message.info(res.data?.message || '商家已领取')
+        message.info(res.data?.message || '该商家你已经领取过了')
         setClaimModalOpen(false)
-        fetchMerchants(merchantPage, merchantPageSize)
       }
     } catch (err) {
-      message.error('领取失败: ' + (err?.response?.data?.detail || err.message))
+      console.error('Claim error:', err)
+      const detail = err?.response?.data?.detail || err?.message || '未知错误'
+      message.error(`领取失败: ${detail}`)
+    } finally {
+      setClaimLoading(false)
     }
   }
 
@@ -1100,6 +1114,9 @@ const MerchantManagement = () => {
                     <Button loading={midRepairLoading} onClick={handleMidRepair}>补齐MID</Button>
                     {isManager && (
                       <Button icon={<CloudSyncOutlined />} loading={platformSyncLoading} onClick={handlePlatformSync}>平台同步</Button>
+                    )}
+                    {canManage && (
+                      <Button icon={<SettingOutlined />} onClick={() => { loadAdDefaults(); setAdDefaultsModalOpen(true) }}>广告设置</Button>
                     )}
                     {canManage && (
                       <Button
@@ -1803,9 +1820,10 @@ const MerchantManagement = () => {
         title={`领取商家: ${claimRecord?.merchant_name || ''}`}
         open={claimModalOpen}
         onOk={handleClaimConfirm}
-        onCancel={() => setClaimModalOpen(false)}
+        onCancel={() => { if (!claimLoading) setClaimModalOpen(false) }}
         okText="确认领取"
         cancelText="取消"
+        confirmLoading={claimLoading}
       >
         <Space direction="vertical" style={{ width: '100%' }} size={16}>
           <div>
@@ -1830,6 +1848,61 @@ const MerchantManagement = () => {
             />
           </div>
         </Space>
+      </Modal>
+
+      {/* 广告默认设置 Modal */}
+      <Modal
+        title="广告创建默认设置"
+        open={adDefaultsModalOpen}
+        onOk={saveAdDefaults}
+        onCancel={() => setAdDefaultsModalOpen(false)}
+        okText="保存"
+        cancelText="取消"
+        width={520}
+      >
+        <Form form={adDefaultsForm} layout="vertical" initialValues={adDefaults}>
+          <Form.Item name="bidding_strategy" label="出价策略">
+            <Select options={[
+              { value: 'MANUAL_CPC', label: '手动 CPC（Manual CPC）' },
+              { value: 'MAXIMIZE_CLICKS', label: '尽可能多获得点击（Maximize Clicks）' },
+            ]} />
+          </Form.Item>
+          <Form.Item name="enhanced_cpc" label="智能点击付费（eCPC）" valuePropName="checked"
+            extra="启用后 Google 会自动调整出价以提高转化率"
+          >
+            <Select options={[
+              { value: false, label: '关闭' },
+              { value: true, label: '开启' },
+            ]} />
+          </Form.Item>
+          <Form.Item name="default_cpc_bid" label="默认 CPC 出价 (USD)">
+            <InputNumber min={0.01} max={100} step={0.1} precision={2} style={{ width: '100%' }} />
+          </Form.Item>
+          <Form.Item name="default_daily_budget" label="默认日预算 (USD)">
+            <InputNumber min={1} max={10000} step={1} precision={0} style={{ width: '100%' }} />
+          </Form.Item>
+          <Alert
+            type="info"
+            message="网络投放设置"
+            description="以下设置决定广告在哪些 Google 网络上展示"
+            style={{ marginBottom: 12, fontSize: 12 }}
+          />
+          <Form.Item name="target_google_search" label="Google 搜索" valuePropName="checked"
+            extra="在 Google 搜索结果中展示广告"
+          >
+            <Select options={[{ value: true, label: '开启' }, { value: false, label: '关闭' }]} />
+          </Form.Item>
+          <Form.Item name="target_search_network" label="搜索合作伙伴网络" valuePropName="checked"
+            extra="在 Google 搜索合作伙伴网站上展示广告"
+          >
+            <Select options={[{ value: true, label: '开启' }, { value: false, label: '关闭' }]} />
+          </Form.Item>
+          <Form.Item name="target_content_network" label="展示广告网络" valuePropName="checked"
+            extra="在 Google 展示广告网络上展示广告（通常不建议搜索广告开启）"
+          >
+            <Select options={[{ value: true, label: '开启' }, { value: false, label: '关闭' }]} />
+          </Form.Item>
+        </Form>
       </Modal>
     </div>
   )
