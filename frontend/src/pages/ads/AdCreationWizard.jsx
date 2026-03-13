@@ -3,6 +3,7 @@ import { Steps, Card, Button, Space, Table, Input, InputNumber, Select, message,
 import { ThunderboltOutlined, SearchOutlined, RocketOutlined, LinkOutlined, BulbOutlined, LoadingOutlined, CheckCircleOutlined, GlobalOutlined } from '@ant-design/icons'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import api from '../../services/api'
+import { getToken } from '../../services/tokenHolder'
 
 const { TextArea } = Input
 
@@ -166,7 +167,7 @@ export default function AdCreationWizard() {
     setRecommendedBudget(null)
 
     const kwData = keywordResults.filter(k => selectedKeywords.includes(k.keyword))
-    const token = localStorage.getItem('token')
+    const token = getToken()
     const baseUrl = api.defaults.baseURL || ''
 
     try {
