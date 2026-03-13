@@ -191,6 +191,9 @@ class GoogleAdsCreator:
         campaign.network_settings.target_search_network = defaults.get("target_search_network", False)
         campaign.network_settings.target_content_network = defaults.get("target_content_network", False)
 
+        eu_ads = defaults.get("eu_political_ads", False)
+        campaign.contains_eu_political_advertising = eu_ads
+
         geo_type = defaults.get("geo_target_type", "PRESENCE")
         if geo_type == "PRESENCE_OR_INTEREST":
             campaign.geo_target_type_setting.positive_geo_target_type = (
