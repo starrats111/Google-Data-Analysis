@@ -615,7 +615,7 @@ def _save_ad_defaults(data: dict):
 
 
 @router.get("/ad-defaults")
-async def get_ad_defaults(current_user: User = Depends(get_current_user)):
+async def get_ad_defaults():
     return _load_ad_defaults()
 
 

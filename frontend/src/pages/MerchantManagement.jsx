@@ -211,8 +211,9 @@ const MerchantManagement = () => {
 
   useEffect(() => {
     fetchUsers()
-    fetchStats().then(() => loadAdDefaults()).catch(() => {})
+    fetchStats()
     fetchMerchants(1, merchantPageSize)
+    loadAdDefaults()
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
@@ -827,9 +828,13 @@ const MerchantManagement = () => {
   const loadAdDefaults = async () => {
     try {
       const res = await api.get('/api/merchants/ad-defaults')
-      setAdDefaults(res.data)
-      adDefaultsForm.setFieldsValue(res.data)
-    } catch {}
+      if (res.data) {
+        setAdDefaults(prev => ({ ...prev, ...res.data }))
+        adDefaultsForm.setFieldsValue(res.data)
+      }
+    } catch (e) {
+      // silently use defaults
+    }
   }
 
   const saveAdDefaults = async () => {
