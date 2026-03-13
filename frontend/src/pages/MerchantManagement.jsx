@@ -1029,8 +1029,7 @@ const MerchantManagement = () => {
 
   return (
     <div>
-      {isManager ? (
-        <Row gutter={12} style={{ marginBottom: 16 }}>
+      <Row gutter={12} style={{ marginBottom: 16 }}>
           {/* 左侧：商家概览统计 */}
           <Col xs={24} md={6}>
             <Card size="small" style={{ height: '100%' }}>
@@ -1113,7 +1112,6 @@ const MerchantManagement = () => {
             </Card>
           </Col>
         </Row>
-      ) : null}
 
       <Tabs
         activeKey={tabKey}
