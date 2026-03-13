@@ -234,7 +234,8 @@ const Layout = () => {
         { key: '/articles/publish', icon: <EditOutlined />, label: '发布文章' },
         { key: '/articles/titles', icon: <FileTextOutlined />, label: '标题库' },
         { key: '/articles/categories', icon: <DatabaseOutlined />, label: '分类管理' },
-        { key: '/articles/sites', icon: <GlobalOutlined />, label: '网站管理' },
+        { key: '/articles/my-sites', icon: <GlobalOutlined />, label: '我的网站' },
+        { key: '/articles/sites', icon: <SettingOutlined />, label: '网站管理' },
       ],
     },
     {
@@ -249,7 +250,7 @@ const Layout = () => {
 
   const isFeedbackManager = user?.username === 'wj07'
 
-  // 组长菜单 - 类似经理菜单格式，但用小组总览
+  // 组长菜单
   const leaderMenuItems = [
     {
       key: 'overview',
@@ -297,7 +298,8 @@ const Layout = () => {
         { key: '/articles/publish', icon: <EditOutlined />, label: '发布文章' },
         { key: '/articles/titles', icon: <FileTextOutlined />, label: '标题库' },
         { key: '/articles/categories', icon: <DatabaseOutlined />, label: '分类管理' },
-        { key: '/articles/sites', icon: <GlobalOutlined />, label: '网站管理' },
+        { key: '/articles/my-sites', icon: <GlobalOutlined />, label: '我的网站' },
+        { key: '/articles/sites', icon: <SettingOutlined />, label: '网站管理' },
       ],
     },
     {
@@ -312,7 +314,7 @@ const Layout = () => {
     },
   ]
 
-  // 经理菜单 - 和截图格式一致，把「总览>团队总览」改为「团队管理」
+  // 经理菜单
   const managerMenuItems = [
     {
       key: 'overview',
@@ -360,7 +362,8 @@ const Layout = () => {
         { key: '/articles/publish', icon: <EditOutlined />, label: '发布文章' },
         { key: '/articles/titles', icon: <FileTextOutlined />, label: '标题库' },
         { key: '/articles/categories', icon: <DatabaseOutlined />, label: '分类管理' },
-        { key: '/articles/sites', icon: <GlobalOutlined />, label: '网站管理' },
+        { key: '/articles/my-sites', icon: <GlobalOutlined />, label: '我的网站' },
+        { key: '/articles/sites', icon: <SettingOutlined />, label: '网站管理' },
       ],
     },
     {

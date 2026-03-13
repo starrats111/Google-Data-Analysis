@@ -12,6 +12,7 @@ from app.models.expense_adjustment import ExpenseAdjustment
 from app.models.mcc_cost_adjustment import MccCostAdjustment
 from app.models.platform_data import PlatformData
 from app.models.google_ads_api_data import GoogleAdsApiData, GoogleMccAccount, CampaignPlatformMapping
+from app.models.keyword_bid import CampaignBidStrategy
 from app.models.affiliate_transaction import AffiliateTransaction, AffiliateRejection
 from app.models.ai_report import AIReport, UserPrompt
 from app.models.notification import Notification
@@ -34,6 +35,8 @@ from app.models.article import (
 from app.models.tracking_link import PubTrackingLink
 # 网站发布配置（OPT-013）
 from app.models.site import PubSite
+# 用户-网站绑定（CR-008）
+from app.models.user_site_binding import UserSiteBinding
 # Campaign Link 缓存（OPT-016）
 from app.models.campaign_link_cache import CampaignLinkCache
 
@@ -55,6 +58,7 @@ __all__ = [
     "GoogleAdsApiData",
     "GoogleMccAccount",
     "CampaignPlatformMapping",
+    "CampaignBidStrategy",
     "AffiliateTransaction",
     "AffiliateRejection",
     "AIReport",
@@ -84,6 +88,8 @@ __all__ = [
     "PubTrackingLink",
     # 网站发布配置
     "PubSite",
+    # 用户-网站绑定
+    "UserSiteBinding",
     # Campaign Link 缓存
     "CampaignLinkCache",
 ]

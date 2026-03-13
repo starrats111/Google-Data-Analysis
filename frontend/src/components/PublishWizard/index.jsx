@@ -920,7 +920,7 @@ const PublishWizard = () => {
                     onChange={setSelectedSiteId}
                     style={{ width: 300 }}
                     options={siteList.map(s => ({ value: s.id, label: `${s.site_name}${s.domain ? ` (${s.domain})` : ''}` }))}
-                    notFoundContent="暂无可用网站，请先在网站管理中添加"
+                    notFoundContent="暂无可绑定网站，请先到「文章管理 → 我的网站」中绑定"
                   />
                 </div>
               )}
@@ -1181,7 +1181,7 @@ const PublishWizard = () => {
                       style={{ width: '100%' }}
                       size="large"
                       options={siteList.map(s => ({ value: s.id, label: `${s.site_name}${s.domain ? ` (${s.domain})` : ''}` }))}
-                      notFoundContent="暂无可用网站"
+                      notFoundContent="暂无可绑定网站，请先到「文章管理 → 我的网站」中绑定"
                     />
                   </Col>
                 </Row>
@@ -1565,7 +1565,7 @@ const PublishWizard = () => {
                   onChange={setSelectedSiteId}
                   style={{ width: 300 }}
                   options={siteList.map(s => ({ value: s.id, label: `${s.site_name}${s.domain ? ` (${s.domain})` : ''}` }))}
-                  notFoundContent="暂无可用网站，请先在网站管理中添加"
+                  notFoundContent="暂无可绑定网站，请先到「文章管理 → 我的网站」中绑定"
                 />
               </div>
             )}

@@ -13,6 +13,7 @@ from app.database import get_db
 from app.middleware.auth import get_current_user
 from app.models.user import User
 from app.models.site import PubSite
+from app.models.user_site_binding import UserSiteBinding
 from app.services import site_publisher
 from app.services.remote_publisher import remote_publisher
 
@@ -65,11 +66,16 @@ async def list_sites(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """获取当前用户组的网站列表"""
+    """获取网站列表（CR-008：普通用户只返回已绑定的网站）"""
     if current_user.role in ("manager", "leader"):
         sites = db.query(PubSite).all()
     else:
-        sites = db.query(PubSite).filter(PubSite.group_id == current_user.team_id).all()
+        bound_ids = (
+            db.query(UserSiteBinding.site_id)
+            .filter(UserSiteBinding.user_id == current_user.id)
+            .subquery()
+        )
+        sites = db.query(PubSite).filter(PubSite.id.in_(bound_ids)).all()
     return {"items": [_site_to_dict(s, db) for s in sites]}
 
 

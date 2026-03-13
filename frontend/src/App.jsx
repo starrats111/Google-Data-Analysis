@@ -47,6 +47,7 @@ const ArticleCategories = lazyWithRetry(() => import('./pages/articles/ArticleCa
 const ArticleTitles = lazyWithRetry(() => import('./pages/articles/ArticleTitles'))
 const PublishWizard = lazyWithRetry(() => import('./components/PublishWizard'))
 const SiteManagement = lazyWithRetry(() => import('./pages/articles/SiteManagement'))
+const MySites = lazyWithRetry(() => import('./pages/articles/MySites'))
 
 // CR-039: 广告管理
 const AdCreationWizard = lazyWithRetry(() => import('./pages/ads/AdCreationWizard'))
@@ -134,6 +135,7 @@ function App() {
               <Route path="articles/categories" element={<ArticleCategories />} />
               <Route path="articles/titles" element={<ArticleTitles />} />
               <Route path="articles/sites" element={<SiteManagement />} />
+              <Route path="articles/my-sites" element={<MySites />} />
               {/* CR-039: 广告管理 */}
               <Route path="ads/create" element={<AdCreationWizard />} />
               <Route path="ads/test-dashboard" element={<TestDashboard />} />
