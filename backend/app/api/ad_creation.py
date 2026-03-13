@@ -282,6 +282,7 @@ async def create_campaign(
     from app.services.google_ads_creator import GoogleAdsCreator
     creator = GoogleAdsCreator(db)
     try:
+        merchant = assignment.merchant
         result = creator.create_full_campaign(
             mcc_id=data.mcc_id,
             customer_id=data.customer_id,
@@ -293,6 +294,9 @@ async def create_campaign(
             target_country=data.target_country,
             mode=data.mode,
             final_url=data.merchant_url,
+            platform=merchant.platform if merchant else "",
+            merchant_mid=merchant.merchant_id if merchant else "",
+            assignment_id=data.assignment_id,
         )
 
         # 更新 assignment 记录

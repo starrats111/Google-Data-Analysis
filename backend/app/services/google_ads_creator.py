@@ -40,14 +40,11 @@ class GoogleAdsCreator:
         target_country: str = "US",
         mode: str = "test",
         final_url: str = "",
+        platform: str = "",
+        merchant_mid: str = "",
+        assignment_id: int = 0,
     ) -> Dict:
-        """一次 API 调用创建完整广告结构。
-
-        M-49 闭环：
-        - 打包 Mutate 是原子操作（全成功或全失败），无需回滚
-        - 幂等性：创建前检查同名广告系列是否已存在
-        - 错误处理：QUOTA_EXCEEDED / AUTHENTICATION_ERROR / 超时
-        """
+        """一次 API 调用创建完整广告结构。"""
         mcc = self.db.query(GoogleMccAccount).filter(GoogleMccAccount.id == mcc_id).first()
         if not mcc:
             raise ValueError("MCC 账号不存在")
@@ -55,11 +52,12 @@ class GoogleAdsCreator:
         client, mcc_customer_id = create_google_ads_client(mcc)
         cid = customer_id.replace("-", "")
 
-        # 幂等性检查：同名广告系列是否已存在
+        # 命名格式: 序号-平台-商家名-国家-日期-MID
         date_str = datetime.now().strftime("%m%d")
-        cid_suffix = cid[-6:] if len(cid) >= 6 else cid
-        mode_tag = "T" if mode == "test" else "F"
-        campaign_name = f"{cid_suffix}-{merchant_name}-{target_country}-{date_str}-{mode_tag}"
+        seq = str(assignment_id).zfill(3)
+        plat = platform.upper() if platform else "XX"
+        mid = merchant_mid or "0"
+        campaign_name = f"{seq}-{plat}-{merchant_name}-{target_country}-{date_str}-{mid}"
         existing = self._check_existing_campaign(client, cid, campaign_name)
         if existing:
             return {
@@ -153,7 +151,7 @@ class GoogleAdsCreator:
         # 1. CampaignBudget
         budget_op = client.get_type("MutateOperation")
         budget = budget_op.campaign_budget_operation.create
-        budget.name = f"{campaign_name}_budget"
+        budget.name = campaign_name
         budget.amount_micros = int(daily_budget * 1_000_000)
         budget.delivery_method = client.enums.BudgetDeliveryMethodEnum.STANDARD
         budget.resource_name = client.get_service("CampaignBudgetService").campaign_budget_path(
