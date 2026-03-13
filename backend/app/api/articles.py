@@ -279,7 +279,8 @@ async def update_article(
 
     if "publish_date" in update_data and update_data["publish_date"]:
         try:
-            update_data["publish_date"] = datetime.fromisoformat(update_data["publish_date"])
+            date_str = update_data["publish_date"].replace('Z', '+00:00')
+            update_data["publish_date"] = datetime.fromisoformat(date_str)
         except ValueError:
             raise HTTPException(status_code=400, detail="publish_date 格式无效")
 
