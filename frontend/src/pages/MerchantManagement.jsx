@@ -836,13 +836,24 @@ const MerchantManagement = () => {
   const saveAdDefaults = async () => {
     try {
       const values = await adDefaultsForm.validateFields()
-      await api.put('/api/merchants/ad-defaults', values)
-      setAdDefaults(values)
+      const payload = {
+        bidding_strategy: values.bidding_strategy ?? adDefaults.bidding_strategy,
+        enhanced_cpc: values.enhanced_cpc ?? adDefaults.enhanced_cpc,
+        target_google_search: values.target_google_search ?? adDefaults.target_google_search,
+        target_search_network: values.target_search_network ?? adDefaults.target_search_network,
+        target_content_network: values.target_content_network ?? adDefaults.target_content_network,
+        default_cpc_bid: values.default_cpc_bid ?? adDefaults.default_cpc_bid,
+        default_daily_budget: values.default_daily_budget ?? adDefaults.default_daily_budget,
+        geo_target_type: values.geo_target_type ?? adDefaults.geo_target_type,
+        eu_political_ads: values.eu_political_ads ?? adDefaults.eu_political_ads,
+      }
+      await api.put('/api/merchants/ad-defaults', payload)
+      setAdDefaults(payload)
       setAdDefaultsModalOpen(false)
       message.success('广告默认设置已保存')
     } catch (err) {
       if (err?.errorFields) return
-      message.error('保存失败')
+      message.error('保存失败: ' + (err?.response?.data?.detail || err.message))
     }
   }
 

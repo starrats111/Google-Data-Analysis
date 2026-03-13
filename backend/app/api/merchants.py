@@ -620,15 +620,15 @@ async def get_ad_defaults(current_user: User = Depends(get_current_user)):
 
 
 class AdDefaultsUpdate(BaseModel):
-    bidding_strategy: str = "MANUAL_CPC"
-    enhanced_cpc: bool = False
-    target_google_search: bool = True
-    target_search_network: bool = False
-    target_content_network: bool = False
-    default_cpc_bid: float = 1.0
-    default_daily_budget: float = 10
-    geo_target_type: str = "PRESENCE"
-    eu_political_ads: bool = False
+    bidding_strategy: Optional[str] = None
+    enhanced_cpc: Optional[bool] = None
+    target_google_search: Optional[bool] = None
+    target_search_network: Optional[bool] = None
+    target_content_network: Optional[bool] = None
+    default_cpc_bid: Optional[float] = None
+    default_daily_budget: Optional[float] = None
+    geo_target_type: Optional[str] = None
+    eu_political_ads: Optional[bool] = None
 
 
 @router.put("/ad-defaults")
@@ -636,6 +636,7 @@ async def update_ad_defaults(
     data: AdDefaultsUpdate,
     current_user: User = Depends(get_current_user),
 ):
-    settings = data.dict()
+    incoming = {k: v for k, v in data.dict().items() if v is not None}
+    settings = {**DEFAULT_AD_SETTINGS, **incoming}
     _save_ad_defaults(settings)
     return {"message": "广告默认设置已保存", **settings}
