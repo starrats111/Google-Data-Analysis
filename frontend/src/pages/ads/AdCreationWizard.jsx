@@ -40,9 +40,11 @@ export default function AdCreationWizard() {
   const autoResearchDone = useRef(false)
 
   // Step 2: AI 素材
-  const [adCopy, setAdCopy] = useState({ headlines: [], descriptions: [], thinking: '' })
+  const [adCopy, setAdCopy] = useState({ headlines: [], descriptions: [], thinking: '', headline_translations: [], description_translations: [] })
   const [editHeadlines, setEditHeadlines] = useState([])
   const [editDescriptions, setEditDescriptions] = useState([])
+  const [headlineTranslations, setHeadlineTranslations] = useState([])
+  const [descTranslations, setDescTranslations] = useState([])
 
   // Step 3: 预算设置
   const [dailyBudget, setDailyBudget] = useState(10)
@@ -151,6 +153,8 @@ export default function AdCreationWizard() {
       setAdCopy(res.data)
       setEditHeadlines([...(res.data.headlines || [])])
       setEditDescriptions([...(res.data.descriptions || [])])
+      setHeadlineTranslations([...(res.data.headline_translations || [])])
+      setDescTranslations([...(res.data.description_translations || [])])
     } catch (err) {
       message.error(err?.response?.data?.detail || 'AI 素材生成失败')
     } finally { setLoading(false) }
@@ -343,31 +347,44 @@ export default function AdCreationWizard() {
               <Divider style={{ margin: '4px 0' }} />
               <Typography.Text strong>标题（最多 15 个，每个 ≤ 30 字符）</Typography.Text>
               {editHeadlines.map((h, i) => (
-                <Input
-                  key={`h-${i}`}
-                  value={h}
-                  maxLength={30}
-                  suffix={`${h.length}/30`}
-                  onChange={e => {
-                    const arr = [...editHeadlines]
-                    arr[i] = e.target.value
-                    setEditHeadlines(arr)
-                  }}
-                />
+                <div key={`h-${i}`} style={{ marginBottom: 4 }}>
+                  <Input
+                    value={h}
+                    maxLength={30}
+                    suffix={`${h.length}/30`}
+                    onChange={e => {
+                      const arr = [...editHeadlines]
+                      arr[i] = e.target.value
+                      setEditHeadlines(arr)
+                    }}
+                  />
+                  {headlineTranslations[i] && (
+                    <Typography.Text type="secondary" style={{ fontSize: 12, paddingLeft: 12 }}>
+                      译：{headlineTranslations[i]}
+                    </Typography.Text>
+                  )}
+                </div>
               ))}
+              <Divider style={{ margin: '8px 0' }} />
               <Typography.Text strong>描述（最多 4 个，每个 ≤ 90 字符）</Typography.Text>
               {editDescriptions.map((d, i) => (
-                <TextArea
-                  key={`d-${i}`}
-                  value={d}
-                  maxLength={90}
-                  autoSize={{ minRows: 1, maxRows: 3 }}
-                  onChange={e => {
-                    const arr = [...editDescriptions]
-                    arr[i] = e.target.value
-                    setEditDescriptions(arr)
-                  }}
-                />
+                <div key={`d-${i}`} style={{ marginBottom: 4 }}>
+                  <TextArea
+                    value={d}
+                    maxLength={90}
+                    autoSize={{ minRows: 1, maxRows: 3 }}
+                    onChange={e => {
+                      const arr = [...editDescriptions]
+                      arr[i] = e.target.value
+                      setEditDescriptions(arr)
+                    }}
+                  />
+                  {descTranslations[i] && (
+                    <Typography.Text type="secondary" style={{ fontSize: 12, paddingLeft: 12 }}>
+                      译：{descTranslations[i]}
+                    </Typography.Text>
+                  )}
+                </div>
               ))}
               <Space>
                 <Button onClick={() => setStep(1)}>上一步</Button>
