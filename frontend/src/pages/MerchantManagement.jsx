@@ -129,7 +129,6 @@ const MerchantManagement = () => {
     missing_mid: undefined,
     relationship_status: undefined,
     search: '',
-    dateRange: null,
   })
   const [assignmentFilters, setAssignmentFilters] = useState({
     user_id: undefined,
@@ -214,6 +213,7 @@ const MerchantManagement = () => {
     fetchUsers()
     fetchStats()
     fetchMerchants(1, merchantPageSize)
+    loadAdDefaults()
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
@@ -343,21 +343,10 @@ const MerchantManagement = () => {
     return false // prevent default upload
   }
 
-  // #region agent log
-  const _fmCallCount = React.useRef(0)
-  // #endregion
   const fetchMerchants = async (page = merchantPage, pageSize = merchantPageSize) => {
-    // #region agent log
-    const _callId = ++_fmCallCount.current
-    const _caller = new Error().stack?.split('\n')[2]?.trim() || 'unknown'
-    fetch('http://127.0.0.1:7242/ingest/2425e147-b839-4dcc-a908-6c4a4b05caf8',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'6b95b2'},body:JSON.stringify({sessionId:'6b95b2',location:'MerchantManagement.jsx:fetchMerchants',message:'fetchMerchants called',data:{callId:_callId,page,pageSize,caller:_caller},timestamp:Date.now(),hypothesisId:'H2,H3'})}).catch(()=>{});
-    // #endregion
     setLoading(true)
     try {
-      const params = {
-        page,
-        page_size: pageSize,
-      }
+      const params = { page, page_size: pageSize }
       if (merchantFilters.platform) params.platform = merchantFilters.platform
       if (merchantFilters.category) params.category = merchantFilters.category
       if (merchantFilters.status) params.status = merchantFilters.status
@@ -365,8 +354,6 @@ const MerchantManagement = () => {
       if (merchantFilters.missing_mid !== undefined) params.missing_mid = merchantFilters.missing_mid
       if (merchantFilters.relationship_status) params.relationship_status = merchantFilters.relationship_status
       if (merchantFilters.search) params.search = merchantFilters.search
-      if (merchantFilters.dateRange?.[0]) params.start_date = merchantFilters.dateRange[0].format('YYYY-MM-DD')
-      if (merchantFilters.dateRange?.[1]) params.end_date = merchantFilters.dateRange[1].format('YYYY-MM-DD')
 
       const resp = await api.get('/api/merchants', { params })
       const data = resp.data || {}
@@ -375,13 +362,7 @@ const MerchantManagement = () => {
       setMerchantPage(page)
       setMerchantPageSize(pageSize)
       setSelectedMerchantIds([])
-      // #region agent log
-      fetch('http://127.0.0.1:7242/ingest/2425e147-b839-4dcc-a908-6c4a4b05caf8',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'6b95b2'},body:JSON.stringify({sessionId:'6b95b2',location:'MerchantManagement.jsx:fetchMerchants:success',message:'fetchMerchants success',data:{callId:_callId,total:data.total,itemCount:(data.items||[]).length},timestamp:Date.now(),hypothesisId:'H1'})}).catch(()=>{});
-      // #endregion
     } catch (error) {
-      // #region agent log
-      fetch('http://127.0.0.1:7242/ingest/2425e147-b839-4dcc-a908-6c4a4b05caf8',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'6b95b2'},body:JSON.stringify({sessionId:'6b95b2',location:'MerchantManagement.jsx:fetchMerchants:error',message:'fetchMerchants error',data:{callId:_callId,isCanceled:!!error.isCanceled,errorName:error.name,errorMsg:error.message,hasResponse:!!error.response,status:error.response?.status,detail:error.response?.data?.detail},timestamp:Date.now(),hypothesisId:'H1,H2,H4'})}).catch(()=>{});
-      // #endregion
       message.error(error.response?.data?.detail || '获取商家列表失败')
     } finally {
       setLoading(false)
@@ -470,9 +451,8 @@ const MerchantManagement = () => {
     setCommissionLoading(true)
     setCommissionModalOpen(true)
     try {
-      const dr = merchantFilters.dateRange
-      const sd = dr?.[0]?.format('YYYY-MM-DD') || dayjs().subtract(30, 'day').format('YYYY-MM-DD')
-      const ed = dr?.[1]?.format('YYYY-MM-DD') || dayjs().format('YYYY-MM-DD')
+      const sd = dayjs().subtract(30, 'day').format('YYYY-MM-DD')
+      const ed = dayjs().format('YYYY-MM-DD')
       const resp = await api.get(`/api/merchants/${record.id}/commission-breakdown`, { params: { start_date: sd, end_date: ed } })
       setCommissionData(resp.data)
     } catch (error) {
@@ -829,6 +809,8 @@ const MerchantManagement = () => {
     target_content_network: false,
     default_cpc_bid: 1.0,
     default_daily_budget: 10,
+    geo_target_type: 'PRESENCE',
+    eu_political_ads: false,
   })
   const [adDefaultsForm] = Form.useForm()
 
@@ -1047,53 +1029,91 @@ const MerchantManagement = () => {
 
   return (
     <div>
-      <Row gutter={16} style={{ marginBottom: 16 }}>
-        <Col xs={24} sm={12} md={6}>
-          <Card>
-            <Statistic title="商家总数" value={stats.total || 0} />
-          </Card>
-        </Col>
-        <Col xs={24} sm={12} md={6}>
-          <Card>
-            <Statistic title="已分配商家" value={stats.assigned || 0} valueStyle={{ color: '#1677ff' }} />
-          </Card>
-        </Col>
-        <Col xs={24} sm={12} md={6}>
-          <Card>
-            <Statistic title="未分配商家" value={stats.unassigned || 0} valueStyle={{ color: '#fa8c16' }} />
-          </Card>
-        </Col>
-        <Col xs={24} sm={12} md={6}>
-          <Card>
-            <Statistic title="待补MID" value={stats.missing_mid_total || 0} valueStyle={{ color: '#d46b08' }} />
-          </Card>
-        </Col>
-      </Row>
+      {isManager ? (
+        <Row gutter={12} style={{ marginBottom: 16 }}>
+          {/* 左侧：商家概览统计 */}
+          <Col xs={24} md={6}>
+            <Card size="small" style={{ height: '100%' }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                <Statistic title="商家总数" value={stats.total || 0} valueStyle={{ fontSize: 20 }} />
+                <div style={{ display: 'flex', gap: 16 }}>
+                  <Statistic title="已分配" value={stats.assigned || 0} valueStyle={{ fontSize: 16, color: '#1677ff' }} />
+                  <Statistic title="待补MID" value={stats.missing_mid_total || 0} valueStyle={{ fontSize: 16, color: '#d46b08' }} />
+                </div>
+                <div>
+                  <span style={{ fontSize: 12, color: '#999', display: 'block', marginBottom: 4 }}>平台分布</span>
+                  <Space wrap size={4}>{platformTags}</Space>
+                </div>
+              </div>
+            </Card>
+          </Col>
 
-      <Row gutter={16} style={{ marginBottom: 16 }}>
-        <Col xs={24} md={8}>
-          <Card>
-            <Statistic title="商家发现成功率" value={stats.discovery_rate || 0} precision={2} suffix="%" valueStyle={{ color: '#389e0d' }} />
-          </Card>
-        </Col>
-        <Col xs={24} md={8}>
-          <Card>
-            <Statistic title="MID缺失率" value={stats.missing_mid_rate || 0} precision={2} suffix="%" valueStyle={{ color: '#cf1322' }} />
-          </Card>
-        </Col>
-        <Col xs={24} md={8}>
-          <Card size="small">
-            <div style={{ marginBottom: 8 }}>
-              <span style={{ fontWeight: 500, marginRight: 8 }}>平台分布</span>
-              <Space wrap size={4}>{platformTags}</Space>
-            </div>
-            <div>
-              <span style={{ fontWeight: 500, marginRight: 8 }}>待补MID</span>
-              <Space wrap size={4}>{missingMidTags}</Space>
-            </div>
-          </Card>
-        </Col>
-      </Row>
+          {/* 红框：广告投放设置 */}
+          <Col xs={24} md={10}>
+            <Card
+              size="small"
+              title={<span style={{ fontSize: 13 }}>广告投放设置</span>}
+              extra={
+                canManage && (
+                  <Button size="small" icon={<SettingOutlined />} onClick={() => { loadAdDefaults(); setAdDefaultsModalOpen(true) }}>
+                    编辑
+                  </Button>
+                )
+              }
+              style={{ height: '100%' }}
+            >
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px 12px' }}>
+                <Tag color="blue">
+                  出价: {adDefaults.bidding_strategy === 'MAXIMIZE_CLICKS' ? '尽可能多点击' : '手动CPC'}
+                </Tag>
+                <Tag color={adDefaults.enhanced_cpc ? 'green' : 'default'}>
+                  eCPC: {adDefaults.enhanced_cpc ? '开' : '关'}
+                </Tag>
+                <Tag color="purple">CPC: ${adDefaults.default_cpc_bid}</Tag>
+                <Tag color="purple">日预算: ${adDefaults.default_daily_budget}</Tag>
+                <Tag color={adDefaults.target_google_search ? 'green' : 'default'}>
+                  Google搜索: {adDefaults.target_google_search ? '开' : '关'}
+                </Tag>
+                <Tag color={adDefaults.target_search_network ? 'green' : 'default'}>
+                  合作伙伴: {adDefaults.target_search_network ? '开' : '关'}
+                </Tag>
+                <Tag color={adDefaults.target_content_network ? 'green' : 'default'}>
+                  展示网络: {adDefaults.target_content_network ? '开' : '关'}
+                </Tag>
+                <Tag color="cyan">
+                  地理定位: {adDefaults.geo_target_type === 'PRESENCE' ? '所在地' : '所在地或兴趣'}
+                </Tag>
+                <Tag color={adDefaults.eu_political_ads ? 'red' : 'green'}>
+                  欧盟政治广告: {adDefaults.eu_political_ads ? '投放' : '不投放'}
+                </Tag>
+              </div>
+            </Card>
+          </Col>
+
+          {/* 绿框：测试广告数量 */}
+          <Col xs={24} md={4}>
+            <Card size="small" style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <Statistic
+                title="测试广告"
+                value={stats.test_campaign_count || 0}
+                suffix="个"
+                valueStyle={{ fontSize: 24, color: '#52c41a' }}
+              />
+            </Card>
+          </Col>
+
+          {/* 蓝框：待定 */}
+          <Col xs={24} md={4}>
+            <Card size="small" style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <div style={{ textAlign: 'center', color: '#bfbfbf' }}>
+                <span style={{ fontSize: 12 }}>更多功能</span>
+                <br />
+                <span style={{ fontSize: 11 }}>待定</span>
+              </div>
+            </Card>
+          </Col>
+        </Row>
+      ) : null}
 
       <Tabs
         activeKey={tabKey}
@@ -1114,9 +1134,6 @@ const MerchantManagement = () => {
                     <Button loading={midRepairLoading} onClick={handleMidRepair}>补齐MID</Button>
                     {isManager && (
                       <Button icon={<CloudSyncOutlined />} loading={platformSyncLoading} onClick={handlePlatformSync}>平台同步</Button>
-                    )}
-                    {canManage && (
-                      <Button icon={<SettingOutlined />} onClick={() => { loadAdDefaults(); setAdDefaultsModalOpen(true) }}>广告设置</Button>
                     )}
                     {canManage && (
                       <Button
@@ -1202,13 +1219,6 @@ const MerchantManagement = () => {
                     <Option value="rejected">已拒绝</Option>
                   </Select>
 
-                  <RangePicker
-                    value={merchantFilters.dateRange}
-                    onChange={(v) => setMerchantFilters((s) => ({ ...s, dateRange: v }))}
-                    style={{ width: 240 }}
-                    placeholder={['佣金开始', '佣金结束']}
-                  />
-
                   <Button type="primary" onClick={() => fetchMerchants(1, merchantPageSize)}>查询</Button>
                   <Button
                     onClick={() => {
@@ -1220,7 +1230,6 @@ const MerchantManagement = () => {
                         missing_mid: undefined,
                         relationship_status: undefined,
                         search: '',
-                        dateRange: null,
                       })
                       setTimeout(() => fetchMerchants(1, merchantPageSize), 0)
                     }}
@@ -1901,6 +1910,25 @@ const MerchantManagement = () => {
             extra="在 Google 展示广告网络上展示广告（通常不建议搜索广告开启）"
           >
             <Select options={[{ value: true, label: '开启' }, { value: false, label: '关闭' }]} />
+          </Form.Item>
+          <Alert
+            type="info"
+            message="地理位置与政策设置"
+            style={{ marginBottom: 12, fontSize: 12 }}
+          />
+          <Form.Item name="geo_target_type" label="地理位置定位方式"
+            extra="「所在地」仅定位实际位于目标地区的用户；「所在地或兴趣」还包含对目标地区感兴趣的用户"
+          >
+            <Select options={[
+              { value: 'PRESENCE', label: '所在地（Presence）' },
+              { value: 'PRESENCE_OR_INTEREST', label: '所在地或兴趣（Presence or Interest）' },
+            ]} />
+          </Form.Item>
+          <Form.Item name="eu_political_ads" label="欧盟政治广告">
+            <Select options={[
+              { value: false, label: '不投放' },
+              { value: true, label: '投放' },
+            ]} />
           </Form.Item>
         </Form>
       </Modal>

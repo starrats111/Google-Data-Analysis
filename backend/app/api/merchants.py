@@ -1,6 +1,8 @@
 """
 商家目录与任务分配 API
 """
+import json
+import os
 import time
 from datetime import date, datetime, timezone
 from typing import Optional
@@ -338,6 +340,16 @@ async def sync_platforms_status(
     return {"status": "idle", "message": "没有正在进行的同步"}
 
 
+@router.get("/{merchant_pk}/active-advertisers")
+async def get_active_advertisers(
+    merchant_pk: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """获取某商家近30天内在投广告的员工列表"""
+    return MerchantService.get_active_advertisers(db, merchant_pk)
+
+
 # OPT-009: 商家佣金拆分明细
 @router.get("/{merchant_pk}/commission-breakdown")
 async def commission_breakdown(
@@ -365,6 +377,7 @@ async def commission_breakdown(
 class ClaimRequest(BaseModel):
     merchant_ids: list
     mode: str = "normal"  # normal / test
+    target_country: str = "US"
 
 
 @assignment_router.post("/claim")
@@ -396,6 +409,7 @@ async def claim_merchants(
             assigned_by=current_user.id,
             status="active",
             mode=data.mode,
+            target_country=data.target_country,
             assignment_source="self_claim",
         )
         db.add(assignment)
@@ -564,3 +578,64 @@ async def get_assignment_events(
             "created_at": e.created_at.isoformat() if e.created_at else None,
         })
     return {"assignment_id": assignment_id, "events": result}
+
+
+# ==================================================================
+# 广告创建默认设置
+# ==================================================================
+
+AD_DEFAULTS_FILE = os.path.join(os.path.dirname(os.path.dirname(__file__)), "ad_defaults.json")
+
+DEFAULT_AD_SETTINGS = {
+    "bidding_strategy": "MANUAL_CPC",
+    "enhanced_cpc": False,
+    "target_google_search": True,
+    "target_search_network": False,
+    "target_content_network": False,
+    "default_cpc_bid": 1.0,
+    "default_daily_budget": 10,
+    "geo_target_type": "PRESENCE",
+    "eu_political_ads": False,
+}
+
+
+def _load_ad_defaults() -> dict:
+    if os.path.exists(AD_DEFAULTS_FILE):
+        try:
+            with open(AD_DEFAULTS_FILE, "r") as f:
+                return {**DEFAULT_AD_SETTINGS, **json.load(f)}
+        except Exception:
+            pass
+    return dict(DEFAULT_AD_SETTINGS)
+
+
+def _save_ad_defaults(data: dict):
+    with open(AD_DEFAULTS_FILE, "w") as f:
+        json.dump(data, f, indent=2)
+
+
+@router.get("/ad-defaults")
+async def get_ad_defaults(current_user: User = Depends(get_current_user)):
+    return _load_ad_defaults()
+
+
+class AdDefaultsUpdate(BaseModel):
+    bidding_strategy: str = "MANUAL_CPC"
+    enhanced_cpc: bool = False
+    target_google_search: bool = True
+    target_search_network: bool = False
+    target_content_network: bool = False
+    default_cpc_bid: float = 1.0
+    default_daily_budget: float = 10
+    geo_target_type: str = "PRESENCE"
+    eu_political_ads: bool = False
+
+
+@router.put("/ad-defaults")
+async def update_ad_defaults(
+    data: AdDefaultsUpdate,
+    current_user: User = Depends(get_current_manager),
+):
+    settings = data.dict()
+    _save_ad_defaults(settings)
+    return {"message": "广告默认设置已保存", **settings}

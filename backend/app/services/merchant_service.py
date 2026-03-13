@@ -14,6 +14,7 @@ from app.models.merchant_mid_repair_queue import MerchantMidRepairQueue
 from app.models.merchant_alias import MerchantAlias
 from app.models.merchant_assignment_event import MerchantAssignmentEvent
 from app.models.affiliate_transaction import AffiliateTransaction
+from app.models.google_ads_api_data import GoogleAdsApiData
 from app.models.user import User
 from app.models.notification import Notification
 
@@ -469,6 +470,28 @@ class MerchantService:
         ) if merchant_ids else []
         perf_map = {r.id: {"commission_30d": float(r.commission_30d), "orders_30d": r.orders_30d} for r in commission_rows}
 
+        # CR-048b: 在投人数 — 基于 GoogleAdsApiData 实际广告数据（近30天）
+        # extracted_platform_code 可能含尾数字(rw1,cg2)，用 RTRIM 去尾数字后与 platform 比较
+        ads_since = (now - timedelta(days=30)).date() if hasattr(now - timedelta(days=30), 'date') else (datetime.now() - timedelta(days=30)).date()
+        advertiser_rows = (
+            db.query(
+                AffiliateMerchant.id,
+                func.count(distinct(GoogleAdsApiData.user_id)).label("active_advertisers"),
+            )
+            .join(
+                GoogleAdsApiData,
+                and_(
+                    func.rtrim(func.lower(GoogleAdsApiData.extracted_platform_code), '0123456789') == func.lower(AffiliateMerchant.platform),
+                    GoogleAdsApiData.extracted_account_code == AffiliateMerchant.merchant_id,
+                    GoogleAdsApiData.date >= ads_since,
+                ),
+            )
+            .filter(AffiliateMerchant.id.in_(merchant_ids))
+            .group_by(AffiliateMerchant.id)
+            .all()
+        ) if merchant_ids else []
+        active_advertiser_map = {r.id: r.active_advertisers for r in advertiser_rows}
+
         split_map = MerchantService._batch_commission_split(db, items, assign_map, range_start, range_end) if merchant_ids else {}
 
         result = []
@@ -499,9 +522,13 @@ class MerchantService:
                         "display_name": a.user.display_name if a.user else None,
                         "priority": a.priority,
                         "monthly_target": float(a.monthly_target) if a.monthly_target else None,
+                        "google_campaign_id": a.google_campaign_id,
+                        "daily_budget": float(a.daily_budget) if a.daily_budget else None,
+                        "mode": a.mode,
                     }
                     for a in assigns
                 ],
+                "active_advertiser_count": active_advertiser_map.get(m.id, 0),
                 **perf,
                 **split,
             })
@@ -673,6 +700,16 @@ class MerchantService:
             key = MerchantService.normalize_platform(p) if p else (p or "UNKNOWN")
             norm_missing[key] = norm_missing.get(key, 0) + c
 
+        test_campaign_count = (
+            db.query(func.count(MerchantAssignment.id))
+            .filter(
+                MerchantAssignment.mode == "test",
+                MerchantAssignment.google_campaign_id.isnot(None),
+                MerchantAssignment.status == "active",
+            )
+            .scalar() or 0
+        )
+
         return {
             "total": total,
             "assigned": assigned,
@@ -682,6 +719,7 @@ class MerchantService:
             "missing_mid_rate": missing_mid_rate,
             "by_platform": norm_platform,
             "missing_mid_by_platform": norm_missing,
+            "test_campaign_count": test_campaign_count,
         }
 
     # ------------------------------------------------------------------
@@ -959,52 +997,6 @@ class MerchantService:
         if not end_date:
             end_date = datetime.now(timezone.utc)
 
-        # #region agent log H-A/H-B: check if assigned_at is used in the query
-        import json as _json, pathlib as _pl
-        _log_path = _pl.Path(__file__).resolve().parents[3] / "debug-74288c.log"
-        _assignments_raw = db.query(
-            MerchantAssignment.id, MerchantAssignment.user_id,
-            MerchantAssignment.merchant_id, MerchantAssignment.assigned_at,
-            AffiliateMerchant.merchant_name, AffiliateMerchant.platform,
-            AffiliateMerchant.merchant_id.label("mid_str"),
-        ).join(AffiliateMerchant, MerchantAssignment.merchant_id == AffiliateMerchant.id
-        ).filter(MerchantAssignment.status == "active").all()
-        for _a in _assignments_raw:
-            _tx_before = db.query(func.count(), func.coalesce(func.sum(AffiliateTransaction.commission_amount), 0)).filter(
-                AffiliateTransaction.platform == _a.platform,
-                AffiliateTransaction.merchant_id == _a.mid_str,
-                AffiliateTransaction.transaction_time >= start_date,
-                AffiliateTransaction.transaction_time <= end_date,
-                AffiliateTransaction.transaction_time < _a.assigned_at,
-            ).first()
-            _tx_after = db.query(func.count(), func.coalesce(func.sum(AffiliateTransaction.commission_amount), 0)).filter(
-                AffiliateTransaction.platform == _a.platform,
-                AffiliateTransaction.merchant_id == _a.mid_str,
-                AffiliateTransaction.transaction_time >= start_date,
-                AffiliateTransaction.transaction_time <= end_date,
-                AffiliateTransaction.transaction_time >= _a.assigned_at,
-            ).first()
-            _tx_total = db.query(func.count(), func.coalesce(func.sum(AffiliateTransaction.commission_amount), 0)).filter(
-                AffiliateTransaction.platform == _a.platform,
-                AffiliateTransaction.merchant_id == _a.mid_str,
-                AffiliateTransaction.transaction_time >= start_date,
-                AffiliateTransaction.transaction_time <= end_date,
-            ).first()
-            with open(_log_path, "a", encoding="utf-8") as _f:
-                _f.write(_json.dumps({"sessionId": "74288c", "hypothesisId": "H-A,H-B",
-                    "location": "merchant_service.py:get_performance",
-                    "message": "assignment_vs_transaction_timing",
-                    "data": {
-                        "assignment_id": _a.id, "user_id": _a.user_id,
-                        "merchant_name": _a.merchant_name, "platform": _a.platform, "mid": _a.mid_str,
-                        "assigned_at": str(_a.assigned_at),
-                        "query_start": str(start_date), "query_end": str(end_date),
-                        "pre_assign_tx_count": _tx_before[0], "pre_assign_commission": float(_tx_before[1]),
-                        "post_assign_tx_count": _tx_after[0], "post_assign_commission": float(_tx_after[1]),
-                        "total_tx_count": _tx_total[0], "total_commission": float(_tx_total[1]),
-                    }, "timestamp": int(datetime.now().timestamp() * 1000)}, ensure_ascii=False) + "\n")
-        # #endregion
-
         q = (
             db.query(
                 MerchantAssignment.user_id,
@@ -1135,6 +1127,52 @@ class MerchantService:
                 "commission": float(r.commission),
                 "total_target": float(r.total_target),
                 "completion_rate": round(float(r.commission) / float(r.total_target) * 100, 1) if r.total_target else None,
+            }
+            for r in rows
+        ]
+
+    # ------------------------------------------------------------------
+    # 在投人数详情
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def get_active_advertisers(db: Session, merchant_pk: int) -> list:
+        """获取某商家近30天内在投广告的员工列表及其广告数据概要。"""
+        m = db.query(AffiliateMerchant).get(merchant_pk)
+        if not m or not m.merchant_id:
+            return []
+
+        ads_since = (datetime.now() - timedelta(days=30)).date()
+        rows = (
+            db.query(
+                GoogleAdsApiData.user_id,
+                User.username,
+                User.display_name,
+                func.count(distinct(GoogleAdsApiData.campaign_id)).label("campaign_count"),
+                func.sum(GoogleAdsApiData.cost).label("total_cost"),
+                func.sum(GoogleAdsApiData.clicks).label("total_clicks"),
+                func.sum(GoogleAdsApiData.impressions).label("total_impressions"),
+            )
+            .join(User, GoogleAdsApiData.user_id == User.id)
+            .filter(
+                func.rtrim(func.lower(GoogleAdsApiData.extracted_platform_code), '0123456789') == func.lower(m.platform),
+                GoogleAdsApiData.extracted_account_code == m.merchant_id,
+                GoogleAdsApiData.date >= ads_since,
+            )
+            .group_by(GoogleAdsApiData.user_id, User.username, User.display_name)
+            .order_by(func.sum(GoogleAdsApiData.cost).desc())
+            .all()
+        )
+
+        return [
+            {
+                "user_id": r.user_id,
+                "username": r.username,
+                "display_name": r.display_name or r.username,
+                "campaign_count": r.campaign_count,
+                "total_cost": round(float(r.total_cost or 0), 2),
+                "total_clicks": int(r.total_clicks or 0),
+                "total_impressions": int(r.total_impressions or 0),
             }
             for r in rows
         ]

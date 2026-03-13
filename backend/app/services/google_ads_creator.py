@@ -185,6 +185,16 @@ class GoogleAdsCreator:
         campaign.network_settings.target_search_network = defaults.get("target_search_network", False)
         campaign.network_settings.target_content_network = defaults.get("target_content_network", False)
 
+        geo_type = defaults.get("geo_target_type", "PRESENCE")
+        if geo_type == "PRESENCE_OR_INTEREST":
+            campaign.geo_target_type_setting.positive_geo_target_type = (
+                client.enums.PositiveGeoTargetTypeEnum.PRESENCE_OR_INTEREST
+            )
+        else:
+            campaign.geo_target_type_setting.positive_geo_target_type = (
+                client.enums.PositiveGeoTargetTypeEnum.PRESENCE
+            )
+
         # 投放地区
         campaign_geo_op = client.get_type("MutateOperation")
         geo_target = campaign_geo_op.campaign_criterion_operation.create
