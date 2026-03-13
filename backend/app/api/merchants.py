@@ -77,6 +77,68 @@ async def merchant_stats(
     return MerchantService.get_stats(db)
 
 
+# ==================================================================
+# 广告创建默认设置 (must be before /{merchant_pk} catch-all routes)
+# ==================================================================
+
+AD_DEFAULTS_FILE = os.path.join(os.path.dirname(os.path.dirname(__file__)), "ad_defaults.json")
+
+DEFAULT_AD_SETTINGS = {
+    "bidding_strategy": "MANUAL_CPC",
+    "enhanced_cpc": False,
+    "target_google_search": True,
+    "target_search_network": False,
+    "target_content_network": False,
+    "default_cpc_bid": 1.0,
+    "default_daily_budget": 10,
+    "geo_target_type": "PRESENCE",
+    "eu_political_ads": False,
+}
+
+
+def _load_ad_defaults() -> dict:
+    if os.path.exists(AD_DEFAULTS_FILE):
+        try:
+            with open(AD_DEFAULTS_FILE, "r") as f:
+                return {**DEFAULT_AD_SETTINGS, **json.load(f)}
+        except Exception:
+            pass
+    return dict(DEFAULT_AD_SETTINGS)
+
+
+def _save_ad_defaults(data: dict):
+    with open(AD_DEFAULTS_FILE, "w") as f:
+        json.dump(data, f, indent=2)
+
+
+class AdDefaultsUpdate(BaseModel):
+    bidding_strategy: Optional[str] = None
+    enhanced_cpc: Optional[bool] = None
+    target_google_search: Optional[bool] = None
+    target_search_network: Optional[bool] = None
+    target_content_network: Optional[bool] = None
+    default_cpc_bid: Optional[float] = None
+    default_daily_budget: Optional[float] = None
+    geo_target_type: Optional[str] = None
+    eu_political_ads: Optional[bool] = None
+
+
+@router.get("/ad-defaults")
+async def get_ad_defaults():
+    return _load_ad_defaults()
+
+
+@router.put("/ad-defaults")
+async def update_ad_defaults(
+    data: AdDefaultsUpdate,
+    current_user: User = Depends(get_current_user),
+):
+    incoming = {k: v for k, v in data.dict().items() if v is not None}
+    settings = {**DEFAULT_AD_SETTINGS, **incoming}
+    _save_ad_defaults(settings)
+    return {"message": "广告默认设置已保存", **settings}
+
+
 @router.get("/{merchant_pk}")
 async def get_merchant(
     merchant_pk: int,
@@ -578,65 +640,3 @@ async def get_assignment_events(
             "created_at": e.created_at.isoformat() if e.created_at else None,
         })
     return {"assignment_id": assignment_id, "events": result}
-
-
-# ==================================================================
-# 广告创建默认设置
-# ==================================================================
-
-AD_DEFAULTS_FILE = os.path.join(os.path.dirname(os.path.dirname(__file__)), "ad_defaults.json")
-
-DEFAULT_AD_SETTINGS = {
-    "bidding_strategy": "MANUAL_CPC",
-    "enhanced_cpc": False,
-    "target_google_search": True,
-    "target_search_network": False,
-    "target_content_network": False,
-    "default_cpc_bid": 1.0,
-    "default_daily_budget": 10,
-    "geo_target_type": "PRESENCE",
-    "eu_political_ads": False,
-}
-
-
-def _load_ad_defaults() -> dict:
-    if os.path.exists(AD_DEFAULTS_FILE):
-        try:
-            with open(AD_DEFAULTS_FILE, "r") as f:
-                return {**DEFAULT_AD_SETTINGS, **json.load(f)}
-        except Exception:
-            pass
-    return dict(DEFAULT_AD_SETTINGS)
-
-
-def _save_ad_defaults(data: dict):
-    with open(AD_DEFAULTS_FILE, "w") as f:
-        json.dump(data, f, indent=2)
-
-
-@router.get("/ad-defaults")
-async def get_ad_defaults():
-    return _load_ad_defaults()
-
-
-class AdDefaultsUpdate(BaseModel):
-    bidding_strategy: Optional[str] = None
-    enhanced_cpc: Optional[bool] = None
-    target_google_search: Optional[bool] = None
-    target_search_network: Optional[bool] = None
-    target_content_network: Optional[bool] = None
-    default_cpc_bid: Optional[float] = None
-    default_daily_budget: Optional[float] = None
-    geo_target_type: Optional[str] = None
-    eu_political_ads: Optional[bool] = None
-
-
-@router.put("/ad-defaults")
-async def update_ad_defaults(
-    data: AdDefaultsUpdate,
-    current_user: User = Depends(get_current_user),
-):
-    incoming = {k: v for k, v in data.dict().items() if v is not None}
-    settings = {**DEFAULT_AD_SETTINGS, **incoming}
-    _save_ad_defaults(settings)
-    return {"message": "广告默认设置已保存", **settings}
