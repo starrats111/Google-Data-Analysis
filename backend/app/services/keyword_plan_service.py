@@ -77,58 +77,42 @@ class KeywordPlanService:
         customer_id: str,
         url: Optional[str] = None,
         keywords: Optional[List[str]] = None,
-        language_id: str = "1000",  # English
-        geo_target: str = "2840",  # US
+        language_id: str = "1000",
+        geo_target: str = "2840",
+        semrush_url: Optional[str] = None,
     ) -> List[Dict]:
-        """调用 KeywordPlanIdeaService 获取关键词建议。
-
-        三种输入方式：
-        - 只传 url → UrlSeed
-        - 只传 keywords → KeywordSeed
-        - 都传 → KeywordAndUrlSeed
+        """通过 SemRush 获取关键词建议（主方案）。
+        支持两种输入方式：
+        1. url - 商家网址，自动查询 SemRush
+        2. semrush_url - SemRush 链接，直接解析参数查询
         """
-        mcc = self.db.query(GoogleMccAccount).filter(GoogleMccAccount.id == mcc_id).first()
-        if not mcc:
-            raise ValueError("MCC 账号不存在")
+        from app.services.semrush_service import SemRushService
 
-        client, mcc_customer_id = create_google_ads_client(mcc)
-        keyword_plan_idea_service = client.get_service("KeywordPlanIdeaService")
+        svc = SemRushService()
 
-        request = client.get_type("GenerateKeywordIdeasRequest")
-        request.customer_id = customer_id.replace("-", "")
-        request.language = f"languageConstants/{language_id}"
-        request.geo_target_constants.append(f"geoTargetConstants/{geo_target}")
+        if semrush_url:
+            parsed = SemRushService.parse_semrush_url(semrush_url)
+            if parsed:
+                logger.info(f"[KeywordPlan] 从 SemRush URL 解析: {parsed}")
+                results = svc.get_organic_keywords(
+                    parsed["domain"], parsed["database"], parsed["search_type"],
+                )
+                if results:
+                    logger.info(f"[KeywordPlan] SemRush URL 返回 {len(results)} 个关键词")
+                    return results
 
-        # 设置种子
-        if url and keywords:
-            request.keyword_and_url_seed.url = url
-            request.keyword_and_url_seed.keywords.extend(keywords[:10])
-        elif url:
-            request.url_seed.url = url
-        elif keywords:
-            request.keyword_seed.keywords.extend(keywords[:10])
-        else:
-            raise ValueError("至少需要提供 url 或 keywords")
+        if not url:
+            raise ValueError("请提供商家网址或 SemRush 链接以进行关键词研究")
 
-        try:
-            response = keyword_plan_idea_service.generate_keyword_ideas(request=request)
-        except Exception as e:
-            logger.error(f"[KeywordPlan] API 调用失败: {e}")
-            raise ValueError(f"关键词研究失败: {str(e)}")
+        geo_to_country = {"2840": "us", "2826": "uk", "2124": "ca", "2036": "au"}
+        country = geo_to_country.get(geo_target, "us")
 
-        results = []
-        for idea in response.results:
-            metrics = idea.keyword_idea_metrics
-            results.append({
-                "keyword": idea.text,
-                "avg_monthly_searches": metrics.avg_monthly_searches or 0,
-                "competition": metrics.competition.name if metrics.competition else "UNSPECIFIED",
-                "competition_index": metrics.competition_index or 0,
-                "low_top_of_page_bid": metrics.low_top_of_page_bid_micros / 1_000_000 if metrics.low_top_of_page_bid_micros else 0,
-                "high_top_of_page_bid": metrics.high_top_of_page_bid_micros / 1_000_000 if metrics.high_top_of_page_bid_micros else 0,
-            })
-
-        # 按搜索量降序排列
-        results.sort(key=lambda x: x["avg_monthly_searches"], reverse=True)
-        logger.info(f"[KeywordPlan] 返回 {len(results)} 个关键词建议 (CID={customer_id})")
+        results = svc.get_organic_keywords(url, country)
+        if not results:
+            raise ValueError(
+                "未找到关键词。您可以：\n"
+                "1. 尝试手动输入种子关键词\n"
+                "2. 粘贴 SemRush 链接（如 https://sem.3ue.co/analytics/overview/?q=...）"
+            )
+        logger.info(f"[KeywordPlan] SemRush 返回 {len(results)} 个关键词 (url={url})")
         return results
