@@ -365,6 +365,52 @@ async def get_test_dashboard(
     return {"items": results, "total": len(results)}
 
 
+@router.delete("/campaign/{assignment_id}")
+async def delete_campaign(
+    assignment_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """删除广告系列：Google Ads 中移除 + 清除本地记录"""
+    assignment = db.query(MerchantAssignment).filter(
+        MerchantAssignment.id == assignment_id,
+        MerchantAssignment.user_id == current_user.id,
+    ).first()
+    if not assignment:
+        raise HTTPException(status_code=404, detail="分配记录不存在或不属于你")
+
+    campaign_id = assignment.google_campaign_id
+    customer_id = assignment.google_customer_id
+
+    if campaign_id and customer_id:
+        try:
+            from app.services.google_ads_client_factory import create_google_ads_client
+            mcc = db.query(GoogleMccAccount).first()
+            if mcc:
+                client, _ = create_google_ads_client(mcc)
+                cid = customer_id.replace("-", "")
+                campaign_service = client.get_service("CampaignService")
+                resource_name = campaign_service.campaign_path(cid, campaign_id)
+
+                campaign_op = client.get_type("CampaignOperation")
+                campaign_op.remove = resource_name
+
+                campaign_service.mutate_campaigns(
+                    customer_id=cid,
+                    operations=[campaign_op],
+                )
+                logger.info(f"[AdDelete] Google Ads 广告系列已删除: CID={cid}, campaign={campaign_id}")
+        except Exception as e:
+            logger.warning(f"[AdDelete] Google Ads 删除失败（将清除本地记录）: {e}")
+
+    assignment.google_campaign_id = None
+    assignment.google_customer_id = None
+    assignment.daily_budget = None
+    db.commit()
+
+    return {"message": "广告已删除", "assignment_id": assignment_id}
+
+
 # ─── AI 分析（Claude claude-opus-4-6） ───
 
 class AiAnalysisRequest(BaseModel):

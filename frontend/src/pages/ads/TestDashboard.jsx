@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react'
-import { Card, Table, Tag, Typography, Spin, Alert, Button, Space, Input, Divider, Row, Col, Statistic, message } from 'antd'
-import { ExperimentOutlined, SyncOutlined, RobotOutlined, SendOutlined, ThunderboltOutlined } from '@ant-design/icons'
+import { Card, Table, Tag, Typography, Spin, Alert, Button, Space, Input, Divider, Row, Col, Statistic, message, Popconfirm } from 'antd'
+import { ExperimentOutlined, SyncOutlined, RobotOutlined, SendOutlined, ThunderboltOutlined, DeleteOutlined } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
 import api from '../../services/api'
 import ReactMarkdown from 'react-markdown'
@@ -53,6 +53,16 @@ export default function TestDashboard() {
     } finally { setAiLoading(false) }
   }
 
+  const handleDelete = async (assignmentId) => {
+    try {
+      await api.delete(`/api/ad-creation/campaign/${assignmentId}`)
+      message.success('广告已删除')
+      fetchData()
+    } catch (err) {
+      message.error(err?.response?.data?.detail || '删除失败')
+    }
+  }
+
   const columns = [
     { title: '商家', dataIndex: 'merchant_name', width: 200 },
     { title: 'Campaign ID', dataIndex: 'campaign_id', width: 150, render: v => v || '-' },
@@ -86,6 +96,21 @@ export default function TestDashboard() {
       }
     },
     { title: '数据日期', width: 110, render: (_, r) => r.ad_data?.date || '-' },
+    {
+      title: '操作', width: 80, fixed: 'right',
+      render: (_, r) => (
+        <Popconfirm
+          title="确定删除该广告？"
+          description={r.campaign_id ? "将同时从 Google Ads 中移除广告系列" : "将取消该商家的广告关联"}
+          onConfirm={() => handleDelete(r.assignment_id)}
+          okText="删除"
+          cancelText="取消"
+          okButtonProps={{ danger: true }}
+        >
+          <Button type="link" danger size="small" icon={<DeleteOutlined />}>删除</Button>
+        </Popconfirm>
+      ),
+    },
   ]
 
   const quickQuestions = [
