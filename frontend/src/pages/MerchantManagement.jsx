@@ -148,6 +148,11 @@ const MerchantManagement = () => {
   const [commissionType, setCommissionType] = useState('self_run')
   const [commissionLoading, setCommissionLoading] = useState(false)
 
+  const [advertiserModalOpen, setAdvertiserModalOpen] = useState(false)
+  const [advertiserData, setAdvertiserData] = useState([])
+  const [advertiserMerchant, setAdvertiserMerchant] = useState(null)
+  const [advertiserLoading, setAdvertiserLoading] = useState(false)
+
   const [currentMerchant, setCurrentMerchant] = useState(null)
   const [currentAssignment, setCurrentAssignment] = useState(null)
 
@@ -463,6 +468,23 @@ const MerchantManagement = () => {
     }
   }
 
+  const handleAdvertiserClick = async (record) => {
+    const count = record.active_advertiser_count || 0
+    if (count === 0) return
+    setAdvertiserMerchant(record)
+    setAdvertiserLoading(true)
+    setAdvertiserModalOpen(true)
+    try {
+      const resp = await api.get(`/api/merchants/${record.id}/active-advertisers`)
+      setAdvertiserData(resp.data)
+    } catch (error) {
+      message.error(error.response?.data?.detail || '获取在投人员失败')
+      setAdvertiserModalOpen(false)
+    } finally {
+      setAdvertiserLoading(false)
+    }
+  }
+
   const handleInlineMidSave = async (merchantId) => {
     const val = editingMidValue.trim()
     if (val && !/^\d+$/.test(val)) {
@@ -698,10 +720,10 @@ const MerchantManagement = () => {
       width: 100,
       align: 'center',
       sorter: (a, b) => (a.active_advertiser_count || 0) - (b.active_advertiser_count || 0),
-      render: (count) => {
+      render: (count, record) => {
         const n = count || 0
         if (n === 0) return <Tag>0</Tag>
-        return <Tag color="blue">{n}</Tag>
+        return <Tag color="blue" style={{ cursor: 'pointer' }} onClick={() => handleAdvertiserClick(record)}>{n}</Tag>
       },
     },
     {
@@ -1661,6 +1683,58 @@ const MerchantManagement = () => {
             />
           </>
         ) : null}
+      </Modal>
+
+      {/* 在投人数详情弹窗 */}
+      <Modal
+        title={`在投人员 — ${advertiserMerchant?.merchant_name || ''}`}
+        open={advertiserModalOpen}
+        onCancel={() => { setAdvertiserModalOpen(false); setAdvertiserData([]) }}
+        footer={null}
+        width={700}
+        destroyOnHidden
+      >
+        {advertiserLoading ? (
+          <div style={{ textAlign: 'center', padding: 32 }}><Spin /></div>
+        ) : (
+          <Table
+            rowKey="user_id"
+            size="small"
+            pagination={false}
+            dataSource={advertiserData}
+            columns={[
+              { title: '员工', dataIndex: 'display_name', key: 'name', render: (v, r) => v || r.username },
+              { title: '广告系列数', dataIndex: 'campaign_count', key: 'campaigns', align: 'center' },
+              { title: '总花费', dataIndex: 'total_cost', key: 'cost', align: 'right', render: v => `$${(v || 0).toFixed(2)}` },
+              { title: '总点击', dataIndex: 'total_clicks', key: 'clicks', align: 'right', render: v => (v || 0).toLocaleString() },
+              { title: '总展示', dataIndex: 'total_impressions', key: 'impressions', align: 'right', render: v => (v || 0).toLocaleString() },
+              {
+                title: 'CTR', key: 'ctr', align: 'right',
+                render: (_, r) => r.total_impressions > 0 ? `${(r.total_clicks / r.total_impressions * 100).toFixed(2)}%` : '-',
+              },
+              {
+                title: 'CPC', key: 'cpc', align: 'right',
+                render: (_, r) => r.total_clicks > 0 ? `$${(r.total_cost / r.total_clicks).toFixed(2)}` : '-',
+              },
+            ]}
+            summary={(rows) => {
+              const tc = rows.reduce((s, r) => s + (r.total_cost || 0), 0)
+              const tk = rows.reduce((s, r) => s + (r.total_clicks || 0), 0)
+              const ti = rows.reduce((s, r) => s + (r.total_impressions || 0), 0)
+              return (
+                <Table.Summary.Row>
+                  <Table.Summary.Cell index={0}><strong>合计</strong></Table.Summary.Cell>
+                  <Table.Summary.Cell index={1} align="center"><strong>{rows.reduce((s, r) => s + (r.campaign_count || 0), 0)}</strong></Table.Summary.Cell>
+                  <Table.Summary.Cell index={2} align="right"><strong>${tc.toFixed(2)}</strong></Table.Summary.Cell>
+                  <Table.Summary.Cell index={3} align="right"><strong>{tk.toLocaleString()}</strong></Table.Summary.Cell>
+                  <Table.Summary.Cell index={4} align="right"><strong>{ti.toLocaleString()}</strong></Table.Summary.Cell>
+                  <Table.Summary.Cell index={5} align="right"><strong>{ti > 0 ? `${(tk / ti * 100).toFixed(2)}%` : '-'}</strong></Table.Summary.Cell>
+                  <Table.Summary.Cell index={6} align="right"><strong>{tk > 0 ? `$${(tc / tk).toFixed(2)}` : '-'}</strong></Table.Summary.Cell>
+                </Table.Summary.Row>
+              )
+            }}
+          />
+        )}
       </Modal>
 
       <Modal
