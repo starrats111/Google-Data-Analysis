@@ -783,7 +783,7 @@ const MerchantManagement = () => {
             size="small"
             type="link"
             style={{ padding: '0 4px', color: '#722ed1' }}
-            onClick={() => handleClaimMerchant(record, 'test')}
+            onClick={() => openClaimModal(record)}
           >
             领取
           </Button>
@@ -838,33 +838,60 @@ const MerchantManagement = () => {
     },
   ]
 
-  // CR-039: 领取商家
-  const handleClaimMerchant = async (record, mode = 'test') => {
+  // CR-048: 领取商家 — 先弹窗选择国家+模式
+  const [claimModalOpen, setClaimModalOpen] = useState(false)
+  const [claimRecord, setClaimRecord] = useState(null)
+  const [claimCountry, setClaimCountry] = useState('US')
+  const [claimMode, setClaimMode] = useState('test')
+
+  const CLAIM_COUNTRIES = [
+    { value: 'US', label: '美国 (English)' },
+    { value: 'UK', label: '英国 (English)' },
+    { value: 'CA', label: '加拿大 (English)' },
+    { value: 'AU', label: '澳大利亚 (English)' },
+    { value: 'DE', label: '德国 (German)' },
+    { value: 'FR', label: '法国 (French)' },
+    { value: 'JP', label: '日本 (Japanese)' },
+    { value: 'BR', label: '巴西 (Portuguese)' },
+  ]
+
+  const openClaimModal = (record) => {
+    setClaimRecord(record)
+    setClaimCountry('US')
+    setClaimMode('test')
+    setClaimModalOpen(true)
+  }
+
+  const handleClaimConfirm = async () => {
+    if (!claimRecord) return
     try {
       const res = await api.post('/api/merchant-assignments/claim', {
-        merchant_ids: [record.id],
-        mode,
+        merchant_ids: [claimRecord.id],
+        mode: claimMode,
+        target_country: claimCountry,
       })
       const created = res.data?.assignments || []
       if (created.length > 0) {
-        message.success(`已领取商家: ${record.merchant_name}`)
+        message.success(`已领取商家: ${claimRecord.merchant_name}`)
+        setClaimModalOpen(false)
         fetchMerchants(merchantPage, merchantPageSize)
         const assignment = created[0]
         Modal.confirm({
           title: '领取成功',
-          content: `已领取商家「${record.merchant_name}」，是否立即为该商家创建广告？`,
+          content: `已领取商家「${claimRecord.merchant_name}」(${claimCountry}, ${claimMode === 'test' ? '测试模式' : '正式模式'})，是否立即创建广告？`,
           okText: '创建广告',
           cancelText: '稍后再说',
           onOk: () => {
             const params = new URLSearchParams({
               assignment_id: assignment.id,
-              merchant_name: record.merchant_name || '',
+              merchant_name: claimRecord.merchant_name || '',
             })
             navigate(`/ads/create?${params.toString()}`)
           },
         })
       } else {
         message.info(res.data?.message || '商家已领取')
+        setClaimModalOpen(false)
         fetchMerchants(merchantPage, merchantPageSize)
       }
     } catch (err) {
@@ -1769,6 +1796,40 @@ const MerchantManagement = () => {
             <Input.TextArea rows={3} />
           </Form.Item>
         </Form>
+      </Modal>
+
+      {/* CR-048: 领取商家弹窗 — 选择国家+模式 */}
+      <Modal
+        title={`领取商家: ${claimRecord?.merchant_name || ''}`}
+        open={claimModalOpen}
+        onOk={handleClaimConfirm}
+        onCancel={() => setClaimModalOpen(false)}
+        okText="确认领取"
+        cancelText="取消"
+      >
+        <Space direction="vertical" style={{ width: '100%' }} size={16}>
+          <div>
+            <div style={{ marginBottom: 6, fontWeight: 500 }}>投放国家</div>
+            <Select
+              style={{ width: '100%' }}
+              value={claimCountry}
+              onChange={setClaimCountry}
+              options={CLAIM_COUNTRIES}
+            />
+          </div>
+          <div>
+            <div style={{ marginBottom: 6, fontWeight: 500 }}>投放模式</div>
+            <Select
+              style={{ width: '100%' }}
+              value={claimMode}
+              onChange={setClaimMode}
+              options={[
+                { value: 'test', label: '测试模式 — 小预算测试效果' },
+                { value: 'normal', label: '正式模式 — 正式投放' },
+              ]}
+            />
+          </div>
+        </Space>
       </Modal>
     </div>
   )
