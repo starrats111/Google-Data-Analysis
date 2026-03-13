@@ -211,9 +211,8 @@ const MerchantManagement = () => {
 
   useEffect(() => {
     fetchUsers()
-    fetchStats()
+    fetchStats().then(() => loadAdDefaults()).catch(() => {})
     fetchMerchants(1, merchantPageSize)
-    loadAdDefaults()
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
