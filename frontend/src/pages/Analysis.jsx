@@ -72,6 +72,7 @@ const Analysis = () => {
   // 详情弹窗状态
   const [detailModalOpen, setDetailModalOpen] = useState(false)
   const [detailRecord, setDetailRecord] = useState(null)
+  const [roiFilter, setRoiFilter] = useState('all')
 
   // 打开单行部署弹窗
   const handleSingleDeploy = (row) => {
@@ -1428,42 +1429,79 @@ G) 综述
 
       {/* 详情弹窗 */}
       <Modal
-        title={detailRecord ? `${detailRecord.username || user?.username || ''} - ${String(detailRecord.analysis_date || '').slice(0, 10)}（${processDetailData(detailRecord).length}条）` : '详情'}
+        title={detailRecord ? `${detailRecord.username || user?.username || ''} - ${String(detailRecord.analysis_date || '').slice(0, 10)}` : '详情'}
         open={detailModalOpen}
-        onCancel={() => { setDetailModalOpen(false); setDetailRecord(null) }}
+        onCancel={() => { setDetailModalOpen(false); setDetailRecord(null); setRoiFilter('all') }}
         footer={null}
         width="90vw"
         destroyOnClose
       >
         {detailRecord && (() => {
-          const detailData = processDetailData(detailRecord)
-          if (detailData.length === 0) return <Text type="secondary">暂无数据</Text>
+          const allDetailData = processDetailData(detailRecord)
+          if (allDetailData.length === 0) return <Text type="secondary">暂无数据</Text>
+          const detailData = roiFilter === 'all' ? allDetailData : allDetailData.filter(row => {
+            const roi = row['ROI']
+            if (roi === '-' || roi === null || roi === undefined || roi === '') {
+              return roiFilter === 'none'
+            }
+            const v = parseFloat(roi)
+            if (isNaN(v)) return roiFilter === 'none'
+            switch (roiFilter) {
+              case 'negative': return v < 0
+              case 'low': return v >= 0 && v < 1.0
+              case 'mid': return v >= 1.0 && v < 3.0
+              case 'high': return v >= 3.0
+              case 'none': return false
+              default: return true
+            }
+          })
           const detailCols = buildDetailColumns(detailRecord.analysis_date, detailRecord.result_data)
           return (
-            <Table
-              columns={detailCols}
-              dataSource={detailData}
-              rowKey="__rowKey"
-              size="small"
-              bordered
-              scroll={{ y: 600 }}
-              rowClassName={(record) => {
-                // CR-039: 测试商家标黄（广告系列名含 _test_）
-                const name = record['广告系列名'] || ''
-                return name.includes('_test_') ? 'test-campaign-row' : ''
-              }}
-              pagination={detailData.length > 50 ? {
-                pageSize: 50,
-                size: 'small',
-                showTotal: (total) => `共 ${total} 条`,
-                showSizeChanger: true,
-                pageSizeOptions: ['20', '50', '100'],
-              } : {
-                pageSize: 50,
-                size: 'small',
-                hideOnSinglePage: true,
-              }}
-            />
+            <>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12, flexWrap: 'wrap' }}>
+                <Text type="secondary" style={{ fontSize: 13 }}>ROI筛选：</Text>
+                <Select
+                  value={roiFilter}
+                  onChange={setRoiFilter}
+                  style={{ width: 180 }}
+                  size="small"
+                  options={[
+                    { label: `全部（${allDetailData.length}条）`, value: 'all' },
+                    { label: 'ROI < 0（亏损）', value: 'negative' },
+                    { label: '0 ≤ ROI < 1（待优化）', value: 'low' },
+                    { label: '1 ≤ ROI < 3（一般）', value: 'mid' },
+                    { label: 'ROI ≥ 3（优秀）', value: 'high' },
+                    { label: '无ROI数据', value: 'none' },
+                  ]}
+                />
+                <Text type="secondary" style={{ fontSize: 12 }}>
+                  筛选后 {detailData.length} 条
+                </Text>
+              </div>
+              <Table
+                columns={detailCols}
+                dataSource={detailData}
+                rowKey="__rowKey"
+                size="small"
+                bordered
+                scroll={{ y: 600 }}
+                rowClassName={(record) => {
+                  const name = record['广告系列名'] || ''
+                  return name.includes('_test_') ? 'test-campaign-row' : ''
+                }}
+                pagination={detailData.length > 50 ? {
+                  pageSize: 50,
+                  size: 'small',
+                  showTotal: (total) => `共 ${total} 条`,
+                  showSizeChanger: true,
+                  pageSizeOptions: ['20', '50', '100'],
+                } : {
+                  pageSize: 50,
+                  size: 'small',
+                  hideOnSinglePage: true,
+                }}
+              />
+            </>
           )
         })()}
       </Modal>
