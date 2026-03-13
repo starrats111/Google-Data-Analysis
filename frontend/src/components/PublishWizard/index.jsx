@@ -8,7 +8,7 @@ import {
   RocketOutlined, CheckOutlined, PlusOutlined, DeleteOutlined,
   ShopOutlined, FileTextOutlined, GlobalOutlined, LinkOutlined,
   SearchOutlined, ThunderboltOutlined, InboxOutlined, UploadOutlined,
-  ClockCircleOutlined,
+  ClockCircleOutlined, EyeOutlined,
 } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
 import dayjs from 'dayjs'
@@ -153,6 +153,8 @@ const PublishWizard = () => {
   const [stockImages, setStockImages] = useState([])             // 图片库待选图（字符串或对象）
   const [imagePoolMode, setImagePoolMode] = useState('crawl')    // 'crawl' | 'stock'
   const [searchingImages, setSearchingImages] = useState(false)
+  const [poolPreviewSrc, setPoolPreviewSrc] = useState('')
+  const [poolPreviewOpen, setPoolPreviewOpen] = useState(false)
   const [imageCacheSession, setImageCacheSession] = useState('') // CR-040: 缓存会话 ID
 
   // === 手动上传图片 State ===
@@ -1250,7 +1252,6 @@ const PublishWizard = () => {
                         {i === 0 ? '头图' : `内容${i}`}
                       </Tag>
                       <Image src={getImgDisplayUrl(src)} width={110} height={110} style={{ objectFit: 'cover', borderRadius: 6 }}
-                        preview={false}
                         fallback="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACklEQVR4nGMAAQAABQABDQottAAAAABJRU5ErkJggg=="
                       />
                       <Button type="text" danger size="small" icon={<DeleteOutlined />}
@@ -1329,10 +1330,24 @@ const PublishWizard = () => {
                           <PlusOutlined style={{ color: '#fff', fontSize: 12 }} />
                         </div>
                       )}
+                      <div
+                        style={{ position: 'absolute', bottom: 4, right: 4, zIndex: 2, background: 'rgba(0,0,0,0.5)', borderRadius: '50%', width: 22, height: 22, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}
+                        onClick={(e) => { e.stopPropagation(); setPoolPreviewSrc(getImgDisplayUrl(imgObj)); setPoolPreviewOpen(true) }}
+                      >
+                        <EyeOutlined style={{ color: '#fff', fontSize: 12 }} />
+                      </div>
                     </div>
                   )
                 })}
               </Space>
+              <Image
+                style={{ display: 'none' }}
+                preview={{
+                  visible: poolPreviewOpen,
+                  src: poolPreviewSrc,
+                  onVisibleChange: (vis) => setPoolPreviewOpen(vis),
+                }}
+              />
             </div>
 
             {/* ===== 文章语言设置 ===== */}
