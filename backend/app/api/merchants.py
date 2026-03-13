@@ -634,7 +634,7 @@ class AdDefaultsUpdate(BaseModel):
 @router.put("/ad-defaults")
 async def update_ad_defaults(
     data: AdDefaultsUpdate,
-    current_user: User = Depends(get_current_manager),
+    current_user: User = Depends(get_current_user),
 ):
     settings = data.dict()
     _save_ad_defaults(settings)

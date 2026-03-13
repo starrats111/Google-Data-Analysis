@@ -1053,11 +1053,9 @@ const MerchantManagement = () => {
               size="small"
               title={<span style={{ fontSize: 13 }}>广告投放设置</span>}
               extra={
-                canManage && (
-                  <Button size="small" icon={<SettingOutlined />} onClick={() => { loadAdDefaults(); setAdDefaultsModalOpen(true) }}>
-                    编辑
-                  </Button>
-                )
+                <Button size="small" icon={<SettingOutlined />} onClick={() => { loadAdDefaults(); setAdDefaultsModalOpen(true) }}>
+                  编辑
+                </Button>
               }
               style={{ height: '100%' }}
             >
