@@ -1,11 +1,13 @@
 """
-广告创建 API（CR-039）
-提供关键词研究、AI 素材生成、广告创建的完整流程端点。
+广告创建 API（CR-039 / CR-048）
+提供关键词研究、AI 素材生成（含 SSE 流式）、广告创建的完整流程端点。
 """
+import json
 import logging
 from typing import Optional, List
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -13,7 +15,8 @@ from app.database import get_db
 from app.middleware.auth import get_current_user
 from app.models.user import User
 from app.models.google_ads_api_data import GoogleMccAccount, GoogleAdsApiData
-from app.models.merchant import MerchantAssignment
+from app.models.merchant import MerchantAssignment, AffiliateMerchant
+from app.models.campaign_link_cache import CampaignLinkCache
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/ad-creation", tags=["广告创建"])
@@ -32,6 +35,7 @@ class KeywordRequest(BaseModel):
     keywords: Optional[List[str]] = None
     language_id: str = "1000"
     geo_target: str = "2840"
+    semrush_url: Optional[str] = None
 
 
 class AdCopyRequest(BaseModel):
@@ -40,6 +44,8 @@ class AdCopyRequest(BaseModel):
     keywords: List[dict] = Field(default_factory=list)
     category: str = ""
     language: str = "en"
+    target_country: str = "US"
+    mcc_id: Optional[int] = None
 
 
 class CreateAdRequest(BaseModel):
@@ -83,6 +89,42 @@ async def list_mcc_accounts(
     ]
 
 
+@router.get("/assignment-detail/{assignment_id}")
+async def get_assignment_detail(
+    assignment_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """根据分配 ID 获取商家网址等详情，用于广告向导自动填入"""
+    assignment = db.query(MerchantAssignment).filter(
+        MerchantAssignment.id == assignment_id,
+        MerchantAssignment.user_id == current_user.id,
+    ).first()
+    if not assignment:
+        raise HTTPException(status_code=404, detail="分配记录不存在或不属于你")
+
+    merchant = assignment.merchant
+    if not merchant:
+        raise HTTPException(status_code=404, detail="商家不存在")
+
+    site_url = ""
+    if merchant.merchant_id:
+        cache = db.query(CampaignLinkCache).filter(
+            CampaignLinkCache.platform_code == merchant.platform,
+            CampaignLinkCache.merchant_id == merchant.merchant_id,
+        ).first()
+        if cache and cache.site_url:
+            site_url = cache.site_url
+
+    return {
+        "merchant_name": merchant.merchant_name,
+        "platform": merchant.platform,
+        "site_url": site_url,
+        "target_country": assignment.target_country or "US",
+        "mode": assignment.mode or "normal",
+    }
+
+
 @router.post("/find-available-cid")
 async def find_available_cid(
     data: FindCidRequest,
@@ -105,7 +147,7 @@ async def generate_keyword_ideas(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """关键词研究（1 次 API 调用）"""
+    """关键词研究 — 支持商家 URL 或 SemRush 链接"""
     from app.services.keyword_plan_service import KeywordPlanService
     svc = KeywordPlanService(db)
     try:
@@ -116,6 +158,7 @@ async def generate_keyword_ideas(
             keywords=data.keywords,
             language_id=data.language_id,
             geo_target=data.geo_target,
+            semrush_url=data.semrush_url,
         )
         return {"keywords": results, "count": len(results)}
     except ValueError as e:
@@ -126,20 +169,90 @@ async def generate_keyword_ideas(
 async def generate_ad_copy(
     data: AdCopyRequest,
     current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
 ):
-    """AI 生成广告素材"""
-    from app.services.ad_copy_generator import ad_copy_generator
+    """AI 生成广告素材（非流式，兼容旧版）"""
+    from app.services.ad_copy_generator import ad_copy_generator, analyze_user_campaigns
+    history = None
+    if data.mcc_id:
+        try:
+            history = analyze_user_campaigns(current_user.id, data.mcc_id, db)
+        except Exception as e:
+            logger.warning(f"[AdCopy] 历史分析失败: {e}")
     try:
         result = ad_copy_generator.generate_ad_copy(
             merchant_name=data.merchant_name,
             merchant_url=data.merchant_url,
             keywords=data.keywords,
             category=data.category,
-            language=data.language,
+            target_country=data.target_country,
+            history=history,
         )
         return result
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/generate-ad-copy-stream")
+async def generate_ad_copy_stream(
+    data: AdCopyRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """AI 生成广告素材（SSE 流式输出思考过程）"""
+    from app.services.ad_copy_generator import ad_copy_generator, analyze_user_campaigns, COUNTRY_LANGUAGE_MAP
+
+    history = None
+    history_summary = ""
+    if data.mcc_id:
+        try:
+            history = analyze_user_campaigns(current_user.id, data.mcc_id, db)
+            if history and history["has_data"]:
+                history_summary = f"已分析 {history['total_campaigns']} 个广告系列"
+                if history["top_campaigns"]:
+                    best = history["top_campaigns"][0]
+                    history_summary += f"，最佳广告「{best['campaign_name']}」CTR={best['ctr']}%"
+        except Exception as e:
+            logger.warning(f"[AdCopy] 历史分析失败: {e}")
+
+    country_info = COUNTRY_LANGUAGE_MAP.get(data.target_country, COUNTRY_LANGUAGE_MAP["US"])
+
+    def event_stream():
+        sse = lambda d: f"data: {json.dumps(d, ensure_ascii=False)}\n\n"
+
+        yield sse({"phase": "analyzing", "text": f"正在加载历史数据...\n"})
+
+        if history_summary:
+            yield sse({"phase": "history", "text": f"✓ {history_summary}\n"})
+        else:
+            yield sse({"phase": "history", "text": "✓ 基于行业经验生成\n"})
+
+        yield sse({
+            "phase": "thinking_start",
+            "text": f"✓ 目标: {country_info['name']}（{country_info['language']}）\n⚡ 正在为「{data.merchant_name}」生成广告文案...\n\n",
+        })
+
+        try:
+            for chunk in ad_copy_generator.generate_ad_copy_stream(
+                merchant_name=data.merchant_name,
+                merchant_url=data.merchant_url,
+                keywords=data.keywords,
+                target_country=data.target_country,
+                history=history,
+                category=data.category,
+            ):
+                if chunk.startswith("<<FINAL_JSON>>"):
+                    result = json.loads(chunk[14:])
+                    yield sse({"phase": "done", "result": result})
+                elif chunk.startswith("<<ERROR>>"):
+                    yield sse({"phase": "error", "text": chunk[9:]})
+                else:
+                    yield sse({"phase": "thinking", "text": chunk})
+        except Exception as e:
+            logger.error(f"[AdCopy Stream] 失败: {e}")
+            yield sse({"phase": "error", "text": str(e)})
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
 
 
 @router.post("/create-campaign")
