@@ -4,6 +4,7 @@ Google Ads 广告创建服务（CR-039 / CR-048）
 Campaign → AdGroup → AdGroupAd (RSA) → AdGroupCriterion (Keywords) → CampaignAsset (Sitelinks)
 """
 import logging
+import traceback
 from datetime import datetime
 from typing import Dict, List, Optional
 
@@ -97,7 +98,7 @@ class GoogleAdsCreator:
 
         except Exception as e:
             error_msg = str(e)
-            logger.error(f"[AdsCreator] 广告创建失败: {e}")
+            logger.error(f"[AdsCreator] 广告创建失败: {e}\n{traceback.format_exc()}")
 
             failure_details = []
             if hasattr(e, 'failure') and e.failure:
@@ -173,13 +174,17 @@ class GoogleAdsCreator:
 
         bidding = defaults.get("bidding_strategy", "MANUAL_CPC")
         if bidding == "MAXIMIZE_CLICKS":
-            campaign.maximize_clicks.cpc_bid_ceiling_micros = int(defaults.get("default_cpc_bid", 2.0) * 1_000_000)
+            cpc_ceiling = int(defaults.get("default_cpc_bid", 2.0) * 1_000_000)
+            if cpc_ceiling > 0:
+                campaign.maximize_clicks.cpc_bid_ceiling_micros = cpc_ceiling
+            else:
+                campaign.maximize_clicks.cpc_bid_ceiling_micros = 2_000_000
+            logger.info(f"[AdsCreator] bidding=MAXIMIZE_CLICKS, ceiling={campaign.maximize_clicks.cpc_bid_ceiling_micros}")
         else:
-            # protobuf3 oneof: setting bool to False (default) won't populate the oneof,
-            # so set True first to force populate, then set the desired value
             campaign.manual_cpc.enhanced_cpc_enabled = True
             if not defaults.get("enhanced_cpc", True):
                 campaign.manual_cpc.enhanced_cpc_enabled = False
+            logger.info(f"[AdsCreator] bidding=MANUAL_CPC, enhanced_cpc={campaign.manual_cpc.enhanced_cpc_enabled}")
 
         campaign.network_settings.target_google_search = defaults.get("target_google_search", True)
         campaign.network_settings.target_search_network = defaults.get("target_search_network", False)
