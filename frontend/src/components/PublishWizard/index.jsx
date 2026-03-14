@@ -1284,7 +1284,7 @@ const PublishWizard = () => {
             <div style={{ marginBottom: 20 }}>
               <div style={{ display: 'flex', alignItems: 'center', marginBottom: 8, gap: 12 }}>
                 <Typography.Title level={5} style={{ margin: 0, color: '#ff4d4f' }}>待选用图</Typography.Title>
-                {(crawledImages.length > 0 || stockImages.length > 0) && (
+                {crawledImages.length > 0 && (
                   <Segmented
                     size="small"
                     value={imagePoolMode}
@@ -1298,15 +1298,15 @@ const PublishWizard = () => {
                     ]}
                   />
                 )}
-                {(crawledImages.length > 0 || stockImages.length > 0) && (
+                {crawledImages.length > 0 && (
                   <Typography.Text type="secondary" style={{ fontSize: 12 }}>
                     点击图片添加到文章用图
                   </Typography.Text>
                 )}
               </div>
 
-              {/* 爬虫失败：手动上传模式 */}
-              {crawledImages.length === 0 && stockImages.length === 0 && !searchingImages && (
+              {/* 爬虫失败（0张爬取图）：手动上传模式 */}
+              {crawledImages.length === 0 && (
                 <div>
                   <Alert type="warning" message="未从商家网站获取到图片，请手动上传" showIcon style={{ marginBottom: 12 }} />
                   <Row gutter={16}>
@@ -1394,9 +1394,6 @@ const PublishWizard = () => {
               )}
 
               {/* 爬虫成功：正常图片选择 */}
-              {imagePoolMode === 'crawl' && crawledImages.length === 0 && stockImages.length > 0 && (
-                <Alert type="warning" message="未从商家网站获取到图片，可切换到图片库" showIcon />
-              )}
               {imagePoolMode === 'stock' && searchingImages && <Spin tip="搜索图片库中..." />}
               {imagePoolMode === 'stock' && !searchingImages && stockImages.length === 0 && crawledImages.length > 0 && (
                 <Alert type="info" message="图片库暂无匹配结果" showIcon />
