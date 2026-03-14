@@ -1316,10 +1316,10 @@ const PublishWizard = () => {
                 )}
               </div>
 
-              {/* 爬虫失败且图库也无图：手动上传模式 */}
-              {crawledImages.length === 0 && stockImages.length === 0 && !searchingImages && (
+              {/* 爬虫失败：显示手动上传区域（不论图库是否有图） */}
+              {crawledImages.length === 0 && !searchingImages && (
                 <div>
-                  <Alert type="warning" message="未从商家网站获取到图片，请手动上传" showIcon style={{ marginBottom: 12 }} />
+                  <Alert type="warning" message={stockImages.length > 0 ? "未从商家网站获取到图片，可手动上传或从下方图库选取" : "未从商家网站获取到图片，请手动上传"} showIcon style={{ marginBottom: 12 }} />
                   <Row gutter={16}>
                     <Col span={8}>
                       <div style={{ textAlign: 'center', marginBottom: 4 }}>
