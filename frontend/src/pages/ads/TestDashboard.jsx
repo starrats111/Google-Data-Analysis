@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react'
-import { Card, Table, Tag, Typography, Spin, Alert, Button, Space, Input, Divider, Row, Col, Statistic, message, Popconfirm } from 'antd'
-import { ExperimentOutlined, SyncOutlined, RobotOutlined, SendOutlined, ThunderboltOutlined, DeleteOutlined } from '@ant-design/icons'
+import { Card, Table, Tag, Typography, Spin, Alert, Button, Space, Input, Divider, Row, Col, Statistic, message, Popconfirm, Dropdown } from 'antd'
+import { ExperimentOutlined, SyncOutlined, RobotOutlined, SendOutlined, ThunderboltOutlined, DeleteOutlined, CheckCircleOutlined, CloseCircleOutlined, MoreOutlined } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
 import api from '../../services/api'
 import ReactMarkdown from 'react-markdown'
@@ -63,6 +63,26 @@ export default function TestDashboard() {
     }
   }
 
+  const handlePromote = async (assignmentId) => {
+    try {
+      await api.post(`/api/ad-creation/promote/${assignmentId}`)
+      message.success('已转为正式投放')
+      fetchData()
+    } catch (err) {
+      message.error(err?.response?.data?.detail || '转正式失败')
+    }
+  }
+
+  const handleRemove = async (assignmentId) => {
+    try {
+      await api.post(`/api/ad-creation/remove/${assignmentId}`)
+      message.success('已从测试看板移除')
+      fetchData()
+    } catch (err) {
+      message.error(err?.response?.data?.detail || '移除失败')
+    }
+  }
+
   const columns = [
     { title: '商家', dataIndex: 'merchant_name', width: 200 },
     { title: 'Campaign ID', dataIndex: 'campaign_id', width: 150, render: v => v || '-' },
@@ -97,18 +117,38 @@ export default function TestDashboard() {
     },
     { title: '数据日期', width: 110, render: (_, r) => r.ad_data?.date || '-' },
     {
-      title: '操作', width: 80, fixed: 'right',
+      title: '操作', width: 160, fixed: 'right',
       render: (_, r) => (
-        <Popconfirm
-          title="确定删除该广告？"
-          description={r.campaign_id ? "将同时从 Google Ads 中移除广告系列" : "将取消该商家的广告关联"}
-          onConfirm={() => handleDelete(r.assignment_id)}
-          okText="删除"
-          cancelText="取消"
-          okButtonProps={{ danger: true }}
-        >
-          <Button type="link" danger size="small" icon={<DeleteOutlined />}>删除</Button>
-        </Popconfirm>
+        <Space size={0}>
+          <Popconfirm
+            title="确定转为正式投放？"
+            description="广告将继续运行，商家从测试看板转入正式管理"
+            onConfirm={() => handlePromote(r.assignment_id)}
+            okText="确定"
+            cancelText="取消"
+          >
+            <Button type="link" size="small" icon={<CheckCircleOutlined />} style={{ color: '#52c41a' }}>转正式</Button>
+          </Popconfirm>
+          <Popconfirm
+            title="确定移除？"
+            description="仅从测试看板移除，不会删除 Google Ads 广告"
+            onConfirm={() => handleRemove(r.assignment_id)}
+            okText="移除"
+            cancelText="取消"
+          >
+            <Button type="link" size="small" icon={<CloseCircleOutlined />}>移除</Button>
+          </Popconfirm>
+          <Popconfirm
+            title="确定删除广告？"
+            description={r.campaign_id ? "将同时从 Google Ads 中删除广告系列" : "将清除广告关联"}
+            onConfirm={() => handleDelete(r.assignment_id)}
+            okText="删除"
+            cancelText="取消"
+            okButtonProps={{ danger: true }}
+          >
+            <Button type="link" danger size="small" icon={<DeleteOutlined />}>删除</Button>
+          </Popconfirm>
+        </Space>
       ),
     },
   ]

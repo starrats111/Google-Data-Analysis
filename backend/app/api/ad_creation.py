@@ -411,6 +411,48 @@ async def delete_campaign(
     return {"message": "广告已删除", "assignment_id": assignment_id}
 
 
+@router.post("/promote/{assignment_id}")
+async def promote_to_production(
+    assignment_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """将测试商家转为正式投放模式"""
+    assignment = db.query(MerchantAssignment).filter(
+        MerchantAssignment.id == assignment_id,
+        MerchantAssignment.user_id == current_user.id,
+    ).first()
+    if not assignment:
+        raise HTTPException(status_code=404, detail="分配记录不存在或不属于你")
+    if assignment.mode != "test":
+        raise HTTPException(status_code=400, detail="该商家已是正式模式")
+
+    assignment.mode = "normal"
+    db.commit()
+    logger.info(f"[AdPromotion] 测试转正式: assignment={assignment_id}, user={current_user.username}")
+    return {"message": "已转为正式投放", "assignment_id": assignment_id}
+
+
+@router.post("/remove/{assignment_id}")
+async def remove_from_test(
+    assignment_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """从测试看板移除（取消分配，不删广告）"""
+    assignment = db.query(MerchantAssignment).filter(
+        MerchantAssignment.id == assignment_id,
+        MerchantAssignment.user_id == current_user.id,
+    ).first()
+    if not assignment:
+        raise HTTPException(status_code=404, detail="分配记录不存在或不属于你")
+
+    assignment.status = "cancelled"
+    db.commit()
+    logger.info(f"[AdRemove] 移除测试: assignment={assignment_id}, user={current_user.username}")
+    return {"message": "已从测试看板移除", "assignment_id": assignment_id}
+
+
 # ─── AI 分析（Claude claude-opus-4-6） ───
 
 class AiAnalysisRequest(BaseModel):
