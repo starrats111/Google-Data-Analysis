@@ -290,6 +290,12 @@ export default function AdCreationWizard() {
       setCreateResult(res.data)
       setConfirmModalOpen(false)
       message.success('广告创建成功！')
+      // 将刚使用的 CID 加入忙碌列表，防止连续创建时重复使用
+      if (availableCid) {
+        setBusyCids(prev => [...prev, availableCid])
+        setAllCids(prev => prev.filter(c => c !== availableCid))
+        setAvailableCid('')
+      }
     } catch (err) {
       message.error(err?.response?.data?.detail || '广告创建失败')
     } finally { setLoading(false) }

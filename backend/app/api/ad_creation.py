@@ -359,6 +359,19 @@ async def create_campaign(
             "is_existing": True,
         }
 
+    # 检查该 CID 是否已有启用的广告系列
+    cid_clean = data.customer_id.replace("-", "") if data.customer_id else data.customer_id
+    existing_enabled = db.query(GoogleAdsApiData).filter(
+        GoogleAdsApiData.customer_id.in_([data.customer_id, cid_clean]),
+        GoogleAdsApiData.status == '已启用',
+        GoogleAdsApiData.user_id == current_user.id,
+    ).first()
+    if existing_enabled:
+        raise HTTPException(
+            status_code=400,
+            detail=f"CID {data.customer_id} 已有启用的广告系列「{existing_enabled.campaign_name}」，请选择其他空闲 CID",
+        )
+
     from app.services.google_ads_creator import GoogleAdsCreator
     creator = GoogleAdsCreator(db)
     try:

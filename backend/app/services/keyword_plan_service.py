@@ -23,8 +23,11 @@ class KeywordPlanService:
     def find_available_cid(self, mcc_id: int) -> dict:
         """查找 MCC 下的可用 CID，优先返回空闲的，全部繁忙时返回第一个。
 
+        对每个 CID 检查其**最近一条记录**的状态，而非仅看某一天。
         返回 {"customer_id": str, "all_cids": list, "busy_cids": list}
         """
+        from sqlalchemy import and_
+
         mcc = self.db.query(GoogleMccAccount).filter(GoogleMccAccount.id == mcc_id).first()
         if not mcc:
             raise ValueError("MCC 账号不存在，请先在设置中添加 MCC")
@@ -38,23 +41,27 @@ class KeywordPlanService:
         if not all_cid_list:
             raise ValueError("MCC 下没有 CID 数据，请先执行一次数据同步")
 
-        latest_date = self.db.query(func.max(GoogleAdsApiData.date)).filter(
+        # 子查询：每个 CID 的最新日期
+        max_date_sub = self.db.query(
+            GoogleAdsApiData.customer_id,
+            func.max(GoogleAdsApiData.date).label("max_date"),
+        ).filter(
             GoogleAdsApiData.mcc_id == mcc_id,
-        ).scalar()
+            GoogleAdsApiData.customer_id.isnot(None),
+        ).group_by(GoogleAdsApiData.customer_id).subquery()
 
-        if latest_date is None:
-            return {
-                "customer_id": all_cid_list[0],
-                "all_cids": all_cid_list,
-                "busy_cids": [],
-            }
-
-        busy_cids_q = self.db.query(GoogleAdsApiData.customer_id).filter(
+        # 在每个 CID 最新日期中，如果存在 status=='已启用' 的广告系列，该 CID 就是忙碌的
+        busy_rows = self.db.query(GoogleAdsApiData.customer_id).join(
+            max_date_sub,
+            and_(
+                GoogleAdsApiData.customer_id == max_date_sub.c.customer_id,
+                GoogleAdsApiData.date == max_date_sub.c.max_date,
+            ),
+        ).filter(
             GoogleAdsApiData.mcc_id == mcc_id,
             GoogleAdsApiData.status == '已启用',
-            GoogleAdsApiData.date == latest_date,
         ).distinct().all()
-        busy_set = {c[0] for c in busy_cids_q if c[0]}
+        busy_set = {r[0] for r in busy_rows if r[0]}
 
         recommended = None
         for cid in all_cid_list:
