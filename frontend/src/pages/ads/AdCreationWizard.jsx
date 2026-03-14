@@ -12,6 +12,16 @@ const COUNTRY_LABELS = {
   DE: '德国', FR: '法国', JP: '日本', BR: '巴西',
 }
 
+const COUNTRY_LANGUAGE = {
+  US: 'English', UK: 'English', CA: 'English', AU: 'English',
+  DE: 'Deutsch', FR: 'Français', JP: '日本語', BR: 'Português',
+}
+
+const COUNTRY_LANGUAGE_ZH = {
+  US: '英语', UK: '英语', CA: '英语', AU: '英语',
+  DE: '德语', FR: '法语', JP: '日语', BR: '葡萄牙语',
+}
+
 export default function AdCreationWizard() {
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
@@ -695,6 +705,10 @@ export default function AdCreationWizard() {
           <Row>
             <Col span={8}><Typography.Text strong>投放国家</Typography.Text></Col>
             <Col span={16}><Tag color="cyan">{COUNTRY_LABELS[targetCountry] || targetCountry}</Tag></Col>
+          </Row>
+          <Row>
+            <Col span={8}><Typography.Text strong>语言</Typography.Text></Col>
+            <Col span={16}><Tag color="purple">{COUNTRY_LANGUAGE[targetCountry] || 'English'} ({COUNTRY_LANGUAGE_ZH[targetCountry] || '英语'})</Tag></Col>
           </Row>
           <Row>
             <Col span={8}><Typography.Text strong>模式</Typography.Text></Col>

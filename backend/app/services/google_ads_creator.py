@@ -252,6 +252,20 @@ class GoogleAdsCreator:
         operations.append(campaign_op)
         operations.append(campaign_geo_op)
 
+        # 语言定位
+        lang_map = {
+            "US": "1000", "UK": "1000", "CA": "1000", "AU": "1000",
+            "DE": "1001", "FR": "1002", "JP": "1005", "BR": "1014",
+        }
+        lang_id = lang_map.get(target_country, "1000")
+        lang_op = client.get_type("MutateOperation")
+        lang_target = lang_op.campaign_criterion_operation.create
+        lang_target.campaign = client.get_service("CampaignService").campaign_path(
+            customer_id, str(CAMPAIGN_TEMP_ID)
+        )
+        lang_target.language.language_constant = f"languageConstants/{lang_id}"
+        operations.append(lang_op)
+
         # 3. AdGroup
         ad_group_op = client.get_type("MutateOperation")
         ad_group = ad_group_op.ad_group_operation.create
