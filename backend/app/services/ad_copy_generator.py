@@ -256,8 +256,9 @@ JSON格式(严格遵守):
 ```
 
 要求:
-- 标题正好15条，每条严格≤30字符（超出必须缩短，绝不截断）
-- 描述正好4条，每条严格≤90字符（超出必须缩短，绝不截断）
+- 标题正好15条，每条严格≤30字符。30字符的参考长度: "Shop TYMO Hair Tools - 50% Off"正好30字符
+- 描述正好4条，每条严格≤90字符。90字符的参考长度: "Shop premium hair styling tools at TYMO. Free shipping on orders over $50. Limited time."正好87字符
+- 写完每条都要数一下字符数（含空格和标点），超出的必须改短
 - 严禁使用任何emoji表情符号（如🎉✓❤️🔥等）
 - 文案用{language}，翻译用中文
 - 专业、真实、符合{country_name}消费者语言习惯"""
@@ -463,15 +464,16 @@ JSON格式(严格遵守):
             for i in bad_d:
                 items.append(f"描述{i+1} (当前{len(descriptions[i])}字符，需≤90): {descriptions[i]}")
 
-            prompt = f"""以下 Google Ads 文案超出字符限制，请缩短每条使其符合要求，保持原意不变。
-禁止使用任何 emoji 表情符号。不要截断，要改写为更简洁的表达。
+            prompt = f"""以下 Google Ads 文案超出字符限制。请根据每条的中文意思，重新用英文写一条更短的版本。
+重要: 标题必须≤25字符，描述必须≤80字符（留余量确保合规）。
+禁止使用 emoji。不要截断原文，要全新改写为更简洁的表达。
 
 {chr(10).join(items)}
 
 返回 JSON:
 {{"headlines": [全部{len(headlines)}条标题], "descriptions": [全部{len(descriptions)}条描述], "headline_translations": [对应中文翻译], "description_translations": [对应中文翻译]}}
 
-规则：只替换超长的条目，其他条目原样保留。"""
+规则：只替换超长的条目，其他条目原样保留。写完后数一下字符数确认不超。"""
 
             messages = [{"role": "user", "content": prompt}]
             raw = self.gen_service._call_with_fallback(messages, max_tokens=2000, fast=True)
@@ -516,34 +518,49 @@ JSON格式(严格遵守):
     def _force_short_rewrite(self, text: str, max_len: int, copy_type: str, merchant_name: str) -> tuple:
         """对仍超长的单条文案全新重写，确保语义完整且字数合规。返回 (新文案, 中文翻译)。"""
         label = "标题" if copy_type == "headline" else "描述"
-        safe_len = max_len - 5
-        prompt = (
-            f"你是 Google Ads 文案专家。请为商家「{merchant_name}」写一条广告{label}。\n"
-            f"原文参考（超长了）: {text}\n\n"
-            f"要求:\n"
-            f"- 新文案必须不超过 {safe_len} 个字符（留余量，硬上限 {max_len}）\n"
-            f"- 必须是完整的、有意义的句子，保持原文的核心卖点\n"
-            f"- 禁止使用任何 emoji 表情符号\n"
-            f"- 禁止简单截断，必须重新组织语言\n\n"
-            f'返回 JSON: {{"text": "新文案", "translation": "中文翻译"}}'
-        )
-        try:
-            messages = [{"role": "user", "content": prompt}]
-            raw = self.gen_service._call_with_fallback(messages, max_tokens=300, fast=True)
-            result = self._parse_json(raw)
-            new_text = _strip_emoji(result.get("text", ""))
-            new_trans = _strip_emoji(result.get("translation", ""))
-            if new_text and len(new_text) <= max_len:
-                return new_text, new_trans
-            logger.warning("[AdCopy] _force_short_rewrite 返回仍超长(%d), 使用通用短文案", len(new_text))
-        except Exception as e:
-            logger.warning("[AdCopy] _force_short_rewrite 失败: %s", e)
+        target_len = int(max_len * 0.75)
+
+        for attempt in range(3):
+            try:
+                prompt = (
+                    f"原文超长了（{len(text)}字符），请根据原文意思，全新写一条 Google Ads 广告{label}。\n"
+                    f"商家: {merchant_name}\n"
+                    f"原文: {text}\n\n"
+                    f"硬性要求:\n"
+                    f"- 新文案必须不超过 {target_len} 个字符（包括空格和标点，绝对不能超过 {max_len}）\n"
+                    f"- 用英文写，必须是一句完整的、有意义的话\n"
+                    f"- 禁止使用 emoji\n"
+                    f"- 举例: 一个{max_len}字符以内的{label}长这样: "
+                )
+                if copy_type == "headline":
+                    prompt += '"Shop TYMO Tools - Save Big"(27字符)\n\n'
+                else:
+                    prompt += '"Shop top-rated styling tools at great prices. Free shipping available today."(78字符)\n\n'
+                prompt += f'只返回 JSON: {{"text": "新文案", "translation": "中文翻译"}}'
+
+                messages = [{"role": "user", "content": prompt}]
+                raw = self.gen_service._call_with_fallback(messages, max_tokens=200, fast=True)
+                result = self._parse_json(raw)
+                new_text = _strip_emoji(result.get("text", ""))
+                new_trans = _strip_emoji(result.get("translation", ""))
+                if new_text and len(new_text) <= max_len:
+                    logger.info("[AdCopy] _force_short_rewrite 成功(attempt=%d, len=%d)", attempt + 1, len(new_text))
+                    return new_text, new_trans
+                logger.warning("[AdCopy] _force_short_rewrite attempt %d 仍超长(%d)", attempt + 1, len(new_text))
+                target_len = int(max_len * 0.6)
+            except Exception as e:
+                logger.warning("[AdCopy] _force_short_rewrite attempt %d 失败: %s", attempt + 1, e)
 
         if copy_type == "headline":
-            fallback = f"Shop {merchant_name} Now"[:max_len]
+            fb = f"Shop {merchant_name} Deals"
+            if len(fb) > max_len:
+                fb = f"{merchant_name} Sale"[:max_len]
         else:
-            fallback = f"Discover great deals at {merchant_name}. Shop now for the best offers."[:max_len]
-        return fallback, ""
+            fb = f"Great deals on {merchant_name} products. Shop now and save."
+            if len(fb) > max_len:
+                fb = f"Shop {merchant_name} today. Save big on top products."[:max_len]
+        logger.warning("[AdCopy] 使用保底文案: %s", fb)
+        return fb, ""
 
     def _parse_json(self, raw: str) -> dict:
         """从 AI 返回中提取 JSON"""
