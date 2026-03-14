@@ -211,7 +211,8 @@ class AdCopyGenerator:
 - 每条都要附带中文翻译
 
 返回 JSON 格式（thinking 字段包含第一步到第四步的所有分析，recommended_budget 是建议日预算）:
-{{"thinking": "第一步...\\n第二步...\\n第三步...\\n第四步...", "recommended_budget": 10, "headlines": ["h1", ...], "headline_translations": ["翻译1", ...], "descriptions": ["d1", ...], "description_translations": ["翻译1", ...]}}"""
+{{"thinking": "第一步...\\n第二步...\\n第三步...\\n第四步...", "recommended_budget": 10, "headlines": ["Shop TYMO Now", ...], "headline_translations": ["立即选购TYMO", ...], "descriptions": ["d1", ...], "description_translations": ["完整中文翻译句子", ...]}}
+注意: headline_translations 和 description_translations 必须是完整的中文翻译句子，不能只写品牌名!"""
 
     def _build_prompt_fast(
         self,
@@ -252,12 +253,13 @@ class AdCopyGenerator:
 
 JSON格式(严格遵守):
 ```json
-{{"recommended_budget": 10, "headlines": ["15条{language}标题,每条≤30字符"], "headline_translations": ["15条中文翻译"], "descriptions": ["4条{language}描述,每条≤90字符"], "description_translations": ["4条中文翻译"]}}
+{{"recommended_budget": 10, "headlines": ["Shop TYMO Hair Tools Now", "TYMO: Style Starts Here", "...共15条"], "headline_translations": ["立即选购TYMO美发工具", "TYMO：时尚从这里开始", "...共15条中文翻译"], "descriptions": ["Shop premium hair styling tools at TYMO. Free shipping on orders over $50.", "...共4条"], "description_translations": ["在TYMO选购优质美发造型工具。满50美元免运费。", "...共4条中文翻译"]}}
 ```
 
 要求:
 - 标题正好15条，每条严格≤30字符。30字符的参考长度: "Shop TYMO Hair Tools - 50% Off"正好30字符
 - 描述正好4条，每条严格≤90字符。90字符的参考长度: "Shop premium hair styling tools at TYMO. Free shipping on orders over $50. Limited time."正好87字符
+- headline_translations 和 description_translations 必须是完整的中文翻译句子，不能只写品牌名！每条英文文案对应一条完整中文翻译
 - 写完每条都要数一下字符数（含空格和标点），超出的必须改短
 - 严禁使用任何emoji表情符号（如🎉✓❤️🔥等）
 - 文案用{language}，翻译用中文
@@ -471,9 +473,9 @@ JSON格式(严格遵守):
 {chr(10).join(items)}
 
 返回 JSON:
-{{"headlines": [全部{len(headlines)}条标题], "descriptions": [全部{len(descriptions)}条描述], "headline_translations": [对应中文翻译], "description_translations": [对应中文翻译]}}
+{{"headlines": [全部{len(headlines)}条标题], "descriptions": [全部{len(descriptions)}条描述], "headline_translations": [对应完整中文翻译句子], "description_translations": [对应完整中文翻译句子]}}
 
-规则：只替换超长的条目，其他条目原样保留。写完后数一下字符数确认不超。"""
+规则：只替换超长的条目，其他条目原样保留。翻译必须是完整的中文句子（不能只写品牌名）。写完后数一下字符数确认不超。"""
 
             messages = [{"role": "user", "content": prompt}]
             raw = self.gen_service._call_with_fallback(messages, max_tokens=2000, fast=True)

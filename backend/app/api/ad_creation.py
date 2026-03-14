@@ -305,7 +305,7 @@ async def modify_ad_copy(
 
 返回 JSON:
 ```json
-{{"headlines": ["修改后的标题列表"], "headline_translations": ["中文翻译"], "descriptions": ["修改后的描述列表"], "description_translations": ["中文翻译"], "reply": "简短说明你做了什么修改"}}
+{{"headlines": ["修改后的标题列表"], "headline_translations": ["每条标题的完整中文翻译句子，不能只写品牌名"], "descriptions": ["修改后的描述列表"], "description_translations": ["每条描述的完整中文翻译句子，不能只写品牌名"], "reply": "简短说明你做了什么修改"}}
 ```"""
 
     messages = [{"role": "user", "content": prompt}]
