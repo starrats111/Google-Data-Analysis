@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.middleware.auth import get_current_user, get_current_manager, get_current_manager_or_leader
 from app.models.user import User
-from app.schemas.merchant import MerchantUpdate, AssignmentCreate, AssignmentUpdate, AssignmentTransfer
+from app.schemas.merchant import MerchantUpdate
 from app.services.merchant_service import MerchantService
 
 router = APIRouter(prefix="/api/merchants", tags=["商家管理"])
@@ -498,27 +498,6 @@ async def claim_merchants(
     }
 
 
-@assignment_router.post("")
-async def create_assignments(
-    data: AssignmentCreate,
-    current_user: User = Depends(get_current_manager_or_leader),
-    db: Session = Depends(get_db),
-):
-    try:
-        created = MerchantService.assign_merchants(
-            db,
-            merchant_ids=data.merchant_ids,
-            user_id=data.user_id,
-            assigned_by=current_user.id,
-            priority=data.priority,
-            monthly_target=data.monthly_target,
-            notes=data.notes,
-        )
-        return {"message": f"成功分配 {len(created)} 个商家", "count": len(created)}
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
-
 @assignment_router.get("")
 async def list_assignments(
     user_id: Optional[int] = None,
@@ -536,49 +515,6 @@ async def list_assignments(
         page=page,
         page_size=page_size,
     )
-
-
-@assignment_router.put("/{assignment_id}")
-async def update_assignment(
-    assignment_id: int,
-    data: AssignmentUpdate,
-    current_user: User = Depends(get_current_manager_or_leader),
-    db: Session = Depends(get_db),
-):
-    a = MerchantService.update_assignment(db, assignment_id, data.model_dump(exclude_unset=True))
-    if not a:
-        raise HTTPException(status_code=404, detail="分配记录不存在")
-    return {"message": "更新成功"}
-
-
-@assignment_router.delete("/{assignment_id}")
-async def delete_assignment(
-    assignment_id: int,
-    current_user: User = Depends(get_current_manager_or_leader),
-    db: Session = Depends(get_db),
-):
-    ok = MerchantService.delete_assignment(db, assignment_id)
-    if not ok:
-        raise HTTPException(status_code=404, detail="分配记录不存在")
-    return {"message": "已取消分配"}
-
-
-@assignment_router.post("/transfer")
-async def transfer_assignments(
-    data: AssignmentTransfer,
-    current_user: User = Depends(get_current_manager),
-    db: Session = Depends(get_db),
-):
-    try:
-        count = MerchantService.transfer_assignments(
-            db,
-            assignment_ids=data.assignment_ids,
-            new_user_id=data.new_user_id,
-            transferred_by=current_user.id,
-        )
-        return {"message": f"成功转移 {count} 个分配", "count": count}
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
 
 
 # ==================================================================

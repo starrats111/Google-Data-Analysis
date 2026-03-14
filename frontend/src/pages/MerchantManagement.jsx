@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState, useCallback } from 'react'
+import React, { useEffect, useMemo, useState } from 'react'
 import {
   Card,
   Table,
@@ -11,20 +11,18 @@ import {
   Tabs,
   Modal,
   message,
-  Popconfirm,
   InputNumber,
   Statistic,
   Row,
   Col,
   Tooltip,
   Badge,
-  DatePicker,
   Spin,
   Upload,
   Alert,
   Popover,
 } from 'antd'
-import { ReloadOutlined, SearchOutlined, UserSwitchOutlined, SyncOutlined, CheckCircleOutlined, CloudSyncOutlined, UploadOutlined, WarningOutlined, InboxOutlined, ThunderboltOutlined, SettingOutlined } from '@ant-design/icons'
+import { ReloadOutlined, SearchOutlined, SyncOutlined, CheckCircleOutlined, CloudSyncOutlined, WarningOutlined, InboxOutlined, ThunderboltOutlined, SettingOutlined } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
 import api from '../services/api'
 import { useAuth } from '../store/authStore'
@@ -62,21 +60,6 @@ function translateCategory(raw) {
 }
 
 const { Option } = Select
-const { RangePicker } = DatePicker
-
-const statusColorMap = {
-  active: 'green',
-  inactive: 'default',
-  completed: 'blue',
-  cancelled: 'red',
-}
-
-const priorityColorMap = {
-  high: 'red',
-  normal: 'blue',
-  low: 'default',
-}
-
 const relationshipStatusMap = {
   joined: { color: 'green', label: '通过' },
   pending: { color: 'orange', label: '审核' },
@@ -103,11 +86,6 @@ const MerchantManagement = () => {
   const [merchantPage, setMerchantPage] = useState(1)
   const [merchantPageSize, setMerchantPageSize] = useState(20)
 
-  const [assignments, setAssignments] = useState([])
-  const [assignmentTotal, setAssignmentTotal] = useState(0)
-  const [assignmentPage, setAssignmentPage] = useState(1)
-  const [assignmentPageSize, setAssignmentPageSize] = useState(20)
-
   const [stats, setStats] = useState({
     total: 0,
     assigned: 0,
@@ -130,18 +108,7 @@ const MerchantManagement = () => {
     relationship_status: undefined,
     search: '',
   })
-  const [assignmentFilters, setAssignmentFilters] = useState({
-    user_id: undefined,
-    status: undefined,
-  })
-
-  const [selectedMerchantIds, setSelectedMerchantIds] = useState([])
-  const [selectedAssignmentIds, setSelectedAssignmentIds] = useState([])
-
-  const [assignModalOpen, setAssignModalOpen] = useState(false)
-  const [transferModalOpen, setTransferModalOpen] = useState(false)
   const [editMerchantModalOpen, setEditMerchantModalOpen] = useState(false)
-  const [editAssignmentModalOpen, setEditAssignmentModalOpen] = useState(false)
   const [commissionModalOpen, setCommissionModalOpen] = useState(false)
   const [commissionData, setCommissionData] = useState(null)
   const [commissionMerchant, setCommissionMerchant] = useState(null)
@@ -154,8 +121,6 @@ const MerchantManagement = () => {
   const [advertiserLoading, setAdvertiserLoading] = useState(false)
 
   const [currentMerchant, setCurrentMerchant] = useState(null)
-  const [currentAssignment, setCurrentAssignment] = useState(null)
-
   const [platformSyncLoading, setPlatformSyncLoading] = useState(false)
   const [midRepairLoading, setMidRepairLoading] = useState(false)
   const [editingMidId, setEditingMidId] = useState(null)
@@ -181,14 +146,7 @@ const MerchantManagement = () => {
   const [recommendUploadResult, setRecommendUploadResult] = useState(null)
   const [recommendUploading, setRecommendUploading] = useState(false)
 
-  // 分配弹窗 - 商家详情
-  const [campaignDetails, setCampaignDetails] = useState([])
-  const [campaignDetailsLoading, setCampaignDetailsLoading] = useState(false)
-
-  const [assignForm] = Form.useForm()
-  const [transferForm] = Form.useForm()
   const [editMerchantForm] = Form.useForm()
-  const [editAssignmentForm] = Form.useForm()
 
   const platformTags = useMemo(() => {
     const entries = Object.entries(stats.by_platform || {})
@@ -222,9 +180,7 @@ const MerchantManagement = () => {
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
-    if (tabKey === 'assignments') {
-      fetchAssignments(1, assignmentPageSize)
-    } else if (tabKey === 'missing_mid') {
+    if (tabKey === 'missing_mid') {
       setMerchantFilters((s) => ({ ...s, missing_mid: true }))
       setTimeout(() => fetchMerchants(1, merchantPageSize), 0)
     } else if (tabKey === 'violations') {
@@ -366,33 +322,8 @@ const MerchantManagement = () => {
       setMerchantTotal(data.total || 0)
       setMerchantPage(page)
       setMerchantPageSize(pageSize)
-      setSelectedMerchantIds([])
     } catch (error) {
       message.error(error.response?.data?.detail || '获取商家列表失败')
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  const fetchAssignments = async (page = assignmentPage, pageSize = assignmentPageSize) => {
-    setLoading(true)
-    try {
-      const params = {
-        page,
-        page_size: pageSize,
-      }
-      if (assignmentFilters.user_id) params.user_id = assignmentFilters.user_id
-      if (assignmentFilters.status) params.status = assignmentFilters.status
-
-      const resp = await api.get('/api/merchant-assignments', { params })
-      const data = resp.data || {}
-      setAssignments(data.items || [])
-      setAssignmentTotal(data.total || 0)
-      setAssignmentPage(page)
-      setAssignmentPageSize(pageSize)
-      setSelectedAssignmentIds([])
-    } catch (error) {
-      message.error(error.response?.data?.detail || '获取分配记录失败')
     } finally {
       setLoading(false)
     }
@@ -505,62 +436,6 @@ const MerchantManagement = () => {
     }
   }
 
-  const handleAssignSubmit = async () => {
-    try {
-      const values = await assignForm.validateFields()
-      if (!selectedMerchantIds.length) {
-        message.warning('请先选择商家')
-        return
-      }
-      await api.post('/api/merchant-assignments', {
-        merchant_ids: selectedMerchantIds,
-        user_id: values.user_id,
-        priority: values.priority || 'normal',
-        monthly_target: values.monthly_target,
-        notes: values.notes,
-      })
-      message.success('分配成功')
-      setAssignModalOpen(false)
-      assignForm.resetFields()
-      setCampaignDetails([])
-      await Promise.all([fetchStats(), fetchMerchants(merchantPage, merchantPageSize), fetchAssignments(1, assignmentPageSize)])
-    } catch (error) {
-      if (error?.errorFields) return
-      message.error(error.response?.data?.detail || '分配失败')
-    }
-  }
-
-  const handleTransferSubmit = async () => {
-    try {
-      const values = await transferForm.validateFields()
-      if (!selectedAssignmentIds.length) {
-        message.warning('请先选择分配记录')
-        return
-      }
-      await api.post('/api/merchant-assignments/transfer', {
-        assignment_ids: selectedAssignmentIds,
-        new_user_id: values.new_user_id,
-      })
-      message.success('转移成功')
-      setTransferModalOpen(false)
-      transferForm.resetFields()
-      await Promise.all([fetchStats(), fetchMerchants(merchantPage, merchantPageSize), fetchAssignments(assignmentPage, assignmentPageSize)])
-    } catch (error) {
-      if (error?.errorFields) return
-      message.error(error.response?.data?.detail || '转移失败')
-    }
-  }
-
-  const handleCancelAssignment = async (assignmentId) => {
-    try {
-      await api.delete(`/api/merchant-assignments/${assignmentId}`)
-      message.success('已取消分配')
-      await Promise.all([fetchStats(), fetchMerchants(merchantPage, merchantPageSize), fetchAssignments(assignmentPage, assignmentPageSize)])
-    } catch (error) {
-      message.error(error.response?.data?.detail || '取消分配失败')
-    }
-  }
-
   const handleToggleTag = async (record, field, value) => {
     try {
       await api.put(`/api/merchants/${record.id}`, { [field]: value })
@@ -595,31 +470,6 @@ const MerchantManagement = () => {
     } catch (error) {
       if (error?.errorFields) return
       message.error(error.response?.data?.detail || '商家更新失败')
-    }
-  }
-
-  const openEditAssignmentModal = (assignment) => {
-    setCurrentAssignment(assignment)
-    editAssignmentForm.setFieldsValue({
-      priority: assignment.priority,
-      monthly_target: assignment.monthly_target,
-      status: assignment.status,
-      notes: assignment.notes,
-    })
-    setEditAssignmentModalOpen(true)
-  }
-
-  const handleEditAssignmentSubmit = async () => {
-    try {
-      const values = await editAssignmentForm.validateFields()
-      await api.put(`/api/merchant-assignments/${currentAssignment.id}`, values)
-      message.success('分配更新成功')
-      setEditAssignmentModalOpen(false)
-      setCurrentAssignment(null)
-      await Promise.all([fetchStats(), fetchMerchants(merchantPage, merchantPageSize), fetchAssignments(assignmentPage, assignmentPageSize)])
-    } catch (error) {
-      if (error?.errorFields) return
-      message.error(error.response?.data?.detail || '分配更新失败')
     }
   }
 
@@ -904,7 +754,6 @@ const MerchantManagement = () => {
         message.success(`已领取商家: ${claimRecord.merchant_name}`)
         setClaimModalOpen(false)
         fetchMerchants(merchantPage, merchantPageSize)
-        fetchAssignments(assignmentPage, assignmentPageSize)
         const assignment = created[0]
         Modal.confirm({
           title: '领取成功',
@@ -949,138 +798,6 @@ const MerchantManagement = () => {
       setClaimLoading(false)
     }
   }
-
-  const assignmentColumns = [
-    {
-      title: '商家',
-      key: 'merchant',
-      width: 220,
-      fixed: 'left',
-      render: (_, record) => (
-        <Space direction="vertical" size={0}>
-          <span style={{ fontWeight: 600 }}>{record.merchant?.merchant_name || '-'}</span>
-          <span style={{ color: '#8c8c8c', fontSize: 12 }}>
-            {record.merchant?.platform || '-'} / {record.merchant?.merchant_id || '-'}
-          </span>
-        </Space>
-      ),
-    },
-    canManage && {
-      title: '负责人',
-      key: 'owner',
-      width: 140,
-      render: (_, record) => record.display_name || record.username || '-',
-    },
-    {
-      title: '分配人',
-      dataIndex: 'assigned_by_name',
-      key: 'assigned_by_name',
-      width: 120,
-      render: (val) => val || '-',
-    },
-    {
-      title: '优先级',
-      dataIndex: 'priority',
-      key: 'priority',
-      width: 100,
-      render: (val) => <Tag color={priorityColorMap[val] || 'default'}>{val || '-'}</Tag>,
-    },
-    {
-      title: '月目标佣金',
-      dataIndex: 'monthly_target',
-      key: 'monthly_target',
-      width: 140,
-      align: 'right',
-      render: (val) => (val ? `$${Number(val).toFixed(2)}` : '-'),
-    },
-    {
-      title: '状态',
-      dataIndex: 'status',
-      key: 'status',
-      width: 110,
-      render: (val) => <Tag color={statusColorMap[val] || 'default'}>{val || '-'}</Tag>,
-    },
-    {
-      title: '分配时间',
-      dataIndex: 'assigned_at',
-      key: 'assigned_at',
-      width: 180,
-      render: (val) => (val ? new Date(val).toLocaleString('zh-CN') : '-'),
-    },
-    {
-      title: '备注',
-      dataIndex: 'notes',
-      key: 'notes',
-      width: 180,
-      render: (val) => val || '-',
-    },
-    {
-      title: '操作',
-      key: 'action',
-      width: canManage ? 250 : 120,
-      fixed: 'right',
-      render: (_, record) => (
-        <Space>
-          {!record.google_campaign_id && (
-            <Button
-              size="small"
-              type="primary"
-              icon={<ThunderboltOutlined />}
-              onClick={() => {
-                const params = new URLSearchParams({
-                  assignment_id: record.id,
-                  merchant_name: record.merchant?.merchant_name || '',
-                })
-                navigate(`/ads/create?${params.toString()}`)
-              }}
-            >
-              创建广告
-            </Button>
-          )}
-          {record.google_campaign_id && (
-            <Tag color="green">已创建</Tag>
-          )}
-          {canManage && (
-            <>
-              <Button size="small" onClick={() => openEditAssignmentModal(record)}>
-                编辑
-              </Button>
-              <Popconfirm
-                title="确认取消该分配吗？"
-                onConfirm={() => handleCancelAssignment(record.id)}
-                okText="确认"
-                cancelText="取消"
-              >
-                <Button size="small" danger>
-                  取消
-                </Button>
-              </Popconfirm>
-            </>
-          )}
-        </Space>
-      ),
-    },
-  ].filter(Boolean)
-
-  const merchantRowSelection = canManage
-    ? {
-        selectedRowKeys: selectedMerchantIds,
-        onChange: (keys) => setSelectedMerchantIds(keys),
-      }
-    : undefined
-
-  const assignmentRowSelection = canManage
-    ? {
-        selectedRowKeys: selectedAssignmentIds,
-        onChange: (keys) => setSelectedAssignmentIds(keys),
-      }
-    : undefined
-
-  // 员工视角的简化统计
-  const myAssignmentStats = useMemo(() => {
-    const activeCount = assignments.filter(a => a.status === 'active').length
-    return { activeCount }
-  }, [assignments])
 
   return (
     <div>
@@ -1186,19 +903,6 @@ const MerchantManagement = () => {
                     {isManager && (
                       <Button icon={<CloudSyncOutlined />} loading={platformSyncLoading} onClick={handlePlatformSync}>平台同步</Button>
                     )}
-                    {canManage && (
-                      <Button
-                        type="primary"
-                        icon={<UserSwitchOutlined />}
-                        disabled={!selectedMerchantIds.length}
-                        onClick={() => {
-                          setAssignModalOpen(true)
-                          assignForm.setFieldsValue({ priority: 'normal' })
-                        }}
-                      >
-                        分配给员工
-                      </Button>
-                    )}
                   </Space>
                 }
               >
@@ -1294,7 +998,6 @@ const MerchantManagement = () => {
                   loading={loading && tabKey === 'merchants'}
                   columns={merchantColumns}
                   dataSource={merchants}
-                  rowSelection={merchantRowSelection}
                   scroll={{ x: 1600 }}
                   pagination={{
                     current: merchantPage,
@@ -1303,86 +1006,6 @@ const MerchantManagement = () => {
                     showSizeChanger: true,
                     showTotal: (total) => `共 ${total} 条`,
                     onChange: (page, size) => fetchMerchants(page, size),
-                  }}
-                />
-              </Card>
-            ),
-          },
-          {
-            key: 'assignments',
-            label: '分配记录',
-            children: (
-              <Card
-                title="分配记录"
-                extra={
-                  <Space>
-                    <Button icon={<ReloadOutlined />} onClick={() => fetchAssignments(assignmentPage, assignmentPageSize)} />
-                    {isManager && (
-                      <Button
-                        type="primary"
-                        disabled={!selectedAssignmentIds.length}
-                        onClick={() => setTransferModalOpen(true)}
-                      >
-                        批量转移
-                      </Button>
-                    )}
-                  </Space>
-                }
-              >
-                <Space wrap style={{ marginBottom: 12 }}>
-                  {canManage && (
-                    <Select
-                      allowClear
-                      placeholder="负责人"
-                      style={{ width: 180 }}
-                      value={assignmentFilters.user_id}
-                      onChange={(v) => setAssignmentFilters((s) => ({ ...s, user_id: v }))}
-                    >
-                      {userOptions.map((u) => (
-                        <Option key={u.id} value={u.id}>
-                          {u.display_name || u.username}
-                        </Option>
-                      ))}
-                    </Select>
-                  )}
-
-                  <Select
-                    allowClear
-                    placeholder="状态"
-                    style={{ width: 140 }}
-                    value={assignmentFilters.status}
-                    onChange={(v) => setAssignmentFilters((s) => ({ ...s, status: v }))}
-                  >
-                    <Option value="active">active</Option>
-                    <Option value="completed">completed</Option>
-                    <Option value="cancelled">cancelled</Option>
-                  </Select>
-
-                  <Button type="primary" onClick={() => fetchAssignments(1, assignmentPageSize)}>查询</Button>
-                  <Button
-                    onClick={() => {
-                      setAssignmentFilters({ user_id: undefined, status: undefined })
-                      setTimeout(() => fetchAssignments(1, assignmentPageSize), 0)
-                    }}
-                  >
-                    重置
-                  </Button>
-                </Space>
-
-                <Table
-                  rowKey="id"
-                  loading={loading && tabKey === 'assignments'}
-                  columns={assignmentColumns}
-                  dataSource={assignments}
-                  rowSelection={canManage ? assignmentRowSelection : undefined}
-                  scroll={{ x: canManage ? 1400 : 1000 }}
-                  pagination={{
-                    current: assignmentPage,
-                    pageSize: assignmentPageSize,
-                    total: assignmentTotal,
-                    showSizeChanger: true,
-                    showTotal: (total) => `共 ${total} 条`,
-                    onChange: (page, size) => fetchAssignments(page, size),
                   }}
                 />
               </Card>
@@ -1756,100 +1379,6 @@ const MerchantManagement = () => {
       </Modal>
 
       <Modal
-        title={`批量分配商家（${selectedMerchantIds.length}个）`}
-        open={assignModalOpen}
-        onOk={handleAssignSubmit}
-        onCancel={() => {
-          setAssignModalOpen(false)
-          assignForm.resetFields()
-        }}
-        destroyOnHidden
-      >
-        <Form form={assignForm} layout="vertical">
-          <Form.Item name="user_id" label="分配给员工" rules={[{ required: true, message: '请选择员工' }]}> 
-            <Select placeholder="选择员工" onChange={async (uid) => {
-              if (!selectedMerchantIds.length || !uid) return
-              setCampaignDetailsLoading(true)
-              try {
-                const details = await Promise.all(
-                  selectedMerchantIds.slice(0, 10).map(mid =>
-                    api.get(`/api/merchants/${mid}/campaign-detail`, { params: { user_id: uid } }).then(r => r.data).catch(() => null)
-                  )
-                )
-                setCampaignDetails(details.filter(Boolean))
-              } catch { setCampaignDetails([]) }
-              finally { setCampaignDetailsLoading(false) }
-            }}>
-              {userOptions.map((u) => (
-                <Option key={u.id} value={u.id}>{u.display_name || u.username}</Option>
-              ))}
-            </Select>
-          </Form.Item>
-
-          {campaignDetailsLoading && <Spin size="small" style={{ marginBottom: 12 }} />}
-          {campaignDetails.length > 0 && (
-            <div style={{ marginBottom: 16, maxHeight: 260, overflowY: 'auto' }}>
-              {campaignDetails.map((d, idx) => (
-                <Card key={idx} size="small" style={{ marginBottom: 8 }} bodyStyle={{ padding: '8px 12px' }}>
-                  <div style={{ fontWeight: 600, marginBottom: 4 }}>
-                    {d.merchant_name || '-'}
-                    <Tag color={PLATFORM_COLORS[d.platform] || 'blue'} style={{ marginLeft: 6 }}>{d.platform}</Tag>
-                    {d.cache_found && <Tag color="green" style={{ fontSize: 10 }}>缓存</Tag>}
-                  </div>
-                  {d.site_url && <div style={{ fontSize: 12, color: '#666' }}>网址: <a href={d.site_url} target="_blank" rel="noreferrer">{d.site_url}</a></div>}
-                  {d.categories && <div style={{ fontSize: 12, color: '#666' }}>品类: {translateCategory(d.categories)}</div>}
-                  {d.commission_rate && <div style={{ fontSize: 12, color: '#666' }}>佣金率: {d.commission_rate}</div>}
-                  {d.support_regions?.length > 0 && (
-                    <div style={{ fontSize: 12, color: '#666' }}>区域: {d.support_regions.map(r => r.code || r).join(', ')}</div>
-                  )}
-                  {d.recommendation && (
-                    <div style={{ fontSize: 12, color: '#52c41a', marginTop: 4 }}>
-                      推荐数据 — EPC: {d.recommendation.epc ?? '-'} | 佣金上限: {d.recommendation.commission_cap ?? '-'} | 平均佣金率: {d.recommendation.avg_commission_rate ? (d.recommendation.avg_commission_rate * 100).toFixed(2) + '%' : '-'}
-                    </div>
-                  )}
-                </Card>
-              ))}
-            </div>
-          )}
-
-          <Form.Item name="priority" label="优先级">
-            <Select>
-              <Option value="high">high</Option>
-              <Option value="normal">normal</Option>
-              <Option value="low">low</Option>
-            </Select>
-          </Form.Item>
-          <Form.Item name="monthly_target" label="月度目标佣金($)">
-            <InputNumber min={0} precision={2} style={{ width: '100%' }} />
-          </Form.Item>
-          <Form.Item name="notes" label="备注">
-            <Input.TextArea rows={3} placeholder="可选" />
-          </Form.Item>
-        </Form>
-      </Modal>
-
-      <Modal
-        title={`批量转移分配（${selectedAssignmentIds.length}条）`}
-        open={transferModalOpen}
-        onOk={handleTransferSubmit}
-        onCancel={() => {
-          setTransferModalOpen(false)
-          transferForm.resetFields()
-        }}
-        destroyOnHidden
-      >
-        <Form form={transferForm} layout="vertical">
-          <Form.Item name="new_user_id" label="转移给员工" rules={[{ required: true, message: '请选择员工' }]}> 
-            <Select placeholder="选择员工">
-              {userOptions.map((u) => (
-                <Option key={u.id} value={u.id}>{u.display_name || u.username}</Option>
-              ))}
-            </Select>
-          </Form.Item>
-        </Form>
-      </Modal>
-
-      <Modal
         title="编辑商家"
         open={editMerchantModalOpen}
         onOk={handleEditMerchantSubmit}
@@ -1885,40 +1414,6 @@ const MerchantManagement = () => {
             <Select>
               <Option value="active">active</Option>
               <Option value="inactive">inactive</Option>
-            </Select>
-          </Form.Item>
-          <Form.Item name="notes" label="备注">
-            <Input.TextArea rows={3} />
-          </Form.Item>
-        </Form>
-      </Modal>
-
-      <Modal
-        title="编辑分配"
-        open={editAssignmentModalOpen}
-        onOk={handleEditAssignmentSubmit}
-        onCancel={() => {
-          setEditAssignmentModalOpen(false)
-          setCurrentAssignment(null)
-        }}
-        destroyOnHidden
-      >
-        <Form form={editAssignmentForm} layout="vertical">
-          <Form.Item name="priority" label="优先级">
-            <Select>
-              <Option value="high">high</Option>
-              <Option value="normal">normal</Option>
-              <Option value="low">low</Option>
-            </Select>
-          </Form.Item>
-          <Form.Item name="monthly_target" label="月度目标佣金($)">
-            <InputNumber min={0} precision={2} style={{ width: '100%' }} />
-          </Form.Item>
-          <Form.Item name="status" label="状态">
-            <Select>
-              <Option value="active">active</Option>
-              <Option value="completed">completed</Option>
-              <Option value="cancelled">cancelled</Option>
             </Select>
           </Form.Item>
           <Form.Item name="notes" label="备注">
