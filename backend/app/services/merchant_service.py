@@ -759,6 +759,17 @@ class MerchantService:
             test_q = test_q.filter(MerchantAssignment.user_id == user_id)
         test_merchant_count = test_q.scalar() or 0
 
+        # 该员工自己有的平台（从 campaign_link_cache 查询）
+        user_platforms = []
+        if user_id:
+            from app.models.campaign_link_cache import CampaignLinkCache
+            rows = (
+                db.query(distinct(CampaignLinkCache.platform_code))
+                .filter(CampaignLinkCache.user_id == user_id)
+                .all()
+            )
+            user_platforms = sorted([r[0].upper() for r in rows if r[0]])
+
         return {
             "total": total,
             "assigned": assigned,
@@ -769,6 +780,7 @@ class MerchantService:
             "by_platform": norm_platform,
             "missing_mid_by_platform": norm_missing,
             "test_merchant_count": test_merchant_count,
+            "user_platforms": user_platforms,
         }
 
     # ------------------------------------------------------------------

@@ -596,43 +596,53 @@ export default function AdCreationWizard() {
                   <Divider style={{ margin: '4px 0' }} />
                   <Typography.Text strong>标题（最多 15 个，每个 ≤ 30 字符）</Typography.Text>
                   {editHeadlines.map((h, i) => (
-                    <div key={`h-${i}`} style={{ marginBottom: 4 }}>
-                      <Input
-                        value={h}
-                        maxLength={30}
-                        suffix={`${h.length}/30`}
-                        onChange={e => {
-                          const arr = [...editHeadlines]
-                          arr[i] = e.target.value
-                          setEditHeadlines(arr)
-                        }}
-                      />
-                      {headlineTranslations[i] && (
-                        <Typography.Text type="secondary" style={{ fontSize: 12, paddingLeft: 12 }}>
-                          译：{headlineTranslations[i]}
-                        </Typography.Text>
-                      )}
+                    <div key={`h-${i}`} style={{ marginBottom: 4, display: 'flex', alignItems: 'flex-start', gap: 8 }}>
+                      <Typography.Text strong style={{ minWidth: 28, textAlign: 'right', lineHeight: '32px', color: '#999', flexShrink: 0 }}>
+                        {i + 1}.
+                      </Typography.Text>
+                      <div style={{ flex: 1 }}>
+                        <Input
+                          value={h}
+                          maxLength={30}
+                          suffix={`${h.length}/30`}
+                          onChange={e => {
+                            const arr = [...editHeadlines]
+                            arr[i] = e.target.value
+                            setEditHeadlines(arr)
+                          }}
+                        />
+                        {headlineTranslations[i] && (
+                          <Typography.Text type="secondary" style={{ fontSize: 12, paddingLeft: 4 }}>
+                            译：{headlineTranslations[i]}
+                          </Typography.Text>
+                        )}
+                      </div>
                     </div>
                   ))}
                   <Divider style={{ margin: '8px 0' }} />
                   <Typography.Text strong>描述（最多 4 个，每个 ≤ 90 字符）</Typography.Text>
                   {editDescriptions.map((d, i) => (
-                    <div key={`d-${i}`} style={{ marginBottom: 4 }}>
-                      <TextArea
-                        value={d}
-                        maxLength={90}
-                        autoSize={{ minRows: 1, maxRows: 3 }}
-                        onChange={e => {
-                          const arr = [...editDescriptions]
-                          arr[i] = e.target.value
-                          setEditDescriptions(arr)
-                        }}
-                      />
-                      {descTranslations[i] && (
-                        <Typography.Text type="secondary" style={{ fontSize: 12, paddingLeft: 12 }}>
-                          译：{descTranslations[i]}
-                        </Typography.Text>
-                      )}
+                    <div key={`d-${i}`} style={{ marginBottom: 4, display: 'flex', alignItems: 'flex-start', gap: 8 }}>
+                      <Typography.Text strong style={{ minWidth: 28, textAlign: 'right', lineHeight: '32px', color: '#999', flexShrink: 0 }}>
+                        {i + 1}.
+                      </Typography.Text>
+                      <div style={{ flex: 1 }}>
+                        <TextArea
+                          value={d}
+                          maxLength={90}
+                          autoSize={{ minRows: 1, maxRows: 3 }}
+                          onChange={e => {
+                            const arr = [...editDescriptions]
+                            arr[i] = e.target.value
+                            setEditDescriptions(arr)
+                          }}
+                        />
+                        {descTranslations[i] && (
+                          <Typography.Text type="secondary" style={{ fontSize: 12, paddingLeft: 4 }}>
+                            译：{descTranslations[i]}
+                          </Typography.Text>
+                        )}
+                      </div>
                     </div>
                   ))}
                   <Space>

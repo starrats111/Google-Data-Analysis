@@ -214,7 +214,8 @@ const MerchantManagement = () => {
         by_platform: {},
         missing_mid_by_platform: {},
       })
-      setPlatformOptions(Object.keys(resp.data?.by_platform || {}))
+      const userPlats = resp.data?.user_platforms || []
+      setPlatformOptions(userPlats.length > 0 ? userPlats : Object.keys(resp.data?.by_platform || {}))
     } catch (error) {
       console.error('获取商家统计失败', error)
     }
