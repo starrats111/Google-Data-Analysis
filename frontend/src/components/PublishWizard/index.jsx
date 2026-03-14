@@ -306,7 +306,15 @@ const PublishWizard = () => {
     setMerchantKeywords(keywords)
     // 自动选择第一个标题
     if (titles.length > 0) {
-      const firstTitle = typeof titles[0] === 'string' ? titles[0] : (language === 'en' ? (titles[0].title_en || titles[0].title) : titles[0].title)
+      const t = titles[0]
+      let firstTitle
+      if (typeof t === 'string') {
+        firstTitle = t
+      } else if (language === 'en') {
+        firstTitle = t.title_en || t.title
+      } else {
+        firstTitle = (t.title && t.title !== t.title_en) ? t.title : (t.title_en || t.title)
+      }
       setSelectedMTitle(firstTitle)
     }
     // 自动选择所有关键词
@@ -1534,7 +1542,10 @@ const PublishWizard = () => {
                     <Typography.Text type="secondary" style={{ fontSize: 12 }}>其他候选标题：</Typography.Text>
                     <div style={{ marginTop: 4 }}>
                       {merchantTitles.slice(0, 5).map((item, i) => {
-                        const t = typeof item === 'string' ? item : (language === 'en' ? (item.title_en || item.title) : item.title)
+                        let t
+                        if (typeof item === 'string') t = item
+                        else if (language === 'en') t = item.title_en || item.title
+                        else t = (item.title && item.title !== item.title_en) ? item.title : (item.title_en || item.title)
                         if (t === selectedMTitle) return null
                         return (
                           <Tag key={i} color="default" style={{ cursor: 'pointer', marginBottom: 4 }}
