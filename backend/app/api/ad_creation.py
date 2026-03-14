@@ -403,10 +403,7 @@ async def delete_campaign(
         except Exception as e:
             logger.warning(f"[AdDelete] Google Ads 删除失败（将清除本地记录）: {e}")
 
-    assignment.google_campaign_id = None
-    assignment.google_customer_id = None
-    assignment.daily_budget = None
-    assignment.status = "cancelled"
+    db.delete(assignment)
     db.commit()
 
     return {"message": "广告已删除", "assignment_id": assignment_id}
@@ -440,7 +437,7 @@ async def remove_from_test(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """从测试看板移除（取消分配，不删广告）"""
+    """从测试看板移除（删除分配记录，不删广告）"""
     assignment = db.query(MerchantAssignment).filter(
         MerchantAssignment.id == assignment_id,
         MerchantAssignment.user_id == current_user.id,
@@ -448,7 +445,7 @@ async def remove_from_test(
     if not assignment:
         raise HTTPException(status_code=404, detail="分配记录不存在或不属于你")
 
-    assignment.status = "cancelled"
+    db.delete(assignment)
     db.commit()
     logger.info(f"[AdRemove] 移除测试: assignment={assignment_id}, user={current_user.username}")
     return {"message": "已从测试看板移除", "assignment_id": assignment_id}
