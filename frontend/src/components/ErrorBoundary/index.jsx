@@ -6,6 +6,16 @@ import { ReloadOutlined } from '@ant-design/icons'
  * 错误边界组件
  * 捕获子组件的渲染错误，防止白屏
  */
+const RELOAD_KEY = '__chunk_reload__'
+
+function isChunkError(error) {
+  const msg = error?.message || ''
+  return msg.includes('Loading chunk') ||
+    msg.includes('Failed to fetch') ||
+    msg.includes('dynamically imported module') ||
+    msg.includes('Importing a module script failed')
+}
+
 class ErrorBoundary extends React.Component {
   constructor(props) {
     super(props)
@@ -17,17 +27,24 @@ class ErrorBoundary extends React.Component {
   }
 
   static getDerivedStateFromError(error) {
-    // 更新 state 使下一次渲染显示错误 UI
     return { hasError: true, error }
   }
 
   componentDidCatch(error, errorInfo) {
     console.error('ErrorBoundary caught an error:', error, errorInfo)
     this.setState({ errorInfo })
+
+    if (isChunkError(error)) {
+      const lastReload = Number(sessionStorage.getItem(RELOAD_KEY) || 0)
+      if (Date.now() - lastReload > 10000) {
+        sessionStorage.setItem(RELOAD_KEY, String(Date.now()))
+        window.location.reload()
+      }
+    }
   }
 
   handleReload = () => {
-    // 清除缓存并重新加载页面
+    sessionStorage.setItem(RELOAD_KEY, String(Date.now()))
     if ('caches' in window) {
       caches.keys().then(names => {
         names.forEach(name => caches.delete(name))
@@ -42,9 +59,7 @@ class ErrorBoundary extends React.Component {
 
   render() {
     if (this.state.hasError) {
-      const isChunkError = this.state.error?.message?.includes('Loading chunk') ||
-                           this.state.error?.message?.includes('Failed to fetch') ||
-                           this.state.error?.message?.includes('dynamically imported module')
+      const chunkErr = isChunkError(this.state.error)
 
       return (
         <div style={{ 
@@ -58,10 +73,10 @@ class ErrorBoundary extends React.Component {
         }}>
           <Result
             status="warning"
-            title={isChunkError ? "页面加载失败" : "页面出现错误"}
+            title={chunkErr ? "页面版本已更新" : "页面出现错误"}
             subTitle={
-              isChunkError 
-                ? "网络连接问题或页面已更新，请刷新重试"
+              chunkErr 
+                ? "系统已部署新版本，正在自动刷新..."
                 : "抱歉，页面渲染时出现了问题"
             }
             style={{ 
@@ -90,34 +105,6 @@ class ErrorBoundary extends React.Component {
               </Button>,
             ]}
           />
-          {this.state.error && (
-            <div style={{
-              background: '#1a1a2e',
-              color: '#e94560',
-              padding: '16px 24px',
-              borderRadius: '8px',
-              marginTop: '16px',
-              maxWidth: '90vw',
-              maxHeight: '300px',
-              overflow: 'auto',
-              fontFamily: 'monospace',
-              fontSize: '12px',
-              whiteSpace: 'pre-wrap',
-              wordBreak: 'break-all',
-            }}>
-              <div style={{ color: '#fff', marginBottom: '8px', fontWeight: 'bold' }}>
-                {this.state.error?.name}: {this.state.error?.message}
-              </div>
-              <div style={{ color: '#aaa' }}>
-                {this.state.error?.stack}
-              </div>
-              {this.state.errorInfo?.componentStack && (
-                <div style={{ color: '#888', marginTop: '8px', borderTop: '1px solid #333', paddingTop: '8px' }}>
-                  {this.state.errorInfo.componentStack}
-                </div>
-              )}
-            </div>
-          )}
         </div>
       )
     }
