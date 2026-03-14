@@ -162,12 +162,14 @@ async def crawl_merchant_site(
                 search_queries = ["product lifestyle photography"]
 
             seen_urls = set()
-            for q in search_queries:
+            for i, q in enumerate(search_queries):
                 if len(stock_images) >= 20:
                     break
                 try:
                     batch = search_merchant_images(
-                        q, count=12, brand_name=brand_name, category=category,
+                        q, count=15,
+                        brand_name=brand_name if i == 0 else "",
+                        category=category if i <= 1 else "",
                     )
                     for img in batch:
                         img_url = img.get("url", img) if isinstance(img, dict) else img
@@ -358,21 +360,25 @@ async def crawl_merchant_site(
 
         stock_target = max(MIN_DISPLAY_IMAGES - crawled_count, 15)
         stock_seen = set()
-        for q in queries:
+        for i, q in enumerate(queries):
             if len(stock_images) >= stock_target:
                 break
             try:
+                # 首轮用品牌名，后续不传brand_name避免内部策略生成重复查询
                 extra = search_merchant_images(
-                    q, count=12,
-                    brand_name=brand,
-                    category=category,
+                    q, count=15,
+                    brand_name=brand if i == 0 else "",
+                    category=category if i <= 1 else "",
                 )
+                new_count = 0
                 for img in extra:
                     img_url = img.get("url", img) if isinstance(img, dict) else img
                     if img_url not in stock_seen:
                         stock_seen.add(img_url)
                         stock_images.append(img)
-                logger.info("[Crawl] 图片库搜索 '%s' 返回 %d 张", q, len(extra))
+                        new_count += 1
+                logger.info("[Crawl] 图片库搜索 '%s': +%d 新图 (total=%d)",
+                            q[:40], new_count, len(stock_images))
             except Exception as e:
                 logger.warning("[Crawl] 图片库搜索失败 '%s': %s", q, e)
 
