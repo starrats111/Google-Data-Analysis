@@ -626,6 +626,35 @@ async def sync_campaign_links(
     return {"success": True, "message": "同步已在后台启动，数据量较大请稍等几分钟"}
 
 
+@router.post("/campaign-link/sync/{platform_code}")
+async def sync_campaign_links_platform(
+    platform_code: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """手动同步当前用户指定平台的 Campaign Link"""
+    import threading
+    from app.database import SessionLocal
+
+    user_id = current_user.id
+    username = current_user.username
+    pc = platform_code.upper()
+
+    def _bg_sync():
+        bg_db = SessionLocal()
+        try:
+            svc = CampaignLinkSyncService(bg_db)
+            cached = svc.sync_user_platform(user_id, pc)
+            logger.info("[CampaignLinkSync] 用户 %s 平台 %s 同步完成: %d 条", username, pc, cached)
+        except Exception as e:
+            logger.error("[CampaignLinkSync] 用户 %s 平台 %s 同步失败: %s", username, pc, e)
+        finally:
+            bg_db.close()
+
+    threading.Thread(target=_bg_sync, daemon=True).start()
+    return {"success": True, "message": f"平台 {pc} 同步已在后台启动", "platform": pc}
+
+
 @router.post("/campaign-link/sync-all")
 async def sync_all_campaign_links(
     current_user: User = Depends(get_current_user),

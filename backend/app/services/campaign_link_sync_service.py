@@ -88,6 +88,36 @@ class CampaignLinkSyncService:
 
         return cached_count
 
+    def sync_user_platform(self, user_id: int, platform_code: str) -> int:
+        """同步单个用户在指定平台的 campaign link，返回缓存条数。"""
+        platform_code = platform_code.upper()
+        accounts = (
+            self.db.query(AffiliateAccount)
+            .join(AffiliatePlatform)
+            .filter(
+                AffiliateAccount.user_id == user_id,
+                AffiliateAccount.is_active.is_(True),
+                AffiliatePlatform.platform_code == platform_code,
+            )
+            .all()
+        )
+        if not accounts:
+            logger.warning("[CampaignLinkSync] 用户 %d 无平台 %s 的活跃账号", user_id, platform_code)
+            return 0
+
+        cached_count = 0
+        for acct in accounts:
+            token = MerchantPlatformSyncService._resolve_token(acct, platform_code)
+            if not token:
+                logger.warning("[CampaignLinkSync] 用户 %d 平台 %s 无有效 Token", user_id, platform_code)
+                continue
+            try:
+                count = self._sync_platform(user_id, platform_code, token)
+                cached_count += count
+            except Exception as e:
+                logger.error("[CampaignLinkSync] 用户 %d 平台 %s 同步异常: %s", user_id, platform_code, e)
+        return cached_count
+
     def _sync_platform(self, user_id: int, platform_code: str, token: str) -> int:
         """全量分页拉取某平台所有 Joined 商家，写入缓存。"""
         cfg = PLATFORM_API_CONFIG.get(platform_code)

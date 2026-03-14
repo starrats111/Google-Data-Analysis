@@ -150,6 +150,104 @@ async def update_ad_defaults(
     return {"message": "广告默认设置已保存", **settings}
 
 
+# ==================================================================
+# 员工个人商家库（CampaignLinkCache）
+# ==================================================================
+
+@router.get("/my-library")
+async def my_library(
+    platform: Optional[str] = None,
+    search: Optional[str] = None,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=200),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """查询当前员工自己的商家库（CampaignLinkCache）"""
+    from app.models.campaign_link_cache import CampaignLinkCache
+    import json as _json
+
+    q = db.query(CampaignLinkCache).filter(CampaignLinkCache.user_id == current_user.id)
+
+    if platform:
+        q = q.filter(CampaignLinkCache.platform_code == platform.upper())
+    if search:
+        like = f"%{search}%"
+        q = q.filter(
+            (CampaignLinkCache.merchant_name.ilike(like))
+            | (CampaignLinkCache.merchant_id.ilike(like))
+        )
+
+    total = q.count()
+    rows = (
+        q.order_by(CampaignLinkCache.platform_code, CampaignLinkCache.merchant_name)
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+        .all()
+    )
+
+    items = []
+    for r in rows:
+        regions = []
+        if r.support_regions:
+            try:
+                regions = _json.loads(r.support_regions)
+            except (ValueError, TypeError):
+                pass
+        cats = r.categories or ""
+        if cats.startswith('"') and cats.endswith('"'):
+            cats = cats[1:-1]
+        items.append({
+            "id": r.id,
+            "platform_code": r.platform_code,
+            "merchant_id": r.merchant_id,
+            "merchant_name": r.merchant_name or "",
+            "campaign_link": r.campaign_link or "",
+            "site_url": r.site_url or "",
+            "categories": cats,
+            "commission_rate": r.commission_rate or "",
+            "support_regions": regions,
+            "logo": r.logo or "",
+            "synced_at": r.synced_at.isoformat() if r.synced_at else None,
+        })
+
+    return {"items": items, "total": total, "page": page, "page_size": page_size}
+
+
+@router.get("/my-library/stats")
+async def my_library_stats(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """统计当前员工商家库"""
+    from app.models.campaign_link_cache import CampaignLinkCache
+    from sqlalchemy import func as _func, distinct as _distinct
+
+    base = db.query(CampaignLinkCache).filter(CampaignLinkCache.user_id == current_user.id)
+    total = base.count()
+
+    platform_rows = (
+        db.query(CampaignLinkCache.platform_code, _func.count(CampaignLinkCache.id))
+        .filter(CampaignLinkCache.user_id == current_user.id)
+        .group_by(CampaignLinkCache.platform_code)
+        .all()
+    )
+    by_platform = {r[0]: r[1] for r in platform_rows if r[0]}
+
+    last_synced = (
+        db.query(_func.max(CampaignLinkCache.synced_at))
+        .filter(CampaignLinkCache.user_id == current_user.id)
+        .scalar()
+    )
+
+    return {
+        "total": total,
+        "by_platform": by_platform,
+        "last_synced_at": last_synced.isoformat() if last_synced else None,
+        "user_platforms": list(by_platform.keys()),
+    }
+
+
 @router.get("/{merchant_pk}")
 async def get_merchant(
     merchant_pk: int,
@@ -448,7 +546,10 @@ async def commission_breakdown(
 
 
 class ClaimRequest(BaseModel):
-    merchant_ids: list
+    merchant_ids: Optional[list] = None
+    platform_code: Optional[str] = None
+    merchant_mid: Optional[str] = None
+    merchant_name: Optional[str] = None
     mode: str = "normal"  # normal / test
     target_country: str = "US"
 
@@ -459,13 +560,37 @@ async def claim_merchants(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """CR-039: 员工自助领取商家（所有登录用户可调用）"""
+    """CR-039: 员工自助领取商家（支持 AffiliateMerchant ID 或 platform_code+merchant_mid）"""
     from app.models.merchant import MerchantAssignment, AffiliateMerchant
+
+    affiliate_ids = []
+
+    if data.platform_code and data.merchant_mid:
+        merchant = db.query(AffiliateMerchant).filter(
+            AffiliateMerchant.platform == data.platform_code.upper(),
+            AffiliateMerchant.merchant_id == data.merchant_mid,
+        ).first()
+        if not merchant:
+            merchant = AffiliateMerchant(
+                platform=data.platform_code.upper(),
+                merchant_id=data.merchant_mid,
+                merchant_name=data.merchant_name or data.merchant_mid,
+                status="active",
+                source_type="campaign_link_cache",
+            )
+            db.add(merchant)
+            db.flush()
+        affiliate_ids = [merchant.id]
+    elif data.merchant_ids:
+        affiliate_ids = data.merchant_ids
+    else:
+        raise HTTPException(status_code=400, detail="需要 merchant_ids 或 platform_code+merchant_mid")
+
     created = []
     merchant_names = {}
     skipped = 0
     skipped_assignments = []
-    for mid in data.merchant_ids:
+    for mid in affiliate_ids:
         merchant = db.query(AffiliateMerchant).filter(AffiliateMerchant.id == mid).first()
         if not merchant:
             continue

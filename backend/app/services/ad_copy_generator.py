@@ -290,6 +290,34 @@ JSON格式(严格遵守):
             description_translations = [_strip_emoji(t) for t in result.get("description_translations", [])[:len(descriptions)]]
             recommended_budget = result.get("recommended_budget", 10)
 
+            # 循环修复超长文案（最多 3 轮）
+            for _attempt in range(3):
+                bad_h = [i for i, h in enumerate(headlines) if len(h) > RSA_HEADLINE_MAX]
+                bad_d = [i for i, d in enumerate(descriptions) if len(d) > RSA_DESC_MAX]
+                if not bad_h and not bad_d:
+                    break
+                fixed = self._fix_overlength(headlines, descriptions, headline_translations, description_translations, bad_h, bad_d)
+                if fixed:
+                    headlines = fixed["headlines"]
+                    descriptions = fixed["descriptions"]
+                    headline_translations = fixed.get("headline_translations", headline_translations)
+                    description_translations = fixed.get("description_translations", description_translations)
+                else:
+                    break
+
+            for i, h in enumerate(headlines):
+                if len(h) > RSA_HEADLINE_MAX:
+                    new_h, new_t = self._force_short_rewrite(h, RSA_HEADLINE_MAX, "headline", merchant_name)
+                    headlines[i] = new_h
+                    if i < len(headline_translations):
+                        headline_translations[i] = new_t
+            for i, d in enumerate(descriptions):
+                if len(d) > RSA_DESC_MAX:
+                    new_d, new_t = self._force_short_rewrite(d, RSA_DESC_MAX, "description", merchant_name)
+                    descriptions[i] = new_d
+                    if i < len(description_translations):
+                        description_translations[i] = new_t
+
             while len(headline_translations) < len(headlines):
                 headline_translations.append("")
             while len(description_translations) < len(descriptions):
@@ -377,17 +405,37 @@ JSON格式(严格遵守):
             description_translations = [_strip_emoji(t) for t in result.get("description_translations", [])[:len(descriptions)]]
             recommended_budget = result.get("recommended_budget", 10)
 
-            bad_h = [i for i, h in enumerate(headlines) if len(h) > RSA_HEADLINE_MAX]
-            bad_d = [i for i, d in enumerate(descriptions) if len(d) > RSA_DESC_MAX]
-
-            if bad_h or bad_d:
-                yield "\n\n⚠ 检测到超长文案，正在重新生成合规版本...\n"
+            # 循环修复超长文案（最多 3 轮批量修复）
+            for _attempt in range(3):
+                bad_h = [i for i, h in enumerate(headlines) if len(h) > RSA_HEADLINE_MAX]
+                bad_d = [i for i, d in enumerate(descriptions) if len(d) > RSA_DESC_MAX]
+                if not bad_h and not bad_d:
+                    break
+                logger.info("[AdCopy] 第 %d 轮超长修复: %d 标题 + %d 描述", _attempt + 1, len(bad_h), len(bad_d))
                 fixed = self._fix_overlength(headlines, descriptions, headline_translations, description_translations, bad_h, bad_d)
                 if fixed:
                     headlines = fixed["headlines"]
                     descriptions = fixed["descriptions"]
                     headline_translations = fixed.get("headline_translations", headline_translations)
                     description_translations = fixed.get("description_translations", description_translations)
+                else:
+                    break
+
+            # 最终安全网：逐条全新重写仍超长的文案
+            for i, h in enumerate(headlines):
+                if len(h) > RSA_HEADLINE_MAX:
+                    logger.warning("[AdCopy] 标题 %d 仍超长(%d), 全新重写", i + 1, len(h))
+                    new_h, new_t = self._force_short_rewrite(h, RSA_HEADLINE_MAX, "headline", merchant_name)
+                    headlines[i] = new_h
+                    if i < len(headline_translations):
+                        headline_translations[i] = new_t
+            for i, d in enumerate(descriptions):
+                if len(d) > RSA_DESC_MAX:
+                    logger.warning("[AdCopy] 描述 %d 仍超长(%d), 全新重写", i + 1, len(d))
+                    new_d, new_t = self._force_short_rewrite(d, RSA_DESC_MAX, "description", merchant_name)
+                    descriptions[i] = new_d
+                    if i < len(description_translations):
+                        description_translations[i] = new_t
 
             while len(headline_translations) < len(headlines):
                 headline_translations.append("")
@@ -464,6 +512,38 @@ JSON格式(严格遵守):
         except Exception as e:
             logger.warning(f"[AdCopy] 超长修复失败: {e}")
             return None
+
+    def _force_short_rewrite(self, text: str, max_len: int, copy_type: str, merchant_name: str) -> tuple:
+        """对仍超长的单条文案全新重写，确保语义完整且字数合规。返回 (新文案, 中文翻译)。"""
+        label = "标题" if copy_type == "headline" else "描述"
+        safe_len = max_len - 5
+        prompt = (
+            f"你是 Google Ads 文案专家。请为商家「{merchant_name}」写一条广告{label}。\n"
+            f"原文参考（超长了）: {text}\n\n"
+            f"要求:\n"
+            f"- 新文案必须不超过 {safe_len} 个字符（留余量，硬上限 {max_len}）\n"
+            f"- 必须是完整的、有意义的句子，保持原文的核心卖点\n"
+            f"- 禁止使用任何 emoji 表情符号\n"
+            f"- 禁止简单截断，必须重新组织语言\n\n"
+            f'返回 JSON: {{"text": "新文案", "translation": "中文翻译"}}'
+        )
+        try:
+            messages = [{"role": "user", "content": prompt}]
+            raw = self.gen_service._call_with_fallback(messages, max_tokens=300, fast=True)
+            result = self._parse_json(raw)
+            new_text = _strip_emoji(result.get("text", ""))
+            new_trans = _strip_emoji(result.get("translation", ""))
+            if new_text and len(new_text) <= max_len:
+                return new_text, new_trans
+            logger.warning("[AdCopy] _force_short_rewrite 返回仍超长(%d), 使用通用短文案", len(new_text))
+        except Exception as e:
+            logger.warning("[AdCopy] _force_short_rewrite 失败: %s", e)
+
+        if copy_type == "headline":
+            fallback = f"Shop {merchant_name} Now"[:max_len]
+        else:
+            fallback = f"Discover great deals at {merchant_name}. Shop now for the best offers."[:max_len]
+        return fallback, ""
 
     def _parse_json(self, raw: str) -> dict:
         """从 AI 返回中提取 JSON"""

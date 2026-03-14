@@ -88,24 +88,20 @@ const MerchantManagement = () => {
 
   const [stats, setStats] = useState({
     total: 0,
-    assigned: 0,
-    unassigned: 0,
-    missing_mid_total: 0,
-    discovery_rate: 100,
-    missing_mid_rate: 0,
     by_platform: {},
-    missing_mid_by_platform: {},
+    last_synced_at: null,
+    user_platforms: [],
   })
   const [platformOptions, setPlatformOptions] = useState([])
   const [userOptions, setUserOptions] = useState([])
 
+  // 同步商家
+  const [syncLoading, setSyncLoading] = useState(false)
+  const [syncPlatformCode, setSyncPlatformCode] = useState(undefined)
+  const [syncPlatformLoading, setSyncPlatformLoading] = useState(false)
+
   const [merchantFilters, setMerchantFilters] = useState({
     platform: undefined,
-    category: undefined,
-    status: undefined,
-    assigned: undefined,
-    missing_mid: undefined,
-    relationship_status: undefined,
     search: '',
   })
   const [editMerchantModalOpen, setEditMerchantModalOpen] = useState(false)
@@ -160,18 +156,6 @@ const MerchantManagement = () => {
       ))
   }, [stats.by_platform])
 
-  const missingMidTags = useMemo(() => {
-    const entries = Object.entries(stats.missing_mid_by_platform || {})
-    if (!entries.length) return <Tag>暂无</Tag>
-    return entries
-      .sort((a, b) => b[1] - a[1])
-      .map(([k, v]) => (
-        <Tag key={k} color="orange" style={{ cursor: 'default' }}>
-          {k} <Badge count={v} style={{ backgroundColor: '#fa8c16', marginLeft: 4, boxShadow: 'none' }} overflowCount={99999} />
-        </Tag>
-      ))
-  }, [stats.missing_mid_by_platform])
-
   useEffect(() => {
     fetchUsers()
     fetchStats()
@@ -180,10 +164,7 @@ const MerchantManagement = () => {
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
-    if (tabKey === 'missing_mid') {
-      setMerchantFilters((s) => ({ ...s, missing_mid: true }))
-      setTimeout(() => fetchMerchants(1, merchantPageSize), 0)
-    } else if (tabKey === 'violations') {
+    if (tabKey === 'violations') {
       fetchViolations(1)
       fetchViolationAssignments()
     } else if (tabKey === 'recommendations') {
@@ -203,17 +184,8 @@ const MerchantManagement = () => {
 
   const fetchStats = async () => {
     try {
-      const resp = await api.get('/api/merchants/stats')
-      setStats(resp.data || {
-        total: 0,
-        assigned: 0,
-        unassigned: 0,
-        missing_mid_total: 0,
-        discovery_rate: 100,
-        missing_mid_rate: 0,
-        by_platform: {},
-        missing_mid_by_platform: {},
-      })
+      const resp = await api.get('/api/merchants/my-library/stats')
+      setStats(resp.data || { total: 0, by_platform: {}, last_synced_at: null, user_platforms: [] })
       const userPlats = resp.data?.user_platforms || []
       setPlatformOptions(userPlats.length > 0 ? userPlats : Object.keys(resp.data?.by_platform || {}))
     } catch (error) {
@@ -310,14 +282,9 @@ const MerchantManagement = () => {
     try {
       const params = { page, page_size: pageSize }
       if (merchantFilters.platform) params.platform = merchantFilters.platform
-      if (merchantFilters.category) params.category = merchantFilters.category
-      if (merchantFilters.status) params.status = merchantFilters.status
-      if (merchantFilters.assigned !== undefined) params.assigned = merchantFilters.assigned
-      if (merchantFilters.missing_mid !== undefined) params.missing_mid = merchantFilters.missing_mid
-      if (merchantFilters.relationship_status) params.relationship_status = merchantFilters.relationship_status
       if (merchantFilters.search) params.search = merchantFilters.search
 
-      const resp = await api.get('/api/merchants', { params })
+      const resp = await api.get('/api/merchants/my-library', { params })
       const data = resp.data || {}
       setMerchants(data.items || [])
       setMerchantTotal(data.total || 0)
@@ -330,57 +297,38 @@ const MerchantManagement = () => {
     }
   }
 
-  const [discoverLoading, setDiscoverLoading] = useState(false)
-
-  const handleDiscover = async () => {
-    setDiscoverLoading(true)
+  const handleSyncAll = async () => {
+    setSyncLoading(true)
     try {
-      const resp = await api.post('/api/merchants/discover')
-      message.success(resp.data?.message || '商家同步完成')
-      await Promise.all([fetchStats(), fetchMerchants(1, merchantPageSize)])
-    } catch (error) {
-      message.error(error.response?.data?.detail || '商家同步失败')
-    } finally {
-      setDiscoverLoading(false)
-    }
-  }
-
-  const handleMidRepair = async () => {
-    setMidRepairLoading(true)
-    try {
-      const resp = await api.post('/api/merchants/repair-all-mid')
-      message.info(resp.data?.message || 'MID补齐已在后台启动')
+      await api.post('/api/article-gen/campaign-link/sync')
+      message.success('同步已在后台启动，数据量较大请稍等几分钟后刷新')
       setTimeout(async () => {
-        setMidRepairLoading(false)
+        setSyncLoading(false)
         await Promise.all([fetchStats(), fetchMerchants(1, merchantPageSize)])
-      }, 10000)
+      }, 8000)
     } catch (error) {
-      message.error(error.response?.data?.detail || 'MID补齐失败')
-      setMidRepairLoading(false)
+      message.error(error.response?.data?.detail || '同步失败')
+      setSyncLoading(false)
     }
   }
 
-  const handlePlatformSync = async () => {
-    setPlatformSyncLoading(true)
+  const handleSyncPlatform = async () => {
+    if (!syncPlatformCode) { message.warning('请选择平台'); return }
+    setSyncPlatformLoading(true)
     try {
-      const resp = await api.post('/api/merchants/sync-platforms')
-      const d = resp.data || {}
-      if (d.status === 'started') {
-        message.info(d.message || '同步已在后台启动，请稍后刷新查看结果')
-        setTimeout(async () => {
-          setPlatformSyncLoading(false)
-          await Promise.all([fetchStats(), fetchMerchants(1, merchantPageSize)])
-        }, 5000)
-        return
-      }
-      message.success(`平台同步完成：同步 ${d.synced_accounts || 0}/${d.total_accounts || 0} 账号，新增 ${d.new_merchants || 0} 商家，状态变更 ${d.status_changes || 0}`)
-      await Promise.all([fetchStats(), fetchMerchants(1, merchantPageSize)])
+      await api.post(`/api/article-gen/campaign-link/sync/${syncPlatformCode}`)
+      message.success(`平台 ${syncPlatformCode} 同步已在后台启动`)
+      setTimeout(async () => {
+        setSyncPlatformLoading(false)
+        await Promise.all([fetchStats(), fetchMerchants(1, merchantPageSize)])
+      }, 6000)
     } catch (error) {
-      message.error(error.response?.data?.detail || '平台同步失败')
-    } finally {
-      setPlatformSyncLoading(false)
+      message.error(error.response?.data?.detail || '同步失败')
+      setSyncPlatformLoading(false)
     }
   }
+
+  const [discoverLoading, setDiscoverLoading] = useState(false)
 
   const handleCommissionClick = async (record, type) => {
     setCommissionMerchant(record)
@@ -479,82 +427,34 @@ const MerchantManagement = () => {
       title: '商家名称',
       dataIndex: 'merchant_name',
       key: 'merchant_name',
-      width: 200,
+      width: 220,
       fixed: 'left',
       render: (text, record) => (
-        <span style={{ fontWeight: 600 }}>
-          {text || '-'}
-          {record.violation_status === 'violated' && (
-            <Tag color="red" style={{ marginLeft: 6, fontSize: 11 }}>违规</Tag>
-          )}
-          {record.recommendation_status === 'recommended' && (
-            <Tag color="green" style={{ marginLeft: 6, fontSize: 11 }}>推荐</Tag>
-          )}
-        </span>
+        <Space size={6}>
+          {record.logo && <img src={record.logo} alt="" style={{ width: 20, height: 20, borderRadius: 4, objectFit: 'contain' }} />}
+          <span style={{ fontWeight: 600 }}>{text || '-'}</span>
+        </Space>
       ),
     },
     {
       title: '平台',
-      dataIndex: 'platform',
-      key: 'platform',
-      width: 90,
+      dataIndex: 'platform_code',
+      key: 'platform_code',
+      width: 80,
       render: (val) => <Tag color={PLATFORM_COLORS[val] || 'blue'}>{val || '-'}</Tag>,
     },
     {
       title: 'MID',
       dataIndex: 'merchant_id',
       key: 'merchant_id',
-      width: 120,
-      render: (val, record) => (
-        editingMidId === record.id ? (
-          <Space size={4}>
-            <Input
-              size="small"
-              style={{ width: 100 }}
-              value={editingMidValue}
-              onChange={(e) => setEditingMidValue(e.target.value)}
-              onPressEnter={() => handleInlineMidSave(record.id)}
-              placeholder="输入MID"
-            />
-            <Button type="link" size="small" loading={midSaving} onClick={() => handleInlineMidSave(record.id)}>
-              <CheckCircleOutlined />
-            </Button>
-            <Button type="link" size="small" onClick={() => { setEditingMidId(null); setEditingMidValue('') }}>
-              取消
-            </Button>
-          </Space>
-        ) : (
-          <Space size={4}>
-            <span style={{ color: val ? undefined : '#faad14', fontSize: 12 }}>{val || '待补'}</span>
-            {record.missing_mid && isManager && (
-              <Button
-                type="link"
-                size="small"
-                style={{ padding: 0, fontSize: 12 }}
-                onClick={() => { setEditingMidId(record.id); setEditingMidValue(record.merchant_id || '') }}
-              >
-                补录
-              </Button>
-            )}
-          </Space>
-        )
-      ),
-    },
-    {
-      title: '申请状态',
-      dataIndex: 'relationship_status',
-      key: 'relationship_status',
-      width: 90,
-      render: (val) => {
-        const cfg = relationshipStatusMap[val] || relationshipStatusMap.unknown
-        return <Tag color={cfg.color}>{cfg.label}</Tag>
-      },
+      width: 110,
+      render: (val) => <span style={{ fontSize: 12 }}>{val || '-'}</span>,
     },
     {
       title: '类别',
-      dataIndex: 'category',
-      key: 'category',
-      width: 100,
+      dataIndex: 'categories',
+      key: 'categories',
+      width: 120,
       render: (val) => <Tooltip title={val}>{translateCategory(val)}</Tooltip>,
     },
     {
@@ -562,105 +462,63 @@ const MerchantManagement = () => {
       dataIndex: 'commission_rate',
       key: 'commission_rate',
       width: 100,
+      sorter: (a, b) => {
+        const pa = parseFloat((a.commission_rate || '0').replace('%', ''))
+        const pb = parseFloat((b.commission_rate || '0').replace('%', ''))
+        return pa - pb
+      },
       render: (val) => val || '-',
     },
     {
-      title: '在投人数',
-      dataIndex: 'active_advertiser_count',
-      key: 'in_tou_count',
-      width: 100,
-      align: 'center',
-      sorter: (a, b) => (a.active_advertiser_count || 0) - (b.active_advertiser_count || 0),
-      render: (count, record) => {
-        const n = count || 0
-        if (n === 0) return <Tag>0</Tag>
-        return <Tag color="blue" style={{ cursor: 'pointer' }} onClick={() => handleAdvertiserClick(record)}>{n}</Tag>
+      title: '支持地区',
+      dataIndex: 'support_regions',
+      key: 'support_regions',
+      width: 150,
+      render: (regions) => {
+        if (!regions || !Array.isArray(regions) || regions.length === 0) return '-'
+        const shown = regions.slice(0, 3)
+        return (
+          <Tooltip title={regions.map(r => r.code || r).join(', ')}>
+            <Space size={2} wrap>
+              {shown.map((r, i) => <Tag key={i} style={{ fontSize: 11, margin: 0 }}>{r.code || r}</Tag>)}
+              {regions.length > 3 && <span style={{ fontSize: 11, color: '#999' }}>+{regions.length - 3}</span>}
+            </Space>
+          </Tooltip>
+        )
       },
     },
     {
-      title: '订单',
-      dataIndex: 'orders_30d',
-      key: 'orders_30d',
-      width: 80,
-      align: 'right',
-      sorter: (a, b) => (a.orders_30d || 0) - (b.orders_30d || 0),
-      render: (val) => (val || 0).toLocaleString(),
+      title: 'Campaign Link',
+      dataIndex: 'campaign_link',
+      key: 'campaign_link',
+      width: 120,
+      render: (val) => val ? (
+        <Button size="small" type="link" style={{ padding: 0 }} onClick={() => { navigator.clipboard.writeText(val); message.success('已复制') }}>
+          复制链接
+        </Button>
+      ) : <span style={{ color: '#bfbfbf' }}>-</span>,
     },
     {
-      title: '佣金',
-      dataIndex: 'commission_30d',
-      key: 'commission_30d',
-      width: 110,
-      align: 'right',
-      sorter: (a, b) => (a.commission_30d || 0) - (b.commission_30d || 0),
-      render: (val, record) => (
-        <a style={{ color: '#1890ff' }} onClick={() => handleCommissionClick(record, 'self_run')}>
-          ${(val || 0).toFixed(2)}
-        </a>
-      ),
+      title: '同步时间',
+      dataIndex: 'synced_at',
+      key: 'synced_at',
+      width: 140,
+      render: (val) => val ? dayjs(val).format('MM-DD HH:mm') : '-',
     },
     {
       title: '操作',
       key: 'action',
-      width: canManage ? 180 : 80,
+      width: 80,
       fixed: 'right',
       render: (_, record) => (
-        <Space size={4} wrap>
-          <Button
-            size="small"
-            type="link"
-            style={{ padding: '0 4px', color: '#722ed1' }}
-            onClick={() => openClaimModal(record)}
-          >
-            领取
-          </Button>
-          {canManage && (
-            <>
-              <Button size="small" onClick={() => openEditMerchantModal(record)}>
-                编辑
-              </Button>
-              {record.recommendation_status !== 'recommended' ? (
-                <Button
-                  size="small"
-                  type="link"
-                  style={{ color: '#52c41a', padding: '0 4px' }}
-                  onClick={() => handleToggleTag(record, 'recommendation_status', 'recommended')}
-                >
-                  推荐
-                </Button>
-              ) : (
-                <Button
-                  size="small"
-                  type="link"
-                  style={{ color: '#999', padding: '0 4px' }}
-                  onClick={() => handleToggleTag(record, 'recommendation_status', 'normal')}
-                >
-                  取消推荐
-                </Button>
-              )}
-              {record.violation_status !== 'violated' ? (
-                <Button
-                  size="small"
-                  type="link"
-                  danger
-                  style={{ padding: '0 4px' }}
-                  onClick={() => handleToggleTag(record, 'violation_status', 'violated')}
-                >
-                  违规
-                </Button>
-              ) : (
-                <Button
-                  size="small"
-                  type="link"
-                  style={{ color: '#999', padding: '0 4px' }}
-                  onClick={() => handleToggleTag(record, 'violation_status', 'normal')}
-                >
-                  取消违规
-                </Button>
-              )}
-            </>
-          )}
-        </Space>
+        <Button
+          size="small"
+          type="link"
+          style={{ padding: '0 4px', color: '#722ed1' }}
+          onClick={() => openClaimModal(record)}
+        >
+          领取
+        </Button>
       ),
     },
   ]
@@ -757,11 +615,18 @@ const MerchantManagement = () => {
     if (!claimRecord) return
     setClaimLoading(true)
     try {
-      const res = await api.post('/api/merchant-assignments/claim', {
-        merchant_ids: [claimRecord.id],
+      const payload = {
         mode: claimMode,
         target_country: claimCountry,
-      })
+      }
+      if (claimRecord.platform_code && claimRecord.merchant_id) {
+        payload.platform_code = claimRecord.platform_code
+        payload.merchant_mid = claimRecord.merchant_id
+        payload.merchant_name = claimRecord.merchant_name || ''
+      } else {
+        payload.merchant_ids = [claimRecord.id]
+      }
+      const res = await api.post('/api/merchant-assignments/claim', payload)
       const created = res.data?.assignments || []
       if (created.length > 0) {
         message.success(`已领取商家: ${claimRecord.merchant_name}`)
@@ -919,18 +784,17 @@ const MerchantManagement = () => {
   return (
     <div>
       <Row gutter={12} style={{ marginBottom: 16 }}>
-          {/* 左侧：商家概览统计 */}
+          {/* 左侧：我的商家库统计 */}
           <Col xs={24} md={6}>
             <Card size="small" style={{ height: '100%' }}>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                <Statistic title="商家总数" value={stats.total || 0} valueStyle={{ fontSize: 20 }} />
-                <div style={{ display: 'flex', gap: 16 }}>
-                  <Statistic title="已分配" value={stats.assigned || 0} valueStyle={{ fontSize: 16, color: '#1677ff' }} />
-                  <Statistic title="待补MID" value={stats.missing_mid_total || 0} valueStyle={{ fontSize: 16, color: '#d46b08' }} />
-                </div>
+                <Statistic title="我的商家" value={stats.total || 0} valueStyle={{ fontSize: 20 }} />
                 <div>
                   <span style={{ fontSize: 12, color: '#999', display: 'block', marginBottom: 4 }}>平台分布</span>
                   <Space wrap size={4}>{platformTags}</Space>
+                </div>
+                <div style={{ fontSize: 11, color: '#999' }}>
+                  最近同步: {stats.last_synced_at ? dayjs(stats.last_synced_at).format('YYYY-MM-DD HH:mm') : '从未同步'}
                 </div>
               </div>
             </Card>
@@ -1039,20 +903,30 @@ const MerchantManagement = () => {
         items={[
           {
             key: 'merchants',
-            label: '商家目录',
+            label: '我的商家库',
             children: (
               <Card
-                title="商家目录"
+                title="我的商家库"
                 extra={
                   <Space>
-                    <Tooltip title="重新加载数据">
+                    <Tooltip title="刷新列表">
                       <Button icon={<ReloadOutlined />} onClick={() => fetchMerchants(merchantPage, merchantPageSize)} />
                     </Tooltip>
-                    <Button icon={<SyncOutlined />} loading={discoverLoading} onClick={handleDiscover}>交易同步</Button>
-                    <Button loading={midRepairLoading} onClick={handleMidRepair}>补齐MID</Button>
-                    {isManager && (
-                      <Button icon={<CloudSyncOutlined />} loading={platformSyncLoading} onClick={handlePlatformSync}>平台同步</Button>
-                    )}
+                    <Button icon={<SyncOutlined />} loading={syncLoading} onClick={handleSyncAll} type="primary">
+                      同步所有商家
+                    </Button>
+                    <Select
+                      allowClear
+                      placeholder="选择平台"
+                      style={{ width: 110 }}
+                      value={syncPlatformCode}
+                      onChange={(v) => setSyncPlatformCode(v)}
+                    >
+                      {platformOptions.map((p) => <Option key={p} value={p}>{p}</Option>)}
+                    </Select>
+                    <Button icon={<CloudSyncOutlined />} loading={syncPlatformLoading} onClick={handleSyncPlatform} disabled={!syncPlatformCode}>
+                      同步该平台
+                    </Button>
                   </Space>
                 }
               >
@@ -1071,7 +945,7 @@ const MerchantManagement = () => {
 
                   <Input
                     allowClear
-                    placeholder="搜索商家名/MID/slug"
+                    placeholder="搜索商家名/MID"
                     style={{ width: 240 }}
                     value={merchantFilters.search}
                     prefix={<SearchOutlined />}
@@ -1079,63 +953,10 @@ const MerchantManagement = () => {
                     onPressEnter={() => fetchMerchants(1, merchantPageSize)}
                   />
 
-                  <Select
-                    allowClear
-                    placeholder="状态"
-                    style={{ width: 120 }}
-                    value={merchantFilters.status}
-                    onChange={(v) => setMerchantFilters((s) => ({ ...s, status: v }))}
-                  >
-                    <Option value="active">active</Option>
-                    <Option value="inactive">inactive</Option>
-                  </Select>
-
-                  <Select
-                    allowClear
-                    placeholder="分配状态"
-                    style={{ width: 140 }}
-                    value={merchantFilters.assigned}
-                    onChange={(v) => setMerchantFilters((s) => ({ ...s, assigned: v }))}
-                  >
-                    <Option value={true}>已分配</Option>
-                    <Option value={false}>未分配</Option>
-                  </Select>
-
-                  <Select
-                    allowClear
-                    placeholder="MID状态"
-                    style={{ width: 120 }}
-                    value={merchantFilters.missing_mid}
-                    onChange={(v) => setMerchantFilters((s) => ({ ...s, missing_mid: v }))}
-                  >
-                    <Option value={true}>待补MID</Option>
-                    <Option value={false}>MID完整</Option>
-                  </Select>
-
-                  <Select
-                    allowClear
-                    placeholder="申请状态"
-                    style={{ width: 120 }}
-                    value={merchantFilters.relationship_status}
-                    onChange={(v) => setMerchantFilters((s) => ({ ...s, relationship_status: v }))}
-                  >
-                    <Option value="joined">通过</Option>
-                    <Option value="pending">审核中</Option>
-                    <Option value="rejected">已拒绝</Option>
-                  </Select>
-
                   <Button type="primary" onClick={() => fetchMerchants(1, merchantPageSize)}>查询</Button>
                   <Button
                     onClick={() => {
-                      setMerchantFilters({
-                        platform: undefined,
-                        category: undefined,
-                        status: undefined,
-                        assigned: undefined,
-                        missing_mid: undefined,
-                        relationship_status: undefined,
-                        search: '',
-                      })
+                      setMerchantFilters({ platform: undefined, search: '' })
                       setTimeout(() => fetchMerchants(1, merchantPageSize), 0)
                     }}
                   >
@@ -1148,7 +969,7 @@ const MerchantManagement = () => {
                   loading={loading && tabKey === 'merchants'}
                   columns={merchantColumns}
                   dataSource={merchants}
-                  scroll={{ x: 1600 }}
+                  scroll={{ x: 1200 }}
                   pagination={{
                     current: merchantPage,
                     pageSize: merchantPageSize,
@@ -1161,71 +982,7 @@ const MerchantManagement = () => {
               </Card>
             ),
           },
-          {
-            key: 'missing_mid',
-            label: '待补MID',
-            children: (
-              <Card
-                title="待补 MID 商家"
-                extra={
-                  <Button icon={<ReloadOutlined />} onClick={() => {
-                    setMerchantFilters((s) => ({ ...s, missing_mid: true }))
-                    setTimeout(() => fetchMerchants(1, merchantPageSize), 0)
-                  }}>
-                    刷新
-                  </Button>
-                }
-              >
-                <Table
-                  rowKey="id"
-                  loading={loading}
-                  dataSource={merchants.filter((m) => m.missing_mid)}
-                  scroll={{ x: 1000 }}
-                  pagination={false}
-                  columns={[
-                    {
-                      title: '平台', dataIndex: 'platform', key: 'platform', width: 80,
-                      render: (val) => <Tag color={PLATFORM_COLORS[val] || 'blue'}>{val}</Tag>,
-                    },
-                    { title: '商家名', dataIndex: 'merchant_name', key: 'merchant_name', width: 200 },
-                    { title: 'Slug', dataIndex: 'slug', key: 'slug', width: 200, render: (v) => v || '-' },
-                    {
-                      title: '申请状态', dataIndex: 'relationship_status', key: 'rs', width: 90,
-                      render: (val) => {
-                        const cfg = relationshipStatusMap[val] || relationshipStatusMap.unknown
-                        return <Tag color={cfg.color}>{cfg.label}</Tag>
-                      },
-                    },
-                    {
-                      title: '操作', key: 'action', width: 220,
-                      render: (_, record) => {
-                        if (editingMidId === record.id) {
-                          return (
-                            <Space>
-                              <Input
-                                size="small"
-                                style={{ width: 120 }}
-                                value={editingMidValue}
-                                onChange={(e) => setEditingMidValue(e.target.value)}
-                                onPressEnter={() => handleInlineMidSave(record.id)}
-                                placeholder="输入MID"
-                              />
-                              <Button type="primary" size="small" loading={midSaving} onClick={() => handleInlineMidSave(record.id)}>确认</Button>
-                              <Button size="small" onClick={() => { setEditingMidId(null); setEditingMidValue('') }}>取消</Button>
-                            </Space>
-                          )
-                        }
-                        return isManager ? (
-                          <Button size="small" onClick={() => { setEditingMidId(record.id); setEditingMidValue('') }}>填写 MID</Button>
-                        ) : <span style={{ color: '#aaa' }}>—</span>
-                      },
-                    },
-                  ]}
-                />
-              </Card>
-            ),
-          },
-          {
+          ...(isManager ? [{
             key: 'violations',
             label: (
               <span>
@@ -1420,7 +1177,7 @@ const MerchantManagement = () => {
                 />
               </Card>
             ),
-          },
+          }] : []),
         ].filter(Boolean)}
       />
 

@@ -33,6 +33,10 @@ const AffiliateAccounts = () => {
   // 一键同步所有平台状态
   const [syncAllLoading, setSyncAllLoading] = useState(false)
   const [syncAllResult, setSyncAllResult] = useState(null)
+
+  // 同步商家库
+  const [syncMerchantLoading, setSyncMerchantLoading] = useState(false)
+  const [syncMerchantPlatformLoading, setSyncMerchantPlatformLoading] = useState({})
   
   // 搜索状态
   const [searchText, setSearchText] = useState('')
@@ -548,6 +552,30 @@ const AffiliateAccounts = () => {
     }
   }
 
+  const handleSyncMerchants = async () => {
+    setSyncMerchantLoading(true)
+    try {
+      await api.post('/api/article-gen/campaign-link/sync')
+      message.success('商家库同步已在后台启动，数据量较大请稍等几分钟')
+    } catch (error) {
+      message.error(error.response?.data?.detail || '商家库同步失败')
+    } finally {
+      setTimeout(() => setSyncMerchantLoading(false), 3000)
+    }
+  }
+
+  const handleSyncMerchantPlatform = async (platformCode) => {
+    setSyncMerchantPlatformLoading(prev => ({ ...prev, [platformCode]: true }))
+    try {
+      await api.post(`/api/article-gen/campaign-link/sync/${platformCode}`)
+      message.success(`${platformCode} 商家同步已在后台启动`)
+    } catch (error) {
+      message.error(error.response?.data?.detail || `${platformCode} 商家同步失败`)
+    } finally {
+      setTimeout(() => setSyncMerchantPlatformLoading(prev => ({ ...prev, [platformCode]: false })), 3000)
+    }
+  }
+
   // 检查是否为 LinkHaitao 平台（支持 lh 和 linkhaitao 两种格式）
   const isLinkHaitaoPlatform = (account) => {
     const platform = account.platform || account
@@ -586,9 +614,17 @@ const AffiliateAccounts = () => {
           <Button
             type="link"
             icon={<SyncOutlined />}
+            loading={syncMerchantPlatformLoading[(record.platform?.platform_code || '').toUpperCase()]}
+            onClick={() => handleSyncMerchantPlatform((record.platform?.platform_code || '').toUpperCase())}
+          >
+            同步商家
+          </Button>
+          <Button
+            type="link"
+            icon={<SyncOutlined />}
             onClick={() => handleSyncCollabGlow(record)}
           >
-            同步数据
+            同步交易
           </Button>
           <Button
             type="link"
@@ -950,17 +986,26 @@ const AffiliateAccounts = () => {
           <h2>我的联盟账号</h2>
           <Space>
             <Button
+              type="primary"
+              icon={<SyncOutlined spin={syncMerchantLoading} />}
+              onClick={handleSyncMerchants}
+              loading={syncMerchantLoading}
+            >
+              同步商家库
+            </Button>
+            <Button
               type="default"
               icon={<SyncOutlined spin={syncAllLoading} />}
               onClick={handleSyncAll}
               loading={syncAllLoading}
             >
-              一键同步所有平台
+              一键同步交易
             </Button>
             <Button
               type="primary"
               icon={<PlusOutlined />}
               onClick={handleCreateAccount}
+              ghost
             >
               添加账号
             </Button>
