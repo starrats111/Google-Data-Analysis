@@ -7,6 +7,12 @@ import { getToken } from '../../services/tokenHolder'
 
 const { TextArea } = Input
 
+function formatCid(cid) {
+  const s = String(cid).replace(/\D/g, '')
+  if (s.length === 10) return `${s.slice(0,3)}-${s.slice(3,6)}-${s.slice(6)}`
+  return cid
+}
+
 const COUNTRY_LABELS = {
   US: '美国', UK: '英国', CA: '加拿大', AU: '澳大利亚',
   DE: '德国', FR: '法国', JP: '日本', BR: '巴西',
@@ -113,11 +119,12 @@ export default function AdCreationWizard() {
       const data = res.data || {}
       const cidList = data.all_cids || []
       const busyList = data.busy_cids || []
-      const recommended = data.customer_id || cidList[0] || ''
-      setAllCids(cidList)
+      const freeCids = cidList.filter(c => !busyList.includes(c))
+      const recommended = data.customer_id && !busyList.includes(data.customer_id) ? data.customer_id : freeCids[0] || ''
+      setAllCids(freeCids)
       setBusyCids(busyList)
       setAvailableCid(recommended)
-      if (mccList.length === 1 && cidList.length <= 1 && recommended) setStep(1)
+      if (mccList.length === 1 && freeCids.length <= 1 && recommended) setStep(1)
     } catch (err) {
       setCidError(err?.response?.data?.detail || err?.message || '查找 CID 失败')
     } finally { setLoading(false) }
@@ -443,14 +450,11 @@ export default function AdCreationWizard() {
                       onChange={(v) => { setAvailableCid(v); setCidError(''); }}
                       options={allCids.map(cid => ({
                         value: cid,
-                        label: busyCids.includes(cid) ? `${cid}（有广告运行中）` : `${cid}（空闲）`,
+                        label: formatCid(cid),
                       }))}
                     />
-                    {availableCid && busyCids.includes(availableCid) && (
-                      <Alert type="info" message="该 CID 已有广告系列在运行，新广告将在同一客户账号下创建" style={{ marginTop: 8 }} />
-                    )}
-                    {availableCid && !busyCids.includes(availableCid) && (
-                      <Alert type="success" message={`CID ${availableCid} 为空闲状态`} style={{ marginTop: 8 }} />
+                    {allCids.length === 0 && !loading && (
+                      <Alert type="warning" message="当前 MCC 下没有空闲的客户账号" style={{ marginTop: 8 }} />
                     )}
                   </div>
                 )}
@@ -700,7 +704,7 @@ export default function AdCreationWizard() {
           </Row>
           <Row>
             <Col span={8}><Typography.Text strong>CID</Typography.Text></Col>
-            <Col span={16}>{availableCid}</Col>
+            <Col span={16}>{formatCid(availableCid)}</Col>
           </Row>
           <Row>
             <Col span={8}><Typography.Text strong>投放国家</Typography.Text></Col>
