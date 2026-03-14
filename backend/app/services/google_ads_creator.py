@@ -28,6 +28,24 @@ class GoogleAdsCreator:
     def __init__(self, db: Session):
         self.db = db
 
+    def _next_platform_seq(self, user_id: int, platform: str) -> str:
+        """计算该用户在指定平台下的下一个序号"""
+        from sqlalchemy import func
+        from app.models.merchant import MerchantAssignment, AffiliateMerchant
+        if not user_id:
+            return "001"
+        count = (
+            self.db.query(MerchantAssignment)
+            .join(AffiliateMerchant, MerchantAssignment.merchant_id == AffiliateMerchant.id)
+            .filter(
+                MerchantAssignment.user_id == user_id,
+                func.upper(AffiliateMerchant.platform) == platform.upper(),
+                MerchantAssignment.google_campaign_id.isnot(None),
+            )
+            .count()
+        )
+        return str(count + 1).zfill(3)
+
     def create_full_campaign(
         self,
         mcc_id: int,
@@ -43,6 +61,7 @@ class GoogleAdsCreator:
         platform: str = "",
         merchant_mid: str = "",
         assignment_id: int = 0,
+        user_id: int = 0,
     ) -> Dict:
         """一次 API 调用创建完整广告结构。"""
         mcc = self.db.query(GoogleMccAccount).filter(GoogleMccAccount.id == mcc_id).first()
@@ -52,11 +71,11 @@ class GoogleAdsCreator:
         client, mcc_customer_id = create_google_ads_client(mcc)
         cid = customer_id.replace("-", "")
 
-        # 命名格式: 序号-平台-商家名-国家-日期-MID
+        # 序号 = 该用户在该平台下已创建的广告数 + 1
         date_str = datetime.now().strftime("%m%d")
-        seq = str(assignment_id).zfill(3)
         plat = platform.upper() if platform else "XX"
         mid = merchant_mid or "0"
+        seq = self._next_platform_seq(user_id, plat)
         campaign_name = f"{seq}-{plat}-{merchant_name}-{target_country}-{date_str}-{mid}"
         existing = self._check_existing_campaign(client, cid, campaign_name)
         if existing:

@@ -297,6 +297,7 @@ async def create_campaign(
             platform=merchant.platform if merchant else "",
             merchant_mid=merchant.merchant_id if merchant else "",
             assignment_id=data.assignment_id,
+            user_id=current_user.id,
         )
 
         # 更新 assignment 记录
