@@ -920,8 +920,26 @@ const MerchantManagement = () => {
           },
         })
       } else {
-        message.info(res.data?.message || '该商家你已经领取过了')
         setClaimModalOpen(false)
+        const skippedList = res.data?.skipped_assignments || []
+        if (skippedList.length > 0) {
+          const existing = skippedList[0]
+          Modal.confirm({
+            title: '该商家已领取',
+            content: `你已领取过「${existing.merchant_name}」，是否立即创建广告？`,
+            okText: '创建广告',
+            cancelText: '稍后再说',
+            onOk: () => {
+              const params = new URLSearchParams({
+                assignment_id: existing.id,
+                merchant_name: existing.merchant_name || '',
+              })
+              navigate(`/ads/create?${params.toString()}`)
+            },
+          })
+        } else {
+          message.info(res.data?.message || '该商家你已经领取过了')
+        }
       }
     } catch (err) {
       console.error('Claim error:', err)

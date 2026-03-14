@@ -117,30 +117,51 @@ export default function TestDashboard() {
     },
     { title: '数据日期', width: 110, render: (_, r) => r.ad_data?.date || '-' },
     {
-      title: '操作', width: 160, fixed: 'right',
+      title: '操作', width: 200, fixed: 'right',
       render: (_, r) => (
         <Space size={0}>
+          {!r.campaign_id && (
+            <Button
+              type="link"
+              size="small"
+              icon={<ThunderboltOutlined />}
+              style={{ color: '#722ed1' }}
+              onClick={() => {
+                const params = new URLSearchParams({
+                  assignment_id: r.assignment_id,
+                  merchant_name: r.merchant_name || '',
+                })
+                navigate(`/ads/create?${params.toString()}`)
+              }}
+            >
+              创建广告
+            </Button>
+          )}
+          {r.campaign_id && (
+            <>
+              <Popconfirm
+                title="确定转为正式投放？"
+                description="广告将继续运行，商家从测试看板转入正式管理"
+                onConfirm={() => handlePromote(r.assignment_id)}
+                okText="确定"
+                cancelText="取消"
+              >
+                <Button type="link" size="small" icon={<CheckCircleOutlined />} style={{ color: '#52c41a' }}>转正式</Button>
+              </Popconfirm>
+              <Popconfirm
+                title="确定移除？"
+                description="仅从测试看板移除，不会删除 Google Ads 广告"
+                onConfirm={() => handleRemove(r.assignment_id)}
+                okText="移除"
+                cancelText="取消"
+              >
+                <Button type="link" size="small" icon={<CloseCircleOutlined />}>移除</Button>
+              </Popconfirm>
+            </>
+          )}
           <Popconfirm
-            title="确定转为正式投放？"
-            description="广告将继续运行，商家从测试看板转入正式管理"
-            onConfirm={() => handlePromote(r.assignment_id)}
-            okText="确定"
-            cancelText="取消"
-          >
-            <Button type="link" size="small" icon={<CheckCircleOutlined />} style={{ color: '#52c41a' }}>转正式</Button>
-          </Popconfirm>
-          <Popconfirm
-            title="确定移除？"
-            description="仅从测试看板移除，不会删除 Google Ads 广告"
-            onConfirm={() => handleRemove(r.assignment_id)}
-            okText="移除"
-            cancelText="取消"
-          >
-            <Button type="link" size="small" icon={<CloseCircleOutlined />}>移除</Button>
-          </Popconfirm>
-          <Popconfirm
-            title="确定删除广告？"
-            description={r.campaign_id ? "将同时从 Google Ads 中删除广告系列" : "将清除广告关联"}
+            title={r.campaign_id ? "确定删除广告？" : "确定取消该分配？"}
+            description={r.campaign_id ? "将同时从 Google Ads 中删除广告系列" : "将取消该商家的测试分配"}
             onConfirm={() => handleDelete(r.assignment_id)}
             okText="删除"
             cancelText="取消"

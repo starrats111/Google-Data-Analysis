@@ -453,6 +453,7 @@ async def claim_merchants(
     created = []
     merchant_names = {}
     skipped = 0
+    skipped_assignments = []
     for mid in data.merchant_ids:
         merchant = db.query(AffiliateMerchant).filter(AffiliateMerchant.id == mid).first()
         if not merchant:
@@ -464,6 +465,11 @@ async def claim_merchants(
         ).first()
         if existing:
             skipped += 1
+            skipped_assignments.append({
+                "id": existing.id,
+                "merchant_id": existing.merchant_id,
+                "merchant_name": merchant.merchant_name,
+            })
             continue
         assignment = MerchantAssignment(
             merchant_id=mid,
@@ -488,6 +494,7 @@ async def claim_merchants(
             {"id": a.id, "merchant_id": a.merchant_id, "merchant_name": merchant_names.get(a.merchant_id, "")}
             for a in created
         ],
+        "skipped_assignments": skipped_assignments,
     }
 
 
