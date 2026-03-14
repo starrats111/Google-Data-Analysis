@@ -255,15 +255,18 @@ class GoogleSheetSyncService:
                 continue
         self.db.commit()
 
-        # 从数据库中提取该 MCC 当前所有 distinct CID，更新 child_customer_ids
+        # 尝试从 CID_List 工作表读取完整 CID 列表
         import json as _json
-        from sqlalchemy import distinct as _distinct
-        cids = self.db.query(_distinct(GoogleAdsApiData.customer_id)).filter(
-            GoogleAdsApiData.mcc_id == mcc.id,
-            GoogleAdsApiData.customer_id.isnot(None),
-            GoogleAdsApiData.customer_id != "",
-        ).all()
-        cid_list = sorted(set(c[0] for c in cids if c[0]))
+        cid_list = self._read_cid_list_from_sheet(sid)
+        if not cid_list:
+            # 回退：从数据库中提取该 MCC 所有 distinct CID
+            from sqlalchemy import distinct as _distinct
+            cids = self.db.query(_distinct(GoogleAdsApiData.customer_id)).filter(
+                GoogleAdsApiData.mcc_id == mcc.id,
+                GoogleAdsApiData.customer_id.isnot(None),
+                GoogleAdsApiData.customer_id != "",
+            ).all()
+            cid_list = sorted(set(c[0] for c in cids if c[0]))
         mcc.child_customer_ids = _json.dumps(cid_list)
         self.db.add(mcc)
         self.db.commit()
@@ -274,6 +277,33 @@ class GoogleSheetSyncService:
             mcc.mcc_name, start, end, inserted, updated, len(cid_list),
         )
         return {"success": True, "inserted": inserted, "updated": updated, "skipped": 0}
+
+    @staticmethod
+    def _read_cid_list_from_sheet(spreadsheet_id: str) -> List[str]:
+        """从 Google Sheet 的 CID_List 工作表读取所有子账号 CID"""
+        try:
+            rows = _read_sheet_csv(spreadsheet_id, "CID_List")
+        except Exception as e:
+            logger.debug("读取 CID_List 表失败（可能不存在）: %s", e)
+            return []
+        if not rows or len(rows) < 2:
+            return []
+        headers = [str(h).strip() for h in rows[0]]
+        cid_col = None
+        for i, h in enumerate(headers):
+            if h.lower() in ("customerid", "customer_id", "cid", "accountid", "account_id"):
+                cid_col = i
+                break
+        if cid_col is None:
+            return []
+        result = []
+        for row in rows[1:]:
+            if cid_col < len(row) and row[cid_col]:
+                cid = str(row[cid_col]).strip().replace("-", "")
+                if cid and cid.isdigit():
+                    result.append(cid)
+        logger.info("从 CID_List 表读取到 %d 个 CID", len(result))
+        return sorted(set(result))
 
     def _update_last_sheet_sync_at(self, mcc: GoogleMccAccount) -> None:
         mcc.last_sheet_sync_at = datetime.utcnow()

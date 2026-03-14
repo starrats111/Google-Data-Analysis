@@ -44,26 +44,35 @@ class KeywordPlanService:
         if not all_cid_list:
             raise ValueError("该 MCC 尚无 CID 列表，请点击「刷新 CID」从 Google Ads 获取")
 
-        # 查找 busy CID：在数据中心中有"已启用"广告系列的 CID
-        from sqlalchemy import distinct as _distinct
-        busy_set = set()
-        for cid in all_cid_list:
-            cid_clean = cid.replace("-", "")
-            cid_variants = {cid, cid_clean}
-            has_enabled = self.db.query(GoogleAdsApiData.campaign_id).filter(
-                GoogleAdsApiData.mcc_id == mcc_id,
-                GoogleAdsApiData.customer_id.in_(list(cid_variants)),
-                GoogleAdsApiData.status == '已启用',
-            ).order_by(GoogleAdsApiData.date.desc()).first()
-            if has_enabled:
-                busy_set.add(cid)
+        # 查找 busy CID：取该 MCC 最新一天的数据，有"已启用"广告的 CID 就是 busy
+        # 暂停/关闭后下次同步自动移除 busy 标记
+        latest_date = self.db.query(func.max(GoogleAdsApiData.date)).filter(
+            GoogleAdsApiData.mcc_id == mcc_id,
+        ).scalar()
 
-        free_cids = [c for c in all_cid_list if c not in busy_set]
+        busy_set = set()
+        if latest_date:
+            from sqlalchemy import distinct as _distinct
+            busy_rows = self.db.query(_distinct(GoogleAdsApiData.customer_id)).filter(
+                GoogleAdsApiData.mcc_id == mcc_id,
+                GoogleAdsApiData.date == latest_date,
+                GoogleAdsApiData.status == '已启用',
+            ).all()
+            busy_set = set(r[0] for r in busy_rows if r[0])
+            # 同时匹配带横杠和不带横杠的格式
+            busy_normalized = set()
+            for b in busy_set:
+                busy_normalized.add(b)
+                busy_normalized.add(b.replace("-", ""))
+            busy_set = busy_normalized
+
+        free_cids = [c for c in all_cid_list if c not in busy_set and c.replace("-", "") not in busy_set]
+        busy_display = [c for c in all_cid_list if c in busy_set or c.replace("-", "") in busy_set]
 
         return {
             "customer_id": free_cids[0] if free_cids else None,
             "all_cids": free_cids,
-            "busy_cids": list(busy_set),
+            "busy_cids": busy_display,
             "total": len(all_cid_list),
         }
 
