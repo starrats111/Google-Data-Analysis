@@ -637,7 +637,7 @@ class MerchantService:
         return m
 
     @staticmethod
-    def get_stats(db: Session) -> dict:
+    def get_stats(db: Session, user_id: int = None) -> dict:
         """商家统计概览"""
         total = db.query(func.count(AffiliateMerchant.id)).scalar() or 0
         assigned_ids = (
@@ -700,14 +700,13 @@ class MerchantService:
             key = MerchantService.normalize_platform(p) if p else (p or "UNKNOWN")
             norm_missing[key] = norm_missing.get(key, 0) + c
 
-        test_merchant_count = (
-            db.query(func.count(MerchantAssignment.id))
-            .filter(
-                MerchantAssignment.mode == "test",
-                MerchantAssignment.status == "active",
-            )
-            .scalar() or 0
+        test_q = db.query(func.count(MerchantAssignment.id)).filter(
+            MerchantAssignment.mode == "test",
+            MerchantAssignment.status == "active",
         )
+        if user_id:
+            test_q = test_q.filter(MerchantAssignment.user_id == user_id)
+        test_merchant_count = test_q.scalar() or 0
 
         return {
             "total": total,

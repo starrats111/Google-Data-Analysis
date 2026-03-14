@@ -74,7 +74,7 @@ async def merchant_stats(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    return MerchantService.get_stats(db)
+    return MerchantService.get_stats(db, user_id=current_user.id)
 
 
 # ==================================================================
