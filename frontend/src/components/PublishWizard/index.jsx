@@ -264,19 +264,18 @@ const PublishWizard = () => {
     // 尝试爬取商家网站获取 AI 分析数据；爬虫失败时自动用 AI 分析 URL 生成标题/关键词
     setLoading(true)
     try {
-      const res = await articleApi.crawlMerchant({ url: merchantUrl, language })
+      const res = await articleApi.crawlMerchant({ url: merchantUrl, language, merchant_name: campaignResult?.merchant_name || '' })
       const resData = res.data
       setCrawlResult(resData)
       _autoSelectTitleAndKeywords(resData)
-      // 保留手动上传的图片，不用爬取的图片覆盖
       setCrawledImages(resData?.images || [])
-      setMStep(1)  // 跳到图片选择步骤，让员工确认/修改图片
+      setMStep(1)
     } catch (err) {
       const detail = err?.response?.data?.detail || err.message || '未知错误'
       const isTimeout = err.code === 'ECONNABORTED' || detail.includes('timeout')
       message.info(isTimeout ? '爬取超时，正在用 AI 分析...' : `爬取失败(${detail.slice(0,50)})，正在用 AI 分析...`)
       try {
-        const aiRes = await articleApi.analyzeUrl({ url: merchantUrl, language })
+        const aiRes = await articleApi.analyzeUrl({ url: merchantUrl, language, merchant_name: campaignResult?.merchant_name || '' })
         const aiData = aiRes.data
         const analysis = aiData?.analysis || {}
         const crawlData = {
@@ -515,11 +514,14 @@ const PublishWizard = () => {
       if (!res.data?.campaign_link) {
         message.warning('该商家未返回 Campaign Link，请切换到手动输入')
       } else if (res.data?.site_url) {
-        // 自动开始爬取（如果有 site_url 和 campaign_link）
-        message.success('已获取 Campaign Link，正在自动爬取商家网站...')
-        setFetchingCampaign(false)
-        _autoCrawl(res.data.site_url, res.data.campaign_link)
-        return
+        if (res.data?.support_regions?.length > 0) {
+          message.success('已获取 Campaign Link，请先选择目标区域/语言，再点击「开始爬取」')
+        } else {
+          message.success('已获取 Campaign Link，正在自动爬取商家网站...')
+          setFetchingCampaign(false)
+          _autoCrawl(res.data.site_url, res.data.campaign_link)
+          return
+        }
       }
     } catch (err) {
       const status = err?.response?.status
@@ -538,7 +540,7 @@ const PublishWizard = () => {
   const _autoCrawl = async (siteUrl, link) => {
     setLoading(true)
     try {
-      const res = await articleApi.crawlMerchant({ url: siteUrl, language })
+      const res = await articleApi.crawlMerchant({ url: siteUrl, language, merchant_name: campaignResult?.merchant_name || '' })
       await _applyCrawlImages(res.data)
     } catch (err) {
       const detail = err?.response?.data?.detail || err.message || '未知错误'
@@ -568,15 +570,16 @@ const PublishWizard = () => {
     if (!trackingLink.trim()) { message.warning('追踪链接为空'); return }
     if (!language) { message.warning('请选择 Support Region 以确定语言'); return }
     setLoading(true)
+    const mName = campaignResult?.merchant_name || ''
     try {
-      const res = await articleApi.crawlMerchant({ url: merchantUrl, language })
+      const res = await articleApi.crawlMerchant({ url: merchantUrl, language, merchant_name: mName })
       await _applyCrawlImages(res.data)
     } catch (err) {
       const detail = err?.response?.data?.detail || err.message || '未知错误'
       const isTimeout = err.code === 'ECONNABORTED' || detail.includes('timeout')
       message.info(isTimeout ? '爬取超时，正在用 AI 分析...' : `爬取失败(${detail.slice(0,50)})，正在用 AI 分析...`)
       try {
-        const aiRes = await articleApi.analyzeUrl({ url: merchantUrl, language })
+        const aiRes = await articleApi.analyzeUrl({ url: merchantUrl, language, merchant_name: mName })
         const aiData = aiRes.data
         const analysis = aiData?.analysis || {}
         const crawlData = {
@@ -604,15 +607,16 @@ const PublishWizard = () => {
     if (!merchantUrl.trim()) { message.warning('请输入商家网址'); return }
     if (!trackingLink.trim()) { message.warning('请输入追踪链接'); return }
     setLoading(true)
+    const mName = campaignResult?.merchant_name || ''
     try {
-      const res = await articleApi.crawlMerchant({ url: merchantUrl, language })
+      const res = await articleApi.crawlMerchant({ url: merchantUrl, language, merchant_name: mName })
       await _applyCrawlImages(res.data)
     } catch (err) {
       const detail = err?.response?.data?.detail || err.message || '未知错误'
       const isTimeout = err.code === 'ECONNABORTED' || detail.includes('timeout')
       message.info(isTimeout ? '爬取超时，正在用 AI 分析...' : `爬取失败(${detail.slice(0,50)})，正在用 AI 分析...`)
       try {
-        const aiRes = await articleApi.analyzeUrl({ url: merchantUrl, language })
+        const aiRes = await articleApi.analyzeUrl({ url: merchantUrl, language, merchant_name: mName })
         const aiData = aiRes.data
         const analysis = aiData?.analysis || {}
         const crawlData = {
