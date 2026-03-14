@@ -411,7 +411,8 @@ async def get_test_dashboard(
     db: Session = Depends(get_db),
 ):
     """测试商家看板 — 只展示广告侧数据（M-50 闭环）"""
-    # 查找当前用户的测试模式分配
+    from sqlalchemy import func
+
     test_assignments = db.query(MerchantAssignment).filter(
         MerchantAssignment.user_id == current_user.id,
         MerchantAssignment.mode == "test",
@@ -424,13 +425,46 @@ async def get_test_dashboard(
         ad_data = None
         sync_pending = False
 
+        # 如果尚未关联广告系列，尝试通过 merchant_id 自动匹配
+        if not a.google_campaign_id and merchant and merchant.merchant_id:
+            mid = merchant.merchant_id
+            matched = db.query(GoogleAdsApiData).filter(
+                GoogleAdsApiData.user_id == current_user.id,
+                GoogleAdsApiData.campaign_name.like(f"%-{mid}"),
+            ).order_by(GoogleAdsApiData.date.desc()).first()
+
+            if matched:
+                a.google_campaign_id = matched.campaign_id
+                a.google_customer_id = matched.customer_id
+                budget_row = db.query(GoogleAdsApiData).filter(
+                    GoogleAdsApiData.campaign_id == matched.campaign_id,
+                    GoogleAdsApiData.customer_id == matched.customer_id,
+                    GoogleAdsApiData.budget > 0,
+                ).order_by(GoogleAdsApiData.date.desc()).first()
+                if budget_row and budget_row.budget:
+                    a.daily_budget = budget_row.budget
+                try:
+                    db.commit()
+                    logger.info(
+                        "Auto-linked test assignment %d to campaign %s (cid=%s)",
+                        a.id, matched.campaign_id, matched.customer_id,
+                    )
+                except Exception:
+                    db.rollback()
+
         if a.google_customer_id and a.google_campaign_id:
-            # 查找广告数据
+            cid_clean = a.google_customer_id.replace("-", "")
             ad_data = db.query(GoogleAdsApiData).filter(
                 GoogleAdsApiData.user_id == current_user.id,
-                GoogleAdsApiData.customer_id == a.google_customer_id,
+                GoogleAdsApiData.customer_id.in_([a.google_customer_id, cid_clean]),
                 GoogleAdsApiData.campaign_id == a.google_campaign_id,
             ).order_by(GoogleAdsApiData.date.desc()).first()
+
+            if not ad_data:
+                ad_data = db.query(GoogleAdsApiData).filter(
+                    GoogleAdsApiData.customer_id.in_([a.google_customer_id, cid_clean]),
+                    GoogleAdsApiData.campaign_id == a.google_campaign_id,
+                ).order_by(GoogleAdsApiData.date.desc()).first()
 
             if not ad_data:
                 sync_pending = True
@@ -447,9 +481,9 @@ async def get_test_dashboard(
             "sync_pending": sync_pending,
             "ad_data": {
                 "cost": float(ad_data.cost or 0) if ad_data else 0,
-                "clicks": ad_data.clicks or 0 if ad_data else 0,
-                "impressions": ad_data.impressions or 0 if ad_data else 0,
-                "conversions": float(ad_data.conversions or 0) if ad_data else 0,
+                "clicks": int(ad_data.clicks or 0) if ad_data else 0,
+                "impressions": int(ad_data.impressions or 0) if ad_data else 0,
+                "conversions": float(getattr(ad_data, "conversions", 0) or 0) if ad_data else 0,
                 "status": ad_data.status if ad_data else "未同步",
                 "date": ad_data.date.isoformat() if ad_data and ad_data.date else None,
             } if ad_data or sync_pending else None,
