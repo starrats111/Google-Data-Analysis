@@ -21,13 +21,11 @@ class KeywordPlanService:
         self.db = db
 
     def find_available_cid(self, mcc_id: int) -> dict:
-        """查找 MCC 下的可用 CID，优先返回空闲的，全部繁忙时返回第一个。
+        """查找 MCC 下的可用 CID，优先返回空闲的。
 
-        对每个 CID 检查其**最近一条记录**的状态，而非仅看某一天。
+        忙碌判定：该 CID 下任意广告系列的**最近一条记录**status == '已启用'。
         返回 {"customer_id": str, "all_cids": list, "busy_cids": list}
         """
-        from sqlalchemy import and_
-
         mcc = self.db.query(GoogleMccAccount).filter(GoogleMccAccount.id == mcc_id).first()
         if not mcc:
             raise ValueError("MCC 账号不存在，请先在设置中添加 MCC")
@@ -41,27 +39,17 @@ class KeywordPlanService:
         if not all_cid_list:
             raise ValueError("MCC 下没有 CID 数据，请先执行一次数据同步")
 
-        # 子查询：每个 CID 的最新日期
-        max_date_sub = self.db.query(
-            GoogleAdsApiData.customer_id,
-            func.max(GoogleAdsApiData.date).label("max_date"),
-        ).filter(
-            GoogleAdsApiData.mcc_id == mcc_id,
-            GoogleAdsApiData.customer_id.isnot(None),
-        ).group_by(GoogleAdsApiData.customer_id).subquery()
-
-        # 在每个 CID 最新日期中，如果存在 status=='已启用' 的广告系列，该 CID 就是忙碌的
-        busy_rows = self.db.query(GoogleAdsApiData.customer_id).join(
-            max_date_sub,
-            and_(
-                GoogleAdsApiData.customer_id == max_date_sub.c.customer_id,
-                GoogleAdsApiData.date == max_date_sub.c.max_date,
-            ),
-        ).filter(
-            GoogleAdsApiData.mcc_id == mcc_id,
-            GoogleAdsApiData.status == '已启用',
-        ).distinct().all()
-        busy_set = {r[0] for r in busy_rows if r[0]}
+        # 简单直接：查找该 MCC 下所有有 '已启用' 状态广告的 CID
+        # 只要某 CID 在最近数据中包含已启用广告，就算忙碌
+        busy_set = set()
+        for cid in all_cid_list:
+            latest = self.db.query(GoogleAdsApiData.status).filter(
+                GoogleAdsApiData.mcc_id == mcc_id,
+                GoogleAdsApiData.customer_id == cid,
+                GoogleAdsApiData.status == '已启用',
+            ).first()
+            if latest:
+                busy_set.add(cid)
 
         recommended = None
         for cid in all_cid_list:

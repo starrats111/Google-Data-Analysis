@@ -327,6 +327,7 @@ async def get_campaign_data(
             GoogleAdsApiData.campaign_id,
             GoogleAdsApiData.customer_id,
         ).filter(
+            GoogleAdsApiData.user_id == current_user.id,
             GoogleAdsApiData.campaign_id.in_(campaign_ids),
             GoogleAdsApiData.customer_id.isnot(None),
         ).group_by(GoogleAdsApiData.campaign_id, GoogleAdsApiData.customer_id).all()

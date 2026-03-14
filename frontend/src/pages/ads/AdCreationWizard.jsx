@@ -122,7 +122,7 @@ export default function AdCreationWizard() {
       const busyList = data.busy_cids || []
       const freeCids = cidList.filter(c => !busyList.includes(c))
       const recommended = data.customer_id && !busyList.includes(data.customer_id) ? data.customer_id : freeCids[0] || ''
-      setAllCids(freeCids)
+      setAllCids(cidList)
       setBusyCids(busyList)
       setAvailableCid(recommended)
       if (mccList.length === 1 && freeCids.length <= 1 && recommended) setStep(1)
@@ -458,15 +458,22 @@ export default function AdCreationWizard() {
                     <Typography.Text strong style={{ marginRight: 8 }}>客户账号 (CID)</Typography.Text>
                     <Select
                       style={{ width: 400 }}
-                      placeholder="选择客户账号"
+                      placeholder="选择空闲的客户账号"
                       value={availableCid || undefined}
                       onChange={(v) => { setAvailableCid(v); setCidError(''); }}
-                      options={allCids.map(cid => ({
-                        value: cid,
-                        label: formatCid(cid),
-                      }))}
+                      options={allCids.map(cid => {
+                        const isBusy = busyCids.includes(cid)
+                        return {
+                          value: cid,
+                          label: `${formatCid(cid)}${isBusy ? ' (已占用)' : ''}`,
+                          disabled: isBusy,
+                        }
+                      })}
                     />
-                    {allCids.length === 0 && !loading && (
+                    <Typography.Text type="secondary" style={{ marginLeft: 8, fontSize: 12 }}>
+                      共 {allCids.length} 个 CID，空闲 {allCids.filter(c => !busyCids.includes(c)).length} 个
+                    </Typography.Text>
+                    {allCids.filter(c => !busyCids.includes(c)).length === 0 && !loading && (
                       <Alert type="warning" message="当前 MCC 下没有空闲的客户账号" style={{ marginTop: 8 }} />
                     )}
                   </div>
