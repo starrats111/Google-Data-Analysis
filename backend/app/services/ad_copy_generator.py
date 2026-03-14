@@ -99,6 +99,28 @@ RSA_HEADLINE_COUNT = 15  # 最多 15 个标题
 RSA_DESC_MAX = 90  # 描述最大字符数
 RSA_DESC_COUNT = 4  # 最多 4 个描述
 
+import re as _re
+
+_EMOJI_PATTERN = _re.compile(
+    "[\U0001F600-\U0001F64F\U0001F300-\U0001F5FF\U0001F680-\U0001F6FF"
+    "\U0001F1E0-\U0001F1FF\U00002702-\U000027B0\U000024C2-\U0001F251"
+    "\U0001F900-\U0001F9FF\U0001FA00-\U0001FA6F\U0001FA70-\U0001FAFF"
+    "\U00002600-\U000026FF\U00002700-\U000027BF\U0000FE00-\U0000FE0F"
+    "\U0000200D\U00002B50\U00002B55\U000023CF\U000023E9-\U000023F3"
+    "\U000023F8-\U000023FA\U0000231A\U0000231B\U00003030\U000000A9"
+    "\U000000AE\U00002122\U00002139\U00002194-\U00002199\U000021A9"
+    "\U000021AA\U0000203C\U00002049\U000020E3\U000025AA\U000025AB"
+    "\U000025B6\U000025C0\U000025FB-\U000025FE\U00002660\U00002663"
+    "\U00002665\U00002666\U00002668\U0000267B\U0000267F\U00002934"
+    "\U00002935\U00002B05-\U00002B07\U00002B1B\U00002B1C\U00003297"
+    "\U00003299\U0000FE0F\U0000200D]+",
+    flags=_re.UNICODE,
+)
+
+
+def _strip_emoji(text: str) -> str:
+    return _EMOJI_PATTERN.sub("", text).strip()
+
 
 class AdCopyGenerator:
     """AI 广告文案生成器"""
@@ -226,7 +248,7 @@ class AdCopyGenerator:
 
 请先用中文写3-5行简要分析（商家定位、策略要点、预算建议），然后输出JSON。
 
-合规要求: 禁止夸大宣传/误导/全大写(品牌缩写除外)/他人商标。
+合规要求: 禁止夸大宣传/误导/全大写(品牌缩写除外)/他人商标/使用emoji表情符号。
 
 JSON格式(严格遵守):
 ```json
@@ -234,8 +256,9 @@ JSON格式(严格遵守):
 ```
 
 要求:
-- 标题正好15条，每条严格≤30字符
-- 描述正好4条，每条严格≤90字符
+- 标题正好15条，每条严格≤30字符（超出必须缩短，绝不截断）
+- 描述正好4条，每条严格≤90字符（超出必须缩短，绝不截断）
+- 严禁使用任何emoji表情符号（如🎉✓❤️🔥等）
 - 文案用{language}，翻译用中文
 - 专业、真实、符合{country_name}消费者语言习惯"""
 
@@ -260,11 +283,11 @@ JSON格式(严格遵守):
             raw = self.gen_service._call_with_fallback(messages, max_tokens=4000, fast=True)
             result = self._parse_json(raw)
 
-            headlines = [h[:RSA_HEADLINE_MAX] for h in result.get("headlines", [])[:RSA_HEADLINE_COUNT]]
-            descriptions = [d[:RSA_DESC_MAX] for d in result.get("descriptions", [])[:RSA_DESC_COUNT]]
+            headlines = [_strip_emoji(h) for h in result.get("headlines", [])[:RSA_HEADLINE_COUNT]]
+            descriptions = [_strip_emoji(d) for d in result.get("descriptions", [])[:RSA_DESC_COUNT]]
             thinking = result.get("thinking", "")
-            headline_translations = result.get("headline_translations", [])[:len(headlines)]
-            description_translations = result.get("description_translations", [])[:len(descriptions)]
+            headline_translations = [_strip_emoji(t) for t in result.get("headline_translations", [])[:len(headlines)]]
+            description_translations = [_strip_emoji(t) for t in result.get("description_translations", [])[:len(descriptions)]]
             recommended_budget = result.get("recommended_budget", 10)
 
             while len(headline_translations) < len(headlines):
@@ -348,11 +371,23 @@ JSON格式(严格遵守):
                             continue
 
             result = self._parse_json(full_text)
-            headlines = [h[:RSA_HEADLINE_MAX] for h in result.get("headlines", [])[:RSA_HEADLINE_COUNT]]
-            descriptions = [d[:RSA_DESC_MAX] for d in result.get("descriptions", [])[:RSA_DESC_COUNT]]
-            headline_translations = result.get("headline_translations", [])[:len(headlines)]
-            description_translations = result.get("description_translations", [])[:len(descriptions)]
+            headlines = [_strip_emoji(h) for h in result.get("headlines", [])[:RSA_HEADLINE_COUNT]]
+            descriptions = [_strip_emoji(d) for d in result.get("descriptions", [])[:RSA_DESC_COUNT]]
+            headline_translations = [_strip_emoji(t) for t in result.get("headline_translations", [])[:len(headlines)]]
+            description_translations = [_strip_emoji(t) for t in result.get("description_translations", [])[:len(descriptions)]]
             recommended_budget = result.get("recommended_budget", 10)
+
+            bad_h = [i for i, h in enumerate(headlines) if len(h) > RSA_HEADLINE_MAX]
+            bad_d = [i for i, d in enumerate(descriptions) if len(d) > RSA_DESC_MAX]
+
+            if bad_h or bad_d:
+                yield "\n\n⚠ 检测到超长文案，正在重新生成合规版本...\n"
+                fixed = self._fix_overlength(headlines, descriptions, headline_translations, description_translations, bad_h, bad_d)
+                if fixed:
+                    headlines = fixed["headlines"]
+                    descriptions = fixed["descriptions"]
+                    headline_translations = fixed.get("headline_translations", headline_translations)
+                    description_translations = fixed.get("description_translations", description_translations)
 
             while len(headline_translations) < len(headlines):
                 headline_translations.append("")
@@ -370,6 +405,65 @@ JSON格式(严格遵守):
         except Exception as e:
             logger.error(f"[AdCopy] 流式生成失败: {e}")
             yield f"<<ERROR>>{str(e)}"
+
+    def _fix_overlength(self, headlines, descriptions, h_trans, d_trans, bad_h, bad_d):
+        """让 AI 重写超长的标题/描述，而非截断"""
+        try:
+            items = []
+            for i in bad_h:
+                items.append(f"标题{i+1} (当前{len(headlines[i])}字符，需≤30): {headlines[i]}")
+            for i in bad_d:
+                items.append(f"描述{i+1} (当前{len(descriptions[i])}字符，需≤90): {descriptions[i]}")
+
+            prompt = f"""以下 Google Ads 文案超出字符限制，请缩短每条使其符合要求，保持原意不变。
+禁止使用任何 emoji 表情符号。不要截断，要改写为更简洁的表达。
+
+{chr(10).join(items)}
+
+返回 JSON:
+{{"headlines": [全部{len(headlines)}条标题], "descriptions": [全部{len(descriptions)}条描述], "headline_translations": [对应中文翻译], "description_translations": [对应中文翻译]}}
+
+规则：只替换超长的条目，其他条目原样保留。"""
+
+            messages = [{"role": "user", "content": prompt}]
+            raw = self.gen_service._call_with_fallback(messages, max_tokens=2000, fast=True)
+            result = self._parse_json(raw)
+
+            new_headlines = list(headlines)
+            new_descriptions = list(descriptions)
+            new_h_trans = list(h_trans)
+            new_d_trans = list(d_trans)
+
+            fixed_h = result.get("headlines", [])
+            fixed_d = result.get("descriptions", [])
+            fixed_ht = result.get("headline_translations", [])
+            fixed_dt = result.get("description_translations", [])
+
+            if len(fixed_h) == len(headlines):
+                for i in bad_h:
+                    candidate = _strip_emoji(fixed_h[i])
+                    if len(candidate) <= RSA_HEADLINE_MAX:
+                        new_headlines[i] = candidate
+                        if i < len(fixed_ht):
+                            new_h_trans[i] = _strip_emoji(fixed_ht[i])
+
+            if len(fixed_d) == len(descriptions):
+                for i in bad_d:
+                    candidate = _strip_emoji(fixed_d[i])
+                    if len(candidate) <= RSA_DESC_MAX:
+                        new_descriptions[i] = candidate
+                        if i < len(fixed_dt):
+                            new_d_trans[i] = _strip_emoji(fixed_dt[i])
+
+            return {
+                "headlines": new_headlines,
+                "descriptions": new_descriptions,
+                "headline_translations": new_h_trans,
+                "description_translations": new_d_trans,
+            }
+        except Exception as e:
+            logger.warning(f"[AdCopy] 超长修复失败: {e}")
+            return None
 
     def _parse_json(self, raw: str) -> dict:
         """从 AI 返回中提取 JSON"""
