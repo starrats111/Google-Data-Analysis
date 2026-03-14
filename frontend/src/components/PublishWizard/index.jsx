@@ -514,12 +514,18 @@ const PublishWizard = () => {
       if (!res.data?.campaign_link) {
         message.warning('该商家未返回 Campaign Link，请切换到手动输入')
       } else if (res.data?.site_url) {
+        // CR-019: 有 support_regions 时必须先选语言；无 support_regions 也要从 URL TLD 推断语言
         if (res.data?.support_regions?.length > 0) {
           message.success('已获取 Campaign Link，请先选择目标区域/语言，再点击「开始爬取」')
         } else {
+          // 从 URL TLD 推断语言（.de→de, .fr→fr 等），避免用默认 en 爬取
+          const tldLang = _inferLangFromUrl(res.data.site_url)
+          if (tldLang && tldLang !== language) {
+            setLanguage(tldLang)
+          }
           message.success('已获取 Campaign Link，正在自动爬取商家网站...')
           setFetchingCampaign(false)
-          _autoCrawl(res.data.site_url, res.data.campaign_link)
+          _autoCrawl(res.data.site_url, res.data.campaign_link, res.data.merchant_name || '', tldLang || language)
           return
         }
       }
@@ -537,10 +543,21 @@ const PublishWizard = () => {
     } finally { setFetchingCampaign(false) }
   }
 
-  const _autoCrawl = async (siteUrl, link) => {
-    setLoading(true)
+  const _inferLangFromUrl = (url) => {
     try {
-      const res = await articleApi.crawlMerchant({ url: siteUrl, language, merchant_name: campaignResult?.merchant_name || '' })
+      const host = new URL(url).hostname
+      const tld = host.split('.').pop().toLowerCase()
+      const TLD_LANG = { de:'de', fr:'fr', it:'it', es:'es', nl:'nl', pl:'pl', pt:'pt', se:'sv', dk:'da', no:'no', fi:'fi', jp:'ja', kr:'ko', ru:'ru', tr:'tr', th:'th', cz:'cs', at:'de', ch:'de', be:'fr', br:'pt' }
+      return TLD_LANG[tld] || null
+    } catch { return null }
+  }
+
+  const _autoCrawl = async (siteUrl, link, merchantName, lang) => {
+    setLoading(true)
+    const crawlLang = lang || language
+    const crawlMerchantName = merchantName || ''
+    try {
+      const res = await articleApi.crawlMerchant({ url: siteUrl, language: crawlLang, merchant_name: crawlMerchantName })
       await _applyCrawlImages(res.data)
     } catch (err) {
       const detail = err?.response?.data?.detail || err.message || '未知错误'
@@ -1063,6 +1080,39 @@ const PublishWizard = () => {
                       />
                     )}
 
+                    {/* CR-019: 在 Step 0 显示语言/区域选择器 */}
+                    {campaignResult.support_regions?.length > 0 && (
+                      <div style={{ marginTop: 16, marginBottom: 16, padding: '12px 16px', background: '#f0f5ff', borderRadius: 8 }}>
+                        <Typography.Text strong style={{ display: 'block', marginBottom: 8 }}>🌐 选择目标区域/语言</Typography.Text>
+                        <Row gutter={12} align="middle">
+                          <Col span={14}>
+                            <Select
+                              placeholder="选择目标区域"
+                              value={selectedRegion}
+                              onChange={handleRegionSelect}
+                              style={{ width: '100%' }}
+                              showSearch
+                              filterOption={(input, option) =>
+                                option.label.toLowerCase().includes(input.toLowerCase()) ||
+                                option.value.toLowerCase().includes(input.toLowerCase())
+                              }
+                              options={campaignResult.support_regions.map(r => ({
+                                value: r.code,
+                                label: `${r.code} — ${r.language}`,
+                              }))}
+                            />
+                          </Col>
+                          <Col span={10}>
+                            {selectedRegion && language && (
+                              <Tag color="blue" style={{ fontSize: 14, padding: '4px 12px' }}>
+                                语言: {LANGUAGES.find(l => l.value === language)?.label || language}
+                              </Tag>
+                            )}
+                          </Col>
+                        </Row>
+                      </div>
+                    )}
+
                     <Divider />
                     <Button
                       type="primary"
@@ -1070,7 +1120,7 @@ const PublishWizard = () => {
                       onClick={handlePlatformCrawl}
                       size="large"
                       block
-                      disabled={!merchantUrl || !trackingLink}
+                      disabled={!merchantUrl || !trackingLink || (campaignResult.support_regions?.length > 0 && !selectedRegion)}
                     >
                       开始爬取 & AI 分析
                     </Button>
