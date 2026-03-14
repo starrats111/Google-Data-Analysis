@@ -381,11 +381,42 @@ async def create_campaign(
         )
 
         # 更新 assignment 记录
-        assignment.google_campaign_id = result.get("campaign_id")
+        new_campaign_id = result.get("campaign_id")
+        assignment.google_campaign_id = new_campaign_id
         assignment.google_customer_id = data.customer_id
         assignment.daily_budget = data.daily_budget
         assignment.target_country = data.target_country
         assignment.mode = data.mode
+
+        # 立即写入 GoogleAdsApiData，让数据中心可以立刻看到
+        if new_campaign_id and not result.get("is_existing"):
+            from datetime import date as date_type
+            cid_clean = data.customer_id.replace("-", "") if data.customer_id else data.customer_id
+            existing_record = db.query(GoogleAdsApiData).filter(
+                GoogleAdsApiData.campaign_id == str(new_campaign_id),
+                GoogleAdsApiData.date == date_type.today(),
+            ).first()
+            if not existing_record:
+                new_record = GoogleAdsApiData(
+                    mcc_id=data.mcc_id,
+                    user_id=current_user.id,
+                    customer_id=cid_clean,
+                    campaign_id=str(new_campaign_id),
+                    campaign_name=result.get("campaign_name", ""),
+                    date=date_type.today(),
+                    status="已启用",
+                    budget=float(data.daily_budget) if data.daily_budget else 0,
+                    cost=0,
+                    impressions=0,
+                    clicks=0,
+                    cpc=0,
+                    is_budget_lost=0,
+                    is_rank_lost=0,
+                )
+                db.add(new_record)
+                logger.info("[AdCreation] 已写入 GoogleAdsApiData: campaign=%s, cid=%s",
+                            result.get("campaign_name"), cid_clean)
+
         db.commit()
 
         # 查找该商家的 campaign link

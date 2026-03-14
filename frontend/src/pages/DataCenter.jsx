@@ -275,9 +275,24 @@ const DataCenter = () => {
         }
         return parseCampaignSeq(a.campaign_name) - parseCampaignSeq(b.campaign_name)
       },
+      defaultSortOrder: 'ascend',
       filteredValue: searchText ? [searchText] : null,
       onFilter: (value, record) => {
         return record.campaign_name?.toLowerCase().includes(value.toLowerCase())
+      },
+    },
+    {
+      title: 'CID',
+      dataIndex: 'customer_id',
+      key: 'customer_id',
+      width: 120,
+      render: (val) => {
+        if (!val) return '-'
+        const clean = val.replace(/-/g, '')
+        if (clean.length === 10) {
+          return `${clean.slice(0, 3)}-${clean.slice(3, 6)}-${clean.slice(6)}`
+        }
+        return val
       },
     },
     {
@@ -865,7 +880,7 @@ const DataCenter = () => {
               )}
               rowKey={(record) => record.campaign_id}
               rowSelection={campaignRowSelection}
-              scroll={{ x: 1400 }}
+              scroll={{ x: 1520 }}
               pagination={{
                 current: pagination.current,
                 pageSize: pagination.pageSize,
