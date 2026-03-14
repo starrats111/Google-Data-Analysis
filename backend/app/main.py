@@ -299,6 +299,10 @@ app.include_router(sites.router)
 from app.api import ad_creation
 app.include_router(ad_creation.router)
 
+# 节日营销路由
+from app.api import holidays
+app.include_router(holidays.router)
+
 
 @app.get("/health")
 async def health():

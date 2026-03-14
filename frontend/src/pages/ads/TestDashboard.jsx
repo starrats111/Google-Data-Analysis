@@ -85,7 +85,6 @@ export default function TestDashboard() {
 
   const columns = [
     { title: '商家', dataIndex: 'merchant_name', width: 200 },
-    { title: 'Campaign ID', dataIndex: 'campaign_id', width: 150, render: v => v || '-' },
     { title: 'CID', dataIndex: 'customer_id', width: 130 },
     { title: '日预算', dataIndex: 'daily_budget', width: 90, render: v => `$${v}` },
     { title: '国家', dataIndex: 'target_country', width: 70 },

@@ -199,6 +199,7 @@ class AdCopyGenerator:
         target_country: str = "US",
         history: Optional[Dict] = None,
         category: str = "",
+        holiday_name: Optional[str] = None,
     ) -> str:
         """精简版 Prompt —— 流式接口专用，保留质量、大幅减少输出 token"""
         country_info = COUNTRY_LANGUAGE_MAP.get(target_country, COUNTRY_LANGUAGE_MAP["US"])
@@ -209,17 +210,19 @@ class AdCopyGenerator:
         top_keywords = [kw["keyword"] for kw in keywords[:10]]
         kw_text = ", ".join(top_keywords) if top_keywords else merchant_name
 
-        history_ref = ""
-        if history and history.get("has_data") and history.get("top_campaigns"):
+        context_ref = ""
+        if holiday_name:
+            context_ref = f"🎉 节日营销: {holiday_name} — 文案必须贴合该节日氛围，突出节日特色、购物需求和情感共鸣，使用节日相关词汇和情感表达。"
+        elif history and history.get("has_data") and history.get("top_campaigns"):
             best = history["top_campaigns"][0]
-            history_ref = f"参考该员工最佳广告「{best['campaign_name']}」(CTR={best['ctr']}%, ROI={best['roi']}%)的成功经验。"
+            context_ref = f"参考该员工最佳广告「{best['campaign_name']}」(CTR={best['ctr']}%, ROI={best['roi']}%)的成功经验。"
 
         return f"""你是资深 Google Ads RSA 文案专家，精通{country_name}市场。
 
 商家: {merchant_name} | 网站: {merchant_url} | 品类: {category or '综合'}
 关键词: {kw_text}
 目标市场: {country_name} ({language}) | 风格: {style}
-{history_ref}
+{context_ref}
 
 请先用中文写3-5行简要分析（商家定位、策略要点、预算建议），然后输出JSON。
 
@@ -296,6 +299,7 @@ JSON格式(严格遵守):
         target_country: str = "US",
         history: Optional[Dict] = None,
         category: str = "",
+        holiday_name: Optional[str] = None,
     ):
         """流式生成 RSA 广告素材（优化版：精简 Prompt、降低 token 开销）。
         yield 每个 text chunk，最终 yield "<<FINAL_JSON>>..." 包含完整结果。
@@ -306,6 +310,7 @@ JSON格式(严格遵守):
         prompt = self._build_prompt_fast(
             merchant_name, merchant_url, keywords,
             target_country, history, category,
+            holiday_name=holiday_name,
         )
         messages = [{"role": "user", "content": prompt}]
         url = f"{settings.gemini_base_url.rstrip('/')}/v1/chat/completions"

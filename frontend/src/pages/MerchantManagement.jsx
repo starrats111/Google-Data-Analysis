@@ -22,7 +22,7 @@ import {
   Alert,
   Popover,
 } from 'antd'
-import { ReloadOutlined, SearchOutlined, SyncOutlined, CheckCircleOutlined, CloudSyncOutlined, WarningOutlined, InboxOutlined, ThunderboltOutlined, SettingOutlined } from '@ant-design/icons'
+import { ReloadOutlined, SearchOutlined, SyncOutlined, CheckCircleOutlined, CloudSyncOutlined, WarningOutlined, InboxOutlined, ThunderboltOutlined, SettingOutlined, GiftOutlined } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
 import api from '../services/api'
 import { useAuth } from '../store/authStore'
@@ -672,6 +672,15 @@ const MerchantManagement = () => {
   const [claimMode, setClaimMode] = useState('test')
   const [claimLoading, setClaimLoading] = useState(false)
 
+  // 节日营销
+  const [holidayCountry, setHolidayCountry] = useState('US')
+  const [holidayList, setHolidayList] = useState([])
+  const [holidayLoading, setHolidayLoading] = useState(false)
+  const [holidayModalOpen, setHolidayModalOpen] = useState(false)
+  const [selectedHoliday, setSelectedHoliday] = useState(null)
+  const [holidayMerchants, setHolidayMerchants] = useState([])
+  const [holidayMerchantLoading, setHolidayMerchantLoading] = useState(false)
+
   // 广告默认设置
   const [adDefaultsModalOpen, setAdDefaultsModalOpen] = useState(false)
   const [adDefaults, setAdDefaults] = useState({
@@ -800,6 +809,104 @@ const MerchantManagement = () => {
     }
   }
 
+  const fetchHolidays = async (country) => {
+    setHolidayLoading(true)
+    try {
+      const res = await api.get('/api/holidays', { params: { country, days: 30 } })
+      setHolidayList(res.data?.holidays || [])
+    } catch (e) {
+      console.error('Holiday fetch error:', e)
+      setHolidayList([])
+    } finally {
+      setHolidayLoading(false)
+    }
+  }
+
+  useEffect(() => { fetchHolidays(holidayCountry) }, [holidayCountry])
+
+  const handleHolidayClick = async (holiday) => {
+    setSelectedHoliday(holiday)
+    setHolidayModalOpen(true)
+    setHolidayMerchantLoading(true)
+    setHolidayMerchants([])
+    try {
+      const res = await api.post('/api/holidays/recommend-merchants', {
+        holiday_name: holiday.name,
+        country: holidayCountry,
+      })
+      setHolidayMerchants(res.data?.merchants || [])
+    } catch (e) {
+      message.error('获取推荐商家失败')
+      setHolidayMerchants([])
+    } finally {
+      setHolidayMerchantLoading(false)
+    }
+  }
+
+  const handleHolidayClaim = (record) => {
+    setClaimRecord(record)
+    setClaimCountry(holidayCountry)
+    setClaimMode('test')
+    setClaimModalOpen(true)
+  }
+
+  const origHandleClaimConfirm = handleClaimConfirm
+  const handleHolidayClaimConfirm = async () => {
+    if (!claimRecord) return
+    setClaimLoading(true)
+    try {
+      const res = await api.post('/api/merchant-assignments/claim', {
+        merchant_ids: [claimRecord.id],
+        mode: claimMode,
+        target_country: claimCountry,
+      })
+      const created = res.data?.assignments || []
+      if (created.length > 0) {
+        message.success(`已领取商家: ${claimRecord.merchant_name}`)
+        setClaimModalOpen(false)
+        setHolidayModalOpen(false)
+        const assignment = created[0]
+        const params = new URLSearchParams({
+          assignment_id: assignment.id,
+          merchant_name: claimRecord.merchant_name || '',
+          holiday_name: selectedHoliday?.name || '',
+        })
+        Modal.confirm({
+          title: '领取成功',
+          content: `已领取商家「${claimRecord.merchant_name}」，是否立即创建节日广告？文案将贴合「${selectedHoliday?.name || ''}」氛围。`,
+          okText: '创建广告',
+          cancelText: '稍后再说',
+          onOk: () => navigate(`/ads/create?${params.toString()}`),
+        })
+      } else {
+        setClaimModalOpen(false)
+        const skippedList = res.data?.skipped_assignments || []
+        if (skippedList.length > 0) {
+          const existing = skippedList[0]
+          const params = new URLSearchParams({
+            assignment_id: existing.id,
+            merchant_name: existing.merchant_name || '',
+            holiday_name: selectedHoliday?.name || '',
+          })
+          Modal.confirm({
+            title: '该商家已领取',
+            content: `你已领取过「${existing.merchant_name}」，是否立即创建节日广告？`,
+            okText: '创建广告',
+            cancelText: '稍后再说',
+            onOk: () => navigate(`/ads/create?${params.toString()}`),
+          })
+        } else {
+          message.info(res.data?.message || '该商家你已经领取过了')
+        }
+      }
+    } catch (err) {
+      const detail = err?.response?.data?.detail || err?.message || '未知错误'
+      message.error(`领取失败: ${detail}`)
+    } finally {
+      setClaimLoading(false)
+    }
+  }
+
   return (
     <div>
       <Row gutter={12} style={{ marginBottom: 16 }}>
@@ -872,14 +979,47 @@ const MerchantManagement = () => {
             </Card>
           </Col>
 
-          {/* 蓝框：待定 */}
+          {/* 节日营销 */}
           <Col xs={24} md={4}>
-            <Card size="small" style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-              <div style={{ textAlign: 'center', color: '#bfbfbf' }}>
-                <span style={{ fontSize: 12 }}>更多功能</span>
-                <br />
-                <span style={{ fontSize: 11 }}>待定</span>
+            <Card size="small" style={{ height: '100%' }} bodyStyle={{ padding: '8px 12px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
+                <GiftOutlined style={{ color: '#eb2f96' }} />
+                <span style={{ fontSize: 13, fontWeight: 500 }}>节日营销</span>
               </div>
+              <Select
+                size="small"
+                style={{ width: '100%', marginBottom: 6 }}
+                value={holidayCountry}
+                onChange={(v) => setHolidayCountry(v)}
+                options={CLAIM_COUNTRIES.map(c => ({ value: c.value, label: c.value }))}
+              />
+              {holidayLoading ? (
+                <Spin size="small" />
+              ) : holidayList.length === 0 ? (
+                <div style={{ color: '#bfbfbf', fontSize: 11, textAlign: 'center' }}>近期无节日</div>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                  {holidayList.slice(0, 3).map((h, i) => (
+                    <Tag
+                      key={i}
+                      color={h.type === 'commercial' ? 'magenta' : 'blue'}
+                      style={{ cursor: 'pointer', fontSize: 11, margin: 0 }}
+                      onClick={() => handleHolidayClick(h)}
+                    >
+                      {h.date?.slice(5)} {h.name_zh || h.name}
+                    </Tag>
+                  ))}
+                  {holidayList.length > 3 && (
+                    <a style={{ fontSize: 11, textAlign: 'right' }} onClick={() => {
+                      setSelectedHoliday(null)
+                      setHolidayModalOpen(true)
+                      setHolidayMerchants([])
+                    }}>
+                      +{holidayList.length - 3} 更多...
+                    </a>
+                  )}
+                </div>
+              )}
             </Card>
           </Col>
         </Row>
@@ -1427,7 +1567,7 @@ const MerchantManagement = () => {
       <Modal
         title={`领取商家: ${claimRecord?.merchant_name || ''}`}
         open={claimModalOpen}
-        onOk={handleClaimConfirm}
+        onOk={selectedHoliday ? handleHolidayClaimConfirm : handleClaimConfirm}
         onCancel={() => { if (!claimLoading) setClaimModalOpen(false) }}
         okText="确认领取"
         cancelText="取消"
@@ -1456,6 +1596,78 @@ const MerchantManagement = () => {
             />
           </div>
         </Space>
+      </Modal>
+
+      {/* 节日推荐商家弹窗 */}
+      <Modal
+        title={selectedHoliday
+          ? <span><GiftOutlined style={{ color: '#eb2f96', marginRight: 8 }} />{selectedHoliday.name_zh || selectedHoliday.name} ({selectedHoliday.date})</span>
+          : <span><GiftOutlined style={{ color: '#eb2f96', marginRight: 8 }} />节日列表 — {holidayCountry}</span>
+        }
+        open={holidayModalOpen}
+        onCancel={() => { setHolidayModalOpen(false); setSelectedHoliday(null) }}
+        footer={null}
+        width={800}
+        destroyOnClose
+      >
+        {!selectedHoliday ? (
+          <div>
+            <p style={{ color: '#666', marginBottom: 12 }}>点击节日查看推荐商家：</p>
+            <Space wrap>
+              {holidayList.map((h, i) => (
+                <Tag
+                  key={i}
+                  color={h.type === 'commercial' ? 'magenta' : 'blue'}
+                  style={{ cursor: 'pointer', fontSize: 13, padding: '4px 10px' }}
+                  onClick={() => handleHolidayClick(h)}
+                >
+                  {h.date?.slice(5)} {h.name_zh || h.name}
+                </Tag>
+              ))}
+            </Space>
+          </div>
+        ) : (
+          <div>
+            <Alert
+              type="info"
+              message={`以下商家适合「${selectedHoliday.name_zh || selectedHoliday.name}」节日促销，点击「领取创建」可直接进入广告创建（文案将自动贴合节日氛围）`}
+              style={{ marginBottom: 12 }}
+            />
+            <Table
+              loading={holidayMerchantLoading}
+              dataSource={holidayMerchants}
+              rowKey="id"
+              size="small"
+              pagination={false}
+              locale={{ emptyText: holidayMerchantLoading ? '正在 AI 匹配中...' : '暂无匹配商家' }}
+              columns={[
+                { title: '商家名称', dataIndex: 'merchant_name', ellipsis: true },
+                {
+                  title: '平台', dataIndex: 'platform', width: 80,
+                  render: (v) => <Tag color={PLATFORM_COLORS[v] || 'blue'}>{v}</Tag>,
+                },
+                {
+                  title: '类别', dataIndex: 'category', width: 120,
+                  render: (v) => <Tooltip title={v}>{translateCategory(v)}</Tooltip>,
+                },
+                { title: '佣金率', dataIndex: 'commission_rate', width: 90, render: (v) => v || '-' },
+                {
+                  title: '操作', width: 100, fixed: 'right',
+                  render: (_, record) => (
+                    <Button
+                      type="primary"
+                      size="small"
+                      icon={<ThunderboltOutlined />}
+                      onClick={() => handleHolidayClaim(record)}
+                    >
+                      领取创建
+                    </Button>
+                  ),
+                },
+              ]}
+            />
+          </div>
+        )}
       </Modal>
 
       {/* 广告默认设置 Modal */}

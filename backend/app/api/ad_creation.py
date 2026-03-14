@@ -46,6 +46,7 @@ class AdCopyRequest(BaseModel):
     language: str = "en"
     target_country: str = "US"
     mcc_id: Optional[int] = None
+    holiday_name: Optional[str] = None
 
 
 class CreateAdRequest(BaseModel):
@@ -212,7 +213,9 @@ async def generate_ad_copy_stream(
 
     history = None
     history_summary = ""
-    if data.mcc_id:
+    is_holiday = bool(data.holiday_name)
+
+    if not is_holiday and data.mcc_id:
         try:
             history = analyze_user_campaigns(current_user.id, data.mcc_id, db)
             if history and history["has_data"]:
@@ -228,12 +231,15 @@ async def generate_ad_copy_stream(
     def event_stream():
         sse = lambda d: f"data: {json.dumps(d, ensure_ascii=False)}\n\n"
 
-        yield sse({"phase": "analyzing", "text": f"正在加载历史数据...\n"})
-
-        if history_summary:
-            yield sse({"phase": "history", "text": f"✓ {history_summary}\n"})
+        if is_holiday:
+            yield sse({"phase": "analyzing", "text": f"🎉 节日营销模式 — {data.holiday_name}\n"})
+            yield sse({"phase": "history", "text": f"✓ 文案将贴合{data.holiday_name}节日氛围\n"})
         else:
-            yield sse({"phase": "history", "text": "✓ 基于行业经验生成\n"})
+            yield sse({"phase": "analyzing", "text": f"正在加载历史数据...\n"})
+            if history_summary:
+                yield sse({"phase": "history", "text": f"✓ {history_summary}\n"})
+            else:
+                yield sse({"phase": "history", "text": "✓ 基于行业经验生成\n"})
 
         yield sse({
             "phase": "thinking_start",
@@ -248,6 +254,7 @@ async def generate_ad_copy_stream(
                 target_country=data.target_country,
                 history=history,
                 category=data.category,
+                holiday_name=data.holiday_name,
             ):
                 if chunk.startswith("<<FINAL_JSON>>"):
                     result = json.loads(chunk[14:])

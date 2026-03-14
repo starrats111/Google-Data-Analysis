@@ -34,6 +34,7 @@ export default function AdCreationWizard() {
   const assignmentId = searchParams.get('assignment_id')
   const merchantName = searchParams.get('merchant_name') || ''
   const merchantUrl = searchParams.get('merchant_url') || ''
+  const holidayName = searchParams.get('holiday_name') || ''
 
   const [step, setStep] = useState(0)
   const [loading, setLoading] = useState(false)
@@ -212,6 +213,7 @@ export default function AdCreationWizard() {
           keywords: kwData,
           target_country: targetCountry,
           mcc_id: selectedMcc,
+          ...(holidayName ? { holiday_name: holidayName } : {}),
         }),
       })
 
@@ -408,6 +410,11 @@ export default function AdCreationWizard() {
         {assignmentMode && (
           <Tag color={assignmentMode === 'test' ? 'orange' : 'green'} style={{ marginLeft: 6 }}>
             {assignmentMode === 'test' ? '测试' : '正式'}
+          </Tag>
+        )}
+        {holidayName && (
+          <Tag color="magenta" style={{ marginLeft: 6 }}>
+            🎉 节日营销 — {holidayName}
           </Tag>
         )}
       </Typography.Title>
