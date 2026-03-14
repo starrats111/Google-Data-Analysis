@@ -262,12 +262,13 @@ async def my_library_active_advertisers(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """查询某商家当前在投广告员工详情（只看每个用户最新数据日期）"""
+    """查询某商家当前在投广告员工详情：最新日期判断在投状态，花费/点击统计本月数据"""
     from app.models.google_ads_api_data import GoogleAdsApiData
     from app.models.user import User as UserModel
     from sqlalchemy import func as sa_func, distinct as sa_distinct, and_
+    from datetime import date as _date
 
-    # 每个用户取最新数据日期
+    # 1. 用最新日期找出当前在投的用户
     user_latest_sub = (
         db.query(
             GoogleAdsApiData.user_id,
@@ -276,7 +277,27 @@ async def my_library_active_advertisers(
         .group_by(GoogleAdsApiData.user_id)
         .subquery()
     )
+    active_user_rows = (
+        db.query(sa_distinct(GoogleAdsApiData.user_id))
+        .join(
+            user_latest_sub,
+            and_(
+                GoogleAdsApiData.user_id == user_latest_sub.c.user_id,
+                GoogleAdsApiData.date == user_latest_sub.c.max_date,
+            ),
+        )
+        .filter(
+            GoogleAdsApiData.extracted_account_code == merchant_id,
+            GoogleAdsApiData.status == "已启用",
+        )
+        .all()
+    )
+    active_user_ids = [r[0] for r in active_user_rows]
+    if not active_user_ids:
+        return []
 
+    # 2. 用本月数据统计花费/点击/展示
+    month_start = _date.today().replace(day=1)
     rows = (
         db.query(
             GoogleAdsApiData.user_id,
@@ -288,16 +309,10 @@ async def my_library_active_advertisers(
             sa_func.sum(GoogleAdsApiData.impressions).label("total_impressions"),
         )
         .join(UserModel, GoogleAdsApiData.user_id == UserModel.id)
-        .join(
-            user_latest_sub,
-            and_(
-                GoogleAdsApiData.user_id == user_latest_sub.c.user_id,
-                GoogleAdsApiData.date == user_latest_sub.c.max_date,
-            ),
-        )
         .filter(
             GoogleAdsApiData.extracted_account_code == merchant_id,
-            GoogleAdsApiData.status == "已启用",
+            GoogleAdsApiData.user_id.in_(active_user_ids),
+            GoogleAdsApiData.date >= month_start,
         )
         .group_by(GoogleAdsApiData.user_id, UserModel.username, UserModel.display_name)
         .order_by(sa_func.sum(GoogleAdsApiData.cost).desc())
