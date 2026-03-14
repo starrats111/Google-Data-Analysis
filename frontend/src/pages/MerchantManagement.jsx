@@ -679,6 +679,9 @@ const MerchantManagement = () => {
   const [holidayModalOpen, setHolidayModalOpen] = useState(false)
   const [selectedHoliday, setSelectedHoliday] = useState(null)
   const [holidayMerchants, setHolidayMerchants] = useState([])
+  const [holidayMerchantsByPlatform, setHolidayMerchantsByPlatform] = useState({})
+  const [holidayPlatforms, setHolidayPlatforms] = useState([])
+  const [holidayPlatformFilter, setHolidayPlatformFilter] = useState(undefined)
   const [holidayMerchantLoading, setHolidayMerchantLoading] = useState(false)
 
   // 广告默认设置
@@ -829,12 +832,18 @@ const MerchantManagement = () => {
     setHolidayModalOpen(true)
     setHolidayMerchantLoading(true)
     setHolidayMerchants([])
+    setHolidayMerchantsByPlatform({})
+    setHolidayPlatforms([])
+    setHolidayPlatformFilter(undefined)
     try {
       const res = await api.post('/api/holidays/recommend-merchants', {
         holiday_name: holiday.name,
         country: holidayCountry,
       })
-      setHolidayMerchants(res.data?.merchants || [])
+      const data = res.data || {}
+      setHolidayMerchants(data.merchants || [])
+      setHolidayMerchantsByPlatform(data.by_platform || {})
+      setHolidayPlatforms(data.platforms || [])
     } catch (e) {
       message.error('获取推荐商家失败')
       setHolidayMerchants([])
@@ -1633,12 +1642,33 @@ const MerchantManagement = () => {
               message={`以下商家适合「${selectedHoliday.name_zh || selectedHoliday.name}」节日促销，点击「领取创建」可直接进入广告创建（文案将自动贴合节日氛围）`}
               style={{ marginBottom: 12 }}
             />
+            <div style={{ marginBottom: 10, display: 'flex', gap: 8, alignItems: 'center' }}>
+              <span style={{ fontSize: 13, color: '#666' }}>筛选平台:</span>
+              <Select
+                allowClear
+                placeholder="全部平台"
+                style={{ width: 140 }}
+                size="small"
+                value={holidayPlatformFilter}
+                onChange={(v) => setHolidayPlatformFilter(v)}
+              >
+                {holidayPlatforms.map(p => (
+                  <Option key={p} value={p}>
+                    {p} ({(holidayMerchantsByPlatform[p] || []).length})
+                  </Option>
+                ))}
+              </Select>
+              <span style={{ fontSize: 12, color: '#999', marginLeft: 'auto' }}>
+                共 {(holidayPlatformFilter ? (holidayMerchantsByPlatform[holidayPlatformFilter] || []) : holidayMerchants).length} 个商家
+              </span>
+            </div>
             <Table
               loading={holidayMerchantLoading}
-              dataSource={holidayMerchants}
+              dataSource={holidayPlatformFilter ? (holidayMerchantsByPlatform[holidayPlatformFilter] || []) : holidayMerchants}
               rowKey="id"
               size="small"
-              pagination={false}
+              pagination={{ pageSize: 20, showSizeChanger: false, showTotal: (t) => `共 ${t} 个` }}
+              scroll={{ y: 400 }}
               locale={{ emptyText: holidayMerchantLoading ? '正在 AI 匹配中...' : '暂无匹配商家' }}
               columns={[
                 { title: '商家名称', dataIndex: 'merchant_name', ellipsis: true },
@@ -1650,7 +1680,15 @@ const MerchantManagement = () => {
                   title: '类别', dataIndex: 'category', width: 120,
                   render: (v) => <Tooltip title={v}>{translateCategory(v)}</Tooltip>,
                 },
-                { title: '佣金率', dataIndex: 'commission_rate', width: 90, render: (v) => v || '-' },
+                {
+                  title: '佣金率', dataIndex: 'commission_rate', width: 110,
+                  sorter: (a, b) => {
+                    const parse = (s) => { if (!s) return 0; const m = String(s).match(/([\d.]+)/); return m ? parseFloat(m[1]) : 0 }
+                    return parse(a.commission_rate) - parse(b.commission_rate)
+                  },
+                  defaultSortOrder: 'descend',
+                  render: (v) => v || '-',
+                },
                 {
                   title: '操作', width: 100, fixed: 'right',
                   render: (_, record) => (

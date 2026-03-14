@@ -39,8 +39,8 @@ async def recommend_merchants(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """根据节日推荐商家"""
-    merchants = recommend_merchants_for_holiday(
+    """根据节日推荐商家（每个平台至少30个）"""
+    result = recommend_merchants_for_holiday(
         holiday_name=data.holiday_name,
         country_code=data.country.upper(),
         db=db,
@@ -49,6 +49,8 @@ async def recommend_merchants(
     return {
         "holiday_name": data.holiday_name,
         "country": data.country.upper(),
-        "total": len(merchants),
-        "merchants": merchants,
+        "platforms": result.get("platforms", []),
+        "by_platform": result.get("by_platform", {}),
+        "merchants": result.get("all", []),
+        "total": len(result.get("all", [])),
     }

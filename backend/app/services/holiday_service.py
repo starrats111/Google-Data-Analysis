@@ -223,8 +223,8 @@ BROAD_HOLIDAY_KEYWORDS = [
 MIN_RECOMMEND = 30
 
 
-def _search_merchants(db, keywords: List[str], platform_list: List[str], exclude_ids: set, limit: int = 60):
-    """用关键词搜索商家"""
+def _search_merchants_single_platform(db, keywords: List[str], platform: str, exclude_ids: set, limit: int = 60):
+    """用关键词在单个平台搜索商家"""
     from app.models.merchant import AffiliateMerchant
 
     conditions = []
@@ -237,7 +237,7 @@ def _search_merchants(db, keywords: List[str], platform_list: List[str], exclude
 
     q = db.query(AffiliateMerchant).filter(
         or_(*conditions),
-        func.upper(AffiliateMerchant.platform).in_([p.upper() for p in platform_list]),
+        func.upper(AffiliateMerchant.platform) == platform.upper(),
         AffiliateMerchant.status == "active",
     )
     if exclude_ids:
@@ -245,14 +245,58 @@ def _search_merchants(db, keywords: List[str], platform_list: List[str], exclude
     return q.limit(limit).all()
 
 
+def _to_dict(m):
+    return {
+        "id": m.id,
+        "merchant_id": m.merchant_id,
+        "merchant_name": m.merchant_name,
+        "platform": m.platform,
+        "category": m.category,
+        "commission_rate": m.commission_rate,
+        "slug": m.slug,
+    }
+
+
+def _fill_platform(db, holiday_name: str, country_code: str, platform: str, seen_ids: set) -> List[Dict]:
+    """对单个平台做三轮搜索，保证至少 MIN_RECOMMEND 个商家"""
+    merchants = []
+
+    ai_keywords = _ai_holiday_keywords(holiday_name, country_code)
+    if ai_keywords:
+        for m in _search_merchants_single_platform(db, ai_keywords, platform, seen_ids, limit=80):
+            if m.id not in seen_ids:
+                seen_ids.add(m.id)
+                merchants.append(_to_dict(m))
+
+    if len(merchants) < MIN_RECOMMEND:
+        fallback_kws = _fallback_keywords(holiday_name)
+        extra = [kw for kw in fallback_kws if kw not in ai_keywords]
+        if extra:
+            for m in _search_merchants_single_platform(db, extra, platform, seen_ids, limit=80):
+                if m.id not in seen_ids:
+                    seen_ids.add(m.id)
+                    merchants.append(_to_dict(m))
+
+    if len(merchants) < MIN_RECOMMEND:
+        used = set(ai_keywords + _fallback_keywords(holiday_name))
+        broad = [kw for kw in BROAD_HOLIDAY_KEYWORDS if kw not in used]
+        if broad:
+            need = MIN_RECOMMEND - len(merchants) + 10
+            for m in _search_merchants_single_platform(db, broad, platform, seen_ids, limit=need):
+                if m.id not in seen_ids:
+                    seen_ids.add(m.id)
+                    merchants.append(_to_dict(m))
+
+    return merchants
+
+
 def recommend_merchants_for_holiday(
     holiday_name: str,
     country_code: str,
     db: Session,
     user_id: int,
-) -> List[Dict]:
-    """用 AI 生成关键词 + 多轮扩展搜索，保证至少 30 个推荐商家"""
-    from app.models.merchant import AffiliateMerchant
+) -> Dict:
+    """每个平台至少 30 个推荐商家，返回按平台分组的结果"""
     from app.models.campaign_link_cache import CampaignLinkCache
 
     user_platforms = (
@@ -262,55 +306,22 @@ def recommend_merchants_for_holiday(
     )
     platform_list = [p[0] for p in user_platforms] if user_platforms else []
     if not platform_list:
-        return []
+        return {"platforms": [], "by_platform": {}, "all": []}
 
-    seen_ids = set()
-    all_merchants = []
+    seen_ids: set = set()
+    by_platform: Dict[str, List[Dict]] = {}
+    all_merchants: List[Dict] = []
 
-    def _to_dict(m):
-        return {
-            "id": m.id,
-            "merchant_id": m.merchant_id,
-            "merchant_name": m.merchant_name,
-            "platform": m.platform,
-            "category": m.category,
-            "commission_rate": m.commission_rate,
-            "slug": m.slug,
-        }
+    for plat in platform_list:
+        plat_merchants = _fill_platform(db, holiday_name, country_code, plat, seen_ids)
+        by_platform[plat] = plat_merchants
+        all_merchants.extend(plat_merchants)
 
-    # Round 1: AI-generated keywords (most relevant)
-    ai_keywords = _ai_holiday_keywords(holiday_name, country_code)
-    if ai_keywords:
-        results = _search_merchants(db, ai_keywords, platform_list, seen_ids, limit=60)
-        for m in results:
-            if m.id not in seen_ids:
-                seen_ids.add(m.id)
-                all_merchants.append(_to_dict(m))
-
-    # Round 2: static fallback keywords
-    if len(all_merchants) < MIN_RECOMMEND:
-        fallback_kws = _fallback_keywords(holiday_name)
-        extra_kws = [kw for kw in fallback_kws if kw not in ai_keywords]
-        if extra_kws:
-            results = _search_merchants(db, extra_kws, platform_list, seen_ids, limit=60)
-            for m in results:
-                if m.id not in seen_ids:
-                    seen_ids.add(m.id)
-                    all_merchants.append(_to_dict(m))
-
-    # Round 3: broad holiday keywords (generally gift/shopping relevant)
-    if len(all_merchants) < MIN_RECOMMEND:
-        used = set(ai_keywords + _fallback_keywords(holiday_name))
-        broad_extra = [kw for kw in BROAD_HOLIDAY_KEYWORDS if kw not in used]
-        if broad_extra:
-            need = MIN_RECOMMEND - len(all_merchants) + 10
-            results = _search_merchants(db, broad_extra, platform_list, seen_ids, limit=need)
-            for m in results:
-                if m.id not in seen_ids:
-                    seen_ids.add(m.id)
-                    all_merchants.append(_to_dict(m))
-
-    return all_merchants
+    return {
+        "platforms": platform_list,
+        "by_platform": by_platform,
+        "all": all_merchants,
+    }
 
 
 _keyword_cache: Dict[str, List[str]] = {}
