@@ -224,6 +224,57 @@ class MerchantService:
             run.new_missing_mid_count = missing_mid_count
             run.status = "success"
 
+            # 从 GoogleAdsApiData 发现缺失商家
+            ads_new = 0
+            try:
+                ad_merchants = (
+                    db.query(
+                        func.rtrim(func.lower(GoogleAdsApiData.extracted_platform_code), '0123456789').label("platform"),
+                        GoogleAdsApiData.extracted_account_code.label("mid"),
+                        func.max(GoogleAdsApiData.campaign_name).label("campaign_name"),
+                    )
+                    .filter(
+                        GoogleAdsApiData.extracted_account_code.isnot(None),
+                        GoogleAdsApiData.extracted_account_code != "",
+                    )
+                    .group_by(
+                        func.rtrim(func.lower(GoogleAdsApiData.extracted_platform_code), '0123456789'),
+                        GoogleAdsApiData.extracted_account_code,
+                    )
+                    .all()
+                )
+                existing_refresh = set(
+                    (MerchantService.normalize_platform(p).lower(), mid)
+                    for p, mid in db.query(AffiliateMerchant.platform, AffiliateMerchant.merchant_id)
+                    .filter(AffiliateMerchant.merchant_id.isnot(None))
+                    .all()
+                )
+                for row in ad_merchants:
+                    norm_p = MerchantService.normalize_platform(row.platform)
+                    if (norm_p.lower(), row.mid) in existing_refresh:
+                        continue
+                    name = row.mid
+                    if row.campaign_name:
+                        parts = row.campaign_name.split("-")
+                        if len(parts) >= 3:
+                            name = parts[2].strip() or row.mid
+                    db.add(AffiliateMerchant(
+                        platform=norm_p,
+                        merchant_id=row.mid,
+                        merchant_name=name,
+                        missing_mid=0,
+                        id_confidence="medium",
+                        source_type="ads_data",
+                    ))
+                    existing_refresh.add((norm_p.lower(), row.mid))
+                    ads_new += 1
+                if ads_new:
+                    db.commit()
+                    logger.info("[商家发现] 从广告数据新增 %d 个商家", ads_new)
+            except Exception as ads_err:
+                logger.warning("[商家发现] 广告数据发现失败: %s", ads_err)
+                db.rollback()
+
             if count or missing_mid_count or new_repair_count:
                 db.commit()
                 logger.info(
@@ -238,7 +289,7 @@ class MerchantService:
             db.commit()
             raise
 
-        return count
+        return count + ads_new
 
     @staticmethod
     def _find_candidate_mid(db: Session, platform: str, merchant_name: str) -> Optional[str]:
@@ -470,8 +521,7 @@ class MerchantService:
         ) if merchant_ids else []
         perf_map = {r.id: {"commission_30d": float(r.commission_30d), "orders_30d": r.orders_30d} for r in commission_rows}
 
-        # CR-048b: 在投人数 — 基于 GoogleAdsApiData 实际广告数据（近30天）
-        # extracted_platform_code 可能含尾数字(rw1,cg2)，用 RTRIM 去尾数字后与 platform 比较
+        # CR-048b: 在投人数 — 基于 GoogleAdsApiData 中已启用广告（近30天）
         ads_since = (now - timedelta(days=30)).date() if hasattr(now - timedelta(days=30), 'date') else (datetime.now() - timedelta(days=30)).date()
         advertiser_rows = (
             db.query(
@@ -484,6 +534,7 @@ class MerchantService:
                     func.rtrim(func.lower(GoogleAdsApiData.extracted_platform_code), '0123456789') == func.lower(AffiliateMerchant.platform),
                     GoogleAdsApiData.extracted_account_code == AffiliateMerchant.merchant_id,
                     GoogleAdsApiData.date >= ads_since,
+                    GoogleAdsApiData.status == "\u5df2\u542f\u7528",
                 ),
             )
             .filter(AffiliateMerchant.id.in_(merchant_ids))
@@ -1135,7 +1186,7 @@ class MerchantService:
 
     @staticmethod
     def get_active_advertisers(db: Session, merchant_pk: int) -> list:
-        """获取某商家近30天内在投广告的员工列表及其广告数据概要。"""
+        """获取某商家当前已启用广告的员工列表及其广告数据概要。"""
         m = db.query(AffiliateMerchant).get(merchant_pk)
         if not m or not m.merchant_id:
             return []
@@ -1156,6 +1207,7 @@ class MerchantService:
                 func.rtrim(func.lower(GoogleAdsApiData.extracted_platform_code), '0123456789') == func.lower(m.platform),
                 GoogleAdsApiData.extracted_account_code == m.merchant_id,
                 GoogleAdsApiData.date >= ads_since,
+                GoogleAdsApiData.status == "\u5df2\u542f\u7528",
             )
             .group_by(GoogleAdsApiData.user_id, User.username, User.display_name)
             .order_by(func.sum(GoogleAdsApiData.cost).desc())
