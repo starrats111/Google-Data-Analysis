@@ -142,20 +142,50 @@ async def crawl_merchant_site(
             brand_name = crawl_data.get("brand_name") or analysis.get("brand_name", "")
             stock_images = []
             category = analysis.get("category", "") if isinstance(analysis, dict) else ""
-            try:
-                stock_images = search_merchant_images(
-                    f"{brand_name} {category} product" if brand_name else "product lifestyle",
-                    count=12, brand_name=brand_name, category=category,
-                )
-            except Exception:
-                pass
+            products = []
+            if isinstance(analysis, dict):
+                products = analysis.get("products") or analysis.get("main_products") or []
+                if isinstance(products, str):
+                    products = [products]
+
+            # 多轮搜索确保至少获取 15 张图片
+            search_queries = []
+            if brand_name and category:
+                search_queries.append(f"{brand_name} {category} product")
+            if brand_name:
+                search_queries.append(f"{brand_name} product photography")
+            for p in products[:3]:
+                search_queries.append(f"{p} product")
+            if category:
+                search_queries.append(f"{category} high quality photography")
+            if not search_queries:
+                search_queries = ["product lifestyle photography"]
+
+            seen_urls = set()
+            for q in search_queries:
+                if len(stock_images) >= 20:
+                    break
+                try:
+                    batch = search_merchant_images(
+                        q, count=12, brand_name=brand_name, category=category,
+                    )
+                    for img in batch:
+                        img_url = img.get("url", img) if isinstance(img, dict) else img
+                        if img_url not in seen_urls:
+                            seen_urls.add(img_url)
+                            stock_images.append(img)
+                except Exception:
+                    pass
+
+            logger.info("[Crawl] 反爬保护站点 → 图片库补充 %d 张 (brand=%s, category=%s)",
+                        len(stock_images), brand_name, category)
             return {
                 "brand_name": brand_name,
                 "url": data.url,
                 "image_cache_session": None,
                 "images": [],
                 "stock_images": [{"url": img, "source": "stock"} if isinstance(img, str) else img
-                                 for img in stock_images[:20]],
+                                 for img in stock_images[:25]],
                 "analysis": analysis,
                 "crawl_warning": crawl_data.get("error", ""),
             }
@@ -301,38 +331,47 @@ async def crawl_merchant_site(
     crawled_count = len(cached_images)
     logger.info("[Crawl] 最终缓存图片: %d 张 (目标>=%d)", crawled_count, MIN_DISPLAY_IMAGES)
 
-    # 不足 15 张时用图片库补充（而非仅在 0 张时）
+    # 不足 15 张时用图片库补充
     stock_images = []
     if crawled_count < MIN_DISPLAY_IMAGES:
         brand = crawl_data.get("brand_name", "")
+        category = analysis.get("category", "") if isinstance(analysis, dict) else ""
         queries = []
+
         if analysis and isinstance(analysis, dict):
             products = analysis.get("products") or analysis.get("main_products") or []
             if isinstance(products, str):
                 products = [products]
-            category = analysis.get("category", "")
-            if products:
-                queries.append(f"{str(products[0])} product photography")
+            # 多个产品分别搜索
+            for p in products[:5]:
+                queries.append(f"{str(p)} product photography")
+            if brand and category:
+                queries.append(f"{brand} {category}")
             if category and category != "general":
-                queries.append(f"{category} product high quality photography")
+                queries.append(f"{category} product high quality")
+                queries.append(f"{category} lifestyle aesthetic")
+            if brand:
+                queries.append(f"{brand} product")
         if not queries:
             queries.append("product lifestyle photography")
+            queries.append("brand product high quality")
 
-        stock_target = MIN_DISPLAY_IMAGES - crawled_count
+        stock_target = max(MIN_DISPLAY_IMAGES - crawled_count, 15)
+        stock_seen = set()
         for q in queries:
             if len(stock_images) >= stock_target:
                 break
             try:
                 extra = search_merchant_images(
-                    q, count=10,
+                    q, count=12,
                     brand_name=brand,
-                    category=analysis.get("category", "") if isinstance(analysis, dict) else ""
+                    category=category,
                 )
-                stock_seen = set(s.get("url", s) if isinstance(s, dict) else s for s in stock_images)
                 for img in extra:
-                    if img not in stock_seen:
+                    img_url = img.get("url", img) if isinstance(img, dict) else img
+                    if img_url not in stock_seen:
+                        stock_seen.add(img_url)
                         stock_images.append(img)
-                        stock_seen.add(img)
                 logger.info("[Crawl] 图片库搜索 '%s' 返回 %d 张", q, len(extra))
             except Exception as e:
                 logger.warning("[Crawl] 图片库搜索失败 '%s': %s", q, e)

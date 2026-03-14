@@ -732,6 +732,11 @@ def _is_blocked_page(html: str) -> bool:
         "please complete the security check",
         "are you a robot",
         "cf-challenge-running",
+        "access denied",
+        "you don't have permission",
+        "errors.edgesuite.net",
+        "request blocked",
+        "forbidden",
     ]
     strong_hits = sum(1 for s in strong_signals if s in text_lower)
 
@@ -1133,6 +1138,9 @@ def _try_google_cache(url: str, timeout: int = 15):
     import datetime
     current_year = datetime.datetime.now().year
 
+    parsed_target = urlparse(url)
+    target_domain = parsed_target.netloc.replace("www.", "").split(".")[0].lower()
+
     cache_urls = [
         f"https://webcache.googleusercontent.com/search?q=cache:{quote(url)}",
         f"https://web.archive.org/web/{current_year}/{url}",
@@ -1144,9 +1152,30 @@ def _try_google_cache(url: str, timeout: int = 15):
             with httpx.Client(timeout=timeout, follow_redirects=True, headers=headers) as client:
                 resp = client.get(cache_url)
                 if resp.status_code == 200 and len(resp.text) > 3000:
-                    if not _is_blocked_page(resp.text):
-                        logger.info("[MerchantCrawler] Google/Archive 缓存命中! %d bytes", len(resp.text))
-                        return _make_httpx_response(resp.text, url)
+                    if _is_blocked_page(resp.text):
+                        continue
+
+                    html_lower = resp.text.lower()
+
+                    # Google Cache 验证：确保返回的是目标站点内容而非搜索结果页
+                    if "webcache.googleusercontent.com" in cache_url:
+                        is_google_search = (
+                            'id="search"' in html_lower
+                            or "google.com/search" in html_lower
+                            or '<title>google' in html_lower[:500]
+                        )
+                        has_target_content = target_domain in html_lower
+                        if is_google_search and not has_target_content:
+                            logger.warning("[MerchantCrawler] Google Cache 返回搜索结果页而非缓存，跳过")
+                            continue
+
+                    # Wayback Machine: 确保不是 archive.org 的错误页
+                    if "web.archive.org" in cache_url:
+                        if "wayback machine" in html_lower and len(resp.text) < 10000:
+                            continue
+
+                    logger.info("[MerchantCrawler] Google/Archive 缓存命中! %d bytes", len(resp.text))
+                    return _make_httpx_response(resp.text, url)
         except Exception as e:
             logger.debug("[MerchantCrawler] 缓存获取失败 %s: %s", cache_url[:60], e)
     return None
