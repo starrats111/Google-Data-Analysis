@@ -254,10 +254,24 @@ class GoogleSheetSyncService:
                 logger.warning("解析行失败: %s", e)
                 continue
         self.db.commit()
+
+        # 从数据库中提取该 MCC 当前所有 distinct CID，更新 child_customer_ids
+        import json as _json
+        from sqlalchemy import distinct as _distinct
+        cids = self.db.query(_distinct(GoogleAdsApiData.customer_id)).filter(
+            GoogleAdsApiData.mcc_id == mcc.id,
+            GoogleAdsApiData.customer_id.isnot(None),
+            GoogleAdsApiData.customer_id != "",
+        ).all()
+        cid_list = sorted(set(c[0] for c in cids if c[0]))
+        mcc.child_customer_ids = _json.dumps(cid_list)
+        self.db.add(mcc)
+        self.db.commit()
+
         self._update_last_sheet_sync_at(mcc)
         logger.info(
-            "MCC %s Sheet 同步完成: %s ~ %s, 插入 %s, 更新 %s",
-            mcc.mcc_name, start, end, inserted, updated,
+            "MCC %s Sheet 同步完成: %s ~ %s, 插入 %s, 更新 %s, CID %s 个",
+            mcc.mcc_name, start, end, inserted, updated, len(cid_list),
         )
         return {"success": True, "inserted": inserted, "updated": updated, "skipped": 0}
 

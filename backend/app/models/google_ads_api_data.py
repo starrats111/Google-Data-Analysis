@@ -90,6 +90,7 @@ class GoogleMccAccount(Base):
     last_sync_date = Column(Date, nullable=True)  # 最后同步的数据日期
     total_campaigns = Column(Integer, default=0)  # 该MCC下的广告系列总数
     total_customers = Column(Integer, default=0)  # 该MCC下的客户账号数
+    child_customer_ids = Column(Text, nullable=True)  # JSON: MCC 下所有子账号 CID 列表，同步时自动更新
 
     # OPT-005 脚本模式：同步模式与 Google Sheet 配置
     sync_mode = Column(String(10), default="api", nullable=False)  # api / script

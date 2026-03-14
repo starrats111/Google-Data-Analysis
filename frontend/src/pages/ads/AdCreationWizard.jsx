@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react'
 import { Steps, Card, Button, Space, Table, Input, InputNumber, Select, message, Spin, Typography, Tag, Alert, Row, Col, Divider, Collapse, Modal } from 'antd'
-import { ThunderboltOutlined, SearchOutlined, RocketOutlined, LinkOutlined, BulbOutlined, LoadingOutlined, CheckCircleOutlined, GlobalOutlined, CopyOutlined } from '@ant-design/icons'
+import { ThunderboltOutlined, SearchOutlined, RocketOutlined, LinkOutlined, BulbOutlined, LoadingOutlined, CheckCircleOutlined, GlobalOutlined, CopyOutlined, ReloadOutlined } from '@ant-design/icons'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import api from '../../services/api'
 import { getToken } from '../../services/tokenHolder'
@@ -50,6 +50,8 @@ export default function AdCreationWizard() {
   const [allCids, setAllCids] = useState([])
   const [busyCids, setBusyCids] = useState([])
   const [cidError, setCidError] = useState('')
+  const [cidTotal, setCidTotal] = useState(0)
+  const [refreshingCid, setRefreshingCid] = useState(false)
 
   // Step 1: 关键词研究
   const [keywordUrl, setKeywordUrl] = useState(merchantUrl)
@@ -114,21 +116,36 @@ export default function AdCreationWizard() {
     setAllCids([])
     setBusyCids([])
     setCidError('')
+    setCidTotal(0)
     setLoading(true)
     try {
       const res = await api.post('/api/ad-creation/find-available-cid', { mcc_id: mccId })
       const data = res.data || {}
-      const cidList = data.all_cids || []
+      const freeCids = data.all_cids || []
       const busyList = data.busy_cids || []
-      const freeCids = cidList.filter(c => !busyList.includes(c))
-      const recommended = data.customer_id && !busyList.includes(data.customer_id) ? data.customer_id : freeCids[0] || ''
-      setAllCids(cidList)
+      const total = data.total || (freeCids.length + busyList.length)
+      const recommended = data.customer_id || freeCids[0] || ''
+      setAllCids(freeCids)
       setBusyCids(busyList)
+      setCidTotal(total)
       setAvailableCid(recommended)
       if (mccList.length === 1 && freeCids.length <= 1 && recommended) setStep(1)
     } catch (err) {
       setCidError(err?.response?.data?.detail || err?.message || '查找 CID 失败')
     } finally { setLoading(false) }
+  }
+
+  // 手动刷新 CID 列表（调一次 Google Ads API）
+  const handleRefreshCids = async () => {
+    if (!selectedMcc) return
+    setRefreshingCid(true)
+    try {
+      await api.post('/api/ad-creation/refresh-cid-list', { mcc_id: selectedMcc })
+      message.success('CID 列表已刷新')
+      await handleSelectMcc(selectedMcc)
+    } catch (err) {
+      message.error(err?.response?.data?.detail || '刷新失败')
+    } finally { setRefreshingCid(false) }
   }
 
   useEffect(() => {
@@ -290,9 +307,8 @@ export default function AdCreationWizard() {
       setCreateResult(res.data)
       setConfirmModalOpen(false)
       message.success('广告创建成功！')
-      // 将刚使用的 CID 加入忙碌列表，防止连续创建时重复使用
+      // 从空闲列表移除刚使用的 CID
       if (availableCid) {
-        setBusyCids(prev => [...prev, availableCid])
         setAllCids(prev => prev.filter(c => c !== availableCid))
         setAvailableCid('')
       }
@@ -453,27 +469,30 @@ export default function AdCreationWizard() {
                     action={<Button size="small" onClick={() => handleSelectMcc(selectedMcc)}>重试</Button>}
                   />
                 )}
-                {allCids.length > 0 && (
+                {(allCids.length > 0 || cidTotal > 0) && (
                   <div>
                     <Typography.Text strong style={{ marginRight: 8 }}>客户账号 (CID)</Typography.Text>
                     <Select
-                      style={{ width: 400 }}
+                      style={{ width: 300 }}
                       placeholder="选择空闲的客户账号"
                       value={availableCid || undefined}
                       onChange={(v) => { setAvailableCid(v); setCidError(''); }}
-                      options={allCids.map(cid => {
-                        const isBusy = busyCids.includes(cid)
-                        return {
-                          value: cid,
-                          label: `${formatCid(cid)}${isBusy ? ' (已占用)' : ''}`,
-                          disabled: isBusy,
-                        }
-                      })}
+                      options={allCids.map(cid => ({
+                        value: cid,
+                        label: formatCid(cid),
+                      }))}
                     />
+                    <Button
+                      icon={<ReloadOutlined />}
+                      loading={refreshingCid}
+                      onClick={handleRefreshCids}
+                      style={{ marginLeft: 8 }}
+                      title="从 Google Ads 刷新 CID 列表"
+                    >刷新 CID</Button>
                     <Typography.Text type="secondary" style={{ marginLeft: 8, fontSize: 12 }}>
-                      共 {allCids.length} 个 CID，空闲 {allCids.filter(c => !busyCids.includes(c)).length} 个
+                      共 {cidTotal} 个 CID，空闲 {allCids.length} 个
                     </Typography.Text>
-                    {allCids.filter(c => !busyCids.includes(c)).length === 0 && !loading && (
+                    {allCids.length === 0 && !loading && (
                       <Alert type="warning" message="当前 MCC 下没有空闲的客户账号" style={{ marginTop: 8 }} />
                     )}
                   </div>

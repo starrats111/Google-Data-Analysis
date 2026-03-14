@@ -150,6 +150,33 @@ async def find_available_cid(
         raise HTTPException(status_code=400, detail=str(e))
 
 
+@router.post("/refresh-cid-list")
+async def refresh_cid_list(
+    data: FindCidRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """手动刷新 MCC 的 CID 列表（调用一次 Google Ads API）"""
+    import json as _json
+    mcc = db.query(GoogleMccAccount).filter(GoogleMccAccount.id == data.mcc_id).first()
+    if not mcc:
+        raise HTTPException(status_code=404, detail="MCC 不存在")
+
+    try:
+        from app.services.google_ads_service_account_sync import GoogleAdsServiceAccountSync
+        sync_svc = GoogleAdsServiceAccountSync(db)
+        client, mcc_customer_id = sync_svc._create_client(mcc)
+        customers = sync_svc.get_accessible_customers(client, mcc_customer_id)
+        cid_list = sorted([c["id"] for c in customers])
+        mcc.child_customer_ids = _json.dumps(cid_list)
+        mcc.total_customers = len(cid_list)
+        db.add(mcc)
+        db.commit()
+        return {"success": True, "count": len(cid_list), "cids": cid_list}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"刷新失败: {str(e)[:200]}")
+
+
 @router.post("/keyword-ideas")
 async def generate_keyword_ideas(
     data: KeywordRequest,
@@ -359,23 +386,18 @@ async def create_campaign(
             "is_existing": True,
         }
 
-    # 检查该 CID 是否已有当前启用的广告系列（只看每个广告系列最新记录的状态）
+    # 检查该 CID 是否已有启用的广告系列（数据中心中有 status='已启用' 的记录）
     cid_clean = data.customer_id.replace("-", "") if data.customer_id else data.customer_id
-    from sqlalchemy import func as sa_func
-    campaigns_in_cid = db.query(GoogleAdsApiData.campaign_id).filter(
+    existing_enabled = db.query(GoogleAdsApiData).filter(
         GoogleAdsApiData.customer_id.in_([data.customer_id, cid_clean]),
-        GoogleAdsApiData.user_id == current_user.id,
-    ).distinct().all()
-    for (camp_id,) in campaigns_in_cid:
-        latest = db.query(GoogleAdsApiData).filter(
-            GoogleAdsApiData.campaign_id == camp_id,
-            GoogleAdsApiData.user_id == current_user.id,
-        ).order_by(GoogleAdsApiData.date.desc()).first()
-        if latest and latest.status == '已启用':
-            raise HTTPException(
-                status_code=400,
-                detail=f"CID {data.customer_id} 已有启用的广告系列「{latest.campaign_name}」，请选择其他空闲 CID",
-            )
+        GoogleAdsApiData.status == '已启用',
+        GoogleAdsApiData.mcc_id == data.mcc_id,
+    ).order_by(GoogleAdsApiData.date.desc()).first()
+    if existing_enabled:
+        raise HTTPException(
+            status_code=400,
+            detail=f"CID {data.customer_id} 已有启用的广告系列「{existing_enabled.campaign_name}」，请选择其他空闲 CID",
+        )
 
     from app.services.google_ads_creator import GoogleAdsCreator
     creator = GoogleAdsCreator(db)

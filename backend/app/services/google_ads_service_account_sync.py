@@ -1102,8 +1102,10 @@ class GoogleAdsServiceAccountSync:
                     "customers_count": 0
                 }
             
-            # 更新MCC的客户账号数
+            # 更新MCC的客户账号数 & 子账号CID列表
+            import json as _json
             mcc_account.total_customers = len(customers)
+            mcc_account.child_customer_ids = _json.dumps([c["id"] for c in customers])
             
             # 自动检测货币类型：如果子账号中有CNY，则标记MCC为CNY
             detected_currencies = set(c.get("currency_code", "USD") for c in customers)

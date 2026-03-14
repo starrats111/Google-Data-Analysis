@@ -21,57 +21,50 @@ class KeywordPlanService:
         self.db = db
 
     def find_available_cid(self, mcc_id: int) -> dict:
-        """查找 MCC 下的可用 CID，优先返回空闲的。
+        """查找 MCC 下的可用 CID（仅返回空闲的，busy 不返回）。
 
-        忙碌判定：该 CID 下每个广告系列取最近一天的记录，如果状态是 '已启用'，该 CID 就忙碌。
-        返回 {"customer_id": str, "all_cids": list, "busy_cids": list}
+        CID 来源：MCC.child_customer_ids（同步时自动更新）。
+        忙碌判定：该 CID 下任意广告系列最新记录 status == '已启用'。
+        返回 {"customer_id": str|None, "all_cids": list(空闲), "busy_cids": list}
         """
+        import json as _json
+
         mcc = self.db.query(GoogleMccAccount).filter(GoogleMccAccount.id == mcc_id).first()
         if not mcc:
             raise ValueError("MCC 账号不存在，请先在设置中添加 MCC")
 
-        all_cids = self.db.query(GoogleAdsApiData.customer_id).filter(
-            GoogleAdsApiData.mcc_id == mcc_id,
-            GoogleAdsApiData.customer_id.isnot(None),
-        ).distinct().all()
-        all_cid_list = [c[0] for c in all_cids if c[0]]
+        # 从存储的 child_customer_ids 获取 CID 列表
+        all_cid_list = []
+        if mcc.child_customer_ids:
+            try:
+                all_cid_list = _json.loads(mcc.child_customer_ids)
+            except (ValueError, TypeError):
+                pass
 
         if not all_cid_list:
-            raise ValueError("MCC 下没有 CID 数据，请先执行一次数据同步")
+            raise ValueError("该 MCC 尚无 CID 列表，请点击「刷新 CID」从 Google Ads 获取")
 
-        # 对每个 CID 下的每个广告系列，只看其最新一天的状态
+        # 查找 busy CID：在数据中心中有"已启用"广告系列的 CID
+        from sqlalchemy import distinct as _distinct
         busy_set = set()
         for cid in all_cid_list:
-            campaigns = self.db.query(
-                GoogleAdsApiData.campaign_id
-            ).filter(
+            cid_clean = cid.replace("-", "")
+            cid_variants = {cid, cid_clean}
+            has_enabled = self.db.query(GoogleAdsApiData.campaign_id).filter(
                 GoogleAdsApiData.mcc_id == mcc_id,
-                GoogleAdsApiData.customer_id == cid,
-            ).distinct().all()
+                GoogleAdsApiData.customer_id.in_(list(cid_variants)),
+                GoogleAdsApiData.status == '已启用',
+            ).order_by(GoogleAdsApiData.date.desc()).first()
+            if has_enabled:
+                busy_set.add(cid)
 
-            for (camp_id,) in campaigns:
-                latest = self.db.query(GoogleAdsApiData.status).filter(
-                    GoogleAdsApiData.mcc_id == mcc_id,
-                    GoogleAdsApiData.customer_id == cid,
-                    GoogleAdsApiData.campaign_id == camp_id,
-                ).order_by(GoogleAdsApiData.date.desc()).first()
-                if latest and latest.status == '已启用':
-                    busy_set.add(cid)
-                    break
-
-        recommended = None
-        for cid in all_cid_list:
-            if cid not in busy_set:
-                recommended = cid
-                break
-
-        if not recommended:
-            recommended = all_cid_list[0]
+        free_cids = [c for c in all_cid_list if c not in busy_set]
 
         return {
-            "customer_id": recommended,
-            "all_cids": all_cid_list,
+            "customer_id": free_cids[0] if free_cids else None,
+            "all_cids": free_cids,
             "busy_cids": list(busy_set),
+            "total": len(all_cid_list),
         }
 
     def generate_keyword_ideas(
