@@ -173,6 +173,7 @@ class GoogleAdsCreator:
         budget.name = campaign_name
         budget.amount_micros = int(daily_budget * 1_000_000)
         budget.delivery_method = client.enums.BudgetDeliveryMethodEnum.STANDARD
+        budget.explicitly_shared = False
         budget.resource_name = client.get_service("CampaignBudgetService").campaign_budget_path(
             customer_id, str(BUDGET_TEMP_ID)
         )
