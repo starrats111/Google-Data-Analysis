@@ -62,6 +62,14 @@ class CreateAdRequest(BaseModel):
     mode: str = "test"
 
 
+class ModifyAdCopyRequest(BaseModel):
+    headlines: List[str] = Field(default_factory=list)
+    descriptions: List[str] = Field(default_factory=list)
+    instruction: str = ""
+    merchant_name: str = ""
+    target_country: str = "US"
+
+
 # ─── 端点 ───
 
 @router.get("/mcc-accounts")
@@ -253,6 +261,71 @@ async def generate_ad_copy_stream(
             yield sse({"phase": "error", "text": str(e)})
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+
+@router.post("/modify-ad-copy")
+async def modify_ad_copy(
+    data: ModifyAdCopyRequest,
+    current_user: User = Depends(get_current_user),
+):
+    """AI 根据用户指令修改广告文案"""
+    from app.services.ad_copy_generator import ad_copy_generator, COUNTRY_LANGUAGE_MAP
+
+    country_info = COUNTRY_LANGUAGE_MAP.get(data.target_country, COUNTRY_LANGUAGE_MAP["US"])
+    language = country_info["language"]
+
+    current_headlines = "\n".join(f"{i+1}. {h}" for i, h in enumerate(data.headlines))
+    current_descs = "\n".join(f"{i+1}. {d}" for i, d in enumerate(data.descriptions))
+
+    prompt = f"""你是 Google Ads RSA 文案专家。
+
+商家: {data.merchant_name}
+广告语言: {language}
+
+当前标题（共{len(data.headlines)}条）:
+{current_headlines}
+
+当前描述（共{len(data.descriptions)}条）:
+{current_descs}
+
+用户要求: {data.instruction}
+
+请根据用户要求修改文案。规则:
+- 标题每条 ≤ 30 字符，描述每条 ≤ 90 字符
+- 如果用户只要求修改部分，保留其他不变
+- 遵守 Google Ads 政策（禁止夸大/误导/全大写）
+- 文案用 {language}，翻译用中文
+
+返回 JSON:
+```json
+{{"headlines": ["修改后的标题列表"], "headline_translations": ["中文翻译"], "descriptions": ["修改后的描述列表"], "description_translations": ["中文翻译"], "reply": "简短说明你做了什么修改"}}
+```"""
+
+    messages = [{"role": "user", "content": prompt}]
+    try:
+        raw = ad_copy_generator.gen_service._call_with_fallback(messages, max_tokens=2000, fast=True)
+        result = ad_copy_generator._parse_json(raw)
+
+        headlines = [h[:30] for h in result.get("headlines", data.headlines)]
+        descriptions = [d[:90] for d in result.get("descriptions", data.descriptions)]
+        headline_translations = result.get("headline_translations", [])
+        description_translations = result.get("description_translations", [])
+
+        while len(headline_translations) < len(headlines):
+            headline_translations.append("")
+        while len(description_translations) < len(descriptions):
+            description_translations.append("")
+
+        return {
+            "headlines": headlines,
+            "descriptions": descriptions,
+            "headline_translations": headline_translations,
+            "description_translations": description_translations,
+            "reply": result.get("reply", "已按要求修改文案"),
+        }
+    except Exception as e:
+        logger.error(f"[ModifyAdCopy] 修改失败: {e}")
+        raise HTTPException(status_code=500, detail=f"AI 修改失败: {str(e)}")
 
 
 @router.post("/create-campaign")

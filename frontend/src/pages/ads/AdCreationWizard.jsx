@@ -54,9 +54,16 @@ export default function AdCreationWizard() {
   const streamingRef = useRef(false)
   const thinkingBoxRef = useRef(null)
 
+  // AI 沟通框
+  const [chatMessages, setChatMessages] = useState([])
+  const [chatInput, setChatInput] = useState('')
+  const [chatLoading, setChatLoading] = useState(false)
+  const chatBoxRef = useRef(null)
+
   // 确认弹窗
   const [confirmModalOpen, setConfirmModalOpen] = useState(false)
   const [dailyBudget, setDailyBudget] = useState(10)
+  const adDefaultBudgetRef = useRef(null)
   const [createResult, setCreateResult] = useState(null)
 
   // 加载 MCC 列表 + 广告默认设置
@@ -65,7 +72,10 @@ export default function AdCreationWizard() {
       setMccList(res.data || [])
     }).catch(() => {})
     api.get('/api/merchants/ad-defaults').then(res => {
-      if (res.data?.default_daily_budget) setDailyBudget(res.data.default_daily_budget)
+      if (res.data?.default_daily_budget) {
+        setDailyBudget(res.data.default_daily_budget)
+        adDefaultBudgetRef.current = res.data.default_daily_budget
+      }
     }).catch(() => {})
   }, [])
 
@@ -212,7 +222,6 @@ export default function AdCreationWizard() {
               setDescTranslations(r.description_translations || [])
               if (r.recommended_budget) {
                 setRecommendedBudget(r.recommended_budget)
-                setDailyBudget(r.recommended_budget)
               }
               setStreamPhase('done')
               setStreamDone(true)
@@ -266,6 +275,39 @@ export default function AdCreationWizard() {
       message.error(err?.response?.data?.detail || '广告创建失败')
     } finally { setLoading(false) }
   }
+
+  // AI 沟通框：发送修改指令
+  const handleChatSend = async () => {
+    if (!chatInput.trim() || chatLoading) return
+    const userMsg = chatInput.trim()
+    setChatInput('')
+    setChatMessages(prev => [...prev, { role: 'user', text: userMsg }])
+    setChatLoading(true)
+    try {
+      const res = await api.post('/api/ad-creation/modify-ad-copy', {
+        headlines: editHeadlines,
+        descriptions: editDescriptions,
+        instruction: userMsg,
+        merchant_name: merchantName,
+        target_country: targetCountry,
+      })
+      const d = res.data
+      if (d.headlines) setEditHeadlines(d.headlines)
+      if (d.descriptions) setEditDescriptions(d.descriptions)
+      if (d.headline_translations) setHeadlineTranslations(d.headline_translations)
+      if (d.description_translations) setDescTranslations(d.description_translations)
+      setChatMessages(prev => [...prev, { role: 'ai', text: d.reply || '已修改完成' }])
+    } catch (err) {
+      setChatMessages(prev => [...prev, { role: 'ai', text: `修改失败: ${err?.response?.data?.detail || err.message}` }])
+    } finally {
+      setChatLoading(false)
+    }
+  }
+
+  // Auto-scroll chat box
+  useEffect(() => {
+    if (chatBoxRef.current) chatBoxRef.current.scrollTop = chatBoxRef.current.scrollHeight
+  }, [chatMessages])
 
   const phaseIcon = streamPhase === 'done' ? <CheckCircleOutlined style={{ color: '#52c41a' }} /> :
                     streamPhase === 'error' ? <BulbOutlined style={{ color: '#ff4d4f' }} /> :
@@ -453,12 +495,53 @@ export default function AdCreationWizard() {
               {/* 文案结果 */}
               {streamDone && editHeadlines.length > 0 && (
                 <>
-                  <Alert
-                    type="warning"
-                    message="Google 政策提示"
-                    description="以下文案已按照 Google Ads 政策生成。请在编辑时继续遵守规则，避免广告被拒绝。"
-                    style={{ fontSize: 12 }}
-                  />
+                  {/* AI 沟通框 */}
+                  <div style={{
+                    border: '1px solid #91caff',
+                    borderRadius: 8,
+                    padding: 12,
+                    background: '#f0f7ff',
+                  }}>
+                    <Typography.Text strong style={{ color: '#1890ff' }}>
+                      <BulbOutlined style={{ marginRight: 6 }} />AI 助手 — 告诉 AI 如何修改文案
+                    </Typography.Text>
+                    {chatMessages.length > 0 && (
+                      <div
+                        ref={chatBoxRef}
+                        style={{
+                          maxHeight: 180,
+                          overflowY: 'auto',
+                          margin: '8px 0',
+                          padding: 8,
+                          background: '#fff',
+                          borderRadius: 6,
+                          border: '1px solid #e8e8e8',
+                        }}
+                      >
+                        {chatMessages.map((msg, i) => (
+                          <div key={i} style={{ marginBottom: 6 }}>
+                            <Tag color={msg.role === 'user' ? 'blue' : 'green'} style={{ marginRight: 6 }}>
+                              {msg.role === 'user' ? '你' : 'AI'}
+                            </Tag>
+                            <span style={{ fontSize: 13 }}>{msg.text}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    <Space.Compact style={{ width: '100%', marginTop: 8 }}>
+                      <Input
+                        placeholder="例如：第3个标题改短一点 / 加入免费送货信息 / 所有描述加上品牌名"
+                        value={chatInput}
+                        onChange={e => setChatInput(e.target.value)}
+                        onPressEnter={handleChatSend}
+                        disabled={chatLoading}
+                      />
+                      <Button type="primary" onClick={handleChatSend} loading={chatLoading}>
+                        发送
+                      </Button>
+                    </Space.Compact>
+                  </div>
+
                   <Divider style={{ margin: '4px 0' }} />
                   <Typography.Text strong>标题（最多 15 个，每个 ≤ 30 字符）</Typography.Text>
                   {editHeadlines.map((h, i) => (
