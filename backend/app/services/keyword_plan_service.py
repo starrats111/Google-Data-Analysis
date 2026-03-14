@@ -23,7 +23,7 @@ class KeywordPlanService:
     def find_available_cid(self, mcc_id: int) -> dict:
         """查找 MCC 下的可用 CID，优先返回空闲的。
 
-        忙碌判定：该 CID 下任意广告系列的**最近一条记录**status == '已启用'。
+        忙碌判定：该 CID 下每个广告系列取最近一天的记录，如果状态是 '已启用'，该 CID 就忙碌。
         返回 {"customer_id": str, "all_cids": list, "busy_cids": list}
         """
         mcc = self.db.query(GoogleMccAccount).filter(GoogleMccAccount.id == mcc_id).first()
@@ -39,17 +39,25 @@ class KeywordPlanService:
         if not all_cid_list:
             raise ValueError("MCC 下没有 CID 数据，请先执行一次数据同步")
 
-        # 简单直接：查找该 MCC 下所有有 '已启用' 状态广告的 CID
-        # 只要某 CID 在最近数据中包含已启用广告，就算忙碌
+        # 对每个 CID 下的每个广告系列，只看其最新一天的状态
         busy_set = set()
         for cid in all_cid_list:
-            latest = self.db.query(GoogleAdsApiData.status).filter(
+            campaigns = self.db.query(
+                GoogleAdsApiData.campaign_id
+            ).filter(
                 GoogleAdsApiData.mcc_id == mcc_id,
                 GoogleAdsApiData.customer_id == cid,
-                GoogleAdsApiData.status == '已启用',
-            ).first()
-            if latest:
-                busy_set.add(cid)
+            ).distinct().all()
+
+            for (camp_id,) in campaigns:
+                latest = self.db.query(GoogleAdsApiData.status).filter(
+                    GoogleAdsApiData.mcc_id == mcc_id,
+                    GoogleAdsApiData.customer_id == cid,
+                    GoogleAdsApiData.campaign_id == camp_id,
+                ).order_by(GoogleAdsApiData.date.desc()).first()
+                if latest and latest.status == '已启用':
+                    busy_set.add(cid)
+                    break
 
         recommended = None
         for cid in all_cid_list:
