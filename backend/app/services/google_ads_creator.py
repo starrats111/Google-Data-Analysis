@@ -29,22 +29,29 @@ class GoogleAdsCreator:
         self.db = db
 
     def _next_platform_seq(self, user_id: int, platform: str) -> str:
-        """计算该用户在指定平台下的下一个序号"""
-        from sqlalchemy import func
-        from app.models.merchant import MerchantAssignment, AffiliateMerchant
+        """从 Google Ads 历史数据中找该用户该平台的最大序号，+1 继续"""
+        import re
+        from sqlalchemy import distinct
+        from app.models.google_ads_api_data import GoogleAdsApiData
         if not user_id:
             return "001"
-        count = (
-            self.db.query(MerchantAssignment)
-            .join(AffiliateMerchant, MerchantAssignment.merchant_id == AffiliateMerchant.id)
+        plat = platform.upper()
+        pattern = f"%-{plat}-%"
+        names = (
+            self.db.query(distinct(GoogleAdsApiData.campaign_name))
             .filter(
-                MerchantAssignment.user_id == user_id,
-                func.upper(AffiliateMerchant.platform) == platform.upper(),
-                MerchantAssignment.google_campaign_id.isnot(None),
+                GoogleAdsApiData.user_id == user_id,
+                GoogleAdsApiData.campaign_name.like(pattern),
             )
-            .count()
+            .all()
         )
-        return str(count + 1).zfill(3)
+        max_seq = 0
+        seq_re = re.compile(r'^(\d{1,4})-' + re.escape(plat) + r'-', re.IGNORECASE)
+        for (name,) in names:
+            m = seq_re.match(name)
+            if m:
+                max_seq = max(max_seq, int(m.group(1)))
+        return str(max_seq + 1).zfill(3)
 
     def create_full_campaign(
         self,
