@@ -1298,15 +1298,18 @@ const PublishWizard = () => {
                     ]}
                   />
                 )}
-                {crawledImages.length > 0 && (
+                {crawledImages.length === 0 && stockImages.length > 0 && (
+                  <Tag color="purple">图片库（商家网站无法爬取，已自动搜索相关图片）</Tag>
+                )}
+                {(crawledImages.length > 0 || stockImages.length > 0) && (
                   <Typography.Text type="secondary" style={{ fontSize: 12 }}>
                     点击图片添加到文章用图
                   </Typography.Text>
                 )}
               </div>
 
-              {/* 爬虫失败（0张爬取图）：手动上传模式 */}
-              {crawledImages.length === 0 && (
+              {/* 爬虫失败且图库也无图：手动上传模式 */}
+              {crawledImages.length === 0 && stockImages.length === 0 && !searchingImages && (
                 <div>
                   <Alert type="warning" message="未从商家网站获取到图片，请手动上传" showIcon style={{ marginBottom: 12 }} />
                   <Row gutter={16}>
@@ -1395,7 +1398,7 @@ const PublishWizard = () => {
 
               {/* 爬虫成功：正常图片选择 */}
               {imagePoolMode === 'stock' && searchingImages && <Spin tip="搜索图片库中..." />}
-              {imagePoolMode === 'stock' && !searchingImages && stockImages.length === 0 && crawledImages.length > 0 && (
+              {imagePoolMode === 'stock' && !searchingImages && stockImages.length === 0 && (
                 <Alert type="info" message="图片库暂无匹配结果" showIcon />
               )}
               <Space wrap size={[8, 8]} style={{ marginTop: 8 }}>
