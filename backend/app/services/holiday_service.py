@@ -263,8 +263,13 @@ def recommend_merchants_for_holiday(
     ]
 
 
+_keyword_cache: Dict[str, List[str]] = {}
+
 def _ai_holiday_keywords(holiday_name: str, country_code: str) -> List[str]:
-    """调用 AI 为节日生成商家搜索关键词"""
+    """调用 AI 为节日生成商家搜索关键词（结果缓存，同一节日只调用一次 AI）"""
+    cache_key = f"{holiday_name}|{country_code}"
+    if cache_key in _keyword_cache:
+        return _keyword_cache[cache_key]
     try:
         from app.services.article_gen_service import ArticleGenService
         svc = ArticleGenService()
@@ -291,10 +296,14 @@ beauty"""
         keywords = [line.strip().lower() for line in raw.strip().split("\n") if line.strip() and not line.strip().startswith("-")]
         keywords = [kw.lstrip("0123456789. ") for kw in keywords]
         keywords = [kw for kw in keywords if 1 < len(kw) < 40]
-        return keywords[:12]
+        result = keywords[:12]
+        _keyword_cache[cache_key] = result
+        return result
     except Exception as e:
         logger.error(f"[Holiday] AI 关键词生成失败: {e}")
-        return _fallback_keywords(holiday_name)
+        fallback = _fallback_keywords(holiday_name)
+        _keyword_cache[cache_key] = fallback
+        return fallback
 
 
 def _fallback_keywords(holiday_name: str) -> List[str]:
