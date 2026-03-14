@@ -755,33 +755,48 @@ async def get_mcc_script_template(
     script = f"""// Google Ads MCC 脚本 - 自动导出到 Google Sheets
 // MCC: {mcc.mcc_name} ({mcc.mcc_id})
 // 生成时间: {ts}
+//
+// 功能：
+//   1. 将广告数据写入 DailyData 工作表
+//   2. 将所有子账号 CID 列表写入 CID_List 工作表
 
 function main() {{
   var spreadsheet = SpreadsheetApp.openByUrl('{sheet_url}');
   var sheet = spreadsheet.getSheetByName('DailyData') || spreadsheet.insertSheet('DailyData');
   sheet.clear();
-  var headers = ['Date', 'Account', 'AccountName', 'CampaignId', 'CampaignName', 'Impressions', 'Clicks', 'Cost', 'Conversions', 'ConversionValue', 'Currency'];
+  var headers = ['Date', 'Account', 'AccountName', 'CampaignId', 'CampaignName', 'Status', 'Budget', 'Impressions', 'Clicks', 'Cost', 'Conversions', 'ConversionValue', 'Currency'];
   sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
   var allRows = [];
+  var cidRows = [];
   var accountIterator = AdsManagerApp.accounts().get();
   while (accountIterator.hasNext()) {{
     var account = accountIterator.next();
+    cidRows.push([account.getCustomerId(), account.getName() || '']);
     AdsManagerApp.select(account);
     try {{
       var report = AdsApp.report(
-        'SELECT segments.date, customer.id, customer.descriptive_name, campaign.id, campaign.name, metrics.impressions, metrics.clicks, metrics.cost_micros, metrics.conversions, metrics.conversions_value, customer.currency_code FROM campaign WHERE segments.date DURING LAST_30_DAYS'
+        'SELECT segments.date, customer.id, customer.descriptive_name, campaign.id, campaign.name, campaign.status, campaign_budget.amount_micros, metrics.impressions, metrics.clicks, metrics.cost_micros, metrics.conversions, metrics.conversions_value, customer.currency_code FROM campaign WHERE segments.date DURING LAST_30_DAYS'
       );
       var rows = report.rows();
       while (rows.hasNext()) {{
         var row = rows.next();
-        allRows.push([row['segments.date'], row['customer.id'], row['customer.descriptive_name'], row['campaign.id'], row['campaign.name'], row['metrics.impressions'], row['metrics.clicks'], row['metrics.cost_micros'], row['metrics.conversions'], row['metrics.conversions_value'], row['customer.currency_code']]);
+        allRows.push([row['segments.date'], row['customer.id'], row['customer.descriptive_name'], row['campaign.id'], row['campaign.name'], row['campaign.status'], row['campaign_budget.amount_micros'], row['metrics.impressions'], row['metrics.clicks'], row['metrics.cost_micros'], row['metrics.conversions'], row['metrics.conversions_value'], row['customer.currency_code']]);
       }}
     }} catch (e) {{ Logger.log('Account ' + account.getName() + ' error: ' + e.message); }}
   }}
   if (allRows.length > 0) {{
     sheet.getRange(2, 1, allRows.length, headers.length).setValues(allRows);
   }}
-  Logger.log('Exported ' + allRows.length + ' rows');
+  Logger.log('DailyData: ' + allRows.length + ' rows');
+  var cidSheet = spreadsheet.getSheetByName('CID_List') || spreadsheet.insertSheet('CID_List');
+  cidSheet.clear();
+  cidSheet.getRange(1, 1, 1, 2).setValues([['CustomerID', 'AccountName']]);
+  cidRows.sort(function(a, b) {{ return a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0; }});
+  if (cidRows.length > 0) {{
+    cidSheet.getRange(2, 1, cidRows.length, 2).setValues(cidRows);
+  }}
+  cidSheet.setFrozenRows(1);
+  Logger.log('CID_List: ' + cidRows.length + ' accounts');
 }}
 """
     return {"script": script, "mcc_name": mcc.mcc_name, "mcc_id": mcc.mcc_id}

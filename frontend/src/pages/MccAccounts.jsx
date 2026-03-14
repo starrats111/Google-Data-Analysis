@@ -742,7 +742,8 @@ export default function MccAccounts() {
                         <li>复制共享链接，粘贴到下方输入框并保存</li>
                         <li>在 MCC 列表操作栏点击「获取脚本」，复制脚本内容</li>
                         <li>到 Google Ads MCC →「工具与设置 → 批量操作 → 脚本」中新建脚本，粘贴并运行</li>
-                        <li>脚本运行完毕后（日志显示 Exported N rows），回到本页点击「同步 Sheet 数据」</li>
+                        <li>脚本运行完毕后（日志显示 DailyData + CID_List），回到本页点击「同步 Sheet 数据」</li>
+                        <li>设置脚本「运行频率」为每日，自动更新广告数据和 CID 列表</li>
                       </ol>
                     }
                     type="info"
@@ -896,8 +897,9 @@ export default function MccAccounts() {
               <li>点击下方「复制脚本」按钮</li>
               <li>打开 Google Ads MCC →「工具与设置 → 批量操作 → 脚本」→ 新建脚本</li>
               <li>粘贴脚本内容 → 点击「运行」（首次运行需授权）</li>
-              <li>运行完毕后日志会显示 <Text code>Exported N rows</Text>，数据写入 Sheet 底部的 <Text strong>DailyData</Text> 标签页</li>
+              <li>运行完毕后日志会显示 <Text code>DailyData: N rows</Text> 和 <Text code>CID_List: N accounts</Text></li>
               <li>回到本页面，在 MCC 操作栏点击「同步 Sheet 数据」按钮即可导入</li>
+              <li>设置「运行频率」为<Text strong>每日</Text>，脚本会自动更新 DailyData 和 CID_List</li>
             </ol>
           }
           type="info"
