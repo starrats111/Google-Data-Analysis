@@ -186,7 +186,7 @@ async def my_library(
         .all()
     )
 
-    # 批量查询在投人数：每个 merchant_id 有多少用户在最新日期有已启用广告
+    # 批量查询在投人数：每个 merchant_id 有多少用户当前有已启用广告
     from app.models.google_ads_api_data import GoogleAdsApiData
     from sqlalchemy import func as sa_func, distinct as sa_distinct, and_
 
@@ -197,10 +197,26 @@ async def my_library(
 
     active_map = {}
     if mid_set:
+        # 每个用户取最新数据日期，只看该日期的状态
+        user_latest_sub = (
+            db.query(
+                GoogleAdsApiData.user_id,
+                sa_func.max(GoogleAdsApiData.date).label("max_date"),
+            )
+            .group_by(GoogleAdsApiData.user_id)
+            .subquery()
+        )
         active_rows = (
             db.query(
                 GoogleAdsApiData.extracted_account_code,
                 sa_func.count(sa_distinct(GoogleAdsApiData.user_id)).label("cnt"),
+            )
+            .join(
+                user_latest_sub,
+                and_(
+                    GoogleAdsApiData.user_id == user_latest_sub.c.user_id,
+                    GoogleAdsApiData.date == user_latest_sub.c.max_date,
+                ),
             )
             .filter(
                 GoogleAdsApiData.extracted_account_code.in_(list(mid_set)),
@@ -246,10 +262,20 @@ async def my_library_active_advertisers(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """查询某商家在投广告员工详情（按 merchant_id 匹配 extracted_account_code）"""
+    """查询某商家当前在投广告员工详情（只看每个用户最新数据日期）"""
     from app.models.google_ads_api_data import GoogleAdsApiData
     from app.models.user import User as UserModel
-    from sqlalchemy import func as sa_func, distinct as sa_distinct
+    from sqlalchemy import func as sa_func, distinct as sa_distinct, and_
+
+    # 每个用户取最新数据日期
+    user_latest_sub = (
+        db.query(
+            GoogleAdsApiData.user_id,
+            sa_func.max(GoogleAdsApiData.date).label("max_date"),
+        )
+        .group_by(GoogleAdsApiData.user_id)
+        .subquery()
+    )
 
     rows = (
         db.query(
@@ -262,6 +288,13 @@ async def my_library_active_advertisers(
             sa_func.sum(GoogleAdsApiData.impressions).label("total_impressions"),
         )
         .join(UserModel, GoogleAdsApiData.user_id == UserModel.id)
+        .join(
+            user_latest_sub,
+            and_(
+                GoogleAdsApiData.user_id == user_latest_sub.c.user_id,
+                GoogleAdsApiData.date == user_latest_sub.c.max_date,
+            ),
+        )
         .filter(
             GoogleAdsApiData.extracted_account_code == merchant_id,
             GoogleAdsApiData.status == "已启用",
