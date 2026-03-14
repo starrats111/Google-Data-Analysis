@@ -406,6 +406,7 @@ async def delete_campaign(
     assignment.google_campaign_id = None
     assignment.google_customer_id = None
     assignment.daily_budget = None
+    assignment.status = "cancelled"
     db.commit()
 
     return {"message": "广告已删除", "assignment_id": assignment_id}
