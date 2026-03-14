@@ -212,13 +212,46 @@ def get_upcoming_holidays(country_code: str, days: int = 30) -> List[Dict]:
     return result
 
 
+BROAD_HOLIDAY_KEYWORDS = [
+    "gift", "fashion", "beauty", "clothing", "apparel", "shoes", "jewelry",
+    "accessories", "home", "decor", "food", "drink", "wine", "chocolate",
+    "flower", "toy", "electronics", "watch", "perfume", "cosmetic",
+    "skincare", "hair", "sport", "fitness", "outdoor", "travel",
+    "health", "wellness", "pet", "art", "book", "kitchen",
+]
+
+MIN_RECOMMEND = 30
+
+
+def _search_merchants(db, keywords: List[str], platform_list: List[str], exclude_ids: set, limit: int = 60):
+    """用关键词搜索商家"""
+    from app.models.merchant import AffiliateMerchant
+
+    conditions = []
+    for kw in keywords:
+        pattern = f"%{kw}%"
+        conditions.append(AffiliateMerchant.merchant_name.ilike(pattern))
+        conditions.append(AffiliateMerchant.category.ilike(pattern))
+    if not conditions:
+        return []
+
+    q = db.query(AffiliateMerchant).filter(
+        or_(*conditions),
+        func.upper(AffiliateMerchant.platform).in_([p.upper() for p in platform_list]),
+        AffiliateMerchant.status == "active",
+    )
+    if exclude_ids:
+        q = q.filter(~AffiliateMerchant.id.in_(exclude_ids))
+    return q.limit(limit).all()
+
+
 def recommend_merchants_for_holiday(
     holiday_name: str,
     country_code: str,
     db: Session,
     user_id: int,
 ) -> List[Dict]:
-    """用 AI 生成关键词，在商家库中匹配推荐商家"""
+    """用 AI 生成关键词 + 多轮扩展搜索，保证至少 30 个推荐商家"""
     from app.models.merchant import AffiliateMerchant
     from app.models.campaign_link_cache import CampaignLinkCache
 
@@ -231,26 +264,11 @@ def recommend_merchants_for_holiday(
     if not platform_list:
         return []
 
-    keywords = _ai_holiday_keywords(holiday_name, country_code)
+    seen_ids = set()
+    all_merchants = []
 
-    conditions = []
-    for kw in keywords:
-        pattern = f"%{kw}%"
-        conditions.append(AffiliateMerchant.merchant_name.ilike(pattern))
-        conditions.append(AffiliateMerchant.category.ilike(pattern))
-
-    if not conditions:
-        return []
-
-    q = db.query(AffiliateMerchant).filter(
-        or_(*conditions),
-        func.upper(AffiliateMerchant.platform).in_([p.upper() for p in platform_list]),
-        AffiliateMerchant.status == "active",
-    ).limit(50)
-
-    merchants = q.all()
-    return [
-        {
+    def _to_dict(m):
+        return {
             "id": m.id,
             "merchant_id": m.merchant_id,
             "merchant_name": m.merchant_name,
@@ -259,8 +277,40 @@ def recommend_merchants_for_holiday(
             "commission_rate": m.commission_rate,
             "slug": m.slug,
         }
-        for m in merchants
-    ]
+
+    # Round 1: AI-generated keywords (most relevant)
+    ai_keywords = _ai_holiday_keywords(holiday_name, country_code)
+    if ai_keywords:
+        results = _search_merchants(db, ai_keywords, platform_list, seen_ids, limit=60)
+        for m in results:
+            if m.id not in seen_ids:
+                seen_ids.add(m.id)
+                all_merchants.append(_to_dict(m))
+
+    # Round 2: static fallback keywords
+    if len(all_merchants) < MIN_RECOMMEND:
+        fallback_kws = _fallback_keywords(holiday_name)
+        extra_kws = [kw for kw in fallback_kws if kw not in ai_keywords]
+        if extra_kws:
+            results = _search_merchants(db, extra_kws, platform_list, seen_ids, limit=60)
+            for m in results:
+                if m.id not in seen_ids:
+                    seen_ids.add(m.id)
+                    all_merchants.append(_to_dict(m))
+
+    # Round 3: broad holiday keywords (generally gift/shopping relevant)
+    if len(all_merchants) < MIN_RECOMMEND:
+        used = set(ai_keywords + _fallback_keywords(holiday_name))
+        broad_extra = [kw for kw in BROAD_HOLIDAY_KEYWORDS if kw not in used]
+        if broad_extra:
+            need = MIN_RECOMMEND - len(all_merchants) + 10
+            results = _search_merchants(db, broad_extra, platform_list, seen_ids, limit=need)
+            for m in results:
+                if m.id not in seen_ids:
+                    seen_ids.add(m.id)
+                    all_merchants.append(_to_dict(m))
+
+    return all_merchants
 
 
 _keyword_cache: Dict[str, List[str]] = {}
@@ -276,27 +326,33 @@ def _ai_holiday_keywords(holiday_name: str, country_code: str) -> List[str]:
 
         country_zh = COUNTRY_NAME_MAP.get(country_code, ("", ""))[0]
         prompt = f"""你是电商营销专家。给定节日「{holiday_name}」和目标市场「{country_zh}」，
-请生成 8-12 个最相关的英文商品/品牌类别关键词，用于从联盟商家库中搜索适合做节日促销的商家。
+请生成 20 个最相关的英文商品/品牌类别搜索关键词，用于从联盟商家库中搜索适合做节日促销的商家。
 
 要求:
-- 只返回关键词，一行一个
-- 关键词为英文，简洁（1-3个单词）
-- 覆盖礼品、服饰、美妆、电子、食品等可能相关的类别
-- 按相关度排序
+- 只返回关键词，一行一个，不要编号
+- 关键词为英文，简洁（1-2个单词）
+- 前10个为该节日高度相关的品类（如节日特色商品）
+- 后10个为节日期间通用促销品类（fashion, beauty, electronics, home 等）
+- 关键词要尽量匹配商家名称或商品类别名
 
 示例格式:
 jewelry
 flowers
 chocolate
 fashion
-beauty"""
+beauty
+home
+electronics
+clothing
+gift
+sport"""
 
         messages = [{"role": "user", "content": prompt}]
-        raw = svc._call_with_fallback(messages, max_tokens=300, fast=True)
+        raw = svc._call_with_fallback(messages, max_tokens=500, fast=True)
         keywords = [line.strip().lower() for line in raw.strip().split("\n") if line.strip() and not line.strip().startswith("-")]
-        keywords = [kw.lstrip("0123456789. ") for kw in keywords]
+        keywords = [kw.lstrip("0123456789. ").strip() for kw in keywords]
         keywords = [kw for kw in keywords if 1 < len(kw) < 40]
-        result = keywords[:12]
+        result = keywords[:20]
         _keyword_cache[cache_key] = result
         return result
     except Exception as e:
