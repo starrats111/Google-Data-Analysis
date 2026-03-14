@@ -426,12 +426,15 @@ class MerchantService:
         end_date: Optional[date] = None,
         page: int = 1,
         page_size: int = 50,
+        user_platforms: Optional[list] = None,
     ) -> dict:
         """分页查询商家列表"""
         q = db.query(AffiliateMerchant)
 
         if platform:
             q = q.filter(AffiliateMerchant.platform.ilike(f"%{platform}%"))
+        elif user_platforms:
+            q = q.filter(func.upper(AffiliateMerchant.platform).in_([p.upper() for p in user_platforms]))
         if category:
             q = q.filter(AffiliateMerchant.category == category)
         if status:

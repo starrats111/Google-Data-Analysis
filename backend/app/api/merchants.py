@@ -47,6 +47,16 @@ async def list_merchants(
     # region agent log
     import json as _json, time as _time, pathlib as _pl
     try:
+        # 非管理员只看自己有的平台
+        user_plats = None
+        if current_user.role != 'manager':
+            from app.models.campaign_link_cache import CampaignLinkCache
+            from sqlalchemy import distinct as _distinct
+            rows = db.query(_distinct(CampaignLinkCache.platform_code)).filter(
+                CampaignLinkCache.user_id == current_user.id
+            ).all()
+            user_plats = [r[0] for r in rows if r[0]] or None
+
         result = MerchantService.list_merchants(
             db,
             platform=platform,
@@ -60,6 +70,7 @@ async def list_merchants(
             end_date=ed,
             page=page,
             page_size=page_size,
+            user_platforms=user_plats,
         )
         _pl.Path("debug-6b95b2.log").open("a").write(_json.dumps({"sessionId":"6b95b2","location":"merchants.py:list_merchants:ok","message":"list ok","data":{"page":page,"total":result.get("total",0)},"timestamp":_time.time()*1000,"hypothesisId":"H1,H4"})+"\n")
         return result
