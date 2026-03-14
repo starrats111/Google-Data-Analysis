@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react'
-import { Steps, Card, Button, Space, Table, Input, InputNumber, Select, message, Spin, Typography, Tag, Alert, Row, Col, Divider, Collapse } from 'antd'
+import { Steps, Card, Button, Space, Table, Input, InputNumber, Select, message, Spin, Typography, Tag, Alert, Row, Col, Divider, Collapse, Modal } from 'antd'
 import { ThunderboltOutlined, SearchOutlined, RocketOutlined, LinkOutlined, BulbOutlined, LoadingOutlined, CheckCircleOutlined, GlobalOutlined } from '@ant-design/icons'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import api from '../../services/api'
@@ -54,16 +54,18 @@ export default function AdCreationWizard() {
   const streamingRef = useRef(false)
   const thinkingBoxRef = useRef(null)
 
-  // Step 3: 预算设置
+  // 确认弹窗
+  const [confirmModalOpen, setConfirmModalOpen] = useState(false)
   const [dailyBudget, setDailyBudget] = useState(10)
-
-  // Step 4: 确认 & 创建
   const [createResult, setCreateResult] = useState(null)
 
-  // 加载 MCC 列表
+  // 加载 MCC 列表 + 广告默认设置
   useEffect(() => {
     api.get('/api/ad-creation/mcc-accounts').then(res => {
       setMccList(res.data || [])
+    }).catch(() => {})
+    api.get('/api/merchants/ad-defaults').then(res => {
+      if (res.data?.default_daily_budget) setDailyBudget(res.data.default_daily_budget)
     }).catch(() => {})
   }, [])
 
@@ -258,6 +260,7 @@ export default function AdCreationWizard() {
         mode: assignmentMode,
       })
       setCreateResult(res.data)
+      setConfirmModalOpen(false)
       message.success('广告创建成功！')
     } catch (err) {
       message.error(err?.response?.data?.detail || '广告创建失败')
@@ -280,8 +283,6 @@ export default function AdCreationWizard() {
     { title: '选择 MCC' },
     { title: '关键词研究' },
     { title: 'AI 智能文案' },
-    { title: '日预算' },
-    { title: '确认创建' },
   ]
 
   return (
@@ -502,8 +503,8 @@ export default function AdCreationWizard() {
                   ))}
                   <Space>
                     <Button onClick={() => setStep(1)}>上一步</Button>
-                    <Button type="primary" onClick={() => setStep(3)}>
-                      下一步：设置日预算{recommendedBudget ? `（AI 建议 $${recommendedBudget}）` : ''}
+                    <Button type="primary" icon={<RocketOutlined />} onClick={() => setConfirmModalOpen(true)}>
+                      创建广告
                     </Button>
                     <Button onClick={() => handleGenerateAdCopyStream()}>重新生成</Button>
                   </Space>
@@ -519,62 +520,90 @@ export default function AdCreationWizard() {
           </Card>
         )}
 
-        {/* Step 3: 日预算 */}
-        {step === 3 && (
-          <Card title="日预算设置">
-            <Space direction="vertical" size={16}>
-              <div>
-                <Typography.Text strong>日预算（USD）</Typography.Text>
-                <InputNumber min={1} max={1000} value={dailyBudget} onChange={setDailyBudget} style={{ marginLeft: 12, width: 120 }} />
-                {recommendedBudget && (
-                  <Typography.Text type="secondary" style={{ marginLeft: 12 }}>
-                    AI 建议: ${recommendedBudget}
-                  </Typography.Text>
-                )}
-              </div>
-              <div>
-                <Typography.Text strong>投放国家: </Typography.Text>
-                <Tag color="cyan">{COUNTRY_LABELS[targetCountry] || targetCountry}</Tag>
-                <Typography.Text type="secondary" style={{ fontSize: 12 }}>（领取商家时已确定）</Typography.Text>
-              </div>
-              <Space>
-                <Button onClick={() => setStep(2)}>上一步</Button>
-                <Button type="primary" onClick={() => setStep(4)}>下一步：确认创建</Button>
-              </Space>
-            </Space>
-          </Card>
-        )}
-
-        {/* Step 4: 确认 & 创建 */}
-        {step === 4 && (
-          <Card title="确认创建">
-            {createResult ? (
-              <Alert
-                type="success"
-                message="广告创建成功！"
-                description={`广告系列 ID: ${createResult.campaign_id}，数据将在次日同步后显示。`}
-                action={<Button type="primary" onClick={() => navigate('/ads/test-dashboard')}>查看测试看板</Button>}
-              />
-            ) : (
-              <Space direction="vertical" size={16} style={{ width: '100%' }}>
-                <Typography.Text>商家：<Tag color="blue">{merchantName}</Tag></Typography.Text>
-                <Typography.Text>MCC：{mccList.find(m => m.id === selectedMcc)?.mcc_id}</Typography.Text>
-                <Typography.Text>CID：{availableCid}</Typography.Text>
-                <Typography.Text>投放国家：<Tag color="cyan">{COUNTRY_LABELS[targetCountry] || targetCountry}</Tag></Typography.Text>
-                <Typography.Text>模式：<Tag color={assignmentMode === 'test' ? 'orange' : 'green'}>{assignmentMode === 'test' ? '测试' : '正式'}</Tag></Typography.Text>
-                <Typography.Text>关键词：{selectedKeywords.length} 个</Typography.Text>
-                <Typography.Text>标题：{editHeadlines.length} 个</Typography.Text>
-                <Typography.Text>描述：{editDescriptions.length} 个</Typography.Text>
-                <Typography.Text>日预算：${dailyBudget}</Typography.Text>
-                <Space>
-                  <Button onClick={() => setStep(3)}>上一步</Button>
-                  <Button type="primary" icon={<RocketOutlined />} onClick={handleCreateAd}>创建广告</Button>
-                </Space>
-              </Space>
-            )}
-          </Card>
-        )}
       </Spin>
+
+      {/* 创建成功提示 */}
+      {createResult && (
+        <Card style={{ marginTop: 16 }}>
+          <Alert
+            type="success"
+            message="广告创建成功！"
+            description={`广告系列: ${createResult.campaign_name || createResult.campaign_id}，数据将在次日同步后显示。`}
+            action={<Button type="primary" onClick={() => navigate('/ads/test-dashboard')}>查看测试看板</Button>}
+          />
+        </Card>
+      )}
+
+      {/* 确认创建弹窗 */}
+      <Modal
+        title="确认创建广告"
+        open={confirmModalOpen}
+        onOk={handleCreateAd}
+        onCancel={() => setConfirmModalOpen(false)}
+        okText="确认创建"
+        cancelText="取消"
+        confirmLoading={loading}
+        maskClosable={false}
+        width={520}
+      >
+        <Space direction="vertical" size={12} style={{ width: '100%' }}>
+          <Row>
+            <Col span={8}><Typography.Text strong>商家</Typography.Text></Col>
+            <Col span={16}><Tag color="blue">{merchantName}</Tag></Col>
+          </Row>
+          <Row>
+            <Col span={8}><Typography.Text strong>MCC</Typography.Text></Col>
+            <Col span={16}>{mccList.find(m => m.id === selectedMcc)?.mcc_id || '-'}</Col>
+          </Row>
+          <Row>
+            <Col span={8}><Typography.Text strong>CID</Typography.Text></Col>
+            <Col span={16}>{availableCid}</Col>
+          </Row>
+          <Row>
+            <Col span={8}><Typography.Text strong>投放国家</Typography.Text></Col>
+            <Col span={16}><Tag color="cyan">{COUNTRY_LABELS[targetCountry] || targetCountry}</Tag></Col>
+          </Row>
+          <Row>
+            <Col span={8}><Typography.Text strong>模式</Typography.Text></Col>
+            <Col span={16}>
+              <Tag color={assignmentMode === 'test' ? 'orange' : 'green'}>
+                {assignmentMode === 'test' ? '测试' : '正式'}
+              </Tag>
+            </Col>
+          </Row>
+          <Row>
+            <Col span={8}><Typography.Text strong>关键词</Typography.Text></Col>
+            <Col span={16}>{selectedKeywords.length} 个</Col>
+          </Row>
+          <Row>
+            <Col span={8}><Typography.Text strong>标题</Typography.Text></Col>
+            <Col span={16}>{editHeadlines.length} 个</Col>
+          </Row>
+          <Row>
+            <Col span={8}><Typography.Text strong>描述</Typography.Text></Col>
+            <Col span={16}>{editDescriptions.length} 个</Col>
+          </Row>
+          <Divider style={{ margin: '8px 0' }} />
+          <Row align="middle">
+            <Col span={8}><Typography.Text strong>日预算 (USD)</Typography.Text></Col>
+            <Col span={16}>
+              <InputNumber
+                min={1}
+                max={1000}
+                value={dailyBudget}
+                onChange={setDailyBudget}
+                style={{ width: 120 }}
+                addonBefore="$"
+              />
+              {recommendedBudget && (
+                <Typography.Text type="secondary" style={{ marginLeft: 8, fontSize: 12 }}>
+                  AI 建议: ${recommendedBudget}
+                </Typography.Text>
+              )}
+            </Col>
+          </Row>
+        </Space>
+      </Modal>
     </div>
   )
 }
