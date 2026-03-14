@@ -377,9 +377,6 @@ const DataCenter = () => {
       width: 100,
       fixed: 'right',
       render: (_, record) => {
-        if (record.sync_mode === 'script') {
-          return <Tooltip title="脚本模式不支持远程操作"><Button disabled size="small">不可用</Button></Tooltip>
-        }
         const isEnabled = record.status_code === 'ENABLED'
         return (
           <Popconfirm

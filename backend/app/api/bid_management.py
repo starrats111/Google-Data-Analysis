@@ -916,8 +916,6 @@ async def toggle_campaign_status(
     mcc = db.query(GoogleMccAccount).filter(GoogleMccAccount.id == record.mcc_id).first()
     if not mcc:
         raise HTTPException(status_code=404, detail="MCC账号不存在")
-    if mcc.sync_mode == "script":
-        raise HTTPException(status_code=400, detail="脚本模式MCC不支持远程操作")
 
     try:
         sync_service = GoogleAdsServiceAccountSync(db)
@@ -976,9 +974,6 @@ async def batch_toggle_campaign_status(
         mcc = db.query(GoogleMccAccount).filter(GoogleMccAccount.id == record.mcc_id).first()
         if not mcc:
             results_list.append({"campaign_id": cid, "success": False, "message": "MCC不存在"})
-            continue
-        if mcc.sync_mode == "script":
-            results_list.append({"campaign_id": cid, "success": False, "message": "脚本模式MCC不支持远程操作"})
             continue
 
         try:
