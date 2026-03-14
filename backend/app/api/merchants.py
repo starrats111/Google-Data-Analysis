@@ -186,6 +186,31 @@ async def my_library(
         .all()
     )
 
+    # 批量查询在投人数：每个 merchant_id 有多少用户在最新日期有已启用广告
+    from app.models.google_ads_api_data import GoogleAdsApiData
+    from sqlalchemy import func as sa_func, distinct as sa_distinct, and_
+
+    mid_set = set()
+    for r in rows:
+        if r.merchant_id:
+            mid_set.add(r.merchant_id)
+
+    active_map = {}
+    if mid_set:
+        active_rows = (
+            db.query(
+                GoogleAdsApiData.extracted_account_code,
+                sa_func.count(sa_distinct(GoogleAdsApiData.user_id)).label("cnt"),
+            )
+            .filter(
+                GoogleAdsApiData.extracted_account_code.in_(list(mid_set)),
+                GoogleAdsApiData.status == "已启用",
+            )
+            .group_by(GoogleAdsApiData.extracted_account_code)
+            .all()
+        )
+        active_map = {r.extracted_account_code: r.cnt for r in active_rows}
+
     items = []
     for r in rows:
         regions = []
@@ -209,9 +234,55 @@ async def my_library(
             "support_regions": regions,
             "logo": r.logo or "",
             "synced_at": r.synced_at.isoformat() if r.synced_at else None,
+            "active_advertisers": active_map.get(r.merchant_id, 0),
         })
 
     return {"items": items, "total": total, "page": page, "page_size": page_size}
+
+
+@router.get("/my-library/active-advertisers")
+async def my_library_active_advertisers(
+    merchant_id: str = Query(...),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """查询某商家在投广告员工详情（按 merchant_id 匹配 extracted_account_code）"""
+    from app.models.google_ads_api_data import GoogleAdsApiData
+    from app.models.user import User as UserModel
+    from sqlalchemy import func as sa_func, distinct as sa_distinct
+
+    rows = (
+        db.query(
+            GoogleAdsApiData.user_id,
+            UserModel.username,
+            UserModel.display_name,
+            sa_func.count(sa_distinct(GoogleAdsApiData.campaign_id)).label("campaign_count"),
+            sa_func.sum(GoogleAdsApiData.cost).label("total_cost"),
+            sa_func.sum(GoogleAdsApiData.clicks).label("total_clicks"),
+            sa_func.sum(GoogleAdsApiData.impressions).label("total_impressions"),
+        )
+        .join(UserModel, GoogleAdsApiData.user_id == UserModel.id)
+        .filter(
+            GoogleAdsApiData.extracted_account_code == merchant_id,
+            GoogleAdsApiData.status == "已启用",
+        )
+        .group_by(GoogleAdsApiData.user_id, UserModel.username, UserModel.display_name)
+        .order_by(sa_func.sum(GoogleAdsApiData.cost).desc())
+        .all()
+    )
+
+    return [
+        {
+            "user_id": r.user_id,
+            "username": r.username,
+            "display_name": r.display_name or r.username,
+            "campaign_count": r.campaign_count,
+            "total_cost": round(float(r.total_cost or 0), 2),
+            "total_clicks": int(r.total_clicks or 0),
+            "total_impressions": int(r.total_impressions or 0),
+        }
+        for r in rows
+    ]
 
 
 @router.get("/my-library/stats")

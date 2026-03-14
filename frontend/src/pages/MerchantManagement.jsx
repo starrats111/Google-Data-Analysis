@@ -488,15 +488,20 @@ const MerchantManagement = () => {
       },
     },
     {
-      title: 'Campaign Link',
-      dataIndex: 'campaign_link',
-      key: 'campaign_link',
-      width: 120,
-      render: (val) => val ? (
-        <Button size="small" type="link" style={{ padding: 0 }} onClick={() => { navigator.clipboard.writeText(val); message.success('已复制') }}>
-          复制链接
-        </Button>
-      ) : <span style={{ color: '#bfbfbf' }}>-</span>,
+      title: '在投人数',
+      dataIndex: 'active_advertisers',
+      key: 'active_advertisers',
+      width: 90,
+      align: 'center',
+      sorter: (a, b) => (a.active_advertisers || 0) - (b.active_advertisers || 0),
+      render: (val, record) => {
+        const count = val || 0
+        return count > 0 ? (
+          <Button size="small" type="link" style={{ padding: 0, fontWeight: 600, color: '#1677ff' }} onClick={() => handleShowActiveAdv(record)}>
+            {count} 人
+          </Button>
+        ) : <span style={{ color: '#bfbfbf' }}>0</span>
+      },
     },
     {
       title: '同步时间',
@@ -529,6 +534,23 @@ const MerchantManagement = () => {
   const [claimCountry, setClaimCountry] = useState('US')
   const [claimMode, setClaimMode] = useState('test')
   const [claimLoading, setClaimLoading] = useState(false)
+
+  // 在投人数详情弹窗
+  const [activeAdvModalOpen, setActiveAdvModalOpen] = useState(false)
+  const [activeAdvMerchant, setActiveAdvMerchant] = useState(null)
+  const [activeAdvList, setActiveAdvList] = useState([])
+  const [activeAdvLoading, setActiveAdvLoading] = useState(false)
+
+  const handleShowActiveAdv = async (record) => {
+    setActiveAdvMerchant(record)
+    setActiveAdvModalOpen(true)
+    setActiveAdvLoading(true)
+    try {
+      const res = await api.get('/api/merchants/my-library/active-advertisers', { params: { merchant_id: record.merchant_id } })
+      setActiveAdvList(res.data || [])
+    } catch { setActiveAdvList([]) }
+    finally { setActiveAdvLoading(false) }
+  }
 
   // 节日营销
   const [holidayCountry, setHolidayCountry] = useState('US')
@@ -1537,6 +1559,34 @@ const MerchantManagement = () => {
             ]} />
           </Form.Item>
         </Form>
+      </Modal>
+      {/* 在投人数详情弹窗 */}
+      <Modal
+        title={activeAdvMerchant ? `在投详情 — ${activeAdvMerchant.merchant_name}` : '在投详情'}
+        open={activeAdvModalOpen}
+        onCancel={() => setActiveAdvModalOpen(false)}
+        footer={null}
+        width={700}
+      >
+        <Spin spinning={activeAdvLoading}>
+          {activeAdvList.length === 0 && !activeAdvLoading ? (
+            <Alert message="当前无员工在投该商家" type="info" />
+          ) : (
+            <Table
+              dataSource={activeAdvList}
+              rowKey="user_id"
+              size="small"
+              pagination={false}
+              columns={[
+                { title: '员工', dataIndex: 'display_name', width: 100, render: (v, r) => v || r.username },
+                { title: '广告系列数', dataIndex: 'campaign_count', width: 100, align: 'center' },
+                { title: '总花费', dataIndex: 'total_cost', width: 120, align: 'right', render: v => `$${(v || 0).toFixed(2)}` },
+                { title: '点击', dataIndex: 'total_clicks', width: 90, align: 'right', render: v => (v || 0).toLocaleString() },
+                { title: '展示', dataIndex: 'total_impressions', width: 100, align: 'right', render: v => (v || 0).toLocaleString() },
+              ]}
+            />
+          )}
+        </Spin>
       </Modal>
     </div>
   )
