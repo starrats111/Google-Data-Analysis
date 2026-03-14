@@ -178,23 +178,25 @@ class ArticleGenService:
         """分析商家爬取数据，生成标题和关键词建议"""
         current_year = datetime.now().year
         lang_label = {
-            'en': '英文', 'zh': '中文', 'de': '德文', 'fr': '法文',
-            'es': '西班牙文', 'it': '意大利文', 'pt': '葡萄牙文', 'nl': '荷兰文',
-            'pl': '波兰文', 'sv': '瑞典文', 'da': '丹麦文', 'no': '挪威文',
-            'fi': '芬兰文', 'ja': '日文', 'ko': '韩文', 'ru': '俄文',
-            'tr': '土耳其文', 'th': '泰文', 'vi': '越南文',
-        }.get(language, '英文')
+            'en': 'English', 'zh': 'Chinese', 'de': 'German', 'fr': 'French',
+            'es': 'Spanish', 'it': 'Italian', 'pt': 'Portuguese', 'nl': 'Dutch',
+            'pl': 'Polish', 'sv': 'Swedish', 'da': 'Danish', 'no': 'Norwegian',
+            'fi': 'Finnish', 'ja': 'Japanese', 'ko': 'Korean', 'ru': 'Russian',
+            'tr': 'Turkish', 'th': 'Thai', 'vi': 'Vietnamese',
+        }.get(language, 'English')
         system_prompt = (
             "You are a JSON API. You MUST respond with ONLY a valid JSON object, no other text before or after.\n"
             "Do NOT include any explanation, greeting, or markdown. Output raw JSON only.\n\n"
             f"Analyze the merchant website info below. Current year: {current_year}.\n"
             "Analysis dimensions: products/services, selling points, target audience, promotions, "
             "best article category (fashion/health/home/travel/finance/food/tech/beauty).\n"
-            f"Generate 5 promotional article titles and 5 SEO keywords in {lang_label}.\n\n"
+            f"Generate 5 promotional article titles and 5 SEO keywords.\n"
+            f"CRITICAL: ALL 'title' fields and ALL 'keywords' MUST be written in **{lang_label}** language. "
+            f"The 'title_en' field must be the English translation.\n\n"
             "Required JSON format:\n"
             '{"category":"travel","products":["product1"],"selling_points":["point1"],'
             '"target_audience":"audience","promotions":"promo info",'
-            '"titles":[{"title":"中文标题","title_en":"English Title"},{"title":"中文标题2","title_en":"English Title 2"}],'
+            f'"titles":[{{"title":"A title written in {lang_label}","title_en":"English translation"}}],'
             '"keywords":["keyword1","keyword2","keyword3","keyword4","keyword5"]}'
         )
         raw_text = crawl_data.get("raw_text", "")
@@ -234,12 +236,12 @@ class ArticleGenService:
         brand_guess = domain.replace("www.", "").split(".")[0].capitalize()
 
         lang_label = {
-            'en': '英文', 'zh': '中文', 'de': '德文', 'fr': '法文',
-            'es': '西班牙文', 'it': '意大利文', 'pt': '葡萄牙文', 'nl': '荷兰文',
-            'pl': '波兰文', 'sv': '瑞典文', 'da': '丹麦文', 'no': '挪威文',
-            'fi': '芬兰文', 'ja': '日文', 'ko': '韩文', 'ru': '俄文',
-            'tr': '土耳其文', 'th': '泰文', 'vi': '越南文',
-        }.get(language, '英文')
+            'en': 'English', 'zh': 'Chinese', 'de': 'German', 'fr': 'French',
+            'es': 'Spanish', 'it': 'Italian', 'pt': 'Portuguese', 'nl': 'Dutch',
+            'pl': 'Polish', 'sv': 'Swedish', 'da': 'Danish', 'no': 'Norwegian',
+            'fi': 'Finnish', 'ja': 'Japanese', 'ko': 'Korean', 'ru': 'Russian',
+            'tr': 'Turkish', 'th': 'Thai', 'vi': 'Vietnamese',
+        }.get(language, 'English')
 
         system_prompt = (
             "You are a JSON API. You MUST respond with ONLY a valid JSON object, no other text.\n"
@@ -249,12 +251,14 @@ class ArticleGenService:
             "- What kind of products/services they likely offer\n"
             "- Their brand positioning\n"
             "- Target audience\n\n"
-            f"Generate 5 promotional article titles and 5 SEO keywords in {lang_label}.\n"
+            f"Generate 5 promotional article titles and 5 SEO keywords.\n"
+            f"CRITICAL: ALL 'title' fields and ALL 'keywords' MUST be written in **{lang_label}** language. "
+            f"The 'title_en' field must be the English translation.\n"
             "Titles should be engaging, SEO-friendly, and suitable for affiliate marketing.\n\n"
             "Required JSON format:\n"
             '{"brand_name":"BrandName","category":"travel","products":["product1"],'
             '"selling_points":["point1"],"target_audience":"audience","promotions":"",'
-            '"titles":[{"title":"标题","title_en":"English Title"}],'
+            f'"titles":[{{"title":"A title written in {lang_label}","title_en":"English translation"}}],'
             '"keywords":["keyword1","keyword2","keyword3","keyword4","keyword5"]}'
         )
         user_msg = f"商家网站 URL：{url}\n域名：{domain}\n推测品牌名：{brand_guess}"
@@ -305,7 +309,7 @@ class ArticleGenService:
         selling_points = ", ".join(merchant_info.get("selling_points", [])[:5])
         promotions = merchant_info.get("promotions", "")
         lang_label = {
-            'en': 'English', 'zh': '中文', 'de': 'German', 'fr': 'French',
+            'en': 'English', 'zh': 'Chinese', 'de': 'German', 'fr': 'French',
             'es': 'Spanish', 'it': 'Italian', 'pt': 'Portuguese', 'nl': 'Dutch',
             'pl': 'Polish', 'sv': 'Swedish', 'da': 'Danish', 'no': 'Norwegian',
             'fi': 'Finnish', 'ja': 'Japanese', 'ko': 'Korean', 'ru': 'Russian',
@@ -357,7 +361,7 @@ class ArticleGenService:
             "- Every mention of the brand name, product names, and related keywords should be hyperlinked\n"
             "- All links point to the SAME tracking URL above\n\n"
             "【Article Requirements】\n"
-            f"- Length: 800-1200 words (medium length)\n"
+            f"- Length: 1000-1500 words (comprehensive article)\n"
             f"- Language: {lang_label}\n"
             "- Category: judge based on the merchant's business (fashion/health/home/travel/finance/food/beauty/tech/lifestyle)\n"
             "- Structure: HTML with h2 headings, 4-6 sections, use <p> tags\n"
