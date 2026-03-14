@@ -27,21 +27,13 @@ var CID_SHEET_NAME = 'CID_List';
 function main() {
   var spreadsheet = SpreadsheetApp.openByUrl(SPREADSHEET_URL);
 
-  // 获取或创建 CID_List 工作表
   var sheet = spreadsheet.getSheetByName(CID_SHEET_NAME);
   if (!sheet) {
     sheet = spreadsheet.insertSheet(CID_SHEET_NAME);
     Logger.log('已创建工作表: ' + CID_SHEET_NAME);
   }
 
-  // 清空旧数据
-  sheet.clear();
-
-  // 表头
-  var headers = ['CustomerID', 'AccountName', 'CurrencyCode', 'TimeZone'];
-  sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
-
-  // 获取 MCC 下所有子账号（不切换账号，避免超时）
+  // 先收集数据，全部成功后再写入 Sheet，避免 clear 后崩溃导致空表
   var accounts = AdsManagerApp.accounts().get();
   var rows = [];
 
@@ -49,23 +41,24 @@ function main() {
     var account = accounts.next();
     rows.push([
       account.getCustomerId(),
-      account.getName() || '',
-      account.getCurrencyCode() || '',
-      account.getTimeZone() || ''
+      account.getName() || ''
     ]);
   }
 
-  // 按 CID 排序
   rows.sort(function(a, b) {
     return a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0;
   });
 
-  // 批量写入
+  // 数据收集完毕，安全写入
+  sheet.clear();
+
+  var headers = ['CustomerID', 'AccountName'];
+  sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
+
   if (rows.length > 0) {
     sheet.getRange(2, 1, rows.length, headers.length).setValues(rows);
   }
 
-  // 格式化
   sheet.setFrozenRows(1);
   sheet.getRange(1, 1, 1, headers.length).setFontWeight('bold');
   sheet.autoResizeColumns(1, headers.length);
