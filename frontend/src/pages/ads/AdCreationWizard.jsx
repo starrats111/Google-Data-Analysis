@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react'
 import { Steps, Card, Button, Space, Table, Input, InputNumber, Select, message, Spin, Typography, Tag, Alert, Row, Col, Divider, Collapse, Modal } from 'antd'
-import { ThunderboltOutlined, SearchOutlined, RocketOutlined, LinkOutlined, BulbOutlined, LoadingOutlined, CheckCircleOutlined, GlobalOutlined } from '@ant-design/icons'
+import { ThunderboltOutlined, SearchOutlined, RocketOutlined, LinkOutlined, BulbOutlined, LoadingOutlined, CheckCircleOutlined, GlobalOutlined, CopyOutlined } from '@ant-design/icons'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import api from '../../services/api'
 import { getToken } from '../../services/tokenHolder'
@@ -327,6 +327,57 @@ export default function AdCreationWizard() {
     { title: 'AI 智能文案' },
   ]
 
+  // 创建成功后显示全屏成功页
+  if (createResult) {
+    const campaignLink = createResult.campaign_link || ''
+    return (
+      <div style={{
+        display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+        minHeight: 'calc(100vh - 120px)', padding: 40, background: '#fff',
+      }}>
+        <CheckCircleOutlined style={{ fontSize: 72, color: '#52c41a', marginBottom: 24 }} />
+        <Typography.Title level={2} style={{ marginBottom: 8 }}>广告创建成功</Typography.Title>
+        <Typography.Text type="secondary" style={{ fontSize: 16, marginBottom: 32 }}>
+          广告系列: {createResult.campaign_name || createResult.campaign_id}
+        </Typography.Text>
+
+        {campaignLink && (
+          <Card
+            size="small"
+            style={{ width: '100%', maxWidth: 600, marginBottom: 24, borderColor: '#91caff' }}
+            title={<span><LinkOutlined /> Campaign Link</span>}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <Input value={campaignLink} readOnly style={{ flex: 1 }} />
+              <Button
+                icon={<CopyOutlined />}
+                onClick={() => {
+                  navigator.clipboard.writeText(campaignLink)
+                  message.success('链接已复制')
+                }}
+              >
+                复制
+              </Button>
+            </div>
+          </Card>
+        )}
+
+        <Space size={16}>
+          <Button type="primary" size="large" onClick={() => navigate('/ads/test-dashboard')}>
+            查看测试看板
+          </Button>
+          <Button size="large" onClick={() => navigate('/merchant-management')}>
+            返回商家管理
+          </Button>
+        </Space>
+
+        <Typography.Text type="secondary" style={{ marginTop: 24, fontSize: 13 }}>
+          广告数据将在次日同步后显示
+        </Typography.Text>
+      </div>
+    )
+  }
+
   return (
     <div style={{ padding: 24 }}>
       <Typography.Title level={4}>
@@ -605,17 +656,6 @@ export default function AdCreationWizard() {
 
       </Spin>
 
-      {/* 创建成功提示 */}
-      {createResult && (
-        <Card style={{ marginTop: 16 }}>
-          <Alert
-            type="success"
-            message="广告创建成功！"
-            description={`广告系列: ${createResult.campaign_name || createResult.campaign_id}，数据将在次日同步后显示。`}
-            action={<Button type="primary" onClick={() => navigate('/ads/test-dashboard')}>查看测试看板</Button>}
-          />
-        </Card>
-      )}
 
       {/* 确认创建弹窗 */}
       <Modal

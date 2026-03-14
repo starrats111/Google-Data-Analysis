@@ -381,6 +381,18 @@ async def create_campaign(
         assignment.mode = data.mode
         db.commit()
 
+        # 查找该商家的 campaign link
+        campaign_link = ""
+        if merchant and merchant.merchant_id:
+            cache = db.query(CampaignLinkCache).filter(
+                CampaignLinkCache.user_id == current_user.id,
+                CampaignLinkCache.platform_code == merchant.platform,
+                CampaignLinkCache.merchant_id == merchant.merchant_id,
+            ).first()
+            if cache:
+                campaign_link = cache.campaign_link or cache.short_link or cache.smart_link or ""
+
+        result["campaign_link"] = campaign_link
         return result
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
