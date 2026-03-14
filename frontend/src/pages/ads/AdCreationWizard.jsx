@@ -520,7 +520,7 @@ export default function AdCreationWizard() {
 
         {/* Step 2: AI 智能文案（SSE 流式） */}
         {step === 2 && (
-          <Card title="AI 智能文案生成">
+          <Card title={<span>AI 智能文案生成 <Tag color="purple" style={{ marginLeft: 8 }}>{COUNTRY_LANGUAGE[targetCountry] || 'English'} ({COUNTRY_LANGUAGE_ZH[targetCountry] || '英语'})</Tag></span>}>
             <Space direction="vertical" style={{ width: '100%' }} size={16}>
               {/* AI 思考过程 */}
               <div
