@@ -1506,30 +1506,12 @@ const PublishWizard = () => {
               />
             </div>
 
-            {/* ===== 文章语言设置 ===== */}
+            {/* ===== 文章语言设置（仅手动输入模式或无 support_regions 时显示） ===== */}
+            {!(campaignResult?.support_regions?.length > 0) && (
             <div style={{ marginBottom: 20 }}>
               <Typography.Title level={5}>🌐 文章语言</Typography.Title>
               <Row gutter={16} align="middle">
-                {campaignResult?.support_regions?.length > 0 && (
-                  <Col span={12}>
-                    <Select
-                      placeholder="选择目标区域 或 输入国家代码搜索"
-                      value={selectedRegion}
-                      onChange={handleRegionSelect}
-                      style={{ width: '100%' }}
-                      showSearch
-                      filterOption={(input, option) =>
-                        option.label.toLowerCase().includes(input.toLowerCase()) ||
-                        option.value.toLowerCase().includes(input.toLowerCase())
-                      }
-                      options={campaignResult.support_regions.map(r => ({
-                        value: r.code,
-                        label: `${r.code} — ${r.language}`,
-                      }))}
-                    />
-                  </Col>
-                )}
-                <Col span={campaignResult?.support_regions?.length > 0 ? 6 : 8}>
+                <Col span={8}>
                   <Tooltip title="输入国家代码，自动映射语言。如 de=德语, fr=法语, us=英语">
                     <Input
                       placeholder="国家代码 如 de, us"
@@ -1540,7 +1522,7 @@ const PublishWizard = () => {
                     />
                   </Tooltip>
                 </Col>
-                <Col span={campaignResult?.support_regions?.length > 0 ? 6 : 8}>
+                <Col span={8}>
                   {!countryCode && (
                     <Select value={language} onChange={setLanguage} options={LANGUAGES} style={{ width: '100%' }} placeholder="选择语言" />
                   )}
@@ -1550,6 +1532,7 @@ const PublishWizard = () => {
                 </Col>
               </Row>
             </div>
+            )}
 
             <Divider />
             <Space>
