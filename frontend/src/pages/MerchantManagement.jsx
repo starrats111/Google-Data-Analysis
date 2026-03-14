@@ -22,7 +22,7 @@ import {
   Alert,
   Popover,
 } from 'antd'
-import { ReloadOutlined, SearchOutlined, SyncOutlined, CheckCircleOutlined, CloudSyncOutlined, WarningOutlined, InboxOutlined, ThunderboltOutlined, SettingOutlined, GiftOutlined } from '@ant-design/icons'
+import { ReloadOutlined, SearchOutlined, SyncOutlined, CheckCircleOutlined, CloudSyncOutlined, WarningOutlined, InboxOutlined, ThunderboltOutlined, SettingOutlined, GiftOutlined, CopyOutlined } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
 import api from '../services/api'
 import { useAuth } from '../store/authStore'
@@ -433,6 +433,19 @@ const MerchantManagement = () => {
         <Space size={6}>
           {record.logo && <img src={record.logo} alt="" style={{ width: 20, height: 20, borderRadius: 4, objectFit: 'contain' }} />}
           <span style={{ fontWeight: 600 }}>{text || '-'}</span>
+          {record.campaign_link && (
+            <Tooltip title="复制 Campaign Link">
+              <CopyOutlined
+                style={{ color: '#1677ff', cursor: 'pointer', fontSize: 13 }}
+                onClick={(e) => {
+                  e.stopPropagation()
+                  navigator.clipboard.writeText(record.campaign_link)
+                    .then(() => message.success('Campaign Link 已复制'))
+                    .catch(() => message.error('复制失败'))
+                }}
+              />
+            </Tooltip>
+          )}
         </Space>
       ),
     },
