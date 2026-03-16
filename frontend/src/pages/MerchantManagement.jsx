@@ -592,7 +592,7 @@ const MerchantManagement = () => {
   })
   const [adDefaultsForm] = Form.useForm()
 
-  const CLAIM_COUNTRIES = [
+  const ALL_CLAIM_COUNTRIES = [
     { value: 'US', label: '美国 (English)' },
     { value: 'UK', label: '英国 (English)' },
     { value: 'CA', label: '加拿大 (English)' },
@@ -602,6 +602,14 @@ const MerchantManagement = () => {
     { value: 'JP', label: '日本 (Japanese)' },
     { value: 'BR', label: '巴西 (Portuguese)' },
   ]
+
+  const claimCountryOptions = useMemo(() => {
+    const regions = claimRecord?.support_regions
+    if (!regions || !Array.isArray(regions) || regions.length === 0) return ALL_CLAIM_COUNTRIES
+    const codes = regions.map(r => (r.code || r || '').toUpperCase())
+    const filtered = ALL_CLAIM_COUNTRIES.filter(c => codes.includes(c.value))
+    return filtered.length > 0 ? filtered : ALL_CLAIM_COUNTRIES
+  }, [claimRecord])
 
   const loadAdDefaults = async () => {
     try {
@@ -641,7 +649,10 @@ const MerchantManagement = () => {
 
   const openClaimModal = (record) => {
     setClaimRecord(record)
-    setClaimCountry('US')
+    const regions = record.support_regions || []
+    const codes = regions.map(r => (r.code || r || '').toUpperCase())
+    const firstMatch = ALL_CLAIM_COUNTRIES.find(c => codes.includes(c.value))
+    setClaimCountry(firstMatch ? firstMatch.value : 'US')
     setClaimMode('test')
     setClaimModalOpen(true)
   }
@@ -899,7 +910,7 @@ const MerchantManagement = () => {
                 style={{ width: '100%', marginBottom: 6 }}
                 value={holidayCountry}
                 onChange={(v) => setHolidayCountry(v)}
-                options={CLAIM_COUNTRIES.map(c => ({ value: c.value, label: c.value }))}
+                options={ALL_CLAIM_COUNTRIES.map(c => ({ value: c.value, label: c.value }))}
               />
               {holidayLoading ? (
                 <Spin size="small" />
@@ -1381,7 +1392,9 @@ const MerchantManagement = () => {
               style={{ width: '100%' }}
               value={claimCountry}
               onChange={setClaimCountry}
-              options={CLAIM_COUNTRIES}
+              options={claimCountryOptions}
+              showSearch
+              filterOption={(input, option) => (option?.label ?? '').toLowerCase().includes(input.toLowerCase())}
             />
           </div>
           <div>
