@@ -391,7 +391,7 @@ JSON格式(严格遵守):
         payload = {
             "model": "deepseek-chat",
             "messages": messages,
-            "max_tokens": 2000,
+            "max_tokens": 3000,
             "temperature": 0.5,
             "stream": True,
         }

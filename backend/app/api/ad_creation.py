@@ -376,11 +376,19 @@ async def get_merchant_assets(
     data: MerchantAssetsRequest,
     current_user: User = Depends(get_current_user),
 ):
-    """快速获取商家网站的图片和 Logo（用于广告素材）"""
+    """快速获取商家网站的图片、Logo、导航链接和卖点（用于广告素材）"""
     from app.services.merchant_crawler import crawl_merchant
+    import httpx
+    from bs4 import BeautifulSoup
+    from urllib.parse import urljoin, urlparse
+
+    nav_links = []
+    selling_points = []
+    images = []
+    logo = ""
+
     try:
         crawl_data = crawl_merchant(data.url)
-        images = []
         for page in crawl_data.get("pages", []):
             for img in page.get("images", []):
                 if img and img not in images and not any(x in img.lower() for x in ['icon', 'svg', 'favicon', '1x1', 'pixel']):
@@ -390,10 +398,84 @@ async def get_merchant_assets(
             if len(images) >= 10:
                 break
         logo = crawl_data.get("logo", "") or crawl_data.get("favicon", "")
-        return {"images": images, "logo": logo}
     except Exception as e:
-        logger.warning("[MerchantAssets] 获取失败: %s", e)
-        return {"images": [], "logo": ""}
+        logger.warning("[MerchantAssets] 爬虫获取失败: %s", e)
+
+    # 额外抓取导航链接和卖点
+    try:
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml",
+        }
+        with httpx.Client(timeout=15, follow_redirects=True) as client:
+            resp = client.get(data.url, headers=headers)
+            resp.raise_for_status()
+            soup = BeautifulSoup(resp.text, "lxml")
+
+            parsed_base = urlparse(data.url)
+            base_domain = parsed_base.hostname or ""
+
+            # 提取导航链接（nav 标签内的 <a> 或 header 内的 <a>）
+            seen_paths = set()
+            skip_texts = {"home", "login", "sign in", "register", "cart", "checkout", "search",
+                          "menu", "close", "skip", "back", "#", "javascript"}
+            for nav_area in [soup.find("nav"), soup.find("header"),
+                             soup.find("div", class_=lambda c: c and "nav" in c.lower() if c else False)]:
+                if not nav_area:
+                    continue
+                for a_tag in nav_area.find_all("a", href=True):
+                    href = a_tag["href"].strip()
+                    text = a_tag.get_text(strip=True)
+                    if not text or len(text) > 30 or len(text) < 2:
+                        continue
+                    if any(s in text.lower() for s in skip_texts):
+                        continue
+                    if href.startswith("javascript") or href == "#":
+                        continue
+                    full_url = urljoin(data.url, href)
+                    link_parsed = urlparse(full_url)
+                    # 只保留同域名链接
+                    if link_parsed.hostname and base_domain and base_domain not in link_parsed.hostname:
+                        continue
+                    path = link_parsed.path.rstrip("/") or "/"
+                    if path in seen_paths or path == "/":
+                        continue
+                    seen_paths.add(path)
+                    nav_links.append({"text": text, "path": path, "url": full_url})
+                    if len(nav_links) >= 8:
+                        break
+                if len(nav_links) >= 8:
+                    break
+
+            # 提取卖点（常见的 USP 区域：free shipping, returns 等）
+            page_text = soup.get_text(separator=" ", strip=True).lower()
+            usp_patterns = [
+                ("Free Shipping", ["free shipping", "free delivery", "complimentary shipping"]),
+                ("Free Returns", ["free returns", "free return", "easy returns", "hassle-free returns"]),
+                ("Money Back Guarantee", ["money back", "money-back guarantee", "satisfaction guaranteed"]),
+                ("24/7 Support", ["24/7 support", "24/7 customer", "round the clock", "always available"]),
+                ("Secure Payment", ["secure payment", "secure checkout", "ssl encrypted", "safe checkout"]),
+                ("Fast Delivery", ["fast delivery", "fast shipping", "express delivery", "quick shipping", "next day"]),
+                ("Price Match", ["price match", "best price", "lowest price"]),
+                ("Warranty", ["warranty", "year guarantee", "lifetime guarantee"]),
+                ("Loyalty Program", ["loyalty program", "rewards program", "earn points"]),
+                ("Eco Friendly", ["eco friendly", "sustainable", "environmentally friendly"]),
+            ]
+            for label, patterns in usp_patterns:
+                if any(p in page_text for p in patterns):
+                    selling_points.append(label)
+                if len(selling_points) >= 6:
+                    break
+
+    except Exception as e:
+        logger.warning("[MerchantAssets] 导航链接提取失败: %s", e)
+
+    return {
+        "images": images,
+        "logo": logo,
+        "nav_links": nav_links[:8],
+        "selling_points": selling_points[:6],
+    }
 
 
 @router.post("/create-campaign")

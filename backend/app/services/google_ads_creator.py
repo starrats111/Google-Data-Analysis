@@ -356,9 +356,16 @@ class GoogleAdsCreator:
                 desc1 = str(sl.get("desc1", ""))[:35]
                 desc2 = str(sl.get("desc2", ""))[:35]
                 path = sl.get("path", "")
+                sl_full_url = sl.get("url", "")
                 if not link_text:
                     continue
-                sl_url = resolved_url.rstrip("/") + "/" + path.lstrip("/") if path else resolved_url
+                # 优先使用爬虫获取的完整 URL，否则用 path 拼接
+                if sl_full_url and sl_full_url.startswith("http"):
+                    sl_url = sl_full_url
+                elif path:
+                    sl_url = resolved_url.rstrip("/") + "/" + path.lstrip("/")
+                else:
+                    sl_url = resolved_url
 
                 asset_op = client.get_type("MutateOperation")
                 asset = asset_op.asset_operation.create

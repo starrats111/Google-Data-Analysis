@@ -305,8 +305,25 @@ export default function AdCreationWizard() {
               if (r.recommended_budget) {
                 setRecommendedBudget(r.recommended_budget)
               }
-              if (r.sitelinks) setSitelinks(r.sitelinks)
-              if (r.callouts) setCallouts(r.callouts)
+              // sitelinks: 优先使用爬虫获取的真实链接，用 AI 描述补充
+              setSitelinks(prev => {
+                if (prev.length > 0 && prev[0].url) {
+                  // 已有真实爬取的 sitelinks，用 AI 的描述补充
+                  const aiSitelinks = r.sitelinks || []
+                  return prev.map((sl, i) => ({
+                    ...sl,
+                    desc1: sl.desc1 || (aiSitelinks[i]?.desc1 || ''),
+                    desc2: sl.desc2 || (aiSitelinks[i]?.desc2 || ''),
+                  }))
+                }
+                // 没有真实数据，使用 AI 生成的
+                return r.sitelinks || prev
+              })
+              // callouts: 优先使用爬虫获取的真实卖点
+              setCallouts(prev => {
+                if (prev.length > 0) return prev
+                return r.callouts || prev
+              })
               setStreamPhase('done')
               setStreamDone(true)
             } else if (evt.phase === 'error') {
@@ -636,6 +653,21 @@ export default function AdCreationWizard() {
                           .then(res => {
                             if (res.data?.images?.length) { setMerchantImages(res.data.images); setEnableImages(true) }
                             if (res.data?.logo) { setMerchantLogo(res.data.logo); setEnableLogo(true) }
+                            // 用真实导航链接预填充 sitelinks
+                            if (res.data?.nav_links?.length) {
+                              const realSitelinks = res.data.nav_links.slice(0, 4).map(link => ({
+                                link_text: link.text.slice(0, 25),
+                                desc1: '',
+                                desc2: '',
+                                path: link.path,
+                                url: link.url,
+                              }))
+                              setSitelinks(realSitelinks)
+                            }
+                            // 用真实卖点预填充 callouts
+                            if (res.data?.selling_points?.length) {
+                              setCallouts(res.data.selling_points.slice(0, 4))
+                            }
                           })
                           .catch(() => {})
                       }
@@ -983,10 +1015,10 @@ export default function AdCreationWizard() {
             <Col span={16}>
               {enableSitelinks && sitelinks.length > 0 ? (
                 <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                  {sitelinks.map(s => s.link_text).join(' / ')}
+                  {sitelinks.map(s => `${s.link_text}(${s.path})`).join(' / ')}
                 </Typography.Text>
               ) : enableSitelinks ? (
-                <Typography.Text type="warning" style={{ fontSize: 12 }}>AI 未生成，将跳过</Typography.Text>
+                <Typography.Text type="warning" style={{ fontSize: 12 }}>未获取到站内链接，将跳过</Typography.Text>
               ) : null}
             </Col>
           </Row>
@@ -1003,7 +1035,7 @@ export default function AdCreationWizard() {
                   {callouts.join(' / ')}
                 </Typography.Text>
               ) : enableCallouts ? (
-                <Typography.Text type="warning" style={{ fontSize: 12 }}>AI 未生成，将跳过</Typography.Text>
+                <Typography.Text type="warning" style={{ fontSize: 12 }}>未获取到卖点信息，将跳过</Typography.Text>
               ) : null}
             </Col>
           </Row>
