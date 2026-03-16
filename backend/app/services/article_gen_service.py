@@ -14,8 +14,18 @@ from app.services.humanizer_service import humanize
 
 logger = logging.getLogger(__name__)
 
-FAST_MODELS = ["deepseek-chat", "claude-sonnet-4-6", "claude-sonnet-4-20250514"]
-SMART_MODELS_FALLBACK = ["deepseek-chat", "claude-sonnet-4-6", "claude-sonnet-4-20250514"]
+FAST_MODELS = [
+    "deepseek-chat",
+    "gemini-3-pro-preview",
+    "claude-sonnet-4-20250514",
+    "[官逆C]gemini-3-flash-preview",
+]
+SMART_MODELS_FALLBACK = [
+    "deepseek-chat",
+    "gemini-3-pro-preview",
+    "claude-sonnet-4-20250514",
+    "[官逆C]gemini-3-flash-preview",
+]
 
 
 def _extract_json_text(raw: str) -> str:
@@ -72,7 +82,9 @@ class ArticleGenService:
             "max_tokens": max_tokens,
             "temperature": 0.7,
         }
-        with httpx.Client(timeout=300) as client:
+        # 长文章用更长超时
+        timeout = 600 if max_tokens > 8192 else 300
+        with httpx.Client(timeout=timeout) as client:
             resp = client.post(url, json=payload, headers=headers)
             resp.raise_for_status()
             data = resp.json()
@@ -84,6 +96,7 @@ class ArticleGenService:
             return _extract_json_text(content)
 
     def _call_with_fallback(self, messages: List[Dict], max_tokens: int = 8192, fast: bool = False) -> str:
+        import time
         if fast:
             models_to_try = self.fast_models
         else:
@@ -97,13 +110,16 @@ class ArticleGenService:
                 seen.add(m)
                 unique.append(m)
         last_error = None
-        for m in unique:
+        for i, m in enumerate(unique):
             try:
-                logger.info(f"[ArticleGen] 尝试模型: {m}")
+                logger.info(f"[ArticleGen] 尝试模型: {m} ({i+1}/{len(unique)})")
                 return self._call_api(messages, m, max_tokens)
             except Exception as e:
                 last_error = e
                 logger.warning(f"[ArticleGen] 模型 {m} 失败: {e}")
+                # 503/429 等服务端错误，等一下再试下一个
+                if i < len(unique) - 1:
+                    time.sleep(2)
         raise last_error
 
     def generate_titles(self, prompt: str, count: int = 10) -> List[Dict]:

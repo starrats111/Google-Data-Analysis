@@ -64,13 +64,26 @@ class RemotePublisher:
             return f.read().decode("utf-8")
 
     def _sftp_write(self, sftp: paramiko.SFTPClient, path: str, content: str):
-        """写入远程文件"""
-        with sftp.open(path, "w") as f:
-            f.write(content.encode("utf-8"))
+        """写入远程文件（带权限 fallback）"""
+        try:
+            with sftp.open(path, "w") as f:
+                f.write(content.encode("utf-8"))
+        except PermissionError:
+            # 权限不足时用 sudo 写入
+            logger.warning(f"[SFTP] 权限不足，使用 sudo 写入: {path}")
+            ssh = sftp.get_channel().get_transport().get_security_options()
+            # 通过 sftp 的 transport 获取 ssh 连接
+            transport = sftp.get_channel().get_transport()
+            tmp_path = f"/tmp/_pub_{hash(path) & 0xFFFFFFFF:08x}.tmp"
+            with sftp.open(tmp_path, "w") as f:
+                f.write(content.encode("utf-8"))
+            chan = transport.open_session()
+            chan.exec_command(f"sudo cp {tmp_path} {path} && sudo chmod 664 {path} && sudo chown ubuntu:www {path} && rm -f {tmp_path}")
+            chan.recv_exit_status()
 
     def _ensure_dir(self, ssh: paramiko.SSHClient, path: str):
         """确保远程目录存在（同步等待完成）"""
-        _, stdout, stderr = ssh.exec_command(f"mkdir -p {path}")
+        _, stdout, stderr = ssh.exec_command(f"mkdir -p {path} || sudo mkdir -p {path} && sudo chown ubuntu:www {path} && sudo chmod 775 {path}")
         stdout.channel.recv_exit_status()  # 阻塞等待命令完成
 
     def _bust_cache(self, sftp: paramiko.SFTPClient, site_root: str, site):
