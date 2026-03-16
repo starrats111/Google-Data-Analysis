@@ -1,5 +1,4 @@
 import api from './api'
-import { getToken } from './tokenHolder'
 
 const articleApi = {
   // 文章 CRUD
@@ -34,50 +33,29 @@ const articleApi = {
   // 商家推广（OPT-012）
   crawlMerchant: (data) => api.post('/api/article-gen/crawl', data, { timeout: 300000 }),
   generateMerchantArticle: async (data, onProgress) => {
-    const baseUrl = api.defaults.baseURL || ''
-    const headers = { 'Content-Type': 'application/json' }
-    const token = getToken()
-    if (token) headers['Authorization'] = `Bearer ${token}`
-    const controller = new AbortController()
-    const timeoutId = setTimeout(() => controller.abort(), 600000) // 10分钟超时
-    let resp
-    try {
-      resp = await fetch(`${baseUrl}/api/article-gen/merchant-article`, {
-        method: 'POST', headers, body: JSON.stringify(data), credentials: 'include',
-        signal: controller.signal,
-      })
-    } catch (e) {
-      clearTimeout(timeoutId)
-      if (e.name === 'AbortError') throw new Error('文章生成超时，请重试')
-      throw new Error(`网络错误: ${e.message}`)
-    }
-    clearTimeout(timeoutId)
-    if (!resp.ok) {
-      const err = await resp.json().catch(() => ({ detail: '生成失败' }))
-      throw new Error(err.detail || '生成失败')
-    }
-    const reader = resp.body.getReader()
-    const decoder = new TextDecoder()
-    let buffer = ''
-    let result = null
-    while (true) {
-      const { done, value } = await reader.read()
-      if (done) break
-      buffer += decoder.decode(value, { stream: true })
-      const lines = buffer.split('\n')
-      buffer = lines.pop() || ''
-      for (const line of lines) {
-        if (line.startsWith('data: ')) {
-          try {
-            const parsed = JSON.parse(line.slice(6))
-            if (parsed.status === 'generating' && onProgress) onProgress(parsed.progress)
-            if (parsed.status === 'done') result = parsed.result
-            if (parsed.status === 'error') throw new Error(parsed.detail)
-          } catch (e) { if (e.message !== 'generating') throw e }
-        }
+    // 1. 提交后台任务（秒级返回）
+    const submitRes = await api.post('/api/article-gen/merchant-article', data, { timeout: 30000 })
+    const taskId = submitRes.data?.task_id
+    if (!taskId) throw new Error('任务提交失败')
+
+    // 2. 轮询状态（每 3 秒，最多 10 分钟）
+    const maxAttempts = 200
+    for (let i = 0; i < maxAttempts; i++) {
+      await new Promise(r => setTimeout(r, 3000))
+      try {
+        const statusRes = await api.get(`/api/article-gen/merchant-article/${taskId}/status`, { timeout: 15000 })
+        const { status, progress, result, error } = statusRes.data || {}
+        if (onProgress && progress) onProgress(progress)
+        if (status === 'done' && result) return { data: result }
+        if (status === 'error') throw new Error(error || '文章生成失败')
+      } catch (e) {
+        // 网络抖动时继续轮询，不立即报错
+        if (e.response?.status === 404) throw new Error('任务不存在或已过期')
+        if (e.message?.includes('文章生成失败')) throw e
+        if (i > 5) console.warn(`轮询第 ${i + 1} 次网络异常，继续重试...`)
       }
     }
-    return { data: result }
+    throw new Error('文章生成超时，请刷新页面查看文章列表')
   },
   getTrackingLinks: (params) => api.get('/api/article-gen/tracking-links', { params }),
   searchImages: (data) => api.post('/api/article-gen/search-images', data),

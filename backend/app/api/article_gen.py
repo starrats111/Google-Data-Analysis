@@ -4,6 +4,9 @@ AI 生成 API（OPT-011/012/015）
 import json
 import logging
 import asyncio
+import uuid
+import threading
+import time as _time
 from typing import Optional, List
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, UploadFile, File, Form
@@ -24,6 +27,28 @@ from app.services.image_cache_service import image_cache_service
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/article-gen", tags=["AI生成"])
+
+# ============ 后台任务存储（内存，进程内共享） ============
+_tasks: dict = {}  # task_id -> {status, progress, result, error, created_at}
+_tasks_lock = threading.Lock()
+
+def _set_task(task_id: str, **kwargs):
+    with _tasks_lock:
+        if task_id not in _tasks:
+            _tasks[task_id] = {"created_at": _time.time()}
+        _tasks[task_id].update(kwargs)
+
+def _get_task(task_id: str) -> dict:
+    with _tasks_lock:
+        return _tasks.get(task_id, {}).copy()
+
+def _cleanup_old_tasks():
+    """清理 30 分钟前的任务"""
+    cutoff = _time.time() - 1800
+    with _tasks_lock:
+        to_del = [k for k, v in _tasks.items() if v.get("created_at", 0) < cutoff]
+        for k in to_del:
+            del _tasks[k]
 
 
 class TitleGenRequest(BaseModel):
@@ -448,33 +473,55 @@ async def generate_merchant_article(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """生成商家推广文章（OPT-012）— SSE 流式响应避免网关超时"""
-    async def event_stream():
-        loop = asyncio.get_event_loop()
-        import concurrent.futures
-        executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+    """生成商家推广文章（OPT-012）— 后台任务模式，前端轮询获取结果"""
+    _cleanup_old_tasks()
+    task_id = uuid.uuid4().hex[:16]
+    user_id = current_user.id
+    merchant_info = data.merchant_info
+    tracking_link = data.tracking_link
 
-        future = loop.run_in_executor(executor, _generate_article_sync,
-            data.title, data.merchant_info, data.tracking_link, data.keywords, data.language)
+    _set_task(task_id, status="generating", progress="AI 正在撰写文章...")
 
-        while not future.done():
-            yield f"data: {json.dumps({'status': 'generating', 'progress': 'AI 正在撰写文章...'})}\n\n"
-            await asyncio.sleep(3)
-
+    def _run():
         try:
-            result = future.result()
+            _set_task(task_id, progress="AI 模型生成中，请稍候...")
+            result = _generate_article_sync(
+                data.title, merchant_info, tracking_link, data.keywords, data.language)
+            _set_task(task_id, progress="保存追踪链接...")
             _save_tracking_link(
-                user_id=current_user.id,
-                merchant_url=data.merchant_info.get("url", ""),
-                tracking_link=data.tracking_link,
-                brand_name=data.merchant_info.get("brand_name", ""),
+                user_id=user_id,
+                merchant_url=merchant_info.get("url", ""),
+                tracking_link=tracking_link,
+                brand_name=merchant_info.get("brand_name", ""),
             )
-            yield f"data: {json.dumps({'status': 'done', 'result': result})}\n\n"
+            _set_task(task_id, status="done", result=result)
+            logger.info(f"[Task {task_id}] 文章生成完成: {data.title[:40]}")
         except Exception as e:
-            logger.error(f"商家文章生成失败: {e}")
-            yield f"data: {json.dumps({'status': 'error', 'detail': str(e)})}\n\n"
+            logger.error(f"[Task {task_id}] 文章生成失败: {e}")
+            _set_task(task_id, status="error", error=str(e))
 
-    return StreamingResponse(event_stream(), media_type="text/event-stream")
+    thread = threading.Thread(target=_run, daemon=True)
+    thread.start()
+
+    return {"task_id": task_id, "status": "generating"}
+
+
+@router.get("/merchant-article/{task_id}/status")
+async def get_merchant_article_status(
+    task_id: str,
+    current_user: User = Depends(get_current_user),
+):
+    """轮询文章生成任务状态"""
+    task = _get_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="任务不存在或已过期")
+    return {
+        "task_id": task_id,
+        "status": task.get("status", "unknown"),
+        "progress": task.get("progress", ""),
+        "result": task.get("result"),
+        "error": task.get("error"),
+    }
 
 
 def _save_tracking_link(user_id: int, merchant_url: str, tracking_link: str, brand_name: str, max_retries: int = 5):

@@ -2,6 +2,7 @@
 文章 CRUD API（OPT-011）
 """
 import logging
+import time as _time
 from datetime import datetime
 from typing import Optional
 
@@ -20,6 +21,22 @@ from app.models.site import PubSite
 from app.services import site_publisher
 from app.services.remote_publisher import remote_publisher
 from app.utils.slug import generate_slug
+
+logger = logging.getLogger(__name__)
+
+
+def _commit_with_retry(db: Session, max_retries: int = 5):
+    """SQLite 写操作重试，解决 database is locked"""
+    for attempt in range(max_retries):
+        try:
+            db.commit()
+            return
+        except Exception as e:
+            db.rollback()
+            if "database is locked" in str(e) and attempt < max_retries - 1:
+                _time.sleep(0.5 * (attempt + 1))
+                continue
+            raise
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/articles", tags=["文章管理"])
@@ -237,7 +254,7 @@ async def create_article(
         changed_by=current_user.username,
     )
     db.add(version)
-    db.commit()
+    _commit_with_retry(db)
     db.refresh(article)
 
     return _article_to_dict(article, db)
@@ -329,7 +346,7 @@ async def update_article(
             changed_by=current_user.username,
         ))
 
-    db.commit()
+    _commit_with_retry(db)
     db.refresh(article)
     return _article_to_dict(article, db)
 
@@ -349,7 +366,10 @@ async def delete_article(
     _check_article_permission(article, current_user)
 
     article.deleted_at = datetime.now()
-    db.commit()
+    try:
+        _commit_with_retry(db)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"删除失败: {str(e)}")
     return {"message": "文章已删除"}
 
 
@@ -434,7 +454,10 @@ async def publish_to_site(
         site.article_var_name = detected.get("article_var_name") or site.article_var_name
         site.article_html_pattern = detected.get("article_html_pattern") or site.article_html_pattern
 
-    db.commit()
+    try:
+        _commit_with_retry(db)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"数据库写入失败: {str(e)}")
 
     logger.info(f"文章已发布到网站: slug={article.slug}, site={site.site_name}, domain={site.domain}")
 
@@ -490,7 +513,10 @@ async def unpublish_from_site(
     article.site_id = None
     article.site_article_slug = None
     article.published_to_site = False
-    db.commit()
+    try:
+        _commit_with_retry(db)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"数据库写入失败: {str(e)}")
 
     return {"message": "文章已从网站移除"}
 
