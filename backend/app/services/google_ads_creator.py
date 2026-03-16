@@ -342,7 +342,7 @@ class GoogleAdsCreator:
                 customer_id, str(AD_GROUP_TEMP_ID)
             )
             criterion.keyword.text = kw
-            criterion.keyword.match_type = client.enums.KeywordMatchTypeEnum.BROAD
+            criterion.keyword.match_type = client.enums.KeywordMatchTypeEnum.PHRASE
             operations.append(kw_op)
 
         asset_service = client.get_service("AssetService")
