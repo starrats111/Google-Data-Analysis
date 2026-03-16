@@ -310,25 +310,37 @@ class RemotePublisher:
 
     def _detect_site_type_inner(self, sftp: paramiko.SFTPClient, site_root: str) -> dict:
         """内部检测逻辑（已有 sftp 连接时使用）"""
-        # A1: assets/js/main.js + const posts
+        # A1: assets/js/main.js + const/var posts
         p = f"{site_root}/assets/js/main.js"
-        if self._remote_file_exists(sftp, p) and self._remote_file_contains(sftp, p, "const posts"):
-            return {
-                "site_type": SITE_TYPE_POSTS_ASSETS_JS,
-                "data_js_path": "assets/js/main.js",
-                "article_var_name": "posts",
-                "article_html_pattern": "post-{slug}.html",
-            }
+        if self._remote_file_exists(sftp, p):
+            content = ""
+            try:
+                content = self._sftp_read(sftp, p)
+            except Exception:
+                pass
+            if "const posts" in content or "var posts" in content:
+                return {
+                    "site_type": SITE_TYPE_POSTS_ASSETS_JS,
+                    "data_js_path": "assets/js/main.js",
+                    "article_var_name": "posts",
+                    "article_html_pattern": "post-{slug}.html",
+                }
 
-        # A2: assets/main.js + const posts
+        # A2: assets/main.js + const/var posts
         p = f"{site_root}/assets/main.js"
-        if self._remote_file_exists(sftp, p) and self._remote_file_contains(sftp, p, "const posts"):
-            return {
-                "site_type": SITE_TYPE_POSTS_ASSETS,
-                "data_js_path": "assets/main.js",
-                "article_var_name": "posts",
-                "article_html_pattern": "post-{slug}.html",
-            }
+        if self._remote_file_exists(sftp, p):
+            content = ""
+            try:
+                content = self._sftp_read(sftp, p)
+            except Exception:
+                pass
+            if "const posts" in content or "var posts" in content:
+                return {
+                    "site_type": SITE_TYPE_POSTS_ASSETS,
+                    "data_js_path": "assets/main.js",
+                    "article_var_name": "posts",
+                    "article_html_pattern": "post-{slug}.html",
+                }
 
         # ── SPA 站点检测：article.html + JS 数据文件 ──
         has_article_html = self._remote_file_exists(sftp, f"{site_root}/article.html")
