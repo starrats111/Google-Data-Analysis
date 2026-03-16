@@ -166,7 +166,10 @@ RESTRICTED_CATEGORY_POLICIES = {
         "label": "武器",
         "keywords": [
             "firearm", "ammunition", "gun", "rifle", "pistol", "shotgun",
-            "weapon", "knife", "sword", "tactical",
+            "weapon", "knife", "sword", "tactical", "handgun", "revolver",
+            "ar-15", "ar15", "ak-47", "ak47", "holster", "gun safe", "ammo",
+            "bullet", "silencer", "suppressor", "body armor", "stun gun",
+            "taser", "crossbow", "combat knife", "machete",
         ],
         "policy": """### 武器广告政策（严格限制）
 - 枪支、弹药、爆炸物广告完全禁止
@@ -174,6 +177,83 @@ RESTRICTED_CATEGORY_POLICIES = {
 - 禁止使用暴力相关词汇
 - 安全用语: "Outdoor tools" "Camping essentials" "Precision craftsmanship"
 - 禁止用语: "Deadly" "Kill" "Attack" "Combat" "Assault"
+""",
+    },
+    "tobacco": {
+        "label": "烟草/电子烟",
+        "keywords": [
+            "tobacco", "cigarette", "cigar", "vape", "vaping", "e-cigarette",
+            "e-cig", "juul", "iqos", "hookah", "shisha", "nicotine",
+            "smokeless tobacco", "chewing tobacco", "snuff", "snus",
+            "disposable vape", "vape juice", "e-liquid", "e-juice",
+            "nicotine pouch", "zyn", "pipe tobacco", "rolling paper",
+        ],
+        "policy": """### 烟草/电子烟广告政策（完全禁止）
+- 烟草产品广告完全禁止，包括香烟、雪茄、烟斗烟草
+- 电子烟/雾化器广告完全禁止，包括含尼古丁和不含尼古丁的
+- 烟草配件（滤嘴、卷纸等）也禁止
+- 尼古丁替代疗法（如尼古丁贴片）需要药品认证
+- ⚠ 建议: 此类商家不要投放 Google Ads
+""",
+    },
+    "cbd": {
+        "label": "CBD/大麻",
+        "keywords": [
+            "cbd", "cannabidiol", "cannabis", "marijuana", "hemp oil",
+            "hemp extract", "thc", "delta-8", "delta 8", "dispensary",
+            "weed", "cbd oil", "cbd gummies", "hemp flower", "cannabis oil",
+            "sativa", "indica", "kush", "edible", "tincture",
+        ],
+        "policy": """### CBD/大麻广告政策（严格限制）
+- 大多数国家完全禁止大麻/CBD广告
+- 美国: 仅允许FDA批准的外用CBD产品广告，需Google认证
+- 加拿大: 仅允许持牌生产商的品牌广告
+- 禁止声称CBD有医疗效果
+- 禁止展示大麻叶等相关图片
+- ⚠ 建议: 除非有Google认证，否则不要投放
+""",
+    },
+    "weightloss": {
+        "label": "减肥产品",
+        "keywords": [
+            "weight loss pill", "diet pill", "fat burner", "appetite suppressant",
+            "slimming", "detox tea", "skinny tea", "garcinia", "keto pill",
+            "metabolism booster", "carb blocker", "thermogenic", "ephedra",
+            "belly fat", "lose weight fast",
+        ],
+        "policy": """### 减肥产品广告政策（限制）
+- 禁止不切实际的减肥承诺（如"一周瘦30斤"）
+- 禁止使用前后对比图
+- 禁止声称有医疗效果
+- 禁止使用"miracle""guaranteed""effortless"等词
+- 安全用语: "Support your fitness goals" "Healthy lifestyle" "Wellness supplement"
+""",
+    },
+    "dating": {
+        "label": "约会交友",
+        "keywords": [
+            "dating site", "dating app", "matchmaking", "hookup",
+            "mail order bride", "sugar daddy", "sugar baby", "affair",
+            "ashley madison", "escort",
+        ],
+        "policy": """### 约会服务广告政策（限制）
+- 禁止推广婚外情/付费陪伴/色情服务
+- 约会服务需遵守年龄限制
+- 禁止性暗示文案和图片
+- 安全用语: "Find meaningful connections" "Meet like-minded people"
+""",
+    },
+    "political": {
+        "label": "政治广告",
+        "keywords": [
+            "political campaign", "vote for", "election", "political action",
+            "super pac", "campaign fund", "ballot", "referendum",
+        ],
+        "policy": """### 政治广告政策（需认证）
+- 必须通过Google政治广告认证
+- 必须包含"付费广告"披露信息
+- 必须披露广告资助方
+- 仅限特定国家
 """,
     },
 }

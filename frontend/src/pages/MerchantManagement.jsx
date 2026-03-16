@@ -61,37 +61,165 @@ function translateCategory(raw) {
 
 /* ── Google Ads 限制品检测 ── */
 const RESTRICTED_RULES = [
+  // ── 酒类 ──
   {
     id: 'alcohol',
     label: '酒类',
     color: '#faad14',
-    keywords: ['whiskey', 'whisky', 'vodka', 'rum', 'gin', 'tequila', 'brandy', 'cognac', 'bourbon', 'wine', 'beer', 'brewery', 'brewing', 'distillery', 'spirits', 'liquor', 'champagne', 'sake', 'cider', 'mead', 'absinthe', 'moonshine', 'cocktail', 'scotch', 'ale', 'lager', 'stout', 'prosecco', 'mezcal', 'soju', 'baijiu'],
-    catKeywords: ['alcohol', 'wine', 'beer', 'spirits', 'liquor', 'beverage'],
-    tip: '酒类广告限制：仅限批准国家投放（US/UK/CA/AU/DE等61国），不得面向未成年人，着陆页需标注酒精含量(ABV)，不可推广过量饮酒。部分国家有ABV上限。',
+    keywords: [
+      'whiskey', 'whisky', 'vodka', 'rum ', ' rum', 'gin ', ' gin', 'tequila', 'brandy', 'cognac',
+      'bourbon', 'wine', 'winery', 'vineyard', 'beer', 'brewery', 'brewing', 'distillery',
+      'spirits', 'liquor', 'champagne', 'sake', 'cider', 'mead', 'absinthe', 'moonshine',
+      'cocktail', 'scotch', 'ale ', ' ale', 'lager', 'stout', 'prosecco', 'mezcal', 'soju',
+      'baijiu', 'grappa', 'vermouth', 'aperitif', 'digestif', 'schnapps', 'armagnac',
+      'port wine', 'sherry', 'malt', 'pilsner', 'ipa ', 'craft beer', 'hard seltzer',
+      'hard cider', 'booze', 'hooch', 'tipsy', 'barware', 'sommelier', 'cellar',
+      'decanter', 'wine club', 'beer club', 'liqueur', 'bitters', 'amaro',
+    ],
+    catKeywords: ['alcohol', 'wine', 'beer', 'spirits', 'liquor', 'beverage', 'brewing'],
+    tip: '酒类广告限制：仅限批准国家投放（US/UK/CA/AU/DE等61国），不得面向未成年人，着陆页需标注酒精含量(ABV)，不可推广过量饮酒。',
   },
+  // ── 赌博 ──
   {
     id: 'gambling',
     label: '赌博',
     color: '#ff4d4f',
-    keywords: ['casino', 'poker', 'betting', 'gamble', 'gambling', 'lottery', 'slot', 'bingo', 'wager', 'sportsbook'],
-    catKeywords: ['gambling', 'casino', 'betting'],
-    tip: '赌博广告需要 Google 认证，仅限特定国家，需持有当地合法牌照。建议不做。',
+    keywords: [
+      'casino', 'poker', 'betting', 'gamble', 'gambling', 'lottery', 'slot machine',
+      'bingo', 'wager', 'sportsbook', 'jackpot', 'roulette', 'blackjack', 'baccarat',
+      'craps', 'keno', 'scratch card', 'sweepstakes', 'bookmaker', 'odds ', 'parlay',
+      'fantasy sport', 'daily fantasy', 'fanduel', 'draftkings', 'betway', 'bet365',
+      'sportingbet', 'ladbrokes', 'william hill', 'paddy power', 'unibet',
+    ],
+    catKeywords: ['gambling', 'casino', 'betting', 'lottery', 'wagering'],
+    tip: '赌博广告需要 Google 认证和当地牌照，仅限特定国家。建议不做。',
   },
+  // ── 医药/处方药 ──
   {
     id: 'pharma',
     label: '医药',
     color: '#ff7a45',
-    keywords: ['pharmacy', 'pharmaceutical', 'prescription', 'drug store', 'rx '],
-    catKeywords: ['pharmacy', 'pharmaceutical', 'prescription drug'],
+    keywords: [
+      'pharmacy', 'pharmaceutical', 'prescription', 'drug store', 'rx ',
+      'compounding pharmacy', 'online pharmacy', 'mail order pharmacy',
+      'generic drug', 'otc drug', 'controlled substance',
+    ],
+    catKeywords: ['pharmacy', 'pharmaceutical', 'prescription drug', 'drugstore'],
     tip: '处方药/药房广告需要 Google 药品认证。OTC保健品通常可以，但需确认着陆页合规。',
   },
+  // ── 武器/弹药 ──
   {
     id: 'weapon',
     label: '武器',
     color: '#ff4d4f',
-    keywords: ['firearm', 'ammunition', 'gun ', 'guns ', 'rifle', 'pistol', 'shotgun', 'weapon'],
-    catKeywords: ['weapon', 'firearm', 'gun'],
+    keywords: [
+      'firearm', 'ammunition', 'gun ', 'guns ', 'rifle', 'pistol', 'shotgun', 'weapon',
+      'handgun', 'revolver', 'assault rifle', 'ar-15', 'ar15', 'ak-47', 'ak47',
+      'holster', 'gun safe', 'gun shop', 'ammo ', 'ammo.', 'bullet', 'cartridge',
+      'silencer', 'suppressor', 'magazine clip', 'tactical gear', 'body armor',
+      'stun gun', 'taser', 'pepper spray', 'switchblade', 'brass knuckle',
+      'crossbow', 'throwing knife', 'combat knife', 'machete',
+    ],
+    catKeywords: ['weapon', 'firearm', 'gun', 'ammunition', 'arms', 'tactical'],
     tip: '武器/弹药广告严格禁止。Google Ads 不允许推广枪支、弹药及爆炸物。',
+  },
+  // ── 烟草/电子烟 ──
+  {
+    id: 'tobacco',
+    label: '烟草',
+    color: '#ff4d4f',
+    keywords: [
+      'tobacco', 'cigarette', 'cigar', 'vape', 'vaping', 'e-cigarette', 'e-cig',
+      'juul', 'iqos', 'hookah', 'shisha', 'pipe tobacco', 'rolling paper',
+      'nicotine', 'smokeless tobacco', 'chewing tobacco', 'snuff', 'snus',
+      'disposable vape', 'vape juice', 'e-liquid', 'e-juice', 'mod box',
+      'pod system', 'nicotine pouch', 'zyn ', 'tobacco leaf',
+    ],
+    catKeywords: ['tobacco', 'cigarette', 'vape', 'vaping', 'e-cigarette', 'smoking', 'nicotine'],
+    tip: '烟草/电子烟广告完全禁止。Google Ads 不允许推广任何烟草产品、电子烟及相关配件。',
+  },
+  // ── 成人/情趣 ──
+  {
+    id: 'adult',
+    label: '成人',
+    color: '#eb2f96',
+    keywords: [
+      'adult toy', 'sex toy', 'vibrator', 'dildo', 'lingerie', 'erotic',
+      'adult shop', 'adult store', 'pleasure', 'intimacy', 'bondage', 'fetish',
+      'stripper', 'escort', 'xxx', 'porn', 'nude', 'sexy costume',
+      'adult novelty', 'love doll', 'intimate apparel', 'sensual',
+    ],
+    catKeywords: ['adult', 'erotic', 'sex', 'xxx', 'adult entertainment', 'intimate'],
+    tip: '成人内容广告严格限制。露骨色情完全禁止，情趣用品需谨慎措辞，不得使用性暗示文案。',
+  },
+  // ── CBD/大麻 ──
+  {
+    id: 'cbd',
+    label: 'CBD/大麻',
+    color: '#52c41a',
+    keywords: [
+      'cbd ', ' cbd', 'cannabidiol', 'cannabis', 'marijuana', 'hemp oil', 'hemp extract',
+      'thc ', ' thc', 'delta-8', 'delta 8', 'delta-9', 'edible', 'dispensary',
+      'weed ', ' weed', 'gummy', 'tincture', 'full spectrum', 'broad spectrum',
+      'cbd oil', 'cbd gummies', 'hemp flower', 'cannabis oil', 'pot ', 'kush',
+      'sativa', 'indica', 'hybrid strain', 'dab ', 'concentrate',
+    ],
+    catKeywords: ['cbd', 'cannabis', 'marijuana', 'hemp', 'dispensary'],
+    tip: 'CBD/大麻广告严格限制。大多数国家完全禁止。美国部分州允许 FDA 批准的 CBD 产品广告，需 Google 认证。',
+  },
+  // ── 金融/加密货币 ──
+  {
+    id: 'finance',
+    label: '金融',
+    color: '#1890ff',
+    keywords: [
+      'payday loan', 'cash advance', 'title loan', 'pawn shop', 'debt collection',
+      'crypto exchange', 'bitcoin trading', 'forex trading', 'binary option',
+      'ico ', 'initial coin offering', 'nft marketplace', 'defi ', 'yield farming',
+      'margin trading', 'leverage trading', 'penny stock', 'pump and dump',
+      'credit repair', 'debt settlement', 'bankruptcy service',
+    ],
+    catKeywords: ['cryptocurrency', 'forex', 'binary option', 'payday loan', 'crypto'],
+    tip: '金融服务广告需遵守当地法规。加密货币广告需 Google 认证，高利贷/掠夺性贷款禁止。',
+  },
+  // ── 减肥/保健品 ──
+  {
+    id: 'weightloss',
+    label: '减肥',
+    color: '#fa8c16',
+    keywords: [
+      'weight loss pill', 'diet pill', 'fat burner', 'appetite suppressant',
+      'slimming', 'detox tea', 'skinny tea', 'garcinia', 'keto pill',
+      'metabolism booster', 'carb blocker', 'thermogenic', 'ephedra',
+      'weight loss supplement', 'belly fat', 'lose weight fast',
+    ],
+    catKeywords: ['weight loss', 'diet pill', 'slimming', 'fat burner'],
+    tip: '减肥产品广告限制：禁止不切实际的承诺（如"一周瘦30斤"），禁止使用前后对比图，不得声称有医疗效果。',
+  },
+  // ── 政治广告 ──
+  {
+    id: 'political',
+    label: '政治',
+    color: '#722ed1',
+    keywords: [
+      'political campaign', 'vote for', 'elect ', 'election', 'political action',
+      'super pac', 'campaign fund', 'ballot', 'referendum', 'political party',
+    ],
+    catKeywords: ['political', 'election', 'campaign', 'government'],
+    tip: '政治广告需要 Google 认证和身份验证，必须包含"付费广告"披露信息。',
+  },
+  // ── 约会交友 ──
+  {
+    id: 'dating',
+    label: '约会',
+    color: '#eb2f96',
+    keywords: [
+      'dating site', 'dating app', 'matchmaking', 'singles', 'hookup',
+      'mail order bride', 'sugar daddy', 'sugar baby', 'affair', 'ashley madison',
+      'tinder', 'bumble', 'hinge', 'okcupid', 'plenty of fish', 'eharmony',
+    ],
+    catKeywords: ['dating', 'matchmaking', 'personals', 'romance'],
+    tip: '约会服务广告有限制：禁止推广婚外情/付费陪伴服务，需遵守年龄限制。',
   },
 ]
 
