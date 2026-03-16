@@ -734,6 +734,8 @@ const PublishWizard = ({ drawerMode = false }) => {
         meta_keywords: merchantArticle.meta_keywords,
         ai_model_used: 'gemini',
         merchant_url: merchantUrl,
+        merchant_name: crawlResult?.brand_name || campaignResult?.merchant_name || '',
+        merchant_mid: merchantMid?.trim() || '',
         tracking_link: trackingLink,
         language,
         category_name: merchantArticle.category || crawlResult?.analysis?.category || null,
