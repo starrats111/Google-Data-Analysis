@@ -92,6 +92,7 @@ class GoogleAdsCreator:
         callouts: Optional[List[str]] = None,
         image_urls: Optional[List[str]] = None,
         logo_url: Optional[str] = None,
+        compliance: Optional[Dict] = None,
     ) -> Dict:
         """一次 API 调用创建完整广告结构（含可选素材）。"""
         mcc = self.db.query(GoogleMccAccount).filter(GoogleMccAccount.id == mcc_id).first()
@@ -127,6 +128,7 @@ class GoogleAdsCreator:
                 callouts=callouts,
                 image_urls=image_urls,
                 logo_url=logo_url,
+                compliance=compliance,
             )
 
             # 执行打包 Mutate（原子操作）
@@ -196,6 +198,7 @@ class GoogleAdsCreator:
         callouts: Optional[List[str]] = None,
         image_urls: Optional[List[str]] = None,
         logo_url: Optional[str] = None,
+        compliance: Optional[Dict] = None,
     ) -> list:
         """构建打包 Mutate 操作列表（使用临时 ID + 读取默认设置 + 可选素材）"""
         defaults = _get_ad_defaults()
@@ -443,6 +446,42 @@ class GoogleAdsCreator:
                 operations.append(ca_op)
                 next_temp_id -= 1
                 logger.info("[AdsCreator] 添加商家图标")
+
+        # ── 限制品合规：年龄定向（排除未成年人群）──
+        if compliance and compliance.get("exclude_minors"):
+            age_targeting = compliance.get("age_targeting", "21_65")
+            # Google Ads 年龄段枚举
+            AGE_RANGES = {
+                "18_24": "AGE_RANGE_18_24",
+                "25_34": "AGE_RANGE_25_34",
+                "35_44": "AGE_RANGE_35_44",
+                "45_54": "AGE_RANGE_45_54",
+                "55_64": "AGE_RANGE_55_64",
+                "65_UP": "AGE_RANGE_65_UP",
+                "UNDETERMINED": "AGE_RANGE_UNDETERMINED",
+            }
+            # 根据年龄定向设置确定要排除的年龄段
+            exclude_ranges = ["UNDETERMINED"]  # 始终排除未确定年龄
+            if age_targeting in ("21_65", "25_65"):
+                exclude_ranges.append("18_24")  # 排除 18-24
+            if age_targeting == "25_65":
+                pass  # 18_24 已排除
+            # 65+ 不排除
+
+            for age_key in exclude_ranges:
+                enum_name = AGE_RANGES.get(age_key)
+                if not enum_name:
+                    continue
+                try:
+                    age_op = client.get_type("MutateOperation")
+                    age_criterion = age_op.ad_group_criterion_operation.create
+                    age_criterion.ad_group = f"customers/{customer_id}/adGroups/{AD_GROUP_TEMP_ID}"
+                    age_criterion.age_range.type_ = client.enums.AgeRangeTypeEnum[enum_name].value
+                    age_criterion.negative = True  # 排除该年龄段
+                    operations.append(age_op)
+                    logger.info(f"[AdsCreator] 合规：排除年龄段 {enum_name}")
+                except Exception as e:
+                    logger.warning(f"[AdsCreator] 年龄排除失败 {age_key}: {e}")
 
         logger.info(f"[AdsCreator] 构建 {len(operations)} 个 Mutate 操作 (campaign={campaign_name})")
         return operations

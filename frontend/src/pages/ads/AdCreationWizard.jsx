@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react'
-import { Steps, Card, Button, Space, Table, Input, InputNumber, Select, message, Spin, Typography, Tag, Alert, Row, Col, Divider, Collapse, Modal, Switch, Tooltip } from 'antd'
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'
+import { Steps, Card, Button, Space, Table, Input, InputNumber, Select, message, Spin, Typography, Tag, Alert, Row, Col, Divider, Collapse, Modal, Switch, Tooltip, Checkbox } from 'antd'
 import { ThunderboltOutlined, SearchOutlined, RocketOutlined, LinkOutlined, BulbOutlined, LoadingOutlined, CheckCircleOutlined, GlobalOutlined, CopyOutlined, ReloadOutlined, PictureOutlined, WarningOutlined } from '@ant-design/icons'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import api from '../../services/api'
@@ -99,6 +99,19 @@ export default function AdCreationWizard() {
   const [dailyBudget, setDailyBudget] = useState(10)
   const adDefaultBudgetRef = useRef(null)
   const [createResult, setCreateResult] = useState(null)
+
+  // 限制品合规设置
+  const merchantRestrictions = useMemo(() => detectMerchantRestrictions(merchantName), [merchantName])
+  const isRestricted = merchantRestrictions.length > 0
+  const isAlcohol = merchantRestrictions.some(r => r.label === '酒类限制品')
+  const isGambling = merchantRestrictions.some(r => r.label === '赌博限制品')
+  const [complianceSettings, setComplianceSettings] = useState({
+    excludeMinors: true,        // 排除未成年人群
+    ageTargeting: '21_65',      // 年龄定向: 21-65
+    addResponsibleMsg: true,    // 添加负责任声明
+    responsibleMsg: 'Drink Responsibly. Must be 21+.',
+    confirmCompliance: false,   // 确认已阅读政策
+  })
 
   // 广告素材开关
   const [sitelinks, setSitelinks] = useState([])
@@ -335,6 +348,16 @@ export default function AdCreationWizard() {
       if (enableCallouts && callouts.length > 0) payload.callouts = callouts
       if (enableImages && merchantImages.length > 0) payload.image_urls = merchantImages.slice(0, 3)
       if (enableLogo && merchantLogo) payload.logo_url = merchantLogo
+      // 限制品合规设置
+      if (isRestricted) {
+        payload.compliance = {
+          restricted_categories: merchantRestrictions.map(r => r.label),
+          exclude_minors: complianceSettings.excludeMinors,
+          age_targeting: complianceSettings.ageTargeting,
+          add_responsible_msg: complianceSettings.addResponsibleMsg,
+          responsible_msg: complianceSettings.responsibleMsg,
+        }
+      }
       const res = await api.post('/api/ad-creation/create-campaign', payload)
       setCreateResult(res.data)
       setConfirmModalOpen(false)
@@ -781,13 +804,20 @@ export default function AdCreationWizard() {
       <Modal
         title="确认创建广告"
         open={confirmModalOpen}
-        onOk={handleCreateAd}
+        onOk={() => {
+          if (isRestricted && !complianceSettings.confirmCompliance) {
+            message.warning('请先确认已阅读限制品类政策')
+            return
+          }
+          handleCreateAd()
+        }}
         onCancel={() => setConfirmModalOpen(false)}
-        okText="确认创建"
+        okText={isRestricted ? '确认合规并创建' : '确认创建'}
+        okButtonProps={isRestricted ? { danger: !complianceSettings.confirmCompliance } : {}}
         cancelText="取消"
         confirmLoading={loading}
         maskClosable={false}
-        width={520}
+        width={isRestricted ? 620 : 520}
       >
         <Space direction="vertical" size={12} style={{ width: '100%' }}>
           <Row>
@@ -818,6 +848,90 @@ export default function AdCreationWizard() {
               </Tag>
             </Col>
           </Row>
+          {isRestricted && (
+            <>
+              <Divider style={{ margin: '8px 0' }} />
+              <Alert
+                type="warning"
+                showIcon
+                icon={<WarningOutlined />}
+                style={{ marginBottom: 8 }}
+                message={`⚠ 限制品类: ${merchantRestrictions.map(r => r.label).join(', ')}`}
+                description="以下合规设置将自动应用到广告中，确保符合 Google Ads 政策。"
+              />
+              <div style={{ background: '#fffbe6', border: '1px solid #ffe58f', borderRadius: 6, padding: 12 }}>
+                <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                  <Row align="middle">
+                    <Col span={10}>
+                      <Checkbox
+                        checked={complianceSettings.excludeMinors}
+                        onChange={e => setComplianceSettings(s => ({ ...s, excludeMinors: e.target.checked }))}
+                      >
+                        <Typography.Text strong style={{ fontSize: 12 }}>排除未成年人群</Typography.Text>
+                      </Checkbox>
+                    </Col>
+                    <Col span={14}>
+                      <Typography.Text type="secondary" style={{ fontSize: 11 }}>
+                        自动排除 18 岁以下受众（Google Ads 年龄定向）
+                      </Typography.Text>
+                    </Col>
+                  </Row>
+                  <Row align="middle">
+                    <Col span={10}>
+                      <Typography.Text strong style={{ fontSize: 12 }}>年龄定向范围</Typography.Text>
+                    </Col>
+                    <Col span={14}>
+                      <Select
+                        size="small"
+                        style={{ width: 180 }}
+                        value={complianceSettings.ageTargeting}
+                        onChange={v => setComplianceSettings(s => ({ ...s, ageTargeting: v }))}
+                        options={[
+                          { value: '21_65', label: '21-65岁（美国酒类法定年龄）' },
+                          { value: '25_65', label: '25-65岁（更保守）' },
+                          { value: '18_65', label: '18-65岁（部分国家法定年龄）' },
+                        ]}
+                      />
+                    </Col>
+                  </Row>
+                  {isAlcohol && (
+                    <Row align="middle">
+                      <Col span={10}>
+                        <Checkbox
+                          checked={complianceSettings.addResponsibleMsg}
+                          onChange={e => setComplianceSettings(s => ({ ...s, addResponsibleMsg: e.target.checked }))}
+                        >
+                          <Typography.Text strong style={{ fontSize: 12 }}>添加负责任饮酒声明</Typography.Text>
+                        </Checkbox>
+                      </Col>
+                      <Col span={14}>
+                        <Input
+                          size="small"
+                          value={complianceSettings.responsibleMsg}
+                          onChange={e => setComplianceSettings(s => ({ ...s, responsibleMsg: e.target.value }))}
+                          disabled={!complianceSettings.addResponsibleMsg}
+                          maxLength={90}
+                          style={{ fontSize: 11 }}
+                        />
+                      </Col>
+                    </Row>
+                  )}
+                  <Row>
+                    <Col span={24}>
+                      <Checkbox
+                        checked={complianceSettings.confirmCompliance}
+                        onChange={e => setComplianceSettings(s => ({ ...s, confirmCompliance: e.target.checked }))}
+                      >
+                        <Typography.Text style={{ fontSize: 12, color: '#d4380d' }}>
+                          我已阅读并理解 Google Ads 限制品类政策，确认广告内容合规
+                        </Typography.Text>
+                      </Checkbox>
+                    </Col>
+                  </Row>
+                </Space>
+              </div>
+            </>
+          )}
           <Row>
             <Col span={8}><Typography.Text strong>关键词</Typography.Text></Col>
             <Col span={16}>{selectedKeywords.length} 个</Col>

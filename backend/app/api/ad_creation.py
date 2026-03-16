@@ -65,6 +65,7 @@ class CreateAdRequest(BaseModel):
     callouts: Optional[List[str]] = None
     image_urls: Optional[List[str]] = None
     logo_url: Optional[str] = None
+    compliance: Optional[dict] = None  # 限制品合规设置
 
 
 class ModifyAdCopyRequest(BaseModel):
@@ -442,13 +443,20 @@ async def create_campaign(
     creator = GoogleAdsCreator(db)
     try:
         merchant = assignment.merchant
+        # 如果有合规设置且需要添加负责任声明，自动追加到 descriptions
+        descriptions_final = list(data.descriptions)
+        if data.compliance and data.compliance.get("add_responsible_msg"):
+            msg = data.compliance.get("responsible_msg", "")
+            if msg and msg not in descriptions_final:
+                descriptions_final.append(msg)
+
         result = creator.create_full_campaign(
             mcc_id=data.mcc_id,
             customer_id=data.customer_id,
             merchant_name=data.merchant_name,
             keywords=data.keywords,
             headlines=data.headlines,
-            descriptions=data.descriptions,
+            descriptions=descriptions_final,
             daily_budget=data.daily_budget,
             target_country=data.target_country,
             mode=data.mode,
@@ -461,6 +469,7 @@ async def create_campaign(
             callouts=data.callouts,
             image_urls=data.image_urls,
             logo_url=data.logo_url,
+            compliance=data.compliance,
         )
 
         # 更新 assignment 记录
