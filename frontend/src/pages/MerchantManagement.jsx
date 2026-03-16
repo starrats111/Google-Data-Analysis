@@ -656,23 +656,47 @@ const MerchantManagement = () => {
   })
   const [adDefaultsForm] = Form.useForm()
 
-  const ALL_CLAIM_COUNTRIES = [
-    { value: 'US', label: '美国 (English)' },
-    { value: 'UK', label: '英国 (English)' },
-    { value: 'CA', label: '加拿大 (English)' },
-    { value: 'AU', label: '澳大利亚 (English)' },
-    { value: 'DE', label: '德国 (German)' },
-    { value: 'FR', label: '法国 (French)' },
-    { value: 'JP', label: '日本 (Japanese)' },
-    { value: 'BR', label: '巴西 (Portuguese)' },
-  ]
+  // 完整国家代码映射（ISO 3166-1 alpha-2）
+  const COUNTRY_MAP = {
+    US: '美国', UK: '英国', GB: '英国', CA: '加拿大', AU: '澳大利亚', DE: '德国',
+    FR: '法国', JP: '日本', BR: '巴西', IT: '意大利', ES: '西班牙', NL: '荷兰',
+    BE: '比利时', AT: '奥地利', CH: '瑞士', IE: '爱尔兰', NZ: '新西兰', ZA: '南非',
+    MX: '墨西哥', AR: '阿根廷', CL: '智利', CO: '哥伦比亚', PE: '秘鲁', SE: '瑞典',
+    NO: '挪威', DK: '丹麦', FI: '芬兰', PL: '波兰', CZ: '捷克', HU: '匈牙利',
+    RO: '罗马尼亚', BG: '保加利亚', HR: '克罗地亚', SK: '斯洛伐克', SI: '斯洛文尼亚',
+    PT: '葡萄牙', GR: '希腊', KR: '韩国', TW: '台湾', HK: '香港', SG: '新加坡',
+    MY: '马来西亚', TH: '泰国', PH: '菲律宾', VN: '越南', IN: '印度', ID: '印尼',
+    TR: '土耳其', SA: '沙特', AE: '阿联酋', IL: '以色列', EG: '埃及', NG: '尼日利亚',
+    KE: '肯尼亚', RU: '俄罗斯', UA: '乌克兰', CN: '中国', PK: '巴基斯坦', BD: '孟加拉',
+    LK: '斯里兰卡', MM: '缅甸', KH: '柬埔寨', LA: '老挝', NP: '尼泊尔',
+    EC: '厄瓜多尔', UY: '乌拉圭', PY: '巴拉圭', BO: '玻利维亚', VE: '委内瑞拉',
+    CR: '哥斯达黎加', PA: '巴拿马', GT: '危地马拉', DO: '多米尼加', CU: '古巴',
+    JM: '牙买加', TT: '特立尼达', PR: '波多黎各', IS: '冰岛', LU: '卢森堡',
+    MT: '马耳他', CY: '塞浦路斯', EE: '爱沙尼亚', LV: '拉脱维亚', LT: '立陶宛',
+    RS: '塞尔维亚', BA: '波黑', MK: '北马其顿', AL: '阿尔巴尼亚', ME: '黑山',
+    GE: '格鲁吉亚', AM: '亚美尼亚', AZ: '阿塞拜疆', KZ: '哈萨克斯坦',
+    QA: '卡塔尔', KW: '科威特', BH: '巴林', OM: '阿曼', JO: '约旦', LB: '黎巴嫩',
+    MA: '摩洛哥', TN: '突尼斯', GH: '加纳', TZ: '坦桑尼亚', UG: '乌干达',
+    ET: '埃塞俄比亚', MU: '毛里求斯', SN: '塞内加尔', CI: '科特迪瓦',
+  }
+
+  const makeCountryOption = (code) => {
+    const c = code.toUpperCase()
+    const name = COUNTRY_MAP[c] || c
+    return { value: c, label: `${name} (${c})` }
+  }
 
   const claimCountryOptions = useMemo(() => {
     const regions = claimRecord?.support_regions
-    if (!regions || !Array.isArray(regions) || regions.length === 0) return ALL_CLAIM_COUNTRIES
-    const codes = regions.map(r => (r.code || r || '').toUpperCase())
-    const filtered = ALL_CLAIM_COUNTRIES.filter(c => codes.includes(c.value))
-    return filtered.length > 0 ? filtered : ALL_CLAIM_COUNTRIES
+    if (!regions || !Array.isArray(regions) || regions.length === 0) {
+      // 无支持地区信息时，返回常用国家
+      return ['US','UK','CA','AU','DE','FR','JP','BR','IT','ES','NL','KR','SG','IN','MX'].map(makeCountryOption)
+    }
+    const codes = regions.map(r => (r.code || r || '').toUpperCase()).filter(Boolean)
+    if (codes.length === 0) {
+      return ['US','UK','CA','AU','DE','FR','JP','BR'].map(makeCountryOption)
+    }
+    return codes.map(makeCountryOption)
   }, [claimRecord])
 
   const loadAdDefaults = async () => {
@@ -714,9 +738,9 @@ const MerchantManagement = () => {
   const openClaimModal = (record) => {
     setClaimRecord(record)
     const regions = record.support_regions || []
-    const codes = regions.map(r => (r.code || r || '').toUpperCase())
-    const firstMatch = ALL_CLAIM_COUNTRIES.find(c => codes.includes(c.value))
-    setClaimCountry(firstMatch ? firstMatch.value : 'US')
+    const codes = regions.map(r => (r.code || r || '').toUpperCase()).filter(Boolean)
+    // 默认选第一个支持地区，没有则 US
+    setClaimCountry(codes.length > 0 ? codes[0] : 'US')
     setClaimMode('test')
     setClaimModalOpen(true)
   }
