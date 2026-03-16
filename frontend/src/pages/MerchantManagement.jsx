@@ -152,6 +152,7 @@ const MerchantManagement = () => {
     platform: undefined,
     search: '',
   })
+  const [sortInfo, setSortInfo] = useState({ field: null, order: null })
   const [editMerchantModalOpen, setEditMerchantModalOpen] = useState(false)
   const [commissionModalOpen, setCommissionModalOpen] = useState(false)
   const [commissionData, setCommissionData] = useState(null)
@@ -325,12 +326,16 @@ const MerchantManagement = () => {
     return false // prevent default upload
   }
 
-  const fetchMerchants = async (page = merchantPage, pageSize = merchantPageSize) => {
+  const fetchMerchants = async (page = merchantPage, pageSize = merchantPageSize, sort = sortInfo) => {
     setLoading(true)
     try {
       const params = { page, page_size: pageSize }
       if (merchantFilters.platform) params.platform = merchantFilters.platform
       if (merchantFilters.search) params.search = merchantFilters.search
+      if (sort.field) {
+        params.sort_by = sort.field
+        params.sort_order = sort.order || 'descend'
+      }
 
       const resp = await api.get('/api/merchants/my-library', { params })
       const data = resp.data || {}
@@ -564,7 +569,8 @@ const MerchantManagement = () => {
       key: 'active_advertisers',
       width: 90,
       align: 'center',
-      sorter: (a, b) => (a.active_advertisers || 0) - (b.active_advertisers || 0),
+      sorter: true,
+      sortOrder: sortInfo.field === 'active_advertisers' ? sortInfo.order : null,
       render: (val, record) => {
         const count = val || 0
         return count > 0 ? (
@@ -1074,13 +1080,17 @@ const MerchantManagement = () => {
                   columns={merchantColumns}
                   dataSource={merchants}
                   scroll={{ x: 1200 }}
+                  onChange={(pagination, filters, sorter) => {
+                    const newSort = sorter.order ? { field: sorter.columnKey, order: sorter.order } : { field: null, order: null }
+                    setSortInfo(newSort)
+                    fetchMerchants(pagination.current, pagination.pageSize, newSort)
+                  }}
                   pagination={{
                     current: merchantPage,
                     pageSize: merchantPageSize,
                     total: merchantTotal,
                     showSizeChanger: true,
                     showTotal: (total) => `共 ${total} 条`,
-                    onChange: (page, size) => fetchMerchants(page, size),
                   }}
                 />
               </Card>
