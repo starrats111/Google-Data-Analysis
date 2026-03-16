@@ -231,12 +231,39 @@ async def my_library(
         all_rows.sort(key=lambda r: active_map.get(r.merchant_id, 0), reverse=reverse)
         rows = all_rows[(page - 1) * page_size : page * page_size]
     else:
+        # 查推荐/违规状态用于排序：推荐优先，违规靠后
+        from app.models.merchant import AffiliateMerchant as _AM
+        recommend_mids = set(
+            r[0] for r in db.query(_AM.merchant_id).filter(
+                _AM.recommendation_status != "normal",
+                _AM.recommendation_status.isnot(None),
+            ).all()
+        )
+        violation_mids = set(
+            r[0] for r in db.query(_AM.merchant_id).filter(
+                _AM.violation_status != "normal",
+                _AM.violation_status.isnot(None),
+            ).all()
+        )
+
+        # 构建排序优先级：推荐=0, 普通=1, 违规=2
+        order_clauses = []
+        if recommend_mids or violation_mids:
+            whens = []
+            if recommend_mids:
+                whens.append((CampaignLinkCache.merchant_id.in_(list(recommend_mids)), 0))
+            if violation_mids:
+                whens.append((CampaignLinkCache.merchant_id.in_(list(violation_mids)), 2))
+            order_clauses.append(sa_case(*whens, else_=1))
+
+        order_clauses.extend([
+            CampaignLinkCache.platform_code,
+            sa_case((CampaignLinkCache.merchant_name.is_(None), 1), (CampaignLinkCache.merchant_name == '', 1), else_=0),
+            CampaignLinkCache.merchant_name,
+        ])
+
         rows = (
-            q.order_by(
-                CampaignLinkCache.platform_code,
-                sa_case((CampaignLinkCache.merchant_name.is_(None), 1), (CampaignLinkCache.merchant_name == '', 1), else_=0),
-                CampaignLinkCache.merchant_name,
-            )
+            q.order_by(*order_clauses)
             .offset((page - 1) * page_size)
             .limit(page_size)
             .all()
