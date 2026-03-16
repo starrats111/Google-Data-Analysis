@@ -481,6 +481,10 @@ class MerchantPlatformSyncService:
                 merchant.merchant_id = mid
                 merchant.missing_mid = 0
                 merchant.id_confidence = "api"
+            # 保存 mcid
+            mcid_val = str(mapped.get("mcid") or "").strip()
+            if mcid_val:
+                merchant.mcid = mcid_val
             api_name = (mapped.get("merchant_name") or "").strip()[:200]
             if api_name:
                 if merchant.source_type != "merchant_api":
@@ -499,6 +503,7 @@ class MerchantPlatformSyncService:
                     ", ".join(mapped["categories"]) if isinstance(mapped.get("categories"), list) else None
                 ),
                 slug=mapped.get("site_url"),
+                mcid=str(mapped.get("mcid") or "").strip() or None,
                 missing_mid=0 if mid else 1,
                 id_confidence="api" if mid else "low",
                 source_type="merchant_api",

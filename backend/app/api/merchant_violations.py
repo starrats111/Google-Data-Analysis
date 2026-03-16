@@ -140,14 +140,16 @@ async def upload_violations(
                 & (AffiliateMerchant.platform == v.platform)
             )
         if v.mcid:
+            # 优先用 mcid 字段精确匹配
             conditions.append(
-                (func.lower(AffiliateMerchant.slug) == v.mcid.lower())
+                (func.lower(AffiliateMerchant.mcid) == v.mcid.lower())
                 & (AffiliateMerchant.platform == v.platform)
             )
-        conditions.append(
-            (func.lower(AffiliateMerchant.merchant_name) == v.merchant_name.lower())
-            & (AffiliateMerchant.platform == v.platform)
-        )
+        if v.merchant_name:
+            conditions.append(
+                (func.lower(AffiliateMerchant.merchant_name) == v.merchant_name.lower())
+                & (AffiliateMerchant.platform == v.platform)
+            )
 
         matched = db.query(AffiliateMerchant).filter(or_(*conditions)).all()
         for m in matched:

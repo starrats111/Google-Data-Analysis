@@ -32,6 +32,7 @@ class CampaignLinkCache(Base):
     categories = Column(Text, nullable=True)
     commission_rate = Column(String(100), nullable=True)
     logo = Column(Text, nullable=True)
+    mcid = Column(String(200), nullable=True, index=True)  # 平台 MCID/slug 标识
 
     synced_at = Column(DateTime, default=datetime.utcnow)
     created_at = Column(DateTime, default=datetime.utcnow)

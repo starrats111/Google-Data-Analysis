@@ -19,6 +19,16 @@ from app.models.user import User
 router = APIRouter(prefix="/api/merchant-recommendations", tags=["推荐商家"])
 logger = logging.getLogger(__name__)
 
+PLATFORM_NAME_MAP = {
+    "linkhaitao": "LH", "lh": "LH",
+    "rewardoo": "RW", "rw": "RW",
+    "collabglow": "CG", "cg": "CG",
+    "brandsparkhub": "BSH", "bsh": "BSH",
+    "partnermatic": "PM", "pm": "PM",
+    "creatorflare": "CF", "cf": "CF",
+    "linkbux": "LB", "lb": "LB",
+}
+
 
 def _clean(val):
     if val is None:
@@ -93,6 +103,8 @@ async def upload_recommendations(
             col["avg_commission_rate"] = i
         elif "平均客单佣金" in h or "average order commission" in hl:
             col["avg_order_commission"] = i
+        elif "平台" in h or "platform" in hl:
+            col["platform"] = i
 
     if "merchant_name" not in col:
         raise HTTPException(status_code=400, detail="Excel 缺少广告主名称列")
@@ -114,10 +126,17 @@ async def upload_recommendations(
         if not merchant_name:
             continue
 
+        # 解析平台
+        raw_platform = _g("platform")
+        platform_code = None
+        if raw_platform:
+            platform_code = PLATFORM_NAME_MAP.get(raw_platform.strip().lower(), raw_platform.strip().upper())
+
         recommendations.append(MerchantRecommendation(
             mcid=_g("mcid"),
             merchant_mid=_g("merchant_mid"),
             merchant_name=merchant_name,
+            platform=platform_code,
             merchant_url=_g("merchant_url"),
             merchant_region=_g("merchant_region"),
             epc=_to_float(_g("epc")),
@@ -140,8 +159,16 @@ async def upload_recommendations(
         if r.merchant_mid and r.merchant_mid.isdigit():
             conditions.append(AffiliateMerchant.merchant_id == r.merchant_mid)
         if r.mcid:
-            conditions.append(func.lower(AffiliateMerchant.slug) == r.mcid.lower())
-        conditions.append(func.lower(AffiliateMerchant.merchant_name) == r.merchant_name.lower())
+            # 优先用 mcid 字段精确匹配
+            if r.platform:
+                conditions.append(
+                    (func.lower(AffiliateMerchant.mcid) == r.mcid.lower())
+                    & (AffiliateMerchant.platform == r.platform)
+                )
+            else:
+                conditions.append(func.lower(AffiliateMerchant.mcid) == r.mcid.lower())
+        if r.merchant_name:
+            conditions.append(func.lower(AffiliateMerchant.merchant_name) == r.merchant_name.lower())
 
         matched = db.query(AffiliateMerchant).filter(or_(*conditions)).all()
         for m in matched:

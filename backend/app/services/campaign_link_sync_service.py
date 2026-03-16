@@ -136,6 +136,7 @@ class CampaignLinkSyncService:
             if not mid:
                 continue
 
+            mcid_val = self._extract_mcid(raw, platform_code)
             mapped = CampaignLinkService._map_campaign_response(raw, platform_code)
             support_regions_json = json.dumps(mapped.get("support_regions") or [], ensure_ascii=False)
 
@@ -160,6 +161,7 @@ class CampaignLinkSyncService:
                     existing.categories = json.dumps(mapped.get("categories") or "", ensure_ascii=False) if mapped.get("categories") else None
                     existing.commission_rate = mapped.get("commission_rate")
                     existing.logo = mapped.get("logo")
+                    existing.mcid = mcid_val or existing.mcid
                     existing.synced_at = now
                 else:
                     record = CampaignLinkCache(
@@ -175,6 +177,7 @@ class CampaignLinkSyncService:
                         categories=json.dumps(mapped.get("categories") or "", ensure_ascii=False) if mapped.get("categories") else None,
                         commission_rate=mapped.get("commission_rate"),
                         logo=mapped.get("logo"),
+                        mcid=mcid_val,
                         synced_at=now,
                     )
                     self.db.add(record)
@@ -300,4 +303,20 @@ class CampaignLinkSyncService:
             val = raw.get(key)
             if val is not None and str(val).strip():
                 return str(val).strip()
+        return None
+
+    @staticmethod
+    def _extract_mcid(raw: dict, platform_code: str) -> Optional[str]:
+        """从原始数据中提取平台 MCID（slug 标识，如 displateaaa）。"""
+        if platform_code in ("CG", "BSH"):
+            val = raw.get("brand_id")
+        elif platform_code == "PM":
+            val = raw.get("brandId")
+        else:
+            # LH / RW / LB 等：mcid 字段
+            val = raw.get("mcid")
+        if val is not None:
+            s = str(val).strip()
+            if s:
+                return s
         return None

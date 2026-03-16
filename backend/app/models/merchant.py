@@ -19,6 +19,7 @@ class AffiliateMerchant(Base):
     merchant_name = Column(String(200), nullable=False)
     platform = Column(String(32), nullable=False, index=True)
     slug = Column(String(200), nullable=True)
+    mcid = Column(String(200), nullable=True, index=True)  # 平台 MCID/slug 标识（如 displateaaa）
     category = Column(String(100), nullable=True)
     commission_rate = Column(String(50), nullable=True)
     logo_url = Column(String(500), nullable=True)

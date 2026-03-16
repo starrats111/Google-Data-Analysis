@@ -384,6 +384,7 @@ async def my_library(
             "active_advertisers": active_map.get(r.merchant_id, 0),
             "violation_status": violation_map.get(r.merchant_id, "normal"),
             "recommendation_status": recommend_map.get(r.merchant_id, "normal"),
+            "mcid": r.mcid or "",
         })
 
     return {"items": items, "total": total, "page": page, "page_size": page_size}
