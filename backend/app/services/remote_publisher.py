@@ -594,17 +594,21 @@ class RemotePublisher:
         img_dir = f"{site_root}/image/post-{slug}"
         result = {"hero": None, "content": []}
 
-        if featured_image:
-            # hero 图放宽要求：宽>=600, 高>=300 即可（横幅图高度通常较低）
-            data = self._download_image(featured_image, min_width=600, min_height=300)
+        hero_url = featured_image
+        if not hero_url and content_images:
+            hero_url = content_images[0]
+            logger.info("featured_image 为空，自动使用第一张内容图作为头图")
+
+        if hero_url:
+            data = self._download_image(hero_url, min_width=600, min_height=300)
             if data:
-                ext = self._get_image_ext(featured_image, data)
+                ext = self._get_image_ext(hero_url, data)
                 remote_path = f"{img_dir}/hero{ext}"
                 self._upload_image(sftp, ssh, data, remote_path)
                 result["hero"] = f"image/post-{slug}/hero{ext}"
                 logger.info(f"头图已上传: {remote_path} ({len(data)} bytes)")
             else:
-                result["hero"] = featured_image
+                result["hero"] = hero_url
 
         for i, img_url in enumerate(content_images):
             if not img_url:
@@ -670,21 +674,26 @@ class RemotePublisher:
             return None
 
         # 处理头图
-        if featured_image:
+        hero_url = featured_image
+        if not hero_url and content_image_urls:
+            hero_url = content_image_urls[0]
+            logger.info("[CR-040] featured_image 为空，自动使用第一张内容图作为头图")
+
+        if hero_url:
             hero_source = "crawl"
-            if any(kw in featured_image for kw in ["pexels.com", "unsplash.com", "images.pexels"]):
+            if any(kw in hero_url for kw in ["pexels.com", "unsplash.com", "images.pexels"]):
                 hero_source = "stock"
-            data = _read_from_cache_or_download(featured_image, hero_source)
+            data = _read_from_cache_or_download(hero_url, hero_source)
             if data:
-                ext = self._get_image_ext(featured_image, data)
+                ext = self._get_image_ext(hero_url, data)
                 remote_path = f"{img_dir}/hero{ext}"
                 self._upload_image(sftp, ssh, data, remote_path)
                 result["hero"] = f"image/post-{slug}/hero{ext}"
                 logger.info(f"[CR-040] 头图已上传: {remote_path} ({len(data)} bytes, source={hero_source})")
             else:
-                if featured_image.startswith("http") or featured_image.startswith("data:image/"):
-                    result["hero"] = featured_image
-                logger.warning(f"[CR-040] 头图获取失败，保留原始URL: {featured_image[:80]}")
+                if hero_url.startswith("http") or hero_url.startswith("data:image/"):
+                    result["hero"] = hero_url
+                logger.warning(f"[CR-040] 头图获取失败，保留原始URL: {hero_url[:80]}")
 
         # 处理内容图
         for i, img_url in enumerate(content_image_urls):
