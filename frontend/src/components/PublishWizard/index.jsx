@@ -202,7 +202,7 @@ const PublishWizard = ({ drawerMode = false }) => {
         filename: file.name || 'upload.jpg',
         data_base64: dataUrl,
       })
-      return res.data  // {cache_url, original_url, source, width, height}
+      return { ...res.data, source: 'upload' }  // {cache_url, original_url, source, width, height}
     } catch (e) {
       // 上传到缓存失败，回退到 data URL
       const dataUrl = await fileToDataUrl(file)
@@ -1379,99 +1379,158 @@ const PublishWizard = ({ drawerMode = false }) => {
             <div style={{ marginBottom: 20 }}>
               <div style={{ display: 'flex', alignItems: 'center', marginBottom: 8, gap: 12 }}>
                 <Typography.Title level={5} style={{ margin: 0, color: '#ff4d4f' }}>待选用图</Typography.Title>
-                {crawledImages.length > 0 && (
-                  <Segmented
-                    size="small"
-                    value={imagePoolMode}
-                    onChange={(v) => {
-                      if (v === 'stock') handleLoadStockImages()
-                      else setImagePoolMode('crawl')
-                    }}
-                    options={[
-                      { label: '商家网站', value: 'crawl' },
-                      { label: '图片库', value: 'stock' },
-                    ]}
-                  />
-                )}
-                {crawledImages.length === 0 && stockImages.length > 0 && (
-                  <Tag color="purple">图片库（商家网站无法爬取，已自动搜索相关图片）</Tag>
-                )}
-                {(crawledImages.length > 0 || stockImages.length > 0) && (
+                <Segmented
+                  size="small"
+                  value={imagePoolMode}
+                  onChange={(v) => {
+                    if (v === 'stock') handleLoadStockImages()
+                    setImagePoolMode(v)
+                  }}
+                  options={[
+                    { label: '商家网站爬取', value: 'crawl' },
+                    { label: '手动上传', value: 'upload' },
+                    { label: '图片库', value: 'stock' },
+                  ]}
+                />
+                {(crawledImages.length > 0 || stockImages.length > 0) && imagePoolMode !== 'upload' && (
                   <Typography.Text type="secondary" style={{ fontSize: 12 }}>
                     点击图片添加到文章用图
                   </Typography.Text>
                 )}
               </div>
 
-              {crawledImages.length === 0 && !searchingImages && stockImages.length === 0 && (
-                <Alert type="warning" message="未从商家网站获取到图片，请通过下方上传按钮手动上传" showIcon style={{ marginBottom: 12 }} />
+              {/* 模式1: 商家网站爬取 */}
+              {imagePoolMode === 'crawl' && crawledImages.length === 0 && !searchingImages && (
+                <Alert type="warning" message="未从商家网站获取到图片，可切换到「手动上传」或「图片库」" showIcon style={{ marginBottom: 12 }} />
+              )}
+              {imagePoolMode === 'crawl' && (
+                <Space wrap size={[8, 8]} style={{ marginTop: 8 }}>
+                  {crawledImages.map((imgObj, i) => {
+                    const imgKey = getImgSubmitValue(imgObj)
+                    const isSelected = selectedImages.some(s => getImgSubmitValue(s) === imgKey)
+                    return (
+                      <div key={`pool-${i}`} style={{
+                        position: 'relative', display: 'inline-block', cursor: isSelected ? 'default' : 'pointer',
+                        border: '2px solid transparent', borderRadius: 6, padding: 1,
+                        opacity: isSelected ? 0.4 : 1, transition: 'opacity 0.2s',
+                      }} onClick={() => !isSelected && handleAddToSelected(imgObj)}>
+                        <Image src={getImgDisplayUrl(imgObj)} width={90} height={90} style={{ objectFit: 'cover', borderRadius: 4 }}
+                          preview={false}
+                          fallback="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACklEQVR4nGMAAQAABQABDQottAAAAABJRU5ErkJggg=="
+                        />
+                        {isSelected && (
+                          <Tag color="green" style={{ position: 'absolute', top: 4, left: 4, zIndex: 2, margin: 0, fontSize: 10 }}>已选</Tag>
+                        )}
+                        {!isSelected && (
+                          <div style={{ position: 'absolute', top: 4, right: 4, zIndex: 2, background: 'rgba(0,0,0,0.5)', borderRadius: '50%', width: 20, height: 20, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                            <PlusOutlined style={{ color: '#fff', fontSize: 12 }} />
+                          </div>
+                        )}
+                        <div
+                          style={{ position: 'absolute', bottom: 4, right: 4, zIndex: 2, background: 'rgba(0,0,0,0.5)', borderRadius: '50%', width: 22, height: 22, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}
+                          onClick={(e) => { e.stopPropagation(); setPoolPreviewSrc(getImgDisplayUrl(imgObj)); setPoolPreviewOpen(true) }}
+                        >
+                          <EyeOutlined style={{ color: '#fff', fontSize: 12 }} />
+                        </div>
+                      </div>
+                    )
+                  })}
+                </Space>
               )}
 
-              {/* 爬虫成功：正常图片选择 */}
-              {imagePoolMode === 'stock' && searchingImages && <Spin tip="搜索图片库中..." />}
-              {imagePoolMode === 'stock' && !searchingImages && stockImages.length === 0 && (
-                <Alert type="info" message="图片库暂无匹配结果" showIcon />
-              )}
-              <Space wrap size={[8, 8]} style={{ marginTop: 8 }}>
-                {(imagePoolMode === 'crawl' ? crawledImages : stockImages).map((imgObj, i) => {
-                  const imgKey = getImgSubmitValue(imgObj)
-                  const isSelected = selectedImages.some(s => getImgSubmitValue(s) === imgKey)
-                  return (
-                    <div key={`pool-${i}`} style={{
-                      position: 'relative', display: 'inline-block', cursor: isSelected ? 'default' : 'pointer',
-                      border: '2px solid transparent', borderRadius: 6, padding: 1,
-                      opacity: isSelected ? 0.4 : 1, transition: 'opacity 0.2s',
-                    }} onClick={() => !isSelected && handleAddToSelected(imgObj)}>
-                      <Image src={getImgDisplayUrl(imgObj)} width={90} height={90} style={{ objectFit: 'cover', borderRadius: 4 }}
-                        preview={false}
-                        fallback="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACklEQVR4nGMAAQAABQABDQottAAAAABJRU5ErkJggg=="
-                      />
-                      {isSelected && (
-                        <Tag color="green" style={{ position: 'absolute', top: 4, left: 4, zIndex: 2, margin: 0, fontSize: 10 }}>已选</Tag>
-                      )}
-                      {!isSelected && (
-                        <div style={{ position: 'absolute', top: 4, right: 4, zIndex: 2, background: 'rgba(0,0,0,0.5)', borderRadius: '50%', width: 20, height: 20, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                          <PlusOutlined style={{ color: '#fff', fontSize: 12 }} />
-                        </div>
-                      )}
-                      <div
-                        style={{ position: 'absolute', bottom: 4, right: 4, zIndex: 2, background: 'rgba(0,0,0,0.5)', borderRadius: '50%', width: 22, height: 22, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}
-                        onClick={(e) => { e.stopPropagation(); setPoolPreviewSrc(getImgDisplayUrl(imgObj)); setPoolPreviewOpen(true) }}
-                      >
-                        <EyeOutlined style={{ color: '#fff', fontSize: 12 }} />
-                      </div>
-                    </div>
-                  )
-                })}
-                {/* 手动上传按钮 — 始终显示 */}
-                <Upload
-                  accept="image/*"
-                  showUploadList={false}
-                  multiple
-                  beforeUpload={() => false}
-                  onChange={async (info) => {
-                    const file = info.file?.originFileObj || info.file
-                    if (!file) return
-                    const imgObj = await uploadToImageCache(file)
-                    if (imgObj) {
-                      setCrawledImages(prev => [...prev, imgObj])
-                      setImagePoolMode('crawl')
-                    }
-                  }}
-                >
-                  <div style={{
-                    width: 90, height: 90, border: '2px dashed #d9d9d9', borderRadius: 6,
-                    display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
-                    cursor: 'pointer', background: '#fafafa', transition: 'border-color 0.3s',
-                  }}
-                    onMouseEnter={(e) => { e.currentTarget.style.borderColor = '#1890ff' }}
-                    onMouseLeave={(e) => { e.currentTarget.style.borderColor = '#d9d9d9' }}
+              {/* 模式2: 手动上传 */}
+              {imagePoolMode === 'upload' && (
+                <div style={{ marginTop: 8 }}>
+                  <Upload.Dragger
+                    accept="image/*"
+                    showUploadList={false}
+                    multiple
+                    beforeUpload={() => false}
+                    onChange={async (info) => {
+                      const files = info.fileList?.map(f => f.originFileObj || f).filter(Boolean) || []
+                      for (const file of files) {
+                        const imgObj = await uploadToImageCache(file)
+                        if (imgObj) {
+                          setCrawledImages(prev => [...prev, imgObj])
+                        }
+                      }
+                      if (files.length > 0) message.success(`已上传 ${files.length} 张图片`)
+                    }}
+                    style={{ padding: '20px 0' }}
                   >
-                    <UploadOutlined style={{ fontSize: 22, color: '#999' }} />
-                    <span style={{ fontSize: 11, color: '#999', marginTop: 4 }}>上传图片</span>
-                  </div>
-                </Upload>
-              </Space>
+                    <p className="ant-upload-drag-icon"><UploadOutlined style={{ fontSize: 36, color: '#1890ff' }} /></p>
+                    <p className="ant-upload-text" style={{ fontSize: 14 }}>点击或拖拽图片到此区域上传</p>
+                    <p className="ant-upload-hint" style={{ fontSize: 12, color: '#999' }}>支持 JPG、PNG、WebP 格式，可多选</p>
+                  </Upload.Dragger>
+                  {crawledImages.filter(img => (img?.source || '') === 'upload').length > 0 && (
+                    <div style={{ marginTop: 12 }}>
+                      <Typography.Text type="secondary" style={{ fontSize: 12 }}>已上传的图片（点击添加到文章用图）：</Typography.Text>
+                      <Space wrap size={[8, 8]} style={{ marginTop: 8 }}>
+                        {crawledImages.filter(img => (img?.source || '') === 'upload').map((imgObj, i) => {
+                          const imgKey = getImgSubmitValue(imgObj)
+                          const isSelected = selectedImages.some(s => getImgSubmitValue(s) === imgKey)
+                          return (
+                            <div key={`upload-${i}`} style={{
+                              position: 'relative', display: 'inline-block', cursor: isSelected ? 'default' : 'pointer',
+                              border: '2px solid transparent', borderRadius: 6, padding: 1,
+                              opacity: isSelected ? 0.4 : 1, transition: 'opacity 0.2s',
+                            }} onClick={() => !isSelected && handleAddToSelected(imgObj)}>
+                              <Image src={getImgDisplayUrl(imgObj)} width={90} height={90} style={{ objectFit: 'cover', borderRadius: 4 }}
+                                preview={false}
+                                fallback="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACklEQVR4nGMAAQAABQABDQottAAAAABJRU5ErkJggg=="
+                              />
+                              {isSelected && (
+                                <Tag color="green" style={{ position: 'absolute', top: 4, left: 4, zIndex: 2, margin: 0, fontSize: 10 }}>已选</Tag>
+                              )}
+                            </div>
+                          )
+                        })}
+                      </Space>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* 模式3: 图片库 */}
+              {imagePoolMode === 'stock' && searchingImages && <Spin tip="搜索图片库中..." style={{ marginTop: 8 }} />}
+              {imagePoolMode === 'stock' && !searchingImages && stockImages.length === 0 && (
+                <Alert type="info" message="图片库暂无匹配结果" showIcon style={{ marginTop: 8 }} />
+              )}
+              {imagePoolMode === 'stock' && (
+                <Space wrap size={[8, 8]} style={{ marginTop: 8 }}>
+                  {stockImages.map((imgObj, i) => {
+                    const imgKey = getImgSubmitValue(imgObj)
+                    const isSelected = selectedImages.some(s => getImgSubmitValue(s) === imgKey)
+                    return (
+                      <div key={`stock-${i}`} style={{
+                        position: 'relative', display: 'inline-block', cursor: isSelected ? 'default' : 'pointer',
+                        border: '2px solid transparent', borderRadius: 6, padding: 1,
+                        opacity: isSelected ? 0.4 : 1, transition: 'opacity 0.2s',
+                      }} onClick={() => !isSelected && handleAddToSelected(imgObj)}>
+                        <Image src={getImgDisplayUrl(imgObj)} width={90} height={90} style={{ objectFit: 'cover', borderRadius: 4 }}
+                          preview={false}
+                          fallback="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACklEQVR4nGMAAQAABQABDQottAAAAABJRU5ErkJggg=="
+                        />
+                        {isSelected && (
+                          <Tag color="green" style={{ position: 'absolute', top: 4, left: 4, zIndex: 2, margin: 0, fontSize: 10 }}>已选</Tag>
+                        )}
+                        {!isSelected && (
+                          <div style={{ position: 'absolute', top: 4, right: 4, zIndex: 2, background: 'rgba(0,0,0,0.5)', borderRadius: '50%', width: 20, height: 20, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                            <PlusOutlined style={{ color: '#fff', fontSize: 12 }} />
+                          </div>
+                        )}
+                        <div
+                          style={{ position: 'absolute', bottom: 4, right: 4, zIndex: 2, background: 'rgba(0,0,0,0.5)', borderRadius: '50%', width: 22, height: 22, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}
+                          onClick={(e) => { e.stopPropagation(); setPoolPreviewSrc(getImgDisplayUrl(imgObj)); setPoolPreviewOpen(true) }}
+                        >
+                          <EyeOutlined style={{ color: '#fff', fontSize: 12 }} />
+                        </div>
+                      </div>
+                    )
+                  })}
+                </Space>
+              )}
+
               <Image
                 style={{ display: 'none' }}
                 preview={{
