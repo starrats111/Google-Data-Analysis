@@ -8,6 +8,8 @@ import logging
 from datetime import date, timedelta
 from typing import Dict, List, Optional
 
+from app.services.google_ads_policy import build_policy_prompt
+
 from sqlalchemy import func as sa_func
 from sqlalchemy.orm import Session
 
@@ -180,6 +182,8 @@ class AdCopyGenerator:
         if history and history.get("top_campaigns"):
             best_campaign = history["top_campaigns"][0]["campaign_name"]
 
+        policy_prompt = build_policy_prompt(merchant_name, category)
+
         return f"""你是一位资深 Google Ads 广告优化专家，精通{country_name}市场。
 
 ## 商家信息
@@ -194,11 +198,7 @@ class AdCopyGenerator:
 - 该国消费者语言风格: {style}
 - 请严格按照{country_name}的语言习惯生成广告文案
 {history_section}
-## Google Ads 政策合规（必须遵守）
-- 禁止夸大宣传、误导性承诺、点击诱导
-- 禁止全大写（品牌缩写除外）、过度标点
-- 禁止使用他人商标、违禁内容
-- 使用专业、真实、可信的语言
+{policy_prompt}
 
 ## 你的输出（必须全部用中文思考，文案用{language}）
 
@@ -216,14 +216,17 @@ class AdCopyGenerator:
 **第四步：策略规划**
 说明你将从哪些角度切入，搭配哪些关键词，预计能获得较高成交率。给出日预算建议（USD）。
 
-**第五步：生成文案**
+**第五步：合规检查**
+根据上述 Google Ads 政策规则，检查文案是否有违规风险，如有则修正。
+
+**第六步：生成文案**
 按照{country_name}的{language}语言习惯，生成以下内容：
 - 15 条标题（每条 ≤ 30 字符）
 - 4 条描述（每条 ≤ 90 字符）
 - 每条都要附带中文翻译
 
-返回 JSON 格式（thinking 字段包含第一步到第四步的所有分析，recommended_budget 是建议日预算）:
-{{"thinking": "第一步...\\n第二步...\\n第三步...\\n第四步...", "recommended_budget": 10, "headlines": ["Shop TYMO Now", ...], "headline_translations": ["立即选购TYMO", ...], "descriptions": ["d1", ...], "description_translations": ["完整中文翻译句子", ...]}}
+返回 JSON 格式（thinking 字段包含第一步到第五步的所有分析，recommended_budget 是建议日预算）:
+{{"thinking": "第一步...\\n第二步...\\n第三步...\\n第四步...\\n第五步...", "recommended_budget": 10, "headlines": ["Shop TYMO Now", ...], "headline_translations": ["立即选购TYMO", ...], "descriptions": ["d1", ...], "description_translations": ["完整中文翻译句子", ...]}}
 翻译规则（极其重要！）: headline_translations 和 description_translations 每一条都必须翻译英文文案的完整含义。
 错误示范: "BRUNT"、"TYMO" ← 禁止只写品牌名！ 正确示范: "BRUNT Boots: Built Tough" → "BRUNT靴子：坚韧耐用\""""
 
@@ -253,6 +256,26 @@ class AdCopyGenerator:
             best = history["top_campaigns"][0]
             context_ref = f"参考该员工最佳广告「{best['campaign_name']}」(CTR={best['ctr']}%, ROI={best['roi']}%)的成功经验。"
 
+        # 构建精简版政策合规提示（流式版控制长度）
+        from app.services.google_ads_policy import detect_restricted_categories, EDITORIAL_RULES, PROHIBITED_CONTENT_RULES
+        restricted = detect_restricted_categories(merchant_name, category)
+        policy_section = """合规要求（Google Ads 政策数据库 — 必须严格遵守）:
+- 禁止夸大宣传/误导性承诺/虚假紧迫感
+- 禁止全大写单词(品牌缩写除外)/gimmick式大写
+- 禁止标题中使用感叹号/连续重复标点/emoji表情符号
+- 禁止使用他人商标/暗示官方关联
+- 禁止无法验证的最高级声明(如"Best in the world")
+- 禁止"Guaranteed results""Miracle""No risk""100% success"等词
+- 所有价格/折扣/免运费声明必须在着陆页可验证
+- 文案必须语法正确、与着陆页内容相关"""
+        if restricted:
+            labels = [r["label"] for r in restricted]
+            policy_section += f"\n⚠️ 限制品类警告 [{', '.join(labels)}]:"
+            for r in restricted:
+                # 取政策的前几行关键规则
+                lines = [l.strip() for l in r["policy"].strip().split("\n") if l.strip().startswith("- ")]
+                policy_section += "\n" + "\n".join(lines[:6])
+
         return f"""你是资深 Google Ads RSA 文案专家，精通{country_name}市场。
 
 商家: {merchant_name} | 网站: {merchant_url} | 品类: {category or '综合'}
@@ -262,7 +285,7 @@ class AdCopyGenerator:
 
 请先用中文写3-5行简要分析（商家定位、策略要点、预算建议），然后输出JSON。
 
-合规要求: 禁止夸大宣传/误导/全大写(品牌缩写除外)/他人商标/使用emoji表情符号。
+{policy_section}
 
 JSON格式(严格遵守):
 ```json
@@ -549,6 +572,37 @@ JSON格式(严格遵守):
         if headlines_clean:
             headlines[:], h_trans[:] = zip(*headlines_clean)
             headlines, h_trans = list(headlines), list(h_trans)
+
+        # 政策合规检查：移除明显违规的文案
+        import re as _re2
+        POLICY_VIOLATIONS = [
+            # 感叹号在标题中
+            (r'!', 'headline_only', '标题含感叹号'),
+            # 连续重复标点
+            (r'[!?\.]{2,}', 'all', '连续重复标点'),
+            # emoji
+            (r'[\U0001F300-\U0001F9FF\u2600-\u27BF\u2702-\u27B0\u2764\u2714\u2716\u2728\u2B50\u2B55\u2934\u2935\u25AA\u25AB\u25B6\u25C0\u25FB-\u25FE\u2600-\u26FF\u2700-\u27BF]', 'all', 'emoji符号'),
+            # 全大写单词（3+字母，排除常见缩写）
+            (r'\b[A-Z]{4,}\b', 'check_brand', '全大写单词'),
+            # 禁止的声明
+            (r'(?i)\b(guaranteed results?|miracle cure|get rich|no risk|100% success)\b', 'all', '禁止声明'),
+        ]
+        brand_upper = merchant_name.upper() if merchant_name else ""
+        for i, h in enumerate(headlines):
+            for pattern, scope, reason in POLICY_VIOLATIONS:
+                if scope == 'headline_only' or scope == 'all':
+                    if _re2.search(pattern, h):
+                        fixed = _re2.sub(pattern, '', h).strip()
+                        if fixed and len(fixed) > 5:
+                            logger.info("[Policy] 标题%d修复(%s): %s → %s", i+1, reason, h, fixed)
+                            headlines[i] = fixed
+                elif scope == 'check_brand':
+                    matches = _re2.findall(pattern, h)
+                    for m in matches:
+                        if m != brand_upper and m not in ('USA', 'UK', 'FREE', 'NEW', 'OFF', 'CEO', 'CTO', 'LLC', 'INC', 'LTD'):
+                            fixed = h.replace(m, m.title())
+                            logger.info("[Policy] 标题%d修复(%s): %s → %s", i+1, reason, h, fixed)
+                            headlines[i] = fixed
 
         return headlines, descriptions, h_trans, d_trans
 
