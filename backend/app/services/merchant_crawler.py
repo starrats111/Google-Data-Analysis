@@ -68,6 +68,38 @@ PRODUCT_IMG_KEYWORDS = [
 
 MIN_IMG_DIMENSION = 200  # 最小宽高像素
 
+# 被排除的图片扩展名/类型（非内容图片）
+_JUNK_IMG_PATTERNS = re.compile(
+    r'(?:'
+    r'\.gif(?:\?|$)'                        # GIF 通常是动图/追踪像素
+    r'|\.svg(?:\?|$)'                       # SVG 通常是图标
+    r'|/(?:pixel|spacer|blank|1x1|clear)\.' # 透明像素
+    r'|(?:_|-)(?:16|24|32|48|64|72)x'       # 极小缩略图 (24x24, 32x32 等)
+    r'|/(?:icon|logo|badge|flag)s?[/_\-.]'  # 图标/logo 路径
+    r'|/emoji/'                             # Emoji 图片
+    r'|gravatar\.com'                       # 用户头像
+    r'|\.ico(?:\?|$)'                       # favicon
+    r')',
+    re.IGNORECASE,
+)
+
+
+def _is_quality_image(url: str) -> bool:
+    """判断 URL 是否指向高质量内容图片（排除图标、追踪像素、极小缩略图等）"""
+    if _JUNK_IMG_PATTERNS.search(url):
+        return False
+    # 图片 URL 至少需要有合理的文件扩展名
+    url_lower = url.lower().split('?')[0]
+    valid_exts = ('.jpg', '.jpeg', '.png', '.webp', '.avif')
+    if not any(url_lower.endswith(ext) for ext in valid_exts):
+        # 允许没有扩展名但来自已知 CDN 的 URL（Shopify/Cloudinary 等）
+        cdn_patterns = ['cdn.shopify', 'cloudinary', 'imgix', 'cloudfront',
+                        'squarespace', 'wixstatic', 'bigcommerce', 'pexels.com',
+                        'unsplash.com', 'images.unsplash']
+        if not any(p in url_lower for p in cdn_patterns):
+            return False
+    return True
+
 # 内联 JS/JSON 中常见的图片 URL 模式
 _JS_IMG_RE = re.compile(
     r'(?:src|image|img|photo|poster|thumbnail|hero|banner|background|cover|media)'
@@ -619,8 +651,8 @@ def _find_sub_pages(soup: BeautifulSoup, base_url: str) -> List[str]:
             other_pages.append(full)
 
     # 产品页最优先，其次关键词页，最后其他内部页面
-    result = product_pages[:10] + priority_pages[:8] + other_pages[:5]
-    return result[:20]
+    result = product_pages[:15] + priority_pages[:12] + other_pages[:8]
+    return result[:30]
 
 
 _FALLBACK_UAS = [
@@ -1396,7 +1428,8 @@ def crawl(url: str) -> Dict:
         seen = set()
         for p in page_list:
             for img in p.get("images", []):
-                seen.add(img)
+                if _is_quality_image(img):
+                    seen.add(img)
         return len(seen)
 
     def _extract_brand_from_url(target_url: str) -> str:
@@ -1407,6 +1440,9 @@ def crawl(url: str) -> Dict:
 
     blocked_titles = {"just a moment...", "just a moment", "attention required",
                       "access denied", "you have been blocked", "security check"}
+    cache_provider_names = {"google", "google search", "google cache", "webcache",
+                            "wayback machine", "internet archive", "archive.org",
+                            "web archive", "cached", "cache"}
 
     home_html = ""
 
@@ -1420,7 +1456,7 @@ def crawl(url: str) -> Dict:
         pages.append(home_data)
         brand_name = home_data["og_site_name"] or home_data["title"].split("|")[0].split("-")[0].strip()
 
-        if brand_name.lower() in blocked_titles:
+        if brand_name.lower() in blocked_titles or brand_name.lower() in cache_provider_names:
             brand_name = _extract_brand_from_url(url)
 
         if is_blocked and not home_data["images"] and len(home_data["text"]) < 200:
@@ -1440,20 +1476,45 @@ def crawl(url: str) -> Dict:
         else:
             home_soup = BeautifulSoup(home_html, "lxml")
             sub_urls = _find_sub_pages(home_soup, url)
+            logger.info("[MerchantCrawler] 发现 %d 个候选子页面", len(sub_urls))
 
-            max_sub = 12 if home_img_count < 5 else 8
-            for sub_url in sub_urls[:max_sub]:
-                if _count_unique_images(pages) >= MIN_GOOD_IMAGES:
-                    logger.info("[MerchantCrawler] 已达 %d 张图片，停止爬取子页面",
-                                _count_unique_images(pages))
-                    break
+            INITIAL_BATCH = 3
+
+            # Phase 1: 先爬首批 3 个子页面（不中途检查）
+            for i, sub_url in enumerate(sub_urls[:INITIAL_BATCH]):
                 try:
                     _time.sleep(_random.uniform(1.0, 2.5))
                     resp = _fetch_with_retry(HEADERS, sub_url, timeout=15)
                     sub_data = _extract_page(resp.text, sub_url)
                     pages.append(sub_data)
+                    logger.info("[MerchantCrawler] Phase1 子页面 %d/%d: %s → +%d 图片",
+                                i + 1, INITIAL_BATCH, sub_url[:60],
+                                len(sub_data.get("images", [])))
                 except Exception as e:
-                    logger.warning("[MerchantCrawler] 子页面爬取失败 %s: %s", sub_url, e)
+                    logger.warning("[MerchantCrawler] Phase1 子页面爬取失败 %s: %s", sub_url, e)
+
+            phase1_count = _count_unique_images(pages)
+            logger.info("[MerchantCrawler] Phase1 完成 (首页+%d子页): %d 张图片 (目标 %d)",
+                        min(INITIAL_BATCH, len(sub_urls)), phase1_count, MIN_GOOD_IMAGES)
+
+            # Phase 2: 逐页爬取剩余子页面，每爬一页检查一次
+            if phase1_count < MIN_GOOD_IMAGES:
+                for i, sub_url in enumerate(sub_urls[INITIAL_BATCH:]):
+                    current_count = _count_unique_images(pages)
+                    if current_count >= MIN_GOOD_IMAGES:
+                        logger.info("[MerchantCrawler] Phase2 已达 %d 张图片 (>=%d)，停止",
+                                    current_count, MIN_GOOD_IMAGES)
+                        break
+                    try:
+                        _time.sleep(_random.uniform(1.0, 2.5))
+                        resp = _fetch_with_retry(HEADERS, sub_url, timeout=15)
+                        sub_data = _extract_page(resp.text, sub_url)
+                        pages.append(sub_data)
+                        new_count = _count_unique_images(pages)
+                        logger.info("[MerchantCrawler] Phase2 子页面 %d: %s → 总计 %d 张图片",
+                                    INITIAL_BATCH + i + 1, sub_url[:60], new_count)
+                    except Exception as e:
+                        logger.warning("[MerchantCrawler] Phase2 子页面爬取失败 %s: %s", sub_url, e)
 
     except httpx.TimeoutException:
         logger.error("[MerchantCrawler] 爬取超时 %s", url)
@@ -1486,7 +1547,7 @@ def crawl(url: str) -> Dict:
             return {"crawl_failed": True, "error": str(e),
                     "url": url, "brand_name": _extract_brand_from_url(url)}
 
-    if not brand_name:
+    if not brand_name or brand_name.lower() in cache_provider_names:
         brand_name = _extract_brand_from_url(url)
 
     # --- 0 图片 / JS渲染站 智能 Playwright 补爬 ---
@@ -1517,21 +1578,36 @@ def crawl(url: str) -> Dict:
             if len(rescue_text) > home_text_len:
                 pages[0]["text"] = rescue_text
                 # 也更新品牌名和标题（Playwright 渲染后更准）
-                if pw_data.get("og_site_name"):
+                if pw_data.get("og_site_name") and pw_data["og_site_name"].lower() not in cache_provider_names:
                     brand_name = pw_data["og_site_name"]
-                elif pw_data.get("title") and pw_data["title"].lower() not in blocked_titles:
+                elif pw_data.get("title") and pw_data["title"].lower() not in blocked_titles and pw_data["title"].split("|")[0].split("-")[0].strip().lower() not in cache_provider_names:
                     brand_name = pw_data["title"].split("|")[0].split("-")[0].strip()
             logger.info("[MerchantCrawler] Playwright 补爬: %d 图片, %d 字文字",
                         len(rescue_images), len(rescue_text))
 
-            # SPA 站点子页面爬取：首页 Playwright 图片不够时，尝试产品子页面
+            # SPA 站点子页面爬取：首页 Playwright 图片不够时，渐进爬取产品子页面
             if total_images < MIN_GOOD_IMAGES:
                 pw_soup = BeautifulSoup(pw_resp.text, "lxml")
                 spa_sub_urls = _find_sub_pages(pw_soup, url)
                 if spa_sub_urls:
                     logger.info("[MerchantCrawler] SPA 子页面补爬: %d 个候选", len(spa_sub_urls))
-                    spa_max = min(6, len(spa_sub_urls))
-                    for sub_url in spa_sub_urls[:spa_max]:
+                    SPA_INITIAL = 3
+                    # Phase 1: 先爬 3 个 SPA 子页面
+                    for i, sub_url in enumerate(spa_sub_urls[:SPA_INITIAL]):
+                        try:
+                            _time.sleep(_random.uniform(1.0, 2.0))
+                            sub_resp = _try_playwright(sub_url, timeout=25)
+                            if sub_resp:
+                                sub_data = _extract_page(sub_resp.text, sub_url)
+                                if sub_data.get("images"):
+                                    pages.append(sub_data)
+                                    logger.info("[MerchantCrawler] SPA Phase1 %d/%d %s: +%d 图",
+                                                i + 1, SPA_INITIAL, sub_url[:60],
+                                                len(sub_data["images"]))
+                        except Exception as e:
+                            logger.warning("[MerchantCrawler] SPA Phase1 失败 %s: %s", sub_url[:60], e)
+                    # Phase 2: 逐页补爬直到满足目标
+                    for i, sub_url in enumerate(spa_sub_urls[SPA_INITIAL:]):
                         if _count_unique_images(pages) >= MIN_GOOD_IMAGES:
                             break
                         try:
@@ -1541,19 +1617,31 @@ def crawl(url: str) -> Dict:
                                 sub_data = _extract_page(sub_resp.text, sub_url)
                                 if sub_data.get("images"):
                                     pages.append(sub_data)
-                                    logger.info("[MerchantCrawler] SPA 子页面 %s: +%d 图片",
-                                                sub_url[:60], len(sub_data["images"]))
+                                    logger.info("[MerchantCrawler] SPA Phase2 %d %s: 总计 %d 图",
+                                                SPA_INITIAL + i + 1, sub_url[:60],
+                                                _count_unique_images(pages))
                         except Exception as e:
-                            logger.warning("[MerchantCrawler] SPA 子页面失败 %s: %s", sub_url[:60], e)
+                            logger.warning("[MerchantCrawler] SPA Phase2 失败 %s: %s", sub_url[:60], e)
                     total_images = _count_unique_images(pages)
 
     raw_text = "\n\n".join(
         f"[{p['title']}]\n{p['text']}" for p in pages
     )[:8000]
 
+    total_images = _count_unique_images(pages)
+    # 收集所有去重后的高质量图片 URL
+    all_quality_images = []
+    seen_imgs = set()
+    for p in pages:
+        for img in p.get("images", []):
+            if img not in seen_imgs and _is_quality_image(img):
+                seen_imgs.add(img)
+                all_quality_images.append(img)
+
     logger.info(
-        "[MerchantCrawler] 爬取完成 %s: %d 页, %d 张图片, brand=%s",
-        url, len(pages), total_images, brand_name,
+        "[MerchantCrawler] 爬取完成 %s: %d 页, %d 张高质量图片 (总 %d), brand=%s",
+        url, len(pages), len(all_quality_images),
+        sum(len(p.get("images", [])) for p in pages), brand_name,
     )
 
     return {
@@ -1562,6 +1650,7 @@ def crawl(url: str) -> Dict:
         "url": url,
         "pages": pages,
         "raw_text": raw_text,
+        "quality_image_count": len(all_quality_images),
     }
 
 
