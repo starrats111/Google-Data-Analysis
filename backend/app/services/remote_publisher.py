@@ -101,6 +101,172 @@ class RemotePublisher:
                 self._sftp_write(sftp, html_path, new_content)
                 logger.info(f"[Cache] 已更新 {html_name} 缓存参数: v={ts}")
 
+    # ─── CR-018: 确保 B1 站点有 article.js 动态路由 ───
+
+    _ARTICLE_JS_TEMPLATE = r"""(function() {
+    'use strict';
+    document.addEventListener('DOMContentLoaded', function() {
+        var titleEl = document.getElementById('articleTitle');
+        if (!titleEl) return;
+
+        var params = new URLSearchParams(window.location.search);
+        var slug = params.get('title');
+        var articleId = params.get('id');
+        if (!slug && !articleId) return;
+
+        var allArticles = (typeof articlesIndex !== 'undefined') ? articlesIndex : [];
+        var templateArticles = (typeof articlesData !== 'undefined') ? articlesData : [];
+
+        var slugify = (window.slugifyTitle) || function(t) {
+            return t.toLowerCase().trim()
+                .replace(/[^\w\s-]/g, '')
+                .replace(/[\s_-]+/g, '-')
+                .replace(/^-+|-+$/g, '');
+        };
+
+        var article = null;
+
+        if (slug) {
+            var decodedSlug = decodeURIComponent(slug);
+            article = allArticles.find(function(a) {
+                return a.slug === slug || a.slug === decodedSlug;
+            });
+            if (!article) {
+                article = templateArticles.find(function(a) {
+                    return slugify(a.title) === slug || slugify(a.title) === decodedSlug;
+                });
+            }
+        }
+
+        if (!article && articleId) {
+            article = allArticles.find(function(a) { return String(a.id) === String(articleId); });
+            if (!article) {
+                article = templateArticles.find(function(a) { return String(a.id) === String(articleId); });
+            }
+        }
+
+        if (!article) {
+            titleEl.textContent = 'Article Not Found';
+            var bodyEl = document.getElementById('articleBody');
+            if (bodyEl) bodyEl.innerHTML = '<p>The requested article could not be found.</p>';
+            return;
+        }
+
+        var siteName = document.querySelector('.logo a');
+        siteName = siteName ? siteName.textContent.trim() : 'Editorial';
+
+        titleEl.textContent = article.title;
+        document.title = article.title + ' - ' + siteName;
+
+        var catEl = document.getElementById('articleCategory');
+        if (catEl && article.categoryName) catEl.textContent = article.categoryName;
+
+        var dateEl = document.getElementById('articleDate');
+        if (dateEl && article.date) dateEl.textContent = article.date;
+
+        var imgEl = document.getElementById('articleImage');
+        if (imgEl && article.image) {
+            imgEl.src = article.image;
+            imgEl.alt = article.title;
+        }
+
+        var bodyEl = document.getElementById('articleBody');
+        if (!bodyEl) return;
+
+        bodyEl.innerHTML = '<p style="text-align:center;color:#888;">Loading article...</p>';
+
+        var jsonId = article.id;
+        if (jsonId) {
+            fetch('js/articles/' + jsonId + '.json')
+                .then(function(resp) { return resp.ok ? resp.json() : null; })
+                .then(function(detail) {
+                    if (detail && detail.content) {
+                        bodyEl.innerHTML = detail.content;
+                        if (detail.author) {
+                            var authorEl = document.querySelector('.article-author');
+                            if (authorEl) authorEl.textContent = 'By ' + detail.author;
+                        }
+                        if (detail.image && imgEl) {
+                            imgEl.src = detail.image;
+                            imgEl.alt = detail.title || article.title;
+                        }
+                    } else {
+                        _fallback(article, bodyEl);
+                    }
+                })
+                .catch(function() { _fallback(article, bodyEl); });
+        } else {
+            _fallback(article, bodyEl);
+        }
+
+        function _fallback(art, el) {
+            if (art.content) {
+                el.innerHTML = (typeof art.content === 'string') ? art.content : '';
+            } else if (art.excerpt) {
+                el.innerHTML = '<p>' + art.excerpt + '</p>';
+            } else {
+                el.innerHTML = '<p>Article content is not available.</p>';
+            }
+        }
+    });
+})();
+"""
+
+    def _ensure_article_routing(self, sftp: paramiko.SFTPClient, site_root: str, site):
+        """确保 B1 类型站点有 article.js 动态路由脚本和正确的 script 标签"""
+        import time as _time
+        ts = str(int(_time.time()))
+
+        article_js_path = f"{site_root}/js/article.js"
+        article_html_path = f"{site_root}/article.html"
+
+        # 1. 确保 article.js 存在
+        if not self._remote_file_exists(sftp, article_js_path):
+            self._sftp_write(sftp, article_js_path, self._ARTICLE_JS_TEMPLATE)
+            logger.info(f"[CR-018] 已创建 article.js 动态路由脚本")
+        else:
+            try:
+                existing = self._sftp_read(sftp, article_js_path)
+                if "articlesIndex" not in existing:
+                    self._sftp_write(sftp, article_js_path, self._ARTICLE_JS_TEMPLATE)
+                    logger.info(f"[CR-018] 已更新 article.js（缺少 articlesIndex 引用）")
+            except Exception:
+                pass
+
+        # 2. 确保 article.html 加载了必要的 script
+        if not self._remote_file_exists(sftp, article_html_path):
+            return
+
+        try:
+            html = self._sftp_read(sftp, article_html_path)
+        except Exception:
+            return
+
+        modified = False
+        data_js = site.data_js_path or "js/articles-index.js"
+
+        scripts_to_check = [
+            (data_js.rsplit("/", 1)[-1], data_js),
+            ("main.js", "js/main.js"),
+            ("article.js", "js/article.js"),
+        ]
+
+        for basename, src in scripts_to_check:
+            if basename not in html:
+                tag = f'    <script src="{src}?v={ts}"></script>\n'
+                html = html.replace("</body>", tag + "</body>")
+                modified = True
+                logger.info(f"[CR-018] 已注入 {basename} 到 article.html")
+
+        # 3. 同时对 article.js 做 cache bust
+        article_js_re = re.compile(r"article\.js(\?v=\d+)?")
+        if article_js_re.search(html):
+            html = article_js_re.sub(f"article.js?v={ts}", html)
+            modified = True
+
+        if modified:
+            self._sftp_write(sftp, article_html_path, html)
+
     # ─── CR-037: 网站架构自动检测 ───
 
     def _remote_file_exists(self, sftp: paramiko.SFTPClient, path: str) -> bool:
@@ -469,7 +635,16 @@ class RemotePublisher:
         result = {"hero": None, "content": []}
 
         def _read_from_cache_or_download(url: str, source: str) -> Optional[bytes]:
-            """优先从缓存读取，缓存没有则从 URL 下载"""
+            """优先从缓存读取，缓存没有则从 URL 下载，支持 base64 data URI"""
+            # base64 data URI: data:image/png;base64,xxxxx
+            if url.startswith("data:image/"):
+                try:
+                    _, b64_part = url.split(",", 1)
+                    import base64 as b64mod
+                    return b64mod.b64decode(b64_part)
+                except Exception as e:
+                    logger.warning(f"[CR-021] base64 data URI 解码失败: {e}")
+                    return None
             # 缓存图片：从本地文件读取
             if cache_session_id and "/image-cache/" in url:
                 filename = url.rsplit("/", 1)[-1] if "/" in url else ""
@@ -507,7 +682,7 @@ class RemotePublisher:
                 result["hero"] = f"image/post-{slug}/hero{ext}"
                 logger.info(f"[CR-040] 头图已上传: {remote_path} ({len(data)} bytes, source={hero_source})")
             else:
-                if featured_image.startswith("http"):
+                if featured_image.startswith("http") or featured_image.startswith("data:image/"):
                     result["hero"] = featured_image
                 logger.warning(f"[CR-040] 头图获取失败，保留原始URL: {featured_image[:80]}")
 
@@ -543,13 +718,10 @@ class RemotePublisher:
 
         def _make_img_tag(path):
             return (
-                f'\n            <div class="ab-page-hero-img">\n'
-                f'              <img\n'
-                f'                src="{path}"\n'
-                f'                alt="Article illustration"\n'
-                f'                loading="lazy"\n'
-                f'              />\n'
-                f'            </div>\n\n'
+                f'\n<div class="article-content-image" style="margin:2rem 0;border-radius:12px;overflow:hidden">'
+                f'<img src="{path}" alt="Article illustration" loading="lazy" '
+                f'style="width:100%;height:auto;display:block" />'
+                f'</div>\n\n'
             )
 
         # 收集所有可用的插入点：h2 > h3 > p（跳过第一个段落）
@@ -668,6 +840,13 @@ class RemotePublisher:
 
             # 更新 HTML 文件的缓存参数，强制 CDN/浏览器加载最新数据
             self._bust_cache(sftp, site_root, site)
+
+            # CR-018: B1 类型站点确保有 article.js 动态路由
+            if site_type == SITE_TYPE_ARTICLES_INDEX:
+                try:
+                    self._ensure_article_routing(sftp, site_root, site)
+                except Exception as e:
+                    logger.warning(f"[CR-018] 确保 article.js 路由失败: {e}")
 
             sftp.close()
             logger.info(f"文章已远程发布: slug={slug}, site={site.site_name}, type={site_type}, "
