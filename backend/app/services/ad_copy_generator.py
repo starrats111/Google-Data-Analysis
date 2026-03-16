@@ -443,57 +443,73 @@ JSON格式(严格遵守):
         fix_indices_h = sorted(set(overlong_h + bad_trans_only_h))
         fix_indices_d = sorted(set(overlong_d + bad_trans_only_d))
 
-        repair_items = []
-        for i in fix_indices_h:
-            repair_items.append({"type": "headline", "index": i, "text": headlines[i], "len": len(headlines[i])})
-        for i in fix_indices_d:
-            repair_items.append({"type": "description", "index": i, "text": descriptions[i], "len": len(descriptions[i])})
+        overlong_h_set = set(overlong_h)
+        overlong_d_set = set(overlong_d)
 
-        items_text = "\n".join(
-            f"- {r['type']} #{r['index']+1}: \"{r['text']}\" ({r['len']}字符)"
-            for r in repair_items
-        )
+        # 分两步处理：超长文案用 AI 改写，翻译缺失用简单翻译 prompt
+        # 步骤 1: 修复超长文案（需要改写英文 + 提供翻译）
+        if overlong_h or overlong_d:
+            rewrite_items = []
+            for i in overlong_h:
+                rewrite_items.append(f"标题{i+1}({len(headlines[i])}字符>30): \"{headlines[i]}\"")
+            for i in overlong_d:
+                rewrite_items.append(f"描述{i+1}({len(descriptions[i])}字符>90): \"{descriptions[i]}\"")
 
-        prompt = f"""修复以下 Google Ads 广告文案问题。商家: {merchant_name}
+            rewrite_prompt = f"""以下广告文案超长，请改写为更短版本。商家: {merchant_name}
 
-问题列表:
-{items_text}
+{chr(10).join(rewrite_items)}
 
-返回 JSON，只包含需要修复的条目:
-{{"fixes": [{{"type": "headline或description", "index": 从0开始的序号, "text": "修复后英文文案", "translation": "完整中文翻译"}}]}}
+返回JSON: {{"fixes": [{{"type":"headline或description","index":序号从0开始,"text":"改写后英文","translation":"完整中文翻译"}}]}}
+标题≤25字符，描述≤80字符。禁止emoji。翻译必须是完整中文句子。"""
 
-规则:
-- 超长的标题改写为≤25字符，超长的描述改写为≤80字符（留余量）
-- 未超长的条目只需补翻译，text 原样返回
-- 翻译必须是完整中文句子（如"BRUNT靴子：坚韧耐用"），禁止只写品牌名
-- 禁止emoji，英文文案必须语义完整"""
-
-        try:
-            raw = self.gen_service._call_with_fallback(
-                [{"role": "user", "content": prompt}], max_tokens=1500, fast=True,
-            )
-            result = self._parse_json(raw)
-            fixes = result.get("fixes", [])
-            for fix in fixes:
-                t = fix.get("type", "")
-                idx = fix.get("index", -1)
-                new_text = _strip_emoji(fix.get("text", ""))
-                new_trans = _strip_emoji(fix.get("translation", ""))
-                if t == "headline" and 0 <= idx < len(headlines):
-                    if new_text and len(new_text) <= RSA_HEADLINE_MAX:
+            try:
+                raw = self.gen_service._call_with_fallback(
+                    [{"role": "user", "content": rewrite_prompt}], max_tokens=1000, fast=True,
+                )
+                result = self._parse_json(raw)
+                for fix in result.get("fixes", []):
+                    t, idx = fix.get("type", ""), fix.get("index", -1)
+                    new_text = _strip_emoji(fix.get("text", ""))
+                    new_trans = _strip_emoji(fix.get("translation", ""))
+                    if t == "headline" and idx in overlong_h_set and new_text and len(new_text) <= RSA_HEADLINE_MAX:
                         headlines[idx] = new_text
-                    if new_trans:
-                        h_trans[idx] = new_trans
-                elif t == "description" and 0 <= idx < len(descriptions):
-                    if new_text and len(new_text) <= RSA_DESC_MAX:
+                        if new_trans:
+                            h_trans[idx] = new_trans
+                    elif t == "description" and idx in overlong_d_set and new_text and len(new_text) <= RSA_DESC_MAX:
                         descriptions[idx] = new_text
-                    if new_trans:
-                        d_trans[idx] = new_trans
-            logger.info("[AdCopy] 后处理完成: 应用 %d 个修复", len(fixes))
-        except Exception as e:
-            logger.warning("[AdCopy] 后处理AI调用失败: %s", e)
+                        if new_trans:
+                            d_trans[idx] = new_trans
+                logger.info("[AdCopy] 超长修复完成")
+            except Exception as e:
+                logger.warning("[AdCopy] 超长修复失败: %s", e)
 
-        # 本地保底：仍超长的直接截断拼接
+        # 步骤 2: 补翻译（不修改英文文案，只翻译）
+        all_bad_trans = []
+        for i in bad_trans_only_h:
+            all_bad_trans.append((i, "h", headlines[i]))
+        for i in bad_trans_only_d:
+            all_bad_trans.append((i, "d", descriptions[i]))
+
+        if all_bad_trans:
+            items_text = "\n".join(f"{idx+1}. {text}" for idx, _, text in all_bad_trans)
+            trans_prompt = f"将以下英文广告文案逐条翻译为完整中文句子，每条一行，只输出翻译：\n{items_text}"
+            try:
+                raw = self.gen_service._call_with_fallback(
+                    [{"role": "user", "content": trans_prompt}], max_tokens=500, fast=True,
+                )
+                lines = [l.strip() for l in raw.strip().split("\n") if l.strip()]
+                lines = [_re.sub(r"^\d+[\.\)、]\s*", "", l) for l in lines]
+                for idx_in_list, (orig_idx, cat, _) in enumerate(all_bad_trans):
+                    if idx_in_list < len(lines) and lines[idx_in_list]:
+                        if cat == "h":
+                            h_trans[orig_idx] = lines[idx_in_list]
+                        else:
+                            d_trans[orig_idx] = lines[idx_in_list]
+                logger.info("[AdCopy] 翻译补全完成: %d 条", len(all_bad_trans))
+            except Exception as e:
+                logger.warning("[AdCopy] 翻译补全失败: %s", e)
+
+        # 本地保底：仍超长的直接截断
         for i, h in enumerate(headlines):
             if len(h) > RSA_HEADLINE_MAX:
                 fb = f"Shop {merchant_name}"[:RSA_HEADLINE_MAX]
@@ -506,6 +522,21 @@ JSON格式(严格遵守):
                 logger.warning("[AdCopy] 描述 %d 保底截断: %s → %s", i+1, d, fb)
                 descriptions[i] = fb
                 d_trans[i] = d_trans[i] or ""
+
+        # 去重：重复标题替换为空，Google Ads 会自动跳过
+        seen_h = set()
+        for i, h in enumerate(headlines):
+            h_lower = h.strip().lower()
+            if h_lower in seen_h:
+                logger.warning("[AdCopy] 去重标题 %d: %s", i+1, h)
+                headlines[i] = ""
+                h_trans[i] = ""
+            else:
+                seen_h.add(h_lower)
+        headlines_clean = [(h, t) for h, t in zip(headlines, h_trans) if h.strip()]
+        if headlines_clean:
+            headlines[:], h_trans[:] = zip(*headlines_clean)
+            headlines, h_trans = list(headlines), list(h_trans)
 
         return headlines, descriptions, h_trans, d_trans
 
