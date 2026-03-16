@@ -1010,6 +1010,33 @@ def image_cache_cleanup_job():
         logger.error(f"图片缓存清理任务异常: {e}", exc_info=True)
 
 
+def sheet_sync_job():
+    """每天 18:00 同步共享表格中的违规/推荐商家数据"""
+    from app.database import SessionLocal
+    from app.models.sheet_config import SheetConfig
+    db = SessionLocal()
+    try:
+        for config_type in ("violation", "recommendation"):
+            cfg = db.query(SheetConfig).filter(SheetConfig.config_type == config_type).first()
+            if not cfg or not cfg.sheet_url:
+                logger.info("[SheetSync] %s 未配置共享表格链接，跳过", config_type)
+                continue
+            try:
+                if config_type == "violation":
+                    from app.services.sheet_sync_service import sync_violation_sheet
+                    result = sync_violation_sheet(db, cfg.sheet_url)
+                else:
+                    from app.services.sheet_sync_service import sync_recommendation_sheet
+                    result = sync_recommendation_sheet(db, cfg.sheet_url)
+                logger.info("[SheetSync] %s 同步完成: %s", config_type, result)
+            except Exception as e:
+                logger.error("[SheetSync] %s 同步失败: %s", config_type, e)
+    except Exception as e:
+        logger.error("[SheetSync] 定时同步异常: %s", e, exc_info=True)
+    finally:
+        db.close()
+
+
 def database_backup_job():
     """数据库自动备份任务（每天北京时间 03:00 执行）"""
     try:
@@ -1155,6 +1182,16 @@ def start_scheduler():
             max_instances=1
         )
 
+        # 13. 每天 18:00 - 共享表格同步（违规/推荐商家）
+        scheduler.add_job(
+            sheet_sync_job,
+            trigger=CronTrigger(hour=18, minute=0),
+            id='sheet_sync',
+            name='共享表格同步（每天18:00）',
+            replace_existing=True,
+            max_instances=1
+        )
+
         scheduler.start()
         logger.info("=" * 60)
         logger.info("定时任务调度器已启动")
@@ -1173,6 +1210,7 @@ def start_scheduler():
         logger.info("  10. 文章定时发布: 每5分钟 (OPT-011)")
         logger.info("  11. Campaign Link缓存同步: 每天 05:00 (OPT-016)")
         logger.info("  12. 图片缓存清理: 每小时 (CR-040)")
+        logger.info("  13. 共享表格同步: 每天 18:00")
         logger.info("=" * 60)
         
     except Exception as e:

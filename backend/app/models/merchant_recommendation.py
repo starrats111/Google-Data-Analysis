@@ -16,6 +16,7 @@ class MerchantRecommendation(Base):
     merchant_name = Column(String(200), nullable=False)
     platform = Column(String(32), nullable=True)
     merchant_url = Column(String(500), nullable=True)
+    recommend_reason = Column(Text, nullable=True)  # 推荐原因
     merchant_region = Column(String(100), nullable=True)
     epc = Column(Numeric(12, 4), nullable=True)
     commission_cap = Column(Numeric(12, 4), nullable=True)

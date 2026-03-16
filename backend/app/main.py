@@ -510,6 +510,39 @@ def _ensure_recommendation_table():
             conn.execute(text("CREATE INDEX IF NOT EXISTS idx_recommend_batch ON merchant_recommendations(upload_batch)"))
 
 
+def _ensure_new_tables():
+    """创建 violation_reports 和 sheet_configs 表，并给已有表加 reason 列。"""
+    from app.database import engine
+    from sqlalchemy import text, inspect as sa_inspect
+    insp = sa_inspect(engine)
+
+    if "violation_reports" not in insp.get_table_names():
+        from app.models.violation_report import ViolationReport
+        ViolationReport.__table__.create(engine)
+        print("[OK] violation_reports 表已创建")
+
+    if "sheet_configs" not in insp.get_table_names():
+        from app.models.sheet_config import SheetConfig
+        SheetConfig.__table__.create(engine)
+        print("[OK] sheet_configs 表已创建")
+
+    # 给 merchant_violations 加 violation_reason 列
+    if "merchant_violations" in insp.get_table_names():
+        vio_cols = [c["name"] for c in insp.get_columns("merchant_violations")]
+        if "violation_reason" not in vio_cols:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE merchant_violations ADD COLUMN violation_reason TEXT"))
+            print("[OK] merchant_violations.violation_reason 列已添加")
+
+    # 给 merchant_recommendations 加 recommend_reason 列
+    if "merchant_recommendations" in insp.get_table_names():
+        rec_cols = [c["name"] for c in insp.get_columns("merchant_recommendations")]
+        if "recommend_reason" not in rec_cols:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE merchant_recommendations ADD COLUMN recommend_reason TEXT"))
+            print("[OK] merchant_recommendations.recommend_reason 列已添加")
+
+
 @app.on_event("startup")
 async def startup_event():
     """应用启动时执行"""
@@ -539,6 +572,10 @@ async def startup_event():
         print("[OK] OPT-013 pub_sites 表已就绪")
     except Exception as e:
         print(f"[WARN] OPT-013 pub_sites 建表失败（首次部署可忽略）: {e}")
+    try:
+        _ensure_new_tables()
+    except Exception as e:
+        print(f"[WARN] 创建新表失败: {e}")
     try:
         start_scheduler()
         print("[OK] 定时任务调度器已启动")

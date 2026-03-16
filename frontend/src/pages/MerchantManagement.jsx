@@ -321,6 +321,31 @@ const MerchantManagement = () => {
   const [recommendUploadResult, setRecommendUploadResult] = useState(null)
   const [recommendUploading, setRecommendUploading] = useState(false)
 
+  // 共享表格同步状态
+  const [violationSheetUrl, setViolationSheetUrl] = useState('')
+  const [recommendSheetUrl, setRecommendSheetUrl] = useState('')
+  const [sheetSyncing, setSheetSyncing] = useState(false)
+  const [sheetSyncResult, setSheetSyncResult] = useState(null)
+  const [violationLastSynced, setViolationLastSynced] = useState(null)
+  const [recommendLastSynced, setRecommendLastSynced] = useState(null)
+
+  // 违规上报状态
+  const [reportModalOpen, setReportModalOpen] = useState(false)
+  const [reportSubmitting, setReportSubmitting] = useState(false)
+  const [reportForm] = Form.useForm()
+  const [violationReports, setViolationReports] = useState([])
+  const [reportsTotal, setReportsTotal] = useState(0)
+  const [reportsPage, setReportsPage] = useState(1)
+  const [reportsLoading, setReportsLoading] = useState(false)
+  const [reviewModalOpen, setReviewModalOpen] = useState(false)
+  const [currentReport, setCurrentReport] = useState(null)
+  const [reviewComment, setReviewComment] = useState('')
+
+  // 原因查看
+  const [reasonModalOpen, setReasonModalOpen] = useState(false)
+  const [reasonContent, setReasonContent] = useState('')
+  const [reasonTitle, setReasonTitle] = useState('')
+
   const [editMerchantForm] = Form.useForm()
 
   const platformTags = useMemo(() => {
@@ -346,8 +371,11 @@ const MerchantManagement = () => {
     if (tabKey === 'violations') {
       fetchViolations(1)
       fetchViolationAssignments()
+      fetchSheetConfig('violation')
+      fetchViolationReports(1)
     } else if (tabKey === 'recommendations') {
       fetchRecommendations(1)
+      fetchSheetConfig('recommendation')
     }
   }, [tabKey]) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -454,6 +482,103 @@ const MerchantManagement = () => {
       setUploading(false)
     }
     return false // prevent default upload
+  }
+
+  // 共享表格相关函数
+  const fetchSheetConfig = async (configType) => {
+    try {
+      const resp = await api.get('/api/merchant-violations/sheet-config', { params: { config_type: configType } })
+      if (configType === 'violation') {
+        setViolationSheetUrl(resp.data?.sheet_url || '')
+        setViolationLastSynced(resp.data?.last_synced_at)
+      } else {
+        setRecommendSheetUrl(resp.data?.sheet_url || '')
+        setRecommendLastSynced(resp.data?.last_synced_at)
+      }
+    } catch (e) { /* ignore */ }
+  }
+
+  const handleSaveSheetUrl = async (configType) => {
+    const url = configType === 'violation' ? violationSheetUrl : recommendSheetUrl
+    if (!url.trim()) { message.warning('请输入共享表格链接'); return }
+    try {
+      await api.post('/api/merchant-violations/sheet-config', { sheet_url: url.trim(), config_type: configType })
+      message.success('共享表格链接已保存')
+    } catch (e) {
+      message.error('保存失败: ' + (e.response?.data?.detail || e.message))
+    }
+  }
+
+  const handleSheetSync = async (configType) => {
+    setSheetSyncing(true)
+    setSheetSyncResult(null)
+    try {
+      const resp = await api.post('/api/merchant-violations/sheet-sync', null, { params: { config_type: configType } })
+      setSheetSyncResult(resp.data)
+      message.success(`同步完成：共 ${resp.data?.total || 0} 条，新增 ${resp.data?.new || 0} 条，标记 ${resp.data?.marked || 0} 个商家`)
+      if (configType === 'violation') {
+        fetchViolations(1)
+        fetchViolationAssignments()
+      } else {
+        fetchRecommendations(1)
+      }
+      fetchSheetConfig(configType)
+      fetchStats()
+    } catch (e) {
+      message.error('同步失败: ' + (e.response?.data?.detail || e.message))
+    } finally {
+      setSheetSyncing(false)
+    }
+  }
+
+  // 违规上报相关函数
+  const fetchViolationReports = async (page = 1) => {
+    setReportsLoading(true)
+    try {
+      const resp = await api.get('/api/merchant-violations/reports', { params: { page, page_size: 20 } })
+      setViolationReports(resp.data?.items || [])
+      setReportsTotal(resp.data?.total || 0)
+      setReportsPage(page)
+    } catch (e) { console.error(e) }
+    finally { setReportsLoading(false) }
+  }
+
+  const handleSubmitReport = async () => {
+    try {
+      const values = await reportForm.validateFields()
+      setReportSubmitting(true)
+      await api.post('/api/merchant-violations/report', values)
+      message.success('违规上报已提交，等待审核')
+      setReportModalOpen(false)
+      reportForm.resetFields()
+      fetchViolationReports(1)
+    } catch (e) {
+      if (e.response) message.error('提交失败: ' + (e.response?.data?.detail || e.message))
+    } finally {
+      setReportSubmitting(false)
+    }
+  }
+
+  const handleReviewReport = async (action) => {
+    if (!currentReport) return
+    try {
+      await api.post(`/api/merchant-violations/reports/${currentReport.id}/review`, {
+        action,
+        comment: reviewComment || undefined,
+      })
+      message.success(action === 'approve' ? '已通过审核' : '已驳回')
+      setReviewModalOpen(false)
+      setCurrentReport(null)
+      setReviewComment('')
+      fetchViolationReports(reportsPage)
+      if (action === 'approve') {
+        fetchViolations(1)
+        fetchViolationAssignments()
+        fetchStats()
+      }
+    } catch (e) {
+      message.error('审核失败: ' + (e.response?.data?.detail || e.message))
+    }
   }
 
   const fetchMerchants = async (page = merchantPage, pageSize = merchantPageSize, sort = sortInfo) => {
@@ -1335,24 +1460,51 @@ const MerchantManagement = () => {
                 )}
 
                 {/* 违规商家列表 */}
-                <Space style={{ marginBottom: 12 }}>
-                  <Input
-                    allowClear
-                    placeholder="搜索商家名/MCID/MID"
-                    style={{ width: 260 }}
-                    prefix={<SearchOutlined />}
-                    value={violationSearch}
-                    onChange={(e) => setViolationSearch(e.target.value)}
-                    onPressEnter={() => fetchViolations(1)}
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, flexWrap: 'wrap', gap: 8 }}>
+                  <Space>
+                    <Input
+                      allowClear
+                      placeholder="搜索商家名/MCID/MID"
+                      style={{ width: 260 }}
+                      prefix={<SearchOutlined />}
+                      value={violationSearch}
+                      onChange={(e) => setViolationSearch(e.target.value)}
+                      onPressEnter={() => fetchViolations(1)}
+                    />
+                    <Button type="primary" onClick={() => fetchViolations(1)}>查询</Button>
+                  </Space>
+                  <Space>
+                    <Input
+                      placeholder="粘贴 Google 共享表格链接"
+                      style={{ width: 300 }}
+                      value={violationSheetUrl}
+                      onChange={(e) => setViolationSheetUrl(e.target.value)}
+                      onPressEnter={() => handleSaveSheetUrl('violation')}
+                    />
+                    <Button onClick={() => handleSaveSheetUrl('violation')}>保存</Button>
+                    <Button type="primary" loading={sheetSyncing} onClick={() => handleSheetSync('violation')} disabled={!violationSheetUrl}>
+                      同步表格
+                    </Button>
+                    {violationLastSynced && (
+                      <span style={{ fontSize: 12, color: '#999' }}>上次同步: {new Date(violationLastSynced).toLocaleString('zh-CN')}</span>
+                    )}
+                  </Space>
+                </div>
+
+                {sheetSyncResult && (
+                  <Alert
+                    type="success" showIcon closable
+                    style={{ marginBottom: 12 }}
+                    message={`表格同步完成：共 ${sheetSyncResult.total} 条，新增 ${sheetSyncResult.new} 条，标记 ${sheetSyncResult.marked} 个商家`}
+                    onClose={() => setSheetSyncResult(null)}
                   />
-                  <Button type="primary" onClick={() => fetchViolations(1)}>查询</Button>
-                </Space>
+                )}
 
                 <Table
                   rowKey="id"
                   loading={violationLoading}
                   dataSource={violations}
-                  scroll={{ x: 1000 }}
+                  scroll={{ x: 1200 }}
                   pagination={{
                     current: violationPage,
                     pageSize: 50,
@@ -1366,6 +1518,8 @@ const MerchantManagement = () => {
                     { title: 'MID', dataIndex: 'merchant_mid', key: 'mid', width: 100, render: (v) => v || '-' },
                     { title: '平台', dataIndex: 'platform', key: 'platform', width: 80,
                       render: (v) => <Tag color={PLATFORM_COLORS[v] || 'blue'}>{v || '-'}</Tag> },
+                    { title: '违规原因', dataIndex: 'violation_reason', key: 'reason', width: 120,
+                      render: (v) => v ? <Button type="link" size="small" onClick={() => { setReasonTitle('违规原因'); setReasonContent(v); setReasonModalOpen(true) }}>查看</Button> : '-' },
                     { title: '违规时间', dataIndex: 'violation_time', key: 'vt', width: 170,
                       render: (v) => v ? new Date(v).toLocaleString('zh-CN') : '-' },
                     { title: '商家URL', dataIndex: 'merchant_url', key: 'url', width: 200, ellipsis: true,
@@ -1373,6 +1527,52 @@ const MerchantManagement = () => {
                     { title: '上传批次', dataIndex: 'upload_batch', key: 'batch', width: 200 },
                   ]}
                 />
+
+                {/* 违规上报区域 */}
+                <Card title="违规上报" size="small" style={{ marginTop: 24 }} extra={
+                  <Button type="primary" onClick={() => setReportModalOpen(true)}>提交违规上报</Button>
+                }>
+                  <Table
+                    rowKey="id"
+                    loading={reportsLoading}
+                    dataSource={violationReports}
+                    size="small"
+                    pagination={{
+                      current: reportsPage,
+                      pageSize: 20,
+                      total: reportsTotal,
+                      showTotal: (total) => `共 ${total} 条`,
+                      onChange: (page) => fetchViolationReports(page),
+                    }}
+                    columns={[
+                      { title: '商家名称', dataIndex: 'merchant_name', key: 'name', width: 160 },
+                      { title: 'MCID', dataIndex: 'mcid', key: 'mcid', width: 140, render: (v) => v || '-' },
+                      { title: '平台', dataIndex: 'platform', key: 'platform', width: 70,
+                        render: (v) => v ? <Tag color={PLATFORM_COLORS[v] || 'blue'}>{v}</Tag> : '-' },
+                      { title: '违规原因', dataIndex: 'reason', key: 'reason', width: 120,
+                        render: (v) => v ? <Button type="link" size="small" onClick={() => { setReasonTitle('违规原因'); setReasonContent(v); setReasonModalOpen(true) }}>查看</Button> : '-' },
+                      { title: '上报人', dataIndex: 'reporter', key: 'reporter', width: 90 },
+                      { title: '状态', dataIndex: 'status', key: 'status', width: 90,
+                        render: (v) => {
+                          const map = { pending: { color: 'orange', text: '待审核' }, approved: { color: 'green', text: '已通过' }, rejected: { color: 'red', text: '已驳回' } }
+                          const s = map[v] || { color: 'default', text: v }
+                          return <Tag color={s.color}>{s.text}</Tag>
+                        }
+                      },
+                      { title: '审核人', dataIndex: 'reviewer', key: 'reviewer', width: 90, render: (v) => v || '-' },
+                      { title: '审核意见', dataIndex: 'review_comment', key: 'comment', width: 120,
+                        render: (v) => v ? <Button type="link" size="small" onClick={() => { setReasonTitle('审核意见'); setReasonContent(v); setReasonModalOpen(true) }}>查看</Button> : '-' },
+                      { title: '提交时间', dataIndex: 'created_at', key: 'time', width: 160,
+                        render: (v) => v ? new Date(v).toLocaleString('zh-CN') : '-' },
+                      ...(canManage ? [{
+                        title: '操作', key: 'action', width: 120, fixed: 'right',
+                        render: (_, record) => record.status === 'pending' ? (
+                          <Button type="link" size="small" onClick={() => { setCurrentReport(record); setReviewComment(''); setReviewModalOpen(true) }}>审核</Button>
+                        ) : null,
+                      }] : []),
+                    ]}
+                  />
+                </Card>
               </Card>
             ),
           },
@@ -1412,24 +1612,42 @@ const MerchantManagement = () => {
                   />
                 )}
 
-                <Space style={{ marginBottom: 12 }}>
-                  <Input
-                    allowClear
-                    placeholder="搜索商家名/MCID/MID"
-                    style={{ width: 260 }}
-                    prefix={<SearchOutlined />}
-                    value={recommendSearch}
-                    onChange={(e) => setRecommendSearch(e.target.value)}
-                    onPressEnter={() => fetchRecommendations(1)}
-                  />
-                  <Button type="primary" onClick={() => fetchRecommendations(1)}>查询</Button>
-                </Space>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, flexWrap: 'wrap', gap: 8 }}>
+                  <Space>
+                    <Input
+                      allowClear
+                      placeholder="搜索商家名/MCID/MID"
+                      style={{ width: 260 }}
+                      prefix={<SearchOutlined />}
+                      value={recommendSearch}
+                      onChange={(e) => setRecommendSearch(e.target.value)}
+                      onPressEnter={() => fetchRecommendations(1)}
+                    />
+                    <Button type="primary" onClick={() => fetchRecommendations(1)}>查询</Button>
+                  </Space>
+                  <Space>
+                    <Input
+                      placeholder="粘贴 Google 共享表格链接"
+                      style={{ width: 300 }}
+                      value={recommendSheetUrl}
+                      onChange={(e) => setRecommendSheetUrl(e.target.value)}
+                      onPressEnter={() => handleSaveSheetUrl('recommendation')}
+                    />
+                    <Button onClick={() => handleSaveSheetUrl('recommendation')}>保存</Button>
+                    <Button type="primary" loading={sheetSyncing} onClick={() => handleSheetSync('recommendation')} disabled={!recommendSheetUrl}>
+                      同步表格
+                    </Button>
+                    {recommendLastSynced && (
+                      <span style={{ fontSize: 12, color: '#999' }}>上次同步: {new Date(recommendLastSynced).toLocaleString('zh-CN')}</span>
+                    )}
+                  </Space>
+                </div>
 
                 <Table
                   rowKey="id"
                   loading={recommendLoading}
                   dataSource={recommendations}
-                  scroll={{ x: 1200 }}
+                  scroll={{ x: 1400 }}
                   pagination={{
                     current: recommendPage,
                     pageSize: 50,
@@ -1441,6 +1659,8 @@ const MerchantManagement = () => {
                     { title: '商家名称', dataIndex: 'merchant_name', key: 'name', width: 200 },
                     { title: 'MCID', dataIndex: 'mcid', key: 'mcid', width: 140, render: (v) => v || '-' },
                     { title: 'MID', dataIndex: 'merchant_mid', key: 'mid', width: 100, render: (v) => v || '-' },
+                    { title: '推荐原因', dataIndex: 'recommend_reason', key: 'reason', width: 120,
+                      render: (v) => v ? <Button type="link" size="small" onClick={() => { setReasonTitle('推荐原因'); setReasonContent(v); setReasonModalOpen(true) }}>查看</Button> : '-' },
                     { title: '地区', dataIndex: 'merchant_region', key: 'region', width: 120, render: (v) => v || '-' },
                     { title: 'EPC', dataIndex: 'epc', key: 'epc', width: 90, align: 'right',
                       render: (v) => v != null ? `$${Number(v).toFixed(2)}` : '-' },
@@ -1879,6 +2099,71 @@ const MerchantManagement = () => {
             </>
           )}
         </Spin>
+      </Modal>
+
+      {/* 违规上报弹窗 */}
+      <Modal
+        title="提交违规上报"
+        open={reportModalOpen}
+        onCancel={() => { setReportModalOpen(false); reportForm.resetFields() }}
+        onOk={handleSubmitReport}
+        confirmLoading={reportSubmitting}
+        okText="提交"
+      >
+        <Form form={reportForm} layout="vertical">
+          <Form.Item name="merchant_name" label="商家名称" rules={[{ required: true, message: '请输入商家名称' }]}>
+            <Input placeholder="输入商家名称" />
+          </Form.Item>
+          <Form.Item name="mcid" label="MCID">
+            <Input placeholder="输入 MCID（可选）" />
+          </Form.Item>
+          <Form.Item name="platform" label="平台">
+            <Select placeholder="选择平台" allowClear>
+              {['LH', 'RW', 'CG', 'BSH', 'PM', 'LB'].map(p => <Select.Option key={p} value={p}>{p}</Select.Option>)}
+            </Select>
+          </Form.Item>
+          <Form.Item name="merchant_url" label="商家URL">
+            <Input placeholder="输入商家网址（可选）" />
+          </Form.Item>
+          <Form.Item name="reason" label="违规原因" rules={[{ required: true, message: '请输入违规原因' }]}>
+            <Input.TextArea rows={3} placeholder="详细描述违规原因" />
+          </Form.Item>
+        </Form>
+      </Modal>
+
+      {/* 审核弹窗 */}
+      <Modal
+        title="审核违规上报"
+        open={reviewModalOpen}
+        onCancel={() => { setReviewModalOpen(false); setCurrentReport(null); setReviewComment('') }}
+        footer={[
+          <Button key="reject" danger onClick={() => handleReviewReport('reject')}>驳回</Button>,
+          <Button key="approve" type="primary" onClick={() => handleReviewReport('approve')}>通过</Button>,
+        ]}
+      >
+        {currentReport && (
+          <div>
+            <p><strong>商家：</strong>{currentReport.merchant_name}</p>
+            <p><strong>MCID：</strong>{currentReport.mcid || '-'}</p>
+            <p><strong>平台：</strong>{currentReport.platform || '-'}</p>
+            <p><strong>上报人：</strong>{currentReport.reporter}</p>
+            <p><strong>违规原因：</strong>{currentReport.reason}</p>
+            <div style={{ marginTop: 16 }}>
+              <p><strong>审核意见（可选）：</strong></p>
+              <Input.TextArea rows={2} value={reviewComment} onChange={(e) => setReviewComment(e.target.value)} placeholder="输入审核意见" />
+            </div>
+          </div>
+        )}
+      </Modal>
+
+      {/* 原因查看弹窗 */}
+      <Modal
+        title={reasonTitle}
+        open={reasonModalOpen}
+        onCancel={() => setReasonModalOpen(false)}
+        footer={<Button onClick={() => setReasonModalOpen(false)}>关闭</Button>}
+      >
+        <p style={{ whiteSpace: 'pre-wrap' }}>{reasonContent}</p>
       </Modal>
     </div>
   )

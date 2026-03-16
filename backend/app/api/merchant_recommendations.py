@@ -217,6 +217,7 @@ async def list_recommendations(
         "items": [{
             "id": r.id, "mcid": r.mcid, "merchant_mid": r.merchant_mid,
             "merchant_name": r.merchant_name, "merchant_url": r.merchant_url,
+            "recommend_reason": r.recommend_reason,
             "merchant_region": r.merchant_region,
             "epc": float(r.epc) if r.epc else None,
             "commission_cap": float(r.commission_cap) if r.commission_cap else None,

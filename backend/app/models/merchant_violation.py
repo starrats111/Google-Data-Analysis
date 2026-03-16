@@ -16,6 +16,7 @@ class MerchantViolation(Base):
     merchant_name = Column(String(200), nullable=False)
     platform = Column(String(32), nullable=False, index=True)
     merchant_url = Column(String(500), nullable=True)
+    violation_reason = Column(Text, nullable=True)  # 违规原因
     violation_time = Column(DateTime(timezone=True), nullable=True)
     upload_batch = Column(String(64), nullable=False, index=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())

@@ -7,6 +7,7 @@ from datetime import datetime
 from typing import Optional
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
+from pydantic import BaseModel
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
@@ -14,6 +15,8 @@ from app.database import get_db
 from app.middleware.auth import get_current_user, get_current_manager_or_leader
 from app.models.merchant import AffiliateMerchant, MerchantAssignment
 from app.models.merchant_violation import MerchantViolation
+from app.models.violation_report import ViolationReport
+from app.models.sheet_config import SheetConfig
 from app.models.notification import Notification
 from app.models.user import User
 
@@ -248,6 +251,7 @@ async def list_violations(
             "id": v.id, "mcid": v.mcid, "merchant_mid": v.merchant_mid,
             "merchant_name": v.merchant_name, "platform": v.platform,
             "merchant_url": v.merchant_url,
+            "violation_reason": v.violation_reason,
             "violation_time": v.violation_time.isoformat() if v.violation_time else None,
             "upload_batch": v.upload_batch,
             "created_at": v.created_at.isoformat() if v.created_at else None,
@@ -309,3 +313,243 @@ async def list_batches(
         "batch_id": b.upload_batch, "count": b.count,
         "uploaded_at": b.uploaded_at.isoformat() if b.uploaded_at else None,
     } for b in batches]
+
+
+# ============================================================
+# 共享表格同步
+# ============================================================
+
+class SheetUrlRequest(BaseModel):
+    sheet_url: str
+    config_type: str = "violation"  # violation / recommendation
+
+
+@router.post("/sheet-config")
+async def save_sheet_config(
+    req: SheetUrlRequest,
+    current_user: User = Depends(get_current_manager_or_leader),
+    db: Session = Depends(get_db),
+):
+    """保存共享表格链接"""
+    from app.services.sheet_sync_service import extract_sheet_id
+    if not extract_sheet_id(req.sheet_url):
+        raise HTTPException(status_code=400, detail="无效的 Google Sheets 链接")
+
+    cfg = db.query(SheetConfig).filter(SheetConfig.config_type == req.config_type).first()
+    if cfg:
+        cfg.sheet_url = req.sheet_url
+        cfg.updated_by = current_user.id
+    else:
+        cfg = SheetConfig(config_type=req.config_type, sheet_url=req.sheet_url, updated_by=current_user.id)
+        db.add(cfg)
+    db.commit()
+    return {"success": True, "config_type": req.config_type}
+
+
+@router.get("/sheet-config")
+async def get_sheet_config(
+    config_type: str = Query("violation"),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """获取共享表格链接配置"""
+    cfg = db.query(SheetConfig).filter(SheetConfig.config_type == config_type).first()
+    if not cfg:
+        return {"sheet_url": "", "last_synced_at": None}
+    return {
+        "sheet_url": cfg.sheet_url,
+        "last_synced_at": cfg.last_synced_at.isoformat() if cfg.last_synced_at else None,
+    }
+
+
+@router.post("/sheet-sync")
+async def sync_from_sheet(
+    config_type: str = Query("violation"),
+    current_user: User = Depends(get_current_manager_or_leader),
+    db: Session = Depends(get_db),
+):
+    """从共享表格实时同步数据"""
+    cfg = db.query(SheetConfig).filter(SheetConfig.config_type == config_type).first()
+    if not cfg or not cfg.sheet_url:
+        raise HTTPException(status_code=400, detail="未配置共享表格链接")
+
+    try:
+        if config_type == "violation":
+            from app.services.sheet_sync_service import sync_violation_sheet
+            result = sync_violation_sheet(db, cfg.sheet_url)
+        else:
+            from app.services.sheet_sync_service import sync_recommendation_sheet
+            result = sync_recommendation_sheet(db, cfg.sheet_url)
+    except Exception as e:
+        logger.error("[SheetSync] 同步失败: %s", e)
+        raise HTTPException(status_code=500, detail=f"同步失败: {str(e)}")
+
+    return {"success": True, **result}
+
+
+# ============================================================
+# 员工违规上报
+# ============================================================
+
+class ViolationReportRequest(BaseModel):
+    merchant_name: str
+    mcid: Optional[str] = None
+    merchant_mid: Optional[str] = None
+    platform: Optional[str] = None
+    merchant_url: Optional[str] = None
+    reason: str
+
+
+@router.post("/report")
+async def submit_violation_report(
+    req: ViolationReportRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """员工提交违规上报"""
+    report = ViolationReport(
+        reporter_id=current_user.id,
+        merchant_name=req.merchant_name,
+        mcid=req.mcid,
+        merchant_mid=req.merchant_mid,
+        platform=req.platform,
+        merchant_url=req.merchant_url,
+        reason=req.reason,
+        status="pending",
+    )
+    db.add(report)
+    db.commit()
+
+    # 通知 leader/manager
+    leaders = db.query(User).filter(User.role.in_(["manager", "leader"]), User.is_active == True).all()
+    for leader in leaders:
+        db.add(Notification(
+            user_id=leader.id, type="violation_report",
+            title="新违规上报待审核",
+            content=f"{current_user.display_name or current_user.username} 上报了商家「{req.merchant_name}」违规，原因：{req.reason[:100]}",
+        ))
+    db.commit()
+
+    return {"success": True, "report_id": report.id}
+
+
+@router.get("/reports")
+async def list_violation_reports(
+    status: Optional[str] = Query(None),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """查询违规上报列表"""
+    q = db.query(ViolationReport)
+    if status:
+        q = q.filter(ViolationReport.status == status)
+    # 普通员工只看自己的，leader/manager 看所有
+    if current_user.role not in ("manager", "leader"):
+        q = q.filter(ViolationReport.reporter_id == current_user.id)
+
+    total = q.count()
+    items = q.order_by(ViolationReport.created_at.desc()).offset((page - 1) * page_size).limit(page_size).all()
+
+    result = []
+    for r in items:
+        reporter = db.query(User).get(r.reporter_id)
+        reviewer = db.query(User).get(r.reviewer_id) if r.reviewer_id else None
+        result.append({
+            "id": r.id,
+            "merchant_name": r.merchant_name,
+            "mcid": r.mcid,
+            "merchant_mid": r.merchant_mid,
+            "platform": r.platform,
+            "merchant_url": r.merchant_url,
+            "reason": r.reason,
+            "status": r.status,
+            "reporter": reporter.display_name or reporter.username if reporter else "未知",
+            "reporter_id": r.reporter_id,
+            "reviewer": reviewer.display_name or reviewer.username if reviewer else None,
+            "review_comment": r.review_comment,
+            "reviewed_at": r.reviewed_at.isoformat() if r.reviewed_at else None,
+            "created_at": r.created_at.isoformat() if r.created_at else None,
+        })
+    return {"items": result, "total": total}
+
+
+class ReviewRequest(BaseModel):
+    action: str  # approve / reject
+    comment: Optional[str] = None
+
+
+@router.post("/reports/{report_id}/review")
+async def review_violation_report(
+    report_id: int,
+    req: ReviewRequest,
+    current_user: User = Depends(get_current_manager_or_leader),
+    db: Session = Depends(get_db),
+):
+    """审核违规上报"""
+    report = db.query(ViolationReport).get(report_id)
+    if not report:
+        raise HTTPException(status_code=404, detail="上报记录不存在")
+    if report.status != "pending":
+        raise HTTPException(status_code=400, detail="该上报已审核")
+
+    report.status = "approved" if req.action == "approve" else "rejected"
+    report.reviewer_id = current_user.id
+    report.review_comment = req.comment
+    report.reviewed_at = datetime.utcnow()
+
+    if req.action == "approve":
+        # 写入违规记录
+        batch_id = f"REPORT-{datetime.utcnow().strftime('%Y%m%d%H%M%S')}-{uuid.uuid4().hex[:6]}"
+        v = MerchantViolation(
+            mcid=report.mcid,
+            merchant_mid=report.merchant_mid,
+            merchant_name=report.merchant_name,
+            platform=report.platform or "",
+            merchant_url=report.merchant_url,
+            violation_reason=report.reason,
+            violation_time=datetime.utcnow(),
+            upload_batch=batch_id,
+        )
+        db.add(v)
+
+        # 标记 AffiliateMerchant
+        conditions = []
+        if report.mcid:
+            conditions.append(func.lower(AffiliateMerchant.mcid) == report.mcid.lower())
+        if report.merchant_mid and report.merchant_mid.isdigit():
+            conditions.append(AffiliateMerchant.merchant_id == report.merchant_mid)
+        if report.merchant_name:
+            conditions.append(func.lower(AffiliateMerchant.merchant_name) == report.merchant_name.lower())
+        if conditions:
+            matched = db.query(AffiliateMerchant).filter(or_(*conditions)).all()
+            for m in matched:
+                if m.violation_status != "violated":
+                    m.violation_status = "violated"
+                    m.violation_time = datetime.utcnow()
+
+        # 尝试写入共享表格
+        cfg = db.query(SheetConfig).filter(SheetConfig.config_type == "violation").first()
+        if cfg and cfg.sheet_url:
+            try:
+                from app.services.sheet_sync_service import write_violation_to_sheet
+                reporter = db.query(User).get(report.reporter_id)
+                write_violation_to_sheet(
+                    cfg.sheet_url, report.merchant_name, report.mcid or "",
+                    report.platform or "", report.reason,
+                    reporter.display_name or reporter.username if reporter else "未知"
+                )
+            except Exception as e:
+                logger.warning("[ViolationReport] 写入共享表格失败: %s", e)
+
+    # 通知上报人
+    db.add(Notification(
+        user_id=report.reporter_id, type="violation_review",
+        title=f"违规上报{'已通过' if req.action == 'approve' else '已驳回'}",
+        content=f"你上报的商家「{report.merchant_name}」违规{'已通过审核' if req.action == 'approve' else '被驳回'}。"
+                + (f"审核意见：{req.comment}" if req.comment else ""),
+    ))
+
+    db.commit()
+    return {"success": True, "status": report.status}

@@ -39,6 +39,9 @@ from app.models.site import PubSite
 from app.models.user_site_binding import UserSiteBinding
 # Campaign Link 缓存（OPT-016）
 from app.models.campaign_link_cache import CampaignLinkCache
+# 违规上报 & 共享表格配置
+from app.models.violation_report import ViolationReport
+from app.models.sheet_config import SheetConfig
 
 __all__ = [
     "User",
@@ -92,6 +95,9 @@ __all__ = [
     "UserSiteBinding",
     # Campaign Link 缓存
     "CampaignLinkCache",
+    # 违规上报 & 共享表格配置
+    "ViolationReport",
+    "SheetConfig",
 ]
 
 
