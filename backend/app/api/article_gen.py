@@ -6,7 +6,7 @@ import logging
 import asyncio
 from typing import Optional, List
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, UploadFile, File, Form
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
@@ -46,6 +46,7 @@ class ImageGenRequest(BaseModel):
 class CrawlRequest(BaseModel):
     url: str
     language: str = "zh"
+    merchant_name: Optional[str] = None
 
 
 class MerchantArticleRequest(BaseModel):
@@ -69,6 +70,7 @@ class ImageSearchRequest(BaseModel):
 class AnalyzeUrlRequest(BaseModel):
     url: str
     language: str = "zh"
+    merchant_name: Optional[str] = None
 
 
 @router.post("/titles")
@@ -130,6 +132,10 @@ async def crawl_merchant_site(
     """爬取商家网站并 AI 分析（OPT-012）"""
     crawl_data = crawl_merchant(data.url)
 
+    # CR-019: 平台提供的商家名称优先作为品牌名
+    if data.merchant_name:
+        crawl_data["brand_name"] = data.merchant_name
+
     if crawl_data.get("crawl_failed") and not crawl_data.get("partial"):
         raise HTTPException(status_code=400, detail=crawl_data.get("error", "爬取失败"))
 
@@ -139,7 +145,7 @@ async def crawl_merchant_site(
         try:
             service = ArticleGenService()
             analysis = service.analyze_url_only(data.url, data.language)
-            brand_name = crawl_data.get("brand_name") or analysis.get("brand_name", "")
+            brand_name = data.merchant_name or crawl_data.get("brand_name") or analysis.get("brand_name", "")
             stock_images = []
             category = analysis.get("category", "") if isinstance(analysis, dict) else ""
             products = []
@@ -426,8 +432,9 @@ async def analyze_url_only(
     try:
         service = ArticleGenService()
         analysis = service.analyze_url_only(data.url, data.language)
+        brand = data.merchant_name or analysis.get("brand_name", "")
         return {
-            "brand_name": analysis.get("brand_name", ""),
+            "brand_name": brand,
             "analysis": analysis,
         }
     except Exception as e:
@@ -555,6 +562,30 @@ class ImageUploadRequest(BaseModel):
     session_id: str
     filename: str
     data_base64: str
+
+
+@router.post("/image-cache/upload")
+async def upload_image_file(
+    file: UploadFile = File(...),
+    session_id: str = Form(...),
+    current_user: User = Depends(get_current_user),
+):
+    """上传图片到缓存（multipart 方式，比 base64 快 30%+）"""
+    file_data = await file.read()
+    if not file_data:
+        raise HTTPException(status_code=400, detail="空文件")
+
+    info = image_cache_service.save_upload(session_id, file_data, file.filename or "upload.jpg")
+    if not info:
+        raise HTTPException(status_code=400, detail="缓存会话不存在或保存失败")
+
+    return {
+        "cache_url": f"/api/article-gen/image-cache/{session_id}/{info['cache_file']}",
+        "original_url": info["original_url"],
+        "source": "upload",
+        "width": info["width"],
+        "height": info["height"],
+    }
 
 
 @router.post("/image-cache/upload-base64")

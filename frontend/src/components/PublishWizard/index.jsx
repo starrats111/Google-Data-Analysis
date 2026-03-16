@@ -190,23 +190,26 @@ const PublishWizard = ({ drawerMode = false }) => {
 
   // CR-040: 上传图片到缓存 API
   const uploadToImageCache = async (file) => {
+    // 先生成本地预览 URL（即时显示，不等网络）
+    const localUrl = URL.createObjectURL(file)
+    const placeholder = { cache_url: localUrl, url: localUrl, source: 'upload', _uploading: true }
+
     if (!imageCacheSession) {
-      // 如果还没有缓存会话（比如没爬虫直接上传），先用 data URL
-      const dataUrl = await fileToDataUrl(file)
-      return { cache_url: dataUrl, url: dataUrl, source: 'upload' }
+      return { ...placeholder, _uploading: false }
     }
+
     try {
-      const dataUrl = await fileToDataUrl(file)
-      const res = await api.post('/api/article-gen/image-cache/upload-base64', {
-        session_id: imageCacheSession,
-        filename: file.name || 'upload.jpg',
-        data_base64: dataUrl,
+      const form = new FormData()
+      form.append('file', file)
+      form.append('session_id', imageCacheSession)
+      const res = await api.post('/api/article-gen/image-cache/upload', form, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+        timeout: 60000,
       })
-      return { ...res.data, source: 'upload' }  // {cache_url, original_url, source, width, height}
-    } catch (e) {
-      // 上传到缓存失败，回退到 data URL
-      const dataUrl = await fileToDataUrl(file)
-      return { cache_url: dataUrl, url: dataUrl, source: 'upload' }
+      return { ...res.data, source: 'upload' }
+    } catch {
+      // 上传失败，保留本地预览
+      return { ...placeholder, _uploading: false }
     }
   }
 
@@ -1448,13 +1451,26 @@ const PublishWizard = ({ drawerMode = false }) => {
                     beforeUpload={() => false}
                     onChange={async (info) => {
                       const files = info.fileList?.map(f => f.originFileObj || f).filter(Boolean) || []
-                      for (const file of files) {
-                        const imgObj = await uploadToImageCache(file)
-                        if (imgObj) {
-                          setCrawledImages(prev => [...prev, imgObj])
+                      if (!files.length) return
+                      // 先用本地 URL 即时显示预览
+                      const localPreviews = files.map(f => ({
+                        cache_url: URL.createObjectURL(f), url: URL.createObjectURL(f),
+                        source: 'upload', _uploading: true, _file: f,
+                      }))
+                      setCrawledImages(prev => [...prev, ...localPreviews])
+                      message.info(`正在上传 ${files.length} 张图片...`)
+                      // 并行上传到服务器
+                      const results = await Promise.all(files.map(f => uploadToImageCache(f)))
+                      // 替换本地预览为服务器 URL
+                      setCrawledImages(prev => {
+                        const updated = [...prev]
+                        for (let i = 0; i < localPreviews.length; i++) {
+                          const idx = updated.findIndex(img => img === localPreviews[i])
+                          if (idx >= 0 && results[i]) updated[idx] = results[i]
                         }
-                      }
-                      if (files.length > 0) message.success(`已上传 ${files.length} 张图片`)
+                        return updated
+                      })
+                      message.success(`已上传 ${files.length} 张图片`)
                     }}
                     style={{ padding: '20px 0' }}
                   >
