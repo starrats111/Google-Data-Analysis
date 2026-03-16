@@ -178,9 +178,15 @@ async def my_library(
             | (CampaignLinkCache.merchant_id.ilike(like))
         )
 
+    from sqlalchemy import case as sa_case
+
     total = q.count()
     rows = (
-        q.order_by(CampaignLinkCache.platform_code, CampaignLinkCache.merchant_name)
+        q.order_by(
+            CampaignLinkCache.platform_code,
+            sa_case((CampaignLinkCache.merchant_name.is_(None), 1), (CampaignLinkCache.merchant_name == '', 1), else_=0),
+            CampaignLinkCache.merchant_name,
+        )
         .offset((page - 1) * page_size)
         .limit(page_size)
         .all()
@@ -197,13 +203,15 @@ async def my_library(
 
     active_map = {}
     if mid_set:
-        # 每个用户取最新数据日期，只看该日期的状态
-        user_latest_sub = (
+        # 按 (user, merchant_code) 取最新日期，检查该日期的状态
+        user_merchant_latest = (
             db.query(
                 GoogleAdsApiData.user_id,
+                GoogleAdsApiData.extracted_account_code,
                 sa_func.max(GoogleAdsApiData.date).label("max_date"),
             )
-            .group_by(GoogleAdsApiData.user_id)
+            .filter(GoogleAdsApiData.extracted_account_code.in_(list(mid_set)))
+            .group_by(GoogleAdsApiData.user_id, GoogleAdsApiData.extracted_account_code)
             .subquery()
         )
         active_rows = (
@@ -212,14 +220,14 @@ async def my_library(
                 sa_func.count(sa_distinct(GoogleAdsApiData.user_id)).label("cnt"),
             )
             .join(
-                user_latest_sub,
+                user_merchant_latest,
                 and_(
-                    GoogleAdsApiData.user_id == user_latest_sub.c.user_id,
-                    GoogleAdsApiData.date == user_latest_sub.c.max_date,
+                    GoogleAdsApiData.user_id == user_merchant_latest.c.user_id,
+                    GoogleAdsApiData.extracted_account_code == user_merchant_latest.c.extracted_account_code,
+                    GoogleAdsApiData.date == user_merchant_latest.c.max_date,
                 ),
             )
             .filter(
-                GoogleAdsApiData.extracted_account_code.in_(list(mid_set)),
                 GoogleAdsApiData.status == "已启用",
             )
             .group_by(GoogleAdsApiData.extracted_account_code)
@@ -268,22 +276,23 @@ async def my_library_active_advertisers(
     from sqlalchemy import func as sa_func, distinct as sa_distinct, and_
     from datetime import date as _date
 
-    # 1. 用最新日期找出当前在投的用户
-    user_latest_sub = (
+    # 1. 按 (user, merchant) 取最新日期，判断在投状态
+    user_merchant_latest = (
         db.query(
             GoogleAdsApiData.user_id,
             sa_func.max(GoogleAdsApiData.date).label("max_date"),
         )
+        .filter(GoogleAdsApiData.extracted_account_code == merchant_id)
         .group_by(GoogleAdsApiData.user_id)
         .subquery()
     )
     active_user_rows = (
         db.query(sa_distinct(GoogleAdsApiData.user_id))
         .join(
-            user_latest_sub,
+            user_merchant_latest,
             and_(
-                GoogleAdsApiData.user_id == user_latest_sub.c.user_id,
-                GoogleAdsApiData.date == user_latest_sub.c.max_date,
+                GoogleAdsApiData.user_id == user_merchant_latest.c.user_id,
+                GoogleAdsApiData.date == user_merchant_latest.c.max_date,
             ),
         )
         .filter(
