@@ -140,16 +140,24 @@ const ArticleList = () => {
     },
     {
       title: '网站',
-      dataIndex: 'published_to_site',
+      dataIndex: 'site_name',
       key: 'site',
-      width: 120,
-      render: (published, record) => published ? (
-        <Tooltip title={record.article_url || record.site_name}>
-          <a href={record.article_url || '#'} target="_blank" rel="noopener noreferrer" onClick={e => !record.article_url && e.preventDefault()}>
-            <Tag icon={<GlobalOutlined />} color="cyan">{record.site_name || '已发布'}</Tag>
-          </a>
-        </Tooltip>
-      ) : '-',
+      width: 130,
+      render: (siteName, record) => {
+        if (record.published_to_site) {
+          return (
+            <Tooltip title={record.article_url || siteName}>
+              <a href={record.article_url || '#'} target="_blank" rel="noopener noreferrer" onClick={e => !record.article_url && e.preventDefault()}>
+                <Tag icon={<GlobalOutlined />} color="cyan">{siteName || '已发布'}</Tag>
+              </a>
+            </Tooltip>
+          )
+        }
+        if (siteName) {
+          return <Tag color="default">{siteName}</Tag>
+        }
+        return <Tag color="warning">未分配</Tag>
+      },
     },
     {
       title: '操作',

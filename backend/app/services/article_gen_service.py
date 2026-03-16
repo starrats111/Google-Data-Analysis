@@ -72,7 +72,7 @@ class ArticleGenService:
             "max_tokens": max_tokens,
             "temperature": 0.7,
         }
-        with httpx.Client(timeout=120) as client:
+        with httpx.Client(timeout=300) as client:
             resp = client.post(url, json=payload, headers=headers)
             resp.raise_for_status()
             data = resp.json()
@@ -187,21 +187,25 @@ class ArticleGenService:
         system_prompt = (
             "You are a JSON API. You MUST respond with ONLY a valid JSON object, no other text before or after.\n"
             "Do NOT include any explanation, greeting, or markdown. Output raw JSON only.\n\n"
+            f"TARGET LANGUAGE: **{lang_label}**. This is the ONLY language you should use for titles and keywords.\n\n"
             f"Analyze the merchant website info below. Current year: {current_year}.\n"
             "Analysis dimensions: products/services, selling points, target audience, promotions, "
             "best article category (fashion/health/home/travel/finance/food/tech/beauty).\n"
             f"Generate 5 promotional article titles and 5 SEO keywords.\n"
-            f"CRITICAL: ALL 'title' fields and ALL 'keywords' MUST be written in **{lang_label}** language. "
-            f"The 'title_en' field must be the English translation.\n\n"
+            f"STRICT LANGUAGE RULE: Every 'title' field MUST be written in {lang_label}. "
+            f"Every keyword MUST be in {lang_label}. "
+            f"The 'title_en' field must be the English translation of the {lang_label} title.\n"
+            f"Do NOT use any other language besides {lang_label} for titles and keywords.\n\n"
             "Required JSON format:\n"
             '{"category":"travel","products":["product1"],"selling_points":["point1"],'
             '"target_audience":"audience","promotions":"promo info",'
-            f'"titles":[{{"title":"A title written in {lang_label}","title_en":"English translation"}}],'
-            '"keywords":["keyword1","keyword2","keyword3","keyword4","keyword5"]}'
+            f'"titles":[{{"title":"Title in {lang_label} language","title_en":"English translation"}}],'
+            f'"keywords":["keyword in {lang_label}","keyword in {lang_label}","keyword in {lang_label}","keyword in {lang_label}","keyword in {lang_label}"]'
+            '}'
         )
         raw_text = crawl_data.get("raw_text", "")
         brand = crawl_data.get("brand_name", "")
-        user_msg = f"商家品牌：{brand}\n\n商家网站内容：\n{raw_text[:6000]}"
+        user_msg = f"商家品牌：{brand}\nTarget language: {lang_label}\n\n商家网站内容：\n{raw_text[:6000]}"
 
         messages = [
             {"role": "system", "content": system_prompt},
@@ -246,22 +250,26 @@ class ArticleGenService:
         system_prompt = (
             "You are a JSON API. You MUST respond with ONLY a valid JSON object, no other text.\n"
             "Do NOT include any explanation, greeting, or markdown. Output raw JSON only.\n\n"
+            f"TARGET LANGUAGE: **{lang_label}**. This is the ONLY language you should use for titles and keywords.\n\n"
             f"Based on the merchant website URL below, generate promotional content. Current year: {current_year}.\n"
             "Even though you cannot access the website, use the domain name and URL path to infer:\n"
             "- What kind of products/services they likely offer\n"
             "- Their brand positioning\n"
             "- Target audience\n\n"
             f"Generate 5 promotional article titles and 5 SEO keywords.\n"
-            f"CRITICAL: ALL 'title' fields and ALL 'keywords' MUST be written in **{lang_label}** language. "
-            f"The 'title_en' field must be the English translation.\n"
+            f"STRICT LANGUAGE RULE: Every 'title' field MUST be written in {lang_label}. "
+            f"Every keyword MUST be in {lang_label}. "
+            f"The 'title_en' field must be the English translation of the {lang_label} title.\n"
+            f"Do NOT use any other language besides {lang_label} for titles and keywords.\n"
             "Titles should be engaging, SEO-friendly, and suitable for affiliate marketing.\n\n"
             "Required JSON format:\n"
             '{"brand_name":"BrandName","category":"travel","products":["product1"],'
             '"selling_points":["point1"],"target_audience":"audience","promotions":"",'
-            f'"titles":[{{"title":"A title written in {lang_label}","title_en":"English translation"}}],'
-            '"keywords":["keyword1","keyword2","keyword3","keyword4","keyword5"]}'
+            f'"titles":[{{"title":"Title in {lang_label} language","title_en":"English translation"}}],'
+            f'"keywords":["keyword in {lang_label}","keyword in {lang_label}","keyword in {lang_label}","keyword in {lang_label}","keyword in {lang_label}"]'
+            '}'
         )
-        user_msg = f"商家网站 URL：{url}\n域名：{domain}\n推测品牌名：{brand_guess}"
+        user_msg = f"商家网站 URL：{url}\n域名：{domain}\n推测品牌名：{brand_guess}\nTarget language: {lang_label}"
 
         messages = [
             {"role": "system", "content": system_prompt},

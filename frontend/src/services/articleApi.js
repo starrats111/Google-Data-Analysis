@@ -11,9 +11,9 @@ const articleApi = {
   getArticleVersions: (id) => api.get(`/api/articles/${id}/versions`),
 
   // AI 生成
-  generateTitles: (data) => api.post('/api/article-gen/titles', data),
-  generateArticle: (data) => api.post('/api/article-gen/article', data),
-  generateImages: (data) => api.post('/api/article-gen/images', data),
+  generateTitles: (data) => api.post('/api/article-gen/titles', data, { timeout: 300000 }),
+  generateArticle: (data) => api.post('/api/article-gen/article', data, { timeout: 600000 }),
+  generateImages: (data) => api.post('/api/article-gen/images', data, { timeout: 300000 }),
 
   // 分类
   getCategories: () => api.get('/api/article-categories'),
@@ -38,9 +38,20 @@ const articleApi = {
     const headers = { 'Content-Type': 'application/json' }
     const token = getToken()
     if (token) headers['Authorization'] = `Bearer ${token}`
-    const resp = await fetch(`${baseUrl}/api/article-gen/merchant-article`, {
-      method: 'POST', headers, body: JSON.stringify(data), credentials: 'include',
-    })
+    const controller = new AbortController()
+    const timeoutId = setTimeout(() => controller.abort(), 600000) // 10分钟超时
+    let resp
+    try {
+      resp = await fetch(`${baseUrl}/api/article-gen/merchant-article`, {
+        method: 'POST', headers, body: JSON.stringify(data), credentials: 'include',
+        signal: controller.signal,
+      })
+    } catch (e) {
+      clearTimeout(timeoutId)
+      if (e.name === 'AbortError') throw new Error('文章生成超时，请重试')
+      throw new Error(`网络错误: ${e.message}`)
+    }
+    clearTimeout(timeoutId)
     if (!resp.ok) {
       const err = await resp.json().catch(() => ({ detail: '生成失败' }))
       throw new Error(err.detail || '生成失败')
