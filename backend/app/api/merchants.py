@@ -382,6 +382,26 @@ async def my_library_active_advertisers(
         .all()
     )
 
+    # 3. 查本月佣金（从 AdCampaignDailyMetric + AdCampaign 关联）
+    from app.models.ad_campaign_daily_metric import AdCampaignDailyMetric
+    from app.models.ad_campaign import AdCampaign
+
+    commission_rows = (
+        db.query(
+            AdCampaign.user_id,
+            sa_func.sum(AdCampaignDailyMetric.commission).label("total_commission"),
+        )
+        .join(AdCampaign, AdCampaignDailyMetric.campaign_id == AdCampaign.id)
+        .filter(
+            AdCampaign.merchant_id == merchant_id,
+            AdCampaign.user_id.in_(active_user_ids),
+            AdCampaignDailyMetric.date >= month_start,
+        )
+        .group_by(AdCampaign.user_id)
+        .all()
+    )
+    commission_map = {r.user_id: round(float(r.total_commission or 0), 2) for r in commission_rows}
+
     return [
         {
             "user_id": r.user_id,
@@ -391,6 +411,7 @@ async def my_library_active_advertisers(
             "total_cost": round(float(r.total_cost or 0), 2),
             "total_clicks": int(r.total_clicks or 0),
             "total_impressions": int(r.total_impressions or 0),
+            "monthly_commission": commission_map.get(r.user_id, 0),
         }
         for r in rows
     ]

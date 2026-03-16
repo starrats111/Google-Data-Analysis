@@ -1660,25 +1660,59 @@ const MerchantManagement = () => {
         open={activeAdvModalOpen}
         onCancel={() => setActiveAdvModalOpen(false)}
         footer={null}
-        width={700}
+        width={750}
       >
         <Spin spinning={activeAdvLoading}>
           {activeAdvList.length === 0 && !activeAdvLoading ? (
             <Alert message="当前无员工在投该商家" type="info" />
           ) : (
-            <Table
-              dataSource={activeAdvList}
-              rowKey="user_id"
-              size="small"
-              pagination={false}
-              columns={[
-                { title: '员工', dataIndex: 'display_name', width: 100, render: (v, r) => v || r.username },
-                { title: '广告系列数', dataIndex: 'campaign_count', width: 100, align: 'center' },
-                { title: '总花费', dataIndex: 'total_cost', width: 120, align: 'right', render: v => `$${(v || 0).toFixed(2)}` },
-                { title: '点击', dataIndex: 'total_clicks', width: 90, align: 'right', render: v => (v || 0).toLocaleString() },
-                { title: '展示', dataIndex: 'total_impressions', width: 100, align: 'right', render: v => (v || 0).toLocaleString() },
-              ]}
-            />
+            <>
+              {/* 汇总指标 */}
+              {(() => {
+                const sumCost = activeAdvList.reduce((s, r) => s + (r.total_cost || 0), 0)
+                const sumCommission = activeAdvList.reduce((s, r) => s + (r.monthly_commission || 0), 0)
+                const roi = sumCost > 0 ? ((sumCommission - sumCost) / sumCost * 100) : 0
+                return (
+                  <Row gutter={16} style={{ marginBottom: 12 }}>
+                    <Col span={8}>
+                      <Statistic title="总花费" value={sumCost} precision={2} prefix="$" valueStyle={{ fontSize: 18, color: '#cf1322' }} />
+                    </Col>
+                    <Col span={8}>
+                      <Statistic title="总佣金（本月）" value={sumCommission} precision={2} prefix="$" valueStyle={{ fontSize: 18, color: '#52c41a' }} />
+                    </Col>
+                    <Col span={8}>
+                      <Statistic
+                        title="ROI"
+                        value={sumCost > 0 ? roi : 0}
+                        precision={1}
+                        suffix="%"
+                        valueStyle={{ fontSize: 18, color: roi > 0 ? '#52c41a' : roi < 0 ? '#cf1322' : undefined }}
+                      />
+                    </Col>
+                  </Row>
+                )
+              })()}
+              <Table
+                dataSource={activeAdvList}
+                rowKey="user_id"
+                size="small"
+                pagination={false}
+                columns={[
+                  { title: '员工', dataIndex: 'display_name', width: 90, render: (v, r) => v || r.username },
+                  { title: '广告系列数', dataIndex: 'campaign_count', width: 90, align: 'center' },
+                  { title: '总花费', dataIndex: 'total_cost', width: 100, align: 'right', render: v => `$${(v || 0).toFixed(2)}` },
+                  { title: '点击', dataIndex: 'total_clicks', width: 80, align: 'right', render: v => (v || 0).toLocaleString() },
+                  { title: '本月佣金', dataIndex: 'monthly_commission', width: 100, align: 'right',
+                    render: v => {
+                      const val = v || 0
+                      return val > 0
+                        ? <span style={{ color: '#52c41a', fontWeight: 600 }}>${val.toFixed(2)}</span>
+                        : <span style={{ color: '#bfbfbf' }}>$0.00</span>
+                    }
+                  },
+                ]}
+              />
+            </>
           )}
         </Spin>
       </Modal>
