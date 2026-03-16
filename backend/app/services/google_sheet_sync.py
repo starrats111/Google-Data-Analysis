@@ -152,8 +152,11 @@ class GoogleSheetSyncService:
                 row_status = "已启用"
                 if "Status" in col and col["Status"] < len(row) and row[col["Status"]] not in (None, ""):
                     raw_st = str(row[col["Status"]]).strip()
-                    status_map = {"ENABLED": "已启用", "PAUSED": "已暂停", "REMOVED": "已移除"}
-                    row_status = status_map.get(raw_st.upper(), raw_st) if raw_st else "已启用"
+                    status_map = {
+                        "ENABLED": "已启用", "PAUSED": "已暂停", "REMOVED": "已移除",
+                        "2": "已启用", "3": "已暂停", "4": "已移除",
+                    }
+                    row_status = status_map.get(raw_st.upper(), status_map.get(raw_st, raw_st)) if raw_st else "已启用"
                 row_budget = 0.0
                 if "Budget" in col and col["Budget"] < len(row) and row[col["Budget"]] not in (None, ""):
                     try:

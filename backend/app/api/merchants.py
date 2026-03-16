@@ -194,7 +194,9 @@ async def my_library(
 
     # 批量查询在投人数：每个 merchant_id 有多少用户当前有已启用广告
     from app.models.google_ads_api_data import GoogleAdsApiData
-    from sqlalchemy import func as sa_func, distinct as sa_distinct, and_
+    from sqlalchemy import func as sa_func, distinct as sa_distinct, and_, or_
+
+    ACTIVE_STATUSES = ["已启用", "2", "ENABLED"]
 
     mid_set = set()
     for r in rows:
@@ -228,7 +230,10 @@ async def my_library(
                 ),
             )
             .filter(
-                GoogleAdsApiData.status == "已启用",
+                or_(
+                    GoogleAdsApiData.status.in_(ACTIVE_STATUSES),
+                    GoogleAdsApiData.status.is_(None),
+                ),
             )
             .group_by(GoogleAdsApiData.extracted_account_code)
             .all()
@@ -273,8 +278,10 @@ async def my_library_active_advertisers(
     """查询某商家当前在投广告员工详情：最新日期判断在投状态，花费/点击统计本月数据"""
     from app.models.google_ads_api_data import GoogleAdsApiData
     from app.models.user import User as UserModel
-    from sqlalchemy import func as sa_func, distinct as sa_distinct, and_
+    from sqlalchemy import func as sa_func, distinct as sa_distinct, and_, or_
     from datetime import date as _date
+
+    ACTIVE_STATUSES = ["已启用", "2", "ENABLED"]
 
     # 1. 按 (user, merchant) 取最新日期，判断在投状态
     user_merchant_latest = (
@@ -297,7 +304,10 @@ async def my_library_active_advertisers(
         )
         .filter(
             GoogleAdsApiData.extracted_account_code == merchant_id,
-            GoogleAdsApiData.status == "已启用",
+            or_(
+                GoogleAdsApiData.status.in_(ACTIVE_STATUSES),
+                GoogleAdsApiData.status.is_(None),
+            ),
         )
         .all()
     )
