@@ -284,7 +284,7 @@ const PublishWizard = ({ drawerMode = false }) => {
         const aiData = aiRes.data
         const analysis = aiData?.analysis || {}
         const crawlData = {
-          brand_name: aiData?.brand_name || '',
+          brand_name: aiData?.brand_name || campaignResult?.merchant_name || '',
           url: merchantUrl,
           analysis,
         }
@@ -293,7 +293,7 @@ const PublishWizard = ({ drawerMode = false }) => {
         message.success('AI 分析完成，已自动选择标题和关键词')
       } catch (_aiErr) {
         message.warning('AI 分析也失败了，请手动输入标题和关键词')
-        setCrawlResult({ brand_name: '', url: merchantUrl, analysis: { titles: [], keywords: [], products: [], selling_points: [], promotions: '' } })
+        setCrawlResult({ brand_name: campaignResult?.merchant_name || '', url: merchantUrl, analysis: { titles: [], keywords: [], products: [], selling_points: [], promotions: '' } })
         setMerchantTitles([])
         setMerchantKeywords([])
       }
@@ -616,7 +616,7 @@ const PublishWizard = ({ drawerMode = false }) => {
         const aiData = aiRes.data
         const analysis = aiData?.analysis || {}
         const crawlData = {
-          brand_name: aiData?.brand_name || '',
+          brand_name: aiData?.brand_name || campaignResult?.merchant_name || '',
           url: merchantUrl,
           analysis,
         }
@@ -625,7 +625,7 @@ const PublishWizard = ({ drawerMode = false }) => {
         message.success('AI 分析完成，已自动选择标题和关键词')
       } catch (_aiErr) {
         message.warning('AI 分析也失败了，请在确认页面手动输入标题和关键词')
-        setCrawlResult({ brand_name: '', url: merchantUrl, analysis: { titles: [], keywords: [], products: [], selling_points: [], promotions: '' } })
+        setCrawlResult({ brand_name: campaignResult?.merchant_name || '', url: merchantUrl, analysis: { titles: [], keywords: [], products: [], selling_points: [], promotions: '' } })
         setMerchantTitles([])
         setMerchantKeywords([])
       }
@@ -657,7 +657,7 @@ const PublishWizard = ({ drawerMode = false }) => {
         const aiData = aiRes.data
         const analysis = aiData?.analysis || {}
         const crawlData = {
-          brand_name: aiData?.brand_name || '',
+          brand_name: aiData?.brand_name || campaignResult?.merchant_name || '',
           url: merchantUrl,
           analysis,
         }
@@ -666,7 +666,7 @@ const PublishWizard = ({ drawerMode = false }) => {
         message.success('AI 分析完成，已自动选择标题和关键词')
       } catch (_aiErr) {
         message.warning('AI 分析也失败了，请在确认页面手动输入标题和关键词')
-        setCrawlResult({ brand_name: '', url: merchantUrl, analysis: { titles: [], keywords: [], products: [], selling_points: [], promotions: '' } })
+        setCrawlResult({ brand_name: campaignResult?.merchant_name || '', url: merchantUrl, analysis: { titles: [], keywords: [], products: [], selling_points: [], promotions: '' } })
         setMerchantTitles([])
         setMerchantKeywords([])
       }
@@ -1672,7 +1672,7 @@ const PublishWizard = ({ drawerMode = false }) => {
                   />
                 </div>
               </div>
-              <p><strong>品牌：</strong>{crawlResult?.brand_name || '（爬虫未获取）'}</p>
+              <p><strong>品牌：</strong>{crawlResult?.brand_name || campaignResult?.merchant_name || merchantUrl?.replace(/^https?:\/\/(www\.)?/, '').split('/')[0] || '（未知）'}</p>
               <p><strong>商家网址：</strong>{merchantUrl}</p>
               <p><strong>追踪链接：</strong>{trackingLink}</p>
               <p><strong>语言：</strong>{language}{countryCode ? ` (${countryCode.toUpperCase()})` : ''}</p>
