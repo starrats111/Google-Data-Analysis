@@ -239,6 +239,7 @@ def _search_merchants_single_platform(db, keywords: List[str], platform: str, ex
         or_(*conditions),
         func.upper(AffiliateMerchant.platform) == platform.upper(),
         AffiliateMerchant.status == "active",
+        AffiliateMerchant.violation_status == "normal",  # 违规商家禁止进入推荐列表
     )
     if exclude_ids:
         q = q.filter(~AffiliateMerchant.id.in_(exclude_ids))

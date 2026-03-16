@@ -282,6 +282,28 @@ async def my_library(
             )
             active_map = {r.extracted_account_code: r.cnt for r in active_rows}
 
+    # 批量查违规/推荐状态（从 AffiliateMerchant 表）
+    from app.models.merchant import AffiliateMerchant
+    mid_list = [r.merchant_id for r in rows if r.merchant_id]
+    platform_list = [r.platform_code for r in rows if r.platform_code]
+    violation_map = {}
+    recommend_map = {}
+    if mid_list:
+        merchants_info = db.query(
+            AffiliateMerchant.merchant_id,
+            AffiliateMerchant.platform,
+            AffiliateMerchant.violation_status,
+            AffiliateMerchant.recommendation_status,
+        ).filter(
+            AffiliateMerchant.merchant_id.in_(mid_list),
+        ).all()
+        for m in merchants_info:
+            key = m.merchant_id
+            if m.violation_status and m.violation_status != "normal":
+                violation_map[key] = m.violation_status
+            if m.recommendation_status and m.recommendation_status != "normal":
+                recommend_map[key] = m.recommendation_status
+
     items = []
     for r in rows:
         regions = []
@@ -306,6 +328,8 @@ async def my_library(
             "logo": r.logo or "",
             "synced_at": r.synced_at.isoformat() if r.synced_at else None,
             "active_advertisers": active_map.get(r.merchant_id, 0),
+            "violation_status": violation_map.get(r.merchant_id, "normal"),
+            "recommendation_status": recommend_map.get(r.merchant_id, "normal"),
         })
 
     return {"items": items, "total": total, "page": page, "page_size": page_size}
@@ -380,22 +404,20 @@ async def my_library_active_advertisers(
         .all()
     )
 
-    # 3. 查本月佣金（从 AdCampaignDailyMetric + AdCampaign 关联）
-    from app.models.ad_campaign_daily_metric import AdCampaignDailyMetric
-    from app.models.ad_campaign import AdCampaign
+    # 3. 查本月佣金（从 AffiliateTransaction 交易表）
+    from app.models.affiliate_transaction import AffiliateTransaction
 
     commission_rows = (
         db.query(
-            AdCampaign.user_id,
-            sa_func.sum(AdCampaignDailyMetric.commission).label("total_commission"),
+            AffiliateTransaction.user_id,
+            sa_func.sum(AffiliateTransaction.commission_amount).label("total_commission"),
         )
-        .join(AdCampaign, AdCampaignDailyMetric.campaign_id == AdCampaign.id)
         .filter(
-            AdCampaign.merchant_id == merchant_id,
-            AdCampaign.user_id.in_(active_user_ids),
-            AdCampaignDailyMetric.date >= month_start,
+            AffiliateTransaction.merchant_id == merchant_id,
+            AffiliateTransaction.user_id.in_(active_user_ids),
+            AffiliateTransaction.transaction_time >= month_start,
         )
-        .group_by(AdCampaign.user_id)
+        .group_by(AffiliateTransaction.user_id)
         .all()
     )
     commission_map = {r.user_id: round(float(r.total_commission or 0), 2) for r in commission_rows}
@@ -442,15 +464,26 @@ async def my_library_stats(
         .scalar()
     )
 
-    test_merchant_count = (
-        db.query(_func.count(MerchantAssignment.id))
-        .filter(
-            MerchantAssignment.user_id == current_user.id,
-            MerchantAssignment.mode == "test",
-            MerchantAssignment.status == "active",
+    # manager 看所有小组测试商家，普通员工只看自己的
+    if current_user.role == "manager":
+        test_merchant_count = (
+            db.query(_func.count(MerchantAssignment.id))
+            .filter(
+                MerchantAssignment.mode == "test",
+                MerchantAssignment.status == "active",
+            )
+            .scalar() or 0
         )
-        .scalar() or 0
-    )
+    else:
+        test_merchant_count = (
+            db.query(_func.count(MerchantAssignment.id))
+            .filter(
+                MerchantAssignment.user_id == current_user.id,
+                MerchantAssignment.mode == "test",
+                MerchantAssignment.status == "active",
+            )
+            .scalar() or 0
+        )
 
     return {
         "total": total,

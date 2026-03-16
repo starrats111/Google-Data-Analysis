@@ -623,6 +623,12 @@ const MerchantManagement = () => {
                 </Tag>
               </Tooltip>
             ))}
+            {record.violation_status && record.violation_status !== 'normal' && (
+              <Tag color="red" style={{ fontSize: 10, lineHeight: '16px', padding: '0 4px', margin: 0 }}>违规</Tag>
+            )}
+            {record.recommendation_status && record.recommendation_status !== 'normal' && (
+              <Tag color="green" style={{ fontSize: 10, lineHeight: '16px', padding: '0 4px', margin: 0 }}>推荐</Tag>
+            )}
             {record.campaign_link && (
               <Tooltip title="复制 Campaign Link">
                 <CopyOutlined
@@ -1062,7 +1068,8 @@ const MerchantManagement = () => {
             </Card>
           </Col>
 
-          {/* 红框：广告投放设置 */}
+          {/* 红框：广告投放设置（管理员不显示） */}
+          {!isManager && (
           <Col xs={24} md={10}>
             <Card
               size="small"
@@ -1101,12 +1108,13 @@ const MerchantManagement = () => {
               </div>
             </Card>
           </Col>
+          )}
 
           {/* 绿框：测试商家数量 */}
-          <Col xs={24} md={4}>
+          <Col xs={24} md={isManager ? 18 : 4}>
             <Card size="small" style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
               <Statistic
-                title="测试商家"
+                title={isManager ? "小组测试商家" : "测试商家"}
                 value={stats.test_merchant_count || 0}
                 suffix="个"
                 valueStyle={{ fontSize: 24, color: '#52c41a' }}
@@ -1114,7 +1122,8 @@ const MerchantManagement = () => {
             </Card>
           </Col>
 
-          {/* 节日营销 */}
+          {/* 节日营销（管理员不显示） */}
+          {!isManager && (
           <Col xs={24} md={4}>
             <Card size="small" style={{ height: '100%' }} bodyStyle={{ padding: '8px 12px' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
@@ -1157,6 +1166,7 @@ const MerchantManagement = () => {
               )}
             </Card>
           </Col>
+          )}
         </Row>
 
       <Tabs
