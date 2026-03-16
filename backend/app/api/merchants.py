@@ -190,45 +190,43 @@ async def my_library(
 
     # 如果按在投人数排序，需要先查所有商家的在投人数
     if sort_by == "active_advertisers":
-        all_rows = q.all()
-        all_mids = set(r.merchant_id for r in all_rows if r.merchant_id)
-
+        # 优化：不用 IN(15000+)，直接查所有有活跃广告的 merchant_code，再和缓存匹配
         active_map = {}
-        if all_mids:
-            user_merchant_latest = (
-                db.query(
-                    GoogleAdsApiData.user_id,
-                    GoogleAdsApiData.extracted_account_code,
-                    sa_func.max(GoogleAdsApiData.date).label("max_date"),
-                )
-                .filter(GoogleAdsApiData.extracted_account_code.in_(list(all_mids)))
-                .group_by(GoogleAdsApiData.user_id, GoogleAdsApiData.extracted_account_code)
-                .subquery()
+        user_merchant_latest = (
+            db.query(
+                GoogleAdsApiData.user_id,
+                GoogleAdsApiData.extracted_account_code,
+                sa_func.max(GoogleAdsApiData.date).label("max_date"),
             )
-            active_rows = (
-                db.query(
-                    GoogleAdsApiData.extracted_account_code,
-                    sa_func.count(sa_distinct(GoogleAdsApiData.user_id)).label("cnt"),
-                )
-                .join(
-                    user_merchant_latest,
-                    and_(
-                        GoogleAdsApiData.user_id == user_merchant_latest.c.user_id,
-                        GoogleAdsApiData.extracted_account_code == user_merchant_latest.c.extracted_account_code,
-                        GoogleAdsApiData.date == user_merchant_latest.c.max_date,
-                    ),
-                )
-                .filter(
-                    or_(
-                        GoogleAdsApiData.status.in_(ACTIVE_STATUSES),
-                        GoogleAdsApiData.status.is_(None),
-                    ),
-                )
-                .group_by(GoogleAdsApiData.extracted_account_code)
-                .all()
+            .filter(GoogleAdsApiData.extracted_account_code.isnot(None))
+            .group_by(GoogleAdsApiData.user_id, GoogleAdsApiData.extracted_account_code)
+            .subquery()
+        )
+        active_rows = (
+            db.query(
+                GoogleAdsApiData.extracted_account_code,
+                sa_func.count(sa_distinct(GoogleAdsApiData.user_id)).label("cnt"),
             )
-            active_map = {r.extracted_account_code: r.cnt for r in active_rows}
+            .join(
+                user_merchant_latest,
+                and_(
+                    GoogleAdsApiData.user_id == user_merchant_latest.c.user_id,
+                    GoogleAdsApiData.extracted_account_code == user_merchant_latest.c.extracted_account_code,
+                    GoogleAdsApiData.date == user_merchant_latest.c.max_date,
+                ),
+            )
+            .filter(
+                or_(
+                    GoogleAdsApiData.status.in_(ACTIVE_STATUSES),
+                    GoogleAdsApiData.status.is_(None),
+                ),
+            )
+            .group_by(GoogleAdsApiData.extracted_account_code)
+            .all()
+        )
+        active_map = {r.extracted_account_code: r.cnt for r in active_rows}
 
+        all_rows = q.all()
         reverse = sort_order != "ascend"
         all_rows.sort(key=lambda r: active_map.get(r.merchant_id, 0), reverse=reverse)
         rows = all_rows[(page - 1) * page_size : page * page_size]
