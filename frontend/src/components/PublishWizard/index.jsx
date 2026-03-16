@@ -14,6 +14,7 @@ import { useNavigate } from 'react-router-dom'
 import dayjs from 'dayjs'
 import articleApi from '../../services/articleApi'
 import api from '../../services/api'
+import { usePublishDrawer } from '../../store/publishDrawerStore'
 
 const { TextArea } = Input
 const { Dragger } = Upload
@@ -95,8 +96,9 @@ const COUNTRY_LANG_MAP = {
   'gr': 'el', 'il': 'he',
 }
 
-const PublishWizard = () => {
+const PublishWizard = ({ drawerMode = false }) => {
   const navigate = useNavigate()
+  const { setProcessing: setDrawerProcessing, closeDrawer } = usePublishDrawer()
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
 
@@ -261,8 +263,8 @@ const PublishWizard = () => {
     setCrawledImages([])
     setStockImages([])
 
-    // 尝试爬取商家网站获取 AI 分析数据；爬虫失败时自动用 AI 分析 URL 生成标题/关键词
     setLoading(true)
+    if (drawerMode) setDrawerProcessing(true, '正在爬取 & AI 分析…')
     try {
       const res = await articleApi.crawlMerchant({ url: merchantUrl, language, merchant_name: campaignResult?.merchant_name || '' })
       const resData = res.data
@@ -294,7 +296,10 @@ const PublishWizard = () => {
       }
       setCrawledImages([])
       setMStep(1)
-    } finally { setLoading(false) }
+    } finally {
+      setLoading(false)
+      if (drawerMode) setDrawerProcessing(false)
+    }
   }
 
   // 自动选择标题和关键词的辅助函数
@@ -554,6 +559,7 @@ const PublishWizard = () => {
 
   const _autoCrawl = async (siteUrl, link, merchantName, lang) => {
     setLoading(true)
+    if (drawerMode) setDrawerProcessing(true, '正在爬取商家网站…')
     const crawlLang = lang || language
     const crawlMerchantName = merchantName || ''
     try {
@@ -571,7 +577,10 @@ const PublishWizard = () => {
       setMerchantKeywords([])
       setCrawledImages([])
       setMStep(1)
-    } finally { setLoading(false) }
+    } finally {
+      setLoading(false)
+      if (drawerMode) setDrawerProcessing(false)
+    }
   }
 
   const handleRegionSelect = (regionCode) => {
@@ -587,6 +596,7 @@ const PublishWizard = () => {
     if (!trackingLink.trim()) { message.warning('追踪链接为空'); return }
     if (!language) { message.warning('请选择 Support Region 以确定语言'); return }
     setLoading(true)
+    if (drawerMode) setDrawerProcessing(true, '正在爬取 & AI 分析…')
     const mName = campaignResult?.merchant_name || ''
     try {
       const res = await articleApi.crawlMerchant({ url: merchantUrl, language, merchant_name: mName })
@@ -615,7 +625,10 @@ const PublishWizard = () => {
       }
       setCrawledImages([])
       setMStep(1)
-    } finally { setLoading(false) }
+    } finally {
+      setLoading(false)
+      if (drawerMode) setDrawerProcessing(false)
+    }
   }
 
   // ==================== Merchant Mode Handlers ====================
@@ -624,6 +637,7 @@ const PublishWizard = () => {
     if (!merchantUrl.trim()) { message.warning('请输入商家网址'); return }
     if (!trackingLink.trim()) { message.warning('请输入追踪链接'); return }
     setLoading(true)
+    if (drawerMode) setDrawerProcessing(true, '正在爬取 & AI 分析…')
     const mName = campaignResult?.merchant_name || ''
     try {
       const res = await articleApi.crawlMerchant({ url: merchantUrl, language, merchant_name: mName })
@@ -652,7 +666,10 @@ const PublishWizard = () => {
       }
       setCrawledImages([])
       setMStep(1)
-    } finally { setLoading(false) }
+    } finally {
+      setLoading(false)
+      if (drawerMode) setDrawerProcessing(false)
+    }
   }
 
   const handleMerchantConfirmTitle = () => {
@@ -665,6 +682,7 @@ const PublishWizard = () => {
   const handleMerchantGenerate = async () => {
     setLoading(true)
     setGenProgress('正在连接 AI...')
+    if (drawerMode) setDrawerProcessing(true, 'AI 文章生成中…')
     try {
       const res = await articleApi.generateMerchantArticle({
         title: selectedMTitle,
@@ -678,17 +696,25 @@ const PublishWizard = () => {
         tracking_link: trackingLink,
         keywords: selectedMKeywords,
         language,
-      }, (progress) => setGenProgress(progress))
+      }, (progress) => {
+        setGenProgress(progress)
+        if (drawerMode) setDrawerProcessing(true, progress || 'AI 生成中…')
+      })
       setMerchantArticle(res.data)
       setMStep(3)
     } catch (err) {
       message.error('文章生成失败: ' + (err?.response?.data?.detail || err.message))
-    } finally { setLoading(false); setGenProgress('') }
+    } finally {
+      setLoading(false)
+      setGenProgress('')
+      if (drawerMode) setDrawerProcessing(false)
+    }
   }
 
   const handleMerchantPublish = async () => {
     if (!merchantArticle) return
     setSaving(true)
+    if (drawerMode) setDrawerProcessing(true, '正在发布文章…')
     try {
       const payload = {
         title: selectedMTitle,
@@ -705,7 +731,6 @@ const PublishWizard = () => {
         tracking_link: trackingLink,
         language,
         category_name: merchantArticle.category || crawlResult?.analysis?.category || null,
-        // CR-040: 图片传递缓存信息
         featured_image: getImgSubmitValue(selectedImages[0]) || null,
         content_images: selectedImages.slice(1).map(img => {
           if (typeof img === 'string') return img
@@ -717,7 +742,6 @@ const PublishWizard = () => {
       const res = await articleApi.createArticle(payload)
       const articleId = res.data?.id
 
-      // OPT-013: 发布到网站
       if (publishToSite && selectedSiteId && articleId) {
         try {
           await articleApi.publishToSite(articleId, selectedSiteId)
@@ -729,10 +753,16 @@ const PublishWizard = () => {
         const isPast = mPublishDate && mPublishDate.isBefore(dayjs())
         message.success(mPublishDate ? (isPast ? '文章已发布（回溯时间）' : '文章已保存，将定时发布') : '文章已发布')
       }
+      if (drawerMode) {
+        closeDrawer()
+      }
       navigate('/articles')
     } catch (err) {
       message.error('发布失败: ' + (err?.response?.data?.detail || err.message))
-    } finally { setSaving(false) }
+    } finally {
+      setSaving(false)
+      if (drawerMode) setDrawerProcessing(false)
+    }
   }
 
   const handleToggleMKeyword = (kw) => {

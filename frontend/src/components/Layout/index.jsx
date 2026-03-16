@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react'
+import React, { useState, useEffect, useCallback, Suspense, lazy } from 'react'
 import { Layout as AntLayout, Menu, Avatar, Dropdown, Space, Drawer, Button, Tag, Badge, Tooltip, List, Typography, Spin, Popover, Modal, Form, Select, Input, message } from 'antd'
 import { Outlet, useNavigate, useLocation } from 'react-router-dom'
 import api from '../../services/api'
@@ -25,9 +25,14 @@ import {
   CommentOutlined,
   GlobalOutlined,
   ExperimentOutlined,
+  LoadingOutlined,
+  FormOutlined,
 } from '@ant-design/icons'
 import { useAuth } from '../../store/authStore'
+import { usePublishDrawer } from '../../store/publishDrawerStore'
 import ChangelogModal, { hasUnreadChangelog } from '../ChangelogModal'
+
+const PublishWizard = lazy(() => import('../PublishWizard'))
 
 const { Header, Sider, Content } = AntLayout
 
@@ -474,7 +479,13 @@ const Layout = () => {
     },
   ]
 
+  const { openDrawer: openPublishDrawer } = usePublishDrawer()
   const handleMenuClick = ({ key }) => {
+    if (key === '/articles/publish') {
+      openPublishDrawer()
+      if (isMobile) setMobileDrawerVisible(false)
+      return
+    }
     navigate(key)
     if (isMobile) {
       setMobileDrawerVisible(false)
@@ -823,7 +834,72 @@ const Layout = () => {
           <Outlet />
         </Content>
       </AntLayout>
+
+      {/* CR-022: 发布文章抽屉（右侧滑出，关闭不销毁以保持状态） */}
+      <PublishDrawerWrapper />
     </AntLayout>
+  )
+}
+
+function PublishDrawerWrapper() {
+  const { open, closeDrawer, processing, processingLabel, openDrawer } = usePublishDrawer()
+  const [mounted, setMounted] = useState(false)
+  useEffect(() => { if (open) setMounted(true) }, [open])
+
+  return (
+    <>
+      {mounted && (
+        <Drawer
+          title="发布文章 — 商家推广"
+          placement="right"
+          width={Math.min(780, window.innerWidth * 0.85)}
+          open={open}
+          onClose={closeDrawer}
+          destroyOnClose={false}
+          maskClosable={!processing}
+          styles={{ body: { padding: '12px 16px', overflow: 'auto' } }}
+          extra={processing && (
+            <Tag icon={<LoadingOutlined spin />} color="processing">{processingLabel || '处理中…'}</Tag>
+          )}
+        >
+          <Suspense fallback={<div style={{ textAlign: 'center', padding: 60 }}><Spin size="large" /></div>}>
+            <PublishWizard drawerMode />
+          </Suspense>
+        </Drawer>
+      )}
+
+      {!open && processing && (
+        <Tooltip title={processingLabel || '文章发布任务进行中，点击展开'} placement="left">
+          <Button
+            type="primary"
+            shape="circle"
+            size="large"
+            icon={<LoadingOutlined spin />}
+            onClick={openDrawer}
+            style={{
+              position: 'fixed', bottom: 32, right: 32, zIndex: 999,
+              width: 52, height: 52, boxShadow: '0 4px 16px rgba(0,0,0,0.2)',
+            }}
+          />
+        </Tooltip>
+      )}
+
+      {!open && !processing && mounted && (
+        <Tooltip title="发布文章" placement="left">
+          <Button
+            shape="circle"
+            size="large"
+            icon={<FormOutlined />}
+            onClick={openDrawer}
+            style={{
+              position: 'fixed', bottom: 32, right: 32, zIndex: 999,
+              width: 48, height: 48, boxShadow: '0 2px 8px rgba(0,0,0,0.12)',
+              opacity: 0.7,
+            }}
+          />
+        </Tooltip>
+      )}
+    </>
   )
 }
 

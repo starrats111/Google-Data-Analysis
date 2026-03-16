@@ -45,7 +45,8 @@ const ArticleList = lazyWithRetry(() => import('./pages/articles/ArticleList'))
 const ArticleEdit = lazyWithRetry(() => import('./pages/articles/ArticleEdit'))
 const ArticleCategories = lazyWithRetry(() => import('./pages/articles/ArticleCategories'))
 const ArticleTitles = lazyWithRetry(() => import('./pages/articles/ArticleTitles'))
-const PublishWizard = lazyWithRetry(() => import('./components/PublishWizard'))
+// CR-022: PublishWizard 改为 Drawer 模式，在 Layout 中渲染
+// 旧路由重定向到 /articles 并自动打开 Drawer
 const SiteManagement = lazyWithRetry(() => import('./pages/articles/SiteManagement'))
 const MySites = lazyWithRetry(() => import('./pages/articles/MySites'))
 
@@ -58,6 +59,8 @@ function PrivateRoute({ children }) {
   const { isAuthenticated } = useAuth()
   return isAuthenticated ? children : <Navigate to="/login" />
 }
+
+const PublishRedirect = lazyWithRetry(() => import('./components/PublishRedirect'))
 
 function App() {
   const [ready, setReady] = useState(false)
@@ -131,7 +134,8 @@ function App() {
               <Route path="articles" element={<ArticleList />} />
               <Route path="articles/edit/:id" element={<ArticleEdit />} />
               <Route path="articles/new" element={<ArticleEdit />} />
-              <Route path="articles/publish" element={<PublishWizard />} />
+              {/* CR-022: 旧路由重定向到文章列表（发布文章改用右侧抽屉） */}
+              <Route path="articles/publish" element={<PublishRedirect />} />
               <Route path="articles/categories" element={<ArticleCategories />} />
               <Route path="articles/titles" element={<ArticleTitles />} />
               <Route path="articles/sites" element={<SiteManagement />} />

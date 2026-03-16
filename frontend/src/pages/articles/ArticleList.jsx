@@ -3,10 +3,12 @@ import { Table, Button, Space, Tag, Input, Select, Modal, message, Card, Tooltip
 import { PlusOutlined, EditOutlined, DeleteOutlined, EyeOutlined, SearchOutlined, GlobalOutlined } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
 import articleApi from '../../services/articleApi'
+import { usePublishDrawer } from '../../store/publishDrawerStore'
 
 const { Option } = Select
 
 const ArticleList = () => {
+  const { openDrawer } = usePublishDrawer()
   const [articles, setArticles] = useState([])
   const [loading, setLoading] = useState(false)
   const [total, setTotal] = useState(0)
@@ -177,7 +179,7 @@ const ArticleList = () => {
     <Card
       title="文章管理"
       extra={
-        <Button type="primary" icon={<PlusOutlined />} onClick={() => navigate('/articles/publish')}>
+        <Button type="primary" icon={<PlusOutlined />} onClick={openDrawer}>
           发布文章
         </Button>
       }
