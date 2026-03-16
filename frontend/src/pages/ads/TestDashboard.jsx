@@ -103,12 +103,12 @@ export default function TestDashboard() {
     { title: '花费', width: 90, render: (_, r) => r.ad_data ? `$${r.ad_data.cost.toFixed(2)}` : '-' },
     { title: '点击', width: 70, render: (_, r) => r.ad_data?.clicks ?? '-' },
     { title: '展示', width: 80, render: (_, r) => r.ad_data?.impressions ?? '-' },
-    { title: '转化', width: 70, render: (_, r) => r.ad_data ? r.ad_data.conversions.toFixed(1) : '-' },
+    { title: '佣金', width: 80, render: (_, r) => r.commission_rate || '-' },
     {
-      title: 'CTR', width: 80,
+      title: 'ROI', width: 80,
       render: (_, r) => {
-        if (!r.ad_data || !r.ad_data.impressions) return '-'
-        return `${(r.ad_data.clicks / r.ad_data.impressions * 100).toFixed(2)}%`
+        if (!r.ad_data || !r.ad_data.cost || r.ad_data.cost === 0) return '-'
+        return '-'
       }
     },
     {
@@ -205,7 +205,7 @@ export default function TestDashboard() {
           <Card size="small"><Statistic title="总展示" value={totalImpressions} /></Card>
         </Col>
         <Col span={4}>
-          <Card size="small"><Statistic title="平均 CTR" value={avgCtr} precision={2} suffix="%" /></Card>
+          <Card size="small"><Statistic title="平均 ROI" value={0} precision={2} suffix="%" /></Card>
         </Col>
         <Col span={4}>
           <Card size="small"><Statistic title="平均 CPC" value={avgCpc} precision={2} prefix="$" /></Card>

@@ -602,11 +602,11 @@ async def get_test_dashboard(
             "target_country": a.target_country,
             "created_at": a.created_at.isoformat() if a.created_at else None,
             "sync_pending": sync_pending,
+            "commission_rate": merchant.commission_rate if merchant else "",
             "ad_data": {
                 "cost": float(ad_data.cost or 0) if ad_data else 0,
                 "clicks": int(ad_data.clicks or 0) if ad_data else 0,
                 "impressions": int(ad_data.impressions or 0) if ad_data else 0,
-                "conversions": float(getattr(ad_data, "conversions", 0) or 0) if ad_data else 0,
                 "status": ad_data.status if ad_data else "未同步",
                 "date": ad_data.date.isoformat() if ad_data and ad_data.date else None,
             } if ad_data or sync_pending else None,
