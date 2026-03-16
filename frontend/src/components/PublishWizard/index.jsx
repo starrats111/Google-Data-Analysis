@@ -475,6 +475,9 @@ const PublishWizard = ({ drawerMode = false }) => {
         meta_keywords: generatedArticle.meta_keywords,
         links: links.filter(l => l.keyword && l.url),
         ai_model_used: 'gemini',
+        merchant_name: campaignResult?.merchant_name || '',
+        merchant_mid: merchantMid?.trim() || '',
+        merchant_url: merchantUrl || '',
       }
       const res = await articleApi.createArticle(payload)
       const articleId = res.data?.id

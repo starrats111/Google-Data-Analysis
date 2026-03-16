@@ -41,6 +41,8 @@ class ArticleCreate(BaseModel):
     meta_keywords: Optional[str] = None
     ai_model_used: Optional[str] = None
     merchant_url: Optional[str] = None
+    merchant_name: Optional[str] = None
+    merchant_mid: Optional[str] = None
     tracking_link: Optional[str] = None
     language: Optional[str] = None
     tag_ids: Optional[list] = Field(default_factory=list)
@@ -62,6 +64,8 @@ class ArticleUpdate(BaseModel):
     meta_title: Optional[str] = None
     meta_description: Optional[str] = None
     meta_keywords: Optional[str] = None
+    merchant_name: Optional[str] = None
+    merchant_mid: Optional[str] = None
     tag_ids: Optional[list] = None
     links: Optional[list] = None
 
@@ -93,7 +97,11 @@ async def list_articles(
     if category_id:
         query = query.filter(PubArticle.category_id == category_id)
     if search:
-        query = query.filter(PubArticle.title.ilike(f"%{search}%"))
+        query = query.filter(
+            (PubArticle.title.ilike(f"%{search}%"))
+            | (PubArticle.merchant_mid.ilike(f"%{search}%"))
+            | (PubArticle.merchant_name.ilike(f"%{search}%"))
+        )
 
     if current_user.role not in ("manager", "leader"):
         query = query.filter(PubArticle.user_id == current_user.id)
@@ -181,6 +189,8 @@ async def create_article(
         meta_keywords=data.meta_keywords,
         ai_model_used=data.ai_model_used,
         merchant_url=data.merchant_url,
+        merchant_name=data.merchant_name,
+        merchant_mid=data.merchant_mid,
         tracking_link=data.tracking_link,
         language=data.language or "zh",
         image_cache_session=data.image_cache_session,
@@ -516,6 +526,8 @@ def _article_to_dict(article: PubArticle, db: Session = None) -> dict:
         "meta_keywords": article.meta_keywords,
         "views": article.views,
         "ai_model_used": article.ai_model_used,
+        "merchant_name": getattr(article, 'merchant_name', None) or None,
+        "merchant_mid": getattr(article, 'merchant_mid', None) or None,
         "tags": tag_list,
         "links": [{"id": l.id, "keyword": l.keyword, "url": l.url} for l in (article.links or [])],
         "images": [{"id": i.id, "url": i.url, "alt_text": i.alt_text, "position": i.position} for i in (article.images or [])],

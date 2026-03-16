@@ -31,6 +31,8 @@ class PubArticle(Base):
     views = Column(Integer, default=0)
     ai_model_used = Column(String(100))
     merchant_url = Column(String(500), nullable=True)
+    merchant_name = Column(String(200), nullable=True)
+    merchant_mid = Column(String(100), nullable=True)
     tracking_link = Column(Text, nullable=True)
     language = Column(String(10), default="zh")
     # OPT-013: 发布到网站

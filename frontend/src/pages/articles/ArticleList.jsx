@@ -112,19 +112,18 @@ const ArticleList = () => {
       ),
     },
     {
-      title: '分类',
-      dataIndex: 'category_name',
-      key: 'category_name',
-      width: 120,
+      title: '商家名称',
+      dataIndex: 'merchant_name',
+      key: 'merchant_name',
+      width: 140,
       render: (v) => v || '-',
     },
     {
-      title: '标签',
-      dataIndex: 'tags',
-      key: 'tags',
-      width: 200,
-      render: (tags) =>
-        tags?.map((t) => <Tag key={t.id} color="blue">{t.name}</Tag>) || '-',
+      title: 'MID',
+      dataIndex: 'merchant_mid',
+      key: 'merchant_mid',
+      width: 120,
+      render: (v) => v ? <Tag color="blue">{v}</Tag> : '-',
     },
     {
       title: '作者',
@@ -186,7 +185,7 @@ const ArticleList = () => {
     >
       <Space style={{ marginBottom: 16 }} wrap>
         <Input
-          placeholder="搜索标题..."
+          placeholder="搜索标题 / MID..."
           prefix={<SearchOutlined />}
           value={search}
           onChange={(e) => setSearch(e.target.value)}
