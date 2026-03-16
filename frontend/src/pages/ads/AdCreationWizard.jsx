@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react'
-import { Steps, Card, Button, Space, Table, Input, InputNumber, Select, message, Spin, Typography, Tag, Alert, Row, Col, Divider, Collapse, Modal } from 'antd'
-import { ThunderboltOutlined, SearchOutlined, RocketOutlined, LinkOutlined, BulbOutlined, LoadingOutlined, CheckCircleOutlined, GlobalOutlined, CopyOutlined, ReloadOutlined } from '@ant-design/icons'
+import { Steps, Card, Button, Space, Table, Input, InputNumber, Select, message, Spin, Typography, Tag, Alert, Row, Col, Divider, Collapse, Modal, Switch, Tooltip } from 'antd'
+import { ThunderboltOutlined, SearchOutlined, RocketOutlined, LinkOutlined, BulbOutlined, LoadingOutlined, CheckCircleOutlined, GlobalOutlined, CopyOutlined, ReloadOutlined, PictureOutlined } from '@ant-design/icons'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import api from '../../services/api'
 import { getToken } from '../../services/tokenHolder'
@@ -84,6 +84,16 @@ export default function AdCreationWizard() {
   const [dailyBudget, setDailyBudget] = useState(10)
   const adDefaultBudgetRef = useRef(null)
   const [createResult, setCreateResult] = useState(null)
+
+  // 广告素材开关
+  const [sitelinks, setSitelinks] = useState([])
+  const [callouts, setCallouts] = useState([])
+  const [enableSitelinks, setEnableSitelinks] = useState(true)
+  const [enableCallouts, setEnableCallouts] = useState(true)
+  const [enableImages, setEnableImages] = useState(false)
+  const [enableLogo, setEnableLogo] = useState(false)
+  const [merchantImages, setMerchantImages] = useState([])
+  const [merchantLogo, setMerchantLogo] = useState('')
 
   // 加载 MCC 列表 + 广告默认设置
   useEffect(() => {
@@ -259,6 +269,8 @@ export default function AdCreationWizard() {
               if (r.recommended_budget) {
                 setRecommendedBudget(r.recommended_budget)
               }
+              if (r.sitelinks) setSitelinks(r.sitelinks)
+              if (r.callouts) setCallouts(r.callouts)
               setStreamPhase('done')
               setStreamDone(true)
             } else if (evt.phase === 'error') {
@@ -291,7 +303,7 @@ export default function AdCreationWizard() {
   const handleCreateAd = async () => {
     setLoading(true)
     try {
-      const res = await api.post('/api/ad-creation/create-campaign', {
+      const payload = {
         assignment_id: parseInt(assignmentId),
         mcc_id: selectedMcc,
         customer_id: availableCid,
@@ -303,7 +315,12 @@ export default function AdCreationWizard() {
         daily_budget: dailyBudget,
         target_country: targetCountry,
         mode: assignmentMode,
-      })
+      }
+      if (enableSitelinks && sitelinks.length > 0) payload.sitelinks = sitelinks
+      if (enableCallouts && callouts.length > 0) payload.callouts = callouts
+      if (enableImages && merchantImages.length > 0) payload.image_urls = merchantImages.slice(0, 3)
+      if (enableLogo && merchantLogo) payload.logo_url = merchantLogo
+      const res = await api.post('/api/ad-creation/create-campaign', payload)
       setCreateResult(res.data)
       setConfirmModalOpen(false)
       message.success('广告创建成功！')
@@ -551,7 +568,19 @@ export default function AdCreationWizard() {
                   />
                   <Space>
                     <Button onClick={() => setStep(0)}>上一步</Button>
-                    <Button type="primary" disabled={selectedKeywords.length === 0} onClick={() => { setStep(2); handleGenerateAdCopyStream() }}>
+                    <Button type="primary" disabled={selectedKeywords.length === 0} onClick={() => {
+                      setStep(2)
+                      handleGenerateAdCopyStream()
+                      const assetUrl = keywordUrl || merchantUrl
+                      if (assetUrl) {
+                        api.post('/api/ad-creation/merchant-assets', { url: assetUrl })
+                          .then(res => {
+                            if (res.data?.images?.length) { setMerchantImages(res.data.images); setEnableImages(true) }
+                            if (res.data?.logo) { setMerchantLogo(res.data.logo); setEnableLogo(true) }
+                          })
+                          .catch(() => {})
+                      }
+                    }}>
                       下一步：AI 智能生成（已选 {selectedKeywords.length} 个关键词）
                     </Button>
                   </Space>
@@ -790,6 +819,79 @@ export default function AdCreationWizard() {
                   AI 建议: ${recommendedBudget}
                 </Typography.Text>
               )}
+            </Col>
+          </Row>
+          <Divider style={{ margin: '8px 0' }} />
+          <Typography.Text strong style={{ fontSize: 13 }}>广告素材（提升广告质量分）</Typography.Text>
+          <Row align="middle" style={{ marginTop: 6 }}>
+            <Col span={8}>
+              <Space size={4}>
+                <Switch size="small" checked={enableSitelinks} onChange={setEnableSitelinks} />
+                <Typography.Text>站内链接</Typography.Text>
+              </Space>
+            </Col>
+            <Col span={16}>
+              {enableSitelinks && sitelinks.length > 0 ? (
+                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                  {sitelinks.map(s => s.link_text).join(' / ')}
+                </Typography.Text>
+              ) : enableSitelinks ? (
+                <Typography.Text type="warning" style={{ fontSize: 12 }}>AI 未生成，将跳过</Typography.Text>
+              ) : null}
+            </Col>
+          </Row>
+          <Row align="middle" style={{ marginTop: 4 }}>
+            <Col span={8}>
+              <Space size={4}>
+                <Switch size="small" checked={enableCallouts} onChange={setEnableCallouts} />
+                <Typography.Text>宣传信息</Typography.Text>
+              </Space>
+            </Col>
+            <Col span={16}>
+              {enableCallouts && callouts.length > 0 ? (
+                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                  {callouts.join(' / ')}
+                </Typography.Text>
+              ) : enableCallouts ? (
+                <Typography.Text type="warning" style={{ fontSize: 12 }}>AI 未生成，将跳过</Typography.Text>
+              ) : null}
+            </Col>
+          </Row>
+          <Row align="middle" style={{ marginTop: 4 }}>
+            <Col span={8}>
+              <Space size={4}>
+                <Switch size="small" checked={enableImages} onChange={setEnableImages} />
+                <Typography.Text>商家图片</Typography.Text>
+              </Space>
+            </Col>
+            <Col span={16}>
+              {enableImages && merchantImages.length > 0 ? (
+                <Space size={4}>
+                  {merchantImages.slice(0, 3).map((url, i) => (
+                    <img key={i} src={url} alt="" style={{ width: 32, height: 32, borderRadius: 4, objectFit: 'cover' }} />
+                  ))}
+                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                    {merchantImages.length} 张
+                  </Typography.Text>
+                </Space>
+              ) : enableImages ? (
+                <Typography.Text type="warning" style={{ fontSize: 12 }}>无可用图片，将跳过</Typography.Text>
+              ) : null}
+            </Col>
+          </Row>
+          <Row align="middle" style={{ marginTop: 4 }}>
+            <Col span={8}>
+              <Space size={4}>
+                <Switch size="small" checked={enableLogo} onChange={setEnableLogo} />
+                <Typography.Text>商家图标</Typography.Text>
+              </Space>
+            </Col>
+            <Col span={16}>
+              {enableLogo && merchantLogo ? (
+                <img src={merchantLogo} alt="logo" style={{ width: 24, height: 24, borderRadius: 4, objectFit: 'contain' }} />
+              ) : enableLogo ? (
+                <Typography.Text type="warning" style={{ fontSize: 12 }}>无可用图标，将跳过</Typography.Text>
+              ) : null}
             </Col>
           </Row>
         </Space>

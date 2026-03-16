@@ -266,12 +266,14 @@ class AdCopyGenerator:
 
 JSON格式(严格遵守):
 ```json
-{{"recommended_budget": 10, "headlines": ["Shop TYMO Hair Tools Now", "TYMO: Style Starts Here", "...共15条"], "headline_translations": ["立即选购TYMO美发工具", "TYMO：时尚从这里开始", "...共15条中文翻译"], "descriptions": ["Shop premium hair styling tools at TYMO. Free shipping on orders over $50.", "...共4条"], "description_translations": ["在TYMO选购优质美发造型工具。满50美元免运费。", "...共4条中文翻译"]}}
+{{"recommended_budget": 10, "headlines": ["Shop TYMO Hair Tools Now", "TYMO: Style Starts Here", "...共15条"], "headline_translations": ["立即选购TYMO美发工具", "TYMO：时尚从这里开始", "...共15条中文翻译"], "descriptions": ["Shop premium hair styling tools at TYMO. Free shipping on orders over $50.", "...共4条"], "description_translations": ["在TYMO选购优质美发造型工具。满50美元免运费。", "...共4条中文翻译"], "sitelinks": [{{"link_text": "Shop All Products", "desc1": "Browse our full collection", "desc2": "Find the perfect fit for you", "path": "/products"}}, {{"link_text": "Today's Deals", "desc1": "Limited-time offers", "desc2": "Save on top picks", "path": "/deals"}}, {{"link_text": "About Us", "desc1": "Our story and mission", "desc2": "Quality you can trust", "path": "/about"}}, {{"link_text": "Contact Support", "desc1": "Get help anytime", "desc2": "We're here for you", "path": "/contact"}}], "callouts": ["Free Shipping", "24/7 Support", "Easy Returns", "Top Rated"]}}
 ```
 
 要求:
 - 标题正好15条，每条严格≤30字符。30字符的参考长度: "Shop TYMO Hair Tools - 50% Off"正好30字符
 - 描述正好4条，每条严格≤90字符。90字符的参考长度: "Shop premium hair styling tools at TYMO. Free shipping on orders over $50. Limited time."正好87字符
+- sitelinks正好4条: link_text≤25字符, desc1和desc2各≤35字符, path是商家网站的子路径
+- callouts正好4条: 每条≤25字符，突出商家卖点（如免运费、退货保障等）
 - 翻译规则（极其重要！）: headline_translations 和 description_translations 每一条都必须是完整的中文翻译句子，翻译对应的英文文案全部含义。
   错误示范: "BRUNT"、"TYMO"、"品牌名" ← 这些不是翻译，禁止出现！
   正确示范: "BRUNT Boots: Built Tough" → "BRUNT靴子：坚韧耐用"，"Save on BRUNT Boots" → "BRUNT靴子优惠购"
@@ -317,7 +319,10 @@ JSON格式(严格遵守):
             if len(descriptions) < 2:
                 raise ValueError(f"AI 只生成了 {len(descriptions)} 个描述，至少需要 2 个")
 
-            logger.info(f"[AdCopy] 生成 {len(headlines)} 标题 + {len(descriptions)} 描述 for {merchant_name}")
+            sitelinks = result.get("sitelinks", [])[:4]
+            callouts = [_strip_emoji(c)[:25] for c in result.get("callouts", [])[:4]]
+
+            logger.info(f"[AdCopy] 生成 {len(headlines)} 标题 + {len(descriptions)} 描述 + {len(sitelinks)} 站内链接 + {len(callouts)} 宣传 for {merchant_name}")
             return {
                 "headlines": headlines,
                 "descriptions": descriptions,
@@ -325,6 +330,8 @@ JSON格式(严格遵守):
                 "description_translations": description_translations,
                 "thinking": thinking,
                 "recommended_budget": recommended_budget,
+                "sitelinks": sitelinks,
+                "callouts": callouts,
             }
 
         except Exception as e:
@@ -398,12 +405,17 @@ JSON格式(严格遵守):
                 headlines, descriptions, headline_translations, description_translations, merchant_name,
             )
 
+            sitelinks = result.get("sitelinks", [])[:4]
+            callouts = [_strip_emoji(c)[:25] for c in result.get("callouts", [])[:4]]
+
             final = {
                 "headlines": headlines,
                 "descriptions": descriptions,
                 "headline_translations": headline_translations,
                 "description_translations": description_translations,
                 "recommended_budget": recommended_budget,
+                "sitelinks": sitelinks,
+                "callouts": callouts,
             }
             yield f"<<FINAL_JSON>>{json.dumps(final, ensure_ascii=False)}"
         except Exception as e:

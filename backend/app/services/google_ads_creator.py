@@ -1,19 +1,38 @@
 """
 Google Ads 广告创建服务（CR-039 / CR-048）
 使用打包 Mutate 一次 API 调用创建完整广告结构：
-Campaign → AdGroup → AdGroupAd (RSA) → AdGroupCriterion (Keywords) → CampaignAsset (Sitelinks)
+Campaign → AdGroup → AdGroupAd (RSA) → AdGroupCriterion (Keywords)
+可选素材: Sitelinks / Callouts / Images / Logo
 """
 import logging
 import traceback
 from datetime import datetime
 from typing import Dict, List, Optional
 
+import requests as _requests
 from sqlalchemy.orm import Session
 
 from app.models.google_ads_api_data import GoogleMccAccount
 from app.services.google_ads_client_factory import create_google_ads_client
 
 logger = logging.getLogger(__name__)
+
+
+def _download_image(url: str, max_bytes: int = 5_000_000) -> Optional[bytes]:
+    """下载图片，返回 bytes 或 None"""
+    try:
+        resp = _requests.get(url, timeout=10, stream=True, headers={
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+        })
+        resp.raise_for_status()
+        data = resp.content
+        if len(data) > max_bytes:
+            logger.warning("[AdsCreator] 图片过大 (%d bytes), 跳过: %s", len(data), url)
+            return None
+        return data
+    except Exception as e:
+        logger.warning("[AdsCreator] 图片下载失败: %s - %s", url, e)
+        return None
 
 
 def _get_ad_defaults() -> dict:
@@ -69,8 +88,12 @@ class GoogleAdsCreator:
         merchant_mid: str = "",
         assignment_id: int = 0,
         user_id: int = 0,
+        sitelinks: Optional[List[Dict]] = None,
+        callouts: Optional[List[str]] = None,
+        image_urls: Optional[List[str]] = None,
+        logo_url: Optional[str] = None,
     ) -> Dict:
-        """一次 API 调用创建完整广告结构。"""
+        """一次 API 调用创建完整广告结构（含可选素材）。"""
         mcc = self.db.query(GoogleMccAccount).filter(GoogleMccAccount.id == mcc_id).first()
         if not mcc:
             raise ValueError("MCC 账号不存在")
@@ -100,6 +123,10 @@ class GoogleAdsCreator:
                 client, cid, campaign_name,
                 keywords, headlines, descriptions,
                 daily_budget, target_country, final_url,
+                sitelinks=sitelinks,
+                callouts=callouts,
+                image_urls=image_urls,
+                logo_url=logo_url,
             )
 
             # 执行打包 Mutate（原子操作）
@@ -165,8 +192,12 @@ class GoogleAdsCreator:
         self, client, customer_id: str, campaign_name: str,
         keywords: List[str], headlines: List[str], descriptions: List[str],
         daily_budget: float, target_country: str, final_url: str,
+        sitelinks: Optional[List[Dict]] = None,
+        callouts: Optional[List[str]] = None,
+        image_urls: Optional[List[str]] = None,
+        logo_url: Optional[str] = None,
     ) -> list:
-        """构建打包 Mutate 操作列表（使用临时 ID + 读取默认设置）"""
+        """构建打包 Mutate 操作列表（使用临时 ID + 读取默认设置 + 可选素材）"""
         defaults = _get_ad_defaults()
         operations = []
 
@@ -310,6 +341,108 @@ class GoogleAdsCreator:
             criterion.keyword.text = kw
             criterion.keyword.match_type = client.enums.KeywordMatchTypeEnum.BROAD
             operations.append(kw_op)
+
+        asset_service = client.get_service("AssetService")
+        campaign_service = client.get_service("CampaignService")
+        next_temp_id = -10
+
+        # 6. Sitelink Assets
+        if sitelinks:
+            for sl in sitelinks[:4]:
+                link_text = str(sl.get("link_text", ""))[:25]
+                desc1 = str(sl.get("desc1", ""))[:35]
+                desc2 = str(sl.get("desc2", ""))[:35]
+                path = sl.get("path", "")
+                if not link_text:
+                    continue
+                sl_url = resolved_url.rstrip("/") + "/" + path.lstrip("/") if path else resolved_url
+
+                asset_op = client.get_type("MutateOperation")
+                asset = asset_op.asset_operation.create
+                asset.sitelink_asset.link_text = link_text
+                if desc1:
+                    asset.sitelink_asset.description1 = desc1
+                if desc2:
+                    asset.sitelink_asset.description2 = desc2
+                asset.final_urls.append(sl_url)
+                asset.resource_name = asset_service.asset_path(customer_id, str(next_temp_id))
+                operations.append(asset_op)
+
+                ca_op = client.get_type("MutateOperation")
+                ca = ca_op.campaign_asset_operation.create
+                ca.asset = asset_service.asset_path(customer_id, str(next_temp_id))
+                ca.campaign = campaign_service.campaign_path(customer_id, str(CAMPAIGN_TEMP_ID))
+                ca.field_type = client.enums.AssetFieldTypeEnum.SITELINK
+                operations.append(ca_op)
+                next_temp_id -= 1
+            logger.info("[AdsCreator] 添加 %d 个站内链接", min(len(sitelinks), 4))
+
+        # 7. Callout Assets
+        if callouts:
+            for ct in callouts[:4]:
+                ct_text = str(ct)[:25]
+                if not ct_text:
+                    continue
+
+                asset_op = client.get_type("MutateOperation")
+                asset = asset_op.asset_operation.create
+                asset.callout_asset.callout_text = ct_text
+                asset.resource_name = asset_service.asset_path(customer_id, str(next_temp_id))
+                operations.append(asset_op)
+
+                ca_op = client.get_type("MutateOperation")
+                ca = ca_op.campaign_asset_operation.create
+                ca.asset = asset_service.asset_path(customer_id, str(next_temp_id))
+                ca.campaign = campaign_service.campaign_path(customer_id, str(CAMPAIGN_TEMP_ID))
+                ca.field_type = client.enums.AssetFieldTypeEnum.CALLOUT
+                operations.append(ca_op)
+                next_temp_id -= 1
+            logger.info("[AdsCreator] 添加 %d 个宣传信息", min(len(callouts), 4))
+
+        # 8. Image Assets (Marketing Images)
+        if image_urls:
+            for img_url in image_urls[:3]:
+                img_data = _download_image(img_url)
+                if not img_data:
+                    continue
+
+                asset_op = client.get_type("MutateOperation")
+                asset = asset_op.asset_operation.create
+                asset.name = f"{campaign_name}_img_{abs(next_temp_id)}"
+                asset.type_ = client.enums.AssetTypeEnum.IMAGE
+                asset.image_asset.data = img_data
+                asset.resource_name = asset_service.asset_path(customer_id, str(next_temp_id))
+                operations.append(asset_op)
+
+                ca_op = client.get_type("MutateOperation")
+                ca = ca_op.campaign_asset_operation.create
+                ca.asset = asset_service.asset_path(customer_id, str(next_temp_id))
+                ca.campaign = campaign_service.campaign_path(customer_id, str(CAMPAIGN_TEMP_ID))
+                ca.field_type = client.enums.AssetFieldTypeEnum.MARKETING_IMAGE
+                operations.append(ca_op)
+                next_temp_id -= 1
+            logger.info("[AdsCreator] 添加商家图片素材")
+
+        # 9. Logo Asset
+        if logo_url:
+            logo_data = _download_image(logo_url)
+            if logo_data:
+                asset_op = client.get_type("MutateOperation")
+                asset = asset_op.asset_operation.create
+                asset.name = f"{campaign_name}_logo"
+                asset.type_ = client.enums.AssetTypeEnum.IMAGE
+                asset.image_asset.data = logo_data
+                asset.resource_name = asset_service.asset_path(customer_id, str(next_temp_id))
+                operations.append(asset_op)
+
+                ca_op = client.get_type("MutateOperation")
+                ca = ca_op.campaign_asset_operation.create
+                ca.asset = asset_service.asset_path(customer_id, str(next_temp_id))
+                ca.campaign = campaign_service.campaign_path(customer_id, str(CAMPAIGN_TEMP_ID))
+                ca.field_type = client.enums.AssetFieldTypeEnum.LOGO
+                operations.append(ca_op)
+                next_temp_id -= 1
+                logger.info("[AdsCreator] 添加商家图标")
 
         logger.info(f"[AdsCreator] 构建 {len(operations)} 个 Mutate 操作 (campaign={campaign_name})")
         return operations

@@ -61,6 +61,10 @@ class CreateAdRequest(BaseModel):
     daily_budget: float = 10.0
     target_country: str = "US"
     mode: str = "test"
+    sitelinks: Optional[List[dict]] = None
+    callouts: Optional[List[str]] = None
+    image_urls: Optional[List[str]] = None
+    logo_url: Optional[str] = None
 
 
 class ModifyAdCopyRequest(BaseModel):
@@ -69,6 +73,10 @@ class ModifyAdCopyRequest(BaseModel):
     instruction: str = ""
     merchant_name: str = ""
     target_country: str = "US"
+
+
+class MerchantAssetsRequest(BaseModel):
+    url: str
 
 
 # ─── 端点 ───
@@ -362,6 +370,31 @@ async def modify_ad_copy(
         raise HTTPException(status_code=500, detail=f"AI 修改失败: {str(e)}")
 
 
+@router.post("/merchant-assets")
+async def get_merchant_assets(
+    data: MerchantAssetsRequest,
+    current_user: User = Depends(get_current_user),
+):
+    """快速获取商家网站的图片和 Logo（用于广告素材）"""
+    from app.services.merchant_crawler import crawl_merchant
+    try:
+        crawl_data = crawl_merchant(data.url)
+        images = []
+        for page in crawl_data.get("pages", []):
+            for img in page.get("images", []):
+                if img and img not in images and not any(x in img.lower() for x in ['icon', 'svg', 'favicon', '1x1', 'pixel']):
+                    images.append(img)
+                if len(images) >= 10:
+                    break
+            if len(images) >= 10:
+                break
+        logo = crawl_data.get("logo", "") or crawl_data.get("favicon", "")
+        return {"images": images, "logo": logo}
+    except Exception as e:
+        logger.warning("[MerchantAssets] 获取失败: %s", e)
+        return {"images": [], "logo": ""}
+
+
 @router.post("/create-campaign")
 async def create_campaign(
     data: CreateAdRequest,
@@ -424,6 +457,10 @@ async def create_campaign(
             merchant_mid=merchant.merchant_id if merchant else "",
             assignment_id=data.assignment_id,
             user_id=current_user.id,
+            sitelinks=data.sitelinks,
+            callouts=data.callouts,
+            image_urls=data.image_urls,
+            logo_url=data.logo_url,
         )
 
         # 更新 assignment 记录
