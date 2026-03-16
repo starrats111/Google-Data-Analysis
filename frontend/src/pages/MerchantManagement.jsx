@@ -998,7 +998,7 @@ const MerchantManagement = () => {
                 style={{ width: '100%', marginBottom: 6 }}
                 value={holidayCountry}
                 onChange={(v) => setHolidayCountry(v)}
-                options={ALL_CLAIM_COUNTRIES.map(c => ({ value: c.value, label: c.value }))}
+                options={['US','UK','CA','AU','DE','FR','JP','BR','IT','ES','NL','KR','SG','IN','MX'].map(c => ({ value: c, label: `${COUNTRY_MAP[c] || c} (${c})` }))}
               />
               {holidayLoading ? (
                 <Spin size="small" />
