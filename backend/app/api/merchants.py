@@ -384,6 +384,7 @@ async def my_library_stats(
         .filter(
             MerchantAssignment.user_id == current_user.id,
             MerchantAssignment.mode == "test",
+            MerchantAssignment.status == "active",
         )
         .scalar() or 0
     )
