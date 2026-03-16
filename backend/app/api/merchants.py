@@ -165,11 +165,38 @@ async def my_library(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """查询当前员工自己的商家库（CampaignLinkCache）"""
+    """查询商家库（CampaignLinkCache）：leader 看本组所有，manager 看全部，member 看自己"""
     from app.models.campaign_link_cache import CampaignLinkCache
     import json as _json
 
-    q = db.query(CampaignLinkCache).filter(CampaignLinkCache.user_id == current_user.id)
+    # 根据角色决定查询范围
+    is_team_view = False
+    if current_user.role == "manager":
+        # manager 看所有人的商家，按 merchant_id+platform_code 去重
+        is_team_view = True
+        from sqlalchemy import func as _dedup_func
+        dedup_ids = (
+            db.query(_dedup_func.min(CampaignLinkCache.id))
+            .group_by(CampaignLinkCache.merchant_id, CampaignLinkCache.platform_code)
+            .subquery()
+        )
+        q = db.query(CampaignLinkCache).filter(CampaignLinkCache.id.in_(dedup_ids))
+    elif current_user.role == "leader" and current_user.team_id:
+        # leader 看本组所有成员的商家，去重
+        is_team_view = True
+        team_user_ids = [
+            u.id for u in db.query(User.id).filter(User.team_id == current_user.team_id).all()
+        ]
+        from sqlalchemy import func as _dedup_func
+        dedup_ids = (
+            db.query(_dedup_func.min(CampaignLinkCache.id))
+            .filter(CampaignLinkCache.user_id.in_(team_user_ids))
+            .group_by(CampaignLinkCache.merchant_id, CampaignLinkCache.platform_code)
+            .subquery()
+        )
+        q = db.query(CampaignLinkCache).filter(CampaignLinkCache.id.in_(dedup_ids))
+    else:
+        q = db.query(CampaignLinkCache).filter(CampaignLinkCache.user_id == current_user.id)
 
     if platform:
         q = q.filter(CampaignLinkCache.platform_code == platform.upper())
@@ -469,33 +496,80 @@ async def my_library_stats(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """统计当前员工商家库"""
+    """统计商家库：leader 看本组，manager 看全部，member 看自己"""
     from app.models.campaign_link_cache import CampaignLinkCache
     from app.models.merchant import MerchantAssignment
     from sqlalchemy import func as _func, distinct as _distinct
 
-    base = db.query(CampaignLinkCache).filter(CampaignLinkCache.user_id == current_user.id)
-    total = base.count()
+    # 根据角色决定查询范围
+    if current_user.role == "manager":
+        # 去重统计
+        total = db.query(_func.count()).select_from(
+            db.query(CampaignLinkCache.merchant_id, CampaignLinkCache.platform_code)
+            .group_by(CampaignLinkCache.merchant_id, CampaignLinkCache.platform_code)
+            .subquery()
+        ).scalar() or 0
+        platform_rows = (
+            db.query(CampaignLinkCache.platform_code, _func.count(_distinct(CampaignLinkCache.merchant_id)))
+            .group_by(CampaignLinkCache.platform_code)
+            .all()
+        )
+        last_synced = db.query(_func.max(CampaignLinkCache.synced_at)).scalar()
+    elif current_user.role == "leader" and current_user.team_id:
+        team_user_ids = [
+            u.id for u in db.query(User.id).filter(User.team_id == current_user.team_id).all()
+        ]
+        total = db.query(_func.count()).select_from(
+            db.query(CampaignLinkCache.merchant_id, CampaignLinkCache.platform_code)
+            .filter(CampaignLinkCache.user_id.in_(team_user_ids))
+            .group_by(CampaignLinkCache.merchant_id, CampaignLinkCache.platform_code)
+            .subquery()
+        ).scalar() or 0
+        platform_rows = (
+            db.query(CampaignLinkCache.platform_code, _func.count(_distinct(CampaignLinkCache.merchant_id)))
+            .filter(CampaignLinkCache.user_id.in_(team_user_ids))
+            .group_by(CampaignLinkCache.platform_code)
+            .all()
+        )
+        last_synced = (
+            db.query(_func.max(CampaignLinkCache.synced_at))
+            .filter(CampaignLinkCache.user_id.in_(team_user_ids))
+            .scalar()
+        )
+    else:
+        total = db.query(CampaignLinkCache).filter(CampaignLinkCache.user_id == current_user.id).count()
+        platform_rows = (
+            db.query(CampaignLinkCache.platform_code, _func.count(CampaignLinkCache.id))
+            .filter(CampaignLinkCache.user_id == current_user.id)
+            .group_by(CampaignLinkCache.platform_code)
+            .all()
+        )
+        last_synced = (
+            db.query(_func.max(CampaignLinkCache.synced_at))
+            .filter(CampaignLinkCache.user_id == current_user.id)
+            .scalar()
+        )
 
-    platform_rows = (
-        db.query(CampaignLinkCache.platform_code, _func.count(CampaignLinkCache.id))
-        .filter(CampaignLinkCache.user_id == current_user.id)
-        .group_by(CampaignLinkCache.platform_code)
-        .all()
-    )
     by_platform = {r[0]: r[1] for r in platform_rows if r[0]}
 
-    last_synced = (
-        db.query(_func.max(CampaignLinkCache.synced_at))
-        .filter(CampaignLinkCache.user_id == current_user.id)
-        .scalar()
-    )
-
-    # manager 看所有小组测试商家，普通员工只看自己的
+    # manager/leader 看组内测试商家，member 看自己的
     if current_user.role == "manager":
         test_merchant_count = (
             db.query(_func.count(MerchantAssignment.id))
             .filter(
+                MerchantAssignment.mode == "test",
+                MerchantAssignment.status == "active",
+            )
+            .scalar() or 0
+        )
+    elif current_user.role == "leader" and current_user.team_id:
+        team_user_ids_for_test = [
+            u.id for u in db.query(User.id).filter(User.team_id == current_user.team_id).all()
+        ]
+        test_merchant_count = (
+            db.query(_func.count(MerchantAssignment.id))
+            .filter(
+                MerchantAssignment.user_id.in_(team_user_ids_for_test),
                 MerchantAssignment.mode == "test",
                 MerchantAssignment.status == "active",
             )

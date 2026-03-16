@@ -254,6 +254,8 @@ const MerchantManagement = () => {
   const role = permissions?.role || user?.role || 'member'
   const canManage = role === 'manager' || role === 'leader'
   const isManager = role === 'manager'
+  const isLeader = role === 'leader'
+  const isAdminOrLeader = isManager || isLeader  // 不做广告的角色
 
   const [tabKey, setTabKey] = useState('merchants')
   const [loading, setLoading] = useState(false)
@@ -1068,8 +1070,8 @@ const MerchantManagement = () => {
             </Card>
           </Col>
 
-          {/* 红框：广告投放设置（管理员不显示） */}
-          {!isManager && (
+          {/* 红框：广告投放设置（管理员/组长不显示） */}
+          {!isAdminOrLeader && (
           <Col xs={24} md={10}>
             <Card
               size="small"
@@ -1111,10 +1113,10 @@ const MerchantManagement = () => {
           )}
 
           {/* 绿框：测试商家数量 */}
-          <Col xs={24} md={isManager ? 18 : 4}>
+          <Col xs={24} md={isAdminOrLeader ? 18 : 4}>
             <Card size="small" style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
               <Statistic
-                title={isManager ? "小组测试商家" : "测试商家"}
+                title={isAdminOrLeader ? "小组测试商家" : "测试商家"}
                 value={stats.test_merchant_count || 0}
                 suffix="个"
                 valueStyle={{ fontSize: 24, color: '#52c41a' }}
@@ -1122,8 +1124,8 @@ const MerchantManagement = () => {
             </Card>
           </Col>
 
-          {/* 节日营销（管理员不显示） */}
-          {!isManager && (
+          {/* 节日营销（管理员/组长不显示） */}
+          {!isAdminOrLeader && (
           <Col xs={24} md={4}>
             <Card size="small" style={{ height: '100%' }} bodyStyle={{ padding: '8px 12px' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
@@ -1258,7 +1260,7 @@ const MerchantManagement = () => {
               </Card>
             ),
           },
-          ...(isManager ? [{
+          ...(canManage ? [{
             key: 'violations',
             label: (
               <span>
