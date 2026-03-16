@@ -842,25 +842,80 @@ const Layout = () => {
 }
 
 function PublishDrawerWrapper() {
-  const { open, closeDrawer, processing, processingLabel, openDrawer } = usePublishDrawer()
+  const {
+    open, closeDrawer, processing, processingLabel, openDrawer,
+    drawerMode, setDrawerMode, toggleFullscreen,
+    doneNotified, clearDoneNotify, hasTask,
+  } = usePublishDrawer()
   const [mounted, setMounted] = useState(false)
   useEffect(() => { if (open) setMounted(true) }, [open])
+
+  // CR-050: AI 完成后顶部通知
+  useEffect(() => {
+    if (doneNotified && !open) {
+      message.success({
+        content: (
+          <span>
+            AI 文章生成完成！
+            <a onClick={() => { openDrawer(); clearDoneNotify() }} style={{ marginLeft: 8 }}>
+              点击查看
+            </a>
+          </span>
+        ),
+        duration: 8,
+        key: 'ai-done-notify',
+        style: { marginTop: 8 },
+      })
+    }
+  }, [doneNotified, open])
+
+  // 抽屉宽度
+  const getDrawerWidth = () => {
+    if (drawerMode === 'full') return '100vw'
+    return Math.min(780, window.innerWidth * 0.5)
+  }
 
   return (
     <>
       {mounted && (
         <Drawer
-          title="发布文章 — 商家推广"
+          title={
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span>发布文章 — 商家推广</span>
+              {processing && (
+                <Tag icon={<LoadingOutlined spin />} color="processing" style={{ margin: 0 }}>
+                  {processingLabel || '处理中…'}
+                </Tag>
+              )}
+            </div>
+          }
           placement="right"
-          width={Math.min(780, window.innerWidth * 0.85)}
+          width={getDrawerWidth()}
           open={open}
           onClose={closeDrawer}
           destroyOnClose={false}
           maskClosable={!processing}
-          styles={{ body: { padding: '12px 16px', overflow: 'auto' } }}
-          extra={processing && (
-            <Tag icon={<LoadingOutlined spin />} color="processing">{processingLabel || '处理中…'}</Tag>
-          )}
+          mask={drawerMode === 'full'}
+          styles={{
+            body: { padding: '12px 16px', overflow: 'auto' },
+            wrapper: { transition: 'width 0.3s ease' },
+          }}
+          extra={
+            <Space size={4}>
+              <Tooltip title={drawerMode === 'full' ? '半屏' : '全屏'}>
+                <Button
+                  type="text"
+                  size="small"
+                  onClick={toggleFullscreen}
+                  icon={
+                    drawerMode === 'full'
+                      ? <span style={{ fontSize: 14 }}>◫</span>
+                      : <span style={{ fontSize: 14 }}>⬜</span>
+                  }
+                />
+              </Tooltip>
+            </Space>
+          }
         >
           <Suspense fallback={<div style={{ textAlign: 'center', padding: 60 }}><Spin size="large" /></div>}>
             <PublishWizard drawerMode />
@@ -868,36 +923,59 @@ function PublishDrawerWrapper() {
         </Drawer>
       )}
 
-      {!open && processing && (
-        <Tooltip title={processingLabel || '文章发布任务进行中，点击展开'} placement="left">
-          <Button
-            type="primary"
-            shape="circle"
-            size="large"
-            icon={<LoadingOutlined spin />}
-            onClick={openDrawer}
-            style={{
-              position: 'fixed', bottom: 32, right: 32, zIndex: 999,
-              width: 52, height: 52, boxShadow: '0 4px 16px rgba(0,0,0,0.2)',
-            }}
-          />
-        </Tooltip>
-      )}
-
-      {!open && !processing && mounted && (
-        <Tooltip title="发布文章" placement="left">
-          <Button
-            shape="circle"
-            size="large"
-            icon={<FormOutlined />}
-            onClick={openDrawer}
-            style={{
-              position: 'fixed', bottom: 32, right: 32, zIndex: 999,
-              width: 48, height: 48, boxShadow: '0 2px 8px rgba(0,0,0,0.12)',
-              opacity: 0.7,
-            }}
-          />
-        </Tooltip>
+      {/* CR-050: 右侧窄条 — 抽屉关闭时始终显示（有任务或已挂载） */}
+      {!open && (hasTask || mounted) && (
+        <div
+          onClick={openDrawer}
+          style={{
+            position: 'fixed',
+            top: '50%',
+            right: 0,
+            transform: 'translateY(-50%)',
+            zIndex: 998,
+            width: 28,
+            height: 120,
+            background: processing
+              ? 'linear-gradient(180deg, #1677ff 0%, #4096ff 100%)'
+              : doneNotified
+                ? 'linear-gradient(180deg, #52c41a 0%, #73d13d 100%)'
+                : 'linear-gradient(180deg, #8c8c8c 0%, #bfbfbf 100%)',
+            borderRadius: '8px 0 0 8px',
+            cursor: 'pointer',
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: 4,
+            boxShadow: '-2px 0 8px rgba(0,0,0,0.15)',
+            transition: 'all 0.3s ease',
+            writingMode: 'vertical-rl',
+            color: '#fff',
+            fontSize: 12,
+            fontWeight: 500,
+            letterSpacing: 2,
+            userSelect: 'none',
+          }}
+          onMouseEnter={(e) => { e.currentTarget.style.width = '34px' }}
+          onMouseLeave={(e) => { e.currentTarget.style.width = '28px' }}
+        >
+          {processing ? (
+            <>
+              <LoadingOutlined spin style={{ fontSize: 14, writingMode: 'horizontal-tb' }} />
+              <span style={{ marginTop: 4 }}>AI</span>
+            </>
+          ) : doneNotified ? (
+            <>
+              <span style={{ writingMode: 'horizontal-tb', fontSize: 14 }}>✓</span>
+              <span style={{ marginTop: 2 }}>完成</span>
+            </>
+          ) : (
+            <>
+              <FormOutlined style={{ fontSize: 14, writingMode: 'horizontal-tb' }} />
+              <span style={{ marginTop: 4 }}>发布</span>
+            </>
+          )}
+        </div>
       )}
     </>
   )
