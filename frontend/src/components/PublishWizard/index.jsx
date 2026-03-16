@@ -1400,92 +1400,8 @@ const PublishWizard = ({ drawerMode = false }) => {
                 )}
               </div>
 
-              {/* 爬虫失败：显示手动上传区域（不论图库是否有图） */}
-              {crawledImages.length === 0 && !searchingImages && (
-                <div>
-                  <Alert type="warning" message={stockImages.length > 0 ? "未从商家网站获取到图片，可手动上传或从下方图库选取" : "未从商家网站获取到图片，请手动上传"} showIcon style={{ marginBottom: 12 }} />
-                  <Row gutter={16}>
-                    <Col span={8}>
-                      <div style={{ textAlign: 'center', marginBottom: 4 }}>
-                        <Tag color="green">头图（必填）</Tag>
-                      </div>
-                      {manualHeroPreview ? (
-                        <div style={{ position: 'relative', textAlign: 'center' }}>
-                          <Image src={manualHeroPreview} width={140} height={140}
-                            style={{ objectFit: 'cover', borderRadius: 8, border: '3px solid #52c41a' }}
-                            preview={false} />
-                          <Button type="text" danger size="small" icon={<DeleteOutlined />}
-                            onClick={() => { handleRemoveHeroImg(); setSelectedImages(prev => prev.slice(1)) }}
-                            style={{ position: 'absolute', top: -6, right: -6, background: '#fff', borderRadius: '50%', boxShadow: '0 1px 4px rgba(0,0,0,0.2)', width: 22, height: 22, padding: 0, minWidth: 22 }}
-                          />
-                        </div>
-                      ) : (
-                        <Upload.Dragger
-                          accept="image/*"
-                          showUploadList={false}
-                          beforeUpload={() => false}
-                          onChange={async (info) => {
-                            const file = info.file?.originFileObj || info.file
-                            if (!file) return
-                            setManualHeroFile(file)
-                            const preview = await fileToDataUrl(file)
-                            setManualHeroPreview(preview)
-                            setSelectedImages(prev => [preview, ...prev])
-                          }}
-                          style={{ padding: '16px 8px' }}
-                        >
-                          <p className="ant-upload-drag-icon"><InboxOutlined style={{ fontSize: 28, color: '#52c41a' }} /></p>
-                          <p style={{ fontSize: 12 }}>拖入头图</p>
-                        </Upload.Dragger>
-                      )}
-                    </Col>
-                    <Col span={16}>
-                      <div style={{ textAlign: 'center', marginBottom: 4 }}>
-                        <Tag color="blue">内容图（最多 4 张）</Tag>
-                      </div>
-                      <Row gutter={8}>
-                        {manualContentPreviews.map((src, i) => (
-                          <Col span={6} key={`step1-mc-${i}`}>
-                            <div style={{ position: 'relative', textAlign: 'center', marginBottom: 8 }}>
-                              <Image src={src} width={80} height={80}
-                                style={{ objectFit: 'cover', borderRadius: 4, border: '2px solid #1890ff' }}
-                                preview={false} />
-                              <Button type="text" danger size="small" icon={<DeleteOutlined />}
-                                onClick={() => {
-                                  handleRemoveContentImg(i)
-                                  setSelectedImages(prev => prev.filter((_, idx) => idx !== i + 1))
-                                }}
-                                style={{ position: 'absolute', top: -6, right: -6, background: '#fff', borderRadius: '50%', boxShadow: '0 1px 3px rgba(0,0,0,0.15)', width: 18, height: 18, padding: 0, minWidth: 18 }}
-                              />
-                            </div>
-                          </Col>
-                        ))}
-                        {manualContentPreviews.length < 4 && (
-                          <Col span={6}>
-                            <Upload.Dragger
-                              accept="image/*"
-                              showUploadList={false}
-                              beforeUpload={() => false}
-                              onChange={async (info) => {
-                                const file = info.file?.originFileObj || info.file
-                                if (!file) return
-                                if (manualContentFiles.length >= 4) { message.warning('最多 4 张内容图'); return }
-                                setManualContentFiles(prev => [...prev, file])
-                                const preview = await fileToDataUrl(file)
-                                setManualContentPreviews(prev => [...prev, preview])
-                                setSelectedImages(prev => [...prev, preview])
-                              }}
-                              style={{ padding: '12px 4px', height: 80 }}
-                            >
-                              <PlusOutlined style={{ fontSize: 18, color: '#1890ff' }} />
-                              <p style={{ fontSize: 11, margin: '4px 0 0' }}>添加</p>
-                            </Upload.Dragger>
-                          </Col>
-                        )}
-                      </Row>
-                    </Col>
-                  </Row>
-                </div>
+              {crawledImages.length === 0 && !searchingImages && stockImages.length === 0 && (
+                <Alert type="warning" message="未从商家网站获取到图片，请通过下方上传按钮手动上传" showIcon style={{ marginBottom: 12 }} />
               )}
 
               {/* 爬虫成功：正常图片选择 */}
@@ -1495,7 +1411,6 @@ const PublishWizard = ({ drawerMode = false }) => {
               )}
               <Space wrap size={[8, 8]} style={{ marginTop: 8 }}>
                 {(imagePoolMode === 'crawl' ? crawledImages : stockImages).map((imgObj, i) => {
-                  // CR-040: 比较对象的 key 值做去重
                   const imgKey = getImgSubmitValue(imgObj)
                   const isSelected = selectedImages.some(s => getImgSubmitValue(s) === imgKey)
                   return (
@@ -1525,6 +1440,34 @@ const PublishWizard = ({ drawerMode = false }) => {
                     </div>
                   )
                 })}
+                {/* 手动上传按钮 — 始终显示 */}
+                <Upload
+                  accept="image/*"
+                  showUploadList={false}
+                  multiple
+                  beforeUpload={() => false}
+                  onChange={async (info) => {
+                    const file = info.file?.originFileObj || info.file
+                    if (!file) return
+                    const imgObj = await uploadToImageCache(file)
+                    if (imgObj) {
+                      setCrawledImages(prev => [...prev, imgObj])
+                      setImagePoolMode('crawl')
+                    }
+                  }}
+                >
+                  <div style={{
+                    width: 90, height: 90, border: '2px dashed #d9d9d9', borderRadius: 6,
+                    display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+                    cursor: 'pointer', background: '#fafafa', transition: 'border-color 0.3s',
+                  }}
+                    onMouseEnter={(e) => { e.currentTarget.style.borderColor = '#1890ff' }}
+                    onMouseLeave={(e) => { e.currentTarget.style.borderColor = '#d9d9d9' }}
+                  >
+                    <UploadOutlined style={{ fontSize: 22, color: '#999' }} />
+                    <span style={{ fontSize: 11, color: '#999', marginTop: 4 }}>上传图片</span>
+                  </div>
+                </Upload>
               </Space>
               <Image
                 style={{ display: 'none' }}
