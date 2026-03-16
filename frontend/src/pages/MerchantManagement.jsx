@@ -59,6 +59,54 @@ function translateCategory(raw) {
   return [...new Set(translated)].join(' / ') || '-'
 }
 
+/* ── Google Ads 限制品检测 ── */
+const RESTRICTED_RULES = [
+  {
+    id: 'alcohol',
+    label: '酒类',
+    color: '#faad14',
+    keywords: ['whiskey', 'whisky', 'vodka', 'rum', 'gin', 'tequila', 'brandy', 'cognac', 'bourbon', 'wine', 'beer', 'brewery', 'brewing', 'distillery', 'spirits', 'liquor', 'champagne', 'sake', 'cider', 'mead', 'absinthe', 'moonshine', 'cocktail', 'scotch', 'ale', 'lager', 'stout', 'prosecco', 'mezcal', 'soju', 'baijiu'],
+    catKeywords: ['alcohol', 'wine', 'beer', 'spirits', 'liquor', 'beverage'],
+    tip: '酒类广告限制：仅限批准国家投放（US/UK/CA/AU/DE等61国），不得面向未成年人，着陆页需标注酒精含量(ABV)，不可推广过量饮酒。部分国家有ABV上限。',
+  },
+  {
+    id: 'gambling',
+    label: '赌博',
+    color: '#ff4d4f',
+    keywords: ['casino', 'poker', 'betting', 'gamble', 'gambling', 'lottery', 'slot', 'bingo', 'wager', 'sportsbook'],
+    catKeywords: ['gambling', 'casino', 'betting'],
+    tip: '赌博广告需要 Google 认证，仅限特定国家，需持有当地合法牌照。建议不做。',
+  },
+  {
+    id: 'pharma',
+    label: '医药',
+    color: '#ff7a45',
+    keywords: ['pharmacy', 'pharmaceutical', 'prescription', 'drug store', 'rx '],
+    catKeywords: ['pharmacy', 'pharmaceutical', 'prescription drug'],
+    tip: '处方药/药房广告需要 Google 药品认证。OTC保健品通常可以，但需确认着陆页合规。',
+  },
+  {
+    id: 'weapon',
+    label: '武器',
+    color: '#ff4d4f',
+    keywords: ['firearm', 'ammunition', 'gun ', 'guns ', 'rifle', 'pistol', 'shotgun', 'weapon'],
+    catKeywords: ['weapon', 'firearm', 'gun'],
+    tip: '武器/弹药广告严格禁止。Google Ads 不允许推广枪支、弹药及爆炸物。',
+  },
+]
+
+function detectRestricted(merchantName, categories) {
+  const name = (merchantName || '').toLowerCase()
+  const cats = (categories || '').toLowerCase()
+  const matched = []
+  for (const rule of RESTRICTED_RULES) {
+    if (rule.keywords.some(kw => name.includes(kw)) || rule.catKeywords.some(kw => cats.includes(kw))) {
+      matched.push(rule)
+    }
+  }
+  return matched
+}
+
 const { Option } = Select
 const relationshipStatusMap = {
   joined: { color: 'green', label: '通过' },
@@ -429,25 +477,35 @@ const MerchantManagement = () => {
       key: 'merchant_name',
       width: 220,
       fixed: 'left',
-      render: (text, record) => (
-        <Space size={6}>
-          {record.logo && <img src={record.logo} alt="" style={{ width: 20, height: 20, borderRadius: 4, objectFit: 'contain' }} />}
-          <span style={{ fontWeight: 600 }}>{text || '-'}</span>
-          {record.campaign_link && (
-            <Tooltip title="复制 Campaign Link">
-              <CopyOutlined
-                style={{ color: '#1677ff', cursor: 'pointer', fontSize: 13 }}
-                onClick={(e) => {
-                  e.stopPropagation()
-                  navigator.clipboard.writeText(record.campaign_link)
-                    .then(() => message.success('Campaign Link 已复制'))
-                    .catch(() => message.error('复制失败'))
-                }}
-              />
-            </Tooltip>
-          )}
-        </Space>
-      ),
+      render: (text, record) => {
+        const restrictions = detectRestricted(text, record.categories)
+        return (
+          <Space size={6}>
+            {record.logo && <img src={record.logo} alt="" style={{ width: 20, height: 20, borderRadius: 4, objectFit: 'contain' }} />}
+            <span style={{ fontWeight: 600 }}>{text || '-'}</span>
+            {restrictions.map(r => (
+              <Tooltip key={r.id} title={<div style={{ maxWidth: 280 }}><b>⚠ {r.label}限制品</b><br/>{r.tip}</div>}>
+                <Tag color={r.color} style={{ fontSize: 10, lineHeight: '16px', padding: '0 4px', margin: 0, cursor: 'help' }}>
+                  {r.label}
+                </Tag>
+              </Tooltip>
+            ))}
+            {record.campaign_link && (
+              <Tooltip title="复制 Campaign Link">
+                <CopyOutlined
+                  style={{ color: '#1677ff', cursor: 'pointer', fontSize: 13 }}
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    navigator.clipboard.writeText(record.campaign_link)
+                      .then(() => message.success('Campaign Link 已复制'))
+                      .catch(() => message.error('复制失败'))
+                  }}
+                />
+              </Tooltip>
+            )}
+          </Space>
+        )
+      },
     },
     {
       title: '平台',

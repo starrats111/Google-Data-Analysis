@@ -1,11 +1,26 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react'
 import { Steps, Card, Button, Space, Table, Input, InputNumber, Select, message, Spin, Typography, Tag, Alert, Row, Col, Divider, Collapse, Modal, Switch, Tooltip } from 'antd'
-import { ThunderboltOutlined, SearchOutlined, RocketOutlined, LinkOutlined, BulbOutlined, LoadingOutlined, CheckCircleOutlined, GlobalOutlined, CopyOutlined, ReloadOutlined, PictureOutlined } from '@ant-design/icons'
+import { ThunderboltOutlined, SearchOutlined, RocketOutlined, LinkOutlined, BulbOutlined, LoadingOutlined, CheckCircleOutlined, GlobalOutlined, CopyOutlined, ReloadOutlined, PictureOutlined, WarningOutlined } from '@ant-design/icons'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import api from '../../services/api'
 import { getToken } from '../../services/tokenHolder'
 
 const { TextArea } = Input
+
+const RESTRICTED_KEYWORDS = {
+  alcohol: { label: '酒类限制品', keywords: ['whiskey', 'whisky', 'vodka', 'rum', 'gin', 'tequila', 'brandy', 'cognac', 'bourbon', 'wine', 'beer', 'brewery', 'brewing', 'distillery', 'spirits', 'liquor', 'champagne', 'sake', 'cider', 'moonshine', 'cocktail', 'scotch', 'ale', 'lager', 'stout', 'mezcal'], tip: '酒类广告限制：仅限批准国家投放（US/UK/CA/AU/DE等61国），不可面向未成年人，着陆页需标注酒精含量(ABV)，不可推广过量饮酒。' },
+  gambling: { label: '赌博限制品', keywords: ['casino', 'poker', 'betting', 'gamble', 'gambling', 'lottery', 'sportsbook'], tip: '赌博广告需 Google 认证和当地牌照，建议不做。' },
+  weapon: { label: '武器禁止品', keywords: ['firearm', 'ammunition', 'gun ', 'guns ', 'rifle', 'pistol', 'shotgun'], tip: '武器/弹药广告严格禁止，Google Ads 不允许推广。' },
+}
+
+function detectMerchantRestrictions(name) {
+  const n = (name || '').toLowerCase()
+  const results = []
+  for (const [, rule] of Object.entries(RESTRICTED_KEYWORDS)) {
+    if (rule.keywords.some(kw => n.includes(kw))) results.push(rule)
+  }
+  return results
+}
 
 function formatCid(cid) {
   const s = String(cid).replace(/\D/g, '')
@@ -438,6 +453,19 @@ export default function AdCreationWizard() {
 
   return (
     <div style={{ padding: 24 }}>
+      {(() => {
+        const restrictions = detectMerchantRestrictions(merchantName)
+        return restrictions.length > 0 && (
+          <Alert
+            type="warning"
+            showIcon
+            icon={<WarningOutlined />}
+            style={{ marginBottom: 12 }}
+            message={restrictions.map(r => r.label).join(' / ')}
+            description={restrictions.map(r => r.tip).join(' ')}
+          />
+        )
+      })()}
       <Typography.Title level={4}>
         <ThunderboltOutlined /> 广告创建向导
         {merchantName && <Tag color="blue" style={{ marginLeft: 12 }}>{merchantName}</Tag>}
