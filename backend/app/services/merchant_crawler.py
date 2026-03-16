@@ -1,18 +1,33 @@
 """
-商家网站爬取服务（OPT-012）
+商家网站爬取服务（OPT-012 / CR-024 增强版）
 httpx + BeautifulSoup 爬取商家首页 + 子页面
 """
 import logging
 import re
 import ipaddress
 import socket
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Tuple
 from urllib.parse import urljoin, urlparse
 
 import httpx
 from bs4 import BeautifulSoup
 
 logger = logging.getLogger(__name__)
+
+# 瞬时网络错误：值得重试的异常类型
+_TRANSIENT_ERRORS = (
+    httpx.ConnectTimeout,
+    httpx.ReadTimeout,
+    httpx.WriteTimeout,
+    httpx.PoolTimeout,
+    httpx.ConnectError,
+    httpx.RemoteProtocolError,
+    ConnectionResetError,
+    ConnectionError,
+    ConnectionAbortedError,
+    TimeoutError,
+    OSError,
+)
 
 PRODUCT_PAGE_KEYWORDS = [
     "product", "shop", "store", "collection", "collections",
@@ -215,25 +230,29 @@ def _validate_url(url: str) -> str:
         raise ValueError("无效的 URL")
     if hostname.lower() in ("localhost", "127.0.0.1", "0.0.0.0"):
         raise ValueError("不允许的 URL 地址")
-    try:
-        ip_str = socket.gethostbyname(hostname)
-        ip = ipaddress.ip_address(ip_str)
-        for net in PRIVATE_NETS:
-            if ip in net:
-                raise ValueError("不允许的 URL 地址")
-    except socket.gaierror:
-        # DNS 解析失败时尝试 www/non-www 变体
-        alt_hostname = hostname
-        if hostname.startswith("www."):
-            alt_hostname = hostname[4:]
-        else:
-            alt_hostname = "www." + hostname
+    dns_resolved = False
+    for dns_attempt in range(3):
         try:
-            socket.gethostbyname(alt_hostname)
-            url = url.replace(hostname, alt_hostname, 1)
-            logger.info("[MerchantCrawler] DNS 回退: %s → %s", hostname, alt_hostname)
+            ip_str = socket.gethostbyname(hostname)
+            ip = ipaddress.ip_address(ip_str)
+            for net in PRIVATE_NETS:
+                if ip in net:
+                    raise ValueError("不允许的 URL 地址")
+            dns_resolved = True
+            break
         except socket.gaierror:
-            raise ValueError(f"域名 {hostname} 无法解析，请检查网址")
+            if dns_attempt < 2:
+                _time.sleep(0.5 * (dns_attempt + 1))
+                continue
+            # 最后一次失败：尝试 www/non-www 变体
+            alt_hostname = hostname[4:] if hostname.startswith("www.") else "www." + hostname
+            try:
+                socket.gethostbyname(alt_hostname)
+                url = url.replace(hostname, alt_hostname, 1)
+                logger.info("[MerchantCrawler] DNS 回退: %s → %s", hostname, alt_hostname)
+                dns_resolved = True
+            except socket.gaierror:
+                raise ValueError(f"域名 {hostname} 无法解析，请检查网址")
     return url
 
 
@@ -735,6 +754,73 @@ def _make_httpx_response(text: str, url: str, headers: dict = None) -> httpx.Res
     )
 
 
+def _fetch_light(url: str, client: httpx.Client = None, timeout: int = 15,
+                 max_retries: int = 2) -> Optional[httpx.Response]:
+    """
+    轻量级请求（用于子页面）：自动重试瞬时错误，不触发 Playwright 等重型方案。
+    比 _fetch_with_retry 快得多，适合批量子页面爬取。
+    """
+    last_err = None
+    for attempt in range(max_retries + 1):
+        if attempt > 0:
+            _time.sleep(_random.uniform(0.5, 1.5) * attempt)
+
+        ua = _random.choice(_FALLBACK_UAS)
+        headers = _build_stealth_headers(url, ua)
+        try:
+            if client:
+                resp = client.get(url, headers=headers, timeout=timeout)
+            else:
+                with httpx.Client(timeout=timeout, follow_redirects=True, http2=True) as c:
+                    resp = c.get(url, headers=headers)
+            if resp.status_code == 200 and len(resp.text) > 500:
+                return resp
+            if resp.status_code == 403:
+                logger.debug("[fetch_light] %s → 403, 跳过", url[:60])
+                return None
+            if resp.status_code >= 500 and attempt < max_retries:
+                logger.debug("[fetch_light] %s → %d, 重试 %d", url[:60], resp.status_code, attempt + 1)
+                continue
+            if resp.status_code == 200:
+                return resp
+            return None
+        except _TRANSIENT_ERRORS as e:
+            last_err = e
+            logger.debug("[fetch_light] %s 瞬时错误 (尝试 %d/%d): %s",
+                         url[:60], attempt + 1, max_retries + 1, type(e).__name__)
+            continue
+        except Exception as e:
+            logger.debug("[fetch_light] %s 非瞬时错误: %s", url[:60], e)
+            return None
+
+    if last_err:
+        logger.warning("[fetch_light] %s 重试 %d 次后仍失败: %s", url[:60], max_retries + 1, last_err)
+    return None
+
+
+def _try_url_variants(base_url: str) -> List[str]:
+    """
+    生成 URL 变体列表（www/non-www, https/http），提高首页命中率。
+    返回不包含原始 URL 的变体列表。
+    """
+    parsed = urlparse(base_url)
+    hostname = parsed.hostname or ""
+    variants = []
+
+    if hostname.startswith("www."):
+        no_www = base_url.replace(f"://{hostname}", f"://{hostname[4:]}", 1)
+        variants.append(no_www)
+    else:
+        with_www = base_url.replace(f"://{hostname}", f"://www.{hostname}", 1)
+        variants.append(with_www)
+
+    if parsed.scheme == "https":
+        http_variant = "http" + base_url[5:]
+        variants.append(http_variant)
+
+    return variants
+
+
 def _is_blocked_page(html: str) -> bool:
     """检测是否是反爬/challenge 拦截页（Cloudflare 5s shield, CAPTCHA 等）
 
@@ -835,13 +921,16 @@ def _try_curl_cffi(url: str, timeout: int = 20):
         logger.debug("[MerchantCrawler] curl_cffi 未安装，跳过")
         return None
 
-    impersonate_targets = ["chrome131", "chrome133", "safari18_0", "edge131"]
+    impersonate_targets = [
+        "chrome131", "chrome133", "chrome136",
+        "safari18_0", "edge131", "edge136",
+    ]
     _random.shuffle(impersonate_targets)
 
     best_result = None
     best_score = -1
 
-    for target in impersonate_targets[:3]:
+    for target in impersonate_targets[:4]:
         try:
             _time.sleep(_random.uniform(0.3, 1.0))
             resp = cffi_requests.get(
@@ -857,26 +946,29 @@ def _try_curl_cffi(url: str, timeout: int = 20):
             )
             if resp.status_code == 200 and len(resp.text) > 500:
                 score = _content_quality_score(resp.text)
-                # 大页面(>50KB)降低质量门槛
-                min_score = 1 if len(resp.text) > 50000 else 2
-                if score >= min_score:
-                    logger.info("[MerchantCrawler] curl_cffi(%s) 成功! %d bytes, quality=%d",
-                                target, len(resp.text), score)
+                content_len = len(resp.text)
+                # CR-024: 放宽接受标准 — 大页面或有基本内容就通过
+                if score >= 2 or (score >= 1 and content_len > 10000) or content_len > 50000:
+                    logger.info("[MerchantCrawler] curl_cffi(%s) 成功! %dKB, quality=%d",
+                                target, content_len // 1024, score)
                     return _make_httpx_response(resp.text, url, dict(resp.headers))
-                if score > best_score:
-                    best_score = score
+                effective = score + (1 if content_len > 5000 else 0)
+                if effective > best_score:
+                    best_score = effective
                     best_result = _make_httpx_response(resp.text, url, dict(resp.headers))
-                logger.info("[MerchantCrawler] curl_cffi(%s) 质量低 (score=%d)", target, score)
+                logger.info("[MerchantCrawler] curl_cffi(%s) 质量低 (score=%d, %dKB)",
+                            target, score, content_len // 1024)
             elif resp.status_code == 403:
                 logger.info("[MerchantCrawler] curl_cffi(%s) 被 403", target)
+            elif resp.status_code >= 500:
+                logger.info("[MerchantCrawler] curl_cffi(%s) 服务端错误 %d", target, resp.status_code)
             else:
                 logger.info("[MerchantCrawler] curl_cffi(%s) 返回 %d", target, resp.status_code)
         except Exception as e:
-            logger.debug("[MerchantCrawler] curl_cffi(%s) 失败: %s", target, e)
+            logger.debug("[MerchantCrawler] curl_cffi(%s) 异常: %s", target, type(e).__name__)
 
-    # 如果有低分但有内容的结果，返回它（比没有强）
     if best_result and best_score >= 1:
-        logger.info("[MerchantCrawler] curl_cffi 使用最佳低分结果 (score=%d)", best_score)
+        logger.info("[MerchantCrawler] curl_cffi 使用最佳结果 (score=%d)", best_score)
         return best_result
 
     return None
@@ -1040,7 +1132,7 @@ except Exception as e:
 def _try_playwright(url: str, timeout: int = 30):
     """
     Level 3: Playwright 无头浏览器 — 在独立子进程中运行。
-    使用 subprocess 彻底隔离 asyncio event loop，避免 Sync API 冲突。
+    CR-024: 增加内容最低接受门槛，即使内容少也尝试保留。
     """
     import subprocess as _sp
     import shutil
@@ -1052,7 +1144,6 @@ def _try_playwright(url: str, timeout: int = 30):
         logger.debug("[MerchantCrawler] python3/python 不在 PATH 中，跳过 playwright")
         return None
 
-    # 写入临时脚本文件而非用 -c 参数，避免参数长度限制和转义问题
     script_fd, script_path = tempfile.mkstemp(suffix=".py", prefix="pw_crawl_")
     try:
         os.write(script_fd, _PLAYWRIGHT_SCRIPT.encode("utf-8"))
@@ -1070,16 +1161,16 @@ def _try_playwright(url: str, timeout: int = 30):
             err_msg = proc.stderr.decode("utf-8", errors="replace")[:500]
             logger.warning("[MerchantCrawler] playwright 子进程失败: %s", err_msg)
             if "playwright" in err_msg.lower() and "install" in err_msg.lower():
-                logger.error("[MerchantCrawler] Playwright 浏览器未安装！请在服务器执行: playwright install chromium")
+                logger.error("[MerchantCrawler] Playwright 浏览器未安装！执行: playwright install chromium")
             return None
 
         if html and len(html) > 500:
             score = _content_quality_score(html)
-            if score >= 1 or len(html) > 5000:
+            if score >= 1 or len(html) > 3000:
                 logger.info("[MerchantCrawler] playwright 成功! %d bytes, quality=%d",
                             len(html), score)
                 return _make_httpx_response(html, url)
-        logger.info("[MerchantCrawler] playwright 返回内容过短 (%d bytes)", len(html))
+        logger.info("[MerchantCrawler] playwright 内容过短 (%d bytes)", len(html) if html else 0)
     except _sp.TimeoutExpired:
         logger.warning("[MerchantCrawler] playwright 超时 (%ds)", timeout)
     except Exception as e:
@@ -1215,40 +1306,45 @@ def _try_google_cache(url: str, timeout: int = 15):
 
 def _fetch_with_retry(client_headers: Dict, url: str, timeout: int = 20) -> httpx.Response:
     """
-    多级反爬回退请求策略（智能版）：
-      Level 0: httpx + 隐身 headers（快速，大部分网站可过）
-      Level 1: curl_cffi + TLS 指纹伪装（绕过 TLS/JA3 检测）
-      Level 2: cloudscraper（绕过旧版 Cloudflare）
-      Level 3: Playwright 无头浏览器（最终手段）
-      Level 4: Google Cache / Wayback Machine（应急）
+    多级反爬回退请求策略（CR-024 增强版）：
+      Level 0: httpx + 隐身 headers + 瞬时错误自动重试
+      Level 1: curl_cffi + TLS 指纹伪装
+      Level 2: cloudscraper
+      Level 3: Playwright 无头浏览器（带重试）
+      Level 4: Google Cache / Wayback Machine
 
-    智能优化：
-      - 首次请求快速判断站点难度
-      - 难站点跳过中间层直接用 Playwright
-      - 保留所有获得的最佳结果作为兜底
+    CR-024 增强：
+      - Level 0 增加瞬时错误重试（ConnectionReset/Timeout/DNS 等）
+      - Level 0 增加更多 UA 轮换（5 个而非 3 个）
+      - Playwright 失败后重试一次（换 UA）
+      - 降低质量门槛接受度（score>=1 且 >10KB 的页面直接通过）
+      - 任何层级成功获得 >5KB 内容都保留为候选
     """
     best_resp = None
     best_score = -1
 
     def _update_best(resp):
         nonlocal best_resp, best_score
-        if resp and hasattr(resp, 'text'):
+        if resp and hasattr(resp, 'text') and len(resp.text) > 200:
             s = _content_quality_score(resp.text)
-            if s > best_score:
-                best_score = s
+            # 考虑内容长度：长页面即使低分也有价值
+            effective = s + (1 if len(resp.text) > 10000 else 0)
+            if effective > best_score:
+                best_score = effective
                 best_resp = resp
 
-    # ── Level 0: httpx stealth ──
+    # ── Level 0: httpx stealth + 瞬时重试 ──
     ua_pool = list(_FALLBACK_UAS)
     _random.shuffle(ua_pool)
-    attempts_uas = [client_headers.get("User-Agent", ua_pool[0])] + ua_pool[:2]
+    attempts_uas = [client_headers.get("User-Agent", ua_pool[0])] + ua_pool[:4]
 
     difficulty = "easy"
     got_403 = False
+    transient_failures = 0
 
     for i, ua in enumerate(attempts_uas):
         if i > 0:
-            _time.sleep(_random.uniform(0.5, 1.0))
+            _time.sleep(_random.uniform(0.5, 1.5))
 
         headers = _build_stealth_headers(url, ua)
         try:
@@ -1263,15 +1359,25 @@ def _fetch_with_retry(client_headers: Dict, url: str, timeout: int = 20) -> http
                     got_403 = True
                     _update_best(resp)
                     continue
-                resp.raise_for_status()
+                if resp.status_code >= 500:
+                    logger.info("[MerchantCrawler] httpx %s → %d, 重试", url[:50], resp.status_code)
+                    continue
+                if resp.status_code >= 400:
+                    _update_best(resp)
+                    break
                 score = _content_quality_score(resp.text)
                 _update_best(resp)
                 if score >= 2:
                     return resp
+                # 放宽：score=1 且页面 >10KB 也接受
+                if score >= 1 and len(resp.text) > 10000:
+                    logger.info("[MerchantCrawler] httpx 接受中等质量 (score=%d, %dKB)",
+                                score, len(resp.text) // 1024)
+                    return resp
 
                 difficulty = _detect_site_difficulty(url, resp.text)
                 if difficulty == "hard":
-                    logger.info("[MerchantCrawler] 检测到困难站点，跳至 Playwright")
+                    logger.info("[MerchantCrawler] 检测到困难站点，跳至高级方案")
                     break
                 logger.info("[MerchantCrawler] httpx 质量低 (score=%d, %d bytes)，升级",
                             score, len(resp.text))
@@ -1281,24 +1387,38 @@ def _fetch_with_retry(client_headers: Dict, url: str, timeout: int = 20) -> http
                 got_403 = True
                 _update_best(e.response)
                 continue
-            raise
-        except Exception:
+            _update_best(getattr(e, 'response', None))
+            break
+        except _TRANSIENT_ERRORS as e:
+            transient_failures += 1
+            logger.info("[MerchantCrawler] httpx 瞬时错误 (尝试 %d/%d): %s",
+                        i + 1, len(attempts_uas), type(e).__name__)
+            if i < len(attempts_uas) - 1:
+                _time.sleep(_random.uniform(1.0, 2.0) * (i + 1))
+                continue
+            break
+        except Exception as e:
+            logger.warning("[MerchantCrawler] httpx 未知错误: %s %s", type(e).__name__, str(e)[:100])
             if i < len(attempts_uas) - 1:
                 continue
             break
 
-    # 403 几乎肯定是反爬检测，标记为困难
     if got_403:
         difficulty = "hard"
+    if transient_failures >= 3:
+        difficulty = max(difficulty, "medium")
 
-    # 困难站点：跳过 Level 1-2，直接用 Playwright
+    # ── Level 1-3: 按难度决定顺序 ──
     if difficulty == "hard":
-        logger.info("[MerchantCrawler] 困难站点，直接尝试 Playwright (Level 3)...")
+        logger.info("[MerchantCrawler] 困难站点路径: Playwright → curl_cffi → cloudscraper")
         result = _try_playwright(url, timeout + 15)
         if result is not None:
             return result
-        # Playwright 也失败，再尝试 curl_cffi 和 cloudscraper
-        logger.info("[MerchantCrawler] Playwright 失败，回退到 curl_cffi...")
+        # Playwright 重试一次（换 timeout）
+        logger.info("[MerchantCrawler] Playwright 首次失败，重试 ...")
+        result = _try_playwright(url, timeout + 25)
+        if result is not None:
+            return result
         result = _try_curl_cffi(url, timeout)
         if result is not None:
             return result
@@ -1306,42 +1426,42 @@ def _fetch_with_retry(client_headers: Dict, url: str, timeout: int = 20) -> http
         if result is not None:
             return result
     else:
-        # 普通站点：按顺序尝试
-        logger.info("[MerchantCrawler] 尝试 curl_cffi (Level 1)...")
+        logger.info("[MerchantCrawler] 标准路径: curl_cffi → cloudscraper → Playwright")
         result = _try_curl_cffi(url, timeout)
         if result is not None:
             return result
 
-        logger.info("[MerchantCrawler] 尝试 cloudscraper (Level 2)...")
         result = _try_cloudscraper(url, timeout)
         if result is not None:
             return result
 
-        logger.info("[MerchantCrawler] 尝试 Playwright (Level 3)...")
+        logger.info("[MerchantCrawler] 尝试 Playwright ...")
         result = _try_playwright(url, timeout + 10)
         if result is not None:
             return result
 
     # ── Level 4: Google Cache / Wayback Machine ──
-    logger.info("[MerchantCrawler] 所有直接方案失败，尝试 Google Cache (Level 4)...")
+    logger.info("[MerchantCrawler] 所有直接方案失败，尝试缓存源 ...")
     result = _try_google_cache(url, timeout)
     if result is not None:
         return result
 
-    # 全部失败：返回最佳低质量结果而非抛出异常
-    if best_resp is not None and best_score >= 1:
-        logger.warning("[MerchantCrawler] 所有方案失败，使用最佳低质量结果 (score=%d, %d bytes)",
-                       best_score, len(getattr(best_resp, 'text', '')))
-        return best_resp
-
-    if best_resp is not None and hasattr(best_resp, 'text') and len(best_resp.text) > 2000:
-        logger.warning("[MerchantCrawler] 使用低分但有内容的结果 (%d bytes)", len(best_resp.text))
-        return best_resp
+    # 全部失败：返回最佳低质量结果（降低门槛）
+    if best_resp is not None and hasattr(best_resp, 'text'):
+        text_len = len(best_resp.text)
+        if best_score >= 1 or text_len > 5000:
+            logger.warning("[MerchantCrawler] 兜底：使用最佳可用结果 (score=%d, %d bytes)",
+                           best_score, text_len)
+            return best_resp
 
     if best_resp is not None:
-        best_resp.raise_for_status()
+        try:
+            best_resp.raise_for_status()
+        except Exception:
+            pass
 
-    raise httpx.HTTPStatusError("403 Forbidden", request=httpx.Request("GET", url), response=best_resp)
+    raise httpx.HTTPStatusError("所有爬取方案失败",
+                                request=httpx.Request("GET", url), response=best_resp)
 
 
 def _try_cloudscraper(url: str, timeout: int = 25):
@@ -1355,38 +1475,50 @@ def _try_cloudscraper(url: str, timeout: int = 25):
         logger.debug("[MerchantCrawler] cloudscraper 不可用: %s", exc)
         return None
 
-    for attempt in range(2):
+    best_cs_result = None
+    for attempt in range(3):
         try:
             _time.sleep(_random.uniform(0.5, 1.5))
-            scraper = cloudscraper.create_scraper(
-                browser={"browser": "chrome", "platform": "windows", "mobile": False}
-            )
-            headers = {
-                "Referer": "https://www.google.com/",
-            }
-            if attempt == 0:
-                headers["Accept-Encoding"] = "gzip, deflate"
-            else:
-                # 第二次尝试不发 Accept-Encoding，避免解压错误
+            browser_opts = [
+                {"browser": "chrome", "platform": "windows", "mobile": False},
+                {"browser": "chrome", "platform": "darwin", "mobile": False},
+                {"browser": "firefox", "platform": "windows", "mobile": False},
+            ]
+            scraper = cloudscraper.create_scraper(browser=browser_opts[attempt % len(browser_opts)])
+            headers = {"Referer": "https://www.google.com/"}
+            if attempt == 1:
                 headers["Accept-Encoding"] = "identity"
+            else:
+                headers["Accept-Encoding"] = "gzip, deflate"
             scraper.headers.update(headers)
             resp = scraper.get(url, timeout=timeout)
-            if resp.status_code == 200 and len(resp.text) > 1000:
+            if resp.status_code == 200 and len(resp.text) > 500:
                 score = _content_quality_score(resp.text)
-                if score >= 2:
-                    logger.info("[MerchantCrawler] cloudscraper 成功! %d bytes, quality=%d", len(resp.text), score)
+                content_len = len(resp.text)
+                if score >= 2 or (score >= 1 and content_len > 10000):
+                    logger.info("[MerchantCrawler] cloudscraper 成功! %dKB, quality=%d",
+                                content_len // 1024, score)
                     return _make_httpx_response(resp.text, url, dict(resp.headers))
-                logger.info("[MerchantCrawler] cloudscraper 质量低 (score=%d)", score)
+                if best_cs_result is None or content_len > len(best_cs_result.text):
+                    best_cs_result = _make_httpx_response(resp.text, url, dict(resp.headers))
+                logger.info("[MerchantCrawler] cloudscraper 质量低 (score=%d, %dKB)",
+                            score, content_len // 1024)
             elif resp.status_code == 403:
                 logger.info("[MerchantCrawler] cloudscraper 被 403")
                 break
         except Exception as e:
-            err_str = str(e)
-            if "decompressing" in err_str.lower() or "zlib" in err_str.lower():
-                logger.info("[MerchantCrawler] cloudscraper 解压错误，重试 identity 编码")
+            err_str = str(e).lower()
+            if "decompressing" in err_str or "zlib" in err_str:
+                logger.info("[MerchantCrawler] cloudscraper 解压错误，重试")
                 continue
-            logger.warning("[MerchantCrawler] cloudscraper 失败: %s", e)
-            break
+            logger.warning("[MerchantCrawler] cloudscraper 异常: %s", type(e).__name__)
+            if attempt >= 1:
+                break
+
+    if best_cs_result and len(best_cs_result.text) > 3000:
+        logger.info("[MerchantCrawler] cloudscraper 使用最佳结果 (%dKB)",
+                    len(best_cs_result.text) // 1024)
+        return best_cs_result
 
     return None
 
@@ -1446,10 +1578,45 @@ def crawl(url: str) -> Dict:
 
     home_html = ""
 
-    try:
-        resp = _fetch_with_retry(HEADERS, url)
-        home_html = resp.text
+    # ── CR-024: 首页爬取（带 URL 变体回退）──
+    home_fetch_error = None
+    urls_to_try = [url] + _try_url_variants(url)
+    for try_url in urls_to_try:
+        try:
+            resp = _fetch_with_retry(HEADERS, try_url)
+            home_html = resp.text
+            if try_url != url:
+                logger.info("[MerchantCrawler] 原始 URL 失败，变体 %s 成功", try_url[:60])
+                url = try_url
+            home_fetch_error = None
+            break
+        except Exception as e:
+            home_fetch_error = e
+            logger.info("[MerchantCrawler] URL %s 失败: %s", try_url[:60], type(e).__name__)
 
+    if home_fetch_error:
+        err_type = type(home_fetch_error).__name__
+        if isinstance(home_fetch_error, httpx.TimeoutException):
+            return {"crawl_failed": True,
+                    "error": "商家网站访问超时，该网站可能较慢或服务器无法访问",
+                    "url": url, "brand_name": _extract_brand_from_url(url)}
+        elif isinstance(home_fetch_error, httpx.ConnectError):
+            return {"crawl_failed": True,
+                    "error": "无法连接到商家网站，请检查网址是否正确",
+                    "url": url, "brand_name": _extract_brand_from_url(url)}
+        elif isinstance(home_fetch_error, httpx.HTTPStatusError):
+            status = home_fetch_error.response.status_code if home_fetch_error.response else 0
+            if status == 403:
+                return {"crawl_failed": True, "partial": True,
+                        "error": "商家网站拒绝访问 (403)，AI 将根据 URL 自动生成标题和关键词。",
+                        "url": url, "brand_name": _extract_brand_from_url(url)}
+            return {"crawl_failed": True, "error": f"商家网站返回 HTTP {status} 错误",
+                    "url": url, "brand_name": _extract_brand_from_url(url)}
+        else:
+            return {"crawl_failed": True, "error": f"爬取失败 ({err_type}): {str(home_fetch_error)[:200]}",
+                    "url": url, "brand_name": _extract_brand_from_url(url)}
+
+    try:
         is_blocked = _is_blocked_page(home_html)
 
         home_data = _extract_page(home_html, url)
@@ -1469,6 +1636,7 @@ def crawl(url: str) -> Dict:
                 "brand_name": brand_name or _extract_brand_from_url(url),
             }
 
+        # ── CR-024: 子页面爬取（轻量请求 + 连接池复用）──
         home_img_count = _count_unique_images(pages)
         if home_img_count >= MIN_GOOD_IMAGES:
             logger.info("[MerchantCrawler] 首页已有 %d 张图片 (>=%d)，跳过子页面",
@@ -1479,72 +1647,70 @@ def crawl(url: str) -> Dict:
             logger.info("[MerchantCrawler] 发现 %d 个候选子页面", len(sub_urls))
 
             INITIAL_BATCH = 3
+            consecutive_fails = 0
 
-            # Phase 1: 先爬首批 3 个子页面（不中途检查）
-            for i, sub_url in enumerate(sub_urls[:INITIAL_BATCH]):
-                try:
-                    _time.sleep(_random.uniform(1.0, 2.5))
-                    resp = _fetch_with_retry(HEADERS, sub_url, timeout=15)
-                    sub_data = _extract_page(resp.text, sub_url)
-                    pages.append(sub_data)
-                    logger.info("[MerchantCrawler] Phase1 子页面 %d/%d: %s → +%d 图片",
-                                i + 1, INITIAL_BATCH, sub_url[:60],
-                                len(sub_data.get("images", [])))
-                except Exception as e:
-                    logger.warning("[MerchantCrawler] Phase1 子页面爬取失败 %s: %s", sub_url, e)
+            # 使用共享 httpx Client 连接池
+            with httpx.Client(
+                timeout=15, follow_redirects=True, http2=True,
+                limits=httpx.Limits(max_keepalive_connections=5, max_connections=10),
+            ) as shared_client:
 
-            phase1_count = _count_unique_images(pages)
-            logger.info("[MerchantCrawler] Phase1 完成 (首页+%d子页): %d 张图片 (目标 %d)",
-                        min(INITIAL_BATCH, len(sub_urls)), phase1_count, MIN_GOOD_IMAGES)
-
-            # Phase 2: 逐页爬取剩余子页面，每爬一页检查一次
-            if phase1_count < MIN_GOOD_IMAGES:
-                for i, sub_url in enumerate(sub_urls[INITIAL_BATCH:]):
-                    current_count = _count_unique_images(pages)
-                    if current_count >= MIN_GOOD_IMAGES:
-                        logger.info("[MerchantCrawler] Phase2 已达 %d 张图片 (>=%d)，停止",
-                                    current_count, MIN_GOOD_IMAGES)
-                        break
+                # Phase 1: 先爬首批 3 个子页面（不中途检查）
+                for i, sub_url in enumerate(sub_urls[:INITIAL_BATCH]):
                     try:
-                        _time.sleep(_random.uniform(1.0, 2.5))
-                        resp = _fetch_with_retry(HEADERS, sub_url, timeout=15)
-                        sub_data = _extract_page(resp.text, sub_url)
-                        pages.append(sub_data)
-                        new_count = _count_unique_images(pages)
-                        logger.info("[MerchantCrawler] Phase2 子页面 %d: %s → 总计 %d 张图片",
-                                    INITIAL_BATCH + i + 1, sub_url[:60], new_count)
+                        _time.sleep(_random.uniform(0.8, 2.0))
+                        resp = _fetch_light(sub_url, client=shared_client, timeout=15)
+                        if resp and len(resp.text) > 500:
+                            sub_data = _extract_page(resp.text, sub_url)
+                            pages.append(sub_data)
+                            consecutive_fails = 0
+                            logger.info("[MerchantCrawler] Phase1 %d/%d: %s → +%d 图",
+                                        i + 1, INITIAL_BATCH, sub_url[:55],
+                                        len(sub_data.get("images", [])))
+                        else:
+                            consecutive_fails += 1
+                            logger.info("[MerchantCrawler] Phase1 %d/%d: %s → 无内容",
+                                        i + 1, INITIAL_BATCH, sub_url[:55])
                     except Exception as e:
-                        logger.warning("[MerchantCrawler] Phase2 子页面爬取失败 %s: %s", sub_url, e)
+                        consecutive_fails += 1
+                        logger.warning("[MerchantCrawler] Phase1 失败 %s: %s", sub_url[:50], e)
 
-    except httpx.TimeoutException:
-        logger.error("[MerchantCrawler] 爬取超时 %s", url)
-        if pages:
-            logger.info("[MerchantCrawler] 超时但已有 %d 页数据，返回部分结果", len(pages))
-        else:
-            return {"crawl_failed": True, "error": "商家网站访问超时，该网站可能较慢或服务器无法访问",
-                    "url": url, "brand_name": _extract_brand_from_url(url)}
-    except httpx.HTTPStatusError as e:
-        status = e.response.status_code if e.response else 0
-        logger.error("[MerchantCrawler] HTTP %d %s: %s", status, url, e)
-        if pages:
-            logger.info("[MerchantCrawler] HTTP错误但已有 %d 页数据，返回部分结果", len(pages))
-        else:
-            if status == 403:
-                return {"crawl_failed": True, "partial": True,
-                        "error": "商家网站拒绝访问 (403)，AI 将根据 URL 自动生成标题和关键词。",
-                        "url": url, "brand_name": _extract_brand_from_url(url)}
-            return {"crawl_failed": True, "error": f"商家网站返回 HTTP {status} 错误",
-                    "url": url, "brand_name": _extract_brand_from_url(url)}
-    except httpx.ConnectError:
-        logger.error("[MerchantCrawler] 连接失败 %s", url)
-        return {"crawl_failed": True, "error": "无法连接到商家网站，请检查网址是否正确",
-                "url": url, "brand_name": _extract_brand_from_url(url)}
+                phase1_count = _count_unique_images(pages)
+                logger.info("[MerchantCrawler] Phase1 完成: %d 张图 (目标 %d)",
+                            phase1_count, MIN_GOOD_IMAGES)
+
+                # Phase 2: 逐页补爬
+                if phase1_count < MIN_GOOD_IMAGES:
+                    for i, sub_url in enumerate(sub_urls[INITIAL_BATCH:]):
+                        if consecutive_fails >= 5:
+                            logger.warning("[MerchantCrawler] 连续 %d 次失败，停止子页面爬取",
+                                           consecutive_fails)
+                            break
+                        current_count = _count_unique_images(pages)
+                        if current_count >= MIN_GOOD_IMAGES:
+                            logger.info("[MerchantCrawler] Phase2 已达 %d 张图 (>=%d)，停止",
+                                        current_count, MIN_GOOD_IMAGES)
+                            break
+                        try:
+                            _time.sleep(_random.uniform(0.8, 2.0))
+                            resp = _fetch_light(sub_url, client=shared_client, timeout=15)
+                            if resp and len(resp.text) > 500:
+                                sub_data = _extract_page(resp.text, sub_url)
+                                pages.append(sub_data)
+                                consecutive_fails = 0
+                                new_count = _count_unique_images(pages)
+                                logger.info("[MerchantCrawler] Phase2 %d: %s → 总 %d 图",
+                                            INITIAL_BATCH + i + 1, sub_url[:55], new_count)
+                            else:
+                                consecutive_fails += 1
+                        except Exception as e:
+                            consecutive_fails += 1
+                            logger.warning("[MerchantCrawler] Phase2 失败 %s: %s", sub_url[:50], e)
+
     except Exception as e:
-        logger.error("[MerchantCrawler] 爬取失败 %s: %s", url, e)
-        if pages:
-            logger.info("[MerchantCrawler] 异常但已有 %d 页数据，返回部分结果", len(pages))
-        else:
-            return {"crawl_failed": True, "error": str(e),
+        logger.error("[MerchantCrawler] 处理异常 %s: %s", url, e)
+        if not pages:
+            return {"crawl_failed": True, "error": str(e)[:300],
                     "url": url, "brand_name": _extract_brand_from_url(url)}
 
     if not brand_name or brand_name.lower() in cache_provider_names:
