@@ -359,6 +359,7 @@ async def my_library_stats(
 ):
     """统计当前员工商家库"""
     from app.models.campaign_link_cache import CampaignLinkCache
+    from app.models.merchant import MerchantAssignment
     from sqlalchemy import func as _func, distinct as _distinct
 
     base = db.query(CampaignLinkCache).filter(CampaignLinkCache.user_id == current_user.id)
@@ -378,11 +379,21 @@ async def my_library_stats(
         .scalar()
     )
 
+    test_merchant_count = (
+        db.query(_func.count(MerchantAssignment.id))
+        .filter(
+            MerchantAssignment.user_id == current_user.id,
+            MerchantAssignment.mode == "test",
+        )
+        .scalar() or 0
+    )
+
     return {
         "total": total,
         "by_platform": by_platform,
         "last_synced_at": last_synced.isoformat() if last_synced else None,
         "user_platforms": list(by_platform.keys()),
+        "test_merchant_count": test_merchant_count,
     }
 
 
