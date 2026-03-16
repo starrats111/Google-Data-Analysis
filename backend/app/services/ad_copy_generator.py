@@ -122,6 +122,35 @@ def _strip_emoji(text: str) -> str:
     return _EMOJI_PATTERN.sub("", text).strip()
 
 
+def _fix_bad_translations(
+    texts: List[str], translations: List[str], merchant_name: str, gen_service
+) -> List[str]:
+    """检测并修复无效翻译（只有品牌名、空白等）"""
+    brand_lower = merchant_name.lower().strip()
+    brand_variants = {brand_lower, brand_lower.replace(" ", ""), brand_lower.replace("-", "")}
+    bad_indices = []
+    for i, t in enumerate(translations):
+        cleaned = t.strip().lower().replace("：", "").replace(":", "").replace(".", "").replace("!", "").replace("！", "")
+        if not cleaned or cleaned in brand_variants or len(cleaned) <= len(brand_lower) + 2:
+            bad_indices.append(i)
+    if not bad_indices or not gen_service:
+        return translations
+    items = "\n".join(f"{i+1}. {texts[i]}" for i in bad_indices if i < len(texts))
+    prompt = f"将以下英文广告文案翻译为完整的中文句子，每条单独一行，只输出翻译结果：\n{items}"
+    try:
+        raw = gen_service._call_with_fallback([{"role": "user", "content": prompt}], max_tokens=500, fast=True)
+        lines = [l.strip() for l in raw.strip().split("\n") if l.strip()]
+        # 去掉 "1. " 等编号前缀
+        import re as _re
+        lines = [_re.sub(r"^\d+[\.\)、]\s*", "", l) for l in lines]
+        for idx, bi in enumerate(bad_indices):
+            if idx < len(lines) and bi < len(translations):
+                translations[bi] = lines[idx]
+    except Exception as e:
+        logger.warning(f"[AdCopy] 修复翻译失败: {e}")
+    return translations
+
+
 class AdCopyGenerator:
     """AI 广告文案生成器"""
 
@@ -212,7 +241,8 @@ class AdCopyGenerator:
 
 返回 JSON 格式（thinking 字段包含第一步到第四步的所有分析，recommended_budget 是建议日预算）:
 {{"thinking": "第一步...\\n第二步...\\n第三步...\\n第四步...", "recommended_budget": 10, "headlines": ["Shop TYMO Now", ...], "headline_translations": ["立即选购TYMO", ...], "descriptions": ["d1", ...], "description_translations": ["完整中文翻译句子", ...]}}
-注意: headline_translations 和 description_translations 必须是完整的中文翻译句子，不能只写品牌名!"""
+翻译规则（极其重要！）: headline_translations 和 description_translations 每一条都必须翻译英文文案的完整含义。
+错误示范: "BRUNT"、"TYMO" ← 禁止只写品牌名！ 正确示范: "BRUNT Boots: Built Tough" → "BRUNT靴子：坚韧耐用\""""
 
     def _build_prompt_fast(
         self,
@@ -259,7 +289,9 @@ JSON格式(严格遵守):
 要求:
 - 标题正好15条，每条严格≤30字符。30字符的参考长度: "Shop TYMO Hair Tools - 50% Off"正好30字符
 - 描述正好4条，每条严格≤90字符。90字符的参考长度: "Shop premium hair styling tools at TYMO. Free shipping on orders over $50. Limited time."正好87字符
-- headline_translations 和 description_translations 必须是完整的中文翻译句子，不能只写品牌名！每条英文文案对应一条完整中文翻译
+- 翻译规则（极其重要！）: headline_translations 和 description_translations 每一条都必须是完整的中文翻译句子，翻译对应的英文文案全部含义。
+  错误示范: "BRUNT"、"TYMO"、"品牌名" ← 这些不是翻译，禁止出现！
+  正确示范: "BRUNT Boots: Built Tough" → "BRUNT靴子：坚韧耐用"，"Save on BRUNT Boots" → "BRUNT靴子优惠购"
 - 写完每条都要数一下字符数（含空格和标点），超出的必须改短
 - 严禁使用任何emoji表情符号（如🎉✓❤️🔥等）
 - 文案用{language}，翻译用中文
@@ -325,6 +357,9 @@ JSON格式(严格遵守):
                 headline_translations.append("")
             while len(description_translations) < len(descriptions):
                 description_translations.append("")
+
+            headline_translations = _fix_bad_translations(headlines, headline_translations, merchant_name, self.gen_service)
+            description_translations = _fix_bad_translations(descriptions, description_translations, merchant_name, self.gen_service)
 
             if len(headlines) < 3:
                 raise ValueError(f"AI 只生成了 {len(headlines)} 个标题，至少需要 3 个")
@@ -444,6 +479,9 @@ JSON格式(严格遵守):
                 headline_translations.append("")
             while len(description_translations) < len(descriptions):
                 description_translations.append("")
+
+            headline_translations = _fix_bad_translations(headlines, headline_translations, merchant_name, self.gen_service)
+            description_translations = _fix_bad_translations(descriptions, description_translations, merchant_name, self.gen_service)
 
             final = {
                 "headlines": headlines,
