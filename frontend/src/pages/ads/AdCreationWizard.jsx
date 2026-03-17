@@ -112,22 +112,15 @@ export default function AdCreationWizard() {
     if (!merchantUrl) return
     const base = merchantUrl.replace(/\/$/, '')
     if (isAlcohol) {
-      // 酒类：到达年龄验证/政策页面
       setFinalUrl(base + '/age-verification')
       setDisplayPath1('age-gate')
     } else if (isGambling) {
-      // 赌博：到达负责任博彩页面
       setFinalUrl(base + '/responsible-gambling')
       setDisplayPath1('responsible')
     } else {
-      // 正常品类：到达首页
       setFinalUrl(base)
     }
-    // 广告组名称自动填入商家名
-    if (!adGroupName) {
-      setAdGroupName(merchantName || '')
-    }
-  }, [merchantUrl, isAlcohol, isGambling, merchantName])
+  }, [merchantUrl, isAlcohol, isGambling])
 
   // Step 2: AI 素材 (SSE streaming)
   const [streamingText, setStreamingText] = useState('')
