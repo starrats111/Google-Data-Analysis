@@ -256,6 +256,77 @@ class AdCopyGenerator:
             best = history["top_campaigns"][0]
             context_ref = f"参考该员工最佳广告「{best['campaign_name']}」(CTR={best['ctr']}%, ROI={best['roi']}%)的成功经验。"
 
+        # ── 爬取商家网站真实运费/折扣/退货信息 ──
+        merchant_facts = ""
+        if merchant_url:
+            try:
+                import httpx, re
+                from bs4 import BeautifulSoup as _BS
+                _headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+                with httpx.Client(timeout=6, follow_redirects=True) as _c:
+                    resp = _c.get(merchant_url, headers=_headers)
+                    if resp.status_code < 400:
+                        text = resp.text[:15000]  # 只取前15KB
+                        soup = _BS(text, "lxml")
+                        page_text = soup.get_text(separator=" ", strip=True)
+
+                        facts = []
+                        # 提取运费信息
+                        shipping_patterns = [
+                            r'free\s+shipping\s+(?:on\s+orders?\s+)?(?:over|above)\s+\$[\d,.]+',
+                            r'free\s+shipping\s+(?:on\s+orders?\s+)?(?:over|above)\s+[\d,.]+',
+                            r'free\s+(?:standard\s+)?shipping',
+                            r'\$[\d,.]+\s+(?:flat\s+rate\s+)?shipping',
+                            r'ships?\s+free',
+                        ]
+                        for pat in shipping_patterns:
+                            m = re.search(pat, page_text, re.IGNORECASE)
+                            if m:
+                                facts.append(f"运费: {m.group(0).strip()}")
+                                break
+
+                        # 提取折扣信息
+                        discount_patterns = [
+                            r'(?:up\s+to\s+)?\d{1,2}%\s+off',
+                            r'save\s+(?:up\s+to\s+)?\d{1,2}%',
+                            r'(?:extra\s+)?\d{1,2}%\s+(?:off|discount)',
+                            r'\$\d+\s+off',
+                        ]
+                        for pat in discount_patterns:
+                            m = re.search(pat, page_text, re.IGNORECASE)
+                            if m:
+                                facts.append(f"折扣: {m.group(0).strip()}")
+                                break
+
+                        # 提取退货信息
+                        return_patterns = [
+                            r'free\s+returns?',
+                            r'\d+[\s-]day\s+returns?',
+                            r'easy\s+returns?',
+                            r'return\s+(?:within\s+)?\d+\s+days?',
+                        ]
+                        for pat in return_patterns:
+                            m = re.search(pat, page_text, re.IGNORECASE)
+                            if m:
+                                facts.append(f"退货: {m.group(0).strip()}")
+                                break
+
+                        # 提取 banner / announcement bar 文字
+                        for bar in soup.find_all(["div", "p", "span"], class_=lambda c: c and any(
+                            x in (c if isinstance(c, str) else " ".join(c)).lower()
+                            for x in ["announcement", "banner", "promo-bar", "top-bar", "header-bar", "marquee"]
+                        )):
+                            bar_text = bar.get_text(strip=True)
+                            if bar_text and 10 < len(bar_text) < 120:
+                                facts.append(f"官网横幅: {bar_text}")
+                                break
+
+                        if facts:
+                            merchant_facts = "\n\n## 商家网站真实信息（从官网爬取，必须严格使用，禁止编造）:\n" + "\n".join(f"- {f}" for f in facts)
+                            merchant_facts += "\n⚠️ 重要：文案中的运费、折扣、退货等信息必须与上述官网数据完全一致，不得修改金额或条件！"
+            except Exception as e:
+                logger.warning(f"[AdCopy] 爬取商家信息失败: {e}")
+
         # 构建精简版政策合规提示（流式版控制长度）
         from app.services.google_ads_policy import detect_restricted_categories, EDITORIAL_RULES, PROHIBITED_CONTENT_RULES
         restricted = detect_restricted_categories(merchant_name, category)
@@ -282,6 +353,7 @@ class AdCopyGenerator:
 关键词: {kw_text}
 目标市场: {country_name} ({language}) | 风格: {style}
 {context_ref}
+{merchant_facts}
 
 请先用中文写3-5行简要分析（商家定位、策略要点、预算建议），然后输出JSON。
 
