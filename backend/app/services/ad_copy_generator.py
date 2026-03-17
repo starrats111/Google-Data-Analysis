@@ -289,21 +289,59 @@ class AdCopyGenerator:
 
 JSON格式(严格遵守):
 ```json
-{{"recommended_budget": 10, "headlines": ["Shop TYMO Hair Tools Now", "TYMO: Style Starts Here", "...共15条"], "headline_translations": ["立即选购TYMO美发工具", "TYMO：时尚从这里开始", "...共15条中文翻译"], "descriptions": ["Shop premium hair styling tools at TYMO. Free shipping on orders over $50.", "...共4条"], "description_translations": ["在TYMO选购优质美发造型工具。满50美元免运费。", "...共4条中文翻译"], "sitelinks": [{{"link_text": "Shop All Products", "desc1": "Browse our full collection", "desc2": "Find the perfect fit for you", "path": "/products"}}, {{"link_text": "Today's Deals", "desc1": "Limited-time offers", "desc2": "Save on top picks", "path": "/deals"}}, {{"link_text": "About Us", "desc1": "Our story and mission", "desc2": "Quality you can trust", "path": "/about"}}, {{"link_text": "Contact Support", "desc1": "Get help anytime", "desc2": "We're here for you", "path": "/contact"}}], "callouts": ["Free Shipping", "24/7 Support", "Easy Returns", "Top Rated"]}}
+{{"recommended_budget": 10, "headlines": ["共15条标题"], "headline_translations": ["共15条中文翻译"], "descriptions": ["共4条描述"], "description_translations": ["共4条中文翻译"], "sitelinks": [{{"link_text": "链接文字", "desc1": "描述行1", "desc2": "描述行2", "path": "/子路径"}}], "callouts": ["卖点1", "卖点2", "卖点3", "卖点4"]}}
 ```
 
-要求:
-- 标题正好15条，每条严格≤30字符。30字符的参考长度: "Shop TYMO Hair Tools - 50% Off"正好30字符
-- 描述正好4条，每条严格≤90字符。90字符的参考长度: "Shop premium hair styling tools at TYMO. Free shipping on orders over $50. Limited time."正好87字符
-- sitelinks正好4条: link_text≤25字符, desc1和desc2各≤35字符, path是商家网站的子路径
-- callouts正好4条: 每条≤25字符，突出商家卖点（如免运费、退货保障等）
-- 翻译规则（极其重要！）: headline_translations 和 description_translations 每一条都必须是完整的中文翻译句子，翻译对应的英文文案全部含义。
-  错误示范: "BRUNT"、"TYMO"、"品牌名" ← 这些不是翻译，禁止出现！
-  正确示范: "BRUNT Boots: Built Tough" → "BRUNT靴子：坚韧耐用"，"Save on BRUNT Boots" → "BRUNT靴子优惠购"
-- 写完每条都要数一下字符数（含空格和标点），超出的必须改短
-- 严禁使用任何emoji表情符号（如🎉✓❤️🔥等）
+## 标题生成策略（15条，严格按以下顺序排列）:
+1. 第1条: 品牌强关联 — 必须包含品牌名"{merchant_name}"，突出品牌核心价值和定位
+2. 第2条: 最大折扣力度 — 优选商家最大的折扣信息（如"Up to 60% Off"），必须在着陆页可验证
+3. 第3条: 物流信息 — 针对{country_name}本国的物流优势（如"Free Shipping to {country_name}"），仅限本国物流
+4. 第4-6条: 次要折扣/促销 — 其他折扣信息、限时优惠、满减活动等
+5. 第7-10条: 产品卖点 — 突出产品品质、材质、设计、用户评价等
+6. 第11-13条: 行动号召 — 引导点击的CTA（如"Shop Now"、"Discover More"）
+7. 第14-15条: 差异化优势 — 与竞品的区别、独特卖点、品牌故事
+
+## 标题规则:
+- 正好15条，每条严格≤30字符（含空格和标点）
+- 30字符参考: "Shop TYMO Hair Tools - 50% Off"正好30字符
+- 尽量避免过多大写字符（品牌缩写除外）
+- 折扣和物流信息必须真实，在着陆页可验证
+- 不得使用感叹号、emoji、全大写单词
+
+## 描述生成策略（4条）:
+1. 第1条: 必须同时包含折扣信息和物流信息（如"Save up to 50% on {merchant_name}. Free shipping on orders over $XX to {country_name}."）
+2. 第2条: 产品品质和品牌故事（突出工艺、材质、设计理念）
+3. 第3条: 用户信任和保障（退货政策、客户评价、售后服务）
+4. 第4条: 行动号召+限时感（引导立即购买，突出稀缺性或时效性）
+
+## 描述规则:
+- 正好4条，每条字数必须在50-80字符之间（含空格和标点）
+- 低于50字符的描述太短，缺乏说服力，必须补充内容
+- 超过80字符的描述太长，必须精简
+- 80字符参考: "Shop premium denim at Current Elliott. Free shipping on orders over $150. Easy returns."正好80字符
+- 50字符参考: "Discover vintage-inspired jeans. Free shipping available."正好55字符
+
+## 站内链接（sitelinks）:
+- 正好6条，link_text≤25字符，desc1和desc2各≤35字符
+- path是商家网站真实存在的子路径（如/shop/women、/collections/new-arrivals）
+- 必须是商家网站上真实存在的页面，不要编造不存在的路径
+
+## 宣传信息（callouts）:
+- 正好4条，每条≤25字符
+- 突出商家核心卖点（如免运费、退货保障、品质保证等）
+
+## 翻译规则（极其重要！）:
+- headline_translations 和 description_translations 每一条都必须是完整的中文翻译句子
+- 错误示范: "BRUNT"、"TYMO"、"品牌名" ← 这些不是翻译，禁止出现！
+- 正确示范: "BRUNT Boots: Built Tough" → "BRUNT靴子：坚韧耐用"
+
+## 其他规则:
+- 写完每条都要数一下字符数，超出的必须改短，不足50字符的描述必须补充
+- 严禁使用任何emoji表情符号
 - 文案用{language}，翻译用中文
-- 专业、真实、符合{country_name}消费者语言习惯"""
+- 语言描述需要具有品牌特色，符合{country_name}消费者语言习惯
+- 完全符合Google Ads平台规范，不得欺骗、误导消费者
+- 所有折扣、价格、物流信息必须真实可验证"""
 
     def generate_ad_copy(
         self,
