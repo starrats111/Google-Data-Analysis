@@ -223,6 +223,10 @@ export default function AdCreationWizard() {
     setCidTotal(0)
     setLoading(true)
     try {
+      // 先尝试从 Google Ads API 刷新 CID 列表（去除幽灵账号）
+      try {
+        await api.post('/api/ad-creation/refresh-cid-list', { mcc_id: mccId })
+      } catch {}
       const res = await api.post('/api/ad-creation/find-available-cid', { mcc_id: mccId })
       const data = res.data || {}
       const freeCids = data.all_cids || []
@@ -392,20 +396,33 @@ export default function AdCreationWizard() {
               if (r.recommended_budget) {
                 setRecommendedBudget(r.recommended_budget)
               }
-              // sitelinks: 优先使用爬虫获取的真实链接，用 AI 描述补充
-              setSitelinks(prev => {
-                if (prev.length > 0 && prev[0].url) {
-                  // 已有真实爬取的 sitelinks，用 AI 的描述补充
-                  const aiSitelinks = r.sitelinks || []
-                  return prev.map((sl, i) => ({
-                    ...sl,
-                    desc1: sl.desc1 || (aiSitelinks[i]?.desc1 || ''),
-                    desc2: sl.desc2 || (aiSitelinks[i]?.desc2 || ''),
-                  }))
-                }
-                // 没有真实数据，使用 AI 生成的
-                return r.sitelinks || prev
-              })
+              // sitelinks: AI 生成完成后，强制用后端爬取的真实链接替代
+              const assetUrl = keywordUrl || merchantUrl || finalUrl
+              if (assetUrl) {
+                api.post('/api/ad-creation/merchant-assets', { url: assetUrl }).then(assetRes => {
+                  const realLinks = (assetRes.data?.nav_links || []).slice(0, 6)
+                  if (realLinks.length > 0) {
+                    const aiSitelinks = r.sitelinks || []
+                    setSitelinks(realLinks.map((link, i) => ({
+                      link_text: link.text?.slice(0, 25) || '',
+                      desc1: link.desc || aiSitelinks[i]?.desc1 || '',
+                      desc2: aiSitelinks[i]?.desc2 || '',
+                      path: link.path || '',
+                      url: link.url || '',
+                    })))
+                  } else {
+                    // 爬取失败，用 AI 的但标记为未验证
+                    setSitelinks(r.sitelinks || [])
+                  }
+                  if (assetRes.data?.selling_points?.length) {
+                    setCallouts(prev => prev.length > 0 ? prev : assetRes.data.selling_points.slice(0, 6))
+                  }
+                }).catch(() => {
+                  setSitelinks(prev => prev.length > 0 ? prev : (r.sitelinks || []))
+                })
+              } else {
+                setSitelinks(r.sitelinks || [])
+              }
               // callouts: 优先使用爬虫获取的真实卖点
               setCallouts(prev => {
                 if (prev.length > 0) return prev
