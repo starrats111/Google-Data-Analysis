@@ -18,6 +18,7 @@ from app.models.merchant import AffiliateMerchant, MerchantAssignment
 from app.models.merchant_violation import MerchantViolation
 from app.models.merchant_recommendation import MerchantRecommendation
 from app.models.sheet_config import SheetConfig
+from app.models.campaign_link_cache import CampaignLinkCache
 from app.models.notification import Notification
 from app.models.user import User
 
@@ -243,30 +244,65 @@ def sync_violation_sheet(db: Session, sheet_url: str) -> dict:
         db.add(v)
         new_count += 1
 
-        # 标记 AffiliateMerchant
-        conditions = []
+        # 标记 AffiliateMerchant + CampaignLinkCache
+        # 1. 先尝试精确匹配 AffiliateMerchant
+        am_conditions = []
         if mcid:
-            conditions.append(
+            am_conditions.append(
                 (func.lower(AffiliateMerchant.mcid) == mcid.lower())
                 & (AffiliateMerchant.platform == platform)
             )
         if mid and mid.isdigit():
-            conditions.append(
+            am_conditions.append(
                 (AffiliateMerchant.merchant_id == mid)
                 & (AffiliateMerchant.platform == platform)
             )
         if name:
-            conditions.append(
+            am_conditions.append(
                 (func.lower(AffiliateMerchant.merchant_name) == name.lower())
                 & (AffiliateMerchant.platform == platform)
             )
-        if conditions:
-            matched = db.query(AffiliateMerchant).filter(or_(*conditions)).all()
+        if am_conditions:
+            matched = db.query(AffiliateMerchant).filter(or_(*am_conditions)).all()
             for m in matched:
                 if m.violation_status != "violated":
                     m.violation_status = "violated"
                     m.violation_time = vtime or datetime.utcnow()
                     marked += 1
+
+        # 2. 同时标记 CampaignLinkCache（用 mcid 模糊匹配）
+        clc_conditions = []
+        if mcid:
+            # 精确匹配
+            clc_conditions.append(
+                (func.lower(CampaignLinkCache.mcid) == mcid.lower())
+                & (CampaignLinkCache.platform_code == platform)
+            )
+            # 模糊匹配：CLC.mcid 以违规 mcid 开头（处理 aaa 后缀）
+            slug = re.sub(r'[^a-z0-9]', '', mcid.lower())
+            if slug and len(slug) >= 4:
+                clc_conditions.append(
+                    func.lower(CampaignLinkCache.mcid).like(f'{slug}%')
+                    & (CampaignLinkCache.platform_code == platform)
+                )
+        if mid and mid.isdigit():
+            clc_conditions.append(
+                (CampaignLinkCache.merchant_id == mid)
+                & (CampaignLinkCache.platform_code == platform)
+            )
+        if clc_conditions:
+            clc_matched = db.query(CampaignLinkCache).filter(or_(*clc_conditions)).all()
+            for c in clc_matched:
+                # 通过 CLC 找到对应的 AffiliateMerchant 并标记
+                if c.merchant_id:
+                    am = db.query(AffiliateMerchant).filter(
+                        AffiliateMerchant.merchant_id == c.merchant_id,
+                        AffiliateMerchant.platform == platform,
+                    ).first()
+                    if am and am.violation_status != "violated":
+                        am.violation_status = "violated"
+                        am.violation_time = vtime or datetime.utcnow()
+                        marked += 1
 
     db.commit()
 
@@ -330,27 +366,58 @@ def sync_recommendation_sheet(db: Session, sheet_url: str) -> dict:
         db.add(r)
         new_count += 1
 
-        # 标记 AffiliateMerchant
-        conditions = []
+        # 标记 AffiliateMerchant + CampaignLinkCache
+        am_conditions = []
         if mcid:
             if platform:
-                conditions.append(
+                am_conditions.append(
                     (func.lower(AffiliateMerchant.mcid) == mcid.lower())
                     & (AffiliateMerchant.platform == platform)
                 )
             else:
-                conditions.append(func.lower(AffiliateMerchant.mcid) == mcid.lower())
+                am_conditions.append(func.lower(AffiliateMerchant.mcid) == mcid.lower())
         if mid and mid.isdigit():
-            conditions.append(AffiliateMerchant.merchant_id == mid)
+            am_conditions.append(AffiliateMerchant.merchant_id == mid)
         if name:
-            conditions.append(func.lower(AffiliateMerchant.merchant_name) == name.lower())
-        if conditions:
-            matched = db.query(AffiliateMerchant).filter(or_(*conditions)).all()
+            am_conditions.append(func.lower(AffiliateMerchant.merchant_name) == name.lower())
+        if am_conditions:
+            matched = db.query(AffiliateMerchant).filter(or_(*am_conditions)).all()
             for m in matched:
                 if m.recommendation_status != "recommended":
                     m.recommendation_status = "recommended"
                     m.recommendation_time = datetime.utcnow()
                     marked += 1
+
+        # 同时通过 CLC mcid 模糊匹配
+        clc_conditions = []
+        if mcid:
+            clc_conditions.append(
+                (func.lower(CampaignLinkCache.mcid) == mcid.lower())
+                & (CampaignLinkCache.platform_code == platform)
+            )
+            slug = re.sub(r'[^a-z0-9]', '', mcid.lower())
+            if slug and len(slug) >= 4:
+                clc_conditions.append(
+                    func.lower(CampaignLinkCache.mcid).like(f'{slug}%')
+                    & (CampaignLinkCache.platform_code == platform)
+                )
+        if mid and mid.isdigit():
+            clc_conditions.append(
+                (CampaignLinkCache.merchant_id == mid)
+                & (CampaignLinkCache.platform_code == platform)
+            )
+        if clc_conditions:
+            clc_matched = db.query(CampaignLinkCache).filter(or_(*clc_conditions)).all()
+            for c in clc_matched:
+                if c.merchant_id:
+                    am = db.query(AffiliateMerchant).filter(
+                        AffiliateMerchant.merchant_id == c.merchant_id,
+                        AffiliateMerchant.platform == platform,
+                    ).first()
+                    if am and am.recommendation_status != "recommended":
+                        am.recommendation_status = "recommended"
+                        am.recommendation_time = datetime.utcnow()
+                        marked += 1
 
     db.commit()
 
