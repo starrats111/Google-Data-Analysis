@@ -421,7 +421,7 @@ async def submit_violation_report(
     db.commit()
 
     # 通知 leader/manager
-    leaders = db.query(User).filter(User.role.in_(["manager", "leader"]), User.is_active == True).all()
+    leaders = db.query(User).filter(User.role.in_(["manager", "leader"])).all()
     for leader in leaders:
         db.add(Notification(
             user_id=leader.id, type="violation_report",
