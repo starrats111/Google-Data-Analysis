@@ -1495,7 +1495,7 @@ const MerchantManagement = () => {
                   <Alert
                     type="success" showIcon closable
                     style={{ marginBottom: 12 }}
-                    message={`表格同步完成：共 ${sheetSyncResult.total} 条，新增 ${sheetSyncResult.new} 条，标记 ${sheetSyncResult.marked} 个商家`}
+                    message={`共享表格同步完成：共 ${sheetSyncResult.total ?? 0} 条，新增 ${sheetSyncResult.new ?? 0} 条，标记 ${sheetSyncResult.marked ?? 0} 个商家`}
                     onClose={() => setSheetSyncResult(null)}
                   />
                 )}

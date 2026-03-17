@@ -71,21 +71,82 @@ def _normalize_platform(raw: str) -> str:
     return PLATFORM_NAME_MAP.get(raw.strip().lower(), raw.strip().upper())
 
 
-def sync_violation_sheet(db: Session, sheet_url: str) -> dict:
-    """同步违规商家共享表格"""
-    rows = fetch_sheet_csv(sheet_url)
-    if len(rows) < 2:
-        return {"total": 0, "new": 0, "skipped": 0, "marked": 0}
+def _detect_multi_group_headers(headers: List[str]) -> List[dict]:
+    """检测多列并排格式（如：平台|商家名|原因|平台|商家名|原因|...）
+    返回每组的列索引列表，如 [{"platform":0,"name":1,"reason":2}, {"platform":3,"name":4,"reason":5}]
+    """
+    PLATFORM_KEYS = {"平台", "platform"}
+    NAME_KEYS = {"商家名", "商家名称", "merchant_name", "广告主名称", "mcid", "advertiser name"}
+    REASON_KEYS = {"原因", "违规原因", "reason", "violation_reason", "推荐原因", "recommend_reason"}
 
-    # 解析表头
+    groups = []
+    i = 0
+    while i < len(headers):
+        h = headers[i].strip().lower()
+        if h in PLATFORM_KEYS:
+            group = {"platform": i}
+            # 往后找 name 和 reason
+            for j in range(i + 1, min(i + 5, len(headers))):
+                hj = headers[j].strip().lower()
+                if hj in NAME_KEYS and "name" not in group:
+                    group["name"] = j
+                elif hj in REASON_KEYS and "reason" not in group:
+                    group["reason"] = j
+            if "name" in group:
+                groups.append(group)
+                i = max(group.values()) + 1
+                continue
+        i += 1
+    return groups
+
+
+def _parse_rows_to_records(rows: List[List[str]], record_type: str = "violation") -> List[dict]:
+    """将表格行解析为统一的记录列表，自动适配标准格式和多列并排格式。
+    record_type: "violation" 或 "recommendation"
+    """
+    if len(rows) < 2:
+        return []
+
     headers = [h.strip().lower() for h in rows[0]]
+
+    # 尝试检测多列并排格式
+    groups = _detect_multi_group_headers(headers)
+    if groups:
+        # 多列并排格式
+        records = []
+        for row in rows[1:]:
+            if not row or all(not c.strip() for c in row):
+                continue
+            for g in groups:
+                def _val(key):
+                    idx = g.get(key)
+                    if idx is not None and idx < len(row) and row[idx].strip():
+                        return row[idx].strip()
+                    return None
+                name = _val("name")
+                if not name:
+                    continue
+                records.append({
+                    "mcid": name,  # 多列并排格式中商家名就是 mcid
+                    "mid": None,
+                    "name": name,
+                    "platform": _normalize_platform(_val("platform") or ""),
+                    "url": _val("url"),
+                    "reason": _val("reason"),
+                    "time": _val("time"),
+                    "region": _val("region"),
+                    "epc": _val("epc"),
+                })
+        return records
+
+    # 标准格式：逐列匹配
     col = {}
     for i, h in enumerate(headers):
         if h in ("mcid",):
             col["mcid"] = i
         elif h in ("mid", "merchant_mid", "商家id"):
             col["mid"] = i
-        elif h in ("merchant_name", "商家名称", "广告主名称", "advertiser name"):
+        elif h in ("merchant_name", "商家名称", "广告主名称", "advertiser name", "商家名"):
             col["name"] = i
         elif h in ("platform", "平台"):
             col["platform"] = i
@@ -93,50 +154,77 @@ def sync_violation_sheet(db: Session, sheet_url: str) -> dict:
             col["url"] = i
         elif h in ("violation_time", "违规时间"):
             col["time"] = i
-        elif h in ("reason", "violation_reason", "违规原因", "原因"):
+        elif h in ("reason", "violation_reason", "违规原因", "原因", "recommend_reason", "推荐原因"):
             col["reason"] = i
+        elif h in ("merchant_region", "商家地区", "merchant base", "地区"):
+            col["region"] = i
+        elif h.startswith("epc"):
+            col["epc"] = i
 
     if "name" not in col and "mcid" not in col:
-        return {"error": "表格缺少商家名称或 MCID 列"}
+        return []
 
-    batch_id = f"SHEET-VIO-{datetime.utcnow().strftime('%Y%m%d%H%M%S')}-{uuid.uuid4().hex[:6]}"
-    total = 0
-    new_count = 0
-    skipped = 0
-    marked = 0
-
+    records = []
     for row in rows[1:]:
         if not row or all(not c.strip() for c in row):
             continue
-        total += 1
-
         def _g(key):
             idx = col.get(key)
             if idx is not None and idx < len(row) and row[idx].strip():
                 return row[idx].strip()
             return None
+        name = _g("name") or _g("mcid") or ""
+        if not name:
+            continue
+        records.append({
+            "mcid": _g("mcid"),
+            "mid": _g("mid"),
+            "name": name,
+            "platform": _normalize_platform(_g("platform") or ""),
+            "url": _g("url"),
+            "reason": _g("reason"),
+            "time": _g("time"),
+            "region": _g("region"),
+            "epc": _g("epc"),
+        })
+    return records
 
-        mcid = _g("mcid")
-        mid = _g("mid")
-        name = _g("name") or mcid or ""
-        platform = _normalize_platform(_g("platform") or "")
-        url = _g("url")
-        reason = _g("reason")
+
+def sync_violation_sheet(db: Session, sheet_url: str) -> dict:
+    """同步违规商家共享表格"""
+    rows = fetch_sheet_csv(sheet_url)
+    records = _parse_rows_to_records(rows, "violation")
+    if not records:
+        return {"total": 0, "new": 0, "skipped": 0, "marked": 0}
+
+    batch_id = f"SHEET-VIO-{datetime.utcnow().strftime('%Y%m%d%H%M%S')}-{uuid.uuid4().hex[:6]}"
+    total = len(records)
+    new_count = 0
+    skipped = 0
+    marked = 0
+
+    for rec in records:
+        mcid = rec["mcid"]
+        mid = rec["mid"]
+        name = rec["name"]
+        platform = rec["platform"]
+        url = rec["url"]
+        reason = rec["reason"]
 
         vtime = None
-        raw_time = _g("time")
-        if raw_time:
+        if rec["time"]:
             for fmt in ("%Y/%m/%d %H:%M:%S", "%Y-%m-%d %H:%M:%S", "%Y/%m/%d", "%Y-%m-%d"):
                 try:
-                    vtime = datetime.strptime(raw_time, fmt)
+                    vtime = datetime.strptime(rec["time"], fmt)
                     break
                 except ValueError:
                     pass
 
-        # 去重：同 batch 内不重复
+        # 去重：同 batch 内不重复（同名+同平台）
         exists = db.query(MerchantViolation).filter(
             MerchantViolation.upload_batch == batch_id,
             func.lower(MerchantViolation.merchant_name) == name.lower(),
+            MerchantViolation.platform == platform,
         ).first()
         if exists:
             skipped += 1
@@ -182,7 +270,6 @@ def sync_violation_sheet(db: Session, sheet_url: str) -> dict:
 
     db.commit()
 
-    # 更新配置的最后同步时间
     cfg = db.query(SheetConfig).filter(SheetConfig.config_type == "violation").first()
     if cfg:
         cfg.last_synced_at = datetime.utcnow()
@@ -194,68 +281,36 @@ def sync_violation_sheet(db: Session, sheet_url: str) -> dict:
 def sync_recommendation_sheet(db: Session, sheet_url: str) -> dict:
     """同步推荐商家共享表格"""
     rows = fetch_sheet_csv(sheet_url)
-    if len(rows) < 2:
+    records = _parse_rows_to_records(rows, "recommendation")
+    if not records:
         return {"total": 0, "new": 0, "skipped": 0, "marked": 0}
 
-    headers = [h.strip().lower() for h in rows[0]]
-    col = {}
-    for i, h in enumerate(headers):
-        if h in ("mcid",):
-            col["mcid"] = i
-        elif h in ("mid", "merchant_mid"):
-            col["mid"] = i
-        elif h in ("merchant_name", "商家名称", "广告主名称", "advertiser name"):
-            col["name"] = i
-        elif h in ("platform", "平台"):
-            col["platform"] = i
-        elif h in ("merchant_url", "商家url", "网址", "website"):
-            col["url"] = i
-        elif h in ("merchant_region", "商家地区", "merchant base", "地区"):
-            col["region"] = i
-        elif h.startswith("epc"):
-            col["epc"] = i
-        elif h in ("reason", "recommend_reason", "推荐原因", "原因"):
-            col["reason"] = i
-
-    if "name" not in col and "mcid" not in col:
-        return {"error": "表格缺少商家名称或 MCID 列"}
-
     batch_id = f"SHEET-REC-{datetime.utcnow().strftime('%Y%m%d%H%M%S')}-{uuid.uuid4().hex[:6]}"
-    total = 0
+    total = len(records)
     new_count = 0
     skipped = 0
     marked = 0
 
-    for row in rows[1:]:
-        if not row or all(not c.strip() for c in row):
-            continue
-        total += 1
-
-        def _g(key):
-            idx = col.get(key)
-            if idx is not None and idx < len(row) and row[idx].strip():
-                return row[idx].strip()
-            return None
-
-        mcid = _g("mcid")
-        mid = _g("mid")
-        name = _g("name") or mcid or ""
-        platform = _normalize_platform(_g("platform") or "")
-        url = _g("url")
-        region = _g("region")
-        reason = _g("reason")
+    for rec in records:
+        mcid = rec["mcid"]
+        mid = rec["mid"]
+        name = rec["name"]
+        platform = rec["platform"]
+        url = rec["url"]
+        region = rec["region"]
+        reason = rec["reason"]
 
         epc_val = None
-        raw_epc = _g("epc")
-        if raw_epc:
+        if rec.get("epc"):
             try:
-                epc_val = float(raw_epc.replace("$", "").replace(",", ""))
+                epc_val = float(rec["epc"].replace("$", "").replace(",", ""))
             except ValueError:
                 pass
 
         exists = db.query(MerchantRecommendation).filter(
             MerchantRecommendation.upload_batch == batch_id,
             func.lower(MerchantRecommendation.merchant_name) == name.lower(),
+            MerchantRecommendation.platform == platform,
         ).first()
         if exists:
             skipped += 1
