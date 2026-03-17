@@ -98,10 +98,36 @@ export default function AdCreationWizard() {
   const autoResearchDone = useRef(false)
   const [keywordMatchType, setKeywordMatchType] = useState('BROAD')  // BROAD / PHRASE / EXACT
   const [negativeKeywords, setNegativeKeywords] = useState('')  // 否定关键词（逗号分隔）
-  const [adGroupName, setAdGroupName] = useState('')  // 广告组名称
-  const [finalUrl, setFinalUrl] = useState(merchantUrl)  // 最终到达网址
+  const [adGroupName, setAdGroupName] = useState(merchantName || '')  // 广告组名称=商家名
+  // 最终到达网址：限制品类→政策合规页，正常→商家首页
+  const [finalUrl, setFinalUrl] = useState(() => {
+    const url = merchantUrl || ''
+    return url
+  })
   const [displayPath1, setDisplayPath1] = useState('')  // 显示路径1
   const [displayPath2, setDisplayPath2] = useState('')  // 显示路径2
+
+  // 根据限制品类自动设置最终到达网址和显示路径
+  useEffect(() => {
+    if (!merchantUrl) return
+    const base = merchantUrl.replace(/\/$/, '')
+    if (isAlcohol) {
+      // 酒类：到达年龄验证/政策页面
+      setFinalUrl(base + '/age-verification')
+      setDisplayPath1('age-gate')
+    } else if (isGambling) {
+      // 赌博：到达负责任博彩页面
+      setFinalUrl(base + '/responsible-gambling')
+      setDisplayPath1('responsible')
+    } else {
+      // 正常品类：到达首页
+      setFinalUrl(base)
+    }
+    // 广告组名称自动填入商家名
+    if (!adGroupName) {
+      setAdGroupName(merchantName || '')
+    }
+  }, [merchantUrl, isAlcohol, isGambling, merchantName])
 
   // Step 2: AI 素材 (SSE streaming)
   const [streamingText, setStreamingText] = useState('')
@@ -673,19 +699,25 @@ export default function AdCreationWizard() {
         {step === 1 && (
           <Card title="关键词 & 广告组">
             <Space direction="vertical" style={{ width: '100%' }} size={16}>
-              {/* 广告组名称 + 最终URL */}
+              {/* 广告组名称 + 最终URL（AI 自动填入） */}
               <Row gutter={16}>
                 <Col span={8}>
                   <Typography.Text strong>广告组名称</Typography.Text>
-                  <Input style={{ marginTop: 4 }} placeholder="如：Brand Keywords"
+                  <Input style={{ marginTop: 4 }} placeholder="自动填入商家名称"
                     value={adGroupName} onChange={e => setAdGroupName(e.target.value)}
                   />
+                  <Typography.Text type="secondary" style={{ fontSize: 11 }}>默认使用商家名称，可修改</Typography.Text>
                 </Col>
                 <Col span={10}>
                   <Typography.Text strong>最终到达网址</Typography.Text>
-                  <Input style={{ marginTop: 4 }} placeholder="https://www.example.com/landing"
+                  <Input style={{ marginTop: 4 }} placeholder="自动填入商家网址"
                     value={finalUrl} onChange={e => setFinalUrl(e.target.value)}
                   />
+                  {isRestricted && (
+                    <Typography.Text type="warning" style={{ fontSize: 11 }}>
+                      ⚠ 限制品类已自动指向合规页面，请确认网址有效
+                    </Typography.Text>
+                  )}
                 </Col>
                 <Col span={6}>
                   <Typography.Text strong>显示路径</Typography.Text>
