@@ -107,6 +107,12 @@ export default function AdCreationWizard() {
   const [displayPath1, setDisplayPath1] = useState('')  // 显示路径1
   const [displayPath2, setDisplayPath2] = useState('')  // 显示路径2
 
+  // 限制品检测（必须在 useEffect 之前声明）
+  const merchantRestrictions = useMemo(() => detectMerchantRestrictions(merchantName), [merchantName])
+  const isRestricted = merchantRestrictions.length > 0
+  const isAlcohol = merchantRestrictions.some(r => r.label === '酒类限制品')
+  const isGambling = merchantRestrictions.some(r => r.label === '赌博限制品')
+
   // 根据限制品类自动设置最终到达网址和显示路径
   useEffect(() => {
     if (!merchantUrl) return
@@ -147,10 +153,6 @@ export default function AdCreationWizard() {
   const [createResult, setCreateResult] = useState(null)
 
   // 限制品合规设置
-  const merchantRestrictions = useMemo(() => detectMerchantRestrictions(merchantName), [merchantName])
-  const isRestricted = merchantRestrictions.length > 0
-  const isAlcohol = merchantRestrictions.some(r => r.label === '酒类限制品')
-  const isGambling = merchantRestrictions.some(r => r.label === '赌博限制品')
   const [complianceSettings, setComplianceSettings] = useState({
     excludeMinors: true,        // 排除未成年人群
     ageTargeting: '21_65',      // 年龄定向: 21-65
