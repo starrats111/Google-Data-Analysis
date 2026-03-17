@@ -28,31 +28,40 @@ export const useAuth = create((set, get) => ({
     const savedUser = JSON.parse(localStorage.getItem('user') || 'null')
     if (!savedUser) return
 
-    // 先用本地缓存立即恢复登录状态（不阻塞页面渲染）
+    // 先用本地缓存立即恢复登录状态
     const cachedPerms = JSON.parse(localStorage.getItem('permissions') || 'null')
     const cachedToken = localStorage.getItem('token') || null
     if (cachedToken) {
       setHolderToken(cachedToken)
       set({ token: cachedToken, isAuthenticated: true, user: savedUser, permissions: cachedPerms })
+      // 有缓存 → 立即返回，后台静默刷新 token（不阻塞页面）
+      setTimeout(() => {
+        api.post('/api/auth/refresh', null, { timeout: 8000 })
+          .then(res => {
+            const newToken = res.data.access_token
+            setHolderToken(newToken)
+            localStorage.setItem('token', newToken)
+            set({ token: newToken })
+            get().fetchPermissions().catch(() => {})
+          })
+          .catch(() => {})
+      }, 100)
+      return  // 立即返回，App.jsx 的 ready 马上变 true
     }
 
-    // 后台异步刷新 token（不阻塞）
+    // 没有缓存 token → 必须等 refresh 完成
     try {
       const response = await api.post('/api/auth/refresh', null, { timeout: 8000 })
       const newToken = response.data.access_token
       setHolderToken(newToken)
       localStorage.setItem('token', newToken)
       set({ token: newToken, isAuthenticated: true, user: savedUser })
-      // 异步更新权限，不阻塞
-      get().fetchPermissions().catch(() => {})
+      await get().fetchPermissions()
     } catch (_) {
-      // 刷新失败但有缓存 token，继续使用
-      if (!cachedToken) {
-        localStorage.removeItem('user')
-        localStorage.removeItem('permissions')
-        localStorage.removeItem('token')
-        set({ user: null, token: null, isAuthenticated: false, permissions: null })
-      }
+      localStorage.removeItem('user')
+      localStorage.removeItem('permissions')
+      localStorage.removeItem('token')
+      set({ user: null, token: null, isAuthenticated: false, permissions: null })
     }
   },
 
