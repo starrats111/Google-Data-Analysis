@@ -24,7 +24,7 @@ class KeywordPlanService:
         """查找 MCC 下的可用 CID（仅返回空闲的，busy 不返回）。
 
         CID 来源：MCC.child_customer_ids（同步时自动更新）。
-        忙碌判定：该 CID 下任意广告系列最新记录 status == '已启用'。
+        忙碌判定：该 CID 下存在任何 status 为已启用/ENABLED/2 的广告系列。
         返回 {"customer_id": str|None, "all_cids": list(空闲), "busy_cids": list}
         """
         import json as _json
@@ -44,27 +44,49 @@ class KeywordPlanService:
         if not all_cid_list:
             raise ValueError("该 MCC 尚无 CID 列表，请点击「刷新 CID」从 Google Ads 获取")
 
-        # 查找 busy CID：取该 MCC 最新一天的数据，有"已启用"广告的 CID 就是 busy
-        # 暂停/关闭后下次同步自动移除 busy 标记
-        latest_date = self.db.query(func.max(GoogleAdsApiData.date)).filter(
+        # 查找 busy CID：不限日期，只要有"已启用"状态的广告就是 busy
+        # 支持多种 status 格式
+        ACTIVE_STATUSES = ['已启用', 'ENABLED', '2']
+        from sqlalchemy import distinct as _distinct, or_
+
+        busy_q = self.db.query(_distinct(GoogleAdsApiData.customer_id)).filter(
             GoogleAdsApiData.mcc_id == mcc_id,
-        ).scalar()
+            GoogleAdsApiData.customer_id.isnot(None),
+            or_(
+                GoogleAdsApiData.status.in_(ACTIVE_STATUSES),
+                GoogleAdsApiData.status.is_(None),
+            ),
+        )
+        # 只看每个 CID+campaign 的最新记录的 status
+        # 简化：取每个 CID 最新日期的记录
+        from sqlalchemy import func as sa_func
+        subq = self.db.query(
+            GoogleAdsApiData.customer_id,
+            GoogleAdsApiData.campaign_id,
+            sa_func.max(GoogleAdsApiData.date).label('max_date')
+        ).filter(
+            GoogleAdsApiData.mcc_id == mcc_id,
+            GoogleAdsApiData.customer_id.isnot(None),
+        ).group_by(
+            GoogleAdsApiData.customer_id,
+            GoogleAdsApiData.campaign_id,
+        ).subquery()
+
+        busy_rows = self.db.query(_distinct(GoogleAdsApiData.customer_id)).join(
+            subq,
+            (GoogleAdsApiData.customer_id == subq.c.customer_id) &
+            (GoogleAdsApiData.campaign_id == subq.c.campaign_id) &
+            (GoogleAdsApiData.date == subq.c.max_date)
+        ).filter(
+            GoogleAdsApiData.mcc_id == mcc_id,
+            GoogleAdsApiData.status.in_(ACTIVE_STATUSES),
+        ).all()
 
         busy_set = set()
-        if latest_date:
-            from sqlalchemy import distinct as _distinct
-            busy_rows = self.db.query(_distinct(GoogleAdsApiData.customer_id)).filter(
-                GoogleAdsApiData.mcc_id == mcc_id,
-                GoogleAdsApiData.date == latest_date,
-                GoogleAdsApiData.status == '已启用',
-            ).all()
-            busy_set = set(r[0] for r in busy_rows if r[0])
-            # 同时匹配带横杠和不带横杠的格式
-            busy_normalized = set()
-            for b in busy_set:
-                busy_normalized.add(b)
-                busy_normalized.add(b.replace("-", ""))
-            busy_set = busy_normalized
+        for r in busy_rows:
+            if r[0]:
+                busy_set.add(r[0])
+                busy_set.add(r[0].replace("-", ""))
 
         free_cids = [c for c in all_cid_list if c not in busy_set and c.replace("-", "") not in busy_set]
         busy_display = [c for c in all_cid_list if c in busy_set or c.replace("-", "") in busy_set]
