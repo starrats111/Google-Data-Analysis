@@ -452,8 +452,8 @@ JSON格式(严格遵守):
             if len(descriptions) < 2:
                 raise ValueError(f"AI 只生成了 {len(descriptions)} 个描述，至少需要 2 个")
 
-            sitelinks = result.get("sitelinks", [])[:4]
-            callouts = [_strip_emoji(c)[:25] for c in result.get("callouts", [])[:4]]
+            sitelinks = result.get("sitelinks", [])[:6]
+            callouts = [_strip_emoji(c)[:25] for c in result.get("callouts", [])[:6]]
 
             logger.info(f"[AdCopy] 生成 {len(headlines)} 标题 + {len(descriptions)} 描述 + {len(sitelinks)} 站内链接 + {len(callouts)} 宣传 for {merchant_name}")
             return {
@@ -538,8 +538,8 @@ JSON格式(严格遵守):
                 headlines, descriptions, headline_translations, description_translations, merchant_name,
             )
 
-            sitelinks = result.get("sitelinks", [])[:4]
-            callouts = [_strip_emoji(c)[:25] for c in result.get("callouts", [])[:4]]
+            sitelinks = result.get("sitelinks", [])[:6]
+            callouts = [_strip_emoji(c)[:25] for c in result.get("callouts", [])[:6]]
 
             final = {
                 "headlines": headlines,

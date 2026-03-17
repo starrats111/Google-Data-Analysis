@@ -307,6 +307,12 @@ async def generate_ad_copy_stream(
                 elif chunk.startswith("<<ERROR>>"):
                     yield sse({"phase": "error", "text": chunk[9:]})
                 else:
+                    # 过滤掉 JSON 片段，不显示在思考区域
+                    clean = chunk.strip()
+                    if clean.startswith('{') or clean.startswith('"') or clean.startswith('```'):
+                        continue
+                    if any(k in clean for k in ['"headlines"', '"descriptions"', '"sitelinks"', '"callouts"', '"recommended_budget"']):
+                        continue
                     yield sse({"phase": "thinking", "text": chunk})
         except Exception as e:
             logger.error(f"[AdCopy Stream] 失败: {e}")
