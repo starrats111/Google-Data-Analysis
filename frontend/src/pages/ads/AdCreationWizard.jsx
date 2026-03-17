@@ -904,7 +904,7 @@ export default function AdCreationWizard() {
                             if (res.data?.nav_links?.length) {
                               const realSitelinks = res.data.nav_links.slice(0, 6).map(link => ({
                                 link_text: link.text.slice(0, 25),
-                                desc1: '',
+                                desc1: link.desc || '',
                                 desc2: '',
                                 path: link.path,
                                 url: link.url,
@@ -1077,7 +1077,7 @@ export default function AdCreationWizard() {
                           const newLinks = (res.data?.nav_links || [])
                             .filter(nl => !sitelinks.some(s => s.url === nl.url))
                             .slice(0, 6 - sitelinks.length)
-                            .map(link => ({ link_text: link.text?.slice(0, 25) || '', desc1: '', desc2: '', url: link.url || '' }))
+                            .map(link => ({ link_text: link.text?.slice(0, 25) || '', desc1: link.desc || '', desc2: '', url: link.url || '' }))
                           if (newLinks.length > 0) {
                             setSitelinks(prev => [...prev, ...newLinks].slice(0, 6))
                             message.success(`新增 ${newLinks.length} 条站内链接`)

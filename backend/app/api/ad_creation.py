@@ -429,7 +429,10 @@ async def get_merchant_assets(
             skip_texts = {"home", "login", "sign in", "register", "cart", "checkout", "search",
                           "menu", "close", "skip", "back", "#", "javascript", "account", "wishlist",
                           "my account", "sign up", "log in", "subscribe", "newsletter", "cookie",
-                          "privacy", "terms", "sitemap", "contact us", "help", "faq"}
+                          "privacy", "terms", "sitemap", "contact us", "help", "faq",
+                          "wholesale", "wholesale contact", "careers", "press", "investors"}
+            # 非HTTP协议前缀（过滤 mailto:、tel: 等）
+            skip_prefixes = ("javascript", "mailto:", "tel:", "sms:", "ftp:", "data:", "#")
             
             # 第一轮：从 nav / header 提取
             nav_areas = [soup.find("nav"), soup.find("header"),
@@ -440,6 +443,7 @@ async def get_merchant_assets(
                             soup.find("main"), soup.find("div", id="content"),
                             soup.find("div", class_=lambda c: c and "menu" in c.lower() if c else False)]
             
+            raw_links = []  # 先收集所有候选链接
             for nav_area in nav_areas + footer_areas:
                 if not nav_area:
                     continue
@@ -450,10 +454,13 @@ async def get_merchant_assets(
                         continue
                     if any(s in text.lower() for s in skip_texts):
                         continue
-                    if href.startswith("javascript") or href == "#":
+                    if any(href.lower().startswith(p) for p in skip_prefixes):
                         continue
                     full_url = urljoin(data.url, href)
                     link_parsed = urlparse(full_url)
+                    # 只保留 http/https 链接
+                    if link_parsed.scheme not in ("http", "https"):
+                        continue
                     # 只保留同域名链接
                     if link_parsed.hostname and base_domain and base_domain not in link_parsed.hostname:
                         continue
@@ -461,14 +468,14 @@ async def get_merchant_assets(
                     if path in seen_paths or path == "/":
                         continue
                     seen_paths.add(path)
-                    nav_links.append({"text": text, "path": path, "url": full_url})
-                    if len(nav_links) >= 12:
+                    raw_links.append({"text": text, "path": path, "url": full_url})
+                    if len(raw_links) >= 20:
                         break
-                if len(nav_links) >= 12:
+                if len(raw_links) >= 20:
                     break
             
             # 第三轮：如果还不够6个，从全页面所有 <a> 中补充
-            if len(nav_links) < 6:
+            if len(raw_links) < 6:
                 for a_tag in soup.find_all("a", href=True):
                     href = a_tag["href"].strip()
                     text = a_tag.get_text(strip=True)
@@ -476,19 +483,35 @@ async def get_merchant_assets(
                         continue
                     if any(s in text.lower() for s in skip_texts):
                         continue
-                    if href.startswith("javascript") or href == "#" or href.startswith("mailto"):
+                    if any(href.lower().startswith(p) for p in skip_prefixes):
                         continue
                     full_url = urljoin(data.url, href)
                     link_parsed = urlparse(full_url)
+                    if link_parsed.scheme not in ("http", "https"):
+                        continue
                     if link_parsed.hostname and base_domain and base_domain not in link_parsed.hostname:
                         continue
                     path = link_parsed.path.rstrip("/") or "/"
                     if path in seen_paths or path == "/":
                         continue
                     seen_paths.add(path)
-                    nav_links.append({"text": text, "path": path, "url": full_url})
-                    if len(nav_links) >= 12:
+                    raw_links.append({"text": text, "path": path, "url": full_url})
+                    if len(raw_links) >= 20:
                         break
+
+            # 验证链接有效性（HEAD 请求检查状态码）
+            valid_links = []
+            for link in raw_links[:16]:
+                try:
+                    head_resp = client.head(link["url"], headers=headers, follow_redirects=True, timeout=4)
+                    if head_resp.status_code < 400:
+                        valid_links.append(link)
+                except Exception:
+                    pass  # 超时或异常的链接跳过
+                if len(valid_links) >= 12:
+                    break
+            
+            nav_links = valid_links if valid_links else raw_links[:12]  # fallback: 验证全失败则用原始链接
 
             # 提取卖点（常见的 USP 区域：free shipping, returns 等）
             page_text = soup.get_text(separator=" ", strip=True).lower()
@@ -513,10 +536,37 @@ async def get_merchant_assets(
     except Exception as e:
         logger.warning("[MerchantAssets] 导航链接提取失败: %s", e)
 
+    # 为站内链接获取描述（从目标页面的 meta description 或 title）
+    enriched_links = []
+    try:
+        import httpx as _httpx
+        _headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml",
+        }
+        with _httpx.Client(timeout=5, follow_redirects=True) as _client:
+            for link in nav_links[:12]:
+                desc = ""
+                try:
+                    page_resp = _client.get(link["url"], headers=_headers)
+                    if page_resp.status_code < 400:
+                        page_soup = BeautifulSoup(page_resp.text, "lxml")
+                        meta_desc = page_soup.find("meta", attrs={"name": "description"})
+                        if meta_desc and meta_desc.get("content"):
+                            desc = meta_desc["content"].strip()[:35]
+                        elif page_soup.title and page_soup.title.string:
+                            desc = page_soup.title.string.strip().split("|")[0].strip()[:35]
+                except Exception:
+                    pass
+                link["desc"] = desc
+                enriched_links.append(link)
+    except Exception:
+        enriched_links = nav_links[:12]
+
     return {
-        "images": images,
+        "images": images[:10],
         "logo": logo,
-        "nav_links": nav_links[:8],
+        "nav_links": enriched_links[:12],
         "selling_points": selling_points[:6],
     }
 
