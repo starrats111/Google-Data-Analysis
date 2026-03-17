@@ -826,6 +826,139 @@ class AiAnalysisRequest(BaseModel):
     question: str = ""
 
 
+class AiKeywordAnalysisRequest(BaseModel):
+    """AI 关键词分析请求"""
+    keywords: List[dict] = Field(default_factory=list)  # 搜索到的关键词列表
+    merchant_name: str = ""
+    merchant_url: str = ""
+    daily_budget: float = 2.0
+    target_cpc: float = 0.3
+    target_country: str = "US"
+
+
+@router.post("/ai-keyword-analysis")
+async def ai_keyword_analysis(
+    data: AiKeywordAnalysisRequest,
+    current_user: User = Depends(get_current_user),
+):
+    """AI 关键词筛选分析 — 使用 Claude claude-opus-4-6 分析关键词"""
+    import json
+    import requests
+    from app.config import settings
+
+    if not data.keywords:
+        raise HTTPException(status_code=400, detail="没有关键词可分析")
+
+    # 构建关键词数据
+    kw_lines = []
+    for kw in data.keywords:
+        line = f"关键词: {kw.get('keyword', '')}, 月搜索量: {kw.get('avg_monthly_searches', 0)}, 竞争度: {kw.get('competition', 'N/A')}, CPC低: ${kw.get('low_top_of_page_bid', 0)}, CPC高: ${kw.get('high_top_of_page_bid', 0)}"
+        kw_lines.append(line)
+    kw_text = "\n".join(kw_lines)
+
+    prompt = f"""你是一名顶级谷歌广告投放专家，特别擅长关键词的筛选，对谷歌搜索广告各种指标及作用了如指掌。
+
+商家信息：
+- 商家名称: {data.merchant_name}
+- 商家网址: {data.merchant_url}
+- 投放国家: {data.target_country}
+- 日预算: ${data.daily_budget}
+- 目标CPC: ${data.target_cpc}
+
+以下是通过关键词研究工具搜索到的关键词数据：
+{kw_text}
+
+请你完成以下任务：
+
+1. **推荐关键词**（recommended_keywords）：从上面的搜索关键词中筛选出最适合投放的关键词，同时补充你认为应该投放但列表中没有的关键词。筛选标准：
+   - CPC 在预算范围内（目标CPC ${data.target_cpc}，日预算 ${data.daily_budget}）
+   - 搜索意图与商家高度相关
+   - 优先选择购买意图强的长尾关键词
+   - 竞争度适中，性价比高
+   - 每个关键词给出推荐理由
+
+2. **否定关键词**（negative_keywords）：分析出应该排除的否定关键词，包括：
+   - 与商家无关的搜索词
+   - 免费/破解/盗版等无购买意图的词
+   - 竞品品牌词（除非策略需要）
+   - 信息查询类词（如 "what is", "how to" 等无转化意图的）
+   - 每个否定关键词给出排除理由
+
+请严格按以下 JSON 格式返回，不要包含任何其他文字：
+{{
+  "recommended_keywords": [
+    {{"keyword": "关键词", "reason": "推荐理由", "estimated_cpc": 0.5, "match_type": "PHRASE", "priority": "high"}}
+  ],
+  "negative_keywords": [
+    {{"keyword": "否定关键词", "reason": "排除理由"}}
+  ],
+  "strategy_summary": "整体关键词策略建议（一段话）"
+}}"""
+
+    messages = [{"role": "user", "content": prompt}]
+
+    api_key = getattr(settings, "gemini_api_key", "")
+    base_url = getattr(settings, "gemini_base_url", "").rstrip("/")
+    model = "claude-opus-4-0-20250514"
+
+    if not api_key or not base_url:
+        raise HTTPException(status_code=500, detail="AI 服务未配置")
+
+    try:
+        resp = requests.post(
+            f"{base_url}/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": model,
+                "messages": messages,
+                "max_tokens": 4096,
+                "temperature": 0.3,
+            },
+            timeout=120,
+        )
+        resp.raise_for_status()
+        result = resp.json()
+        content = result["choices"][0]["message"]["content"]
+
+        # 解析 JSON
+        # 去掉可能的 markdown 代码块
+        clean = content.strip()
+        if clean.startswith("```"):
+            clean = clean.split("\n", 1)[1] if "\n" in clean else clean[3:]
+        if clean.endswith("```"):
+            clean = clean[:-3]
+        clean = clean.strip()
+        if clean.startswith("json"):
+            clean = clean[4:].strip()
+
+        parsed = json.loads(clean)
+        return {
+            "success": True,
+            "model": model,
+            "recommended_keywords": parsed.get("recommended_keywords", []),
+            "negative_keywords": parsed.get("negative_keywords", []),
+            "strategy_summary": parsed.get("strategy_summary", ""),
+        }
+    except json.JSONDecodeError:
+        # JSON 解析失败，返回原始文本
+        return {
+            "success": True,
+            "model": model,
+            "recommended_keywords": [],
+            "negative_keywords": [],
+            "strategy_summary": content if 'content' in dir() else "AI 分析完成但格式解析失败",
+            "raw_response": content if 'content' in dir() else "",
+        }
+    except requests.exceptions.Timeout:
+        raise HTTPException(status_code=504, detail="AI 分析超时，请稍后重试")
+    except Exception as e:
+        logger.error(f"[AI Keyword Analysis] 失败: {e}")
+        raise HTTPException(status_code=500, detail=f"AI 关键词分析失败: {str(e)}")
+
+
 @router.post("/ai-analysis")
 async def ai_analysis(
     data: AiAnalysisRequest,

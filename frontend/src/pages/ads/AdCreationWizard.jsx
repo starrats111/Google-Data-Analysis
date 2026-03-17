@@ -152,6 +152,12 @@ export default function AdCreationWizard() {
   const adDefaultBudgetRef = useRef(null)
   const [createResult, setCreateResult] = useState(null)
 
+  // AI 关键词分析
+  const [aiRecommendedKws, setAiRecommendedKws] = useState([])  // AI 推荐关键词
+  const [aiNegativeKws, setAiNegativeKws] = useState([])  // AI 否定关键词
+  const [aiStrategySummary, setAiStrategySummary] = useState('')
+  const [aiAnalyzing, setAiAnalyzing] = useState(false)
+
   // 限制品合规设置
   const [complianceSettings, setComplianceSettings] = useState({
     excludeMinors: true,        // 排除未成年人群
@@ -286,9 +292,37 @@ export default function AdCreationWizard() {
         keywords: seedKeywords ? seedKeywords.split(',').map(s => s.trim()).filter(Boolean) : undefined,
         semrush_url: semrushUrl || undefined,
       })
-      setKeywordResults(res.data.keywords || [])
-      const top10 = (res.data.keywords || []).slice(0, 10).map(k => k.keyword)
+      const kws = res.data.keywords || []
+      setKeywordResults(kws)
+      const top10 = kws.slice(0, 10).map(k => k.keyword)
       setSelectedKeywords(top10)
+
+      // 自动触发 AI 关键词分析
+      if (kws.length > 0) {
+        setAiAnalyzing(true)
+        api.post('/api/ad-creation/ai-keyword-analysis', {
+          keywords: kws,
+          merchant_name: merchantName,
+          merchant_url: keywordUrl || merchantUrl,
+          daily_budget: dailyBudget,
+          target_cpc: maxCpcLimit || 0.3,
+          target_country: targetCountry,
+        }).then(aiRes => {
+          if (aiRes.data?.recommended_keywords?.length) {
+            setAiRecommendedKws(aiRes.data.recommended_keywords)
+            // 自动选中 AI 推荐的关键词
+            const aiKwNames = aiRes.data.recommended_keywords.map(k => k.keyword)
+            setSelectedKeywords(prev => [...new Set([...prev, ...aiKwNames])])
+          }
+          if (aiRes.data?.negative_keywords?.length) {
+            setAiNegativeKws(aiRes.data.negative_keywords)
+            // 自动填入否定关键词
+            const negKws = aiRes.data.negative_keywords.map(k => k.keyword).join(', ')
+            setNegativeKeywords(prev => prev ? prev + ', ' + negKws : negKws)
+          }
+          if (aiRes.data?.strategy_summary) setAiStrategySummary(aiRes.data.strategy_summary)
+        }).catch(() => {}).finally(() => setAiAnalyzing(false))
+      }
     } catch (err) {
       message.error(err?.response?.data?.detail || '关键词研究失败')
     } finally { setLoading(false) }
@@ -776,17 +810,86 @@ export default function AdCreationWizard() {
               </Row>
               {keywordResults.length > 0 && (
                 <>
-                  <Table
-                    dataSource={keywordResults}
-                    columns={keywordColumns}
-                    rowKey="keyword"
-                    size="small"
-                    pagination={{ pageSize: 20 }}
-                    rowSelection={{
-                      selectedRowKeys: selectedKeywords,
-                      onChange: setSelectedKeywords,
-                    }}
-                  />
+                  {/* 搜索关键词（红色区域） */}
+                  <div style={{ border: '2px solid #ff4d4f', borderRadius: 8, padding: 12, marginBottom: 12 }}>
+                    <Typography.Text strong style={{ color: '#ff4d4f', fontSize: 14 }}>
+                      🔍 搜索关键词（{keywordResults.length} 个）
+                    </Typography.Text>
+                    <Table
+                      dataSource={keywordResults}
+                      columns={keywordColumns}
+                      rowKey="keyword"
+                      size="small"
+                      pagination={{ pageSize: 10, size: 'small' }}
+                      rowSelection={{
+                        selectedRowKeys: selectedKeywords,
+                        onChange: setSelectedKeywords,
+                      }}
+                    />
+                  </div>
+
+                  {/* AI 推荐关键词（蓝色区域） */}
+                  <div style={{ border: '2px solid #1890ff', borderRadius: 8, padding: 12, marginBottom: 12 }}>
+                    <Typography.Text strong style={{ color: '#1890ff', fontSize: 14 }}>
+                      🤖 AI 推荐关键词 {aiAnalyzing ? <Spin size="small" style={{ marginLeft: 8 }} /> : aiRecommendedKws.length > 0 ? `（${aiRecommendedKws.length} 个）` : ''}
+                    </Typography.Text>
+                    {aiAnalyzing && <Typography.Text type="secondary" style={{ marginLeft: 8, fontSize: 12 }}>Claude claude-opus-4-6 正在分析中...</Typography.Text>}
+                    {aiRecommendedKws.length > 0 && (
+                      <Table
+                        dataSource={aiRecommendedKws}
+                        rowKey="keyword"
+                        size="small"
+                        pagination={false}
+                        columns={[
+                          { title: '关键词', dataIndex: 'keyword', width: 200 },
+                          { title: '预估CPC', dataIndex: 'estimated_cpc', width: 90, render: v => v ? `$${Number(v).toFixed(2)}` : '-' },
+                          { title: '匹配类型', dataIndex: 'match_type', width: 90, render: v => <Tag color="blue">{v === 'PHRASE' ? '词组' : v === 'EXACT' ? '完全' : '广泛'}</Tag> },
+                          { title: '优先级', dataIndex: 'priority', width: 80, render: v => <Tag color={v === 'high' ? 'red' : v === 'medium' ? 'orange' : 'default'}>{v === 'high' ? '高' : v === 'medium' ? '中' : '低'}</Tag> },
+                          { title: '推荐理由', dataIndex: 'reason', ellipsis: true },
+                        ]}
+                        rowSelection={{
+                          selectedRowKeys: selectedKeywords,
+                          onChange: setSelectedKeywords,
+                        }}
+                      />
+                    )}
+                    {!aiAnalyzing && aiRecommendedKws.length === 0 && (
+                      <Typography.Text type="secondary" style={{ display: 'block', marginTop: 8 }}>等待 AI 分析完成...</Typography.Text>
+                    )}
+                  </div>
+
+                  {/* AI 否定关键词（绿色区域） */}
+                  <div style={{ border: '2px solid #52c41a', borderRadius: 8, padding: 12, marginBottom: 12 }}>
+                    <Typography.Text strong style={{ color: '#52c41a', fontSize: 14 }}>
+                      🚫 AI 推荐否定关键词 {aiNegativeKws.length > 0 ? `（${aiNegativeKws.length} 个）` : ''}
+                    </Typography.Text>
+                    {aiNegativeKws.length > 0 ? (
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 8 }}>
+                        {aiNegativeKws.map((nk, i) => (
+                          <Tooltip key={i} title={nk.reason}>
+                            <Tag color="red" closable onClose={() => {
+                              setAiNegativeKws(prev => prev.filter((_, idx) => idx !== i))
+                              setNegativeKeywords(prev => {
+                                const parts = prev.split(',').map(s => s.trim()).filter(s => s !== nk.keyword)
+                                return parts.join(', ')
+                              })
+                            }}>
+                              {nk.keyword}
+                            </Tag>
+                          </Tooltip>
+                        ))}
+                      </div>
+                    ) : (
+                      <Typography.Text type="secondary" style={{ display: 'block', marginTop: 8 }}>
+                        {aiAnalyzing ? 'AI 分析中...' : '暂无否定关键词建议'}
+                      </Typography.Text>
+                    )}
+                  </div>
+
+                  {/* AI 策略建议 */}
+                  {aiStrategySummary && (
+                    <Alert type="info" message="AI 策略建议" description={aiStrategySummary} style={{ marginBottom: 12 }} />
+                  )}
                   <Space>
                     <Button onClick={() => setStep(0)}>上一步</Button>
                     <Button type="primary" disabled={selectedKeywords.length === 0} onClick={() => {
