@@ -451,9 +451,9 @@ async def get_merchant_assets(
                         continue
                     seen_paths.add(path)
                     nav_links.append({"text": text, "path": path, "url": full_url})
-                    if len(nav_links) >= 8:
+                    if len(nav_links) >= 12:
                         break
-                if len(nav_links) >= 8:
+                if len(nav_links) >= 12:
                     break
 
             # 提取卖点（常见的 USP 区域：free shipping, returns 等）

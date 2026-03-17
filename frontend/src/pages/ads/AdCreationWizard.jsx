@@ -902,7 +902,7 @@ export default function AdCreationWizard() {
                             if (res.data?.images?.length) { setMerchantImages(res.data.images); setEnableImages(true) }
                             if (res.data?.logo) { setMerchantLogo(res.data.logo); setEnableLogo(true) }
                             if (res.data?.nav_links?.length) {
-                              const realSitelinks = res.data.nav_links.slice(0, 4).map(link => ({
+                              const realSitelinks = res.data.nav_links.slice(0, 6).map(link => ({
                                 link_text: link.text.slice(0, 25),
                                 desc1: '',
                                 desc2: '',
@@ -1064,95 +1064,88 @@ export default function AdCreationWizard() {
                   ))}
 
                   {/* 站内链接 */}
-                  {sitelinks.length > 0 && (
-                    <>
-                      <Divider style={{ margin: '8px 0' }} />
-                      <Typography.Text strong>站内链接（Sitelinks）</Typography.Text>
-                      {sitelinks.map((sl, i) => (
-                        <div key={`sl-${i}`} style={{ marginBottom: 8, padding: '8px 12px', background: '#fafafa', borderRadius: 6, border: '1px solid #f0f0f0' }}>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-                            <Typography.Text strong style={{ minWidth: 28, color: '#999' }}>{i + 1}.</Typography.Text>
-                            <Input
-                              value={sl.link_text || ''}
-                              placeholder="链接文字（≤25字符）"
-                              maxLength={25}
-                              suffix={`${(sl.link_text || '').length}/25`}
-                              onChange={e => {
-                                const arr = [...sitelinks]
-                                arr[i] = { ...arr[i], link_text: e.target.value }
-                                setSitelinks(arr)
-                              }}
-                            />
-                          </div>
-                          <div style={{ display: 'flex', gap: 8, paddingLeft: 36 }}>
-                            <Input
-                              size="small"
-                              value={sl.desc1 || ''}
-                              placeholder="描述行1（≤35字符）"
-                              maxLength={35}
-                              onChange={e => {
-                                const arr = [...sitelinks]
-                                arr[i] = { ...arr[i], desc1: e.target.value }
-                                setSitelinks(arr)
-                              }}
-                            />
-                            <Input
-                              size="small"
-                              value={sl.desc2 || ''}
-                              placeholder="描述行2（≤35字符）"
-                              maxLength={35}
-                              onChange={e => {
-                                const arr = [...sitelinks]
-                                arr[i] = { ...arr[i], desc2: e.target.value }
-                                setSitelinks(arr)
-                              }}
-                            />
-                          </div>
-                          {sl.url && (
-                            <Typography.Text type="secondary" style={{ fontSize: 11, paddingLeft: 36 }}>
-                              🔗 {sl.url}
-                            </Typography.Text>
-                          )}
-                        </div>
-                      ))}
-                    </>
-                  )}
-
-                  {/* 宣传信息 */}
-                  {callouts.length > 0 && (
-                    <>
-                      <Divider style={{ margin: '8px 0' }} />
-                      <Typography.Text strong>宣传信息（Callouts）</Typography.Text>
-                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 4 }}>
-                        {callouts.map((c, i) => (
-                          <Input
-                            key={`co-${i}`}
-                            style={{ width: 220 }}
-                            value={c}
-                            placeholder={`宣传信息 ${i + 1}（≤25字符）`}
-                            maxLength={25}
-                            suffix={`${c.length}/25`}
-                            onChange={e => {
-                              const arr = [...callouts]
-                              arr[i] = e.target.value
-                              setCallouts(arr)
-                            }}
-                          />
-                        ))}
+                  {/* 站内链接（Sitelinks）— 6个，可删除，可跳转，可继续生成 */}
+                  <Divider style={{ margin: '8px 0' }} />
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <Typography.Text strong>站内链接（Sitelinks）{sitelinks.length}/6</Typography.Text>
+                    {sitelinks.length < 6 && (
+                      <Button size="small" type="dashed" loading={loading} onClick={() => {
+                        const assetUrl = keywordUrl || merchantUrl
+                        if (!assetUrl) { message.warning('无商家网址'); return }
+                        setLoading(true)
+                        api.post('/api/ad-creation/merchant-assets', { url: assetUrl }).then(res => {
+                          const newLinks = (res.data?.nav_links || [])
+                            .filter(nl => !sitelinks.some(s => s.url === nl.url))
+                            .slice(0, 6 - sitelinks.length)
+                            .map(link => ({ link_text: link.text?.slice(0, 25) || '', desc1: '', desc2: '', url: link.url || '' }))
+                          if (newLinks.length > 0) {
+                            setSitelinks(prev => [...prev, ...newLinks].slice(0, 6))
+                            message.success(`新增 ${newLinks.length} 条站内链接`)
+                          } else { message.info('没有更多可用的站内链接') }
+                        }).catch(() => message.error('获取失败')).finally(() => setLoading(false))
+                      }}>继续生成</Button>
+                    )}
+                  </div>
+                  {sitelinks.map((sl, i) => (
+                    <div key={`sl-${i}`} style={{ marginBottom: 8, padding: '8px 12px', background: '#fafafa', borderRadius: 6, border: '1px solid #f0f0f0' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                        <Typography.Text strong style={{ minWidth: 28, color: '#999' }}>{i + 1}.</Typography.Text>
+                        <Input value={sl.link_text || ''} placeholder="链接文字（≤25字符）" maxLength={25}
+                          suffix={`${(sl.link_text || '').length}/25`}
+                          onChange={e => { const arr = [...sitelinks]; arr[i] = { ...arr[i], link_text: e.target.value }; setSitelinks(arr) }}
+                        />
+                        {sl.url && (
+                          <Tooltip title="点击跳转验证链接">
+                            <Button size="small" type="link" icon={<LinkOutlined />} onClick={() => window.open(sl.url, '_blank')} />
+                          </Tooltip>
+                        )}
+                        <Button size="small" type="text" danger onClick={() => setSitelinks(prev => prev.filter((_, idx) => idx !== i))}>×</Button>
                       </div>
-                    </>
-                  )}
+                      <div style={{ display: 'flex', gap: 8, paddingLeft: 36 }}>
+                        <Input size="small" value={sl.desc1 || ''} placeholder="描述行1（≤35字符）" maxLength={35}
+                          onChange={e => { const arr = [...sitelinks]; arr[i] = { ...arr[i], desc1: e.target.value }; setSitelinks(arr) }} />
+                        <Input size="small" value={sl.desc2 || ''} placeholder="描述行2（≤35字符）" maxLength={35}
+                          onChange={e => { const arr = [...sitelinks]; arr[i] = { ...arr[i], desc2: e.target.value }; setSitelinks(arr) }} />
+                      </div>
+                      {sl.url && (
+                        <Typography.Link href={sl.url} target="_blank" style={{ fontSize: 11, paddingLeft: 36 }}>🔗 {sl.url}</Typography.Link>
+                      )}
+                    </div>
+                  ))}
+                  {sitelinks.length === 0 && <Typography.Text type="secondary" style={{ fontSize: 12 }}>暂无站内链接，点击"继续生成"获取</Typography.Text>}
 
-                  {/* 商家图片 */}
+                  {/* 宣传信息（Callouts）— 可删除可添加 */}
+                  <Divider style={{ margin: '8px 0' }} />
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <Typography.Text strong>宣传信息（Callouts）{callouts.filter(Boolean).length} 条</Typography.Text>
+                    <Button size="small" type="dashed" onClick={() => setCallouts(prev => [...prev, ''])}>+ 添加</Button>
+                  </div>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 4 }}>
+                    {callouts.map((c, i) => (
+                      <div key={`co-${i}`} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                        <Input size="small" style={{ width: 200 }} value={c} placeholder={`宣传信息 ${i + 1}（≤25字符）`}
+                          maxLength={25} suffix={`${c.length}/25`}
+                          onChange={e => { const arr = [...callouts]; arr[i] = e.target.value; setCallouts(arr) }} />
+                        <Button size="small" type="text" danger onClick={() => setCallouts(prev => prev.filter((_, idx) => idx !== i))}>×</Button>
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* 商家图片 — 可删除可预览 */}
                   {merchantImages.length > 0 && (
                     <>
                       <Divider style={{ margin: '8px 0' }} />
-                      <Typography.Text strong>商家图片</Typography.Text>
+                      <Typography.Text strong>商家图片（{merchantImages.length} 张，点击预览）</Typography.Text>
                       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 4 }}>
                         {merchantImages.map((img, i) => (
-                          <img key={`img-${i}`} src={img} alt={`商家图片${i + 1}`}
-                            style={{ width: 120, height: 120, objectFit: 'cover', borderRadius: 6, border: '1px solid #d9d9d9' }}
-                          />
+                          <div key={`img-${i}`} style={{ position: 'relative', display: 'inline-block' }}>
+                            <img src={img} alt={`商家图片${i + 1}`}
+                              style={{ width: 120, height: 120, objectFit: 'cover', borderRadius: 6, border: '1px solid #d9d9d9', cursor: 'pointer' }}
+                              onClick={() => window.open(img, '_blank')} title="点击预览大图" />
+                            <Button size="small" type="text" danger
+                              style={{ position: 'absolute', top: 2, right: 2, background: 'rgba(255,255,255,0.85)', borderRadius: '50%', width: 22, height: 22, padding: 0, fontSize: 12, lineHeight: '22px' }}
+                              onClick={() => setMerchantImages(prev => prev.filter((_, idx) => idx !== i))}>×</Button>
+                          </div>
                         ))}
                       </div>
                     </>
