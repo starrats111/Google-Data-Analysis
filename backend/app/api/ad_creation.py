@@ -426,93 +426,93 @@ async def get_merchant_assets(
 
             # 提取导航链接（nav 标签内的 <a> 或 header 内的 <a>）
             seen_paths = set()
+            seen_texts = set()  # 标题去重
             skip_texts = {"home", "login", "sign in", "register", "cart", "checkout", "search",
                           "menu", "close", "skip", "back", "#", "javascript", "account", "wishlist",
                           "my account", "sign up", "log in", "subscribe", "newsletter", "cookie",
                           "privacy", "terms", "sitemap", "contact us", "help", "faq",
-                          "wholesale", "wholesale contact", "careers", "press", "investors"}
-            # 非HTTP协议前缀（过滤 mailto:、tel: 等）
+                          "wholesale", "wholesale contact", "careers", "press", "investors",
+                          "notice", "legal", "disclaimer", "accessibility"}
+            # 非HTTP协议前缀
             skip_prefixes = ("javascript", "mailto:", "tel:", "sms:", "ftp:", "data:", "#")
             
-            # 第一轮：从 nav / header 提取
+            def _is_valid_link(href, text):
+                """检查链接是否有效"""
+                if not text or len(text) > 30 or len(text) < 2:
+                    return False
+                if any(s in text.lower() for s in skip_texts):
+                    return False
+                if any(href.lower().startswith(p) for p in skip_prefixes):
+                    return False
+                # 标题去重（忽略大小写）
+                if text.lower().strip() in seen_texts:
+                    return False
+                return True
+            
+            def _process_link(href, text):
+                """处理链接并返回标准化结果，无效返回 None"""
+                full_url = urljoin(data.url, href)
+                link_parsed = urlparse(full_url)
+                if link_parsed.scheme not in ("http", "https"):
+                    return None
+                if link_parsed.hostname and base_domain and base_domain not in link_parsed.hostname:
+                    return None
+                path = link_parsed.path.rstrip("/") or "/"
+                if path in seen_paths or path == "/":
+                    return None
+                seen_paths.add(path)
+                seen_texts.add(text.lower().strip())
+                return {"text": text, "path": path, "url": full_url}
+            
+            # 从 nav / header / footer / main 提取
             nav_areas = [soup.find("nav"), soup.find("header"),
                          soup.find("div", class_=lambda c: c and "nav" in c.lower() if c else False)]
-            # 第二轮：从 footer 和主体补充
             footer_areas = [soup.find("footer"),
                             soup.find("div", class_=lambda c: c and "footer" in c.lower() if c else False),
-                            soup.find("main"), soup.find("div", id="content"),
-                            soup.find("div", class_=lambda c: c and "menu" in c.lower() if c else False)]
+                            soup.find("main"), soup.find("div", id="content")]
             
-            raw_links = []  # 先收集所有候选链接
-            for nav_area in nav_areas + footer_areas:
-                if not nav_area:
+            raw_links = []
+            for area in nav_areas + footer_areas:
+                if not area:
                     continue
-                for a_tag in nav_area.find_all("a", href=True):
+                for a_tag in area.find_all("a", href=True):
                     href = a_tag["href"].strip()
                     text = a_tag.get_text(strip=True)
-                    if not text or len(text) > 30 or len(text) < 2:
+                    if not _is_valid_link(href, text):
                         continue
-                    if any(s in text.lower() for s in skip_texts):
-                        continue
-                    if any(href.lower().startswith(p) for p in skip_prefixes):
-                        continue
-                    full_url = urljoin(data.url, href)
-                    link_parsed = urlparse(full_url)
-                    # 只保留 http/https 链接
-                    if link_parsed.scheme not in ("http", "https"):
-                        continue
-                    # 只保留同域名链接
-                    if link_parsed.hostname and base_domain and base_domain not in link_parsed.hostname:
-                        continue
-                    path = link_parsed.path.rstrip("/") or "/"
-                    if path in seen_paths or path == "/":
-                        continue
-                    seen_paths.add(path)
-                    raw_links.append({"text": text, "path": path, "url": full_url})
+                    result = _process_link(href, text)
+                    if result:
+                        raw_links.append(result)
                     if len(raw_links) >= 20:
                         break
                 if len(raw_links) >= 20:
                     break
             
-            # 第三轮：如果还不够6个，从全页面所有 <a> 中补充
-            if len(raw_links) < 6:
+            # 补充：全页面 <a> 标签
+            if len(raw_links) < 8:
                 for a_tag in soup.find_all("a", href=True):
                     href = a_tag["href"].strip()
                     text = a_tag.get_text(strip=True)
-                    if not text or len(text) > 30 or len(text) < 2:
+                    if not _is_valid_link(href, text):
                         continue
-                    if any(s in text.lower() for s in skip_texts):
-                        continue
-                    if any(href.lower().startswith(p) for p in skip_prefixes):
-                        continue
-                    full_url = urljoin(data.url, href)
-                    link_parsed = urlparse(full_url)
-                    if link_parsed.scheme not in ("http", "https"):
-                        continue
-                    if link_parsed.hostname and base_domain and base_domain not in link_parsed.hostname:
-                        continue
-                    path = link_parsed.path.rstrip("/") or "/"
-                    if path in seen_paths or path == "/":
-                        continue
-                    seen_paths.add(path)
-                    raw_links.append({"text": text, "path": path, "url": full_url})
+                    result = _process_link(href, text)
+                    if result:
+                        raw_links.append(result)
                     if len(raw_links) >= 20:
                         break
 
-            # 验证链接有效性 + 获取描述（并发请求，合并为一步）
-            import asyncio
+            # 并发验证链接有效性 + 获取描述（一步完成）
             from concurrent.futures import ThreadPoolExecutor
 
             def _validate_and_enrich(link_item):
-                """验证链接并获取描述，单次请求完成"""
+                """GET 请求验证链接 + 提取 meta description"""
                 try:
                     resp = client.get(link_item["url"], headers=headers, follow_redirects=True, timeout=4)
                     if resp.status_code >= 400:
                         return None
-                    # 从响应中提取描述
                     desc = ""
                     try:
-                        ps = BeautifulSoup(resp.text[:5000], "lxml")  # 只解析前5KB
+                        ps = BeautifulSoup(resp.text[:5000], "lxml")
                         meta = ps.find("meta", attrs={"name": "description"})
                         if meta and meta.get("content"):
                             desc = meta["content"].strip()[:35]
@@ -525,13 +525,12 @@ async def get_merchant_assets(
                 except Exception:
                     return None
 
-            # 并发验证（最多8个线程，超时总计10秒）
-            with ThreadPoolExecutor(max_workers=8) as pool:
+            with ThreadPoolExecutor(max_workers=6) as pool:
                 futures = [pool.submit(_validate_and_enrich, lk) for lk in raw_links[:16]]
                 validated = []
                 for f in futures:
                     try:
-                        r = f.result(timeout=6)
+                        r = f.result(timeout=5)
                         if r:
                             validated.append(r)
                     except Exception:
