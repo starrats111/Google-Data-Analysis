@@ -33,8 +33,8 @@ export default function TestDashboard() {
   const totalCost = data.reduce((s, r) => s + (r.ad_data?.cost || 0), 0)
   const totalClicks = data.reduce((s, r) => s + (r.ad_data?.clicks || 0), 0)
   const totalImpressions = data.reduce((s, r) => s + (r.ad_data?.impressions || 0), 0)
-  const totalConversions = data.reduce((s, r) => s + (r.ad_data?.conversions || 0), 0)
-  const avgCtr = totalImpressions > 0 ? (totalClicks / totalImpressions * 100) : 0
+  const totalCommission = data.reduce((s, r) => s + (r.commission || 0), 0)
+  const avgRoi = totalCost > 0 ? (totalCommission / totalCost * 100) : 0
   const avgCpc = totalClicks > 0 ? (totalCost / totalClicks) : 0
 
   // AI 分析
@@ -103,12 +103,13 @@ export default function TestDashboard() {
     { title: '花费', width: 90, render: (_, r) => r.ad_data ? `$${r.ad_data.cost.toFixed(2)}` : '-' },
     { title: '点击', width: 70, render: (_, r) => r.ad_data?.clicks ?? '-' },
     { title: '展示', width: 80, render: (_, r) => r.ad_data?.impressions ?? '-' },
-    { title: '佣金', width: 80, render: (_, r) => r.commission_rate || '-' },
+    { title: '佣金', width: 80, render: (_, r) => r.commission != null && r.commission > 0 ? `$${r.commission.toFixed(2)}` : '-' },
     {
       title: 'ROI', width: 80,
       render: (_, r) => {
         if (!r.ad_data || !r.ad_data.cost || r.ad_data.cost === 0) return '-'
-        return '-'
+        if (!r.commission || r.commission === 0) return '-'
+        return `${((r.commission / r.ad_data.cost) * 100).toFixed(0)}%`
       }
     },
     {
@@ -205,7 +206,7 @@ export default function TestDashboard() {
           <Card size="small"><Statistic title="总展示" value={totalImpressions} /></Card>
         </Col>
         <Col span={4}>
-          <Card size="small"><Statistic title="平均 ROI" value={0} precision={2} suffix="%" /></Card>
+          <Card size="small"><Statistic title="平均 ROI" value={avgRoi} precision={2} suffix="%" /></Card>
         </Col>
         <Col span={4}>
           <Card size="small"><Statistic title="平均 CPC" value={avgCpc} precision={2} prefix="$" /></Card>

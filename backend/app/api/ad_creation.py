@@ -617,6 +617,11 @@ async def get_test_dashboard(
 ):
     """测试商家看板 — 只展示广告侧数据（M-50 闭环）"""
     from sqlalchemy import func
+    from app.models.affiliate_transaction import AffiliateTransaction
+    from datetime import date as _date
+
+    # 本月佣金查询
+    month_start = _date.today().replace(day=1)
 
     test_assignments = db.query(MerchantAssignment).filter(
         MerchantAssignment.user_id == current_user.id,
@@ -674,6 +679,17 @@ async def get_test_dashboard(
             if not ad_data:
                 sync_pending = True
 
+        # 查询本月佣金
+        commission = 0.0
+        if merchant and merchant.merchant_id:
+            comm_row = db.query(func.sum(AffiliateTransaction.commission_amount)).filter(
+                AffiliateTransaction.user_id == current_user.id,
+                AffiliateTransaction.merchant_id == merchant.merchant_id,
+                AffiliateTransaction.transaction_time >= month_start,
+            ).scalar()
+            if comm_row:
+                commission = float(comm_row)
+
         results.append({
             "assignment_id": a.id,
             "merchant_name": merchant.merchant_name if merchant else "Unknown",
@@ -685,6 +701,7 @@ async def get_test_dashboard(
             "created_at": a.created_at.isoformat() if a.created_at else None,
             "sync_pending": sync_pending,
             "commission_rate": merchant.commission_rate if merchant else "",
+            "commission": commission,
             "ad_data": {
                 "cost": float(ad_data.cost or 0) if ad_data else 0,
                 "clicks": int(ad_data.clicks or 0) if ad_data else 0,
