@@ -372,7 +372,7 @@ async def get_merchant_assets(
     current_user: User = Depends(get_current_user),
 ):
     """快速获取商家网站的图片、Logo、导航链接和卖点（用于广告素材）"""
-    from app.services.merchant_crawler import crawl_merchant
+    from app.services.merchant_crawler import crawl as crawl_merchant
     import httpx
     from bs4 import BeautifulSoup
     from urllib.parse import urljoin, urlparse
