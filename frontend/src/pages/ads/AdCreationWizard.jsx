@@ -205,7 +205,11 @@ export default function AdCreationWizard() {
       const d = res.data || {}
       if (d.target_country) setTargetCountry(d.target_country)
       if (d.mode) setAssignmentMode(d.mode)
-      if (d.site_url) setKeywordUrl(d.site_url)
+      if (d.site_url) {
+        setKeywordUrl(d.site_url)
+        // 同步填入最终到达网址
+        if (!finalUrl) setFinalUrl(d.site_url.replace(/\/$/, ''))
+      }
     }).catch(() => {})
   }, [assignmentId])
 
@@ -264,6 +268,7 @@ export default function AdCreationWizard() {
         const siteUrl = detailRes.data?.site_url || ''
         if (siteUrl) {
           setKeywordUrl(siteUrl)
+          if (!finalUrl) setFinalUrl(siteUrl.replace(/\/$/, ''))
           const res = await api.post('/api/ad-creation/keyword-ideas', {
             mcc_id: selectedMcc,
             customer_id: availableCid,
