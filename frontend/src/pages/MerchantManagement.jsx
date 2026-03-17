@@ -1385,7 +1385,7 @@ const MerchantManagement = () => {
               </Card>
             ),
           },
-          ...(canManage ? [{
+          ...[{
             key: 'violations',
             label: (
               <span>
@@ -1398,7 +1398,8 @@ const MerchantManagement = () => {
             ),
             children: (
               <Card title="违规商家管理">
-                {/* 上传区域 */}
+                {/* 上传区域 - 仅管理员 */}
+                {canManage && (
                 <Upload.Dragger
                   accept=".xlsx,.xls"
                   showUploadList={false}
@@ -1412,6 +1413,7 @@ const MerchantManagement = () => {
                   <p className="ant-upload-text">点击或拖拽 Excel 文件到此区域上传</p>
                   <p className="ant-upload-hint">支持 .xlsx / .xls 格式，包含列：商家Mcid、Violation Time、商家ID、商家名称、平台、商家URL</p>
                 </Upload.Dragger>
+                )}
 
                 {uploading && <Spin tip="正在上传并处理..." style={{ display: 'block', margin: '16px 0' }} />}
 
@@ -1586,6 +1588,7 @@ const MerchantManagement = () => {
             ),
             children: (
               <Card title="推荐商家管理">
+                {canManage && (
                 <Upload.Dragger
                   accept=".xlsx,.xls"
                   showUploadList={false}
@@ -1599,6 +1602,7 @@ const MerchantManagement = () => {
                   <p className="ant-upload-text">点击或拖拽推荐商家 Excel 文件到此区域上传</p>
                   <p className="ant-upload-hint">支持 .xlsx / .xls 格式，包含列：mcid、MID、广告主名称、网址、商家地区、EPC、佣金等</p>
                 </Upload.Dragger>
+                )}
 
                 {recommendUploading && <Spin tip="正在上传并处理..." style={{ display: 'block', margin: '16px 0' }} />}
 
@@ -1675,7 +1679,7 @@ const MerchantManagement = () => {
                 />
               </Card>
             ),
-          }] : []),
+          }],
         ].filter(Boolean)}
       />
 

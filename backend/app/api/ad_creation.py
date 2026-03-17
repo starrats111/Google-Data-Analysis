@@ -427,9 +427,20 @@ async def get_merchant_assets(
             # 提取导航链接（nav 标签内的 <a> 或 header 内的 <a>）
             seen_paths = set()
             skip_texts = {"home", "login", "sign in", "register", "cart", "checkout", "search",
-                          "menu", "close", "skip", "back", "#", "javascript"}
-            for nav_area in [soup.find("nav"), soup.find("header"),
-                             soup.find("div", class_=lambda c: c and "nav" in c.lower() if c else False)]:
+                          "menu", "close", "skip", "back", "#", "javascript", "account", "wishlist",
+                          "my account", "sign up", "log in", "subscribe", "newsletter", "cookie",
+                          "privacy", "terms", "sitemap", "contact us", "help", "faq"}
+            
+            # 第一轮：从 nav / header 提取
+            nav_areas = [soup.find("nav"), soup.find("header"),
+                         soup.find("div", class_=lambda c: c and "nav" in c.lower() if c else False)]
+            # 第二轮：从 footer 和主体补充
+            footer_areas = [soup.find("footer"),
+                            soup.find("div", class_=lambda c: c and "footer" in c.lower() if c else False),
+                            soup.find("main"), soup.find("div", id="content"),
+                            soup.find("div", class_=lambda c: c and "menu" in c.lower() if c else False)]
+            
+            for nav_area in nav_areas + footer_areas:
                 if not nav_area:
                     continue
                 for a_tag in nav_area.find_all("a", href=True):
@@ -455,6 +466,29 @@ async def get_merchant_assets(
                         break
                 if len(nav_links) >= 12:
                     break
+            
+            # 第三轮：如果还不够6个，从全页面所有 <a> 中补充
+            if len(nav_links) < 6:
+                for a_tag in soup.find_all("a", href=True):
+                    href = a_tag["href"].strip()
+                    text = a_tag.get_text(strip=True)
+                    if not text or len(text) > 30 or len(text) < 2:
+                        continue
+                    if any(s in text.lower() for s in skip_texts):
+                        continue
+                    if href.startswith("javascript") or href == "#" or href.startswith("mailto"):
+                        continue
+                    full_url = urljoin(data.url, href)
+                    link_parsed = urlparse(full_url)
+                    if link_parsed.hostname and base_domain and base_domain not in link_parsed.hostname:
+                        continue
+                    path = link_parsed.path.rstrip("/") or "/"
+                    if path in seen_paths or path == "/":
+                        continue
+                    seen_paths.add(path)
+                    nav_links.append({"text": text, "path": path, "url": full_url})
+                    if len(nav_links) >= 12:
+                        break
 
             # 提取卖点（常见的 USP 区域：free shipping, returns 等）
             page_text = soup.get_text(separator=" ", strip=True).lower()
