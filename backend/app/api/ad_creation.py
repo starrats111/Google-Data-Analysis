@@ -499,19 +499,45 @@ async def get_merchant_assets(
                     if len(raw_links) >= 20:
                         break
 
-            # 验证链接有效性（HEAD 请求检查状态码）
-            valid_links = []
-            for link in raw_links[:16]:
+            # 验证链接有效性 + 获取描述（并发请求，合并为一步）
+            import asyncio
+            from concurrent.futures import ThreadPoolExecutor
+
+            def _validate_and_enrich(link_item):
+                """验证链接并获取描述，单次请求完成"""
                 try:
-                    head_resp = client.head(link["url"], headers=headers, follow_redirects=True, timeout=4)
-                    if head_resp.status_code < 400:
-                        valid_links.append(link)
+                    resp = client.get(link_item["url"], headers=headers, follow_redirects=True, timeout=4)
+                    if resp.status_code >= 400:
+                        return None
+                    # 从响应中提取描述
+                    desc = ""
+                    try:
+                        ps = BeautifulSoup(resp.text[:5000], "lxml")  # 只解析前5KB
+                        meta = ps.find("meta", attrs={"name": "description"})
+                        if meta and meta.get("content"):
+                            desc = meta["content"].strip()[:35]
+                        elif ps.title and ps.title.string:
+                            desc = ps.title.string.strip().split("|")[0].strip()[:35]
+                    except Exception:
+                        pass
+                    link_item["desc"] = desc
+                    return link_item
                 except Exception:
-                    pass  # 超时或异常的链接跳过
-                if len(valid_links) >= 12:
-                    break
+                    return None
+
+            # 并发验证（最多8个线程，超时总计10秒）
+            with ThreadPoolExecutor(max_workers=8) as pool:
+                futures = [pool.submit(_validate_and_enrich, lk) for lk in raw_links[:16]]
+                validated = []
+                for f in futures:
+                    try:
+                        r = f.result(timeout=6)
+                        if r:
+                            validated.append(r)
+                    except Exception:
+                        pass
             
-            nav_links = valid_links if valid_links else raw_links[:12]  # fallback: 验证全失败则用原始链接
+            nav_links = validated[:12] if validated else [dict(lk, desc="") for lk in raw_links[:12]]
 
             # 提取卖点（常见的 USP 区域：free shipping, returns 等）
             page_text = soup.get_text(separator=" ", strip=True).lower()
@@ -536,37 +562,10 @@ async def get_merchant_assets(
     except Exception as e:
         logger.warning("[MerchantAssets] 导航链接提取失败: %s", e)
 
-    # 为站内链接获取描述（从目标页面的 meta description 或 title）
-    enriched_links = []
-    try:
-        import httpx as _httpx
-        _headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            "Accept": "text/html,application/xhtml+xml",
-        }
-        with _httpx.Client(timeout=5, follow_redirects=True) as _client:
-            for link in nav_links[:12]:
-                desc = ""
-                try:
-                    page_resp = _client.get(link["url"], headers=_headers)
-                    if page_resp.status_code < 400:
-                        page_soup = BeautifulSoup(page_resp.text, "lxml")
-                        meta_desc = page_soup.find("meta", attrs={"name": "description"})
-                        if meta_desc and meta_desc.get("content"):
-                            desc = meta_desc["content"].strip()[:35]
-                        elif page_soup.title and page_soup.title.string:
-                            desc = page_soup.title.string.strip().split("|")[0].strip()[:35]
-                except Exception:
-                    pass
-                link["desc"] = desc
-                enriched_links.append(link)
-    except Exception:
-        enriched_links = nav_links[:12]
-
     return {
         "images": images[:10],
         "logo": logo,
-        "nav_links": enriched_links[:12],
+        "nav_links": nav_links[:12],
         "selling_points": selling_points[:6],
     }
 

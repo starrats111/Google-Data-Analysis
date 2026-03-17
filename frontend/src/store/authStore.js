@@ -28,16 +28,31 @@ export const useAuth = create((set, get) => ({
     const savedUser = JSON.parse(localStorage.getItem('user') || 'null')
     if (!savedUser) return
 
+    // 先用本地缓存立即恢复登录状态（不阻塞页面渲染）
+    const cachedPerms = JSON.parse(localStorage.getItem('permissions') || 'null')
+    const cachedToken = localStorage.getItem('token') || null
+    if (cachedToken) {
+      setHolderToken(cachedToken)
+      set({ token: cachedToken, isAuthenticated: true, user: savedUser, permissions: cachedPerms })
+    }
+
+    // 后台异步刷新 token（不阻塞）
     try {
-      const response = await api.post('/api/auth/refresh')
+      const response = await api.post('/api/auth/refresh', null, { timeout: 8000 })
       const newToken = response.data.access_token
       setHolderToken(newToken)
+      localStorage.setItem('token', newToken)
       set({ token: newToken, isAuthenticated: true, user: savedUser })
-      await get().fetchPermissions()
+      // 异步更新权限，不阻塞
+      get().fetchPermissions().catch(() => {})
     } catch (_) {
-      localStorage.removeItem('user')
-      localStorage.removeItem('permissions')
-      set({ user: null, token: null, isAuthenticated: false, permissions: null })
+      // 刷新失败但有缓存 token，继续使用
+      if (!cachedToken) {
+        localStorage.removeItem('user')
+        localStorage.removeItem('permissions')
+        localStorage.removeItem('token')
+        set({ user: null, token: null, isAuthenticated: false, permissions: null })
+      }
     }
   },
 
@@ -53,6 +68,7 @@ export const useAuth = create((set, get) => ({
 
       const { access_token, user } = response.data
       localStorage.setItem('user', JSON.stringify(user))
+      localStorage.setItem('token', access_token)
       setHolderToken(access_token)
 
       try {
