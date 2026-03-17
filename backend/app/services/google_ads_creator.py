@@ -93,6 +93,17 @@ class GoogleAdsCreator:
         image_urls: Optional[List[str]] = None,
         logo_url: Optional[str] = None,
         compliance: Optional[Dict] = None,
+        # 新增参数
+        bidding_strategy: str = "MAXIMIZE_CLICKS",
+        max_cpc_limit: Optional[float] = None,
+        network_search: bool = True,
+        network_partners: bool = False,
+        network_display: bool = False,
+        ad_group_name: str = "",
+        keyword_match_type: str = "PHRASE",
+        negative_keywords: Optional[List[str]] = None,
+        display_path1: str = "",
+        display_path2: str = "",
     ) -> Dict:
         """一次 API 调用创建完整广告结构（含可选素材）。"""
         mcc = self.db.query(GoogleMccAccount).filter(GoogleMccAccount.id == mcc_id).first()
@@ -129,6 +140,16 @@ class GoogleAdsCreator:
                 image_urls=image_urls,
                 logo_url=logo_url,
                 compliance=compliance,
+                bidding_strategy=bidding_strategy,
+                max_cpc_limit=max_cpc_limit,
+                network_search=network_search,
+                network_partners=network_partners,
+                network_display=network_display,
+                ad_group_name=ad_group_name,
+                keyword_match_type=keyword_match_type,
+                negative_keywords=negative_keywords,
+                display_path1=display_path1,
+                display_path2=display_path2,
             )
 
             # 执行打包 Mutate（原子操作）
@@ -199,8 +220,18 @@ class GoogleAdsCreator:
         image_urls: Optional[List[str]] = None,
         logo_url: Optional[str] = None,
         compliance: Optional[Dict] = None,
+        bidding_strategy: str = "MAXIMIZE_CLICKS",
+        max_cpc_limit: Optional[float] = None,
+        network_search: bool = True,
+        network_partners: bool = False,
+        network_display: bool = False,
+        ad_group_name: str = "",
+        keyword_match_type: str = "PHRASE",
+        negative_keywords: Optional[List[str]] = None,
+        display_path1: str = "",
+        display_path2: str = "",
     ) -> list:
-        """构建打包 Mutate 操作列表（使用临时 ID + 读取默认设置 + 可选素材）"""
+        """构建打包 Mutate 操作列表（使用传入参数 + 可选素材）"""
         defaults = _get_ad_defaults()
         operations = []
 
@@ -220,7 +251,7 @@ class GoogleAdsCreator:
         )
         operations.append(budget_op)
 
-        # 2. Campaign（使用默认设置）
+        # 2. Campaign（使用传入的设置，回退到默认设置）
         campaign_op = client.get_type("MutateOperation")
         campaign = campaign_op.campaign_operation.create
         campaign.name = campaign_name
@@ -233,24 +264,30 @@ class GoogleAdsCreator:
             customer_id, str(CAMPAIGN_TEMP_ID)
         )
 
-        bidding = defaults.get("bidding_strategy", "MANUAL_CPC")
-        if bidding == "MAXIMIZE_CLICKS":
-            # Google Ads API v23: "Maximize Clicks" = target_spend
-            cpc_ceiling = int(defaults.get("default_cpc_bid", 2.0) * 1_000_000)
+        # 出价策略：优先使用传入参数
+        effective_bidding = bidding_strategy or defaults.get("bidding_strategy", "MANUAL_CPC")
+        effective_cpc = max_cpc_limit or defaults.get("default_cpc_bid", 2.0)
+        if effective_bidding == "MAXIMIZE_CLICKS":
+            cpc_ceiling = int(effective_cpc * 1_000_000)
             if cpc_ceiling > 0:
                 campaign.target_spend.cpc_bid_ceiling_micros = cpc_ceiling
             else:
                 campaign.target_spend.cpc_bid_ceiling_micros = 2_000_000
             logger.info(f"[AdsCreator] bidding=MAXIMIZE_CLICKS(target_spend), ceiling={campaign.target_spend.cpc_bid_ceiling_micros}")
+        elif effective_bidding == "TARGET_CPA":
+            campaign.target_cpa.target_cpa_micros = int(effective_cpc * 1_000_000)
+            logger.info(f"[AdsCreator] bidding=TARGET_CPA, target={effective_cpc}")
+        elif effective_bidding == "TARGET_ROAS":
+            campaign.target_roas.target_roas = effective_cpc
+            logger.info(f"[AdsCreator] bidding=TARGET_ROAS, target={effective_cpc}")
         else:
-            campaign.manual_cpc.enhanced_cpc_enabled = True
-            if not defaults.get("enhanced_cpc", True):
-                campaign.manual_cpc.enhanced_cpc_enabled = False
+            campaign.manual_cpc.enhanced_cpc_enabled = defaults.get("enhanced_cpc", True)
             logger.info(f"[AdsCreator] bidding=MANUAL_CPC, enhanced_cpc={campaign.manual_cpc.enhanced_cpc_enabled}")
 
-        campaign.network_settings.target_google_search = defaults.get("target_google_search", True)
-        campaign.network_settings.target_search_network = defaults.get("target_search_network", False)
-        campaign.network_settings.target_content_network = defaults.get("target_content_network", False)
+        # 网络设置：优先使用传入参数
+        campaign.network_settings.target_google_search = network_search
+        campaign.network_settings.target_search_network = network_partners
+        campaign.network_settings.target_content_network = network_display
 
         if defaults.get("eu_political_ads", False):
             campaign.contains_eu_political_advertising = (
@@ -303,12 +340,12 @@ class GoogleAdsCreator:
         # 3. AdGroup
         ad_group_op = client.get_type("MutateOperation")
         ad_group = ad_group_op.ad_group_operation.create
-        ad_group.name = f"{campaign_name}_adgroup"
+        ad_group.name = ad_group_name or f"{campaign_name}_adgroup"
         ad_group.campaign = client.get_service("CampaignService").campaign_path(
             customer_id, str(CAMPAIGN_TEMP_ID)
         )
         ad_group.type_ = client.enums.AdGroupTypeEnum.SEARCH_STANDARD
-        ad_group.cpc_bid_micros = int(defaults.get("default_cpc_bid", 1.0) * 1_000_000)
+        ad_group.cpc_bid_micros = int((max_cpc_limit or defaults.get("default_cpc_bid", 1.0)) * 1_000_000)
         ad_group.resource_name = client.get_service("AdGroupService").ad_group_path(
             customer_id, str(AD_GROUP_TEMP_ID)
         )
@@ -332,9 +369,19 @@ class GoogleAdsCreator:
             rsa.descriptions.append(desc)
         resolved_url = final_url or "https://example.com"
         ad_group_ad.ad.final_urls.append(resolved_url)
+        if display_path1:
+            rsa.path1 = display_path1[:15]
+        if display_path2:
+            rsa.path2 = display_path2[:15]
         operations.append(ad_op)
 
         # 5. AdGroupCriterion (Keywords) — 批量添加
+        match_type_map = {
+            "BROAD": client.enums.KeywordMatchTypeEnum.BROAD,
+            "PHRASE": client.enums.KeywordMatchTypeEnum.PHRASE,
+            "EXACT": client.enums.KeywordMatchTypeEnum.EXACT,
+        }
+        kw_match = match_type_map.get(keyword_match_type, client.enums.KeywordMatchTypeEnum.PHRASE)
         for kw in keywords[:20]:
             kw_op = client.get_type("MutateOperation")
             criterion = kw_op.ad_group_criterion_operation.create
@@ -342,8 +389,24 @@ class GoogleAdsCreator:
                 customer_id, str(AD_GROUP_TEMP_ID)
             )
             criterion.keyword.text = kw
-            criterion.keyword.match_type = client.enums.KeywordMatchTypeEnum.PHRASE
+            criterion.keyword.match_type = kw_match
             operations.append(kw_op)
+
+        # 5b. Negative Keywords
+        if negative_keywords:
+            for nkw in negative_keywords[:20]:
+                nkw = nkw.strip()
+                if not nkw:
+                    continue
+                nkw_op = client.get_type("MutateOperation")
+                neg_criterion = nkw_op.campaign_criterion_operation.create
+                neg_criterion.campaign = client.get_service("CampaignService").campaign_path(
+                    customer_id, str(CAMPAIGN_TEMP_ID)
+                )
+                neg_criterion.keyword.text = nkw
+                neg_criterion.keyword.match_type = client.enums.KeywordMatchTypeEnum.PHRASE
+                neg_criterion.negative = True
+                operations.append(nkw_op)
 
         asset_service = client.get_service("AssetService")
         campaign_service = client.get_service("CampaignService")

@@ -66,6 +66,20 @@ class CreateAdRequest(BaseModel):
     image_urls: Optional[List[str]] = None
     logo_url: Optional[str] = None
     compliance: Optional[dict] = None  # 限制品合规设置
+    # 新增广告系列设置
+    bidding_strategy: str = "MAXIMIZE_CLICKS"
+    max_cpc_limit: Optional[float] = None
+    network_search: bool = True
+    network_partners: bool = False
+    network_display: bool = False
+    ad_schedule: str = "all"
+    device_targeting: str = "all"
+    # 广告组设置
+    ad_group_name: str = ""
+    keyword_match_type: str = "PHRASE"
+    negative_keywords: List[str] = Field(default_factory=list)
+    display_path1: str = ""
+    display_path2: str = ""
 
 
 class ModifyAdCopyRequest(BaseModel):
@@ -547,6 +561,16 @@ async def create_campaign(
             image_urls=data.image_urls,
             logo_url=data.logo_url,
             compliance=data.compliance,
+            bidding_strategy=data.bidding_strategy,
+            max_cpc_limit=data.max_cpc_limit,
+            network_search=data.network_search,
+            network_partners=data.network_partners,
+            network_display=data.network_display,
+            ad_group_name=data.ad_group_name,
+            keyword_match_type=data.keyword_match_type,
+            negative_keywords=data.negative_keywords,
+            display_path1=data.display_path1,
+            display_path2=data.display_path2,
         )
 
         # 更新 assignment 记录

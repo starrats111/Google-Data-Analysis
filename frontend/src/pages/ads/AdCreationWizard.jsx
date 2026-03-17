@@ -66,7 +66,7 @@ export default function AdCreationWizard() {
   const [targetCountry, setTargetCountry] = useState('US')
   const [assignmentMode, setAssignmentMode] = useState('test')
 
-  // Step 0: MCC 选择
+  // Step 0: MCC 选择 + 广告系列设置
   const [mccList, setMccList] = useState([])
   const [selectedMcc, setSelectedMcc] = useState(null)
   const [availableCid, setAvailableCid] = useState('')
@@ -76,6 +76,19 @@ export default function AdCreationWizard() {
   const [cidTotal, setCidTotal] = useState(0)
   const [refreshingCid, setRefreshingCid] = useState(false)
 
+  // 广告系列设置（Google Ads 核心参数）
+  const [biddingStrategy, setBiddingStrategy] = useState('MAXIMIZE_CLICKS')  // 出价策略
+  const [maxCpcLimit, setMaxCpcLimit] = useState(null)  // 最高 CPC 出价上限
+  const [networkSearch, setNetworkSearch] = useState(true)  // 搜索网络
+  const [networkPartners, setNetworkPartners] = useState(false)  // 搜索合作伙伴
+  const [networkDisplay, setNetworkDisplay] = useState(false)  // 展示网络
+  const [adSchedule, setAdSchedule] = useState('all')  // 投放时段: all / custom
+  const [adScheduleDays, setAdScheduleDays] = useState([0,1,2,3,4,5,6])  // 0=Mon...6=Sun
+  const [adScheduleHours, setAdScheduleHours] = useState([0, 24])  // 起止小时
+  const [deviceTargeting, setDeviceTargeting] = useState('all')  // 设备: all / mobile / desktop
+  const [campaignStartDate, setCampaignStartDate] = useState('')  // 开始日期
+  const [campaignEndDate, setCampaignEndDate] = useState('')  // 结束日期
+
   // Step 1: 关键词研究
   const [keywordUrl, setKeywordUrl] = useState(merchantUrl)
   const [semrushUrl, setSemrushUrl] = useState('')
@@ -83,6 +96,12 @@ export default function AdCreationWizard() {
   const [keywordResults, setKeywordResults] = useState([])
   const [selectedKeywords, setSelectedKeywords] = useState([])
   const autoResearchDone = useRef(false)
+  const [keywordMatchType, setKeywordMatchType] = useState('BROAD')  // BROAD / PHRASE / EXACT
+  const [negativeKeywords, setNegativeKeywords] = useState('')  // 否定关键词（逗号分隔）
+  const [adGroupName, setAdGroupName] = useState('')  // 广告组名称
+  const [finalUrl, setFinalUrl] = useState(merchantUrl)  // 最终到达网址
+  const [displayPath1, setDisplayPath1] = useState('')  // 显示路径1
+  const [displayPath2, setDisplayPath2] = useState('')  // 显示路径2
 
   // Step 2: AI 素材 (SSE streaming)
   const [streamingText, setStreamingText] = useState('')
@@ -137,9 +156,17 @@ export default function AdCreationWizard() {
       setMccList(res.data || [])
     }).catch(() => {})
     api.get('/api/merchants/ad-defaults').then(res => {
-      if (res.data?.default_daily_budget) {
-        setDailyBudget(res.data.default_daily_budget)
-        adDefaultBudgetRef.current = res.data.default_daily_budget
+      if (res.data) {
+        const d = res.data
+        if (d.default_daily_budget) {
+          setDailyBudget(d.default_daily_budget)
+          adDefaultBudgetRef.current = d.default_daily_budget
+        }
+        if (d.bidding_strategy) setBiddingStrategy(d.bidding_strategy)
+        if (d.default_cpc_bid) setMaxCpcLimit(d.default_cpc_bid)
+        if (d.target_google_search !== undefined) setNetworkSearch(d.target_google_search)
+        if (d.target_search_network !== undefined) setNetworkPartners(d.target_search_network)
+        if (d.target_content_network !== undefined) setNetworkDisplay(d.target_content_network)
       }
     }).catch(() => {})
   }, [])
@@ -361,13 +388,27 @@ export default function AdCreationWizard() {
         mcc_id: selectedMcc,
         customer_id: availableCid,
         merchant_name: merchantName,
-        merchant_url: keywordUrl || merchantUrl,
+        merchant_url: finalUrl || keywordUrl || merchantUrl,
         keywords: selectedKeywords,
         headlines: editHeadlines,
         descriptions: editDescriptions,
         daily_budget: dailyBudget,
         target_country: targetCountry,
         mode: assignmentMode,
+        // 新增广告系列设置
+        bidding_strategy: biddingStrategy,
+        max_cpc_limit: maxCpcLimit,
+        network_search: networkSearch,
+        network_partners: networkPartners,
+        network_display: networkDisplay,
+        ad_schedule: adSchedule,
+        device_targeting: deviceTargeting,
+        // 广告组设置
+        ad_group_name: adGroupName || merchantName || '默认广告组',
+        keyword_match_type: keywordMatchType,
+        negative_keywords: negativeKeywords ? negativeKeywords.split(',').map(k => k.trim()).filter(Boolean) : [],
+        display_path1: displayPath1,
+        display_path2: displayPath2,
       }
       if (enableSitelinks && sitelinks.length > 0) payload.sitelinks = sitelinks
       if (enableCallouts && callouts.length > 0) payload.callouts = callouts
@@ -443,9 +484,10 @@ export default function AdCreationWizard() {
   ]
 
   const steps = [
-    { title: '选择 MCC' },
-    { title: '关键词研究' },
+    { title: '广告系列设置' },
+    { title: '关键词 & 广告组' },
     { title: 'AI 智能文案' },
+    { title: '预览 & 创建' },
   ]
 
   // 创建成功后显示全屏成功页
@@ -539,67 +581,122 @@ export default function AdCreationWizard() {
       <Spin spinning={loading}>
         {/* Step 0: 选择 MCC */}
         {step === 0 && (
-          <Card title="选择 MCC 账号">
+          <Card title="广告系列设置">
             {mccList.length === 0 ? (
               <Alert type="warning" message="您还没有绑定 MCC 账号，请先在设置中添加" />
             ) : (
-              <Space direction="vertical" style={{ width: '100%' }} size={12}>
-                <div>
-                  <Typography.Text strong style={{ marginRight: 8 }}>MCC 账号</Typography.Text>
-                  <Select
-                    style={{ width: 400 }}
-                    placeholder="选择 MCC 账号"
-                    value={selectedMcc}
-                    onChange={handleSelectMcc}
-                    options={mccList.map(m => ({ value: m.id, label: `${m.name} (${m.mcc_id})` }))}
-                  />
-                </div>
-                {cidError && (
-                  <Alert
-                    type="error"
-                    message="CID 查找失败"
-                    description={cidError}
-                    action={<Button size="small" onClick={() => handleSelectMcc(selectedMcc)}>重试</Button>}
-                  />
-                )}
-                {(allCids.length > 0 || cidTotal > 0) && (
-                  <div>
-                    <Typography.Text strong style={{ marginRight: 8 }}>客户账号 (CID)</Typography.Text>
-                    <Select
-                      style={{ width: 300 }}
-                      placeholder="选择空闲的客户账号"
-                      value={availableCid || undefined}
-                      onChange={(v) => { setAvailableCid(v); setCidError(''); }}
-                      options={allCids.map(cid => ({
-                        value: cid,
-                        label: formatCid(cid),
-                      }))}
+              <Space direction="vertical" style={{ width: '100%' }} size={16}>
+                {/* MCC + CID */}
+                <Row gutter={16}>
+                  <Col span={12}>
+                    <Typography.Text strong>MCC 账号</Typography.Text>
+                    <Select style={{ width: '100%', marginTop: 4 }} placeholder="选择 MCC 账号"
+                      value={selectedMcc} onChange={handleSelectMcc}
+                      options={mccList.map(m => ({ value: m.id, label: `${m.name} (${m.mcc_id})` }))}
                     />
-                    <Button
-                      icon={<ReloadOutlined />}
-                      loading={refreshingCid}
-                      onClick={handleRefreshCids}
-                      style={{ marginLeft: 8 }}
-                      title="从 Google Ads 刷新 CID 列表"
-                    >刷新 CID</Button>
-                    <Typography.Text type="secondary" style={{ marginLeft: 8, fontSize: 12 }}>
-                      共 {cidTotal} 个 CID，空闲 {allCids.length} 个
-                    </Typography.Text>
-                    {allCids.length === 0 && !loading && (
-                      <Alert type="warning" message="当前 MCC 下没有空闲的客户账号" style={{ marginTop: 8 }} />
+                  </Col>
+                  <Col span={12}>
+                    <Typography.Text strong>客户账号 (CID)</Typography.Text>
+                    <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
+                      <Select style={{ flex: 1 }} placeholder="选择空闲的客户账号"
+                        value={availableCid || undefined}
+                        onChange={(v) => { setAvailableCid(v); setCidError(''); }}
+                        options={allCids.map(cid => ({ value: cid, label: formatCid(cid) }))}
+                      />
+                      <Button icon={<ReloadOutlined />} loading={refreshingCid} onClick={handleRefreshCids}>刷新</Button>
+                    </div>
+                    {cidTotal > 0 && (
+                      <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                        空闲 {allCids.length} / 总计 {cidTotal}，忙碌 {busyCids.length}
+                      </Typography.Text>
                     )}
-                  </div>
+                  </Col>
+                </Row>
+                {cidError && <Alert type="error" message={cidError} />}
+                {allCids.length === 0 && !loading && selectedMcc && (
+                  <Alert type="warning" message="当前 MCC 下没有空闲的客户账号" />
                 )}
-                <Button type="primary" disabled={!availableCid} onClick={() => setStep(1)}>下一步</Button>
+
+                <Divider style={{ margin: '4px 0' }}>预算 & 出价</Divider>
+                <Row gutter={16}>
+                  <Col span={8}>
+                    <Typography.Text strong>日预算</Typography.Text>
+                    <InputNumber style={{ width: '100%', marginTop: 4 }} min={1} max={10000} step={1}
+                      value={dailyBudget} onChange={v => setDailyBudget(v)} addonBefore="$"
+                    />
+                  </Col>
+                  <Col span={8}>
+                    <Typography.Text strong>出价策略</Typography.Text>
+                    <Select style={{ width: '100%', marginTop: 4 }} value={biddingStrategy} onChange={setBiddingStrategy}
+                      options={[
+                        { value: 'MAXIMIZE_CLICKS', label: '尽可能多获得点击' },
+                        { value: 'MANUAL_CPC', label: '手动 CPC' },
+                        { value: 'TARGET_CPA', label: '目标每次转化费用' },
+                        { value: 'TARGET_ROAS', label: '目标广告支出回报率' },
+                      ]}
+                    />
+                  </Col>
+                  <Col span={8}>
+                    <Typography.Text strong>最高 CPC 出价</Typography.Text>
+                    <InputNumber style={{ width: '100%', marginTop: 4 }} min={0.01} max={100} step={0.1}
+                      value={maxCpcLimit} onChange={v => setMaxCpcLimit(v)} addonBefore="$" placeholder="不限"
+                    />
+                  </Col>
+                </Row>
+
+                <Divider style={{ margin: '4px 0' }}>投放网络 & 设备</Divider>
+                <Row gutter={16} align="middle">
+                  <Col span={6}><Checkbox checked={networkSearch} onChange={e => setNetworkSearch(e.target.checked)}>Google 搜索</Checkbox></Col>
+                  <Col span={6}><Checkbox checked={networkPartners} onChange={e => setNetworkPartners(e.target.checked)}>搜索合作伙伴</Checkbox></Col>
+                  <Col span={6}><Checkbox checked={networkDisplay} onChange={e => setNetworkDisplay(e.target.checked)}>展示网络</Checkbox></Col>
+                  <Col span={6}>
+                    <Select style={{ width: '100%' }} value={adSchedule} onChange={setAdSchedule} size="small"
+                      options={[
+                        { value: 'all', label: '⏰ 全天候投放' },
+                        { value: 'weekday', label: '⏰ 仅工作日' },
+                      ]}
+                    />
+                  </Col>
+                </Row>
+
+                <div style={{ marginTop: 8 }}>
+                  <Button type="primary" disabled={!availableCid} onClick={() => setStep(1)}>
+                    下一步：关键词 & 广告组
+                  </Button>
+                </div>
               </Space>
             )}
           </Card>
         )}
 
-        {/* Step 1: 关键词研究 */}
+        {/* Step 1: 关键词 & 广告组 */}
         {step === 1 && (
-          <Card title="关键词研究">
+          <Card title="关键词 & 广告组">
             <Space direction="vertical" style={{ width: '100%' }} size={16}>
+              {/* 广告组名称 + 最终URL */}
+              <Row gutter={16}>
+                <Col span={8}>
+                  <Typography.Text strong>广告组名称</Typography.Text>
+                  <Input style={{ marginTop: 4 }} placeholder="如：Brand Keywords"
+                    value={adGroupName} onChange={e => setAdGroupName(e.target.value)}
+                  />
+                </Col>
+                <Col span={10}>
+                  <Typography.Text strong>最终到达网址</Typography.Text>
+                  <Input style={{ marginTop: 4 }} placeholder="https://www.example.com/landing"
+                    value={finalUrl} onChange={e => setFinalUrl(e.target.value)}
+                  />
+                </Col>
+                <Col span={6}>
+                  <Typography.Text strong>显示路径</Typography.Text>
+                  <div style={{ display: 'flex', gap: 4, marginTop: 4 }}>
+                    <Input placeholder="path1" value={displayPath1} onChange={e => setDisplayPath1(e.target.value)} style={{ flex: 1 }} />
+                    <Input placeholder="path2" value={displayPath2} onChange={e => setDisplayPath2(e.target.value)} style={{ flex: 1 }} />
+                  </div>
+                </Col>
+              </Row>
+
+              <Divider style={{ margin: '4px 0' }}>关键词研究</Divider>
               <Row gutter={16}>
                 <Col span={12}>
                   <Input placeholder="商家网址（如 https://www.trovata.com）" value={keywordUrl} onChange={e => setKeywordUrl(e.target.value)} />
@@ -628,7 +725,28 @@ export default function AdCreationWizard() {
                   ),
                 }]}
               />
-              <Button type="primary" icon={<SearchOutlined />} onClick={handleKeywordResearch}>研究关键词</Button>
+              <Row gutter={16} align="middle">
+                <Col span={6}>
+                  <Button type="primary" icon={<SearchOutlined />} onClick={handleKeywordResearch}>研究关键词</Button>
+                </Col>
+                <Col span={6}>
+                  <Typography.Text strong style={{ marginRight: 8 }}>匹配类型</Typography.Text>
+                  <Select size="small" value={keywordMatchType} onChange={setKeywordMatchType} style={{ width: 120 }}
+                    options={[
+                      { value: 'PHRASE', label: '词组匹配' },
+                      { value: 'BROAD', label: '广泛匹配' },
+                      { value: 'EXACT', label: '完全匹配' },
+                    ]}
+                  />
+                </Col>
+                <Col span={12}>
+                  <Typography.Text strong style={{ marginRight: 8 }}>否定关键词</Typography.Text>
+                  <Input size="small" placeholder="逗号分隔，如：free, cheap, crack"
+                    value={negativeKeywords} onChange={e => setNegativeKeywords(e.target.value)}
+                    style={{ width: '100%' }}
+                  />
+                </Col>
+              </Row>
               {keywordResults.length > 0 && (
                 <>
                   <Table
@@ -653,7 +771,6 @@ export default function AdCreationWizard() {
                           .then(res => {
                             if (res.data?.images?.length) { setMerchantImages(res.data.images); setEnableImages(true) }
                             if (res.data?.logo) { setMerchantLogo(res.data.logo); setEnableLogo(true) }
-                            // 用真实导航链接预填充 sitelinks
                             if (res.data?.nav_links?.length) {
                               const realSitelinks = res.data.nav_links.slice(0, 4).map(link => ({
                                 link_text: link.text.slice(0, 25),
@@ -664,7 +781,6 @@ export default function AdCreationWizard() {
                               }))
                               setSitelinks(realSitelinks)
                             }
-                            // 用真实卖点预填充 callouts
                             if (res.data?.selling_points?.length) {
                               setCallouts(res.data.selling_points.slice(0, 4))
                             }
@@ -927,8 +1043,8 @@ export default function AdCreationWizard() {
 
                   <Space>
                     <Button onClick={() => setStep(1)}>上一步</Button>
-                    <Button type="primary" icon={<RocketOutlined />} onClick={() => setConfirmModalOpen(true)}>
-                      创建广告
+                    <Button type="primary" onClick={() => setStep(3)}>
+                      下一步：预览确认
                     </Button>
                     <Button onClick={() => handleGenerateAdCopyStream()}>重新生成</Button>
                   </Space>
@@ -944,8 +1060,146 @@ export default function AdCreationWizard() {
           </Card>
         )}
 
-      </Spin>
+        {/* Step 3: 预览确认 */}
+        {step === 3 && (
+          <Card title="预览 & 创建广告">
+            <Space direction="vertical" style={{ width: '100%' }} size={16}>
+              {/* 广告系列设置摘要 */}
+              <Card size="small" title="广告系列设置" type="inner">
+                <Row gutter={[16, 8]}>
+                  <Col span={6}><Typography.Text type="secondary">MCC 账号</Typography.Text><br />{mccList.find(m => m.id === selectedMcc)?.name || '-'}</Col>
+                  <Col span={6}><Typography.Text type="secondary">CID</Typography.Text><br />{formatCid(availableCid)}</Col>
+                  <Col span={4}><Typography.Text type="secondary">日预算</Typography.Text><br />${dailyBudget}</Col>
+                  <Col span={4}><Typography.Text type="secondary">出价策略</Typography.Text><br />{
+                    biddingStrategy === 'MAXIMIZE_CLICKS' ? '尽可能多点击' :
+                    biddingStrategy === 'MANUAL_CPC' ? '手动 CPC' :
+                    biddingStrategy === 'TARGET_CPA' ? '目标 CPA' : '目标 ROAS'
+                  }</Col>
+                  <Col span={4}><Typography.Text type="secondary">最高 CPC</Typography.Text><br />{maxCpcLimit ? `$${maxCpcLimit}` : '不限'}</Col>
+                </Row>
+                <Divider style={{ margin: '8px 0' }} />
+                <Space size={12}>
+                  <Tag color={networkSearch ? 'green' : 'default'}>Google 搜索: {networkSearch ? '开' : '关'}</Tag>
+                  <Tag color={networkPartners ? 'green' : 'default'}>搜索合作伙伴: {networkPartners ? '开' : '关'}</Tag>
+                  <Tag color={networkDisplay ? 'green' : 'default'}>展示网络: {networkDisplay ? '开' : '关'}</Tag>
+                  <Tag color="blue">投放国家: {targetCountry}</Tag>
+                </Space>
+              </Card>
 
+              {/* 广告组 & 关键词摘要 */}
+              <Card size="small" title="广告组 & 关键词" type="inner">
+                <Row gutter={[16, 8]}>
+                  <Col span={8}><Typography.Text type="secondary">广告组名称</Typography.Text><br />{adGroupName || merchantName || '默认广告组'}</Col>
+                  <Col span={8}><Typography.Text type="secondary">最终到达网址</Typography.Text><br /><Typography.Text copyable ellipsis style={{ maxWidth: 300 }}>{finalUrl || merchantUrl}</Typography.Text></Col>
+                  <Col span={4}><Typography.Text type="secondary">匹配类型</Typography.Text><br />{
+                    keywordMatchType === 'PHRASE' ? '词组匹配' :
+                    keywordMatchType === 'BROAD' ? '广泛匹配' : '完全匹配'
+                  }</Col>
+                  <Col span={4}><Typography.Text type="secondary">关键词数</Typography.Text><br />{selectedKeywords.length} 个</Col>
+                </Row>
+                {displayPath1 && (
+                  <div style={{ marginTop: 8 }}>
+                    <Typography.Text type="secondary">显示路径: </Typography.Text>
+                    <Typography.Text code>{displayPath1}{displayPath2 ? `/${displayPath2}` : ''}</Typography.Text>
+                  </div>
+                )}
+                {negativeKeywords && (
+                  <div style={{ marginTop: 8 }}>
+                    <Typography.Text type="secondary">否定关键词: </Typography.Text>
+                    <Typography.Text>{negativeKeywords}</Typography.Text>
+                  </div>
+                )}
+                <Divider style={{ margin: '8px 0' }} />
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+                  {selectedKeywords.slice(0, 20).map(kw => <Tag key={kw} color="blue">{kw}</Tag>)}
+                  {selectedKeywords.length > 20 && <Tag>+{selectedKeywords.length - 20} 更多</Tag>}
+                </div>
+              </Card>
+
+              {/* 广告预览 */}
+              <Card size="small" title="广告预览" type="inner">
+                <div style={{ maxWidth: 600, border: '1px solid #e8e8e8', borderRadius: 8, padding: 16, background: '#fff' }}>
+                  <Typography.Text type="secondary" style={{ fontSize: 11 }}>广告 · {(finalUrl || merchantUrl || '').replace(/^https?:\/\//, '').split('/')[0]}</Typography.Text>
+                  <div style={{ marginTop: 4 }}>
+                    <Typography.Link style={{ fontSize: 18, fontWeight: 500 }}>
+                      {editHeadlines[0] || '标题 1'} | {editHeadlines[1] || '标题 2'} | {editHeadlines[2] || '标题 3'}
+                    </Typography.Link>
+                  </div>
+                  <Typography.Paragraph style={{ margin: '4px 0 0', color: '#4d5156', fontSize: 13 }}>
+                    {editDescriptions[0] || '描述 1'}
+                  </Typography.Paragraph>
+                  {sitelinks.length > 0 && (
+                    <div style={{ marginTop: 8, display: 'flex', gap: 16 }}>
+                      {sitelinks.slice(0, 4).map((sl, i) => (
+                        <Typography.Link key={i} style={{ fontSize: 12 }}>{sl.link_text}</Typography.Link>
+                      ))}
+                    </div>
+                  )}
+                  {callouts.length > 0 && (
+                    <div style={{ marginTop: 4 }}>
+                      <Typography.Text style={{ fontSize: 12, color: '#70757a' }}>
+                        {callouts.filter(Boolean).join(' · ')}
+                      </Typography.Text>
+                    </div>
+                  )}
+                </div>
+                <div style={{ marginTop: 12 }}>
+                  <Typography.Text strong>全部标题 ({editHeadlines.length})</Typography.Text>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 4 }}>
+                    {editHeadlines.map((h, i) => <Tag key={i}>{i + 1}. {h}</Tag>)}
+                  </div>
+                </div>
+                <div style={{ marginTop: 8 }}>
+                  <Typography.Text strong>全部描述 ({editDescriptions.length})</Typography.Text>
+                  {editDescriptions.map((d, i) => (
+                    <div key={i} style={{ fontSize: 12, color: '#666', marginTop: 2 }}>{i + 1}. {d}</div>
+                  ))}
+                </div>
+              </Card>
+
+              {/* 素材摘要 */}
+              {(sitelinks.length > 0 || callouts.length > 0 || merchantImages.length > 0 || merchantLogo) && (
+                <Card size="small" title="广告素材" type="inner">
+                  <Space size={16}>
+                    {sitelinks.length > 0 && <Tag color="blue">站内链接 ×{sitelinks.length}</Tag>}
+                    {callouts.length > 0 && <Tag color="green">宣传信息 ×{callouts.filter(Boolean).length}</Tag>}
+                    {merchantImages.length > 0 && <Tag color="purple">商家图片 ×{merchantImages.length}</Tag>}
+                    {merchantLogo && <Tag color="orange">商家 Logo</Tag>}
+                  </Space>
+                </Card>
+              )}
+
+              {/* 限制品类合规 */}
+              {isRestricted && (
+                <Alert type="warning" message="限制品类提醒" description={
+                  <div>
+                    <div>该商家属于限制品类：{merchantRestrictions.map(r => r.label).join('、')}</div>
+                    <Checkbox
+                      checked={complianceSettings.confirmCompliance}
+                      onChange={e => setComplianceSettings(prev => ({ ...prev, confirmCompliance: e.target.checked }))}
+                      style={{ marginTop: 8 }}
+                    >
+                      我已阅读并确认遵守 Google Ads 限制品类政策
+                    </Checkbox>
+                  </div>
+                } />
+              )}
+
+              <Space>
+                <Button onClick={() => setStep(2)}>上一步：修改文案</Button>
+                <Button type="primary" icon={<RocketOutlined />} size="large"
+                  disabled={isRestricted && !complianceSettings.confirmCompliance}
+                  onClick={() => setConfirmModalOpen(true)}
+                >
+                  确认创建广告
+                </Button>
+              </Space>
+            </Space>
+          </Card>
+        )}
+
+
+      </Spin>
 
       {/* 确认创建弹窗 */}
       <Modal
@@ -959,230 +1213,28 @@ export default function AdCreationWizard() {
           handleCreateAd()
         }}
         onCancel={() => setConfirmModalOpen(false)}
-        okText={isRestricted ? '确认合规并创建' : '确认创建'}
-        okButtonProps={isRestricted ? { danger: !complianceSettings.confirmCompliance } : {}}
+        okText="确认创建"
         cancelText="取消"
         confirmLoading={loading}
         maskClosable={false}
-        width={isRestricted ? 620 : 520}
+        width={480}
       >
-        <Space direction="vertical" size={12} style={{ width: '100%' }}>
-          <Row>
-            <Col span={8}><Typography.Text strong>商家</Typography.Text></Col>
-            <Col span={16}><Tag color="blue">{merchantName}</Tag></Col>
-          </Row>
-          <Row>
-            <Col span={8}><Typography.Text strong>MCC</Typography.Text></Col>
-            <Col span={16}>{mccList.find(m => m.id === selectedMcc)?.mcc_id || '-'}</Col>
-          </Row>
-          <Row>
-            <Col span={8}><Typography.Text strong>CID</Typography.Text></Col>
-            <Col span={16}>{formatCid(availableCid)}</Col>
-          </Row>
-          <Row>
-            <Col span={8}><Typography.Text strong>投放国家</Typography.Text></Col>
-            <Col span={16}><Tag color="cyan">{COUNTRY_LABELS[targetCountry] || targetCountry}</Tag></Col>
-          </Row>
-          <Row>
-            <Col span={8}><Typography.Text strong>语言</Typography.Text></Col>
-            <Col span={16}><Tag color="purple">{COUNTRY_LANGUAGE[targetCountry] || 'English'} ({COUNTRY_LANGUAGE_ZH[targetCountry] || '英语'})</Tag></Col>
-          </Row>
-          <Row>
-            <Col span={8}><Typography.Text strong>模式</Typography.Text></Col>
-            <Col span={16}>
-              <Tag color={assignmentMode === 'test' ? 'orange' : 'green'}>
-                {assignmentMode === 'test' ? '测试' : '正式'}
-              </Tag>
-            </Col>
-          </Row>
-          {isRestricted && (
-            <>
-              <Divider style={{ margin: '8px 0' }} />
-              <Alert
-                type="warning"
-                showIcon
-                icon={<WarningOutlined />}
-                style={{ marginBottom: 8 }}
-                message={`⚠ 限制品类: ${merchantRestrictions.map(r => r.label).join(', ')}`}
-                description="以下合规设置将自动应用到广告中，确保符合 Google Ads 政策。"
-              />
-              <div style={{ background: '#fffbe6', border: '1px solid #ffe58f', borderRadius: 6, padding: 12 }}>
-                <Space direction="vertical" size={8} style={{ width: '100%' }}>
-                  <Row align="middle">
-                    <Col span={10}>
-                      <Checkbox
-                        checked={complianceSettings.excludeMinors}
-                        onChange={e => setComplianceSettings(s => ({ ...s, excludeMinors: e.target.checked }))}
-                      >
-                        <Typography.Text strong style={{ fontSize: 12 }}>排除未成年人群</Typography.Text>
-                      </Checkbox>
-                    </Col>
-                    <Col span={14}>
-                      <Typography.Text type="secondary" style={{ fontSize: 11 }}>
-                        自动排除 18 岁以下受众（Google Ads 年龄定向）
-                      </Typography.Text>
-                    </Col>
-                  </Row>
-                  <Row align="middle">
-                    <Col span={10}>
-                      <Typography.Text strong style={{ fontSize: 12 }}>年龄定向范围</Typography.Text>
-                    </Col>
-                    <Col span={14}>
-                      <Select
-                        size="small"
-                        style={{ width: 180 }}
-                        value={complianceSettings.ageTargeting}
-                        onChange={v => setComplianceSettings(s => ({ ...s, ageTargeting: v }))}
-                        options={[
-                          { value: '21_65', label: '21-65岁（美国酒类法定年龄）' },
-                          { value: '25_65', label: '25-65岁（更保守）' },
-                          { value: '18_65', label: '18-65岁（部分国家法定年龄）' },
-                        ]}
-                      />
-                    </Col>
-                  </Row>
-                  {isAlcohol && (
-                    <Row align="middle">
-                      <Col span={10}>
-                        <Checkbox
-                          checked={complianceSettings.addResponsibleMsg}
-                          onChange={e => setComplianceSettings(s => ({ ...s, addResponsibleMsg: e.target.checked }))}
-                        >
-                          <Typography.Text strong style={{ fontSize: 12 }}>添加负责任饮酒声明</Typography.Text>
-                        </Checkbox>
-                      </Col>
-                      <Col span={14}>
-                        <Input
-                          size="small"
-                          value={complianceSettings.responsibleMsg}
-                          onChange={e => setComplianceSettings(s => ({ ...s, responsibleMsg: e.target.value }))}
-                          disabled={!complianceSettings.addResponsibleMsg}
-                          maxLength={90}
-                          style={{ fontSize: 11 }}
-                        />
-                      </Col>
-                    </Row>
-                  )}
-                  <Row>
-                    <Col span={24}>
-                      <Checkbox
-                        checked={complianceSettings.confirmCompliance}
-                        onChange={e => setComplianceSettings(s => ({ ...s, confirmCompliance: e.target.checked }))}
-                      >
-                        <Typography.Text style={{ fontSize: 12, color: '#d4380d' }}>
-                          我已阅读并理解 Google Ads 限制品类政策，确认广告内容合规
-                        </Typography.Text>
-                      </Checkbox>
-                    </Col>
-                  </Row>
-                </Space>
-              </div>
-            </>
-          )}
-          <Row>
-            <Col span={8}><Typography.Text strong>关键词</Typography.Text></Col>
-            <Col span={16}>{selectedKeywords.length} 个</Col>
-          </Row>
-          <Row>
-            <Col span={8}><Typography.Text strong>标题</Typography.Text></Col>
-            <Col span={16}>{editHeadlines.length} 个</Col>
-          </Row>
-          <Row>
-            <Col span={8}><Typography.Text strong>描述</Typography.Text></Col>
-            <Col span={16}>{editDescriptions.length} 个</Col>
-          </Row>
+        <Space direction="vertical" size={8} style={{ width: '100%' }}>
+          <Row><Col span={8}><Typography.Text strong>商家</Typography.Text></Col><Col span={16}><Tag color="blue">{merchantName}</Tag></Col></Row>
+          <Row><Col span={8}><Typography.Text strong>CID</Typography.Text></Col><Col span={16}>{formatCid(availableCid)}</Col></Row>
+          <Row><Col span={8}><Typography.Text strong>投放国家</Typography.Text></Col><Col span={16}><Tag color="cyan">{targetCountry}</Tag></Col></Row>
+          <Row><Col span={8}><Typography.Text strong>日预算</Typography.Text></Col><Col span={16}>${dailyBudget}</Col></Row>
+          <Row><Col span={8}><Typography.Text strong>出价策略</Typography.Text></Col><Col span={16}>{
+            biddingStrategy === 'MAXIMIZE_CLICKS' ? '尽可能多点击' :
+            biddingStrategy === 'MANUAL_CPC' ? '手动 CPC' :
+            biddingStrategy === 'TARGET_CPA' ? '目标 CPA' : '目标 ROAS'
+          }</Col></Row>
+          <Row><Col span={8}><Typography.Text strong>关键词</Typography.Text></Col><Col span={16}>{selectedKeywords.length} 个（{keywordMatchType === 'PHRASE' ? '词组' : keywordMatchType === 'BROAD' ? '广泛' : '完全'}匹配）</Col></Row>
+          <Row><Col span={8}><Typography.Text strong>标题/描述</Typography.Text></Col><Col span={16}>{editHeadlines.length} 标题 / {editDescriptions.length} 描述</Col></Row>
           <Divider style={{ margin: '8px 0' }} />
-          <Row align="middle">
-            <Col span={8}><Typography.Text strong>日预算 (USD)</Typography.Text></Col>
-            <Col span={16}>
-              <InputNumber
-                min={1}
-                max={1000}
-                value={dailyBudget}
-                onChange={setDailyBudget}
-                style={{ width: 120 }}
-                addonBefore="$"
-              />
-              {recommendedBudget && (
-                <Typography.Text type="secondary" style={{ marginLeft: 8, fontSize: 12 }}>
-                  AI 建议: ${recommendedBudget}
-                </Typography.Text>
-              )}
-            </Col>
-          </Row>
-          <Divider style={{ margin: '8px 0' }} />
-          <Typography.Text strong style={{ fontSize: 13 }}>广告素材（提升广告质量分）</Typography.Text>
-          <Row align="middle" style={{ marginTop: 6 }}>
-            <Col span={8}>
-              <Space size={4}>
-                <Switch size="small" checked={enableSitelinks} onChange={setEnableSitelinks} />
-                <Typography.Text>站内链接</Typography.Text>
-              </Space>
-            </Col>
-            <Col span={16}>
-              {enableSitelinks && sitelinks.length > 0 ? (
-                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                  {sitelinks.map(s => `${s.link_text}(${s.path})`).join(' / ')}
-                </Typography.Text>
-              ) : enableSitelinks ? (
-                <Typography.Text type="warning" style={{ fontSize: 12 }}>未获取到站内链接，将跳过</Typography.Text>
-              ) : null}
-            </Col>
-          </Row>
-          <Row align="middle" style={{ marginTop: 4 }}>
-            <Col span={8}>
-              <Space size={4}>
-                <Switch size="small" checked={enableCallouts} onChange={setEnableCallouts} />
-                <Typography.Text>宣传信息</Typography.Text>
-              </Space>
-            </Col>
-            <Col span={16}>
-              {enableCallouts && callouts.length > 0 ? (
-                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                  {callouts.join(' / ')}
-                </Typography.Text>
-              ) : enableCallouts ? (
-                <Typography.Text type="warning" style={{ fontSize: 12 }}>未获取到卖点信息，将跳过</Typography.Text>
-              ) : null}
-            </Col>
-          </Row>
-          <Row align="middle" style={{ marginTop: 4 }}>
-            <Col span={8}>
-              <Space size={4}>
-                <Switch size="small" checked={enableImages} onChange={setEnableImages} />
-                <Typography.Text>商家图片</Typography.Text>
-              </Space>
-            </Col>
-            <Col span={16}>
-              {enableImages && merchantImages.length > 0 ? (
-                <Space size={4}>
-                  {merchantImages.slice(0, 3).map((url, i) => (
-                    <img key={i} src={url} alt="" style={{ width: 32, height: 32, borderRadius: 4, objectFit: 'cover' }} />
-                  ))}
-                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                    {merchantImages.length} 张
-                  </Typography.Text>
-                </Space>
-              ) : enableImages ? (
-                <Typography.Text type="warning" style={{ fontSize: 12 }}>无可用图片，将跳过</Typography.Text>
-              ) : null}
-            </Col>
-          </Row>
-          <Row align="middle" style={{ marginTop: 4 }}>
-            <Col span={8}>
-              <Space size={4}>
-                <Switch size="small" checked={enableLogo} onChange={setEnableLogo} />
-                <Typography.Text>商家图标</Typography.Text>
-              </Space>
-            </Col>
-            <Col span={16}>
-              {enableLogo && merchantLogo ? (
-                <img src={merchantLogo} alt="logo" style={{ width: 24, height: 24, borderRadius: 4, objectFit: 'contain' }} />
-              ) : enableLogo ? (
-                <Typography.Text type="warning" style={{ fontSize: 12 }}>无可用图标，将跳过</Typography.Text>
-              ) : null}
-            </Col>
-          </Row>
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            点击确认后将通过 Google Ads API 创建广告系列、广告组和广告。
+          </Typography.Text>
         </Space>
       </Modal>
     </div>
