@@ -705,8 +705,6 @@ export default function AdCreationWizard() {
                   <span style={{ marginLeft: 8 }}>
                     {streamPhase === 'done' ? 'AI 分析完成' :
                      streamPhase === 'error' ? '生成出错' :
-                     streamPhase === 'analyzing' ? '正在分析历史数据...' :
-                     streamPhase === 'history' ? '历史数据分析完成' :
                      'AI 正在思考...'}
                   </span>
                 </div>
@@ -818,6 +816,115 @@ export default function AdCreationWizard() {
                       </div>
                     </div>
                   ))}
+
+                  {/* 站内链接 */}
+                  {sitelinks.length > 0 && (
+                    <>
+                      <Divider style={{ margin: '8px 0' }} />
+                      <Typography.Text strong>站内链接（Sitelinks）</Typography.Text>
+                      {sitelinks.map((sl, i) => (
+                        <div key={`sl-${i}`} style={{ marginBottom: 8, padding: '8px 12px', background: '#fafafa', borderRadius: 6, border: '1px solid #f0f0f0' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                            <Typography.Text strong style={{ minWidth: 28, color: '#999' }}>{i + 1}.</Typography.Text>
+                            <Input
+                              value={sl.link_text || ''}
+                              placeholder="链接文字（≤25字符）"
+                              maxLength={25}
+                              suffix={`${(sl.link_text || '').length}/25`}
+                              onChange={e => {
+                                const arr = [...sitelinks]
+                                arr[i] = { ...arr[i], link_text: e.target.value }
+                                setSitelinks(arr)
+                              }}
+                            />
+                          </div>
+                          <div style={{ display: 'flex', gap: 8, paddingLeft: 36 }}>
+                            <Input
+                              size="small"
+                              value={sl.desc1 || ''}
+                              placeholder="描述行1（≤35字符）"
+                              maxLength={35}
+                              onChange={e => {
+                                const arr = [...sitelinks]
+                                arr[i] = { ...arr[i], desc1: e.target.value }
+                                setSitelinks(arr)
+                              }}
+                            />
+                            <Input
+                              size="small"
+                              value={sl.desc2 || ''}
+                              placeholder="描述行2（≤35字符）"
+                              maxLength={35}
+                              onChange={e => {
+                                const arr = [...sitelinks]
+                                arr[i] = { ...arr[i], desc2: e.target.value }
+                                setSitelinks(arr)
+                              }}
+                            />
+                          </div>
+                          {sl.url && (
+                            <Typography.Text type="secondary" style={{ fontSize: 11, paddingLeft: 36 }}>
+                              🔗 {sl.url}
+                            </Typography.Text>
+                          )}
+                        </div>
+                      ))}
+                    </>
+                  )}
+
+                  {/* 宣传信息 */}
+                  {callouts.length > 0 && (
+                    <>
+                      <Divider style={{ margin: '8px 0' }} />
+                      <Typography.Text strong>宣传信息（Callouts）</Typography.Text>
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 4 }}>
+                        {callouts.map((c, i) => (
+                          <Input
+                            key={`co-${i}`}
+                            style={{ width: 220 }}
+                            value={c}
+                            placeholder={`宣传信息 ${i + 1}（≤25字符）`}
+                            maxLength={25}
+                            suffix={`${c.length}/25`}
+                            onChange={e => {
+                              const arr = [...callouts]
+                              arr[i] = e.target.value
+                              setCallouts(arr)
+                            }}
+                          />
+                        ))}
+                      </div>
+                    </>
+                  )}
+
+                  {/* 商家图片 */}
+                  {merchantImages.length > 0 && (
+                    <>
+                      <Divider style={{ margin: '8px 0' }} />
+                      <Typography.Text strong>商家图片</Typography.Text>
+                      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 4 }}>
+                        {merchantImages.map((img, i) => (
+                          <img key={`img-${i}`} src={img} alt={`商家图片${i + 1}`}
+                            style={{ width: 120, height: 120, objectFit: 'cover', borderRadius: 6, border: '1px solid #d9d9d9' }}
+                          />
+                        ))}
+                      </div>
+                    </>
+                  )}
+
+                  {/* 商家图标 */}
+                  {merchantLogo && (
+                    <>
+                      <Divider style={{ margin: '8px 0' }} />
+                      <Typography.Text strong>商家图标（Logo）</Typography.Text>
+                      <div style={{ marginTop: 4 }}>
+                        <img src={merchantLogo} alt="商家Logo"
+                          style={{ width: 80, height: 80, objectFit: 'contain', borderRadius: 6, border: '1px solid #d9d9d9', background: '#fff', padding: 4 }}
+                        />
+                      </div>
+                    </>
+                  )}
+
                   <Space>
                     <Button onClick={() => setStep(1)}>上一步</Button>
                     <Button type="primary" icon={<RocketOutlined />} onClick={() => setConfirmModalOpen(true)}>

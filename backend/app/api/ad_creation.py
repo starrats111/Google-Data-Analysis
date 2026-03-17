@@ -268,14 +268,9 @@ async def generate_ad_copy_stream(
         sse = lambda d: f"data: {json.dumps(d, ensure_ascii=False)}\n\n"
 
         if is_holiday:
-            yield sse({"phase": "analyzing", "text": f"🎉 节日营销模式 — {data.holiday_name}\n"})
-            yield sse({"phase": "history", "text": f"✓ 文案将贴合{data.holiday_name}节日氛围\n"})
+            yield sse({"phase": "thinking_start", "text": f"🎉 节日营销模式 — {data.holiday_name}\n✓ 文案将贴合{data.holiday_name}节日氛围\n"})
         else:
-            yield sse({"phase": "analyzing", "text": f"正在加载历史数据...\n"})
-            if history_summary:
-                yield sse({"phase": "history", "text": f"✓ {history_summary}\n"})
-            else:
-                yield sse({"phase": "history", "text": "✓ 基于行业经验生成\n"})
+            yield sse({"phase": "thinking_start", "text": ""})
 
         yield sse({
             "phase": "thinking_start",
