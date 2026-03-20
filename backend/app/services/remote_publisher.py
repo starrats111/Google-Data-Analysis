@@ -307,6 +307,67 @@ class RemotePublisher:
         except Exception:
             return False
 
+    def _extract_site_template(self, sftp: paramiko.SFTPClient, site_root: str) -> dict:
+        """从站点 index.html 中提取模板信息：CSS 路径、字体链接、header、footer、品牌名。
+        返回值供 _generate_article_html 使用，使生成的文章页面自动匹配目标站点风格。
+        """
+        template = {
+            "head_links": "",
+            "header_html": "",
+            "footer_html": "",
+            "brand_name": "Editorial",
+            "body_class": "",
+            "wrapper_open": "",
+            "wrapper_close": "",
+            "scripts": "",
+        }
+
+        try:
+            index_html = self._sftp_read(sftp, f"{site_root}/index.html")
+        except Exception:
+            return template
+
+        # 品牌名：从 <title> 中提取
+        title_m = re.search(r'<title>([^<]+)</title>', index_html)
+        if title_m:
+            raw = title_m.group(1).strip()
+            template["brand_name"] = raw.split(' - ')[0].split(' | ')[0].split(' –')[0].strip()
+
+        # body class
+        body_m = re.search(r'<body[^>]*class=["\']([^"\']*)["\']', index_html)
+        if body_m:
+            template["body_class"] = body_m.group(1)
+
+        # <head> 中的 link 标签（CSS、fonts、preconnect）
+        head_m = re.search(r'<head[^>]*>(.*?)</head>', index_html, re.DOTALL)
+        if head_m:
+            head_content = head_m.group(1)
+            links = re.findall(r'<link[^>]+(?:stylesheet|preconnect|fonts)[^>]*>', head_content)
+            template["head_links"] = "\n  ".join(links)
+
+        # <header>...</header>
+        header_m = re.search(r'(<header[^>]*>.*?</header>)', index_html, re.DOTALL)
+        if header_m:
+            template["header_html"] = header_m.group(1)
+
+        # <footer>...</footer>
+        footer_m = re.search(r'(<footer[^>]*>.*?</footer>)', index_html, re.DOTALL)
+        if footer_m:
+            template["footer_html"] = footer_m.group(1)
+
+        # 检测 body 下是否有包裹 div（如 <div class="ab-page-wrapper">）
+        wrapper_m = re.search(r'<body[^>]*>\s*(<div[^>]+class=["\'][^"\']*wrapper[^"\']*["\'][^>]*>)', index_html)
+        if wrapper_m:
+            template["wrapper_open"] = wrapper_m.group(1)
+            template["wrapper_close"] = "</div>"
+
+        # scripts（</body> 前的 <script> 标签）
+        scripts = re.findall(r'<script[^>]+src=["\'][^"\']+["\'][^>]*></script>', index_html)
+        if scripts:
+            template["scripts"] = "\n  ".join(scripts)
+
+        return template
+
     def detect_site_type(self, site_path: str) -> dict:
         """
         SSH 连接宝塔服务器，自动检测网站的文章管理架构。
@@ -935,13 +996,15 @@ class RemotePublisher:
         new_content = self._rebuild_js_array(main_js_content, var_name, posts)
         self._sftp_write(sftp, data_path, new_content)
 
-        # 生成文章详情页 HTML
+        # 从站点 index.html 提取模板信息（CSS、header、footer）
         category_name = self._get_category_name(article)
         date_label, read_time = self._get_date_and_readtime(article)
+        site_template = self._extract_site_template(sftp, site_root)
         html_content = self._generate_article_html(
             article, category_name, date_label, read_time,
             hero_path=image_paths["hero"],
             content_image_paths=image_paths["content"],
+            site_template=site_template,
         )
         html_path = f"{site_root}/post-{slug}.html"
         self._sftp_write(sftp, html_path, html_content)
@@ -1661,18 +1724,21 @@ class RemotePublisher:
         return s.replace("\\", "\\\\").replace("'", "\\'").replace("\n", "\\n").replace("\r", "")
 
     def _generate_article_html(self, article, category: str, date_label: str, read_time: int,
-                               hero_path: str = None, content_image_paths: List[str] = None) -> str:
-        """生成与 AuraBloom 原有文章完全一致的详情页 HTML"""
+                               hero_path: str = None, content_image_paths: List[str] = None,
+                               site_template: dict = None) -> str:
+        """生成文章详情页 HTML。
+        如果提供了 site_template（从站点 index.html 提取），则使用目标站点的
+        CSS/header/footer，保证文章页面与站点风格一致。
+        文章内容区域使用内联样式，确保即使 CSS 加载失败也能正确显示。
+        """
         title = self._html_escape(article.title)
         excerpt = self._html_escape(article.excerpt or "")
         hero_image = hero_path or article.featured_image or ""
         content_html = article.content or ""
 
-        # 清洗 content：去除 JSON 转义残留、\n 字面文本
         content_html = content_html.replace("\\n", "\n").replace("\\t", "\t")
         content_html = content_html.replace('\\"', '"').replace("\\/", "/")
         content_html = re.sub(r'(?<!\\)\\n', '\n', content_html)
-        # 去掉可能的 JSON 包裹残留
         content_html = re.sub(r'^\s*\{\s*"content"\s*:\s*"?', '', content_html)
         content_html = re.sub(r'"?\s*[,}]\s*"excerpt"[\s\S]*$', '', content_html)
         content_html = re.sub(r'"?\s*\}\s*$', '', content_html)
@@ -1681,172 +1747,84 @@ class RemotePublisher:
         if content_image_paths:
             content_html = self._insert_content_images(content_html, content_image_paths)
 
-        tags_list = []
-        if hasattr(article, "tags") and article.tags:
-            for at in article.tags:
-                if hasattr(at, "tag") and at.tag:
-                    tags_list.append(at.tag.name)
-
-        meta_pills = f'<span class="ab-inline-pill">Category: {self._html_escape(category)}</span>'
-        if tags_list:
-            theme_str = " &middot; ".join(self._html_escape(t) for t in tags_list)
-            meta_pills += f'\n              <span class="ab-inline-pill">Theme: {theme_str}</span>'
+        tpl = site_template or {}
+        brand = tpl.get("brand_name", "AuraBloom")
+        head_links = tpl.get("head_links", "")
+        header_html = tpl.get("header_html", "")
+        footer_html = tpl.get("footer_html", "")
+        body_class = tpl.get("body_class", "")
+        wrapper_open = tpl.get("wrapper_open", "")
+        wrapper_close = tpl.get("wrapper_close", "")
+        scripts = tpl.get("scripts", "")
 
         kicker = f'{self._html_escape(category)} &middot; {date_label} &middot; {read_time} min read'
 
-        aside_items = []
-        if tags_list:
-            for t in tags_list[:3]:
-                aside_items.append(f"              <li>{self._html_escape(t)}</li>")
-        aside_list = "\n".join(aside_items) if aside_items else ""
-        aside_section = f"""
-          <aside class="ab-aside-card">
-            <h3>About this story</h3>
-            <ul>
-              <li>Category: {self._html_escape(category)}</li>
-              <li>Reading time: approximately {read_time} minutes</li>
-{aside_list}
-            </ul>
-            <p class="ab-aside-meta">
-              Published on {date_label}. Discover more stories and gentle guides on <a href="index.html">AuraBloom</a>.
-            </p>
-          </aside>"""
+        # 如果没有从站点提取到模板，使用最小化的回退 head
+        if not head_links:
+            head_links = (
+                '<link rel="preconnect" href="https://fonts.googleapis.com" />\n'
+                '  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />\n'
+                '  <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@300;400;600;700&display=swap" rel="stylesheet" />'
+            )
+
+        body_attr = f' class="{body_class}"' if body_class else ""
 
         html = f'''<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>{title} &#8211; AuraBloom</title>
-  <link rel="stylesheet" href="assets/css/style.css" />
-  <link rel="preconnect" href="https://images.unsplash.com" />
-  <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@300;400;600;700&display=swap" rel="stylesheet" />
+  <title>{title} &#8211; {self._html_escape(brand)}</title>
+  {head_links}
 </head>
-<body class="ab-body">
-  <div class="ab-page-wrapper">
-    <header class="ab-header">
-      <div class="ab-header-inner">
-        <a href="index.html" class="ab-logo">
-          <div class="ab-logo-mark">AB</div>
-          <div class="ab-logo-text">
-            <span class="ab-logo-title">AuraBloom</span>
-            <span class="ab-logo-subtitle">Soft &amp; Warm Living</span>
-          </div>
-        </a>
-        <button class="ab-nav-toggle" aria-label="Toggle navigation">
-          <span></span><span></span><span></span>
-        </button>
-        <nav class="ab-nav">
-          <a href="index.html">Home</a>
-          <a href="index.html#categories">Categories</a>
-          <a href="index.html#latest" class="is-active">Blog</a>
-          <a href="products.html">Products</a>
-          <a href="about.html">About</a>
-          <a href="contact.html">Contact</a>
-        </nav>
-      </div>
-    </header>
+<body{body_attr}>
+  {wrapper_open}
+  {header_html}
 
-    <main class="ab-main">
-      <article class="ab-page">
-        <header class="ab-page-header">
-          <p class="ab-page-kicker">{kicker}</p>
-          <h1 class="ab-page-title">{title}</h1>
-          <p class="ab-page-subtitle">
+    <main>
+      <article>
+        <header style="padding:3rem 2rem 1.5rem;text-align:center;max-width:900px;margin:0 auto">
+          <p style="font-size:0.85rem;text-transform:uppercase;letter-spacing:1.5px;color:#888;margin-bottom:1rem">{kicker}</p>
+          <h1 style="font-size:2.5rem;line-height:1.2;margin-bottom:1rem">{title}</h1>
+          <p style="font-size:1.15rem;color:#666;line-height:1.6">
             {excerpt}
           </p>
         </header>
 
-        <div class="ab-page-grid">
-          <div class="ab-page-main">
-            <div class="ab-page-hero-img">
-              <img
-                src="{hero_image}"
-                alt="{title}"
-                loading="lazy"
-              />
-            </div>
-            <div class="ab-page-meta-row">
-              {meta_pills}
-            </div>
-
-            {content_html}
-
+        <div style="max-width:900px;margin:0 auto;padding:0 2rem 3rem">
+          <div style="margin-bottom:2rem;border-radius:12px;overflow:hidden">
+            <img
+              src="{hero_image}"
+              alt="{title}"
+              loading="lazy"
+              style="width:100%;height:auto;display:block"
+            />
           </div>
-{aside_section}
+          <div style="margin-bottom:2rem">
+            <span style="display:inline-block;padding:0.35rem 0.75rem;background:#f0ebe3;border-radius:20px;font-size:0.8rem;color:#666">Category: {self._html_escape(category)}</span>
+          </div>
+
+          <div class="article-content" style="font-size:1.1rem;line-height:1.8;color:#444">
+            {content_html}
+          </div>
+
+          <div style="margin-top:2.5rem;padding:1.5rem;background:#f9f6f1;border-radius:12px">
+            <p style="font-size:0.85rem;color:#888">
+              Category: {self._html_escape(category)} &middot;
+              Reading time: approximately {read_time} minutes
+            </p>
+            <p style="font-size:0.85rem;color:#888;margin-top:0.5rem">
+              Published on {date_label}. Discover more stories on <a href="index.html" style="color:#d4874b">{self._html_escape(brand)}</a>.
+            </p>
+          </div>
         </div>
       </article>
     </main>
 
-    <footer class="ab-footer">
-      <div class="ab-footer-inner">
-        <div class="ab-footer-brand">
-          <div class="ab-logo ab-logo-footer">
-            <div class="ab-logo-mark">AB</div>
-            <div class="ab-logo-text">
-              <span class="ab-logo-title">AuraBloom</span>
-              <span class="ab-logo-subtitle">Soft &amp; Warm Living</span>
-            </div>
-          </div>
-          <p class="ab-footer-copy">
-            Soft stories, calm visuals and gentle routines for every corner of your life.
-          </p>
-        </div>
+  {footer_html}
+  {wrapper_close}
 
-        <div class="ab-footer-links">
-          <div>
-            <h3>Explore</h3>
-            <a href="index.html#latest">Latest stories</a>
-            <a href="products.html">Product reviews</a>
-            <a href="about.html">About AuraBloom</a>
-            <a href="contact.html">Contact</a>
-          </div>
-          <div>
-            <h3>Categories</h3>
-            <a href="index.html#categories">Fashion &amp; Accessories</a>
-            <a href="index.html#categories">Health &amp; Beauty</a>
-            <a href="index.html#categories">Home &amp; Garden</a>
-            <a href="index.html#categories">Travel &amp; Stays</a>
-          </div>
-        </div>
-
-        <div class="ab-footer-social">
-          <h3>Stay connected</h3>
-          <div class="ab-social-widget">
-            <a href="https://www.instagram.com/aurabloom" aria-label="AuraBloom on Instagram" class="ab-social-icon">
-              <svg viewBox="0 0 24 24" aria-hidden="true">
-                <rect x="3" y="3" width="18" height="18" rx="5"></rect>
-                <circle cx="12" cy="12" r="4.2"></circle>
-                <circle cx="17.3" cy="6.7" r="1.1"></circle>
-              </svg>
-            </a>
-            <a href="https://www.pinterest.com/aurabloom" aria-label="AuraBloom on Pinterest" class="ab-social-icon">
-              <svg viewBox="0 0 24 24" aria-hidden="true">
-                <circle cx="12" cy="12" r="9"></circle>
-                <path d="M12 7.5c-2.5 0-4 1.7-4 3.7 0 1.5.9 2.7 2.5 2.7.4 0 .7-.2.8-.6l.3-1.2c.1-.3 0-.5-.2-.7-.4-.3-.6-.8-.6-1.3 0-1 .7-1.8 1.8-1.8 1 0 1.6.7 1.6 1.7 0 1.3-.6 2.3-1.5 2.3-.3 0-.6-.1-.7-.3l-.3 1.1-.2.8c-.1.3-.2.7-.2 1l1 .3c.3-1 .7-2.1.7-2.4.1-.2.1-.3.2-.5.2.3.7.5 1.1.5 1.4 0 2.6-1.4 2.6-3.4 0-2-1.5-3.7-3.9-3.7z" fill="#f8f5f2"></path>
-              </svg>
-            </a>
-            <a href="https://www.tiktok.com/@aurabloom" aria-label="AuraBloom on TikTok" class="ab-social-icon">
-              <svg viewBox="0 0 24 24" aria-hidden="true">
-                <path d="M15.5 5.1c.5.7 1.1 1.3 1.8 1.7.6.4 1.3.6 2 .7v2.5c-.8 0-1.6-.2-2.4-.5-.6-.3-1.2-.6-1.7-1.1v6.3c0 2.7-2.2 4.8-4.8 4.8S5.5 17.4 5.5 14.8 7.7 10 10.3 10c.4 0 .7 0 1 .1v2.6c-.3-.1-.6-.1-.9-.1-1.2 0-2.2 1-2.2 2.3s1 2.3 2.3 2.3 2.3-1 2.3-2.3V4.5h2.7v.6z"></path>
-              </svg>
-            </a>
-            <a href="https://www.youtube.com/@aurabloom" aria-label="AuraBloom on YouTube" class="ab-social-icon">
-              <svg viewBox="0 0 24 24" aria-hidden="true">
-                <rect x="3" y="7" width="18" height="10" rx="3"></rect>
-                <path d="M11 10v4l3.5-2z" fill="#f8f5f2"></path>
-              </svg>
-            </a>
-          </div>
-          <p class="ab-footer-meta">&copy; 2025 AuraBloom. All rights reserved.</p>
-        </div>
-      </div>
-    </footer>
-  </div>
-
-  <script src="assets/js/main.js"></script>
+  {scripts}
 </body>
 </html>'''
         return html
