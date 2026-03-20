@@ -1776,6 +1776,18 @@ class RemotePublisher:
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>{title} &#8211; {self._html_escape(brand)}</title>
   {head_links}
+  <style>
+    .article-content a {{
+      color: #D4874B;
+      font-weight: 700;
+      text-decoration: underline;
+      text-underline-offset: 2px;
+      transition: opacity 0.2s;
+    }}
+    .article-content a:hover {{
+      opacity: 0.75;
+    }}
+  </style>
 </head>
 <body{body_attr}>
   {wrapper_open}
