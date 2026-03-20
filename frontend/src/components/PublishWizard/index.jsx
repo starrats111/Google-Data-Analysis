@@ -1262,6 +1262,27 @@ const PublishWizard = ({ drawerMode = false }) => {
 
                 <Row gutter={16} style={{ marginTop: 20 }}>
                   <Col span={8}>
+                    <Typography.Title level={5}><GlobalOutlined /> 国家代码 <Typography.Text type="danger">*</Typography.Text></Typography.Title>
+                    <Tooltip title="输入国家代码，自动映射文章语言。如 de=德语, fr=法语, us=英语">
+                      <Input
+                        placeholder="如 de, us, fr"
+                        value={countryCode}
+                        onChange={e => handleCountryCodeChange(e.target.value)}
+                        maxLength={3}
+                        size="large"
+                        style={{ textTransform: 'lowercase' }}
+                      />
+                    </Tooltip>
+                    {countryCode && COUNTRY_LANG_MAP[countryCode.toLowerCase()] && (
+                      <Tag color="blue" style={{ marginTop: 4 }}>语言: {COUNTRY_LANG_MAP[countryCode.toLowerCase()]}</Tag>
+                    )}
+                    {countryCode && !COUNTRY_LANG_MAP[countryCode.toLowerCase()] && (
+                      <div style={{ marginTop: 4 }}>
+                        <Select value={language} onChange={setLanguage} options={LANGUAGES} style={{ width: '100%' }} placeholder="选择语言" size="small" />
+                      </div>
+                    )}
+                  </Col>
+                  <Col span={8}>
                     <Typography.Title level={5}><ClockCircleOutlined /> 发布时间</Typography.Title>
                     <DatePicker
                       showTime
