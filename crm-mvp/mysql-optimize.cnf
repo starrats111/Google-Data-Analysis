@@ -1,0 +1,47 @@
+# ─── MySQL/MariaDB 优化配置 ───
+# 适配 2核2G 服务器
+# 将此文件内容追加到 /etc/mysql/my.cnf 或 /etc/my.cnf
+#
+# 内存分配策略（2G 总内存）：
+#   系统 + nginx:  ~400MB
+#   Node.js:       ~768MB (max-old-space-size)
+#   MySQL:         ~500MB
+#   缓冲区:        ~300MB
+
+[mysqld]
+# ─── 连接数限制 ───
+max_connections = 20          # CRM 只需要 3-5 个连接，留余量给管理工具
+wait_timeout = 300            # 空闲连接 5 分钟后断开
+interactive_timeout = 300
+
+# ─── InnoDB 缓冲池 ───
+# 2G 内存下分配 256MB（默认 128MB）
+innodb_buffer_pool_size = 256M
+innodb_buffer_pool_instances = 1
+
+# ─── 日志 ───
+innodb_log_file_size = 48M    # 默认 48M 够用
+innodb_log_buffer_size = 8M
+
+# ─── 查询缓存（MariaDB 支持） ───
+query_cache_type = 1
+query_cache_size = 32M
+query_cache_limit = 2M
+
+# ─── 临时表 ───
+tmp_table_size = 32M
+max_heap_table_size = 32M
+
+# ─── 排序/连接缓冲 ───
+sort_buffer_size = 256K       # 每连接，不要太大
+join_buffer_size = 256K
+read_buffer_size = 128K
+read_rnd_buffer_size = 256K
+
+# ─── 线程 ───
+thread_cache_size = 8
+
+# ─── 慢查询日志 ───
+slow_query_log = 1
+slow_query_log_file = /var/log/mysql/slow.log
+long_query_time = 2           # 超过 2 秒记录

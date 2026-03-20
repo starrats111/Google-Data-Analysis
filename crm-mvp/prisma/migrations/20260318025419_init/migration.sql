@@ -1,0 +1,2 @@
+-- This migration was superseded by 20260318110332_init_crm_mvp_tables
+-- Kept empty to preserve migration history

@@ -1,0 +1,5 @@
+---
+alwaysApply: true
+---
+
+-CRM 数据库是 MySQL，库名 google-data-analysis，影子库名google-data-analysis_shadow

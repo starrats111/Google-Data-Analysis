@@ -1,0 +1,10 @@
+---
+description: 
+alwaysApply: true
+---
+
+- 我的开发框架是 Next.js 请直接使⽤
+- Orm 框架是 Primsa 7 请直接使⽤
+- 前端开发框架是 Antdesgin 请直接使⽤
+- 不要直接操作我的数据库，要采⽤标准的 Prisma 流程来操作
+- 不要直接执⾏数据库结构变更，要采⽤标准的 Prisma Migration 流程来操作

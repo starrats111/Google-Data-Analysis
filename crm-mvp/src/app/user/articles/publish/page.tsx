@@ -1,0 +1,634 @@
+"use client";
+
+import { useState, useEffect, useCallback } from "react";
+import { useSearchParams } from "next/navigation";
+import {
+  Card, Steps, Form, Select, Button, Typography, Space, App, Spin, Image,
+  Checkbox, DatePicker, Row, Col, Tag, Result, Input,
+} from "antd";
+import {
+  ShopOutlined, GlobalOutlined, CameraOutlined, FileTextOutlined,
+  CalendarOutlined, SendOutlined, CheckCircleOutlined, LoadingOutlined, SaveOutlined,
+} from "@ant-design/icons";
+import { sanitizeHtml } from "@/lib/sanitize";
+import dayjs from "dayjs";
+import utc from "dayjs/plugin/utc";
+import timezone from "dayjs/plugin/timezone";
+
+dayjs.extend(utc);
+dayjs.extend(timezone);
+const TZ = "Asia/Shanghai";
+
+const { Title, Text, Paragraph } = Typography;
+
+interface Merchant {
+  id: string; merchant_name: string; platform: string; merchant_id: string;
+  merchant_url: string | null; target_country: string | null;
+  supported_regions: string[] | { code: string }[] | null;
+  platform_connection_id?: string | null;
+}
+
+interface PlatformConnection {
+  id: string; platform: string; account_name: string;
+  publish_site_id: string | null;
+}
+
+interface Site {
+  id: string; site_name: string; domain: string; verified: number; status: string;
+}
+
+interface CrawlResult {
+  images: string[];
+  title: string;
+  description: string;
+  selling_points: string[];
+}
+
+interface ArticlePreview {
+  id: string;
+  title: string;
+  content: string;
+  slug: string;
+}
+
+export default function ArticlePublishPage() {
+  const { message } = App.useApp();
+  const searchParams = useSearchParams();
+  const articleSlugFromUrl = searchParams.get("slug");
+  const [step, setStep] = useState(0);
+  const [merchants, setMerchants] = useState<Merchant[]>([]);
+  const [sites, setSites] = useState<Site[]>([]);
+  const [platformConns, setPlatformConns] = useState<PlatformConnection[]>([]);
+  const [loadingArticle, setLoadingArticle] = useState(false);
+  const [boundSiteName, setBoundSiteName] = useState("");
+
+  // Step 0: 选择商家
+  const [selectedMerchant, setSelectedMerchant] = useState<Merchant | null>(null);
+  // Step 1: 确认国家
+  const [country, setCountry] = useState("US");
+  const [language, setLanguage] = useState("en");
+  // Step 2: 爬取中
+  const [crawling, setCrawling] = useState(false);
+  const [crawlResult, setCrawlResult] = useState<CrawlResult | null>(null);
+  // Step 3: 确认图片
+  const [selectedImages, setSelectedImages] = useState<string[]>([]);
+  // Step 4: 生成文章预览
+  const [generating, setGenerating] = useState(false);
+  const [articlePreview, setArticlePreview] = useState<ArticlePreview | null>(null);
+  // Step 5: 确认时间 & 发布
+  const [publishTime, setPublishTime] = useState(dayjs().tz(TZ));
+  const [selectedSite, setSelectedSite] = useState<string>("");
+  const [publishing, setPublishing] = useState(false);
+  const [savingDraft, setSavingDraft] = useState(false);
+  const [publishResult, setPublishResult] = useState<{ url: string } | null>(null);
+
+  useEffect(() => {
+    // 获取已领取的商家
+    fetch("/api/user/merchants?tab=claimed&pageSize=200")
+      .then((r) => r.json())
+      .then((res) => {
+        if (res.code === 0) setMerchants(res.data.merchants || []);
+      }).catch(() => {});
+    // 获取站点
+    fetch("/api/user/publish-sites")
+      .then((r) => r.json())
+      .then((res) => {
+        if (res.code === 0) setSites(res.data || []);
+      }).catch(() => {});
+    // 获取平台连接（含绑定站点）
+    fetch("/api/user/settings/platforms")
+      .then((r) => r.json())
+      .then((res) => {
+        if (res.code === 0) setPlatformConns(res.data || []);
+      }).catch(() => {});
+  }, []);
+
+  // 选择商家后，自动根据平台连接匹配绑定站点
+  useEffect(() => {
+    if (!selectedMerchant || platformConns.length === 0 || sites.length === 0) return;
+    const conn = platformConns.find((c) => c.platform === selectedMerchant.platform && c.publish_site_id);
+    if (conn?.publish_site_id) {
+      const siteId = String(conn.publish_site_id);
+      setSelectedSite(siteId);
+      const site = sites.find((s) => String(s.id) === siteId);
+      setBoundSiteName(site ? `${site.site_name} (${site.domain})` : "");
+    } else {
+      setSelectedSite("");
+      setBoundSiteName("");
+    }
+  }, [selectedMerchant, platformConns, sites]);
+
+  // 从广告提交页跳转过来时，通过 slug 加载已生成的文章
+  useEffect(() => {
+    if (!articleSlugFromUrl) return;
+    setLoadingArticle(true);
+
+    const pollArticle = async (retries = 0) => {
+      try {
+        const res = await fetch(`/api/user/articles?slug=${encodeURIComponent(articleSlugFromUrl)}&page=1&pageSize=1`).then((r) => r.json());
+        const articles = res.data?.articles || [];
+        const article = articles[0];
+
+        if (article && article.status !== "generating") {
+          setArticlePreview({
+            id: article.id,
+            title: article.title || "无标题",
+            content: article.content || "",
+            slug: article.slug || "",
+          });
+          if (article.publish_site_id) {
+            setSelectedSite(String(article.publish_site_id));
+            // 查找站点名称
+            fetch("/api/user/publish-sites").then((r) => r.json()).then((sRes) => {
+              const allSites = sRes.data || [];
+              const s = allSites.find((s: any) => String(s.id) === String(article.publish_site_id));
+              if (s) setBoundSiteName(`${s.site_name} (${s.domain})`);
+            }).catch(() => {});
+          }
+          setStep(4);
+          setLoadingArticle(false);
+        } else if (article && article.status === "generating" && retries < 40) {
+          setTimeout(() => pollArticle(retries + 1), 3000);
+        } else if (!article && retries < 5) {
+          setTimeout(() => pollArticle(retries + 1), 2000);
+        } else {
+          setLoadingArticle(false);
+          if (article?.status === "generating") {
+            message.info("文章仍在生成中，请稍后在文章列表中查看");
+          }
+        }
+      } catch {
+        setLoadingArticle(false);
+      }
+    };
+
+    pollArticle();
+  }, [articleSlugFromUrl, message]);
+
+  // Step 2: 开始爬取商家信息
+  const handleCrawl = useCallback(async () => {
+    if (!selectedMerchant) return;
+    setCrawling(true);
+    try {
+      const res = await fetch("/api/user/articles/crawl", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          merchant_id: selectedMerchant.id,
+          merchant_url: selectedMerchant.merchant_url,
+          merchant_name: selectedMerchant.merchant_name,
+          country,
+        }),
+      }).then((r) => r.json());
+
+      if (res.code === 0) {
+        setCrawlResult(res.data);
+        setSelectedImages(res.data.images?.slice(0, 5) || []);
+        setStep(3);
+      } else {
+        message.error(res.message || "爬取失败");
+      }
+    } catch {
+      message.error("爬取请求失败");
+    } finally {
+      setCrawling(false);
+    }
+  }, [selectedMerchant, country, message]);
+
+  // Step 4: 生成文章
+  const handleGenerate = useCallback(async () => {
+    if (!selectedMerchant || !crawlResult) return;
+    setGenerating(true);
+    try {
+      const res = await fetch("/api/user/articles", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          user_merchant_id: selectedMerchant.id,
+          language,
+          country,
+          images: selectedImages,
+          crawl_data: crawlResult,
+          article_type: "review",
+          article_length: "medium",
+        }),
+      }).then((r) => r.json());
+
+      if (res.code === 0 && res.data?.id) {
+        // 轮询等待文章生成完成
+        const articleId = res.data.id;
+        let retries = 0;
+        const poll = async () => {
+          const check = await fetch(`/api/user/articles?page=1&pageSize=1`).then((r) => r.json());
+          const article = check.data?.articles?.find((a: any) => String(a.id) === String(articleId));
+          if (article && article.status !== "generating") {
+            setArticlePreview({
+              id: article.id,
+              title: article.title || "无标题",
+              content: article.content || "",
+              slug: article.slug || "",
+            });
+            setStep(4);
+            setGenerating(false);
+          } else if (retries < 60) {
+            retries++;
+            setTimeout(poll, 3000);
+          } else {
+            message.warning("文章生成超时，请在文章列表中查看");
+            setGenerating(false);
+          }
+        };
+        setTimeout(poll, 5000);
+      } else {
+        message.error(res.message || "生成失败");
+        setGenerating(false);
+      }
+    } catch {
+      message.error("请求失败");
+      setGenerating(false);
+    }
+  }, [selectedMerchant, crawlResult, selectedImages, language, country, message]);
+
+  // 存入草稿
+  const handleSaveDraft = useCallback(async () => {
+    if (!articlePreview) return;
+    setSavingDraft(true);
+    try {
+      const res = await fetch("/api/user/articles", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          id: articlePreview.id,
+          status: "draft",
+          publish_site_id: selectedSite || undefined,
+        }),
+      }).then((r) => r.json());
+      if (res.code === 0) {
+        message.success("已存入草稿，可在文章管理中查看");
+      } else {
+        message.error(res.message || "保存失败");
+      }
+    } catch {
+      message.error("保存请求失败");
+    } finally {
+      setSavingDraft(false);
+    }
+  }, [articlePreview, selectedSite, message]);
+
+  // Step 5: 发布
+  const handlePublish = useCallback(async () => {
+    if (!articlePreview || !selectedSite) {
+      message.warning("请选择发布站点");
+      return;
+    }
+    setPublishing(true);
+    try {
+      // 如果设置了未来时间，先更新文章的 published_at
+      if (publishTime.isAfter(dayjs().tz(TZ))) {
+        await fetch("/api/user/articles", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ id: articlePreview.id, status: "preview" }),
+        });
+      }
+
+      const res = await fetch("/api/user/articles/publish-to-site", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          article_id: articlePreview.id,
+          site_id: selectedSite,
+        }),
+      }).then((r) => r.json());
+
+      if (res.code === 0) {
+        setPublishResult({ url: res.data?.url || "" });
+        setStep(5);
+        message.success("发布成功！");
+      } else {
+        message.error(res.message || "发布失败");
+      }
+    } catch {
+      message.error("发布请求失败");
+    } finally {
+      setPublishing(false);
+    }
+  }, [articlePreview, selectedSite, publishTime, message]);
+
+  const activeSites = sites.filter((s) => s.status === "active" && s.verified === 1);
+
+  const COUNTRY_LANG: Record<string, string> = {
+    US: "en", GB: "en", UK: "en", CA: "en", AU: "en", NZ: "en", IE: "en", SG: "en",
+    DE: "de", AT: "de", CH: "de",
+    FR: "fr", BE: "fr",
+    ES: "es", MX: "es", AR: "es", CL: "es", CO: "es",
+    IT: "it", PT: "pt", BR: "pt", NL: "nl",
+    JP: "ja", KR: "ko",
+    SE: "sv", NO: "no", DK: "da", FI: "fi", PL: "pl", CZ: "cs",
+    TR: "tr", TH: "th", VN: "vi", ID: "id",
+    RU: "ru", IN: "en", PH: "en",
+  };
+  const LANG_NAME: Record<string, string> = {
+    en: "English", de: "Deutsch", fr: "Français", es: "Español",
+    it: "Italiano", pt: "Português", nl: "Nederlands", ja: "日本語",
+    ko: "한국어", sv: "Svenska", no: "Norsk", da: "Dansk", fi: "Suomi",
+    pl: "Polski", cs: "Čeština", tr: "Türkçe", th: "ไทย", vi: "Tiếng Việt",
+    id: "Bahasa Indonesia", ru: "Русский",
+  };
+  const getLang = (c: string) => COUNTRY_LANG[c.toUpperCase()] || "en";
+
+  const countryOptions = [
+    { value: "US", label: "美国 (US)" },
+    { value: "GB", label: "英国 (GB)" },
+    { value: "AU", label: "澳洲 (AU)" },
+    { value: "CA", label: "加拿大 (CA)" },
+    { value: "NZ", label: "新西兰 (NZ)" },
+    { value: "DE", label: "德国 (DE)" },
+    { value: "FR", label: "法国 (FR)" },
+    { value: "ES", label: "西班牙 (ES)" },
+    { value: "IT", label: "意大利 (IT)" },
+    { value: "NL", label: "荷兰 (NL)" },
+    { value: "JP", label: "日本 (JP)" },
+    { value: "KR", label: "韩国 (KR)" },
+    { value: "BR", label: "巴西 (BR)" },
+    { value: "MX", label: "墨西哥 (MX)" },
+    { value: "SE", label: "瑞典 (SE)" },
+    { value: "NO", label: "挪威 (NO)" },
+    { value: "DK", label: "丹麦 (DK)" },
+    { value: "FI", label: "芬兰 (FI)" },
+    { value: "PL", label: "波兰 (PL)" },
+    { value: "AT", label: "奥地利 (AT)" },
+    { value: "CH", label: "瑞士 (CH)" },
+    { value: "BE", label: "比利时 (BE)" },
+    { value: "IE", label: "爱尔兰 (IE)" },
+    { value: "PT", label: "葡萄牙 (PT)" },
+    { value: "SG", label: "新加坡 (SG)" },
+    { value: "IN", label: "印度 (IN)" },
+  ];
+
+  // 从广告页跳转过来时显示加载状态
+  if (loadingArticle) {
+    return (
+      <div>
+        <Title level={4}><FileTextOutlined /> 文章发布</Title>
+        <Card style={{ textAlign: "center", padding: 48 }}>
+          <Spin size="large" tip="正在加载已生成的文章...">
+            <div style={{ minHeight: 200 }} />
+          </Spin>
+          <Text type="secondary" style={{ display: "block", marginTop: 16 }}>
+            广告已成功提交到 Google Ads，正在准备文章发布...
+          </Text>
+        </Card>
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      <Title level={4}><FileTextOutlined /> {articleSlugFromUrl ? "文章发布" : "快速发布文章"}</Title>
+
+      <Steps
+        current={step}
+        size="small"
+        style={{ marginBottom: 24 }}
+        items={[
+          { title: "选择商家", icon: <ShopOutlined /> },
+          { title: "确认国家", icon: <GlobalOutlined /> },
+          { title: "爬取数据", icon: crawling ? <LoadingOutlined /> : <CameraOutlined /> },
+          { title: "确认图片", icon: <CameraOutlined /> },
+          { title: "预览文章", icon: <FileTextOutlined /> },
+          { title: "发布", icon: <SendOutlined /> },
+        ]}
+      />
+
+      {/* Step 0: 选择商家 */}
+      {step === 0 && (
+        <Card>
+          <Form layout="vertical" style={{ maxWidth: 600 }}>
+            <Form.Item label="选择推广商家" required>
+              <Select
+                placeholder="搜索并选择已领取的商家"
+                showSearch
+                optionFilterProp="label"
+                style={{ width: "100%" }}
+                onChange={(v) => {
+                  const m = merchants.find((m) => m.id === v);
+                  setSelectedMerchant(m || null);
+                  if (m?.target_country) {
+                    setCountry(m.target_country);
+                    setLanguage(getLang(m.target_country));
+                  }
+                }}
+                options={merchants.map((m) => ({
+                  value: m.id,
+                  label: `${m.merchant_name} [${m.platform}] (MID: ${m.merchant_id})`,
+                }))}
+              />
+            </Form.Item>
+            {selectedMerchant && (
+              <div style={{ marginBottom: 16, padding: 12, background: "#f6f8fa", borderRadius: 8 }}>
+                <Space direction="vertical" size={4}>
+                  <Text strong>{selectedMerchant.merchant_name}</Text>
+                  <Space>
+                    <Tag color="blue">{selectedMerchant.platform}</Tag>
+                    <Text type="secondary">MID: {selectedMerchant.merchant_id}</Text>
+                  </Space>
+                  {selectedMerchant.merchant_url && (
+                    <Text type="secondary" style={{ fontSize: 12 }}>{selectedMerchant.merchant_url}</Text>
+                  )}
+                </Space>
+              </div>
+            )}
+            <Button type="primary" disabled={!selectedMerchant} onClick={() => setStep(1)}>
+              下一步
+            </Button>
+          </Form>
+        </Card>
+      )}
+
+      {/* Step 1: 确认国家 */}
+      {step === 1 && (
+        <Card>
+          <Form layout="vertical" style={{ maxWidth: 600 }}>
+            <Form.Item label="目标国家" required>
+              <Select
+                value={country}
+                showSearch
+                optionFilterProp="label"
+                onChange={(v) => {
+                  setCountry(v);
+                  setLanguage(getLang(v));
+                }}
+                options={countryOptions}
+              />
+            </Form.Item>
+            <div style={{ marginBottom: 16, padding: "8px 12px", background: "#f6f8fa", borderRadius: 6 }}>
+              <Text type="secondary">文章语言：</Text>
+              <Text strong>{LANG_NAME[getLang(country)] || "English"}</Text>
+            </div>
+            <Space>
+              <Button onClick={() => setStep(0)}>上一步</Button>
+              <Button type="primary" onClick={() => { setStep(2); handleCrawl(); }}>
+                开始爬取
+              </Button>
+            </Space>
+          </Form>
+        </Card>
+      )}
+
+      {/* Step 2: 爬取中 */}
+      {step === 2 && (
+        <Card style={{ textAlign: "center", padding: 48 }}>
+          <Spin size="large" tip="正在爬取商家信息和图片..." spinning={crawling}>
+            <div style={{ minHeight: 200 }}>
+              {!crawling && crawlResult && (
+                <Result status="success" title="爬取完成" subTitle={`获取到 ${crawlResult.images?.length || 0} 张图片`} />
+              )}
+              {!crawling && !crawlResult && (
+                <Result status="warning" title="爬取未开始" extra={<Button type="primary" onClick={handleCrawl}>重新爬取</Button>} />
+              )}
+            </div>
+          </Spin>
+        </Card>
+      )}
+
+      {/* Step 3: 确认图片 */}
+      {step === 3 && crawlResult && (
+        <Card>
+          <Title level={5}>选择文章配图（已选 {selectedImages.length} 张）</Title>
+          <Text type="secondary" style={{ display: "block", marginBottom: 16 }}>
+            从爬取结果中选择要在文章中使用的图片
+          </Text>
+          <Row gutter={[12, 12]} style={{ marginBottom: 24 }}>
+            {(crawlResult.images || []).map((img, i) => (
+              <Col key={i} xs={12} sm={8} md={6} lg={4}>
+                <div
+                  style={{
+                    border: selectedImages.includes(img) ? "2px solid #1677ff" : "2px solid #f0f0f0",
+                    borderRadius: 8, padding: 4, cursor: "pointer", position: "relative",
+                  }}
+                  onClick={() => {
+                    setSelectedImages((prev) =>
+                      prev.includes(img) ? prev.filter((u) => u !== img) : [...prev, img]
+                    );
+                  }}
+                >
+                  <Image src={img} alt={`img-${i}`} width="100%" height={120} style={{ objectFit: "cover", borderRadius: 6 }} preview={false} />
+                  {selectedImages.includes(img) && (
+                    <CheckCircleOutlined style={{ position: "absolute", top: 8, right: 8, fontSize: 20, color: "#1677ff" }} />
+                  )}
+                </div>
+              </Col>
+            ))}
+          </Row>
+          {crawlResult.images?.length === 0 && (
+            <Text type="secondary">未爬取到图片，将使用默认配图</Text>
+          )}
+          <Space>
+            <Button onClick={() => setStep(1)}>上一步</Button>
+            <Button type="primary" loading={generating} onClick={handleGenerate}>
+              {generating ? "生成中..." : "生成文章"}
+            </Button>
+          </Space>
+        </Card>
+      )}
+
+      {/* Step 4: 文章预览 */}
+      {step === 4 && articlePreview && (
+        <Card>
+          <Title level={5}>文章预览</Title>
+          <div style={{
+            border: "1px solid #e8e8e8", borderRadius: 8, padding: 24, marginBottom: 24,
+            maxHeight: 500, overflowY: "auto", background: "#fafafa",
+          }}>
+            <Title level={3}>{articlePreview.title}</Title>
+            <div dangerouslySetInnerHTML={{ __html: sanitizeHtml(articlePreview.content) }} />
+          </div>
+
+          <Form layout="vertical" style={{ maxWidth: 600 }}>
+            {boundSiteName ? (
+              <Form.Item label="发布站点">
+                <div style={{ padding: "8px 12px", background: "#f6ffed", border: "1px solid #b7eb8f", borderRadius: 6 }}>
+                  <CheckCircleOutlined style={{ color: "#52c41a", marginRight: 8 }} />
+                  <Text strong>{boundSiteName}</Text>
+                  <Text type="secondary" style={{ marginLeft: 8, fontSize: 12 }}>（平台绑定站点）</Text>
+                </div>
+              </Form.Item>
+            ) : (
+              <Form.Item label="发布站点" required>
+                <Select
+                  placeholder="选择发布站点（建议在个人设置中为平台绑定站点）"
+                  value={selectedSite || undefined}
+                  onChange={setSelectedSite}
+                  options={activeSites.map((s) => ({ value: s.id, label: `${s.site_name} (${s.domain})` }))}
+                />
+              </Form.Item>
+            )}
+            <Form.Item label="发布时间">
+              <DatePicker
+                showTime
+                value={publishTime}
+                onChange={(v) => v && setPublishTime(v)}
+                style={{ width: "100%" }}
+              />
+            </Form.Item>
+          </Form>
+
+          <Space>
+            <Button onClick={() => setStep(3)}>上一步</Button>
+            <Button icon={<SaveOutlined />} loading={savingDraft} onClick={handleSaveDraft}>
+              存入草稿
+            </Button>
+            <Button type="primary" icon={<SendOutlined />} loading={publishing} onClick={handlePublish}>
+              确认发布
+            </Button>
+          </Space>
+        </Card>
+      )}
+
+      {/* Step 5: 发布成功 */}
+      {step === 5 && (
+        <Card>
+          <Result
+            status="success"
+            title="文章发布成功！"
+            subTitle={publishResult?.url ? `文章地址: ${publishResult.url}` : "文章已发布到站点"}
+            extra={[
+              publishResult?.url && (
+                <Button key="view" type="primary" onClick={() => window.open(publishResult.url, "_blank")}>
+                  查看文章
+                </Button>
+              ),
+              <Button key="list" onClick={() => window.location.href = "/user/articles"}>
+                文章列表
+              </Button>,
+              <Button key="new" onClick={() => {
+                setStep(0);
+                setSelectedMerchant(null);
+                setCrawlResult(null);
+                setArticlePreview(null);
+                setPublishResult(null);
+                setSelectedImages([]);
+              }}>
+                继续发布
+              </Button>,
+            ].filter(Boolean)}
+          />
+        </Card>
+      )}
+
+      {/* 生成中遮罩 */}
+      {generating && step === 3 && (
+        <div style={{
+          position: "fixed", top: 0, left: 0, right: 0, bottom: 0,
+          background: "rgba(255,255,255,0.8)", zIndex: 1000,
+          display: "flex", alignItems: "center", justifyContent: "center",
+        }}>
+          <Spin size="large" tip="AI 正在生成文章，请稍候...">
+            <div style={{ width: 300, height: 100 }} />
+          </Spin>
+        </div>
+      )}
+    </div>
+  );
+}

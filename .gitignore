@@ -1,4 +1,5 @@
-# 参考源码（不纳入版本控制）
+# 归档代码（不纳入版本控制）
+_archive_data_analysis/
 Ediora - 副本/
 
 # 包含密钥的文件/目录
@@ -7,3 +8,10 @@ backend/scripts/_check_parcel.py
 backend/scripts/_check_repos.py
 backend/scripts/_list_repos.py
 backend/scripts/_search_delivery.py
+
+# 临时迁移工具
+_ssh_exec.py
+_ssh_query.py
+_ssh_schema.py
+_ssh_setup_db.py
+_migration_script.py

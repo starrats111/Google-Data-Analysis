@@ -1,0 +1,630 @@
+// CRM SaaS MVP — Prisma Schema
+// 基于 CRM_MVP_数据库设计.sql 生成
+// 规则：无外键约束、软删除、含 created_at / updated_at
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "mysql"
+}
+
+// -----------------------------------------------------------
+// 0. 团队/小组表
+// -----------------------------------------------------------
+model teams {
+  id         BigInt   @id @default(autoincrement()) @db.UnsignedBigInt
+  team_code  String   @unique(map: "uk_team_code") @db.VarChar(20)
+  team_name  String   @db.VarChar(50)
+  leader_id  BigInt?  @db.UnsignedBigInt
+  is_deleted Int      @default(0) @db.TinyInt
+  created_at DateTime @default(now()) @db.DateTime(0)
+  updated_at DateTime @default(now()) @updatedAt @db.DateTime(0)
+}
+
+// -----------------------------------------------------------
+// 1. 用户表
+// -----------------------------------------------------------
+model users {
+  id             BigInt   @id @default(autoincrement()) @db.UnsignedBigInt
+  username       String   @unique(map: "uk_username") @db.VarChar(64)
+  password_hash  String   @db.VarChar(255)
+  plain_password String?  @db.VarChar(128)
+  role           String   @default("user") @db.VarChar(16)
+  status         String   @default("active") @db.VarChar(16)
+  team_id        BigInt?  @db.UnsignedBigInt
+  display_name   String?  @db.VarChar(50)
+  is_deleted     Int      @default(0) @db.TinyInt
+  created_at     DateTime @default(now()) @db.DateTime(0)
+  updated_at     DateTime @default(now()) @updatedAt @db.DateTime(0)
+
+  @@index([team_id], map: "idx_team_id")
+}
+
+// -----------------------------------------------------------
+// 2. AI 供应商表
+// -----------------------------------------------------------
+model ai_providers {
+  id            BigInt   @id @default(autoincrement()) @db.UnsignedBigInt
+  provider_name String   @db.VarChar(32)
+  api_key       String   @db.Text
+  api_base_url  String?  @db.VarChar(512)
+  status        String   @default("active") @db.VarChar(16)
+  is_deleted    Int      @default(0) @db.TinyInt
+  created_at    DateTime @default(now()) @db.DateTime(0)
+  updated_at    DateTime @default(now()) @updatedAt @db.DateTime(0)
+}
+
+// -----------------------------------------------------------
+// 3. AI 场景模型分配表
+// -----------------------------------------------------------
+model ai_model_configs {
+  id          BigInt   @id @default(autoincrement()) @db.UnsignedBigInt
+  scene       String   @db.VarChar(32)
+  provider_id BigInt   @db.UnsignedBigInt
+  model_name  String   @db.VarChar(64)
+  max_tokens  Int?     @default(4096) @db.UnsignedInt
+  temperature Decimal? @default(0.70) @db.Decimal(3, 2)
+  is_active   Int      @default(1) @db.TinyInt
+  priority    Int      @default(1) @db.UnsignedTinyInt
+  is_deleted  Int      @default(0) @db.TinyInt
+  created_at  DateTime @default(now()) @db.DateTime(0)
+  updated_at  DateTime @default(now()) @updatedAt @db.DateTime(0)
+
+  @@index([scene, is_active, priority], map: "idx_scene_active")
+}
+
+// -----------------------------------------------------------
+// 4. 系统配置表
+// -----------------------------------------------------------
+model system_configs {
+  id           BigInt   @id @default(autoincrement()) @db.UnsignedBigInt
+  config_key   String   @unique(map: "uk_config_key") @db.VarChar(128)
+  config_value String?  @db.Text
+  description  String?  @db.VarChar(255)
+  is_deleted   Int      @default(0) @db.TinyInt
+  created_at   DateTime @default(now()) @db.DateTime(0)
+  updated_at   DateTime @default(now()) @updatedAt @db.DateTime(0)
+}
+
+// -----------------------------------------------------------
+// 5. 联盟平台连接表
+// -----------------------------------------------------------
+model platform_connections {
+  id              BigInt    @id @default(autoincrement()) @db.UnsignedBigInt
+  user_id         BigInt    @db.UnsignedBigInt
+  platform        String    @db.VarChar(8)
+  account_name    String    @default("") @db.VarChar(32) // 账号名称，如 RW1, RW2
+  api_key         String?   @db.Text
+  publish_site_id BigInt?   @db.UnsignedBigInt  // 绑定的发布站点（管理员创建的全局站点）
+  status          String    @default("connected") @db.VarChar(16)
+  last_synced_at  DateTime? @db.DateTime(0)
+  is_deleted      Int       @default(0) @db.TinyInt
+  created_at      DateTime  @default(now()) @db.DateTime(0)
+  updated_at      DateTime  @default(now()) @updatedAt @db.DateTime(0)
+
+  @@index([user_id, platform], map: "idx_user_platform")
+}
+
+// -----------------------------------------------------------
+// 6. 商家库表
+// -----------------------------------------------------------
+model user_merchants {
+  id                BigInt    @id @default(autoincrement()) @db.UnsignedBigInt
+  user_id           BigInt    @db.UnsignedBigInt
+  platform          String    @db.VarChar(8)
+  merchant_id       String    @db.VarChar(64)
+  merchant_name     String    @db.VarChar(255)
+  merchant_url      String?   @db.VarChar(512)
+  category          String?   @db.VarChar(128)
+  commission_rate   String?   @db.VarChar(64)
+  cookie_duration   Int?      @db.UnsignedInt
+  supported_regions Json?
+  status            String    @default("available") @db.VarChar(16)
+  claimed_at        DateTime? @db.DateTime(0)
+  target_country    String?   @db.VarChar(8)
+  holiday_name      String?   @db.VarChar(128)
+  tracking_link     String?   @db.VarChar(1024)
+  campaign_link     String?   @db.Text           // 联盟平台推广链接
+  // 违规/推荐标记（从 Google Sheets 同步）
+  violation_status       String  @default("normal") @db.VarChar(20)  // normal / violated
+  violation_time         DateTime? @db.DateTime(0)
+  recommendation_status  String  @default("normal") @db.VarChar(20)  // normal / recommended
+  recommendation_time    DateTime? @db.DateTime(0)
+  // 政策审核标记（商家同步时自动检测）
+  policy_status          String  @default("pending") @db.VarChar(16)  // pending / clean / restricted / prohibited
+  policy_category_code   String? @db.VarChar(32)  // 匹配到的政策类别代码，如 alcohol / gambling
+  platform_connection_id BigInt? @db.UnsignedBigInt // 关联到具体平台账号
+  is_deleted        Int       @default(0) @db.TinyInt
+  created_at        DateTime  @default(now()) @db.DateTime(0)
+  updated_at        DateTime  @default(now()) @updatedAt @db.DateTime(0)
+
+  @@index([user_id, status], map: "idx_user_status")
+  @@index([user_id, platform], map: "idx_user_platform")
+}
+
+// -----------------------------------------------------------
+// 6b. 商家违规记录表（从 Google Sheets 同步）
+// -----------------------------------------------------------
+model merchant_violations {
+  id               BigInt    @id @default(autoincrement()) @db.UnsignedBigInt
+  merchant_name    String    @db.VarChar(255)
+  platform         String    @default("") @db.VarChar(32)
+  merchant_domain  String?   @db.VarChar(255)
+  violation_reason String?   @db.Text
+  violation_time   DateTime? @db.DateTime(0)
+  source           String?   @db.VarChar(100)  // 名单来源
+  upload_batch     String    @db.VarChar(64)
+  is_deleted       Int       @default(0) @db.TinyInt
+  created_at       DateTime  @default(now()) @db.DateTime(0)
+
+  @@index([merchant_name], map: "idx_vio_name")
+}
+
+// -----------------------------------------------------------
+// 6c. 推荐商家记录表（从 Google Sheets 同步）
+// -----------------------------------------------------------
+model merchant_recommendations {
+  id               BigInt    @id @default(autoincrement()) @db.UnsignedBigInt
+  merchant_name    String    @db.VarChar(255)
+  roi_reference    String?   @db.VarChar(64)
+  commission_info  String?   @db.VarChar(64)   // 佣金率
+  settlement_info  String?   @db.VarChar(64)   // 结算率
+  remark           String?   @db.Text           // 标记/备注
+  share_time       String?   @db.VarChar(32)    // 分享时间
+  upload_batch     String    @db.VarChar(64)
+  is_deleted       Int       @default(0) @db.TinyInt
+  created_at       DateTime  @default(now()) @db.DateTime(0)
+
+  @@index([merchant_name], map: "idx_rec_name")
+}
+
+// -----------------------------------------------------------
+// 6d. 共享表格配置（存储 Google Sheets 链接）
+// -----------------------------------------------------------
+model sheet_configs {
+  id             BigInt    @id @default(autoincrement()) @db.UnsignedBigInt
+  config_type    String    @unique @db.VarChar(32)  // violation / recommendation / merchant_sheet
+  sheet_url      String    @db.Text
+  last_synced_at DateTime? @db.DateTime(0)
+  updated_by     BigInt?   @db.UnsignedBigInt
+  is_deleted     Int       @default(0) @db.TinyInt
+  created_at     DateTime  @default(now()) @db.DateTime(0)
+  updated_at     DateTime  @default(now()) @updatedAt @db.DateTime(0)
+}
+
+// -----------------------------------------------------------
+// 7. 广告默认设置表
+// -----------------------------------------------------------
+model ad_default_settings {
+  id               BigInt   @id @default(autoincrement()) @db.UnsignedBigInt
+  user_id          BigInt   @unique(map: "uk_user") @db.UnsignedBigInt
+  bidding_strategy String   @default("MAXIMIZE_CLICKS") @db.VarChar(32)
+  ecpc_enabled     Int      @default(1) @db.TinyInt
+  max_cpc          Decimal  @default(0.30) @db.Decimal(10, 2)
+  daily_budget     Decimal  @default(2.00) @db.Decimal(10, 2)
+  network_search   Int      @default(1) @db.TinyInt
+  network_partners Int      @default(0) @db.TinyInt
+  network_display  Int      @default(0) @db.TinyInt
+  naming_rule      String   @default("global") @db.VarChar(20)  // global | per_platform
+  naming_prefix    String   @default("wj") @db.VarChar(10)       // 全局序号前缀
+  eu_political_ad  Int      @default(0) @db.TinyInt              // 0=不含EU政治广告 1=含
+  is_deleted       Int      @default(0) @db.TinyInt
+  created_at       DateTime @default(now()) @db.DateTime(0)
+  updated_at       DateTime @default(now()) @updatedAt @db.DateTime(0)
+}
+
+// -----------------------------------------------------------
+// 8. 节日日历表
+// -----------------------------------------------------------
+model holiday_calendar {
+  id               BigInt   @id @default(autoincrement()) @db.UnsignedBigInt
+  country_code     String   @db.VarChar(8)
+  holiday_name     String   @db.VarChar(128)
+  holiday_date     DateTime @db.Date
+  holiday_type     String   @default("commercial") @db.VarChar(16)
+  related_holidays Json?
+  is_deleted       Int      @default(0) @db.TinyInt
+  created_at       DateTime @default(now()) @db.DateTime(0)
+  updated_at       DateTime @default(now()) @updatedAt @db.DateTime(0)
+
+  @@index([country_code, holiday_date], map: "idx_country_date")
+}
+
+// -----------------------------------------------------------
+// 9. 广告系列表
+// -----------------------------------------------------------
+model campaigns {
+  id                 BigInt   @id @default(autoincrement()) @db.UnsignedBigInt
+  user_id            BigInt   @db.UnsignedBigInt
+  user_merchant_id   BigInt   @db.UnsignedBigInt
+  google_campaign_id String?  @db.VarChar(64)
+  mcc_id             BigInt?  @db.UnsignedBigInt
+  customer_id        String?  @db.VarChar(32)
+  campaign_name      String?  @db.VarChar(255)
+  daily_budget       Decimal  @default(2.00) @db.Decimal(10, 2)
+  bidding_strategy   String   @default("MAXIMIZE_CLICKS") @db.VarChar(32)
+  max_cpc_limit      Decimal? @db.Decimal(10, 2)
+  target_country     String   @db.VarChar(8)
+  geo_target         String?  @db.VarChar(16)
+  language_id        String?  @db.VarChar(16)
+  network_search     Int      @default(1) @db.TinyInt
+  network_partners   Int      @default(0) @db.TinyInt
+  network_display    Int      @default(0) @db.TinyInt
+  status             String   @default("active") @db.VarChar(16)
+  google_status      String   @default("ENABLED") @db.VarChar(16) // Google Ads 侧真实状态: ENABLED / PAUSED / REMOVED
+  last_google_sync_at DateTime? @db.DateTime(0) // 最后一次从 Google 同步状态的时间
+  is_deleted         Int      @default(0) @db.TinyInt
+  created_at         DateTime @default(now()) @db.DateTime(0)
+  updated_at         DateTime @default(now()) @updatedAt @db.DateTime(0)
+
+  @@index([user_id], map: "idx_user")
+  @@index([user_merchant_id], map: "idx_user_merchant")
+  @@index([google_campaign_id], map: "idx_google_campaign")
+}
+
+// -----------------------------------------------------------
+// 10. 广告组表
+// -----------------------------------------------------------
+model ad_groups {
+  id                 BigInt   @id @default(autoincrement()) @db.UnsignedBigInt
+  campaign_id        BigInt   @db.UnsignedBigInt
+  google_ad_group_id String?  @db.VarChar(64)
+  ad_group_name      String?  @db.VarChar(255)
+  keyword_match_type String   @default("PHRASE") @db.VarChar(16)
+  is_deleted         Int      @default(0) @db.TinyInt
+  created_at         DateTime @default(now()) @db.DateTime(0)
+  updated_at         DateTime @default(now()) @updatedAt @db.DateTime(0)
+
+  @@index([campaign_id], map: "idx_campaign")
+}
+
+// -----------------------------------------------------------
+// 11. 关键词表
+// -----------------------------------------------------------
+model keywords {
+  id                   BigInt   @id @default(autoincrement()) @db.UnsignedBigInt
+  ad_group_id          BigInt   @db.UnsignedBigInt
+  keyword_text         String   @db.VarChar(255)
+  match_type           String   @default("PHRASE") @db.VarChar(16)
+  is_negative          Int      @default(0) @db.TinyInt
+  avg_monthly_searches Int?     @db.UnsignedInt
+  competition          String?  @db.VarChar(16)
+  suggested_bid        Decimal? @db.Decimal(10, 2)
+  is_deleted           Int      @default(0) @db.TinyInt
+  created_at           DateTime @default(now()) @db.DateTime(0)
+  updated_at           DateTime @default(now()) @updatedAt @db.DateTime(0)
+
+  @@index([ad_group_id], map: "idx_ad_group")
+}
+
+// -----------------------------------------------------------
+// 12. 广告素材表
+// -----------------------------------------------------------
+model ad_creatives {
+  id            BigInt   @id @default(autoincrement()) @db.UnsignedBigInt
+  ad_group_id   BigInt   @db.UnsignedBigInt
+  final_url     String   @db.VarChar(1024)
+  display_path1 String?  @db.VarChar(15)
+  display_path2 String?  @db.VarChar(15)
+  headlines     Json
+  descriptions  Json
+  headlines_zh    Json?    // 标题中文参考翻译
+  descriptions_zh Json?   // 描述中文参考翻译
+  sitelinks      Json?
+  callouts       Json?
+  image_urls     Json?
+  logo_url       String?  @db.VarChar(1024)  // 商家 Logo URL
+  selling_points Json?    // 卖点列表（爬虫抓取）
+  is_deleted     Int      @default(0) @db.TinyInt
+  created_at     DateTime @default(now()) @db.DateTime(0)
+  updated_at     DateTime @default(now()) @updatedAt @db.DateTime(0)
+
+  @@index([ad_group_id], map: "idx_ad_group")
+}
+
+// -----------------------------------------------------------
+// 13. 站点表（全局资源，管理员统一管理）
+// -----------------------------------------------------------
+model publish_sites {
+  id                   BigInt   @id @default(autoincrement()) @db.UnsignedBigInt
+  site_name            String   @db.VarChar(128)
+  domain               String   @unique @db.VarChar(200)     // 域名（如 allurahub.com）
+  site_path            String?  @db.VarChar(300)             // 宝塔远程路径（自动生成）
+  site_type            String?  @db.VarChar(30)              // 架构类型（自动检测）
+  data_js_path         String?  @default("js/articles-index.js") @db.VarChar(200)
+  article_var_name     String?  @db.VarChar(100)
+  article_html_pattern String?  @db.VarChar(100)
+  deploy_type          String   @default("bt_ssh") @db.VarChar(32)
+  deploy_config        Json?
+  status               String   @default("active") @db.VarChar(16)
+  verified             Int      @default(0) @db.TinyInt
+  is_deleted           Int      @default(0) @db.TinyInt
+  created_at           DateTime @default(now()) @db.DateTime(0)
+  updated_at           DateTime @default(now()) @updatedAt @db.DateTime(0)
+}
+
+// -----------------------------------------------------------
+// 13b. 站点迁移任务表（异步迁移进度追踪）
+// -----------------------------------------------------------
+model site_migrations {
+  id            BigInt   @id @default(autoincrement()) @db.UnsignedBigInt
+  site_id       BigInt?  @db.UnsignedBigInt           // 关联 publish_sites.id
+  domain        String   @db.VarChar(200)
+  source_type   String   @db.VarChar(16)              // github / cloudflare
+  source_ref    String?  @db.VarChar(512)             // GitHub repo URL 或 CF pages.dev URL
+  status        String   @default("pending") @db.VarChar(16) // pending / cloning / dns / ssl / verifying / done / failed
+  progress      Int      @default(0) @db.UnsignedTinyInt     // 0-100
+  step_detail   String?  @db.Text                     // 当前步骤详情
+  error_message String?  @db.Text
+  started_at    DateTime? @db.DateTime(0)
+  finished_at   DateTime? @db.DateTime(0)
+  created_by    BigInt   @db.UnsignedBigInt            // 管理员 user_id
+  is_deleted    Int      @default(0) @db.TinyInt
+  created_at    DateTime @default(now()) @db.DateTime(0)
+  updated_at    DateTime @default(now()) @updatedAt @db.DateTime(0)
+
+  @@index([status], map: "idx_migration_status")
+}
+
+// -----------------------------------------------------------
+// 14. 文章表（原15，精简 campaign_id 和 images 字段）
+// -----------------------------------------------------------
+model articles {
+  id               BigInt    @id @default(autoincrement()) @db.UnsignedBigInt
+  user_id          BigInt    @db.UnsignedBigInt
+  user_merchant_id BigInt?   @db.UnsignedBigInt
+  publish_site_id  BigInt?   @db.UnsignedBigInt
+  title            String?   @db.VarChar(512)
+  slug             String?   @db.VarChar(512)
+  content          String?   @db.LongText
+  excerpt          String?   @db.Text
+  language         String    @default("en") @db.VarChar(8)
+  keywords         Json?
+  images           Json?    // 文章配图 URL 列表
+  status           String    @default("generating") @db.VarChar(16)
+  published_at     DateTime? @db.DateTime(0)
+  published_url    String?   @db.VarChar(1024)
+  merchant_name    String?   @db.VarChar(255)
+  tracking_link    String?   @db.VarChar(1024)
+  meta_title       String?   @db.VarChar(512)
+  meta_description String?   @db.Text
+  is_deleted       Int       @default(0) @db.TinyInt
+  created_at       DateTime  @default(now()) @db.DateTime(0)
+  updated_at       DateTime  @default(now()) @updatedAt @db.DateTime(0)
+
+  @@index([user_id], map: "idx_user")
+  @@index([user_merchant_id], map: "idx_user_merchant")
+  @@index([status], map: "idx_status")
+}
+
+// -----------------------------------------------------------
+// 15. 广告每日数据表（原16，精简冗余字段）
+// -----------------------------------------------------------
+model ads_daily_stats {
+  id                BigInt   @id @default(autoincrement()) @db.UnsignedBigInt
+  user_id           BigInt   @db.UnsignedBigInt
+  user_merchant_id  BigInt   @db.UnsignedBigInt
+  campaign_id       BigInt   @db.UnsignedBigInt
+  date              DateTime @db.Date
+  budget            Decimal? @db.Decimal(12, 2) // 当日预算（USD）
+  cost              Decimal? @default(0.00) @db.Decimal(12, 2)
+  clicks            Int?     @default(0) @db.UnsignedInt
+  impressions       Int?     @default(0) @db.UnsignedInt
+  cpc               Decimal? @db.Decimal(10, 4)
+  conversions       Int?     @default(0) @db.UnsignedInt
+  commission        Decimal? @default(0.00) @db.Decimal(12, 2)
+  rejected_commission Decimal? @default(0.00) @db.Decimal(12, 2) // 拒付佣金
+  roi               Decimal? @db.Decimal(10, 4)
+  orders            Int?     @default(0) @db.UnsignedInt
+  data_source       String?  @default("sheet") @db.VarChar(8) // 数据来源: sheet / api
+  is_deleted        Int      @default(0) @db.TinyInt
+  created_at        DateTime @default(now()) @db.DateTime(0)
+  updated_at        DateTime @default(now()) @updatedAt @db.DateTime(0)
+
+  @@unique([campaign_id, date], map: "uk_campaign_date")
+  @@index([user_id, date], map: "idx_user_date")
+  @@index([user_merchant_id, date], map: "idx_merchant_date")
+}
+
+// -----------------------------------------------------------
+// 16. Google Ads MCC 账户表（原18，ai_insights 已删除）
+// -----------------------------------------------------------
+model google_mcc_accounts {
+  id                   BigInt   @id @default(autoincrement()) @db.UnsignedBigInt
+  user_id              BigInt   @db.UnsignedBigInt
+  mcc_id               String   @db.VarChar(32)
+  mcc_name             String?  @db.VarChar(128)
+  currency             String   @default("USD") @db.VarChar(8)
+  service_account_json String?  @db.Text
+  sheet_url            String?  @db.VarChar(1024) // MCC 脚本导出的 Google Sheet URL
+  developer_token      String?  @db.VarChar(128)  // Google Ads API Developer Token
+  is_active            Int      @default(1) @db.TinyInt
+  is_deleted           Int      @default(0) @db.TinyInt
+  created_at           DateTime @default(now()) @db.DateTime(0)
+  updated_at           DateTime @default(now()) @updatedAt @db.DateTime(0)
+
+  @@index([user_id], map: "idx_user")
+}
+
+// -----------------------------------------------------------
+// 17. 联盟交易明细表（支撑数据查看 + 结算查询）
+// -----------------------------------------------------------
+model affiliate_transactions {
+  id                      BigInt    @id @default(autoincrement()) @db.UnsignedBigInt
+  user_id                 BigInt    @db.UnsignedBigInt
+  user_merchant_id        BigInt    @db.UnsignedBigInt
+  campaign_id             BigInt?   @db.UnsignedBigInt
+  platform_connection_id  BigInt?   @db.UnsignedBigInt // 关联到具体平台账号
+  platform                String    @db.VarChar(8)
+  merchant_id             String    @db.VarChar(64)
+  merchant_name           String    @db.VarChar(255)
+  transaction_id          String    @db.VarChar(128)
+  transaction_time        DateTime  @db.DateTime(0)
+  order_amount            Decimal?  @default(0.00) @db.Decimal(12, 2)
+  commission_amount       Decimal?  @default(0.00) @db.Decimal(12, 2)
+  currency                String    @default("USD") @db.VarChar(8)
+  status                  String    @default("pending") @db.VarChar(16)
+  raw_status              String?   @db.VarChar(32)
+  is_deleted              Int       @default(0) @db.TinyInt
+  created_at              DateTime  @default(now()) @db.DateTime(0)
+  updated_at              DateTime  @default(now()) @updatedAt @db.DateTime(0)
+
+  @@unique([platform, transaction_id], map: "uk_platform_txn")
+  @@index([user_id, merchant_id], map: "idx_user_merchant_id")
+  @@index([user_id, transaction_time], map: "idx_user_txn_time")
+  @@index([user_id, status], map: "idx_user_status")
+  @@index([platform_connection_id], map: "idx_platform_conn")
+}
+
+// -----------------------------------------------------------
+// 18. 消息通知表
+// -----------------------------------------------------------
+model notifications {
+  id         BigInt   @id @default(autoincrement()) @db.UnsignedBigInt
+  user_id    BigInt   @db.UnsignedBigInt
+  type       String   @default("system") @db.VarChar(32) // system | merchant | article | ad | alert
+  title      String   @db.VarChar(255)
+  content    String?  @db.Text
+  is_read    Int      @default(0) @db.TinyInt
+  is_deleted Int      @default(0) @db.TinyInt
+  created_at DateTime @default(now()) @db.DateTime(0)
+  updated_at DateTime @default(now()) @updatedAt @db.DateTime(0)
+
+  @@index([user_id, is_read, is_deleted], map: "idx_user_read")
+  @@index([user_id, created_at], map: "idx_user_created")
+}
+
+// -----------------------------------------------------------
+// 19. 通知偏好设置表
+// -----------------------------------------------------------
+model notification_preferences {
+  id                BigInt   @id @default(autoincrement()) @db.UnsignedBigInt
+  user_id           BigInt   @unique(map: "uk_user") @db.UnsignedBigInt
+  notify_system     Int      @default(1) @db.TinyInt
+  notify_merchant   Int      @default(1) @db.TinyInt
+  notify_article    Int      @default(1) @db.TinyInt
+  notify_ad         Int      @default(1) @db.TinyInt
+  notify_alert      Int      @default(1) @db.TinyInt
+  is_deleted        Int      @default(0) @db.TinyInt
+  created_at        DateTime @default(now()) @db.DateTime(0)
+  updated_at        DateTime @default(now()) @updatedAt @db.DateTime(0)
+}
+
+// （prompt_preferences 表已删除 — AI 风格偏好 MVP 阶段使用默认值）
+
+// -----------------------------------------------------------
+// 21. AI 洞察报告表
+// -----------------------------------------------------------
+model ai_insights {
+  id            BigInt   @id @default(autoincrement()) @db.UnsignedBigInt
+  user_id       BigInt   @db.UnsignedBigInt
+  insight_date  DateTime @db.Date
+  insight_type  String   @default("daily") @db.VarChar(16)  // daily / weekly / monthly
+  content       String   @db.LongText  // AI 生成的洞察内容（Markdown）
+  metrics_snapshot Json?  // 生成时的关键指标快照
+  is_deleted    Int      @default(0) @db.TinyInt
+  created_at    DateTime @default(now()) @db.DateTime(0)
+  updated_at    DateTime @default(now()) @updatedAt @db.DateTime(0)
+
+  @@unique([user_id, insight_date, insight_type], map: "uk_user_date_type")
+  @@index([user_id, insight_date], map: "idx_user_insight_date")
+}
+
+// -----------------------------------------------------------
+// 23. 操作日志表（审计追踪）
+// -----------------------------------------------------------
+model operation_logs {
+  id          BigInt   @id @default(autoincrement()) @db.UnsignedBigInt
+  user_id     BigInt   @db.UnsignedBigInt
+  username    String   @db.VarChar(64)
+  action      String   @db.VarChar(64)   // login / create_user / claim_merchant / publish_article 等
+  target_type String?  @db.VarChar(32)   // user / merchant / article / campaign 等
+  target_id   String?  @db.VarChar(64)
+  detail      String?  @db.Text          // 操作详情 JSON
+  ip_address  String?  @db.VarChar(45)
+  user_agent  String?  @db.VarChar(512)
+  created_at  DateTime @default(now()) @db.DateTime(0)
+
+  @@index([user_id, created_at], map: "idx_user_created")
+  @@index([action], map: "idx_action")
+}
+
+// （exchange_rates 表已删除，汇率转换改为实时处理）
+
+// -----------------------------------------------------------
+// 20. MCC 子账户（CID）列表
+// -----------------------------------------------------------
+model mcc_cid_accounts {
+  id               BigInt    @id @default(autoincrement()) @db.UnsignedBigInt
+  mcc_account_id   BigInt    @db.UnsignedBigInt       // 关联 google_mcc_accounts.id
+  customer_id      String    @db.VarChar(32)           // Google Ads CID (如 "1234567890")
+  customer_name    String?   @db.VarChar(255)          // CID 账户名称
+  is_available     String    @default("Y") @db.VarChar(1)  // Y=可用, N=已被广告系列占用
+  status           String    @default("active") @db.VarChar(16) // active / suspended / cancelled
+  last_synced_at   DateTime? @db.DateTime(0)
+  is_deleted       Int       @default(0) @db.TinyInt
+  created_at       DateTime  @default(now()) @db.DateTime(0)
+  updated_at       DateTime  @default(now()) @updatedAt @db.DateTime(0)
+
+  @@unique([mcc_account_id, customer_id], map: "uk_mcc_cid")
+  @@index([mcc_account_id, is_available], map: "idx_mcc_available")
+}
+
+// -----------------------------------------------------------
+// 25. Google Ads 政策限制类别表
+// -----------------------------------------------------------
+model ad_policy_categories {
+  id                BigInt   @id @default(autoincrement()) @db.UnsignedBigInt
+  category_code     String   @unique(map: "uk_category_code") @db.VarChar(32)
+  category_name     String   @db.VarChar(64)       // 中文名
+  category_name_en  String   @db.VarChar(64)       // 英文名
+  restriction_level String   @db.VarChar(16)       // restricted / prohibited
+  description       String?  @db.Text              // 政策说明
+  // ─── 投放限制规则 ───
+  allowed_regions   Json?    // 允许投放的国家代码列表
+  blocked_regions   Json?    // 完全禁止的国家代码列表
+  age_targeting     String?  @db.VarChar(16)       // "18+" / "21+" / null
+  requires_cert     Int      @default(0) @db.TinyInt // 是否需要 Google 认证
+  // ─── 文案生成约束（给 AI 的规则） ───
+  ad_copy_rules     Json?
+  // ─── 着陆页要求 ───
+  landing_page_rules Json?
+  // ─── 自动匹配规则（用于商家域名/类别自动检测） ───
+  match_keywords    Json?    // ["alcohol","wine","beer","liquor",...]
+  match_domains     Json?    // ["wine.com","totalwine.com",...]
+  sort_order        Int      @default(0) @db.UnsignedSmallInt
+  is_deleted        Int      @default(0) @db.TinyInt
+  created_at        DateTime @default(now()) @db.DateTime(0)
+  updated_at        DateTime @default(now()) @updatedAt @db.DateTime(0)
+}
+
+// -----------------------------------------------------------
+// 26. 商家政策审核记录表
+// -----------------------------------------------------------
+model merchant_policy_reviews {
+  id                  BigInt    @id @default(autoincrement()) @db.UnsignedBigInt
+  merchant_name       String    @db.VarChar(255)
+  merchant_domain     String?   @db.VarChar(255)
+  platform            String?   @db.VarChar(8)
+  // ─── 审核结果 ───
+  policy_category_id  BigInt?   @db.UnsignedBigInt   // 匹配到的政策类别 id
+  policy_status       String    @default("clean") @db.VarChar(16) // clean / restricted / prohibited
+  matched_rule        String?   @db.VarChar(128)     // 匹配到的关键词/规则（审计用）
+  review_method       String    @default("auto") @db.VarChar(16)  // auto / manual
+  reviewed_at         DateTime  @default(now()) @db.DateTime(0)
+  notes               String?   @db.Text
+  is_deleted          Int       @default(0) @db.TinyInt
+  created_at          DateTime  @default(now()) @db.DateTime(0)
+  updated_at          DateTime  @default(now()) @updatedAt @db.DateTime(0)
+
+  @@unique([merchant_name, platform], map: "uk_merchant_platform")
+  @@index([policy_status], map: "idx_policy_status")
+}
+
+// -----------------------------------------------------------
+// campaign_link_cache 已移除 — CRM 和数据分析平台是独立系统
+// CRM 通过 platform_connections 的 API Key 直接调用联盟平台 API
+// -----------------------------------------------------------

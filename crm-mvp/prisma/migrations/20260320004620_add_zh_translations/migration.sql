@@ -1,0 +1,3 @@
+-- AlterTable
+ALTER TABLE `ad_creatives` ADD COLUMN `descriptions_zh` JSON NULL,
+    ADD COLUMN `headlines_zh` JSON NULL;
