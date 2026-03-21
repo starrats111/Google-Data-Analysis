@@ -203,6 +203,19 @@ export class SemRushClient {
     return null;
   }
 
+  private collectCookies(res: Response) {
+    const setCookies = res.headers.getSetCookie?.() || [];
+    for (const c of setCookies) {
+      const [kv] = c.split(";");
+      const eqIdx = kv.indexOf("=");
+      if (eqIdx > 0) {
+        const k = kv.slice(0, eqIdx).trim();
+        const v = kv.slice(eqIdx + 1).trim();
+        if (k && v) this.cookies[k] = v;
+      }
+    }
+  }
+
   async login(): Promise<string> {
     const ts = Date.now();
     const url = `${LOGIN_URL}?username=${encodeURIComponent(this.creds.username)}&password=${encodeURIComponent(this.creds.password)}&ts=${ts}`;
@@ -216,13 +229,7 @@ export class SemRushClient {
       }
       throw new Error(`3UE 登录失败（HTTP ${res.status}），请稍后再试或联系管理员`);
     }
-    // 保存 cookies
-    const setCookies = res.headers.getSetCookie?.() || [];
-    for (const c of setCookies) {
-      const [kv] = c.split(";");
-      const [k, v] = kv.split("=");
-      if (k && v) this.cookies[k.trim()] = v.trim();
-    }
+    this.collectCookies(res);
     const payload = await res.json();
     const token = this.extractToken(payload);
     if (!token) throw new Error(`登录成功但未找到 token`);
@@ -230,6 +237,25 @@ export class SemRushClient {
     this.cookies["GMITM_token"] = token;
     this.cookies["GMITM_uname"] = this.creds.username;
     this.cookies["GMITM_config"] = this.buildConfigValue();
+
+    // 访问分析页面获取完整 session cookies（3UE 可能依赖页面加载时设置的额外 cookies）
+    try {
+      const pageRes = await fetch("https://sem.3ue.co/analytics/overview/", {
+        headers: {
+          "user-agent": USER_AGENT,
+          accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+          "accept-language": "zh-CN,zh;q=0.9,en;q=0.8",
+          cookie: Object.entries(this.cookies).map(([k, v]) => `${k}=${v}`).join("; "),
+        },
+        redirect: "follow",
+        signal: AbortSignal.timeout(15000),
+      });
+      this.collectCookies(pageRes);
+      await pageRes.text();
+    } catch {
+      // 页面访问失败不阻塞流程
+    }
+
     return token;
   }
 

@@ -76,7 +76,7 @@ export async function POST(req: NextRequest) {
     return apiSuccess({ steps, overall: "fail" });
   }
 
-  // Step 3: RPC 调用测试
+  // Step 2.5: 访问分析页面获取完整 session cookies
   try {
     const configValue = JSON.stringify({
       chat: { node, lang: "zh_CN" },
@@ -85,6 +85,34 @@ export async function POST(req: NextRequest) {
     cookies["GMITM_token"] = token;
     cookies["GMITM_uname"] = username;
     cookies["GMITM_config"] = configValue;
+    const initCookieStr = Object.entries(cookies).map(([k, v]) => `${k}=${v}`).join("; ");
+    const pageRes = await fetch("https://sem.3ue.co/analytics/overview/", {
+      headers: {
+        "user-agent": USER_AGENT,
+        accept: "text/html,application/xhtml+xml,*/*",
+        cookie: initCookieStr,
+      },
+      redirect: "follow",
+      signal: AbortSignal.timeout(15000),
+    });
+    const pageCookies = pageRes.headers.getSetCookie?.() || [];
+    for (const c of pageCookies) {
+      const [kv] = c.split(";");
+      const eqIdx = kv.indexOf("=");
+      if (eqIdx > 0) {
+        const k = kv.slice(0, eqIdx).trim();
+        const v = kv.slice(eqIdx + 1).trim();
+        if (k && v) cookies[k] = v;
+      }
+    }
+    await pageRes.text();
+    steps.push({ step: "页面 Session", status: "success", detail: `获取到 ${Object.keys(cookies).length} 个 cookies` });
+  } catch (err) {
+    steps.push({ step: "页面 Session", status: "skip", detail: `页面访问失败（不影响主流程）: ${err instanceof Error ? err.message : String(err)}` });
+  }
+
+  // Step 3: RPC 调用测试
+  try {
     const cookieStr = Object.entries(cookies).map(([k, v]) => `${k}=${v}`).join("; ");
 
     const rpcPayload = {
