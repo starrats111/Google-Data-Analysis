@@ -22,6 +22,9 @@ function log(msg: string) {
  * 2. 同步交易数据（各联盟平台）
  * 3. 同步违规/推荐商家（Google Sheet）
  */
+export const dynamic = "force-dynamic";
+export const maxDuration = 300;
+
 export async function GET(req: NextRequest) {
   if (!verifyCron(req)) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });

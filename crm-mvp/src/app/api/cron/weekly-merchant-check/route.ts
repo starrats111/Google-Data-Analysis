@@ -20,6 +20,9 @@ function log(msg: string) {
  * 对每个用户，调用联盟平台 API 获取最新商家关系状态，
  * 剔除已非 joined 的 claimed 商家，加入新 joined 商家。
  */
+export const dynamic = "force-dynamic";
+export const maxDuration = 300;
+
 export async function GET(req: NextRequest) {
   if (!verifyCron(req)) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
