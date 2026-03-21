@@ -512,8 +512,9 @@ export async function fetchAllTransactions(
   const allTxns: PlatformTransaction[] = [];
   const seen = new Set<string>();
 
-  // RW 有 62 天限制，LH 数据量大，按月分段拉取
-  const dateChunks = splitDateRange(startDate, endDate, platform === "RW" ? 60 : 90);
+  // RW/LB 有 62 天限制，LH 数据量大，按月分段拉取
+  const maxDays = (platform === "RW" || platform === "LB") ? 60 : 90;
+  const dateChunks = splitDateRange(startDate, endDate, maxDays);
 
   try {
     for (const chunk of dateChunks) {

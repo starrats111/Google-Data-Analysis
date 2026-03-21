@@ -98,6 +98,28 @@ export async function POST(req: NextRequest) {
       }
       const dedupedTxns = [...grouped.values()];
 
+      // 自动创建缺失的 user_merchants（交易中有但商家表没有的）
+      const missingMerchants = new Map<string, { merchantId: string; name: string }>();
+      for (const txn of dedupedTxns) {
+        const mid = txn.merchant_id || "";
+        if (!mid) continue;
+        const key = `${platform}_${mid}`;
+        if (!merchantMap.has(key) && !missingMerchants.has(key)) {
+          missingMerchants.set(key, { merchantId: mid, name: txn.merchant || "" });
+        }
+      }
+      for (const [key, { merchantId, name }] of missingMerchants) {
+        try {
+          const created = await prisma.user_merchants.upsert({
+            where: { user_platform_merchant: { user_id: userId, platform, merchant_id: merchantId } },
+            create: { user_id: userId, platform, merchant_id: merchantId, merchant_name: name, status: "available" },
+            update: { merchant_name: name || undefined },
+            select: { id: true, merchant_id: true, platform: true, merchant_name: true },
+          });
+          merchantMap.set(key, created);
+        } catch { /* ignore duplicate */ }
+      }
+
       let synced = 0;
       let skipped = 0;
 
