@@ -87,6 +87,19 @@ const COUNTRY_MAP: Record<string, string> = {
   DE: "de", FR: "fr", JP: "jp", BR: "br",
 };
 
+/** 从 3UE SemRush 页面 URL 中提取被查询的域名 */
+export function parseDomainFromSemrushUrl(url: string): string {
+  try {
+    const parsed = new URL(url);
+    if (!parsed.hostname.includes("3ue.co") && !parsed.hostname.includes("semrush")) return "";
+    const q = parsed.searchParams.get("q") || parsed.searchParams.get("searchItem") || "";
+    if (q) return normalizeDomain(q);
+    const pathMatch = parsed.pathname.match(/\/(?:analytics|overview)\/.*?([a-z0-9][-a-z0-9]*\.[a-z]{2,})/i);
+    if (pathMatch) return normalizeDomain(pathMatch[1]);
+  } catch {}
+  return "";
+}
+
 // ─── 客户端类 ───
 
 interface NodeConfig {
@@ -197,7 +210,12 @@ export class SemRushClient {
       headers: { "user-agent": USER_AGENT, origin: LOGIN_ORIGIN },
       signal: AbortSignal.timeout(20000),
     });
-    if (!res.ok) throw new Error(`登录失败: HTTP ${res.status}`);
+    if (!res.ok) {
+      if (res.status === 401 || res.status === 403) {
+        throw new Error("3UE 登录失败：用户名或密码错误，请在管理后台检查 SemRush 配置");
+      }
+      throw new Error(`3UE 登录失败（HTTP ${res.status}），请稍后再试或联系管理员`);
+    }
     // 保存 cookies
     const setCookies = res.headers.getSetCookie?.() || [];
     for (const c of setCookies) {
@@ -230,7 +248,17 @@ export class SemRushClient {
       body: JSON.stringify(payload),
       signal: AbortSignal.timeout(30000),
     });
-    if (!res.ok) throw new Error(`RPC 失败: HTTP ${res.status}`);
+    if (!res.ok) {
+      const statusMessages: Record<number, string> = {
+        401: "3UE 账户认证失败，请检查用户名和密码是否正确",
+        403: "3UE 账户访问被拒绝，可能是账户已过期或 API Key 无效，请联系管理员检查 SemRush 配置",
+        429: "3UE 请求过于频繁，请稍后再试",
+        500: "3UE 服务器内部错误，请稍后再试",
+        502: "3UE 服务暂时不可用，请稍后再试",
+        503: "3UE 服务暂时不可用，请稍后再试",
+      };
+      throw new Error(statusMessages[res.status] || `3UE 服务请求失败 (HTTP ${res.status})，请稍后再试`);
+    }
     return res.json();
   }
 
@@ -313,6 +341,57 @@ export class SemRushClient {
     const total = response[1]?.result || 0;
     const samples = rows.slice(0, limit).map((r: any) => ({ title: r.title || "", description: r.description || "" }));
     return { date: dateStr, total, samples };
+  }
+
+  /** 尝试通过 3UE 页面 URL 抓取嵌入数据 */
+  async fetchFromPageUrl(pageUrl: string): Promise<{ phrase: string; volume: number }[]> {
+    if (!this.token) await this.login();
+    const cookieStr = Object.entries(this.cookies).map(([k, v]) => `${k}=${v}`).join("; ");
+    const res = await fetch(pageUrl, {
+      headers: {
+        "user-agent": USER_AGENT,
+        cookie: cookieStr,
+        accept: "text/html,application/xhtml+xml,*/*",
+      },
+      signal: AbortSignal.timeout(20000),
+    });
+    if (!res.ok) return [];
+    const html = await res.text();
+    const patterns = [
+      /window\.__INITIAL_STATE__\s*=\s*(\{[\s\S]*?\});/,
+      /window\.__data\s*=\s*(\{[\s\S]*?\});/,
+      /__NEXT_DATA__[^>]*>(\{[\s\S]*?\})\s*<\/script>/,
+    ];
+    for (const pattern of patterns) {
+      const match = html.match(pattern);
+      if (match?.[1]) {
+        try {
+          const data = JSON.parse(match[1]);
+          const keywords = this.extractKeywordsFromEmbeddedData(data);
+          if (keywords.length > 0) return keywords;
+        } catch {}
+      }
+    }
+    return [];
+  }
+
+  private extractKeywordsFromEmbeddedData(data: any, depth = 0): { phrase: string; volume: number }[] {
+    if (depth > 5 || !data || typeof data !== "object") return [];
+    if (Array.isArray(data)) {
+      if (data.length > 0 && data[0]?.phrase) {
+        return data.filter((r) => r.phrase).map((r) => ({ phrase: String(r.phrase), volume: Number(r.volume || 0) }));
+      }
+      for (const item of data) {
+        const result = this.extractKeywordsFromEmbeddedData(item, depth + 1);
+        if (result.length > 0) return result;
+      }
+    } else {
+      for (const value of Object.values(data)) {
+        const result = this.extractKeywordsFromEmbeddedData(value, depth + 1);
+        if (result.length > 0) return result;
+      }
+    }
+    return [];
   }
 
   /** 一站式查询：关键词 + 竞品广告标题/描述（去重） */

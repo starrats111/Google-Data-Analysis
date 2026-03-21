@@ -29,6 +29,9 @@ export async function POST(req: NextRequest) {
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     console.error("[SemRush API]", msg);
-    return apiError(`SemRush 查询失败: ${msg.slice(0, 200)}`);
+    if (msg.includes("凭据未配置")) {
+      return apiError("SemRush 功能未配置，请联系管理员在后台设置 SemRush/3UE 凭据");
+    }
+    return apiError(msg);
   }
 }

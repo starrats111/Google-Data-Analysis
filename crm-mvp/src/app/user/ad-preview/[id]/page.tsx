@@ -140,6 +140,9 @@ export default function AdPreviewPage() {
 
   // 关键词获取
   const [kwFetching, setKwFetching] = useState(false);
+  const [semrushFailed, setSemrushFailed] = useState(false);
+  const [semrushUrl, setSemrushUrl] = useState("");
+  const [semrushUrlFetching, setSemrushUrlFetching] = useState(false);
 
   // 轮询获取数据 — 就绪后停止
   const { data: preview, isLoading, mutate } = useApiWithParams<AdPreviewData>(
@@ -349,9 +352,14 @@ export default function AdPreviewPage() {
         body: JSON.stringify({ merchant_url: merchantUrl, country }),
       });
       const json = await res.json();
-      if (json.code !== 0) { message.error(json.message || "SemRush 查询失败"); return; }
+      if (json.code !== 0) {
+        setSemrushFailed(true);
+        message.error({ content: json.message || "SemRush 自动获取失败，可粘贴 3UE 链接手动获取", duration: 6 });
+        return;
+      }
+      setSemrushFailed(false);
       const kws = json.data?.keywords || [];
-      if (kws.length === 0) { message.warning("SemRush 未找到该商家的关键词"); return; }
+      if (kws.length === 0) { message.warning("SemRush 未找到该商家的关键词，请手动输入"); return; }
       const existing = new Set(kwList.map((k) => k.text.toLowerCase()));
       const newKws = kws
         .filter((kw: any) => !existing.has((kw.phrase || "").toLowerCase()))
@@ -363,11 +371,46 @@ export default function AdPreviewPage() {
         message.info("SemRush 关键词已全部存在");
       }
     } catch (err: any) {
-      message.error(err?.message || "关键词获取失败");
+      setSemrushFailed(true);
+      message.error({ content: err?.message || "关键词获取失败，可粘贴 3UE 链接手动获取", duration: 6 });
     } finally {
       setKwFetching(false);
     }
   }, [preview, kwList, message]);
+
+  // ─── 通过 3UE 链接获取关键词 ───
+  const fetchKeywordsFromUrl = useCallback(async () => {
+    if (!semrushUrl.trim()) { message.warning("请粘贴 3UE SemRush 链接"); return; }
+    const country = preview?.campaign?.target_country || "US";
+    setSemrushUrlFetching(true);
+    try {
+      const res = await fetch("/api/user/ad-creation/semrush-url", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url: semrushUrl.trim(), country }),
+      });
+      const json = await res.json();
+      if (json.code !== 0) { message.error({ content: json.message || "获取失败", duration: 6 }); return; }
+      const kws = json.data?.keywords || [];
+      if (kws.length === 0) { message.warning("未从该链接获取到关键词，请手动输入"); return; }
+      const existing = new Set(kwList.map((k) => k.text.toLowerCase()));
+      const newKws = kws
+        .filter((kw: any) => !existing.has((kw.phrase || "").toLowerCase()))
+        .map((kw: any) => ({ text: kw.phrase, matchType: "PHRASE" }));
+      if (newKws.length > 0) {
+        setKwList((prev) => [...prev, ...newKws]);
+        setSemrushFailed(false);
+        setSemrushUrl("");
+        message.success(`已从链接获取 ${newKws.length} 个关键词`);
+      } else {
+        message.info("关键词已全部存在");
+      }
+    } catch (err: any) {
+      message.error({ content: err?.message || "获取失败，请手动输入关键词", duration: 6 });
+    } finally {
+      setSemrushUrlFetching(false);
+    }
+  }, [semrushUrl, preview, kwList, message]);
 
   // ─── MCC/CID 操作 ───
   const loadCidList = useCallback(async (mccAccountId: string) => {
@@ -872,7 +915,7 @@ export default function AdPreviewPage() {
               </Button>
             }
           >
-            {kwList.length === 0 && !kwFetching && (
+            {kwList.length === 0 && !kwFetching && !semrushFailed && (
               <Alert
                 type="info" showIcon
                 message="暂无关键词"
@@ -884,6 +927,37 @@ export default function AdPreviewPage() {
               <div style={{ textAlign: "center", padding: "16px 0" }}>
                 <Spin tip="正在从 SemRush 获取竞品关键词..." />
               </div>
+            )}
+            {semrushFailed && !kwFetching && (
+              <Alert
+                type="warning" showIcon icon={<WarningOutlined />}
+                message="SemRush 自动获取失败"
+                description={
+                  <div>
+                    <Text type="secondary" style={{ display: "block", marginBottom: 8 }}>
+                      可粘贴 3UE SemRush 链接手动获取关键词，或在下方直接输入关键词
+                    </Text>
+                    <Space.Compact style={{ width: "100%" }}>
+                      <Input
+                        value={semrushUrl}
+                        onChange={(e) => setSemrushUrl(e.target.value)}
+                        placeholder="粘贴 3UE 链接，如 https://sem.3ue.co/analytics/overview/?q=..."
+                        onPressEnter={fetchKeywordsFromUrl}
+                        disabled={semrushUrlFetching}
+                      />
+                      <Button
+                        type="primary"
+                        onClick={fetchKeywordsFromUrl}
+                        loading={semrushUrlFetching}
+                        icon={<ThunderboltOutlined />}
+                      >
+                        获取
+                      </Button>
+                    </Space.Compact>
+                  </div>
+                }
+                style={{ marginBottom: 8 }}
+              />
             )}
             <Space wrap style={{ marginBottom: 8 }}>
               {kwList.map((kw, i) => (
