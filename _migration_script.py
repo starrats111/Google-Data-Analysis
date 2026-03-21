@@ -17,17 +17,14 @@ Migrates critical data:
 """
 import sqlite3
 import json
+import os
 import re
 import sys
 from datetime import datetime
 
-try:
-    import mariadb
-except ImportError:
-    print("Installing mariadb connector...")
-    import subprocess
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "mariadb"])
-    import mariadb
+import pymysql
+
+RESUME_FROM = int(os.environ.get("RESUME_FROM", "1"))
 
 
 SQLITE_PATH = "/home/admin/Google-Data-Analysis/backend/google_analysis.db"
@@ -37,6 +34,7 @@ MARIADB_CONFIG = {
     "user": "crm",
     "password": "CrmPass2026!",
     "database": "google-data-analysis",
+    "charset": "utf8mb4",
 }
 
 PLATFORM_ID_TO_CODE = {1: "RW", 2: "LB", 3: "LH", 4: "CG", 5: "PM", 6: "BSH", 7: "CF"}
@@ -66,6 +64,14 @@ def safe_datetime(val):
     return val
 
 
+def safe_get(row, key, default=None):
+    """sqlite3.Row doesn't support .get(), so use try/except"""
+    try:
+        return row[key]
+    except (IndexError, KeyError):
+        return default
+
+
 def migrate():
     print("=== Data Migration: SQLite -> MariaDB ===")
     print(f"SQLite: {SQLITE_PATH}")
@@ -75,8 +81,8 @@ def migrate():
     sqlite_conn = sqlite3.connect(SQLITE_PATH)
     sqlite_conn.row_factory = sqlite3.Row
 
-    maria_conn = mariadb.connect(**MARIADB_CONFIG)
-    maria_conn.autocommit = False
+    maria_conn = pymysql.connect(**MARIADB_CONFIG)
+    maria_conn.autocommit(False)
     mc = maria_conn.cursor()
 
     try:
@@ -88,7 +94,7 @@ def migrate():
         for r in rows:
             mc.execute("""
                 INSERT INTO teams (id, team_code, team_name, leader_id, is_deleted, created_at, updated_at)
-                VALUES (?, ?, ?, ?, 0, ?, ?)
+                VALUES (%s, %s, %s, %s, 0, %s, %s)
                 ON DUPLICATE KEY UPDATE team_name=VALUES(team_name)
             """, (r["id"], safe_str(r["team_code"], 20), safe_str(r["team_name"], 50),
                   r["leader_id"], safe_datetime(r["created_at"]) or datetime.now(),
@@ -106,7 +112,7 @@ def migrate():
             mc.execute("""
                 INSERT INTO users (id, username, password_hash, plain_password, role, status, team_id,
                                    display_name, is_deleted, created_at, updated_at)
-                VALUES (?, ?, ?, NULL, ?, 'active', ?, ?, 0, ?, ?)
+                VALUES (%s, %s, %s, NULL, %s, 'active', %s, %s, 0, %s, %s)
                 ON DUPLICATE KEY UPDATE display_name=VALUES(display_name)
             """, (r["id"], safe_str(r["username"], 64), safe_str(r["password_hash"], 255),
                   role, r["team_id"], safe_str(r["display_name"], 50),
@@ -125,7 +131,7 @@ def migrate():
                 INSERT INTO publish_sites (id, site_name, domain, site_path, site_type,
                     data_js_path, article_var_name, article_html_pattern,
                     deploy_type, status, verified, is_deleted, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'bt_ssh', 'active', 1, 0, ?, ?)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'bt_ssh', 'active', 1, 0, %s, %s)
                 ON DUPLICATE KEY UPDATE site_name=VALUES(site_name)
             """, (r["id"], safe_str(r["site_name"], 128), safe_str(r["domain"], 200),
                   safe_str(r["site_path"], 300), safe_str(r["site_type"], 30),
@@ -146,7 +152,7 @@ def migrate():
             mc.execute("""
                 INSERT INTO sheet_configs (id, config_type, sheet_url, last_synced_at,
                     updated_by, is_deleted, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, 0, ?, ?)
+                VALUES (%s, %s, %s, %s, %s, 0, %s, %s)
                 ON DUPLICATE KEY UPDATE sheet_url=VALUES(sheet_url)
             """, (r["id"], safe_str(r["config_type"], 32), r["sheet_url"],
                   safe_datetime(r["last_synced_at"]), r["updated_by"],
@@ -165,7 +171,7 @@ def migrate():
                 INSERT INTO google_mcc_accounts (id, user_id, mcc_id, mcc_name, currency,
                     service_account_json, sheet_url, developer_token, is_active, is_deleted,
                     created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, 0, ?, ?)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, NULL, %s, 0, %s, %s)
                 ON DUPLICATE KEY UPDATE mcc_name=VALUES(mcc_name)
             """, (r["id"], r["user_id"], safe_str(r["mcc_id"], 32),
                   safe_str(r["mcc_name"], 128), safe_str(r["currency"], 8) or "USD",
@@ -196,7 +202,7 @@ def migrate():
             mc.execute("""
                 INSERT INTO platform_connections (id, user_id, platform, account_name, api_key,
                     publish_site_id, status, last_synced_at, is_deleted, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, NULL, 'connected', NULL, 0, ?, ?)
+                VALUES (%s, %s, %s, %s, %s, NULL, 'connected', NULL, 0, %s, %s)
                 ON DUPLICATE KEY UPDATE api_key=VALUES(api_key)
             """, (r["id"], r["user_id"], platform_code,
                   safe_str(r["account_name"], 32) or "",
@@ -227,7 +233,7 @@ def migrate():
                     target_country, tracking_link, violation_status, violation_time,
                     recommendation_status, recommendation_time, policy_status,
                     is_deleted, created_at, updated_at)
-                VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, 'pending', 0, ?, ?)
+                VALUES (%s, %s, %s, %s, NULL, %s, %s, %s, %s, %s, NULL, %s, %s, %s, %s, 'pending', 0, %s, %s)
             """, (r["user_id"], platform, safe_str(r["mid"], 64) or "",
                   safe_str(r["merchant_name"], 255) or "",
                   safe_str(r["category"], 128), safe_str(r["commission_rate"], 64),
@@ -253,7 +259,7 @@ def migrate():
         for r in rows:
             platform = PLATFORM_CODE_UPPER.get(r["platform"], safe_str(r["platform"], 8) or "")
             batch.append((
-                r["user_id"] or 0, 0, None, r["affiliate_account_id"],
+                r["user_id"] or 0, 0, None,
                 platform, safe_str(r["merchant_id"], 64) or "",
                 safe_str(r["merchant"], 255) or "",
                 safe_str(r["transaction_id"], 128),
@@ -266,15 +272,18 @@ def migrate():
                 safe_datetime(r["updated_at"]) or datetime.now(),
             ))
 
-        mc.executemany("""
-            INSERT INTO affiliate_transactions (user_id, user_merchant_id, campaign_id,
-                platform_connection_id, platform, merchant_id, merchant_name,
-                transaction_id, transaction_time, order_amount, commission_amount,
-                currency, status, raw_status, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, batch)
-        maria_conn.commit()
-        print(f"  -> {len(batch)} affiliate_transactions migrated")
+        for i in range(0, len(batch), 1000):
+            chunk = batch[i:i+1000]
+            mc.executemany("""
+                INSERT INTO affiliate_transactions (user_id, user_merchant_id, campaign_id,
+                    platform, merchant_id, merchant_name,
+                    transaction_id, transaction_time, order_amount, commission_amount,
+                    currency, status, raw_status, created_at, updated_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """, chunk)
+            maria_conn.commit()
+            print(f"  -> batch {i//1000+1}: {len(chunk)} rows")
+        print(f"  -> {len(batch)} affiliate_transactions migrated total")
 
         # =============================================
         # 9. Migrate pub_articles -> articles
@@ -296,7 +305,7 @@ def migrate():
                     content, excerpt, language, keywords, images, status, published_at,
                     published_url, merchant_name, tracking_link, meta_title, meta_description,
                     is_deleted, created_at, updated_at)
-                VALUES (?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, 0, ?, ?)
+                VALUES (%s, NULL, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NULL, %s, %s, %s, %s, 0, %s, %s)
             """, (r["user_id"], r["site_id"],
                   safe_str(r["title"], 512), safe_str(r["slug"], 512),
                   r["content"], r["excerpt"],
@@ -317,25 +326,23 @@ def migrate():
         # =============================================
         print("[10/12] Migrating merchant_violations...")
         rows = sqlite_conn.execute("SELECT * FROM merchant_violations").fetchall()
-        batch = []
-        for r in rows:
-            batch.append((
-                safe_str(r["merchant_name"], 255) or "",
-                safe_str(r["platform"], 32) or "",
-                safe_str(r.get("merchant_url"), 255),
-                r.get("violation_reason"),
-                safe_datetime(r.get("violation_time")),
-                None,
-                safe_str(r["upload_batch"], 64) or "",
-                safe_datetime(r["created_at"]) or datetime.now(),
-            ))
-        mc.executemany("""
-            INSERT INTO merchant_violations (merchant_name, platform, merchant_domain,
-                violation_reason, violation_time, source, upload_batch, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        """, batch)
-        maria_conn.commit()
-        print(f"  -> {len(batch)} merchant_violations migrated")
+        for i in range(0, len(rows), 500):
+            chunk = rows[i:i+500]
+            for r in chunk:
+                mc.execute("""
+                    INSERT INTO merchant_violations (merchant_name, platform, merchant_domain,
+                        violation_reason, violation_time, source, upload_batch, created_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                """, (safe_str(r["merchant_name"], 255) or "",
+                      safe_str(r["platform"], 32) or "",
+                      safe_str(safe_get(r, "merchant_url"), 255),
+                      safe_get(r, "violation_reason"),
+                      safe_datetime(safe_get(r, "violation_time")),
+                      None,
+                      safe_str(r["upload_batch"], 64) or "",
+                      safe_datetime(r["created_at"]) or datetime.now()))
+            maria_conn.commit()
+        print(f"  -> {len(rows)} merchant_violations migrated")
 
         # =============================================
         # 11. Migrate merchant_recommendations
@@ -347,10 +354,10 @@ def migrate():
                 INSERT INTO merchant_recommendations (merchant_name, roi_reference,
                     commission_info, settlement_info, remark, share_time,
                     upload_batch, is_deleted, created_at)
-                VALUES (?, NULL, ?, NULL, ?, NULL, ?, 0, ?)
+                VALUES (%s, NULL, %s, NULL, %s, NULL, %s, 0, %s)
             """, (safe_str(r["merchant_name"], 255) or "",
-                  safe_str(r.get("commission_cap"), 64),
-                  r.get("recommend_reason"),
+                  safe_str(safe_get(r, "commission_cap"), 64),
+                  safe_get(r, "recommend_reason"),
                   safe_str(r["upload_batch"], 64) or "",
                   safe_datetime(r["created_at"]) or datetime.now()))
         maria_conn.commit()
@@ -365,7 +372,7 @@ def migrate():
             mc.execute("""
                 INSERT INTO notifications (user_id, type, title, content, is_read,
                     is_deleted, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, 0, ?, ?)
+                VALUES (%s, %s, %s, %s, %s, 0, %s, %s)
             """, (r["user_id"], safe_str(r["type"], 32) or "system",
                   safe_str(r["title"], 255) or "", r["content"],
                   1 if r["is_read"] else 0,

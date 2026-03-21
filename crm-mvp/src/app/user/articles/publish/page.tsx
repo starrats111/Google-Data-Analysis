@@ -4,11 +4,13 @@ import { useState, useEffect, useCallback } from "react";
 import { useSearchParams } from "next/navigation";
 import {
   Card, Steps, Form, Select, Button, Typography, Space, App, Spin, Image,
-  Checkbox, DatePicker, Row, Col, Tag, Result, Input,
+  Checkbox, DatePicker, Row, Col, Tag, Result, Input, Upload,
 } from "antd";
+import type { UploadFile, RcFile } from "antd/es/upload";
 import {
   ShopOutlined, GlobalOutlined, CameraOutlined, FileTextOutlined,
   CalendarOutlined, SendOutlined, CheckCircleOutlined, LoadingOutlined, SaveOutlined,
+  InboxOutlined, LinkOutlined,
 } from "@ant-design/icons";
 import { sanitizeHtml } from "@/lib/sanitize";
 import dayjs from "dayjs";
@@ -70,8 +72,12 @@ export default function ArticlePublishPage() {
   // Step 2: 爬取中
   const [crawling, setCrawling] = useState(false);
   const [crawlResult, setCrawlResult] = useState<CrawlResult | null>(null);
+  const [crawlFailed, setCrawlFailed] = useState(false);
+  const [manualUrl, setManualUrl] = useState("");
   // Step 3: 确认图片
   const [selectedImages, setSelectedImages] = useState<string[]>([]);
+  const [uploadedImages, setUploadedImages] = useState<string[]>([]);
+  const [uploading, setUploading] = useState(false);
   // Step 4: 生成文章预览
   const [generating, setGenerating] = useState(false);
   const [articlePreview, setArticlePreview] = useState<ArticlePreview | null>(null);
@@ -166,34 +172,64 @@ export default function ArticlePublishPage() {
   }, [articleSlugFromUrl, message]);
 
   // Step 2: 开始爬取商家信息
-  const handleCrawl = useCallback(async () => {
+  const handleCrawl = useCallback(async (overrideUrl?: string) => {
     if (!selectedMerchant) return;
     setCrawling(true);
+    setCrawlFailed(false);
     try {
+      const crawlTargetUrl = overrideUrl || manualUrl || selectedMerchant.merchant_url;
       const res = await fetch("/api/user/articles/crawl", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           merchant_id: selectedMerchant.id,
-          merchant_url: selectedMerchant.merchant_url,
+          merchant_url: crawlTargetUrl,
           merchant_name: selectedMerchant.merchant_name,
           country,
         }),
       }).then((r) => r.json());
 
-      if (res.code === 0) {
+      if (res.code === 0 && res.data?.images?.length > 0) {
         setCrawlResult(res.data);
         setSelectedImages(res.data.images?.slice(0, 5) || []);
         setStep(3);
       } else {
-        message.error(res.message || "爬取失败");
+        setCrawlFailed(true);
+        setCrawlResult(res.data || null);
+        message.warning("未爬取到图片，可手动输入 URL 重试或直接上传图片");
       }
     } catch {
+      setCrawlFailed(true);
       message.error("爬取请求失败");
     } finally {
       setCrawling(false);
     }
-  }, [selectedMerchant, country, message]);
+  }, [selectedMerchant, country, manualUrl, message]);
+
+  const handleSkipCrawl = useCallback(() => {
+    setCrawlResult({ images: [], title: selectedMerchant?.merchant_name || "", description: "", selling_points: [] });
+    setStep(3);
+  }, [selectedMerchant]);
+
+  const handleImageUpload = useCallback(async (file: RcFile) => {
+    if (file.size > 10 * 1024 * 1024) { message.error("图片不能超过 10MB"); return false; }
+    setUploading(true);
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+      const res = await fetch("/api/user/ad-creation/upload-image", { method: "POST", body: formData }).then(r => r.json());
+      if (res.code === 0 && res.data?.url) {
+        const imgUrl = res.data.url;
+        setUploadedImages(prev => [...prev, imgUrl]);
+        setSelectedImages(prev => [...prev, imgUrl]);
+        message.success("图片上传成功");
+      } else {
+        message.error(res.message || "上传失败");
+      }
+    } catch { message.error("上传请求失败"); }
+    finally { setUploading(false); }
+    return false;
+  }, [message]);
 
   // Step 4: 生成文章
   const handleGenerate = useCallback(async () => {
@@ -481,11 +517,37 @@ export default function ArticlePublishPage() {
         <Card style={{ textAlign: "center", padding: 48 }}>
           <Spin size="large" tip="正在爬取商家信息和图片..." spinning={crawling}>
             <div style={{ minHeight: 200 }}>
-              {!crawling && crawlResult && (
+              {!crawling && !crawlFailed && crawlResult && (
                 <Result status="success" title="爬取完成" subTitle={`获取到 ${crawlResult.images?.length || 0} 张图片`} />
               )}
-              {!crawling && !crawlResult && (
-                <Result status="warning" title="爬取未开始" extra={<Button type="primary" onClick={handleCrawl}>重新爬取</Button>} />
+              {!crawling && crawlFailed && (
+                <Result
+                  status="warning"
+                  title="爬取未获取到图片"
+                  subTitle="该商家可能有企业级反爬保护，您可以手动输入产品页 URL 重试，或跳过爬取直接上传图片"
+                  extra={
+                    <Space direction="vertical" size={16} style={{ width: "100%", maxWidth: 500 }}>
+                      <Input.Search
+                        placeholder="输入商家产品页 URL，如 https://www.bofrost.de/produkte/"
+                        enterButton="用此 URL 重试爬取"
+                        size="large"
+                        prefix={<LinkOutlined />}
+                        value={manualUrl}
+                        onChange={(e) => setManualUrl(e.target.value)}
+                        onSearch={(v) => { if (v) handleCrawl(v); }}
+                      />
+                      <Space>
+                        <Button onClick={() => setStep(1)}>上一步</Button>
+                        <Button type="primary" onClick={handleSkipCrawl}>
+                          跳过爬取，直接上传图片
+                        </Button>
+                      </Space>
+                    </Space>
+                  }
+                />
+              )}
+              {!crawling && !crawlFailed && !crawlResult && (
+                <Result status="warning" title="爬取未开始" extra={<Button type="primary" onClick={() => handleCrawl()}>重新爬取</Button>} />
               )}
             </div>
           </Spin>
@@ -497,36 +559,90 @@ export default function ArticlePublishPage() {
         <Card>
           <Title level={5}>选择文章配图（已选 {selectedImages.length} 张）</Title>
           <Text type="secondary" style={{ display: "block", marginBottom: 16 }}>
-            从爬取结果中选择要在文章中使用的图片
+            从爬取结果中选择图片，或拖动上传本地图片
           </Text>
-          <Row gutter={[12, 12]} style={{ marginBottom: 24 }}>
-            {(crawlResult.images || []).map((img, i) => (
-              <Col key={i} xs={12} sm={8} md={6} lg={4}>
-                <div
-                  style={{
-                    border: selectedImages.includes(img) ? "2px solid #1677ff" : "2px solid #f0f0f0",
-                    borderRadius: 8, padding: 4, cursor: "pointer", position: "relative",
-                  }}
-                  onClick={() => {
-                    setSelectedImages((prev) =>
-                      prev.includes(img) ? prev.filter((u) => u !== img) : [...prev, img]
-                    );
-                  }}
-                >
-                  <Image src={img} alt={`img-${i}`} width="100%" height={120} style={{ objectFit: "cover", borderRadius: 6 }} preview={false} />
-                  {selectedImages.includes(img) && (
-                    <CheckCircleOutlined style={{ position: "absolute", top: 8, right: 8, fontSize: 20, color: "#1677ff" }} />
-                  )}
-                </div>
-              </Col>
-            ))}
-          </Row>
-          {crawlResult.images?.length === 0 && (
-            <Text type="secondary">未爬取到图片，将使用默认配图</Text>
+
+          {/* 拖动上传区域 */}
+          <div style={{ marginBottom: 24 }}>
+            <Upload.Dragger
+              accept="image/jpeg,image/png,image/webp,image/gif"
+              multiple
+              showUploadList={false}
+              beforeUpload={handleImageUpload}
+              disabled={uploading}
+            >
+              <p className="ant-upload-drag-icon"><InboxOutlined /></p>
+              <p className="ant-upload-text">{uploading ? "上传中..." : "拖动图片到此处，或点击选择文件"}</p>
+              <p className="ant-upload-hint">支持 JPG/PNG/WebP/GIF，单张不超过 10MB</p>
+            </Upload.Dragger>
+          </div>
+
+          {/* 已上传的图片 */}
+          {uploadedImages.length > 0 && (
+            <>
+              <Text strong style={{ display: "block", marginBottom: 8 }}>已上传的图片：</Text>
+              <Row gutter={[12, 12]} style={{ marginBottom: 16 }}>
+                {uploadedImages.map((img, i) => (
+                  <Col key={`up-${i}`} xs={12} sm={8} md={6} lg={4}>
+                    <div
+                      style={{
+                        border: selectedImages.includes(img) ? "2px solid #52c41a" : "2px solid #f0f0f0",
+                        borderRadius: 8, padding: 4, cursor: "pointer", position: "relative",
+                      }}
+                      onClick={() => {
+                        setSelectedImages((prev) =>
+                          prev.includes(img) ? prev.filter((u) => u !== img) : [...prev, img]
+                        );
+                      }}
+                    >
+                      <Image src={img} alt={`uploaded-${i}`} width="100%" height={120} style={{ objectFit: "cover", borderRadius: 6 }} preview={false} />
+                      {selectedImages.includes(img) && (
+                        <CheckCircleOutlined style={{ position: "absolute", top: 8, right: 8, fontSize: 20, color: "#52c41a" }} />
+                      )}
+                      <Tag color="green" style={{ position: "absolute", bottom: 8, left: 8, fontSize: 10 }}>已上传</Tag>
+                    </div>
+                  </Col>
+                ))}
+              </Row>
+            </>
           )}
+
+          {/* 爬取到的图片 */}
+          {(crawlResult.images || []).length > 0 && (
+            <>
+              <Text strong style={{ display: "block", marginBottom: 8 }}>爬取到的图片：</Text>
+              <Row gutter={[12, 12]} style={{ marginBottom: 24 }}>
+                {(crawlResult.images || []).map((img, i) => (
+                  <Col key={i} xs={12} sm={8} md={6} lg={4}>
+                    <div
+                      style={{
+                        border: selectedImages.includes(img) ? "2px solid #1677ff" : "2px solid #f0f0f0",
+                        borderRadius: 8, padding: 4, cursor: "pointer", position: "relative",
+                      }}
+                      onClick={() => {
+                        setSelectedImages((prev) =>
+                          prev.includes(img) ? prev.filter((u) => u !== img) : [...prev, img]
+                        );
+                      }}
+                    >
+                      <Image src={img} alt={`img-${i}`} width="100%" height={120} style={{ objectFit: "cover", borderRadius: 6 }} preview={false} />
+                      {selectedImages.includes(img) && (
+                        <CheckCircleOutlined style={{ position: "absolute", top: 8, right: 8, fontSize: 20, color: "#1677ff" }} />
+                      )}
+                    </div>
+                  </Col>
+                ))}
+              </Row>
+            </>
+          )}
+
+          {(crawlResult.images || []).length === 0 && uploadedImages.length === 0 && (
+            <Text type="secondary" style={{ display: "block", marginBottom: 16 }}>未爬取到图片，请上传商家产品图片用于文章配图</Text>
+          )}
+
           <Space>
             <Button onClick={() => setStep(1)}>上一步</Button>
-            <Button type="primary" loading={generating} onClick={handleGenerate}>
+            <Button type="primary" loading={generating} onClick={handleGenerate} disabled={selectedImages.length === 0 && uploadedImages.length === 0}>
               {generating ? "生成中..." : "生成文章"}
             </Button>
           </Space>

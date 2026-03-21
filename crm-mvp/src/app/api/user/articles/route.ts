@@ -47,7 +47,7 @@ export async function GET(req: NextRequest) {
     siteIds.length > 0
       ? prisma.publish_sites.findMany({
           where: { id: { in: siteIds } },
-          select: { id: true, site_name: true, domain: true },
+          select: { id: true, site_name: true, domain: true, article_html_pattern: true },
         })
       : [],
   ]);
@@ -55,18 +55,29 @@ export async function GET(req: NextRequest) {
   const merchantMap = new Map(merchants.map((m) => [String(m.id), m]));
   const siteMap = new Map(sites.map((s) => [String(s.id), s]));
 
-  // 组装返回数据
+  // 组装返回数据，回补缺失的 published_url
+  const urlFixOps: Promise<unknown>[] = [];
   const enrichedArticles = articles.map((a) => {
     const merchant = a.user_merchant_id ? merchantMap.get(String(a.user_merchant_id)) : null;
     const site = a.publish_site_id ? siteMap.get(String(a.publish_site_id)) : null;
+
+    let publishedUrl = a.published_url;
+    if (!publishedUrl && a.status === "published" && site?.domain && a.slug) {
+      const pattern = (site as any).article_html_pattern || "article.html?title={slug}";
+      publishedUrl = `https://${site.domain}/${pattern.replace("{slug}", a.slug)}`;
+      urlFixOps.push(prisma.articles.update({ where: { id: a.id }, data: { published_url: publishedUrl } }));
+    }
+
     return {
       ...a,
+      published_url: publishedUrl,
       merchant_name: a.merchant_name || merchant?.merchant_name || null,
       merchant_id: merchant?.merchant_id || null,
       site_name: site?.site_name || null,
       site_domain: site?.domain || null,
     };
   });
+  if (urlFixOps.length > 0) Promise.all(urlFixOps).catch(() => {});
 
   return apiSuccess(serializeData({ articles: enrichedArticles, total, page, pageSize }));
 }

@@ -108,15 +108,39 @@ async function doSyncInBackground(
       return;
     }
 
-    // 2. 写入 user_merchants（使用唯一索引 user_id+platform+merchant_id 保证不重复）
+    // 2. 写入 user_merchants（去重 + 防止新增重复）
     const existing = await prisma.user_merchants.findMany({
       where: { user_id: userId },
       select: { id: true, platform: true, merchant_id: true, status: true, is_deleted: true, platform_connection_id: true },
     });
-    const map = new Map(existing.map(m => [`${m.platform}:${m.merchant_id}`, m]));
 
+    // 清理历史重复数据：保留 status=claimed 或 id 最小的记录，删除其余
+    const groupedByKey = new Map<string, typeof existing>();
+    for (const m of existing) {
+      const k = `${m.platform}:${m.merchant_id}`;
+      const arr = groupedByKey.get(k) || [];
+      arr.push(m);
+      groupedByKey.set(k, arr);
+    }
+    const deduped: typeof existing = [];
+    for (const [, arr] of groupedByKey) {
+      if (arr.length <= 1) { deduped.push(arr[0]); continue; }
+      const keep = arr.find(m => m.status === "claimed") || arr.reduce((a, b) => (a.id < b.id ? a : b));
+      deduped.push(keep);
+      const toDelete = arr.filter(m => m.id !== keep.id);
+      if (toDelete.length > 0) {
+        await prisma.user_merchants.deleteMany({ where: { id: { in: toDelete.map(m => m.id) } } });
+        console.log(`[MerchantSync] 清理重复商家: ${toDelete.length} 条 (key=${arr[0].platform}:${arr[0].merchant_id})`);
+      }
+    }
+
+    const map = new Map(deduped.map(m => [`${m.platform}:${m.merchant_id}`, m]));
+
+    const seenInThisBatch = new Set<string>();
     for (const row of rows) {
       const key = `${row.platform_code}:${row.merchant_id}`;
+      if (seenInThisBatch.has(key)) continue;
+      seenInThisBatch.add(key);
       platformCounts[row.platform_code] = (platformCounts[row.platform_code] || 0) + 1;
 
       let regions: unknown = null;
@@ -149,7 +173,7 @@ async function doSyncInBackground(
         await prisma.user_merchants.update({ where: { id: ex.id }, data: updateData });
         updatedCount++;
       } else {
-        await prisma.user_merchants.create({
+        const created = await prisma.user_merchants.create({
           data: {
             user_id: userId,
             platform: row.platform_code,
@@ -165,6 +189,7 @@ async function doSyncInBackground(
             status: "available",
           },
         });
+        map.set(key, { id: created.id, platform: row.platform_code, merchant_id: row.merchant_id, status: "available", is_deleted: 0, platform_connection_id: row.conn_id || null });
         newCount++;
       }
     }
