@@ -103,7 +103,7 @@ export function cleanArticleContent(raw: string): { cleaned: string; wasDirty: b
     } catch { /* continue to regex fallback */ }
 
     // 方式2：正则提取 "content":"..." 字段值
-    const contentMatch = stripped.match(/"content"\s*:\s*"((?:[^"\\]|\\.)*)"/s);
+    const contentMatch = stripped.match(new RegExp('"content"\\s*:\\s*"((?:[^"\\\\]|\\\\.)*)"', "s"));
     if (contentMatch) {
       content = contentMatch[1]
         .replace(/\\n/g, "\n")

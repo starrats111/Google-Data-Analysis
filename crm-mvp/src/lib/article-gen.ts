@@ -128,7 +128,7 @@ export async function generateMerchantArticle(params: {
   const langLabel = COUNTRY_LANG_MAP[country.toUpperCase()] || "English";
   const year = new Date().getFullYear();
 
-  const articleType = "review", articleLength = "medium";
+  const articleType = "review", articleLength: string = "medium";
   const seoFocus: string[] = [], extraPrompt = "";
 
   const wordCount = articleLength === "short" ? "500-800" : articleLength === "long" ? "1500-2000" : "1000-1500";

@@ -230,7 +230,7 @@ export async function POST(req: NextRequest) {
       generateCallouts(merchantName, merchantUrl, country, crawlResult.html)
         .then((data) => { result.callouts = data; })
         .catch(() => {
-          result.callouts = getDefaultCallouts(country);
+          result.callouts = getDefaultCallouts(merchantName, country, []);
         }),
     );
   }

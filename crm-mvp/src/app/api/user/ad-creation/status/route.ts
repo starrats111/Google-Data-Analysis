@@ -129,7 +129,7 @@ export async function GET(req: NextRequest) {
       network_search: adSettings.network_search,
       network_partners: adSettings.network_partners,
       network_display: adSettings.network_display,
-      eu_political_ad: adSettings.eu_political_ad,
+      eu_political_ad: (adSettings as any).eu_political_ad ?? 0,
     } : null,
     merchant,
     mccAccounts,
