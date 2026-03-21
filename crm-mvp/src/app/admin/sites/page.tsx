@@ -235,14 +235,36 @@ function ServerConfigCard({ onConfigLoaded }: { onConfigLoaded?: () => void }) {
 
           <Divider titlePlacement="left" plain>部署凭证</Divider>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 24px" }}>
-            <Form.Item name="github_token" label="GitHub Token" rules={[{ required: true, message: "请输入 GitHub Token" }]}>
-              <Password placeholder="ghp_..." />
+            <Form.Item label="GitHub Token">
+              <Space.Compact style={{ width: "100%" }}>
+                <Form.Item name="github_token" noStyle>
+                  <Password placeholder="ghp_..." style={{ flex: 1 }} />
+                </Form.Item>
+                <Tooltip title="清除 Token">
+                  <Button
+                    danger
+                    icon={<DeleteOutlined />}
+                    onClick={() => { form.setFieldValue("github_token", ""); message.info("已清除 GitHub Token，保存后生效"); }}
+                  />
+                </Tooltip>
+              </Space.Compact>
             </Form.Item>
             <Form.Item name="github_org" label="GitHub 组织/用户名">
               <Input placeholder="如：starrats111" />
             </Form.Item>
-            <Form.Item name="cf_token" label="Cloudflare API Token" rules={[{ required: true, message: "请输入 Cloudflare Token" }]}>
-              <Password placeholder="Bearer Token" />
+            <Form.Item label="Cloudflare API Token">
+              <Space.Compact style={{ width: "100%" }}>
+                <Form.Item name="cf_token" noStyle>
+                  <Password placeholder="Bearer Token" style={{ flex: 1 }} />
+                </Form.Item>
+                <Tooltip title="清除 Token">
+                  <Button
+                    danger
+                    icon={<DeleteOutlined />}
+                    onClick={() => { form.setFieldValue("cf_token", ""); message.info("已清除 Cloudflare Token，保存后生效"); }}
+                  />
+                </Tooltip>
+              </Space.Compact>
             </Form.Item>
             <Form.Item name="bt_server_ip" label="宝塔服务器公网 IP" rules={[{ required: true, message: "请输入公网 IP" }]}>
               <Input placeholder="如：52.74.221.116" />

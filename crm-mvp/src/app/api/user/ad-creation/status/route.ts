@@ -103,6 +103,7 @@ export async function GET(req: NextRequest) {
       network_search: campaign.network_search,
       network_partners: campaign.network_partners,
       network_display: campaign.network_display,
+      language_id: campaign.language_id,
       google_campaign_id: campaign.google_campaign_id,
       customer_id: campaign.customer_id,
       mcc_id: campaign.mcc_id,

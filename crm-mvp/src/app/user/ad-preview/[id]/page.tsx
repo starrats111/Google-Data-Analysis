@@ -167,8 +167,8 @@ export default function AdPreviewPage() {
     setNetworkSearch(c?.network_search === 1 || s?.network_search === 1);
     setNetworkPartners(c?.network_partners === 1 || s?.network_partners === 1);
     setNetworkDisplay(c?.network_display === 1 || s?.network_display === 1);
-    // 初始化广告语言：优先用已保存的，否则根据国家推断
-    const savedLang = c?.ad_language || s?.ad_language || "";
+    // 初始化广告语言：优先用后端根据国家自动设置的 language_id，兜底按国家推断
+    const savedLang = c?.language_id || "";
     if (savedLang) {
       setAdLanguage(savedLang);
     } else {

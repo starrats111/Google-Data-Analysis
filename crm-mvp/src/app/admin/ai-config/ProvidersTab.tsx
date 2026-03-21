@@ -83,12 +83,17 @@ export default function AIProvidersTab() {
       <Modal title={editItem ? "编辑供应商" : "添加供应商"} open={modalOpen} onOk={handleSubmit} onCancel={() => setModalOpen(false)}>
         <Form form={form} layout="vertical">
           <Form.Item name="provider_name" label="供应商名称" rules={[{ required: true }]}>
-            <Select options={[
-              { value: "openai", label: "OpenAI" },
-              { value: "anthropic", label: "Anthropic" },
-              { value: "deepseek", label: "DeepSeek" },
-              { value: "google", label: "Google" },
-            ]} />
+            <Select
+              showSearch
+              options={[
+                { value: "hajimi", label: "哈基米中转" },
+                { value: "openai", label: "OpenAI" },
+                { value: "anthropic", label: "Anthropic" },
+                { value: "deepseek", label: "DeepSeek" },
+                { value: "google", label: "Google" },
+                { value: "other", label: "其他" },
+              ]}
+            />
           </Form.Item>
           <Form.Item name="api_key" label="API Key" rules={[{ required: true }]}>
             <Input.Password />

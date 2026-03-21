@@ -460,6 +460,7 @@ export async function POST(req: NextRequest) {
         daily_budget: daily_budget,
         bidding_strategy: bidding_strategy,
         max_cpc_limit: max_cpc_limit,
+        language_id: ad_language || null,
         network_search: network_search ? 1 : 0,
         network_partners: network_partners ? 1 : 0,
         network_display: network_display ? 1 : 0,

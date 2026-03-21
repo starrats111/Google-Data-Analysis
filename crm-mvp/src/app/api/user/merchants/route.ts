@@ -5,6 +5,19 @@ import { withUser } from "@/lib/api-handler";
 import prisma from "@/lib/prisma";
 import { generateCampaignName } from "@/lib/campaign-naming";
 
+// 国家 → Google Ads 语言代码（创建 campaign 时自动设置）
+const COUNTRY_TO_LANG_CODE: Record<string, string> = {
+  US: "en", UK: "en", GB: "en", CA: "en", AU: "en", IE: "en", SG: "en", NZ: "en", PH: "en", IN: "en",
+  DE: "de", AT: "de", CH: "de",
+  FR: "fr", BE: "fr",
+  ES: "es", MX: "es", AR: "es", CL: "es", CO: "es",
+  IT: "it", PT: "pt", BR: "pt", NL: "nl",
+  JP: "ja", KR: "ko", CN: "zh_CN", TW: "zh_TW", HK: "zh_TW",
+  RU: "ru", PL: "pl", SE: "sv", NO: "no", DK: "da", FI: "fi", CZ: "cs",
+  TR: "tr", TH: "th", VN: "vi", ID: "id", MY: "ms",
+  SA: "ar", AE: "ar", IL: "iw", GR: "el", RO: "ro", HU: "hu", BG: "bg",
+};
+
 // 政策类别代码 → 中文
 const POLICY_CATEGORY_CN: Record<string, string> = {
   alcohol: "酒类", gambling: "赌博", tobacco: "烟草", cannabis: "大麻/CBD",
@@ -451,6 +464,9 @@ export const POST = withUser(async (req: NextRequest, { user }) => {
     adSettings?.naming_rule || "global",
   );
 
+  // 根据目标国家自动确定广告语言
+  const langCode = COUNTRY_TO_LANG_CODE[target_country.toUpperCase()] || "en";
+
   // 创建广告系列
   const campaign = await prisma.campaigns.create({
     data: {
@@ -461,6 +477,7 @@ export const POST = withUser(async (req: NextRequest, { user }) => {
       bidding_strategy: adSettings?.bidding_strategy || "MAXIMIZE_CLICKS",
       max_cpc_limit: adSettings?.max_cpc || 0.3,
       target_country,
+      language_id: langCode,
       network_search: adSettings?.network_search ?? 1,
       network_partners: adSettings?.network_partners ?? 0,
       network_display: adSettings?.network_display ?? 0,

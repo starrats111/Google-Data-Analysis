@@ -1,7 +1,7 @@
 "use client";
 import { useState, useCallback, useMemo, useEffect } from "react";
 import { Card, Row, Col, Table, Input, Select, Button, Space, Tag, Modal, Form, Typography, Popconfirm, Switch, InputNumber, Tabs, App, Tooltip } from "antd";
-import { ShopOutlined, SearchOutlined, CheckOutlined, DollarOutlined, CalendarOutlined, SaveOutlined, SyncOutlined, WarningOutlined, StarOutlined, CopyOutlined, LinkOutlined } from "@ant-design/icons";
+import { ShopOutlined, SearchOutlined, CheckOutlined, DollarOutlined, CalendarOutlined, SaveOutlined, SyncOutlined, WarningOutlined, StarOutlined, CopyOutlined, LinkOutlined, ReloadOutlined } from "@ant-design/icons";
 import { PLATFORMS, BIDDING_STRATEGIES } from "@/lib/constants";
 import { useApiWithParams, useStaleApi, mutateApi, refreshApi } from "@/lib/swr";
 import { useRouter } from "next/navigation";
@@ -99,8 +99,8 @@ export default function MerchantsPage() {
   useEffect(() => { if (adData) adForm.setFieldsValue({ ...adData, max_cpc: Number(adData.max_cpc), daily_budget: Number(adData.daily_budget) }); }, [adData, adForm]);
   const [vioSearch, setVioSearch] = useState(""); const [vioPage, setVioPage] = useState(1);
   const [recSearch, setRecSearch] = useState(""); const [recPage, setRecPage] = useState(1);
-  const { data: vioData, isLoading: vl } = useApiWithParams<{ items: any[]; total: number }>(tab === "violations" ? "/api/user/merchants/sheet-sync" : null, { type: "violation", page: vioPage, pageSize: 50, ...(vioSearch ? { search: vioSearch } : {}) });
-  const { data: recData, isLoading: rl } = useApiWithParams<{ items: any[]; total: number }>(tab === "recommendations" ? "/api/user/merchants/sheet-sync" : null, { type: "recommendation", page: recPage, pageSize: 50, ...(recSearch ? { search: recSearch } : {}) });
+  const { data: vioData, isLoading: vl, error: vioError, mutate: vioMutate } = useApiWithParams<{ items: any[]; total: number }>(tab === "violations" ? "/api/user/merchants/sheet-sync" : null, { type: "violation", page: vioPage, pageSize: 50, ...(vioSearch ? { search: vioSearch } : {}) });
+  const { data: recData, isLoading: rl, error: recError, mutate: recMutate } = useApiWithParams<{ items: any[]; total: number }>(tab === "recommendations" ? "/api/user/merchants/sheet-sync" : null, { type: "recommendation", page: recPage, pageSize: 50, ...(recSearch ? { search: recSearch } : {}) });
   const [cc, setCc] = useState(""); const [qc, setQc] = useState("");
   const { data: holidays, isLoading: hl } = useApiWithParams<Holiday[]>(qc ? "/api/user/holidays" : null, { country: qc });
   const [claimModal, setClaimModal] = useState(false); const [claimM, setClaimM] = useState<Merchant | null>(null); const [claimForm] = Form.useForm();
@@ -246,9 +246,19 @@ export default function MerchantsPage() {
         </Space>) : null} />
       {tab === "claimed" && <Table columns={claimedCols} dataSource={merchants} rowKey="id" loading={ml} onChange={handleTableChange} pagination={{ current: page, pageSize: 50, total, onChange: setPage, showTotal: (t: number) => `共 ${t} 条` }} scroll={{ x: 1000 }} size="small" />}
       {tab === "available" && <Table columns={availCols} dataSource={merchants} rowKey="id" loading={ml} onChange={handleTableChange} pagination={{ current: page, pageSize: 50, total, onChange: setPage, showTotal: (t: number) => `共 ${t} 条` }} scroll={{ x: 1100 }} size="small" />}
-      {tab === "violations" && (<div><div style={{ marginBottom: 12 }}><Space><Input allowClear placeholder="搜索商家名" style={{ width: 240 }} prefix={<SearchOutlined />} value={vioSearch} onChange={(e) => setVioSearch(e.target.value)} onPressEnter={() => setVioPage(1)} /><Button type="primary" size="small" onClick={() => setVioPage(1)}>查询</Button></Space></div>
+      {tab === "violations" && (<div>
+        {vioError && <div style={{ marginBottom: 12, padding: "8px 12px", background: "#fff2f0", border: "1px solid #ffccc7", borderRadius: 6, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <span><WarningOutlined style={{ color: "#ff4d4f", marginRight: 6 }} />加载违规商家失败：{vioError.message || "请求异常"}</span>
+          <Button size="small" icon={<ReloadOutlined />} onClick={() => vioMutate()}>重试</Button>
+        </div>}
+        <div style={{ marginBottom: 12 }}><Space><Input allowClear placeholder="搜索商家名" style={{ width: 240 }} prefix={<SearchOutlined />} value={vioSearch} onChange={(e) => setVioSearch(e.target.value)} onPressEnter={() => setVioPage(1)} /><Button type="primary" size="small" onClick={() => setVioPage(1)}>查询</Button><Button size="small" icon={<ReloadOutlined />} onClick={() => vioMutate()}>刷新</Button></Space></div>
         <Table rowKey="id" loading={vl} dataSource={vioData?.items || []} size="small" scroll={{ x: 1000 }} pagination={{ current: vioPage, pageSize: 50, total: vioData?.total || 0, showTotal: (t: number) => `共 ${t} 条`, onChange: setVioPage }} columns={vioCols} /></div>)}
-      {tab === "recommendations" && (<div><div style={{ marginBottom: 12 }}><Space><Input allowClear placeholder="搜索商家名" style={{ width: 240 }} prefix={<SearchOutlined />} value={recSearch} onChange={(e) => setRecSearch(e.target.value)} onPressEnter={() => setRecPage(1)} /><Button type="primary" size="small" onClick={() => setRecPage(1)}>查询</Button></Space></div>
+      {tab === "recommendations" && (<div>
+        {recError && <div style={{ marginBottom: 12, padding: "8px 12px", background: "#fff2f0", border: "1px solid #ffccc7", borderRadius: 6, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <span><WarningOutlined style={{ color: "#ff4d4f", marginRight: 6 }} />加载推荐商家失败：{recError.message || "请求异常"}</span>
+          <Button size="small" icon={<ReloadOutlined />} onClick={() => recMutate()}>重试</Button>
+        </div>}
+        <div style={{ marginBottom: 12 }}><Space><Input allowClear placeholder="搜索商家名" style={{ width: 240 }} prefix={<SearchOutlined />} value={recSearch} onChange={(e) => setRecSearch(e.target.value)} onPressEnter={() => setRecPage(1)} /><Button type="primary" size="small" onClick={() => setRecPage(1)}>查询</Button><Button size="small" icon={<ReloadOutlined />} onClick={() => recMutate()}>刷新</Button></Space></div>
         <Table rowKey="id" loading={rl} dataSource={recData?.items || []} size="small" scroll={{ x: 1000 }} pagination={{ current: recPage, pageSize: 50, total: recData?.total || 0, showTotal: (t: number) => `共 ${t} 条`, onChange: setRecPage }} columns={recCols} /></div>)}
     </Card>
     <Modal title={`领取商家: ${claimM?.merchant_name}`} open={claimModal} onOk={submitClaim} onCancel={() => setClaimModal(false)}>

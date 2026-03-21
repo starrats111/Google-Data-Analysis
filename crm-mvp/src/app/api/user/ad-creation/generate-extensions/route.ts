@@ -32,6 +32,38 @@ function isBadSitelinkUrl(url: string): boolean {
   return false;
 }
 
+/** 解码 HTML 实体（&amp; &ndash; &#39; 等） */
+function decodeHtmlEntities(str: string): string {
+  return str
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'")
+    .replace(/&apos;/gi, "'")
+    .replace(/&ndash;/gi, "–")
+    .replace(/&mdash;/gi, "—")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&laquo;/gi, "«")
+    .replace(/&raquo;/gi, "»")
+    .replace(/&copy;/gi, "©")
+    .replace(/&reg;/gi, "®")
+    .replace(/&trade;/gi, "™")
+    .replace(/&#(\d+);/g, (_, n) => String.fromCharCode(parseInt(n, 10)))
+    .replace(/&#x([0-9a-f]+);/gi, (_, h) => String.fromCharCode(parseInt(h, 16)));
+}
+
+/** 智能截断：在字符限制内保持语义完整，优先在单词边界截断 */
+function smartTruncate(text: string, maxLen: number): string {
+  if (text.length <= maxLen) return text;
+  const truncated = text.slice(0, maxLen);
+  const lastSpace = truncated.lastIndexOf(" ");
+  if (lastSpace > maxLen * 0.5) {
+    return truncated.slice(0, lastSpace).replace(/[,.\-–—:;]+$/, "").trim();
+  }
+  return truncated.replace(/[,.\-–—:;\s]+$/, "").trim();
+}
+
 const BLOCKED_PAGE_TITLES = [
   "just a moment", "attention required", "access denied",
   "you have been blocked", "security check", "checking your browser",
@@ -304,18 +336,20 @@ async function probeUrlReal(
         continue;
       }
 
-      // 提取标题和描述
-      const cleanTitle = pageTitle
-        .replace(/\s*[\|–—]\s*[^|–—]{0,40}$/, "")
-        .replace(/\s*-\s*[A-Z][a-zA-Z\s]{0,30}$/, "")
-        .trim()
-        .slice(0, 25);
+      // 提取标题和描述（解码 HTML 实体 + 智能截断）
+      const cleanTitle = smartTruncate(
+        decodeHtmlEntities(pageTitle)
+          .replace(/\s*[\|–—]\s*[^|–—]{0,40}$/, "")
+          .replace(/\s*-\s*[A-Z][a-zA-Z\s]{0,30}$/, "")
+          .trim(),
+        25,
+      );
 
       const descMatch = html.match(/<meta[^>]+name=["']description["'][^>]+content=["']([^"']*)/i)
         || html.match(/<meta[^>]+content=["']([^"']*?)["'][^>]+name=["']description["']/i);
       const ogDescMatch = html.match(/<meta[^>]+property=["']og:description["'][^>]+content=["']([^"']*)/i)
         || html.match(/<meta[^>]+content=["']([^"']*?)["'][^>]+property=["']og:description["']/i);
-      const desc = (descMatch?.[1] || ogDescMatch?.[1] || "").trim().slice(0, 35);
+      const desc = smartTruncate(decodeHtmlEntities((descMatch?.[1] || ogDescMatch?.[1] || "").trim()), 35);
 
       if (!cleanTitle || cleanTitle.length < 2) {
         const pathTitle = titleFromUrlPath(finalUrl);
@@ -398,19 +432,19 @@ async function generateSitelinks(
       let desc1 = "";
 
       if (meta.ok && meta.title && !isBlockedTitle(meta.title)) {
-        title = meta.title
+        title = decodeHtmlEntities(meta.title)
           .replace(/\s*[\|–—]\s*[^|–—]{0,40}$/, "")
           .replace(/\s*-\s*[A-Z][a-zA-Z\s]{0,30}$/, "")
-          .trim()
-          .slice(0, 25);
+          .trim();
+        title = smartTruncate(title, 25);
       }
 
       // 跳过无意义的 link.text（如 "click here" 等）
       const BAD_LINK_TEXTS = ["click here", "read more", "learn more", "see more", "view more", "here", "link", "click"];
       if (!title || title.length < 2) {
-        const cleanLinkText = link.text.trim();
+        const cleanLinkText = decodeHtmlEntities(link.text.trim());
         if (cleanLinkText.length >= 2 && !BAD_LINK_TEXTS.includes(cleanLinkText.toLowerCase())) {
-          title = cleanLinkText.slice(0, 25);
+          title = smartTruncate(cleanLinkText, 25);
         }
       }
 
@@ -420,7 +454,7 @@ async function generateSitelinks(
       }
 
       if (meta.ok && meta.description) {
-        desc1 = meta.description.slice(0, 35);
+        desc1 = smartTruncate(decodeHtmlEntities(meta.description), 35);
       }
 
       if (title.length >= 2) {
@@ -607,20 +641,76 @@ async function selectBestImages(
   return filtered.slice(0, 20);
 }
 
+/** 从 HTML 中提取商家真实卖点信息（运费政策、退换货、品牌特色等） */
+function extractMerchantFeatures(html: string): string[] {
+  const features: string[] = [];
+  const lower = html.toLowerCase();
+
+  // 提取 title 和 meta description
+  const titleMatch = html.match(/<title[^>]*>([^<]*)<\/title>/i);
+  if (titleMatch?.[1]) features.push(`Page title: ${decodeHtmlEntities(titleMatch[1].trim())}`);
+  const descMatch = html.match(/<meta[^>]+name=["']description["'][^>]+content=["']([^"']*)/i)
+    || html.match(/<meta[^>]+content=["']([^"']*?)["'][^>]+name=["']description["']/i);
+  if (descMatch?.[1]) features.push(`Meta description: ${decodeHtmlEntities(descMatch[1].trim())}`);
+
+  // 匹配实际卖点关键词
+  const featurePatterns: { pattern: RegExp; label: string }[] = [
+    { pattern: /free\s*shipping/i, label: "Free Shipping" },
+    { pattern: /free\s*deliver/i, label: "Free Delivery" },
+    { pattern: /(\d+)[%\s-]*day[s]?\s*(return|refund|money.back)/i, label: "Return/Refund Policy" },
+    { pattern: /money[- ]?back\s*guarantee/i, label: "Money-Back Guarantee" },
+    { pattern: /satisfaction\s*guarantee/i, label: "Satisfaction Guaranteed" },
+    { pattern: /price\s*match/i, label: "Price Match" },
+    { pattern: /(\d+)\s*%\s*off/i, label: "Discount Available" },
+    { pattern: /24\s*\/?\s*7/i, label: "24/7 Service" },
+    { pattern: /same[- ]?day\s*(shipping|dispatch)/i, label: "Same-Day Shipping" },
+    { pattern: /next[- ]?day\s*(shipping|deliver)/i, label: "Next-Day Delivery" },
+    { pattern: /award[- ]?winning/i, label: "Award-Winning" },
+    { pattern: /hand[- ]?(made|crafted)/i, label: "Handcrafted" },
+    { pattern: /organic|natural/i, label: "Organic/Natural" },
+    { pattern: /sustainab|eco[- ]?friend/i, label: "Sustainable/Eco-Friendly" },
+    { pattern: /made\s*in\s*(the\s*)?(usa|america|uk|europe|france|germany|italy|japan)/i, label: "Made In Origin" },
+    { pattern: /family[- ]?owned/i, label: "Family-Owned" },
+    { pattern: /since\s*\d{4}/i, label: "Established Brand" },
+    { pattern: /veteran[- ]?owned/i, label: "Veteran-Owned" },
+    { pattern: /locally\s*(sourced|made)/i, label: "Locally Sourced" },
+    { pattern: /limited\s*edition/i, label: "Limited Edition" },
+    { pattern: /exclusive/i, label: "Exclusive Products" },
+    { pattern: /best\s*seller/i, label: "Best Sellers" },
+    { pattern: /loyalty\s*(program|reward)/i, label: "Loyalty Program" },
+    { pattern: /gift\s*card/i, label: "Gift Cards Available" },
+    { pattern: /wholesale/i, label: "Wholesale Available" },
+  ];
+
+  const found: string[] = [];
+  for (const { pattern, label } of featurePatterns) {
+    if (pattern.test(lower)) found.push(label);
+  }
+  if (found.length > 0) features.push(`Detected features: ${found.join(", ")}`);
+
+  // 提取 banner 文本中的卖点
+  const bannerRegex = /<(?:div|span|p|a)[^>]*class=["'][^"']*(?:banner|announcement|promo|hero|notice|topbar|top-bar)[^"']*["'][^>]*>([\s\S]*?)<\/(?:div|span|p|a)>/gi;
+  let bannerMatch;
+  const bannerTexts: string[] = [];
+  while ((bannerMatch = bannerRegex.exec(html)) !== null && bannerTexts.length < 3) {
+    const text = decodeHtmlEntities(bannerMatch[1].replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim());
+    if (text.length > 5 && text.length < 200) bannerTexts.push(text);
+  }
+  if (bannerTexts.length > 0) features.push(`Banner text: ${bannerTexts.join(" | ")}`);
+
+  return features;
+}
+
 async function generateCallouts(
   merchantName: string,
   merchantUrl: string,
   country: string,
   pageHtml: string,
 ): Promise<string[]> {
-  let pageContext = "";
-  if (pageHtml) {
-    const titleMatch = pageHtml.match(/<title[^>]*>([^<]*)<\/title>/i);
-    const descMatch = pageHtml.match(/<meta[^>]+name=["']description["'][^>]+content=["']([^"']*)/i)
-      || pageHtml.match(/<meta[^>]+content=["']([^"']*?)["'][^>]+name=["']description["']/i);
-    if (titleMatch?.[1]) pageContext += `Page title: ${titleMatch[1].trim()}\n`;
-    if (descMatch?.[1]) pageContext += `Meta description: ${descMatch[1].trim()}\n`;
-  }
+  const merchantFeatures = pageHtml ? extractMerchantFeatures(pageHtml) : [];
+  const pageContext = merchantFeatures.length > 0
+    ? `\nReal information from merchant website:\n${merchantFeatures.join("\n")}\n`
+    : "";
 
   try {
     const prompt = `You are a Google Ads callout extension expert.
@@ -628,30 +718,59 @@ Merchant: ${merchantName}
 Website: ${merchantUrl}
 Target country: ${country}
 ${pageContext}
-Generate exactly 6 callout extensions for this merchant.
+Generate exactly 6 callout extensions for this merchant based on REAL information from their website.
+
 Rules:
 - Each callout MUST be ≤ 25 characters
-- Highlight key selling points: free shipping, money-back guarantee, 24/7 support, new arrivals, etc.
+- PRIORITY: Use actual merchant features found on their website (shipping policy, return policy, brand story, product type, certifications, etc.)
+- If the website mentions specific policies (e.g. "Free Shipping Over $50", "30-Day Returns"), reflect those accurately
+- Include the merchant's actual strengths, NOT generic/made-up claims
+- Only include "Free Shipping" if the website actually offers it
 - Write in the language appropriate for ${country}
 - Be concise and impactful, no emoji
+
 Return ONLY a JSON array: ["callout1","callout2",...]`;
 
     const raw = await callAiWithFallback("ad_copy", [{ role: "user", content: prompt }], 1024);
     const parsed = JSON.parse(extractJsonFromAi(raw)) as string[];
     return parsed.filter((c) => c.trim().length > 0 && c.length <= 25).slice(0, 6);
   } catch {
-    return getDefaultCallouts(country);
+    return getDefaultCallouts(merchantName, country, merchantFeatures);
   }
 }
 
-function getDefaultCallouts(country: string): string[] {
-  const defaults: Record<string, string[]> = {
-    US: ["Free Shipping", "Easy Returns", "24/7 Support", "Secure Checkout", "New Arrivals", "Best Price"],
-    FR: ["Livraison Gratuite", "Retours Faciles", "Service Client 24/7", "Paiement Sécurisé", "Nouveautés", "Meilleur Prix"],
-    DE: ["Kostenloser Versand", "Einfache Rückgabe", "24/7 Support", "Sicherer Checkout", "Neuheiten", "Bester Preis"],
-    UK: ["Free Delivery", "Easy Returns", "24/7 Support", "Secure Payment", "New Arrivals", "Best Price"],
-  };
-  return defaults[country] || defaults.US;
+function getDefaultCallouts(merchantName: string, country: string, features: string[]): string[] {
+  const result: string[] = [];
+  const featStr = features.join(" ").toLowerCase();
+
+  // 优先使用从网页检测到的真实卖点
+  if (/free\s*ship/i.test(featStr)) result.push(country === "UK" ? "Free Delivery" : "Free Shipping");
+  if (/money.back|return|refund/i.test(featStr)) result.push("Easy Returns");
+  if (/24\s*\/?\s*7/i.test(featStr)) result.push("24/7 Support");
+  if (/hand.?(made|crafted)/i.test(featStr)) result.push("Handcrafted Quality");
+  if (/award.?winning/i.test(featStr)) result.push("Award-Winning");
+  if (/organic|natural/i.test(featStr)) result.push("All Natural");
+  if (/sustainab|eco/i.test(featStr)) result.push("Eco-Friendly");
+  if (/family.?owned/i.test(featStr)) result.push("Family-Owned");
+  if (/veteran.?owned/i.test(featStr)) result.push("Veteran-Owned");
+  if (/made\s*in/i.test(featStr)) result.push("Made in USA");
+  if (/best\s*seller/i.test(featStr)) result.push("Best Sellers");
+  if (/gift\s*card/i.test(featStr)) result.push("Gift Cards Available");
+
+  // 品牌名作为 callout（如果够短）
+  const brandShort = smartTruncate(merchantName, 25);
+  if (brandShort.length >= 3 && brandShort.length <= 25 && !result.includes(brandShort)) {
+    result.unshift(brandShort);
+  }
+
+  // 补充通用但安全的 callout
+  const generic = ["Secure Checkout", "Shop Online", "Browse Collection", "New Arrivals", "Best Price", "Quality Products"];
+  for (const g of generic) {
+    if (result.length >= 6) break;
+    if (!result.includes(g)) result.push(g);
+  }
+
+  return result.slice(0, 6);
 }
 
 function extractJsonFromAi(raw: string): string {
