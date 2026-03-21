@@ -87,10 +87,26 @@ async function fetchSheetCsv(sheetUrl: string, gid?: string): Promise<string[][]
   if (!sheetId) throw new Error("无法从链接中提取 Google Sheets ID");
   const g = gid ?? extractGid(sheetUrl);
   const csvUrl = `https://docs.google.com/spreadsheets/d/${sheetId}/export?format=csv&gid=${g}`;
-  const resp = await fetch(csvUrl, { redirect: "follow" });
-  if (!resp.ok) throw new Error(`Google Sheets 请求失败: ${resp.status}`);
-  const text = await resp.text();
-  return parseCsv(text);
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 30000);
+  try {
+    const resp = await fetch(csvUrl, { redirect: "follow", signal: controller.signal });
+    if (!resp.ok) {
+      const body = await resp.text().catch(() => "");
+      throw new Error(`Google Sheets 请求失败: HTTP ${resp.status}${body ? ` — ${body.slice(0, 200)}` : ""}`);
+    }
+    const text = await resp.text();
+    if (!text.trim()) throw new Error("Google Sheets 返回空内容");
+    const rows = parseCsv(text);
+    if (rows.length === 0) throw new Error("CSV 解析后无任何行");
+    return rows;
+  } catch (e: any) {
+    if (e.name === "AbortError") throw new Error("Google Sheets 请求超时（30秒），请检查服务器是否能访问 Google");
+    throw e;
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 function parseCsv(text: string): string[][] {
@@ -151,14 +167,16 @@ export interface ViolationRecord {
 }
 
 function parseViolationRows(rows: string[][]): ViolationRecord[] {
-  if (rows.length < 3) return [];
-  // 找表头行
-  let headerIdx = 1;
+  if (rows.length < 2) throw new Error(`违规商家 Sheet 数据不足: 仅 ${rows.length} 行（至少需要表头+数据行）`);
+  let headerIdx = -1;
   for (let i = 0; i < Math.min(5, rows.length); i++) {
     const text = rows[i].slice(0, 6).join(" ").toLowerCase();
     if (text.includes("商家名称") || text.includes("merchant")) { headerIdx = i; break; }
   }
-  // 只取前6列（A-F: 商家名称、商家平台、商家域名、下架时间、备注原因、名单来源）
+  if (headerIdx === -1) {
+    const sample = rows.slice(0, 3).map(r => r.slice(0, 6).join(", ")).join(" | ");
+    throw new Error(`无法找到违规商家表头行（前3行A-F列: ${sample}）`);
+  }
   const headers = rows[headerIdx].slice(0, 6).map((h) => (h || "").trim().toLowerCase());
   const col: Record<string, number> = {};
   headers.forEach((h, i) => {
@@ -169,7 +187,7 @@ function parseViolationRows(rows: string[][]): ViolationRecord[] {
     else if (["备注原因", "reason", "违规原因", "原因"].includes(h)) col.reason = i;
     else if (["名单来源", "source", "来源"].includes(h)) col.source = i;
   });
-  if (col.name === undefined) return [];
+  if (col.name === undefined) throw new Error(`违规商家表头中未找到"商家名称"列（表头: ${headers.join(", ")}）`);
 
   const records: ViolationRecord[] = [];
   for (let r = headerIdx + 1; r < rows.length; r++) {
@@ -204,18 +222,20 @@ export interface RecommendationRecord {
 }
 
 function parseRecommendationRows(rows: string[][]): RecommendationRecord[] {
-  if (rows.length < 3) return [];
-  // 找表头行 — 在 G 列（index 6）之后查找
-  let headerIdx = 1;
+  if (rows.length < 2) throw new Error(`推荐商家 Sheet 数据不足: 仅 ${rows.length} 行（至少需要表头+数据行）`);
+  let headerIdx = -1;
   for (let i = 0; i < Math.min(5, rows.length); i++) {
     const text = (rows[i].slice(6) || []).join(" ").toLowerCase();
     if (text.includes("商家名称") || text.includes("roi")) { headerIdx = i; break; }
   }
-  // 取 G-M 列（index 6-12）
+  if (headerIdx === -1) {
+    const sample = rows.slice(0, 3).map(r => (r.slice(6, 13) || []).join(", ")).join(" | ");
+    throw new Error(`无法找到推荐商家表头行（前3行G-M列: ${sample}）`);
+  }
   const recHeaders = rows[headerIdx].slice(6, 13).map((h) => (h || "").trim().toLowerCase());
   const col: Record<string, number> = {};
   recHeaders.forEach((h, i) => {
-    const absIdx = i + 6; // 绝对列索引
+    const absIdx = i + 6;
     if (["商家名称", "merchant_name", "商家名"].includes(h)) col.name = absIdx;
     else if (h.includes("roi")) col.roi = absIdx;
     else if (["佣金率", "commission_rate", "佣金"].includes(h)) col.commission = absIdx;
@@ -224,7 +244,9 @@ function parseRecommendationRows(rows: string[][]): RecommendationRecord[] {
     else if (["分享时间", "share_time", "时间"].includes(h)) col.time = absIdx;
     else if (["备注", "note", "notes"].includes(h) && col.remark === undefined) col.remark = absIdx;
   });
-  if (col.name === undefined) return [];
+  if (col.name === undefined) {
+    throw new Error(`推荐商家表头中未找到"商家名称"列（G-M列表头: ${recHeaders.join(", ")}）`);
+  }
 
   const records: RecommendationRecord[] = [];
   for (let r = headerIdx + 1; r < rows.length; r++) {

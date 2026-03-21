@@ -97,17 +97,16 @@ export async function POST(req: NextRequest) {
 
     // 同步违规商家
     let vioTotal = 0, vioNew = 0, vioSkipped = 0, vioMarked = 0;
+    let vioError: string | null = null;
     try {
       const violations = await fetchViolations(sheetUrl);
       vioTotal = violations.length;
       const vioBatch = `SHEET-VIO-${batchTs}`;
 
-      // 收集违规商家名（精确 + 基础名）用于重置判断
       const { stripCountrySuffix } = await import("@/lib/merchant-sheet-sync");
       const violationNames = new Set(violations.map((v) => v.name.toLowerCase()));
       const violationBaseNames = new Set(violations.map((v) => stripCountrySuffix(v.name).toLowerCase()));
 
-      // 重置不在本次黑名单中的商家
       const previouslyViolated = await prisma.user_merchants.findMany({
         where: { is_deleted: 0, violation_status: "violated" },
         select: { id: true, merchant_name: true },
@@ -135,7 +134,6 @@ export async function POST(req: NextRequest) {
           where: { merchant_name: v.name, is_deleted: 0 },
         });
         if (exists) {
-          // 更新已有记录（修正原因、时间等字段）
           await prisma.merchant_violations.update({
             where: { id: exists.id },
             data: {
@@ -148,7 +146,6 @@ export async function POST(req: NextRequest) {
             },
           });
           vioSkipped++;
-          // 继续处理跨平台匹配（不 skip）
         } else {
           await prisma.merchant_violations.create({
             data: {
@@ -159,15 +156,11 @@ export async function POST(req: NextRequest) {
           vioNew++;
         }
 
-        // 跨平台匹配 user_merchants（商家名精确匹配 + 去掉国家代码后匹配 + 域名匹配）
-        const { stripCountrySuffix } = await import("@/lib/merchant-sheet-sync");
         const baseName = stripCountrySuffix(v.name);
         const nameConditions: any[] = [{ merchant_name: { equals: v.name } }];
         if (baseName !== v.name) {
-          // 违规表中 "bofrost DE" → 也匹配 user_merchants 中的 "bofrost"
           nameConditions.push({ merchant_name: { equals: baseName } });
         }
-        // 反向：user_merchants 中 "bofrost DE" 应匹配违规表中 "bofrost"
         nameConditions.push({ merchant_name: { startsWith: baseName + " " } });
         if (v.domain) {
           nameConditions.push({ merchant_url: { contains: v.domain } });
@@ -185,10 +178,14 @@ export async function POST(req: NextRequest) {
           }
         }
       }
-    } catch (e) { console.error("[AdminSheetSync] 违规同步失败:", e); }
+    } catch (e: any) {
+      vioError = e?.message || String(e);
+      console.error("[AdminSheetSync] 违规同步失败:", e);
+    }
 
     // 同步推荐商家
     let recTotal = 0, recNew = 0, recSkipped = 0, recMarked = 0;
+    let recError: string | null = null;
     try {
       const recs = await fetchRecommendations(sheetUrl);
       recTotal = recs.length;
@@ -217,7 +214,6 @@ export async function POST(req: NextRequest) {
               data: {
                 recommendation_status: "recommended",
                 recommendation_time: new Date(),
-                // 推荐商家不应该同时是违规商家，清除违规标记
                 violation_status: "normal",
                 violation_time: null,
               },
@@ -226,14 +222,29 @@ export async function POST(req: NextRequest) {
           }
         }
       }
-    } catch (e) { console.error("[AdminSheetSync] 推荐同步失败:", e); }
+    } catch (e: any) {
+      recError = e?.message || String(e);
+      console.error("[AdminSheetSync] 推荐同步失败:", e);
+    }
 
+    // 两个同步都失败时返回错误
+    if (vioError && recError) {
+      return apiError(`同步失败 — 违规: ${vioError} | 推荐: ${recError}`);
+    }
+
+    // 至少有一个成功才更新同步时间
     await prisma.sheet_configs.update({ where: { id: cfg.id }, data: { last_synced_at: new Date() } });
 
+    const msg = vioError
+      ? `部分同步完成（违规同步失败: ${vioError}）`
+      : recError
+        ? `部分同步完成（推荐同步失败: ${recError}）`
+        : "统一同步完成";
+
     return apiSuccess(serializeData({
-      violation: { total: vioTotal, new: vioNew, skipped: vioSkipped, marked: vioMarked },
-      recommendation: { total: recTotal, new: recNew, skipped: recSkipped, marked: recMarked },
-    }), "统一同步完成");
+      violation: { total: vioTotal, new: vioNew, skipped: vioSkipped, marked: vioMarked, error: vioError },
+      recommendation: { total: recTotal, new: recNew, skipped: recSkipped, marked: recMarked, error: recError },
+    }), msg);
   }
 
   // 删除违规记录

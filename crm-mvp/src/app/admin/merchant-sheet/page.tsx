@@ -141,9 +141,26 @@ export default function MerchantSheetPage() {
       </Card>
 
       {syncResult && (
-        <Alert type="success" showIcon closable style={{ marginBottom: 16 }}
-          title={`统一同步完成 — 违规：共 ${syncResult.violation?.total ?? 0} 条，新增 ${syncResult.violation?.new ?? 0} 条，标记 ${syncResult.violation?.marked ?? 0} 个 | 推荐：共 ${syncResult.recommendation?.total ?? 0} 条，新增 ${syncResult.recommendation?.new ?? 0} 条，标记 ${syncResult.recommendation?.marked ?? 0} 个`}
-          onClose={() => setSyncResult(null)} />
+        <Alert
+          type={syncResult.violation?.error || syncResult.recommendation?.error ? "warning" : "success"}
+          showIcon closable style={{ marginBottom: 16 }}
+          message={
+            (syncResult.violation?.error || syncResult.recommendation?.error)
+              ? "部分同步完成（有错误）"
+              : `统一同步完成 — 违规：共 ${syncResult.violation?.total ?? 0} 条，新增 ${syncResult.violation?.new ?? 0} 条，标记 ${syncResult.violation?.marked ?? 0} 个 | 推荐：共 ${syncResult.recommendation?.total ?? 0} 条，新增 ${syncResult.recommendation?.new ?? 0} 条，标记 ${syncResult.recommendation?.marked ?? 0} 个`
+          }
+          description={
+            (syncResult.violation?.error || syncResult.recommendation?.error)
+              ? [
+                  syncResult.violation?.error && `违规同步错误: ${syncResult.violation.error}`,
+                  syncResult.recommendation?.error && `推荐同步错误: ${syncResult.recommendation.error}`,
+                  !syncResult.violation?.error && `违规：共 ${syncResult.violation?.total ?? 0} 条，新增 ${syncResult.violation?.new ?? 0} 条`,
+                  !syncResult.recommendation?.error && `推荐：共 ${syncResult.recommendation?.total ?? 0} 条，新增 ${syncResult.recommendation?.new ?? 0} 条`,
+                ].filter(Boolean).join("\n")
+              : undefined
+          }
+          onClose={() => setSyncResult(null)}
+        />
       )}
 
       {/* Tab 切换 */}
