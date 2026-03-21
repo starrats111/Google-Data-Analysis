@@ -405,7 +405,7 @@ export async function POST(req: NextRequest) {
             create: {
               asset: assetTempRn,
               campaign: campaignTempRn,
-              field_type: "IMAGE",
+              field_type: "MARKETING_IMAGE",
             },
           },
         });
