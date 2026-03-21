@@ -413,17 +413,53 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // ─── 发送批量 Mutate 请求（含 DUPLICATE_CAMPAIGN_NAME 自动重试） ───
+    // ─── 发送批量 Mutate 请求（含 DUPLICATE_CAMPAIGN_NAME / POLICY_ERROR 自动重试） ───
     let result: Record<string, unknown>;
+    let skippedKeywords: string[] = [];
     try {
       result = await mutateGoogleAds(credentials, customerId, operations) as Record<string, unknown>;
     } catch (mutateErr) {
       const errMsg = mutateErr instanceof Error ? mutateErr.message : String(mutateErr);
+
       if (errMsg.includes("DUPLICATE_CAMPAIGN_NAME")) {
         console.log("[AdSubmit] 检测到同名冲突，强制清理后重试...");
         await removeDuplicateCampaigns();
-        result = await mutateGoogleAds(credentials, customerId, operations) as Record<string, unknown>;
-      } else {
+        try {
+          result = await mutateGoogleAds(credentials, customerId, operations) as Record<string, unknown>;
+        } catch (retryErr) {
+          const retryMsg = retryErr instanceof Error ? retryErr.message : String(retryErr);
+          if (!retryMsg.includes("POLICY_ERROR") && !retryMsg.includes("policyViolationError")) throw retryErr;
+          // Fall through to policy error handling below
+          Object.assign(mutateErr as Error, { message: retryMsg });
+        }
+      }
+
+      // Handle policy violations: remove violating operations and retry
+      const finalMsg = mutateErr instanceof Error ? mutateErr.message : String(mutateErr);
+      if (finalMsg.includes("POLICY_ERROR") || finalMsg.includes("policyViolationError")) {
+        console.log("[AdSubmit] 检测到政策违规，尝试移除违规操作后重试...");
+        const violatingIndices = parsePolicyViolationIndices(finalMsg);
+
+        if (violatingIndices.size > 0) {
+          // Collect skipped keyword texts for reporting
+          for (const idx of violatingIndices) {
+            const op = operations[idx] as any;
+            const kwText = op?.ad_group_criterion_operation?.create?.keyword?.text;
+            if (kwText) skippedKeywords.push(kwText);
+          }
+
+          const filteredOps = operations.filter((_, i) => !violatingIndices.has(i));
+          console.log(`[AdSubmit] 移除 ${violatingIndices.size} 个违规操作 (关键词: ${skippedKeywords.join(", ")}), 剩余 ${filteredOps.length} 个操作`);
+
+          if (filteredOps.length >= 6) {
+            result = await mutateGoogleAds(credentials, customerId, filteredOps) as Record<string, unknown>;
+          } else {
+            throw new Error(`政策违规：关键词 [${skippedKeywords.join(", ")}] 违反 Google Ads 政策，移除后操作数不足，无法创建广告`);
+          }
+        } else {
+          throw mutateErr;
+        }
+      } else if (!result!) {
         throw mutateErr;
       }
     }
@@ -491,6 +527,10 @@ export async function POST(req: NextRequest) {
       select: { id: true, status: true, slug: true },
     });
 
+    const successMsg = skippedKeywords.length > 0
+      ? `广告创建成功（已跳过 ${skippedKeywords.length} 个违反政策的关键词: ${skippedKeywords.join(", ")}）`
+      : "广告创建成功";
+
     return apiSuccess(serializeData({
       google_campaign_id: googleCampaignId,
       customer_id: customerId,
@@ -498,11 +538,45 @@ export async function POST(req: NextRequest) {
       article_id: article?.id || null,
       article_slug: article?.slug || null,
       article_status: article?.status || null,
-    }), "广告创建成功");
+      skipped_keywords: skippedKeywords,
+    }), successMsg);
 
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     console.error("[AdSubmit] Google Ads 创建失败:", msg);
     return apiError(`Google Ads 创建失败: ${msg.slice(0, 800)}`);
   }
+}
+
+/** 从 Google Ads API 错误消息中解析违反政策的操作索引 */
+function parsePolicyViolationIndices(errMsg: string): Set<number> {
+  const indices = new Set<number>();
+  // Match "mutate_operations[N]" patterns in the error
+  const indexPattern = /mutate_operations\[(\d+)\]/g;
+  let match;
+  while ((match = indexPattern.exec(errMsg)) !== null) {
+    indices.add(parseInt(match[1], 10));
+  }
+  // Also try parsing JSON error body for fieldPathElements
+  try {
+    const jsonStart = errMsg.indexOf("{");
+    const jsonEnd = errMsg.lastIndexOf("}");
+    if (jsonStart >= 0 && jsonEnd > jsonStart) {
+      const jsonStr = errMsg.slice(jsonStart, jsonEnd + 1);
+      const errObj = JSON.parse(jsonStr);
+      const details = errObj?.error?.details || errObj?.details || [];
+      for (const detail of details) {
+        const errors = detail?.errors || [];
+        for (const e of errors) {
+          const elements = e?.location?.fieldPathElements || [];
+          for (const el of elements) {
+            if (el.fieldName === "mutate_operations" && el.index != null) {
+              indices.add(Number(el.index));
+            }
+          }
+        }
+      }
+    }
+  } catch {}
+  return indices;
 }
