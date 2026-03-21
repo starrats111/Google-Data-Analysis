@@ -401,22 +401,14 @@ async function createArticleHtmlPage(
 ): Promise<void> {
   const htmlPath = `${siteRoot}/${htmlFilename}`;
 
+  // Always use index.html for template (correct site branding, not another post's theme)
   let templateHtml = "";
   try {
-    const listing = await execCommand(
-      client,
-      `ls -1 "${siteRoot}"/post-*.html 2>/dev/null | head -5`,
-    );
-    const files = listing.trim().split("\n").filter(Boolean);
-    const tplFile = files.find((f) => !f.endsWith(htmlFilename));
-    if (tplFile) templateHtml = await sftpReadFile(sftp, tplFile);
+    templateHtml = await sftpReadFile(sftp, `${siteRoot}/index.html`);
   } catch { /* ignore */ }
 
-  if (!templateHtml) {
-    try {
-      templateHtml = await sftpReadFile(sftp, `${siteRoot}/index.html`);
-    } catch { /* ignore */ }
-  }
+  // Strip leading <h1> from article content to avoid duplicate title
+  const cleanedContent = article.content.replace(/^\s*<h1[^>]*>[\s\S]*?<\/h1>\s*/i, "").trim();
 
   let html: string;
 
@@ -428,6 +420,8 @@ async function createArticleHtmlPage(
         /<title>[^<]*<\/title>/i,
         `<title>${escapeHtml(article.title)}</title>`,
       );
+      // Remove main.js to avoid loading article listing code on detail page
+      headSection = headSection.replace(/<script[^>]*main\.js[^>]*><\/script>/gi, "");
     } else {
       headSection = `<!DOCTYPE html>\n<html lang="en">\n<head>\n<meta charset="UTF-8">\n<meta name="viewport" content="width=device-width,initial-scale=1">\n<title>${escapeHtml(article.title)}</title>\n</head>`;
     }
@@ -449,7 +443,7 @@ async function createArticleHtmlPage(
       <h1>${article.title}</h1>
       <div style="color:#888;margin-bottom:24px;font-size:14px;">${dateLabel}</div>
       <div class="article-content" style="line-height:1.8;">
-        ${article.content}
+        ${cleanedContent}
       </div>
     </article>
   </main>
