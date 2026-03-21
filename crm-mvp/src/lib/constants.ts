@@ -70,7 +70,12 @@ export function normalizePlatformCode(raw: string): string {
   if (VALID_CODES.has(trimmed)) return trimmed;
   const upper = trimmed.toUpperCase();
   if (VALID_CODES.has(upper)) return upper;
-  return PLATFORM_ALIASES.get(trimmed) || PLATFORM_ALIASES.get(trimmed.toLowerCase()) || trimmed;
+  const alias = PLATFORM_ALIASES.get(trimmed) || PLATFORM_ALIASES.get(trimmed.toLowerCase());
+  if (alias) return alias;
+  // 账号名带数字后缀（如 CG2, PM3, BSH1）→ 去掉数字再匹配
+  const stripped = upper.replace(/\d+$/, "");
+  if (stripped && VALID_CODES.has(stripped)) return stripped;
+  return trimmed;
 }
 
 // 商家状态
