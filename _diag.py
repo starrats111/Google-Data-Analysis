@@ -7,12 +7,14 @@ USER = "admin"
 PASS = "A123456"
 
 QUERIES = [
-    ("Users 30+",
-     "SELECT id, username, display_name FROM users WHERE id > 30 LIMIT 20"),
-    ("Campaigns MCC distribution",
-     "SELECT c.mcc_id, m.mcc_id as mcc_code, m.mcc_name, m.developer_token IS NOT NULL as has_token, COUNT(1) as cnt FROM campaigns c JOIN google_mcc_accounts m ON c.mcc_id = m.id WHERE c.is_deleted=0 GROUP BY c.mcc_id, m.mcc_id, m.mcc_name, has_token ORDER BY cnt DESC"),
-    ("All MCC per user 2 and 8",
-     "SELECT user_id, id, mcc_id, mcc_name, developer_token IS NOT NULL as has_token FROM google_mcc_accounts WHERE is_deleted=0 AND user_id IN (2, 8) ORDER BY user_id, id"),
+    ("Txn platforms vs merchant platforms for user 2",
+     "SELECT DISTINCT t.platform as txn_platform, t.merchant_id as txn_mid, m.platform as merch_platform, m.merchant_id as merch_mid FROM (SELECT DISTINCT platform, merchant_id FROM affiliate_transactions WHERE user_id=2 AND is_deleted=0 LIMIT 10) t LEFT JOIN user_merchants m ON m.user_id=2 AND m.merchant_id=t.merchant_id AND m.is_deleted=0 LIMIT 15"),
+    ("User 2 merchant count",
+     "SELECT COUNT(1) as cnt FROM user_merchants WHERE user_id=2 AND is_deleted=0"),
+    ("User 2 sample merchants",
+     "SELECT id, merchant_id, platform FROM user_merchants WHERE user_id=2 AND is_deleted=0 LIMIT 10"),
+    ("User 2 sample txn merchant_ids",
+     "SELECT DISTINCT merchant_id, platform FROM affiliate_transactions WHERE user_id=2 AND is_deleted=0 LIMIT 10"),
 ]
 
 def run():
