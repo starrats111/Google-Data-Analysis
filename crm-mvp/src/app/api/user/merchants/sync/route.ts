@@ -64,22 +64,36 @@ async function doSyncInBackground(
   let updatedCount = 0;
 
   try {
-    // 1. 从联盟平台 API 拉取商家
+    // 1. 从联盟平台 API 并行拉取商家（3 个平台并发）
     const { fetchAllMerchants } = await import("@/lib/platform-api");
     const rows: any[] = [];
 
-    for (const conn of conns) {
-      if (targetPlatform && conn.platform !== targetPlatform.toUpperCase()) continue;
-      dbg(`Fetch ${conn.platform}...`);
-      try {
-        const r = await fetchAllMerchants(conn.platform, conn.api_key!);
-        if (r.error) errors.push(r.error);
-        dbg(`  ${conn.platform}: ${r.merchants.length} merchants${r.error ? `, err=${r.error}` : ""}`);
-        if (r.merchants.length > 0) {
-          const s = r.merchants[0];
-          dbg(`  sample: id=${s.merchant_id} cat=${s.category} comm=${s.commission_rate} link=${(s.campaign_link || "").substring(0, 60)}`);
-        }
-        for (const m of r.merchants) {
+    const fetchTargets = conns.filter(c => !targetPlatform || c.platform === targetPlatform.toUpperCase());
+    const FETCH_CONCURRENCY = 3;
+    for (let fi = 0; fi < fetchTargets.length; fi += FETCH_CONCURRENCY) {
+      const batch = fetchTargets.slice(fi, fi + FETCH_CONCURRENCY);
+      const results = await Promise.all(
+        batch.map(async (conn) => {
+          dbg(`Fetch ${conn.platform}...`);
+          try {
+            const r = await fetchAllMerchants(conn.platform, conn.api_key!);
+            if (r.error) errors.push(r.error);
+            dbg(`  ${conn.platform}: ${r.merchants.length} merchants${r.error ? `, err=${r.error}` : ""}`);
+            if (r.merchants.length > 0) {
+              const s = r.merchants[0];
+              dbg(`  sample: id=${s.merchant_id} cat=${s.category} comm=${s.commission_rate} link=${(s.campaign_link || "").substring(0, 60)}`);
+            }
+            return { conn, merchants: r.merchants };
+          } catch (err) {
+            const msg = `${conn.platform}: ${err instanceof Error ? err.message : String(err)}`;
+            errors.push(msg);
+            dbg(`  ERROR ${msg}`);
+            return { conn, merchants: [] as any[] };
+          }
+        })
+      );
+      for (const { conn, merchants } of results) {
+        for (const m of merchants) {
           if (m.relationship_status !== "joined") continue;
           rows.push({
             platform_code: conn.platform,
@@ -94,10 +108,6 @@ async function doSyncInBackground(
             logo: m.logo_url || "",
           });
         }
-      } catch (err) {
-        const msg = `${conn.platform}: ${err instanceof Error ? err.message : String(err)}`;
-        errors.push(msg);
-        dbg(`  ERROR ${msg}`);
       }
     }
 
@@ -137,6 +147,9 @@ async function doSyncInBackground(
     const map = new Map(deduped.map(m => [`${m.platform}:${m.merchant_id}`, m]));
 
     const seenInThisBatch = new Set<string>();
+    const updateOps: Array<{ id: bigint; data: Record<string, unknown> }> = [];
+    const createOps: Array<{ key: string; data: Record<string, unknown>; connId: bigint | null }> = [];
+
     for (const row of rows) {
       const key = `${row.platform_code}:${row.merchant_id}`;
       if (seenInThisBatch.has(key)) continue;
@@ -162,7 +175,6 @@ async function doSyncInBackground(
           tracking_link: row.campaign_link || undefined,
           campaign_link: row.campaign_link || undefined,
         };
-        // 如果尚未绑定 platform_connection_id，设置为当前连接
         if (!ex.platform_connection_id && row.conn_id) {
           updateData.platform_connection_id = row.conn_id;
         }
@@ -170,10 +182,11 @@ async function doSyncInBackground(
           updateData.is_deleted = 0;
           updateData.status = "available";
         }
-        await prisma.user_merchants.update({ where: { id: ex.id }, data: updateData });
-        updatedCount++;
+        updateOps.push({ id: ex.id, data: updateData });
       } else {
-        const created = await prisma.user_merchants.create({
+        createOps.push({
+          key,
+          connId: row.conn_id || null,
           data: {
             user_id: userId,
             platform: row.platform_code,
@@ -189,10 +202,27 @@ async function doSyncInBackground(
             status: "available",
           },
         });
-        map.set(key, { id: created.id, platform: row.platform_code, merchant_id: row.merchant_id, status: "available", is_deleted: 0, platform_connection_id: row.conn_id || null });
-        newCount++;
       }
     }
+
+    // 批量更新（每 50 条并发）
+    for (let i = 0; i < updateOps.length; i += 50) {
+      const batch = updateOps.slice(i, i + 50);
+      await Promise.all(batch.map(op => prisma.user_merchants.update({ where: { id: op.id }, data: op.data })));
+    }
+    updatedCount = updateOps.length;
+
+    // 批量创建（每 50 条并发）
+    for (let i = 0; i < createOps.length; i += 50) {
+      const batch = createOps.slice(i, i + 50);
+      const results = await Promise.all(batch.map(op => prisma.user_merchants.create({ data: op.data as any })));
+      for (let j = 0; j < results.length; j++) {
+        const created = results[j];
+        const op = batch[j];
+        map.set(op.key, { id: created.id, platform: created.platform, merchant_id: created.merchant_id, status: "available", is_deleted: 0, platform_connection_id: op.connId });
+      }
+    }
+    newCount = createOps.length;
 
     // 2.5 清理：只清理本次成功返回数据的平台中不再存在的未领取商家
     // 避免某个平台 API 失败/返回空数据时误删已有商家
@@ -212,14 +242,19 @@ async function doSyncInBackground(
     }
     if (removedCount > 0) dbg(`Removed ${removedCount} non-joined merchants (only from synced platforms: ${[...syncedPlatforms].join(",")})`);
 
-    // 3. 政策审核（对所有新增和更新的商家执行）
+    // 3. 政策审核（仅审核本次新增和更新的商家）
+    const changedIds = [...updateOps.map(op => op.id), ...createOps.map((_, i) => {
+      const key = createOps[i].key;
+      return map.get(key)?.id;
+    }).filter(Boolean) as bigint[]];
+
     let policyMsg = "";
     try {
-      const toReview = await prisma.user_merchants.findMany({
-        where: { user_id: userId, is_deleted: 0 },
+      const toReview = changedIds.length > 0 ? await prisma.user_merchants.findMany({
+        where: { id: { in: changedIds }, is_deleted: 0 },
         select: { id: true, merchant_name: true, category: true, merchant_url: true },
-      });
-      dbg(`Policy review: ${toReview.length} merchants to review`);
+      }) : [];
+      dbg(`Policy review: ${toReview.length} merchants to review (changed only)`);
       if (toReview.length > 0) {
         const ps = await batchReviewMerchants(prisma as any, toReview.map(m => ({ ...m, platform: "" })));
         if (ps.reviewed > 0) policyMsg = `，政策审核 ${ps.reviewed} 个（限制 ${ps.restricted}，禁止 ${ps.prohibited}）`;

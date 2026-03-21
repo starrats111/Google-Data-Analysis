@@ -90,28 +90,38 @@ export async function fetchAllCampaignStatuses(
   customerIds: string[],
 ): Promise<{ customer_id: string; campaign_id: string; status: string; name: string; budget_micros: number; budget_dollars: number }[]> {
   const all: { customer_id: string; campaign_id: string; status: string; name: string; budget_micros: number; budget_dollars: number }[] = [];
-  for (const cid of customerIds) {
+
+  const fetchOne = async (cid: string) => {
     try {
       const results = await queryGoogleAds(credentials, cid, `
         SELECT campaign.id, campaign.name, campaign.status, campaign_budget.amount_micros
         FROM campaign
       `);
-      for (const r of results) {
+      return results.map((r) => {
         const c = r.campaign as Record<string, unknown> | undefined;
         const budget = r.campaignBudget as Record<string, unknown> | undefined;
         const budgetMicros = Number(budget?.amountMicros ?? 0);
-        all.push({
+        return {
           customer_id: cid.replace(/-/g, ""),
           campaign_id: String(c?.id ?? ""),
           status: String(c?.status ?? "UNKNOWN"),
           name: String(c?.name ?? ""),
           budget_micros: budgetMicros,
           budget_dollars: microsToDollars(budgetMicros),
-        });
-      }
+        };
+      });
     } catch (err) {
       console.error(`查询 CID ${cid} 失败:`, err);
+      return [];
     }
+  };
+
+  const CONCURRENCY = 5;
+  for (let i = 0; i < customerIds.length; i += CONCURRENCY) {
+    const batch = customerIds.slice(i, i + CONCURRENCY);
+    const results = await Promise.all(batch.map(fetchOne));
+    for (const items of results) all.push(...items);
   }
+
   return all;
 }

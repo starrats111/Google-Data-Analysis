@@ -239,7 +239,7 @@ export async function fetchAllMerchants(
     // 后续页
     for (let page = 2; page <= Math.min(totalPages, 200); page++) {
       if (config.rateLimitMs) await sleep(config.rateLimitMs);
-      else await sleep(500);
+      else await sleep(100);
 
       const pageData = await callPlatformApi(config, token, page);
       const batch = parseMerchants(platform, pageData);
@@ -539,7 +539,7 @@ export async function fetchAllTransactions(
 
       for (let page = 2; page <= Math.min(totalPages, 50); page++) {
         if (config.rateLimitMs) await sleep(config.rateLimitMs);
-        else await sleep(500);
+        else await sleep(100);
 
         const pageData = await callTxnApi(config, token, chunk.start, chunk.end, page);
         const batch = parseTransactions(platform, pageData);

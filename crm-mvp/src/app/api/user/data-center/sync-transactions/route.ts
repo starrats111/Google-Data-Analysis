@@ -43,120 +43,100 @@ export async function POST(req: NextRequest) {
       userMerchants.map((m) => [`${normalizePlatformCode(m.platform)}_${m.merchant_id}`, m])
     );
 
-    // 3. 逐个平台连接拉取交易
+    // 3. 并行拉取各平台交易（3 个平台并发）
     const { fetchAllTransactions } = await import("@/lib/platform-api");
-    const accountResults: {
-      account_name: string;
-      platform: string;
-      synced: number;
-      total_fetched: number;
-      error?: string;
-    }[] = [];
 
+    type FetchedConn = { conn: typeof validConns[0]; platform: string; label: string; transactions: any[]; error?: string };
+    const fetched: FetchedConn[] = [];
+    const FETCH_CONCURRENCY = 3;
+
+    for (let fi = 0; fi < validConns.length; fi += FETCH_CONCURRENCY) {
+      const batch = validConns.slice(fi, fi + FETCH_CONCURRENCY);
+      const results = await Promise.all(
+        batch.map(async (conn) => {
+          const platform = normalizePlatformCode(conn.platform);
+          const label = conn.account_name || platform;
+          try {
+            const r = await fetchAllTransactions(platform, conn.api_key!, startStr, endStr);
+            return { conn, platform, label, transactions: r.transactions, error: r.error };
+          } catch (err) {
+            return { conn, platform, label, transactions: [] as any[], error: `${err instanceof Error ? err.message : String(err)}` };
+          }
+        })
+      );
+      fetched.push(...results);
+    }
+
+    // 顺序处理各平台数据（upsert 到数据库）
+    const accountResults: { account_name: string; platform: string; synced: number; total_fetched: number; error?: string }[] = [];
     let totalSynced = 0;
     let totalSkipped = 0;
 
-    for (const conn of validConns) {
-      const platform = normalizePlatformCode(conn.platform);
-      const label = conn.account_name || platform;
-
-      try {
-        const result = await fetchAllTransactions(platform, conn.api_key!, startStr, endStr);
-
-        if (result.error) {
-          accountResults.push({
-            account_name: label, platform, synced: 0,
-            total_fetched: result.transactions.length, error: result.error,
-          });
-        }
-
-        if (result.transactions.length === 0) {
-          accountResults.push({
-            account_name: label, platform, synced: 0, total_fetched: 0,
-            error: result.error || undefined,
-          });
-          continue;
-        }
-
-        // 按 transaction_id 去重求和（移植自旧平台，同一笔订单可能出现多行）
-        const grouped = new Map<string, typeof result.transactions[0]>();
-        for (const txn of result.transactions) {
-          if (!txn.transaction_id) continue;
-          const existing = grouped.get(txn.transaction_id);
-          if (existing) {
-            existing.commission_amount = (existing.commission_amount || 0) + (txn.commission_amount || 0);
-            existing.order_amount = (existing.order_amount || 0) + (txn.order_amount || 0);
-          } else {
-            grouped.set(txn.transaction_id, { ...txn });
-          }
-        }
-        const dedupedTxns = [...grouped.values()];
-
-        // upsert 交易数据
-        let synced = 0;
-        let skipped = 0;
-
-        for (let i = 0; i < dedupedTxns.length; i += 20) {
-          const batch = dedupedTxns.slice(i, i + 20);
-          const ops = batch.map((txn) => {
-            const merchantId = txn.merchant_id || "";
-            const txnId = txn.transaction_id;
-            if (!txnId) { skipped++; return null; }
-
-            const merchant = merchantMap.get(`${platform}_${merchantId}`);
-            const userMerchantId = merchant ? merchant.id : BigInt(0);
-            const merchantName = txn.merchant || merchant?.merchant_name || "";
-
-            const newComm = txn.commission_amount || 0;
-            const newAmt = txn.order_amount || 0;
-            return prisma.affiliate_transactions.upsert({
-              where: {
-                platform_transaction_id: { platform, transaction_id: txnId },
-              },
-              create: {
-                user_id: userId,
-                user_merchant_id: userMerchantId,
-                platform_connection_id: conn.id,
-                platform,
-                merchant_id: merchantId,
-                merchant_name: merchantName,
-                transaction_id: txnId,
-                transaction_time: new Date(txn.transaction_time),
-                order_amount: newAmt,
-                commission_amount: newComm,
-                currency: "USD",
-                status: txn.status,
-                raw_status: txn.raw_status || "",
-              },
-              update: {
-                platform_connection_id: conn.id,
-                merchant_id: merchantId,
-                ...(userMerchantId !== BigInt(0) ? { user_merchant_id: userMerchantId } : {}),
-                ...(newComm > 0 ? { commission_amount: newComm } : {}),
-                status: txn.status,
-                raw_status: txn.raw_status || "",
-                ...(newAmt > 0 ? { order_amount: newAmt } : {}),
-                merchant_name: merchantName || undefined,
-              },
-            });
-          }).filter(Boolean);
-
-          await Promise.all(ops);
-          synced += ops.length;
-        }
-
-        totalSynced += synced;
-        totalSkipped += skipped;
-        accountResults.push({
-          account_name: label, platform, synced, total_fetched: result.transactions.length,
-          error: result.error || undefined,
-        });
-      } catch (err) {
-        accountResults.push({
-          account_name: label, platform, synced: 0, total_fetched: 0,
-          error: `${err instanceof Error ? err.message : String(err)}`,
-        });
+    for (const { conn, platform, label, transactions, error } of fetched) {
+      if (error && transactions.length === 0) {
+        accountResults.push({ account_name: label, platform, synced: 0, total_fetched: 0, error });
+        continue;
       }
+      if (transactions.length === 0) {
+        accountResults.push({ account_name: label, platform, synced: 0, total_fetched: 0, error: error || undefined });
+        continue;
+      }
+
+      const grouped = new Map<string, typeof transactions[0]>();
+      for (const txn of transactions) {
+        if (!txn.transaction_id) continue;
+        const existing = grouped.get(txn.transaction_id);
+        if (existing) {
+          existing.commission_amount = (existing.commission_amount || 0) + (txn.commission_amount || 0);
+          existing.order_amount = (existing.order_amount || 0) + (txn.order_amount || 0);
+        } else {
+          grouped.set(txn.transaction_id, { ...txn });
+        }
+      }
+      const dedupedTxns = [...grouped.values()];
+
+      let synced = 0;
+      let skipped = 0;
+
+      for (let i = 0; i < dedupedTxns.length; i += 50) {
+        const batch = dedupedTxns.slice(i, i + 50);
+        const ops = batch.map((txn) => {
+          const merchantId = txn.merchant_id || "";
+          const txnId = txn.transaction_id;
+          if (!txnId) { skipped++; return null; }
+
+          const merchant = merchantMap.get(`${platform}_${merchantId}`);
+          const userMerchantId = merchant ? merchant.id : BigInt(0);
+          const merchantName = txn.merchant || merchant?.merchant_name || "";
+          const newComm = txn.commission_amount || 0;
+          const newAmt = txn.order_amount || 0;
+
+          return prisma.affiliate_transactions.upsert({
+            where: { platform_transaction_id: { platform, transaction_id: txnId } },
+            create: {
+              user_id: userId, user_merchant_id: userMerchantId, platform_connection_id: conn.id,
+              platform, merchant_id: merchantId, merchant_name: merchantName, transaction_id: txnId,
+              transaction_time: new Date(txn.transaction_time), order_amount: newAmt,
+              commission_amount: newComm, currency: "USD", status: txn.status, raw_status: txn.raw_status || "",
+            },
+            update: {
+              platform_connection_id: conn.id, merchant_id: merchantId,
+              ...(userMerchantId !== BigInt(0) ? { user_merchant_id: userMerchantId } : {}),
+              ...(newComm > 0 ? { commission_amount: newComm } : {}),
+              status: txn.status, raw_status: txn.raw_status || "",
+              ...(newAmt > 0 ? { order_amount: newAmt } : {}),
+              merchant_name: merchantName || undefined,
+            },
+          });
+        }).filter(Boolean);
+
+        await Promise.all(ops);
+        synced += ops.length;
+      }
+
+      totalSynced += synced;
+      totalSkipped += skipped;
+      accountResults.push({ account_name: label, platform, synced, total_fetched: transactions.length, error: error || undefined });
     }
 
     // 4. 关联交易和 campaigns 到正确的商家
@@ -190,35 +170,25 @@ export async function POST(req: NextRequest) {
 // ─── linkTransactionsToMerchants ───
 
 async function linkTransactionsToMerchants(userId: bigint) {
-  const userMerchants = await prisma.user_merchants.findMany({
-    where: { user_id: userId, is_deleted: 0 },
-    select: { id: true, platform: true, merchant_id: true },
-  });
-
   await normalizeExistingTransactionPlatforms(userId);
 
-  for (const m of userMerchants) {
-    const normalizedPlatform = normalizePlatformCode(m.platform);
+  // 精确匹配：platform + merchant_id（单条 SQL 替代 N 次循环）
+  await prisma.$executeRawUnsafe(`
+    UPDATE affiliate_transactions t
+    JOIN user_merchants m
+      ON t.user_id = m.user_id AND t.merchant_id = m.merchant_id AND t.platform = m.platform
+    SET t.user_merchant_id = m.id
+    WHERE t.user_id = ? AND t.user_merchant_id = 0 AND t.is_deleted = 0 AND m.is_deleted = 0
+  `, userId);
 
-    const r1 = await prisma.affiliate_transactions.updateMany({
-      where: { user_id: userId, platform: normalizedPlatform, merchant_id: m.merchant_id, user_merchant_id: BigInt(0), is_deleted: 0 },
-      data: { user_merchant_id: m.id },
-    });
-
-    if (normalizedPlatform !== m.platform) {
-      await prisma.affiliate_transactions.updateMany({
-        where: { user_id: userId, platform: m.platform, merchant_id: m.merchant_id, user_merchant_id: BigInt(0), is_deleted: 0 },
-        data: { user_merchant_id: m.id },
-      });
-    }
-
-    if (r1.count === 0) {
-      await prisma.affiliate_transactions.updateMany({
-        where: { user_id: userId, merchant_id: m.merchant_id, user_merchant_id: BigInt(0), is_deleted: 0 },
-        data: { user_merchant_id: m.id },
-      });
-    }
-  }
+  // 兜底匹配：仅 merchant_id（处理平台未精确匹配的情况）
+  await prisma.$executeRawUnsafe(`
+    UPDATE affiliate_transactions t
+    JOIN user_merchants m
+      ON t.user_id = m.user_id AND t.merchant_id = m.merchant_id
+    SET t.user_merchant_id = m.id
+    WHERE t.user_id = ? AND t.user_merchant_id = 0 AND t.is_deleted = 0 AND m.is_deleted = 0
+  `, userId);
 }
 
 async function normalizeExistingTransactionPlatforms(userId: bigint) {
@@ -294,19 +264,46 @@ async function updateDailyStatsCommission(userId: bigint, startDate: Date): Prom
 
   if (!txnAgg || txnAgg.length === 0) return 0;
 
+  // 预加载所有相关 campaigns（按 merchant 分组）
+  const merchantIds = [...new Set(txnAgg.map(t => t.user_merchant_id))].filter(id => id && id !== BigInt(0));
+  if (merchantIds.length === 0) return 0;
+
+  const allCampaigns = await prisma.campaigns.findMany({
+    where: { user_id: userId, user_merchant_id: { in: merchantIds }, is_deleted: 0 },
+    select: { id: true, user_merchant_id: true },
+    orderBy: { id: "asc" },
+  });
+
+  const campaignsByMerchant = new Map<string, bigint[]>();
+  for (const c of allCampaigns) {
+    const key = String(c.user_merchant_id);
+    if (!campaignsByMerchant.has(key)) campaignsByMerchant.set(key, []);
+    campaignsByMerchant.get(key)!.push(c.id);
+  }
+
+  // 预加载所有相关 daily_stats（消除 N+1）
+  const allCampaignIds = allCampaigns.map(c => c.id);
+  const allStats = allCampaignIds.length > 0 ? await prisma.ads_daily_stats.findMany({
+    where: { campaign_id: { in: allCampaignIds }, date: { gte: startDate } },
+    select: { id: true, campaign_id: true, date: true },
+  }) : [];
+
+  const statsMap = new Map<string, bigint>();
+  for (const s of allStats) {
+    statsMap.set(`${s.campaign_id}_${s.date.toISOString().split("T")[0]}`, s.id);
+  }
+
+  // 收集所有操作，批量执行
+  const ops: (() => Promise<unknown>)[] = [];
   let updated = 0;
 
   for (const agg of txnAgg) {
     if (!agg.user_merchant_id || agg.user_merchant_id === BigInt(0)) continue;
 
-    const campaigns = await prisma.campaigns.findMany({
-      where: { user_id: userId, user_merchant_id: agg.user_merchant_id, is_deleted: 0 },
-      select: { id: true },
-      orderBy: { id: "asc" },
-    });
-    if (campaigns.length === 0) continue;
+    const campaignIds = campaignsByMerchant.get(String(agg.user_merchant_id));
+    if (!campaignIds?.length) continue;
 
-    const txnDate = new Date(agg.txn_date);
+    const txnDateStr = String(agg.txn_date).split("T")[0];
     const commData = {
       commission: Number(agg.total_commission),
       rejected_commission: Number(agg.rejected_commission),
@@ -314,36 +311,33 @@ async function updateDailyStatsCommission(userId: bigint, startDate: Date): Prom
     };
 
     let wrote = false;
-    for (const c of campaigns) {
-      const existing = await prisma.ads_daily_stats.findFirst({
-        where: { campaign_id: c.id, date: txnDate },
-      });
-      if (existing) {
+    for (const cid of campaignIds) {
+      const statsId = statsMap.get(`${cid}_${txnDateStr}`);
+      if (statsId) {
         if (!wrote) {
-          await prisma.ads_daily_stats.update({ where: { id: existing.id }, data: commData });
+          ops.push(() => prisma.ads_daily_stats.update({ where: { id: statsId }, data: commData }));
           wrote = true;
           updated++;
         } else {
-          await prisma.ads_daily_stats.update({ where: { id: existing.id }, data: { commission: 0, rejected_commission: 0, orders: 0 } });
+          ops.push(() => prisma.ads_daily_stats.update({ where: { id: statsId }, data: { commission: 0, rejected_commission: 0, orders: 0 } }));
         }
       }
     }
 
     if (!wrote) {
-      try {
-        await prisma.ads_daily_stats.create({
-          data: {
-            user_id: userId,
-            user_merchant_id: agg.user_merchant_id,
-            campaign_id: campaigns[0].id,
-            date: txnDate,
-            cost: 0, clicks: 0, impressions: 0,
-            ...commData,
-          },
-        });
-        updated++;
-      } catch { /* 并发冲突忽略 */ }
+      ops.push(() => prisma.ads_daily_stats.create({
+        data: {
+          user_id: userId, user_merchant_id: agg.user_merchant_id, campaign_id: campaignIds[0],
+          date: new Date(agg.txn_date), cost: 0, clicks: 0, impressions: 0, ...commData,
+        },
+      }).catch(() => {}));
+      updated++;
     }
+  }
+
+  // 批量执行（每 50 条并发）
+  for (let i = 0; i < ops.length; i += 50) {
+    await Promise.all(ops.slice(i, i + 50).map(fn => fn()));
   }
 
   return updated;
