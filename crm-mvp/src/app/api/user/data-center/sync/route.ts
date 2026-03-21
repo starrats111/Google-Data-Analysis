@@ -86,28 +86,29 @@ async function syncAdsData(
     sheetResult.message = "未配置 Sheet URL";
   }
 
-  // 2. API 同步今日数据
+  // 2. API 同步近 7 天数据（覆盖 Sheet 可能的过期数据）
   if (mcc.service_account_json) {
     try {
-      const { fetchTodayCampaignData } = await import("@/lib/google-ads");
+      const { fetchCampaignDataByDateRange } = await import("@/lib/google-ads");
       const credentials = {
         mcc_id: mcc.mcc_id,
         developer_token: mcc.developer_token || "",
         service_account_json: mcc.service_account_json,
       };
 
+      const apiStartDate = nowCST().subtract(7, "day").format("YYYY-MM-DD");
+      const apiEndDate = todayStr;
+
       const cids = await prisma.mcc_cid_accounts.findMany({
         where: { mcc_account_id: mcc.id, is_deleted: 0, status: "active" },
-        take: 50, // 限制单次同步 CID 数量
+        take: 50,
       });
 
-      // ─── 批量预加载所有 campaigns ───
       const existingCampaigns = await prisma.campaigns.findMany({
         where: { user_id: userId, mcc_id: mcc.id, is_deleted: 0 },
       });
       const campaignMap = new Map(existingCampaigns.map((c) => [c.google_campaign_id, c]));
 
-      // 预加载商家索引，用于关联 campaign 与 merchant
       const apiMerchants = await prisma.user_merchants.findMany({
         where: { user_id: userId, is_deleted: 0, status: "claimed" },
         select: { id: true, platform: true, merchant_id: true },
@@ -120,10 +121,10 @@ async function syncAdsData(
 
       for (const cid of cids) {
         try {
-          const campaignData = await fetchTodayCampaignData(credentials, cid.customer_id);
+          const campaignData = await fetchCampaignDataByDateRange(credentials, cid.customer_id, apiStartDate, apiEndDate);
 
-          // ─── 批量处理每个 CID 的数据 ───
           const operations: (() => Promise<unknown>)[] = [];
+          const seenCampaigns = new Set<string>();
 
           for (const cd of campaignData) {
             let campaign = campaignMap.get(cd.campaign_id);
@@ -142,7 +143,8 @@ async function syncAdsData(
                 },
               });
               campaignMap.set(cd.campaign_id, campaign);
-            } else {
+            } else if (!seenCampaigns.has(cd.campaign_id)) {
+              seenCampaigns.add(cd.campaign_id);
               operations.push(() => prisma.campaigns.update({
                 where: { id: campaign!.id },
                 data: {
@@ -152,10 +154,12 @@ async function syncAdsData(
               }));
             }
 
-            // 批量 upsert 今日统计
+            const rowDate = cd.date;
+            if (!rowDate) continue;
+
             operations.push(async () => {
               const existing = await prisma.ads_daily_stats.findFirst({
-                where: { campaign_id: campaign!.id, date: new Date(todayStr) },
+                where: { campaign_id: campaign!.id, date: new Date(rowDate) },
               });
               if (existing) {
                 await prisma.ads_daily_stats.update({
@@ -165,25 +169,22 @@ async function syncAdsData(
                 totalUpdated++;
               } else {
                 await prisma.ads_daily_stats.create({
-                  data: { user_id: userId, user_merchant_id: BigInt(0), campaign_id: campaign!.id, date: new Date(todayStr), budget: cd.budget_dollars, cost: cd.cost_dollars, clicks: cd.clicks, impressions: cd.impressions, cpc: cd.cpc_dollars, conversions: cd.conversions, data_source: "api" },
+                  data: { user_id: userId, user_merchant_id: BigInt(0), campaign_id: campaign!.id, date: new Date(rowDate), budget: cd.budget_dollars, cost: cd.cost_dollars, clicks: cd.clicks, impressions: cd.impressions, cpc: cd.cpc_dollars, conversions: cd.conversions, data_source: "api" },
                 });
                 totalInserted++;
               }
             });
           }
 
-          // 批量执行（每 20 个一批，避免连接池耗尽）
           for (let i = 0; i < operations.length; i += 20) {
             const batch = operations.slice(i, i + 20);
             await Promise.all(batch.map((op) => op()));
           }
 
-          // 批量更新 CID 状态（一次查询代替 N 次）
-          const cidCustomerIds = campaignData.map((cd) => cd.customer_id);
           const enabledCids = campaignData.filter((cd) => cd.campaign_status === "ENABLED").map((cd) => cd.customer_id);
-          if (cidCustomerIds.length > 0) {
+          if (enabledCids.length > 0) {
             await prisma.mcc_cid_accounts.updateMany({
-              where: { mcc_account_id: mcc.id, customer_id: { in: enabledCids } },
+              where: { mcc_account_id: mcc.id, customer_id: { in: [...new Set(enabledCids)] } },
               data: { is_available: "N" },
             });
           }
