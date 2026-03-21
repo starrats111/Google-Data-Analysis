@@ -30,30 +30,30 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
+  // 立即返回，后台异步执行
+  doDailySync().catch(e => log(`FATAL: ${e instanceof Error ? e.message : String(e)}`));
+
+  return NextResponse.json({ ok: true, message: "daily sync started in background" });
+}
+
+async function doDailySync() {
   const t0 = Date.now();
-  const results: Record<string, unknown> = {};
 
   try {
-    // ── 1. 违规 & 推荐商家同步 ──
     log("Step 1: Syncing violation & recommendation merchants...");
-    results.merchantSheet = await syncMerchantSheet();
+    await syncMerchantSheet();
 
-    // ── 2. 每个用户的 MCC 广告数据 ──
     log("Step 2: Syncing MCC ad data for all users...");
-    results.mccSync = await syncAllUsersMcc();
+    await syncAllUsersMcc();
 
-    // ── 3. 每个用户的交易数据 ──
     log("Step 3: Syncing transaction data for all users...");
-    results.transactionSync = await syncAllUsersTransactions();
+    await syncAllUsersTransactions();
 
     const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
     log(`All done in ${elapsed}s`);
-
-    return NextResponse.json({ ok: true, elapsed_s: elapsed, results });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     log(`FATAL: ${msg}`);
-    return NextResponse.json({ ok: false, error: msg, results }, { status: 500 });
   }
 }
 
