@@ -3,6 +3,37 @@ import { getUserFromRequest, serializeData } from "@/lib/auth";
 import { apiSuccess, apiError } from "@/lib/constants";
 import prisma from "@/lib/prisma";
 import { mutateGoogleAds, dollarsToMicros, queryGoogleAds } from "@/lib/google-ads";
+import { readFile } from "fs/promises";
+import { existsSync } from "fs";
+import path from "path";
+
+const AD_IMAGE_DIR = path.join(process.cwd(), ".uploads", "ad-images");
+
+async function loadImageAsBase64(imageUrl: string): Promise<{ data: string; name: string } | null> {
+  try {
+    if (imageUrl.startsWith("/api/user/ad-creation/upload-image/")) {
+      const filename = imageUrl.split("/").pop();
+      if (!filename) return null;
+      const filePath = path.join(AD_IMAGE_DIR, filename);
+      if (!existsSync(filePath)) return null;
+      const buffer = await readFile(filePath);
+      if (buffer.length > 5 * 1024 * 1024) return null;
+      return { data: buffer.toString("base64"), name: filename };
+    }
+    if (imageUrl.startsWith("http://") || imageUrl.startsWith("https://")) {
+      const resp = await fetch(imageUrl, { signal: AbortSignal.timeout(15000) });
+      if (!resp.ok) return null;
+      const buffer = Buffer.from(await resp.arrayBuffer());
+      if (buffer.length > 5 * 1024 * 1024) return null;
+      const urlName = imageUrl.split("/").pop()?.split("?")[0] || "image";
+      return { data: buffer.toString("base64"), name: urlName.slice(0, 50) };
+    }
+    return null;
+  } catch (err) {
+    console.warn("[AdSubmit] 图片加载失败:", imageUrl, err);
+    return null;
+  }
+}
 
 /**
  * POST /api/user/ad-creation/submit
@@ -68,9 +99,12 @@ export async function POST(req: NextRequest) {
   if (!mccAccount.service_account_json) return apiError("MCC 未配置服务账号凭证");
   if (!mccAccount.developer_token) return apiError("MCC 未配置 developer_token");
 
-  const finalUrl = adCreative.final_url?.trim();
+  let finalUrl = adCreative.final_url?.trim() || "";
   if (!finalUrl || !finalUrl.startsWith("http")) {
     return apiError("广告落地页 URL 无效，请确保商家链接已填写");
+  }
+  if (finalUrl.startsWith("http://")) {
+    finalUrl = finalUrl.replace("http://", "https://");
   }
 
   const credentials = {
@@ -295,11 +329,13 @@ export async function POST(req: NextRequest) {
     let assetTempId = -10;
     for (const sl of sitelinks) {
       const assetTempRn = `customers/${cid}/assets/${assetTempId}`;
+      let slUrl = (sl.finalUrl || "").trim();
+      if (slUrl.startsWith("http://")) slUrl = slUrl.replace("http://", "https://");
       operations.push({
         asset_operation: {
           create: {
             resource_name: assetTempRn,
-            final_urls: [sl.finalUrl],
+            final_urls: [slUrl],
             sitelink_asset: {
               link_text: (sl.title || "").slice(0, 25),
               description1: (sl.description1 || "").slice(0, 35),
@@ -343,6 +379,38 @@ export async function POST(req: NextRequest) {
         },
       });
       assetTempId--;
+    }
+
+    // ─── 10. 图片素材（Image Extensions） ───
+    if (image_urls.length > 0) {
+      const imageLoadTasks = (image_urls as string[]).slice(0, 20).map((url) => loadImageAsBase64(url));
+      const imageResults = await Promise.all(imageLoadTasks);
+      for (const img of imageResults) {
+        if (!img) continue;
+        const assetTempRn = `customers/${cid}/assets/${assetTempId}`;
+        operations.push({
+          asset_operation: {
+            create: {
+              resource_name: assetTempRn,
+              name: `AdImage-${img.name}-${Date.now()}`,
+              type: "IMAGE",
+              image_asset: {
+                data: img.data,
+              },
+            },
+          },
+        });
+        operations.push({
+          campaign_asset_operation: {
+            create: {
+              asset: assetTempRn,
+              campaign: campaignTempRn,
+              field_type: "IMAGE",
+            },
+          },
+        });
+        assetTempId--;
+      }
     }
 
     // ─── 发送批量 Mutate 请求（含 DUPLICATE_CAMPAIGN_NAME 自动重试） ───

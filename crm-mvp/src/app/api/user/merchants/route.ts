@@ -477,6 +477,9 @@ export const POST = withUser(async (req: NextRequest, { user }) => {
 
   // 创建空的广告素材（后续由异步任务填充 headlines/descriptions）
   let finalUrl = merchant.merchant_url || merchant.tracking_link || "";
+  if (finalUrl.startsWith("http://")) {
+    finalUrl = finalUrl.replace("http://", "https://");
+  }
   if (policyCategory && finalUrl) {
     const lpRules = policyCategory.landing_page_rules as Record<string, any> | null;
     if (lpRules?.url_params) {
