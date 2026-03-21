@@ -112,9 +112,9 @@ export default function UserLayout({ children }: { children: React.ReactNode }) 
     errorRetryInterval: 2000,
   });
 
-  // 根据角色选择菜单
+  // 根据角色选择菜单：组长 = 用户全部功能 + 团队管理
   const currentMenuItems = useMemo(() => {
-    if (authData?.role === "leader") return leaderMenuItems;
+    if (authData?.role === "leader") return [...userMenuItems, ...leaderMenuItems];
     return userMenuItems;
   }, [authData?.role]);
 
@@ -260,7 +260,7 @@ export default function UserLayout({ children }: { children: React.ReactNode }) 
       >
         <div className="sidebar-logo">
           <AppstoreOutlined style={{ fontSize: 20, color: COLORS.primary, marginRight: collapsed ? 0 : 8 }} />
-          {!collapsed && <span className="sidebar-logo-text">{authData?.role === "leader" ? "组长管理平台" : "CRM 管理平台"}</span>}
+          {!collapsed && <span className="sidebar-logo-text">CRM 管理平台</span>}
         </div>
         <Menu
           mode="inline"
@@ -283,7 +283,7 @@ export default function UserLayout({ children }: { children: React.ReactNode }) 
             lineHeight: "56px",
           }}
         >
-          <Text strong style={{ fontSize: 15, color: COLORS.textPrimary }}>{authData?.role === "leader" ? "组长管理平台" : "CRM 用户管理平台"}</Text>
+          <Text strong style={{ fontSize: 15, color: COLORS.textPrimary }}>CRM 用户管理平台</Text>
           <Space size={16}>
             <Popover
               content={notificationContent}
