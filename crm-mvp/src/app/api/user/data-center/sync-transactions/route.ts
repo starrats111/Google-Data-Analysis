@@ -110,14 +110,18 @@ export async function POST(req: NextRequest) {
       }
       for (const [key, { merchantId, name }] of missingMerchants) {
         try {
-          const created = await prisma.user_merchants.upsert({
-            where: { user_platform_merchant: { user_id: userId, platform, merchant_id: merchantId } },
-            create: { user_id: userId, platform, merchant_id: merchantId, merchant_name: name, status: "available" },
-            update: { merchant_name: name || undefined },
+          let existing = await prisma.user_merchants.findFirst({
+            where: { user_id: userId, platform, merchant_id: merchantId, is_deleted: 0 },
             select: { id: true, merchant_id: true, platform: true, merchant_name: true },
           });
-          merchantMap.set(key, created);
-        } catch { /* ignore duplicate */ }
+          if (!existing) {
+            existing = await prisma.user_merchants.create({
+              data: { user_id: userId, platform, merchant_id: merchantId, merchant_name: name, status: "available" },
+              select: { id: true, merchant_id: true, platform: true, merchant_name: true },
+            });
+          }
+          merchantMap.set(key, existing);
+        } catch { /* ignore race condition */ }
       }
 
       let synced = 0;
