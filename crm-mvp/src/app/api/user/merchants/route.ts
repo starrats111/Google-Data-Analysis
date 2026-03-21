@@ -543,12 +543,16 @@ export const POST = withUser(async (req: NextRequest, { user }) => {
   const articleTrackingLink = merchant.campaign_link || merchant.tracking_link || "";
 
   // 异步创建文章生成任务（领取商家时自动触发）
+  const initTitle = `${merchant.merchant_name} Review`;
+  const initSlug = initTitle.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
   const article = await prisma.articles.create({
     data: {
       user_id: BigInt(user.userId),
       user_merchant_id: BigInt(merchant_id),
       publish_site_id: publishSiteId,
       language: "en",
+      title: initTitle,
+      slug: initSlug,
       status: "generating",
       merchant_name: merchant.merchant_name,
       tracking_link: articleTrackingLink || null,
