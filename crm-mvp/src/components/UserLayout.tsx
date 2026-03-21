@@ -78,6 +78,14 @@ const leaderMenuItems: MenuItem[] = [
       { key: "/user/team-members", icon: <TeamOutlined />, label: "员工管理" },
     ],
   },
+  {
+    key: "leader-data-group",
+    label: "数据中心",
+    type: "group" as const,
+    children: [
+      { key: "/user/data-center/settlement", icon: <AccountBookOutlined />, label: "结算查询" },
+    ],
+  },
 ];
 
 interface Notification {
