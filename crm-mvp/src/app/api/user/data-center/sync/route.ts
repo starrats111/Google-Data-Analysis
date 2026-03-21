@@ -44,9 +44,7 @@ export async function POST(req: NextRequest) {
   await linkTransactionsToMerchants(userId);
 
   if (type === "all" || type === "platform") {
-    // 先清除错误的佣金数据，再重新按日期写入正确值
-    const thirtyDaysAgo = new Date();
-    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+    const thirtyDaysAgo = nowCST().subtract(30, "day").toDate();
     await prisma.ads_daily_stats.updateMany({
       where: { user_id: userId, date: { gte: thirtyDaysAgo } },
       data: { commission: 0, rejected_commission: 0, orders: 0 },
@@ -544,8 +542,7 @@ async function normalizeExistingTransactionPlatforms(userId: bigint) {
  */
 async function syncPlatformData(userId: bigint) {
   try {
-    const thirtyDaysAgo = new Date();
-    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+    const thirtyDaysAgo = nowCST().subtract(30, "day").toDate();
 
     const txnAgg = await prisma.$queryRawUnsafe<
       { user_merchant_id: bigint; txn_date: string; total_commission: number; rejected_commission: number; order_count: number }[]
@@ -616,7 +613,7 @@ async function syncPlatformData(userId: bigint) {
           await prisma.ads_daily_stats.create({
             data: {
               user_id: userId,
-              user_merchant_id: BigInt(0),
+              user_merchant_id: agg.user_merchant_id,
               campaign_id: campaignIds[0],
               date: txnDate,
               cost: 0, clicks: 0, impressions: 0,

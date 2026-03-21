@@ -132,23 +132,10 @@ async function callPlatformApi(
 // ── 解析商家数据（各平台返回格式不同，统一提取） ──
 
 function parseMerchants(platform: string, data: Record<string, unknown>): PlatformMerchant[] {
-  // DEBUG 4fc40c
-  const fs = require("fs");
-  const log = (msg: string) => fs.appendFileSync("debug-4fc40c.log", `[${new Date().toISOString()}] [parseMerchants] ${msg}\n`);
-
-  // 大多数平台返回 { code: "0", data: { list: [...] } } 或 { data: { list: [...] } }
   const root = (data.data || data) as Record<string, unknown>;
   const list = (root.list || root.items || root.merchants || []) as Record<string, unknown>[];
 
-  log(`platform=${platform}, topKeys=${Object.keys(data).join(",")}, rootKeys=${Object.keys(root).join(",")}, listLen=${Array.isArray(list) ? list.length : "NOT_ARRAY"}`);
-
   if (!Array.isArray(list)) return [];
-
-  if (list.length > 0) {
-    const sample = list[0];
-    log(`  sample item keys: ${Object.keys(sample).join(",")}`);
-    log(`  sample item: ${JSON.stringify(sample).substring(0, 500)}`);
-  }
 
   return list.map((item) => {
     // LH 的字段命名和其他平台相反：mcid=数字MID，m_id=slug MCID
@@ -420,12 +407,20 @@ function parseTimestamp(raw: unknown): string {
   return s;
 }
 
+const TXN_STATUS_MAP: Record<string, string> = {
+  approved: "approved", confirmed: "approved", locked: "approved",
+  active: "approved", effective: "approved",
+  paid: "paid", settled: "paid",
+  pending: "pending", under_review: "pending", processing: "pending",
+  waiting: "pending", untreated: "pending", "preliminary effective": "pending",
+  rejected: "rejected", declined: "rejected", reversed: "rejected",
+  invalid: "rejected", adjusted: "rejected", cancelled: "rejected",
+  voided: "rejected", expired: "rejected", "preliminary expired": "rejected",
+};
+
 function normalizeTxnStatus(s: string): string {
-  const lower = String(s).toLowerCase();
-  if (["approved", "confirmed", "locked", "active"].includes(lower)) return "approved";
-  if (["rejected", "declined", "reversed"].includes(lower)) return "rejected";
-  if (["paid", "settled"].includes(lower)) return "paid";
-  return "pending";
+  const lower = String(s).toLowerCase().trim();
+  return TXN_STATUS_MAP[lower] || "pending";
 }
 
 function parseTransactions(platform: string, data: Record<string, unknown>): PlatformTransaction[] {
@@ -447,10 +442,16 @@ function parseTransactions(platform: string, data: Record<string, unknown>): Pla
       item.advertiser_name || item.mcid || item.brand || item.name || ""
     );
 
-    // 商家 ID (MID)
-    let mid = String(item.mid || item.m_id || item.merchant_id || "");
-    if (platform === "LH") {
-      mid = String(item.m_id || item.brand_id || item.merchant_id || item.mid || "");
+    // 商家 ID (MID) — 仅接受纯数字，与旧平台 isdigit() 保持一致
+    const midCandidates = platform === "LH"
+      ? [item.mcid, item.mid, item.m_id, item.brand_id, item.merchant_id]
+      : [item.mid, item.m_id, item.merchant_id];
+    let mid = "";
+    for (const c of midCandidates) {
+      if (c != null) {
+        const s = String(c).trim();
+        if (s && /^\d+$/.test(s)) { mid = s; break; }
+      }
     }
 
     // 金额

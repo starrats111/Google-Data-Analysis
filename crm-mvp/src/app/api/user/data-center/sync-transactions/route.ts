@@ -78,12 +78,26 @@ export async function POST(req: NextRequest) {
           continue;
         }
 
+        // 按 transaction_id 去重求和（移植自旧平台，同一笔订单可能出现多行）
+        const grouped = new Map<string, typeof result.transactions[0]>();
+        for (const txn of result.transactions) {
+          if (!txn.transaction_id) continue;
+          const existing = grouped.get(txn.transaction_id);
+          if (existing) {
+            existing.commission_amount = (existing.commission_amount || 0) + (txn.commission_amount || 0);
+            existing.order_amount = (existing.order_amount || 0) + (txn.order_amount || 0);
+          } else {
+            grouped.set(txn.transaction_id, { ...txn });
+          }
+        }
+        const dedupedTxns = [...grouped.values()];
+
         // upsert 交易数据
         let synced = 0;
         let skipped = 0;
 
-        for (let i = 0; i < result.transactions.length; i += 20) {
-          const batch = result.transactions.slice(i, i + 20);
+        for (let i = 0; i < dedupedTxns.length; i += 20) {
+          const batch = dedupedTxns.slice(i, i + 20);
           const ops = batch.map((txn) => {
             const merchantId = txn.merchant_id || "";
             const txnId = txn.transaction_id;
@@ -93,6 +107,8 @@ export async function POST(req: NextRequest) {
             const userMerchantId = merchant ? merchant.id : BigInt(0);
             const merchantName = txn.merchant || merchant?.merchant_name || "";
 
+            const newComm = txn.commission_amount || 0;
+            const newAmt = txn.order_amount || 0;
             return prisma.affiliate_transactions.upsert({
               where: {
                 platform_transaction_id: { platform, transaction_id: txnId },
@@ -106,18 +122,18 @@ export async function POST(req: NextRequest) {
                 merchant_name: merchantName,
                 transaction_id: txnId,
                 transaction_time: new Date(txn.transaction_time),
-                order_amount: txn.order_amount || 0,
-                commission_amount: txn.commission_amount || 0,
+                order_amount: newAmt,
+                commission_amount: newComm,
                 currency: "USD",
                 status: txn.status,
                 raw_status: txn.raw_status || "",
               },
               update: {
                 platform_connection_id: conn.id,
-                commission_amount: txn.commission_amount || 0,
+                ...(newComm > 0 ? { commission_amount: newComm } : {}),
                 status: txn.status,
                 raw_status: txn.raw_status || "",
-                order_amount: txn.order_amount || 0,
+                ...(newAmt > 0 ? { order_amount: newAmt } : {}),
                 merchant_name: merchantName || undefined,
               },
             });
@@ -316,7 +332,7 @@ async function updateDailyStatsCommission(userId: bigint, startDate: Date): Prom
         await prisma.ads_daily_stats.create({
           data: {
             user_id: userId,
-            user_merchant_id: BigInt(0),
+            user_merchant_id: agg.user_merchant_id,
             campaign_id: campaigns[0].id,
             date: txnDate,
             cost: 0, clicks: 0, impressions: 0,
