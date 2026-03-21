@@ -28,8 +28,9 @@ export default function UserLoginPage() {
           username: data.data.username,
           role: data.data.role,
         }, { revalidate: false });
-        // 硬跳转确保 cookie 完全生效
-        window.location.href = "/user/merchants";
+        // 组长跳转到小组总览，普通用户跳转到商家管理
+        const targetPath = data.data.role === "leader" ? "/user/team-overview" : "/user/merchants";
+        window.location.href = targetPath;
       } else {
         message.error(data.message || "登录失败");
       }

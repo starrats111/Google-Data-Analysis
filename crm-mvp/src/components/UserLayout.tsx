@@ -112,9 +112,9 @@ export default function UserLayout({ children }: { children: React.ReactNode }) 
     errorRetryInterval: 2000,
   });
 
-  // 根据角色选择菜单：组长 = 用户全部功能 + 团队管理
+  // 根据角色选择菜单：组长只看团队管理，普通用户看完整菜单
   const currentMenuItems = useMemo(() => {
-    if (authData?.role === "leader") return [...userMenuItems, ...leaderMenuItems];
+    if (authData?.role === "leader") return leaderMenuItems;
     return userMenuItems;
   }, [authData?.role]);
 
