@@ -93,14 +93,21 @@ export async function POST(req: NextRequest) {
       method: "user.Databases",
       params: { userId: parseInt(userId), apiKey },
     };
+    const rpcHeaders: Record<string, string> = {
+      "user-agent": USER_AGENT,
+      "content-type": "application/json; charset=utf-8",
+      origin: RPC_ORIGIN,
+      referer: "https://sem.3ue.co/analytics/overview/",
+      accept: "application/json, text/plain, */*",
+      "accept-language": "zh-CN,zh;q=0.9,en;q=0.8",
+      "sec-fetch-dest": "empty",
+      "sec-fetch-mode": "cors",
+      "sec-fetch-site": "same-origin",
+      cookie: cookieStr,
+    };
     const rpcRes = await fetch(RPC_URL, {
       method: "POST",
-      headers: {
-        "user-agent": USER_AGENT,
-        "content-type": "application/json; charset=utf-8",
-        origin: RPC_ORIGIN,
-        cookie: cookieStr,
-      },
+      headers: rpcHeaders,
       body: JSON.stringify(rpcPayload),
       signal: AbortSignal.timeout(15000),
     });
@@ -108,7 +115,7 @@ export async function POST(req: NextRequest) {
     if (!rpcRes.ok) {
       const statusHints: Record<number, string> = {
         401: "认证失败 — Token 或凭据无效",
-        403: "访问被拒绝 — 账户可能已过期，或 User ID / API Key 不匹配",
+        403: "访问被拒绝 — 账户可能已过期，或 User ID / API Key 不匹配，或服务器 IP 被限制",
         429: "请求频率过高，请稍后再试",
       };
       steps.push({
@@ -159,6 +166,12 @@ export async function POST(req: NextRequest) {
         "user-agent": USER_AGENT,
         "content-type": "application/json; charset=utf-8",
         origin: RPC_ORIGIN,
+        referer: "https://sem.3ue.co/analytics/overview/",
+        accept: "application/json, text/plain, */*",
+        "accept-language": "zh-CN,zh;q=0.9,en;q=0.8",
+        "sec-fetch-dest": "empty",
+        "sec-fetch-mode": "cors",
+        "sec-fetch-site": "same-origin",
         cookie: cookieStr,
       },
       body: JSON.stringify(kwPayload),

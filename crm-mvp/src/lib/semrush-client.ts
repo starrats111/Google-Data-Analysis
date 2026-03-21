@@ -240,6 +240,12 @@ export class SemRushClient {
       "user-agent": USER_AGENT,
       "content-type": "application/json; charset=utf-8",
       origin: RPC_ORIGIN,
+      referer: "https://sem.3ue.co/analytics/overview/",
+      accept: "application/json, text/plain, */*",
+      "accept-language": "zh-CN,zh;q=0.9,en;q=0.8",
+      "sec-fetch-dest": "empty",
+      "sec-fetch-mode": "cors",
+      "sec-fetch-site": "same-origin",
       cookie: cookieStr,
     };
     const res = await fetch(RPC_URL, {
