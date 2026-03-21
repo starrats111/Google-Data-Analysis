@@ -173,7 +173,7 @@ export async function POST(req: NextRequest) {
 
 async function linkTransactionsToMerchants(userId: bigint) {
   const userMerchants = await prisma.user_merchants.findMany({
-    where: { user_id: userId, is_deleted: 0, status: "claimed" },
+    where: { user_id: userId, is_deleted: 0 },
     select: { id: true, platform: true, merchant_id: true },
   });
 
@@ -238,11 +238,11 @@ async function linkCampaignsToMerchants(userId: bigint) {
   if (unlinked.length === 0) return;
 
   const userMerchants = await prisma.user_merchants.findMany({
-    where: { user_id: userId, is_deleted: 0, status: "claimed" },
+    where: { user_id: userId, is_deleted: 0 },
     select: { id: true, platform: true, merchant_id: true },
   });
   const merchantIndex = new Map(
-    userMerchants.map((m) => [`${m.platform}_${m.merchant_id}`, m.id])
+    userMerchants.map((m) => [`${normalizePlatformCode(m.platform)}_${m.merchant_id}`, m.id])
   );
 
   const updates: Promise<unknown>[] = [];

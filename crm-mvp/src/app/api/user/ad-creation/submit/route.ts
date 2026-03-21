@@ -97,7 +97,7 @@ export async function POST(req: NextRequest) {
   if (!adCreative) return apiError("广告素材不存在");
 
   if (!mccAccount.service_account_json) return apiError("MCC 未配置服务账号凭证");
-  if (!mccAccount.developer_token) return apiError("MCC 未配置 developer_token");
+  if (!mccAccount.developer_token) return apiError(`MCC「${(mccAccount as { mcc_name?: string; mcc_id: string }).mcc_name || (mccAccount as { mcc_id: string }).mcc_id}」未配置 developer_token，请在「个人设置 → MCC 管理」中编辑该 MCC 填写 Developer Token`);
 
   let finalUrl = adCreative.final_url?.trim() || "";
   if (!finalUrl || !finalUrl.startsWith("http")) {

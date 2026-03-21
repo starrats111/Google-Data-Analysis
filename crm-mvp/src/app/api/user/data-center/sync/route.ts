@@ -109,7 +109,7 @@ async function syncAdsData(
 
       // 预加载商家索引，用于关联 campaign 与 merchant
       const apiMerchants = await prisma.user_merchants.findMany({
-        where: { user_id: userId, is_deleted: 0, status: "claimed" },
+        where: { user_id: userId, is_deleted: 0 },
         select: { id: true, platform: true, merchant_id: true },
       });
       const apiMerchantIndex = new Map(
@@ -224,7 +224,7 @@ async function upsertSheetRowsBatch(
   const missingIds = uniqueCampaignIds.filter((id) => !campaignMap.has(id));
   if (missingIds.length > 0) {
     const userMerchants = await prisma.user_merchants.findMany({
-      where: { user_id: userId, is_deleted: 0, status: "claimed" },
+      where: { user_id: userId, is_deleted: 0 },
       select: { id: true, platform: true, merchant_id: true },
     });
     const merchantIndex = new Map(
@@ -348,7 +348,7 @@ async function linkCampaignsToMerchants(userId: bigint) {
   if (unlinked.length === 0) return 0;
 
   const userMerchants = await prisma.user_merchants.findMany({
-    where: { user_id: userId, is_deleted: 0, status: "claimed" },
+    where: { user_id: userId, is_deleted: 0 },
     select: { id: true, platform: true, merchant_id: true },
   });
   const merchantIndex = new Map(
@@ -390,7 +390,7 @@ async function linkCampaignsToMerchants(userId: bigint) {
  */
 async function linkTransactionsToMerchants(userId: bigint) {
   const userMerchants = await prisma.user_merchants.findMany({
-    where: { user_id: userId, is_deleted: 0, status: "claimed" },
+    where: { user_id: userId, is_deleted: 0 },
     select: { id: true, platform: true, merchant_id: true },
   });
   if (userMerchants.length === 0) return;

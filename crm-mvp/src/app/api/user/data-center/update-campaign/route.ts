@@ -30,7 +30,7 @@ export async function POST(req: NextRequest) {
   });
   if (!mcc) return apiError("MCC 账户不存在", 404);
   if (!mcc.service_account_json) return apiError("MCC 未配置服务账号凭证", 400);
-  if (!mcc.developer_token) return apiError("MCC 未配置 developer_token", 400);
+  if (!mcc.developer_token) return apiError(`MCC「${mcc.mcc_name || mcc.mcc_id}」未配置 developer_token，请在「个人设置 → MCC 管理」中编辑该 MCC 填写 Developer Token`, 400);
 
   try {
     const { updateCampaignBudget, updateCampaignMaxCpc } = await import("@/lib/google-ads");
