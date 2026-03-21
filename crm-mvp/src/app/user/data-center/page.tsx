@@ -32,12 +32,13 @@ interface CampaignRow {
   id: string; google_campaign_id: string; customer_id: string; campaign_name: string;
   status: string; daily_budget: number; max_cpc: number | null;
   cost: number; clicks: number; impressions: number; cpc: number;
-  commission: number; rejected_commission: number; orders: number; roi: number;
+  commission: number; rejected_commission: number; approved_commission: number; orders: number; roi: number;
   target_country: string; last_synced: string | null;
 }
 
 interface Summary {
-  totalCost: number; totalCommission: number; totalRejectedCommission: number; totalClicks: number; totalImpressions: number;
+  totalCost: number; totalCommission: number; totalRejectedCommission: number; totalApprovedCommission: number;
+  totalClicks: number; totalImpressions: number;
   avgCpc: number; roi: number; campaignCount: number; enabledCount: number; pausedCount: number;
 }
 
@@ -93,8 +94,8 @@ export default function DataCenterPage() {
 
   const rows = campaignData?.rows || [];
   const summary = campaignData?.summary || {
-    totalCost: 0, totalCommission: 0, totalRejectedCommission: 0, totalClicks: 0, totalImpressions: 0,
-    avgCpc: 0, roi: 0, campaignCount: 0, enabledCount: 0, pausedCount: 0,
+    totalCost: 0, totalCommission: 0, totalRejectedCommission: 0, totalApprovedCommission: 0,
+    totalClicks: 0, totalImpressions: 0, avgCpc: 0, roi: 0, campaignCount: 0, enabledCount: 0, pausedCount: 0,
   };
 
   // 按广告系列汇总花费和佣金
@@ -105,6 +106,7 @@ export default function DataCenterPage() {
       cost: r.cost,
       commission: r.commission,
       rejected_commission: r.rejected_commission || 0,
+      approved_commission: r.approved_commission || 0,
     }));
   }, [rows]);
 
@@ -281,6 +283,10 @@ export default function DataCenterPage() {
       render: (v: number) => <Text type={v > 0 ? "danger" : "secondary"} style={{ fontSize: 12 }}>${(v || 0).toFixed(2)}</Text>,
     },
     {
+      title: "已付佣金", dataIndex: "approved_commission", width: 80, align: "right",
+      render: (v: number) => <Text style={{ fontSize: 12, color: v > 0 ? "#1890ff" : undefined }}>${(v || 0).toFixed(2)}</Text>,
+    },
+    {
       title: "点击", dataIndex: "clicks", width: 55, align: "right",
       render: (v: number) => <Text style={{ fontSize: 12 }}>{v}</Text>,
     },
@@ -388,6 +394,11 @@ export default function DataCenterPage() {
         </Col>
         <Col xs={12} sm={6} md={4}>
           <Card size="small" styles={{ body: { padding: "8px 12px" } }}>
+            <Statistic title="已付佣金" value={summary.totalApprovedCommission} prefix="$" precision={2} styles={{ content: { fontSize: 18, color: summary.totalApprovedCommission > 0 ? "#1890ff" : undefined } }} />
+          </Card>
+        </Col>
+        <Col xs={12} sm={6} md={4}>
+          <Card size="small" styles={{ body: { padding: "8px 12px" } }}>
             <Statistic title="平均 CPC" value={summary.avgCpc} prefix="$" precision={4} styles={{ content: { fontSize: 18 } }} />
           </Card>
         </Col>
@@ -424,8 +435,9 @@ export default function DataCenterPage() {
                   <Table.Summary.Cell index={6} align="right"><Text strong style={{ color: "#cf1322" }}>${summary.totalCost.toFixed(2)}</Text></Table.Summary.Cell>
                   <Table.Summary.Cell index={7} align="right"><Text strong style={{ color: "#389e0d" }}>${summary.totalCommission.toFixed(2)}</Text></Table.Summary.Cell>
                   <Table.Summary.Cell index={8} align="right"><Text strong type="danger">${summary.totalRejectedCommission.toFixed(2)}</Text></Table.Summary.Cell>
-                  <Table.Summary.Cell index={9} align="right"><Text strong>{summary.totalClicks}</Text></Table.Summary.Cell>
-                  <Table.Summary.Cell index={10} align="right"><Text strong>{summary.totalImpressions}</Text></Table.Summary.Cell>
+                  <Table.Summary.Cell index={9} align="right"><Text strong style={{ color: "#1890ff" }}>${summary.totalApprovedCommission.toFixed(2)}</Text></Table.Summary.Cell>
+                  <Table.Summary.Cell index={10} align="right"><Text strong>{summary.totalClicks}</Text></Table.Summary.Cell>
+                  <Table.Summary.Cell index={11} align="right"><Text strong>{summary.totalImpressions}</Text></Table.Summary.Cell>
                 </Table.Summary.Row>
               </Table.Summary>
             );
@@ -441,6 +453,7 @@ export default function DataCenterPage() {
             { title: "总花费", dataIndex: "cost", width: 100, align: "right", render: (v: number) => <Text style={{ color: v > 0 ? "#cf1322" : undefined }}>${v.toFixed(2)}</Text> },
             { title: "总佣金", dataIndex: "commission", width: 100, align: "right", render: (v: number) => <Text style={{ color: v > 0 ? "#389e0d" : undefined }}>${v.toFixed(2)}</Text> },
             { title: "拒付佣金", dataIndex: "rejected_commission", width: 100, align: "right", render: (v: number) => <Text type={v > 0 ? "danger" : "secondary"}>${v.toFixed(2)}</Text> },
+            { title: "已付佣金", dataIndex: "approved_commission", width: 100, align: "right", render: (v: number) => <Text style={{ color: v > 0 ? "#1890ff" : undefined }}>${v.toFixed(2)}</Text> },
           ]}
           summary={() => (
             <Table.Summary.Row>
@@ -448,6 +461,7 @@ export default function DataCenterPage() {
               <Table.Summary.Cell index={1} align="right"><Text strong style={{ color: "#cf1322" }}>${summary.totalCost.toFixed(2)}</Text></Table.Summary.Cell>
               <Table.Summary.Cell index={2} align="right"><Text strong style={{ color: "#389e0d" }}>${summary.totalCommission.toFixed(2)}</Text></Table.Summary.Cell>
               <Table.Summary.Cell index={3} align="right"><Text strong type="danger">${detailByRow.reduce((s, r) => s + r.rejected_commission, 0).toFixed(2)}</Text></Table.Summary.Cell>
+              <Table.Summary.Cell index={4} align="right"><Text strong style={{ color: "#1890ff" }}>${detailByRow.reduce((s, r) => s + r.approved_commission, 0).toFixed(2)}</Text></Table.Summary.Cell>
             </Table.Summary.Row>
           )}
         />

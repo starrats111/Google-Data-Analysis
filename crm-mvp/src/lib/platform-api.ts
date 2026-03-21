@@ -369,6 +369,7 @@ async function callTxnApi(
       form.set(endKey, endDate);
       form.set(pageKey, String(page));
       form.set(sizeKey, String(maxSize));
+      form.set("status", "all");
       resp = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/x-www-form-urlencoded" },
@@ -394,16 +395,19 @@ async function callTxnApi(
   }
 }
 
+/**
+ * 解析各种格式的时间戳为 ISO 字符串（保留 Z 后缀避免二次 new Date 时发生时区偏移）
+ */
 function parseTimestamp(raw: unknown): string {
-  if (!raw) return new Date().toISOString().slice(0, 19).replace("T", " ");
+  if (!raw) return new Date().toISOString();
   const s = String(raw);
   // Unix 时间戳（秒）
-  if (/^\d{10}$/.test(s)) return new Date(Number(s) * 1000).toISOString().slice(0, 19).replace("T", " ");
+  if (/^\d{10}$/.test(s)) return new Date(Number(s) * 1000).toISOString();
   // Unix 时间戳（毫秒）
-  if (/^\d{13}$/.test(s)) return new Date(Number(s)).toISOString().slice(0, 19).replace("T", " ");
+  if (/^\d{13}$/.test(s)) return new Date(Number(s)).toISOString();
   // ISO / 标准日期字符串
   const d = new Date(s);
-  if (!isNaN(d.getTime())) return d.toISOString().slice(0, 19).replace("T", " ");
+  if (!isNaN(d.getTime())) return d.toISOString();
   return s;
 }
 
@@ -436,16 +440,15 @@ function parseTransactions(platform: string, data: Record<string, unknown>): Pla
       item.partnermaticId || item.sign_id || item.action_id || item.id || ""
     );
 
-    // 商家
     const merchant = String(
       item.merchant || item.merchant_name || item.merchantName ||
-      item.advertiser_name || item.mcid || item.brand || item.name || ""
+      item.advertiser_name || item.brand || item.name || ""
     );
 
     // 商家 ID (MID) — 仅接受纯数字，与旧平台 isdigit() 保持一致
     const midCandidates = platform === "LH"
-      ? [item.mcid, item.mid, item.m_id, item.brand_id, item.merchant_id]
-      : [item.mid, item.m_id, item.merchant_id];
+      ? [item.mcid, item.mid, item.m_id, item.brand_id, item.merchant_id, item.merchantId, item.advertiser_id]
+      : [item.mid, item.m_id, item.merchant_id, item.merchantId, item.brand_id, item.advertiser_id];
     let mid = "";
     for (const c of midCandidates) {
       if (c != null) {

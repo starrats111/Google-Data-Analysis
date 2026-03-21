@@ -59,6 +59,31 @@ export async function POST(req: NextRequest) {
 }
 
 /**
+ * 获取实时汇率（非 USD 账号需要转换费用）
+ */
+async function fetchExchangeRate(currency: string): Promise<number> {
+  if (!currency || currency.toUpperCase() === "USD") return 1;
+  try {
+    const resp = await fetch(
+      `https://open.er-api.com/v6/latest/${currency.toUpperCase()}`,
+      { signal: AbortSignal.timeout(10000) }
+    );
+    if (!resp.ok) {
+      console.error(`[Exchange] API returned ${resp.status}`);
+      return 1;
+    }
+    const data = await resp.json();
+    const rate = data.rates?.USD;
+    if (!rate || rate <= 0) return 1;
+    console.log(`[Exchange] ${currency} → USD rate: ${rate}`);
+    return rate;
+  } catch (err) {
+    console.error(`[Exchange] 获取 ${currency}→USD 汇率失败:`, err);
+    return 1;
+  }
+}
+
+/**
  * 广告数据同步 — 批量操作版
  */
 async function syncAdsData(
@@ -71,13 +96,15 @@ async function syncAdsData(
   let sheetResult = { inserted: 0, updated: 0, message: "" };
   let apiResult = { inserted: 0, updated: 0, message: "" };
 
+  const exchangeRate = await fetchExchangeRate(mcc.currency);
+
   // 1. Sheet 同步
   if (mcc.sheet_url) {
     const startStr = nowCST().subtract(31, "day").format("YYYY-MM-DD");
 
     const sheetData = await syncFromSheet(mcc.sheet_url, startStr, yesterdayStr);
     if (sheetData.success && sheetData.rows.length > 0) {
-      sheetResult = await upsertSheetRowsBatch(sheetData.rows, mcc.id, userId);
+      sheetResult = await upsertSheetRowsBatch(sheetData.rows, mcc.id, userId, exchangeRate);
     } else {
       sheetResult.message = sheetData.message || "Sheet 无数据";
     }
@@ -185,7 +212,7 @@ async function syncAdsData(
             }));
           }
 
-          const statsData = { budget: cd.budget_dollars, cost: cd.cost_dollars, clicks: cd.clicks, impressions: cd.impressions, cpc: cd.cpc_dollars, conversions: cd.conversions, data_source: "api" as const };
+          const statsData = { budget: Number((cd.budget_dollars * exchangeRate).toFixed(2)), cost: Number((cd.cost_dollars * exchangeRate).toFixed(2)), clicks: cd.clicks, impressions: cd.impressions, cpc: Number((cd.cpc_dollars * exchangeRate).toFixed(4)), conversions: cd.conversions, data_source: "api" as const };
           const existingStatsId = todayStatsMap.get(String(campaign.id));
           if (existingStatsId) {
             operations.push(() => prisma.ads_daily_stats.update({ where: { id: existingStatsId }, data: statsData }));
@@ -288,7 +315,8 @@ async function syncAdsData(
 async function upsertSheetRowsBatch(
   rows: { date: string; campaign_id: string; campaign_name: string; customer_id: string; cost: number; budget: number; clicks: number; impressions: number; cpc: number; status: string }[],
   mccId: bigint,
-  userId: bigint
+  userId: bigint,
+  exchangeRate: number = 1
 ) {
   let inserted = 0, updated = 0;
 
@@ -351,16 +379,20 @@ async function upsertSheetRowsBatch(
       const statsKey = `${campaign.id}_${row.date}`;
       const existingId = statsKeyMap.get(statsKey);
 
+      const convertedCost = Number((row.cost * exchangeRate).toFixed(2));
+      const convertedBudget = Number((row.budget * exchangeRate).toFixed(2));
+      const convertedCpc = Number((row.cpc * exchangeRate).toFixed(4));
+
       if (existingId) {
         updated++;
         return prisma.ads_daily_stats.update({
           where: { id: existingId },
-          data: { budget: row.budget, cost: row.cost, clicks: row.clicks, impressions: row.impressions, cpc: row.cpc, data_source: "sheet" },
+          data: { budget: convertedBudget, cost: convertedCost, clicks: row.clicks, impressions: row.impressions, cpc: convertedCpc, data_source: "sheet" },
         });
       } else {
         inserted++;
         return prisma.ads_daily_stats.create({
-          data: { user_id: userId, user_merchant_id: BigInt(0), campaign_id: campaign.id, date: new Date(row.date), budget: row.budget, cost: row.cost, clicks: row.clicks, impressions: row.impressions, cpc: row.cpc, data_source: "sheet" },
+          data: { user_id: userId, user_merchant_id: BigInt(0), campaign_id: campaign.id, date: new Date(row.date), budget: convertedBudget, cost: convertedCost, clicks: row.clicks, impressions: row.impressions, cpc: convertedCpc, data_source: "sheet" },
         });
       }
     });
@@ -502,6 +534,7 @@ async function claimLinkedMerchants(userId: bigint) {
  * 1. 先规范化已有交易的 platform 字段
  * 2. 精确匹配: normalized_platform + merchant_id
  * 3. 仅 merchant_id 兜底匹配
+ * 4. 按商家名称兜底匹配（merchant_id 为空时）
  */
 async function linkTransactionsToMerchants(userId: bigint) {
   await normalizeExistingTransactionPlatforms(userId);
@@ -513,6 +546,7 @@ async function linkTransactionsToMerchants(userId: bigint) {
       ON t.user_id = m.user_id AND t.merchant_id = m.merchant_id AND t.platform = m.platform
     SET t.user_merchant_id = m.id
     WHERE t.user_id = ? AND t.user_merchant_id = 0 AND t.is_deleted = 0 AND m.is_deleted = 0
+      AND t.merchant_id != ''
   `, userId);
 
   // 兜底匹配：仅 merchant_id
@@ -522,6 +556,17 @@ async function linkTransactionsToMerchants(userId: bigint) {
       ON t.user_id = m.user_id AND t.merchant_id = m.merchant_id
     SET t.user_merchant_id = m.id
     WHERE t.user_id = ? AND t.user_merchant_id = 0 AND t.is_deleted = 0 AND m.is_deleted = 0
+      AND t.merchant_id != ''
+  `, userId);
+
+  // 兜底匹配：按商家名称（merchant_id 为空时尝试用名称匹配）
+  await prisma.$executeRawUnsafe(`
+    UPDATE affiliate_transactions t
+    JOIN user_merchants m
+      ON t.user_id = m.user_id AND t.merchant_name = m.merchant_name AND t.platform = m.platform
+    SET t.user_merchant_id = m.id
+    WHERE t.user_id = ? AND t.user_merchant_id = 0 AND t.is_deleted = 0 AND m.is_deleted = 0
+      AND t.merchant_name != ''
   `, userId);
 }
 
@@ -558,7 +603,7 @@ async function syncPlatformData(userId: bigint) {
       SELECT 
         user_merchant_id,
         DATE(transaction_time) as txn_date,
-        SUM(CASE WHEN status IN ('approved','pending','paid') THEN CAST(commission_amount AS DECIMAL(12,2)) ELSE 0 END) as total_commission,
+        SUM(CAST(commission_amount AS DECIMAL(12,2))) as total_commission,
         SUM(CASE WHEN status = 'rejected' THEN CAST(commission_amount AS DECIMAL(12,2)) ELSE 0 END) as rejected_commission,
         COUNT(*) as order_count
       FROM affiliate_transactions
@@ -573,8 +618,15 @@ async function syncPlatformData(userId: bigint) {
 
     const campaigns = await prisma.campaigns.findMany({
       where: { user_id: userId, user_merchant_id: { in: merchantIds }, is_deleted: 0 },
-      select: { id: true, user_merchant_id: true },
-      orderBy: { id: "asc" },
+      select: { id: true, user_merchant_id: true, google_status: true, updated_at: true },
+    });
+
+    const STATUS_PRIORITY: Record<string, number> = { ENABLED: 0, PAUSED: 1, REMOVED: 2 };
+    campaigns.sort((a, b) => {
+      const pa = STATUS_PRIORITY[a.google_status || ""] ?? 2;
+      const pb = STATUS_PRIORITY[b.google_status || ""] ?? 2;
+      if (pa !== pb) return pa - pb;
+      return b.updated_at.getTime() - a.updated_at.getTime();
     });
 
     const campaignsByMerchant = new Map<string, bigint[]>();

@@ -182,6 +182,7 @@ async function linkTransactionsToMerchants(userId: bigint) {
       ON t.user_id = m.user_id AND t.merchant_id = m.merchant_id AND t.platform = m.platform
     SET t.user_merchant_id = m.id
     WHERE t.user_id = ? AND t.user_merchant_id = 0 AND t.is_deleted = 0 AND m.is_deleted = 0
+      AND t.merchant_id != ''
   `, userId);
 
   // 兜底匹配：仅 merchant_id（处理平台未精确匹配的情况）
@@ -191,6 +192,17 @@ async function linkTransactionsToMerchants(userId: bigint) {
       ON t.user_id = m.user_id AND t.merchant_id = m.merchant_id
     SET t.user_merchant_id = m.id
     WHERE t.user_id = ? AND t.user_merchant_id = 0 AND t.is_deleted = 0 AND m.is_deleted = 0
+      AND t.merchant_id != ''
+  `, userId);
+
+  // 兜底匹配：按商家名称（merchant_id 为空时尝试用名称匹配）
+  await prisma.$executeRawUnsafe(`
+    UPDATE affiliate_transactions t
+    JOIN user_merchants m
+      ON t.user_id = m.user_id AND t.merchant_name = m.merchant_name AND t.platform = m.platform
+    SET t.user_merchant_id = m.id
+    WHERE t.user_id = ? AND t.user_merchant_id = 0 AND t.is_deleted = 0 AND m.is_deleted = 0
+      AND t.merchant_name != ''
   `, userId);
 }
 
@@ -257,7 +269,7 @@ async function updateDailyStatsCommission(userId: bigint, startDate: Date): Prom
     SELECT 
       user_merchant_id,
       DATE(transaction_time) as txn_date,
-      SUM(CASE WHEN status IN ('approved','pending','paid') THEN CAST(commission_amount AS DECIMAL(12,2)) ELSE 0 END) as total_commission,
+      SUM(CAST(commission_amount AS DECIMAL(12,2))) as total_commission,
       SUM(CASE WHEN status = 'rejected' THEN CAST(commission_amount AS DECIMAL(12,2)) ELSE 0 END) as rejected_commission,
       COUNT(*) as order_count
     FROM affiliate_transactions
@@ -267,14 +279,20 @@ async function updateDailyStatsCommission(userId: bigint, startDate: Date): Prom
 
   if (!txnAgg || txnAgg.length === 0) return 0;
 
-  // 预加载所有相关 campaigns（按 merchant 分组）
   const merchantIds = [...new Set(txnAgg.map(t => t.user_merchant_id))].filter(id => id && id !== BigInt(0));
   if (merchantIds.length === 0) return 0;
 
   const allCampaigns = await prisma.campaigns.findMany({
     where: { user_id: userId, user_merchant_id: { in: merchantIds }, is_deleted: 0 },
-    select: { id: true, user_merchant_id: true },
-    orderBy: { id: "asc" },
+    select: { id: true, user_merchant_id: true, google_status: true, updated_at: true },
+  });
+
+  const STATUS_PRIORITY: Record<string, number> = { ENABLED: 0, PAUSED: 1, REMOVED: 2 };
+  allCampaigns.sort((a, b) => {
+    const pa = STATUS_PRIORITY[a.google_status || ""] ?? 2;
+    const pb = STATUS_PRIORITY[b.google_status || ""] ?? 2;
+    if (pa !== pb) return pa - pb;
+    return b.updated_at.getTime() - a.updated_at.getTime();
   });
 
   const campaignsByMerchant = new Map<string, bigint[]>();

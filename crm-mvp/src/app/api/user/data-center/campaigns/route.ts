@@ -165,44 +165,44 @@ export async function GET(req: NextRequest) {
     ])
   );
 
-  // 从 affiliate_transactions 直接查询佣金（按状态分组），避免依赖 ads_daily_stats
+  // 从 affiliate_transactions 直接查询佣金（三分类：全部/拒付/已付）
   const endPlusOne = new Date(end);
   endPlusOne.setDate(endPlusOne.getDate() + 1);
 
   const commissionAgg = await prisma.$queryRawUnsafe<
-    { user_merchant_id: bigint; comm_status: string; total_amount: number; order_count: number }[]
+    { user_merchant_id: bigint; total_commission: number; rejected_commission: number; approved_commission: number; order_count: number }[]
   >(`
     SELECT
       user_merchant_id,
-      CASE WHEN status = 'rejected' THEN 'rejected' ELSE 'commission' END as comm_status,
-      SUM(CAST(commission_amount AS DECIMAL(12,2))) as total_amount,
+      SUM(CAST(commission_amount AS DECIMAL(12,2))) as total_commission,
+      SUM(CASE WHEN status = 'rejected' THEN CAST(commission_amount AS DECIMAL(12,2)) ELSE 0 END) as rejected_commission,
+      SUM(CASE WHEN status IN ('approved', 'paid') THEN CAST(commission_amount AS DECIMAL(12,2)) ELSE 0 END) as approved_commission,
       COUNT(*) as order_count
     FROM affiliate_transactions
     WHERE user_id = ? AND is_deleted = 0
       AND transaction_time >= ? AND transaction_time < ?
-    GROUP BY user_merchant_id, comm_status
+    GROUP BY user_merchant_id
   `, userId, start, endPlusOne);
 
   const commissionByMerchant = new Map<string, number>();
   const rejectedByMerchant = new Map<string, number>();
+  const approvedByMerchant = new Map<string, number>();
   const ordersByMerchant = new Map<string, number>();
   let totalCommissionFromTxn = 0;
   let totalRejectedFromTxn = 0;
+  let totalApprovedFromTxn = 0;
   let totalOrdersFromTxn = 0;
 
   for (const r of commissionAgg) {
     const key = String(r.user_merchant_id);
-    const amt = Number(r.total_amount || 0);
-    const cnt = Number(r.order_count || 0);
-    if (r.comm_status === "rejected") {
-      rejectedByMerchant.set(key, (rejectedByMerchant.get(key) || 0) + amt);
-      totalRejectedFromTxn += amt;
-    } else {
-      commissionByMerchant.set(key, (commissionByMerchant.get(key) || 0) + amt);
-      totalCommissionFromTxn += amt;
-    }
-    ordersByMerchant.set(key, (ordersByMerchant.get(key) || 0) + cnt);
-    totalOrdersFromTxn += cnt;
+    commissionByMerchant.set(key, Number(r.total_commission || 0));
+    rejectedByMerchant.set(key, Number(r.rejected_commission || 0));
+    approvedByMerchant.set(key, Number(r.approved_commission || 0));
+    ordersByMerchant.set(key, Number(r.order_count || 0));
+    totalCommissionFromTxn += Number(r.total_commission || 0);
+    totalRejectedFromTxn += Number(r.rejected_commission || 0);
+    totalApprovedFromTxn += Number(r.approved_commission || 0);
+    totalOrdersFromTxn += Number(r.order_count || 0);
   }
 
   // 查询 campaign → user_merchant_id 映射
@@ -217,13 +217,17 @@ export async function GET(req: NextRequest) {
     }
   }
 
-  // 每个商家只分配给第一个 campaign，避免翻倍
-  const merchantRejectedWritten = new Set<string>();
-  const merchantCommissionWritten = new Set<string>();
+  // 每个商家只分配给一个 campaign，避免翻倍
+  const merchantWritten = new Set<string>();
 
-  // 按状态优先级排序：ENABLED → PAUSED → REMOVED / 其它
+  // 按状态优先级排序：ENABLED → PAUSED → REMOVED，同状态按最近更新优先
   const STATUS_ORDER: Record<string, number> = { ENABLED: 0, PAUSED: 1, REMOVED: 2 };
-  campaigns.sort((a, b) => (STATUS_ORDER[a.google_status || ""] ?? 2) - (STATUS_ORDER[b.google_status || ""] ?? 2));
+  campaigns.sort((a, b) => {
+    const pa = STATUS_ORDER[a.google_status || ""] ?? 2;
+    const pb = STATUS_ORDER[b.google_status || ""] ?? 2;
+    if (pa !== pb) return pa - pb;
+    return 0;
+  });
 
   // 组装行数据
   let totalCost = 0, totalCommission = 0, totalClicks = 0, totalImpressions = 0;
@@ -236,21 +240,20 @@ export async function GET(req: NextRequest) {
     const impressions = s?.impressions || 0;
     const avgCpc = clicks > 0 ? Number((cost / clicks).toFixed(4)) : 0;
 
-    // 佣金和拒付佣金：从 affiliate_transactions 直接查询
-    // 排除 "0"：user_merchant_id=0 的交易尚未关联商家，不应分配给任何 campaign
     const merchantId = campaignMerchantMap.get(String(c.id));
     let commission = 0;
-    if (merchantId && merchantId !== "0" && commissionByMerchant.has(merchantId) && !merchantCommissionWritten.has(merchantId)) {
-      commission = commissionByMerchant.get(merchantId)!;
-      merchantCommissionWritten.add(merchantId);
-    }
     let rejectedComm = 0;
-    if (merchantId && merchantId !== "0" && rejectedByMerchant.has(merchantId) && !merchantRejectedWritten.has(merchantId)) {
-      rejectedComm = rejectedByMerchant.get(merchantId)!;
-      merchantRejectedWritten.add(merchantId);
+    let approvedComm = 0;
+    let orders = 0;
+    if (merchantId && merchantId !== "0" && commissionByMerchant.has(merchantId) && !merchantWritten.has(merchantId)) {
+      commission = commissionByMerchant.get(merchantId)!;
+      rejectedComm = rejectedByMerchant.get(merchantId) || 0;
+      approvedComm = approvedByMerchant.get(merchantId) || 0;
+      orders = ordersByMerchant.get(merchantId) || 0;
+      merchantWritten.add(merchantId);
     }
 
-    const roi = cost > 0 ? Number(((commission - cost) / cost * 100).toFixed(2)) : 0;
+    const roi = cost > 0 ? Number(((approvedComm - cost) / cost * 100).toFixed(2)) : 0;
 
     totalCost += cost;
     totalCommission += commission;
@@ -273,23 +276,23 @@ export async function GET(req: NextRequest) {
       cpc: avgCpc,
       commission: Number(commission.toFixed(2)),
       rejected_commission: Number(rejectedComm.toFixed(2)),
-      orders: s?.orders || 0,
+      approved_commission: Number(approvedComm.toFixed(2)),
+      orders,
       roi,
       target_country: c.target_country,
       last_synced: c.last_google_sync_at,
     };
   });
 
-  const effectiveCommission = totalCommissionFromTxn > 0 ? totalCommissionFromTxn : totalCommission;
-
   const summary = {
     totalCost: Number(totalCost.toFixed(2)),
-    totalCommission: Number(effectiveCommission.toFixed(2)),
+    totalCommission: Number(totalCommissionFromTxn.toFixed(2)),
     totalRejectedCommission: Number(totalRejectedFromTxn.toFixed(2)),
+    totalApprovedCommission: Number(totalApprovedFromTxn.toFixed(2)),
     totalClicks,
     totalImpressions,
     avgCpc: totalClicks > 0 ? Number((totalCost / totalClicks).toFixed(4)) : 0,
-    roi: totalCost > 0 ? Number(((effectiveCommission - totalCost) / totalCost * 100).toFixed(2)) : 0,
+    roi: totalCost > 0 ? Number(((totalApprovedFromTxn - totalCost) / totalCost * 100).toFixed(2)) : 0,
     campaignCount: campaigns.length,
     enabledCount,
     pausedCount,
@@ -300,7 +303,8 @@ export async function GET(req: NextRequest) {
 
 function emptySummary() {
   return {
-    totalCost: 0, totalCommission: 0, totalRejectedCommission: 0, totalClicks: 0, totalImpressions: 0,
+    totalCost: 0, totalCommission: 0, totalRejectedCommission: 0, totalApprovedCommission: 0,
+    totalClicks: 0, totalImpressions: 0,
     avgCpc: 0, roi: 0, campaignCount: 0, enabledCount: 0, pausedCount: 0,
   };
 }
