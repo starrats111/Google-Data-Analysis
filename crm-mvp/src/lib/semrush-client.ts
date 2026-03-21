@@ -23,9 +23,10 @@ interface CurlResponse {
 
 export function curlFetch(
   url: string,
-  opts: { method?: string; headers?: Record<string, string>; body?: string; timeoutMs?: number } = {},
+  opts: { method?: string; headers?: Record<string, string>; body?: string; timeoutMs?: number; followRedirects?: boolean } = {},
 ): CurlResponse {
   const args: string[] = ["-s", "-i", "--max-time", String(Math.ceil((opts.timeoutMs || 30000) / 1000))];
+  if (opts.followRedirects) args.push("-L");
   if (opts.method) args.push("-X", opts.method);
   for (const [k, v] of Object.entries(opts.headers || {})) {
     args.push("-H", `${k}: ${v}`);
@@ -282,6 +283,25 @@ export class SemRushClient {
     this.cookies["GMITM_token"] = token;
     this.cookies["GMITM_uname"] = this.creds.username;
     this.cookies["GMITM_config"] = this.buildConfigValue();
+
+    // 访问分析页面获取完整 session cookies（sem.3ue.co 可能在页面加载时设置额外验证 cookie）
+    try {
+      const cookieStr = Object.entries(this.cookies).map(([k, v]) => `${k}=${v}`).join("; ");
+      const pageRes = curlFetch("https://sem.3ue.co/analytics/overview/", {
+        headers: {
+          "user-agent": USER_AGENT,
+          accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+          "accept-language": "zh-CN,zh;q=0.9,en;q=0.8",
+          cookie: cookieStr,
+        },
+        followRedirects: true,
+        timeoutMs: 15000,
+      });
+      Object.assign(this.cookies, pageRes.cookies);
+    } catch {
+      // 页面访问失败不阻塞流程
+    }
+
     return token;
   }
 

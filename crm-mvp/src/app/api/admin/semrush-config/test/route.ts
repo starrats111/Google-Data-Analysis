@@ -72,7 +72,7 @@ export async function POST(req: NextRequest) {
     return apiSuccess({ steps, overall: "fail" });
   }
 
-  // Step 2.5: 设置 cookies
+  // Step 2.5: 设置 cookies 并访问分析页面获取完整 session
   const configValue = JSON.stringify({
     chat: { node, lang: "zh_CN" },
     semrush: { node, lang: "zh" },
@@ -80,7 +80,24 @@ export async function POST(req: NextRequest) {
   cookies["GMITM_token"] = token;
   cookies["GMITM_uname"] = username;
   cookies["GMITM_config"] = configValue;
-  steps.push({ step: "Session", status: "success", detail: `共 ${Object.keys(cookies).length} 个 cookies` });
+
+  try {
+    const initCookieStr = Object.entries(cookies).map(([k, v]) => `${k}=${v}`).join("; ");
+    const pageRes = curlFetch("https://sem.3ue.co/analytics/overview/", {
+      headers: {
+        "user-agent": USER_AGENT,
+        accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "accept-language": "zh-CN,zh;q=0.9,en;q=0.8",
+        cookie: initCookieStr,
+      },
+      followRedirects: true,
+      timeoutMs: 15000,
+    });
+    Object.assign(cookies, pageRes.cookies);
+    steps.push({ step: "页面 Session", status: "success", detail: `页面 HTTP ${pageRes.status}，共 ${Object.keys(cookies).length} 个 cookies` });
+  } catch (err) {
+    steps.push({ step: "页面 Session", status: "skip", detail: `页面访问失败（不影响主流程）: ${err instanceof Error ? err.message : String(err)}` });
+  }
 
   // Step 3: RPC 调用测试
   try {
