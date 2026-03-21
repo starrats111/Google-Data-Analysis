@@ -243,10 +243,14 @@ export async function fetchAllMerchants(
       if (!seen.has(m.merchant_id)) { seen.add(m.merchant_id); allMerchants.push(m); }
     }
 
-    const totalPages = getTotalPages(firstPage, config.maxSize);
+    let totalPages = getTotalPages(firstPage, config.maxSize);
+
+    // 回退：如果无法解析总页数但首页返回了满页数据，按逐页拉取直到空页
+    const useProbing = totalPages <= 1 && firstBatch.length >= config.maxSize;
+    if (useProbing) totalPages = 200; // 设置一个安全上限
 
     // 后续页
-    for (let page = 2; page <= Math.min(totalPages, 50); page++) {
+    for (let page = 2; page <= Math.min(totalPages, 200); page++) {
       if (config.rateLimitMs) await sleep(config.rateLimitMs);
       else await sleep(500);
 
@@ -257,6 +261,9 @@ export async function fetchAllMerchants(
       for (const m of batch) {
         if (!seen.has(m.merchant_id)) { seen.add(m.merchant_id); allMerchants.push(m); }
       }
+
+      // 如果本页数据量不足 maxSize，说明是最后一页
+      if (batch.length < config.maxSize) break;
     }
 
     return { merchants: allMerchants };

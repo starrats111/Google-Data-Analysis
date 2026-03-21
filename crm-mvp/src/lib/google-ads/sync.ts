@@ -88,22 +88,25 @@ export async function fetchCampaignDataByDateRange(
 export async function fetchAllCampaignStatuses(
   credentials: MccCredentials,
   customerIds: string[],
-): Promise<{ customer_id: string; campaign_id: string; status: string; name: string }[]> {
-  const all: { customer_id: string; campaign_id: string; status: string; name: string }[] = [];
+): Promise<{ customer_id: string; campaign_id: string; status: string; name: string; budget_micros: number; budget_dollars: number }[]> {
+  const all: { customer_id: string; campaign_id: string; status: string; name: string; budget_micros: number; budget_dollars: number }[] = [];
   for (const cid of customerIds) {
     try {
       const results = await queryGoogleAds(credentials, cid, `
-        SELECT campaign.id, campaign.name, campaign.status
+        SELECT campaign.id, campaign.name, campaign.status, campaign_budget.amount_micros
         FROM campaign
-        WHERE campaign.status != 'REMOVED'
       `);
       for (const r of results) {
         const c = r.campaign as Record<string, unknown> | undefined;
+        const budget = r.campaignBudget as Record<string, unknown> | undefined;
+        const budgetMicros = Number(budget?.amountMicros ?? 0);
         all.push({
           customer_id: cid.replace(/-/g, ""),
           campaign_id: String(c?.id ?? ""),
           status: String(c?.status ?? "UNKNOWN"),
           name: String(c?.name ?? ""),
+          budget_micros: budgetMicros,
+          budget_dollars: microsToDollars(budgetMicros),
         });
       }
     } catch (err) {

@@ -292,7 +292,7 @@ export const GET = withUser(async (req: NextRequest, { user }) => {
     const claimedMids: string[] = [];
     for (const c of campaigns) {
       if (!c.campaign_name) continue;
-      const parts = c.campaign_name.split("-");
+      const parts = c.campaign_name.split(/[-\s]+/);
       const mid = parts[parts.length - 1]?.trim();
       if (mid && /^\d+$/.test(mid)) claimedMids.push(mid);
     }
@@ -601,7 +601,7 @@ export const PUT = withUser(async (req: NextRequest, { user }) => {
       }
       // 方式2: 通过 campaign_name 末尾的 MID 匹配（同步来的广告系列 user_merchant_id=0）
       if (c.campaign_name && mids.length > 0) {
-        const parts = c.campaign_name.split("-");
+        const parts = c.campaign_name.split(/[-\s]+/);
         const nameMid = parts[parts.length - 1]?.trim();
         if (nameMid && mids.includes(nameMid)) {
           campaignIds.push(c.id);

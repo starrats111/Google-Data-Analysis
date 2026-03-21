@@ -192,6 +192,47 @@ async function syncAdsData(
         }
       }
 
+      // ─── 全量同步所有广告系列状态（含已暂停/已移除） ───
+      try {
+        const { fetchAllCampaignStatuses } = await import("@/lib/google-ads");
+        const allCidIds = cids.map((c) => c.customer_id);
+        const allStatuses = await fetchAllCampaignStatuses(credentials, allCidIds);
+
+        for (const cs of allStatuses) {
+          const existing = campaignMap.get(cs.campaign_id);
+          if (existing) {
+            if (existing.google_status !== cs.status || existing.campaign_name !== cs.name) {
+              await prisma.campaigns.update({
+                where: { id: existing.id },
+                data: {
+                  google_status: cs.status,
+                  campaign_name: cs.name,
+                  daily_budget: cs.budget_dollars,
+                  last_google_sync_at: new Date(),
+                },
+              });
+            }
+          } else {
+            const parsed = parseCampaignName(cs.name);
+            const merchantId = parsed ? (apiMerchantIndex.get(`${parsed.platform}_${parsed.mid}`) || BigInt(0)) : BigInt(0);
+
+            const newCampaign = await prisma.campaigns.create({
+              data: {
+                user_id: userId, user_merchant_id: merchantId,
+                google_campaign_id: cs.campaign_id, mcc_id: mcc.id,
+                customer_id: cs.customer_id, campaign_name: cs.name,
+                daily_budget: cs.budget_dollars, target_country: "US",
+                google_status: cs.status, last_google_sync_at: new Date(),
+              },
+            });
+            campaignMap.set(cs.campaign_id, newCampaign);
+            totalInserted++;
+          }
+        }
+      } catch (err) {
+        console.error("全量状态同步失败:", err);
+      }
+
       apiResult = { inserted: totalInserted, updated: totalUpdated, message: "API 同步完成" };
     } catch (err) {
       apiResult.message = `API 同步失败: ${err instanceof Error ? err.message : String(err)}`;
@@ -322,12 +363,13 @@ async function upsertSheetRowsBatch(
 
 /**
  * 从广告系列名中提取平台代码和商家 MID
- * 广告名格式: 序号-平台-商家名-国家-日期-MID
- * 例如: 003-RW-deltachildren-US-0126-117904
+ * 支持两种格式：
+ *   破折号: 003-RW-deltachildren-US-0126-117904
+ *   空格:   011 CG cellFilter JS 0320 8000389
  */
 function parseCampaignName(name: string): { platform: string; mid: string } | null {
   if (!name) return null;
-  const parts = name.split("-");
+  const parts = name.split(/[-\s]+/);
   if (parts.length < 4) return null;
   const rawPlatform = parts[1]?.trim();
   const mid = parts[parts.length - 1]?.trim();
