@@ -381,8 +381,9 @@ export async function POST(req: NextRequest) {
       assetTempId--;
     }
 
-    // ─── 10. 图片素材（Image Extensions） ───
-    if (image_urls.length > 0) {
+    // ─── 10. 图片素材（仅非搜索广告系列支持，搜索广告系列跳过） ───
+    const isSearchCampaign = true; // 当前仅创建搜索广告系列
+    if (image_urls.length > 0 && !isSearchCampaign) {
       const imageLoadTasks = (image_urls as string[]).slice(0, 20).map((url) => loadImageAsBase64(url));
       const imageResults = await Promise.all(imageLoadTasks);
       for (const img of imageResults) {
