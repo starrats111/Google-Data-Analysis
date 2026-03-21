@@ -204,6 +204,10 @@ export async function GET(req: NextRequest) {
   // 每个商家只分配给第一个 campaign，避免翻倍
   const merchantRejectedWritten = new Set<string>();
 
+  // 按状态优先级排序：ENABLED → PAUSED → REMOVED / 其它
+  const STATUS_ORDER: Record<string, number> = { ENABLED: 0, PAUSED: 1, REMOVED: 2 };
+  campaigns.sort((a, b) => (STATUS_ORDER[a.google_status || ""] ?? 2) - (STATUS_ORDER[b.google_status || ""] ?? 2));
+
   // 组装行数据
   let totalCost = 0, totalCommission = 0, totalClicks = 0, totalImpressions = 0;
   let enabledCount = 0, pausedCount = 0;
