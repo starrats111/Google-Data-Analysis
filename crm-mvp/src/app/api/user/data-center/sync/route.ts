@@ -40,6 +40,7 @@ export async function POST(req: NextRequest) {
 
   // 关联 campaigns 和 transactions 与 merchants
   await linkCampaignsToMerchants(userId);
+  await claimLinkedMerchants(userId);
   await linkTransactionsToMerchants(userId);
 
   if (type === "all" || type === "platform") {
@@ -380,6 +381,7 @@ function parseCampaignName(name: string): { platform: string; mid: string } | nu
 /**
  * 关联 campaigns 与 user_merchants — 修复 user_merchant_id = 0 的记录
  * 从广告系列名解析平台和 MID，匹配 user_merchants
+ * 匹配成功时同时将商家标记为 claimed，使其出现在"我的商家"
  */
 async function linkCampaignsToMerchants(userId: bigint) {
   const unlinked = await prisma.campaigns.findMany({
@@ -391,28 +393,40 @@ async function linkCampaignsToMerchants(userId: bigint) {
 
   const userMerchants = await prisma.user_merchants.findMany({
     where: { user_id: userId, is_deleted: 0 },
-    select: { id: true, platform: true, merchant_id: true },
+    select: { id: true, platform: true, merchant_id: true, status: true },
   });
   const merchantIndex = new Map(
-    userMerchants.map((m) => [`${normalizePlatformCode(m.platform)}_${m.merchant_id}`, m.id])
+    userMerchants.map((m) => [`${normalizePlatformCode(m.platform)}_${m.merchant_id}`, m])
   );
 
   let linked = 0;
   const updates: Promise<unknown>[] = [];
+  const claimedMerchantIds = new Set<bigint>();
 
   for (const c of unlinked) {
     const parsed = parseCampaignName(c.campaign_name || "");
     if (!parsed) continue;
 
-    const merchantId = merchantIndex.get(`${parsed.platform}_${parsed.mid}`);
-    if (!merchantId) continue;
+    const merchant = merchantIndex.get(`${parsed.platform}_${parsed.mid}`);
+    if (!merchant) continue;
 
     updates.push(
       prisma.campaigns.update({
         where: { id: c.id },
-        data: { user_merchant_id: merchantId },
+        data: { user_merchant_id: merchant.id },
       })
     );
+
+    if (merchant.status !== "claimed" && !claimedMerchantIds.has(merchant.id)) {
+      claimedMerchantIds.add(merchant.id);
+      updates.push(
+        prisma.user_merchants.update({
+          where: { id: merchant.id },
+          data: { status: "claimed", claimed_at: new Date() },
+        })
+      );
+    }
+
     linked++;
 
     if (updates.length >= 20) {
@@ -422,6 +436,28 @@ async function linkCampaignsToMerchants(userId: bigint) {
 
   if (updates.length > 0) await Promise.all(updates);
   return linked;
+}
+
+/**
+ * 将所有已关联广告系列但尚未 claimed 的商家标记为 claimed
+ * 确保所有在投广告的商家都出现在"我的商家"中
+ */
+async function claimLinkedMerchants(userId: bigint) {
+  const linkedMerchantIds = await prisma.campaigns.findMany({
+    where: { user_id: userId, is_deleted: 0, user_merchant_id: { not: BigInt(0) }, google_campaign_id: { not: null } },
+    select: { user_merchant_id: true },
+    distinct: ["user_merchant_id"],
+  });
+
+  if (linkedMerchantIds.length === 0) return 0;
+
+  const ids = linkedMerchantIds.map((c) => c.user_merchant_id);
+  const result = await prisma.user_merchants.updateMany({
+    where: { id: { in: ids }, user_id: userId, is_deleted: 0, status: { not: "claimed" } },
+    data: { status: "claimed", claimed_at: new Date() },
+  });
+
+  return result.count;
 }
 
 /**
