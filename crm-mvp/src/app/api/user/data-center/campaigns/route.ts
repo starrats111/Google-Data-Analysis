@@ -237,14 +237,15 @@ export async function GET(req: NextRequest) {
     const avgCpc = clicks > 0 ? Number((cost / clicks).toFixed(4)) : 0;
 
     // 佣金和拒付佣金：从 affiliate_transactions 直接查询
+    // 排除 "0"：user_merchant_id=0 的交易尚未关联商家，不应分配给任何 campaign
     const merchantId = campaignMerchantMap.get(String(c.id));
     let commission = 0;
-    if (merchantId && commissionByMerchant.has(merchantId) && !merchantCommissionWritten.has(merchantId)) {
+    if (merchantId && merchantId !== "0" && commissionByMerchant.has(merchantId) && !merchantCommissionWritten.has(merchantId)) {
       commission = commissionByMerchant.get(merchantId)!;
       merchantCommissionWritten.add(merchantId);
     }
     let rejectedComm = 0;
-    if (merchantId && rejectedByMerchant.has(merchantId) && !merchantRejectedWritten.has(merchantId)) {
+    if (merchantId && merchantId !== "0" && rejectedByMerchant.has(merchantId) && !merchantRejectedWritten.has(merchantId)) {
       rejectedComm = rejectedByMerchant.get(merchantId)!;
       merchantRejectedWritten.add(merchantId);
     }

@@ -24,7 +24,7 @@ const _PLATFORM_ALIAS_ENTRIES: [string, PlatformCode][] = [
   ["collabglow.com", "CG"], ["app.collabglow.com", "CG"],
 
   // RW = Rewardoo (rewardoo.com)
-  ["RW", "RW"], ["rw", "RW"],
+  ["RW", "RW"], ["rw", "RW"], ["RW1", "RW"], ["rw1", "RW"],
   ["Rewardoo", "RW"], ["rewardoo", "RW"],
   ["rewardoo.com", "RW"], ["account.rewardoo.com", "RW"],
 

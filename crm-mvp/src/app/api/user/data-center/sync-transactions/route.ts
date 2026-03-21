@@ -34,9 +34,9 @@ export async function POST(req: NextRequest) {
       return apiError("没有可用的平台连接，请先在「个人设置 → 联盟平台连接」中配置 API Key", 400);
     }
 
-    // 2. 获取商家映射
+    // 2. 获取商家映射（查询所有商家，不限 claimed，提升匹配率）
     const userMerchants = await prisma.user_merchants.findMany({
-      where: { user_id: userId, is_deleted: 0, status: "claimed" },
+      where: { user_id: userId, is_deleted: 0 },
       select: { id: true, merchant_id: true, platform: true, merchant_name: true },
     });
     const merchantMap = new Map(
@@ -130,6 +130,8 @@ export async function POST(req: NextRequest) {
               },
               update: {
                 platform_connection_id: conn.id,
+                merchant_id: merchantId,
+                ...(userMerchantId !== BigInt(0) ? { user_merchant_id: userMerchantId } : {}),
                 ...(newComm > 0 ? { commission_amount: newComm } : {}),
                 status: txn.status,
                 raw_status: txn.raw_status || "",
