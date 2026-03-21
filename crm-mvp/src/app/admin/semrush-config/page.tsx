@@ -5,6 +5,7 @@ import {
 } from "antd";
 import {
   SaveOutlined, DeleteOutlined, ReloadOutlined, CheckCircleOutlined, ExclamationCircleOutlined,
+  ApiOutlined, LoadingOutlined, CloseCircleOutlined,
 } from "@ant-design/icons";
 import { useEffect, useState, useCallback } from "react";
 
@@ -24,6 +25,8 @@ export default function SemRushConfigPage() {
   const [saving, setSaving] = useState(false);
   const [fields, setFields] = useState<SemRushField[]>([]);
   const [hasConfig, setHasConfig] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState<{ steps: { step: string; status: string; detail: string }[]; overall: string } | null>(null);
 
   const fetchConfig = useCallback(async () => {
     setLoading(true);
@@ -76,6 +79,30 @@ export default function SemRushConfigPage() {
     } else {
       message.error(res.message);
     }
+  };
+
+  const handleTest = async () => {
+    setTesting(true);
+    setTestResult(null);
+    try {
+      const res = await fetch("/api/admin/semrush-config/test", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+      }).then((r) => r.json());
+      if (res.code === 0) {
+        setTestResult(res.data);
+        if (res.data.overall === "success") {
+          message.success("所有连接测试通过");
+        } else {
+          message.warning("部分测试未通过，请查看详情");
+        }
+      } else {
+        message.error(res.message || "测试失败");
+      }
+    } catch {
+      message.error("测试请求失败");
+    }
+    setTesting(false);
   };
 
   // 密码类字段
@@ -132,11 +159,52 @@ export default function SemRushConfigPage() {
             ))}
 
             <Form.Item style={{ marginTop: 24 }}>
-              <Button type="primary" icon={<SaveOutlined />} onClick={handleSave} loading={saving} size="large">
-                保存配置
-              </Button>
+              <Space>
+                <Button type="primary" icon={<SaveOutlined />} onClick={handleSave} loading={saving} size="large">
+                  保存配置
+                </Button>
+                {hasConfig && (
+                  <Button
+                    icon={testing ? <LoadingOutlined /> : <ApiOutlined />}
+                    onClick={handleTest}
+                    loading={testing}
+                    size="large"
+                  >
+                    测试连接
+                  </Button>
+                )}
+              </Space>
             </Form.Item>
           </Form>
+
+          {testResult && (
+            <div style={{ marginTop: 16, padding: 16, background: "#fafafa", borderRadius: 8 }}>
+              <Text strong style={{ display: "block", marginBottom: 12 }}>连接诊断结果：</Text>
+              {testResult.steps.map((s, i) => (
+                <div key={i} style={{ display: "flex", alignItems: "flex-start", gap: 8, marginBottom: 8 }}>
+                  {s.status === "success" ? (
+                    <CheckCircleOutlined style={{ color: "#52c41a", marginTop: 3 }} />
+                  ) : s.status === "fail" ? (
+                    <CloseCircleOutlined style={{ color: "#ff4d4f", marginTop: 3 }} />
+                  ) : (
+                    <ExclamationCircleOutlined style={{ color: "#faad14", marginTop: 3 }} />
+                  )}
+                  <div>
+                    <Text strong>{s.step}</Text>
+                    <Text type={s.status === "fail" ? "danger" : "secondary"} style={{ display: "block", fontSize: 12 }}>
+                      {s.detail}
+                    </Text>
+                  </div>
+                </div>
+              ))}
+              {testResult.overall === "success" && (
+                <Alert type="success" message="所有步骤测试通过，SemRush 功能可正常使用" showIcon style={{ marginTop: 8 }} />
+              )}
+              {testResult.overall === "fail" && (
+                <Alert type="error" message="连接测试未通过，请根据上方提示修正配置后重试" showIcon style={{ marginTop: 8 }} />
+              )}
+            </div>
+          )}
         </Card>
       </Spin>
 
