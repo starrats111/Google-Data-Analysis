@@ -360,6 +360,14 @@ function slugify(title: string): string {
     .replace(/^-+|-+$/g, "");
 }
 
+function escapeHtml(str: string): string {
+  return str
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
 interface ArticlePayload {
   id: string;
   title: string;
@@ -378,6 +386,97 @@ interface SiteConfig {
   domain: string;
 }
 
+/**
+ * 从已有 post 页面提取 head/header/footer，组装新文章页面。
+ * 如果找不到模板，回退为独立页面。
+ */
+async function createArticleHtmlPage(
+  sftp: SFTPWrapper,
+  client: Client,
+  siteRoot: string,
+  article: { title: string; content: string },
+  htmlFilename: string,
+  domain: string,
+  dateLabel: string,
+): Promise<void> {
+  const htmlPath = `${siteRoot}/${htmlFilename}`;
+
+  let templateHtml = "";
+  try {
+    const listing = await execCommand(
+      client,
+      `ls -1 "${siteRoot}"/post-*.html 2>/dev/null | head -5`,
+    );
+    const files = listing.trim().split("\n").filter(Boolean);
+    const tplFile = files.find((f) => !f.endsWith(htmlFilename));
+    if (tplFile) templateHtml = await sftpReadFile(sftp, tplFile);
+  } catch { /* ignore */ }
+
+  if (!templateHtml) {
+    try {
+      templateHtml = await sftpReadFile(sftp, `${siteRoot}/index.html`);
+    } catch { /* ignore */ }
+  }
+
+  let html: string;
+
+  if (templateHtml) {
+    const headMatch = templateHtml.match(/^[\s\S]*?<\/head>/i);
+    let headSection = headMatch ? headMatch[0] : "";
+    if (headSection) {
+      headSection = headSection.replace(
+        /<title>[^<]*<\/title>/i,
+        `<title>${escapeHtml(article.title)}</title>`,
+      );
+    } else {
+      headSection = `<!DOCTYPE html>\n<html lang="en">\n<head>\n<meta charset="UTF-8">\n<meta name="viewport" content="width=device-width,initial-scale=1">\n<title>${escapeHtml(article.title)}</title>\n</head>`;
+    }
+
+    let headerNav = "";
+    const headerMatch = templateHtml.match(/<header[\s\S]*?<\/header>/i);
+    if (headerMatch) headerNav = headerMatch[0];
+
+    let footer = "";
+    const footerMatch = templateHtml.match(/<footer[\s\S]*?<\/footer>/i);
+    if (footerMatch) footer = footerMatch[0];
+
+    html = `${headSection}
+<body>
+  ${headerNav}
+  <main style="max-width:800px;margin:40px auto;padding:0 20px;">
+    <a href="/" style="color:#888;text-decoration:none;display:inline-block;margin-bottom:20px;">&larr; Back to articles</a>
+    <article>
+      <h1>${article.title}</h1>
+      <div style="color:#888;margin-bottom:24px;font-size:14px;">${dateLabel}</div>
+      <div class="article-content" style="line-height:1.8;">
+        ${article.content}
+      </div>
+    </article>
+  </main>
+  ${footer}
+</body>
+</html>`;
+  } else {
+    html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>${escapeHtml(article.title)}</title>
+  <style>body{font-family:Georgia,serif;max-width:800px;margin:40px auto;padding:0 20px;line-height:1.8;color:#333}h1{font-size:2em}img{max-width:100%;height:auto}.meta{color:#888;margin-bottom:24px}a.back{color:#888;text-decoration:none}</style>
+</head>
+<body>
+  <a class="back" href="/">&larr; Back</a>
+  <h1>${article.title}</h1>
+  <div class="meta">${dateLabel}</div>
+  <div>${article.content}</div>
+</body>
+</html>`;
+  }
+
+  await sftpWriteFile(sftp, htmlPath, html);
+}
+
 export async function publishArticleToSite(
   article: ArticlePayload,
   site: SiteConfig
@@ -391,6 +490,22 @@ export async function publishArticleToSite(
     const dataJsPath = site.data_js_path || "js/articles-index.js";
     const varName = site.article_var_name || "articlesIndex";
     const fullDataPath = `${siteRoot}/${dataJsPath}`;
+    const pattern = site.article_html_pattern || "article.html?title={slug}";
+    const detailUrl = pattern.replace("{slug}", slug);
+    const isStaticHtml = !detailUrl.includes("?");
+
+    const now = new Date();
+    const dateLabel = now.toLocaleDateString("en-US", {
+      timeZone: "Asia/Shanghai",
+      year: "numeric",
+      month: "short",
+      day: "numeric",
+    });
+    const dateISO = now.toISOString().slice(0, 10);
+
+    const plainText = article.content.replace(/<[^>]*>/g, "");
+    const wordCount = plainText.split(/\s+/).filter(Boolean).length;
+    const readTime = `${Math.max(1, Math.ceil(wordCount / 200))} min read`;
 
     // 1. 确保 js/articles 目录存在（存放 JSON 详情）
     const articlesDir = `${siteRoot}/js/articles`;
@@ -403,7 +518,7 @@ export async function publishArticleToSite(
       slug,
       content: article.content,
       category: article.category || "General",
-      date: new Date().toLocaleDateString("en-US", { timeZone: "Asia/Shanghai", year: "numeric", month: "short", day: "numeric" }),
+      date: dateLabel,
     });
     await sftpWriteFile(sftp, `${articlesDir}/${article.id}.json`, articleJson);
 
@@ -412,19 +527,23 @@ export async function publishArticleToSite(
     try {
       dataContent = await sftpReadFile(sftp, fullDataPath);
     } catch {
-      // 文件不存在，创建新的
       dataContent = `const ${varName} = [];\n`;
     }
 
-    // 构建索引条目
-    const indexEntry = {
+    // 构建索引条目 — 字段名匹配网站渲染代码（category / dateLabel / heroImage 等）
+    const excerpt = plainText.slice(0, 160).trim() + "...";
+    const indexEntry: Record<string, unknown> = {
       id: article.id,
-      title: article.title,
       slug,
-      categoryName: article.category || "General",
-      date: new Date().toLocaleDateString("en-US", { timeZone: "Asia/Shanghai", year: "numeric", month: "short", day: "numeric" }),
-      excerpt: article.content.replace(/<[^>]*>/g, "").slice(0, 160) + "...",
-      image: article.image || "",
+      title: article.title,
+      category: (article.category || "general").toLowerCase(),
+      dateISO,
+      dateLabel,
+      readTime,
+      excerpt,
+      heroImage: article.image || "",
+      detailUrl,
+      tags: [(article.category || "general").toLowerCase()],
     };
 
     // 解析现有数组并追加
@@ -446,13 +565,21 @@ export async function publishArticleToSite(
       const entryStr = "\n  " + JSON.stringify(indexEntry) + ",";
       dataContent = dataContent.slice(0, insertPos) + entryStr + dataContent.slice(insertPos);
     } else {
-      // 无法解析，重写整个文件
       dataContent = `const ${varName} = [\n  ${JSON.stringify(indexEntry)}\n];\n`;
     }
 
     await sftpWriteFile(sftp, fullDataPath, dataContent);
 
-    // 4. CDN 缓存刷新（更新 HTML 中的 ?v=timestamp）
+    // 4. 创建文章详情 HTML 页面（仅静态 HTML 类型，如 post-{slug}.html）
+    if (isStaticHtml) {
+      await createArticleHtmlPage(
+        sftp, client, siteRoot,
+        { title: article.title, content: article.content },
+        detailUrl, site.domain, dateLabel,
+      );
+    }
+
+    // 5. CDN 缓存刷新（更新 HTML 中的 ?v=timestamp）
     const ts = String(Math.floor(Date.now() / 1000));
     const jsBasename = dataJsPath.split("/").pop() || "";
     const cacheRe = new RegExp(jsBasename.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "\\?v=\\d+", "g");
@@ -477,9 +604,8 @@ export async function publishArticleToSite(
       } catch { /* skip */ }
     }
 
-    // 5. 构建发布 URL
-    const pattern = site.article_html_pattern || `article.html?title={slug}`;
-    const articleUrl = `https://${site.domain}/${pattern.replace("{slug}", slug)}`;
+    // 6. 构建发布 URL
+    const articleUrl = `https://${site.domain}/${detailUrl}`;
 
     client.end();
     return { success: true, url: articleUrl };
@@ -492,7 +618,14 @@ export async function publishArticleToSite(
 // ─── 撤回文章（从站点移除）───
 export async function unpublishArticleFromSite(
   articleId: string,
-  site: { site_path: string; site_type: string | null; data_js_path: string | null; article_var_name: string | null; }
+  slug: string,
+  site: {
+    site_path: string;
+    site_type: string | null;
+    data_js_path: string | null;
+    article_var_name: string | null;
+    article_html_pattern: string | null;
+  }
 ): Promise<{ success: boolean; error?: string }> {
   let client: Client | null = null;
   try {
@@ -522,6 +655,20 @@ export async function unpublishArticleFromSite(
         await sftpWriteFile(sftp, fullDataPath, newContent);
       }
     } catch { /* 索引文件可能不存在 */ }
+
+    // 3. 删除文章详情 HTML 页面
+    if (slug) {
+      const pattern = site.article_html_pattern || "article.html?title={slug}";
+      const detailUrl = pattern.replace("{slug}", slug);
+      if (!detailUrl.includes("?")) {
+        const htmlPath = `${siteRoot}/${detailUrl}`;
+        try {
+          await new Promise<void>((resolve, reject) => {
+            sftp.unlink(htmlPath, (err) => { if (err) reject(err); else resolve(); });
+          });
+        } catch { /* 文件可能不存在 */ }
+      }
+    }
 
     client.end();
     return { success: true };
