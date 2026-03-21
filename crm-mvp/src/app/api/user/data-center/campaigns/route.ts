@@ -82,6 +82,8 @@ export async function GET(req: NextRequest) {
   }
   if (statusFilter && statusFilter !== "all") {
     campaignWhere.google_status = statusFilter;
+  } else {
+    campaignWhere.google_status = { not: "REMOVED" };
   }
   if (searchFilter) {
     campaignWhere.campaign_name = { contains: searchFilter };
