@@ -109,7 +109,7 @@ async function fetchSheetCsv(sheetUrl: string, gid?: string): Promise<string[][]
   }
 }
 
-function parseCsv(text: string): string[][] {
+export function parseCsv(text: string): string[][] {
   const rows: string[][] = [];
   let row: string[] = [];
   let cell = "";
@@ -166,7 +166,7 @@ export interface ViolationRecord {
   source: string;
 }
 
-function parseViolationRows(rows: string[][]): ViolationRecord[] {
+export function parseViolationRows(rows: string[][]): ViolationRecord[] {
   if (rows.length < 2) throw new Error(`违规商家 Sheet 数据不足: 仅 ${rows.length} 行（至少需要表头+数据行）`);
   let headerIdx = -1;
   for (let i = 0; i < Math.min(5, rows.length); i++) {
@@ -221,7 +221,7 @@ export interface RecommendationRecord {
   time: string;
 }
 
-function parseRecommendationRows(rows: string[][]): RecommendationRecord[] {
+export function parseRecommendationRows(rows: string[][]): RecommendationRecord[] {
   if (rows.length < 2) throw new Error(`推荐商家 Sheet 数据不足: 仅 ${rows.length} 行（至少需要表头+数据行）`);
   let headerIdx = -1;
   for (let i = 0; i < Math.min(5, rows.length); i++) {

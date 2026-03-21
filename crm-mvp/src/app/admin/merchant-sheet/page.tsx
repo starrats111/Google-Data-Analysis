@@ -83,9 +83,30 @@ export default function MerchantSheetPage() {
     setSheetSyncing(true);
     setSyncResult(null);
     try {
+      // 从浏览器直接拉取 Google Sheets CSV（绕过服务器无法访问 Google 的问题）
+      let csvData: string | undefined;
+      const sheetIdMatch = sheetUrl.match(/\/spreadsheets\/d\/([a-zA-Z0-9_-]+)/);
+      if (sheetIdMatch) {
+        const sid = sheetIdMatch[1];
+        const csvUrls = [
+          `https://docs.google.com/spreadsheets/d/${sid}/gviz/tq?tqx=out:csv&gid=0`,
+          `https://docs.google.com/spreadsheets/d/${sid}/export?format=csv&gid=0`,
+        ];
+        for (const url of csvUrls) {
+          try {
+            const resp = await fetch(url);
+            if (resp.ok) {
+              let text = await resp.text();
+              if (text.charCodeAt(0) === 0xFEFF) text = text.slice(1);
+              if (text.trim()) { csvData = text; break; }
+            }
+          } catch { /* try next URL */ }
+        }
+      }
+
       const res = await fetch("/api/admin/merchant-sheet", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "sync" }),
+        body: JSON.stringify({ action: "sync", csv_data: csvData }),
       }).then((r) => r.json());
       if (res.code === 0) {
         setSyncResult(res.data);

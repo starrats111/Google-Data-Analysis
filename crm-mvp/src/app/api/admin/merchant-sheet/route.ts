@@ -2,7 +2,11 @@ import { NextRequest } from "next/server";
 import { getAdminFromRequest, serializeData } from "@/lib/auth";
 import { apiSuccess, apiError } from "@/lib/constants";
 import prisma from "@/lib/prisma";
-import { extractSheetId, fetchViolations, fetchRecommendations } from "@/lib/merchant-sheet-sync";
+import {
+  extractSheetId, fetchViolations, fetchRecommendations,
+  parseCsv, parseViolationRows, parseRecommendationRows,
+  type ViolationRecord, type RecommendationRecord,
+} from "@/lib/merchant-sheet-sync";
 
 // ── GET: 获取配置 + 违规/推荐列表 ──
 export async function GET(req: NextRequest) {
@@ -94,12 +98,28 @@ export async function POST(req: NextRequest) {
 
     const sheetUrl = cfg.sheet_url;
     const batchTs = new Date().toISOString().replace(/[-:T]/g, "").slice(0, 14);
+    const csvData = body.csv_data as string | undefined;
+
+    let violations: ViolationRecord[] = [];
+    let recommendations: RecommendationRecord[] = [];
+
+    try {
+      if (csvData) {
+        const rows = parseCsv(csvData);
+        violations = parseViolationRows(rows);
+        recommendations = parseRecommendationRows(rows);
+      } else {
+        violations = await fetchViolations(sheetUrl);
+        recommendations = await fetchRecommendations(sheetUrl);
+      }
+    } catch (e: any) {
+      return apiError(`数据获取/解析失败: ${e?.message || e}`);
+    }
 
     // 同步违规商家
     let vioTotal = 0, vioNew = 0, vioSkipped = 0, vioMarked = 0;
     let vioError: string | null = null;
     try {
-      const violations = await fetchViolations(sheetUrl);
       vioTotal = violations.length;
       const vioBatch = `SHEET-VIO-${batchTs}`;
 
@@ -187,10 +207,9 @@ export async function POST(req: NextRequest) {
     let recTotal = 0, recNew = 0, recSkipped = 0, recMarked = 0;
     let recError: string | null = null;
     try {
-      const recs = await fetchRecommendations(sheetUrl);
-      recTotal = recs.length;
+      recTotal = recommendations.length;
       const recBatch = `SHEET-REC-${batchTs}`;
-      for (const r of recs) {
+      for (const r of recommendations) {
         const exists = await prisma.merchant_recommendations.findFirst({
           where: { merchant_name: r.name, is_deleted: 0 },
         });
