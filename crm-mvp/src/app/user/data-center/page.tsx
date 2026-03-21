@@ -142,7 +142,7 @@ export default function DataCenterPage() {
     try {
       const res = await fetch("/api/user/data-center/sync-transactions", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ days: 30 }),
+        body: JSON.stringify({}),
       }).then((r) => r.json());
       if (res.code === 0) {
         message.success(res.data?.message || "交易同步完成");
@@ -393,8 +393,9 @@ export default function DataCenterPage() {
         </Col>
         <Col xs={12} sm={6} md={4}>
           <Card size="small" styles={{ body: { padding: "8px 12px" } }}>
-            <Statistic title="ROI" value={summary.roi / 100} precision={2}
+            <Statistic title="ROI" value={summary.roi} precision={2}
               prefix={summary.roi >= 0 ? <RiseOutlined /> : <FallOutlined />}
+              suffix="%"
               styles={{ content: { fontSize: 18, color: summary.roi >= 0 ? "#389e0d" : "#cf1322" } }} />
           </Card>
         </Col>
@@ -413,7 +414,6 @@ export default function DataCenterPage() {
           pagination={{ pageSize: 50, showTotal: (t) => `共 ${t} 条`, showSizeChanger: true, pageSizeOptions: ["20", "50", "100"] }}
           summary={() => {
             if (rows.length === 0) return null;
-            const totalRejected = rows.reduce((s, r) => s + (r.rejected_commission || 0), 0);
             return (
               <Table.Summary fixed>
                 <Table.Summary.Row>
@@ -423,7 +423,7 @@ export default function DataCenterPage() {
                   <Table.Summary.Cell index={5} align="right"><Text strong>${summary.avgCpc.toFixed(4)}</Text></Table.Summary.Cell>
                   <Table.Summary.Cell index={6} align="right"><Text strong style={{ color: "#cf1322" }}>${summary.totalCost.toFixed(2)}</Text></Table.Summary.Cell>
                   <Table.Summary.Cell index={7} align="right"><Text strong style={{ color: "#389e0d" }}>${summary.totalCommission.toFixed(2)}</Text></Table.Summary.Cell>
-                  <Table.Summary.Cell index={8} align="right"><Text strong type="danger">${totalRejected.toFixed(2)}</Text></Table.Summary.Cell>
+                  <Table.Summary.Cell index={8} align="right"><Text strong type="danger">${summary.totalRejectedCommission.toFixed(2)}</Text></Table.Summary.Cell>
                   <Table.Summary.Cell index={9} align="right"><Text strong>{summary.totalClicks}</Text></Table.Summary.Cell>
                   <Table.Summary.Cell index={10} align="right"><Text strong>{summary.totalImpressions}</Text></Table.Summary.Cell>
                 </Table.Summary.Row>

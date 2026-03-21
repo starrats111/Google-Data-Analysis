@@ -15,11 +15,14 @@ export async function POST(req: NextRequest) {
   if (!user) return apiError("未授权", 401);
 
   const userId = BigInt(user.userId);
-  const { days = 30 } = await req.json().catch(() => ({}));
+  const body = await req.json().catch(() => ({}));
 
   const cstNow = nowCST();
-  const startDate = cstNow.subtract(days, "day").toDate();
-  const startStr = cstNow.subtract(days, "day").format("YYYY-MM-DD");
+  const DEFAULT_START = "2025-11-01";
+  const startStr = body.days
+    ? cstNow.subtract(body.days, "day").format("YYYY-MM-DD")
+    : DEFAULT_START;
+  const startDate = new Date(startStr);
   const endStr = cstNow.format("YYYY-MM-DD");
 
   try {
@@ -122,9 +125,9 @@ export async function POST(req: NextRequest) {
             update: {
               platform_connection_id: conn.id, merchant_id: merchantId,
               ...(userMerchantId !== BigInt(0) ? { user_merchant_id: userMerchantId } : {}),
-              ...(newComm > 0 ? { commission_amount: newComm } : {}),
+              commission_amount: newComm,
               status: txn.status, raw_status: txn.raw_status || "",
-              ...(newAmt > 0 ? { order_amount: newAmt } : {}),
+              order_amount: newAmt,
               merchant_name: merchantName || undefined,
             },
           });
@@ -209,7 +212,7 @@ async function normalizeExistingTransactionPlatforms(userId: bigint) {
 
 function parseCampaignName(name: string): { platform: string; mid: string } | null {
   if (!name) return null;
-  const parts = name.split("-");
+  const parts = name.split(/[-\s]+/);
   if (parts.length < 4) return null;
   const rawPlatform = parts[1]?.trim();
   const mid = parts[parts.length - 1]?.trim();
