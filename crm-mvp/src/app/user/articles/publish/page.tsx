@@ -28,6 +28,7 @@ interface Merchant {
   merchant_url: string | null; target_country: string | null;
   supported_regions: string[] | { code: string }[] | null;
   platform_connection_id?: string | null;
+  ad_status?: string;
 }
 
 interface PlatformConnection {
@@ -59,6 +60,7 @@ export default function ArticlePublishPage() {
   const articleSlugFromUrl = searchParams.get("slug");
   const [step, setStep] = useState(0);
   const [merchants, setMerchants] = useState<Merchant[]>([]);
+  const [publishedMerchantIds, setPublishedMerchantIds] = useState<Set<string>>(new Set());
   const [sites, setSites] = useState<Site[]>([]);
   const [platformConns, setPlatformConns] = useState<PlatformConnection[]>([]);
   const [loadingArticle, setLoadingArticle] = useState(false);
@@ -66,6 +68,7 @@ export default function ArticlePublishPage() {
 
   // Step 0: 选择商家
   const [selectedMerchant, setSelectedMerchant] = useState<Merchant | null>(null);
+  const [merchantSearch, setMerchantSearch] = useState("");
   // Step 1: 确认国家
   const [country, setCountry] = useState("US");
   const [language, setLanguage] = useState("en");
@@ -94,6 +97,18 @@ export default function ArticlePublishPage() {
       .then((r) => r.json())
       .then((res) => {
         if (res.code === 0) setMerchants(res.data.merchants || []);
+      }).catch(() => {});
+    // 获取已发布文章的商家 ID（排除已删除的）
+    fetch("/api/user/articles?pageSize=500")
+      .then((r) => r.json())
+      .then((res) => {
+        if (res.code === 0) {
+          const ids = new Set<string>();
+          for (const a of res.data.articles || []) {
+            if (a.user_merchant_id && a.status !== "deleted") ids.add(String(a.user_merchant_id));
+          }
+          setPublishedMerchantIds(ids);
+        }
       }).catch(() => {});
     // 获取站点
     fetch("/api/user/publish-sites")
@@ -446,19 +461,27 @@ export default function ArticlePublishPage() {
                 placeholder="搜索并选择已领取的商家"
                 showSearch
                 optionFilterProp="label"
+                onSearch={setMerchantSearch}
                 style={{ width: "100%" }}
                 onChange={(v) => {
                   const m = merchants.find((m) => m.id === v);
                   setSelectedMerchant(m || null);
+                  setMerchantSearch("");
                   if (m?.target_country) {
                     setCountry(m.target_country);
                     setLanguage(getLang(m.target_country));
                   }
                 }}
-                options={merchants.map((m) => ({
-                  value: m.id,
-                  label: `${m.merchant_name} [${m.platform}] (MID: ${m.merchant_id})`,
-                }))}
+                options={merchants
+                  .filter((m) => !publishedMerchantIds.has(m.id))
+                  .filter((m) => {
+                    if (m.ad_status !== "PAUSED") return true;
+                    return merchantSearch.length > 0 && m.merchant_id.includes(merchantSearch);
+                  })
+                  .map((m) => ({
+                    value: m.id,
+                    label: `${m.merchant_name} [${m.platform}] (MID: ${m.merchant_id})`,
+                  }))}
               />
             </Form.Item>
             {selectedMerchant && (
