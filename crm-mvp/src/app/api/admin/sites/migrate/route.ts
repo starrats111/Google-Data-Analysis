@@ -86,7 +86,7 @@ async function runMigrationAsync(taskId: bigint) {
 
     // 读取系统配置
     const configs = await prisma.system_configs.findMany({
-      where: { is_deleted: 0, config_key: { in: ["github_token", "github_org", "cf_token", "bt_server_ip", "bt_ssh_host", "bt_ssh_port", "bt_ssh_user", "bt_ssh_password", "bt_ssh_key_path", "bt_site_root"] } },
+      where: { is_deleted: 0, config_key: { in: ["github_token", "github_org", "cf_token", "bt_server_ip", "bt_ssh_host", "bt_ssh_port", "bt_ssh_user", "bt_ssh_password", "bt_ssh_key_path", "bt_ssh_key_content", "bt_site_root"] } },
     });
     const cfg: Record<string, string> = {};
     for (const c of configs) {
@@ -104,12 +104,18 @@ async function runMigrationAsync(taskId: bigint) {
 
     const { Client } = await import("ssh2");
     const fs = await import("fs");
+    let privateKey: Buffer | undefined;
+    if (cfg.bt_ssh_key_content) {
+      privateKey = Buffer.from(cfg.bt_ssh_key_content);
+    } else if (cfg.bt_ssh_key_path) {
+      try { privateKey = fs.readFileSync(cfg.bt_ssh_key_path); } catch { /* ignore */ }
+    }
     const sshConfig = {
       host: cfg.bt_ssh_host,
       port: parseInt(cfg.bt_ssh_port || "22"),
       username: cfg.bt_ssh_user || "ubuntu",
       password: cfg.bt_ssh_password || undefined,
-      privateKey: cfg.bt_ssh_key_path ? fs.readFileSync(cfg.bt_ssh_key_path) : undefined,
+      privateKey,
     };
 
     const client = await new Promise<InstanceType<typeof Client>>((resolve, reject) => {
