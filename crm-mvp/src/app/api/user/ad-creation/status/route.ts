@@ -90,9 +90,6 @@ export async function GET(req: NextRequest) {
 
   const zhH = ((adCreative as any)?.headlines_zh as string[]) || [];
   const zhD = ((adCreative as any)?.descriptions_zh as string[]) || [];
-  // #region agent log
-  fetch('http://127.0.0.1:7366/ingest/05d05002-39c6-4179-a54f-bba78c014ee4',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'ea79a9'},body:JSON.stringify({sessionId:'ea79a9',location:'status/route.ts:GET',message:'status response',data:{isReady,headlines:headlines.length,descs:descriptions.length,headlinesZh:zhH.length,descriptionsZh:zhD.length,kws:keywords.length},timestamp:Date.now()})}).catch(()=>{});
-  // #endregion
 
   return apiSuccess(serializeData({
     campaign: {
@@ -157,10 +154,6 @@ async function triggerAdCopyGeneration(
     let dedupedDescriptions: string[] = [];
     let kws: { phrase: string; volume: number }[] = [];
 
-    // #region agent log
-    console.log(`[DEBUG-ea79a9] triggerAdCopy: merchantUrl="${merchantUrl}", country="${country}"`);
-    // #endregion
-
     if (merchantUrl) {
       try {
         const client = await SemRushClient.fromConfig(country);
@@ -169,20 +162,10 @@ async function triggerAdCopyGeneration(
         dedupedDescriptions = result.dedupedDescriptions;
         kws = result.keywords;
         console.log(`[AdCopy] SemRush 成功: ${dedupedTitles.length} 标题, ${dedupedDescriptions.length} 描述, ${kws.length} 关键词`);
-        // #region agent log
-        console.log(`[DEBUG-ea79a9] SemRush OK: titles=${dedupedTitles.length}, descs=${dedupedDescriptions.length}, kws=${kws.length}`);
-        // #endregion
       } catch (err) {
         const errMsg = err instanceof Error ? err.message : String(err);
         console.warn("[AdCopy] SemRush 失败，将完全由 AI 生成:", errMsg);
-        // #region agent log
-        console.log(`[DEBUG-ea79a9] SemRush FAILED: ${errMsg}`);
-        // #endregion
       }
-    } else {
-      // #region agent log
-      console.log(`[DEBUG-ea79a9] No merchantUrl for SemRush, skipped`);
-      // #endregion
     }
 
     const headlines = await padHeadlines(dedupedTitles, merchantName, country, 15);

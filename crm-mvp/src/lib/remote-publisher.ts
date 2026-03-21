@@ -301,12 +301,9 @@ async function _detectSiteType(sftp: SFTPWrapper, siteRoot: string): Promise<Sit
 
 // ─── 验证连接（与 Python 后端 verify_connection 一致）───
 export async function verifyConnection(sitePath: string): Promise<VerifyResult> {
-  // [TEMP-DEBUG] 验证连接临时日志 — 问题解决后删除
-  console.log(`[verify-debug] ▶ verifyConnection called, sitePath=${sitePath}`);
   let client: Client | null = null;
   try {
     client = await connectSSH();
-    console.log(`[verify-debug] ✅ SSH connected`);
     const sftp = await getSFTP(client);
 
     const checks: VerifyResult = {
@@ -322,7 +319,6 @@ export async function verifyConnection(sitePath: string): Promise<VerifyResult> 
     };
 
     checks.site_dir_exists = await sftpIsDir(sftp, sitePath);
-    console.log(`[verify-debug] site_dir_exists=${checks.site_dir_exists}`);
 
     if (checks.site_dir_exists) {
       const detected = await _detectSiteType(sftp, sitePath);
@@ -335,12 +331,10 @@ export async function verifyConnection(sitePath: string): Promise<VerifyResult> 
 
     checks.index_html_exists = await sftpStat(sftp, `${sitePath}/index.html`);
     checks.valid = checks.ssh_connected && checks.site_dir_exists && checks.index_html_exists;
-    console.log(`[verify-debug] index_html_exists=${checks.index_html_exists}, valid=${checks.valid}, site_type=${checks.site_type}`);
 
     client.end();
     return checks;
   } catch (err) {
-    console.error(`[verify-debug] ❌ verifyConnection error:`, err instanceof Error ? err.message : err);
     client?.end();
     return {
       ssh_connected: false,

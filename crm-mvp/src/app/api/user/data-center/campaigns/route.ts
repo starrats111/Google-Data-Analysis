@@ -203,10 +203,6 @@ export async function GET(req: NextRequest) {
     totalOrdersFromTxn += cnt;
   }
 
-  // #region agent log
-  fetch('http://127.0.0.1:7366/ingest/05d05002-39c6-4179-a54f-bba78c014ee4',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'dc453c'},body:JSON.stringify({sessionId:'dc453c',location:'campaigns/route.ts:commissionAgg',message:'commission aggregation from txn',data:{commissionAggRows:commissionAgg.length,totalCommissionFromTxn,totalRejectedFromTxn,totalOrdersFromTxn,commissionByMerchantKeys:[...commissionByMerchant.keys()],rejectedByMerchantKeys:[...rejectedByMerchant.keys()],dateRange:{start:start.toISOString(),end:endPlusOne.toISOString()}},timestamp:Date.now()})}).catch(()=>{});
-  // #endregion
-
   // 查询 campaign → user_merchant_id 映射
   const campaignMerchantMap = new Map<string, string>();
   if (commissionAgg.length > 0) {
@@ -282,10 +278,6 @@ export async function GET(req: NextRequest) {
   });
 
   const effectiveCommission = totalCommissionFromTxn > 0 ? totalCommissionFromTxn : totalCommission;
-
-  // #region agent log
-  fetch('http://127.0.0.1:7366/ingest/05d05002-39c6-4179-a54f-bba78c014ee4',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'dc453c'},body:JSON.stringify({sessionId:'dc453c',location:'campaigns/route.ts:summary',message:'final summary values',data:{totalCost,totalCommission,totalCommissionFromTxn,effectiveCommission,totalRejectedFromTxn,campaignCount:campaigns.length,campaignMerchantMapSize:campaignMerchantMap.size,merchantCommissionWrittenSize:merchantCommissionWritten.size},timestamp:Date.now()})}).catch(()=>{});
-  // #endregion
 
   const summary = {
     totalCost: Number(totalCost.toFixed(2)),

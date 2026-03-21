@@ -68,16 +68,11 @@ export async function POST(req: NextRequest) {
   try {
     const { listMccChildAccounts } = await import("@/lib/google-ads");
 
-    // #region agent log
-    fetch('http://127.0.0.1:7366/ingest/05d05002-39c6-4179-a54f-bba78c014ee4',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'ea79a9'},body:JSON.stringify({sessionId:'ea79a9',location:'cids/route.ts:POST',message:'CID sync start',data:{mcc_id:mcc.mcc_id,has_sa:!!mcc.service_account_json,has_dt:!!mcc.developer_token},timestamp:Date.now()})}).catch(()=>{});
-    // #endregion
     const childAccounts = await listMccChildAccounts({
       mcc_id: mcc.mcc_id,
       developer_token: mcc.developer_token,
       service_account_json: mcc.service_account_json,
     });
-    // #region agent log
-    fetch('http://127.0.0.1:7366/ingest/05d05002-39c6-4179-a54f-bba78c014ee4',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'ea79a9'},body:JSON.stringify({sessionId:'ea79a9',location:'cids/route.ts:POST',message:'CID sync result',data:{count:childAccounts.length},timestamp:Date.now()})}).catch(()=>{});
 
     const existingCids = await prisma.mcc_cid_accounts.findMany({
       where: { mcc_account_id: BigInt(mcc_account_id), is_deleted: 0 },
@@ -137,9 +132,6 @@ export async function POST(req: NextRequest) {
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error("[CID Sync] 失败:", message);
-    // #region agent log
-    fetch('http://127.0.0.1:7366/ingest/05d05002-39c6-4179-a54f-bba78c014ee4',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'ea79a9'},body:JSON.stringify({sessionId:'ea79a9',location:'cids/route.ts:error',message:'CID sync error',data:{error:message.slice(0,300)},timestamp:Date.now()})}).catch(()=>{});
-    // #endregion
     return apiError(`CID 同步失败: ${message}`, 500);
   }
 }

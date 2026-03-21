@@ -27,9 +27,6 @@ function resolveDevToken(dbToken: string): string {
  */
 async function getAccessToken(serviceAccountJson: string): Promise<string> {
   const sa = JSON.parse(serviceAccountJson);
-  // #region agent log
-  fetch('http://127.0.0.1:7366/ingest/05d05002-39c6-4179-a54f-bba78c014ee4',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'ea79a9'},body:JSON.stringify({sessionId:'ea79a9',location:'client.ts:getAccessToken',message:'JWT auth attempt',data:{email:sa.client_email,hasKey:!!sa.private_key,subject:sa.subject||null},timestamp:Date.now()})}).catch(()=>{});
-  // #endregion
   const jwt = new JWT({
     email: sa.client_email,
     key: sa.private_key,
@@ -37,9 +34,6 @@ async function getAccessToken(serviceAccountJson: string): Promise<string> {
     subject: sa.subject || undefined,
   });
   const { token } = await jwt.getAccessToken();
-  // #region agent log
-  fetch('http://127.0.0.1:7366/ingest/05d05002-39c6-4179-a54f-bba78c014ee4',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'ea79a9'},body:JSON.stringify({sessionId:'ea79a9',location:'client.ts:getAccessToken',message:'JWT auth result',data:{gotToken:!!token,tokenLen:token?.length||0},timestamp:Date.now()})}).catch(()=>{});
-  // #endregion
   if (!token) throw new Error("无法从 Service Account 获取 access_token");
   return token;
 }
@@ -70,9 +64,6 @@ export async function queryGoogleAds(
   const headers = buildHeaders(token, devToken, credentials.mcc_id);
 
   const apiUrl = `${ADS_BASE_URL}/customers/${cid}/googleAds:searchStream`;
-  // #region agent log
-  fetch('http://127.0.0.1:7366/ingest/05d05002-39c6-4179-a54f-bba78c014ee4',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'ea79a9'},body:JSON.stringify({sessionId:'ea79a9',location:'client.ts:queryGoogleAds',message:'API request',data:{url:apiUrl,cid,queryStart:query.trim().slice(0,80)},timestamp:Date.now()})}).catch(()=>{});
-  // #endregion
   const resp = await fetch(apiUrl, {
     method: "POST",
     headers,
@@ -81,9 +72,6 @@ export async function queryGoogleAds(
 
   if (!resp.ok) {
     const errBody = await resp.text().catch(() => "");
-    // #region agent log
-    fetch('http://127.0.0.1:7366/ingest/05d05002-39c6-4179-a54f-bba78c014ee4',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'ea79a9'},body:JSON.stringify({sessionId:'ea79a9',location:'client.ts:queryGoogleAds',message:'API query error',data:{status:resp.status,url:apiUrl,body:errBody.slice(0,300)},timestamp:Date.now()})}).catch(()=>{});
-    // #endregion
     throw new Error(`Google Ads API 查询失败 (${resp.status}): ${errBody.slice(0, 500)}`);
   }
 
@@ -114,9 +102,6 @@ export async function mutateGoogleAds(
   const headers = buildHeaders(token, devToken, credentials.mcc_id);
 
   const apiUrl = `${ADS_BASE_URL}/customers/${cid}/googleAds:mutate`;
-  // #region agent log
-  fetch('http://127.0.0.1:7366/ingest/05d05002-39c6-4179-a54f-bba78c014ee4',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'ea79a9'},body:JSON.stringify({sessionId:'ea79a9',location:'client.ts:mutateGoogleAds',message:'mutate request',data:{url:apiUrl,cid,opCount:operations.length},timestamp:Date.now()})}).catch(()=>{});
-  // #endregion
   const resp = await fetch(apiUrl, {
     method: "POST",
     headers,
@@ -125,9 +110,6 @@ export async function mutateGoogleAds(
 
   if (!resp.ok) {
     const errBody = await resp.text().catch(() => "");
-    // #region agent log
-    fetch('http://127.0.0.1:7366/ingest/05d05002-39c6-4179-a54f-bba78c014ee4',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'ea79a9'},body:JSON.stringify({sessionId:'ea79a9',location:'client.ts:mutateGoogleAds',message:'mutate error',data:{status:resp.status,body:errBody.slice(0,300)},timestamp:Date.now()})}).catch(()=>{});
-    // #endregion
     throw new Error(`Google Ads API 修改失败 (${resp.status}): ${errBody.slice(0, 2000)}`);
   }
 
