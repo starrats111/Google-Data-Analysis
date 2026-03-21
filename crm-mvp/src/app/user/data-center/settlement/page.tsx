@@ -53,10 +53,31 @@ interface MonthlyRow {
   orders: number;
 }
 
+interface MemberRow {
+  user_id: string;
+  username: string;
+  display_name: string;
+  total: number;
+  approved: number;
+  rejected: number;
+  paid: number;
+  pending: number;
+  orders: number;
+  order_amount: number;
+}
+
+interface TeamMember {
+  id: string;
+  name: string;
+}
+
 interface SettlementData {
   summary: Summary;
   merchants: MerchantRow[];
   monthly: MonthlyRow[];
+  members?: MemberRow[];
+  teamMembers?: TeamMember[];
+  isLeader?: boolean;
 }
 
 const RANGE_OPTIONS = [
@@ -74,6 +95,7 @@ export default function SettlementPage() {
   const [dateRange, setDateRange] = useState<[Dayjs, Dayjs] | null>(null);
   const [platform, setPlatform] = useState<string>("");
   const [mid, setMid] = useState("");
+  const [memberId, setMemberId] = useState<string>("");
   const [data, setData] = useState<SettlementData | null>(null);
   const [loading, setLoading] = useState(false);
   const [activeTab, setActiveTab] = useState<string>("merchant");
@@ -90,6 +112,7 @@ export default function SettlementPage() {
       }
       if (platform) params.set("platform", platform);
       if (mid.trim()) params.set("mid", mid.trim());
+      if (memberId) params.set("member_id", memberId);
 
       const res = await fetch(`/api/user/data-center/settlement?${params}`).then((r) => r.json());
       if (res.code === 0) {
@@ -102,7 +125,7 @@ export default function SettlementPage() {
     } finally {
       setLoading(false);
     }
-  }, [range, dateRange, platform, mid, message]);
+  }, [range, dateRange, platform, mid, memberId, message]);
 
   useEffect(() => { doSearch(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -184,7 +207,50 @@ export default function SettlementPage() {
     { title: "订单数", dataIndex: "orders", width: 90 },
   ];
 
+  const memberColumns: ColumnsType<MemberRow> = [
+    {
+      title: "员工", dataIndex: "display_name", width: 120,
+      render: (v: string, r: MemberRow) => (
+        <span>
+          <Text style={{ fontSize: 13 }}>{v}</Text>
+          <Text type="secondary" style={{ fontSize: 11, marginLeft: 4 }}>({r.username})</Text>
+        </span>
+      ),
+    },
+    {
+      title: "总佣金($)", dataIndex: "total", width: 110, align: "right",
+      sorter: (a, b) => a.total - b.total, defaultSortOrder: "descend",
+      render: (v: number) => `$${v.toFixed(2)}`,
+    },
+    {
+      title: "已确认($)", dataIndex: "approved", width: 100, align: "right",
+      render: (v: number) => <span style={{ color: v > 0 ? COLORS.successGreen : undefined }}>${v.toFixed(2)}</span>,
+    },
+    {
+      title: "已支付($)", dataIndex: "paid", width: 100, align: "right",
+      render: (v: number) => <span style={{ color: v > 0 ? "#1890ff" : undefined }}>${v.toFixed(2)}</span>,
+    },
+    {
+      title: "拒付($)", dataIndex: "rejected", width: 100, align: "right",
+      render: (v: number) => <span style={{ color: v > 0 ? "#cf1322" : undefined, fontWeight: v > 0 ? 600 : 400 }}>${v.toFixed(2)}</span>,
+    },
+    {
+      title: "待审核($)", dataIndex: "pending", width: 100, align: "right",
+      render: (v: number) => <span style={{ color: v > 0 ? "#faad14" : undefined }}>${v.toFixed(2)}</span>,
+    },
+    {
+      title: "订单数", dataIndex: "orders", width: 70, align: "right",
+      sorter: (a, b) => a.orders - b.orders,
+    },
+    {
+      title: "订单金额($)", dataIndex: "order_amount", width: 110, align: "right",
+      render: (v: number) => `$${v.toFixed(2)}`,
+      sorter: (a, b) => a.order_amount - b.order_amount,
+    },
+  ];
+
   const s = data?.summary;
+  const isLeader = data?.isLeader;
 
   return (
     <div>
@@ -192,7 +258,9 @@ export default function SettlementPage() {
       <Card size="small" style={{ marginBottom: 12 }}>
         <Row gutter={[8, 8]} align="middle">
           <Col>
-            <Title level={5} style={{ margin: 0 }}><AccountBookOutlined /> 结算查询</Title>
+            <Title level={5} style={{ margin: 0 }}>
+              <AccountBookOutlined /> 结算查询{isLeader && <Tag color="blue" style={{ marginLeft: 8 }}>组长视图</Tag>}
+            </Title>
           </Col>
           <Col flex="auto">
             <Space size={8} wrap>
@@ -222,6 +290,14 @@ export default function SettlementPage() {
                 onChange={(e) => setMid(e.target.value)}
                 onPressEnter={doSearch}
               />
+              {data?.teamMembers && (
+                <Select
+                  placeholder="全部员工" allowClear style={{ width: 140 }} size="small"
+                  value={memberId || undefined}
+                  onChange={(v) => setMemberId(v || "")}
+                  options={data.teamMembers.map((m) => ({ value: m.id, label: m.name }))}
+                />
+              )}
               <Button type="primary" size="small" icon={<SyncOutlined spin={loading} />} loading={loading} onClick={doSearch}>
                 查询
               </Button>
@@ -307,12 +383,48 @@ export default function SettlementPage() {
                 options={[
                   { label: `按商家 (${data?.merchants.length || 0})`, value: "merchant" },
                   { label: `按月份 (${data?.monthly.length || 0})`, value: "monthly" },
+                  ...(isLeader ? [{ label: `按员工 (${data?.members?.length || 0})`, value: "member" }] : []),
                 ]}
                 size="small"
               />
             }
           >
-            {activeTab === "merchant" ? (
+            {activeTab === "member" && isLeader ? (
+              <Table<MemberRow>
+                columns={memberColumns}
+                dataSource={data?.members || []}
+                rowKey="user_id"
+                size="small"
+                scroll={{ x: 850 }}
+                pagination={false}
+                summary={() => {
+                  if (!data?.members?.length) return null;
+                  const totals = data.members.reduce(
+                    (acc, r) => ({
+                      total: acc.total + r.total, approved: acc.approved + r.approved,
+                      paid: acc.paid + r.paid, rejected: acc.rejected + r.rejected,
+                      pending: acc.pending + r.pending, orders: acc.orders + r.orders,
+                      order_amount: acc.order_amount + r.order_amount,
+                    }),
+                    { total: 0, approved: 0, paid: 0, rejected: 0, pending: 0, orders: 0, order_amount: 0 }
+                  );
+                  return (
+                    <Table.Summary fixed>
+                      <Table.Summary.Row>
+                        <Table.Summary.Cell index={0}><Text strong>合计</Text></Table.Summary.Cell>
+                        <Table.Summary.Cell index={1} align="right"><Text strong>${totals.total.toFixed(2)}</Text></Table.Summary.Cell>
+                        <Table.Summary.Cell index={2} align="right"><Text strong style={{ color: COLORS.successGreen }}>${totals.approved.toFixed(2)}</Text></Table.Summary.Cell>
+                        <Table.Summary.Cell index={3} align="right"><Text strong style={{ color: "#1890ff" }}>${totals.paid.toFixed(2)}</Text></Table.Summary.Cell>
+                        <Table.Summary.Cell index={4} align="right"><Text strong style={{ color: "#cf1322" }}>${totals.rejected.toFixed(2)}</Text></Table.Summary.Cell>
+                        <Table.Summary.Cell index={5} align="right"><Text strong style={{ color: "#faad14" }}>${totals.pending.toFixed(2)}</Text></Table.Summary.Cell>
+                        <Table.Summary.Cell index={6} align="right"><Text strong>{totals.orders}</Text></Table.Summary.Cell>
+                        <Table.Summary.Cell index={7} align="right"><Text strong>${totals.order_amount.toFixed(2)}</Text></Table.Summary.Cell>
+                      </Table.Summary.Row>
+                    </Table.Summary>
+                  );
+                }}
+              />
+            ) : activeTab === "merchant" ? (
               <Table<MerchantRow>
                 columns={merchantColumns}
                 dataSource={data?.merchants || []}

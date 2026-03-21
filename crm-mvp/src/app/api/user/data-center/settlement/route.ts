@@ -11,8 +11,9 @@ import { nowCST, TZ } from "@/lib/date-utils";
  *   - 时间：range (1m/3m/6m/1y) 或 date_start + date_end
  *   - 平台：platform (CG/RW/LH/...)
  *   - 商家：mid (商家 MID)
+ *   - 员工：member_id (组长筛选特定员工)
  *
- * 不传 mid 时返回按商家维度聚合的明细表
+ * 组长角色：查看全组员工聚合数据，额外返回 members 维度
  */
 export async function GET(req: NextRequest) {
   const user = getUserFromRequest(req);
@@ -24,8 +25,10 @@ export async function GET(req: NextRequest) {
   const range = searchParams.get("range") || "1m";
   const dateStart = searchParams.get("date_start");
   const dateEnd = searchParams.get("date_end");
+  const memberId = searchParams.get("member_id") || "";
 
   const userId = BigInt(user.userId);
+  const isLeader = user.role === "leader" && user.teamId;
   const cstNow = nowCST();
 
   const start = dateStart
@@ -40,8 +43,26 @@ export async function GET(req: NextRequest) {
       })();
   const end = dateEnd ? new Date(dateEnd + "T23:59:59") : cstNow.toDate();
 
+  // 组长查看全组数据，普通用户只看自己
+  let userFilter: unknown = userId;
+  let teamMembers: { id: bigint; username: string; display_name: string | null }[] = [];
+
+  if (isLeader) {
+    const members = await prisma.users.findMany({
+      where: { team_id: BigInt(user.teamId!), is_deleted: 0, role: { not: "admin" } },
+      select: { id: true, username: true, display_name: true },
+    });
+    teamMembers = members;
+    const memberIds = members.map((m) => m.id);
+    if (memberId) {
+      userFilter = BigInt(memberId);
+    } else {
+      userFilter = { in: memberIds };
+    }
+  }
+
   const where: Record<string, unknown> = {
-    user_id: userId,
+    user_id: userFilter,
     is_deleted: 0,
     transaction_time: { gte: start, lte: end },
   };
@@ -80,6 +101,19 @@ export async function GET(req: NextRequest) {
   const monthlyMap = new Map<string, {
     month: string; total: number; approved: number; rejected: number; paid: number; pending: number; orders: number;
   }>();
+
+  // 按员工聚合（组长专用）
+  const memberMap = new Map<string, {
+    user_id: string; username: string; display_name: string;
+    total: number; approved: number; rejected: number; paid: number; pending: number; orders: number; order_amount: number;
+  }>();
+
+  const memberNameMap = new Map<string, { username: string; display_name: string }>();
+  if (isLeader) {
+    for (const m of teamMembers) {
+      memberNameMap.set(String(m.id), { username: m.username, display_name: m.display_name || m.username });
+    }
+  }
 
   for (const t of txns) {
     const amt = Number(t.commission_amount || 0);
@@ -122,6 +156,24 @@ export async function GET(req: NextRequest) {
     else mExisting.pending += amt;
     mExisting.orders += 1;
     monthlyMap.set(monthKey, mExisting);
+
+    // 按员工（组长视角）
+    if (isLeader) {
+      const uid = String(t.user_id);
+      const nameInfo = memberNameMap.get(uid) || { username: uid, display_name: uid };
+      const eExisting = memberMap.get(uid) || {
+        user_id: uid, username: nameInfo.username, display_name: nameInfo.display_name,
+        total: 0, approved: 0, rejected: 0, paid: 0, pending: 0, orders: 0, order_amount: 0,
+      };
+      eExisting.total += amt;
+      eExisting.order_amount += orderAmt;
+      if (t.status === "approved") eExisting.approved += amt;
+      else if (t.status === "rejected") eExisting.rejected += amt;
+      else if (t.status === "paid") eExisting.paid += amt;
+      else eExisting.pending += amt;
+      eExisting.orders += 1;
+      memberMap.set(uid, eExisting);
+    }
   }
 
   const fix2 = (n: number) => +n.toFixed(2);
@@ -146,6 +198,20 @@ export async function GET(req: NextRequest) {
       paid: fix2(m.paid), pending: fix2(m.pending),
     }));
 
+  const members = isLeader
+    ? Array.from(memberMap.values())
+        .sort((a, b) => b.total - a.total)
+        .map((m) => ({
+          ...m,
+          total: fix2(m.total), approved: fix2(m.approved), rejected: fix2(m.rejected),
+          paid: fix2(m.paid), pending: fix2(m.pending), order_amount: fix2(m.order_amount),
+        }))
+    : undefined;
+
+  const teamMemberList = isLeader
+    ? teamMembers.map((m) => ({ id: String(m.id), name: m.display_name || m.username }))
+    : undefined;
+
   return apiSuccess(serializeData({
     summary: {
       total_commission: fix2(totalCommission),
@@ -161,5 +227,8 @@ export async function GET(req: NextRequest) {
     },
     merchants,
     monthly,
+    members,
+    teamMembers: teamMemberList,
+    isLeader: !!isLeader,
   }));
 }
