@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { getAdminFromRequest } from "@/lib/auth";
 import { apiSuccess, apiError } from "@/lib/constants";
 import { getSystemConfigsByPrefix } from "@/lib/system-config";
+import { curlFetch } from "@/lib/semrush-client";
 
 const USER_AGENT =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36";
@@ -12,7 +13,7 @@ const RPC_ORIGIN = "https://sem.3ue.co";
 
 /**
  * POST /api/admin/semrush-config/test
- * 分步诊断 SemRush/3UE 连接状态
+ * 分步诊断 SemRush/3UE 连接状态（使用 curl 绕过 TLS 指纹检测）
  */
 export async function POST(req: NextRequest) {
   const admin = getAdminFromRequest(req);
@@ -46,25 +47,20 @@ export async function POST(req: NextRequest) {
 
   // Step 2: 登录测试
   let token = "";
-  let cookies: Record<string, string> = {};
+  const cookies: Record<string, string> = {};
   try {
     const ts = Date.now();
     const loginUrl = `${LOGIN_URL}?username=${encodeURIComponent(username)}&password=${encodeURIComponent(password)}&ts=${ts}`;
-    const loginRes = await fetch(loginUrl, {
+    const loginRes = curlFetch(loginUrl, {
       headers: { "user-agent": USER_AGENT, origin: LOGIN_ORIGIN },
-      signal: AbortSignal.timeout(15000),
+      timeoutMs: 15000,
     });
-    if (!loginRes.ok) {
+    if (loginRes.status >= 400) {
       steps.push({ step: "3UE 登录", status: "fail", detail: `HTTP ${loginRes.status} — 用户名或密码错误` });
       return apiSuccess({ steps, overall: "fail" });
     }
-    const setCookies = loginRes.headers.getSetCookie?.() || [];
-    for (const c of setCookies) {
-      const [kv] = c.split(";");
-      const [k, v] = kv.split("=");
-      if (k && v) cookies[k.trim()] = v.trim();
-    }
-    const payload = await loginRes.json();
+    Object.assign(cookies, loginRes.cookies);
+    const payload = JSON.parse(loginRes.body);
     token = extractToken(payload);
     if (!token) {
       steps.push({ step: "3UE 登录", status: "fail", detail: "登录响应中未找到 token，请检查凭据" });
@@ -76,74 +72,44 @@ export async function POST(req: NextRequest) {
     return apiSuccess({ steps, overall: "fail" });
   }
 
-  // Step 2.5: 访问分析页面获取完整 session cookies
-  try {
-    const configValue = JSON.stringify({
-      chat: { node, lang: "zh_CN" },
-      semrush: { node, lang: "zh" },
-    });
-    cookies["GMITM_token"] = token;
-    cookies["GMITM_uname"] = username;
-    cookies["GMITM_config"] = configValue;
-    const initCookieStr = Object.entries(cookies).map(([k, v]) => `${k}=${v}`).join("; ");
-    const pageRes = await fetch("https://sem.3ue.co/analytics/overview/", {
-      headers: {
-        "user-agent": USER_AGENT,
-        accept: "text/html,application/xhtml+xml,*/*",
-        cookie: initCookieStr,
-      },
-      redirect: "follow",
-      signal: AbortSignal.timeout(15000),
-    });
-    const pageCookies = pageRes.headers.getSetCookie?.() || [];
-    for (const c of pageCookies) {
-      const [kv] = c.split(";");
-      const eqIdx = kv.indexOf("=");
-      if (eqIdx > 0) {
-        const k = kv.slice(0, eqIdx).trim();
-        const v = kv.slice(eqIdx + 1).trim();
-        if (k && v) cookies[k] = v;
-      }
-    }
-    await pageRes.text();
-    steps.push({ step: "页面 Session", status: "success", detail: `获取到 ${Object.keys(cookies).length} 个 cookies` });
-  } catch (err) {
-    steps.push({ step: "页面 Session", status: "skip", detail: `页面访问失败（不影响主流程）: ${err instanceof Error ? err.message : String(err)}` });
-  }
+  // Step 2.5: 设置 cookies
+  const configValue = JSON.stringify({
+    chat: { node, lang: "zh_CN" },
+    semrush: { node, lang: "zh" },
+  });
+  cookies["GMITM_token"] = token;
+  cookies["GMITM_uname"] = username;
+  cookies["GMITM_config"] = configValue;
+  steps.push({ step: "Session", status: "success", detail: `共 ${Object.keys(cookies).length} 个 cookies` });
 
   // Step 3: RPC 调用测试
   try {
     const cookieStr = Object.entries(cookies).map(([k, v]) => `${k}=${v}`).join("; ");
-
     const rpcPayload = {
       id: 1,
       jsonrpc: "2.0",
       method: "user.Databases",
       params: { userId: parseInt(userId), apiKey },
     };
-    const rpcHeaders: Record<string, string> = {
-      "user-agent": USER_AGENT,
-      "content-type": "application/json; charset=utf-8",
-      origin: RPC_ORIGIN,
-      referer: "https://sem.3ue.co/analytics/overview/",
-      accept: "application/json, text/plain, */*",
-      "accept-language": "zh-CN,zh;q=0.9,en;q=0.8",
-      "sec-fetch-dest": "empty",
-      "sec-fetch-mode": "cors",
-      "sec-fetch-site": "same-origin",
-      cookie: cookieStr,
-    };
-    const rpcRes = await fetch(RPC_URL, {
+    const rpcRes = curlFetch(RPC_URL, {
       method: "POST",
-      headers: rpcHeaders,
+      headers: {
+        "user-agent": USER_AGENT,
+        "content-type": "application/json; charset=utf-8",
+        origin: RPC_ORIGIN,
+        referer: "https://sem.3ue.co/analytics/overview/",
+        accept: "application/json, text/plain, */*",
+        "accept-language": "zh-CN,zh;q=0.9,en;q=0.8",
+        cookie: cookieStr,
+      },
       body: JSON.stringify(rpcPayload),
-      signal: AbortSignal.timeout(15000),
+      timeoutMs: 15000,
     });
 
-    if (!rpcRes.ok) {
+    if (rpcRes.status >= 400) {
       const statusHints: Record<number, string> = {
         401: "认证失败 — Token 或凭据无效",
-        403: "访问被拒绝 — 账户可能已过期，或 User ID / API Key 不匹配，或服务器 IP 被限制",
+        403: "访问被拒绝 — 账户可能已过期，或 User ID / API Key 不匹配",
         429: "请求频率过高，请稍后再试",
       };
       steps.push({
@@ -154,7 +120,7 @@ export async function POST(req: NextRequest) {
       return apiSuccess({ steps, overall: "fail" });
     }
 
-    const rpcData = await rpcRes.json();
+    const rpcData = JSON.parse(rpcRes.body);
     const databases = rpcData?.result;
     if (databases) {
       const dbList = Array.isArray(databases) ? databases.slice(0, 5).join(", ") : JSON.stringify(databases).slice(0, 100);
@@ -169,13 +135,7 @@ export async function POST(req: NextRequest) {
 
   // Step 4: 关键词查询测试
   try {
-    const configValue = JSON.stringify({
-      chat: { node, lang: "zh_CN" },
-      semrush: { node, lang: "zh" },
-    });
-    cookies["GMITM_config"] = configValue;
     const cookieStr = Object.entries(cookies).map(([k, v]) => `${k}=${v}`).join("; ");
-
     const kwPayload = {
       id: 13,
       jsonrpc: "2.0",
@@ -188,7 +148,7 @@ export async function POST(req: NextRequest) {
         apiKey,
       },
     };
-    const kwRes = await fetch(RPC_URL, {
+    const kwRes = curlFetch(RPC_URL, {
       method: "POST",
       headers: {
         "user-agent": USER_AGENT,
@@ -197,20 +157,17 @@ export async function POST(req: NextRequest) {
         referer: "https://sem.3ue.co/analytics/overview/",
         accept: "application/json, text/plain, */*",
         "accept-language": "zh-CN,zh;q=0.9,en;q=0.8",
-        "sec-fetch-dest": "empty",
-        "sec-fetch-mode": "cors",
-        "sec-fetch-site": "same-origin",
         cookie: cookieStr,
       },
       body: JSON.stringify(kwPayload),
-      signal: AbortSignal.timeout(15000),
+      timeoutMs: 15000,
     });
 
-    if (!kwRes.ok) {
+    if (kwRes.status >= 400) {
       steps.push({ step: "关键词查询", status: "fail", detail: `HTTP ${kwRes.status}` });
       return apiSuccess({ steps, overall: "fail" });
     }
-    const kwData = await kwRes.json();
+    const kwData = JSON.parse(kwRes.body);
     const rows = kwData?.result || [];
     steps.push({
       step: "关键词查询",

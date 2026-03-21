@@ -1,8 +1,10 @@
 /**
  * SemRush 竞品分析客户端（移植自 sem01_client.py）
  * 通过 3UE 代理获取竞品域名的关键词、广告标题、广告描述
+ * 使用 curl 发送请求以绕过 TLS 指纹检测（Node.js fetch 的 JA3 指纹会被 3UE 拦截）
  */
 import { getSystemConfigsByPrefix } from "@/lib/system-config";
+import { execFileSync } from "child_process";
 
 const USER_AGENT =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36";
@@ -10,6 +12,62 @@ const RPC_URL = "https://sem.3ue.co/dpa/rpc?__gmitm=ayWzA3*l4EVcTpZei43sW*qRvljS
 const LOGIN_URL = "https://dash.3ue.co/api/account/login";
 const LOGIN_ORIGIN = "https://dash.3ue.co";
 const RPC_ORIGIN = "https://sem.3ue.co";
+
+// ─── curl 封装（绕过 TLS 指纹检测） ───
+
+interface CurlResponse {
+  status: number;
+  body: string;
+  cookies: Record<string, string>;
+}
+
+export function curlFetch(
+  url: string,
+  opts: { method?: string; headers?: Record<string, string>; body?: string; timeoutMs?: number } = {},
+): CurlResponse {
+  const args: string[] = ["-s", "-i", "--max-time", String(Math.ceil((opts.timeoutMs || 30000) / 1000))];
+  if (opts.method) args.push("-X", opts.method);
+  for (const [k, v] of Object.entries(opts.headers || {})) {
+    args.push("-H", `${k}: ${v}`);
+  }
+  if (opts.body) args.push("-d", opts.body);
+  args.push(url);
+
+  const raw = execFileSync("curl", args, {
+    timeout: (opts.timeoutMs || 30000) + 5000,
+    encoding: "utf-8",
+    maxBuffer: 10 * 1024 * 1024,
+  });
+
+  // 解析 HTTP 响应：头部 + 空行 + body
+  const headerEndIdx = raw.indexOf("\r\n\r\n");
+  const headerSection = headerEndIdx > 0 ? raw.slice(0, headerEndIdx) : "";
+  const body = headerEndIdx > 0 ? raw.slice(headerEndIdx + 4) : raw;
+
+  // 解析状态码（取最后一个 HTTP 状态行，处理重定向链）
+  let status = 200;
+  const statusLines = headerSection.match(/HTTP\/[\d.]+ (\d+)/g) || [];
+  if (statusLines.length > 0) {
+    const lastStatus = statusLines[statusLines.length - 1].match(/(\d+)$/);
+    if (lastStatus) status = parseInt(lastStatus[1]);
+  }
+
+  // 解析 Set-Cookie
+  const cookies: Record<string, string> = {};
+  const cookieMatches = headerSection.match(/^set-cookie:\s*(.+)$/gim) || [];
+  for (const line of cookieMatches) {
+    const val = line.replace(/^set-cookie:\s*/i, "");
+    const [kv] = val.split(";");
+    const eqIdx = kv.indexOf("=");
+    if (eqIdx > 0) {
+      const k = kv.slice(0, eqIdx).trim();
+      const v = kv.slice(eqIdx + 1).trim();
+      if (k && v) cookies[k] = v;
+    }
+  }
+
+  return { status, body, cookies };
+}
 
 // ─── 工具函数 ───
 
@@ -203,84 +261,48 @@ export class SemRushClient {
     return null;
   }
 
-  private collectCookies(res: Response) {
-    const setCookies = res.headers.getSetCookie?.() || [];
-    for (const c of setCookies) {
-      const [kv] = c.split(";");
-      const eqIdx = kv.indexOf("=");
-      if (eqIdx > 0) {
-        const k = kv.slice(0, eqIdx).trim();
-        const v = kv.slice(eqIdx + 1).trim();
-        if (k && v) this.cookies[k] = v;
-      }
-    }
-  }
-
   async login(): Promise<string> {
     const ts = Date.now();
     const url = `${LOGIN_URL}?username=${encodeURIComponent(this.creds.username)}&password=${encodeURIComponent(this.creds.password)}&ts=${ts}`;
-    const res = await fetch(url, {
+    const res = curlFetch(url, {
       headers: { "user-agent": USER_AGENT, origin: LOGIN_ORIGIN },
-      signal: AbortSignal.timeout(20000),
+      timeoutMs: 20000,
     });
-    if (!res.ok) {
+    if (res.status >= 400) {
       if (res.status === 401 || res.status === 403) {
         throw new Error("3UE 登录失败：用户名或密码错误，请在管理后台检查 SemRush 配置");
       }
       throw new Error(`3UE 登录失败（HTTP ${res.status}），请稍后再试或联系管理员`);
     }
-    this.collectCookies(res);
-    const payload = await res.json();
+    Object.assign(this.cookies, res.cookies);
+    const payload = JSON.parse(res.body);
     const token = this.extractToken(payload);
     if (!token) throw new Error(`登录成功但未找到 token`);
     this.token = token;
     this.cookies["GMITM_token"] = token;
     this.cookies["GMITM_uname"] = this.creds.username;
     this.cookies["GMITM_config"] = this.buildConfigValue();
-
-    // 访问分析页面获取完整 session cookies（3UE 可能依赖页面加载时设置的额外 cookies）
-    try {
-      const pageRes = await fetch("https://sem.3ue.co/analytics/overview/", {
-        headers: {
-          "user-agent": USER_AGENT,
-          accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-          "accept-language": "zh-CN,zh;q=0.9,en;q=0.8",
-          cookie: Object.entries(this.cookies).map(([k, v]) => `${k}=${v}`).join("; "),
-        },
-        redirect: "follow",
-        signal: AbortSignal.timeout(15000),
-      });
-      this.collectCookies(pageRes);
-      await pageRes.text();
-    } catch {
-      // 页面访问失败不阻塞流程
-    }
-
     return token;
   }
 
   private async rpc(payload: unknown): Promise<unknown> {
     if (!this.token) await this.login();
     const cookieStr = Object.entries(this.cookies).map(([k, v]) => `${k}=${v}`).join("; ");
-    const headers: Record<string, string> = {
-      "user-agent": USER_AGENT,
-      "content-type": "application/json; charset=utf-8",
-      origin: RPC_ORIGIN,
-      referer: "https://sem.3ue.co/analytics/overview/",
-      accept: "application/json, text/plain, */*",
-      "accept-language": "zh-CN,zh;q=0.9,en;q=0.8",
-      "sec-fetch-dest": "empty",
-      "sec-fetch-mode": "cors",
-      "sec-fetch-site": "same-origin",
-      cookie: cookieStr,
-    };
-    const res = await fetch(RPC_URL, {
+    const res = curlFetch(RPC_URL, {
       method: "POST",
-      headers,
+      headers: {
+        "user-agent": USER_AGENT,
+        "content-type": "application/json; charset=utf-8",
+        origin: RPC_ORIGIN,
+        referer: "https://sem.3ue.co/analytics/overview/",
+        accept: "application/json, text/plain, */*",
+        "accept-language": "zh-CN,zh;q=0.9,en;q=0.8",
+        cookie: cookieStr,
+      },
       body: JSON.stringify(payload),
-      signal: AbortSignal.timeout(30000),
+      timeoutMs: 30000,
     });
-    if (!res.ok) {
+    if (res.status >= 400) {
       const statusMessages: Record<number, string> = {
         401: "3UE 账户认证失败，请检查用户名和密码是否正确",
         403: "3UE 账户访问被拒绝，可能是账户已过期或 API Key 无效，请联系管理员检查 SemRush 配置",
@@ -291,7 +313,7 @@ export class SemRushClient {
       };
       throw new Error(statusMessages[res.status] || `3UE 服务请求失败 (HTTP ${res.status})，请稍后再试`);
     }
-    return res.json();
+    return JSON.parse(res.body);
   }
 
   async getRatesDate(domain: string): Promise<string> {
@@ -379,16 +401,16 @@ export class SemRushClient {
   async fetchFromPageUrl(pageUrl: string): Promise<{ phrase: string; volume: number }[]> {
     if (!this.token) await this.login();
     const cookieStr = Object.entries(this.cookies).map(([k, v]) => `${k}=${v}`).join("; ");
-    const res = await fetch(pageUrl, {
+    const res = curlFetch(pageUrl, {
       headers: {
         "user-agent": USER_AGENT,
         cookie: cookieStr,
         accept: "text/html,application/xhtml+xml,*/*",
       },
-      signal: AbortSignal.timeout(20000),
+      timeoutMs: 20000,
     });
-    if (!res.ok) return [];
-    const html = await res.text();
+    if (res.status >= 400) return [];
+    const html = res.body;
     const patterns = [
       /window\.__INITIAL_STATE__\s*=\s*(\{[\s\S]*?\});/,
       /window\.__data\s*=\s*(\{[\s\S]*?\});/,
