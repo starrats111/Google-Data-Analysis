@@ -4,27 +4,27 @@
 #
 # 用法：
 #   chmod +x deploy.sh
-#   ./deploy.sh          # 首次部署
-#   ./deploy.sh restart  # 重启
+#   ./deploy.sh          # 首次部署（含 git pull + 安装 + 构建 + 迁移 + 种子）
+#   ./deploy.sh restart  # 仅重启服务
+#   ./deploy.sh update   # 拉取代码 + 构建 + 重启（跳过种子数据，适合日常更新）
 
 set -e
 
 APP_DIR="$HOME/Google-Data-Analysis/crm-mvp"
+REPO_DIR="$HOME/Google-Data-Analysis"
 PORT=20050
 LOG_DIR="$APP_DIR/logs"
 
-# ─── Node.js 内存限制 ───
-# 2G 总内存，分配给 Node.js 最多 768MB
-# 剩余给 MySQL (~500MB) + 系统 (~700MB)
 export NODE_OPTIONS="--max-old-space-size=768"
 
-# ─── 颜色输出 ───
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
+RED='\033[0;31m'
 NC='\033[0m'
 
 echo -e "${GREEN}═══════════════════════════════════════${NC}"
 echo -e "${GREEN}  广告自动化发布 部署${NC}"
+echo -e "${GREEN}  模式: ${1:-full}${NC}"
 echo -e "${GREEN}═══════════════════════════════════════${NC}"
 
 cd "$APP_DIR"
@@ -35,24 +35,37 @@ TOTAL_MEM=$(free -m | awk '/^Mem:/{print $2}')
 AVAIL_MEM=$(free -m | awk '/^Mem:/{print $7}')
 echo -e "${YELLOW}系统内存: ${TOTAL_MEM}MB 总计 / ${AVAIL_MEM}MB 可用${NC}"
 
-if [ "$AVAIL_MEM" -lt 400 ]; then
-  echo -e "${YELLOW}⚠ 可用内存不足 400MB，建议先清理内存${NC}"
-  echo "  运行: sync && echo 3 > /proc/sys/vm/drop_caches"
+if [ "$AVAIL_MEM" -lt 300 ]; then
+  echo -e "${YELLOW}⚠ 内存不足，自动清理缓存...${NC}"
+  sync && echo 3 > /proc/sys/vm/drop_caches 2>/dev/null || true
+  AVAIL_MEM=$(free -m | awk '/^Mem:/{print $7}')
+  echo -e "${YELLOW}  清理后可用: ${AVAIL_MEM}MB${NC}"
 fi
 
-# ─── 安装依赖 ───
+# ─── 拉取代码（update / full 模式） ───
+if [ "$1" != "restart" ]; then
+  echo "📥 拉取最新代码..."
+  cd "$REPO_DIR"
+  git fetch origin main
+  git reset --hard origin/main
+  cd "$APP_DIR"
+fi
+
+# ─── 安装 + 构建 + 迁移 ───
 if [ "$1" != "restart" ]; then
   echo "📦 安装依赖..."
   npm ci --production --ignore-scripts 2>/dev/null || npm install --production
-  
+
   echo "🔨 构建项目..."
-  npm run build 2>&1 | tail -5
-  
-  echo "🗄️ 同步数据库..."
-  npx prisma migrate deploy 2>&1 | tail -3
-  
-  echo "🌱 初始化种子数据..."
-  npm run seed 2>&1 | tail -5
+  NODE_OPTIONS="--max-old-space-size=512" npm run build 2>&1 | tail -10
+
+  echo "🗄️  同步数据库..."
+  npx prisma migrate deploy 2>&1 | tail -5
+
+  if [ "$1" != "update" ]; then
+    echo "🌱 初始化种子数据..."
+    npm run seed 2>&1 | tail -5
+  fi
 fi
 
 # ─── 停止旧进程 ───

@@ -1,0 +1,88 @@
+name: Deploy to Production
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'crm-mvp/**'
+      - '.github/workflows/deploy.yml'
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          password: ${{ secrets.SERVER_PASSWORD }}
+          port: ${{ secrets.SERVER_PORT }}
+          timeout: 60s
+          command_timeout: 12m
+          script: |
+            set -e
+
+            APP_DIR="$HOME/Google-Data-Analysis"
+            CRM_DIR="$APP_DIR/crm-mvp"
+
+            echo "===== 1. Pull latest code ====="
+            cd "$APP_DIR"
+            git fetch origin main
+            git reset --hard origin/main
+
+            echo "===== 2. Check server resources ====="
+            AVAIL_MEM=$(free -m | awk '/^Mem:/{print $7}')
+            echo "Available memory: ${AVAIL_MEM}MB"
+            if [ "$AVAIL_MEM" -lt 300 ]; then
+              echo "Low memory, clearing cache..."
+              sync && echo 3 > /proc/sys/vm/drop_caches 2>/dev/null || true
+            fi
+
+            echo "===== 3. Install dependencies ====="
+            cd "$CRM_DIR"
+            export NODE_OPTIONS="--max-old-space-size=768"
+
+            if git diff HEAD~1 --name-only | grep -q "crm-mvp/package-lock.json"; then
+              echo "package-lock.json changed, running npm ci..."
+              npm ci --production --ignore-scripts 2>/dev/null || npm install --production
+            else
+              echo "No dependency changes, skipping npm install"
+            fi
+
+            echo "===== 4. Build ====="
+            NODE_OPTIONS="--max-old-space-size=512" npx next build 2>&1 | tail -20
+
+            echo "===== 5. Database migrations ====="
+            npx prisma migrate deploy 2>&1 | tail -5
+
+            echo "===== 6. Restart service ====="
+            if command -v pm2 &> /dev/null; then
+              pm2 restart ad-automation 2>/dev/null || pm2 start npm --name "ad-automation" --max-memory-restart "700M" -- start
+              sleep 3
+              pm2 status ad-automation
+            else
+              PID=$(lsof -ti:20050 2>/dev/null || true)
+              if [ -n "$PID" ]; then
+                kill -9 $PID 2>/dev/null || true
+                sleep 1
+              fi
+              cd "$CRM_DIR"
+              nohup npm start > logs/app.log 2>&1 &
+              echo "Started with PID: $!"
+            fi
+
+            echo "===== 7. Health check ====="
+            sleep 5
+            HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:20050/api/health 2>/dev/null || echo "000")
+            if [ "$HTTP_CODE" = "200" ]; then
+              echo "Health check PASSED (HTTP $HTTP_CODE)"
+            else
+              echo "Health check WARNING (HTTP $HTTP_CODE) - service may still be starting"
+              pm2 logs ad-automation --lines 10 --nostream 2>/dev/null || true
+            fi
+
+            echo "===== Deploy complete ====="
+            free -m | head -2
