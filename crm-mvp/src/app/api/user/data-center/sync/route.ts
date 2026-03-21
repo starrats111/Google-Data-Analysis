@@ -90,17 +90,29 @@ async function syncAdsData(
   // 2. API 同步今日数据
   if (mcc.service_account_json) {
     try {
-      const { fetchTodayCampaignData } = await import("@/lib/google-ads");
+      const { fetchTodayCampaignData, listMccChildAccounts } = await import("@/lib/google-ads");
       const credentials = {
         mcc_id: mcc.mcc_id,
         developer_token: mcc.developer_token || "",
         service_account_json: mcc.service_account_json,
       };
 
-      const cids = await prisma.mcc_cid_accounts.findMany({
+      let cids = await prisma.mcc_cid_accounts.findMany({
         where: { mcc_account_id: mcc.id, is_deleted: 0, status: "active" },
-        take: 50, // 限制单次同步 CID 数量
+        take: 50,
       });
+
+      // 如果 CID 表为空，直接从 MCC API 获取所有子账户
+      let apiDiscoveredCids: string[] = [];
+      if (cids.length === 0) {
+        try {
+          const childAccounts = await listMccChildAccounts(credentials);
+          apiDiscoveredCids = childAccounts.map((c) => c.customer_id);
+          console.log(`[Sync] CID 表为空，从 MCC API 发现 ${apiDiscoveredCids.length} 个子账户`);
+        } catch (err) {
+          console.error("[Sync] 从 MCC 获取子账户失败:", err);
+        }
+      }
 
       // ─── 批量预加载所有 campaigns ───
       const existingCampaigns = await prisma.campaigns.findMany({
@@ -196,7 +208,14 @@ async function syncAdsData(
       // ─── 全量同步所有广告系列状态（含已暂停/已移除） ───
       try {
         const { fetchAllCampaignStatuses } = await import("@/lib/google-ads");
-        const allCidIds = cids.map((c) => c.customer_id);
+        // 合并 CID 来源：数据库 CID 表 + API 发现的 CID + 已有广告系列中的 CID
+        const cidSet = new Set([
+          ...cids.map((c) => c.customer_id),
+          ...apiDiscoveredCids,
+          ...[...campaignMap.values()].map((c) => c.customer_id).filter(Boolean) as string[],
+        ]);
+        const allCidIds = [...cidSet];
+        console.log(`[Sync] 全量同步 CID 列表: ${allCidIds.length} 个`);
         const allStatuses = await fetchAllCampaignStatuses(credentials, allCidIds);
 
         for (const cs of allStatuses) {
