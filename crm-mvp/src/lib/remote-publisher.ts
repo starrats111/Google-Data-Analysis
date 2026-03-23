@@ -46,7 +46,8 @@ async function getSSHConfig() {
 
   // 优先使用上传的密钥内容，其次使用密钥路径
   if (config.keyContent) {
-    privateKey = Buffer.from(config.keyContent);
+    const normalizedKey = config.keyContent.replace(/\\n/g, '\n');
+    privateKey = Buffer.from(normalizedKey);
   } else if (config.keyPath) {
     try {
       privateKey = require("fs").readFileSync(config.keyPath);
@@ -108,6 +109,15 @@ function sftpReadFile(sftp: SFTPWrapper, path: string): Promise<string> {
 function sftpWriteFile(sftp: SFTPWrapper, path: string, content: string): Promise<void> {
   return new Promise((resolve, reject) => {
     sftp.writeFile(path, content, "utf8", (err) => {
+      if (err) reject(err);
+      else resolve();
+    });
+  });
+}
+
+function sftpWriteBuffer(sftp: SFTPWrapper, path: string, data: Buffer): Promise<void> {
+  return new Promise((resolve, reject) => {
+    sftp.writeFile(path, data, (err) => {
       if (err) reject(err);
       else resolve();
     });
@@ -546,10 +556,116 @@ async function syncToHomepageDataFile(
   }
 }
 
+// ─── 图片下载与本地化（v3.0 新增）───
+
+const MAX_IMAGES = 25;
+
+const REFERER_STRATEGIES: ((url: string) => string)[] = [
+  (url: string) => {
+    try { return new URL(url).origin + "/"; } catch { return ""; }
+  },
+  () => "",
+  () => "https://www.google.com/",
+];
+
+async function downloadImageWithRetry(
+  imageUrl: string,
+  timeoutMs = 10000,
+): Promise<{ buffer: Buffer; contentType: string } | null> {
+  for (const getReferer of REFERER_STRATEGIES) {
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), timeoutMs);
+      const referer = getReferer(imageUrl);
+      const headers: Record<string, string> = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+      };
+      if (referer) headers["Referer"] = referer;
+
+      const resp = await fetch(imageUrl, { headers, signal: controller.signal, redirect: "follow" });
+      clearTimeout(timer);
+
+      if (!resp.ok) continue;
+      const ct = resp.headers.get("content-type") || "";
+      if (!ct.startsWith("image/")) continue;
+
+      const arrayBuf = await resp.arrayBuffer();
+      if (arrayBuf.byteLength < 1024) continue;
+      return { buffer: Buffer.from(arrayBuf), contentType: ct };
+    } catch {
+      continue;
+    }
+  }
+  return null;
+}
+
+async function syncArticleImages(
+  sftp: SFTPWrapper,
+  client: Client,
+  siteRoot: string,
+  articleId: string,
+  content: string,
+): Promise<string> {
+  const imagesDir = `${siteRoot}/images/articles`;
+  await execCommand(client, `mkdir -p ${imagesDir} || sudo mkdir -p ${imagesDir}`);
+
+  const imgRegex = /<img\s[^>]*?src=["']([^"']+)["'][^>]*?\/?>/gi;
+  let match: RegExpExecArray | null;
+  const matches: { fullTag: string; url: string }[] = [];
+
+  while ((match = imgRegex.exec(content)) !== null) {
+    const url = match[1];
+    if (url.startsWith("http://") || url.startsWith("https://")) {
+      if (!url.includes("images/articles/")) {
+        matches.push({ fullTag: match[0], url });
+      }
+    }
+  }
+
+  if (matches.length === 0) return content;
+
+  let updatedContent = content;
+  let processed = 0;
+
+  for (const { fullTag, url } of matches) {
+    if (processed >= MAX_IMAGES) break;
+
+    try {
+      const result = await downloadImageWithRetry(url);
+      if (!result) continue;
+
+      const ext = result.contentType.includes("png") ? ".png"
+        : result.contentType.includes("webp") ? ".webp"
+        : result.contentType.includes("gif") ? ".gif"
+        : ".jpg";
+
+      const filename = `${articleId}_${processed}${ext}`;
+      const remotePath = `${imagesDir}/${filename}`;
+
+      await sftpWriteBuffer(sftp, remotePath, result.buffer);
+
+      const localUrl = `images/articles/${filename}`;
+      const newTag = fullTag.replace(url, localUrl);
+      updatedContent = updatedContent.replace(fullTag, newTag);
+      processed++;
+    } catch (err) {
+      console.warn(`[Publisher] 图片下载失败 (${url}):`, err);
+    }
+  }
+
+  console.log(`[Publisher] 文章 ${articleId}: 本地化 ${processed}/${matches.length} 张图片`);
+  return updatedContent;
+}
+
+function extractHeroImage(content: string): string {
+  const match = content.match(/<img\s[^>]*?src=["']([^"']+)["']/i);
+  return match ? match[1] : "";
+}
+
 export async function publishArticleToSite(
   article: ArticlePayload,
   site: SiteConfig
-): Promise<{ success: boolean; url?: string; error?: string }> {
+): Promise<{ success: boolean; url?: string; error?: string; updatedContent?: string }> {
   let client: Client | null = null;
   try {
     client = await connectSSH();
@@ -563,6 +679,31 @@ export async function publishArticleToSite(
     const detailUrl = pattern.replace("{slug}", slug);
     const isStaticHtml = !detailUrl.includes("?");
 
+    // ─── 图片本地化（v3.0）───
+    let workingContent = article.content;
+    let updatedContent: string | undefined;
+    try {
+      workingContent = await syncArticleImages(sftp, client, siteRoot, article.id, article.content);
+      if (workingContent !== article.content) {
+        updatedContent = workingContent;
+      }
+    } catch (err) {
+      console.warn("[Publisher] 图片本地化失败（不阻塞发布）:", err);
+    }
+
+    // 提取 hero image（优先从本地化后的 content 中取）
+    let heroImage = article.image || "";
+    if (!heroImage) {
+      heroImage = extractHeroImage(workingContent);
+    }
+    // 如果 hero image 已被本地化，使用本地化路径
+    if (heroImage && updatedContent && !heroImage.startsWith("images/")) {
+      const localizedHero = extractHeroImage(updatedContent);
+      if (localizedHero && localizedHero.startsWith("images/")) {
+        heroImage = localizedHero;
+      }
+    }
+
     const now = new Date();
     const dateLabel = now.toLocaleDateString("en-US", {
       timeZone: "Asia/Shanghai",
@@ -572,7 +713,7 @@ export async function publishArticleToSite(
     });
     const dateISO = now.toISOString().slice(0, 10);
 
-    const plainText = article.content.replace(/<[^>]*>/g, "");
+    const plainText = workingContent.replace(/<[^>]*>/g, "");
     const wordCount = plainText.split(/\s+/).filter(Boolean).length;
     const readTime = `${Math.max(1, Math.ceil(wordCount / 200))} min read`;
 
@@ -580,12 +721,12 @@ export async function publishArticleToSite(
     const articlesDir = `${siteRoot}/js/articles`;
     await execCommand(client, `mkdir -p ${articlesDir} || sudo mkdir -p ${articlesDir}`);
 
-    // 2. 写入文章 JSON 详情
+    // 2. 写入文章 JSON 详情（使用本地化后的 content）
     const articleJson = JSON.stringify({
       id: article.id,
       title: article.title,
       slug,
-      content: article.content,
+      content: workingContent,
       category: article.category || "General",
       date: dateLabel,
     });
@@ -602,7 +743,6 @@ export async function publishArticleToSite(
     // 构建索引条目 — 同时兼容两种字段名：
     //   旧模板用 date / image，CRM 模板用 dateISO / dateLabel / heroImage
     const excerpt = plainText.slice(0, 160).trim() + "...";
-    const heroImage = article.image || "";
     const indexEntry: Record<string, unknown> = {
       id: article.id,
       slug,
@@ -646,11 +786,11 @@ export async function publishArticleToSite(
     // 3b. 同步更新首页实际加载的数据文件（解决检测结果与首页引用不一致的问题）
     await syncToHomepageDataFile(sftp, siteRoot, dataJsPath, indexEntry, article.id);
 
-    // 4. 创建文章详情 HTML 页面（仅静态 HTML 类型，如 post-{slug}.html）
+    // 4. 创建文章详情 HTML 页面（使用本地化后的 content）
     if (isStaticHtml) {
       await createArticleHtmlPage(
         sftp, client, siteRoot,
-        { title: article.title, content: article.content },
+        { title: article.title, content: workingContent },
         detailUrl, site.domain, dateLabel,
       );
     }
@@ -693,7 +833,7 @@ export async function publishArticleToSite(
     const articleUrl = `https://${site.domain}/${detailUrl}`;
 
     client.end();
-    return { success: true, url: articleUrl };
+    return { success: true, url: articleUrl, updatedContent };
   } catch (err) {
     client?.end();
     return { success: false, error: err instanceof Error ? err.message : String(err) };

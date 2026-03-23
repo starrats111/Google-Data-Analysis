@@ -163,6 +163,7 @@ export async function POST(req: NextRequest) {
           meta_title: result.metaTitle,
           meta_description: result.metaDescription,
           keywords: analysis.keywords as any,
+          category: result.category || analysis.category || "General",
           status: "preview",
         },
       });

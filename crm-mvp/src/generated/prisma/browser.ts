@@ -138,11 +138,6 @@ export type notifications = Prisma.notificationsModel
  */
 export type notification_preferences = Prisma.notification_preferencesModel
 /**
- * Model prompt_preferences
- * 
- */
-export type prompt_preferences = Prisma.prompt_preferencesModel
-/**
  * Model ai_insights
  * 
  */

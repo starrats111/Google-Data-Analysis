@@ -536,7 +536,16 @@ export async function fetchAllTransactions(
 
       const firstBatch = parseTransactions(platform, firstPage);
       for (const t of firstBatch) {
-        if (!seen.has(t.transaction_id)) { seen.add(t.transaction_id); allTxns.push(t); }
+        if (seen.has(t.transaction_id)) {
+          const existing = allTxns.find(x => x.transaction_id === t.transaction_id);
+          if (existing) {
+            existing.commission_amount += t.commission_amount;
+            existing.order_amount += t.order_amount;
+          }
+        } else {
+          seen.add(t.transaction_id);
+          allTxns.push({ ...t });
+        }
       }
 
       const totalPages = getTxnTotalPages(firstPage, config.maxSize);
@@ -550,7 +559,16 @@ export async function fetchAllTransactions(
         if (batch.length === 0) break;
 
         for (const t of batch) {
-          if (!seen.has(t.transaction_id)) { seen.add(t.transaction_id); allTxns.push(t); }
+          if (seen.has(t.transaction_id)) {
+            const existing = allTxns.find(x => x.transaction_id === t.transaction_id);
+            if (existing) {
+              existing.commission_amount += t.commission_amount;
+              existing.order_amount += t.order_amount;
+            }
+          } else {
+            seen.add(t.transaction_id);
+            allTxns.push({ ...t });
+          }
         }
       }
     }

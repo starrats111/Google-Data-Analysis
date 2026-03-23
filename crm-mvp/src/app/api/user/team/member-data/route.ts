@@ -150,7 +150,8 @@ export const GET = withLeader(async (req: NextRequest, { user }) => {
       merchantWritten.add(merchantId);
     }
 
-    const roi = cost > 0 ? ((commission - cost) / cost) * 100 : 0;
+    const net = commission - rejectedComm;
+    const roi = cost > 0 ? ((net - cost) / cost) * 100 : 0;
 
     totalCost += cost;
     totalClicks += clicks;
@@ -174,7 +175,7 @@ export const GET = withLeader(async (req: NextRequest, { user }) => {
   campaignDetails.sort((a, b) => b.cost - a.cost);
 
   const avgCpc = totalClicks > 0 ? totalCost / totalClicks : 0;
-  const roi = totalCost > 0 ? ((totalCommissionFromTxn - totalCost) / totalCost) * 100 : 0;
+  const roi = totalCost > 0 ? ((totalCommissionFromTxn - totalRejectedFromTxn - totalCost) / totalCost) * 100 : 0;
 
   return apiSuccess(serializeData({
     user: { id: targetUser.id.toString(), username: targetUser.username, display_name: targetUser.display_name },

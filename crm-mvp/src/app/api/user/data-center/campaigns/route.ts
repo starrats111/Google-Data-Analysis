@@ -242,7 +242,7 @@ export async function GET(req: NextRequest) {
       merchantWritten.add(merchantId);
     }
 
-    const roi = cost > 0 ? Number(((approvedComm - cost) / cost).toFixed(2)) : 0;
+    const roi = cost > 0 ? Number(((commission - rejectedComm - cost) / cost).toFixed(2)) : 0;
 
     totalCost += cost;
     totalClicks += clicks;
@@ -310,7 +310,7 @@ export async function GET(req: NextRequest) {
     totalClicks,
     totalImpressions,
     avgCpc: totalClicks > 0 ? Number((totalCost / totalClicks).toFixed(4)) : 0,
-    roi: totalCost > 0 ? Number(((totalApprovedFromTxn - totalCost) / totalCost).toFixed(2)) : 0,
+    roi: totalCost > 0 ? Number(((totalCommissionFromTxn - totalRejectedFromTxn - totalCost) / totalCost).toFixed(2)) : 0,
     campaignCount: campaigns.length,
     enabledCount,
     pausedCount,

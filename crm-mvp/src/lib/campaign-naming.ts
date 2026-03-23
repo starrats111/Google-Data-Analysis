@@ -24,7 +24,7 @@ export async function generateCampaignName(
     .replace(/\s+/g, "-")
     .slice(0, 30);
 
-  const platformLabel = accountName && accountName.trim() ? accountName.trim() : platform;
+  const platformLabel = platform;
 
   const where: Record<string, unknown> = { user_id: userId, is_deleted: 0 };
   if (mccId) {

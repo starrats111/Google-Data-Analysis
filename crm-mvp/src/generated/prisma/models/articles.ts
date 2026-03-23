@@ -52,6 +52,7 @@ export type ArticlesMinAggregateOutputType = {
   content: string | null
   excerpt: string | null
   language: string | null
+  category: string | null
   status: string | null
   published_at: Date | null
   published_url: string | null
@@ -74,6 +75,7 @@ export type ArticlesMaxAggregateOutputType = {
   content: string | null
   excerpt: string | null
   language: string | null
+  category: string | null
   status: string | null
   published_at: Date | null
   published_url: string | null
@@ -98,6 +100,7 @@ export type ArticlesCountAggregateOutputType = {
   language: number
   keywords: number
   images: number
+  category: number
   status: number
   published_at: number
   published_url: number
@@ -138,6 +141,7 @@ export type ArticlesMinAggregateInputType = {
   content?: true
   excerpt?: true
   language?: true
+  category?: true
   status?: true
   published_at?: true
   published_url?: true
@@ -160,6 +164,7 @@ export type ArticlesMaxAggregateInputType = {
   content?: true
   excerpt?: true
   language?: true
+  category?: true
   status?: true
   published_at?: true
   published_url?: true
@@ -184,6 +189,7 @@ export type ArticlesCountAggregateInputType = {
   language?: true
   keywords?: true
   images?: true
+  category?: true
   status?: true
   published_at?: true
   published_url?: true
@@ -295,6 +301,7 @@ export type ArticlesGroupByOutputType = {
   language: string
   keywords: runtime.JsonValue | null
   images: runtime.JsonValue | null
+  category: string | null
   status: string
   published_at: Date | null
   published_url: string | null
@@ -342,6 +349,7 @@ export type articlesWhereInput = {
   language?: Prisma.StringFilter<"articles"> | string
   keywords?: Prisma.JsonNullableFilter<"articles">
   images?: Prisma.JsonNullableFilter<"articles">
+  category?: Prisma.StringNullableFilter<"articles"> | string | null
   status?: Prisma.StringFilter<"articles"> | string
   published_at?: Prisma.DateTimeNullableFilter<"articles"> | Date | string | null
   published_url?: Prisma.StringNullableFilter<"articles"> | string | null
@@ -366,6 +374,7 @@ export type articlesOrderByWithRelationInput = {
   language?: Prisma.SortOrder
   keywords?: Prisma.SortOrderInput | Prisma.SortOrder
   images?: Prisma.SortOrderInput | Prisma.SortOrder
+  category?: Prisma.SortOrderInput | Prisma.SortOrder
   status?: Prisma.SortOrder
   published_at?: Prisma.SortOrderInput | Prisma.SortOrder
   published_url?: Prisma.SortOrderInput | Prisma.SortOrder
@@ -394,6 +403,7 @@ export type articlesWhereUniqueInput = Prisma.AtLeast<{
   language?: Prisma.StringFilter<"articles"> | string
   keywords?: Prisma.JsonNullableFilter<"articles">
   images?: Prisma.JsonNullableFilter<"articles">
+  category?: Prisma.StringNullableFilter<"articles"> | string | null
   status?: Prisma.StringFilter<"articles"> | string
   published_at?: Prisma.DateTimeNullableFilter<"articles"> | Date | string | null
   published_url?: Prisma.StringNullableFilter<"articles"> | string | null
@@ -418,6 +428,7 @@ export type articlesOrderByWithAggregationInput = {
   language?: Prisma.SortOrder
   keywords?: Prisma.SortOrderInput | Prisma.SortOrder
   images?: Prisma.SortOrderInput | Prisma.SortOrder
+  category?: Prisma.SortOrderInput | Prisma.SortOrder
   status?: Prisma.SortOrder
   published_at?: Prisma.SortOrderInput | Prisma.SortOrder
   published_url?: Prisma.SortOrderInput | Prisma.SortOrder
@@ -450,6 +461,7 @@ export type articlesScalarWhereWithAggregatesInput = {
   language?: Prisma.StringWithAggregatesFilter<"articles"> | string
   keywords?: Prisma.JsonNullableWithAggregatesFilter<"articles">
   images?: Prisma.JsonNullableWithAggregatesFilter<"articles">
+  category?: Prisma.StringNullableWithAggregatesFilter<"articles"> | string | null
   status?: Prisma.StringWithAggregatesFilter<"articles"> | string
   published_at?: Prisma.DateTimeNullableWithAggregatesFilter<"articles"> | Date | string | null
   published_url?: Prisma.StringNullableWithAggregatesFilter<"articles"> | string | null
@@ -474,6 +486,7 @@ export type articlesCreateInput = {
   language?: string
   keywords?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   images?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  category?: string | null
   status?: string
   published_at?: Date | string | null
   published_url?: string | null
@@ -498,6 +511,7 @@ export type articlesUncheckedCreateInput = {
   language?: string
   keywords?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   images?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  category?: string | null
   status?: string
   published_at?: Date | string | null
   published_url?: string | null
@@ -522,6 +536,7 @@ export type articlesUpdateInput = {
   language?: Prisma.StringFieldUpdateOperationsInput | string
   keywords?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   images?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  category?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   status?: Prisma.StringFieldUpdateOperationsInput | string
   published_at?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
   published_url?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
@@ -546,6 +561,7 @@ export type articlesUncheckedUpdateInput = {
   language?: Prisma.StringFieldUpdateOperationsInput | string
   keywords?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   images?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  category?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   status?: Prisma.StringFieldUpdateOperationsInput | string
   published_at?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
   published_url?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
@@ -570,6 +586,7 @@ export type articlesCreateManyInput = {
   language?: string
   keywords?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   images?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  category?: string | null
   status?: string
   published_at?: Date | string | null
   published_url?: string | null
@@ -594,6 +611,7 @@ export type articlesUpdateManyMutationInput = {
   language?: Prisma.StringFieldUpdateOperationsInput | string
   keywords?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   images?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  category?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   status?: Prisma.StringFieldUpdateOperationsInput | string
   published_at?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
   published_url?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
@@ -618,6 +636,7 @@ export type articlesUncheckedUpdateManyInput = {
   language?: Prisma.StringFieldUpdateOperationsInput | string
   keywords?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   images?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  category?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   status?: Prisma.StringFieldUpdateOperationsInput | string
   published_at?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
   published_url?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
@@ -648,6 +667,7 @@ export type articlesCountOrderByAggregateInput = {
   language?: Prisma.SortOrder
   keywords?: Prisma.SortOrder
   images?: Prisma.SortOrder
+  category?: Prisma.SortOrder
   status?: Prisma.SortOrder
   published_at?: Prisma.SortOrder
   published_url?: Prisma.SortOrder
@@ -678,6 +698,7 @@ export type articlesMaxOrderByAggregateInput = {
   content?: Prisma.SortOrder
   excerpt?: Prisma.SortOrder
   language?: Prisma.SortOrder
+  category?: Prisma.SortOrder
   status?: Prisma.SortOrder
   published_at?: Prisma.SortOrder
   published_url?: Prisma.SortOrder
@@ -700,6 +721,7 @@ export type articlesMinOrderByAggregateInput = {
   content?: Prisma.SortOrder
   excerpt?: Prisma.SortOrder
   language?: Prisma.SortOrder
+  category?: Prisma.SortOrder
   status?: Prisma.SortOrder
   published_at?: Prisma.SortOrder
   published_url?: Prisma.SortOrder
@@ -734,6 +756,7 @@ export type articlesSelect<ExtArgs extends runtime.Types.Extensions.InternalArgs
   language?: boolean
   keywords?: boolean
   images?: boolean
+  category?: boolean
   status?: boolean
   published_at?: boolean
   published_url?: boolean
@@ -760,6 +783,7 @@ export type articlesSelectScalar = {
   language?: boolean
   keywords?: boolean
   images?: boolean
+  category?: boolean
   status?: boolean
   published_at?: boolean
   published_url?: boolean
@@ -772,7 +796,7 @@ export type articlesSelectScalar = {
   updated_at?: boolean
 }
 
-export type articlesOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"id" | "user_id" | "user_merchant_id" | "publish_site_id" | "title" | "slug" | "content" | "excerpt" | "language" | "keywords" | "images" | "status" | "published_at" | "published_url" | "merchant_name" | "tracking_link" | "meta_title" | "meta_description" | "is_deleted" | "created_at" | "updated_at", ExtArgs["result"]["articles"]>
+export type articlesOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"id" | "user_id" | "user_merchant_id" | "publish_site_id" | "title" | "slug" | "content" | "excerpt" | "language" | "keywords" | "images" | "category" | "status" | "published_at" | "published_url" | "merchant_name" | "tracking_link" | "meta_title" | "meta_description" | "is_deleted" | "created_at" | "updated_at", ExtArgs["result"]["articles"]>
 
 export type $articlesPayload<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = {
   name: "articles"
@@ -789,6 +813,7 @@ export type $articlesPayload<ExtArgs extends runtime.Types.Extensions.InternalAr
     language: string
     keywords: runtime.JsonValue | null
     images: runtime.JsonValue | null
+    category: string | null
     status: string
     published_at: Date | null
     published_url: string | null
@@ -1179,6 +1204,7 @@ export interface articlesFieldRefs {
   readonly language: Prisma.FieldRef<"articles", 'String'>
   readonly keywords: Prisma.FieldRef<"articles", 'Json'>
   readonly images: Prisma.FieldRef<"articles", 'Json'>
+  readonly category: Prisma.FieldRef<"articles", 'String'>
   readonly status: Prisma.FieldRef<"articles", 'String'>
   readonly published_at: Prisma.FieldRef<"articles", 'DateTime'>
   readonly published_url: Prisma.FieldRef<"articles", 'String'>

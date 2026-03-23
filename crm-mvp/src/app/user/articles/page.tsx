@@ -43,6 +43,7 @@ export default function ArticlesPage() {
   const [publishModal, setPublishModal] = useState(false);
   const [publishArticle, setPublishArticle] = useState<Article | null>(null);
   const [publishForm] = Form.useForm();
+  const [publishing, setPublishing] = useState(false);
 
   const fetchArticles = useCallback(async () => {
     setLoading(true);
@@ -76,16 +77,27 @@ export default function ArticlesPage() {
 
   const submitPublish = async () => {
     const values = await publishForm.validateFields();
-    const res = await fetch("/api/user/articles/publish-to-site", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ article_id: publishArticle?.id, site_id: values.publish_site_id }),
-    }).then((r) => r.json());
-    if (res.code === 0) {
-      message.success(`发布成功${res.data?.url ? `，访问: ${res.data.url}` : ""}`);
-      setPublishModal(false);
-      fetchArticles();
-    } else {
-      message.error(res.message);
+    setPublishing(true);
+    message.loading({ content: "正在发布，图片处理中，请耐心等待...", key: "publish", duration: 0 });
+    try {
+      const res = await fetch("/api/user/articles/publish-to-site", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ article_id: publishArticle?.id, site_id: values.publish_site_id }),
+        signal: AbortSignal.timeout(180000),
+      }).then((r) => r.json());
+      if (res.code === 0) {
+        message.success({ content: `发布成功${res.data?.url ? `，访问: ${res.data.url}` : ""}`, key: "publish" });
+        setPublishModal(false);
+        fetchArticles();
+      } else {
+        message.error({ content: res.message, key: "publish" });
+      }
+    } catch (err) {
+      const errMsg = err instanceof Error && err.name === "TimeoutError"
+        ? "发布超时，请稍后在列表中检查状态" : "发布请求失败";
+      message.error({ content: errMsg, key: "publish" });
+    } finally {
+      setPublishing(false);
     }
   };
 
@@ -231,12 +243,27 @@ export default function ArticlesPage() {
       </Modal>
 
       {/* 发布弹窗 */}
-      <Modal title="选择发布站点" open={publishModal} onOk={submitPublish} onCancel={() => setPublishModal(false)}>
+      <Modal
+        title="选择发布站点"
+        open={publishModal}
+        onOk={submitPublish}
+        onCancel={() => !publishing && setPublishModal(false)}
+        confirmLoading={publishing}
+        okText={publishing ? "发布中..." : "确认发布"}
+        cancelButtonProps={{ disabled: publishing }}
+        closable={!publishing}
+        maskClosable={!publishing}
+      >
         <Form form={publishForm} layout="vertical">
           <Form.Item name="publish_site_id" label="发布到" rules={[{ required: true, message: "请选择站点" }]}>
-            <Select options={sites.filter((s) => s.status === "active" && s.verified === 1).map((s) => ({ value: s.id, label: `${s.site_name} (${s.domain})` }))} />
+            <Select disabled={publishing} options={sites.filter((s) => s.status === "active" && s.verified === 1).map((s) => ({ value: s.id, label: `${s.site_name} (${s.domain})` }))} />
           </Form.Item>
         </Form>
+        {publishing && (
+          <div style={{ color: "#888", fontSize: 12, marginTop: 8 }}>
+            发布过程包含图片下载和本地化处理，可能需要 30-60 秒，请勿关闭此窗口。
+          </div>
+        )}
       </Modal>
     </div>
   );

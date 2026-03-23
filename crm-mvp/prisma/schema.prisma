@@ -384,6 +384,7 @@ model articles {
   language         String    @default("en") @db.VarChar(8)
   keywords         Json?
   images           Json?    // 文章配图 URL 列表
+  category         String?   @default("General") @db.VarChar(64)
   status           String    @default("generating") @db.VarChar(16)
   published_at     DateTime? @db.DateTime(0)
   published_url    String?   @db.VarChar(1024)

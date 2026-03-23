@@ -135,7 +135,7 @@ export const GET = withLeader(async (req: NextRequest, { user }) => {
     const rejected = userComm?.rejected || 0;
     const net = commission - rejected;
     const profit = net - cost;
-    const roi = cost > 0 ? ((commission - cost) / cost) * 100 : 0;
+    const roi = cost > 0 ? ((net - cost) / cost) * 100 : 0;
 
     return {
       user_id: uid,
@@ -159,7 +159,7 @@ export const GET = withLeader(async (req: NextRequest, { user }) => {
   const totalRejected = memberStats.reduce((s, m) => s + m.rejected_commission, 0);
   const totalNet = totalCommission - totalRejected;
   const totalProfit = totalNet - totalCost;
-  const avgRoi = totalCost > 0 ? ((totalCommission - totalCost) / totalCost) * 100 : 0;
+  const avgRoi = totalCost > 0 ? ((totalNet - totalCost) / totalCost) * 100 : 0;
 
   return apiSuccess(serializeData({
     team_stats: {

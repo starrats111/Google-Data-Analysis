@@ -891,7 +891,7 @@ async function triggerArticleGeneration(
       userId,
     });
 
-    // Step 5: 更新文章记录（含爬取的图片）
+    // Step 5: 更新文章记录（含爬取的图片 + category）
     await prisma.articles.update({
       where: { id: articleId },
       data: {
@@ -903,6 +903,7 @@ async function triggerArticleGeneration(
         meta_description: article.metaDescription,
         keywords: analysis.keywords as any,
         images: crawledImages.slice(0, 8) as any,
+        category: article.category || analysis.category || "General",
         status: "preview",
       },
     });

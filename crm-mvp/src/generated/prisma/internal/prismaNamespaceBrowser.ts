@@ -75,7 +75,6 @@ export const ModelName = {
   affiliate_transactions: 'affiliate_transactions',
   notifications: 'notifications',
   notification_preferences: 'notification_preferences',
-  prompt_preferences: 'prompt_preferences',
   ai_insights: 'ai_insights',
   operation_logs: 'operation_logs',
   mcc_cid_accounts: 'mcc_cid_accounts',
@@ -280,6 +279,7 @@ export const Ad_default_settingsScalarFieldEnum = {
   network_display: 'network_display',
   naming_rule: 'naming_rule',
   naming_prefix: 'naming_prefix',
+  eu_political_ad: 'eu_political_ad',
   is_deleted: 'is_deleted',
   created_at: 'created_at',
   updated_at: 'updated_at'
@@ -439,6 +439,7 @@ export const ArticlesScalarFieldEnum = {
   language: 'language',
   keywords: 'keywords',
   images: 'images',
+  category: 'category',
   status: 'status',
   published_at: 'published_at',
   published_url: 'published_url',
@@ -550,24 +551,6 @@ export const Notification_preferencesScalarFieldEnum = {
 } as const
 
 export type Notification_preferencesScalarFieldEnum = (typeof Notification_preferencesScalarFieldEnum)[keyof typeof Notification_preferencesScalarFieldEnum]
-
-
-export const Prompt_preferencesScalarFieldEnum = {
-  id: 'id',
-  user_id: 'user_id',
-  ad_writing_style: 'ad_writing_style',
-  ad_emphasis_tags: 'ad_emphasis_tags',
-  ad_extra_prompt: 'ad_extra_prompt',
-  article_type: 'article_type',
-  article_length: 'article_length',
-  article_seo_focus: 'article_seo_focus',
-  article_extra_prompt: 'article_extra_prompt',
-  is_deleted: 'is_deleted',
-  created_at: 'created_at',
-  updated_at: 'updated_at'
-} as const
-
-export type Prompt_preferencesScalarFieldEnum = (typeof Prompt_preferencesScalarFieldEnum)[keyof typeof Prompt_preferencesScalarFieldEnum]
 
 
 export const Ai_insightsScalarFieldEnum = {
@@ -913,6 +896,7 @@ export const articlesOrderByRelevanceFieldEnum = {
   content: 'content',
   excerpt: 'excerpt',
   language: 'language',
+  category: 'category',
   status: 'status',
   published_url: 'published_url',
   merchant_name: 'merchant_name',
@@ -963,17 +947,6 @@ export const notificationsOrderByRelevanceFieldEnum = {
 } as const
 
 export type notificationsOrderByRelevanceFieldEnum = (typeof notificationsOrderByRelevanceFieldEnum)[keyof typeof notificationsOrderByRelevanceFieldEnum]
-
-
-export const prompt_preferencesOrderByRelevanceFieldEnum = {
-  ad_writing_style: 'ad_writing_style',
-  ad_extra_prompt: 'ad_extra_prompt',
-  article_type: 'article_type',
-  article_length: 'article_length',
-  article_extra_prompt: 'article_extra_prompt'
-} as const
-
-export type prompt_preferencesOrderByRelevanceFieldEnum = (typeof prompt_preferencesOrderByRelevanceFieldEnum)[keyof typeof prompt_preferencesOrderByRelevanceFieldEnum]
 
 
 export const ai_insightsOrderByRelevanceFieldEnum = {

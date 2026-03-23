@@ -35,6 +35,7 @@ export type Ad_default_settingsAvgAggregateOutputType = {
   network_search: number | null
   network_partners: number | null
   network_display: number | null
+  eu_political_ad: number | null
   is_deleted: number | null
 }
 
@@ -47,6 +48,7 @@ export type Ad_default_settingsSumAggregateOutputType = {
   network_search: number | null
   network_partners: number | null
   network_display: number | null
+  eu_political_ad: number | null
   is_deleted: number | null
 }
 
@@ -62,6 +64,7 @@ export type Ad_default_settingsMinAggregateOutputType = {
   network_display: number | null
   naming_rule: string | null
   naming_prefix: string | null
+  eu_political_ad: number | null
   is_deleted: number | null
   created_at: Date | null
   updated_at: Date | null
@@ -79,6 +82,7 @@ export type Ad_default_settingsMaxAggregateOutputType = {
   network_display: number | null
   naming_rule: string | null
   naming_prefix: string | null
+  eu_political_ad: number | null
   is_deleted: number | null
   created_at: Date | null
   updated_at: Date | null
@@ -96,6 +100,7 @@ export type Ad_default_settingsCountAggregateOutputType = {
   network_display: number
   naming_rule: number
   naming_prefix: number
+  eu_political_ad: number
   is_deleted: number
   created_at: number
   updated_at: number
@@ -112,6 +117,7 @@ export type Ad_default_settingsAvgAggregateInputType = {
   network_search?: true
   network_partners?: true
   network_display?: true
+  eu_political_ad?: true
   is_deleted?: true
 }
 
@@ -124,6 +130,7 @@ export type Ad_default_settingsSumAggregateInputType = {
   network_search?: true
   network_partners?: true
   network_display?: true
+  eu_political_ad?: true
   is_deleted?: true
 }
 
@@ -139,6 +146,7 @@ export type Ad_default_settingsMinAggregateInputType = {
   network_display?: true
   naming_rule?: true
   naming_prefix?: true
+  eu_political_ad?: true
   is_deleted?: true
   created_at?: true
   updated_at?: true
@@ -156,6 +164,7 @@ export type Ad_default_settingsMaxAggregateInputType = {
   network_display?: true
   naming_rule?: true
   naming_prefix?: true
+  eu_political_ad?: true
   is_deleted?: true
   created_at?: true
   updated_at?: true
@@ -173,6 +182,7 @@ export type Ad_default_settingsCountAggregateInputType = {
   network_display?: true
   naming_rule?: true
   naming_prefix?: true
+  eu_political_ad?: true
   is_deleted?: true
   created_at?: true
   updated_at?: true
@@ -277,6 +287,7 @@ export type Ad_default_settingsGroupByOutputType = {
   network_display: number
   naming_rule: string
   naming_prefix: string
+  eu_political_ad: number
   is_deleted: number
   created_at: Date
   updated_at: Date
@@ -317,6 +328,7 @@ export type ad_default_settingsWhereInput = {
   network_display?: Prisma.IntFilter<"ad_default_settings"> | number
   naming_rule?: Prisma.StringFilter<"ad_default_settings"> | string
   naming_prefix?: Prisma.StringFilter<"ad_default_settings"> | string
+  eu_political_ad?: Prisma.IntFilter<"ad_default_settings"> | number
   is_deleted?: Prisma.IntFilter<"ad_default_settings"> | number
   created_at?: Prisma.DateTimeFilter<"ad_default_settings"> | Date | string
   updated_at?: Prisma.DateTimeFilter<"ad_default_settings"> | Date | string
@@ -334,6 +346,7 @@ export type ad_default_settingsOrderByWithRelationInput = {
   network_display?: Prisma.SortOrder
   naming_rule?: Prisma.SortOrder
   naming_prefix?: Prisma.SortOrder
+  eu_political_ad?: Prisma.SortOrder
   is_deleted?: Prisma.SortOrder
   created_at?: Prisma.SortOrder
   updated_at?: Prisma.SortOrder
@@ -355,6 +368,7 @@ export type ad_default_settingsWhereUniqueInput = Prisma.AtLeast<{
   network_display?: Prisma.IntFilter<"ad_default_settings"> | number
   naming_rule?: Prisma.StringFilter<"ad_default_settings"> | string
   naming_prefix?: Prisma.StringFilter<"ad_default_settings"> | string
+  eu_political_ad?: Prisma.IntFilter<"ad_default_settings"> | number
   is_deleted?: Prisma.IntFilter<"ad_default_settings"> | number
   created_at?: Prisma.DateTimeFilter<"ad_default_settings"> | Date | string
   updated_at?: Prisma.DateTimeFilter<"ad_default_settings"> | Date | string
@@ -372,6 +386,7 @@ export type ad_default_settingsOrderByWithAggregationInput = {
   network_display?: Prisma.SortOrder
   naming_rule?: Prisma.SortOrder
   naming_prefix?: Prisma.SortOrder
+  eu_political_ad?: Prisma.SortOrder
   is_deleted?: Prisma.SortOrder
   created_at?: Prisma.SortOrder
   updated_at?: Prisma.SortOrder
@@ -397,6 +412,7 @@ export type ad_default_settingsScalarWhereWithAggregatesInput = {
   network_display?: Prisma.IntWithAggregatesFilter<"ad_default_settings"> | number
   naming_rule?: Prisma.StringWithAggregatesFilter<"ad_default_settings"> | string
   naming_prefix?: Prisma.StringWithAggregatesFilter<"ad_default_settings"> | string
+  eu_political_ad?: Prisma.IntWithAggregatesFilter<"ad_default_settings"> | number
   is_deleted?: Prisma.IntWithAggregatesFilter<"ad_default_settings"> | number
   created_at?: Prisma.DateTimeWithAggregatesFilter<"ad_default_settings"> | Date | string
   updated_at?: Prisma.DateTimeWithAggregatesFilter<"ad_default_settings"> | Date | string
@@ -414,6 +430,7 @@ export type ad_default_settingsCreateInput = {
   network_display?: number
   naming_rule?: string
   naming_prefix?: string
+  eu_political_ad?: number
   is_deleted?: number
   created_at?: Date | string
   updated_at?: Date | string
@@ -431,6 +448,7 @@ export type ad_default_settingsUncheckedCreateInput = {
   network_display?: number
   naming_rule?: string
   naming_prefix?: string
+  eu_political_ad?: number
   is_deleted?: number
   created_at?: Date | string
   updated_at?: Date | string
@@ -448,6 +466,7 @@ export type ad_default_settingsUpdateInput = {
   network_display?: Prisma.IntFieldUpdateOperationsInput | number
   naming_rule?: Prisma.StringFieldUpdateOperationsInput | string
   naming_prefix?: Prisma.StringFieldUpdateOperationsInput | string
+  eu_political_ad?: Prisma.IntFieldUpdateOperationsInput | number
   is_deleted?: Prisma.IntFieldUpdateOperationsInput | number
   created_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updated_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
@@ -465,6 +484,7 @@ export type ad_default_settingsUncheckedUpdateInput = {
   network_display?: Prisma.IntFieldUpdateOperationsInput | number
   naming_rule?: Prisma.StringFieldUpdateOperationsInput | string
   naming_prefix?: Prisma.StringFieldUpdateOperationsInput | string
+  eu_political_ad?: Prisma.IntFieldUpdateOperationsInput | number
   is_deleted?: Prisma.IntFieldUpdateOperationsInput | number
   created_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updated_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
@@ -482,6 +502,7 @@ export type ad_default_settingsCreateManyInput = {
   network_display?: number
   naming_rule?: string
   naming_prefix?: string
+  eu_political_ad?: number
   is_deleted?: number
   created_at?: Date | string
   updated_at?: Date | string
@@ -499,6 +520,7 @@ export type ad_default_settingsUpdateManyMutationInput = {
   network_display?: Prisma.IntFieldUpdateOperationsInput | number
   naming_rule?: Prisma.StringFieldUpdateOperationsInput | string
   naming_prefix?: Prisma.StringFieldUpdateOperationsInput | string
+  eu_political_ad?: Prisma.IntFieldUpdateOperationsInput | number
   is_deleted?: Prisma.IntFieldUpdateOperationsInput | number
   created_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updated_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
@@ -516,6 +538,7 @@ export type ad_default_settingsUncheckedUpdateManyInput = {
   network_display?: Prisma.IntFieldUpdateOperationsInput | number
   naming_rule?: Prisma.StringFieldUpdateOperationsInput | string
   naming_prefix?: Prisma.StringFieldUpdateOperationsInput | string
+  eu_political_ad?: Prisma.IntFieldUpdateOperationsInput | number
   is_deleted?: Prisma.IntFieldUpdateOperationsInput | number
   created_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updated_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
@@ -539,6 +562,7 @@ export type ad_default_settingsCountOrderByAggregateInput = {
   network_display?: Prisma.SortOrder
   naming_rule?: Prisma.SortOrder
   naming_prefix?: Prisma.SortOrder
+  eu_political_ad?: Prisma.SortOrder
   is_deleted?: Prisma.SortOrder
   created_at?: Prisma.SortOrder
   updated_at?: Prisma.SortOrder
@@ -553,6 +577,7 @@ export type ad_default_settingsAvgOrderByAggregateInput = {
   network_search?: Prisma.SortOrder
   network_partners?: Prisma.SortOrder
   network_display?: Prisma.SortOrder
+  eu_political_ad?: Prisma.SortOrder
   is_deleted?: Prisma.SortOrder
 }
 
@@ -568,6 +593,7 @@ export type ad_default_settingsMaxOrderByAggregateInput = {
   network_display?: Prisma.SortOrder
   naming_rule?: Prisma.SortOrder
   naming_prefix?: Prisma.SortOrder
+  eu_political_ad?: Prisma.SortOrder
   is_deleted?: Prisma.SortOrder
   created_at?: Prisma.SortOrder
   updated_at?: Prisma.SortOrder
@@ -585,6 +611,7 @@ export type ad_default_settingsMinOrderByAggregateInput = {
   network_display?: Prisma.SortOrder
   naming_rule?: Prisma.SortOrder
   naming_prefix?: Prisma.SortOrder
+  eu_political_ad?: Prisma.SortOrder
   is_deleted?: Prisma.SortOrder
   created_at?: Prisma.SortOrder
   updated_at?: Prisma.SortOrder
@@ -599,6 +626,7 @@ export type ad_default_settingsSumOrderByAggregateInput = {
   network_search?: Prisma.SortOrder
   network_partners?: Prisma.SortOrder
   network_display?: Prisma.SortOrder
+  eu_political_ad?: Prisma.SortOrder
   is_deleted?: Prisma.SortOrder
 }
 
@@ -624,6 +652,7 @@ export type ad_default_settingsSelect<ExtArgs extends runtime.Types.Extensions.I
   network_display?: boolean
   naming_rule?: boolean
   naming_prefix?: boolean
+  eu_political_ad?: boolean
   is_deleted?: boolean
   created_at?: boolean
   updated_at?: boolean
@@ -643,12 +672,13 @@ export type ad_default_settingsSelectScalar = {
   network_display?: boolean
   naming_rule?: boolean
   naming_prefix?: boolean
+  eu_political_ad?: boolean
   is_deleted?: boolean
   created_at?: boolean
   updated_at?: boolean
 }
 
-export type ad_default_settingsOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"id" | "user_id" | "bidding_strategy" | "ecpc_enabled" | "max_cpc" | "daily_budget" | "network_search" | "network_partners" | "network_display" | "naming_rule" | "naming_prefix" | "is_deleted" | "created_at" | "updated_at", ExtArgs["result"]["ad_default_settings"]>
+export type ad_default_settingsOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"id" | "user_id" | "bidding_strategy" | "ecpc_enabled" | "max_cpc" | "daily_budget" | "network_search" | "network_partners" | "network_display" | "naming_rule" | "naming_prefix" | "eu_political_ad" | "is_deleted" | "created_at" | "updated_at", ExtArgs["result"]["ad_default_settings"]>
 
 export type $ad_default_settingsPayload<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = {
   name: "ad_default_settings"
@@ -665,6 +695,7 @@ export type $ad_default_settingsPayload<ExtArgs extends runtime.Types.Extensions
     network_display: number
     naming_rule: string
     naming_prefix: string
+    eu_political_ad: number
     is_deleted: number
     created_at: Date
     updated_at: Date
@@ -1048,6 +1079,7 @@ export interface ad_default_settingsFieldRefs {
   readonly network_display: Prisma.FieldRef<"ad_default_settings", 'Int'>
   readonly naming_rule: Prisma.FieldRef<"ad_default_settings", 'String'>
   readonly naming_prefix: Prisma.FieldRef<"ad_default_settings", 'String'>
+  readonly eu_political_ad: Prisma.FieldRef<"ad_default_settings", 'Int'>
   readonly is_deleted: Prisma.FieldRef<"ad_default_settings", 'Int'>
   readonly created_at: Prisma.FieldRef<"ad_default_settings", 'DateTime'>
   readonly updated_at: Prisma.FieldRef<"ad_default_settings", 'DateTime'>

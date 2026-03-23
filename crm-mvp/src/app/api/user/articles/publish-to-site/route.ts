@@ -33,13 +33,14 @@ export async function POST(req: NextRequest) {
     .replace(/[\s_-]+/g, "-")
     .replace(/^-+|-+$/g, "");
 
-  // SSH 推送文件到宝塔
+  // SSH 推送文件到宝塔（含图片本地化）
   const result = await publishArticleToSite(
     {
       id: String(article.id),
       title: article.title,
       slug,
       content: article.content,
+      category: article.category || "General",
     },
     {
       site_path: site.site_path,
@@ -55,7 +56,7 @@ export async function POST(req: NextRequest) {
     return apiError(`发布失败: ${result.error}`, 500);
   }
 
-  // 更新文章状态
+  // 更新文章状态 + 同步本地化 content
   await prisma.articles.update({
     where: { id: BigInt(article_id) },
     data: {
@@ -64,6 +65,7 @@ export async function POST(req: NextRequest) {
       status: "published",
       published_at: new Date(),
       published_url: result.url || null,
+      content: result.updatedContent || article.content,
     },
   });
 

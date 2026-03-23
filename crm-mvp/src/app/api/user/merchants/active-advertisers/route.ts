@@ -125,11 +125,12 @@ export const GET = withUser(async (req: NextRequest) => {
   // 佣金从 affiliate_transactions 聚合（半开区间处理 DATETIME 类型）
   const commissionAgg = umIds.length > 0
     ? await prisma.$queryRawUnsafe<
-        { user_merchant_id: bigint; user_id: bigint; total_commission: number }[]
+        { user_merchant_id: bigint; user_id: bigint; total_commission: number; rejected_commission: number }[]
       >(`
         SELECT
           user_merchant_id, user_id,
-          SUM(CAST(commission_amount AS DECIMAL(12,2))) as total_commission
+          SUM(CAST(commission_amount AS DECIMAL(12,2))) as total_commission,
+          SUM(CASE WHEN status = 'rejected' THEN CAST(commission_amount AS DECIMAL(12,2)) ELSE 0 END) as rejected_commission
         FROM affiliate_transactions
         WHERE user_merchant_id IN (${umIds.map(() => "?").join(",")}) AND is_deleted = 0
           AND transaction_time >= ? AND transaction_time < ?
@@ -138,10 +139,13 @@ export const GET = withUser(async (req: NextRequest) => {
       `, ...umIds, monthStart, nextMonth)
     : [];
 
-  const commissionByUserMerchant = new Map<string, number>();
+  const commissionByUserMerchant = new Map<string, { total: number; rejected: number }>();
   for (const r of commissionAgg) {
     const key = `${r.user_id}_${r.user_merchant_id}`;
-    commissionByUserMerchant.set(key, Number(r.total_commission || 0));
+    commissionByUserMerchant.set(key, {
+      total: Number(r.total_commission || 0),
+      rejected: Number(r.rejected_commission || 0),
+    });
   }
 
   // 汇总每个用户
@@ -157,12 +161,18 @@ export const GET = withUser(async (req: NextRequest) => {
     }
 
     let totalCommission = 0;
+    let totalRejected = 0;
     for (const umId of umIds) {
       const userId = userIdMap.get(umId);
       if (userId && userId === entry.userId) {
-        totalCommission += commissionByUserMerchant.get(`${userId}_${umId}`) || 0;
+        const c = commissionByUserMerchant.get(`${userId}_${umId}`);
+        if (c) {
+          totalCommission += c.total;
+          totalRejected += c.rejected;
+        }
       }
     }
+    const netCommission = totalCommission - totalRejected;
 
     return {
       user_id: entry.userId,
@@ -173,7 +183,7 @@ export const GET = withUser(async (req: NextRequest) => {
       total_clicks: totalClicks,
       total_impressions: totalImpressions,
       monthly_commission: totalCommission.toFixed(2),
-      roi: totalCost > 0 ? (totalCommission / totalCost).toFixed(2) : "0.00",
+      roi: totalCost > 0 ? ((netCommission - totalCost) / totalCost).toFixed(2) : "0.00",
     };
   });
 

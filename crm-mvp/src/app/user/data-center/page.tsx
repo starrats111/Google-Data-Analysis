@@ -286,7 +286,7 @@ export default function DataCenterPage() {
       render: (v: number) => <Text type={v > 0 ? "danger" : "secondary"} style={{ fontSize: 12 }}>${(v || 0).toFixed(2)}</Text>,
     },
     {
-      title: "已付佣金", dataIndex: "approved_commission", width: 80, align: "right",
+      title: "已确认佣金", dataIndex: "approved_commission", width: 80, align: "right",
       render: (v: number) => <Text style={{ fontSize: 12, color: v > 0 ? "#1890ff" : undefined }}>${(v || 0).toFixed(2)}</Text>,
     },
     {
@@ -400,7 +400,15 @@ export default function DataCenterPage() {
         </Col>
         <Col xs={12} sm={6} md={4}>
           <Card size="small" styles={{ body: { padding: "8px 12px" } }}>
-            <Statistic title="已付佣金" value={summary.totalApprovedCommission} prefix="$" precision={2} styles={{ content: { fontSize: 18, color: summary.totalApprovedCommission > 0 ? "#1890ff" : undefined } }} />
+            <Statistic title="已确认佣金" value={summary.totalApprovedCommission} prefix="$" precision={2} styles={{ content: { fontSize: 18, color: summary.totalApprovedCommission > 0 ? "#1890ff" : undefined } }} />
+          </Card>
+        </Col>
+        <Col xs={12} sm={6} md={4}>
+          <Card size="small" styles={{ body: { padding: "8px 12px" } }}>
+            <Statistic title="待审核佣金"
+              value={summary.totalCommission - summary.totalRejectedCommission - summary.totalApprovedCommission}
+              prefix="$" precision={2}
+              styles={{ content: { fontSize: 18, color: (summary.totalCommission - summary.totalRejectedCommission - summary.totalApprovedCommission) > 0 ? "#faad14" : undefined } }} />
           </Card>
         </Col>
         <Col xs={12} sm={6} md={4}>
@@ -458,7 +466,7 @@ export default function DataCenterPage() {
             { title: "总花费", dataIndex: "cost", width: 100, align: "right", render: (v: number) => <Text style={{ color: v > 0 ? "#cf1322" : undefined }}>${v.toFixed(2)}</Text> },
             { title: "总佣金", dataIndex: "commission", width: 100, align: "right", render: (v: number) => <Text style={{ color: v > 0 ? "#389e0d" : undefined }}>${v.toFixed(2)}</Text> },
             { title: "拒付佣金", dataIndex: "rejected_commission", width: 100, align: "right", render: (v: number) => <Text type={v > 0 ? "danger" : "secondary"}>${v.toFixed(2)}</Text> },
-            { title: "已付佣金", dataIndex: "approved_commission", width: 100, align: "right", render: (v: number) => <Text style={{ color: v > 0 ? "#1890ff" : undefined }}>${v.toFixed(2)}</Text> },
+            { title: "已确认佣金", dataIndex: "approved_commission", width: 100, align: "right", render: (v: number) => <Text style={{ color: v > 0 ? "#1890ff" : undefined }}>${v.toFixed(2)}</Text> },
           ]}
           summary={() => (
             <Table.Summary.Row>

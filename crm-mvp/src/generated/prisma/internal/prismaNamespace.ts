@@ -408,7 +408,6 @@ export const ModelName = {
   affiliate_transactions: 'affiliate_transactions',
   notifications: 'notifications',
   notification_preferences: 'notification_preferences',
-  prompt_preferences: 'prompt_preferences',
   ai_insights: 'ai_insights',
   operation_logs: 'operation_logs',
   mcc_cid_accounts: 'mcc_cid_accounts',
@@ -429,7 +428,7 @@ export type TypeMap<ExtArgs extends runtime.Types.Extensions.InternalArgs = runt
     omit: GlobalOmitOptions
   }
   meta: {
-    modelProps: "teams" | "users" | "ai_providers" | "ai_model_configs" | "system_configs" | "platform_connections" | "user_merchants" | "merchant_violations" | "merchant_recommendations" | "sheet_configs" | "ad_default_settings" | "holiday_calendar" | "campaigns" | "ad_groups" | "keywords" | "ad_creatives" | "publish_sites" | "site_migrations" | "articles" | "ads_daily_stats" | "google_mcc_accounts" | "affiliate_transactions" | "notifications" | "notification_preferences" | "prompt_preferences" | "ai_insights" | "operation_logs" | "mcc_cid_accounts" | "ad_policy_categories" | "merchant_policy_reviews"
+    modelProps: "teams" | "users" | "ai_providers" | "ai_model_configs" | "system_configs" | "platform_connections" | "user_merchants" | "merchant_violations" | "merchant_recommendations" | "sheet_configs" | "ad_default_settings" | "holiday_calendar" | "campaigns" | "ad_groups" | "keywords" | "ad_creatives" | "publish_sites" | "site_migrations" | "articles" | "ads_daily_stats" | "google_mcc_accounts" | "affiliate_transactions" | "notifications" | "notification_preferences" | "ai_insights" | "operation_logs" | "mcc_cid_accounts" | "ad_policy_categories" | "merchant_policy_reviews"
     txIsolationLevel: TransactionIsolationLevel
   }
   model: {
@@ -2017,72 +2016,6 @@ export type TypeMap<ExtArgs extends runtime.Types.Extensions.InternalArgs = runt
         }
       }
     }
-    prompt_preferences: {
-      payload: Prisma.$prompt_preferencesPayload<ExtArgs>
-      fields: Prisma.prompt_preferencesFieldRefs
-      operations: {
-        findUnique: {
-          args: Prisma.prompt_preferencesFindUniqueArgs<ExtArgs>
-          result: runtime.Types.Utils.PayloadToResult<Prisma.$prompt_preferencesPayload> | null
-        }
-        findUniqueOrThrow: {
-          args: Prisma.prompt_preferencesFindUniqueOrThrowArgs<ExtArgs>
-          result: runtime.Types.Utils.PayloadToResult<Prisma.$prompt_preferencesPayload>
-        }
-        findFirst: {
-          args: Prisma.prompt_preferencesFindFirstArgs<ExtArgs>
-          result: runtime.Types.Utils.PayloadToResult<Prisma.$prompt_preferencesPayload> | null
-        }
-        findFirstOrThrow: {
-          args: Prisma.prompt_preferencesFindFirstOrThrowArgs<ExtArgs>
-          result: runtime.Types.Utils.PayloadToResult<Prisma.$prompt_preferencesPayload>
-        }
-        findMany: {
-          args: Prisma.prompt_preferencesFindManyArgs<ExtArgs>
-          result: runtime.Types.Utils.PayloadToResult<Prisma.$prompt_preferencesPayload>[]
-        }
-        create: {
-          args: Prisma.prompt_preferencesCreateArgs<ExtArgs>
-          result: runtime.Types.Utils.PayloadToResult<Prisma.$prompt_preferencesPayload>
-        }
-        createMany: {
-          args: Prisma.prompt_preferencesCreateManyArgs<ExtArgs>
-          result: BatchPayload
-        }
-        delete: {
-          args: Prisma.prompt_preferencesDeleteArgs<ExtArgs>
-          result: runtime.Types.Utils.PayloadToResult<Prisma.$prompt_preferencesPayload>
-        }
-        update: {
-          args: Prisma.prompt_preferencesUpdateArgs<ExtArgs>
-          result: runtime.Types.Utils.PayloadToResult<Prisma.$prompt_preferencesPayload>
-        }
-        deleteMany: {
-          args: Prisma.prompt_preferencesDeleteManyArgs<ExtArgs>
-          result: BatchPayload
-        }
-        updateMany: {
-          args: Prisma.prompt_preferencesUpdateManyArgs<ExtArgs>
-          result: BatchPayload
-        }
-        upsert: {
-          args: Prisma.prompt_preferencesUpsertArgs<ExtArgs>
-          result: runtime.Types.Utils.PayloadToResult<Prisma.$prompt_preferencesPayload>
-        }
-        aggregate: {
-          args: Prisma.Prompt_preferencesAggregateArgs<ExtArgs>
-          result: runtime.Types.Utils.Optional<Prisma.AggregatePrompt_preferences>
-        }
-        groupBy: {
-          args: Prisma.prompt_preferencesGroupByArgs<ExtArgs>
-          result: runtime.Types.Utils.Optional<Prisma.Prompt_preferencesGroupByOutputType>[]
-        }
-        count: {
-          args: Prisma.prompt_preferencesCountArgs<ExtArgs>
-          result: runtime.Types.Utils.Optional<Prisma.Prompt_preferencesCountAggregateOutputType> | number
-        }
-      }
-    }
     ai_insights: {
       payload: Prisma.$ai_insightsPayload<ExtArgs>
       fields: Prisma.ai_insightsFieldRefs
@@ -2633,6 +2566,7 @@ export const Ad_default_settingsScalarFieldEnum = {
   network_display: 'network_display',
   naming_rule: 'naming_rule',
   naming_prefix: 'naming_prefix',
+  eu_political_ad: 'eu_political_ad',
   is_deleted: 'is_deleted',
   created_at: 'created_at',
   updated_at: 'updated_at'
@@ -2792,6 +2726,7 @@ export const ArticlesScalarFieldEnum = {
   language: 'language',
   keywords: 'keywords',
   images: 'images',
+  category: 'category',
   status: 'status',
   published_at: 'published_at',
   published_url: 'published_url',
@@ -2903,24 +2838,6 @@ export const Notification_preferencesScalarFieldEnum = {
 } as const
 
 export type Notification_preferencesScalarFieldEnum = (typeof Notification_preferencesScalarFieldEnum)[keyof typeof Notification_preferencesScalarFieldEnum]
-
-
-export const Prompt_preferencesScalarFieldEnum = {
-  id: 'id',
-  user_id: 'user_id',
-  ad_writing_style: 'ad_writing_style',
-  ad_emphasis_tags: 'ad_emphasis_tags',
-  ad_extra_prompt: 'ad_extra_prompt',
-  article_type: 'article_type',
-  article_length: 'article_length',
-  article_seo_focus: 'article_seo_focus',
-  article_extra_prompt: 'article_extra_prompt',
-  is_deleted: 'is_deleted',
-  created_at: 'created_at',
-  updated_at: 'updated_at'
-} as const
-
-export type Prompt_preferencesScalarFieldEnum = (typeof Prompt_preferencesScalarFieldEnum)[keyof typeof Prompt_preferencesScalarFieldEnum]
 
 
 export const Ai_insightsScalarFieldEnum = {
@@ -3266,6 +3183,7 @@ export const articlesOrderByRelevanceFieldEnum = {
   content: 'content',
   excerpt: 'excerpt',
   language: 'language',
+  category: 'category',
   status: 'status',
   published_url: 'published_url',
   merchant_name: 'merchant_name',
@@ -3316,17 +3234,6 @@ export const notificationsOrderByRelevanceFieldEnum = {
 } as const
 
 export type notificationsOrderByRelevanceFieldEnum = (typeof notificationsOrderByRelevanceFieldEnum)[keyof typeof notificationsOrderByRelevanceFieldEnum]
-
-
-export const prompt_preferencesOrderByRelevanceFieldEnum = {
-  ad_writing_style: 'ad_writing_style',
-  ad_extra_prompt: 'ad_extra_prompt',
-  article_type: 'article_type',
-  article_length: 'article_length',
-  article_extra_prompt: 'article_extra_prompt'
-} as const
-
-export type prompt_preferencesOrderByRelevanceFieldEnum = (typeof prompt_preferencesOrderByRelevanceFieldEnum)[keyof typeof prompt_preferencesOrderByRelevanceFieldEnum]
 
 
 export const ai_insightsOrderByRelevanceFieldEnum = {
@@ -3565,7 +3472,6 @@ export type GlobalOmitConfig = {
   affiliate_transactions?: Prisma.affiliate_transactionsOmit
   notifications?: Prisma.notificationsOmit
   notification_preferences?: Prisma.notification_preferencesOmit
-  prompt_preferences?: Prisma.prompt_preferencesOmit
   ai_insights?: Prisma.ai_insightsOmit
   operation_logs?: Prisma.operation_logsOmit
   mcc_cid_accounts?: Prisma.mcc_cid_accountsOmit
