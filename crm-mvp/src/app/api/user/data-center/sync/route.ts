@@ -694,19 +694,13 @@ async function syncTransactionsInline(userId: bigint) {
         if (r.error) errors.push(`${label}: ${r.error}`);
         if (r.transactions.length === 0) continue;
 
-        // 去重
-        const grouped = new Map<string, (typeof r.transactions)[0]>();
-        for (const txn of r.transactions) {
-          if (!txn.transaction_id) continue;
-          const existing = grouped.get(txn.transaction_id);
-          if (existing) {
-            existing.commission_amount = (existing.commission_amount || 0) + (txn.commission_amount || 0);
-            existing.order_amount = (existing.order_amount || 0) + (txn.order_amount || 0);
-          } else {
-            grouped.set(txn.transaction_id, { ...txn });
-          }
-        }
-        const dedupedTxns = [...grouped.values()];
+        const dedupedTxns = r.transactions.filter((t) => !!t.transaction_id);
+
+        // 诊断日志：打印 API 拉取总览，帮助验证佣金准确性
+        const apiTotalComm = dedupedTxns.reduce((s, t) => s + (t.commission_amount || 0), 0);
+        const apiTotalOrder = dedupedTxns.reduce((s, t) => s + (t.order_amount || 0), 0);
+        const zeroCommCount = dedupedTxns.filter((t) => t.commission_amount === 0 && t.order_amount > 0).length;
+        console.log(`[SyncDiag] ${label}: ${dedupedTxns.length} 条交易, 总佣金=$${apiTotalComm.toFixed(2)}, 总订单额=$${apiTotalOrder.toFixed(2)}, 零佣金但有订单额=${zeroCommCount} 条`);
 
         // 自动创建缺失的 user_merchants
         for (const txn of dedupedTxns) {

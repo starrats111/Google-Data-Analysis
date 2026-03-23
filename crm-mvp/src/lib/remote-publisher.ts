@@ -570,7 +570,7 @@ const REFERER_STRATEGIES: ((url: string) => string)[] = [
 
 async function downloadImageWithRetry(
   imageUrl: string,
-  timeoutMs = 10000,
+  timeoutMs = 15000,
 ): Promise<{ buffer: Buffer; contentType: string } | null> {
   for (const getReferer of REFERER_STRATEGIES) {
     try {
@@ -579,6 +579,7 @@ async function downloadImageWithRetry(
       const referer = getReferer(imageUrl);
       const headers: Record<string, string> = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "image/webp,image/apng,image/*,*/*;q=0.8",
       };
       if (referer) headers["Referer"] = referer;
 
@@ -590,7 +591,7 @@ async function downloadImageWithRetry(
       if (!ct.startsWith("image/")) continue;
 
       const arrayBuf = await resp.arrayBuffer();
-      if (arrayBuf.byteLength < 1024) continue;
+      if (arrayBuf.byteLength < 100) continue;
       return { buffer: Buffer.from(arrayBuf), contentType: ct };
     } catch {
       continue;
@@ -609,15 +610,17 @@ async function syncArticleImages(
   const imagesDir = `${siteRoot}/images/articles`;
   await execCommand(client, `mkdir -p ${imagesDir} || sudo mkdir -p ${imagesDir}`);
 
-  const imgRegex = /<img\s[^>]*?src=["']([^"']+)["'][^>]*?\/?>/gi;
+  // 匹配 src 和 data-src 属性中的外链图片
+  const imgRegex = /<img\s[^>]*?(?:src|data-src)=["']([^"']+)["'][^>]*?\/?>/gi;
   let match: RegExpExecArray | null;
-  const matches: { fullTag: string; url: string }[] = [];
+  const matches: { fullTag: string; url: string; attr: string }[] = [];
 
   while ((match = imgRegex.exec(content)) !== null) {
     const url = match[1];
     if (url.startsWith("http://") || url.startsWith("https://")) {
       if (!url.includes("images/articles/")) {
-        matches.push({ fullTag: match[0], url });
+        const attrMatch = match[0].match(/\b(src|data-src)=["']/);
+        matches.push({ fullTag: match[0], url, attr: attrMatch?.[1] || "src" });
       }
     }
   }
@@ -626,13 +629,18 @@ async function syncArticleImages(
 
   let updatedContent = content;
   let processed = 0;
+  let failed = 0;
 
-  for (const { fullTag, url } of matches) {
+  for (const { fullTag, url, attr } of matches) {
     if (processed >= MAX_IMAGES) break;
 
     try {
       const result = await downloadImageWithRetry(url);
-      if (!result) continue;
+      if (!result) {
+        failed++;
+        console.warn(`[Publisher] 图片下载失败，保留原 URL: ${url.slice(0, 80)}`);
+        continue;
+      }
 
       const ext = result.contentType.includes("png") ? ".png"
         : result.contentType.includes("webp") ? ".webp"
@@ -645,21 +653,29 @@ async function syncArticleImages(
       await sftpWriteBuffer(sftp, remotePath, result.buffer);
 
       const localUrl = `images/articles/${filename}`;
-      const newTag = fullTag.replace(url, localUrl);
+      let newTag = fullTag.replace(url, localUrl);
+      // 如果原标签用的是 data-src，也将其转为 src 确保可见
+      if (attr === "data-src") {
+        newTag = newTag.replace("data-src=", "src=");
+      }
       updatedContent = updatedContent.replace(fullTag, newTag);
       processed++;
     } catch (err) {
-      console.warn(`[Publisher] 图片下载失败 (${url}):`, err);
+      failed++;
+      console.warn(`[Publisher] 图片处理异常 (${url.slice(0, 60)}):`, err);
     }
   }
 
-  console.log(`[Publisher] 文章 ${articleId}: 本地化 ${processed}/${matches.length} 张图片`);
+  console.log(`[Publisher] 文章 ${articleId}: 本地化 ${processed}/${matches.length} 张图片` + (failed > 0 ? ` (${failed} 张失败)` : ""));
   return updatedContent;
 }
 
 function extractHeroImage(content: string): string {
-  const match = content.match(/<img\s[^>]*?src=["']([^"']+)["']/i);
-  return match ? match[1] : "";
+  // 优先匹配 src，兜底匹配 data-src
+  const srcMatch = content.match(/<img\s[^>]*?src=["']([^"']+)["']/i);
+  if (srcMatch) return srcMatch[1];
+  const dataSrcMatch = content.match(/<img\s[^>]*?data-src=["']([^"']+)["']/i);
+  return dataSrcMatch ? dataSrcMatch[1] : "";
 }
 
 export async function publishArticleToSite(

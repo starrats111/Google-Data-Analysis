@@ -396,16 +396,29 @@ async function callTxnApi(
 }
 
 /**
- * 解析各种格式的时间戳为 ISO 字符串（保留 Z 后缀避免二次 new Date 时发生时区偏移）
+ * 解析各种格式的时间戳为 ISO 字符串。
+ * 关键修复：无时区后缀的日期字符串（如 "2026-03-23 15:30:00"）
+ * 强制视为 UTC，避免被 new Date() 按服务器本地时区（UTC+8）解析导致偏移。
  */
 function parseTimestamp(raw: unknown): string {
   if (!raw) return new Date().toISOString();
-  const s = String(raw);
+  const s = String(raw).trim();
   // Unix 时间戳（秒）
   if (/^\d{10}$/.test(s)) return new Date(Number(s) * 1000).toISOString();
   // Unix 时间戳（毫秒）
   if (/^\d{13}$/.test(s)) return new Date(Number(s)).toISOString();
-  // ISO / 标准日期字符串
+  // 已有时区标识（Z / +HH:MM / -HH:MM）→ 直接解析
+  if (/[Zz]$/.test(s) || /[+-]\d{2}:\d{2}$/.test(s)) {
+    const d = new Date(s);
+    if (!isNaN(d.getTime())) return d.toISOString();
+  }
+  // "YYYY-MM-DD HH:MM:SS" 或 "YYYY-MM-DDTHH:MM:SS"（无时区）→ 强制 UTC
+  const utcMatch = s.match(/^(\d{4}-\d{2}-\d{2})[\sT](\d{2}:\d{2}:\d{2})$/);
+  if (utcMatch) {
+    const d = new Date(`${utcMatch[1]}T${utcMatch[2]}Z`);
+    if (!isNaN(d.getTime())) return d.toISOString();
+  }
+  // 其他格式兜底
   const d = new Date(s);
   if (!isNaN(d.getTime())) return d.toISOString();
   return s;
@@ -427,13 +440,61 @@ function normalizeTxnStatus(s: string): string {
   return TXN_STATUS_MAP[lower] || "pending";
 }
 
+/**
+ * 从多个候选字段中提取第一个有效的非零数值。
+ * 修复 `||` 链对 "0.00" 等 truthy 字符串的短路问题：
+ *   旧代码: item.sale_comm || item.commission → "0.00" 是 truthy，后续字段被跳过
+ *   新代码: 逐个尝试，优先取非零值，全为零时返回 0
+ */
+function pickNumericField(...candidates: unknown[]): number {
+  for (const c of candidates) {
+    if (c == null) continue;
+    const n = parseFloat(String(c));
+    if (!isNaN(n) && n !== 0) return n;
+  }
+  for (const c of candidates) {
+    if (c == null) continue;
+    const n = parseFloat(String(c));
+    if (!isNaN(n)) return n;
+  }
+  return 0;
+}
+
+let _diagLogged = new Set<string>();
+
 function parseTransactions(platform: string, data: Record<string, unknown>): PlatformTransaction[] {
   const root = (data.data || data) as Record<string, unknown>;
   const list = (root.list || root.transactions || root.items || []) as Record<string, unknown>[];
   if (!Array.isArray(list)) return [];
 
+  // 每个平台只打印一次首条交易的原始字段（诊断用）
+  if (list.length > 0 && !_diagLogged.has(platform)) {
+    _diagLogged.add(platform);
+    const sample = list[0] as Record<string, unknown>;
+    const commFields: Record<string, string> = {};
+    for (const [k, v] of Object.entries(sample)) {
+      const kl = k.toLowerCase();
+      if (["comm", "amount", "sale", "cashback", "cost", "price", "revenue", "fee", "payout", "earning"].some(w => kl.includes(w))) {
+        commFields[k] = `${JSON.stringify(v)} (${typeof v})`;
+      }
+    }
+    console.log(`[TxnDiag] ${platform} 首条交易金额相关字段:`, JSON.stringify(commFields));
+
+    // 模拟旧逻辑对比
+    const oldComm = parseFloat(String(
+      sample.sale_comm || sample.saleComm || sample.commission_amount || sample.commission ||
+      sample.saleCommission || sample.cashback || "0"
+    )) || 0;
+    const newComm = pickNumericField(
+      sample.sale_comm, sample.saleComm, sample.commission_amount, sample.commission,
+      sample.saleCommission, sample.cashback
+    );
+    if (oldComm !== newComm) {
+      console.log(`[TxnDiag] ★★★ ${platform} Bug1 确认! 旧逻辑=${oldComm}, 新逻辑=${newComm}, 差=${newComm - oldComm}`);
+    }
+  }
+
   return list.map((item) => {
-    // 交易 ID
     const txnId = String(
       item.order_id || item.transaction_id || item.collabgrowId || item.orderId ||
       item.linkbux_id || item.creatorflare_id || item.brandsparkhub_id ||
@@ -445,7 +506,6 @@ function parseTransactions(platform: string, data: Record<string, unknown>): Pla
       item.advertiser_name || item.brand || item.name || ""
     );
 
-    // 商家 ID (MID) — 仅接受纯数字，与旧平台 isdigit() 保持一致
     const midCandidates = platform === "LH"
       ? [item.mcid, item.mid, item.m_id, item.brand_id, item.merchant_id, item.merchantId, item.advertiser_id]
       : [item.mid, item.m_id, item.merchant_id, item.merchantId, item.brand_id, item.advertiser_id];
@@ -457,20 +517,17 @@ function parseTransactions(platform: string, data: Record<string, unknown>): Pla
       }
     }
 
-    // 金额
-    const orderAmount = parseFloat(String(
-      item.sale_amount || item.saleAmount || item.order_amount || item.amount || "0"
-    )) || 0;
+    const orderAmount = pickNumericField(
+      item.sale_amount, item.saleAmount, item.order_amount, item.amount
+    );
 
-    const commissionAmount = parseFloat(String(
-      item.sale_comm || item.saleComm || item.commission_amount || item.commission ||
-      item.saleCommission || item.cashback || "0"
-    )) || 0;
+    const commissionAmount = pickNumericField(
+      item.sale_comm, item.saleComm, item.commission_amount, item.commission,
+      item.saleCommission, item.cashback
+    );
 
-    // 状态
     const rawStatus = String(item.status || item.raw_status || "pending");
 
-    // 时间
     const txnTime = parseTimestamp(
       item.order_time || item.orderTime || item.transaction_time || item.report_time || item.created_at
     );
@@ -510,18 +567,35 @@ export async function fetchAllTransactions(
   if (!config) return { transactions: [], error: `不支持的平台交易 API: ${platform}` };
 
   const allTxns: PlatformTransaction[] = [];
-  const seen = new Set<string>();
+  const txnIndex = new Map<string, number>(); // transaction_id → index in allTxns
 
-  // RW/LB 有 62 天限制，LH 数据量大，按月分段拉取
   const maxDays = (platform === "RW" || platform === "LB") ? 60 : 90;
   const dateChunks = splitDateRange(startDate, endDate, maxDays);
+
+  const mergeTxn = (t: PlatformTransaction) => {
+    const idx = txnIndex.get(t.transaction_id);
+    if (idx !== undefined) {
+      const existing = allTxns[idx];
+      // 相同金额 → 分页重复，用最新状态覆盖即可
+      if (existing.commission_amount === t.commission_amount && existing.order_amount === t.order_amount) {
+        if (t.status !== existing.status) existing.status = t.status;
+        if (t.raw_status !== existing.raw_status) existing.raw_status = t.raw_status;
+        return;
+      }
+      // 不同金额 → 同一订单的不同子项，累加
+      existing.commission_amount += t.commission_amount;
+      existing.order_amount += t.order_amount;
+    } else {
+      txnIndex.set(t.transaction_id, allTxns.length);
+      allTxns.push({ ...t });
+    }
+  };
 
   try {
     for (const chunk of dateChunks) {
       const firstPage = await callTxnApi(config, token, chunk.start, chunk.end, 1);
       const code = String((firstPage as Record<string, unknown>).code ?? (firstPage as Record<string, unknown>).status ? ((firstPage as any).status?.code ?? "0") : "0");
 
-      // CollabGlow/PM/CF 用 code "0"，RW/LH/LB 用 status.code 0
       const statusCode = (firstPage as any).status?.code;
       if (statusCode !== undefined && statusCode !== 0 && String(statusCode) !== "0") {
         const msg = String((firstPage as any).status?.msg || "API 错误");
@@ -535,18 +609,7 @@ export async function fetchAllTransactions(
       }
 
       const firstBatch = parseTransactions(platform, firstPage);
-      for (const t of firstBatch) {
-        if (seen.has(t.transaction_id)) {
-          const existing = allTxns.find(x => x.transaction_id === t.transaction_id);
-          if (existing) {
-            existing.commission_amount += t.commission_amount;
-            existing.order_amount += t.order_amount;
-          }
-        } else {
-          seen.add(t.transaction_id);
-          allTxns.push({ ...t });
-        }
-      }
+      for (const t of firstBatch) mergeTxn(t);
 
       const totalPages = getTxnTotalPages(firstPage, config.maxSize);
 
@@ -558,18 +621,7 @@ export async function fetchAllTransactions(
         const batch = parseTransactions(platform, pageData);
         if (batch.length === 0) break;
 
-        for (const t of batch) {
-          if (seen.has(t.transaction_id)) {
-            const existing = allTxns.find(x => x.transaction_id === t.transaction_id);
-            if (existing) {
-              existing.commission_amount += t.commission_amount;
-              existing.order_amount += t.order_amount;
-            }
-          } else {
-            seen.add(t.transaction_id);
-            allTxns.push({ ...t });
-          }
-        }
+        for (const t of batch) mergeTxn(t);
       }
     }
 
