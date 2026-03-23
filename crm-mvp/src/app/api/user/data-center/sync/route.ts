@@ -708,19 +708,6 @@ async function syncTransactionsInline(userId: bigint) {
           }
         }
 
-        // 清理旧格式 transaction_id：使用 collabgrow_id 等 hex32 后，删除残留的旧 order_id 记录
-        if (dedupedTxns.length > 0 && /^[0-9a-f]{32}$/i.test(dedupedTxns[0].transaction_id)) {
-          try {
-            const cleaned = await prisma.$executeRawUnsafe(
-              `UPDATE \`affiliate_transactions\` SET is_deleted = 1 WHERE user_id = ? AND platform = ? AND is_deleted = 0 AND transaction_id NOT REGEXP '^[0-9a-f]{32}$'`,
-              Number(userId), platform
-            );
-            if (typeof cleaned === "number" && cleaned > 0) {
-              console.log(`[Sync] ${label}: 清理 ${cleaned} 条旧格式交易记录`);
-            }
-          } catch { /* non-critical */ }
-        }
-
         // 批量 upsert 交易
         for (let i = 0; i < dedupedTxns.length; i += 50) {
           const batch = dedupedTxns.slice(i, i + 50);
