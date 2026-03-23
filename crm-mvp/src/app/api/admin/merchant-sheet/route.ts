@@ -20,9 +20,15 @@ export async function GET(req: NextRequest) {
     const cfg = await prisma.sheet_configs.findFirst({
       where: { config_type: "merchant_sheet", is_deleted: 0 },
     });
+    let sa_email: string | null = null;
+    try {
+      const { getServiceAccountEmail } = await import("@/lib/google-sheets-auth");
+      sa_email = await getServiceAccountEmail();
+    } catch { /* ignore */ }
     return apiSuccess({
       sheet_url: cfg?.sheet_url || "",
       last_synced_at: cfg?.last_synced_at?.toISOString() || null,
+      sa_email,
     });
   }
 

@@ -6,13 +6,13 @@ import { syncFromSheet } from "@/lib/sheet-sync";
 import { cacheDelete } from "@/lib/cache";
 import { todayCST, yesterdayCST, nowCST } from "@/lib/date-utils";
 
+const HISTORY_START = "2025-11-01";
+
 /**
  * POST /api/user/data-center/sync
  *
- * 2核2G 优化：
- * - 批量查询代替循环内单条查询（消除 N+1）
- * - 用 $transaction 批量写入
- * - 限制单次同步数据量
+ * 统一同步入口：广告数据 + 联盟交易，一键完成
+ * 首次同步自动拉取 2025-11-01 起的历史数据
  */
 export async function POST(req: NextRequest) {
   const user = getUserFromRequest(req);
@@ -43,13 +43,9 @@ export async function POST(req: NextRequest) {
   await claimLinkedMerchants(userId);
   await linkTransactionsToMerchants(userId);
 
+  // type=all 时同步联盟交易（合并原来独立的 sync-transactions 功能）
   if (type === "all" || type === "platform") {
-    const thirtyDaysAgo = nowCST().subtract(30, "day").toDate();
-    await prisma.ads_daily_stats.updateMany({
-      where: { user_id: userId, date: { gte: thirtyDaysAgo } },
-      data: { commission: 0, rejected_commission: 0, orders: 0 },
-    });
-    results.platform = await syncPlatformData(userId);
+    results.transactions = await syncTransactionsInline(userId);
   }
 
   // 清除相关缓存
@@ -84,7 +80,9 @@ async function fetchExchangeRate(currency: string): Promise<number> {
 }
 
 /**
- * 广告数据同步 — 批量操作版
+ * 广告数据同步
+ * 首次同步：拉取 2025-11-01 起全部历史数据（Sheet + Google Ads API 按日期范围）
+ * 后续同步：Sheet 近31天 + Google Ads API 今日
  */
 async function syncAdsData(
   mcc: { id: bigint; mcc_id: string; sheet_url: string | null; service_account_json: string | null; developer_token: string | null; currency: string },
@@ -98,10 +96,27 @@ async function syncAdsData(
 
   const exchangeRate = await fetchExchangeRate(mcc.currency);
 
+  // 检测是否首次同步：该 MCC 在 ads_daily_stats 中是否有数据
+  const existingStatsCount = await prisma.ads_daily_stats.count({
+    where: {
+      user_id: userId,
+      campaign_id: {
+        in: (await prisma.campaigns.findMany({
+          where: { user_id: userId, mcc_id: mcc.id, is_deleted: 0 },
+          select: { id: true },
+        })).map(c => c.id),
+      },
+    },
+  });
+  const isFirstSync = existingStatsCount === 0;
+
   // 1. Sheet 同步
   if (mcc.sheet_url) {
-    const startStr = nowCST().subtract(31, "day").format("YYYY-MM-DD");
+    const startStr = isFirstSync
+      ? HISTORY_START
+      : nowCST().subtract(31, "day").format("YYYY-MM-DD");
 
+    console.log(`[Sync] Sheet 同步范围: ${startStr} → ${yesterdayStr} (${isFirstSync ? "首次-全量" : "增量"})`);
     const sheetData = await syncFromSheet(mcc.sheet_url, startStr, yesterdayStr);
     if (sheetData.success && sheetData.rows.length > 0) {
       sheetResult = await upsertSheetRowsBatch(sheetData.rows, mcc.id, userId, exchangeRate);
@@ -112,10 +127,10 @@ async function syncAdsData(
     sheetResult.message = "未配置 Sheet URL";
   }
 
-  // 2. API 同步今日数据
+  // 2. Google Ads API 同步
   if (mcc.service_account_json) {
     try {
-      const { fetchTodayCampaignData, listMccChildAccounts } = await import("@/lib/google-ads");
+      const { fetchTodayCampaignData, fetchCampaignDataByDateRange, listMccChildAccounts } = await import("@/lib/google-ads");
       const credentials = {
         mcc_id: mcc.mcc_id,
         developer_token: mcc.developer_token || "",
@@ -127,7 +142,6 @@ async function syncAdsData(
         take: 50,
       });
 
-      // 如果 CID 表为空，直接从 MCC API 获取所有子账户
       let apiDiscoveredCids: string[] = [];
       if (cids.length === 0) {
         try {
@@ -139,13 +153,11 @@ async function syncAdsData(
         }
       }
 
-      // ─── 批量预加载所有 campaigns ───
       const existingCampaigns = await prisma.campaigns.findMany({
         where: { user_id: userId, mcc_id: mcc.id, is_deleted: 0 },
       });
       const campaignMap = new Map(existingCampaigns.map((c) => [c.google_campaign_id, c]));
 
-      // 预加载商家索引，用于关联 campaign 与 merchant
       const apiMerchants = await prisma.user_merchants.findMany({
         where: { user_id: userId, is_deleted: 0 },
         select: { id: true, platform: true, merchant_id: true },
@@ -156,7 +168,60 @@ async function syncAdsData(
 
       let totalInserted = 0, totalUpdated = 0;
 
-      // ─── 并行拉取所有 CID 数据（3 个并发） ───
+      // ─── 首次同步：拉取历史数据（按日期范围） ───
+      if (isFirstSync && cids.length > 0) {
+        console.log(`[Sync] 首次同步：拉取 ${HISTORY_START} → ${yesterdayStr} 的历史数据`);
+        const CID_CONCURRENCY = 2; // 首次同步降低并发，保护服务器
+        for (let ci = 0; ci < cids.length; ci += CID_CONCURRENCY) {
+          const batch = cids.slice(ci, ci + CID_CONCURRENCY);
+          for (const cid of batch) {
+            try {
+              const historyData = await fetchCampaignDataByDateRange(
+                credentials, cid.customer_id, HISTORY_START, yesterdayStr
+              );
+              console.log(`[Sync] CID ${cid.customer_id} 历史数据: ${historyData.length} 条`);
+
+              for (const cd of historyData) {
+                let campaign = campaignMap.get(cd.campaign_id);
+                if (!campaign) {
+                  const parsed = parseCampaignName(cd.campaign_name);
+                  const merchantId = parsed ? (apiMerchantIndex.get(`${parsed.platform}_${parsed.mid}`) || BigInt(0)) : BigInt(0);
+                  campaign = await prisma.campaigns.create({
+                    data: {
+                      user_id: userId, user_merchant_id: merchantId,
+                      google_campaign_id: cd.campaign_id, mcc_id: mcc.id,
+                      customer_id: cd.customer_id, campaign_name: cd.campaign_name,
+                      daily_budget: cd.budget_dollars, target_country: "US",
+                      google_status: cd.campaign_status, last_google_sync_at: new Date(),
+                    },
+                  });
+                  campaignMap.set(cd.campaign_id, campaign);
+                }
+
+                const dateObj = new Date(cd.date);
+                const statsData = {
+                  budget: Number((cd.budget_dollars * exchangeRate).toFixed(2)),
+                  cost: Number((cd.cost_dollars * exchangeRate).toFixed(2)),
+                  clicks: cd.clicks, impressions: cd.impressions,
+                  cpc: Number((cd.cpc_dollars * exchangeRate).toFixed(4)),
+                  conversions: cd.conversions, data_source: "api" as const,
+                };
+
+                await prisma.ads_daily_stats.upsert({
+                  where: { uk_campaign_date: { campaign_id: campaign.id, date: dateObj } },
+                  update: statsData,
+                  create: { user_id: userId, user_merchant_id: BigInt(0), campaign_id: campaign.id, date: dateObj, ...statsData },
+                });
+                totalInserted++;
+              }
+            } catch (err) {
+              console.error(`[Sync] CID ${cid.customer_id} 历史同步失败:`, err);
+            }
+          }
+        }
+      }
+
+      // ─── 常规同步：拉取今日数据 ───
       const cidDataMap = new Map<string, Awaited<ReturnType<typeof fetchTodayCampaignData>>>();
       const CID_CONCURRENCY = 3;
       for (let ci = 0; ci < cids.length; ci += CID_CONCURRENCY) {
@@ -174,7 +239,6 @@ async function syncAdsData(
         for (const r of results) cidDataMap.set(r.id, r.data);
       }
 
-      // ─── 预加载今日 daily_stats（消除循环内 findFirst） ───
       const todayDate = new Date(todayStr);
       const existingTodayStats = await prisma.ads_daily_stats.findMany({
         where: { user_id: userId, date: todayDate, data_source: "api" },
@@ -182,7 +246,6 @@ async function syncAdsData(
       });
       const todayStatsMap = new Map(existingTodayStats.map(s => [String(s.campaign_id), s.id]));
 
-      // ─── 顺序处理（维护 campaignMap 一致性）───
       for (const cid of cids) {
         const campaignData = cidDataMap.get(cid.customer_id) || [];
         if (campaignData.length === 0) continue;
@@ -238,7 +301,7 @@ async function syncAdsData(
         }
       }
 
-      // ─── 全量同步所有广告系列状态（含已暂停/已移除）— 批量操作 ───
+      // ─── 全量同步所有广告系列状态 ───
       try {
         const { fetchAllCampaignStatuses } = await import("@/lib/google-ads");
         const cidSet = new Set([
@@ -250,7 +313,6 @@ async function syncAdsData(
         console.log(`[Sync] 全量同步 CID 列表: ${allCidIds.length} 个`);
         const allStatuses = await fetchAllCampaignStatuses(credentials, allCidIds);
 
-        // 分离更新和创建操作
         const statusUpdateOps: (() => Promise<unknown>)[] = [];
         const statusCreateOps: Array<{ cs: typeof allStatuses[0]; merchantId: bigint }> = [];
 
@@ -270,12 +332,10 @@ async function syncAdsData(
           }
         }
 
-        // 批量执行更新（每 50 条并发）
         for (let i = 0; i < statusUpdateOps.length; i += 50) {
           await Promise.all(statusUpdateOps.slice(i, i + 50).map(fn => fn()));
         }
 
-        // 批量创建新广告系列（每 30 条并发）
         for (let i = 0; i < statusCreateOps.length; i += 30) {
           const batch = statusCreateOps.slice(i, i + 30);
           const results = await Promise.all(batch.map(({ cs, merchantId }) =>
@@ -298,7 +358,7 @@ async function syncAdsData(
         console.error("全量状态同步失败:", err);
       }
 
-      apiResult = { inserted: totalInserted, updated: totalUpdated, message: "API 同步完成" };
+      apiResult = { inserted: totalInserted, updated: totalUpdated, message: `API 同步完成${isFirstSync ? "（含历史数据）" : ""}` };
     } catch (err) {
       apiResult.message = `API 同步失败: ${err instanceof Error ? err.message : String(err)}`;
     }
@@ -458,6 +518,9 @@ async function linkCampaignsToMerchants(userId: bigint) {
     select: { id: true, campaign_name: true },
     take: 500,
   });
+  // #region agent log
+  fetch('http://127.0.0.1:7366/ingest/05d05002-39c6-4179-a54f-bba78c014ee4',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'c94445'},body:JSON.stringify({sessionId:'c94445',location:'sync/route.ts:linkCampaignsToMerchants',message:'H1A/H1D: linkCampaigns called',data:{userId:userId.toString(),unlinkedCount:unlinked.length,sampleNames:unlinked.slice(0,5).map(c=>c.campaign_name)},timestamp:Date.now()})}).catch(()=>{});
+  // #endregion
   if (unlinked.length === 0) return 0;
 
   const userMerchants = await prisma.user_merchants.findMany({
@@ -471,12 +534,24 @@ async function linkCampaignsToMerchants(userId: bigint) {
   let linked = 0;
   const updates: Promise<unknown>[] = [];
   const claimedMerchantIds = new Set<bigint>();
+  // #region agent log
+  let dbgParseFailCount = 0;
+  let dbgNoMatchCount = 0;
+  const dbgParseFails: string[] = [];
+  const dbgNoMatches: string[] = [];
+  // #endregion
 
   for (const c of unlinked) {
     const parsed = parseCampaignName(c.campaign_name || "");
+    // #region agent log
+    if (!parsed) { dbgParseFailCount++; if (dbgParseFails.length < 5) dbgParseFails.push(c.campaign_name || "(null)"); }
+    // #endregion
     if (!parsed) continue;
 
     const merchant = merchantIndex.get(`${parsed.platform}_${parsed.mid}`);
+    // #region agent log
+    if (!merchant) { dbgNoMatchCount++; if (dbgNoMatches.length < 5) dbgNoMatches.push(`${parsed.platform}_${parsed.mid}:${c.campaign_name}`); }
+    // #endregion
     if (!merchant) continue;
 
     updates.push(
@@ -504,6 +579,9 @@ async function linkCampaignsToMerchants(userId: bigint) {
   }
 
   if (updates.length > 0) await Promise.all(updates);
+  // #region agent log
+  fetch('http://127.0.0.1:7366/ingest/05d05002-39c6-4179-a54f-bba78c014ee4',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'c94445'},body:JSON.stringify({sessionId:'c94445',location:'sync/route.ts:linkCampaignsToMerchants-done',message:'H1B/H1C: link results',data:{linked,parseFailCount:dbgParseFailCount,noMatchCount:dbgNoMatchCount,parseFails:dbgParseFails,noMatches:dbgNoMatches,merchantIndexSize:merchantIndex.size,claimedCount:claimedMerchantIds.size},timestamp:Date.now()})}).catch(()=>{});
+  // #endregion
   return linked;
 }
 
@@ -518,6 +596,10 @@ async function claimLinkedMerchants(userId: bigint) {
     distinct: ["user_merchant_id"],
   });
 
+  // #region agent log
+  fetch('http://127.0.0.1:7366/ingest/05d05002-39c6-4179-a54f-bba78c014ee4',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'c94445'},body:JSON.stringify({sessionId:'c94445',location:'sync/route.ts:claimLinkedMerchants',message:'H1B: claimLinked diagnostics',data:{userId:userId.toString(),linkedMerchantCount:linkedMerchantIds.length,sampleIds:linkedMerchantIds.slice(0,5).map(c=>c.user_merchant_id.toString())},timestamp:Date.now()})}).catch(()=>{});
+  // #endregion
+
   if (linkedMerchantIds.length === 0) return 0;
 
   const ids = linkedMerchantIds.map((c) => c.user_merchant_id);
@@ -525,6 +607,10 @@ async function claimLinkedMerchants(userId: bigint) {
     where: { id: { in: ids }, user_id: userId, is_deleted: 0, status: { not: "claimed" } },
     data: { status: "claimed", claimed_at: new Date() },
   });
+
+  // #region agent log
+  fetch('http://127.0.0.1:7366/ingest/05d05002-39c6-4179-a54f-bba78c014ee4',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'c94445'},body:JSON.stringify({sessionId:'c94445',location:'sync/route.ts:claimLinkedMerchants-done',message:'H1B: claim result',data:{claimedCount:result.count},timestamp:Date.now()})}).catch(()=>{});
+  // #endregion
 
   return result.count;
 }
@@ -590,113 +676,131 @@ async function normalizeExistingTransactionPlatforms(userId: bigint) {
 }
 
 /**
- * 平台佣金数据同步 — 按商家+日期聚合
- * 每个商家+日期只写入一个 campaign 的 daily_stats，避免多 campaign 翻倍
+ * 内联交易同步 — 从各联盟平台 API 拉取最新交易数据
+ * 替代独立的 sync-transactions 接口，合并到主同步流程
  */
-async function syncPlatformData(userId: bigint) {
+async function syncTransactionsInline(userId: bigint) {
   try {
-    const thirtyDaysAgo = nowCST().subtract(30, "day").toDate();
-
-    const txnAgg = await prisma.$queryRawUnsafe<
-      { user_merchant_id: bigint; txn_date: string; total_commission: number; rejected_commission: number; order_count: number }[]
-    >(`
-      SELECT 
-        user_merchant_id,
-        DATE(transaction_time) as txn_date,
-        SUM(CAST(commission_amount AS DECIMAL(12,2))) as total_commission,
-        SUM(CASE WHEN status = 'rejected' THEN CAST(commission_amount AS DECIMAL(12,2)) ELSE 0 END) as rejected_commission,
-        COUNT(*) as order_count
-      FROM affiliate_transactions
-      WHERE user_id = ? AND is_deleted = 0 AND transaction_time >= ?
-      GROUP BY user_merchant_id, DATE(transaction_time)
-    `, userId, thirtyDaysAgo);
-
-    if (!txnAgg || txnAgg.length === 0) return { updated: 0, message: "无交易数据" };
-
-    const merchantIds = [...new Set(txnAgg.map((t) => t.user_merchant_id))].filter((id) => id && id !== BigInt(0));
-    if (merchantIds.length === 0) return { updated: 0, message: "无可匹配的商家" };
-
-    const campaigns = await prisma.campaigns.findMany({
-      where: { user_id: userId, user_merchant_id: { in: merchantIds }, is_deleted: 0 },
-      select: { id: true, user_merchant_id: true, google_status: true, updated_at: true },
+    const connections = await prisma.platform_connections.findMany({
+      where: { user_id: userId, is_deleted: 0, status: "connected" },
+      select: { id: true, platform: true, account_name: true, api_key: true },
     });
+    const validConns = connections.filter((c) => c.api_key && c.api_key.length > 5);
+    if (validConns.length === 0) return { synced: 0, message: "无可用平台连接" };
 
-    const STATUS_PRIORITY: Record<string, number> = { ENABLED: 0, PAUSED: 1, REMOVED: 2 };
-    campaigns.sort((a, b) => {
-      const pa = STATUS_PRIORITY[a.google_status || ""] ?? 2;
-      const pb = STATUS_PRIORITY[b.google_status || ""] ?? 2;
-      if (pa !== pb) return pa - pb;
-      return b.updated_at.getTime() - a.updated_at.getTime();
+    const cstNow = nowCST();
+
+    // 检测首次交易同步：是否有该用户的交易数据
+    const existingTxnCount = await prisma.affiliate_transactions.count({
+      where: { user_id: userId, is_deleted: 0 },
     });
+    const isFirstTxnSync = existingTxnCount === 0;
+    const startStr = isFirstTxnSync ? HISTORY_START : cstNow.subtract(30, "day").format("YYYY-MM-DD");
+    const endStr = cstNow.format("YYYY-MM-DD");
 
-    const campaignsByMerchant = new Map<string, bigint[]>();
-    for (const c of campaigns) {
-      const key = String(c.user_merchant_id);
-      if (!campaignsByMerchant.has(key)) campaignsByMerchant.set(key, []);
-      campaignsByMerchant.get(key)!.push(c.id);
-    }
+    console.log(`[Sync] 交易同步范围: ${startStr} → ${endStr} (${isFirstTxnSync ? "首次-全量" : "增量30天"})`);
 
-    // 预加载所有相关 daily_stats（消除 N+1）
-    const allCampaignIds = campaigns.map(c => c.id);
-    const allStats = allCampaignIds.length > 0 ? await prisma.ads_daily_stats.findMany({
-      where: { campaign_id: { in: allCampaignIds }, date: { gte: thirtyDaysAgo } },
-      select: { id: true, campaign_id: true, date: true },
-    }) : [];
+    const userMerchants = await prisma.user_merchants.findMany({
+      where: { user_id: userId, is_deleted: 0 },
+      select: { id: true, merchant_id: true, platform: true, merchant_name: true },
+    });
+    const merchantMap = new Map(
+      userMerchants.map((m) => [`${normalizePlatformCode(m.platform)}_${m.merchant_id}`, m])
+    );
 
-    const statsMap = new Map<string, bigint>();
-    for (const s of allStats) {
-      statsMap.set(`${s.campaign_id}_${s.date.toISOString().split("T")[0]}`, s.id);
-    }
+    const { fetchAllTransactions } = await import("@/lib/platform-api");
+    let totalSynced = 0;
+    const errors: string[] = [];
 
-    // 收集所有操作，批量执行
-    const ops: (() => Promise<unknown>)[] = [];
-    let updated = 0;
+    for (const conn of validConns) {
+      const platform = normalizePlatformCode(conn.platform);
+      const label = conn.account_name || platform;
+      try {
+        const r = await fetchAllTransactions(platform, conn.api_key!, startStr, endStr);
+        if (r.error) errors.push(`${label}: ${r.error}`);
+        if (r.transactions.length === 0) continue;
 
-    for (const agg of txnAgg) {
-      if (!agg.user_merchant_id || agg.user_merchant_id === BigInt(0)) continue;
-
-      const campaignIds = campaignsByMerchant.get(String(agg.user_merchant_id));
-      if (!campaignIds?.length) continue;
-
-      const txnDateStr = String(agg.txn_date).split("T")[0];
-      const commData = {
-        commission: Number(agg.total_commission),
-        rejected_commission: Number(agg.rejected_commission),
-        orders: Number(agg.order_count),
-      };
-
-      let wrote = false;
-      for (const cid of campaignIds) {
-        const statsId = statsMap.get(`${cid}_${txnDateStr}`);
-        if (statsId) {
-          if (!wrote) {
-            ops.push(() => prisma.ads_daily_stats.update({ where: { id: statsId }, data: commData }));
-            wrote = true;
-            updated++;
+        // 去重
+        const grouped = new Map<string, (typeof r.transactions)[0]>();
+        for (const txn of r.transactions) {
+          if (!txn.transaction_id) continue;
+          const existing = grouped.get(txn.transaction_id);
+          if (existing) {
+            existing.commission_amount = (existing.commission_amount || 0) + (txn.commission_amount || 0);
+            existing.order_amount = (existing.order_amount || 0) + (txn.order_amount || 0);
           } else {
-            ops.push(() => prisma.ads_daily_stats.update({ where: { id: statsId }, data: { commission: 0, rejected_commission: 0, orders: 0 } }));
+            grouped.set(txn.transaction_id, { ...txn });
           }
         }
-      }
+        const dedupedTxns = [...grouped.values()];
 
-      if (!wrote) {
-        ops.push(() => prisma.ads_daily_stats.create({
-          data: {
-            user_id: userId, user_merchant_id: agg.user_merchant_id, campaign_id: campaignIds[0],
-            date: new Date(agg.txn_date), cost: 0, clicks: 0, impressions: 0, ...commData,
-          },
-        }).catch(() => {}));
-        updated++;
+        // 自动创建缺失的 user_merchants
+        for (const txn of dedupedTxns) {
+          const mid = txn.merchant_id || "";
+          if (!mid) continue;
+          const key = `${platform}_${mid}`;
+          if (!merchantMap.has(key)) {
+            try {
+              let existing = await prisma.user_merchants.findFirst({
+                where: { user_id: userId, platform, merchant_id: mid, is_deleted: 0 },
+                select: { id: true, merchant_id: true, platform: true, merchant_name: true },
+              });
+              if (!existing) {
+                existing = await prisma.user_merchants.create({
+                  data: { user_id: userId, platform, merchant_id: mid, merchant_name: txn.merchant || "", status: "available" },
+                  select: { id: true, merchant_id: true, platform: true, merchant_name: true },
+                });
+              }
+              merchantMap.set(key, existing);
+            } catch { /* race condition */ }
+          }
+        }
+
+        // 批量 upsert 交易
+        for (let i = 0; i < dedupedTxns.length; i += 50) {
+          const batch = dedupedTxns.slice(i, i + 50);
+          const ops = batch.map((txn) => {
+            const mid = txn.merchant_id || "";
+            const txnId = txn.transaction_id;
+            if (!txnId) return null;
+            const merchant = merchantMap.get(`${platform}_${mid}`);
+            const userMerchantId = merchant ? merchant.id : BigInt(0);
+            const merchantName = txn.merchant || merchant?.merchant_name || "";
+
+            return prisma.affiliate_transactions.upsert({
+              where: { platform_transaction_id: { platform, transaction_id: txnId } },
+              create: {
+                user_id: userId, user_merchant_id: userMerchantId, platform_connection_id: conn.id,
+                platform, merchant_id: mid, merchant_name: merchantName, transaction_id: txnId,
+                transaction_time: new Date(txn.transaction_time), order_amount: txn.order_amount || 0,
+                commission_amount: txn.commission_amount || 0, currency: "USD",
+                status: txn.status, raw_status: txn.raw_status || "",
+              },
+              update: {
+                platform_connection_id: conn.id, merchant_id: mid,
+                ...(userMerchantId !== BigInt(0) ? { user_merchant_id: userMerchantId } : {}),
+                commission_amount: txn.commission_amount || 0,
+                status: txn.status, raw_status: txn.raw_status || "",
+                order_amount: txn.order_amount || 0,
+                merchant_name: merchantName || undefined,
+              },
+            });
+          }).filter(Boolean);
+          await Promise.all(ops);
+          totalSynced += ops.length;
+        }
+      } catch (err) {
+        errors.push(`${label}: ${err instanceof Error ? err.message : String(err)}`);
       }
     }
 
-    // 批量执行（每 50 条并发）
-    for (let i = 0; i < ops.length; i += 50) {
-      await Promise.all(ops.slice(i, i + 50).map(fn => fn()));
-    }
+    // 关联交易和 campaigns 到正确的商家
+    await linkTransactionsToMerchants(userId);
+    await linkCampaignsToMerchants(userId);
 
-    return { updated, message: `平台佣金已合并 ${updated} 条` };
+    const msg = errors.length > 0 ? `同步 ${totalSynced} 条，${errors.length} 个错误` : `同步 ${totalSynced} 条`;
+    return { synced: totalSynced, errors, message: msg };
   } catch (err) {
-    return { updated: 0, message: `平台数据同步失败: ${err instanceof Error ? err.message : String(err)}` };
+    return { synced: 0, message: `交易同步失败: ${err instanceof Error ? err.message : String(err)}` };
   }
 }

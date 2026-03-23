@@ -86,6 +86,11 @@ export const MYSQL_CONFIG_KEYS = {
   SHADOW_DATABASE: "mysql_shadow_database",
 } as const;
 
+// ─── Google Sheets 配置 key 常量 ───
+export const GOOGLE_SHEETS_CONFIG_KEYS = {
+  SA_JSON: "google_sheets_sa_json",
+} as const;
+
 // ─── 配置分组定义（前端表单渲染用）───
 export interface ConfigField {
   key: string;
@@ -93,6 +98,7 @@ export interface ConfigField {
   placeholder: string;
   required?: boolean;
   isPassword?: boolean;
+  isTextarea?: boolean;
   type?: "text" | "password" | "number";
 }
 
@@ -119,6 +125,15 @@ export const CONFIG_GROUPS = {
       { key: "mysql_password", label: "密码", placeholder: "数据库密码", isPassword: true as const },
       { key: "mysql_database", label: "数据库名", placeholder: "google-data-analysis", required: true },
       { key: "mysql_shadow_database", label: "影子库名", placeholder: "google-data-analysis_shadow" },
+    ] as ConfigField[],
+  },
+  google_sheets: {
+    title: "Google Sheets 服务账号",
+    icon: "GoogleOutlined",
+    description: "用于访问需要邮箱授权的 Google Sheet（违规/推荐商家名单）。将 Service Account JSON 粘贴到下方，并将 Sheet 共享给该服务账号邮箱。",
+    prefix: "google_sheets_",
+    fields: [
+      { key: "google_sheets_sa_json", label: "Service Account JSON", placeholder: "粘贴 Google Cloud Service Account 密钥 JSON 全文（与 MCC 使用同一个即可）", required: true, isTextarea: true },
     ] as ConfigField[],
   },
 } as const;
@@ -171,4 +186,11 @@ export async function getMysqlConfig() {
     database: configs[MYSQL_CONFIG_KEYS.DATABASE] || "google-data-analysis",
     shadowDatabase: configs[MYSQL_CONFIG_KEYS.SHADOW_DATABASE] || "google-data-analysis_shadow",
   };
+}
+
+/**
+ * 获取 Google Sheets Service Account JSON
+ */
+export async function getGoogleSheetsSaJson(): Promise<string | null> {
+  return getSystemConfig(GOOGLE_SHEETS_CONFIG_KEYS.SA_JSON);
 }

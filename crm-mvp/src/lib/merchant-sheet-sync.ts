@@ -80,21 +80,65 @@ function extractDomain(raw: string): string {
   }
 }
 
-// ── CSV 读取 ──
+// ── Sheet 数据读取（优先 Service Account API，回退公开 CSV） ──
 
 async function fetchSheetCsv(sheetUrl: string, gid?: string): Promise<string[][]> {
   const sheetId = extractSheetId(sheetUrl);
   if (!sheetId) throw new Error("无法从链接中提取 Google Sheets ID");
   const g = gid ?? extractGid(sheetUrl);
-  const csvUrl = `https://docs.google.com/spreadsheets/d/${sheetId}/export?format=csv&gid=${g}`;
 
+  // 优先通过 Service Account 认证访问 Google Sheets API
+  try {
+    const { getSheetsAccessToken } = await import("./google-sheets-auth");
+    const token = await getSheetsAccessToken();
+    if (token) {
+      return await fetchSheetViaApi(sheetId, g, token);
+    }
+  } catch (e: any) {
+    console.warn("[MerchantSheetSync] Service Account API 访问失败, 回退公开 CSV:", e?.message || e);
+  }
+
+  return await fetchSheetPublicCsv(sheetId, g);
+}
+
+async function fetchSheetViaApi(sheetId: string, gid: string, accessToken: string): Promise<string[][]> {
+  const metaUrl = `https://sheets.googleapis.com/v4/spreadsheets/${sheetId}?fields=sheets.properties`;
+  const metaResp = await fetch(metaUrl, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+    signal: AbortSignal.timeout(30000),
+  });
+  if (!metaResp.ok) {
+    const body = await metaResp.text().catch(() => "");
+    throw new Error(`Sheets API 元数据请求失败: HTTP ${metaResp.status}${body ? ` — ${body.slice(0, 200)}` : ""}`);
+  }
+  const meta = await metaResp.json();
+  const sheet = (meta.sheets as any[])?.find((s) => String(s.properties?.sheetId) === gid);
+  const sheetName = sheet?.properties?.title || "Sheet1";
+
+  const valuesUrl = `https://sheets.googleapis.com/v4/spreadsheets/${sheetId}/values/${encodeURIComponent(sheetName)}?valueRenderOption=FORMATTED_VALUE`;
+  const valuesResp = await fetch(valuesUrl, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+    signal: AbortSignal.timeout(30000),
+  });
+  if (!valuesResp.ok) {
+    const body = await valuesResp.text().catch(() => "");
+    throw new Error(`Sheets API 数据请求失败: HTTP ${valuesResp.status}${body ? ` — ${body.slice(0, 200)}` : ""}`);
+  }
+  const data = await valuesResp.json();
+  const rows: string[][] = data.values || [];
+  if (rows.length === 0) throw new Error("Google Sheets API 返回空数据");
+  return rows;
+}
+
+async function fetchSheetPublicCsv(sheetId: string, gid: string): Promise<string[][]> {
+  const csvUrl = `https://docs.google.com/spreadsheets/d/${sheetId}/export?format=csv&gid=${gid}`;
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 30000);
   try {
     const resp = await fetch(csvUrl, { redirect: "follow", signal: controller.signal });
     if (!resp.ok) {
       const body = await resp.text().catch(() => "");
-      throw new Error(`Google Sheets 请求失败: HTTP ${resp.status}${body ? ` — ${body.slice(0, 200)}` : ""}`);
+      throw new Error(`Google Sheets CSV 请求失败: HTTP ${resp.status}${body ? ` — ${body.slice(0, 200)}` : ""}`);
     }
     const text = await resp.text();
     if (!text.trim()) throw new Error("Google Sheets 返回空内容");

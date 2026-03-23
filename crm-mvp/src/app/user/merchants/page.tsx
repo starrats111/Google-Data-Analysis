@@ -105,6 +105,7 @@ export default function MerchantsPage() {
   const { data: holidays, isLoading: hl } = useApiWithParams<Holiday[]>(qc ? "/api/user/holidays" : null, { country: qc });
   const [claimModal, setClaimModal] = useState(false); const [claimM, setClaimM] = useState<Merchant | null>(null); const [claimForm] = Form.useForm();
   const [platformConns, setPlatformConns] = useState<{ id: string; platform: string; account_name: string }[]>([]);
+  const [mccAccounts, setMccAccounts] = useState<{ id: string; mcc_id: string; mcc_name: string }[]>([]);
   const [rModal, setRModal] = useState(false); const [rTitle, setRTitle] = useState(""); const [rContent, setRContent] = useState("");
   // 在投人数弹窗
   const [advModal, setAdvModal] = useState(false);
@@ -125,11 +126,19 @@ export default function MerchantsPage() {
   const doClaim = useCallback(async (m: Merchant) => {
     setClaimM(m); claimForm.resetFields(); setClaimModal(true);
     try {
-      const res = await fetch("/api/user/settings/platforms").then((r) => r.json());
-      if (res.code === 0) {
-        const conns = (res.data || []).filter((c: any) => c.platform === m.platform);
+      const [platRes, mccRes] = await Promise.all([
+        fetch("/api/user/settings/platforms").then((r) => r.json()),
+        fetch("/api/user/settings/mcc").then((r) => r.json()),
+      ]);
+      if (platRes.code === 0) {
+        const conns = (platRes.data || []).filter((c: any) => c.platform === m.platform);
         setPlatformConns(conns);
         if (conns.length === 1) claimForm.setFieldValue("platform_connection_id", conns[0].id);
+      }
+      if (mccRes.code === 0) {
+        const mccs = (mccRes.data || []).filter((a: any) => a.is_active);
+        setMccAccounts(mccs);
+        if (mccs.length === 1) claimForm.setFieldValue("mcc_account_id", mccs[0].id);
       }
     } catch { /* ignore */ }
   }, [claimForm]);
@@ -264,6 +273,11 @@ export default function MerchantsPage() {
     <Modal title={`领取商家: ${claimM?.merchant_name}`} open={claimModal} onOk={submitClaim} onCancel={() => setClaimModal(false)}>
       {claimM?.policy_status === "restricted" && (<div style={{ marginBottom: 16, padding: "8px 12px", background: "#fff7e6", border: "1px solid #ffd591", borderRadius: 6 }}><WarningOutlined style={{ color: "#fa8c16", marginRight: 6 }} /><Text type="warning" style={{ fontSize: 13 }}>该商家属于受限类别{claimM.policy_category_code ? `（${PN[claimM.policy_category_code] || claimM.policy_category_code}）` : ""}，投放将受限。</Text></div>)}
       <Form form={claimForm} layout="vertical">
+        {mccAccounts.length > 1 && (
+          <Form.Item name="mcc_account_id" label="MCC 账户" rules={[{ required: true, message: "请选择 MCC 账户" }]}>
+            <Select placeholder="选择 MCC 账户" options={mccAccounts.map((a) => ({ value: a.id, label: `${a.mcc_name || a.mcc_id} (${a.mcc_id})` }))} />
+          </Form.Item>
+        )}
         <Form.Item name="target_country" label="目标国家" rules={[{ required: true, message: "请选择目标国家" }]}>
           <Select
             showSearch

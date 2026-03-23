@@ -130,7 +130,7 @@ export async function GET(req: NextRequest) {
 
   const campaignIds = campaigns.map((c) => c.id);
 
-  // 用数据库 groupBy 聚合 — 代替 JS 遍历，节省内存
+  // 聚合 ads_daily_stats（仅用于 cost/clicks/impressions）
   const statsAgg = campaignIds.length > 0
     ? await prisma.ads_daily_stats.groupBy({
         by: ["campaign_id"],
@@ -143,14 +143,10 @@ export async function GET(req: NextRequest) {
           cost: true,
           clicks: true,
           impressions: true,
-          commission: true,
-          rejected_commission: true,
-          orders: true,
         },
       })
     : [];
 
-  // 构建聚合 Map
   const statsMap = new Map(
     statsAgg.map((s) => [
       String(s.campaign_id),
@@ -158,22 +154,20 @@ export async function GET(req: NextRequest) {
         cost: Number(s._sum?.cost || 0),
         clicks: Number(s._sum?.clicks || 0),
         impressions: Number(s._sum?.impressions || 0),
-        commission: Number(s._sum?.commission || 0),
-        rejected_commission: Number(s._sum?.rejected_commission || 0),
-        orders: Number(s._sum?.orders || 0),
       },
     ])
   );
 
-  // 从 affiliate_transactions 直接查询佣金（三分类：全部/拒付/已付）
+  // 佣金统一从 affiliate_transactions 聚合（单一数据源，最准确）
   const endPlusOne = new Date(end);
   endPlusOne.setDate(endPlusOne.getDate() + 1);
 
   const commissionAgg = await prisma.$queryRawUnsafe<
-    { user_merchant_id: bigint; total_commission: number; rejected_commission: number; approved_commission: number; order_count: number }[]
+    { user_merchant_id: bigint; merchant_name: string; total_commission: number; rejected_commission: number; approved_commission: number; order_count: number }[]
   >(`
     SELECT
       user_merchant_id,
+      MAX(merchant_name) as merchant_name,
       SUM(CAST(commission_amount AS DECIMAL(12,2))) as total_commission,
       SUM(CASE WHEN status = 'rejected' THEN CAST(commission_amount AS DECIMAL(12,2)) ELSE 0 END) as rejected_commission,
       SUM(CASE WHEN status IN ('approved', 'paid') THEN CAST(commission_amount AS DECIMAL(12,2)) ELSE 0 END) as approved_commission,
@@ -184,10 +178,7 @@ export async function GET(req: NextRequest) {
     GROUP BY user_merchant_id
   `, userId, start, endPlusOne);
 
-  const commissionByMerchant = new Map<string, number>();
-  const rejectedByMerchant = new Map<string, number>();
-  const approvedByMerchant = new Map<string, number>();
-  const ordersByMerchant = new Map<string, number>();
+  const commissionByMerchant = new Map<string, { commission: number; rejected: number; approved: number; orders: number; merchantName: string }>();
   let totalCommissionFromTxn = 0;
   let totalRejectedFromTxn = 0;
   let totalApprovedFromTxn = 0;
@@ -195,17 +186,20 @@ export async function GET(req: NextRequest) {
 
   for (const r of commissionAgg) {
     const key = String(r.user_merchant_id);
-    commissionByMerchant.set(key, Number(r.total_commission || 0));
-    rejectedByMerchant.set(key, Number(r.rejected_commission || 0));
-    approvedByMerchant.set(key, Number(r.approved_commission || 0));
-    ordersByMerchant.set(key, Number(r.order_count || 0));
+    commissionByMerchant.set(key, {
+      commission: Number(r.total_commission || 0),
+      rejected: Number(r.rejected_commission || 0),
+      approved: Number(r.approved_commission || 0),
+      orders: Number(r.order_count || 0),
+      merchantName: r.merchant_name || "",
+    });
     totalCommissionFromTxn += Number(r.total_commission || 0);
     totalRejectedFromTxn += Number(r.rejected_commission || 0);
     totalApprovedFromTxn += Number(r.approved_commission || 0);
     totalOrdersFromTxn += Number(r.order_count || 0);
   }
 
-  // 查询 campaign → user_merchant_id 映射
+  // campaign → user_merchant_id 映射
   const campaignMerchantMap = new Map<string, string>();
   if (commissionAgg.length > 0) {
     const campaignsWithMerchant = await prisma.campaigns.findMany({
@@ -217,10 +211,8 @@ export async function GET(req: NextRequest) {
     }
   }
 
-  // 每个商家只分配给一个 campaign，避免翻倍
   const merchantWritten = new Set<string>();
 
-  // 按状态优先级排序：ENABLED → PAUSED → REMOVED，同状态按最近更新优先
   const STATUS_ORDER: Record<string, number> = { ENABLED: 0, PAUSED: 1, REMOVED: 2 };
   campaigns.sort((a, b) => {
     const pa = STATUS_ORDER[a.google_status || ""] ?? 2;
@@ -229,8 +221,7 @@ export async function GET(req: NextRequest) {
     return 0;
   });
 
-  // 组装行数据
-  let totalCost = 0, totalCommission = 0, totalClicks = 0, totalImpressions = 0;
+  let totalCost = 0, totalClicks = 0, totalImpressions = 0;
   let enabledCount = 0, pausedCount = 0;
 
   const rows = campaigns.map((c) => {
@@ -241,22 +232,19 @@ export async function GET(req: NextRequest) {
     const avgCpc = clicks > 0 ? Number((cost / clicks).toFixed(4)) : 0;
 
     const merchantId = campaignMerchantMap.get(String(c.id));
-    let commission = 0;
-    let rejectedComm = 0;
-    let approvedComm = 0;
-    let orders = 0;
+    let commission = 0, rejectedComm = 0, approvedComm = 0, orders = 0;
     if (merchantId && merchantId !== "0" && commissionByMerchant.has(merchantId) && !merchantWritten.has(merchantId)) {
-      commission = commissionByMerchant.get(merchantId)!;
-      rejectedComm = rejectedByMerchant.get(merchantId) || 0;
-      approvedComm = approvedByMerchant.get(merchantId) || 0;
-      orders = ordersByMerchant.get(merchantId) || 0;
+      const comm = commissionByMerchant.get(merchantId)!;
+      commission = comm.commission;
+      rejectedComm = comm.rejected;
+      approvedComm = comm.approved;
+      orders = comm.orders;
       merchantWritten.add(merchantId);
     }
 
-    const roi = cost > 0 ? Number(((approvedComm - cost) / cost * 100).toFixed(2)) : 0;
+    const roi = cost > 0 ? Number(((approvedComm - cost) / cost).toFixed(2)) : 0;
 
     totalCost += cost;
-    totalCommission += commission;
     totalClicks += clicks;
     totalImpressions += impressions;
     if (c.google_status === "ENABLED") enabledCount++;
@@ -284,6 +272,36 @@ export async function GET(req: NextRequest) {
     };
   });
 
+  // F-05: 未关联到广告系列的交易 → 显示商家名作为虚拟行
+  for (const [merchantIdStr, comm] of commissionByMerchant) {
+    if (merchantWritten.has(merchantIdStr)) continue;
+    if (merchantIdStr === "0" && comm.commission === 0) continue;
+
+    const displayName = comm.merchantName || `未关联商家 (ID: ${merchantIdStr})`;
+    rows.push({
+      id: BigInt(0),
+      google_campaign_id: null,
+      customer_id: "",
+      campaign_name: displayName,
+      status: "N/A",
+      daily_budget: 0,
+      max_cpc: null,
+      cost: 0,
+      clicks: 0,
+      impressions: 0,
+      cpc: 0,
+      commission: Number(comm.commission.toFixed(2)),
+      rejected_commission: Number(comm.rejected.toFixed(2)),
+      approved_commission: Number(comm.approved.toFixed(2)),
+      orders: comm.orders,
+      roi: 0,
+      target_country: "",
+      last_synced: null,
+    });
+  }
+
+  const totalCommission = rows.reduce((sum, r) => sum + r.commission, 0);
+
   const summary = {
     totalCost: Number(totalCost.toFixed(2)),
     totalCommission: Number(totalCommissionFromTxn.toFixed(2)),
@@ -292,7 +310,7 @@ export async function GET(req: NextRequest) {
     totalClicks,
     totalImpressions,
     avgCpc: totalClicks > 0 ? Number((totalCost / totalClicks).toFixed(4)) : 0,
-    roi: totalCost > 0 ? Number(((totalApprovedFromTxn - totalCost) / totalCost * 100).toFixed(2)) : 0,
+    roi: totalCost > 0 ? Number(((totalApprovedFromTxn - totalCost) / totalCost).toFixed(2)) : 0,
     campaignCount: campaigns.length,
     enabledCount,
     pausedCount,

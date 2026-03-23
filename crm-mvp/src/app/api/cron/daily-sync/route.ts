@@ -153,14 +153,13 @@ async function syncMerchantSheet(): Promise<unknown> {
   }
 }
 
-// ── 同步所有用户的 MCC 广告数据 ──
+// ── 同步所有用户的 MCC 广告数据（Sheet + Google Ads API） ──
 
 async function syncAllUsersMcc(): Promise<unknown> {
   const allMcc = await prisma.google_mcc_accounts.findMany({
     where: { is_deleted: 0, is_active: 1 },
   });
 
-  // 按 user_id 分组
   const userMccMap = new Map<string, typeof allMcc>();
   for (const mcc of allMcc) {
     const uid = String(mcc.user_id);
@@ -176,7 +175,6 @@ async function syncAllUsersMcc(): Promise<unknown> {
       const { syncFromSheet } = await import("@/lib/sheet-sync");
 
       for (const mcc of mccs) {
-        if (!mcc.sheet_url) continue;
         log(`  MCC ${mcc.mcc_name || mcc.mcc_id} for user ${userId}...`);
 
         try {
@@ -184,38 +182,91 @@ async function syncAllUsersMcc(): Promise<unknown> {
           yesterday.setDate(yesterday.getDate() - 1);
           const startStr = yesterday.toISOString().slice(0, 10);
           const endStr = new Date().toISOString().slice(0, 10);
-
-          const sheetResult = await syncFromSheet(mcc.sheet_url, startStr, endStr);
-          if (!sheetResult.success || !sheetResult.rows.length) {
-            results[`mcc_${mcc.mcc_id}`] = { skipped: true, message: sheetResult.message || "no data" };
-            continue;
-          }
           const rate = await fetchExchangeRate(mcc.currency);
-          let upserted = 0;
 
-          for (const row of sheetResult.rows) {
-            if (!row.campaign_id) continue;
-            const campaign = await prisma.campaigns.findFirst({
-              where: { user_id: uid, google_campaign_id: row.campaign_id, is_deleted: 0 },
-              select: { id: true },
-            });
-            if (!campaign) continue;
+          let sheetUpserted = 0;
+          let apiUpserted = 0;
 
-            const dateObj = new Date(row.date);
-            const costUsd = Number((row.cost * rate).toFixed(2));
+          // 1. Sheet 同步（昨天→今天）
+          if (mcc.sheet_url) {
+            const sheetResult = await syncFromSheet(mcc.sheet_url, startStr, endStr);
+            if (sheetResult.success && sheetResult.rows.length > 0) {
+              for (const row of sheetResult.rows) {
+                if (!row.campaign_id) continue;
+                const campaign = await prisma.campaigns.findFirst({
+                  where: { user_id: uid, google_campaign_id: row.campaign_id, is_deleted: 0 },
+                  select: { id: true },
+                });
+                if (!campaign) continue;
 
-            await prisma.ads_daily_stats.upsert({
-              where: { uk_campaign_date: { campaign_id: campaign.id, date: dateObj } },
-              update: { cost: costUsd, clicks: row.clicks, impressions: row.impressions },
-              create: {
-                user_id: uid, campaign_id: campaign.id, date: dateObj,
-                cost: costUsd, clicks: row.clicks, impressions: row.impressions,
-                user_merchant_id: BigInt(0),
-              },
-            });
-            upserted++;
+                const dateObj = new Date(row.date);
+                const costUsd = Number((row.cost * rate).toFixed(2));
+
+                await prisma.ads_daily_stats.upsert({
+                  where: { uk_campaign_date: { campaign_id: campaign.id, date: dateObj } },
+                  update: { cost: costUsd, clicks: row.clicks, impressions: row.impressions },
+                  create: {
+                    user_id: uid, campaign_id: campaign.id, date: dateObj,
+                    cost: costUsd, clicks: row.clicks, impressions: row.impressions,
+                    user_merchant_id: BigInt(0),
+                  },
+                });
+                sheetUpserted++;
+              }
+            }
           }
-          results[`mcc_${mcc.mcc_id}`] = { rows: sheetResult.rows.length, upserted, rate };
+
+          // 2. Google Ads API 同步今日数据
+          if (mcc.service_account_json) {
+            try {
+              const { fetchTodayCampaignData } = await import("@/lib/google-ads");
+              const credentials = {
+                mcc_id: mcc.mcc_id,
+                developer_token: mcc.developer_token || "",
+                service_account_json: mcc.service_account_json,
+              };
+              const cids = await prisma.mcc_cid_accounts.findMany({
+                where: { mcc_account_id: mcc.id, is_deleted: 0, status: "active" },
+                take: 50,
+              });
+              const todayDate = new Date(endStr);
+
+              for (const cid of cids) {
+                try {
+                  const data = await fetchTodayCampaignData(credentials, cid.customer_id);
+                  for (const cd of data) {
+                    const campaign = await prisma.campaigns.findFirst({
+                      where: { user_id: uid, google_campaign_id: cd.campaign_id, is_deleted: 0 },
+                      select: { id: true },
+                    });
+                    if (!campaign) continue;
+
+                    await prisma.ads_daily_stats.upsert({
+                      where: { uk_campaign_date: { campaign_id: campaign.id, date: todayDate } },
+                      update: {
+                        cost: Number((cd.cost_dollars * rate).toFixed(2)),
+                        clicks: cd.clicks, impressions: cd.impressions,
+                        data_source: "api",
+                      },
+                      create: {
+                        user_id: uid, campaign_id: campaign.id, date: todayDate,
+                        cost: Number((cd.cost_dollars * rate).toFixed(2)),
+                        clicks: cd.clicks, impressions: cd.impressions,
+                        user_merchant_id: BigInt(0), data_source: "api",
+                      },
+                    });
+                    apiUpserted++;
+                  }
+                } catch (e) {
+                  log(`    CID ${cid.customer_id} API error: ${e instanceof Error ? e.message : String(e)}`);
+                }
+              }
+            } catch (e) {
+              log(`    API sync error: ${e instanceof Error ? e.message : String(e)}`);
+            }
+          }
+
+          results[`mcc_${mcc.mcc_id}`] = { sheetUpserted, apiUpserted, rate };
         } catch (e) {
           results[`mcc_${mcc.mcc_id}`] = { error: e instanceof Error ? e.message : String(e) };
         }
@@ -253,9 +304,9 @@ async function syncAllUsersTransactions(): Promise<unknown> {
       log(`  Transactions for ${user.username} (${validConns.length} connections)...`);
 
       const { fetchAllTransactions } = await import("@/lib/platform-api");
-      const yesterday = new Date();
-      yesterday.setDate(yesterday.getDate() - 1);
-      const startStr = yesterday.toISOString().slice(0, 10);
+      const sevenDaysAgo = new Date();
+      sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+      const startStr = sevenDaysAgo.toISOString().slice(0, 10);
       const endStr = new Date().toISOString().slice(0, 10);
 
       let totalSynced = 0;
@@ -300,10 +351,8 @@ async function syncAllUsersTransactions(): Promise<unknown> {
         }
       }
 
-      // 关联 + 更新佣金
       if (totalSynced > 0) {
         await linkTransactionsToMerchants(userId);
-        await updateDailyStatsCommission(userId, yesterday);
       }
 
       results[user.username] = { synced: totalSynced };
@@ -330,67 +379,6 @@ async function linkTransactionsToMerchants(userId: bigint) {
     SET t.user_merchant_id = m.id
     WHERE t.user_id = ? AND t.user_merchant_id = 0 AND t.is_deleted = 0 AND m.is_deleted = 0 AND t.merchant_id != ''
   `, userId);
-}
-
-async function updateDailyStatsCommission(userId: bigint, startDate: Date) {
-  const txnAgg = await prisma.$queryRawUnsafe<
-    { user_merchant_id: bigint; txn_date: string; total_commission: number; rejected_commission: number; order_count: number }[]
-  >(`
-    SELECT user_merchant_id, DATE(transaction_time) as txn_date,
-      SUM(CAST(commission_amount AS DECIMAL(12,2))) as total_commission,
-      SUM(CASE WHEN status = 'rejected' THEN CAST(commission_amount AS DECIMAL(12,2)) ELSE 0 END) as rejected_commission,
-      COUNT(*) as order_count
-    FROM affiliate_transactions WHERE user_id = ? AND is_deleted = 0 AND transaction_time >= ? AND user_merchant_id != 0
-    GROUP BY user_merchant_id, DATE(transaction_time)
-  `, userId, startDate);
-
-  if (!txnAgg.length) return;
-
-  const merchantIds = [...new Set(txnAgg.map(t => t.user_merchant_id))].filter(id => id && id !== BigInt(0));
-  if (!merchantIds.length) return;
-
-  const campaigns = await prisma.campaigns.findMany({
-    where: { user_id: userId, user_merchant_id: { in: merchantIds }, is_deleted: 0 },
-    select: { id: true, user_merchant_id: true, google_status: true, updated_at: true },
-  });
-
-  const STATUS_PRIORITY: Record<string, number> = { ENABLED: 0, PAUSED: 1, REMOVED: 2 };
-  campaigns.sort((a, b) => {
-    const pa = STATUS_PRIORITY[a.google_status || ""] ?? 2;
-    const pb = STATUS_PRIORITY[b.google_status || ""] ?? 2;
-    if (pa !== pb) return pa - pb;
-    return b.updated_at.getTime() - a.updated_at.getTime();
-  });
-
-  const bestCampaign = new Map<string, bigint>();
-  for (const c of campaigns) {
-    const key = String(c.user_merchant_id);
-    if (!bestCampaign.has(key)) bestCampaign.set(key, c.id);
-  }
-
-  for (const agg of txnAgg) {
-    if (!agg.user_merchant_id || agg.user_merchant_id === BigInt(0)) continue;
-    const campaignId = bestCampaign.get(String(agg.user_merchant_id));
-    if (!campaignId) continue;
-    const dateStr = String(agg.txn_date).split("T")[0];
-    const dateObj = new Date(dateStr);
-
-    await prisma.ads_daily_stats.upsert({
-      where: { uk_campaign_date: { campaign_id: campaignId, date: dateObj } },
-      update: {
-        commission: Number(agg.total_commission),
-        rejected_commission: Number(agg.rejected_commission),
-        orders: Number(agg.order_count),
-      },
-      create: {
-        user_id: userId, campaign_id: campaignId, user_merchant_id: agg.user_merchant_id,
-        date: dateObj, cost: 0, clicks: 0, impressions: 0,
-        commission: Number(agg.total_commission),
-        rejected_commission: Number(agg.rejected_commission),
-        orders: Number(agg.order_count),
-      },
-    });
-  }
 }
 
 async function fetchExchangeRate(currency: string): Promise<number> {

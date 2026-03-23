@@ -209,6 +209,15 @@ export const GET = withUser(async (req: NextRequest, { user }) => {
   }
 
   if (tab === "claimed") {
+    // #region agent log
+    const [dbgAllCount, dbgStatusCounts, dbgCampaignCount, dbgCampaignSamples] = await Promise.all([
+      prisma.user_merchants.count({ where: { user_id: userId, is_deleted: 0 } }),
+      prisma.user_merchants.groupBy({ by: ["status"], where: { user_id: userId, is_deleted: 0 } as never, _count: true }),
+      prisma.campaigns.count({ where: { user_id: userId, is_deleted: 0 } }),
+      prisma.campaigns.findMany({ where: { user_id: userId, is_deleted: 0 }, select: { id: true, campaign_name: true, user_merchant_id: true, google_campaign_id: true, google_status: true }, take: 10 }),
+    ]);
+    fetch('http://127.0.0.1:7366/ingest/05d05002-39c6-4179-a54f-bba78c014ee4',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'c94445'},body:JSON.stringify({sessionId:'c94445',location:'merchants/route.ts:claimed-tab',message:'H1A-H1D: claimed tab diagnostics',data:{userId:userId.toString(),allMerchantCount:dbgAllCount,statusCounts:dbgStatusCounts,campaignCount:dbgCampaignCount,campaignSamples:dbgCampaignSamples.map(c=>({id:c.id.toString(),name:c.campaign_name,umId:c.user_merchant_id.toString(),gCampaignId:c.google_campaign_id,gStatus:c.google_status}))},timestamp:Date.now()})}).catch(()=>{});
+    // #endregion
     // ─── 我的商家：直接查 status="claimed" 的商家，不依赖广告系列 ───
     const where: Record<string, unknown> = {
       user_id: userId,
@@ -402,7 +411,7 @@ export const GET = withUser(async (req: NextRequest, { user }) => {
 
 // 领取商家
 export const POST = withUser(async (req: NextRequest, { user }) => {
-  const { merchant_id, target_country, holiday_name, platform_connection_id } = await req.json();
+  const { merchant_id, target_country, holiday_name, platform_connection_id, mcc_account_id } = await req.json();
   if (!merchant_id) return apiError("缺少商家 ID");
   if (!target_country) return apiError("请选择目标国家");
   if (target_country.length > 8) return apiError("国家代码格式无效");
@@ -428,13 +437,24 @@ export const POST = withUser(async (req: NextRequest, { user }) => {
 
   // 如果未指定 platform_connection_id，自动选择该平台的第一个连接
   let connId = platform_connection_id ? BigInt(platform_connection_id) : null;
+  let connAccountName = "";
+  if (connId) {
+    const conn = await prisma.platform_connections.findFirst({
+      where: { id: connId, user_id: BigInt(user.userId), is_deleted: 0 },
+      select: { id: true, account_name: true },
+    });
+    connAccountName = conn?.account_name || "";
+  }
   if (!connId && merchant.platform) {
     const defaultConn = await prisma.platform_connections.findFirst({
       where: { user_id: BigInt(user.userId), platform: merchant.platform, is_deleted: 0 },
-      select: { id: true },
+      select: { id: true, account_name: true },
       orderBy: { created_at: "asc" },
     });
-    if (defaultConn) connId = defaultConn.id;
+    if (defaultConn) {
+      connId = defaultConn.id;
+      connAccountName = defaultConn.account_name || "";
+    }
   }
 
   // 更新商家状态
@@ -454,7 +474,20 @@ export const POST = withUser(async (req: NextRequest, { user }) => {
     where: { user_id: BigInt(user.userId), is_deleted: 0 },
   });
 
-  // 生成广告系列名称
+  // 确定 MCC：前端传入 > 用户最近使用的 MCC
+  let claimMccId: bigint | null = null;
+  if (mcc_account_id) {
+    claimMccId = BigInt(mcc_account_id);
+  } else {
+    const recentMcc = await prisma.campaigns.findFirst({
+      where: { user_id: BigInt(user.userId), mcc_id: { not: null }, is_deleted: 0 },
+      orderBy: { updated_at: "desc" },
+      select: { mcc_id: true },
+    });
+    claimMccId = recentMcc?.mcc_id ?? null;
+  }
+
+  // 生成广告系列名称（按 MCC 分开计算序号）
   const campaignName = await generateCampaignName(
     BigInt(user.userId),
     merchant.platform || "",
@@ -462,6 +495,9 @@ export const POST = withUser(async (req: NextRequest, { user }) => {
     target_country,
     merchant.merchant_id || "",
     adSettings?.naming_rule || "global",
+    connAccountName,
+    adSettings?.naming_prefix || "",
+    claimMccId,
   );
 
   // 根据目标国家自动确定广告语言

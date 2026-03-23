@@ -471,6 +471,81 @@ async function createArticleHtmlPage(
   await sftpWriteFile(sftp, htmlPath, html);
 }
 
+/**
+ * 解析 index.html 中引用的数据 JS 文件路径，
+ * 确保新文章也写入首页实际加载的索引文件。
+ */
+async function syncToHomepageDataFile(
+  sftp: SFTPWrapper,
+  siteRoot: string,
+  primaryDataJsPath: string,
+  indexEntry: Record<string, unknown>,
+  articleId: string,
+): Promise<void> {
+  try {
+    const indexHtml = await sftpReadFile(sftp, `${siteRoot}/index.html`);
+
+    // 从 <script src="..."> 标签中提取所有 JS 路径
+    const scriptRe = /<script[^>]+src=["']([^"'?]+)/gi;
+    let m: RegExpExecArray | null;
+    const candidates: string[] = [];
+    while ((m = scriptRe.exec(indexHtml)) !== null) {
+      const src = m[1].replace(/^\.\//, "");
+      if (src !== primaryDataJsPath && !src.includes("main.js")) {
+        candidates.push(src);
+      }
+    }
+
+    // 同时检测 main.js 引用但非当前数据文件的索引 JS
+    const knownIndexFiles = [
+      "js/articles-index.js", "js/data.js", "data.js",
+      "articles-data.js", "assets/js/main.js", "assets/main.js",
+    ];
+    for (const known of knownIndexFiles) {
+      if (known !== primaryDataJsPath && indexHtml.includes(known)) {
+        if (!candidates.includes(known)) candidates.push(known);
+      }
+    }
+
+    for (const relPath of candidates) {
+      const fullPath = `${siteRoot}/${relPath}`;
+      if (!(await sftpStat(sftp, fullPath))) continue;
+
+      let content = "";
+      try { content = await sftpReadFile(sftp, fullPath); } catch { continue; }
+
+      // 检测文件中的数组变量名
+      const varMatch = content.match(
+        /(?:const|var|let)\s+(articlesIndex|articles|posts|blogPosts|POSTS|articlesData)\s*=\s*\[/
+      );
+      if (!varMatch) continue;
+
+      const hpVarName = varMatch[1];
+      console.log(`[Publisher] 同步索引到首页文件: ${relPath} (var=${hpVarName})`);
+
+      // 移除已有同 id 条目
+      const removeRe = new RegExp(
+        `\\{[^}]*"id"\\s*:\\s*"${articleId}"[^}]*\\},?\\s*`, "g"
+      );
+      content = content.replace(removeRe, "");
+
+      // 在数组开头插入
+      const arrRe = new RegExp(
+        `(const|var|let)\\s+${hpVarName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*=\\s*\\[`
+      );
+      const arrMatch = arrRe.exec(content);
+      if (arrMatch) {
+        const pos = (arrMatch.index || 0) + arrMatch[0].length;
+        const entryStr = "\n  " + JSON.stringify(indexEntry) + ",";
+        content = content.slice(0, pos) + entryStr + content.slice(pos);
+        await sftpWriteFile(sftp, fullPath, content);
+      }
+    }
+  } catch (err) {
+    console.warn(`[Publisher] 同步首页数据文件时出错（非致命）:`, err);
+  }
+}
+
 export async function publishArticleToSite(
   article: ArticlePayload,
   site: SiteConfig
@@ -524,18 +599,22 @@ export async function publishArticleToSite(
       dataContent = `const ${varName} = [];\n`;
     }
 
-    // 构建索引条目 — 字段名匹配网站渲染代码（category / dateLabel / heroImage 等）
+    // 构建索引条目 — 同时兼容两种字段名：
+    //   旧模板用 date / image，CRM 模板用 dateISO / dateLabel / heroImage
     const excerpt = plainText.slice(0, 160).trim() + "...";
+    const heroImage = article.image || "";
     const indexEntry: Record<string, unknown> = {
       id: article.id,
       slug,
       title: article.title,
       category: (article.category || "general").toLowerCase(),
+      date: dateISO,
       dateISO,
       dateLabel,
       readTime,
       excerpt,
-      heroImage: article.image || "",
+      image: heroImage,
+      heroImage,
       detailUrl,
       tags: [(article.category || "general").toLowerCase()],
     };
@@ -564,6 +643,9 @@ export async function publishArticleToSite(
 
     await sftpWriteFile(sftp, fullDataPath, dataContent);
 
+    // 3b. 同步更新首页实际加载的数据文件（解决检测结果与首页引用不一致的问题）
+    await syncToHomepageDataFile(sftp, siteRoot, dataJsPath, indexEntry, article.id);
+
     // 4. 创建文章详情 HTML 页面（仅静态 HTML 类型，如 post-{slug}.html）
     if (isStaticHtml) {
       await createArticleHtmlPage(
@@ -573,27 +655,36 @@ export async function publishArticleToSite(
       );
     }
 
-    // 5. CDN 缓存刷新（更新 HTML 中的 ?v=timestamp）
+    // 5. CDN 缓存刷新（更新 HTML 中所有数据 JS 的 ?v= 参数）
     const ts = String(Math.floor(Date.now() / 1000));
-    const jsBasename = dataJsPath.split("/").pop() || "";
-    const cacheRe = new RegExp(jsBasename.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "\\?v=\\d+", "g");
+    // 收集所有需要刷新缓存的 JS 文件名
+    const jsBasenames = new Set<string>();
+    const primaryBasename = dataJsPath.split("/").pop() || "";
+    if (primaryBasename) jsBasenames.add(primaryBasename);
+    jsBasenames.add("articles-index.js");
 
     for (const htmlName of ["article.html", "articles.html", "index.html"]) {
       const htmlPath = `${siteRoot}/${htmlName}`;
       try {
         let html = await sftpReadFile(sftp, htmlPath);
-        if (!html.includes(jsBasename)) continue;
-        let newHtml: string;
-        if (cacheRe.test(html)) {
-          cacheRe.lastIndex = 0;
-          newHtml = html.replace(cacheRe, `${jsBasename}?v=${ts}`);
-        } else {
-          newHtml = html
-            .replace(`${jsBasename}"`, `${jsBasename}?v=${ts}"`)
-            .replace(`${jsBasename}'`, `${jsBasename}?v=${ts}'`);
+        let changed = false;
+        for (const basename of jsBasenames) {
+          if (!html.includes(basename)) continue;
+          const escaped = basename.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+          // 匹配 ?v= 后的任意非引号字符（支持字母+数字混合版本号如 20260314b）
+          const re = new RegExp(escaped + "\\?v=[^\"'\\s>]+", "g");
+          if (re.test(html)) {
+            re.lastIndex = 0;
+            html = html.replace(re, `${basename}?v=${ts}`);
+            changed = true;
+          } else {
+            const r1 = html.replace(`${basename}"`, `${basename}?v=${ts}"`);
+            const r2 = r1.replace(`${basename}'`, `${basename}?v=${ts}'`);
+            if (r2 !== html) { html = r2; changed = true; }
+          }
         }
-        if (newHtml !== html) {
-          await sftpWriteFile(sftp, htmlPath, newHtml);
+        if (changed) {
+          await sftpWriteFile(sftp, htmlPath, html);
         }
       } catch { /* skip */ }
     }
@@ -637,18 +728,30 @@ export async function unpublishArticleFromSite(
       });
     } catch { /* 文件可能不存在 */ }
 
-    // 2. 从索引文件中移除条目
+    // 2. 从所有索引文件中移除条目（包括首页数据文件）
+    const entryRegex = new RegExp(
+      `\\{[^}]*"id"\\s*:\\s*"${articleId}"[^}]*\\},?\\s*`,
+      "g"
+    );
+    // 收集需要清理的数据文件
+    const filesToClean = new Set<string>([fullDataPath]);
     try {
-      let dataContent = await sftpReadFile(sftp, fullDataPath);
-      const entryRegex = new RegExp(
-        `\\{[^}]*"id"\\s*:\\s*"${articleId}"[^}]*\\},?\\s*`,
-        "g"
-      );
-      const newContent = dataContent.replace(entryRegex, "");
-      if (newContent !== dataContent) {
-        await sftpWriteFile(sftp, fullDataPath, newContent);
+      const indexHtml = await sftpReadFile(sftp, `${siteRoot}/index.html`);
+      const knownFiles = [
+        "js/articles-index.js", "js/data.js", "data.js",
+        "articles-data.js", "assets/js/main.js", "assets/main.js",
+      ];
+      for (const f of knownFiles) {
+        if (indexHtml.includes(f)) filesToClean.add(`${siteRoot}/${f}`);
       }
-    } catch { /* 索引文件可能不存在 */ }
+    } catch { /* ignore */ }
+    for (const fp of filesToClean) {
+      try {
+        const content = await sftpReadFile(sftp, fp);
+        const cleaned = content.replace(entryRegex, "");
+        if (cleaned !== content) await sftpWriteFile(sftp, fp, cleaned);
+      } catch { /* 文件可能不存在 */ }
+    }
 
     // 3. 删除文章详情 HTML 页面
     if (slug) {

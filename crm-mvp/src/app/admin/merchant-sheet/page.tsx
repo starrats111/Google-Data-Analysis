@@ -32,6 +32,9 @@ export default function MerchantSheetPage() {
   const [syncResult, setSyncResult] = useState<any>(null);
   const [lastSynced, setLastSynced] = useState<string | null>(null);
 
+  // Service Account
+  const [saEmail, setSaEmail] = useState<string | null>(null);
+
   // 详情弹窗
   const [detailModal, setDetailModal] = useState(false);
   const [detailTitle, setDetailTitle] = useState("");
@@ -42,6 +45,7 @@ export default function MerchantSheetPage() {
     if (res.code === 0) {
       setSheetUrl(res.data.sheet_url || "");
       setLastSynced(res.data.last_synced_at);
+      setSaEmail(res.data.sa_email || null);
     }
   };
 
@@ -83,30 +87,34 @@ export default function MerchantSheetPage() {
     setSheetSyncing(true);
     setSyncResult(null);
     try {
-      // 从浏览器直接拉取 Google Sheets CSV（绕过服务器无法访问 Google 的问题）
+      // 服务端通过 Service Account API 直接访问 Sheet（支持需要授权的表格）
+      // 如果 SA 不可用，服务端会自动回退到公开 CSV 导出
+      // 浏览器端拉 CSV 作为最后兜底（仅在服务端两种方式都失败时有用）
       let csvData: string | undefined;
-      const sheetIdMatch = sheetUrl.match(/\/spreadsheets\/d\/([a-zA-Z0-9_-]+)/);
-      if (sheetIdMatch) {
-        const sid = sheetIdMatch[1];
-        const csvUrls = [
-          `https://docs.google.com/spreadsheets/d/${sid}/gviz/tq?tqx=out:csv&gid=0`,
-          `https://docs.google.com/spreadsheets/d/${sid}/export?format=csv&gid=0`,
-        ];
-        for (const url of csvUrls) {
-          try {
-            const resp = await fetch(url);
-            if (resp.ok) {
-              let text = await resp.text();
-              if (text.charCodeAt(0) === 0xFEFF) text = text.slice(1);
-              if (text.trim()) { csvData = text; break; }
-            }
-          } catch { /* try next URL */ }
+      if (!saEmail) {
+        const sheetIdMatch = sheetUrl.match(/\/spreadsheets\/d\/([a-zA-Z0-9_-]+)/);
+        if (sheetIdMatch) {
+          const sid = sheetIdMatch[1];
+          const csvUrls = [
+            `https://docs.google.com/spreadsheets/d/${sid}/gviz/tq?tqx=out:csv&gid=0`,
+            `https://docs.google.com/spreadsheets/d/${sid}/export?format=csv&gid=0`,
+          ];
+          for (const url of csvUrls) {
+            try {
+              const resp = await fetch(url);
+              if (resp.ok) {
+                let text = await resp.text();
+                if (text.charCodeAt(0) === 0xFEFF) text = text.slice(1);
+                if (text.trim()) { csvData = text; break; }
+              }
+            } catch { /* try next URL */ }
+          }
         }
       }
 
       const res = await fetch("/api/admin/merchant-sheet", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "sync", csv_data: csvData }),
+        body: JSON.stringify({ action: "sync", ...(csvData ? { csv_data: csvData } : {}) }),
       }).then((r) => r.json());
       if (res.code === 0) {
         setSyncResult(res.data);
@@ -154,11 +162,28 @@ export default function MerchantSheetPage() {
           <Button type="primary" loading={sheetSyncing} onClick={handleSync} disabled={!sheetUrl} icon={<CloudSyncOutlined />}>
             统一同步
           </Button>
-          <Tooltip title="从同一个 Google Sheets 链接同步黑名单（gid=0）和推荐商家表（第二个 sheet），按商家名称+域名跨平台匹配">
+          <Tooltip title="从同一个 Google Sheets 链接同步黑名单（gid=0 的 A-F 列）和推荐商家（gid=0 的 G-M 列），按商家名称+域名跨平台匹配">
             <span style={{ fontSize: 12, color: "#999", cursor: "help" }}>ⓘ</span>
           </Tooltip>
           {lastSynced && <span style={{ fontSize: 12, color: "#999" }}>上次同步: {new Date(lastSynced).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai" })}</span>}
         </div>
+        {saEmail && (
+          <Alert
+            type="info" showIcon style={{ marginTop: 12 }}
+            message={
+              <span>
+                已启用 Service Account 认证访问，支持需要邮箱授权的 Google Sheet。
+                请将 Sheet 共享给：<strong style={{ userSelect: "all" }}>{saEmail}</strong>（查看者权限即可）
+              </span>
+            }
+          />
+        )}
+        {!saEmail && (
+          <Alert
+            type="warning" showIcon style={{ marginTop: 12 }}
+            message="未检测到 Service Account，仅支持公开的 Google Sheet。如需访问授权表格，请在 MCC 设置中配置 Service Account。"
+          />
+        )}
       </Card>
 
       {syncResult && (

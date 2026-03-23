@@ -6,7 +6,7 @@ import {
 } from "antd";
 import {
   PlusOutlined, EditOutlined, DeleteOutlined, SaveOutlined,
-  CloudServerOutlined, ApiOutlined, DatabaseOutlined, SettingOutlined,
+  CloudServerOutlined, ApiOutlined, DatabaseOutlined, SettingOutlined, GoogleOutlined,
 } from "@ant-design/icons";
 import { useEffect, useState, useCallback } from "react";
 
@@ -20,6 +20,7 @@ interface ConfigField {
   placeholder: string;
   required?: boolean;
   isPassword?: boolean;
+  isTextarea?: boolean;
   type?: string;
 }
 
@@ -49,6 +50,14 @@ const CONFIG_GROUPS: Record<string, {
       { key: "mysql_password", label: "密码", placeholder: "数据库密码", isPassword: true },
       { key: "mysql_database", label: "数据库名", placeholder: "google-data-analysis", required: true },
       { key: "mysql_shadow_database", label: "影子库名", placeholder: "google-data-analysis_shadow" },
+    ],
+  },
+  google_sheets: {
+    title: "Google Sheets 服务账号",
+    icon: <GoogleOutlined />,
+    description: "用于访问需要邮箱授权的 Google Sheet（违规/推荐商家名单）。粘贴 Service Account JSON 密钥，并将 Sheet 共享给该服务账号邮箱（查看者权限）。与 wj07 的 MCC 服务账号一致。",
+    fields: [
+      { key: "google_sheets_sa_json", label: "Service Account JSON", placeholder: "粘贴 Google Cloud Service Account 密钥 JSON 全文", required: true, isTextarea: true },
     ],
   },
 };
@@ -134,10 +143,12 @@ function ConfigGroupCard({
               name={field.key}
               label={field.label}
               rules={field.required ? [{ required: true, message: `请输入${field.label}` }] : undefined}
-              style={field.key.includes("base_url") || field.key.includes("key_path") ? { gridColumn: "1 / -1" } : undefined}
+              style={(field.key.includes("base_url") || field.key.includes("key_path") || field.isTextarea) ? { gridColumn: "1 / -1" } : undefined}
             >
               {field.isPassword ? (
                 <Password placeholder={field.placeholder} />
+              ) : field.isTextarea ? (
+                <TextArea rows={6} placeholder={field.placeholder} style={{ fontFamily: "monospace", fontSize: 12 }} />
               ) : (
                 <Input placeholder={field.placeholder} />
               )}
@@ -238,6 +249,13 @@ export default function SystemConfigPage() {
               label: <><DatabaseOutlined /> MySQL 配置</>,
               children: (
                 <ConfigGroupCard groupKey="mysql" group={CONFIG_GROUPS.mysql} configValues={configValues} onSaved={fetchAll} />
+              ),
+            },
+            {
+              key: "google_sheets",
+              label: <><GoogleOutlined /> Google Sheets</>,
+              children: (
+                <ConfigGroupCard groupKey="google_sheets" group={CONFIG_GROUPS.google_sheets} configValues={configValues} onSaved={fetchAll} />
               ),
             },
             {

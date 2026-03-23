@@ -230,6 +230,7 @@ JSON schema: {"content":"<full article HTML with h2/h3/p tags, 10-15 hyperlinks>
     if (result.content) {
       result.content = humanize(result.content);
       result.content = ensureLinkCount(result.content, trackingLink, merchantName, products, keywords);
+      result.content = redistributeImages(result.content);
     }
 
     return {
@@ -244,6 +245,73 @@ JSON schema: {"content":"<full article HTML with h2/h3/p tags, 10-15 hyperlinks>
     console.error("[generateMerchantArticle] 失败:", err);
     throw err;
   }
+}
+
+/**
+ * 将文章中的图片重新均匀分布到各段落之间。
+ * 第一张图保持为 hero image（标题后），其余图片按等间距插入到段落间。
+ */
+function redistributeImages(html: string): string {
+  const imgRegex = /<img\s[^>]*?\/?>/gi;
+  const allImages = [...html.matchAll(imgRegex)].map((m) => m[0]);
+  if (allImages.length <= 1) return html;
+
+  // 移除所有图片
+  let cleaned = html.replace(imgRegex, "");
+  // 清理移除图片后产生的连续空行
+  cleaned = cleaned.replace(/(<\/(?:p|div|section)>)\s*(<(?:p|div|section)[\s>])/gi, "$1\n$2");
+
+  // 按段落级元素分割（h2/h3/p/div/ul/ol/blockquote/table/figure）
+  const blockRegex = /(<(?:h[1-6]|p|div|ul|ol|blockquote|table|figure|section)[\s>][\s\S]*?<\/(?:h[1-6]|p|div|ul|ol|blockquote|table|figure|section)>)/gi;
+  const blocks = [...cleaned.matchAll(blockRegex)].map((m) => m[0]);
+  if (blocks.length === 0) return html;
+
+  const heroImg = allImages[0];
+  const bodyImages = allImages.slice(1);
+
+  if (bodyImages.length === 0) {
+    // 只有 hero 图：放在第一个块之后
+    const firstBlockEnd = cleaned.indexOf(blocks[0]) + blocks[0].length;
+    return cleaned.slice(0, firstBlockEnd) + "\n" + heroImg + cleaned.slice(firstBlockEnd);
+  }
+
+  // 计算 body 图片的插入位置：均匀分布在所有块之间
+  // 跳过第一个块（hero 图会放在它后面），从第二个块开始计算分布
+  const availableSlots = blocks.length - 1; // 第一个块之后到最后一个块之间的间隙数
+  const insertPositions: number[] = [];
+
+  for (let i = 0; i < bodyImages.length; i++) {
+    // 均匀映射：将 bodyImages[i] 映射到 blocks 间隙中
+    const pos = Math.round(((i + 1) * availableSlots) / (bodyImages.length + 1));
+    insertPositions.push(pos);
+  }
+
+  // 重建 HTML：逐块拼接，在合适的位置插入图片
+  let result = "";
+  let searchFrom = 0;
+
+  for (let blockIdx = 0; blockIdx < blocks.length; blockIdx++) {
+    const blockStart = cleaned.indexOf(blocks[blockIdx], searchFrom);
+    // 保留块前面的内容（空白、注释等）
+    result += cleaned.slice(searchFrom, blockStart + blocks[blockIdx].length);
+    searchFrom = blockStart + blocks[blockIdx].length;
+
+    // 在第一个块后面插入 hero 图
+    if (blockIdx === 0) {
+      result += "\n" + heroImg;
+    }
+
+    // 检查是否需要在这个间隙插入 body 图片
+    for (let imgIdx = 0; imgIdx < bodyImages.length; imgIdx++) {
+      if (insertPositions[imgIdx] === blockIdx + 1) {
+        result += "\n" + bodyImages[imgIdx];
+      }
+    }
+  }
+
+  // 拼接剩余内容
+  result += cleaned.slice(searchFrom);
+  return result;
 }
 
 /** 确保文章中超链接数量在 10-15 之间 */

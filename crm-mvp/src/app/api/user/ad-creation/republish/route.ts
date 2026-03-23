@@ -46,12 +46,21 @@ export async function POST(req: NextRequest) {
   // 2. 重新生成正确的广告系列名称
   const merchant = await prisma.user_merchants.findFirst({
     where: { id: campaign.user_merchant_id, is_deleted: 0 },
-    select: { platform: true, merchant_name: true, merchant_id: true },
+    select: { platform: true, merchant_name: true, merchant_id: true, platform_connection_id: true },
   });
 
   const adSettings = await prisma.ad_default_settings.findFirst({
     where: { user_id: userId, is_deleted: 0 },
   });
+
+  let connAccountName = "";
+  if (merchant?.platform_connection_id) {
+    const conn = await prisma.platform_connections.findFirst({
+      where: { id: merchant.platform_connection_id, is_deleted: 0 },
+      select: { account_name: true },
+    });
+    connAccountName = conn?.account_name || "";
+  }
 
   let newCampaignName = campaign.campaign_name;
   if (merchant) {
@@ -62,6 +71,9 @@ export async function POST(req: NextRequest) {
       campaign.target_country || "US",
       merchant.merchant_id || "",
       adSettings?.naming_rule || "global",
+      connAccountName,
+      adSettings?.naming_prefix || "",
+      campaign.mcc_id,
     );
   }
 

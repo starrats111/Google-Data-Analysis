@@ -6,7 +6,7 @@ import {
   Dropdown, DatePicker, Tooltip, App, Input, Modal,
 } from "antd";
 import {
-  DollarOutlined, RiseOutlined, FallOutlined, SyncOutlined,
+  RiseOutlined, FallOutlined, SyncOutlined,
   CloudDownloadOutlined, TableOutlined, EditOutlined, SearchOutlined,
   PlayCircleOutlined, PauseCircleOutlined, RedoOutlined,
 } from "@ant-design/icons";
@@ -110,7 +110,7 @@ export default function DataCenterPage() {
     }));
   }, [rows]);
 
-  // 同步 — 未选 MCC 时逐个同步所有 MCC
+  // 一键同步：广告数据 + 联盟交易（合并为单个操作）
   const handleSync = useCallback(async () => {
     if (mccAccounts.length === 0) { message.warning("请先添加 MCC 账户"); return; }
     setSyncing(true);
@@ -129,7 +129,7 @@ export default function DataCenterPage() {
       }
 
       if (successCount > 0) {
-        message.success(`${successCount} 个 MCC 同步完成${errors.length > 0 ? `，${errors.length} 个失败` : ""}`);
+        message.success(`${successCount} 个 MCC 同步完成（含广告数据和交易佣金）${errors.length > 0 ? `，${errors.length} 个失败` : ""}`);
         refreshApi(/\/api\/user\/data-center/);
       } else {
         message.error(errors[0] || "同步失败");
@@ -137,21 +137,24 @@ export default function DataCenterPage() {
     } finally { setSyncing(false); }
   }, [selectedMcc, mccAccounts, message]);
 
-  // 同步交易佣金
-  const [syncingTxn, setSyncingTxn] = useState(false);
-  const handleSyncTransactions = useCallback(async () => {
-    setSyncingTxn(true);
+  // 同步 CID 子账户
+  const [syncingCid, setSyncingCid] = useState(false);
+  const handleSyncCids = useCallback(async () => {
+    if (mccAccounts.length === 0) { message.warning("请先添加 MCC 账户"); return; }
+    const mccId = selectedMcc || mccAccounts[0]?.id;
+    if (!mccId) return;
+    setSyncingCid(true);
     try {
-      const res = await fetch("/api/user/data-center/sync-transactions", {
+      const res = await fetch("/api/user/data-center/cids", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({}),
+        body: JSON.stringify({ mcc_account_id: mccId }),
       }).then((r) => r.json());
       if (res.code === 0) {
-        message.success(res.data?.message || "交易同步完成");
+        message.success(res.data?.message || "CID 同步完成");
         refreshApi(/\/api\/user\/data-center/);
       } else message.error(res.message);
-    } finally { setSyncingTxn(false); }
-  }, [message]);
+    } finally { setSyncingCid(false); }
+  }, [selectedMcc, mccAccounts, message]);
 
   const handleOpenCommissionModal = useCallback(async () => {
     setCommissionModal(true);
@@ -367,9 +370,12 @@ export default function DataCenterPage() {
           </Col>
           <Col>
             <Space>
-              <Button type="primary" size="small" icon={<SyncOutlined spin={syncing} />} loading={syncing} onClick={handleSync}>同步数据</Button>
-              <Button size="small" icon={<DollarOutlined />} loading={syncingTxn} onClick={handleSyncTransactions}>同步交易</Button>
-              <Button size="small" icon={<CloudDownloadOutlined />}>同步 CID</Button>
+              <Tooltip title="一键同步广告数据和联盟交易佣金（首次同步将拉取全部历史数据）">
+                <Button type="primary" size="small" icon={<SyncOutlined spin={syncing} />} loading={syncing} onClick={handleSync}>
+                  {syncing ? "同步中..." : "重新同步"}
+                </Button>
+              </Tooltip>
+              <Button size="small" icon={<CloudDownloadOutlined />} loading={syncingCid} onClick={handleSyncCids}>同步 CID</Button>
             </Space>
           </Col>
         </Row>
@@ -406,7 +412,6 @@ export default function DataCenterPage() {
           <Card size="small" styles={{ body: { padding: "8px 12px" } }}>
             <Statistic title="ROI" value={summary.roi} precision={2}
               prefix={summary.roi >= 0 ? <RiseOutlined /> : <FallOutlined />}
-              suffix="%"
               styles={{ content: { fontSize: 18, color: summary.roi >= 0 ? "#389e0d" : "#cf1322" } }} />
           </Card>
         </Col>
