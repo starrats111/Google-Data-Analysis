@@ -292,6 +292,7 @@ async function syncAllUsersTransactions(): Promise<unknown> {
               update: {
                 commission_amount: txn.commission_amount || 0,
                 status: txn.status, raw_status: txn.raw_status || "",
+                is_deleted: 0,
                 ...(umId !== BigInt(0) ? { user_merchant_id: umId } : {}),
               },
             });

@@ -735,6 +735,7 @@ async function syncTransactionsInline(userId: bigint) {
                 status: txn.status, raw_status: txn.raw_status || "",
                 order_amount: txn.order_amount || 0,
                 merchant_name: merchantName || undefined,
+                is_deleted: 0,
               },
             });
           }).filter(Boolean);
