@@ -153,7 +153,7 @@ async function syncMerchantSheet(): Promise<unknown> {
   }
 }
 
-// ── 同步所有用户的 MCC 广告数据（Sheet + Google Ads API） ──
+// ── 同步所有用户的 MCC 广告数据（仅 Sheet，API 同步由用户手动触发） ──
 
 async function syncAllUsersMcc(): Promise<unknown> {
   const allMcc = await prisma.google_mcc_accounts.findMany({
@@ -185,7 +185,6 @@ async function syncAllUsersMcc(): Promise<unknown> {
           const rate = await fetchExchangeRate(mcc.currency);
 
           let sheetUpserted = 0;
-          let apiUpserted = 0;
 
           // 1. Sheet 同步（昨天→今天）
           if (mcc.sheet_url) {
@@ -216,57 +215,10 @@ async function syncAllUsersMcc(): Promise<unknown> {
             }
           }
 
-          // 2. Google Ads API 同步今日数据
-          if (mcc.service_account_json) {
-            try {
-              const { fetchTodayCampaignData } = await import("@/lib/google-ads");
-              const credentials = {
-                mcc_id: mcc.mcc_id,
-                developer_token: mcc.developer_token || "",
-                service_account_json: mcc.service_account_json,
-              };
-              const cids = await prisma.mcc_cid_accounts.findMany({
-                where: { mcc_account_id: mcc.id, is_deleted: 0, status: "active" },
-                take: 50,
-              });
-              const todayDate = new Date(endStr);
+          // Google Ads API 同步已移至前端「重新同步」按钮手动触发，
+          // 避免测试令牌用户在定时任务中产生 DEVELOPER_TOKEN_NOT_APPROVED 错误。
 
-              for (const cid of cids) {
-                try {
-                  const data = await fetchTodayCampaignData(credentials, cid.customer_id);
-                  for (const cd of data) {
-                    const campaign = await prisma.campaigns.findFirst({
-                      where: { user_id: uid, google_campaign_id: cd.campaign_id, is_deleted: 0 },
-                      select: { id: true },
-                    });
-                    if (!campaign) continue;
-
-                    await prisma.ads_daily_stats.upsert({
-                      where: { uk_campaign_date: { campaign_id: campaign.id, date: todayDate } },
-                      update: {
-                        cost: Number((cd.cost_dollars * rate).toFixed(2)),
-                        clicks: cd.clicks, impressions: cd.impressions,
-                        data_source: "api",
-                      },
-                      create: {
-                        user_id: uid, campaign_id: campaign.id, date: todayDate,
-                        cost: Number((cd.cost_dollars * rate).toFixed(2)),
-                        clicks: cd.clicks, impressions: cd.impressions,
-                        user_merchant_id: BigInt(0), data_source: "api",
-                      },
-                    });
-                    apiUpserted++;
-                  }
-                } catch (e) {
-                  log(`    CID ${cid.customer_id} API error: ${e instanceof Error ? e.message : String(e)}`);
-                }
-              }
-            } catch (e) {
-              log(`    API sync error: ${e instanceof Error ? e.message : String(e)}`);
-            }
-          }
-
-          results[`mcc_${mcc.mcc_id}`] = { sheetUpserted, apiUpserted, rate };
+          results[`mcc_${mcc.mcc_id}`] = { sheetUpserted, rate };
         } catch (e) {
           results[`mcc_${mcc.mcc_id}`] = { error: e instanceof Error ? e.message : String(e) };
         }
