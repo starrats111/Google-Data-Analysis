@@ -204,7 +204,7 @@ async function syncAllUsersMcc(): Promise<unknown> {
                 const costUsd = Number((row.cost * rate).toFixed(2));
 
                 await prisma.ads_daily_stats.upsert({
-                  where: { uk_campaign_date: { campaign_id: campaign.id, date: dateObj } },
+                  where: { campaign_id_date: { campaign_id: campaign.id, date: dateObj } },
                   update: { cost: costUsd, clicks: row.clicks, impressions: row.impressions },
                   create: {
                     user_id: uid, campaign_id: campaign.id, date: dateObj,

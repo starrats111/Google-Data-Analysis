@@ -190,7 +190,7 @@ async function syncAdsData(
                 };
 
                 await prisma.ads_daily_stats.upsert({
-                  where: { uk_campaign_date: { campaign_id: campaign.id, date: dateObj } },
+                  where: { campaign_id_date: { campaign_id: campaign.id, date: dateObj } },
                   update: statsData,
                   create: { user_id: userId, user_merchant_id: BigInt(0), campaign_id: campaign.id, date: dateObj, ...statsData },
                 });

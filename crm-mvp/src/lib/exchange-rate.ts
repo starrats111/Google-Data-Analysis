@@ -21,7 +21,7 @@ export async function getExchangeRate(currency: string, dateStr: string): Promis
   const dateObj = new Date(dateStr);
 
   const snapshot = await prisma.exchange_rate_snapshots.findUnique({
-    where: { uk_currency_date: { currency: cur, date: dateObj } },
+    where: { currency_date: { currency: cur, date: dateObj } },
   });
   if (snapshot) {
     const rate = Number(snapshot.rate_to_usd);
@@ -36,7 +36,7 @@ export async function getExchangeRate(currency: string, dateStr: string): Promis
         data: { currency: cur, date: dateObj, rate_to_usd: apiRate },
       });
     } catch {
-      // uk_currency_date 冲突时忽略（并发写入）
+      // currency_date 唯一约束冲突时忽略（并发写入）
     }
     rateCache.set(key, apiRate);
     return apiRate;
