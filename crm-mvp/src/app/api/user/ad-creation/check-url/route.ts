@@ -217,29 +217,28 @@ async function tryValidateUrl(
           const body = await res.text().catch(() => "");
           if (isCloudflareChallenge(body)) {
             cloudflareCount++;
-            if (i < UA_POOL.length - 1) continue; // 继续尝试其他 UA
+            if (i < UA_POOL.length - 1) continue;
+            break; // 所有 UA 都被 Cloudflare 拦截，跳出循环走 cloudflareCount 兜底
           }
         } catch {}
         const getResult = await getAndCheck(url, ua);
         if (getResult) return getResult;
         if (i < UA_POOL.length - 1) continue;
-      }
-
-      if (res.status === 405) {
+        return { ok: false, status: res.status, finalUrl: url, reason: `请求失败 ${res.status}` };
+      } else if (res.status === 405) {
         const getResult = await getAndCheck(url, ua);
         if (getResult) return getResult;
         if (i < UA_POOL.length - 1) continue;
-      }
-
-      if (res.status >= 500) {
+        return { ok: false, status: res.status, finalUrl: url, reason: `请求失败 ${res.status}` };
+      } else if (res.status >= 500) {
         if (i < UA_POOL.length - 1) continue;
         return { ok: false, status: res.status, finalUrl: url, reason: `服务器错误 ${res.status}` };
+      } else {
+        const getResult = await getAndCheck(url, ua);
+        if (getResult) return getResult;
+        if (i < UA_POOL.length - 1) continue;
+        return { ok: false, status: res.status, finalUrl: url, reason: `请求失败 ${res.status}` };
       }
-
-      const getResult = await getAndCheck(url, ua);
-      if (getResult) return getResult;
-      if (i < UA_POOL.length - 1) continue;
-      return { ok: false, status: res.status, finalUrl: url, reason: `请求失败 ${res.status}` };
     } catch (err) {
       const msg = err instanceof Error ? err.message : "";
       if (msg.includes("abort")) {
