@@ -608,7 +608,6 @@ async function syncArticleImages(
   content: string,
 ): Promise<string> {
   const imagesDir = `${siteRoot}/images/articles`;
-  await execCommand(client, `mkdir -p ${imagesDir} || sudo mkdir -p ${imagesDir}`);
 
   // 匹配 src 和 data-src 属性中的外链图片
   const imgRegex = /<img\s[^>]*?(?:src|data-src)=["']([^"']+)["'][^>]*?\/?>/gi;
@@ -678,6 +677,18 @@ function extractHeroImage(content: string): string {
   return dataSrcMatch ? dataSrcMatch[1] : "";
 }
 
+async function ensureSiteWritable(client: Client, siteRoot: string, dataJsPath: string): Promise<void> {
+  const dirs = [`${siteRoot}/js`, `${siteRoot}/js/articles`, `${siteRoot}/images`, `${siteRoot}/images/articles`];
+  for (const dir of dirs) {
+    await execCommand(client, `sudo mkdir -p ${dir} && sudo chown ubuntu:www ${dir} && sudo chmod 775 ${dir} 2>/dev/null; true`);
+  }
+  const dataFile = `${siteRoot}/${dataJsPath}`;
+  await execCommand(client, `test -f ${dataFile} && sudo chown ubuntu:www ${dataFile} && sudo chmod 664 ${dataFile} 2>/dev/null; true`);
+  for (const html of ["index.html", "article.html", "articles.html"]) {
+    await execCommand(client, `test -f ${siteRoot}/${html} && sudo chown ubuntu:www ${siteRoot}/${html} && sudo chmod 664 ${siteRoot}/${html} 2>/dev/null; true`);
+  }
+}
+
 export async function publishArticleToSite(
   article: ArticlePayload,
   site: SiteConfig
@@ -694,6 +705,8 @@ export async function publishArticleToSite(
     const pattern = site.article_html_pattern || "article.html?title={slug}";
     const detailUrl = pattern.replace("{slug}", slug);
     const isStaticHtml = !detailUrl.includes("?");
+
+    await ensureSiteWritable(client, siteRoot, dataJsPath);
 
     // ─── 图片本地化（v3.0）───
     let workingContent = article.content;
@@ -733,9 +746,8 @@ export async function publishArticleToSite(
     const wordCount = plainText.split(/\s+/).filter(Boolean).length;
     const readTime = `${Math.max(1, Math.ceil(wordCount / 200))} min read`;
 
-    // 1. 确保 js/articles 目录存在（存放 JSON 详情）
+    // 1. js/articles 目录（ensureSiteWritable 已创建并修正权限）
     const articlesDir = `${siteRoot}/js/articles`;
-    await execCommand(client, `mkdir -p ${articlesDir} || sudo mkdir -p ${articlesDir}`);
 
     // 2. 写入文章 JSON 详情（使用本地化后的 content）
     const articleJson = JSON.stringify({
