@@ -385,7 +385,7 @@ export const GET = withUser(async (req: NextRequest, { user }) => {
         _count: true,
       }),
       prisma.user_merchants.count({ where: { user_id: userId, is_deleted: 0 } }),
-      Promise.resolve(claimedMids.length),
+      prisma.user_merchants.count({ where: { user_id: userId, is_deleted: 0, status: "claimed" } }),
     ]);
 
     return apiSuccess(serializeData({
