@@ -90,7 +90,7 @@ export default function MerchantsPage() {
   const [sortField, setSortField] = useState("");
   const [sortOrder, setSortOrder] = useState<"asc" | "desc" | "">("");
   const mp = useMemo(() => ({ tab, page, pageSize: 50, ...(platform ? { platform } : {}), ...(search ? { search } : {}), ...(labelFilter ? { label: labelFilter } : {}), ...(sortField ? { sortField, sortOrder } : {}) }), [tab, platform, search, labelFilter, page, sortField, sortOrder]);
-  const { data: md, isLoading: ml } = useApiWithParams<MerchantResponse>((tab === "claimed" || tab === "available") ? "/api/user/merchants" : null, mp);
+  const { data: md, isLoading: ml } = useApiWithParams<MerchantResponse>((tab === "claimed" || tab === "available") ? "/api/user/merchants" : null, mp, { keepPreviousData: false });
   const merchants = md?.merchants || [];
   const total = md?.total || 0;
   const stats = md?.stats || { total: 0, claimed: 0, byPlatform: [] };

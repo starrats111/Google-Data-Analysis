@@ -205,16 +205,17 @@ async function doSyncInBackground(
       }
     }
 
-    // 批量更新（每 50 条并发）
-    for (let i = 0; i < updateOps.length; i += 50) {
-      const batch = updateOps.slice(i, i + 50);
+    // 批量更新（每 2 条并发，避免独占连接池导致 UI 请求超时）
+    const DB_BATCH = 2;
+    for (let i = 0; i < updateOps.length; i += DB_BATCH) {
+      const batch = updateOps.slice(i, i + DB_BATCH);
       await Promise.all(batch.map(op => prisma.user_merchants.update({ where: { id: op.id }, data: op.data })));
     }
     updatedCount = updateOps.length;
 
-    // 批量创建（每 50 条并发）
-    for (let i = 0; i < createOps.length; i += 50) {
-      const batch = createOps.slice(i, i + 50);
+    // 批量创建（每 2 条并发）
+    for (let i = 0; i < createOps.length; i += DB_BATCH) {
+      const batch = createOps.slice(i, i + DB_BATCH);
       const results = await Promise.all(batch.map(op => prisma.user_merchants.create({ data: op.data as any })));
       for (let j = 0; j < results.length; j++) {
         const created = results[j];
