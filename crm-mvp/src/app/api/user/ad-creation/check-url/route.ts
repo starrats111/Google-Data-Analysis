@@ -9,10 +9,6 @@ const UA_POOL = [
   "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)",
 ];
 
-/**
- * JS 重定向 / 挑战页面的 URL 模式
- * 这些 URL 本身不是内容页，是 bot 检测中间页
- */
 const JS_REDIRECT_PATTERNS = [
   /\/httpservice\/retry/i,
   /\/enablejs/i,
@@ -23,6 +19,16 @@ const JS_REDIRECT_PATTERNS = [
   /\/captcha\//i,
   /\/bot-check/i,
   /\/human-verification/i,
+];
+
+const SOFT_404_SIGNALS = [
+  "page not found", "page introuvable", "seite nicht gefunden",
+  "página no encontrada", "pagina non trovata",
+  "not found", "does not exist", "n'existe pas",
+  "nichts gefunden", "has disappeared",
+  "no longer available", "has been removed",
+  "page doesn't exist", "page does not exist",
+  "couldn't find", "could not find this page",
 ];
 
 function isJsRedirectUrl(url: string): boolean {
@@ -50,13 +56,55 @@ function buildStealthHeaders(ua: string): Record<string, string> {
   return headers;
 }
 
+function extractTitle(html: string): string {
+  const m = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
+  return m ? m[1].replace(/\s+/g, " ").trim() : "";
+}
+
 /**
- * 通过内容判断页面是否为有效页面（即使 status >= 400）
- * 如果 HTML 包含正常页面内容（<main>, <article>, 产品区域等），视为有效
+ * 检测页面是否为软 404（HTTP 200 但内容为"页面不存在"）
+ * 通过标题和内容中的关键词判断
  */
+function checkSoft404(html: string): { isSoft404: boolean; reason?: string } {
+  const title = extractTitle(html).toLowerCase();
+  const lower = html.toLowerCase();
+
+  // 标题直接包含 404 或 not found → 高置信度
+  if (title.includes("404") || title.includes("not found") || title.includes("page not found")) {
+    return { isSoft404: true, reason: `页面标题含"${title.includes("404") ? "404" : "not found"}"（软 404）` };
+  }
+
+  // 标题包含其他软 404 信号
+  for (const s of SOFT_404_SIGNALS) {
+    if (title.includes(s)) {
+      return { isSoft404: true, reason: `页面标题含"${s}"（软 404）` };
+    }
+  }
+
+  // 短页面（< 20KB）且内容包含多个软 404 信号 → 高置信度
+  if (html.length < 20000) {
+    const hits = SOFT_404_SIGNALS.filter((s) => lower.includes(s));
+    if (hits.length >= 2) {
+      return { isSoft404: true, reason: `页面内容含多个 404 信号（软 404）` };
+    }
+  }
+
+  return { isSoft404: false };
+}
+
+function isCloudflareChallenge(html: string): boolean {
+  const lower = html.toLowerCase();
+  return lower.includes("just a moment") || lower.includes("cf_chl_opt") ||
+    lower.includes("cloudflare") || lower.includes("cf-ray");
+}
+
 function isValidPageContent(html: string): boolean {
   const lower = html.toLowerCase();
   if (html.length < 500) return false;
+
+  // 先检查软 404 —— 软 404 页面不算有效
+  if (checkSoft404(html).isSoft404) return false;
+
   if (html.length > 50000) return true;
 
   const blockedSignals = [
@@ -83,14 +131,54 @@ function isValidPageContent(html: string): boolean {
   return false;
 }
 
+/**
+ * GET 请求获取页面内容，检查软 404
+ * 返回 null 表示请求失败（调用方可继续尝试其他 UA）
+ */
+async function getAndCheck(
+  url: string,
+  ua: string,
+): Promise<{ ok: boolean; status: number; finalUrl: string; reason?: string } | null> {
+  try {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 12000);
+    const res = await fetch(url, {
+      method: "GET", redirect: "follow", signal: ctrl.signal,
+      headers: buildStealthHeaders(ua),
+    });
+    clearTimeout(t);
+
+    const html = await res.text().catch(() => "");
+
+    if (isCloudflareChallenge(html)) {
+      return null; // Cloudflare 拦截，让调用方尝试下一个 UA
+    }
+
+    if (res.status < 400) {
+      const soft = checkSoft404(html);
+      if (soft.isSoft404) {
+        return { ok: false, status: res.status, finalUrl: res.url, reason: soft.reason };
+      }
+      return { ok: true, status: res.status, finalUrl: res.url };
+    }
+
+    // status >= 400 但内容有效（某些网站对 bot 返回 403 但页面正常）
+    if (isValidPageContent(html)) {
+      return { ok: true, status: res.status, finalUrl: res.url, reason: "页面内容有效" };
+    }
+  } catch {}
+  return null;
+}
+
 async function tryValidateUrl(
   url: string,
 ): Promise<{ ok: boolean; status: number; finalUrl: string; reason?: string }> {
+  let cloudflareCount = 0;
+
   for (let i = 0; i < UA_POOL.length; i++) {
     const ua = UA_POOL[i];
     const headers = buildStealthHeaders(ua);
 
-    // HEAD 请求
     try {
       const ctrl = new AbortController();
       const t = setTimeout(() => ctrl.abort(), 10000);
@@ -108,36 +196,37 @@ async function tryValidateUrl(
             return { ok: false, status: res.status, finalUrl, reason: `链接被重定向到不同域名 ${finalDomain}` };
           }
         } catch {}
+
+        // HEAD 返回 200 不够 —— 用 GET 检查内容是否为软 404
+        const getResult = await getAndCheck(url, ua);
+        if (getResult) return getResult;
+
+        // GET 失败（Cloudflare 等），HEAD 200 作为兜底
         return { ok: true, status: res.status, finalUrl };
       }
 
       if (res.status === 404 || res.status === 410) {
-        // 有些服务器对 HEAD 返回 404 但 GET 正常，用 GET 重试
-        const getResult = await tryGet(url, ua);
+        const getResult = await getAndCheck(url, ua);
         if (getResult) return getResult;
         if (i < UA_POOL.length - 1) continue;
         return { ok: false, status: res.status, finalUrl: url, reason: `页面返回 ${res.status}（页面不存在）` };
       }
 
       if (res.status === 403) {
-        // 先检查是否 Cloudflare
         try {
           const body = await res.text().catch(() => "");
-          const isCf = body.includes("Just a moment") || body.includes("cf_chl_opt") ||
-            body.includes("cloudflare") || body.includes("cf-ray");
-          if (isCf) {
-            return { ok: true, status: 200, finalUrl: url, reason: "Cloudflare 保护（链接有效）" };
+          if (isCloudflareChallenge(body)) {
+            cloudflareCount++;
+            if (i < UA_POOL.length - 1) continue; // 继续尝试其他 UA
           }
         } catch {}
-        // GET 重试
-        const getResult = await tryGet(url, ua);
+        const getResult = await getAndCheck(url, ua);
         if (getResult) return getResult;
         if (i < UA_POOL.length - 1) continue;
       }
 
       if (res.status === 405) {
-        // Method Not Allowed - 尝试 GET
-        const getResult = await tryGet(url, ua);
+        const getResult = await getAndCheck(url, ua);
         if (getResult) return getResult;
         if (i < UA_POOL.length - 1) continue;
       }
@@ -147,8 +236,7 @@ async function tryValidateUrl(
         return { ok: false, status: res.status, finalUrl: url, reason: `服务器错误 ${res.status}` };
       }
 
-      // 其他 4xx，GET 重试
-      const getResult = await tryGet(url, ua);
+      const getResult = await getAndCheck(url, ua);
       if (getResult) return getResult;
       if (i < UA_POOL.length - 1) continue;
       return { ok: false, status: res.status, finalUrl: url, reason: `请求失败 ${res.status}` };
@@ -162,47 +250,17 @@ async function tryValidateUrl(
     }
   }
 
+  // 所有 UA 都被 Cloudflare 拦截 —— 无法确认真实性
+  if (cloudflareCount === UA_POOL.length) {
+    return { ok: true, status: 200, finalUrl: url, reason: "Cloudflare 保护，无法验证页面内容" };
+  }
+
   return { ok: false, status: 0, finalUrl: url, reason: "所有验证方式均失败" };
-}
-
-async function tryGet(
-  url: string,
-  ua: string,
-): Promise<{ ok: boolean; status: number; finalUrl: string; reason?: string } | null> {
-  try {
-    const ctrl = new AbortController();
-    const t = setTimeout(() => ctrl.abort(), 12000);
-    const res = await fetch(url, {
-      method: "GET", redirect: "follow", signal: ctrl.signal,
-      headers: buildStealthHeaders(ua),
-    });
-    clearTimeout(t);
-
-    if (res.status < 400) {
-      return { ok: true, status: res.status, finalUrl: res.url };
-    }
-
-    // 即使 status >= 400，检查内容是否是有效页面
-    const html = await res.text().catch(() => "");
-
-    // 检查 Cloudflare
-    const lower = html.toLowerCase();
-    if (lower.includes("cloudflare") || lower.includes("cf-ray") || lower.includes("cf_chl_opt")) {
-      return { ok: true, status: 200, finalUrl: url, reason: "Cloudflare 保护（链接有效）" };
-    }
-
-    // 检查内容质量
-    if (isValidPageContent(html)) {
-      return { ok: true, status: res.status, finalUrl: res.url, reason: "页面内容有效" };
-    }
-  } catch {}
-  return null;
 }
 
 /**
  * GET /api/user/ad-creation/check-url?url=xxx
- * 验证站内链接是否真实有效
- * 使用和爬虫同级别的多UA策略、内容验证、JS重定向处理
+ * 验证站内链接是否真实有效（含软 404 检测）
  */
 export async function GET(req: NextRequest) {
   const user = getUserFromRequest(req);
@@ -218,7 +276,6 @@ export async function GET(req: NextRequest) {
     return apiSuccess({ ok: false, reason: "URL 格式无效" });
   }
 
-  // 如果是 JS 重定向/挑战 URL，验证基础域名
   if (isJsRedirectUrl(url)) {
     try {
       const baseUrl = new URL(url).origin;

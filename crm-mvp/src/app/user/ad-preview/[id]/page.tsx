@@ -549,8 +549,10 @@ export default function AdPreviewPage() {
       const metaJson = await metaRes.json();
       const checkJson = await checkRes.json();
 
-      const isValid = checkJson?.data?.ok === true;
+      const checkOk = checkJson?.data?.ok === true;
       const metaOk = metaJson.code === 0 && metaJson.data?.ok;
+      const isSoft404 = metaJson?.data?.isSoft404 === true;
+      const isValid = checkOk && !isSoft404;
 
       setSitelinks((prev) => {
         const n = [...prev];
@@ -563,7 +565,9 @@ export default function AdPreviewPage() {
         return n;
       });
 
-      if (metaOk) {
+      if (isSoft404) {
+        message.error("链接页面显示「页面不存在」（软 404）");
+      } else if (metaOk) {
         message.success("已自动获取页面标题和描述");
       } else if (isValid) {
         message.info("链接有效，但无法获取页面信息，请手动填写标题");
@@ -659,15 +663,25 @@ export default function AdPreviewPage() {
 
     setSitelinks((prev) => { const n = [...prev]; n[idx] = { ...n[idx], urlStatus: "checking" }; return n; });
     try {
-      const res = await fetch(`/api/user/ad-creation/check-url?url=${encodeURIComponent(url)}`);
-      const data = await res.json();
-      const isValid = data?.data?.ok === true;
+      const [checkRes, metaRes] = await Promise.all([
+        fetch(`/api/user/ad-creation/check-url?url=${encodeURIComponent(url)}`),
+        fetch(`/api/user/ad-creation/fetch-url-meta?url=${encodeURIComponent(url)}`),
+      ]);
+      const checkData = await checkRes.json();
+      const metaData = await metaRes.json();
+      const checkOk = checkData?.data?.ok === true;
+      const isSoft404 = metaData?.data?.isSoft404 === true;
+      const isValid = checkOk && !isSoft404;
       setSitelinks((prev) => {
         const n = [...prev];
         n[idx] = { ...n[idx], urlStatus: isValid ? "valid" : "invalid" };
         return n;
       });
-      if (!isValid) message.error(data?.data?.reason || "链接不可用（404 或无法访问）");
+      if (isSoft404) {
+        message.error("链接页面显示「页面不存在」（软 404）");
+      } else if (!isValid) {
+        message.error(checkData?.data?.reason || "链接不可用（404 或无法访问）");
+      }
     } catch {
       setSitelinks((prev) => { const n = [...prev]; n[idx] = { ...n[idx], urlStatus: "valid" }; return n; });
     }
