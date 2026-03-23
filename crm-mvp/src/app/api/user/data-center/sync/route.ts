@@ -518,9 +518,6 @@ async function linkCampaignsToMerchants(userId: bigint) {
     select: { id: true, campaign_name: true },
     take: 500,
   });
-  // #region agent log
-  fetch('http://127.0.0.1:7366/ingest/05d05002-39c6-4179-a54f-bba78c014ee4',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'c94445'},body:JSON.stringify({sessionId:'c94445',location:'sync/route.ts:linkCampaignsToMerchants',message:'H1A/H1D: linkCampaigns called',data:{userId:userId.toString(),unlinkedCount:unlinked.length,sampleNames:unlinked.slice(0,5).map(c=>c.campaign_name)},timestamp:Date.now()})}).catch(()=>{});
-  // #endregion
   if (unlinked.length === 0) return 0;
 
   const userMerchants = await prisma.user_merchants.findMany({
@@ -534,24 +531,12 @@ async function linkCampaignsToMerchants(userId: bigint) {
   let linked = 0;
   const updates: Promise<unknown>[] = [];
   const claimedMerchantIds = new Set<bigint>();
-  // #region agent log
-  let dbgParseFailCount = 0;
-  let dbgNoMatchCount = 0;
-  const dbgParseFails: string[] = [];
-  const dbgNoMatches: string[] = [];
-  // #endregion
 
   for (const c of unlinked) {
     const parsed = parseCampaignName(c.campaign_name || "");
-    // #region agent log
-    if (!parsed) { dbgParseFailCount++; if (dbgParseFails.length < 5) dbgParseFails.push(c.campaign_name || "(null)"); }
-    // #endregion
     if (!parsed) continue;
 
     const merchant = merchantIndex.get(`${parsed.platform}_${parsed.mid}`);
-    // #region agent log
-    if (!merchant) { dbgNoMatchCount++; if (dbgNoMatches.length < 5) dbgNoMatches.push(`${parsed.platform}_${parsed.mid}:${c.campaign_name}`); }
-    // #endregion
     if (!merchant) continue;
 
     updates.push(
@@ -579,9 +564,6 @@ async function linkCampaignsToMerchants(userId: bigint) {
   }
 
   if (updates.length > 0) await Promise.all(updates);
-  // #region agent log
-  fetch('http://127.0.0.1:7366/ingest/05d05002-39c6-4179-a54f-bba78c014ee4',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'c94445'},body:JSON.stringify({sessionId:'c94445',location:'sync/route.ts:linkCampaignsToMerchants-done',message:'H1B/H1C: link results',data:{linked,parseFailCount:dbgParseFailCount,noMatchCount:dbgNoMatchCount,parseFails:dbgParseFails,noMatches:dbgNoMatches,merchantIndexSize:merchantIndex.size,claimedCount:claimedMerchantIds.size},timestamp:Date.now()})}).catch(()=>{});
-  // #endregion
   return linked;
 }
 
@@ -596,10 +578,6 @@ async function claimLinkedMerchants(userId: bigint) {
     distinct: ["user_merchant_id"],
   });
 
-  // #region agent log
-  fetch('http://127.0.0.1:7366/ingest/05d05002-39c6-4179-a54f-bba78c014ee4',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'c94445'},body:JSON.stringify({sessionId:'c94445',location:'sync/route.ts:claimLinkedMerchants',message:'H1B: claimLinked diagnostics',data:{userId:userId.toString(),linkedMerchantCount:linkedMerchantIds.length,sampleIds:linkedMerchantIds.slice(0,5).map(c=>c.user_merchant_id.toString())},timestamp:Date.now()})}).catch(()=>{});
-  // #endregion
-
   if (linkedMerchantIds.length === 0) return 0;
 
   const ids = linkedMerchantIds.map((c) => c.user_merchant_id);
@@ -607,10 +585,6 @@ async function claimLinkedMerchants(userId: bigint) {
     where: { id: { in: ids }, user_id: userId, is_deleted: 0, status: { not: "claimed" } },
     data: { status: "claimed", claimed_at: new Date() },
   });
-
-  // #region agent log
-  fetch('http://127.0.0.1:7366/ingest/05d05002-39c6-4179-a54f-bba78c014ee4',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'c94445'},body:JSON.stringify({sessionId:'c94445',location:'sync/route.ts:claimLinkedMerchants-done',message:'H1B: claim result',data:{claimedCount:result.count},timestamp:Date.now()})}).catch(()=>{});
-  // #endregion
 
   return result.count;
 }

@@ -94,9 +94,11 @@ export const GET = withUser(async (req: NextRequest) => {
   // 本月统计数据
   const now = new Date();
   const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+  const nextMonth = new Date(now.getFullYear(), now.getMonth() + 1, 1);
 
   const allCampaignIds = activeUserIds.flatMap((e) => e.campaignIds);
 
+  // cost/clicks/impressions 从 ads_daily_stats 聚合
   const monthlyStats = await prisma.ads_daily_stats.groupBy({
     by: ["campaign_id"],
     where: {
@@ -108,33 +110,60 @@ export const GET = withUser(async (req: NextRequest) => {
       cost: true,
       clicks: true,
       impressions: true,
-      commission: true,
     },
   });
 
-  // campaign_id → stats
   const statsMap = new Map(monthlyStats.map((s) => [
     s.campaign_id.toString(),
     {
       cost: Number(s._sum.cost || 0),
       clicks: Number(s._sum.clicks || 0),
       impressions: Number(s._sum.impressions || 0),
-      commission: Number(s._sum.commission || 0),
     },
   ]));
 
+  // 佣金从 affiliate_transactions 聚合（半开区间处理 DATETIME 类型）
+  const commissionAgg = umIds.length > 0
+    ? await prisma.$queryRawUnsafe<
+        { user_merchant_id: bigint; user_id: bigint; total_commission: number }[]
+      >(`
+        SELECT
+          user_merchant_id, user_id,
+          SUM(CAST(commission_amount AS DECIMAL(12,2))) as total_commission
+        FROM affiliate_transactions
+        WHERE user_merchant_id IN (${umIds.map(() => "?").join(",")}) AND is_deleted = 0
+          AND transaction_time >= ? AND transaction_time < ?
+          AND user_merchant_id != 0
+        GROUP BY user_merchant_id, user_id
+      `, ...umIds, monthStart, nextMonth)
+    : [];
+
+  const commissionByUserMerchant = new Map<string, number>();
+  for (const r of commissionAgg) {
+    const key = `${r.user_id}_${r.user_merchant_id}`;
+    commissionByUserMerchant.set(key, Number(r.total_commission || 0));
+  }
+
   // 汇总每个用户
   const result = activeUserIds.map((entry) => {
-    let totalCost = 0, totalClicks = 0, totalImpressions = 0, totalCommission = 0;
+    let totalCost = 0, totalClicks = 0, totalImpressions = 0;
     for (const cid of entry.campaignIds) {
       const s = statsMap.get(cid.toString());
       if (s) {
         totalCost += s.cost;
         totalClicks += s.clicks;
         totalImpressions += s.impressions;
-        totalCommission += s.commission;
       }
     }
+
+    let totalCommission = 0;
+    for (const umId of umIds) {
+      const userId = userIdMap.get(umId);
+      if (userId && userId === entry.userId) {
+        totalCommission += commissionByUserMerchant.get(`${userId}_${umId}`) || 0;
+      }
+    }
+
     return {
       user_id: entry.userId,
       display_name: userNameMap.get(entry.userId.toString()) || "未知",

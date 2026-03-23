@@ -1,6 +1,6 @@
 import { NextRequest } from "next/server";
 import { serializeData } from "@/lib/auth";
-import { apiSuccess, apiError } from "@/lib/constants";
+import { apiSuccess, apiError, normalizePlatformCode } from "@/lib/constants";
 import { withUser } from "@/lib/api-handler";
 import prisma from "@/lib/prisma";
 import { generateCampaignName } from "@/lib/campaign-naming";
@@ -209,15 +209,20 @@ export const GET = withUser(async (req: NextRequest, { user }) => {
   }
 
   if (tab === "claimed") {
-    // #region agent log
-    const [dbgAllCount, dbgStatusCounts, dbgCampaignCount, dbgCampaignSamples] = await Promise.all([
-      prisma.user_merchants.count({ where: { user_id: userId, is_deleted: 0 } }),
-      prisma.user_merchants.groupBy({ by: ["status"], where: { user_id: userId, is_deleted: 0 } as never, _count: true }),
-      prisma.campaigns.count({ where: { user_id: userId, is_deleted: 0 } }),
-      prisma.campaigns.findMany({ where: { user_id: userId, is_deleted: 0 }, select: { id: true, campaign_name: true, user_merchant_id: true, google_campaign_id: true, google_status: true }, take: 10 }),
+    // ─── 数据一致性修复：有 campaigns 但无 claimed 商家时，自动关联 + 认领 ───
+    const [consistCampaignCount, consistClaimedCount] = await Promise.all([
+      prisma.campaigns.count({ where: { user_id: userId, is_deleted: 0, google_campaign_id: { not: null } } }),
+      prisma.user_merchants.count({ where: { user_id: userId, is_deleted: 0, status: "claimed" } }),
     ]);
-    fetch('http://127.0.0.1:7366/ingest/05d05002-39c6-4179-a54f-bba78c014ee4',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'c94445'},body:JSON.stringify({sessionId:'c94445',location:'merchants/route.ts:claimed-tab',message:'H1A-H1D: claimed tab diagnostics',data:{userId:userId.toString(),allMerchantCount:dbgAllCount,statusCounts:dbgStatusCounts,campaignCount:dbgCampaignCount,campaignSamples:dbgCampaignSamples.map(c=>({id:c.id.toString(),name:c.campaign_name,umId:c.user_merchant_id.toString(),gCampaignId:c.google_campaign_id,gStatus:c.google_status}))},timestamp:Date.now()})}).catch(()=>{});
-    // #endregion
+
+    if (consistCampaignCount > 0 && consistClaimedCount === 0) {
+      try {
+        await autoLinkAndClaimMerchants(userId);
+      } catch (err) {
+        console.error("[Merchants] 自动关联认领失败:", err);
+      }
+    }
+
     // ─── 我的商家：直接查 status="claimed" 的商家，不依赖广告系列 ───
     const where: Record<string, unknown> = {
       user_id: userId,
@@ -912,5 +917,96 @@ async function triggerArticleGeneration(
       });
     } catch {}
   }
+}
+
+/**
+ * 自动关联 campaigns ↔ user_merchants 并认领
+ * 当检测到有 campaigns 但无 claimed 商家时触发（数据一致性修复）
+ *
+ * 逻辑：
+ * 1. 精确匹配：解析广告名 → ${platform}_${MID} 匹配 user_merchants
+ * 2. 兜底匹配：仅用末尾纯数字 MID 匹配（不限平台）
+ * 3. 将匹配到的商家标记为 claimed
+ */
+async function autoLinkAndClaimMerchants(userId: bigint) {
+  const unlinked = await prisma.campaigns.findMany({
+    where: { user_id: userId, user_merchant_id: BigInt(0), is_deleted: 0, google_campaign_id: { not: null } },
+    select: { id: true, campaign_name: true },
+    take: 500,
+  });
+
+  const userMerchants = await prisma.user_merchants.findMany({
+    where: { user_id: userId, is_deleted: 0 },
+    select: { id: true, platform: true, merchant_id: true, status: true },
+  });
+
+  if (userMerchants.length === 0) return;
+
+  const merchantByKey = new Map(
+    userMerchants.map((m) => [`${normalizePlatformCode(m.platform)}_${m.merchant_id}`, m])
+  );
+  const merchantByMid = new Map<string, typeof userMerchants[0]>();
+  for (const m of userMerchants) {
+    if (!merchantByMid.has(m.merchant_id)) merchantByMid.set(m.merchant_id, m);
+  }
+
+  const updates: Promise<unknown>[] = [];
+  const claimedIds = new Set<bigint>();
+
+  for (const c of unlinked) {
+    if (!c.campaign_name) continue;
+    const parts = c.campaign_name.split(/[-\s]+/);
+    const mid = parts[parts.length - 1]?.trim();
+    if (!mid || !/^\d+$/.test(mid)) continue;
+
+    let matched: typeof userMerchants[0] | undefined;
+
+    if (parts.length >= 4) {
+      const rawPlatform = parts[1]?.trim();
+      if (rawPlatform) {
+        matched = merchantByKey.get(`${normalizePlatformCode(rawPlatform)}_${mid}`);
+      }
+    }
+
+    if (!matched) {
+      matched = merchantByMid.get(mid);
+    }
+
+    if (!matched) continue;
+
+    updates.push(
+      prisma.campaigns.update({ where: { id: c.id }, data: { user_merchant_id: matched.id } })
+    );
+
+    if (matched.status !== "claimed" && !claimedIds.has(matched.id)) {
+      claimedIds.add(matched.id);
+      updates.push(
+        prisma.user_merchants.update({ where: { id: matched.id }, data: { status: "claimed", claimed_at: new Date() } })
+      );
+    }
+
+    if (updates.length >= 20) {
+      await Promise.all(updates.splice(0));
+    }
+  }
+
+  // 已关联但未认领的商家也标记为 claimed
+  const linkedIds = await prisma.campaigns.findMany({
+    where: { user_id: userId, is_deleted: 0, user_merchant_id: { not: BigInt(0) }, google_campaign_id: { not: null } },
+    select: { user_merchant_id: true },
+    distinct: ["user_merchant_id"],
+  });
+
+  if (linkedIds.length > 0) {
+    const ids = linkedIds.map((c) => c.user_merchant_id);
+    updates.push(
+      prisma.user_merchants.updateMany({
+        where: { id: { in: ids }, user_id: userId, is_deleted: 0, status: { not: "claimed" } },
+        data: { status: "claimed", claimed_at: new Date() },
+      })
+    );
+  }
+
+  if (updates.length > 0) await Promise.all(updates);
 }
 

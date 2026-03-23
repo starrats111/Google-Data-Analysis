@@ -353,6 +353,8 @@ async function syncAllUsersTransactions(): Promise<unknown> {
 
       if (totalSynced > 0) {
         await linkTransactionsToMerchants(userId);
+        const commUpdated = await updateDailyStatsCommission(userId, sevenDaysAgo);
+        log(`    ${user.username}: updated ${commUpdated} commission records in ads_daily_stats`);
       }
 
       results[user.username] = { synced: totalSynced };
@@ -379,6 +381,83 @@ async function linkTransactionsToMerchants(userId: bigint) {
     SET t.user_merchant_id = m.id
     WHERE t.user_id = ? AND t.user_merchant_id = 0 AND t.is_deleted = 0 AND m.is_deleted = 0 AND t.merchant_id != ''
   `, userId);
+}
+
+/**
+ * 将 affiliate_transactions 佣金回写到 ads_daily_stats（向后兼容，非前端主要读取源）
+ */
+async function updateDailyStatsCommission(userId: bigint, startDate: Date): Promise<number> {
+  await prisma.ads_daily_stats.updateMany({
+    where: { user_id: userId, date: { gte: startDate } },
+    data: { commission: 0, rejected_commission: 0, orders: 0 },
+  });
+
+  const txnAgg = await prisma.$queryRawUnsafe<
+    { user_merchant_id: bigint; txn_date: string; total_commission: number; rejected_commission: number; order_count: number }[]
+  >(`
+    SELECT
+      user_merchant_id,
+      DATE(transaction_time) as txn_date,
+      SUM(CAST(commission_amount AS DECIMAL(12,2))) as total_commission,
+      SUM(CASE WHEN status = 'rejected' THEN CAST(commission_amount AS DECIMAL(12,2)) ELSE 0 END) as rejected_commission,
+      COUNT(*) as order_count
+    FROM affiliate_transactions
+    WHERE user_id = ? AND is_deleted = 0 AND transaction_time >= ?
+    GROUP BY user_merchant_id, DATE(transaction_time)
+  `, userId, startDate);
+
+  if (!txnAgg || txnAgg.length === 0) return 0;
+
+  const merchantIds = [...new Set(txnAgg.map(t => t.user_merchant_id))].filter(id => id && id !== BigInt(0));
+  if (merchantIds.length === 0) return 0;
+
+  const allCampaigns = await prisma.campaigns.findMany({
+    where: { user_id: userId, user_merchant_id: { in: merchantIds }, is_deleted: 0 },
+    select: { id: true, user_merchant_id: true, google_status: true, updated_at: true },
+  });
+
+  const STATUS_PRIORITY: Record<string, number> = { ENABLED: 0, PAUSED: 1, REMOVED: 2 };
+  allCampaigns.sort((a, b) => {
+    const pa = STATUS_PRIORITY[a.google_status || ""] ?? 2;
+    const pb = STATUS_PRIORITY[b.google_status || ""] ?? 2;
+    if (pa !== pb) return pa - pb;
+    return b.updated_at.getTime() - a.updated_at.getTime();
+  });
+
+  const campaignsByMerchant = new Map<string, bigint[]>();
+  for (const c of allCampaigns) {
+    const key = String(c.user_merchant_id);
+    if (!campaignsByMerchant.has(key)) campaignsByMerchant.set(key, []);
+    campaignsByMerchant.get(key)!.push(c.id);
+  }
+
+  let updated = 0;
+  for (const agg of txnAgg) {
+    if (!agg.user_merchant_id || agg.user_merchant_id === BigInt(0)) continue;
+    const campaignIds = campaignsByMerchant.get(String(agg.user_merchant_id));
+    if (!campaignIds?.length) continue;
+
+    const txnDateStr = String(agg.txn_date).split("T")[0];
+    const commData = {
+      commission: Number(agg.total_commission),
+      rejected_commission: Number(agg.rejected_commission),
+      orders: Number(agg.order_count),
+    };
+
+    for (const cid of campaignIds) {
+      const existing = await prisma.ads_daily_stats.findFirst({
+        where: { campaign_id: cid, date: new Date(txnDateStr) },
+        select: { id: true },
+      });
+      if (existing) {
+        await prisma.ads_daily_stats.update({ where: { id: existing.id }, data: commData });
+        updated++;
+        break;
+      }
+    }
+  }
+
+  return updated;
 }
 
 async function fetchExchangeRate(currency: string): Promise<number> {

@@ -19,7 +19,7 @@ export interface MccCredentials {
  * 获取 developer_token：优先 MCC 数据库字段（支持多用户），兜底环境变量
  */
 function resolveDevToken(dbToken: string): string {
-  return dbToken || process.env.GOOGLE_ADS_DEVELOPER_TOKEN || "";
+  return (dbToken || process.env.GOOGLE_ADS_DEVELOPER_TOKEN || "").trim();
 }
 
 /**
@@ -72,6 +72,17 @@ export async function queryGoogleAds(
 
   if (!resp.ok) {
     const errBody = await resp.text().catch(() => "");
+    if (errBody.includes("DEVELOPER_TOKEN_NOT_APPROVED")) {
+      throw new Error("Google Ads API 权限错误：Developer Token 仅被批准用于测试账号，无法访问正式广告账号。请在 Google Ads API Center 申请标准访问权限。");
+    }
+    if (resp.status === 401 || errBody.includes("UNAUTHENTICATED")) {
+      throw new Error("Google Ads API 认证失败：Service Account 凭证无效或已过期，请检查 MCC 配置中的服务账号 JSON。");
+    }
+    if (errBody.includes("has not been used in project")) {
+      const projectMatch = errBody.match(/project (\d+)/);
+      const projectId = projectMatch?.[1] || "未知";
+      throw new Error(`Google Ads API 未启用：Service Account 所属项目（${projectId}）需在 Google Cloud Console 中启用 Google Ads API。`);
+    }
     throw new Error(`Google Ads API 查询失败 (${resp.status}): ${errBody.slice(0, 500)}`);
   }
 
@@ -110,6 +121,12 @@ export async function mutateGoogleAds(
 
   if (!resp.ok) {
     const errBody = await resp.text().catch(() => "");
+    if (errBody.includes("DEVELOPER_TOKEN_NOT_APPROVED")) {
+      throw new Error("Google Ads API 权限错误：Developer Token 仅被批准用于测试账号，无法访问正式广告账号。请在 Google Ads API Center 申请标准访问权限。");
+    }
+    if (resp.status === 401 || errBody.includes("UNAUTHENTICATED")) {
+      throw new Error("Google Ads API 认证失败：Service Account 凭证无效或已过期，请检查 MCC 配置中的服务账号 JSON。");
+    }
     throw new Error(`Google Ads API 修改失败 (${resp.status}): ${errBody.slice(0, 2000)}`);
   }
 

@@ -66,7 +66,7 @@ export const GET = withLeader(async (req: NextRequest, { user }) => {
 
   const allCampaignIds = validCampaigns.map((c) => c.id);
 
-  // 批量聚合所有 campaign 的 stats
+  // 批量聚合 cost/clicks/impressions（佣金统一从 affiliate_transactions 读取）
   const statsAgg = allCampaignIds.length > 0
     ? await prisma.ads_daily_stats.groupBy({
         by: ["campaign_id"],
@@ -75,7 +75,7 @@ export const GET = withLeader(async (req: NextRequest, { user }) => {
           date: { gte: start, lte: end },
           is_deleted: 0,
         } as never,
-        _sum: { cost: true, clicks: true, impressions: true, commission: true, orders: true },
+        _sum: { cost: true, clicks: true, impressions: true },
       })
     : [];
 
@@ -86,31 +86,33 @@ export const GET = withLeader(async (req: NextRequest, { user }) => {
         cost: Number(s._sum?.cost || 0),
         clicks: Number(s._sum?.clicks || 0),
         impressions: Number(s._sum?.impressions || 0),
-        commission: Number(s._sum?.commission || 0),
-        orders: Number(s._sum?.orders || 0),
       },
     ])
   );
 
-  // 从 affiliate_transactions 批量查拒付佣金（按用户聚合）
-  const rejectedAgg = memberIds.length > 0
+  // 佣金+拒付统一从 affiliate_transactions 聚合（与数据中心口径一致，排除未关联交易）
+  const commissionAgg = memberIds.length > 0
     ? await prisma.$queryRawUnsafe<
-        { user_id: bigint; rejected_commission: number }[]
+        { user_id: bigint; total_commission: number; rejected_commission: number }[]
       >(`
         SELECT
           user_id,
-          SUM(CAST(commission_amount AS DECIMAL(12,2))) as rejected_commission
+          SUM(CAST(commission_amount AS DECIMAL(12,2))) as total_commission,
+          SUM(CASE WHEN status = 'rejected' THEN CAST(commission_amount AS DECIMAL(12,2)) ELSE 0 END) as rejected_commission
         FROM affiliate_transactions
         WHERE user_id IN (${memberIds.map(() => "?").join(",")}) AND is_deleted = 0
-          AND status = 'rejected'
           AND transaction_time >= ? AND transaction_time < ?
+          AND user_merchant_id != 0
         GROUP BY user_id
       `, ...memberIds, start, endPlusOne)
     : [];
 
-  const rejectedByUser = new Map<string, number>();
-  for (const r of rejectedAgg) {
-    rejectedByUser.set(String(r.user_id), Number(r.rejected_commission || 0));
+  const commissionByUser = new Map<string, { commission: number; rejected: number }>();
+  for (const r of commissionAgg) {
+    commissionByUser.set(String(r.user_id), {
+      commission: Number(r.total_commission || 0),
+      rejected: Number(r.rejected_commission || 0),
+    });
   }
 
   // 汇总每个成员的数据
@@ -118,18 +120,19 @@ export const GET = withLeader(async (req: NextRequest, { user }) => {
     const uid = String(member.id);
     const cIds = userCampaignIds.get(uid) || [];
 
-    let cost = 0, commission = 0, clicks = 0, impressions = 0;
+    let cost = 0, clicks = 0, impressions = 0;
     for (const cid of cIds) {
       const s = statsMap.get(String(cid));
       if (s) {
         cost += s.cost;
-        commission += s.commission;
         clicks += s.clicks;
         impressions += s.impressions;
       }
     }
 
-    const rejected = rejectedByUser.get(uid) || 0;
+    const userComm = commissionByUser.get(uid);
+    const commission = userComm?.commission || 0;
+    const rejected = userComm?.rejected || 0;
     const net = commission - rejected;
     const profit = net - cost;
     const roi = cost > 0 ? ((commission - cost) / cost) * 100 : 0;

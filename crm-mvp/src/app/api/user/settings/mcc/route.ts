@@ -26,12 +26,12 @@ export async function POST(req: NextRequest) {
   const account = await prisma.google_mcc_accounts.create({
     data: {
       user_id: BigInt(user.userId),
-      mcc_id,
-      mcc_name: mcc_name || null,
+      mcc_id: mcc_id.trim(),
+      mcc_name: mcc_name?.trim() || null,
       currency: currency || "USD",
-      service_account_json: service_account_json || null,
-      sheet_url: sheet_url || null,
-      developer_token: developer_token || null,
+      service_account_json: service_account_json?.trim() || null,
+      sheet_url: sheet_url?.trim() || null,
+      developer_token: developer_token?.trim() || null,
     },
   });
   return apiSuccess(serializeData(account));
@@ -50,8 +50,7 @@ export async function PUT(req: NextRequest) {
   if (currency !== undefined) data.currency = currency;
   if (service_account_json !== undefined) data.service_account_json = service_account_json;
   if (sheet_url !== undefined) data.sheet_url = sheet_url;
-  // developer_token: 只在有实际值时才更新，空字符串不覆盖
-  if (developer_token !== undefined && developer_token !== "") data.developer_token = developer_token;
+  if (developer_token !== undefined && developer_token !== "") data.developer_token = developer_token.trim();
   if (is_active !== undefined) data.is_active = is_active;
 
   await prisma.google_mcc_accounts.update({ where: { id: BigInt(id) }, data });

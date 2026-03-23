@@ -142,6 +142,20 @@ export async function POST(req: NextRequest) {
         500
       );
     }
+    if (message.includes("DEVELOPER_TOKEN_NOT_APPROVED")) {
+      return apiError(
+        "CID 同步失败：Developer Token 仅被批准用于测试账号，无法访问正式广告账号。" +
+        "请在 Google Ads API Center 申请标准访问权限（Standard Access），或使用测试账号。",
+        500
+      );
+    }
+    if (message.includes("UNAUTHENTICATED") || message.includes("missing required authentication credential")) {
+      return apiError(
+        "CID 同步失败：认证失败，Service Account 凭证无效或已过期。" +
+        "请检查 MCC 配置中的服务账号 JSON 是否正确，以及该服务账号是否有权限访问此 MCC。",
+        500
+      );
+    }
     if (message.includes("PERMISSION_DENIED")) {
       return apiError("CID 同步失败：权限不足，请检查 Service Account 是否有 Google Ads API 访问权限", 500);
     }

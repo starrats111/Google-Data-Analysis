@@ -69,7 +69,7 @@ export const GET = withLeader(async (req: NextRequest, { user }) => {
     }));
   }
 
-  // 按 campaign_id 聚合统计（与数据中心一致）
+  // 按 campaign_id 聚合 cost/clicks/impressions（佣金统一从 affiliate_transactions 读取）
   const statsAgg = await prisma.ads_daily_stats.groupBy({
     by: ["campaign_id"],
     where: {
@@ -77,7 +77,7 @@ export const GET = withLeader(async (req: NextRequest, { user }) => {
       date: { gte: start, lte: end },
       is_deleted: 0,
     } as never,
-    _sum: { cost: true, clicks: true, impressions: true, commission: true, orders: true },
+    _sum: { cost: true, clicks: true, impressions: true },
   });
 
   const statsMap = new Map(
@@ -87,66 +87,72 @@ export const GET = withLeader(async (req: NextRequest, { user }) => {
         cost: Number(s._sum?.cost || 0),
         clicks: Number(s._sum?.clicks || 0),
         impressions: Number(s._sum?.impressions || 0),
-        commission: Number(s._sum?.commission || 0),
-        orders: Number(s._sum?.orders || 0),
       },
     ])
   );
 
-  // 与数据中心一致：从 affiliate_transactions 查拒付佣金
+  // 佣金统一从 affiliate_transactions 聚合（与数据中心口径一致）
   const endPlusOne = new Date(end);
   endPlusOne.setDate(endPlusOne.getDate() + 1);
 
-  const rejectedAgg = await prisma.$queryRawUnsafe<
-    { user_merchant_id: bigint; rejected_commission: number }[]
+  const commissionAgg = await prisma.$queryRawUnsafe<
+    { user_merchant_id: bigint; total_commission: number; rejected_commission: number; approved_commission: number; order_count: number }[]
   >(`
     SELECT
       user_merchant_id,
-      SUM(CAST(commission_amount AS DECIMAL(12,2))) as rejected_commission
+      SUM(CAST(commission_amount AS DECIMAL(12,2))) as total_commission,
+      SUM(CASE WHEN status = 'rejected' THEN CAST(commission_amount AS DECIMAL(12,2)) ELSE 0 END) as rejected_commission,
+      SUM(CASE WHEN status IN ('approved', 'paid') THEN CAST(commission_amount AS DECIMAL(12,2)) ELSE 0 END) as approved_commission,
+      COUNT(*) as order_count
     FROM affiliate_transactions
     WHERE user_id = ? AND is_deleted = 0
-      AND status = 'rejected'
       AND transaction_time >= ? AND transaction_time < ?
+      AND user_merchant_id != 0
     GROUP BY user_merchant_id
   `, targetId, start, endPlusOne);
 
-  const rejectedByMerchant = new Map<string, number>();
+  const commissionByMerchant = new Map<string, { commission: number; rejected: number; approved: number; orders: number }>();
+  let totalCommissionFromTxn = 0;
   let totalRejectedFromTxn = 0;
-  for (const r of rejectedAgg) {
-    const amt = Number(r.rejected_commission || 0);
-    rejectedByMerchant.set(String(r.user_merchant_id), amt);
-    totalRejectedFromTxn += amt;
+  let totalOrdersFromTxn = 0;
+  for (const r of commissionAgg) {
+    const key = String(r.user_merchant_id);
+    const comm = Number(r.total_commission || 0);
+    const rej = Number(r.rejected_commission || 0);
+    commissionByMerchant.set(key, {
+      commission: comm,
+      rejected: rej,
+      approved: Number(r.approved_commission || 0),
+      orders: Number(r.order_count || 0),
+    });
+    totalCommissionFromTxn += comm;
+    totalRejectedFromTxn += rej;
+    totalOrdersFromTxn += Number(r.order_count || 0);
   }
 
-  // campaign → user_merchant_id 映射
-  const campaignMerchantMap = new Map<string, string>();
-  for (const c of campaigns) {
-    campaignMerchantMap.set(String(c.id), String(c.user_merchant_id));
-  }
+  const merchantWritten = new Set<string>();
 
-  const merchantRejectedWritten = new Set<string>();
-
-  let totalCost = 0, totalCommission = 0, totalClicks = 0, totalImpressions = 0;
+  let totalCost = 0, totalClicks = 0, totalImpressions = 0;
 
   const campaignDetails = campaigns.map((c) => {
     const s = statsMap.get(String(c.id));
     const cost = s?.cost || 0;
     const clicks = s?.clicks || 0;
-    const commission = s?.commission || 0;
     const impressions = s?.impressions || 0;
 
-    // 拒付佣金：与数据中心一致，从 affiliate_transactions 读取
-    const merchantId = campaignMerchantMap.get(String(c.id));
-    let rejectedComm = 0;
-    if (merchantId && rejectedByMerchant.has(merchantId) && !merchantRejectedWritten.has(merchantId)) {
-      rejectedComm = rejectedByMerchant.get(merchantId)!;
-      merchantRejectedWritten.add(merchantId);
+    const merchantId = String(c.user_merchant_id);
+    let commission = 0, rejectedComm = 0, orders = 0;
+    if (merchantId && merchantId !== "0" && commissionByMerchant.has(merchantId) && !merchantWritten.has(merchantId)) {
+      const comm = commissionByMerchant.get(merchantId)!;
+      commission = comm.commission;
+      rejectedComm = comm.rejected;
+      orders = comm.orders;
+      merchantWritten.add(merchantId);
     }
 
     const roi = cost > 0 ? ((commission - cost) / cost) * 100 : 0;
 
     totalCost += cost;
-    totalCommission += commission;
     totalClicks += clicks;
     totalImpressions += impressions;
 
@@ -160,6 +166,7 @@ export const GET = withLeader(async (req: NextRequest, { user }) => {
       rejected_commission: Math.round(rejectedComm * 100) / 100,
       clicks,
       impressions,
+      orders,
       roi: Math.round(roi * 10) / 10,
     };
   });
@@ -167,20 +174,20 @@ export const GET = withLeader(async (req: NextRequest, { user }) => {
   campaignDetails.sort((a, b) => b.cost - a.cost);
 
   const avgCpc = totalClicks > 0 ? totalCost / totalClicks : 0;
-  const roi = totalCost > 0 ? ((totalCommission - totalCost) / totalCost) * 100 : 0;
+  const roi = totalCost > 0 ? ((totalCommissionFromTxn - totalCost) / totalCost) * 100 : 0;
 
   return apiSuccess(serializeData({
     user: { id: targetUser.id.toString(), username: targetUser.username, display_name: targetUser.display_name },
     summary: {
       total_cost: Math.round(totalCost * 100) / 100,
-      total_commission: Math.round(totalCommission * 100) / 100,
+      total_commission: Math.round(totalCommissionFromTxn * 100) / 100,
       rejected_commission: Math.round(totalRejectedFromTxn * 100) / 100,
-      net_commission: Math.round((totalCommission - totalRejectedFromTxn) * 100) / 100,
+      net_commission: Math.round((totalCommissionFromTxn - totalRejectedFromTxn) * 100) / 100,
       total_clicks: totalClicks,
       total_impressions: totalImpressions,
       avg_cpc: Math.round(avgCpc * 10000) / 10000,
       roi: Math.round(roi * 10) / 10,
-      total_orders: statsAgg.reduce((sum, s) => sum + Number(s._sum?.orders || 0), 0),
+      total_orders: totalOrdersFromTxn,
     },
     campaigns: campaignDetails,
   }));
