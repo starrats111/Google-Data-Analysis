@@ -61,27 +61,20 @@ function extractTitle(html: string): string {
   return m ? m[1].replace(/\s+/g, " ").trim() : "";
 }
 
-/**
- * 检测页面是否为软 404（HTTP 200 但内容为"页面不存在"）
- * 通过标题和内容中的关键词判断
- */
 function checkSoft404(html: string): { isSoft404: boolean; reason?: string } {
   const title = extractTitle(html).toLowerCase();
   const lower = html.toLowerCase();
 
-  // 标题直接包含 404 或 not found → 高置信度
   if (title.includes("404") || title.includes("not found") || title.includes("page not found")) {
     return { isSoft404: true, reason: `页面标题含"${title.includes("404") ? "404" : "not found"}"（软 404）` };
   }
 
-  // 标题包含其他软 404 信号
   for (const s of SOFT_404_SIGNALS) {
     if (title.includes(s)) {
       return { isSoft404: true, reason: `页面标题含"${s}"（软 404）` };
     }
   }
 
-  // 短页面（< 20KB）且内容包含多个软 404 信号 → 高置信度
   if (html.length < 20000) {
     const hits = SOFT_404_SIGNALS.filter((s) => lower.includes(s));
     if (hits.length >= 2) {
@@ -93,6 +86,7 @@ function checkSoft404(html: string): { isSoft404: boolean; reason?: string } {
 }
 
 function isCloudflareChallenge(html: string): boolean {
+  if (!html || html.length < 20) return false;
   const lower = html.toLowerCase();
   return lower.includes("just a moment") || lower.includes("cf_chl_opt") ||
     lower.includes("cloudflare") || lower.includes("cf-ray");
@@ -101,10 +95,7 @@ function isCloudflareChallenge(html: string): boolean {
 function isValidPageContent(html: string): boolean {
   const lower = html.toLowerCase();
   if (html.length < 500) return false;
-
-  // 先检查软 404 —— 软 404 页面不算有效
   if (checkSoft404(html).isSoft404) return false;
-
   if (html.length > 50000) return true;
 
   const blockedSignals = [
@@ -131,14 +122,15 @@ function isValidPageContent(html: string): boolean {
   return false;
 }
 
+type GetResult =
+  | { type: "ok"; ok: boolean; status: number; finalUrl: string; reason?: string }
+  | { type: "cloudflare" }
+  | { type: "failed" };
+
 /**
- * GET 请求获取页面内容，检查软 404
- * 返回 null 表示请求失败（调用方可继续尝试其他 UA）
+ * GET 请求获取页面内容，检查软 404 和 Cloudflare
  */
-async function getAndCheck(
-  url: string,
-  ua: string,
-): Promise<{ ok: boolean; status: number; finalUrl: string; reason?: string } | null> {
+async function getAndCheck(url: string, ua: string): Promise<GetResult> {
   try {
     const ctrl = new AbortController();
     const t = setTimeout(() => ctrl.abort(), 12000);
@@ -151,23 +143,22 @@ async function getAndCheck(
     const html = await res.text().catch(() => "");
 
     if (isCloudflareChallenge(html)) {
-      return null; // Cloudflare 拦截，让调用方尝试下一个 UA
+      return { type: "cloudflare" };
     }
 
     if (res.status < 400) {
       const soft = checkSoft404(html);
       if (soft.isSoft404) {
-        return { ok: false, status: res.status, finalUrl: res.url, reason: soft.reason };
+        return { type: "ok", ok: false, status: res.status, finalUrl: res.url, reason: soft.reason };
       }
-      return { ok: true, status: res.status, finalUrl: res.url };
+      return { type: "ok", ok: true, status: res.status, finalUrl: res.url };
     }
 
-    // status >= 400 但内容有效（某些网站对 bot 返回 403 但页面正常）
     if (isValidPageContent(html)) {
-      return { ok: true, status: res.status, finalUrl: res.url, reason: "页面内容有效" };
+      return { type: "ok", ok: true, status: res.status, finalUrl: res.url, reason: "页面内容有效" };
     }
   } catch {}
-  return null;
+  return { type: "failed" };
 }
 
 async function tryValidateUrl(
@@ -197,48 +188,47 @@ async function tryValidateUrl(
           }
         } catch {}
 
-        // HEAD 返回 200 不够 —— 用 GET 检查内容是否为软 404
         const getResult = await getAndCheck(url, ua);
-        if (getResult) return getResult;
-
-        // GET 失败（Cloudflare 等），HEAD 200 作为兜底
+        if (getResult.type === "ok") return getResult;
+        // GET 被 Cloudflare 拦截或失败 → HEAD 200 作为兜底
         return { ok: true, status: res.status, finalUrl };
       }
 
       if (res.status === 404 || res.status === 410) {
         const getResult = await getAndCheck(url, ua);
-        if (getResult) return getResult;
+        if (getResult.type === "ok") return getResult;
+        if (getResult.type === "cloudflare") { cloudflareCount++; if (i < UA_POOL.length - 1) continue; break; }
         if (i < UA_POOL.length - 1) continue;
         return { ok: false, status: res.status, finalUrl: url, reason: `页面返回 ${res.status}（页面不存在）` };
       }
 
       if (res.status === 403) {
-        try {
-          const body = await res.text().catch(() => "");
-          if (isCloudflareChallenge(body)) {
-            cloudflareCount++;
-            if (i < UA_POOL.length - 1) continue;
-            break; // 所有 UA 都被 Cloudflare 拦截，跳出循环走 cloudflareCount 兜底
-          }
-        } catch {}
+        // HEAD 没有 body，直接用 GET 判断
         const getResult = await getAndCheck(url, ua);
-        if (getResult) return getResult;
-        if (i < UA_POOL.length - 1) continue;
-        return { ok: false, status: res.status, finalUrl: url, reason: `请求失败 ${res.status}` };
-      } else if (res.status === 405) {
-        const getResult = await getAndCheck(url, ua);
-        if (getResult) return getResult;
-        if (i < UA_POOL.length - 1) continue;
-        return { ok: false, status: res.status, finalUrl: url, reason: `请求失败 ${res.status}` };
-      } else if (res.status >= 500) {
-        if (i < UA_POOL.length - 1) continue;
-        return { ok: false, status: res.status, finalUrl: url, reason: `服务器错误 ${res.status}` };
-      } else {
-        const getResult = await getAndCheck(url, ua);
-        if (getResult) return getResult;
+        if (getResult.type === "ok") return getResult;
+        if (getResult.type === "cloudflare") { cloudflareCount++; if (i < UA_POOL.length - 1) continue; break; }
         if (i < UA_POOL.length - 1) continue;
         return { ok: false, status: res.status, finalUrl: url, reason: `请求失败 ${res.status}` };
       }
+
+      if (res.status === 405) {
+        const getResult = await getAndCheck(url, ua);
+        if (getResult.type === "ok") return getResult;
+        if (getResult.type === "cloudflare") { cloudflareCount++; if (i < UA_POOL.length - 1) continue; break; }
+        if (i < UA_POOL.length - 1) continue;
+        return { ok: false, status: res.status, finalUrl: url, reason: `请求失败 ${res.status}` };
+      }
+
+      if (res.status >= 500) {
+        if (i < UA_POOL.length - 1) continue;
+        return { ok: false, status: res.status, finalUrl: url, reason: `服务器错误 ${res.status}` };
+      }
+
+      const getResult = await getAndCheck(url, ua);
+      if (getResult.type === "ok") return getResult;
+      if (getResult.type === "cloudflare") { cloudflareCount++; if (i < UA_POOL.length - 1) continue; break; }
+      if (i < UA_POOL.length - 1) continue;
+      return { ok: false, status: res.status, finalUrl: url, reason: `请求失败 ${res.status}` };
     } catch (err) {
       const msg = err instanceof Error ? err.message : "";
       if (msg.includes("abort")) {
@@ -249,8 +239,7 @@ async function tryValidateUrl(
     }
   }
 
-  // 所有 UA 都被 Cloudflare 拦截 —— 无法确认真实性
-  if (cloudflareCount === UA_POOL.length) {
+  if (cloudflareCount > 0) {
     return { ok: true, status: 200, finalUrl: url, reason: "Cloudflare 保护，无法验证页面内容" };
   }
 
