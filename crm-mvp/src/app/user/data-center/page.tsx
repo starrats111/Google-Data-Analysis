@@ -105,17 +105,8 @@ export default function DataCenterPage() {
     totalClicks: 0, totalImpressions: 0, avgCpc: 0, roi: 0, campaignCount: 0, enabledCount: 0, pausedCount: 0,
   };
 
-  // 按广告系列汇总花费和佣金
-  const detailByRow = useMemo(() => {
-    return rows.map((r) => ({
-      id: r.id,
-      campaign_name: r.campaign_name,
-      cost: r.cost,
-      commission: r.commission,
-      rejected_commission: r.rejected_commission || 0,
-      approved_commission: r.approved_commission || 0,
-    }));
-  }, [rows]);
+  // 为表格添加序号
+  const rowsWithIndex = useMemo(() => rows.map((r, i) => ({ ...r, _index: i + 1 })), [rows]);
 
   // 一键同步：广告数据 + 联盟交易（合并为单个操作）
   const handleSync = useCallback(async (forceFullSync = false) => {
@@ -228,20 +219,26 @@ export default function DataCenterPage() {
   const statusColors: Record<string, string> = { ENABLED: "green", PAUSED: "orange", REMOVED: "red" };
   const statusLabels: Record<string, string> = { ENABLED: "已启用", PAUSED: "已暂停", REMOVED: "已移除" };
 
-  const columns: ColumnsType<CampaignRow> = [
+  type IndexedRow = CampaignRow & { _index: number };
+  const columns: ColumnsType<IndexedRow> = [
+    {
+      title: "#", dataIndex: "_index", width: 45, fixed: "left", align: "center",
+      sorter: (a, b) => a._index - b._index,
+      render: (v: number) => <Text style={{ fontSize: 12 }}>{v}</Text>,
+    },
     {
       title: "CID", dataIndex: "customer_id", width: 110, fixed: "left",
       render: (v: string) => <Text copyable={{ text: v }} style={{ fontSize: 12 }}>{formatCid(v)}</Text>,
     },
     {
-      title: "广告系列", dataIndex: "campaign_name", width: 280, fixed: "left",
+      title: "广告系列", dataIndex: "campaign_name", width: 280,
       render: (v: string) => (
         <Text style={{ fontSize: 12, wordBreak: "break-all", whiteSpace: "normal", lineHeight: "1.4" }}>{v}</Text>
       ),
     },
     {
       title: "状态", dataIndex: "status", width: 100, align: "center",
-      render: (v: string, r: CampaignRow) => (
+      render: (v: string, r: IndexedRow) => (
         <Space size={4}>
           <Tag color={statusColors[v] || "default"} style={{ fontSize: 11, margin: 0 }}>{statusLabels[v] || v}</Tag>
           {v !== "REMOVED" && r.google_campaign_id && (
@@ -260,7 +257,7 @@ export default function DataCenterPage() {
     },
     {
       title: "预算", dataIndex: "daily_budget", width: 70, align: "right",
-      render: (v: number, r: CampaignRow) => (
+      render: (v: number, r: IndexedRow) => (
         <Button type="link" size="small" style={{ padding: 0, fontSize: 12 }}
           onClick={() => setEditModal({ open: true, campaign: r, field: "budget" })}>
           ${v?.toFixed(2)} <EditOutlined style={{ fontSize: 10 }} />
@@ -269,7 +266,7 @@ export default function DataCenterPage() {
     },
     {
       title: "最高出价", dataIndex: "max_cpc", width: 90, align: "right",
-      render: (v: number | null, r: CampaignRow) => (
+      render: (v: number | null, r: IndexedRow) => (
         <Button type="link" size="small" style={{ padding: 0, fontSize: 12 }}
           onClick={() => setEditModal({ open: true, campaign: r, field: "max_cpc" })}>
           ${(v ?? 0).toFixed(4)} <EditOutlined style={{ fontSize: 10 }} />
@@ -282,7 +279,8 @@ export default function DataCenterPage() {
     },
     {
       title: "花费", dataIndex: "cost", width: 85, align: "right",
-      render: (v: number, r: CampaignRow) => (
+      sorter: (a, b) => a.cost - b.cost,
+      render: (v: number, r: IndexedRow) => (
         <span>
           <Text style={{ fontSize: 12, color: v > 0 ? "#cf1322" : undefined }}>${v?.toFixed(2)}</Text>
           {r.mcc_currency === "CNY" && <Tag color="orange" style={{ fontSize: 9, marginLeft: 2, padding: "0 3px", lineHeight: "14px" }}>CNY</Tag>}
@@ -291,15 +289,12 @@ export default function DataCenterPage() {
     },
     {
       title: "佣金", dataIndex: "commission", width: 70, align: "right",
+      sorter: (a, b) => a.commission - b.commission,
       render: (v: number) => <Text style={{ fontSize: 12, color: v > 0 ? "#389e0d" : undefined }}>${v?.toFixed(2)}</Text>,
     },
     {
       title: "拒付佣金", dataIndex: "rejected_commission", width: 80, align: "right",
       render: (v: number) => <Text type={v > 0 ? "danger" : "secondary"} style={{ fontSize: 12 }}>${(v || 0).toFixed(2)}</Text>,
-    },
-    {
-      title: "已确认佣金", dataIndex: "approved_commission", width: 80, align: "right",
-      render: (v: number) => <Text style={{ fontSize: 12, color: v > 0 ? "#1890ff" : undefined }}>${(v || 0).toFixed(2)}</Text>,
     },
     {
       title: "点击", dataIndex: "clicks", width: 55, align: "right",
@@ -311,7 +306,7 @@ export default function DataCenterPage() {
     },
     {
       title: "操作", width: 80, align: "center", fixed: "right",
-      render: (_: unknown, r: CampaignRow) => (
+      render: (_: unknown, r: IndexedRow) => (
         r.google_campaign_id ? (
           <Tooltip title="移除旧广告并重新发布">
             <Button
@@ -438,8 +433,8 @@ export default function DataCenterPage() {
 
       {/* ========== 广告系列表格 ========== */}
       <Card size="small" styles={{ body: { padding: "0 8px 8px" } }}>
-        <Table<CampaignRow>
-          rowKey="id" loading={isLoading} dataSource={rows} columns={columns}
+        <Table<IndexedRow>
+          rowKey="id" loading={isLoading} dataSource={rowsWithIndex} columns={columns}
           size="small" scroll={{ x: 1040 }}
           pagination={{ pageSize: 50, showTotal: (t) => `共 ${t} 条`, showSizeChanger: true, pageSizeOptions: ["20", "50", "100"] }}
           summary={() => {
@@ -447,14 +442,13 @@ export default function DataCenterPage() {
             return (
               <Table.Summary fixed>
                 <Table.Summary.Row>
-                  <Table.Summary.Cell index={0} colSpan={3}><Text strong>合计</Text></Table.Summary.Cell>
-                  <Table.Summary.Cell index={3} />
+                  <Table.Summary.Cell index={0} colSpan={4}><Text strong>合计</Text></Table.Summary.Cell>
                   <Table.Summary.Cell index={4} />
-                  <Table.Summary.Cell index={5} align="right"><Text strong>${summary.avgCpc.toFixed(4)}</Text></Table.Summary.Cell>
-                  <Table.Summary.Cell index={6} align="right"><Text strong style={{ color: "#cf1322" }}>${summary.totalCost.toFixed(2)}</Text></Table.Summary.Cell>
-                  <Table.Summary.Cell index={7} align="right"><Text strong style={{ color: "#389e0d" }}>${summary.totalCommission.toFixed(2)}</Text></Table.Summary.Cell>
-                  <Table.Summary.Cell index={8} align="right"><Text strong type="danger">${summary.totalRejectedCommission.toFixed(2)}</Text></Table.Summary.Cell>
-                  <Table.Summary.Cell index={9} align="right"><Text strong style={{ color: "#1890ff" }}>${summary.totalApprovedCommission.toFixed(2)}</Text></Table.Summary.Cell>
+                  <Table.Summary.Cell index={5} />
+                  <Table.Summary.Cell index={6} align="right"><Text strong>${summary.avgCpc.toFixed(4)}</Text></Table.Summary.Cell>
+                  <Table.Summary.Cell index={7} align="right"><Text strong style={{ color: "#cf1322" }}>${summary.totalCost.toFixed(2)}</Text></Table.Summary.Cell>
+                  <Table.Summary.Cell index={8} align="right"><Text strong style={{ color: "#389e0d" }}>${summary.totalCommission.toFixed(2)}</Text></Table.Summary.Cell>
+                  <Table.Summary.Cell index={9} align="right"><Text strong type="danger">${summary.totalRejectedCommission.toFixed(2)}</Text></Table.Summary.Cell>
                   <Table.Summary.Cell index={10} align="right"><Text strong>{summary.totalClicks}</Text></Table.Summary.Cell>
                   <Table.Summary.Cell index={11} align="right"><Text strong>{summary.totalImpressions}</Text></Table.Summary.Cell>
                 </Table.Summary.Row>
@@ -464,55 +458,33 @@ export default function DataCenterPage() {
         />
       </Card>
 
-      {/* ========== 花费/佣金详情弹窗（按 MCC 分组） ========== */}
-      <Modal title="花费 / 佣金明细" open={detailModal} onCancel={() => setDetailModal(false)} footer={null} width={750}>
-        {/* MCC 费用汇总 */}
-        {costByMcc.length > 0 && (
-          <Card size="small" style={{ marginBottom: 12, background: "#fafafa" }} styles={{ body: { padding: "8px 12px" } }}>
-            <Text strong style={{ fontSize: 13 }}>按 MCC 账户汇总</Text>
-            <Table
-              rowKey="mcc_db_id" dataSource={costByMcc} size="small" pagination={false}
-              style={{ marginTop: 8 }}
-              columns={[
-                { title: "MCC 账户", dataIndex: "mcc_name", width: 160, render: (v: string, r: CostByMcc) => (
-                  <span><Text style={{ fontSize: 12 }}>{v}</Text> <Tag color={r.currency === "CNY" ? "orange" : "blue"} style={{ fontSize: 10, marginLeft: 4 }}>{r.currency}</Tag></span>
-                ) },
-                { title: "花费 (USD)", dataIndex: "cost_usd", width: 120, align: "right", render: (v: number) => <Text strong style={{ color: "#cf1322", fontSize: 13 }}>${v.toFixed(2)}</Text> },
-                { title: "原始金额", key: "cost_original", width: 140, align: "right", render: (_: unknown, r: CostByMcc) => (
-                  r.currency === "CNY" && r.cost_original != null
-                    ? <Text strong style={{ color: "#d46b08", fontSize: 13 }}>¥{r.cost_original.toFixed(2)}</Text>
-                    : <Text type="secondary" style={{ fontSize: 12 }}>—</Text>
-                ) },
-              ]}
-              summary={() => costByMcc.length > 1 ? (
-                <Table.Summary.Row>
-                  <Table.Summary.Cell index={0}><Text strong>合计</Text></Table.Summary.Cell>
-                  <Table.Summary.Cell index={1} align="right"><Text strong style={{ color: "#cf1322" }}>${summary.totalCost.toFixed(2)}</Text></Table.Summary.Cell>
-                  <Table.Summary.Cell index={2} />
-                </Table.Summary.Row>
-              ) : null}
-            />
-          </Card>
+      {/* ========== 花费明细弹窗（仅 MCC 汇总） ========== */}
+      <Modal title="花费明细" open={detailModal} onCancel={() => setDetailModal(false)} footer={null} width={500}>
+        {costByMcc.length > 0 ? (
+          <Table
+            rowKey="mcc_db_id" dataSource={costByMcc} size="small" pagination={false}
+            columns={[
+              { title: "MCC 账户", dataIndex: "mcc_name", width: 160, render: (v: string, r: CostByMcc) => (
+                <span><Text style={{ fontSize: 12 }}>{v}</Text> <Tag color={r.currency === "CNY" ? "orange" : "blue"} style={{ fontSize: 10, marginLeft: 4 }}>{r.currency}</Tag></span>
+              ) },
+              { title: "花费 (USD)", dataIndex: "cost_usd", width: 120, align: "right", render: (v: number) => <Text strong style={{ color: "#cf1322", fontSize: 13 }}>${v.toFixed(2)}</Text> },
+              { title: "原始金额", key: "cost_original", width: 140, align: "right", render: (_: unknown, r: CostByMcc) => (
+                r.currency === "CNY" && r.cost_original != null
+                  ? <Text strong style={{ color: "#d46b08", fontSize: 13 }}>¥{r.cost_original.toFixed(2)}</Text>
+                  : <Text type="secondary" style={{ fontSize: 12 }}>—</Text>
+              ) },
+            ]}
+            summary={() => costByMcc.length > 1 ? (
+              <Table.Summary.Row>
+                <Table.Summary.Cell index={0}><Text strong>合计</Text></Table.Summary.Cell>
+                <Table.Summary.Cell index={1} align="right"><Text strong style={{ color: "#cf1322" }}>${summary.totalCost.toFixed(2)}</Text></Table.Summary.Cell>
+                <Table.Summary.Cell index={2} />
+              </Table.Summary.Row>
+            ) : null}
+          />
+        ) : (
+          <Text type="secondary">暂无数据</Text>
         )}
-        {/* 按广告系列明细 */}
-        <Table rowKey="id" dataSource={detailByRow} size="small" pagination={false}
-          columns={[
-            { title: "广告系列", dataIndex: "campaign_name", width: 280, render: (v: string) => <Text style={{ fontSize: 12, wordBreak: "break-all", whiteSpace: "normal" }}>{v}</Text> },
-            { title: "总花费", dataIndex: "cost", width: 100, align: "right", render: (v: number) => <Text style={{ color: v > 0 ? "#cf1322" : undefined }}>${v.toFixed(2)}</Text> },
-            { title: "总佣金", dataIndex: "commission", width: 100, align: "right", render: (v: number) => <Text style={{ color: v > 0 ? "#389e0d" : undefined }}>${v.toFixed(2)}</Text> },
-            { title: "拒付佣金", dataIndex: "rejected_commission", width: 100, align: "right", render: (v: number) => <Text type={v > 0 ? "danger" : "secondary"}>${v.toFixed(2)}</Text> },
-            { title: "已确认佣金", dataIndex: "approved_commission", width: 100, align: "right", render: (v: number) => <Text style={{ color: v > 0 ? "#1890ff" : undefined }}>${v.toFixed(2)}</Text> },
-          ]}
-          summary={() => (
-            <Table.Summary.Row>
-              <Table.Summary.Cell index={0}><Text strong>合计</Text></Table.Summary.Cell>
-              <Table.Summary.Cell index={1} align="right"><Text strong style={{ color: "#cf1322" }}>${summary.totalCost.toFixed(2)}</Text></Table.Summary.Cell>
-              <Table.Summary.Cell index={2} align="right"><Text strong style={{ color: "#389e0d" }}>${summary.totalCommission.toFixed(2)}</Text></Table.Summary.Cell>
-              <Table.Summary.Cell index={3} align="right"><Text strong type="danger">${detailByRow.reduce((s, r) => s + r.rejected_commission, 0).toFixed(2)}</Text></Table.Summary.Cell>
-              <Table.Summary.Cell index={4} align="right"><Text strong style={{ color: "#1890ff" }}>${detailByRow.reduce((s, r) => s + r.approved_commission, 0).toFixed(2)}</Text></Table.Summary.Cell>
-            </Table.Summary.Row>
-          )}
-        />
       </Modal>
 
       {/* ========== 佣金详情弹窗（含汇总指标 + 按平台账号明细） ========== */}
