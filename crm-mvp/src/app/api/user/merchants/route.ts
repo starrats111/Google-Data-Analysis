@@ -309,28 +309,12 @@ export const GET = withUser(async (req: NextRequest, { user }) => {
     }));
 
   } else {
-    // ─── 选取商家：user_merchants 排除已在广告系列中的 MID ───
-    // 先获取已有广告系列的 MID 集合
-    const campaigns = await prisma.campaigns.findMany({
-      where: { user_id: userId, is_deleted: 0 },
-      select: { campaign_name: true },
-    });
-
-    const claimedMids: string[] = [];
-    for (const c of campaigns) {
-      if (!c.campaign_name) continue;
-      const parts = c.campaign_name.split(/[-\s]+/);
-      const mid = parts[parts.length - 1]?.trim();
-      if (mid && /^\d+$/.test(mid)) claimedMids.push(mid);
-    }
-
+    // ─── 选取商家：仅查询 status="available" 的商家 ───
     const where: Record<string, unknown> = {
       user_id: userId,
       is_deleted: 0,
+      status: "available",
     };
-    if (claimedMids.length > 0) {
-      where.merchant_id = { notIn: claimedMids };
-    }
     if (platform) where.platform = platform;
     if (search) {
       where.OR = [
