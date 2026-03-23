@@ -495,10 +495,17 @@ function parseTransactions(platform: string, data: Record<string, unknown>): Pla
   }
 
   return list.map((item) => {
+    // 优先使用平台级商品/明细 ID（每个商品独立），再 fallback 到 order_id
+    // API 字段用下划线命名（如 collabgrow_id），代码同时兼容驼峰
     const txnId = String(
-      item.order_id || item.transaction_id || item.collabgrowId || item.orderId ||
-      item.linkbux_id || item.creatorflare_id || item.brandsparkhub_id ||
-      item.partnermaticId || item.sign_id || item.action_id || item.id || ""
+      item.collabgrow_id || item.collabgrowId ||
+      item.creatorflare_id || item.creatorflareId ||
+      item.brandsparkhub_id || item.brandsparkhubId ||
+      item.partnermatic_id || item.partnermaticId ||
+      item.linkbux_id || item.linkbuxId ||
+      item.sign_id || item.action_id ||
+      item.order_id || item.transaction_id || item.orderId ||
+      item.id || ""
     );
 
     const merchant = String(
@@ -575,16 +582,13 @@ export async function fetchAllTransactions(
   const mergeTxn = (t: PlatformTransaction) => {
     const idx = txnIndex.get(t.transaction_id);
     if (idx !== undefined) {
+      // 同一 ID 多次出现：累加金额（RW 等平台同一订单有多个商品行）
+      // CG/BSH/PM/LB 因使用 collabgrow_id 等唯一 ID，不会触发此分支
       const existing = allTxns[idx];
-      // 相同金额 → 分页重复，用最新状态覆盖即可
-      if (existing.commission_amount === t.commission_amount && existing.order_amount === t.order_amount) {
-        if (t.status !== existing.status) existing.status = t.status;
-        if (t.raw_status !== existing.raw_status) existing.raw_status = t.raw_status;
-        return;
-      }
-      // 不同金额 → 同一订单的不同子项，累加
       existing.commission_amount += t.commission_amount;
       existing.order_amount += t.order_amount;
+      existing.status = t.status;
+      existing.raw_status = t.raw_status;
     } else {
       txnIndex.set(t.transaction_id, allTxns.length);
       allTxns.push({ ...t });
