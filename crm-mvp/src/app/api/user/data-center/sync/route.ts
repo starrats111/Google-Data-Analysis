@@ -5,21 +5,21 @@ import prisma from "@/lib/prisma";
 import { syncFromSheet } from "@/lib/sheet-sync";
 import { cacheDelete } from "@/lib/cache";
 import { todayCST, yesterdayCST, nowCST } from "@/lib/date-utils";
-
-const HISTORY_START = "2025-11-01";
+import { getExchangeRate, preloadRates } from "@/lib/exchange-rate";
 
 /**
  * POST /api/user/data-center/sync
  *
  * 统一同步入口：广告数据 + 联盟交易，一键完成
- * 首次同步自动拉取 2025-11-01 起的历史数据
+ * 首次同步自动从 MCC 创建时间起拉取历史数据
+ * 支持 force_full_sync=true 强制全量重跑
  */
 export async function POST(req: NextRequest) {
   const user = getUserFromRequest(req);
   if (!user) return apiError("未授权", 401);
 
   const body = await req.json();
-  const { type = "all", mcc_account_id } = body;
+  const { type = "all", mcc_account_id, force_full_sync = false, sync_start_date } = body;
 
   if (!mcc_account_id) return apiError("缺少 mcc_account_id", 400);
   if (!["all", "ads", "platform"].includes(type)) {
@@ -35,7 +35,7 @@ export async function POST(req: NextRequest) {
   const results: Record<string, unknown> = {};
 
   if (type === "all" || type === "ads") {
-    results.ads = await syncAdsData(mcc, userId);
+    results.ads = await syncAdsData(mcc, userId, force_full_sync, sync_start_date);
   }
 
   // 关联 campaigns 和 transactions 与 merchants
@@ -55,38 +55,17 @@ export async function POST(req: NextRequest) {
 }
 
 /**
- * 获取实时汇率（非 USD 账号需要转换费用）
- */
-async function fetchExchangeRate(currency: string): Promise<number> {
-  if (!currency || currency.toUpperCase() === "USD") return 1;
-  try {
-    const resp = await fetch(
-      `https://open.er-api.com/v6/latest/${currency.toUpperCase()}`,
-      { signal: AbortSignal.timeout(10000) }
-    );
-    if (!resp.ok) {
-      console.error(`[Exchange] API returned ${resp.status}`);
-      return 1;
-    }
-    const data = await resp.json();
-    const rate = data.rates?.USD;
-    if (!rate || rate <= 0) return 1;
-    console.log(`[Exchange] ${currency} → USD rate: ${rate}`);
-    return rate;
-  } catch (err) {
-    console.error(`[Exchange] 获取 ${currency}→USD 汇率失败:`, err);
-    return 1;
-  }
-}
-
-/**
  * 广告数据同步
- * 首次同步：拉取 2025-11-01 起全部历史数据（Sheet + Google Ads API 按日期范围）
+ * 首次同步：拉取 MCC 创建时间起的全部历史数据（Sheet + Google Ads API）
  * 后续同步：Sheet 近31天 + Google Ads API 今日
+ * force_full_sync: 强制全量重新同步
+ * sync_start_date: 指定起始日期（覆盖自动计算）
  */
 async function syncAdsData(
-  mcc: { id: bigint; mcc_id: string; sheet_url: string | null; service_account_json: string | null; developer_token: string | null; currency: string },
-  userId: bigint
+  mcc: { id: bigint; mcc_id: string; sheet_url: string | null; service_account_json: string | null; developer_token: string | null; currency: string; created_at: Date },
+  userId: bigint,
+  forceFullSync = false,
+  syncStartDate?: string,
 ) {
   const todayStr = todayCST();
   const yesterdayStr = yesterdayCST();
@@ -94,10 +73,8 @@ async function syncAdsData(
   let sheetResult = { inserted: 0, updated: 0, message: "" };
   let apiResult = { inserted: 0, updated: 0, message: "" };
 
-  const exchangeRate = await fetchExchangeRate(mcc.currency);
-
   // 检测是否首次同步：该 MCC 在 ads_daily_stats 中是否有数据
-  const existingStatsCount = await prisma.ads_daily_stats.count({
+  const existingStatsCount = forceFullSync ? 0 : await prisma.ads_daily_stats.count({
     where: {
       user_id: userId,
       campaign_id: {
@@ -110,16 +87,20 @@ async function syncAdsData(
   });
   const isFirstSync = existingStatsCount === 0;
 
+  // 动态起始日期：用户指定 > MCC 创建时间 > 默认31天
+  const mccCreatedStr = mcc.created_at.toISOString().split("T")[0];
+  const defaultHistoryStart = isFirstSync ? mccCreatedStr : nowCST().subtract(31, "day").format("YYYY-MM-DD");
+  const historyStart = syncStartDate || defaultHistoryStart;
+
+  // 预加载汇率快照到缓存
+  await preloadRates(mcc.currency, historyStart, todayStr);
+
   // 1. Sheet 同步
   if (mcc.sheet_url) {
-    const startStr = isFirstSync
-      ? HISTORY_START
-      : nowCST().subtract(31, "day").format("YYYY-MM-DD");
-
-    console.log(`[Sync] Sheet 同步范围: ${startStr} → ${yesterdayStr} (${isFirstSync ? "首次-全量" : "增量"})`);
-    const sheetData = await syncFromSheet(mcc.sheet_url, startStr, yesterdayStr);
+    console.log(`[Sync] Sheet 同步范围: ${historyStart} → ${yesterdayStr} (${isFirstSync ? "首次-全量" : "增量"})`);
+    const sheetData = await syncFromSheet(mcc.sheet_url, historyStart, yesterdayStr);
     if (sheetData.success && sheetData.rows.length > 0) {
-      sheetResult = await upsertSheetRowsBatch(sheetData.rows, mcc.id, userId, exchangeRate);
+      sheetResult = await upsertSheetRowsBatch(sheetData.rows, mcc.id, userId, mcc.currency);
     } else {
       sheetResult.message = sheetData.message || "Sheet 无数据";
     }
@@ -170,14 +151,14 @@ async function syncAdsData(
 
       // ─── 首次同步：拉取历史数据（按日期范围） ───
       if (isFirstSync && cids.length > 0) {
-        console.log(`[Sync] 首次同步：拉取 ${HISTORY_START} → ${yesterdayStr} 的历史数据`);
-        const CID_CONCURRENCY = 2; // 首次同步降低并发，保护服务器
+        console.log(`[Sync] 首次同步：拉取 ${historyStart} → ${yesterdayStr} 的历史数据`);
+        const CID_CONCURRENCY = 2;
         for (let ci = 0; ci < cids.length; ci += CID_CONCURRENCY) {
           const batch = cids.slice(ci, ci + CID_CONCURRENCY);
           for (const cid of batch) {
             try {
               const historyData = await fetchCampaignDataByDateRange(
-                credentials, cid.customer_id, HISTORY_START, yesterdayStr
+                credentials, cid.customer_id, historyStart, yesterdayStr
               );
               console.log(`[Sync] CID ${cid.customer_id} 历史数据: ${historyData.length} 条`);
 
@@ -199,11 +180,12 @@ async function syncAdsData(
                 }
 
                 const dateObj = new Date(cd.date);
+                const dateRate = await getExchangeRate(mcc.currency, cd.date);
                 const statsData = {
-                  budget: Number((cd.budget_dollars * exchangeRate).toFixed(2)),
-                  cost: Number((cd.cost_dollars * exchangeRate).toFixed(2)),
+                  budget: Number((cd.budget_dollars * dateRate).toFixed(2)),
+                  cost: Number((cd.cost_dollars * dateRate).toFixed(2)),
                   clicks: cd.clicks, impressions: cd.impressions,
-                  cpc: Number((cd.cpc_dollars * exchangeRate).toFixed(4)),
+                  cpc: Number((cd.cpc_dollars * dateRate).toFixed(4)),
                   conversions: cd.conversions, data_source: "api" as const,
                 };
 
@@ -275,7 +257,8 @@ async function syncAdsData(
             }));
           }
 
-          const statsData = { budget: Number((cd.budget_dollars * exchangeRate).toFixed(2)), cost: Number((cd.cost_dollars * exchangeRate).toFixed(2)), clicks: cd.clicks, impressions: cd.impressions, cpc: Number((cd.cpc_dollars * exchangeRate).toFixed(4)), conversions: cd.conversions, data_source: "api" as const };
+          const todayRate = await getExchangeRate(mcc.currency, todayStr);
+          const statsData = { budget: Number((cd.budget_dollars * todayRate).toFixed(2)), cost: Number((cd.cost_dollars * todayRate).toFixed(2)), clicks: cd.clicks, impressions: cd.impressions, cpc: Number((cd.cpc_dollars * todayRate).toFixed(4)), conversions: cd.conversions, data_source: "api" as const };
           const existingStatsId = todayStatsMap.get(String(campaign.id));
           if (existingStatsId) {
             operations.push(() => prisma.ads_daily_stats.update({ where: { id: existingStatsId }, data: statsData }));
@@ -358,7 +341,7 @@ async function syncAdsData(
         console.error("全量状态同步失败:", err);
       }
 
-      apiResult = { inserted: totalInserted, updated: totalUpdated, message: `API 同步完成${isFirstSync ? "（含历史数据）" : ""}` };
+      apiResult = { inserted: totalInserted, updated: totalUpdated, message: `API 同步完成${isFirstSync ? `（全量 ${historyStart} 起）` : ""}` };
     } catch (err) {
       apiResult.message = `API 同步失败: ${err instanceof Error ? err.message : String(err)}`;
     }
@@ -376,7 +359,7 @@ async function upsertSheetRowsBatch(
   rows: { date: string; campaign_id: string; campaign_name: string; customer_id: string; cost: number; budget: number; clicks: number; impressions: number; cpc: number; status: string }[],
   mccId: bigint,
   userId: bigint,
-  exchangeRate: number = 1
+  currency: string = "USD",
 ) {
   let inserted = 0, updated = 0;
 
@@ -431,33 +414,32 @@ async function upsertSheetRowsBatch(
     existingStats.map((s) => [`${s.campaign_id}_${s.date.toISOString().split("T")[0]}`, s.id])
   );
 
-  // ─── 4. 批量 upsert（每 20 条一批） ───
+  // ─── 4. 批量 upsert（每 20 条一批，按日期获取汇率） ───
   for (let i = 0; i < rows.length; i += 20) {
     const batch = rows.slice(i, i + 20);
-    const operations = batch.map((row) => {
+    await Promise.all(batch.map(async (row) => {
       const campaign = campaignMap.get(row.campaign_id)!;
       const statsKey = `${campaign.id}_${row.date}`;
       const existingId = statsKeyMap.get(statsKey);
 
-      const convertedCost = Number((row.cost * exchangeRate).toFixed(2));
-      const convertedBudget = Number((row.budget * exchangeRate).toFixed(2));
-      const convertedCpc = Number((row.cpc * exchangeRate).toFixed(4));
+      const rate = await getExchangeRate(currency, row.date);
+      const convertedCost = Number((row.cost * rate).toFixed(2));
+      const convertedBudget = Number((row.budget * rate).toFixed(2));
+      const convertedCpc = Number((row.cpc * rate).toFixed(4));
 
       if (existingId) {
         updated++;
-        return prisma.ads_daily_stats.update({
+        await prisma.ads_daily_stats.update({
           where: { id: existingId },
           data: { budget: convertedBudget, cost: convertedCost, clicks: row.clicks, impressions: row.impressions, cpc: convertedCpc, data_source: "sheet" },
         });
       } else {
         inserted++;
-        return prisma.ads_daily_stats.create({
+        await prisma.ads_daily_stats.create({
           data: { user_id: userId, user_merchant_id: BigInt(0), campaign_id: campaign.id, date: new Date(row.date), budget: convertedBudget, cost: convertedCost, clicks: row.clicks, impressions: row.impressions, cpc: convertedCpc, data_source: "sheet" },
         });
       }
-    });
-
-    await Promise.all(operations);
+    }));
   }
 
   // ─── 5. 批量更新 CID 状态 ───
@@ -669,10 +651,12 @@ async function syncTransactionsInline(userId: bigint) {
       where: { user_id: userId, is_deleted: 0 },
     });
     const isFirstTxnSync = existingTxnCount === 0;
-    const startStr = isFirstTxnSync ? HISTORY_START : cstNow.subtract(30, "day").format("YYYY-MM-DD");
+    const startStr = isFirstTxnSync
+      ? cstNow.subtract(365, "day").format("YYYY-MM-DD")
+      : cstNow.subtract(120, "day").format("YYYY-MM-DD");
     const endStr = cstNow.format("YYYY-MM-DD");
 
-    console.log(`[Sync] 交易同步范围: ${startStr} → ${endStr} (${isFirstTxnSync ? "首次-全量" : "增量30天"})`);
+    console.log(`[Sync] 交易同步范围: ${startStr} → ${endStr} (${isFirstTxnSync ? "首次-全量" : "增量120天"})`);
 
     const userMerchants = await prisma.user_merchants.findMany({
       where: { user_id: userId, is_deleted: 0 },

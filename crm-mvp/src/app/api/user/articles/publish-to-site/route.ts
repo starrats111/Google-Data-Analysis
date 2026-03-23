@@ -41,6 +41,7 @@ export async function POST(req: NextRequest) {
       slug,
       content: article.content,
       category: article.category || "General",
+      images: article.images,
     },
     {
       site_path: site.site_path,

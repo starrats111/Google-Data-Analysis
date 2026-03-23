@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 import { normalizePlatformCode } from "@/lib/constants";
+import { getExchangeRate, preloadRates } from "@/lib/exchange-rate";
 
 const CRON_SECRET = process.env.CRON_SECRET || "";
 
@@ -182,7 +183,7 @@ async function syncAllUsersMcc(): Promise<unknown> {
           yesterday.setDate(yesterday.getDate() - 1);
           const startStr = yesterday.toISOString().slice(0, 10);
           const endStr = new Date().toISOString().slice(0, 10);
-          const rate = await fetchExchangeRate(mcc.currency);
+          await preloadRates(mcc.currency, startStr, endStr);
 
           let sheetUpserted = 0;
 
@@ -199,6 +200,7 @@ async function syncAllUsersMcc(): Promise<unknown> {
                 if (!campaign) continue;
 
                 const dateObj = new Date(row.date);
+                const rate = await getExchangeRate(mcc.currency, row.date);
                 const costUsd = Number((row.cost * rate).toFixed(2));
 
                 await prisma.ads_daily_stats.upsert({
@@ -215,10 +217,7 @@ async function syncAllUsersMcc(): Promise<unknown> {
             }
           }
 
-          // Google Ads API 同步已移至前端「重新同步」按钮手动触发，
-          // 避免测试令牌用户在定时任务中产生 DEVELOPER_TOKEN_NOT_APPROVED 错误。
-
-          results[`mcc_${mcc.mcc_id}`] = { sheetUpserted, rate };
+          results[`mcc_${mcc.mcc_id}`] = { sheetUpserted };
         } catch (e) {
           results[`mcc_${mcc.mcc_id}`] = { error: e instanceof Error ? e.message : String(e) };
         }
@@ -256,9 +255,9 @@ async function syncAllUsersTransactions(): Promise<unknown> {
       log(`  Transactions for ${user.username} (${validConns.length} connections)...`);
 
       const { fetchAllTransactions } = await import("@/lib/platform-api");
-      const sevenDaysAgo = new Date();
-      sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
-      const startStr = sevenDaysAgo.toISOString().slice(0, 10);
+      const syncStart = new Date();
+      syncStart.setDate(syncStart.getDate() - 120);
+      const startStr = syncStart.toISOString().slice(0, 10);
       const endStr = new Date().toISOString().slice(0, 10);
 
       let totalSynced = 0;
@@ -305,7 +304,7 @@ async function syncAllUsersTransactions(): Promise<unknown> {
 
       if (totalSynced > 0) {
         await linkTransactionsToMerchants(userId);
-        const commUpdated = await updateDailyStatsCommission(userId, sevenDaysAgo);
+        const commUpdated = await updateDailyStatsCommission(userId, syncStart);
         log(`    ${user.username}: updated ${commUpdated} commission records in ads_daily_stats`);
       }
 
@@ -412,15 +411,3 @@ async function updateDailyStatsCommission(userId: bigint, startDate: Date): Prom
   return updated;
 }
 
-async function fetchExchangeRate(currency: string): Promise<number> {
-  if (!currency || currency.toUpperCase() === "USD") return 1;
-  try {
-    const resp = await fetch(`https://open.er-api.com/v6/latest/${currency.toUpperCase()}`, { signal: AbortSignal.timeout(10000) });
-    if (!resp.ok) return 1;
-    const data = await resp.json();
-    const rate = data.rates?.USD;
-    return (rate && rate > 0) ? rate : 1;
-  } catch {
-    return 1;
-  }
-}

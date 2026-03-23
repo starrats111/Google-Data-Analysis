@@ -206,9 +206,6 @@ export default function ArticlesPage() {
             }}>
               <Button danger icon={<DeleteOutlined />}>清理失败文章</Button>
             </Popconfirm>
-            <Button icon={<SyncOutlined />} loading={syncing} onClick={handleSyncArticles}>
-              同步文章
-            </Button>
           </Space>
         </div>
         <Table

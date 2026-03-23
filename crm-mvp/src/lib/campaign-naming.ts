@@ -2,7 +2,7 @@ import prisma from "@/lib/prisma";
 
 /**
  * 生成广告系列名称
- * 格式: {prefix}{序号}-{平台}-{商家名}-{国家}-{日期MMDD}-{MID}
+ * 格式: {序号}-{平台}-{商家名}-{国家}-{日期MMDD}-{MID}
  * 序号按 MCC 分开统计，每个 MCC 独立递增
  */
 export async function generateCampaignName(
@@ -21,14 +21,14 @@ export async function generateCampaignName(
   const cleanName = merchantName
     .replace(/[^a-zA-Z0-9\u4e00-\u9fff ]/g, "")
     .trim()
-    .replace(/\s+/g, "-")
+    .replace(/\s+/g, "")
     .slice(0, 30);
 
   const platformLabel = platform;
 
   const where: Record<string, unknown> = { user_id: userId, is_deleted: 0 };
   if (mccId) {
-    where.OR = [{ mcc_id: mccId }, { mcc_id: null }];
+    where.mcc_id = mccId;
   }
 
   const existingCampaigns = await prisma.campaigns.findMany({
@@ -37,7 +37,6 @@ export async function generateCampaignName(
   });
 
   let maxSeq = 0;
-  const prefix = namingPrefix?.trim() || "";
 
   if (namingRule === "per_platform") {
     for (const c of existingCampaigns) {
@@ -61,6 +60,6 @@ export async function generateCampaignName(
     }
   }
 
-  const seqStr = `${prefix}${String(maxSeq + 1).padStart(3, "0")}`;
+  const seqStr = String(maxSeq + 1).padStart(3, "0");
   return `${seqStr}-${platformLabel}-${cleanName}-${country}-${mmdd}-${merchantId}`;
 }

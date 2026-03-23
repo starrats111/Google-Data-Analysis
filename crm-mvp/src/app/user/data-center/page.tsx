@@ -111,7 +111,7 @@ export default function DataCenterPage() {
   }, [rows]);
 
   // 一键同步：广告数据 + 联盟交易（合并为单个操作）
-  const handleSync = useCallback(async () => {
+  const handleSync = useCallback(async (forceFullSync = false) => {
     if (mccAccounts.length === 0) { message.warning("请先添加 MCC 账户"); return; }
     setSyncing(true);
     try {
@@ -122,14 +122,14 @@ export default function DataCenterPage() {
       for (const mccId of idsToSync) {
         const res = await fetch("/api/user/data-center/sync", {
           method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ type: "all", mcc_account_id: mccId }),
+          body: JSON.stringify({ type: "all", mcc_account_id: mccId, force_full_sync: forceFullSync }),
         }).then((r) => r.json());
         if (res.code === 0) successCount++;
         else errors.push(res.message);
       }
 
       if (successCount > 0) {
-        message.success(`${successCount} 个 MCC 同步完成（含广告数据和交易佣金）${errors.length > 0 ? `，${errors.length} 个失败` : ""}`);
+        message.success(`${successCount} 个 MCC ${forceFullSync ? "全量" : ""}同步完成${errors.length > 0 ? `，${errors.length} 个失败` : ""}`);
         refreshApi(/\/api\/user\/data-center/);
       } else {
         message.error(errors[0] || "同步失败");
@@ -370,10 +370,20 @@ export default function DataCenterPage() {
           </Col>
           <Col>
             <Space>
-              <Tooltip title="一键同步广告数据和联盟交易佣金（首次同步将拉取全部历史数据）">
-                <Button type="primary" size="small" icon={<SyncOutlined spin={syncing} />} loading={syncing} onClick={handleSync}>
+              <Tooltip title="增量同步广告数据和联盟交易佣金">
+                <Button type="primary" size="small" icon={<SyncOutlined spin={syncing} />} loading={syncing} onClick={() => handleSync(false)}>
                   {syncing ? "同步中..." : "重新同步"}
                 </Button>
+              </Tooltip>
+              <Tooltip title="从 MCC 创建时间开始全量重新拉取所有数据（耗时较长）">
+                <Button size="small" icon={<CloudDownloadOutlined />} loading={syncing} onClick={() => {
+                  Modal.confirm({
+                    title: "全量重新同步",
+                    content: "将从 MCC 创建时间起重新拉取所有广告数据和交易佣金，耗时较长，确定继续？",
+                    okText: "确定", cancelText: "取消",
+                    onOk: () => handleSync(true),
+                  });
+                }}>全量同步</Button>
               </Tooltip>
               <Button size="small" icon={<CloudDownloadOutlined />} loading={syncingCid} onClick={handleSyncCids}>同步 CID</Button>
             </Space>
