@@ -345,7 +345,7 @@ export async function GET(req: NextRequest) {
         { mcc_id: bigint; date: Date; cost_usd: number; rate: number | null }[]
       >(`
         SELECT c.mcc_id, s.date, SUM(s.cost) as cost_usd,
-          (SELECT e.rate FROM exchange_rate_snapshots e WHERE e.currency = 'CNY' AND e.date = s.date LIMIT 1) as rate
+          (SELECT e.rate_to_usd FROM exchange_rate_snapshots e WHERE e.currency = 'CNY' AND e.date = s.date LIMIT 1) as rate
         FROM ads_daily_stats s
         JOIN campaigns c ON c.id = s.campaign_id
         WHERE s.campaign_id IN (${cnyCampaignIds.map(() => "?").join(",")})
