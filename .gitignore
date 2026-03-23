@@ -15,3 +15,6 @@ _ssh_query.py
 _ssh_schema.py
 _ssh_setup_db.py
 _migration_script.py
+
+# 上传文件目录
+crm-mvp/.uploads/

@@ -120,6 +120,7 @@ export async function GET(req: NextRequest) {
       descriptions_zh: (adCreative as any).descriptions_zh || [],
       sitelinks: adCreative.sitelinks,
       callouts: adCreative.callouts,
+      image_urls: adCreative.image_urls,
     } : null,
     keywords,
     adSettings: adSettings ? {

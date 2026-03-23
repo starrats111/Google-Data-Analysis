@@ -204,6 +204,11 @@ export default function AdPreviewPage() {
       setEnableCallouts(true);
       setCallouts(existingCallouts);
     }
+    const existingImages = preview.adCreative?.image_urls as string[] | null;
+    if (existingImages?.length) {
+      setEnableImages(true);
+      setImageUrls(existingImages);
+    }
     setInitialized(true);
   }, [preview, isReady, initialized]);
 
@@ -572,6 +577,14 @@ export default function AdPreviewPage() {
 
   // ─── 图片上传 ───
   const handleImageUpload = useCallback(async (file: File) => {
+    if (!["image/jpeg", "image/png"].includes(file.type)) {
+      message.error("Google Ads 仅支持 JPG 和 PNG 格式图片");
+      return false;
+    }
+    if (file.size > 5 * 1024 * 1024) {
+      message.error("图片大小不能超过 5MB（Google Ads 限制）");
+      return false;
+    }
     const formData = new FormData();
     formData.append("file", file);
     try {
@@ -1199,7 +1212,7 @@ export default function AdPreviewPage() {
                         </Space>
                       )}
                       <Upload.Dragger
-                        accept="image/jpeg,image/png,image/webp,image/gif"
+                        accept="image/jpeg,image/png"
                         multiple
                         showUploadList={false}
                         beforeUpload={(file) => { handleImageUpload(file); return false; }}
@@ -1207,7 +1220,7 @@ export default function AdPreviewPage() {
                       >
                         <p className="ant-upload-drag-icon"><InboxOutlined /></p>
                         <p className="ant-upload-text">点击或拖入商家产品图片</p>
-                        <p className="ant-upload-hint">支持 JPG、PNG、WebP、GIF，最大 10MB</p>
+                        <p className="ant-upload-hint">支持 JPG、PNG，最大 5MB（Google Ads 要求最低 300×300 像素）</p>
                       </Upload.Dragger>
                       <Space.Compact style={{ width: "100%" }}>
                         <Input

@@ -5,9 +5,11 @@ alwaysApply: true
 
 # 部署架构
 
-- 前端代码推送至 GitHub（https://github.com/starrats111/Google-Data-Analysis），Cloudflare 自动部署
-- 后端运行在阿里云服务器，使用密码登录
-- 宝塔面板运行在亚马逊服务器，使用密钥登录
+- 全栈 Next.js 应用部署在阿里云服务器（47.239.193.33），使用密码登录
+- 代码推送至 GitHub（https://github.com/starrats111/Google-Data-Analysis），通过 GitHub Actions 自动 SSH 部署到服务器
+- Cloudflare 作为 CDN 代理（域名：google-data-analysis.top）
+- 宝塔面板运行在亚马逊服务器（52.74.221.16），使用密钥登录
+- 自动部署流程：push main → GitHub Actions → SSH → git pull → build → pm2 restart
 
 # 服务器资源约束（极其重要）
 

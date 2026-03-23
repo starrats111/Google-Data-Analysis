@@ -381,36 +381,25 @@ export async function POST(req: NextRequest) {
       assetTempId--;
     }
 
-    // ─── 10. 图片素材（仅非搜索广告系列支持，搜索广告系列跳过） ───
-    const isSearchCampaign = true; // 当前仅创建搜索广告系列
-    if (image_urls.length > 0 && !isSearchCampaign) {
-      const imageLoadTasks = (image_urls as string[]).slice(0, 20).map((url) => loadImageAsBase64(url));
-      const imageResults = await Promise.all(imageLoadTasks);
-      for (const img of imageResults) {
+    // ─── 10. 预加载图片素材（串行加载 + 累计内存限额，实际提交在主广告创建成功后） ───
+    const MAX_TOTAL_IMAGE_BYTES = 50 * 1024 * 1024;
+    const MAX_IMAGES = 20;
+    const imageAssets: { data: string; name: string }[] = [];
+    if (image_urls.length > 0) {
+      let totalBytes = 0;
+      for (const url of (image_urls as string[]).slice(0, MAX_IMAGES)) {
+        const img = await loadImageAsBase64(url);
         if (!img) continue;
-        const assetTempRn = `customers/${cid}/assets/${assetTempId}`;
-        operations.push({
-          asset_operation: {
-            create: {
-              resource_name: assetTempRn,
-              name: `AdImage-${img.name}-${Date.now()}`,
-              type: "IMAGE",
-              image_asset: {
-                data: img.data,
-              },
-            },
-          },
-        });
-        operations.push({
-          campaign_asset_operation: {
-            create: {
-              asset: assetTempRn,
-              campaign: campaignTempRn,
-              field_type: "MARKETING_IMAGE",
-            },
-          },
-        });
-        assetTempId--;
+        const imgBytes = Buffer.byteLength(img.data, "base64");
+        if (totalBytes + imgBytes > MAX_TOTAL_IMAGE_BYTES) {
+          console.warn(`[AdSubmit] 图片累计体积已达限额 (${Math.round(totalBytes / 1024 / 1024)}MB)，跳过剩余图片`);
+          break;
+        }
+        imageAssets.push(img);
+        totalBytes += imgBytes;
+      }
+      if (imageAssets.length > 0) {
+        console.log(`[AdSubmit] 已加载 ${imageAssets.length} 张图片 (${Math.round(totalBytes / 1024 / 1024)}MB)`);
       }
     }
 
@@ -487,6 +476,46 @@ export async function POST(req: NextRequest) {
     );
     const googleAdGroupId = adGroupRn.split("/").pop() || "";
 
+    // ─── 11. 图片素材独立提交（第二次 mutate，失败不影响主广告） ───
+    const imageUploadResult = { success: 0, failed: 0, errors: [] as string[] };
+    if (imageAssets.length > 0 && campaignRn) {
+      try {
+        const imageOps: Record<string, unknown>[] = [];
+        let imgTempId = -100;
+        for (const img of imageAssets) {
+          const assetRn = `customers/${cid}/assets/${imgTempId}`;
+          imageOps.push({
+            asset_operation: {
+              create: {
+                resource_name: assetRn,
+                name: `AdImage-${img.name}-${Date.now()}`,
+                type: "IMAGE",
+                image_asset: { data: img.data },
+              },
+            },
+          });
+          imageOps.push({
+            campaign_asset_operation: {
+              create: {
+                asset: assetRn,
+                campaign: campaignRn,
+                field_type: "MARKETING_IMAGE",
+              },
+            },
+          });
+          imgTempId--;
+        }
+        await mutateGoogleAds(credentials, customerId, imageOps);
+        imageUploadResult.success = imageAssets.length;
+        console.log(`[AdSubmit] 图片素材上传成功: ${imageAssets.length} 张`);
+      } catch (imgErr) {
+        const msg = imgErr instanceof Error ? imgErr.message : String(imgErr);
+        console.warn("[AdSubmit] 图片素材上传失败（不影响广告创建）:", msg.slice(0, 500));
+        imageUploadResult.failed = imageAssets.length;
+        imageUploadResult.errors.push(msg.slice(0, 200));
+      }
+    }
+
     // ─── 更新数据库记录 ───
     await prisma.campaigns.update({
       where: { id: campaign.id },
@@ -528,9 +557,17 @@ export async function POST(req: NextRequest) {
       select: { id: true, status: true, slug: true },
     });
 
-    const successMsg = skippedKeywords.length > 0
-      ? `广告创建成功（已跳过 ${skippedKeywords.length} 个违反政策的关键词: ${skippedKeywords.join(", ")}）`
-      : "广告创建成功";
+    const msgParts: string[] = ["广告创建成功"];
+    if (skippedKeywords.length > 0) {
+      msgParts.push(`已跳过 ${skippedKeywords.length} 个违反政策的关键词: ${skippedKeywords.join(", ")}`);
+    }
+    if (imageUploadResult.success > 0) {
+      msgParts.push(`${imageUploadResult.success} 张图片素材上传成功`);
+    }
+    if (imageUploadResult.failed > 0) {
+      msgParts.push(`${imageUploadResult.failed} 张图片素材上传失败（不影响广告）`);
+    }
+    const successMsg = msgParts.join("，");
 
     return apiSuccess(serializeData({
       google_campaign_id: googleCampaignId,
@@ -540,6 +577,7 @@ export async function POST(req: NextRequest) {
       article_slug: article?.slug || null,
       article_status: article?.status || null,
       skipped_keywords: skippedKeywords,
+      image_upload: imageUploadResult,
     }), successMsg);
 
   } catch (err) {

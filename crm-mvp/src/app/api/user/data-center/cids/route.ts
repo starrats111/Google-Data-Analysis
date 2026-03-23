@@ -132,6 +132,23 @@ export async function POST(req: NextRequest) {
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error("[CID Sync] 失败:", message);
-    return apiError(`CID 同步失败: ${message}`, 500);
+
+    if (message.includes("PERMISSION_DENIED") && message.includes("has not been used in project")) {
+      const projectMatch = message.match(/project (\d+)/);
+      const projectId = projectMatch?.[1] || "未知";
+      return apiError(
+        `CID 同步失败：Service Account 所属的 Google Cloud 项目（${projectId}）未启用 Google Ads API。` +
+        `请联系管理员在 Google Cloud Console 中启用该 API 后重试。`,
+        500
+      );
+    }
+    if (message.includes("PERMISSION_DENIED")) {
+      return apiError("CID 同步失败：权限不足，请检查 Service Account 是否有 Google Ads API 访问权限", 500);
+    }
+    if (message.includes("无法从 Service Account 获取 access_token")) {
+      return apiError("CID 同步失败：Service Account 凭证无效，请检查 MCC 配置中的服务账号 JSON", 500);
+    }
+
+    return apiError(`CID 同步失败: ${message.slice(0, 200)}`, 500);
   }
 }

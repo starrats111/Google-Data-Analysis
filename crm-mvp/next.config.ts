@@ -46,6 +46,9 @@ const nextConfig: NextConfig = {
   // ─── 包导入优化 — 按需加载，减少 bundle 体积 ───
   experimental: {
     optimizePackageImports: ["antd", "@ant-design/icons", "recharts", "dayjs"],
+    serverActions: {
+      bodySizeLimit: '5mb',
+    },
   },
 
   // ─── 日志 — 生产环境关闭，节省内存 ───
