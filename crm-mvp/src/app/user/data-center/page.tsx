@@ -34,6 +34,12 @@ interface CampaignRow {
   cost: number; clicks: number; impressions: number; cpc: number;
   commission: number; rejected_commission: number; approved_commission: number; orders: number; roi: number;
   target_country: string; last_synced: string | null;
+  mcc_currency?: string;
+}
+
+interface CostByMcc {
+  mcc_db_id: string; mcc_id: string; mcc_name: string; currency: string;
+  cost_usd: number; cost_original?: number;
 }
 
 interface Summary {
@@ -88,11 +94,12 @@ export default function DataCenterPage() {
     return p;
   }, [selectedMcc, dateRange, statusFilter, platformFilter, midFilter, searchFilter]);
 
-  const { data: campaignData, isLoading } = useApiWithParams<{ rows: CampaignRow[]; summary: Summary }>(
+  const { data: campaignData, isLoading } = useApiWithParams<{ rows: CampaignRow[]; summary: Summary; costByMcc?: CostByMcc[] }>(
     "/api/user/data-center/campaigns", queryParams
   );
 
   const rows = campaignData?.rows || [];
+  const costByMcc = campaignData?.costByMcc || [];
   const summary = campaignData?.summary || {
     totalCost: 0, totalCommission: 0, totalRejectedCommission: 0, totalApprovedCommission: 0,
     totalClicks: 0, totalImpressions: 0, avgCpc: 0, roi: 0, campaignCount: 0, enabledCount: 0, pausedCount: 0,
@@ -274,8 +281,13 @@ export default function DataCenterPage() {
       render: (v: number) => <Text style={{ fontSize: 12 }}>${v?.toFixed(4)}</Text>,
     },
     {
-      title: "花费", dataIndex: "cost", width: 70, align: "right",
-      render: (v: number) => <Text style={{ fontSize: 12, color: v > 0 ? "#cf1322" : undefined }}>${v?.toFixed(2)}</Text>,
+      title: "花费", dataIndex: "cost", width: 85, align: "right",
+      render: (v: number, r: CampaignRow) => (
+        <span>
+          <Text style={{ fontSize: 12, color: v > 0 ? "#cf1322" : undefined }}>${v?.toFixed(2)}</Text>
+          {r.mcc_currency === "CNY" && <Tag color="orange" style={{ fontSize: 9, marginLeft: 2, padding: "0 3px", lineHeight: "14px" }}>CNY</Tag>}
+        </span>
+      ),
     },
     {
       title: "佣金", dataIndex: "commission", width: 70, align: "right",
@@ -396,6 +408,18 @@ export default function DataCenterPage() {
         <Col xs={12} sm={8} md={8}>
           <Card size="small" styles={{ body: { padding: "8px 12px", cursor: "pointer" } }} hoverable onClick={() => setDetailModal(true)}>
             <Statistic title="总花费" value={summary.totalCost} prefix="$" precision={2} styles={{ content: { fontSize: 18, color: "#cf1322" } }} />
+            {costByMcc.length > 0 && (
+              <div style={{ marginTop: 4 }}>
+                {costByMcc.map((m) => (
+                  <div key={m.mcc_db_id} style={{ fontSize: 11, color: "#666", lineHeight: 1.6 }}>
+                    {m.mcc_name}: <span style={{ color: "#cf1322" }}>${m.cost_usd.toFixed(2)}</span>
+                    {m.currency === "CNY" && m.cost_original != null && (
+                      <span style={{ color: "#d46b08", marginLeft: 4 }}>(¥{m.cost_original.toFixed(2)})</span>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
           </Card>
         </Col>
         <Col xs={12} sm={8} md={8}>
@@ -440,8 +464,37 @@ export default function DataCenterPage() {
         />
       </Card>
 
-      {/* ========== 花费/佣金详情弹窗（按广告系列） ========== */}
-      <Modal title="花费 / 佣金明细" open={detailModal} onCancel={() => setDetailModal(false)} footer={null} width={700}>
+      {/* ========== 花费/佣金详情弹窗（按 MCC 分组） ========== */}
+      <Modal title="花费 / 佣金明细" open={detailModal} onCancel={() => setDetailModal(false)} footer={null} width={750}>
+        {/* MCC 费用汇总 */}
+        {costByMcc.length > 0 && (
+          <Card size="small" style={{ marginBottom: 12, background: "#fafafa" }} styles={{ body: { padding: "8px 12px" } }}>
+            <Text strong style={{ fontSize: 13 }}>按 MCC 账户汇总</Text>
+            <Table
+              rowKey="mcc_db_id" dataSource={costByMcc} size="small" pagination={false}
+              style={{ marginTop: 8 }}
+              columns={[
+                { title: "MCC 账户", dataIndex: "mcc_name", width: 160, render: (v: string, r: CostByMcc) => (
+                  <span><Text style={{ fontSize: 12 }}>{v}</Text> <Tag color={r.currency === "CNY" ? "orange" : "blue"} style={{ fontSize: 10, marginLeft: 4 }}>{r.currency}</Tag></span>
+                ) },
+                { title: "花费 (USD)", dataIndex: "cost_usd", width: 120, align: "right", render: (v: number) => <Text strong style={{ color: "#cf1322", fontSize: 13 }}>${v.toFixed(2)}</Text> },
+                { title: "原始金额", key: "cost_original", width: 140, align: "right", render: (_: unknown, r: CostByMcc) => (
+                  r.currency === "CNY" && r.cost_original != null
+                    ? <Text strong style={{ color: "#d46b08", fontSize: 13 }}>¥{r.cost_original.toFixed(2)}</Text>
+                    : <Text type="secondary" style={{ fontSize: 12 }}>—</Text>
+                ) },
+              ]}
+              summary={() => costByMcc.length > 1 ? (
+                <Table.Summary.Row>
+                  <Table.Summary.Cell index={0}><Text strong>合计</Text></Table.Summary.Cell>
+                  <Table.Summary.Cell index={1} align="right"><Text strong style={{ color: "#cf1322" }}>${summary.totalCost.toFixed(2)}</Text></Table.Summary.Cell>
+                  <Table.Summary.Cell index={2} />
+                </Table.Summary.Row>
+              ) : null}
+            />
+          </Card>
+        )}
+        {/* 按广告系列明细 */}
         <Table rowKey="id" dataSource={detailByRow} size="small" pagination={false}
           columns={[
             { title: "广告系列", dataIndex: "campaign_name", width: 280, render: (v: string) => <Text style={{ fontSize: 12, wordBreak: "break-all", whiteSpace: "normal" }}>{v}</Text> },

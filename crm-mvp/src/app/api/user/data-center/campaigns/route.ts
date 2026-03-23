@@ -108,6 +108,7 @@ export async function GET(req: NextRequest) {
     take: 200,
     select: {
       id: true,
+      mcc_id: true,
       google_campaign_id: true,
       customer_id: true,
       campaign_name: true,
@@ -119,6 +120,13 @@ export async function GET(req: NextRequest) {
     },
   });
 
+  // MCC 信息映射（id → {mcc_id, mcc_name, currency}）
+  const allMccInfo = await prisma.google_mcc_accounts.findMany({
+    where: { user_id: userId, is_deleted: 0 },
+    select: { id: true, mcc_id: true, mcc_name: true, currency: true },
+  });
+  const mccInfoMap = new Map(allMccInfo.map((m) => [String(m.id), { mcc_id: m.mcc_id, mcc_name: m.mcc_name || m.mcc_id, currency: m.currency || "USD" }]));
+
   // 按 google_campaign_id 去重（保留最新的一条）
   const seenGoogleIds = new Set<string>();
   const campaigns = rawCampaigns.filter((c) => {
@@ -129,6 +137,12 @@ export async function GET(req: NextRequest) {
   });
 
   const campaignIds = campaigns.map((c) => c.id);
+
+  // campaign → MCC 映射
+  const campaignMccMap = new Map<string, string>();
+  for (const c of campaigns) {
+    campaignMccMap.set(String(c.id), String(c.mcc_id));
+  }
 
   // 聚合 ads_daily_stats（仅用于 cost/clicks/impressions）
   const statsAgg = campaignIds.length > 0
@@ -224,6 +238,9 @@ export async function GET(req: NextRequest) {
   let totalCost = 0, totalClicks = 0, totalImpressions = 0;
   let enabledCount = 0, pausedCount = 0;
 
+  // 按 MCC 聚合费用
+  const mccCostAccum = new Map<string, number>();
+
   const rows = campaigns.map((c) => {
     const s = statsMap.get(String(c.id));
     const cost = s?.cost || 0;
@@ -250,6 +267,11 @@ export async function GET(req: NextRequest) {
     if (c.google_status === "ENABLED") enabledCount++;
     if (c.google_status === "PAUSED") pausedCount++;
 
+    // 按 MCC 累加费用
+    const cMccId = String(c.mcc_id);
+    mccCostAccum.set(cMccId, (mccCostAccum.get(cMccId) || 0) + cost);
+
+    const mccInfo = mccInfoMap.get(cMccId);
     return {
       id: c.id,
       google_campaign_id: c.google_campaign_id,
@@ -269,6 +291,7 @@ export async function GET(req: NextRequest) {
       roi,
       target_country: c.target_country,
       last_synced: c.last_google_sync_at,
+      mcc_currency: mccInfo?.currency || "USD",
     };
   });
 
@@ -300,7 +323,60 @@ export async function GET(req: NextRequest) {
     });
   }
 
-  const totalCommission = rows.reduce((sum, r) => sum + r.commission, 0);
+  // 按 MCC 汇总费用，CNY 账号计算原始人民币金额
+  const costByMcc: { mcc_db_id: string; mcc_id: string; mcc_name: string; currency: string; cost_usd: number; cost_original?: number }[] = [];
+  const cnyCostByDay = new Map<string, { mcc_db_id: string; dailyCosts: Map<string, number> }>();
+
+  for (const [mccDbId, costUsd] of mccCostAccum) {
+    const info = mccInfoMap.get(mccDbId);
+    if (!info) continue;
+    if (info.currency === "CNY" && costUsd > 0) {
+      cnyCostByDay.set(mccDbId, { mcc_db_id: mccDbId, dailyCosts: new Map() });
+    } else {
+      costByMcc.push({ mcc_db_id: mccDbId, mcc_id: info.mcc_id, mcc_name: info.mcc_name, currency: info.currency, cost_usd: Number(costUsd.toFixed(2)) });
+    }
+  }
+
+  // CNY MCC: 按天反算原始人民币金额 (cost_cny = cost_usd / rate)
+  if (cnyCostByDay.size > 0) {
+    const cnyCampaignIds = campaigns.filter((c) => cnyCostByDay.has(String(c.mcc_id))).map((c) => c.id);
+    if (cnyCampaignIds.length > 0) {
+      const cnyDailyStats = await prisma.$queryRawUnsafe<
+        { mcc_id: bigint; date: Date; cost_usd: number; rate: number | null }[]
+      >(`
+        SELECT c.mcc_id, s.date, SUM(s.cost) as cost_usd,
+          (SELECT e.rate FROM exchange_rate_snapshots e WHERE e.currency = 'CNY' AND e.date = s.date LIMIT 1) as rate
+        FROM ads_daily_stats s
+        JOIN campaigns c ON c.id = s.campaign_id
+        WHERE s.campaign_id IN (${cnyCampaignIds.map(() => "?").join(",")})
+          AND s.date >= ? AND s.date <= ? AND s.is_deleted = 0
+        GROUP BY c.mcc_id, s.date
+      `, ...cnyCampaignIds.map(Number), start, end);
+
+      for (const row of cnyDailyStats) {
+        const mccDbId = String(row.mcc_id);
+        const info = mccInfoMap.get(mccDbId);
+        if (!info) continue;
+        const costUsd = Number(row.cost_usd || 0);
+        const rate = Number(row.rate || 0);
+        const costCny = rate > 0 ? costUsd / rate : 0;
+        const entry = cnyCostByDay.get(mccDbId);
+        if (entry) entry.dailyCosts.set(row.date.toISOString(), costCny);
+      }
+
+      for (const [mccDbId, entry] of cnyCostByDay) {
+        const info = mccInfoMap.get(mccDbId)!;
+        const totalCostUsd = mccCostAccum.get(mccDbId) || 0;
+        let totalCostCny = 0;
+        for (const cny of entry.dailyCosts.values()) totalCostCny += cny;
+        costByMcc.push({
+          mcc_db_id: mccDbId, mcc_id: info.mcc_id, mcc_name: info.mcc_name,
+          currency: "CNY", cost_usd: Number(totalCostUsd.toFixed(2)),
+          cost_original: Number(totalCostCny.toFixed(2)),
+        });
+      }
+    }
+  }
 
   const summary = {
     totalCost: Number(totalCost.toFixed(2)),
@@ -316,7 +392,7 @@ export async function GET(req: NextRequest) {
     pausedCount,
   };
 
-  return apiSuccess(serializeData({ rows, summary }));
+  return apiSuccess(serializeData({ rows, summary, costByMcc }));
 }
 
 function emptySummary() {
