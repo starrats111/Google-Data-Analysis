@@ -550,7 +550,14 @@ export default function AdminSitesPage() {
     if (res.code === 0 && res.data?.checks?.valid) {
       message.success({ content: "验证通过", key: "verify" });
     } else {
-      const errText = res.data?.checks?.error || res.message || "验证失败";
+      const checks = res.data?.checks;
+      const errText =
+        res.code !== 0
+          ? (res.message || "验证失败")
+          : checks?.error ||
+            (!checks?.valid
+              ? "验证未通过：请检查宝塔 SSH、站点目录及 index.html / 数据 JS 是否与架构一致"
+              : "验证失败");
       message.error({ content: errText, key: "verify" });
     }
     fetchSites();
