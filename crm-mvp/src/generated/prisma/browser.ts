@@ -148,6 +148,11 @@ export type ai_insights = Prisma.ai_insightsModel
  */
 export type operation_logs = Prisma.operation_logsModel
 /**
+ * Model exchange_rate_snapshots
+ * 
+ */
+export type exchange_rate_snapshots = Prisma.exchange_rate_snapshotsModel
+/**
  * Model mcc_cid_accounts
  * 
  */

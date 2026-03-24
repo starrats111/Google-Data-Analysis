@@ -3,7 +3,7 @@
 import { useState, useMemo, useCallback } from "react";
 import {
   Card, Table, Row, Col, Statistic, Select, Space, Typography, Tag, Button,
-  Dropdown, DatePicker, Tooltip, App, Input, Modal,
+  Dropdown, DatePicker, Tooltip, App, Input, Modal, Tabs,
 } from "antd";
 import {
   RiseOutlined, FallOutlined, SyncOutlined,
@@ -43,9 +43,19 @@ interface CostByMcc {
 }
 
 interface Summary {
-  totalCost: number; totalCommission: number; totalRejectedCommission: number; totalApprovedCommission: number;
-  totalClicks: number; totalImpressions: number;
-  avgCpc: number; roi: number; campaignCount: number; enabledCount: number; pausedCount: number;
+  totalCost: number;
+  totalCommission: number;
+  totalRejectedCommission: number;
+  totalApprovedCommission: number;
+  totalPaidCommission: number;
+  totalPendingCommission: number;
+  totalClicks: number;
+  totalImpressions: number;
+  avgCpc: number;
+  roi: number;
+  campaignCount: number;
+  enabledCount: number;
+  pausedCount: number;
 }
 
 // CID 格式化: 1234567890 → 123-456-7890
@@ -73,8 +83,15 @@ export default function DataCenterPage() {
   const [commissionModal, setCommissionModal] = useState(false);
   const [commissionByAccount, setCommissionByAccount] = useState<{
     account_name: string; platform: string; total_commission: number;
+    approved_commission: number; paid_commission: number;
     rejected_commission: number; pending_commission: number; order_count: number; order_amount: number;
   }[]>([]);
+  const [commissionByMerchant, setCommissionByMerchant] = useState<{
+    user_merchant_id: string; merchant_name: string; platform: string; total_commission: number;
+    approved_commission: number; paid_commission: number;
+    rejected_commission: number; pending_commission: number; order_count: number; order_amount: number;
+  }[]>([]);
+  const [commissionTab, setCommissionTab] = useState<"merchant" | "account">("merchant");
   const [loadingCommission, setLoadingCommission] = useState(false);
 
   // MCC 列表
@@ -94,15 +111,28 @@ export default function DataCenterPage() {
     return p;
   }, [selectedMcc, dateRange, statusFilter, platformFilter, midFilter, searchFilter]);
 
-  const { data: campaignData, isLoading } = useApiWithParams<{ rows: CampaignRow[]; summary: Summary; costByMcc?: CostByMcc[] }>(
-    "/api/user/data-center/campaigns", queryParams
-  );
+  const { data: campaignData, isLoading } = useApiWithParams<{
+    rows: CampaignRow[]; summary: Summary; costByMcc?: CostByMcc[];
+    rowMeta?: { displayedCount: number; totalCount: number; isLimited: boolean };
+  }>("/api/user/data-center/campaigns", queryParams);
 
   const rows = campaignData?.rows || [];
   const costByMcc = campaignData?.costByMcc || [];
+  const rowMeta = campaignData?.rowMeta;
   const summary = campaignData?.summary || {
-    totalCost: 0, totalCommission: 0, totalRejectedCommission: 0, totalApprovedCommission: 0,
-    totalClicks: 0, totalImpressions: 0, avgCpc: 0, roi: 0, campaignCount: 0, enabledCount: 0, pausedCount: 0,
+    totalCost: 0,
+    totalCommission: 0,
+    totalRejectedCommission: 0,
+    totalApprovedCommission: 0,
+    totalPaidCommission: 0,
+    totalPendingCommission: 0,
+    totalClicks: 0,
+    totalImpressions: 0,
+    avgCpc: 0,
+    roi: 0,
+    campaignCount: 0,
+    enabledCount: 0,
+    pausedCount: 0,
   };
 
   // 为表格添加序号
@@ -156,6 +186,7 @@ export default function DataCenterPage() {
 
   const handleOpenCommissionModal = useCallback(async () => {
     setCommissionModal(true);
+    setCommissionTab("merchant");
     setLoadingCommission(true);
     try {
       const params = new URLSearchParams({
@@ -163,7 +194,10 @@ export default function DataCenterPage() {
         date_end: dateRange[1].format("YYYY-MM-DD"),
       });
       const res = await fetch(`/api/user/data-center/commission-by-account?${params}`).then((r) => r.json());
-      if (res.code === 0) setCommissionByAccount(res.data || []);
+      if (res.code === 0) {
+        setCommissionByAccount(res.data?.byAccount || []);
+        setCommissionByMerchant(res.data?.byMerchant || []);
+      }
     } finally { setLoadingCommission(false); }
   }, [dateRange]);
 
@@ -431,6 +465,16 @@ export default function DataCenterPage() {
         </Col>
       </Row>
 
+      {/* ========== 口径说明 + 行数限制提示 ========== */}
+      <div style={{ marginBottom: 8, padding: "4px 8px", background: "#fafafa", borderRadius: 4, fontSize: 12, color: "#888", lineHeight: 1.8 }}>
+        <span>统计口径：总花费 / 总佣金 / ROI 基于全部去重 Campaign 聚合，不受表格展示行数限制。</span>
+        {rowMeta?.isLimited && (
+          <span style={{ color: "#fa8c16", marginLeft: 8 }}>
+            表格仅展示 {rowMeta.displayedCount} / {rowMeta.totalCount} 条 Campaign 行，合计行与上方总览一致。
+          </span>
+        )}
+      </div>
+
       {/* ========== 广告系列表格 ========== */}
       <Card size="small" styles={{ body: { padding: "0 8px 8px" } }}>
         <Table<IndexedRow>
@@ -493,15 +537,20 @@ export default function DataCenterPage() {
         <Row gutter={[12, 12]} style={{ marginBottom: 16 }}>
           <Col span={8}>
             <Card size="small" styles={{ body: { padding: "8px 12px" } }}>
+              <Statistic title="总佣金" value={summary.totalCommission} prefix="$" precision={2} styles={{ content: { fontSize: 16, color: summary.totalCommission > 0 ? "#389e0d" : undefined } }} />
+            </Card>
+          </Col>
+          <Col span={8}>
+            <Card size="small" styles={{ body: { padding: "8px 12px" } }}>
               <Statistic title="已确认佣金" value={summary.totalApprovedCommission} prefix="$" precision={2} styles={{ content: { fontSize: 16, color: summary.totalApprovedCommission > 0 ? "#1890ff" : undefined } }} />
             </Card>
           </Col>
           <Col span={8}>
             <Card size="small" styles={{ body: { padding: "8px 12px" } }}>
               <Statistic title="待审核佣金"
-                value={summary.totalCommission - summary.totalRejectedCommission - summary.totalApprovedCommission}
+                value={summary.totalPendingCommission}
                 prefix="$" precision={2}
-                styles={{ content: { fontSize: 16, color: (summary.totalCommission - summary.totalRejectedCommission - summary.totalApprovedCommission) > 0 ? "#faad14" : undefined } }} />
+                styles={{ content: { fontSize: 16, color: summary.totalPendingCommission > 0 ? "#faad14" : undefined } }} />
             </Card>
           </Col>
           <Col span={8}>
@@ -528,43 +577,89 @@ export default function DataCenterPage() {
           </Col>
         </Row>
 
-        {/* 按平台账号明细 */}
-        <Text strong style={{ display: "block", marginBottom: 8 }}>按平台账号</Text>
-        <Table
-          rowKey={(r) => `${r.platform}-${r.account_name}`}
-          dataSource={commissionByAccount}
-          size="small"
-          loading={loadingCommission}
-          pagination={false}
-          columns={[
-            { title: "账号", dataIndex: "account_name", width: 120, render: (v: string, r) => <Tag color="blue">{v} ({r.platform})</Tag> },
-            { title: "已确认佣金", dataIndex: "total_commission", width: 120, align: "right", render: (v: number) => <Text style={{ color: v > 0 ? "#389e0d" : undefined }}>${v.toFixed(2)}</Text> },
-            { title: "待审核佣金", dataIndex: "pending_commission", width: 120, align: "right", render: (v: number) => <Text style={{ color: v > 0 ? "#faad14" : undefined }}>${v.toFixed(2)}</Text> },
-            { title: "拒付佣金", dataIndex: "rejected_commission", width: 100, align: "right", render: (v: number) => <Text type={v > 0 ? "danger" : "secondary"}>${v.toFixed(2)}</Text> },
-            { title: "订单数", dataIndex: "order_count", width: 80, align: "right" },
-          ]}
-          summary={() => {
-            if (commissionByAccount.length === 0) return null;
-            const totals = commissionByAccount.reduce(
-              (acc, r) => ({
-                commission: acc.commission + r.total_commission,
-                pending: acc.pending + r.pending_commission,
-                rejected: acc.rejected + r.rejected_commission,
-                orders: acc.orders + r.order_count,
-              }),
-              { commission: 0, pending: 0, rejected: 0, orders: 0 }
-            );
-            return (
-              <Table.Summary.Row>
-                <Table.Summary.Cell index={0}><Text strong>合计</Text></Table.Summary.Cell>
-                <Table.Summary.Cell index={1} align="right"><Text strong style={{ color: "#389e0d" }}>${totals.commission.toFixed(2)}</Text></Table.Summary.Cell>
-                <Table.Summary.Cell index={2} align="right"><Text strong style={{ color: "#faad14" }}>${totals.pending.toFixed(2)}</Text></Table.Summary.Cell>
-                <Table.Summary.Cell index={3} align="right"><Text strong type="danger">${totals.rejected.toFixed(2)}</Text></Table.Summary.Cell>
-                <Table.Summary.Cell index={4} align="right"><Text strong>{totals.orders}</Text></Table.Summary.Cell>
-              </Table.Summary.Row>
-            );
-          }}
-        />
+        {/* 佣金明细 Tabs：按商家 / 按平台账号 */}
+        <Tabs activeKey={commissionTab} onChange={(k) => setCommissionTab(k as "merchant" | "account")} size="small" items={[
+          {
+            key: "merchant",
+            label: "按商家",
+            children: (
+              <Table
+                rowKey="user_merchant_id"
+                dataSource={commissionByMerchant}
+                size="small"
+                loading={loadingCommission}
+                pagination={false}
+                columns={[
+                  { title: "商家", dataIndex: "merchant_name", width: 140, ellipsis: true, render: (v: string) => <Tag color="geekblue">{v}</Tag> },
+                  { title: "总佣金", dataIndex: "total_commission", width: 120, align: "right" as const, render: (v: number) => <Text style={{ color: v > 0 ? "#389e0d" : undefined }}>${v.toFixed(2)}</Text> },
+                  { title: "已确认", dataIndex: "approved_commission", width: 110, align: "right" as const, render: (v: number) => <Text style={{ color: v > 0 ? "#1890ff" : undefined }}>${v.toFixed(2)}</Text> },
+                  { title: "已支付", dataIndex: "paid_commission", width: 110, align: "right" as const, render: (v: number) => <Text style={{ color: v > 0 ? "#13c2c2" : undefined }}>${v.toFixed(2)}</Text> },
+                  { title: "待审核", dataIndex: "pending_commission", width: 110, align: "right" as const, render: (v: number) => <Text style={{ color: v > 0 ? "#faad14" : undefined }}>${v.toFixed(2)}</Text> },
+                  { title: "拒付", dataIndex: "rejected_commission", width: 100, align: "right" as const, render: (v: number) => <Text type={v > 0 ? "danger" : "secondary"}>${v.toFixed(2)}</Text> },
+                  { title: "订单数", dataIndex: "order_count", width: 80, align: "right" as const },
+                ]}
+                summary={() => {
+                  if (commissionByMerchant.length === 0) return null;
+                  const totals = commissionByMerchant.reduce(
+                    (acc, r) => ({ total: acc.total + r.total_commission, approved: acc.approved + r.approved_commission, paid: acc.paid + r.paid_commission, pending: acc.pending + r.pending_commission, rejected: acc.rejected + r.rejected_commission, orders: acc.orders + r.order_count }),
+                    { total: 0, approved: 0, paid: 0, pending: 0, rejected: 0, orders: 0 }
+                  );
+                  return (
+                    <Table.Summary.Row>
+                      <Table.Summary.Cell index={0}><Text strong>合计</Text></Table.Summary.Cell>
+                      <Table.Summary.Cell index={1} align="right"><Text strong style={{ color: "#389e0d" }}>${totals.total.toFixed(2)}</Text></Table.Summary.Cell>
+                      <Table.Summary.Cell index={2} align="right"><Text strong style={{ color: "#1890ff" }}>${totals.approved.toFixed(2)}</Text></Table.Summary.Cell>
+                      <Table.Summary.Cell index={3} align="right"><Text strong style={{ color: "#13c2c2" }}>${totals.paid.toFixed(2)}</Text></Table.Summary.Cell>
+                      <Table.Summary.Cell index={4} align="right"><Text strong style={{ color: "#faad14" }}>${totals.pending.toFixed(2)}</Text></Table.Summary.Cell>
+                      <Table.Summary.Cell index={5} align="right"><Text strong type="danger">${totals.rejected.toFixed(2)}</Text></Table.Summary.Cell>
+                      <Table.Summary.Cell index={6} align="right"><Text strong>{totals.orders}</Text></Table.Summary.Cell>
+                    </Table.Summary.Row>
+                  );
+                }}
+              />
+            ),
+          },
+          {
+            key: "account",
+            label: "按平台账号",
+            children: (
+              <Table
+                rowKey={(r) => `${r.platform}-${r.account_name}`}
+                dataSource={commissionByAccount}
+                size="small"
+                loading={loadingCommission}
+                pagination={false}
+                columns={[
+                  { title: "账号", dataIndex: "account_name", width: 120, render: (v: string, r: (typeof commissionByAccount)[0]) => <Tag color="blue">{v} ({r.platform})</Tag> },
+                  { title: "总佣金", dataIndex: "total_commission", width: 120, align: "right" as const, render: (v: number) => <Text style={{ color: v > 0 ? "#389e0d" : undefined }}>${v.toFixed(2)}</Text> },
+                  { title: "已确认", dataIndex: "approved_commission", width: 110, align: "right" as const, render: (v: number) => <Text style={{ color: v > 0 ? "#1890ff" : undefined }}>${v.toFixed(2)}</Text> },
+                  { title: "已支付", dataIndex: "paid_commission", width: 110, align: "right" as const, render: (v: number) => <Text style={{ color: v > 0 ? "#13c2c2" : undefined }}>${v.toFixed(2)}</Text> },
+                  { title: "待审核", dataIndex: "pending_commission", width: 110, align: "right" as const, render: (v: number) => <Text style={{ color: v > 0 ? "#faad14" : undefined }}>${v.toFixed(2)}</Text> },
+                  { title: "拒付", dataIndex: "rejected_commission", width: 100, align: "right" as const, render: (v: number) => <Text type={v > 0 ? "danger" : "secondary"}>${v.toFixed(2)}</Text> },
+                  { title: "订单数", dataIndex: "order_count", width: 80, align: "right" as const },
+                ]}
+                summary={() => {
+                  if (commissionByAccount.length === 0) return null;
+                  const totals = commissionByAccount.reduce(
+                    (acc, r) => ({ total: acc.total + r.total_commission, approved: acc.approved + r.approved_commission, paid: acc.paid + r.paid_commission, pending: acc.pending + r.pending_commission, rejected: acc.rejected + r.rejected_commission, orders: acc.orders + r.order_count }),
+                    { total: 0, approved: 0, paid: 0, pending: 0, rejected: 0, orders: 0 }
+                  );
+                  return (
+                    <Table.Summary.Row>
+                      <Table.Summary.Cell index={0}><Text strong>合计</Text></Table.Summary.Cell>
+                      <Table.Summary.Cell index={1} align="right"><Text strong style={{ color: "#389e0d" }}>${totals.total.toFixed(2)}</Text></Table.Summary.Cell>
+                      <Table.Summary.Cell index={2} align="right"><Text strong style={{ color: "#1890ff" }}>${totals.approved.toFixed(2)}</Text></Table.Summary.Cell>
+                      <Table.Summary.Cell index={3} align="right"><Text strong style={{ color: "#13c2c2" }}>${totals.paid.toFixed(2)}</Text></Table.Summary.Cell>
+                      <Table.Summary.Cell index={4} align="right"><Text strong style={{ color: "#faad14" }}>${totals.pending.toFixed(2)}</Text></Table.Summary.Cell>
+                      <Table.Summary.Cell index={5} align="right"><Text strong type="danger">${totals.rejected.toFixed(2)}</Text></Table.Summary.Cell>
+                      <Table.Summary.Cell index={6} align="right"><Text strong>{totals.orders}</Text></Table.Summary.Cell>
+                    </Table.Summary.Row>
+                  );
+                }}
+              />
+            ),
+          },
+        ]} />
       </Modal>
 
       <EditCampaignModal

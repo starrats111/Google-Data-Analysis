@@ -3,6 +3,7 @@ import { serializeData } from "@/lib/auth";
 import { apiSuccess, apiError } from "@/lib/constants";
 import { withLeader } from "@/lib/api-handler";
 import prisma from "@/lib/prisma";
+import { nowCST, parseCSTDateStart, parseCSTDateEndExclusive, isTodayCST } from "@/lib/date-utils";
 
 /**
  * 获取指定组员的详细数据（组长专用）
@@ -28,8 +29,11 @@ export const GET = withLeader(async (req: NextRequest, { user }) => {
   const targetId = targetUser.id;
 
   // 日期范围
-  const start = startDate ? new Date(startDate) : new Date();
-  const end = endDate ? new Date(endDate) : new Date();
+  const cstNow = nowCST();
+  const start = startDate ? parseCSTDateStart(startDate) : cstNow.startOf("month").toDate();
+  const endExclusive = endDate
+    ? (isTodayCST(endDate, cstNow) ? cstNow.toDate() : parseCSTDateEndExclusive(endDate))
+    : cstNow.toDate();
 
   // 与数据中心一致：先查 campaigns，过滤掉无 google_campaign_id 的幽灵记录
   const rawCampaigns = await prisma.campaigns.findMany({
@@ -74,7 +78,7 @@ export const GET = withLeader(async (req: NextRequest, { user }) => {
     by: ["campaign_id"],
     where: {
       campaign_id: { in: campaignIds },
-      date: { gte: start, lte: end },
+      date: { gte: start, lt: endExclusive },
       is_deleted: 0,
     } as never,
     _sum: { cost: true, clicks: true, impressions: true },
@@ -92,9 +96,6 @@ export const GET = withLeader(async (req: NextRequest, { user }) => {
   );
 
   // 佣金统一从 affiliate_transactions 聚合（与数据中心口径一致）
-  const endPlusOne = new Date(end);
-  endPlusOne.setDate(endPlusOne.getDate() + 1);
-
   const commissionAgg = await prisma.$queryRawUnsafe<
     { user_merchant_id: bigint; total_commission: number; rejected_commission: number; approved_commission: number; order_count: number }[]
   >(`
@@ -102,14 +103,13 @@ export const GET = withLeader(async (req: NextRequest, { user }) => {
       user_merchant_id,
       SUM(CAST(commission_amount AS DECIMAL(12,2))) as total_commission,
       SUM(CASE WHEN status = 'rejected' THEN CAST(commission_amount AS DECIMAL(12,2)) ELSE 0 END) as rejected_commission,
-      SUM(CASE WHEN status IN ('approved', 'paid') THEN CAST(commission_amount AS DECIMAL(12,2)) ELSE 0 END) as approved_commission,
+      SUM(CASE WHEN status = 'approved' THEN CAST(commission_amount AS DECIMAL(12,2)) ELSE 0 END) as approved_commission,
       COUNT(*) as order_count
     FROM affiliate_transactions
     WHERE user_id = ? AND is_deleted = 0
       AND transaction_time >= ? AND transaction_time < ?
-      AND user_merchant_id != 0
     GROUP BY user_merchant_id
-  `, targetId, start, endPlusOne);
+  `, targetId, start, endExclusive);
 
   const commissionByMerchant = new Map<string, { commission: number; rejected: number; approved: number; orders: number }>();
   let totalCommissionFromTxn = 0;

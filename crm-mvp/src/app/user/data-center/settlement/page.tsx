@@ -81,10 +81,10 @@ interface SettlementData {
 }
 
 const RANGE_OPTIONS = [
-  { label: "1个月", value: "1m" },
-  { label: "3个月", value: "3m" },
-  { label: "半年", value: "6m" },
-  { label: "全年", value: "1y" },
+  { label: "本月", value: "1m" },
+  { label: "近3个月", value: "3m" },
+  { label: "近半年", value: "6m" },
+  { label: "近1年", value: "1y" },
 ];
 
 const PLATFORM_OPTIONS = PLATFORMS.map((p) => ({ value: p.code, label: `${p.code} (${p.name})` }));

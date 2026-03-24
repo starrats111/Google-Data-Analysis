@@ -2,11 +2,11 @@ import { NextRequest } from "next/server";
 import { getUserFromRequest, serializeData } from "@/lib/auth";
 import { apiSuccess, apiError } from "@/lib/constants";
 import prisma from "@/lib/prisma";
-import { nowCST } from "@/lib/date-utils";
+import { nowCST, parseCSTDateStart, parseCSTDateEndExclusive, isTodayCST } from "@/lib/date-utils";
 
 /**
  * GET /api/user/data-center/commission-by-account
- * 按平台账号聚合佣金数据（用于总佣金详情弹窗）
+ * 佣金明细：同时返回"按平台账号"和"按商家"两个维度，供审核复核
  */
 export async function GET(req: NextRequest) {
   const user = getUserFromRequest(req);
@@ -18,14 +18,18 @@ export async function GET(req: NextRequest) {
 
   const userId = BigInt(user.userId);
   const cstNow = nowCST();
-  const startDate = dateStart ? new Date(dateStart) : cstNow.startOf("month").toDate();
-  const endDate = dateEnd ? new Date(dateEnd + "T23:59:59") : cstNow.toDate();
+  const startDate = dateStart ? parseCSTDateStart(dateStart) : cstNow.startOf("month").toDate();
+  const endDate = dateEnd
+    ? (isTodayCST(dateEnd, cstNow) ? cstNow.toDate() : parseCSTDateEndExclusive(dateEnd))
+    : cstNow.toDate();
 
-  // 按 platform_connection_id 聚合交易数据
-  const aggRows = await prisma.$queryRawUnsafe<{
+  // ─── 维度一：按平台账号聚合 ───
+  const byAccountRows = await prisma.$queryRawUnsafe<{
     platform_connection_id: bigint | null;
     platform: string;
     total_commission: number;
+    approved_commission: number;
+    paid_commission: number;
     rejected_commission: number;
     pending_commission: number;
     order_count: number;
@@ -34,20 +38,21 @@ export async function GET(req: NextRequest) {
     SELECT
       platform_connection_id,
       platform,
-      SUM(CASE WHEN status IN ('approved','paid') THEN CAST(commission_amount AS DECIMAL(12,2)) ELSE 0 END) as total_commission,
+      SUM(CAST(commission_amount AS DECIMAL(12,2))) as total_commission,
+      SUM(CASE WHEN status = 'approved' THEN CAST(commission_amount AS DECIMAL(12,2)) ELSE 0 END) as approved_commission,
+      SUM(CASE WHEN status = 'paid' THEN CAST(commission_amount AS DECIMAL(12,2)) ELSE 0 END) as paid_commission,
       SUM(CASE WHEN status = 'rejected' THEN CAST(commission_amount AS DECIMAL(12,2)) ELSE 0 END) as rejected_commission,
       SUM(CASE WHEN status = 'pending' THEN CAST(commission_amount AS DECIMAL(12,2)) ELSE 0 END) as pending_commission,
       COUNT(*) as order_count,
       SUM(CAST(order_amount AS DECIMAL(12,2))) as order_amount
     FROM affiliate_transactions
     WHERE user_id = ? AND is_deleted = 0
-      AND transaction_time >= ? AND transaction_time <= ?
+      AND transaction_time >= ? AND transaction_time < ?
     GROUP BY platform_connection_id, platform
     ORDER BY total_commission DESC
   `, userId, startDate, endDate);
 
-  // 获取平台连接名称
-  const connIds = aggRows
+  const connIds = byAccountRows
     .map((r) => r.platform_connection_id)
     .filter((id): id is bigint => id !== null && id !== BigInt(0));
 
@@ -62,18 +67,64 @@ export async function GET(req: NextRequest) {
     }
   }
 
-  const result = aggRows.map((r) => ({
+  const byAccount = byAccountRows.map((r) => ({
     platform_connection_id: r.platform_connection_id ? String(r.platform_connection_id) : null,
     platform: r.platform,
     account_name: r.platform_connection_id
       ? (connMap.get(String(r.platform_connection_id)) || r.platform)
       : r.platform,
-    total_commission: Number(r.total_commission),
-    rejected_commission: Number(r.rejected_commission),
-    pending_commission: Number(r.pending_commission),
-    order_count: Number(r.order_count),
-    order_amount: Number(r.order_amount),
+    total_commission: Number(r.total_commission || 0),
+    approved_commission: Number(r.approved_commission || 0),
+    paid_commission: Number(r.paid_commission || 0),
+    rejected_commission: Number(r.rejected_commission || 0),
+    pending_commission: Number(r.pending_commission || 0),
+    order_count: Number(r.order_count || 0),
+    order_amount: Number(r.order_amount || 0),
   }));
 
-  return apiSuccess(serializeData(result));
+  // ─── 维度二：按商家聚合（与总览同口径，用于审核复核） ───
+  const byMerchantRows = await prisma.$queryRawUnsafe<{
+    user_merchant_id: bigint;
+    merchant_name: string;
+    platform: string;
+    total_commission: number;
+    approved_commission: number;
+    paid_commission: number;
+    rejected_commission: number;
+    pending_commission: number;
+    order_count: number;
+    order_amount: number;
+  }[]>(`
+    SELECT
+      user_merchant_id,
+      MAX(merchant_name) as merchant_name,
+      MAX(platform) as platform,
+      SUM(CAST(commission_amount AS DECIMAL(12,2))) as total_commission,
+      SUM(CASE WHEN status = 'approved' THEN CAST(commission_amount AS DECIMAL(12,2)) ELSE 0 END) as approved_commission,
+      SUM(CASE WHEN status = 'paid' THEN CAST(commission_amount AS DECIMAL(12,2)) ELSE 0 END) as paid_commission,
+      SUM(CASE WHEN status = 'rejected' THEN CAST(commission_amount AS DECIMAL(12,2)) ELSE 0 END) as rejected_commission,
+      SUM(CASE WHEN status = 'pending' THEN CAST(commission_amount AS DECIMAL(12,2)) ELSE 0 END) as pending_commission,
+      COUNT(*) as order_count,
+      SUM(CAST(order_amount AS DECIMAL(12,2))) as order_amount
+    FROM affiliate_transactions
+    WHERE user_id = ? AND is_deleted = 0
+      AND transaction_time >= ? AND transaction_time < ?
+    GROUP BY user_merchant_id
+    ORDER BY total_commission DESC
+  `, userId, startDate, endDate);
+
+  const byMerchant = byMerchantRows.map((r) => ({
+    user_merchant_id: String(r.user_merchant_id),
+    merchant_name: r.merchant_name || `未知商家 (${r.user_merchant_id})`,
+    platform: r.platform || "",
+    total_commission: Number(r.total_commission || 0),
+    approved_commission: Number(r.approved_commission || 0),
+    paid_commission: Number(r.paid_commission || 0),
+    rejected_commission: Number(r.rejected_commission || 0),
+    pending_commission: Number(r.pending_commission || 0),
+    order_count: Number(r.order_count || 0),
+    order_amount: Number(r.order_amount || 0),
+  }));
+
+  return apiSuccess(serializeData({ byAccount, byMerchant }));
 }

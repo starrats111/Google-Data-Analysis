@@ -2,7 +2,7 @@ import { NextRequest } from "next/server";
 import { getUserFromRequest, serializeData } from "@/lib/auth";
 import { apiSuccess, apiError, normalizePlatformCode } from "@/lib/constants";
 import prisma from "@/lib/prisma";
-import { nowCST } from "@/lib/date-utils";
+import { nowCST, parseCSTDateStart } from "@/lib/date-utils";
 
 /**
  * POST /api/user/data-center/sync-transactions
@@ -22,7 +22,7 @@ export async function POST(req: NextRequest) {
   const startStr = body.days
     ? cstNow.subtract(body.days, "day").format("YYYY-MM-DD")
     : DEFAULT_START;
-  const startDate = new Date(startStr);
+  const startDate = parseCSTDateStart(startStr);
   const endStr = cstNow.format("YYYY-MM-DD");
 
   try {
@@ -171,6 +171,7 @@ export async function POST(req: NextRequest) {
     // 4. 关联交易和 campaigns 到正确的商家
     await linkTransactionsToMerchants(userId);
     await linkCampaignsToMerchants(userId);
+    await claimLinkedMerchants(userId);
 
     // 5. 先清零旧佣金，再按日期重新写入正确值
     await prisma.ads_daily_stats.updateMany({
@@ -264,26 +265,62 @@ async function linkCampaignsToMerchants(userId: bigint) {
     select: { id: true, campaign_name: true },
     take: 500,
   });
-  if (unlinked.length === 0) return;
+  if (unlinked.length === 0) return 0;
 
   const userMerchants = await prisma.user_merchants.findMany({
     where: { user_id: userId, is_deleted: 0 },
-    select: { id: true, platform: true, merchant_id: true },
+    select: { id: true, platform: true, merchant_id: true, status: true },
   });
   const merchantIndex = new Map(
-    userMerchants.map((m) => [`${normalizePlatformCode(m.platform)}_${m.merchant_id}`, m.id])
+    userMerchants.map((m) => [`${normalizePlatformCode(m.platform)}_${m.merchant_id}`, m])
   );
 
+  let linked = 0;
   const updates: Promise<unknown>[] = [];
+  const claimedMerchantIds = new Set<bigint>();
+
   for (const c of unlinked) {
     const parsed = parseCampaignName(c.campaign_name || "");
     if (!parsed) continue;
-    const merchantId = merchantIndex.get(`${parsed.platform}_${parsed.mid}`);
-    if (!merchantId) continue;
-    updates.push(prisma.campaigns.update({ where: { id: c.id }, data: { user_merchant_id: merchantId } }));
+    const merchant = merchantIndex.get(`${parsed.platform}_${parsed.mid}`);
+    if (!merchant) continue;
+
+    updates.push(prisma.campaigns.update({ where: { id: c.id }, data: { user_merchant_id: merchant.id } }));
+
+    if (merchant.status !== "claimed" && !claimedMerchantIds.has(merchant.id)) {
+      claimedMerchantIds.add(merchant.id);
+      updates.push(
+        prisma.user_merchants.update({
+          where: { id: merchant.id },
+          data: { status: "claimed", claimed_at: new Date() },
+        })
+      );
+    }
+
+    linked++;
     if (updates.length >= 20) await Promise.all(updates.splice(0));
   }
+
   if (updates.length > 0) await Promise.all(updates);
+  return linked;
+}
+
+async function claimLinkedMerchants(userId: bigint) {
+  const linkedMerchantIds = await prisma.campaigns.findMany({
+    where: { user_id: userId, is_deleted: 0, user_merchant_id: { not: BigInt(0) }, google_campaign_id: { not: null } },
+    select: { user_merchant_id: true },
+    distinct: ["user_merchant_id"],
+  });
+
+  if (linkedMerchantIds.length === 0) return 0;
+
+  const ids = linkedMerchantIds.map((c) => c.user_merchant_id);
+  const result = await prisma.user_merchants.updateMany({
+    where: { id: { in: ids }, user_id: userId, is_deleted: 0, status: { not: "claimed" } },
+    data: { status: "claimed", claimed_at: new Date() },
+  });
+
+  return result.count;
 }
 
 // ─── updateDailyStatsCommission ───

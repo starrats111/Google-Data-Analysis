@@ -40,6 +40,21 @@ export function nowCST() {
   return dayjs().tz(TZ);
 }
 
+/** 解析东八区日期字符串为当天起始时间 */
+export function parseCSTDateStart(dateStr: string): Date {
+  return dayjs.tz(`${dateStr} 00:00:00`, TZ).toDate();
+}
+
+/** 解析东八区日期字符串为次日零点（独占上界） */
+export function parseCSTDateEndExclusive(dateStr: string): Date {
+  return dayjs.tz(`${dateStr} 00:00:00`, TZ).add(1, "day").toDate();
+}
+
+/** 判断给定日期字符串是否为东八区今天 */
+export function isTodayCST(dateStr: string, now = nowCST()): boolean {
+  return dateStr === now.format("YYYY-MM-DD");
+}
+
 /** 获取东八区月初的 dayjs 实例 */
 export function startOfMonthCST() {
   return dayjs().tz(TZ).startOf("month");

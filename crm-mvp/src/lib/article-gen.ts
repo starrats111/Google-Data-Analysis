@@ -226,11 +226,17 @@ JSON schema: {"content":"<full article HTML with h2/h3/p tags, 10-15 hyperlinks>
       }
     }
 
-    // 去 AI 味
+    // 去 AI 味 + 用共享布局工具插入图片
     if (result.content) {
       result.content = humanize(result.content);
       result.content = ensureLinkCount(result.content, trackingLink, merchantName, products, keywords);
-      result.content = redistributeImages(result.content);
+
+      const { buildDefaultArticleImageLayout, rebuildArticleContentWithLayout, normalizeArticleImageList } = await import("@/lib/article-image-layout");
+      const normalizedImages = normalizeArticleImageList(images);
+      if (normalizedImages.length > 0) {
+        const layout = buildDefaultArticleImageLayout(result.content, normalizedImages.slice(0, 5));
+        result.content = rebuildArticleContentWithLayout(result.content, layout, title);
+      }
     }
 
     return {
@@ -251,6 +257,58 @@ JSON schema: {"content":"<full article HTML with h2/h3/p tags, 10-15 hyperlinks>
  * 将文章中的图片重新均匀分布到各段落之间。
  * 第一张图保持为 hero image（标题后），其余图片按等间距插入到段落间。
  */
+function buildImageTag(src: string, alt: string, isHero: boolean): string {
+  const safeAlt = alt.replace(/"/g, "&quot;");
+  return isHero
+    ? `<img src="${src}" alt="${safeAlt}" style="width:100%;max-height:400px;object-fit:cover;border-radius:12px;margin:0 0 24px 0" loading="lazy" />`
+    : `<img src="${src}" alt="${safeAlt}" style="max-width:100%;border-radius:8px;margin:16px 0" loading="lazy" />`;
+}
+
+function ensureImagesPresent(html: string, images: string[], merchantName: string, title: string): string {
+  if (!html || images.length === 0) return html;
+
+  const imgRegex = /<img\s[^>]*?\/?>/gi;
+  const existingCount = [...html.matchAll(imgRegex)].length;
+  if (existingCount > 0) return html;
+
+  const usableImages = images
+    .filter((url) => typeof url === "string" && /^https?:\/\//i.test(url))
+    .slice(0, 5);
+  if (usableImages.length === 0) return html;
+
+  const blocks = html.match(/(<(?:h[1-6]|p|div|ul|ol|blockquote|table|figure|section)[\s>][\s\S]*?<\/(?:h[1-6]|p|div|ul|ol|blockquote|table|figure|section)>)/gi) || [];
+  if (blocks.length === 0) {
+    return `${buildImageTag(usableImages[0], `${merchantName} featured image`, true)}\n${html}`;
+  }
+
+  const heroAlt = `${merchantName} featured image for ${title}`;
+  const bodyImages = usableImages.slice(1);
+  let result = "";
+  let cursor = 0;
+
+  for (let i = 0; i < blocks.length; i++) {
+    const block = blocks[i];
+    const start = html.indexOf(block, cursor);
+    if (start < 0) continue;
+    const end = start + block.length;
+    result += html.slice(cursor, end);
+    cursor = end;
+
+    if (i === 0) {
+      result += `\n${buildImageTag(usableImages[0], heroAlt, true)}`;
+    }
+  }
+
+  result += html.slice(cursor);
+
+  if (bodyImages.length === 0) {
+    return result;
+  }
+
+  const redistributed = `${result}\n${bodyImages.map((src, index) => buildImageTag(src, `${merchantName} article image ${index + 1}`, false)).join("\n")}`;
+  return redistributed;
+}
+
 function redistributeImages(html: string): string {
   const imgRegex = /<img\s[^>]*?\/?>/gi;
   const allImages = [...html.matchAll(imgRegex)].map((m) => m[0]);

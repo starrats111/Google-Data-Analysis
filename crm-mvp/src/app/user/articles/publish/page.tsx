@@ -150,16 +150,36 @@ export default function ArticlePublishPage() {
         const articles = res.data?.articles || [];
         const article = articles[0];
 
-        if (article && article.status !== "generating") {
+        if (article && article.status === "failed") {
+          setLoadingArticle(false);
+          message.error("文章生成失败，请检查 AI 配置后重试");
+        } else if (article && article.status !== "generating") {
+          if (!article.content) {
+            setLoadingArticle(false);
+            message.error("文章内容为空，AI 生成可能异常，请重试");
+            return;
+          }
+
+          // 加载文章的权威图片列表（广告提交时已同步）并用于重建 content
+          let finalContent = article.content;
+          const articleImages: string[] = Array.isArray(article.images) ? article.images.filter((u: unknown) => typeof u === "string" && (u as string).trim()) : [];
+          if (articleImages.length > 0) {
+            setSelectedImages(articleImages);
+            try {
+              const { rebuildArticleContentWithLayout, buildDefaultArticleImageLayout } = await import("@/lib/article-image-layout");
+              const layout = buildDefaultArticleImageLayout(finalContent, articleImages);
+              finalContent = rebuildArticleContentWithLayout(finalContent, layout, article.title || "Article");
+            } catch { /* 布局重建失败时保留原始 content */ }
+          }
+
           setArticlePreview({
             id: article.id,
             title: article.title || "无标题",
-            content: article.content || "",
+            content: finalContent,
             slug: article.slug || "",
           });
           if (article.publish_site_id) {
             setSelectedSite(String(article.publish_site_id));
-            // 查找站点名称
             fetch("/api/user/publish-sites").then((r) => r.json()).then((sRes) => {
               const allSites = sRes.data || [];
               const s = allSites.find((s: any) => String(s.id) === String(article.publish_site_id));
@@ -272,15 +292,23 @@ export default function ArticlePublishPage() {
         const poll = async () => {
           const check = await fetch(`/api/user/articles?page=1&pageSize=1`).then((r) => r.json());
           const article = check.data?.articles?.find((a: any) => String(a.id) === String(articleId));
-          if (article && article.status !== "generating") {
-            setArticlePreview({
-              id: article.id,
-              title: article.title || "无标题",
-              content: article.content || "",
-              slug: article.slug || "",
-            });
-            setStep(4);
+          if (article && article.status === "failed") {
+            message.error("文章生成失败，请检查 AI 配置后重试");
             setGenerating(false);
+          } else if (article && article.status !== "generating") {
+            if (!article.content) {
+              message.error("文章内容为空，AI 生成可能异常，请重试");
+              setGenerating(false);
+            } else {
+              setArticlePreview({
+                id: article.id,
+                title: article.title || "无标题",
+                content: article.content,
+                slug: article.slug || "",
+              });
+              setStep(4);
+              setGenerating(false);
+            }
           } else if (retries < 60) {
             retries++;
             setTimeout(poll, 3000);
@@ -310,6 +338,8 @@ export default function ArticlePublishPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           id: articlePreview.id,
+          title: articlePreview.title,
+          content: articlePreview.content,
           status: "draft",
           publish_site_id: selectedSite || undefined,
         }),
@@ -332,16 +362,24 @@ export default function ArticlePublishPage() {
       message.warning("请选择发布站点");
       return;
     }
+    if (!articlePreview.title || !articlePreview.content) {
+      message.error("文章标题或内容为空，无法发布");
+      return;
+    }
     setPublishing(true);
     try {
-      // 如果设置了未来时间，先更新文章的 published_at
-      if (publishTime.isAfter(dayjs().tz(TZ))) {
-        await fetch("/api/user/articles", {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ id: articlePreview.id, status: "preview" }),
-        });
-      }
+      // 发布前先将最终预览内容保存到数据库，确保发布器读到的是带正确图片的 HTML
+      await fetch("/api/user/articles", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          id: articlePreview.id,
+          title: articlePreview.title,
+          content: articlePreview.content,
+          status: publishTime.isAfter(dayjs().tz(TZ)) ? "preview" : undefined,
+          publish_site_id: selectedSite || undefined,
+        }),
+      });
 
       const res = await fetch("/api/user/articles/publish-to-site", {
         method: "POST",

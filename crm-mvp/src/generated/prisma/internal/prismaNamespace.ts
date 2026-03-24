@@ -410,6 +410,7 @@ export const ModelName = {
   notification_preferences: 'notification_preferences',
   ai_insights: 'ai_insights',
   operation_logs: 'operation_logs',
+  exchange_rate_snapshots: 'exchange_rate_snapshots',
   mcc_cid_accounts: 'mcc_cid_accounts',
   ad_policy_categories: 'ad_policy_categories',
   merchant_policy_reviews: 'merchant_policy_reviews'
@@ -428,7 +429,7 @@ export type TypeMap<ExtArgs extends runtime.Types.Extensions.InternalArgs = runt
     omit: GlobalOmitOptions
   }
   meta: {
-    modelProps: "teams" | "users" | "ai_providers" | "ai_model_configs" | "system_configs" | "platform_connections" | "user_merchants" | "merchant_violations" | "merchant_recommendations" | "sheet_configs" | "ad_default_settings" | "holiday_calendar" | "campaigns" | "ad_groups" | "keywords" | "ad_creatives" | "publish_sites" | "site_migrations" | "articles" | "ads_daily_stats" | "google_mcc_accounts" | "affiliate_transactions" | "notifications" | "notification_preferences" | "ai_insights" | "operation_logs" | "mcc_cid_accounts" | "ad_policy_categories" | "merchant_policy_reviews"
+    modelProps: "teams" | "users" | "ai_providers" | "ai_model_configs" | "system_configs" | "platform_connections" | "user_merchants" | "merchant_violations" | "merchant_recommendations" | "sheet_configs" | "ad_default_settings" | "holiday_calendar" | "campaigns" | "ad_groups" | "keywords" | "ad_creatives" | "publish_sites" | "site_migrations" | "articles" | "ads_daily_stats" | "google_mcc_accounts" | "affiliate_transactions" | "notifications" | "notification_preferences" | "ai_insights" | "operation_logs" | "exchange_rate_snapshots" | "mcc_cid_accounts" | "ad_policy_categories" | "merchant_policy_reviews"
     txIsolationLevel: TransactionIsolationLevel
   }
   model: {
@@ -2148,6 +2149,72 @@ export type TypeMap<ExtArgs extends runtime.Types.Extensions.InternalArgs = runt
         }
       }
     }
+    exchange_rate_snapshots: {
+      payload: Prisma.$exchange_rate_snapshotsPayload<ExtArgs>
+      fields: Prisma.exchange_rate_snapshotsFieldRefs
+      operations: {
+        findUnique: {
+          args: Prisma.exchange_rate_snapshotsFindUniqueArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$exchange_rate_snapshotsPayload> | null
+        }
+        findUniqueOrThrow: {
+          args: Prisma.exchange_rate_snapshotsFindUniqueOrThrowArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$exchange_rate_snapshotsPayload>
+        }
+        findFirst: {
+          args: Prisma.exchange_rate_snapshotsFindFirstArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$exchange_rate_snapshotsPayload> | null
+        }
+        findFirstOrThrow: {
+          args: Prisma.exchange_rate_snapshotsFindFirstOrThrowArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$exchange_rate_snapshotsPayload>
+        }
+        findMany: {
+          args: Prisma.exchange_rate_snapshotsFindManyArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$exchange_rate_snapshotsPayload>[]
+        }
+        create: {
+          args: Prisma.exchange_rate_snapshotsCreateArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$exchange_rate_snapshotsPayload>
+        }
+        createMany: {
+          args: Prisma.exchange_rate_snapshotsCreateManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        delete: {
+          args: Prisma.exchange_rate_snapshotsDeleteArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$exchange_rate_snapshotsPayload>
+        }
+        update: {
+          args: Prisma.exchange_rate_snapshotsUpdateArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$exchange_rate_snapshotsPayload>
+        }
+        deleteMany: {
+          args: Prisma.exchange_rate_snapshotsDeleteManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        updateMany: {
+          args: Prisma.exchange_rate_snapshotsUpdateManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        upsert: {
+          args: Prisma.exchange_rate_snapshotsUpsertArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$exchange_rate_snapshotsPayload>
+        }
+        aggregate: {
+          args: Prisma.Exchange_rate_snapshotsAggregateArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.AggregateExchange_rate_snapshots>
+        }
+        groupBy: {
+          args: Prisma.exchange_rate_snapshotsGroupByArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.Exchange_rate_snapshotsGroupByOutputType>[]
+        }
+        count: {
+          args: Prisma.exchange_rate_snapshotsCountArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.Exchange_rate_snapshotsCountAggregateOutputType> | number
+        }
+      }
+    }
     mcc_cid_accounts: {
       payload: Prisma.$mcc_cid_accountsPayload<ExtArgs>
       fields: Prisma.mcc_cid_accountsFieldRefs
@@ -2871,6 +2938,17 @@ export const Operation_logsScalarFieldEnum = {
 export type Operation_logsScalarFieldEnum = (typeof Operation_logsScalarFieldEnum)[keyof typeof Operation_logsScalarFieldEnum]
 
 
+export const Exchange_rate_snapshotsScalarFieldEnum = {
+  id: 'id',
+  currency: 'currency',
+  date: 'date',
+  rate_to_usd: 'rate_to_usd',
+  created_at: 'created_at'
+} as const
+
+export type Exchange_rate_snapshotsScalarFieldEnum = (typeof Exchange_rate_snapshotsScalarFieldEnum)[keyof typeof Exchange_rate_snapshotsScalarFieldEnum]
+
+
 export const Mcc_cid_accountsScalarFieldEnum = {
   id: 'id',
   mcc_account_id: 'mcc_account_id',
@@ -3257,6 +3335,13 @@ export const operation_logsOrderByRelevanceFieldEnum = {
 export type operation_logsOrderByRelevanceFieldEnum = (typeof operation_logsOrderByRelevanceFieldEnum)[keyof typeof operation_logsOrderByRelevanceFieldEnum]
 
 
+export const exchange_rate_snapshotsOrderByRelevanceFieldEnum = {
+  currency: 'currency'
+} as const
+
+export type exchange_rate_snapshotsOrderByRelevanceFieldEnum = (typeof exchange_rate_snapshotsOrderByRelevanceFieldEnum)[keyof typeof exchange_rate_snapshotsOrderByRelevanceFieldEnum]
+
+
 export const mcc_cid_accountsOrderByRelevanceFieldEnum = {
   customer_id: 'customer_id',
   customer_name: 'customer_name',
@@ -3474,6 +3559,7 @@ export type GlobalOmitConfig = {
   notification_preferences?: Prisma.notification_preferencesOmit
   ai_insights?: Prisma.ai_insightsOmit
   operation_logs?: Prisma.operation_logsOmit
+  exchange_rate_snapshots?: Prisma.exchange_rate_snapshotsOmit
   mcc_cid_accounts?: Prisma.mcc_cid_accountsOmit
   ad_policy_categories?: Prisma.ad_policy_categoriesOmit
   merchant_policy_reviews?: Prisma.merchant_policy_reviewsOmit

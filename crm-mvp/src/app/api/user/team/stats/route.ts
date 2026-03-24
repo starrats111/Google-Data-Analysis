@@ -3,6 +3,7 @@ import { serializeData } from "@/lib/auth";
 import { apiSuccess, apiError } from "@/lib/constants";
 import { withLeader } from "@/lib/api-handler";
 import prisma from "@/lib/prisma";
+import { nowCST, parseCSTDateStart, parseCSTDateEndExclusive, isTodayCST } from "@/lib/date-utils";
 
 /**
  * 获取小组统计数据（组长专用）
@@ -32,10 +33,11 @@ export const GET = withLeader(async (req: NextRequest, { user }) => {
 
   const memberIds = members.map((m) => m.id);
 
-  const start = startDate ? new Date(startDate) : new Date();
-  const end = endDate ? new Date(endDate) : new Date();
-  const endPlusOne = new Date(end);
-  endPlusOne.setDate(endPlusOne.getDate() + 1);
+  const cstNow = nowCST();
+  const start = startDate ? parseCSTDateStart(startDate) : cstNow.startOf("month").toDate();
+  const endExclusive = endDate
+    ? (isTodayCST(endDate, cstNow) ? cstNow.toDate() : parseCSTDateEndExclusive(endDate))
+    : cstNow.toDate();
 
   // 查询所有组员的有效 campaigns（排除幽灵记录，统一去重）
   const rawCampaigns = await prisma.campaigns.findMany({
@@ -72,7 +74,7 @@ export const GET = withLeader(async (req: NextRequest, { user }) => {
         by: ["campaign_id"],
         where: {
           campaign_id: { in: allCampaignIds },
-          date: { gte: start, lte: end },
+          date: { gte: start, lt: endExclusive },
           is_deleted: 0,
         } as never,
         _sum: { cost: true, clicks: true, impressions: true },
@@ -102,9 +104,8 @@ export const GET = withLeader(async (req: NextRequest, { user }) => {
         FROM affiliate_transactions
         WHERE user_id IN (${memberIds.map(() => "?").join(",")}) AND is_deleted = 0
           AND transaction_time >= ? AND transaction_time < ?
-          AND user_merchant_id != 0
         GROUP BY user_id
-      `, ...memberIds, start, endPlusOne)
+      `, ...memberIds, start, endExclusive)
     : [];
 
   const commissionByUser = new Map<string, { commission: number; rejected: number }>();

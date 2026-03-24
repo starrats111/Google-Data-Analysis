@@ -750,6 +750,7 @@ async function syncTransactionsInline(userId: bigint) {
     // 关联交易和 campaigns 到正确的商家
     await linkTransactionsToMerchants(userId);
     await linkCampaignsToMerchants(userId);
+    await claimLinkedMerchants(userId);
 
     const msg = errors.length > 0 ? `同步 ${totalSynced} 条，${errors.length} 个错误` : `同步 ${totalSynced} 条`;
     return { synced: totalSynced, errors, message: msg };

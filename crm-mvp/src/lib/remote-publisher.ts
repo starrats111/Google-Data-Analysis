@@ -5,6 +5,7 @@
  */
 import { Client, SFTPWrapper } from "ssh2";
 import { getBtSshConfig } from "@/lib/system-config";
+import { cleanArticleContent } from "@/lib/sanitize";
 
 // ─── 网站架构类型常量（与 Python 后端一致）───
 export const SITE_TYPES = {
@@ -340,7 +341,7 @@ export async function verifyConnection(sitePath: string): Promise<VerifyResult> 
     }
 
     checks.index_html_exists = await sftpStat(sftp, `${sitePath}/index.html`);
-    checks.valid = checks.ssh_connected && checks.site_dir_exists && checks.index_html_exists;
+    checks.valid = checks.ssh_connected && checks.site_dir_exists && checks.index_html_exists && checks.main_js_exists;
 
     client.end();
     return checks;
@@ -397,6 +398,57 @@ interface SiteConfig {
   domain: string;
 }
 
+const ABSOLUTE_OR_SPECIAL_URL_RE = /^(?:[a-z][a-z0-9+.-]*:|\/\/|#|data:|mailto:|tel:)/i;
+
+function rewriteUrlToRoot(url: string): string {
+  const value = url.trim();
+  if (!value || value.startsWith("/") || value.startsWith("?") || ABSOLUTE_OR_SPECIAL_URL_RE.test(value)) {
+    return value;
+  }
+
+  const match = value.match(/^([^?#]*)([?#][\s\S]*)?$/);
+  const pathname = match?.[1] ?? value;
+  const suffix = match?.[2] ?? "";
+  const normalizedPath = pathname
+    .replace(/^(\.\/)+/, "")
+    .replace(/^(?:\.\.\/)+/, "")
+    .replace(/^\/+/, "");
+
+  if (!normalizedPath) {
+    return suffix || "/";
+  }
+
+  return `/${normalizedPath}${suffix}`;
+}
+
+function rewriteSrcSetToRoot(srcset: string): string {
+  return srcset
+    .split(",")
+    .map((item) => {
+      const trimmed = item.trim();
+      if (!trimmed) return trimmed;
+      const [url, ...descriptors] = trimmed.split(/\s+/);
+      return [rewriteUrlToRoot(url), ...descriptors].join(" ");
+    })
+    .join(", ");
+}
+
+function rewriteHtmlRelativeUrls(html: string): string {
+  if (!html) return html;
+
+  return html
+    .replace(/(\s(?:href|src|poster)=["'])([^"']+)(["'])/gi, (_match, prefix: string, url: string, suffix: string) => {
+      return `${prefix}${rewriteUrlToRoot(url)}${suffix}`;
+    })
+    .replace(/(\ssrcset=["'])([^"']+)(["'])/gi, (_match, prefix: string, srcset: string, suffix: string) => {
+      return `${prefix}${rewriteSrcSetToRoot(srcset)}${suffix}`;
+    })
+    .replace(/url\((["']?)([^)'"\s]+)\1\)/gi, (_match, quote: string, url: string) => {
+      const rewritten = rewriteUrlToRoot(url);
+      return `url(${quote}${rewritten}${quote})`;
+    });
+}
+
 /**
  * 从已有 post 页面提取 head/header/footer，组装新文章页面。
  * 如果找不到模板，回退为独立页面。
@@ -426,41 +478,54 @@ async function createArticleHtmlPage(
     templateHtml = await sftpReadFile(sftp, `${siteRoot}/index.html`);
   } catch { /* ignore */ }
 
+  const normalizedArticle = cleanArticleContent(article.content).cleaned || article.content;
   // Strip leading <h1> from article content to avoid duplicate title
-  const cleanedContent = article.content.replace(/^\s*<h1[^>]*>[\s\S]*?<\/h1>\s*/i, "").trim();
+  const cleanedContent = rewriteHtmlRelativeUrls(
+    normalizedArticle.replace(/^\s*<h1[^>]*>[\s\S]*?<\/h1>\s*/i, "").trim()
+  );
 
   let html: string;
 
   if (templateHtml) {
-    const headMatch = templateHtml.match(/^[\s\S]*?<\/head>/i);
+    const htmlOpenTag = templateHtml.match(/<html\b[^>]*>/i)?.[0] || '<html lang="en">';
+    const bodyOpenTag = templateHtml.match(/<body\b[^>]*>/i)?.[0] || "<body>";
+
+    const headMatch = templateHtml.match(/<head\b[^>]*>[\s\S]*?<\/head>/i);
     let headSection = headMatch ? headMatch[0] : "";
     if (headSection) {
-      headSection = headSection.replace(
-        /<title>[^<]*<\/title>/i,
-        `<title>${escapeHtml(article.title)}</title>`,
-      );
+      headSection = rewriteHtmlRelativeUrls(headSection);
+      if (/<title>[^<]*<\/title>/i.test(headSection)) {
+        headSection = headSection.replace(
+          /<title>[^<]*<\/title>/i,
+          `<title>${escapeHtml(article.title)}</title>`,
+        );
+      } else {
+        headSection = headSection.replace(/<\/head>/i, `  <title>${escapeHtml(article.title)}</title>\n</head>`);
+      }
       // Remove main.js to avoid loading article listing code on detail page
-      headSection = headSection.replace(/<script[^>]*main\.js[^>]*><\/script>/gi, "");
+      headSection = headSection.replace(/<script[^>]*main\.js[^>]*><\/script>\s*/gi, "");
     } else {
-      headSection = `<!DOCTYPE html>\n<html lang="en">\n<head>\n<meta charset="UTF-8">\n<meta name="viewport" content="width=device-width,initial-scale=1">\n<title>${escapeHtml(article.title)}</title>\n</head>`;
+      headSection = `<head>\n<meta charset="UTF-8">\n<meta name="viewport" content="width=device-width,initial-scale=1">\n<title>${escapeHtml(article.title)}</title>\n</head>`;
     }
 
     let headerNav = "";
     const headerMatch = templateHtml.match(/<header[\s\S]*?<\/header>/i);
-    if (headerMatch) headerNav = headerMatch[0];
+    if (headerMatch) headerNav = rewriteHtmlRelativeUrls(headerMatch[0]);
 
     let footer = "";
     const footerMatch = templateHtml.match(/<footer[\s\S]*?<\/footer>/i);
-    if (footerMatch) footer = footerMatch[0];
+    if (footerMatch) footer = rewriteHtmlRelativeUrls(footerMatch[0]);
 
-    html = `${headSection}
-<body>
+    html = `<!DOCTYPE html>
+${htmlOpenTag}
+${headSection}
+${bodyOpenTag}
   ${headerNav}
   <main style="max-width:800px;margin:40px auto;padding:0 20px;">
     <a href="/" style="color:#888;text-decoration:none;display:inline-block;margin-bottom:20px;">&larr; Back to articles</a>
     <article>
-      <h1>${article.title}</h1>
-      <div style="color:#888;margin-bottom:24px;font-size:14px;">${dateLabel}</div>
+      <h1>${escapeHtml(article.title)}</h1>
+      <div style="color:#888;margin-bottom:24px;font-size:14px;">${escapeHtml(dateLabel)}</div>
       <div class="article-content" style="line-height:1.8;">
         ${cleanedContent}
       </div>
@@ -480,9 +545,9 @@ async function createArticleHtmlPage(
 </head>
 <body>
   <a class="back" href="/">&larr; Back</a>
-  <h1>${article.title}</h1>
-  <div class="meta">${dateLabel}</div>
-  <div>${article.content}</div>
+  <h1>${escapeHtml(article.title)}</h1>
+  <div class="meta">${escapeHtml(dateLabel)}</div>
+  <div>${cleanedContent}</div>
 </body>
 </html>`;
   }
@@ -615,6 +680,17 @@ async function downloadImageWithRetry(
   return null;
 }
 
+function normalizeArticleImagePaths(content: string): string {
+  if (!content) return content;
+  return content.replace(
+    /(<img\s[^>]*?(?:src|data-src)=["'])(\.?\/?images\/articles\/[^"']+)(["'][^>]*?>)/gi,
+    (_match, prefix: string, path: string, suffix: string) => {
+      const normalizedPath = path.replace(/^\.?\/?/, "");
+      return `${prefix}/${normalizedPath}${suffix}`;
+    }
+  );
+}
+
 async function syncArticleImages(
   sftp: SFTPWrapper,
   client: Client,
@@ -624,18 +700,22 @@ async function syncArticleImages(
 ): Promise<string> {
   const imagesDir = `${siteRoot}/images/articles`;
 
-  // 匹配 src 和 data-src 属性中的外链图片
   const imgRegex = /<img\s[^>]*?(?:src|data-src)=["']([^"']+)["'][^>]*?\/?>/gi;
   let match: RegExpExecArray | null;
-  const matches: { fullTag: string; url: string; attr: string }[] = [];
+  const matches: { fullTag: string; url: string; attr: string; isInternal: boolean }[] = [];
 
   while ((match = imgRegex.exec(content)) !== null) {
     const url = match[1];
+    // 已本地化的图片跳过
+    if (url.includes("images/articles/")) continue;
+
+    const attrMatch = match[0].match(/\b(src|data-src)=["']/);
+    const attr = attrMatch?.[1] || "src";
+
     if (url.startsWith("http://") || url.startsWith("https://")) {
-      if (!url.includes("images/articles/")) {
-        const attrMatch = match[0].match(/\b(src|data-src)=["']/);
-        matches.push({ fullTag: match[0], url, attr: attrMatch?.[1] || "src" });
-      }
+      matches.push({ fullTag: match[0], url, attr, isInternal: false });
+    } else if (/^\/api\/user\/ad-creation\/upload-image\//i.test(url)) {
+      matches.push({ fullTag: match[0], url, attr, isInternal: true });
     }
   }
 
@@ -645,30 +725,47 @@ async function syncArticleImages(
   let processed = 0;
   let failed = 0;
 
-  for (const { fullTag, url, attr } of matches) {
+  for (const { fullTag, url, attr, isInternal } of matches) {
     if (processed >= MAX_IMAGES) break;
 
     try {
-      const result = await downloadImageWithRetry(url);
-      if (!result) {
+      let buffer: Buffer | null = null;
+      let contentType = "";
+
+      if (isInternal) {
+        // 内部上传图片：直接从本地文件系统读取
+        const { readUploadedImageBuffer } = await import("@/lib/upload-image-reader");
+        const result = await readUploadedImageBuffer(url);
+        if (result) {
+          buffer = result.buffer;
+          contentType = result.contentType;
+        }
+      } else {
+        const result = await downloadImageWithRetry(url);
+        if (result) {
+          buffer = result.buffer;
+          contentType = result.contentType;
+        }
+      }
+
+      if (!buffer) {
         failed++;
-        console.warn(`[Publisher] 图片下载失败，保留原 URL: ${url.slice(0, 80)}`);
+        console.warn(`[Publisher] 图片获取失败，保留原 URL: ${url.slice(0, 80)}`);
         continue;
       }
 
-      const ext = result.contentType.includes("png") ? ".png"
-        : result.contentType.includes("webp") ? ".webp"
-        : result.contentType.includes("gif") ? ".gif"
+      const ext = contentType.includes("png") ? ".png"
+        : contentType.includes("webp") ? ".webp"
+        : contentType.includes("gif") ? ".gif"
         : ".jpg";
 
       const filename = `${articleId}_${processed}${ext}`;
       const remotePath = `${imagesDir}/${filename}`;
 
-      await sftpWriteBuffer(sftp, remotePath, result.buffer);
+      await sftpWriteBuffer(sftp, remotePath, buffer);
 
-      const localUrl = `images/articles/${filename}`;
+      const localUrl = `/images/articles/${filename}`;
       let newTag = fullTag.replace(url, localUrl);
-      // 如果原标签用的是 data-src，也将其转为 src 确保可见
       if (attr === "data-src") {
         newTag = newTag.replace("data-src=", "src=");
       }
@@ -684,25 +781,72 @@ async function syncArticleImages(
   return updatedContent;
 }
 
+function buildArticleImageTag(src: string, alt: string, isHero: boolean): string {
+  const safeAlt = alt.replace(/"/g, "&quot;");
+  return isHero
+    ? `<img src="${src}" alt="${safeAlt}" style="width:100%;max-height:400px;object-fit:cover;border-radius:12px;margin:0 0 24px 0" loading="lazy" />`
+    : `<img src="${src}" alt="${safeAlt}" style="max-width:100%;border-radius:8px;margin:16px 0" loading="lazy" />`;
+}
+
+function ensurePublishContentImages(content: string, title: string, imagesJson?: unknown): string {
+  const images = Array.isArray(imagesJson)
+    ? imagesJson.filter((u): u is string => typeof u === "string" && /^https?:\/\//i.test(u)).slice(0, 5)
+    : [];
+
+  if (!content || images.length === 0) return content;
+
+  const imgRegex = /<img\s[^>]*?(?:src|data-src)=["']([^"']+)["'][^>]*?\/?>/gi;
+  const existingCount = [...content.matchAll(imgRegex)].length;
+  if (existingCount > 0) return content;
+
+  const blocks = content.match(/(<(?:h[1-6]|p|div|ul|ol|blockquote|table|figure|section)[\s>][\s\S]*?<\/(?:h[1-6]|p|div|ul|ol|blockquote|table|figure|section)>)/gi) || [];
+  const hero = buildArticleImageTag(images[0], `${title} hero image`, true);
+  const body = images.slice(1).map((src, index) => buildArticleImageTag(src, `${title} image ${index + 1}`, false));
+
+  if (blocks.length === 0) {
+    return [hero, content, ...body].join("\n");
+  }
+
+  let result = "";
+  let cursor = 0;
+  for (let i = 0; i < blocks.length; i++) {
+    const block = blocks[i];
+    const start = content.indexOf(block, cursor);
+    if (start < 0) continue;
+    const end = start + block.length;
+    result += content.slice(cursor, end);
+    cursor = end;
+    if (i === 0) {
+      result += `\n${hero}`;
+    }
+  }
+  result += content.slice(cursor);
+
+  if (body.length > 0) {
+    result += `\n${body.join("\n")}`;
+  }
+  return result;
+}
+
 function extractHeroImage(content: string, imagesJson?: unknown): string {
-  // 1. 从 images JSON 字段提取第一张（优先，因为是预设图）
+  // 1. 从 HTML content 中匹配（跳过小图标/追踪像素）
+  const imgRegex = /<img\s[^>]*?(?:src|data-src)=["']([^"']+)["'][^>]*?\/?>/gi;
+  let m: RegExpExecArray | null;
+  while ((m = imgRegex.exec(content)) !== null) {
+    const url = m[1];
+    if (!url || url.length < 10) continue;
+    if (/width=["']?1["']?/i.test(m[0]) && /height=["']?1["']?/i.test(m[0])) continue;
+    if (url.endsWith(".svg") || url.includes("tracking") || url.includes("pixel")) continue;
+    return url;
+  }
+
+  // 2. 从 images JSON 字段提取第一张（回退，因为可能还是外链图）
   if (imagesJson) {
     const arr = Array.isArray(imagesJson) ? imagesJson : [];
     const first = arr.find((u: unknown) => typeof u === "string" && u.length > 5);
     if (first) return first as string;
   }
 
-  // 2. 从 HTML content 中匹配（跳过小图标/追踪像素）
-  const imgRegex = /<img\s[^>]*?(?:src|data-src)=["']([^"']+)["'][^>]*?\/?>/gi;
-  let m: RegExpExecArray | null;
-  while ((m = imgRegex.exec(content)) !== null) {
-    const url = m[1];
-    if (!url || url.length < 10) continue;
-    // 跳过 1x1 追踪像素和 SVG 图标
-    if (/width=["']?1["']?/i.test(m[0]) && /height=["']?1["']?/i.test(m[0])) continue;
-    if (url.endsWith(".svg") || url.includes("tracking") || url.includes("pixel")) continue;
-    return url;
-  }
   return "";
 }
 
@@ -737,11 +881,14 @@ export async function publishArticleToSite(
 
     await ensureSiteWritable(client, siteRoot, dataJsPath);
 
-    // ─── 图片本地化（v3.0）───
-    let workingContent = article.content;
-    let updatedContent: string | undefined;
+    const cleanedArticle = cleanArticleContent(article.content);
+
+    // ─── 图片路径规范化 + 本地化（v4.0 — 不再自动补图/重排）───
+    let workingContent = cleanedArticle.cleaned || article.content;
+    workingContent = normalizeArticleImagePaths(workingContent);
+    let updatedContent: string | undefined = workingContent !== article.content ? workingContent : undefined;
     try {
-      workingContent = await syncArticleImages(sftp, client, siteRoot, article.id, article.content);
+      workingContent = await syncArticleImages(sftp, client, siteRoot, article.id, workingContent);
       if (workingContent !== article.content) {
         updatedContent = workingContent;
       }
@@ -749,15 +896,18 @@ export async function publishArticleToSite(
       console.warn("[Publisher] 图片本地化失败（不阻塞发布）:", err);
     }
 
-    // 提取 hero image（优先级：article.image > images JSON > 文章正文首图）
-    let heroImage = article.image || "";
+    // 提取 hero image：优先使用文章正文中的首图（尤其是已本地化后的首图），再回退到预设图片
+    let heroImage = extractHeroImage(workingContent);
+    if (!heroImage) {
+      heroImage = article.image || "";
+    }
     if (!heroImage) {
       heroImage = extractHeroImage(workingContent, article.images);
     }
-    // 如果 hero image 已被本地化，使用本地化路径
-    if (heroImage && updatedContent && !heroImage.startsWith("images/")) {
+    // 如果 hero image 已被本地化，优先使用本地化路径
+    if (updatedContent) {
       const localizedHero = extractHeroImage(updatedContent);
-      if (localizedHero && localizedHero.startsWith("images/")) {
+      if (localizedHero && localizedHero.startsWith("/images/")) {
         heroImage = localizedHero;
       }
     }

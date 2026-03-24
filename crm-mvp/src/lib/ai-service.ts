@@ -123,10 +123,11 @@ async function callAi(
   messages: { role: string; content: string }[],
   maxTokens?: number,
 ): Promise<string> {
-  const base = config.baseUrl.replace(/\/+$/, "");
-  const url = base.endsWith("/v1")
-    ? `${base}/chat/completions`
-    : `${base}/v1/chat/completions`;
+  const base = config.baseUrl
+    .replace(/\/+$/, "")
+    .replace(/\/v1\/messages$/, "")
+    .replace(/\/v1$/, "");
+  const url = `${base}/v1/chat/completions`;
   const body = JSON.stringify({
     model: config.modelName,
     messages,

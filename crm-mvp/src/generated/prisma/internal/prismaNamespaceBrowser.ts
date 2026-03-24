@@ -77,6 +77,7 @@ export const ModelName = {
   notification_preferences: 'notification_preferences',
   ai_insights: 'ai_insights',
   operation_logs: 'operation_logs',
+  exchange_rate_snapshots: 'exchange_rate_snapshots',
   mcc_cid_accounts: 'mcc_cid_accounts',
   ad_policy_categories: 'ad_policy_categories',
   merchant_policy_reviews: 'merchant_policy_reviews'
@@ -584,6 +585,17 @@ export const Operation_logsScalarFieldEnum = {
 export type Operation_logsScalarFieldEnum = (typeof Operation_logsScalarFieldEnum)[keyof typeof Operation_logsScalarFieldEnum]
 
 
+export const Exchange_rate_snapshotsScalarFieldEnum = {
+  id: 'id',
+  currency: 'currency',
+  date: 'date',
+  rate_to_usd: 'rate_to_usd',
+  created_at: 'created_at'
+} as const
+
+export type Exchange_rate_snapshotsScalarFieldEnum = (typeof Exchange_rate_snapshotsScalarFieldEnum)[keyof typeof Exchange_rate_snapshotsScalarFieldEnum]
+
+
 export const Mcc_cid_accountsScalarFieldEnum = {
   id: 'id',
   mcc_account_id: 'mcc_account_id',
@@ -968,6 +980,13 @@ export const operation_logsOrderByRelevanceFieldEnum = {
 } as const
 
 export type operation_logsOrderByRelevanceFieldEnum = (typeof operation_logsOrderByRelevanceFieldEnum)[keyof typeof operation_logsOrderByRelevanceFieldEnum]
+
+
+export const exchange_rate_snapshotsOrderByRelevanceFieldEnum = {
+  currency: 'currency'
+} as const
+
+export type exchange_rate_snapshotsOrderByRelevanceFieldEnum = (typeof exchange_rate_snapshotsOrderByRelevanceFieldEnum)[keyof typeof exchange_rate_snapshotsOrderByRelevanceFieldEnum]
 
 
 export const mcc_cid_accountsOrderByRelevanceFieldEnum = {

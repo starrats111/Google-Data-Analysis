@@ -1,36 +1,56 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# CRM MVP
 
-## Getting Started
+这是当前正在使用的 CRM 主应用。
 
-First, run the development server:
+## 技术栈
+
+- Next.js 16
+- React 19
+- Ant Design 6
+- Prisma 7
+- MySQL / MariaDB
+
+## 常用命令
 
 ```bash
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+npm run build
+npm run start
+npm run seed
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## 运行说明
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+### 开发环境
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+```bash
+npm run dev
+```
 
-## Learn More
+启动后访问：
 
-To learn more about Next.js, take a look at the following resources:
+- `http://localhost:20050`
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+### 生产环境
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+```bash
+npm run build
+npm run start
+```
 
-## Deploy on Vercel
+生产环境默认运行在端口 `20050`。
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+## 核心模块
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+- `/admin` 管理后台
+- `/user` 用户平台
+- `prisma/` 数据库模型与迁移
+- `src/app/api/` 后端接口
+- `src/lib/` 核心业务逻辑
+
+## 说明
+
+如需查看更完整的产品与数据结构说明，请参考仓库根目录：
+
+- `CRM_MVP_开发文档.md`
+- `CRM_MVP_模块与字段.md`

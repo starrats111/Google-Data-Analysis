@@ -5,7 +5,7 @@ import {
   Card, Table, Tag, Button, Space, Select, Modal, Form, Typography, Popconfirm, App,
 } from "antd";
 import {
-  UnorderedListOutlined, DeleteOutlined, EyeOutlined, SendOutlined, CopyOutlined, LinkOutlined, SyncOutlined,
+  UnorderedListOutlined, DeleteOutlined, EyeOutlined, SendOutlined, CopyOutlined, LinkOutlined, SyncOutlined, ToolOutlined,
 } from "@ant-design/icons";
 import { sanitizeHtml } from "@/lib/sanitize";
 
@@ -44,6 +44,7 @@ export default function ArticlesPage() {
   const [publishArticle, setPublishArticle] = useState<Article | null>(null);
   const [publishForm] = Form.useForm();
   const [publishing, setPublishing] = useState(false);
+  const [repairing, setRepairing] = useState(false);
 
   const fetchArticles = useCallback(async () => {
     setLoading(true);
@@ -119,6 +120,93 @@ export default function ArticlesPage() {
 
   const copyUrl = (url: string) => {
     navigator.clipboard.writeText(url).then(() => message.success("已复制链接"));
+  };
+
+  const handleRepairPublishedArticles = async () => {
+    const activeVerifiedSites = sites.filter((s) => s.status === "active" && s.verified === 1);
+    if (activeVerifiedSites.length === 0) {
+      message.warning("没有可修复的已验证站点，请先到站点管理完成验证");
+      return;
+    }
+
+    setRepairing(true);
+    message.loading({ content: "正在修复已发布文章，请耐心等待...", key: "repair", duration: 0 });
+    try {
+      const allPublishedArticles: Article[] = [];
+      let currentPage = 1;
+      let hasMore = true;
+
+      while (hasMore) {
+        const res = await fetch(`/api/user/articles?status=published&page=${currentPage}&pageSize=200`).then((r) => r.json());
+        if (res.code !== 0) {
+          throw new Error(res.message || "加载已发布文章失败");
+        }
+
+        const batch: Article[] = res.data?.articles || [];
+        allPublishedArticles.push(...batch);
+        const totalCount = Number(res.data?.total || 0);
+        hasMore = allPublishedArticles.length < totalCount && batch.length > 0;
+        currentPage += 1;
+      }
+
+      const publishedArticles = allPublishedArticles.filter((a) => a.publish_site_id);
+      if (publishedArticles.length === 0) {
+        message.info({ content: "当前没有可修复的已发布文章", key: "repair" });
+        return;
+      }
+
+      const siteIds = [...new Set(publishedArticles.map((a) => a.publish_site_id).filter((v): v is string => Boolean(v)))];
+      let repaired = 0;
+      let failed = 0;
+      const errors: string[] = [];
+
+      for (const siteId of siteIds) {
+        const articleIds = publishedArticles.filter((a) => a.publish_site_id === siteId).map((a) => a.id);
+        const res = await fetch("/api/user/articles/repair-images", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ site_id: siteId, article_ids: articleIds }),
+          signal: AbortSignal.timeout(10 * 60 * 1000),
+        }).then((r) => r.json());
+
+        if (res.code === 0) {
+          repaired += res.data?.repaired || 0;
+          failed += res.data?.failed || 0;
+          if (Array.isArray(res.data?.errors)) {
+            errors.push(...res.data.errors.slice(0, 10));
+          }
+        } else {
+          failed += articleIds.length;
+          errors.push(res.message || `站点 ${siteId} 修复失败`);
+        }
+      }
+
+      if (failed === 0) {
+        message.success({ content: `修复完成，共处理 ${repaired} 篇文章`, key: "repair" });
+      } else {
+        message.warning({ content: `修复完成：成功 ${repaired} 篇，失败 ${failed} 篇`, key: "repair" });
+        if (errors.length > 0) {
+          Modal.info({
+            title: "部分文章修复失败",
+            width: 720,
+            content: (
+              <div style={{ maxHeight: 320, overflowY: "auto", whiteSpace: "pre-wrap", fontSize: 12 }}>
+                {errors.join("\n")}
+              </div>
+            ),
+          });
+        }
+      }
+
+      fetchArticles();
+    } catch (err) {
+      const errMsg = err instanceof Error && err.name === "TimeoutError"
+        ? "修复超时，请稍后刷新文章列表查看结果"
+        : (err instanceof Error ? err.message : "修复请求失败");
+      message.error({ content: errMsg, key: "repair" });
+    } finally {
+      setRepairing(false);
+    }
   };
 
   const statusColor: Record<string, string> = { generating: "processing", draft: "default", preview: "warning", published: "success", failed: "error" };
@@ -200,6 +288,9 @@ export default function ArticlesPage() {
             ]}
           />
           <Space>
+            <Button icon={<ToolOutlined />} loading={repairing} onClick={handleRepairPublishedArticles}>
+              修复已发布文章
+            </Button>
             <Popconfirm title="确认清理所有失败/生成中的文章？" onConfirm={async () => {
               const res = await fetch("/api/user/articles", { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "cleanup_failed" }) }).then(r => r.json());
               if (res.code === 0) { message.success(res.message); fetchArticles(); } else message.error(res.message);

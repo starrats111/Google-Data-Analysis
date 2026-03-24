@@ -2,7 +2,7 @@ import { NextRequest } from "next/server";
 import { getUserFromRequest, serializeData } from "@/lib/auth";
 import { apiSuccess, apiError } from "@/lib/constants";
 import prisma from "@/lib/prisma";
-import { nowCST, TZ } from "@/lib/date-utils";
+import { nowCST, TZ, parseCSTDateStart, parseCSTDateEndExclusive, isTodayCST } from "@/lib/date-utils";
 
 /**
  * GET /api/user/data-center/settlement
@@ -32,16 +32,20 @@ export async function GET(req: NextRequest) {
   const cstNow = nowCST();
 
   const start = dateStart
-    ? new Date(dateStart)
+    ? parseCSTDateStart(dateStart)
     : (() => {
         switch (range) {
           case "3m": return cstNow.subtract(3, "month").toDate();
           case "6m": return cstNow.subtract(6, "month").toDate();
           case "1y": return cstNow.subtract(1, "year").toDate();
-          default: return cstNow.subtract(1, "month").toDate();
+          case "1m":
+          default:
+            return cstNow.startOf("month").toDate();
         }
       })();
-  const end = dateEnd ? new Date(dateEnd + "T23:59:59") : cstNow.toDate();
+  const end = dateEnd
+    ? (isTodayCST(dateEnd, cstNow) ? cstNow.toDate() : parseCSTDateEndExclusive(dateEnd))
+    : cstNow.toDate();
 
   // 组长查看全组数据，普通用户只看自己
   let userFilter: unknown = userId;
@@ -64,7 +68,7 @@ export async function GET(req: NextRequest) {
   const where: Record<string, unknown> = {
     user_id: userFilter,
     is_deleted: 0,
-    transaction_time: { gte: start, lte: end },
+    transaction_time: { gte: start, lt: end },
   };
   if (mid) where.merchant_id = mid;
   if (platform) where.platform = platform;

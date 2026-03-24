@@ -554,8 +554,16 @@ export async function POST(req: NextRequest) {
     const article = await prisma.articles.findFirst({
       where: { user_merchant_id: campaign.user_merchant_id, user_id: userId, is_deleted: 0 },
       orderBy: { id: "desc" },
-      select: { id: true, status: true, slug: true },
+      select: { id: true, status: true, slug: true, images: true },
     });
+
+    // 将广告最终选图同步到文章 images，作为文章配图的唯一权威来源
+    if (article && image_urls.length > 0) {
+      await prisma.articles.update({
+        where: { id: article.id },
+        data: { images: image_urls as any },
+      });
+    }
 
     const msgParts: string[] = ["广告创建成功"];
     if (skippedKeywords.length > 0) {

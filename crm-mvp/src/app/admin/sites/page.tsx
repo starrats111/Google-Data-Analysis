@@ -17,8 +17,6 @@ const { Title, Text } = Typography;
 const { Password } = Input;
 const { Dragger } = Upload;
 
-// === PLACEHOLDER:TYPES ===
-
 const SITE_TYPE_LABELS: Record<string, string> = {
   posts_assets_js: "A1: posts/assets/js",
   posts_assets: "A2: posts/assets",
@@ -64,10 +62,44 @@ interface MigrationTask {
   finished_at: string | null;
 }
 
-// === PLACEHOLDER:SERVER_CONFIG ===
+interface GitHubTokenEntry {
+  id: string;
+  label: string;
+  org: string;
+  token: string;
+}
 
-// ─── 服务器配置组件（宝塔SSH + 部署凭证）───
-function ServerConfigCard({ onConfigLoaded }: { onConfigLoaded?: () => void }) {
+interface CFTokenEntry {
+  id: string;
+  label: string;
+  token: string;
+}
+
+interface TokenPool {
+  github_tokens: GitHubTokenEntry[];
+  cf_tokens: CFTokenEntry[];
+  bt_server_ip: string;
+}
+
+function createEmptyGHToken(): GitHubTokenEntry {
+  return {
+    id: globalThis.crypto?.randomUUID?.() || `gh_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+    label: "",
+    org: "",
+    token: "",
+  };
+}
+
+function createEmptyCFToken(): CFTokenEntry {
+  return {
+    id: globalThis.crypto?.randomUUID?.() || `cf_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+    label: "",
+    token: "",
+  };
+}
+
+// ─── 服务器配置组件（宝塔SSH + Token 池）───
+function ServerConfigCard({ onPoolLoaded }: { onPoolLoaded?: (pool: TokenPool) => void }) {
   const { message } = App.useApp();
   const [form] = Form.useForm();
   const [loading, setLoading] = useState(false);
@@ -76,21 +108,40 @@ function ServerConfigCard({ onConfigLoaded }: { onConfigLoaded?: () => void }) {
   const [keyUploaded, setKeyUploaded] = useState(false);
   const [keyFilename, setKeyFilename] = useState<string>("");
 
+  const applyConfigToForm = useCallback((cfg: Record<string, unknown>) => {
+    const pool = (cfg.token_pool || { github_tokens: [], cf_tokens: [], bt_server_ip: "" }) as TokenPool;
+
+    form.setFieldsValue({
+      ...cfg,
+      github_tokens: pool.github_tokens || [],
+      cf_tokens: pool.cf_tokens || [],
+      bt_server_ip: pool.bt_server_ip || "",
+    });
+
+    if (cfg.bt_ssh_key_content) {
+      setKeyUploaded(true);
+      setKeyFilename("已上传密钥");
+    } else {
+      setKeyUploaded(false);
+      setKeyFilename("");
+    }
+
+    onPoolLoaded?.(pool);
+  }, [form, onPoolLoaded]);
+
   const fetchConfig = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await fetch("/api/admin/deploy-config").then(r => r.json());
+      const res = await fetch("/api/admin/deploy-config").then((r) => r.json());
       if (res.code === 0 && res.data?.config) {
-        const cfg = res.data.config;
-        form.setFieldsValue(cfg);
-        if (cfg.bt_ssh_key_content) {
-          setKeyUploaded(true);
-          setKeyFilename("已上传密钥");
-        }
+        applyConfigToForm(res.data.config as Record<string, unknown>);
       }
-    } catch { /* ignore */ }
-    setLoading(false);
-  }, [form]);
+    } catch {
+      // ignore
+    } finally {
+      setLoading(false);
+    }
+  }, [applyConfigToForm]);
 
   useEffect(() => { fetchConfig(); }, [fetchConfig]);
 
@@ -98,14 +149,35 @@ function ServerConfigCard({ onConfigLoaded }: { onConfigLoaded?: () => void }) {
     const values = await form.validateFields();
     setSaving(true);
     try {
+      const payload = {
+        ...values,
+        token_pool: {
+          github_tokens: values.github_tokens || [],
+          cf_tokens: values.cf_tokens || [],
+          bt_server_ip: values.bt_server_ip || "",
+        },
+      };
+      delete payload.github_tokens;
+      delete payload.cf_tokens;
+
       const res = await fetch("/api/admin/deploy-config", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(values),
-      }).then(r => r.json());
+        body: JSON.stringify(payload),
+      }).then((r) => r.json());
+
       if (res.code === 0) {
+        if (res.data?.config) {
+          applyConfigToForm(res.data.config as Record<string, unknown>);
+        } else {
+          const pool: TokenPool = {
+            github_tokens: values.github_tokens || [],
+            cf_tokens: values.cf_tokens || [],
+            bt_server_ip: values.bt_server_ip || "",
+          };
+          onPoolLoaded?.(pool);
+        }
         message.success("服务器配置已保存");
-        onConfigLoaded?.();
       } else {
         message.error(res.message);
       }
@@ -116,20 +188,17 @@ function ServerConfigCard({ onConfigLoaded }: { onConfigLoaded?: () => void }) {
     }
   };
 
-  // 从数据分析平台同步配置
   const handleSync = async () => {
     setSyncing(true);
     try {
       const res = await fetch("/api/admin/deploy-config/sync", {
         method: "POST",
-      }).then(r => r.json());
+      }).then((r) => r.json());
       if (res.code === 0) {
-        // 同步成功，用返回的配置填充表单
         if (res.data?.config) {
-          form.setFieldsValue(res.data.config);
+          applyConfigToForm(res.data.config as Record<string, unknown>);
         }
         message.success(res.message || "同步成功");
-        onConfigLoaded?.();
       } else {
         message.error(res.message || "同步失败");
       }
@@ -147,7 +216,7 @@ function ServerConfigCard({ onConfigLoaded }: { onConfigLoaded?: () => void }) {
       const res = await fetch("/api/admin/deploy-config/ssh-key", {
         method: "POST",
         body: formData,
-      }).then(r => r.json());
+      }).then((r) => r.json());
       if (res.code === 0) {
         message.success(`密钥文件 ${res.data.filename} 已上传`);
         setKeyUploaded(true);
@@ -158,13 +227,14 @@ function ServerConfigCard({ onConfigLoaded }: { onConfigLoaded?: () => void }) {
     } catch {
       message.error("上传失败");
     }
-    return false; // 阻止 antd 默认上传
+    return false;
   };
 
   const handleKeyDelete = async () => {
-    const res = await fetch("/api/admin/deploy-config/ssh-key", { method: "DELETE" }).then(r => r.json());
+    const res = await fetch("/api/admin/deploy-config/ssh-key", { method: "DELETE" }).then((r) => r.json());
     if (res.code === 0) {
       message.success("密钥已删除");
+      form.setFieldValue("bt_ssh_key_content", "");
       setKeyUploaded(false);
       setKeyFilename("");
     }
@@ -187,10 +257,10 @@ function ServerConfigCard({ onConfigLoaded }: { onConfigLoaded?: () => void }) {
         style={{ marginBottom: 16 }}
       >
         <Text type="secondary" style={{ display: "block", marginBottom: 16 }}>
-          宝塔服务器 SSH 连接和部署凭证。这些配置与数据分析平台共用，点击「从数据分析平台同步」可自动填充。
+          宝塔 SSH 连接、GitHub Token 和 Cloudflare Token 分开管理。迁移站点时系统根据 GitHub 仓库所属 org 和域名 DNS 所在 CF 账户自动匹配对应 Token。
         </Text>
 
-        <Form form={form} layout="vertical" style={{ maxWidth: 720 }}>
+        <Form form={form} layout="vertical" style={{ maxWidth: 900 }}>
           <Divider titlePlacement="left" plain>宝塔服务器 SSH</Divider>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 24px" }}>
             <Form.Item name="bt_ssh_host" label="服务器 IP" rules={[{ required: true, message: "请输入服务器 IP" }]}>
@@ -208,7 +278,7 @@ function ServerConfigCard({ onConfigLoaded }: { onConfigLoaded?: () => void }) {
           </div>
 
           <Form.Item label={<Space><KeyOutlined />SSH 密钥文件</Space>} extra={keyUploaded ? `当前密钥：${keyFilename}` : "拖动或点击上传 SSH 私钥文件（如 id_rsa）"}>
-            <Flex vertical style={{ width: "100%" }}>
+            <Flex vertical style={{ width: "100%" }} gap={8}>
               <Dragger
                 accept=".pem,.key,.rsa,*"
                 maxCount={1}
@@ -233,55 +303,154 @@ function ServerConfigCard({ onConfigLoaded }: { onConfigLoaded?: () => void }) {
             <Input placeholder="/www/wwwroot" style={{ maxWidth: 320 }} />
           </Form.Item>
 
-          <Divider titlePlacement="left" plain>部署凭证</Divider>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 24px" }}>
-            <Form.Item label="GitHub Token">
-              <Space.Compact style={{ width: "100%" }}>
-                <Form.Item name="github_token" noStyle>
-                  <Password placeholder="ghp_..." style={{ flex: 1 }} />
-                </Form.Item>
-                <Tooltip title="清除 Token">
-                  <Button
-                    danger
-                    icon={<DeleteOutlined />}
-                    onClick={() => { form.setFieldValue("github_token", ""); message.info("已清除 GitHub Token，保存后生效"); }}
-                  />
-                </Tooltip>
-              </Space.Compact>
-            </Form.Item>
-            <Form.Item name="github_org" label="GitHub 组织/用户名">
-              <Input placeholder="如：starrats111" />
-            </Form.Item>
-            <Form.Item label="Cloudflare API Token">
-              <Space.Compact style={{ width: "100%" }}>
-                <Form.Item name="cf_token" noStyle>
-                  <Password placeholder="Bearer Token" style={{ flex: 1 }} />
-                </Form.Item>
-                <Tooltip title="清除 Token">
-                  <Button
-                    danger
-                    icon={<DeleteOutlined />}
-                    onClick={() => { form.setFieldValue("cf_token", ""); message.info("已清除 Cloudflare Token，保存后生效"); }}
-                  />
-                </Tooltip>
-              </Space.Compact>
-            </Form.Item>
-            <Form.Item name="bt_server_ip" label="宝塔服务器公网 IP" rules={[{ required: true, message: "请输入公网 IP" }]}>
-              <Input placeholder="如：52.74.221.116" />
-            </Form.Item>
-          </div>
+          <Form.Item name="bt_server_ip" label="宝塔服务器公网 IP" extra="DNS A 记录指向此 IP">
+            <Input placeholder="如：52.74.221.116" style={{ maxWidth: 320 }} />
+          </Form.Item>
+
+          {/* ─── GitHub Token 列表 ─── */}
+          <Divider titlePlacement="left" plain><Space><GithubOutlined />GitHub Token 列表</Space></Divider>
+          <Text type="secondary" style={{ display: "block", marginBottom: 12 }}>
+            迁移时根据仓库的 GitHub org/用户名自动匹配对应 Token。
+          </Text>
+          <Form.List name="github_tokens">
+            {(fields, { add, remove }) => (
+              <Flex vertical gap={12}>
+                {fields.length === 0 && (
+                  <Text type="secondary">暂无 GitHub Token，请先新增。</Text>
+                )}
+
+                {fields.map((field, index) => {
+                  const label = form.getFieldValue(["github_tokens", field.name, "label"]);
+                  return (
+                    <Card
+                      key={field.key}
+                      size="small"
+                      title={<Space><GithubOutlined />{label || `GitHub Token ${index + 1}`}</Space>}
+                      extra={
+                        <Popconfirm title="确认删除此 GitHub Token？" onConfirm={() => remove(field.name)}>
+                          <Button danger size="small" icon={<DeleteOutlined />}>删除</Button>
+                        </Popconfirm>
+                      }
+                    >
+                      <Form.Item name={[field.name, "id"]} hidden><Input /></Form.Item>
+                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 24px" }}>
+                        <Form.Item
+                          name={[field.name, "label"]}
+                          label="标签/名称"
+                          rules={[{ required: true, message: "请输入标签" }]}
+                        >
+                          <Input placeholder="如：starrats111" />
+                        </Form.Item>
+                        <Form.Item
+                          name={[field.name, "org"]}
+                          label="GitHub Org / 用户名"
+                          rules={[{ required: true, message: "请输入 GitHub 组织或用户名" }]}
+                          extra="自动匹配的依据"
+                        >
+                          <Input placeholder="如：starrats111" />
+                        </Form.Item>
+                        <Form.Item label="Token" style={{ gridColumn: "1 / -1" }}>
+                          <Space.Compact style={{ width: "100%" }}>
+                            <Form.Item name={[field.name, "token"]} noStyle rules={[{ required: true, message: "请输入 Token" }]}>
+                              <Password placeholder="ghp_..." style={{ flex: 1 }} />
+                            </Form.Item>
+                            <Tooltip title="清除 Token">
+                              <Button
+                                danger
+                                icon={<DeleteOutlined />}
+                                onClick={() => {
+                                  form.setFieldValue(["github_tokens", field.name, "token"], "");
+                                  message.info("已清除，保存后生效");
+                                }}
+                              />
+                            </Tooltip>
+                          </Space.Compact>
+                        </Form.Item>
+                      </div>
+                    </Card>
+                  );
+                })}
+
+                <Button type="dashed" icon={<PlusOutlined />} onClick={() => add(createEmptyGHToken())}>
+                  新增 GitHub Token
+                </Button>
+              </Flex>
+            )}
+          </Form.List>
+
+          {/* ─── CF Token 列表 ─── */}
+          <Divider titlePlacement="left" plain><Space><CloudOutlined />Cloudflare Token 列表</Space></Divider>
+          <Text type="secondary" style={{ display: "block", marginBottom: 12 }}>
+            迁移时系统会用每个 CF Token 查询域名的 Zone，自动选择管理该域名的 Token。
+          </Text>
+          <Form.List name="cf_tokens">
+            {(fields, { add, remove }) => (
+              <Flex vertical gap={12}>
+                {fields.length === 0 && (
+                  <Text type="secondary">暂无 Cloudflare Token，请先新增。</Text>
+                )}
+
+                {fields.map((field, index) => {
+                  const label = form.getFieldValue(["cf_tokens", field.name, "label"]);
+                  return (
+                    <Card
+                      key={field.key}
+                      size="small"
+                      title={<Space><CloudOutlined />{label || `CF Token ${index + 1}`}</Space>}
+                      extra={
+                        <Popconfirm title="确认删除此 Cloudflare Token？" onConfirm={() => remove(field.name)}>
+                          <Button danger size="small" icon={<DeleteOutlined />}>删除</Button>
+                        </Popconfirm>
+                      }
+                    >
+                      <Form.Item name={[field.name, "id"]} hidden><Input /></Form.Item>
+                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 24px" }}>
+                        <Form.Item
+                          name={[field.name, "label"]}
+                          label="标签/邮箱"
+                          rules={[{ required: true, message: "请输入标签" }]}
+                        >
+                          <Input placeholder="如：kyreg@163.com" />
+                        </Form.Item>
+                        <Form.Item label="API Token">
+                          <Space.Compact style={{ width: "100%" }}>
+                            <Form.Item name={[field.name, "token"]} noStyle rules={[{ required: true, message: "请输入 Token" }]}>
+                              <Password placeholder="Bearer Token" style={{ flex: 1 }} />
+                            </Form.Item>
+                            <Tooltip title="清除 Token">
+                              <Button
+                                danger
+                                icon={<DeleteOutlined />}
+                                onClick={() => {
+                                  form.setFieldValue(["cf_tokens", field.name, "token"], "");
+                                  message.info("已清除，保存后生效");
+                                }}
+                              />
+                            </Tooltip>
+                          </Space.Compact>
+                        </Form.Item>
+                      </div>
+                    </Card>
+                  );
+                })}
+
+                <Button type="dashed" icon={<PlusOutlined />} onClick={() => add(createEmptyCFToken())}>
+                  新增 Cloudflare Token
+                </Button>
+              </Flex>
+            )}
+          </Form.List>
         </Form>
       </Card>
     </Spin>
   );
 }
 
-// === PLACEHOLDER:SITES_PAGE ===
-
 export default function AdminSitesPage() {
   const { message } = App.useApp();
   const [sites, setSites] = useState<Site[]>([]);
   const [migrations, setMigrations] = useState<MigrationTask[]>([]);
+  const [hasTokens, setHasTokens] = useState(false);
   const [loading, setLoading] = useState(false);
   const [siteModalOpen, setSiteModalOpen] = useState(false);
   const [migrateModalOpen, setMigrateModalOpen] = useState(false);
@@ -310,12 +479,24 @@ export default function AdminSitesPage() {
     } catch { /* ignore */ }
   }, []);
 
+  const fetchTokenPool = useCallback(async () => {
+    try {
+      const r = await fetch("/api/admin/deploy-config");
+      if (!r.ok) return;
+      const res = await r.json();
+      if (res.code === 0) {
+        const pool = res.data?.config?.token_pool as TokenPool | undefined;
+        setHasTokens(Boolean(pool && (pool.github_tokens.length > 0 || pool.cf_tokens.length > 0)));
+      }
+    } catch { /* ignore */ }
+  }, []);
+
   useEffect(() => {
     fetchSites();
     fetchMigrations();
-  }, [fetchSites, fetchMigrations]);
+    fetchTokenPool();
+  }, [fetchSites, fetchMigrations, fetchTokenPool]);
 
-  // 轮询进行中的迁移任务
   useEffect(() => {
     const hasRunning = migrations.some((m) => !["done", "failed"].includes(m.status));
     if (hasRunning && !pollRef.current) {
@@ -330,9 +511,13 @@ export default function AdminSitesPage() {
     return () => { if (pollRef.current) clearInterval(pollRef.current); };
   }, [migrations, fetchMigrations, fetchSites]);
 
-  // 站点 CRUD
   const handleAddSite = () => { setEditSite(null); siteForm.resetFields(); setSiteModalOpen(true); };
   const handleEditSite = (site: Site) => { setEditSite(site); siteForm.setFieldsValue(site); setSiteModalOpen(true); };
+
+  const handlePoolLoaded = useCallback((pool: TokenPool) => {
+    setHasTokens(pool.github_tokens.length > 0 || pool.cf_tokens.length > 0);
+    fetchSites();
+  }, [fetchSites]);
 
   const handleSiteSubmit = async () => {
     const values = await siteForm.validateFields();
@@ -365,13 +550,20 @@ export default function AdminSitesPage() {
     if (res.code === 0 && res.data?.checks?.valid) {
       message.success({ content: "验证通过", key: "verify" });
     } else {
-      message.error({ content: "验证失败", key: "verify" });
+      const errText = res.data?.checks?.error || res.message || "验证失败";
+      message.error({ content: errText, key: "verify" });
     }
     fetchSites();
   };
 
-  // 迁移
-  const handleMigrate = () => { migrateForm.resetFields(); setMigrateModalOpen(true); };
+  const handleMigrate = () => {
+    if (!hasTokens) {
+      message.warning("请先在服务器配置中添加至少一个 GitHub Token 或 CF Token");
+      return;
+    }
+    migrateForm.resetFields();
+    setMigrateModalOpen(true);
+  };
 
   const handleMigrateSubmit = async () => {
     const values = await migrateForm.validateFields();
@@ -386,8 +578,6 @@ export default function AdminSitesPage() {
       message.error(res.message);
     }
   };
-
-
 
   const siteColumns = [
     {
@@ -474,7 +664,7 @@ export default function AdminSitesPage() {
                   title="所有站点"
                   extra={
                     <Space>
-                      <Button icon={<CloudDownloadOutlined />} onClick={handleMigrate}>迁移站点</Button>
+                      <Button icon={<CloudDownloadOutlined />} onClick={handleMigrate} disabled={!hasTokens}>迁移站点</Button>
                       <Button type="primary" icon={<PlusOutlined />} onClick={handleAddSite}>添加站点</Button>
                     </Space>
                   }
@@ -497,7 +687,7 @@ export default function AdminSitesPage() {
           {
             key: "server",
             label: <><CloudServerOutlined /> 服务器配置</>,
-            children: <ServerConfigCard onConfigLoaded={fetchSites} />,
+            children: <ServerConfigCard onPoolLoaded={handlePoolLoaded} />,
           },
         ]}
       />
@@ -519,7 +709,7 @@ export default function AdminSitesPage() {
         </Form>
       </Modal>
 
-      {/* 迁移站点弹窗 */}
+      {/* 迁移站点弹窗 — 无需手动选 Token，系统自动匹配 */}
       <Modal title="迁移站点到宝塔" open={migrateModalOpen} onOk={handleMigrateSubmit} onCancel={() => setMigrateModalOpen(false)} okText="开始迁移" destroyOnHidden width={520}>
         <Form form={migrateForm} layout="vertical" style={{ marginTop: 16 }}>
           <Form.Item name="domain" label="域名" rules={[{ required: true, message: "请输入域名" }]}>
@@ -534,12 +724,12 @@ export default function AdminSitesPage() {
               { value: "cloudflare", label: <Space><CloudOutlined />Cloudflare Pages</Space> },
             ]} />
           </Form.Item>
-          <Form.Item name="source_ref" label="来源地址" extra="GitHub: 仓库名或完整URL；Cloudflare: pages.dev 地址（可选）">
-            <Input placeholder="如：kaizenflowshop 或 https://kaizenflowshop.pages.dev" />
+          <Form.Item name="source_ref" label="来源地址" extra="GitHub: 仓库名（如 kaizenflowshop）或 org/repo 格式；Cloudflare: pages.dev 地址（可选）">
+            <Input placeholder="如：kaizenflowshop 或 starrats111/kaizenflowshop" />
           </Form.Item>
         </Form>
         <Text type="secondary" style={{ fontSize: 12 }}>
-          迁移流程：下载文件 → 配置 DNS → 申请 SSL → 验证站点。整个过程约 2-5 分钟。
+          系统会根据仓库 org 自动匹配 GitHub Token，根据域名 DNS 所在 CF 账户自动匹配 Cloudflare Token。整个过程约 2-5 分钟。
         </Text>
       </Modal>
 

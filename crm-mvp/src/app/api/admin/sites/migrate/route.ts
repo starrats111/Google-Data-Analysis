@@ -4,8 +4,8 @@ import { apiSuccess, apiError } from "@/lib/constants";
 import { withAdmin } from "@/lib/api-handler";
 import prisma from "@/lib/prisma";
 import { getSiteRoot } from "@/lib/remote-publisher";
+import { getTokenPool, findGitHubToken, findCFTokenForDomain } from "@/lib/deploy-credentials";
 
-// 获取迁移任务列表
 export async function GET() {
   try {
     const tasks = await prisma.site_migrations.findMany({
@@ -20,7 +20,6 @@ export async function GET() {
   }
 }
 
-// 创建迁移任务（异步执行）
 export const POST = withAdmin(async (req: NextRequest) => {
   const { domain, source_type, source_ref, site_name } = await req.json();
   if (!domain || !source_type) return apiError("域名和来源类型不能为空");
@@ -28,13 +27,16 @@ export const POST = withAdmin(async (req: NextRequest) => {
 
   const domainClean = domain.trim().toLowerCase().replace(/^https?:\/\//, "").replace(/\/+$/, "");
 
-  // 检查是否已有进行中的迁移
+  const pool = await getTokenPool();
+  if (pool.github_tokens.length === 0 && pool.cf_tokens.length === 0) {
+    return apiError("请先在服务器配置中添加 GitHub Token 或 CF Token");
+  }
+
   const running = await prisma.site_migrations.findFirst({
     where: { domain: domainClean, status: { in: ["pending", "cloning", "dns", "ssl", "verifying"] }, is_deleted: 0 },
   });
   if (running) return apiError("该域名已有进行中的迁移任务");
 
-  // 创建或获取站点记录
   let site = await prisma.publish_sites.findFirst({
     where: { domain: domainClean, is_deleted: 0 },
   });
@@ -51,7 +53,6 @@ export const POST = withAdmin(async (req: NextRequest) => {
     });
   }
 
-  // 从 cookie 获取管理员 ID（简化处理，用 1 作为默认）
   const adminUser = await prisma.users.findFirst({ where: { role: "admin", is_deleted: 0 } });
 
   const task = await prisma.site_migrations.create({
@@ -66,7 +67,6 @@ export const POST = withAdmin(async (req: NextRequest) => {
     },
   });
 
-  // 异步执行迁移（不阻塞响应）
   runMigrationAsync(task.id).catch((err) => {
     console.error("[site-migration] async error:", err);
   });
@@ -84,23 +84,23 @@ async function runMigrationAsync(taskId: bigint) {
   try {
     await update({ status: "cloning", progress: 10, step_detail: "正在准备环境...", started_at: new Date() });
 
-    // 读取系统配置
-    const configs = await prisma.system_configs.findMany({
-      where: { is_deleted: 0, config_key: { in: ["github_token", "github_org", "cf_token", "bt_server_ip", "bt_ssh_host", "bt_ssh_port", "bt_ssh_user", "bt_ssh_password", "bt_ssh_key_path", "bt_ssh_key_content", "bt_site_root"] } },
+    const serverConfigs = await prisma.system_configs.findMany({
+      where: { is_deleted: 0, config_key: { in: ["bt_ssh_host", "bt_ssh_port", "bt_ssh_user", "bt_ssh_password", "bt_ssh_key_path", "bt_ssh_key_content", "bt_site_root"] } },
     });
     const cfg: Record<string, string> = {};
-    for (const c of configs) {
+    for (const c of serverConfigs) {
       if (c.config_value) cfg[c.config_key] = c.config_value;
     }
 
+    const pool = await getTokenPool();
     const task = await prisma.site_migrations.findUnique({ where: { id: taskId } });
     if (!task) return;
 
     const siteRoot = cfg.bt_site_root || "/www/wwwroot";
     const sitePath = `${siteRoot}/${task.domain}`;
 
-    // Step 1: Clone/Download
-    await update({ status: "cloning", progress: 20, step_detail: `正在从 ${task.source_type} 获取站点文件...` });
+    // Step 1: Clone/Download — 自动匹配 GitHub Token
+    await update({ status: "cloning", progress: 15, step_detail: "正在自动匹配 Token..." });
 
     const { Client } = await import("ssh2");
     const fs = await import("fs");
@@ -134,22 +134,27 @@ async function runMigrationAsync(taskId: bigint) {
       });
     });
 
-    // 创建目录
     await exec(`sudo mkdir -p ${sitePath}`);
 
     if (task.source_type === "github") {
-      const ghToken = cfg.github_token;
-      const ghOrg = cfg.github_org || "";
       const repoRef = task.source_ref || task.domain.replace(/\.(top|com|net|org)$/, "");
+      const orgHint = repoRef.includes("/") ? repoRef.split("/")[0] : "";
+      const ghEntry = findGitHubToken(pool, orgHint || repoRef);
+
+      if (!ghEntry) {
+        throw new Error("Token 池中没有可用的 GitHub Token");
+      }
+
+      await update({ progress: 20, step_detail: `自动匹配 GitHub Token「${ghEntry.label}」(org: ${ghEntry.org})，正在 clone...` });
+
       const cloneUrl = repoRef.startsWith("http")
-        ? repoRef.replace("https://", `https://${ghToken}@`)
-        : `https://${ghToken}@github.com/${ghOrg}/${repoRef}.git`;
+        ? repoRef.replace("https://", `https://${ghEntry.token}@`)
+        : `https://${ghEntry.token}@github.com/${ghEntry.org}/${repoRef.includes("/") ? repoRef.split("/").slice(1).join("/") : repoRef}.git`;
 
       await update({ progress: 30, step_detail: `正在 clone GitHub 仓库...` });
-      const cloneResult = await exec(`cd ${sitePath} && sudo git clone --depth 1 ${cloneUrl} _tmp_clone 2>&1 && sudo cp -r _tmp_clone/* . && sudo rm -rf _tmp_clone`);
+      await exec(`cd ${sitePath} && sudo git clone --depth 1 ${cloneUrl} _tmp_clone 2>&1 && sudo cp -r _tmp_clone/* . && sudo rm -rf _tmp_clone`);
       await update({ progress: 50, step_detail: `Clone 完成` });
     } else {
-      // Cloudflare Pages: wget 下载
       const pagesUrl = task.source_ref || `https://${task.domain.replace(/\.(top|com|net|org)$/, "")}.pages.dev`;
       await update({ progress: 30, step_detail: `正在从 Cloudflare Pages 下载...` });
 
@@ -160,23 +165,23 @@ async function runMigrationAsync(taskId: bigint) {
       await update({ progress: 50, step_detail: `下载完成` });
     }
 
-    // Step 2: DNS
-    await update({ status: "dns", progress: 60, step_detail: "正在配置 Cloudflare DNS..." });
+    // Step 2: DNS — 自动匹配 CF Token
+    await update({ status: "dns", progress: 55, step_detail: "正在自动匹配 Cloudflare Token..." });
 
-    const cfToken = cfg.cf_token;
-    const btIp = cfg.bt_server_ip || cfg.bt_ssh_host;
+    const cfEntry = await findCFTokenForDomain(pool, task.domain);
+    const btIp = pool.bt_server_ip || cfg.bt_ssh_host;
 
-    if (cfToken && btIp) {
+    if (cfEntry && btIp) {
+      await update({ progress: 60, step_detail: `自动匹配 CF Token「${cfEntry.label}」，正在配置 DNS...` });
+
       try {
-        const cfHeaders = { Authorization: `Bearer ${cfToken}`, "Content-Type": "application/json" };
+        const cfHeaders = { Authorization: `Bearer ${cfEntry.token}`, "Content-Type": "application/json" };
 
-        // 查找 zone
         const zonesRes = await fetch(`https://api.cloudflare.com/client/v4/zones?name=${task.domain}`, { headers: cfHeaders });
         const zonesData = await zonesRes.json() as { result?: { id: string }[] };
         const zoneId = zonesData.result?.[0]?.id;
 
         if (zoneId) {
-          // 删除旧记录
           const dnsRes = await fetch(`https://api.cloudflare.com/client/v4/zones/${zoneId}/dns_records`, { headers: cfHeaders });
           const dnsData = await dnsRes.json() as { result?: { id: string; name: string; type: string }[] };
           for (const rec of dnsData.result || []) {
@@ -185,29 +190,28 @@ async function runMigrationAsync(taskId: bigint) {
             }
           }
 
-          // 创建 A 记录
           await fetch(`https://api.cloudflare.com/client/v4/zones/${zoneId}/dns_records`, {
             method: "POST", headers: cfHeaders,
             body: JSON.stringify({ type: "A", name: task.domain, content: btIp, ttl: 1, proxied: true }),
           });
-          // www CNAME
           await fetch(`https://api.cloudflare.com/client/v4/zones/${zoneId}/dns_records`, {
             method: "POST", headers: cfHeaders,
             body: JSON.stringify({ type: "CNAME", name: `www.${task.domain}`, content: task.domain, ttl: 1, proxied: true }),
           });
-          // SSL flexible
           await fetch(`https://api.cloudflare.com/client/v4/zones/${zoneId}/settings/ssl`, {
             method: "PATCH", headers: cfHeaders,
             body: JSON.stringify({ value: "flexible" }),
           });
 
-          await update({ progress: 75, step_detail: "DNS 配置完成" });
+          await update({ progress: 75, step_detail: `DNS 配置完成（CF: ${cfEntry.label}）` });
         } else {
           await update({ step_detail: "DNS: 未找到 Cloudflare Zone，跳过" });
         }
       } catch (dnsErr) {
         await update({ step_detail: `DNS 配置异常: ${dnsErr instanceof Error ? dnsErr.message : String(dnsErr)}` });
       }
+    } else if (!cfEntry) {
+      await update({ progress: 75, step_detail: "Token 池中没有 CF Token，跳过 DNS 配置" });
     }
 
     // Step 3: SSL
@@ -239,7 +243,6 @@ async function runMigrationAsync(taskId: bigint) {
     const checks = await verifyConnection(sitePath);
 
     if (checks.valid) {
-      // 更新站点信息
       if (task.site_id) {
         await prisma.publish_sites.update({
           where: { id: task.site_id },

@@ -875,7 +875,14 @@ async function triggerArticleGeneration(
       userId,
     });
 
-    // Step 5: 更新文章记录（含爬取的图片 + category）
+    // Step 5: 更新文章记录（含 category）
+    // 仅当文章尚无图片时才写入爬虫图，避免覆盖广告提交后已同步的最终选图
+    const existingArticle = await prisma.articles.findUnique({
+      where: { id: articleId },
+      select: { images: true },
+    });
+    const hasExistingImages = Array.isArray(existingArticle?.images) && (existingArticle.images as string[]).length > 0;
+
     await prisma.articles.update({
       where: { id: articleId },
       data: {
@@ -886,7 +893,7 @@ async function triggerArticleGeneration(
         meta_title: article.metaTitle,
         meta_description: article.metaDescription,
         keywords: analysis.keywords as any,
-        images: crawledImages.slice(0, 8) as any,
+        ...(!hasExistingImages && crawledImages.length > 0 ? { images: crawledImages.slice(0, 8) as any } : {}),
         category: article.category || analysis.category || "General",
         status: "preview",
       },

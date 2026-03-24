@@ -1,24 +1,25 @@
 ---
-description: 
+description: 当前生产环境部署架构与服务器约束
 alwaysApply: true
 ---
 
 # 部署架构
 
-- 全栈 Next.js 应用部署在阿里云服务器（47.239.193.33），使用密码登录
-- 代码推送至 GitHub（https://github.com/starrats111/Google-Data-Analysis），通过 GitHub Actions 自动 SSH 部署到服务器
-- Cloudflare 作为 CDN 代理（域名：google-data-analysis.top）
-- 宝塔面板运行在亚马逊服务器（52.74.221.16），使用密钥登录
-- 自动部署流程：push main → GitHub Actions → SSH → git pull → build → pm2 restart
+- 默认生产环境是腾讯云服务器 `43.156.142.141`，不要再按旧生产环境处理
+- 服务器登录方式为 `ubuntu` 用户 + SSH 密钥；本地常用密钥为 `xlx0310.pem`
+- 项目仓库是 `https://github.com/starrats111/Google-Data-Analysis`
+- 代码推送到 `main` 后，通过 GitHub Actions 使用 `SERVER_HOST`、`SERVER_USER`、`SERVER_SSH_KEY`、`SERVER_PORT` 自动 SSH 部署
+- 域名为 `google-data-analysis.top`，由 Cloudflare 代理；Nginx 反向代理到本机 `20050` 端口
+- PM2 进程名固定为 `ad-automation`
+- 当前自动部署流程：`push main` → GitHub Actions → SSH 登录服务器 → `git fetch` / `git reset --hard origin/main` → 按需安装依赖 → `next build` → `prisma migrate deploy` → `pm2 restart/start` → 健康检查 `/api/health`
 
-# 服务器资源约束（极其重要）
+# 服务器资源约束
 
-服务器配置极低：**2核 CPU / 2G 内存 / 40G 磁盘**，非常容易崩溃，必须严格遵守以下原则：
-
-- **禁止**在服务器上执行高内存操作（如 `npm install` 全量安装、大规模构建等）
-- **禁止**同时运行多个耗资源的进程
-- **禁止**在服务器上运行 `prisma generate` 或 `prisma migrate` 等重操作时不先确认资源状况
-- 所有服务器操作必须**逐步执行**，每步确认无误后再进行下一步
-- 安装依赖或部署前，先检查磁盘和内存使用情况（`df -h` / `free -m`）
-- 遇到服务器无响应时，**不要反复重试**，先等待恢复
-- 日志文件需定期关注大小，防止磁盘被日志撑满
+- 当前服务器资源约为 **2 核 CPU / 3.7G 内存 / 60G 磁盘**，仍按低配生产机处理
+- 部署、构建、迁移、数据同步等重操作必须串行执行，禁止并发跑多个高负载任务
+- 手动操作服务器前，先检查 `free -m` 和 `df -h`
+- 非必要不要在服务器上反复执行 `npm install`、`next build`、`prisma migrate`
+- 如内存偏低，先停止无关进程，再执行构建或迁移
+- 构建失败时不要重启 PM2，必须确认构建产物和健康检查通过后再启动服务
+- 日志、临时文件和构建产物要定期清理，防止磁盘被占满
+- 除非用户明确要求检查旧环境，否则默认所有部署、排障、验证都基于腾讯云生产环境处理
