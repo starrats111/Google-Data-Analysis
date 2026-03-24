@@ -124,20 +124,28 @@ async function runMigrationAsync(taskId: bigint) {
     });
     sshClient = client;
 
-    const exec = (cmd: string): Promise<string> => new Promise((resolve, reject) => {
+    const exec = (cmd: string, failOnError = false): Promise<string> => new Promise((resolve, reject) => {
       client.exec(cmd, (err, stream) => {
         if (err) return reject(err);
         let out = "";
         stream.on("data", (d: Buffer) => { out += d.toString(); });
         stream.stderr.on("data", (d: Buffer) => { out += d.toString(); });
-        stream.on("close", () => resolve(out));
+        stream.on("close", (code: number) => {
+          if (failOnError && code !== 0) {
+            reject(new Error(`命令执行失败 (exit ${code}): ${out.slice(0, 500)}`));
+          } else {
+            resolve(out);
+          }
+        });
       });
     });
 
     await exec(`sudo mkdir -p ${sitePath}`);
 
+    const stripTLD = (d: string) => d.replace(/\.[a-z]{2,}$/, "");
+
     if (task.source_type === "github") {
-      const repoRef = task.source_ref || task.domain.replace(/\.(top|com|net|org)$/, "");
+      const repoRef = task.source_ref || stripTLD(task.domain);
       const orgHint = repoRef.includes("/") ? repoRef.split("/")[0] : "";
       const ghEntry = findGitHubToken(pool, orgHint || repoRef);
 
@@ -152,10 +160,15 @@ async function runMigrationAsync(taskId: bigint) {
         : `https://${ghEntry.token}@github.com/${ghEntry.org}/${repoRef.includes("/") ? repoRef.split("/").slice(1).join("/") : repoRef}.git`;
 
       await update({ progress: 30, step_detail: `正在 clone GitHub 仓库...` });
-      await exec(`cd ${sitePath} && sudo git clone --depth 1 ${cloneUrl} _tmp_clone 2>&1 && sudo cp -r _tmp_clone/* . && sudo rm -rf _tmp_clone`);
+      const cloneOut = await exec(`cd ${sitePath} && sudo git clone --depth 1 ${cloneUrl} _tmp_clone 2>&1`, true);
+      await exec(`cd ${sitePath} && sudo cp -r _tmp_clone/* . && sudo rm -rf _tmp_clone`);
+      const fileCount = await exec(`ls -1 ${sitePath} | wc -l`);
+      if (parseInt(fileCount.trim()) === 0) {
+        throw new Error(`Clone 后站点目录为空，clone 输出: ${cloneOut.slice(0, 300)}`);
+      }
       await update({ progress: 50, step_detail: `Clone 完成` });
     } else {
-      const pagesUrl = task.source_ref || `https://${task.domain.replace(/\.(top|com|net|org)$/, "")}.pages.dev`;
+      const pagesUrl = task.source_ref || `https://${stripTLD(task.domain)}.pages.dev`;
       await update({ progress: 30, step_detail: `正在从 Cloudflare Pages 下载...` });
 
       const files = ["index.html", "about.html", "contact.html", "article.html", "category.html", "search.html", "js/main.js", "js/data.js", "js/articles-index.js", "css/style.css"];
