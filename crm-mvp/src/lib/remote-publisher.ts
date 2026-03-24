@@ -343,6 +343,21 @@ export async function verifyConnection(sitePath: string): Promise<VerifyResult> 
     checks.index_html_exists = await sftpStat(sftp, `${sitePath}/index.html`);
     checks.valid = checks.ssh_connected && checks.site_dir_exists && checks.index_html_exists && checks.main_js_exists;
 
+    if (!checks.valid) {
+      const parts: string[] = [];
+      if (!checks.site_dir_exists) {
+        parts.push(`站点目录不存在或不可读：${sitePath}（请核对「服务器配置」网站根目录与站点记录中的路径是否一致）`);
+      } else {
+        if (!checks.index_html_exists) parts.push("根目录缺少 index.html");
+        if (!checks.main_js_exists) {
+          parts.push(
+            "未识别到支持的站点架构：需在站点根下存在其一，例如 assets/js/main.js（含 const/var posts）、js/data.js（含 const articles）、js/articles-index.js（含 articlesIndex）、data.js（含 blogPosts）等"
+          );
+        }
+      }
+      checks.error = parts.join("；");
+    }
+
     client.end();
     return checks;
   } catch (err) {
