@@ -407,11 +407,41 @@ function parseJsArrayLiteral(content: string, varName: string): Record<string, u
 }
 
 function normalizeEntryForA1(entry: Record<string, unknown>): Record<string, unknown> {
-  const slug = typeof entry.slug === "string" ? entry.slug : "";
-  const id = typeof entry.id === "string" ? entry.id : String(entry.id ?? "");
-  let detailUrl = typeof entry.detailUrl === "string" ? entry.detailUrl : "";
-  if (!detailUrl && slug) detailUrl = `post-${slug}`;
-  return { ...entry, id, slug, detailUrl };
+  const title = typeof entry.title === "string" && entry.title.trim()
+    ? entry.title.trim()
+    : String(entry.id ?? "Untitled");
+  const legacyDetailUrl = typeof entry.detailUrl === "string"
+    ? entry.detailUrl
+    : (typeof entry.url === "string" ? entry.url : "");
+  let slug = typeof entry.slug === "string" ? entry.slug.trim() : "";
+
+  if (!slug && legacyDetailUrl) {
+    const clean = legacyDetailUrl.replace(/^https?:\/\/[^/]+/i, "").replace(/^\/+/, "");
+    const pathOnly = clean.split("?")[0].replace(/\/index\.html$/i, "").replace(/\.html$/i, "").replace(/\/+$/, "");
+    const pathMatch = pathOnly.match(/(?:post|article)-([^/]+)/i);
+    if (pathMatch?.[1]) {
+      slug = decodeURIComponent(pathMatch[1]);
+    } else if (clean.includes("?")) {
+      const params = new URLSearchParams(clean.split("?")[1] || "");
+      const fromParam = params.get("slug") || params.get("title") || params.get("id");
+      if (fromParam) slug = decodeURIComponent(fromParam);
+    }
+  }
+
+  if (!slug) slug = slugify(title) || `article-${Date.now()}`;
+
+  const id = typeof entry.id === "string" && entry.id
+    ? entry.id
+    : slug || String(entry.id ?? Date.now());
+
+  return {
+    ...entry,
+    id,
+    title,
+    slug,
+    legacyDetailUrl: legacyDetailUrl || undefined,
+    detailUrl: `post-${slug}`,
+  };
 }
 
 function buildA1IndexHtml(cacheVersion: string): string {
@@ -471,11 +501,141 @@ function buildA1MainJs(postsJson: string): string {
 `;
 }
 
+function replaceJsArrayLiteral(content: string, varName: string, entries: Record<string, unknown>[]): string | null {
+  const re = new RegExp(`(?:const|var|let)\\s+${varName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*=\\s*\\[`, "m");
+  const m = re.exec(content);
+  if (!m || m.index === undefined) return null;
+  const openBracket = content.indexOf("[", m.index + m[0].length - 1);
+  if (openBracket < 0) return null;
+  let depth = 0;
+  for (let i = openBracket; i < content.length; i++) {
+    const c = content[i];
+    if (c === "[") depth++;
+    else if (c === "]") {
+      depth--;
+      if (depth === 0) {
+        return `${content.slice(0, openBracket)}${JSON.stringify(entries, null, 2)}${content.slice(i + 1)}`;
+      }
+    }
+  }
+  return null;
+}
+
+function resolveLegacyDateLabel(entry: Record<string, unknown>): string {
+  const direct = [entry.dateLabel, entry.date, entry.published_at, entry.publishedAt]
+    .find((v) => typeof v === "string" && v.trim()) as string | undefined;
+  if (direct) return direct;
+  return new Date().toLocaleDateString("en-US", {
+    timeZone: "Asia/Shanghai",
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+  });
+}
+
+function buildSlugRedirectHtml(target: string, title: string): string {
+  const safeTarget = target.startsWith("/") ? target : `/${target}`;
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="refresh" content="0;url=${safeTarget}" />
+  <link rel="canonical" href="${safeTarget}" />
+  <title>${escapeHtml(title)}</title>
+  <script>location.replace(${JSON.stringify(safeTarget)});</script>
+</head>
+<body>
+  <p>Redirecting to <a href="${safeTarget}">${safeTarget}</a>...</p>
+</body>
+</html>`;
+}
+
+async function materializeLegacySlugPages(
+  sftp: SFTPWrapper,
+  client: Client,
+  siteRoot: string,
+  domain: string,
+  entries: Record<string, unknown>[],
+): Promise<void> {
+  for (const raw of entries) {
+    const entry = normalizeEntryForA1(raw);
+    const slug = typeof entry.slug === "string" ? entry.slug : "";
+    if (!slug) continue;
+
+    const slugDir = `${siteRoot}/post-${slug}`;
+    await execCommand(client, `sudo mkdir -p "${slugDir}" && sudo chown ubuntu:www "${slugDir}" && sudo chmod 775 "${slugDir}" 2>/dev/null; true`);
+
+    let wrote = false;
+    const id = typeof entry.id === "string" ? entry.id : "";
+    if (id && await sftpStat(sftp, `${siteRoot}/js/articles/${id}.json`)) {
+      try {
+        const json = await sftpReadFile(sftp, `${siteRoot}/js/articles/${id}.json`);
+        const article = JSON.parse(json) as Record<string, unknown>;
+        const title = typeof article.title === "string" ? article.title : String(entry.title || slug);
+        const content = typeof article.content === "string" ? article.content : "";
+        if (content) {
+          await createArticleHtmlPage(
+            sftp,
+            client,
+            siteRoot,
+            { title, content },
+            `post-${slug}`,
+            domain,
+            resolveLegacyDateLabel(article),
+          );
+          wrote = true;
+        }
+      } catch {
+        /* ignore */
+      }
+    }
+
+    if (!wrote) {
+      const legacyDetailUrl = typeof entry.legacyDetailUrl === "string" ? entry.legacyDetailUrl : "";
+      if (legacyDetailUrl) {
+        const clean = legacyDetailUrl.replace(/^https?:\/\/[^/]+/i, "").replace(/^\/+/, "");
+        if (clean.includes("?")) {
+          await sftpWriteFile(sftp, `${slugDir}/index.html`, buildSlugRedirectHtml(clean, String(entry.title || slug)));
+          wrote = true;
+        } else {
+          const candidates = clean.endsWith(".html")
+            ? [`${siteRoot}/${clean}`, `${siteRoot}/${clean.replace(/\.html$/i, "")}/index.html`]
+            : [`${siteRoot}/${clean}/index.html`, `${siteRoot}/${clean}.html`, `${siteRoot}/${clean}`];
+          for (const candidate of candidates) {
+            try {
+              const html = await sftpReadFile(sftp, candidate);
+              await sftpWriteFile(sftp, `${slugDir}/index.html`, rewriteHtmlRelativeUrls(html));
+              wrote = true;
+              break;
+            } catch {
+              /* try next */
+            }
+          }
+        }
+      }
+    }
+
+    if (!wrote) {
+      const title = String(entry.title || slug);
+      const excerpt = typeof entry.excerpt === "string" ? entry.excerpt : "";
+      await createArticleHtmlPage(
+        sftp,
+        client,
+        siteRoot,
+        { title, content: excerpt ? `<p>${excerpt}</p>` : `<p>${title}</p>` },
+        `post-${slug}`,
+        domain,
+        resolveLegacyDateLabel(entry),
+      );
+    }
+  }
+}
+
 /**
- * 将远程站点目录重写为 A1 架构，并尽量合并当前已识别的索引数据。
- * 成功后应与 verifyConnection（posts_assets_js）一致，便于 publishArticleToSite 统一管理。
+ * 将远程站点补齐为 A1 架构（assets/js/main.js + const posts），同时尽量保留原站主题、CSS 与旧文章。
+ * 规则：保留现有首页/静态资源；写入 A1 数据层；将旧文章补齐为 slug 目录页 post-{slug}/index.html。
  */
-export async function applyA1SiteStandard(sitePath: string): Promise<{ ok: boolean; merged_count?: number; error?: string }> {
+export async function applyA1SiteStandard(sitePath: string, domain = ""): Promise<{ ok: boolean; merged_count?: number; error?: string }> {
   let client: Client | null = null;
   try {
     client = await connectSSH();
@@ -488,25 +648,36 @@ export async function applyA1SiteStandard(sitePath: string): Promise<{ ok: boole
 
     if (detected.data_js_path && detected.article_var_name) {
       try {
-        const raw = await sftpReadFile(sftp, `${sitePath}/${detected.data_js_path}`);
+        const sourcePath = `${sitePath}/${detected.data_js_path}`;
+        const raw = await sftpReadFile(sftp, sourcePath);
         const parsed = parseJsArrayLiteral(raw, detected.article_var_name);
-        if (parsed?.length) initial = parsed.map(normalizeEntryForA1);
+        if (parsed?.length) {
+          initial = parsed.map(normalizeEntryForA1);
+          const rewritten = replaceJsArrayLiteral(raw, detected.article_var_name, initial);
+          if (rewritten && sourcePath !== `${sitePath}/assets/js/main.js`) {
+            await sftpWriteFile(sftp, sourcePath, rewritten);
+          }
+        }
       } catch {
         /* 无法解析则空列表 */
       }
     }
 
-    const cacheVersion = String(Math.floor(Date.now() / 1000));
-    const postsJson = JSON.stringify(initial, null, 2);
-    const indexHtml = buildA1IndexHtml(cacheVersion);
-    const mainJs = buildA1MainJs(postsJson);
+    await materializeLegacySlugPages(sftp, client, sitePath, domain, initial);
 
-    await sftpWriteFile(sftp, `${sitePath}/index.html`, indexHtml);
+    const postsJson = JSON.stringify(initial, null, 2);
+    const mainJs = buildA1MainJs(postsJson);
     await sftpWriteFile(sftp, `${sitePath}/assets/js/main.js`, mainJs);
+
+    const hasIndexHtml = await sftpStat(sftp, `${sitePath}/index.html`);
+    if (!hasIndexHtml) {
+      const cacheVersion = String(Math.floor(Date.now() / 1000));
+      await sftpWriteFile(sftp, `${sitePath}/index.html`, buildA1IndexHtml(cacheVersion));
+    }
 
     await execCommand(
       client,
-      `sudo chown ubuntu:www "${sitePath}/index.html" "${sitePath}/assets/js/main.js" 2>/dev/null; sudo chmod 664 "${sitePath}/index.html" "${sitePath}/assets/js/main.js" 2>/dev/null; true`,
+      `sudo chown ubuntu:www "${sitePath}/assets/js/main.js" 2>/dev/null; sudo chmod 664 "${sitePath}/assets/js/main.js" 2>/dev/null; test -f "${sitePath}/index.html" && sudo chown ubuntu:www "${sitePath}/index.html" && sudo chmod 664 "${sitePath}/index.html" 2>/dev/null; true`,
     );
 
     client.end();

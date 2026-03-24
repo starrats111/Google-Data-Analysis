@@ -632,7 +632,7 @@ export default function AdminSitesPage() {
       render: (_: unknown, record: Site) => (
         <Space size="small">
           <Tooltip title="验证"><Button type="link" size="small" icon={<SafetyCertificateOutlined />} onClick={() => handleVerifySite(record)} /></Tooltip>
-          <Tooltip title="标准化 A1（覆盖首页与数据 JS，便于 CRM 发布）">
+          <Tooltip title="标准化 A1（保留主题与 CSS，统一数据层和 slug 页面）">
             <Button type="link" size="small" icon={<DatabaseOutlined />} onClick={() => handleStandardizeA1(record)} />
           </Tooltip>
           <Tooltip title="编辑"><Button type="link" size="small" icon={<EditOutlined />} onClick={() => handleEditSite(record)} /></Tooltip>
@@ -756,7 +756,7 @@ export default function AdminSitesPage() {
           <Form.Item
             name="standardize_a1"
             valuePropName="checked"
-            extra="会覆盖远程 index.html 与 assets/js/main.js，并尽量从当前站点解析文章列表写入 const posts，便于在 CRM 统一发布与管理。"
+            extra="默认保留原站主题、CSS 和静态资源；统一生成 A1 数据层 assets/js/main.js，并把旧文章补齐为 slug 目录页 post-{slug}/index.html，便于 CRM 统一发布与管理。若首页缺失时才回退生成简易首页。"
           >
             <Checkbox>迁移后自动标准化为 A1 架构（推荐）</Checkbox>
           </Form.Item>

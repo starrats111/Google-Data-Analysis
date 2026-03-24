@@ -183,13 +183,13 @@ async function runMigrationAsync(taskId: bigint) {
     if (task.standardize_a1) {
       await update({ progress: 52, step_detail: "正在合并旧索引并标准化为 A1 架构..." });
       const { applyA1SiteStandard } = await import("@/lib/remote-publisher");
-      const a1 = await applyA1SiteStandard(sitePath);
+      const a1 = await applyA1SiteStandard(sitePath, task.domain);
       if (!a1.ok) {
         throw new Error(a1.error || "A1 标准化失败");
       }
       await update({
         progress: 54,
-        step_detail: `A1 标准化完成（已合并约 ${a1.merged_count ?? 0} 条列表索引，原有架构数据已尽量保留）`,
+        step_detail: `A1 标准化完成（已合并约 ${a1.merged_count ?? 0} 条旧文章索引，主题/CSS/静态资源已尽量保留）`,
       });
     }
 

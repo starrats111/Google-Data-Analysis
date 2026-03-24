@@ -15,7 +15,7 @@ export const POST = withAdmin(async (req: NextRequest) => {
   });
   if (!site?.site_path) return apiError("站点不存在或未配置路径");
 
-  const a1 = await applyA1SiteStandard(site.site_path);
+  const a1 = await applyA1SiteStandard(site.site_path, site.domain);
   if (!a1.ok) return apiError(a1.error || "A1 标准化失败");
 
   const checks = await verifyConnection(site.site_path);
