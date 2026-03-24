@@ -1,13 +1,11 @@
 import { NextRequest } from "next/server";
-import { getUserFromRequest, serializeData } from "@/lib/auth";
+import { serializeData } from "@/lib/auth";
 import { apiSuccess, apiError } from "@/lib/constants";
+import { withAdmin } from "@/lib/api-handler";
 import { verifyPublishSiteById } from "@/lib/publish-site-verify";
 
-// POST /api/user/publish-sites/verify — 用户端验证站点目录（SSH 连接 + 架构检测）
-export async function POST(req: NextRequest) {
-  const user = getUserFromRequest(req);
-  if (!user) return apiError("未授权", 401);
-
+// POST /api/admin/sites/verify — 管理后台验证站点（走 admin_token，避免 /api/user 中间件拦截）
+export const POST = withAdmin(async (req: NextRequest) => {
   const { id } = await req.json();
   if (!id) return apiError("缺少站点 ID");
 
@@ -19,4 +17,4 @@ export async function POST(req: NextRequest) {
     site_name: result.site.site_name,
     checks: result.checks,
   });
-}
+});

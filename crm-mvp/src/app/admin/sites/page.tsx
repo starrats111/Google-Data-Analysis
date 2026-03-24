@@ -544,7 +544,7 @@ export default function AdminSitesPage() {
 
   const handleVerifySite = async (site: Site) => {
     message.loading({ content: "验证中...", key: "verify" });
-    const res = await fetch("/api/user/publish-sites/verify", {
+    const res = await fetch("/api/admin/sites/verify", {
       method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: site.id }),
     }).then((r) => r.json());
     if (res.code === 0 && res.data?.checks?.valid) {
