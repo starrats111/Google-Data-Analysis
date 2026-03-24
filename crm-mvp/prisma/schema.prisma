@@ -355,6 +355,7 @@ model site_migrations {
   domain        String   @db.VarChar(200)
   source_type   String   @db.VarChar(16)              // github / cloudflare
   source_ref    String?  @db.VarChar(512)             // GitHub repo URL 或 CF pages.dev URL
+  standardize_a1 Boolean @default(true)               // 迁移完成后是否标准化为 A1（assets/js/main.js + posts）
   status        String   @default("pending") @db.VarChar(16) // pending / cloning / dns / ssl / verifying / done / failed
   progress      Int      @default(0) @db.UnsignedTinyInt     // 0-100
   step_detail   String?  @db.Text                     // 当前步骤详情

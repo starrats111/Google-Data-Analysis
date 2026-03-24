@@ -377,6 +377,146 @@ export async function verifyConnection(sitePath: string): Promise<VerifyResult> 
   }
 }
 
+// ─── A1 标准化：统一为 assets/js/main.js + const posts（与 CRM 发布逻辑一致）───
+
+/** 从 JS 文件中解析 const/var name = [ ... ]; 的 JSON 兼容数组（条目须为合法 JSON 对象） */
+function parseJsArrayLiteral(content: string, varName: string): Record<string, unknown>[] | null {
+  const re = new RegExp(`(?:const|var|let)\\s+${varName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*=\\s*\\[`, "m");
+  const m = re.exec(content);
+  if (!m || m.index === undefined) return null;
+  const openBracket = content.indexOf("[", m.index + m[0].length - 1);
+  if (openBracket < 0) return null;
+  let depth = 0;
+  for (let i = openBracket; i < content.length; i++) {
+    const c = content[i];
+    if (c === "[") depth++;
+    else if (c === "]") {
+      depth--;
+      if (depth === 0) {
+        const slice = content.slice(openBracket, i + 1);
+        try {
+          const arr = JSON.parse(slice) as unknown;
+          return Array.isArray(arr) ? (arr.filter((x) => x && typeof x === "object") as Record<string, unknown>[]) : null;
+        } catch {
+          return null;
+        }
+      }
+    }
+  }
+  return null;
+}
+
+function normalizeEntryForA1(entry: Record<string, unknown>): Record<string, unknown> {
+  const slug = typeof entry.slug === "string" ? entry.slug : "";
+  const id = typeof entry.id === "string" ? entry.id : String(entry.id ?? "");
+  let detailUrl = typeof entry.detailUrl === "string" ? entry.detailUrl : "";
+  if (!detailUrl && slug) detailUrl = `post-${slug}`;
+  return { ...entry, id, slug, detailUrl };
+}
+
+function buildA1IndexHtml(cacheVersion: string): string {
+  return `<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>首页</title>
+  <style>
+    body{font-family:system-ui,-apple-system,sans-serif;max-width:900px;margin:0 auto;padding:24px;line-height:1.6;color:#222}
+    h1{font-size:1.5rem;font-weight:600}
+    .list{list-style:none;padding:0;margin:24px 0}
+    .list li{border-bottom:1px solid #eee;padding:16px 0}
+    .list a{color:#1677ff;text-decoration:none;font-weight:600;font-size:1.05rem}
+    .list .meta{color:#888;font-size:.85rem;margin-top:6px}
+  </style>
+</head>
+<body>
+  <header><h1>文章列表</h1></header>
+  <main><ul id="article-list" class="list"></ul></main>
+  <footer style="margin-top:48px;color:#888;font-size:.85rem">CRM 统一管理站点</footer>
+  <script src="assets/js/main.js?v=${cacheVersion}"></script>
+</body>
+</html>
+`;
+}
+
+function buildA1MainJs(postsJson: string): string {
+  return `const posts = ${postsJson};
+
+(function () {
+  var ul = document.getElementById("article-list");
+  if (!ul) return;
+  if (!posts.length) {
+    ul.innerHTML = '<li style="color:#888">暂无文章，可在 CRM 中发布到本站</li>';
+    return;
+  }
+  posts.forEach(function (p) {
+    var li = document.createElement("li");
+    var a = document.createElement("a");
+    var path = (p.detailUrl || ("post-" + (p.slug || ""))).replace(/^\\/+/, "");
+    if (path.indexOf("?") >= 0) {
+      a.href = "/" + path;
+    } else {
+      a.href = "/" + path.replace(/\\/$/, "") + "/";
+    }
+    a.textContent = p.title || p.slug || "Untitled";
+    li.appendChild(a);
+    var meta = document.createElement("div");
+    meta.className = "meta";
+    meta.textContent = (p.dateLabel || p.date || "") + (p.readTime ? " · " + p.readTime : "");
+    li.appendChild(meta);
+    ul.appendChild(li);
+  });
+})();
+`;
+}
+
+/**
+ * 将远程站点目录重写为 A1 架构，并尽量合并当前已识别的索引数据。
+ * 成功后应与 verifyConnection（posts_assets_js）一致，便于 publishArticleToSite 统一管理。
+ */
+export async function applyA1SiteStandard(sitePath: string): Promise<{ ok: boolean; merged_count?: number; error?: string }> {
+  let client: Client | null = null;
+  try {
+    client = await connectSSH();
+    const sftp = await getSFTP(client);
+
+    await execCommand(client, `sudo mkdir -p "${sitePath}/assets/js" "${sitePath}/js/articles" "${sitePath}/images/articles" && sudo chown -R ubuntu:www "${sitePath}/assets" "${sitePath}/js" "${sitePath}/images" 2>/dev/null; sudo chmod -R 775 "${sitePath}/assets" "${sitePath}/js" "${sitePath}/images" 2>/dev/null; true`);
+
+    const detected = await _detectSiteType(sftp, sitePath);
+    let initial: Record<string, unknown>[] = [];
+
+    if (detected.data_js_path && detected.article_var_name) {
+      try {
+        const raw = await sftpReadFile(sftp, `${sitePath}/${detected.data_js_path}`);
+        const parsed = parseJsArrayLiteral(raw, detected.article_var_name);
+        if (parsed?.length) initial = parsed.map(normalizeEntryForA1);
+      } catch {
+        /* 无法解析则空列表 */
+      }
+    }
+
+    const cacheVersion = String(Math.floor(Date.now() / 1000));
+    const postsJson = JSON.stringify(initial, null, 2);
+    const indexHtml = buildA1IndexHtml(cacheVersion);
+    const mainJs = buildA1MainJs(postsJson);
+
+    await sftpWriteFile(sftp, `${sitePath}/index.html`, indexHtml);
+    await sftpWriteFile(sftp, `${sitePath}/assets/js/main.js`, mainJs);
+
+    await execCommand(
+      client,
+      `sudo chown ubuntu:www "${sitePath}/index.html" "${sitePath}/assets/js/main.js" 2>/dev/null; sudo chmod 664 "${sitePath}/index.html" "${sitePath}/assets/js/main.js" 2>/dev/null; true`,
+    );
+
+    client.end();
+    return { ok: true, merged_count: initial.length };
+  } catch (err) {
+    client?.end();
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
 // ─── 发布文章到站点（通过 SSH 推送文件）───
 
 function slugify(title: string): string {

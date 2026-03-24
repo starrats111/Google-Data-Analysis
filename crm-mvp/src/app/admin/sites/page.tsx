@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import {
   Card, Table, Button, Space, Modal, Form, Input, Select, Typography, App,
-  Popconfirm, Tag, Tooltip, Progress, Badge, Upload, Tabs, Spin, Divider, Flex,
+  Popconfirm, Tag, Tooltip, Progress, Badge, Upload, Tabs, Spin, Divider, Flex, Checkbox,
 } from "antd";
 import {
   GlobalOutlined, PlusOutlined, EditOutlined, DeleteOutlined,
@@ -563,12 +563,28 @@ export default function AdminSitesPage() {
     fetchSites();
   };
 
+  const handleStandardizeA1 = async (site: Site) => {
+    message.loading({ content: "正在标准化为 A1…", key: "a1" });
+    const res = await fetch("/api/admin/sites/standardize-a1", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: site.id }),
+    }).then((r) => r.json());
+    if (res.code === 0) {
+      message.success({ content: res.message || "已标准化为 A1", key: "a1" });
+      fetchSites();
+    } else {
+      message.error({ content: res.message || "标准化失败", key: "a1" });
+    }
+  };
+
   const handleMigrate = () => {
     if (!hasTokens) {
       message.warning("请先在服务器配置中添加至少一个 GitHub Token 或 CF Token");
       return;
     }
     migrateForm.resetFields();
+    migrateForm.setFieldsValue({ standardize_a1: true });
     setMigrateModalOpen(true);
   };
 
@@ -612,10 +628,13 @@ export default function AdminSitesPage() {
       render: (v: string) => new Date(v).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai" }),
     },
     {
-      title: "操作", width: 160,
+      title: "操作", width: 220,
       render: (_: unknown, record: Site) => (
         <Space size="small">
           <Tooltip title="验证"><Button type="link" size="small" icon={<SafetyCertificateOutlined />} onClick={() => handleVerifySite(record)} /></Tooltip>
+          <Tooltip title="标准化 A1（覆盖首页与数据 JS，便于 CRM 发布）">
+            <Button type="link" size="small" icon={<DatabaseOutlined />} onClick={() => handleStandardizeA1(record)} />
+          </Tooltip>
           <Tooltip title="编辑"><Button type="link" size="small" icon={<EditOutlined />} onClick={() => handleEditSite(record)} /></Tooltip>
           <Popconfirm title="确认删除？" onConfirm={() => handleDeleteSite(record.id)}>
             <Button type="link" size="small" danger icon={<DeleteOutlined />} />
@@ -718,7 +737,7 @@ export default function AdminSitesPage() {
 
       {/* 迁移站点弹窗 — 无需手动选 Token，系统自动匹配 */}
       <Modal title="迁移站点到宝塔" open={migrateModalOpen} onOk={handleMigrateSubmit} onCancel={() => setMigrateModalOpen(false)} okText="开始迁移" destroyOnHidden width={520}>
-        <Form form={migrateForm} layout="vertical" style={{ marginTop: 16 }}>
+        <Form form={migrateForm} layout="vertical" style={{ marginTop: 16 }} initialValues={{ standardize_a1: true }}>
           <Form.Item name="domain" label="域名" rules={[{ required: true, message: "请输入域名" }]}>
             <Input placeholder="如：kaizenflowshop.top" />
           </Form.Item>
@@ -734,9 +753,16 @@ export default function AdminSitesPage() {
           <Form.Item name="source_ref" label="来源地址" extra="GitHub: 仓库名（如 kaizenflowshop）或 org/repo 格式；Cloudflare: pages.dev 地址（可选）">
             <Input placeholder="如：kaizenflowshop 或 starrats111/kaizenflowshop" />
           </Form.Item>
+          <Form.Item
+            name="standardize_a1"
+            valuePropName="checked"
+            extra="会覆盖远程 index.html 与 assets/js/main.js，并尽量从当前站点解析文章列表写入 const posts，便于在 CRM 统一发布与管理。"
+          >
+            <Checkbox>迁移后自动标准化为 A1 架构（推荐）</Checkbox>
+          </Form.Item>
         </Form>
         <Text type="secondary" style={{ fontSize: 12 }}>
-          系统会根据仓库 org 自动匹配 GitHub Token，根据域名 DNS 所在 CF 账户自动匹配 Cloudflare Token。整个过程约 2-5 分钟。
+          系统会根据仓库 org 自动匹配 GitHub Token，根据域名 DNS 所在 CF 账户自动匹配 Cloudflare Token。勾选 A1 后，下载完成即写入统一模板再配 DNS/SSL。整个过程约 2–5 分钟。
         </Text>
       </Modal>
 

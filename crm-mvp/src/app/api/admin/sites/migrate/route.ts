@@ -21,7 +21,7 @@ export async function GET() {
 }
 
 export const POST = withAdmin(async (req: NextRequest) => {
-  const { domain, source_type, source_ref, site_name } = await req.json();
+  const { domain, source_type, source_ref, site_name, standardize_a1 } = await req.json();
   if (!domain || !source_type) return apiError("域名和来源类型不能为空");
   if (!["github", "cloudflare"].includes(source_type)) return apiError("来源类型无效");
 
@@ -61,6 +61,7 @@ export const POST = withAdmin(async (req: NextRequest) => {
       domain: domainClean,
       source_type,
       source_ref: source_ref || null,
+      standardize_a1: standardize_a1 === false ? false : true,
       status: "pending",
       progress: 0,
       created_by: adminUser?.id || BigInt(1),
@@ -176,6 +177,20 @@ async function runMigrationAsync(taskId: bigint) {
         await exec(`sudo mkdir -p ${sitePath}/$(dirname ${f}) 2>/dev/null; sudo wget -q --timeout=15 -O "${sitePath}/${f}" "${pagesUrl}/${f}" 2>/dev/null`);
       }
       await update({ progress: 50, step_detail: `下载完成` });
+    }
+
+    // Step 1b: 标准化为 A1（首页 + assets/js/main.js + posts，便于 CRM 统一发布）
+    if (task.standardize_a1) {
+      await update({ progress: 52, step_detail: "正在合并旧索引并标准化为 A1 架构..." });
+      const { applyA1SiteStandard } = await import("@/lib/remote-publisher");
+      const a1 = await applyA1SiteStandard(sitePath);
+      if (!a1.ok) {
+        throw new Error(a1.error || "A1 标准化失败");
+      }
+      await update({
+        progress: 54,
+        step_detail: `A1 标准化完成（已合并约 ${a1.merged_count ?? 0} 条列表索引，原有架构数据已尽量保留）`,
+      });
     }
 
     // Step 2: DNS — 自动匹配 CF Token

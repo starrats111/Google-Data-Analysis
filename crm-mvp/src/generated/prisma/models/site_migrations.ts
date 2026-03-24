@@ -48,6 +48,7 @@ export type Site_migrationsMinAggregateOutputType = {
   domain: string | null
   source_type: string | null
   source_ref: string | null
+  standardize_a1: boolean | null
   status: string | null
   progress: number | null
   step_detail: string | null
@@ -66,6 +67,7 @@ export type Site_migrationsMaxAggregateOutputType = {
   domain: string | null
   source_type: string | null
   source_ref: string | null
+  standardize_a1: boolean | null
   status: string | null
   progress: number | null
   step_detail: string | null
@@ -84,6 +86,7 @@ export type Site_migrationsCountAggregateOutputType = {
   domain: number
   source_type: number
   source_ref: number
+  standardize_a1: number
   status: number
   progress: number
   step_detail: number
@@ -120,6 +123,7 @@ export type Site_migrationsMinAggregateInputType = {
   domain?: true
   source_type?: true
   source_ref?: true
+  standardize_a1?: true
   status?: true
   progress?: true
   step_detail?: true
@@ -138,6 +142,7 @@ export type Site_migrationsMaxAggregateInputType = {
   domain?: true
   source_type?: true
   source_ref?: true
+  standardize_a1?: true
   status?: true
   progress?: true
   step_detail?: true
@@ -156,6 +161,7 @@ export type Site_migrationsCountAggregateInputType = {
   domain?: true
   source_type?: true
   source_ref?: true
+  standardize_a1?: true
   status?: true
   progress?: true
   step_detail?: true
@@ -261,6 +267,7 @@ export type Site_migrationsGroupByOutputType = {
   domain: string
   source_type: string
   source_ref: string | null
+  standardize_a1: boolean
   status: string
   progress: number
   step_detail: string | null
@@ -302,6 +309,7 @@ export type site_migrationsWhereInput = {
   domain?: Prisma.StringFilter<"site_migrations"> | string
   source_type?: Prisma.StringFilter<"site_migrations"> | string
   source_ref?: Prisma.StringNullableFilter<"site_migrations"> | string | null
+  standardize_a1?: Prisma.BoolFilter<"site_migrations"> | boolean
   status?: Prisma.StringFilter<"site_migrations"> | string
   progress?: Prisma.IntFilter<"site_migrations"> | number
   step_detail?: Prisma.StringNullableFilter<"site_migrations"> | string | null
@@ -320,6 +328,7 @@ export type site_migrationsOrderByWithRelationInput = {
   domain?: Prisma.SortOrder
   source_type?: Prisma.SortOrder
   source_ref?: Prisma.SortOrderInput | Prisma.SortOrder
+  standardize_a1?: Prisma.SortOrder
   status?: Prisma.SortOrder
   progress?: Prisma.SortOrder
   step_detail?: Prisma.SortOrderInput | Prisma.SortOrder
@@ -342,6 +351,7 @@ export type site_migrationsWhereUniqueInput = Prisma.AtLeast<{
   domain?: Prisma.StringFilter<"site_migrations"> | string
   source_type?: Prisma.StringFilter<"site_migrations"> | string
   source_ref?: Prisma.StringNullableFilter<"site_migrations"> | string | null
+  standardize_a1?: Prisma.BoolFilter<"site_migrations"> | boolean
   status?: Prisma.StringFilter<"site_migrations"> | string
   progress?: Prisma.IntFilter<"site_migrations"> | number
   step_detail?: Prisma.StringNullableFilter<"site_migrations"> | string | null
@@ -360,6 +370,7 @@ export type site_migrationsOrderByWithAggregationInput = {
   domain?: Prisma.SortOrder
   source_type?: Prisma.SortOrder
   source_ref?: Prisma.SortOrderInput | Prisma.SortOrder
+  standardize_a1?: Prisma.SortOrder
   status?: Prisma.SortOrder
   progress?: Prisma.SortOrder
   step_detail?: Prisma.SortOrderInput | Prisma.SortOrder
@@ -386,6 +397,7 @@ export type site_migrationsScalarWhereWithAggregatesInput = {
   domain?: Prisma.StringWithAggregatesFilter<"site_migrations"> | string
   source_type?: Prisma.StringWithAggregatesFilter<"site_migrations"> | string
   source_ref?: Prisma.StringNullableWithAggregatesFilter<"site_migrations"> | string | null
+  standardize_a1?: Prisma.BoolWithAggregatesFilter<"site_migrations"> | boolean
   status?: Prisma.StringWithAggregatesFilter<"site_migrations"> | string
   progress?: Prisma.IntWithAggregatesFilter<"site_migrations"> | number
   step_detail?: Prisma.StringNullableWithAggregatesFilter<"site_migrations"> | string | null
@@ -404,6 +416,7 @@ export type site_migrationsCreateInput = {
   domain: string
   source_type: string
   source_ref?: string | null
+  standardize_a1?: boolean
   status?: string
   progress?: number
   step_detail?: string | null
@@ -422,6 +435,7 @@ export type site_migrationsUncheckedCreateInput = {
   domain: string
   source_type: string
   source_ref?: string | null
+  standardize_a1?: boolean
   status?: string
   progress?: number
   step_detail?: string | null
@@ -440,6 +454,7 @@ export type site_migrationsUpdateInput = {
   domain?: Prisma.StringFieldUpdateOperationsInput | string
   source_type?: Prisma.StringFieldUpdateOperationsInput | string
   source_ref?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  standardize_a1?: Prisma.BoolFieldUpdateOperationsInput | boolean
   status?: Prisma.StringFieldUpdateOperationsInput | string
   progress?: Prisma.IntFieldUpdateOperationsInput | number
   step_detail?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
@@ -458,6 +473,7 @@ export type site_migrationsUncheckedUpdateInput = {
   domain?: Prisma.StringFieldUpdateOperationsInput | string
   source_type?: Prisma.StringFieldUpdateOperationsInput | string
   source_ref?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  standardize_a1?: Prisma.BoolFieldUpdateOperationsInput | boolean
   status?: Prisma.StringFieldUpdateOperationsInput | string
   progress?: Prisma.IntFieldUpdateOperationsInput | number
   step_detail?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
@@ -476,6 +492,7 @@ export type site_migrationsCreateManyInput = {
   domain: string
   source_type: string
   source_ref?: string | null
+  standardize_a1?: boolean
   status?: string
   progress?: number
   step_detail?: string | null
@@ -494,6 +511,7 @@ export type site_migrationsUpdateManyMutationInput = {
   domain?: Prisma.StringFieldUpdateOperationsInput | string
   source_type?: Prisma.StringFieldUpdateOperationsInput | string
   source_ref?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  standardize_a1?: Prisma.BoolFieldUpdateOperationsInput | boolean
   status?: Prisma.StringFieldUpdateOperationsInput | string
   progress?: Prisma.IntFieldUpdateOperationsInput | number
   step_detail?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
@@ -512,6 +530,7 @@ export type site_migrationsUncheckedUpdateManyInput = {
   domain?: Prisma.StringFieldUpdateOperationsInput | string
   source_type?: Prisma.StringFieldUpdateOperationsInput | string
   source_ref?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  standardize_a1?: Prisma.BoolFieldUpdateOperationsInput | boolean
   status?: Prisma.StringFieldUpdateOperationsInput | string
   progress?: Prisma.IntFieldUpdateOperationsInput | number
   step_detail?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
@@ -536,6 +555,7 @@ export type site_migrationsCountOrderByAggregateInput = {
   domain?: Prisma.SortOrder
   source_type?: Prisma.SortOrder
   source_ref?: Prisma.SortOrder
+  standardize_a1?: Prisma.SortOrder
   status?: Prisma.SortOrder
   progress?: Prisma.SortOrder
   step_detail?: Prisma.SortOrder
@@ -562,6 +582,7 @@ export type site_migrationsMaxOrderByAggregateInput = {
   domain?: Prisma.SortOrder
   source_type?: Prisma.SortOrder
   source_ref?: Prisma.SortOrder
+  standardize_a1?: Prisma.SortOrder
   status?: Prisma.SortOrder
   progress?: Prisma.SortOrder
   step_detail?: Prisma.SortOrder
@@ -580,6 +601,7 @@ export type site_migrationsMinOrderByAggregateInput = {
   domain?: Prisma.SortOrder
   source_type?: Prisma.SortOrder
   source_ref?: Prisma.SortOrder
+  standardize_a1?: Prisma.SortOrder
   status?: Prisma.SortOrder
   progress?: Prisma.SortOrder
   step_detail?: Prisma.SortOrder
@@ -600,6 +622,10 @@ export type site_migrationsSumOrderByAggregateInput = {
   is_deleted?: Prisma.SortOrder
 }
 
+export type BoolFieldUpdateOperationsInput = {
+  set?: boolean
+}
+
 
 
 export type site_migrationsSelect<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetSelect<{
@@ -608,6 +634,7 @@ export type site_migrationsSelect<ExtArgs extends runtime.Types.Extensions.Inter
   domain?: boolean
   source_type?: boolean
   source_ref?: boolean
+  standardize_a1?: boolean
   status?: boolean
   progress?: boolean
   step_detail?: boolean
@@ -628,6 +655,7 @@ export type site_migrationsSelectScalar = {
   domain?: boolean
   source_type?: boolean
   source_ref?: boolean
+  standardize_a1?: boolean
   status?: boolean
   progress?: boolean
   step_detail?: boolean
@@ -640,7 +668,7 @@ export type site_migrationsSelectScalar = {
   updated_at?: boolean
 }
 
-export type site_migrationsOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"id" | "site_id" | "domain" | "source_type" | "source_ref" | "status" | "progress" | "step_detail" | "error_message" | "started_at" | "finished_at" | "created_by" | "is_deleted" | "created_at" | "updated_at", ExtArgs["result"]["site_migrations"]>
+export type site_migrationsOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"id" | "site_id" | "domain" | "source_type" | "source_ref" | "standardize_a1" | "status" | "progress" | "step_detail" | "error_message" | "started_at" | "finished_at" | "created_by" | "is_deleted" | "created_at" | "updated_at", ExtArgs["result"]["site_migrations"]>
 
 export type $site_migrationsPayload<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = {
   name: "site_migrations"
@@ -651,6 +679,7 @@ export type $site_migrationsPayload<ExtArgs extends runtime.Types.Extensions.Int
     domain: string
     source_type: string
     source_ref: string | null
+    standardize_a1: boolean
     status: string
     progress: number
     step_detail: string | null
@@ -1035,6 +1064,7 @@ export interface site_migrationsFieldRefs {
   readonly domain: Prisma.FieldRef<"site_migrations", 'String'>
   readonly source_type: Prisma.FieldRef<"site_migrations", 'String'>
   readonly source_ref: Prisma.FieldRef<"site_migrations", 'String'>
+  readonly standardize_a1: Prisma.FieldRef<"site_migrations", 'Boolean'>
   readonly status: Prisma.FieldRef<"site_migrations", 'String'>
   readonly progress: Prisma.FieldRef<"site_migrations", 'Int'>
   readonly step_detail: Prisma.FieldRef<"site_migrations", 'String'>

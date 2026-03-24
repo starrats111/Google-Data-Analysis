@@ -413,6 +413,7 @@ export const Site_migrationsScalarFieldEnum = {
   domain: 'domain',
   source_type: 'source_type',
   source_ref: 'source_ref',
+  standardize_a1: 'standardize_a1',
   status: 'status',
   progress: 'progress',
   step_detail: 'step_detail',

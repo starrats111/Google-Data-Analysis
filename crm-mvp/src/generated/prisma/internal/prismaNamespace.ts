@@ -2766,6 +2766,7 @@ export const Site_migrationsScalarFieldEnum = {
   domain: 'domain',
   source_type: 'source_type',
   source_ref: 'source_ref',
+  standardize_a1: 'standardize_a1',
   status: 'status',
   progress: 'progress',
   step_detail: 'step_detail',
@@ -3429,6 +3430,13 @@ export type JsonFieldRefInput<$PrismaModel> = FieldRefInputType<$PrismaModel, 'J
  * Reference to a field of type 'QueryMode'
  */
 export type EnumQueryModeFieldRefInput<$PrismaModel> = FieldRefInputType<$PrismaModel, 'QueryMode'>
+    
+
+
+/**
+ * Reference to a field of type 'Boolean'
+ */
+export type BooleanFieldRefInput<$PrismaModel> = FieldRefInputType<$PrismaModel, 'Boolean'>
     
 
 
