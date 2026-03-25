@@ -113,11 +113,11 @@ export default function AdPreviewPage() {
   const [cidLoading, setCidLoading] = useState(false);
   const [cidSyncing, setCidSyncing] = useState(false);
 
-  // 可选扩展模块
-  const [enableSitelinks, setEnableSitelinks] = useState(false);
+  // 扩展模块
+  const [enableSitelinks, setEnableSitelinks] = useState(true);
   const [sitelinks, setSitelinks] = useState<SitelinkItem[]>([]);
   const [sitelinksLoading, setSitelinksLoading] = useState(false);
-  const [enableImages, setEnableImages] = useState(false);
+  const [enableImages, setEnableImages] = useState(true);
   const [imageUrls, setImageUrls] = useState<string[]>([]);
   const [crawledImages, setCrawledImages] = useState<string[]>([]);
   const [newImageUrl, setNewImageUrl] = useState("");
@@ -129,6 +129,7 @@ export default function AdPreviewPage() {
 
   // 促销扩展
   const [enablePromotion, setEnablePromotion] = useState(false);
+  const [promotionLoading, setPromotionLoading] = useState(false);
   const [promotion, setPromotion] = useState<{
     occasion?: string; language_code?: string; promotion_target: string;
     discount_type: "MONETARY" | "PERCENT"; discount_amount?: number; discount_percent?: number;
@@ -140,6 +141,7 @@ export default function AdPreviewPage() {
 
   // 价格扩展
   const [enablePrice, setEnablePrice] = useState(false);
+  const [priceLoading, setPriceLoading] = useState(false);
   const [priceType, setPriceType] = useState("BRANDS");
   const [priceItems, setPriceItems] = useState<{
     header: string; description: string; price_amount: number; currency_code: string; unit?: string; final_url: string;
@@ -147,11 +149,13 @@ export default function AdPreviewPage() {
 
   // 致电扩展
   const [enableCall, setEnableCall] = useState(false);
+  const [callLoading, setCallLoading] = useState(false);
   const [callCountryCode, setCallCountryCode] = useState("US");
   const [callPhoneNumber, setCallPhoneNumber] = useState("");
 
   // 结构化摘要
   const [enableSnippet, setEnableSnippet] = useState(false);
+  const [snippetLoading, setSnippetLoading] = useState(false);
   const [snippetHeader, setSnippetHeader] = useState("Brands");
   const [snippetValues, setSnippetValues] = useState<string[]>(["", "", ""]);
 
@@ -240,6 +244,17 @@ export default function AdPreviewPage() {
       setImageUrls(existingImages);
     }
     setInitialized(true);
+
+    // ─── 自动生成：图片和站内链接默认自动触发（不需要用户勾选） ───
+    if (!existingSitelinks?.length) {
+      setEnableSitelinks(true);
+      // 延迟触发，等 state 更新完
+      setTimeout(() => generateExtension("sitelinks"), 100);
+    }
+    if (!existingImages?.length) {
+      setEnableImages(true);
+      setTimeout(() => generateExtension("images"), 200);
+    }
   }, [preview, isReady, initialized]);
 
   // ─── 生成中文翻译（仅参考，不影响广告内容） ───
@@ -247,9 +262,9 @@ export default function AdPreviewPage() {
     const validH = headlines.filter((h) => h.trim().length > 0);
     const validD = descriptions.filter((d) => d.trim().length > 0);
     const validC = enableCallouts ? callouts.filter((c) => c.trim().length > 0) : [];
-    const validS = enableSitelinks ? sitelinks.filter((s) => s.title.trim().length > 0).map((s) => ({
+    const validS = sitelinks.filter((s) => s.title.trim().length > 0).map((s) => ({
       title: s.title, desc1: s.desc1, desc2: s.desc2,
-    })) : [];
+    }));
     if (validH.length === 0 && validD.length === 0 && validC.length === 0 && validS.length === 0) {
       message.warning("没有需要翻译的内容");
       return;
@@ -514,10 +529,14 @@ export default function AdPreviewPage() {
   }, [selectedMccId, selectedCid, message]);
 
   // ─── 爬虫生成扩展 ───
-  const generateExtension = useCallback(async (type: "sitelinks" | "images" | "callouts" | "promotion" | "price") => {
+  const generateExtension = useCallback(async (type: "sitelinks" | "images" | "callouts" | "promotion" | "price" | "call" | "snippet") => {
     if (type === "sitelinks") setSitelinksLoading(true);
     if (type === "images") setImagesLoading(true);
     if (type === "callouts") setCalloutsLoading(true);
+    if (type === "promotion") setPromotionLoading(true);
+    if (type === "price") setPriceLoading(true);
+    if (type === "call") setCallLoading(true);
+    if (type === "snippet") setSnippetLoading(true);
     try {
       const res = await fetch("/api/user/ad-creation/generate-extensions", {
         method: "POST",
@@ -591,14 +610,40 @@ export default function AdPreviewPage() {
         })));
         message.success(`已自动提取 ${items.length} 条价格信息`);
       }
+
+      // 自动填入致电信息
+      if (data.call && typeof data.call === "object") {
+        const c = data.call as Record<string, unknown>;
+        if (c.phone_number) {
+          setEnableCall(true);
+          setCallCountryCode(String(c.country_code || callCountryCode));
+          setCallPhoneNumber(String(c.phone_number));
+          message.success("已自动提取联系电话");
+        }
+      }
+
+      // 自动填入结构化摘要
+      if (data.structured_snippet && typeof data.structured_snippet === "object") {
+        const s = data.structured_snippet as Record<string, unknown>;
+        if (s.header && Array.isArray(s.values) && s.values.length >= 3) {
+          setEnableSnippet(true);
+          setSnippetHeader(String(s.header));
+          setSnippetValues((s.values as string[]).map(String));
+          message.success("已自动生成结构化摘要");
+        }
+      }
     } catch (err: any) {
       message.error(err?.message || "生成失败，请手动填写");
     } finally {
       if (type === "sitelinks") setSitelinksLoading(false);
       if (type === "images") setImagesLoading(false);
       if (type === "callouts") setCalloutsLoading(false);
+      if (type === "promotion") setPromotionLoading(false);
+      if (type === "price") setPriceLoading(false);
+      if (type === "call") setCallLoading(false);
+      if (type === "snippet") setSnippetLoading(false);
     }
-  }, [campaignId, message]);
+  }, [campaignId, message, callCountryCode]);
 
   // ─── 手动输入 URL → 自动获取标题和描述 + 验证 ───
   const fetchUrlMeta = useCallback(async (idx: number) => {
@@ -1138,23 +1183,21 @@ export default function AdPreviewPage() {
             </Space.Compact>
           </Card>
 
-          {/* ─── 广告扩展（可选） ─── */}
-          <Card title="广告扩展（可选）" size="small" style={{ marginBottom: 16 }}>
+          {/* ─── 广告素材与扩展 ─── */}
+          <Card title="广告素材与扩展" size="small" style={{ marginBottom: 16 }}>
 
-            {/* 站内链接 */}
+            {/* 站内链接 — 自动生成 */}
             <div style={{ marginBottom: 16 }}>
               <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <Checkbox checked={enableSitelinks} onChange={(e) => toggleSitelinks(e.target.checked)}>
-                  <Space><LinkOutlined /><Text strong>站内链接 (Sitelinks)</Text></Space>
-                </Checkbox>
-                {enableSitelinks && !sitelinksLoading && sitelinks.length > 0 && (
+                <Space><LinkOutlined /><Text strong>站内链接 (Sitelinks)</Text><Tag color="blue">自动生成</Tag></Space>
+                {!sitelinksLoading && sitelinks.length > 0 && (
                   <Button size="small" type="link" icon={<ReloadOutlined />} onClick={() => generateExtension("sitelinks")}>重新爬取</Button>
                 )}
               </div>
               <Text type="secondary" style={{ fontSize: 12, display: "block", marginLeft: 24 }}>
-                勾选后自动爬取商家网站获取真实链接。如爬取失败，可手动输入 URL，系统会自动获取标题和描述
+                系统自动从商家网站爬取真实链接并生成。如爬取失败，可手动输入 URL，系统会自动获取标题和描述
               </Text>
-              {crawlFailed && enableSitelinks && !sitelinksLoading && sitelinks.every((sl) => !sl.url) && (
+              {crawlFailed && !sitelinksLoading && sitelinks.every((sl) => !sl.url) && (
                 <Alert
                   type="warning" showIcon icon={<WarningOutlined />}
                   message="商家网站爬取失败（可能有反爬保护且无 sitemap）"
@@ -1162,9 +1205,8 @@ export default function AdPreviewPage() {
                   style={{ marginTop: 8, marginLeft: 24 }}
                 />
               )}
-              {enableSitelinks && (
-                <div style={{ marginTop: 12, marginLeft: 24 }}>
-                  {sitelinksLoading ? (
+              <div style={{ marginTop: 12, marginLeft: 24 }}>
+                {sitelinksLoading ? (
                     <div style={{ textAlign: "center", padding: "24px 0" }}>
                       <Spin tip="正在爬取商家网站获取站内链接..." />
                     </div>
@@ -1306,23 +1348,20 @@ export default function AdPreviewPage() {
                     </>
                   )}
                 </div>
-              )}
             </div>
 
             <Divider style={{ margin: "12px 0" }} />
 
-            {/* 商家图片 */}
+            {/* 商家图片 — 自动生成 */}
             <div style={{ marginBottom: 16 }}>
               <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <Checkbox checked={enableImages} onChange={(e) => toggleImages(e.target.checked)}>
-                  <Space><PictureOutlined /><Text strong>商家图片</Text></Space>
-                </Checkbox>
-                {enableImages && !imagesLoading && imageUrls.length > 0 && (
+                <Space><PictureOutlined /><Text strong>商家图片</Text><Tag color="blue">自动生成</Tag></Space>
+                {!imagesLoading && imageUrls.length > 0 && (
                   <Button size="small" type="link" icon={<ReloadOutlined />} onClick={() => generateExtension("images")}>重新提取</Button>
                 )}
               </div>
               <Text type="secondary" style={{ fontSize: 12, display: "block", marginLeft: 24 }}>
-                勾选后自动从商家网站爬取产品图片。如爬取失败，可拖入图片或粘贴图片 URL
+                系统自动从商家网站爬取产品图片。如爬取失败，可拖入图片或粘贴图片 URL
               </Text>
               <Alert
                 type="info" showIcon
@@ -1330,7 +1369,7 @@ export default function AdPreviewPage() {
                 description="1. 图片需与品牌强关联（产品图、品牌场景图等）。2. 图片不要包含文字（上传后自动 OCR 检测）。"
                 style={{ marginTop: 8, marginLeft: 24, marginBottom: 0 }}
               />
-              {enableImages && !imagesLoading && imageUrls.length === 0 && (
+              {!imagesLoading && imageUrls.length === 0 && crawledImages.length === 0 && (
                 <Alert
                   type="warning" showIcon icon={<WarningOutlined />}
                   message="未自动获取到商家图片"
@@ -1338,9 +1377,8 @@ export default function AdPreviewPage() {
                   style={{ marginTop: 8, marginLeft: 24 }}
                 />
               )}
-              {enableImages && (
-                <div style={{ marginTop: 12, marginLeft: 24 }}>
-                  {imagesLoading ? (
+              <div style={{ marginTop: 12, marginLeft: 24 }}>
+                {imagesLoading ? (
                     <div style={{ textAlign: "center", padding: "24px 0" }}>
                       <Spin tip="正在从商家网站提取图片..." />
                     </div>
@@ -1443,7 +1481,6 @@ export default function AdPreviewPage() {
                     </>
                   )}
                 </div>
-              )}
             </div>
 
             <Divider style={{ margin: "12px 0" }} />
@@ -1513,6 +1550,11 @@ export default function AdPreviewPage() {
               <Text type="secondary" style={{ fontSize: 12, display: "block", marginLeft: 24 }}>勾选后自动从商家网站提取促销信息（折扣、优惠码等）</Text>
               {enablePromotion && (
                 <div style={{ marginTop: 12, marginLeft: 24 }}>
+                  {promotionLoading ? (
+                    <div style={{ textAlign: "center", padding: "24px 0" }}>
+                      <Spin tip="正在从商家网站提取促销信息..." />
+                    </div>
+                  ) : (
                   <Row gutter={[8, 8]}>
                     <Col span={12}>
                       <Text type="secondary" style={{ fontSize: 12 }}>促销内容（必填）</Text>
@@ -1565,6 +1607,7 @@ export default function AdPreviewPage() {
                         ]} />
                     </Col>
                   </Row>
+                  )}
                 </div>
               )}
             </div>
@@ -1589,6 +1632,12 @@ export default function AdPreviewPage() {
               <Text type="secondary" style={{ fontSize: 12, display: "block", marginLeft: 24 }}>勾选后自动从商家网站提取产品价格信息</Text>
               {enablePrice && (
                 <div style={{ marginTop: 12, marginLeft: 24 }}>
+                  {priceLoading ? (
+                    <div style={{ textAlign: "center", padding: "24px 0" }}>
+                      <Spin tip="正在从商家网站提取价格信息..." />
+                    </div>
+                  ) : (
+                  <>
                   <div style={{ marginBottom: 8 }}>
                     <Text type="secondary" style={{ fontSize: 12 }}>价格类型</Text>
                     <Select size="small" value={priceType} onChange={setPriceType} style={{ width: "100%", marginTop: 4 }}
@@ -1636,6 +1685,8 @@ export default function AdPreviewPage() {
                       添加价格项（最多 8 项）
                     </Button>
                   )}
+                  </>
+                  )}
                 </div>
               )}
             </div>
@@ -1644,12 +1695,20 @@ export default function AdPreviewPage() {
 
             {/* 致电扩展 */}
             <div style={{ marginBottom: 16 }}>
-              <Checkbox checked={enableCall} onChange={(e) => setEnableCall(e.target.checked)}>
+              <Checkbox checked={enableCall} onChange={(e) => {
+                setEnableCall(e.target.checked);
+                if (e.target.checked && !callPhoneNumber) generateExtension("call");
+              }}>
                 <Space><PhoneOutlined /><Text strong>致电 (Call)</Text></Space>
               </Checkbox>
-              <Text type="secondary" style={{ fontSize: 12, display: "block", marginLeft: 24 }}>添加电话号码，用户可直接拨打</Text>
+              <Text type="secondary" style={{ fontSize: 12, display: "block", marginLeft: 24 }}>勾选后自动从商家网站提取联系电话，用户可直接拨打</Text>
               {enableCall && (
                 <div style={{ marginTop: 12, marginLeft: 24 }}>
+                  {callLoading ? (
+                    <div style={{ textAlign: "center", padding: "24px 0" }}>
+                      <Spin tip="正在从商家网站提取联系电话..." />
+                    </div>
+                  ) : (
                   <Row gutter={8}>
                     <Col span={8}>
                       <Text type="secondary" style={{ fontSize: 12 }}>国家代码</Text>
@@ -1667,6 +1726,7 @@ export default function AdPreviewPage() {
                         onChange={(e) => setCallPhoneNumber(e.target.value)} style={{ marginTop: 4 }} />
                     </Col>
                   </Row>
+                  )}
                 </div>
               )}
             </div>
@@ -1675,12 +1735,21 @@ export default function AdPreviewPage() {
 
             {/* 结构化摘要 */}
             <div>
-              <Checkbox checked={enableSnippet} onChange={(e) => setEnableSnippet(e.target.checked)}>
+              <Checkbox checked={enableSnippet} onChange={(e) => {
+                setEnableSnippet(e.target.checked);
+                if (e.target.checked && snippetValues.every((v) => !v.trim())) generateExtension("snippet");
+              }}>
                 <Space><UnorderedListOutlined /><Text strong>结构化摘要 (Structured Snippet)</Text></Space>
               </Checkbox>
-              <Text type="secondary" style={{ fontSize: 12, display: "block", marginLeft: 24 }}>展示产品或服务的特定属性列表</Text>
+              <Text type="secondary" style={{ fontSize: 12, display: "block", marginLeft: 24 }}>勾选后自动从商家网站提取产品/服务属性列表</Text>
               {enableSnippet && (
                 <div style={{ marginTop: 12, marginLeft: 24 }}>
+                  {snippetLoading ? (
+                    <div style={{ textAlign: "center", padding: "24px 0" }}>
+                      <Spin tip="正在从商家网站提取结构化摘要..." />
+                    </div>
+                  ) : (
+                  <>
                   <div style={{ marginBottom: 8 }}>
                     <Text type="secondary" style={{ fontSize: 12 }}>标题类型</Text>
                     <Select size="small" value={snippetHeader} onChange={setSnippetHeader} style={{ width: "100%", marginTop: 4 }}
@@ -1710,6 +1779,8 @@ export default function AdPreviewPage() {
                       onClick={() => setSnippetValues((prev) => [...prev, ""])}>
                       添加值（最少 3 个，最多 10 个）
                     </Button>
+                  )}
+                  </>
                   )}
                 </div>
               )}

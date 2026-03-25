@@ -225,11 +225,19 @@ function extractJson(raw: string): string {
   return text;
 }
 
-// ─── 广告文案补充 ───
+// ─── 广告文案补充（严格对齐桌面文案提示词） ───
+
+const DISCOUNT_RE = /discount|sale|off|%|save|deal|promo|solde|rabatt|reduc|sparen|remise|descuento|sconto|割引|セール/i;
+const SHIPPING_RE = /ship|deliver|livra|versand|envio|freight|expedit|lieferung|envoi|配送|送料/i;
 
 /**
  * 补充 headlines 到指定数量
- * 先用 SemRush 去重后的标题，不足时 AI 补充
+ * 严格遵循桌面文案提示词规范：
+ *  - 第一条必须品牌相关
+ *  - 折扣和物流各一条并优先展示（折扣力度优选最大的）
+ *  - 次要折扣从第四条输出
+ *  - 字数 ≤ 30，避免过多大写
+ *  - 有折扣/物流的一定要写入，不满足就重生成
  */
 export async function padHeadlines(
   existing: string[],
@@ -237,60 +245,93 @@ export async function padHeadlines(
   country: string,
   count = 15,
 ): Promise<string[]> {
-  // 过滤超长标题（Google Ads 限制 30 字符）
   const valid = existing.filter((h) => h.length <= 30 && h.length > 0);
   if (valid.length >= count) return valid.slice(0, count);
 
-  const needed = count - valid.length;
   const lang = COUNTRY_LANGUAGE_MAP[country.toUpperCase()] || COUNTRY_LANGUAGE_MAP.US;
 
-  const hasDiscountHeadline = valid.some((h) => /discount|sale|off|%|save|deal|promo|solde|rabatt|reduc/i.test(h));
-  const hasShippingHeadline = valid.some((h) => /ship|deliver|livra|versand|envio|freight|expedit/i.test(h));
-  const discountNeeded = !hasDiscountHeadline;
-  const shippingNeeded = !hasShippingHeadline;
+  // 最多尝试 3 次，确保折扣/物流一定写入
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const needed = count - valid.length;
+    const allSoFar = [...valid];
 
-  const prompt = `You are a senior Google Ads copywriter and keyword specialist. You deeply understand Google search ad metrics, Ad Strength scoring, and platform policies.
+    const prompt = `You are a senior Google Ads copywriter with 30 years of experience. You deeply understand Google search ad metrics, Ad Strength scoring, keyword selection, and platform policies.
 
-Merchant: ${merchantName}
-Target country: ${lang.name} (${lang.language})
-Style: ${lang.style}
-Budget context: $1.5/day budget, CPC $0.3 target — every headline must maximize click value.
+Context:
+- Merchant: ${merchantName}
+- Target country: ${lang.name} (${lang.language})
+- Style: ${lang.style}
+- Budget: $1.5/day, CPC $0.3 — every headline must maximize click value.
+- Based on SemRush keyword data, generate headlines that align with high-performing keywords.
 
-Existing headlines (already have ${valid.length}):
-${valid.map((h, i) => `${i + 1}. "${h}"`).join("\n")}
+${valid.length > 0 ? `Existing headlines (${valid.length}):\n${valid.map((h, i) => `${i + 1}. "${h}"`).join("\n")}\n` : ""}
+Generate exactly ${needed} headlines. You MUST output a JSON array of exactly ${needed} strings.
 
-Generate exactly ${needed} MORE unique headlines for this merchant.
+=== MANDATORY RULES (violation = rejection) ===
 
-STRICT Rules — follow EVERY rule precisely:
-1. Each headline MUST be ≤ 30 characters. Count carefully before outputting. If over 30, rewrite shorter.
-2. Write in ${lang.language}.
-3. Do NOT repeat or closely paraphrase any existing headline.
-4. Headline #1 MUST be strongly brand-related — include "${merchantName}" or a clear brand reference. This is the most important headline.
-${discountNeeded ? `5. MANDATORY: Include exactly ONE discount headline — pick the BIGGEST discount available (e.g. "Up to 60% Off ${merchantName}"). Place it prominently (headline #2 or #3 among generated ones). Prioritize the strongest offer.\n` : ""}${shippingNeeded ? `6. MANDATORY: Include exactly ONE shipping headline targeting ${lang.name} ONLY (e.g. "Free ${lang.name} Shipping", "Fast Local Delivery"). Shipping must be country-specific.\n` : ""}7. Discount and shipping headlines should appear EARLY (within first 4 generated headlines) for priority display.
-8. Remaining headlines should diversify across: quality/trust signals, strong CTAs ("Shop Now", "Order Today"), unique selling points, seasonal relevance, brand differentiators.
-9. Language must reflect the brand character of ${merchantName} — be authentic and compelling, NOT generic filler.
-10. Use Title Case. Avoid excessive UPPERCASE — never write entire words in caps unless it's an acronym.
-11. No emoji. Max 1 exclamation mark across ALL headlines.
-12. Every headline must comply with Google Ads policies: no deceptive claims, no misleading info, no sensitive terms. Information must be truthful.
-13. After generating, re-verify EACH headline is ≤ 30 characters. If any exceeds, rewrite it shorter.
+RULE 1 — BRAND FIRST: Headline #1 (first in your output) MUST be strongly brand-related — include "${merchantName}" or a clear brand reference. This is the most important headline.
 
-Return ONLY a JSON array of strings, no explanation. Example: ["Headline 1", "Headline 2"]`;
+RULE 2 — DISCOUNT MANDATORY: You MUST include exactly ONE discount headline. Pick the BIGGEST discount available for ${merchantName}. Place it as headline #2 or #3 in your output for priority display. The discount must be real and truthful. Example: "Up to 60% Off ${merchantName}".
 
-  try {
-    const raw = await callAiWithFallback("ad_copy", [{ role: "user", content: prompt }], 2048);
-    const parsed = JSON.parse(extractJson(raw)) as string[];
-    const aiHeadlines = parsed
-      .map((h) => h.trim())
-      .filter((h) => h.length > 0 && h.length <= 30);
-    return [...valid, ...aiHeadlines].slice(0, count);
-  } catch (err) {
-    console.error("[padHeadlines] AI 补充失败:", err);
-    return valid; // 返回已有的
+RULE 3 — SHIPPING MANDATORY: You MUST include exactly ONE shipping headline targeting ${lang.name} ONLY. Example: "Free ${lang.name} Shipping" or "Kostenloser Versand DE". Shipping must be country-specific, local only.
+
+RULE 4 — PRIORITY ORDER: Brand headline first, then discount and shipping within the first 4 headlines. Secondary discount references (if any) start from headline #4 onward.
+
+RULE 5 — CHARACTER LIMIT: Each headline MUST be ≤ 30 characters. Count EVERY character carefully. If over 30, rewrite shorter immediately.
+
+RULE 6 — LANGUAGE: Write in ${lang.language}. Use Title Case. Avoid excessive UPPERCASE — never write entire words in caps unless it's an acronym.
+
+RULE 7 — QUALITY: Language must reflect ${merchantName}'s brand character — authentic and compelling, NOT generic filler. Diversify remaining headlines across: quality/trust signals, strong CTAs, unique selling points, seasonal relevance.
+
+RULE 8 — COMPLIANCE: No emoji. Max 1 exclamation mark across ALL headlines. Comply with Google Ads policies: no deceptive claims, no misleading info, no sensitive terms. Information must be truthful.
+
+RULE 9 — FINAL CHECK: After generating, re-verify EVERY headline is ≤ 30 characters, contains no duplicates, and rules 1-3 are satisfied.
+
+Return ONLY a JSON array of strings. Example: ["Brand Headline", "Discount Headline", "Shipping Headline", ...]`;
+
+    try {
+      const raw = await callAiWithFallback("ad_copy", [{ role: "user", content: prompt }], 2048);
+      const parsed = JSON.parse(extractJson(raw)) as string[];
+      const aiHeadlines = parsed.map((h) => h.trim()).filter((h) => h.length > 0 && h.length <= 30);
+      const combined = [...valid, ...aiHeadlines].slice(0, count);
+
+      // ─── 二次硬校验 ───
+      const hasDiscount = combined.some((h) => DISCOUNT_RE.test(h));
+      const hasShipping = combined.some((h) => SHIPPING_RE.test(h));
+      const firstIsBrand = combined.length > 0 && combined[0].toLowerCase().includes(merchantName.toLowerCase().slice(0, 5));
+
+      if (hasDiscount && hasShipping) {
+        console.log(`[padHeadlines] 校验通过 (attempt ${attempt + 1}): 折扣=${hasDiscount}, 物流=${hasShipping}, 品牌首条=${firstIsBrand}, 共${combined.length}条`);
+        return combined;
+      }
+
+      console.warn(`[padHeadlines] 校验不通过 (attempt ${attempt + 1}): 折扣=${hasDiscount}, 物流=${hasShipping} → 重试`);
+      // 不通过时不累加 valid，下次重新生成全部 AI 部分
+    } catch (err) {
+      console.error(`[padHeadlines] AI 生成失败 (attempt ${attempt + 1}):`, err);
+    }
   }
+
+  // 3 次都失败，返回已有的 + 强制插入兜底折扣/物流标题
+  console.error("[padHeadlines] 3 次校验均失败，插入兜底折扣/物流标题");
+  const fallback = [...valid];
+  if (!fallback.some((h) => DISCOUNT_RE.test(h))) {
+    const shortName = merchantName.length > 15 ? merchantName.slice(0, 15) : merchantName;
+    fallback.push(`Save Big at ${shortName}`.slice(0, 30));
+  }
+  if (!fallback.some((h) => SHIPPING_RE.test(h))) {
+    const langName = lang.name.length > 10 ? lang.name.slice(0, 10) : lang.name;
+    fallback.push(`Free ${langName} Shipping`.slice(0, 30));
+  }
+  return fallback.slice(0, count);
 }
 
 /**
  * 补充 descriptions 到指定数量
+ * 严格遵循桌面文案提示词规范：
+ *  - 有且仅有一条同时包含折扣和物流信息
+ *  - 字数 50-90，避免过多大写
+ *  - 有折扣/物流的一定要写入，不满足就重生成
  */
 export async function padDescriptions(
   existing: string[],
@@ -301,47 +342,64 @@ export async function padDescriptions(
   const valid = existing.filter((d) => d.length <= 90 && d.length > 0);
   if (valid.length >= count) return valid.slice(0, count);
 
-  const needed = count - valid.length;
   const lang = COUNTRY_LANGUAGE_MAP[country.toUpperCase()] || COUNTRY_LANGUAGE_MAP.US;
 
-  const hasDiscountAndShipping = valid.some((d) =>
-    (/discount|sale|off|%|save|deal|promo|solde|rabatt|reduc/i.test(d))
-    && (/ship|deliver|livra|versand|envio|freight|expedit/i.test(d)),
-  );
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const needed = count - valid.length;
 
-  const prompt = `You are a senior Google Ads copywriter specializing in compelling RSA descriptions that drive conversions.
+    const prompt = `You are a senior Google Ads copywriter with 30 years of experience, specializing in compelling RSA descriptions that drive conversions.
 
-Merchant: ${merchantName}
-Target country: ${lang.name} (${lang.language})
-Style: ${lang.style}
-Budget context: $1.5/day budget, CPC $0.3 target — descriptions must maximize conversion value.
+Context:
+- Merchant: ${merchantName}
+- Target country: ${lang.name} (${lang.language})
+- Style: ${lang.style}
+- Budget: $1.5/day, CPC $0.3 — descriptions must maximize conversion value.
 
-Existing descriptions (already have ${valid.length}):
-${valid.map((d, i) => `${i + 1}. "${d}"`).join("\n")}
+${valid.length > 0 ? `Existing descriptions (${valid.length}):\n${valid.map((d, i) => `${i + 1}. "${d}"`).join("\n")}\n` : ""}
+Generate exactly ${needed} descriptions. You MUST output a JSON array of exactly ${needed} strings.
 
-Generate exactly ${needed} MORE unique descriptions for this merchant.
+=== MANDATORY RULES (violation = rejection) ===
 
-STRICT Rules — follow EVERY rule precisely:
-1. Each description MUST be between 50-90 characters (Google Ads limit is 90). Count carefully.
-2. Write in ${lang.language}.
-3. Do NOT repeat or closely paraphrase any existing description.
-${!hasDiscountAndShipping ? `4. MANDATORY: Exactly ONE description must combine both discount info AND shipping info in a single line (e.g. "Save 30% + Free ${lang.name} Shipping on All Orders"). Shipping must target ${lang.name} only. This is REQUIRED.\n` : ""}5. Other descriptions should cover: brand story/uniqueness, product quality, trust signals (reviews, guarantees), strong CTAs ("Shop Now", "Order Today"), brand differentiators.
-6. Language must reflect the brand character of ${merchantName} — be authentic and compelling, NOT generic filler like "Great products at great prices".
-7. Use natural sentence case. Avoid excessive UPPERCASE — never write entire words in caps unless it's an acronym.
-8. No emoji. Comply with Google Ads policies: no deceptive or misleading claims, no sensitive terms. All information must be truthful.
-9. After generating, re-verify each description is between 50-90 characters. If any is out of range, rewrite it.
+RULE 1 — DISCOUNT + SHIPPING COMBINED: Exactly ONE description MUST combine BOTH discount info AND shipping info in a single line. Example: "Save 30% + Free ${lang.name} Shipping on All Orders" or "Bis zu 40% Rabatt + Kostenloser DE Versand". Shipping must target ${lang.name} only. This is REQUIRED and non-negotiable.
 
-Return ONLY a JSON array of strings. Example: ["Description 1", "Description 2"]`;
+RULE 2 — CHARACTER LIMIT: Each description MUST be between 50-90 characters (Google Ads limit is 90). Count carefully.
 
-  try {
-    const raw = await callAiWithFallback("ad_copy", [{ role: "user", content: prompt }], 2048);
-    const parsed = JSON.parse(extractJson(raw)) as string[];
-    const aiDescs = parsed
-      .map((d) => d.trim())
-      .filter((d) => d.length > 0 && d.length <= 90);
-    return [...valid, ...aiDescs].slice(0, count);
-  } catch (err) {
-    console.error("[padDescriptions] AI 补充失败:", err);
-    return valid;
+RULE 3 — LANGUAGE: Write in ${lang.language}. Use natural sentence case. Avoid excessive UPPERCASE.
+
+RULE 4 — QUALITY: Language must reflect ${merchantName}'s brand character — authentic and compelling, NOT generic filler like "Great products at great prices". Cover: brand story, product quality, trust signals, strong CTAs, brand differentiators.
+
+RULE 5 — COMPLIANCE: No emoji. Comply with Google Ads policies: no deceptive or misleading claims, no sensitive terms. All information must be truthful.
+
+RULE 6 — FINAL CHECK: After generating, re-verify each description is 50-90 characters, and RULE 1 is satisfied (exactly one line has both discount AND shipping).
+
+Return ONLY a JSON array of strings. Example: ["Description with discount + shipping", "Brand description", ...]`;
+
+    try {
+      const raw = await callAiWithFallback("ad_copy", [{ role: "user", content: prompt }], 2048);
+      const parsed = JSON.parse(extractJson(raw)) as string[];
+      const aiDescs = parsed.map((d) => d.trim()).filter((d) => d.length > 0 && d.length <= 90);
+      const combined = [...valid, ...aiDescs].slice(0, count);
+
+      // ─── 二次硬校验：必须有一条同时含折扣+物流 ───
+      const hasCombo = combined.some((d) => DISCOUNT_RE.test(d) && SHIPPING_RE.test(d));
+
+      if (hasCombo) {
+        console.log(`[padDescriptions] 校验通过 (attempt ${attempt + 1}): 折扣+物流组合=${hasCombo}, 共${combined.length}条`);
+        return combined;
+      }
+
+      console.warn(`[padDescriptions] 校验不通过 (attempt ${attempt + 1}): 缺少折扣+物流组合描述 → 重试`);
+    } catch (err) {
+      console.error(`[padDescriptions] AI 生成失败 (attempt ${attempt + 1}):`, err);
+    }
   }
+
+  // 3 次都失败，强制插入兜底
+  console.error("[padDescriptions] 3 次校验均失败，插入兜底折扣+物流描述");
+  const fallback = [...valid];
+  if (!fallback.some((d) => DISCOUNT_RE.test(d) && SHIPPING_RE.test(d))) {
+    const langName = lang.name.length > 8 ? lang.name.slice(0, 8) : lang.name;
+    fallback.push(`Save Big + Free ${langName} Shipping on ${merchantName} Orders`.slice(0, 90));
+  }
+  return fallback.slice(0, count);
 }

@@ -243,6 +243,28 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  // 致电扩展：从商家网站提取联系电话
+  if (types.includes("call")) {
+    tasks.push(
+      extractPhoneNumber(merchantUrl, merchantName, country, crawlResult.html, crawlResult.links)
+        .then((data) => { if (data) result.call = data; })
+        .catch((err) => {
+          console.warn("[Extensions] 致电提取失败:", err instanceof Error ? err.message : err);
+        }),
+    );
+  }
+
+  // 结构化摘要：从商家网站提取产品/服务属性
+  if (types.includes("snippet")) {
+    tasks.push(
+      extractStructuredSnippet(merchantName, merchantUrl, country, crawlResult.html, crawlResult.links)
+        .then((data) => { if (data) result.structured_snippet = data; })
+        .catch((err) => {
+          console.warn("[Extensions] 结构化摘要提取失败:", err instanceof Error ? err.message : err);
+        }),
+    );
+  }
+
   await Promise.all(tasks);
 
   return apiSuccess(serializeData(result));
@@ -1165,4 +1187,173 @@ function extractJsonFromAi(raw: string): string {
     }
   }
   return text;
+}
+
+/**
+ * 从商家网站提取联系电话
+ * 优先从 HTML 中正则提取，不足时尝试 contact/about 子页面
+ */
+async function extractPhoneNumber(
+  merchantUrl: string,
+  _merchantName: string,
+  country: string,
+  html: string,
+  links: { url: string; text: string }[],
+): Promise<{ country_code: string; phone_number: string } | null> {
+  // 国际电话正则（匹配 +XX-XXX-XXX-XXXX 等格式）
+  const phoneRegex = /(?:\+\d{1,3}[\s.-]?)?\(?\d{2,4}\)?[\s.-]?\d{3,4}[\s.-]?\d{3,4}/g;
+  // tel: 链接
+  const telRegex = /href=["']tel:([^"']+)["']/gi;
+
+  const candidates: string[] = [];
+
+  // 从 tel: 链接提取
+  let telMatch;
+  while ((telMatch = telRegex.exec(html)) !== null) {
+    const phone = decodeURIComponent(telMatch[1]).replace(/\s+/g, "").trim();
+    if (phone.length >= 7 && phone.length <= 20) candidates.push(phone);
+  }
+
+  // 从页面文本提取
+  const textOnly = html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ");
+  const phoneMatches = textOnly.match(phoneRegex) || [];
+  for (const p of phoneMatches) {
+    const clean = p.replace(/\s+/g, "").trim();
+    if (clean.length >= 7 && clean.length <= 20 && !candidates.includes(clean)) {
+      candidates.push(clean);
+    }
+  }
+
+  // 如果首页没找到，尝试 contact/about 页面
+  if (candidates.length === 0) {
+    const contactLinks = links.filter((l) =>
+      /contact|about|impressum|kontakt|nous-contacter/i.test(l.url) || /contact|about/i.test(l.text),
+    ).slice(0, 3);
+
+    for (const link of contactLinks) {
+      try {
+        const ctrl = new AbortController();
+        const t = setTimeout(() => ctrl.abort(), 8000);
+        const res = await fetch(link.url, {
+          signal: ctrl.signal,
+          headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" },
+        });
+        clearTimeout(t);
+        if (!res.ok) continue;
+        const subHtml = await res.text();
+
+        let subTelMatch;
+        const subTelRegex = /href=["']tel:([^"']+)["']/gi;
+        while ((subTelMatch = subTelRegex.exec(subHtml)) !== null) {
+          const phone = decodeURIComponent(subTelMatch[1]).replace(/\s+/g, "").trim();
+          if (phone.length >= 7 && phone.length <= 20) candidates.push(phone);
+        }
+
+        const subText = subHtml.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ");
+        const subPhones = subText.match(phoneRegex) || [];
+        for (const p of subPhones) {
+          const clean = p.replace(/\s+/g, "").trim();
+          if (clean.length >= 7 && clean.length <= 20 && !candidates.includes(clean)) {
+            candidates.push(clean);
+          }
+        }
+        if (candidates.length > 0) break;
+      } catch {}
+    }
+  }
+
+  if (candidates.length === 0) return null;
+
+  // 优先选带国际区号的
+  const withPlus = candidates.find((c) => c.startsWith("+"));
+  const phone = withPlus || candidates[0];
+
+  // 推断国家代码
+  const COUNTRY_PHONE_CODE: Record<string, string> = {
+    US: "US", CA: "CA", GB: "GB", UK: "GB", AU: "AU",
+    DE: "DE", FR: "FR", JP: "JP", BR: "BR", IT: "IT",
+    ES: "ES", NL: "NL", SE: "SE", NO: "NO", DK: "DK",
+  };
+  const countryCode = COUNTRY_PHONE_CODE[country.toUpperCase()] || "US";
+
+  console.log(`[Extensions] 提取到电话: ${phone} (country: ${countryCode})`);
+  return { country_code: countryCode, phone_number: phone };
+}
+
+/**
+ * 从商家网站提取结构化摘要
+ * 使用 AI 从页面内容中提取品牌/产品/服务类别
+ */
+async function extractStructuredSnippet(
+  merchantName: string,
+  merchantUrl: string,
+  _country: string,
+  html: string,
+  links: { url: string; text: string }[],
+): Promise<{ header: string; values: string[] } | null> {
+  // 从链接文本和页面内容中提取分类信息
+  const linkTexts = links
+    .map((l) => l.text.trim())
+    .filter((t) => t.length >= 2 && t.length <= 30)
+    .slice(0, 30);
+
+  // 提取导航菜单项（通常是分类）
+  const navItems: string[] = [];
+  const navRegex = /<nav[^>]*>([\s\S]*?)<\/nav>/gi;
+  let navMatch;
+  while ((navMatch = navRegex.exec(html)) !== null) {
+    const navHtml = navMatch[1];
+    const linkRegex = /<a[^>]*>([^<]{2,30})<\/a>/gi;
+    let linkMatch;
+    while ((linkMatch = linkRegex.exec(navHtml)) !== null) {
+      const text = decodeHtmlEntities(linkMatch[1].trim());
+      if (text.length >= 2 && text.length <= 25 && !navItems.includes(text)) {
+        navItems.push(text);
+      }
+    }
+  }
+
+  const contextItems = [...new Set([...navItems, ...linkTexts])].slice(0, 40);
+
+  if (contextItems.length < 3) return null;
+
+  const prompt = `You are analyzing a merchant website to extract structured snippet data for Google Ads.
+
+Merchant: ${merchantName}
+Website: ${merchantUrl}
+
+Navigation/category items found on the site:
+${contextItems.map((t, i) => `${i + 1}. "${t}"`).join("\n")}
+
+Based on these items, determine the best structured snippet header and extract 3-10 relevant values.
+
+Available headers: "Brands", "Types", "Styles", "Models", "Service catalog", "Amenities", "Destinations", "Neighborhoods"
+
+Rules:
+1. Choose the most appropriate header based on the merchant's content
+2. Values must be real categories/items found on the site, NOT made up
+3. Each value must be ≤ 25 characters
+4. Minimum 3 values, maximum 10
+5. Values should be the most important/popular categories
+
+Return ONLY JSON: {"header": "Types", "values": ["Value 1", "Value 2", "Value 3"]}`;
+
+  try {
+    const raw = await callAiWithFallback("ad_copy", [{ role: "user", content: prompt }], 1024);
+    const parsed = JSON.parse(extractJsonFromAi(raw));
+    if (parsed.header && Array.isArray(parsed.values) && parsed.values.length >= 3) {
+      const values = parsed.values
+        .map((v: string) => String(v).trim())
+        .filter((v: string) => v.length >= 1 && v.length <= 25)
+        .slice(0, 10);
+      if (values.length >= 3) {
+        console.log(`[Extensions] 结构化摘要: header=${parsed.header}, values=${values.length}条`);
+        return { header: parsed.header, values };
+      }
+    }
+  } catch (err) {
+    console.warn("[Extensions] AI 结构化摘要提取失败:", err instanceof Error ? err.message : err);
+  }
+
+  return null;
 }
