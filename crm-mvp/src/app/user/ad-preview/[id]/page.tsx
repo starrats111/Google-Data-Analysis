@@ -4,7 +4,7 @@ import { useParams, useRouter } from "next/navigation";
 import {
   Card, Row, Col, Input, Button, Space, Tag, Typography, Spin, Alert,
   Select, InputNumber, Switch, Divider, App, Tooltip, Popconfirm, Checkbox,
-  Upload, Image,
+  Upload, Image, DatePicker,
 } from "antd";
 import {
   ThunderboltOutlined, LoadingOutlined,
@@ -12,6 +12,7 @@ import {
   ArrowLeftOutlined, ReloadOutlined, LinkOutlined, PictureOutlined,
   SoundOutlined, CheckCircleOutlined, ExclamationCircleOutlined,
   InboxOutlined, WarningOutlined, TranslationOutlined,
+  PhoneOutlined, DollarOutlined, TagOutlined, UnorderedListOutlined,
 } from "@ant-design/icons";
 import { useApiWithParams, mutateApi } from "@/lib/swr";
 import { BIDDING_STRATEGIES } from "@/lib/constants";
@@ -124,6 +125,34 @@ export default function AdPreviewPage() {
   const [callouts, setCallouts] = useState<string[]>([]);
   const [calloutsLoading, setCalloutsLoading] = useState(false);
   const [crawlFailed, setCrawlFailed] = useState(false);
+
+  // 促销扩展
+  const [enablePromotion, setEnablePromotion] = useState(false);
+  const [promotion, setPromotion] = useState<{
+    occasion?: string; language_code?: string; promotion_target: string;
+    discount_type: "MONETARY" | "PERCENT"; discount_amount?: number; discount_percent?: number;
+    currency_code?: string; promo_code?: string; start_date?: string; end_date?: string; final_url?: string;
+  }>({
+    promotion_target: "", discount_type: "PERCENT", discount_percent: 10,
+    currency_code: "USD", language_code: "en", final_url: "",
+  });
+
+  // 价格扩展
+  const [enablePrice, setEnablePrice] = useState(false);
+  const [priceType, setPriceType] = useState("BRANDS");
+  const [priceItems, setPriceItems] = useState<{
+    header: string; description: string; price_amount: number; currency_code: string; unit?: string; final_url: string;
+  }[]>([]);
+
+  // 致电扩展
+  const [enableCall, setEnableCall] = useState(false);
+  const [callCountryCode, setCallCountryCode] = useState("US");
+  const [callPhoneNumber, setCallPhoneNumber] = useState("");
+
+  // 结构化摘要
+  const [enableSnippet, setEnableSnippet] = useState(false);
+  const [snippetHeader, setSnippetHeader] = useState("Brands");
+  const [snippetValues, setSnippetValues] = useState<string[]>(["", "", ""]);
 
   // 中文参考翻译（只读）
   const [headlinesZh, setHeadlinesZh] = useState<string[]>([]);
@@ -336,13 +365,17 @@ export default function AdPreviewPage() {
   }, [descriptions, preview, message]);
 
   // ─── 关键词操作 ───
+  const [newKwMatchType, setNewKwMatchType] = useState<string>("PHRASE");
   const addKeyword = () => {
     if (newKeyword.trim()) {
-      setKwList((prev) => [...prev, { text: newKeyword.trim(), matchType: "PHRASE" }]);
+      setKwList((prev) => [...prev, { text: newKeyword.trim(), matchType: newKwMatchType }]);
       setNewKeyword("");
     }
   };
   const removeKeyword = (idx: number) => setKwList((prev) => prev.filter((_, i) => i !== idx));
+  const updateKeywordMatchType = (idx: number, matchType: string) => {
+    setKwList((prev) => { const n = [...prev]; n[idx] = { ...n[idx], matchType }; return n; });
+  };
 
   // ─── SemRush 关键词获取 ───
   const fetchKeywordsFromSemrush = useCallback(async () => {
@@ -580,6 +613,33 @@ export default function AdPreviewPage() {
   }, [sitelinks, message]);
 
   // ─── 图片上传 ───
+  const [imageCheckResults, setImageCheckResults] = useState<Record<number, { has_text: boolean; checking: boolean; text?: string }>>({});
+
+  const checkImageForText = useCallback(async (url: string, idx: number) => {
+    setImageCheckResults((prev) => ({ ...prev, [idx]: { has_text: false, checking: true } }));
+    try {
+      const res = await fetch("/api/user/ad-creation/check-image", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url }),
+      });
+      const json = await res.json();
+      if (json.code === 0) {
+        setImageCheckResults((prev) => ({
+          ...prev,
+          [idx]: { has_text: json.data.has_text, checking: false, text: json.data.text },
+        }));
+        if (json.data.has_text) {
+          message.warning(`图片 ${idx + 1} 检测到文字内容，建议更换为无文字图片`);
+        }
+      } else {
+        setImageCheckResults((prev) => ({ ...prev, [idx]: { has_text: false, checking: false } }));
+      }
+    } catch {
+      setImageCheckResults((prev) => ({ ...prev, [idx]: { has_text: false, checking: false } }));
+    }
+  }, [message]);
+
   const handleImageUpload = useCallback(async (file: File) => {
     if (!["image/jpeg", "image/png"].includes(file.type)) {
       message.error("Google Ads 仅支持 JPG 和 PNG 格式图片");
@@ -595,8 +655,13 @@ export default function AdPreviewPage() {
       const res = await fetch("/api/user/ad-creation/upload-image", { method: "POST", body: formData });
       const json = await res.json();
       if (json.code === 0 && json.data?.url) {
-        setImageUrls((prev) => [...prev, json.data.url]);
-        message.success("图片上传成功");
+        setImageUrls((prev) => {
+          const newUrls = [...prev, json.data.url];
+          // 自动触发 OCR 检测
+          checkImageForText(json.data.url, newUrls.length - 1);
+          return newUrls;
+        });
+        message.success("图片上传成功，正在检测文字...");
       } else {
         message.error(json.message || "上传失败");
       }
@@ -780,6 +845,18 @@ export default function AdPreviewPage() {
       }
       if (enableCallouts) {
         submitBody.callouts = callouts.filter((c) => c.trim().length > 0);
+      }
+      if (enablePromotion && promotion.promotion_target.trim()) {
+        submitBody.promotion = promotion;
+      }
+      if (enablePrice && priceItems.length > 0) {
+        submitBody.price = { type: priceType, items: priceItems.filter((p) => p.header.trim()) };
+      }
+      if (enableCall && callPhoneNumber.trim()) {
+        submitBody.call = { country_code: callCountryCode, phone_number: callPhoneNumber.trim() };
+      }
+      if (enableSnippet && snippetValues.some((v) => v.trim())) {
+        submitBody.structured_snippet = { header: snippetHeader, values: snippetValues.filter((v) => v.trim()) };
       }
 
       const res = await mutateApi("/api/user/ad-creation/submit", {
@@ -988,14 +1065,36 @@ export default function AdPreviewPage() {
             )}
             <Space wrap style={{ marginBottom: 8 }}>
               {kwList.map((kw, i) => (
-                <Tag key={`${kw.text}-${kw.matchType}-${i}`} closable onClose={(e: React.MouseEvent) => { e.preventDefault(); removeKeyword(i); }} color="blue">
-                  <Tooltip title={kw.matchType}>
-                    {kw.matchType === "EXACT" ? `[${kw.text}]` : kw.matchType === "PHRASE" ? `"${kw.text}"` : kw.text}
-                  </Tooltip>
+                <Tag key={`${kw.text}-${kw.matchType}-${i}`} closable onClose={(e: React.MouseEvent) => { e.preventDefault(); removeKeyword(i); }} color="blue" style={{ display: "inline-flex", alignItems: "center", gap: 4, padding: "2px 8px" }}>
+                  <Select
+                    size="small"
+                    value={kw.matchType}
+                    onChange={(val) => updateKeywordMatchType(i, val)}
+                    style={{ width: 80, fontSize: 11 }}
+                    variant="borderless"
+                    popupMatchSelectWidth={false}
+                    options={[
+                      { value: "BROAD", label: "广泛" },
+                      { value: "PHRASE", label: "词组" },
+                      { value: "EXACT", label: "完全" },
+                    ]}
+                  />
+                  <span>{kw.matchType === "EXACT" ? `[${kw.text}]` : kw.matchType === "PHRASE" ? `"${kw.text}"` : kw.text}</span>
                 </Tag>
               ))}
             </Space>
             <Space.Compact style={{ width: "100%" }}>
+              <Select
+                size="middle"
+                value={newKwMatchType}
+                onChange={setNewKwMatchType}
+                style={{ width: 100 }}
+                options={[
+                  { value: "BROAD", label: "广泛" },
+                  { value: "PHRASE", label: "词组" },
+                  { value: "EXACT", label: "完全" },
+                ]}
+              />
               <Input
                 value={newKeyword} onChange={(e) => setNewKeyword(e.target.value)}
                 placeholder="输入关键词" onPressEnter={addKeyword}
@@ -1190,6 +1289,12 @@ export default function AdPreviewPage() {
               <Text type="secondary" style={{ fontSize: 12, display: "block", marginLeft: 24 }}>
                 勾选后自动从商家网站爬取产品图片。如爬取失败，可拖入图片或粘贴图片 URL
               </Text>
+              <Alert
+                type="info" showIcon
+                message="图片要求"
+                description="1. 图片需与品牌强关联（产品图、品牌场景图等）。2. 图片不要包含文字（上传后自动 OCR 检测）。"
+                style={{ marginTop: 8, marginLeft: 24, marginBottom: 0 }}
+              />
               {enableImages && !imagesLoading && imageUrls.length === 0 && (
                 <Alert
                   type="warning" showIcon icon={<WarningOutlined />}
@@ -1208,21 +1313,44 @@ export default function AdPreviewPage() {
                     <>
                       {imageUrls.length > 0 && (
                         <Space wrap style={{ marginBottom: 8 }}>
-                          {imageUrls.map((url, i) => (
+                          {imageUrls.map((url, i) => {
+                            const checkResult = imageCheckResults[i];
+                            return (
                             <div key={url + i} style={{ position: "relative", display: "inline-block" }}>
                               <Image
                                 src={url} alt={`img-${i}`}
                                 width={80} height={80}
-                                style={{ objectFit: "cover", borderRadius: 6, border: "1px solid #d9d9d9" }}
+                                style={{
+                                  objectFit: "cover", borderRadius: 6,
+                                  border: checkResult?.has_text ? "2px solid #ff4d4f" : "1px solid #d9d9d9",
+                                }}
                                 fallback="data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iODAiIGhlaWdodD0iODAiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+PHJlY3Qgd2lkdGg9IjgwIiBoZWlnaHQ9IjgwIiBmaWxsPSIjZjVmNWY1Ii8+PHRleHQgeD0iNDAiIHk9IjQ0IiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmaWxsPSIjYmZiZmJmIiBmb250LXNpemU9IjEyIj7ml6Dms5XliqDovb08L3RleHQ+PC9zdmc+"
                               />
+                              {checkResult?.checking && (
+                                <div style={{ position: "absolute", bottom: 2, left: 2, background: "rgba(0,0,0,0.5)", borderRadius: 4, padding: "1px 4px" }}>
+                                  <LoadingOutlined style={{ color: "#fff", fontSize: 10 }} />
+                                </div>
+                              )}
+                              {checkResult?.has_text && (
+                                <Tooltip title={`检测到文字: ${checkResult.text || ""}。建议更换为无文字图片`}>
+                                  <div style={{ position: "absolute", bottom: 2, left: 2, background: "#ff4d4f", borderRadius: 4, padding: "1px 4px" }}>
+                                    <Text style={{ color: "#fff", fontSize: 10 }}>含文字</Text>
+                                  </div>
+                                </Tooltip>
+                              )}
+                              {checkResult && !checkResult.checking && !checkResult.has_text && (
+                                <div style={{ position: "absolute", bottom: 2, left: 2, background: "#52c41a", borderRadius: 4, padding: "1px 4px" }}>
+                                  <CheckCircleOutlined style={{ color: "#fff", fontSize: 10 }} />
+                                </div>
+                              )}
                               <Button
                                 size="small" type="text" danger icon={<DeleteOutlined />}
                                 style={{ position: "absolute", top: -4, right: -4, background: "#fff", borderRadius: "50%", boxShadow: "0 1px 3px rgba(0,0,0,.2)", width: 20, height: 20, padding: 0, fontSize: 10 }}
                                 onClick={() => removeImage(i)}
                               />
                             </div>
-                          ))}
+                            );
+                          })}
                         </Space>
                       )}
                       <Upload.Dragger
@@ -1300,6 +1428,217 @@ export default function AdPreviewPage() {
                         <Button type="dashed" size="small" icon={<PlusOutlined />} onClick={addCallout} block>添加宣传信息（最多 10 条）</Button>
                       )}
                     </>
+                  )}
+                </div>
+              )}
+            </div>
+
+            <Divider style={{ margin: "12px 0" }} />
+
+            {/* 促销扩展 */}
+            <div style={{ marginBottom: 16 }}>
+              <Checkbox checked={enablePromotion} onChange={(e) => setEnablePromotion(e.target.checked)}>
+                <Space><TagOutlined /><Text strong>促销 (Promotion)</Text></Space>
+              </Checkbox>
+              <Text type="secondary" style={{ fontSize: 12, display: "block", marginLeft: 24 }}>添加促销信息，如折扣、优惠码等</Text>
+              {enablePromotion && (
+                <div style={{ marginTop: 12, marginLeft: 24 }}>
+                  <Row gutter={[8, 8]}>
+                    <Col span={12}>
+                      <Text type="secondary" style={{ fontSize: 12 }}>促销内容（必填）</Text>
+                      <Input size="small" value={promotion.promotion_target} placeholder="如：All Inclusive Deals" onChange={(e) => setPromotion((p) => ({ ...p, promotion_target: e.target.value }))} />
+                    </Col>
+                    <Col span={12}>
+                      <Text type="secondary" style={{ fontSize: 12 }}>落地页 URL</Text>
+                      <Input size="small" value={promotion.final_url} placeholder="https://..." onChange={(e) => setPromotion((p) => ({ ...p, final_url: e.target.value }))} />
+                    </Col>
+                    <Col span={8}>
+                      <Text type="secondary" style={{ fontSize: 12 }}>折扣类型</Text>
+                      <Select size="small" value={promotion.discount_type} onChange={(v) => setPromotion((p) => ({ ...p, discount_type: v }))} style={{ width: "100%" }}
+                        options={[{ value: "PERCENT", label: "百分比折扣" }, { value: "MONETARY", label: "金额折扣" }]} />
+                    </Col>
+                    <Col span={8}>
+                      {promotion.discount_type === "PERCENT" ? (
+                        <><Text type="secondary" style={{ fontSize: 12 }}>折扣百分比</Text>
+                        <InputNumber size="small" value={promotion.discount_percent} onChange={(v) => setPromotion((p) => ({ ...p, discount_percent: v || 0 }))} min={1} max={99} style={{ width: "100%" }} suffix="%" /></>
+                      ) : (
+                        <><Text type="secondary" style={{ fontSize: 12 }}>折扣金额</Text>
+                        <InputNumber size="small" value={promotion.discount_amount} onChange={(v) => setPromotion((p) => ({ ...p, discount_amount: v || 0 }))} min={1} style={{ width: "100%" }} prefix="$" /></>
+                      )}
+                    </Col>
+                    <Col span={8}>
+                      <Text type="secondary" style={{ fontSize: 12 }}>货币</Text>
+                      <Select size="small" value={promotion.currency_code} onChange={(v) => setPromotion((p) => ({ ...p, currency_code: v }))} style={{ width: "100%" }}
+                        options={[{ value: "USD", label: "USD" }, { value: "GBP", label: "GBP" }, { value: "EUR", label: "EUR" }, { value: "CAD", label: "CAD" }, { value: "AUD", label: "AUD" }]} />
+                    </Col>
+                    <Col span={8}>
+                      <Text type="secondary" style={{ fontSize: 12 }}>促销代码（可选）</Text>
+                      <Input size="small" value={promotion.promo_code} placeholder="如：SAVE20" onChange={(e) => setPromotion((p) => ({ ...p, promo_code: e.target.value }))} />
+                    </Col>
+                    <Col span={8}>
+                      <Text type="secondary" style={{ fontSize: 12 }}>语言</Text>
+                      <Select size="small" value={promotion.language_code} onChange={(v) => setPromotion((p) => ({ ...p, language_code: v }))} style={{ width: "100%" }}
+                        options={[{ value: "en", label: "English" }, { value: "de", label: "Deutsch" }, { value: "fr", label: "Français" }, { value: "es", label: "Español" }, { value: "ja", label: "日本語" }]} />
+                    </Col>
+                    <Col span={8}>
+                      <Text type="secondary" style={{ fontSize: 12 }}>促销场合（可选）</Text>
+                      <Select size="small" value={promotion.occasion || undefined} onChange={(v) => setPromotion((p) => ({ ...p, occasion: v }))} allowClear placeholder="选择场合" style={{ width: "100%" }}
+                        options={[
+                          { value: "NEW_YEARS", label: "新年" }, { value: "VALENTINES_DAY", label: "情人节" },
+                          { value: "EASTER", label: "复活节" }, { value: "MOTHERS_DAY", label: "母亲节" },
+                          { value: "FATHERS_DAY", label: "父亲节" }, { value: "LABOR_DAY", label: "劳动节" },
+                          { value: "BACK_TO_SCHOOL", label: "返校季" }, { value: "HALLOWEEN", label: "万圣节" },
+                          { value: "BLACK_FRIDAY", label: "黑五" }, { value: "CYBER_MONDAY", label: "网一" },
+                          { value: "CHRISTMAS", label: "圣诞节" }, { value: "BOXING_DAY", label: "节礼日" },
+                          { value: "INDEPENDENCE_DAY", label: "独立日" }, { value: "SINGLES_DAY", label: "双十一" },
+                          { value: "YEAR_END_GIFT", label: "年终礼" },
+                        ]} />
+                    </Col>
+                  </Row>
+                </div>
+              )}
+            </div>
+
+            <Divider style={{ margin: "12px 0" }} />
+
+            {/* 价格扩展 */}
+            <div style={{ marginBottom: 16 }}>
+              <Checkbox checked={enablePrice} onChange={(e) => {
+                setEnablePrice(e.target.checked);
+                if (e.target.checked && priceItems.length === 0) {
+                  setPriceItems([
+                    { header: "", description: "", price_amount: 0, currency_code: "USD", final_url: "" },
+                    { header: "", description: "", price_amount: 0, currency_code: "USD", final_url: "" },
+                    { header: "", description: "", price_amount: 0, currency_code: "USD", final_url: "" },
+                  ]);
+                }
+              }}>
+                <Space><DollarOutlined /><Text strong>价格 (Price)</Text></Space>
+              </Checkbox>
+              <Text type="secondary" style={{ fontSize: 12, display: "block", marginLeft: 24 }}>展示产品或服务的价格信息</Text>
+              {enablePrice && (
+                <div style={{ marginTop: 12, marginLeft: 24 }}>
+                  <div style={{ marginBottom: 8 }}>
+                    <Text type="secondary" style={{ fontSize: 12 }}>价格类型</Text>
+                    <Select size="small" value={priceType} onChange={setPriceType} style={{ width: "100%", marginTop: 4 }}
+                      options={[
+                        { value: "BRANDS", label: "品牌" }, { value: "EVENTS", label: "活动" },
+                        { value: "LOCATIONS", label: "地点" }, { value: "NEIGHBORHOODS", label: "区域" },
+                        { value: "PRODUCT_CATEGORIES", label: "产品类别" }, { value: "PRODUCT_TIERS", label: "产品层级" },
+                        { value: "SERVICES", label: "服务" }, { value: "SERVICE_CATEGORIES", label: "服务类别" },
+                        { value: "SERVICE_TIERS", label: "服务层级" },
+                      ]} />
+                  </div>
+                  {priceItems.map((item, i) => (
+                    <Card key={i} size="small" style={{ marginBottom: 8, background: "#fafafa" }}
+                      title={<Text type="secondary" style={{ fontSize: 12 }}>价格项 {i + 1}</Text>}
+                      extra={priceItems.length > 3 && <Button size="small" type="text" danger icon={<DeleteOutlined />} onClick={() => setPriceItems((prev) => prev.filter((_, idx) => idx !== i))} />}
+                    >
+                      <Row gutter={[8, 8]}>
+                        <Col span={12}>
+                          <Input size="small" value={item.header} placeholder="标题（必填，≤25字符）" maxLength={28}
+                            onChange={(e) => setPriceItems((prev) => { const n = [...prev]; n[i] = { ...n[i], header: e.target.value }; return n; })} />
+                        </Col>
+                        <Col span={12}>
+                          <Input size="small" value={item.description} placeholder="描述（≤25字符）" maxLength={28}
+                            onChange={(e) => setPriceItems((prev) => { const n = [...prev]; n[i] = { ...n[i], description: e.target.value }; return n; })} />
+                        </Col>
+                        <Col span={8}>
+                          <InputNumber size="small" value={item.price_amount} min={0} step={0.01} style={{ width: "100%" }} prefix="$"
+                            onChange={(v) => setPriceItems((prev) => { const n = [...prev]; n[i] = { ...n[i], price_amount: v || 0 }; return n; })} />
+                        </Col>
+                        <Col span={8}>
+                          <Select size="small" value={item.currency_code} style={{ width: "100%" }}
+                            onChange={(v) => setPriceItems((prev) => { const n = [...prev]; n[i] = { ...n[i], currency_code: v }; return n; })}
+                            options={[{ value: "USD", label: "USD" }, { value: "GBP", label: "GBP" }, { value: "EUR", label: "EUR" }]} />
+                        </Col>
+                        <Col span={8}>
+                          <Input size="small" value={item.final_url} placeholder="链接 URL"
+                            onChange={(e) => setPriceItems((prev) => { const n = [...prev]; n[i] = { ...n[i], final_url: e.target.value }; return n; })} />
+                        </Col>
+                      </Row>
+                    </Card>
+                  ))}
+                  {priceItems.length < 8 && (
+                    <Button type="dashed" size="small" icon={<PlusOutlined />} block
+                      onClick={() => setPriceItems((prev) => [...prev, { header: "", description: "", price_amount: 0, currency_code: "USD", final_url: "" }])}>
+                      添加价格项（最多 8 项）
+                    </Button>
+                  )}
+                </div>
+              )}
+            </div>
+
+            <Divider style={{ margin: "12px 0" }} />
+
+            {/* 致电扩展 */}
+            <div style={{ marginBottom: 16 }}>
+              <Checkbox checked={enableCall} onChange={(e) => setEnableCall(e.target.checked)}>
+                <Space><PhoneOutlined /><Text strong>致电 (Call)</Text></Space>
+              </Checkbox>
+              <Text type="secondary" style={{ fontSize: 12, display: "block", marginLeft: 24 }}>添加电话号码，用户可直接拨打</Text>
+              {enableCall && (
+                <div style={{ marginTop: 12, marginLeft: 24 }}>
+                  <Row gutter={8}>
+                    <Col span={8}>
+                      <Text type="secondary" style={{ fontSize: 12 }}>国家代码</Text>
+                      <Select size="small" value={callCountryCode} onChange={setCallCountryCode} style={{ width: "100%", marginTop: 4 }}
+                        options={[
+                          { value: "US", label: "US (+1)" }, { value: "GB", label: "GB (+44)" },
+                          { value: "CA", label: "CA (+1)" }, { value: "AU", label: "AU (+61)" },
+                          { value: "DE", label: "DE (+49)" }, { value: "FR", label: "FR (+33)" },
+                          { value: "JP", label: "JP (+81)" }, { value: "BR", label: "BR (+55)" },
+                        ]} />
+                    </Col>
+                    <Col span={16}>
+                      <Text type="secondary" style={{ fontSize: 12 }}>电话号码</Text>
+                      <Input size="small" value={callPhoneNumber} placeholder="如：+1-800-123-4567"
+                        onChange={(e) => setCallPhoneNumber(e.target.value)} style={{ marginTop: 4 }} />
+                    </Col>
+                  </Row>
+                </div>
+              )}
+            </div>
+
+            <Divider style={{ margin: "12px 0" }} />
+
+            {/* 结构化摘要 */}
+            <div>
+              <Checkbox checked={enableSnippet} onChange={(e) => setEnableSnippet(e.target.checked)}>
+                <Space><UnorderedListOutlined /><Text strong>结构化摘要 (Structured Snippet)</Text></Space>
+              </Checkbox>
+              <Text type="secondary" style={{ fontSize: 12, display: "block", marginLeft: 24 }}>展示产品或服务的特定属性列表</Text>
+              {enableSnippet && (
+                <div style={{ marginTop: 12, marginLeft: 24 }}>
+                  <div style={{ marginBottom: 8 }}>
+                    <Text type="secondary" style={{ fontSize: 12 }}>标题类型</Text>
+                    <Select size="small" value={snippetHeader} onChange={setSnippetHeader} style={{ width: "100%", marginTop: 4 }}
+                      options={[
+                        { value: "Brands", label: "品牌 (Brands)" }, { value: "Courses", label: "课程 (Courses)" },
+                        { value: "Degree programs", label: "学位 (Degree programs)" }, { value: "Destinations", label: "目的地 (Destinations)" },
+                        { value: "Featured hotels", label: "精选酒店 (Featured hotels)" }, { value: "Insurance coverage", label: "保险 (Insurance coverage)" },
+                        { value: "Models", label: "型号 (Models)" }, { value: "Neighborhoods", label: "区域 (Neighborhoods)" },
+                        { value: "Service catalog", label: "服务目录 (Service catalog)" }, { value: "Shows", label: "节目 (Shows)" },
+                        { value: "Styles", label: "风格 (Styles)" }, { value: "Types", label: "类型 (Types)" },
+                        { value: "Amenities", label: "设施 (Amenities)" },
+                      ]} />
+                  </div>
+                  {snippetValues.map((v, i) => (
+                    <div key={i} style={{ display: "flex", gap: 8, marginBottom: 6, alignItems: "center" }}>
+                      <Input size="small" value={v} placeholder={`值 ${i + 1}（≤25字符）`} maxLength={28}
+                        onChange={(e) => setSnippetValues((prev) => { const n = [...prev]; n[i] = e.target.value; return n; })}
+                        style={{ flex: 1 }} />
+                      {snippetValues.length > 3 && (
+                        <Button size="small" type="text" danger icon={<DeleteOutlined />}
+                          onClick={() => setSnippetValues((prev) => prev.filter((_, idx) => idx !== i))} />
+                      )}
+                    </div>
+                  ))}
+                  {snippetValues.length < 10 && (
+                    <Button type="dashed" size="small" icon={<PlusOutlined />} block
+                      onClick={() => setSnippetValues((prev) => [...prev, ""])}>
+                      添加值（最少 3 个，最多 10 个）
+                    </Button>
                   )}
                 </div>
               )}

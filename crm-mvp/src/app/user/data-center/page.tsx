@@ -135,8 +135,7 @@ export default function DataCenterPage() {
     pausedCount: 0,
   };
 
-  // 为表格添加序号
-  const rowsWithIndex = useMemo(() => rows.map((r, i) => ({ ...r, _index: i + 1 })), [rows]);
+  // 表格数据（不再添加序号列）
 
   // 一键同步：广告数据 + 联盟交易（合并为单个操作）
   const handleSync = useCallback(async (forceFullSync = false) => {
@@ -253,13 +252,8 @@ export default function DataCenterPage() {
   const statusColors: Record<string, string> = { ENABLED: "green", PAUSED: "orange", REMOVED: "red" };
   const statusLabels: Record<string, string> = { ENABLED: "已启用", PAUSED: "已暂停", REMOVED: "已移除" };
 
-  type IndexedRow = CampaignRow & { _index: number };
+  type IndexedRow = CampaignRow;
   const columns: ColumnsType<IndexedRow> = [
-    {
-      title: "#", dataIndex: "_index", width: 45, fixed: "left", align: "center",
-      sorter: (a, b) => a._index - b._index,
-      render: (v: number) => <Text style={{ fontSize: 12 }}>{v}</Text>,
-    },
     {
       title: "CID", dataIndex: "customer_id", width: 110, fixed: "left",
       render: (v: string) => <Text copyable={{ text: v }} style={{ fontSize: 12 }}>{formatCid(v)}</Text>,
@@ -478,7 +472,7 @@ export default function DataCenterPage() {
       {/* ========== 广告系列表格 ========== */}
       <Card size="small" styles={{ body: { padding: "0 8px 8px" } }}>
         <Table<IndexedRow>
-          rowKey="id" loading={isLoading} dataSource={rowsWithIndex} columns={columns}
+          rowKey="id" loading={isLoading} dataSource={rows} columns={columns}
           size="small" scroll={{ x: 1040 }}
           pagination={{ pageSize: 50, showTotal: (t) => `共 ${t} 条`, showSizeChanger: true, pageSizeOptions: ["20", "50", "100"] }}
           summary={() => {
@@ -486,15 +480,15 @@ export default function DataCenterPage() {
             return (
               <Table.Summary fixed>
                 <Table.Summary.Row>
-                  <Table.Summary.Cell index={0} colSpan={4}><Text strong>合计</Text></Table.Summary.Cell>
+                  <Table.Summary.Cell index={0} colSpan={3}><Text strong>合计</Text></Table.Summary.Cell>
+                  <Table.Summary.Cell index={3} />
                   <Table.Summary.Cell index={4} />
-                  <Table.Summary.Cell index={5} />
-                  <Table.Summary.Cell index={6} align="right"><Text strong>${summary.avgCpc.toFixed(4)}</Text></Table.Summary.Cell>
-                  <Table.Summary.Cell index={7} align="right"><Text strong style={{ color: "#cf1322" }}>${summary.totalCost.toFixed(2)}</Text></Table.Summary.Cell>
-                  <Table.Summary.Cell index={8} align="right"><Text strong style={{ color: "#389e0d" }}>${summary.totalCommission.toFixed(2)}</Text></Table.Summary.Cell>
-                  <Table.Summary.Cell index={9} align="right"><Text strong type="danger">${summary.totalRejectedCommission.toFixed(2)}</Text></Table.Summary.Cell>
-                  <Table.Summary.Cell index={10} align="right"><Text strong>{summary.totalClicks}</Text></Table.Summary.Cell>
-                  <Table.Summary.Cell index={11} align="right"><Text strong>{summary.totalImpressions}</Text></Table.Summary.Cell>
+                  <Table.Summary.Cell index={5} align="right"><Text strong>${summary.avgCpc.toFixed(4)}</Text></Table.Summary.Cell>
+                  <Table.Summary.Cell index={6} align="right"><Text strong style={{ color: "#cf1322" }}>${summary.totalCost.toFixed(2)}</Text></Table.Summary.Cell>
+                  <Table.Summary.Cell index={7} align="right"><Text strong style={{ color: "#389e0d" }}>${summary.totalCommission.toFixed(2)}</Text></Table.Summary.Cell>
+                  <Table.Summary.Cell index={8} align="right"><Text strong type="danger">${summary.totalRejectedCommission.toFixed(2)}</Text></Table.Summary.Cell>
+                  <Table.Summary.Cell index={9} align="right"><Text strong>{summary.totalClicks}</Text></Table.Summary.Cell>
+                  <Table.Summary.Cell index={10} align="right"><Text strong>{summary.totalImpressions}</Text></Table.Summary.Cell>
                 </Table.Summary.Row>
               </Table.Summary>
             );

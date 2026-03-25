@@ -30,7 +30,8 @@
     "react-dom": "19.2.3",
     "recharts": "^3.8.0",
     "ssh2": "^1.17.0",
-    "swr": "^2.3.3"
+    "swr": "^2.3.3",
+    "tesseract.js": "^5.1.1"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",

@@ -304,13 +304,19 @@ export async function GET(req: NextRequest) {
     pausedCount,
   };
 
-  // ─── 表格行：按状态排序后取前 200 条 ───
+  // ─── 表格行：按状态排序，同状态内按广告系列名称中的序号升序，取前 200 条 ───
   const STATUS_ORDER: Record<string, number> = { ENABLED: 0, PAUSED: 1, REMOVED: 2 };
+  const extractSeq = (name: string | null): number => {
+    if (!name) return 999999;
+    const first = name.split("-")[0] || "";
+    const digits = first.replace(/^[a-zA-Z]+/, "");
+    return /^\d+$/.test(digits) ? parseInt(digits, 10) : 999999;
+  };
   dedupedCampaigns.sort((a, b) => {
     const pa = STATUS_ORDER[a.google_status || ""] ?? 2;
     const pb = STATUS_ORDER[b.google_status || ""] ?? 2;
     if (pa !== pb) return pa - pb;
-    return 0;
+    return extractSeq(a.campaign_name) - extractSeq(b.campaign_name);
   });
 
   const displayCampaigns = dedupedCampaigns.slice(0, 200);

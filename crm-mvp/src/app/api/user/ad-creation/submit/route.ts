@@ -53,6 +53,7 @@ export async function POST(req: NextRequest) {
     sitelinks = [], image_urls = [], callouts = [],
     customer_id: bodyCustomerId, mcc_account_id: bodyMccAccountId,
     ad_language, eu_political_ad,
+    promotion, price, call: callExtension, structured_snippet,
   } = body;
 
   if (!campaign_id) return apiError("缺少 campaign_id");
@@ -384,6 +385,138 @@ export async function POST(req: NextRequest) {
       assetTempId--;
     }
 
+    // ─── 9b. 促销扩展 (Promotion) ───
+    if (promotion?.promotion_target) {
+      const assetTempRn = `customers/${cid}/assets/${assetTempId}`;
+      const promotionAsset: Record<string, unknown> = {
+        promotion_target: promotion.promotion_target,
+        language_code: promotion.language_code || "en",
+      };
+      if (promotion.discount_type === "PERCENT" && promotion.discount_percent) {
+        promotionAsset.percent_off = promotion.discount_percent;
+      } else if (promotion.discount_type === "MONETARY" && promotion.discount_amount) {
+        promotionAsset.money_amount_off = {
+          amount_micros: String(Math.round(promotion.discount_amount * 1_000_000)),
+          currency_code: promotion.currency_code || "USD",
+        };
+      }
+      if (promotion.promo_code) promotionAsset.orders_over_amount = undefined;
+      if (promotion.promo_code) promotionAsset.promotion_code = promotion.promo_code;
+      if (promotion.occasion) promotionAsset.occasion = promotion.occasion;
+      if (promotion.start_date) promotionAsset.start_date = promotion.start_date;
+      if (promotion.end_date) promotionAsset.end_date = promotion.end_date;
+
+      operations.push({
+        asset_operation: {
+          create: {
+            resource_name: assetTempRn,
+            promotion_asset: promotionAsset,
+            ...(promotion.final_url ? { final_urls: [promotion.final_url] } : {}),
+          },
+        },
+      });
+      operations.push({
+        campaign_asset_operation: {
+          create: {
+            asset: assetTempRn,
+            campaign: campaignTempRn,
+            field_type: "PROMOTION",
+          },
+        },
+      });
+      assetTempId--;
+    }
+
+    // ─── 9c. 价格扩展 (Price) ───
+    if (price?.items?.length > 0) {
+      const assetTempRn = `customers/${cid}/assets/${assetTempId}`;
+      const priceOfferings = price.items.map((item: any) => ({
+        header: (item.header || "").slice(0, 25),
+        description: (item.description || "").slice(0, 25),
+        price: {
+          amount_micros: String(Math.round((item.price_amount || 0) * 1_000_000)),
+          currency_code: item.currency_code || "USD",
+        },
+        unit: item.unit || "PER_UNIT",
+        ...(item.final_url ? { final_urls: [item.final_url] } : {}),
+      }));
+      operations.push({
+        asset_operation: {
+          create: {
+            resource_name: assetTempRn,
+            price_asset: {
+              type: price.type || "BRANDS",
+              language_code: "en",
+              price_offerings: priceOfferings,
+            },
+          },
+        },
+      });
+      operations.push({
+        campaign_asset_operation: {
+          create: {
+            asset: assetTempRn,
+            campaign: campaignTempRn,
+            field_type: "PRICE",
+          },
+        },
+      });
+      assetTempId--;
+    }
+
+    // ─── 9d. 致电扩展 (Call) ───
+    if (callExtension?.phone_number) {
+      const assetTempRn = `customers/${cid}/assets/${assetTempId}`;
+      operations.push({
+        asset_operation: {
+          create: {
+            resource_name: assetTempRn,
+            call_asset: {
+              country_code: callExtension.country_code || "US",
+              phone_number: callExtension.phone_number,
+              call_conversion_reporting_state: "DISABLED",
+            },
+          },
+        },
+      });
+      operations.push({
+        campaign_asset_operation: {
+          create: {
+            asset: assetTempRn,
+            campaign: campaignTempRn,
+            field_type: "CALL",
+          },
+        },
+      });
+      assetTempId--;
+    }
+
+    // ─── 9e. 结构化摘要 (Structured Snippet) ───
+    if (structured_snippet?.values?.length >= 3) {
+      const assetTempRn = `customers/${cid}/assets/${assetTempId}`;
+      operations.push({
+        asset_operation: {
+          create: {
+            resource_name: assetTempRn,
+            structured_snippet_asset: {
+              header: structured_snippet.header || "Brands",
+              values: structured_snippet.values.slice(0, 10).map((v: string) => (v || "").slice(0, 25)),
+            },
+          },
+        },
+      });
+      operations.push({
+        campaign_asset_operation: {
+          create: {
+            asset: assetTempRn,
+            campaign: campaignTempRn,
+            field_type: "STRUCTURED_SNIPPET",
+          },
+        },
+      });
+      assetTempId--;
+    }
+
     // ─── 10. 预加载图片素材（串行加载 + 累计内存限额，实际提交在主广告创建成功后） ───
     const MAX_TOTAL_IMAGE_BYTES = 50 * 1024 * 1024;
     const MAX_IMAGES = 20;
@@ -480,6 +613,7 @@ export async function POST(req: NextRequest) {
     const googleAdGroupId = adGroupRn.split("/").pop() || "";
 
     // ─── 11. 图片素材独立提交（第二次 mutate，失败不影响主广告） ───
+    // 搜索广告系列必须使用 AD_IMAGE field_type（MARKETING_IMAGE 不兼容 SEARCH Campaign）
     const imageUploadResult = { success: 0, failed: 0, errors: [] as string[] };
     if (imageAssets.length > 0 && campaignRn) {
       try {
@@ -502,7 +636,7 @@ export async function POST(req: NextRequest) {
               create: {
                 asset: assetRn,
                 campaign: campaignRn,
-                field_type: "MARKETING_IMAGE",
+                field_type: "AD_IMAGE",
               },
             },
           });
