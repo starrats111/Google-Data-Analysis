@@ -630,15 +630,120 @@ async function selectBestImages(
   _merchantUrl: string,
   rawImages: string[],
 ): Promise<string[]> {
-  const filtered = rawImages.filter((url) => {
+  // ── 1. URL 关键词黑名单过滤（快速排除无关图片） ──
+  const URL_BLACKLIST = [
+    "logo", "favicon", "icon", "avatar", "payment", "badge", "social",
+    "flag", "arrow", "spinner", "loading", "placeholder", "blank",
+    "banner", "header-bg", "footer", "newsletter", "popup", "modal",
+    "trustpilot", "review-star", "rating", "captcha", "recaptcha",
+    "pixel", "tracking", "analytics", "ad-", "advert", "sponsor",
+    "facebook", "twitter", "instagram", "youtube", "pinterest", "tiktok",
+    "linkedin", "whatsapp", "telegram", "wechat", "share",
+    "visa", "mastercard", "paypal", "amex", "stripe", "klarna", "afterpay",
+    "ssl", "secure", "certificate", "norton", "mcafee",
+    "shipping-", "delivery-icon", "return-icon", "warranty",
+    "emoji", "smiley", "thumb", "check-mark", "close-btn",
+    "bg-", "background", "pattern", "texture", "gradient",
+    "1x1", "spacer", "clear.gif", "pixel.gif",
+  ];
+
+  const urlFiltered = rawImages.filter((url) => {
     const lower = url.toLowerCase();
-    return !lower.includes("logo") && !lower.includes("favicon")
-      && !lower.includes("icon") && !lower.includes("avatar")
-      && !lower.includes("payment") && !lower.includes("badge")
-      && !lower.includes("social") && !lower.includes("flag") && !lower.includes("arrow");
+    // 排除黑名单关键词
+    if (URL_BLACKLIST.some((kw) => lower.includes(kw))) return false;
+    // 排除 SVG（通常是图标）
+    if (lower.endsWith(".svg")) return false;
+    // 排除 base64 data URI（通常是小图标）
+    if (lower.startsWith("data:")) return false;
+    // 排除明显的小尺寸（URL 中带尺寸参数）
+    const tinyMatch = lower.match(/[/_-](\d+)x(\d+)/);
+    if (tinyMatch) {
+      const w = parseInt(tinyMatch[1], 10);
+      const h = parseInt(tinyMatch[2], 10);
+      if (w < 150 || h < 150) return false;
+    }
+    return true;
   });
-  if (filtered.length === 0) return rawImages.slice(0, 20);
-  return filtered.slice(0, 20);
+
+  if (urlFiltered.length === 0) return rawImages.slice(0, 20);
+
+  // ── 2. HEAD 请求检测实际图片尺寸（排除太小的） ──
+  const sizeChecked: string[] = [];
+  const HEAD_CONCURRENCY = 10;
+  const HEAD_TIMEOUT = 5000;
+
+  for (let i = 0; i < urlFiltered.length && sizeChecked.length < 40; i += HEAD_CONCURRENCY) {
+    const batch = urlFiltered.slice(i, i + HEAD_CONCURRENCY);
+    const results = await Promise.allSettled(
+      batch.map(async (url) => {
+        try {
+          const resp = await fetch(url, {
+            method: "HEAD",
+            signal: AbortSignal.timeout(HEAD_TIMEOUT),
+            headers: { "User-Agent": "Googlebot-Image/1.0" },
+          });
+          if (!resp.ok) return null;
+          const contentType = resp.headers.get("content-type") || "";
+          if (!contentType.startsWith("image/")) return null;
+          // 排除太小的图片（< 5KB 通常是图标/占位符）
+          const contentLength = parseInt(resp.headers.get("content-length") || "0", 10);
+          if (contentLength > 0 && contentLength < 5000) return null;
+          return url;
+        } catch {
+          return url; // HEAD 失败的保留（有些服务器不支持 HEAD）
+        }
+      }),
+    );
+    for (const r of results) {
+      if (r.status === "fulfilled" && r.value) sizeChecked.push(r.value);
+    }
+  }
+
+  if (sizeChecked.length === 0) return urlFiltered.slice(0, 20);
+
+  // ── 3. 批量 OCR 检测（排除有文字的图片） ──
+  const OCR_CONCURRENCY = 5;
+  const OCR_TIMEOUT = 10000;
+  const clean: string[] = [];
+
+  for (let i = 0; i < sizeChecked.length && clean.length < 20; i += OCR_CONCURRENCY) {
+    const batch = sizeChecked.slice(i, i + OCR_CONCURRENCY);
+    const results = await Promise.allSettled(
+      batch.map(async (url) => {
+        try {
+          const resp = await fetch(url, {
+            signal: AbortSignal.timeout(OCR_TIMEOUT),
+            headers: { "User-Agent": "Googlebot-Image/1.0" },
+          });
+          if (!resp.ok) return null;
+          const buf = Buffer.from(await resp.arrayBuffer());
+          // 太小的图片直接排除
+          if (buf.length < 5000) return null;
+          // 太大的图片跳过 OCR（保留，可能是高清产品图）
+          if (buf.length > 2 * 1024 * 1024) return url;
+
+          const Tesseract = (await import("tesseract.js")).default;
+          const { data } = await Tesseract.recognize(buf, "eng", {
+            logger: () => {},
+          });
+          // 过滤有意义的文字（长度>2，置信度>60）
+          const meaningfulWords = (data.words || []).filter(
+            (w) => w.text.replace(/[^a-zA-Z0-9]/g, "").length > 2 && w.confidence > 60,
+          );
+          // 超过 3 个有意义的词 → 判定为有文字的图片
+          if (meaningfulWords.length > 3) return null;
+          return url;
+        } catch {
+          return url; // OCR 失败的保留
+        }
+      }),
+    );
+    for (const r of results) {
+      if (r.status === "fulfilled" && r.value) clean.push(r.value);
+    }
+  }
+
+  return clean.length > 0 ? clean : sizeChecked.slice(0, 20);
 }
 
 /** 从 HTML 中提取商家真实卖点信息（运费政策、退换货、品牌特色等） */
