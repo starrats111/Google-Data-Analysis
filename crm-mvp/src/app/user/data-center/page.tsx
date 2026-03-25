@@ -116,7 +116,7 @@ export default function DataCenterPage() {
     rowMeta?: { displayedCount: number; totalCount: number; isLimited: boolean };
   }>("/api/user/data-center/campaigns", queryParams);
 
-  const rows = campaignData?.rows || [];
+  const rows = (campaignData?.rows || []).filter((r: IndexedRow) => r.campaign_name && /^\d/.test(r.campaign_name));
   const costByMcc = campaignData?.costByMcc || [];
   const rowMeta = campaignData?.rowMeta;
   const summary = campaignData?.summary || {
