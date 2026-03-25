@@ -260,6 +260,12 @@ export default function DataCenterPage() {
     },
     {
       title: "广告系列", dataIndex: "campaign_name", width: 280,
+      sorter: (a, b) => {
+        const seqA = parseInt(a.campaign_name?.split("-")[0] || "0", 10) || 0;
+        const seqB = parseInt(b.campaign_name?.split("-")[0] || "0", 10) || 0;
+        return seqA - seqB;
+      },
+      defaultSortOrder: "descend" as const,
       render: (v: string) => (
         <Text style={{ fontSize: 12, wordBreak: "break-all", whiteSpace: "normal", lineHeight: "1.4" }}>{v}</Text>
       ),
