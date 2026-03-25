@@ -323,6 +323,7 @@ const PLATFORM_TXN_CONFIG: Record<string, PlatformTxnConfig> = {
 
 export interface PlatformTransaction {
   transaction_id: string;
+  order_id?: string;          // 原始 order_id（CG/PM/BSH/CF 平台用于辅助去重）
   transaction_time: string; // YYYY-MM-DD HH:MM:SS
   merchant: string;
   merchant_id: string;
@@ -508,6 +509,9 @@ function parseTransactions(platform: string, data: Record<string, unknown>): Pla
       item.id || ""
     );
 
+    // 同时保留原始 order_id，用于辅助去重（同一 order_id 可能对应多个商品行 ID）
+    const rawOrderId = String(item.order_id || item.orderId || "");
+
     const merchant = String(
       item.merchant || item.merchant_name || item.merchantName ||
       item.advertiser_name || item.brand || item.name || ""
@@ -541,6 +545,7 @@ function parseTransactions(platform: string, data: Record<string, unknown>): Pla
 
     return {
       transaction_id: txnId,
+      order_id: rawOrderId || undefined,
       transaction_time: txnTime,
       merchant,
       merchant_id: mid,
@@ -576,7 +581,8 @@ export async function fetchAllTransactions(
   const allTxns: PlatformTransaction[] = [];
   const txnIndex = new Map<string, number>(); // transaction_id → index in allTxns
 
-  const maxDays = (platform === "RW" || platform === "LB") ? 60 : 90;
+  // CG API 限制查询跨度不超过 62 天，统一用 60 天切片
+  const maxDays = 60;
   const dateChunks = splitDateRange(startDate, endDate, maxDays);
 
   const mergeTxn = (t: PlatformTransaction) => {

@@ -126,6 +126,25 @@ export async function POST(req: NextRequest) {
 
       let synced = 0;
       let skipped = 0;
+      let cleaned = 0;
+
+      // 预清理：如果交易有 order_id，先删除数据库中以该 order_id 作为 transaction_id 的旧记录
+      // 这解决了历史代码用 order_id 而非 collabgrow_id 导致的重复问题
+      const orderIdsToClean = dedupedTxns
+        .filter((txn) => txn.order_id && txn.transaction_id !== txn.order_id)
+        .map((txn) => txn.order_id!);
+      if (orderIdsToClean.length > 0) {
+        for (let ci = 0; ci < orderIdsToClean.length; ci += 200) {
+          const batch = orderIdsToClean.slice(ci, ci + 200);
+          const result = await prisma.affiliate_transactions.deleteMany({
+            where: { platform, user_id: userId, transaction_id: { in: batch } },
+          });
+          cleaned += result.count;
+        }
+        if (cleaned > 0) {
+          console.log(`[sync-txn] ${platform}/${label}: 清理了 ${cleaned} 条旧 order_id 格式记录`);
+        }
+      }
 
       for (let i = 0; i < dedupedTxns.length; i += 50) {
         const batch = dedupedTxns.slice(i, i + 50);

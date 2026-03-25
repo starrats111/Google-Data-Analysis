@@ -366,6 +366,19 @@ async function syncAllUsersTransactions(): Promise<unknown> {
           const r = await fetchAllTransactions(platform, conn.api_key!, startStr, endStr);
           if (!r.transactions.length) continue;
 
+          // 预清理：删除数据库中以 order_id 作为 transaction_id 的旧记录（防重复）
+          const orderIdsToClean = r.transactions
+            .filter((txn) => txn.order_id && txn.transaction_id !== txn.order_id)
+            .map((txn) => txn.order_id!);
+          if (orderIdsToClean.length > 0) {
+            for (let ci = 0; ci < orderIdsToClean.length; ci += 200) {
+              const batch = orderIdsToClean.slice(ci, ci + 200);
+              await prisma.affiliate_transactions.deleteMany({
+                where: { platform, user_id: userId, transaction_id: { in: batch } },
+              });
+            }
+          }
+
           for (const txn of r.transactions) {
             if (!txn.transaction_id) continue;
             const mid = txn.merchant_id || "";
