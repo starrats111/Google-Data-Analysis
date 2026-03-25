@@ -242,6 +242,26 @@ async function runMigrationAsync(taskId: bigint) {
       await update({ progress: 75, step_detail: "Token 池中没有 CF Token，跳过 DNS 配置" });
     }
 
+    // Step 2.5: 注册站点到宝塔面板数据库
+    try {
+      await update({ progress: 77, step_detail: "正在注册站点到宝塔面板..." });
+      const now = new Date().toISOString().replace("T", " ").slice(0, 19);
+      // 检查是否已存在
+      const existing = await exec(`sudo sqlite3 /www/server/panel/data/default.db "SELECT id FROM sites WHERE name='${task.domain}' LIMIT 1;" 2>/dev/null`);
+      if (!existing.trim()) {
+        await exec(`sudo sqlite3 /www/server/panel/data/default.db "INSERT INTO sites (name, path, status, \\\`index\\\`, ps, addtime) VALUES ('${task.domain}', '${sitePath}', '1', 'index.html', '${task.domain}', '${now}');"`);
+        const sid = await exec(`sudo sqlite3 /www/server/panel/data/default.db "SELECT id FROM sites WHERE name='${task.domain}' ORDER BY id DESC LIMIT 1;"`);
+        if (sid.trim()) {
+          await exec(`sudo sqlite3 /www/server/panel/data/default.db "INSERT INTO domain (pid, name, port, addtime) VALUES (${sid.trim()}, '${task.domain}', 80, '${now}');"`);
+        }
+        await update({ step_detail: `宝塔面板站点已注册 (id=${sid.trim()})` });
+      } else {
+        await update({ step_detail: `宝塔面板已存在该站点 (id=${existing.trim()})` });
+      }
+    } catch (btErr) {
+      await update({ step_detail: `宝塔注册异常（不影响迁移）: ${btErr instanceof Error ? btErr.message : String(btErr)}` });
+    }
+
     // Step 3: SSL
     await update({ status: "ssl", progress: 80, step_detail: "正在申请 SSL 证书..." });
 
