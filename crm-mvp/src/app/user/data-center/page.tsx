@@ -532,7 +532,7 @@ export default function DataCenterPage() {
       </Modal>
 
       {/* ========== 佣金详情弹窗（含汇总指标 + 按平台账号明细） ========== */}
-      <Modal title="佣金详情" open={commissionModal} onCancel={() => setCommissionModal(false)} footer={null} width={750}>
+      <Modal title="佣金详情" open={commissionModal} onCancel={() => setCommissionModal(false)} footer={null} width={900}>
         {/* 汇总指标 */}
         <Row gutter={[12, 12]} style={{ marginBottom: 16 }}>
           <Col span={8}>
@@ -589,14 +589,15 @@ export default function DataCenterPage() {
                 size="small"
                 loading={loadingCommission}
                 pagination={false}
+                scroll={{ x: 820 }}
                 columns={[
-                  { title: "商家", dataIndex: "merchant_name", width: 140, ellipsis: true, render: (v: string) => <Tag color="geekblue">{v}</Tag> },
-                  { title: "总佣金", dataIndex: "total_commission", width: 120, align: "right" as const, render: (v: number) => <Text style={{ color: v > 0 ? "#389e0d" : undefined }}>${v.toFixed(2)}</Text> },
-                  { title: "已确认", dataIndex: "approved_commission", width: 110, align: "right" as const, render: (v: number) => <Text style={{ color: v > 0 ? "#1890ff" : undefined }}>${v.toFixed(2)}</Text> },
-                  { title: "已支付", dataIndex: "paid_commission", width: 110, align: "right" as const, render: (v: number) => <Text style={{ color: v > 0 ? "#13c2c2" : undefined }}>${v.toFixed(2)}</Text> },
-                  { title: "待审核", dataIndex: "pending_commission", width: 110, align: "right" as const, render: (v: number) => <Text style={{ color: v > 0 ? "#faad14" : undefined }}>${v.toFixed(2)}</Text> },
-                  { title: "拒付", dataIndex: "rejected_commission", width: 100, align: "right" as const, render: (v: number) => <Text type={v > 0 ? "danger" : "secondary"}>${v.toFixed(2)}</Text> },
-                  { title: "订单数", dataIndex: "order_count", width: 80, align: "right" as const },
+                  { title: "商家", dataIndex: "merchant_name", width: 160, ellipsis: true, render: (v: string) => <Tag color="geekblue">{v}</Tag> },
+                  { title: "总佣金", dataIndex: "total_commission", width: 100, align: "right" as const, render: (v: number) => <Text style={{ color: v > 0 ? "#389e0d" : undefined }}>${v.toFixed(2)}</Text> },
+                  { title: "已确认", dataIndex: "approved_commission", width: 100, align: "right" as const, render: (v: number) => <Text style={{ color: v > 0 ? "#1890ff" : undefined }}>${v.toFixed(2)}</Text> },
+                  { title: "已支付", dataIndex: "paid_commission", width: 100, align: "right" as const, render: (v: number) => <Text style={{ color: v > 0 ? "#13c2c2" : undefined }}>${v.toFixed(2)}</Text> },
+                  { title: "待审核", dataIndex: "pending_commission", width: 100, align: "right" as const, render: (v: number) => <Text style={{ color: v > 0 ? "#faad14" : undefined }}>${v.toFixed(2)}</Text> },
+                  { title: "拒付", dataIndex: "rejected_commission", width: 90, align: "right" as const, render: (v: number) => <Text type={v > 0 ? "danger" : "secondary"}>${v.toFixed(2)}</Text> },
+                  { title: "订单数", dataIndex: "order_count", width: 70, align: "right" as const },
                 ]}
                 summary={() => {
                   if (commissionByMerchant.length === 0) return null;
@@ -629,14 +630,15 @@ export default function DataCenterPage() {
                 size="small"
                 loading={loadingCommission}
                 pagination={false}
+                scroll={{ x: 820 }}
                 columns={[
-                  { title: "账号", dataIndex: "account_name", width: 120, render: (v: string, r: (typeof commissionByAccount)[0]) => <Tag color="blue">{v} ({r.platform})</Tag> },
-                  { title: "总佣金", dataIndex: "total_commission", width: 120, align: "right" as const, render: (v: number) => <Text style={{ color: v > 0 ? "#389e0d" : undefined }}>${v.toFixed(2)}</Text> },
-                  { title: "已确认", dataIndex: "approved_commission", width: 110, align: "right" as const, render: (v: number) => <Text style={{ color: v > 0 ? "#1890ff" : undefined }}>${v.toFixed(2)}</Text> },
-                  { title: "已支付", dataIndex: "paid_commission", width: 110, align: "right" as const, render: (v: number) => <Text style={{ color: v > 0 ? "#13c2c2" : undefined }}>${v.toFixed(2)}</Text> },
-                  { title: "待审核", dataIndex: "pending_commission", width: 110, align: "right" as const, render: (v: number) => <Text style={{ color: v > 0 ? "#faad14" : undefined }}>${v.toFixed(2)}</Text> },
-                  { title: "拒付", dataIndex: "rejected_commission", width: 100, align: "right" as const, render: (v: number) => <Text type={v > 0 ? "danger" : "secondary"}>${v.toFixed(2)}</Text> },
-                  { title: "订单数", dataIndex: "order_count", width: 80, align: "right" as const },
+                  { title: "账号", dataIndex: "account_name", width: 160, ellipsis: true, render: (v: string, r: (typeof commissionByAccount)[0]) => <Tag color="blue">{v} ({r.platform})</Tag> },
+                  { title: "总佣金", dataIndex: "total_commission", width: 100, align: "right" as const, render: (v: number) => <Text style={{ color: v > 0 ? "#389e0d" : undefined }}>${v.toFixed(2)}</Text> },
+                  { title: "已确认", dataIndex: "approved_commission", width: 100, align: "right" as const, render: (v: number) => <Text style={{ color: v > 0 ? "#1890ff" : undefined }}>${v.toFixed(2)}</Text> },
+                  { title: "已支付", dataIndex: "paid_commission", width: 100, align: "right" as const, render: (v: number) => <Text style={{ color: v > 0 ? "#13c2c2" : undefined }}>${v.toFixed(2)}</Text> },
+                  { title: "待审核", dataIndex: "pending_commission", width: 100, align: "right" as const, render: (v: number) => <Text style={{ color: v > 0 ? "#faad14" : undefined }}>${v.toFixed(2)}</Text> },
+                  { title: "拒付", dataIndex: "rejected_commission", width: 90, align: "right" as const, render: (v: number) => <Text type={v > 0 ? "danger" : "secondary"}>${v.toFixed(2)}</Text> },
+                  { title: "订单数", dataIndex: "order_count", width: 70, align: "right" as const },
                 ]}
                 summary={() => {
                   if (commissionByAccount.length === 0) return null;
