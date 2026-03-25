@@ -4,8 +4,9 @@
  * SSH 配置从管理员系统配置（system_configs 表）读取
  */
 import { Client, SFTPWrapper } from "ssh2";
+import JSON5 from "json5";
 import { getBtSshConfig } from "@/lib/system-config";
-import { cleanArticleContent } from "@/lib/sanitize";
+import { ARTICLE_HYPERLINK_STYLE_BLOCK, cleanArticleContent, emphasizeArticleHyperlinks } from "@/lib/sanitize";
 
 // ─── 网站架构类型常量（与 Python 后端一致）───
 export const SITE_TYPES = {
@@ -38,6 +39,38 @@ export interface VerifyResult {
   article_html_pattern: string | null;
   valid: boolean;
   error?: string;
+}
+
+export interface ArticlePresenceResult {
+  validSite: boolean;
+  jsonExists: boolean;
+  detailExists: boolean;
+  indexedInPrimaryData: boolean;
+  indexedInHomepageData: boolean;
+  checks?: VerifyResult;
+  error?: string;
+}
+
+export interface RemoteSiteArticleIndexEntry {
+  id: string;
+  legacyId?: string;
+  slug: string;
+  title: string;
+  detailUrl: string;
+  legacyDetailUrl?: string;
+  excerpt?: string;
+  category?: string;
+  date?: string;
+  dateLabel?: string;
+  image?: string;
+  heroImage?: string;
+}
+
+export interface RemoteSiteArticleContentResult {
+  content: string | null;
+  source: "json" | "html" | "excerpt" | "none";
+  publishedUrl: string;
+  detailUrl: string;
 }
 
 // ─── SSH 配置（从管理员系统配置表读取）───
@@ -380,29 +413,119 @@ export async function verifyConnection(sitePath: string): Promise<VerifyResult> 
 // ─── A1 标准化：统一为 assets/js/main.js + const posts（与 CRM 发布逻辑一致）───
 
 /** 从 JS 文件中解析 const/var name = [ ... ]; 的 JSON 兼容数组（条目须为合法 JSON 对象） */
-function parseJsArrayLiteral(content: string, varName: string): Record<string, unknown>[] | null {
-  const re = new RegExp(`(?:const|var|let)\\s+${varName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*=\\s*\\[`, "m");
-  const m = re.exec(content);
-  if (!m || m.index === undefined) return null;
-  const openBracket = content.indexOf("[", m.index + m[0].length - 1);
+function findArrayLiteralBounds(content: string, startIndex: number): { openBracket: number; closeBracket: number } | null {
+  const openBracket = content.indexOf("[", startIndex);
   if (openBracket < 0) return null;
+
   let depth = 0;
+  let inString: '"' | "'" | "`" | null = null;
+  let escaped = false;
+  let inLineComment = false;
+  let inBlockComment = false;
+
   for (let i = openBracket; i < content.length; i++) {
-    const c = content[i];
-    if (c === "[") depth++;
-    else if (c === "]") {
+    const char = content[i];
+    const next = content[i + 1];
+
+    if (inLineComment) {
+      if (char === "\n") inLineComment = false;
+      continue;
+    }
+    if (inBlockComment) {
+      if (char === "*" && next === "/") {
+        inBlockComment = false;
+        i++;
+      }
+      continue;
+    }
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+      if (char === "\\") {
+        escaped = true;
+        continue;
+      }
+      if (char === inString) {
+        inString = null;
+      }
+      continue;
+    }
+
+    if (char === "/" && next === "/") {
+      inLineComment = true;
+      i++;
+      continue;
+    }
+    if (char === "/" && next === "*") {
+      inBlockComment = true;
+      i++;
+      continue;
+    }
+    if (char === '"' || char === "'" || char === "`") {
+      inString = char as '"' | "'" | "`";
+      continue;
+    }
+
+    if (char === "[") depth++;
+    else if (char === "]") {
       depth--;
       if (depth === 0) {
-        const slice = content.slice(openBracket, i + 1);
-        try {
-          const arr = JSON.parse(slice) as unknown;
-          return Array.isArray(arr) ? (arr.filter((x) => x && typeof x === "object") as Record<string, unknown>[]) : null;
-        } catch {
-          return null;
-        }
+        return { openBracket, closeBracket: i };
       }
     }
   }
+
+  return null;
+}
+
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function findArrayAssignmentMatch(content: string, varName: string): RegExpExecArray | null {
+  const escaped = escapeRegExp(varName);
+  const patterns = [new RegExp(`(?:const|var|let)\\s+${escaped}\\s*=\\s*\\[`, "m")];
+  if (varName.includes(".") || varName.includes("[")) {
+    patterns.unshift(new RegExp(`${escaped}\\s*=\\s*\\[`, "m"));
+  } else {
+    patterns.push(new RegExp(`${escaped}\\s*=\\s*\\[`, "m"));
+  }
+
+  for (const re of patterns) {
+    const match = re.exec(content);
+    if (match) return match;
+  }
+  return null;
+}
+
+function buildArrayAssignmentStatement(varName: string, entries: Record<string, unknown>[]) {
+  const serialized = JSON.stringify(entries, null, 2);
+  if (varName.includes(".") || varName.includes("[")) {
+    return `${varName} = ${serialized};`;
+  }
+  return `const ${varName} = ${serialized};`;
+}
+
+function parseJsArrayLiteral(content: string, varName: string): Record<string, unknown>[] | null {
+  const match = findArrayAssignmentMatch(content, varName);
+  if (!match || match.index === undefined) return null;
+
+  const bounds = findArrayLiteralBounds(content, match.index + match[0].length - 1);
+  if (!bounds) return null;
+
+  const slice = content.slice(bounds.openBracket, bounds.closeBracket + 1);
+  const candidates = [slice, slice.replace(/,\s*([}\]])/g, "$1")];
+  for (const candidate of candidates) {
+    try {
+      const arr = JSON5.parse(candidate) as unknown;
+      return Array.isArray(arr) ? (arr.filter((x) => x && typeof x === "object") as Record<string, unknown>[]) : null;
+    } catch {
+      /* try next */
+    }
+  }
+
   return null;
 }
 
@@ -502,23 +625,110 @@ function buildA1MainJs(postsJson: string): string {
 }
 
 function replaceJsArrayLiteral(content: string, varName: string, entries: Record<string, unknown>[]): string | null {
-  const re = new RegExp(`(?:const|var|let)\\s+${varName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*=\\s*\\[`, "m");
-  const m = re.exec(content);
-  if (!m || m.index === undefined) return null;
-  const openBracket = content.indexOf("[", m.index + m[0].length - 1);
-  if (openBracket < 0) return null;
-  let depth = 0;
-  for (let i = openBracket; i < content.length; i++) {
-    const c = content[i];
-    if (c === "[") depth++;
-    else if (c === "]") {
-      depth--;
-      if (depth === 0) {
-        return `${content.slice(0, openBracket)}${JSON.stringify(entries, null, 2)}${content.slice(i + 1)}`;
-      }
+  const match = findArrayAssignmentMatch(content, varName);
+  if (!match || match.index === undefined) return null;
+
+  const bounds = findArrayLiteralBounds(content, match.index + match[0].length - 1);
+  if (!bounds) return null;
+
+  const serialized = JSON.stringify(entries, null, 2);
+  const suffix = content.slice(bounds.closeBracket + 1).replace(/^\s*;?/, ";");
+  return `${content.slice(0, bounds.openBracket)}${serialized}${suffix}`;
+}
+
+function getSupportedIndexFiles(indexHtml = "", primaryDataJsPath = ""): string[] {
+  const candidates = new Set<string>();
+  const scriptRe = /<script[^>]+src=["']([^"'?]+)[^"']*["']/gi;
+  let match: RegExpExecArray | null;
+  while ((match = scriptRe.exec(indexHtml)) !== null) {
+    const src = match[1].replace(/^\.\//, "").replace(/^\/+/, "");
+    if (!src || src.includes("main.js")) continue;
+    candidates.add(src);
+  }
+
+  const knownIndexFiles = [
+    primaryDataJsPath,
+    "js/articles-index.js",
+    "js/data.js",
+    "data.js",
+    "articles-data.js",
+    "assets/js/main.js",
+    "assets/main.js",
+  ];
+  for (const known of knownIndexFiles) {
+    const normalized = (known || "").replace(/^\.\//, "").replace(/^\/+/, "");
+    if (normalized && (normalized === primaryDataJsPath || indexHtml.includes(normalized))) {
+      candidates.add(normalized);
     }
   }
-  return null;
+
+  return [...candidates];
+}
+
+function buildDetailUrl(slug: string, pattern: string) {
+  return pattern.replace("{slug}", slug);
+}
+
+function buildPublishedUrl(domain: string, detailUrl: string) {
+  return `https://${domain}/${detailUrl.replace(/^\/+/, "")}`;
+}
+
+function parseDateValue(value: unknown): Date | null {
+  if (!value) return null;
+  if (value instanceof Date) {
+    return Number.isNaN(value.getTime()) ? null : value;
+  }
+  if (typeof value === "number") {
+    const date = new Date(value > 1e12 ? value : value * 1000);
+    return Number.isNaN(date.getTime()) ? null : date;
+  }
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+    const date = new Date(`${trimmed}T00:00:00Z`);
+    return Number.isNaN(date.getTime()) ? null : date;
+  }
+  const direct = new Date(trimmed);
+  return Number.isNaN(direct.getTime()) ? null : direct;
+}
+
+function removeArticleEntriesByIdentity(
+  content: string,
+  identities: { id?: string; slug?: string; detailUrl?: string; title?: string },
+  preferredVarName?: string,
+) {
+  const detectedVarName = preferredVarName
+    || content.match(/(?:const|var|let)\s+([A-Za-z_$][\w$]*)\s*=\s*\[/)?.[1]
+    || (content.includes("window.__ARTICLES__") ? "window.__ARTICLES__" : undefined);
+  if (!detectedVarName) return content;
+
+  const entries = parseJsArrayLiteral(content, detectedVarName);
+  if (!entries) return content;
+
+  const normalizedSlug = (identities.slug || "").trim().toLowerCase();
+  const normalizedDetailUrl = (identities.detailUrl || "").trim().replace(/^\/+/, "").toLowerCase();
+  const normalizedTitle = (identities.title || "").trim().toLowerCase();
+  const normalizedId = identities.id ? String(identities.id).trim() : "";
+
+  const filtered = entries.filter((entry) => {
+    const entryId = entry.id == null ? "" : String(entry.id).trim();
+    const entrySlug = typeof entry.slug === "string" ? entry.slug.trim().toLowerCase() : "";
+    const entryTitle = typeof entry.title === "string" ? entry.title.trim().toLowerCase() : "";
+    const entryDetailUrlRaw = typeof entry.detailUrl === "string"
+      ? entry.detailUrl
+      : (typeof entry.url === "string" ? entry.url : "");
+    const entryDetailUrl = entryDetailUrlRaw.trim().replace(/^\/+/, "").toLowerCase();
+
+    if (normalizedId && entryId === normalizedId) return false;
+    if (normalizedSlug && entrySlug === normalizedSlug) return false;
+    if (normalizedDetailUrl && entryDetailUrl === normalizedDetailUrl) return false;
+    if (normalizedTitle && normalizedTitle.length >= 8 && entryTitle === normalizedTitle) return false;
+    return true;
+  });
+
+  if (filtered.length === entries.length) return content;
+  return replaceJsArrayLiteral(content, detectedVarName, filtered) || content;
 }
 
 function resolveLegacyDateLabel(entry: Record<string, unknown>): string {
@@ -688,6 +898,158 @@ export async function applyA1SiteStandard(sitePath: string, domain = ""): Promis
   }
 }
 
+export async function listRemoteSiteArticles(site: SiteConfig): Promise<RemoteSiteArticleIndexEntry[]> {
+  let client: Client | null = null;
+  try {
+    client = await connectSSH();
+    const sftp = await getSFTP(client);
+    const siteRoot = site.site_path;
+    const checks = await verifyConnection(siteRoot);
+    if (!checks.valid) {
+      client.end();
+      return [];
+    }
+
+    const dataJsPath = site.data_js_path || checks.data_js_path || "js/articles-index.js";
+    const varName = site.article_var_name || checks.article_var_name || "articlesIndex";
+    const sourcePath = `${siteRoot}/${dataJsPath}`;
+    let raw = "";
+    try {
+      raw = await sftpReadFile(sftp, sourcePath);
+    } catch {
+      try {
+        const indexHtml = await sftpReadFile(sftp, `${siteRoot}/index.html`);
+        const candidates = getSupportedIndexFiles(indexHtml, dataJsPath);
+        for (const relPath of candidates) {
+          try {
+            raw = await sftpReadFile(sftp, `${siteRoot}/${relPath}`);
+            if (raw) break;
+          } catch {
+            /* try next */
+          }
+        }
+      } catch {
+        /* ignore */
+      }
+    }
+
+    if (!raw) {
+      client.end();
+      return [];
+    }
+
+    const parsed = parseJsArrayLiteral(raw, varName)
+      || ["posts", "articlesIndex", "articles", "blogPosts", "POSTS", "articlesData"]
+        .filter((name) => name !== varName)
+        .map((name) => parseJsArrayLiteral(raw, name))
+        .find((entries): entries is Record<string, unknown>[] => Array.isArray(entries) && entries.length > 0)
+      || [];
+
+    const normalized = parsed
+      .map(normalizeEntryForA1)
+      .filter((entry) => typeof entry.slug === "string" && typeof entry.title === "string")
+      .map((entry) => ({
+        id: String(entry.id || entry.slug),
+        legacyId: entry.id == null ? undefined : String(entry.id),
+        slug: String(entry.slug),
+        title: String(entry.title),
+        detailUrl: typeof entry.detailUrl === "string" ? entry.detailUrl : `post-${String(entry.slug)}`,
+        legacyDetailUrl: typeof entry.legacyDetailUrl === "string" ? entry.legacyDetailUrl : undefined,
+        excerpt: typeof entry.excerpt === "string" ? entry.excerpt : undefined,
+        category: typeof entry.category === "string" ? entry.category : undefined,
+        date: typeof entry.date === "string" ? entry.date : undefined,
+        dateLabel: typeof entry.dateLabel === "string" ? entry.dateLabel : undefined,
+        image: typeof entry.image === "string" ? entry.image : undefined,
+        heroImage: typeof entry.heroImage === "string" ? entry.heroImage : undefined,
+      }));
+
+    client.end();
+    return normalized;
+  } catch {
+    client?.end();
+    return [];
+  }
+}
+
+export async function readRemoteSiteArticleContent(
+  entry: RemoteSiteArticleIndexEntry,
+  site: SiteConfig,
+): Promise<RemoteSiteArticleContentResult> {
+  let client: Client | null = null;
+  try {
+    client = await connectSSH();
+    const sftp = await getSFTP(client);
+    const siteRoot = site.site_path;
+    const checks = await verifyConnection(siteRoot);
+    const pattern = site.article_html_pattern || checks.article_html_pattern || "post-{slug}";
+    const detailUrl = entry.detailUrl || buildDetailUrl(entry.slug, pattern);
+    const publishedUrl = buildPublishedUrl(site.domain, detailUrl);
+
+    const jsonCandidates = new Set<string>();
+    if (entry.legacyId) jsonCandidates.add(entry.legacyId);
+    jsonCandidates.add(entry.id);
+
+    for (const candidateId of jsonCandidates) {
+      if (!candidateId) continue;
+      try {
+        const raw = await sftpReadFile(sftp, `${siteRoot}/js/articles/${candidateId}.json`);
+        const data = JSON.parse(raw) as Record<string, unknown>;
+        const content = typeof data.content === "string" ? data.content.trim() : "";
+        if (content) {
+          client.end();
+          return { content, source: "json", publishedUrl, detailUrl };
+        }
+      } catch {
+        /* try next */
+      }
+    }
+
+    const htmlCandidates = !detailUrl.includes("?")
+      ? [
+          `${siteRoot}/${detailUrl}/index.html`,
+          `${siteRoot}/${detailUrl}.html`,
+          `${siteRoot}/${detailUrl}`,
+        ]
+      : [];
+
+    for (const candidate of htmlCandidates) {
+      try {
+        const html = await sftpReadFile(sftp, candidate);
+        const bodyMatch = html.match(/<article[\s\S]*?<\/article>/i)
+          || html.match(/<main[\s\S]*?<\/main>/i)
+          || html.match(/<body[\s\S]*?<\/body>/i);
+        const block = bodyMatch?.[0] || html;
+        const content = block
+          .replace(/<script[\s\S]*?<\/script>/gi, "")
+          .replace(/<style[\s\S]*?<\/style>/gi, "")
+          .replace(/^[\s\S]*?<h1[^>]*>[\s\S]*?<\/h1>/i, "")
+          .trim();
+        if (content) {
+          client.end();
+          return { content, source: "html", publishedUrl, detailUrl };
+        }
+      } catch {
+        /* try next */
+      }
+    }
+
+    client.end();
+    if (entry.excerpt?.trim()) {
+      return {
+        content: `<p>${escapeHtml(entry.excerpt.trim())}</p>`,
+        source: "excerpt",
+        publishedUrl,
+        detailUrl,
+      };
+    }
+    return { content: null, source: "none", publishedUrl, detailUrl };
+  } catch {
+    client?.end();
+    const detailUrl = entry.detailUrl || buildDetailUrl(entry.slug, site.article_html_pattern || "post-{slug}");
+    return { content: null, source: "none", publishedUrl: buildPublishedUrl(site.domain, detailUrl), detailUrl };
+  }
+}
+
 // ─── 发布文章到站点（通过 SSH 推送文件）───
 
 function slugify(title: string): string {
@@ -713,6 +1075,7 @@ interface ArticlePayload {
   category?: string;
   image?: string;
   images?: unknown;
+  trackingLink?: string | null;
 }
 
 interface SiteConfig {
@@ -830,8 +1193,11 @@ async function createArticleHtmlPage(
       }
       // Remove main.js to avoid loading article listing code on detail page
       headSection = headSection.replace(/<script[^>]*main\.js[^>]*><\/script>\s*/gi, "");
+      if (!headSection.includes("crm-affiliate-link")) {
+        headSection = headSection.replace(/<\/head>/i, `  <style>${ARTICLE_HYPERLINK_STYLE_BLOCK}</style>\n</head>`);
+      }
     } else {
-      headSection = `<head>\n<meta charset="UTF-8">\n<meta name="viewport" content="width=device-width,initial-scale=1">\n<title>${escapeHtml(article.title)}</title>\n</head>`;
+      headSection = `<head>\n<meta charset="UTF-8">\n<meta name="viewport" content="width=device-width,initial-scale=1">\n<title>${escapeHtml(article.title)}</title>\n<style>${ARTICLE_HYPERLINK_STYLE_BLOCK}</style>\n</head>`;
     }
 
     let headerNav = "";
@@ -867,7 +1233,7 @@ ${bodyOpenTag}
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>${escapeHtml(article.title)}</title>
-  <style>body{font-family:Georgia,serif;max-width:800px;margin:40px auto;padding:0 20px;line-height:1.8;color:#333}h1{font-size:2em}img{max-width:100%;height:auto}.meta{color:#888;margin-bottom:24px}a.back{color:#888;text-decoration:none}</style>
+  <style>body{font-family:Georgia,serif;max-width:800px;margin:40px auto;padding:0 20px;line-height:1.8;color:#333}h1{font-size:2em}img{max-width:100%;height:auto}.meta{color:#888;margin-bottom:24px}a.back{color:#888;text-decoration:none}${ARTICLE_HYPERLINK_STYLE_BLOCK}</style>
 </head>
 <body>
   <a class="back" href="/">&larr; Back</a>
@@ -925,25 +1291,21 @@ async function syncToHomepageDataFile(
       try { content = await sftpReadFile(sftp, fullPath); } catch { continue; }
 
       // 检测文件中的数组变量名
-      const varMatch = content.match(
-        /(?:const|var|let)\s+(articlesIndex|articles|posts|blogPosts|POSTS|articlesData)\s*=\s*\[/
-      );
-      if (!varMatch) continue;
+      const candidateVarNames = ["articlesIndex", "articles", "posts", "blogPosts", "POSTS", "articlesData", "window.__ARTICLES__"];
+      const hpVarName = candidateVarNames.find((name) => Boolean(findArrayAssignmentMatch(content, name)));
+      if (!hpVarName) continue;
 
-      const hpVarName = varMatch[1];
       console.log(`[Publisher] 同步索引到首页文件: ${relPath} (var=${hpVarName})`);
 
-      // 移除已有同 id 条目
-      const removeRe = new RegExp(
-        `\\{[^}]*"id"\\s*:\\s*"${articleId}"[^}]*\\},?\\s*`, "g"
-      );
-      content = content.replace(removeRe, "");
+      content = removeArticleEntriesByIdentity(content, {
+        id: articleId,
+        slug: String(indexEntry.slug || ""),
+        detailUrl: String(indexEntry.detailUrl || ""),
+        title: String(indexEntry.title || ""),
+      }, hpVarName);
 
       // 在数组开头插入
-      const arrRe = new RegExp(
-        `(const|var|let)\\s+${hpVarName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*=\\s*\\[`
-      );
-      const arrMatch = arrRe.exec(content);
+      const arrMatch = findArrayAssignmentMatch(content, hpVarName);
       if (arrMatch) {
         const pos = (arrMatch.index || 0) + arrMatch[0].length;
         const entryStr = "\n  " + JSON.stringify(indexEntry) + ",";
@@ -1188,6 +1550,98 @@ async function ensureSiteWritable(client: Client, siteRoot: string, dataJsPath: 
   }
 }
 
+export async function verifyArticlePresenceOnSite(
+  article: { id: string; slug?: string | null },
+  site: SiteConfig,
+): Promise<ArticlePresenceResult> {
+  let client: Client | null = null;
+  try {
+    client = await connectSSH();
+    const sftp = await getSFTP(client);
+    const siteRoot = site.site_path;
+    const checks = await verifyConnection(siteRoot);
+    if (!checks.valid) {
+      client.end();
+      return { validSite: false, jsonExists: false, detailExists: false, indexedInPrimaryData: false, indexedInHomepageData: false, checks, error: checks.error };
+    }
+
+    const articleId = String(article.id);
+    const slug = article.slug?.trim() || "";
+    const jsonExists = await sftpStat(sftp, `${siteRoot}/js/articles/${articleId}.json`);
+
+    const pattern = site.article_html_pattern || checks.article_html_pattern || "article.html?title={slug}";
+    const detailUrl = slug ? pattern.replace("{slug}", slug) : "";
+    let detailExists = false;
+    if (detailUrl && !detailUrl.includes("?")) {
+      detailExists = await sftpStat(sftp, `${siteRoot}/${detailUrl}`)
+        || await sftpStat(sftp, `${siteRoot}/${detailUrl}/index.html`)
+        || await sftpStat(sftp, `${siteRoot}/${detailUrl}.html`);
+    } else if (detailUrl) {
+      detailExists = true;
+    }
+
+    const containsIdentity = (content: string) => {
+      const escapedId = articleId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const escapedSlug = slug.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      if (new RegExp(`\"id\"\\s*:\\s*\"?${escapedId}\"?`).test(content)) return true;
+      if (slug && new RegExp(`\"slug\"\\s*:\\s*\"${escapedSlug}\"`).test(content)) return true;
+      if (slug && content.includes(`post-${slug}`)) return true;
+      return false;
+    };
+
+    let indexedInPrimaryData = false;
+    const primaryDataPath = `${siteRoot}/${site.data_js_path || checks.data_js_path || "js/articles-index.js"}`;
+    try {
+      const primaryContent = await sftpReadFile(sftp, primaryDataPath);
+      indexedInPrimaryData = containsIdentity(primaryContent);
+    } catch { /* ignore */ }
+
+    let indexedInHomepageData = indexedInPrimaryData;
+    try {
+      const indexHtml = await sftpReadFile(sftp, `${siteRoot}/index.html`);
+      const candidates = new Set<string>();
+      const scriptRe = /<script[^>]+src=["']([^"'?]+)[^"']*["']/gi;
+      let m: RegExpExecArray | null;
+      while ((m = scriptRe.exec(indexHtml)) !== null) {
+        const src = m[1].replace(/^\.\//, "");
+        if (!src.includes("main.js")) candidates.add(src);
+      }
+      for (const relPath of ["js/articles-index.js", "js/data.js", "data.js", "articles-data.js", "assets/js/main.js", "assets/main.js"]) {
+        if (indexHtml.includes(relPath)) candidates.add(relPath);
+      }
+      for (const relPath of candidates) {
+        const fullPath = `${siteRoot}/${relPath}`;
+        if (!(await sftpStat(sftp, fullPath))) continue;
+        const content = await sftpReadFile(sftp, fullPath);
+        if (containsIdentity(content)) {
+          indexedInHomepageData = true;
+          break;
+        }
+      }
+    } catch { /* ignore */ }
+
+    client.end();
+    return {
+      validSite: true,
+      jsonExists,
+      detailExists,
+      indexedInPrimaryData,
+      indexedInHomepageData,
+      checks,
+    };
+  } catch (err) {
+    client?.end();
+    return {
+      validSite: false,
+      jsonExists: false,
+      detailExists: false,
+      indexedInPrimaryData: false,
+      indexedInHomepageData: false,
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
+
 export async function publishArticleToSite(
   article: ArticlePayload,
   site: SiteConfig
@@ -1211,6 +1665,7 @@ export async function publishArticleToSite(
 
     // ─── 图片路径规范化 + 本地化（v4.0 — 不再自动补图/重排）───
     let workingContent = cleanedArticle.cleaned || article.content;
+    workingContent = emphasizeArticleHyperlinks(workingContent);
     workingContent = normalizeArticleImagePaths(workingContent);
     let updatedContent: string | undefined = workingContent !== article.content ? workingContent : undefined;
     try {
@@ -1275,7 +1730,7 @@ export async function publishArticleToSite(
     try {
       dataContent = await sftpReadFile(sftp, fullDataPath);
     } catch {
-      dataContent = `const ${varName} = [];\n`;
+      dataContent = `${buildArrayAssignmentStatement(varName, [])}\n`;
     }
 
     // 构建索引条目 — 同时兼容两种字段名：
@@ -1298,25 +1753,26 @@ export async function publishArticleToSite(
     };
 
     // 解析现有数组并追加
-    const arrayRegex = new RegExp(
-      `(const|var|let)\\s+${varName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*=\\s*\\[`
-    );
-    const match = arrayRegex.exec(dataContent);
+    const existingMatch = findArrayAssignmentMatch(dataContent, varName);
 
-    if (match) {
-      // 检查是否已存在同 id 的文章，先移除
-      const entryRegex = new RegExp(
-        `\\{[^}]*"id"\\s*:\\s*"${article.id}"[^}]*\\},?\\s*`,
-        "g"
-      );
-      dataContent = dataContent.replace(entryRegex, "");
+    if (existingMatch) {
+      dataContent = removeArticleEntriesByIdentity(dataContent, {
+        id: article.id,
+        slug,
+        detailUrl,
+        title: article.title,
+      }, varName);
 
-      // 在数组开头插入新条目
-      const insertPos = (match.index || 0) + match[0].length;
-      const entryStr = "\n  " + JSON.stringify(indexEntry) + ",";
-      dataContent = dataContent.slice(0, insertPos) + entryStr + dataContent.slice(insertPos);
+      const updatedMatch = findArrayAssignmentMatch(dataContent, varName);
+      if (updatedMatch) {
+        const insertPos = (updatedMatch.index || 0) + updatedMatch[0].length;
+        const entryStr = "\n  " + JSON.stringify(indexEntry) + ",";
+        dataContent = dataContent.slice(0, insertPos) + entryStr + dataContent.slice(insertPos);
+      } else {
+        dataContent = `${buildArrayAssignmentStatement(varName, [indexEntry])}\n`;
+      }
     } else {
-      dataContent = `const ${varName} = [\n  ${JSON.stringify(indexEntry)}\n];\n`;
+      dataContent = `${buildArrayAssignmentStatement(varName, [indexEntry])}\n`;
     }
 
     await sftpWriteFile(sftp, fullDataPath, dataContent);

@@ -19,6 +19,7 @@
     "dayjs": "^1.11.20",
     "google-ads-api": "^23.0.0",
     "google-auth-library": "^10.6.2",
+    "json5": "^2.2.3",
     "jsonwebtoken": "^9.0.3",
     "mariadb": "^3.5.2",
     "next": "16.1.7",

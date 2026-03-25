@@ -35,14 +35,15 @@ export async function POST(req: NextRequest) {
 
   // SSH 推送文件到宝塔（含图片本地化）
   const result = await publishArticleToSite(
-    {
-      id: String(article.id),
-      title: article.title,
-      slug,
-      content: article.content,
-      category: article.category || "General",
-      images: article.images,
-    },
+        {
+          id: String(article.id),
+          title: article.title,
+          slug,
+          content: article.content,
+          category: article.category || "General",
+          images: article.images,
+          trackingLink: article.tracking_link,
+        },
     {
       site_path: site.site_path,
       site_type: site.site_type,

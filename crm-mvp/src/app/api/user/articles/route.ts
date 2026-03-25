@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { getUserFromRequest, serializeData } from "@/lib/auth";
 import { apiSuccess, apiError } from "@/lib/constants";
 import prisma from "@/lib/prisma";
+import { autoRepairPublishedArticles } from "@/lib/article-auto-repair";
 
 // 获取文章列表（含商家名、站点信息）
 export async function GET(req: NextRequest) {
@@ -14,6 +15,14 @@ export async function GET(req: NextRequest) {
   const slug = searchParams.get("slug") || "";
   const page = parseInt(searchParams.get("page") || "1");
   const pageSize = parseInt(searchParams.get("pageSize") || "20");
+
+  if ((!status || status === "published") && page === 1) {
+    try {
+      await autoRepairPublishedArticles({ userId: BigInt(user.userId), limit: 8 });
+    } catch (err) {
+      console.error("[ArticlesList] 自动修复已发布文章失败:", err);
+    }
+  }
 
   const where: Record<string, unknown> = {
     user_id: BigInt(user.userId),

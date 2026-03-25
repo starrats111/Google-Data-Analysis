@@ -5,6 +5,7 @@
 import { callAiWithFallback } from "@/lib/ai-service";
 import { humanize } from "@/lib/humanizer";
 import prisma from "@/lib/prisma";
+import { emphasizeArticleHyperlinks } from "@/lib/sanitize";
 
 const COUNTRY_LANG_MAP: Record<string, string> = {
   US: "English", UK: "English", CA: "English", AU: "English",
@@ -230,6 +231,7 @@ JSON schema: {"content":"<full article HTML with h2/h3/p tags, 10-15 hyperlinks>
     if (result.content) {
       result.content = humanize(result.content);
       result.content = ensureLinkCount(result.content, trackingLink, merchantName, products, keywords);
+      result.content = emphasizeArticleHyperlinks(result.content);
 
       const { buildDefaultArticleImageLayout, rebuildArticleContentWithLayout, normalizeArticleImageList } = await import("@/lib/article-image-layout");
       const normalizedImages = normalizeArticleImageList(images);

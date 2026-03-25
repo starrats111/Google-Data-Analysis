@@ -17,17 +17,96 @@ const ALLOWED_TAGS = new Set([
   "hr",
 ]);
 
-// 允许的属性白名单
-const ALLOWED_ATTRS: Record<string, Set<string>> = {
-  a: new Set(["href", "title", "target", "rel"]),
-  img: new Set(["src", "alt", "width", "height", "loading"]),
-  td: new Set(["colspan", "rowspan"]),
-  th: new Set(["colspan", "rowspan"]),
-  "*": new Set(["class", "style"]),
-};
-
 // 危险的 CSS 属性
 const DANGEROUS_CSS = /expression|javascript|vbscript|url\s*\(/gi;
+
+export const ARTICLE_HYPERLINK_CLASS = "crm-affiliate-link";
+export const ARTICLE_HYPERLINK_INLINE_STYLE = [
+  "color:#b42318 !important",
+  "font-weight:700 !important",
+  "text-decoration:underline !important",
+  "text-decoration-thickness:2px",
+  "text-underline-offset:3px",
+  "background:linear-gradient(180deg,rgba(255,244,179,0) 0%,rgba(255,244,179,0.96) 100%) !important",
+  "padding:0 0.18em",
+  "border-radius:4px",
+  "box-shadow:inset 0 -0.55em 0 rgba(255,244,179,0.96)",
+].join(";") + ";";
+
+export const ARTICLE_HYPERLINK_STYLE_BLOCK = `
+.article-content a,
+.${ARTICLE_HYPERLINK_CLASS} {
+  color:#b42318 !important;
+  font-weight:700 !important;
+  text-decoration:underline !important;
+  text-decoration-thickness:2px;
+  text-underline-offset:3px;
+  background:linear-gradient(180deg,rgba(255,244,179,0) 0%,rgba(255,244,179,0.96) 100%) !important;
+  padding:0 0.18em;
+  border-radius:4px;
+  box-shadow:inset 0 -0.55em 0 rgba(255,244,179,0.96);
+}
+.article-content a:hover,
+.${ARTICLE_HYPERLINK_CLASS}:hover {
+  color:#8f1d15 !important;
+  background:linear-gradient(180deg,rgba(255,230,109,0) 0%,rgba(255,230,109,1) 100%) !important;
+}
+`;
+
+function escapeAttrValue(value: string): string {
+  return value.replace(/&/g, "&amp;").replace(/"/g, "&quot;");
+}
+
+function upsertAttr(
+  attrs: string,
+  attrName: string,
+  nextValue: string,
+  merge?: (current: string) => string,
+): string {
+  const re = new RegExp(`\\b${attrName}\\s*=\\s*("([^"]*)"|'([^']*)')`, "i");
+  const match = attrs.match(re);
+  if (match) {
+    const current = match[2] ?? match[3] ?? "";
+    const value = merge ? merge(current) : nextValue;
+    return attrs.replace(re, `${attrName}="${escapeAttrValue(value)}"`);
+  }
+  return `${attrs} ${attrName}="${escapeAttrValue(nextValue)}"`;
+}
+
+function mergeTokenAttr(current: string, required: string[]): string {
+  const tokens = current.split(/\s+/).map((t) => t.trim()).filter(Boolean);
+  const merged = [...tokens];
+  for (const token of required) {
+    if (!merged.includes(token)) merged.push(token);
+  }
+  return merged.join(" ");
+}
+
+function mergeStyleAttr(current: string): string {
+  const normalized = current.trim();
+  if (normalized.includes("crm-affiliate-link") || normalized.includes("box-shadow:inset 0 -0.55em")) {
+    return normalized;
+  }
+  if (!normalized) return ARTICLE_HYPERLINK_INLINE_STYLE;
+  return `${normalized.replace(/;?\s*$/, ";")} ${ARTICLE_HYPERLINK_INLINE_STYLE}`;
+}
+
+export function emphasizeArticleHyperlinks(html: string): string {
+  if (!html || !/<a\b/i.test(html)) return html;
+
+  return html.replace(/<a\b([^>]*)>/gi, (_match, rawAttrs: string) => {
+    let attrs = rawAttrs || "";
+    attrs = upsertAttr(attrs, "class", ARTICLE_HYPERLINK_CLASS, (current) => mergeTokenAttr(current, [ARTICLE_HYPERLINK_CLASS]));
+    attrs = upsertAttr(attrs, "target", "_blank");
+    attrs = upsertAttr(attrs, "rel", "sponsored nofollow noopener noreferrer", (current) => mergeTokenAttr(current, ["sponsored", "nofollow", "noopener", "noreferrer"]));
+    attrs = upsertAttr(attrs, "style", ARTICLE_HYPERLINK_INLINE_STYLE, mergeStyleAttr);
+    return `<a${attrs}>`;
+  });
+}
+
+export function needsArticleHyperlinkRefresh(html: string): boolean {
+  return /<a\b/i.test(html || "") && !html.includes(ARTICLE_HYPERLINK_CLASS);
+}
 
 /**
  * 清洗 HTML 内容，移除危险标签和属性
@@ -61,16 +140,12 @@ export function sanitizeHtml(html: string): string {
   clean = clean.replace(/<\/?([a-z][a-z0-9]*)\b[^>]*>/gi, (match, tag) => {
     const tagLower = tag.toLowerCase();
     if (ALLOWED_TAGS.has(tagLower)) {
-      // 对 a 标签强制添加 rel="noopener noreferrer" 和 target="_blank"
-      if (tagLower === "a" && !match.startsWith("</")) {
-        if (!match.includes("rel=")) {
-          match = match.replace(">", ' rel="noopener noreferrer">');
-        }
-      }
       return match;
     }
     return ""; // 移除不允许的标签
   });
+
+  clean = emphasizeArticleHyperlinks(clean);
 
   return clean;
 }
