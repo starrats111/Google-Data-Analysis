@@ -121,7 +121,16 @@ export default function DataCenterPage() {
 
   const rows = (campaignData?.rows || [])
     .filter((r: IndexedRow) => r.campaign_name && /^\d/.test(r.campaign_name))
-    .map((r: IndexedRow) => statusOverrides[r.id] ? { ...r, status: statusOverrides[r.id] } : r);
+    .map((r: IndexedRow) => statusOverrides[r.id] ? { ...r, status: statusOverrides[r.id] } : r)
+    .sort((a, b) => {
+      // 已启用优先
+      if (a.status === "ENABLED" && b.status !== "ENABLED") return -1;
+      if (a.status !== "ENABLED" && b.status === "ENABLED") return 1;
+      // 同状态按序号降序
+      const seqA = parseInt(a.campaign_name?.split("-")[0] || "0", 10) || 0;
+      const seqB = parseInt(b.campaign_name?.split("-")[0] || "0", 10) || 0;
+      return seqB - seqA;
+    });
   const costByMcc = campaignData?.costByMcc || [];
   const rowMeta = campaignData?.rowMeta;
 
