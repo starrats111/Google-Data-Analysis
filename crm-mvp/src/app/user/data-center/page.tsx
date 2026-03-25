@@ -391,7 +391,6 @@ export default function DataCenterPage() {
         const seqB = parseInt(b.campaign_name?.split("-")[0] || "0", 10) || 0;
         return seqA - seqB;
       },
-      defaultSortOrder: "descend" as const,
       render: (v: string) => (
         <Text style={{ fontSize: 12, wordBreak: "break-all", whiteSpace: "normal", lineHeight: "1.4" }}>{v}</Text>
       ),
