@@ -578,6 +578,7 @@ export default function AdPreviewPage() {
       const json = await res.json();
       if (json.code !== 0) { message.error(json.message || "生成失败"); return; }
       const data = json.data;
+      const merchantLandingUrl = preview?.merchant?.merchant_url || preview?.adCreative?.final_url || "";
 
       if (data.crawl_failed) setCrawlFailed(true);
 
@@ -624,11 +625,23 @@ export default function AdPreviewPage() {
           discount_percent: p.discount_percent != null ? Number(p.discount_percent) : prev.discount_percent,
           discount_amount: p.discount_amount != null ? Number(p.discount_amount) : prev.discount_amount,
           promo_code: p.promo_code ? String(p.promo_code) : prev.promo_code,
-          final_url: p.final_url ? String(p.final_url) : prev.final_url,
+          occasion: p.occasion ? String(p.occasion) : prev.occasion,
+          start_date: p.start_date ? String(p.start_date) : prev.start_date,
+          end_date: p.end_date ? String(p.end_date) : prev.end_date,
+          final_url: String(p.final_url || prev.final_url || merchantLandingUrl),
           currency_code: String(p.currency_code || prev.currency_code || defaultCurrencyCode),
           language_code: String(p.language_code || prev.language_code || defaultLanguageCode),
         }));
         message.success("已自动提取促销信息");
+      }
+
+      if (type === "promotion" && (!data.promotion || typeof data.promotion !== "object") && merchantLandingUrl) {
+        setEnablePromotion(true);
+        setPromotion((prev) => ({
+          ...prev,
+          final_url: prev.final_url || merchantLandingUrl,
+        }));
+        message.warning(data.crawl_failed ? "未能完整提取促销信息，已先填入商家落地页，请补充其余字段" : "暂未识别到完整促销信息，已先填入商家落地页");
       }
 
       // 自动填入价格信息

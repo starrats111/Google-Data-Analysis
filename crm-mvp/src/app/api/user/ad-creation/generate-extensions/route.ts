@@ -116,7 +116,18 @@ export async function POST(req: NextRequest) {
   });
   if (!merchant) return apiError("商家不存在");
 
-  const merchantUrl = merchant.merchant_url || "";
+  const adGroup = await prisma.ad_groups.findFirst({
+    where: { campaign_id: campaign.id, is_deleted: 0 },
+    select: { id: true },
+  });
+  const adCreative = adGroup
+    ? await prisma.ad_creatives.findFirst({
+      where: { ad_group_id: adGroup.id, is_deleted: 0 },
+      select: { final_url: true },
+    })
+    : null;
+
+  const merchantUrl = merchant.merchant_url || adCreative?.final_url || "";
   const merchantName = merchant.merchant_name || "";
   const country = campaign.target_country || "US";
 
@@ -780,7 +791,37 @@ async function selectBestImages(
 /**
  * 从 HTML 中提取促销信息（折扣、优惠码、促销活动）
  */
-function extractPromotionInfo(html: string, merchantUrl: string, country: string): Record<string, unknown> | null {
+function hasPromotionSignal(data: Record<string, unknown> | null | undefined): data is Record<string, unknown> {
+  if (!data) return false;
+  return Boolean(
+    (typeof data.promotion_target === "string" && data.promotion_target.trim())
+    || data.discount_type === "PERCENT"
+    || data.discount_type === "MONETARY"
+    || (typeof data.promo_code === "string" && data.promo_code.trim())
+    || (typeof data.final_url === "string" && data.final_url.trim()),
+  );
+}
+
+function mergePromotionData(
+  primary: Record<string, unknown> | null,
+  fallback: Record<string, unknown> | null,
+): Record<string, unknown> | null {
+  if (!hasPromotionSignal(primary) && !hasPromotionSignal(fallback)) return null;
+  const merged: Record<string, unknown> = {};
+
+  for (const source of [primary, fallback]) {
+    if (!source) continue;
+    for (const [key, value] of Object.entries(source)) {
+      if (value == null) continue;
+      if (typeof value === "string" && !value.trim()) continue;
+      if (!(key in merged)) merged[key] = value;
+    }
+  }
+
+  return merged;
+}
+
+function extractPromotionInfo(html: string, sourceUrl: string, country: string): Record<string, unknown> | null {
   if (!html) return null;
   const lower = html.toLowerCase();
   const result: Record<string, unknown> = {};
@@ -851,7 +892,7 @@ function extractPromotionInfo(html: string, merchantUrl: string, country: string
     }
   }
 
-  result.final_url = merchantUrl;
+  result.final_url = sourceUrl;
   if (result.promotion_target) result.language_code = market.promotionLanguageCode;
   if (result.discount_type === "MONETARY" && !result.currency_code) result.currency_code = market.currencyCode;
   return Object.keys(result).length > 1 ? result : null;
@@ -919,8 +960,10 @@ async function extractPromotionWithAI(
 ): Promise<Record<string, unknown> | null> {
   const market = getAdMarketConfig(country);
   // 1. 先用正则快速提取（首页）
-  const regexResult = extractPromotionInfo(html, merchantUrl, country);
-  if (regexResult && regexResult.discount_type) return regexResult;
+  const homepageResult = extractPromotionInfo(html, merchantUrl, country);
+  let mergedResult: Record<string, unknown> | null = hasPromotionSignal(homepageResult)
+    ? { ...homepageResult }
+    : null;
 
   // 2. 爬取促销相关子页面
   const promoKeywords = ["sale", "deal", "offer", "promo", "discount", "coupon", "special", "clearance", "pricing"];
@@ -938,8 +981,8 @@ async function extractPromotionWithAI(
       });
       if (resp.ok) {
         const subHtml = await resp.text();
-        const subResult = extractPromotionInfo(subHtml, merchantUrl, country);
-        if (subResult && subResult.discount_type) return subResult;
+        const subResult = extractPromotionInfo(subHtml, link.url, country);
+        mergedResult = mergePromotionData(mergedResult, subResult);
         const subText = subHtml.replace(/<script[\s\S]*?<\/script>/gi, "").replace(/<style[\s\S]*?<\/style>/gi, "").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().slice(0, 2000);
         combinedText += "\n\n--- Sub page: " + link.url + " ---\n" + subText;
       }
@@ -979,19 +1022,29 @@ Rules:
 Return ONLY valid JSON, no explanation.` }], 2048);
 
     const parsed = JSON.parse(aiResp.replace(/```json?\s*/g, "").replace(/```/g, "").trim());
-    if (parsed.discount_type || parsed.promotion_target || parsed.promo_code) {
-      return {
+    if (parsed.discount_type || parsed.promotion_target || parsed.promo_code || parsed.final_url) {
+      mergedResult = mergePromotionData(mergedResult, {
         ...parsed,
         currency_code: parsed.currency_code || market.currencyCode,
         language_code: parsed.language_code || market.promotionLanguageCode,
         final_url: parsed.final_url || merchantUrl,
-      };
+      });
     }
   } catch (err) {
     console.warn("[ExtractPromotion] AI extraction failed:", err instanceof Error ? err.message : err);
   }
 
-  return null;
+  if (mergedResult) {
+    mergedResult.final_url = String(mergedResult.final_url || merchantUrl || "");
+    if (!mergedResult.language_code && mergedResult.promotion_target) {
+      mergedResult.language_code = market.promotionLanguageCode;
+    }
+    if (mergedResult.discount_type === "MONETARY" && !mergedResult.currency_code) {
+      mergedResult.currency_code = market.currencyCode;
+    }
+  }
+
+  return hasPromotionSignal(mergedResult) ? mergedResult : null;
 }
 
 /**
