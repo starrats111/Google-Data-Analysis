@@ -6,18 +6,13 @@ import prisma from "@/lib/prisma";
 import { verifyConnection, getSiteRoot } from "@/lib/remote-publisher";
 
 // 获取所有站点列表（管理员 + 用户端共用，用户端只读）
-export async function GET() {
-  try {
-    const sites = await prisma.publish_sites.findMany({
-      where: { is_deleted: 0 },
-      orderBy: { created_at: "desc" },
-    });
-    return apiSuccess(serializeData(sites));
-  } catch (err) {
-    console.error("[admin/sites] GET error:", err);
-    return apiSuccess([]);
-  }
-}
+export const GET = withAdmin(async () => {
+  const sites = await prisma.publish_sites.findMany({
+    where: { is_deleted: 0 },
+    orderBy: { created_at: "desc" },
+  });
+  return apiSuccess(serializeData(sites));
+});
 
 // 添加站点（管理员）
 export const POST = withAdmin(async (req: NextRequest) => {
