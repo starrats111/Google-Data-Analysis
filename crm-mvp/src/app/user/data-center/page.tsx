@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo, useCallback } from "react";
+import { useState, useMemo, useCallback, useEffect, useRef } from "react";
 import {
   Card, Table, Row, Col, Statistic, Select, Space, Typography, Tag, Button,
   Dropdown, DatePicker, Tooltip, App, Input, Modal, Tabs,
@@ -121,6 +121,21 @@ export default function DataCenterPage() {
     .map((r: IndexedRow) => statusOverrides[r.id] ? { ...r, status: statusOverrides[r.id] } : r);
   const costByMcc = campaignData?.costByMcc || [];
   const rowMeta = campaignData?.rowMeta;
+
+  // 页面加载时自动从 Google Ads 同步最新状态（每 5 分钟最多一次）
+  const syncedRef = useRef(false);
+  useEffect(() => {
+    if (syncedRef.current) return;
+    syncedRef.current = true;
+    fetch("/api/user/data-center/campaigns/refresh-status", { method: "POST" })
+      .then((r) => r.json())
+      .then((res) => {
+        if (res.code === 0 && res.data?.totalUpdated > 0) {
+          refreshApi(/\/api\/user\/data-center/);
+        }
+      })
+      .catch(() => {});
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
   const summary = campaignData?.summary || {
     totalCost: 0,
     totalCommission: 0,

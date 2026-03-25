@@ -286,7 +286,6 @@ async function syncAllCampaignStatuses(): Promise<unknown> {
           },
           data: {
             google_status: s.status,
-            campaign_name: s.name,
             last_google_sync_at: new Date(),
           },
         });
