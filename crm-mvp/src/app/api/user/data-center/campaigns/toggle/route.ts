@@ -40,6 +40,13 @@ export async function POST(req: NextRequest) {
     );
 
     if (!result.success) return apiError(result.message);
+
+    // 更新数据库中的状态
+    await prisma.campaigns.update({
+      where: { id: campaign.id },
+      data: { google_status: newStatus },
+    });
+
     return apiSuccess({ status: newStatus }, `广告已${action === "enable" ? "启用" : "暂停"}`);
   } catch (err) {
     return apiError(`操作失败: ${err instanceof Error ? err.message : String(err)}`);
