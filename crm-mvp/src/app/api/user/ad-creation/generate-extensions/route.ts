@@ -130,7 +130,7 @@ export async function POST(req: NextRequest) {
   crawlResult.links = crawlResult.links.filter((l) => !isBadSitelinkUrl(l.url));
 
   const crawlFailed = crawlResult.method === "failed";
-  const result: Record<string, any> = {
+  const result: Record<string, unknown> = {
     crawl_failed: crawlFailed,
     crawl_method: crawlResult.method,
   };
@@ -160,7 +160,7 @@ export async function POST(req: NextRequest) {
   if (types.includes("images")) {
     tasks.push(
       (async () => {
-        let allImgs = [...crawlResult.images];
+        const allImgs = [...crawlResult.images];
 
         // 图片不足时，尝试从子页面获取更多
         if (allImgs.length < 25 && crawlResult.links.length > 0) {
@@ -1165,7 +1165,6 @@ async function generateCallouts(
   country: string,
   pageHtml: string,
 ): Promise<string[]> {
-  const market = getAdMarketConfig(country);
   const merchantFeatures = pageHtml ? extractMerchantFeatures(pageHtml) : [];
   const pageContext = merchantFeatures.length > 0
     ? `\nReal information from merchant website:\n${merchantFeatures.join("\n")}\n`
@@ -1178,7 +1177,7 @@ async function generateCallouts(
     const returnPattern = /return|refund|money.back|rückgabe|retour|retours|devoluci|resi/i;
     const hasShipping = items.some((item) => shippingPattern.test(item));
     const hasReturns = items.some((item) => returnPattern.test(item));
-    const mergedPolicy = smartTruncate(`${market.shippingLabel} · ${market.returnLabel}`, 25);
+    const mergedPolicy = smartTruncate(getMergedPolicyCallout(country), 25);
 
     for (const raw of items) {
       const text = smartTruncate(String(raw || "").trim(), 25);
@@ -1210,7 +1209,7 @@ Generate exactly 6 callout extensions for this merchant based on REAL informatio
 Rules:
 - Each callout MUST be ≤ 25 characters
 - PRIORITY: Use actual merchant features found on their website (shipping policy, return policy, brand story, product type, certifications, etc.)
-- If shipping and return policy both exist, MERGE them into one line when possible (example: "${market.shippingLabel} + ${market.returnLabel}")
+- If shipping and return policy both exist, MERGE them into one line when possible (example: "${getMergedPolicyCallout(country)}")
 - If the website mentions specific policies, reflect those accurately
 - Include the merchant's actual strengths, NOT generic/made-up claims
 - Only include shipping if the website actually offers it
@@ -1235,7 +1234,7 @@ function getDefaultCallouts(merchantName: string, country: string, features: str
   const hasShipping = /free\s*ship|free\s*deliver|kostenlos(?:e|er)?\s+versand|livraison\s+offerte|env[ií]o\s+gratis|spedizione\s+gratuita/i.test(featStr);
   const hasReturns = /money.back|return|refund|rückgabe|retour|retours|devoluci|resi/i.test(featStr);
   if (hasShipping && hasReturns) {
-    result.push(smartTruncate(`${market.shippingLabel} · ${market.returnLabel}`, 25));
+    result.push(smartTruncate(getMergedPolicyCallout(country), 25));
   } else {
     if (hasShipping) result.push(smartTruncate(market.shippingLabel, 25));
     if (hasReturns) result.push(smartTruncate(market.returnLabel, 25));
