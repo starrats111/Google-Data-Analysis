@@ -1,8 +1,20 @@
 import prisma from "@/lib/prisma";
-import { verifyConnection, verifyPublicSiteAccess, type VerifyResult, type PublicSiteAccessResult } from "@/lib/remote-publisher";
+import {
+  verifySiteWithAutoRegister,
+  type VerifyResult,
+  type PublicSiteAccessResult,
+  type BtPanelRegistrationResult,
+} from "@/lib/remote-publisher";
 
 type VerifyOutcome =
-  | { ok: true; site: { id: bigint; site_name: string }; checks: VerifyResult; publicAccess: PublicSiteAccessResult }
+  | {
+      ok: true;
+      site: { id: bigint; site_name: string };
+      checks: VerifyResult;
+      publicAccess: PublicSiteAccessResult;
+      autoRegisterAttempted: boolean;
+      panelRegistration?: BtPanelRegistrationResult;
+    }
   | { ok: false; message: string; status: number };
 
 export async function verifyPublishSiteById(siteId: bigint): Promise<VerifyOutcome> {
@@ -12,9 +24,8 @@ export async function verifyPublishSiteById(siteId: bigint): Promise<VerifyOutco
   if (!site) return { ok: false, message: "站点不存在", status: 404 };
   if (!site.site_path) return { ok: false, message: "站点路径未配置", status: 400 };
 
-  const checks = await verifyConnection(site.site_path);
-  const publicAccess = await verifyPublicSiteAccess(site.domain);
-  const fullyVerified = checks.valid && publicAccess.ok;
+  const verifyResult = await verifySiteWithAutoRegister(site.domain, site.site_path);
+  const { checks, publicAccess, fullyVerified, autoRegisterAttempted, panelRegistration } = verifyResult;
 
   const updateData: Record<string, unknown> = {
     verified: fullyVerified ? 1 : 0,
@@ -36,5 +47,7 @@ export async function verifyPublishSiteById(siteId: bigint): Promise<VerifyOutco
     site: { id: site.id, site_name: site.site_name },
     checks,
     publicAccess,
+    autoRegisterAttempted,
+    panelRegistration,
   };
 }

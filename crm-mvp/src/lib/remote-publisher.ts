@@ -3,6 +3,7 @@
  * 通过 SSH 连接宝塔服务器，验证目录、检测架构类型、发布/撤回文章
  * SSH 配置从管理员系统配置（system_configs 表）读取
  */
+import { readFileSync } from "fs";
 import { Client, SFTPWrapper } from "ssh2";
 import JSON5 from "json5";
 import { getBtSshConfig } from "@/lib/system-config";
@@ -49,6 +50,23 @@ export interface PublicSiteAccessResult {
   error?: string;
 }
 
+export interface BtPanelRegistrationResult {
+  ok: boolean;
+  exists: boolean;
+  created: boolean;
+  panelSiteId?: string;
+  domainLinked?: boolean;
+  error?: string;
+}
+
+export interface VerifyWithAutoRegisterResult {
+  checks: VerifyResult;
+  publicAccess: PublicSiteAccessResult;
+  fullyVerified: boolean;
+  autoRegisterAttempted: boolean;
+  panelRegistration?: BtPanelRegistrationResult;
+}
+
 export interface ArticlePresenceResult {
   validSite: boolean;
   jsonExists: boolean;
@@ -92,7 +110,7 @@ async function getSSHConfig() {
     privateKey = Buffer.from(normalizedKey);
   } else if (config.keyPath) {
     try {
-      privateKey = require("fs").readFileSync(config.keyPath);
+      privateKey = readFileSync(config.keyPath);
     } catch {
       // 密钥文件不存在，忽略
     }
@@ -210,6 +228,135 @@ function execCommand(client: Client, cmd: string): Promise<string> {
       stream.on("close", () => resolve(output));
     });
   });
+}
+
+function shellSingleQuote(value: string) {
+  return "'" + value.replace(/'/g, `'"'"'`) + "'";
+}
+
+async function registerBtPanelSiteInternal(client: Client, domain: string, sitePath: string): Promise<BtPanelRegistrationResult> {
+  const domainClean = domain.trim().toLowerCase().replace(/^https?:\/\//, "").replace(/\/+$/, "");
+  const sitePathClean = sitePath.trim().replace(/\\/g, "/").replace(/\/+$/, "");
+
+  if (!domainClean) {
+    return { ok: false, exists: false, created: false, error: "域名不能为空" };
+  }
+  if (!sitePathClean) {
+    return { ok: false, exists: false, created: false, error: "站点路径不能为空" };
+  }
+
+  const now = new Date().toISOString().replace("T", " ").slice(0, 19);
+  const dbPath = "/www/server/panel/data/default.db";
+  const escapedDomain = domainClean.replace(/'/g, "''");
+  const escapedPath = sitePathClean.replace(/'/g, "''");
+  const escapedNow = now.replace(/'/g, "''");
+
+  try {
+    const existing = await execCommand(
+      client,
+      `sudo sqlite3 ${shellSingleQuote(dbPath)} "SELECT id FROM sites WHERE name='${escapedDomain}' LIMIT 1;" 2>/dev/null`
+    );
+    const existingId = existing.trim();
+
+    if (existingId) {
+      const domainExisting = await execCommand(
+        client,
+        `sudo sqlite3 ${shellSingleQuote(dbPath)} "SELECT id FROM domain WHERE pid=${existingId} AND name='${escapedDomain}' LIMIT 1;" 2>/dev/null`
+      );
+
+      if (!domainExisting.trim()) {
+        await execCommand(
+          client,
+          `sudo sqlite3 ${shellSingleQuote(dbPath)} "INSERT INTO domain (pid, name, port, addtime) VALUES (${existingId}, '${escapedDomain}', 80, '${escapedNow}');"`
+        );
+      }
+
+      return {
+        ok: true,
+        exists: true,
+        created: false,
+        panelSiteId: existingId,
+        domainLinked: true,
+      };
+    }
+
+    await execCommand(
+      client,
+      `sudo sqlite3 ${shellSingleQuote(dbPath)} "INSERT INTO sites (name, path, status, \`index\`, ps, addtime) VALUES ('${escapedDomain}', '${escapedPath}', '1', 'index.html', '${escapedDomain}', '${escapedNow}');"`
+    );
+    const sid = await execCommand(
+      client,
+      `sudo sqlite3 ${shellSingleQuote(dbPath)} "SELECT id FROM sites WHERE name='${escapedDomain}' ORDER BY id DESC LIMIT 1;"`
+    );
+    const siteId = sid.trim();
+
+    if (siteId) {
+      await execCommand(
+        client,
+        `sudo sqlite3 ${shellSingleQuote(dbPath)} "INSERT INTO domain (pid, name, port, addtime) VALUES (${siteId}, '${escapedDomain}', 80, '${escapedNow}');"`
+      );
+    }
+
+    return {
+      ok: !!siteId,
+      exists: false,
+      created: true,
+      panelSiteId: siteId || undefined,
+      domainLinked: !!siteId,
+      error: siteId ? undefined : "宝塔站点创建后未获取到站点 ID",
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      exists: false,
+      created: false,
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
+
+export async function registerBtPanelSite(domain: string, sitePath: string): Promise<BtPanelRegistrationResult> {
+  let client: Client | null = null;
+  try {
+    client = await connectSSH();
+    const result = await registerBtPanelSiteInternal(client, domain, sitePath);
+    client.end();
+    return result;
+  } catch (err) {
+    client?.end();
+    return {
+      ok: false,
+      exists: false,
+      created: false,
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
+
+export async function verifySiteWithAutoRegister(domain: string, sitePath: string): Promise<VerifyWithAutoRegisterResult> {
+  let checks = await verifyConnection(sitePath);
+  let publicAccess = await verifyPublicSiteAccess(domain);
+  let panelRegistration: BtPanelRegistrationResult | undefined;
+  let autoRegisterAttempted = false;
+  let fullyVerified = checks.valid && publicAccess.ok;
+
+  if (!fullyVerified && checks.site_dir_exists) {
+    autoRegisterAttempted = true;
+    panelRegistration = await registerBtPanelSite(domain, sitePath);
+    if (panelRegistration.ok) {
+      checks = await verifyConnection(sitePath);
+      publicAccess = await verifyPublicSiteAccess(domain);
+      fullyVerified = checks.valid && publicAccess.ok;
+    }
+  }
+
+  return {
+    checks,
+    publicAccess,
+    fullyVerified,
+    autoRegisterAttempted,
+    panelRegistration,
+  };
 }
 
 // ─── 架构检测（与 Python 后端 _detect_site_type_inner 一致）───

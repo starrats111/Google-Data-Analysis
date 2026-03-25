@@ -70,6 +70,15 @@ interface PublicAccessResult {
   error?: string;
 }
 
+interface BtPanelRegistrationResult {
+  ok: boolean;
+  exists: boolean;
+  created: boolean;
+  panelSiteId?: string;
+  domainLinked?: boolean;
+  error?: string;
+}
+
 interface GitHubTokenEntry {
   id: string;
   label: string;
@@ -557,14 +566,22 @@ export default function AdminSitesPage() {
     }).then((r) => r.json());
     const checks = res.data?.checks;
     const publicAccess = res.data?.publicAccess as PublicAccessResult | undefined;
+    const autoRegisterAttempted = !!res.data?.autoRegisterAttempted;
+    const panelRegistration = res.data?.panelRegistration as BtPanelRegistrationResult | undefined;
     const fullyVerified = res.code === 0 && !!checks?.valid && !!publicAccess?.ok;
     if (fullyVerified) {
-      message.success({ content: "验证通过", key: "verify" });
+      const successText = autoRegisterAttempted && panelRegistration?.ok
+        ? (panelRegistration.created ? "已自动补登记站点并验证通过" : "已自动核对宝塔站点并验证通过")
+        : "验证通过";
+      message.success({ content: successText, key: "verify" });
     } else {
       const errText =
         res.code !== 0
           ? (res.message || "验证失败")
           : [
+              autoRegisterAttempted && panelRegistration && !panelRegistration.ok
+                ? (`自动补登记失败：${panelRegistration.error || "未知错误"}`)
+                : "",
               !checks?.valid ? (checks?.error || "站点结构校验未通过：请检查宝塔 SSH、站点目录、index.html 与数据 JS 是否完整") : "",
               !publicAccess?.ok ? (`公网访问未通过：${publicAccess?.error || publicAccess?.checked_url || "站点无法从外网访问"}`) : "",
             ].filter(Boolean).join("；");

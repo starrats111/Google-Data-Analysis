@@ -3,7 +3,7 @@ import { serializeData } from "@/lib/auth";
 import { apiSuccess, apiError } from "@/lib/constants";
 import { withAdmin } from "@/lib/api-handler";
 import prisma from "@/lib/prisma";
-import { getSiteRoot } from "@/lib/remote-publisher";
+import { getSiteRoot, registerBtPanelSite } from "@/lib/remote-publisher";
 import { getTokenPool, findGitHubToken, findCFTokenForDomain, type GitHubTokenEntry } from "@/lib/deploy-credentials";
 
 export async function GET() {
@@ -320,18 +320,15 @@ async function runMigrationAsync(taskId: bigint) {
     // Step 2.5: 注册站点到宝塔面板数据库
     try {
       await update({ progress: 77, step_detail: "正在注册站点到宝塔面板..." });
-      const now = new Date().toISOString().replace("T", " ").slice(0, 19);
-      // 检查是否已存在
-      const existing = await exec(`sudo sqlite3 /www/server/panel/data/default.db "SELECT id FROM sites WHERE name='${task.domain}' LIMIT 1;" 2>/dev/null`);
-      if (!existing.trim()) {
-        await exec(`sudo sqlite3 /www/server/panel/data/default.db "INSERT INTO sites (name, path, status, \\\`index\\\`, ps, addtime) VALUES ('${task.domain}', '${sitePath}', '1', 'index.html', '${task.domain}', '${now}');"`);
-        const sid = await exec(`sudo sqlite3 /www/server/panel/data/default.db "SELECT id FROM sites WHERE name='${task.domain}' ORDER BY id DESC LIMIT 1;"`);
-        if (sid.trim()) {
-          await exec(`sudo sqlite3 /www/server/panel/data/default.db "INSERT INTO domain (pid, name, port, addtime) VALUES (${sid.trim()}, '${task.domain}', 80, '${now}');"`);
-        }
-        await update({ step_detail: `宝塔面板站点已注册 (id=${sid.trim()})` });
+      const panelRegistration = await registerBtPanelSite(task.domain, sitePath);
+      if (panelRegistration.ok) {
+        await update({
+          step_detail: panelRegistration.created
+            ? `宝塔面板站点已注册 (id=${panelRegistration.panelSiteId || "-"})`
+            : `宝塔面板已存在该站点 (id=${panelRegistration.panelSiteId || "-"})`,
+        });
       } else {
-        await update({ step_detail: `宝塔面板已存在该站点 (id=${existing.trim()})` });
+        await update({ step_detail: `宝塔注册异常（不影响迁移）: ${panelRegistration.error || "未知错误"}` });
       }
     } catch (btErr) {
       await update({ step_detail: `宝塔注册异常（不影响迁移）: ${btErr instanceof Error ? btErr.message : String(btErr)}` });

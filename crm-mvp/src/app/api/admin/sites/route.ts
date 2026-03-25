@@ -3,7 +3,7 @@ import { serializeData } from "@/lib/auth";
 import { apiSuccess, apiError } from "@/lib/constants";
 import { withAdmin } from "@/lib/api-handler";
 import prisma from "@/lib/prisma";
-import { verifyConnection, verifyPublicSiteAccess, getSiteRoot } from "@/lib/remote-publisher";
+import { verifySiteWithAutoRegister, getSiteRoot } from "@/lib/remote-publisher";
 
 // 获取所有站点列表（管理员 + 用户端共用，用户端只读）
 export const GET = withAdmin(async () => {
@@ -36,9 +36,9 @@ export const POST = withAdmin(async (req: NextRequest) => {
   let verified = 0;
 
   try {
-    const checks = await verifyConnection(sitePath);
-    const publicAccess = await verifyPublicSiteAccess(domainClean);
-    if (checks.valid && publicAccess.ok) {
+    const verifyResult = await verifySiteWithAutoRegister(domainClean, sitePath);
+    const { checks, fullyVerified } = verifyResult;
+    if (fullyVerified) {
       verified = 1;
     }
     if (checks.site_type) {

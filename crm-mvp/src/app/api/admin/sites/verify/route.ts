@@ -17,5 +17,7 @@ export const POST = withAdmin(async (req: NextRequest) => {
     site_name: result.site.site_name,
     checks: result.checks,
     publicAccess: result.publicAccess,
+    autoRegisterAttempted: result.autoRegisterAttempted,
+    panelRegistration: result.panelRegistration,
   });
 });
