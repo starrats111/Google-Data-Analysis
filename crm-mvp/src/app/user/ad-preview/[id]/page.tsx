@@ -74,6 +74,35 @@ interface AdPreviewData {
   isReady: boolean;
 }
 
+function normalizeSitelinkItems(items: unknown): SitelinkItem[] {
+  if (!Array.isArray(items)) return [];
+  return items
+    .map((item) => {
+      const record = (item ?? {}) as Record<string, unknown>;
+      const title = String(record.title || "").trim();
+      const desc1 = String(record.desc1 || record.description1 || "").trim();
+      const desc2 = String(record.desc2 || record.description2 || "").trim();
+      const url = String(record.url || record.finalUrl || "").trim();
+      return {
+        title,
+        desc1,
+        desc2,
+        url,
+        urlStatus: url ? "valid" as const : "",
+      };
+    })
+    .filter((item) => item.title || item.desc1 || item.desc2 || item.url);
+}
+
+function normalizeImageUrls(items: unknown): string[] {
+  if (!Array.isArray(items)) return [];
+  return Array.from(new Set(
+    items
+      .map((item) => String(item || "").trim())
+      .filter((url) => url.startsWith("http")),
+  ));
+}
+
 export default function AdPreviewPage() {
   const params = useParams();
   const router = useRouter();
@@ -228,34 +257,31 @@ export default function AdPreviewPage() {
       setSelectedCid(preview.campaign.customer_id);
     }
     // 初始化已有扩展数据
-    const existingSitelinks = preview.adCreative?.sitelinks as SitelinkItem[] | null;
-    if (existingSitelinks?.length) {
+    const existingSitelinks = normalizeSitelinkItems(preview.adCreative?.sitelinks);
+    if (existingSitelinks.length > 0) {
       setEnableSitelinks(true);
-      setSitelinks(existingSitelinks.map((s: any) => ({
-        title: s.title || "", desc1: s.desc1 || s.description1 || "",
-        desc2: s.desc2 || s.description2 || "", url: s.url || s.finalUrl || "",
-        urlStatus: s.url ? "valid" : "",
-      })));
+      setSitelinks(existingSitelinks);
     }
     const existingCallouts = preview.adCreative?.callouts as string[] | null;
     if (existingCallouts?.length) {
       setEnableCallouts(true);
       setCallouts(existingCallouts);
     }
-    const existingImages = preview.adCreative?.image_urls as string[] | null;
-    if (existingImages?.length) {
+    const existingImages = normalizeImageUrls(preview.adCreative?.image_urls);
+    if (existingImages.length > 0) {
       setEnableImages(true);
+      setCrawledImages(existingImages);
       setImageUrls(existingImages);
     }
     setInitialized(true);
 
     // ─── 自动生成：图片和站内链接默认自动触发（不需要用户勾选） ───
-    if (!existingSitelinks?.length) {
+    if (existingSitelinks.length === 0) {
       setEnableSitelinks(true);
       // 延迟触发，等 state 更新完
       setTimeout(() => generateExtension("sitelinks"), 100);
     }
-    if (!existingImages?.length) {
+    if (existingImages.length === 0) {
       setEnableImages(true);
       setTimeout(() => generateExtension("images"), 200);
     }
@@ -556,9 +582,9 @@ export default function AdPreviewPage() {
       if (data.crawl_failed) setCrawlFailed(true);
 
       if (type === "sitelinks" && data.sitelinks !== undefined) {
-        const items: SitelinkItem[] = data.sitelinks.map((s: any) => ({
-          title: s.title || "", desc1: s.desc1 || "", desc2: s.desc2 || "",
-          url: s.url || "", urlStatus: s.url ? "" as const : "" as const,
+        const items = normalizeSitelinkItems(data.sitelinks).map((item) => ({
+          ...item,
+          urlStatus: item.url ? "" as const : item.urlStatus,
         }));
         if (items.length > 0) {
           setSitelinks(items);
@@ -759,8 +785,9 @@ export default function AdPreviewPage() {
   // 勾选时自动触发 AI 生成
   const toggleSitelinks = useCallback((checked: boolean) => {
     setEnableSitelinks(checked);
-    if (checked && sitelinks.length === 0) generateExtension("sitelinks");
-  }, [sitelinks.length, generateExtension]);
+    const hasRealSitelinks = sitelinks.some((item) => item.url.trim().startsWith("http"));
+    if (checked && !hasRealSitelinks) generateExtension("sitelinks");
+  }, [sitelinks, generateExtension]);
 
   const toggleImages = useCallback((checked: boolean) => {
     setEnableImages(checked);
@@ -1364,7 +1391,7 @@ export default function AdPreviewPage() {
             <div style={{ marginBottom: 16 }}>
               <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                 <Space><PictureOutlined /><Text strong>商家图片</Text><Tag color="blue">自动生成</Tag></Space>
-                {!imagesLoading && imageUrls.length > 0 && (
+                {!imagesLoading && (crawledImages.length > 0 || imageUrls.length > 0) && (
                   <Button size="small" type="link" icon={<ReloadOutlined />} onClick={() => generateExtension("images")}>重新提取</Button>
                 )}
               </div>
@@ -1396,7 +1423,7 @@ export default function AdPreviewPage() {
                       {crawledImages.length > 0 && (
                         <div style={{ marginBottom: 12 }}>
                           <Text type="secondary" style={{ fontSize: 12, marginBottom: 8, display: "block" }}>
-                            已爬取 {crawledImages.length} 张图片，已选 {imageUrls.filter(u => crawledImages.includes(u)).length} 张（点击图片选择/取消）
+                            可选图片 {crawledImages.length} 张，已选 {imageUrls.filter(u => crawledImages.includes(u)).length} 张（点击图片选择/取消）
                           </Text>
                           <Space wrap>
                             {crawledImages.map((url, i) => {
@@ -1433,7 +1460,9 @@ export default function AdPreviewPage() {
                       {/* 已选中 + 手动上传的图片 */}
                       {imageUrls.filter(u => !crawledImages.includes(u)).length > 0 && (
                         <div style={{ marginBottom: 8 }}>
-                          <Text type="secondary" style={{ fontSize: 12, marginBottom: 4, display: "block" }}>手动添加的图片：</Text>
+                          <Text type="secondary" style={{ fontSize: 12, marginBottom: 4, display: "block" }}>
+                            已选手动图片 {imageUrls.filter(u => !crawledImages.includes(u)).length} 张
+                          </Text>
                           <Space wrap>
                             {imageUrls.filter(u => !crawledImages.includes(u)).map((url, i) => {
                               const checkResult = imageCheckResults[imageUrls.indexOf(url)];
@@ -1444,10 +1473,14 @@ export default function AdPreviewPage() {
                                   width={80} height={80}
                                   style={{
                                     objectFit: "cover", borderRadius: 6,
-                                    border: checkResult?.has_text ? "2px solid #ff4d4f" : "1px solid #d9d9d9",
+                                    border: checkResult?.has_text ? "2px solid #ff4d4f" : "3px solid #1890ff",
+                                    opacity: 1,
                                   }}
                                   fallback="data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iODAiIGhlaWdodD0iODAiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+PHJlY3Qgd2lkdGg9IjgwIiBoZWlnaHQ9IjgwIiBmaWxsPSIjZjVmNWY1Ii8+PHRleHQgeD0iNDAiIHk9IjQ0IiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmaWxsPSIjYmZiZmJmIiBmb250LXNpemU9IjEyIj7ml6Dms5XliqDovb08L3RleHQ+PC9zdmc+"
                                 />
+                                <div style={{ position: "absolute", top: -4, right: -4, background: "#1890ff", borderRadius: "50%", width: 20, height: 20, display: "flex", alignItems: "center", justifyContent: "center", boxShadow: "0 1px 3px rgba(0,0,0,.3)" }}>
+                                  <CheckCircleOutlined style={{ color: "#fff", fontSize: 12 }} />
+                                </div>
                                 {checkResult?.has_text && (
                                   <Tooltip title={`检测到文字: ${checkResult.text || ""}`}>
                                     <div style={{ position: "absolute", bottom: 2, left: 2, background: "#ff4d4f", borderRadius: 4, padding: "1px 4px" }}>
@@ -1457,7 +1490,7 @@ export default function AdPreviewPage() {
                                 )}
                                 <Button
                                   size="small" type="text" danger icon={<DeleteOutlined />}
-                                  style={{ position: "absolute", top: -4, right: -4, background: "#fff", borderRadius: "50%", boxShadow: "0 1px 3px rgba(0,0,0,.2)", width: 20, height: 20, padding: 0, fontSize: 10 }}
+                                  style={{ position: "absolute", top: -4, left: -4, background: "#fff", borderRadius: "50%", boxShadow: "0 1px 3px rgba(0,0,0,.2)", width: 20, height: 20, padding: 0, fontSize: 10 }}
                                   onClick={() => removeImage(imageUrls.indexOf(url))}
                                 />
                               </div>
