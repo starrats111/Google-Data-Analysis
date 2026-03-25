@@ -65,18 +65,18 @@ export async function GET(req: NextRequest) {
     orderBy: { created_at: "asc" },
   });
 
-  // 判断是否就绪（headlines 和 descriptions 已填充）
+  // 判断是否就绪（标题必须满 15 条，描述必须满 4 条）
   const headlines = (adCreative?.headlines as string[]) || [];
   const descriptions = (adCreative?.descriptions as string[]) || [];
-  const isReady = headlines.length >= 1 && descriptions.length >= 1;
+  const isReady = headlines.length >= 15 && descriptions.length >= 4;
 
-  // 如果未就绪且创建超过 10 秒，自动重新触发 AI 生成（防止领取时异步任务丢失）
+  // 如果未就绪且创建超过 10 秒，自动重新触发 AI 生成（防止异步任务丢失或只生成部分文案）
   if (!isReady && adCreative && adGroup && merchant) {
     const ageMs = Date.now() - new Date(adCreative.created_at).getTime();
     const genKey = `adcopy-${adCreative.id}`;
     if (ageMs > 10000 && !generatingSet.has(genKey)) {
       generatingSet.add(genKey);
-      console.log(`[AdCopy] 检测到 headlines 为空（已过 ${Math.round(ageMs / 1000)}s），重新触发 AI 生成...`);
+      console.log(`[AdCopy] 检测到广告文案未补齐（已过 ${Math.round(ageMs / 1000)}s），重新触发 AI 生成...`);
       triggerAdCopyGeneration(
         adCreative.id,
         adGroup.id,

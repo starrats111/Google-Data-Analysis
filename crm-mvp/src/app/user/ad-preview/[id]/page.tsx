@@ -214,10 +214,10 @@ export default function AdPreviewPage() {
   // 数据就绪后初始化编辑状态
   useEffect(() => {
     if (!preview || initialized || !isReady) return;
-    const h = preview.adCreative?.headlines || [];
-    const d = preview.adCreative?.descriptions || [];
-    setHeadlines(h.length > 0 ? h : Array(15).fill(""));
-    setDescriptions(d.length > 0 ? d : Array(4).fill(""));
+    const h = Array.isArray(preview.adCreative?.headlines) ? preview.adCreative.headlines : [];
+    const d = Array.isArray(preview.adCreative?.descriptions) ? preview.adCreative.descriptions : [];
+    setHeadlines(h.length >= 15 ? h.slice(0, 15) : [...h, ...Array(15 - h.length).fill("")]);
+    setDescriptions(d.length >= 4 ? d.slice(0, 4) : [...d, ...Array(4 - d.length).fill("")]);
     setHeadlinesZh(preview.adCreative?.headlines_zh || []);
     setDescriptionsZh(preview.adCreative?.descriptions_zh || []);
     setKwList((preview.keywords || []).map((k: any) => ({ text: k.keyword_text, matchType: k.match_type })));
