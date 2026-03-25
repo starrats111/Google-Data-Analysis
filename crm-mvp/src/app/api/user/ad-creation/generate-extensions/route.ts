@@ -137,12 +137,12 @@ export async function POST(req: NextRequest) {
 
   const tasks: Promise<void>[] = [];
 
-  // 促销/价格信息：需要前端单独请求
+  // 促销/价格信息：爬首页 + 子页面，用 AI 提取
   if (types.includes("promotion")) {
-    result.promotion = extractPromotionInfo(crawlResult.html, merchantUrl);
+    result.promotion = await extractPromotionWithAI(crawlResult.html, merchantUrl, merchantName, crawlResult.links);
   }
   if (types.includes("price")) {
-    result.price_items = extractPriceInfo(crawlResult.html);
+    result.price_items = await extractPriceWithAI(crawlResult.html, merchantUrl, merchantName, crawlResult.links);
   }
 
   if (types.includes("sitelinks")) {
@@ -754,8 +754,6 @@ async function selectBestImages(
   return clean.length > 0 ? clean : sizeChecked.slice(0, 30);
 }
 
-/** 从 HTML 中提取商家真实卖点信息（运费政策、退换货、品牌特色等） */
-
 /**
  * 从 HTML 中提取促销信息（折扣、优惠码、促销活动）
  */
@@ -869,6 +867,153 @@ function extractPriceInfo(html: string): Array<{ header: string; description: st
   }
 
   return items;
+}
+
+/**
+ * 用 AI 从商家网站提取促销信息（爬首页 + 子页面）
+ */
+async function extractPromotionWithAI(
+  html: string,
+  merchantUrl: string,
+  merchantName: string,
+  links: { url: string; text: string }[],
+): Promise<Record<string, unknown> | null> {
+  // 1. 先用正则快速提取（首页）
+  const regexResult = extractPromotionInfo(html, merchantUrl);
+  if (regexResult && regexResult.discount_type) return regexResult;
+
+  // 2. 爬取促销相关子页面
+  const promoKeywords = ["sale", "deal", "offer", "promo", "discount", "coupon", "special", "clearance", "pricing"];
+  const promoLinks = links.filter((l) =>
+    promoKeywords.some((kw) => l.url.toLowerCase().includes(kw) || l.text.toLowerCase().includes(kw)),
+  ).slice(0, 3);
+
+  let combinedText = html.replace(/<script[\s\S]*?<\/script>/gi, "").replace(/<style[\s\S]*?<\/style>/gi, "").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().slice(0, 3000);
+
+  for (const link of promoLinks) {
+    try {
+      const resp = await fetch(link.url, {
+        signal: AbortSignal.timeout(8000),
+        headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" },
+      });
+      if (resp.ok) {
+        const subHtml = await resp.text();
+        const subResult = extractPromotionInfo(subHtml, merchantUrl);
+        if (subResult && subResult.discount_type) return subResult;
+        const subText = subHtml.replace(/<script[\s\S]*?<\/script>/gi, "").replace(/<style[\s\S]*?<\/style>/gi, "").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().slice(0, 2000);
+        combinedText += "\n\n--- Sub page: " + link.url + " ---\n" + subText;
+      }
+    } catch { /* skip */ }
+  }
+
+  // 3. 用 AI 提取
+  try {
+    const { callAiWithFallback } = await import("@/lib/ai-service");
+    const aiResp = await callAiWithFallback("ad_copy", [{ role: "user", content: `Analyze this merchant website text and extract promotion/discount information.
+
+Merchant: ${merchantName}
+URL: ${merchantUrl}
+
+Website text (truncated):
+${combinedText.slice(0, 4000)}
+
+Extract and return a JSON object with these fields (use null if not found):
+- discount_type: "PERCENT" or "MONETARY" or null
+- discount_percent: number or null (e.g. 20 for 20% off)
+- discount_amount: number or null (e.g. 10 for $10 off)
+- promo_code: string or null (e.g. "SAVE20")
+- promotion_target: string or null (a short description of the promotion, max 60 chars, e.g. "All Inclusive Deals", "Summer Sale", "Free Shipping on Orders Over $50")
+- final_url: the best URL for this promotion, or "${merchantUrl}" if none
+
+Return ONLY valid JSON, no explanation.` }], 2048);
+
+    const parsed = JSON.parse(aiResp.replace(/```json?\s*/g, "").replace(/```/g, "").trim());
+    if (parsed.discount_type || parsed.promotion_target || parsed.promo_code) {
+      return { ...parsed, final_url: parsed.final_url || merchantUrl };
+    }
+  } catch (err) {
+    console.warn("[ExtractPromotion] AI extraction failed:", err instanceof Error ? err.message : err);
+  }
+
+  return null;
+}
+
+/**
+ * 用 AI 从商家网站提取价格/产品信息（爬首页 + 子页面）
+ */
+async function extractPriceWithAI(
+  html: string,
+  merchantUrl: string,
+  merchantName: string,
+  links: { url: string; text: string }[],
+): Promise<Array<{ header: string; description: string; price: number; currency: string; url: string }>> {
+  // 1. 先用正则快速提取（首页 JSON-LD）
+  const regexResult = extractPriceInfo(html);
+  if (regexResult.length >= 3) return regexResult;
+
+  // 2. 爬取价格相关子页面
+  const priceKeywords = ["pricing", "price", "plan", "shop", "product", "store", "buy", "collection"];
+  const priceLinks = links.filter((l) =>
+    priceKeywords.some((kw) => l.url.toLowerCase().includes(kw) || l.text.toLowerCase().includes(kw)),
+  ).slice(0, 3);
+
+  let combinedText = html.replace(/<script[\s\S]*?<\/script>/gi, "").replace(/<style[\s\S]*?<\/style>/gi, "").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().slice(0, 3000);
+
+  for (const link of priceLinks) {
+    try {
+      const resp = await fetch(link.url, {
+        signal: AbortSignal.timeout(8000),
+        headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" },
+      });
+      if (resp.ok) {
+        const subHtml = await resp.text();
+        const subResult = extractPriceInfo(subHtml);
+        if (subResult.length >= 3) return subResult;
+        const subText = subHtml.replace(/<script[\s\S]*?<\/script>/gi, "").replace(/<style[\s\S]*?<\/style>/gi, "").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().slice(0, 2000);
+        combinedText += "\n\n--- Sub page: " + link.url + " ---\n" + subText;
+      }
+    } catch { /* skip */ }
+  }
+
+  // 3. 用 AI 提取
+  try {
+    const { callAiWithFallback } = await import("@/lib/ai-service");
+    const aiResp = await callAiWithFallback("ad_copy", [{ role: "user", content: `Analyze this merchant website text and extract product/pricing information for Google Ads Price Extensions.
+
+Merchant: ${merchantName}
+URL: ${merchantUrl}
+
+Website text (truncated):
+${combinedText.slice(0, 4000)}
+
+Extract 3-8 products/services with pricing. Return a JSON array of objects:
+[
+  { "header": "Product Name (max 25 chars)", "description": "Short desc (max 25 chars)", "price": 29.99, "currency": "USD", "url": "product URL or empty string" }
+]
+
+Rules:
+- header and description MUST be ≤ 25 characters each
+- price must be a real number found on the website, NOT made up
+- If no real prices are found, return an empty array []
+- currency should match the website's currency
+
+Return ONLY valid JSON array, no explanation.` }], 2048);
+
+    const parsed = JSON.parse(aiResp.replace(/```json?\s*/g, "").replace(/```/g, "").trim());
+    if (Array.isArray(parsed) && parsed.length > 0) {
+      return parsed.filter((p: Record<string, unknown>) => p.price && Number(p.price) > 0).slice(0, 8).map((p: Record<string, unknown>) => ({
+        header: String(p.header || "").slice(0, 25),
+        description: String(p.description || "").slice(0, 25),
+        price: Number(p.price),
+        currency: String(p.currency || "USD"),
+        url: String(p.url || ""),
+      }));
+    }
+  } catch (err) {
+    console.warn("[ExtractPrice] AI extraction failed:", err instanceof Error ? err.message : err);
+  }
+
+  return regexResult;
 }
 
 /** 从 HTML 中提取商家真实卖点信息（运费政策、退换货、品牌特色等） */
