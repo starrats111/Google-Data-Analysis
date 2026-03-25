@@ -52,36 +52,62 @@ jobs:
               echo "No dependency changes, skipping npm install"
             fi
 
-            echo "===== 4. Build ====="
-            NODE_OPTIONS="--max-old-space-size=512" npx next build 2>&1 | tail -20
-
-            echo "===== 5. Database migrations ====="
-            npx prisma migrate deploy 2>&1 | tail -5
-
-            echo "===== 6. Restart service ====="
+            echo "===== 4. Stop service before build (B-1) ====="
             if command -v pm2 &> /dev/null; then
-              pm2 restart ad-automation 2>/dev/null || pm2 start npm --name "ad-automation" --max-memory-restart "700M" -- start
-              sleep 3
-              pm2 status ad-automation
-            else
-              PID=$(lsof -ti:20050 2>/dev/null || true)
-              if [ -n "$PID" ]; then
-                kill -9 $PID 2>/dev/null || true
-                sleep 1
-              fi
-              cd "$CRM_DIR"
-              nohup npm start > logs/app.log 2>&1 &
-              echo "Started with PID: $!"
+              pm2 stop ad-automation 2>/dev/null || true
+              echo "Service stopped for safe build"
             fi
 
-            echo "===== 7. Health check ====="
-            sleep 5
-            HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:20050/api/health 2>/dev/null || echo "000")
+            echo "===== 5. Build ====="
+            NODE_OPTIONS="--max-old-space-size=512" npx next build 2>&1 | tail -20
+
+            echo "===== 6. Verify build (B-2) ====="
+            if [ ! -f "$CRM_DIR/.next/BUILD_ID" ]; then
+              echo "BUILD FAILED: .next/BUILD_ID not found, aborting deploy"
+              pm2 start ad-automation 2>/dev/null || true
+              exit 1
+            fi
+            echo "Build verified: BUILD_ID=$(cat $CRM_DIR/.next/BUILD_ID)"
+
+            echo "===== 7. Database migrations ====="
+            npx prisma migrate deploy 2>&1 | tail -5
+
+            echo "===== 8. Start service ====="
+            cd "$CRM_DIR"
+            if command -v pm2 &> /dev/null; then
+              if pm2 describe ad-automation > /dev/null 2>&1; then
+                pm2 start ad-automation
+              else
+                pm2 start ecosystem.config.cjs
+              fi
+              sleep 5
+              pm2 status ad-automation
+            else
+              nohup npm start > logs/app.log 2>&1 &
+              echo "Started with PID: $!"
+              sleep 5
+            fi
+
+            echo "===== 9. Health check ====="
+            RETRIES=0
+            MAX_RETRIES=6
+            HTTP_CODE="000"
+            while [ "$RETRIES" -lt "$MAX_RETRIES" ]; do
+              HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:20050/api/health 2>/dev/null || echo "000")
+              if [ "$HTTP_CODE" = "200" ]; then
+                break
+              fi
+              RETRIES=$((RETRIES + 1))
+              echo "Health check attempt $RETRIES/$MAX_RETRIES: HTTP $HTTP_CODE, retrying in 5s..."
+              sleep 5
+            done
+
             if [ "$HTTP_CODE" = "200" ]; then
               echo "Health check PASSED (HTTP $HTTP_CODE)"
             else
-              echo "Health check WARNING (HTTP $HTTP_CODE) - service may still be starting"
-              pm2 logs ad-automation --lines 10 --nostream 2>/dev/null || true
+              echo "Health check FAILED after $MAX_RETRIES attempts (HTTP $HTTP_CODE)"
+              pm2 logs ad-automation --err --lines 20 --nostream 2>/dev/null || true
+              exit 1
             fi
 
             echo "===== Deploy complete ====="
