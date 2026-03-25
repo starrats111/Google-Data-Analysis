@@ -37,17 +37,24 @@ export async function listMccChildAccounts(
 }
 
 /**
- * 检查 CID 是否可用（无 ENABLED campaign）
+ * 检查 CID 是否可用（无 ENABLED campaign 且账户可访问）
  */
 export async function checkCidAvailability(
   credentials: MccCredentials,
   customerId: string,
 ): Promise<boolean> {
-  const results = await queryGoogleAds(credentials, customerId, `
-    SELECT campaign.id, campaign.status
-    FROM campaign
-    WHERE campaign.status = 'ENABLED'
-    LIMIT 1
-  `);
-  return results.length === 0;
+  try {
+    const results = await queryGoogleAds(credentials, customerId, `
+      SELECT campaign.id, campaign.status
+      FROM campaign
+      WHERE campaign.status = 'ENABLED'
+      LIMIT 1
+    `);
+    return results.length === 0;
+  } catch (err) {
+    // 账户不可用（停用/未启用/无权限）视为不可用
+    const msg = err instanceof Error ? err.message : String(err);
+    console.warn(`[CID] checkCidAvailability(${customerId}) 失败: ${msg}`);
+    return false;
+  }
 }

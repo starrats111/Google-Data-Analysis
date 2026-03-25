@@ -117,6 +117,9 @@ export async function POST(req: NextRequest) {
   if (!customerId) {
     const { listMccChildAccounts, checkCidAvailability } = await import("@/lib/google-ads/cid");
     const cids = await listMccChildAccounts(credentials);
+    if (cids.length === 0) {
+      return apiError("MCC 下没有可用的客户账号（CID），请检查 MCC 是否已关联子账户");
+    }
     for (const cid of cids) {
       const available = await checkCidAvailability(credentials, cid.customer_id);
       if (available) {
@@ -124,7 +127,7 @@ export async function POST(req: NextRequest) {
         break;
       }
     }
-    if (!customerId) return apiError("MCC 下没有空闲的客户账号（CID）");
+    if (!customerId) return apiError(`MCC 下 ${cids.length} 个 CID 均不可用（已有广告或账户未启用），请新增 CID 或检查账户状态`);
   }
 
   const cid = customerId.replace(/-/g, "");
