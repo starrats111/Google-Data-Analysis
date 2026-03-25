@@ -88,8 +88,9 @@ export async function fetchCampaignDataByDateRange(
 export async function fetchAllCampaignStatuses(
   credentials: MccCredentials,
   customerIds: string[],
-): Promise<{ customer_id: string; campaign_id: string; status: string; name: string; budget_micros: number; budget_dollars: number }[]> {
+): Promise<{ statuses: { customer_id: string; campaign_id: string; status: string; name: string; budget_micros: number; budget_dollars: number }[]; disabledCids: string[] }> {
   const all: { customer_id: string; campaign_id: string; status: string; name: string; budget_micros: number; budget_dollars: number }[] = [];
+  const disabledCids: string[] = [];
 
   const fetchOne = async (cid: string) => {
     try {
@@ -111,7 +112,12 @@ export async function fetchAllCampaignStatuses(
         };
       });
     } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
       console.error(`查询 CID ${cid} 失败:`, err);
+      // CID 被停用/未启用时，标记为 disabled
+      if (msg.includes("CUSTOMER_NOT_ENABLED") || msg.includes("not yet enabled")) {
+        disabledCids.push(cid.replace(/-/g, ""));
+      }
       return [];
     }
   };
@@ -123,5 +129,5 @@ export async function fetchAllCampaignStatuses(
     for (const items of results) all.push(...items);
   }
 
-  return all;
+  return { statuses: all, disabledCids };
 }

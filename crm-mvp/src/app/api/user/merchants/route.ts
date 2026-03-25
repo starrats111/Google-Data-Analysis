@@ -290,6 +290,12 @@ export const GET = withUser(async (req: NextRequest, { user }) => {
       };
     });
 
+    // 默认排序时，优先显示已启用（ENABLED）的商家
+    if (!sortField) {
+      const STATUS_PRIORITY: Record<string, number> = { ENABLED: 0, PAUSED: 1, NOT_SUBMITTED: 2, UNKNOWN: 3 };
+      enriched.sort((a, b) => (STATUS_PRIORITY[a.ad_status] ?? 9) - (STATUS_PRIORITY[b.ad_status] ?? 9));
+    }
+
     const platformStats = await prisma.user_merchants.groupBy({
       by: ["platform"],
       where: { user_id: userId, is_deleted: 0, status: "claimed" } as never,

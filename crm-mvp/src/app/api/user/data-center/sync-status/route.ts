@@ -40,10 +40,19 @@ export async function POST(req: NextRequest) {
     });
 
     const customerIds = cids.map((c) => c.customer_id);
-    const statuses = await fetchAllCampaignStatuses(credentials, customerIds);
+    const { statuses, disabledCids } = await fetchAllCampaignStatuses(credentials, customerIds);
 
     let campaignUpdated = 0;
     let cidUpdated = 0;
+
+    // 对于被停用的 CID，将其下所有 campaign 标记为 PAUSED
+    if (disabledCids.length > 0) {
+      const r = await prisma.campaigns.updateMany({
+        where: { user_id: userId, customer_id: { in: disabledCids }, is_deleted: 0, google_status: { not: "PAUSED" } },
+        data: { google_status: "PAUSED", last_google_sync_at: new Date() },
+      });
+      campaignUpdated += r.count;
+    }
 
     // 更新 campaigns 表
     for (const s of statuses) {

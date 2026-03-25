@@ -3,6 +3,7 @@ import prisma from "@/lib/prisma";
 import { normalizePlatformCode } from "@/lib/constants";
 import { getExchangeRate, preloadRates } from "@/lib/exchange-rate";
 import { nowCST, parseCSTDateStart } from "@/lib/date-utils";
+import { autoRepairPublishedArticles } from "@/lib/article-auto-repair";
 
 const CRON_SECRET = process.env.CRON_SECRET || "";
 
@@ -48,8 +49,14 @@ async function doDailySync() {
     log("Step 2: Syncing MCC ad data for all users...");
     await syncAllUsersMcc();
 
+    log("Step 2.5: Syncing campaign statuses from Google Ads API...");
+    await syncAllCampaignStatuses();
+
     log("Step 3: Syncing transaction data for all users...");
     await syncAllUsersTransactions();
+
+    log("Step 4: Auto-repairing published articles...");
+    await autoRepairPublishedArticles({ limit: 50 });
 
     const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
     log(`All done in ${elapsed}s`);
@@ -225,6 +232,89 @@ async function syncAllUsersMcc(): Promise<unknown> {
       }
     } catch (e) {
       results[`user_${userId}`] = { error: e instanceof Error ? e.message : String(e) };
+    }
+  }
+  return results;
+}
+
+// ── 同步所有用户的广告系列状态（从 Google Ads API） ──
+
+async function syncAllCampaignStatuses(): Promise<unknown> {
+  const allMcc = await prisma.google_mcc_accounts.findMany({
+    where: { is_deleted: 0, is_active: 1, service_account_json: { not: null } },
+  });
+
+  const results: Record<string, unknown> = {};
+
+  for (const mcc of allMcc) {
+    try {
+      if (!mcc.service_account_json) continue;
+
+      const { fetchAllCampaignStatuses } = await import("@/lib/google-ads");
+      const credentials = {
+        mcc_id: mcc.mcc_id,
+        developer_token: mcc.developer_token || "",
+        service_account_json: mcc.service_account_json,
+      };
+
+      const cids = await prisma.mcc_cid_accounts.findMany({
+        where: { mcc_account_id: mcc.id, is_deleted: 0, status: "active" },
+      });
+      if (cids.length === 0) continue;
+
+      const customerIds = cids.map((c) => c.customer_id);
+      log(`  MCC ${mcc.mcc_name || mcc.mcc_id}: syncing statuses for ${customerIds.length} CIDs...`);
+
+      const { statuses, disabledCids } = await fetchAllCampaignStatuses(credentials, customerIds);
+      let updated = 0;
+
+      // 对于被停用的 CID，将其下所有 campaign 标记为 PAUSED
+      if (disabledCids.length > 0) {
+        const r = await prisma.campaigns.updateMany({
+          where: { user_id: mcc.user_id, customer_id: { in: disabledCids }, is_deleted: 0, google_status: { not: "PAUSED" } },
+          data: { google_status: "PAUSED", last_google_sync_at: new Date() },
+        });
+        updated += r.count;
+      }
+
+      for (const s of statuses) {
+        const result = await prisma.campaigns.updateMany({
+          where: {
+            user_id: mcc.user_id,
+            google_campaign_id: s.campaign_id,
+            is_deleted: 0,
+          },
+          data: {
+            google_status: s.status,
+            campaign_name: s.name,
+            last_google_sync_at: new Date(),
+          },
+        });
+        updated += result.count;
+      }
+
+      // 更新 CID 可用状态
+      const cidHasEnabled = new Map<string, boolean>();
+      for (const s of statuses) {
+        if (s.status === "ENABLED") {
+          cidHasEnabled.set(s.customer_id, true);
+        } else if (!cidHasEnabled.has(s.customer_id)) {
+          cidHasEnabled.set(s.customer_id, false);
+        }
+      }
+      for (const [customerId, hasEnabled] of cidHasEnabled) {
+        await prisma.mcc_cid_accounts.updateMany({
+          where: { mcc_account_id: mcc.id, customer_id: customerId },
+          data: { is_available: hasEnabled ? "N" : "Y", last_synced_at: new Date() },
+        });
+      }
+
+      results[`mcc_${mcc.mcc_id}`] = { statuses: statuses.length, updated };
+      log(`  MCC ${mcc.mcc_name || mcc.mcc_id}: ${statuses.length} campaigns, ${updated} updated`);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      results[`mcc_${mcc.mcc_id}`] = { error: msg };
+      log(`  MCC ${mcc.mcc_name || mcc.mcc_id} status sync error: ${msg}`);
     }
   }
   return results;

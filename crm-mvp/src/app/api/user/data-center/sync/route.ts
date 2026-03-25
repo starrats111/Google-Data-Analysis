@@ -294,7 +294,16 @@ async function syncAdsData(
         ]);
         const allCidIds = [...cidSet];
         console.log(`[Sync] 全量同步 CID 列表: ${allCidIds.length} 个`);
-        const allStatuses = await fetchAllCampaignStatuses(credentials, allCidIds);
+        const { statuses: allStatuses, disabledCids } = await fetchAllCampaignStatuses(credentials, allCidIds);
+
+        // 对于被停用的 CID，将其下所有 campaign 标记为 PAUSED
+        if (disabledCids.length > 0) {
+          console.log(`[Sync] 停用的 CID: ${disabledCids.join(", ")}，将其 campaign 标记为 PAUSED`);
+          await prisma.campaigns.updateMany({
+            where: { user_id: userId, customer_id: { in: disabledCids }, is_deleted: 0, google_status: { not: "PAUSED" } },
+            data: { google_status: "PAUSED", last_google_sync_at: new Date() },
+          });
+        }
 
         const statusUpdateOps: (() => Promise<unknown>)[] = [];
         const statusCreateOps: Array<{ cs: typeof allStatuses[0]; merchantId: bigint }> = [];
