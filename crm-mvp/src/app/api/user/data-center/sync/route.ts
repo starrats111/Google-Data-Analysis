@@ -253,7 +253,7 @@ async function syncAdsData(
           } else {
             operations.push(() => prisma.campaigns.update({
               where: { id: campaign!.id },
-              data: { campaign_name: cd.campaign_name, daily_budget: cd.budget_dollars, google_status: cd.campaign_status, last_google_sync_at: new Date() },
+              data: { daily_budget: cd.budget_dollars, google_status: cd.campaign_status, last_google_sync_at: new Date() },
             }));
           }
 
