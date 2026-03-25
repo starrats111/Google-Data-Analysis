@@ -222,20 +222,33 @@ export default function ArticlePublishPage() {
           merchant_name: selectedMerchant.merchant_name,
           country,
         }),
-      }).then((r) => r.json());
+        signal: AbortSignal.timeout(65000),
+      });
 
-      if (res.code === 0 && res.data?.images?.length > 0) {
-        setCrawlResult(res.data);
-        setSelectedImages(res.data.images?.slice(0, 5) || []);
+      let data: { code?: number; data?: CrawlResult; message?: string };
+      try {
+        data = await res.json();
+      } catch {
+        // 服务端返回了非 JSON 响应
+        setCrawlFailed(true);
+        setCrawlResult(null);
+        message.warning("爬取服务响应异常，可手动输入 URL 重试或直接上传图片");
+        return;
+      }
+
+      if (data.code === 0 && data.data?.images?.length > 0) {
+        setCrawlResult(data.data);
+        setSelectedImages(data.data.images?.slice(0, 5) || []);
         setStep(3);
       } else {
         setCrawlFailed(true);
-        setCrawlResult(res.data || null);
+        setCrawlResult(data.data || null);
         message.warning("未爬取到图片，可手动输入 URL 重试或直接上传图片");
       }
-    } catch {
+    } catch (err) {
       setCrawlFailed(true);
-      message.error("爬取请求失败");
+      const isTimeout = err instanceof Error && (err.name === "TimeoutError" || err.name === "AbortError");
+      message.error(isTimeout ? "爬取超时，请手动输入产品页 URL 重试或直接上传图片" : "爬取请求失败");
     } finally {
       setCrawling(false);
     }
