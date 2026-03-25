@@ -119,6 +119,7 @@ export default function AdPreviewPage() {
   const [sitelinksLoading, setSitelinksLoading] = useState(false);
   const [enableImages, setEnableImages] = useState(false);
   const [imageUrls, setImageUrls] = useState<string[]>([]);
+  const [crawledImages, setCrawledImages] = useState<string[]>([]);
   const [newImageUrl, setNewImageUrl] = useState("");
   const [imagesLoading, setImagesLoading] = useState(false);
   const [enableCallouts, setEnableCallouts] = useState(false);
@@ -513,7 +514,7 @@ export default function AdPreviewPage() {
   }, [selectedMccId, selectedCid, message]);
 
   // ─── 爬虫生成扩展 ───
-  const generateExtension = useCallback(async (type: "sitelinks" | "images" | "callouts") => {
+  const generateExtension = useCallback(async (type: "sitelinks" | "images" | "callouts" | "promotion" | "price") => {
     if (type === "sitelinks") setSitelinksLoading(true);
     if (type === "images") setImagesLoading(true);
     if (type === "callouts") setCalloutsLoading(true);
@@ -545,9 +546,10 @@ export default function AdPreviewPage() {
         }
       }
       if (type === "images" && data.images !== undefined) {
-        setImageUrls(data.images);
+        setCrawledImages(data.images);
+        setImageUrls([]); // 清空选中，让用户重新选
         if (data.images.length > 0) {
-          message.success(`已从商家网站提取 ${data.images.length} 张真实图片`);
+          message.success(`已从商家网站提取 ${data.images.length} 张图片，请勾选需要的图片`);
         } else {
           message.warning(data.crawl_failed
             ? "无法爬取商家网站图片，请手动拖入或粘贴图片 URL"
@@ -558,6 +560,36 @@ export default function AdPreviewPage() {
         setCallouts(data.callouts.length > 0 ? data.callouts : ["", ""]);
         if (data.callouts.length > 0) message.success(`已生成 ${data.callouts.length} 条宣传信息`);
         else message.warning("未能生成宣传信息，请手动添加");
+      }
+
+      // 自动填入促销信息
+      if (data.promotion && typeof data.promotion === "object") {
+        const p = data.promotion as Record<string, unknown>;
+        setEnablePromotion(true);
+        setPromotion((prev) => ({
+          ...prev,
+          promotion_target: String(p.promotion_target || prev.promotion_target || ""),
+          discount_type: (p.discount_type === "MONETARY" ? "MONETARY" : "PERCENT") as "MONETARY" | "PERCENT",
+          discount_percent: p.discount_percent != null ? Number(p.discount_percent) : prev.discount_percent,
+          discount_amount: p.discount_amount != null ? Number(p.discount_amount) : prev.discount_amount,
+          promo_code: p.promo_code ? String(p.promo_code) : prev.promo_code,
+          final_url: p.final_url ? String(p.final_url) : prev.final_url,
+        }));
+        message.success("已自动提取促销信息");
+      }
+
+      // 自动填入价格信息
+      if (data.price_items && Array.isArray(data.price_items) && data.price_items.length > 0) {
+        setEnablePrice(true);
+        const items = (data.price_items as Array<{ header: string; description: string; price: number; currency: string; url: string }>).slice(0, 8);
+        setPriceItems(items.map((item) => ({
+          header: item.header || "",
+          description: item.description || "",
+          price_amount: item.price || 0,
+          currency_code: item.currency || "USD",
+          final_url: item.url || "",
+        })));
+        message.success(`已自动提取 ${items.length} 条价格信息`);
       }
     } catch (err: any) {
       message.error(err?.message || "生成失败，请手动填写");
@@ -777,6 +809,9 @@ export default function AdPreviewPage() {
     }
   };
   const removeImage = (idx: number) => setImageUrls((prev) => prev.filter((_, i) => i !== idx));
+  const toggleImageSelect = (url: string) => {
+    setImageUrls((prev) => prev.includes(url) ? prev.filter((u) => u !== url) : [...prev, url]);
+  };
 
   // ─── 宣传信息操作 ───
   const updateCallout = (idx: number, val: string) => {
@@ -1311,47 +1346,79 @@ export default function AdPreviewPage() {
                     </div>
                   ) : (
                     <>
-                      {imageUrls.length > 0 && (
-                        <Space wrap style={{ marginBottom: 8 }}>
-                          {imageUrls.map((url, i) => {
-                            const checkResult = imageCheckResults[i];
-                            return (
-                            <div key={url + i} style={{ position: "relative", display: "inline-block" }}>
-                              <Image
-                                src={url} alt={`img-${i}`}
-                                width={80} height={80}
-                                style={{
-                                  objectFit: "cover", borderRadius: 6,
-                                  border: checkResult?.has_text ? "2px solid #ff4d4f" : "1px solid #d9d9d9",
-                                }}
-                                fallback="data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iODAiIGhlaWdodD0iODAiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+PHJlY3Qgd2lkdGg9IjgwIiBoZWlnaHQ9IjgwIiBmaWxsPSIjZjVmNWY1Ii8+PHRleHQgeD0iNDAiIHk9IjQ0IiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmaWxsPSIjYmZiZmJmIiBmb250LXNpemU9IjEyIj7ml6Dms5XliqDovb08L3RleHQ+PC9zdmc+"
-                              />
-                              {checkResult?.checking && (
-                                <div style={{ position: "absolute", bottom: 2, left: 2, background: "rgba(0,0,0,0.5)", borderRadius: 4, padding: "1px 4px" }}>
-                                  <LoadingOutlined style={{ color: "#fff", fontSize: 10 }} />
-                                </div>
-                              )}
-                              {checkResult?.has_text && (
-                                <Tooltip title={`检测到文字: ${checkResult.text || ""}。建议更换为无文字图片`}>
-                                  <div style={{ position: "absolute", bottom: 2, left: 2, background: "#ff4d4f", borderRadius: 4, padding: "1px 4px" }}>
-                                    <Text style={{ color: "#fff", fontSize: 10 }}>含文字</Text>
+                      {/* 爬取到的图片 — 勾选模式 */}
+                      {crawledImages.length > 0 && (
+                        <div style={{ marginBottom: 12 }}>
+                          <Text type="secondary" style={{ fontSize: 12, marginBottom: 8, display: "block" }}>
+                            已爬取 {crawledImages.length} 张图片，已选 {imageUrls.filter(u => crawledImages.includes(u)).length} 张（点击图片选择/取消）
+                          </Text>
+                          <Space wrap>
+                            {crawledImages.map((url, i) => {
+                              const isSelected = imageUrls.includes(url);
+                              return (
+                              <div
+                                key={url + i}
+                                onClick={() => toggleImageSelect(url)}
+                                style={{ position: "relative", display: "inline-block", cursor: "pointer" }}
+                              >
+                                <Image
+                                  src={url} alt={`crawled-${i}`}
+                                  width={80} height={80}
+                                  preview={false}
+                                  style={{
+                                    objectFit: "cover", borderRadius: 6,
+                                    border: isSelected ? "3px solid #1890ff" : "1px solid #d9d9d9",
+                                    opacity: isSelected ? 1 : 0.5,
+                                    transition: "all 0.2s",
+                                  }}
+                                  fallback="data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iODAiIGhlaWdodD0iODAiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+PHJlY3Qgd2lkdGg9IjgwIiBoZWlnaHQ9IjgwIiBmaWxsPSIjZjVmNWY1Ii8+PHRleHQgeD0iNDAiIHk9IjQ0IiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmaWxsPSIjYmZiZmJmIiBmb250LXNpemU9IjEyIj7ml6Dms5XliqDovb08L3RleHQ+PC9zdmc+"
+                                />
+                                {isSelected && (
+                                  <div style={{ position: "absolute", top: -4, right: -4, background: "#1890ff", borderRadius: "50%", width: 20, height: 20, display: "flex", alignItems: "center", justifyContent: "center", boxShadow: "0 1px 3px rgba(0,0,0,.3)" }}>
+                                    <CheckCircleOutlined style={{ color: "#fff", fontSize: 12 }} />
                                   </div>
-                                </Tooltip>
-                              )}
-                              {checkResult && !checkResult.checking && !checkResult.has_text && (
-                                <div style={{ position: "absolute", bottom: 2, left: 2, background: "#52c41a", borderRadius: 4, padding: "1px 4px" }}>
-                                  <CheckCircleOutlined style={{ color: "#fff", fontSize: 10 }} />
-                                </div>
-                              )}
-                              <Button
-                                size="small" type="text" danger icon={<DeleteOutlined />}
-                                style={{ position: "absolute", top: -4, right: -4, background: "#fff", borderRadius: "50%", boxShadow: "0 1px 3px rgba(0,0,0,.2)", width: 20, height: 20, padding: 0, fontSize: 10 }}
-                                onClick={() => removeImage(i)}
-                              />
-                            </div>
-                            );
-                          })}
-                        </Space>
+                                )}
+                              </div>
+                              );
+                            })}
+                          </Space>
+                        </div>
+                      )}
+                      {/* 已选中 + 手动上传的图片 */}
+                      {imageUrls.filter(u => !crawledImages.includes(u)).length > 0 && (
+                        <div style={{ marginBottom: 8 }}>
+                          <Text type="secondary" style={{ fontSize: 12, marginBottom: 4, display: "block" }}>手动添加的图片：</Text>
+                          <Space wrap>
+                            {imageUrls.filter(u => !crawledImages.includes(u)).map((url, i) => {
+                              const checkResult = imageCheckResults[imageUrls.indexOf(url)];
+                              return (
+                              <div key={`manual-${url}-${i}`} style={{ position: "relative", display: "inline-block" }}>
+                                <Image
+                                  src={url} alt={`manual-${i}`}
+                                  width={80} height={80}
+                                  style={{
+                                    objectFit: "cover", borderRadius: 6,
+                                    border: checkResult?.has_text ? "2px solid #ff4d4f" : "1px solid #d9d9d9",
+                                  }}
+                                  fallback="data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iODAiIGhlaWdodD0iODAiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+PHJlY3Qgd2lkdGg9IjgwIiBoZWlnaHQ9IjgwIiBmaWxsPSIjZjVmNWY1Ii8+PHRleHQgeD0iNDAiIHk9IjQ0IiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmaWxsPSIjYmZiZmJmIiBmb250LXNpemU9IjEyIj7ml6Dms5XliqDovb08L3RleHQ+PC9zdmc+"
+                                />
+                                {checkResult?.has_text && (
+                                  <Tooltip title={`检测到文字: ${checkResult.text || ""}`}>
+                                    <div style={{ position: "absolute", bottom: 2, left: 2, background: "#ff4d4f", borderRadius: 4, padding: "1px 4px" }}>
+                                      <Text style={{ color: "#fff", fontSize: 10 }}>含文字</Text>
+                                    </div>
+                                  </Tooltip>
+                                )}
+                                <Button
+                                  size="small" type="text" danger icon={<DeleteOutlined />}
+                                  style={{ position: "absolute", top: -4, right: -4, background: "#fff", borderRadius: "50%", boxShadow: "0 1px 3px rgba(0,0,0,.2)", width: 20, height: 20, padding: 0, fontSize: 10 }}
+                                  onClick={() => removeImage(imageUrls.indexOf(url))}
+                                />
+                              </div>
+                              );
+                            })}
+                          </Space>
+                        </div>
                       )}
                       <Upload.Dragger
                         accept="image/jpeg,image/png"
@@ -1437,10 +1504,13 @@ export default function AdPreviewPage() {
 
             {/* 促销扩展 */}
             <div style={{ marginBottom: 16 }}>
-              <Checkbox checked={enablePromotion} onChange={(e) => setEnablePromotion(e.target.checked)}>
+              <Checkbox checked={enablePromotion} onChange={(e) => {
+                setEnablePromotion(e.target.checked);
+                if (e.target.checked && !promotion.promotion_target) generateExtension("promotion");
+              }}>
                 <Space><TagOutlined /><Text strong>促销 (Promotion)</Text></Space>
               </Checkbox>
-              <Text type="secondary" style={{ fontSize: 12, display: "block", marginLeft: 24 }}>添加促销信息，如折扣、优惠码等</Text>
+              <Text type="secondary" style={{ fontSize: 12, display: "block", marginLeft: 24 }}>勾选后自动从商家网站提取促销信息（折扣、优惠码等）</Text>
               {enablePromotion && (
                 <div style={{ marginTop: 12, marginLeft: 24 }}>
                   <Row gutter={[8, 8]}>
@@ -1506,6 +1576,7 @@ export default function AdPreviewPage() {
               <Checkbox checked={enablePrice} onChange={(e) => {
                 setEnablePrice(e.target.checked);
                 if (e.target.checked && priceItems.length === 0) {
+                  generateExtension("price");
                   setPriceItems([
                     { header: "", description: "", price_amount: 0, currency_code: "USD", final_url: "" },
                     { header: "", description: "", price_amount: 0, currency_code: "USD", final_url: "" },
@@ -1515,7 +1586,7 @@ export default function AdPreviewPage() {
               }}>
                 <Space><DollarOutlined /><Text strong>价格 (Price)</Text></Space>
               </Checkbox>
-              <Text type="secondary" style={{ fontSize: 12, display: "block", marginLeft: 24 }}>展示产品或服务的价格信息</Text>
+              <Text type="secondary" style={{ fontSize: 12, display: "block", marginLeft: 24 }}>勾选后自动从商家网站提取产品价格信息</Text>
               {enablePrice && (
                 <div style={{ marginTop: 12, marginLeft: 24 }}>
                   <div style={{ marginBottom: 8 }}>

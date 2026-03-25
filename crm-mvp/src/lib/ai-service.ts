@@ -249,27 +249,30 @@ export async function padHeadlines(
   const discountNeeded = !hasDiscountHeadline;
   const shippingNeeded = !hasShippingHeadline;
 
-  const prompt = `You are a top Google Ads RSA headline expert specializing in high Ad Strength scores.
+  const prompt = `You are a senior Google Ads copywriter and keyword specialist. You deeply understand Google search ad metrics, Ad Strength scoring, and platform policies.
 
 Merchant: ${merchantName}
 Target country: ${lang.name} (${lang.language})
 Style: ${lang.style}
+Budget context: $1.5/day budget, CPC $0.3 target — every headline must maximize click value.
 
 Existing headlines (already have ${valid.length}):
 ${valid.map((h, i) => `${i + 1}. "${h}"`).join("\n")}
 
 Generate exactly ${needed} MORE unique headlines for this merchant.
 
-STRICT Rules (follow every rule precisely):
-1. Each headline MUST be ≤ 30 characters. Count carefully before outputting. If over 30, shorten it.
+STRICT Rules — follow EVERY rule precisely:
+1. Each headline MUST be ≤ 30 characters. Count carefully before outputting. If over 30, rewrite shorter.
 2. Write in ${lang.language}.
 3. Do NOT repeat or closely paraphrase any existing headline.
-4. Headline #1 (the first generated) MUST be strongly brand-related — include the brand name "${merchantName}" or a clear brand reference.
-${discountNeeded ? `5. MANDATORY: Include exactly ONE headline about the biggest discount/offer (e.g. "Up to 60% Off ${merchantName}", "Exclusive Sale - Save Big"). Place it as headline #4 or earlier among generated ones. Pick the strongest discount available.\n` : ""}${shippingNeeded ? `6. MANDATORY: Include exactly ONE headline about shipping/delivery for ${lang.name} only (e.g. "Free US Shipping", "Fast ${lang.name} Delivery"). Shipping info must target the local country only.\n` : ""}7. Remaining headlines should diversify across: quality/trust signals, CTA (Shop Now, Order Today), unique selling points, seasonal relevance.
-8. Avoid excessive UPPERCASE — only capitalize the first letter of each word (Title Case) or the first letter of the sentence. Never write entire words in caps unless it's an acronym.
-9. No emoji, no exclamation marks overuse (max 1 across all headlines).
-10. Every headline must comply with Google Ads platform policies: no deceptive claims, no misleading info, no sensitive terms.
-11. After generating, re-verify each headline is ≤ 30 characters. If any exceeds, rewrite it shorter.
+4. Headline #1 MUST be strongly brand-related — include "${merchantName}" or a clear brand reference. This is the most important headline.
+${discountNeeded ? `5. MANDATORY: Include exactly ONE discount headline — pick the BIGGEST discount available (e.g. "Up to 60% Off ${merchantName}"). Place it prominently (headline #2 or #3 among generated ones). Prioritize the strongest offer.\n` : ""}${shippingNeeded ? `6. MANDATORY: Include exactly ONE shipping headline targeting ${lang.name} ONLY (e.g. "Free ${lang.name} Shipping", "Fast Local Delivery"). Shipping must be country-specific.\n` : ""}7. Discount and shipping headlines should appear EARLY (within first 4 generated headlines) for priority display.
+8. Remaining headlines should diversify across: quality/trust signals, strong CTAs ("Shop Now", "Order Today"), unique selling points, seasonal relevance, brand differentiators.
+9. Language must reflect the brand character of ${merchantName} — be authentic and compelling, NOT generic filler.
+10. Use Title Case. Avoid excessive UPPERCASE — never write entire words in caps unless it's an acronym.
+11. No emoji. Max 1 exclamation mark across ALL headlines.
+12. Every headline must comply with Google Ads policies: no deceptive claims, no misleading info, no sensitive terms. Information must be truthful.
+13. After generating, re-verify EACH headline is ≤ 30 characters. If any exceeds, rewrite it shorter.
 
 Return ONLY a JSON array of strings, no explanation. Example: ["Headline 1", "Headline 2"]`;
 
@@ -306,24 +309,25 @@ export async function padDescriptions(
     && (/ship|deliver|livra|versand|envio|freight|expedit/i.test(d)),
   );
 
-  const prompt = `You are a top Google Ads RSA description expert specializing in high Ad Strength scores.
+  const prompt = `You are a senior Google Ads copywriter specializing in compelling RSA descriptions that drive conversions.
 
 Merchant: ${merchantName}
 Target country: ${lang.name} (${lang.language})
 Style: ${lang.style}
+Budget context: $1.5/day budget, CPC $0.3 target — descriptions must maximize conversion value.
 
 Existing descriptions (already have ${valid.length}):
 ${valid.map((d, i) => `${i + 1}. "${d}"`).join("\n")}
 
 Generate exactly ${needed} MORE unique descriptions for this merchant.
 
-STRICT Rules (follow every rule precisely):
-1. Each description MUST be between 50-90 characters. Count carefully. If over 90, shorten it.
+STRICT Rules — follow EVERY rule precisely:
+1. Each description MUST be between 50-90 characters (Google Ads limit is 90). Count carefully.
 2. Write in ${lang.language}.
 3. Do NOT repeat or closely paraphrase any existing description.
-${!hasDiscountAndShipping ? `4. MANDATORY: Exactly ONE description (and only one) MUST include BOTH discount/offer info AND shipping/delivery info in the SAME sentence (e.g. "Save 30% on All Orders + Free ${lang.name} Shipping. Shop Now!"). Shipping must target ${lang.name} only. This is REQUIRED.\n` : ""}5. Other descriptions should include: value propositions, trust signals (reviews, guarantees), CTAs ("Shop Now", "Order Today"), brand differentiators.
-6. Language must reflect the brand character of ${merchantName} — be authentic, not generic.
-7. Avoid excessive UPPERCASE — only capitalize the first letter of each word or sentence. Never write entire words in caps unless it's an acronym.
+${!hasDiscountAndShipping ? `4. MANDATORY: Exactly ONE description must combine both discount info AND shipping info in a single line (e.g. "Save 30% + Free ${lang.name} Shipping on All Orders"). Shipping must target ${lang.name} only. This is REQUIRED.\n` : ""}5. Other descriptions should cover: brand story/uniqueness, product quality, trust signals (reviews, guarantees), strong CTAs ("Shop Now", "Order Today"), brand differentiators.
+6. Language must reflect the brand character of ${merchantName} — be authentic and compelling, NOT generic filler like "Great products at great prices".
+7. Use natural sentence case. Avoid excessive UPPERCASE — never write entire words in caps unless it's an acronym.
 8. No emoji. Comply with Google Ads policies: no deceptive or misleading claims, no sensitive terms. All information must be truthful.
 9. After generating, re-verify each description is between 50-90 characters. If any is out of range, rewrite it.
 

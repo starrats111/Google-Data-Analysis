@@ -137,6 +137,14 @@ export async function POST(req: NextRequest) {
 
   const tasks: Promise<void>[] = [];
 
+  // 促销/价格信息：需要前端单独请求
+  if (types.includes("promotion")) {
+    result.promotion = extractPromotionInfo(crawlResult.html, merchantUrl);
+  }
+  if (types.includes("price")) {
+    result.price_items = extractPriceInfo(crawlResult.html);
+  }
+
   if (types.includes("sitelinks")) {
     tasks.push(
       generateSitelinks(merchantName, merchantUrl, country, crawlResult.links)
@@ -706,7 +714,7 @@ async function selectBestImages(
   const OCR_TIMEOUT = 10000;
   const clean: string[] = [];
 
-  for (let i = 0; i < sizeChecked.length && clean.length < 20; i += OCR_CONCURRENCY) {
+  for (let i = 0; i < sizeChecked.length && clean.length < 30; i += OCR_CONCURRENCY) {
     const batch = sizeChecked.slice(i, i + OCR_CONCURRENCY);
     const results = await Promise.allSettled(
       batch.map(async (url) => {
@@ -743,7 +751,124 @@ async function selectBestImages(
     }
   }
 
-  return clean.length > 0 ? clean : sizeChecked.slice(0, 20);
+  return clean.length > 0 ? clean : sizeChecked.slice(0, 30);
+}
+
+/** 从 HTML 中提取商家真实卖点信息（运费政策、退换货、品牌特色等） */
+
+/**
+ * 从 HTML 中提取促销信息（折扣、优惠码、促销活动）
+ */
+function extractPromotionInfo(html: string, merchantUrl: string): Record<string, unknown> | null {
+  if (!html) return null;
+  const lower = html.toLowerCase();
+  const result: Record<string, unknown> = {};
+
+  // 提取折扣百分比（如 "20% off", "Save 30%", "Up to 50% off"）
+  const percentMatch = html.match(/(?:up\s+to\s+)?(\d{1,2})\s*%\s*(?:off|discount|sale|rabatt|remise|sconto)/i)
+    || html.match(/(?:save|get|enjoy)\s+(\d{1,2})\s*%/i);
+  if (percentMatch) {
+    result.discount_type = "PERCENT";
+    result.discount_percent = parseInt(percentMatch[1], 10);
+  }
+
+  // 提取金额折扣（如 "$10 off", "Save $20"）
+  const moneyMatch = html.match(/(?:save|get)\s*\$\s*(\d+)/i)
+    || html.match(/\$\s*(\d+)\s*off/i);
+  if (moneyMatch && !result.discount_type) {
+    result.discount_type = "MONETARY";
+    result.discount_amount = parseInt(moneyMatch[1], 10);
+  }
+
+  // 提取优惠码（如 "Use code: SAVE20", "Promo code: WELCOME10"）
+  const codeMatch = html.match(/(?:code|coupon|promo|voucher|gutschein|codice)[:\s]+["']?([A-Z0-9]{3,20})["']?/i)
+    || html.match(/(?:use|enter|apply)\s+(?:code\s+)?["']?([A-Z0-9]{4,20})["']?/i);
+  if (codeMatch) {
+    result.promo_code = codeMatch[1].toUpperCase();
+  }
+
+  // 提取促销标题（从 banner/announcement 区域）
+  const bannerRegex = /<(?:div|span|p|a)[^>]*class=["'][^"']*(?:banner|announcement|promo|hero|notice|topbar|top-bar|sale-bar|offer)[^"']*["'][^>]*>([\s\S]*?)<\/(?:div|span|p|a)>/gi;
+  let bannerMatch;
+  const bannerTexts: string[] = [];
+  while ((bannerMatch = bannerRegex.exec(html)) !== null) {
+    const text = bannerMatch[1].replace(/<[^>]+>/g, "").replace(/\s+/g, " ").trim();
+    if (text.length > 5 && text.length < 150 && /\d/.test(text)) bannerTexts.push(text);
+  }
+  if (bannerTexts.length > 0) {
+    result.promotion_target = bannerTexts[0].slice(0, 60);
+  }
+
+  // 提取 Free Shipping 信息
+  if (/free\s*(?:standard\s*)?(?:shipping|delivery|versand|livraison|envio)/i.test(lower)) {
+    if (!result.promotion_target) result.promotion_target = "Free Shipping on Orders";
+    const thresholdMatch = html.match(/free\s*(?:shipping|delivery)[^.]*?(?:over|above|on orders?\s*(?:over|above)?)\s*\$?\s*(\d+)/i);
+    if (thresholdMatch) {
+      result.promotion_target = `Free Shipping on Orders Over $${thresholdMatch[1]}`;
+    }
+  }
+
+  if (!result.promotion_target && !result.discount_type) {
+    // 尝试从 meta/title 提取
+    const titleMatch = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
+    if (titleMatch) {
+      const title = titleMatch[1].replace(/\s+/g, " ").trim();
+      const saleInTitle = title.match(/(\d+%?\s*off|sale|discount|free shipping)/i);
+      if (saleInTitle) result.promotion_target = title.slice(0, 60);
+    }
+  }
+
+  result.final_url = merchantUrl;
+  return Object.keys(result).length > 1 ? result : null;
+}
+
+/**
+ * 从 HTML 中提取价格/产品信息
+ */
+function extractPriceInfo(html: string): Array<{ header: string; description: string; price: number; currency: string; url: string }> {
+  if (!html) return [];
+  const items: Array<{ header: string; description: string; price: number; currency: string; url: string }> = [];
+
+  // 提取 JSON-LD 结构化数据中的产品信息
+  const jsonLdRegex = /<script[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi;
+  let jsonLdMatch;
+  while ((jsonLdMatch = jsonLdRegex.exec(html)) !== null) {
+    try {
+      const data = JSON.parse(jsonLdMatch[1]);
+      const products = Array.isArray(data) ? data : [data];
+      for (const p of products) {
+        if (p["@type"] === "Product" && p.name && p.offers) {
+          const offers = Array.isArray(p.offers) ? p.offers : [p.offers];
+          for (const o of offers) {
+            const price = parseFloat(o.price || o.lowPrice || "0");
+            if (price > 0 && items.length < 8) {
+              items.push({
+                header: String(p.name).slice(0, 25),
+                description: String(p.description || p.name).slice(0, 25),
+                price,
+                currency: o.priceCurrency || "USD",
+                url: o.url || p.url || "",
+              });
+            }
+          }
+        }
+      }
+    } catch { /* ignore parse errors */ }
+  }
+
+  // 如果 JSON-LD 没找到，从 HTML 中提取价格
+  if (items.length === 0) {
+    const priceRegex = /<[^>]*class=["'][^"']*(?:price|product-price|sale-price)[^"']*["'][^>]*>\s*\$?\s*([\d,.]+)\s*<\/[^>]+>/gi;
+    let priceMatch;
+    while ((priceMatch = priceRegex.exec(html)) !== null && items.length < 8) {
+      const price = parseFloat(priceMatch[1].replace(",", ""));
+      if (price > 0 && price < 100000) {
+        items.push({ header: `Product ${items.length + 1}`, description: "", price, currency: "USD", url: "" });
+      }
+    }
+  }
+
+  return items;
 }
 
 /** 从 HTML 中提取商家真实卖点信息（运费政策、退换货、品牌特色等） */
