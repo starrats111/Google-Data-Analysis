@@ -41,6 +41,14 @@ export interface VerifyResult {
   error?: string;
 }
 
+export interface PublicSiteAccessResult {
+  ok: boolean;
+  checked_url: string;
+  final_url?: string;
+  status?: number;
+  error?: string;
+}
+
 export interface ArticlePresenceResult {
   validSite: boolean;
   jsonExists: boolean;
@@ -163,6 +171,22 @@ function sftpStat(sftp: SFTPWrapper, path: string): Promise<boolean> {
     sftp.stat(path, (err, stats) => {
       if (err) resolve(false);
       else resolve(true);
+    });
+  });
+}
+
+function sftpStatInfo(sftp: SFTPWrapper, path: string): Promise<{ exists: boolean; size: number; isDirectory: boolean }> {
+  return new Promise((resolve) => {
+    sftp.stat(path, (err, stats) => {
+      if (err || !stats) {
+        resolve({ exists: false, size: 0, isDirectory: false });
+        return;
+      }
+      resolve({
+        exists: true,
+        size: Number(stats.size || 0),
+        isDirectory: stats.isDirectory(),
+      });
     });
   });
 }
@@ -364,16 +388,23 @@ export async function verifyConnection(sitePath: string): Promise<VerifyResult> 
 
     checks.site_dir_exists = await sftpIsDir(sftp, sitePath);
 
+    let dataJsInfo: { exists: boolean; size: number; isDirectory: boolean } | null = null;
+    let indexHtmlInfo = { exists: false, size: 0, isDirectory: false };
+
     if (checks.site_dir_exists) {
       const detected = await _detectSiteType(sftp, sitePath);
       checks.site_type = detected.site_type;
       checks.data_js_path = detected.data_js_path;
       checks.article_var_name = detected.article_var_name;
       checks.article_html_pattern = detected.article_html_pattern;
-      if (detected.data_js_path) checks.main_js_exists = true;
+      if (detected.data_js_path) {
+        dataJsInfo = await sftpStatInfo(sftp, `${sitePath}/${detected.data_js_path}`);
+        checks.main_js_exists = dataJsInfo.exists && !dataJsInfo.isDirectory && dataJsInfo.size > 0;
+      }
     }
 
-    checks.index_html_exists = await sftpStat(sftp, `${sitePath}/index.html`);
+    indexHtmlInfo = await sftpStatInfo(sftp, `${sitePath}/index.html`);
+    checks.index_html_exists = indexHtmlInfo.exists && !indexHtmlInfo.isDirectory && indexHtmlInfo.size > 0;
     checks.valid = checks.ssh_connected && checks.site_dir_exists && checks.index_html_exists && checks.main_js_exists;
 
     if (!checks.valid) {
@@ -381,10 +412,17 @@ export async function verifyConnection(sitePath: string): Promise<VerifyResult> 
       if (!checks.site_dir_exists) {
         parts.push(`站点目录不存在或不可读：${sitePath}（请核对「服务器配置」网站根目录与站点记录中的路径是否一致）`);
       } else {
-        if (!checks.index_html_exists) parts.push("根目录缺少 index.html");
+        if (!indexHtmlInfo.exists) parts.push("根目录缺少 index.html");
+        else if (indexHtmlInfo.size <= 0) parts.push("根目录 index.html 为空，说明迁移下载不完整或来源页不存在");
+
+        if (checks.data_js_path) {
+          if (!dataJsInfo?.exists) parts.push(`站点数据文件缺失：${checks.data_js_path}`);
+          else if ((dataJsInfo?.size || 0) <= 0) parts.push(`站点数据文件为空：${checks.data_js_path}`);
+        }
+
         if (!checks.main_js_exists) {
           parts.push(
-            "未识别到支持的站点架构：需在站点根下存在其一，例如 assets/js/main.js（含 const/var posts）、js/data.js（含 const articles）、js/articles-index.js（含 articlesIndex）、data.js（含 blogPosts）等"
+            "未识别到支持的站点架构：需在站点根下存在其一，例如 assets/js/main.js（含 const/var posts）、js/data.js（含 const articles）、js/articles-index.js（含 articlesIndex）、data.js（含 blogPosts）等，且文件内容不能为空"
           );
         }
       }
@@ -408,6 +446,52 @@ export async function verifyConnection(sitePath: string): Promise<VerifyResult> 
       error: err instanceof Error ? err.message : String(err),
     };
   }
+}
+
+async function checkPublicUrl(url: string, allowedHosts: Set<string>): Promise<PublicSiteAccessResult> {
+  try {
+    const res = await fetch(url, {
+      redirect: "follow",
+      signal: AbortSignal.timeout(8000),
+      headers: { "user-agent": "crm-site-verifier/1.0" },
+    });
+    const finalUrl = res.url || url;
+    const finalHost = new URL(finalUrl).hostname.toLowerCase();
+    const hostMatched = allowedHosts.has(finalHost);
+    const ok = res.ok && hostMatched;
+    return {
+      ok,
+      checked_url: url,
+      final_url: finalUrl,
+      status: res.status,
+      error: ok ? undefined : [!res.ok ? `HTTP ${res.status}` : "", !hostMatched ? `最终跳转到 ${finalHost}` : ""].filter(Boolean).join("；"),
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      checked_url: url,
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
+
+export async function verifyPublicSiteAccess(domain: string): Promise<PublicSiteAccessResult> {
+  const normalized = domain.trim().toLowerCase().replace(/^https?:\/\//, "").replace(/\/+$/, "");
+  const allowedHosts = new Set([normalized, `www.${normalized}`]);
+  const urls = [`https://${normalized}`, `https://www.${normalized}`, `http://${normalized}`, `http://www.${normalized}`];
+
+  let firstFailure: PublicSiteAccessResult | null = null;
+  for (const url of urls) {
+    const result = await checkPublicUrl(url, allowedHosts);
+    if (result.ok) return result;
+    if (!firstFailure) firstFailure = result;
+  }
+
+  return firstFailure || {
+    ok: false,
+    checked_url: `https://${normalized}`,
+    error: "公网访问校验失败",
+  };
 }
 
 // ─── A1 标准化：统一为 assets/js/main.js + const posts（与 CRM 发布逻辑一致）───
@@ -879,8 +963,8 @@ export async function applyA1SiteStandard(sitePath: string, domain = ""): Promis
     const mainJs = buildA1MainJs(postsJson);
     await sftpWriteFile(sftp, `${sitePath}/assets/js/main.js`, mainJs);
 
-    const hasIndexHtml = await sftpStat(sftp, `${sitePath}/index.html`);
-    if (!hasIndexHtml) {
+    const indexInfo = await sftpStatInfo(sftp, `${sitePath}/index.html`);
+    if (!indexInfo.exists || indexInfo.size <= 0 || indexInfo.isDirectory) {
       const cacheVersion = String(Math.floor(Date.now() / 1000));
       await sftpWriteFile(sftp, `${sitePath}/index.html`, buildA1IndexHtml(cacheVersion));
     }

@@ -6,7 +6,7 @@
     "dev": "next dev -p 20050",
     "build": "NODE_OPTIONS='--max-old-space-size=512' next build",
     "start": "NODE_OPTIONS='--max-old-space-size=768' next start -p 20050",
-    "lint": "next lint",
+    "lint": "eslint .",
     "seed": "npx tsx prisma/seed.ts"
   },
   "dependencies": {

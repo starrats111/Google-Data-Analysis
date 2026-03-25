@@ -16,6 +16,9 @@ import {
 } from "@ant-design/icons";
 import { useApiWithParams, mutateApi } from "@/lib/swr";
 import { BIDDING_STRATEGIES } from "@/lib/constants";
+import { getAdMarketConfig, getCurrencyCodeByCountry, getLanguageCodeByCountry, getSnippetHeaderByCountry } from "@/lib/ad-market";
+
+const CURRENCY_OPTIONS = ["USD", "EUR", "GBP", "CAD", "AUD", "CHF", "BRL", "JPY"];
 
 const { Title, Text } = Typography;
 const { TextArea } = Input;
@@ -31,19 +34,6 @@ function formatCid(cid: string): string {
   if (digits.length === 10) return `${digits.slice(0, 3)}-${digits.slice(3, 6)}-${digits.slice(6)}`;
   return cid;
 }
-
-// 国家 → Google Ads 语言代码
-const COUNTRY_TO_GOOGLE_LANG: Record<string, string> = {
-  US: "en", UK: "en", CA: "en", AU: "en", IE: "en", SG: "en", NZ: "en", PH: "en", IN: "en",
-  DE: "de", AT: "de", CH: "de",
-  FR: "fr", BE: "fr",
-  ES: "es", MX: "es", AR: "es", CL: "es", CO: "es",
-  IT: "it", PT: "pt", BR: "pt", NL: "nl",
-  JP: "ja", KR: "ko", CN: "zh_CN", TW: "zh_TW", HK: "zh_TW",
-  RU: "ru", PL: "pl", SE: "sv", NO: "no", DK: "da", FI: "fi", CZ: "cs",
-  TR: "tr", TH: "th", VN: "vi", ID: "id", MY: "ms",
-  SA: "ar", AE: "ar", IL: "iw", GR: "el", RO: "ro", HU: "hu", BG: "bg",
-};
 
 // Google Ads 支持的语言列表
 const GOOGLE_ADS_LANGUAGES = [
@@ -185,6 +175,12 @@ export default function AdPreviewPage() {
     { refreshInterval: initialized ? 0 : 5000 },
   );
   const isReady = preview?.isReady ?? false;
+  const targetCountry = String(preview?.campaign?.target_country || "US").toUpperCase();
+  const market = getAdMarketConfig(targetCountry);
+  const currencyOptions = Array.from(new Set([market.currencyCode, ...CURRENCY_OPTIONS])).map((value) => ({ value, label: value }));
+  const defaultCurrencyCode = getCurrencyCodeByCountry(targetCountry);
+  const defaultLanguageCode = getLanguageCodeByCountry(targetCountry);
+  const defaultSnippetHeader = getSnippetHeaderByCountry(targetCountry);
 
   // 数据就绪后初始化编辑状态
   useEffect(() => {
@@ -198,6 +194,7 @@ export default function AdPreviewPage() {
     setKwList((preview.keywords || []).map((k: any) => ({ text: k.keyword_text, matchType: k.match_type })));
     const c = preview.campaign;
     const s = preview.adSettings;
+    const marketCfg = getAdMarketConfig((c?.target_country || "US").toUpperCase());
     setBudget(Number(c?.daily_budget || s?.daily_budget || 2));
     setMaxCpc(Number(c?.max_cpc_limit || s?.max_cpc || 0.3));
     setBiddingStrategy(c?.bidding_strategy || s?.bidding_strategy || "MAXIMIZE_CLICKS");
@@ -210,8 +207,15 @@ export default function AdPreviewPage() {
       setAdLanguage(savedLang);
     } else {
       const country = (c?.target_country || "").toUpperCase();
-      setAdLanguage(COUNTRY_TO_GOOGLE_LANG[country] || "en");
+      setAdLanguage(getLanguageCodeByCountry(country) || "en");
     }
+    setPromotion((prev) => ({
+      ...prev,
+      currency_code: marketCfg.currencyCode,
+      language_code: marketCfg.promotionLanguageCode,
+    }));
+    setCallCountryCode((c?.target_country || "US").toUpperCase());
+    setSnippetHeader(marketCfg.snippetHeader);
     // 初始化 EU 政治广告设置
     setEuPoliticalAd(s?.eu_political_ad ?? 0);
     // 初始化 MCC/CID
@@ -325,6 +329,7 @@ export default function AdPreviewPage() {
           existing: headlines.filter((h) => h.trim()),
           merchant_name: preview?.merchant?.merchant_name || "",
           country: preview?.campaign?.target_country || "US",
+          keywords: kwList.map((kw) => kw.text).filter(Boolean),
           count: 15,
         }),
       });
@@ -359,6 +364,7 @@ export default function AdPreviewPage() {
           existing: descriptions.filter((d) => d.trim()),
           merchant_name: preview?.merchant?.merchant_name || "",
           country: preview?.campaign?.target_country || "US",
+          keywords: kwList.map((kw) => kw.text).filter(Boolean),
           count: 4,
         }),
       });
@@ -593,6 +599,8 @@ export default function AdPreviewPage() {
           discount_amount: p.discount_amount != null ? Number(p.discount_amount) : prev.discount_amount,
           promo_code: p.promo_code ? String(p.promo_code) : prev.promo_code,
           final_url: p.final_url ? String(p.final_url) : prev.final_url,
+          currency_code: String(p.currency_code || prev.currency_code || defaultCurrencyCode),
+          language_code: String(p.language_code || prev.language_code || defaultLanguageCode),
         }));
         message.success("已自动提取促销信息");
       }
@@ -605,7 +613,7 @@ export default function AdPreviewPage() {
           header: item.header || "",
           description: item.description || "",
           price_amount: item.price || 0,
-          currency_code: item.currency || "USD",
+          currency_code: item.currency || defaultCurrencyCode,
           final_url: item.url || "",
         })));
         message.success(`已自动提取 ${items.length} 条价格信息`);
@@ -616,7 +624,7 @@ export default function AdPreviewPage() {
         const c = data.call as Record<string, unknown>;
         if (c.phone_number) {
           setEnableCall(true);
-          setCallCountryCode(String(c.country_code || callCountryCode));
+          setCallCountryCode(String(c.country_code || targetCountry || callCountryCode));
           setCallPhoneNumber(String(c.phone_number));
           message.success("已自动提取联系电话");
         }
@@ -627,7 +635,7 @@ export default function AdPreviewPage() {
         const s = data.structured_snippet as Record<string, unknown>;
         if (s.header && Array.isArray(s.values) && s.values.length >= 3) {
           setEnableSnippet(true);
-          setSnippetHeader(String(s.header));
+          setSnippetHeader(String(s.header || defaultSnippetHeader));
           setSnippetValues((s.values as string[]).map(String));
           message.success("已自动生成结构化摘要");
         }
@@ -643,7 +651,7 @@ export default function AdPreviewPage() {
       if (type === "call") setCallLoading(false);
       if (type === "snippet") setSnippetLoading(false);
     }
-  }, [campaignId, message, callCountryCode]);
+  }, [campaignId, message, callCountryCode, defaultCurrencyCode, defaultLanguageCode, defaultSnippetHeader, targetCountry]);
 
   // ─── 手动输入 URL → 自动获取标题和描述 + 验证 ───
   const fetchUrlMeta = useCallback(async (idx: number) => {
@@ -1575,13 +1583,13 @@ export default function AdPreviewPage() {
                         <InputNumber size="small" value={promotion.discount_percent} onChange={(v) => setPromotion((p) => ({ ...p, discount_percent: v || 0 }))} min={1} max={99} style={{ width: "100%" }} suffix="%" /></>
                       ) : (
                         <><Text type="secondary" style={{ fontSize: 12 }}>折扣金额</Text>
-                        <InputNumber size="small" value={promotion.discount_amount} onChange={(v) => setPromotion((p) => ({ ...p, discount_amount: v || 0 }))} min={1} style={{ width: "100%" }} prefix="$" /></>
+                        <InputNumber size="small" value={promotion.discount_amount} onChange={(v) => setPromotion((p) => ({ ...p, discount_amount: v || 0 }))} min={1} style={{ width: "100%" }} prefix={promotion.currency_code || defaultCurrencyCode} /></>
                       )}
                     </Col>
                     <Col span={8}>
                       <Text type="secondary" style={{ fontSize: 12 }}>货币</Text>
                       <Select size="small" value={promotion.currency_code} onChange={(v) => setPromotion((p) => ({ ...p, currency_code: v }))} style={{ width: "100%" }}
-                        options={[{ value: "USD", label: "USD" }, { value: "GBP", label: "GBP" }, { value: "EUR", label: "EUR" }, { value: "CAD", label: "CAD" }, { value: "AUD", label: "AUD" }]} />
+                        options={currencyOptions} />
                     </Col>
                     <Col span={8}>
                       <Text type="secondary" style={{ fontSize: 12 }}>促销代码（可选）</Text>
@@ -1590,7 +1598,7 @@ export default function AdPreviewPage() {
                     <Col span={8}>
                       <Text type="secondary" style={{ fontSize: 12 }}>语言</Text>
                       <Select size="small" value={promotion.language_code} onChange={(v) => setPromotion((p) => ({ ...p, language_code: v }))} style={{ width: "100%" }}
-                        options={[{ value: "en", label: "English" }, { value: "de", label: "Deutsch" }, { value: "fr", label: "Français" }, { value: "es", label: "Español" }, { value: "ja", label: "日本語" }]} />
+                        options={GOOGLE_ADS_LANGUAGES.map((item) => ({ value: item.code, label: item.name }))} />
                     </Col>
                     <Col span={8}>
                       <Text type="secondary" style={{ fontSize: 12 }}>促销场合（可选）</Text>
@@ -1621,9 +1629,9 @@ export default function AdPreviewPage() {
                 if (e.target.checked && priceItems.length === 0) {
                   generateExtension("price");
                   setPriceItems([
-                    { header: "", description: "", price_amount: 0, currency_code: "USD", final_url: "" },
-                    { header: "", description: "", price_amount: 0, currency_code: "USD", final_url: "" },
-                    { header: "", description: "", price_amount: 0, currency_code: "USD", final_url: "" },
+                    { header: "", description: "", price_amount: 0, currency_code: defaultCurrencyCode, final_url: "" },
+                    { header: "", description: "", price_amount: 0, currency_code: defaultCurrencyCode, final_url: "" },
+                    { header: "", description: "", price_amount: 0, currency_code: defaultCurrencyCode, final_url: "" },
                   ]);
                 }
               }}>
@@ -1664,13 +1672,13 @@ export default function AdPreviewPage() {
                             onChange={(e) => setPriceItems((prev) => { const n = [...prev]; n[i] = { ...n[i], description: e.target.value }; return n; })} />
                         </Col>
                         <Col span={8}>
-                          <InputNumber size="small" value={item.price_amount} min={0} step={0.01} style={{ width: "100%" }} prefix="$"
+                          <InputNumber size="small" value={item.price_amount} min={0} step={0.01} style={{ width: "100%" }} prefix={item.currency_code || defaultCurrencyCode}
                             onChange={(v) => setPriceItems((prev) => { const n = [...prev]; n[i] = { ...n[i], price_amount: v || 0 }; return n; })} />
                         </Col>
                         <Col span={8}>
                           <Select size="small" value={item.currency_code} style={{ width: "100%" }}
                             onChange={(v) => setPriceItems((prev) => { const n = [...prev]; n[i] = { ...n[i], currency_code: v }; return n; })}
-                            options={[{ value: "USD", label: "USD" }, { value: "GBP", label: "GBP" }, { value: "EUR", label: "EUR" }]} />
+                            options={currencyOptions} />
                         </Col>
                         <Col span={8}>
                           <Input size="small" value={item.final_url} placeholder="链接 URL"
@@ -1681,7 +1689,7 @@ export default function AdPreviewPage() {
                   ))}
                   {priceItems.length < 8 && (
                     <Button type="dashed" size="small" icon={<PlusOutlined />} block
-                      onClick={() => setPriceItems((prev) => [...prev, { header: "", description: "", price_amount: 0, currency_code: "USD", final_url: "" }])}>
+                      onClick={() => setPriceItems((prev) => [...prev, { header: "", description: "", price_amount: 0, currency_code: defaultCurrencyCode, final_url: "" }])}>
                       添加价格项（最多 8 项）
                     </Button>
                   )}
@@ -1865,7 +1873,7 @@ export default function AdPreviewPage() {
 
           <Card title={<><ThunderboltOutlined /> 广告设置</>} size="small" style={{ marginBottom: 16 }}>
             <div style={{ marginBottom: 12 }}>
-              <Text type="secondary">每日预算 (USD)</Text>
+              <Text type="secondary">每日预算 ({defaultCurrencyCode})</Text>
               <InputNumber value={budget} onChange={(v) => setBudget(v || 2)} min={0.5} step={0.5} style={{ width: "100%", marginTop: 4 }} prefix="$" />
             </div>
             <div style={{ marginBottom: 12 }}>
@@ -1875,7 +1883,7 @@ export default function AdPreviewPage() {
               />
             </div>
             <div style={{ marginBottom: 12 }}>
-              <Text type="secondary">最高 CPC (USD)</Text>
+              <Text type="secondary">最高 CPC ({defaultCurrencyCode})</Text>
               <InputNumber value={maxCpc} onChange={(v) => setMaxCpc(v || 0.3)} min={0.01} step={0.05} style={{ width: "100%", marginTop: 4 }} prefix="$" />
             </div>
             <Divider style={{ margin: "8px 0" }}>广告语言</Divider>

@@ -367,35 +367,6 @@ export async function GET(req: NextRequest) {
     };
   });
 
-  // 未关联到广告系列的交易 → 显示商家名作为虚拟行
-  for (const [merchantIdStr, comm] of commissionByMerchant) {
-    if (merchantWritten.has(merchantIdStr)) continue;
-    if (merchantIdStr === "0" && comm.commission === 0) continue;
-
-    const displayName = comm.merchantName || `未关联商家 (ID: ${merchantIdStr})`;
-    rows.push({
-      id: BigInt(0),
-      google_campaign_id: null,
-      customer_id: "",
-      campaign_name: displayName,
-      status: "N/A",
-      daily_budget: 0,
-      max_cpc: null,
-      cost: 0,
-      clicks: 0,
-      impressions: 0,
-      cpc: 0,
-      commission: Number(comm.commission.toFixed(2)),
-      rejected_commission: Number(comm.rejected.toFixed(2)),
-      approved_commission: Number(comm.approved.toFixed(2)),
-      orders: comm.orders,
-      roi: 0,
-      target_country: "",
-      last_synced: null,
-      mcc_currency: "USD",
-    });
-  }
-
   return apiSuccess(serializeData({
     rows,
     summary,

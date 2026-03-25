@@ -16,5 +16,6 @@ export const POST = withAdmin(async (req: NextRequest) => {
     site_id: serializeData(result.site.id),
     site_name: result.site.site_name,
     checks: result.checks,
+    publicAccess: result.publicAccess,
   });
 });

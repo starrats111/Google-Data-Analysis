@@ -504,6 +504,7 @@ function parseTransactions(platform: string, data: Record<string, unknown>): Pla
       item.brandsparkhub_id || item.brandsparkhubId ||
       item.partnermatic_id || item.partnermaticId ||
       item.linkbux_id || item.linkbuxId ||
+      item.rewardoo_id || item.rewardooId ||
       item.sign_id || item.action_id ||
       item.order_id || item.transaction_id || item.orderId ||
       item.id || ""
@@ -588,8 +589,7 @@ export async function fetchAllTransactions(
   const mergeTxn = (t: PlatformTransaction) => {
     const idx = txnIndex.get(t.transaction_id);
     if (idx !== undefined) {
-      // 同一 ID 多次出现：累加金额（RW 等平台同一订单有多个商品行）
-      // CG/BSH/PM/LB 因使用 collabgrow_id 等唯一 ID，不会触发此分支
+      // 同一 ID 多次出现：累加金额（跨日期段重复拉取时可能出现）
       const existing = allTxns[idx];
       existing.commission_amount += t.commission_amount;
       existing.order_amount += t.order_amount;

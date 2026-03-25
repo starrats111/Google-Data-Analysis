@@ -4,7 +4,7 @@ import { apiSuccess, apiError } from "@/lib/constants";
 import { withAdmin } from "@/lib/api-handler";
 import prisma from "@/lib/prisma";
 import { getSiteRoot } from "@/lib/remote-publisher";
-import { getTokenPool, findGitHubToken, findCFTokenForDomain } from "@/lib/deploy-credentials";
+import { getTokenPool, findGitHubToken, findCFTokenForDomain, type GitHubTokenEntry } from "@/lib/deploy-credentials";
 
 export async function GET() {
   try {
@@ -75,6 +75,37 @@ export const POST = withAdmin(async (req: NextRequest) => {
   return apiSuccess(serializeData(task), "迁移任务已创建");
 });
 
+function shellSingleQuote(value: string) {
+  return `'${value.replace(/'/g, `'"'"'`)}'`;
+}
+
+function stripTld(domain: string) {
+  return domain.replace(/\.[a-z]{2,}$/, "");
+}
+
+function buildGitHubRepoCandidates(domain: string, sourceRef?: string | null) {
+  const raw = sourceRef?.trim();
+  if (raw) return [raw];
+
+  const full = domain.trim().toLowerCase();
+  const stripped = stripTld(full);
+  const candidates = [full, stripped].filter(Boolean);
+  return Array.from(new Set(candidates));
+}
+
+function buildGitHubCloneUrl(ghEntry: GitHubTokenEntry, repoRef: string) {
+  if (repoRef.startsWith("http://") || repoRef.startsWith("https://")) {
+    return repoRef.replace(/^https?:\/\//, `https://${ghEntry.token}@`);
+  }
+
+  const normalized = repoRef.replace(/^\/+|\/+$/g, "");
+  const repoPath = normalized.includes("/")
+    ? normalized
+    : `${ghEntry.org}/${normalized}`;
+
+  return `https://${ghEntry.token}@github.com/${repoPath}.git`;
+}
+
 // ─── 异步迁移执行器 ───
 async function runMigrationAsync(taskId: bigint) {
   const update = async (data: Record<string, unknown>) => {
@@ -141,42 +172,86 @@ async function runMigrationAsync(taskId: bigint) {
       });
     });
 
-    await exec(`sudo mkdir -p ${sitePath}`);
-
-    const stripTLD = (d: string) => d.replace(/\.[a-z]{2,}$/, "");
+    await exec(`sudo mkdir -p ${shellSingleQuote(sitePath)}`);
 
     if (task.source_type === "github") {
-      const repoRef = task.source_ref || stripTLD(task.domain);
-      const orgHint = repoRef.includes("/") ? repoRef.split("/")[0] : "";
-      const ghEntry = findGitHubToken(pool, orgHint || repoRef);
+      const repoCandidates = buildGitHubRepoCandidates(task.domain, task.source_ref);
+      const initialHint = repoCandidates[0] || task.domain;
+      const initialOrgHint = initialHint.includes("/") ? initialHint.split("/")[0] : "";
+      const ghEntry = findGitHubToken(pool, initialOrgHint || initialHint);
 
       if (!ghEntry) {
         throw new Error("Token 池中没有可用的 GitHub Token");
       }
 
-      await update({ progress: 20, step_detail: `自动匹配 GitHub Token「${ghEntry.label}」(org: ${ghEntry.org})，正在 clone...` });
+      await update({ progress: 20, step_detail: `自动匹配 GitHub Token「${ghEntry.label}」(org: ${ghEntry.org})，正在尝试仓库...` });
 
-      const cloneUrl = repoRef.startsWith("http")
-        ? repoRef.replace("https://", `https://${ghEntry.token}@`)
-        : `https://${ghEntry.token}@github.com/${ghEntry.org}/${repoRef.includes("/") ? repoRef.split("/").slice(1).join("/") : repoRef}.git`;
+      let cloneSucceeded = false;
+      let cloneOut = "";
+      const errors: string[] = [];
 
-      await update({ progress: 30, step_detail: `正在 clone GitHub 仓库...` });
-      const cloneOut = await exec(`cd ${sitePath} && sudo git clone --depth 1 ${cloneUrl} _tmp_clone 2>&1`, true);
-      await exec(`cd ${sitePath} && sudo cp -r _tmp_clone/* . && sudo rm -rf _tmp_clone`);
-      const fileCount = await exec(`ls -1 ${sitePath} | wc -l`);
-      if (parseInt(fileCount.trim()) === 0) {
+      for (const repoRef of repoCandidates) {
+        const cloneUrl = buildGitHubCloneUrl(ghEntry, repoRef);
+        await update({ progress: 30, step_detail: `正在尝试 GitHub 仓库：${repoRef}` });
+        await exec(`sudo rm -rf ${shellSingleQuote(`${sitePath}/_tmp_clone`)}`);
+        try {
+          cloneOut = await exec(`cd ${shellSingleQuote(sitePath)} && sudo git clone --depth 1 ${shellSingleQuote(cloneUrl)} _tmp_clone 2>&1`, true);
+          cloneSucceeded = true;
+          await update({ progress: 40, step_detail: `GitHub 仓库匹配成功：${repoRef}` });
+          break;
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          errors.push(`${repoRef}: ${msg.slice(0, 180)}`);
+        }
+      }
+
+      if (!cloneSucceeded) {
+        throw new Error(`GitHub 仓库不存在或无权限访问。已尝试：${repoCandidates.join(", ")}。${errors[0] || ""}`);
+      }
+
+      await exec(`cd ${shellSingleQuote(sitePath)} && sudo cp -r _tmp_clone/. . && sudo rm -rf _tmp_clone`);
+      const fileCount = await exec(`ls -1 ${shellSingleQuote(sitePath)} | wc -l`);
+      if (parseInt(fileCount.trim(), 10) === 0) {
         throw new Error(`Clone 后站点目录为空，clone 输出: ${cloneOut.slice(0, 300)}`);
       }
-      await update({ progress: 50, step_detail: `Clone 完成` });
+      await update({ progress: 50, step_detail: "Clone 完成" });
     } else {
-      const pagesUrl = task.source_ref || `https://${stripTLD(task.domain)}.pages.dev`;
+      const pagesUrl = task.source_ref?.trim() || `https://${stripTld(task.domain)}.pages.dev`;
       await update({ progress: 30, step_detail: `正在从 Cloudflare Pages 下载...` });
 
       const files = ["index.html", "about.html", "contact.html", "article.html", "category.html", "search.html", "js/main.js", "js/data.js", "js/articles-index.js", "css/style.css"];
+      let downloaded = 0;
+      let nonEmpty = 0;
+      let hasNonEmptyIndex = false;
+      const downloadErrors: string[] = [];
+
       for (const f of files) {
-        await exec(`sudo mkdir -p ${sitePath}/$(dirname ${f}) 2>/dev/null; sudo wget -q --timeout=15 -O "${sitePath}/${f}" "${pagesUrl}/${f}" 2>/dev/null`);
+        const target = `${sitePath}/${f}`;
+        const url = `${pagesUrl.replace(/\/+$/, "")}/${f}`;
+        const result = await exec(`sudo mkdir -p $(dirname ${shellSingleQuote(target)}) 2>/dev/null; if curl -fsSL --max-time 20 ${shellSingleQuote(url)} -o ${shellSingleQuote(target)}; then stat -c %s ${shellSingleQuote(target)}; else rm -f ${shellSingleQuote(target)}; echo ERROR; fi`);
+        const trimmed = result.trim();
+        if (trimmed === "ERROR") {
+          downloadErrors.push(f);
+          continue;
+        }
+        const size = Number(trimmed.split(/\s+/).pop() || 0);
+        downloaded += 1;
+        if (size > 0) {
+          nonEmpty += 1;
+          if (f === "index.html") hasNonEmptyIndex = true;
+        } else {
+          await exec(`sudo rm -f ${shellSingleQuote(target)}`);
+        }
       }
-      await update({ progress: 50, step_detail: `下载完成` });
+
+      if (!hasNonEmptyIndex) {
+        throw new Error(`Cloudflare Pages 下载失败：index.html 不存在或为空。来源：${pagesUrl}`);
+      }
+      if (nonEmpty === 0) {
+        throw new Error(`Cloudflare Pages 下载失败：未获取到任何有效文件。来源：${pagesUrl}`);
+      }
+
+      await update({ progress: 50, step_detail: `下载完成（有效文件 ${nonEmpty}/${files.length}${downloadErrors.length ? `，缺失 ${downloadErrors.length} 个` : ""}）` });
     }
 
     // Step 1b: 标准化为 A1（首页 + assets/js/main.js + posts，便于 CRM 统一发布）
@@ -284,41 +359,58 @@ async function runMigrationAsync(taskId: bigint) {
       await update({ step_detail: `SSL 异常: ${sslErr instanceof Error ? sslErr.message : String(sslErr)}` });
     }
 
-    // Step 4: 验证 + 检测架构
+    // Step 4: 验证 + 检测架构 + 公网连通性
     await update({ status: "verifying", progress: 95, step_detail: "正在验证站点..." });
 
-    const { verifyConnection } = await import("@/lib/remote-publisher");
+    const { verifyConnection, verifyPublicSiteAccess } = await import("@/lib/remote-publisher");
     const checks = await verifyConnection(sitePath);
+    const publicAccess = await verifyPublicSiteAccess(task.domain);
+    const fullyVerified = checks.valid && publicAccess.ok;
 
-    if (checks.valid) {
-      if (task.site_id) {
-        await prisma.publish_sites.update({
-          where: { id: task.site_id },
-          data: {
-            verified: 1,
-            site_type: checks.site_type,
-            data_js_path: checks.data_js_path,
-            article_var_name: checks.article_var_name,
-            article_html_pattern: checks.article_html_pattern,
-          },
-        });
-      }
+    if (task.site_id) {
+      await prisma.publish_sites.update({
+        where: { id: task.site_id },
+        data: {
+          verified: fullyVerified ? 1 : 0,
+          site_type: checks.site_type,
+          data_js_path: checks.data_js_path,
+          article_var_name: checks.article_var_name,
+          article_html_pattern: checks.article_html_pattern,
+        },
+      });
     }
 
     client.end();
 
+    const verifyMessage = fullyVerified
+      ? "迁移完成，站点已验证"
+      : `迁移完成，但验证未通过：${checks.valid ? "公网访问失败" : (checks.error || "站点结构校验失败")}${!publicAccess.ok ? `（${publicAccess.error || publicAccess.checked_url}）` : ""}`;
+
     await update({
       status: "done",
       progress: 100,
-      step_detail: checks.valid ? "迁移完成，站点已验证" : "迁移完成，但站点验证未通过",
+      step_detail: verifyMessage,
+      error_message: fullyVerified ? null : `site=${checks.error || "ok"}; public=${publicAccess.ok ? "ok" : (publicAccess.error || publicAccess.checked_url)}`,
       finished_at: new Date(),
     });
   } catch (err) {
     try { sshClient?.end(); } catch { /* ignore */ }
+    const errorMessage = err instanceof Error ? err.message : String(err);
+    try {
+      const failedTask = await prisma.site_migrations.findUnique({ where: { id: taskId } });
+      if (failedTask?.site_id) {
+        await prisma.publish_sites.update({
+          where: { id: failedTask.site_id },
+          data: { verified: 0 },
+        });
+      }
+    } catch {
+      /* ignore */
+    }
     await update({
       status: "failed",
       step_detail: "迁移失败",
-      error_message: err instanceof Error ? err.message : String(err),
+      error_message: errorMessage,
       finished_at: new Date(),
     });
   }

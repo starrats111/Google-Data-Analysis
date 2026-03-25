@@ -3,6 +3,7 @@ import { getUserFromRequest, serializeData } from "@/lib/auth";
 import { apiSuccess, apiError } from "@/lib/constants";
 import prisma from "@/lib/prisma";
 import { callAiWithFallback } from "@/lib/ai-service";
+import { getAdMarketConfig } from "@/lib/ad-market";
 import { crawlPage, fetchUrlMeta, fetchPageImages, searchMerchantImages } from "@/lib/crawler";
 
 /**
@@ -139,10 +140,10 @@ export async function POST(req: NextRequest) {
 
   // 促销/价格信息：爬首页 + 子页面，用 AI 提取
   if (types.includes("promotion")) {
-    result.promotion = await extractPromotionWithAI(crawlResult.html, merchantUrl, merchantName, crawlResult.links);
+    result.promotion = await extractPromotionWithAI(crawlResult.html, merchantUrl, merchantName, country, crawlResult.links);
   }
   if (types.includes("price")) {
-    result.price_items = await extractPriceWithAI(crawlResult.html, merchantUrl, merchantName, crawlResult.links);
+    result.price_items = await extractPriceWithAI(crawlResult.html, merchantUrl, merchantName, country, crawlResult.links);
   }
 
   if (types.includes("sitelinks")) {
@@ -779,10 +780,11 @@ async function selectBestImages(
 /**
  * 从 HTML 中提取促销信息（折扣、优惠码、促销活动）
  */
-function extractPromotionInfo(html: string, merchantUrl: string): Record<string, unknown> | null {
+function extractPromotionInfo(html: string, merchantUrl: string, country: string): Record<string, unknown> | null {
   if (!html) return null;
   const lower = html.toLowerCase();
   const result: Record<string, unknown> = {};
+  const market = getAdMarketConfig(country);
 
   // 提取折扣百分比（如 "20% off", "Save 30%", "Up to 50% off"）
   const percentMatch = html.match(/(?:up\s+to\s+)?(\d{1,2})\s*%\s*(?:off|discount|sale|rabatt|remise|sconto)/i)
@@ -792,12 +794,13 @@ function extractPromotionInfo(html: string, merchantUrl: string): Record<string,
     result.discount_percent = parseInt(percentMatch[1], 10);
   }
 
-  // 提取金额折扣（如 "$10 off", "Save $20"）
-  const moneyMatch = html.match(/(?:save|get)\s*\$\s*(\d+)/i)
-    || html.match(/\$\s*(\d+)\s*off/i);
+  // 提取金额折扣（支持 $, €, £, CHF 等）
+  const moneyMatch = html.match(/(?:save|get|rabatt|remise|sconto|descuento)\s*(?:[$€£]|chf\s*)?(\d{1,4})/i)
+    || html.match(/(?:[$€£]|chf\s*)(\d{1,4})\s*(?:off|rabatt|remise|sconto|descuento)/i);
   if (moneyMatch && !result.discount_type) {
     result.discount_type = "MONETARY";
     result.discount_amount = parseInt(moneyMatch[1], 10);
+    result.currency_code = market.currencyCode;
   }
 
   // 提取优惠码（如 "Use code: SAVE20", "Promo code: WELCOME10"）
@@ -819,12 +822,22 @@ function extractPromotionInfo(html: string, merchantUrl: string): Record<string,
     result.promotion_target = bannerTexts[0].slice(0, 60);
   }
 
-  // 提取 Free Shipping 信息
-  if (/free\s*(?:standard\s*)?(?:shipping|delivery|versand|livraison|envio)/i.test(lower)) {
-    if (!result.promotion_target) result.promotion_target = "Free Shipping on Orders";
-    const thresholdMatch = html.match(/free\s*(?:shipping|delivery)[^.]*?(?:over|above|on orders?\s*(?:over|above)?)\s*\$?\s*(\d+)/i);
+  // 提取免邮信息并按国家本地化
+  if (/free\s*(?:standard\s*)?(?:shipping|delivery)|kostenlos(?:e|er)?\s+versand|livraison\s+offerte|env[ií]o\s+gratis|spedizione\s+gratuita/i.test(lower)) {
+    if (!result.promotion_target) result.promotion_target = market.genericPromotionTarget;
+    const thresholdMatch = html.match(/(?:free\s*(?:shipping|delivery)|kostenlos(?:e|er)?\s+versand|livraison\s+offerte|env[ií]o\s+gratis|spedizione\s+gratuita)[^.]*?(?:over|above|ab|d[eè]s|desde|from)?\s*(?:[$€£]|chf\s*)?(\d+)/i);
     if (thresholdMatch) {
-      result.promotion_target = `Free Shipping on Orders Over $${thresholdMatch[1]}`;
+      if (market.languageCode === "de") {
+        result.promotion_target = `Kostenloser Versand ab ${thresholdMatch[1]} ${market.currencyCode}`;
+      } else if (market.languageCode === "fr") {
+        result.promotion_target = `Livraison offerte dès ${thresholdMatch[1]} ${market.currencyCode}`;
+      } else if (market.languageCode === "es") {
+        result.promotion_target = `Envío gratis desde ${thresholdMatch[1]} ${market.currencyCode}`;
+      } else if (market.languageCode === "it") {
+        result.promotion_target = `Spedizione gratis da ${thresholdMatch[1]} ${market.currencyCode}`;
+      } else {
+        result.promotion_target = `Free Shipping Over ${thresholdMatch[1]} ${market.currencyCode}`;
+      }
     }
   }
 
@@ -839,15 +852,18 @@ function extractPromotionInfo(html: string, merchantUrl: string): Record<string,
   }
 
   result.final_url = merchantUrl;
+  if (result.promotion_target) result.language_code = market.promotionLanguageCode;
+  if (result.discount_type === "MONETARY" && !result.currency_code) result.currency_code = market.currencyCode;
   return Object.keys(result).length > 1 ? result : null;
 }
 
 /**
  * 从 HTML 中提取价格/产品信息
  */
-function extractPriceInfo(html: string): Array<{ header: string; description: string; price: number; currency: string; url: string }> {
+function extractPriceInfo(html: string, country: string): Array<{ header: string; description: string; price: number; currency: string; url: string }> {
   if (!html) return [];
   const items: Array<{ header: string; description: string; price: number; currency: string; url: string }> = [];
+  const market = getAdMarketConfig(country);
 
   // 提取 JSON-LD 结构化数据中的产品信息
   const jsonLdRegex = /<script[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi;
@@ -866,7 +882,7 @@ function extractPriceInfo(html: string): Array<{ header: string; description: st
                 header: String(p.name).slice(0, 25),
                 description: String(p.description || p.name).slice(0, 25),
                 price,
-                currency: o.priceCurrency || "USD",
+                currency: o.priceCurrency || market.currencyCode,
                 url: o.url || p.url || "",
               });
             }
@@ -883,7 +899,7 @@ function extractPriceInfo(html: string): Array<{ header: string; description: st
     while ((priceMatch = priceRegex.exec(html)) !== null && items.length < 8) {
       const price = parseFloat(priceMatch[1].replace(",", ""));
       if (price > 0 && price < 100000) {
-        items.push({ header: `Product ${items.length + 1}`, description: "", price, currency: "USD", url: "" });
+        items.push({ header: `Product ${items.length + 1}`, description: "", price, currency: market.currencyCode, url: "" });
       }
     }
   }
@@ -898,10 +914,12 @@ async function extractPromotionWithAI(
   html: string,
   merchantUrl: string,
   merchantName: string,
+  country: string,
   links: { url: string; text: string }[],
 ): Promise<Record<string, unknown> | null> {
+  const market = getAdMarketConfig(country);
   // 1. 先用正则快速提取（首页）
-  const regexResult = extractPromotionInfo(html, merchantUrl);
+  const regexResult = extractPromotionInfo(html, merchantUrl, country);
   if (regexResult && regexResult.discount_type) return regexResult;
 
   // 2. 爬取促销相关子页面
@@ -920,7 +938,7 @@ async function extractPromotionWithAI(
       });
       if (resp.ok) {
         const subHtml = await resp.text();
-        const subResult = extractPromotionInfo(subHtml, merchantUrl);
+        const subResult = extractPromotionInfo(subHtml, merchantUrl, country);
         if (subResult && subResult.discount_type) return subResult;
         const subText = subHtml.replace(/<script[\s\S]*?<\/script>/gi, "").replace(/<style[\s\S]*?<\/style>/gi, "").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().slice(0, 2000);
         combinedText += "\n\n--- Sub page: " + link.url + " ---\n" + subText;
@@ -934,6 +952,9 @@ async function extractPromotionWithAI(
     const aiResp = await callAiWithFallback("ad_copy", [{ role: "user", content: `Analyze this merchant website text and extract promotion/discount information.
 
 Merchant: ${merchantName}
+Target market: ${market.countryNameZh} / ${market.languageName}
+Preferred language code: ${market.promotionLanguageCode}
+Preferred currency code: ${market.currencyCode}
 URL: ${merchantUrl}
 
 Website text (truncated):
@@ -942,16 +963,29 @@ ${combinedText.slice(0, 4000)}
 Extract and return a JSON object with these fields (use null if not found):
 - discount_type: "PERCENT" or "MONETARY" or null
 - discount_percent: number or null (e.g. 20 for 20% off)
-- discount_amount: number or null (e.g. 10 for $10 off)
-- promo_code: string or null (e.g. "SAVE20")
-- promotion_target: string or null (a short description of the promotion, max 60 chars, e.g. "All Inclusive Deals", "Summer Sale", "Free Shipping on Orders Over $50")
+- discount_amount: number or null
+- currency_code: string or null
+- promo_code: string or null
+- language_code: string or null
+- promotion_target: string or null (localized for the target market, max 60 chars)
 - final_url: the best URL for this promotion, or "${merchantUrl}" if none
+
+Rules:
+- promotion_target MUST be in ${market.languageName}
+- Never default to English for non-English markets
+- If discount_type is MONETARY, currency_code should be ${market.currencyCode} unless the website clearly shows another local currency
+- Keep the phrasing truthful and concise
 
 Return ONLY valid JSON, no explanation.` }], 2048);
 
     const parsed = JSON.parse(aiResp.replace(/```json?\s*/g, "").replace(/```/g, "").trim());
     if (parsed.discount_type || parsed.promotion_target || parsed.promo_code) {
-      return { ...parsed, final_url: parsed.final_url || merchantUrl };
+      return {
+        ...parsed,
+        currency_code: parsed.currency_code || market.currencyCode,
+        language_code: parsed.language_code || market.promotionLanguageCode,
+        final_url: parsed.final_url || merchantUrl,
+      };
     }
   } catch (err) {
     console.warn("[ExtractPromotion] AI extraction failed:", err instanceof Error ? err.message : err);
@@ -967,10 +1001,12 @@ async function extractPriceWithAI(
   html: string,
   merchantUrl: string,
   merchantName: string,
+  country: string,
   links: { url: string; text: string }[],
 ): Promise<Array<{ header: string; description: string; price: number; currency: string; url: string }>> {
+  const market = getAdMarketConfig(country);
   // 1. 先用正则快速提取（首页 JSON-LD）
-  const regexResult = extractPriceInfo(html);
+  const regexResult = extractPriceInfo(html, country);
   if (regexResult.length >= 3) return regexResult;
 
   // 2. 爬取价格相关子页面
@@ -989,7 +1025,7 @@ async function extractPriceWithAI(
       });
       if (resp.ok) {
         const subHtml = await resp.text();
-        const subResult = extractPriceInfo(subHtml);
+        const subResult = extractPriceInfo(subHtml, country);
         if (subResult.length >= 3) return subResult;
         const subText = subHtml.replace(/<script[\s\S]*?<\/script>/gi, "").replace(/<style[\s\S]*?<\/style>/gi, "").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().slice(0, 2000);
         combinedText += "\n\n--- Sub page: " + link.url + " ---\n" + subText;
@@ -1003,6 +1039,8 @@ async function extractPriceWithAI(
     const aiResp = await callAiWithFallback("ad_copy", [{ role: "user", content: `Analyze this merchant website text and extract product/pricing information for Google Ads Price Extensions.
 
 Merchant: ${merchantName}
+Target market: ${market.countryNameZh} / ${market.languageName}
+Preferred currency: ${market.currencyCode}
 URL: ${merchantUrl}
 
 Website text (truncated):
@@ -1010,14 +1048,15 @@ ${combinedText.slice(0, 4000)}
 
 Extract 3-8 products/services with pricing. Return a JSON array of objects:
 [
-  { "header": "Product Name (max 25 chars)", "description": "Short desc (max 25 chars)", "price": 29.99, "currency": "USD", "url": "product URL or empty string" }
+  { "header": "Localized name (max 25 chars)", "description": "Localized short desc (max 25 chars)", "price": 29.99, "currency": "${market.currencyCode}", "url": "product URL or empty string" }
 ]
 
 Rules:
 - header and description MUST be ≤ 25 characters each
+- Use the target market language where possible
 - price must be a real number found on the website, NOT made up
 - If no real prices are found, return an empty array []
-- currency should match the website's currency
+- currency should match the website's currency or ${market.currencyCode} for this market
 
 Return ONLY valid JSON array, no explanation.` }], 2048);
 
@@ -1027,7 +1066,7 @@ Return ONLY valid JSON array, no explanation.` }], 2048);
         header: String(p.header || "").slice(0, 25),
         description: String(p.description || "").slice(0, 25),
         price: Number(p.price),
-        currency: String(p.currency || "USD"),
+        currency: String(p.currency || market.currencyCode),
         url: String(p.url || ""),
       }));
     }
@@ -1052,9 +1091,9 @@ function extractMerchantFeatures(html: string): string[] {
 
   // 匹配实际卖点关键词
   const featurePatterns: { pattern: RegExp; label: string }[] = [
-    { pattern: /free\s*shipping/i, label: "Free Shipping" },
+    { pattern: /free\s*shipping|free\s*deliver|kostenlos(?:e|er)?\s+versand|livraison\s+offerte|env[ií]o\s+gratis|spedizione\s+gratuita/i, label: "Free Shipping" },
     { pattern: /free\s*deliver/i, label: "Free Delivery" },
-    { pattern: /(\d+)[%\s-]*day[s]?\s*(return|refund|money.back)/i, label: "Return/Refund Policy" },
+    { pattern: /(\d+)[%\s-]*day[s]?\s*(return|refund|money.back)|rückgabe|retour|retours|devoluci|resi/i, label: "Return/Refund Policy" },
     { pattern: /money[- ]?back\s*guarantee/i, label: "Money-Back Guarantee" },
     { pattern: /satisfaction\s*guarantee/i, label: "Satisfaction Guaranteed" },
     { pattern: /price\s*match/i, label: "Price Match" },
@@ -1098,16 +1137,67 @@ function extractMerchantFeatures(html: string): string[] {
   return features;
 }
 
+function getMergedPolicyCallout(country: string): string {
+  const market = getAdMarketConfig(country);
+  switch (market.languageCode) {
+    case "de":
+      return "Versand & Rückgabe frei";
+    case "fr":
+      return "Livraison + retours";
+    case "es":
+      return "Envío y devoluciones";
+    case "it":
+      return "Spedizione + resi";
+    case "pt":
+      return "Envio + devoluções";
+    case "nl":
+      return "Verzending & retour";
+    case "ja":
+      return "送料無料・返品対応";
+    default:
+      return "Free Shipping & Returns";
+  }
+}
+
 async function generateCallouts(
   merchantName: string,
   merchantUrl: string,
   country: string,
   pageHtml: string,
 ): Promise<string[]> {
+  const market = getAdMarketConfig(country);
   const merchantFeatures = pageHtml ? extractMerchantFeatures(pageHtml) : [];
   const pageContext = merchantFeatures.length > 0
     ? `\nReal information from merchant website:\n${merchantFeatures.join("\n")}\n`
     : "";
+
+  const normalizeCallouts = (items: string[]): string[] => {
+    const deduped: string[] = [];
+    const seen = new Set<string>();
+    const shippingPattern = /free\s*ship|free\s*deliver|kostenlos(?:e|er)?\s+versand|livraison\s+offerte|env[ií]o\s+gratis|spedizione\s+gratuita/i;
+    const returnPattern = /return|refund|money.back|rückgabe|retour|retours|devoluci|resi/i;
+    const hasShipping = items.some((item) => shippingPattern.test(item));
+    const hasReturns = items.some((item) => returnPattern.test(item));
+    const mergedPolicy = smartTruncate(`${market.shippingLabel} · ${market.returnLabel}`, 25);
+
+    for (const raw of items) {
+      const text = smartTruncate(String(raw || "").trim(), 25);
+      if (!text) continue;
+      if ((shippingPattern.test(text) || returnPattern.test(text)) && hasShipping && hasReturns) {
+        continue;
+      }
+      const key = text.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      deduped.push(text);
+    }
+
+    if (hasShipping && hasReturns) {
+      deduped.unshift(mergedPolicy);
+    }
+
+    return deduped.slice(0, 6);
+  };
 
   try {
     const prompt = `You are a Google Ads callout extension expert.
@@ -1120,9 +1210,10 @@ Generate exactly 6 callout extensions for this merchant based on REAL informatio
 Rules:
 - Each callout MUST be ≤ 25 characters
 - PRIORITY: Use actual merchant features found on their website (shipping policy, return policy, brand story, product type, certifications, etc.)
-- If the website mentions specific policies (e.g. "Free Shipping Over $50", "30-Day Returns"), reflect those accurately
+- If shipping and return policy both exist, MERGE them into one line when possible (example: "${market.shippingLabel} + ${market.returnLabel}")
+- If the website mentions specific policies, reflect those accurately
 - Include the merchant's actual strengths, NOT generic/made-up claims
-- Only include "Free Shipping" if the website actually offers it
+- Only include shipping if the website actually offers it
 - Write in the language appropriate for ${country}
 - Be concise and impactful, no emoji
 
@@ -1130,38 +1221,45 @@ Return ONLY a JSON array: ["callout1","callout2",...]`;
 
     const raw = await callAiWithFallback("ad_copy", [{ role: "user", content: prompt }], 1024);
     const parsed = JSON.parse(extractJsonFromAi(raw)) as string[];
-    return parsed.filter((c) => c.trim().length > 0 && c.length <= 25).slice(0, 6);
+    return normalizeCallouts(parsed.filter((c) => c.trim().length > 0));
   } catch {
-    return getDefaultCallouts(merchantName, country, merchantFeatures);
+    return normalizeCallouts(getDefaultCallouts(merchantName, country, merchantFeatures));
   }
 }
 
 function getDefaultCallouts(merchantName: string, country: string, features: string[]): string[] {
+  const market = getAdMarketConfig(country);
   const result: string[] = [];
   const featStr = features.join(" ").toLowerCase();
 
-  // 优先使用从网页检测到的真实卖点
-  if (/free\s*ship/i.test(featStr)) result.push(country === "UK" ? "Free Delivery" : "Free Shipping");
-  if (/money.back|return|refund/i.test(featStr)) result.push("Easy Returns");
-  if (/24\s*\/?\s*7/i.test(featStr)) result.push("24/7 Support");
-  if (/hand.?(made|crafted)/i.test(featStr)) result.push("Handcrafted Quality");
-  if (/award.?winning/i.test(featStr)) result.push("Award-Winning");
-  if (/organic|natural/i.test(featStr)) result.push("All Natural");
-  if (/sustainab|eco/i.test(featStr)) result.push("Eco-Friendly");
-  if (/family.?owned/i.test(featStr)) result.push("Family-Owned");
-  if (/veteran.?owned/i.test(featStr)) result.push("Veteran-Owned");
-  if (/made\s*in/i.test(featStr)) result.push("Made in USA");
-  if (/best\s*seller/i.test(featStr)) result.push("Best Sellers");
-  if (/gift\s*card/i.test(featStr)) result.push("Gift Cards Available");
+  const hasShipping = /free\s*ship|free\s*deliver|kostenlos(?:e|er)?\s+versand|livraison\s+offerte|env[ií]o\s+gratis|spedizione\s+gratuita/i.test(featStr);
+  const hasReturns = /money.back|return|refund|rückgabe|retour|retours|devoluci|resi/i.test(featStr);
+  if (hasShipping && hasReturns) {
+    result.push(smartTruncate(`${market.shippingLabel} · ${market.returnLabel}`, 25));
+  } else {
+    if (hasShipping) result.push(smartTruncate(market.shippingLabel, 25));
+    if (hasReturns) result.push(smartTruncate(market.returnLabel, 25));
+  }
 
-  // 品牌名作为 callout（如果够短）
+  if (/24\s*\/?\s*7/i.test(featStr)) result.push(market.languageCode === "de" ? "24/7 Service" : "24/7 Support");
+  if (/hand.?(made|crafted)/i.test(featStr)) result.push(market.languageCode === "de" ? "Handwerksqualität" : "Handcrafted Quality");
+  if (/award.?winning/i.test(featStr)) result.push(market.languageCode === "de" ? "Ausgezeichnet" : "Award-Winning");
+  if (/organic|natural/i.test(featStr)) result.push(market.languageCode === "de" ? "Natürlich" : "All Natural");
+  if (/sustainab|eco/i.test(featStr)) result.push(market.languageCode === "de" ? "Nachhaltig" : "Eco-Friendly");
+  if (/family.?owned/i.test(featStr)) result.push(market.languageCode === "de" ? "Familiengeführt" : "Family-Owned");
+  if (/veteran.?owned/i.test(featStr)) result.push(market.languageCode === "de" ? "Veteranengeführt" : "Veteran-Owned");
+  if (/made\s*in/i.test(featStr)) result.push(market.languageCode === "de" ? "Hergestellt vor Ort" : "Made in Origin");
+  if (/best\s*seller/i.test(featStr)) result.push(market.languageCode === "de" ? "Bestseller" : "Best Sellers");
+  if (/gift\s*card/i.test(featStr)) result.push(market.languageCode === "de" ? "Geschenkkarten" : "Gift Cards");
+
   const brandShort = smartTruncate(merchantName, 25);
   if (brandShort.length >= 3 && brandShort.length <= 25 && !result.includes(brandShort)) {
     result.unshift(brandShort);
   }
 
-  // 补充通用但安全的 callout
-  const generic = ["Secure Checkout", "Shop Online", "Browse Collection", "New Arrivals", "Best Price", "Quality Products"];
+  const generic = market.languageCode === "de"
+    ? ["Sicher bestellen", "Online kaufen", "Kollektion entdecken", "Neu eingetroffen", "Top-Qualität", "Direkt beim Händler"]
+    : ["Secure Checkout", "Shop Online", "Browse Collection", "New Arrivals", "Best Price", "Quality Products"];
   for (const g of generic) {
     if (result.length >= 6) break;
     if (!result.includes(g)) result.push(g);

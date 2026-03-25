@@ -62,6 +62,14 @@ interface MigrationTask {
   finished_at: string | null;
 }
 
+interface PublicAccessResult {
+  ok: boolean;
+  checked_url: string;
+  final_url?: string;
+  status?: number;
+  error?: string;
+}
+
 interface GitHubTokenEntry {
   id: string;
   label: string;
@@ -547,18 +555,20 @@ export default function AdminSitesPage() {
     const res = await fetch("/api/admin/sites/verify", {
       method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: site.id }),
     }).then((r) => r.json());
-    if (res.code === 0 && res.data?.checks?.valid) {
+    const checks = res.data?.checks;
+    const publicAccess = res.data?.publicAccess as PublicAccessResult | undefined;
+    const fullyVerified = res.code === 0 && !!checks?.valid && !!publicAccess?.ok;
+    if (fullyVerified) {
       message.success({ content: "验证通过", key: "verify" });
     } else {
-      const checks = res.data?.checks;
       const errText =
         res.code !== 0
           ? (res.message || "验证失败")
-          : checks?.error ||
-            (!checks?.valid
-              ? "验证未通过：请检查宝塔 SSH、站点目录及 index.html / 数据 JS 是否与架构一致"
-              : "验证失败");
-      message.error({ content: errText, key: "verify" });
+          : [
+              !checks?.valid ? (checks?.error || "站点结构校验未通过：请检查宝塔 SSH、站点目录、index.html 与数据 JS 是否完整") : "",
+              !publicAccess?.ok ? (`公网访问未通过：${publicAccess?.error || publicAccess?.checked_url || "站点无法从外网访问"}`) : "",
+            ].filter(Boolean).join("；");
+      message.error({ content: errText || "验证失败", key: "verify" });
     }
     fetchSites();
   };

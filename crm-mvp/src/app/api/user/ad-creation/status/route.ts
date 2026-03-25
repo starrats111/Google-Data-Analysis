@@ -170,8 +170,14 @@ async function triggerAdCopyGeneration(
       }
     }
 
-    const headlines = await padHeadlines(dedupedTitles, merchantName, country, 15);
-    const descriptions = await padDescriptions(dedupedDescriptions, merchantName, country, 4);
+    const headlines = await padHeadlines([], merchantName, country, 15, {
+      referenceItems: dedupedTitles,
+      keywords: kws.map((kw) => kw.phrase),
+    });
+    const descriptions = await padDescriptions([], merchantName, country, 4, {
+      referenceItems: dedupedDescriptions,
+      keywords: kws.map((kw) => kw.phrase),
+    });
 
     // 自动翻译为中文参考
     let headlinesZh: string[] = [];

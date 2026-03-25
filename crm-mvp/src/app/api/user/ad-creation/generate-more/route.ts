@@ -11,7 +11,7 @@ export async function POST(req: NextRequest) {
   const user = getUserFromRequest(req);
   if (!user) return apiError("未授权", 401);
 
-  const { type, existing, merchant_name, country, count } = await req.json();
+  const { type, existing, merchant_name, country, count, keywords = [] } = await req.json();
 
   if (!type || !["headlines", "descriptions"].includes(type)) {
     return apiError("type 必须为 headlines 或 descriptions");
@@ -22,11 +22,15 @@ export async function POST(req: NextRequest) {
 
   try {
     if (type === "headlines") {
-      const result = await padHeadlines(existingItems, merchant_name || "", country || "US", targetCount);
+      const result = await padHeadlines(existingItems, merchant_name || "", country || "US", targetCount, {
+        keywords: Array.isArray(keywords) ? keywords.map((k: string) => String(k).trim()).filter(Boolean) : [],
+      });
       const newItems = result.filter((h) => !existingItems.includes(h));
       return apiSuccess({ items: newItems });
     } else {
-      const result = await padDescriptions(existingItems, merchant_name || "", country || "US", targetCount);
+      const result = await padDescriptions(existingItems, merchant_name || "", country || "US", targetCount, {
+        keywords: Array.isArray(keywords) ? keywords.map((k: string) => String(k).trim()).filter(Boolean) : [],
+      });
       const newItems = result.filter((d) => !existingItems.includes(d));
       return apiSuccess({ items: newItems });
     }

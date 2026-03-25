@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { getUserFromRequest, serializeData } from "@/lib/auth";
 import { apiSuccess, apiError } from "@/lib/constants";
 import prisma from "@/lib/prisma";
+import { getAdMarketConfig } from "@/lib/ad-market";
 import { mutateGoogleAds, dollarsToMicros, queryGoogleAds } from "@/lib/google-ads";
 import { readFile } from "fs/promises";
 import { existsSync } from "fs";
@@ -157,6 +158,8 @@ export async function POST(req: NextRequest) {
   };
 
   const campaignNameToUse = campaign.campaign_name || `Campaign-${Date.now()}`;
+  const countryCode = campaign.target_country?.toUpperCase() || "US";
+  const market = getAdMarketConfig(countryCode);
 
   // 清理同名冲突的辅助函数（使用 remove 操作而非 update status）
   async function removeDuplicateCampaigns() {
@@ -238,7 +241,6 @@ export async function POST(req: NextRequest) {
     });
 
     // ─── 3. 地理定向 ───
-    const countryCode = campaign.target_country?.toUpperCase() || "US";
     const geoTargetMap: Record<string, string> = {
       US: "2840", UK: "2826", GB: "2826", CA: "2124", AU: "2036",
       DE: "2276", FR: "2250", JP: "2392", BR: "2076", IT: "2380",
@@ -390,14 +392,14 @@ export async function POST(req: NextRequest) {
       const assetTempRn = `customers/${cid}/assets/${assetTempId}`;
       const promotionAsset: Record<string, unknown> = {
         promotion_target: promotion.promotion_target,
-        language_code: promotion.language_code || "en",
+        language_code: promotion.language_code || market.promotionLanguageCode,
       };
       if (promotion.discount_type === "PERCENT" && promotion.discount_percent) {
         promotionAsset.percent_off = promotion.discount_percent;
       } else if (promotion.discount_type === "MONETARY" && promotion.discount_amount) {
         promotionAsset.money_amount_off = {
           amount_micros: String(Math.round(promotion.discount_amount * 1_000_000)),
-          currency_code: promotion.currency_code || "USD",
+          currency_code: promotion.currency_code || market.currencyCode,
         };
       }
       if (promotion.promo_code) promotionAsset.orders_over_amount = undefined;
@@ -435,7 +437,7 @@ export async function POST(req: NextRequest) {
         description: (item.description || "").slice(0, 25),
         price: {
           amount_micros: String(Math.round((item.price_amount || 0) * 1_000_000)),
-          currency_code: item.currency_code || "USD",
+          currency_code: item.currency_code || market.currencyCode,
         },
         unit: item.unit || "PER_UNIT",
         ...(item.final_url ? { final_urls: [item.final_url] } : {}),
@@ -446,7 +448,7 @@ export async function POST(req: NextRequest) {
             resource_name: assetTempRn,
             price_asset: {
               type: price.type || "BRANDS",
-              language_code: "en",
+              language_code: market.priceLanguageCode,
               price_offerings: priceOfferings,
             },
           },
@@ -472,7 +474,7 @@ export async function POST(req: NextRequest) {
           create: {
             resource_name: assetTempRn,
             call_asset: {
-              country_code: callExtension.country_code || "US",
+              country_code: callExtension.country_code || countryCode,
               phone_number: callExtension.phone_number,
               call_conversion_reporting_state: "DISABLED",
             },
@@ -499,7 +501,7 @@ export async function POST(req: NextRequest) {
           create: {
             resource_name: assetTempRn,
             structured_snippet_asset: {
-              header: structured_snippet.header || "Brands",
+              header: structured_snippet.header || market.snippetHeader,
               values: structured_snippet.values.slice(0, 10).map((v: string) => (v || "").slice(0, 25)),
             },
           },

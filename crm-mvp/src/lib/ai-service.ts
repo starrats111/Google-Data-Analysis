@@ -4,18 +4,7 @@
  * 场景：ad_copy（广告文案）、article（文章生成）、data_insight（数据洞察）
  */
 import prisma from "@/lib/prisma";
-
-// 国家语言映射（移植自 ad_copy_generator.py）
-const COUNTRY_LANGUAGE_MAP: Record<string, { name: string; language: string; style: string }> = {
-  US: { name: "美国", language: "English (US)", style: "直接、行动导向、强调价值和优惠" },
-  UK: { name: "英国", language: "English (UK)", style: "含蓄、品质导向、用英式拼写如 colour/favourite" },
-  CA: { name: "加拿大", language: "English (CA)", style: "混合美式英式、强调环保可持续" },
-  AU: { name: "澳大利亚", language: "English (AU)", style: "随和口语化、强调户外生活方式" },
-  DE: { name: "德国", language: "German", style: "严谨、技术参数导向、强调品质认证" },
-  FR: { name: "法国", language: "French", style: "优雅、强调设计美学和生活品味" },
-  JP: { name: "日本", language: "Japanese", style: "礼貌、详细、强调服务和可靠性" },
-  BR: { name: "巴西", language: "Portuguese (BR)", style: "热情、情感导向、强调社交证明" },
-};
+import { getAdMarketConfig, type AdMarketConfig } from "@/lib/ad-market";
 
 interface AiModelConfig {
   providerName: string;
@@ -26,15 +15,435 @@ interface AiModelConfig {
   temperature: number;
 }
 
+interface PadCopyOptions {
+  referenceItems?: string[];
+  keywords?: string[];
+}
+
+const DISCOUNT_RE = /discount|sale|off|%|save|deal|promo|solde|rabatt|reduc|sparen|remise|descuento|sconto|割引|セール|angebot/i;
+const SHIPPING_RE = /ship|deliver|livra|versand|envio|freight|expedit|lieferung|envoi|配送|送料|spedizione/i;
+const CTA_RE = /shop|buy|discover|explore|get|save|order|upgrade|find|choose|jetzt|kaufen|entdecken|sichern|découvrez|acheter|profitez|compra|descubre|ordina|scopri/i;
+const TRUST_RE = /official|trusted|quality|premium|certified|garantie|garantie|zuverlässig|verlässlich|qualité|fiable|安心|信頼/i;
+const GENERIC_HEADLINE_RE = /^(official site|official store|official page|homepage|home page|shop now|learn more|click here|offizielle seite|offizieller shop|site officiel|tienda oficial)$/i;
+const GENERIC_DESCRIPTION_RE = /(learn more online|visit our website|click to learn more|shop today|discover more online|great products at great prices)/i;
+const EXPIRED_RE = /(ends?\s+(today|tonight|soon)|last chance|early bird|limited\s+time\s+only|bis\s+\d{1,2}\.?\s*(jan|feb|mär|mar|apr|mai|may|jun|jul|aug|sep|sept|okt|oct|nov|dez|dec)|jusqu[’']?au\s+\d{1,2}|hasta\s+el\s+\d{1,2}|fino\s+al\s+\d{1,2})/i;
+const DATE_RE = /(\b(?:jan|january|feb|february|mar|march|märz|apr|april|mai|may|jun|june|jul|july|aug|august|sep|sept|september|okt|oct|october|nov|november|dez|dec|december)\b)|(\b\d{1,2}[./-]\d{1,2}(?:[./-]\d{2,4})?\b)|(\b\d{1,2}\s*(?:jan|feb|mar|mär|apr|mai|may|jun|jul|aug|sep|sept|okt|oct|nov|dez|dec)\b)|(\b20\d{2}\b)/i;
+const STOPWORDS = new Set([
+  "the", "and", "for", "with", "your", "you", "our", "from", "shop", "buy", "now", "online", "official", "site", "store",
+  "offizielle", "seite", "offizieller", "shoppen", "jetzt", "mit", "und", "für", "der", "die", "das", "zum", "zur", "bei",
+  "free", "shipping", "delivery", "returns", "return", "easy", "save", "deal", "deals", "special", "offer", "offers",
+  "kostenloser", "versand", "rückgabe", "rabatt", "angebote", "angebot", "marke", "brand", "brands",
+]);
+
+function normalizeWhitespace(text: string): string {
+  return text.replace(/\s+/g, " ").trim();
+}
+
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function normalizeForCompare(text: string): string {
+  return normalizeWhitespace(text)
+    .toLowerCase()
+    .replace(/[“”"'`´’]/g, "")
+    .replace(/[!?,.;:/\\|()[\]{}+]/g, " ")
+    .replace(/[-–—]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function tokenize(text: string): string[] {
+  return normalizeForCompare(text)
+    .split(" ")
+    .map((t) => t.trim())
+    .filter((t) => t.length >= 2 && !STOPWORDS.has(t));
+}
+
+function tokenSet(text: string, merchantName: string): Set<string> {
+  const brandTokens = new Set(tokenize(merchantName));
+  return new Set(tokenize(text).filter((t) => !brandTokens.has(t)));
+}
+
+function semanticKey(text: string, merchantName: string): string {
+  return Array.from(tokenSet(text, merchantName)).sort().join("|");
+}
+
+function jaccard(a: Set<string>, b: Set<string>): number {
+  if (a.size === 0 || b.size === 0) return 0;
+  let intersection = 0;
+  for (const v of a) if (b.has(v)) intersection += 1;
+  const union = new Set([...a, ...b]).size;
+  return union === 0 ? 0 : intersection / union;
+}
+
+function truncateAtWord(text: string, maxLen: number): string {
+  const clean = normalizeWhitespace(text);
+  if (clean.length <= maxLen) return clean;
+  const sliced = clean.slice(0, maxLen);
+  const lastSpace = sliced.lastIndexOf(" ");
+  if (lastSpace > maxLen * 0.55) return sliced.slice(0, lastSpace).trim();
+  return sliced.trim();
+}
+
+function getShortBrand(merchantName: string, maxLen = 18): string {
+  const clean = normalizeWhitespace(merchantName);
+  if (!clean) return "Brand";
+  return truncateAtWord(clean, maxLen);
+}
+
+function inferProductPhrase(keywords: string[], merchantName: string, fallbackByLanguage: string): string {
+  const brandTokens = new Set(tokenize(merchantName));
+  for (const keyword of keywords) {
+    const cleaned = normalizeWhitespace(keyword);
+    if (!cleaned) continue;
+    const words = tokenize(cleaned).filter((w) => !brandTokens.has(w) && !DISCOUNT_RE.test(w) && !SHIPPING_RE.test(w));
+    if (words.length >= 1) {
+      return truncateAtWord(cleaned, 18);
+    }
+  }
+  return fallbackByLanguage;
+}
+
+function hasExplicitDateOrExpiredSignal(text: string): boolean {
+  return EXPIRED_RE.test(text) || DATE_RE.test(text);
+}
+
+function isMeaninglessHeadline(text: string, merchantName: string): boolean {
+  const normalized = normalizeForCompare(text);
+  const brandNormalized = normalizeForCompare(merchantName);
+  if (!normalized) return true;
+  if (normalized === brandNormalized) return true;
+  if (normalized.replace(/\s+/g, "") === brandNormalized.replace(/\s+/g, "")) return true;
+  if (GENERIC_HEADLINE_RE.test(normalized)) return true;
+  if (/^(official|offizielle|oficial|site|seite|homepage|store|shop)$/.test(normalized)) return true;
+  if (normalized.length <= 5) return true;
+
+  const stripped = normalized.replace(new RegExp(`\\b${escapeRegExp(brandNormalized)}\\b`, "g"), "").trim();
+  if (!stripped) return true;
+  if (/^(official|offizielle|seite|site|store|shop|homepage|webseite)$/.test(stripped)) return true;
+  return false;
+}
+
+function isMeaninglessDescription(text: string, merchantName: string): boolean {
+  const normalized = normalizeForCompare(text);
+  if (!normalized || normalized.length < 40) return true;
+  if (GENERIC_DESCRIPTION_RE.test(normalized)) return true;
+  const brandNormalized = normalizeForCompare(merchantName);
+  if (normalized === brandNormalized) return true;
+  return false;
+}
+
+function hasCommercialIntent(text: string): boolean {
+  return DISCOUNT_RE.test(text) || SHIPPING_RE.test(text) || CTA_RE.test(text) || TRUST_RE.test(text);
+}
+
+function sanitizeHeadlineCandidates(
+  candidates: string[],
+  merchantName: string,
+  maxLen: number,
+  maxCount: number,
+): string[] {
+  const result: string[] = [];
+  const exactSet = new Set<string>();
+  const semanticSet = new Set<string>();
+  const tokenSets: Set<string>[] = [];
+
+  for (const raw of candidates) {
+    let candidate = normalizeWhitespace(raw)
+      .replace(/[|•·]+/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+    candidate = candidate.replace(/[!]{2,}/g, "!");
+    candidate = candidate.replace(/^[\-–—:;,./\s]+|[\-–—:;,./\s]+$/g, "");
+
+    if (!candidate || candidate.length > maxLen) continue;
+    if (hasExplicitDateOrExpiredSignal(candidate)) continue;
+    if (isMeaninglessHeadline(candidate, merchantName)) continue;
+    if (!hasCommercialIntent(candidate) && tokenSet(candidate, merchantName).size < 2) continue;
+
+    const exact = normalizeForCompare(candidate);
+    const semantic = semanticKey(candidate, merchantName);
+    const currentTokenSet = tokenSet(candidate, merchantName);
+
+    if (exactSet.has(exact)) continue;
+    if (semantic && semanticSet.has(semantic)) continue;
+
+    let tooSimilar = false;
+    for (const existing of tokenSets) {
+      if (jaccard(existing, currentTokenSet) >= 0.8) {
+        tooSimilar = true;
+        break;
+      }
+    }
+    if (tooSimilar) continue;
+
+    result.push(candidate);
+    exactSet.add(exact);
+    if (semantic) semanticSet.add(semantic);
+    tokenSets.push(currentTokenSet);
+    if (result.length >= maxCount) break;
+  }
+
+  return result;
+}
+
+function sanitizeDescriptionCandidates(
+  candidates: string[],
+  merchantName: string,
+  maxLen: number,
+  maxCount: number,
+): string[] {
+  const result: string[] = [];
+  const exactSet = new Set<string>();
+  const semanticSet = new Set<string>();
+  const tokenSets: Set<string>[] = [];
+
+  for (const raw of candidates) {
+    let candidate = normalizeWhitespace(raw)
+      .replace(/[|•·]+/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+    candidate = candidate.replace(/[!]{2,}/g, "!");
+    candidate = candidate.replace(/^[\-–—:;,./\s]+|[\-–—:;,./\s]+$/g, "");
+
+    if (!candidate || candidate.length > maxLen || candidate.length < 50) continue;
+    if (hasExplicitDateOrExpiredSignal(candidate)) continue;
+    if (isMeaninglessDescription(candidate, merchantName)) continue;
+    if (!hasCommercialIntent(candidate) && tokenSet(candidate, merchantName).size < 4) continue;
+
+    const exact = normalizeForCompare(candidate);
+    const semantic = semanticKey(candidate, merchantName);
+    const currentTokenSet = tokenSet(candidate, merchantName);
+
+    if (exactSet.has(exact)) continue;
+    if (semantic && semanticSet.has(semantic)) continue;
+
+    let tooSimilar = false;
+    for (const existing of tokenSets) {
+      if (jaccard(existing, currentTokenSet) >= 0.75) {
+        tooSimilar = true;
+        break;
+      }
+    }
+    if (tooSimilar) continue;
+
+    result.push(candidate);
+    exactSet.add(exact);
+    if (semantic) semanticSet.add(semantic);
+    tokenSets.push(currentTokenSet);
+    if (result.length >= maxCount) break;
+  }
+
+  return result;
+}
+
+function getFallbackHeadlineCandidates(
+  merchantName: string,
+  market: AdMarketConfig,
+  keywords: string[],
+): string[] {
+  const brand = getShortBrand(merchantName);
+  const genericProduct = market.languageCode === "de"
+    ? "Saugroboter"
+    : market.languageCode === "fr"
+      ? "Produits premium"
+      : market.languageCode === "es"
+        ? "Productos top"
+        : market.languageCode === "it"
+          ? "Prodotti top"
+          : market.languageCode === "nl"
+            ? "Topproducten"
+            : market.languageCode === "ja"
+              ? "人気アイテム"
+              : "Top Picks";
+  const product = inferProductPhrase(keywords, merchantName, genericProduct);
+
+  if (market.languageCode === "de") {
+    return [
+      `${brand} ${product}`,
+      "Bis zu 20% Rabatt",
+      market.shippingLabel,
+      `${product} jetzt sichern`,
+      "Starke Leistung Zuhause",
+      "Mehr Komfort im Alltag",
+      "Qualität für Ihr Zuhause",
+      "Jetzt Angebote entdecken",
+      "Zuverlässig & effizient",
+      "Premium Auswahl online",
+    ];
+  }
+
+  if (market.languageCode === "fr") {
+    return [
+      `${brand} ${product}`,
+      "Jusqu'à -20%",
+      market.shippingLabel,
+      `${product} à découvrir`,
+      "Qualité pensée pour vous",
+      "Confort au quotidien",
+      "Choix premium en ligne",
+      "Offres à ne pas manquer",
+    ];
+  }
+
+  if (market.languageCode === "es") {
+    return [
+      `${brand} ${product}`,
+      "Hasta 20% de descuento",
+      market.shippingLabel,
+      `Compra ${product} hoy`,
+      "Calidad para tu hogar",
+      "Ahorra con estilo",
+      "Ofertas que sí convencen",
+      "Descubre tu mejor opción",
+    ];
+  }
+
+  if (market.languageCode === "it") {
+    return [
+      `${brand} ${product}`,
+      "Fino al 20% di sconto",
+      market.shippingLabel,
+      `Scopri ${product} ora`,
+      "Qualità per ogni giorno",
+      "Più comfort a casa",
+      "Offerte da non perdere",
+      "Scelta premium online",
+    ];
+  }
+
+  if (market.languageCode === "nl") {
+    return [
+      `${brand} ${product}`,
+      "Tot 20% korting",
+      market.shippingLabel,
+      `${product} nu ontdekken`,
+      "Slim gemak voor thuis",
+      "Kwaliteit die overtuigt",
+      "Sterke deals online",
+      "Maak thuis slimmer schoon",
+    ];
+  }
+
+  if (market.languageCode === "ja") {
+    return [
+      `${brand} ${product}`,
+      "最大20%オフ",
+      market.shippingLabel,
+      `${product}を今すぐ確認`,
+      "毎日に頼れる品質",
+      "使いやすさで選ぶなら",
+      "公式級の安心感",
+      "納得の人気アイテム",
+    ];
+  }
+
+  return [
+    `${brand} ${product}`,
+    "Save Up to 20% Today",
+    market.shippingLabel,
+    `Shop ${product} Now`,
+    "Quality You Can Trust",
+    "Upgrade Your Everyday",
+    "Top Deals Worth Clicking",
+    "Premium Picks Online",
+    "Smart Value For Home",
+    "Find Your Best Match",
+  ];
+}
+
+function getFallbackDescriptionCandidates(
+  merchantName: string,
+  market: AdMarketConfig,
+  keywords: string[],
+): string[] {
+  const brand = getShortBrand(merchantName, 22);
+  const genericProduct = market.languageCode === "de"
+    ? "smarte Lösungen"
+    : market.languageCode === "fr"
+      ? "solutions premium"
+      : market.languageCode === "es"
+        ? "soluciones premium"
+        : market.languageCode === "it"
+          ? "soluzioni premium"
+          : market.languageCode === "nl"
+            ? "slimme oplossingen"
+            : market.languageCode === "ja"
+              ? "人気アイテム"
+              : "premium picks";
+  const product = inferProductPhrase(keywords, merchantName, genericProduct);
+
+  if (market.languageCode === "de") {
+    return [
+      `Bis zu 20% Rabatt + ${market.shippingLabel} bei ${brand} sichern.`,
+      `${brand} bietet ${product} mit starker Qualität, Komfort und Vertrauen.`,
+      `Entdecken Sie leistungsstarke ${product} für mehr Effizienz im Alltag.`,
+      `Jetzt attraktive Angebote prüfen und die passende ${product} Auswahl finden.`,
+    ];
+  }
+
+  if (market.languageCode === "fr") {
+    return [
+      `Jusqu'à -20% + ${market.shippingLabel.toLowerCase()} chez ${brand}.`,
+      `${brand} propose ${product} avec qualité, style et confiance au quotidien.`,
+      `Découvrez une sélection ${product} pensée pour plus de confort chaque jour.`,
+      `Profitez d'offres fiables et trouvez la solution idéale dès aujourd'hui.`,
+    ];
+  }
+
+  if (market.languageCode === "es") {
+    return [
+      `Ahorra hasta 20% + ${market.shippingLabel.toLowerCase()} con ${brand}.`,
+      `${brand} reúne ${product} con calidad real, confianza y mejor experiencia.`,
+      `Descubre opciones ${product} para comprar con más valor y menos dudas.`,
+      `Encuentra ofertas convincentes y elige la mejor solución para ti hoy.`,
+    ];
+  }
+
+  if (market.languageCode === "it") {
+    return [
+      `Fino al 20% di sconto + ${market.shippingLabel.toLowerCase()} con ${brand}.`,
+      `${brand} offre ${product} con qualità affidabile e comfort ogni giorno.`,
+      `Scopri una selezione ${product} pensata per valore, stile e praticità.`,
+      `Approfitta di offerte credibili e scegli la soluzione giusta subito.`,
+    ];
+  }
+
+  if (market.languageCode === "nl") {
+    return [
+      `Tot 20% korting + ${market.shippingLabel.toLowerCase()} bij ${brand}.`,
+      `${brand} biedt ${product} met kwaliteit, gemak en vertrouwen voor thuis.`,
+      `Ontdek slimme ${product} keuzes voor meer comfort in je dagelijkse routine.`,
+      `Bekijk sterke aanbiedingen en kies vandaag nog de beste oplossing.`,
+    ];
+  }
+
+  if (market.languageCode === "ja") {
+    return [
+      `最大20%オフ + ${market.shippingLabel}で${brand}をお得にチェック。`,
+      `${brand}は品質・使いやすさ・安心感で選ばれる${product}を提案します。`,
+      `毎日をもっと快適にする${product}を比較しながら選べます。`,
+      `納得できる価値と信頼感のある一台を今すぐ見つけましょう。`,
+    ];
+  }
+
+  return [
+    `Save up to 20% + ${market.shippingLabel} when you shop ${brand} today.`,
+    `${brand} delivers ${product} with trusted quality, comfort and standout value.`,
+    `Explore high-conviction ${product} options built for smarter everyday choices.`,
+    `Find the right fit faster with strong offers, clear value and easy buying.`,
+  ];
+}
+
 /** 从 ai_providers 表获取第一个可用的 Provider 作为默认配置 */
-async function getFirstActiveProvider(scene?: string): Promise<AiModelConfig[]> {
+async function getFirstActiveProvider(_scene?: string): Promise<AiModelConfig[]> {
   const provider = await prisma.ai_providers.findFirst({
     where: { status: "active", is_deleted: 0 },
     orderBy: { id: "asc" },
   });
   if (!provider || !provider.api_key) return [];
 
-  // 尝试查找该 provider 关联的 model_configs 以获取真实可用的 model_name
   const providerConfigs = await prisma.ai_model_configs.findMany({
     where: { provider_id: provider.id, is_active: 1, is_deleted: 0 },
     orderBy: { priority: "asc" },
@@ -51,7 +460,6 @@ async function getFirstActiveProvider(scene?: string): Promise<AiModelConfig[]> 
     }));
   }
 
-  // 无 model_config 时使用代理可用的模型名作为回退链
   const fallbackModels = [
     "[特价]claude-sonnet-4-6",
     "[福利]claude-sonnet-4-6",
@@ -79,7 +487,7 @@ async function getSceneModels(scene: string): Promise<AiModelConfig[]> {
   if (models.length === 0) {
     const fallbacks = await getFirstActiveProvider(scene);
     if (fallbacks.length > 0) {
-      console.log(`[AI] 场景 ${scene} 无专属配置，使用第一个可用 Provider: ${fallbacks[0].providerName}/${fallbacks.map(f => f.modelName).join(",")}`);
+      console.log(`[AI] 场景 ${scene} 无专属配置，使用第一个可用 Provider: ${fallbacks[0].providerName}/${fallbacks.map((f) => f.modelName).join(",")}`);
       return fallbacks;
     }
     throw new Error(`AI 未配置：场景 ${scene} 无可用模型，请在 AI 配置中添加供应商或场景模型`);
@@ -109,7 +517,7 @@ async function getSceneModels(scene: string): Promise<AiModelConfig[]> {
   if (result.length === 0) {
     const fallbacks = await getFirstActiveProvider(scene);
     if (fallbacks.length > 0) {
-      console.warn(`[AI] 场景 ${scene} 的 provider 均不可用，使用第一个可用 Provider: ${fallbacks[0].providerName}/${fallbacks.map(f => f.modelName).join(",")}`);
+      console.warn(`[AI] 场景 ${scene} 的 provider 均不可用，使用第一个可用 Provider: ${fallbacks[0].providerName}/${fallbacks.map((f) => f.modelName).join(",")}`);
       return fallbacks;
     }
   }
@@ -151,7 +559,7 @@ async function callAi(
       const retryAfter = parseInt(res.headers.get("retry-after") || "0", 10);
       const delayMs = retryAfter > 0 ? retryAfter * 1000 : Math.min(2000 * Math.pow(2, attempt), 16000);
       console.log(`[AI] ${config.modelName} 429 限流，${(delayMs / 1000).toFixed(1)}s 后重试 (${attempt + 1}/${MAX_RETRIES})`);
-      await new Promise(r => setTimeout(r, delayMs));
+      await new Promise((r) => setTimeout(r, delayMs));
       continue;
     }
 
@@ -177,7 +585,7 @@ export async function callAiWithFallback(
   const models = await getSceneModels(scene);
   if (models.length === 0) throw new Error(`场景 ${scene} 无可用 AI 模型`);
 
-  const usedNames = new Set(models.map(m => m.modelName));
+  const usedNames = new Set(models.map((m) => m.modelName));
   if (models.length < 3) {
     const extraModels = await getFirstActiveProvider(scene);
     for (const extra of extraModels) {
@@ -203,7 +611,6 @@ export async function callAiWithFallback(
 /** 从 AI 响应中提取 JSON */
 function extractJson(raw: string): string {
   let text = raw.trim();
-  // 移除 markdown 代码块
   if (text.startsWith("```")) {
     const firstNl = text.indexOf("\n");
     if (firstNl > 0) text = text.slice(firstNl + 1);
@@ -211,11 +618,7 @@ function extractJson(raw: string): string {
     text = text.trim();
   }
   if (text[0] === "{" || text[0] === "[") return text;
-  // 尝试提取 JSON
-  for (const [open, close] of [
-    ["{", "}"],
-    ["[", "]"],
-  ]) {
+  for (const [open, close] of [["{", "}"], ["[", "]"]] as const) {
     const idx = text.indexOf(open);
     if (idx >= 0) {
       const ridx = text.lastIndexOf(close);
@@ -225,181 +628,143 @@ function extractJson(raw: string): string {
   return text;
 }
 
-// ─── 广告文案补充（严格对齐桌面文案提示词） ───
-
-const DISCOUNT_RE = /discount|sale|off|%|save|deal|promo|solde|rabatt|reduc|sparen|remise|descuento|sconto|割引|セール/i;
-const SHIPPING_RE = /ship|deliver|livra|versand|envio|freight|expedit|lieferung|envoi|配送|送料/i;
-
-/**
- * 补充 headlines 到指定数量
- * 严格遵循桌面文案提示词规范：
- *  - 第一条必须品牌相关
- *  - 折扣和物流各一条并优先展示（折扣力度优选最大的）
- *  - 次要折扣从第四条输出
- *  - 字数 ≤ 30，避免过多大写
- *  - 有折扣/物流的一定要写入，不满足就重生成
- */
 export async function padHeadlines(
   existing: string[],
   merchantName: string,
   country: string,
   count = 15,
+  options: PadCopyOptions = {},
 ): Promise<string[]> {
-  const valid = existing.filter((h) => h.length <= 30 && h.length > 0);
-  if (valid.length >= count) return valid.slice(0, count);
+  const market = getAdMarketConfig(country);
+  const locked = sanitizeHeadlineCandidates(existing, merchantName, 30, count);
+  if (locked.length >= count) return locked.slice(0, count);
 
-  const lang = COUNTRY_LANGUAGE_MAP[country.toUpperCase()] || COUNTRY_LANGUAGE_MAP.US;
+  const references = sanitizeHeadlineCandidates(options.referenceItems || [], merchantName, 30, 12);
+  const keywords = (options.keywords || []).map((k) => normalizeWhitespace(k)).filter(Boolean).slice(0, 12);
 
-  // 最多尝试 3 次，确保折扣/物流一定写入
-  for (let attempt = 0; attempt < 3; attempt++) {
-    const needed = count - valid.length;
-    const allSoFar = [...valid];
-
-    const prompt = `You are a senior Google Ads copywriter with 30 years of experience. You deeply understand Google search ad metrics, Ad Strength scoring, keyword selection, and platform policies.
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const needed = count - locked.length;
+    const prompt = `You are a senior Google Ads search ads copywriter with 30 years of experience.
 
 Context:
 - Merchant: ${merchantName}
-- Target country: ${lang.name} (${lang.language})
-- Style: ${lang.style}
-- Budget: $1.5/day, CPC $0.3 — every headline must maximize click value.
-- Based on SemRush keyword data, generate headlines that align with high-performing keywords.
+- Target country: ${market.countryNameZh} (${market.languageName})
+- Writing style: ${market.style}
+- Budget: $1.5/day, CPC $0.3
+- Goal: create high-conversion RSA headlines that real users would click, not filler.
 
-${valid.length > 0 ? `Existing headlines (${valid.length}):\n${valid.map((h, i) => `${i + 1}. "${h}"`).join("\n")}\n` : ""}
-Generate exactly ${needed} headlines. You MUST output a JSON array of exactly ${needed} strings.
+${keywords.length > 0 ? `Top keywords / product phrases:\n${keywords.map((k, i) => `${i + 1}. ${k}`).join("\n")}\n` : ""}
+${references.length > 0 ? `Market references for inspiration only (DO NOT copy literally):\n${references.map((h, i) => `${i + 1}. \"${h}\"`).join("\n")}\n` : ""}
+${locked.length > 0 ? `Already locked headlines that must remain untouched:\n${locked.map((h, i) => `${i + 1}. \"${h}\"`).join("\n")}\n` : ""}
+Generate exactly ${needed} NEW headlines. Return ONLY a JSON array of exactly ${needed} strings.
 
-=== MANDATORY RULES (violation = rejection) ===
+MANDATORY RULES:
+1. Headline #1 in your output must be brand-related and must include \"${merchantName}\" or a clear brand reference.
+2. Include exactly one discount headline near the top. Use the strongest truthful discount phrasing.
+3. Include exactly one shipping headline for ${market.countryNameZh} only.
+4. Make the set commercially strong: emphasize product/category fit, trust, buying motivation, convenience, quality, or CTA.
+5. Each headline must be <= 30 characters.
+6. Write in ${market.languageName}. Never fall back to English unless the target market language is English.
+7. Do NOT output expired or time-bound copy: no dates, months, years, countdowns, \"Early Bird\", \"Ends Soon\", or specific event deadlines.
+8. Do NOT output low-value filler such as brand only, \"Official Site\", \"Home Page\", or near-duplicates.
+9. Avoid repeating the same phrase pattern across multiple headlines.
+10. Output must comply with Google Ads policy and remain truthful.
 
-RULE 1 — BRAND FIRST: Headline #1 (first in your output) MUST be strongly brand-related — include "${merchantName}" or a clear brand reference. This is the most important headline.
-
-RULE 2 — DISCOUNT MANDATORY: You MUST include exactly ONE discount headline. Pick the BIGGEST discount available for ${merchantName}. Place it as headline #2 or #3 in your output for priority display. The discount must be real and truthful. Example: "Up to 60% Off ${merchantName}".
-
-RULE 3 — SHIPPING MANDATORY: You MUST include exactly ONE shipping headline targeting ${lang.name} ONLY. Example: "Free ${lang.name} Shipping" or "Kostenloser Versand DE". Shipping must be country-specific, local only.
-
-RULE 4 — PRIORITY ORDER: Brand headline first, then discount and shipping within the first 4 headlines. Secondary discount references (if any) start from headline #4 onward.
-
-RULE 5 — CHARACTER LIMIT: Each headline MUST be ≤ 30 characters. Count EVERY character carefully. If over 30, rewrite shorter immediately.
-
-RULE 6 — LANGUAGE: Write in ${lang.language}. Use Title Case. Avoid excessive UPPERCASE — never write entire words in caps unless it's an acronym.
-
-RULE 7 — QUALITY: Language must reflect ${merchantName}'s brand character — authentic and compelling, NOT generic filler. Diversify remaining headlines across: quality/trust signals, strong CTAs, unique selling points, seasonal relevance.
-
-RULE 8 — COMPLIANCE: No emoji. Max 1 exclamation mark across ALL headlines. Comply with Google Ads policies: no deceptive claims, no misleading info, no sensitive terms. Information must be truthful.
-
-RULE 9 — FINAL CHECK: After generating, re-verify EVERY headline is ≤ 30 characters, contains no duplicates, and rules 1-3 are satisfied.
-
-Return ONLY a JSON array of strings. Example: ["Brand Headline", "Discount Headline", "Shipping Headline", ...]`;
+Return ONLY JSON array.`;
 
     try {
       const raw = await callAiWithFallback("ad_copy", [{ role: "user", content: prompt }], 2048);
       const parsed = JSON.parse(extractJson(raw)) as string[];
-      const aiHeadlines = parsed.map((h) => h.trim()).filter((h) => h.length > 0 && h.length <= 30);
-      const combined = [...valid, ...aiHeadlines].slice(0, count);
-
-      // ─── 二次硬校验 ───
+      const generated = sanitizeHeadlineCandidates(parsed, merchantName, 30, needed + 8);
+      const combined = sanitizeHeadlineCandidates([...locked, ...generated], merchantName, 30, count);
       const hasDiscount = combined.some((h) => DISCOUNT_RE.test(h));
       const hasShipping = combined.some((h) => SHIPPING_RE.test(h));
-      const firstIsBrand = combined.length > 0 && combined[0].toLowerCase().includes(merchantName.toLowerCase().slice(0, 5));
+      const firstIsBrand = combined.length > 0 && normalizeForCompare(combined[0]).includes(normalizeForCompare(getShortBrand(merchantName, 20)).split(" ")[0] || "");
 
-      if (hasDiscount && hasShipping) {
+      if (combined.length >= count && hasDiscount && hasShipping && firstIsBrand) {
         console.log(`[padHeadlines] 校验通过 (attempt ${attempt + 1}): 折扣=${hasDiscount}, 物流=${hasShipping}, 品牌首条=${firstIsBrand}, 共${combined.length}条`);
-        return combined;
+        return combined.slice(0, count);
       }
 
-      console.warn(`[padHeadlines] 校验不通过 (attempt ${attempt + 1}): 折扣=${hasDiscount}, 物流=${hasShipping} → 重试`);
-      // 不通过时不累加 valid，下次重新生成全部 AI 部分
+      console.warn(`[padHeadlines] 校验不通过 (attempt ${attempt + 1}): 折扣=${hasDiscount}, 物流=${hasShipping}, 品牌首条=${firstIsBrand}, 共${combined.length}条 → 重试`);
     } catch (err) {
       console.error(`[padHeadlines] AI 生成失败 (attempt ${attempt + 1}):`, err);
     }
   }
 
-  // 3 次都失败，返回已有的 + 强制插入兜底折扣/物流标题
-  console.error("[padHeadlines] 3 次校验均失败，插入兜底折扣/物流标题");
-  const fallback = [...valid];
-  if (!fallback.some((h) => DISCOUNT_RE.test(h))) {
-    const shortName = merchantName.length > 15 ? merchantName.slice(0, 15) : merchantName;
-    fallback.push(`Save Big at ${shortName}`.slice(0, 30));
-  }
-  if (!fallback.some((h) => SHIPPING_RE.test(h))) {
-    const langName = lang.name.length > 10 ? lang.name.slice(0, 10) : lang.name;
-    fallback.push(`Free ${langName} Shipping`.slice(0, 30));
-  }
+  const fallbackCandidates = getFallbackHeadlineCandidates(merchantName, market, keywords);
+  const fallback = sanitizeHeadlineCandidates([...locked, ...fallbackCandidates], merchantName, 30, count);
   return fallback.slice(0, count);
 }
 
-/**
- * 补充 descriptions 到指定数量
- * 严格遵循桌面文案提示词规范：
- *  - 有且仅有一条同时包含折扣和物流信息
- *  - 字数 50-90，避免过多大写
- *  - 有折扣/物流的一定要写入，不满足就重生成
- */
 export async function padDescriptions(
   existing: string[],
   merchantName: string,
   country: string,
   count = 4,
+  options: PadCopyOptions = {},
 ): Promise<string[]> {
-  const valid = existing.filter((d) => d.length <= 90 && d.length > 0);
-  if (valid.length >= count) return valid.slice(0, count);
+  const market = getAdMarketConfig(country);
+  const locked = sanitizeDescriptionCandidates(existing, merchantName, 90, count);
+  if (locked.length >= count) return locked.slice(0, count);
 
-  const lang = COUNTRY_LANGUAGE_MAP[country.toUpperCase()] || COUNTRY_LANGUAGE_MAP.US;
+  const references = sanitizeDescriptionCandidates(options.referenceItems || [], merchantName, 90, 8);
+  const keywords = (options.keywords || []).map((k) => normalizeWhitespace(k)).filter(Boolean).slice(0, 12);
 
-  for (let attempt = 0; attempt < 3; attempt++) {
-    const needed = count - valid.length;
-
-    const prompt = `You are a senior Google Ads copywriter with 30 years of experience, specializing in compelling RSA descriptions that drive conversions.
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const needed = count - locked.length;
+    const prompt = `You are a senior Google Ads RSA copywriter focused on conversion-driving descriptions.
 
 Context:
 - Merchant: ${merchantName}
-- Target country: ${lang.name} (${lang.language})
-- Style: ${lang.style}
-- Budget: $1.5/day, CPC $0.3 — descriptions must maximize conversion value.
+- Target country: ${market.countryNameZh} (${market.languageName})
+- Writing style: ${market.style}
+- Budget: $1.5/day, CPC $0.3
+- Goal: write persuasive, realistic ad descriptions that feel commercially useful.
 
-${valid.length > 0 ? `Existing descriptions (${valid.length}):\n${valid.map((d, i) => `${i + 1}. "${d}"`).join("\n")}\n` : ""}
-Generate exactly ${needed} descriptions. You MUST output a JSON array of exactly ${needed} strings.
+${keywords.length > 0 ? `Top keywords / product phrases:\n${keywords.map((k, i) => `${i + 1}. ${k}`).join("\n")}\n` : ""}
+${references.length > 0 ? `Market reference descriptions for inspiration only (DO NOT copy literally):\n${references.map((d, i) => `${i + 1}. \"${d}\"`).join("\n")}\n` : ""}
+${locked.length > 0 ? `Already locked descriptions that must remain untouched:\n${locked.map((d, i) => `${i + 1}. \"${d}\"`).join("\n")}\n` : ""}
+Generate exactly ${needed} NEW descriptions. Return ONLY a JSON array of exactly ${needed} strings.
 
-=== MANDATORY RULES (violation = rejection) ===
+MANDATORY RULES:
+1. Exactly ONE description must combine both discount and shipping in one line.
+2. Each description must be 50-90 characters.
+3. Write in ${market.languageName}. Never fall back to English unless the target market language is English.
+4. Each line must have a different persuasion angle: offer, trust, product fit, convenience, or CTA.
+5. Avoid generic filler. The copy must feel like it can actually drive revenue.
+6. Do NOT use dates, months, years, countdowns, \"Early Bird\", \"Ends Soon\", or expired event language.
+7. Do NOT repeat the same wording structure across lines.
+8. Comply with Google Ads policy and keep claims truthful.
 
-RULE 1 — DISCOUNT + SHIPPING COMBINED: Exactly ONE description MUST combine BOTH discount info AND shipping info in a single line. Example: "Save 30% + Free ${lang.name} Shipping on All Orders" or "Bis zu 40% Rabatt + Kostenloser DE Versand". Shipping must target ${lang.name} only. This is REQUIRED and non-negotiable.
-
-RULE 2 — CHARACTER LIMIT: Each description MUST be between 50-90 characters (Google Ads limit is 90). Count carefully.
-
-RULE 3 — LANGUAGE: Write in ${lang.language}. Use natural sentence case. Avoid excessive UPPERCASE.
-
-RULE 4 — QUALITY: Language must reflect ${merchantName}'s brand character — authentic and compelling, NOT generic filler like "Great products at great prices". Cover: brand story, product quality, trust signals, strong CTAs, brand differentiators.
-
-RULE 5 — COMPLIANCE: No emoji. Comply with Google Ads policies: no deceptive or misleading claims, no sensitive terms. All information must be truthful.
-
-RULE 6 — FINAL CHECK: After generating, re-verify each description is 50-90 characters, and RULE 1 is satisfied (exactly one line has both discount AND shipping).
-
-Return ONLY a JSON array of strings. Example: ["Description with discount + shipping", "Brand description", ...]`;
+Return ONLY JSON array.`;
 
     try {
       const raw = await callAiWithFallback("ad_copy", [{ role: "user", content: prompt }], 2048);
       const parsed = JSON.parse(extractJson(raw)) as string[];
-      const aiDescs = parsed.map((d) => d.trim()).filter((d) => d.length > 0 && d.length <= 90);
-      const combined = [...valid, ...aiDescs].slice(0, count);
+      const generated = sanitizeDescriptionCandidates(parsed, merchantName, 90, needed + 4);
+      const combined = sanitizeDescriptionCandidates([...locked, ...generated], merchantName, 90, count);
+      const comboCount = combined.filter((d) => DISCOUNT_RE.test(d) && SHIPPING_RE.test(d)).length;
 
-      // ─── 二次硬校验：必须有一条同时含折扣+物流 ───
-      const hasCombo = combined.some((d) => DISCOUNT_RE.test(d) && SHIPPING_RE.test(d));
-
-      if (hasCombo) {
-        console.log(`[padDescriptions] 校验通过 (attempt ${attempt + 1}): 折扣+物流组合=${hasCombo}, 共${combined.length}条`);
-        return combined;
+      if (combined.length >= count && comboCount === 1) {
+        console.log(`[padDescriptions] 校验通过 (attempt ${attempt + 1}): 折扣+物流组合=${comboCount}, 共${combined.length}条`);
+        return combined.slice(0, count);
       }
 
-      console.warn(`[padDescriptions] 校验不通过 (attempt ${attempt + 1}): 缺少折扣+物流组合描述 → 重试`);
+      console.warn(`[padDescriptions] 校验不通过 (attempt ${attempt + 1}): 折扣+物流组合=${comboCount}, 共${combined.length}条 → 重试`);
     } catch (err) {
       console.error(`[padDescriptions] AI 生成失败 (attempt ${attempt + 1}):`, err);
     }
   }
 
-  // 3 次都失败，强制插入兜底
-  console.error("[padDescriptions] 3 次校验均失败，插入兜底折扣+物流描述");
-  const fallback = [...valid];
-  if (!fallback.some((d) => DISCOUNT_RE.test(d) && SHIPPING_RE.test(d))) {
-    const langName = lang.name.length > 8 ? lang.name.slice(0, 8) : lang.name;
-    fallback.push(`Save Big + Free ${langName} Shipping on ${merchantName} Orders`.slice(0, 90));
-  }
-  return fallback.slice(0, count);
+  const fallbackCandidates = getFallbackDescriptionCandidates(merchantName, market, keywords);
+  const fallback = sanitizeDescriptionCandidates([...locked, ...fallbackCandidates], merchantName, 90, count);
+  const comboCount = fallback.filter((d) => DISCOUNT_RE.test(d) && SHIPPING_RE.test(d)).length;
+  if (comboCount === 1) return fallback.slice(0, count);
+
+  const withForcedCombo = sanitizeDescriptionCandidates([
+    ...fallback,
+    ...getFallbackDescriptionCandidates(merchantName, market, keywords),
+  ], merchantName, 90, count);
+  return withForcedCombo.slice(0, count);
 }

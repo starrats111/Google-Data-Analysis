@@ -3,15 +3,14 @@
 import { useState, useMemo, useCallback, useEffect, useRef } from "react";
 import {
   Card, Table, Row, Col, Statistic, Select, Space, Typography, Tag, Button,
-  Dropdown, DatePicker, Tooltip, App, Input, Modal, Tabs,
+  DatePicker, Tooltip, App, Input, Modal, Tabs, Form,
 } from "antd";
 import {
   RiseOutlined, FallOutlined, SyncOutlined,
-  CloudDownloadOutlined, TableOutlined, EditOutlined, SearchOutlined,
+  CloudDownloadOutlined, EditOutlined, SearchOutlined,
   PlayCircleOutlined, PauseCircleOutlined, RedoOutlined,
 } from "@ant-design/icons";
 import type { ColumnsType } from "antd/es/table";
-import { COLORS } from "@/styles/themeConfig";
 import { PLATFORMS } from "@/lib/constants";
 import dayjs, { Dayjs } from "dayjs";
 import utc from "dayjs/plugin/utc";
@@ -23,7 +22,7 @@ dayjs.extend(utc);
 dayjs.extend(timezone);
 const TZ = "Asia/Shanghai";
 
-const { Title, Text } = Typography;
+const { Text } = Typography;
 const { RangePicker } = DatePicker;
 
 interface MccAccount { id: string; mcc_id: string; mcc_name: string; currency: string; }
@@ -77,7 +76,11 @@ export default function DataCenterPage() {
   const [midFilter, setMidFilter] = useState<string>("");
   const [searchFilter, setSearchFilter] = useState<string>("");
   const [dateRange, setDateRange] = useState<[Dayjs, Dayjs]>([defaultStartDate, defaultEndDate]);
-  const [syncing, setSyncing] = useState(false);
+  const [syncingTransactions, setSyncingTransactions] = useState(false);
+  const [syncingMcc, setSyncingMcc] = useState(false);
+  const [syncingFull, setSyncingFull] = useState(false);
+  const [syncDialog, setSyncDialog] = useState<{ open: boolean; type: "transactions" | "mcc" | null }>({ open: false, type: null });
+  const [syncForm] = Form.useForm<{ range: [Dayjs, Dayjs] }>();
   const [editModal, setEditModal] = useState<{ open: boolean; campaign: CampaignRow | null; field: "budget" | "max_cpc" }>({ open: false, campaign: null, field: "budget" });
   const [detailModal, setDetailModal] = useState(false);
   const [commissionModal, setCommissionModal] = useState(false);
@@ -147,7 +150,7 @@ export default function DataCenterPage() {
         }
       })
       .catch(() => {});
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, []);
   const summary = campaignData?.summary || {
     totalCost: 0,
     totalCommission: 0,
@@ -166,32 +169,121 @@ export default function DataCenterPage() {
 
   // 表格数据（不再添加序号列）
 
-  // 一键同步：广告数据 + 联盟交易（合并为单个操作）
-  const handleSync = useCallback(async (forceFullSync = false) => {
+  const syncDateRange = useCallback(async (type: "transactions" | "mcc") => {
+    try {
+      const values = await syncForm.validateFields();
+      const range = values.range;
+      if (!range?.[0] || !range?.[1]) return;
+      const syncStart = range[0].format("YYYY-MM-DD");
+      const syncEnd = range[1].format("YYYY-MM-DD");
+
+      if (type === "transactions") {
+        setSyncingTransactions(true);
+        try {
+          const res = await fetch("/api/user/data-center/sync", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ type: "platform", sync_start_date: syncStart, sync_end_date: syncEnd }),
+          }).then((r) => r.json());
+          if (res.code === 0) {
+            message.success(res.data?.transactions?.message || `交易同步完成（${syncStart} → ${syncEnd}）`);
+            setSyncDialog({ open: false, type: null });
+            refreshApi(/\/api\/user\/data-center/);
+          } else {
+            message.error(res.message || "交易同步失败");
+          }
+        } finally {
+          setSyncingTransactions(false);
+        }
+        return;
+      }
+
+      if (mccAccounts.length === 0) {
+        message.warning("请先添加 MCC 账户");
+        return;
+      }
+
+      setSyncingMcc(true);
+      try {
+        const idsToSync = selectedMcc ? [selectedMcc] : mccAccounts.map((m) => m.id);
+        let successCount = 0;
+        const errors: string[] = [];
+
+        for (const mccId of idsToSync) {
+          const res = await fetch("/api/user/data-center/sync", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              type: "ads",
+              mcc_account_id: mccId,
+              sync_start_date: syncStart,
+              sync_end_date: syncEnd,
+            }),
+          }).then((r) => r.json());
+          if (res.code === 0) successCount++;
+          else errors.push(res.message);
+        }
+
+        if (successCount > 0) {
+          message.success(`${successCount} 个 MCC 同步完成（${syncStart} → ${syncEnd}）${errors.length > 0 ? `，${errors.length} 个失败` : ""}`);
+          setSyncDialog({ open: false, type: null });
+          refreshApi(/\/api\/user\/data-center/);
+        } else {
+          message.error(errors[0] || "MCC 同步失败");
+        }
+      } finally {
+        setSyncingMcc(false);
+      }
+    } catch {
+      // 表单校验失败时不提示额外消息
+    }
+  }, [message, mccAccounts, selectedMcc, syncForm]);
+
+  const handleFullSync = useCallback(async () => {
     if (mccAccounts.length === 0) { message.warning("请先添加 MCC 账户"); return; }
-    setSyncing(true);
+    setSyncingFull(true);
     try {
       const idsToSync = selectedMcc ? [selectedMcc] : mccAccounts.map((m) => m.id);
       let successCount = 0;
+      let transactionSynced = false;
       const errors: string[] = [];
+
+      const txnRes = await fetch("/api/user/data-center/sync", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ type: "platform", force_full_sync: true }),
+      }).then((r) => r.json());
+      if (txnRes.code === 0) {
+        transactionSynced = true;
+      } else {
+        errors.push(`交易全同步失败：${txnRes.message || "未知错误"}`);
+      }
 
       for (const mccId of idsToSync) {
         const res = await fetch("/api/user/data-center/sync", {
-          method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ type: "all", mcc_account_id: mccId, force_full_sync: forceFullSync }),
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ type: "ads", mcc_account_id: mccId, force_full_sync: true }),
         }).then((r) => r.json());
         if (res.code === 0) successCount++;
         else errors.push(res.message);
       }
 
-      if (successCount > 0) {
-        message.success(`${successCount} 个 MCC ${forceFullSync ? "全量" : ""}同步完成${errors.length > 0 ? `，${errors.length} 个失败` : ""}`);
+      if (transactionSynced || successCount > 0) {
+        message.success(`全量同步完成：交易${transactionSynced ? "已完成" : "失败"}，MCC 成功 ${successCount} 个${errors.length > 0 ? `，${errors.length} 项异常` : ""}`);
         refreshApi(/\/api\/user\/data-center/);
       } else {
-        message.error(errors[0] || "同步失败");
+        message.error(errors[0] || "全量同步失败");
       }
-    } finally { setSyncing(false); }
-  }, [selectedMcc, mccAccounts, message]);
+    } finally {
+      setSyncingFull(false);
+    }
+  }, [message, mccAccounts, selectedMcc]);
+
+  const openSyncDialog = useCallback((type: "transactions" | "mcc") => {
+    syncForm.setFieldsValue({ range: dateRange });
+    setSyncDialog({ open: true, type });
+  }, [dateRange, syncForm]);
 
   // 同步 CID 子账户
   const [syncingCid, setSyncingCid] = useState(false);
@@ -445,18 +537,23 @@ export default function DataCenterPage() {
           </Col>
           <Col>
             <Space>
-              <Tooltip title="增量同步广告数据和联盟交易佣金">
-                <Button type="primary" size="small" icon={<SyncOutlined spin={syncing} />} loading={syncing} onClick={() => handleSync(false)}>
-                  {syncing ? "同步中..." : "重新同步"}
+              <Tooltip title="按所选时间范围同步联盟交易数据">
+                <Button type="primary" size="small" icon={<SyncOutlined spin={syncingTransactions} />} loading={syncingTransactions} onClick={() => openSyncDialog("transactions")}>
+                  同步交易
                 </Button>
               </Tooltip>
-              <Tooltip title="从 MCC 创建时间开始全量重新拉取所有数据（耗时较长）">
-                <Button size="small" icon={<CloudDownloadOutlined />} loading={syncing} onClick={() => {
+              <Tooltip title="按所选时间范围同步 MCC 广告数据">
+                <Button size="small" icon={<CloudDownloadOutlined />} loading={syncingMcc} onClick={() => openSyncDialog("mcc")}>
+                  同步MCC
+                </Button>
+              </Tooltip>
+              <Tooltip title="执行交易全同步 + MCC 全同步，耗时较长">
+                <Button size="small" icon={<CloudDownloadOutlined />} loading={syncingFull} onClick={() => {
                   Modal.confirm({
-                    title: "全量重新同步",
-                    content: "将从 MCC 创建时间起重新拉取所有广告数据和交易佣金，耗时较长，确定继续？",
+                    title: "全量同步",
+                    content: "将执行交易全同步和 MCC 全同步，耗时较长，确定继续？",
                     okText: "确定", cancelText: "取消",
-                    onOk: () => handleSync(true),
+                    onOk: handleFullSync,
                   });
                 }}>全量同步</Button>
               </Tooltip>
@@ -696,6 +793,32 @@ export default function DataCenterPage() {
             ),
           },
         ]} />
+      </Modal>
+
+      <Modal
+        title={syncDialog.type === "transactions" ? "同步交易" : "同步MCC"}
+        open={syncDialog.open}
+        onCancel={() => setSyncDialog({ open: false, type: null })}
+        onOk={() => { if (syncDialog.type) void syncDateRange(syncDialog.type); }}
+        confirmLoading={syncDialog.type === "transactions" ? syncingTransactions : syncingMcc}
+        okText="开始同步"
+        cancelText="取消"
+        destroyOnHidden
+      >
+        <Form form={syncForm} layout="vertical">
+          <Form.Item
+            name="range"
+            label="选择同步时间"
+            rules={[{ required: true, message: "请选择同步时间范围" }]}
+          >
+            <RangePicker style={{ width: "100%" }} />
+          </Form.Item>
+          <Text type="secondary" style={{ fontSize: 12 }}>
+            {syncDialog.type === "transactions"
+              ? "将仅同步所选时间范围内的联盟交易数据，并重算对应佣金。"
+              : "将仅同步所选时间范围内的 MCC 广告数据。若结束日期包含今天，会额外抓取今日 Google Ads 数据。"}
+          </Text>
+        </Form>
       </Modal>
 
       <EditCampaignModal

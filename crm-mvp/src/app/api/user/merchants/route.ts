@@ -743,9 +743,15 @@ async function triggerAdCopyGeneration(
       }
     }
 
-    // Step 2: AI 补充到 15 标题 + 4 描述
-    const headlines = await padHeadlines(dedupedTitles, merchantName, country, 15);
-    const descriptions = await padDescriptions(dedupedDescriptions, merchantName, country, 4);
+    // Step 2: AI 基于参考样本生成 15 标题 + 4 描述
+    const headlines = await padHeadlines([], merchantName, country, 15, {
+      referenceItems: dedupedTitles,
+      keywords: keywords.map((kw) => kw.phrase),
+    });
+    const descriptions = await padDescriptions([], merchantName, country, 4, {
+      referenceItems: dedupedDescriptions,
+      keywords: keywords.map((kw) => kw.phrase),
+    });
 
     // Step 3: 更新 ad_creatives
     await prisma.ad_creatives.update({
