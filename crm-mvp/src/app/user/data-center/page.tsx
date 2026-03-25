@@ -116,6 +116,9 @@ export default function DataCenterPage() {
     rowMeta?: { displayedCount: number; totalCount: number; isLimited: boolean };
   }>("/api/user/data-center/campaigns", queryParams);
 
+  // 本地状态覆盖（toggle 后立即更新，不等 API 刷新）
+  const [statusOverrides, setStatusOverrides] = useState<Record<string, string>>({});
+
   const rows = (campaignData?.rows || [])
     .filter((r: IndexedRow) => r.campaign_name && /^\d/.test(r.campaign_name))
     .map((r: IndexedRow) => statusOverrides[r.id] ? { ...r, status: statusOverrides[r.id] } : r);
@@ -250,8 +253,6 @@ export default function DataCenterPage() {
 
   // 切换广告状态
   const [togglingId, setTogglingId] = useState<string | null>(null);
-  // 本地状态覆盖（toggle 后立即更新，不等 API 刷新）
-  const [statusOverrides, setStatusOverrides] = useState<Record<string, string>>({});
 
   const handleToggleStatus = useCallback(async (row: CampaignRow) => {
     if (!row.google_campaign_id) { message.warning("该广告系列尚未提交到 Google Ads"); return; }
