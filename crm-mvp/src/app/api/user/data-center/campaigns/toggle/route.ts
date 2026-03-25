@@ -41,13 +41,34 @@ export async function POST(req: NextRequest) {
 
     if (!result.success) return apiError(result.message);
 
-    // 更新数据库中的状态
+    // 从 Google Ads 查询确认真实状态
+    let confirmedStatus = newStatus;
+    try {
+      const { queryGoogleAds } = await import("@/lib/google-ads/client");
+      const credentials = { mcc_id: mcc.mcc_id, developer_token: mcc.developer_token, service_account_json: mcc.service_account_json };
+      const rows = await queryGoogleAds(credentials, (campaign.customer_id || "").replace(/-/g, ""), `
+        SELECT campaign.id, campaign.status
+        FROM campaign
+        WHERE campaign.id = ${campaign.google_campaign_id}
+      `);
+      if (rows.length > 0) {
+        const c = rows[0].campaign as Record<string, unknown> | undefined;
+        const realStatus = String(c?.status ?? "");
+        if (realStatus === "ENABLED" || realStatus === "PAUSED" || realStatus === "REMOVED") {
+          confirmedStatus = realStatus as typeof newStatus;
+        }
+      }
+    } catch {
+      // 查询失败不阻塞，使用预期状态
+    }
+
+    // 更新数据库中的状态（使用 Google Ads 确认的真实状态）
     await prisma.campaigns.update({
       where: { id: campaign.id },
-      data: { google_status: newStatus },
+      data: { google_status: confirmedStatus },
     });
 
-    return apiSuccess({ status: newStatus }, `广告已${action === "enable" ? "启用" : "暂停"}`);
+    return apiSuccess({ status: confirmedStatus }, `广告已${action === "enable" ? "启用" : "暂停"}`);
   } catch (err) {
     return apiError(`操作失败: ${err instanceof Error ? err.message : String(err)}`);
   }

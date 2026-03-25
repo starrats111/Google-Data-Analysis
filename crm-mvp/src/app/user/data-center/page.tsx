@@ -116,7 +116,9 @@ export default function DataCenterPage() {
     rowMeta?: { displayedCount: number; totalCount: number; isLimited: boolean };
   }>("/api/user/data-center/campaigns", queryParams);
 
-  const rows = (campaignData?.rows || []).filter((r: IndexedRow) => r.campaign_name && /^\d/.test(r.campaign_name));
+  const rows = (campaignData?.rows || [])
+    .filter((r: IndexedRow) => r.campaign_name && /^\d/.test(r.campaign_name))
+    .map((r: IndexedRow) => statusOverrides[r.id] ? { ...r, status: statusOverrides[r.id] } : r);
   const costByMcc = campaignData?.costByMcc || [];
   const rowMeta = campaignData?.rowMeta;
   const summary = campaignData?.summary || {
@@ -233,9 +235,13 @@ export default function DataCenterPage() {
 
   // 切换广告状态
   const [togglingId, setTogglingId] = useState<string | null>(null);
+  // 本地状态覆盖（toggle 后立即更新，不等 API 刷新）
+  const [statusOverrides, setStatusOverrides] = useState<Record<string, string>>({});
+
   const handleToggleStatus = useCallback(async (row: CampaignRow) => {
     if (!row.google_campaign_id) { message.warning("该广告系列尚未提交到 Google Ads"); return; }
     const action = row.status === "ENABLED" ? "pause" : "enable";
+    const newStatus = action === "enable" ? "ENABLED" : "PAUSED";
     setTogglingId(row.id);
     try {
       const res = await fetch("/api/user/data-center/campaigns/toggle", {
@@ -244,6 +250,9 @@ export default function DataCenterPage() {
       }).then((r) => r.json());
       if (res.code === 0) {
         message.success(res.message || `广告已${action === "enable" ? "启用" : "暂停"}`);
+        // 立即在本地覆盖状态
+        setStatusOverrides((prev) => ({ ...prev, [row.id]: newStatus }));
+        // 后台静默刷新数据
         refreshApi(/\/api\/user\/data-center/);
       } else message.error(res.message);
     } finally { setTogglingId(null); }
