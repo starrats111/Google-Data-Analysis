@@ -2,7 +2,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { useParams, useRouter } from "next/navigation";
 import {
-  Card, Row, Col, Input, Button, Space, Tag, Typography, Spin, Alert,
+  Card, Row, Col, Input, Button, Space, Tag, Typography, Spin, Alert, Progress,
   Select, InputNumber, Switch, Divider, App, Tooltip, Popconfirm, Checkbox,
   Upload, Image,
 } from "antd";
@@ -219,9 +219,10 @@ export default function AdPreviewPage() {
   const [semrushUrl, setSemrushUrl] = useState("");
   const [semrushUrlFetching, setSemrushUrlFetching] = useState(false);
 
-  // 动态轮询：前 30 秒 2s 快轮询，之后 5s，就绪后停止
+  // 动态轮询：前 20s 每 3s，20-60s 每 5s，60s+ 每 8s，就绪后停止
   const [pollStart] = useState(() => Date.now());
-  const pollInterval = initialized ? 0 : (Date.now() - pollStart < 30000 ? 2000 : 5000);
+  const elapsed = Date.now() - pollStart;
+  const pollInterval = initialized ? 0 : (elapsed < 20000 ? 3000 : elapsed < 60000 ? 5000 : 8000);
   const { data: preview, isLoading, mutate } = useApiWithParams<AdPreviewData>(
     "/api/user/ad-creation/status",
     { campaign_id: campaignId },
@@ -621,169 +622,163 @@ export default function AdPreviewPage() {
     }
   }, [selectedMccId, selectedCid, message]);
 
-  // ─── 爬虫生成扩展（支持批量 types 减少 HTTP 往返） ───
+  // ─── 爬虫生成扩展（SSE 流式接收，逐项更新 UI） ───
   const generateExtension = useCallback(async (...requestedTypes: Array<"sitelinks" | "images" | "callouts" | "promotion" | "price" | "call" | "snippet">) => {
-    for (const t of requestedTypes) {
-      if (t === "sitelinks") setSitelinksLoading(true);
-      if (t === "images") setImagesLoading(true);
-      if (t === "callouts") setCalloutsLoading(true);
-      if (t === "promotion") setPromotionLoading(true);
-      if (t === "price") setPriceLoading(true);
-      if (t === "call") setCallLoading(true);
-      if (t === "snippet") setSnippetLoading(true);
-    }
+    const loadingSetters: Record<string, (v: boolean) => void> = {
+      sitelinks: setSitelinksLoading, images: setImagesLoading, callouts: setCalloutsLoading,
+      promotion: setPromotionLoading, price: setPriceLoading, call: setCallLoading, snippet: setSnippetLoading,
+    };
+    for (const t of requestedTypes) loadingSetters[t]?.(true);
+
+    const arrived = new Set<string>();
+    const merchantLandingUrl = preview?.merchant?.merchant_url || preview?.adCreative?.final_url || "";
+    let wasCrawlFailed = false;
+
+    const handleEvent = async (type: string, data: unknown) => {
+      arrived.add(type);
+
+      if (type === "crawl_status") {
+        const cs = data as Record<string, unknown>;
+        if (cs?.crawl_failed) { setCrawlFailed(true); wasCrawlFailed = true; }
+        return;
+      }
+
+      if (type === "sitelinks") {
+        const raw = data as Array<Record<string, string>> | null;
+        if (raw && raw.length > 0) {
+          const items = normalizeSitelinkItems(raw).map((item) => ({ ...item, urlStatus: item.url ? "" as const : item.urlStatus }));
+          setSitelinks(items);
+          setSitelinksLoading(false);
+          message.loading({ content: `已获取 ${items.length} 条链接，正在逐条验证...`, key: "sl-auto-check", duration: 0 });
+          const checkResults = await Promise.all(
+            items.map(async (item, idx) => {
+              if (!item.url || !item.url.startsWith("http")) return { idx, valid: false };
+              try { const r = await fetch(`/api/user/ad-creation/check-url?url=${encodeURIComponent(item.url)}`); const j = await r.json(); return { idx, valid: j.code === 0 && j.data?.ok }; }
+              catch { return { idx, valid: false }; }
+            }),
+          );
+          const validItems: SitelinkItem[] = []; const invalidUrls: string[] = [];
+          for (const r of checkResults) { if (r.valid) validItems.push({ ...items[r.idx], urlStatus: "valid" as const }); else invalidUrls.push(items[r.idx].title || items[r.idx].url); }
+          message.destroy("sl-auto-check");
+          if (invalidUrls.length > 0) message.warning(`已自动移除 ${invalidUrls.length} 条无效链接（${invalidUrls.join("、")}）`);
+          if (validItems.length > 0) { setSitelinks(validItems.length >= 2 ? validItems : [...validItems, { title: "", desc1: "", desc2: "", url: "", urlStatus: "" }]); message.success(`${validItems.length} 条站内链接已验证通过`); }
+          else { setSitelinks([{ title: "", desc1: "", desc2: "", url: "", urlStatus: "" }, { title: "", desc1: "", desc2: "", url: "", urlStatus: "" }]); message.warning("所有爬取链接均无效，请手动添加"); }
+        } else {
+          setSitelinks([{ title: "", desc1: "", desc2: "", url: "", urlStatus: "" }, { title: "", desc1: "", desc2: "", url: "", urlStatus: "" }]);
+          message.warning(wasCrawlFailed ? "无法爬取商家网站，请手动输入链接（输入 URL 后自动获取标题）" : "未找到可用链接，请手动添加");
+          setSitelinksLoading(false);
+        }
+        return;
+      }
+
+      if (type === "images") {
+        const imgs = (data || []) as string[];
+        setCrawledImages(imgs); setImageUrls([]);
+        if (imgs.length > 0) message.success(`已从商家网站提取 ${imgs.length} 张图片，请勾选需要的图片`);
+        else message.warning(wasCrawlFailed ? "无法爬取商家网站图片，请手动拖入或粘贴图片 URL" : "未找到可用图片，请手动添加");
+        setImagesLoading(false); return;
+      }
+
+      if (type === "callouts") {
+        const calloutData = (data || []) as string[];
+        setCallouts(calloutData.length > 0 ? calloutData : ["", ""]);
+        if (calloutData.length > 0) message.success(`已生成 ${calloutData.length} 条宣传信息`);
+        else message.warning("未能生成宣传信息，请手动添加");
+        setCalloutsLoading(false); return;
+      }
+
+      if (type === "promotion") {
+        if (data && typeof data === "object") {
+          const p = data as Record<string, unknown>;
+          setEnablePromotion(true);
+          setPromotion((prev) => ({
+            ...prev,
+            promotion_target: String(p.promotion_target || prev.promotion_target || ""),
+            discount_type: (p.discount_type === "MONETARY" ? "MONETARY" : "PERCENT") as "MONETARY" | "PERCENT",
+            discount_percent: p.discount_percent != null ? Number(p.discount_percent) : prev.discount_percent,
+            discount_amount: p.discount_amount != null ? Number(p.discount_amount) : prev.discount_amount,
+            promo_code: p.promo_code ? String(p.promo_code) : prev.promo_code,
+            occasion: p.occasion ? String(p.occasion) : prev.occasion,
+            final_url: String(p.final_url || prev.final_url || merchantLandingUrl),
+            currency_code: String(p.currency_code || prev.currency_code || defaultCurrencyCode),
+            language_code: String(p.language_code || prev.language_code || defaultLanguageCode),
+          }));
+          message.success("已自动提取促销信息");
+        } else if (merchantLandingUrl) {
+          setEnablePromotion(true);
+          setPromotion((prev) => ({ ...prev, final_url: prev.final_url || merchantLandingUrl }));
+          message.warning(wasCrawlFailed ? "未能完整提取促销信息，已先填入商家落地页，请补充其余字段" : "暂未识别到完整促销信息，已先填入商家落地页");
+        }
+        setPromotionLoading(false); return;
+      }
+
+      if (type === "price_items") {
+        const priceData = (data || []) as Array<{ header: string; description: string; price: number; currency: string; url: string }>;
+        if (priceData.length > 0) {
+          setEnablePrice(true);
+          const items = priceData.slice(0, 8);
+          setPriceItems(items.map((item) => ({ header: item.header || "", description: item.description || "", price_amount: item.price || 0, currency_code: item.currency || defaultCurrencyCode, final_url: item.url || "" })));
+          message.success(`已自动提取 ${items.length} 条价格信息`);
+        }
+        setPriceLoading(false); return;
+      }
+
+      if (type === "call") {
+        if (data && typeof data === "object") {
+          const c = data as Record<string, unknown>;
+          if (c.phone_number) { setEnableCall(true); setCallCountryCode(String(c.country_code || targetCountry || callCountryCode)); setCallPhoneNumber(String(c.phone_number)); message.success("已自动提取联系电话"); }
+        }
+        setCallLoading(false); return;
+      }
+
+      if (type === "structured_snippet") {
+        if (data && typeof data === "object") {
+          const s = data as Record<string, unknown>;
+          if (s.header && Array.isArray(s.values) && s.values.length >= 3) { setEnableSnippet(true); setSnippetHeader(String(s.header || defaultSnippetHeader)); setSnippetValues((s.values as string[]).map(String)); message.success("已自动生成结构化摘要"); }
+        }
+        setSnippetLoading(false); return;
+      }
+    };
+
     try {
       const res = await fetch("/api/user/ad-creation/generate-extensions", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ campaign_id: campaignId, types: requestedTypes }),
       });
-      const json = await res.json();
-      if (json.code !== 0) { message.error(json.message || "生成失败"); return; }
-      const data = json.data;
-      const merchantLandingUrl = preview?.merchant?.merchant_url || preview?.adCreative?.final_url || "";
 
-      if (data.crawl_failed) setCrawlFailed(true);
+      if (!res.ok || !res.body) { message.error("生成失败"); return; }
 
-      if (requestedTypes.includes("sitelinks") && data.sitelinks !== undefined) {
-        const items = normalizeSitelinkItems(data.sitelinks).map((item) => ({
-          ...item,
-          urlStatus: item.url ? "" as const : item.urlStatus,
-        }));
-        if (items.length > 0) {
-          setSitelinks(items);
-          message.loading({ content: `已获取 ${items.length} 条链接，正在逐条验证...`, key: "sl-auto-check", duration: 0 });
-          const checkResults = await Promise.all(
-            items.map(async (item, idx) => {
-              if (!item.url || !item.url.startsWith("http")) return { idx, valid: false };
-              try {
-                const checkRes = await fetch(`/api/user/ad-creation/check-url?url=${encodeURIComponent(item.url)}`);
-                const checkJson = await checkRes.json();
-                return { idx, valid: checkJson.code === 0 && checkJson.data?.ok };
-              } catch { return { idx, valid: false }; }
-            }),
-          );
-          const validItems: SitelinkItem[] = [];
-          const invalidUrls: string[] = [];
-          for (const r of checkResults) {
-            if (r.valid) {
-              validItems.push({ ...items[r.idx], urlStatus: "valid" as const });
-            } else {
-              invalidUrls.push(items[r.idx].title || items[r.idx].url);
-            }
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+
+        const parts = buffer.split("\n\n");
+        buffer = parts.pop() || "";
+
+        for (const part of parts) {
+          for (const line of part.split("\n")) {
+            if (!line.startsWith("data: ")) continue;
+            const payload = line.slice(6).trim();
+            if (payload === "[DONE]") continue;
+            try {
+              const evt = JSON.parse(payload) as { type: string; data: unknown };
+              await handleEvent(evt.type, evt.data);
+            } catch {}
           }
-          message.destroy("sl-auto-check");
-          if (invalidUrls.length > 0) {
-            message.warning(`已自动移除 ${invalidUrls.length} 条无效链接（${invalidUrls.join("、")}）`);
-          }
-          if (validItems.length > 0) {
-            setSitelinks(validItems.length >= 2 ? validItems : [...validItems, { title: "", desc1: "", desc2: "", url: "", urlStatus: "" }]);
-            message.success(`${validItems.length} 条站内链接已验证通过`);
-          } else {
-            setSitelinks([{ title: "", desc1: "", desc2: "", url: "", urlStatus: "" }, { title: "", desc1: "", desc2: "", url: "", urlStatus: "" }]);
-            message.warning("所有爬取链接均无效，请手动添加");
-          }
-        } else {
-          setSitelinks([{ title: "", desc1: "", desc2: "", url: "", urlStatus: "" }, { title: "", desc1: "", desc2: "", url: "", urlStatus: "" }]);
-          message.warning(data.crawl_failed
-            ? "无法爬取商家网站，请手动输入链接（输入 URL 后自动获取标题）"
-            : "未找到可用链接，请手动添加");
         }
       }
-      if (requestedTypes.includes("images") && data.images !== undefined) {
-        setCrawledImages(data.images);
-        setImageUrls([]); // 清空选中，让用户重新选
-        if (data.images.length > 0) {
-          message.success(`已从商家网站提取 ${data.images.length} 张图片，请勾选需要的图片`);
-        } else {
-          message.warning(data.crawl_failed
-            ? "无法爬取商家网站图片，请手动拖入或粘贴图片 URL"
-            : "未找到可用图片，请手动添加");
-        }
-      }
-      if (requestedTypes.includes("callouts") && data.callouts) {
-        setCallouts(data.callouts.length > 0 ? data.callouts : ["", ""]);
-        if (data.callouts.length > 0) message.success(`已生成 ${data.callouts.length} 条宣传信息`);
-        else message.warning("未能生成宣传信息，请手动添加");
-      }
-
-      // 自动填入促销信息
-      if (data.promotion && typeof data.promotion === "object") {
-        const p = data.promotion as Record<string, unknown>;
-        setEnablePromotion(true);
-        setPromotion((prev) => ({
-          ...prev,
-          promotion_target: String(p.promotion_target || prev.promotion_target || ""),
-          discount_type: (p.discount_type === "MONETARY" ? "MONETARY" : "PERCENT") as "MONETARY" | "PERCENT",
-          discount_percent: p.discount_percent != null ? Number(p.discount_percent) : prev.discount_percent,
-          discount_amount: p.discount_amount != null ? Number(p.discount_amount) : prev.discount_amount,
-          promo_code: p.promo_code ? String(p.promo_code) : prev.promo_code,
-          occasion: p.occasion ? String(p.occasion) : prev.occasion,
-          final_url: String(p.final_url || prev.final_url || merchantLandingUrl),
-          currency_code: String(p.currency_code || prev.currency_code || defaultCurrencyCode),
-          language_code: String(p.language_code || prev.language_code || defaultLanguageCode),
-        }));
-        message.success("已自动提取促销信息");
-      }
-
-      if (requestedTypes.includes("promotion") && (!data.promotion || typeof data.promotion !== "object") && merchantLandingUrl) {
-        setEnablePromotion(true);
-        setPromotion((prev) => ({
-          ...prev,
-          final_url: prev.final_url || merchantLandingUrl,
-        }));
-        message.warning(data.crawl_failed ? "未能完整提取促销信息，已先填入商家落地页，请补充其余字段" : "暂未识别到完整促销信息，已先填入商家落地页");
-      }
-
-      // 自动填入价格信息
-      if (data.price_items && Array.isArray(data.price_items) && data.price_items.length > 0) {
-        setEnablePrice(true);
-        const items = (data.price_items as Array<{ header: string; description: string; price: number; currency: string; url: string }>).slice(0, 8);
-        setPriceItems(items.map((item) => ({
-          header: item.header || "",
-          description: item.description || "",
-          price_amount: item.price || 0,
-          currency_code: item.currency || defaultCurrencyCode,
-          final_url: item.url || "",
-        })));
-        message.success(`已自动提取 ${items.length} 条价格信息`);
-      }
-
-      // 自动填入致电信息
-      if (data.call && typeof data.call === "object") {
-        const c = data.call as Record<string, unknown>;
-        if (c.phone_number) {
-          setEnableCall(true);
-          setCallCountryCode(String(c.country_code || targetCountry || callCountryCode));
-          setCallPhoneNumber(String(c.phone_number));
-          message.success("已自动提取联系电话");
-        }
-      }
-
-      // 自动填入结构化摘要
-      if (data.structured_snippet && typeof data.structured_snippet === "object") {
-        const s = data.structured_snippet as Record<string, unknown>;
-        if (s.header && Array.isArray(s.values) && s.values.length >= 3) {
-          setEnableSnippet(true);
-          setSnippetHeader(String(s.header || defaultSnippetHeader));
-          setSnippetValues((s.values as string[]).map(String));
-          message.success("已自动生成结构化摘要");
-        }
-      }
-    } catch (err: any) {
-      message.error(err?.message || "生成失败，请手动填写");
+    } catch (err: unknown) {
+      message.error((err instanceof Error ? err.message : null) || "生成失败，请手动填写");
     } finally {
-      for (const t of requestedTypes) {
-        if (t === "sitelinks") setSitelinksLoading(false);
-        if (t === "images") setImagesLoading(false);
-        if (t === "callouts") setCalloutsLoading(false);
-        if (t === "promotion") setPromotionLoading(false);
-        if (t === "price") setPriceLoading(false);
-        if (t === "call") setCallLoading(false);
-        if (t === "snippet") setSnippetLoading(false);
-      }
+      for (const t of requestedTypes) if (!arrived.has(t) && !arrived.has(t === "price" ? "price_items" : t === "snippet" ? "structured_snippet" : t)) loadingSetters[t]?.(false);
     }
-  }, [campaignId, message, callCountryCode, defaultCurrencyCode, defaultLanguageCode, defaultSnippetHeader, targetCountry]);
+  }, [campaignId, message, callCountryCode, defaultCurrencyCode, defaultLanguageCode, defaultSnippetHeader, targetCountry, preview]);
 
   // ─── 手动输入 URL → 自动获取标题和描述 + 验证 ───
   const fetchAndValidateSitelink = useCallback(async (idx: number) => {
@@ -1100,19 +1095,26 @@ export default function AdPreviewPage() {
       {!isReady && (() => {
         const hCount = (preview?.adCreative?.headlines as string[] | undefined)?.length || 0;
         const dCount = (preview?.adCreative?.descriptions as string[] | undefined)?.length || 0;
+        const totalDone = Math.min(hCount, 15) + Math.min(dCount, 4);
+        const totalTarget = 19;
+        const pct = Math.round((totalDone / totalTarget) * 100);
         const stepText = hCount >= 15
-          ? `标题已就绪 (${hCount}/15)，描述生成中 (${dCount}/4)...`
+          ? `标题已就绪，描述生成中 (${dCount}/4)...`
           : hCount > 0
-            ? `标题生成中 (${hCount}/15)...`
-            : "SemRush 竞品数据获取和 AI 文案生成中，请稍候。";
+            ? `标题生成中 (${hCount}/15)，描述并行生成中...`
+            : "正在获取竞品数据并生成 AI 文案，请稍候。";
         return (
-          <Alert
-            type="info" showIcon icon={<LoadingOutlined />}
-            message="正在生成广告素材..."
-            description={`${stepText} 页面会自动刷新。`}
-            style={{ marginBottom: 16 }}
-            action={<Button size="small" icon={<ReloadOutlined />} onClick={() => mutate()}>刷新</Button>}
-          />
+          <Card size="small" style={{ marginBottom: 16, border: "1px solid #91caff", background: "#e6f4ff" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
+              <LoadingOutlined style={{ fontSize: 20, color: "#1677ff" }} />
+              <div style={{ flex: 1 }}>
+                <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 4 }}>正在生成广告素材...</div>
+                <div style={{ fontSize: 12, color: "#5F6368", marginBottom: 8 }}>{stepText}</div>
+                <Progress percent={pct} size="small" strokeColor={{ from: "#4DA6FF", to: "#1A7FDB" }} />
+              </div>
+              <Button size="small" icon={<ReloadOutlined />} onClick={() => mutate()}>刷新</Button>
+            </div>
+          </Card>
         );
       })()}
 

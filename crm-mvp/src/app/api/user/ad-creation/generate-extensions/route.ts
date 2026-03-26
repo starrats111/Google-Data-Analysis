@@ -1,6 +1,6 @@
 import { NextRequest } from "next/server";
 import { getUserFromRequest, serializeData } from "@/lib/auth";
-import { apiSuccess, apiError } from "@/lib/constants";
+import { apiError } from "@/lib/constants";
 import prisma from "@/lib/prisma";
 import { callAiWithFallback } from "@/lib/ai-service";
 import { getAdMarketConfig } from "@/lib/ad-market";
@@ -154,158 +154,91 @@ export async function POST(req: NextRequest) {
   crawlResult.links = crawlResult.links.filter((l) => !isBadSitelinkUrl(l.url));
 
   const crawlFailed = crawlResult.method === "failed";
-  const result: Record<string, unknown> = {
-    crawl_failed: crawlFailed,
-    crawl_method: crawlResult.method,
-  };
-  if (crawlResult.error) result.crawl_error = crawlResult.error;
+  const crawlMeta = { crawl_failed: crawlFailed, crawl_method: crawlResult.method, crawl_error: crawlResult.error || undefined };
 
-  const tasks: Promise<void>[] = [];
+  const encoder = new TextEncoder();
+  const stream = new ReadableStream({
+    async start(controller) {
+      const send = (eventType: string, payload: unknown) => {
+        try { controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: eventType, data: serializeData(payload) })}\n\n`)); } catch {}
+      };
 
-  if (types.includes("promotion")) {
-    tasks.push(
-      extractPromotionWithAI(crawlResult.html, merchantUrl, merchantName, country, crawlResult.links, aiRuleProfile)
-        .then((data) => { result.promotion = data; })
-        .catch((err) => {
-          console.warn("[Extensions] 促销提取失败:", err instanceof Error ? err.message : err);
-          result.promotion = null;
-        }),
-    );
-  }
-  if (types.includes("price")) {
-    tasks.push(
-      extractPriceWithAI(crawlResult.html, merchantUrl, merchantName, country, crawlResult.links, aiRuleProfile)
-        .then((data) => { result.price_items = data; })
-        .catch((err) => {
-          console.warn("[Extensions] 价格提取失败:", err instanceof Error ? err.message : err);
-          result.price_items = [];
-        }),
-    );
-  }
+      send("crawl_status", crawlMeta);
 
-  if (types.includes("sitelinks")) {
-    tasks.push(
-      generateSitelinks(merchantName, merchantUrl, country, crawlResult.links, aiRuleProfile)
-        .then((data) => { result.sitelinks = data; })
-        .catch((err) => {
-          console.error("[Extensions] Sitelinks 生成失败:", err instanceof Error ? err.message : err);
-          result.sitelinks = [];
-        }),
-    );
-  }
+      const tasks: Promise<void>[] = [];
 
-  if (types.includes("images")) {
-    tasks.push(
-      (async () => {
-        const allImgs = [...crawlResult.images];
-
-        // 图片不足时，尝试从子页面获取更多
-        if (allImgs.length < 25 && crawlResult.links.length > 0) {
-          console.log(`[Images] 图片不足 (${allImgs.length})，从子页面补充...`);
-          const subPages = crawlResult.links.slice(0, 12).map((l) => l.url);
-          for (let i = 0; i < subPages.length && allImgs.length < 40; i += 3) {
-            const batch = subPages.slice(i, i + 3);
-            const batchResults = await Promise.all(batch.map((u) => fetchPageImages(u).catch(() => [] as string[])));
-            for (const imgs of batchResults) {
-              for (const img of imgs) {
-                if (allImgs.length >= 40) break;
-                if (!allImgs.includes(img)) allImgs.push(img);
-              }
+      if (types.includes("promotion")) {
+        tasks.push(
+          extractPromotionWithAI(crawlResult.html, merchantUrl, merchantName, country, crawlResult.links, aiRuleProfile)
+            .then((d) => send("promotion", d))
+            .catch((e) => { console.warn("[Extensions] 促销提取失败:", e instanceof Error ? e.message : e); send("promotion", null); }),
+        );
+      }
+      if (types.includes("price")) {
+        tasks.push(
+          extractPriceWithAI(crawlResult.html, merchantUrl, merchantName, country, crawlResult.links, aiRuleProfile)
+            .then((d) => send("price_items", d))
+            .catch((e) => { console.warn("[Extensions] 价格提取失败:", e instanceof Error ? e.message : e); send("price_items", []); }),
+        );
+      }
+      if (types.includes("sitelinks")) {
+        tasks.push(
+          generateSitelinks(merchantName, merchantUrl, country, crawlResult.links, aiRuleProfile)
+            .then((d) => send("sitelinks", d))
+            .catch((e) => { console.error("[Extensions] Sitelinks 失败:", e instanceof Error ? e.message : e); send("sitelinks", []); }),
+        );
+      }
+      if (types.includes("images")) {
+        tasks.push(
+          (async () => {
+            const allImgs = [...crawlResult.images];
+            if (allImgs.length < 25 && crawlResult.links.length > 0) {
+              const subPages = crawlResult.links.slice(0, 9).map((l) => l.url);
+              const batchResults = await Promise.all(subPages.map((u) => fetchPageImages(u).catch(() => [] as string[])));
+              for (const imgs of batchResults) for (const img of imgs) { if (allImgs.length >= 40) break; if (!allImgs.includes(img)) allImgs.push(img); }
             }
-          }
-          if (allImgs.length > 0) console.log(`[Images] 子页面补充后共 ${allImgs.length} 张图片`);
-        }
-
-        // 仍然无图片 → Wayback Machine CDX API 回退
-        if (allImgs.length === 0 && merchantUrl) {
-          console.log("[Images] 子页面也无图片，尝试 Wayback Machine...");
-          try {
-            const domain = new URL(merchantUrl).hostname;
-            const cdxUrl = `https://web.archive.org/cdx/search/cdx?url=${domain}/*&matchType=prefix&filter=mimetype:image/jpeg&filter=statuscode:200&fl=timestamp,original&limit=30&output=json`;
-            const ctrl = new AbortController();
-            const t = setTimeout(() => ctrl.abort(), 15000);
-            const cdxRes = await fetch(cdxUrl, { signal: ctrl.signal });
-            clearTimeout(t);
-            if (cdxRes.ok) {
-              const rows = await cdxRes.json() as string[][];
-              const seen = new Set<string>();
-              for (const row of rows.slice(1)) {
-                if (allImgs.length >= 20) break;
-                const [ts, origUrl] = row;
-                if (!origUrl || seen.has(origUrl)) continue;
-                const lower = origUrl.toLowerCase();
-                if (/icon|logo|favicon|badge|pixel|spacer|1x1|svg|gif/i.test(lower)) continue;
-                if (!/\.(jpg|jpeg|png|webp)(\?|$)/i.test(lower)) continue;
-                seen.add(origUrl);
-                const waybackUrl = `https://web.archive.org/web/${ts}im_/${origUrl}`;
-                allImgs.push(waybackUrl);
-              }
-              if (allImgs.length > 0) console.log(`[Images] Wayback Machine 获取到 ${allImgs.length} 张图片`);
+            if (allImgs.length === 0 && merchantUrl) {
+              try {
+                const searchImgs = await searchMerchantImages(merchantUrl, merchantName);
+                for (const img of searchImgs) { if (allImgs.length >= 40) break; if (!allImgs.includes(img)) allImgs.push(img); }
+              } catch {}
             }
-          } catch (e) {
-            console.log("[Images] Wayback Machine 获取失败:", e instanceof Error ? e.message : e);
-          }
-        }
+            const final = allImgs.length > 0 ? await selectBestImages(merchantName, merchantUrl, allImgs).catch(() => allImgs.slice(0, 20)) : [];
+            send("images", final);
+          })(),
+        );
+      }
+      if (types.includes("callouts")) {
+        tasks.push(
+          generateCallouts(merchantName, merchantUrl, country, crawlResult.html, aiRuleProfile)
+            .then((d) => send("callouts", d))
+            .catch(() => send("callouts", getDefaultCallouts(merchantName, country, []))),
+        );
+      }
+      if (types.includes("call")) {
+        tasks.push(
+          extractPhoneNumber(merchantUrl, merchantName, country, crawlResult.html, crawlResult.links)
+            .then((d) => send("call", d || null))
+            .catch(() => send("call", null)),
+        );
+      }
+      if (types.includes("snippet")) {
+        tasks.push(
+          extractStructuredSnippet(merchantName, merchantUrl, country, crawlResult.html, crawlResult.links)
+            .then((d) => send("structured_snippet", d || null))
+            .catch(() => send("structured_snippet", null)),
+        );
+      }
 
-        // 图片不足 → 搜索引擎图片搜索补充
-        if (allImgs.length < 20 && merchantUrl) {
-          console.log(`[Images] 图片不足 (${allImgs.length})，启用搜索引擎图片搜索补充...`);
-          try {
-            const searchImgs = await searchMerchantImages(merchantUrl, merchantName);
-            for (const img of searchImgs) {
-              if (allImgs.length >= 40) break;
-              if (!allImgs.includes(img)) allImgs.push(img);
-            }
-            if (allImgs.length > 0) console.log(`[Images] 搜索引擎补充后共 ${allImgs.length} 张图片`);
-          } catch (e) {
-            console.log("[Images] 搜索引擎图片搜索失败:", e instanceof Error ? e.message : e);
-          }
-        }
+      await Promise.all(tasks);
+      controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+      controller.close();
+    },
+  });
 
-        if (allImgs.length > 0) {
-          result.images = await selectBestImages(merchantName, merchantUrl, allImgs).catch(() => allImgs.slice(0, 20));
-        } else {
-          result.images = [];
-        }
-      })(),
-    );
-  }
-
-  if (types.includes("callouts")) {
-    tasks.push(
-      generateCallouts(merchantName, merchantUrl, country, crawlResult.html, aiRuleProfile)
-        .then((data) => { result.callouts = data; })
-        .catch(() => {
-          result.callouts = getDefaultCallouts(merchantName, country, []);
-        }),
-    );
-  }
-
-  // 致电扩展：从商家网站提取联系电话
-  if (types.includes("call")) {
-    tasks.push(
-      extractPhoneNumber(merchantUrl, merchantName, country, crawlResult.html, crawlResult.links)
-        .then((data) => { if (data) result.call = data; })
-        .catch((err) => {
-          console.warn("[Extensions] 致电提取失败:", err instanceof Error ? err.message : err);
-        }),
-    );
-  }
-
-  // 结构化摘要：从商家网站提取产品/服务属性
-  if (types.includes("snippet")) {
-    tasks.push(
-      extractStructuredSnippet(merchantName, merchantUrl, country, crawlResult.html, crawlResult.links)
-        .then((data) => { if (data) result.structured_snippet = data; })
-        .catch((err) => {
-          console.warn("[Extensions] 结构化摘要提取失败:", err instanceof Error ? err.message : err);
-        }),
-    );
-  }
-
-  await Promise.all(tasks);
-
-  return apiSuccess(serializeData(result));
+  return new Response(stream, {
+    headers: { "Content-Type": "text/event-stream", "Cache-Control": "no-cache, no-transform", "X-Accel-Buffering": "no" },
+  });
 }
 
 /**
@@ -339,7 +272,6 @@ function getCommonProbePaths(merchantUrl: string): string[] {
 const PROBE_UAS = [
   "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)",
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36",
-  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36",
 ];
 
 async function probeUrlReal(
@@ -556,22 +488,23 @@ async function generateSitelinks(
     }
   }
 
-  // 第三步：AI 生成有吸引力的描述（desc1 + desc2）
+  // 第三步：AI 一次性生成 desc1 + desc2（合并为单次调用）
   if (candidates.length > 0) {
     try {
-      const linksInfo = candidates.map((c) => `- "${c.title}" → ${c.url}${c.desc1 ? ` (现有描述: "${c.desc1}")` : ""}`).join("\n");
+      const linksInfo = candidates.map((c) => `- "${c.title}" → ${c.url}${c.desc1 ? ` (meta desc: "${c.desc1}")` : ""}`).join("\n");
       const prompt = `You are a Google Ads sitelink description writer for "${_merchantName}" (${merchantUrl}), target market: ${_country}.
 
-For each sitelink below, write TWO short, compelling description lines that attract clicks.
-Each description line MUST be ≤ 35 characters. Use the target market's language.
-Focus on benefits, urgency, or value propositions. No emoji.
+For each sitelink below, write EXACTLY TWO short, compelling description lines (desc1 + desc2) that attract clicks.
+EVERY sitelink MUST have BOTH desc1 AND desc2 filled in — never leave either empty.
+Each line MUST be ≤ 35 characters. Use the target market's language.
+Focus on benefits, urgency, or value. No emoji. If a meta description is provided, use it as inspiration but rewrite it to be compelling.
 
 Sitelinks:
 ${linksInfo}
 ${formatAiRuleBlock(aiRuleProfile, "sitelinks")}
 
 Return ONLY a JSON array matching the sitelinks order:
-[{"desc1":"compelling line 1","desc2":"compelling line 2"},...]`;
+[{"desc1":"compelling line 1 (≤35 chars)","desc2":"compelling line 2 (≤35 chars)"},...]`;
 
       const raw = await callAiWithFallback("ad_copy", [{ role: "user", content: prompt }], 2048);
       const parsed = JSON.parse(extractJsonFromAi(raw)) as { desc1: string; desc2: string }[];
@@ -586,54 +519,7 @@ Return ONLY a JSON array matching the sitelinks order:
       console.error(`[Sitelinks] AI 描述生成失败:`, err instanceof Error ? err.message : err);
     }
 
-    // 第四步：补足缺失的描述（desc1 或 desc2 为空的逐条补齐）
-    const incomplete = candidates
-      .map((c, i) => ({ idx: i, c }))
-      .filter(({ c }) => !c.desc1 || c.desc1.length < 2 || !c.desc2 || c.desc2.length < 2);
-
-    if (incomplete.length > 0) {
-      console.log(`[Sitelinks] ${incomplete.length} 条链接描述不完整，补足中...`);
-      try {
-        const fillInfo = incomplete.map(({ c }) => {
-          const missing = [];
-          if (!c.desc1 || c.desc1.length < 2) missing.push("desc1");
-          if (!c.desc2 || c.desc2.length < 2) missing.push("desc2");
-          return `- "${c.title}" (${c.url}) — need: ${missing.join(", ")}${c.desc1 ? ` [existing desc1: "${c.desc1}"]` : ""}${c.desc2 ? ` [existing desc2: "${c.desc2}"]` : ""}`;
-        }).join("\n");
-
-        const fillPrompt = `You are a Google Ads sitelink description writer for "${_merchantName}" (${merchantUrl}), target market: ${_country}.
-
-Fill in the MISSING description lines for these sitelinks. Each line MUST be ≤ 35 characters.
-Use the target market's language. Be compelling - focus on benefits, urgency, or value. No emoji.
-If a sitelink already has desc1 or desc2, write the OTHER one to complement it.
-
-Sitelinks needing descriptions:
-${fillInfo}
-${formatAiRuleBlock(aiRuleProfile, "sitelinks")}
-
-Return ONLY a JSON array (same order):
-[{"desc1":"line or empty if exists","desc2":"line or empty if exists"},...]`;
-
-        const fillRaw = await callAiWithFallback("ad_copy", [{ role: "user", content: fillPrompt }], 1024);
-        const fillParsed = JSON.parse(extractJsonFromAi(fillRaw)) as { desc1: string; desc2: string }[];
-
-        for (let j = 0; j < incomplete.length && j < fillParsed.length; j++) {
-          const { idx, c } = incomplete[j];
-          const fill = fillParsed[j];
-          if ((!c.desc1 || c.desc1.length < 2) && fill.desc1 && fill.desc1.length <= 35) {
-            candidates[idx].desc1 = fill.desc1;
-          }
-          if ((!c.desc2 || c.desc2.length < 2) && fill.desc2 && fill.desc2.length <= 35) {
-            candidates[idx].desc2 = fill.desc2;
-          }
-        }
-        console.log(`[Sitelinks] 描述补足完成`);
-      } catch (fillErr) {
-        console.error(`[Sitelinks] 描述补足失败:`, fillErr instanceof Error ? fillErr.message : fillErr);
-      }
-    }
-
-    // 最终兜底：仍缺描述的用品牌名+路径填充
+    // 兜底：仍缺描述的用品牌名+路径填充
     const brandName = _merchantName.replace(/[.。,，!！?？]+/g, "").trim().slice(0, 15);
     for (const c of candidates) {
       if (!c.desc1 || c.desc1.length < 2) {
@@ -665,7 +551,7 @@ async function verifySitelinkCandidates(
   const TARGET = 6;
   let pool = [...candidates];
 
-  for (let round = 0; round < 3; round++) {
+  for (let round = 0; round < 1; round++) {
     if (pool.length === 0) break;
 
     const validSet = await verifyLinks(pool.map((c) => c.url));
@@ -869,51 +755,7 @@ async function selectBestImages(
     }
   }
 
-  if (sizeChecked.length === 0) return urlFiltered.slice(0, 20);
-
-  // ── 3. 批量 OCR 检测（排除有文字的图片） ──
-  const OCR_CONCURRENCY = 5;
-  const OCR_TIMEOUT = 10000;
-  const clean: string[] = [];
-
-  for (let i = 0; i < sizeChecked.length && clean.length < 30; i += OCR_CONCURRENCY) {
-    const batch = sizeChecked.slice(i, i + OCR_CONCURRENCY);
-    const results = await Promise.allSettled(
-      batch.map(async (url) => {
-        try {
-          const resp = await fetch(url, {
-            signal: AbortSignal.timeout(OCR_TIMEOUT),
-            headers: { "User-Agent": "Googlebot-Image/1.0" },
-          });
-          if (!resp.ok) return null;
-          const buf = Buffer.from(await resp.arrayBuffer());
-          // 太小的图片直接排除
-          if (buf.length < 5000) return null;
-          // 太大的图片跳过 OCR（保留，可能是高清产品图）
-          if (buf.length > 2 * 1024 * 1024) return url;
-
-          const Tesseract = (await import("tesseract.js")).default;
-          const { data } = await Tesseract.recognize(buf, "eng", {
-            logger: () => {},
-          });
-          // 过滤有意义的文字（长度>2，置信度>60）
-          const meaningfulWords = (data.words || []).filter(
-            (w) => w.text.replace(/[^a-zA-Z0-9]/g, "").length > 2 && w.confidence > 60,
-          );
-          // 超过 3 个有意义的词 → 判定为有文字的图片
-          if (meaningfulWords.length > 3) return null;
-          return url;
-        } catch {
-          return url; // OCR 失败的保留
-        }
-      }),
-    );
-    for (const r of results) {
-      if (r.status === "fulfilled" && r.value) clean.push(r.value);
-    }
-  }
-
-  return clean.length > 0 ? clean : sizeChecked.slice(0, 30);
+  return sizeChecked.length > 0 ? sizeChecked.slice(0, 30) : urlFiltered.slice(0, 20);
 }
 
 /**
@@ -1105,25 +947,26 @@ async function extractPromotionWithAI(
 
   let combinedText = html.replace(/<script[\s\S]*?<\/script>/gi, "").replace(/<style[\s\S]*?<\/style>/gi, "").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().slice(0, 3000);
 
-  for (const link of promoLinks) {
-    try {
-      const resp = await fetch(link.url, {
-        signal: AbortSignal.timeout(8000),
-        headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" },
-      });
-      if (resp.ok) {
-        const subHtml = await resp.text();
-        const subResult = extractPromotionInfo(subHtml, link.url, country);
-        mergedResult = mergePromotionData(mergedResult, subResult);
-        const subText = subHtml.replace(/<script[\s\S]*?<\/script>/gi, "").replace(/<style[\s\S]*?<\/style>/gi, "").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().slice(0, 2000);
-        combinedText += "\n\n--- Sub page: " + link.url + " ---\n" + subText;
-      }
-    } catch { /* skip */ }
+  const subResults = await Promise.allSettled(promoLinks.map(async (link) => {
+    const resp = await fetch(link.url, {
+      signal: AbortSignal.timeout(8000),
+      headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" },
+    });
+    if (!resp.ok) return null;
+    const subHtml = await resp.text();
+    const subResult = extractPromotionInfo(subHtml, link.url, country);
+    const subText = subHtml.replace(/<script[\s\S]*?<\/script>/gi, "").replace(/<style[\s\S]*?<\/style>/gi, "").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().slice(0, 2000);
+    return { subResult, subText, url: link.url };
+  }));
+  for (const r of subResults) {
+    if (r.status === "fulfilled" && r.value) {
+      mergedResult = mergePromotionData(mergedResult, r.value.subResult);
+      combinedText += "\n\n--- Sub page: " + r.value.url + " ---\n" + r.value.subText;
+    }
   }
 
   // 3. 用 AI 提取
   try {
-    const { callAiWithFallback } = await import("@/lib/ai-service");
     const aiResp = await callAiWithFallback("ad_copy", [{ role: "user", content: `Analyze this merchant website text and extract promotion/discount information.
 
 Merchant: ${merchantName}
@@ -1204,25 +1047,26 @@ async function extractPriceWithAI(
 
   let combinedText = html.replace(/<script[\s\S]*?<\/script>/gi, "").replace(/<style[\s\S]*?<\/style>/gi, "").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().slice(0, 3000);
 
-  for (const link of priceLinks) {
-    try {
-      const resp = await fetch(link.url, {
-        signal: AbortSignal.timeout(8000),
-        headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" },
-      });
-      if (resp.ok) {
-        const subHtml = await resp.text();
-        const subResult = extractPriceInfo(subHtml, country);
-        if (subResult.length >= 3) return subResult;
-        const subText = subHtml.replace(/<script[\s\S]*?<\/script>/gi, "").replace(/<style[\s\S]*?<\/style>/gi, "").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().slice(0, 2000);
-        combinedText += "\n\n--- Sub page: " + link.url + " ---\n" + subText;
-      }
-    } catch { /* skip */ }
+  const priceSubResults = await Promise.allSettled(priceLinks.map(async (link) => {
+    const resp = await fetch(link.url, {
+      signal: AbortSignal.timeout(8000),
+      headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" },
+    });
+    if (!resp.ok) return null;
+    const subHtml = await resp.text();
+    const subResult = extractPriceInfo(subHtml, country);
+    const subText = subHtml.replace(/<script[\s\S]*?<\/script>/gi, "").replace(/<style[\s\S]*?<\/style>/gi, "").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().slice(0, 2000);
+    return { subResult, subText, url: link.url };
+  }));
+  for (const r of priceSubResults) {
+    if (r.status === "fulfilled" && r.value) {
+      if (r.value.subResult.length >= 3) return r.value.subResult;
+      combinedText += "\n\n--- Sub page: " + r.value.url + " ---\n" + r.value.subText;
+    }
   }
 
   // 3. 用 AI 提取
   try {
-    const { callAiWithFallback } = await import("@/lib/ai-service");
     const aiResp = await callAiWithFallback("ad_copy", [{ role: "user", content: `Analyze this merchant website text and extract product/pricing information for Google Ads Price Extensions.
 
 Merchant: ${merchantName}
