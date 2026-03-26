@@ -6,6 +6,8 @@ import prisma from "@/lib/prisma";
 import { getSiteRoot, registerBtPanelSite, verifySiteWithAutoRegister } from "@/lib/remote-publisher";
 import { getTokenPool, findGitHubToken, findCFTokenForDomain, type GitHubTokenEntry } from "@/lib/deploy-credentials";
 
+export const dynamic = "force-dynamic";
+
 export async function GET() {
   try {
     const tasks = await prisma.site_migrations.findMany({

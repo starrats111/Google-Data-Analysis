@@ -5,6 +5,8 @@ import { withAdmin } from "@/lib/api-handler";
 import prisma from "@/lib/prisma";
 import { verifySiteWithAutoRegister, getSiteRoot } from "@/lib/remote-publisher";
 
+export const dynamic = "force-dynamic";
+
 // 获取所有站点列表（管理员 + 用户端共用，用户端只读）
 export const GET = withAdmin(async () => {
   const sites = await prisma.publish_sites.findMany({

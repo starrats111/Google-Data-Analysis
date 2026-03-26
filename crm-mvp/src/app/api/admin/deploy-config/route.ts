@@ -8,6 +8,8 @@ import prisma from "@/lib/prisma";
 import { getTokenPool, saveTokenPool } from "@/lib/deploy-credentials";
 import { clearConfigCache } from "@/lib/system-config";
 
+export const dynamic = "force-dynamic";
+
 const SERVER_CONFIG_KEYS = [
   "bt_ssh_host",
   "bt_ssh_port",
