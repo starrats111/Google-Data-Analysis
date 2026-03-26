@@ -70,6 +70,12 @@ interface PublicAccessResult {
   error?: string;
 }
 
+interface A1StandardizationResult {
+  ok: boolean;
+  merged_count?: number;
+  error?: string;
+}
+
 interface BtPanelRegistrationResult {
   ok: boolean;
   exists: boolean;
@@ -566,19 +572,30 @@ export default function AdminSitesPage() {
     }).then((r) => r.json());
     const checks = res.data?.checks;
     const publicAccess = res.data?.publicAccess as PublicAccessResult | undefined;
+    const autoStandardizeAttempted = !!res.data?.autoStandardizeAttempted;
+    const a1Standardization = res.data?.a1Standardization as A1StandardizationResult | undefined;
     const autoRegisterAttempted = !!res.data?.autoRegisterAttempted;
     const panelRegistration = res.data?.panelRegistration as BtPanelRegistrationResult | undefined;
     const fullyVerified = res.code === 0 && !!checks?.valid && !!publicAccess?.ok;
     if (fullyVerified) {
-      const successText = autoRegisterAttempted && panelRegistration?.ok
-        ? (panelRegistration.created ? "已自动补登记站点并验证通过" : "已自动核对宝塔站点并验证通过")
-        : "验证通过";
+      const successParts = [
+        autoStandardizeAttempted && a1Standardization?.ok
+          ? `已自动标准化为 A1（合并约 ${a1Standardization.merged_count ?? 0} 条）`
+          : "",
+        autoRegisterAttempted && panelRegistration?.ok
+          ? (panelRegistration.created ? "已自动补登记站点" : "已自动核对宝塔站点")
+          : "",
+      ].filter(Boolean);
+      const successText = successParts.length > 0 ? `${successParts.join("，")}并验证通过` : "验证通过";
       message.success({ content: successText, key: "verify" });
     } else {
       const errText =
         res.code !== 0
           ? (res.message || "验证失败")
           : [
+              autoStandardizeAttempted && a1Standardization && !a1Standardization.ok
+                ? (`自动标准化 A1 失败：${a1Standardization.error || "未知错误"}`)
+                : "",
               autoRegisterAttempted && panelRegistration && !panelRegistration.ok
                 ? (`自动补登记失败：${panelRegistration.error || "未知错误"}`)
                 : "",
@@ -783,9 +800,9 @@ export default function AdminSitesPage() {
           <Form.Item
             name="standardize_a1"
             valuePropName="checked"
-            extra="默认保留原站主题、CSS 和静态资源；统一生成 A1 数据层 assets/js/main.js，并把旧文章补齐为 slug 目录页 post-{slug}/index.html，便于 CRM 统一发布与管理。若首页缺失时才回退生成简易首页。"
+            extra="勾选后会在下载完成后优先执行 A1 标准化，默认保留原站主题、CSS 和静态资源；统一生成 A1 数据层 assets/js/main.js，并把旧文章补齐为 slug 目录页 post-{slug}/index.html。即使不勾选，若最终验证阶段发现站点结构不完整，系统仍会自动尝试修复。若首页缺失时才回退生成简易首页。"
           >
-            <Checkbox>迁移后自动标准化为 A1 架构（推荐）</Checkbox>
+            <Checkbox>迁移后优先标准化为 A1 架构（推荐）</Checkbox>
           </Form.Item>
         </Form>
         <Text type="secondary" style={{ fontSize: 12 }}>

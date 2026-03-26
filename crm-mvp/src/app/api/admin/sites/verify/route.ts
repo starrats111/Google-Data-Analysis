@@ -17,6 +17,8 @@ export const POST = withAdmin(async (req: NextRequest) => {
     site_name: result.site.site_name,
     checks: result.checks,
     publicAccess: result.publicAccess,
+    autoStandardizeAttempted: result.autoStandardizeAttempted,
+    a1Standardization: result.a1Standardization,
     autoRegisterAttempted: result.autoRegisterAttempted,
     panelRegistration: result.panelRegistration,
   });

@@ -4,6 +4,7 @@ import {
   type VerifyResult,
   type PublicSiteAccessResult,
   type BtPanelRegistrationResult,
+  type A1StandardizationResult,
 } from "@/lib/remote-publisher";
 
 type VerifyOutcome =
@@ -12,6 +13,8 @@ type VerifyOutcome =
       site: { id: bigint; site_name: string };
       checks: VerifyResult;
       publicAccess: PublicSiteAccessResult;
+      autoStandardizeAttempted: boolean;
+      a1Standardization?: A1StandardizationResult;
       autoRegisterAttempted: boolean;
       panelRegistration?: BtPanelRegistrationResult;
     }
@@ -25,7 +28,15 @@ export async function verifyPublishSiteById(siteId: bigint): Promise<VerifyOutco
   if (!site.site_path) return { ok: false, message: "站点路径未配置", status: 400 };
 
   const verifyResult = await verifySiteWithAutoRegister(site.domain, site.site_path);
-  const { checks, publicAccess, fullyVerified, autoRegisterAttempted, panelRegistration } = verifyResult;
+  const {
+    checks,
+    publicAccess,
+    fullyVerified,
+    autoStandardizeAttempted,
+    a1Standardization,
+    autoRegisterAttempted,
+    panelRegistration,
+  } = verifyResult;
 
   const updateData: Record<string, unknown> = {
     verified: fullyVerified ? 1 : 0,
@@ -47,6 +58,8 @@ export async function verifyPublishSiteById(siteId: bigint): Promise<VerifyOutco
     site: { id: site.id, site_name: site.site_name },
     checks,
     publicAccess,
+    autoStandardizeAttempted,
+    a1Standardization,
     autoRegisterAttempted,
     panelRegistration,
   };

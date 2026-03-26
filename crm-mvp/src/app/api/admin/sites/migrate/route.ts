@@ -3,7 +3,7 @@ import { serializeData } from "@/lib/auth";
 import { apiSuccess, apiError } from "@/lib/constants";
 import { withAdmin } from "@/lib/api-handler";
 import prisma from "@/lib/prisma";
-import { getSiteRoot, registerBtPanelSite } from "@/lib/remote-publisher";
+import { getSiteRoot, registerBtPanelSite, verifySiteWithAutoRegister } from "@/lib/remote-publisher";
 import { getTokenPool, findGitHubToken, findCFTokenForDomain, type GitHubTokenEntry } from "@/lib/deploy-credentials";
 
 export async function GET() {
@@ -356,13 +356,19 @@ async function runMigrationAsync(taskId: bigint) {
       await update({ step_detail: `SSL 异常: ${sslErr instanceof Error ? sslErr.message : String(sslErr)}` });
     }
 
-    // Step 4: 验证 + 检测架构 + 公网连通性
-    await update({ status: "verifying", progress: 95, step_detail: "正在验证站点..." });
+    // Step 4: 统一自动修复 + 验证 + 检测架构 + 公网连通性
+    await update({ status: "verifying", progress: 95, step_detail: "正在自动修复并验证站点..." });
 
-    const { verifyConnection, verifyPublicSiteAccess } = await import("@/lib/remote-publisher");
-    const checks = await verifyConnection(sitePath);
-    const publicAccess = await verifyPublicSiteAccess(task.domain);
-    const fullyVerified = checks.valid && publicAccess.ok;
+    const verifyResult = await verifySiteWithAutoRegister(task.domain, sitePath);
+    const {
+      checks,
+      publicAccess,
+      fullyVerified,
+      autoStandardizeAttempted,
+      a1Standardization,
+      autoRegisterAttempted,
+      panelRegistration,
+    } = verifyResult;
 
     if (task.site_id) {
       await prisma.publish_sites.update({
@@ -379,9 +385,26 @@ async function runMigrationAsync(taskId: bigint) {
 
     client.end();
 
+    const repairParts = [
+      autoStandardizeAttempted
+        ? (a1Standardization?.ok
+          ? `已自动标准化 A1（合并约 ${a1Standardization.merged_count ?? 0} 条）`
+          : `自动标准化失败：${a1Standardization?.error || "未知错误"}`)
+        : "",
+      autoRegisterAttempted
+        ? (panelRegistration?.ok
+          ? (panelRegistration.created ? `已自动补登记宝塔站点(id=${panelRegistration.panelSiteId || "-"})` : `已自动核对宝塔站点(id=${panelRegistration.panelSiteId || "-"})`)
+          : `自动补登记失败：${panelRegistration?.error || "未知错误"}`)
+        : "",
+    ].filter(Boolean).join("；");
+
     const verifyMessage = fullyVerified
-      ? "迁移完成，站点已验证"
-      : `迁移完成，但验证未通过：${checks.valid ? "公网访问失败" : (checks.error || "站点结构校验失败")}${!publicAccess.ok ? `（${publicAccess.error || publicAccess.checked_url}）` : ""}`;
+      ? ["迁移完成，站点已验证", repairParts].filter(Boolean).join("；")
+      : `迁移完成，但验证未通过：${[
+          repairParts,
+          checks.valid ? "" : (checks.error || "站点结构校验失败"),
+          publicAccess.ok ? "" : `公网访问未通过：${publicAccess.error || publicAccess.checked_url}`,
+        ].filter(Boolean).join("；")}`;
 
     await update({
       status: "done",

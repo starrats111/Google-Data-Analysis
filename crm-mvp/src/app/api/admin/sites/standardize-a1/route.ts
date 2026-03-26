@@ -3,7 +3,7 @@ import { serializeData } from "@/lib/auth";
 import { apiSuccess, apiError } from "@/lib/constants";
 import { withAdmin } from "@/lib/api-handler";
 import prisma from "@/lib/prisma";
-import { applyA1SiteStandard, verifyConnection } from "@/lib/remote-publisher";
+import { applyA1SiteStandard, verifyConnection, verifyPublicSiteAccess } from "@/lib/remote-publisher";
 
 // POST /api/admin/sites/standardize-a1 — 将已有站点远程目录标准化为 A1 并回写库内架构字段
 export const POST = withAdmin(async (req: NextRequest) => {
@@ -23,10 +23,13 @@ export const POST = withAdmin(async (req: NextRequest) => {
     return apiError(checks.error || "标准化后验证仍未通过，请检查 SSH 与目录权限");
   }
 
+  const publicAccess = await verifyPublicSiteAccess(site.domain);
+  const fullyVerified = checks.valid && publicAccess.ok;
+
   await prisma.publish_sites.update({
     where: { id: site.id },
     data: {
-      verified: 1,
+      verified: fullyVerified ? 1 : 0,
       site_type: checks.site_type,
       data_js_path: checks.data_js_path,
       article_var_name: checks.article_var_name,
@@ -38,5 +41,7 @@ export const POST = withAdmin(async (req: NextRequest) => {
     site_id: serializeData(site.id),
     merged_count: a1.merged_count ?? 0,
     checks: serializeData(checks),
-  }, "已标准化为 A1 并完成验证");
+    publicAccess,
+    fullyVerified,
+  }, fullyVerified ? "已标准化为 A1 并完成验证" : "已标准化为 A1，但公网访问未通过");
 });

@@ -59,10 +59,18 @@ export interface BtPanelRegistrationResult {
   error?: string;
 }
 
+export interface A1StandardizationResult {
+  ok: boolean;
+  merged_count?: number;
+  error?: string;
+}
+
 export interface VerifyWithAutoRegisterResult {
   checks: VerifyResult;
   publicAccess: PublicSiteAccessResult;
   fullyVerified: boolean;
+  autoStandardizeAttempted: boolean;
+  a1Standardization?: A1StandardizationResult;
   autoRegisterAttempted: boolean;
   panelRegistration?: BtPanelRegistrationResult;
 }
@@ -336,9 +344,21 @@ export async function registerBtPanelSite(domain: string, sitePath: string): Pro
 export async function verifySiteWithAutoRegister(domain: string, sitePath: string): Promise<VerifyWithAutoRegisterResult> {
   let checks = await verifyConnection(sitePath);
   let publicAccess = await verifyPublicSiteAccess(domain);
+  let a1Standardization: A1StandardizationResult | undefined;
   let panelRegistration: BtPanelRegistrationResult | undefined;
+  let autoStandardizeAttempted = false;
   let autoRegisterAttempted = false;
   let fullyVerified = checks.valid && publicAccess.ok;
+
+  if (!checks.valid && checks.site_dir_exists) {
+    autoStandardizeAttempted = true;
+    a1Standardization = await applyA1SiteStandard(sitePath, domain);
+    if (a1Standardization.ok) {
+      checks = await verifyConnection(sitePath);
+      publicAccess = await verifyPublicSiteAccess(domain);
+      fullyVerified = checks.valid && publicAccess.ok;
+    }
+  }
 
   if (!fullyVerified && checks.site_dir_exists) {
     autoRegisterAttempted = true;
@@ -354,6 +374,8 @@ export async function verifySiteWithAutoRegister(domain: string, sitePath: strin
     checks,
     publicAccess,
     fullyVerified,
+    autoStandardizeAttempted,
+    a1Standardization,
     autoRegisterAttempted,
     panelRegistration,
   };
@@ -1076,7 +1098,7 @@ async function materializeLegacySlugPages(
  * 将远程站点补齐为 A1 架构（assets/js/main.js + const posts），同时尽量保留原站主题、CSS 与旧文章。
  * 规则：保留现有首页/静态资源；写入 A1 数据层；将旧文章补齐为 slug 目录页 post-{slug}/index.html。
  */
-export async function applyA1SiteStandard(sitePath: string, domain = ""): Promise<{ ok: boolean; merged_count?: number; error?: string }> {
+export async function applyA1SiteStandard(sitePath: string, domain = ""): Promise<A1StandardizationResult> {
   let client: Client | null = null;
   try {
     client = await connectSSH();

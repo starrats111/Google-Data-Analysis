@@ -18,5 +18,10 @@ export async function POST(req: NextRequest) {
     site_id: serializeData(result.site.id),
     site_name: result.site.site_name,
     checks: result.checks,
+    publicAccess: result.publicAccess,
+    autoStandardizeAttempted: result.autoStandardizeAttempted,
+    a1Standardization: result.a1Standardization,
+    autoRegisterAttempted: result.autoRegisterAttempted,
+    panelRegistration: result.panelRegistration,
   });
 }
