@@ -57,7 +57,7 @@ export async function fetchTodayCampaignData(
       metrics.average_cpc, metrics.conversions
     FROM campaign
     WHERE segments.date DURING TODAY
-      AND campaign.status != 'REMOVED'
+      AND metrics.cost_micros > 0
   `);
   return results.map((r) => parseCampaignRow(r, customerId));
 }
@@ -77,7 +77,7 @@ export async function fetchCampaignDataByDateRange(
       segments.date
     FROM campaign
     WHERE segments.date BETWEEN '${startDate}' AND '${endDate}'
-      AND campaign.status != 'REMOVED'
+      AND metrics.cost_micros > 0
   `);
   return results.map((r) => ({
     ...parseCampaignRow(r, customerId),
