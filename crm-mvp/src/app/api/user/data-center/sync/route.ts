@@ -228,6 +228,10 @@ async function syncAdsData(
 
                 const dateObj = new Date(cd.date);
                 const dateRate = await getExchangeRate(mcc.currency, cd.date);
+                if (dateRate <= 0) {
+                  console.warn(`[Sync] 跳过 campaign ${cd.campaign_id} ${cd.date}：汇率不可用`);
+                  continue;
+                }
                 const statsData = {
                   budget: Number((cd.budget_dollars * dateRate).toFixed(2)),
                   cost: Number((cd.cost_dollars * dateRate).toFixed(2)),
@@ -311,6 +315,10 @@ async function syncAdsData(
           }
 
           const todayRate = await getExchangeRate(mcc.currency, todayStr);
+          if (todayRate <= 0) {
+            console.warn(`[Sync] 跳过 today campaign ${cd.campaign_id}：汇率不可用`);
+            continue;
+          }
           const statsData = { budget: Number((cd.budget_dollars * todayRate).toFixed(2)), cost: Number((cd.cost_dollars * todayRate).toFixed(2)), clicks: cd.clicks, impressions: cd.impressions, cpc: Number((cd.cpc_dollars * todayRate).toFixed(4)), conversions: cd.conversions, data_source: "api" as const };
           const existingStatsId = todayStatsMap.get(String(campaign.id));
           if (existingStatsId) {
@@ -485,6 +493,10 @@ async function upsertSheetRowsBatch(
       const existingId = statsKeyMap.get(statsKey);
 
       const rate = await getExchangeRate(currency, row.date);
+      if (rate <= 0) {
+        console.warn(`[Sheet] 跳过 ${row.campaign_id} ${row.date}：汇率不可用`);
+        return;
+      }
       const convertedCost = Number((row.cost * rate).toFixed(2));
       const convertedBudget = Number((row.budget * rate).toFixed(2));
       const convertedCpc = Number((row.cpc * rate).toFixed(4));

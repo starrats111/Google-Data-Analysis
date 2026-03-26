@@ -52,8 +52,8 @@ export async function getExchangeRate(currency: string, dateStr: string): Promis
     return rate;
   }
 
-  console.error(`[ExchangeRate] 无法获取 ${cur} 汇率，无快照可用`);
-  return 1;
+  console.error(`[ExchangeRate] CRITICAL: 无法获取 ${cur} 在 ${dateStr} 的汇率，所有兜底方案均失败，跳过该记录`);
+  return 0;
 }
 
 /**

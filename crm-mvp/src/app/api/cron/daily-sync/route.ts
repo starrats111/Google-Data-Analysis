@@ -187,15 +187,16 @@ async function syncAllUsersMcc(): Promise<unknown> {
         log(`  MCC ${mcc.mcc_name || mcc.mcc_id} for user ${userId}...`);
 
         try {
-          const yesterday = new Date();
-          yesterday.setDate(yesterday.getDate() - 1);
-          const startStr = yesterday.toISOString().slice(0, 10);
-          const endStr = new Date().toISOString().slice(0, 10);
+          const now = new Date();
+          const syncStart = new Date();
+          syncStart.setDate(now.getDate() - 7);
+          const startStr = syncStart.toISOString().slice(0, 10);
+          const endStr = now.toISOString().slice(0, 10);
           await preloadRates(mcc.currency, startStr, endStr);
 
           let sheetUpserted = 0;
 
-          // 1. Sheet 同步（昨天→今天）
+          // 1. Sheet 同步（近7天）
           if (mcc.sheet_url) {
             const sheetResult = await syncFromSheet(mcc.sheet_url, startStr, endStr);
             if (sheetResult.success && sheetResult.rows.length > 0) {
@@ -209,6 +210,10 @@ async function syncAllUsersMcc(): Promise<unknown> {
 
                 const dateObj = new Date(row.date);
                 const rate = await getExchangeRate(mcc.currency, row.date);
+                if (rate <= 0) {
+                  log(`  跳过 ${row.campaign_id} ${row.date}：汇率不可用`);
+                  continue;
+                }
                 const costUsd = Number((row.cost * rate).toFixed(2));
 
                 await prisma.ads_daily_stats.upsert({
