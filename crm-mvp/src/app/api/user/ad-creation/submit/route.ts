@@ -439,16 +439,19 @@ export async function POST(req: NextRequest) {
     }
 
     // ─── 9b. 促销扩展 (Promotion) ───
-    if (promotion?.promotion_target) {
+    const hasValidDiscount =
+      (promotion?.discount_type === "PERCENT" && Number(promotion?.discount_percent) > 0) ||
+      (promotion?.discount_type === "MONETARY" && Number(promotion?.discount_amount) > 0);
+    if (promotion?.promotion_target && hasValidDiscount) {
       const assetTempRn = `customers/${cid}/assets/${assetTempId}`;
       const promotionAsset: Record<string, unknown> = {
         promotion_target: (promotion.promotion_target || "").slice(0, 20),
         language_code: promotion.language_code || market.promotionLanguageCode,
       };
-      if (promotion.discount_type === "PERCENT" && promotion.discount_percent) {
+      if (promotion.discount_type === "PERCENT") {
         const pct = Math.min(Math.max(Number(promotion.discount_percent) || 0, 1), 100);
         promotionAsset.percent_off = pct * 10_000;
-      } else if (promotion.discount_type === "MONETARY" && promotion.discount_amount) {
+      } else {
         const rawMicros = Math.round(Math.abs(Number(promotion.discount_amount) || 0) * 1_000_000);
         const centAligned = Math.round(rawMicros / 10_000) * 10_000;
         promotionAsset.money_amount_off = {
@@ -462,12 +465,13 @@ export async function POST(req: NextRequest) {
       if (promotion.start_date) promotionAsset.start_date = promotion.start_date;
       if (promotion.end_date) promotionAsset.end_date = promotion.end_date;
 
+      const promoFinalUrl = (promotion.final_url || finalUrl || "").trim();
       operations.push({
         asset_operation: {
           create: {
             resource_name: assetTempRn,
             promotion_asset: promotionAsset,
-            ...(promotion.final_url ? { final_urls: [promotion.final_url] } : {}),
+            final_urls: [promoFinalUrl],
           },
         },
       });
@@ -501,9 +505,7 @@ export async function POST(req: NextRequest) {
         if (item.unit && VALID_PRICE_UNITS.has(item.unit)) {
           offering.unit = item.unit;
         }
-        if (item.final_url) {
-          offering.final_url = item.final_url;
-        }
+        offering.final_url = (item.final_url || finalUrl || "").trim();
         return offering;
       });
       operations.push({
