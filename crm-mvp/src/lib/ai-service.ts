@@ -623,7 +623,7 @@ async function callAi(
         "Content-Type": "application/json",
       },
       body,
-      signal: AbortSignal.timeout(300000),
+      signal: AbortSignal.timeout(90000),
     });
 
     if (res.status === 429 && attempt < MAX_RETRIES) {
@@ -717,7 +717,7 @@ export async function padHeadlines(
   const biddingStrategy = options.biddingStrategy || "MAXIMIZE_CLICKS";
   const aiRulePrompt = buildAiRulePrompt(options.aiRuleProfile, "ad_copy");
 
-  for (let attempt = 0; attempt < 4; attempt++) {
+  for (let attempt = 0; attempt < 2; attempt++) {
     const needed = count - locked.length;
     const prompt = `You are a senior Google Ads search ads copywriter with 30 years of experience.
 
@@ -804,7 +804,7 @@ export async function padDescriptions(
     ? `Current RSA headlines (descriptions must NOT paraphrase or stack the same phrases; Google flags \"Make your descriptions more unique\"):\n${uniqHeadlines.map((h, i) => `${i + 1}. \"${h}\"`).join("\n")}\n\n`
     : "";
 
-  for (let attempt = 0; attempt < 4; attempt++) {
+  for (let attempt = 0; attempt < 2; attempt++) {
     const needed = count - locked.length;
     const prompt = `You are a senior Google Ads RSA copywriter focused on conversion-driving descriptions.
 

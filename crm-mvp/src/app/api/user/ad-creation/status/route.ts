@@ -21,25 +21,35 @@ export async function GET(req: NextRequest) {
   const campaignId = searchParams.get("campaign_id");
   if (!campaignId) return apiError("缺少 campaign_id");
 
-  const campaign = await prisma.campaigns.findFirst({
-    where: { id: BigInt(campaignId), user_id: BigInt(user.userId), is_deleted: 0 },
-  });
+  // Phase A: campaign + 只依赖 userId 的查询并行
+  const [campaign, adSettings, mccAccounts] = await Promise.all([
+    prisma.campaigns.findFirst({
+      where: { id: BigInt(campaignId), user_id: BigInt(user.userId), is_deleted: 0 },
+    }),
+    prisma.ad_default_settings.findFirst({
+      where: { user_id: BigInt(user.userId), is_deleted: 0 },
+    }),
+    prisma.google_mcc_accounts.findMany({
+      where: { user_id: BigInt(user.userId), is_deleted: 0, is_active: 1 },
+      select: { id: true, mcc_id: true, mcc_name: true, currency: true },
+      orderBy: { created_at: "asc" },
+    }),
+  ]);
   if (!campaign) return apiError("广告系列不存在", 404);
 
-  // 获取广告组
-  const adGroup = await prisma.ad_groups.findFirst({
-    where: { campaign_id: campaign.id, is_deleted: 0 },
-  });
+  // Phase B: 依赖 campaign 的查询并行
+  const [adGroup, merchant] = await Promise.all([
+    prisma.ad_groups.findFirst({
+      where: { campaign_id: campaign.id, is_deleted: 0 },
+    }),
+    prisma.user_merchants.findFirst({
+      where: { id: campaign.user_merchant_id, is_deleted: 0 },
+      select: { merchant_name: true, merchant_url: true, platform: true, merchant_id: true, tracking_link: true },
+    }),
+  ]);
 
-  // 获取广告素材
+  // Phase C: 依赖 adGroup 的查询并行
   let adCreative = null;
-  if (adGroup) {
-    adCreative = await prisma.ad_creatives.findFirst({
-      where: { ad_group_id: adGroup.id, is_deleted: 0 },
-    });
-  }
-
-  // 获取关键词
   let keywords: {
     id: bigint;
     keyword_text: string;
@@ -49,29 +59,18 @@ export async function GET(req: NextRequest) {
     suggested_bid: unknown;
   }[] = [];
   if (adGroup) {
-    keywords = await prisma.keywords.findMany({
-      where: { ad_group_id: adGroup.id, is_deleted: 0 },
-      select: { id: true, keyword_text: true, match_type: true, avg_monthly_searches: true, competition: true, suggested_bid: true },
-    });
+    const [creative, kws] = await Promise.all([
+      prisma.ad_creatives.findFirst({
+        where: { ad_group_id: adGroup.id, is_deleted: 0 },
+      }),
+      prisma.keywords.findMany({
+        where: { ad_group_id: adGroup.id, is_deleted: 0 },
+        select: { id: true, keyword_text: true, match_type: true, avg_monthly_searches: true, competition: true, suggested_bid: true },
+      }),
+    ]);
+    adCreative = creative;
+    keywords = kws;
   }
-
-  // 获取用户默认广告设置
-  const adSettings = await prisma.ad_default_settings.findFirst({
-    where: { user_id: BigInt(user.userId), is_deleted: 0 },
-  });
-
-  // 获取商家信息
-  const merchant = await prisma.user_merchants.findFirst({
-    where: { id: campaign.user_merchant_id, is_deleted: 0 },
-    select: { merchant_name: true, merchant_url: true, platform: true, merchant_id: true, tracking_link: true },
-  });
-
-  // 获取用户的 MCC 账户列表
-  const mccAccounts = await prisma.google_mcc_accounts.findMany({
-    where: { user_id: BigInt(user.userId), is_deleted: 0, is_active: 1 },
-    select: { id: true, mcc_id: true, mcc_name: true, currency: true },
-    orderBy: { created_at: "asc" },
-  });
 
   // 判断是否就绪（标题必须满 15 条，描述必须满 4 条）
   const headlines = (adCreative?.headlines as string[]) || [];
@@ -161,7 +160,8 @@ export async function GET(req: NextRequest) {
 }
 
 /**
- * 异步触发广告文案生成（SemRush 竞品数据 + AI 补充）
+ * 异步触发广告文案生成（重试时仅使用 AI 补充，不重复查询 SemRush）
+ * 重试场景下跳过 Semrush 请求，避免频繁调用导致账号封禁
  */
 async function triggerAdCopyGeneration(
   adCreativeId: bigint,
@@ -177,26 +177,12 @@ async function triggerAdCopyGeneration(
   } = {},
 ) {
   try {
-    const { SemRushClient } = await import("@/lib/semrush-client");
     const { padHeadlines, padDescriptions, suggestDisplayPaths } = await import("@/lib/ai-service");
 
-    let dedupedTitles: string[] = [];
-    let dedupedDescriptions: string[] = [];
-    let kws: Array<{ phrase: string; volume: number; competition?: string | number | null; suggested_bid?: number | null; cpc?: number | null }> = [];
-
-    if (merchantUrl) {
-      try {
-        const client = await SemRushClient.fromConfig(country);
-        const result = await client.queryDomain(merchantUrl);
-        dedupedTitles = result.dedupedTitles;
-        dedupedDescriptions = result.dedupedDescriptions;
-        kws = result.keywords;
-        console.log(`[AdCopy] SemRush 成功: ${dedupedTitles.length} 标题, ${dedupedDescriptions.length} 描述, ${kws.length} 关键词`);
-      } catch (err) {
-        const errMsg = err instanceof Error ? err.message : String(err);
-        console.warn("[AdCopy] SemRush 失败，将完全由 AI 生成:", errMsg);
-      }
-    }
+    const dedupedTitles: string[] = [];
+    const dedupedDescriptions: string[] = [];
+    const kws: Array<{ phrase: string; volume: number; competition?: string | number | null; suggested_bid?: number | null; cpc?: number | null }> = [];
+    console.log("[AdCopy] 重试模式：跳过 SemRush 查询，由 AI 直接生成文案");
 
     const optimizedKeywords = selectOptimizedKeywords(kws, {
       merchantName,
@@ -215,44 +201,8 @@ async function triggerAdCopyGeneration(
       biddingStrategy: options.biddingStrategy,
       aiRuleProfile: options.aiRuleProfile,
     });
-    const descriptions = await padDescriptions([], merchantName, country, 4, {
-      referenceItems: dedupedDescriptions,
-      keywords: optimizedKeywords.map((kw) => kw.phrase),
-      headlinesForUniqueness: headlines,
-      dailyBudget: options.dailyBudget,
-      maxCpc: options.maxCpc,
-      biddingStrategy: options.biddingStrategy,
-      aiRuleProfile: options.aiRuleProfile,
-    });
 
-    // 自动翻译为中文参考
-    let headlinesZh: string[] = [];
-    let descriptionsZh: string[] = [];
-    try {
-      const { callAiWithFallback } = await import("@/lib/ai-service");
-      const zhPrompt = `Translate these Google Ads headlines and descriptions into Simplified Chinese (中文).
-This is for reference only, no character limit. Translate naturally.
-
-HEADLINES:
-${headlines.map((h: string, i: number) => `${i + 1}. "${h}"`).join("\n")}
-
-DESCRIPTIONS:
-${descriptions.map((d: string, i: number) => `${i + 1}. "${d}"`).join("\n")}
-
-Return ONLY JSON: {"headlines":["中文标题1","..."],"descriptions":["中文描述1","..."]}`;
-      const zhRaw = await callAiWithFallback("translate", [{ role: "user", content: zhPrompt }], 4096);
-      let zhText = zhRaw.trim();
-      const js = zhText.indexOf("{");
-      const je = zhText.lastIndexOf("}");
-      if (js >= 0 && je > js) zhText = zhText.slice(js, je + 1);
-      const zhParsed = JSON.parse(zhText);
-      headlinesZh = (zhParsed.headlines || []).map((s: string) => s.trim());
-      descriptionsZh = (zhParsed.descriptions || []).map((s: string) => s.trim());
-      console.log(`[AdCopy] 中文翻译完成: ${headlinesZh.length} 标题, ${descriptionsZh.length} 描述`);
-    } catch (zhErr) {
-      console.warn("[AdCopy] 中文翻译失败（不影响主流程）:", zhErr instanceof Error ? zhErr.message : zhErr);
-    }
-
+    // 标题就绪后立即保存，前端下次轮询即可拿到
     const existingCreative = await prisma.ad_creatives.findUnique({
       where: { id: adCreativeId },
       select: { display_path1: true, display_path2: true },
@@ -262,18 +212,15 @@ Return ONLY JSON: {"headlines":["中文标题1","..."],"descriptions":["中文�
       optimizedKeywords.map((kw) => kw.phrase),
       country,
     );
-
     await prisma.ad_creatives.update({
       where: { id: adCreativeId },
       data: {
         headlines: headlines as any,
-        descriptions: descriptions as any,
-        ...(headlinesZh.length > 0 ? { headlines_zh: headlinesZh as any } : {}),
-        ...(descriptionsZh.length > 0 ? { descriptions_zh: descriptionsZh as any } : {}),
         ...(!existingCreative?.display_path1?.trim() ? { display_path1: pathSuggest.path1 } : {}),
         ...(!existingCreative?.display_path2?.trim() ? { display_path2: pathSuggest.path2 } : {}),
       },
     });
+    console.log(`[AdCopy] 标题已保存 (${headlines.length} 条)，开始生成描述...`);
 
     if (optimizedKeywords.length > 0) {
       const existingCount = await prisma.keywords.count({
@@ -285,6 +232,58 @@ Return ONLY JSON: {"headlines":["中文标题1","..."],"descriptions":["中文�
         });
       }
     }
+
+    const descriptions = await padDescriptions([], merchantName, country, 4, {
+      referenceItems: dedupedDescriptions,
+      keywords: optimizedKeywords.map((kw) => kw.phrase),
+      headlinesForUniqueness: headlines,
+      dailyBudget: options.dailyBudget,
+      maxCpc: options.maxCpc,
+      biddingStrategy: options.biddingStrategy,
+      aiRuleProfile: options.aiRuleProfile,
+    });
+
+    // 描述就绪后立即保存
+    await prisma.ad_creatives.update({
+      where: { id: adCreativeId },
+      data: { descriptions: descriptions as any },
+    });
+    console.log(`[AdCopy] 描述已保存 (${descriptions.length} 条)，启动后台翻译...`);
+
+    // 中文翻译异步执行，不阻塞主流程
+    (async () => {
+      try {
+        const { callAiWithFallback } = await import("@/lib/ai-service");
+        const zhPrompt = `Translate these Google Ads headlines and descriptions into Simplified Chinese (中文).
+This is for reference only, no character limit. Translate naturally.
+
+HEADLINES:
+${headlines.map((h: string, i: number) => `${i + 1}. "${h}"`).join("\n")}
+
+DESCRIPTIONS:
+${descriptions.map((d: string, i: number) => `${i + 1}. "${d}"`).join("\n")}
+
+Return ONLY JSON: {"headlines":["中文标题1","..."],"descriptions":["中文描述1","..."]}`;
+        const zhRaw = await callAiWithFallback("translate", [{ role: "user", content: zhPrompt }], 4096);
+        let zhText = zhRaw.trim();
+        const js = zhText.indexOf("{");
+        const je = zhText.lastIndexOf("}");
+        if (js >= 0 && je > js) zhText = zhText.slice(js, je + 1);
+        const zhParsed = JSON.parse(zhText);
+        const headlinesZh = (zhParsed.headlines || []).map((s: string) => s.trim());
+        const descriptionsZh = (zhParsed.descriptions || []).map((s: string) => s.trim());
+        await prisma.ad_creatives.update({
+          where: { id: adCreativeId },
+          data: {
+            ...(headlinesZh.length > 0 ? { headlines_zh: headlinesZh as any } : {}),
+            ...(descriptionsZh.length > 0 ? { descriptions_zh: descriptionsZh as any } : {}),
+          },
+        });
+        console.log(`[AdCopy] 中文翻译完成: ${headlinesZh.length} 标题, ${descriptionsZh.length} 描述`);
+      } catch (zhErr) {
+        console.warn("[AdCopy] 中文翻译失败（不影响主流程）:", zhErr instanceof Error ? zhErr.message : zhErr);
+      }
+    })().catch(() => {});
 
     console.log(`[AdCopy] 完成: ${headlines.length} 标题, ${descriptions.length} 描述, ${optimizedKeywords.length} 关键词`);
   } catch (err) {

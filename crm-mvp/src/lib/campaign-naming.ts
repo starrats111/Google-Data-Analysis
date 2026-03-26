@@ -85,25 +85,38 @@ export async function generateCampaignName(
           select: { customer_id: true },
         });
 
-        // 逐 CID 查 Google Ads campaigns（限制并发，最多查 5 个有广告的 CID）
-        let checkedCount = 0;
-        for (const cid of cids) {
-          if (checkedCount >= 10) break; // 最多查 10 个 CID，避免太慢
-          try {
-            const rows = await queryGoogleAds(credentials, cid.customer_id.replace(/-/g, ""), `
-              SELECT campaign.name
-              FROM campaign
-              WHERE campaign.status != 'REMOVED'
-            `);
-            for (const row of rows) {
-              const c = row.campaign as Record<string, unknown> | undefined;
-              const name = String(c?.name ?? "");
-              const num = extractSeqFromName(name, namingRule, platformLabel);
-              if (num > googleMaxSeq) googleMaxSeq = num;
+        const cidSlice = cids.slice(0, 10);
+        const BATCH = 5;
+        const timeoutMs = 8000;
+        const deadline = Date.now() + timeoutMs;
+
+        for (let i = 0; i < cidSlice.length; i += BATCH) {
+          if (Date.now() >= deadline) {
+            console.warn(`[CampaignNaming] Google Ads 查询已超 ${timeoutMs}ms，跳过剩余 CID`);
+            break;
+          }
+          const batch = cidSlice.slice(i, i + BATCH);
+          const results = await Promise.allSettled(
+            batch.map(async (cid) => {
+              const rows = await queryGoogleAds(credentials, cid.customer_id.replace(/-/g, ""), `
+                SELECT campaign.name
+                FROM campaign
+                WHERE campaign.status != 'REMOVED'
+              `);
+              let batchMax = 0;
+              for (const row of rows) {
+                const c = row.campaign as Record<string, unknown> | undefined;
+                const name = String(c?.name ?? "");
+                const num = extractSeqFromName(name, namingRule, platformLabel);
+                if (num > batchMax) batchMax = num;
+              }
+              return batchMax;
+            }),
+          );
+          for (const r of results) {
+            if (r.status === "fulfilled" && r.value > googleMaxSeq) {
+              googleMaxSeq = r.value;
             }
-            checkedCount++;
-          } catch {
-            // 单个 CID 查询失败（如 CUSTOMER_NOT_ENABLED），跳过
           }
         }
       }

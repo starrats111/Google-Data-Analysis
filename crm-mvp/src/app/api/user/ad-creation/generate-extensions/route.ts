@@ -162,12 +162,25 @@ export async function POST(req: NextRequest) {
 
   const tasks: Promise<void>[] = [];
 
-  // 促销/价格信息：爬首页 + 子页面，用 AI 提取
   if (types.includes("promotion")) {
-    result.promotion = await extractPromotionWithAI(crawlResult.html, merchantUrl, merchantName, country, crawlResult.links, aiRuleProfile);
+    tasks.push(
+      extractPromotionWithAI(crawlResult.html, merchantUrl, merchantName, country, crawlResult.links, aiRuleProfile)
+        .then((data) => { result.promotion = data; })
+        .catch((err) => {
+          console.warn("[Extensions] 促销提取失败:", err instanceof Error ? err.message : err);
+          result.promotion = null;
+        }),
+    );
   }
   if (types.includes("price")) {
-    result.price_items = await extractPriceWithAI(crawlResult.html, merchantUrl, merchantName, country, crawlResult.links, aiRuleProfile);
+    tasks.push(
+      extractPriceWithAI(crawlResult.html, merchantUrl, merchantName, country, crawlResult.links, aiRuleProfile)
+        .then((data) => { result.price_items = data; })
+        .catch((err) => {
+          console.warn("[Extensions] 价格提取失败:", err instanceof Error ? err.message : err);
+          result.price_items = [];
+        }),
+    );
   }
 
   if (types.includes("sitelinks")) {

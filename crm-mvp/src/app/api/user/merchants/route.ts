@@ -765,19 +765,10 @@ async function triggerAdCopyGeneration(
       limit: 12,
     });
 
-    // Step 2: AI 基于参考样本生成 15 标题 + 4 描述
+    // Step 2: AI 生成标题 → 立即保存 → 前端下次轮询即可拿到
     const headlines = await padHeadlines([], merchantName, country, 15, {
       referenceItems: dedupedTitles,
       keywords: optimizedKeywords.map((kw) => kw.phrase),
-      dailyBudget: options.dailyBudget,
-      maxCpc: options.maxCpc,
-      biddingStrategy: options.biddingStrategy,
-      aiRuleProfile: options.aiRuleProfile,
-    });
-    const descriptions = await padDescriptions([], merchantName, country, 4, {
-      referenceItems: dedupedDescriptions,
-      keywords: optimizedKeywords.map((kw) => kw.phrase),
-      headlinesForUniqueness: headlines,
       dailyBudget: options.dailyBudget,
       maxCpc: options.maxCpc,
       biddingStrategy: options.biddingStrategy,
@@ -793,24 +784,36 @@ async function triggerAdCopyGeneration(
       optimizedKeywords.map((kw) => kw.phrase),
       country,
     );
-
-    // Step 3: 更新 ad_creatives
     await prisma.ad_creatives.update({
       where: { id: adCreativeId },
       data: {
         headlines: headlines as any,
-        descriptions: descriptions as any,
         ...(!existingCreative?.display_path1?.trim() ? { display_path1: pathSuggest.path1 } : {}),
         ...(!existingCreative?.display_path2?.trim() ? { display_path2: pathSuggest.path2 } : {}),
       },
     });
+    console.log(`[AdCopy] 标题已保存 (${headlines.length} 条)，开始生成描述...`);
 
-    // Step 4: 保存关键词到 keywords 表
     if (optimizedKeywords.length > 0) {
       await prisma.keywords.createMany({
         data: buildKeywordCreateManyInput(adGroupId, optimizedKeywords),
       });
     }
+
+    // Step 3: AI 生成描述 → 立即保存
+    const descriptions = await padDescriptions([], merchantName, country, 4, {
+      referenceItems: dedupedDescriptions,
+      keywords: optimizedKeywords.map((kw) => kw.phrase),
+      headlinesForUniqueness: headlines,
+      dailyBudget: options.dailyBudget,
+      maxCpc: options.maxCpc,
+      biddingStrategy: options.biddingStrategy,
+      aiRuleProfile: options.aiRuleProfile,
+    });
+    await prisma.ad_creatives.update({
+      where: { id: adCreativeId },
+      data: { descriptions: descriptions as any },
+    });
 
     console.log(`[AdCopy] 完成: ${headlines.length} 标题, ${descriptions.length} 描述, ${optimizedKeywords.length} 关键词`);
   } catch (err) {

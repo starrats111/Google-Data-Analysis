@@ -219,11 +219,13 @@ export default function AdPreviewPage() {
   const [semrushUrl, setSemrushUrl] = useState("");
   const [semrushUrlFetching, setSemrushUrlFetching] = useState(false);
 
-  // 轮询获取数据 — 就绪后停止
+  // 动态轮询：前 30 秒 2s 快轮询，之后 5s，就绪后停止
+  const [pollStart] = useState(() => Date.now());
+  const pollInterval = initialized ? 0 : (Date.now() - pollStart < 30000 ? 2000 : 5000);
   const { data: preview, isLoading, mutate } = useApiWithParams<AdPreviewData>(
     "/api/user/ad-creation/status",
     { campaign_id: campaignId },
-    { refreshInterval: initialized ? 0 : 5000 },
+    { refreshInterval: pollInterval },
   );
   const isReady = preview?.isReady ?? false;
   const targetCountry = String(preview?.campaign?.target_country || "US").toUpperCase();
@@ -305,12 +307,12 @@ export default function AdPreviewPage() {
     }
     setInitialized(true);
 
-    // 站内链接和图片默认自动触发
-    if (existingSitelinks.length === 0) {
-      setTimeout(() => generateExtension("sitelinks"), 100);
-    }
-    if (existingImages.length === 0) {
-      setTimeout(() => generateExtension("images"), 200);
+    // 站内链接和图片合并为一次请求，减少 HTTP 往返 + 共享爬虫结果
+    const autoTypes: Array<"sitelinks" | "images"> = [];
+    if (existingSitelinks.length === 0) autoTypes.push("sitelinks");
+    if (existingImages.length === 0) autoTypes.push("images");
+    if (autoTypes.length > 0) {
+      setTimeout(() => generateExtension(...autoTypes), 100);
     }
   }, [preview, isReady, initialized]);
 
@@ -619,20 +621,22 @@ export default function AdPreviewPage() {
     }
   }, [selectedMccId, selectedCid, message]);
 
-  // ─── 爬虫生成扩展 ───
-  const generateExtension = useCallback(async (type: "sitelinks" | "images" | "callouts" | "promotion" | "price" | "call" | "snippet") => {
-    if (type === "sitelinks") setSitelinksLoading(true);
-    if (type === "images") setImagesLoading(true);
-    if (type === "callouts") setCalloutsLoading(true);
-    if (type === "promotion") setPromotionLoading(true);
-    if (type === "price") setPriceLoading(true);
-    if (type === "call") setCallLoading(true);
-    if (type === "snippet") setSnippetLoading(true);
+  // ─── 爬虫生成扩展（支持批量 types 减少 HTTP 往返） ───
+  const generateExtension = useCallback(async (...requestedTypes: Array<"sitelinks" | "images" | "callouts" | "promotion" | "price" | "call" | "snippet">) => {
+    for (const t of requestedTypes) {
+      if (t === "sitelinks") setSitelinksLoading(true);
+      if (t === "images") setImagesLoading(true);
+      if (t === "callouts") setCalloutsLoading(true);
+      if (t === "promotion") setPromotionLoading(true);
+      if (t === "price") setPriceLoading(true);
+      if (t === "call") setCallLoading(true);
+      if (t === "snippet") setSnippetLoading(true);
+    }
     try {
       const res = await fetch("/api/user/ad-creation/generate-extensions", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ campaign_id: campaignId, types: [type] }),
+        body: JSON.stringify({ campaign_id: campaignId, types: requestedTypes }),
       });
       const json = await res.json();
       if (json.code !== 0) { message.error(json.message || "生成失败"); return; }
@@ -641,7 +645,7 @@ export default function AdPreviewPage() {
 
       if (data.crawl_failed) setCrawlFailed(true);
 
-      if (type === "sitelinks" && data.sitelinks !== undefined) {
+      if (requestedTypes.includes("sitelinks") && data.sitelinks !== undefined) {
         const items = normalizeSitelinkItems(data.sitelinks).map((item) => ({
           ...item,
           urlStatus: item.url ? "" as const : item.urlStatus,
@@ -686,7 +690,7 @@ export default function AdPreviewPage() {
             : "未找到可用链接，请手动添加");
         }
       }
-      if (type === "images" && data.images !== undefined) {
+      if (requestedTypes.includes("images") && data.images !== undefined) {
         setCrawledImages(data.images);
         setImageUrls([]); // 清空选中，让用户重新选
         if (data.images.length > 0) {
@@ -697,7 +701,7 @@ export default function AdPreviewPage() {
             : "未找到可用图片，请手动添加");
         }
       }
-      if (type === "callouts" && data.callouts) {
+      if (requestedTypes.includes("callouts") && data.callouts) {
         setCallouts(data.callouts.length > 0 ? data.callouts : ["", ""]);
         if (data.callouts.length > 0) message.success(`已生成 ${data.callouts.length} 条宣传信息`);
         else message.warning("未能生成宣传信息，请手动添加");
@@ -722,7 +726,7 @@ export default function AdPreviewPage() {
         message.success("已自动提取促销信息");
       }
 
-      if (type === "promotion" && (!data.promotion || typeof data.promotion !== "object") && merchantLandingUrl) {
+      if (requestedTypes.includes("promotion") && (!data.promotion || typeof data.promotion !== "object") && merchantLandingUrl) {
         setEnablePromotion(true);
         setPromotion((prev) => ({
           ...prev,
@@ -769,13 +773,15 @@ export default function AdPreviewPage() {
     } catch (err: any) {
       message.error(err?.message || "生成失败，请手动填写");
     } finally {
-      if (type === "sitelinks") setSitelinksLoading(false);
-      if (type === "images") setImagesLoading(false);
-      if (type === "callouts") setCalloutsLoading(false);
-      if (type === "promotion") setPromotionLoading(false);
-      if (type === "price") setPriceLoading(false);
-      if (type === "call") setCallLoading(false);
-      if (type === "snippet") setSnippetLoading(false);
+      for (const t of requestedTypes) {
+        if (t === "sitelinks") setSitelinksLoading(false);
+        if (t === "images") setImagesLoading(false);
+        if (t === "callouts") setCalloutsLoading(false);
+        if (t === "promotion") setPromotionLoading(false);
+        if (t === "price") setPriceLoading(false);
+        if (t === "call") setCallLoading(false);
+        if (t === "snippet") setSnippetLoading(false);
+      }
     }
   }, [campaignId, message, callCountryCode, defaultCurrencyCode, defaultLanguageCode, defaultSnippetHeader, targetCountry]);
 
@@ -1091,15 +1097,24 @@ export default function AdPreviewPage() {
         {preview.campaign?.google_campaign_id && <Tag color="green">已提交</Tag>}
       </Space>
 
-      {!isReady && (
-        <Alert
-          type="info" showIcon icon={<LoadingOutlined />}
-          message="正在生成广告素材..."
-          description="SemRush 竞品数据获取和 AI 文案生成中，请稍候。页面会自动刷新。"
-          style={{ marginBottom: 16 }}
-          action={<Button size="small" icon={<ReloadOutlined />} onClick={() => mutate()}>刷新</Button>}
-        />
-      )}
+      {!isReady && (() => {
+        const hCount = (preview?.adCreative?.headlines as string[] | undefined)?.length || 0;
+        const dCount = (preview?.adCreative?.descriptions as string[] | undefined)?.length || 0;
+        const stepText = hCount >= 15
+          ? `标题已就绪 (${hCount}/15)，描述生成中 (${dCount}/4)...`
+          : hCount > 0
+            ? `标题生成中 (${hCount}/15)...`
+            : "SemRush 竞品数据获取和 AI 文案生成中，请稍候。";
+        return (
+          <Alert
+            type="info" showIcon icon={<LoadingOutlined />}
+            message="正在生成广告素材..."
+            description={`${stepText} 页面会自动刷新。`}
+            style={{ marginBottom: 16 }}
+            action={<Button size="small" icon={<ReloadOutlined />} onClick={() => mutate()}>刷新</Button>}
+          />
+        );
+      })()}
 
       <Row gutter={16}>
         {/* ─── 左侧：标题 / 描述 / 关键词 / 扩展 ─── */}
