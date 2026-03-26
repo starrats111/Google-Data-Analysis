@@ -43,7 +43,6 @@ export const GET = withLeader(async (req: NextRequest, { user }) => {
       is_deleted: 0,
     },
     orderBy: { id: "desc" },
-    take: 200,
     select: {
       id: true,
       google_campaign_id: true,
@@ -150,8 +149,8 @@ export const GET = withLeader(async (req: NextRequest, { user }) => {
       merchantWritten.add(merchantId);
     }
 
-    const net = commission - rejectedComm;
-    const roi = cost > 0 ? ((net - cost) / cost) * 100 : 0;
+    const net = commission - rejectedComm - cost;
+    const roi = cost > 0 ? (net / cost) * 100 : 0;
 
     totalCost += cost;
     totalClicks += clicks;
@@ -175,7 +174,8 @@ export const GET = withLeader(async (req: NextRequest, { user }) => {
   campaignDetails.sort((a, b) => b.cost - a.cost);
 
   const avgCpc = totalClicks > 0 ? totalCost / totalClicks : 0;
-  const roi = totalCost > 0 ? ((totalCommissionFromTxn - totalRejectedFromTxn - totalCost) / totalCost) * 100 : 0;
+  const totalNet = totalCommissionFromTxn - totalRejectedFromTxn - totalCost;
+  const roi = totalCost > 0 ? (totalNet / totalCost) * 100 : 0;
 
   return apiSuccess(serializeData({
     user: { id: targetUser.id.toString(), username: targetUser.username, display_name: targetUser.display_name },
@@ -183,7 +183,7 @@ export const GET = withLeader(async (req: NextRequest, { user }) => {
       total_cost: Math.round(totalCost * 100) / 100,
       total_commission: Math.round(totalCommissionFromTxn * 100) / 100,
       rejected_commission: Math.round(totalRejectedFromTxn * 100) / 100,
-      net_commission: Math.round((totalCommissionFromTxn - totalRejectedFromTxn) * 100) / 100,
+      net_commission: Math.round(totalNet * 100) / 100,
       total_clicks: totalClicks,
       total_impressions: totalImpressions,
       avg_cpc: Math.round(avgCpc * 10000) / 10000,

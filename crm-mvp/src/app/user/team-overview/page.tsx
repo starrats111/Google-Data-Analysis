@@ -26,7 +26,6 @@ interface TeamStats {
   total_commission: number;
   rejected_commission: number;
   net_commission: number;
-  total_profit: number;
   avg_roi: number;
 }
 
@@ -38,7 +37,6 @@ interface MemberRanking {
   commission: number;
   rejected_commission: number;
   net_commission: number;
-  profit: number;
   roi: number;
   clicks: number;
 }
@@ -191,11 +189,7 @@ export default function TeamOverviewPage() {
               </Col>
               <Col xs={12} sm={8} md={4}>
                 <Statistic title="净佣金" value={teamStats.net_commission} precision={2} prefix="$"
-                  styles={{ content: { color: "#52c41a" } }} />
-              </Col>
-              <Col xs={12} sm={8} md={4}>
-                <Statistic title="总利润" value={teamStats.total_profit} precision={2} prefix="$"
-                  styles={{ content: { color: teamStats.total_profit >= 0 ? "#3f8600" : "#cf1322" } }} />
+                  styles={{ content: { color: teamStats.net_commission >= 0 ? "#52c41a" : "#cf1322" } }} />
               </Col>
             </Row>
             <div style={{ marginTop: 16 }}>

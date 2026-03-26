@@ -135,9 +135,8 @@ export const GET = withLeader(async (req: NextRequest, { user }) => {
     const userComm = commissionByUser.get(uid);
     const commission = userComm?.commission || 0;
     const rejected = userComm?.rejected || 0;
-    const net = commission - rejected;
-    const profit = net - cost;
-    const roi = cost > 0 ? ((net - cost) / cost) * 100 : 0;
+    const net = commission - rejected - cost;
+    const roi = cost > 0 ? (net / cost) * 100 : 0;
 
     return {
       user_id: uid,
@@ -147,7 +146,6 @@ export const GET = withLeader(async (req: NextRequest, { user }) => {
       commission: Math.round(commission * 100) / 100,
       rejected_commission: Math.round(rejected * 100) / 100,
       net_commission: Math.round(net * 100) / 100,
-      profit: Math.round(profit * 100) / 100,
       roi: Math.round(roi * 10) / 10,
       clicks,
       impressions,
@@ -159,9 +157,8 @@ export const GET = withLeader(async (req: NextRequest, { user }) => {
   const totalCost = memberStats.reduce((s, m) => s + m.cost, 0);
   const totalCommission = memberStats.reduce((s, m) => s + m.commission, 0);
   const totalRejected = memberStats.reduce((s, m) => s + m.rejected_commission, 0);
-  const totalNet = totalCommission - totalRejected;
-  const totalProfit = totalNet - totalCost;
-  const avgRoi = totalCost > 0 ? ((totalNet - totalCost) / totalCost) * 100 : 0;
+  const totalNet = totalCommission - totalRejected - totalCost;
+  const avgRoi = totalCost > 0 ? (totalNet / totalCost) * 100 : 0;
 
   return apiSuccess(serializeData({
     team_stats: {
@@ -170,7 +167,6 @@ export const GET = withLeader(async (req: NextRequest, { user }) => {
       total_commission: Math.round(totalCommission * 100) / 100,
       rejected_commission: Math.round(totalRejected * 100) / 100,
       net_commission: Math.round(totalNet * 100) / 100,
-      total_profit: Math.round(totalProfit * 100) / 100,
       avg_roi: Math.round(avgRoi * 10) / 10,
     },
     member_ranking: memberStats,
