@@ -290,7 +290,7 @@ async function registerBtPanelSiteInternal(client: Client, domain: string, siteP
 
     await execCommand(
       client,
-      `sudo sqlite3 ${shellSingleQuote(dbPath)} "INSERT INTO sites (name, path, status, \`index\`, ps, addtime) VALUES ('${escapedDomain}', '${escapedPath}', '1', 'index.html', '${escapedDomain}', '${escapedNow}');"`
+      `sudo sqlite3 ${shellSingleQuote(dbPath)} "INSERT INTO sites (name, path, status, [index], ps, addtime) VALUES ('${escapedDomain}', '${escapedPath}', '1', 'index.html', '${escapedDomain}', '${escapedNow}');"`
     );
     const sid = await execCommand(
       client,
