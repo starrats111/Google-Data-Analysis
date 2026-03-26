@@ -83,8 +83,6 @@ export async function GET(req: NextRequest) {
   }
   if (statusFilter && statusFilter !== "all") {
     campaignWhere.google_status = statusFilter;
-  } else {
-    campaignWhere.google_status = { not: "REMOVED" };
   }
   if (searchFilter) {
     campaignWhere.campaign_name = { contains: searchFilter };
@@ -319,7 +317,11 @@ export async function GET(req: NextRequest) {
     return extractSeq(a.campaign_name) - extractSeq(b.campaign_name);
   });
 
-  const displayCampaigns = dedupedCampaigns.slice(0, 200);
+  const showRemoved = statusFilter === "REMOVED" || statusFilter === "all";
+  const filteredForDisplay = showRemoved
+    ? dedupedCampaigns
+    : dedupedCampaigns.filter((c) => c.google_status !== "REMOVED");
+  const displayCampaigns = filteredForDisplay.slice(0, 200);
   const merchantWritten = new Set<string>();
 
   const rows = displayCampaigns.map((c) => {
@@ -373,8 +375,8 @@ export async function GET(req: NextRequest) {
     costByMcc,
     rowMeta: {
       displayedCount: displayCampaigns.length,
-      totalCount: dedupedCampaigns.length,
-      isLimited: dedupedCampaigns.length > 200,
+      totalCount: filteredForDisplay.length,
+      isLimited: filteredForDisplay.length > 200,
     },
   }));
 }
