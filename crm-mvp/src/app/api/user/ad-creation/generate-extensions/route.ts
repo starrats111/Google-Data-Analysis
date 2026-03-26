@@ -988,7 +988,7 @@ function extractPromotionInfo(html: string, sourceUrl: string, country: string):
     if (text.length > 5 && text.length < 150 && /\d/.test(text)) bannerTexts.push(text);
   }
   if (bannerTexts.length > 0) {
-    result.promotion_target = bannerTexts[0].slice(0, 60);
+    result.promotion_target = smartTruncate(bannerTexts[0], 20);
   }
 
   // 提取免邮信息并按国家本地化
@@ -997,15 +997,15 @@ function extractPromotionInfo(html: string, sourceUrl: string, country: string):
     const thresholdMatch = html.match(/(?:free\s*(?:shipping|delivery)|kostenlos(?:e|er)?\s+versand|livraison\s+offerte|env[ií]o\s+gratis|spedizione\s+gratuita)[^.]*?(?:over|above|ab|d[eè]s|desde|from)?\s*(?:[$€£]|chf\s*)?(\d+)/i);
     if (thresholdMatch) {
       if (market.languageCode === "de") {
-        result.promotion_target = `Kostenloser Versand ab ${thresholdMatch[1]} ${market.currencyCode}`;
+        result.promotion_target = smartTruncate(`Gratis Versand >${thresholdMatch[1]}`, 20);
       } else if (market.languageCode === "fr") {
-        result.promotion_target = `Livraison offerte dès ${thresholdMatch[1]} ${market.currencyCode}`;
+        result.promotion_target = smartTruncate(`Port offert >${thresholdMatch[1]}`, 20);
       } else if (market.languageCode === "es") {
-        result.promotion_target = `Envío gratis desde ${thresholdMatch[1]} ${market.currencyCode}`;
+        result.promotion_target = smartTruncate(`Envío gratis >${thresholdMatch[1]}`, 20);
       } else if (market.languageCode === "it") {
-        result.promotion_target = `Spedizione gratis da ${thresholdMatch[1]} ${market.currencyCode}`;
+        result.promotion_target = smartTruncate(`Spediz. gratis >${thresholdMatch[1]}`, 20);
       } else {
-        result.promotion_target = `Free Shipping Over ${thresholdMatch[1]} ${market.currencyCode}`;
+        result.promotion_target = smartTruncate(`Free Shipping >${thresholdMatch[1]}`, 20);
       }
     }
   }
@@ -1016,12 +1016,15 @@ function extractPromotionInfo(html: string, sourceUrl: string, country: string):
     if (titleMatch) {
       const title = titleMatch[1].replace(/\s+/g, " ").trim();
       const saleInTitle = title.match(/(\d+%?\s*off|sale|discount|free shipping)/i);
-      if (saleInTitle) result.promotion_target = title.slice(0, 60);
+      if (saleInTitle) result.promotion_target = smartTruncate(title, 20);
     }
   }
 
   result.final_url = sourceUrl;
-  if (result.promotion_target) result.language_code = market.promotionLanguageCode;
+  if (result.promotion_target) {
+    result.promotion_target = smartTruncate(result.promotion_target, 20);
+    result.language_code = market.promotionLanguageCode;
+  }
   if (result.discount_type === "MONETARY" && !result.currency_code) result.currency_code = market.currencyCode;
   return Object.keys(result).length > 1 ? result : null;
 }

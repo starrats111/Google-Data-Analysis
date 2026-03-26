@@ -221,7 +221,7 @@ export const AD_MARKET_MAP: Record<string, AdMarketConfig> = {
     currencyCode: "EUR",
     shippingLabel: "Gratis verzending",
     returnLabel: "Eenvoudig retourneren",
-    genericPromotionTarget: "Speciale aanbiedingen",
+    genericPromotionTarget: "Speciale deals",
     snippetHeader: "Brands",
     priceLanguageCode: "nl",
     promotionLanguageCode: "nl",

@@ -442,7 +442,7 @@ export async function POST(req: NextRequest) {
     if (promotion?.promotion_target) {
       const assetTempRn = `customers/${cid}/assets/${assetTempId}`;
       const promotionAsset: Record<string, unknown> = {
-        promotion_target: promotion.promotion_target,
+        promotion_target: (promotion.promotion_target || "").slice(0, 20),
         language_code: promotion.language_code || market.promotionLanguageCode,
       };
       if (promotion.discount_type === "PERCENT" && promotion.discount_percent) {
