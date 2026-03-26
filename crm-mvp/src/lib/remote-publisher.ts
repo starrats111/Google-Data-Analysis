@@ -1104,7 +1104,7 @@ export async function applyA1SiteStandard(sitePath: string, domain = ""): Promis
     client = await connectSSH();
     const sftp = await getSFTP(client);
 
-    await execCommand(client, `sudo mkdir -p "${sitePath}/assets/js" "${sitePath}/js/articles" "${sitePath}/images/articles" && sudo chown -R ubuntu:www "${sitePath}/assets" "${sitePath}/js" "${sitePath}/images" 2>/dev/null; sudo chmod -R 775 "${sitePath}/assets" "${sitePath}/js" "${sitePath}/images" 2>/dev/null; true`);
+    await execCommand(client, `sudo mkdir -p "${sitePath}" "${sitePath}/assets/js" "${sitePath}/js/articles" "${sitePath}/images/articles" && sudo chown ubuntu:www "${sitePath}" 2>/dev/null; sudo chmod 775 "${sitePath}" 2>/dev/null; sudo chown -R ubuntu:www "${sitePath}/assets" "${sitePath}/js" "${sitePath}/images" 2>/dev/null; sudo chmod -R 775 "${sitePath}/assets" "${sitePath}/js" "${sitePath}/images" 2>/dev/null; true`);
 
     const detected = await _detectSiteType(sftp, sitePath);
     let initial: Record<string, unknown>[] = [];
