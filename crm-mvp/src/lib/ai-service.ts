@@ -674,6 +674,9 @@ export async function callAiWithFallback(
     } catch (err) {
       lastError = err instanceof Error ? err : new Error(String(err));
       console.warn(`[AI] ${model.modelName} 失败，尝试下一个:`, lastError.message);
+      if (lastError.message.includes("insufficient_user_quota")) {
+        throw lastError;
+      }
     }
   }
   throw lastError || new Error("所有 AI 模型均失败");
