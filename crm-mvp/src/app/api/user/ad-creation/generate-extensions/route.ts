@@ -1143,9 +1143,9 @@ Extract and return a JSON object with these fields (use null if not found):
 - promo_code: string or null
 - language_code: string or null
 - promotion_target: string or null (localized for the target market, max 20 chars)
-- final_url: the best URL for this promotion, or "${merchantUrl}" if none
 
 Rules:
+- Do NOT include final_url — it will be set separately from crawled data
 - promotion_target MUST be in ${market.languageName}
 - Never default to English for non-English markets
 - If discount_type is MONETARY, currency_code should be ${market.currencyCode} unless the website clearly shows another local currency
@@ -1155,12 +1155,12 @@ ${formatAiRuleBlock(aiRuleProfile, "compliance")}
 Return ONLY valid JSON, no explanation.` }], 2048);
 
     const parsed = JSON.parse(aiResp.replace(/```json?\s*/g, "").replace(/```/g, "").trim());
-    if (parsed.discount_type || parsed.promotion_target || parsed.promo_code || parsed.final_url) {
+    if (parsed.discount_type || parsed.promotion_target || parsed.promo_code) {
+      delete parsed.final_url;
       mergedResult = mergePromotionData(mergedResult, {
         ...parsed,
         currency_code: parsed.currency_code || market.currencyCode,
         language_code: parsed.language_code || market.promotionLanguageCode,
-        final_url: parsed.final_url || merchantUrl,
       });
     }
   } catch (err) {
@@ -1235,7 +1235,7 @@ ${combinedText.slice(0, 4000)}
 
 Extract 3-8 products/services with pricing. Return a JSON array of objects:
 [
-  { "header": "Localized name (max 25 chars)", "description": "Localized short desc (max 25 chars)", "price": 29.99, "currency": "${market.currencyCode}", "url": "product URL or empty string" }
+  { "header": "Localized name (max 25 chars)", "description": "Localized short desc (max 25 chars)", "price": 29.99, "currency": "${market.currencyCode}" }
 ]
 
 Rules:
@@ -1244,6 +1244,7 @@ Rules:
 - price must be a real number found on the website, NOT made up
 - If no real prices are found, return an empty array []
 - currency should match the website's currency or ${market.currencyCode} for this market
+- Do NOT include URLs — they will be set separately
 ${formatAiRuleBlock(aiRuleProfile, "compliance")}
 
 Return ONLY valid JSON array, no explanation.` }], 2048);
@@ -1255,7 +1256,7 @@ Return ONLY valid JSON array, no explanation.` }], 2048);
         description: String(p.description || "").slice(0, 25),
         price: Number(p.price),
         currency: String(p.currency || market.currencyCode),
-        url: String(p.url || ""),
+        url: "",
       }));
     }
   } catch (err) {

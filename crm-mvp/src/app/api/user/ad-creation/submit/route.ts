@@ -505,7 +505,13 @@ export async function POST(req: NextRequest) {
         if (item.unit && VALID_PRICE_UNITS.has(item.unit)) {
           offering.unit = item.unit;
         }
-        offering.final_url = (item.final_url || finalUrl || "").trim();
+        let itemUrl = (item.final_url || item.url || "").trim();
+        try {
+          if (itemUrl && new URL(itemUrl).hostname.replace(/^www\./, "") !== new URL(finalUrl).hostname.replace(/^www\./, "")) {
+            itemUrl = "";
+          }
+        } catch { itemUrl = ""; }
+        offering.final_url = itemUrl || finalUrl;
         return offering;
       });
       operations.push({
