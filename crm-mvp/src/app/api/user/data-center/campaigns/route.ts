@@ -121,12 +121,12 @@ export async function GET(req: NextRequest) {
     },
   });
 
-  // 按 google_campaign_id 去重（保留最新一条，即 id 最大的）
-  const seenGoogleIds = new Set<string>();
+  // 按「CID + Google Campaign ID」去重（保留最新一条，即 id 最大的），避免不同广告账户同号 campaign 互相吞掉花费
+  const seenCampaignKeys = new Set<string>();
   const dedupedCampaigns = allCampaigns.filter((c) => {
-    const gid = c.google_campaign_id || String(c.id);
-    if (seenGoogleIds.has(gid)) return false;
-    seenGoogleIds.add(gid);
+    const dedupKey = `${c.customer_id || ""}:${c.google_campaign_id || String(c.id)}`;
+    if (seenCampaignKeys.has(dedupKey)) return false;
+    seenCampaignKeys.add(dedupKey);
     return true;
   });
 

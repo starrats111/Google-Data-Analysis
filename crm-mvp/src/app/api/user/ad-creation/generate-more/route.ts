@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 import { getUserFromRequest } from "@/lib/auth";
 import { apiSuccess, apiError } from "@/lib/constants";
+import prisma from "@/lib/prisma";
 import { padHeadlines, padDescriptions } from "@/lib/ai-service";
 
 /**
@@ -11,7 +12,7 @@ export async function POST(req: NextRequest) {
   const user = getUserFromRequest(req);
   if (!user) return apiError("未授权", 401);
 
-  const { type, existing, merchant_name, country, count, keywords = [] } = await req.json();
+  const { type, existing, merchant_name, country, count, keywords = [], headlines_for_uniqueness = [], daily_budget, max_cpc, bidding_strategy } = await req.json();
 
   if (!type || !["headlines", "descriptions"].includes(type)) {
     return apiError("type 必须为 headlines 或 descriptions");
@@ -19,17 +20,32 @@ export async function POST(req: NextRequest) {
 
   const existingItems = Array.isArray(existing) ? existing.filter((s: string) => s?.trim()) : [];
   const targetCount = Math.min(count || (type === "headlines" ? 15 : 4), type === "headlines" ? 15 : 4);
+  const settings = await prisma.ad_default_settings.findFirst({
+    where: { user_id: BigInt(user.userId), is_deleted: 0 },
+    select: { ai_rule_profile: true },
+  });
 
   try {
     if (type === "headlines") {
       const result = await padHeadlines(existingItems, merchant_name || "", country || "US", targetCount, {
         keywords: Array.isArray(keywords) ? keywords.map((k: string) => String(k).trim()).filter(Boolean) : [],
+        dailyBudget: Number(daily_budget || 0),
+        maxCpc: Number(max_cpc || 0),
+        biddingStrategy: bidding_strategy,
+        aiRuleProfile: settings?.ai_rule_profile,
       });
       const newItems = result.filter((h) => !existingItems.includes(h));
       return apiSuccess({ items: newItems });
     } else {
       const result = await padDescriptions(existingItems, merchant_name || "", country || "US", targetCount, {
         keywords: Array.isArray(keywords) ? keywords.map((k: string) => String(k).trim()).filter(Boolean) : [],
+        headlinesForUniqueness: Array.isArray(headlines_for_uniqueness)
+          ? headlines_for_uniqueness.map((h: string) => String(h).trim()).filter(Boolean)
+          : [],
+        dailyBudget: Number(daily_budget || 0),
+        maxCpc: Number(max_cpc || 0),
+        biddingStrategy: bidding_strategy,
+        aiRuleProfile: settings?.ai_rule_profile,
       });
       const newItems = result.filter((d) => !existingItems.includes(d));
       return apiSuccess({ items: newItems });

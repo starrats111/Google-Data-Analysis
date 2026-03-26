@@ -1,7 +1,9 @@
 import { NextRequest } from "next/server";
 import { getUserFromRequest, serializeData } from "@/lib/auth";
 import { apiSuccess, apiError } from "@/lib/constants";
+import prisma from "@/lib/prisma";
 import { SemRushClient, parseDomainFromSemrushUrl } from "@/lib/semrush-client";
+import { selectOptimizedKeywords } from "@/lib/ad-keyword-pipeline";
 
 /**
  * POST /api/user/ad-creation/semrush-url
@@ -11,8 +13,13 @@ export async function POST(req: NextRequest) {
   const user = getUserFromRequest(req);
   if (!user) return apiError("未授权", 401);
 
-  const { url, country = "US" } = await req.json();
+  const { url, country = "US", merchant_name = "", daily_budget, max_cpc, bidding_strategy } = await req.json();
   if (!url) return apiError("请输入 3UE SemRush 链接");
+
+  const settings = await prisma.ad_default_settings.findFirst({
+    where: { user_id: BigInt(user.userId), is_deleted: 0 },
+    select: { ai_rule_profile: true },
+  });
 
   const domain = parseDomainFromSemrushUrl(url);
   if (!domain) {
@@ -23,9 +30,18 @@ export async function POST(req: NextRequest) {
   try {
     const client = await SemRushClient.fromConfig(country);
     const result = await client.queryDomain(domain);
+    const optimizedKeywords = selectOptimizedKeywords(result.keywords, {
+      merchantName: merchant_name,
+      dailyBudget: Number(daily_budget || 0),
+      maxCpc: Number(max_cpc || 0),
+      biddingStrategy: bidding_strategy,
+      aiRuleProfile: settings?.ai_rule_profile,
+      limit: 12,
+    });
     return apiSuccess(serializeData({
       domain: result.domain,
-      keywords: result.keywords,
+      keywords: optimizedKeywords,
+      raw_keywords: result.keywords,
       deduped_titles: result.dedupedTitles,
       deduped_descriptions: result.dedupedDescriptions,
     }));
@@ -38,7 +54,15 @@ export async function POST(req: NextRequest) {
     const client = await SemRushClient.fromConfig(country);
     const keywords = await client.fetchFromPageUrl(url);
     if (keywords.length > 0) {
-      return apiSuccess(serializeData({ domain, keywords }));
+      const optimizedKeywords = selectOptimizedKeywords(keywords, {
+        merchantName: merchant_name,
+        dailyBudget: Number(daily_budget || 0),
+        maxCpc: Number(max_cpc || 0),
+        biddingStrategy: bidding_strategy,
+        aiRuleProfile: settings?.ai_rule_profile,
+        limit: 12,
+      });
+      return apiSuccess(serializeData({ domain, keywords: optimizedKeywords, raw_keywords: keywords }));
     }
   } catch (pageErr) {
     console.warn("[SemRush URL] 页面抓取失败:", pageErr instanceof Error ? pageErr.message : pageErr);

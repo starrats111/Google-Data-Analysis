@@ -57,6 +57,15 @@ interface Summary {
   pausedCount: number;
 }
 
+function calcCtr(clicks: number, impressions: number): number {
+  if (!impressions) return 0;
+  return (clicks / impressions) * 100;
+}
+
+function calcNetProfit(commission: number, rejectedCommission: number, cost: number): number {
+  return (commission || 0) - (rejectedCommission || 0) - (cost || 0);
+}
+
 // CID 格式化: 1234567890 → 123-456-7890
 function formatCid(cid: string | number): string {
   const s = String(cid).replace(/\D/g, "");
@@ -456,12 +465,17 @@ export default function DataCenterPage() {
       render: (v: number) => <Text type={v > 0 ? "danger" : "secondary"} style={{ fontSize: 12 }}>${(v || 0).toFixed(2)}</Text>,
     },
     {
-      title: "点击", dataIndex: "clicks", width: 55, align: "right",
-      render: (v: number) => <Text style={{ fontSize: 12 }}>{v}</Text>,
+      title: "净利润", key: "net_profit", width: 85, align: "right",
+      sorter: (a, b) => calcNetProfit(a.commission, a.rejected_commission, a.cost) - calcNetProfit(b.commission, b.rejected_commission, b.cost),
+      render: (_: unknown, r: IndexedRow) => {
+        const value = calcNetProfit(r.commission, r.rejected_commission, r.cost);
+        return <Text style={{ fontSize: 12, color: value >= 0 ? "#389e0d" : "#cf1322" }}>${value.toFixed(2)}</Text>;
+      },
     },
     {
-      title: "展示", dataIndex: "impressions", width: 55, align: "right",
-      render: (v: number) => <Text style={{ fontSize: 12 }}>{v}</Text>,
+      title: "点击率", key: "ctr", width: 75, align: "right",
+      sorter: (a, b) => calcCtr(a.clicks, a.impressions) - calcCtr(b.clicks, b.impressions),
+      render: (_: unknown, r: IndexedRow) => <Text style={{ fontSize: 12 }}>{calcCtr(r.clicks, r.impressions).toFixed(2)}%</Text>,
     },
     {
       title: "操作", width: 80, align: "center", fixed: "right",
@@ -609,7 +623,7 @@ export default function DataCenterPage() {
       <Card size="small" styles={{ body: { padding: "0 8px 8px" } }}>
         <Table<IndexedRow>
           rowKey="id" loading={isLoading} dataSource={rows} columns={columns}
-          size="small" scroll={{ x: 1040 }}
+          size="small" scroll={{ x: 1080 }}
           pagination={{ pageSize: 50, showTotal: (t) => `共 ${t} 条`, showSizeChanger: true, pageSizeOptions: ["20", "50", "100"] }}
           summary={() => {
             if (rows.length === 0) return null;
@@ -623,8 +637,8 @@ export default function DataCenterPage() {
                   <Table.Summary.Cell index={6} align="right"><Text strong style={{ color: "#cf1322" }}>${summary.totalCost.toFixed(2)}</Text></Table.Summary.Cell>
                   <Table.Summary.Cell index={7} align="right"><Text strong style={{ color: "#389e0d" }}>${summary.totalCommission.toFixed(2)}</Text></Table.Summary.Cell>
                   <Table.Summary.Cell index={8} align="right"><Text strong type="danger">${summary.totalRejectedCommission.toFixed(2)}</Text></Table.Summary.Cell>
-                  <Table.Summary.Cell index={9} align="right"><Text strong>{summary.totalClicks}</Text></Table.Summary.Cell>
-                  <Table.Summary.Cell index={10} align="right"><Text strong>{summary.totalImpressions}</Text></Table.Summary.Cell>
+                  <Table.Summary.Cell index={9} align="right"><Text strong style={{ color: calcNetProfit(summary.totalCommission, summary.totalRejectedCommission, summary.totalCost) >= 0 ? "#389e0d" : "#cf1322" }}>${calcNetProfit(summary.totalCommission, summary.totalRejectedCommission, summary.totalCost).toFixed(2)}</Text></Table.Summary.Cell>
+                  <Table.Summary.Cell index={10} align="right"><Text strong>{calcCtr(summary.totalClicks, summary.totalImpressions).toFixed(2)}%</Text></Table.Summary.Cell>
                 </Table.Summary.Row>
               </Table.Summary>
             );

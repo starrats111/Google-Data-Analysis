@@ -101,6 +101,7 @@ export type Ad_default_settingsCountAggregateOutputType = {
   naming_rule: number
   naming_prefix: number
   eu_political_ad: number
+  ai_rule_profile: number
   is_deleted: number
   created_at: number
   updated_at: number
@@ -183,6 +184,7 @@ export type Ad_default_settingsCountAggregateInputType = {
   naming_rule?: true
   naming_prefix?: true
   eu_political_ad?: true
+  ai_rule_profile?: true
   is_deleted?: true
   created_at?: true
   updated_at?: true
@@ -288,6 +290,7 @@ export type Ad_default_settingsGroupByOutputType = {
   naming_rule: string
   naming_prefix: string
   eu_political_ad: number
+  ai_rule_profile: runtime.JsonValue | null
   is_deleted: number
   created_at: Date
   updated_at: Date
@@ -329,6 +332,7 @@ export type ad_default_settingsWhereInput = {
   naming_rule?: Prisma.StringFilter<"ad_default_settings"> | string
   naming_prefix?: Prisma.StringFilter<"ad_default_settings"> | string
   eu_political_ad?: Prisma.IntFilter<"ad_default_settings"> | number
+  ai_rule_profile?: Prisma.JsonNullableFilter<"ad_default_settings">
   is_deleted?: Prisma.IntFilter<"ad_default_settings"> | number
   created_at?: Prisma.DateTimeFilter<"ad_default_settings"> | Date | string
   updated_at?: Prisma.DateTimeFilter<"ad_default_settings"> | Date | string
@@ -347,6 +351,7 @@ export type ad_default_settingsOrderByWithRelationInput = {
   naming_rule?: Prisma.SortOrder
   naming_prefix?: Prisma.SortOrder
   eu_political_ad?: Prisma.SortOrder
+  ai_rule_profile?: Prisma.SortOrderInput | Prisma.SortOrder
   is_deleted?: Prisma.SortOrder
   created_at?: Prisma.SortOrder
   updated_at?: Prisma.SortOrder
@@ -369,6 +374,7 @@ export type ad_default_settingsWhereUniqueInput = Prisma.AtLeast<{
   naming_rule?: Prisma.StringFilter<"ad_default_settings"> | string
   naming_prefix?: Prisma.StringFilter<"ad_default_settings"> | string
   eu_political_ad?: Prisma.IntFilter<"ad_default_settings"> | number
+  ai_rule_profile?: Prisma.JsonNullableFilter<"ad_default_settings">
   is_deleted?: Prisma.IntFilter<"ad_default_settings"> | number
   created_at?: Prisma.DateTimeFilter<"ad_default_settings"> | Date | string
   updated_at?: Prisma.DateTimeFilter<"ad_default_settings"> | Date | string
@@ -387,6 +393,7 @@ export type ad_default_settingsOrderByWithAggregationInput = {
   naming_rule?: Prisma.SortOrder
   naming_prefix?: Prisma.SortOrder
   eu_political_ad?: Prisma.SortOrder
+  ai_rule_profile?: Prisma.SortOrderInput | Prisma.SortOrder
   is_deleted?: Prisma.SortOrder
   created_at?: Prisma.SortOrder
   updated_at?: Prisma.SortOrder
@@ -413,6 +420,7 @@ export type ad_default_settingsScalarWhereWithAggregatesInput = {
   naming_rule?: Prisma.StringWithAggregatesFilter<"ad_default_settings"> | string
   naming_prefix?: Prisma.StringWithAggregatesFilter<"ad_default_settings"> | string
   eu_political_ad?: Prisma.IntWithAggregatesFilter<"ad_default_settings"> | number
+  ai_rule_profile?: Prisma.JsonNullableWithAggregatesFilter<"ad_default_settings">
   is_deleted?: Prisma.IntWithAggregatesFilter<"ad_default_settings"> | number
   created_at?: Prisma.DateTimeWithAggregatesFilter<"ad_default_settings"> | Date | string
   updated_at?: Prisma.DateTimeWithAggregatesFilter<"ad_default_settings"> | Date | string
@@ -431,6 +439,7 @@ export type ad_default_settingsCreateInput = {
   naming_rule?: string
   naming_prefix?: string
   eu_political_ad?: number
+  ai_rule_profile?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   is_deleted?: number
   created_at?: Date | string
   updated_at?: Date | string
@@ -449,6 +458,7 @@ export type ad_default_settingsUncheckedCreateInput = {
   naming_rule?: string
   naming_prefix?: string
   eu_political_ad?: number
+  ai_rule_profile?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   is_deleted?: number
   created_at?: Date | string
   updated_at?: Date | string
@@ -467,6 +477,7 @@ export type ad_default_settingsUpdateInput = {
   naming_rule?: Prisma.StringFieldUpdateOperationsInput | string
   naming_prefix?: Prisma.StringFieldUpdateOperationsInput | string
   eu_political_ad?: Prisma.IntFieldUpdateOperationsInput | number
+  ai_rule_profile?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   is_deleted?: Prisma.IntFieldUpdateOperationsInput | number
   created_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updated_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
@@ -485,6 +496,7 @@ export type ad_default_settingsUncheckedUpdateInput = {
   naming_rule?: Prisma.StringFieldUpdateOperationsInput | string
   naming_prefix?: Prisma.StringFieldUpdateOperationsInput | string
   eu_political_ad?: Prisma.IntFieldUpdateOperationsInput | number
+  ai_rule_profile?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   is_deleted?: Prisma.IntFieldUpdateOperationsInput | number
   created_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updated_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
@@ -503,6 +515,7 @@ export type ad_default_settingsCreateManyInput = {
   naming_rule?: string
   naming_prefix?: string
   eu_political_ad?: number
+  ai_rule_profile?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   is_deleted?: number
   created_at?: Date | string
   updated_at?: Date | string
@@ -521,6 +534,7 @@ export type ad_default_settingsUpdateManyMutationInput = {
   naming_rule?: Prisma.StringFieldUpdateOperationsInput | string
   naming_prefix?: Prisma.StringFieldUpdateOperationsInput | string
   eu_political_ad?: Prisma.IntFieldUpdateOperationsInput | number
+  ai_rule_profile?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   is_deleted?: Prisma.IntFieldUpdateOperationsInput | number
   created_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updated_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
@@ -539,6 +553,7 @@ export type ad_default_settingsUncheckedUpdateManyInput = {
   naming_rule?: Prisma.StringFieldUpdateOperationsInput | string
   naming_prefix?: Prisma.StringFieldUpdateOperationsInput | string
   eu_political_ad?: Prisma.IntFieldUpdateOperationsInput | number
+  ai_rule_profile?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   is_deleted?: Prisma.IntFieldUpdateOperationsInput | number
   created_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updated_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
@@ -563,6 +578,7 @@ export type ad_default_settingsCountOrderByAggregateInput = {
   naming_rule?: Prisma.SortOrder
   naming_prefix?: Prisma.SortOrder
   eu_political_ad?: Prisma.SortOrder
+  ai_rule_profile?: Prisma.SortOrder
   is_deleted?: Prisma.SortOrder
   created_at?: Prisma.SortOrder
   updated_at?: Prisma.SortOrder
@@ -653,6 +669,7 @@ export type ad_default_settingsSelect<ExtArgs extends runtime.Types.Extensions.I
   naming_rule?: boolean
   naming_prefix?: boolean
   eu_political_ad?: boolean
+  ai_rule_profile?: boolean
   is_deleted?: boolean
   created_at?: boolean
   updated_at?: boolean
@@ -673,12 +690,13 @@ export type ad_default_settingsSelectScalar = {
   naming_rule?: boolean
   naming_prefix?: boolean
   eu_political_ad?: boolean
+  ai_rule_profile?: boolean
   is_deleted?: boolean
   created_at?: boolean
   updated_at?: boolean
 }
 
-export type ad_default_settingsOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"id" | "user_id" | "bidding_strategy" | "ecpc_enabled" | "max_cpc" | "daily_budget" | "network_search" | "network_partners" | "network_display" | "naming_rule" | "naming_prefix" | "eu_political_ad" | "is_deleted" | "created_at" | "updated_at", ExtArgs["result"]["ad_default_settings"]>
+export type ad_default_settingsOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"id" | "user_id" | "bidding_strategy" | "ecpc_enabled" | "max_cpc" | "daily_budget" | "network_search" | "network_partners" | "network_display" | "naming_rule" | "naming_prefix" | "eu_political_ad" | "ai_rule_profile" | "is_deleted" | "created_at" | "updated_at", ExtArgs["result"]["ad_default_settings"]>
 
 export type $ad_default_settingsPayload<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = {
   name: "ad_default_settings"
@@ -696,6 +714,7 @@ export type $ad_default_settingsPayload<ExtArgs extends runtime.Types.Extensions
     naming_rule: string
     naming_prefix: string
     eu_political_ad: number
+    ai_rule_profile: runtime.JsonValue | null
     is_deleted: number
     created_at: Date
     updated_at: Date
@@ -1080,6 +1099,7 @@ export interface ad_default_settingsFieldRefs {
   readonly naming_rule: Prisma.FieldRef<"ad_default_settings", 'String'>
   readonly naming_prefix: Prisma.FieldRef<"ad_default_settings", 'String'>
   readonly eu_political_ad: Prisma.FieldRef<"ad_default_settings", 'Int'>
+  readonly ai_rule_profile: Prisma.FieldRef<"ad_default_settings", 'Json'>
   readonly is_deleted: Prisma.FieldRef<"ad_default_settings", 'Int'>
   readonly created_at: Prisma.FieldRef<"ad_default_settings", 'DateTime'>
   readonly updated_at: Prisma.FieldRef<"ad_default_settings", 'DateTime'>

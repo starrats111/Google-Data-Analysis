@@ -46,15 +46,16 @@ export const GET = withLeader(async (req: NextRequest, { user }) => {
       google_campaign_id: { not: null },
       is_deleted: 0,
     },
-    select: { id: true, user_id: true, google_campaign_id: true },
+    orderBy: { id: "desc" },
+    select: { id: true, user_id: true, customer_id: true, google_campaign_id: true },
   });
 
-  // 按 google_campaign_id 去重
-  const seenGoogleIds = new Set<string>();
+  // 按「成员 + CID + Google Campaign ID」去重，优先保留最新一条，避免不同成员/账户间同号 campaign 相互吞掉费用
+  const seenCampaignKeys = new Set<string>();
   const validCampaigns = rawCampaigns.filter((c) => {
-    const gid = c.google_campaign_id || String(c.id);
-    if (seenGoogleIds.has(gid)) return false;
-    seenGoogleIds.add(gid);
+    const dedupKey = `${c.user_id}:${c.customer_id || ""}:${c.google_campaign_id || String(c.id)}`;
+    if (seenCampaignKeys.has(dedupKey)) return false;
+    seenCampaignKeys.add(dedupKey);
     return true;
   });
 

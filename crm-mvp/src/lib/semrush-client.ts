@@ -177,9 +177,17 @@ interface SemRushCredentials {
   nodeConfig: NodeConfig;
 }
 
+export interface SemRushKeyword {
+  phrase: string;
+  volume: number;
+  cpc?: number | null;
+  competition?: string | number | null;
+  suggested_bid?: number | null;
+}
+
 export interface SemRushResult {
   domain: string;
-  keywords: { phrase: string; volume: number }[];
+  keywords: SemRushKeyword[];
   adsOverview: { title: string; description: string }[];
   copies: { date: string; total: number; samples: { title: string; description: string }[] };
   creativeSamples: { title: string; description: string }[];
@@ -360,7 +368,7 @@ export class SemRushClient {
     return String(response?.result?.token || "");
   }
 
-  async keywords(domain: string, limit = 5): Promise<{ phrase: string; volume: number }[]> {
+  async keywords(domain: string, limit = 5): Promise<SemRushKeyword[]> {
     const payload = {
       id: 13, jsonrpc: "2.0", method: "organic.PositionsOverview",
       params: {
@@ -371,7 +379,19 @@ export class SemRushClient {
     };
     const response = (await this.rpc(payload)) as any;
     const rows = response?.result || [];
-    return rows.slice(0, limit).map((r: any) => ({ phrase: r.phrase || "", volume: r.volume || 0 }));
+    return rows.slice(0, limit).map((r: any) => ({
+      phrase: String(r.phrase || ""),
+      volume: Number(r.volume || 0),
+      cpc: r.cpc != null ? Number(r.cpc) : null,
+      competition: r.competition ?? r.competition_level ?? null,
+      suggested_bid: r.suggested_bid != null
+        ? Number(r.suggested_bid)
+        : r.suggestedBid != null
+          ? Number(r.suggestedBid)
+          : r.cpc != null
+            ? Number(r.cpc)
+            : null,
+    }));
   }
 
   async adsOverview(domain: string, limit = 10): Promise<{ title: string; description: string }[]> {
@@ -418,7 +438,7 @@ export class SemRushClient {
   }
 
   /** 尝试通过 3UE 页面 URL 抓取嵌入数据 */
-  async fetchFromPageUrl(pageUrl: string): Promise<{ phrase: string; volume: number }[]> {
+  async fetchFromPageUrl(pageUrl: string): Promise<SemRushKeyword[]> {
     if (!this.token) await this.login();
     const cookieStr = Object.entries(this.cookies).map(([k, v]) => `${k}=${v}`).join("; ");
     const res = curlFetch(pageUrl, {
@@ -449,11 +469,25 @@ export class SemRushClient {
     return [];
   }
 
-  private extractKeywordsFromEmbeddedData(data: any, depth = 0): { phrase: string; volume: number }[] {
+  private extractKeywordsFromEmbeddedData(data: any, depth = 0): SemRushKeyword[] {
     if (depth > 5 || !data || typeof data !== "object") return [];
     if (Array.isArray(data)) {
       if (data.length > 0 && data[0]?.phrase) {
-        return data.filter((r) => r.phrase).map((r) => ({ phrase: String(r.phrase), volume: Number(r.volume || 0) }));
+        return data
+          .filter((r) => r.phrase)
+          .map((r) => ({
+            phrase: String(r.phrase),
+            volume: Number(r.volume || 0),
+            cpc: r.cpc != null ? Number(r.cpc) : null,
+            competition: r.competition ?? r.competition_level ?? null,
+            suggested_bid: r.suggested_bid != null
+              ? Number(r.suggested_bid)
+              : r.suggestedBid != null
+                ? Number(r.suggestedBid)
+                : r.cpc != null
+                  ? Number(r.cpc)
+                  : null,
+          }));
       }
       for (const item of data) {
         const result = this.extractKeywordsFromEmbeddedData(item, depth + 1);

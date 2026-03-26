@@ -5,6 +5,7 @@
  */
 import prisma from "@/lib/prisma";
 import { getAdMarketConfig, type AdMarketConfig } from "@/lib/ad-market";
+import { buildAiRulePrompt } from "@/lib/ai-rule-profile";
 
 interface AiModelConfig {
   providerName: string;
@@ -18,6 +19,57 @@ interface AiModelConfig {
 interface PadCopyOptions {
   referenceItems?: string[];
   keywords?: string[];
+  /** 与标题 token 重叠过高会被过滤，贴合 Google RSA「描述更独特」反馈 */
+  headlinesForUniqueness?: string[];
+  dailyBudget?: number;
+  maxCpc?: number;
+  biddingStrategy?: string;
+  aiRuleProfile?: unknown;
+}
+
+/** 显示路径（path1/path2）每条 ≤15 字符，字母数字与连字符；用于提升 RSA 完整度与点击率 */
+export function suggestDisplayPaths(merchantName: string, keywords: string[], country: string): { path1: string; path2: string } {
+  const market = getAdMarketConfig(country);
+  const segments: string[] = [];
+  const seen = new Set<string>();
+  const pushSeg = (raw: string) => {
+    const s = slugDisplayPathSegment(raw, 15);
+    if (s.length < 2 || seen.has(s)) return;
+    seen.add(s);
+    segments.push(s);
+  };
+  for (const k of keywords) {
+    pushSeg(k);
+    if (segments.length >= 4) break;
+  }
+  pushSeg(merchantName);
+  const shop = market.languageCode === "de" ? "shop" : market.languageCode === "fr" ? "boutique" : "shop";
+  const extra = market.languageCode === "de" ? "angebote" : market.languageCode === "fr" ? "promos" : "deals";
+  const path1 = (segments[0] || shop).slice(0, 15);
+  const path2 = (segments[1] || segments[2] || extra).slice(0, 15);
+  return { path1, path2 };
+}
+
+interface SanitizeDescriptionOpts {
+  headlineTokenSets?: Set<string>[];
+  /** 描述之间的 Jaccard 上限，默认 0.55（更严以贴近 Google「描述独特性」） */
+  maxDescJaccard?: number;
+  /** 描述相对单条标题的 Jaccard 上限，默认 0.42 */
+  maxHeadlineJaccard?: number;
+}
+
+function buildHeadlineTokenSets(headlines: string[], merchantName: string): Set<string>[] {
+  const sets: Set<string>[] = [];
+  const seen = new Set<string>();
+  for (const h of headlines) {
+    const ts = tokenSet(h, merchantName);
+    if (ts.size === 0) continue;
+    const key = [...ts].sort().join("|");
+    if (seen.has(key)) continue;
+    seen.add(key);
+    sets.push(ts);
+  }
+  return sets;
 }
 
 const DISCOUNT_RE = /discount|sale|off|%|save|deal|promo|solde|rabatt|reduc|sparen|remise|descuento|sconto|割引|セール|angebot/i;
@@ -37,6 +89,12 @@ const STOPWORDS = new Set([
 
 function normalizeWhitespace(text: string): string {
   return text.replace(/\s+/g, " ").trim();
+}
+
+function slugDisplayPathSegment(text: string, maxLen: number): string {
+  const base = normalizeWhitespace(text).toLowerCase();
+  const s = base.replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+  return s.slice(0, maxLen).replace(/-+$/g, "");
 }
 
 function escapeRegExp(text: string): string {
@@ -193,7 +251,12 @@ function sanitizeDescriptionCandidates(
   merchantName: string,
   maxLen: number,
   maxCount: number,
+  opts?: SanitizeDescriptionOpts,
 ): string[] {
+  const maxDescJ = opts?.maxDescJaccard ?? 0.55;
+  const maxHeadlineJ = opts?.maxHeadlineJaccard ?? 0.42;
+  const headlineSets = opts?.headlineTokenSets || [];
+
   const result: string[] = [];
   const exactSet = new Set<string>();
   const semanticSet = new Set<string>();
@@ -221,9 +284,17 @@ function sanitizeDescriptionCandidates(
 
     let tooSimilar = false;
     for (const existing of tokenSets) {
-      if (jaccard(existing, currentTokenSet) >= 0.75) {
+      if (jaccard(existing, currentTokenSet) >= maxDescJ) {
         tooSimilar = true;
         break;
+      }
+    }
+    if (!tooSimilar && headlineSets.length > 0) {
+      for (const hSet of headlineSets) {
+        if (hSet.size > 0 && jaccard(currentTokenSet, hSet) > maxHeadlineJ) {
+          tooSimilar = true;
+          break;
+        }
       }
     }
     if (tooSimilar) continue;
@@ -641,6 +712,10 @@ export async function padHeadlines(
 
   const references = sanitizeHeadlineCandidates(options.referenceItems || [], merchantName, 30, 12);
   const keywords = (options.keywords || []).map((k) => normalizeWhitespace(k)).filter(Boolean).slice(0, 12);
+  const dailyBudget = Number(options.dailyBudget) > 0 ? Number(options.dailyBudget) : 1.5;
+  const maxCpc = Number(options.maxCpc) > 0 ? Number(options.maxCpc) : 0.3;
+  const biddingStrategy = options.biddingStrategy || "MAXIMIZE_CLICKS";
+  const aiRulePrompt = buildAiRulePrompt(options.aiRuleProfile, "ad_copy");
 
   for (let attempt = 0; attempt < 4; attempt++) {
     const needed = count - locked.length;
@@ -650,10 +725,11 @@ Context:
 - Merchant: ${merchantName}
 - Target country: ${market.countryNameZh} (${market.languageName})
 - Writing style: ${market.style}
-- Budget: $1.5/day, CPC $0.3
+- Budget: $${dailyBudget.toFixed(2)}/day, CPC $${maxCpc.toFixed(2)}
+- Bidding strategy: ${biddingStrategy}
 - Goal: create high-conversion RSA headlines that real users would click, not filler.
 
-${keywords.length > 0 ? `Top keywords / product phrases:\n${keywords.map((k, i) => `${i + 1}. ${k}`).join("\n")}\n` : ""}
+${aiRulePrompt ? `User hard rules (MUST follow):\n${aiRulePrompt}\n\n` : ""}${keywords.length > 0 ? `Top keywords / product phrases:\n${keywords.map((k, i) => `${i + 1}. ${k}`).join("\n")}\n` : ""}
 ${references.length > 0 ? `Market references for inspiration only (DO NOT copy literally):\n${references.map((h, i) => `${i + 1}. \"${h}\"`).join("\n")}\n` : ""}
 ${locked.length > 0 ? `Already locked headlines that must remain untouched:\n${locked.map((h, i) => `${i + 1}. \"${h}\"`).join("\n")}\n` : ""}
 Generate exactly ${needed} NEW headlines. Return ONLY a JSON array of exactly ${needed} strings.
@@ -669,6 +745,7 @@ MANDATORY RULES:
 8. Do NOT output low-value filler such as brand only, \"Official Site\", \"Home Page\", or near-duplicates.
 9. Avoid repeating the same phrase pattern across multiple headlines.
 10. Output must comply with Google Ads policy and remain truthful.
+11. If any user hard rule conflicts with these defaults, follow the user hard rule first unless it violates policy.
 
 Return ONLY JSON array.`;
 
@@ -710,6 +787,22 @@ export async function padDescriptions(
 
   const references = sanitizeDescriptionCandidates(options.referenceItems || [], merchantName, 90, 8);
   const keywords = (options.keywords || []).map((k) => normalizeWhitespace(k)).filter(Boolean).slice(0, 12);
+  const dailyBudget = Number(options.dailyBudget) > 0 ? Number(options.dailyBudget) : 1.5;
+  const maxCpc = Number(options.maxCpc) > 0 ? Number(options.maxCpc) : 0.3;
+  const biddingStrategy = options.biddingStrategy || "MAXIMIZE_CLICKS";
+  const aiRulePrompt = buildAiRulePrompt(options.aiRuleProfile, "ad_copy");
+  const uniqHeadlines = (options.headlinesForUniqueness || [])
+    .map((h) => normalizeWhitespace(h))
+    .filter(Boolean)
+    .slice(0, 15);
+  const headlineSets = buildHeadlineTokenSets(uniqHeadlines, merchantName);
+  const descSanitizeOpts: SanitizeDescriptionOpts = {
+    maxDescJaccard: 0.55,
+    ...(headlineSets.length > 0 ? { headlineTokenSets: headlineSets } : {}),
+  };
+  const headlineBlock = uniqHeadlines.length > 0
+    ? `Current RSA headlines (descriptions must NOT paraphrase or stack the same phrases; Google flags \"Make your descriptions more unique\"):\n${uniqHeadlines.map((h, i) => `${i + 1}. \"${h}\"`).join("\n")}\n\n`
+    : "";
 
   for (let attempt = 0; attempt < 4; attempt++) {
     const needed = count - locked.length;
@@ -719,10 +812,17 @@ Context:
 - Merchant: ${merchantName}
 - Target country: ${market.countryNameZh} (${market.languageName})
 - Writing style: ${market.style}
-- Budget: $1.5/day, CPC $0.3
+- Budget: $${dailyBudget.toFixed(2)}/day, CPC $${maxCpc.toFixed(2)}
+- Bidding strategy: ${biddingStrategy}
 - Goal: write persuasive, realistic ad descriptions that feel commercially useful.
 
-${keywords.length > 0 ? `Top keywords / product phrases:\n${keywords.map((k, i) => `${i + 1}. ${k}`).join("\n")}\n` : ""}
+GOOGLE ADS AD STRENGTH (Responsive Search Ads — official feedback patterns):
+- Descriptions are rated for UNIQUENESS vs headlines and vs each other; repeating headline wording lowers Ad strength.
+- Prefer full-sentence flow with DISTINCT openings (e.g. \"Whether you need...\", \"From daily commutes to...\", \"Built to...\", \"Worried about...?\", \"Install in minutes and...\").
+- Avoid copying 3+ consecutive content words from any headline; use different benefits: fit, care/cleaning, durability, use-case, warranty/trust — not the same angle twice.
+- Sitelink count (6+) is separate in the UI; your job here is only stronger, more distinct descriptions.
+
+${headlineBlock}${aiRulePrompt ? `User hard rules (MUST follow):\n${aiRulePrompt}\n\n` : ""}${keywords.length > 0 ? `Top keywords / product phrases (weave naturally; do not mirror headline lines):\n${keywords.map((k, i) => `${i + 1}. ${k}`).join("\n")}\n` : ""}
 ${references.length > 0 ? `Market reference descriptions for inspiration only (DO NOT copy literally):\n${references.map((d, i) => `${i + 1}. \"${d}\"`).join("\n")}\n` : ""}
 ${locked.length > 0 ? `Already locked descriptions that must remain untouched:\n${locked.map((d, i) => `${i + 1}. \"${d}\"`).join("\n")}\n` : ""}
 Generate exactly ${needed} NEW descriptions. Return ONLY a JSON array of exactly ${needed} strings.
@@ -734,16 +834,17 @@ MANDATORY RULES:
 4. Each line must have a different persuasion angle: offer, trust, product fit, convenience, or CTA.
 5. Avoid generic filler. The copy must feel like it can actually drive revenue.
 6. Do NOT use dates, months, years, countdowns, \"Early Bird\", \"Ends Soon\", or expired event language.
-7. Do NOT repeat the same wording structure across lines.
+7. Do NOT repeat the same wording structure across lines; vary syntax and first words.
 8. Comply with Google Ads policy and keep claims truthful.
+9. If any user hard rule conflicts with these defaults, follow the user hard rule first unless it violates policy.
 
 Return ONLY JSON array.`;
 
     try {
       const raw = await callAiWithFallback("ad_copy", [{ role: "user", content: prompt }], 2048);
       const parsed = JSON.parse(extractJson(raw)) as string[];
-      const generated = sanitizeDescriptionCandidates(parsed, merchantName, 90, needed + 4);
-      const combined = sanitizeDescriptionCandidates([...locked, ...generated], merchantName, 90, count);
+      const generated = sanitizeDescriptionCandidates(parsed, merchantName, 90, needed + 4, descSanitizeOpts);
+      const combined = sanitizeDescriptionCandidates([...locked, ...generated], merchantName, 90, count, descSanitizeOpts);
       const comboCount = combined.filter((d) => DISCOUNT_RE.test(d) && SHIPPING_RE.test(d)).length;
 
       if (combined.length >= count && comboCount === 1) {
@@ -758,13 +859,13 @@ Return ONLY JSON array.`;
   }
 
   const fallbackCandidates = getFallbackDescriptionCandidates(merchantName, market, keywords);
-  const fallback = sanitizeDescriptionCandidates([...locked, ...fallbackCandidates], merchantName, 90, count);
+  const fallback = sanitizeDescriptionCandidates([...locked, ...fallbackCandidates], merchantName, 90, count, descSanitizeOpts);
   const comboCount = fallback.filter((d) => DISCOUNT_RE.test(d) && SHIPPING_RE.test(d)).length;
   if (comboCount === 1) return fallback.slice(0, count);
 
   const withForcedCombo = sanitizeDescriptionCandidates([
     ...fallback,
     ...getFallbackDescriptionCandidates(merchantName, market, keywords),
-  ], merchantName, 90, count);
+  ], merchantName, 90, count, descSanitizeOpts);
   return withForcedCombo.slice(0, count);
 }

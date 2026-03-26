@@ -4,7 +4,7 @@ import { useParams, useRouter } from "next/navigation";
 import {
   Card, Row, Col, Input, Button, Space, Tag, Typography, Spin, Alert,
   Select, InputNumber, Switch, Divider, App, Tooltip, Popconfirm, Checkbox,
-  Upload, Image, DatePicker,
+  Upload, Image,
 } from "antd";
 import {
   ThunderboltOutlined, LoadingOutlined,
@@ -28,6 +28,7 @@ const DESC_MAX = 90;
 const SITELINK_TITLE_MAX = 25;
 const SITELINK_DESC_MAX = 35;
 const CALLOUT_MAX = 25;
+const IMAGE_FALLBACK = "data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iODAiIGhlaWdodD0iODAiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+PHJlY3Qgd2lkdGg9IjgwIiBoZWlnaHQ9IjgwIiBmaWxsPSIjZjVmNWY1Ii8+PHRleHQgeD0iNDAiIHk9IjQ0IiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmaWxsPSIjYmZiZmJmIiBmb250LXNpemU9IjEyIj7ml6Dms5XliqDovb08L3RleHQ+PC9zdmc+";
 
 function formatCid(cid: string): string {
   const digits = cid.replace(/\D/g, "");
@@ -63,11 +64,34 @@ interface SitelinkItem {
   urlStatus?: "valid" | "invalid" | "checking" | "";
 }
 
+interface KeywordItem {
+  id?: string;
+  text: string;
+  matchType: string;
+  score?: number | null;
+  reason?: string;
+  avgMonthlySearches?: number | null;
+  competition?: string | null;
+  suggestedBid?: number | null;
+  competitionBand?: string;
+}
+
 interface AdPreviewData {
   campaign: any;
   adGroup: any;
   adCreative: any;
-  keywords: { id: string; keyword_text: string; match_type: string }[];
+  keywords: Array<{
+    id: string;
+    keyword_text: string;
+    match_type: string;
+    score?: number;
+    reason?: string;
+    avg_monthly_searches?: number | null;
+    competition?: string | null;
+    suggested_bid?: number | null;
+    competition_band?: string;
+    recommended_match_type?: string;
+  }>;
   adSettings: any;
   merchant: any;
   mccAccounts?: { id: string | number; [key: string]: any }[];
@@ -112,7 +136,7 @@ export default function AdPreviewPage() {
   // 核心编辑状态
   const [headlines, setHeadlines] = useState<string[]>([]);
   const [descriptions, setDescriptions] = useState<string[]>([]);
-  const [kwList, setKwList] = useState<{ text: string; matchType: string }[]>([]);
+  const [kwList, setKwList] = useState<KeywordItem[]>([]);
   const [newKeyword, setNewKeyword] = useState("");
   const [budget, setBudget] = useState(2);
   const [maxCpc, setMaxCpc] = useState(0.3);
@@ -133,10 +157,8 @@ export default function AdPreviewPage() {
   const [cidSyncing, setCidSyncing] = useState(false);
 
   // 扩展模块
-  const [enableSitelinks, setEnableSitelinks] = useState(true);
   const [sitelinks, setSitelinks] = useState<SitelinkItem[]>([]);
   const [sitelinksLoading, setSitelinksLoading] = useState(false);
-  const [enableImages, setEnableImages] = useState(true);
   const [imageUrls, setImageUrls] = useState<string[]>([]);
   const [crawledImages, setCrawledImages] = useState<string[]>([]);
   const [newImageUrl, setNewImageUrl] = useState("");
@@ -152,7 +174,7 @@ export default function AdPreviewPage() {
   const [promotion, setPromotion] = useState<{
     occasion?: string; language_code?: string; promotion_target: string;
     discount_type: "MONETARY" | "PERCENT"; discount_amount?: number; discount_percent?: number;
-    currency_code?: string; promo_code?: string; start_date?: string; end_date?: string; final_url?: string;
+    currency_code?: string; promo_code?: string; final_url?: string;
   }>({
     promotion_target: "", discount_type: "PERCENT", discount_percent: 10,
     currency_code: "USD", language_code: "en", final_url: "",
@@ -220,7 +242,17 @@ export default function AdPreviewPage() {
     setDescriptions(d.length >= 4 ? d.slice(0, 4) : [...d, ...Array(4 - d.length).fill("")]);
     setHeadlinesZh(preview.adCreative?.headlines_zh || []);
     setDescriptionsZh(preview.adCreative?.descriptions_zh || []);
-    setKwList((preview.keywords || []).map((k: any) => ({ text: k.keyword_text, matchType: k.match_type })));
+    setKwList((preview.keywords || []).map((k: any) => ({
+      id: k.id,
+      text: k.keyword_text,
+      matchType: k.match_type,
+      score: k.score ?? null,
+      reason: k.reason || "",
+      avgMonthlySearches: k.avg_monthly_searches ?? null,
+      competition: k.competition ?? null,
+      suggestedBid: k.suggested_bid != null ? Number(k.suggested_bid) : null,
+      competitionBand: k.competition_band || "",
+    })));
     const c = preview.campaign;
     const s = preview.adSettings;
     const marketCfg = getAdMarketConfig((c?.target_country || "US").toUpperCase());
@@ -259,7 +291,6 @@ export default function AdPreviewPage() {
     // 初始化已有扩展数据
     const existingSitelinks = normalizeSitelinkItems(preview.adCreative?.sitelinks);
     if (existingSitelinks.length > 0) {
-      setEnableSitelinks(true);
       setSitelinks(existingSitelinks);
     }
     const existingCallouts = preview.adCreative?.callouts as string[] | null;
@@ -269,20 +300,16 @@ export default function AdPreviewPage() {
     }
     const existingImages = normalizeImageUrls(preview.adCreative?.image_urls);
     if (existingImages.length > 0) {
-      setEnableImages(true);
       setCrawledImages(existingImages);
       setImageUrls(existingImages);
     }
     setInitialized(true);
 
-    // ─── 自动生成：图片和站内链接默认自动触发（不需要用户勾选） ───
+    // 站内链接和图片默认自动触发
     if (existingSitelinks.length === 0) {
-      setEnableSitelinks(true);
-      // 延迟触发，等 state 更新完
       setTimeout(() => generateExtension("sitelinks"), 100);
     }
     if (existingImages.length === 0) {
-      setEnableImages(true);
       setTimeout(() => generateExtension("images"), 200);
     }
   }, [preview, isReady, initialized]);
@@ -328,7 +355,7 @@ export default function AdPreviewPage() {
     } finally {
       setTranslating(false);
     }
-  }, [headlines, descriptions, callouts, enableCallouts, sitelinks, enableSitelinks, preview, message]);
+  }, [headlines, descriptions, callouts, enableCallouts, sitelinks, preview, message]);
 
   // ─── 标题/描述操作 ───
   const updateHeadline = (idx: number, val: string) => {
@@ -356,6 +383,9 @@ export default function AdPreviewPage() {
           merchant_name: preview?.merchant?.merchant_name || "",
           country: preview?.campaign?.target_country || "US",
           keywords: kwList.map((kw) => kw.text).filter(Boolean),
+          daily_budget: budget,
+          max_cpc: maxCpc,
+          bidding_strategy: biddingStrategy,
           count: 15,
         }),
       });
@@ -375,9 +405,9 @@ export default function AdPreviewPage() {
     } finally {
       setGeneratingHeadlines(false);
     }
-  }, [headlines, preview, message]);
+  }, [headlines, preview, message, kwList, budget, maxCpc, biddingStrategy]);
 
-  // ─── AI 生成更多描述 ───
+  // ─── AI 生成更多描述（与当前标题差异化，贴合 Google「描述更独特」）───
   const aiGenerateDescriptions = useCallback(async () => {
     if (descriptions.length >= 4) { message.warning("描述已满 4 条"); return; }
     setGeneratingDescriptions(true);
@@ -391,6 +421,10 @@ export default function AdPreviewPage() {
           merchant_name: preview?.merchant?.merchant_name || "",
           country: preview?.campaign?.target_country || "US",
           keywords: kwList.map((kw) => kw.text).filter(Boolean),
+          headlines_for_uniqueness: headlines.filter((h) => h.trim()),
+          daily_budget: budget,
+          max_cpc: maxCpc,
+          bidding_strategy: biddingStrategy,
           count: 4,
         }),
       });
@@ -410,7 +444,7 @@ export default function AdPreviewPage() {
     } finally {
       setGeneratingDescriptions(false);
     }
-  }, [descriptions, preview, message]);
+  }, [descriptions, headlines, preview, message, kwList, budget, maxCpc, biddingStrategy]);
 
   // ─── 关键词操作 ───
   const [newKwMatchType, setNewKwMatchType] = useState<string>("PHRASE");
@@ -425,6 +459,23 @@ export default function AdPreviewPage() {
     setKwList((prev) => { const n = [...prev]; n[idx] = { ...n[idx], matchType }; return n; });
   };
 
+  // ─── SemRush 关键词合并（去重+映射） ───
+  const mergeSemrushKeywords = (rawKws: any[], existingList: typeof kwList) => {
+    const existing = new Set(existingList.map((k) => k.text.toLowerCase()));
+    return rawKws
+      .filter((kw: any) => !existing.has((kw.phrase || "").toLowerCase()))
+      .map((kw: any) => ({
+        text: kw.phrase,
+        matchType: kw.recommended_match_type || kw.match_type || "PHRASE",
+        score: kw.score ?? null,
+        reason: kw.reason || "",
+        avgMonthlySearches: kw.volume ?? kw.avg_monthly_searches ?? null,
+        competition: kw.competition != null ? String(kw.competition) : null,
+        suggestedBid: kw.suggested_bid != null ? Number(kw.suggested_bid) : kw.cpc != null ? Number(kw.cpc) : null,
+        competitionBand: kw.competition_band || "",
+      }));
+  };
+
   // ─── SemRush 关键词获取 ───
   const fetchKeywordsFromSemrush = useCallback(async () => {
     const merchantUrl = preview?.merchant?.merchant_url;
@@ -435,7 +486,14 @@ export default function AdPreviewPage() {
       const res = await fetch("/api/user/ad-creation/semrush", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ merchant_url: merchantUrl, country }),
+        body: JSON.stringify({
+          merchant_url: merchantUrl,
+          merchant_name: preview?.merchant?.merchant_name || "",
+          country,
+          daily_budget: budget,
+          max_cpc: maxCpc,
+          bidding_strategy: biddingStrategy,
+        }),
       });
       const json = await res.json();
       if (json.code !== 0) {
@@ -446,10 +504,7 @@ export default function AdPreviewPage() {
       setSemrushFailed(false);
       const kws = json.data?.keywords || [];
       if (kws.length === 0) { message.warning("SemRush 未找到该商家的关键词，请手动输入"); return; }
-      const existing = new Set(kwList.map((k) => k.text.toLowerCase()));
-      const newKws = kws
-        .filter((kw: any) => !existing.has((kw.phrase || "").toLowerCase()))
-        .map((kw: any) => ({ text: kw.phrase, matchType: "PHRASE" }));
+      const newKws = mergeSemrushKeywords(kws, kwList);
       if (newKws.length > 0) {
         setKwList((prev) => [...prev, ...newKws]);
         message.success(`已从 SemRush 获取 ${newKws.length} 个关键词`);
@@ -462,7 +517,7 @@ export default function AdPreviewPage() {
     } finally {
       setKwFetching(false);
     }
-  }, [preview, kwList, message]);
+  }, [preview, kwList, message, budget, maxCpc, biddingStrategy]);
 
   // ─── 通过 3UE 链接获取关键词 ───
   const fetchKeywordsFromUrl = useCallback(async () => {
@@ -473,16 +528,20 @@ export default function AdPreviewPage() {
       const res = await fetch("/api/user/ad-creation/semrush-url", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url: semrushUrl.trim(), country }),
+        body: JSON.stringify({
+          url: semrushUrl.trim(),
+          merchant_name: preview?.merchant?.merchant_name || "",
+          country,
+          daily_budget: budget,
+          max_cpc: maxCpc,
+          bidding_strategy: biddingStrategy,
+        }),
       });
       const json = await res.json();
       if (json.code !== 0) { message.error({ content: json.message || "获取失败", duration: 6 }); return; }
       const kws = json.data?.keywords || [];
       if (kws.length === 0) { message.warning("未从该链接获取到关键词，请手动输入"); return; }
-      const existing = new Set(kwList.map((k) => k.text.toLowerCase()));
-      const newKws = kws
-        .filter((kw: any) => !existing.has((kw.phrase || "").toLowerCase()))
-        .map((kw: any) => ({ text: kw.phrase, matchType: "PHRASE" }));
+      const newKws = mergeSemrushKeywords(kws, kwList);
       if (newKws.length > 0) {
         setKwList((prev) => [...prev, ...newKws]);
         setSemrushFailed(false);
@@ -496,7 +555,7 @@ export default function AdPreviewPage() {
     } finally {
       setSemrushUrlFetching(false);
     }
-  }, [semrushUrl, preview, kwList, message]);
+  }, [semrushUrl, preview, kwList, message, budget, maxCpc, biddingStrategy]);
 
   // ─── MCC/CID 操作 ───
   const loadCidList = useCallback(async (mccAccountId: string) => {
@@ -589,7 +648,37 @@ export default function AdPreviewPage() {
         }));
         if (items.length > 0) {
           setSitelinks(items);
-          message.success(`已从商家网站获取 ${items.length} 条真实链接，请验证`);
+          message.loading({ content: `已获取 ${items.length} 条链接，正在逐条验证...`, key: "sl-auto-check", duration: 0 });
+          const checkResults = await Promise.all(
+            items.map(async (item, idx) => {
+              if (!item.url || !item.url.startsWith("http")) return { idx, valid: false };
+              try {
+                const checkRes = await fetch(`/api/user/ad-creation/check-url?url=${encodeURIComponent(item.url)}`);
+                const checkJson = await checkRes.json();
+                return { idx, valid: checkJson.code === 0 && checkJson.data?.ok };
+              } catch { return { idx, valid: false }; }
+            }),
+          );
+          const validItems: SitelinkItem[] = [];
+          const invalidUrls: string[] = [];
+          for (const r of checkResults) {
+            if (r.valid) {
+              validItems.push({ ...items[r.idx], urlStatus: "valid" as const });
+            } else {
+              invalidUrls.push(items[r.idx].title || items[r.idx].url);
+            }
+          }
+          message.destroy("sl-auto-check");
+          if (invalidUrls.length > 0) {
+            message.warning(`已自动移除 ${invalidUrls.length} 条无效链接（${invalidUrls.join("、")}）`);
+          }
+          if (validItems.length > 0) {
+            setSitelinks(validItems.length >= 2 ? validItems : [...validItems, { title: "", desc1: "", desc2: "", url: "", urlStatus: "" }]);
+            message.success(`${validItems.length} 条站内链接已验证通过`);
+          } else {
+            setSitelinks([{ title: "", desc1: "", desc2: "", url: "", urlStatus: "" }, { title: "", desc1: "", desc2: "", url: "", urlStatus: "" }]);
+            message.warning("所有爬取链接均无效，请手动添加");
+          }
         } else {
           setSitelinks([{ title: "", desc1: "", desc2: "", url: "", urlStatus: "" }, { title: "", desc1: "", desc2: "", url: "", urlStatus: "" }]);
           message.warning(data.crawl_failed
@@ -626,8 +715,6 @@ export default function AdPreviewPage() {
           discount_amount: p.discount_amount != null ? Number(p.discount_amount) : prev.discount_amount,
           promo_code: p.promo_code ? String(p.promo_code) : prev.promo_code,
           occasion: p.occasion ? String(p.occasion) : prev.occasion,
-          start_date: p.start_date ? String(p.start_date) : prev.start_date,
-          end_date: p.end_date ? String(p.end_date) : prev.end_date,
           final_url: String(p.final_url || prev.final_url || merchantLandingUrl),
           currency_code: String(p.currency_code || prev.currency_code || defaultCurrencyCode),
           language_code: String(p.language_code || prev.language_code || defaultLanguageCode),
@@ -693,30 +780,50 @@ export default function AdPreviewPage() {
   }, [campaignId, message, callCountryCode, defaultCurrencyCode, defaultLanguageCode, defaultSnippetHeader, targetCountry]);
 
   // ─── 手动输入 URL → 自动获取标题和描述 + 验证 ───
-  const fetchUrlMeta = useCallback(async (idx: number) => {
+  const fetchAndValidateSitelink = useCallback(async (idx: number) => {
     const url = sitelinks[idx]?.url;
-    if (!url || !url.startsWith("http")) return;
+    if (!url) return;
+    const merchantDomain = preview?.merchant?.merchant_url || preview?.adCreative?.final_url || "";
+    let baseDomain = "";
+    try { baseDomain = new URL(merchantDomain).hostname.replace(/^www\./, ""); } catch {}
+
+    if (!url.startsWith("http")) {
+      setSitelinks((prev) => { const n = [...prev]; n[idx] = { ...n[idx], urlStatus: "invalid" }; return n; });
+      message.error("链接必须以 http:// 或 https:// 开头");
+      return;
+    }
+    try {
+      const urlDomain = new URL(url).hostname.replace(/^www\./, "");
+      if (baseDomain && !urlDomain.includes(baseDomain) && !baseDomain.includes(urlDomain)) {
+        setSitelinks((prev) => { const n = [...prev]; n[idx] = { ...n[idx], urlStatus: "invalid" }; return n; });
+        message.error(`链接域名 (${urlDomain}) 与商家域名 (${baseDomain}) 不匹配`);
+        return;
+      }
+    } catch {
+      setSitelinks((prev) => { const n = [...prev]; n[idx] = { ...n[idx], urlStatus: "invalid" }; return n; });
+      message.error("URL 格式无效");
+      return;
+    }
+
     setSitelinks((prev) => { const n = [...prev]; n[idx] = { ...n[idx], urlStatus: "checking" }; return n; });
     try {
-      // 同时获取元数据和验证链接
-      const [metaRes, checkRes] = await Promise.all([
-        fetch(`/api/user/ad-creation/fetch-url-meta?url=${encodeURIComponent(url)}`),
+      const [checkRes, metaRes] = await Promise.all([
         fetch(`/api/user/ad-creation/check-url?url=${encodeURIComponent(url)}`),
+        fetch(`/api/user/ad-creation/fetch-url-meta?url=${encodeURIComponent(url)}`),
       ]);
-      const metaJson = await metaRes.json();
-      const checkJson = await checkRes.json();
-
-      const checkOk = checkJson?.data?.ok === true;
-      const metaOk = metaJson.code === 0 && metaJson.data?.ok;
-      const isSoft404 = metaJson?.data?.isSoft404 === true;
+      const checkData = await checkRes.json();
+      const metaData = await metaRes.json();
+      const checkOk = checkData?.data?.ok === true;
+      const metaOk = metaData.code === 0 && metaData.data?.ok;
+      const isSoft404 = metaData?.data?.isSoft404 === true;
       const isValid = checkOk && !isSoft404;
 
       setSitelinks((prev) => {
         const n = [...prev];
         n[idx] = {
           ...n[idx],
-          title: n[idx].title || (metaOk ? metaJson.data.title : "") || "",
-          desc1: n[idx].desc1 || (metaOk ? metaJson.data.description : "") || "",
+          title: n[idx].title || (metaOk ? metaData.data.title : "") || "",
+          desc1: n[idx].desc1 || (metaOk ? metaData.data.description : "") || "",
           urlStatus: isValid ? "valid" : "invalid",
         };
         return n;
@@ -724,17 +831,17 @@ export default function AdPreviewPage() {
 
       if (isSoft404) {
         message.error("链接页面显示「页面不存在」（软 404）");
-      } else if (metaOk) {
+      } else if (metaOk && isValid) {
         message.success("已自动获取页面标题和描述");
       } else if (isValid) {
         message.info("链接有效，但无法获取页面信息，请手动填写标题");
       } else {
-        message.error(checkJson?.data?.reason || "链接不可用");
+        message.error(checkData?.data?.reason || "链接不可用");
       }
     } catch {
       setSitelinks((prev) => { const n = [...prev]; n[idx] = { ...n[idx], urlStatus: "valid" }; return n; });
     }
-  }, [sitelinks, message]);
+  }, [sitelinks, preview, message]);
 
   // ─── 图片上传 ───
   const [imageCheckResults, setImageCheckResults] = useState<Record<number, { has_text: boolean; checking: boolean; text?: string }>>({});
@@ -795,18 +902,6 @@ export default function AdPreviewPage() {
     return false;
   }, [message]);
 
-  // 勾选时自动触发 AI 生成
-  const toggleSitelinks = useCallback((checked: boolean) => {
-    setEnableSitelinks(checked);
-    const hasRealSitelinks = sitelinks.some((item) => item.url.trim().startsWith("http"));
-    if (checked && !hasRealSitelinks) generateExtension("sitelinks");
-  }, [sitelinks, generateExtension]);
-
-  const toggleImages = useCallback((checked: boolean) => {
-    setEnableImages(checked);
-    if (checked && imageUrls.length === 0) generateExtension("images");
-  }, [imageUrls.length, generateExtension]);
-
   const toggleCallouts = useCallback((checked: boolean) => {
     setEnableCallouts(checked);
     if (checked && callouts.length === 0) generateExtension("callouts");
@@ -826,64 +921,13 @@ export default function AdPreviewPage() {
   };
   const removeSitelink = (idx: number) => setSitelinks((prev) => prev.filter((_, i) => i !== idx));
 
-  const validateSitelinkUrl = useCallback(async (idx: number) => {
-    const url = sitelinks[idx]?.url;
-    if (!url) return;
-    const merchantDomain = preview?.merchant?.merchant_url || preview?.adCreative?.final_url || "";
-    let baseDomain = "";
-    try { baseDomain = new URL(merchantDomain).hostname.replace(/^www\./, ""); } catch {}
-
-    if (!url.startsWith("http")) {
-      setSitelinks((prev) => { const n = [...prev]; n[idx] = { ...n[idx], urlStatus: "invalid" }; return n; });
-      message.error("链接必须以 http:// 或 https:// 开头");
-      return;
-    }
-    try {
-      const urlDomain = new URL(url).hostname.replace(/^www\./, "");
-      if (baseDomain && !urlDomain.includes(baseDomain) && !baseDomain.includes(urlDomain)) {
-        setSitelinks((prev) => { const n = [...prev]; n[idx] = { ...n[idx], urlStatus: "invalid" }; return n; });
-        message.error(`链接域名 (${urlDomain}) 与商家域名 (${baseDomain}) 不匹配`);
-        return;
-      }
-    } catch {
-      setSitelinks((prev) => { const n = [...prev]; n[idx] = { ...n[idx], urlStatus: "invalid" }; return n; });
-      message.error("URL 格式无效");
-      return;
-    }
-
-    setSitelinks((prev) => { const n = [...prev]; n[idx] = { ...n[idx], urlStatus: "checking" }; return n; });
-    try {
-      const [checkRes, metaRes] = await Promise.all([
-        fetch(`/api/user/ad-creation/check-url?url=${encodeURIComponent(url)}`),
-        fetch(`/api/user/ad-creation/fetch-url-meta?url=${encodeURIComponent(url)}`),
-      ]);
-      const checkData = await checkRes.json();
-      const metaData = await metaRes.json();
-      const checkOk = checkData?.data?.ok === true;
-      const isSoft404 = metaData?.data?.isSoft404 === true;
-      const isValid = checkOk && !isSoft404;
-      setSitelinks((prev) => {
-        const n = [...prev];
-        n[idx] = { ...n[idx], urlStatus: isValid ? "valid" : "invalid" };
-        return n;
-      });
-      if (isSoft404) {
-        message.error("链接页面显示「页面不存在」（软 404）");
-      } else if (!isValid) {
-        message.error(checkData?.data?.reason || "链接不可用（404 或无法访问）");
-      }
-    } catch {
-      setSitelinks((prev) => { const n = [...prev]; n[idx] = { ...n[idx], urlStatus: "valid" }; return n; });
-    }
-  }, [sitelinks, preview, message]);
-
   const validateAllSitelinks = useCallback(async () => {
     const validIndices = sitelinks
       .map((sl, i) => ({ sl, i }))
       .filter(({ sl }) => sl.url.trim().length > 0 && sl.urlStatus !== "checking");
     if (validIndices.length === 0) { message.warning("没有需要验证的链接"); return; }
-    await Promise.all(validIndices.map(({ i }) => validateSitelinkUrl(i)));
-  }, [sitelinks, validateSitelinkUrl, message]);
+    await Promise.all(validIndices.map(({ i }) => fetchAndValidateSitelink(i)));
+  }, [sitelinks, fetchAndValidateSitelink, message]);
 
   const removeInvalidSitelinks = useCallback(() => {
     const invalids = sitelinks.filter((sl) => sl.urlStatus === "invalid");
@@ -924,14 +968,33 @@ export default function AdPreviewPage() {
     const overD = validD.filter((d) => d.length > DESC_MAX);
     if (overD.length > 0) { message.error(`有 ${overD.length} 条描述超过 ${DESC_MAX} 字符限制`); return; }
 
-    // 验证站内链接
-    if (enableSitelinks) {
-      const validLinks = sitelinks.filter((s) => s.title.trim() && s.url.trim());
+    // 验证站内链接（自动触发未验证链接的校验）
+    const validLinks = sitelinks.filter((s) => s.title.trim() && s.url.trim());
+    if (validLinks.length > 0) {
       if (validLinks.length < 2) { message.error("站内链接至少需要 2 条（标题和链接必填）"); return; }
-      const invalidLinks = validLinks.filter((s) => s.urlStatus === "invalid");
-      if (invalidLinks.length > 0) { message.error("有站内链接验证失败，请修正后提交"); return; }
-      const unchecked = validLinks.filter((s) => s.urlStatus !== "valid");
-      if (unchecked.length > 0) { message.error("请先验证所有站内链接"); return; }
+      const uncheckedIndices = validLinks
+        .map((s, i) => ({ s, origIdx: sitelinks.indexOf(s) }))
+        .filter(({ s }) => s.urlStatus !== "valid" && s.urlStatus !== "invalid" && s.urlStatus !== "checking")
+        .map(({ origIdx }) => origIdx);
+      if (uncheckedIndices.length > 0) {
+        message.loading({ content: `正在验证 ${uncheckedIndices.length} 条未检查的站内链接...`, key: "sl-check", duration: 0 });
+        await Promise.all(uncheckedIndices.map((idx) => fetchAndValidateSitelink(idx)));
+        message.destroy("sl-check");
+        const afterCheck = sitelinks.filter((s) => s.title.trim() && s.url.trim());
+        const stillInvalid = afterCheck.filter((s) => s.urlStatus === "invalid");
+        if (stillInvalid.length > 0) {
+          message.error(`有 ${stillInvalid.length} 条站内链接无效，请修正或删除后再提交`);
+          return;
+        }
+        const stillUnchecked = afterCheck.filter((s) => s.urlStatus !== "valid");
+        if (stillUnchecked.length > 0) {
+          message.error("部分站内链接仍未通过验证，请重新检查后提交");
+          return;
+        }
+      } else {
+        const invalidLinks = validLinks.filter((s) => s.urlStatus === "invalid");
+        if (invalidLinks.length > 0) { message.error(`有 ${invalidLinks.length} 条站内链接无效，请修正或删除后再提交`); return; }
+      }
       const overTitle = validLinks.filter((s) => s.title.length > SITELINK_TITLE_MAX);
       if (overTitle.length > 0) { message.error(`站内链接标题不能超过 ${SITELINK_TITLE_MAX} 字符`); return; }
     }
@@ -963,12 +1026,11 @@ export default function AdPreviewPage() {
         ad_language: adLanguage || "en",
         eu_political_ad: euPoliticalAd,
       };
-      if (enableSitelinks) {
-        submitBody.sitelinks = sitelinks
-          .filter((s) => s.title.trim() && s.url.trim())
-          .map((s) => ({ title: s.title, description1: s.desc1, description2: s.desc2, finalUrl: s.url }));
+      {
+        const sl = sitelinks.filter((s) => s.title.trim() && s.url.trim());
+        if (sl.length > 0) submitBody.sitelinks = sl.map((s) => ({ title: s.title, description1: s.desc1, description2: s.desc2, finalUrl: s.url }));
       }
-      if (enableImages && imageUrls.length > 0) {
+      if (imageUrls.length > 0) {
         submitBody.image_urls = imageUrls;
       }
       if (enableCallouts) {
@@ -1010,7 +1072,7 @@ export default function AdPreviewPage() {
     } finally {
       setSubmitting(false);
     }
-  }, [headlines, descriptions, kwList, budget, maxCpc, biddingStrategy, networkSearch, networkPartners, networkDisplay, campaignId, message, router, enableSitelinks, sitelinks, enableImages, imageUrls, enableCallouts, callouts, selectedCid, selectedMccId, adLanguage, euPoliticalAd]);
+  }, [headlines, descriptions, kwList, budget, maxCpc, biddingStrategy, networkSearch, networkPartners, networkDisplay, campaignId, message, router, sitelinks, imageUrls, enableCallouts, callouts, selectedCid, selectedMccId, adLanguage, euPoliticalAd, fetchAndValidateSitelink, enablePromotion, promotion, enablePrice, priceItems, priceType, enableCall, callPhoneNumber, callCountryCode, enableSnippet, snippetHeader, snippetValues]);
 
   if (isLoading && !preview) {
     return <div style={{ textAlign: "center", padding: 80 }}><Spin size="large" tip="加载中..." /></div>;
@@ -1151,13 +1213,13 @@ export default function AdPreviewPage() {
               <Alert
                 type="info" showIcon
                 message="暂无关键词"
-                description="点击右上角「从 SemRush 获取关键词」自动获取竞品关键词，或手动输入添加。"
+                description="点击右上角「从 SemRush 获取关键词」自动获取竞品关键词，系统会结合预算、CPC 和竞争度优选后再展示，也可手动输入添加。"
                 style={{ marginBottom: 8 }}
               />
             )}
             {kwFetching && (
               <div style={{ textAlign: "center", padding: "16px 0" }}>
-                <Spin tip="正在从 SemRush 获取竞品关键词..." />
+                <Spin tip="正在从 SemRush 获取并优选关键词..." />
               </div>
             )}
             {semrushFailed && !kwFetching && (
@@ -1191,15 +1253,14 @@ export default function AdPreviewPage() {
                 style={{ marginBottom: 8 }}
               />
             )}
-            <Space wrap style={{ marginBottom: 8 }}>
+            <Space direction="vertical" style={{ width: "100%", marginBottom: 8 }} size={8}>
               {kwList.map((kw, i) => (
-                <Tag key={`${kw.text}-${kw.matchType}-${i}`} closable onClose={(e: React.MouseEvent) => { e.preventDefault(); removeKeyword(i); }} color="blue" style={{ display: "inline-flex", alignItems: "center", gap: 4, padding: "2px 8px" }}>
+                <div key={`${kw.text}-${kw.matchType}-${i}`} style={{ display: "flex", alignItems: "flex-start", gap: 8, padding: "8px 10px", border: "1px solid #d9e8ff", borderRadius: 8, background: kw.score != null && kw.score >= 70 ? "#f6ffed" : "#f8fbff" }}>
                   <Select
                     size="small"
                     value={kw.matchType}
                     onChange={(val) => updateKeywordMatchType(i, val)}
-                    style={{ width: 80, fontSize: 11 }}
-                    variant="borderless"
+                    style={{ width: 88, fontSize: 11, flexShrink: 0 }}
                     popupMatchSelectWidth={false}
                     options={[
                       { value: "BROAD", label: "广泛" },
@@ -1207,8 +1268,18 @@ export default function AdPreviewPage() {
                       { value: "EXACT", label: "完全" },
                     ]}
                   />
-                  <span>{kw.matchType === "EXACT" ? `[${kw.text}]` : kw.matchType === "PHRASE" ? `"${kw.text}"` : kw.text}</span>
-                </Tag>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center", marginBottom: 4 }}>
+                      <Text strong>{kw.matchType === "EXACT" ? `[${kw.text}]` : kw.matchType === "PHRASE" ? `"${kw.text}"` : kw.text}</Text>
+                      {kw.score != null && <Tag color={kw.score >= 70 ? "success" : kw.score >= 50 ? "processing" : "default"} style={{ margin: 0 }}>评分 {kw.score.toFixed(0)}</Tag>}
+                      {kw.avgMonthlySearches != null && <Tag style={{ margin: 0 }}>搜索量 {kw.avgMonthlySearches}</Tag>}
+                      {kw.suggestedBid != null && <Tag style={{ margin: 0 }}>建议 CPC ${kw.suggestedBid.toFixed(2)}</Tag>}
+                      {kw.competitionBand && <Tag color={kw.competitionBand === "LOW" ? "green" : kw.competitionBand === "MEDIUM" ? "gold" : kw.competitionBand === "HIGH" ? "red" : "default"} style={{ margin: 0 }}>{kw.competitionBand}</Tag>}
+                    </div>
+                    {kw.reason && <Text type="secondary" style={{ fontSize: 12 }}>{kw.reason}</Text>}
+                  </div>
+                  <Button size="small" type="text" danger icon={<DeleteOutlined />} onClick={() => removeKeyword(i)} />
+                </div>
               ))}
             </Space>
             <Space.Compact style={{ width: "100%" }}>
@@ -1245,6 +1316,14 @@ export default function AdPreviewPage() {
               <Text type="secondary" style={{ fontSize: 12, display: "block", marginLeft: 24 }}>
                 系统自动从商家网站爬取真实链接并生成。如爬取失败，可手动输入 URL，系统会自动获取标题和描述
               </Text>
+              {!sitelinksLoading && sitelinks.filter((sl) => sl.title.trim() && sl.url.trim()).length > 0 && sitelinks.filter((sl) => sl.title.trim() && sl.url.trim()).length < 6 && (
+                <Alert
+                  type="info" showIcon
+                  message="广告效力提示（Google 官方）"
+                  description="响应式搜索广告要达到「良好」或「极佳」的广告效力，建议在账户/系列/广告组层级合计至少 6 条站内链接。请补满有效链接或点击「添加链接」手动补充。"
+                  style={{ marginTop: 8, marginLeft: 24 }}
+                />
+              )}
               {crawlFailed && !sitelinksLoading && sitelinks.every((sl) => !sl.url) && (
                 <Alert
                   type="warning" showIcon icon={<WarningOutlined />}
@@ -1328,7 +1407,7 @@ export default function AdPreviewPage() {
                                   onChange={(e) => updateSitelink(i, "url", e.target.value)}
                                   onBlur={() => {
                                     if (sl.url.startsWith("http") && !sl.title && sl.urlStatus !== "checking") {
-                                      fetchUrlMeta(i);
+                                      fetchAndValidateSitelink(i);
                                     }
                                   }}
                                   suffix={
@@ -1345,10 +1424,10 @@ export default function AdPreviewPage() {
                                     type={sl.urlStatus === "invalid" ? "primary" : "default"}
                                     danger={sl.urlStatus === "invalid"}
                                     icon={sl.urlStatus === "checking" ? <LoadingOutlined /> : <LinkOutlined />}
-                                    onClick={() => sl.title ? validateSitelinkUrl(i) : fetchUrlMeta(i)}
+                                    onClick={() => fetchAndValidateSitelink(i)}
                                     disabled={!sl.url.trim() || sl.urlStatus === "checking"}
                                   >
-                                    {sl.title ? "验证" : "获取"}
+                                    验证
                                   </Button>
                                 </Tooltip>
                               </Space.Compact>
@@ -1457,7 +1536,7 @@ export default function AdPreviewPage() {
                                     opacity: isSelected ? 1 : 0.5,
                                     transition: "all 0.2s",
                                   }}
-                                  fallback="data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iODAiIGhlaWdodD0iODAiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+PHJlY3Qgd2lkdGg9IjgwIiBoZWlnaHQ9IjgwIiBmaWxsPSIjZjVmNWY1Ii8+PHRleHQgeD0iNDAiIHk9IjQ0IiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmaWxsPSIjYmZiZmJmIiBmb250LXNpemU9IjEyIj7ml6Dms5XliqDovb08L3RleHQ+PC9zdmc+"
+                                  fallback={IMAGE_FALLBACK}
                                 />
                                 {isSelected && (
                                   <div style={{ position: "absolute", top: -4, right: -4, background: "#1890ff", borderRadius: "50%", width: 20, height: 20, display: "flex", alignItems: "center", justifyContent: "center", boxShadow: "0 1px 3px rgba(0,0,0,.3)" }}>
@@ -1489,7 +1568,7 @@ export default function AdPreviewPage() {
                                     border: checkResult?.has_text ? "2px solid #ff4d4f" : "3px solid #1890ff",
                                     opacity: 1,
                                   }}
-                                  fallback="data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iODAiIGhlaWdodD0iODAiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+PHJlY3Qgd2lkdGg9IjgwIiBoZWlnaHQ9IjgwIiBmaWxsPSIjZjVmNWY1Ii8+PHRleHQgeD0iNDAiIHk9IjQ0IiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmaWxsPSIjYmZiZmJmIiBmb250LXNpemU9IjEyIj7ml6Dms5XliqDovb08L3RleHQ+PC9zdmc+"
+                                  fallback={IMAGE_FALLBACK}
                                 />
                                 <div style={{ position: "absolute", top: -4, right: -4, background: "#1890ff", borderRadius: "50%", width: 20, height: 20, display: "flex", alignItems: "center", justifyContent: "center", boxShadow: "0 1px 3px rgba(0,0,0,.3)" }}>
                                   <CheckCircleOutlined style={{ color: "#fff", fontSize: 12 }} />

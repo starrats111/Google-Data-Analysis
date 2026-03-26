@@ -2634,6 +2634,7 @@ export const Ad_default_settingsScalarFieldEnum = {
   naming_rule: 'naming_rule',
   naming_prefix: 'naming_prefix',
   eu_political_ad: 'eu_political_ad',
+  ai_rule_profile: 'ai_rule_profile',
   is_deleted: 'is_deleted',
   created_at: 'created_at',
   updated_at: 'updated_at'

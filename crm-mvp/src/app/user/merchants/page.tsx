@@ -1,11 +1,37 @@
 "use client";
 import { useState, useCallback, useMemo, useEffect } from "react";
-import { Card, Row, Col, Table, Input, Select, Button, Space, Tag, Modal, Form, Typography, Popconfirm, Switch, InputNumber, Tabs, App, Tooltip } from "antd";
-import { ShopOutlined, SearchOutlined, CheckOutlined, DollarOutlined, CalendarOutlined, SaveOutlined, SyncOutlined, WarningOutlined, StarOutlined, CopyOutlined, LinkOutlined, ReloadOutlined } from "@ant-design/icons";
+import { Card, Row, Col, Table, Input, Select, Button, Space, Tag, Modal, Form, Typography, Popconfirm, Switch, InputNumber, Tabs, App, Tooltip, Upload } from "antd";
+import { ShopOutlined, SearchOutlined, CheckOutlined, DollarOutlined, CalendarOutlined, SaveOutlined, SyncOutlined, WarningOutlined, StarOutlined, CopyOutlined, ReloadOutlined, RobotOutlined, UploadOutlined } from "@ant-design/icons";
 import { PLATFORMS, BIDDING_STRATEGIES } from "@/lib/constants";
 import { useApiWithParams, useStaleApi, mutateApi, refreshApi } from "@/lib/swr";
 import { useRouter } from "next/navigation";
 const { Text } = Typography;
+const { TextArea } = Input;
+
+interface AdSettingsApiData {
+  bidding_strategy: string;
+  ecpc_enabled: number;
+  max_cpc: string;
+  daily_budget: string;
+  network_search: number;
+  network_partners: number;
+  network_display: number;
+  naming_rule: string;
+  naming_prefix: string;
+  eu_political_ad?: number;
+  ai_rule_profile?: {
+    prompt_text?: string;
+    persona?: string;
+    keyword_requirements?: string;
+    ad_copy_requirements?: string;
+    sitelink_requirements?: string;
+    compliance_requirements?: string;
+    hard_rules?: string;
+    forbidden_terms?: string[] | string;
+    preferred_terms?: string[] | string;
+    enforce_policy_check?: boolean;
+  };
+}
 // 主营业务英中翻译
 const CATEGORY_CN: Record<string, string> = {
   "Others": "其他", "Health & Beauty": "健康美容", "Home & Garden": "家居园艺",
@@ -94,9 +120,43 @@ export default function MerchantsPage() {
   const merchants = md?.merchants || [];
   const total = md?.total || 0;
   const stats = md?.stats || { total: 0, claimed: 0, byPlatform: [] };
-  const { data: adData } = useStaleApi<{ bidding_strategy: string; ecpc_enabled: number; max_cpc: string; daily_budget: string; network_search: number; network_partners: number; network_display: number; naming_rule: string; naming_prefix: string }>("/api/user/ad-settings");
+  const { data: adData } = useStaleApi<AdSettingsApiData>("/api/user/ad-settings");
   const [adForm] = Form.useForm();
-  useEffect(() => { if (adData) adForm.setFieldsValue({ ...adData, max_cpc: Number(adData.max_cpc), daily_budget: Number(adData.daily_budget) }); }, [adData, adForm]);
+  useEffect(() => {
+    if (!adData) return;
+    const profile = adData.ai_rule_profile;
+    const toTagList = (v: unknown): string[] => {
+      if (Array.isArray(v)) return v.map((x) => String(x || "").trim()).filter(Boolean);
+      if (typeof v === "string") {
+        return v.split(/[\n,，;；]+/).map((s) => s.trim()).filter(Boolean);
+      }
+      return [];
+    };
+    const ai = profile && typeof profile === "object"
+      ? {
+        ...profile,
+        preferred_terms: toTagList(profile.preferred_terms),
+        forbidden_terms: toTagList(profile.forbidden_terms),
+      }
+      : undefined;
+    adForm.setFieldsValue({
+      ...adData,
+      max_cpc: Number(adData.max_cpc),
+      daily_budget: Number(adData.daily_budget),
+      ...(ai ? { ai_rule_profile: ai } : {}),
+    });
+  }, [adData, adForm]);
+  const onAiPromptUpload = useCallback((file: File) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const text = String(reader.result ?? "");
+      const cur = adForm.getFieldValue("ai_rule_profile") ?? {};
+      adForm.setFieldsValue({ ai_rule_profile: { ...cur, prompt_text: text } });
+      message.success("提示词已读入");
+    };
+    reader.readAsText(file, "UTF-8");
+    return false;
+  }, [adForm, message]);
   const [vioSearch, setVioSearch] = useState(""); const [vioPage, setVioPage] = useState(1);
   const [recSearch, setRecSearch] = useState(""); const [recPage, setRecPage] = useState(1);
   const { data: vioData, isLoading: vl, error: vioError, mutate: vioMutate } = useApiWithParams<{ items: any[]; total: number }>(tab === "violations" ? "/api/user/merchants/sheet-sync" : null, { type: "violation", page: vioPage, pageSize: 50, ...(vioSearch ? { search: vioSearch } : {}) });
@@ -202,46 +262,64 @@ export default function MerchantsPage() {
     { title: "分享时间", dataIndex: "share_time", width: 100, render: (v: string) => v || "-" },
   ], []);
   return (<div>
-    <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
-      <Col xs={24} md={8}><Card size="small" title={<><ShopOutlined /> 我的商家</>} style={{ height: "100%" }}>
-        <div style={{ fontSize: 28, fontWeight: 700, marginBottom: 8 }}>{stats.total.toLocaleString()}</div>
-        <Text type="secondary" style={{ fontSize: 12 }}>平台分布</Text>
-        <div style={{ marginTop: 6, display: "flex", flexWrap: "wrap", gap: 6 }}>{stats.byPlatform.map((p) => <Tag key={p.platform} color={PC[p.platform] || "default"} style={{ fontWeight: 600 }}>{p.platform} {p._count.toLocaleString()}</Tag>)}</div>
-        <div style={{ marginTop: 8, fontSize: 12, color: "#999" }}>在投广告 {stats.claimed} 个商家</div>
-      </Card></Col>
-      <Col xs={24} md={8}><Card size="small" title={<><DollarOutlined /> 广告投放设置</>} extra={<Button type="primary" size="small" icon={<SaveOutlined />} onClick={saveAd}>保存</Button>} style={{ height: "100%" }}>
-        {adData && (<Form form={adForm} size="small" layout="vertical" style={{ fontSize: 12 }}>
-          <Row gutter={[8, 0]}>
-            <Col span={12}><Form.Item name="bidding_strategy" label="出价策略" style={{ marginBottom: 6 }}><Select options={BIDDING_STRATEGIES.map((b) => ({ value: b.value, label: b.label }))} /></Form.Item></Col>
-            <Col span={6}><Form.Item name="ecpc_enabled" label="eCPC" valuePropName="checked" style={{ marginBottom: 6 }} getValueFromEvent={(c: boolean) => c ? 1 : 0} getValueProps={(v: number) => ({ checked: v === 1 })}><Switch size="small" /></Form.Item></Col>
-            <Col span={6}><Form.Item name="max_cpc" label="CPC($)" style={{ marginBottom: 6 }}><InputNumber prefix="$" style={{ width: "100%" }} min={0.01} step={0.1} /></Form.Item></Col>
-          </Row>
-          <Row gutter={[8, 0]}>
-            <Col span={8}><Form.Item name="daily_budget" label="日预算($)" style={{ marginBottom: 6 }}><InputNumber prefix="$" style={{ width: "100%" }} min={0.5} step={0.5} /></Form.Item></Col>
-            <Col span={16}><div style={{ marginBottom: 4, fontSize: 12, color: "#666" }}>投放网络</div><Space size={12}>
-              <Form.Item name="network_search" valuePropName="checked" noStyle getValueFromEvent={(c: boolean) => c ? 1 : 0} getValueProps={(v: number) => ({ checked: v === 1 })}><Switch size="small" checkedChildren="搜索" unCheckedChildren="搜索" /></Form.Item>
-              <Form.Item name="network_partners" valuePropName="checked" noStyle getValueFromEvent={(c: boolean) => c ? 1 : 0} getValueProps={(v: number) => ({ checked: v === 1 })}><Switch size="small" checkedChildren="合作伙伴" unCheckedChildren="合作伙伴" /></Form.Item>
-              <Form.Item name="network_display" valuePropName="checked" noStyle getValueFromEvent={(c: boolean) => c ? 1 : 0} getValueProps={(v: number) => ({ checked: v === 1 })}><Switch size="small" checkedChildren="展示" unCheckedChildren="展示" /></Form.Item>
-            </Space></Col>
-          </Row>
-          <Row gutter={[8, 0]}>
-            <Col span={12}><Form.Item name="naming_rule" label="命名规则" style={{ marginBottom: 6 }}><Select options={[{ value: "global", label: "全局序号 (001,002,003...)" }, { value: "per_platform", label: "平台序号 (CG:001,RW:001...)" }]} /></Form.Item></Col>
-            <Col span={12}><Form.Item name="eu_political_ad" label="EU政治广告" valuePropName="checked" style={{ marginBottom: 6 }} getValueFromEvent={(c: boolean) => c ? 1 : 0} getValueProps={(v: number) => ({ checked: v === 1 })}><Switch size="small" checkedChildren="含" unCheckedChildren="不含" /></Form.Item></Col>
-          </Row>
-        </Form>)}
-      </Card></Col>
-      <Col xs={24} md={8}><Card size="small" title={<><CalendarOutlined /> 节日营销</>} style={{ height: "100%" }}>
-        <Space style={{ marginBottom: 8, width: "100%" }}>
-          <Select placeholder="选择国家" showSearch style={{ width: 120 }} size="small" value={cc || undefined} onChange={(v) => setCc(v || "")} options={[{ value: "US", label: "美国" }, { value: "GB", label: "英国" }, { value: "AU", label: "澳洲" }, { value: "CA", label: "加拿大" }, { value: "DE", label: "德国" }, { value: "FR", label: "法国" }, { value: "JP", label: "日本" }]} />
-          <Button type="primary" size="small" icon={<SearchOutlined />} loading={hl} onClick={() => setQc(cc)}>查询</Button>
-        </Space>
-        <div style={{ maxHeight: 120, overflowY: "auto" }}>{(holidays || []).length > 0 ? (holidays || []).map((h) => (
-          <div key={h.id} style={{ display: "flex", justifyContent: "space-between", padding: "3px 0", borderBottom: "1px solid #f5f5f5", fontSize: 12 }}>
-            <Text style={{ fontSize: 12 }}>{new Date(h.holiday_date).toLocaleDateString("zh-CN", { timeZone: "Asia/Shanghai", month: "2-digit", day: "2-digit" })} {h.holiday_name}</Text>
-            <Tag style={{ fontSize: 11, lineHeight: "18px", margin: 0 }}>{h.holiday_type}</Tag>
-          </div>)) : <Text type="secondary" style={{ fontSize: 12 }}>选择国家查询节日信息</Text>}</div>
-      </Card></Col>
-    </Row>
+    <Form form={adForm} component={false} layout="vertical" size="small">
+      <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
+        <Col xs={24} sm={12} md={6}><Card size="small" title={<><ShopOutlined /> 我的商家</>} style={{ height: "100%" }}>
+          <div style={{ fontSize: 28, fontWeight: 700, marginBottom: 8 }}>{stats.total.toLocaleString()}</div>
+          <Text type="secondary" style={{ fontSize: 12 }}>平台分布</Text>
+          <div style={{ marginTop: 6, display: "flex", flexWrap: "wrap", gap: 6 }}>{stats.byPlatform.map((p) => <Tag key={p.platform} color={PC[p.platform] || "default"} style={{ fontWeight: 600 }}>{p.platform} {p._count.toLocaleString()}</Tag>)}</div>
+          <div style={{ marginTop: 8, fontSize: 12, color: "#999" }}>在投广告 {stats.claimed} 个商家</div>
+        </Card></Col>
+        <Col xs={24} sm={12} md={6}><Card size="small" title={<><DollarOutlined /> 广告投放设置</>} extra={<Button type="primary" size="small" icon={<SaveOutlined />} onClick={saveAd}>保存</Button>} style={{ height: "100%" }}>
+          {adData && (<div style={{ fontSize: 12 }}>
+            <Row gutter={[8, 0]}>
+              <Col span={12}><Form.Item name="bidding_strategy" label="出价策略" style={{ marginBottom: 6 }}><Select options={BIDDING_STRATEGIES.map((b) => ({ value: b.value, label: b.label }))} /></Form.Item></Col>
+              <Col span={6}><Form.Item name="ecpc_enabled" label="eCPC" valuePropName="checked" style={{ marginBottom: 6 }} getValueFromEvent={(c: boolean) => c ? 1 : 0} getValueProps={(v: number) => ({ checked: v === 1 })}><Switch size="small" /></Form.Item></Col>
+              <Col span={6}><Form.Item name="max_cpc" label="CPC($)" style={{ marginBottom: 6 }}><InputNumber prefix="$" style={{ width: "100%" }} min={0.01} step={0.1} /></Form.Item></Col>
+            </Row>
+            <Row gutter={[8, 0]}>
+              <Col span={8}><Form.Item name="daily_budget" label="日预算($)" style={{ marginBottom: 6 }}><InputNumber prefix="$" style={{ width: "100%" }} min={0.5} step={0.5} /></Form.Item></Col>
+              <Col span={16}><div style={{ marginBottom: 4, fontSize: 12, color: "#666" }}>投放网络</div><Space size={12}>
+                <Form.Item name="network_search" valuePropName="checked" noStyle getValueFromEvent={(c: boolean) => c ? 1 : 0} getValueProps={(v: number) => ({ checked: v === 1 })}><Switch size="small" checkedChildren="搜索" unCheckedChildren="搜索" /></Form.Item>
+                <Form.Item name="network_partners" valuePropName="checked" noStyle getValueFromEvent={(c: boolean) => c ? 1 : 0} getValueProps={(v: number) => ({ checked: v === 1 })}><Switch size="small" checkedChildren="合作伙伴" unCheckedChildren="合作伙伴" /></Form.Item>
+                <Form.Item name="network_display" valuePropName="checked" noStyle getValueFromEvent={(c: boolean) => c ? 1 : 0} getValueProps={(v: number) => ({ checked: v === 1 })}><Switch size="small" checkedChildren="展示" unCheckedChildren="展示" /></Form.Item>
+              </Space></Col>
+            </Row>
+            <Row gutter={[8, 0]}>
+              <Col span={12}><Form.Item name="naming_rule" label="命名规则" style={{ marginBottom: 6 }}><Select options={[{ value: "global", label: "全局序号 (001,002,003...)" }, { value: "per_platform", label: "平台序号 (CG:001,RW:001...)" }]} /></Form.Item></Col>
+              <Col span={12}><Form.Item name="eu_political_ad" label="EU政治广告" valuePropName="checked" style={{ marginBottom: 6 }} getValueFromEvent={(c: boolean) => c ? 1 : 0} getValueProps={(v: number) => ({ checked: v === 1 })}><Switch size="small" checkedChildren="含" unCheckedChildren="不含" /></Form.Item></Col>
+            </Row>
+          </div>)}
+        </Card></Col>
+        <Col xs={24} sm={12} md={6}><Card size="small" title={<><CalendarOutlined /> 节日营销</>} style={{ height: "100%" }}>
+          <Space style={{ marginBottom: 8, width: "100%" }}>
+            <Select placeholder="选择国家" showSearch style={{ width: 120 }} size="small" value={cc || undefined} onChange={(v) => setCc(v || "")} options={[{ value: "US", label: "美国" }, { value: "GB", label: "英国" }, { value: "AU", label: "澳洲" }, { value: "CA", label: "加拿大" }, { value: "DE", label: "德国" }, { value: "FR", label: "法国" }, { value: "JP", label: "日本" }]} />
+            <Button type="primary" size="small" icon={<SearchOutlined />} loading={hl} onClick={() => setQc(cc)}>查询</Button>
+          </Space>
+          <div style={{ maxHeight: 120, overflowY: "auto" }}>{(holidays || []).length > 0 ? (holidays || []).map((h) => (
+            <div key={h.id} style={{ display: "flex", justifyContent: "space-between", padding: "3px 0", borderBottom: "1px solid #f5f5f5", fontSize: 12 }}>
+              <Text style={{ fontSize: 12 }}>{new Date(h.holiday_date).toLocaleDateString("zh-CN", { timeZone: "Asia/Shanghai", month: "2-digit", day: "2-digit" })} {h.holiday_name}</Text>
+              <Tag style={{ fontSize: 11, lineHeight: "18px", margin: 0 }}>{h.holiday_type}</Tag>
+            </div>)) : <Text type="secondary" style={{ fontSize: 12 }}>选择国家查询节日信息</Text>}</div>
+        </Card></Col>
+        <Col xs={24} sm={12} md={6}><Card size="small" title={<><RobotOutlined /> AI 设定（硬规则）</>} extra={<Space size={4}><Upload accept=".txt,.md,.text" showUploadList={false} beforeUpload={(f) => onAiPromptUpload(f as File)}><Button size="small" icon={<UploadOutlined />}>上传提示词</Button></Upload><Button type="primary" size="small" icon={<SaveOutlined />} onClick={saveAd}>保存</Button></Space>} style={{ height: "100%" }}>
+          {adData && (
+            <div style={{ maxHeight: 360, overflowY: "auto", paddingRight: 4, fontSize: 12 }}>
+              <Form.Item name={["ai_rule_profile", "persona"]} label="AI 人设" style={{ marginBottom: 6 }}><Input placeholder="人设与角色" /></Form.Item>
+              <Form.Item name={["ai_rule_profile", "keyword_requirements"]} label="关键词规则" style={{ marginBottom: 6 }}><TextArea rows={2} placeholder="结合预算、CPC、出价策略与 Semrush 的筛选要求" /></Form.Item>
+              <Form.Item name={["ai_rule_profile", "ad_copy_requirements"]} label="文案规则" style={{ marginBottom: 6 }}><TextArea rows={2} placeholder="标题/描述结构与语气" /></Form.Item>
+              <Form.Item name={["ai_rule_profile", "sitelink_requirements"]} label="站内链接规则" style={{ marginBottom: 6 }}><TextArea rows={2} placeholder="站内链接标题与描述要求" /></Form.Item>
+              <Form.Item name={["ai_rule_profile", "compliance_requirements"]} label="合规规则" style={{ marginBottom: 6 }}><TextArea rows={2} placeholder="政策与合规自检要求" /></Form.Item>
+              <Form.Item name={["ai_rule_profile", "hard_rules"]} label="硬规则（总述）" style={{ marginBottom: 6 }}><TextArea rows={2} placeholder="必须遵守的硬性约束" /></Form.Item>
+              <Form.Item name={["ai_rule_profile", "preferred_terms"]} label="偏好词" style={{ marginBottom: 6 }}><Select mode="tags" placeholder="输入后回车" tokenSeparators={[",", "，"]} /></Form.Item>
+              <Form.Item name={["ai_rule_profile", "forbidden_terms"]} label="禁止词" style={{ marginBottom: 6 }}><Select mode="tags" placeholder="输入后回车" tokenSeparators={[",", "，"]} /></Form.Item>
+              <Form.Item name={["ai_rule_profile", "enforce_policy_check"]} label="启用政策风险自检" valuePropName="checked" style={{ marginBottom: 6 }}><Switch size="small" /></Form.Item>
+              <Form.Item name={["ai_rule_profile", "prompt_text"]} label="完整提示词（可上传覆盖）" style={{ marginBottom: 0 }}><TextArea rows={4} placeholder="分步说明或长提示词" /></Form.Item>
+            </div>
+          )}
+        </Card></Col>
+      </Row>
+    </Form>
     <Card>
       <Tabs activeKey={tab} onChange={(v) => { setTab(v); setPage(1); setSortField(""); setSortOrder(""); }} style={{ marginBottom: 0 }}
         items={[{ key: "claimed", label: "我的商家" }, { key: "available", label: "选取商家" }, { key: "violations", label: <span><WarningOutlined style={{ color: "#ff4d4f", marginRight: 4 }} />违规商家</span> }, { key: "recommendations", label: <span><StarOutlined style={{ color: "#52c41a", marginRight: 4 }} />推荐商家</span> }]}

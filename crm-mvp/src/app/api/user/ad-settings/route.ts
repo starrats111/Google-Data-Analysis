@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { getUserFromRequest, serializeData } from "@/lib/auth";
 import { apiSuccess, apiError } from "@/lib/constants";
 import prisma from "@/lib/prisma";
+import { DEFAULT_AI_RULE_PROFILE, normalizeAiRuleProfile } from "@/lib/ai-rule-profile";
 
 // 获取广告默认设置
 export async function GET(req: NextRequest) {
@@ -14,11 +15,17 @@ export async function GET(req: NextRequest) {
 
   if (!settings) {
     settings = await prisma.ad_default_settings.create({
-      data: { user_id: BigInt(user.userId) },
+      data: {
+        user_id: BigInt(user.userId),
+        ai_rule_profile: DEFAULT_AI_RULE_PROFILE as unknown as object,
+      },
     });
   }
 
-  return apiSuccess(serializeData(settings));
+  const serialized = serializeData(settings) as Record<string, unknown>;
+  serialized.ai_rule_profile = normalizeAiRuleProfile(serialized.ai_rule_profile);
+
+  return apiSuccess(serialized);
 }
 
 // 更新广告默认设置
@@ -27,7 +34,19 @@ export async function PUT(req: NextRequest) {
   if (!user) return apiError("未授权", 401);
 
   const body = await req.json();
-  const { bidding_strategy, ecpc_enabled, max_cpc, daily_budget, network_search, network_partners, network_display, naming_rule, naming_prefix, eu_political_ad } = body;
+  const {
+    bidding_strategy,
+    ecpc_enabled,
+    max_cpc,
+    daily_budget,
+    network_search,
+    network_partners,
+    network_display,
+    naming_rule,
+    naming_prefix,
+    eu_political_ad,
+    ai_rule_profile,
+  } = body;
 
   const data: Record<string, unknown> = {};
   if (bidding_strategy !== undefined) data.bidding_strategy = bidding_strategy;
@@ -40,6 +59,7 @@ export async function PUT(req: NextRequest) {
   if (naming_rule !== undefined) data.naming_rule = naming_rule;
   if (naming_prefix !== undefined) data.naming_prefix = naming_prefix;
   if (eu_political_ad !== undefined) data.eu_political_ad = eu_political_ad;
+  if (ai_rule_profile !== undefined) data.ai_rule_profile = normalizeAiRuleProfile(ai_rule_profile) as unknown as object;
 
   const existing = await prisma.ad_default_settings.findFirst({
     where: { user_id: BigInt(user.userId), is_deleted: 0 },

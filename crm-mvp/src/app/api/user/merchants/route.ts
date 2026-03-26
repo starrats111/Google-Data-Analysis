@@ -4,6 +4,7 @@ import { apiSuccess, apiError, normalizePlatformCode } from "@/lib/constants";
 import { withUser } from "@/lib/api-handler";
 import prisma from "@/lib/prisma";
 import { generateCampaignName } from "@/lib/campaign-naming";
+import { buildKeywordCreateManyInput, selectOptimizedKeywords } from "@/lib/ad-keyword-pipeline";
 
 // 国家 → Google Ads 语言代码（创建 campaign 时自动设置）
 const COUNTRY_TO_LANG_CODE: Record<string, string> = {
@@ -597,6 +598,12 @@ export const POST = withUser(async (req: NextRequest, { user }) => {
     merchant.merchant_name,
     merchant.merchant_url || "",
     target_country,
+    {
+      dailyBudget: Number(adSettings?.daily_budget || 2.0),
+      maxCpc: Number(adSettings?.max_cpc || 0.3),
+      biddingStrategy: adSettings?.bidding_strategy || "MAXIMIZE_CLICKS",
+      aiRuleProfile: (adSettings as any)?.ai_rule_profile,
+    },
   ).catch((err) => console.error("[异步] 广告文案生成失败:", err));
 
   // ─── 异步任务 B：爬取商家网站 + 文章生成（CRM 自有 AI） ───
@@ -720,14 +727,20 @@ async function triggerAdCopyGeneration(
   merchantName: string,
   merchantUrl: string,
   country: string,
+  options: {
+    dailyBudget?: number;
+    maxCpc?: number;
+    biddingStrategy?: string;
+    aiRuleProfile?: unknown;
+  } = {},
 ) {
   try {
     const { SemRushClient, dedupeAdTitles, dedupeAdDescriptions } = await import("@/lib/semrush-client");
-    const { padHeadlines, padDescriptions } = await import("@/lib/ai-service");
+    const { padHeadlines, padDescriptions, suggestDisplayPaths } = await import("@/lib/ai-service");
 
     let dedupedTitles: string[] = [];
     let dedupedDescriptions: string[] = [];
-    let keywords: { phrase: string; volume: number }[] = [];
+    let keywords: Array<{ phrase: string; volume: number; competition?: string | number | null; suggested_bid?: number | null; cpc?: number | null }> = [];
 
     // Step 1: 尝试从 SemRush 获取竞品数据
     if (merchantUrl) {
@@ -743,15 +756,43 @@ async function triggerAdCopyGeneration(
       }
     }
 
+    const optimizedKeywords = selectOptimizedKeywords(keywords, {
+      merchantName,
+      dailyBudget: options.dailyBudget,
+      maxCpc: options.maxCpc,
+      biddingStrategy: options.biddingStrategy,
+      aiRuleProfile: options.aiRuleProfile,
+      limit: 12,
+    });
+
     // Step 2: AI 基于参考样本生成 15 标题 + 4 描述
     const headlines = await padHeadlines([], merchantName, country, 15, {
       referenceItems: dedupedTitles,
-      keywords: keywords.map((kw) => kw.phrase),
+      keywords: optimizedKeywords.map((kw) => kw.phrase),
+      dailyBudget: options.dailyBudget,
+      maxCpc: options.maxCpc,
+      biddingStrategy: options.biddingStrategy,
+      aiRuleProfile: options.aiRuleProfile,
     });
     const descriptions = await padDescriptions([], merchantName, country, 4, {
       referenceItems: dedupedDescriptions,
-      keywords: keywords.map((kw) => kw.phrase),
+      keywords: optimizedKeywords.map((kw) => kw.phrase),
+      headlinesForUniqueness: headlines,
+      dailyBudget: options.dailyBudget,
+      maxCpc: options.maxCpc,
+      biddingStrategy: options.biddingStrategy,
+      aiRuleProfile: options.aiRuleProfile,
     });
+
+    const existingCreative = await prisma.ad_creatives.findUnique({
+      where: { id: adCreativeId },
+      select: { display_path1: true, display_path2: true },
+    });
+    const pathSuggest = suggestDisplayPaths(
+      merchantName,
+      optimizedKeywords.map((kw) => kw.phrase),
+      country,
+    );
 
     // Step 3: 更新 ad_creatives
     await prisma.ad_creatives.update({
@@ -759,21 +800,19 @@ async function triggerAdCopyGeneration(
       data: {
         headlines: headlines as any,
         descriptions: descriptions as any,
+        ...(!existingCreative?.display_path1?.trim() ? { display_path1: pathSuggest.path1 } : {}),
+        ...(!existingCreative?.display_path2?.trim() ? { display_path2: pathSuggest.path2 } : {}),
       },
     });
 
     // Step 4: 保存关键词到 keywords 表
-    if (keywords.length > 0) {
+    if (optimizedKeywords.length > 0) {
       await prisma.keywords.createMany({
-        data: keywords.map((kw) => ({
-          ad_group_id: adGroupId,
-          keyword_text: kw.phrase,
-          match_type: "PHRASE",
-        })),
+        data: buildKeywordCreateManyInput(adGroupId, optimizedKeywords),
       });
     }
 
-    console.log(`[AdCopy] 完成: ${headlines.length} 标题, ${descriptions.length} 描述, ${keywords.length} 关键词`);
+    console.log(`[AdCopy] 完成: ${headlines.length} 标题, ${descriptions.length} 描述, ${optimizedKeywords.length} 关键词`);
   } catch (err) {
     console.error("[AdCopy] 广告文案生成异常:", err);
   }

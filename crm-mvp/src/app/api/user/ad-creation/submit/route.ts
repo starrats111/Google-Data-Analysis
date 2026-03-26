@@ -3,6 +3,7 @@ import { getUserFromRequest, serializeData } from "@/lib/auth";
 import { apiSuccess, apiError } from "@/lib/constants";
 import prisma from "@/lib/prisma";
 import { getAdMarketConfig } from "@/lib/ad-market";
+import { collectAiRuleViolations } from "@/lib/ai-rule-profile";
 import { mutateGoogleAds, dollarsToMicros, queryGoogleAds } from "@/lib/google-ads";
 import { readFile } from "fs/promises";
 import { existsSync } from "fs";
@@ -93,6 +94,11 @@ export async function POST(req: NextRequest) {
   });
   if (!adGroup) return apiError("广告组不存在");
 
+  const adSettings = await prisma.ad_default_settings.findFirst({
+    where: { user_id: userId, is_deleted: 0 },
+    select: { ai_rule_profile: true },
+  });
+
   const adCreative = await prisma.ad_creatives.findFirst({
     where: { ad_group_id: adGroup.id, is_deleted: 0 },
   });
@@ -107,6 +113,52 @@ export async function POST(req: NextRequest) {
   }
   if (finalUrl.startsWith("http://")) {
     finalUrl = finalUrl.replace("http://", "https://");
+  }
+
+  const aiRuleViolations = collectAiRuleViolations({
+    profile: adSettings?.ai_rule_profile,
+    keywords,
+    headlines,
+    descriptions,
+    callouts,
+    sitelinks,
+  });
+  if (aiRuleViolations.length > 0) {
+    return apiError(`AI 设定硬规则未通过：${aiRuleViolations.join("；")}`);
+  }
+
+  if (sitelinks.length > 0) {
+    const badLinks: string[] = [];
+    await Promise.all(
+      sitelinks.map(async (sl: { finalUrl?: string; title?: string }) => {
+        const slUrl = (sl.finalUrl || "").trim();
+        if (!slUrl || !slUrl.startsWith("http")) {
+          badLinks.push(sl.title || slUrl || "(空)");
+          return;
+        }
+        try {
+          const ctrl = new AbortController();
+          const t = setTimeout(() => ctrl.abort(), 10000);
+          const res = await fetch(slUrl, {
+            method: "HEAD",
+            redirect: "follow",
+            signal: ctrl.signal,
+            headers: {
+              "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36",
+            },
+          });
+          clearTimeout(t);
+          if (res.status === 404 || res.status === 410) {
+            badLinks.push(`${sl.title || slUrl}（HTTP ${res.status}）`);
+          }
+        } catch {
+          badLinks.push(`${sl.title || slUrl}（请求失败/超时）`);
+        }
+      }),
+    );
+    if (badLinks.length > 0) {
+      return apiError(`站内链接无效，请修正后再提交：${badLinks.join("、")}`);
+    }
   }
 
   const credentials = {
@@ -287,9 +339,8 @@ export async function POST(req: NextRequest) {
     });
 
     // ─── 6. RSA 广告 ───
-    const headlineAssets = headlines.slice(0, 15).map((h: string, i: number) => ({
+    const headlineAssets = headlines.slice(0, 15).map((h: string) => ({
       text: h.slice(0, 30),
-      ...(i === 0 ? { pinned_field: "HEADLINE_1" } : {}),
     }));
     const descriptionAssets = descriptions.slice(0, 4).map((d: string) => ({
       text: d.slice(0, 90),

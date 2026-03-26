@@ -42,7 +42,7 @@ export const GET = withLeader(async (req: NextRequest, { user }) => {
       google_campaign_id: { not: null },
       is_deleted: 0,
     },
-    orderBy: { id: "asc" },
+    orderBy: { id: "desc" },
     take: 200,
     select: {
       id: true,
@@ -54,12 +54,12 @@ export const GET = withLeader(async (req: NextRequest, { user }) => {
     },
   });
 
-  // 与数据中心一致：按 google_campaign_id 去重
-  const seenGoogleIds = new Set<string>();
+  // 与数据中心一致：按「CID + Google Campaign ID」去重，并优先保留最新一条
+  const seenCampaignKeys = new Set<string>();
   const campaigns = rawCampaigns.filter((c) => {
-    const gid = c.google_campaign_id || String(c.id);
-    if (seenGoogleIds.has(gid)) return false;
-    seenGoogleIds.add(gid);
+    const dedupKey = `${c.customer_id || ""}:${c.google_campaign_id || String(c.id)}`;
+    if (seenCampaignKeys.has(dedupKey)) return false;
+    seenCampaignKeys.add(dedupKey);
     return true;
   });
 

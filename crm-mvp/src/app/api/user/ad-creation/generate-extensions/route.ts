@@ -5,6 +5,13 @@ import prisma from "@/lib/prisma";
 import { callAiWithFallback } from "@/lib/ai-service";
 import { getAdMarketConfig } from "@/lib/ad-market";
 import { crawlPage, fetchUrlMeta, fetchPageImages, searchMerchantImages } from "@/lib/crawler";
+import { buildAiRulePrompt } from "@/lib/ai-rule-profile";
+
+function formatAiRuleBlock(profile: unknown | null | undefined, section: "sitelinks" | "ad_copy" | "compliance"): string {
+  if (!profile) return "";
+  const text = buildAiRulePrompt(profile, section);
+  return text ? `\n\nUser hard rules (MUST follow; do not violate Google Ads policy):\n${text}\n` : "";
+}
 
 /**
  * JS 重定向 / 挑战 URL 过滤模式
@@ -131,6 +138,12 @@ export async function POST(req: NextRequest) {
   const merchantName = merchant.merchant_name || "";
   const country = campaign.target_country || "US";
 
+  const adSettings = await prisma.ad_default_settings.findFirst({
+    where: { user_id: BigInt(user.userId), is_deleted: 0 },
+    select: { ai_rule_profile: true },
+  });
+  const aiRuleProfile = (adSettings as { ai_rule_profile?: unknown } | null)?.ai_rule_profile;
+
   let crawlResult: { html: string; links: { url: string; text: string }[]; images: string[]; method: string; error?: string } = { html: "", links: [], images: [], method: "failed", error: "" };
 
   if (merchantUrl) {
@@ -151,15 +164,15 @@ export async function POST(req: NextRequest) {
 
   // 促销/价格信息：爬首页 + 子页面，用 AI 提取
   if (types.includes("promotion")) {
-    result.promotion = await extractPromotionWithAI(crawlResult.html, merchantUrl, merchantName, country, crawlResult.links);
+    result.promotion = await extractPromotionWithAI(crawlResult.html, merchantUrl, merchantName, country, crawlResult.links, aiRuleProfile);
   }
   if (types.includes("price")) {
-    result.price_items = await extractPriceWithAI(crawlResult.html, merchantUrl, merchantName, country, crawlResult.links);
+    result.price_items = await extractPriceWithAI(crawlResult.html, merchantUrl, merchantName, country, crawlResult.links, aiRuleProfile);
   }
 
   if (types.includes("sitelinks")) {
     tasks.push(
-      generateSitelinks(merchantName, merchantUrl, country, crawlResult.links)
+      generateSitelinks(merchantName, merchantUrl, country, crawlResult.links, aiRuleProfile)
         .then((data) => { result.sitelinks = data; })
         .catch((err) => {
           console.error("[Extensions] Sitelinks 生成失败:", err instanceof Error ? err.message : err);
@@ -247,7 +260,7 @@ export async function POST(req: NextRequest) {
 
   if (types.includes("callouts")) {
     tasks.push(
-      generateCallouts(merchantName, merchantUrl, country, crawlResult.html)
+      generateCallouts(merchantName, merchantUrl, country, crawlResult.html, aiRuleProfile)
         .then((data) => { result.callouts = data; })
         .catch(() => {
           result.callouts = getDefaultCallouts(merchantName, country, []);
@@ -425,6 +438,7 @@ async function generateSitelinks(
   merchantUrl: string,
   _country: string,
   pageLinks: { url: string; text: string }[],
+  aiRuleProfile?: unknown,
 ): Promise<{ title: string; desc1: string; desc2: string; url: string }[]> {
 
   let merchantDomain = "";
@@ -541,6 +555,7 @@ Focus on benefits, urgency, or value propositions. No emoji.
 
 Sitelinks:
 ${linksInfo}
+${formatAiRuleBlock(aiRuleProfile, "sitelinks")}
 
 Return ONLY a JSON array matching the sitelinks order:
 [{"desc1":"compelling line 1","desc2":"compelling line 2"},...]`;
@@ -581,6 +596,7 @@ If a sitelink already has desc1 or desc2, write the OTHER one to complement it.
 
 Sitelinks needing descriptions:
 ${fillInfo}
+${formatAiRuleBlock(aiRuleProfile, "sitelinks")}
 
 Return ONLY a JSON array (same order):
 [{"desc1":"line or empty if exists","desc2":"line or empty if exists"},...]`;
@@ -617,8 +633,107 @@ Return ONLY a JSON array (same order):
     }
   }
 
-  console.log(`[Sitelinks] 最终生成 ${candidates.length} 条站内链接`);
-  return candidates;
+  // ─── 第五步：验证所有链接有效性，踢掉无效的，不够 6 条就补 ───
+  const verified = await verifySitelinkCandidates(candidates, merchantUrl, merchantDomain, usedFinalUrls);
+  console.log(`[Sitelinks] 最终生成 ${verified.length} 条已验证站内链接`);
+  return verified;
+}
+
+/**
+ * 验证候选站内链接，移除无效的（404/410/超时），
+ * 不足 6 条时探测更多常见路径补充，最多重试 2 轮
+ */
+async function verifySitelinkCandidates(
+  candidates: { title: string; desc1: string; desc2: string; url: string }[],
+  merchantUrl: string,
+  merchantDomain: string,
+  usedUrls: Set<string>,
+): Promise<{ title: string; desc1: string; desc2: string; url: string }[]> {
+  const TARGET = 6;
+  let pool = [...candidates];
+
+  for (let round = 0; round < 3; round++) {
+    if (pool.length === 0) break;
+
+    const validSet = await verifyLinks(pool.map((c) => c.url));
+    const good: typeof pool = [];
+    const bad: string[] = [];
+    for (const c of pool) {
+      if (validSet.has(c.url)) {
+        good.push(c);
+      } else {
+        bad.push(c.url);
+        console.log(`[Sitelinks] 链接无效已移除: ${c.url}`);
+      }
+    }
+
+    pool = good;
+    if (pool.length >= TARGET || bad.length === 0) break;
+
+    console.log(`[Sitelinks] 验证后仅 ${pool.length} 条有效，第 ${round + 1} 轮补充探测...`);
+    const existingNorm = new Set(pool.map((c) => c.url.replace(/\/$/, "").replace(/^http:/, "https:")));
+    for (const b of bad) existingNorm.add(b.replace(/\/$/, "").replace(/^http:/, "https:"));
+    for (const u of usedUrls) existingNorm.add(u);
+
+    const extraPaths = getExtraProbePaths(merchantUrl, round);
+    const newCandidates: typeof pool = [];
+
+    for (let i = 0; i < extraPaths.length && pool.length + newCandidates.length < TARGET; i += 5) {
+      const batch = extraPaths.slice(i, i + 5);
+      const results = await Promise.all(
+        batch.map((p) => probeUrlReal(p, merchantDomain)),
+      );
+      for (const r of results) {
+        if (!r || pool.length + newCandidates.length >= TARGET) continue;
+        const norm = r.url.replace(/\/$/, "").replace(/^http:/, "https:");
+        if (existingNorm.has(norm)) continue;
+        existingNorm.add(norm);
+        newCandidates.push({ title: r.title, desc1: r.desc || "", desc2: "", url: r.url });
+        console.log(`[Sitelinks] 补充探测成功: ${r.url} → "${r.title}"`);
+      }
+    }
+
+    pool = [...pool, ...newCandidates];
+  }
+
+  return pool.slice(0, TARGET);
+}
+
+function getExtraProbePaths(merchantUrl: string, round: number): string[] {
+  let origin = "";
+  try { origin = new URL(merchantUrl).origin; } catch { return []; }
+
+  const sets: string[][] = [
+    [
+      `${origin}/faq`, `${origin}/faqs`, `${origin}/help`,
+      `${origin}/pages/faq`, `${origin}/pages/shipping`,
+      `${origin}/pages/returns`, `${origin}/pages/warranty`,
+      `${origin}/shipping`, `${origin}/returns`, `${origin}/warranty`,
+      `${origin}/reviews`, `${origin}/testimonials`,
+      `${origin}/blog`, `${origin}/news`,
+      `${origin}/gift-cards`, `${origin}/gift-card`,
+    ],
+    [
+      `${origin}/our-story`, `${origin}/pages/our-story`,
+      `${origin}/sustainability`, `${origin}/pages/sustainability`,
+      `${origin}/wholesale`, `${origin}/pages/wholesale`,
+      `${origin}/store-locator`, `${origin}/stores`,
+      `${origin}/new-in`, `${origin}/featured`,
+      `${origin}/bundles`, `${origin}/sets`,
+      `${origin}/deals`, `${origin}/offers`,
+      `${origin}/rewards`, `${origin}/loyalty`,
+    ],
+    [
+      `${origin}/collections/sale`, `${origin}/collections/new`,
+      `${origin}/collections/best-sellers`, `${origin}/collections/featured`,
+      `${origin}/catalog/sale`, `${origin}/catalog/new`,
+      `${origin}/c/accessories`, `${origin}/c/shoes`,
+      `${origin}/c/home`, `${origin}/c/electronics`,
+      `${origin}/how-it-works`, `${origin}/pages/how-it-works`,
+    ],
+  ];
+
+  return sets[Math.min(round, sets.length - 1)] || [];
 }
 
 const VERIFY_UAS = [
@@ -957,6 +1072,7 @@ async function extractPromotionWithAI(
   merchantName: string,
   country: string,
   links: { url: string; text: string }[],
+  aiRuleProfile?: unknown,
 ): Promise<Record<string, unknown> | null> {
   const market = getAdMarketConfig(country);
   // 1. 先用正则快速提取（首页）
@@ -1018,6 +1134,7 @@ Rules:
 - Never default to English for non-English markets
 - If discount_type is MONETARY, currency_code should be ${market.currencyCode} unless the website clearly shows another local currency
 - Keep the phrasing truthful and concise
+${formatAiRuleBlock(aiRuleProfile, "compliance")}
 
 Return ONLY valid JSON, no explanation.` }], 2048);
 
@@ -1056,6 +1173,7 @@ async function extractPriceWithAI(
   merchantName: string,
   country: string,
   links: { url: string; text: string }[],
+  aiRuleProfile?: unknown,
 ): Promise<Array<{ header: string; description: string; price: number; currency: string; url: string }>> {
   const market = getAdMarketConfig(country);
   // 1. 先用正则快速提取（首页 JSON-LD）
@@ -1110,6 +1228,7 @@ Rules:
 - price must be a real number found on the website, NOT made up
 - If no real prices are found, return an empty array []
 - currency should match the website's currency or ${market.currencyCode} for this market
+${formatAiRuleBlock(aiRuleProfile, "compliance")}
 
 Return ONLY valid JSON array, no explanation.` }], 2048);
 
@@ -1217,6 +1336,7 @@ async function generateCallouts(
   merchantUrl: string,
   country: string,
   pageHtml: string,
+  aiRuleProfile?: unknown,
 ): Promise<string[]> {
   const merchantFeatures = pageHtml ? extractMerchantFeatures(pageHtml) : [];
   const pageContext = merchantFeatures.length > 0
@@ -1268,6 +1388,7 @@ Rules:
 - Only include shipping if the website actually offers it
 - Write in the language appropriate for ${country}
 - Be concise and impactful, no emoji
+${formatAiRuleBlock(aiRuleProfile, "ad_copy")}
 
 Return ONLY a JSON array: ["callout1","callout2",...]`;
 

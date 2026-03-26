@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { getUserFromRequest, serializeData } from "@/lib/auth";
 import { apiSuccess, apiError } from "@/lib/constants";
 import prisma from "@/lib/prisma";
+import { mapStoredKeywordsForClient, buildKeywordCreateManyInput, selectOptimizedKeywords } from "@/lib/ad-keyword-pipeline";
 
 // 防止并发重复触发 AI 生成
 const generatingSet = new Set<string>();
@@ -39,11 +40,18 @@ export async function GET(req: NextRequest) {
   }
 
   // 获取关键词
-  let keywords: { id: bigint; keyword_text: string; match_type: string }[] = [];
+  let keywords: {
+    id: bigint;
+    keyword_text: string;
+    match_type: string;
+    avg_monthly_searches: number | null;
+    competition: string | null;
+    suggested_bid: unknown;
+  }[] = [];
   if (adGroup) {
     keywords = await prisma.keywords.findMany({
       where: { ad_group_id: adGroup.id, is_deleted: 0 },
-      select: { id: true, keyword_text: true, match_type: true },
+      select: { id: true, keyword_text: true, match_type: true, avg_monthly_searches: true, competition: true, suggested_bid: true },
     });
   }
 
@@ -83,6 +91,12 @@ export async function GET(req: NextRequest) {
         merchant.merchant_name,
         merchant.merchant_url || "",
         campaign.target_country || "US",
+        {
+          dailyBudget: Number(campaign.daily_budget || adSettings?.daily_budget || 1.5),
+          maxCpc: Number(campaign.max_cpc_limit || adSettings?.max_cpc || 0.3),
+          biddingStrategy: campaign.bidding_strategy || adSettings?.bidding_strategy || "MAXIMIZE_CLICKS",
+          aiRuleProfile: (adSettings as any)?.ai_rule_profile,
+        },
       ).catch((err) => console.error("[AdCopy] 重新触发失败:", err))
         .finally(() => generatingSet.delete(genKey));
     }
@@ -90,6 +104,13 @@ export async function GET(req: NextRequest) {
 
   const zhH = ((adCreative as any)?.headlines_zh as string[]) || [];
   const zhD = ((adCreative as any)?.descriptions_zh as string[]) || [];
+  const keywordView = mapStoredKeywordsForClient(keywords, {
+    merchantName: merchant?.merchant_name || "",
+    dailyBudget: Number(campaign.daily_budget || adSettings?.daily_budget || 1.5),
+    maxCpc: Number(campaign.max_cpc_limit || adSettings?.max_cpc || 0.3),
+    biddingStrategy: campaign.bidding_strategy || adSettings?.bidding_strategy || "MAXIMIZE_CLICKS",
+    aiRuleProfile: (adSettings as any)?.ai_rule_profile,
+  });
 
   return apiSuccess(serializeData({
     campaign: {
@@ -122,7 +143,7 @@ export async function GET(req: NextRequest) {
       callouts: adCreative.callouts,
       image_urls: adCreative.image_urls,
     } : null,
-    keywords,
+    keywords: keywordView,
     adSettings: adSettings ? {
       bidding_strategy: adSettings.bidding_strategy,
       max_cpc: adSettings.max_cpc,
@@ -131,6 +152,7 @@ export async function GET(req: NextRequest) {
       network_partners: adSettings.network_partners,
       network_display: adSettings.network_display,
       eu_political_ad: (adSettings as any).eu_political_ad ?? 0,
+      ai_rule_profile: (adSettings as any).ai_rule_profile ?? null,
     } : null,
     merchant,
     mccAccounts,
@@ -147,14 +169,20 @@ async function triggerAdCopyGeneration(
   merchantName: string,
   merchantUrl: string,
   country: string,
+  options: {
+    dailyBudget?: number;
+    maxCpc?: number;
+    biddingStrategy?: string;
+    aiRuleProfile?: unknown;
+  } = {},
 ) {
   try {
     const { SemRushClient } = await import("@/lib/semrush-client");
-    const { padHeadlines, padDescriptions } = await import("@/lib/ai-service");
+    const { padHeadlines, padDescriptions, suggestDisplayPaths } = await import("@/lib/ai-service");
 
     let dedupedTitles: string[] = [];
     let dedupedDescriptions: string[] = [];
-    let kws: { phrase: string; volume: number }[] = [];
+    let kws: Array<{ phrase: string; volume: number; competition?: string | number | null; suggested_bid?: number | null; cpc?: number | null }> = [];
 
     if (merchantUrl) {
       try {
@@ -170,13 +198,31 @@ async function triggerAdCopyGeneration(
       }
     }
 
+    const optimizedKeywords = selectOptimizedKeywords(kws, {
+      merchantName,
+      dailyBudget: options.dailyBudget,
+      maxCpc: options.maxCpc,
+      biddingStrategy: options.biddingStrategy,
+      aiRuleProfile: options.aiRuleProfile,
+      limit: 12,
+    });
+
     const headlines = await padHeadlines([], merchantName, country, 15, {
       referenceItems: dedupedTitles,
-      keywords: kws.map((kw) => kw.phrase),
+      keywords: optimizedKeywords.map((kw) => kw.phrase),
+      dailyBudget: options.dailyBudget,
+      maxCpc: options.maxCpc,
+      biddingStrategy: options.biddingStrategy,
+      aiRuleProfile: options.aiRuleProfile,
     });
     const descriptions = await padDescriptions([], merchantName, country, 4, {
       referenceItems: dedupedDescriptions,
-      keywords: kws.map((kw) => kw.phrase),
+      keywords: optimizedKeywords.map((kw) => kw.phrase),
+      headlinesForUniqueness: headlines,
+      dailyBudget: options.dailyBudget,
+      maxCpc: options.maxCpc,
+      biddingStrategy: options.biddingStrategy,
+      aiRuleProfile: options.aiRuleProfile,
     });
 
     // 自动翻译为中文参考
@@ -207,6 +253,16 @@ Return ONLY JSON: {"headlines":["中文标题1","..."],"descriptions":["中文�
       console.warn("[AdCopy] 中文翻译失败（不影响主流程）:", zhErr instanceof Error ? zhErr.message : zhErr);
     }
 
+    const existingCreative = await prisma.ad_creatives.findUnique({
+      where: { id: adCreativeId },
+      select: { display_path1: true, display_path2: true },
+    });
+    const pathSuggest = suggestDisplayPaths(
+      merchantName,
+      optimizedKeywords.map((kw) => kw.phrase),
+      country,
+    );
+
     await prisma.ad_creatives.update({
       where: { id: adCreativeId },
       data: {
@@ -214,26 +270,23 @@ Return ONLY JSON: {"headlines":["中文标题1","..."],"descriptions":["中文�
         descriptions: descriptions as any,
         ...(headlinesZh.length > 0 ? { headlines_zh: headlinesZh as any } : {}),
         ...(descriptionsZh.length > 0 ? { descriptions_zh: descriptionsZh as any } : {}),
+        ...(!existingCreative?.display_path1?.trim() ? { display_path1: pathSuggest.path1 } : {}),
+        ...(!existingCreative?.display_path2?.trim() ? { display_path2: pathSuggest.path2 } : {}),
       },
     });
 
-    if (kws.length > 0) {
-      // 先检查是否已有关键词，避免重复插入
+    if (optimizedKeywords.length > 0) {
       const existingCount = await prisma.keywords.count({
         where: { ad_group_id: adGroupId, is_deleted: 0 },
       });
       if (existingCount === 0) {
         await prisma.keywords.createMany({
-          data: kws.map((kw) => ({
-            ad_group_id: adGroupId,
-            keyword_text: kw.phrase,
-            match_type: "PHRASE",
-          })),
+          data: buildKeywordCreateManyInput(adGroupId, optimizedKeywords),
         });
       }
     }
 
-    console.log(`[AdCopy] 完成: ${headlines.length} 标题, ${descriptions.length} 描述, ${kws.length} 关键词`);
+    console.log(`[AdCopy] 完成: ${headlines.length} 标题, ${descriptions.length} 描述, ${optimizedKeywords.length} 关键词`);
   } catch (err) {
     console.error("[AdCopy] 广告文案生成异常:", err instanceof Error ? err.message : err);
   }

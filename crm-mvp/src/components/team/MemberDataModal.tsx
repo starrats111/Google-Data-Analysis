@@ -135,7 +135,7 @@ export default function MemberDataModal({ open, userId, username, displayName, o
       onCancel={onClose}
       footer={null}
       width={900}
-      destroyOnClose
+      destroyOnHidden
     >
       <Space style={{ marginBottom: 16 }}>
         <Text>日期范围：</Text>

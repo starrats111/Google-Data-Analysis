@@ -211,6 +211,7 @@ model ad_default_settings {
   naming_rule      String   @default("global") @db.VarChar(20)  // global | per_platform
   naming_prefix    String   @default("") @db.VarChar(10)         // 全局序号前缀（空=纯数字）
   eu_political_ad  Int      @default(0) @db.TinyInt              // 0=不含EU政治广告 1=含
+  ai_rule_profile  Json?
   is_deleted       Int      @default(0) @db.TinyInt
   created_at       DateTime @default(now()) @db.DateTime(0)
   updated_at       DateTime @default(now()) @updatedAt @db.DateTime(0)
