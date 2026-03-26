@@ -286,6 +286,23 @@ export async function GET(req: NextRequest) {
     }
   }
 
+  // ─── 合并 MCC 误差费用 ───
+  const queryMonth = (dateStart || cstNow.startOf("month").format("YYYY-MM-DD")).slice(0, 7);
+  const adjustments = await prisma.mcc_cost_adjustments.findMany({
+    where: { user_id: userId, month: queryMonth, is_deleted: 0 },
+  });
+  const adjustMap = new Map(adjustments.map((a) => [String(a.mcc_account_id), Number(a.amount)]));
+  let totalAdjustment = 0;
+  for (const mcc of costByMcc) {
+    const adj = adjustMap.get(mcc.mcc_db_id) || 0;
+    if (adj > 0) {
+      (mcc as Record<string, unknown>).adjustment = adj;
+      mcc.cost_usd = Number((mcc.cost_usd + adj).toFixed(2));
+      totalAdjustment += adj;
+    }
+  }
+  totalCost += totalAdjustment;
+
   const summary = {
     totalCost: Number(totalCost.toFixed(2)),
     totalCommission: Number(totalCommissionFromTxn.toFixed(2)),

@@ -3,12 +3,12 @@
 import { useState, useMemo, useCallback, useEffect, useRef } from "react";
 import {
   Card, Table, Row, Col, Statistic, Select, Space, Typography, Tag, Button,
-  DatePicker, Tooltip, App, Input, Modal, Tabs, Form,
+  DatePicker, Tooltip, App, Input, Modal, Tabs, Form, InputNumber,
 } from "antd";
 import {
   RiseOutlined, FallOutlined, SyncOutlined,
   CloudDownloadOutlined, EditOutlined, SearchOutlined,
-  PlayCircleOutlined, PauseCircleOutlined, RedoOutlined,
+  PlayCircleOutlined, PauseCircleOutlined, RedoOutlined, PlusOutlined,
 } from "@ant-design/icons";
 import type { ColumnsType } from "antd/es/table";
 import { PLATFORMS } from "@/lib/constants";
@@ -38,7 +38,7 @@ interface CampaignRow {
 
 interface CostByMcc {
   mcc_db_id: string; mcc_id: string; mcc_name: string; currency: string;
-  cost_usd: number; cost_original?: number;
+  cost_usd: number; cost_original?: number; adjustment?: number;
 }
 
 interface Summary {
@@ -105,6 +105,10 @@ export default function DataCenterPage() {
   }[]>([]);
   const [commissionTab, setCommissionTab] = useState<"merchant" | "account">("merchant");
   const [loadingCommission, setLoadingCommission] = useState(false);
+  const [adjModal, setAdjModal] = useState<{ open: boolean; mcc: CostByMcc | null }>({ open: false, mcc: null });
+  const [adjAmount, setAdjAmount] = useState<number>(0);
+  const [adjRemark, setAdjRemark] = useState("");
+  const [adjSaving, setAdjSaving] = useState(false);
 
   // MCC 列表
   const { data: mccAccounts = [] } = useStaleApi<MccAccount[]>("/api/user/settings/mcc");
@@ -312,6 +316,29 @@ export default function DataCenterPage() {
       } else message.error(res.message);
     } finally { setSyncingCid(false); }
   }, [selectedMcc, mccAccounts, message]);
+
+  const handleOpenAdj = useCallback((mcc: CostByMcc) => {
+    setAdjAmount(mcc.adjustment || 0);
+    setAdjRemark("");
+    setAdjModal({ open: true, mcc });
+  }, []);
+
+  const handleSaveAdj = useCallback(async () => {
+    if (!adjModal.mcc) return;
+    setAdjSaving(true);
+    try {
+      const month = dateRange[0].format("YYYY-MM");
+      const res = await fetch("/api/user/data-center/cost-adjustment", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mcc_account_id: adjModal.mcc.mcc_db_id, month, amount: adjAmount, remark: adjRemark || undefined }),
+      }).then((r) => r.json());
+      if (res.code === 0) {
+        message.success("误差费用已保存");
+        setAdjModal({ open: false, mcc: null });
+        refreshApi(/\/api\/user\/data-center\/campaigns/);
+      } else message.error(res.message);
+    } finally { setAdjSaving(false); }
+  }, [adjModal.mcc, adjAmount, adjRemark, dateRange, message]);
 
   const handleOpenCommissionModal = useCallback(async () => {
     setCommissionModal(true);
@@ -646,20 +673,26 @@ export default function DataCenterPage() {
         />
       </Card>
 
-      {/* ========== 花费明细弹窗（仅 MCC 汇总） ========== */}
-      <Modal title="花费明细" open={detailModal} onCancel={() => setDetailModal(false)} footer={null} width={500}>
+      {/* ========== 花费明细弹窗（MCC 汇总 + 误差） ========== */}
+      <Modal title="花费明细" open={detailModal} onCancel={() => setDetailModal(false)} footer={null} width={600}>
         {costByMcc.length > 0 ? (
           <Table
             rowKey="mcc_db_id" dataSource={costByMcc} size="small" pagination={false}
             columns={[
-              { title: "MCC 账户", dataIndex: "mcc_name", width: 160, render: (v: string, r: CostByMcc) => (
+              { title: "MCC 账户", dataIndex: "mcc_name", width: 140, render: (v: string, r: CostByMcc) => (
                 <span><Text style={{ fontSize: 12 }}>{v}</Text> <Tag color={r.currency === "CNY" ? "orange" : "blue"} style={{ fontSize: 10, marginLeft: 4 }}>{r.currency}</Tag></span>
               ) },
-              { title: "花费 (USD)", dataIndex: "cost_usd", width: 120, align: "right", render: (v: number) => <Text strong style={{ color: "#cf1322", fontSize: 13 }}>${v.toFixed(2)}</Text> },
-              { title: "原始金额", key: "cost_original", width: 140, align: "right", render: (_: unknown, r: CostByMcc) => (
+              { title: "花费 (USD)", dataIndex: "cost_usd", width: 110, align: "right", render: (v: number) => <Text strong style={{ color: "#cf1322", fontSize: 13 }}>${v.toFixed(2)}</Text> },
+              { title: "原始金额", key: "cost_original", width: 110, align: "right", render: (_: unknown, r: CostByMcc) => (
                 r.currency === "CNY" && r.cost_original != null
                   ? <Text strong style={{ color: "#d46b08", fontSize: 13 }}>¥{r.cost_original.toFixed(2)}</Text>
                   : <Text type="secondary" style={{ fontSize: 12 }}>—</Text>
+              ) },
+              { title: "误差", key: "adjustment", width: 120, align: "right", render: (_: unknown, r: CostByMcc) => (
+                <Space size={4}>
+                  {r.adjustment ? <Text style={{ fontSize: 12, color: "#fa8c16" }}>+${r.adjustment.toFixed(2)}</Text> : <Text type="secondary" style={{ fontSize: 12 }}>—</Text>}
+                  <Button type="link" size="small" icon={r.adjustment ? <EditOutlined /> : <PlusOutlined />} style={{ padding: 0, fontSize: 12 }} onClick={(e) => { e.stopPropagation(); handleOpenAdj(r); }} />
+                </Space>
               ) },
             ]}
             summary={() => costByMcc.length > 1 ? (
@@ -667,12 +700,28 @@ export default function DataCenterPage() {
                 <Table.Summary.Cell index={0}><Text strong>合计</Text></Table.Summary.Cell>
                 <Table.Summary.Cell index={1} align="right"><Text strong style={{ color: "#cf1322" }}>${summary.totalCost.toFixed(2)}</Text></Table.Summary.Cell>
                 <Table.Summary.Cell index={2} />
+                <Table.Summary.Cell index={3} />
               </Table.Summary.Row>
             ) : null}
           />
         ) : (
           <Text type="secondary">暂无数据</Text>
         )}
+      </Modal>
+
+      {/* ========== 误差费用编辑弹窗 ========== */}
+      <Modal title={`${adjModal.mcc?.mcc_name || ""} — 误差费用（${dateRange[0].format("YYYY-MM")}）`} open={adjModal.open} onCancel={() => setAdjModal({ open: false, mcc: null })} onOk={handleSaveAdj} confirmLoading={adjSaving} okText="保存" width={400}>
+        <div style={{ marginBottom: 12 }}>
+          <Text type="secondary" style={{ fontSize: 12 }}>输入 Google Ads 后台与系统之间的费用差额（USD），将计入总花费。</Text>
+        </div>
+        <div style={{ marginBottom: 12 }}>
+          <Text style={{ fontSize: 13, marginBottom: 4, display: "block" }}>误差金额 ($)</Text>
+          <InputNumber value={adjAmount} onChange={(v) => setAdjAmount(v || 0)} min={0} step={0.01} precision={2} style={{ width: "100%" }} prefix="$" />
+        </div>
+        <div>
+          <Text style={{ fontSize: 13, marginBottom: 4, display: "block" }}>备注（可选）</Text>
+          <Input value={adjRemark} onChange={(e) => setAdjRemark(e.target.value)} placeholder="如：已取消 CID 的历史费用" maxLength={200} />
+        </div>
       </Modal>
 
       {/* ========== 佣金详情弹窗（含汇总指标 + 按平台账号明细） ========== */}

@@ -167,3 +167,8 @@ export type ad_policy_categories = Prisma.ad_policy_categoriesModel
  * 
  */
 export type merchant_policy_reviews = Prisma.merchant_policy_reviewsModel
+/**
+ * Model mcc_cost_adjustments
+ * 
+ */
+export type mcc_cost_adjustments = Prisma.mcc_cost_adjustmentsModel

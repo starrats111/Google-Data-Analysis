@@ -413,7 +413,8 @@ export const ModelName = {
   exchange_rate_snapshots: 'exchange_rate_snapshots',
   mcc_cid_accounts: 'mcc_cid_accounts',
   ad_policy_categories: 'ad_policy_categories',
-  merchant_policy_reviews: 'merchant_policy_reviews'
+  merchant_policy_reviews: 'merchant_policy_reviews',
+  mcc_cost_adjustments: 'mcc_cost_adjustments'
 } as const
 
 export type ModelName = (typeof ModelName)[keyof typeof ModelName]
@@ -429,7 +430,7 @@ export type TypeMap<ExtArgs extends runtime.Types.Extensions.InternalArgs = runt
     omit: GlobalOmitOptions
   }
   meta: {
-    modelProps: "teams" | "users" | "ai_providers" | "ai_model_configs" | "system_configs" | "platform_connections" | "user_merchants" | "merchant_violations" | "merchant_recommendations" | "sheet_configs" | "ad_default_settings" | "holiday_calendar" | "campaigns" | "ad_groups" | "keywords" | "ad_creatives" | "publish_sites" | "site_migrations" | "articles" | "ads_daily_stats" | "google_mcc_accounts" | "affiliate_transactions" | "notifications" | "notification_preferences" | "ai_insights" | "operation_logs" | "exchange_rate_snapshots" | "mcc_cid_accounts" | "ad_policy_categories" | "merchant_policy_reviews"
+    modelProps: "teams" | "users" | "ai_providers" | "ai_model_configs" | "system_configs" | "platform_connections" | "user_merchants" | "merchant_violations" | "merchant_recommendations" | "sheet_configs" | "ad_default_settings" | "holiday_calendar" | "campaigns" | "ad_groups" | "keywords" | "ad_creatives" | "publish_sites" | "site_migrations" | "articles" | "ads_daily_stats" | "google_mcc_accounts" | "affiliate_transactions" | "notifications" | "notification_preferences" | "ai_insights" | "operation_logs" | "exchange_rate_snapshots" | "mcc_cid_accounts" | "ad_policy_categories" | "merchant_policy_reviews" | "mcc_cost_adjustments"
     txIsolationLevel: TransactionIsolationLevel
   }
   model: {
@@ -2413,6 +2414,72 @@ export type TypeMap<ExtArgs extends runtime.Types.Extensions.InternalArgs = runt
         }
       }
     }
+    mcc_cost_adjustments: {
+      payload: Prisma.$mcc_cost_adjustmentsPayload<ExtArgs>
+      fields: Prisma.mcc_cost_adjustmentsFieldRefs
+      operations: {
+        findUnique: {
+          args: Prisma.mcc_cost_adjustmentsFindUniqueArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$mcc_cost_adjustmentsPayload> | null
+        }
+        findUniqueOrThrow: {
+          args: Prisma.mcc_cost_adjustmentsFindUniqueOrThrowArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$mcc_cost_adjustmentsPayload>
+        }
+        findFirst: {
+          args: Prisma.mcc_cost_adjustmentsFindFirstArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$mcc_cost_adjustmentsPayload> | null
+        }
+        findFirstOrThrow: {
+          args: Prisma.mcc_cost_adjustmentsFindFirstOrThrowArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$mcc_cost_adjustmentsPayload>
+        }
+        findMany: {
+          args: Prisma.mcc_cost_adjustmentsFindManyArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$mcc_cost_adjustmentsPayload>[]
+        }
+        create: {
+          args: Prisma.mcc_cost_adjustmentsCreateArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$mcc_cost_adjustmentsPayload>
+        }
+        createMany: {
+          args: Prisma.mcc_cost_adjustmentsCreateManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        delete: {
+          args: Prisma.mcc_cost_adjustmentsDeleteArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$mcc_cost_adjustmentsPayload>
+        }
+        update: {
+          args: Prisma.mcc_cost_adjustmentsUpdateArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$mcc_cost_adjustmentsPayload>
+        }
+        deleteMany: {
+          args: Prisma.mcc_cost_adjustmentsDeleteManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        updateMany: {
+          args: Prisma.mcc_cost_adjustmentsUpdateManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        upsert: {
+          args: Prisma.mcc_cost_adjustmentsUpsertArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$mcc_cost_adjustmentsPayload>
+        }
+        aggregate: {
+          args: Prisma.Mcc_cost_adjustmentsAggregateArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.AggregateMcc_cost_adjustments>
+        }
+        groupBy: {
+          args: Prisma.mcc_cost_adjustmentsGroupByArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.Mcc_cost_adjustmentsGroupByOutputType>[]
+        }
+        count: {
+          args: Prisma.mcc_cost_adjustmentsCountArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.Mcc_cost_adjustmentsCountAggregateOutputType> | number
+        }
+      }
+    }
   }
 } & {
   other: {
@@ -3010,6 +3077,21 @@ export const Merchant_policy_reviewsScalarFieldEnum = {
 export type Merchant_policy_reviewsScalarFieldEnum = (typeof Merchant_policy_reviewsScalarFieldEnum)[keyof typeof Merchant_policy_reviewsScalarFieldEnum]
 
 
+export const Mcc_cost_adjustmentsScalarFieldEnum = {
+  id: 'id',
+  user_id: 'user_id',
+  mcc_account_id: 'mcc_account_id',
+  month: 'month',
+  amount: 'amount',
+  remark: 'remark',
+  is_deleted: 'is_deleted',
+  created_at: 'created_at',
+  updated_at: 'updated_at'
+} as const
+
+export type Mcc_cost_adjustmentsScalarFieldEnum = (typeof Mcc_cost_adjustmentsScalarFieldEnum)[keyof typeof Mcc_cost_adjustmentsScalarFieldEnum]
+
+
 export const SortOrder = {
   asc: 'asc',
   desc: 'desc'
@@ -3379,6 +3461,14 @@ export const merchant_policy_reviewsOrderByRelevanceFieldEnum = {
 export type merchant_policy_reviewsOrderByRelevanceFieldEnum = (typeof merchant_policy_reviewsOrderByRelevanceFieldEnum)[keyof typeof merchant_policy_reviewsOrderByRelevanceFieldEnum]
 
 
+export const mcc_cost_adjustmentsOrderByRelevanceFieldEnum = {
+  month: 'month',
+  remark: 'remark'
+} as const
+
+export type mcc_cost_adjustmentsOrderByRelevanceFieldEnum = (typeof mcc_cost_adjustmentsOrderByRelevanceFieldEnum)[keyof typeof mcc_cost_adjustmentsOrderByRelevanceFieldEnum]
+
+
 
 /**
  * Field references
@@ -3572,6 +3662,7 @@ export type GlobalOmitConfig = {
   mcc_cid_accounts?: Prisma.mcc_cid_accountsOmit
   ad_policy_categories?: Prisma.ad_policy_categoriesOmit
   merchant_policy_reviews?: Prisma.merchant_policy_reviewsOmit
+  mcc_cost_adjustments?: Prisma.mcc_cost_adjustmentsOmit
 }
 
 /* Types for Logging */

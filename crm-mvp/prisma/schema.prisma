@@ -640,6 +640,23 @@ model merchant_policy_reviews {
 }
 
 // -----------------------------------------------------------
+// 27. MCC 费用误差补充表（按月按 MCC）
+// -----------------------------------------------------------
+model mcc_cost_adjustments {
+  id             BigInt   @id @default(autoincrement()) @db.UnsignedBigInt
+  user_id        BigInt   @db.UnsignedBigInt
+  mcc_account_id BigInt   @db.UnsignedBigInt
+  month          String   @db.VarChar(7)
+  amount         Decimal  @default(0.00) @db.Decimal(12, 2)
+  remark         String?  @db.VarChar(200)
+  is_deleted     Int      @default(0) @db.TinyInt
+  created_at     DateTime @default(now()) @db.DateTime(0)
+  updated_at     DateTime @default(now()) @updatedAt @db.DateTime(0)
+
+  @@unique([user_id, mcc_account_id, month], map: "uk_user_mcc_month")
+}
+
+// -----------------------------------------------------------
 // campaign_link_cache 已移除 — CRM 和数据分析平台是独立系统
 // CRM 通过 platform_connections 的 API Key 直接调用联盟平台 API
 // -----------------------------------------------------------

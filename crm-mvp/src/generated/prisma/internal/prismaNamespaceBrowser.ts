@@ -80,7 +80,8 @@ export const ModelName = {
   exchange_rate_snapshots: 'exchange_rate_snapshots',
   mcc_cid_accounts: 'mcc_cid_accounts',
   ad_policy_categories: 'ad_policy_categories',
-  merchant_policy_reviews: 'merchant_policy_reviews'
+  merchant_policy_reviews: 'merchant_policy_reviews',
+  mcc_cost_adjustments: 'mcc_cost_adjustments'
 } as const
 
 export type ModelName = (typeof ModelName)[keyof typeof ModelName]
@@ -657,6 +658,21 @@ export const Merchant_policy_reviewsScalarFieldEnum = {
 export type Merchant_policy_reviewsScalarFieldEnum = (typeof Merchant_policy_reviewsScalarFieldEnum)[keyof typeof Merchant_policy_reviewsScalarFieldEnum]
 
 
+export const Mcc_cost_adjustmentsScalarFieldEnum = {
+  id: 'id',
+  user_id: 'user_id',
+  mcc_account_id: 'mcc_account_id',
+  month: 'month',
+  amount: 'amount',
+  remark: 'remark',
+  is_deleted: 'is_deleted',
+  created_at: 'created_at',
+  updated_at: 'updated_at'
+} as const
+
+export type Mcc_cost_adjustmentsScalarFieldEnum = (typeof Mcc_cost_adjustmentsScalarFieldEnum)[keyof typeof Mcc_cost_adjustmentsScalarFieldEnum]
+
+
 export const SortOrder = {
   asc: 'asc',
   desc: 'desc'
@@ -1024,4 +1040,12 @@ export const merchant_policy_reviewsOrderByRelevanceFieldEnum = {
 } as const
 
 export type merchant_policy_reviewsOrderByRelevanceFieldEnum = (typeof merchant_policy_reviewsOrderByRelevanceFieldEnum)[keyof typeof merchant_policy_reviewsOrderByRelevanceFieldEnum]
+
+
+export const mcc_cost_adjustmentsOrderByRelevanceFieldEnum = {
+  month: 'month',
+  remark: 'remark'
+} as const
+
+export type mcc_cost_adjustmentsOrderByRelevanceFieldEnum = (typeof mcc_cost_adjustmentsOrderByRelevanceFieldEnum)[keyof typeof mcc_cost_adjustmentsOrderByRelevanceFieldEnum]
 
