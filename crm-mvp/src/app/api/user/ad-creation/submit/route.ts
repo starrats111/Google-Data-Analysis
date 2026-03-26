@@ -483,16 +483,26 @@ export async function POST(req: NextRequest) {
     // ─── 9c. 价格扩展 (Price) ───
     if (price?.items?.length > 0) {
       const assetTempRn = `customers/${cid}/assets/${assetTempId}`;
-      const priceOfferings = price.items.map((item: any) => ({
-        header: (item.header || "").slice(0, 25),
-        description: (item.description || "").slice(0, 25),
-        price: {
-          amount_micros: String(Math.round((item.price_amount || 0) * 1_000_000)),
-          currency_code: item.currency_code || market.currencyCode,
-        },
-        unit: item.unit || "PER_UNIT",
-        ...(item.final_url ? { final_urls: [item.final_url] } : {}),
-      }));
+      const VALID_PRICE_UNITS = new Set([
+        "PER_HOUR", "PER_DAY", "PER_WEEK", "PER_MONTH", "PER_YEAR", "PER_NIGHT",
+      ]);
+      const priceOfferings = price.items.map((item: any) => {
+        const offering: Record<string, unknown> = {
+          header: (item.header || "").slice(0, 25),
+          description: (item.description || "").slice(0, 25),
+          price: {
+            amount_micros: String(Math.round((item.price_amount || 0) * 1_000_000)),
+            currency_code: item.currency_code || market.currencyCode,
+          },
+        };
+        if (item.unit && VALID_PRICE_UNITS.has(item.unit)) {
+          offering.unit = item.unit;
+        }
+        if (item.final_url) {
+          offering.final_url = item.final_url;
+        }
+        return offering;
+      });
       operations.push({
         asset_operation: {
           create: {
