@@ -277,7 +277,7 @@ async function syncAdsData(
         }
 
         const existingTodayStats = await prisma.ads_daily_stats.findMany({
-          where: { user_id: userId, date: todayDate, data_source: "api" },
+          where: { user_id: userId, date: todayDate },
           select: { id: true, campaign_id: true },
         });
         for (const stat of existingTodayStats) {
