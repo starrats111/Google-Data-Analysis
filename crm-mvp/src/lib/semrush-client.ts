@@ -2,6 +2,8 @@
  * SemRush 竞品分析客户端（移植自 sem01_client.py）
  * 通过 3UE 代理获取竞品域名的关键词、广告标题、广告描述
  * 使用 curl 发送请求以绕过 TLS 指纹检测（Node.js fetch 的 JA3 指纹会被 3UE 拦截）
+ *
+ * 安全防护：全局请求队列限流 + 域名结果缓存 + 会话复用
  */
 import { getSystemConfigsByPrefix } from "@/lib/system-config";
 import { execFileSync } from "child_process";
@@ -12,6 +14,123 @@ const RPC_URL = "https://sem.3ue.co/dpa/rpc?__gmitm=ayWzA3*l4EVcTpZei43sW*qRvljS
 const LOGIN_URL = "https://dash.3ue.co/api/account/login";
 const LOGIN_ORIGIN = "https://dash.3ue.co";
 const RPC_ORIGIN = "https://sem.3ue.co";
+
+// ─── 全局安全防护：限流 + 缓存 ───
+
+const MIN_REQUEST_INTERVAL_MS = 4000;
+const RANDOM_JITTER_MAX_MS = 3000;
+const DOMAIN_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
+const SESSION_TTL_MS = 30 * 60 * 1000;
+
+export interface SemRushKeyword {
+  phrase: string;
+  volume: number;
+  cpc?: number | null;
+  competition?: string | number | null;
+  suggested_bid?: number | null;
+}
+
+export interface SemRushResult {
+  domain: string;
+  keywords: SemRushKeyword[];
+  adsOverview: { title: string; description: string }[];
+  copies: { date: string; total: number; samples: { title: string; description: string }[] };
+  creativeSamples: { title: string; description: string }[];
+  dedupedTitles: string[];
+  dedupedDescriptions: string[];
+}
+
+interface CachedSession {
+  token: string;
+  cookies: Record<string, string>;
+  username: string;
+  expiresAt: number;
+}
+
+interface CachedDomainResult {
+  data: SemRushResult;
+  cachedAt: number;
+}
+
+class SemrushGuard {
+  private lastRequestTime = 0;
+  private queue: Array<{ resolve: () => void }> = [];
+  private processing = false;
+  private domainCache = new Map<string, CachedDomainResult>();
+  private sessionCache: CachedSession | null = null;
+
+  private async processQueue() {
+    if (this.processing) return;
+    this.processing = true;
+    while (this.queue.length > 0) {
+      const now = Date.now();
+      const elapsed = now - this.lastRequestTime;
+      const jitter = Math.floor(Math.random() * RANDOM_JITTER_MAX_MS);
+      const requiredWait = MIN_REQUEST_INTERVAL_MS + jitter;
+      if (elapsed < requiredWait) {
+        await new Promise((r) => setTimeout(r, requiredWait - elapsed));
+      }
+      this.lastRequestTime = Date.now();
+      const item = this.queue.shift();
+      item?.resolve();
+    }
+    this.processing = false;
+  }
+
+  async waitForSlot(): Promise<void> {
+    return new Promise((resolve) => {
+      this.queue.push({ resolve });
+      this.processQueue();
+    });
+  }
+
+  getCachedDomain(domain: string): SemRushResult | null {
+    const entry = this.domainCache.get(domain);
+    if (!entry) return null;
+    if (Date.now() - entry.cachedAt > DOMAIN_CACHE_TTL_MS) {
+      this.domainCache.delete(domain);
+      return null;
+    }
+    return entry.data;
+  }
+
+  setCachedDomain(domain: string, data: SemRushResult) {
+    this.domainCache.set(domain, { data, cachedAt: Date.now() });
+    if (this.domainCache.size > 500) {
+      const oldest = [...this.domainCache.entries()]
+        .sort((a, b) => a[1].cachedAt - b[1].cachedAt)[0];
+      if (oldest) this.domainCache.delete(oldest[0]);
+    }
+  }
+
+  getCachedSession(username: string): CachedSession | null {
+    if (!this.sessionCache) return null;
+    if (this.sessionCache.username !== username) return null;
+    if (Date.now() > this.sessionCache.expiresAt) {
+      this.sessionCache = null;
+      return null;
+    }
+    return this.sessionCache;
+  }
+
+  setCachedSession(username: string, token: string, cookies: Record<string, string>) {
+    this.sessionCache = { token, cookies: { ...cookies }, username, expiresAt: Date.now() + SESSION_TTL_MS };
+  }
+
+  invalidateSession() {
+    this.sessionCache = null;
+  }
+
+  getStats() {
+    return {
+      cacheSize: this.domainCache.size,
+      queueLength: this.queue.length,
+      hasSession: !!this.sessionCache,
+    };
+  }
+}
+
+const guard = new SemrushGuard();
 
 // ─── curl 封装（绕过 TLS 指纹检测） ───
 
@@ -141,10 +260,15 @@ function selectCreativeSamples(
   return copiesSamples.length > 0 ? copiesSamples : adsOverview;
 }
 
-const COUNTRY_MAP: Record<string, string> = {
-  US: "us", UK: "uk", CA: "ca", AU: "au",
-  DE: "de", FR: "fr", JP: "jp", BR: "br",
+const COUNTRY_EXCEPTIONS: Record<string, string> = {
+  GB: "uk",
+  UK: "uk",
 };
+
+function countryToDatabase(country: string): string {
+  const upper = country.toUpperCase();
+  return COUNTRY_EXCEPTIONS[upper] || upper.toLowerCase();
+}
 
 /** 从 3UE SemRush 页面 URL 中提取被查询的域名 */
 export function parseDomainFromSemrushUrl(url: string): string {
@@ -177,24 +301,6 @@ interface SemRushCredentials {
   nodeConfig: NodeConfig;
 }
 
-export interface SemRushKeyword {
-  phrase: string;
-  volume: number;
-  cpc?: number | null;
-  competition?: string | number | null;
-  suggested_bid?: number | null;
-}
-
-export interface SemRushResult {
-  domain: string;
-  keywords: SemRushKeyword[];
-  adsOverview: { title: string; description: string }[];
-  copies: { date: string; total: number; samples: { title: string; description: string }[] };
-  creativeSamples: { title: string; description: string }[];
-  dedupedTitles: string[];
-  dedupedDescriptions: string[];
-}
-
 export class SemRushClient {
   private creds: SemRushCredentials;
   private token: string | null = null;
@@ -214,7 +320,7 @@ export class SemRushClient {
     if (!username || !password || !userId || !apiKey) {
       throw new Error("SemRush 凭据未配置，请在管理后台 SemRush 配置中设置");
     }
-    const db = country ? (COUNTRY_MAP[country.toUpperCase()] || configs["semrush_database"] || "us") : (configs["semrush_database"] || "us");
+    const db = country ? countryToDatabase(country) : (configs["semrush_database"] || "us");
     return new SemRushClient({
       username,
       password,
@@ -271,6 +377,15 @@ export class SemRushClient {
   }
 
   async login(): Promise<string> {
+    const cached = guard.getCachedSession(this.creds.username);
+    if (cached) {
+      this.token = cached.token;
+      this.cookies = { ...cached.cookies };
+      console.log("[SemRush] 复用缓存会话，跳过登录");
+      return cached.token;
+    }
+
+    await guard.waitForSlot();
     const ts = Date.now();
     const url = `${LOGIN_URL}?username=${encodeURIComponent(this.creds.username)}&password=${encodeURIComponent(this.creds.password)}&ts=${ts}`;
     const res = curlFetch(url, {
@@ -292,7 +407,7 @@ export class SemRushClient {
     this.cookies["GMITM_uname"] = this.creds.username;
     this.cookies["GMITM_config"] = this.buildConfigValue();
 
-    // 访问分析页面获取完整 session cookies（sem.3ue.co 可能在页面加载时设置额外验证 cookie）
+    await guard.waitForSlot();
     try {
       const cookieStr = Object.entries(this.cookies).map(([k, v]) => `${k}=${v}`).join("; ");
       const pageRes = curlFetch("https://sem.3ue.co/analytics/overview/", {
@@ -310,11 +425,14 @@ export class SemRushClient {
       // 页面访问失败不阻塞流程
     }
 
+    guard.setCachedSession(this.creds.username, token, this.cookies);
+    console.log("[SemRush] 登录成功，会话已缓存");
     return token;
   }
 
   private async rpc(payload: unknown): Promise<unknown> {
     if (!this.token) await this.login();
+    await guard.waitForSlot();
     const cookieStr = Object.entries(this.cookies).map(([k, v]) => `${k}=${v}`).join("; ");
     const res = curlFetch(RPC_URL, {
       method: "POST",
@@ -331,10 +449,13 @@ export class SemRushClient {
       timeoutMs: 30000,
     });
     if (res.status >= 400) {
+      if (res.status === 401 || res.status === 403) {
+        guard.invalidateSession();
+      }
       const statusMessages: Record<number, string> = {
         401: "3UE 账户认证失败，请检查用户名和密码是否正确",
         403: "3UE 账户访问被拒绝，可能是账户已过期或 API Key 无效，请联系管理员检查 SemRush 配置",
-        429: "3UE 请求过于频繁，请稍后再试",
+        429: "3UE 请求过于频繁，请稍后再试（系统已自动限流，建议等待几分钟后重试）",
         500: "3UE 服务器内部错误，请稍后再试",
         502: "3UE 服务暂时不可用，请稍后再试",
         503: "3UE 服务暂时不可用，请稍后再试",
@@ -440,6 +561,7 @@ export class SemRushClient {
   /** 尝试通过 3UE 页面 URL 抓取嵌入数据 */
   async fetchFromPageUrl(pageUrl: string): Promise<SemRushKeyword[]> {
     if (!this.token) await this.login();
+    await guard.waitForSlot();
     const cookieStr = Object.entries(this.cookies).map(([k, v]) => `${k}=${v}`).join("; ");
     const res = curlFetch(pageUrl, {
       headers: {
@@ -502,17 +624,23 @@ export class SemRushClient {
     return [];
   }
 
-  /** 一站式查询：关键词 + 竞品广告标题/描述（去重） */
+  /** 一站式查询：关键词 + 竞品广告标题/描述（去重）。自动使用缓存和限流。 */
   async queryDomain(domainOrUrl: string): Promise<SemRushResult> {
     const domain = normalizeDomain(domainOrUrl);
     if (!domain) throw new Error("无效的域名");
 
+    const cacheKey = `${domain}:${this.creds.database}`;
+    const cached = guard.getCachedDomain(cacheKey);
+    if (cached) {
+      console.log(`[SemRush] 命中缓存: ${domain} (db=${this.creds.database}, ${cached.keywords.length} 关键词)`);
+      return cached;
+    }
+
+    console.log(`[SemRush] 开始查询: ${domain} (db=${this.creds.database})（队列状态: ${JSON.stringify(guard.getStats())}）`);
     await this.login();
 
-    const [kws, ads] = await Promise.all([
-      this.keywords(domain, 10),
-      this.adsOverview(domain, 20),
-    ]);
+    const kws = await this.keywords(domain, 10);
+    const ads = await this.adsOverview(domain, 20);
 
     let copiesData: { date: string; total: number; samples: { title: string; description: string }[] } = { date: "", total: 0, samples: [] };
     try {
@@ -528,7 +656,7 @@ export class SemRushClient {
     const titlePool = creativeSamples.filter((s) => s.title).map((s) => s.title);
     const descPool = creativeSamples.filter((s) => s.description).map((s) => s.description);
 
-    return {
+    const result: SemRushResult = {
       domain,
       keywords: kws,
       adsOverview: ads,
@@ -537,5 +665,14 @@ export class SemRushClient {
       dedupedTitles: dedupeAdTitles(titlePool),
       dedupedDescriptions: dedupeAdDescriptions(descPool),
     };
+
+    guard.setCachedDomain(cacheKey, result);
+    console.log(`[SemRush] 查询完成并缓存: ${domain} (db=${this.creds.database}, ${kws.length} 关键词, ${ads.length} 广告)`);
+    return result;
+  }
+
+  /** 获取缓存统计信息 */
+  static getGuardStats() {
+    return guard.getStats();
   }
 }
