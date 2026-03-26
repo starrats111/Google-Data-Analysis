@@ -1142,7 +1142,7 @@ Extract and return a JSON object with these fields (use null if not found):
 - currency_code: string or null
 - promo_code: string or null
 - language_code: string or null
-- promotion_target: string or null (localized for the target market, max 60 chars)
+- promotion_target: string or null (localized for the target market, max 20 chars)
 - final_url: the best URL for this promotion, or "${merchantUrl}" if none
 
 Rules:

@@ -446,10 +446,13 @@ export async function POST(req: NextRequest) {
         language_code: promotion.language_code || market.promotionLanguageCode,
       };
       if (promotion.discount_type === "PERCENT" && promotion.discount_percent) {
-        promotionAsset.percent_off = promotion.discount_percent;
+        const pct = Math.min(Math.max(Number(promotion.discount_percent) || 0, 1), 100);
+        promotionAsset.percent_off = pct * 10_000;
       } else if (promotion.discount_type === "MONETARY" && promotion.discount_amount) {
+        const rawMicros = Math.round(Math.abs(Number(promotion.discount_amount) || 0) * 1_000_000);
+        const centAligned = Math.round(rawMicros / 10_000) * 10_000;
         promotionAsset.money_amount_off = {
-          amount_micros: String(Math.round(promotion.discount_amount * 1_000_000)),
+          amount_micros: String(Math.max(centAligned, 10_000)),
           currency_code: promotion.currency_code || market.currencyCode,
         };
       }
