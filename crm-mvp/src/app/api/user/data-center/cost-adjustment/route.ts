@@ -49,7 +49,7 @@ export async function POST(req: NextRequest) {
 
   const result = await prisma.mcc_cost_adjustments.upsert({
     where: {
-      uk_user_mcc_month: { user_id: userId, mcc_account_id: mccId, month },
+      user_id_mcc_account_id_month: { user_id: userId, mcc_account_id: mccId, month },
     },
     update: { amount, remark: remark || null, is_deleted: 0 },
     create: { user_id: userId, mcc_account_id: mccId, month, amount, remark: remark || null },
