@@ -3,7 +3,7 @@ import { serializeData } from "@/lib/auth";
 import { apiSuccess, apiError } from "@/lib/constants";
 import { withLeader } from "@/lib/api-handler";
 import prisma from "@/lib/prisma";
-import { nowCST, parseCSTDateStart, parseCSTDateEndExclusive, isTodayCST } from "@/lib/date-utils";
+import { nowCST, parseCSTDateStart, parseCSTDateEndExclusive, isTodayCST, dateColumnStart, dateColumnEndExclusive, dateColumnTodayEndExclusive } from "@/lib/date-utils";
 
 /**
  * 获取指定组员的详细数据（组长专用）
@@ -28,10 +28,14 @@ export const GET = withLeader(async (req: NextRequest, { user }) => {
 
   const targetId = targetUser.id;
 
-  // 日期范围
   const cstNow = nowCST();
-  const start = startDate ? parseCSTDateStart(startDate) : cstNow.startOf("month").toDate();
-  const endExclusive = endDate
+  const monthStartStr = cstNow.startOf("month").format("YYYY-MM-DD");
+  const statsStart = startDate ? dateColumnStart(startDate) : dateColumnStart(monthStartStr);
+  const statsEnd = endDate
+    ? (isTodayCST(endDate, cstNow) ? dateColumnTodayEndExclusive() : dateColumnEndExclusive(endDate))
+    : dateColumnTodayEndExclusive();
+  const txnStart = startDate ? parseCSTDateStart(startDate) : cstNow.startOf("month").toDate();
+  const txnEnd = endDate
     ? (isTodayCST(endDate, cstNow) ? cstNow.toDate() : parseCSTDateEndExclusive(endDate))
     : cstNow.toDate();
 
@@ -95,7 +99,7 @@ export const GET = withLeader(async (req: NextRequest, { user }) => {
     by: ["campaign_id"],
     where: {
       campaign_id: { in: allIdsForStats },
-      date: { gte: start, lt: endExclusive },
+      date: { gte: statsStart, lt: statsEnd },
       is_deleted: 0,
     } as never,
     _sum: { cost: true, clicks: true, impressions: true },
@@ -129,7 +133,7 @@ export const GET = withLeader(async (req: NextRequest, { user }) => {
     WHERE user_id = ? AND is_deleted = 0
       AND transaction_time >= ? AND transaction_time < ?
     GROUP BY user_merchant_id
-  `, targetId, start, endExclusive);
+  `, targetId, txnStart, txnEnd);
 
   const commissionByMerchant = new Map<string, { commission: number; rejected: number; approved: number; orders: number }>();
   let totalCommissionFromTxn = 0;

@@ -3,6 +3,7 @@ import { serializeData } from "@/lib/auth";
 import { apiSuccess, apiError } from "@/lib/constants";
 import { withUser } from "@/lib/api-handler";
 import prisma from "@/lib/prisma";
+import { dateColumnStart, nowCST, parseCSTDateStart, parseCSTDateEndExclusive } from "@/lib/date-utils";
 
 /**
  * GET /api/user/merchants/active-advertisers?merchant_id=xxx&platform=YY
@@ -104,10 +105,14 @@ export const GET = withUser(async (req: NextRequest) => {
   });
   const userNameMap = new Map(users.map((u) => [u.id.toString(), u.display_name || u.username]));
 
-  // 本月统计数据
-  const now = new Date();
-  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
-  const nextMonth = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+  // DATE 列用 UTC 午夜对齐；DATETIME 列用 CST 转换
+  const cstNow = nowCST();
+  const monthStartStr = cstNow.startOf("month").format("YYYY-MM-DD");
+  const nextMonthStr = cstNow.startOf("month").add(1, "month").format("YYYY-MM-DD");
+  const statsMonthStart = dateColumnStart(monthStartStr);
+  const statsNextMonth = dateColumnStart(nextMonthStr);
+  const txnMonthStart = parseCSTDateStart(monthStartStr);
+  const txnNextMonth = parseCSTDateStart(nextMonthStr);
 
   const allCampaignIds = activeUserIds.flatMap((e) => e.campaignIds);
 
@@ -116,7 +121,7 @@ export const GET = withUser(async (req: NextRequest) => {
     by: ["campaign_id"],
     where: {
       campaign_id: { in: allCampaignIds },
-      date: { gte: monthStart },
+      date: { gte: statsMonthStart, lt: statsNextMonth },
       is_deleted: 0,
     },
     _sum: {
@@ -149,7 +154,7 @@ export const GET = withUser(async (req: NextRequest) => {
           AND transaction_time >= ? AND transaction_time < ?
           AND user_merchant_id != 0
         GROUP BY user_merchant_id, user_id
-      `, ...umIds, monthStart, nextMonth)
+      `, ...umIds, txnMonthStart, txnNextMonth)
     : [];
 
   const commissionByUserMerchant = new Map<string, { total: number; rejected: number }>();

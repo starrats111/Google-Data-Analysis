@@ -3,7 +3,7 @@ import { getUserFromRequest, serializeData } from "@/lib/auth";
 import { apiSuccess, apiError } from "@/lib/constants";
 import prisma from "@/lib/prisma";
 import { cachedQuery, cacheDelete } from "@/lib/cache";
-import { nowCST, parseCSTDateStart, parseCSTDateEndExclusive, isTodayCST } from "@/lib/date-utils";
+import { nowCST, parseCSTDateStart, parseCSTDateEndExclusive, isTodayCST, dateColumnStart, dateColumnEndExclusive, dateColumnTodayEndExclusive } from "@/lib/date-utils";
 
 /**
  * GET /api/user/data-center/campaigns
@@ -63,8 +63,18 @@ export async function GET(req: NextRequest) {
 
   // 日期范围（默认本月，东八区）
   const cstNow = nowCST();
-  const start = dateStart ? parseCSTDateStart(dateStart) : cstNow.startOf("month").toDate();
-  const endExclusive = dateEnd
+  const monthStartStr = cstNow.startOf("month").format("YYYY-MM-DD");
+  const todayStr = cstNow.format("YYYY-MM-DD");
+
+  // ads_daily_stats.date 是 DATE 列，必须用 UTC 午夜对齐，否则 CST→UTC 会偏移一天
+  const statsDateStart = dateStart ? dateColumnStart(dateStart) : dateColumnStart(monthStartStr);
+  const statsDateEnd = dateEnd
+    ? (isTodayCST(dateEnd, cstNow) ? dateColumnTodayEndExclusive() : dateColumnEndExclusive(dateEnd))
+    : dateColumnTodayEndExclusive();
+
+  // affiliate_transactions.transaction_time 是 DATETIME 列，用 CST 转换是正确的
+  const txnStart = dateStart ? parseCSTDateStart(dateStart) : cstNow.startOf("month").toDate();
+  const txnEnd = dateEnd
     ? (isTodayCST(dateEnd, cstNow) ? cstNow.toDate() : parseCSTDateEndExclusive(dateEnd))
     : cstNow.toDate();
 
@@ -170,7 +180,7 @@ export async function GET(req: NextRequest) {
         by: ["campaign_id"],
         where: {
           campaign_id: { in: allCampaignIdsIncludingDupes },
-          date: { gte: start, lt: endExclusive },
+          date: { gte: statsDateStart, lt: statsDateEnd },
           is_deleted: 0,
         } as never,
         _sum: { cost: true, clicks: true, impressions: true },
@@ -218,7 +228,7 @@ export async function GET(req: NextRequest) {
     WHERE user_id = ? AND is_deleted = 0
       AND transaction_time >= ? AND transaction_time < ?
     GROUP BY user_merchant_id
-  `, userId, start, endExclusive);
+  `, userId, txnStart, txnEnd);
 
   const commissionByMerchant = new Map<string, {
     commission: number; rejected: number; approved: number;
@@ -293,7 +303,7 @@ export async function GET(req: NextRequest) {
         WHERE s.campaign_id IN (${cnyCampaignIds.map(() => "?").join(",")})
           AND s.date >= ? AND s.date < ? AND s.is_deleted = 0
         GROUP BY c.mcc_id, s.date
-      `, ...cnyCampaignIds.map(Number), start, endExclusive);
+      `, ...cnyCampaignIds.map(Number), statsDateStart, statsDateEnd);
 
       for (const row of cnyDailyStats) {
         const mccDbId = String(row.mcc_id);

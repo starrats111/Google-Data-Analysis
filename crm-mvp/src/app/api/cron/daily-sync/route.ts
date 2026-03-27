@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 import { normalizePlatformCode } from "@/lib/constants";
 import { getExchangeRate, preloadRates } from "@/lib/exchange-rate";
-import { nowCST, parseCSTDateStart } from "@/lib/date-utils";
+import { nowCST, parseCSTDateStart, dateColumnStart } from "@/lib/date-utils";
 import { autoRepairPublishedArticles } from "@/lib/article-auto-repair";
 
 const CRON_SECRET = process.env.CRON_SECRET || "";
@@ -368,6 +368,7 @@ async function syncAllUsersTransactions(): Promise<unknown> {
       const cstNow = nowCST();
       const startStr = cstNow.subtract(120, "day").format("YYYY-MM-DD");
       const syncStart = parseCSTDateStart(startStr);
+      const statsSyncStart = dateColumnStart(startStr);
       const endStr = cstNow.format("YYYY-MM-DD");
 
       const userMerchants = await prisma.user_merchants.findMany({
@@ -457,7 +458,7 @@ async function syncAllUsersTransactions(): Promise<unknown> {
         await linkTransactionsToMerchants(userId);
         await linkCampaignsToMerchants(userId);
         await claimLinkedMerchants(userId);
-        const commUpdated = await updateDailyStatsCommission(userId, syncStart);
+        const commUpdated = await updateDailyStatsCommission(userId, statsSyncStart, syncStart);
         log(`    ${user.username}: updated ${commUpdated} commission records in ads_daily_stats`);
       }
 
@@ -588,9 +589,9 @@ async function claimLinkedMerchants(userId: bigint) {
 /**
  * 将 affiliate_transactions 佣金回写到 ads_daily_stats（向后兼容，非前端主要读取源）
  */
-async function updateDailyStatsCommission(userId: bigint, startDate: Date): Promise<number> {
+async function updateDailyStatsCommission(userId: bigint, statsStartDate: Date, txnStartDate: Date): Promise<number> {
   await prisma.ads_daily_stats.updateMany({
-    where: { user_id: userId, date: { gte: startDate } },
+    where: { user_id: userId, date: { gte: statsStartDate } },
     data: { commission: 0, rejected_commission: 0, orders: 0 },
   });
 
@@ -606,7 +607,7 @@ async function updateDailyStatsCommission(userId: bigint, startDate: Date): Prom
     FROM affiliate_transactions
     WHERE user_id = ? AND is_deleted = 0 AND transaction_time >= ?
     GROUP BY user_merchant_id, DATE(transaction_time)
-  `, userId, startDate);
+  `, userId, txnStartDate);
 
   if (!txnAgg || txnAgg.length === 0) return 0;
 

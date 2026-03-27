@@ -2,7 +2,7 @@ import { NextRequest } from "next/server";
 import { getUserFromRequest, serializeData } from "@/lib/auth";
 import { apiSuccess, apiError, normalizePlatformCode } from "@/lib/constants";
 import prisma from "@/lib/prisma";
-import { nowCST, parseCSTDateStart } from "@/lib/date-utils";
+import { nowCST, parseCSTDateStart, dateColumnStart } from "@/lib/date-utils";
 
 /**
  * POST /api/user/data-center/sync-transactions
@@ -23,6 +23,7 @@ export async function POST(req: NextRequest) {
     ? cstNow.subtract(body.days, "day").format("YYYY-MM-DD")
     : DEFAULT_START;
   const startDate = parseCSTDateStart(startStr);
+  const statsStartDate = dateColumnStart(startStr);
   const endStr = cstNow.format("YYYY-MM-DD");
 
   try {
@@ -194,10 +195,10 @@ export async function POST(req: NextRequest) {
 
     // 5. 先清零旧佣金，再按日期重新写入正确值
     await prisma.ads_daily_stats.updateMany({
-      where: { user_id: userId, date: { gte: startDate } },
+      where: { user_id: userId, date: { gte: statsStartDate } },
       data: { commission: 0, rejected_commission: 0, orders: 0 },
     });
-    const commissionUpdated = await updateDailyStatsCommission(userId, startDate);
+    const commissionUpdated = await updateDailyStatsCommission(userId, statsStartDate, startDate);
 
     const errors = accountResults.filter((r) => r.error);
     const msg = accountResults.map((r) =>
@@ -344,7 +345,7 @@ async function claimLinkedMerchants(userId: bigint) {
 
 // ─── updateDailyStatsCommission ───
 
-async function updateDailyStatsCommission(userId: bigint, startDate: Date): Promise<number> {
+async function updateDailyStatsCommission(userId: bigint, statsStartDate: Date, txnStartDate: Date): Promise<number> {
   const txnAgg = await prisma.$queryRawUnsafe<
     { user_merchant_id: bigint; txn_date: string; total_commission: number; rejected_commission: number; order_count: number }[]
   >(`
@@ -357,7 +358,7 @@ async function updateDailyStatsCommission(userId: bigint, startDate: Date): Prom
     FROM affiliate_transactions
     WHERE user_id = ? AND is_deleted = 0 AND transaction_time >= ?
     GROUP BY user_merchant_id, DATE(transaction_time)
-  `, userId, startDate);
+  `, userId, txnStartDate);
 
   if (!txnAgg || txnAgg.length === 0) return 0;
 
@@ -387,7 +388,7 @@ async function updateDailyStatsCommission(userId: bigint, startDate: Date): Prom
   // 预加载所有相关 daily_stats（消除 N+1）
   const allCampaignIds = allCampaigns.map(c => c.id);
   const allStats = allCampaignIds.length > 0 ? await prisma.ads_daily_stats.findMany({
-    where: { campaign_id: { in: allCampaignIds }, date: { gte: startDate } },
+    where: { campaign_id: { in: allCampaignIds }, date: { gte: statsStartDate } },
     select: { id: true, campaign_id: true, date: true },
   }) : [];
 

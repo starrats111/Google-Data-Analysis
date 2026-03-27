@@ -55,6 +55,27 @@ export function isTodayCST(dateStr: string, now = nowCST()): boolean {
   return dateStr === now.format("YYYY-MM-DD");
 }
 
+/**
+ * 用于 MySQL DATE 列比较的日期（UTC 午夜）。
+ * Prisma 对 DATE 列按 UTC 日期部分比较，不能用 CST 偏移量，否则日期会偏移一天。
+ */
+export function dateColumnStart(dateStr: string): Date {
+  return new Date(dateStr + "T00:00:00.000Z");
+}
+
+/** DATE 列专用：次日 UTC 午夜（独占上界） */
+export function dateColumnEndExclusive(dateStr: string): Date {
+  const d = new Date(dateStr + "T00:00:00.000Z");
+  d.setUTCDate(d.getUTCDate() + 1);
+  return d;
+}
+
+/** DATE 列专用：东八区"今天"对应的次日 UTC 午夜（确保包含今天数据） */
+export function dateColumnTodayEndExclusive(): Date {
+  const todayStr = dayjs().tz(TZ).format("YYYY-MM-DD");
+  return dateColumnEndExclusive(todayStr);
+}
+
 /** 获取东八区月初的 dayjs 实例 */
 export function startOfMonthCST() {
   return dayjs().tz(TZ).startOf("month");

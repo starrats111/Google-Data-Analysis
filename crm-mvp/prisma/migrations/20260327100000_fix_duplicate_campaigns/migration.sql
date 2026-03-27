@@ -60,7 +60,7 @@ WHERE dupe.is_deleted = 0
 -- Step 4: 补充主记录缺失的 customer_id（从已软删除的重复记录获取）
 UPDATE campaigns c
 JOIN (
-  SELECT c2.google_campaign_id, c2.user_id, MAX(d.customer_id) as cid
+  SELECT d.google_campaign_id, d.user_id, MAX(d.customer_id) as cid
   FROM campaigns d
   WHERE d.is_deleted = 1 AND d.customer_id IS NOT NULL AND d.customer_id != ''
     AND d.google_campaign_id IS NOT NULL
