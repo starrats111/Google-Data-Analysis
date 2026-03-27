@@ -2,7 +2,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { useParams, useRouter } from "next/navigation";
 import {
-  Card, Row, Col, Input, Button, Space, Tag, Typography, Spin, Alert, Progress,
+  Card, Row, Col, Input, Button, Space, Tag, Typography, Spin, Alert,
   Select, InputNumber, Switch, Divider, App, Tooltip, Popconfirm, Checkbox,
   Upload, Image,
 } from "antd";
@@ -213,20 +213,17 @@ export default function AdPreviewPage() {
   const [generatingHeadlines, setGeneratingHeadlines] = useState(false);
   const [generatingDescriptions, setGeneratingDescriptions] = useState(false);
 
+  // Core 一键生成（标题+描述+站内链接+图片）
+  const [coreGenerating, setCoreGenerating] = useState(false);
+
   // 关键词获取
   const [kwFetching, setKwFetching] = useState(false);
   const [semrushFailed, setSemrushFailed] = useState(false);
   const [semrushUrl, setSemrushUrl] = useState("");
   const [semrushUrlFetching, setSemrushUrlFetching] = useState(false);
 
-  // 动态轮询：前 20s 每 3s，20-60s 每 5s，60s-180s 每 10s，180s+ 停止轮询
-  const [pollStart] = useState(() => Date.now());
-  const MAX_POLL_MS = 180_000; // 3 分钟后停止自动轮询
-  const elapsed = Date.now() - pollStart;
-  const pollTimedOut = !initialized && elapsed >= MAX_POLL_MS;
-  const pollInterval = initialized || pollTimedOut
-    ? 0
-    : elapsed < 20000 ? 3000 : elapsed < 60000 ? 5000 : 10000;
+  // 初始化前轮询查状态，初始化后停止轮询
+  const pollInterval = initialized ? 0 : 3000;
   const { data: preview, isLoading, mutate } = useApiWithParams<AdPreviewData>(
     "/api/user/ad-creation/status",
     { campaign_id: campaignId },
@@ -240,9 +237,9 @@ export default function AdPreviewPage() {
   const defaultLanguageCode = getLanguageCodeByCountry(targetCountry);
   const defaultSnippetHeader = getSnippetHeaderByCountry(targetCountry);
 
-  // 数据就绪后初始化编辑状态
+  // 数据加载后初始化编辑状态（不再等待 isReady — 标题描述由前端触发生成）
   useEffect(() => {
-    if (!preview || initialized || !isReady) return;
+    if (!preview || initialized) return;
     const h = Array.isArray(preview.adCreative?.headlines) ? preview.adCreative.headlines : [];
     const d = Array.isArray(preview.adCreative?.descriptions) ? preview.adCreative.descriptions : [];
     setHeadlines(h.length >= 15 ? h.slice(0, 15) : [...h, ...Array(15 - h.length).fill("")]);
@@ -312,14 +309,20 @@ export default function AdPreviewPage() {
     }
     setInitialized(true);
 
-    // 站内链接和图片合并为一次请求，减少 HTTP 往返 + 共享爬虫结果
-    const autoTypes: Array<"sitelinks" | "images"> = [];
-    if (existingSitelinks.length === 0) autoTypes.push("sitelinks");
-    if (existingImages.length === 0) autoTypes.push("images");
-    if (autoTypes.length > 0) {
-      setTimeout(() => generateExtension(...autoTypes), 100);
+    // 标题/描述为空 → 自动触发 core 一键生成（标题+描述+站内链接+图片）
+    const needCore = h.length === 0 || d.length === 0;
+    if (needCore) {
+      setTimeout(() => generateExtension("core" as any), 100);
+    } else {
+      // 标题描述已有，只补充缺失的站内链接和图片
+      const autoTypes: Array<"sitelinks" | "images"> = [];
+      if (existingSitelinks.length === 0) autoTypes.push("sitelinks");
+      if (existingImages.length === 0) autoTypes.push("images");
+      if (autoTypes.length > 0) {
+        setTimeout(() => generateExtension(...autoTypes), 100);
+      }
     }
-  }, [preview, isReady, initialized]);
+  }, [preview, initialized]);
 
   // ─── 生成中文翻译（仅参考，不影响广告内容） ───
   const generateZhTranslation = useCallback(async () => {
@@ -627,12 +630,20 @@ export default function AdPreviewPage() {
   }, [selectedMccId, selectedCid, message]);
 
   // ─── 爬虫生成扩展（SSE 流式接收，逐项更新 UI） ───
-  const generateExtension = useCallback(async (...requestedTypes: Array<"sitelinks" | "images" | "callouts" | "promotion" | "price" | "call" | "snippet">) => {
+  const generateExtension = useCallback(async (...requestedTypes: Array<"core" | "sitelinks" | "images" | "callouts" | "promotion" | "price" | "call" | "snippet">) => {
     const loadingSetters: Record<string, (v: boolean) => void> = {
       sitelinks: setSitelinksLoading, images: setImagesLoading, callouts: setCalloutsLoading,
       promotion: setPromotionLoading, price: setPriceLoading, call: setCallLoading, snippet: setSnippetLoading,
     };
-    for (const t of requestedTypes) loadingSetters[t]?.(true);
+
+    const isCore = requestedTypes.includes("core" as any);
+    if (isCore) {
+      setCoreGenerating(true);
+      setSitelinksLoading(true);
+      setImagesLoading(true);
+    } else {
+      for (const t of requestedTypes) loadingSetters[t]?.(true);
+    }
 
     const arrived = new Set<string>();
     const merchantLandingUrl = preview?.merchant?.merchant_url || preview?.adCreative?.final_url || "";
@@ -644,6 +655,26 @@ export default function AdPreviewPage() {
       if (type === "crawl_status") {
         const cs = data as Record<string, unknown>;
         if (cs?.crawl_failed) { setCrawlFailed(true); wasCrawlFailed = true; }
+        return;
+      }
+
+      if (type === "headlines") {
+        const hs = (data || []) as string[];
+        if (hs.length > 0) {
+          const padded = hs.length >= 15 ? hs.slice(0, 15) : [...hs, ...Array(15 - hs.length).fill("")];
+          setHeadlines(padded);
+          message.success(`已生成 ${hs.length} 条标题`);
+        }
+        return;
+      }
+
+      if (type === "descriptions") {
+        const ds = (data || []) as string[];
+        if (ds.length > 0) {
+          const padded = ds.length >= 4 ? ds.slice(0, 4) : [...ds, ...Array(4 - ds.length).fill("")];
+          setDescriptions(padded);
+          message.success(`已生成 ${ds.length} 条描述`);
+        }
         return;
       }
 
@@ -745,10 +776,26 @@ export default function AdPreviewPage() {
     };
 
     try {
+      // core → 发送 types: ["core"]
+      // optional → 发送 types: ["optional"], optionalTypes: [...]
+      // 其他 → 兼容旧逻辑
+      let reqBody: Record<string, unknown>;
+      if (isCore) {
+        reqBody = { campaign_id: campaignId, types: ["core"] };
+      } else {
+        const optionalSet = new Set(["callouts", "promotion", "price", "call", "snippet"]);
+        const isOptionalBatch = requestedTypes.every((t) => optionalSet.has(t));
+        if (isOptionalBatch && requestedTypes.length > 0) {
+          reqBody = { campaign_id: campaignId, types: ["optional"], optionalTypes: requestedTypes };
+        } else {
+          reqBody = { campaign_id: campaignId, types: requestedTypes };
+        }
+      }
+
       const res = await fetch("/api/user/ad-creation/generate-extensions", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ campaign_id: campaignId, types: requestedTypes }),
+        body: JSON.stringify(reqBody),
       });
 
       if (!res.ok || !res.body) { message.error("生成失败"); return; }
@@ -780,7 +827,13 @@ export default function AdPreviewPage() {
     } catch (err: unknown) {
       message.error((err instanceof Error ? err.message : null) || "生成失败，请手动填写");
     } finally {
-      for (const t of requestedTypes) if (!arrived.has(t) && !arrived.has(t === "price" ? "price_items" : t === "snippet" ? "structured_snippet" : t)) loadingSetters[t]?.(false);
+      if (isCore) {
+        setCoreGenerating(false);
+        setSitelinksLoading(false);
+        setImagesLoading(false);
+      } else {
+        for (const t of requestedTypes) if (!arrived.has(t) && !arrived.has(t === "price" ? "price_items" : t === "snippet" ? "structured_snippet" : t)) loadingSetters[t]?.(false);
+      }
     }
   }, [campaignId, message, callCountryCode, defaultCurrencyCode, defaultLanguageCode, defaultSnippetHeader, targetCountry, preview]);
 
@@ -909,8 +962,7 @@ export default function AdPreviewPage() {
 
   const toggleCallouts = useCallback((checked: boolean) => {
     setEnableCallouts(checked);
-    if (checked && callouts.length === 0) generateExtension("callouts");
-  }, [callouts.length, generateExtension]);
+  }, []);
 
   // ─── 站内链接操作 ───
   const updateSitelink = (idx: number, field: keyof SitelinkItem, val: string) => {
@@ -1096,48 +1148,17 @@ export default function AdPreviewPage() {
         {preview.campaign?.google_campaign_id && <Tag color="green">已提交</Tag>}
       </Space>
 
-      {!isReady && (() => {
-        const hCount = (preview?.adCreative?.headlines as string[] | undefined)?.length || 0;
-        const dCount = (preview?.adCreative?.descriptions as string[] | undefined)?.length || 0;
-        const totalDone = Math.min(hCount, 15) + Math.min(dCount, 4);
-        const totalTarget = 19;
-        const pct = Math.round((totalDone / totalTarget) * 100);
-        if (pollTimedOut) {
-          return (
-            <Card size="small" style={{ marginBottom: 16, border: "1px solid #faad14", background: "#fffbe6" }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
-                <ExclamationCircleOutlined style={{ fontSize: 20, color: "#faad14" }} />
-                <div style={{ flex: 1 }}>
-                  <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 4 }}>AI 文案生成超时</div>
-                  <div style={{ fontSize: 12, color: "#5F6368", marginBottom: 8 }}>
-                    当前进度：标题 {hCount}/15，描述 {dCount}/4。系统仍在后台生成，点击刷新查看最新状态。
-                  </div>
-                  <Progress percent={pct} size="small" strokeColor="#faad14" />
-                </div>
-                <Button type="primary" size="small" icon={<ReloadOutlined />} onClick={() => mutate()}>刷新状态</Button>
-              </div>
-            </Card>
-          );
-        }
-        const stepText = hCount >= 15
-          ? `标题已就绪，描述生成中 (${dCount}/4)...`
-          : hCount > 0
-            ? `标题生成中 (${hCount}/15)，描述并行生成中...`
-            : "正在获取竞品数据并生成 AI 文案，请稍候。";
-        return (
-          <Card size="small" style={{ marginBottom: 16, border: "1px solid #91caff", background: "#e6f4ff" }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
-              <LoadingOutlined style={{ fontSize: 20, color: "#1677ff" }} />
-              <div style={{ flex: 1 }}>
-                <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 4 }}>正在生成广告素材...</div>
-                <div style={{ fontSize: 12, color: "#5F6368", marginBottom: 8 }}>{stepText}</div>
-                <Progress percent={pct} size="small" strokeColor={{ from: "#4DA6FF", to: "#1A7FDB" }} />
-              </div>
-              <Button size="small" icon={<ReloadOutlined />} onClick={() => mutate()}>刷新</Button>
+      {coreGenerating && (
+        <Card size="small" style={{ marginBottom: 16, border: "1px solid #91caff", background: "#e6f4ff" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
+            <LoadingOutlined style={{ fontSize: 20, color: "#1677ff" }} />
+            <div style={{ flex: 1 }}>
+              <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 4 }}>正在一键生成广告素材...</div>
+              <div style={{ fontSize: 12, color: "#5F6368" }}>AI 正在生成标题、描述和站内链接，通常需要 15-30 秒。</div>
             </div>
-          </Card>
-        );
-      })()}
+          </div>
+        </Card>
+      )}
 
       <Row gutter={16}>
         {/* ─── 左侧：标题 / 描述 / 关键词 / 扩展 ─── */}
@@ -1714,7 +1735,6 @@ export default function AdPreviewPage() {
             <div style={{ marginBottom: 16 }}>
               <Checkbox checked={enablePromotion} onChange={(e) => {
                 setEnablePromotion(e.target.checked);
-                if (e.target.checked && !promotion.promotion_target) generateExtension("promotion");
               }}>
                 <Space><TagOutlined /><Text strong>促销 (Promotion)</Text></Space>
               </Checkbox>
@@ -1790,7 +1810,6 @@ export default function AdPreviewPage() {
               <Checkbox checked={enablePrice} onChange={(e) => {
                 setEnablePrice(e.target.checked);
                 if (e.target.checked && priceItems.length === 0) {
-                  generateExtension("price");
                   setPriceItems([
                     { header: "", description: "", price_amount: 0, currency_code: defaultCurrencyCode, final_url: "" },
                     { header: "", description: "", price_amount: 0, currency_code: defaultCurrencyCode, final_url: "" },
@@ -1868,7 +1887,6 @@ export default function AdPreviewPage() {
             <div style={{ marginBottom: 16 }}>
               <Checkbox checked={enableCall} onChange={(e) => {
                 setEnableCall(e.target.checked);
-                if (e.target.checked && !callPhoneNumber) generateExtension("call");
               }}>
                 <Space><PhoneOutlined /><Text strong>致电 (Call)</Text></Space>
               </Checkbox>
@@ -1908,7 +1926,6 @@ export default function AdPreviewPage() {
             <div>
               <Checkbox checked={enableSnippet} onChange={(e) => {
                 setEnableSnippet(e.target.checked);
-                if (e.target.checked && snippetValues.every((v) => !v.trim())) generateExtension("snippet");
               }}>
                 <Space><UnorderedListOutlined /><Text strong>结构化摘要 (Structured Snippet)</Text></Space>
               </Checkbox>
@@ -1956,6 +1973,30 @@ export default function AdPreviewPage() {
                 </div>
               )}
             </div>
+
+            {/* 批量生成按钮：勾选后一键 AI 生成所有可选扩展 */}
+            {(enableCallouts || enablePromotion || enablePrice || enableCall || enableSnippet) && (
+              <>
+                <Divider style={{ margin: "12px 0" }} />
+                <Button
+                  type="primary"
+                  icon={<ReloadOutlined />}
+                  loading={calloutsLoading || promotionLoading || priceLoading || callLoading || snippetLoading}
+                  onClick={() => {
+                    const types: Array<"callouts" | "promotion" | "price" | "call" | "snippet"> = [];
+                    if (enableCallouts) types.push("callouts");
+                    if (enablePromotion) types.push("promotion");
+                    if (enablePrice) types.push("price");
+                    if (enableCall) types.push("call");
+                    if (enableSnippet) types.push("snippet");
+                    if (types.length > 0) generateExtension(...types);
+                  }}
+                  block
+                >
+                  一键生成已勾选的可选扩展
+                </Button>
+              </>
+            )}
           </Card>
         </Col>
 
@@ -2104,13 +2145,13 @@ export default function AdPreviewPage() {
             onConfirm={handleSubmit}
             okText="确认提交"
             cancelText="取消"
-            disabled={!isReady || submitting || !!preview.campaign?.google_campaign_id}
+            disabled={coreGenerating || submitting || !!preview.campaign?.google_campaign_id || headlines.filter(h => h.trim()).length === 0}
           >
             <Button
               type="primary" size="large" block
               icon={submitting ? <LoadingOutlined /> : <RocketOutlined />}
               loading={submitting}
-              disabled={!isReady || !!preview.campaign?.google_campaign_id}
+              disabled={coreGenerating || !!preview.campaign?.google_campaign_id || headlines.filter(h => h.trim()).length === 0}
             >
               {preview.campaign?.google_campaign_id ? "已提交到 Google Ads" : submitting ? "提交中..." : "提交到 Google Ads"}
             </Button>

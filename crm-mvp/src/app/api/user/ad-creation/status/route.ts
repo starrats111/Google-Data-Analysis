@@ -4,17 +4,10 @@ import { apiSuccess, apiError } from "@/lib/constants";
 import prisma from "@/lib/prisma";
 import { mapStoredKeywordsForClient } from "@/lib/ad-keyword-pipeline";
 
-// 防止频繁触发 AI 生成：key → { lastTs: 上次触发时间, count: 累计触发次数 }
-// 无论成功或失败都保持冷却期，超过最大次数后彻底停止自动触发
-const genCooldown = new Map<string, { lastTs: number; count: number }>();
-const GEN_COOLDOWN_MS = 10 * 60 * 1000; // 10 分钟冷却
-const GEN_MAX_AUTO_RETRIES = 3; // 单个 adCreative 最多自动触发 3 次
-
 /**
  * GET /api/user/ad-creation/status?campaign_id=xxx
- * 获取广告创建状态（含 headlines/descriptions/keywords/设置）
- * 用于广告预览页轮询加载
- * 如果文案未就绪且超过 45 秒，自动重新触发 AI 生成（仅补充缺失部分）
+ * 纯状态查询：返回广告预览所需的全部数据，无任何副作用
+ * AI 生成完全由前端通过 generate-extensions 端点主动触发
  */
 export async function GET(req: NextRequest) {
   const user = getUserFromRequest(req);
@@ -75,43 +68,9 @@ export async function GET(req: NextRequest) {
     keywords = kws;
   }
 
-  // 判断是否就绪（标题必须满 15 条，描述必须满 4 条）
   const headlines = (adCreative?.headlines as string[]) || [];
   const descriptions = (adCreative?.descriptions as string[]) || [];
   const isReady = headlines.length >= 15 && descriptions.length >= 4;
-
-  // 如果未就绪且创建超过 45 秒，自动重新触发 AI 补充（仅生成缺失部分）
-  // 三重保护：冷却期 + 最大次数上限 + 成功/失败都不立即清除冷却
-  if (!isReady && adCreative && adGroup && merchant) {
-    const ageMs = Date.now() - new Date(adCreative.created_at).getTime();
-    const genKey = `adcopy-${adCreative.id}`;
-    const state = genCooldown.get(genKey);
-    const lastTry = state?.lastTs || 0;
-    const tryCount = state?.count || 0;
-
-    if (tryCount >= GEN_MAX_AUTO_RETRIES) {
-      // 静默跳过：已达上限
-    } else if (ageMs > 45000 && Date.now() - lastTry > GEN_COOLDOWN_MS) {
-      const newCount = tryCount + 1;
-      genCooldown.set(genKey, { lastTs: Date.now(), count: newCount });
-      console.log(`[AdCopy] 补充生成 (${newCount}/${GEN_MAX_AUTO_RETRIES})：标题${headlines.length}/15 描述${descriptions.length}/4，已过 ${Math.round(ageMs / 1000)}s`);
-      triggerAdCopyGeneration(
-        adCreative.id,
-        adGroup.id,
-        merchant.merchant_name,
-        merchant.merchant_url || "",
-        campaign.target_country || "US",
-        {
-          existingHeadlines: headlines,
-          existingDescriptions: descriptions,
-          dailyBudget: Number(campaign.daily_budget || adSettings?.daily_budget || 1.5),
-          maxCpc: Number(campaign.max_cpc_limit || adSettings?.max_cpc || 0.3),
-          biddingStrategy: campaign.bidding_strategy || adSettings?.bidding_strategy || "MAXIMIZE_CLICKS",
-          aiRuleProfile: (adSettings as any)?.ai_rule_profile,
-        },
-      ).catch((err) => console.error(`[AdCopy] 补充生成失败 (${newCount}/${GEN_MAX_AUTO_RETRIES}，冷却 ${GEN_COOLDOWN_MS / 60000} 分钟):`, err));
-    }
-  }
 
   const zhH = ((adCreative as any)?.headlines_zh as string[]) || [];
   const zhD = ((adCreative as any)?.descriptions_zh as string[]) || [];
@@ -171,85 +130,3 @@ export async function GET(req: NextRequest) {
   }));
 }
 
-/**
- * 补充生成广告文案（重试时复用已有数据，仅补充缺失部分）
- * 跳过 SemRush 请求，避免频繁调用导致账号封禁
- */
-async function triggerAdCopyGeneration(
-  adCreativeId: bigint,
-  adGroupId: bigint,
-  merchantName: string,
-  merchantUrl: string,
-  country: string,
-  options: {
-    existingHeadlines?: string[];
-    existingDescriptions?: string[];
-    dailyBudget?: number;
-    maxCpc?: number;
-    biddingStrategy?: string;
-    aiRuleProfile?: unknown;
-  } = {},
-) {
-  try {
-    const { padHeadlines, padDescriptions, suggestDisplayPaths } = await import("@/lib/ai-service");
-
-    const existH = options.existingHeadlines || [];
-    const existD = options.existingDescriptions || [];
-    const needHeadlines = existH.length < 15;
-    const needDescriptions = existD.length < 4;
-
-    if (!needHeadlines && !needDescriptions) {
-      console.log("[AdCopy] 补充检查：标题和描述均已就绪，跳过");
-      return;
-    }
-    console.log(`[AdCopy] 补充模式：标题 ${existH.length}/15, 描述 ${existD.length}/4`);
-
-    const commonOpts = {
-      keywords: [] as string[],
-      dailyBudget: options.dailyBudget,
-      maxCpc: options.maxCpc,
-      biddingStrategy: options.biddingStrategy,
-      aiRuleProfile: options.aiRuleProfile,
-    };
-
-    const tasks: Promise<void>[] = [];
-
-    if (needHeadlines) {
-      tasks.push(
-        padHeadlines(existH, merchantName, country, 15, commonOpts).then(async (headlines) => {
-          const existingCreative = await prisma.ad_creatives.findUnique({
-            where: { id: adCreativeId },
-            select: { display_path1: true, display_path2: true },
-          });
-          const pathSuggest = suggestDisplayPaths(merchantName, [], country);
-          await prisma.ad_creatives.update({
-            where: { id: adCreativeId },
-            data: {
-              headlines: headlines as any,
-              ...(!existingCreative?.display_path1?.trim() ? { display_path1: pathSuggest.path1 } : {}),
-              ...(!existingCreative?.display_path2?.trim() ? { display_path2: pathSuggest.path2 } : {}),
-            },
-          });
-          console.log(`[AdCopy] 标题补充完成 (${headlines.length} 条)`);
-        }),
-      );
-    }
-
-    if (needDescriptions) {
-      tasks.push(
-        padDescriptions(existD, merchantName, country, 4, commonOpts).then(async (descriptions) => {
-          await prisma.ad_creatives.update({
-            where: { id: adCreativeId },
-            data: { descriptions: descriptions as any },
-          });
-          console.log(`[AdCopy] 描述补充完成 (${descriptions.length} 条)`);
-        }),
-      );
-    }
-
-    await Promise.all(tasks);
-    console.log("[AdCopy] 补充生成全部完成");
-  } catch (err) {
-    console.error("[AdCopy] 补充生成异常:", err instanceof Error ? err.message : err);
-  }
-}

@@ -319,6 +319,7 @@ model ad_creatives {
   image_urls     Json?
   logo_url       String?  @db.VarChar(1024)  // 商家 Logo URL
   selling_points Json?    // 卖点列表（爬虫抓取）
+  crawl_cache    Json?    // 爬取缓存：links/images/pageText/features/sitelinkCandidates 等
   is_deleted     Int      @default(0) @db.TinyInt
   created_at     DateTime @default(now()) @db.DateTime(0)
   updated_at     DateTime @default(now()) @updatedAt @db.DateTime(0)

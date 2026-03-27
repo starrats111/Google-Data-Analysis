@@ -721,8 +721,8 @@ export const PUT = withUser(async (req: NextRequest, { user }) => {
 const adCopyGeneratingSet = new Set<string>();
 
 /**
- * 异步触发广告文案生成（SemRush 竞品数据 + AI 补充）
- * 标题和描述并行生成，各自完成后立即保存，大幅缩短总耗时
+ * 异步触发数据收集：SemRush + 爬取主站 → 缓存到 crawl_cache
+ * 不再做 AI 生成（标题/描述/站内链接统一在预览页一次性 AI 生成）
  */
 async function triggerAdCopyGeneration(
   adCreativeId: bigint,
@@ -739,13 +739,13 @@ async function triggerAdCopyGeneration(
 ) {
   const lockKey = `adcopy-${adCreativeId}`;
   if (adCopyGeneratingSet.has(lockKey)) {
-    console.log(`[AdCopy] 跳过：${lockKey} 正在生成中`);
+    console.log(`[DataCollect] 跳过：${lockKey} 正在收集中`);
     return;
   }
   adCopyGeneratingSet.add(lockKey);
   try {
     const { SemRushClient } = await import("@/lib/semrush-client");
-    const { padHeadlines, padDescriptions, suggestDisplayPaths } = await import("@/lib/ai-service");
+    const { buildCrawlCache } = await import("@/lib/crawl-pipeline");
 
     let dedupedTitles: string[] = [];
     let dedupedDescriptions: string[] = [];
@@ -758,12 +758,13 @@ async function triggerAdCopyGeneration(
         dedupedTitles = result.dedupedTitles;
         dedupedDescriptions = result.dedupedDescriptions;
         keywords = result.keywords;
-        console.log(`[AdCopy] SemRush 获取成功: ${dedupedTitles.length} 标题, ${dedupedDescriptions.length} 描述, ${keywords.length} 关键词`);
+        console.log(`[DataCollect] SemRush 获取成功: ${dedupedTitles.length} 标题, ${dedupedDescriptions.length} 描述, ${keywords.length} 关键词`);
       } catch (err) {
-        console.warn("[AdCopy] SemRush 获取失败，将完全由 AI 生成:", err);
+        console.warn("[DataCollect] SemRush 获取失败:", err);
       }
     }
 
+    // 关键词写入 DB
     const optimizedKeywords = selectOptimizedKeywords(keywords, {
       merchantName,
       dailyBudget: options.dailyBudget,
@@ -773,56 +774,28 @@ async function triggerAdCopyGeneration(
       limit: 12,
     });
 
-    const commonOpts = {
-      keywords: optimizedKeywords.map((kw) => kw.phrase),
-      dailyBudget: options.dailyBudget,
-      maxCpc: options.maxCpc,
-      biddingStrategy: options.biddingStrategy,
-      aiRuleProfile: options.aiRuleProfile,
-    };
-
-    // 并行生成标题和描述，各自完成后立即保存到 DB
-    const headlinesTask = padHeadlines([], merchantName, country, 15, {
-      ...commonOpts,
-      referenceItems: dedupedTitles,
-    }).then(async (headlines) => {
-      const existingCreative = await prisma.ad_creatives.findUnique({
-        where: { id: adCreativeId },
-        select: { display_path1: true, display_path2: true },
-      });
-      const pathSuggest = suggestDisplayPaths(merchantName, optimizedKeywords.map((kw) => kw.phrase), country);
-      await prisma.ad_creatives.update({
-        where: { id: adCreativeId },
-        data: {
-          headlines: headlines as any,
-          ...(!existingCreative?.display_path1?.trim() ? { display_path1: pathSuggest.path1 } : {}),
-          ...(!existingCreative?.display_path2?.trim() ? { display_path2: pathSuggest.path2 } : {}),
-        },
-      });
-      console.log(`[AdCopy] 标题已保存 (${headlines.length} 条)`);
-      return headlines;
-    });
-
-    const descriptionsTask = padDescriptions([], merchantName, country, 4, {
-      ...commonOpts,
-      referenceItems: dedupedDescriptions,
-    }).then(async (descriptions) => {
-      await prisma.ad_creatives.update({
-        where: { id: adCreativeId },
-        data: { descriptions: descriptions as any },
-      });
-      console.log(`[AdCopy] 描述已保存 (${descriptions.length} 条)`);
-      return descriptions;
-    });
-
     const keywordsTask = optimizedKeywords.length > 0
       ? prisma.keywords.createMany({ data: buildKeywordCreateManyInput(adGroupId, optimizedKeywords) })
       : Promise.resolve();
 
-    const [headlines, descriptions] = await Promise.all([headlinesTask, descriptionsTask, keywordsTask]);
-    console.log(`[AdCopy] 完成: ${headlines.length} 标题, ${descriptions.length} 描述, ${optimizedKeywords.length} 关键词`);
+    // 爬取主站 + 构建缓存（含站内链接发现、图片收集、特征提取等）
+    const crawlCache = await buildCrawlCache(merchantUrl, merchantName, country, {
+      titles: dedupedTitles,
+      descriptions: dedupedDescriptions,
+    });
+
+    // 并行：关键词写入 + 缓存存储
+    await Promise.all([
+      keywordsTask,
+      prisma.ad_creatives.update({
+        where: { id: adCreativeId },
+        data: { crawl_cache: crawlCache as any },
+      }),
+    ]);
+
+    console.log(`[DataCollect] 完成: ${optimizedKeywords.length} 关键词, 站内链接候选 ${crawlCache.sitelinkCandidates.length}, 图片 ${crawlCache.images.length}`);
   } catch (err) {
-    console.error("[AdCopy] 广告文案生成异常:", err);
+    console.error("[DataCollect] 数据收集异常:", err);
   } finally {
     adCopyGeneratingSet.delete(lockKey);
   }
