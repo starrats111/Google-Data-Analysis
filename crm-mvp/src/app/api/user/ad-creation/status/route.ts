@@ -82,15 +82,17 @@ export async function GET(req: NextRequest) {
 
   // 如果未就绪且创建超过 45 秒，自动重新触发 AI 补充（仅生成缺失部分）
   // 三重保护：冷却期 + 最大次数上限 + 成功/失败都不立即清除冷却
+  console.log(`[AdCopy:status] isReady=${isReady}, adCreative=${!!adCreative}, adGroup=${!!adGroup}, merchant=${!!merchant}, h=${headlines.length}/15 d=${descriptions.length}/4`);
   if (!isReady && adCreative && adGroup && merchant) {
     const ageMs = Date.now() - new Date(adCreative.created_at).getTime();
     const genKey = `adcopy-${adCreative.id}`;
     const state = genCooldown.get(genKey);
     const lastTry = state?.lastTs || 0;
     const tryCount = state?.count || 0;
+    console.log(`[AdCopy:check] key=${genKey} age=${Math.round(ageMs/1000)}s tryCount=${tryCount}/${GEN_MAX_AUTO_RETRIES} cooldownLeft=${Math.max(0, GEN_COOLDOWN_MS - (Date.now() - lastTry))}ms`);
 
     if (tryCount >= GEN_MAX_AUTO_RETRIES) {
-      // 已达上限，不再自动触发（用户可手动重新生成）
+      console.log(`[AdCopy:skip] 已达上限 ${tryCount}/${GEN_MAX_AUTO_RETRIES}`);
     } else if (ageMs > 45000 && Date.now() - lastTry > GEN_COOLDOWN_MS) {
       const newCount = tryCount + 1;
       genCooldown.set(genKey, { lastTs: Date.now(), count: newCount });
