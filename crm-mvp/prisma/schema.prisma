@@ -118,6 +118,7 @@ model user_merchants {
   merchant_id       String    @db.VarChar(64)
   merchant_name     String    @db.VarChar(255)
   merchant_url      String?   @db.VarChar(512)
+  logo_url          String?   @db.VarChar(1024)
   category          String?   @db.VarChar(128)
   commission_rate   String?   @db.VarChar(64)
   cookie_duration   Int?      @db.UnsignedInt

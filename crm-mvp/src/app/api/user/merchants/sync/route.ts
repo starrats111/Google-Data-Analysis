@@ -172,6 +172,7 @@ async function doSyncInBackground(
           commission_rate: row.commission_rate || undefined,
           supported_regions: regions ?? undefined,
           merchant_url: row.site_url || undefined,
+          logo_url: row.logo || undefined,
           tracking_link: row.campaign_link || undefined,
           campaign_link: row.campaign_link || undefined,
         };
@@ -196,6 +197,7 @@ async function doSyncInBackground(
             commission_rate: row.commission_rate || null,
             supported_regions: regions ?? undefined,
             merchant_url: row.site_url || null,
+            logo_url: row.logo || null,
             tracking_link: row.campaign_link || null,
             campaign_link: row.campaign_link || null,
             platform_connection_id: row.conn_id || null,

@@ -64,20 +64,28 @@ interface Merchant {
   policy_status?: string; policy_category_code?: string;
   ad_status?: string; ad_campaign_name?: string; ad_campaign_id?: string;
   tracking_link?: string | null; campaign_link?: string | null;
+  logo_url?: string | null;
 }
-function getFaviconUrl(merchantUrl: string | null | undefined): string | null {
-  if (!merchantUrl) return null;
-  try {
-    const url = new URL(merchantUrl.startsWith("http") ? merchantUrl : `https://${merchantUrl}`);
-    return `${url.origin}/favicon.ico`;
-  } catch { return null; }
+const AVATAR_COLORS = ["#1677ff","#52c41a","#722ed1","#eb2f96","#fa8c16","#13c2c2","#2f54eb","#f5222d","#a0d911","#faad14"];
+function MerchantAvatar({ name }: { name: string }) {
+  const initial = (name || "?").charAt(0).toUpperCase();
+  const color = AVATAR_COLORS[name.charCodeAt(0) % AVATAR_COLORS.length];
+  return (
+    <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 22, height: 22, borderRadius: 4, background: color, color: "#fff", fontSize: 12, fontWeight: 700, flexShrink: 0 }}>
+      {initial}
+    </span>
+  );
+}
+function MerchantIcon({ rec }: { rec: Merchant }) {
+  const [failed, setFailed] = useState(false);
+  if (!rec.logo_url || failed) return <MerchantAvatar name={rec.merchant_name || ""} />;
+  return <img src={rec.logo_url} alt="" style={{ width: 22, height: 22, borderRadius: 4, objectFit: "contain", flexShrink: 0 }} onError={() => setFailed(true)} />;
 }
 function MerchantNameCell({ rec, onCopy }: { rec: Merchant; onCopy: (link: string) => void }) {
-  const favicon = getFaviconUrl(rec.merchant_url);
   const copyLink = rec.campaign_link || rec.tracking_link;
   return (
     <Space size={6}>
-      {favicon && <img src={favicon} alt="" style={{ width: 20, height: 20, borderRadius: 4, objectFit: "contain" }} onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} />}
+      <MerchantIcon rec={rec} />
       <span style={{ fontWeight: 600 }}>{rec.merchant_name || "-"}</span>
       {copyLink && (
         <Tooltip title="复制追踪链接">

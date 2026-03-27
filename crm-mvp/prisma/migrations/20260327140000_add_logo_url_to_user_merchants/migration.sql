@@ -1,0 +1,2 @@
+-- AlterTable
+ALTER TABLE `user_merchants` ADD COLUMN `logo_url` VARCHAR(1024) NULL AFTER `merchant_url`;
