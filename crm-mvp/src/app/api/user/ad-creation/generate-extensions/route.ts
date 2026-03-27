@@ -74,10 +74,10 @@ export async function POST(req: NextRequest) {
   });
   const aiRuleProfile = (adSettings as any)?.ai_rule_profile;
 
-  // 读取或构建爬取缓存
+  // 读取或构建爬取缓存（失败的缓存也重新爬取）
   let cache = adCreative?.crawl_cache as CrawlCache | null;
-  if (!cache || !cache.crawledAt) {
-    console.log("[Extensions] crawl_cache 为空，现场爬取...");
+  if (!cache || !cache.crawledAt || cache.crawlFailed) {
+    console.log(`[Extensions] crawl_cache ${cache?.crawlFailed ? '上次失败，重新' : '为空，现场'}爬取...`);
     cache = await buildCrawlCache(merchantUrl, merchantName, country);
     if (adCreative?.id) {
       await prisma.ad_creatives.update({

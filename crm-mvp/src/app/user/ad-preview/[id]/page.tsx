@@ -780,7 +780,9 @@ export default function AdPreviewPage() {
       // optional → 发送 types: ["optional"], optionalTypes: [...]
       // 其他 → 兼容旧逻辑
       let reqBody: Record<string, unknown>;
-      if (isCore) {
+      const coreTypes = new Set(["sitelinks", "images"]);
+      const needsCore = isCore || requestedTypes.some((t) => coreTypes.has(t));
+      if (needsCore) {
         reqBody = { campaign_id: campaignId, types: ["core"] };
       } else {
         const optionalSet = new Set(["callouts", "promotion", "price", "call", "snippet"]);
