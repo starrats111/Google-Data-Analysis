@@ -366,7 +366,7 @@ async function syncAllUsersTransactions(): Promise<unknown> {
 
       const { fetchAllTransactions } = await import("@/lib/platform-api");
       const cstNow = nowCST();
-      const startStr = cstNow.subtract(120, "day").format("YYYY-MM-DD");
+      const startStr = cstNow.subtract(180, "day").format("YYYY-MM-DD");
       const syncStart = parseCSTDateStart(startStr);
       const statsSyncStart = dateColumnStart(startStr);
       const endStr = cstNow.format("YYYY-MM-DD");

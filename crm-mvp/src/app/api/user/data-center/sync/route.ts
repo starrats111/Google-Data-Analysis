@@ -14,7 +14,7 @@ import { getExchangeRate, preloadRates } from "@/lib/exchange-rate";
  * 首次同步自动从 MCC 创建时间起拉取历史数据
  * 支持 force_full_sync=true 强制全量重跑
  */
-const TRANSACTION_FULL_SYNC_START = "2025-11-01";
+const TRANSACTION_FULL_SYNC_START = "2025-01-01";
 
 function isValidDateString(value?: string): value is string {
   return !!value && /^\d{4}-\d{2}-\d{2}$/.test(value);

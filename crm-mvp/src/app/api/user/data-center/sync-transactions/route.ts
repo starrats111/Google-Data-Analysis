@@ -18,7 +18,7 @@ export async function POST(req: NextRequest) {
   const body = await req.json().catch(() => ({}));
 
   const cstNow = nowCST();
-  const DEFAULT_START = "2025-11-01";
+  const DEFAULT_START = "2025-01-01";
   const startStr = body.days
     ? cstNow.subtract(body.days, "day").format("YYYY-MM-DD")
     : DEFAULT_START;

@@ -75,6 +75,9 @@ export interface PlatformMerchant {
 
 // ── API 请求 ──
 
+const RETRYABLE_STATUS = new Set([502, 503, 504]);
+const MAX_RETRIES = 2;
+
 async function callPlatformApi(
   config: PlatformApiConfig,
   token: string,
@@ -82,51 +85,73 @@ async function callPlatformApi(
   relationship?: string,
 ): Promise<Record<string, unknown>> {
   const { mode, url, source, pageKey, sizeKey, maxSize } = config;
-  const timeout = 120000; // 2分钟，LH等平台分页多+限速需要更长时间
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeout);
 
-  try {
-    let resp: Response;
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    const timeout = 120000;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeout);
 
-    if (mode === "post_json") {
-      const payload: Record<string, unknown> = {
-        source, token,
-        [pageKey]: page,
-        [sizeKey]: maxSize,
-      };
-      if (relationship) payload.relationship = relationship;
-      resp = await fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-        signal: controller.signal,
-      });
-    } else if (mode === "post_form") {
-      const form = new URLSearchParams();
-      form.set("token", token);
-      form.set(pageKey, String(page));
-      form.set(sizeKey, String(maxSize));
-      if (relationship) form.set("relationship", relationship);
-      resp = await fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        body: form.toString(),
-        signal: controller.signal,
-      });
-    } else {
-      const params = new URLSearchParams({
-        token, [pageKey]: String(page), [sizeKey]: String(maxSize),
-      });
-      if (relationship) params.set("relationship", relationship);
-      resp = await fetch(`${url}&${params}`, { signal: controller.signal });
+    try {
+      let resp: Response;
+
+      if (mode === "post_json") {
+        const payload: Record<string, unknown> = {
+          source, token,
+          [pageKey]: page,
+          [sizeKey]: maxSize,
+        };
+        if (relationship) payload.relationship = relationship;
+        resp = await fetch(url, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+          signal: controller.signal,
+        });
+      } else if (mode === "post_form") {
+        const form = new URLSearchParams();
+        form.set("token", token);
+        form.set(pageKey, String(page));
+        form.set(sizeKey, String(maxSize));
+        if (relationship) form.set("relationship", relationship);
+        resp = await fetch(url, {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: form.toString(),
+          signal: controller.signal,
+        });
+      } else {
+        const params = new URLSearchParams({
+          token, [pageKey]: String(page), [sizeKey]: String(maxSize),
+        });
+        if (relationship) params.set("relationship", relationship);
+        resp = await fetch(`${url}&${params}`, { signal: controller.signal });
+      }
+
+      if (!resp.ok) {
+        if (RETRYABLE_STATUS.has(resp.status) && attempt < MAX_RETRIES) {
+          const delay = (attempt + 1) * 5000;
+          console.warn(`[Platform] ${url} HTTP ${resp.status}，${delay / 1000}s 后重试 (${attempt + 1}/${MAX_RETRIES})`);
+          clearTimeout(timer);
+          await sleep(delay);
+          continue;
+        }
+        throw new Error(`HTTP ${resp.status}`);
+      }
+      return await resp.json();
+    } catch (err) {
+      clearTimeout(timer);
+      if (attempt < MAX_RETRIES && err instanceof Error && (err.name === "AbortError" || err.name === "TimeoutError")) {
+        const delay = (attempt + 1) * 5000;
+        console.warn(`[Platform] ${url} 超时，${delay / 1000}s 后重试 (${attempt + 1}/${MAX_RETRIES})`);
+        await sleep(delay);
+        continue;
+      }
+      throw err;
+    } finally {
+      clearTimeout(timer);
     }
-
-    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-    return await resp.json();
-  } finally {
-    clearTimeout(timer);
   }
+  throw new Error("max retries exceeded");
 }
 
 // ── 解析商家数据（各平台返回格式不同，统一提取） ──
@@ -146,9 +171,16 @@ function parseMerchants(platform: string, data: Record<string, unknown>): Platfo
     const category = String(item.category || item.categories || item.category_name || item.categoryName || "");
     const commission = String(item.comm_rate || item.commission_rate || item.commissionRate || item.commission || "");
     const regions = parseRegions(item.support_region || item.supported_regions || item.regions || item.country || "");
-    const url = String(item.site_url || item.merchant_url || item.url || item.website || item.domain || "");
+    const url = String(item.site_url || item.merchant_url || item.url || item.website || item.domain || item.homepage || "");
     const logo = String(item.logo || item.logo_url || item.logoUrl || "");
-    const campaignLink = String(item.tracking_url || item.campaign_link || item.campaignLink || item.tracking_link || item.trackingLink || item.link || "");
+    const campaignLink = String(
+      item.tracking_url || item.trackingUrl ||
+      item.campaign_link || item.campaignLink ||
+      item.tracking_link || item.trackingLink ||
+      item.promote_link || item.promoteLink ||
+      item.aff_link || item.affLink ||
+      item.link || ""
+    );
     const status = String(item.relationship || item.relationship_status || item.status || "not_joined");
 
     return {
@@ -217,12 +249,26 @@ export async function fetchAllMerchants(
   const seen = new Set<string>();
 
   try {
-    // 第一页
     const firstPage = await callPlatformApi(config, token, 1);
     const code = String((firstPage as Record<string, unknown>).code ?? "0");
     if (code !== "0" && code !== "200") {
       const msg = String((firstPage as Record<string, unknown>).message || "API 返回错误");
       return { merchants: [], error: `${platform}: ${msg}` };
+    }
+
+    // 首页诊断：打印首条原始记录的链接相关字段
+    const diagRoot = ((firstPage as any).data || firstPage) as Record<string, unknown>;
+    const diagList = (diagRoot.list || diagRoot.items || diagRoot.merchants || []) as Record<string, unknown>[];
+    if (Array.isArray(diagList) && diagList.length > 0) {
+      const sample = diagList[0];
+      const linkFields: Record<string, unknown> = {};
+      for (const [k, v] of Object.entries(sample)) {
+        const kl = k.toLowerCase();
+        if (["url", "link", "track", "site", "domain", "homepage", "promote", "aff"].some(w => kl.includes(w))) {
+          linkFields[k] = v;
+        }
+      }
+      console.log(`[MerchantDiag] ${platform} 首条商家链接字段:`, JSON.stringify(linkFields));
     }
 
     const firstBatch = parseMerchants(platform, firstPage);
@@ -341,59 +387,81 @@ async function callTxnApi(
   page: number,
 ): Promise<Record<string, unknown>> {
   const { mode, url, source, dateFormat, pageKey, sizeKey, maxSize } = config;
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 120000);
 
   const beginKey = dateFormat === "camel" ? "beginDate" : "begin_date";
   const endKey = dateFormat === "camel" ? "endDate" : "end_date";
 
-  try {
-    let resp: Response;
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 120000);
 
-    if (mode === "post_json") {
-      const payload: Record<string, unknown> = {
-        token, [beginKey]: startDate, [endKey]: endDate,
-        [pageKey]: page, [sizeKey]: maxSize,
-        status: ["All"],
-      };
-      if (source) payload.source = source;
-      resp = await fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-        signal: controller.signal,
-      });
-    } else if (mode === "post_form") {
-      const form = new URLSearchParams();
-      form.set("token", token);
-      form.set(beginKey, startDate);
-      form.set(endKey, endDate);
-      form.set(pageKey, String(page));
-      form.set(sizeKey, String(maxSize));
-      form.set("status", "all");
-      resp = await fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        body: form.toString(),
-        signal: controller.signal,
-      });
-    } else {
-      const params = new URLSearchParams({
-        token,
-        [beginKey]: startDate,
-        [endKey]: endDate,
-        [pageKey]: String(page),
-        [sizeKey]: String(maxSize),
-        status: "all",
-      });
-      resp = await fetch(`${url}&${params}`, { signal: controller.signal });
+    try {
+      let resp: Response;
+
+      if (mode === "post_json") {
+        const payload: Record<string, unknown> = {
+          token, [beginKey]: startDate, [endKey]: endDate,
+          [pageKey]: page, [sizeKey]: maxSize,
+          status: ["All"],
+        };
+        if (source) payload.source = source;
+        resp = await fetch(url, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+          signal: controller.signal,
+        });
+      } else if (mode === "post_form") {
+        const form = new URLSearchParams();
+        form.set("token", token);
+        form.set(beginKey, startDate);
+        form.set(endKey, endDate);
+        form.set(pageKey, String(page));
+        form.set(sizeKey, String(maxSize));
+        form.set("status", "all");
+        resp = await fetch(url, {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: form.toString(),
+          signal: controller.signal,
+        });
+      } else {
+        const params = new URLSearchParams({
+          token,
+          [beginKey]: startDate,
+          [endKey]: endDate,
+          [pageKey]: String(page),
+          [sizeKey]: String(maxSize),
+          status: "all",
+        });
+        resp = await fetch(`${url}&${params}`, { signal: controller.signal });
+      }
+
+      if (!resp.ok) {
+        if (RETRYABLE_STATUS.has(resp.status) && attempt < MAX_RETRIES) {
+          const delay = (attempt + 1) * 5000;
+          console.warn(`[TxnAPI] ${url} HTTP ${resp.status}，${delay / 1000}s 后重试 (${attempt + 1}/${MAX_RETRIES})`);
+          clearTimeout(timer);
+          await sleep(delay);
+          continue;
+        }
+        throw new Error(`HTTP ${resp.status}`);
+      }
+      return await resp.json();
+    } catch (err) {
+      clearTimeout(timer);
+      if (attempt < MAX_RETRIES && err instanceof Error && (err.name === "AbortError" || err.name === "TimeoutError")) {
+        const delay = (attempt + 1) * 5000;
+        console.warn(`[TxnAPI] ${url} 超时，${delay / 1000}s 后重试 (${attempt + 1}/${MAX_RETRIES})`);
+        await sleep(delay);
+        continue;
+      }
+      throw err;
+    } finally {
+      clearTimeout(timer);
     }
-
-    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-    return await resp.json();
-  } finally {
-    clearTimeout(timer);
   }
+  throw new Error("max retries exceeded");
 }
 
 /**
