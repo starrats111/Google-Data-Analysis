@@ -182,6 +182,26 @@ export async function POST(req: NextRequest) {
       }
     }
     if (!customerId) return apiError(`MCC 下 ${cids.length} 个 CID 均不可用（已有广告或账户未启用），请新增 CID 或检查账户状态`);
+  } else {
+    try {
+      const testQuery = `SELECT customer.id, customer.status FROM customer LIMIT 1`;
+      const rows = await queryGoogleAds(credentials, customerId, testQuery);
+      const status = rows[0]?.customer && typeof rows[0].customer === "object"
+        ? (rows[0].customer as Record<string, unknown>).status
+        : undefined;
+      if (status === "SUSPENDED" || status === "CLOSED" || status === "CANCELLED") {
+        return apiError(`CID ${customerId} 账户状态异常（${status}），请重新同步 CID 列表并选择其他可用账户`);
+      }
+    } catch (preCheckErr) {
+      const preMsg = preCheckErr instanceof Error ? preCheckErr.message : String(preCheckErr);
+      if (preMsg.includes("CUSTOMER_NOT_ENABLED") || preMsg.includes("not yet enabled") || preMsg.includes("has been deactivated")) {
+        return apiError(`CID ${customerId} 账户未启用或已停用，无法提交广告。请点击「同步 CID」刷新列表，选择其他可用 CID 后重试。`);
+      }
+      if (preMsg.includes("PERMISSION_DENIED")) {
+        return apiError(`CID ${customerId} 无访问权限，请确认该 CID 属于当前 MCC 且状态正常`);
+      }
+      console.warn("[AdSubmit] CID 预检查异常（将继续尝试提交）:", preMsg);
+    }
   }
 
   const cid = customerId.replace(/-/g, "");

@@ -362,7 +362,7 @@ const PLATFORM_TXN_CONFIG: Record<string, PlatformTxnConfig> = {
   },
   LB: {
     mode: "get",
-    url: "https://www.linkbux.com/api.php?mod=medium&op=transaction_v2",
+    url: "https://www.linkbux.com/api.php?mod=medium&op=transaction",
     dateFormat: "snake", pageKey: "page", sizeKey: "limit", maxSize: 2000,
   },
 };

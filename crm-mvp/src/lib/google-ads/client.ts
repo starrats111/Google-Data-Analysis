@@ -83,6 +83,9 @@ export async function queryGoogleAds(
       const projectId = projectMatch?.[1] || "未知";
       throw new Error(`Google Ads API 未启用：Service Account 所属项目（${projectId}）需在 Google Cloud Console 中启用 Google Ads API。`);
     }
+    if (errBody.includes("CUSTOMER_NOT_ENABLED") || errBody.includes("not yet enabled or has been deactivated")) {
+      throw new Error(`CID ${customerId} 账户未启用或已停用，无法访问。请同步 CID 列表并选择其他可用账户。`);
+    }
     throw new Error(`Google Ads API 查询失败 (${resp.status}): ${errBody.slice(0, 500)}`);
   }
 
@@ -126,6 +129,9 @@ export async function mutateGoogleAds(
     }
     if (resp.status === 401 || errBody.includes("UNAUTHENTICATED")) {
       throw new Error("Google Ads API 认证失败：Service Account 凭证无效或已过期，请检查 MCC 配置中的服务账号 JSON。");
+    }
+    if (errBody.includes("CUSTOMER_NOT_ENABLED") || errBody.includes("not yet enabled or has been deactivated")) {
+      throw new Error(`CID ${customerId} 账户未启用或已停用，无法提交广告。请点击「同步 CID」刷新列表，选择其他可用 CID 后重试。`);
     }
     throw new Error(`Google Ads API 修改失败 (${resp.status}): ${errBody.slice(0, 2000)}`);
   }
