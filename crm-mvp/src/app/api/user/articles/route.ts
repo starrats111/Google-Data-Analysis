@@ -4,6 +4,8 @@ import { apiSuccess, apiError } from "@/lib/constants";
 import prisma from "@/lib/prisma";
 import { autoRepairPublishedArticles } from "@/lib/article-auto-repair";
 
+const GENERATING_TIMEOUT_MS = 5 * 60 * 1000;
+
 // 获取文章列表（含商家名、站点信息）
 export async function GET(req: NextRequest) {
   try {
@@ -19,7 +21,6 @@ export async function GET(req: NextRequest) {
 
     if ((!status || status === "published") && page === 1) {
       try {
-        // 自动修复不阻塞列表查询，设置 10 秒超时
         await Promise.race([
           autoRepairPublishedArticles({ userId: BigInt(user.userId), limit: 8 }),
           new Promise((_, reject) => setTimeout(() => reject(new Error("repair timeout")), 10_000)),
@@ -28,6 +29,23 @@ export async function GET(req: NextRequest) {
         console.error("[ArticlesList] 自动修复已发布文章失败:", err);
       }
     }
+
+    // 自动将超时的 generating 文章标记为 failed（防止进程重启导致文章永久卡死）
+    try {
+      const cutoff = new Date(Date.now() - GENERATING_TIMEOUT_MS);
+      const stale = await prisma.articles.updateMany({
+        where: {
+          user_id: BigInt(user.userId),
+          status: "generating",
+          created_at: { lt: cutoff },
+          is_deleted: 0,
+        },
+        data: { status: "failed" },
+      });
+      if (stale.count > 0) {
+        console.warn(`[ArticlesList] 自动标记 ${stale.count} 篇超时 generating 文章为 failed`);
+      }
+    } catch { /* ignore */ }
 
     const where: Record<string, unknown> = {
       user_id: BigInt(user.userId),
@@ -162,8 +180,18 @@ export async function POST(req: NextRequest) {
       },
     });
 
-    // 异步生成文章
+    // 异步生成文章（带超时保护）
     (async () => {
+      const genTimeout = setTimeout(async () => {
+        console.error(`[ArticleCreate] 文章 ${article.id} 生成超时(${GENERATING_TIMEOUT_MS / 1000}s)，标记为 failed`);
+        try {
+          await prisma.articles.update({
+            where: { id: article.id },
+            data: { status: "failed" },
+          });
+        } catch { /* ignore */ }
+      }, GENERATING_TIMEOUT_MS);
+
       try {
         const { analyzeUrl, generateMerchantArticle } = await import("@/lib/article-gen");
 
@@ -185,6 +213,8 @@ export async function POST(req: NextRequest) {
           userId,
         });
 
+        clearTimeout(genTimeout);
+
         await prisma.articles.update({
           where: { id: article.id },
           data: {
@@ -200,6 +230,7 @@ export async function POST(req: NextRequest) {
           },
         });
       } catch (err) {
+        clearTimeout(genTimeout);
         console.error("[ArticleCreate] 文章生成失败:", err);
         try {
           await prisma.articles.update({

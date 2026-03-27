@@ -656,8 +656,7 @@ export async function callAiWithFallback(
   const allModels = await getSceneModels(scene);
   if (allModels.length === 0) throw new Error(`场景 ${scene} 无可用 AI 模型`);
 
-  // 最多尝试 2 个模型，避免 fallback 链过长导致大量 API 调用
-  const models = allModels.slice(0, 2);
+  const models = allModels.slice(0, 4);
 
   let lastError: Error | null = null;
   for (const model of models) {
@@ -671,6 +670,31 @@ export async function callAiWithFallback(
       }
     }
   }
+
+  // 场景模型全部失败时，尝试 deepseek-chat 兜底
+  const fallbackProvider = await prisma.ai_providers.findFirst({
+    where: { status: "active", is_deleted: 0 },
+    orderBy: { id: "asc" },
+  });
+  if (fallbackProvider?.api_key) {
+    const emergencyModels = ["deepseek-chat", "gpt-4o-mini"];
+    for (const modelName of emergencyModels) {
+      try {
+        console.warn(`[AI] 场景 ${scene} 全部失败，尝试兜底模型: ${modelName}`);
+        return await callAi({
+          providerName: fallbackProvider.provider_name,
+          apiKey: fallbackProvider.api_key,
+          baseUrl: fallbackProvider.api_base_url || "https://api.openai.com",
+          modelName,
+          maxTokens: maxTokens || 4096,
+          temperature: 0.7,
+        }, messages, maxTokens);
+      } catch (err) {
+        console.warn(`[AI] 兜底模型 ${modelName} 也失败:`, err instanceof Error ? err.message : err);
+      }
+    }
+  }
+
   throw lastError || new Error("所有 AI 模型均失败");
 }
 
