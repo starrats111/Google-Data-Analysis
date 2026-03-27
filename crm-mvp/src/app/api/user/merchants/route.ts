@@ -717,9 +717,12 @@ export const PUT = withUser(async (req: NextRequest, { user }) => {
   return apiError("未知操作");
 });
 
+// 全局生成锁：防止同一 adCreative 被多个流程同时生成
+const adCopyGeneratingSet = new Set<string>();
+
 /**
  * 异步触发广告文案生成（SemRush 竞品数据 + AI 补充）
- * 不阻塞领取流程，后台执行
+ * 标题和描述并行生成，各自完成后立即保存，大幅缩短总耗时
  */
 async function triggerAdCopyGeneration(
   adCreativeId: bigint,
@@ -734,15 +737,20 @@ async function triggerAdCopyGeneration(
     aiRuleProfile?: unknown;
   } = {},
 ) {
+  const lockKey = `adcopy-${adCreativeId}`;
+  if (adCopyGeneratingSet.has(lockKey)) {
+    console.log(`[AdCopy] 跳过：${lockKey} 正在生成中`);
+    return;
+  }
+  adCopyGeneratingSet.add(lockKey);
   try {
-    const { SemRushClient, dedupeAdTitles, dedupeAdDescriptions } = await import("@/lib/semrush-client");
+    const { SemRushClient } = await import("@/lib/semrush-client");
     const { padHeadlines, padDescriptions, suggestDisplayPaths } = await import("@/lib/ai-service");
 
     let dedupedTitles: string[] = [];
     let dedupedDescriptions: string[] = [];
     let keywords: Array<{ phrase: string; volume: number; competition?: string | number | null; suggested_bid?: number | null; cpc?: number | null }> = [];
 
-    // Step 1: 尝试从 SemRush 获取竞品数据
     if (merchantUrl) {
       try {
         const client = await SemRushClient.fromConfig(country);
@@ -765,59 +773,58 @@ async function triggerAdCopyGeneration(
       limit: 12,
     });
 
-    // Step 2: AI 生成标题 → 立即保存 → 前端下次轮询即可拿到
-    const headlines = await padHeadlines([], merchantName, country, 15, {
+    const commonOpts = {
+      keywords: optimizedKeywords.map((kw) => kw.phrase),
+      dailyBudget: options.dailyBudget,
+      maxCpc: options.maxCpc,
+      biddingStrategy: options.biddingStrategy,
+      aiRuleProfile: options.aiRuleProfile,
+    };
+
+    // 并行生成标题和描述，各自完成后立即保存到 DB
+    const headlinesTask = padHeadlines([], merchantName, country, 15, {
+      ...commonOpts,
       referenceItems: dedupedTitles,
-      keywords: optimizedKeywords.map((kw) => kw.phrase),
-      dailyBudget: options.dailyBudget,
-      maxCpc: options.maxCpc,
-      biddingStrategy: options.biddingStrategy,
-      aiRuleProfile: options.aiRuleProfile,
-    });
-
-    const existingCreative = await prisma.ad_creatives.findUnique({
-      where: { id: adCreativeId },
-      select: { display_path1: true, display_path2: true },
-    });
-    const pathSuggest = suggestDisplayPaths(
-      merchantName,
-      optimizedKeywords.map((kw) => kw.phrase),
-      country,
-    );
-    await prisma.ad_creatives.update({
-      where: { id: adCreativeId },
-      data: {
-        headlines: headlines as any,
-        ...(!existingCreative?.display_path1?.trim() ? { display_path1: pathSuggest.path1 } : {}),
-        ...(!existingCreative?.display_path2?.trim() ? { display_path2: pathSuggest.path2 } : {}),
-      },
-    });
-    console.log(`[AdCopy] 标题已保存 (${headlines.length} 条)，开始生成描述...`);
-
-    if (optimizedKeywords.length > 0) {
-      await prisma.keywords.createMany({
-        data: buildKeywordCreateManyInput(adGroupId, optimizedKeywords),
+    }).then(async (headlines) => {
+      const existingCreative = await prisma.ad_creatives.findUnique({
+        where: { id: adCreativeId },
+        select: { display_path1: true, display_path2: true },
       });
-    }
+      const pathSuggest = suggestDisplayPaths(merchantName, optimizedKeywords.map((kw) => kw.phrase), country);
+      await prisma.ad_creatives.update({
+        where: { id: adCreativeId },
+        data: {
+          headlines: headlines as any,
+          ...(!existingCreative?.display_path1?.trim() ? { display_path1: pathSuggest.path1 } : {}),
+          ...(!existingCreative?.display_path2?.trim() ? { display_path2: pathSuggest.path2 } : {}),
+        },
+      });
+      console.log(`[AdCopy] 标题已保存 (${headlines.length} 条)`);
+      return headlines;
+    });
 
-    // Step 3: AI 生成描述 → 立即保存
-    const descriptions = await padDescriptions([], merchantName, country, 4, {
+    const descriptionsTask = padDescriptions([], merchantName, country, 4, {
+      ...commonOpts,
       referenceItems: dedupedDescriptions,
-      keywords: optimizedKeywords.map((kw) => kw.phrase),
-      headlinesForUniqueness: headlines,
-      dailyBudget: options.dailyBudget,
-      maxCpc: options.maxCpc,
-      biddingStrategy: options.biddingStrategy,
-      aiRuleProfile: options.aiRuleProfile,
-    });
-    await prisma.ad_creatives.update({
-      where: { id: adCreativeId },
-      data: { descriptions: descriptions as any },
+    }).then(async (descriptions) => {
+      await prisma.ad_creatives.update({
+        where: { id: adCreativeId },
+        data: { descriptions: descriptions as any },
+      });
+      console.log(`[AdCopy] 描述已保存 (${descriptions.length} 条)`);
+      return descriptions;
     });
 
+    const keywordsTask = optimizedKeywords.length > 0
+      ? prisma.keywords.createMany({ data: buildKeywordCreateManyInput(adGroupId, optimizedKeywords) })
+      : Promise.resolve();
+
+    const [headlines, descriptions] = await Promise.all([headlinesTask, descriptionsTask, keywordsTask]);
     console.log(`[AdCopy] 完成: ${headlines.length} 标题, ${descriptions.length} 描述, ${optimizedKeywords.length} 关键词`);
   } catch (err) {
     console.error("[AdCopy] 广告文案生成异常:", err);
+  } finally {
+    adCopyGeneratingSet.delete(lockKey);
   }
 }
 

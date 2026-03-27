@@ -261,16 +261,16 @@ export default function MerchantsPage() {
     { title: "备注", dataIndex: "remark", width: 200, render: (v: string) => v ? <Button type="link" size="small" onClick={() => { setRTitle("推荐详情"); setRContent(v); setRModal(true); }}>查看</Button> : "-" },
     { title: "分享时间", dataIndex: "share_time", width: 100, render: (v: string) => v || "-" },
   ], []);
-  return (<div>
+  return (<div style={{ maxWidth: 1600, margin: "0 auto" }}>
     <Form form={adForm} component={false} layout="vertical" size="small">
-      <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
-        <Col xs={24} sm={12} md={6}><Card size="small" title={<><ShopOutlined /> 我的商家</>} style={{ height: "100%" }}>
-          <div style={{ fontSize: 28, fontWeight: 700, marginBottom: 8 }}>{stats.total.toLocaleString()}</div>
-          <Text type="secondary" style={{ fontSize: 12 }}>平台分布</Text>
-          <div style={{ marginTop: 6, display: "flex", flexWrap: "wrap", gap: 6 }}>{stats.byPlatform.map((p) => <Tag key={p.platform} color={PC[p.platform] || "default"} style={{ fontWeight: 600 }}>{p.platform} {p._count.toLocaleString()}</Tag>)}</div>
-          <div style={{ marginTop: 8, fontSize: 12, color: "#999" }}>在投广告 {stats.claimed} 个商家</div>
+      <Row gutter={[20, 20]} style={{ marginBottom: 20 }}>
+        <Col xs={24} sm={12} md={6}><Card size="small" className="stat-card-hero" title={<span style={{ color: "#fff" }}><ShopOutlined style={{ marginRight: 6 }} />我的商家</span>} style={{ height: "100%" }}>
+          <div style={{ fontSize: 36, fontWeight: 800, color: "#fff", marginBottom: 4, lineHeight: 1.2 }}>{stats.total.toLocaleString()}</div>
+          <div style={{ fontSize: 12, color: "rgba(255,255,255,0.7)", marginBottom: 10 }}>平台分布</div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>{stats.byPlatform.map((p) => <Tag key={p.platform} style={{ background: "rgba(255,255,255,0.18)", border: "none", color: "#fff", fontWeight: 600, backdropFilter: "blur(4px)" }}>{p.platform} {p._count.toLocaleString()}</Tag>)}</div>
+          <div style={{ marginTop: 12, fontSize: 12, color: "rgba(255,255,255,0.65)", borderTop: "1px solid rgba(255,255,255,0.15)", paddingTop: 8 }}>在投广告 <span style={{ color: "#fff", fontWeight: 700 }}>{stats.claimed}</span> 个商家</div>
         </Card></Col>
-        <Col xs={24} sm={12} md={6}><Card size="small" title={<><DollarOutlined /> 广告投放设置</>} extra={<Button type="primary" size="small" icon={<SaveOutlined />} onClick={saveAd}>保存</Button>} style={{ height: "100%" }}>
+        <Col xs={24} sm={12} md={6}><Card size="small" className="func-card-ad" title={<><DollarOutlined style={{ color: "#4DA6FF" }} /> 广告投放设置</>} extra={<Button type="primary" size="small" icon={<SaveOutlined />} onClick={saveAd}>保存</Button>} style={{ height: "100%" }}>
           {adData && (<div style={{ fontSize: 12 }}>
             <Row gutter={[8, 0]}>
               <Col span={12}><Form.Item name="bidding_strategy" label="出价策略" style={{ marginBottom: 6 }}><Select options={BIDDING_STRATEGIES.map((b) => ({ value: b.value, label: b.label }))} /></Form.Item></Col>
@@ -291,7 +291,7 @@ export default function MerchantsPage() {
             </Row>
           </div>)}
         </Card></Col>
-        <Col xs={24} sm={12} md={6}><Card size="small" title={<><CalendarOutlined /> 节日营销</>} style={{ height: "100%" }}>
+        <Col xs={24} sm={12} md={6}><Card size="small" className="func-card-holiday" title={<><CalendarOutlined style={{ color: "#52c41a" }} /> 节日营销</>} style={{ height: "100%" }}>
           <Space style={{ marginBottom: 8, width: "100%" }}>
             <Select placeholder="选择国家" showSearch style={{ width: 120 }} size="small" value={cc || undefined} onChange={(v) => setCc(v || "")} options={[{ value: "US", label: "美国" }, { value: "GB", label: "英国" }, { value: "AU", label: "澳洲" }, { value: "CA", label: "加拿大" }, { value: "DE", label: "德国" }, { value: "FR", label: "法国" }, { value: "JP", label: "日本" }]} />
             <Button type="primary" size="small" icon={<SearchOutlined />} loading={hl} onClick={() => setQc(cc)}>查询</Button>
@@ -302,7 +302,7 @@ export default function MerchantsPage() {
               <Tag style={{ fontSize: 11, lineHeight: "18px", margin: 0 }}>{h.holiday_type}</Tag>
             </div>)) : <Text type="secondary" style={{ fontSize: 12 }}>选择国家查询节日信息</Text>}</div>
         </Card></Col>
-        <Col xs={24} sm={12} md={6}><Card size="small" title={<><RobotOutlined /> AI 设定（硬规则）</>} extra={<Space size={4}><Upload accept=".txt,.md,.text" showUploadList={false} beforeUpload={(f) => onAiPromptUpload(f as File)}><Button size="small" icon={<UploadOutlined />}>上传提示词</Button></Upload><Button type="primary" size="small" icon={<SaveOutlined />} onClick={saveAd}>保存</Button></Space>} style={{ height: "100%" }}>
+        <Col xs={24} sm={12} md={6}><Card size="small" className="func-card-ai" title={<><RobotOutlined style={{ color: "#722ed1" }} /> AI 设定（硬规则）</>} extra={<Space size={4}><Upload accept=".txt,.md,.text" showUploadList={false} beforeUpload={(f) => onAiPromptUpload(f as File)}><Button size="small" icon={<UploadOutlined />}>上传提示词</Button></Upload><Button type="primary" size="small" icon={<SaveOutlined />} onClick={saveAd}>保存</Button></Space>} style={{ height: "100%" }}>
           {adData && (
             <div style={{ maxHeight: 360, overflowY: "auto", paddingRight: 4, fontSize: 12 }}>
               <Form.Item name={["ai_rule_profile", "persona"]} label="AI 人设" style={{ marginBottom: 6 }}><Input placeholder="人设与角色" /></Form.Item>
@@ -320,17 +320,20 @@ export default function MerchantsPage() {
         </Card></Col>
       </Row>
     </Form>
-    <Card>
+    <Card className="merchant-table-card">
       <Tabs activeKey={tab} onChange={(v) => { setTab(v); setPage(1); setSortField(""); setSortOrder(""); }} style={{ marginBottom: 0 }}
-        items={[{ key: "claimed", label: "我的商家" }, { key: "available", label: "选取商家" }, { key: "violations", label: <span><WarningOutlined style={{ color: "#ff4d4f", marginRight: 4 }} />违规商家</span> }, { key: "recommendations", label: <span><StarOutlined style={{ color: "#52c41a", marginRight: 4 }} />推荐商家</span> }]}
-        tabBarExtraContent={(tab === "claimed" || tab === "available") ? (<Space>
+        items={[{ key: "claimed", label: "我的商家" }, { key: "available", label: "选取商家" }, { key: "violations", label: <span><WarningOutlined style={{ color: "#ff4d4f", marginRight: 4 }} />违规商家</span> }, { key: "recommendations", label: <span><StarOutlined style={{ color: "#52c41a", marginRight: 4 }} />推荐商家</span> }]} />
+      {(tab === "claimed" || tab === "available") && (
+        <div className="filter-bar">
           <Select placeholder="平台" allowClear style={{ width: 120 }} size="small" value={platform || undefined} onChange={(v) => { setPlatform(v || ""); setPage(1); }} options={PLATFORMS.map((p) => ({ value: p.code, label: p.code }))} />
           {tab === "available" && <Select placeholder="标签筛选" allowClear style={{ width: 120 }} size="small" value={labelFilter || undefined} onChange={(v) => { setLabelFilter(v || ""); setPage(1); }} options={[{ value: "recommended", label: "推荐商家" }, { value: "violation", label: "违规商家" }, { value: "restricted", label: "限制投放" }, { value: "prohibited", label: "禁止投放" }]} />}
-          <Input placeholder="搜索商家名/MID" prefix={<SearchOutlined />} style={{ width: 180 }} size="small" value={searchInput} onChange={(e) => setSearchInput(e.target.value)} onPressEnter={doSearch} />
-          <Button type="primary" size="small" onClick={doSearch}>查询</Button>
+          <Input placeholder="搜索商家名/MID" prefix={<SearchOutlined />} style={{ width: 200 }} size="small" value={searchInput} onChange={(e) => setSearchInput(e.target.value)} onPressEnter={doSearch} />
+          <Button type="primary" size="small" icon={<SearchOutlined />} onClick={doSearch}>查询</Button>
           <Button size="small" icon={<SyncOutlined />} onClick={() => { setSearchInput(""); setSearch(""); setPlatform(""); setLabelFilter(""); setPage(1); setSortField(""); setSortOrder(""); }}>重置</Button>
+          <div style={{ flex: 1 }} />
           <Button size="small" type="dashed" icon={<SyncOutlined spin={syncing} />} loading={syncing} onClick={doSync}>同步商家库</Button>
-        </Space>) : null} />
+        </div>
+      )}
       {tab === "claimed" && <Table columns={claimedCols} dataSource={merchants} rowKey="id" loading={ml} onChange={handleTableChange} pagination={{ current: page, pageSize: 50, total, onChange: setPage, showTotal: (t: number) => `共 ${t} 条` }} scroll={{ x: 1000 }} size="small" />}
       {tab === "available" && <Table columns={availCols} dataSource={merchants} rowKey="id" loading={ml} onChange={handleTableChange} pagination={{ current: page, pageSize: 50, total, onChange: setPage, showTotal: (t: number) => `共 ${t} 条` }} scroll={{ x: 1100 }} size="small" />}
       {tab === "violations" && (<div>
@@ -338,14 +341,14 @@ export default function MerchantsPage() {
           <span><WarningOutlined style={{ color: "#ff4d4f", marginRight: 6 }} />加载违规商家失败：{vioError.message || "请求异常"}</span>
           <Button size="small" icon={<ReloadOutlined />} onClick={() => vioMutate()}>重试</Button>
         </div>}
-        <div style={{ marginBottom: 12 }}><Space><Input allowClear placeholder="搜索商家名" style={{ width: 240 }} prefix={<SearchOutlined />} value={vioSearch} onChange={(e) => setVioSearch(e.target.value)} onPressEnter={() => setVioPage(1)} /><Button type="primary" size="small" onClick={() => setVioPage(1)}>查询</Button><Button size="small" icon={<ReloadOutlined />} onClick={() => vioMutate()}>刷新</Button></Space></div>
+        <div className="filter-bar"><Input allowClear placeholder="搜索商家名" style={{ width: 240 }} prefix={<SearchOutlined />} size="small" value={vioSearch} onChange={(e) => setVioSearch(e.target.value)} onPressEnter={() => setVioPage(1)} /><Button type="primary" size="small" icon={<SearchOutlined />} onClick={() => setVioPage(1)}>查询</Button><Button size="small" icon={<ReloadOutlined />} onClick={() => vioMutate()}>刷新</Button></div>
         <Table rowKey="id" loading={vl} dataSource={vioData?.items || []} size="small" scroll={{ x: 1000 }} pagination={{ current: vioPage, pageSize: 50, total: vioData?.total || 0, showTotal: (t: number) => `共 ${t} 条`, onChange: setVioPage }} columns={vioCols} /></div>)}
       {tab === "recommendations" && (<div>
         {recError && <div style={{ marginBottom: 12, padding: "8px 12px", background: "#fff2f0", border: "1px solid #ffccc7", borderRadius: 6, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
           <span><WarningOutlined style={{ color: "#ff4d4f", marginRight: 6 }} />加载推荐商家失败：{recError.message || "请求异常"}</span>
           <Button size="small" icon={<ReloadOutlined />} onClick={() => recMutate()}>重试</Button>
         </div>}
-        <div style={{ marginBottom: 12 }}><Space><Input allowClear placeholder="搜索商家名" style={{ width: 240 }} prefix={<SearchOutlined />} value={recSearch} onChange={(e) => setRecSearch(e.target.value)} onPressEnter={() => setRecPage(1)} /><Button type="primary" size="small" onClick={() => setRecPage(1)}>查询</Button><Button size="small" icon={<ReloadOutlined />} onClick={() => recMutate()}>刷新</Button></Space></div>
+        <div className="filter-bar"><Input allowClear placeholder="搜索商家名" style={{ width: 240 }} prefix={<SearchOutlined />} size="small" value={recSearch} onChange={(e) => setRecSearch(e.target.value)} onPressEnter={() => setRecPage(1)} /><Button type="primary" size="small" icon={<SearchOutlined />} onClick={() => setRecPage(1)}>查询</Button><Button size="small" icon={<ReloadOutlined />} onClick={() => recMutate()}>刷新</Button></div>
         <Table rowKey="id" loading={rl} dataSource={recData?.items || []} size="small" scroll={{ x: 1000 }} pagination={{ current: recPage, pageSize: 50, total: recData?.total || 0, showTotal: (t: number) => `共 ${t} 条`, onChange: setRecPage }} columns={recCols} /></div>)}
     </Card>
     <Modal title={`领取商家: ${claimM?.merchant_name}`} open={claimModal} onOk={submitClaim} onCancel={() => setClaimModal(false)}>

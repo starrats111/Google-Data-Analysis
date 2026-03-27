@@ -50,14 +50,30 @@ export const GET = withLeader(async (req: NextRequest, { user }) => {
     select: { id: true, user_id: true, customer_id: true, google_campaign_id: true },
   });
 
-  // 按「成员 + CID + Google Campaign ID」去重，优先保留最新一条，避免不同成员/账户间同号 campaign 相互吞掉费用
-  const seenCampaignKeys = new Set<string>();
-  const validCampaigns = rawCampaigns.filter((c) => {
-    const dedupKey = `${c.user_id}:${c.customer_id || ""}:${c.google_campaign_id || String(c.id)}`;
-    if (seenCampaignKeys.has(dedupKey)) return false;
-    seenCampaignKeys.add(dedupKey);
-    return true;
-  });
+  // 按「成员 + Google Campaign ID」去重，优先保留有 customer_id 的记录
+  const gcidGroups = new Map<string, typeof rawCampaigns>();
+  for (const c of rawCampaigns) {
+    const key = `${c.user_id}:${c.google_campaign_id || String(c.id)}`;
+    if (!gcidGroups.has(key)) gcidGroups.set(key, []);
+    gcidGroups.get(key)!.push(c);
+  }
+  const validCampaigns: typeof rawCampaigns = [];
+  const extraIds: bigint[] = [];
+  for (const [, group] of gcidGroups) {
+    group.sort((a, b) => {
+      if (a.customer_id && !b.customer_id) return -1;
+      if (!a.customer_id && b.customer_id) return 1;
+      return Number(b.id) - Number(a.id);
+    });
+    validCampaigns.push(group[0]);
+    for (let i = 1; i < group.length; i++) extraIds.push(group[i].id);
+  }
+
+  // campaign_id → 主记录 campaign_id 映射（处理重复）
+  const campIdToGcid = new Map<string, string>();
+  for (const c of rawCampaigns) campIdToGcid.set(String(c.id), `${c.user_id}:${c.google_campaign_id || String(c.id)}`);
+  const gcidToPrimary = new Map<string, string>();
+  for (const c of validCampaigns) gcidToPrimary.set(`${c.user_id}:${c.google_campaign_id || String(c.id)}`, String(c.id));
 
   // 按用户分组 campaign_ids
   const userCampaignIds = new Map<string, bigint[]>();
@@ -68,19 +84,32 @@ export const GET = withLeader(async (req: NextRequest, { user }) => {
   }
 
   const allCampaignIds = validCampaigns.map((c) => c.id);
+  const allIdsForStats = [...allCampaignIds, ...extraIds];
 
-  // 批量聚合 cost/clicks/impressions（佣金统一从 affiliate_transactions 读取）
-  const statsAgg = allCampaignIds.length > 0
+  // 批量聚合 cost/clicks/impressions（含重复 campaign 的 stats，取较高值）
+  const rawStatsAgg = allIdsForStats.length > 0
     ? await prisma.ads_daily_stats.groupBy({
         by: ["campaign_id"],
         where: {
-          campaign_id: { in: allCampaignIds },
+          campaign_id: { in: allIdsForStats },
           date: { gte: start, lt: endExclusive },
           is_deleted: 0,
         } as never,
         _sum: { cost: true, clicks: true, impressions: true },
       })
     : [];
+  const statsAgg: typeof rawStatsAgg = [];
+  const mergedStats = new Map<string, typeof rawStatsAgg[0]>();
+  for (const s of rawStatsAgg) {
+    const gcid = campIdToGcid.get(String(s.campaign_id));
+    const primaryId = gcid ? gcidToPrimary.get(gcid) : String(s.campaign_id);
+    const key = primaryId || String(s.campaign_id);
+    const existing = mergedStats.get(key);
+    if (!existing || Number(s._sum?.cost || 0) > Number(existing._sum?.cost || 0)) {
+      mergedStats.set(key, { ...s, campaign_id: BigInt(key) });
+    }
+  }
+  statsAgg.push(...mergedStats.values());
 
   const statsMap = new Map(
     statsAgg.map((s) => [

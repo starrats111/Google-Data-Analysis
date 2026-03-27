@@ -53,14 +53,24 @@ export const GET = withLeader(async (req: NextRequest, { user }) => {
     },
   });
 
-  // 与数据中心一致：按「CID + Google Campaign ID」去重，并优先保留最新一条
-  const seenCampaignKeys = new Set<string>();
-  const campaigns = rawCampaigns.filter((c) => {
-    const dedupKey = `${c.customer_id || ""}:${c.google_campaign_id || String(c.id)}`;
-    if (seenCampaignKeys.has(dedupKey)) return false;
-    seenCampaignKeys.add(dedupKey);
-    return true;
-  });
+  // 按 google_campaign_id 去重，优先保留有 customer_id 的记录
+  const gcidGroups = new Map<string, typeof rawCampaigns>();
+  for (const c of rawCampaigns) {
+    const gcid = c.google_campaign_id || String(c.id);
+    if (!gcidGroups.has(gcid)) gcidGroups.set(gcid, []);
+    gcidGroups.get(gcid)!.push(c);
+  }
+  const campaigns: typeof rawCampaigns = [];
+  const extraCampaignIds: bigint[] = [];
+  for (const [, group] of gcidGroups) {
+    group.sort((a, b) => {
+      if (a.customer_id && !b.customer_id) return -1;
+      if (!a.customer_id && b.customer_id) return 1;
+      return Number(b.id) - Number(a.id);
+    });
+    campaigns.push(group[0]);
+    for (let i = 1; i < group.length; i++) extraCampaignIds.push(group[i].id);
+  }
 
   const campaignIds = campaigns.map((c) => c.id);
 
@@ -72,27 +82,38 @@ export const GET = withLeader(async (req: NextRequest, { user }) => {
     }));
   }
 
-  // 按 campaign_id 聚合 cost/clicks/impressions（佣金统一从 affiliate_transactions 读取）
-  const statsAgg = await prisma.ads_daily_stats.groupBy({
+  // 建立重复 campaign 映射
+  const cIdToGcid = new Map<string, string>();
+  for (const c of rawCampaigns) cIdToGcid.set(String(c.id), c.google_campaign_id || String(c.id));
+  const gcidToPrimary = new Map<string, string>();
+  for (const c of campaigns) gcidToPrimary.set(c.google_campaign_id || String(c.id), String(c.id));
+
+  const allIdsForStats = [...campaignIds, ...extraCampaignIds];
+
+  // 按 campaign_id 聚合 cost/clicks/impressions（含重复记录，取较高值）
+  const rawStatsAgg = await prisma.ads_daily_stats.groupBy({
     by: ["campaign_id"],
     where: {
-      campaign_id: { in: campaignIds },
+      campaign_id: { in: allIdsForStats },
       date: { gte: start, lt: endExclusive },
       is_deleted: 0,
     } as never,
     _sum: { cost: true, clicks: true, impressions: true },
   });
 
-  const statsMap = new Map(
-    statsAgg.map((s) => [
-      String(s.campaign_id),
-      {
-        cost: Number(s._sum?.cost || 0),
-        clicks: Number(s._sum?.clicks || 0),
-        impressions: Number(s._sum?.impressions || 0),
-      },
-    ])
-  );
+  const statsMap = new Map<string, { cost: number; clicks: number; impressions: number }>();
+  for (const s of rawStatsAgg) {
+    const gcid = cIdToGcid.get(String(s.campaign_id));
+    const primaryId = gcid ? gcidToPrimary.get(gcid) : String(s.campaign_id);
+    const key = primaryId || String(s.campaign_id);
+    const existing = statsMap.get(key);
+    const cost = Number(s._sum?.cost || 0);
+    const clicks = Number(s._sum?.clicks || 0);
+    const impressions = Number(s._sum?.impressions || 0);
+    if (!existing || cost > existing.cost) {
+      statsMap.set(key, { cost, clicks, impressions });
+    }
+  }
 
   // 佣金统一从 affiliate_transactions 聚合（与数据中心口径一致）
   const commissionAgg = await prisma.$queryRawUnsafe<

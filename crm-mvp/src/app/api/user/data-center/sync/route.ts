@@ -224,6 +224,12 @@ async function syncAdsData(
                     },
                   });
                   campaignMap.set(cd.campaign_id, campaign);
+                } else if (!campaign.customer_id && cd.customer_id) {
+                  await prisma.campaigns.update({
+                    where: { id: campaign.id },
+                    data: { customer_id: cd.customer_id },
+                  });
+                  campaign.customer_id = cd.customer_id;
                 }
 
                 const dateObj = new Date(cd.date);
@@ -308,9 +314,16 @@ async function syncAdsData(
             });
             campaignMap.set(cd.campaign_id, campaign);
           } else {
+            const updateData: Record<string, unknown> = {
+              daily_budget: cd.budget_dollars, google_status: cd.campaign_status, last_google_sync_at: new Date(),
+            };
+            if (!campaign.customer_id && cd.customer_id) {
+              updateData.customer_id = cd.customer_id;
+              campaign.customer_id = cd.customer_id;
+            }
             operations.push(() => prisma.campaigns.update({
               where: { id: campaign!.id },
-              data: { daily_budget: cd.budget_dollars, google_status: cd.campaign_status, last_google_sync_at: new Date() },
+              data: updateData,
             }));
           }
 
@@ -372,10 +385,17 @@ async function syncAdsData(
         for (const cs of allStatuses) {
           const existing = campaignMap.get(cs.campaign_id);
           if (existing) {
-            if (existing.google_status !== cs.status || existing.campaign_name !== cs.name) {
+            const needsUpdate = existing.google_status !== cs.status || existing.campaign_name !== cs.name || (!existing.customer_id && cs.customer_id);
+            if (needsUpdate) {
+              const updateData: Record<string, unknown> = {
+                google_status: cs.status, campaign_name: cs.name, daily_budget: cs.budget_dollars, last_google_sync_at: new Date(),
+              };
+              if (!existing.customer_id && cs.customer_id) {
+                updateData.customer_id = cs.customer_id;
+              }
               statusUpdateOps.push(() => prisma.campaigns.update({
                 where: { id: existing.id },
-                data: { google_status: cs.status, campaign_name: cs.name, daily_budget: cs.budget_dollars, last_google_sync_at: new Date() },
+                data: updateData,
               }));
             }
           } else {
@@ -433,12 +453,18 @@ async function upsertSheetRowsBatch(
 ) {
   let inserted = 0, updated = 0;
 
-  // ─── 1. 批量预加载所有相关 campaigns ───
+  // ─── 1. 批量预加载所有相关 campaigns（存在重复时优先选有 customer_id 的） ───
   const uniqueCampaignIds = [...new Set(rows.map((r) => r.campaign_id))];
   const existingCampaigns = await prisma.campaigns.findMany({
     where: { user_id: userId, google_campaign_id: { in: uniqueCampaignIds }, is_deleted: 0 },
   });
-  const campaignMap = new Map(existingCampaigns.map((c) => [c.google_campaign_id, c]));
+  const campaignMap = new Map<string | null, typeof existingCampaigns[0]>();
+  for (const c of existingCampaigns) {
+    const existing = campaignMap.get(c.google_campaign_id);
+    if (!existing || (!existing.customer_id && c.customer_id) || (!existing.customer_id === !c.customer_id && Number(c.id) > Number(existing.id))) {
+      campaignMap.set(c.google_campaign_id, c);
+    }
+  }
 
   // ─── 2. 创建缺失的 campaigns（批量），尝试从广告名解析商家关联 ───
   const missingIds = uniqueCampaignIds.filter((id) => !campaignMap.has(id));
@@ -534,9 +560,14 @@ async function upsertSheetRowsBatch(
     .filter(([gid]) => !missingIds.includes(gid))
     .map(([gid, row]) => {
       const campaign = campaignMap.get(gid)!;
+      const updateData: Record<string, unknown> = {
+        campaign_name: row.campaign_name, daily_budget: row.budget,
+        google_status: row.status, last_google_sync_at: new Date(),
+      };
+      if (row.customer_id) updateData.customer_id = row.customer_id;
       return prisma.campaigns.update({
         where: { id: campaign.id },
-        data: { campaign_name: row.campaign_name, customer_id: row.customer_id, daily_budget: row.budget, google_status: row.status, last_google_sync_at: new Date() },
+        data: updateData,
       });
     });
   // 每 20 条一批

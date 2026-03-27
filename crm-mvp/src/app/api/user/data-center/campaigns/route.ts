@@ -119,14 +119,25 @@ export async function GET(req: NextRequest) {
     },
   });
 
-  // 按「CID + Google Campaign ID」去重（保留最新一条，即 id 最大的），避免不同广告账户同号 campaign 互相吞掉花费
-  const seenCampaignKeys = new Set<string>();
-  const dedupedCampaigns = allCampaigns.filter((c) => {
-    const dedupKey = `${c.customer_id || ""}:${c.google_campaign_id || String(c.id)}`;
-    if (seenCampaignKeys.has(dedupKey)) return false;
-    seenCampaignKeys.add(dedupKey);
-    return true;
-  });
+  // 按 google_campaign_id 去重（Google Campaign ID 全局唯一）
+  // 优先保留有 customer_id 的记录；同条件下保留 id 最大的
+  const gcidGroups = new Map<string, typeof allCampaigns>();
+  for (const c of allCampaigns) {
+    const gcid = c.google_campaign_id || String(c.id);
+    if (!gcidGroups.has(gcid)) gcidGroups.set(gcid, []);
+    gcidGroups.get(gcid)!.push(c);
+  }
+  const dedupedCampaigns: typeof allCampaigns = [];
+  const extraCampaignIds: bigint[] = [];
+  for (const [, group] of gcidGroups) {
+    group.sort((a, b) => {
+      if (a.customer_id && !b.customer_id) return -1;
+      if (!a.customer_id && b.customer_id) return 1;
+      return Number(b.id) - Number(a.id);
+    });
+    dedupedCampaigns.push(group[0]);
+    for (let i = 1; i < group.length; i++) extraCampaignIds.push(group[i].id);
+  }
 
   // MCC 信息映射
   // 这里按当前页实际命中的 mcc_id 回查，避免“账号无本人 MCC 配置但已有 campaign 数据”时丢失 MCC 名称/币种。
@@ -140,13 +151,25 @@ export async function GET(req: NextRequest) {
   const mccInfoMap = new Map(allMccInfo.map((m) => [String(m.id), { mcc_id: m.mcc_id, mcc_name: m.mcc_name || m.mcc_id, currency: m.currency || "USD" }]));
 
   const allCampaignIds = dedupedCampaigns.map((c) => c.id);
+  const allCampaignIdsIncludingDupes = [...allCampaignIds, ...extraCampaignIds];
 
-  // ─── 全量 stats 聚合（总览用） ───
-  const allStatsAgg = allCampaignIds.length > 0
+  // 建立 campaign_id → google_campaign_id 映射（含重复记录）
+  const campaignIdToGcid = new Map<string, string>();
+  for (const c of allCampaigns) {
+    campaignIdToGcid.set(String(c.id), c.google_campaign_id || String(c.id));
+  }
+  // 建立 google_campaign_id → 主记录 campaign_id 映射
+  const gcidToPrimaryCampaignId = new Map<string, string>();
+  for (const c of dedupedCampaigns) {
+    gcidToPrimaryCampaignId.set(c.google_campaign_id || String(c.id), String(c.id));
+  }
+
+  // ─── 全量 stats 聚合（含重复 campaign 的 stats，按 google_campaign_id+date 去重后聚合） ───
+  const rawStatsAgg = allCampaignIdsIncludingDupes.length > 0
     ? await prisma.ads_daily_stats.groupBy({
         by: ["campaign_id"],
         where: {
-          campaign_id: { in: allCampaignIds },
+          campaign_id: { in: allCampaignIdsIncludingDupes },
           date: { gte: start, lt: endExclusive },
           is_deleted: 0,
         } as never,
@@ -154,12 +177,20 @@ export async function GET(req: NextRequest) {
       })
     : [];
 
-  const allStatsMap = new Map(
-    allStatsAgg.map((s) => [
-      String(s.campaign_id),
-      { cost: Number(s._sum?.cost || 0), clicks: Number(s._sum?.clicks || 0), impressions: Number(s._sum?.impressions || 0) },
-    ])
-  );
+  // 合并重复 campaign 的 stats 到主记录（避免重复计算，取较高值）
+  const allStatsMap = new Map<string, { cost: number; clicks: number; impressions: number }>();
+  for (const s of rawStatsAgg) {
+    const gcid = campaignIdToGcid.get(String(s.campaign_id));
+    const primaryId = gcid ? gcidToPrimaryCampaignId.get(gcid) : String(s.campaign_id);
+    const key = primaryId || String(s.campaign_id);
+    const existing = allStatsMap.get(key);
+    const cost = Number(s._sum?.cost || 0);
+    const clicks = Number(s._sum?.clicks || 0);
+    const impressions = Number(s._sum?.impressions || 0);
+    if (!existing || cost > existing.cost) {
+      allStatsMap.set(key, { cost, clicks, impressions });
+    }
+  }
 
   // ─── 全量佣金聚合（按 merchant，与日期范围一致） ───
   const commissionAgg = await prisma.$queryRawUnsafe<

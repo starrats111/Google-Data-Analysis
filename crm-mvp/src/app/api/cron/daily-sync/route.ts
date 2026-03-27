@@ -200,12 +200,27 @@ async function syncAllUsersMcc(): Promise<unknown> {
           if (mcc.sheet_url) {
             const sheetResult = await syncFromSheet(mcc.sheet_url, startStr, endStr);
             if (sheetResult.success && sheetResult.rows.length > 0) {
+              // 预加载所有相关 campaigns，按 google_campaign_id 去重（优先有 customer_id 的）
+              const gcids = [...new Set(sheetResult.rows.map(r => r.campaign_id).filter(Boolean))];
+              const existingCampaigns = gcids.length > 0
+                ? await prisma.campaigns.findMany({
+                    where: { user_id: uid, google_campaign_id: { in: gcids as string[] }, is_deleted: 0 },
+                    select: { id: true, google_campaign_id: true, customer_id: true },
+                    orderBy: { id: "desc" },
+                  })
+                : [];
+              const campaignByGcid = new Map<string, (typeof existingCampaigns)[0]>();
+              for (const c of existingCampaigns) {
+                if (!c.google_campaign_id) continue;
+                const existing = campaignByGcid.get(c.google_campaign_id);
+                if (!existing || (!existing.customer_id && c.customer_id)) {
+                  campaignByGcid.set(c.google_campaign_id, c);
+                }
+              }
+
               for (const row of sheetResult.rows) {
                 if (!row.campaign_id) continue;
-                const campaign = await prisma.campaigns.findFirst({
-                  where: { user_id: uid, google_campaign_id: row.campaign_id, is_deleted: 0 },
-                  select: { id: true },
-                });
+                const campaign = campaignByGcid.get(row.campaign_id);
                 if (!campaign) continue;
 
                 const dateObj = new Date(row.date);

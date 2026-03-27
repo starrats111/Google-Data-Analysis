@@ -37,8 +37,8 @@ export const GET = withUser(async (req: NextRequest) => {
   const umIds = allUserMerchants.map((um) => um.id);
   const userIdMap = new Map(allUserMerchants.map((um) => [um.id, um.user_id]));
 
-  // 查找关联的 campaigns（启用状态）
-  const campaigns = await prisma.campaigns.findMany({
+  // 查找关联的 campaigns（启用状态），按 google_campaign_id 去重
+  const rawCampaigns = await prisma.campaigns.findMany({
     where: {
       user_merchant_id: { in: umIds },
       is_deleted: 0,
@@ -49,7 +49,20 @@ export const GET = withUser(async (req: NextRequest) => {
       user_merchant_id: true,
       campaign_name: true,
       google_status: true,
+      google_campaign_id: true,
+      customer_id: true,
     },
+    orderBy: { id: "desc" },
+  });
+
+  // 按 user_id + google_campaign_id 去重（防止重复 campaign 导致花费重复计算）
+  const seenKeys = new Set<string>();
+  const campaigns = rawCampaigns.filter((c) => {
+    const gcid = c.google_campaign_id || String(c.id);
+    const key = `${c.user_id}:${gcid}`;
+    if (seenKeys.has(key)) return false;
+    seenKeys.add(key);
+    return true;
   });
 
   // 按 user_id 聚合
