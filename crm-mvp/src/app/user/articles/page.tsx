@@ -2,10 +2,10 @@
 
 import { useState, useEffect, useCallback } from "react";
 import {
-  Card, Table, Tag, Button, Space, Select, Modal, Form, Typography, Popconfirm, App,
+  Card, Table, Tag, Button, Space, Select, Modal, Form, Typography, Popconfirm, App, Input,
 } from "antd";
 import {
-  UnorderedListOutlined, DeleteOutlined, EyeOutlined, SendOutlined, CopyOutlined, LinkOutlined,
+  UnorderedListOutlined, DeleteOutlined, EyeOutlined, SendOutlined, CopyOutlined, LinkOutlined, SearchOutlined,
 } from "@ant-design/icons";
 import { sanitizeHtml } from "@/lib/sanitize";
 
@@ -32,6 +32,7 @@ export default function ArticlesPage() {
   const [sites, setSites] = useState<Site[]>([]);
   const [loading, setLoading] = useState(false);
   const [statusFilter, setStatusFilter] = useState<string>("");
+  const [midFilter, setMidFilter] = useState<string>("");
   const [page, setPage] = useState(1);
   const [total, setTotal] = useState(0);
 
@@ -49,10 +50,11 @@ export default function ArticlesPage() {
     setLoading(true);
     const params = new URLSearchParams({ page: String(page), pageSize: "20" });
     if (statusFilter) params.set("status", statusFilter);
+    if (midFilter) params.set("mid", midFilter);
     const res = await fetch(`/api/user/articles?${params}`).then((r) => r.json());
     if (res.code === 0) { setArticles(res.data.articles); setTotal(res.data.total); }
     setLoading(false);
-  }, [statusFilter, page]);
+  }, [statusFilter, midFilter, page]);
 
   const fetchSites = async () => {
     const res = await fetch("/api/user/publish-sites").then((r) => r.json());
@@ -169,20 +171,29 @@ export default function ArticlesPage() {
 
       <Card>
         <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 16 }}>
-          <Select
-            placeholder="按状态筛选"
-            allowClear
-            style={{ width: 160 }}
-            value={statusFilter || undefined}
-            onChange={(v) => { setStatusFilter(v || ""); setPage(1); }}
-            options={[
-              { value: "generating", label: "生成中" },
-              { value: "draft", label: "草稿" },
-              { value: "preview", label: "待预览" },
-              { value: "published", label: "已发布" },
-              { value: "failed", label: "失败" },
-            ]}
-          />
+          <Space>
+            <Select
+              placeholder="按状态筛选"
+              allowClear
+              style={{ width: 160 }}
+              value={statusFilter || undefined}
+              onChange={(v) => { setStatusFilter(v || ""); setPage(1); }}
+              options={[
+                { value: "generating", label: "生成中" },
+                { value: "draft", label: "草稿" },
+                { value: "preview", label: "待预览" },
+                { value: "published", label: "已发布" },
+                { value: "failed", label: "失败" },
+              ]}
+            />
+            <Input.Search
+              placeholder="搜索 MID"
+              allowClear
+              style={{ width: 200 }}
+              enterButton={<SearchOutlined />}
+              onSearch={(v) => { setMidFilter(v.trim()); setPage(1); }}
+            />
+          </Space>
           <Space>
             <Popconfirm title="确认清理所有失败/生成中的文章？" onConfirm={async () => {
               const res = await fetch("/api/user/articles", { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "cleanup_failed" }) }).then(r => r.json());

@@ -16,6 +16,7 @@ export async function GET(req: NextRequest) {
     const articleId = searchParams.get("id") || "";
     const status = searchParams.get("status") || "";
     const merchant_id = searchParams.get("merchant_id") || "";
+    const mid = searchParams.get("mid") || "";
     const slug = searchParams.get("slug") || "";
     const page = parseInt(searchParams.get("page") || "1");
     const pageSize = parseInt(searchParams.get("pageSize") || "20");
@@ -49,14 +50,26 @@ export async function GET(req: NextRequest) {
       }
     } catch { /* ignore */ }
 
+    const userId = BigInt(user.userId);
     const where: Record<string, unknown> = {
-      user_id: BigInt(user.userId),
+      user_id: userId,
       is_deleted: 0,
     };
     if (articleId) where.id = BigInt(articleId);
     if (status) where.status = status;
     if (merchant_id) where.user_merchant_id = BigInt(merchant_id);
     if (slug) where.slug = slug;
+
+    if (mid) {
+      const matchedMerchants = await prisma.user_merchants.findMany({
+        where: { user_id: userId, merchant_id: mid, is_deleted: 0 },
+        select: { id: true },
+      });
+      if (matchedMerchants.length === 0) {
+        return apiSuccess(serializeData({ articles: [], total: 0, page, pageSize }));
+      }
+      where.user_merchant_id = { in: matchedMerchants.map((m) => m.id) };
+    }
 
     const [total, articles] = await Promise.all([
       prisma.articles.count({ where: where as never }),
@@ -326,8 +339,13 @@ export async function DELETE(req: NextRequest) {
     const { id } = body as { id?: string };
     if (!id) return apiError("缺少文章 ID");
 
+    const article = await prisma.articles.findFirst({
+      where: { id: BigInt(id), user_id: BigInt(user.userId), is_deleted: 0 },
+    });
+    if (!article) return apiError("文章不存在");
+
     await prisma.articles.update({
-      where: { id: BigInt(id) },
+      where: { id: article.id },
       data: { is_deleted: 1 },
     });
     return apiSuccess(null, "删除成功");
