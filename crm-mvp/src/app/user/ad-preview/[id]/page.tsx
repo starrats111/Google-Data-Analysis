@@ -310,7 +310,9 @@ export default function AdPreviewPage() {
     setInitialized(true);
 
     // 标题/描述为空 → 自动触发 core 一键生成（标题+描述+站内链接+图片）
-    const needCore = h.length === 0 || d.length === 0;
+    const filledH = h.filter((x: string) => x && x.trim());
+    const filledD = d.filter((x: string) => x && x.trim());
+    const needCore = filledH.length === 0 || filledD.length === 0;
     if (needCore) {
       setTimeout(() => generateExtension("core" as any), 100);
     } else {
@@ -320,6 +322,40 @@ export default function AdPreviewPage() {
       if (existingImages.length === 0) autoTypes.push("images");
       if (autoTypes.length > 0) {
         setTimeout(() => generateExtension(...autoTypes), 100);
+      }
+
+      // 标题/描述不完整时自动补全（已有内容但未满）
+      if (filledH.length < 15) {
+        setTimeout(async () => {
+          setGeneratingHeadlines(true);
+          try {
+            const res = await fetch("/api/user/ad-creation/generate-more", {
+              method: "POST", headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ type: "headlines", existing: filledH, merchant_name: preview?.merchant?.merchant_name || "", country: preview?.campaign?.target_country || "US", count: 15 }),
+            });
+            const json = await res.json();
+            if (json.code === 0 && json.data?.items?.length > 0) {
+              const combined = [...filledH, ...json.data.items].slice(0, 15);
+              setHeadlines(combined.length >= 15 ? combined : [...combined, ...Array(15 - combined.length).fill("")]);
+            }
+          } catch {} finally { setGeneratingHeadlines(false); }
+        }, 200);
+      }
+      if (filledD.length < 4) {
+        setTimeout(async () => {
+          setGeneratingDescriptions(true);
+          try {
+            const res = await fetch("/api/user/ad-creation/generate-more", {
+              method: "POST", headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ type: "descriptions", existing: filledD, merchant_name: preview?.merchant?.merchant_name || "", country: preview?.campaign?.target_country || "US", count: 4, headlines_for_uniqueness: filledH }),
+            });
+            const json = await res.json();
+            if (json.code === 0 && json.data?.items?.length > 0) {
+              const combined = [...filledD, ...json.data.items].slice(0, 4);
+              setDescriptions(combined.length >= 4 ? combined : [...combined, ...Array(4 - combined.length).fill("")]);
+            }
+          } catch {} finally { setGeneratingDescriptions(false); }
+        }, 200);
       }
     }
   }, [preview, initialized]);
@@ -381,7 +417,8 @@ export default function AdPreviewPage() {
 
   // ─── AI 生成更多标题 ───
   const aiGenerateHeadlines = useCallback(async () => {
-    if (headlines.length >= 15) { message.warning("标题已满 15 条"); return; }
+    const filled = headlines.filter((h) => h.trim());
+    if (filled.length >= 15) { message.warning("标题已满 15 条"); return; }
     setGeneratingHeadlines(true);
     try {
       const res = await fetch("/api/user/ad-creation/generate-more", {
@@ -389,7 +426,7 @@ export default function AdPreviewPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           type: "headlines",
-          existing: headlines.filter((h) => h.trim()),
+          existing: filled,
           merchant_name: preview?.merchant?.merchant_name || "",
           country: preview?.campaign?.target_country || "US",
           keywords: kwList.map((kw) => kw.text).filter(Boolean),
@@ -401,17 +438,14 @@ export default function AdPreviewPage() {
       });
       const json = await res.json();
       if (json.code === 0 && json.data?.items?.length > 0) {
-        const maxAdd = 15 - headlines.length;
-        const toAdd = json.data.items.slice(0, maxAdd);
-        setHeadlines((prev) => [...prev, ...toAdd]);
-        message.success(`AI 已生成 ${toAdd.length} 条标题`);
+        const combined = [...filled, ...json.data.items].slice(0, 15);
+        setHeadlines(combined.length >= 15 ? combined : [...combined, ...Array(15 - combined.length).fill("")]);
+        message.success(`AI 已生成 ${json.data.items.length} 条标题`);
       } else {
         message.warning(json.message || "AI 生成失败，请手动输入");
-        if (headlines.length < 15) setHeadlines((prev) => [...prev, ""]);
       }
     } catch {
       message.warning("AI 生成失败，请手动输入");
-      if (headlines.length < 15) setHeadlines((prev) => [...prev, ""]);
     } finally {
       setGeneratingHeadlines(false);
     }
@@ -419,7 +453,8 @@ export default function AdPreviewPage() {
 
   // ─── AI 生成更多描述（与当前标题差异化，贴合 Google「描述更独特」）───
   const aiGenerateDescriptions = useCallback(async () => {
-    if (descriptions.length >= 4) { message.warning("描述已满 4 条"); return; }
+    const filled = descriptions.filter((d) => d.trim());
+    if (filled.length >= 4) { message.warning("描述已满 4 条"); return; }
     setGeneratingDescriptions(true);
     try {
       const res = await fetch("/api/user/ad-creation/generate-more", {
@@ -427,7 +462,7 @@ export default function AdPreviewPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           type: "descriptions",
-          existing: descriptions.filter((d) => d.trim()),
+          existing: filled,
           merchant_name: preview?.merchant?.merchant_name || "",
           country: preview?.campaign?.target_country || "US",
           keywords: kwList.map((kw) => kw.text).filter(Boolean),
@@ -440,17 +475,14 @@ export default function AdPreviewPage() {
       });
       const json = await res.json();
       if (json.code === 0 && json.data?.items?.length > 0) {
-        const maxAdd = 4 - descriptions.length;
-        const toAdd = json.data.items.slice(0, maxAdd);
-        setDescriptions((prev) => [...prev, ...toAdd]);
-        message.success(`AI 已生成 ${toAdd.length} 条描述`);
+        const combined = [...filled, ...json.data.items].slice(0, 4);
+        setDescriptions(combined.length >= 4 ? combined : [...combined, ...Array(4 - combined.length).fill("")]);
+        message.success(`AI 已生成 ${json.data.items.length} 条描述`);
       } else {
         message.warning(json.message || "AI 生成失败，请手动输入");
-        if (descriptions.length < 4) setDescriptions((prev) => [...prev, ""]);
       }
     } catch {
       message.warning("AI 生成失败，请手动输入");
-      if (descriptions.length < 4) setDescriptions((prev) => [...prev, ""]);
     } finally {
       setGeneratingDescriptions(false);
     }
