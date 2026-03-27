@@ -219,10 +219,14 @@ export default function AdPreviewPage() {
   const [semrushUrl, setSemrushUrl] = useState("");
   const [semrushUrlFetching, setSemrushUrlFetching] = useState(false);
 
-  // 动态轮询：前 20s 每 3s，20-60s 每 5s，60s+ 每 8s，就绪后停止
+  // 动态轮询：前 20s 每 3s，20-60s 每 5s，60s-180s 每 10s，180s+ 停止轮询
   const [pollStart] = useState(() => Date.now());
+  const MAX_POLL_MS = 180_000; // 3 分钟后停止自动轮询
   const elapsed = Date.now() - pollStart;
-  const pollInterval = initialized ? 0 : (elapsed < 20000 ? 3000 : elapsed < 60000 ? 5000 : 8000);
+  const pollTimedOut = !initialized && elapsed >= MAX_POLL_MS;
+  const pollInterval = initialized || pollTimedOut
+    ? 0
+    : elapsed < 20000 ? 3000 : elapsed < 60000 ? 5000 : 10000;
   const { data: preview, isLoading, mutate } = useApiWithParams<AdPreviewData>(
     "/api/user/ad-creation/status",
     { campaign_id: campaignId },
@@ -1098,6 +1102,23 @@ export default function AdPreviewPage() {
         const totalDone = Math.min(hCount, 15) + Math.min(dCount, 4);
         const totalTarget = 19;
         const pct = Math.round((totalDone / totalTarget) * 100);
+        if (pollTimedOut) {
+          return (
+            <Card size="small" style={{ marginBottom: 16, border: "1px solid #faad14", background: "#fffbe6" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
+                <ExclamationCircleOutlined style={{ fontSize: 20, color: "#faad14" }} />
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 4 }}>AI 文案生成超时</div>
+                  <div style={{ fontSize: 12, color: "#5F6368", marginBottom: 8 }}>
+                    当前进度：标题 {hCount}/15，描述 {dCount}/4。系统仍在后台生成，点击刷新查看最新状态。
+                  </div>
+                  <Progress percent={pct} size="small" strokeColor="#faad14" />
+                </div>
+                <Button type="primary" size="small" icon={<ReloadOutlined />} onClick={() => mutate()}>刷新状态</Button>
+              </div>
+            </Card>
+          );
+        }
         const stepText = hCount >= 15
           ? `标题已就绪，描述生成中 (${dCount}/4)...`
           : hCount > 0

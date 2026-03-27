@@ -4,10 +4,11 @@ import { apiSuccess, apiError } from "@/lib/constants";
 import prisma from "@/lib/prisma";
 import { mapStoredKeywordsForClient } from "@/lib/ad-keyword-pipeline";
 
-// 防止并发 / 失败后反复触发 AI 生成：key → 上次触发时间戳
-// 成功后 isReady=true 自然不会再触发；失败后保持冷却期避免轮询死循环
-const genCooldown = new Map<string, number>();
-const GEN_COOLDOWN_MS = 5 * 60 * 1000;
+// 防止频繁触发 AI 生成：key → { lastTs: 上次触发时间, count: 累计触发次数 }
+// 无论成功或失败都保持冷却期，超过最大次数后彻底停止自动触发
+const genCooldown = new Map<string, { lastTs: number; count: number }>();
+const GEN_COOLDOWN_MS = 10 * 60 * 1000; // 10 分钟冷却
+const GEN_MAX_AUTO_RETRIES = 3; // 单个 adCreative 最多自动触发 3 次
 
 /**
  * GET /api/user/ad-creation/status?campaign_id=xxx
@@ -80,14 +81,20 @@ export async function GET(req: NextRequest) {
   const isReady = headlines.length >= 15 && descriptions.length >= 4;
 
   // 如果未就绪且创建超过 45 秒，自动重新触发 AI 补充（仅生成缺失部分）
-  // 失败后保持冷却期，防止前端轮询导致无限重试消耗 API 额度
+  // 三重保护：冷却期 + 最大次数上限 + 成功/失败都不立即清除冷却
   if (!isReady && adCreative && adGroup && merchant) {
     const ageMs = Date.now() - new Date(adCreative.created_at).getTime();
     const genKey = `adcopy-${adCreative.id}`;
-    const lastTry = genCooldown.get(genKey) || 0;
-    if (ageMs > 45000 && Date.now() - lastTry > GEN_COOLDOWN_MS) {
-      genCooldown.set(genKey, Date.now());
-      console.log(`[AdCopy] 检测到广告文案未补齐（已过 ${Math.round(ageMs / 1000)}s, 标题${headlines.length}/15 描述${descriptions.length}/4），触发补充生成...`);
+    const state = genCooldown.get(genKey);
+    const lastTry = state?.lastTs || 0;
+    const tryCount = state?.count || 0;
+
+    if (tryCount >= GEN_MAX_AUTO_RETRIES) {
+      // 已达上限，不再自动触发（用户可手动重新生成）
+    } else if (ageMs > 45000 && Date.now() - lastTry > GEN_COOLDOWN_MS) {
+      const newCount = tryCount + 1;
+      genCooldown.set(genKey, { lastTs: Date.now(), count: newCount });
+      console.log(`[AdCopy] 补充生成 (${newCount}/${GEN_MAX_AUTO_RETRIES})：标题${headlines.length}/15 描述${descriptions.length}/4，已过 ${Math.round(ageMs / 1000)}s`);
       triggerAdCopyGeneration(
         adCreative.id,
         adGroup.id,
@@ -102,8 +109,7 @@ export async function GET(req: NextRequest) {
           biddingStrategy: campaign.bidding_strategy || adSettings?.bidding_strategy || "MAXIMIZE_CLICKS",
           aiRuleProfile: (adSettings as any)?.ai_rule_profile,
         },
-      ).then(() => genCooldown.delete(genKey))
-        .catch((err) => console.error("[AdCopy] 补充生成失败（冷却 5 分钟后可重试）:", err));
+      ).catch((err) => console.error(`[AdCopy] 补充生成失败 (${newCount}/${GEN_MAX_AUTO_RETRIES}，冷却 ${GEN_COOLDOWN_MS / 60000} 分钟):`, err));
     }
   }
 

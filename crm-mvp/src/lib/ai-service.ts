@@ -614,7 +614,7 @@ async function callAi(
     temperature: config.temperature,
   });
 
-  const MAX_RETRIES = 3;
+  const MAX_RETRIES = 1;
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
     const res = await fetch(url, {
       method: "POST",
@@ -628,7 +628,7 @@ async function callAi(
 
     if (res.status === 429 && attempt < MAX_RETRIES) {
       const retryAfter = parseInt(res.headers.get("retry-after") || "0", 10);
-      const delayMs = retryAfter > 0 ? retryAfter * 1000 : Math.min(2000 * Math.pow(2, attempt), 16000);
+      const delayMs = retryAfter > 0 ? retryAfter * 1000 : 3000;
       console.log(`[AI] ${config.modelName} 429 限流，${(delayMs / 1000).toFixed(1)}s 后重试 (${attempt + 1}/${MAX_RETRIES})`);
       await new Promise((r) => setTimeout(r, delayMs));
       continue;
@@ -653,19 +653,11 @@ export async function callAiWithFallback(
   messages: { role: string; content: string }[],
   maxTokens?: number,
 ): Promise<string> {
-  const models = await getSceneModels(scene);
-  if (models.length === 0) throw new Error(`场景 ${scene} 无可用 AI 模型`);
+  const allModels = await getSceneModels(scene);
+  if (allModels.length === 0) throw new Error(`场景 ${scene} 无可用 AI 模型`);
 
-  const usedNames = new Set(models.map((m) => m.modelName));
-  if (models.length < 3) {
-    const extraModels = await getFirstActiveProvider(scene);
-    for (const extra of extraModels) {
-      if (!usedNames.has(extra.modelName)) {
-        usedNames.add(extra.modelName);
-        models.push(extra);
-      }
-    }
-  }
+  // 最多尝试 2 个模型，避免 fallback 链过长导致大量 API 调用
+  const models = allModels.slice(0, 2);
 
   let lastError: Error | null = null;
   for (const model of models) {
@@ -720,7 +712,7 @@ export async function padHeadlines(
   const biddingStrategy = options.biddingStrategy || "MAXIMIZE_CLICKS";
   const aiRulePrompt = buildAiRulePrompt(options.aiRuleProfile, "ad_copy");
 
-  for (let attempt = 0; attempt < 2; attempt++) {
+  {
     const needed = count - locked.length;
     const prompt = `You are a senior Google Ads search ads copywriter with 30 years of experience.
 
@@ -762,14 +754,13 @@ Return ONLY JSON array.`;
       const firstIsBrand = combined.length > 0 && normalizeForCompare(combined[0]).includes(normalizeForCompare(getShortBrand(merchantName, 20)).split(" ")[0] || "");
 
       if (combined.length >= count && hasDiscount && hasShipping && firstIsBrand) {
-        console.log(`[padHeadlines] 校验通过 (attempt ${attempt + 1}): 折扣=${hasDiscount}, 物流=${hasShipping}, 品牌首条=${firstIsBrand}, 共${combined.length}条`);
+        console.log(`[padHeadlines] 校验通过: 折扣=${hasDiscount}, 物流=${hasShipping}, 品牌首条=${firstIsBrand}, 共${combined.length}条`);
         return combined.slice(0, count);
       }
 
-      console.warn(`[padHeadlines] 校验不通过 (attempt ${attempt + 1}): 折扣=${hasDiscount}, 物流=${hasShipping}, 品牌首条=${firstIsBrand}, 共${combined.length}条 → 重试`);
+      console.warn(`[padHeadlines] AI 输出校验未通过（折扣=${hasDiscount}, 物流=${hasShipping}, 品牌首条=${firstIsBrand}, 共${combined.length}条），使用 fallback`);
     } catch (err) {
-      console.error(`[padHeadlines] AI 生成失败 (attempt ${attempt + 1}):`, err);
-      if (err instanceof Error && err.message.includes("insufficient_user_quota")) break;
+      console.error("[padHeadlines] AI 生成失败:", err);
     }
   }
 
@@ -808,7 +799,7 @@ export async function padDescriptions(
     ? `Current RSA headlines (descriptions must NOT paraphrase or stack the same phrases; Google flags \"Make your descriptions more unique\"):\n${uniqHeadlines.map((h, i) => `${i + 1}. \"${h}\"`).join("\n")}\n\n`
     : "";
 
-  for (let attempt = 0; attempt < 2; attempt++) {
+  {
     const needed = count - locked.length;
     const prompt = `You are a senior Google Ads RSA copywriter focused on conversion-driving descriptions.
 
@@ -852,14 +843,13 @@ Return ONLY JSON array.`;
       const comboCount = combined.filter((d) => DISCOUNT_RE.test(d) && SHIPPING_RE.test(d)).length;
 
       if (combined.length >= count && comboCount === 1) {
-        console.log(`[padDescriptions] 校验通过 (attempt ${attempt + 1}): 折扣+物流组合=${comboCount}, 共${combined.length}条`);
+        console.log(`[padDescriptions] 校验通过: 折扣+物流组合=${comboCount}, 共${combined.length}条`);
         return combined.slice(0, count);
       }
 
-      console.warn(`[padDescriptions] 校验不通过 (attempt ${attempt + 1}): 折扣+物流组合=${comboCount}, 共${combined.length}条 → 重试`);
+      console.warn(`[padDescriptions] AI 输出校验未通过（折扣+物流组合=${comboCount}, 共${combined.length}条），使用 fallback`);
     } catch (err) {
-      console.error(`[padDescriptions] AI 生成失败 (attempt ${attempt + 1}):`, err);
-      if (err instanceof Error && err.message.includes("insufficient_user_quota")) break;
+      console.error("[padDescriptions] AI 生成失败:", err);
     }
   }
 
