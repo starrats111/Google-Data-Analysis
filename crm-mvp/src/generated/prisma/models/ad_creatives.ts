@@ -77,6 +77,7 @@ export type Ad_creativesCountAggregateOutputType = {
   image_urls: number
   logo_url: number
   selling_points: number
+  crawl_cache: number
   is_deleted: number
   created_at: number
   updated_at: number
@@ -135,6 +136,7 @@ export type Ad_creativesCountAggregateInputType = {
   image_urls?: true
   logo_url?: true
   selling_points?: true
+  crawl_cache?: true
   is_deleted?: true
   created_at?: true
   updated_at?: true
@@ -242,6 +244,7 @@ export type Ad_creativesGroupByOutputType = {
   image_urls: runtime.JsonValue | null
   logo_url: string | null
   selling_points: runtime.JsonValue | null
+  crawl_cache: runtime.JsonValue | null
   is_deleted: number
   created_at: Date
   updated_at: Date
@@ -285,6 +288,7 @@ export type ad_creativesWhereInput = {
   image_urls?: Prisma.JsonNullableFilter<"ad_creatives">
   logo_url?: Prisma.StringNullableFilter<"ad_creatives"> | string | null
   selling_points?: Prisma.JsonNullableFilter<"ad_creatives">
+  crawl_cache?: Prisma.JsonNullableFilter<"ad_creatives">
   is_deleted?: Prisma.IntFilter<"ad_creatives"> | number
   created_at?: Prisma.DateTimeFilter<"ad_creatives"> | Date | string
   updated_at?: Prisma.DateTimeFilter<"ad_creatives"> | Date | string
@@ -305,6 +309,7 @@ export type ad_creativesOrderByWithRelationInput = {
   image_urls?: Prisma.SortOrderInput | Prisma.SortOrder
   logo_url?: Prisma.SortOrderInput | Prisma.SortOrder
   selling_points?: Prisma.SortOrderInput | Prisma.SortOrder
+  crawl_cache?: Prisma.SortOrderInput | Prisma.SortOrder
   is_deleted?: Prisma.SortOrder
   created_at?: Prisma.SortOrder
   updated_at?: Prisma.SortOrder
@@ -329,6 +334,7 @@ export type ad_creativesWhereUniqueInput = Prisma.AtLeast<{
   image_urls?: Prisma.JsonNullableFilter<"ad_creatives">
   logo_url?: Prisma.StringNullableFilter<"ad_creatives"> | string | null
   selling_points?: Prisma.JsonNullableFilter<"ad_creatives">
+  crawl_cache?: Prisma.JsonNullableFilter<"ad_creatives">
   is_deleted?: Prisma.IntFilter<"ad_creatives"> | number
   created_at?: Prisma.DateTimeFilter<"ad_creatives"> | Date | string
   updated_at?: Prisma.DateTimeFilter<"ad_creatives"> | Date | string
@@ -349,6 +355,7 @@ export type ad_creativesOrderByWithAggregationInput = {
   image_urls?: Prisma.SortOrderInput | Prisma.SortOrder
   logo_url?: Prisma.SortOrderInput | Prisma.SortOrder
   selling_points?: Prisma.SortOrderInput | Prisma.SortOrder
+  crawl_cache?: Prisma.SortOrderInput | Prisma.SortOrder
   is_deleted?: Prisma.SortOrder
   created_at?: Prisma.SortOrder
   updated_at?: Prisma.SortOrder
@@ -377,6 +384,7 @@ export type ad_creativesScalarWhereWithAggregatesInput = {
   image_urls?: Prisma.JsonNullableWithAggregatesFilter<"ad_creatives">
   logo_url?: Prisma.StringNullableWithAggregatesFilter<"ad_creatives"> | string | null
   selling_points?: Prisma.JsonNullableWithAggregatesFilter<"ad_creatives">
+  crawl_cache?: Prisma.JsonNullableWithAggregatesFilter<"ad_creatives">
   is_deleted?: Prisma.IntWithAggregatesFilter<"ad_creatives"> | number
   created_at?: Prisma.DateTimeWithAggregatesFilter<"ad_creatives"> | Date | string
   updated_at?: Prisma.DateTimeWithAggregatesFilter<"ad_creatives"> | Date | string
@@ -397,6 +405,7 @@ export type ad_creativesCreateInput = {
   image_urls?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   logo_url?: string | null
   selling_points?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  crawl_cache?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   is_deleted?: number
   created_at?: Date | string
   updated_at?: Date | string
@@ -417,6 +426,7 @@ export type ad_creativesUncheckedCreateInput = {
   image_urls?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   logo_url?: string | null
   selling_points?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  crawl_cache?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   is_deleted?: number
   created_at?: Date | string
   updated_at?: Date | string
@@ -437,6 +447,7 @@ export type ad_creativesUpdateInput = {
   image_urls?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   logo_url?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   selling_points?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  crawl_cache?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   is_deleted?: Prisma.IntFieldUpdateOperationsInput | number
   created_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updated_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
@@ -457,6 +468,7 @@ export type ad_creativesUncheckedUpdateInput = {
   image_urls?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   logo_url?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   selling_points?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  crawl_cache?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   is_deleted?: Prisma.IntFieldUpdateOperationsInput | number
   created_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updated_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
@@ -477,6 +489,7 @@ export type ad_creativesCreateManyInput = {
   image_urls?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   logo_url?: string | null
   selling_points?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  crawl_cache?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   is_deleted?: number
   created_at?: Date | string
   updated_at?: Date | string
@@ -497,6 +510,7 @@ export type ad_creativesUpdateManyMutationInput = {
   image_urls?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   logo_url?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   selling_points?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  crawl_cache?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   is_deleted?: Prisma.IntFieldUpdateOperationsInput | number
   created_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updated_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
@@ -517,6 +531,7 @@ export type ad_creativesUncheckedUpdateManyInput = {
   image_urls?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   logo_url?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   selling_points?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  crawl_cache?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   is_deleted?: Prisma.IntFieldUpdateOperationsInput | number
   created_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updated_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
@@ -543,6 +558,7 @@ export type ad_creativesCountOrderByAggregateInput = {
   image_urls?: Prisma.SortOrder
   logo_url?: Prisma.SortOrder
   selling_points?: Prisma.SortOrder
+  crawl_cache?: Prisma.SortOrder
   is_deleted?: Prisma.SortOrder
   created_at?: Prisma.SortOrder
   updated_at?: Prisma.SortOrder
@@ -601,6 +617,7 @@ export type ad_creativesSelect<ExtArgs extends runtime.Types.Extensions.Internal
   image_urls?: boolean
   logo_url?: boolean
   selling_points?: boolean
+  crawl_cache?: boolean
   is_deleted?: boolean
   created_at?: boolean
   updated_at?: boolean
@@ -623,12 +640,13 @@ export type ad_creativesSelectScalar = {
   image_urls?: boolean
   logo_url?: boolean
   selling_points?: boolean
+  crawl_cache?: boolean
   is_deleted?: boolean
   created_at?: boolean
   updated_at?: boolean
 }
 
-export type ad_creativesOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"id" | "ad_group_id" | "final_url" | "display_path1" | "display_path2" | "headlines" | "descriptions" | "headlines_zh" | "descriptions_zh" | "sitelinks" | "callouts" | "image_urls" | "logo_url" | "selling_points" | "is_deleted" | "created_at" | "updated_at", ExtArgs["result"]["ad_creatives"]>
+export type ad_creativesOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"id" | "ad_group_id" | "final_url" | "display_path1" | "display_path2" | "headlines" | "descriptions" | "headlines_zh" | "descriptions_zh" | "sitelinks" | "callouts" | "image_urls" | "logo_url" | "selling_points" | "crawl_cache" | "is_deleted" | "created_at" | "updated_at", ExtArgs["result"]["ad_creatives"]>
 
 export type $ad_creativesPayload<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = {
   name: "ad_creatives"
@@ -648,6 +666,7 @@ export type $ad_creativesPayload<ExtArgs extends runtime.Types.Extensions.Intern
     image_urls: runtime.JsonValue | null
     logo_url: string | null
     selling_points: runtime.JsonValue | null
+    crawl_cache: runtime.JsonValue | null
     is_deleted: number
     created_at: Date
     updated_at: Date
@@ -1034,6 +1053,7 @@ export interface ad_creativesFieldRefs {
   readonly image_urls: Prisma.FieldRef<"ad_creatives", 'Json'>
   readonly logo_url: Prisma.FieldRef<"ad_creatives", 'String'>
   readonly selling_points: Prisma.FieldRef<"ad_creatives", 'Json'>
+  readonly crawl_cache: Prisma.FieldRef<"ad_creatives", 'Json'>
   readonly is_deleted: Prisma.FieldRef<"ad_creatives", 'Int'>
   readonly created_at: Prisma.FieldRef<"ad_creatives", 'DateTime'>
   readonly updated_at: Prisma.FieldRef<"ad_creatives", 'DateTime'>

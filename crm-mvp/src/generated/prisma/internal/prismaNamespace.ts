@@ -2799,6 +2799,7 @@ export const Ad_creativesScalarFieldEnum = {
   image_urls: 'image_urls',
   logo_url: 'logo_url',
   selling_points: 'selling_points',
+  crawl_cache: 'crawl_cache',
   is_deleted: 'is_deleted',
   created_at: 'created_at',
   updated_at: 'updated_at'
