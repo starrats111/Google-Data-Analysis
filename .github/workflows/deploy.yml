@@ -52,30 +52,22 @@ jobs:
               echo "No dependency changes, skipping npm install"
             fi
 
-            echo "===== 4. Stop service before build (B-1) ====="
-            if command -v pm2 &> /dev/null; then
-              pm2 stop ad-automation 2>/dev/null || true
-              echo "Service stopped for safe build"
-            fi
-
-            echo "===== 5. Build ====="
+            echo "===== 4. Build (service keeps running) ====="
             NODE_OPTIONS="--max-old-space-size=512" npx next build 2>&1 | tail -20
 
-            echo "===== 6. Verify build (B-2) ====="
+            echo "===== 5. Verify build ====="
             if [ ! -f "$CRM_DIR/.next/BUILD_ID" ]; then
               echo "BUILD FAILED: .next/BUILD_ID not found, aborting deploy"
-              pm2 start ad-automation 2>/dev/null || true
               exit 1
             fi
             echo "Build verified: BUILD_ID=$(cat $CRM_DIR/.next/BUILD_ID)"
 
-            echo "===== 7. Database migrations ====="
+            echo "===== 6. Database migrations ====="
             npx prisma migrate deploy 2>&1 | tail -5
 
-            echo "===== 8. Start service ====="
+            echo "===== 7. Reload service (zero-downtime) ====="
             cd "$CRM_DIR"
             if command -v pm2 &> /dev/null; then
-              # 始终用 ecosystem 对齐内存/kill_timeout 等（仅 pm2 start 名称不会读入文件变更）
               if pm2 describe ad-automation > /dev/null 2>&1; then
                 pm2 reload ecosystem.config.cjs --update-env
               else
