@@ -167,6 +167,7 @@ export default function MerchantsPage() {
   const [platformConns, setPlatformConns] = useState<{ id: string; platform: string; account_name: string }[]>([]);
   const [mccAccounts, setMccAccounts] = useState<{ id: string; mcc_id: string; mcc_name: string }[]>([]);
   const [rModal, setRModal] = useState(false); const [rTitle, setRTitle] = useState(""); const [rContent, setRContent] = useState("");
+  const [aiModalOpen, setAiModalOpen] = useState(false);
   // 在投人数弹窗
   const [advModal, setAdvModal] = useState(false);
   const [advMerchant, setAdvMerchant] = useState<Merchant | null>(null);
@@ -263,14 +264,14 @@ export default function MerchantsPage() {
   ], []);
   return (<div style={{ maxWidth: 1600, margin: "0 auto" }}>
     <Form form={adForm} component={false} layout="vertical" size="small">
-      <Row gutter={[20, 20]} style={{ marginBottom: 20 }}>
-        <Col xs={24} sm={12} md={6}><Card size="small" className="stat-card-hero" title={<span style={{ color: "#fff" }}><ShopOutlined style={{ marginRight: 6 }} />我的商家</span>} style={{ height: "100%" }}>
-          <div style={{ fontSize: 36, fontWeight: 800, color: "#fff", marginBottom: 4, lineHeight: 1.2 }}>{stats.total.toLocaleString()}</div>
-          <div style={{ fontSize: 12, color: "rgba(255,255,255,0.7)", marginBottom: 10 }}>平台分布</div>
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>{stats.byPlatform.map((p) => <Tag key={p.platform} style={{ background: "rgba(255,255,255,0.18)", border: "none", color: "#fff", fontWeight: 600, backdropFilter: "blur(4px)" }}>{p.platform} {p._count.toLocaleString()}</Tag>)}</div>
-          <div style={{ marginTop: 12, fontSize: 12, color: "rgba(255,255,255,0.65)", borderTop: "1px solid rgba(255,255,255,0.15)", paddingTop: 8 }}>在投广告 <span style={{ color: "#fff", fontWeight: 700 }}>{stats.claimed}</span> 个商家</div>
+      <Row gutter={[20, 20]} align="stretch" style={{ marginBottom: 20 }}>
+        <Col xs={24} sm={12} md={6}><Card size="small" className="stat-card-hero" title={<><ShopOutlined style={{ color: "#999", marginRight: 6 }} />我的商家</>} style={{ height: "100%" }}>
+          <div style={{ fontSize: 36, fontWeight: 800, marginBottom: 4, lineHeight: 1.2 }}>{stats.total.toLocaleString()}</div>
+          <div style={{ fontSize: 12, color: "#999", marginBottom: 10 }}>平台分布</div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>{stats.byPlatform.map((p) => <Tag key={p.platform} color={PC[p.platform] || "default"} style={{ fontWeight: 600 }}>{p.platform} {p._count.toLocaleString()}</Tag>)}</div>
+          <div style={{ marginTop: 12, fontSize: 12, color: "#999", borderTop: "1px solid #f0f0f0", paddingTop: 8 }}>在投广告 <span style={{ fontWeight: 700, color: "#333" }}>{stats.claimed}</span> 个商家</div>
         </Card></Col>
-        <Col xs={24} sm={12} md={6}><Card size="small" className="func-card-ad" title={<><DollarOutlined style={{ color: "#4DA6FF" }} /> 广告投放设置</>} extra={<Button type="primary" size="small" icon={<SaveOutlined />} onClick={saveAd}>保存</Button>} style={{ height: "100%" }}>
+        <Col xs={24} sm={12} md={6}><Card size="small" className="func-card-ad" title={<><DollarOutlined style={{ color: "#999" }} /> 广告投放设置</>} extra={<Button type="primary" size="small" icon={<SaveOutlined />} onClick={saveAd}>保存</Button>} style={{ height: "100%" }}>
           {adData && (<div style={{ fontSize: 12 }}>
             <Row gutter={[8, 0]}>
               <Col span={12}><Form.Item name="bidding_strategy" label="出价策略" style={{ marginBottom: 6 }}><Select options={BIDDING_STRATEGIES.map((b) => ({ value: b.value, label: b.label }))} /></Form.Item></Col>
@@ -291,7 +292,7 @@ export default function MerchantsPage() {
             </Row>
           </div>)}
         </Card></Col>
-        <Col xs={24} sm={12} md={6}><Card size="small" className="func-card-holiday" title={<><CalendarOutlined style={{ color: "#52c41a" }} /> 节日营销</>} style={{ height: "100%" }}>
+        <Col xs={24} sm={12} md={6}><Card size="small" className="func-card-holiday" title={<><CalendarOutlined style={{ color: "#999" }} /> 节日营销</>} style={{ height: "100%" }}>
           <Space style={{ marginBottom: 8, width: "100%" }}>
             <Select placeholder="选择国家" showSearch style={{ width: 120 }} size="small" value={cc || undefined} onChange={(v) => setCc(v || "")} options={[{ value: "US", label: "美国" }, { value: "GB", label: "英国" }, { value: "AU", label: "澳洲" }, { value: "CA", label: "加拿大" }, { value: "DE", label: "德国" }, { value: "FR", label: "法国" }, { value: "JP", label: "日本" }]} />
             <Button type="primary" size="small" icon={<SearchOutlined />} loading={hl} onClick={() => setQc(cc)}>查询</Button>
@@ -302,21 +303,36 @@ export default function MerchantsPage() {
               <Tag style={{ fontSize: 11, lineHeight: "18px", margin: 0 }}>{h.holiday_type}</Tag>
             </div>)) : <Text type="secondary" style={{ fontSize: 12 }}>选择国家查询节日信息</Text>}</div>
         </Card></Col>
-        <Col xs={24} sm={12} md={6}><Card size="small" className="func-card-ai" title={<><RobotOutlined style={{ color: "#722ed1" }} /> AI 设定（硬规则）</>} extra={<Space size={4}><Upload accept=".txt,.md,.text" showUploadList={false} beforeUpload={(f) => onAiPromptUpload(f as File)}><Button size="small" icon={<UploadOutlined />}>上传提示词</Button></Upload><Button type="primary" size="small" icon={<SaveOutlined />} onClick={saveAd}>保存</Button></Space>} style={{ height: "100%" }}>
-          {adData && (
-            <div style={{ maxHeight: 360, overflowY: "auto", paddingRight: 4, fontSize: 12 }}>
-              <Form.Item name={["ai_rule_profile", "persona"]} label="AI 人设" style={{ marginBottom: 6 }}><Input placeholder="人设与角色" /></Form.Item>
-              <Form.Item name={["ai_rule_profile", "keyword_requirements"]} label="关键词规则" style={{ marginBottom: 6 }}><TextArea rows={2} placeholder="结合预算、CPC、出价策略与 Semrush 的筛选要求" /></Form.Item>
-              <Form.Item name={["ai_rule_profile", "ad_copy_requirements"]} label="文案规则" style={{ marginBottom: 6 }}><TextArea rows={2} placeholder="标题/描述结构与语气" /></Form.Item>
-              <Form.Item name={["ai_rule_profile", "sitelink_requirements"]} label="站内链接规则" style={{ marginBottom: 6 }}><TextArea rows={2} placeholder="站内链接标题与描述要求" /></Form.Item>
-              <Form.Item name={["ai_rule_profile", "compliance_requirements"]} label="合规规则" style={{ marginBottom: 6 }}><TextArea rows={2} placeholder="政策与合规自检要求" /></Form.Item>
-              <Form.Item name={["ai_rule_profile", "hard_rules"]} label="硬规则（总述）" style={{ marginBottom: 6 }}><TextArea rows={2} placeholder="必须遵守的硬性约束" /></Form.Item>
-              <Form.Item name={["ai_rule_profile", "preferred_terms"]} label="偏好词" style={{ marginBottom: 6 }}><Select mode="tags" placeholder="输入后回车" tokenSeparators={[",", "，"]} /></Form.Item>
-              <Form.Item name={["ai_rule_profile", "forbidden_terms"]} label="禁止词" style={{ marginBottom: 6 }}><Select mode="tags" placeholder="输入后回车" tokenSeparators={[",", "，"]} /></Form.Item>
-              <Form.Item name={["ai_rule_profile", "enforce_policy_check"]} label="启用政策风险自检" valuePropName="checked" style={{ marginBottom: 6 }}><Switch size="small" /></Form.Item>
-              <Form.Item name={["ai_rule_profile", "prompt_text"]} label="完整提示词（可上传覆盖）" style={{ marginBottom: 0 }}><TextArea rows={4} placeholder="分步说明或长提示词" /></Form.Item>
-            </div>
-          )}
+        <Col xs={24} sm={12} md={6}><Card size="small" className="func-card-ai" title={<><RobotOutlined style={{ color: "#999" }} /> AI 设定（硬规则）</>} extra={<Button type="primary" size="small" icon={<SaveOutlined />} onClick={saveAd}>保存</Button>} style={{ height: "100%" }}>
+          {adData && (() => {
+            const profile = adData.ai_rule_profile;
+            const persona = profile?.persona;
+            const hasKeyword = !!profile?.keyword_requirements;
+            const hasCopy = !!profile?.ad_copy_requirements;
+            const hasSitelink = !!profile?.sitelink_requirements;
+            const hasCompliance = !!profile?.compliance_requirements;
+            const hasHardRules = !!profile?.hard_rules;
+            const hasPrompt = !!profile?.prompt_text;
+            const policyCheck = profile?.enforce_policy_check;
+            const configuredCount = [hasKeyword, hasCopy, hasSitelink, hasCompliance, hasHardRules, hasPrompt].filter(Boolean).length;
+            return (
+              <div style={{ fontSize: 12 }}>
+                <div style={{ marginBottom: 8 }}>
+                  <Text type="secondary" style={{ fontSize: 12 }}>AI 人设</Text>
+                  <div style={{ fontSize: 13, fontWeight: 500, marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{persona || <span style={{ color: "#bfbfbf" }}>未设定</span>}</div>
+                </div>
+                <div style={{ marginBottom: 8 }}>
+                  <Text type="secondary" style={{ fontSize: 12 }}>已配置规则</Text>
+                  <div style={{ fontSize: 13, fontWeight: 500, marginTop: 2 }}>{configuredCount} / 6 项</div>
+                </div>
+                <div style={{ marginBottom: 12 }}>
+                  <Text type="secondary" style={{ fontSize: 12 }}>政策风险自检</Text>
+                  <div style={{ marginTop: 2 }}><Tag color={policyCheck ? "green" : "default"}>{policyCheck ? "已启用" : "未启用"}</Tag></div>
+                </div>
+                <Button block icon={<RobotOutlined />} onClick={() => setAiModalOpen(true)}>编辑 AI 规则</Button>
+              </div>
+            );
+          })()}
         </Card></Col>
       </Row>
     </Form>
@@ -398,6 +414,42 @@ export default function MerchantsPage() {
       </Form>
     </Modal>
     <Modal title={rTitle} open={rModal} onCancel={() => setRModal(false)} footer={null} width={480}><div style={{ whiteSpace: "pre-wrap", lineHeight: 1.8, padding: "8px 0" }}>{rContent}</div></Modal>
+    <Modal
+      title={<><RobotOutlined style={{ color: "#722ed1", marginRight: 8 }} />AI 设定（硬规则）</>}
+      open={aiModalOpen}
+      onCancel={() => setAiModalOpen(false)}
+      width={640}
+      footer={
+        <Space>
+          <Upload accept=".txt,.md,.text" showUploadList={false} beforeUpload={(f) => onAiPromptUpload(f as File)}>
+            <Button icon={<UploadOutlined />}>上传提示词</Button>
+          </Upload>
+          <Button onClick={() => setAiModalOpen(false)}>取消</Button>
+          <Button type="primary" icon={<SaveOutlined />} onClick={async () => { await saveAd(); setAiModalOpen(false); }}>保存</Button>
+        </Space>
+      }
+    >
+      <Form form={adForm} component={false} layout="vertical" size="small">
+        <div style={{ fontSize: 13 }}>
+          <Form.Item name={["ai_rule_profile", "persona"]} label="AI 人设" style={{ marginBottom: 12 }}><Input placeholder="人设与角色" /></Form.Item>
+          <Row gutter={16}>
+            <Col span={12}><Form.Item name={["ai_rule_profile", "keyword_requirements"]} label="关键词规则" style={{ marginBottom: 12 }}><TextArea rows={3} placeholder="结合预算、CPC、出价策略与 Semrush 的筛选要求" /></Form.Item></Col>
+            <Col span={12}><Form.Item name={["ai_rule_profile", "ad_copy_requirements"]} label="文案规则" style={{ marginBottom: 12 }}><TextArea rows={3} placeholder="标题/描述结构与语气" /></Form.Item></Col>
+          </Row>
+          <Row gutter={16}>
+            <Col span={12}><Form.Item name={["ai_rule_profile", "sitelink_requirements"]} label="站内链接规则" style={{ marginBottom: 12 }}><TextArea rows={3} placeholder="站内链接标题与描述要求" /></Form.Item></Col>
+            <Col span={12}><Form.Item name={["ai_rule_profile", "compliance_requirements"]} label="合规规则" style={{ marginBottom: 12 }}><TextArea rows={3} placeholder="政策与合规自检要求" /></Form.Item></Col>
+          </Row>
+          <Form.Item name={["ai_rule_profile", "hard_rules"]} label="硬规则（总述）" style={{ marginBottom: 12 }}><TextArea rows={3} placeholder="必须遵守的硬性约束" /></Form.Item>
+          <Row gutter={16}>
+            <Col span={12}><Form.Item name={["ai_rule_profile", "preferred_terms"]} label="偏好词" style={{ marginBottom: 12 }}><Select mode="tags" placeholder="输入后回车" tokenSeparators={[",", "，"]} /></Form.Item></Col>
+            <Col span={12}><Form.Item name={["ai_rule_profile", "forbidden_terms"]} label="禁止词" style={{ marginBottom: 12 }}><Select mode="tags" placeholder="输入后回车" tokenSeparators={[",", "，"]} /></Form.Item></Col>
+          </Row>
+          <Form.Item name={["ai_rule_profile", "enforce_policy_check"]} label="启用政策风险自检" valuePropName="checked" style={{ marginBottom: 12 }}><Switch size="small" /></Form.Item>
+          <Form.Item name={["ai_rule_profile", "prompt_text"]} label="完整提示词（可上传覆盖）" style={{ marginBottom: 0 }}><TextArea rows={5} placeholder="分步说明或长提示词" /></Form.Item>
+        </div>
+      </Form>
+    </Modal>
     <Modal title={`在投详情 — ${advMerchant?.merchant_name || ""}`} open={advModal} onCancel={() => setAdvModal(false)} footer={null} width={720}>
       {advList.length > 0 && (<div style={{ marginBottom: 12, display: "flex", gap: 24 }}>
         <div><Text type="secondary">总花费（本月）</Text><div style={{ fontSize: 20, fontWeight: 700 }}>${advList.reduce((s, r) => s + parseFloat(r.total_cost || "0"), 0).toFixed(2)}</div></div>
