@@ -18,6 +18,31 @@ interface ModelConfig {
 
 interface Provider { id: string; provider_name: string; }
 
+type ApiEnvelope = { code: number; message?: string; data?: unknown };
+
+async function readApiJson(res: Response): Promise<ApiEnvelope> {
+  const text = await res.text();
+  if (!text) {
+    return {
+      code: res.ok ? 0 : -1,
+      message: res.ok ? "success" : `服务无响应内容 (${res.status})`,
+      data: null,
+    };
+  }
+  try {
+    return JSON.parse(text) as ApiEnvelope;
+  } catch {
+    return {
+      code: -1,
+      message:
+        res.status === 502 || res.status === 503 || res.status === 504
+          ? `网关或服务暂时不可用 (${res.status})，请稍后重试`
+          : `服务返回异常 (${res.status})，请稍后重试`,
+      data: null,
+    };
+  }
+}
+
 export default function AIModelsTab() {
   const { message } = App.useApp();
   const [list, setList] = useState<ModelConfig[]>([]);
@@ -29,9 +54,19 @@ export default function AIModelsTab() {
 
   const fetchData = async () => {
     setLoading(true);
-    const res = await fetch("/api/admin/ai-models").then((r) => r.json());
-    if (res.code === 0) { setList(res.data.configs); setProviders(res.data.providers); }
-    setLoading(false);
+    try {
+      const r = await fetch("/api/admin/ai-models");
+      const res = await readApiJson(r);
+      if (res.code === 0 && res.data && typeof res.data === "object") {
+        const d = res.data as { configs: ModelConfig[]; providers: Provider[] };
+        setList(d.configs);
+        setProviders(d.providers);
+      } else if (res.code !== 0) {
+        message.error(res.message ?? "加载失败");
+      }
+    } finally {
+      setLoading(false);
+    }
   };
 
   useEffect(() => { fetchData(); }, []);
@@ -48,26 +83,44 @@ export default function AIModelsTab() {
     const values = await form.validateFields();
     const method = editItem ? "PUT" : "POST";
     const body = editItem ? { id: editItem.id, ...values } : values;
-    const res = await fetch("/api/admin/ai-models", {
+    const r = await fetch("/api/admin/ai-models", {
       method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
-    }).then((r) => r.json());
-    if (res.code === 0) { message.success(editItem ? "更新成功" : "创建成功"); setModalOpen(false); fetchData(); }
-    else message.error(res.message);
+    });
+    const res = await readApiJson(r);
+    if (res.code === 0) {
+      message.success(editItem ? "更新成功" : "创建成功");
+      setModalOpen(false);
+      fetchData();
+    } else {
+      message.error(res.message ?? "操作失败");
+    }
   };
 
   const handleDelete = async (id: string) => {
-    const res = await fetch("/api/admin/ai-models", {
+    const r = await fetch("/api/admin/ai-models", {
       method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id }),
-    }).then((r) => r.json());
-    if (res.code === 0) { message.success("删除成功"); fetchData(); } else message.error(res.message);
+    });
+    const res = await readApiJson(r);
+    if (res.code === 0) {
+      message.success("删除成功");
+      fetchData();
+    } else {
+      message.error(res.message ?? "删除失败");
+    }
   };
 
   const handleToggle = async (id: string, checked: boolean) => {
-    await fetch("/api/admin/ai-models", {
+    const r = await fetch("/api/admin/ai-models", {
       method: "PUT", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ id, is_active: checked ? 1 : 0 }),
     });
-    fetchData();
+    const res = await readApiJson(r);
+    if (res.code === 0) {
+      fetchData();
+    } else {
+      message.error(res.message ?? "更新启用状态失败");
+      fetchData();
+    }
   };
 
   const sceneLabel = (v: string) => AI_SCENES.find((s) => s.value === v)?.label || v;

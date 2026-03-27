@@ -75,8 +75,9 @@ jobs:
             echo "===== 8. Start service ====="
             cd "$CRM_DIR"
             if command -v pm2 &> /dev/null; then
+              # 始终用 ecosystem 对齐内存/kill_timeout 等（仅 pm2 start 名称不会读入文件变更）
               if pm2 describe ad-automation > /dev/null 2>&1; then
-                pm2 start ad-automation
+                pm2 reload ecosystem.config.cjs --update-env
               else
                 pm2 start ecosystem.config.cjs
               fi
