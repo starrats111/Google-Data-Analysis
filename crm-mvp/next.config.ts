@@ -1,8 +1,17 @@
 import type { NextConfig } from "next";
+import { execSync } from "child_process";
 
 const isProd = process.env.NODE_ENV === "production";
 
 const nextConfig: NextConfig = {
+  generateBuildId: async () => {
+    try {
+      return execSync("git rev-parse --short HEAD", { encoding: "utf-8" }).trim();
+    } catch {
+      return `build-${Date.now()}`;
+    }
+  },
+
   typescript: {
     ignoreBuildErrors: true,
   },

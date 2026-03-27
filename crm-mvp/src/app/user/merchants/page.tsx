@@ -69,7 +69,7 @@ function getFaviconUrl(merchantUrl: string | null | undefined): string | null {
   if (!merchantUrl) return null;
   try {
     const url = new URL(merchantUrl.startsWith("http") ? merchantUrl : `https://${merchantUrl}`);
-    return `https://www.google.com/s2/favicons?domain=${url.hostname}&sz=32`;
+    return `${url.origin}/favicon.ico`;
   } catch { return null; }
 }
 function MerchantNameCell({ rec, onCopy }: { rec: Merchant; onCopy: (link: string) => void }) {
