@@ -172,7 +172,14 @@ function parseMerchants(platform: string, data: Record<string, unknown>): Platfo
     const commission = String(item.comm_rate || item.commission_rate || item.commissionRate || item.commission || "");
     const regions = parseRegions(item.support_region || item.supported_regions || item.regions || item.country || "");
     const url = String(item.site_url || item.merchant_url || item.url || item.website || item.domain || item.homepage || "");
-    const logo = String(item.logo || item.logo_url || item.logoUrl || "");
+    const logo = String(
+      item.logo || item.logo_url || item.logoUrl ||
+      item.icon || item.icon_url || item.iconUrl ||
+      item.merchant_logo || item.merchantLogo ||
+      item.image || item.image_url || item.imageUrl ||
+      item.thumbnail || item.thumb ||
+      item.m_icon || item.favicon || ""
+    );
     const campaignLink = String(
       item.tracking_url || item.trackingUrl ||
       item.campaign_link || item.campaignLink ||
