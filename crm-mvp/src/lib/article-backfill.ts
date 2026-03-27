@@ -235,12 +235,11 @@ async function resolveOwnerForEntry(siteId: bigint, entry: RemoteSiteArticleInde
   return null;
 }
 
-async function findExistingArticle(siteId: bigint, entry: RemoteSiteArticleIndexEntry, publishedUrl: string, userId?: bigint) {
+async function findExistingArticle(siteId: bigint, entry: RemoteSiteArticleIndexEntry, publishedUrl: string, _userId?: bigint) {
   const candidates = await prisma.articles.findMany({
     where: {
       is_deleted: 0,
       publish_site_id: siteId,
-      ...(userId ? { user_id: userId } : {}),
       OR: [
         { slug: entry.slug },
         { published_url: publishedUrl },
