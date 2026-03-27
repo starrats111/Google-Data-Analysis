@@ -176,7 +176,7 @@ export default function AdPreviewPage() {
     discount_type: "MONETARY" | "PERCENT"; discount_amount?: number; discount_percent?: number;
     currency_code?: string; promo_code?: string; final_url?: string;
   }>({
-    promotion_target: "", discount_type: "PERCENT", discount_percent: 10,
+    promotion_target: "", discount_type: "PERCENT", discount_percent: 0,
     currency_code: "USD", language_code: "en", final_url: "",
   });
 
@@ -726,12 +726,13 @@ export default function AdPreviewPage() {
         if (data && typeof data === "object") {
           const p = data as Record<string, unknown>;
           setEnablePromotion(true);
+          const hasDiscount = p.discount_type === "PERCENT" || p.discount_type === "MONETARY";
           setPromotion((prev) => ({
             ...prev,
             promotion_target: String(p.promotion_target || prev.promotion_target || ""),
-            discount_type: (p.discount_type === "MONETARY" ? "MONETARY" : "PERCENT") as "MONETARY" | "PERCENT",
-            discount_percent: p.discount_percent != null ? Number(p.discount_percent) : prev.discount_percent,
-            discount_amount: p.discount_amount != null ? Number(p.discount_amount) : prev.discount_amount,
+            discount_type: (hasDiscount ? p.discount_type : prev.discount_type) as "MONETARY" | "PERCENT",
+            discount_percent: p.discount_percent != null ? Number(p.discount_percent) : (hasDiscount && p.discount_type === "PERCENT" ? 0 : prev.discount_percent),
+            discount_amount: p.discount_amount != null ? Number(p.discount_amount) : (hasDiscount && p.discount_type === "MONETARY" ? 0 : prev.discount_amount),
             promo_code: p.promo_code ? String(p.promo_code) : prev.promo_code,
             occasion: p.occasion ? String(p.occasion) : prev.occasion,
             final_url: String(p.final_url || prev.final_url || merchantLandingUrl),

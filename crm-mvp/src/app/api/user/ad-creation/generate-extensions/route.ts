@@ -24,6 +24,43 @@ function formatAiRuleBlock(profile: unknown | null | undefined, section: "siteli
 }
 
 /**
+ * AI 语义缩略：将超过 maxLen 的文案用 AI 缩写，保留核心含义和商业意图
+ * 一次调用批量处理所有超长项，失败时降级为 smartTruncate
+ */
+async function condenseOverlong(items: string[], maxLen: number, languageName: string): Promise<string[]> {
+  const overlong = items
+    .map((text, idx) => ({ idx, text }))
+    .filter((item) => item.text.length > maxLen);
+  if (overlong.length === 0) return items;
+
+  try {
+    const condensedPrompt = `Condense each line to ≤${maxLen} characters. Keep the same language (${languageName}). Preserve brand names, numbers, and key selling points. Do NOT add new information.
+
+${overlong.map((item, i) => `${i + 1}. "${item.text}" (${item.text.length} chars)`).join("\n")}
+
+Return ONLY a JSON array of condensed strings in the same order.`;
+    const rawResult = await callAiWithFallback("ad_copy", [{ role: "user", content: condensedPrompt }], 1024);
+    const condensed = JSON.parse(extractJsonFromAi(rawResult));
+    if (!Array.isArray(condensed) || condensed.length !== overlong.length) throw new Error("AI 返回数量不匹配");
+
+    const result = [...items];
+    for (let i = 0; i < overlong.length; i++) {
+      const c = String(condensed[i] || "").trim();
+      if (c.length >= 2 && c.length <= maxLen) {
+        result[overlong[i].idx] = c;
+      } else {
+        result[overlong[i].idx] = smartTruncate(overlong[i].text, maxLen);
+      }
+    }
+    console.log(`[condenseOverlong] AI 缩略 ${overlong.length} 条超长文案 (maxLen=${maxLen})`);
+    return result;
+  } catch (err) {
+    console.warn("[condenseOverlong] AI 缩略失败，降级为 smartTruncate:", err instanceof Error ? err.message : err);
+    return items.map((text) => text.length > maxLen ? smartTruncate(text, maxLen) : text);
+  }
+}
+
+/**
  * POST /api/user/ad-creation/generate-extensions
  *
  * types 支持:
@@ -189,16 +226,52 @@ Return ONLY valid JSON, no explanation.`;
     const raw = await callAiWithFallback("ad_copy", [{ role: "user", content: prompt }], 4096);
     const parsed = JSON.parse(extractJsonFromAi(raw));
 
-    // 处理标题
-    const headlines = Array.isArray(parsed.headlines)
-      ? parsed.headlines.filter((h: string) => h && h.length <= 30).slice(0, 15)
+    // 处理标题：超长的用 AI 语义缩略（保留含义），而非直接丢弃
+    let rawHeadlines = Array.isArray(parsed.headlines)
+      ? parsed.headlines.filter((h: string) => h && h.trim())
       : [];
+    rawHeadlines = await condenseOverlong(rawHeadlines, 30, market.languageName);
+    let headlines = rawHeadlines.filter((h: string) => h.length >= 2 && h.length <= 30).slice(0, 15);
+
+    // 标题不足15条时，用 padHeadlines 补全
+    if (headlines.length < 15) {
+      try {
+        const { padHeadlines } = await import("@/lib/ai-service");
+        headlines = await padHeadlines(headlines, merchantName, country, 15, {
+          referenceItems: cache.semrushTitles,
+          dailyBudget: Number(adSettings?.daily_budget || 2),
+          maxCpc: Number(adSettings?.max_cpc || 0.3),
+          biddingStrategy: adSettings?.bidding_strategy || "MAXIMIZE_CLICKS",
+          aiRuleProfile,
+        });
+      } catch (padErr) {
+        console.warn("[Core] padHeadlines 补全失败:", padErr instanceof Error ? padErr.message : padErr);
+      }
+    }
     send("headlines", headlines);
 
-    // 处理描述
-    const descriptions = Array.isArray(parsed.descriptions)
-      ? parsed.descriptions.filter((d: string) => d && d.length >= 40 && d.length <= 90).slice(0, 4)
+    // 处理描述：超长的用 AI 语义缩略
+    let rawDescs = Array.isArray(parsed.descriptions)
+      ? parsed.descriptions.filter((d: string) => d && d.trim())
       : [];
+    rawDescs = await condenseOverlong(rawDescs, 90, market.languageName);
+    let descriptions = rawDescs.filter((d: string) => d.length >= 40 && d.length <= 90).slice(0, 4);
+
+    // 描述不足4条时，用 padDescriptions 补全
+    if (descriptions.length < 4) {
+      try {
+        const { padDescriptions } = await import("@/lib/ai-service");
+        descriptions = await padDescriptions(descriptions, merchantName, country, 4, {
+          referenceItems: cache.semrushDescriptions,
+          dailyBudget: Number(adSettings?.daily_budget || 2),
+          maxCpc: Number(adSettings?.max_cpc || 0.3),
+          biddingStrategy: adSettings?.bidding_strategy || "MAXIMIZE_CLICKS",
+          aiRuleProfile,
+        });
+      } catch (padErr) {
+        console.warn("[Core] padDescriptions 补全失败:", padErr instanceof Error ? padErr.message : padErr);
+      }
+    }
     send("descriptions", descriptions);
 
     // 处理站内链接
@@ -402,9 +475,11 @@ Return ONLY a JSON object with applicable keys:
         description: String(p.description || "").slice(0, 25),
         price: Number(p.price),
         currency: String(p.currency || market.currencyCode),
-        url: "",
+        url: merchantUrl,
       }));
-      if (items.length === 0 && priceItems.length > 0) items = priceItems;
+      if (items.length === 0 && priceItems.length > 0) {
+        items = priceItems.map((p) => ({ ...p, url: p.url || merchantUrl }));
+      }
       send("price_items", items);
     }
 
