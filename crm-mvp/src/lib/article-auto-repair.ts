@@ -94,9 +94,9 @@ export async function autoRepairPublishedArticles(options: RepairOptions = {}): 
       }
     }
 
-    repairLastRunAt.set(scopeKey, Date.now());
     return result;
   } finally {
+    repairLastRunAt.set(scopeKey, Date.now());
     repairLocks.delete(scopeKey);
   }
 }

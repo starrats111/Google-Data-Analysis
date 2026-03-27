@@ -769,6 +769,7 @@ Return ONLY JSON array.`;
       console.warn(`[padHeadlines] 校验不通过 (attempt ${attempt + 1}): 折扣=${hasDiscount}, 物流=${hasShipping}, 品牌首条=${firstIsBrand}, 共${combined.length}条 → 重试`);
     } catch (err) {
       console.error(`[padHeadlines] AI 生成失败 (attempt ${attempt + 1}):`, err);
+      if (err instanceof Error && err.message.includes("insufficient_user_quota")) break;
     }
   }
 
@@ -858,6 +859,7 @@ Return ONLY JSON array.`;
       console.warn(`[padDescriptions] 校验不通过 (attempt ${attempt + 1}): 折扣+物流组合=${comboCount}, 共${combined.length}条 → 重试`);
     } catch (err) {
       console.error(`[padDescriptions] AI 生成失败 (attempt ${attempt + 1}):`, err);
+      if (err instanceof Error && err.message.includes("insufficient_user_quota")) break;
     }
   }
 
