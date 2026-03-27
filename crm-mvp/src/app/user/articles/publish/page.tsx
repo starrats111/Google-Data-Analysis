@@ -160,7 +160,6 @@ export default function ArticlePublishPage() {
             return;
           }
 
-          // 加载文章的权威图片列表（广告提交时已同步）并用于重建 content
           let finalContent = article.content;
           const articleImages: string[] = Array.isArray(article.images) ? article.images.filter((u: unknown) => typeof u === "string" && (u as string).trim()) : [];
           if (articleImages.length > 0) {
@@ -199,7 +198,11 @@ export default function ArticlePublishPage() {
           }
         }
       } catch {
-        setLoadingArticle(false);
+        if (retries < 40) {
+          setTimeout(() => pollArticle(retries + 1), 3000);
+        } else {
+          setLoadingArticle(false);
+        }
       }
     };
 
@@ -299,35 +302,44 @@ export default function ArticlePublishPage() {
       }).then((r) => r.json());
 
       if (res.code === 0 && res.data?.id) {
-        // 轮询等待文章生成完成
         const articleId = res.data.id;
         let retries = 0;
         const poll = async () => {
-          const check = await fetch(`/api/user/articles?page=1&pageSize=1`).then((r) => r.json());
-          const article = check.data?.articles?.find((a: any) => String(a.id) === String(articleId));
-          if (article && article.status === "failed") {
-            message.error("文章生成失败，请检查 AI 配置后重试");
-            setGenerating(false);
-          } else if (article && article.status !== "generating") {
-            if (!article.content) {
-              message.error("文章内容为空，AI 生成可能异常，请重试");
+          try {
+            const check = await fetch(`/api/user/articles?id=${articleId}&page=1&pageSize=1`).then((r) => r.json());
+            const article = check.data?.articles?.[0];
+            if (article && article.status === "failed") {
+              message.error("文章生成失败，请检查 AI 配置后重试");
               setGenerating(false);
+            } else if (article && article.status !== "generating") {
+              if (!article.content) {
+                message.error("文章内容为空，AI 生成可能异常，请重试");
+                setGenerating(false);
+              } else {
+                setArticlePreview({
+                  id: article.id,
+                  title: article.title || "无标题",
+                  content: article.content,
+                  slug: article.slug || "",
+                });
+                setStep(4);
+                setGenerating(false);
+              }
+            } else if (retries < 60) {
+              retries++;
+              setTimeout(poll, 3000);
             } else {
-              setArticlePreview({
-                id: article.id,
-                title: article.title || "无标题",
-                content: article.content,
-                slug: article.slug || "",
-              });
-              setStep(4);
+              message.warning("文章生成超时，请在文章列表中查看");
               setGenerating(false);
             }
-          } else if (retries < 60) {
-            retries++;
-            setTimeout(poll, 3000);
-          } else {
-            message.warning("文章生成超时，请在文章列表中查看");
-            setGenerating(false);
+          } catch {
+            if (retries < 60) {
+              retries++;
+              setTimeout(poll, 3000);
+            } else {
+              message.warning("文章状态查询失败，请刷新页面查看");
+              setGenerating(false);
+            }
           }
         };
         setTimeout(poll, 5000);

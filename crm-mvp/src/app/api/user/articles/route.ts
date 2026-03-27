@@ -13,13 +13,15 @@ export async function GET(req: NextRequest) {
     if (!user) return apiError("未授权", 401);
 
     const { searchParams } = new URL(req.url);
+    const articleId = searchParams.get("id") || "";
     const status = searchParams.get("status") || "";
     const merchant_id = searchParams.get("merchant_id") || "";
     const slug = searchParams.get("slug") || "";
     const page = parseInt(searchParams.get("page") || "1");
     const pageSize = parseInt(searchParams.get("pageSize") || "20");
 
-    if ((!status || status === "published") && page === 1) {
+    // 按 ID 查询（轮询场景）跳过 auto-repair 以降低延迟
+    if (!articleId && (!status || status === "published") && page === 1) {
       try {
         await Promise.race([
           autoRepairPublishedArticles({ userId: BigInt(user.userId), limit: 8 }),
@@ -51,6 +53,7 @@ export async function GET(req: NextRequest) {
       user_id: BigInt(user.userId),
       is_deleted: 0,
     };
+    if (articleId) where.id = BigInt(articleId);
     if (status) where.status = status;
     if (merchant_id) where.user_merchant_id = BigInt(merchant_id);
     if (slug) where.slug = slug;
