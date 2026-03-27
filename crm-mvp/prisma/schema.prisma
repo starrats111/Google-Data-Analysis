@@ -137,6 +137,10 @@ model user_merchants {
   policy_status          String  @default("pending") @db.VarChar(16)  // pending / clean / restricted / prohibited
   policy_category_code   String? @db.VarChar(32)  // 匹配到的政策类别代码，如 alcohol / gambling
   platform_connection_id BigInt? @db.UnsignedBigInt // 关联到具体平台账号
+  // 链接可达性检测
+  link_status            String  @default("unchecked") @db.VarChar(16)  // unchecked / valid / invalid
+  link_checked_at        DateTime? @db.DateTime(0)
+  link_check_reason      String? @db.VarChar(255)
   is_deleted        Int       @default(0) @db.TinyInt
   created_at        DateTime  @default(now()) @db.DateTime(0)
   updated_at        DateTime  @default(now()) @updatedAt @db.DateTime(0)
