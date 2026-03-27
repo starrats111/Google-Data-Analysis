@@ -596,7 +596,22 @@ async function getSceneModels(scene: string): Promise<AiModelConfig[]> {
   return result;
 }
 
-/** 调用 AI API（OpenAI 兼容格式），429 自动退避重试 */
+/** 判断是否为连接超时/网络错误（值得立即重试） */
+function isConnectError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  const msg = err.message || "";
+  const cause = (err as { cause?: { code?: string; message?: string } }).cause;
+  return (
+    msg.includes("fetch failed") ||
+    msg.includes("ConnectTimeoutError") ||
+    msg.includes("ECONNRESET") ||
+    msg.includes("ECONNREFUSED") ||
+    cause?.code === "UND_ERR_CONNECT_TIMEOUT" ||
+    cause?.code === "ECONNRESET"
+  );
+}
+
+/** 调用 AI API（OpenAI 兼容格式），连接超时自动重试，429 自动退避 */
 async function callAi(
   config: AiModelConfig,
   messages: { role: string; content: string }[],
@@ -614,17 +629,28 @@ async function callAi(
     temperature: config.temperature,
   });
 
-  const MAX_RETRIES = 1;
+  const MAX_RETRIES = 2;
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
-    const res = await fetch(url, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${config.apiKey}`,
-        "Content-Type": "application/json",
-      },
-      body,
-      signal: AbortSignal.timeout(90000),
-    });
+    let res: Response;
+    try {
+      res = await fetch(url, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${config.apiKey}`,
+          "Content-Type": "application/json",
+        },
+        body,
+        signal: AbortSignal.timeout(120000),
+      });
+    } catch (err) {
+      if (isConnectError(err) && attempt < MAX_RETRIES) {
+        const delay = 2000 * (attempt + 1);
+        console.warn(`[AI] ${config.modelName} 连接失败(${attempt + 1}/${MAX_RETRIES})，${delay / 1000}s 后重试`);
+        await new Promise((r) => setTimeout(r, delay));
+        continue;
+      }
+      throw err;
+    }
 
     if (res.status === 429 && attempt < MAX_RETRIES) {
       const retryAfter = parseInt(res.headers.get("retry-after") || "0", 10);
