@@ -22,7 +22,7 @@ export async function GET(req: NextRequest) {
   if (!mcc) return apiError("MCC 账户不存在", 404);
 
   const cids = await prisma.mcc_cid_accounts.findMany({
-    where: { mcc_account_id: BigInt(mccAccountId), is_deleted: 0 },
+    where: { mcc_account_id: BigInt(mccAccountId), is_deleted: 0, status: "active" },
     orderBy: { customer_id: "asc" },
   });
 
@@ -79,13 +79,15 @@ export async function POST(req: NextRequest) {
     });
     const existingMap = new Map(existingCids.map((c) => [c.customer_id, c]));
 
-    let created = 0, updated = 0;
+    let created = 0, updated = 0, cancelled = 0;
+    const googleCidSet = new Set(childAccounts.map((c) => c.customer_id));
+
     for (const child of childAccounts) {
       const existing = existingMap.get(child.customer_id);
       if (existing) {
         await prisma.mcc_cid_accounts.update({
           where: { id: existing.id },
-          data: { customer_name: child.customer_name, last_synced_at: new Date() },
+          data: { customer_name: child.customer_name, status: "active", last_synced_at: new Date() },
         });
         updated++;
       } else {
@@ -102,8 +104,18 @@ export async function POST(req: NextRequest) {
       }
     }
 
+    for (const existing of existingCids) {
+      if (!googleCidSet.has(existing.customer_id) && existing.status === "active") {
+        await prisma.mcc_cid_accounts.update({
+          where: { id: existing.id },
+          data: { status: "cancelled", is_available: "N" },
+        });
+        cancelled++;
+      }
+    }
+
     const allCids = await prisma.mcc_cid_accounts.findMany({
-      where: { mcc_account_id: BigInt(mcc_account_id), is_deleted: 0 },
+      where: { mcc_account_id: BigInt(mcc_account_id), is_deleted: 0, status: "active" },
       orderBy: { customer_id: "asc" },
     });
 
@@ -127,7 +139,7 @@ export async function POST(req: NextRequest) {
 
     return apiSuccess(serializeData({
       cids: cidsWithAvailability,
-      synced: { created, updated, total: allCids.length },
+      synced: { created, updated, cancelled, total: allCids.length },
     }));
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
