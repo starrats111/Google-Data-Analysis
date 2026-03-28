@@ -1,23 +1,30 @@
 import prisma from "@/lib/prisma";
 
 /**
- * 从广告系列名称中提取序号
+ * 校验名称是否符合系统命名格式: 序号-平台-商家名-国家(2字母)-日期(MMDD)-MID
+ * 至少 6 段，且国家位(parts[3])为 2 位字母、日期位(parts[4])为 4 位数字
+ */
+function isSystemCampaignName(parts: string[]): boolean {
+  if (parts.length < 6) return false;
+  if (!/^\d+$/.test(parts[0])) return false;
+  if (!/^[A-Z]{2}$/i.test(parts[3])) return false;
+  if (!/^\d{4}$/.test(parts[4])) return false;
+  return true;
+}
+
+/**
+ * 从广告系列名称中提取序号（仅识别系统命名格式）
  */
 function extractSeqFromName(name: string, namingRule: string, platformLabel?: string): number {
   if (!name) return 0;
+  const parts = name.split("-");
+  if (!isSystemCampaignName(parts)) return 0;
+
   if (namingRule === "per_platform") {
-    const parts = name.split("-");
-    if (parts.length < 2) return 0;
     if (platformLabel && parts[1]?.trim().toUpperCase() !== platformLabel.toUpperCase()) return 0;
-    const seqPart = parts[0].replace(/^[a-zA-Z]+/, "");
-    if (!/^\d+$/.test(seqPart)) return 0;
-    return parseInt(seqPart, 10);
-  } else {
-    const firstPart = name.split("-")[0] || "";
-    const seqPart = firstPart.replace(/^[a-zA-Z]+/, "");
-    if (!/^\d+$/.test(seqPart)) return 0;
-    return parseInt(seqPart, 10);
   }
+
+  return parseInt(parts[0], 10);
 }
 
 /**
@@ -47,18 +54,24 @@ export async function generateCampaignName(
   const platformLabel = platform;
 
   // 1. 从 CRM 数据库查 maxSeq（带事务锁防并发）
-  // 不过滤 is_deleted 和 mcc_id，确保序号全局递增、不重复、不跳号
+  // 按 MCC 过滤（含 mcc_id 为 NULL 的记录），不过滤 is_deleted 防止序号重复
+  const dbWhere: Record<string, unknown> = { user_id: userId };
+  if (mccId) {
+    dbWhere.OR = [{ mcc_id: mccId }, { mcc_id: null }];
+  }
   const dbMaxSeq = await prisma.$transaction(async (tx) => {
     const existingCampaigns = await tx.campaigns.findMany({
-      where: { user_id: userId },
+      where: dbWhere as any,
       select: { campaign_name: true },
     });
 
     let max = 0;
+    let maxName = "";
     for (const c of existingCampaigns) {
       const num = extractSeqFromName(c.campaign_name || "", namingRule, platformLabel);
-      if (num > max) max = num;
+      if (num > max) { max = num; maxName = c.campaign_name || ""; }
     }
+    if (max > 0) console.log(`[CampaignNaming] DB maxSeq=${max} from "${maxName}" (total ${existingCampaigns.length} campaigns)`);
     return max;
   }, { isolationLevel: "Serializable" });
 
@@ -102,12 +115,14 @@ export async function generateCampaignName(
                 WHERE campaign.status != 'REMOVED'
               `);
               let batchMax = 0;
+              let batchMaxName = "";
               for (const row of rows) {
                 const c = row.campaign as Record<string, unknown> | undefined;
                 const name = String(c?.name ?? "");
                 const num = extractSeqFromName(name, namingRule, platformLabel);
-                if (num > batchMax) batchMax = num;
+                if (num > batchMax) { batchMax = num; batchMaxName = name; }
               }
+              if (batchMax > 0) console.log(`[CampaignNaming] Google Ads CID ${cid.customer_id} maxSeq=${batchMax} from "${batchMaxName}" (${rows.length} campaigns)`);
               return batchMax;
             }),
           );
@@ -125,5 +140,6 @@ export async function generateCampaignName(
 
   const maxSeq = Math.max(dbMaxSeq, googleMaxSeq);
   const seqStr = String(maxSeq + 1).padStart(3, "0");
+  console.log(`[CampaignNaming] Final: dbMax=${dbMaxSeq}, googleMax=${googleMaxSeq} → seq=${seqStr}`);
   return `${seqStr}-${platformLabel}-${cleanName}-${country}-${mmdd}-${merchantId}`;
 }
