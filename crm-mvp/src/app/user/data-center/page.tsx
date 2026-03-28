@@ -261,32 +261,35 @@ export default function DataCenterPage() {
       let transactionSynced = false;
       const errors: string[] = [];
 
+      const todayStr = dayjs().tz(TZ).format("YYYY-MM-DD");
+      const sevenDaysAgoStr = dayjs().tz(TZ).subtract(6, "day").format("YYYY-MM-DD");
+
       const txnRes = await fetch("/api/user/data-center/sync", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ type: "platform", force_full_sync: true }),
+        body: JSON.stringify({ type: "platform", sync_start_date: sevenDaysAgoStr, sync_end_date: todayStr }),
       }).then((r) => r.json());
       if (txnRes.code === 0) {
         transactionSynced = true;
       } else {
-        errors.push(`交易全同步失败：${txnRes.message || "未知错误"}`);
+        errors.push(`商家交易刷新失败：${txnRes.message || "未知错误"}`);
       }
 
       for (const mccId of idsToSync) {
         const res = await fetch("/api/user/data-center/sync", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ type: "ads", mcc_account_id: mccId, force_full_sync: true }),
+          body: JSON.stringify({ type: "ads", mcc_account_id: mccId, sync_start_date: todayStr, sync_end_date: todayStr }),
         }).then((r) => r.json());
         if (res.code === 0) successCount++;
         else errors.push(res.message);
       }
 
       if (transactionSynced || successCount > 0) {
-        message.success(`全量同步完成：交易${transactionSynced ? "已完成" : "失败"}，MCC 成功 ${successCount} 个${errors.length > 0 ? `，${errors.length} 项异常` : ""}`);
+        message.success(`刷新完成：商家交易${transactionSynced ? "已完成" : "失败"}，MCC 成功 ${successCount} 个${errors.length > 0 ? `，${errors.length} 项异常` : ""}`);
         refreshApi(/\/api\/user\/data-center/);
       } else {
-        message.error(errors[0] || "全量同步失败");
+        message.error(errors[0] || "刷新失败");
       }
     } finally {
       setSyncingFull(false);
@@ -587,15 +590,8 @@ export default function DataCenterPage() {
                   同步MCC
                 </Button>
               </Tooltip>
-              <Tooltip title="执行交易全同步 + MCC 全同步，耗时较长">
-                <Button size="small" icon={<CloudDownloadOutlined />} loading={syncingFull} onClick={() => {
-                  Modal.confirm({
-                    title: "全量同步",
-                    content: "将执行交易全同步和 MCC 全同步，耗时较长，确定继续？",
-                    okText: "确定", cancelText: "取消",
-                    onOk: handleFullSync,
-                  });
-                }}>全量同步</Button>
+              <Tooltip title="同步今日谷歌广告数据 + 近7天商家交易数据">
+                <Button size="small" icon={<RedoOutlined />} loading={syncingFull} onClick={handleFullSync}>刷新</Button>
               </Tooltip>
               <Button size="small" icon={<CloudDownloadOutlined />} loading={syncingCid} onClick={handleSyncCids}>同步 CID</Button>
             </Space>
