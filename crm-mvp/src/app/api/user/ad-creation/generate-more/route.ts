@@ -7,7 +7,7 @@ import { checkItemViolations } from "@/lib/ai-rule-profile";
 import { extractJsonFromAi } from "@/lib/crawl-pipeline";
 import { getAdMarketConfig } from "@/lib/ad-market";
 
-const MAX_COMPLIANCE_RETRIES = 2;
+const MAX_COMPLIANCE_RETRIES = 3;
 
 /**
  * POST /api/user/ad-creation/generate-more
@@ -74,7 +74,7 @@ REJECTED items needing replacement:
 ${violations.map((v, i) => `${i + 1}. "${v.text}" — reason: ${v.reasons.join(", ")}`).join("\n")}
 
 MUST AVOID: ${avoidReasons.join("; ")}
-Never use: guaranteed, risk-free, zero risk, 100% safe, cure, miracle, heals, instant approval, before and after
+Never use these exact words: guaranteed, risk-free, zero risk, 100% safe, cure, cures, miracle, heal, heals, instant approval, before and after
 Each item: ${minLen}-${maxLen} characters. Return ONLY a JSON array of ${violations.length} strings.`;
 
       try {
@@ -95,8 +95,12 @@ Each item: ${minLen}-${maxLen} characters. Return ONLY a JSON array of ${violati
     }
 
     const finalViolations = checkItemViolations(newItems, settings?.ai_rule_profile);
-    for (const v of finalViolations) {
-      remaining.push(`${type === "headlines" ? "标题" : "描述"}「${v.text}」${v.reasons.join("、")}`);
+    if (finalViolations.length > 0) {
+      const removeIndices = new Set(finalViolations.map((v) => v.index));
+      for (const v of finalViolations) {
+        remaining.push(`${type === "headlines" ? "标题" : "描述"}「${v.text}」已删除（${v.reasons.join("、")}）`);
+      }
+      newItems = newItems.filter((_, idx) => !removeIndices.has(idx));
     }
 
     return apiSuccess({

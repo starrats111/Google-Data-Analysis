@@ -61,7 +61,7 @@ Return ONLY a JSON array of condensed strings in the same order.`;
   }
 }
 
-const MAX_COMPLIANCE_RETRIES = 2;
+const MAX_COMPLIANCE_RETRIES = 3;
 
 async function complianceAutoFix(
   items: string[],
@@ -83,6 +83,7 @@ async function complianceAutoFix(
     console.log(`[complianceAutoFix] ${label}第${attempt + 1}次修复: ${violations.length} 条违规`);
 
     const avoidReasons = [...new Set(violations.flatMap((v) => v.reasons))];
+    const violatingTexts = violations.map((v) => v.text.toLowerCase());
 
     const prompt = `Generate ${violations.length} replacement Google Ads RSA ${type === "headline" ? "headlines" : "descriptions"}.
 Merchant: ${merchantName}, Language: ${languageName}
@@ -92,9 +93,10 @@ ${violations.map((v, i) => `${i + 1}. "${v.text}" — reason: ${v.reasons.join("
 
 CRITICAL AVOIDANCE RULES — your output will be auto-checked, violations cause rejection:
 ${avoidReasons.map((r) => `- MUST NOT trigger: ${r}`).join("\n")}
-- Never use: guaranteed, risk-free, zero risk, 100% safe, cure, miracle, heals, instant approval, before and after
-- Use factual, benefit-driven language instead of absolute promises
+- Never use these exact words: guaranteed, risk-free, zero risk, 100% safe, cure, cures, miracle, heal, heals, instant approval, before and after
+- Use factual, benefit-driven language instead of absolute promises or medical claims
 - Each ${type === "headline" ? "headline" : "description"}: ${minLen}-${maxLen} characters
+- IMPORTANT: Write COMPLETELY DIFFERENT content from the rejected items, do not just rephrase them
 Return ONLY a JSON array of ${violations.length} strings.`;
 
     try {
@@ -115,11 +117,19 @@ Return ONLY a JSON array of ${violations.length} strings.`;
     }
   }
 
+  // 最终检查：仍然违规的直接删除，不保留
   const finalViolations = checkItemViolations(current, aiRuleProfile);
-  const remaining = finalViolations.map((v) => {
+  const remaining: string[] = [];
+  if (finalViolations.length > 0) {
     const label = type === "headline" ? "标题" : "描述";
-    return `${label}「${v.text}」${v.reasons.join("、")}`;
-  });
+    const removeIndices = new Set(finalViolations.map((v) => v.index));
+    for (const v of finalViolations) {
+      remaining.push(`${label}「${v.text}」已删除（${v.reasons.join("、")}）`);
+    }
+    current = current.filter((_, idx) => !removeIndices.has(idx));
+    console.log(`[complianceAutoFix] ${label}最终删除 ${finalViolations.length} 条无法修复的违规项`);
+  }
+
   return { items: current, fixed: allFixed, remaining };
 }
 
@@ -336,6 +346,24 @@ Return ONLY valid JSON, no explanation.`;
     // 合规自动修复：标题
     const headlineFix = await complianceAutoFix(headlines, "headline", merchantName, market.languageName, aiRuleProfile, 30, 2);
     headlines = headlineFix.items;
+
+    // 违规项被删除后，不足 15 条时补全一次（不再做二次合规，避免循环）
+    if (headlines.length < 15) {
+      try {
+        const { padHeadlines } = await import("@/lib/ai-service");
+        const padded = await padHeadlines(headlines, merchantName, country, 15, {
+          referenceItems: cache.semrushTitles,
+          dailyBudget: Number(adSettings?.daily_budget || 2),
+          maxCpc: Number(adSettings?.max_cpc || 0.3),
+          biddingStrategy: adSettings?.bidding_strategy || "MAXIMIZE_CLICKS",
+          aiRuleProfile,
+        });
+        const newOnly = padded.filter((h: string) => !headlines.includes(h));
+        const cleanNew = newOnly.filter((h: string) => checkItemViolations([h], aiRuleProfile).length === 0);
+        headlines = [...headlines, ...cleanNew].slice(0, 15);
+        console.log(`[Core] 合规删除后补全标题: +${cleanNew.length} 条 (总${headlines.length})`);
+      } catch (e) { console.warn("[Core] 合规后补全标题失败:", e instanceof Error ? e.message : e); }
+    }
     send("headlines", headlines);
 
     // 处理描述：去 AI 味 → 超长缩略 → 过滤
@@ -365,6 +393,24 @@ Return ONLY valid JSON, no explanation.`;
     // 合规自动修复：描述
     const descFix = await complianceAutoFix(descriptions, "description", merchantName, market.languageName, aiRuleProfile, 90, 40);
     descriptions = descFix.items;
+
+    // 违规项被删除后，不足 4 条时补全一次
+    if (descriptions.length < 4) {
+      try {
+        const { padDescriptions } = await import("@/lib/ai-service");
+        const padded = await padDescriptions(descriptions, merchantName, country, 4, {
+          referenceItems: cache.semrushDescriptions,
+          dailyBudget: Number(adSettings?.daily_budget || 2),
+          maxCpc: Number(adSettings?.max_cpc || 0.3),
+          biddingStrategy: adSettings?.bidding_strategy || "MAXIMIZE_CLICKS",
+          aiRuleProfile,
+        });
+        const newOnly = padded.filter((d: string) => !descriptions.includes(d));
+        const cleanNew = newOnly.filter((d: string) => checkItemViolations([d], aiRuleProfile).length === 0);
+        descriptions = [...descriptions, ...cleanNew].slice(0, 4);
+        console.log(`[Core] 合规删除后补全描述: +${cleanNew.length} 条 (总${descriptions.length})`);
+      } catch (e) { console.warn("[Core] 合规后补全描述失败:", e instanceof Error ? e.message : e); }
+    }
     send("descriptions", descriptions);
 
     // 汇总合规修复结果

@@ -33,10 +33,10 @@ export const DEFAULT_AI_RULE_PROFILE: AiRuleProfile = {
 };
 
 const BASIC_POLICY_RISK_PATTERNS: Array<{ label: string; pattern: RegExp }> = [
-  { label: "保证结果/零风险承诺", pattern: /guaranteed?\s+results?|zero\s+risk|risk[\s-]?free|100%\s+safe|instant\s+approval/i },
-  { label: "医疗治愈类承诺", pattern: /cure|miracle|heals?|治疗|治愈|神药/i },
-  { label: "快速致富类承诺", pattern: /make\s+money\s+fast|get\s+rich\s+quick|快速赚钱|暴富/i },
-  { label: "误导性前后对比承诺", pattern: /before\s+and\s+after|before\/after|前后对比/i },
+  { label: "保证结果/零风险承诺", pattern: /\bguaranteed?\s+results?\b|\bzero\s+risk\b|\brisk[\s-]?free\b|\b100%\s+safe\b|\binstant\s+approval\b/i },
+  { label: "医疗治愈类承诺", pattern: /\bcures?\b|\bmiracle\b|\bheals?\b|治疗|治愈|神药/i },
+  { label: "快速致富类承诺", pattern: /\bmake\s+money\s+fast\b|\bget\s+rich\s+quick\b|快速赚钱|暴富/i },
+  { label: "误导性前后对比承诺", pattern: /\bbefore\s+and\s+after\b|\bbefore\/after\b|前后对比/i },
 ];
 
 function normalizeText(value: unknown, fallback = ""): string {
