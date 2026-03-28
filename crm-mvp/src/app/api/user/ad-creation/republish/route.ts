@@ -53,15 +53,6 @@ export async function POST(req: NextRequest) {
     where: { user_id: userId, is_deleted: 0 },
   });
 
-  let connAccountName = "";
-  if (merchant?.platform_connection_id) {
-    const conn = await prisma.platform_connections.findFirst({
-      where: { id: merchant.platform_connection_id, is_deleted: 0 },
-      select: { account_name: true },
-    });
-    connAccountName = conn?.account_name || "";
-  }
-
   let newCampaignName = campaign.campaign_name;
   if (merchant) {
     newCampaignName = await generateCampaignName(
@@ -71,9 +62,10 @@ export async function POST(req: NextRequest) {
       campaign.target_country || "US",
       merchant.merchant_id || "",
       adSettings?.naming_rule || "global",
-      connAccountName,
-      adSettings?.naming_prefix || "",
+      undefined,
+      undefined,
       campaign.mcc_id,
+      campaign.id,
     );
   }
 

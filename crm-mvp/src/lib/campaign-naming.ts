@@ -15,6 +15,12 @@ function isSystemCampaignName(parts: string[]): boolean {
   return true;
 }
 
+export function hasAssignedFormalCampaignName(name: string | null | undefined): boolean {
+  if (!name || name.startsWith("DRAFT-")) return false;
+  const parts = name.split("-");
+  return isSystemCampaignName(parts);
+}
+
 /**
  * 从广告系列名称中提取序号（仅识别系统命名格式）
  */
@@ -30,12 +36,26 @@ function extractSeqFromName(name: string, namingRule: string, platformLabel?: st
   return parseInt(parts[0], 10);
 }
 
-function campaignDbWhere(userId: bigint, mccId?: bigint | null): Record<string, unknown> {
+/**
+ * MCC 范围：与历史逻辑一致（当前 MCC 或尚未写入 mcc 的行）
+ */
+function campaignMccScope(userId: bigint, mccId?: bigint | null): Record<string, unknown> {
   const w: Record<string, unknown> = { user_id: userId };
   if (mccId) {
     w.OR = [{ mcc_id: mccId }, { mcc_id: null }];
   }
   return w;
+}
+
+/**
+ * 仅「已提交 Google 且未删除」的广告系列参与三位序号统计与占号（草稿、已删不占号）
+ */
+export function campaignFormalSequenceWhere(userId: bigint, mccId?: bigint | null): Record<string, unknown> {
+  return {
+    ...campaignMccScope(userId, mccId),
+    is_deleted: 0,
+    google_campaign_id: { not: null },
+  };
 }
 
 function lockKeyForCampaignSeq(userId: bigint, mccId?: bigint | null): string {
@@ -76,7 +96,7 @@ function computeDbMaxSeqFromTx(
     }
   }
   if (max > 0) {
-    console.log(`[CampaignNaming] DB maxSeq=${max} from "${maxName}" (total ${rows.length} campaigns)`);
+    console.log(`[CampaignNaming] DB maxSeq=${max} from "${maxName}" (total ${rows.length} formal campaigns)`);
   }
   return max;
 }
@@ -86,21 +106,30 @@ async function seqPrefixTakenInTx(
   userId: bigint,
   mccId: bigint | null | undefined,
   seq: number,
+  excludeCampaignId?: bigint,
 ): Promise<boolean> {
   const prefix = `${String(seq).padStart(3, "0")}-`;
+  const where: Record<string, unknown> = {
+    ...campaignFormalSequenceWhere(userId, mccId),
+    campaign_name: { startsWith: prefix },
+  };
+  if (excludeCampaignId) {
+    where.id = { not: excludeCampaignId };
+  }
   const row = await tx.campaigns.findFirst({
-    where: {
-      ...campaignDbWhere(userId, mccId),
-      campaign_name: { startsWith: prefix },
-    } as never,
+    where: where as never,
     select: { id: true },
   });
   return !!row;
 }
 
 /**
- * 从 Google Ads 拉取当前 MCC 下各 CID 广告系列名称中的最大系统序号（在事务外调用，避免长时间持锁）
+ * 认领商家时占位名：不参与系统序号（首段非纯数字），提交 Google 时再分配正式 NNN-
  */
+export function buildDraftCampaignName(userId: bigint, userMerchantId: bigint): string {
+  return `DRAFT-u${userId}-m${userMerchantId}-${Date.now()}`;
+}
+
 export function campaignNameCleanAndMmdd(merchantName: string): { cleanName: string; mmdd: string } {
   const now = new Date();
   const mmdd = `${String(now.getMonth() + 1).padStart(2, "0")}${String(now.getDate()).padStart(2, "0")}`;
@@ -197,16 +226,18 @@ export type NextCampaignNameTxArgs = {
   country: string;
   mmdd: string;
   merchantId: string;
+  /** 重命名本行时，前缀冲突检测排除自身 */
+  excludeCampaignId?: bigint;
 };
 
 /**
- * 在已持有命名锁的事务内，计算下一个不重名的广告系列名称（含前缀冲突自增）
+ * 在已持有命名锁的事务内，计算下一个不重名的正式广告系列名称（仅与已提交行冲突检测）
  */
 export async function resolveNextCampaignNameInTx(tx: TxClient, args: NextCampaignNameTxArgs): Promise<string> {
-  const { userId, mccId, namingRule, platformLabel, googleMaxSeq, cleanName, country, mmdd, merchantId } = args;
+  const { userId, mccId, namingRule, platformLabel, googleMaxSeq, cleanName, country, mmdd, merchantId, excludeCampaignId } = args;
 
   const existingCampaigns = await tx.campaigns.findMany({
-    where: campaignDbWhere(userId, mccId) as never,
+    where: campaignFormalSequenceWhere(userId, mccId) as never,
     select: { campaign_name: true },
   });
 
@@ -214,7 +245,7 @@ export async function resolveNextCampaignNameInTx(tx: TxClient, args: NextCampai
   let seq = Math.max(dbMaxSeq, googleMaxSeq) + 1;
 
   let guard = 0;
-  while (await seqPrefixTakenInTx(tx, userId, mccId, seq)) {
+  while (await seqPrefixTakenInTx(tx, userId, mccId, seq, excludeCampaignId)) {
     seq += 1;
     if (++guard > 5000) {
       throw new Error("广告系列序号分配失败：冲突过多，请联系管理员");
@@ -226,9 +257,6 @@ export async function resolveNextCampaignNameInTx(tx: TxClient, args: NextCampai
   return `${seqStr}-${platformLabel}-${cleanName}-${country}-${mmdd}-${merchantId}`;
 }
 
-/**
- * 领取商家等场景：在持锁事务内创建 campaign 行，避免并发拿到同一序号
- */
 export async function acquireCampaignSeqLockInTx(tx: TxClient, userId: bigint, mccId?: bigint | null): Promise<void> {
   await acquireCampaignSeqLock(tx, userId, mccId);
 }
@@ -238,9 +266,7 @@ export async function releaseCampaignSeqLockInTx(tx: TxClient, userId: bigint, m
 }
 
 /**
- * 生成广告系列名称
- * 格式: {序号}-{平台}-{商家名}-{国家}-{日期MMDD}-{MID}
- * 序号取 CRM 数据库 和 Google Ads 中已有名称的最大值 + 1；MySQL 命名锁 + 前缀去重，避免并发重复序号
+ * 生成正式广告系列名称（重新发布等场景，此时本地行可能仍带 google_campaign_id 直至调用方 update）
  */
 export async function generateCampaignName(
   userId: bigint,
@@ -252,7 +278,10 @@ export async function generateCampaignName(
   _accountName?: string,
   _namingPrefix?: string,
   mccId?: bigint | null,
+  excludeCampaignId?: bigint,
 ): Promise<string> {
+  void _accountName;
+  void _namingPrefix;
   const { cleanName, mmdd } = campaignNameCleanAndMmdd(merchantName);
   const platformLabel = platform;
   const googleMaxSeq = await fetchGoogleAdsMaxCampaignSequence(userId, mccId, namingRule, platformLabel);
@@ -270,7 +299,60 @@ export async function generateCampaignName(
         country,
         mmdd,
         merchantId,
+        excludeCampaignId,
       });
+    } finally {
+      await releaseCampaignSeqLock(tx, userId, mccId);
+    }
+  }, { timeout: 25000 });
+}
+
+/**
+ * 首次提交 Google 前：分配正式名称并写回 campaigns 行（持锁事务）
+ */
+export async function assignFormalCampaignNameBeforeSubmit(params: {
+  campaignId: bigint;
+  userId: bigint;
+  mccId: bigint | null;
+  namingRule: string;
+  platformLabel: string;
+  country: string;
+  merchantName: string;
+  merchantId: string;
+}): Promise<string> {
+  const { campaignId, userId, mccId, namingRule, platformLabel, country, merchantName, merchantId } = params;
+
+  const existing = await prisma.campaigns.findFirst({
+    where: { id: campaignId, user_id: userId, is_deleted: 0 },
+    select: { campaign_name: true },
+  });
+  if (existing?.campaign_name && hasAssignedFormalCampaignName(existing.campaign_name)) {
+    return existing.campaign_name;
+  }
+
+  const googleMaxSeq = await fetchGoogleAdsMaxCampaignSequence(userId, mccId, namingRule, platformLabel);
+  const { cleanName, mmdd } = campaignNameCleanAndMmdd(merchantName);
+
+  return prisma.$transaction(async (tx) => {
+    await acquireCampaignSeqLock(tx, userId, mccId);
+    try {
+      const name = await resolveNextCampaignNameInTx(tx, {
+        userId,
+        mccId,
+        namingRule,
+        platformLabel,
+        googleMaxSeq,
+        cleanName,
+        country,
+        mmdd,
+        merchantId,
+        excludeCampaignId: campaignId,
+      });
+      await tx.campaigns.update({
+        where: { id: campaignId },
+        data: { campaign_name: name },
+      });
+      return name;
     } finally {
       await releaseCampaignSeqLock(tx, userId, mccId);
     }

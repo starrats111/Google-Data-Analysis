@@ -641,7 +641,7 @@ export default function DataCenterPage() {
           </span>
         )}
         <div style={{ marginTop: 4 }}>
-          本表仅列出已提交到 Google Ads 的广告系列；未提交草稿、已删除记录仍会占用名称前缀序号，故名称中的三位序号可能不连续，属正常现象。
+          三位序号仅分配给已提交到 Google Ads 的广告系列；草稿为 DRAFT- 占位名，不占序号。已删除、已移除的系列不再保留序号，新系列会按当前最大已提交序号连续递增。
         </div>
       </div>
 

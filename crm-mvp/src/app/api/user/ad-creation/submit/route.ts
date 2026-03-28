@@ -5,6 +5,7 @@ import prisma from "@/lib/prisma";
 import { getAdMarketConfig } from "@/lib/ad-market";
 import { collectAiRuleViolations } from "@/lib/ai-rule-profile";
 import { mutateGoogleAds, dollarsToMicros, queryGoogleAds } from "@/lib/google-ads";
+import { assignFormalCampaignNameBeforeSubmit } from "@/lib/campaign-naming";
 import { readFile } from "fs/promises";
 import { existsSync } from "fs";
 import path from "path";
@@ -206,6 +207,33 @@ export async function POST(req: NextRequest) {
 
   const cid = customerId.replace(/-/g, "");
 
+  const submitMerchant = await prisma.user_merchants.findFirst({
+    where: { id: campaign.user_merchant_id, is_deleted: 0 },
+    select: { merchant_name: true, merchant_id: true, platform: true },
+  });
+  if (!submitMerchant) return apiError("商家不存在", 404);
+
+  const submitAdSettings = await prisma.ad_default_settings.findFirst({
+    where: { user_id: userId, is_deleted: 0 },
+    select: { naming_rule: true },
+  });
+
+  const formalName = await assignFormalCampaignNameBeforeSubmit({
+    campaignId: campaign.id,
+    userId,
+    mccId: campaign.mcc_id,
+    namingRule: submitAdSettings?.naming_rule || "global",
+    platformLabel: submitMerchant.platform || "",
+    country: campaign.target_country || "US",
+    merchantName: submitMerchant.merchant_name || "",
+    merchantId: submitMerchant.merchant_id || "",
+  });
+
+  const campaignFresh = await prisma.campaigns.findFirst({
+    where: { id: campaign.id, user_id: userId, is_deleted: 0 },
+  });
+  if (!campaignFresh) return apiError("广告系列不存在", 404);
+
   // 语言代码 → Google Ads 语言常量 ID
   const LANG_CODE_TO_ID: Record<string, string> = {
     en: "1000", de: "1001", fr: "1002", es: "1003", it: "1004",
@@ -229,8 +257,8 @@ export async function POST(req: NextRequest) {
     FI: "1011", PL: "1030", KR: "1012", IN: "1023",
   };
 
-  const campaignNameToUse = campaign.campaign_name || `Campaign-${Date.now()}`;
-  const countryCode = campaign.target_country?.toUpperCase() || "US";
+  const campaignNameToUse = formalName || campaignFresh.campaign_name || `Campaign-${Date.now()}`;
+  const countryCode = campaignFresh.target_country?.toUpperCase() || "US";
   const market = getAdMarketConfig(countryCode);
 
   // 清理同名冲突的辅助函数（使用 remove 操作而非 update status）
@@ -273,7 +301,7 @@ export async function POST(req: NextRequest) {
       campaign_budget_operation: {
         create: {
           resource_name: budgetTempRn,
-          name: `Budget-${campaign.campaign_name}-${Date.now()}`,
+          name: `Budget-${campaignNameToUse}-${Date.now()}`,
           amount_micros: String(dollarsToMicros(daily_budget)),
           delivery_method: "STANDARD",
           explicitly_shared: false,
@@ -349,7 +377,7 @@ export async function POST(req: NextRequest) {
       ad_group_operation: {
         create: {
           resource_name: adGroupTempRn,
-          name: adGroup.ad_group_name || campaign.campaign_name || `AdGroup-${Date.now()}`,
+          name: adGroup.ad_group_name || campaignNameToUse || `AdGroup-${Date.now()}`,
           campaign: campaignTempRn,
           type: "SEARCH_STANDARD",
           cpc_bid_micros: String(dollarsToMicros(max_cpc_limit)),
@@ -749,7 +777,7 @@ export async function POST(req: NextRequest) {
 
     // ─── 更新数据库记录 ───
     await prisma.campaigns.update({
-      where: { id: campaign.id },
+      where: { id: campaignFresh.id },
       data: {
         google_campaign_id: googleCampaignId,
         customer_id: cid,
@@ -811,7 +839,7 @@ export async function POST(req: NextRequest) {
     return apiSuccess(serializeData({
       google_campaign_id: googleCampaignId,
       customer_id: customerId,
-      campaign_name: campaign.campaign_name,
+      campaign_name: campaignNameToUse,
       article_id: article?.id || null,
       article_slug: article?.slug || null,
       article_status: article?.status || null,
