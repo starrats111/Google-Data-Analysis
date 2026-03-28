@@ -76,10 +76,25 @@ function MerchantAvatar({ name }: { name: string }) {
     </span>
   );
 }
+function getFaviconUrl(merchantUrl: string | null | undefined): string | null {
+  if (!merchantUrl) return null;
+  try {
+    const domain = new URL(merchantUrl.startsWith("http") ? merchantUrl : `https://${merchantUrl}`).hostname;
+    return `https://www.google.com/s2/favicons?domain=${domain}&sz=128`;
+  } catch { return null; }
+}
 function MerchantIcon({ rec }: { rec: Merchant }) {
   const [failed, setFailed] = useState(false);
-  if (!rec.logo_url || failed) return <MerchantAvatar name={rec.merchant_name || ""} />;
-  return <img src={rec.logo_url} alt="" style={{ width: 22, height: 22, borderRadius: 4, objectFit: "contain", flexShrink: 0 }} onError={() => setFailed(true)} />;
+  const [faviconFailed, setFaviconFailed] = useState(false);
+  const faviconUrl = getFaviconUrl(rec.merchant_url);
+
+  if (rec.logo_url && !failed) {
+    return <img src={rec.logo_url} alt="" style={{ width: 22, height: 22, borderRadius: 4, objectFit: "contain", flexShrink: 0 }} onError={() => setFailed(true)} />;
+  }
+  if (faviconUrl && !faviconFailed) {
+    return <img src={faviconUrl} alt="" style={{ width: 22, height: 22, borderRadius: 4, objectFit: "contain", flexShrink: 0 }} onError={() => setFaviconFailed(true)} />;
+  }
+  return <MerchantAvatar name={rec.merchant_name || ""} />;
 }
 function MerchantNameCell({ rec, onCopy }: { rec: Merchant; onCopy: (link: string) => void }) {
   const copyLink = rec.campaign_link || rec.tracking_link;
