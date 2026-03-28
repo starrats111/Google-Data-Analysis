@@ -101,6 +101,7 @@ function computeDbMaxSeqFromTx(
   return max;
 }
 
+/** 任意未删除行占用此前缀即视为冲突（含历史遗留的 NNN- 草稿，避免与新建正式名撞号） */
 async function seqPrefixTakenInTx(
   tx: TxClient,
   userId: bigint,
@@ -110,7 +111,8 @@ async function seqPrefixTakenInTx(
 ): Promise<boolean> {
   const prefix = `${String(seq).padStart(3, "0")}-`;
   const where: Record<string, unknown> = {
-    ...campaignFormalSequenceWhere(userId, mccId),
+    ...campaignMccScope(userId, mccId),
+    is_deleted: 0,
     campaign_name: { startsWith: prefix },
   };
   if (excludeCampaignId) {
