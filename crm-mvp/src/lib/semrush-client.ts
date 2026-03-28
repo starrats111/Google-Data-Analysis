@@ -430,7 +430,8 @@ export class SemRushClient {
     return token;
   }
 
-  private async rpc(payload: unknown): Promise<unknown> {
+  private async rpc(payload: unknown, retryCount = 0): Promise<unknown> {
+    const MAX_RPC_RETRIES = 2;
     if (!this.token) await this.login();
     await guard.waitForSlot();
     const cookieStr = Object.entries(this.cookies).map(([k, v]) => `${k}=${v}`).join("; ");
@@ -462,7 +463,23 @@ export class SemRushClient {
       };
       throw new Error(statusMessages[res.status] || `3UE 服务请求失败 (HTTP ${res.status})，请稍后再试`);
     }
-    return JSON.parse(res.body);
+    try {
+      const body = res.body.trim();
+      if (!body) {
+        throw new Error("3UE 返回空响应");
+      }
+      return JSON.parse(body);
+    } catch (parseErr) {
+      if (retryCount < MAX_RPC_RETRIES) {
+        const wait = (retryCount + 1) * 3000 + Math.floor(Math.random() * 2000);
+        console.warn(`[SemRush] JSON 解析失败 (${retryCount + 1}/${MAX_RPC_RETRIES})，${wait}ms 后重试。body 前200字符: ${res.body.slice(0, 200)}`);
+        await new Promise((r) => setTimeout(r, wait));
+        return this.rpc(payload, retryCount + 1);
+      }
+      const preview = res.body.slice(0, 300);
+      console.error(`[SemRush] JSON 解析最终失败 (已重试${MAX_RPC_RETRIES}次)。body 前300字符: ${preview}`);
+      throw new Error("3UE 服务返回了不完整的数据，请稍后重试");
+    }
   }
 
   async getRatesDate(domain: string): Promise<string> {

@@ -4,7 +4,7 @@ import { apiError } from "@/lib/constants";
 import prisma from "@/lib/prisma";
 import { callAiWithFallback, suggestDisplayPaths } from "@/lib/ai-service";
 import { getAdMarketConfig } from "@/lib/ad-market";
-import { buildAiRulePrompt } from "@/lib/ai-rule-profile";
+import { buildAiRulePrompt, checkItemViolations } from "@/lib/ai-rule-profile";
 import {
   type CrawlCache,
   buildCrawlCache,
@@ -60,6 +60,68 @@ Return ONLY a JSON array of condensed strings in the same order.`;
   }
 }
 
+const MAX_COMPLIANCE_RETRIES = 2;
+
+async function complianceAutoFix(
+  items: string[],
+  type: "headline" | "description",
+  merchantName: string,
+  languageName: string,
+  aiRuleProfile: unknown,
+  maxLen: number,
+  minLen: number,
+): Promise<{ items: string[]; fixed: string[]; remaining: string[] }> {
+  let current = [...items];
+  const allFixed: string[] = [];
+
+  for (let attempt = 0; attempt < MAX_COMPLIANCE_RETRIES; attempt++) {
+    const violations = checkItemViolations(current, aiRuleProfile);
+    if (violations.length === 0) return { items: current, fixed: allFixed, remaining: [] };
+
+    const label = type === "headline" ? "标题" : "描述";
+    console.log(`[complianceAutoFix] ${label}第${attempt + 1}次修复: ${violations.length} 条违规`);
+
+    const avoidReasons = [...new Set(violations.flatMap((v) => v.reasons))];
+
+    const prompt = `Generate ${violations.length} replacement Google Ads RSA ${type === "headline" ? "headlines" : "descriptions"}.
+Merchant: ${merchantName}, Language: ${languageName}
+
+The following were REJECTED for policy violations and need replacements:
+${violations.map((v, i) => `${i + 1}. "${v.text}" — reason: ${v.reasons.join(", ")}`).join("\n")}
+
+CRITICAL AVOIDANCE RULES — your output will be auto-checked, violations cause rejection:
+${avoidReasons.map((r) => `- MUST NOT trigger: ${r}`).join("\n")}
+- Never use: guaranteed, risk-free, zero risk, 100% safe, cure, miracle, heals, instant approval, before and after
+- Use factual, benefit-driven language instead of absolute promises
+- Each ${type === "headline" ? "headline" : "description"}: ${minLen}-${maxLen} characters
+Return ONLY a JSON array of ${violations.length} strings.`;
+
+    try {
+      const raw = await callAiWithFallback("ad_copy", [{ role: "user", content: prompt }], 1024);
+      const parsed = JSON.parse(extractJsonFromAi(raw));
+      if (Array.isArray(parsed)) {
+        for (let i = 0; i < violations.length && i < parsed.length; i++) {
+          const replacement = String(parsed[i] || "").trim();
+          if (replacement.length >= minLen && replacement.length <= maxLen) {
+            allFixed.push(`「${violations[i].text}」→「${replacement}」`);
+            current[violations[i].index] = replacement;
+          }
+        }
+      }
+    } catch (err) {
+      console.warn(`[complianceAutoFix] ${label}第${attempt + 1}次重生成失败:`, err instanceof Error ? err.message : err);
+      break;
+    }
+  }
+
+  const finalViolations = checkItemViolations(current, aiRuleProfile);
+  const remaining = finalViolations.map((v) => {
+    const label = type === "headline" ? "标题" : "描述";
+    return `${label}「${v.text}」${v.reasons.join("、")}`;
+  });
+  return { items: current, fixed: allFixed, remaining };
+}
+
 /**
  * POST /api/user/ad-creation/generate-extensions
  *
@@ -74,20 +136,38 @@ export async function POST(req: NextRequest) {
   const user = getUserFromRequest(req);
   if (!user) return apiError("未授权", 401);
 
-  const body = await req.json();
+  let body: any;
+  try {
+    body = await req.json();
+  } catch (e) {
+    console.error("[Extensions] 请求体 JSON 解析失败:", e instanceof Error ? e.message : e);
+    return apiError("请求体格式错误");
+  }
   const { campaign_id, types = [] } = body;
-  if (!campaign_id) return apiError("缺少 campaign_id");
-  if (!types.length) return apiError("缺少 types");
+  if (!campaign_id) {
+    console.warn("[Extensions] 400: 缺少 campaign_id, body:", JSON.stringify(body).slice(0, 200));
+    return apiError("缺少 campaign_id");
+  }
+  if (!types.length) {
+    console.warn("[Extensions] 400: 缺少 types, campaign_id:", campaign_id);
+    return apiError("缺少 types");
+  }
 
   const campaign = await prisma.campaigns.findFirst({
     where: { id: BigInt(campaign_id), user_id: BigInt(user.userId), is_deleted: 0 },
   });
-  if (!campaign) return apiError("广告系列不存在", 404);
+  if (!campaign) {
+    console.warn(`[Extensions] 404: 广告系列不存在, campaign_id=${campaign_id}, user_id=${user.userId}`);
+    return apiError("广告系列不存在", 404);
+  }
 
   const merchant = await prisma.user_merchants.findFirst({
     where: { id: campaign.user_merchant_id, is_deleted: 0 },
   });
-  if (!merchant) return apiError("商家不存在");
+  if (!merchant) {
+    console.warn(`[Extensions] 400: 商家不存在, user_merchant_id=${campaign.user_merchant_id}, campaign_id=${campaign_id}`);
+    return apiError("商家不存在");
+  }
 
   const adGroup = await prisma.ad_groups.findFirst({
     where: { campaign_id: campaign.id, is_deleted: 0 },
@@ -248,6 +328,9 @@ Return ONLY valid JSON, no explanation.`;
         console.warn("[Core] padHeadlines 补全失败:", padErr instanceof Error ? padErr.message : padErr);
       }
     }
+    // 合规自动修复：标题
+    const headlineFix = await complianceAutoFix(headlines, "headline", merchantName, market.languageName, aiRuleProfile, 30, 2);
+    headlines = headlineFix.items;
     send("headlines", headlines);
 
     // 处理描述：超长的用 AI 语义缩略
@@ -272,7 +355,23 @@ Return ONLY valid JSON, no explanation.`;
         console.warn("[Core] padDescriptions 补全失败:", padErr instanceof Error ? padErr.message : padErr);
       }
     }
+
+    // 合规自动修复：描述
+    const descFix = await complianceAutoFix(descriptions, "description", merchantName, market.languageName, aiRuleProfile, 90, 40);
+    descriptions = descFix.items;
     send("descriptions", descriptions);
+
+    // 汇总合规修复结果
+    const allAutoFixed = [...headlineFix.fixed, ...descFix.fixed];
+    const allRemaining = [...headlineFix.remaining, ...descFix.remaining];
+    if (allAutoFixed.length > 0) {
+      send("compliance_auto_fix", { fixed: allAutoFixed, count: allAutoFixed.length });
+      console.log(`[Core] 合规自动修复: ${allAutoFixed.length} 条已替换`);
+    }
+    if (allRemaining.length > 0) {
+      send("compliance_warnings", { warnings: allRemaining, count: allRemaining.length });
+      console.log(`[Core] 合规警告: ${allRemaining.length} 条仍有风险（已达最大重试次数）`);
+    }
 
     // 处理站内链接
     const sitelinkDescs = Array.isArray(parsed.sitelink_descriptions) ? parsed.sitelink_descriptions : [];
@@ -447,9 +546,13 @@ Return ONLY a JSON object with applicable keys:
     const parsed = JSON.parse(extractJsonFromAi(raw));
 
     if (needsAi.includes("callouts")) {
-      const callouts = Array.isArray(parsed.callouts)
+      let callouts = Array.isArray(parsed.callouts)
         ? parsed.callouts.filter((c: string) => c && c.length <= 25).slice(0, 6)
         : getDefaultCallouts(merchantName, country, cache.features);
+      const calloutFix = await complianceAutoFix(callouts, "headline", merchantName, market.languageName, aiRuleProfile, 25, 2);
+      callouts = calloutFix.items;
+      if (calloutFix.fixed.length > 0) send("compliance_auto_fix", { fixed: calloutFix.fixed, count: calloutFix.fixed.length });
+      if (calloutFix.remaining.length > 0) send("compliance_warnings", { warnings: calloutFix.remaining, count: calloutFix.remaining.length });
       send("callouts", callouts);
     }
 
