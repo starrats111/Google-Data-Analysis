@@ -3,6 +3,14 @@ import type { Prisma } from "@/generated/prisma/client";
 
 type TxClient = Prisma.TransactionClient;
 
+/* ────────────────────────────────────────────────────────────────────────────
+ * 序号来源说明（2026-03-28 修正）
+ *
+ * 所有广告系列都通过本系统创建，DB 是唯一序号来源。
+ * 之前的 Google Ads API 扫描会把同一 MCC 下其他用户 / 其他系统创建的广告系列序号
+ * 也计入 max，导致序号暴涨（如 032 → 071）。故已移除 API 扫描。
+ * ──────────────────────────────────────────────────────────────────────── */
+
 /**
  * 校验名称是否符合系统命名格式: 序号-平台-商家名-国家(2字母)-日期(MMDD)-MID
  * 至少 6 段，且国家位(parts[3])为 2 位字母、日期位(parts[4])为 4 位数字
@@ -143,87 +151,13 @@ export function campaignNameCleanAndMmdd(merchantName: string): { cleanName: str
   return { cleanName, mmdd };
 }
 
-export async function fetchGoogleAdsMaxCampaignSequence(
-  _userId: bigint,
-  mccId: bigint | null | undefined,
-  namingRule: string,
-  platformLabel: string,
-): Promise<number> {
-  void _userId;
-  if (!mccId) return 0;
-  try {
-    const mccAccount = await prisma.google_mcc_accounts.findFirst({
-      where: { id: mccId, is_deleted: 0 },
-    });
-    if (!mccAccount?.service_account_json || !mccAccount?.developer_token) return 0;
-
-    const { queryGoogleAds } = await import("@/lib/google-ads/client");
-    const credentials = {
-      mcc_id: mccAccount.mcc_id,
-      developer_token: mccAccount.developer_token,
-      service_account_json: mccAccount.service_account_json,
-    };
-
-    const cids = await prisma.mcc_cid_accounts.findMany({
-      where: { mcc_account_id: mccId, is_deleted: 0 },
-      select: { customer_id: true },
-    });
-
-    let googleMaxSeq = 0;
-    const cidSlice = cids.slice(0, 10);
-    const BATCH = 5;
-    const timeoutMs = 8000;
-    const deadline = Date.now() + timeoutMs;
-
-    for (let i = 0; i < cidSlice.length; i += BATCH) {
-      if (Date.now() >= deadline) {
-        console.warn(`[CampaignNaming] Google Ads 查询已超 ${timeoutMs}ms，跳过剩余 CID`);
-        break;
-      }
-      const batch = cidSlice.slice(i, i + BATCH);
-      const results = await Promise.allSettled(
-        batch.map(async (cid) => {
-          const rows = await queryGoogleAds(credentials, cid.customer_id.replace(/-/g, ""), `
-                SELECT campaign.name
-                FROM campaign
-                WHERE campaign.status != 'REMOVED'
-              `);
-          let batchMax = 0;
-          let batchMaxName = "";
-          for (const row of rows) {
-            const c = row.campaign as Record<string, unknown> | undefined;
-            const name = String(c?.name ?? "");
-            const num = extractSeqFromName(name, namingRule, platformLabel);
-            if (num > batchMax) {
-              batchMax = num;
-              batchMaxName = name;
-            }
-          }
-          if (batchMax > 0) {
-            console.log(`[CampaignNaming] Google Ads CID ${cid.customer_id} maxSeq=${batchMax} from "${batchMaxName}" (${rows.length} campaigns)`);
-          }
-          return batchMax;
-        }),
-      );
-      for (const r of results) {
-        if (r.status === "fulfilled" && r.value > googleMaxSeq) {
-          googleMaxSeq = r.value;
-        }
-      }
-    }
-    return googleMaxSeq;
-  } catch (err) {
-    console.warn("[CampaignNaming] Google Ads 查询失败，仅使用数据库序号:", err instanceof Error ? err.message : err);
-    return 0;
-  }
-}
+/* fetchGoogleAdsMaxCampaignSequence 已移除 — 见文件头部说明 */
 
 export type NextCampaignNameTxArgs = {
   userId: bigint;
   mccId: bigint | null | undefined;
   namingRule: string;
   platformLabel: string;
-  googleMaxSeq: number;
   cleanName: string;
   country: string;
   mmdd: string;
@@ -233,10 +167,10 @@ export type NextCampaignNameTxArgs = {
 };
 
 /**
- * 在已持有命名锁的事务内，计算下一个不重名的正式广告系列名称（仅与已提交行冲突检测）
+ * 在已持有命名锁的事务内，计算下一个不重名的正式广告系列名称（仅基于 DB 序号）
  */
 export async function resolveNextCampaignNameInTx(tx: TxClient, args: NextCampaignNameTxArgs): Promise<string> {
-  const { userId, mccId, namingRule, platformLabel, googleMaxSeq, cleanName, country, mmdd, merchantId, excludeCampaignId } = args;
+  const { userId, mccId, namingRule, platformLabel, cleanName, country, mmdd, merchantId, excludeCampaignId } = args;
 
   const existingCampaigns = await tx.campaigns.findMany({
     where: campaignFormalSequenceWhere(userId, mccId) as never,
@@ -244,7 +178,7 @@ export async function resolveNextCampaignNameInTx(tx: TxClient, args: NextCampai
   });
 
   const dbMaxSeq = computeDbMaxSeqFromTx(existingCampaigns, namingRule, platformLabel);
-  let seq = Math.max(dbMaxSeq, googleMaxSeq) + 1;
+  let seq = dbMaxSeq + 1;
 
   let guard = 0;
   while (await seqPrefixTakenInTx(tx, userId, mccId, seq, excludeCampaignId)) {
@@ -255,7 +189,7 @@ export async function resolveNextCampaignNameInTx(tx: TxClient, args: NextCampai
   }
 
   const seqStr = String(seq).padStart(3, "0");
-  console.log(`[CampaignNaming] Final: dbMax=${dbMaxSeq}, googleMax=${googleMaxSeq} → seq=${seqStr}`);
+  console.log(`[CampaignNaming] dbMax=${dbMaxSeq} → seq=${seqStr} (user=${userId}, mcc=${mccId})`);
   return `${seqStr}-${platformLabel}-${cleanName}-${country}-${mmdd}-${merchantId}`;
 }
 
@@ -286,7 +220,6 @@ export async function generateCampaignName(
   void _namingPrefix;
   const { cleanName, mmdd } = campaignNameCleanAndMmdd(merchantName);
   const platformLabel = platform;
-  const googleMaxSeq = await fetchGoogleAdsMaxCampaignSequence(userId, mccId, namingRule, platformLabel);
 
   return prisma.$transaction(async (tx) => {
     await acquireCampaignSeqLock(tx, userId, mccId);
@@ -296,7 +229,6 @@ export async function generateCampaignName(
         mccId,
         namingRule,
         platformLabel,
-        googleMaxSeq,
         cleanName,
         country,
         mmdd,
@@ -332,7 +264,6 @@ export async function assignFormalCampaignNameBeforeSubmit(params: {
     return existing.campaign_name;
   }
 
-  const googleMaxSeq = await fetchGoogleAdsMaxCampaignSequence(userId, mccId, namingRule, platformLabel);
   const { cleanName, mmdd } = campaignNameCleanAndMmdd(merchantName);
 
   return prisma.$transaction(async (tx) => {
@@ -343,7 +274,6 @@ export async function assignFormalCampaignNameBeforeSubmit(params: {
         mccId,
         namingRule,
         platformLabel,
-        googleMaxSeq,
         cleanName,
         country,
         mmdd,
