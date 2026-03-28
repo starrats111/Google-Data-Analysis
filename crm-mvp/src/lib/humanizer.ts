@@ -123,3 +123,85 @@ export function humanize(text: string): string {
   result = result.replace(/\n{3,}/g, "\n\n");
   return result.trim();
 }
+
+// ─── 广告文案去 AI 味 ───
+
+const AD_COPY_REPLACEMENTS: [RegExp, string][] = [
+  [/^Unlock\s+/i, "Get "],
+  [/^Unleash\s+/i, "Try "],
+  [/^Elevate\s+(?:Your\s+)?/i, "Upgrade "],
+  [/^Transform\s+(?:Your\s+)?/i, "Improve "],
+  [/^Discover\s+(?:the\s+)?/i, "See "],
+  [/^Experience\s+(?:the\s+)?/i, "See "],
+  [/^Embrace\s+/i, "Choose "],
+  [/^Reimagine\s+/i, "Rethink "],
+  [/^Redefine\s+(?:Your\s+)?/i, "Change "],
+  [/^Supercharge\s+/i, "Boost "],
+  [/^Empower\s+(?:Your\s+)?/i, "Strengthen "],
+  [/^Navigate\s+(?:Your\s+)?/i, "Plan "],
+  [/^Harness\s+(?:the\s+)?/i, "Use "],
+  [/\bseamless(?:ly)?\b/gi, "smooth"],
+  [/\bcutting[\s-]edge\b/gi, "modern"],
+  [/\bworld[\s-]class\b/gi, "top"],
+  [/\bbest[\s-]in[\s-]class\b/gi, "top"],
+  [/\bunmatched\b/gi, "great"],
+  [/\bunparalleled\b/gi, "top"],
+  [/\brevolution(?:ary|ize|izing)\b/gi, "new"],
+  [/\bgame[\s-]chang(?:er|ing)\b/gi, "effective"],
+  [/\btransformative\b/gi, "powerful"],
+  [/\bgroundbreaking\b/gi, "new"],
+  [/\bholistic\b/gi, "complete"],
+  [/\bsynergy\b/gi, "teamwork"],
+  [/\bparadigm(?:\s+shift)?\b/gi, "approach"],
+  [/\bbespoke\b/gi, "custom"],
+  [/\bcurated\b/gi, "selected"],
+  [/\bdelve\b/gi, "look"],
+  [/\btestament\b/gi, "proof"],
+  [/\bpivotal\b/gi, "key"],
+  [/\brobust\b/gi, "strong"],
+  [/\bstreamline[ds]?\b/gi, "simplify"],
+  [/\binnovative\b/gi, "new"],
+  // 中文 AI 高频广告词
+  [/引领\S{0,4}(?:未来|潮流|趋势)/g, ""],
+  [/(?:全面)?(?:赋能|赋予力量)/g, "帮助"],
+  [/无缝(?:衔接|连接|体验)/g, "顺畅"],
+  [/(?:颠覆|革新|革命性)/g, "全新"],
+  [/(?:前沿|尖端|领先)技术/g, "新技术"],
+  [/一站式(?:解决方案)?/g, "完整方案"],
+  [/(?:极致|卓越|非凡)(?:体验|品质)/g, "优质"],
+  [/开启\S{0,4}之旅/g, "开始使用"],
+];
+
+/** 广告文案去 AI 味：对单条标题/描述做轻量替换，保留字数限制内的可读性 */
+export function humanizeAdCopy(text: string): string {
+  if (!text) return text;
+  let result = text;
+  for (const [pattern, replacement] of AD_COPY_REPLACEMENTS) {
+    result = result.replace(pattern, replacement);
+  }
+  result = result.replace(/\s{2,}/g, " ").trim();
+  return result;
+}
+
+/**
+ * 批量处理广告文案：对标题/描述数组做去 AI 味处理
+ * 如果处理后超长或过短，则保留原始文案
+ */
+export function humanizeAdCopyBatch(items: string[], minLen: number, maxLen: number): string[] {
+  return items.map((item) => {
+    const cleaned = humanizeAdCopy(item);
+    if (cleaned.length < minLen || cleaned.length > maxLen) return item;
+    return cleaned;
+  });
+}
+
+/** 注入到广告文案 prompt 中的反 AI 指令块 */
+export const AD_COPY_ANTI_AI_BLOCK = `
+【ANTI-AI STYLE — CRITICAL】
+Write like a real human ad copywriter, NOT an AI. Your output will be checked for AI patterns and rejected if it reads like generic AI marketing speak.
+
+BANNED words/phrases — using ANY of these will cause automatic rejection:
+unlock, unleash, elevate, transform, discover, revolutionize, game-changer, seamless, seamlessly, cutting-edge, world-class, best-in-class, unmatched, unparalleled, supercharge, empower, harness, navigate, embrace, reimagine, redefine, groundbreaking, innovative, transformative, holistic, synergy, paradigm, bespoke, curated, delve, testament, pivotal, robust, streamline, ecosystem, embark, realm, tapestry, beacon, multifaceted
+
+INSTEAD: Use plain, specific, concrete language. Write the way a real store owner or marketer talks — direct, clear, benefit-focused. Prefer words like: save, get, try, buy, shop, new, top, fast, free, easy, quality, trusted, rated, proven, real, simple, fresh, smart, value.
+`;

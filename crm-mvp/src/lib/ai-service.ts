@@ -6,6 +6,7 @@
 import prisma from "@/lib/prisma";
 import { getAdMarketConfig, type AdMarketConfig } from "@/lib/ad-market";
 import { buildAiRulePrompt } from "@/lib/ai-rule-profile";
+import { humanizeAdCopyBatch, AD_COPY_ANTI_AI_BLOCK } from "@/lib/humanizer";
 
 interface AiModelConfig {
   providerName: string;
@@ -777,6 +778,8 @@ Context:
 ${aiRulePrompt ? `User hard rules (MUST follow):\n${aiRulePrompt}\n\n` : ""}${keywords.length > 0 ? `Top keywords / product phrases:\n${keywords.map((k, i) => `${i + 1}. ${k}`).join("\n")}\n` : ""}
 ${references.length > 0 ? `Market references for inspiration only (DO NOT copy literally):\n${references.map((h, i) => `${i + 1}. \"${h}\"`).join("\n")}\n` : ""}
 ${locked.length > 0 ? `Already locked headlines that must remain untouched:\n${locked.map((h, i) => `${i + 1}. \"${h}\"`).join("\n")}\n` : ""}
+${AD_COPY_ANTI_AI_BLOCK}
+
 Generate exactly ${needed} NEW headlines. Return ONLY a JSON array of exactly ${needed} strings.
 
 MANDATORY RULES:
@@ -791,13 +794,15 @@ MANDATORY RULES:
 9. Avoid repeating the same phrase pattern across multiple headlines.
 10. Output must comply with Google Ads policy and remain truthful.
 11. If any user hard rule conflicts with these defaults, follow the user hard rule first unless it violates policy.
+12. Write like a real marketer — specific, punchy, no AI buzzwords. Use plain language that real people use.
 
 Return ONLY JSON array.`;
 
     try {
       const raw = await callAiWithFallback("ad_copy", [{ role: "user", content: prompt }], 2048);
       const parsed = JSON.parse(extractJson(raw)) as string[];
-      const generated = sanitizeHeadlineCandidates(parsed, merchantName, 30, needed + 8);
+      const humanized = humanizeAdCopyBatch(parsed, 2, 30);
+      const generated = sanitizeHeadlineCandidates(humanized, merchantName, 30, needed + 8);
       const combined = sanitizeHeadlineCandidates([...locked, ...generated], merchantName, 30, count);
       const hasDiscount = combined.some((h) => DISCOUNT_RE.test(h));
       const hasShipping = combined.some((h) => SHIPPING_RE.test(h));
@@ -870,6 +875,8 @@ GOOGLE ADS AD STRENGTH (Responsive Search Ads — official feedback patterns):
 ${headlineBlock}${aiRulePrompt ? `User hard rules (MUST follow):\n${aiRulePrompt}\n\n` : ""}${keywords.length > 0 ? `Top keywords / product phrases (weave naturally; do not mirror headline lines):\n${keywords.map((k, i) => `${i + 1}. ${k}`).join("\n")}\n` : ""}
 ${references.length > 0 ? `Market reference descriptions for inspiration only (DO NOT copy literally):\n${references.map((d, i) => `${i + 1}. \"${d}\"`).join("\n")}\n` : ""}
 ${locked.length > 0 ? `Already locked descriptions that must remain untouched:\n${locked.map((d, i) => `${i + 1}. \"${d}\"`).join("\n")}\n` : ""}
+${AD_COPY_ANTI_AI_BLOCK}
+
 Generate exactly ${needed} NEW descriptions. Return ONLY a JSON array of exactly ${needed} strings.
 
 MANDATORY RULES:
@@ -882,13 +889,15 @@ MANDATORY RULES:
 7. Do NOT repeat the same wording structure across lines; vary syntax and first words.
 8. Comply with Google Ads policy and keep claims truthful.
 9. If any user hard rule conflicts with these defaults, follow the user hard rule first unless it violates policy.
+10. Use concrete product details and real benefits, avoid vague AI marketing buzzwords.
 
 Return ONLY JSON array.`;
 
     try {
       const raw = await callAiWithFallback("ad_copy", [{ role: "user", content: prompt }], 2048);
       const parsed = JSON.parse(extractJson(raw)) as string[];
-      const generated = sanitizeDescriptionCandidates(parsed, merchantName, 90, needed + 4, descSanitizeOpts);
+      const humanized = humanizeAdCopyBatch(parsed, 40, 90);
+      const generated = sanitizeDescriptionCandidates(humanized, merchantName, 90, needed + 4, descSanitizeOpts);
       const combined = sanitizeDescriptionCandidates([...locked, ...generated], merchantName, 90, count, descSanitizeOpts);
       const comboCount = combined.filter((d) => DISCOUNT_RE.test(d) && SHIPPING_RE.test(d)).length;
 

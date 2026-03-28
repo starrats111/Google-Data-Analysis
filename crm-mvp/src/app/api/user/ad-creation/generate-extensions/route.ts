@@ -16,6 +16,7 @@ import {
   titleFromUrlPath,
   decodeHtmlEntities,
 } from "@/lib/crawl-pipeline";
+import { humanizeAdCopyBatch, AD_COPY_ANTI_AI_BLOCK } from "@/lib/humanizer";
 
 function formatAiRuleBlock(profile: unknown | null | undefined, section: "sitelinks" | "ad_copy" | "compliance"): string {
   if (!profile) return "";
@@ -274,6 +275,7 @@ Website content (truncated):
 ${cache.pageText.slice(0, 2000)}
 
 ${cache.features.length > 0 ? `Merchant features:\n${cache.features.join("\n")}\n` : ""}${semrushBlock}${sitelinkBlock}${formatAiRuleBlock(aiRuleProfile, "ad_copy")}
+${AD_COPY_ANTI_AI_BLOCK}
 
 Return ONLY a JSON object with this exact structure:
 {
@@ -288,12 +290,14 @@ MANDATORY RULES for headlines (exactly 15):
 3. Each ≤ 30 characters, in ${market.languageName}
 4. No dates/expiry/countdowns, no generic filler like "Official Site"
 5. Commercially strong: trust, value, CTA, product fit
+6. Write like a real marketer — specific, punchy, no AI buzzwords
 
 MANDATORY RULES for descriptions (exactly 4):
 1. Exactly 1 must combine discount + shipping
 2. Each 50-90 characters, in ${market.languageName}
 3. Each uses a different persuasion angle
 4. Must be distinct from headlines (Google flags duplicates)
+5. Use concrete benefits and real product details, avoid vague hype
 
 MANDATORY RULES for sitelink_descriptions (${cache.sitelinkCandidates.length} entries matching sitelinks order):
 1. Each desc1 and desc2 ≤ 35 characters
@@ -306,10 +310,11 @@ Return ONLY valid JSON, no explanation.`;
     const raw = await callAiWithFallback("ad_copy", [{ role: "user", content: prompt }], 4096);
     const parsed = JSON.parse(extractJsonFromAi(raw));
 
-    // 处理标题：超长的用 AI 语义缩略（保留含义），而非直接丢弃
+    // 处理标题：去 AI 味 → 超长缩略 → 过滤
     let rawHeadlines = Array.isArray(parsed.headlines)
       ? parsed.headlines.filter((h: string) => h && h.trim())
       : [];
+    rawHeadlines = humanizeAdCopyBatch(rawHeadlines, 2, 30);
     rawHeadlines = await condenseOverlong(rawHeadlines, 30, market.languageName);
     let headlines = rawHeadlines.filter((h: string) => h.length >= 2 && h.length <= 30).slice(0, 15);
 
@@ -333,10 +338,11 @@ Return ONLY valid JSON, no explanation.`;
     headlines = headlineFix.items;
     send("headlines", headlines);
 
-    // 处理描述：超长的用 AI 语义缩略
+    // 处理描述：去 AI 味 → 超长缩略 → 过滤
     let rawDescs = Array.isArray(parsed.descriptions)
       ? parsed.descriptions.filter((d: string) => d && d.trim())
       : [];
+    rawDescs = humanizeAdCopyBatch(rawDescs, 40, 90);
     rawDescs = await condenseOverlong(rawDescs, 90, market.languageName);
     let descriptions = rawDescs.filter((d: string) => d.length >= 40 && d.length <= 90).slice(0, 4);
 
