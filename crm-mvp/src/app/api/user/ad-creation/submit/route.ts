@@ -221,7 +221,7 @@ export async function POST(req: NextRequest) {
   const formalName = await assignFormalCampaignNameBeforeSubmit({
     campaignId: campaign.id,
     userId,
-    mccId: campaign.mcc_id,
+    mccId: mccAccount.id,
     namingRule: submitAdSettings?.naming_rule || "global",
     platformLabel: submitMerchant.platform || "",
     country: campaign.target_country || "US",

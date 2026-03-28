@@ -491,6 +491,7 @@ export const POST = withUser(async (req: NextRequest, { user }) => {
       user_id: userIdBn,
       user_merchant_id: BigInt(merchant_id),
       campaign_name: draftName,
+      mcc_id: claimMccId,
       daily_budget: adSettings?.daily_budget || 2.0,
       bidding_strategy: adSettings?.bidding_strategy || "MAXIMIZE_CLICKS",
       max_cpc_limit: adSettings?.max_cpc || 0.3,
