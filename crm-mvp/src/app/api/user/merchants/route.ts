@@ -3,7 +3,13 @@ import { serializeData } from "@/lib/auth";
 import { apiSuccess, apiError, normalizePlatformCode } from "@/lib/constants";
 import { withUser } from "@/lib/api-handler";
 import prisma from "@/lib/prisma";
-import { generateCampaignName } from "@/lib/campaign-naming";
+import {
+  fetchGoogleAdsMaxCampaignSequence,
+  resolveNextCampaignNameInTx,
+  acquireCampaignSeqLockInTx,
+  releaseCampaignSeqLockInTx,
+  campaignNameCleanAndMmdd,
+} from "@/lib/campaign-naming";
 import { buildKeywordCreateManyInput, selectOptimizedKeywords } from "@/lib/ad-keyword-pipeline";
 
 // 国家 → Google Ads 语言代码（创建 campaign 时自动设置）
@@ -433,24 +439,20 @@ export const POST = withUser(async (req: NextRequest, { user }) => {
 
   // 如果未指定 platform_connection_id，自动选择该平台的第一个连接
   let connId = platform_connection_id ? BigInt(platform_connection_id) : null;
-  let connAccountName = "";
   if (connId) {
     const conn = await prisma.platform_connections.findFirst({
       where: { id: connId, user_id: BigInt(user.userId), is_deleted: 0 },
-      select: { id: true, account_name: true },
+      select: { id: true },
     });
-    connAccountName = conn?.account_name || "";
+    if (!conn) connId = null;
   }
   if (!connId && merchant.platform) {
     const defaultConn = await prisma.platform_connections.findFirst({
       where: { user_id: BigInt(user.userId), platform: merchant.platform, is_deleted: 0 },
-      select: { id: true, account_name: true },
+      select: { id: true },
       orderBy: { created_at: "asc" },
     });
-    if (defaultConn) {
-      connId = defaultConn.id;
-      connAccountName = defaultConn.account_name || "";
-    }
+    if (defaultConn) connId = defaultConn.id;
   }
 
   // 更新商家状态
@@ -483,38 +485,52 @@ export const POST = withUser(async (req: NextRequest, { user }) => {
     claimMccId = recentMcc?.mcc_id ?? null;
   }
 
-  // 生成广告系列名称（按 MCC 分开计算序号）
-  const campaignName = await generateCampaignName(
-    BigInt(user.userId),
-    merchant.platform || "",
-    merchant.merchant_name || "",
-    target_country,
-    merchant.merchant_id || "",
-    adSettings?.naming_rule || "global",
-    connAccountName,
-    adSettings?.naming_prefix || "",
-    claimMccId,
-  );
-
   // 根据目标国家自动确定广告语言
   const langCode = COUNTRY_TO_LANG_CODE[target_country.toUpperCase()] || "en";
 
-  // 创建广告系列
-  const campaign = await prisma.campaigns.create({
-    data: {
-      user_id: BigInt(user.userId),
-      user_merchant_id: BigInt(merchant_id),
-      campaign_name: campaignName,
-      daily_budget: adSettings?.daily_budget || 2.0,
-      bidding_strategy: adSettings?.bidding_strategy || "MAXIMIZE_CLICKS",
-      max_cpc_limit: adSettings?.max_cpc || 0.3,
-      target_country,
-      language_id: langCode,
-      network_search: adSettings?.network_search ?? 1,
-      network_partners: adSettings?.network_partners ?? 0,
-      network_display: adSettings?.network_display ?? 0,
-    },
-  });
+  // 广告系列命名：先查 Google max（事务外），再在持锁事务内算序号并 insert，避免并发重复前缀
+  const userIdBn = BigInt(user.userId);
+  const googleMaxSeq = await fetchGoogleAdsMaxCampaignSequence(
+    userIdBn,
+    claimMccId,
+    adSettings?.naming_rule || "global",
+    merchant.platform || "",
+  );
+  const { cleanName, mmdd } = campaignNameCleanAndMmdd(merchant.merchant_name || "");
+
+  const campaign = await prisma.$transaction(async (tx) => {
+    await acquireCampaignSeqLockInTx(tx, userIdBn, claimMccId);
+    try {
+      const campaignName = await resolveNextCampaignNameInTx(tx, {
+        userId: userIdBn,
+        mccId: claimMccId,
+        namingRule: adSettings?.naming_rule || "global",
+        platformLabel: merchant.platform || "",
+        googleMaxSeq,
+        cleanName,
+        country: target_country,
+        mmdd,
+        merchantId: merchant.merchant_id || "",
+      });
+      return await tx.campaigns.create({
+        data: {
+          user_id: userIdBn,
+          user_merchant_id: BigInt(merchant_id),
+          campaign_name: campaignName,
+          daily_budget: adSettings?.daily_budget || 2.0,
+          bidding_strategy: adSettings?.bidding_strategy || "MAXIMIZE_CLICKS",
+          max_cpc_limit: adSettings?.max_cpc || 0.3,
+          target_country,
+          language_id: langCode,
+          network_search: adSettings?.network_search ?? 1,
+          network_partners: adSettings?.network_partners ?? 0,
+          network_display: adSettings?.network_display ?? 0,
+        },
+      });
+    } finally {
+      await releaseCampaignSeqLockInTx(tx, userIdBn, claimMccId);
+    }
+  }, { timeout: 30000 });
 
   // 创建广告组
   const adGroup = await prisma.ad_groups.create({

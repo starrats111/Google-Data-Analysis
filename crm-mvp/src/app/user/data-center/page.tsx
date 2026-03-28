@@ -640,6 +640,9 @@ export default function DataCenterPage() {
             表格仅展示 {rowMeta.displayedCount} / {rowMeta.totalCount} 条 Campaign 行，合计行与上方总览一致。
           </span>
         )}
+        <div style={{ marginTop: 4 }}>
+          本表仅列出已提交到 Google Ads 的广告系列；未提交草稿、已删除记录仍会占用名称前缀序号，故名称中的三位序号可能不连续，属正常现象。
+        </div>
       </div>
 
       {/* ========== 广告系列表格 ========== */}
