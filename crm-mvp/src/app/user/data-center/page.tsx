@@ -640,9 +640,6 @@ export default function DataCenterPage() {
             表格仅展示 {rowMeta.displayedCount} / {rowMeta.totalCount} 条 Campaign 行，合计行与上方总览一致。
           </span>
         )}
-        <div style={{ marginTop: 4 }}>
-          三位序号仅分配给已提交到 Google Ads 的广告系列；草稿为 DRAFT- 占位名，不占序号。已删除、已移除的系列不再保留序号，新系列会按当前最大已提交序号连续递增。
-        </div>
       </div>
 
       {/* ========== 广告系列表格 ========== */}
