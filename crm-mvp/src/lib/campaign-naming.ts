@@ -47,12 +47,10 @@ export async function generateCampaignName(
   const platformLabel = platform;
 
   // 1. 从 CRM 数据库查 maxSeq（带事务锁防并发）
+  // 不过滤 is_deleted 和 mcc_id，确保序号全局递增、不重复、不跳号
   const dbMaxSeq = await prisma.$transaction(async (tx) => {
-    const where: Record<string, unknown> = { user_id: userId, is_deleted: 0 };
-    if (mccId) where.mcc_id = mccId;
-
     const existingCampaigns = await tx.campaigns.findMany({
-      where,
+      where: { user_id: userId },
       select: { campaign_name: true },
     });
 

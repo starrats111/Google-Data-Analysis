@@ -143,6 +143,40 @@ function includesForbiddenTerm(text: string, forbiddenTerms: string[]): string |
   return null;
 }
 
+export function checkItemViolations(
+  items: string[],
+  profile: unknown,
+): Array<{ index: number; text: string; reasons: string[] }> {
+  const normalized = normalizeAiRuleProfile(profile);
+  const results: Array<{ index: number; text: string; reasons: string[] }> = [];
+
+  for (let i = 0; i < items.length; i++) {
+    const text = items[i];
+    if (!text) continue;
+    const reasons: string[] = [];
+
+    const matched = includesForbiddenTerm(text, normalized.forbidden_terms);
+    if (matched) {
+      reasons.push(`命中禁止词「${matched}」`);
+    }
+
+    if (normalized.enforce_policy_check) {
+      for (const rule of BASIC_POLICY_RISK_PATTERNS) {
+        if (rule.pattern.test(text)) {
+          reasons.push(rule.label);
+          break;
+        }
+      }
+    }
+
+    if (reasons.length > 0) {
+      results.push({ index: i, text, reasons });
+    }
+  }
+
+  return results;
+}
+
 export function collectAiRuleViolations(payload: {
   profile: unknown;
   keywords?: Array<string | { text?: string | null }>;

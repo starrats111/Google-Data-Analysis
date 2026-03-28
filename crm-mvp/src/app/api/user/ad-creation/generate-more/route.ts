@@ -2,7 +2,12 @@ import { NextRequest } from "next/server";
 import { getUserFromRequest } from "@/lib/auth";
 import { apiSuccess, apiError } from "@/lib/constants";
 import prisma from "@/lib/prisma";
-import { padHeadlines, padDescriptions } from "@/lib/ai-service";
+import { padHeadlines, padDescriptions, callAiWithFallback } from "@/lib/ai-service";
+import { checkItemViolations } from "@/lib/ai-rule-profile";
+import { extractJsonFromAi } from "@/lib/crawl-pipeline";
+import { getAdMarketConfig } from "@/lib/ad-market";
+
+const MAX_COMPLIANCE_RETRIES = 2;
 
 /**
  * POST /api/user/ad-creation/generate-more
@@ -26,6 +31,9 @@ export async function POST(req: NextRequest) {
   });
 
   try {
+    let newItems: string[];
+    const market = getAdMarketConfig(country || "US");
+
     if (type === "headlines") {
       const result = await padHeadlines(existingItems, merchant_name || "", country || "US", targetCount, {
         keywords: Array.isArray(keywords) ? keywords.map((k: string) => String(k).trim()).filter(Boolean) : [],
@@ -34,8 +42,7 @@ export async function POST(req: NextRequest) {
         biddingStrategy: bidding_strategy,
         aiRuleProfile: settings?.ai_rule_profile,
       });
-      const newItems = result.filter((h) => !existingItems.includes(h));
-      return apiSuccess({ items: newItems });
+      newItems = result.filter((h) => !existingItems.includes(h));
     } else {
       const result = await padDescriptions(existingItems, merchant_name || "", country || "US", targetCount, {
         keywords: Array.isArray(keywords) ? keywords.map((k: string) => String(k).trim()).filter(Boolean) : [],
@@ -47,9 +54,56 @@ export async function POST(req: NextRequest) {
         biddingStrategy: bidding_strategy,
         aiRuleProfile: settings?.ai_rule_profile,
       });
-      const newItems = result.filter((d) => !existingItems.includes(d));
-      return apiSuccess({ items: newItems });
+      newItems = result.filter((d) => !existingItems.includes(d));
     }
+
+    const maxLen = type === "headlines" ? 30 : 90;
+    const minLen = type === "headlines" ? 2 : 40;
+    const autoFixed: string[] = [];
+    const remaining: string[] = [];
+
+    for (let attempt = 0; attempt < MAX_COMPLIANCE_RETRIES; attempt++) {
+      const violations = checkItemViolations(newItems, settings?.ai_rule_profile);
+      if (violations.length === 0) break;
+
+      const avoidReasons = [...new Set(violations.flatMap((v) => v.reasons))];
+      const prompt = `Generate ${violations.length} replacement Google Ads RSA ${type === "headlines" ? "headlines" : "descriptions"}.
+Merchant: ${merchant_name || ""}, Language: ${market.languageName}
+
+REJECTED items needing replacement:
+${violations.map((v, i) => `${i + 1}. "${v.text}" — reason: ${v.reasons.join(", ")}`).join("\n")}
+
+MUST AVOID: ${avoidReasons.join("; ")}
+Never use: guaranteed, risk-free, zero risk, 100% safe, cure, miracle, heals, instant approval, before and after
+Each item: ${minLen}-${maxLen} characters. Return ONLY a JSON array of ${violations.length} strings.`;
+
+      try {
+        const raw = await callAiWithFallback("ad_copy", [{ role: "user", content: prompt }], 1024);
+        const parsed = JSON.parse(extractJsonFromAi(raw));
+        if (Array.isArray(parsed)) {
+          for (let i = 0; i < violations.length && i < parsed.length; i++) {
+            const replacement = String(parsed[i] || "").trim();
+            if (replacement.length >= minLen && replacement.length <= maxLen) {
+              autoFixed.push(`「${violations[i].text}」→「${replacement}」`);
+              newItems[violations[i].index] = replacement;
+            }
+          }
+        }
+      } catch {
+        break;
+      }
+    }
+
+    const finalViolations = checkItemViolations(newItems, settings?.ai_rule_profile);
+    for (const v of finalViolations) {
+      remaining.push(`${type === "headlines" ? "标题" : "描述"}「${v.text}」${v.reasons.join("、")}`);
+    }
+
+    return apiSuccess({
+      items: newItems,
+      ...(autoFixed.length > 0 ? { compliance_auto_fix: autoFixed } : {}),
+      ...(remaining.length > 0 ? { compliance_warnings: remaining } : {}),
+    });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     console.error("[GenerateMore]", msg);

@@ -337,6 +337,8 @@ export default function AdPreviewPage() {
             if (json.code === 0 && json.data?.items?.length > 0) {
               const combined = [...filledH, ...json.data.items].slice(0, 15);
               setHeadlines(combined.length >= 15 ? combined : [...combined, ...Array(15 - combined.length).fill("")]);
+              if (json.data.compliance_auto_fix?.length > 0) message.success(`已自动修正 ${json.data.compliance_auto_fix.length} 条违规标题`);
+              if (json.data.compliance_warnings?.length > 0) message.warning({ content: `${json.data.compliance_warnings.length} 条标题仍可能触发政策风险，请手动调整`, duration: 6 });
             }
           } catch {} finally { setGeneratingHeadlines(false); }
         }, 200);
@@ -353,6 +355,8 @@ export default function AdPreviewPage() {
             if (json.code === 0 && json.data?.items?.length > 0) {
               const combined = [...filledD, ...json.data.items].slice(0, 4);
               setDescriptions(combined.length >= 4 ? combined : [...combined, ...Array(4 - combined.length).fill("")]);
+              if (json.data.compliance_auto_fix?.length > 0) message.success(`已自动修正 ${json.data.compliance_auto_fix.length} 条违规描述`);
+              if (json.data.compliance_warnings?.length > 0) message.warning({ content: `${json.data.compliance_warnings.length} 条描述仍可能触发政策风险，请手动调整`, duration: 6 });
             }
           } catch {} finally { setGeneratingDescriptions(false); }
         }, 200);
@@ -441,6 +445,8 @@ export default function AdPreviewPage() {
         const combined = [...filled, ...json.data.items].slice(0, 15);
         setHeadlines(combined.length >= 15 ? combined : [...combined, ...Array(15 - combined.length).fill("")]);
         message.success(`AI 已生成 ${json.data.items.length} 条标题`);
+        if (json.data.compliance_auto_fix?.length > 0) message.success(`已自动修正 ${json.data.compliance_auto_fix.length} 条违规标题`);
+        if (json.data.compliance_warnings?.length > 0) message.warning({ content: `${json.data.compliance_warnings.length} 条标题仍可能触发政策风险，请手动调整`, duration: 6 });
       } else {
         message.warning(json.message || "AI 生成失败，请手动输入");
       }
@@ -478,6 +484,8 @@ export default function AdPreviewPage() {
         const combined = [...filled, ...json.data.items].slice(0, 4);
         setDescriptions(combined.length >= 4 ? combined : [...combined, ...Array(4 - combined.length).fill("")]);
         message.success(`AI 已生成 ${json.data.items.length} 条描述`);
+        if (json.data.compliance_auto_fix?.length > 0) message.success(`已自动修正 ${json.data.compliance_auto_fix.length} 条违规描述`);
+        if (json.data.compliance_warnings?.length > 0) message.warning({ content: `${json.data.compliance_warnings.length} 条描述仍可能触发政策风险，请手动调整`, duration: 6 });
       } else {
         message.warning(json.message || "AI 生成失败，请手动输入");
       }
@@ -805,6 +813,25 @@ export default function AdPreviewPage() {
           if (s.header && Array.isArray(s.values) && s.values.length >= 3) { setEnableSnippet(true); setSnippetHeader(String(s.header || defaultSnippetHeader)); setSnippetValues((s.values as string[]).map(String)); message.success("已自动生成结构化摘要"); }
         }
         setSnippetLoading(false); return;
+      }
+
+      if (type === "compliance_auto_fix") {
+        const d = data as { fixed: string[]; count: number };
+        if (d?.count > 0) {
+          message.success(`AI 已自动修正 ${d.count} 条违规内容`);
+        }
+        return;
+      }
+
+      if (type === "compliance_warnings") {
+        const d = data as { warnings: string[]; count: number };
+        if (d?.warnings?.length > 0) {
+          message.warning({
+            content: `${d.count} 条内容仍可能触发 Google Ads 政策风险（已达自动修复上限），请手动调整：${d.warnings.join("；")}`,
+            duration: 8,
+          });
+        }
+        return;
       }
     };
 
