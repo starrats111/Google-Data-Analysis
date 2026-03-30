@@ -174,31 +174,46 @@ export async function GET(req: NextRequest) {
     gcidToPrimaryCampaignId.set(c.google_campaign_id || String(c.id), String(c.id));
   }
 
-  // ─── 全量 stats 聚合（含重复 campaign 的 stats，按 google_campaign_id+date 去重后聚合） ───
-  const rawStatsAgg = allCampaignIdsIncludingDupes.length > 0
-    ? await prisma.ads_daily_stats.groupBy({
-        by: ["campaign_id"],
-        where: {
-          campaign_id: { in: allCampaignIdsIncludingDupes },
-          date: { gte: statsDateStart, lt: statsDateEnd },
-          is_deleted: 0,
-        } as never,
-        _sum: { cost: true, clicks: true, impressions: true },
-      })
-    : [];
-
-  // 合并重复 campaign 的 stats 到主记录（避免重复计算，取较高值）
+  // ─── 全量 stats 聚合（按 google_campaign_id + date 去重后求和，消除重复 campaign 导致的数据偏差） ───
   const allStatsMap = new Map<string, { cost: number; clicks: number; impressions: number }>();
-  for (const s of rawStatsAgg) {
-    const gcid = campaignIdToGcid.get(String(s.campaign_id));
-    const primaryId = gcid ? gcidToPrimaryCampaignId.get(gcid) : String(s.campaign_id);
-    const key = primaryId || String(s.campaign_id);
-    const existing = allStatsMap.get(key);
-    const cost = Number(s._sum?.cost || 0);
-    const clicks = Number(s._sum?.clicks || 0);
-    const impressions = Number(s._sum?.impressions || 0);
-    if (!existing || cost > existing.cost) {
-      allStatsMap.set(key, { cost, clicks, impressions });
+
+  if (allCampaignIdsIncludingDupes.length > 0) {
+    const rawStatsRows = await prisma.ads_daily_stats.groupBy({
+      by: ["campaign_id", "date"],
+      where: {
+        campaign_id: { in: allCampaignIdsIncludingDupes },
+        date: { gte: statsDateStart, lt: statsDateEnd },
+        is_deleted: 0,
+      } as never,
+      _sum: { cost: true, clicks: true, impressions: true },
+    });
+
+    // 按 (google_campaign_id, date) 去重：同一 gcid+date 取 cost 最大的一条
+    const gcidDateBest = new Map<string, { primaryId: string; cost: number; clicks: number; impressions: number }>();
+    for (const s of rawStatsRows) {
+      const gcid = campaignIdToGcid.get(String(s.campaign_id));
+      const primaryId = gcid ? (gcidToPrimaryCampaignId.get(gcid) || String(s.campaign_id)) : String(s.campaign_id);
+      const dateKey = s.date instanceof Date ? s.date.toISOString().split("T")[0] : String(s.date);
+      const dedupKey = `${primaryId}_${dateKey}`;
+      const cost = Number(s._sum?.cost || 0);
+      const clicks = Number(s._sum?.clicks || 0);
+      const impressions = Number(s._sum?.impressions || 0);
+      const prev = gcidDateBest.get(dedupKey);
+      if (!prev || cost > prev.cost) {
+        gcidDateBest.set(dedupKey, { primaryId, cost, clicks, impressions });
+      }
+    }
+
+    // 按 primaryId（去重后的 campaign）汇总所有日期
+    for (const entry of gcidDateBest.values()) {
+      const existing = allStatsMap.get(entry.primaryId);
+      if (existing) {
+        existing.cost += entry.cost;
+        existing.clicks += entry.clicks;
+        existing.impressions += entry.impressions;
+      } else {
+        allStatsMap.set(entry.primaryId, { cost: entry.cost, clicks: entry.clicks, impressions: entry.impressions });
+      }
     }
   }
 

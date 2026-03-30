@@ -260,10 +260,9 @@ async function syncAdsData(
         }
       }
 
-      // ─── 今日数据同步：仅当结束日期包含今天时执行 ───
+      // ─── 近期数据同步（含今日）：用昨天~今天的日期范围替代 DURING TODAY，修复时区偏移 ───
       const cidDataMap = new Map<string, Awaited<ReturnType<typeof fetchTodayCampaignData>>>();
-      const todayStatsMap = new Map<string, bigint>();
-      const todayDate = new Date(todayStr);
+      const recentStatsMap = new Map<string, bigint>();
 
       if (includeTodayApi) {
         const CID_CONCURRENCY = 3;
@@ -272,7 +271,7 @@ async function syncAdsData(
           const results = await Promise.all(
             batch.map(async (cid) => {
               try {
-                return { id: cid.customer_id, data: await fetchTodayCampaignData(credentials, cid.customer_id) };
+                return { id: cid.customer_id, data: await fetchTodayCampaignData(credentials, cid.customer_id, { startDate: yesterdayStr, endDate: todayStr }) };
               } catch (err) {
                 console.error(`CID ${cid.customer_id} 同步失败:`, err);
                 return { id: cid.customer_id, data: [] as Awaited<ReturnType<typeof fetchTodayCampaignData>> };
@@ -282,12 +281,14 @@ async function syncAdsData(
           for (const r of results) cidDataMap.set(r.id, r.data);
         }
 
-        const existingTodayStats = await prisma.ads_daily_stats.findMany({
-          where: { user_id: userId, date: todayDate },
-          select: { id: true, campaign_id: true },
+        const recentDates = [new Date(yesterdayStr), new Date(todayStr)];
+        const existingRecentStats = await prisma.ads_daily_stats.findMany({
+          where: { user_id: userId, date: { in: recentDates } },
+          select: { id: true, campaign_id: true, date: true },
         });
-        for (const stat of existingTodayStats) {
-          todayStatsMap.set(String(stat.campaign_id), stat.id);
+        for (const stat of existingRecentStats) {
+          const dateKey = stat.date.toISOString().split("T")[0];
+          recentStatsMap.set(`${stat.campaign_id}_${dateKey}`, stat.id);
         }
       }
 
@@ -327,20 +328,23 @@ async function syncAdsData(
             }));
           }
 
-          const todayRate = await getExchangeRate(mcc.currency, todayStr);
-          if (todayRate <= 0) {
-            console.warn(`[Sync] 跳过 today campaign ${cd.campaign_id}：汇率不可用`);
+          const dataDate = cd.date;
+          const dateRate = await getExchangeRate(mcc.currency, dataDate);
+          if (dateRate <= 0) {
+            console.warn(`[Sync] 跳过 campaign ${cd.campaign_id} ${dataDate}：汇率不可用`);
             continue;
           }
-          const statsData = { budget: Number((cd.budget_dollars * todayRate).toFixed(2)), cost: Number((cd.cost_dollars * todayRate).toFixed(2)), clicks: cd.clicks, impressions: cd.impressions, cpc: Number((cd.cpc_dollars * todayRate).toFixed(4)), conversions: cd.conversions, data_source: "api" as const };
-          const existingStatsId = todayStatsMap.get(String(campaign.id));
+          const dateObj = new Date(dataDate);
+          const statsData = { budget: Number((cd.budget_dollars * dateRate).toFixed(2)), cost: Number((cd.cost_dollars * dateRate).toFixed(2)), clicks: cd.clicks, impressions: cd.impressions, cpc: Number((cd.cpc_dollars * dateRate).toFixed(4)), conversions: cd.conversions, data_source: "api" as const };
+          const statsKey = `${campaign.id}_${dataDate}`;
+          const existingStatsId = recentStatsMap.get(statsKey);
           if (existingStatsId) {
             operations.push(() => prisma.ads_daily_stats.update({ where: { id: existingStatsId }, data: statsData }));
             totalUpdated++;
           } else {
             operations.push(() => prisma.ads_daily_stats.create({
-              data: { user_id: userId, user_merchant_id: BigInt(0), campaign_id: campaign!.id, date: todayDate, ...statsData },
-            }).then(s => { todayStatsMap.set(String(campaign!.id), s.id); }));
+              data: { user_id: userId, user_merchant_id: BigInt(0), campaign_id: campaign!.id, date: dateObj, ...statsData },
+            }).then(s => { recentStatsMap.set(`${campaign!.id}_${dataDate}`, s.id); }));
             totalInserted++;
           }
         }

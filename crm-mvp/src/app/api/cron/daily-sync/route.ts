@@ -162,7 +162,7 @@ async function syncMerchantSheet(): Promise<unknown> {
   }
 }
 
-// ── 同步所有用户的 MCC 广告数据（仅 Sheet，API 同步由用户手动触发） ──
+// ── 同步所有用户的 MCC 广告数据（Sheet 近 7 天 + API 近 2 天补数据） ──
 
 async function syncAllUsersMcc(): Promise<unknown> {
   const allMcc = await prisma.google_mcc_accounts.findMany({
@@ -187,11 +187,10 @@ async function syncAllUsersMcc(): Promise<unknown> {
         log(`  MCC ${mcc.mcc_name || mcc.mcc_id} for user ${userId}...`);
 
         try {
-          const now = new Date();
-          const syncStart = new Date();
-          syncStart.setDate(now.getDate() - 7);
-          const startStr = syncStart.toISOString().slice(0, 10);
-          const endStr = now.toISOString().slice(0, 10);
+          const cstNow = nowCST();
+          const startStr = cstNow.subtract(7, "day").format("YYYY-MM-DD");
+          const endStr = cstNow.format("YYYY-MM-DD");
+          const yesterdayStr = cstNow.subtract(1, "day").format("YYYY-MM-DD");
           await preloadRates(mcc.currency, startStr, endStr);
 
           let sheetUpserted = 0;
@@ -200,7 +199,6 @@ async function syncAllUsersMcc(): Promise<unknown> {
           if (mcc.sheet_url) {
             const sheetResult = await syncFromSheet(mcc.sheet_url, startStr, endStr);
             if (sheetResult.success && sheetResult.rows.length > 0) {
-              // 预加载所有相关 campaigns，按 google_campaign_id 去重（优先有 customer_id 的）
               const gcids = [...new Set(sheetResult.rows.map(r => r.campaign_id).filter(Boolean))];
               const existingCampaigns = gcids.length > 0
                 ? await prisma.campaigns.findMany({
@@ -245,7 +243,80 @@ async function syncAllUsersMcc(): Promise<unknown> {
             }
           }
 
-          results[`mcc_${mcc.mcc_id}`] = { sheetUpserted };
+          // 2. API 补数据（近 2 天：昨天+今天），弥补 Sheet 延迟
+          let apiUpserted = 0;
+          if (mcc.service_account_json) {
+            try {
+              const { fetchCampaignDataByDateRange } = await import("@/lib/google-ads");
+              const credentials = {
+                mcc_id: mcc.mcc_id,
+                developer_token: mcc.developer_token || "",
+                service_account_json: mcc.service_account_json,
+              };
+
+              const cids = await prisma.mcc_cid_accounts.findMany({
+                where: { mcc_account_id: mcc.id, is_deleted: 0, status: "active" },
+                take: 50,
+              });
+
+              if (cids.length > 0) {
+                const existingCampaigns = await prisma.campaigns.findMany({
+                  where: { user_id: uid, mcc_id: mcc.id, is_deleted: 0 },
+                  select: { id: true, google_campaign_id: true, customer_id: true },
+                });
+                const campaignByGcid = new Map<string, (typeof existingCampaigns)[0]>();
+                for (const c of existingCampaigns) {
+                  if (!c.google_campaign_id) continue;
+                  const existing = campaignByGcid.get(c.google_campaign_id);
+                  if (!existing || (!existing.customer_id && c.customer_id)) {
+                    campaignByGcid.set(c.google_campaign_id, c);
+                  }
+                }
+
+                log(`    API 补数据 ${yesterdayStr} → ${endStr}, ${cids.length} CIDs`);
+                const CID_CONCURRENCY = 3;
+                for (let ci = 0; ci < cids.length; ci += CID_CONCURRENCY) {
+                  const batch = cids.slice(ci, ci + CID_CONCURRENCY);
+                  const batchResults = await Promise.all(batch.map(async (cid) => {
+                    try {
+                      return await fetchCampaignDataByDateRange(credentials, cid.customer_id, yesterdayStr, endStr);
+                    } catch (err) {
+                      log(`    CID ${cid.customer_id} API err: ${err instanceof Error ? err.message.slice(0, 80) : String(err)}`);
+                      return [];
+                    }
+                  }));
+
+                  for (const data of batchResults) {
+                    for (const cd of data) {
+                      const campaign = campaignByGcid.get(cd.campaign_id);
+                      if (!campaign) continue;
+
+                      const dateObj = new Date(cd.date);
+                      const rate = await getExchangeRate(mcc.currency, cd.date);
+                      if (rate <= 0) continue;
+
+                      const costUsd = Number((cd.cost_dollars * rate).toFixed(2));
+                      await prisma.ads_daily_stats.upsert({
+                        where: { campaign_id_date: { campaign_id: campaign.id, date: dateObj } },
+                        update: { cost: costUsd, clicks: cd.clicks, impressions: cd.impressions, cpc: Number((cd.cpc_dollars * rate).toFixed(4)), data_source: "api" },
+                        create: {
+                          user_id: uid, campaign_id: campaign.id, date: dateObj,
+                          cost: costUsd, clicks: cd.clicks, impressions: cd.impressions,
+                          cpc: Number((cd.cpc_dollars * rate).toFixed(4)),
+                          data_source: "api", user_merchant_id: BigInt(0),
+                        },
+                      });
+                      apiUpserted++;
+                    }
+                  }
+                }
+              }
+            } catch (e) {
+              log(`    API 补数据失败: ${e instanceof Error ? e.message : String(e)}`);
+            }
+          }
+
+          results[`mcc_${mcc.mcc_id}`] = { sheetUpserted, apiUpserted };
         } catch (e) {
           results[`mcc_${mcc.mcc_id}`] = { error: e instanceof Error ? e.message : String(e) };
         }

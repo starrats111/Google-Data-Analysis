@@ -45,21 +45,34 @@ function parseCampaignRow(row: Record<string, unknown>, customerId: string): Cam
   };
 }
 
+/**
+ * 拉取"今日"数据 — 用最近2天的 date range 替代 DURING TODAY，
+ * 避免 Google 账户时区与 CST 不一致导致日期张冠李戴。
+ * 返回值包含 date 字段，调用方应按此日期存储。
+ */
 export async function fetchTodayCampaignData(
   credentials: MccCredentials,
   customerId: string,
-): Promise<CampaignData[]> {
+  dateRange?: { startDate: string; endDate: string },
+): Promise<(CampaignData & { date: string })[]> {
+  const end = dateRange?.endDate || new Date().toISOString().slice(0, 10);
+  const start = dateRange?.startDate || end;
+
   const results = await queryGoogleAds(credentials, customerId, `
     SELECT
       campaign.id, campaign.name, campaign.status,
       campaign_budget.amount_micros,
       metrics.cost_micros, metrics.clicks, metrics.impressions,
-      metrics.average_cpc, metrics.conversions
+      metrics.average_cpc, metrics.conversions,
+      segments.date
     FROM campaign
-    WHERE segments.date DURING TODAY
+    WHERE segments.date BETWEEN '${start}' AND '${end}'
       AND metrics.cost_micros > 0
   `);
-  return results.map((r) => parseCampaignRow(r, customerId));
+  return results.map((r) => ({
+    ...parseCampaignRow(r, customerId),
+    date: String((r.segments as Record<string, unknown> | undefined)?.date ?? end),
+  }));
 }
 
 export async function fetchCampaignDataByDateRange(
