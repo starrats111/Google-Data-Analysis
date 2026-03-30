@@ -3,7 +3,7 @@ import { getUserFromRequest, serializeData } from "@/lib/auth";
 import { apiError } from "@/lib/constants";
 import prisma from "@/lib/prisma";
 import { callAiWithFallback, suggestDisplayPaths } from "@/lib/ai-service";
-import { getAdMarketConfig } from "@/lib/ad-market";
+import { getAdMarketConfig, resolveLanguageName } from "@/lib/ad-market";
 import { buildAiRulePrompt, checkItemViolations } from "@/lib/ai-rule-profile";
 import {
   type CrawlCache,
@@ -154,7 +154,7 @@ export async function POST(req: NextRequest) {
     console.error("[Extensions] 请求体 JSON 解析失败:", e instanceof Error ? e.message : e);
     return apiError("请求体格式错误");
   }
-  const { campaign_id, types = [] } = body;
+  const { campaign_id, types = [], ad_language } = body;
   if (!campaign_id) {
     console.warn("[Extensions] 400: 缺少 campaign_id, body:", JSON.stringify(body).slice(0, 200));
     return apiError("缺少 campaign_id");
@@ -228,13 +228,13 @@ export async function POST(req: NextRequest) {
 
       // ─── core: 1 次 AI 生成标题 + 描述 + 站内链接描述 + 图片 ───
       if (types.includes("core")) {
-        tasks.push(generateCore(cache!, merchantName, merchantUrl, country, adSettings, aiRuleProfile, adCreative?.id || null, send));
+        tasks.push(generateCore(cache!, merchantName, merchantUrl, country, adSettings, aiRuleProfile, adCreative?.id || null, send, ad_language));
       }
 
       // ─── optional: 1 次 AI 批量生成所有勾选的可选扩展 ───
       if (types.includes("optional")) {
         const optionalTypes: string[] = body.optionalTypes || [];
-        tasks.push(generateOptionalBatch(cache!, merchantName, merchantUrl, country, optionalTypes, aiRuleProfile, send));
+        tasks.push(generateOptionalBatch(cache!, merchantName, merchantUrl, country, optionalTypes, aiRuleProfile, send, ad_language));
       }
 
       await Promise.all(tasks);
@@ -259,8 +259,10 @@ async function generateCore(
   aiRuleProfile: unknown,
   adCreativeId: bigint | null,
   send: (type: string, data: unknown) => void,
+  adLanguageCode?: string,
 ) {
   const market = getAdMarketConfig(country);
+  const languageName = resolveLanguageName(country, adLanguageCode);
   const dailyBudget = Number(adSettings?.daily_budget || 2);
   const maxCpc = Number(adSettings?.max_cpc || 0.3);
   const biddingStrategy = adSettings?.bidding_strategy || "MAXIMIZE_CLICKS";
@@ -278,7 +280,7 @@ async function generateCore(
 Context:
 - Merchant: ${merchantName}
 - Website: ${merchantUrl}
-- Target: ${market.countryNameZh} (${market.languageName})
+- Target: ${market.countryNameZh} (${languageName})
 - Budget: $${dailyBudget.toFixed(2)}/day, CPC $${maxCpc.toFixed(2)}, Strategy: ${biddingStrategy}
 
 Website content (truncated):
@@ -297,14 +299,14 @@ Return ONLY a JSON object with this exact structure:
 MANDATORY RULES for headlines (exactly 15):
 1. #1 must include "${merchantName}" or clear brand reference
 2. Include exactly 1 discount headline and 1 shipping headline
-3. Each ≤ 30 characters, in ${market.languageName}
+3. Each ≤ 30 characters, in ${languageName}
 4. No dates/expiry/countdowns, no generic filler like "Official Site"
 5. Commercially strong: trust, value, CTA, product fit
 6. Write like a real marketer — specific, punchy, no AI buzzwords
 
 MANDATORY RULES for descriptions (exactly 4):
 1. Exactly 1 must combine discount + shipping
-2. Each 50-90 characters, in ${market.languageName}
+2. Each 50-90 characters, in ${languageName}
 3. Each uses a different persuasion angle
 4. Must be distinct from headlines (Google flags duplicates)
 5. Use concrete benefits and real product details, avoid vague hype
@@ -325,7 +327,7 @@ Return ONLY valid JSON, no explanation.`;
       ? parsed.headlines.filter((h: string) => h && h.trim())
       : [];
     rawHeadlines = humanizeAdCopyBatch(rawHeadlines, 2, 30);
-    rawHeadlines = await condenseOverlong(rawHeadlines, 30, market.languageName);
+    rawHeadlines = await condenseOverlong(rawHeadlines, 30, languageName);
     let headlines = rawHeadlines.filter((h: string) => h.length >= 2 && h.length <= 30).slice(0, 15);
 
     // 标题不足15条时，用 padHeadlines 补全
@@ -338,13 +340,14 @@ Return ONLY valid JSON, no explanation.`;
           maxCpc: Number(adSettings?.max_cpc || 0.3),
           biddingStrategy: adSettings?.bidding_strategy || "MAXIMIZE_CLICKS",
           aiRuleProfile,
+          adLanguageCode,
         });
       } catch (padErr) {
         console.warn("[Core] padHeadlines 补全失败:", padErr instanceof Error ? padErr.message : padErr);
       }
     }
     // 合规自动修复：标题
-    const headlineFix = await complianceAutoFix(headlines, "headline", merchantName, market.languageName, aiRuleProfile, 30, 2);
+    const headlineFix = await complianceAutoFix(headlines, "headline", merchantName, languageName, aiRuleProfile, 30, 2);
     headlines = headlineFix.items;
 
     // 违规项被删除后，不足 15 条时补全一次（不再做二次合规，避免循环）
@@ -357,6 +360,7 @@ Return ONLY valid JSON, no explanation.`;
           maxCpc: Number(adSettings?.max_cpc || 0.3),
           biddingStrategy: adSettings?.bidding_strategy || "MAXIMIZE_CLICKS",
           aiRuleProfile,
+          adLanguageCode,
         });
         const newOnly = padded.filter((h: string) => !headlines.includes(h));
         const cleanNew = newOnly.filter((h: string) => checkItemViolations([h], aiRuleProfile).length === 0);
@@ -371,7 +375,7 @@ Return ONLY valid JSON, no explanation.`;
       ? parsed.descriptions.filter((d: string) => d && d.trim())
       : [];
     rawDescs = humanizeAdCopyBatch(rawDescs, 40, 90);
-    rawDescs = await condenseOverlong(rawDescs, 90, market.languageName);
+    rawDescs = await condenseOverlong(rawDescs, 90, languageName);
     let descriptions = rawDescs.filter((d: string) => d.length >= 40 && d.length <= 90).slice(0, 4);
 
     // 描述不足4条时，用 padDescriptions 补全
@@ -384,6 +388,7 @@ Return ONLY valid JSON, no explanation.`;
           maxCpc: Number(adSettings?.max_cpc || 0.3),
           biddingStrategy: adSettings?.bidding_strategy || "MAXIMIZE_CLICKS",
           aiRuleProfile,
+          adLanguageCode,
         });
       } catch (padErr) {
         console.warn("[Core] padDescriptions 补全失败:", padErr instanceof Error ? padErr.message : padErr);
@@ -391,7 +396,7 @@ Return ONLY valid JSON, no explanation.`;
     }
 
     // 合规自动修复：描述
-    const descFix = await complianceAutoFix(descriptions, "description", merchantName, market.languageName, aiRuleProfile, 90, 40);
+    const descFix = await complianceAutoFix(descriptions, "description", merchantName, languageName, aiRuleProfile, 90, 40);
     descriptions = descFix.items;
 
     // 违规项被删除后，不足 4 条时补全一次
@@ -404,6 +409,7 @@ Return ONLY valid JSON, no explanation.`;
           maxCpc: Number(adSettings?.max_cpc || 0.3),
           biddingStrategy: adSettings?.bidding_strategy || "MAXIMIZE_CLICKS",
           aiRuleProfile,
+          adLanguageCode,
         });
         const newOnly = padded.filter((d: string) => !descriptions.includes(d));
         const cleanNew = newOnly.filter((d: string) => checkItemViolations([d], aiRuleProfile).length === 0);
@@ -466,6 +472,7 @@ Return ONLY valid JSON, no explanation.`;
         maxCpc: Number(adSettings?.max_cpc || 0.3),
         biddingStrategy: adSettings?.bidding_strategy || "MAXIMIZE_CLICKS",
         aiRuleProfile,
+        adLanguageCode,
       });
       send("headlines", headlines);
       const descriptions = await padDescriptions([], merchantName, country, 4, {
@@ -474,6 +481,7 @@ Return ONLY valid JSON, no explanation.`;
         maxCpc: Number(adSettings?.max_cpc || 0.3),
         biddingStrategy: adSettings?.bidding_strategy || "MAXIMIZE_CLICKS",
         aiRuleProfile,
+        adLanguageCode,
       });
       send("descriptions", descriptions);
       const sitelinks = cache.sitelinkCandidates.map((s) => ({
@@ -514,10 +522,12 @@ async function generateOptionalBatch(
   optionalTypes: string[],
   aiRuleProfile: unknown,
   send: (type: string, data: unknown) => void,
+  adLanguageCode?: string,
 ) {
   if (optionalTypes.length === 0) return;
 
   const market = getAdMarketConfig(country);
+  const languageName = resolveLanguageName(country, adLanguageCode);
   const needsAi = optionalTypes.filter((t) => t !== "call");
   const needsCall = optionalTypes.includes("call");
 
@@ -554,7 +564,7 @@ Based on real merchant features. If shipping + returns both exist, merge into on
 
   if (needsAi.includes("promotion")) {
     sections.push(`## Promotion
-Extract promotion/discount info. Return: discount_type ("PERCENT"/"MONETARY"/null), discount_percent, discount_amount, currency_code ("${market.currencyCode}"), promo_code, promotion_target (≤20 chars, in ${market.languageName}), language_code ("${market.promotionLanguageCode}").
+Extract promotion/discount info. Return: discount_type ("PERCENT"/"MONETARY"/null), discount_percent, discount_amount, currency_code ("${market.currencyCode}"), promo_code, promotion_target (≤20 chars, in ${languageName}), language_code ("${market.promotionLanguageCode}").
 Do NOT include final_url.`);
   }
 
@@ -577,7 +587,7 @@ Extract 3-10 real category values (≤25 chars each) from: ${contextItems.slice(
 
 Merchant: ${merchantName}
 Website: ${merchantUrl}
-Target: ${market.countryNameZh} (${market.languageName})
+Target: ${market.countryNameZh} (${languageName})
 
 Website content:
 ${promoText.slice(0, 3000)}
@@ -601,7 +611,7 @@ Return ONLY a JSON object with applicable keys:
       let callouts = Array.isArray(parsed.callouts)
         ? parsed.callouts.filter((c: string) => c && c.length <= 25).slice(0, 6)
         : getDefaultCallouts(merchantName, country, cache.features);
-      const calloutFix = await complianceAutoFix(callouts, "headline", merchantName, market.languageName, aiRuleProfile, 25, 2);
+      const calloutFix = await complianceAutoFix(callouts, "headline", merchantName, languageName, aiRuleProfile, 25, 2);
       callouts = calloutFix.items;
       if (calloutFix.fixed.length > 0) send("compliance_auto_fix", { fixed: calloutFix.fixed, count: calloutFix.fixed.length });
       if (calloutFix.remaining.length > 0) send("compliance_warnings", { warnings: calloutFix.remaining, count: calloutFix.remaining.length });

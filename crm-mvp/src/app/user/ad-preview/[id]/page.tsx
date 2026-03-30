@@ -336,7 +336,7 @@ export default function AdPreviewPage() {
           try {
             const res = await fetch("/api/user/ad-creation/generate-more", {
               method: "POST", headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ type: "headlines", existing: filledH, merchant_name: preview?.merchant?.merchant_name || "", country: preview?.campaign?.target_country || "US", count: 15 }),
+              body: JSON.stringify({ type: "headlines", existing: filledH, merchant_name: preview?.merchant?.merchant_name || "", country: preview?.campaign?.target_country || "US", count: 15, ad_language: adLanguage || undefined }),
             });
             const json = await res.json();
             if (json.code === 0 && json.data?.items?.length > 0) {
@@ -354,7 +354,7 @@ export default function AdPreviewPage() {
           try {
             const res = await fetch("/api/user/ad-creation/generate-more", {
               method: "POST", headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ type: "descriptions", existing: filledD, merchant_name: preview?.merchant?.merchant_name || "", country: preview?.campaign?.target_country || "US", count: 4, headlines_for_uniqueness: filledH }),
+              body: JSON.stringify({ type: "descriptions", existing: filledD, merchant_name: preview?.merchant?.merchant_name || "", country: preview?.campaign?.target_country || "US", count: 4, headlines_for_uniqueness: filledH, ad_language: adLanguage || undefined }),
             });
             const json = await res.json();
             if (json.code === 0 && json.data?.items?.length > 0) {
@@ -443,6 +443,7 @@ export default function AdPreviewPage() {
           max_cpc: maxCpc,
           bidding_strategy: biddingStrategy,
           count: 15,
+          ad_language: adLanguage || undefined,
         }),
       });
       const json = await res.json();
@@ -460,7 +461,7 @@ export default function AdPreviewPage() {
     } finally {
       setGeneratingHeadlines(false);
     }
-  }, [headlines, preview, message, kwList, budget, maxCpc, biddingStrategy]);
+  }, [headlines, preview, message, kwList, budget, maxCpc, biddingStrategy, adLanguage]);
 
   // ─── AI 生成更多描述（与当前标题差异化，贴合 Google「描述更独特」）───
   const aiGenerateDescriptions = useCallback(async () => {
@@ -482,6 +483,7 @@ export default function AdPreviewPage() {
           max_cpc: maxCpc,
           bidding_strategy: biddingStrategy,
           count: 4,
+          ad_language: adLanguage || undefined,
         }),
       });
       const json = await res.json();
@@ -499,7 +501,7 @@ export default function AdPreviewPage() {
     } finally {
       setGeneratingDescriptions(false);
     }
-  }, [descriptions, headlines, preview, message, kwList, budget, maxCpc, biddingStrategy]);
+  }, [descriptions, headlines, preview, message, kwList, budget, maxCpc, biddingStrategy, adLanguage]);
 
   // ─── 关键词操作 ───
   const [newKwMatchType, setNewKwMatchType] = useState<string>("PHRASE");
@@ -848,14 +850,14 @@ export default function AdPreviewPage() {
       const coreTypes = new Set(["sitelinks", "images"]);
       const needsCore = isCore || requestedTypes.some((t) => coreTypes.has(t));
       if (needsCore) {
-        reqBody = { campaign_id: campaignId, types: ["core"] };
+        reqBody = { campaign_id: campaignId, types: ["core"], ad_language: adLanguage || undefined };
       } else {
         const optionalSet = new Set(["callouts", "promotion", "price", "call", "snippet"]);
         const isOptionalBatch = requestedTypes.every((t) => optionalSet.has(t));
         if (isOptionalBatch && requestedTypes.length > 0) {
-          reqBody = { campaign_id: campaignId, types: ["optional"], optionalTypes: requestedTypes };
+          reqBody = { campaign_id: campaignId, types: ["optional"], optionalTypes: requestedTypes, ad_language: adLanguage || undefined };
         } else {
-          reqBody = { campaign_id: campaignId, types: requestedTypes };
+          reqBody = { campaign_id: campaignId, types: requestedTypes, ad_language: adLanguage || undefined };
         }
       }
 
@@ -902,7 +904,7 @@ export default function AdPreviewPage() {
         for (const t of requestedTypes) if (!arrived.has(t) && !arrived.has(t === "price" ? "price_items" : t === "snippet" ? "structured_snippet" : t)) loadingSetters[t]?.(false);
       }
     }
-  }, [campaignId, message, callCountryCode, defaultCurrencyCode, defaultLanguageCode, defaultSnippetHeader, targetCountry, preview]);
+  }, [campaignId, message, callCountryCode, defaultCurrencyCode, defaultLanguageCode, defaultSnippetHeader, targetCountry, preview, adLanguage]);
 
   // ─── 手动输入 URL → 自动获取标题和描述 + 验证 ───
   const fetchAndValidateSitelink = useCallback(async (idx: number) => {

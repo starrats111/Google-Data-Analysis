@@ -5,7 +5,7 @@ import prisma from "@/lib/prisma";
 import { padHeadlines, padDescriptions, callAiWithFallback } from "@/lib/ai-service";
 import { checkItemViolations } from "@/lib/ai-rule-profile";
 import { extractJsonFromAi } from "@/lib/crawl-pipeline";
-import { getAdMarketConfig } from "@/lib/ad-market";
+import { getAdMarketConfig, resolveLanguageName } from "@/lib/ad-market";
 
 const MAX_COMPLIANCE_RETRIES = 3;
 
@@ -17,7 +17,7 @@ export async function POST(req: NextRequest) {
   const user = getUserFromRequest(req);
   if (!user) return apiError("未授权", 401);
 
-  const { type, existing, merchant_name, country, count, keywords = [], headlines_for_uniqueness = [], daily_budget, max_cpc, bidding_strategy } = await req.json();
+  const { type, existing, merchant_name, country, count, keywords = [], headlines_for_uniqueness = [], daily_budget, max_cpc, bidding_strategy, ad_language } = await req.json();
 
   if (!type || !["headlines", "descriptions"].includes(type)) {
     return apiError("type 必须为 headlines 或 descriptions");
@@ -33,6 +33,7 @@ export async function POST(req: NextRequest) {
   try {
     let newItems: string[];
     const market = getAdMarketConfig(country || "US");
+    const languageName = resolveLanguageName(country || "US", ad_language);
 
     if (type === "headlines") {
       const result = await padHeadlines(existingItems, merchant_name || "", country || "US", targetCount, {
@@ -41,6 +42,7 @@ export async function POST(req: NextRequest) {
         maxCpc: Number(max_cpc || 0),
         biddingStrategy: bidding_strategy,
         aiRuleProfile: settings?.ai_rule_profile,
+        adLanguageCode: ad_language,
       });
       newItems = result.filter((h) => !existingItems.includes(h));
     } else {
@@ -53,6 +55,7 @@ export async function POST(req: NextRequest) {
         maxCpc: Number(max_cpc || 0),
         biddingStrategy: bidding_strategy,
         aiRuleProfile: settings?.ai_rule_profile,
+        adLanguageCode: ad_language,
       });
       newItems = result.filter((d) => !existingItems.includes(d));
     }
@@ -68,7 +71,7 @@ export async function POST(req: NextRequest) {
 
       const avoidReasons = [...new Set(violations.flatMap((v) => v.reasons))];
       const prompt = `Generate ${violations.length} replacement Google Ads RSA ${type === "headlines" ? "headlines" : "descriptions"}.
-Merchant: ${merchant_name || ""}, Language: ${market.languageName}
+Merchant: ${merchant_name || ""}, Language: ${languageName}
 
 REJECTED items needing replacement:
 ${violations.map((v, i) => `${i + 1}. "${v.text}" — reason: ${v.reasons.join(", ")}`).join("\n")}

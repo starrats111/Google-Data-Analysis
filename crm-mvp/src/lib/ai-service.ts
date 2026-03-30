@@ -4,7 +4,7 @@
  * 场景：ad_copy（广告文案）、article（文章生成）、data_insight（数据洞察）
  */
 import prisma from "@/lib/prisma";
-import { getAdMarketConfig, type AdMarketConfig } from "@/lib/ad-market";
+import { getAdMarketConfig, resolveLanguageName, type AdMarketConfig } from "@/lib/ad-market";
 import { buildAiRulePrompt } from "@/lib/ai-rule-profile";
 import { humanizeAdCopyBatch, AD_COPY_ANTI_AI_BLOCK } from "@/lib/humanizer";
 
@@ -26,6 +26,8 @@ interface PadCopyOptions {
   maxCpc?: number;
   biddingStrategy?: string;
   aiRuleProfile?: unknown;
+  /** 用户在前端选择的广告语言代码（如 "da"），优先于国家推导的语言 */
+  adLanguageCode?: string;
 }
 
 /** 显示路径（path1/path2）每条 ≤15 字符，字母数字与连字符；用于提升 RSA 完整度与点击率 */
@@ -753,6 +755,7 @@ export async function padHeadlines(
   options: PadCopyOptions = {},
 ): Promise<string[]> {
   const market = getAdMarketConfig(country);
+  const languageName = resolveLanguageName(country, options.adLanguageCode);
   const locked = sanitizeHeadlineCandidates(existing, merchantName, 30, count);
   if (locked.length >= count) return locked.slice(0, count);
 
@@ -769,7 +772,7 @@ export async function padHeadlines(
 
 Context:
 - Merchant: ${merchantName}
-- Target country: ${market.countryNameZh} (${market.languageName})
+- Target country: ${market.countryNameZh} (${languageName})
 - Writing style: ${market.style}
 - Budget: $${dailyBudget.toFixed(2)}/day, CPC $${maxCpc.toFixed(2)}
 - Bidding strategy: ${biddingStrategy}
@@ -788,7 +791,7 @@ MANDATORY RULES:
 3. Include exactly one shipping headline for ${market.countryNameZh} only.
 4. Make the set commercially strong: emphasize product/category fit, trust, buying motivation, convenience, quality, or CTA.
 5. Each headline must be <= 30 characters.
-6. Write in ${market.languageName}. Never fall back to English unless the target market language is English.
+6. Write in ${languageName}. Never fall back to English unless the target market language is English.
 7. Do NOT output expired or time-bound copy: no dates, months, years, countdowns, \"Early Bird\", \"Ends Soon\", or specific event deadlines.
 8. Do NOT output low-value filler such as brand only, \"Official Site\", \"Home Page\", or near-duplicates.
 9. Avoid repeating the same phrase pattern across multiple headlines.
@@ -832,6 +835,7 @@ export async function padDescriptions(
   options: PadCopyOptions = {},
 ): Promise<string[]> {
   const market = getAdMarketConfig(country);
+  const languageName = resolveLanguageName(country, options.adLanguageCode);
   const locked = sanitizeDescriptionCandidates(existing, merchantName, 90, count);
   if (locked.length >= count) return locked.slice(0, count);
 
@@ -860,7 +864,7 @@ export async function padDescriptions(
 
 Context:
 - Merchant: ${merchantName}
-- Target country: ${market.countryNameZh} (${market.languageName})
+- Target country: ${market.countryNameZh} (${languageName})
 - Writing style: ${market.style}
 - Budget: $${dailyBudget.toFixed(2)}/day, CPC $${maxCpc.toFixed(2)}
 - Bidding strategy: ${biddingStrategy}
@@ -882,7 +886,7 @@ Generate exactly ${needed} NEW descriptions. Return ONLY a JSON array of exactly
 MANDATORY RULES:
 1. Exactly ONE description must combine both discount and shipping in one line.
 2. Each description must be 50-90 characters.
-3. Write in ${market.languageName}. Never fall back to English unless the target market language is English.
+3. Write in ${languageName}. Never fall back to English unless the target market language is English.
 4. Each line must have a different persuasion angle: offer, trust, product fit, convenience, or CTA.
 5. Avoid generic filler. The copy must feel like it can actually drive revenue.
 6. Do NOT use dates, months, years, countdowns, \"Early Bird\", \"Ends Soon\", or expired event language.
