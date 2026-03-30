@@ -33,7 +33,12 @@ export async function syncUserCampaignStatuses(userId: bigint): Promise<SyncResu
       };
 
       const cids = await prisma.mcc_cid_accounts.findMany({
-        where: { mcc_account_id: mcc.id, is_deleted: 0, status: "active" },
+        where: {
+          mcc_account_id: mcc.id,
+          is_deleted: 0,
+          status: "active",
+          is_available: { not: "D" },
+        },
       });
       if (cids.length === 0) continue;
 
@@ -41,13 +46,16 @@ export async function syncUserCampaignStatuses(userId: bigint): Promise<SyncResu
       const { statuses, disabledCids } = await fetchAllCampaignStatuses(credentials, customerIds);
       let updated = 0;
 
-      // 停用 CID 下的 campaign 标记为 PAUSED
       if (disabledCids.length > 0) {
         const r = await prisma.campaigns.updateMany({
           where: { user_id: userId, customer_id: { in: disabledCids }, is_deleted: 0, google_status: { not: "PAUSED" } },
           data: { google_status: "PAUSED", last_google_sync_at: new Date() },
         });
         updated += r.count;
+        await prisma.mcc_cid_accounts.updateMany({
+          where: { mcc_account_id: mcc.id, customer_id: { in: disabledCids } },
+          data: { is_available: "D", last_synced_at: new Date() },
+        });
       }
 
       // 逐条更新状态（不覆盖 campaign_name）

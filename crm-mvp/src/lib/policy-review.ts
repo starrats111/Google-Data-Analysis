@@ -113,7 +113,7 @@ export async function reviewMerchantPolicy(
 
 /**
  * 批量审核商家并写入数据库
- * 用于商家同步时调用
+ * 纯内存匹配 + 批量 DB 写入，避免逐条查库
  */
 export async function batchReviewMerchants(
   prisma: PrismaClient,
@@ -125,9 +125,10 @@ export async function batchReviewMerchants(
     platform: string;
   }>
 ): Promise<{ reviewed: number; restricted: number; prohibited: number }> {
-  let reviewed = 0, restricted = 0, prohibited = 0;
+  let restricted = 0, prohibited = 0;
 
-  // 先审核所有商家，收集结果
+  const categories = await getPolicyCategories(prisma);
+
   const cleanIds: bigint[] = [];
   const taggedMerchants: Array<{
     id: bigint;
@@ -138,23 +139,44 @@ export async function batchReviewMerchants(
   }> = [];
 
   for (const m of merchants) {
-    const result = await reviewMerchantPolicy(prisma, m);
-    reviewed++;
+    const domain = m.merchant_url ? extractDomain(m.merchant_url) : "";
+    const searchText = [m.merchant_name, domain, m.category || ""].join(" ").toLowerCase();
+    let matched = false;
 
-    if (result.policy_status === "clean") {
-      cleanIds.push(m.id);
-    } else {
-      taggedMerchants.push({ ...m, result });
-      if (result.policy_status === "restricted") restricted++;
-      if (result.policy_status === "prohibited") prohibited++;
+    for (const cat of categories!) {
+      const rawDomains = cat.match_domains;
+      const matchDomains: string[] = typeof rawDomains === "string" ? JSON.parse(rawDomains) : (rawDomains as string[] || []);
+      for (const d of matchDomains) {
+        if (domain && domain.includes(d.toLowerCase())) {
+          taggedMerchants.push({ ...m, result: { policy_status: cat.restriction_level as "restricted" | "prohibited", policy_category_code: cat.category_code, policy_category_id: cat.id, matched_rule: `domain:${d}`, restriction_level: cat.restriction_level } });
+          if (cat.restriction_level === "restricted") restricted++;
+          if (cat.restriction_level === "prohibited") prohibited++;
+          matched = true;
+          break;
+        }
+      }
+      if (matched) break;
+
+      const rawKeywords = cat.match_keywords;
+      const matchKeywords: string[] = typeof rawKeywords === "string" ? JSON.parse(rawKeywords) : (rawKeywords as string[] || []);
+      for (const kw of matchKeywords) {
+        if (searchText.includes(kw.toLowerCase())) {
+          taggedMerchants.push({ ...m, result: { policy_status: cat.restriction_level as "restricted" | "prohibited", policy_category_code: cat.category_code, policy_category_id: cat.id, matched_rule: `keyword:${kw}`, restriction_level: cat.restriction_level } });
+          if (cat.restriction_level === "restricted") restricted++;
+          if (cat.restriction_level === "prohibited") prohibited++;
+          matched = true;
+          break;
+        }
+      }
+      if (matched) break;
     }
+    if (!matched) cleanIds.push(m.id);
   }
 
-  // 批量更新 clean 商家（一条 SQL）
+  const BATCH_SIZE = 500;
   if (cleanIds.length > 0) {
-    // 分批处理，每批 500 个，避免 SQL 过长
-    for (let i = 0; i < cleanIds.length; i += 500) {
-      const batch = cleanIds.slice(i, i + 500);
+    for (let i = 0; i < cleanIds.length; i += BATCH_SIZE) {
+      const batch = cleanIds.slice(i, i + BATCH_SIZE);
       await prisma.user_merchants.updateMany({
         where: { id: { in: batch } },
         data: { policy_status: "clean" },
@@ -162,50 +184,25 @@ export async function batchReviewMerchants(
     }
   }
 
-  // 逐条更新有标签的商家（数量少，逐条更新可接受）
-  for (const m of taggedMerchants) {
-    await prisma.user_merchants.update({
-      where: { id: m.id },
-      data: {
-        policy_status: m.result.policy_status,
-        policy_category_code: m.result.policy_category_code,
-      },
-    });
-
-    // 写入/更新审核记录（用 findFirst + create/update 代替 upsert，避免复合唯一键问题）
-    const existing = await prisma.merchant_policy_reviews.findFirst({
-      where: {
-        merchant_name: m.merchant_name,
-        platform: m.platform || null,
-        is_deleted: 0,
-      },
-    });
-
-    if (existing) {
-      await prisma.merchant_policy_reviews.update({
-        where: { id: existing.id },
-        data: {
-          merchant_domain: m.merchant_url ? extractDomain(m.merchant_url) : null,
-          policy_category_id: m.result.policy_category_id,
-          policy_status: m.result.policy_status,
-          matched_rule: m.result.matched_rule,
-          reviewed_at: new Date(),
-        },
-      });
-    } else {
-      await prisma.merchant_policy_reviews.create({
-        data: {
-          merchant_name: m.merchant_name,
-          merchant_domain: m.merchant_url ? extractDomain(m.merchant_url) : null,
-          platform: m.platform || null,
-          policy_category_id: m.result.policy_category_id,
-          policy_status: m.result.policy_status,
-          matched_rule: m.result.matched_rule,
-          review_method: "auto",
-        },
-      });
+  if (taggedMerchants.length > 0) {
+    const byStatus = new Map<string, { ids: bigint[]; code: string | null }>();
+    for (const m of taggedMerchants) {
+      const key = `${m.result.policy_status}:${m.result.policy_category_code || ""}`;
+      const group = byStatus.get(key) || { ids: [], code: m.result.policy_category_code };
+      group.ids.push(m.id);
+      byStatus.set(key, group);
+    }
+    for (const [key, group] of byStatus) {
+      const [status] = key.split(":");
+      for (let i = 0; i < group.ids.length; i += BATCH_SIZE) {
+        const batch = group.ids.slice(i, i + BATCH_SIZE);
+        await prisma.user_merchants.updateMany({
+          where: { id: { in: batch } },
+          data: { policy_status: status, policy_category_code: group.code },
+        });
+      }
     }
   }
 
-  return { reviewed, restricted, prohibited };
+  return { reviewed: merchants.length, restricted, prohibited };
 }

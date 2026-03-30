@@ -207,8 +207,7 @@ async function doSyncInBackground(
       }
     }
 
-    // 批量更新（每 2 条并发，逐条容错避免单条失败中断全部同步）
-    const DB_BATCH = 2;
+    const DB_BATCH = 50;
     let updateFailCount = 0;
     const succeededUpdateIds: bigint[] = [];
     for (let i = 0; i < updateOps.length; i += DB_BATCH) {
@@ -219,25 +218,36 @@ async function doSyncInBackground(
           succeededUpdateIds.push(op.id);
         } catch (e) {
           updateFailCount++;
-          dbg(`UPDATE FAIL id=${op.id} data=${JSON.stringify(op.data).substring(0, 200)} err=${e instanceof Error ? e.message : String(e)}`);
+          dbg(`UPDATE FAIL id=${op.id} err=${e instanceof Error ? e.message : String(e)}`);
         }
       }));
     }
     updatedCount = updateOps.length - updateFailCount;
 
-    // 批量创建（每 2 条并发，逐条容错）
     let createFailCount = 0;
-    for (let i = 0; i < createOps.length; i += DB_BATCH) {
-      const batch = createOps.slice(i, i + DB_BATCH);
-      await Promise.all(batch.map(async (op) => {
-        try {
-          const created = await prisma.user_merchants.create({ data: op.data as any });
-          map.set(op.key, { id: created.id, platform: created.platform, merchant_id: created.merchant_id, status: "available", is_deleted: 0, platform_connection_id: op.connId });
-        } catch (e) {
-          createFailCount++;
-          dbg(`CREATE FAIL key=${op.key} err=${e instanceof Error ? e.message : String(e)}`);
+    const CREATE_BATCH = 200;
+    for (let i = 0; i < createOps.length; i += CREATE_BATCH) {
+      const batch = createOps.slice(i, i + CREATE_BATCH);
+      try {
+        await prisma.user_merchants.createMany({
+          data: batch.map(op => op.data as any),
+          skipDuplicates: true,
+        });
+        const created = await prisma.user_merchants.findMany({
+          where: {
+            user_id: userId,
+            platform: { in: batch.map(op => (op.data as any).platform) },
+            merchant_id: { in: batch.map(op => (op.data as any).merchant_id) },
+          },
+          select: { id: true, platform: true, merchant_id: true, status: true, is_deleted: true, platform_connection_id: true },
+        });
+        for (const c of created) {
+          map.set(`${c.platform}:${c.merchant_id}`, c);
         }
-      }));
+      } catch (e) {
+        createFailCount += batch.length;
+        dbg(`CREATE_MANY FAIL batch=${batch.length} err=${e instanceof Error ? e.message : String(e)}`);
+      }
     }
     newCount = createOps.length - createFailCount;
 
@@ -281,48 +291,27 @@ async function doSyncInBackground(
       dbg(`Policy error: ${e instanceof Error ? e.message : String(e)}`);
     }
 
-    const sec = ((Date.now() - t0) / 1000).toFixed(1);
-    const platStr = Object.entries(platformCounts).map(([p, c]) => `${p}: ${c}`).join(", ");
-
-    // 4. 同步 Google Ads 广告系列状态
+    // 4. 从 DB 匹配广告系列状态（不调 Google Ads API）
     let statusMsg = "";
     try {
-      const mccs = await prisma.google_mcc_accounts.findMany({
-        where: { user_id: userId, is_deleted: 0, is_active: 1, service_account_json: { not: null } },
-      });
-      if (mccs.length > 0) {
-        const { fetchAllCampaignStatuses } = await import("@/lib/google-ads");
-        let totalStatusUpdated = 0;
-        for (const mcc of mccs) {
-          if (!mcc.service_account_json) continue;
-          const cids = await prisma.mcc_cid_accounts.findMany({
-            where: { mcc_account_id: mcc.id, is_deleted: 0, status: "active" },
-          });
-          if (cids.length === 0) continue;
-          const credentials = { mcc_id: mcc.mcc_id, developer_token: mcc.developer_token || "", service_account_json: mcc.service_account_json };
-          const { statuses, disabledCids } = await fetchAllCampaignStatuses(credentials, cids.map(c => c.customer_id));
-          // 对于被停用的 CID，将其下所有 campaign 标记为 PAUSED
-          if (disabledCids.length > 0) {
-            const r = await prisma.campaigns.updateMany({
-              where: { user_id: userId, customer_id: { in: disabledCids }, is_deleted: 0, google_status: { not: "PAUSED" } },
-              data: { google_status: "PAUSED", last_google_sync_at: new Date() },
-            });
-            totalStatusUpdated += r.count;
-          }
-          for (const s of statuses) {
-            const r = await prisma.campaigns.updateMany({
-              where: { user_id: userId, google_campaign_id: s.campaign_id, is_deleted: 0 },
-              data: { google_status: s.status, campaign_name: s.name, last_google_sync_at: new Date() },
-            });
-            totalStatusUpdated += r.count;
-          }
+      const allMerchantIds = [...map.values()].filter(m => m.is_deleted === 0).map(m => m.id);
+      if (allMerchantIds.length > 0) {
+        const campaigns = await prisma.campaigns.findMany({
+          where: { user_id: userId, user_merchant_id: { in: allMerchantIds }, is_deleted: 0 },
+          select: { user_merchant_id: true, google_status: true },
+        });
+        const enabledCount = new Set(campaigns.filter(c => c.google_status === "ENABLED").map(c => c.user_merchant_id.toString())).size;
+        const pausedCount = new Set(campaigns.filter(c => c.google_status === "PAUSED").map(c => c.user_merchant_id.toString())).size;
+        if (enabledCount > 0 || pausedCount > 0) {
+          statusMsg = `，广告匹配：${enabledCount} 个投放中，${pausedCount} 个已暂停`;
         }
-        if (totalStatusUpdated > 0) statusMsg = `，广告状态更新 ${totalStatusUpdated} 条`;
-        dbg(`Ad status sync: ${totalStatusUpdated} updated`);
       }
     } catch (e) {
-      dbg(`Ad status sync error: ${e instanceof Error ? e.message : String(e)}`);
+      dbg(`Campaign match error: ${e instanceof Error ? e.message : String(e)}`);
     }
+
+    const sec = ((Date.now() - t0) / 1000).toFixed(1);
+    const platStr = Object.entries(platformCounts).map(([p, c]) => `${p}: ${c}`).join(", ");
 
     const failMsg = (updateFailCount + createFailCount) > 0
       ? `，失败 ${updateFailCount + createFailCount} 条`

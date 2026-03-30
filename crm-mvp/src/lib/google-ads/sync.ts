@@ -105,6 +105,8 @@ export async function fetchAllCampaignStatuses(
   const all: { customer_id: string; campaign_id: string; status: string; name: string; budget_micros: number; budget_dollars: number }[] = [];
   const disabledCids: string[] = [];
 
+  const PERM_DENIED_ERRORS = ["CUSTOMER_NOT_ENABLED", "not yet enabled", "USER_PERMISSION_DENIED", "PERMISSION_DENIED", "未启用或已停用"];
+
   const fetchOne = async (cid: string) => {
     try {
       const results = await queryGoogleAds(credentials, cid, `
@@ -126,10 +128,10 @@ export async function fetchAllCampaignStatuses(
       });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      console.error(`查询 CID ${cid} 失败:`, err);
-      // CID 被停用/未启用时，标记为 disabled
-      if (msg.includes("CUSTOMER_NOT_ENABLED") || msg.includes("not yet enabled")) {
+      if (PERM_DENIED_ERRORS.some(e => msg.includes(e))) {
         disabledCids.push(cid.replace(/-/g, ""));
+      } else {
+        console.error(`查询 CID ${cid} 失败:`, err);
       }
       return [];
     }
