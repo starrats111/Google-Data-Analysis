@@ -27,6 +27,7 @@ module.exports = {
         NODE_ENV: 'production',
         NODE_OPTIONS: '--max-old-space-size=768',
         PORT: '20050',
+        TZ: 'Asia/Shanghai',
       },
 
       // 日志配置（B-5）

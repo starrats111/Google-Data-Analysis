@@ -43,6 +43,7 @@ jobs:
 
             echo "===== 3. Install dependencies ====="
             cd "$CRM_DIR"
+            export TZ="Asia/Shanghai"
             export NODE_OPTIONS="--max-old-space-size=768"
 
             if git diff HEAD~1 --name-only | grep -q "crm-mvp/package-lock.json"; then

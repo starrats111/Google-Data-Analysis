@@ -2,6 +2,7 @@
  * Google Ads 数据同步服务 - 基于 Service Account REST API
  */
 import { MccCredentials, queryGoogleAds, microsToDollars } from "./client";
+import { todayCST } from "@/lib/date-utils";
 
 export interface CampaignData {
   campaign_id: string;
@@ -55,7 +56,7 @@ export async function fetchTodayCampaignData(
   customerId: string,
   dateRange?: { startDate: string; endDate: string },
 ): Promise<(CampaignData & { date: string })[]> {
-  const end = dateRange?.endDate || new Date().toISOString().slice(0, 10);
+  const end = dateRange?.endDate || todayCST();
   const start = dateRange?.startDate || end;
 
   const results = await queryGoogleAds(credentials, customerId, `

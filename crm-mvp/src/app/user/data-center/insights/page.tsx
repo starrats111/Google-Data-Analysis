@@ -5,6 +5,13 @@ import { Card, Tabs, Typography, Empty, Pagination, Spin } from "antd";
 import { BulbOutlined, CalendarOutlined } from "@ant-design/icons";
 import { useApiWithParams } from "@/lib/swr";
 import dayjs from "dayjs";
+import utc from "dayjs/plugin/utc";
+import timezone from "dayjs/plugin/timezone";
+
+dayjs.extend(utc);
+dayjs.extend(timezone);
+
+const TZ = "Asia/Shanghai";
 
 const { Title, Text } = Typography;
 
@@ -73,7 +80,7 @@ export default function InsightsPage() {
                 title={
                   <span>
                     <CalendarOutlined style={{ marginRight: 8 }} />
-                    {dayjs(item.insight_date).format("YYYY-MM-DD")}
+                    {dayjs(item.insight_date).tz(TZ).format("YYYY-MM-DD")}
                     <Text type="secondary" style={{ marginLeft: 12, fontSize: 12 }}>
                       {TYPE_LABELS[item.insight_type] || item.insight_type}
                     </Text>
@@ -81,7 +88,7 @@ export default function InsightsPage() {
                 }
                 extra={
                   <Text type="secondary" style={{ fontSize: 12 }}>
-                    {dayjs(item.created_at).format("MM-DD HH:mm")}
+                    {dayjs(item.created_at).tz(TZ).format("MM-DD HH:mm")}
                   </Text>
                 }
               >
