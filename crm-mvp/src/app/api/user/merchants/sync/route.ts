@@ -166,16 +166,17 @@ async function doSyncInBackground(
 
       const ex = map.get(key);
       if (ex) {
-        const updateData: Record<string, unknown> = {
-          merchant_name: row.merchant_name || undefined,
-          category: cat || undefined,
-          commission_rate: row.commission_rate || undefined,
-          supported_regions: regions ?? undefined,
-          merchant_url: row.site_url || undefined,
-          logo_url: row.logo || undefined,
-          tracking_link: row.campaign_link || undefined,
-          campaign_link: row.campaign_link || undefined,
-        };
+        const updateData: Record<string, any> = {};
+        if (row.merchant_name) updateData.merchant_name = row.merchant_name;
+        if (cat) updateData.category = cat;
+        if (row.commission_rate) updateData.commission_rate = row.commission_rate;
+        if (regions != null) updateData.supported_regions = regions;
+        if (row.site_url) updateData.merchant_url = row.site_url;
+        if (row.logo) updateData.logo_url = row.logo;
+        if (row.campaign_link) {
+          updateData.tracking_link = row.campaign_link;
+          updateData.campaign_link = row.campaign_link;
+        }
         if (!ex.platform_connection_id && row.conn_id) {
           updateData.platform_connection_id = row.conn_id;
         }
@@ -183,49 +184,62 @@ async function doSyncInBackground(
           updateData.is_deleted = 0;
           updateData.status = "available";
         }
-        updateOps.push({ id: ex.id, data: updateData });
+        if (Object.keys(updateData).length > 0) {
+          updateOps.push({ id: ex.id, data: updateData });
+        }
       } else {
-        createOps.push({
-          key,
-          connId: row.conn_id || null,
-          data: {
-            user_id: userId,
-            platform: row.platform_code,
-            merchant_id: row.merchant_id,
-            merchant_name: row.merchant_name || "",
-            category: cat || null,
-            commission_rate: row.commission_rate || null,
-            supported_regions: regions ?? undefined,
-            merchant_url: row.site_url || null,
-            logo_url: row.logo || null,
-            tracking_link: row.campaign_link || null,
-            campaign_link: row.campaign_link || null,
-            platform_connection_id: row.conn_id || null,
-            status: "available",
-          },
-        });
+        const createData: Record<string, any> = {
+          user_id: userId,
+          platform: row.platform_code,
+          merchant_id: row.merchant_id,
+          merchant_name: row.merchant_name || "",
+          category: cat || null,
+          commission_rate: row.commission_rate || null,
+          merchant_url: row.site_url || null,
+          logo_url: row.logo || null,
+          tracking_link: row.campaign_link || null,
+          campaign_link: row.campaign_link || null,
+          platform_connection_id: row.conn_id || null,
+          status: "available",
+        };
+        if (regions != null) createData.supported_regions = regions;
+        createOps.push({ key, connId: row.conn_id || null, data: createData });
       }
     }
 
-    // 批量更新（每 2 条并发，避免独占连接池导致 UI 请求超时）
+    // 批量更新（每 2 条并发，逐条容错避免单条失败中断全部同步）
     const DB_BATCH = 2;
+    let updateFailCount = 0;
+    const succeededUpdateIds: bigint[] = [];
     for (let i = 0; i < updateOps.length; i += DB_BATCH) {
       const batch = updateOps.slice(i, i + DB_BATCH);
-      await Promise.all(batch.map(op => prisma.user_merchants.update({ where: { id: op.id }, data: op.data })));
+      await Promise.all(batch.map(async (op) => {
+        try {
+          await prisma.user_merchants.update({ where: { id: op.id }, data: op.data });
+          succeededUpdateIds.push(op.id);
+        } catch (e) {
+          updateFailCount++;
+          dbg(`UPDATE FAIL id=${op.id} data=${JSON.stringify(op.data).substring(0, 200)} err=${e instanceof Error ? e.message : String(e)}`);
+        }
+      }));
     }
-    updatedCount = updateOps.length;
+    updatedCount = updateOps.length - updateFailCount;
 
-    // 批量创建（每 2 条并发）
+    // 批量创建（每 2 条并发，逐条容错）
+    let createFailCount = 0;
     for (let i = 0; i < createOps.length; i += DB_BATCH) {
       const batch = createOps.slice(i, i + DB_BATCH);
-      const results = await Promise.all(batch.map(op => prisma.user_merchants.create({ data: op.data as any })));
-      for (let j = 0; j < results.length; j++) {
-        const created = results[j];
-        const op = batch[j];
-        map.set(op.key, { id: created.id, platform: created.platform, merchant_id: created.merchant_id, status: "available", is_deleted: 0, platform_connection_id: op.connId });
-      }
+      await Promise.all(batch.map(async (op) => {
+        try {
+          const created = await prisma.user_merchants.create({ data: op.data as any });
+          map.set(op.key, { id: created.id, platform: created.platform, merchant_id: created.merchant_id, status: "available", is_deleted: 0, platform_connection_id: op.connId });
+        } catch (e) {
+          createFailCount++;
+          dbg(`CREATE FAIL key=${op.key} err=${e instanceof Error ? e.message : String(e)}`);
+        }
+      }));
     }
-    newCount = createOps.length;
+    newCount = createOps.length - createFailCount;
 
     // 2.5 清理：只清理本次成功返回数据的平台中不再存在的未领取商家
     // 避免某个平台 API 失败/返回空数据时误删已有商家
@@ -245,11 +259,11 @@ async function doSyncInBackground(
     }
     if (removedCount > 0) dbg(`Removed ${removedCount} non-joined merchants (only from synced platforms: ${[...syncedPlatforms].join(",")})`);
 
-    // 3. 政策审核（仅审核本次新增和更新的商家）
-    const changedIds = [...updateOps.map(op => op.id), ...createOps.map((_, i) => {
-      const key = createOps[i].key;
-      return map.get(key)?.id;
-    }).filter(Boolean) as bigint[]];
+    // 3. 政策审核（仅审核本次成功新增和更新的商家）
+    const succeededCreateIds = createOps
+      .map((op) => map.get(op.key)?.id)
+      .filter((id): id is bigint => id != null);
+    const changedIds = [...succeededUpdateIds, ...succeededCreateIds];
 
     let policyMsg = "";
     try {
@@ -310,7 +324,10 @@ async function doSyncInBackground(
       dbg(`Ad status sync error: ${e instanceof Error ? e.message : String(e)}`);
     }
 
-    const summary = `同步完成（${sec}秒）：${rows.length} 个已批准商家（${platStr}），新增 ${newCount}，更新 ${updatedCount}，清理 ${removedCount}${statusMsg}${policyMsg}${errors.length > 0 ? `。警告: ${errors.join("; ")}` : ""}`;
+    const failMsg = (updateFailCount + createFailCount) > 0
+      ? `，失败 ${updateFailCount + createFailCount} 条`
+      : "";
+    const summary = `同步完成（${sec}秒）：${rows.length} 个已批准商家（${platStr}），新增 ${newCount}，更新 ${updatedCount}，清理 ${removedCount}${failMsg}${statusMsg}${policyMsg}${errors.length > 0 ? `。警告: ${errors.join("; ")}` : ""}`;
 
     dbg(`DONE: ${summary}`);
     await notify(userId, "商家同步完成", summary);
