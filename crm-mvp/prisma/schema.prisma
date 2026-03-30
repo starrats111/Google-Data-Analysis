@@ -497,6 +497,7 @@ model notifications {
   type       String   @default("system") @db.VarChar(32) // system | merchant | article | ad | alert
   title      String   @db.VarChar(255)
   content    String?  @db.Text
+  metadata   String?  @db.Text
   is_read    Int      @default(0) @db.TinyInt
   is_deleted Int      @default(0) @db.TinyInt
   created_at DateTime @default(now()) @db.DateTime(0)

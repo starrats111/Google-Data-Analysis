@@ -1616,12 +1616,6 @@ export default function AdPreviewPage() {
               <Text type="secondary" style={{ fontSize: 12, display: "block", marginLeft: 24 }}>
                 系统自动从商家网站爬取产品图片。如爬取失败，可拖入图片或粘贴图片 URL
               </Text>
-              <Alert
-                type="info" showIcon
-                message="图片要求"
-                description="1. 图片需与品牌强关联（产品图、品牌场景图等）。2. 图片不要包含文字（上传后自动 OCR 检测）。"
-                style={{ marginTop: 8, marginLeft: 24, marginBottom: 0 }}
-              />
               {!imagesLoading && imageUrls.length === 0 && crawledImages.length === 0 && (
                 <Alert
                   type="warning" showIcon icon={<WarningOutlined />}

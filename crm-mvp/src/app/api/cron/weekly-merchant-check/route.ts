@@ -119,6 +119,8 @@ async function checkUserMerchants(userId: bigint, username: string): Promise<unk
   });
 
   let removed = 0, added = 0;
+  const removedList: { name: string; platform: string }[] = [];
+  const addedList: { name: string; platform: string }[] = [];
 
   for (const m of claimedMerchants) {
     const platform = normalizePlatformCode(m.platform);
@@ -132,6 +134,7 @@ async function checkUserMerchants(userId: bigint, username: string): Promise<unk
         data: { status: "available", claimed_at: null },
       });
       removed++;
+      removedList.push({ name: m.merchant_name, platform });
       log(`  REMOVED: ${m.merchant_name} [${platform}] → ${currentStatus}`);
     }
   }
@@ -159,6 +162,7 @@ async function checkUserMerchants(userId: bigint, username: string): Promise<unk
       },
     });
     added++;
+    addedList.push({ name: m.merchant_name, platform: m.platform });
     log(`  ADDED: ${m.merchant_name} [${m.platform}]`);
   }
 
@@ -166,8 +170,9 @@ async function checkUserMerchants(userId: bigint, username: string): Promise<unk
     const parts: string[] = [];
     if (removed > 0) parts.push(`剔除 ${removed} 个非 joined 商家`);
     if (added > 0) parts.push(`新增 ${added} 个 joined 商家`);
+    const metadata = JSON.stringify({ removed: removedList, added: addedList });
     await prisma.notifications.create({
-      data: { user_id: userId, title: "商家关系定期检查", content: parts.join("；"), type: "system" },
+      data: { user_id: userId, title: "商家关系定期检查", content: parts.join("；"), metadata, type: "system" },
     }).catch(() => {});
   }
 
@@ -198,6 +203,7 @@ async function checkUserMerchantLinks(
 
   let invalidCount = 0;
   const invalidMerchants: string[] = [];
+  const invalidDetails: { name: string; platform: string; reason: string }[] = [];
 
   for (const m of toCheck) {
     const linkToCheck = m.tracking_link || m.campaign_link;
@@ -212,6 +218,7 @@ async function checkUserMerchantLinks(
       });
       invalidCount++;
       invalidMerchants.push(m.merchant_name);
+      invalidDetails.push({ name: m.merchant_name, platform: m.platform, reason: "URL 格式无效" });
       log(`  INVALID URL format: ${m.merchant_name} [${m.platform}]`);
       continue;
     }
@@ -231,6 +238,7 @@ async function checkUserMerchantLinks(
       if (!result.ok) {
         invalidCount++;
         invalidMerchants.push(m.merchant_name);
+        invalidDetails.push({ name: m.merchant_name, platform: m.platform, reason: result.reason || "未知" });
         log(`  INVALID LINK: ${m.merchant_name} [${m.platform}] → ${result.reason}`);
       }
     } catch (e) {
@@ -241,11 +249,13 @@ async function checkUserMerchantLinks(
   }
 
   if (invalidCount > 0) {
+    const metadata = JSON.stringify({ invalidLinks: invalidDetails });
     await prisma.notifications.create({
       data: {
         user_id: userId,
         title: "商家链接异常",
         content: `检测到 ${invalidCount} 个商家链接无效：${invalidMerchants.slice(0, 5).join("、")}${invalidMerchants.length > 5 ? ` 等 ${invalidMerchants.length} 个` : ""}`,
+        metadata,
         type: "warning",
       },
     }).catch(() => {});

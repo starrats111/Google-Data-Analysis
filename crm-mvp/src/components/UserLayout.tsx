@@ -1,6 +1,6 @@
 "use client";
 
-import { Layout, Menu, Typography, Button, Space, Dropdown, Badge, Popover, Empty, Spin } from "antd";
+import { Layout, Menu, Typography, Button, Space, Dropdown, Badge, Popover, Empty, Spin, Modal, Tag, Table } from "antd";
 import {
   ShopOutlined,
   FileTextOutlined,
@@ -16,6 +16,7 @@ import {
   UnorderedListOutlined,
   TeamOutlined,
   BulbOutlined,
+  RightOutlined,
 } from "@ant-design/icons";
 import { useRouter, usePathname } from "next/navigation";
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
@@ -95,6 +96,13 @@ interface Notification {
   type: string;
   is_read: number;
   created_at: string;
+  has_detail?: boolean;
+}
+
+interface NotificationDetail {
+  removed?: { name: string; platform: string }[];
+  added?: { name: string; platform: string }[];
+  invalidLinks?: { name: string; platform: string; reason: string }[];
 }
 
 export default function UserLayout({ children }: { children: React.ReactNode }) {
@@ -187,6 +195,29 @@ export default function UserLayout({ children }: { children: React.ReactNode }) 
     mutateUnread();
   }, [mutateUnread]);
 
+  const [detailModal, setDetailModal] = useState<{ open: boolean; title: string; loading: boolean; data: NotificationDetail | null }>({
+    open: false, title: "", loading: false, data: null,
+  });
+
+  const openNotifDetail = useCallback(async (n: Notification) => {
+    if (!n.is_read) {
+      setNotifications((prev) => prev.map((x) => x.id === n.id ? { ...x, is_read: 1 } : x));
+      mutateUnread();
+    }
+    setDetailModal({ open: true, title: n.title, loading: true, data: null });
+    setNotifOpen(false);
+    try {
+      const res = await fetch(`/api/user/notifications/${n.id}`).then((r) => r.json());
+      if (res.code === 0 && res.data?.metadata) {
+        setDetailModal((prev) => ({ ...prev, loading: false, data: res.data.metadata }));
+      } else {
+        setDetailModal((prev) => ({ ...prev, loading: false, data: null }));
+      }
+    } catch {
+      setDetailModal((prev) => ({ ...prev, loading: false }));
+    }
+  }, [mutateUnread]);
+
   const handleLogout = useCallback(async () => {
     await fetch("/api/auth/logout", { method: "POST" });
     router.replace("/user/login");
@@ -226,21 +257,27 @@ export default function UserLayout({ children }: { children: React.ReactNode }) 
           <div
             key={n.id}
             className={`notification-item ${n.is_read ? "" : "unread"}`}
-            onClick={() => !n.is_read && markAsRead(n.id)}
+            onClick={() => n.has_detail ? openNotifDetail(n) : (!n.is_read && markAsRead(n.id))}
           >
             <div style={{ display: "flex", alignItems: "flex-start" }}>
               <span className={`notification-dot ${n.is_read ? "read" : "unread"}`} style={{ marginTop: 6 }} />
               <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontWeight: n.is_read ? 400 : 600, fontSize: 14, color: COLORS.textPrimary }}>{n.title}</div>
+                <div style={{ fontWeight: n.is_read ? 400 : 600, fontSize: 14, color: COLORS.textPrimary }}>
+                  {n.title}
+                  {n.has_detail && <RightOutlined style={{ fontSize: 10, marginLeft: 6, color: COLORS.textSecondary }} />}
+                </div>
                 <div style={{ fontSize: 13, color: COLORS.textSecondary, marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{n.content}</div>
-                <div style={{ fontSize: 12, color: "#9AA0A6", marginTop: 4 }}>{new Date(n.created_at).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai" })}</div>
+                <div style={{ fontSize: 12, color: "#9AA0A6", marginTop: 4 }}>
+                  {new Date(n.created_at).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai" })}
+                  {n.has_detail && <span style={{ marginLeft: 8, color: COLORS.primary, fontSize: 12 }}>点击查看详情</span>}
+                </div>
               </div>
             </div>
           </div>
         ))
       )}
     </div>
-  ), [notifications, unreadCount, markAsRead, markAllRead]);
+  ), [notifications, unreadCount, markAsRead, markAllRead, openNotifDetail]);
 
   // auth 加载中显示全屏 loading（仅首次加载，有缓存时不显示）
   if (!isLoginPage && authLoading && !authData && !authVerifiedRef.current) {
@@ -323,6 +360,75 @@ export default function UserLayout({ children }: { children: React.ReactNode }) 
         </Header>
         <Content style={{ margin: 16 }} className="page-content">{children}</Content>
       </Layout>
+
+      <Modal
+        title={detailModal.title}
+        open={detailModal.open}
+        onCancel={() => setDetailModal((prev) => ({ ...prev, open: false }))}
+        footer={null}
+        width={640}
+      >
+        {detailModal.loading ? (
+          <div style={{ textAlign: "center", padding: 40 }}><Spin /></div>
+        ) : detailModal.data ? (
+          <div>
+            {detailModal.data.removed && detailModal.data.removed.length > 0 && (
+              <div style={{ marginBottom: 20 }}>
+                <Text strong style={{ fontSize: 14, display: "block", marginBottom: 8 }}>
+                  <Tag color="red">剔除</Tag>以下 {detailModal.data.removed.length} 个商家已非 joined 状态
+                </Text>
+                <Table
+                  dataSource={detailModal.data.removed}
+                  columns={[
+                    { title: "商家名称", dataIndex: "name", key: "name" },
+                    { title: "平台", dataIndex: "platform", key: "platform", width: 120, render: (v: string) => <Tag>{v}</Tag> },
+                  ]}
+                  rowKey={(_, i) => String(i)}
+                  size="small"
+                  pagination={detailModal.data.removed.length > 10 ? { pageSize: 10 } : false}
+                />
+              </div>
+            )}
+            {detailModal.data.added && detailModal.data.added.length > 0 && (
+              <div style={{ marginBottom: 20 }}>
+                <Text strong style={{ fontSize: 14, display: "block", marginBottom: 8 }}>
+                  <Tag color="green">新增</Tag>以下 {detailModal.data.added.length} 个 joined 商家已自动同步
+                </Text>
+                <Table
+                  dataSource={detailModal.data.added}
+                  columns={[
+                    { title: "商家名称", dataIndex: "name", key: "name" },
+                    { title: "平台", dataIndex: "platform", key: "platform", width: 120, render: (v: string) => <Tag>{v}</Tag> },
+                  ]}
+                  rowKey={(_, i) => String(i)}
+                  size="small"
+                  pagination={detailModal.data.added.length > 10 ? { pageSize: 10 } : false}
+                />
+              </div>
+            )}
+            {detailModal.data.invalidLinks && detailModal.data.invalidLinks.length > 0 && (
+              <div>
+                <Text strong style={{ fontSize: 14, display: "block", marginBottom: 8 }}>
+                  <Tag color="orange">异常</Tag>以下 {detailModal.data.invalidLinks.length} 个商家链接无效
+                </Text>
+                <Table
+                  dataSource={detailModal.data.invalidLinks}
+                  columns={[
+                    { title: "商家名称", dataIndex: "name", key: "name" },
+                    { title: "平台", dataIndex: "platform", key: "platform", width: 120, render: (v: string) => <Tag>{v}</Tag> },
+                    { title: "原因", dataIndex: "reason", key: "reason", width: 160 },
+                  ]}
+                  rowKey={(_, i) => String(i)}
+                  size="small"
+                  pagination={detailModal.data.invalidLinks.length > 10 ? { pageSize: 10 } : false}
+                />
+              </div>
+            )}
+          </div>
+        ) : (
+          <Empty description="暂无详细数据" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+        )}
+      </Modal>
     </Layout>
   );
 }

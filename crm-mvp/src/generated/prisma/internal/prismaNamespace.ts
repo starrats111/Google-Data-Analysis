@@ -2617,6 +2617,7 @@ export const User_merchantsScalarFieldEnum = {
   merchant_id: 'merchant_id',
   merchant_name: 'merchant_name',
   merchant_url: 'merchant_url',
+  logo_url: 'logo_url',
   category: 'category',
   commission_rate: 'commission_rate',
   cookie_duration: 'cookie_duration',
@@ -2634,6 +2635,9 @@ export const User_merchantsScalarFieldEnum = {
   policy_status: 'policy_status',
   policy_category_code: 'policy_category_code',
   platform_connection_id: 'platform_connection_id',
+  link_status: 'link_status',
+  link_checked_at: 'link_checked_at',
+  link_check_reason: 'link_check_reason',
   is_deleted: 'is_deleted',
   created_at: 'created_at',
   updated_at: 'updated_at'
@@ -2952,6 +2956,7 @@ export const NotificationsScalarFieldEnum = {
   type: 'type',
   title: 'title',
   content: 'content',
+  metadata: 'metadata',
   is_read: 'is_read',
   is_deleted: 'is_deleted',
   created_at: 'created_at',
@@ -3203,6 +3208,7 @@ export const user_merchantsOrderByRelevanceFieldEnum = {
   merchant_id: 'merchant_id',
   merchant_name: 'merchant_name',
   merchant_url: 'merchant_url',
+  logo_url: 'logo_url',
   category: 'category',
   commission_rate: 'commission_rate',
   status: 'status',
@@ -3213,7 +3219,9 @@ export const user_merchantsOrderByRelevanceFieldEnum = {
   violation_status: 'violation_status',
   recommendation_status: 'recommendation_status',
   policy_status: 'policy_status',
-  policy_category_code: 'policy_category_code'
+  policy_category_code: 'policy_category_code',
+  link_status: 'link_status',
+  link_check_reason: 'link_check_reason'
 } as const
 
 export type user_merchantsOrderByRelevanceFieldEnum = (typeof user_merchantsOrderByRelevanceFieldEnum)[keyof typeof user_merchantsOrderByRelevanceFieldEnum]
@@ -3393,7 +3401,8 @@ export type affiliate_transactionsOrderByRelevanceFieldEnum = (typeof affiliate_
 export const notificationsOrderByRelevanceFieldEnum = {
   type: 'type',
   title: 'title',
-  content: 'content'
+  content: 'content',
+  metadata: 'metadata'
 } as const
 
 export type notificationsOrderByRelevanceFieldEnum = (typeof notificationsOrderByRelevanceFieldEnum)[keyof typeof notificationsOrderByRelevanceFieldEnum]

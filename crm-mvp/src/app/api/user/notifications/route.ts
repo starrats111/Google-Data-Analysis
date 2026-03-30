@@ -23,8 +23,13 @@ export async function GET(req: NextRequest) {
     }),
   ]);
 
+  const enriched = list.map((n) => ({
+    ...serializeData(n),
+    has_detail: !!n.metadata,
+  }));
+
   return NextResponse.json({
     code: 0,
-    data: { list: serializeData(list), total, page, pageSize },
+    data: { list: enriched, total, page, pageSize },
   });
 }
