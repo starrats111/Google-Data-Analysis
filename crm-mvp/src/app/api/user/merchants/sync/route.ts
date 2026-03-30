@@ -69,7 +69,7 @@ async function doSyncInBackground(
     const rows: any[] = [];
 
     const fetchTargets = conns.filter(c => !targetPlatform || c.platform === targetPlatform.toUpperCase());
-    const FETCH_CONCURRENCY = 3;
+    const FETCH_CONCURRENCY = 7;
     for (let fi = 0; fi < fetchTargets.length; fi += FETCH_CONCURRENCY) {
       const batch = fetchTargets.slice(fi, fi + FETCH_CONCURRENCY);
       const results = await Promise.all(

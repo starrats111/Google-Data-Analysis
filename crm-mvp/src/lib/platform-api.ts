@@ -50,7 +50,7 @@ const PLATFORM_API_CONFIG: Record<string, PlatformApiConfig> = {
     mode: "post_form",
     url: "https://www.linkhaitao.com/api.php?mod=medium&op=merchantBasicList3",
     pageKey: "page", sizeKey: "per_page", maxSize: 2000,
-    rateLimitMs: 4000,
+    rateLimitMs: 1500,
   },
   RW: {
     mode: "post_form",
@@ -87,7 +87,7 @@ async function callPlatformApi(
   const { mode, url, source, pageKey, sizeKey, maxSize } = config;
 
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
-    const timeout = 120000;
+    const timeout = 45000;
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeout);
 
@@ -129,7 +129,7 @@ async function callPlatformApi(
 
       if (!resp.ok) {
         if (RETRYABLE_STATUS.has(resp.status) && attempt < MAX_RETRIES) {
-          const delay = (attempt + 1) * 5000;
+          const delay = (attempt + 1) * 2000;
           console.warn(`[Platform] ${url} HTTP ${resp.status}，${delay / 1000}s 后重试 (${attempt + 1}/${MAX_RETRIES})`);
           clearTimeout(timer);
           await sleep(delay);
@@ -141,7 +141,7 @@ async function callPlatformApi(
     } catch (err) {
       clearTimeout(timer);
       if (attempt < MAX_RETRIES && err instanceof Error && (err.name === "AbortError" || err.name === "TimeoutError")) {
-        const delay = (attempt + 1) * 5000;
+        const delay = (attempt + 1) * 2000;
         console.warn(`[Platform] ${url} 超时，${delay / 1000}s 后重试 (${attempt + 1}/${MAX_RETRIES})`);
         await sleep(delay);
         continue;
