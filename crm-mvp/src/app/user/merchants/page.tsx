@@ -66,10 +66,18 @@ interface Merchant {
   tracking_link?: string | null; campaign_link?: string | null;
   logo_url?: string | null;
 }
+function getFaviconUrl(merchantUrl: string | null | undefined): string | null {
+  if (!merchantUrl) return null;
+  try {
+    const domain = new URL(merchantUrl.startsWith("http") ? merchantUrl : `https://${merchantUrl}`).hostname;
+    return `https://www.google.com/s2/favicons?domain=${domain}&sz=128`;
+  } catch { return null; }
+}
 function MerchantIcon({ rec }: { rec: Merchant }) {
   const [failed, setFailed] = useState(false);
-  if (rec.logo_url && !failed) {
-    return <img src={rec.logo_url} alt="" style={{ width: 22, height: 22, borderRadius: 4, objectFit: "contain", flexShrink: 0 }} onError={() => setFailed(true)} />;
+  const iconUrl = getFaviconUrl(rec.merchant_url);
+  if (iconUrl && !failed) {
+    return <img src={iconUrl} alt="" style={{ width: 22, height: 22, borderRadius: 4, objectFit: "contain", flexShrink: 0 }} onError={() => setFailed(true)} />;
   }
   return <ShopOutlined style={{ fontSize: 18, color: "#bfbfbf", flexShrink: 0 }} />;
 }
