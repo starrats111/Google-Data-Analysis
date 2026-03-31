@@ -741,23 +741,26 @@ async function normalizeExistingTransactionPlatforms(userId: bigint) {
 }
 
 async function updateDailyStatsCommissionByRange(userId: bigint, startDate: Date, endExclusive: Date): Promise<number> {
+  // 使用 DATE_FORMAT 返回字符串（避免 Date 对象在 UTC+8 服务器上 String() 产生本地格式导致解析错误）
   const txnAgg = await prisma.$queryRawUnsafe<
     { user_merchant_id: bigint; txn_date: string; total_commission: number; rejected_commission: number; order_count: number }[]
   >(`
     SELECT 
       user_merchant_id,
-      DATE(transaction_time) as txn_date,
+      DATE_FORMAT(transaction_time, '%Y-%m-%d') as txn_date,
       SUM(CAST(commission_amount AS DECIMAL(12,2))) as total_commission,
       SUM(CASE WHEN status = 'rejected' THEN CAST(commission_amount AS DECIMAL(12,2)) ELSE 0 END) as rejected_commission,
       COUNT(*) as order_count
     FROM affiliate_transactions
     WHERE user_id = ? AND is_deleted = 0 AND transaction_time >= ? AND transaction_time < ?
-    GROUP BY user_merchant_id, DATE(transaction_time)
+    GROUP BY user_merchant_id, DATE_FORMAT(transaction_time, '%Y-%m-%d')
   `, userId, startDate, endExclusive);
 
   if (!txnAgg || txnAgg.length === 0) return 0;
 
-  const merchantIds = [...new Set(txnAgg.map((t) => t.user_merchant_id))].filter((id) => id && id !== BigInt(0));
+  // 强制转换为 BigInt，避免 MariaDB 驱动对小数值返回 number 类型导致 Prisma 类型校验失败
+  const merchantIds = [...new Set(txnAgg.map((t) => BigInt(String(t.user_merchant_id ?? 0))))]
+    .filter((id) => id !== BigInt(0));
   if (merchantIds.length === 0) return 0;
 
   const allCampaigns = await prisma.campaigns.findMany({
@@ -781,26 +784,39 @@ async function updateDailyStatsCommissionByRange(userId: bigint, startDate: Date
   }
 
   const allCampaignIds = allCampaigns.map((c) => c.id);
-  const allStats = allCampaignIds.length > 0 ? await prisma.ads_daily_stats.findMany({
-    where: { campaign_id: { in: allCampaignIds }, date: { gte: startDate, lt: endExclusive } },
-    select: { id: true, campaign_id: true, date: true },
-  }) : [];
+
+  // 使用原始 SQL + DATE_FORMAT 读取日期字符串，避免 Date 对象时区转换导致的日期偏差
+  type StatsRow = { id: bigint; campaign_id: bigint; date_str: string };
+  const allStatsRaw: StatsRow[] = allCampaignIds.length > 0
+    ? await prisma.$queryRawUnsafe<StatsRow[]>(
+        `SELECT id, campaign_id, DATE_FORMAT(date, '%Y-%m-%d') as date_str
+         FROM ads_daily_stats
+         WHERE campaign_id IN (${allCampaignIds.map(() => "?").join(",")})
+           AND date >= ? AND date < ?`,
+        ...allCampaignIds, startDate, endExclusive
+      )
+    : [];
 
   const statsMap = new Map<string, bigint>();
-  for (const s of allStats) {
-    statsMap.set(`${s.campaign_id}_${s.date.toISOString().split("T")[0]}`, s.id);
+  for (const s of allStatsRaw) {
+    statsMap.set(
+      `${BigInt(String(s.campaign_id ?? 0))}_${s.date_str}`,
+      BigInt(String(s.id ?? 0))
+    );
   }
 
   const ops: (() => Promise<unknown>)[] = [];
   let updated = 0;
 
   for (const agg of txnAgg) {
-    if (!agg.user_merchant_id || agg.user_merchant_id === BigInt(0)) continue;
+    const umid = BigInt(String(agg.user_merchant_id ?? 0));
+    if (umid === BigInt(0)) continue;
 
-    const campaignIds = campaignsByMerchant.get(String(agg.user_merchant_id));
+    const campaignIds = campaignsByMerchant.get(String(umid));
     if (!campaignIds?.length) continue;
 
-    const txnDateStr = String(agg.txn_date).split("T")[0];
+    // txn_date 现在始终是 "YYYY-MM-DD" 字符串（来自 DATE_FORMAT）
+    const txnDateStr = String(agg.txn_date);
     const commData = {
       commission: Number(agg.total_commission),
       rejected_commission: Number(agg.rejected_commission),
@@ -825,9 +841,9 @@ async function updateDailyStatsCommissionByRange(userId: bigint, startDate: Date
       ops.push(() => prisma.ads_daily_stats.create({
         data: {
           user_id: userId,
-          user_merchant_id: agg.user_merchant_id,
+          user_merchant_id: umid,
           campaign_id: campaignIds[0],
-          date: new Date(agg.txn_date),
+          date: new Date(`${txnDateStr}T00:00:00.000Z`),
           cost: 0,
           clicks: 0,
           impressions: 0,
