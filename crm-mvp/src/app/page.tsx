@@ -1,6 +1,6 @@
 "use client";
 
-import { Button, Typography, Card, Row, Col, Space } from "antd";
+import { Button, Typography, Card, Row, Col, Space, Divider } from "antd";
 import {
   RocketOutlined,
   ShopOutlined,
@@ -10,6 +10,7 @@ import {
   UserOutlined,
 } from "@ant-design/icons";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 
 const { Title, Paragraph, Text } = Typography;
 
@@ -104,8 +105,15 @@ export default function HomePage() {
       </div>
 
       {/* Footer */}
-      <div style={{ textAlign: "center", padding: "20px", color: "#999" }}>
-        <Text style={{ color: "#999" }}>© 2026 广告自动化发布</Text>
+      <div style={{ textAlign: "center", padding: "30px 20px", borderTop: "1px solid #f0f0f0" }}>
+        <Text style={{ color: "#999", display: "block", marginBottom: 8 }}>
+          © 2026 Wenzhou Fengdu Advertising &amp; Media Co., Ltd. All rights reserved.
+        </Text>
+        <Space split={<Divider type="vertical" />} size={4}>
+          <Link href="/about" style={{ color: "#999", fontSize: 13 }}>About Us</Link>
+          <Link href="/privacy-policy" style={{ color: "#999", fontSize: 13 }}>Privacy Policy</Link>
+          <Link href="/terms-of-service" style={{ color: "#999", fontSize: 13 }}>Terms of Service</Link>
+        </Space>
       </div>
     </div>
   );

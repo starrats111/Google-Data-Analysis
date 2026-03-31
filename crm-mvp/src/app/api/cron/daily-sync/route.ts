@@ -470,21 +470,8 @@ async function syncAllUsersTransactions(): Promise<unknown> {
             }
           }
 
-          // 预查已归属其他用户的交易，避免跨用户覆盖
-          const txnIds = r.transactions.map(t => t.transaction_id).filter(Boolean) as string[];
-          const otherUserTxnIds = new Set<string>();
-          for (let qi = 0; qi < txnIds.length; qi += 500) {
-            const qBatch = txnIds.slice(qi, qi + 500);
-            const existingOther = await prisma.affiliate_transactions.findMany({
-              where: { platform, transaction_id: { in: qBatch }, user_id: { not: userId } },
-              select: { transaction_id: true },
-            });
-            for (const e of existingOther) otherUserTxnIds.add(e.transaction_id);
-          }
-
           for (const txn of r.transactions) {
             if (!txn.transaction_id) continue;
-            if (otherUserTxnIds.has(txn.transaction_id)) continue;
             const mid = txn.merchant_id || "";
             const merchantKey = `${platform}_${mid}`;
 
@@ -542,8 +529,18 @@ async function syncAllUsersTransactions(): Promise<unknown> {
         await linkTransactionsToMerchants(userId);
         await linkCampaignsToMerchants(userId);
         await claimLinkedMerchants(userId);
+
+        // 按规则将特定商家的交易转移给实际投放人
+        const reassigned = await reassignTransactionsByRules(userId);
+
         const commUpdated = await updateDailyStatsCommission(userId, statsSyncStart, syncStart);
         log(`    ${user.username}: updated ${commUpdated} commission records in ads_daily_stats`);
+
+        // 转移后更新目标用户的佣金聚合
+        for (const r of reassigned) {
+          const targetCommUpdated = await updateDailyStatsCommission(BigInt(r.targetUserId), statsSyncStart, syncStart);
+          log(`    → reassigned ${r.count} txns to user ${r.targetUserId}, updated ${targetCommUpdated} commission records`);
+        }
       }
 
       results[user.username] = { synced: totalSynced };
@@ -747,3 +744,51 @@ async function updateDailyStatsCommission(userId: bigint, statsStartDate: Date, 
   return updated;
 }
 
+// ─── 交易转移规则 ───
+
+interface ReassignRule {
+  source_user_id: number;
+  target_user_id: number;
+  platform: string;
+  merchant_id: string;
+  target_user_merchant_id: number;
+  target_campaign_id: number;
+}
+
+async function reassignTransactionsByRules(sourceUserId: bigint) {
+  const cfg = await prisma.system_configs.findFirst({
+    where: { config_key: "transaction_reassignment_rules", is_deleted: 0 },
+  });
+  if (!cfg?.config_value) return [];
+
+  let rules: ReassignRule[];
+  try { rules = JSON.parse(cfg.config_value); } catch { return []; }
+
+  const applicable = rules.filter(r => BigInt(r.source_user_id) === sourceUserId);
+  if (applicable.length === 0) return [];
+
+  const results: { targetUserId: number; count: number }[] = [];
+
+  for (const rule of applicable) {
+    const result = await prisma.affiliate_transactions.updateMany({
+      where: {
+        user_id: BigInt(rule.source_user_id),
+        platform: rule.platform,
+        merchant_id: rule.merchant_id,
+        is_deleted: 0,
+      },
+      data: {
+        user_id: BigInt(rule.target_user_id),
+        user_merchant_id: BigInt(rule.target_user_merchant_id),
+        campaign_id: BigInt(rule.target_campaign_id),
+      },
+    });
+
+    if (result.count > 0) {
+      log(`  reassign: ${result.count} ${rule.platform}/${rule.merchant_id} txns from user ${rule.source_user_id} → ${rule.target_user_id}`);
+      results.push({ targetUserId: rule.target_user_id, count: result.count });
+    }
+  }
+
+  return results;
+}

@@ -4,8 +4,9 @@ import ThemeProvider from "@/components/ThemeProvider";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "广告自动化发布",
-  description: "Ad Automation & Publishing Platform",
+  title: "Ad Automation Platform - Wenzhou Fengdu Advertising & Media",
+  description:
+    "Internal advertising campaign management and reporting platform by Wenzhou Fengdu Advertising & Media Co., Ltd. Integrates with Google Ads API for campaign creation, budget optimization, performance reporting, and MCC account management.",
 };
 
 export default function RootLayout({

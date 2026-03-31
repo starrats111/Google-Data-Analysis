@@ -4,6 +4,9 @@ import type { NextRequest } from "next/server";
 // 公开路由 — 无需认证
 const PUBLIC_PATHS = [
   "/",
+  "/about",
+  "/privacy-policy",
+  "/terms-of-service",
   "/admin/login",
   "/user/login",
   "/api/auth/login",
