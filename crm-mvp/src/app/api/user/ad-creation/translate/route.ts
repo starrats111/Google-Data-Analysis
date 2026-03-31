@@ -3,6 +3,70 @@ import { getUserFromRequest } from "@/lib/auth";
 import { apiSuccess, apiError } from "@/lib/constants";
 import { callAiWithFallback } from "@/lib/ai-service";
 
+function safeParseJson(raw: string): Record<string, unknown> {
+  let text = raw.trim();
+  if (text.startsWith("```")) {
+    const firstNl = text.indexOf("\n");
+    if (firstNl > 0) text = text.slice(firstNl + 1);
+    if (text.trimEnd().endsWith("```")) text = text.trimEnd().slice(0, -3);
+    text = text.trim();
+  }
+  const jsonStart = text.indexOf("{");
+  const jsonEnd = text.lastIndexOf("}");
+  if (jsonStart >= 0 && jsonEnd > jsonStart) {
+    text = text.slice(jsonStart, jsonEnd + 1);
+  }
+
+  try {
+    return JSON.parse(text);
+  } catch {
+    // pass — try repair below
+  }
+
+  let repaired = text
+    .replace(/,\s*([}\]])/g, "$1")              // trailing commas
+    .replace(/\n/g, "\\n")                       // unescaped newlines inside strings
+    .replace(/\r/g, "\\r")
+    .replace(/\t/g, "\\t");
+
+  try {
+    return JSON.parse(repaired);
+  } catch {
+    // pass
+  }
+
+  // aggressive: regex-extract arrays for each known key
+  const result: Record<string, unknown> = {};
+  for (const key of ["headlines", "descriptions", "callouts"]) {
+    const re = new RegExp(`"${key}"\\s*:\\s*\\[([^\\]]*?)\\]`, "s");
+    const m = repaired.match(re);
+    if (m) {
+      const items = [...m[1].matchAll(/"((?:[^"\\]|\\.)*)"/g)].map((x) =>
+        x[1].replace(/\\n/g, "\n").replace(/\\"/g, '"'),
+      );
+      if (items.length > 0) result[key] = items;
+    }
+  }
+  // sitelinks: array of objects
+  const slMatch = repaired.match(/"sitelinks"\s*:\s*\[([\s\S]*?)\]/);
+  if (slMatch) {
+    const objMatches = [...slMatch[1].matchAll(/\{[^}]*\}/g)];
+    const sitelinks = objMatches.map((om) => {
+      const obj: Record<string, string> = {};
+      for (const field of ["title", "desc1", "desc2"]) {
+        const fm = om[0].match(new RegExp(`"${field}"\\s*:\\s*"((?:[^"\\\\]|\\\\.)*)"`));
+        if (fm) obj[field] = fm[1].replace(/\\"/g, '"');
+      }
+      return obj;
+    }).filter((o) => o.title);
+    if (sitelinks.length > 0) result.sitelinks = sitelinks;
+  }
+
+  if (Object.keys(result).length > 0) return result;
+
+  throw new Error(`Expected ',' or '}' — AI returned invalid JSON that could not be repaired`);
+}
+
 const COUNTRY_LANGUAGE_MAP: Record<string, { name: string; language: string }> = {
   CN: { name: "中国", language: "Simplified Chinese (中文)" },
   US: { name: "美国", language: "English (US)" },
@@ -107,35 +171,27 @@ Return ONLY a JSON object:
       4096,
     );
 
-    let text = raw.trim();
-    if (text.startsWith("```")) {
-      const firstNl = text.indexOf("\n");
-      if (firstNl > 0) text = text.slice(firstNl + 1);
-      if (text.trimEnd().endsWith("```")) text = text.trimEnd().slice(0, -3);
-      text = text.trim();
-    }
-    const jsonStart = text.indexOf("{");
-    const jsonEnd = text.lastIndexOf("}");
-    if (jsonStart >= 0 && jsonEnd > jsonStart) {
-      text = text.slice(jsonStart, jsonEnd + 1);
-    }
+    const parsed = safeParseJson(raw);
+    const rawH = Array.isArray(parsed.headlines) ? parsed.headlines : [];
+    const rawD = Array.isArray(parsed.descriptions) ? parsed.descriptions : [];
+    const rawC = Array.isArray(parsed.callouts) ? parsed.callouts : [];
+    const rawS = Array.isArray(parsed.sitelinks) ? parsed.sitelinks : [];
 
-    const parsed = JSON.parse(text);
-    const translatedH = (parsed.headlines || [])
-      .map((h: string) => h.trim())
+    const translatedH = rawH
+      .map((h: string) => String(h).trim())
       .filter((h: string) => h.length > 0);
-    const translatedD = (parsed.descriptions || [])
-      .map((d: string) => d.trim())
+    const translatedD = rawD
+      .map((d: string) => String(d).trim())
       .filter((d: string) => d.length > 0);
-    const translatedC = (parsed.callouts || [])
-      .map((c: string) => c.trim())
+    const translatedC = rawC
+      .map((c: string) => String(c).trim())
       .filter((c: string) => c.length > 0);
 
-    const translatedS = (parsed.sitelinks || [])
+    const translatedS = rawS
       .map((s: any) => ({
-        title: (s.title || "").trim(),
-        desc1: (s.desc1 || "").trim(),
-        desc2: (s.desc2 || "").trim(),
+        title: String(s?.title || "").trim(),
+        desc1: String(s?.desc1 || "").trim(),
+        desc2: String(s?.desc2 || "").trim(),
       }))
       .filter((s: any) => s.title.length > 0);
 
