@@ -264,6 +264,101 @@ export async function POST(req: NextRequest) {
   }
 }
 
+// 重新生成失败的文章
+export async function PATCH(req: NextRequest) {
+  try {
+    const user = getUserFromRequest(req);
+    if (!user) return apiError("未授权", 401);
+
+    let body: Record<string, unknown>;
+    try {
+      body = await req.json();
+    } catch {
+      return apiError("请求体解析失败", 400);
+    }
+
+    const { id } = body as { id?: string };
+    if (!id) return apiError("缺少文章 ID");
+
+    const userId = BigInt(user.userId);
+    const article = await prisma.articles.findFirst({
+      where: { id: BigInt(id), user_id: userId, is_deleted: 0 },
+    });
+    if (!article) return apiError("文章不存在");
+    if (article.status !== "failed") return apiError("只能重试失败的文章");
+
+    const merchant = article.user_merchant_id
+      ? await prisma.user_merchants.findFirst({ where: { id: article.user_merchant_id, is_deleted: 0 } })
+      : null;
+    if (!merchant) return apiError("关联商家已删除");
+
+    await prisma.articles.update({ where: { id: article.id }, data: { status: "generating", content: null, title: null, slug: null } });
+
+    const trackingLink = article.tracking_link || merchant.campaign_link || merchant.tracking_link || merchant.merchant_url || "";
+    const images = (article.images as string[] | null) || [];
+
+    (async () => {
+      const genTimeout = setTimeout(async () => {
+        console.error(`[ArticleRetry] 文章 ${article.id} 重新生成超时(${GENERATING_TIMEOUT_MS / 1000}s)，标记为 failed`);
+        try {
+          await prisma.articles.update({ where: { id: article.id }, data: { status: "failed" } });
+        } catch { /* ignore */ }
+      }, GENERATING_TIMEOUT_MS);
+
+      try {
+        const { analyzeUrl, generateMerchantArticle } = await import("@/lib/article-gen");
+
+        const targetUrl = merchant.merchant_url || `https://${(merchant.merchant_name || "").toLowerCase().replace(/\s+/g, "")}.com`;
+        const analysis = await analyzeUrl(targetUrl, article.language === "en" ? "US" : "US");
+
+        const title = analysis.titles[0]?.titleEn || analysis.titles[0]?.title || `${merchant.merchant_name} Review`;
+
+        const result = await generateMerchantArticle({
+          title,
+          merchantName: analysis.brandName || merchant.merchant_name,
+          merchantUrl: merchant.merchant_url || "",
+          trackingLink,
+          country: "US",
+          products: analysis.products,
+          sellingPoints: analysis.sellingPoints,
+          keywords: analysis.keywords,
+          images,
+          userId,
+        });
+
+        clearTimeout(genTimeout);
+
+        await prisma.articles.update({
+          where: { id: article.id },
+          data: {
+            title,
+            slug: title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, ""),
+            content: result.content,
+            excerpt: result.excerpt,
+            meta_title: result.metaTitle,
+            meta_description: result.metaDescription,
+            keywords: analysis.keywords as any,
+            category: result.category || analysis.category || "General",
+            status: "preview",
+          },
+        });
+        console.log(`[ArticleRetry] 文章 ${article.id} 重新生成成功`);
+      } catch (err) {
+        clearTimeout(genTimeout);
+        console.error("[ArticleRetry] 文章重新生成失败:", err);
+        try {
+          await prisma.articles.update({ where: { id: article.id }, data: { status: "failed" } });
+        } catch { /* ignore */ }
+      }
+    })();
+
+    return apiSuccess(serializeData({ id: article.id }), "文章重新生成已启动");
+  } catch (err) {
+    console.error("[ArticleRetry] PATCH 异常:", err);
+    return apiError("重新生成失败", 500);
+  }
+}
+
 // 更新文章（编辑标题/内容/选择发布站点）
 export async function PUT(req: NextRequest) {
   try {

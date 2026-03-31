@@ -5,7 +5,7 @@ import {
   Card, Table, Tag, Button, Space, Select, Modal, Form, Typography, Popconfirm, App, Input,
 } from "antd";
 import {
-  UnorderedListOutlined, DeleteOutlined, EyeOutlined, SendOutlined, CopyOutlined, LinkOutlined, SearchOutlined,
+  UnorderedListOutlined, DeleteOutlined, EyeOutlined, SendOutlined, CopyOutlined, LinkOutlined, SearchOutlined, ReloadOutlined,
 } from "@ant-design/icons";
 import { sanitizeHtml } from "@/lib/sanitize";
 
@@ -103,6 +103,27 @@ export default function ArticlesPage() {
     }
   };
 
+  const [retrying, setRetrying] = useState<string | null>(null);
+  const handleRetry = async (id: string) => {
+    setRetrying(id);
+    message.loading({ content: "正在重新生成...", key: "retry", duration: 0 });
+    try {
+      const res = await fetch("/api/user/articles", {
+        method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id }),
+      }).then((r) => r.json());
+      if (res.code === 0) {
+        message.success({ content: "重新生成已启动，请稍后刷新查看", key: "retry" });
+        fetchArticles();
+      } else {
+        message.error({ content: res.message, key: "retry" });
+      }
+    } catch {
+      message.error({ content: "请求失败", key: "retry" });
+    } finally {
+      setRetrying(null);
+    }
+  };
+
   const copyUrl = (url: string) => {
     navigator.clipboard.writeText(url).then(() => message.success("已复制链接"));
   };
@@ -151,9 +172,12 @@ export default function ArticlesPage() {
       render: (v: string) => <Text style={{ fontSize: 12 }}>{new Date(v).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai" })}</Text>,
     },
     {
-      title: "操作", width: 200, render: (_: unknown, record: Article) => (
+      title: "操作", width: 240, render: (_: unknown, record: Article) => (
         <Space>
           <Button size="small" icon={<EyeOutlined />} onClick={() => { setPreviewArticle(record); setPreviewOpen(true); }}>预览</Button>
+          {record.status === "failed" && (
+            <Button size="small" type="primary" icon={<ReloadOutlined />} loading={retrying === record.id} onClick={() => handleRetry(record.id)}>重试</Button>
+          )}
           {(record.status === "preview" || record.status === "draft") && (
             <Button size="small" type="primary" icon={<SendOutlined />} onClick={() => handlePublish(record)}>发布</Button>
           )}
