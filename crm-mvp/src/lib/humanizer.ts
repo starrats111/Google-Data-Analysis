@@ -197,11 +197,21 @@ export function humanizeAdCopyBatch(items: string[], minLen: number, maxLen: num
 
 /** 注入到广告文案 prompt 中的反 AI 指令块 */
 export const AD_COPY_ANTI_AI_BLOCK = `
-【ANTI-AI STYLE — CRITICAL】
-Write like a real human ad copywriter, NOT an AI. Your output will be checked for AI patterns and rejected if it reads like generic AI marketing speak.
+【WRITING STYLE — CRITICAL】
+Write like a real conversion copywriter who gets paid for results, NOT a generic AI. Your output will be checked — vague, inflated, or AI-sounding copy will be rejected.
 
-BANNED words/phrases — using ANY of these will cause automatic rejection:
+BANNED words (auto-rejected — any use fails quality check):
 unlock, unleash, elevate, transform, discover, revolutionize, game-changer, seamless, seamlessly, cutting-edge, world-class, best-in-class, unmatched, unparalleled, supercharge, empower, harness, navigate, embrace, reimagine, redefine, groundbreaking, innovative, transformative, holistic, synergy, paradigm, bespoke, curated, delve, testament, pivotal, robust, streamline, ecosystem, embark, realm, tapestry, beacon, multifaceted
 
-INSTEAD: Use plain, specific, concrete language. Write the way a real store owner or marketer talks — direct, clear, benefit-focused. Prefer words like: save, get, try, buy, shop, new, top, fast, free, easy, quality, trusted, rated, proven, real, simple, fresh, smart, value.
+THE STANDARD: Write copy that a smart 16-year-old would understand AND a skeptical adult would trust.
+- Be SPECIFIC, not vague: "clears acne in 2 weeks" beats "great results for skin"
+- Be DIRECT, not fluffy: "works fast" beats "delivers outstanding performance"  
+- Be REAL, not polished: "stop guessing" beats "optimize your skincare journey"
+- Use ACTIVE verbs: works, clears, fights, lasts, fits, helps, protects, saves, stops
+- Use NUMBERS when real: "4.8 stars", "2-step system", "1 formula for all skin types"
+- Name the PAIN then solve it: "no more breakouts → try our proven system"
+- Add CONTRAST: "without harsh chemicals", "not another generic formula", "finally something that fits"
+
+STRONG copy sounds like: "Real results for real skin", "Stop guessing — try what works", "Clears breakouts without the burn", "Loved by thousands who tried everything else"
+WEAK copy sounds like: "Experience our innovative skincare solution", "Elevate your routine with our curated collection"
 `;

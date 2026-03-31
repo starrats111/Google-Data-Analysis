@@ -15,6 +15,7 @@ import {
   smartTruncate,
   titleFromUrlPath,
   decodeHtmlEntities,
+  sanitizeAdText,
 } from "@/lib/crawl-pipeline";
 import { humanizeAdCopyBatch, AD_COPY_ANTI_AI_BLOCK } from "@/lib/humanizer";
 
@@ -268,7 +269,11 @@ async function generateCore(
   const biddingStrategy = adSettings?.bidding_strategy || "MAXIMIZE_CLICKS";
 
   const sitelinkBlock = cache.sitelinkCandidates.length > 0
-    ? `\nVerified sitelinks (write desc1+desc2 for each, ≤35 chars each):\n${cache.sitelinkCandidates.map((s, i) => `${i + 1}. "${s.title}" → ${s.url}${s.description ? ` (meta: "${s.description}")` : ""}`).join("\n")}\n`
+    ? `\nVerified sitelinks (for each: if title is in ALL CAPS or unclear, rewrite it; write desc1+desc2):\n${cache.sitelinkCandidates.map((s, i) => {
+        const isAllCaps = /^[A-Z0-9\s#&!?',.-]+$/.test(s.title.trim()) && s.title.trim().length > 3;
+        const titleNote = isAllCaps ? ` ← ALL CAPS, MUST rewrite to Title Case` : "";
+        return `${i + 1}. title: "${s.title}"${titleNote} → ${s.url}${s.description ? ` (meta: "${s.description}")` : ""}`;
+      }).join("\n")}\n`
     : "";
 
   const semrushBlock = cache.semrushTitles.length > 0
@@ -304,53 +309,85 @@ async function generateCore(
     ? `\nReal products found on website (use these names in copy, do NOT invent product names):\n${crawledProducts.slice(0, 10).map((p: any, i: number) => `${i + 1}. "${p.name}"${p.price ? ` — ${p.currency || ""}${p.price}` : ""}`).join("\n")}\n`
     : "";
 
-  const prompt = `You are a senior Google Ads RSA copywriter. Your job is to WRITE compelling ad copy based on the factual data provided below.
+  const prompt = `You are a top-tier Google Ads conversion copywriter. Your mission: write ad copy so compelling that users STOP scrolling and click. Every line must earn its place.
 
-CRITICAL RULES:
-- You are a COPYWRITER, not a fact generator. All product names, prices, discounts, and features below come from our crawler. Use ONLY these facts.
-- NEVER invent product names, prices, discount amounts, or factual claims not provided below.
-- If no products/discounts are provided, write about the brand's value, quality, and trustworthiness instead.
+FACTUAL CONSTRAINTS (non-negotiable):
+- Use ONLY facts from the data below. NEVER fabricate product names, prices, or claims.
+- If no discount/shipping data is provided, focus on desire, trust, and brand story instead.
 ${discountGuidance}${shippingGuidance}
 
 Context:
 - Merchant: ${merchantName}
 - Website: ${merchantUrl}
-- Target: ${market.countryNameZh} (${languageName})
+- Target market: ${market.countryNameZh} (write in ${languageName})
 - Budget: $${dailyBudget.toFixed(2)}/day, CPC $${maxCpc.toFixed(2)}, Strategy: ${biddingStrategy}
 ${productBlock}
-Website content (truncated):
+Website content:
 ${cache.pageText.slice(0, 2000)}
 
-${cache.features.length > 0 ? `Merchant features (from crawler):\n${cache.features.join("\n")}\n` : ""}${semrushBlock}${sitelinkBlock}${formatAiRuleBlock(aiRuleProfile, "ad_copy")}
+${cache.features.length > 0 ? `Merchant features:\n${cache.features.join("\n")}\n` : ""}${semrushBlock}${sitelinkBlock}${formatAiRuleBlock(aiRuleProfile, "ad_copy")}
 ${AD_COPY_ANTI_AI_BLOCK}
 
 Return ONLY a JSON object with this exact structure:
 {
   "headlines": ["h1","h2",...],
   "descriptions": ["d1","d2","d3","d4"],
-  "sitelink_descriptions": [{"desc1":"...","desc2":"..."},...]
+  "sitelink_descriptions": [{"title":"...","desc1":"...","desc2":"..."},...]
 }
+Note: "title" in sitelink_descriptions is required. If the original sitelink title is in ALL CAPS or is unclear, rewrite it in Title Case or sentence case (≤25 chars). Otherwise keep it as-is.
 
-MANDATORY RULES for headlines (exactly 15):
-1. #1 must include "${merchantName}" or clear brand reference
-2. ${hasRealDiscount ? "Include 1 headline referencing the verified discount" : "Do NOT include any specific discount numbers — focus on brand value, product benefits, and trust"}
-3. ${hasRealFreeShipping ? "Include 1 shipping-related headline" : "Only mention shipping if confirmed in the website content above"}
-4. Each ≤ 30 characters, in ${languageName}
-5. No dates/expiry/countdowns, no generic filler like "Official Site"
-6. Commercially strong: trust, value, CTA, product fit
-7. Write like a real marketer — specific, punchy, no AI buzzwords
+═══ COPYWRITING CRAFT — READ BEFORE WRITING ═══
+Great ad copy does ONE of these things per line:
+  • Speaks to a pain: "Tired of products that don't work?"
+  • Promises a specific outcome: "Results you'll actually see"
+  • Builds desire: "The skin you've always wanted"
+  • Creates trust: "Trusted by thousands — see why"
+  • Drives action: "Shop the top-rated collection"
+  • Highlights edge: "No harsh chemicals. Real results."
 
-MANDATORY RULES for descriptions (exactly 4):
-1. ${hasRealDiscount && hasRealFreeShipping ? "Exactly 1 may combine the verified discount + shipping info" : "Each description must use only verified information from the website content"}
-2. Each 50-90 characters, in ${languageName}
-3. Each uses a different persuasion angle
-4. Must be distinct from headlines (Google flags duplicates)
-5. Use concrete benefits and real product details from the website, avoid vague hype and unverified claims
+Power words (use freely): proven, real results, fast, works, rated, top-selling, trusted, easy, clear, fresh, effective, new, better, lasting, gentle, visible, simple, best
 
-MANDATORY RULES for sitelink_descriptions (${cache.sitelinkCandidates.length} entries matching sitelinks order):
-1. Each desc1 and desc2 ≤ 35 characters
-2. Both desc1 AND desc2 must be filled for every sitelink
-3. Focus on benefits that attract clicks
+BANNED words (auto-rejected): unlock, unleash, elevate, revolutionize, seamless, cutting-edge, game-changer, curated, empower, harness, innovative, transformative, holistic, paradigm, synergy
+
+═══ HEADLINES — exactly 15, each ≤30 chars ═══
+Build a VARIED set across these angles (mix freely, brand headline MUST be #1):
+  ① Brand (required #1): include "${merchantName}" — make it memorable, not just the name
+  ② Benefit (2-3 lines): specific outcome the customer gets — concrete, vivid
+  ③ Hook/question (1-2 lines): speak to the pain or desire — make them feel seen
+  ④ Trust/proof (1-2 lines): credibility signal — rated, proven, loved, tested
+  ⑤ Product/category (2-3 lines): what they're shopping for — specific, searchable
+  ⑥ Differentiator (1-2 lines): what makes this brand stand out vs. alternatives
+  ⑦ CTA (1-2 lines): what to do next — specific action, not just "Shop Now"
+  ${hasRealDiscount ? "⑧ Discount (1 line): reference the verified discount — be specific" : ""}
+  ${hasRealFreeShipping ? "⑧ Shipping (1 line): mention free shipping as a value hook" : ""}
+
+Rules:
+- Use Title Case or sentence case — NEVER ALL CAPS
+- No dates, expiry, or countdowns
+- No multiple punctuation — at most ONE ! or ? per headline
+- Front-load the most important word
+
+═══ DESCRIPTIONS — exactly 4, each 50-90 chars ═══
+Write one description per angle — each must open differently and cover a DISTINCT benefit:
+
+  Description 1 — PROBLEM → SOLUTION: Name the customer's real pain, position the product as the fix. Example: "Struggling with X? [Brand] delivers Y that actually works."
+  Description 2 — KEY BENEFIT + CTA: Lead with the strongest product outcome, end with a specific action. Example: "Get [specific result] with [product]. Shop the full range today."
+  Description 3 — TRUST + PROOF: Use credibility — ratings, endorsements, brand heritage, tested/proven claims. Example: "Trusted by [audience]. Dermatologist-tested. See real results."
+  Description 4 — UNIQUE EDGE: What makes this brand different. No harsh chemicals, better formula, exclusive range, etc. Example: "Unlike [generic alternatives], [brand] uses [specific edge] for real results."
+
+Rules:
+- Each description MUST open with a different word/phrase — no two can start the same
+- ${hasRealDiscount && hasRealFreeShipping ? "Description 1 or 2 may combine verified discount + free shipping" : "Only use verified information from the website content"}
+- No multiple punctuation — at most one ! per description
+- NEVER write in ALL CAPS
+- Must be clearly distinct from headlines (Google penalizes repetition)
+
+═══ SITELINK DESCRIPTIONS — ${cache.sitelinkCandidates.length} entries ═══
+1. "title" REQUIRED — ≤25 chars, Title Case/sentence case, NEVER ALL CAPS
+2. If title is marked "← ALL CAPS, MUST rewrite" — provide a natural, clear replacement
+3. desc1 and desc2 each ≤35 chars — both required
+4. Make desc1 the main benefit hook, desc2 a supporting detail or CTA
+5. No exclamation marks in titles — desc1/desc2 may use at most one
 
 Return ONLY valid JSON, no explanation.`;
 
@@ -467,16 +504,34 @@ Return ONLY valid JSON, no explanation.`;
       console.log(`[Core] 合规警告: ${allRemaining.length} 条仍有风险（已达最大重试次数）`);
     }
 
-    // 处理站内链接
+    // 处理站内链接（标题/描述需符合 Google Ads 规范：不能全大写、不能有多余标点）
     const sitelinkDescs = Array.isArray(parsed.sitelink_descriptions) ? parsed.sitelink_descriptions : [];
     const sitelinks = cache.sitelinkCandidates.map((s, i) => {
       const aiDesc = sitelinkDescs[i] || {};
       const brandName = merchantName.replace(/[.。,，!！?？]+/g, "").trim().slice(0, 15);
+
+      // 优先使用 AI 建议的 title（需通过验证：非全大写、长度合法）
+      const rawCrawlTitle = sanitizeAdText(s.title);
+      let finalTitle = rawCrawlTitle;
+      if (aiDesc.title && typeof aiDesc.title === "string") {
+        const aiTitle = sanitizeAdText(aiDesc.title.trim());
+        const isAllCaps = /^[A-Z0-9\s#&!?',.-]+$/.test(aiTitle) && /[A-Z]{2,}/.test(aiTitle);
+        if (!isAllCaps && aiTitle.length >= 2 && aiTitle.length <= 25) {
+          finalTitle = aiTitle;
+        }
+      }
+
       return {
-        title: s.title,
+        title: finalTitle.slice(0, 25),
         url: s.url,
-        desc1: (aiDesc.desc1 && aiDesc.desc1.length <= 35) ? aiDesc.desc1 : (s.description || brandName).slice(0, 35),
-        desc2: (aiDesc.desc2 && aiDesc.desc2.length <= 35) ? aiDesc.desc2 : (brandName || titleFromUrlPath(s.url)).slice(0, 35),
+        desc1: sanitizeAdText(
+          (aiDesc.desc1 && aiDesc.desc1.length <= 35) ? aiDesc.desc1 : (s.description || brandName).slice(0, 35),
+          { allowExclamation: true },
+        ),
+        desc2: sanitizeAdText(
+          (aiDesc.desc2 && aiDesc.desc2.length <= 35) ? aiDesc.desc2 : (brandName || titleFromUrlPath(s.url)).slice(0, 35),
+          { allowExclamation: true },
+        ),
       };
     });
     send("sitelinks", sitelinks);
@@ -521,7 +576,9 @@ Return ONLY valid JSON, no explanation.`;
       });
       send("descriptions", descriptions);
       const sitelinks = cache.sitelinkCandidates.map((s) => ({
-        title: s.title, url: s.url, desc1: s.description || merchantName.slice(0, 35), desc2: merchantName.slice(0, 35),
+        title: sanitizeAdText(s.title).slice(0, 25), url: s.url,
+        desc1: sanitizeAdText(s.description || merchantName.slice(0, 35), { allowExclamation: true }),
+        desc2: sanitizeAdText(merchantName.slice(0, 35), { allowExclamation: true }),
       }));
       send("sitelinks", sitelinks);
       if (adCreativeId) {

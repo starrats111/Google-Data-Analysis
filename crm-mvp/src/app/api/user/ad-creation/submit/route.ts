@@ -3,6 +3,7 @@ import { getUserFromRequest, serializeData } from "@/lib/auth";
 import { apiSuccess, apiError } from "@/lib/constants";
 import prisma from "@/lib/prisma";
 import { getAdMarketConfig } from "@/lib/ad-market";
+import { sanitizeAdText } from "@/lib/crawl-pipeline";
 import { collectAiRuleViolations } from "@/lib/ai-rule-profile";
 import { mutateGoogleAds, dollarsToMicros, queryGoogleAds } from "@/lib/google-ads";
 import { assignFormalCampaignNameBeforeSubmit } from "@/lib/campaign-naming";
@@ -137,23 +138,33 @@ export async function POST(req: NextRequest) {
           badLinks.push(sl.title || slUrl || "(空)");
           return;
         }
-        try {
-          const ctrl = new AbortController();
-          const t = setTimeout(() => ctrl.abort(), 10000);
-          const res = await fetch(slUrl, {
-            method: "HEAD",
-            redirect: "follow",
-            signal: ctrl.signal,
-            headers: {
-              "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36",
-            },
-          });
-          clearTimeout(t);
-          if (res.status === 404 || res.status === 410) {
-            badLinks.push(`${sl.title || slUrl}（HTTP ${res.status}）`);
-          }
-        } catch {
-          badLinks.push(`${sl.title || slUrl}（请求失败/超时）`);
+        // 用 Googlebot UA 检测——和 Google Ads 审核使用的爬虫一致
+        const UAS = [
+          "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)",
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36",
+        ];
+        let reachable = false;
+        for (const ua of UAS) {
+          try {
+            const ctrl = new AbortController();
+            const t = setTimeout(() => ctrl.abort(), 10000);
+            const res = await fetch(slUrl, {
+              method: "GET",
+              redirect: "follow",
+              signal: ctrl.signal,
+              headers: { "User-Agent": ua, Accept: "text/html,*/*" },
+            });
+            clearTimeout(t);
+            if (res.status >= 400) continue;
+            const html = await res.text();
+            if (/cf-browser-verification|cf-challenge|challenge-platform|turnstile/i.test(html)) continue;
+            if (html.length < 500) continue;
+            reachable = true;
+            break;
+          } catch { /* try next UA */ }
+        }
+        if (!reachable) {
+          badLinks.push(`${sl.title || slUrl}（Google 爬虫无法访问）`);
         }
       }),
     );
@@ -388,10 +399,10 @@ export async function POST(req: NextRequest) {
 
     // ─── 6. RSA 广告 ───
     const headlineAssets = headlines.slice(0, 15).map((h: string) => ({
-      text: h.slice(0, 30),
+      text: sanitizeAdText(h, { allowExclamation: true }).slice(0, 30),
     }));
     const descriptionAssets = descriptions.slice(0, 4).map((d: string) => ({
-      text: d.slice(0, 90),
+      text: sanitizeAdText(d, { allowExclamation: true }).slice(0, 90),
     }));
 
     const rsaInfo: Record<string, unknown> = {
@@ -430,21 +441,24 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    // ─── 8. Sitelink 扩展 ───
+    // ─── 8. Sitelink 扩展（标题/描述需符合 Google Ads 大写和标点规范） ───
     let assetTempId = -10;
     for (const sl of sitelinks) {
       const assetTempRn = `customers/${cid}/assets/${assetTempId}`;
       let slUrl = (sl.finalUrl || "").trim();
       if (slUrl.startsWith("http://")) slUrl = slUrl.replace("http://", "https://");
+      const linkText = sanitizeAdText((sl.title || ""), { allowExclamation: false }).slice(0, 25);
+      const desc1 = sanitizeAdText((sl.description1 || ""), { allowExclamation: true }).slice(0, 35);
+      const desc2 = sanitizeAdText((sl.description2 || ""), { allowExclamation: true }).slice(0, 35);
       operations.push({
         asset_operation: {
           create: {
             resource_name: assetTempRn,
             final_urls: [slUrl],
             sitelink_asset: {
-              link_text: (sl.title || "").slice(0, 25),
-              description1: (sl.description1 || "").slice(0, 35),
-              description2: (sl.description2 || "").slice(0, 35),
+              link_text: linkText,
+              description1: desc1,
+              description2: desc2,
             },
           },
         },
@@ -469,7 +483,7 @@ export async function POST(req: NextRequest) {
           create: {
             resource_name: assetTempRn,
             callout_asset: {
-              callout_text: (calloutText || "").slice(0, 25),
+              callout_text: sanitizeAdText((calloutText || ""), { allowExclamation: false }).slice(0, 25),
             },
           },
         },
@@ -850,6 +864,9 @@ export async function POST(req: NextRequest) {
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     console.error("[AdSubmit] Google Ads 创建失败:", msg);
+    if (msg.includes("RESOURCE_EXHAUSTED") || msg.includes("请求频率超限")) {
+      return apiError("Google Ads API 请求频率超限，系统已自动重试但仍受限。请等待 3-5 分钟后再重试。（当前 Developer Token 为 explorer access 级别，频率限制较严格）");
+    }
     return apiError(`Google Ads 创建失败: ${msg.slice(0, 800)}`);
   }
 }

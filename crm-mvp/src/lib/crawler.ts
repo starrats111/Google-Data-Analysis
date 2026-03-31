@@ -1475,22 +1475,9 @@ export async function fetchUrlMeta(url: string): Promise<{ title: string; descri
     } catch {}
   }
 
-  // 所有 UA 被拦截但 URL 有效（如 Cloudflare），用路径生成标题
+  // 所有 UA 被拦截（如 Cloudflare）→ Google Ads 审核也会被拦截 → 标记为不可用
   if (wasBlocked) {
-    const segments = (() => {
-      try {
-        return new URL(lastFinalUrl).pathname
-          .replace(/\.(html?|php|aspx?)$/i, "")
-          .split("/").filter(Boolean).filter((s) => s.length > 1);
-      } catch { return []; }
-    })();
-    if (segments.length > 0) {
-      const pathTitle = segments
-        .map((s) => decodeURIComponent(s).replace(/[-_+]/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()))
-        .join(" ")
-        .slice(0, 60);
-      return { title: pathTitle, description: "", ok: true, finalUrl: lastFinalUrl, isSoft404: false };
-    }
+    return { title: "", description: "", ok: false, finalUrl: lastFinalUrl, isSoft404: false };
   }
 
   return { title: "", description: "", ok: false, finalUrl: lastFinalUrl, isSoft404: false };

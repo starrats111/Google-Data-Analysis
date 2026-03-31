@@ -9,6 +9,23 @@ const GOOGLE_ADS_SCOPE = "https://www.googleapis.com/auth/adwords";
 const ADS_API_VERSION = "v23";
 const ADS_BASE_URL = `https://googleads.googleapis.com/${ADS_API_VERSION}`;
 
+const MAX_429_RETRIES = 3;
+const MAX_429_WAIT_MS = 200_000;
+
+/** 从 Google Ads 429 错误体中提取 retryDelay（秒） */
+function parseRetryDelay(errBody: string): number {
+  try {
+    const match = errBody.match(/"retryDelay"\s*:\s*"(\d+)s?"/);
+    if (match) return parseInt(match[1], 10);
+  } catch {}
+  return 0;
+}
+
+/** 等待指定毫秒 */
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
 export interface MccCredentials {
   mcc_id: string;
   developer_token: string;
@@ -51,27 +68,52 @@ function buildHeaders(accessToken: string, developerToken: string, loginCustomer
 }
 
 /**
- * 执行 Google Ads 查询（GAQL）
+ * 执行 Google Ads 查询（GAQL），含 429 自动重试
  */
 export async function queryGoogleAds(
   credentials: MccCredentials,
   customerId: string,
   query: string,
 ): Promise<Record<string, unknown>[]> {
-  const token = await getAccessToken(credentials.service_account_json);
   const cid = customerId.replace(/-/g, "");
   const devToken = resolveDevToken(credentials.developer_token);
-  const headers = buildHeaders(token, devToken, credentials.mcc_id);
 
-  const apiUrl = `${ADS_BASE_URL}/customers/${cid}/googleAds:searchStream`;
-  const resp = await fetch(apiUrl, {
-    method: "POST",
-    headers,
-    body: JSON.stringify({ query }),
-  });
+  for (let attempt = 0; attempt <= MAX_429_RETRIES; attempt++) {
+    const token = await getAccessToken(credentials.service_account_json);
+    const headers = buildHeaders(token, devToken, credentials.mcc_id);
+    const apiUrl = `${ADS_BASE_URL}/customers/${cid}/googleAds:searchStream`;
+    const resp = await fetch(apiUrl, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ query }),
+    });
 
-  if (!resp.ok) {
+    if (resp.ok) {
+      const data = await resp.json();
+      const results: Record<string, unknown>[] = [];
+      if (Array.isArray(data)) {
+        for (const batch of data) {
+          if (Array.isArray(batch.results)) {
+            results.push(...batch.results);
+          }
+        }
+      }
+      return results;
+    }
+
     const errBody = await resp.text().catch(() => "");
+
+    if (resp.status === 429 || errBody.includes("RESOURCE_EXHAUSTED")) {
+      if (attempt < MAX_429_RETRIES) {
+        const delaySec = parseRetryDelay(errBody) || 30 * (attempt + 1);
+        const delayMs = Math.min(delaySec * 1000, MAX_429_WAIT_MS);
+        console.log(`[GoogleAds] 查询触发 429 限流，等待 ${delaySec}s 后重试 (${attempt + 1}/${MAX_429_RETRIES})`);
+        await sleep(delayMs);
+        continue;
+      }
+      throw new Error(`Google Ads API 请求频率超限（explorer access 配额较低）。请等待几分钟后再重试，或在 Google Ads API Center 申请更高级别的 API 访问权限。`);
+    }
+
     if (errBody.includes("DEVELOPER_TOKEN_NOT_APPROVED")) {
       throw new Error("Google Ads API 权限错误：Developer Token 仅被批准用于测试账号，无法访问正式广告账号。请在 Google Ads API Center 申请标准访问权限。");
     }
@@ -89,41 +131,47 @@ export async function queryGoogleAds(
     throw new Error(`Google Ads API 查询失败 (${resp.status}): ${errBody.slice(0, 500)}`);
   }
 
-  const data = await resp.json();
-  // searchStream 返回数组，每个元素有 results
-  const results: Record<string, unknown>[] = [];
-  if (Array.isArray(data)) {
-    for (const batch of data) {
-      if (Array.isArray(batch.results)) {
-        results.push(...batch.results);
-      }
-    }
-  }
-  return results;
+  throw new Error("Google Ads API 查询重试次数已耗尽");
 }
 
 /**
- * 执行 Google Ads mutate 操作
+ * 执行 Google Ads mutate 操作，含 429 自动重试
  */
 export async function mutateGoogleAds(
   credentials: MccCredentials,
   customerId: string,
   operations: Record<string, unknown>[],
 ): Promise<Record<string, unknown>> {
-  const token = await getAccessToken(credentials.service_account_json);
   const cid = customerId.replace(/-/g, "");
   const devToken = resolveDevToken(credentials.developer_token);
-  const headers = buildHeaders(token, devToken, credentials.mcc_id);
 
-  const apiUrl = `${ADS_BASE_URL}/customers/${cid}/googleAds:mutate`;
-  const resp = await fetch(apiUrl, {
-    method: "POST",
-    headers,
-    body: JSON.stringify({ mutate_operations: operations }),
-  });
+  for (let attempt = 0; attempt <= MAX_429_RETRIES; attempt++) {
+    const token = await getAccessToken(credentials.service_account_json);
+    const headers = buildHeaders(token, devToken, credentials.mcc_id);
+    const apiUrl = `${ADS_BASE_URL}/customers/${cid}/googleAds:mutate`;
+    const resp = await fetch(apiUrl, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ mutate_operations: operations }),
+    });
 
-  if (!resp.ok) {
+    if (resp.ok) {
+      return await resp.json();
+    }
+
     const errBody = await resp.text().catch(() => "");
+
+    if (resp.status === 429 || errBody.includes("RESOURCE_EXHAUSTED")) {
+      if (attempt < MAX_429_RETRIES) {
+        const delaySec = parseRetryDelay(errBody) || 30 * (attempt + 1);
+        const delayMs = Math.min(delaySec * 1000, MAX_429_WAIT_MS);
+        console.log(`[GoogleAds] Mutate 触发 429 限流，等待 ${delaySec}s 后重试 (${attempt + 1}/${MAX_429_RETRIES})`);
+        await sleep(delayMs);
+        continue;
+      }
+      throw new Error(`Google Ads API 请求频率超限（explorer access 配额较低）。请等待几分钟后再重试，或在 Google Ads API Center 申请更高级别的 API 访问权限。`);
+    }
+
     if (errBody.includes("DEVELOPER_TOKEN_NOT_APPROVED")) {
       throw new Error("Google Ads API 权限错误：Developer Token 仅被批准用于测试账号，无法访问正式广告账号。请在 Google Ads API Center 申请标准访问权限。");
     }
@@ -133,10 +181,10 @@ export async function mutateGoogleAds(
     if (errBody.includes("CUSTOMER_NOT_ENABLED") || errBody.includes("not yet enabled or has been deactivated")) {
       throw new Error(`CID ${customerId} 账户未启用或已停用，无法提交广告。请点击「同步 CID」刷新列表，选择其他可用 CID 后重试。`);
     }
-    throw new Error(`Google Ads API 修改失败 (${resp.status}): ${errBody.slice(0, 2000)}`);
+    throw new Error(`Google Ads API 请求失败 (${resp.status}): ${errBody.slice(0, 2000)}`);
   }
 
-  return await resp.json();
+  throw new Error("Google Ads API 修改重试次数已耗尽");
 }
 
 /**

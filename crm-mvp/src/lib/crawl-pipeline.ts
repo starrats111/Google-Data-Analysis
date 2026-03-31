@@ -90,10 +90,50 @@ export function titleFromUrlPath(url: string): string {
       .split("/").filter(Boolean)
       .filter((s) => s.length > 1);
     if (segments.length === 0) return "";
-    return segments
+    const raw = segments
       .map((s) => decodeURIComponent(s).replace(/[-_+]/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()))
       .join(" ").slice(0, 25);
+    return sanitizeAdText(raw);
   } catch { return ""; }
+}
+
+/**
+ * Google Ads 文案规范化：修复大写、标点、符号问题
+ * - 全大写 → Title Case（除品牌名）
+ * - 移除多余标点（!!!, ???, ...）
+ * - 移除感叹号（Google Ads sitelink 不允许）
+ * - 移除开头/结尾的多余标点
+ */
+export function sanitizeAdText(text: string, opts?: { allowExclamation?: boolean }): string {
+  let s = text.trim();
+  if (!s) return s;
+
+  // 修复全大写：如果超过 50% 是大写字母，转为 Title Case
+  const letters = s.replace(/[^a-zA-Z]/g, "");
+  if (letters.length >= 3) {
+    const upperCount = (s.match(/[A-Z]/g) || []).length;
+    if (upperCount / letters.length > 0.5) {
+      s = s.toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase());
+    }
+  }
+
+  // 移除多余/重复标点
+  s = s.replace(/([!?.])\1+/g, "$1");     // "!!!" → "!"  "???" → "?"
+  s = s.replace(/[!?]{2,}/g, "!");         // "!?" → "!"
+  s = s.replace(/\.{2,}/g, "…");           // ".." → "…"
+
+  // sitelink 标题中不允许感叹号（Google Ads 政策）
+  if (!opts?.allowExclamation) {
+    s = s.replace(/!/g, "");
+  }
+
+  // 移除开头/结尾的多余标点符号
+  s = s.replace(/^[.,;:!?\-–—]+\s*/, "").replace(/\s*[.,;:!?\-–—]+$/, "");
+
+  // 清理多余空格
+  s = s.replace(/\s+/g, " ").trim();
+
+  return s;
 }
 
 export function extractJsonFromAi(raw: string): string {
@@ -475,10 +515,14 @@ async function probeUrlReal(probeUrl: string, merchantDomain: string): Promise<{
       } catch { return null; }
 
       try { const p = new URL(finalUrl).pathname; if (p === "/" || p === "") return null; } catch {}
-      if (res.status >= 400 && res.status !== 403) continue;
+      // 400+ 状态码说明 Google 爬虫也访问不了，直接排除
+      if (res.status >= 400) return null;
 
       const html = await res.text();
       if (!html || html.length < 500) continue;
+
+      // 检测 Cloudflare/反爬拦截页面（Google Ads 审核时也会被拦截）
+      if (/cf-browser-verification|cf-challenge|challenge-platform|turnstile/i.test(html)) return null;
 
       const lower = html.toLowerCase();
       const soft404 = ["page not found", "page introuvable", "seite nicht gefunden", "404", "not found", "does not exist"];
@@ -488,12 +532,12 @@ async function probeUrlReal(probeUrl: string, merchantDomain: string): Promise<{
       if (html.length < 5000 && soft404.some((s) => lower.includes(s))) return null;
       if (isBlockedTitle(pageTitle)) { wasBlocked = true; continue; }
 
-      const cleanTitle = smartTruncate(
-        decodeHtmlEntities(pageTitle).replace(/\s*[\|–—]\s*[^|–—]{0,40}$/, "").replace(/\s*-\s*[A-Z][a-zA-Z\s]{0,30}$/, "").trim(), 25);
+      const cleanTitle = sanitizeAdText(smartTruncate(
+        decodeHtmlEntities(pageTitle).replace(/\s*[\|–—]\s*[^|–—]{0,40}$/, "").replace(/\s*-\s*[A-Z][a-zA-Z\s]{0,30}$/, "").trim(), 25));
 
       const descMatch = html.match(/<meta[^>]+name=["']description["'][^>]+content=["']([^"']*)/i)
         || html.match(/<meta[^>]+content=["']([^"']*?)["'][^>]+name=["']description["']/i);
-      const desc = smartTruncate(decodeHtmlEntities((descMatch?.[1] || "").trim()), 35);
+      const desc = sanitizeAdText(smartTruncate(decodeHtmlEntities((descMatch?.[1] || "").trim()), 35), { allowExclamation: true });
 
       if (!cleanTitle || cleanTitle.length < 2) {
         const pathTitle = titleFromUrlPath(finalUrl);
@@ -550,23 +594,25 @@ async function discoverSitelinkCandidates(
       if (candidates.length >= 6) break;
       const realUrl = meta.finalUrl || link.url;
       if (meta.isSoft404) continue;
+      // 非 200 的 URL Google Ads 审核会拒登
+      if (!meta.ok) continue;
       try { const p = new URL(realUrl).pathname; if (p === "/" || p === "") continue; } catch {}
       const normalizedUrl = realUrl.replace(/\/$/, "").replace(/^http:/, "https:");
       if (usedFinalUrls.has(normalizedUrl)) continue;
       usedFinalUrls.add(normalizedUrl);
 
       let title = "";
-      if (meta.ok && meta.title && !isBlockedTitle(meta.title)) {
-        title = smartTruncate(decodeHtmlEntities(meta.title).replace(/\s*[\|–—]\s*[^|–—]{0,40}$/, "").replace(/\s*-\s*[A-Z][a-zA-Z\s]{0,30}$/, "").trim(), 25);
+      if (meta.title && !isBlockedTitle(meta.title)) {
+        title = sanitizeAdText(smartTruncate(decodeHtmlEntities(meta.title).replace(/\s*[\|–—]\s*[^|–—]{0,40}$/, "").replace(/\s*-\s*[A-Z][a-zA-Z\s]{0,30}$/, "").trim(), 25));
       }
       if (!title || title.length < 2) {
-        const cleanLinkText = decodeHtmlEntities(link.text.trim());
+        const cleanLinkText = sanitizeAdText(decodeHtmlEntities(link.text.trim()));
         if (cleanLinkText.length >= 2 && !BAD_LINK_TEXTS.includes(cleanLinkText.toLowerCase())) title = smartTruncate(cleanLinkText, 25);
       }
       if (!title || title.length < 2) title = titleFromUrlPath(realUrl);
 
       let desc = "";
-      if (meta.ok && meta.description) desc = smartTruncate(decodeHtmlEntities(meta.description), 35);
+      if (meta.description) desc = sanitizeAdText(smartTruncate(decodeHtmlEntities(meta.description), 35), { allowExclamation: true });
 
       if (title.length >= 2) candidates.push({ url: realUrl, title, description: desc });
     }

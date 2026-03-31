@@ -215,8 +215,18 @@ function sanitizeHeadlineCandidates(
       .replace(/[|•·]+/g, " ")
       .replace(/\s+/g, " ")
       .trim();
-    candidate = candidate.replace(/[!]{2,}/g, "!");
+    // 修复重复标点
+    candidate = candidate.replace(/([!?.])\1+/g, "$1");
+    candidate = candidate.replace(/[!?]{2,}/g, "!");
     candidate = candidate.replace(/^[\-–—:;,./\s]+|[\-–—:;,./\s]+$/g, "");
+    // 修复全大写（>50% 大写字母 → Title Case）
+    const letters = candidate.replace(/[^a-zA-Z]/g, "");
+    if (letters.length >= 3) {
+      const upperCount = (candidate.match(/[A-Z]/g) || []).length;
+      if (upperCount / letters.length > 0.5) {
+        candidate = candidate.toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase());
+      }
+    }
 
     if (!candidate || candidate.length > maxLen) continue;
     if (hasExplicitDateOrExpiredSignal(candidate)) continue;
@@ -270,8 +280,18 @@ function sanitizeDescriptionCandidates(
       .replace(/[|•·]+/g, " ")
       .replace(/\s+/g, " ")
       .trim();
-    candidate = candidate.replace(/[!]{2,}/g, "!");
+    // 修复重复标点
+    candidate = candidate.replace(/([!?.])\1+/g, "$1");
+    candidate = candidate.replace(/[!?]{2,}/g, "!");
     candidate = candidate.replace(/^[\-–—:;,./\s]+|[\-–—:;,./\s]+$/g, "");
+    // 修复全大写（>50% 大写字母 → Title Case）
+    const letters = candidate.replace(/[^a-zA-Z]/g, "");
+    if (letters.length >= 3) {
+      const upperCount = (candidate.match(/[A-Z]/g) || []).length;
+      if (upperCount / letters.length > 0.5) {
+        candidate = candidate.toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase());
+      }
+    }
 
     if (!candidate || candidate.length > maxLen || candidate.length < 50) continue;
     if (hasExplicitDateOrExpiredSignal(candidate)) continue;
@@ -761,36 +781,41 @@ export async function padHeadlines(
 
   {
     const needed = count - locked.length;
-    const prompt = `You are a senior Google Ads search ads copywriter with 30 years of experience.
+    const prompt = `You are a top-tier Google Ads RSA headline writer. Your goal: write headlines so compelling that users stop and click.
 
 Context:
 - Merchant: ${merchantName}
-- Target country: ${market.countryNameZh} (${languageName})
-- Writing style: ${market.style}
-- Budget: $${dailyBudget.toFixed(2)}/day, CPC $${maxCpc.toFixed(2)}
-- Bidding strategy: ${biddingStrategy}
-- Goal: create high-conversion RSA headlines that real users would click, not filler.
+- Target: ${market.countryNameZh} — write in ${languageName}
+- Style: ${market.style}
+- Budget: $${dailyBudget.toFixed(2)}/day, CPC $${maxCpc.toFixed(2)}, Strategy: ${biddingStrategy}
 
-${aiRulePrompt ? `User hard rules (MUST follow):\n${aiRulePrompt}\n\n` : ""}${keywords.length > 0 ? `Top keywords / product phrases:\n${keywords.map((k, i) => `${i + 1}. ${k}`).join("\n")}\n` : ""}
-${references.length > 0 ? `Market references for inspiration only (DO NOT copy literally):\n${references.map((h, i) => `${i + 1}. \"${h}\"`).join("\n")}\n` : ""}
-${locked.length > 0 ? `Already locked headlines that must remain untouched:\n${locked.map((h, i) => `${i + 1}. \"${h}\"`).join("\n")}\n` : ""}
+${aiRulePrompt ? `User hard rules (MUST follow):\n${aiRulePrompt}\n\n` : ""}${keywords.length > 0 ? `Product/keyword focus:\n${keywords.map((k, i) => `${i + 1}. ${k}`).join("\n")}\n` : ""}
+${references.length > 0 ? `Market reference headlines (inspiration only — do NOT copy):\n${references.map((h, i) => `${i + 1}. \"${h}\"`).join("\n")}\n` : ""}
+${locked.length > 0 ? `Already locked (do NOT change or duplicate):\n${locked.map((h, i) => `${i + 1}. \"${h}\"`).join("\n")}\n` : ""}
 ${AD_COPY_ANTI_AI_BLOCK}
 
 Generate exactly ${needed} NEW headlines. Return ONLY a JSON array of exactly ${needed} strings.
 
+WHAT MAKES A GREAT HEADLINE — choose from these angles:
+  • Pain/desire hook: "Tired of X?" / "Want clearer skin?" — make them feel understood
+  • Specific benefit: concrete outcome, not vague promise — "Clears skin in 2 weeks"
+  • Trust signal: "Top-rated", "Proven formula", "Loved by thousands"
+  • Product focus: what they're searching for — specific, matches search intent
+  • Differentiator: what makes this brand stand out — "No harsh chemicals"
+  • CTA: clear next step — "Shop the collection", "Find yours today", "See what works"
+  • Brand: include "${merchantName}" — make it memorable, not just the name alone
+
 MANDATORY RULES:
-1. Headline #1 in your output must be brand-related and must include \"${merchantName}\" or a clear brand reference.
-2. Do NOT fabricate specific discount numbers (e.g. "20% off", "Save $50") unless the information comes from verified website data. Generic phrases like "Browse Deals" or "View Offers" are acceptable.
-3. Do NOT claim free shipping unless it is explicitly confirmed from the merchant website.
-4. Make the set commercially strong: emphasize product/category fit, trust, buying motivation, convenience, quality, or CTA.
-5. Each headline must be <= 30 characters.
-6. Write in ${languageName}. Never fall back to English unless the target market language is English.
-7. Do NOT output expired or time-bound copy: no dates, months, years, countdowns, \"Early Bird\", \"Ends Soon\", or specific event deadlines.
-8. Do NOT output low-value filler such as brand only, \"Official Site\", \"Home Page\", or near-duplicates.
-9. Avoid repeating the same phrase pattern across multiple headlines.
-10. Output must comply with Google Ads policy and remain truthful. All claims must be verifiable.
-11. If any user hard rule conflicts with these defaults, follow the user hard rule first unless it violates policy.
-12. Write like a real marketer — specific, punchy, no AI buzzwords. Use plain language that real people use.
+1. Headline #1 MUST be brand-related and include \"${merchantName}\" or a clear brand reference.
+2. Do NOT fabricate discount numbers — generic value phrases like "Best value picks" are fine.
+3. Do NOT claim free shipping unless explicitly confirmed.
+4. Each headline ≤ 30 characters. Every character counts — be tight and punchy.
+5. Write in ${languageName} only.
+6. No dates, countdowns, or expiry language.
+7. No filler: avoid "Official Site", "Home Page", or brand-name-only headlines.
+8. Vary the opening word — no two headlines should start the same way.
+9. Be specific — "Fast results" beats "Great results". "For teens" beats "For everyone".
+10. Follow all user hard rules above. Comply with Google Ads policy.
 
 Return ONLY JSON array.`;
 
@@ -851,40 +876,42 @@ export async function padDescriptions(
 
   {
     const needed = count - locked.length;
-    const prompt = `You are a senior Google Ads RSA copywriter focused on conversion-driving descriptions.
+    const prompt = `You are a top-tier Google Ads RSA description writer. Your goal: write descriptions that bridge the headline promise and drive the click-to-purchase.
 
 Context:
 - Merchant: ${merchantName}
-- Target country: ${market.countryNameZh} (${languageName})
-- Writing style: ${market.style}
-- Budget: $${dailyBudget.toFixed(2)}/day, CPC $${maxCpc.toFixed(2)}
-- Bidding strategy: ${biddingStrategy}
-- Goal: write persuasive, realistic ad descriptions that feel commercially useful.
+- Target: ${market.countryNameZh} — write in ${languageName}
+- Style: ${market.style}
+- Budget: $${dailyBudget.toFixed(2)}/day, CPC $${maxCpc.toFixed(2)}, Strategy: ${biddingStrategy}
 
-GOOGLE ADS AD STRENGTH (Responsive Search Ads — official feedback patterns):
-- Descriptions are rated for UNIQUENESS vs headlines and vs each other; repeating headline wording lowers Ad strength.
-- Prefer full-sentence flow with DISTINCT openings (e.g. \"Whether you need...\", \"From daily commutes to...\", \"Built to...\", \"Worried about...?\", \"Install in minutes and...\").
-- Avoid copying 3+ consecutive content words from any headline; use different benefits: fit, care/cleaning, durability, use-case, warranty/trust — not the same angle twice.
-- Sitelink count (6+) is separate in the UI; your job here is only stronger, more distinct descriptions.
+GOOGLE ADS DESCRIPTION BEST PRACTICES:
+- Google rates descriptions on UNIQUENESS — repeating headline wording lowers ad strength
+- Each description must have a DISTINCT opening word and a different core message
+- Avoid copying 3+ consecutive words from any headline
+- Full sentences with clear benefit → action flow perform best
+- Strong openers: "Whether you need...", "Struggling with...?", "Built for...", "Real results for...", "Stop settling for..."
 
-${headlineBlock}${aiRulePrompt ? `User hard rules (MUST follow):\n${aiRulePrompt}\n\n` : ""}${keywords.length > 0 ? `Top keywords / product phrases (weave naturally; do not mirror headline lines):\n${keywords.map((k, i) => `${i + 1}. ${k}`).join("\n")}\n` : ""}
-${references.length > 0 ? `Market reference descriptions for inspiration only (DO NOT copy literally):\n${references.map((d, i) => `${i + 1}. \"${d}\"`).join("\n")}\n` : ""}
-${locked.length > 0 ? `Already locked descriptions that must remain untouched:\n${locked.map((d, i) => `${i + 1}. \"${d}\"`).join("\n")}\n` : ""}
+${headlineBlock}${aiRulePrompt ? `User hard rules (MUST follow):\n${aiRulePrompt}\n\n` : ""}${keywords.length > 0 ? `Product/keyword focus (weave naturally, do not mirror headlines):\n${keywords.map((k, i) => `${i + 1}. ${k}`).join("\n")}\n` : ""}
+${references.length > 0 ? `Market reference descriptions (inspiration only — do NOT copy):\n${references.map((d, i) => `${i + 1}. \"${d}\"`).join("\n")}\n` : ""}
+${locked.length > 0 ? `Already locked (do NOT change or duplicate):\n${locked.map((d, i) => `${i + 1}. \"${d}\"`).join("\n")}\n` : ""}
 ${AD_COPY_ANTI_AI_BLOCK}
 
 Generate exactly ${needed} NEW descriptions. Return ONLY a JSON array of exactly ${needed} strings.
 
+WRITE ONE DESCRIPTION PER ANGLE — each must be clearly different:
+  Angle A — PROBLEM → SOLUTION: Name the customer's real frustration, position the product as the answer. Strong: "Tired of products that don't work? [Brand] delivers real results."
+  Angle B — KEY BENEFIT + CTA: Lead with the strongest concrete outcome, close with a specific action. Strong: "Get visible results with our proven formula. Shop the full range today."
+  Angle C — TRUST + PROOF: Credibility signals — top-rated, tested, loved by thousands, brand reputation. Strong: "Top-rated by customers. Dermatologist-tested. See what the reviews say."
+  Angle D — UNIQUE EDGE: What makes this brand different from generic alternatives. Strong: "No harsh chemicals, no guesswork — just a formula that actually fits real skin."
+
 MANDATORY RULES:
-1. Do NOT fabricate specific discounts, prices, or free shipping claims unless they come from verified website data. Use factual, benefit-driven language instead.
-2. Each description must be 50-90 characters.
-3. Write in ${languageName}. Never fall back to English unless the target market language is English.
-4. Each line must have a different persuasion angle: trust, product fit, convenience, quality, or CTA.
-5. Avoid generic filler. The copy must feel like it can actually drive revenue.
-6. Do NOT use dates, months, years, countdowns, \"Early Bird\", \"Ends Soon\", or expired event language.
-7. Do NOT repeat the same wording structure across lines; vary syntax and first words.
-8. Comply with Google Ads policy and keep ALL claims truthful and verifiable.
-9. If any user hard rule conflicts with these defaults, follow the user hard rule first unless it violates policy.
-10. Use concrete product details and real benefits, avoid vague AI marketing buzzwords.
+1. Each description 50-90 characters exactly.
+2. Write in ${languageName} only.
+3. No fabricated discounts, prices, or free shipping unless from verified data.
+4. No dates, countdowns, or expiry language.
+5. Every description must open with a DIFFERENT word or phrase.
+6. Vary sentence structure — no two descriptions should read the same way.
+7. Comply with Google Ads policy. Follow user hard rules above.
 
 Return ONLY JSON array.`;
 
