@@ -1,6 +1,6 @@
 "use client";
 
-import { Table, Button, Modal, Form, Input, Select, Tag, Space, App, Popconfirm } from "antd";
+import { Table, Button, Modal, Form, Input, Select, AutoComplete, Tag, Space, App, Popconfirm } from "antd";
 import { PlusOutlined, EditOutlined, DeleteOutlined } from "@ant-design/icons";
 import { useEffect, useState } from "react";
 
@@ -82,17 +82,20 @@ export default function AIProvidersTab() {
       <Table columns={columns} dataSource={list} rowKey="id" loading={loading} />
       <Modal title={editItem ? "编辑供应商" : "添加供应商"} open={modalOpen} onOk={handleSubmit} onCancel={() => setModalOpen(false)}>
         <Form form={form} layout="vertical">
-          <Form.Item name="provider_name" label="供应商名称" rules={[{ required: true }]}>
-            <Select
-              showSearch
+          <Form.Item name="provider_name" label="供应商名称" rules={[{ required: true, message: "请输入供应商名称" }]}>
+            <AutoComplete
               options={[
-                { value: "hajimi", label: "哈基米中转" },
-                { value: "openai", label: "OpenAI" },
-                { value: "anthropic", label: "Anthropic" },
-                { value: "deepseek", label: "DeepSeek" },
-                { value: "google", label: "Google" },
-                { value: "other", label: "其他" },
+                { value: "哈基米中转" },
+                { value: "OpenAI" },
+                { value: "Anthropic" },
+                { value: "DeepSeek" },
+                { value: "Google" },
+                { value: "其他" },
               ]}
+              placeholder="输入供应商名称，或从下拉中选择常用项"
+              filterOption={(input, option) =>
+                (option?.value ?? "").toLowerCase().includes(input.toLowerCase())
+              }
             />
           </Form.Item>
           <Form.Item name="api_key" label="API Key" rules={[{ required: true }]}>
