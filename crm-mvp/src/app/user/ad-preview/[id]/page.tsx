@@ -172,6 +172,10 @@ export default function AdPreviewPage() {
   const [callouts, setCallouts] = useState<string[]>([]);
   const [calloutsLoading, setCalloutsLoading] = useState(false);
   const [crawlFailed, setCrawlFailed] = useState(false);
+  // 爬取图片文字检测（规则：不能有文字、必须品牌强相关）
+  const [crawledImagesOcrDone, setCrawledImagesOcrDone] = useState(false);
+  const [crawledImagesOcrProgress, setCrawledImagesOcrProgress] = useState(0);
+  const [crawledImagesTextFlags, setCrawledImagesTextFlags] = useState<Record<string, boolean>>({});
 
   // 促销扩展
   const [enablePromotion, setEnablePromotion] = useState(false);
@@ -756,8 +760,12 @@ export default function AdPreviewPage() {
       if (type === "images") {
         const imgs = (data || []) as string[];
         setCrawledImages(imgs); setImageUrls([]);
-        if (imgs.length > 0) message.success(`已从商家网站提取 ${imgs.length} 张图片，请勾选需要的图片`);
-        else message.warning(wasCrawlFailed ? "无法爬取商家网站图片，请手动拖入或粘贴图片 URL" : "未找到可用图片，请手动添加");
+        setCrawledImagesTextFlags({}); setCrawledImagesOcrDone(false); setCrawledImagesOcrProgress(0);
+        if (imgs.length > 0) {
+          message.loading({ content: `已提取 ${imgs.length} 张图片，正在检测含文字图片...`, key: "ocr-filter", duration: 0 });
+        } else {
+          message.warning(wasCrawlFailed ? "无法爬取商家网站图片，请手动拖入或粘贴图片 URL" : "未找到可用图片，请手动添加");
+        }
         setImagesLoading(false); return;
       }
 
@@ -997,6 +1005,59 @@ export default function AdPreviewPage() {
       setImageCheckResults((prev) => ({ ...prev, [idx]: { has_text: false, checking: false } }));
     }
   }, [message]);
+
+  // 爬取图片到达后自动批量 OCR 过滤（规则：不能有文字、必须品牌强相关）
+  useEffect(() => {
+    if (crawledImages.length === 0) return;
+    let cancelled = false;
+    const CONCURRENCY = 3;
+
+    const runOcr = async () => {
+      const flags: Record<string, boolean> = {};
+      let checked = 0;
+
+      for (let i = 0; i < crawledImages.length; i += CONCURRENCY) {
+        if (cancelled) break;
+        const batch = crawledImages.slice(i, i + CONCURRENCY);
+        await Promise.allSettled(
+          batch.map(async (url) => {
+            try {
+              const res = await fetch("/api/user/ad-creation/check-image", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ url }),
+              });
+              const json = await res.json();
+              flags[url] = json.code === 0 && json.data?.has_text === true;
+            } catch {
+              flags[url] = false;
+            }
+          }),
+        );
+        if (!cancelled) {
+          checked = Math.min(i + CONCURRENCY, crawledImages.length);
+          setCrawledImagesOcrProgress(checked);
+          setCrawledImagesTextFlags((prev) => ({ ...prev, ...Object.fromEntries(batch.map((u) => [u, flags[u] ?? false])) }));
+        }
+      }
+
+      if (!cancelled) {
+        setCrawledImagesOcrDone(true);
+        const removedCount = Object.values(flags).filter(Boolean).length;
+        const cleanCount = crawledImages.length - removedCount;
+        message.destroy("ocr-filter");
+        if (removedCount > 0) {
+          message.success(`已过滤 ${removedCount} 张含文字图片，剩余 ${cleanCount} 张可选`);
+        } else {
+          message.success(`已提取 ${cleanCount} 张图片，请勾选需要的图片`);
+        }
+      }
+    };
+
+    runOcr();
+    return () => { cancelled = true; };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [crawledImages]);
 
   const handleImageUpload = useCallback(async (file: File) => {
     if (!["image/jpeg", "image/png"].includes(file.type)) {
@@ -1616,7 +1677,7 @@ export default function AdPreviewPage() {
                 )}
               </div>
               <Text type="secondary" style={{ fontSize: 12, display: "block", marginLeft: 24 }}>
-                系统自动从商家网站爬取产品图片。如爬取失败，可拖入图片或粘贴图片 URL
+                系统自动从商家网站爬取产品图片，并过滤含文字图片（Google Ads 规则：图片不得含文字）。如爬取失败，可拖入图片或粘贴图片 URL
               </Text>
               {!imagesLoading && imageUrls.length === 0 && crawledImages.length === 0 && (
                 <Alert
@@ -1633,42 +1694,64 @@ export default function AdPreviewPage() {
                     </div>
                   ) : (
                     <>
-                      {/* 爬取到的图片 — 勾选模式 */}
+                      {/* 爬取到的图片 — 勾选模式（含文字图片自动隐藏） */}
                       {crawledImages.length > 0 && (
                         <div style={{ marginBottom: 12 }}>
-                          <Text type="secondary" style={{ fontSize: 12, marginBottom: 8, display: "block" }}>
-                            可选图片 {crawledImages.length} 张，已选 {imageUrls.filter(u => crawledImages.includes(u)).length} 张（点击图片选择/取消）
-                          </Text>
-                          <Space wrap>
-                            {crawledImages.map((url, i) => {
-                              const isSelected = imageUrls.includes(url);
-                              return (
-                              <div
-                                key={url + i}
-                                onClick={() => toggleImageSelect(url)}
-                                style={{ position: "relative", display: "inline-block", cursor: "pointer" }}
-                              >
-                                <Image
-                                  src={proxyImageUrl(url)} alt={`crawled-${i}`}
-                                  width={80} height={80}
-                                  preview={false}
-                                  style={{
-                                    objectFit: "cover", borderRadius: 6,
-                                    border: isSelected ? "3px solid #1890ff" : "1px solid #d9d9d9",
-                                    opacity: isSelected ? 1 : 0.5,
-                                    transition: "all 0.2s",
-                                  }}
-                                  fallback={IMAGE_FALLBACK}
-                                />
-                                {isSelected && (
-                                  <div style={{ position: "absolute", top: -4, right: -4, background: "#1890ff", borderRadius: "50%", width: 20, height: 20, display: "flex", alignItems: "center", justifyContent: "center", boxShadow: "0 1px 3px rgba(0,0,0,.3)" }}>
-                                    <CheckCircleOutlined style={{ color: "#fff", fontSize: 12 }} />
-                                  </div>
-                                )}
-                              </div>
-                              );
-                            })}
-                          </Space>
+                          {/* OCR 检测进度提示 */}
+                          {!crawledImagesOcrDone && crawledImages.length > 0 && (
+                            <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8 }}>
+                              <Spin size="small" />
+                              <Text type="secondary" style={{ fontSize: 12 }}>
+                                正在检测含文字图片...（{crawledImagesOcrProgress}/{crawledImages.length}）
+                              </Text>
+                            </div>
+                          )}
+                          {(() => {
+                            const visibleImages = crawledImages.filter(u => !crawledImagesTextFlags[u]);
+                            const filteredCount = Object.values(crawledImagesTextFlags).filter(Boolean).length;
+                            return (
+                              <>
+                                <Text type="secondary" style={{ fontSize: 12, marginBottom: 8, display: "block" }}>
+                                  可选图片 {visibleImages.length} 张，已选 {imageUrls.filter(u => visibleImages.includes(u)).length} 张（点击图片选择/取消）
+                                  {crawledImagesOcrDone && filteredCount > 0 && (
+                                    <Text type="warning" style={{ fontSize: 12, marginLeft: 8 }}>
+                                      已自动过滤 {filteredCount} 张含文字图片
+                                    </Text>
+                                  )}
+                                </Text>
+                                <Space wrap>
+                                  {visibleImages.map((url, i) => {
+                                    const isSelected = imageUrls.includes(url);
+                                    return (
+                                    <div
+                                      key={url + i}
+                                      onClick={() => toggleImageSelect(url)}
+                                      style={{ position: "relative", display: "inline-block", cursor: "pointer" }}
+                                    >
+                                      <Image
+                                        src={proxyImageUrl(url)} alt={`crawled-${i}`}
+                                        width={80} height={80}
+                                        preview={false}
+                                        style={{
+                                          objectFit: "cover", borderRadius: 6,
+                                          border: isSelected ? "3px solid #1890ff" : "1px solid #d9d9d9",
+                                          opacity: isSelected ? 1 : 0.5,
+                                          transition: "all 0.2s",
+                                        }}
+                                        fallback={IMAGE_FALLBACK}
+                                      />
+                                      {isSelected && (
+                                        <div style={{ position: "absolute", top: -4, right: -4, background: "#1890ff", borderRadius: "50%", width: 20, height: 20, display: "flex", alignItems: "center", justifyContent: "center", boxShadow: "0 1px 3px rgba(0,0,0,.3)" }}>
+                                          <CheckCircleOutlined style={{ color: "#fff", fontSize: 12 }} />
+                                        </div>
+                                      )}
+                                    </div>
+                                    );
+                                  })}
+                                </Space>
+                              </>
+                            );
+                          })()}
                         </div>
                       )}
                       {/* 已选中 + 手动上传的图片 */}

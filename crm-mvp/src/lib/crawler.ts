@@ -1527,18 +1527,28 @@ export async function searchMerchantImages(merchantUrl: string, merchantName: st
   const images: string[] = [];
   const seen = new Set<string>();
 
+  // 只接受来自商家自身域名的图片，避免混入无关第三方图片
   const addImg = (url: string) => {
     if (!url || seen.has(url) || url.startsWith("data:")) return;
     const lower = url.toLowerCase();
     if (/icon|logo|favicon|badge|pixel|spacer|1x1|emoji|avatar/i.test(lower)) return;
     if (!/\.(jpg|jpeg|png|webp)(\?|$)/i.test(lower) && !/\/dw\/image\//i.test(lower)) return;
+    // 严格过滤：只接受来自商家域名或其 CDN 的图片
+    try {
+      const imgHost = new URL(url).hostname.toLowerCase();
+      const merchantHost = domain.replace(/^www\./, "");
+      // 允许：同域 / 子域 / 常见电商CDN（shopify/cloudinary 等必须包含商家域特征时放开，否则不放宽）
+      const isSameDomain = imgHost === domain || imgHost === merchantHost || imgHost.endsWith("." + merchantHost);
+      if (!isSameDomain) return; // 搜索引擎回退场景严格同域
+    } catch { return; }
     seen.add(url);
     images.push(url);
   };
 
+  // 只用 site: 严格搜索，禁用品牌名宽泛搜索（会拉取无关图片）
   const searchQueries = [
-    `site:${domain} products`,
-    `${merchantName} products official`,
+    `site:${domain} product`,
+    `site:${domain}`,
   ];
 
   for (const query of searchQueries) {

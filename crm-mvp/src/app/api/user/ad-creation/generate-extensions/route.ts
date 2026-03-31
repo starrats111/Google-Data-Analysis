@@ -594,8 +594,8 @@ Return ONLY valid JSON, no explanation.`;
     }
   }
 
-  // 图片筛选（无 AI）
-  const images = await selectBestImages(cache.images);
+  // 图片筛选：社交域名 + 促销URL过滤 + 商家同域优先
+  const images = await selectBestImages(cache.images, merchantUrl);
   send("images", images);
   if (adCreativeId) {
     await prisma.ad_creatives.update({
@@ -866,21 +866,83 @@ const IMG_BLACKLIST = [
   "1x1", "spacer",
 ];
 
-async function selectBestImages(rawImages: string[]): Promise<string[]> {
+// 社交媒体域名 - 非品牌相关图片（规则：不能有文字、必须品牌强相关）
+const SOCIAL_MEDIA_DOMAINS = [
+  "instagram.com", "cdninstagram.com",
+  "facebook.com", "fbcdn.net", "fbsbx.com",
+  "twitter.com", "twimg.com",
+  "tiktok.com", "tiktokcdn.com",
+  "pinterest.com", "pinimg.com",
+  "youtube.com", "ytimg.com",
+  "snapchat.com", "snapchatcdn.com",
+  "reddit.com", "redd.it",
+  "tumblr.com",
+];
+
+// URL 路径中的促销/文字内容特征词（此类图片通常带大量文字）
+const TEXT_PROMO_URL_PATTERNS = [
+  "/sale", "_sale", "-sale",
+  "/promo", "_promo", "-promo",
+  "/offer", "_offer", "-offer",
+  "/deal", "_deal", "-deal",
+  "/coupon", "/clearance", "/flyer", "/poster",
+  "/announce", "/campaign", "/ad-", "/ads-",
+  "percent-off", "pct-off", "%-off",
+  "/graphic", "/infographic",
+  "before-after", "before_after", "beforeafter",
+];
+
+async function selectBestImages(rawImages: string[], merchantUrl?: string): Promise<string[]> {
+  // 解析商家主域名，用于品牌相关性判断
+  let merchantDomain = "";
+  if (merchantUrl) {
+    try {
+      const u = new URL(merchantUrl.startsWith("http") ? merchantUrl : `https://${merchantUrl}`);
+      merchantDomain = u.hostname.replace(/^www\./, "");
+    } catch { /* ignore */ }
+  }
+
   const filtered = rawImages.filter((url) => {
     const lower = url.toLowerCase();
     if (IMG_BLACKLIST.some((kw) => lower.includes(kw))) return false;
     if (lower.endsWith(".svg") || lower.startsWith("data:")) return false;
     const tinyMatch = lower.match(/[/_-](\d+)x(\d+)/);
     if (tinyMatch && (parseInt(tinyMatch[1]) < 150 || parseInt(tinyMatch[2]) < 150)) return false;
+
+    // 过滤社交媒体域名图片（与品牌不强相关）
+    try {
+      const imgHostname = new URL(url).hostname.toLowerCase();
+      if (SOCIAL_MEDIA_DOMAINS.some((d) => imgHostname === d || imgHostname.endsWith("." + d))) return false;
+      // 如果商家域名已知，且图片来自完全无关的第三方域（非主流CDN），降低优先级
+      // 但不直接过滤，避免误伤合法CDN
+    } catch { /* ignore */ }
+
+    // 过滤 URL 中含有明显促销/文字内容特征的图片
+    const urlPath = lower.split("?")[0];
+    if (TEXT_PROMO_URL_PATTERNS.some((p) => urlPath.includes(p))) return false;
+
     return true;
   });
 
-  if (filtered.length === 0) return rawImages.slice(0, 20);
+  // 若商家域名已知，将同域图片排在前面
+  const ranked = merchantDomain
+    ? [
+        ...filtered.filter((url) => {
+          try { return new URL(url).hostname.replace(/^www\./, "").includes(merchantDomain); }
+          catch { return false; }
+        }),
+        ...filtered.filter((url) => {
+          try { return !new URL(url).hostname.replace(/^www\./, "").includes(merchantDomain); }
+          catch { return true; }
+        }),
+      ]
+    : filtered;
+
+  if (ranked.length === 0) return rawImages.slice(0, 20);
 
   const checked: string[] = [];
-  for (let i = 0; i < filtered.length && checked.length < 40; i += 10) {
-    const batch = filtered.slice(i, i + 10);
+  for (let i = 0; i < ranked.length && checked.length < 40; i += 10) {
+    const batch = ranked.slice(i, i + 10);
     const results = await Promise.allSettled(
       batch.map(async (url) => {
         try {
@@ -897,5 +959,5 @@ async function selectBestImages(rawImages: string[]): Promise<string[]> {
     for (const r of results) if (r.status === "fulfilled" && r.value) checked.push(r.value);
   }
 
-  return checked.length > 0 ? checked.slice(0, 30) : filtered.slice(0, 20);
+  return checked.length > 0 ? checked.slice(0, 30) : ranked.slice(0, 20);
 }
