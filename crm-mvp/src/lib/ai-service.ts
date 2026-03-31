@@ -336,13 +336,12 @@ function getFallbackHeadlineCandidates(
   if (market.languageCode === "de") {
     return [
       `${brand} ${product}`,
-      "Bis zu 20% Rabatt",
-      market.shippingLabel,
+      "Angebote entdecken",
       `${product} jetzt sichern`,
       "Starke Leistung Zuhause",
       "Mehr Komfort im Alltag",
       "Qualität für Ihr Zuhause",
-      "Jetzt Angebote entdecken",
+      "Jetzt Auswahl ansehen",
       "Zuverlässig & effizient",
       "Premium Auswahl online",
     ];
@@ -351,8 +350,7 @@ function getFallbackHeadlineCandidates(
   if (market.languageCode === "fr") {
     return [
       `${brand} ${product}`,
-      "Jusqu'à -20%",
-      market.shippingLabel,
+      "Voir les offres",
       `${product} à découvrir`,
       "Qualité pensée pour vous",
       "Confort au quotidien",
@@ -364,11 +362,10 @@ function getFallbackHeadlineCandidates(
   if (market.languageCode === "es") {
     return [
       `${brand} ${product}`,
-      "Hasta 20% de descuento",
-      market.shippingLabel,
+      "Ver ofertas",
       `Compra ${product} hoy`,
       "Calidad para tu hogar",
-      "Ahorra con estilo",
+      "Estilo y valor",
       "Ofertas que sí convencen",
       "Descubre tu mejor opción",
     ];
@@ -377,8 +374,7 @@ function getFallbackHeadlineCandidates(
   if (market.languageCode === "it") {
     return [
       `${brand} ${product}`,
-      "Fino al 20% di sconto",
-      market.shippingLabel,
+      "Scopri le offerte",
       `Scopri ${product} ora`,
       "Qualità per ogni giorno",
       "Più comfort a casa",
@@ -390,21 +386,19 @@ function getFallbackHeadlineCandidates(
   if (market.languageCode === "nl") {
     return [
       `${brand} ${product}`,
-      "Tot 20% korting",
-      market.shippingLabel,
+      "Bekijk de aanbiedingen",
       `${product} nu ontdekken`,
       "Slim gemak voor thuis",
       "Kwaliteit die overtuigt",
       "Sterke deals online",
-      "Maak thuis slimmer schoon",
+      "Ontdek slim winkelen",
     ];
   }
 
   if (market.languageCode === "ja") {
     return [
       `${brand} ${product}`,
-      "最大20%オフ",
-      market.shippingLabel,
+      "お得な情報をチェック",
       `${product}を今すぐ確認`,
       "毎日に頼れる品質",
       "使いやすさで選ぶなら",
@@ -415,12 +409,11 @@ function getFallbackHeadlineCandidates(
 
   return [
     `${brand} ${product}`,
-    "Save Up to 20% Today",
-    market.shippingLabel,
+    "Browse Deals Today",
     `Shop ${product} Now`,
     "Quality You Can Trust",
     "Upgrade Your Everyday",
-    "Top Deals Worth Clicking",
+    "Top Picks Online",
     "Premium Picks Online",
     "Smart Value For Home",
     "Find Your Best Match",
@@ -450,63 +443,63 @@ function getFallbackDescriptionCandidates(
 
   if (market.languageCode === "de") {
     return [
-      `Bis zu 20% Rabatt + ${market.shippingLabel} bei ${brand} sichern.`,
       `${brand} bietet ${product} mit starker Qualität, Komfort und Vertrauen.`,
       `Entdecken Sie leistungsstarke ${product} für mehr Effizienz im Alltag.`,
       `Jetzt attraktive Angebote prüfen und die passende ${product} Auswahl finden.`,
+      `Top-Auswahl an ${product} für Qualitätsbewusste jetzt bei ${brand} entdecken.`,
     ];
   }
 
   if (market.languageCode === "fr") {
     return [
-      `Jusqu'à -20% + ${market.shippingLabel.toLowerCase()} chez ${brand}.`,
       `${brand} propose ${product} avec qualité, style et confiance au quotidien.`,
       `Découvrez une sélection ${product} pensée pour plus de confort chaque jour.`,
       `Profitez d'offres fiables et trouvez la solution idéale dès aujourd'hui.`,
+      `Explorez la gamme ${product} chez ${brand} pour des achats en toute confiance.`,
     ];
   }
 
   if (market.languageCode === "es") {
     return [
-      `Ahorra hasta 20% + ${market.shippingLabel.toLowerCase()} con ${brand}.`,
       `${brand} reúne ${product} con calidad real, confianza y mejor experiencia.`,
       `Descubre opciones ${product} para comprar con más valor y menos dudas.`,
       `Encuentra ofertas convincentes y elige la mejor solución para ti hoy.`,
+      `Compra ${product} de calidad en ${brand} con total confianza y comodidad.`,
     ];
   }
 
   if (market.languageCode === "it") {
     return [
-      `Fino al 20% di sconto + ${market.shippingLabel.toLowerCase()} con ${brand}.`,
       `${brand} offre ${product} con qualità affidabile e comfort ogni giorno.`,
       `Scopri una selezione ${product} pensata per valore, stile e praticità.`,
       `Approfitta di offerte credibili e scegli la soluzione giusta subito.`,
+      `Esplora la gamma ${product} su ${brand} per acquisti sicuri e di qualità.`,
     ];
   }
 
   if (market.languageCode === "nl") {
     return [
-      `Tot 20% korting + ${market.shippingLabel.toLowerCase()} bij ${brand}.`,
       `${brand} biedt ${product} met kwaliteit, gemak en vertrouwen voor thuis.`,
       `Ontdek slimme ${product} keuzes voor meer comfort in je dagelijkse routine.`,
       `Bekijk sterke aanbiedingen en kies vandaag nog de beste oplossing.`,
+      `Verken ${product} bij ${brand} voor slim winkelen met vertrouwen.`,
     ];
   }
 
   if (market.languageCode === "ja") {
     return [
-      `最大20%オフ + ${market.shippingLabel}で${brand}をお得にチェック。`,
       `${brand}は品質・使いやすさ・安心感で選ばれる${product}を提案します。`,
       `毎日をもっと快適にする${product}を比較しながら選べます。`,
       `納得できる価値と信頼感のある一台を今すぐ見つけましょう。`,
+      `${brand}で${product}をチェック。品質と信頼のお買い物体験をお届けします。`,
     ];
   }
 
   return [
-    `Save up to 20% + ${market.shippingLabel} when you shop ${brand} today.`,
     `${brand} delivers ${product} with trusted quality, comfort and standout value.`,
     `Explore high-conviction ${product} options built for smarter everyday choices.`,
     `Find the right fit faster with strong offers, clear value and easy buying.`,
+    `Shop ${product} at ${brand} for quality you can trust and great value today.`,
   ];
 }
 
@@ -787,15 +780,15 @@ Generate exactly ${needed} NEW headlines. Return ONLY a JSON array of exactly ${
 
 MANDATORY RULES:
 1. Headline #1 in your output must be brand-related and must include \"${merchantName}\" or a clear brand reference.
-2. Include exactly one discount headline near the top. Use the strongest truthful discount phrasing.
-3. Include exactly one shipping headline for ${market.countryNameZh} only.
+2. Do NOT fabricate specific discount numbers (e.g. "20% off", "Save $50") unless the information comes from verified website data. Generic phrases like "Browse Deals" or "View Offers" are acceptable.
+3. Do NOT claim free shipping unless it is explicitly confirmed from the merchant website.
 4. Make the set commercially strong: emphasize product/category fit, trust, buying motivation, convenience, quality, or CTA.
 5. Each headline must be <= 30 characters.
 6. Write in ${languageName}. Never fall back to English unless the target market language is English.
 7. Do NOT output expired or time-bound copy: no dates, months, years, countdowns, \"Early Bird\", \"Ends Soon\", or specific event deadlines.
 8. Do NOT output low-value filler such as brand only, \"Official Site\", \"Home Page\", or near-duplicates.
 9. Avoid repeating the same phrase pattern across multiple headlines.
-10. Output must comply with Google Ads policy and remain truthful.
+10. Output must comply with Google Ads policy and remain truthful. All claims must be verifiable.
 11. If any user hard rule conflicts with these defaults, follow the user hard rule first unless it violates policy.
 12. Write like a real marketer — specific, punchy, no AI buzzwords. Use plain language that real people use.
 
@@ -807,16 +800,14 @@ Return ONLY JSON array.`;
       const humanized = humanizeAdCopyBatch(parsed, 2, 30);
       const generated = sanitizeHeadlineCandidates(humanized, merchantName, 30, needed + 8);
       const combined = sanitizeHeadlineCandidates([...locked, ...generated], merchantName, 30, count);
-      const hasDiscount = combined.some((h) => DISCOUNT_RE.test(h));
-      const hasShipping = combined.some((h) => SHIPPING_RE.test(h));
       const firstIsBrand = combined.length > 0 && normalizeForCompare(combined[0]).includes(normalizeForCompare(getShortBrand(merchantName, 20)).split(" ")[0] || "");
 
-      if (combined.length >= count && hasDiscount && hasShipping && firstIsBrand) {
-        console.log(`[padHeadlines] 校验通过: 折扣=${hasDiscount}, 物流=${hasShipping}, 品牌首条=${firstIsBrand}, 共${combined.length}条`);
+      if (combined.length >= count && firstIsBrand) {
+        console.log(`[padHeadlines] 校验通过: 品牌首条=${firstIsBrand}, 共${combined.length}条`);
         return combined.slice(0, count);
       }
 
-      console.warn(`[padHeadlines] AI 输出校验未通过（折扣=${hasDiscount}, 物流=${hasShipping}, 品牌首条=${firstIsBrand}, 共${combined.length}条），使用 fallback`);
+      console.warn(`[padHeadlines] AI 输出校验未通过（品牌首条=${firstIsBrand}, 共${combined.length}条），使用 fallback`);
     } catch (err) {
       console.error("[padHeadlines] AI 生成失败:", err);
     }
@@ -884,14 +875,14 @@ ${AD_COPY_ANTI_AI_BLOCK}
 Generate exactly ${needed} NEW descriptions. Return ONLY a JSON array of exactly ${needed} strings.
 
 MANDATORY RULES:
-1. Exactly ONE description must combine both discount and shipping in one line.
+1. Do NOT fabricate specific discounts, prices, or free shipping claims unless they come from verified website data. Use factual, benefit-driven language instead.
 2. Each description must be 50-90 characters.
 3. Write in ${languageName}. Never fall back to English unless the target market language is English.
-4. Each line must have a different persuasion angle: offer, trust, product fit, convenience, or CTA.
+4. Each line must have a different persuasion angle: trust, product fit, convenience, quality, or CTA.
 5. Avoid generic filler. The copy must feel like it can actually drive revenue.
 6. Do NOT use dates, months, years, countdowns, \"Early Bird\", \"Ends Soon\", or expired event language.
 7. Do NOT repeat the same wording structure across lines; vary syntax and first words.
-8. Comply with Google Ads policy and keep claims truthful.
+8. Comply with Google Ads policy and keep ALL claims truthful and verifiable.
 9. If any user hard rule conflicts with these defaults, follow the user hard rule first unless it violates policy.
 10. Use concrete product details and real benefits, avoid vague AI marketing buzzwords.
 
@@ -903,14 +894,12 @@ Return ONLY JSON array.`;
       const humanized = humanizeAdCopyBatch(parsed, 40, 90);
       const generated = sanitizeDescriptionCandidates(humanized, merchantName, 90, needed + 4, descSanitizeOpts);
       const combined = sanitizeDescriptionCandidates([...locked, ...generated], merchantName, 90, count, descSanitizeOpts);
-      const comboCount = combined.filter((d) => DISCOUNT_RE.test(d) && SHIPPING_RE.test(d)).length;
-
-      if (combined.length >= count && comboCount === 1) {
-        console.log(`[padDescriptions] 校验通过: 折扣+物流组合=${comboCount}, 共${combined.length}条`);
+      if (combined.length >= count) {
+        console.log(`[padDescriptions] 校验通过: 共${combined.length}条`);
         return combined.slice(0, count);
       }
 
-      console.warn(`[padDescriptions] AI 输出校验未通过（折扣+物流组合=${comboCount}, 共${combined.length}条），使用 fallback`);
+      console.warn(`[padDescriptions] AI 输出校验未通过（共${combined.length}条），使用 fallback`);
     } catch (err) {
       console.error("[padDescriptions] AI 生成失败:", err);
     }
@@ -918,12 +907,5 @@ Return ONLY JSON array.`;
 
   const fallbackCandidates = getFallbackDescriptionCandidates(merchantName, market, keywords);
   const fallback = sanitizeDescriptionCandidates([...locked, ...fallbackCandidates], merchantName, 90, count, descSanitizeOpts);
-  const comboCount = fallback.filter((d) => DISCOUNT_RE.test(d) && SHIPPING_RE.test(d)).length;
-  if (comboCount === 1) return fallback.slice(0, count);
-
-  const withForcedCombo = sanitizeDescriptionCandidates([
-    ...fallback,
-    ...getFallbackDescriptionCandidates(merchantName, market, keywords),
-  ], merchantName, 90, count, descSanitizeOpts);
-  return withForcedCombo.slice(0, count);
+  return fallback.slice(0, count);
 }

@@ -75,16 +75,19 @@ export async function analyzeUrl(
   const year = new Date().getFullYear();
 
   const prompt = `You are a JSON API. Respond with ONLY a valid JSON object.
-Based on the merchant website URL, generate promotional content. Year: ${year}.
-Use the domain name to infer products, brand positioning, target audience.
-Generate 5 article titles and 5 SEO keywords in ${langLabel}.
+Based on the merchant website URL, infer the brand category and generate article titles and SEO keywords in ${langLabel}. Year: ${year}.
+
+CRITICAL RULES:
+- For "products": Only include product category names (e.g. "travel packages", "running shoes"). Do NOT invent specific product names or models that you cannot verify exist.
+- For "selling_points": Use only general, verifiable selling points based on the brand category (e.g. "Wide selection", "Online shopping"). Do NOT fabricate specific claims like "50% off" or "Free shipping" unless you are certain they exist.
+- Do NOT include any specific discount percentages, prices, or promotional claims.
 
 URL: ${url}
 Domain: ${domain}
 Brand guess: ${brandGuess}
 
 JSON format:
-{"brand_name":"Name","category":"travel","products":["p1"],"selling_points":["sp1"],
+{"brand_name":"Name","category":"travel","products":["product category 1"],"selling_points":["general selling point"],
 "titles":[{"title":"Title in ${langLabel}","title_en":"English translation"}],
 "keywords":["kw1","kw2","kw3","kw4","kw5"]}`;
 

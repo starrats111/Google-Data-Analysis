@@ -810,6 +810,7 @@ async function triggerArticleGeneration(
     const targetUrl = merchantUrl || `https://${merchantName.toLowerCase().replace(/\s+/g, "")}.com`;
 
     // Step 1: 爬取商家网站（图片 + 页面信息），数据供广告和文章共用
+    // 产品名、URL、价格等事实性信息由爬虫提供，AI 只负责写文案
     let crawledImages: string[] = [];
     let crawledProducts: string[] = [];
     let crawledSellingPoints: string[] = [];
@@ -838,14 +839,57 @@ async function triggerArticleGeneration(
       }
       crawledImages = [...new Set(crawledImages)].slice(0, 20);
 
-      // 从爬取的 HTML 中提取 logo
+      // 从爬取的 HTML 中提取 logo（多策略：link[rel=icon] > og:logo > schema.org > og:image）
       if (crawlResult.status === "fulfilled" && crawlResult.value?.html) {
-        const logoMatch = crawlResult.value.html.match(/<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']*)/i)
-          || crawlResult.value.html.match(/<meta[^>]+content=["']([^"']*?)["'][^>]+property=["']og:image["']/i);
-        if (logoMatch?.[1]) crawledLogoUrl = logoMatch[1];
+        const pageHtml = crawlResult.value.html;
+        // 1. <link rel="icon"> / <link rel="apple-touch-icon">（最可靠的 logo 来源）
+        const iconMatch = pageHtml.match(/<link[^>]+rel=["'](?:apple-touch-icon|icon|shortcut\s+icon)["'][^>]+href=["']([^"']+)/i)
+          || pageHtml.match(/<link[^>]+href=["']([^"']+?)["'][^>]+rel=["'](?:apple-touch-icon|icon|shortcut\s+icon)["']/i);
+        if (iconMatch?.[1]) {
+          const iconUrl = iconMatch[1];
+          // apple-touch-icon 通常 ≥180×180，适合做 logo
+          if (/apple-touch-icon/i.test(iconMatch[0])) {
+            crawledLogoUrl = iconUrl.startsWith("http") ? iconUrl : new URL(iconUrl, merchantUrl || targetUrl).href;
+          } else if (!crawledLogoUrl) {
+            crawledLogoUrl = iconUrl.startsWith("http") ? iconUrl : new URL(iconUrl, merchantUrl || targetUrl).href;
+          }
+        }
+        // 2. JSON-LD Organization/WebSite logo
+        const schemaLogoMatch = pageHtml.match(/"logo"\s*:\s*(?:"([^"]+)"|{\s*"url"\s*:\s*"([^"]+)")/i);
+        if (!crawledLogoUrl && schemaLogoMatch) {
+          crawledLogoUrl = schemaLogoMatch[1] || schemaLogoMatch[2] || "";
+        }
+        // 3. <img> with class/id/alt containing "logo"
+        if (!crawledLogoUrl) {
+          const imgLogoMatch = pageHtml.match(/<img[^>]+(?:class|id|alt)=["'][^"']*logo[^"']*["'][^>]+src=["']([^"']+)/i)
+            || pageHtml.match(/<img[^>]+src=["']([^"']+?)["'][^>]+(?:class|id|alt)=["'][^"']*logo[^"']*["']/i);
+          if (imgLogoMatch?.[1]) {
+            crawledLogoUrl = imgLogoMatch[1].startsWith("http") ? imgLogoMatch[1] : new URL(imgLogoMatch[1], merchantUrl || targetUrl).href;
+          }
+        }
+        // 4. og:image 作为最后回退（注意：这通常是页面主图，不一定是 logo）
+        if (!crawledLogoUrl) {
+          const ogMatch = pageHtml.match(/<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']*)/i)
+            || pageHtml.match(/<meta[^>]+content=["']([^"']*?)["'][^>]+property=["']og:image["']/i);
+          if (ogMatch?.[1]) crawledLogoUrl = ogMatch[1];
+        }
       }
 
-      console.log(`[Article] 爬取完成: ${crawledImages.length} 张图片`);
+      // 从爬取的 HTML 提取真实产品名和卖点
+      if (crawlResult.status === "fulfilled" && crawlResult.value?.html) {
+        const { extractProducts, extractMerchantFeatures } = await import("@/lib/crawl-pipeline");
+        const products = extractProducts(crawlResult.value.html, merchantUrl || targetUrl, country);
+        if (products.length > 0) {
+          crawledProducts = products.map((p) => p.name);
+          console.log(`[Article] 从网页提取到 ${products.length} 个真实产品: ${crawledProducts.slice(0, 5).join(", ")}`);
+        }
+        const features = extractMerchantFeatures(crawlResult.value.html);
+        if (features.length > 0) {
+          crawledSellingPoints = features.filter((f) => !f.startsWith("Page title:") && !f.startsWith("Meta description:"));
+        }
+      }
+
+      console.log(`[Article] 爬取完成: ${crawledImages.length} 张图片, ${crawledProducts.length} 个产品`);
 
       // 将爬取的图片同步写入 ad_creatives，供广告预览页使用
       if (crawledImages.length > 0 || crawledLogoUrl) {
@@ -858,14 +902,14 @@ async function triggerArticleGeneration(
         });
       }
     } catch (crawlErr) {
-      console.warn("[Article] 爬取商家网站失败（将继续 AI 推断）:", crawlErr);
+      console.warn("[Article] 爬取商家网站失败（将继续 AI 推断品类）:", crawlErr);
     }
 
-    // Step 2: AI 分析商家 URL（推断品牌/品类/关键词/标题）
+    // Step 2: AI 分析商家 URL（仅用于推断品类/关键词/文章标题，不推断产品名）
     const analysis = await analyzeUrl(targetUrl, country);
     console.log(`[Article] URL 分析完成: ${analysis.brandName}, ${analysis.category}`);
 
-    // 合并爬虫数据和 AI 分析数据
+    // 产品名优先用爬虫数据，AI 推断仅作品类参考
     const products = crawledProducts.length > 0 ? crawledProducts : analysis.products;
     const sellingPoints = crawledSellingPoints.length > 0 ? crawledSellingPoints : analysis.sellingPoints;
 

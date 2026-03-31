@@ -275,18 +275,53 @@ async function generateCore(
     ? `\nCompetitor headline references (inspiration only, do NOT copy):\n${cache.semrushTitles.slice(0, 8).map((t, i) => `${i + 1}. "${t}"`).join("\n")}\n`
     : "";
 
-  const prompt = `You are a senior Google Ads RSA copywriter. Generate ALL ad copy in ONE response.
+  // 根据爬取数据判断是否有真实折扣/物流信息
+  const hasRealDiscount = cache.promoRegex && (cache.promoRegex.discount_type === "PERCENT" || cache.promoRegex.discount_type === "MONETARY");
+  const hasRealFreeShipping = cache.features.some((f) => /free\s*ship|free\s*deliver/i.test(f));
+  const hasGenericPromo = cache.promoRegex && !hasRealDiscount;
+
+  let discountGuidance = "";
+  if (hasRealDiscount && cache.promoRegex) {
+    const promoData = cache.promoRegex;
+    if (promoData.discount_type === "PERCENT") {
+      discountGuidance = `\nThe website has a VERIFIED ${promoData.discount_percent}% discount — you may reference this exact number.`;
+    } else if (promoData.discount_type === "MONETARY") {
+      discountGuidance = `\nThe website has a VERIFIED ${promoData.currency_code || ""}${promoData.discount_amount} discount — you may reference this exact amount.`;
+    }
+  } else if (hasGenericPromo) {
+    discountGuidance = "\nThe website appears to have general promotions/deals. You may mention 'deals available' or 'special offers' but do NOT fabricate specific discount numbers.";
+  } else {
+    discountGuidance = "\nNo verified discount was found on the website. Do NOT mention any specific discounts, percentages, or savings amounts. Focus on product quality, brand trust, and value instead.";
+  }
+
+  const shippingGuidance = hasRealFreeShipping
+    ? "\nFree shipping was detected on the website — you may mention it."
+    : "\nNo free shipping was confirmed on the website. Do NOT claim free shipping unless it is explicitly stated in the website content above.";
+
+  // 爬虫提取的真实产品数据，传给 AI 作为写文案的素材
+  const crawledProducts = (cache as any).crawledProducts || [];
+  const productBlock = crawledProducts.length > 0
+    ? `\nReal products found on website (use these names in copy, do NOT invent product names):\n${crawledProducts.slice(0, 10).map((p: any, i: number) => `${i + 1}. "${p.name}"${p.price ? ` — ${p.currency || ""}${p.price}` : ""}`).join("\n")}\n`
+    : "";
+
+  const prompt = `You are a senior Google Ads RSA copywriter. Your job is to WRITE compelling ad copy based on the factual data provided below.
+
+CRITICAL RULES:
+- You are a COPYWRITER, not a fact generator. All product names, prices, discounts, and features below come from our crawler. Use ONLY these facts.
+- NEVER invent product names, prices, discount amounts, or factual claims not provided below.
+- If no products/discounts are provided, write about the brand's value, quality, and trustworthiness instead.
+${discountGuidance}${shippingGuidance}
 
 Context:
 - Merchant: ${merchantName}
 - Website: ${merchantUrl}
 - Target: ${market.countryNameZh} (${languageName})
 - Budget: $${dailyBudget.toFixed(2)}/day, CPC $${maxCpc.toFixed(2)}, Strategy: ${biddingStrategy}
-
+${productBlock}
 Website content (truncated):
 ${cache.pageText.slice(0, 2000)}
 
-${cache.features.length > 0 ? `Merchant features:\n${cache.features.join("\n")}\n` : ""}${semrushBlock}${sitelinkBlock}${formatAiRuleBlock(aiRuleProfile, "ad_copy")}
+${cache.features.length > 0 ? `Merchant features (from crawler):\n${cache.features.join("\n")}\n` : ""}${semrushBlock}${sitelinkBlock}${formatAiRuleBlock(aiRuleProfile, "ad_copy")}
 ${AD_COPY_ANTI_AI_BLOCK}
 
 Return ONLY a JSON object with this exact structure:
@@ -298,18 +333,19 @@ Return ONLY a JSON object with this exact structure:
 
 MANDATORY RULES for headlines (exactly 15):
 1. #1 must include "${merchantName}" or clear brand reference
-2. Include exactly 1 discount headline and 1 shipping headline
-3. Each ≤ 30 characters, in ${languageName}
-4. No dates/expiry/countdowns, no generic filler like "Official Site"
-5. Commercially strong: trust, value, CTA, product fit
-6. Write like a real marketer — specific, punchy, no AI buzzwords
+2. ${hasRealDiscount ? "Include 1 headline referencing the verified discount" : "Do NOT include any specific discount numbers — focus on brand value, product benefits, and trust"}
+3. ${hasRealFreeShipping ? "Include 1 shipping-related headline" : "Only mention shipping if confirmed in the website content above"}
+4. Each ≤ 30 characters, in ${languageName}
+5. No dates/expiry/countdowns, no generic filler like "Official Site"
+6. Commercially strong: trust, value, CTA, product fit
+7. Write like a real marketer — specific, punchy, no AI buzzwords
 
 MANDATORY RULES for descriptions (exactly 4):
-1. Exactly 1 must combine discount + shipping
+1. ${hasRealDiscount && hasRealFreeShipping ? "Exactly 1 may combine the verified discount + shipping info" : "Each description must use only verified information from the website content"}
 2. Each 50-90 characters, in ${languageName}
 3. Each uses a different persuasion angle
 4. Must be distinct from headlines (Google flags duplicates)
-5. Use concrete benefits and real product details, avoid vague hype
+5. Use concrete benefits and real product details from the website, avoid vague hype and unverified claims
 
 MANDATORY RULES for sitelink_descriptions (${cache.sitelinkCandidates.length} entries matching sitelinks order):
 1. Each desc1 and desc2 ≤ 35 characters
@@ -528,7 +564,6 @@ async function generateOptionalBatch(
 
   const market = getAdMarketConfig(country);
   const languageName = resolveLanguageName(country, adLanguageCode);
-  const needsAi = optionalTypes.filter((t) => t !== "call");
   const needsCall = optionalTypes.includes("call");
 
   // 电话提取（无 AI，并行执行）
@@ -536,61 +571,88 @@ async function generateOptionalBatch(
     ? extractPhoneFromCache(cache, merchantUrl, country).then((d) => send("call", d)).catch(() => send("call", null))
     : Promise.resolve();
 
-  // 如果没有需要 AI 的类型，只处理电话
-  if (needsAi.length === 0) {
-    await callTask;
-    return;
-  }
-
-  // 按需爬取子页补充数据
-  let promoText = cache.pageText;
-  let priceItems = cache.priceRegex;
-
-  if (needsAi.includes("promotion") || needsAi.includes("price")) {
-    const subData = await fetchSubPagesForOptional(cache.links, needsAi);
-    if (subData.promoText) promoText += "\n\n" + subData.promoText;
-    if (subData.priceItems.length > 0 && priceItems.length < 3) priceItems = subData.priceItems;
-  }
-
-  // 构建合并 prompt
-  const sections: string[] = [];
-
-  if (needsAi.includes("callouts")) {
-    const featuresBlock = cache.features.length > 0 ? `\nMerchant features: ${cache.features.join(", ")}` : "";
-    sections.push(`## Callouts
-Generate exactly 6 callout extensions (≤25 chars each).
-Based on real merchant features. If shipping + returns both exist, merge into one line.${featuresBlock}`);
-  }
-
-  if (needsAi.includes("promotion")) {
-    sections.push(`## Promotion
-Extract promotion/discount info. Return: discount_type ("PERCENT"/"MONETARY"/null), discount_percent, discount_amount, currency_code ("${market.currencyCode}"), promo_code, promotion_target (≤20 chars, in ${languageName}), language_code ("${market.promotionLanguageCode}").
-Do NOT include final_url.`);
-  }
-
-  if (needsAi.includes("price")) {
-    sections.push(`## Price Items
-Extract 3-8 products with real pricing. Each: header (≤25 chars), description (≤25 chars), price (real number), currency ("${market.currencyCode}").
-Do NOT include URLs. Return empty array if no real prices found.`);
-  }
-
-  if (needsAi.includes("snippet")) {
-    const contextItems = [...new Set([...cache.navItems, ...cache.links.map((l) => l.text).filter((t) => t.length >= 2 && t.length <= 30)])].slice(0, 30);
-    if (contextItems.length >= 3) {
-      sections.push(`## Structured Snippet
-Choose header from: "Brands", "Types", "Styles", "Models", "Service catalog", "Amenities"
-Extract 3-10 real category values (≤25 chars each) from: ${contextItems.slice(0, 20).map((t) => `"${t}"`).join(", ")}`);
+  // ─── promotion: 完全由爬虫数据提供，不经过 AI ───
+  if (optionalTypes.includes("promotion")) {
+    const promo = cache.promoRegex
+      ? { ...cache.promoRegex, final_url: merchantUrl }
+      : null;
+    send("promotion", promo);
+    if (promo) {
+      console.log(`[Optional] 促销信息（爬虫提取）: ${JSON.stringify(promo).slice(0, 200)}`);
+    } else {
+      console.log("[Optional] 未从网页爬取到促销信息");
     }
   }
 
-  const prompt = `Analyze this merchant website and generate the requested ad extensions.
+  // ─── price: 完全由爬虫数据提供，不经过 AI ───
+  if (optionalTypes.includes("price")) {
+    // 优先使用 crawledProducts（有真实产品名和URL），其次用 priceRegex
+    const crawledProducts = (cache as any).crawledProducts || [];
+    let items: { header: string; description: string; price: number; currency: string; url: string }[] = [];
+
+    if (crawledProducts.length > 0) {
+      items = crawledProducts
+        .filter((p: any) => p.name && p.price && p.price > 0)
+        .slice(0, 8)
+        .map((p: any) => ({
+          header: String(p.name).slice(0, 25),
+          description: String(p.description || "").slice(0, 25),
+          price: Number(p.price),
+          currency: String(p.currency || market.currencyCode),
+          url: String(p.url || merchantUrl),
+        }));
+    }
+
+    if (items.length === 0 && cache.priceRegex.length > 0) {
+      items = cache.priceRegex.map((p) => ({ ...p, url: p.url || merchantUrl }));
+    }
+
+    // 如果首页爬不到，尝试子页面
+    if (items.length === 0) {
+      const subData = await fetchSubPagesForOptional(cache.links, ["price"]);
+      if (subData.priceItems.length > 0) {
+        items = subData.priceItems.map((p) => ({ ...p, url: p.url || merchantUrl }));
+      }
+    }
+
+    send("price_items", items);
+    console.log(`[Optional] 价格信息（爬虫提取）: ${items.length} 条产品`);
+  }
+
+  // ─── 需要 AI 的类型：仅 callouts 和 snippet ───
+  const needsAi = optionalTypes.filter((t) => !["call", "promotion", "price"].includes(t));
+
+  if (needsAi.length > 0) {
+    // 构建合并 prompt（仅 callouts / snippet，不含 promotion / price）
+    const sections: string[] = [];
+
+    if (needsAi.includes("callouts")) {
+      const featuresBlock = cache.features.length > 0 ? `\nMerchant features: ${cache.features.join(", ")}` : "";
+      sections.push(`## Callouts
+Generate exactly 6 callout extensions (≤25 chars each).
+Based on real merchant features. If shipping + returns both exist, merge into one line.
+Do NOT fabricate specific discounts or promotions.${featuresBlock}`);
+    }
+
+    if (needsAi.includes("snippet")) {
+      const contextItems = [...new Set([...cache.navItems, ...cache.links.map((l) => l.text).filter((t) => t.length >= 2 && t.length <= 30)])].slice(0, 30);
+      if (contextItems.length >= 3) {
+        sections.push(`## Structured Snippet
+Choose header from: "Brands", "Types", "Styles", "Models", "Service catalog", "Amenities"
+Extract 3-10 real category values (≤25 chars each) from: ${contextItems.slice(0, 20).map((t) => `"${t}"`).join(", ")}`);
+      }
+    }
+
+    const prompt = `Analyze this merchant website and generate the requested ad extensions.
+
+CRITICAL: Your role is to WRITE copy based on the information below. Do NOT invent product names, prices, discounts, or any factual claims. Only use information explicitly present in the website content.
 
 Merchant: ${merchantName}
 Website: ${merchantUrl}
 Target: ${market.countryNameZh} (${languageName})
 
 Website content:
-${promoText.slice(0, 3000)}
+${cache.pageText.slice(0, 3000)}
 
 ${sections.join("\n\n")}
 ${formatAiRuleBlock(aiRuleProfile, "compliance")}
@@ -598,74 +660,41 @@ ${formatAiRuleBlock(aiRuleProfile, "compliance")}
 Return ONLY a JSON object with applicable keys:
 {
   ${needsAi.includes("callouts") ? '"callouts": ["c1","c2","c3","c4","c5","c6"],' : ""}
-  ${needsAi.includes("promotion") ? '"promotion": { "discount_type": ..., "promotion_target": ..., ... },' : ""}
-  ${needsAi.includes("price") ? '"price_items": [{ "header": ..., "description": ..., "price": ..., "currency": ... }, ...],' : ""}
   ${needsAi.includes("snippet") ? '"snippet": { "header": "Types", "values": ["v1","v2","v3"] }' : ""}
 }`;
 
-  try {
-    const raw = await callAiWithFallback("ad_copy", [{ role: "user", content: prompt }], 4096);
-    const parsed = JSON.parse(extractJsonFromAi(raw));
+    try {
+      const raw = await callAiWithFallback("ad_copy", [{ role: "user", content: prompt }], 4096);
+      const parsed = JSON.parse(extractJsonFromAi(raw));
 
-    if (needsAi.includes("callouts")) {
-      let callouts = Array.isArray(parsed.callouts)
-        ? parsed.callouts.filter((c: string) => c && c.length <= 25).slice(0, 6)
-        : getDefaultCallouts(merchantName, country, cache.features);
-      const calloutFix = await complianceAutoFix(callouts, "headline", merchantName, languageName, aiRuleProfile, 25, 2);
-      callouts = calloutFix.items;
-      if (calloutFix.fixed.length > 0) send("compliance_auto_fix", { fixed: calloutFix.fixed, count: calloutFix.fixed.length });
-      if (calloutFix.remaining.length > 0) send("compliance_warnings", { warnings: calloutFix.remaining, count: calloutFix.remaining.length });
-      send("callouts", callouts);
-    }
-
-    if (needsAi.includes("promotion")) {
-      let promo = parsed.promotion || null;
-      if (promo) {
-        delete promo.final_url;
-        promo.final_url = merchantUrl;
-        if (!promo.language_code && promo.promotion_target) promo.language_code = market.promotionLanguageCode;
-        if (promo.promotion_target) promo.promotion_target = smartTruncate(String(promo.promotion_target), 20);
+      if (needsAi.includes("callouts")) {
+        let callouts = Array.isArray(parsed.callouts)
+          ? parsed.callouts.filter((c: string) => c && c.length <= 25).slice(0, 6)
+          : getDefaultCallouts(merchantName, country, cache.features);
+        const calloutFix = await complianceAutoFix(callouts, "headline", merchantName, languageName, aiRuleProfile, 25, 2);
+        callouts = calloutFix.items;
+        if (calloutFix.fixed.length > 0) send("compliance_auto_fix", { fixed: calloutFix.fixed, count: calloutFix.fixed.length });
+        if (calloutFix.remaining.length > 0) send("compliance_warnings", { warnings: calloutFix.remaining, count: calloutFix.remaining.length });
+        send("callouts", callouts);
       }
-      // 合并正则结果
-      if (cache.promoRegex && !promo) {
-        promo = { ...cache.promoRegex, final_url: merchantUrl };
-      }
-      send("promotion", promo);
-    }
 
-    if (needsAi.includes("price")) {
-      let items = Array.isArray(parsed.price_items) ? parsed.price_items : [];
-      items = items.filter((p: any) => p.price && Number(p.price) > 0).slice(0, 8).map((p: any) => ({
-        header: String(p.header || "").slice(0, 25),
-        description: String(p.description || "").slice(0, 25),
-        price: Number(p.price),
-        currency: String(p.currency || market.currencyCode),
-        url: merchantUrl,
-      }));
-      if (items.length === 0 && priceItems.length > 0) {
-        items = priceItems.map((p) => ({ ...p, url: p.url || merchantUrl }));
+      if (needsAi.includes("snippet")) {
+        const snippet = parsed.snippet;
+        if (snippet?.header && Array.isArray(snippet.values) && snippet.values.length >= 3) {
+          const values = snippet.values.filter((v: string) => v && v.length <= 25).slice(0, 10);
+          send("structured_snippet", values.length >= 3 ? { header: snippet.header, values } : null);
+        } else {
+          send("structured_snippet", null);
+        }
       }
-      send("price_items", items);
-    }
 
-    if (needsAi.includes("snippet")) {
-      const snippet = parsed.snippet;
-      if (snippet?.header && Array.isArray(snippet.values) && snippet.values.length >= 3) {
-        const values = snippet.values.filter((v: string) => v && v.length <= 25).slice(0, 10);
-        send("structured_snippet", values.length >= 3 ? { header: snippet.header, values } : null);
-      } else {
-        send("structured_snippet", null);
+      console.log(`[Optional] AI 生成完成: ${needsAi.join(", ")}`);
+    } catch (err) {
+      console.error("[Optional] AI 生成失败:", err instanceof Error ? err.message : err);
+      for (const t of needsAi) {
+        if (t === "callouts") send("callouts", getDefaultCallouts(merchantName, country, cache.features));
+        else if (t === "snippet") send("structured_snippet", null);
       }
-    }
-
-    console.log(`[Optional] AI 批量生成完成: ${needsAi.join(", ")}`);
-  } catch (err) {
-    console.error("[Optional] AI 批量生成失败:", err instanceof Error ? err.message : err);
-    for (const t of needsAi) {
-      if (t === "callouts") send("callouts", getDefaultCallouts(merchantName, country, cache.features));
-      else if (t === "promotion") send("promotion", cache.promoRegex ? { ...cache.promoRegex, final_url: merchantUrl } : null);
-      else if (t === "price") send("price_items", cache.priceRegex || []);
-      else if (t === "snippet") send("structured_snippet", null);
     }
   }
 
@@ -706,7 +735,7 @@ async function fetchSubPagesForOptional(
     if (r.status === "fulfilled" && r.value) {
       promoText += `\n--- ${r.value.url} ---\n${r.value.text}`;
       if (needsAi.includes("price")) {
-        const items = extractPriceInfo(r.value.html, "US");
+        const items = extractPriceInfo(r.value.html, "US", r.value.url);
         if (items.length > priceItems.length) priceItems = items;
       }
     }

@@ -7,6 +7,15 @@ import { getAdMarketConfig } from "@/lib/ad-market";
 
 // ─── 类型定义 ───
 
+export interface CrawledProduct {
+  name: string;
+  url: string;
+  price?: number;
+  currency?: string;
+  description?: string;
+  imageUrl?: string;
+}
+
 export interface CrawlCache {
   links: { url: string; text: string }[];
   images: string[];
@@ -19,6 +28,7 @@ export interface CrawlCache {
   semrushDescriptions: string[];
   promoRegex: Record<string, unknown> | null;
   priceRegex: { header: string; description: string; price: number; currency: string; url: string }[];
+  crawledProducts: CrawledProduct[];
   crawledAt: string;
   crawlMethod: string;
   crawlFailed: boolean;
@@ -162,39 +172,69 @@ export function extractPromotionInfo(html: string, sourceUrl: string, country: s
   const result: Record<string, unknown> = {};
   const market = getAdMarketConfig(country);
 
-  const percentMatch = html.match(/(?:up\s+to\s+)?(\d{1,2})\s*%\s*(?:off|discount|sale|rabatt|remise|sconto)/i)
-    || html.match(/(?:save|get|enjoy)\s+(\d{1,2})\s*%/i);
-  if (percentMatch) { result.discount_type = "PERCENT"; result.discount_percent = parseInt(percentMatch[1], 10); }
+  // 只从促销相关区域（banner/topbar/promo）提取折扣信息，避免匹配到正文中的无关数字
+  const promoZoneRegex = /<(?:div|span|p|a|header|section)[^>]*class=["'][^"']*(?:banner|announcement|promo|hero|notice|topbar|top-bar|sale-bar|offer|discount|coupon|deal)[^"']*["'][^>]*>([\s\S]*?)<\/(?:div|span|p|a|header|section)>/gi;
+  let promoZoneMatch;
+  const promoZoneTexts: string[] = [];
+  while ((promoZoneMatch = promoZoneRegex.exec(html)) !== null) {
+    const text = promoZoneMatch[1].replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+    if (text.length > 3 && text.length < 200) promoZoneTexts.push(text);
+  }
+  const promoZoneText = promoZoneTexts.join(" ");
 
-  const moneyMatch = html.match(/(?:save|get|rabatt|remise|sconto|descuento)\s*(?:[$\u20AC\u00A3]|chf\s*)?(\d{1,4})/i)
-    || html.match(/(?:[$\u20AC\u00A3]|chf\s*)(\d{1,4})\s*(?:off|rabatt|remise|sconto|descuento)/i);
+  // 优先从促销区域提取具体折扣数字，而非全页匹配
+  const zoneToSearch = promoZoneText || "";
+  const percentMatch = zoneToSearch.match(/(?:up\s+to\s+)?(\d{1,2})\s*%\s*(?:off|discount|sale|rabatt|remise|sconto)/i)
+    || zoneToSearch.match(/(?:save|get|enjoy)\s+(\d{1,2})\s*%/i);
+  if (percentMatch) {
+    const pct = parseInt(percentMatch[1], 10);
+    if (pct >= 5 && pct <= 90) {
+      result.discount_type = "PERCENT";
+      result.discount_percent = pct;
+    }
+  }
+
+  const moneyMatch = zoneToSearch.match(/(?:save|get|rabatt|remise|sconto|descuento)\s*(?:[$€£]|chf\s*)?(\d{1,4})/i)
+    || zoneToSearch.match(/(?:[$€£]|chf\s*)(\d{1,4})\s*(?:off|rabatt|remise|sconto|descuento)/i);
   if (moneyMatch && !result.discount_type) {
-    result.discount_type = "MONETARY"; result.discount_amount = parseInt(moneyMatch[1], 10); result.currency_code = market.currencyCode;
+    const amt = parseInt(moneyMatch[1], 10);
+    if (amt >= 1 && amt <= 5000) {
+      result.discount_type = "MONETARY";
+      result.discount_amount = amt;
+      result.currency_code = market.currencyCode;
+    }
   }
 
   const codeMatch = html.match(/(?:code|coupon|promo|voucher|gutschein|codice)[:\s]+["']?([A-Z0-9]{3,20})["']?/i)
     || html.match(/(?:use|enter|apply)\s+(?:code\s+)?["']?([A-Z0-9]{4,20})["']?/i);
   if (codeMatch) result.promo_code = codeMatch[1].toUpperCase();
 
-  const bannerRegex = /<(?:div|span|p|a)[^>]*class=["'][^"']*(?:banner|announcement|promo|hero|notice|topbar|top-bar|sale-bar|offer)[^"']*["'][^>]*>([\s\S]*?)<\/(?:div|span|p|a)>/gi;
-  let bannerMatch;
-  const bannerTexts: string[] = [];
-  while ((bannerMatch = bannerRegex.exec(html)) !== null) {
-    const text = bannerMatch[1].replace(/<[^>]+>/g, "").replace(/\s+/g, " ").trim();
-    if (text.length > 5 && text.length < 150 && /\d/.test(text)) bannerTexts.push(text);
-  }
-  if (bannerTexts.length > 0) result.promotion_target = smartTruncate(bannerTexts[0], 20);
-
-  if (/free\s*(?:standard\s*)?(?:shipping|delivery)|kostenlos(?:e|er)?\s+versand|livraison\s+offerte|env[ií]o\s+gratis|spedizione\s+gratuita/i.test(lower)) {
-    if (!result.promotion_target) result.promotion_target = market.genericPromotionTarget;
+  if (promoZoneTexts.length > 0 && /\d/.test(promoZoneTexts[0])) {
+    result.promotion_target = smartTruncate(promoZoneTexts[0], 20);
   }
 
+  const hasFreeShipping = /free\s*(?:standard\s*)?(?:shipping|delivery)|kostenlos(?:e|er)?\s+versand|livraison\s+offerte|env[ií]o\s+gratis|spedizione\s+gratuita/i.test(lower);
+  if (hasFreeShipping && !result.promotion_target) {
+    result.promotion_target = market.genericPromotionTarget;
+  }
+
+  // 仅当 title 中明确含有折扣关键词+数字时才从 title 提取
   if (!result.promotion_target && !result.discount_type) {
     const titleMatch2 = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
     if (titleMatch2) {
       const title = titleMatch2[1].replace(/\s+/g, " ").trim();
-      if (/(\d+%?\s*off|sale|discount|free shipping)/i.test(title)) result.promotion_target = smartTruncate(title, 20);
+      if (/\d+%\s*off/i.test(title)) result.promotion_target = smartTruncate(title, 20);
     }
+  }
+
+  // 如果没有具体折扣数字但页面有一般性优惠/促销关键词，仅标记"有优惠"
+  const hasGenericPromo = !result.discount_type && (
+    /(?:sale|deals?|special\s+offer|limited\s+time|clearance)\b/i.test(promoZoneText) ||
+    /(?:sale|deals?|special\s+offer)\b/i.test(html.match(/<title[^>]*>([^<]*)<\/title>/i)?.[1] || "")
+  );
+  if (hasGenericPromo && !result.promotion_target) {
+    result.promotion_target = market.genericPromotionTarget;
+    result.has_generic_promo = true;
   }
 
   result.final_url = sourceUrl;
@@ -206,7 +246,7 @@ export function extractPromotionInfo(html: string, sourceUrl: string, country: s
   return Object.keys(result).length > 1 ? result : null;
 }
 
-export function extractPriceInfo(html: string, country: string): { header: string; description: string; price: number; currency: string; url: string }[] {
+export function extractPriceInfo(html: string, country: string, sourceUrl?: string): { header: string; description: string; price: number; currency: string; url: string }[] {
   if (!html) return [];
   const items: { header: string; description: string; price: number; currency: string; url: string }[] = [];
   const market = getAdMarketConfig(country);
@@ -225,7 +265,7 @@ export function extractPriceInfo(html: string, country: string): { header: strin
             if (price > 0 && items.length < 8) {
               items.push({
                 header: String(p.name).slice(0, 25), description: String(p.description || p.name).slice(0, 25),
-                price, currency: o.priceCurrency || market.currencyCode, url: o.url || p.url || "",
+                price, currency: o.priceCurrency || market.currencyCode, url: o.url || p.url || sourceUrl || "",
               });
             }
           }
@@ -235,14 +275,123 @@ export function extractPriceInfo(html: string, country: string): { header: strin
   }
 
   if (items.length === 0) {
-    const priceRegex = /<[^>]*class=["'][^"']*(?:price|product-price|sale-price)[^"']*["'][^>]*>\s*\$?\s*([\d,.]+)\s*<\/[^>]+>/gi;
-    let priceMatch;
-    while ((priceMatch = priceRegex.exec(html)) !== null && items.length < 8) {
+    const productBlockRegex = /<(?:div|li|article|section)[^>]*class=["'][^"']*(?:product|item|card)[^"']*["'][^>]*>([\s\S]*?)<\/(?:div|li|article|section)>/gi;
+    let blockMatch;
+    while ((blockMatch = productBlockRegex.exec(html)) !== null && items.length < 8) {
+      const block = blockMatch[1];
+      const priceMatch = block.match(/(?:[$€£¥]|(?:USD|EUR|GBP)\s*)\s*([\d,.]+)/i)
+        || block.match(/([\d,.]+)\s*(?:[$€£¥]|(?:USD|EUR|GBP))/i);
+      if (!priceMatch) continue;
       const price = parseFloat(priceMatch[1].replace(",", ""));
-      if (price > 0 && price < 100000) items.push({ header: `Product ${items.length + 1}`, description: "", price, currency: market.currencyCode, url: "" });
+      if (price <= 0 || price >= 100000) continue;
+
+      let productName = "";
+      const nameMatch = block.match(/<(?:h[1-6]|a|span|strong)[^>]*class=["'][^"']*(?:product[_-]?(?:name|title)|item[_-]?(?:name|title)|card[_-]?title)[^"']*["'][^>]*>([^<]+)</i)
+        || block.match(/<(?:h[2-4]|a)[^>]*>([^<]{3,60})<\/(?:h[2-4]|a)>/i);
+      if (nameMatch?.[1]) {
+        productName = decodeHtmlEntities(nameMatch[1].trim()).slice(0, 25);
+      }
+      const linkMatch = block.match(/<a[^>]+href=["']([^"'#][^"']*?)["']/i);
+      const productUrl = linkMatch?.[1] || sourceUrl || "";
+
+      if (productName && productName.length >= 2) {
+        items.push({ header: productName, description: "", price, currency: market.currencyCode, url: productUrl });
+      }
     }
   }
   return items;
+}
+
+/**
+ * 从 HTML 提取真实产品信息（名称、URL、价格、图片）
+ * 优先 JSON-LD 结构化数据，其次从商品卡片 DOM 结构提取
+ */
+export function extractProducts(html: string, sourceUrl: string, country: string): CrawledProduct[] {
+  if (!html) return [];
+  const products: CrawledProduct[] = [];
+  const seenNames = new Set<string>();
+  const market = getAdMarketConfig(country);
+
+  // 1. JSON-LD Product（最可靠）
+  const jsonLdRegex = /<script[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi;
+  let jsonLdMatch;
+  while ((jsonLdMatch = jsonLdRegex.exec(html)) !== null) {
+    try {
+      const data = JSON.parse(jsonLdMatch[1]);
+      const items = Array.isArray(data) ? data : data["@graph"] ? data["@graph"] : [data];
+      for (const p of items) {
+        if (p["@type"] !== "Product" || !p.name) continue;
+        const name = String(p.name).trim();
+        if (name.length < 2 || seenNames.has(name.toLowerCase())) continue;
+        seenNames.add(name.toLowerCase());
+
+        const offers = p.offers ? (Array.isArray(p.offers) ? p.offers : [p.offers]) : [];
+        const firstOffer = offers[0] || {};
+        const price = parseFloat(firstOffer.price || firstOffer.lowPrice || "0");
+        const img = p.image ? (Array.isArray(p.image) ? p.image[0] : (typeof p.image === "string" ? p.image : p.image?.url)) : undefined;
+
+        products.push({
+          name: name.slice(0, 80),
+          url: firstOffer.url || p.url || sourceUrl,
+          price: price > 0 ? price : undefined,
+          currency: firstOffer.priceCurrency || market.currencyCode,
+          description: p.description ? String(p.description).slice(0, 120) : undefined,
+          imageUrl: img || undefined,
+        });
+        if (products.length >= 20) break;
+      }
+    } catch {}
+  }
+
+  // 2. 从商品卡片 DOM 结构提取（仅当 JSON-LD 不足时）
+  if (products.length < 5) {
+    const cardRegex = /<(?:div|li|article|section)[^>]*class=["'][^"']*(?:product(?:-card|-item|-tile)?|item-card|grid-item|card)[^"']*["'][^>]*>([\s\S]*?)<\/(?:div|li|article|section)>/gi;
+    let cardMatch;
+    while ((cardMatch = cardRegex.exec(html)) !== null && products.length < 20) {
+      const block = cardMatch[1];
+      // 提取产品名
+      const nameMatch = block.match(/<(?:h[1-6]|a|span|strong)[^>]*class=["'][^"']*(?:product[_-]?(?:name|title)|item[_-]?(?:name|title)|card[_-]?title)[^"']*["'][^>]*>([^<]{2,80})</i)
+        || block.match(/<(?:h[2-5])[^>]*>([^<]{2,80})<\/h[2-5]>/i)
+        || block.match(/<a[^>]+(?:title=["']([^"']{2,80})["'])/i);
+      let name = nameMatch ? decodeHtmlEntities((nameMatch[1] || "").trim()) : "";
+      if (!name) {
+        const aMatch = block.match(/<a[^>]+href=["'][^"'#]+["'][^>]*>([^<]{2,60})<\/a>/i);
+        if (aMatch) name = decodeHtmlEntities(aMatch[1].trim());
+      }
+      if (!name || name.length < 2 || seenNames.has(name.toLowerCase())) continue;
+      seenNames.add(name.toLowerCase());
+
+      // 提取链接
+      const linkMatch = block.match(/<a[^>]+href=["']([^"'#][^"']*?)["']/i);
+      let productUrl = linkMatch?.[1] || "";
+      if (productUrl && !productUrl.startsWith("http")) {
+        try { productUrl = new URL(productUrl, sourceUrl).href; } catch { productUrl = ""; }
+      }
+
+      // 提取价格
+      let price: number | undefined;
+      const priceMatch = block.match(/(?:[$€£¥])\s*([\d,.]+)/i)
+        || block.match(/([\d,.]+)\s*(?:[$€£¥])/i);
+      if (priceMatch) {
+        const parsed = parseFloat(priceMatch[1].replace(",", ""));
+        if (parsed > 0 && parsed < 100000) price = parsed;
+      }
+
+      // 提取图片
+      const imgMatch = block.match(/<img[^>]+src=["']([^"']+?)["']/i);
+      const imageUrl = imgMatch?.[1] || undefined;
+
+      products.push({
+        name: name.slice(0, 80),
+        url: productUrl || sourceUrl,
+        price,
+        currency: market.currencyCode,
+        imageUrl,
+      });
+    }
+  }
+
+  return products;
 }
 
 function extractNavItems(html: string): string[] {
@@ -489,14 +638,15 @@ export async function buildCrawlCache(
   const html = crawlResult.html;
 
   // 并行执行所有提取任务
-  const [sitelinkCandidates, images, features, navItems, phoneCandidates, promoRegex, priceRegex] = await Promise.all([
+  const [sitelinkCandidates, images, features, navItems, phoneCandidates, promoRegex, priceRegex, crawledProducts] = await Promise.all([
     discoverSitelinkCandidates(merchantUrl, crawlResult.links).catch(() => []),
     collectImages(crawlResult.images, crawlResult.links, merchantUrl, merchantName).catch(() => [] as string[]),
     Promise.resolve(html ? extractMerchantFeatures(html) : []),
     Promise.resolve(html ? extractNavItems(html) : []),
     Promise.resolve(html ? extractPhoneCandidates(html, country) : []),
     Promise.resolve(html ? extractPromotionInfo(html, merchantUrl, country) : null),
-    Promise.resolve(html ? extractPriceInfo(html, country) : []),
+    Promise.resolve(html ? extractPriceInfo(html, country, merchantUrl) : []),
+    Promise.resolve(html ? extractProducts(html, merchantUrl, country) : []),
   ]);
 
   const pageText = html ? htmlToText(html).slice(0, 4000) : "";
@@ -513,6 +663,7 @@ export async function buildCrawlCache(
     semrushDescriptions: semrushData?.descriptions || [],
     promoRegex,
     priceRegex,
+    crawledProducts,
     crawledAt: new Date().toISOString(),
     crawlMethod: crawlResult.method,
     crawlFailed,
