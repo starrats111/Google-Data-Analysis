@@ -159,10 +159,28 @@ export function curlFetch(
     maxBuffer: 10 * 1024 * 1024,
   });
 
-  // 解析 HTTP 响应：头部 + 空行 + body
-  const headerEndIdx = raw.indexOf("\r\n\r\n");
-  const headerSection = headerEndIdx > 0 ? raw.slice(0, headerEndIdx) : "";
-  const body = headerEndIdx > 0 ? raw.slice(headerEndIdx + 4) : raw;
+  // 跳过 100 Continue 等中间响应（curl -i 会依次输出所有中间响应）
+  let remaining = raw;
+  while (true) {
+    const sepIdx = remaining.indexOf("\r\n\r\n");
+    if (sepIdx < 0) break;
+    const headerPart = remaining.slice(0, sepIdx);
+    if (/^HTTP\/[\d.]+ 1\d{2}\b/.test(headerPart.trim())) {
+      remaining = remaining.slice(sepIdx + 4);
+      continue;
+    }
+    break;
+  }
+
+  // 解析 HTTP 响应：头部 + 空行 + body（兼容 \r\n\r\n 和 \n\n）
+  let headerEndIdx = remaining.indexOf("\r\n\r\n");
+  let sepLen = 4;
+  if (headerEndIdx < 0) {
+    headerEndIdx = remaining.indexOf("\n\n");
+    sepLen = 2;
+  }
+  const headerSection = headerEndIdx > 0 ? remaining.slice(0, headerEndIdx) : "";
+  const body = headerEndIdx > 0 ? remaining.slice(headerEndIdx + sepLen) : remaining;
 
   // 解析状态码（取最后一个 HTTP 状态行，处理重定向链）
   let status = 200;
@@ -430,7 +448,7 @@ export class SemRushClient {
     return token;
   }
 
-  private async rpc(payload: unknown, retryCount = 0): Promise<unknown> {
+  private async rpc(payload: unknown, retryCount = 0, sessionRefreshed = false): Promise<unknown> {
     const MAX_RPC_RETRIES = 2;
     if (!this.token) await this.login();
     await guard.waitForSlot();
@@ -463,20 +481,60 @@ export class SemRushClient {
       };
       throw new Error(statusMessages[res.status] || `3UE 服务请求失败 (HTTP ${res.status})，请稍后再试`);
     }
-    try {
-      const body = res.body.trim();
-      if (!body) {
-        throw new Error("3UE 返回空响应");
+
+    let body = res.body.trim();
+
+    // 如果 body 以 HTTP/ 开头，说明 curlFetch 解析时包含了嵌套的响应头（100 Continue 残留）
+    if (body.startsWith("HTTP/")) {
+      const innerSep = body.indexOf("\r\n\r\n");
+      const innerSep2 = body.indexOf("\n\n");
+      const sep = innerSep >= 0 ? innerSep : innerSep2;
+      const sepLen = innerSep >= 0 ? 4 : 2;
+      if (sep > 0) {
+        body = body.slice(sep + sepLen).trim();
       }
+    }
+
+    // 如果 body 以 < 开头，说明返回了 HTML（可能是会话过期被重定向到登录页）
+    if (body.startsWith("<") && !sessionRefreshed) {
+      console.warn("[SemRush] RPC 返回 HTML 而非 JSON，会话可能已过期，刷新会话后重试");
+      guard.invalidateSession();
+      this.token = null;
+      await this.login();
+      return this.rpc(payload, 0, true);
+    }
+
+    if (!body) {
+      if (!sessionRefreshed) {
+        console.warn("[SemRush] RPC 返回空 body，刷新会话后重试");
+        guard.invalidateSession();
+        this.token = null;
+        await this.login();
+        return this.rpc(payload, 0, true);
+      }
+      throw new Error("3UE 返回空响应，请检查 3UE 账户状态");
+    }
+
+    try {
       return JSON.parse(body);
     } catch (parseErr) {
+      const safePreview = body.slice(0, 200).replace(/[\x00-\x1f]/g, (c) => `\\x${c.charCodeAt(0).toString(16).padStart(2, "0")}`);
+
+      if (!sessionRefreshed && retryCount === 0) {
+        console.warn(`[SemRush] JSON 解析失败，刷新会话后重试。body 前200字符: ${safePreview}`);
+        guard.invalidateSession();
+        this.token = null;
+        await this.login();
+        return this.rpc(payload, 0, true);
+      }
+
       if (retryCount < MAX_RPC_RETRIES) {
         const wait = (retryCount + 1) * 3000 + Math.floor(Math.random() * 2000);
-        console.warn(`[SemRush] JSON 解析失败 (${retryCount + 1}/${MAX_RPC_RETRIES})，${wait}ms 后重试。body 前200字符: ${res.body.slice(0, 200)}`);
+        console.warn(`[SemRush] JSON 解析失败 (${retryCount + 1}/${MAX_RPC_RETRIES})，${wait}ms 后重试。body 前200字符: ${safePreview}`);
         await new Promise((r) => setTimeout(r, wait));
-        return this.rpc(payload, retryCount + 1);
+        return this.rpc(payload, retryCount + 1, sessionRefreshed);
       }
-      const preview = res.body.slice(0, 300);
+      const preview = body.slice(0, 300).replace(/[\x00-\x1f]/g, (c) => `\\x${c.charCodeAt(0).toString(16).padStart(2, "0")}`);
       console.error(`[SemRush] JSON 解析最终失败 (已重试${MAX_RPC_RETRIES}次)。body 前300字符: ${preview}`);
       throw new Error("3UE 服务返回了不完整的数据，请稍后重试");
     }
