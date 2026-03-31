@@ -470,8 +470,21 @@ async function syncAllUsersTransactions(): Promise<unknown> {
             }
           }
 
+          // 预查已归属其他用户的交易，避免跨用户覆盖
+          const txnIds = r.transactions.map(t => t.transaction_id).filter(Boolean) as string[];
+          const otherUserTxnIds = new Set<string>();
+          for (let qi = 0; qi < txnIds.length; qi += 500) {
+            const qBatch = txnIds.slice(qi, qi + 500);
+            const existingOther = await prisma.affiliate_transactions.findMany({
+              where: { platform, transaction_id: { in: qBatch }, user_id: { not: userId } },
+              select: { transaction_id: true },
+            });
+            for (const e of existingOther) otherUserTxnIds.add(e.transaction_id);
+          }
+
           for (const txn of r.transactions) {
             if (!txn.transaction_id) continue;
+            if (otherUserTxnIds.has(txn.transaction_id)) continue;
             const mid = txn.merchant_id || "";
             const merchantKey = `${platform}_${mid}`;
 

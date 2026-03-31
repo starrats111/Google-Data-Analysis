@@ -147,12 +147,25 @@ export async function POST(req: NextRequest) {
         }
       }
 
+      // 预查已存在且归属其他用户的交易，避免跨用户覆盖
+      const allTxnIds = dedupedTxns.map(t => t.transaction_id).filter(Boolean) as string[];
+      const otherUserTxnIds = new Set<string>();
+      for (let qi = 0; qi < allTxnIds.length; qi += 500) {
+        const qBatch = allTxnIds.slice(qi, qi + 500);
+        const existing = await prisma.affiliate_transactions.findMany({
+          where: { platform, transaction_id: { in: qBatch }, user_id: { not: userId } },
+          select: { transaction_id: true },
+        });
+        for (const e of existing) otherUserTxnIds.add(e.transaction_id);
+      }
+
       for (let i = 0; i < dedupedTxns.length; i += 50) {
         const batch = dedupedTxns.slice(i, i + 50);
         const ops = batch.map((txn) => {
           const merchantId = txn.merchant_id || "";
           const txnId = txn.transaction_id;
           if (!txnId) { skipped++; return null; }
+          if (otherUserTxnIds.has(txnId)) { skipped++; return null; }
 
           const merchant = merchantMap.get(`${platform}_${merchantId}`);
           const userMerchantId = merchant ? merchant.id : BigInt(0);
