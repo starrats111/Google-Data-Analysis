@@ -223,29 +223,44 @@ export async function POST(req: NextRequest) {
         try { controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: eventType, data: serializeData(payload) })}\n\n`)); } catch {}
       };
 
-      send("crawl_status", { crawl_failed: cache!.crawlFailed, crawl_method: cache!.crawlMethod });
+      try {
+        send("crawl_status", { crawl_failed: cache!.crawlFailed, crawl_method: cache!.crawlMethod });
 
-      const tasks: Promise<void>[] = [];
+        const tasks: Promise<void>[] = [];
 
-      // ─── core: 1 次 AI 生成标题 + 描述 + 站内链接描述 + 图片 ───
-      if (types.includes("core")) {
-        tasks.push(generateCore(cache!, merchantName, merchantUrl, country, adSettings, aiRuleProfile, adCreative?.id || null, send, ad_language));
+        // ─── core: 1 次 AI 生成标题 + 描述 + 站内链接描述 + 图片 ───
+        if (types.includes("core")) {
+          tasks.push(generateCore(cache!, merchantName, merchantUrl, country, adSettings, aiRuleProfile, adCreative?.id || null, send, ad_language));
+        }
+
+        // ─── optional: 1 次 AI 批量生成所有勾选的可选扩展 ───
+        if (types.includes("optional")) {
+          const optionalTypes: string[] = body.optionalTypes || [];
+          tasks.push(generateOptionalBatch(cache!, merchantName, merchantUrl, country, optionalTypes, aiRuleProfile, send, ad_language));
+        }
+
+        await Promise.all(tasks);
+        controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+      } catch (err) {
+        console.error("[Extensions] 流式生成未捕获异常:", err instanceof Error ? err.message : err);
+        try { controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: "error", data: "生成失败，请重试" })}\n\n`)); } catch {}
+      } finally {
+        try { controller.close(); } catch {}
       }
-
-      // ─── optional: 1 次 AI 批量生成所有勾选的可选扩展 ───
-      if (types.includes("optional")) {
-        const optionalTypes: string[] = body.optionalTypes || [];
-        tasks.push(generateOptionalBatch(cache!, merchantName, merchantUrl, country, optionalTypes, aiRuleProfile, send, ad_language));
-      }
-
-      await Promise.all(tasks);
-      controller.enqueue(encoder.encode("data: [DONE]\n\n"));
-      controller.close();
+    },
+    cancel() {
+      // 客户端主动断开连接时静默处理，避免抛出未捕获异常
     },
   });
 
   return new Response(stream, {
-    headers: { "Content-Type": "text/event-stream", "Cache-Control": "no-cache, no-transform", "X-Accel-Buffering": "no" },
+    headers: {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache, no-transform",
+      "X-Accel-Buffering": "no",
+      // 禁止 Cloudflare 对此接口使用 QUIC/HTTP3，避免 ERR_QUIC_PROTOCOL_ERROR
+      "Alt-Svc": "clear",
+    },
   });
 }
 
@@ -938,10 +953,10 @@ async function selectBestImages(rawImages: string[], merchantUrl?: string): Prom
       ]
     : filtered;
 
-  if (ranked.length === 0) return rawImages.slice(0, 20);
+  if (ranked.length === 0) return rawImages.slice(0, 60);
 
   const checked: string[] = [];
-  for (let i = 0; i < ranked.length && checked.length < 40; i += 10) {
+  for (let i = 0; i < ranked.length && checked.length < 80; i += 10) {
     const batch = ranked.slice(i, i + 10);
     const results = await Promise.allSettled(
       batch.map(async (url) => {
@@ -959,5 +974,5 @@ async function selectBestImages(rawImages: string[], merchantUrl?: string): Prom
     for (const r of results) if (r.status === "fulfilled" && r.value) checked.push(r.value);
   }
 
-  return checked.length > 0 ? checked.slice(0, 30) : ranked.slice(0, 20);
+  return checked.length > 0 ? checked.slice(0, 60) : ranked.slice(0, 60);
 }
