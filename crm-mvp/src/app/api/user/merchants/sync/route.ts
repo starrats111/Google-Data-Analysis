@@ -142,7 +142,7 @@ async function doSyncInBackground(
     const deduped: typeof existing = [];
     for (const [, arr] of groupedByKey) {
       if (arr.length <= 1) { deduped.push(arr[0]); continue; }
-      const keep = arr.find(m => m.status === "claimed") || arr.reduce((a, b) => (a.id < b.id ? a : b));
+      const keep = arr.find(m => m.status === "claimed" || m.status === "paused") || arr.reduce((a, b) => (a.id < b.id ? a : b));
       deduped.push(keep);
       const toDelete = arr.filter(m => m.id !== keep.id);
       if (toDelete.length > 0) {
@@ -266,7 +266,7 @@ async function doSyncInBackground(
     const toRemoveIds: bigint[] = [];
     for (const [key, ex] of map.entries()) {
       const [exPlatform] = key.split(":");
-      if (!syncedKeys.has(key) && ex.status !== "claimed" && ex.is_deleted === 0 && syncedPlatforms.has(exPlatform)) {
+      if (!syncedKeys.has(key) && ex.status !== "claimed" && ex.status !== "paused" && ex.is_deleted === 0 && syncedPlatforms.has(exPlatform)) {
         toRemoveIds.push(ex.id);
         removedCount++;
       }

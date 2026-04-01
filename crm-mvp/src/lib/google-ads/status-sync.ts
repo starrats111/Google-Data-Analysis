@@ -1,18 +1,32 @@
 /**
  * Google Ads 广告系列状态实时同步
  * 从 Google Ads API 拉取最新 campaign 状态/预算，更新到数据库
+ *
+ * 扩展功能（F-05.1）：
+ * - 发现 Google Ads 中存在但 DB 中未记录的新广告系列，自动入库
+ * - 新广告入库后调用 autoLinkAndCreateMerchants，根据广告名（平台+MID）自动查找或创建商家
+ * - syncMerchantStatusFromCampaigns 确保有 ENABLED 广告的商家处于 claimed 状态
  */
 import prisma from "@/lib/prisma";
+import { parseCampaignNameFull, autoLinkAndCreateMerchants, syncMerchantStatusFromCampaigns } from "@/lib/campaign-merchant-link";
 
 interface SyncResult {
   mcc: string;
   campaigns: number;
   updated: number;
+  new_campaigns: number;
   error?: string;
 }
 
 /**
  * 同步指定用户所有 MCC 下的广告系列状态
+ *
+ * 流程：
+ * 1. 从 Google Ads API 拉取所有 CID 下的广告系列列表和状态
+ * 2. 对 DB 中已有的广告系列：更新 google_status / budget
+ * 3. 对 Google 中有但 DB 中没有的广告系列：自动创建 DB 记录
+ * 4. 调用 autoLinkAndCreateMerchants 为未匹配商家的广告系列自动关联/创建商家
+ * 5. 调用 syncMerchantStatusFromCampaigns 确保 ENABLED 广告对应商家为 claimed
  */
 export async function syncUserCampaignStatuses(userId: bigint): Promise<SyncResult[]> {
   const mccs = await prisma.google_mcc_accounts.findMany({
@@ -20,6 +34,7 @@ export async function syncUserCampaignStatuses(userId: bigint): Promise<SyncResu
   });
 
   const results: SyncResult[] = [];
+  let anyChange = false;
 
   for (const mcc of mccs) {
     if (!mcc.service_account_json || !mcc.developer_token) continue;
@@ -45,10 +60,17 @@ export async function syncUserCampaignStatuses(userId: bigint): Promise<SyncResu
       const customerIds = cids.map((c) => c.customer_id);
       const { statuses, disabledCids } = await fetchAllCampaignStatuses(credentials, customerIds);
       let updated = 0;
+      let newCampaigns = 0;
 
+      // ── 1. 处理被停用的 CID ──────────────────────────────────────────────
       if (disabledCids.length > 0) {
         const r = await prisma.campaigns.updateMany({
-          where: { user_id: userId, customer_id: { in: disabledCids }, is_deleted: 0, google_status: { not: "PAUSED" } },
+          where: {
+            user_id: userId,
+            customer_id: { in: disabledCids },
+            is_deleted: 0,
+            google_status: { not: "PAUSED" },
+          },
           data: { google_status: "PAUSED", last_google_sync_at: new Date() },
         });
         updated += r.count;
@@ -58,16 +80,72 @@ export async function syncUserCampaignStatuses(userId: bigint): Promise<SyncResu
         });
       }
 
-      // 逐条更新状态（不覆盖 campaign_name）
+      // ── 2. 加载该 MCC 下所有已存在的广告系列，构建索引 ─────────────────
+      const existingCampaigns = await prisma.campaigns.findMany({
+        where: { user_id: userId, mcc_id: mcc.id, is_deleted: 0 },
+        select: {
+          id: true,
+          google_campaign_id: true,
+          google_status: true,
+          customer_id: true,
+          campaign_name: true,
+        },
+      });
+      const campaignMap = new Map(
+        existingCampaigns.map((c) => [c.google_campaign_id, c])
+      );
+
+      // ── 3. 更新已有广告状态 / 创建新广告 ──────────────────────────────────
       for (const s of statuses) {
-        const result = await prisma.campaigns.updateMany({
-          where: { user_id: userId, google_campaign_id: s.campaign_id, is_deleted: 0 },
-          data: { google_status: s.status, last_google_sync_at: new Date() },
-        });
-        updated += result.count;
+        const existing = campaignMap.get(s.campaign_id);
+
+        if (existing) {
+          // 更新状态（不覆盖 campaign_name，防止冲突）
+          const needsUpdate =
+            existing.google_status !== s.status ||
+            (!existing.customer_id && s.customer_id);
+          if (needsUpdate) {
+            const updateData: Record<string, unknown> = {
+              google_status: s.status,
+              last_google_sync_at: new Date(),
+            };
+            if (!existing.customer_id && s.customer_id) {
+              updateData.customer_id = s.customer_id;
+            }
+            await prisma.campaigns.update({
+              where: { id: existing.id },
+              data: updateData,
+            });
+            updated++;
+          }
+        } else {
+          // Google Ads 中存在但 DB 中没有 → 员工自建广告，自动入库
+          const parsed = parseCampaignNameFull(s.name);
+          await prisma.campaigns.create({
+            data: {
+              user_id: userId,
+              // user_merchant_id 先留 0，由 autoLinkAndCreateMerchants 补全
+              user_merchant_id: BigInt(0),
+              google_campaign_id: s.campaign_id,
+              mcc_id: mcc.id,
+              customer_id: s.customer_id,
+              campaign_name: s.name,
+              daily_budget: s.budget_dollars,
+              target_country: parsed?.country || "US",
+              google_status: s.status,
+              last_google_sync_at: new Date(),
+            },
+          });
+          newCampaigns++;
+          anyChange = true;
+          console.log(
+            `[StatusSync] 发现并入库新广告系列: "${s.name}"` +
+            ` (campaign_id=${s.campaign_id}, cid=${s.customer_id})`
+          );
+        }
       }
 
-      // 更新 CID 可用状态
+      // ── 4. 更新 CID 可用状态 ───────────────────────────────────────────────
       const cidHasEnabled = new Map<string, boolean>();
       for (const s of statuses) {
         if (s.status === "ENABLED") cidHasEnabled.set(s.customer_id, true);
@@ -80,9 +158,33 @@ export async function syncUserCampaignStatuses(userId: bigint): Promise<SyncResu
         });
       }
 
-      results.push({ mcc: mcc.mcc_name || mcc.mcc_id, campaigns: statuses.length, updated });
+      if (updated > 0 || newCampaigns > 0) anyChange = true;
+
+      results.push({
+        mcc: mcc.mcc_name || mcc.mcc_id,
+        campaigns: statuses.length,
+        updated,
+        new_campaigns: newCampaigns,
+      });
     } catch (e) {
-      results.push({ mcc: mcc.mcc_name || mcc.mcc_id, campaigns: 0, updated: 0, error: e instanceof Error ? e.message : String(e) });
+      results.push({
+        mcc: mcc.mcc_name || mcc.mcc_id,
+        campaigns: 0,
+        updated: 0,
+        new_campaigns: 0,
+        error: e instanceof Error ? e.message : String(e),
+      });
+    }
+  }
+
+  // ── 5. 全局商家自动关联与状态同步（仅在有变更时执行，减少无效查询）───
+  if (anyChange || results.some((r) => r.new_campaigns > 0)) {
+    const linked = await autoLinkAndCreateMerchants(userId);
+    const claimed = await syncMerchantStatusFromCampaigns(userId);
+    if (linked > 0 || claimed > 0) {
+      console.log(
+        `[StatusSync] 商家关联完成：关联 ${linked} 条，更新 claimed ${claimed} 个`
+      );
     }
   }
 

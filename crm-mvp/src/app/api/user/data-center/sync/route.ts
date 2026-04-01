@@ -6,6 +6,7 @@ import { syncFromSheet } from "@/lib/sheet-sync";
 import { cacheDelete } from "@/lib/cache";
 import { todayCST, yesterdayCST, nowCST, parseCSTDateStart, parseCSTDateEndExclusive, isTodayCST } from "@/lib/date-utils";
 import { getExchangeRate, preloadRates } from "@/lib/exchange-rate";
+import { autoLinkAndCreateMerchants, syncMerchantStatusFromCampaigns, parseCampaignNameFull } from "@/lib/campaign-merchant-link";
 
 /**
  * POST /api/user/data-center/sync
@@ -68,9 +69,9 @@ export async function POST(req: NextRequest) {
     results.ads = await syncAdsData(mcc, userId, forceFullSync, sync_start_date, sync_end_date);
   }
 
-  // 关联 campaigns 和 transactions 与 merchants
-  await linkCampaignsToMerchants(userId);
-  await claimLinkedMerchants(userId);
+  // 关联 campaigns 与 merchants（自动查找或创建商家，商家状态跟随广告系列）
+  await autoLinkAndCreateMerchants(userId);
+  await syncMerchantStatusFromCampaigns(userId);
   await linkTransactionsToMerchants(userId);
 
   // type=all 时同步联盟交易（合并原来独立的 sync-transactions 功能）
@@ -212,7 +213,7 @@ async function syncAdsData(
               for (const cd of historyData) {
                 let campaign = campaignMap.get(cd.campaign_id);
                 if (!campaign) {
-                  const parsed = parseCampaignName(cd.campaign_name);
+                  const parsed = parseCampaignNameFull(cd.campaign_name);
                   const merchantId = parsed ? (apiMerchantIndex.get(`${parsed.platform}_${parsed.mid}`) || BigInt(0)) : BigInt(0);
                   campaign = await prisma.campaigns.create({
                     data: {
@@ -302,7 +303,7 @@ async function syncAdsData(
           let campaign = campaignMap.get(cd.campaign_id);
 
           if (!campaign) {
-            const parsed = parseCampaignName(cd.campaign_name);
+            const parsed = parseCampaignNameFull(cd.campaign_name);
             const merchantId = parsed ? (apiMerchantIndex.get(`${parsed.platform}_${parsed.mid}`) || BigInt(0)) : BigInt(0);
             campaign = await prisma.campaigns.create({
               data: {
@@ -403,7 +404,7 @@ async function syncAdsData(
               }));
             }
           } else {
-            const parsed = parseCampaignName(cs.name);
+            const parsed = parseCampaignNameFull(cs.name);
             const merchantId = parsed ? (apiMerchantIndex.get(`${parsed.platform}_${parsed.mid}`) || BigInt(0)) : BigInt(0);
             statusCreateOps.push({ cs, merchantId });
           }
@@ -484,7 +485,7 @@ async function upsertSheetRowsBatch(
     const firstRowByGid = new Map(rows.map((r) => [r.campaign_id, r]));
     for (const gid of missingIds) {
       const row = firstRowByGid.get(gid)!;
-      const parsed = parseCampaignName(row.campaign_name);
+      const parsed = parseCampaignNameFull(row.campaign_name);
       const merchantId = parsed ? (merchantIndex.get(`${parsed.platform}_${parsed.mid}`) || BigInt(0)) : BigInt(0);
 
       const campaign = await prisma.campaigns.create({
@@ -582,103 +583,7 @@ async function upsertSheetRowsBatch(
   return { inserted, updated, message: `Sheet 同步完成` };
 }
 
-/**
- * 从广告系列名中提取平台代码和商家 MID
- * 支持两种格式：
- *   破折号: 003-RW-deltachildren-US-0126-117904
- *   空格:   011 CG cellFilter JS 0320 8000389
- */
-function parseCampaignName(name: string): { platform: string; mid: string } | null {
-  if (!name) return null;
-  const parts = name.split(/[-\s]+/);
-  if (parts.length < 4) return null;
-  const rawPlatform = parts[1]?.trim();
-  const mid = parts[parts.length - 1]?.trim();
-  if (!rawPlatform || !mid || !/^\d+$/.test(mid)) return null;
-  return { platform: normalizePlatformCode(rawPlatform), mid };
-}
 
-/**
- * 关联 campaigns 与 user_merchants — 修复 user_merchant_id = 0 的记录
- * 从广告系列名解析平台和 MID，匹配 user_merchants
- * 匹配成功时同时将商家标记为 claimed，使其出现在"我的商家"
- */
-async function linkCampaignsToMerchants(userId: bigint) {
-  const unlinked = await prisma.campaigns.findMany({
-    where: { user_id: userId, user_merchant_id: BigInt(0), is_deleted: 0, google_campaign_id: { not: null } },
-    select: { id: true, campaign_name: true },
-    take: 500,
-  });
-  if (unlinked.length === 0) return 0;
-
-  const userMerchants = await prisma.user_merchants.findMany({
-    where: { user_id: userId, is_deleted: 0 },
-    select: { id: true, platform: true, merchant_id: true, status: true },
-  });
-  const merchantIndex = new Map(
-    userMerchants.map((m) => [`${normalizePlatformCode(m.platform)}_${m.merchant_id}`, m])
-  );
-
-  let linked = 0;
-  const updates: Promise<unknown>[] = [];
-  const claimedMerchantIds = new Set<bigint>();
-
-  for (const c of unlinked) {
-    const parsed = parseCampaignName(c.campaign_name || "");
-    if (!parsed) continue;
-
-    const merchant = merchantIndex.get(`${parsed.platform}_${parsed.mid}`);
-    if (!merchant) continue;
-
-    updates.push(
-      prisma.campaigns.update({
-        where: { id: c.id },
-        data: { user_merchant_id: merchant.id },
-      })
-    );
-
-    if (merchant.status !== "claimed" && !claimedMerchantIds.has(merchant.id)) {
-      claimedMerchantIds.add(merchant.id);
-      updates.push(
-        prisma.user_merchants.update({
-          where: { id: merchant.id },
-          data: { status: "claimed", claimed_at: new Date() },
-        })
-      );
-    }
-
-    linked++;
-
-    if (updates.length >= 20) {
-      await Promise.all(updates.splice(0));
-    }
-  }
-
-  if (updates.length > 0) await Promise.all(updates);
-  return linked;
-}
-
-/**
- * 将所有已关联广告系列但尚未 claimed 的商家标记为 claimed
- * 确保所有在投广告的商家都出现在"我的商家"中
- */
-async function claimLinkedMerchants(userId: bigint) {
-  const linkedMerchantIds = await prisma.campaigns.findMany({
-    where: { user_id: userId, is_deleted: 0, user_merchant_id: { not: BigInt(0) }, google_campaign_id: { not: null } },
-    select: { user_merchant_id: true },
-    distinct: ["user_merchant_id"],
-  });
-
-  if (linkedMerchantIds.length === 0) return 0;
-
-  const ids = linkedMerchantIds.map((c) => c.user_merchant_id);
-  const result = await prisma.user_merchants.updateMany({
-    where: { id: { in: ids }, user_id: userId, is_deleted: 0, status: { not: "claimed" } },
-    data: { status: "claimed", claimed_at: new Date() },
-  });
-
-  return result.count;
-}
 
 /**
  * 关联 affiliate_transactions 与 user_merchants
@@ -986,10 +891,10 @@ async function syncTransactionsInline(
       }
     }
 
-    // 关联交易和 campaigns 到正确的商家
+    // 关联交易和 campaigns 到正确的商家（自动创建缺失商家，状态跟随广告）
     await linkTransactionsToMerchants(userId);
-    await linkCampaignsToMerchants(userId);
-    await claimLinkedMerchants(userId);
+    await autoLinkAndCreateMerchants(userId);
+    await syncMerchantStatusFromCampaigns(userId);
 
     await prisma.ads_daily_stats.updateMany({
       where: { user_id: userId, date: { gte: startDate, lt: endExclusive } },

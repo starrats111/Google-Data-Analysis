@@ -22,7 +22,7 @@ export const GET = withUser(async (req: NextRequest) => {
   const where: Record<string, unknown> = {
     merchant_id: merchantId,
     is_deleted: 0,
-    status: "claimed",
+    status: { in: ["claimed", "paused"] },
   };
   if (platform) where.platform = platform;
 
