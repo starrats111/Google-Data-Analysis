@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { useSearchParams } from "next/navigation";
 import {
   Card, Steps, Form, Select, Button, Typography, Space, App, Spin, Image,
@@ -68,6 +68,18 @@ export default function ArticlePublishPage() {
 
   // Step 0: 选择商家
   const [selectedMerchant, setSelectedMerchant] = useState<Merchant | null>(null);
+  // O(1) 查找 map，避免 filterOption 回调中 O(n²) 遍历
+  const merchantMap = useMemo(() => new Map(merchants.map((m) => [m.id, m])), [merchants]);
+  const merchantFilterOption = useCallback(
+    (input: string, option?: { value?: string | number | bigint | null; label?: React.ReactNode }) => {
+      if (!option) return false;
+      const merchant = merchantMap.get(String(option.value ?? ""));
+      if (!merchant) return false;
+      if (merchant.ad_status === "PAUSED" && !input) return false;
+      return String(option.label ?? "").toLowerCase().includes(input.toLowerCase());
+    },
+    [merchantMap],
+  );
   // Step 1: 确认国家
   const [country, setCountry] = useState("US");
   const [language, setLanguage] = useState("en");
@@ -522,15 +534,7 @@ export default function ArticlePublishPage() {
               <Select
                 placeholder="搜索并选择已领取的商家（输入商家名或MID）"
                 showSearch
-                filterOption={(input, option) => {
-                  if (!option) return false;
-                  const merchant = merchants.find((m) => m.id === option.value);
-                  if (!merchant) return false;
-                  // PAUSED 商家在无输入时隐藏，避免列表过长
-                  if (merchant.ad_status === "PAUSED" && !input) return false;
-                  // 统一在此处按 label 过滤，消除与 React 状态更新的时序差
-                  return (option.label as string).toLowerCase().includes(input.toLowerCase());
-                }}
+                filterOption={merchantFilterOption}
                 style={{ width: "100%" }}
                 onChange={(v) => {
                   const m = merchants.find((m) => m.id === v);
