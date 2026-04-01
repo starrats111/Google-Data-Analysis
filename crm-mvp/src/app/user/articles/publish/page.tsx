@@ -68,7 +68,6 @@ export default function ArticlePublishPage() {
 
   // Step 0: 选择商家
   const [selectedMerchant, setSelectedMerchant] = useState<Merchant | null>(null);
-  const [merchantSearch, setMerchantSearch] = useState("");
   // Step 1: 确认国家
   const [country, setCountry] = useState("US");
   const [language, setLanguage] = useState("en");
@@ -93,7 +92,7 @@ export default function ArticlePublishPage() {
 
   useEffect(() => {
     // 获取已领取的商家
-    fetch("/api/user/merchants?tab=claimed&pageSize=200")
+    fetch("/api/user/merchants?tab=claimed&pageSize=500")
       .then((r) => r.json())
       .then((res) => {
         if (res.code === 0) setMerchants(res.data.merchants || []);
@@ -521,30 +520,33 @@ export default function ArticlePublishPage() {
           <Form layout="vertical" style={{ maxWidth: 600 }}>
             <Form.Item label="选择推广商家" required>
               <Select
-                placeholder="搜索并选择已领取的商家"
+                placeholder="搜索并选择已领取的商家（输入商家名或MID）"
                 showSearch
-                optionFilterProp="label"
-                onSearch={setMerchantSearch}
+                filterOption={(input, option) => {
+                  if (!option) return false;
+                  const merchant = merchants.find((m) => m.id === option.value);
+                  if (!merchant) return false;
+                  // PAUSED 商家在无输入时隐藏，避免列表过长
+                  if (merchant.ad_status === "PAUSED" && !input) return false;
+                  // 统一在此处按 label 过滤，消除与 React 状态更新的时序差
+                  return (option.label as string).toLowerCase().includes(input.toLowerCase());
+                }}
                 style={{ width: "100%" }}
                 onChange={(v) => {
                   const m = merchants.find((m) => m.id === v);
                   setSelectedMerchant(m || null);
-                  setMerchantSearch("");
                   if (m?.target_country) {
                     setCountry(m.target_country);
                     setLanguage(getLang(m.target_country));
                   }
                 }}
-                options={merchants
-                  .filter((m) => !publishedMerchantIds.has(m.id))
-                  .filter((m) => {
-                    if (m.ad_status !== "PAUSED") return true;
-                    return merchantSearch.length > 0 && m.merchant_id.includes(merchantSearch);
-                  })
-                  .map((m) => ({
+                options={merchants.map((m) => {
+                  const hasArticle = publishedMerchantIds.has(m.id);
+                  return {
                     value: m.id,
-                    label: `${m.merchant_name} [${m.platform}] (MID: ${m.merchant_id})`,
-                  }))}
+                    label: `${hasArticle ? "[已发布] " : ""}${m.merchant_name} [${m.platform}] (MID: ${m.merchant_id})`,
+                  };
+                })}
               />
             </Form.Item>
             {selectedMerchant && (

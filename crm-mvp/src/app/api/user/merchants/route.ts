@@ -193,7 +193,7 @@ export const GET = withUser(async (req: NextRequest, { user }) => {
   const platform = searchParams.get("platform") || "";
   const search = searchParams.get("search") || "";
   const page = parseInt(searchParams.get("page") || "1");
-  const pageSize = Math.min(parseInt(searchParams.get("pageSize") || "50"), 200);
+  const pageSize = Math.min(parseInt(searchParams.get("pageSize") || "50"), 500);
 
   const label = searchParams.get("label") || "";
   const sortField = searchParams.get("sortField") || "";
