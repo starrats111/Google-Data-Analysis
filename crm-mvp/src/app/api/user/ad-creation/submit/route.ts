@@ -448,18 +448,37 @@ export async function POST(req: NextRequest) {
       let slUrl = (sl.finalUrl || "").trim();
       if (slUrl.startsWith("http://")) slUrl = slUrl.replace("http://", "https://");
       const linkText = sanitizeAdText((sl.title || ""), { allowExclamation: false }).slice(0, 25);
-      const desc1 = sanitizeAdText((sl.description1 || ""), { allowExclamation: true }).slice(0, 35);
-      const desc2 = sanitizeAdText((sl.description2 || ""), { allowExclamation: true }).slice(0, 35);
+      const desc1Raw = sanitizeAdText((sl.description1 || ""), { allowExclamation: true }).slice(0, 35);
+      const desc2Raw = sanitizeAdText((sl.description2 || ""), { allowExclamation: true }).slice(0, 35);
+
+      // 安全校验：link_text 为空或 URL 无效则跳过该站内链接
+      if (!linkText || !slUrl.startsWith("https://")) {
+        console.warn(`[AdSubmit] 跳过无效站内链接: title="${sl.title}", url="${slUrl}"`);
+        continue;
+      }
+
+      // Google Ads API v23: description1 和 description2 必须同时有值（1-35 字符），
+      // 否则必须同时省略。空字符串在 proto3 中视为"未设置"，会触发 REQUIRED 错误。
+      const sitelinkAssetPayload: Record<string, unknown> = { link_text: linkText };
+      if (desc1Raw.length >= 1 && desc2Raw.length >= 1) {
+        sitelinkAssetPayload.description1 = desc1Raw;
+        sitelinkAssetPayload.description2 = desc2Raw;
+      } else if (desc1Raw.length >= 1) {
+        // desc2 为空时用 link_text 截断补全，保证二者同时存在
+        sitelinkAssetPayload.description1 = desc1Raw;
+        sitelinkAssetPayload.description2 = linkText.slice(0, 35);
+      } else if (desc2Raw.length >= 1) {
+        sitelinkAssetPayload.description1 = linkText.slice(0, 35);
+        sitelinkAssetPayload.description2 = desc2Raw;
+      }
+      // 两者均为空时不包含，API 允许省略描述
+
       operations.push({
         asset_operation: {
           create: {
             resource_name: assetTempRn,
             final_urls: [slUrl],
-            sitelink_asset: {
-              link_text: linkText,
-              description1: desc1,
-              description2: desc2,
-            },
+            sitelink_asset: sitelinkAssetPayload,
           },
         },
       });
@@ -477,13 +496,16 @@ export async function POST(req: NextRequest) {
 
     // ─── 9. Callout 扩展 ───
     for (const calloutText of callouts) {
+      const cleanCallout = sanitizeAdText((calloutText || ""), { allowExclamation: false }).slice(0, 25);
+      // callout_text 为必填项（1-25 字符），空文本直接跳过
+      if (!cleanCallout) continue;
       const assetTempRn = `customers/${cid}/assets/${assetTempId}`;
       operations.push({
         asset_operation: {
           create: {
             resource_name: assetTempRn,
             callout_asset: {
-              callout_text: sanitizeAdText((calloutText || ""), { allowExclamation: false }).slice(0, 25),
+              callout_text: cleanCallout,
             },
           },
         },
@@ -762,7 +784,7 @@ export async function POST(req: NextRequest) {
               create: {
                 resource_name: assetRn,
                 name: `AdImage-${img.name}-${Date.now()}`,
-                type: "IMAGE",
+                // 注意：type 是 output-only 字段，不能在 CREATE 中设置
                 image_asset: { data: img.data },
               },
             },
