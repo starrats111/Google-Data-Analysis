@@ -211,9 +211,9 @@ function parseRegions(raw: unknown): string[] {
 }
 
 function normalizeStatus(s: string): string {
-  const lower = s.toLowerCase();
-  if (["joined", "approved", "active", "accepted"].includes(lower)) return "joined";
-  if (["pending", "applied", "waiting"].includes(lower)) return "pending";
+  const lower = s.toLowerCase().trim();
+  if (["joined", "approved", "active", "accepted", "confirmed", "enabled", "member", "success", "1", "2"].includes(lower)) return "joined";
+  if (["pending", "applied", "waiting", "reviewing", "under_review", "in_review"].includes(lower)) return "pending";
   return "not_joined";
 }
 
@@ -244,10 +244,12 @@ export interface SyncResult {
 
 /**
  * 从单个平台拉取全部商家列表
+ * @param relationshipFilter 可选：传 "joined" 让 API 只返回已加入的品牌（更高效，避免翻页上限漏掉末尾品牌）
  */
 export async function fetchAllMerchants(
   platform: string,
   token: string,
+  relationshipFilter?: string,
 ): Promise<{ merchants: PlatformMerchant[]; error?: string }> {
   const config = PLATFORM_API_CONFIG[platform];
   if (!config) return { merchants: [], error: `不支持的平台: ${platform}` };
@@ -256,7 +258,7 @@ export async function fetchAllMerchants(
   const seen = new Set<string>();
 
   try {
-    const firstPage = await callPlatformApi(config, token, 1);
+    const firstPage = await callPlatformApi(config, token, 1, relationshipFilter);
     const code = String((firstPage as Record<string, unknown>).code ?? "0");
     if (code !== "0" && code !== "200") {
       const msg = String((firstPage as Record<string, unknown>).message || "API 返回错误");
@@ -294,7 +296,7 @@ export async function fetchAllMerchants(
       if (config.rateLimitMs) await sleep(config.rateLimitMs);
       else await sleep(100);
 
-      const pageData = await callPlatformApi(config, token, page);
+      const pageData = await callPlatformApi(config, token, page, relationshipFilter);
       const batch = parseMerchants(platform, pageData);
       if (batch.length === 0) break;
 

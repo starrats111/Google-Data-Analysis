@@ -76,7 +76,9 @@ async function doSyncInBackground(
         batch.map(async (conn) => {
           dbg(`Fetch ${conn.platform}...`);
           try {
-            const r = await fetchAllMerchants(conn.platform, conn.api_key!);
+            // 传 relationship="joined" 让平台 API 直接只返回已加入品牌，
+            // 避免全量拉取（数十万条）+本地过滤时因 200 页上限漏掉末尾新品牌
+            const r = await fetchAllMerchants(conn.platform, conn.api_key!, "joined");
             if (r.error) errors.push(r.error);
             dbg(`  ${conn.platform}: ${r.merchants.length} merchants${r.error ? `, err=${r.error}` : ""}`);
             if (r.merchants.length > 0) {
@@ -94,7 +96,12 @@ async function doSyncInBackground(
       );
       for (const { conn, merchants } of results) {
         for (const m of merchants) {
-          if (m.relationship_status !== "joined") continue;
+          if (m.relationship_status !== "joined") {
+            if (m.relationship_status === "pending") {
+              dbg(`  [SKIP pending] platform=${conn.platform} id=${m.merchant_id} name=${m.merchant_name}`);
+            }
+            continue;
+          }
           rows.push({
             platform_code: conn.platform,
             conn_id: conn.id,
