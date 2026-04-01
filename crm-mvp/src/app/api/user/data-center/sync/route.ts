@@ -239,10 +239,10 @@ async function syncAdsData(
                   continue;
                 }
                 const statsData = {
-                  budget: Number((cd.budget_dollars * dateRate).toFixed(2)),
-                  cost: Number((cd.cost_dollars * dateRate).toFixed(2)),
+                  budget: cd.budget_dollars * dateRate,
+                  cost: cd.cost_dollars * dateRate,
                   clicks: cd.clicks, impressions: cd.impressions,
-                  cpc: Number((cd.cpc_dollars * dateRate).toFixed(4)),
+                  cpc: cd.cpc_dollars * dateRate,
                   conversions: cd.conversions, data_source: "api" as const,
                 };
 
@@ -335,7 +335,7 @@ async function syncAdsData(
             continue;
           }
           const dateObj = new Date(dataDate);
-          const statsData = { budget: Number((cd.budget_dollars * dateRate).toFixed(2)), cost: Number((cd.cost_dollars * dateRate).toFixed(2)), clicks: cd.clicks, impressions: cd.impressions, cpc: Number((cd.cpc_dollars * dateRate).toFixed(4)), conversions: cd.conversions, data_source: "api" as const };
+          const statsData = { budget: cd.budget_dollars * dateRate, cost: cd.cost_dollars * dateRate, clicks: cd.clicks, impressions: cd.impressions, cpc: cd.cpc_dollars * dateRate, conversions: cd.conversions, data_source: "api" as const };
           const statsKey = `${campaign.id}_${dataDate}`;
           const existingStatsId = recentStatsMap.get(statsKey);
           if (existingStatsId) {
@@ -527,9 +527,9 @@ async function upsertSheetRowsBatch(
         console.warn(`[Sheet] 跳过 ${row.campaign_id} ${row.date}：汇率不可用`);
         return;
       }
-      const convertedCost = Number((row.cost * rate).toFixed(2));
-      const convertedBudget = Number((row.budget * rate).toFixed(2));
-      const convertedCpc = Number((row.cpc * rate).toFixed(4));
+      const convertedCost = row.cost * rate;
+      const convertedBudget = row.budget * rate;
+      const convertedCpc = row.cpc * rate;
 
       if (existingId) {
         updated++;

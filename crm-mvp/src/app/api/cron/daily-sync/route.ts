@@ -162,7 +162,7 @@ async function syncMerchantSheet(): Promise<unknown> {
   }
 }
 
-// ── 同步所有用户的 MCC 广告数据（Sheet 近 7 天 + API 近 2 天补数据） ──
+// ── 同步所有用户的 MCC 广告数据（Sheet 近 31 天 + API 近 2 天补数据） ──
 
 async function syncAllUsersMcc(): Promise<unknown> {
   const allMcc = await prisma.google_mcc_accounts.findMany({
@@ -188,7 +188,8 @@ async function syncAllUsersMcc(): Promise<unknown> {
 
         try {
           const cstNow = nowCST();
-          const startStr = cstNow.subtract(7, "day").format("YYYY-MM-DD");
+          // 扩大至 31 天：覆盖完整一个自然月，防止 Sheet 脚本偶发失败导致历史数据永久缺失
+          const startStr = cstNow.subtract(31, "day").format("YYYY-MM-DD");
           const endStr = cstNow.format("YYYY-MM-DD");
           const yesterdayStr = cstNow.subtract(1, "day").format("YYYY-MM-DD");
           await preloadRates(mcc.currency, startStr, endStr);
@@ -227,7 +228,7 @@ async function syncAllUsersMcc(): Promise<unknown> {
                   log(`  跳过 ${row.campaign_id} ${row.date}：汇率不可用`);
                   continue;
                 }
-                const costUsd = Number((row.cost * rate).toFixed(2));
+                const costUsd = row.cost * rate;
 
                 await prisma.ads_daily_stats.upsert({
                   where: { campaign_id_date: { campaign_id: campaign.id, date: dateObj } },
@@ -295,14 +296,14 @@ async function syncAllUsersMcc(): Promise<unknown> {
                       const rate = await getExchangeRate(mcc.currency, cd.date);
                       if (rate <= 0) continue;
 
-                      const costUsd = Number((cd.cost_dollars * rate).toFixed(2));
+                      const costUsd = cd.cost_dollars * rate;
                       await prisma.ads_daily_stats.upsert({
                         where: { campaign_id_date: { campaign_id: campaign.id, date: dateObj } },
-                        update: { cost: costUsd, clicks: cd.clicks, impressions: cd.impressions, cpc: Number((cd.cpc_dollars * rate).toFixed(4)), data_source: "api" },
+                        update: { cost: costUsd, clicks: cd.clicks, impressions: cd.impressions, cpc: cd.cpc_dollars * rate, data_source: "api" },
                         create: {
                           user_id: uid, campaign_id: campaign.id, date: dateObj,
                           cost: costUsd, clicks: cd.clicks, impressions: cd.impressions,
-                          cpc: Number((cd.cpc_dollars * rate).toFixed(4)),
+                          cpc: cd.cpc_dollars * rate,
                           data_source: "api", user_merchant_id: BigInt(0),
                         },
                       });

@@ -216,11 +216,11 @@ export async function syncFromSheet(
         campaign_id: campaignId,
         campaign_name: campaignName,
         customer_id: customerId,
-        cost: Number(cost.toFixed(2)),
-        budget: Number(budget.toFixed(2)),
+        cost,
+        budget,
         clicks,
         impressions,
-        cpc: Number(cpc.toFixed(4)),
+        cpc,
         status,
       });
     } catch {

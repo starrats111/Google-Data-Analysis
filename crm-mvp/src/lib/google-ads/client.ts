@@ -195,10 +195,13 @@ export function dollarsToMicros(amount: number): number {
 }
 
 /**
- * 金额转换：micros → 美元
+ * 金额转换：micros → 美元（保留6位小数，由存储层控制最终精度）
+ * 不在此处 toFixed(2) 截断：多条记录若各自提前截断再汇总，会引入累积舍入误差。
+ * Google Ads 后台是先汇总所有 micros 再除以 1e6，我们存储全精度后在 DB 聚合，
+ * 保证与官方数值偏差不超过 ±$0.01。
  */
 export function microsToDollars(micros: number): number {
-  return Number((micros / 1_000_000).toFixed(2));
+  return micros / 1_000_000;
 }
 
 /**

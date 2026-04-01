@@ -3,7 +3,7 @@
 import { useState, useMemo, useCallback, useEffect, useRef } from "react";
 import {
   Card, Table, Row, Col, Statistic, Select, Space, Typography, Tag, Button,
-  DatePicker, Tooltip, App, Input, Modal, Tabs, Form, InputNumber,
+  DatePicker, Tooltip, App, Input, Modal, Tabs, Form, InputNumber, Alert,
 } from "antd";
 import {
   RiseOutlined, FallOutlined, SyncOutlined,
@@ -670,36 +670,52 @@ export default function DataCenterPage() {
       </Card>
 
       {/* ========== 花费明细弹窗（MCC 汇总 + 误差） ========== */}
-      <Modal title="花费明细" open={detailModal} onCancel={() => setDetailModal(false)} footer={null} width={600}>
+      <Modal title="花费明细" open={detailModal} onCancel={() => setDetailModal(false)} footer={null} width={620}>
         {costByMcc.length > 0 ? (
-          <Table
-            rowKey="mcc_db_id" dataSource={costByMcc} size="small" pagination={false}
-            columns={[
-              { title: "MCC 账户", dataIndex: "mcc_name", width: 140, render: (v: string, r: CostByMcc) => (
-                <span><Text style={{ fontSize: 12 }}>{v}</Text> <Tag color={r.currency === "CNY" ? "orange" : "blue"} style={{ fontSize: 10, marginLeft: 4 }}>{r.currency}</Tag></span>
-              ) },
-              { title: "花费 (USD)", dataIndex: "cost_usd", width: 110, align: "right", render: (v: number) => <Text strong style={{ color: "#cf1322", fontSize: 13 }}>${v.toFixed(2)}</Text> },
-              { title: "原始金额", key: "cost_original", width: 110, align: "right", render: (_: unknown, r: CostByMcc) => (
-                r.currency === "CNY" && r.cost_original != null
-                  ? <Text strong style={{ color: "#d46b08", fontSize: 13 }}>¥{r.cost_original.toFixed(2)}</Text>
-                  : <Text type="secondary" style={{ fontSize: 12 }}>—</Text>
-              ) },
-              { title: "误差", key: "adjustment", width: 120, align: "right", render: (_: unknown, r: CostByMcc) => (
-                <Space size={4}>
-                  {r.adjustment ? <Text style={{ fontSize: 12, color: "#fa8c16" }}>+${r.adjustment.toFixed(2)}</Text> : <Text type="secondary" style={{ fontSize: 12 }}>—</Text>}
-                  <Button type="link" size="small" icon={r.adjustment ? <EditOutlined /> : <PlusOutlined />} style={{ padding: 0, fontSize: 12 }} onClick={(e) => { e.stopPropagation(); handleOpenAdj(r); }} />
-                </Space>
-              ) },
-            ]}
-            summary={() => costByMcc.length > 1 ? (
-              <Table.Summary.Row>
-                <Table.Summary.Cell index={0}><Text strong>合计</Text></Table.Summary.Cell>
-                <Table.Summary.Cell index={1} align="right"><Text strong style={{ color: "#cf1322" }}>${summary.totalCost.toFixed(2)}</Text></Table.Summary.Cell>
-                <Table.Summary.Cell index={2} />
-                <Table.Summary.Cell index={3} />
-              </Table.Summary.Row>
-            ) : null}
-          />
+          <>
+            <Table
+              rowKey="mcc_db_id" dataSource={costByMcc} size="small" pagination={false}
+              columns={[
+                { title: "MCC 账户", dataIndex: "mcc_name", width: 140, render: (v: string, r: CostByMcc) => (
+                  <span><Text style={{ fontSize: 12 }}>{v}</Text> <Tag color={r.currency === "CNY" ? "orange" : "blue"} style={{ fontSize: 10, marginLeft: 4 }}>{r.currency}</Tag></span>
+                ) },
+                { title: "花费 (USD)", dataIndex: "cost_usd", width: 110, align: "right", render: (v: number) => <Text strong style={{ color: "#cf1322", fontSize: 13 }}>${v.toFixed(2)}</Text> },
+                { title: "原始金额", key: "cost_original", width: 110, align: "right", render: (_: unknown, r: CostByMcc) => (
+                  r.currency === "CNY" && r.cost_original != null
+                    ? <Text strong style={{ color: "#d46b08", fontSize: 13 }}>¥{r.cost_original.toFixed(2)}</Text>
+                    : <Text type="secondary" style={{ fontSize: 12 }}>—</Text>
+                ) },
+                { title: "误差", key: "adjustment", width: 120, align: "right", render: (_: unknown, r: CostByMcc) => (
+                  <Space size={4}>
+                    {r.adjustment ? <Text style={{ fontSize: 12, color: "#fa8c16" }}>+${r.adjustment.toFixed(2)}</Text> : <Text type="secondary" style={{ fontSize: 12 }}>—</Text>}
+                    <Button type="link" size="small" icon={r.adjustment ? <EditOutlined /> : <PlusOutlined />} style={{ padding: 0, fontSize: 12 }} onClick={(e) => { e.stopPropagation(); handleOpenAdj(r); }} />
+                  </Space>
+                ) },
+              ]}
+              summary={() => costByMcc.length > 1 ? (
+                <Table.Summary.Row>
+                  <Table.Summary.Cell index={0}><Text strong>合计</Text></Table.Summary.Cell>
+                  <Table.Summary.Cell index={1} align="right"><Text strong style={{ color: "#cf1322" }}>${summary.totalCost.toFixed(2)}</Text></Table.Summary.Cell>
+                  <Table.Summary.Cell index={2} />
+                  <Table.Summary.Cell index={3} />
+                </Table.Summary.Row>
+              ) : null}
+            />
+            <Alert
+              style={{ marginTop: 12 }}
+              type="info"
+              showIcon
+              message="数据来源说明"
+              description={
+                <div style={{ fontSize: 12, lineHeight: "1.8" }}>
+                  系统数据来自 Google Sheet 导出（每日自动同步近 31 天）+ Google Ads API（补近 2 天）。
+                  若与 Google Ads 后台存在差异，可能是 Sheet 脚本未覆盖某些日期，请点击上方
+                  <Text strong>「同步MCC」</Text>按钮并选择完整月份范围重新同步。
+                  若仍存在差额，可通过「误差」列手动补录差值。
+                </div>
+              }
+            />
+          </>
         ) : (
           <Text type="secondary">暂无数据</Text>
         )}
