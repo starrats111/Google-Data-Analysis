@@ -177,15 +177,14 @@ export async function syncUserCampaignStatuses(userId: bigint): Promise<SyncResu
     }
   }
 
-  // ── 5. 全局商家自动关联与状态同步（仅在有变更时执行，减少无效查询）───
-  if (anyChange || results.some((r) => r.new_campaigns > 0)) {
-    const linked = await autoLinkAndCreateMerchants(userId);
-    const claimed = await syncMerchantStatusFromCampaigns(userId);
-    if (linked > 0 || claimed > 0) {
-      console.log(
-        `[StatusSync] 商家关联完成：关联 ${linked} 条，更新 claimed ${claimed} 个`
-      );
-    }
+  // ── 5. 全局商家自动关联与状态同步（每次都执行，确保历史数据一致性）───
+  // 不加 anyChange 条件：广告状态即使没变，也需要把 available 商家更新为 paused
+  const linked = await autoLinkAndCreateMerchants(userId);
+  const claimed = await syncMerchantStatusFromCampaigns(userId);
+  if (linked > 0 || claimed > 0) {
+    console.log(
+      `[StatusSync] 商家关联完成：关联 ${linked} 条，更新状态 ${claimed} 个`
+    );
   }
 
   return results;

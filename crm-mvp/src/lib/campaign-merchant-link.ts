@@ -220,15 +220,16 @@ export async function syncMerchantStatusFromCampaigns(userId: bigint): Promise<n
     updated += r.count;
   }
 
-  // 全部 PAUSED/REMOVED → 降为 "paused"（不释放回 "available"）
+  // 全部 PAUSED/REMOVED → 改为 "paused"
+  // pausedMerchantIds 均来自 user_merchant_id != 0 的广告系列，说明商家已与广告关联，
+  // 无论当前是 "available" 还是 "claimed"，都应归入「我的商家」并标记为暂停状态
   if (pausedMerchantIds.length > 0) {
     const r = await prisma.user_merchants.updateMany({
       where: {
         id: { in: pausedMerchantIds },
         user_id: userId,
         is_deleted: 0,
-        // 不更新 "available"（未关联的商家不受影响），只调整已认领的
-        status: { in: ["claimed"] },
+        status: { not: "paused" }, // 已经是 "paused" 的不重复写
       },
       data: { status: "paused" },
     });
