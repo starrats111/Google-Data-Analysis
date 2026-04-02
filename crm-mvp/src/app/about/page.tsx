@@ -8,6 +8,8 @@ import {
   TeamOutlined,
   GlobalOutlined,
   ArrowLeftOutlined,
+  LinkOutlined,
+  DollarOutlined,
 } from "@ant-design/icons";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
@@ -74,39 +76,81 @@ export default function AboutPage() {
         <Card style={{ borderRadius: 12, marginBottom: 32 }}>
           <Space direction="vertical" size={16} style={{ width: "100%" }}>
             <Title level={3} style={{ margin: 0 }}>
-              <GlobalOutlined style={{ marginRight: 8, color: "#52c41a" }} />
-              What We Do
+              <DollarOutlined style={{ marginRight: 8, color: "#fa8c16" }} />
+              Our Business Model
             </Title>
             <Paragraph style={{ fontSize: 16, lineHeight: 1.8 }}>
-              Our core platform provides the following capabilities:
+              Wenzhou Fengdu Advertising &amp; Media Co., Ltd. is an{" "}
+              <Text strong>affiliate marketing company</Text>. Our business
+              involves identifying commercial opportunities through major
+              international affiliate networks — including Commission Junction
+              (CJ), Impact, ShareASale, Awin, Rakuten, and others — and
+              promoting these partner merchants by running Google Search
+              Advertising campaigns that drive qualified traffic to their
+              websites. We earn commissions on resulting sales or conversions.
+            </Paragraph>
+            <Paragraph style={{ fontSize: 16, lineHeight: 1.8 }}>
+              Our internal team of advertising professionals manages all Google
+              Ads campaigns in-house. To operate this affiliate marketing
+              business at scale across multiple international markets and
+              languages, we have developed the Ad Automation CRM — an internal
+              platform that integrates with the Google Ads API to automate and
+              streamline the full campaign management workflow.
+            </Paragraph>
+            <Paragraph style={{ fontSize: 16, lineHeight: 1.8 }}>
+              All advertising campaigns are run exclusively by our internal
+              employees. We do not offer advertising management or this platform
+              as a service to third-party clients.
+            </Paragraph>
+          </Space>
+        </Card>
+
+        <Card style={{ borderRadius: 12, marginBottom: 32 }}>
+          <Space direction="vertical" size={16} style={{ width: "100%" }}>
+            <Title level={3} style={{ margin: 0 }}>
+              <GlobalOutlined style={{ marginRight: 8, color: "#52c41a" }} />
+              Platform Capabilities
+            </Title>
+            <Paragraph style={{ fontSize: 16, lineHeight: 1.8 }}>
+              Our Ad Automation CRM platform provides the following capabilities
+              to support our affiliate marketing operations:
             </Paragraph>
             <ul style={{ fontSize: 16, lineHeight: 2.2, paddingLeft: 24 }}>
               <li>
-                <Text strong>Campaign Management</Text> — Automated creation and
-                management of Google Search campaigns, including budget
-                allocation, bidding strategies, geographic and language targeting,
-                ad groups, Responsive Search Ads, and keyword management.
+                <Text strong>Affiliate Merchant Management</Text> — Source and
+                manage partner merchants from 7 major international affiliate
+                networks; assign merchants to team members and track campaign
+                status.
               </li>
               <li>
-                <Text strong>Budget &amp; Bid Optimization</Text> — Real-time
-                campaign budget adjustments and ad group CPC bid updates directly
-                from our dashboard.
+                <Text strong>Google Ads Campaign Automation</Text> — Automated
+                creation and management of Google Search campaigns, including
+                budget allocation, bidding strategies (Manual CPC, Target CPA,
+                Maximize Clicks), geographic and language targeting, ad groups,
+                Responsive Search Ads, and keyword management.
               </li>
               <li>
-                <Text strong>Performance Reporting</Text> — Daily campaign
-                performance metrics (cost, clicks, impressions, average CPC,
-                conversions) with historical analysis and ROI reporting.
+                <Text strong>Budget &amp; Bid Control</Text> — Real-time
+                campaign budget adjustments and ad group CPC bid updates
+                directly from our dashboard.
+              </li>
+              <li>
+                <Text strong>Performance &amp; ROI Reporting</Text> — Daily
+                campaign performance metrics (cost, clicks, impressions, average
+                CPC, conversions) combined with affiliate commission tracking
+                for ROI analysis and data-driven optimization.
               </li>
               <li>
                 <Text strong>MCC Account Management</Text> — Multi-account
                 management under MCC manager accounts, including child account
-                listing, availability checking, and spending attribution.
+                listing, availability checking, and spending attribution per
+                merchant.
               </li>
               <li>
-                <Text strong>Ad Asset Management</Text> — Creation and management
-                of campaign-level assets including sitelinks, callouts,
-                promotions, price extensions, call extensions, structured
-                snippets, and image assets.
+                <Text strong>Ad Asset Management</Text> — Creation and
+                management of campaign-level assets including sitelinks,
+                callouts, promotions, price extensions, call extensions,
+                structured snippets, and image assets.
               </li>
               <li>
                 <Text strong>Data Synchronization</Text> — Automated daily
@@ -115,9 +159,52 @@ export default function AboutPage() {
               </li>
               <li>
                 <Text strong>Content Automation</Text> — AI-powered SEO article
-                generation and multi-site publishing for merchant promotion.
+                generation and multi-site publishing to support organic
+                promotion of affiliate merchants alongside paid search
+                campaigns.
               </li>
             </ul>
+          </Space>
+        </Card>
+
+        <Card style={{ borderRadius: 12, marginBottom: 32 }}>
+          <Space direction="vertical" size={16} style={{ width: "100%" }}>
+            <Title level={3} style={{ margin: 0 }}>
+              <LinkOutlined style={{ marginRight: 8, color: "#722ed1" }} />
+              How We Use the Google Ads API
+            </Title>
+            <Paragraph style={{ fontSize: 16, lineHeight: 1.8 }}>
+              Our platform integrates with the Google Ads API v23 to manage
+              Search campaigns across multiple Google Ads accounts under our
+              MCC manager accounts. The API is used exclusively for internal
+              campaign management and reporting operations. Key API functions
+              include:
+            </Paragraph>
+            <ul style={{ fontSize: 16, lineHeight: 2.2, paddingLeft: 24 }}>
+              <li>
+                Creating and modifying campaigns, ad groups, Responsive Search
+                Ads, keywords, and campaign-level assets via{" "}
+                <Text code>googleAds:mutate</Text>
+              </li>
+              <li>
+                Querying campaign performance metrics, account information, and
+                status via <Text code>googleAds:searchStream</Text> (GAQL)
+              </li>
+              <li>
+                Managing multiple Google Ads sub-accounts under our MCC,
+                including child account enumeration and availability checking
+              </li>
+              <li>
+                Performing automated daily data synchronization to update
+                campaign metrics and status in our internal database
+              </li>
+            </ul>
+            <Paragraph style={{ fontSize: 16, lineHeight: 1.8 }}>
+              All Google Ads data accessed through the API is used solely for
+              our internal affiliate marketing campaign management and
+              reporting. We do not share, resell, or expose this data to
+              external parties.
+            </Paragraph>
           </Space>
         </Card>
 

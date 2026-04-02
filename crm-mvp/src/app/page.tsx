@@ -37,6 +37,29 @@ const features = [
   },
 ];
 
+const enFeatures = [
+  {
+    icon: <ShopOutlined style={{ fontSize: 28, color: "#4DA6FF" }} />,
+    title: "Affiliate Merchant Management",
+    desc: "Source and manage partner merchants from major international affiliate networks (CJ, Impact, ShareASale, Awin, Rakuten, etc.) and assign campaigns to team members.",
+  },
+  {
+    icon: <RocketOutlined style={{ fontSize: 28, color: "#52c41a" }} />,
+    title: "Google Ads Campaign Automation",
+    desc: "Automate the full Google Search campaign lifecycle — creation, keyword setup, bidding strategy, geographic/language targeting, RSA composition, and asset management.",
+  },
+  {
+    icon: <BarChartOutlined style={{ fontSize: 28, color: "#fa8c16" }} />,
+    title: "Performance & ROI Analytics",
+    desc: "Track spend, clicks, impressions, conversions, affiliate commissions, and ROI across all campaigns in a unified real-time dashboard.",
+  },
+  {
+    icon: <FileTextOutlined style={{ fontSize: 28, color: "#1A7FDB" }} />,
+    title: "Content & Publishing Automation",
+    desc: "AI-powered SEO article generation and multi-site publishing to support organic traffic alongside paid search campaigns for each affiliate merchant.",
+  },
+];
+
 export default function HomePage() {
   const router = useRouter();
 
@@ -58,15 +81,22 @@ export default function HomePage() {
         </Space>
       </div>
 
-      {/* Hero */}
-      <div style={{ textAlign: "center", padding: "80px 20px 60px" }}>
-        <Title style={{ color: "#1A7FDB", fontSize: 48, marginBottom: 16 }}>
-          广告自动化发布平台
+      {/* English Hero — for external visitors and verification */}
+      <div style={{ background: "#f0f7ff", padding: "60px 20px 48px", textAlign: "center" }}>
+        <Title style={{ color: "#1A7FDB", fontSize: 36, marginBottom: 12 }}>
+          Ad Automation CRM
         </Title>
-        <Paragraph style={{ color: "#666", fontSize: 18, maxWidth: 600, margin: "0 auto 40px" }}>
-          商家领取 → 广告自动创建 → 文章自动生成 → 数据自动分析，一站式闭环管理
+        <Paragraph style={{ color: "#444", fontSize: 17, maxWidth: 720, margin: "0 auto 16px", lineHeight: 1.8 }}>
+          An internal affiliate marketing operations platform developed by{" "}
+          <Text strong>Wenzhou Fengdu Advertising &amp; Media Co., Ltd.</Text>{" "}
+          Our team uses this platform to manage Google Ads Search campaigns for affiliate merchants sourced from major international affiliate networks, track ROI and commissions, and automate content publishing — all within a single, internally-operated system.
         </Paragraph>
-        <Space size="large">
+        <Paragraph style={{ color: "#888", fontSize: 14, maxWidth: 680, margin: "0 auto 32px" }}>
+          This platform is used exclusively by our internal advertising team and is not offered as a service to third parties.
+          For company information, please visit our{" "}
+          <a href="/about" style={{ color: "#1A7FDB" }}>About Us</a> page.
+        </Paragraph>
+        <Space size="large" wrap style={{ justifyContent: "center" }}>
           <Button
             type="primary"
             size="large"
@@ -87,13 +117,43 @@ export default function HomePage() {
         </Space>
       </div>
 
-      {/* Features */}
+      {/* English Features */}
+      <div style={{ maxWidth: 1060, margin: "0 auto", padding: "48px 20px 16px" }}>
+        <Title level={3} style={{ textAlign: "center", color: "#333", marginBottom: 32 }}>
+          Platform Capabilities
+        </Title>
+        <Row gutter={[24, 24]}>
+          {enFeatures.map((f) => (
+            <Col xs={24} sm={12} key={f.title}>
+              <Card hoverable style={{ height: "100%", borderRadius: 12 }}>
+                <Space direction="vertical" size={12}>
+                  {f.icon}
+                  <Title level={4} style={{ margin: 0 }}>{f.title}</Title>
+                  <Text type="secondary">{f.desc}</Text>
+                </Space>
+              </Card>
+            </Col>
+          ))}
+        </Row>
+      </div>
+
+      {/* Chinese Hero */}
+      <div style={{ textAlign: "center", padding: "48px 20px 32px" }}>
+        <Title level={3} style={{ color: "#555", marginBottom: 8 }}>
+          广告自动化发布平台
+        </Title>
+        <Paragraph style={{ color: "#888", fontSize: 15, maxWidth: 540, margin: "0 auto" }}>
+          商家领取 → 广告自动创建 → 文章自动生成 → 数据自动分析，一站式闭环管理
+        </Paragraph>
+      </div>
+
+      {/* Chinese Features */}
       <div style={{ maxWidth: 1000, margin: "0 auto", padding: "0 20px 80px" }}>
         <Row gutter={[24, 24]}>
           {features.map((f) => (
             <Col xs={24} sm={12} key={f.title}>
               <Card hoverable style={{ height: "100%", borderRadius: 12 }}>
-                <Space orientation="vertical" size={12}>
+                <Space direction="vertical" size={12}>
                   {f.icon}
                   <Title level={4} style={{ margin: 0 }}>{f.title}</Title>
                   <Text type="secondary">{f.desc}</Text>
