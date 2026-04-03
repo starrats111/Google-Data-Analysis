@@ -60,7 +60,6 @@ export default function ArticlePublishPage() {
   const articleSlugFromUrl = searchParams.get("slug");
   const [step, setStep] = useState(0);
   const [merchants, setMerchants] = useState<Merchant[]>([]);
-  const [publishedMerchantIds, setPublishedMerchantIds] = useState<Set<string>>(new Set());
   const [sites, setSites] = useState<Site[]>([]);
   const [platformConns, setPlatformConns] = useState<PlatformConnection[]>([]);
   const [loadingArticle, setLoadingArticle] = useState(false);
@@ -108,18 +107,6 @@ export default function ArticlePublishPage() {
       .then((r) => r.json())
       .then((res) => {
         if (res.code === 0) setMerchants(res.data.merchants || []);
-      }).catch(() => {});
-    // 获取已发布文章的商家 ID（排除已删除的）
-    fetch("/api/user/articles?pageSize=500")
-      .then((r) => r.json())
-      .then((res) => {
-        if (res.code === 0) {
-          const ids = new Set<string>();
-          for (const a of res.data.articles || []) {
-            if (a.user_merchant_id && a.status !== "deleted") ids.add(String(a.user_merchant_id));
-          }
-          setPublishedMerchantIds(ids);
-        }
       }).catch(() => {});
     // 获取站点
     fetch("/api/user/publish-sites")
@@ -545,7 +532,6 @@ export default function ArticlePublishPage() {
                   }
                 }}
                 options={merchants
-                  .filter((m) => !publishedMerchantIds.has(m.id))
                   .map((m) => ({
                     value: m.id,
                     label: `${m.merchant_name} [${m.platform}] (MID: ${m.merchant_id})`,
