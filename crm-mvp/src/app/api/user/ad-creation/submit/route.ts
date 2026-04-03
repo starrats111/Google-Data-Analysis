@@ -131,45 +131,14 @@ export async function POST(req: NextRequest) {
 
   if (sitelinks.length > 0) {
     const badLinks: string[] = [];
-    await Promise.all(
-      sitelinks.map(async (sl: { finalUrl?: string; title?: string }) => {
-        const slUrl = (sl.finalUrl || "").trim();
-        if (!slUrl || !slUrl.startsWith("http")) {
-          badLinks.push(sl.title || slUrl || "(空)");
-          return;
-        }
-        // 用 Googlebot UA 检测——和 Google Ads 审核使用的爬虫一致
-        const UAS = [
-          "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)",
-          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36",
-        ];
-        let reachable = false;
-        for (const ua of UAS) {
-          try {
-            const ctrl = new AbortController();
-            const t = setTimeout(() => ctrl.abort(), 10000);
-            const res = await fetch(slUrl, {
-              method: "GET",
-              redirect: "follow",
-              signal: ctrl.signal,
-              headers: { "User-Agent": ua, Accept: "text/html,*/*" },
-            });
-            clearTimeout(t);
-            if (res.status >= 400) continue;
-            const html = await res.text();
-            if (/cf-browser-verification|cf-challenge|challenge-platform|turnstile/i.test(html)) continue;
-            if (html.length < 500) continue;
-            reachable = true;
-            break;
-          } catch { /* try next UA */ }
-        }
-        if (!reachable) {
-          badLinks.push(`${sl.title || slUrl}（Google 爬虫无法访问）`);
-        }
-      }),
-    );
+    for (const sl of sitelinks as { finalUrl?: string; title?: string }[]) {
+      const slUrl = (sl.finalUrl || "").trim();
+      if (!slUrl || !slUrl.startsWith("http")) {
+        badLinks.push(sl.title || slUrl || "(空)");
+      }
+    }
     if (badLinks.length > 0) {
-      return apiError(`站内链接无效，请修正后再提交：${badLinks.join("、")}`);
+      return apiError(`站内链接 URL 格式无效，请修正后再提交：${badLinks.join("、")}`);
     }
   }
 
