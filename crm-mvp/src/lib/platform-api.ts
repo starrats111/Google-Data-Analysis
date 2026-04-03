@@ -16,6 +16,12 @@ interface PlatformApiConfig {
   rateLimitMs?: number;
   /** 该平台 API 本身只返回已加入的商家，无需再做 relationship_status 过滤 */
   assumeAllJoined?: boolean;
+  /**
+   * 该平台 API 要求显式携带 relationship 参数才能正常返回数据。
+   * 不传时 API 报错：filter.relationship must be one of the following values: Joined, Pending...
+   * 设为 true 时请求会固定附带 relationship: "Joined"
+   */
+  requiresRelationshipParam?: boolean;
 }
 
 const PLATFORM_API_CONFIG: Record<string, PlatformApiConfig> = {
@@ -24,28 +30,32 @@ const PLATFORM_API_CONFIG: Record<string, PlatformApiConfig> = {
     url: "https://api.creatorflare.com/api/monetization",
     source: "creatorflare",
     pageKey: "curPage", sizeKey: "perPage", maxSize: 500,
-    assumeAllJoined: true, // /api/monetization 只返回已加入商家，无需再过滤 relationship_status
+    assumeAllJoined: true,
+    requiresRelationshipParam: true, // API 要求显式传 relationship:"Joined"，否则报 filter.relationship 错误
   },
   CG: {
     mode: "post_json",
     url: "https://api.collabglow.com/api/monetization",
     source: "collabglow",
     pageKey: "curPage", sizeKey: "perPage", maxSize: 500,
-    assumeAllJoined: true, // /api/monetization 只返回已加入商家，无需再过滤 relationship_status
+    assumeAllJoined: true,
+    requiresRelationshipParam: true, // API 要求显式传 relationship:"Joined"，否则报 filter.relationship 错误
   },
   BSH: {
     mode: "post_json",
     url: "https://api.brandsparkhub.com/api/monetization",
     source: "brandsparkhub",
     pageKey: "curPage", sizeKey: "perPage", maxSize: 500,
-    assumeAllJoined: true, // /api/monetization 只返回已加入商家，无需再过滤 relationship_status
+    assumeAllJoined: true,
+    requiresRelationshipParam: true, // API 要求显式传 relationship:"Joined"，否则报 filter.relationship 错误
   },
   PM: {
     mode: "post_json",
     url: "https://api.partnermatic.com/api/monetization",
     source: "partnermatic",
     pageKey: "curPage", sizeKey: "perPage", maxSize: 500,
-    assumeAllJoined: true, // /api/monetization 只返回已加入商家，无需再过滤 relationship_status
+    assumeAllJoined: true,
+    requiresRelationshipParam: true, // API 要求显式传 relationship:"Joined"，否则报 filter.relationship 错误
   },
   LB: {
     mode: "post_form",
@@ -280,9 +290,12 @@ export async function fetchAllMerchants(
 
   const assumeAllJoined = config.assumeAllJoined === true;
 
-  // assumeAllJoined 平台已知只返回已加入商家，无需（也不能）传 relationship 参数给 API
-  // 例如 CG 会校验报错 "filter.relationship must ..."
-  const effectiveRelFilter = assumeAllJoined ? undefined : relationshipFilter;
+  // requiresRelationshipParam：该平台 API 必须显式携带 relationship:"Joined"，
+  // 不传时会返回错误（filter.relationship must be one of the following values: Joined...）
+  // assumeAllJoined 但不需要显式参数的平台（LH/LB/RW）不传该字段，避免不兼容
+  const effectiveRelFilter = config.requiresRelationshipParam
+    ? "Joined"
+    : (assumeAllJoined ? undefined : relationshipFilter);
 
   try {
     const firstPage = await callPlatformApi(config, token, 1, effectiveRelFilter);
