@@ -1,7 +1,7 @@
 "use client";
 import { useState, useCallback, useMemo, useEffect } from "react";
-import { Card, Row, Col, Table, Input, Select, Button, Space, Tag, Modal, Form, Typography, Popconfirm, Switch, InputNumber, Tabs, App, Tooltip, Upload } from "antd";
-import { ShopOutlined, SearchOutlined, CheckOutlined, DollarOutlined, CalendarOutlined, SaveOutlined, SyncOutlined, WarningOutlined, StarOutlined, CopyOutlined, ReloadOutlined, RobotOutlined, UploadOutlined } from "@ant-design/icons";
+import { Card, Row, Col, Table, Input, Select, Button, Space, Tag, Modal, Form, Typography, Popconfirm, Switch, InputNumber, Tabs, App, Tooltip } from "antd";
+import { ShopOutlined, SearchOutlined, CheckOutlined, DollarOutlined, CalendarOutlined, SaveOutlined, SyncOutlined, WarningOutlined, StarOutlined, CopyOutlined, ReloadOutlined, RobotOutlined } from "@ant-design/icons";
 import { PLATFORMS, BIDDING_STRATEGIES } from "@/lib/constants";
 import { useApiWithParams, useStaleApi, mutateApi, refreshApi } from "@/lib/swr";
 import { useRouter } from "next/navigation";
@@ -154,17 +154,6 @@ export default function MerchantsPage() {
       ...(ai ? { ai_rule_profile: ai } : {}),
     });
   }, [adData, adForm]);
-  const onAiPromptUpload = useCallback((file: File) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      const text = String(reader.result ?? "");
-      const cur = adForm.getFieldValue("ai_rule_profile") ?? {};
-      adForm.setFieldsValue({ ai_rule_profile: { ...cur, prompt_text: text } });
-      message.success("提示词已读入");
-    };
-    reader.readAsText(file, "UTF-8");
-    return false;
-  }, [adForm, message]);
   const [vioSearch, setVioSearch] = useState(""); const [vioPage, setVioPage] = useState(1);
   const [recSearch, setRecSearch] = useState(""); const [recPage, setRecPage] = useState(1);
   const { data: vioData, isLoading: vl, error: vioError, mutate: vioMutate } = useApiWithParams<{ items: any[]; total: number }>(tab === "violations" ? "/api/user/merchants/sheet-sync" : null, { type: "violation", page: vioPage, pageSize: 50, ...(vioSearch ? { search: vioSearch } : {}) });
@@ -311,33 +300,33 @@ export default function MerchantsPage() {
               <Tag style={{ fontSize: 11, lineHeight: "18px", margin: 0 }}>{h.holiday_type}</Tag>
             </div>)) : <Text type="secondary" style={{ fontSize: 12 }}>选择国家查询节日信息</Text>}</div>
         </Card></Col>
-        <Col xs={24} sm={12} md={6}><Card size="small" className="func-card-ai" title={<><RobotOutlined style={{ color: "#999" }} /> AI 设定（硬规则）</>} extra={<Button type="primary" size="small" icon={<SaveOutlined />} onClick={saveAd}>保存</Button>} style={{ height: "100%" }}>
+        <Col xs={24} sm={12} md={6}><Card size="small" className="func-card-ai" title={<><RobotOutlined style={{ color: "#722ed1" }} /> AI 设定（规则）</>} style={{ height: "100%" }}>
           {adData && (() => {
             const profile = adData.ai_rule_profile;
-            const persona = profile?.persona;
-            const hasKeyword = !!profile?.keyword_requirements;
-            const hasCopy = !!profile?.ad_copy_requirements;
-            const hasSitelink = !!profile?.sitelink_requirements;
-            const hasCompliance = !!profile?.compliance_requirements;
-            const hasHardRules = !!profile?.hard_rules;
-            const hasPrompt = !!profile?.prompt_text;
+            const forbiddenCount = Array.isArray(profile?.forbidden_terms) ? profile.forbidden_terms.length : 0;
+            const preferredCount = Array.isArray(profile?.preferred_terms) ? profile.preferred_terms.length : 0;
             const policyCheck = profile?.enforce_policy_check;
-            const configuredCount = [hasKeyword, hasCopy, hasSitelink, hasCompliance, hasHardRules, hasPrompt].filter(Boolean).length;
             return (
               <div style={{ fontSize: 12 }}>
-                <div style={{ marginBottom: 8 }}>
-                  <Text type="secondary" style={{ fontSize: 12 }}>AI 人设</Text>
-                  <div style={{ fontSize: 13, fontWeight: 500, marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{persona || <span style={{ color: "#bfbfbf" }}>未设定</span>}</div>
+                <div style={{ background: "#f5f0ff", borderRadius: 6, padding: "8px 10px", marginBottom: 10 }}>
+                  <div style={{ fontWeight: 700, color: "#4a1d96", fontSize: 13 }}>数据猎手（Search Ads）</div>
+                  <div style={{ color: "#7c3aed", fontSize: 11, marginTop: 2 }}>ROI 导向 · 精准投放 · 账户优化</div>
                 </div>
-                <div style={{ marginBottom: 8 }}>
-                  <Text type="secondary" style={{ fontSize: 12 }}>已配置规则</Text>
-                  <div style={{ fontSize: 13, fontWeight: 500, marginTop: 2 }}>{configuredCount} / 6 项</div>
+                <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
+                  <div style={{ flex: 1, textAlign: "center" }}>
+                    <div style={{ fontSize: 18, fontWeight: 700, color: forbiddenCount > 0 ? "#f5222d" : "#bbb" }}>{forbiddenCount}</div>
+                    <Text type="secondary" style={{ fontSize: 11 }}>禁止词</Text>
+                  </div>
+                  <div style={{ flex: 1, textAlign: "center" }}>
+                    <div style={{ fontSize: 18, fontWeight: 700, color: preferredCount > 0 ? "#52c41a" : "#bbb" }}>{preferredCount}</div>
+                    <Text type="secondary" style={{ fontSize: 11 }}>偏好词</Text>
+                  </div>
+                  <div style={{ flex: 1, textAlign: "center" }}>
+                    <div style={{ marginTop: 2 }}><Tag color={policyCheck ? "green" : "default"} style={{ fontSize: 10, margin: 0 }}>{policyCheck ? "自检开" : "自检关"}</Tag></div>
+                    <Text type="secondary" style={{ fontSize: 11 }}>政策检</Text>
+                  </div>
                 </div>
-                <div style={{ marginBottom: 12 }}>
-                  <Text type="secondary" style={{ fontSize: 12 }}>政策风险自检</Text>
-                  <div style={{ marginTop: 2 }}><Tag color={policyCheck ? "green" : "default"}>{policyCheck ? "已启用" : "未启用"}</Tag></div>
-                </div>
-                <Button block icon={<RobotOutlined />} onClick={() => setAiModalOpen(true)}>编辑 AI 规则</Button>
+                <Button block icon={<RobotOutlined />} onClick={() => setAiModalOpen(true)}>配置个人规则</Button>
               </div>
             );
           })()}
@@ -423,38 +412,62 @@ export default function MerchantsPage() {
     </Modal>
     <Modal title={rTitle} open={rModal} onCancel={() => setRModal(false)} footer={null} width={480}><div style={{ whiteSpace: "pre-wrap", lineHeight: 1.8, padding: "8px 0" }}>{rContent}</div></Modal>
     <Modal
-      title={<><RobotOutlined style={{ color: "#722ed1", marginRight: 8 }} />AI 设定（硬规则）</>}
+      title={<><RobotOutlined style={{ color: "#722ed1", marginRight: 8 }} />AI 设定（规则）</>}
       open={aiModalOpen}
       onCancel={() => setAiModalOpen(false)}
-      width={640}
+      width={560}
       footer={
         <Space>
-          <Upload accept=".txt,.md,.text" showUploadList={false} beforeUpload={(f) => onAiPromptUpload(f as File)}>
-            <Button icon={<UploadOutlined />}>上传提示词</Button>
-          </Upload>
           <Button onClick={() => setAiModalOpen(false)}>取消</Button>
           <Button type="primary" icon={<SaveOutlined />} onClick={async () => { await saveAd(); setAiModalOpen(false); }}>保存</Button>
         </Space>
       }
     >
+      {/* ── 系统人设展示（只读） ── */}
+      <div style={{ background: "linear-gradient(135deg,#f5f0ff 0%,#ede9fe 100%)", border: "1px solid #d3adf7", borderRadius: 10, padding: "14px 16px", marginBottom: 16 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+          <RobotOutlined style={{ color: "#722ed1", fontSize: 18 }} />
+          <span style={{ fontWeight: 700, fontSize: 15, color: "#4a1d96" }}>数据猎手（Search Ads）</span>
+          <Tag color="purple" style={{ marginLeft: "auto", fontSize: 11 }}>系统内置</Tag>
+        </div>
+        <div style={{ fontSize: 12, color: "#6b21a8", marginBottom: 8, fontStyle: "italic" }}>
+          Google Ads 搜索广告顾问 · ROI 导向 · 精准投放 · 账户优化
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12, color: "#555" }}>
+          <div><span style={{ color: "#7c3aed", fontWeight: 600 }}>关键词：</span>日预算 $1.5~$2.0 / 最高 CPC $0.3，Broad Match 为主，过滤高竞争词</div>
+          <div><span style={{ color: "#7c3aed", fontWeight: 600 }}>文案：</span>15 条标题 + 4 条描述，品牌词优先，折扣/物流单独一条，合规自检</div>
+          <div><span style={{ color: "#7c3aed", fontWeight: 600 }}>合规：</span>禁止夸大承诺、医疗治愈类、快速致富类等违规表达</div>
+        </div>
+      </div>
+
+      {/* ── 用户个人定制规则 ── */}
+      <div style={{ fontSize: 12, color: "#888", marginBottom: 12, display: "flex", alignItems: "center", gap: 6 }}>
+        <span style={{ flex: 1, height: 1, background: "#e8e8e8", display: "inline-block" }} />
+        <span>个人定制规则</span>
+        <span style={{ flex: 1, height: 1, background: "#e8e8e8", display: "inline-block" }} />
+      </div>
       <Form form={adForm} component={false} layout="vertical" size="small">
         <div style={{ fontSize: 13 }}>
-          <Form.Item name={["ai_rule_profile", "persona"]} label="AI 人设" style={{ marginBottom: 12 }}><Input placeholder="人设与角色" /></Form.Item>
           <Row gutter={16}>
-            <Col span={12}><Form.Item name={["ai_rule_profile", "keyword_requirements"]} label="关键词规则" style={{ marginBottom: 12 }}><TextArea rows={3} placeholder="结合预算、CPC、出价策略与 Semrush 的筛选要求" /></Form.Item></Col>
-            <Col span={12}><Form.Item name={["ai_rule_profile", "ad_copy_requirements"]} label="文案规则" style={{ marginBottom: 12 }}><TextArea rows={3} placeholder="标题/描述结构与语气" /></Form.Item></Col>
+            <Col span={12}>
+              <Form.Item name={["ai_rule_profile", "preferred_terms"]} label={<Tooltip title="AI 生成时优先使用这些词汇或表达"><span>偏好词 <span style={{ color: "#999", fontSize: 11 }}>（优先使用）</span></span></Tooltip>} style={{ marginBottom: 12 }}>
+                <Select mode="tags" placeholder="输入后回车添加" tokenSeparators={[",", "，"]} />
+              </Form.Item>
+            </Col>
+            <Col span={12}>
+              <Form.Item name={["ai_rule_profile", "forbidden_terms"]} label={<Tooltip title="AI 生成时严格禁止出现这些词汇"><span>禁止词 <span style={{ color: "#f5222d", fontSize: 11 }}>（绝对禁用）</span></span></Tooltip>} style={{ marginBottom: 12 }}>
+                <Select mode="tags" placeholder="输入后回车添加" tokenSeparators={[",", "，"]} />
+              </Form.Item>
+            </Col>
           </Row>
-          <Row gutter={16}>
-            <Col span={12}><Form.Item name={["ai_rule_profile", "sitelink_requirements"]} label="站内链接规则" style={{ marginBottom: 12 }}><TextArea rows={3} placeholder="站内链接标题与描述要求" /></Form.Item></Col>
-            <Col span={12}><Form.Item name={["ai_rule_profile", "compliance_requirements"]} label="合规规则" style={{ marginBottom: 12 }}><TextArea rows={3} placeholder="政策与合规自检要求" /></Form.Item></Col>
-          </Row>
-          <Form.Item name={["ai_rule_profile", "hard_rules"]} label="硬规则（总述）" style={{ marginBottom: 12 }}><TextArea rows={3} placeholder="必须遵守的硬性约束" /></Form.Item>
-          <Row gutter={16}>
-            <Col span={12}><Form.Item name={["ai_rule_profile", "preferred_terms"]} label="偏好词" style={{ marginBottom: 12 }}><Select mode="tags" placeholder="输入后回车" tokenSeparators={[",", "，"]} /></Form.Item></Col>
-            <Col span={12}><Form.Item name={["ai_rule_profile", "forbidden_terms"]} label="禁止词" style={{ marginBottom: 12 }}><Select mode="tags" placeholder="输入后回车" tokenSeparators={[",", "，"]} /></Form.Item></Col>
-          </Row>
-          <Form.Item name={["ai_rule_profile", "enforce_policy_check"]} label="启用政策风险自检" valuePropName="checked" style={{ marginBottom: 12 }}><Switch size="small" /></Form.Item>
-          <Form.Item name={["ai_rule_profile", "prompt_text"]} label="完整提示词（可上传覆盖）" style={{ marginBottom: 0 }}><TextArea rows={5} placeholder="分步说明或长提示词" /></Form.Item>
+          <Form.Item
+            name={["ai_rule_profile", "enforce_policy_check"]}
+            label="启用政策风险自检"
+            valuePropName="checked"
+            style={{ marginBottom: 0 }}
+          >
+            <Switch size="small" checkedChildren="开启" unCheckedChildren="关闭" />
+          </Form.Item>
         </div>
       </Form>
     </Modal>

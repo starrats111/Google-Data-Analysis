@@ -60,17 +60,28 @@ function normalizeStringArray(value: unknown): string[] {
   return [];
 }
 
+/**
+ * 合并用户存储的 profile 与系统 DEFAULT。
+ *
+ * 核心人设字段（prompt_text / persona / keyword_requirements / ad_copy_requirements /
+ * sitelink_requirements / compliance_requirements / hard_rules）始终取 DEFAULT，
+ * 确保所有员工使用统一的「数据猎手」人设，无论数据库里保存的是什么旧值。
+ *
+ * 用户只能自定义：preferred_terms / forbidden_terms / enforce_policy_check。
+ */
 export function normalizeAiRuleProfile(value: unknown): AiRuleProfile {
   const raw = (value && typeof value === "object") ? (value as Record<string, unknown>) : {};
   return {
     version: 1,
-    prompt_text: normalizeText(raw.prompt_text, DEFAULT_AI_RULE_PROFILE.prompt_text),
-    persona: normalizeText(raw.persona, DEFAULT_AI_RULE_PROFILE.persona),
-    keyword_requirements: normalizeText(raw.keyword_requirements, DEFAULT_AI_RULE_PROFILE.keyword_requirements),
-    ad_copy_requirements: normalizeText(raw.ad_copy_requirements, DEFAULT_AI_RULE_PROFILE.ad_copy_requirements),
-    sitelink_requirements: normalizeText(raw.sitelink_requirements, DEFAULT_AI_RULE_PROFILE.sitelink_requirements),
-    compliance_requirements: normalizeText(raw.compliance_requirements, DEFAULT_AI_RULE_PROFILE.compliance_requirements),
-    hard_rules: normalizeText(raw.hard_rules, DEFAULT_AI_RULE_PROFILE.hard_rules),
+    // ── 系统锁定字段（始终使用 DEFAULT，不受用户保存值影响） ──
+    prompt_text: DEFAULT_AI_RULE_PROFILE.prompt_text,
+    persona: DEFAULT_AI_RULE_PROFILE.persona,
+    keyword_requirements: DEFAULT_AI_RULE_PROFILE.keyword_requirements,
+    ad_copy_requirements: DEFAULT_AI_RULE_PROFILE.ad_copy_requirements,
+    sitelink_requirements: DEFAULT_AI_RULE_PROFILE.sitelink_requirements,
+    compliance_requirements: DEFAULT_AI_RULE_PROFILE.compliance_requirements,
+    hard_rules: DEFAULT_AI_RULE_PROFILE.hard_rules,
+    // ── 用户可自定义字段 ──
     forbidden_terms: normalizeStringArray(raw.forbidden_terms),
     preferred_terms: normalizeStringArray(raw.preferred_terms),
     enforce_policy_check: typeof raw.enforce_policy_check === "boolean"
