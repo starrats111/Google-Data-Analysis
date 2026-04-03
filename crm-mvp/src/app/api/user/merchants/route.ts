@@ -512,7 +512,19 @@ export const POST = withUser(async (req: NextRequest, { user }) => {
   });
 
   // 创建空的广告素材（后续由异步任务填充 headlines/descriptions）
-  let finalUrl = merchant.merchant_url || merchant.tracking_link || "";
+  // campaign_link 是联盟跟踪链接，包含 ?url= 参数时尝试提取真实目标 URL
+  let rawUrl = merchant.merchant_url || merchant.tracking_link || "";
+  if (!rawUrl && merchant.campaign_link) {
+    // 从 Linkbux/CollabGlow 等联盟链接的 ?url= 参数中提取真实目标 URL
+    try {
+      const parsed = new URL(merchant.campaign_link);
+      const innerUrl = parsed.searchParams.get("url") || parsed.searchParams.get("new");
+      rawUrl = innerUrl ? decodeURIComponent(innerUrl) : merchant.campaign_link;
+    } catch {
+      rawUrl = merchant.campaign_link;
+    }
+  }
+  let finalUrl = rawUrl;
   if (finalUrl.startsWith("http://")) {
     finalUrl = finalUrl.replace("http://", "https://");
   }

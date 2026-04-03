@@ -1,0 +1,79 @@
+import { NextRequest } from "next/server";
+import { getUserFromRequest } from "@/lib/auth";
+import { apiSuccess, apiError } from "@/lib/constants";
+import prisma from "@/lib/prisma";
+
+/**
+ * PATCH /api/user/ad-creation/update-final-url
+ * 更新广告素材的落地页 URL（final_url），同时可更新商家的 tracking_link / campaign_link
+ *
+ * Body:
+ *   campaign_id     - 广告系列 ID（必填）
+ *   final_url       - 广告落地页 URL（必填，必须以 https:// 开头）
+ *   affiliate_url   - 联盟跟踪链接（选填，保存到 user_merchants.tracking_link + campaign_link）
+ */
+export async function PATCH(req: NextRequest) {
+  const user = getUserFromRequest(req);
+  if (!user) return apiError("未授权", 401);
+
+  let body: Record<string, unknown>;
+  try {
+    body = await req.json();
+  } catch {
+    return apiError("请求体解析失败", 400);
+  }
+
+  const { campaign_id, final_url, affiliate_url } = body as {
+    campaign_id?: string;
+    final_url?: string;
+    affiliate_url?: string;
+  };
+
+  if (!campaign_id) return apiError("缺少 campaign_id");
+
+  let fixedUrl = (final_url || "").trim();
+  if (!fixedUrl) return apiError("落地页 URL 不能为空");
+  if (!fixedUrl.startsWith("http")) return apiError("落地页 URL 必须以 http:// 或 https:// 开头");
+  if (fixedUrl.startsWith("http://")) fixedUrl = fixedUrl.replace("http://", "https://");
+
+  const userId = BigInt(user.userId);
+
+  // 验证 campaign 归属
+  const campaign = await prisma.campaigns.findFirst({
+    where: { id: BigInt(campaign_id), user_id: userId, is_deleted: 0 },
+    select: { id: true, user_merchant_id: true },
+  });
+  if (!campaign) return apiError("广告系列不存在", 404);
+
+  // 查找广告组和广告素材
+  const adGroup = await prisma.ad_groups.findFirst({
+    where: { campaign_id: campaign.id, is_deleted: 0 },
+    select: { id: true },
+  });
+  if (!adGroup) return apiError("广告组不存在");
+
+  const adCreative = await prisma.ad_creatives.findFirst({
+    where: { ad_group_id: adGroup.id, is_deleted: 0 },
+    select: { id: true },
+  });
+  if (!adCreative) return apiError("广告素材不存在");
+
+  // 更新 final_url
+  await prisma.ad_creatives.update({
+    where: { id: adCreative.id },
+    data: { final_url: fixedUrl },
+  });
+
+  // 若提供了联盟跟踪链接，同步更新商家记录
+  if (affiliate_url && typeof affiliate_url === "string" && affiliate_url.startsWith("http")) {
+    await prisma.user_merchants.update({
+      where: { id: campaign.user_merchant_id },
+      data: {
+        tracking_link: affiliate_url,
+        campaign_link: affiliate_url,
+      },
+    });
+  }
+
+  return apiSuccess({ message: "落地页 URL 已更新" });
+}

@@ -154,6 +154,12 @@ export default function AdPreviewPage() {
   const [submitting, setSubmitting] = useState(false);
   const [initialized, setInitialized] = useState(false);
 
+  // 落地页 URL 编辑
+  const [editingFinalUrl, setEditingFinalUrl] = useState(false);
+  const [finalUrlInput, setFinalUrlInput] = useState("");
+  const [affiliateUrlInput, setAffiliateUrlInput] = useState("");
+  const [savingFinalUrl, setSavingFinalUrl] = useState(false);
+
   // MCC / CID 选择
   const [selectedMccId, setSelectedMccId] = useState<string>("");
   const [selectedCid, setSelectedCid] = useState<string>("");
@@ -1143,6 +1149,37 @@ export default function AdPreviewPage() {
   };
   const addCallout = () => { if (callouts.length < 10) setCallouts((prev) => [...prev, ""]); };
   const removeCallout = (idx: number) => setCallouts((prev) => prev.filter((_, i) => i !== idx));
+
+  // ─── 保存落地页 URL ───
+  const handleSaveFinalUrl = useCallback(async () => {
+    const url = finalUrlInput.trim();
+    if (!url) { message.error("落地页 URL 不能为空"); return; }
+    if (!url.startsWith("http")) { message.error("URL 必须以 http:// 或 https:// 开头"); return; }
+    setSavingFinalUrl(true);
+    try {
+      const res = await fetch("/api/user/ad-creation/update-final-url", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          campaign_id: campaignId,
+          final_url: url,
+          affiliate_url: affiliateUrlInput.trim() || undefined,
+        }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        message.success("落地页 URL 已保存");
+        setEditingFinalUrl(false);
+        mutate();
+      } else {
+        message.error(data.message || "保存失败");
+      }
+    } catch {
+      message.error("保存失败，请重试");
+    } finally {
+      setSavingFinalUrl(false);
+    }
+  }, [finalUrlInput, affiliateUrlInput, campaignId, message, mutate]);
 
   // ─── 提交 ───
   const handleSubmit = useCallback(async () => {
@@ -2280,10 +2317,74 @@ export default function AdPreviewPage() {
             <div><Text type="secondary">平台：</Text><Tag>{preview.merchant?.platform}</Tag></div>
             <div><Text type="secondary">国家：</Text><Tag color="blue">{preview.campaign?.target_country}</Tag></div>
             <div><Text type="secondary">广告语言：</Text><Tag color="orange">{GOOGLE_ADS_LANGUAGES.find((l) => l.code === adLanguage)?.name || adLanguage || "English"}</Tag></div>
-            {preview.adCreative?.final_url && (
-              <div style={{ marginTop: 4 }}><Text type="secondary">落地页：</Text><Text copyable style={{ fontSize: 12 }}>{preview.adCreative.final_url}</Text></div>
-            )}
+            <div style={{ marginTop: 8 }}>
+              <Text type="secondary">落地页 URL：</Text>
+              {!editingFinalUrl ? (
+                <Space size={4} style={{ display: "inline-flex", alignItems: "center", flexWrap: "wrap" }}>
+                  {preview.adCreative?.final_url ? (
+                    <Text copyable style={{ fontSize: 12 }}>{preview.adCreative.final_url}</Text>
+                  ) : (
+                    <Tag color="error" icon={<ExclamationCircleOutlined />}>未设置</Tag>
+                  )}
+                  {!preview.campaign?.google_campaign_id && (
+                    <Button
+                      size="small" type="link" icon={<EditOutlined />}
+                      onClick={() => {
+                        setFinalUrlInput(preview.adCreative?.final_url || preview.merchant?.merchant_url || "");
+                        setAffiliateUrlInput("");
+                        setEditingFinalUrl(true);
+                      }}
+                    >
+                      {preview.adCreative?.final_url ? "修改" : "设置"}
+                    </Button>
+                  )}
+                </Space>
+              ) : (
+                <div style={{ marginTop: 6 }}>
+                  <div style={{ marginBottom: 4 }}>
+                    <Text type="secondary" style={{ fontSize: 12 }}>落地页 URL（Google Ads final URL，必须是商家真实域名）</Text>
+                    <Input
+                      size="small"
+                      placeholder="https://fr.shopping.rakuten.com/"
+                      value={finalUrlInput}
+                      onChange={(e) => setFinalUrlInput(e.target.value)}
+                      style={{ marginTop: 4 }}
+                    />
+                  </div>
+                  <div style={{ marginBottom: 8 }}>
+                    <Text type="secondary" style={{ fontSize: 12 }}>联盟跟踪链接（选填，如 Linkbux/CollabGlow 推广链接，存档用）</Text>
+                    <Input
+                      size="small"
+                      placeholder="https://www.linkbux.com/track/..."
+                      value={affiliateUrlInput}
+                      onChange={(e) => setAffiliateUrlInput(e.target.value)}
+                      style={{ marginTop: 4 }}
+                    />
+                  </div>
+                  <Space size={6}>
+                    <Button size="small" type="primary" loading={savingFinalUrl} onClick={handleSaveFinalUrl}>保存</Button>
+                    <Button size="small" onClick={() => setEditingFinalUrl(false)}>取消</Button>
+                  </Space>
+                </div>
+              )}
+            </div>
           </Card>
+
+          {!preview.adCreative?.final_url && !preview.campaign?.google_campaign_id && (
+            <Alert
+              type="warning"
+              showIcon
+              style={{ marginBottom: 16 }}
+              message="广告落地页 URL 未设置"
+              description={
+                <span>
+                  该广告的落地页 URL 为空，<strong>提交到 Google Ads 前必须先设置</strong>。
+                  请在上方「商家信息」中点击「设置」，填写商家真实目标域名（如 https://fr.shopping.rakuten.com/），
+                  并可填入联盟跟踪链接（Linkbux 等）存档。
+                </span>
+              }
+            />
+          )}
 
           <Popconfirm
             title="确认提交广告到 Google Ads？"
