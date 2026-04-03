@@ -280,8 +280,12 @@ export async function fetchAllMerchants(
 
   const assumeAllJoined = config.assumeAllJoined === true;
 
+  // assumeAllJoined 平台已知只返回已加入商家，无需（也不能）传 relationship 参数给 API
+  // 例如 CG 会校验报错 "filter.relationship must ..."
+  const effectiveRelFilter = assumeAllJoined ? undefined : relationshipFilter;
+
   try {
-    const firstPage = await callPlatformApi(config, token, 1, relationshipFilter);
+    const firstPage = await callPlatformApi(config, token, 1, effectiveRelFilter);
     const code = String((firstPage as Record<string, unknown>).code ?? "0");
     if (code !== "0" && code !== "200") {
       const msg = String((firstPage as Record<string, unknown>).message || "API 返回错误");
@@ -320,7 +324,7 @@ export async function fetchAllMerchants(
       if (config.rateLimitMs) await sleep(config.rateLimitMs);
       else await sleep(100);
 
-      const pageData = await callPlatformApi(config, token, page, relationshipFilter);
+      const pageData = await callPlatformApi(config, token, page, effectiveRelFilter);
       const batch = parseMerchants(platform, pageData, assumeAllJoined);
       if (batch.length === 0) break;
 
