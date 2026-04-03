@@ -544,13 +544,12 @@ export default function ArticlePublishPage() {
                     setLanguage(getLang(m.target_country));
                   }
                 }}
-                options={merchants.map((m) => {
-                  const hasArticle = publishedMerchantIds.has(m.id);
-                  return {
+                options={merchants
+                  .filter((m) => !publishedMerchantIds.has(m.id))
+                  .map((m) => ({
                     value: m.id,
-                    label: `${hasArticle ? "[已发布] " : ""}${m.merchant_name} [${m.platform}] (MID: ${m.merchant_id})`,
-                  };
-                })}
+                    label: `${m.merchant_name} [${m.platform}] (MID: ${m.merchant_id})`,
+                  }))}
               />
             </Form.Item>
             {selectedMerchant && (
