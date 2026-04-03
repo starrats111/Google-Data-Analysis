@@ -17,7 +17,7 @@ export const GET = withAdmin(async (req: NextRequest) => {
     where.username = { contains: search };
   }
 
-  const [total, users] = await Promise.all([
+  const [total, users, merchantStats] = await Promise.all([
     prisma.users.count({ where: where as never }),
     prisma.users.findMany({
       where: where as never,
@@ -26,9 +26,18 @@ export const GET = withAdmin(async (req: NextRequest) => {
       skip: (page - 1) * pageSize,
       take: pageSize,
     }),
+    // 每个用户的商家总数（只统计未删除）
+    prisma.user_merchants.groupBy({
+      by: ["user_id"],
+      where: { is_deleted: 0 },
+      _count: { _all: true },
+    }),
   ]);
 
-  return apiSuccess(serializeData({ list: users, total, page, pageSize }));
+  const merchantCountMap = new Map(merchantStats.map((s) => [String(s.user_id), s._count._all]));
+  const list = users.map((u) => ({ ...u, merchant_count: merchantCountMap.get(String(u.id)) || 0 }));
+
+  return apiSuccess(serializeData({ list, total, page, pageSize }));
 });
 
 // 创建用户
