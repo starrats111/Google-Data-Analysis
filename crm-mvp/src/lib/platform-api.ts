@@ -24,24 +24,28 @@ const PLATFORM_API_CONFIG: Record<string, PlatformApiConfig> = {
     url: "https://api.creatorflare.com/api/monetization",
     source: "creatorflare",
     pageKey: "curPage", sizeKey: "perPage", maxSize: 500,
+    assumeAllJoined: true, // /api/monetization 只返回已加入商家，无需再过滤 relationship_status
   },
   CG: {
     mode: "post_json",
     url: "https://api.collabglow.com/api/monetization",
     source: "collabglow",
     pageKey: "curPage", sizeKey: "perPage", maxSize: 500,
+    assumeAllJoined: true, // /api/monetization 只返回已加入商家，无需再过滤 relationship_status
   },
   BSH: {
     mode: "post_json",
     url: "https://api.brandsparkhub.com/api/monetization",
     source: "brandsparkhub",
     pageKey: "curPage", sizeKey: "perPage", maxSize: 500,
+    assumeAllJoined: true, // /api/monetization 只返回已加入商家，无需再过滤 relationship_status
   },
   PM: {
     mode: "post_json",
     url: "https://api.partnermatic.com/api/monetization",
     source: "partnermatic",
     pageKey: "curPage", sizeKey: "perPage", maxSize: 500,
+    assumeAllJoined: true, // /api/monetization 只返回已加入商家，无需再过滤 relationship_status
   },
   LB: {
     mode: "post_form",
