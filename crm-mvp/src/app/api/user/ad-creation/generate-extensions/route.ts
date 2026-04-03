@@ -324,8 +324,13 @@ async function generateCore(
     ? `\nReal products found on website (use these names in copy, do NOT invent product names):\n${crawledProducts.slice(0, 10).map((p: any, i: number) => `${i + 1}. "${p.name}"${p.price ? ` — ${p.currency || ""}${p.price}` : ""}`).join("\n")}\n`
     : "";
 
-  const prompt = `You are a top-tier Google Ads conversion copywriter. Your mission: write ad copy so compelling that users STOP scrolling and click. Every line must earn its place.
+  const isNonEnglish = market.languageCode !== "en";
+  const langEnforcement = isNonEnglish
+    ? `\n⚠️ CRITICAL LANGUAGE RULE: ALL output MUST be written in ${languageName} ONLY. Do NOT use English in headlines, descriptions, or sitelink descriptions. Every single string must be in ${languageName}.\n`
+    : "";
 
+  const prompt = `You are a top-tier Google Ads conversion copywriter. Your mission: write ad copy so compelling that users STOP scrolling and click. Every line must earn its place.
+${langEnforcement}
 FACTUAL CONSTRAINTS (non-negotiable):
 - Use ONLY facts from the data below. NEVER fabricate product names, prices, or claims.
 - If no discount/shipping data is provided, focus on desire, trust, and brand story instead.

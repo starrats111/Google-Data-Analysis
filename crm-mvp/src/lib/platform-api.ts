@@ -14,6 +14,8 @@ interface PlatformApiConfig {
   sizeKey: string;
   maxSize: number;
   rateLimitMs?: number;
+  /** 该平台 API 本身只返回已加入的商家，无需再做 relationship_status 过滤 */
+  assumeAllJoined?: boolean;
 }
 
 const PLATFORM_API_CONFIG: Record<string, PlatformApiConfig> = {
@@ -45,17 +47,20 @@ const PLATFORM_API_CONFIG: Record<string, PlatformApiConfig> = {
     mode: "post_form",
     url: "https://www.linkbux.com/api.php?mod=medium&op=monetization_api",
     pageKey: "page", sizeKey: "limit", maxSize: 1000,
+    assumeAllJoined: true, // monetization_api 只返回已加入商家，无需再过滤 relationship_status
   },
   LH: {
     mode: "post_form",
     url: "https://www.linkhaitao.com/api.php?mod=medium&op=merchantBasicList3",
     pageKey: "page", sizeKey: "per_page", maxSize: 2000,
     rateLimitMs: 1500,
+    assumeAllJoined: true, // merchantBasicList3 只返回已加入商家
   },
   RW: {
     mode: "post_form",
     url: "https://admin.rewardoo.com/api.php?mod=medium&op=monetization_api",
     pageKey: "page", sizeKey: "limit", maxSize: 1000,
+    assumeAllJoined: true, // monetization_api 只返回已加入商家
   },
 };
 
@@ -156,13 +161,13 @@ async function callPlatformApi(
 
 // ── 解析商家数据（各平台返回格式不同，统一提取） ──
 
-function parseMerchants(platform: string, data: Record<string, unknown>): PlatformMerchant[] {
+function parseMerchants(platform: string, data: Record<string, unknown>, assumeAllJoined = false): PlatformMerchant[] {
   const root = (data.data || data) as Record<string, unknown>;
   const list = (root.list || root.items || root.merchants || []) as Record<string, unknown>[];
 
   if (!Array.isArray(list)) return [];
 
-  return list.map((item) => {
+  return list.map((item, idx) => {
     // LH 的字段命名和其他平台相反：mcid=数字MID，m_id=slug MCID
     const mid = platform === "LH"
       ? String(item.mcid || item.mid || item.m_id || item.id || "")
@@ -188,7 +193,19 @@ function parseMerchants(platform: string, data: Record<string, unknown>): Platfo
       item.aff_link || item.affLink ||
       item.link || ""
     );
-    const status = String(item.relationship || item.relationship_status || item.status || "not_joined");
+
+    // assumeAllJoined：该平台 API 本身只返回已加入商家，强制标记为 joined
+    let relationshipStatus: string;
+    if (assumeAllJoined) {
+      relationshipStatus = "joined";
+    } else {
+      const rawStatus = String(item.relationship || item.relationship_status || item.status || "not_joined");
+      relationshipStatus = normalizeStatus(rawStatus);
+      // 首条商家诊断日志
+      if (idx === 0) {
+        console.log(`[MerchantDiag] ${platform} 首条商家 status 字段: relationship=${item.relationship} relationship_status=${item.relationship_status} status=${item.status} → normalized=${relationshipStatus}`);
+      }
+    }
 
     return {
       merchant_id: mid,
@@ -199,7 +216,7 @@ function parseMerchants(platform: string, data: Record<string, unknown>): Platfo
       merchant_url: url,
       logo_url: logo,
       campaign_link: campaignLink,
-      relationship_status: normalizeStatus(status),
+      relationship_status: relationshipStatus,
     };
   }).filter((m) => m.merchant_id && m.merchant_name);
 }
@@ -257,6 +274,8 @@ export async function fetchAllMerchants(
   const allMerchants: PlatformMerchant[] = [];
   const seen = new Set<string>();
 
+  const assumeAllJoined = config.assumeAllJoined === true;
+
   try {
     const firstPage = await callPlatformApi(config, token, 1, relationshipFilter);
     const code = String((firstPage as Record<string, unknown>).code ?? "0");
@@ -278,9 +297,10 @@ export async function fetchAllMerchants(
         }
       }
       console.log(`[MerchantDiag] ${platform} 首条商家链接字段:`, JSON.stringify(linkFields));
+      console.log(`[MerchantDiag] ${platform} assumeAllJoined=${assumeAllJoined}`);
     }
 
-    const firstBatch = parseMerchants(platform, firstPage);
+    const firstBatch = parseMerchants(platform, firstPage, assumeAllJoined);
     for (const m of firstBatch) {
       if (!seen.has(m.merchant_id)) { seen.add(m.merchant_id); allMerchants.push(m); }
     }
@@ -297,7 +317,7 @@ export async function fetchAllMerchants(
       else await sleep(100);
 
       const pageData = await callPlatformApi(config, token, page, relationshipFilter);
-      const batch = parseMerchants(platform, pageData);
+      const batch = parseMerchants(platform, pageData, assumeAllJoined);
       if (batch.length === 0) break;
 
       for (const m of batch) {

@@ -79,6 +79,11 @@ const DISCOUNT_RE = /discount|sale|off|%|save|deal|promo|solde|rabatt|reduc|spar
 const SHIPPING_RE = /ship|deliver|livra|versand|envio|freight|expedit|lieferung|envoi|配送|送料|spedizione/i;
 const CTA_RE = /shop|buy|discover|explore|get|save|order|upgrade|find|choose|jetzt|kaufen|entdecken|sichern|découvrez|acheter|profitez|compra|descubre|ordina|scopri/i;
 const TRUST_RE = /official|trusted|quality|premium|certified|garantie|garantie|zuverlässig|verlässlich|qualité|fiable|安心|信頼/i;
+
+/** CJK 文字检测（中日韩统一表意文字、假名等），用于跳过英文商业意图检测 */
+function hasCjkChars(text: string): boolean {
+  return /[\u3000-\u9FFF\uF900-\uFAFF\uFF00-\uFFEF\uAC00-\uD7AF]/.test(text);
+}
 const GENERIC_HEADLINE_RE = /^(official site|official store|official page|homepage|home page|shop now|learn more|click here|offizielle seite|offizieller shop|site officiel|tienda oficial)$/i;
 const GENERIC_DESCRIPTION_RE = /(learn more online|visit our website|click to learn more|shop today|discover more online|great products at great prices)/i;
 const EXPIRED_RE = /(ends?\s+(today|tonight|soon)|last chance|early bird|limited\s+time\s+only|bis\s+\d{1,2}\.?\s*(jan|feb|mär|mar|apr|mai|may|jun|jul|aug|sep|sept|okt|oct|nov|dez|dec)|jusqu[’']?au\s+\d{1,2}|hasta\s+el\s+\d{1,2}|fino\s+al\s+\d{1,2})/i;
@@ -231,7 +236,8 @@ function sanitizeHeadlineCandidates(
     if (!candidate || candidate.length > maxLen) continue;
     if (hasExplicitDateOrExpiredSignal(candidate)) continue;
     if (isMeaninglessHeadline(candidate, merchantName)) continue;
-    if (!hasCommercialIntent(candidate) && tokenSet(candidate, merchantName).size < 2) continue;
+    // CJK 文字（日/中/韩）不受英文商业意图检测约束
+    if (!hasCjkChars(candidate) && !hasCommercialIntent(candidate) && tokenSet(candidate, merchantName).size < 2) continue;
 
     const exact = normalizeForCompare(candidate);
     const semantic = semanticKey(candidate, merchantName);
@@ -296,7 +302,8 @@ function sanitizeDescriptionCandidates(
     if (!candidate || candidate.length > maxLen || candidate.length < 50) continue;
     if (hasExplicitDateOrExpiredSignal(candidate)) continue;
     if (isMeaninglessDescription(candidate, merchantName)) continue;
-    if (!hasCommercialIntent(candidate) && tokenSet(candidate, merchantName).size < 4) continue;
+    // CJK 文字（日/中/韩）不受英文商业意图检测约束
+    if (!hasCjkChars(candidate) && !hasCommercialIntent(candidate) && tokenSet(candidate, merchantName).size < 4) continue;
 
     const exact = normalizeForCompare(candidate);
     const semantic = semanticKey(candidate, merchantName);
@@ -781,8 +788,12 @@ export async function padHeadlines(
 
   {
     const needed = count - locked.length;
+    const isNonEnglish = market.languageCode !== "en";
+    const langWarning = isNonEnglish
+      ? `⚠️ CRITICAL: Write ONLY in ${languageName}. English is FORBIDDEN.\n\n`
+      : "";
     const prompt = `You are a top-tier Google Ads RSA headline writer. Your goal: write headlines so compelling that users stop and click.
-
+${langWarning}
 Context:
 - Merchant: ${merchantName}
 - Target: ${market.countryNameZh} — write in ${languageName}
@@ -790,31 +801,31 @@ Context:
 - Budget: $${dailyBudget.toFixed(2)}/day, CPC $${maxCpc.toFixed(2)}, Strategy: ${biddingStrategy}
 
 ${aiRulePrompt ? `User hard rules (MUST follow):\n${aiRulePrompt}\n\n` : ""}${keywords.length > 0 ? `Product/keyword focus:\n${keywords.map((k, i) => `${i + 1}. ${k}`).join("\n")}\n` : ""}
-${references.length > 0 ? `Market reference headlines (inspiration only — do NOT copy):\n${references.map((h, i) => `${i + 1}. \"${h}\"`).join("\n")}\n` : ""}
+${references.length > 0 ? `Market reference headlines (inspiration only — do NOT copy, translate concepts to ${languageName} if needed):\n${references.map((h, i) => `${i + 1}. \"${h}\"`).join("\n")}\n` : ""}
 ${locked.length > 0 ? `Already locked (do NOT change or duplicate):\n${locked.map((h, i) => `${i + 1}. \"${h}\"`).join("\n")}\n` : ""}
 ${AD_COPY_ANTI_AI_BLOCK}
 
 Generate exactly ${needed} NEW headlines. Return ONLY a JSON array of exactly ${needed} strings.
 
 WHAT MAKES A GREAT HEADLINE — choose from these angles:
-  • Pain/desire hook: "Tired of X?" / "Want clearer skin?" — make them feel understood
-  • Specific benefit: concrete outcome, not vague promise — "Clears skin in 2 weeks"
-  • Trust signal: "Top-rated", "Proven formula", "Loved by thousands"
+  • Pain/desire hook: make them feel understood
+  • Specific benefit: concrete outcome, not vague promise
+  • Trust signal: "Top-rated", "Proven formula", "Loved by thousands" (in ${languageName})
   • Product focus: what they're searching for — specific, matches search intent
-  • Differentiator: what makes this brand stand out — "No harsh chemicals"
-  • CTA: clear next step — "Shop the collection", "Find yours today", "See what works"
+  • Differentiator: what makes this brand stand out
+  • CTA: clear next step (in ${languageName})
   • Brand: include "${merchantName}" — make it memorable, not just the name alone
 
 MANDATORY RULES:
 1. Headline #1 MUST be brand-related and include \"${merchantName}\" or a clear brand reference.
-2. Do NOT fabricate discount numbers — generic value phrases like "Best value picks" are fine.
+2. Do NOT fabricate discount numbers — generic value phrases are fine.
 3. Do NOT claim free shipping unless explicitly confirmed.
 4. Each headline ≤ 30 characters. Every character counts — be tight and punchy.
-5. Write in ${languageName} only.
+5. Write in ${languageName} ONLY. No English words unless they are part of the brand name.
 6. No dates, countdowns, or expiry language.
-7. No filler: avoid "Official Site", "Home Page", or brand-name-only headlines.
+7. No filler: avoid generic site/store-only headlines.
 8. Vary the opening word — no two headlines should start the same way.
-9. Be specific — "Fast results" beats "Great results". "For teens" beats "For everyone".
+9. Be specific and use natural ${languageName} expressions.
 10. Follow all user hard rules above. Comply with Google Ads policy.
 
 Return ONLY JSON array.`;
@@ -876,8 +887,12 @@ export async function padDescriptions(
 
   {
     const needed = count - locked.length;
+    const isNonEnglish = market.languageCode !== "en";
+    const langWarning = isNonEnglish
+      ? `⚠️ CRITICAL: Write ONLY in ${languageName}. English is FORBIDDEN.\n\n`
+      : "";
     const prompt = `You are a top-tier Google Ads RSA description writer. Your goal: write descriptions that bridge the headline promise and drive the click-to-purchase.
-
+${langWarning}
 Context:
 - Merchant: ${merchantName}
 - Target: ${market.countryNameZh} — write in ${languageName}
@@ -889,29 +904,29 @@ GOOGLE ADS DESCRIPTION BEST PRACTICES:
 - Each description must have a DISTINCT opening word and a different core message
 - Avoid copying 3+ consecutive words from any headline
 - Full sentences with clear benefit → action flow perform best
-- Strong openers: "Whether you need...", "Struggling with...?", "Built for...", "Real results for...", "Stop settling for..."
 
 ${headlineBlock}${aiRulePrompt ? `User hard rules (MUST follow):\n${aiRulePrompt}\n\n` : ""}${keywords.length > 0 ? `Product/keyword focus (weave naturally, do not mirror headlines):\n${keywords.map((k, i) => `${i + 1}. ${k}`).join("\n")}\n` : ""}
-${references.length > 0 ? `Market reference descriptions (inspiration only — do NOT copy):\n${references.map((d, i) => `${i + 1}. \"${d}\"`).join("\n")}\n` : ""}
+${references.length > 0 ? `Market reference descriptions (inspiration only — translate concepts to ${languageName}, do NOT copy):\n${references.map((d, i) => `${i + 1}. \"${d}\"`).join("\n")}\n` : ""}
 ${locked.length > 0 ? `Already locked (do NOT change or duplicate):\n${locked.map((d, i) => `${i + 1}. \"${d}\"`).join("\n")}\n` : ""}
 ${AD_COPY_ANTI_AI_BLOCK}
 
 Generate exactly ${needed} NEW descriptions. Return ONLY a JSON array of exactly ${needed} strings.
 
 WRITE ONE DESCRIPTION PER ANGLE — each must be clearly different:
-  Angle A — PROBLEM → SOLUTION: Name the customer's real frustration, position the product as the answer. Strong: "Tired of products that don't work? [Brand] delivers real results."
-  Angle B — KEY BENEFIT + CTA: Lead with the strongest concrete outcome, close with a specific action. Strong: "Get visible results with our proven formula. Shop the full range today."
-  Angle C — TRUST + PROOF: Credibility signals — top-rated, tested, loved by thousands, brand reputation. Strong: "Top-rated by customers. Dermatologist-tested. See what the reviews say."
-  Angle D — UNIQUE EDGE: What makes this brand different from generic alternatives. Strong: "No harsh chemicals, no guesswork — just a formula that actually fits real skin."
+  Angle A — PROBLEM → SOLUTION: Name the customer's real frustration, position the product as the answer.
+  Angle B — KEY BENEFIT + CTA: Lead with the strongest concrete outcome, close with a specific action.
+  Angle C — TRUST + PROOF: Credibility signals — top-rated, tested, loved by thousands, brand reputation.
+  Angle D — UNIQUE EDGE: What makes this brand different from generic alternatives.
 
 MANDATORY RULES:
 1. Each description 50-90 characters exactly.
-2. Write in ${languageName} only.
+2. Write in ${languageName} ONLY. No English words unless part of the brand name.
 3. No fabricated discounts, prices, or free shipping unless from verified data.
 4. No dates, countdowns, or expiry language.
 5. Every description must open with a DIFFERENT word or phrase.
 6. Vary sentence structure — no two descriptions should read the same way.
 7. Comply with Google Ads policy. Follow user hard rules above.
+8. Use natural ${languageName} expressions appropriate for the target market.
 
 Return ONLY JSON array.`;
 

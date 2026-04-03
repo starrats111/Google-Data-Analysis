@@ -17,6 +17,7 @@ import {
   TeamOutlined,
   BulbOutlined,
   RightOutlined,
+  SwapOutlined,
 } from "@ant-design/icons";
 import { useRouter, usePathname } from "next/navigation";
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
@@ -37,6 +38,7 @@ const userMenuItems: MenuItem[] = [
     type: "group" as const,
     children: [
       { key: "/user/merchants", icon: <ShopOutlined />, label: "我的商家" },
+      { key: "/user/link-exchange", icon: <SwapOutlined />, label: "换链接" },
     ],
   },
   {
@@ -46,7 +48,7 @@ const userMenuItems: MenuItem[] = [
     children: [
       { key: "/user/data-center", icon: <TableOutlined />, label: "数据中心" },
       { key: "/user/data-center/settlement", icon: <AccountBookOutlined />, label: "结算查询" },
-      { key: "/user/data-center/insights", icon: <BulbOutlined />, label: "AI 洞察" },
+      { key: "/user/data-center/insights", icon: <BulbOutlined />, label: "AI 浏览" },
     ],
   },
   {
