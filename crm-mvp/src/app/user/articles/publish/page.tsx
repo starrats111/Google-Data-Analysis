@@ -60,6 +60,8 @@ export default function ArticlePublishPage() {
   const articleSlugFromUrl = searchParams.get("slug");
   const [step, setStep] = useState(0);
   const [merchants, setMerchants] = useState<Merchant[]>([]);
+  // 已有已发布文章的 user_merchant_id 集合（用于默认视图过滤）
+  const [publishedMerchantIds, setPublishedMerchantIds] = useState<Set<string>>(new Set());
   const [sites, setSites] = useState<Site[]>([]);
   const [platformConns, setPlatformConns] = useState<PlatformConnection[]>([]);
   const [loadingArticle, setLoadingArticle] = useState(false);
@@ -74,10 +76,14 @@ export default function ArticlePublishPage() {
       if (!option) return false;
       const merchant = merchantMap.get(String(option.value ?? ""));
       if (!merchant) return false;
-      if (merchant.ad_status === "PAUSED" && !input) return false;
+      if (!input) {
+        // 无搜索词时：只显示广告已启用且尚无已发布文章的商家
+        if (merchant.ad_status !== "ENABLED") return false;
+        if (publishedMerchantIds.has(merchant.id)) return false;
+      }
       return String(option.label ?? "").toLowerCase().includes(input.toLowerCase());
     },
-    [merchantMap],
+    [merchantMap, publishedMerchantIds],
   );
   // Step 1: 确认国家
   const [country, setCountry] = useState("US");
@@ -107,6 +113,18 @@ export default function ArticlePublishPage() {
       .then((r) => r.json())
       .then((res) => {
         if (res.code === 0) setMerchants(res.data.merchants || []);
+      }).catch(() => {});
+    // 获取已发布文章的商家 ID（仅 published 状态，用于默认视图过滤）
+    fetch("/api/user/articles?pageSize=500")
+      .then((r) => r.json())
+      .then((res) => {
+        if (res.code === 0) {
+          const ids = new Set<string>();
+          for (const a of res.data.articles || []) {
+            if (a.user_merchant_id && a.status === "published") ids.add(String(a.user_merchant_id));
+          }
+          setPublishedMerchantIds(ids);
+        }
       }).catch(() => {});
     // 获取站点
     fetch("/api/user/publish-sites")
@@ -519,7 +537,7 @@ export default function ArticlePublishPage() {
           <Form layout="vertical" style={{ maxWidth: 600 }}>
             <Form.Item label="选择推广商家" required>
               <Select
-                placeholder="搜索并选择已领取的商家（输入商家名或MID）"
+                placeholder="默认显示已启用商家，输入商家名或MID可搜索所有已领取商家"
                 showSearch
                 filterOption={merchantFilterOption}
                 style={{ width: "100%" }}
