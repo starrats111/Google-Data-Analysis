@@ -2,7 +2,7 @@ import { NextRequest } from "next/server";
 import { getUserFromRequest, serializeData } from "@/lib/auth";
 import { apiSuccess, apiError } from "@/lib/constants";
 import prisma from "@/lib/prisma";
-import { DEFAULT_AI_RULE_PROFILE, normalizeAiRuleProfile } from "@/lib/ai-rule-profile";
+import { normalizeAiRuleProfile, SYSTEM_ADRIAN_PERSONA } from "@/lib/ai-rule-profile";
 
 // 获取广告默认设置
 export async function GET(req: NextRequest) {
@@ -14,10 +14,11 @@ export async function GET(req: NextRequest) {
   });
 
   if (!settings) {
+    const defaultProfile = normalizeAiRuleProfile(null);
     settings = await prisma.ad_default_settings.create({
       data: {
         user_id: BigInt(user.userId),
-        ai_rule_profile: DEFAULT_AI_RULE_PROFILE as unknown as object,
+        ai_rule_profile: defaultProfile as unknown as object,
       },
     });
   }

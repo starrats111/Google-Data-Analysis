@@ -625,7 +625,35 @@ Return ONLY valid JSON, no explanation.`;
   }
 }
 
-// ─── 可选扩展批量生成：1 次 AI 生成全部勾选项 ───
+// Google Ads 审批的 Promotion occasion 枚举
+const GOOGLE_PROMOTION_OCCASIONS = [
+  "BACK_TO_SCHOOL", "BLACK_FRIDAY", "CHRISTMAS", "CYBER_MONDAY",
+  "EASTER", "FATHERS_DAY", "HALLOWEEN", "MOTHERS_DAY",
+  "NEW_YEARS", "THANKSGIVING", "VALENTINES_DAY", "NONE",
+] as const;
+type PromotionOccasion = (typeof GOOGLE_PROMOTION_OCCASIONS)[number];
+
+// Google Ads 审批的 Structured Snippet header 枚举（13个）
+const GOOGLE_SNIPPET_HEADERS = [
+  "Amenities", "Brands", "Courses", "Degree programs", "Destinations",
+  "Featured hotels", "Insurance coverage", "Models", "Neighborhoods",
+  "Service catalog", "Shows", "Styles", "Types",
+] as const;
+type SnippetHeader = (typeof GOOGLE_SNIPPET_HEADERS)[number];
+
+function validatePromotionOccasion(val: string): PromotionOccasion {
+  const upper = val.toUpperCase().replace(/ /g, "_") as PromotionOccasion;
+  return GOOGLE_PROMOTION_OCCASIONS.includes(upper) ? upper : "NONE";
+}
+
+function validateSnippetHeader(val: string): SnippetHeader {
+  const found = GOOGLE_SNIPPET_HEADERS.find(
+    (h) => h.toLowerCase() === val.toLowerCase()
+  );
+  return found ?? "Types";
+}
+
+// ─── 可选扩展批量生成 ───
 
 async function generateOptionalBatch(
   cache: CrawlCache,
@@ -641,31 +669,81 @@ async function generateOptionalBatch(
 
   const market = getAdMarketConfig(country);
   const languageName = resolveLanguageName(country, adLanguageCode);
-  const needsCall = optionalTypes.includes("call");
 
-  // 电话提取（无 AI，并行执行）
-  const callTask = needsCall
-    ? extractPhoneFromCache(cache, merchantUrl, country).then((d) => send("call", d)).catch(() => send("call", null))
-    : Promise.resolve();
-
-  // ─── promotion: 完全由爬虫数据提供，不经过 AI ───
-  if (optionalTypes.includes("promotion")) {
-    const promo = cache.promoRegex
-      ? { ...cache.promoRegex, final_url: merchantUrl }
-      : null;
-    send("promotion", promo);
-    if (promo) {
-      console.log(`[Optional] 促销信息（爬虫提取）: ${JSON.stringify(promo).slice(0, 200)}`);
-    } else {
-      console.log("[Optional] 未从网页爬取到促销信息");
+  // ─── call: 电话提取（无 AI，找不到时返回 manual_required） ───
+  if (optionalTypes.includes("call")) {
+    try {
+      const phone = await extractPhoneFromCache(cache, merchantUrl, country);
+      if (phone) {
+        send("call", { found: true, ...phone });
+      } else {
+        send("call", { found: false, manual_required: true });
+      }
+    } catch {
+      send("call", { found: false, manual_required: true });
     }
   }
 
-  // ─── price: 完全由爬虫数据提供，不经过 AI ───
+  // ─── promotion: AI 生成结构化建议 ───
+  if (optionalTypes.includes("promotion")) {
+    try {
+      const promoContext = cache.promoRegex
+        ? `Crawled promo data: discount_type=${cache.promoRegex.discount_type}, percent=${cache.promoRegex.discount_percent ?? "N/A"}, amount=${cache.promoRegex.discount_amount ?? "N/A"}`
+        : "No specific promotion found on the crawled page.";
+
+      const promoPrompt = `Analyze this merchant and suggest a Google Ads Promotion Extension.
+
+Merchant: ${merchantName}
+Website: ${merchantUrl}
+${promoContext}
+Website content excerpt: ${cache.pageText.slice(0, 1500)}
+
+Output a JSON object with this EXACT structure:
+{
+  "promotion_target": "short description of what is being promoted (≤20 chars)",
+  "discount_type": "PERCENT" or "MONETARY",
+  "discount_percent": number or null (only if PERCENT),
+  "discount_amount": number or null (only if MONETARY),
+  "currency_code": "${market.currencyCode}",
+  "occasion": one of: ${GOOGLE_PROMOTION_OCCASIONS.join(", ")},
+  "found": true or false (false = AI suggestion based on page content, not verified)
+}
+
+Rules:
+- If crawled data has a real discount number, use it and set found=true
+- If no real discount found, suggest a reasonable promotion template and set found=false
+- Choose the most appropriate occasion based on current period or merchant type
+- Default to NONE if no occasion is clearly appropriate
+- Do NOT invent specific numbers if not found — use null for discount fields if unknown
+
+Return ONLY valid JSON.`;
+
+      const raw = await callAiWithFallback("ad_copy", [{ role: "user", content: promoPrompt }], 512);
+      const parsed = JSON.parse(extractJsonFromAi(raw));
+      parsed.occasion = validatePromotionOccasion(String(parsed.occasion || "NONE"));
+      parsed.final_url = merchantUrl;
+      send("promotion", parsed);
+      console.log(`[Optional] 促销建议生成完成: occasion=${parsed.occasion}, found=${parsed.found}`);
+    } catch (err) {
+      console.error("[Optional] Promotion AI 生成失败:", err instanceof Error ? err.message : err);
+      // 降级：返回最小结构让用户手动填写
+      send("promotion", {
+        promotion_target: merchantName.slice(0, 20),
+        discount_type: "PERCENT",
+        discount_percent: null,
+        discount_amount: null,
+        currency_code: market.currencyCode,
+        occasion: "NONE",
+        final_url: merchantUrl,
+        found: false,
+      });
+    }
+  }
+
+  // ─── price: 爬虫优先，不足3条时 AI 补全 ───
   if (optionalTypes.includes("price")) {
-    // 优先使用 crawledProducts（有真实产品名和URL），其次用 priceRegex
     const crawledProducts = (cache as any).crawledProducts || [];
-    let items: { header: string; description: string; price: number; currency: string; url: string }[] = [];
+    let items: { header: string; description: string; price: number; currency: string; url: string; ai_suggested?: boolean }[] = [];
 
     if (crawledProducts.length > 0) {
       items = crawledProducts
@@ -684,45 +762,124 @@ async function generateOptionalBatch(
       items = cache.priceRegex.map((p) => ({ ...p, url: p.url || merchantUrl }));
     }
 
-    // 如果首页爬不到，尝试子页面
-    if (items.length === 0) {
+    // 尝试子页面
+    if (items.length < 3) {
       const subData = await fetchSubPagesForOptional(cache.links, ["price"]);
-      if (subData.priceItems.length > 0) {
+      if (subData.priceItems.length > items.length) {
         items = subData.priceItems.map((p) => ({ ...p, url: p.url || merchantUrl }));
       }
     }
 
-    send("price_items", items);
-    console.log(`[Optional] 价格信息（爬虫提取）: ${items.length} 条产品`);
-  }
+    // 仍然不足3条：AI 推断补全，明确标注 ai_suggested
+    if (items.length < 3) {
+      try {
+        const pricePrompt = `Based on this merchant's website, suggest ${3 - items.length} representative product offerings for a Google Ads Price Extension.
 
-  // ─── 需要 AI 的类型：仅 callouts 和 snippet ───
-  const needsAi = optionalTypes.filter((t) => !["call", "promotion", "price"].includes(t));
+Merchant: ${merchantName}
+Website: ${merchantUrl}
+Existing crawled items: ${items.length > 0 ? JSON.stringify(items) : "none"}
+Website content: ${cache.pageText.slice(0, 1500)}
 
-  if (needsAi.length > 0) {
-    // 构建合并 prompt（仅 callouts / snippet，不含 promotion / price）
-    const sections: string[] = [];
+Output a JSON array of objects:
+[{ "header": "product name ≤25 chars", "description": "brief desc ≤25 chars", "price": number, "currency": "${market.currencyCode}", "url": "${merchantUrl}", "ai_suggested": true }]
 
-    if (needsAi.includes("callouts")) {
-      const featuresBlock = cache.features.length > 0 ? `\nMerchant features: ${cache.features.join(", ")}` : "";
-      sections.push(`## Callouts
-Generate exactly 6 callout extensions (≤25 chars each).
-Based on real merchant features. If shipping + returns both exist, merge into one line.
-Do NOT fabricate specific discounts or promotions.${featuresBlock}`);
-    }
+Rules:
+- Suggest realistic products/categories based on the website content
+- Use reasonable price ranges based on what you can infer from the page
+- Mark all items as ai_suggested: true — the user will verify before submitting
+- Return ONLY the JSON array`;
 
-    if (needsAi.includes("snippet")) {
-      const contextItems = [...new Set([...cache.navItems, ...cache.links.map((l) => l.text).filter((t) => t.length >= 2 && t.length <= 30)])].slice(0, 30);
-      if (contextItems.length >= 3) {
-        sections.push(`## Structured Snippet
-Choose header from: "Brands", "Types", "Styles", "Models", "Service catalog", "Amenities"
-Extract 3-10 real category values (≤25 chars each) from: ${contextItems.slice(0, 20).map((t) => `"${t}"`).join(", ")}`);
+        const raw = await callAiWithFallback("ad_copy", [{ role: "user", content: pricePrompt }], 512);
+        const aiItems = JSON.parse(extractJsonFromAi(raw));
+        if (Array.isArray(aiItems)) {
+          const cleaned = aiItems
+            .filter((p: any) => p.header && p.price > 0)
+            .map((p: any) => ({
+              header: String(p.header).slice(0, 25),
+              description: String(p.description || "").slice(0, 25),
+              price: Number(p.price),
+              currency: String(p.currency || market.currencyCode),
+              url: String(p.url || merchantUrl),
+              ai_suggested: true,
+            }));
+          items = [...items, ...cleaned].slice(0, 8);
+        }
+      } catch (err) {
+        console.error("[Optional] Price AI 补全失败:", err instanceof Error ? err.message : err);
       }
     }
 
-    const prompt = `Analyze this merchant website and generate the requested ad extensions.
+    // 推断 type 字段（AI 选择，不默认 BRANDS）
+    let priceType = "Products";
+    try {
+      if (merchantName.split(" ").length === 1 || /store|shop|brand/i.test(cache.pageText)) {
+        priceType = "Brands";
+      } else if (/service|consult|plan|subscription/i.test(cache.pageText)) {
+        priceType = "Services";
+      }
+    } catch {}
 
-CRITICAL: Your role is to WRITE copy based on the information below. Do NOT invent product names, prices, discounts, or any factual claims. Only use information explicitly present in the website content.
+    send("price_items", { items, type: priceType, has_ai_suggested: items.some((i) => i.ai_suggested) });
+    console.log(`[Optional] 价格信息: ${items.length} 条（含AI建议=${items.filter(i => i.ai_suggested).length}条）`);
+  }
+
+  // ─── AI 生成类型：callouts + snippet + negative_keywords ───
+  const needsAi = optionalTypes.filter((t) => !["call", "promotion", "price"].includes(t));
+
+  if (needsAi.length > 0) {
+    const sections: string[] = [];
+
+    if (needsAi.includes("callouts")) {
+      const featuresText = cache.features.length > 0
+        ? cache.features.join(", ")
+        : cache.pageText.slice(0, 500);
+      sections.push(`## Callouts (宣传信息)
+Generate exactly 6 callout extensions based ONLY on real merchant features.
+Each callout: 2-25 characters STRICTLY. No generic placeholder text.
+Merchant features / page content: ${featuresText}
+
+Rules:
+- Must be specific to THIS merchant (not generic like "Best Quality", "Shop Now")
+- If free shipping confirmed: include it. If returns confirmed: include it.
+- Focus on concrete features: materials, certifications, guarantees, unique attributes
+- Do NOT fabricate discounts, numbers, or unverified claims`);
+    }
+
+    if (needsAi.includes("snippet")) {
+      const contextItems = [...new Set([
+        ...cache.navItems,
+        ...cache.links.map((l) => l.text).filter((t) => t.length >= 2 && t.length <= 30),
+      ])].slice(0, 30);
+      sections.push(`## Structured Snippet (结构化摘要)
+IMPORTANT: Choose header ONLY from this exact list (case-sensitive):
+${GOOGLE_SNIPPET_HEADERS.map((h) => `"${h}"`).join(", ")}
+
+Extract 3-10 real category values (each ≤25 chars) from merchant content.
+Available nav/link items: ${contextItems.slice(0, 20).map((t) => `"${t}"`).join(", ")}
+
+Choose the most appropriate header for this merchant type.`);
+    }
+
+    if (needsAi.includes("negative_keywords")) {
+      sections.push(`## Negative Keywords (否定关键词)
+Generate 10-20 negative keywords using Adrian's strategy.
+Merchant: ${merchantName}, Products/Context: ${cache.features.slice(0, 5).join(", ") || cache.pageText.slice(0, 300)}
+
+MUST include (where relevant):
+- Price-sensitivity negatives: cheap, cheapest, free, wholesale, budget, bargain
+- DIY/research intent: diy, how to make, tutorial, homemade, recipe
+- Non-purchase intent: reddit, review only, forum, wiki, definition, meaning
+- Competitor confusion: [if merchant is a specific brand, include generic category terms that don't match]
+- Low-quality seekers: knockoff, replica, fake, imitation, generic
+
+Return ONLY single words or short phrases. No match-type brackets.`);
+    }
+
+    if (sections.length === 0) { await Promise.resolve(); return; }
+
+    const prompt = `Analyze this merchant and generate the requested Google Ads extensions.
+
+CRITICAL: Only use facts from the website content. Do NOT invent product names, prices, or claims.
 
 Merchant: ${merchantName}
 Website: ${merchantUrl}
@@ -732,12 +889,12 @@ Website content:
 ${cache.pageText.slice(0, 3000)}
 
 ${sections.join("\n\n")}
-${formatAiRuleBlock(aiRuleProfile, "compliance")}
 
-Return ONLY a JSON object with applicable keys:
+Return ONLY a valid JSON object with the applicable keys:
 {
   ${needsAi.includes("callouts") ? '"callouts": ["c1","c2","c3","c4","c5","c6"],' : ""}
-  ${needsAi.includes("snippet") ? '"snippet": { "header": "Types", "values": ["v1","v2","v3"] }' : ""}
+  ${needsAi.includes("snippet") ? `"snippet": { "header": "Types", "values": ["v1","v2","v3"] }${needsAi.includes("negative_keywords") ? "," : ""}` : ""}
+  ${needsAi.includes("negative_keywords") ? '"negative_keywords": ["kw1","kw2",...]' : ""}
 }`;
 
     try {
@@ -745,37 +902,57 @@ Return ONLY a JSON object with applicable keys:
       const parsed = JSON.parse(extractJsonFromAi(raw));
 
       if (needsAi.includes("callouts")) {
-        let callouts = Array.isArray(parsed.callouts)
-          ? parsed.callouts.filter((c: string) => c && c.length <= 25).slice(0, 6)
-          : getDefaultCallouts(merchantName, country, cache.features);
+        let callouts: string[] = Array.isArray(parsed.callouts)
+          ? parsed.callouts
+              .map((c: string) => String(c || "").trim())
+              .filter((c: string) => c.length >= 2 && c.length <= 25)
+          : [];
+        // 必须至少4条，不足则补充通用词
+        if (callouts.length < 4) {
+          const extras = cache.features
+            .map((f) => f.slice(0, 25))
+            .filter((f) => f.length >= 2 && !callouts.includes(f));
+          callouts = [...callouts, ...extras].slice(0, 6);
+        }
         const calloutFix = await complianceAutoFix(callouts, "headline", merchantName, languageName, aiRuleProfile, 25, 2);
         callouts = calloutFix.items;
         if (calloutFix.fixed.length > 0) send("compliance_auto_fix", { fixed: calloutFix.fixed, count: calloutFix.fixed.length });
-        if (calloutFix.remaining.length > 0) send("compliance_warnings", { warnings: calloutFix.remaining, count: calloutFix.remaining.length });
-        send("callouts", callouts);
+        send("callouts", callouts.slice(0, 6));
       }
 
       if (needsAi.includes("snippet")) {
         const snippet = parsed.snippet;
         if (snippet?.header && Array.isArray(snippet.values) && snippet.values.length >= 3) {
-          const values = snippet.values.filter((v: string) => v && v.length <= 25).slice(0, 10);
-          send("structured_snippet", values.length >= 3 ? { header: snippet.header, values } : null);
+          const validHeader = validateSnippetHeader(String(snippet.header));
+          const values = snippet.values
+            .map((v: string) => String(v || "").trim())
+            .filter((v: string) => v.length >= 2 && v.length <= 25)
+            .slice(0, 10);
+          send("structured_snippet", values.length >= 3 ? { header: validHeader, values } : null);
         } else {
           send("structured_snippet", null);
         }
       }
 
+      if (needsAi.includes("negative_keywords")) {
+        const negKws: string[] = Array.isArray(parsed.negative_keywords)
+          ? parsed.negative_keywords
+              .map((k: string) => String(k || "").trim().toLowerCase())
+              .filter((k: string) => k.length >= 2 && k.length <= 80)
+              .slice(0, 20)
+          : [];
+        send("negative_keywords", negKws);
+        console.log(`[Optional] 否定关键词: ${negKws.length} 条`);
+      }
+
       console.log(`[Optional] AI 生成完成: ${needsAi.join(", ")}`);
     } catch (err) {
       console.error("[Optional] AI 生成失败:", err instanceof Error ? err.message : err);
-      for (const t of needsAi) {
-        if (t === "callouts") send("callouts", getDefaultCallouts(merchantName, country, cache.features));
-        else if (t === "snippet") send("structured_snippet", null);
-      }
+      if (needsAi.includes("callouts")) send("callouts", []);
+      if (needsAi.includes("snippet")) send("structured_snippet", null);
+      if (needsAi.includes("negative_keywords")) send("negative_keywords", []);
     }
   }
-
-  await callTask;
 }
 
 // ─── 辅助函数 ───
@@ -858,25 +1035,7 @@ async function extractPhoneFromCache(
   return null;
 }
 
-function getDefaultCallouts(merchantName: string, country: string, features: string[]): string[] {
-  const market = getAdMarketConfig(country);
-  const result: string[] = [];
-  const featStr = features.join(" ").toLowerCase();
-
-  const hasShipping = /free\s*ship|free\s*deliver|kostenlos/i.test(featStr);
-  const hasReturns = /money.back|return|refund|rückgabe|retour/i.test(featStr);
-  if (hasShipping) result.push(smartTruncate(market.shippingLabel, 25));
-  if (hasReturns) result.push(smartTruncate(market.returnLabel, 25));
-
-  const brandShort = smartTruncate(merchantName, 25);
-  if (brandShort.length >= 3) result.unshift(brandShort);
-
-  const generic = market.languageCode === "de"
-    ? ["Sicher bestellen", "Online kaufen", "Top-Qualität", "Direkt beim Händler"]
-    : ["Secure Checkout", "Shop Online", "Best Price", "Quality Products"];
-  for (const g of generic) { if (result.length >= 6) break; result.push(g); }
-  return result.slice(0, 6);
-}
+// getDefaultCallouts 已移除 — callouts 必须基于真实商家特征由 AI 生成
 
 const IMG_BLACKLIST = [
   "logo", "favicon", "icon", "avatar", "payment", "badge", "social", "flag", "arrow",

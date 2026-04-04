@@ -29,6 +29,7 @@
     "puppeteer-extra-plugin-stealth": "^2.11.2",
     "react": "19.2.3",
     "react-dom": "19.2.3",
+    "react-markdown": "^10.1.0",
     "recharts": "^3.8.0",
     "ssh2": "^1.17.0",
     "swr": "^2.3.3",

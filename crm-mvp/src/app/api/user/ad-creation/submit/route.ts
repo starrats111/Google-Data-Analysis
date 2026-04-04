@@ -58,6 +58,7 @@ export async function POST(req: NextRequest) {
     customer_id: bodyCustomerId, mcc_account_id: bodyMccAccountId,
     ad_language, eu_political_ad,
     promotion, price, call: callExtension, structured_snippet,
+    negative_keywords = [],
   } = body;
 
   if (!campaign_id) return apiError("缺少 campaign_id");
@@ -463,10 +464,17 @@ export async function POST(req: NextRequest) {
       assetTempId--;
     }
 
-    // ─── 9. Callout 扩展 ───
-    for (const calloutText of callouts) {
-      const cleanCallout = sanitizeAdText((calloutText || ""), { allowExclamation: false }).slice(0, 25);
-      // callout_text 为必填项（1-25 字符），空文本直接跳过
+    // ─── 9. Callout 扩展（服务端校验：callout 必须 ≥ 2 条、每条 2-25 字符） ───
+    const validCallouts = callouts
+      .map((c: string) => sanitizeAdText((c || ""), { allowExclamation: false }).slice(0, 25))
+      .filter((c: string) => c.length >= 2);
+    if (validCallouts.length > 0 && validCallouts.length < 2) {
+      console.warn(`[AdSubmit] Callout 不足2条（${validCallouts.length}条），Google Ads 要求至少2条才能展示，跳过提交`);
+    }
+    const calloutsToSubmit = validCallouts.length >= 2 ? validCallouts : [];
+    for (const calloutText of calloutsToSubmit) {
+      const cleanCallout = calloutText;
+      // callout_text 为必填项（2-25 字符），空文本直接跳过
       if (!cleanCallout) continue;
       const assetTempRn = `customers/${cid}/assets/${assetTempId}`;
       operations.push({
@@ -491,7 +499,12 @@ export async function POST(req: NextRequest) {
       assetTempId--;
     }
 
-    // ─── 9b. 促销扩展 (Promotion) ───
+    // ─── 9b. 促销扩展 (Promotion) — 服务端校验 occasion 枚举 ───
+    const VALID_PROMOTION_OCCASIONS = new Set([
+      "BACK_TO_SCHOOL", "BLACK_FRIDAY", "CHRISTMAS", "CYBER_MONDAY",
+      "EASTER", "FATHERS_DAY", "HALLOWEEN", "MOTHERS_DAY",
+      "NEW_YEARS", "THANKSGIVING", "VALENTINES_DAY", "NONE",
+    ]);
     const hasValidDiscount =
       (promotion?.discount_type === "PERCENT" && Number(promotion?.discount_percent) > 0) ||
       (promotion?.discount_type === "MONETARY" && Number(promotion?.discount_amount) > 0);
@@ -512,9 +525,23 @@ export async function POST(req: NextRequest) {
           currency_code: promotion.currency_code || market.currencyCode,
         };
       }
-      if (promotion.promo_code) promotionAsset.orders_over_amount = undefined;
-      if (promotion.promo_code) promotionAsset.promotion_code = promotion.promo_code;
-      if (promotion.occasion) promotionAsset.occasion = promotion.occasion;
+      if (promotion.promo_code) {
+        promotionAsset.promotion_code = promotion.promo_code;
+        // orders_over_amount 只有在没有 promo_code 时才能设置
+      } else if (promotion.orders_over_amount && Number(promotion.orders_over_amount) > 0) {
+        const ordersOverMicros = Math.round(Number(promotion.orders_over_amount) * 1_000_000);
+        promotionAsset.orders_over_amount = {
+          amount_micros: String(ordersOverMicros),
+          currency_code: promotion.currency_code || market.currencyCode,
+        };
+      }
+      // occasion 枚举校验：无效值替换为 NONE（不传 occasion 字段以避免 API 拒绝）
+      if (promotion.occasion) {
+        const upperOccasion = String(promotion.occasion).toUpperCase().replace(/ /g, "_");
+        if (VALID_PROMOTION_OCCASIONS.has(upperOccasion) && upperOccasion !== "NONE") {
+          promotionAsset.occasion = upperOccasion;
+        }
+      }
       if (promotion.start_date) promotionAsset.start_date = promotion.start_date;
       if (promotion.end_date) promotionAsset.end_date = promotion.end_date;
 
@@ -540,8 +567,11 @@ export async function POST(req: NextRequest) {
       assetTempId--;
     }
 
-    // ─── 9c. 价格扩展 (Price) ───
-    if (price?.items?.length > 0) {
+    // ─── 9c. 价格扩展 (Price) — 服务端校验：至少需要 3 条产品项 ───
+    if (price?.items?.length > 0 && price.items.length < 3) {
+      console.warn(`[AdSubmit] Price Extension 仅有 ${price.items.length} 条，Google Ads 要求至少3条，跳过提交`);
+    }
+    if (price?.items?.length >= 3) {
       const assetTempRn = `customers/${cid}/assets/${assetTempId}`;
       const VALID_PRICE_UNITS = new Set([
         "PER_HOUR", "PER_DAY", "PER_WEEK", "PER_MONTH", "PER_YEAR", "PER_NIGHT",
@@ -642,6 +672,31 @@ export async function POST(req: NextRequest) {
         },
       });
       assetTempId--;
+    }
+
+    // ─── 9f. 否定关键词 (Negative Keywords) — 系列级别 ───
+    const validNegativeKws: string[] = Array.isArray(negative_keywords)
+      ? negative_keywords
+          .map((k: string) => String(k || "").trim().toLowerCase())
+          .filter((k: string) => k.length >= 2 && k.length <= 80)
+          .slice(0, 20)
+      : [];
+    for (const kwText of validNegativeKws) {
+      operations.push({
+        campaign_criterion_operation: {
+          create: {
+            campaign: campaignTempRn,
+            negative: true,
+            keyword: {
+              text: kwText,
+              match_type: "BROAD",
+            },
+          },
+        },
+      });
+    }
+    if (validNegativeKws.length > 0) {
+      console.log(`[AdSubmit] 否定关键词: ${validNegativeKws.length} 条`);
     }
 
     // ─── 10. 预加载图片素材（串行加载 + 累计内存限额，实际提交在主广告创建成功后） ───

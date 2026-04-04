@@ -1,0 +1,30 @@
+---
+description: 数据真实性与完整性规范——禁止臆测和手动编造数据
+alwaysApply: true
+---
+
+# 数据真实性规范
+
+## 核心原则
+
+**任何写入数据库的数据，必须来源于真实 API 响应或用户明确提供的信息，严禁臆测、估算、伪造。**
+
+## 禁止行为
+
+- ❌ 手动拼凑 API 字段值后直接 INSERT/UPDATE 到生产数据库
+- ❌ 用 API 原始字段（如 `comm_rate`）在未经验证与前端展示一致时就写入
+- ❌ 用"看起来合理"的数据填补空字段
+- ❌ 为了让 UI"好看"而补全实际为空的字段
+
+## 正确做法
+
+- ✅ 数据必须经过正式同步流程（cron / admin sync API）写入，确保字段映射正确
+- ✅ 如需应急手动插入，只写最基础的标识字段（如 `merchant_id`、`merchant_name`、`status`），其余字段留 NULL，等待正式同步补全
+- ✅ 若对某字段含义不确定，先查阅 `platform-api.ts` 的 `parseMerchants` 逻辑，与前端展示对比后再决定是否写入
+- ✅ 发现写入了不确定的数据，立即回滚（UPDATE ... SET 字段 = NULL）并说明原因
+
+## 反面案例（本项目真实教训）
+
+商家 MID 166377 手动插入时，错误地用 API 的 `comm_rate: "Revshare 70%"` 填写了 `commission_rate`，
+而 Rewardoo 真实界面显示的是 `Base Commission 4.2%`，两者含义完全不同，造成脏数据。
+正确做法：只 INSERT `merchant_id / merchant_name / status`，其余字段等 cron 同步补全。

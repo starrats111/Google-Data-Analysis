@@ -1,0 +1,1 @@
+SELECT DATE_FORMAT(date,'%Y-%m-%d') d, COUNT(*) cnt, ROUND(SUM(cost),2) total_cost, SUM(clicks) total_clicks, data_source FROM ads_daily_stats WHERE date >= '2026-03-28' AND is_deleted=0 GROUP BY date, data_source ORDER BY date, data_source;
