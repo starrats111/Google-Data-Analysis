@@ -1416,7 +1416,8 @@ export default function AdPreviewPage() {
           )}
 
           {/* ── Step 2: 标题 / 描述 ── */}
-          {currentStep >= 1 && <Card
+          {currentStep >= 1 && (<>
+          <Card
             title={<><EditOutlined /> 广告标题 ({headlines.length}/15)</>}
             size="small" style={{ marginBottom: 16 }}
             extra={
@@ -1505,7 +1506,8 @@ export default function AdPreviewPage() {
                 <Button type="dashed" size="small" icon={<PlusOutlined />} onClick={addDescription}>手动添加</Button>
               </Space>
             )}
-          </Card>}
+          </Card>
+          </>)}
 
           {/* ── 关键词卡（两步均显示，Step 2 显示在标题描述后面作参考） ── */}
           <Card
