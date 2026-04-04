@@ -29,7 +29,7 @@ const PLATFORM_API_CONFIG: Record<string, PlatformApiConfig> = {
     mode: "post_json",
     url: "https://api.creatorflare.com/api/monetization",
     source: "creatorflare",
-    pageKey: "curPage", sizeKey: "perPage", maxSize: 500,
+    pageKey: "curPage", sizeKey: "perPage", maxSize: 2000, // 文档最大 2000，减少分页次数
     assumeAllJoined: true,
     requiresRelationshipParam: true, // API 要求显式传 relationship:"Joined"，否则报 filter.relationship 错误
   },
@@ -37,7 +37,7 @@ const PLATFORM_API_CONFIG: Record<string, PlatformApiConfig> = {
     mode: "post_json",
     url: "https://api.collabglow.com/api/monetization",
     source: "collabglow",
-    pageKey: "curPage", sizeKey: "perPage", maxSize: 500,
+    pageKey: "curPage", sizeKey: "perPage", maxSize: 2000, // 文档最大 2000，减少分页次数
     assumeAllJoined: true,
     requiresRelationshipParam: true, // API 要求显式传 relationship:"Joined"，否则报 filter.relationship 错误
   },
@@ -45,7 +45,7 @@ const PLATFORM_API_CONFIG: Record<string, PlatformApiConfig> = {
     mode: "post_json",
     url: "https://api.brandsparkhub.com/api/monetization",
     source: "brandsparkhub",
-    pageKey: "curPage", sizeKey: "perPage", maxSize: 500,
+    pageKey: "curPage", sizeKey: "perPage", maxSize: 2000, // 文档最大 2000，减少分页次数
     assumeAllJoined: true,
     requiresRelationshipParam: true, // API 要求显式传 relationship:"Joined"，否则报 filter.relationship 错误
   },
@@ -53,7 +53,7 @@ const PLATFORM_API_CONFIG: Record<string, PlatformApiConfig> = {
     mode: "post_json",
     url: "https://api.partnermatic.com/api/monetization",
     source: "partnermatic",
-    pageKey: "curPage", sizeKey: "perPage", maxSize: 500,
+    pageKey: "curPage", sizeKey: "perPage", maxSize: 2000, // 文档最大 2000，减少分页次数
     assumeAllJoined: true,
     requiresRelationshipParam: true, // API 要求显式传 relationship:"Joined"，否则报 filter.relationship 错误
   },
@@ -197,9 +197,10 @@ function parseMerchants(platform: string, data: Record<string, unknown>, assumeA
       : String(item.mid || item.m_id || item.merchant_id || item.id || "");
     const name = String(item.merchant_name || item.name || item.merchantName || "");
     const category = String(item.category || item.categories || item.category_name || item.categoryName || "");
-    const commission = String(item.comm_rate || item.commission_rate || item.commissionRate || item.commission || "");
-    const regions = parseRegions(item.support_region || item.supported_regions || item.regions || item.country || "");
-    const url = String(item.site_url || item.merchant_url || item.url || item.website || item.domain || item.homepage || "");
+    // PM (Partnermatic) 返回 camelCase 字段名（commRate / siteUrl / supportRegion），其余平台为 snake_case
+    const commission = String(item.comm_rate || item.commRate || item.commission_rate || item.commissionRate || item.commission || "");
+    const regions = parseRegions(item.support_region || item.supportRegion || item.supported_regions || item.regions || item.country || "");
+    const url = String(item.site_url || item.siteUrl || item.merchant_url || item.url || item.website || item.domain || item.homepage || "");
     const logo = String(
       item.logo || item.logo_url || item.logoUrl ||
       item.icon || item.icon_url || item.iconUrl ||
