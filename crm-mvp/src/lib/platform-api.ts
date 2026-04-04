@@ -76,7 +76,8 @@ const PLATFORM_API_CONFIG: Record<string, PlatformApiConfig> = {
     mode: "post_form",
     url: "https://admin.rewardoo.com/api.php?mod=medium&op=monetization_api",
     pageKey: "page", sizeKey: "limit", maxSize: 1000,
-    assumeAllJoined: true, // monetization_api 只返回已加入商家
+    assumeAllJoined: true, // 加 relationship=Joined 过滤后 API 只返回已加入商家
+    requiresRelationshipParam: true, // 必须显式传 relationship:"Joined"；不传时 API 返回全量商家（含 Pending/Rejected），造成脏数据
   },
 };
 
