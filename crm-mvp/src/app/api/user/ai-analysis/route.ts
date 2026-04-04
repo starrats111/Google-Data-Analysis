@@ -175,9 +175,9 @@ async function executeTool(name: string, args: ToolArgs, userId: bigint): Promis
       grouped[id].rejected += Number(r.rejected_commission ?? 0);
     }
 
-    const campaignIds = Object.keys(grouped).map((id) => BigInt(id));
+    const groupedIds = Object.keys(grouped).map((id) => BigInt(id));
     const campaigns = await prisma.campaigns.findMany({
-      where: { id: { in: campaignIds }, is_deleted: 0 },
+      where: { id: { in: groupedIds }, is_deleted: 0 },
       select: { id: true, campaign_name: true, status: true, daily_budget: true },
     });
     const campMap = new Map(campaigns.map((c) => [String(c.id), c]));
