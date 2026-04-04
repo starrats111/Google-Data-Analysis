@@ -4,7 +4,7 @@ import { useParams, useRouter } from "next/navigation";
 import {
   Card, Row, Col, Input, Button, Space, Tag, Typography, Spin, Alert,
   Select, InputNumber, Switch, Divider, App, Tooltip, Popconfirm, Checkbox,
-  Upload, Image,
+  Upload, Image, Steps, Avatar,
 } from "antd";
 import {
   ThunderboltOutlined, LoadingOutlined,
@@ -236,6 +236,13 @@ export default function AdPreviewPage() {
   const [semrushFailed, setSemrushFailed] = useState(false);
   const [semrushUrl, setSemrushUrl] = useState("");
   const [semrushUrlFetching, setSemrushUrlFetching] = useState(false);
+
+  // 两步流程
+  const [currentStep, setCurrentStep] = useState(0); // 0=关键词确认, 1=文案与扩展
+
+  // 否定关键词
+  const [negativeKeywords, setNegativeKeywords] = useState<string[]>([]);
+  const [negKwLoading, setNegKwLoading] = useState(false);
 
   // 初始化前轮询查状态，初始化后停止轮询
   const pollInterval = initialized ? 0 : 3000;
@@ -854,6 +861,16 @@ export default function AdPreviewPage() {
         }
         return;
       }
+
+      if (type === "negative_keywords") {
+        const kws = data as string[];
+        if (Array.isArray(kws) && kws.length > 0) {
+          setNegativeKeywords(kws);
+          message.success(`已生成 ${kws.length} 条否定关键词`);
+        }
+        setNegKwLoading(false);
+        return;
+      }
     };
 
     try {
@@ -1307,6 +1324,66 @@ export default function AdPreviewPage() {
 
   return (
     <div style={{ padding: "16px 24px", maxWidth: 1200, margin: "0 auto" }}>
+      {/* Adrian 顾问标识条 */}
+      <Card
+        size="small"
+        style={{
+          marginBottom: 12,
+          background: "linear-gradient(135deg, #0f0c29 0%, #302b63 60%, #24243e 100%)",
+          border: "1px solid #4a3f8c",
+          borderRadius: 8,
+        }}
+        styles={{ body: { padding: "10px 16px" } }}
+      >
+        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          <Avatar
+            size={38}
+            icon={<RobotOutlined />}
+            style={{ background: "linear-gradient(135deg,#667eea 0%,#764ba2 100%)", border: "1px solid #9b8ed6", flexShrink: 0 }}
+          />
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+              <span style={{ color: "#e8e0ff", fontWeight: 700, fontSize: 14 }}>Adrian · 数据猎手</span>
+              <span style={{ color: "#9b8ed6", fontSize: 11 }}>Google Ads 搜索广告顾问</span>
+              <Tag style={{ background: "rgba(102,126,234,0.2)", border: "1px solid #667eea", color: "#b8a9f5", fontSize: 10, margin: 0 }}>ROI 激进派</Tag>
+              <Tag style={{ background: "rgba(102,126,234,0.2)", border: "1px solid #667eea", color: "#b8a9f5", fontSize: 10, margin: 0 }}>数字驱动运营</Tag>
+            </div>
+            <div style={{ color: "#7c6fbc", fontSize: 11, fontStyle: "italic", marginTop: 2 }}>
+              「没有坏的产品，只有投错的人群和出不动的价。」
+            </div>
+          </div>
+          {currentStep === 0 && kwList.length >= 1 && (
+            <Button
+              type="primary"
+              size="small"
+              style={{ background: "#764ba2", borderColor: "#764ba2", flexShrink: 0 }}
+              onClick={() => setCurrentStep(1)}
+            >
+              关键词已确认 →
+            </Button>
+          )}
+        </div>
+      </Card>
+
+      {/* 步骤条 */}
+      <Card size="small" style={{ marginBottom: 12, border: "1px solid #e8e0ff" }} styles={{ body: { padding: "10px 20px" } }}>
+        <Steps
+          current={currentStep}
+          size="small"
+          onChange={(step) => setCurrentStep(step)}
+          items={[
+            {
+              title: "关键词确认",
+              description: kwList.length > 0 ? `已选 ${kwList.length} 个关键词` : "从 SemRush 获取或手动添加",
+            },
+            {
+              title: "文案与扩展",
+              description: currentStep >= 1 ? "编辑标题、描述、扩展" : "完成关键词后进入",
+            },
+          ]}
+        />
+      </Card>
+
       <Space style={{ marginBottom: 16 }}>
         <Button icon={<ArrowLeftOutlined />} onClick={() => router.push("/user/merchants")}>返回商家管理</Button>
         <Title level={4} style={{ margin: 0 }}>
@@ -1328,9 +1405,18 @@ export default function AdPreviewPage() {
       )}
 
       <Row gutter={16}>
-        {/* ─── 左侧：标题 / 描述 / 关键词 / 扩展 ─── */}
+        {/* ─── 左侧：关键词（步骤1） / 标题 / 描述 / 扩展（步骤2） ─── */}
         <Col span={16}>
-          <Card
+
+          {/* ── Step 1: 关键词区域（始终显示，Step 2 收起） ── */}
+          {currentStep === 0 && (
+            <>
+              {/* 关键词内容在下方 kwCard 占位 */}
+            </>
+          )}
+
+          {/* ── Step 2: 标题 / 描述 ── */}
+          {currentStep >= 1 && <Card
             title={<><EditOutlined /> 广告标题 ({headlines.length}/15)</>}
             size="small" style={{ marginBottom: 16 }}
             extra={
@@ -1419,8 +1505,9 @@ export default function AdPreviewPage() {
                 <Button type="dashed" size="small" icon={<PlusOutlined />} onClick={addDescription}>手动添加</Button>
               </Space>
             )}
-          </Card>
+          </Card>}
 
+          {/* ── 关键词卡（两步均显示，Step 2 显示在标题描述后面作参考） ── */}
           <Card
             title={<Space>关键词 ({kwList.length})</Space>}
             size="small" style={{ marginBottom: 16 }}
@@ -1528,8 +1615,73 @@ export default function AdPreviewPage() {
             </Space.Compact>
           </Card>
 
-          {/* ─── 广告素材与扩展 ─── */}
-          <Card title="广告素材与扩展" size="small" style={{ marginBottom: 16 }}>
+          {/* ─── 否定关键词（Adrian 自动生成） ─── */}
+          {(negativeKeywords.length > 0 || negKwLoading) && (
+            <Card
+              size="small"
+              style={{ marginBottom: 16, border: "1px solid #ffd591" }}
+              title={
+                <Space>
+                  <span>🚫 否定关键词</span>
+                  <Tag color="orange">Adrian 推荐</Tag>
+                  <Text type="secondary" style={{ fontSize: 11 }}>{negativeKeywords.length} 条，已广泛匹配</Text>
+                </Space>
+              }
+            >
+              {negKwLoading ? (
+                <Spin size="small" tip="正在生成否定关键词..." />
+              ) : (
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                  {negativeKeywords.map((kw, i) => (
+                    <Tag
+                      key={i}
+                      closable
+                      color="orange"
+                      style={{ fontSize: 12 }}
+                      onClose={() => setNegativeKeywords((prev) => prev.filter((_, j) => j !== i))}
+                    >
+                      -{kw}
+                    </Tag>
+                  ))}
+                </div>
+              )}
+              <Text type="secondary" style={{ fontSize: 11, display: "block", marginTop: 8 }}>
+                否定关键词将在提交时一并写入广告系列，过滤价格敏感、非购买意图流量。可点击 × 删除不需要的词。
+              </Text>
+            </Card>
+          )}
+
+          {/* ─── 步骤 1 确认区 ─── */}
+          {currentStep === 0 && (
+            <Card
+              size="small"
+              style={{ marginBottom: 16, border: "2px solid #764ba2", background: "linear-gradient(135deg,#faf5ff 0%,#f5f0ff 100%)" }}
+            >
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8 }}>
+                <div>
+                  <Text strong style={{ color: "#4a1d96", fontSize: 14 }}>关键词确认</Text>
+                  <Text type="secondary" style={{ display: "block", fontSize: 12, marginTop: 2 }}>
+                    已选 <Text strong>{kwList.length}</Text> 个关键词，确认后 Adrian 将为你生成文案与扩展
+                  </Text>
+                </div>
+                <Button
+                  type="primary"
+                  size="large"
+                  style={{ background: "#764ba2", borderColor: "#764ba2" }}
+                  disabled={kwList.length === 0}
+                  onClick={() => {
+                    if (kwList.length === 0) { return; }
+                    setCurrentStep(1);
+                  }}
+                >
+                  确认关键词，生成广告文案 →
+                </Button>
+              </div>
+            </Card>
+          )}
+
+          {/* ─── 广告素材与扩展（步骤 2 才显示） ─── */}
+          {currentStep >= 1 && <Card title="广告素材与扩展" size="small" style={{ marginBottom: 16 }}>
 
             {/* 站内链接 — 自动生成 */}
             <div style={{ marginBottom: 16 }}>
@@ -2180,7 +2332,15 @@ export default function AdPreviewPage() {
                 </Button>
               </>
             )}
-          </Card>
+          </Card>}
+
+          {/* 步骤 2 返回 */}
+          {currentStep >= 1 && (
+            <div style={{ textAlign: "center", marginBottom: 16 }}>
+              <Button size="small" type="link" onClick={() => setCurrentStep(0)}>← 返回修改关键词</Button>
+            </div>
+          )}
+
         </Col>
 
         {/* ─── 右侧：广告设置 ─── */}

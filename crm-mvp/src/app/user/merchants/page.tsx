@@ -1,10 +1,11 @@
 "use client";
 import { useState, useCallback, useMemo, useEffect } from "react";
 import { Card, Row, Col, Table, Input, Select, Button, Space, Tag, Modal, Form, Typography, Popconfirm, Switch, InputNumber, Tabs, App, Tooltip } from "antd";
-import { ShopOutlined, SearchOutlined, CheckOutlined, DollarOutlined, CalendarOutlined, SaveOutlined, SyncOutlined, WarningOutlined, StarOutlined, CopyOutlined, ReloadOutlined, RobotOutlined } from "@ant-design/icons";
+import { ShopOutlined, SearchOutlined, CheckOutlined, DollarOutlined, CalendarOutlined, SaveOutlined, SyncOutlined, WarningOutlined, StarOutlined, CopyOutlined, ReloadOutlined, RobotOutlined, DeleteOutlined } from "@ant-design/icons";
 import { PLATFORMS, BIDDING_STRATEGIES } from "@/lib/constants";
 import { useApiWithParams, useStaleApi, mutateApi, refreshApi } from "@/lib/swr";
 import { useRouter } from "next/navigation";
+import { normalizeAiRuleProfile, SYSTEM_ADRIAN_PERSONA, type AiRuleProfile, type AiPersona } from "@/lib/ai-rule-profile";
 const { Text } = Typography;
 const { TextArea } = Input;
 
@@ -19,18 +20,7 @@ interface AdSettingsApiData {
   naming_rule: string;
   naming_prefix: string;
   eu_political_ad?: number;
-  ai_rule_profile?: {
-    prompt_text?: string;
-    persona?: string;
-    keyword_requirements?: string;
-    ad_copy_requirements?: string;
-    sitelink_requirements?: string;
-    compliance_requirements?: string;
-    hard_rules?: string;
-    forbidden_terms?: string[] | string;
-    preferred_terms?: string[] | string;
-    enforce_policy_check?: boolean;
-  };
+  ai_rule_profile?: Record<string, unknown>;
 }
 // 主营业务英中翻译
 const CATEGORY_CN: Record<string, string> = {
@@ -136,6 +126,8 @@ export default function MerchantsPage() {
   const [adForm] = Form.useForm();
   useEffect(() => {
     if (!adData) return;
+    // 解析 v2 人设 profile
+    setPersonaProfile(normalizeAiRuleProfile(adData.ai_rule_profile));
     const profile = adData.ai_rule_profile;
     const toTagList = (v: unknown): string[] => {
       if (Array.isArray(v)) return v.map((x) => String(x || "").trim()).filter(Boolean);
@@ -169,6 +161,14 @@ export default function MerchantsPage() {
   const [mccAccounts, setMccAccounts] = useState<{ id: string; mcc_id: string; mcc_name: string }[]>([]);
   const [rModal, setRModal] = useState(false); const [rTitle, setRTitle] = useState(""); const [rContent, setRContent] = useState("");
   const [aiModalOpen, setAiModalOpen] = useState(false);
+  // 人设库管理
+  const [personaProfile, setPersonaProfile] = useState<AiRuleProfile | null>(null);
+  const [personaTab, setPersonaTab] = useState<"library" | "new">("library");
+  const [newPersonaName, setNewPersonaName] = useState("");
+  const [newPersonaTags, setNewPersonaTags] = useState<string[]>([]);
+  const [newPersonaDesc, setNewPersonaDesc] = useState("");
+  const [newPersonaPrompt, setNewPersonaPrompt] = useState("");
+  const [savingPersona, setSavingPersona] = useState(false);
   // 在投人数弹窗
   const [advModal, setAdvModal] = useState(false);
   const [advMerchant, setAdvMerchant] = useState<Merchant | null>(null);
@@ -185,6 +185,60 @@ export default function MerchantsPage() {
   const [syncing, setSyncing] = useState(false);
   const doSync = useCallback(async () => { setSyncing(true); try { const r = await fetch("/api/user/merchants/sync", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }).then(r => r.json()); if (r.code === 0) { message.success(r.data?.message || "商家同步已开始，完成后将通知您"); setTimeout(() => refreshApi(/\/api\/user\/merchants/), 5000); setTimeout(() => refreshApi(/\/api\/user\/merchants/), 15000); setTimeout(() => refreshApi(/\/api\/user\/merchants/), 30000); setTimeout(() => refreshApi(/\/api\/user\/merchants/), 60000); } else message.error(r.message); } catch { message.error("同步失败"); } finally { setSyncing(false); } }, [message]);
   const saveAd = useCallback(async () => { const v = adForm.getFieldsValue(); const r = await mutateApi("/api/user/ad-settings", { method: "PUT", body: v }, ["/api/user/ad-settings"]); if (r.code === 0) message.success("已保存"); else message.error(r.message); }, [adForm, message]);
+
+  const savePersonaProfile = useCallback(async (updatedProfile: AiRuleProfile) => {
+    setSavingPersona(true);
+    const formData = adForm.getFieldsValue();
+    const r = await mutateApi("/api/user/ad-settings", { method: "PUT", body: { ...formData, ai_rule_profile: updatedProfile } }, ["/api/user/ad-settings"]);
+    setSavingPersona(false);
+    if (r.code === 0) { message.success("人设已保存"); setPersonaProfile(updatedProfile); return true; }
+    else { message.error(r.message); return false; }
+  }, [adForm, message]);
+
+  const activatePersona = useCallback(async (personaId: string) => {
+    if (!personaProfile) return;
+    const updated: AiRuleProfile = { ...personaProfile, active_persona_id: personaId };
+    await savePersonaProfile(updated);
+  }, [personaProfile, savePersonaProfile]);
+
+  const deletePersona = useCallback(async (personaId: string) => {
+    if (!personaProfile) return;
+    const updated: AiRuleProfile = {
+      ...personaProfile,
+      personas: personaProfile.personas.filter((p) => p.id !== personaId),
+      active_persona_id: personaProfile.active_persona_id === personaId ? "system_adrian" : personaProfile.active_persona_id,
+    };
+    await savePersonaProfile(updated);
+  }, [personaProfile, savePersonaProfile]);
+
+  const createPersona = useCallback(async () => {
+    if (!newPersonaName.trim()) { message.error("请输入人设名称"); return; }
+    if (!personaProfile) return;
+    const newPersona: AiPersona = {
+      id: `custom_${Date.now()}`,
+      name: newPersonaName.trim(),
+      tags: newPersonaTags,
+      description: newPersonaDesc.trim() || newPersonaName.trim(),
+      is_system: false,
+      prompt_text: newPersonaPrompt.trim() || SYSTEM_ADRIAN_PERSONA.prompt_text,
+      persona: newPersonaDesc.trim() || newPersonaName.trim(),
+      keyword_requirements: SYSTEM_ADRIAN_PERSONA.keyword_requirements,
+      ad_copy_requirements: SYSTEM_ADRIAN_PERSONA.ad_copy_requirements,
+      sitelink_requirements: SYSTEM_ADRIAN_PERSONA.sitelink_requirements,
+      compliance_requirements: SYSTEM_ADRIAN_PERSONA.compliance_requirements,
+      hard_rules: SYSTEM_ADRIAN_PERSONA.hard_rules,
+      forbidden_terms: [],
+      preferred_terms: [],
+      enforce_policy_check: true,
+    };
+    const updated: AiRuleProfile = {
+      ...personaProfile,
+      personas: [...personaProfile.personas, newPersona],
+      active_persona_id: newPersona.id,
+    };
+    const ok = await savePersonaProfile(updated);
+    if (ok) { setNewPersonaName(""); setNewPersonaTags([]); setNewPersonaDesc(""); setNewPersonaPrompt(""); setPersonaTab("library"); }
+  }, [personaProfile, newPersonaName, newPersonaTags, newPersonaDesc, newPersonaPrompt, savePersonaProfile, message]);
   const doClaim = useCallback(async (m: Merchant) => {
     setClaimM(m); claimForm.resetFields(); setClaimModal(true);
     try {
@@ -304,33 +358,36 @@ export default function MerchantsPage() {
               <Tag style={{ fontSize: 11, lineHeight: "18px", margin: 0 }}>{h.holiday_type}</Tag>
             </div>)) : <Text type="secondary" style={{ fontSize: 12 }}>选择国家查询节日信息</Text>}</div>
         </Card></Col>
-        <Col xs={24} sm={12} md={6}><Card size="small" className="func-card-ai" title={<><RobotOutlined style={{ color: "#722ed1" }} /> AI 设定（规则）</>} style={{ height: "100%" }}>
-          {adData && (() => {
-            const profile = adData.ai_rule_profile;
-            const forbiddenCount = Array.isArray(profile?.forbidden_terms) ? profile.forbidden_terms.length : 0;
-            const preferredCount = Array.isArray(profile?.preferred_terms) ? profile.preferred_terms.length : 0;
-            const policyCheck = profile?.enforce_policy_check;
+        <Col xs={24} sm={12} md={6}><Card size="small" className="func-card-ai" title={<><RobotOutlined style={{ color: "#722ed1" }} /> AI 人设库</>} style={{ height: "100%" }}>
+          {(() => {
+            const activePersona = personaProfile
+              ? (personaProfile.personas.find((p) => p.id === personaProfile.active_persona_id) ?? SYSTEM_ADRIAN_PERSONA)
+              : SYSTEM_ADRIAN_PERSONA;
+            const totalPersonas = personaProfile?.personas.length ?? 1;
             return (
               <div style={{ fontSize: 12 }}>
-                <div style={{ background: "#f5f0ff", borderRadius: 6, padding: "8px 10px", marginBottom: 10 }}>
-                  <div style={{ fontWeight: 700, color: "#4a1d96", fontSize: 13 }}>数据猎手（Search Ads）</div>
-                  <div style={{ color: "#7c3aed", fontSize: 11, marginTop: 2 }}>ROI 导向 · 精准投放 · 账户优化</div>
+                <div style={{ background: "linear-gradient(135deg,#f5f0ff 0%,#ede9fe 100%)", borderRadius: 6, padding: "8px 10px", marginBottom: 10, border: "1px solid #d3adf7" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
+                    <Tag color="purple" style={{ fontSize: 10, margin: 0 }}>激活中</Tag>
+                    <span style={{ fontWeight: 700, color: "#4a1d96", fontSize: 13, flex: 1 }}>{activePersona.name}</span>
+                  </div>
+                  <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+                    {activePersona.tags.slice(0, 3).map((t) => (
+                      <Tag key={t} style={{ fontSize: 10, margin: 0, padding: "0 4px", background: "rgba(114,46,209,0.1)", border: "1px solid #d3adf7", color: "#722ed1" }}>{t}</Tag>
+                    ))}
+                  </div>
                 </div>
                 <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
                   <div style={{ flex: 1, textAlign: "center" }}>
-                    <div style={{ fontSize: 18, fontWeight: 700, color: forbiddenCount > 0 ? "#f5222d" : "#bbb" }}>{forbiddenCount}</div>
-                    <Text type="secondary" style={{ fontSize: 11 }}>禁止词</Text>
+                    <div style={{ fontSize: 18, fontWeight: 700, color: "#722ed1" }}>{totalPersonas}</div>
+                    <Text type="secondary" style={{ fontSize: 11 }}>人设库</Text>
                   </div>
                   <div style={{ flex: 1, textAlign: "center" }}>
-                    <div style={{ fontSize: 18, fontWeight: 700, color: preferredCount > 0 ? "#52c41a" : "#bbb" }}>{preferredCount}</div>
-                    <Text type="secondary" style={{ fontSize: 11 }}>偏好词</Text>
-                  </div>
-                  <div style={{ flex: 1, textAlign: "center" }}>
-                    <div style={{ marginTop: 2 }}><Tag color={policyCheck ? "green" : "default"} style={{ fontSize: 10, margin: 0 }}>{policyCheck ? "自检开" : "自检关"}</Tag></div>
-                    <Text type="secondary" style={{ fontSize: 11 }}>政策检</Text>
+                    <div style={{ fontSize: 18, fontWeight: 700, color: "#52c41a" }}>{totalPersonas - 1}</div>
+                    <Text type="secondary" style={{ fontSize: 11 }}>自建人设</Text>
                   </div>
                 </div>
-                <Button block icon={<RobotOutlined />} onClick={() => setAiModalOpen(true)}>配置个人规则</Button>
+                <Button block icon={<RobotOutlined />} onClick={() => { setAiModalOpen(true); setPersonaTab("library"); }}>管理 AI 人设库</Button>
               </div>
             );
           })()}
@@ -416,64 +473,141 @@ export default function MerchantsPage() {
     </Modal>
     <Modal title={rTitle} open={rModal} onCancel={() => setRModal(false)} footer={null} width={480}><div style={{ whiteSpace: "pre-wrap", lineHeight: 1.8, padding: "8px 0" }}>{rContent}</div></Modal>
     <Modal
-      title={<><RobotOutlined style={{ color: "#722ed1", marginRight: 8 }} />AI 设定（规则）</>}
+      title={<><RobotOutlined style={{ color: "#722ed1", marginRight: 8 }} />AI 人设库管理</>}
       open={aiModalOpen}
       onCancel={() => setAiModalOpen(false)}
-      width={560}
-      footer={
-        <Space>
-          <Button onClick={() => setAiModalOpen(false)}>取消</Button>
-          <Button type="primary" icon={<SaveOutlined />} onClick={async () => { await saveAd(); setAiModalOpen(false); }}>保存</Button>
-        </Space>
-      }
+      width={600}
+      footer={null}
     >
-      {/* ── 系统人设展示（只读） ── */}
-      <div style={{ background: "linear-gradient(135deg,#f5f0ff 0%,#ede9fe 100%)", border: "1px solid #d3adf7", borderRadius: 10, padding: "14px 16px", marginBottom: 16 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
-          <RobotOutlined style={{ color: "#722ed1", fontSize: 18 }} />
-          <span style={{ fontWeight: 700, fontSize: 15, color: "#4a1d96" }}>数据猎手（Search Ads）</span>
-          <Tag color="purple" style={{ marginLeft: "auto", fontSize: 11 }}>系统内置</Tag>
-        </div>
-        <div style={{ fontSize: 12, color: "#6b21a8", marginBottom: 8, fontStyle: "italic" }}>
-          Google Ads 搜索广告顾问 · ROI 导向 · 精准投放 · 账户优化
-        </div>
-        <div style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12, color: "#555" }}>
-          <div><span style={{ color: "#7c3aed", fontWeight: 600 }}>关键词：</span>日预算 $1.5~$2.0 / 最高 CPC $0.3，Broad Match 为主，过滤高竞争词</div>
-          <div><span style={{ color: "#7c3aed", fontWeight: 600 }}>文案：</span>15 条标题 + 4 条描述，品牌词优先，折扣/物流单独一条，合规自检</div>
-          <div><span style={{ color: "#7c3aed", fontWeight: 600 }}>合规：</span>禁止夸大承诺、医疗治愈类、快速致富类等违规表达</div>
-        </div>
-      </div>
+      <Tabs
+        activeKey={personaTab}
+        onChange={(k) => setPersonaTab(k as "library" | "new")}
+        items={[
+          { key: "library", label: "人设库" },
+          { key: "new", label: "+ 新建人设" },
+        ]}
+      />
 
-      {/* ── 用户个人定制规则 ── */}
-      <div style={{ fontSize: 12, color: "#888", marginBottom: 12, display: "flex", alignItems: "center", gap: 6 }}>
-        <span style={{ flex: 1, height: 1, background: "#e8e8e8", display: "inline-block" }} />
-        <span>个人定制规则</span>
-        <span style={{ flex: 1, height: 1, background: "#e8e8e8", display: "inline-block" }} />
-      </div>
-      <Form form={adForm} component={false} layout="vertical" size="small">
-        <div style={{ fontSize: 13 }}>
-          <Row gutter={16}>
-            <Col span={12}>
-              <Form.Item name={["ai_rule_profile", "preferred_terms"]} label={<Tooltip title="AI 生成时优先使用这些词汇或表达"><span>偏好词 <span style={{ color: "#999", fontSize: 11 }}>（优先使用）</span></span></Tooltip>} style={{ marginBottom: 12 }}>
-                <Select mode="tags" placeholder="输入后回车添加" tokenSeparators={[",", "，"]} />
-              </Form.Item>
-            </Col>
-            <Col span={12}>
-              <Form.Item name={["ai_rule_profile", "forbidden_terms"]} label={<Tooltip title="AI 生成时严格禁止出现这些词汇"><span>禁止词 <span style={{ color: "#f5222d", fontSize: 11 }}>（绝对禁用）</span></span></Tooltip>} style={{ marginBottom: 12 }}>
-                <Select mode="tags" placeholder="输入后回车添加" tokenSeparators={[",", "，"]} />
-              </Form.Item>
-            </Col>
-          </Row>
-          <Form.Item
-            name={["ai_rule_profile", "enforce_policy_check"]}
-            label="启用政策风险自检"
-            valuePropName="checked"
-            style={{ marginBottom: 0 }}
-          >
-            <Switch size="small" checkedChildren="开启" unCheckedChildren="关闭" />
-          </Form.Item>
+      {personaTab === "library" && personaProfile && (
+        <div style={{ maxHeight: 480, overflowY: "auto", paddingRight: 4 }}>
+          {personaProfile.personas.map((p) => {
+            const isActive = p.id === personaProfile.active_persona_id;
+            return (
+              <Card
+                key={p.id}
+                size="small"
+                style={{
+                  marginBottom: 10,
+                  border: isActive ? "2px solid #722ed1" : "1px solid #f0f0f0",
+                  background: isActive ? "linear-gradient(135deg,#faf5ff 0%,#f5f0ff 100%)" : "#fafafa",
+                }}
+              >
+                <div style={{ display: "flex", alignItems: "flex-start", gap: 10 }}>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4, flexWrap: "wrap" }}>
+                      <Text strong style={{ color: isActive ? "#4a1d96" : undefined }}>{p.name}</Text>
+                      {p.is_system && <Tag color="purple" style={{ fontSize: 10, margin: 0 }}>系统内置</Tag>}
+                      {isActive && <Tag color="green" style={{ fontSize: 10, margin: 0 }}>✓ 激活中</Tag>}
+                    </div>
+                    {p.description && (
+                      <Text type="secondary" style={{ fontSize: 12, display: "block", marginBottom: 6 }}>{p.description}</Text>
+                    )}
+                    <Space wrap size={4}>
+                      {p.tags.map((t) => (
+                        <Tag key={t} style={{ fontSize: 11, margin: 0, padding: "0 4px", background: "rgba(114,46,209,0.08)", border: "1px solid #d3adf7", color: "#722ed1" }}>{t}</Tag>
+                      ))}
+                    </Space>
+                    {p.prompt_text && p.id !== "system_adrian" && (
+                      <div style={{ marginTop: 6, fontSize: 11, color: "#888", background: "#f9f9f9", borderRadius: 4, padding: "4px 8px", maxHeight: 60, overflow: "hidden", lineClamp: 3 }}>
+                        {p.prompt_text.slice(0, 120)}{p.prompt_text.length > 120 ? "..." : ""}
+                      </div>
+                    )}
+                  </div>
+                  <Space direction="vertical" size={4} style={{ flexShrink: 0 }}>
+                    {!isActive && (
+                      <Button
+                        size="small" type="primary" ghost
+                        loading={savingPersona}
+                        onClick={() => activatePersona(p.id)}
+                      >
+                        激活
+                      </Button>
+                    )}
+                    {!p.is_system && (
+                      <Popconfirm
+                        title={`确认删除「${p.name}」？`}
+                        onConfirm={() => deletePersona(p.id)}
+                        okText="删除"
+                        okButtonProps={{ danger: true }}
+                        cancelText="取消"
+                      >
+                        <Button size="small" danger icon={<DeleteOutlined />} />
+                      </Popconfirm>
+                    )}
+                  </Space>
+                </div>
+              </Card>
+            );
+          })}
         </div>
-      </Form>
+      )}
+
+      {personaTab === "new" && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+          <div>
+            <Text strong style={{ display: "block", marginBottom: 4 }}>人设名称 <Text type="danger">*</Text></Text>
+            <Input
+              value={newPersonaName}
+              onChange={(e) => setNewPersonaName(e.target.value)}
+              placeholder="例：激进增长派、保守稳健型"
+              maxLength={30}
+              showCount
+            />
+          </div>
+          <div>
+            <Text strong style={{ display: "block", marginBottom: 4 }}>特征标签</Text>
+            <Select
+              mode="tags"
+              value={newPersonaTags}
+              onChange={setNewPersonaTags}
+              placeholder="输入后回车添加，如：高预算激进、品牌优先"
+              tokenSeparators={[","]}
+              style={{ width: "100%" }}
+            />
+          </div>
+          <div>
+            <Text strong style={{ display: "block", marginBottom: 4 }}>人设描述</Text>
+            <Input
+              value={newPersonaDesc}
+              onChange={(e) => setNewPersonaDesc(e.target.value)}
+              placeholder="简要描述这个人设的定位和风格"
+              maxLength={80}
+              showCount
+            />
+          </div>
+          <div>
+            <Text strong style={{ display: "block", marginBottom: 4 }}>核心提示词 <Text type="secondary" style={{ fontSize: 12 }}>（不填则继承 Adrian 策略）</Text></Text>
+            <TextArea
+              value={newPersonaPrompt}
+              onChange={(e) => setNewPersonaPrompt(e.target.value)}
+              placeholder={`例：你是一位注重品牌形象的 Google Ads 专家，侧重高端定位和品牌词保护。关键词策略：精确匹配为主，不投 Broad Match...`}
+              rows={5}
+              maxLength={2000}
+              showCount
+            />
+          </div>
+          <Button
+            type="primary"
+            icon={<RobotOutlined />}
+            loading={savingPersona}
+            onClick={createPersona}
+            block
+            style={{ background: "#722ed1", borderColor: "#722ed1" }}
+          >
+            创建并激活此人设
+          </Button>
+        </div>
+      )}
     </Modal>
     <Modal title={`在投详情 — ${advMerchant?.merchant_name || ""}`} open={advModal} onCancel={() => setAdvModal(false)} footer={null} width={720}>
       {advList.length > 0 && (<div style={{ marginBottom: 12, display: "flex", gap: 24 }}>
