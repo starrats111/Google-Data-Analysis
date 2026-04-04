@@ -22,6 +22,10 @@ dayjs.extend(utc);
 dayjs.extend(timezone);
 const TZ = "Asia/Shanghai";
 
+/** 各列 width 之和，scroll.x 须 ≥ 此值否则固定列（CID / 操作）会与表体错位 */
+const DATA_CENTER_TABLE_SCROLL_X =
+  110 + 280 + 100 + 70 + 90 + 80 + 85 + 70 + 80 + 85 + 75 + 80;
+
 const { Text } = Typography;
 const { RangePicker } = DatePicker;
 
@@ -421,7 +425,11 @@ export default function DataCenterPage() {
   const columns: ColumnsType<IndexedRow> = [
     {
       title: "CID", dataIndex: "customer_id", width: 110, fixed: "left",
-      render: (v: string) => <Text copyable={{ text: v }} style={{ fontSize: 12 }}>{formatCid(v)}</Text>,
+      render: (v: string) => (
+        <span style={{ display: "inline-flex", alignItems: "center" }}>
+          <Text copyable={{ text: v }} style={{ fontSize: 12, margin: 0 }}>{formatCid(v)}</Text>
+        </span>
+      ),
     },
     {
       title: "广告系列", dataIndex: "campaign_name", width: 280,
@@ -603,19 +611,9 @@ export default function DataCenterPage() {
       <Row gutter={[12, 12]} style={{ marginBottom: 12 }}>
         <Col xs={12} sm={8} md={8}>
           <Card size="small" styles={{ body: { padding: "8px 12px", cursor: "pointer" } }} hoverable onClick={() => setDetailModal(true)}>
-            <Statistic title="总花费" value={summary.totalCost} prefix="$" precision={2} styles={{ content: { fontSize: 18, color: "#cf1322" } }} />
-            {costByMcc.length > 0 && (
-              <div style={{ marginTop: 4 }}>
-                {costByMcc.map((m) => (
-                  <div key={m.mcc_db_id} style={{ fontSize: 11, color: "#666", lineHeight: 1.6 }}>
-                    {m.mcc_name}: <span style={{ color: "#cf1322" }}>${m.cost_usd.toFixed(2)}</span>
-                    {m.currency === "CNY" && m.cost_original != null && (
-                      <span style={{ color: "#d46b08", marginLeft: 4 }}>(¥{m.cost_original.toFixed(2)})</span>
-                    )}
-                  </div>
-                ))}
-              </div>
-            )}
+            <Statistic title="总花费" value={summary.totalCost} prefix="$" precision={2}
+              suffix={<Text style={{ fontSize: 11, color: "#999" }}>点击查看详情</Text>}
+              styles={{ content: { fontSize: 18, color: "#cf1322" } }} />
           </Card>
         </Col>
         <Col xs={12} sm={8} md={8}>
@@ -643,10 +641,11 @@ export default function DataCenterPage() {
       </div>
 
       {/* ========== 广告系列表格 ========== */}
-      <Card size="small" styles={{ body: { padding: "0 8px 8px" } }}>
+      <Card size="small" styles={{ body: { padding: "8px 8px 8px" } }}>
         <Table<IndexedRow>
           rowKey="id" loading={isLoading} dataSource={rows} columns={columns}
-          size="small" scroll={{ x: 1080 }}
+          size="small" scroll={{ x: DATA_CENTER_TABLE_SCROLL_X }}
+          className="data-center-campaigns-table"
           pagination={{ pageSize: 50, showTotal: (t) => `共 ${t} 条`, showSizeChanger: true, pageSizeOptions: ["20", "50", "100"] }}
           summary={() => {
             if (rows.length === 0) return null;
@@ -662,6 +661,7 @@ export default function DataCenterPage() {
                   <Table.Summary.Cell index={8} align="right"><Text strong type="danger">${summary.totalRejectedCommission.toFixed(2)}</Text></Table.Summary.Cell>
                   <Table.Summary.Cell index={9} align="right"><Text strong style={{ color: calcNetProfit(summary.totalCommission, summary.totalRejectedCommission, summary.totalCost) >= 0 ? "#389e0d" : "#cf1322" }}>${calcNetProfit(summary.totalCommission, summary.totalRejectedCommission, summary.totalCost).toFixed(2)}</Text></Table.Summary.Cell>
                   <Table.Summary.Cell index={10} align="right"><Text strong>{calcCtr(summary.totalClicks, summary.totalImpressions).toFixed(2)}%</Text></Table.Summary.Cell>
+                  <Table.Summary.Cell index={11} />
                 </Table.Summary.Row>
               </Table.Summary>
             );
