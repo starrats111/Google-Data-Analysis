@@ -90,7 +90,7 @@ async function doAiInsights(force = false, filterUserId: bigint | null = null) {
         }
       }
 
-      // 查询昨日广告数据
+      // 查询昨日广告数据（ads_daily_stats 无 campaign_name，需要 join campaigns）
       const adStats = await prisma.ads_daily_stats.findMany({
         where: {
           user_id: user.id,
@@ -98,17 +98,26 @@ async function doAiInsights(force = false, filterUserId: bigint | null = null) {
           is_deleted: 0,
         },
         select: {
-          campaign_name: true,
-          status: true,
+          campaign_id: true,
           cost: true,
           clicks: true,
           impressions: true,
           commission: true,
           rejected_commission: true,
           orders: true,
-          daily_budget: true,
+          budget: true,
         },
       });
+
+      // 查询 campaign 信息（name + status）
+      const campaignIds = [...new Set(adStats.map((r) => r.campaign_id))];
+      const campaignsInfo = campaignIds.length > 0
+        ? await prisma.campaigns.findMany({
+            where: { id: { in: campaignIds }, is_deleted: 0 },
+            select: { id: true, campaign_name: true, status: true, daily_budget: true },
+          })
+        : [];
+      const campaignMap = new Map(campaignsInfo.map((c) => [String(c.id), c]));
 
       // 查询昨日联盟收入
       const txDateStart = new Date(dateStr + "T00:00:00.000Z");
@@ -128,11 +137,11 @@ async function doAiInsights(force = false, filterUserId: bigint | null = null) {
       });
 
       // 构建核心指标
-      const totalCost = adStats.reduce((s, r) => s + Number(r.cost || 0), 0);
-      const totalClicks = adStats.reduce((s, r) => s + Number(r.clicks || 0), 0);
-      const totalImpressions = adStats.reduce((s, r) => s + Number(r.impressions || 0), 0);
-      const totalCommission = adStats.reduce((s, r) => s + Number(r.commission || 0), 0);
-      const totalRejectedCommission = adStats.reduce((s, r) => s + Number(r.rejected_commission || 0), 0);
+      const totalCost = adStats.reduce((s, r) => s + Number(r.cost ?? 0), 0);
+      const totalClicks = adStats.reduce((s, r) => s + Number(r.clicks ?? 0), 0);
+      const totalImpressions = adStats.reduce((s, r) => s + Number(r.impressions ?? 0), 0);
+      const totalCommission = adStats.reduce((s, r) => s + Number(r.commission ?? 0), 0);
+      const totalRejectedCommission = adStats.reduce((s, r) => s + Number(r.rejected_commission ?? 0), 0);
 
       // 联盟平台分布
       const platformMap: Record<string, DailyInsightAffiliatePlatform> = {};
@@ -171,6 +180,9 @@ async function doAiInsights(force = false, filterUserId: bigint | null = null) {
       const finalCommission = totalCommission > 0 ? totalCommission : txTotalCommission;
       const roi = totalCost > 0 ? (finalCommission - totalCost) / totalCost : 0;
 
+      const enabledCount = campaignsInfo.filter((c) => String(c.status || "").toUpperCase() === "ENABLED").length;
+      const pausedCount = campaignsInfo.filter((c) => String(c.status || "").toUpperCase() === "PAUSED").length;
+
       const metrics: DailyInsightMetrics = {
         totalCost,
         totalCommission: finalCommission,
@@ -181,25 +193,28 @@ async function doAiInsights(force = false, filterUserId: bigint | null = null) {
         totalImpressions,
         avgCpc: totalClicks > 0 ? totalCost / totalClicks : 0,
         roi,
-        enabledCount: adStats.filter((r) => String(r.status || "").toUpperCase() === "ENABLED").length,
-        pausedCount: adStats.filter((r) => String(r.status || "").toUpperCase() === "PAUSED").length,
+        enabledCount,
+        pausedCount,
         campaignCount: adStats.length,
       };
 
-      const campaigns: DailyInsightCampaignRow[] = adStats.map((r) => ({
-        campaign_name: String(r.campaign_name || ""),
-        status: String(r.status || ""),
-        cost: Number(r.cost || 0),
-        clicks: Number(r.clicks || 0),
-        impressions: Number(r.impressions || 0),
-        commission: Number(r.commission || 0),
-        rejected_commission: Number(r.rejected_commission || 0),
-        orders: Number(r.orders || 0),
-        roi: Number(r.cost || 0) > 0
-          ? (Number(r.commission || 0) - Number(r.cost || 0)) / Number(r.cost || 0)
-          : 0,
-        daily_budget: r.daily_budget != null ? Number(r.daily_budget) : undefined,
-      }));
+      const campaigns: DailyInsightCampaignRow[] = adStats.map((r) => {
+        const campInfo = campaignMap.get(String(r.campaign_id));
+        const cost = Number(r.cost ?? 0);
+        const commission = Number(r.commission ?? 0);
+        return {
+          campaign_name: campInfo?.campaign_name || String(r.campaign_id),
+          status: campInfo?.status || "UNKNOWN",
+          cost,
+          clicks: Number(r.clicks ?? 0),
+          impressions: Number(r.impressions ?? 0),
+          commission,
+          rejected_commission: Number(r.rejected_commission ?? 0),
+          orders: Number(r.orders ?? 0),
+          roi: cost > 0 ? (commission - cost) / cost : 0,
+          daily_budget: campInfo?.daily_budget != null ? Number(campInfo.daily_budget) : undefined,
+        };
+      });
 
       // 调用 AI 生成洞察报告
       const content = await generateDailyInsight({
