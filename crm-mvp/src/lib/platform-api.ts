@@ -109,9 +109,9 @@ export interface PlatformMerchant {
 const RETRYABLE_STATUS = new Set([502, 503, 504]);
 const MAX_RETRIES = 2;
 
-// 商家列表 API 超时：15s，最多重试 1 次（单页最长 15+2+15=32s）
-// 交易 API 超时更长（120s），保持不变
-const MERCHANT_API_TIMEOUT = 15000;
+// 商家列表 API 超时：30s，最多重试 1 次（单页最长 30+2+30=62s）
+// RW 平台实测 page1~page2 响应 17~25s，需要更长超时
+const MERCHANT_API_TIMEOUT = 30000;
 const MERCHANT_API_MAX_RETRIES = 1;
 
 async function callPlatformApi(
@@ -204,7 +204,17 @@ function parseMerchants(platform: string, data: Record<string, unknown>, assumeA
     const mid = platform === "LH"
       ? String(item.mcid || item.mid || item.m_id || item.id || "")
       : String(item.mid || item.m_id || item.merchant_id || item.id || "");
-    const name = String(item.merchant_name || item.name || item.merchantName || "");
+    // RW 部分商家 merchant_name 为空字符串，用 site_url 域名或 mcid 兜底，避免被过滤掉
+    const rawName = String(item.merchant_name || item.name || item.merchantName || "");
+    const nameFallback = (() => {
+      if (rawName) return rawName;
+      const siteUrl = String(item.site_url || item.siteUrl || "");
+      if (siteUrl) {
+        try { return new URL(siteUrl).hostname.replace(/^www\./, ""); } catch { /* ignore */ }
+      }
+      return String(item.mcid || item.m_id || "");
+    })();
+    const name = nameFallback;
     const category = String(item.category || item.categories || item.category_name || item.categoryName || "");
     // PM (Partnermatic) 返回 camelCase 字段名（commRate / siteUrl / supportRegion），其余平台为 snake_case
     const commission = String(item.comm_rate || item.commRate || item.commission_rate || item.commissionRate || item.commission || "");
@@ -339,6 +349,11 @@ export async function fetchAllMerchants(
       console.log(`[MerchantDiag] ${platform} assumeAllJoined=${assumeAllJoined}`);
     }
 
+    // 获取首页原始列表数量（用于判断是否是最后一页，不受 parseMerchants 过滤影响）
+    const firstRoot = ((firstPage as any).data || firstPage) as Record<string, unknown>;
+    const firstRawList = (firstRoot.list || firstRoot.items || firstRoot.merchants || []) as unknown[];
+    const firstRawCount = Array.isArray(firstRawList) ? firstRawList.length : 0;
+
     const firstBatch = parseMerchants(platform, firstPage, assumeAllJoined);
     for (const m of firstBatch) {
       if (!seen.has(m.merchant_id)) { seen.add(m.merchant_id); allMerchants.push(m); }
@@ -346,8 +361,8 @@ export async function fetchAllMerchants(
 
     let totalPages = getTotalPages(firstPage, config.maxSize);
 
-    // 回退：如果无法解析总页数但首页返回了满页数据，按逐页拉取直到空页
-    const useProbing = totalPages <= 1 && firstBatch.length >= config.maxSize;
+    // 回退：如果无法解析总页数但首页返回了满页原始数据，按逐页拉取直到空页
+    const useProbing = totalPages <= 1 && firstRawCount >= config.maxSize;
     if (useProbing) totalPages = 200; // 设置一个安全上限
 
     // 后续页
@@ -356,15 +371,22 @@ export async function fetchAllMerchants(
       else await sleep(100);
 
       const pageData = await callPlatformApi(config, token, page, effectiveRelFilter);
-      const batch = parseMerchants(platform, pageData, assumeAllJoined);
-      if (batch.length === 0) break;
 
+      // 用原始列表数量判断是否是最后一页：
+      // parseMerchants 会过滤掉 merchant_name 为空的行，导致 batch.length < maxSize 误判提前停止
+      const pageRoot = ((pageData as any).data || pageData) as Record<string, unknown>;
+      const pageRawList = (pageRoot.list || pageRoot.items || pageRoot.merchants || []) as unknown[];
+      const pageRawCount = Array.isArray(pageRawList) ? pageRawList.length : 0;
+
+      if (pageRawCount === 0) break; // 真正的空页才停止
+
+      const batch = parseMerchants(platform, pageData, assumeAllJoined);
       for (const m of batch) {
         if (!seen.has(m.merchant_id)) { seen.add(m.merchant_id); allMerchants.push(m); }
       }
 
-      // 如果本页数据量不足 maxSize，说明是最后一页
-      if (batch.length < config.maxSize) break;
+      // 用原始数量判断最后一页（而非 batch.length），避免空名商家过滤导致误判
+      if (pageRawCount < config.maxSize) break;
     }
 
     return { merchants: allMerchants };
