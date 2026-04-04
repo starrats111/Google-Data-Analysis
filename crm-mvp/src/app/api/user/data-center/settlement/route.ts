@@ -14,6 +14,8 @@ import { nowCST, TZ, parseCSTDateStart, parseCSTDateEndExclusive, isTodayCST } f
  *   - 员工：member_id (组长筛选特定员工)
  *
  * 组长角色：查看全组员工聚合数据，额外返回 members 维度
+ *
+ * 注意：使用 SQL 直接聚合，不拉取原始行，避免 take 上限导致数据截断。
  */
 export async function GET(req: NextRequest) {
   const user = getUserFromRequest(req);
@@ -47,8 +49,8 @@ export async function GET(req: NextRequest) {
     ? (isTodayCST(dateEnd, cstNow) ? cstNow.toDate() : parseCSTDateEndExclusive(dateEnd))
     : cstNow.toDate();
 
-  // 组长查看全组数据，普通用户只看自己
-  let userFilter: unknown = userId;
+  // 确定查询范围的用户 ID 列表
+  let userIds: bigint[] = [];
   let teamMembers: { id: bigint; username: string; display_name: string | null }[] = [];
 
   if (isLeader) {
@@ -57,160 +59,193 @@ export async function GET(req: NextRequest) {
       select: { id: true, username: true, display_name: true },
     });
     teamMembers = members;
-    const memberIds = members.map((m) => m.id);
     if (memberId) {
-      userFilter = BigInt(memberId);
+      userIds = [BigInt(memberId)];
     } else {
-      userFilter = { in: memberIds };
+      userIds = members.map((m) => m.id);
     }
+  } else {
+    userIds = [userId];
   }
 
-  const where: Record<string, unknown> = {
-    user_id: userFilter,
-    is_deleted: 0,
-    transaction_time: { gte: start, lt: end },
-  };
-  if (mid) where.merchant_id = mid;
-  if (platform) where.platform = platform;
+  if (userIds.length === 0) {
+    return apiSuccess(serializeData({
+      summary: {
+        total_commission: 0, approved_commission: 0, rejected_commission: 0,
+        paid_commission: 0, pending_commission: 0,
+        total_orders: 0, total_order_amount: 0,
+        approval_rate: 0, rejection_rate: 0, settlement_rate: 0,
+      },
+      merchants: [], monthly: [], members: isLeader ? [] : undefined,
+      teamMembers: isLeader ? [] : undefined, isLeader: !!isLeader,
+    }));
+  }
 
-  const txns = await prisma.affiliate_transactions.findMany({
-    where: where as never,
-    orderBy: { transaction_time: "desc" },
-    take: 50000,
-  });
+  // 构建 WHERE 子句（避免直接拼接，使用参数化占位符）
+  const uidPlaceholders = userIds.map(() => "?").join(",");
+  const baseParams: unknown[] = [...userIds, start, end];
 
-  let totalCommission = 0;
-  let approvedCommission = 0;
-  let rejectedCommission = 0;
-  let paidCommission = 0;
-  let pendingCommission = 0;
-  let totalOrders = 0;
-  let totalOrderAmount = 0;
+  let midClause = "";
+  if (mid) { midClause = " AND merchant_id = ?"; baseParams.push(mid); }
 
-  // 按商家聚合
-  const merchantMap = new Map<string, {
-    merchant_id: string;
-    merchant_name: string;
-    platform: string;
-    total: number;
-    approved: number;
-    rejected: number;
-    paid: number;
-    pending: number;
+  let platformClause = "";
+  if (platform) { platformClause = " AND platform = ?"; baseParams.push(platform); }
+
+  const baseWhere = `user_id IN (${uidPlaceholders}) AND is_deleted = 0
+    AND transaction_time >= ? AND transaction_time < ?${midClause}${platformClause}`;
+
+  // ── 1. 汇总（单次聚合，不拉原始行） ──────────────────────────────────────
+  const summaryRows = await prisma.$queryRawUnsafe<{
+    total_commission: number;
+    approved_commission: number;
+    rejected_commission: number;
+    paid_commission: number;
+    pending_commission: number;
+    total_orders: number;
+    total_order_amount: number;
+  }[]>(`
+    SELECT
+      SUM(CAST(commission_amount AS DECIMAL(14,4))) AS total_commission,
+      SUM(CASE WHEN status = 'approved' THEN CAST(commission_amount AS DECIMAL(14,4)) ELSE 0 END) AS approved_commission,
+      SUM(CASE WHEN status = 'rejected' THEN CAST(commission_amount AS DECIMAL(14,4)) ELSE 0 END) AS rejected_commission,
+      SUM(CASE WHEN status = 'paid'     THEN CAST(commission_amount AS DECIMAL(14,4)) ELSE 0 END) AS paid_commission,
+      SUM(CASE WHEN status NOT IN ('approved','rejected','paid') THEN CAST(commission_amount AS DECIMAL(14,4)) ELSE 0 END) AS pending_commission,
+      COUNT(*)                                                                          AS total_orders,
+      SUM(COALESCE(CAST(order_amount AS DECIMAL(14,4)), 0))                             AS total_order_amount
+    FROM affiliate_transactions
+    WHERE ${baseWhere}
+  `, ...baseParams);
+
+  const sum = summaryRows[0] || {};
+  const totalCommission    = Number(sum.total_commission    || 0);
+  const approvedCommission = Number(sum.approved_commission || 0);
+  const rejectedCommission = Number(sum.rejected_commission || 0);
+  const paidCommission     = Number(sum.paid_commission     || 0);
+  const pendingCommission  = Number(sum.pending_commission  || 0);
+  const totalOrders        = Number(sum.total_orders        || 0);
+  const totalOrderAmount   = Number(sum.total_order_amount  || 0);
+
+  const fix2 = (n: number) => +n.toFixed(2);
+  const approvalRate   = totalCommission > 0 ? fix2(approvedCommission / totalCommission * 100) : 0;
+  const rejectionRate  = totalCommission > 0 ? fix2(rejectedCommission / totalCommission * 100) : 0;
+  const settlementRate = totalCommission > 0 ? fix2(paidCommission     / totalCommission * 100) : 0;
+
+  // ── 2. 按商家聚合 ──────────────────────────────────────────────────────────
+  const merchantRows = await prisma.$queryRawUnsafe<{
+    platform: string; merchant_id: string; merchant_name: string;
+    total: number; approved: number; rejected: number; paid: number; pending: number;
+    orders: number; order_amount: number;
+  }[]>(`
+    SELECT
+      platform,
+      merchant_id,
+      MAX(merchant_name) AS merchant_name,
+      SUM(CAST(commission_amount AS DECIMAL(14,4))) AS total,
+      SUM(CASE WHEN status = 'approved' THEN CAST(commission_amount AS DECIMAL(14,4)) ELSE 0 END) AS approved,
+      SUM(CASE WHEN status = 'rejected' THEN CAST(commission_amount AS DECIMAL(14,4)) ELSE 0 END) AS rejected,
+      SUM(CASE WHEN status = 'paid'     THEN CAST(commission_amount AS DECIMAL(14,4)) ELSE 0 END) AS paid,
+      SUM(CASE WHEN status NOT IN ('approved','rejected','paid') THEN CAST(commission_amount AS DECIMAL(14,4)) ELSE 0 END) AS pending,
+      COUNT(*) AS orders,
+      SUM(COALESCE(CAST(order_amount AS DECIMAL(14,4)), 0)) AS order_amount
+    FROM affiliate_transactions
+    WHERE ${baseWhere}
+    GROUP BY platform, merchant_id
+    ORDER BY total DESC
+  `, ...baseParams);
+
+  const merchants = merchantRows.map((m) => ({
+    merchant_id: m.merchant_id,
+    merchant_name: m.merchant_name || m.merchant_id,
+    platform: m.platform,
+    total: fix2(Number(m.total)),
+    approved: fix2(Number(m.approved)),
+    rejected: fix2(Number(m.rejected)),
+    paid: fix2(Number(m.paid)),
+    pending: fix2(Number(m.pending)),
+    orders: Number(m.orders),
+    order_amount: fix2(Number(m.order_amount)),
+  }));
+
+  // ── 3. 按月聚合 ───────────────────────────────────────────────────────────
+  const monthlyRows = await prisma.$queryRawUnsafe<{
+    month: string;
+    total: number; approved: number; rejected: number; paid: number; pending: number;
     orders: number;
-    order_amount: number;
-  }>();
+  }[]>(`
+    SELECT
+      DATE_FORMAT(CONVERT_TZ(transaction_time, '+00:00', '+08:00'), '%Y-%m') AS month,
+      SUM(CAST(commission_amount AS DECIMAL(14,4))) AS total,
+      SUM(CASE WHEN status = 'approved' THEN CAST(commission_amount AS DECIMAL(14,4)) ELSE 0 END) AS approved,
+      SUM(CASE WHEN status = 'rejected' THEN CAST(commission_amount AS DECIMAL(14,4)) ELSE 0 END) AS rejected,
+      SUM(CASE WHEN status = 'paid'     THEN CAST(commission_amount AS DECIMAL(14,4)) ELSE 0 END) AS paid,
+      SUM(CASE WHEN status NOT IN ('approved','rejected','paid') THEN CAST(commission_amount AS DECIMAL(14,4)) ELSE 0 END) AS pending,
+      COUNT(*) AS orders
+    FROM affiliate_transactions
+    WHERE ${baseWhere}
+    GROUP BY month
+    ORDER BY month DESC
+  `, ...baseParams);
 
-  // 按月聚合
-  const monthlyMap = new Map<string, {
-    month: string; total: number; approved: number; rejected: number; paid: number; pending: number; orders: number;
-  }>();
+  const monthly = monthlyRows.map((m) => ({
+    month: m.month,
+    total: fix2(Number(m.total)),
+    approved: fix2(Number(m.approved)),
+    rejected: fix2(Number(m.rejected)),
+    paid: fix2(Number(m.paid)),
+    pending: fix2(Number(m.pending)),
+    orders: Number(m.orders),
+  }));
 
-  // 按员工聚合（组长专用）
-  const memberMap = new Map<string, {
+  // ── 4. 按员工聚合（组长专用） ─────────────────────────────────────────────
+  let members: {
     user_id: string; username: string; display_name: string;
-    total: number; approved: number; rejected: number; paid: number; pending: number; orders: number; order_amount: number;
-  }>();
+    total: number; approved: number; rejected: number; paid: number; pending: number;
+    orders: number; order_amount: number;
+  }[] | undefined = undefined;
 
-  const memberNameMap = new Map<string, { username: string; display_name: string }>();
   if (isLeader) {
+    const memberNameMap = new Map<string, { username: string; display_name: string }>();
     for (const m of teamMembers) {
       memberNameMap.set(String(m.id), { username: m.username, display_name: m.display_name || m.username });
     }
-  }
 
-  for (const t of txns) {
-    const amt = Number(t.commission_amount || 0);
-    const orderAmt = Number(t.order_amount || 0);
-    totalCommission += amt;
-    totalOrders += 1;
-    totalOrderAmount += orderAmt;
+    const memberRows = await prisma.$queryRawUnsafe<{
+      user_id: bigint;
+      total: number; approved: number; rejected: number; paid: number; pending: number;
+      orders: number; order_amount: number;
+    }[]>(`
+      SELECT
+        user_id,
+        SUM(CAST(commission_amount AS DECIMAL(14,4))) AS total,
+        SUM(CASE WHEN status = 'approved' THEN CAST(commission_amount AS DECIMAL(14,4)) ELSE 0 END) AS approved,
+        SUM(CASE WHEN status = 'rejected' THEN CAST(commission_amount AS DECIMAL(14,4)) ELSE 0 END) AS rejected,
+        SUM(CASE WHEN status = 'paid'     THEN CAST(commission_amount AS DECIMAL(14,4)) ELSE 0 END) AS paid,
+        SUM(CASE WHEN status NOT IN ('approved','rejected','paid') THEN CAST(commission_amount AS DECIMAL(14,4)) ELSE 0 END) AS pending,
+        COUNT(*) AS orders,
+        SUM(COALESCE(CAST(order_amount AS DECIMAL(14,4)), 0)) AS order_amount
+      FROM affiliate_transactions
+      WHERE ${baseWhere}
+      GROUP BY user_id
+      ORDER BY total DESC
+    `, ...baseParams);
 
-    switch (t.status) {
-      case "approved": approvedCommission += amt; break;
-      case "rejected": rejectedCommission += amt; break;
-      case "paid": paidCommission += amt; break;
-      default: pendingCommission += amt; break;
-    }
-
-    // 按商家
-    const mKey = `${t.platform}:${t.merchant_id}`;
-    const existing = merchantMap.get(mKey) || {
-      merchant_id: t.merchant_id, merchant_name: t.merchant_name || t.merchant_id,
-      platform: t.platform, total: 0, approved: 0, rejected: 0, paid: 0, pending: 0, orders: 0, order_amount: 0,
-    };
-    existing.total += amt;
-    existing.order_amount += orderAmt;
-    if (t.status === "approved") existing.approved += amt;
-    else if (t.status === "rejected") existing.rejected += amt;
-    else if (t.status === "paid") existing.paid += amt;
-    else existing.pending += amt;
-    existing.orders += 1;
-    merchantMap.set(mKey, existing);
-
-    // 按月
-    const monthKey = new Date(t.transaction_time).toLocaleDateString("sv-SE", { timeZone: TZ, year: "numeric", month: "2-digit" }).slice(0, 7);
-    const mExisting = monthlyMap.get(monthKey) || {
-      month: monthKey, total: 0, approved: 0, rejected: 0, paid: 0, pending: 0, orders: 0,
-    };
-    mExisting.total += amt;
-    if (t.status === "approved") mExisting.approved += amt;
-    else if (t.status === "rejected") mExisting.rejected += amt;
-    else if (t.status === "paid") mExisting.paid += amt;
-    else mExisting.pending += amt;
-    mExisting.orders += 1;
-    monthlyMap.set(monthKey, mExisting);
-
-    // 按员工（组长视角）
-    if (isLeader) {
-      const uid = String(t.user_id);
+    members = memberRows.map((r) => {
+      const uid = String(r.user_id);
       const nameInfo = memberNameMap.get(uid) || { username: uid, display_name: uid };
-      const eExisting = memberMap.get(uid) || {
-        user_id: uid, username: nameInfo.username, display_name: nameInfo.display_name,
-        total: 0, approved: 0, rejected: 0, paid: 0, pending: 0, orders: 0, order_amount: 0,
+      return {
+        user_id: uid,
+        username: nameInfo.username,
+        display_name: nameInfo.display_name,
+        total: fix2(Number(r.total)),
+        approved: fix2(Number(r.approved)),
+        rejected: fix2(Number(r.rejected)),
+        paid: fix2(Number(r.paid)),
+        pending: fix2(Number(r.pending)),
+        orders: Number(r.orders),
+        order_amount: fix2(Number(r.order_amount)),
       };
-      eExisting.total += amt;
-      eExisting.order_amount += orderAmt;
-      if (t.status === "approved") eExisting.approved += amt;
-      else if (t.status === "rejected") eExisting.rejected += amt;
-      else if (t.status === "paid") eExisting.paid += amt;
-      else eExisting.pending += amt;
-      eExisting.orders += 1;
-      memberMap.set(uid, eExisting);
-    }
+    });
   }
-
-  const fix2 = (n: number) => +n.toFixed(2);
-
-  const approvalRate = totalCommission > 0 ? fix2(approvedCommission / totalCommission * 100) : 0;
-  const rejectionRate = totalCommission > 0 ? fix2(rejectedCommission / totalCommission * 100) : 0;
-  const settlementRate = totalCommission > 0 ? fix2(paidCommission / totalCommission * 100) : 0;
-
-  const merchants = Array.from(merchantMap.values())
-    .sort((a, b) => b.total - a.total)
-    .map((m) => ({
-      ...m,
-      total: fix2(m.total), approved: fix2(m.approved), rejected: fix2(m.rejected),
-      paid: fix2(m.paid), pending: fix2(m.pending), order_amount: fix2(m.order_amount),
-    }));
-
-  const monthly = Array.from(monthlyMap.values())
-    .sort((a, b) => b.month.localeCompare(a.month))
-    .map((m) => ({
-      ...m,
-      total: fix2(m.total), approved: fix2(m.approved), rejected: fix2(m.rejected),
-      paid: fix2(m.paid), pending: fix2(m.pending),
-    }));
-
-  const members = isLeader
-    ? Array.from(memberMap.values())
-        .sort((a, b) => b.total - a.total)
-        .map((m) => ({
-          ...m,
-          total: fix2(m.total), approved: fix2(m.approved), rejected: fix2(m.rejected),
-          paid: fix2(m.paid), pending: fix2(m.pending), order_amount: fix2(m.order_amount),
-        }))
-    : undefined;
 
   const teamMemberList = isLeader
     ? teamMembers.map((m) => ({ id: String(m.id), name: m.display_name || m.username }))
