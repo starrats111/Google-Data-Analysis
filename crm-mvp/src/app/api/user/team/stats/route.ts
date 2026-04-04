@@ -188,21 +188,10 @@ export const GET = withLeader(async (req: NextRequest, { user }) => {
 
   memberStats.sort((a, b) => b.roi - a.roi);
 
-  const totalCost = memberStats.reduce((s, m) => s + m.cost, 0);
-  const totalCommission = memberStats.reduce((s, m) => s + m.commission, 0);
-  const totalRejected = memberStats.reduce((s, m) => s + m.rejected_commission, 0);
-  const totalNet = totalCommission - totalRejected - totalCost;
-  const avgRoi = totalCost > 0 ? (totalNet / totalCost) * 100 : 0;
-
+  // team_stats 汇总数据由前端从 member_ranking 派生，此处仅返回 member_count
+  // （包含无 campaign 数据的成员，前端无法从 member_ranking 获知）
   return apiSuccess(serializeData({
-    team_stats: {
-      member_count: members.length,
-      total_cost: Math.round(totalCost * 100) / 100,
-      total_commission: Math.round(totalCommission * 100) / 100,
-      rejected_commission: Math.round(totalRejected * 100) / 100,
-      net_commission: Math.round(totalNet * 100) / 100,
-      avg_roi: Math.round(avgRoi * 10) / 10,
-    },
+    team_stats: { member_count: members.length },
     member_ranking: memberStats,
   }));
 });

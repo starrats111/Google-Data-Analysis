@@ -61,6 +61,11 @@ export function middleware(request: NextRequest) {
     return NextResponse.next();
   }
 
+  // ─── v1 API（Google Ads Script 调用，使用 API Key 鉴权，不走 Cookie）───
+  if (pathname.startsWith("/api/v1/")) {
+    return NextResponse.next();
+  }
+
   // ─── 认证 API（logout / me）需要任一 token ───
   if (pathname.startsWith("/api/auth/")) {
     return NextResponse.next();

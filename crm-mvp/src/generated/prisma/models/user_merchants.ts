@@ -69,6 +69,7 @@ export type User_merchantsMinAggregateOutputType = {
   link_status: string | null
   link_checked_at: Date | null
   link_check_reason: string | null
+  kyads_referer_url: string | null
   is_deleted: number | null
   created_at: Date | null
   updated_at: Date | null
@@ -101,6 +102,7 @@ export type User_merchantsMaxAggregateOutputType = {
   link_status: string | null
   link_checked_at: Date | null
   link_check_reason: string | null
+  kyads_referer_url: string | null
   is_deleted: number | null
   created_at: Date | null
   updated_at: Date | null
@@ -134,6 +136,7 @@ export type User_merchantsCountAggregateOutputType = {
   link_status: number
   link_checked_at: number
   link_check_reason: number
+  kyads_referer_url: number
   is_deleted: number
   created_at: number
   updated_at: number
@@ -184,6 +187,7 @@ export type User_merchantsMinAggregateInputType = {
   link_status?: true
   link_checked_at?: true
   link_check_reason?: true
+  kyads_referer_url?: true
   is_deleted?: true
   created_at?: true
   updated_at?: true
@@ -216,6 +220,7 @@ export type User_merchantsMaxAggregateInputType = {
   link_status?: true
   link_checked_at?: true
   link_check_reason?: true
+  kyads_referer_url?: true
   is_deleted?: true
   created_at?: true
   updated_at?: true
@@ -249,6 +254,7 @@ export type User_merchantsCountAggregateInputType = {
   link_status?: true
   link_checked_at?: true
   link_check_reason?: true
+  kyads_referer_url?: true
   is_deleted?: true
   created_at?: true
   updated_at?: true
@@ -369,6 +375,7 @@ export type User_merchantsGroupByOutputType = {
   link_status: string
   link_checked_at: Date | null
   link_check_reason: string | null
+  kyads_referer_url: string | null
   is_deleted: number
   created_at: Date
   updated_at: Date
@@ -425,6 +432,7 @@ export type user_merchantsWhereInput = {
   link_status?: Prisma.StringFilter<"user_merchants"> | string
   link_checked_at?: Prisma.DateTimeNullableFilter<"user_merchants"> | Date | string | null
   link_check_reason?: Prisma.StringNullableFilter<"user_merchants"> | string | null
+  kyads_referer_url?: Prisma.StringNullableFilter<"user_merchants"> | string | null
   is_deleted?: Prisma.IntFilter<"user_merchants"> | number
   created_at?: Prisma.DateTimeFilter<"user_merchants"> | Date | string
   updated_at?: Prisma.DateTimeFilter<"user_merchants"> | Date | string
@@ -458,6 +466,7 @@ export type user_merchantsOrderByWithRelationInput = {
   link_status?: Prisma.SortOrder
   link_checked_at?: Prisma.SortOrderInput | Prisma.SortOrder
   link_check_reason?: Prisma.SortOrderInput | Prisma.SortOrder
+  kyads_referer_url?: Prisma.SortOrderInput | Prisma.SortOrder
   is_deleted?: Prisma.SortOrder
   created_at?: Prisma.SortOrder
   updated_at?: Prisma.SortOrder
@@ -495,6 +504,7 @@ export type user_merchantsWhereUniqueInput = Prisma.AtLeast<{
   link_status?: Prisma.StringFilter<"user_merchants"> | string
   link_checked_at?: Prisma.DateTimeNullableFilter<"user_merchants"> | Date | string | null
   link_check_reason?: Prisma.StringNullableFilter<"user_merchants"> | string | null
+  kyads_referer_url?: Prisma.StringNullableFilter<"user_merchants"> | string | null
   is_deleted?: Prisma.IntFilter<"user_merchants"> | number
   created_at?: Prisma.DateTimeFilter<"user_merchants"> | Date | string
   updated_at?: Prisma.DateTimeFilter<"user_merchants"> | Date | string
@@ -528,6 +538,7 @@ export type user_merchantsOrderByWithAggregationInput = {
   link_status?: Prisma.SortOrder
   link_checked_at?: Prisma.SortOrderInput | Prisma.SortOrder
   link_check_reason?: Prisma.SortOrderInput | Prisma.SortOrder
+  kyads_referer_url?: Prisma.SortOrderInput | Prisma.SortOrder
   is_deleted?: Prisma.SortOrder
   created_at?: Prisma.SortOrder
   updated_at?: Prisma.SortOrder
@@ -569,6 +580,7 @@ export type user_merchantsScalarWhereWithAggregatesInput = {
   link_status?: Prisma.StringWithAggregatesFilter<"user_merchants"> | string
   link_checked_at?: Prisma.DateTimeNullableWithAggregatesFilter<"user_merchants"> | Date | string | null
   link_check_reason?: Prisma.StringNullableWithAggregatesFilter<"user_merchants"> | string | null
+  kyads_referer_url?: Prisma.StringNullableWithAggregatesFilter<"user_merchants"> | string | null
   is_deleted?: Prisma.IntWithAggregatesFilter<"user_merchants"> | number
   created_at?: Prisma.DateTimeWithAggregatesFilter<"user_merchants"> | Date | string
   updated_at?: Prisma.DateTimeWithAggregatesFilter<"user_merchants"> | Date | string
@@ -602,6 +614,7 @@ export type user_merchantsCreateInput = {
   link_status?: string
   link_checked_at?: Date | string | null
   link_check_reason?: string | null
+  kyads_referer_url?: string | null
   is_deleted?: number
   created_at?: Date | string
   updated_at?: Date | string
@@ -635,6 +648,7 @@ export type user_merchantsUncheckedCreateInput = {
   link_status?: string
   link_checked_at?: Date | string | null
   link_check_reason?: string | null
+  kyads_referer_url?: string | null
   is_deleted?: number
   created_at?: Date | string
   updated_at?: Date | string
@@ -668,6 +682,7 @@ export type user_merchantsUpdateInput = {
   link_status?: Prisma.StringFieldUpdateOperationsInput | string
   link_checked_at?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
   link_check_reason?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  kyads_referer_url?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   is_deleted?: Prisma.IntFieldUpdateOperationsInput | number
   created_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updated_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
@@ -701,6 +716,7 @@ export type user_merchantsUncheckedUpdateInput = {
   link_status?: Prisma.StringFieldUpdateOperationsInput | string
   link_checked_at?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
   link_check_reason?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  kyads_referer_url?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   is_deleted?: Prisma.IntFieldUpdateOperationsInput | number
   created_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updated_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
@@ -734,6 +750,7 @@ export type user_merchantsCreateManyInput = {
   link_status?: string
   link_checked_at?: Date | string | null
   link_check_reason?: string | null
+  kyads_referer_url?: string | null
   is_deleted?: number
   created_at?: Date | string
   updated_at?: Date | string
@@ -767,6 +784,7 @@ export type user_merchantsUpdateManyMutationInput = {
   link_status?: Prisma.StringFieldUpdateOperationsInput | string
   link_checked_at?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
   link_check_reason?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  kyads_referer_url?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   is_deleted?: Prisma.IntFieldUpdateOperationsInput | number
   created_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updated_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
@@ -800,6 +818,7 @@ export type user_merchantsUncheckedUpdateManyInput = {
   link_status?: Prisma.StringFieldUpdateOperationsInput | string
   link_checked_at?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
   link_check_reason?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  kyads_referer_url?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   is_deleted?: Prisma.IntFieldUpdateOperationsInput | number
   created_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updated_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
@@ -839,6 +858,7 @@ export type user_merchantsCountOrderByAggregateInput = {
   link_status?: Prisma.SortOrder
   link_checked_at?: Prisma.SortOrder
   link_check_reason?: Prisma.SortOrder
+  kyads_referer_url?: Prisma.SortOrder
   is_deleted?: Prisma.SortOrder
   created_at?: Prisma.SortOrder
   updated_at?: Prisma.SortOrder
@@ -879,6 +899,7 @@ export type user_merchantsMaxOrderByAggregateInput = {
   link_status?: Prisma.SortOrder
   link_checked_at?: Prisma.SortOrder
   link_check_reason?: Prisma.SortOrder
+  kyads_referer_url?: Prisma.SortOrder
   is_deleted?: Prisma.SortOrder
   created_at?: Prisma.SortOrder
   updated_at?: Prisma.SortOrder
@@ -911,6 +932,7 @@ export type user_merchantsMinOrderByAggregateInput = {
   link_status?: Prisma.SortOrder
   link_checked_at?: Prisma.SortOrder
   link_check_reason?: Prisma.SortOrder
+  kyads_referer_url?: Prisma.SortOrder
   is_deleted?: Prisma.SortOrder
   created_at?: Prisma.SortOrder
   updated_at?: Prisma.SortOrder
@@ -954,6 +976,7 @@ export type user_merchantsSelect<ExtArgs extends runtime.Types.Extensions.Intern
   link_status?: boolean
   link_checked_at?: boolean
   link_check_reason?: boolean
+  kyads_referer_url?: boolean
   is_deleted?: boolean
   created_at?: boolean
   updated_at?: boolean
@@ -989,12 +1012,13 @@ export type user_merchantsSelectScalar = {
   link_status?: boolean
   link_checked_at?: boolean
   link_check_reason?: boolean
+  kyads_referer_url?: boolean
   is_deleted?: boolean
   created_at?: boolean
   updated_at?: boolean
 }
 
-export type user_merchantsOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"id" | "user_id" | "platform" | "merchant_id" | "merchant_name" | "merchant_url" | "logo_url" | "category" | "commission_rate" | "cookie_duration" | "supported_regions" | "status" | "claimed_at" | "target_country" | "holiday_name" | "tracking_link" | "campaign_link" | "violation_status" | "violation_time" | "recommendation_status" | "recommendation_time" | "policy_status" | "policy_category_code" | "platform_connection_id" | "link_status" | "link_checked_at" | "link_check_reason" | "is_deleted" | "created_at" | "updated_at", ExtArgs["result"]["user_merchants"]>
+export type user_merchantsOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"id" | "user_id" | "platform" | "merchant_id" | "merchant_name" | "merchant_url" | "logo_url" | "category" | "commission_rate" | "cookie_duration" | "supported_regions" | "status" | "claimed_at" | "target_country" | "holiday_name" | "tracking_link" | "campaign_link" | "violation_status" | "violation_time" | "recommendation_status" | "recommendation_time" | "policy_status" | "policy_category_code" | "platform_connection_id" | "link_status" | "link_checked_at" | "link_check_reason" | "kyads_referer_url" | "is_deleted" | "created_at" | "updated_at", ExtArgs["result"]["user_merchants"]>
 
 export type $user_merchantsPayload<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = {
   name: "user_merchants"
@@ -1027,6 +1051,7 @@ export type $user_merchantsPayload<ExtArgs extends runtime.Types.Extensions.Inte
     link_status: string
     link_checked_at: Date | null
     link_check_reason: string | null
+    kyads_referer_url: string | null
     is_deleted: number
     created_at: Date
     updated_at: Date
@@ -1426,6 +1451,7 @@ export interface user_merchantsFieldRefs {
   readonly link_status: Prisma.FieldRef<"user_merchants", 'String'>
   readonly link_checked_at: Prisma.FieldRef<"user_merchants", 'DateTime'>
   readonly link_check_reason: Prisma.FieldRef<"user_merchants", 'String'>
+  readonly kyads_referer_url: Prisma.FieldRef<"user_merchants", 'String'>
   readonly is_deleted: Prisma.FieldRef<"user_merchants", 'Int'>
   readonly created_at: Prisma.FieldRef<"user_merchants", 'DateTime'>
   readonly updated_at: Prisma.FieldRef<"user_merchants", 'DateTime'>

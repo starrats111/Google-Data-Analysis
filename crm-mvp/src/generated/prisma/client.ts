@@ -196,3 +196,28 @@ export type merchant_policy_reviews = Prisma.merchant_policy_reviewsModel
  * 
  */
 export type mcc_cost_adjustments = Prisma.mcc_cost_adjustmentsModel
+/**
+ * Model kyads_proxies
+ * 
+ */
+export type kyads_proxies = Prisma.kyads_proxiesModel
+/**
+ * Model kyads_proxy_users
+ * 
+ */
+export type kyads_proxy_users = Prisma.kyads_proxy_usersModel
+/**
+ * Model suffix_pool
+ * 
+ */
+export type suffix_pool = Prisma.suffix_poolModel
+/**
+ * Model suffix_assignments
+ * 
+ */
+export type suffix_assignments = Prisma.suffix_assignmentsModel
+/**
+ * Model kyads_click_tasks
+ * 
+ */
+export type kyads_click_tasks = Prisma.kyads_click_tasksModel

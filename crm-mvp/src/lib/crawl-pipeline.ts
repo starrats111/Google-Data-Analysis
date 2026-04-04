@@ -646,11 +646,11 @@ async function collectImages(
 ): Promise<string[]> {
   const allImgs = [...crawlImages];
 
-  if (allImgs.length < 25 && links.length > 0) {
+  if (allImgs.length < 60 && links.length > 0) {
     const subPages = links.slice(0, 9).map((l) => l.url);
     const batchResults = await Promise.all(subPages.map((u) => fetchPageImages(u).catch(() => [] as string[])));
     for (const imgs of batchResults) for (const img of imgs) {
-      if (allImgs.length >= 40) break;
+      if (allImgs.length >= 80) break;
       if (!allImgs.includes(img)) allImgs.push(img);
     }
   }
@@ -658,7 +658,7 @@ async function collectImages(
   if (allImgs.length === 0 && merchantUrl) {
     try {
       const searchImgs = await searchMerchantImages(merchantUrl, merchantName);
-      for (const img of searchImgs) { if (allImgs.length >= 40) break; if (!allImgs.includes(img)) allImgs.push(img); }
+      for (const img of searchImgs) { if (allImgs.length >= 80) break; if (!allImgs.includes(img)) allImgs.push(img); }
     } catch {}
   }
 

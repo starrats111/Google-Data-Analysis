@@ -96,9 +96,10 @@ body {
   animation: fadeIn 0.2s ease-in;
 }
 
+/* 仅用 opacity，避免父级 transform 破坏表头 sticky / 固定列与表体对齐 */
 @keyframes fadeIn {
-  from { opacity: 0; transform: translateY(4px); }
-  to { opacity: 1; transform: translateY(0); }
+  from { opacity: 0; }
+  to { opacity: 1; }
 }
 
 /* 卡片统一阴影 */
@@ -164,4 +165,12 @@ body {
   text-transform: uppercase;
   letter-spacing: 0.5px;
   padding-left: 24px !important;
+}
+
+/* 数据中心广告表：多行单元格垂直居中（勿对包裹 Table 的 Card body 设 overflow:visible，会破坏固定列） */
+.data-center-campaigns-table .ant-table-tbody > tr > td {
+  vertical-align: middle;
+}
+.data-center-campaigns-table .ant-table-summary .ant-table-cell {
+  vertical-align: middle;
 }

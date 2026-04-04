@@ -19,6 +19,7 @@
     "dayjs": "^1.11.20",
     "google-ads-api": "^23.0.0",
     "google-auth-library": "^10.6.2",
+    "https-proxy-agent": "^9.0.0",
     "json5": "^2.2.3",
     "jsonwebtoken": "^9.0.3",
     "mariadb": "^3.5.2",
@@ -31,7 +32,8 @@
     "recharts": "^3.8.0",
     "ssh2": "^1.17.0",
     "swr": "^2.3.3",
-    "tesseract.js": "^5.1.1"
+    "tesseract.js": "^5.1.1",
+    "uuid": "^13.0.0"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",

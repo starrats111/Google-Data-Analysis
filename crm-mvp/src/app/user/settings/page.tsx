@@ -9,7 +9,9 @@ import {
   SettingOutlined, ApiOutlined, GoogleOutlined,
   PlusOutlined, DeleteOutlined, SaveOutlined, EditOutlined, BellOutlined,
   InboxOutlined, FileTextOutlined, CheckCircleOutlined, LockOutlined, CopyOutlined,
+  CodeOutlined,
 } from "@ant-design/icons";
+import { generateLinkExchangeScript } from "@/lib/link-exchange-script-template";
 import {
   PLATFORMS,
 } from "@/lib/constants";
@@ -497,6 +499,95 @@ function ChangePasswordTab() {
   );
 }
 
+// ==================== 脚本配置 Tab ====================
+function ScriptConfigTab() {
+  const { message } = App.useApp();
+  const [apiKey, setApiKey] = useState<string | null>(null);
+  const [generating, setGenerating] = useState(false);
+  const [sheetUrl, setSheetUrl] = useState("");
+
+  useEffect(() => {
+    fetch("/api/user/settings/script-api-key")
+      .then((r) => r.json())
+      .then((res) => { if (res.code === 0) setApiKey(res.data.apiKey); });
+  }, []);
+
+  const handleGenerate = async () => {
+    setGenerating(true);
+    try {
+      const res = await fetch("/api/user/settings/script-api-key", { method: "POST" }).then((r) => r.json());
+      if (res.code === 0) {
+        setApiKey(res.data.apiKey);
+        message.success(res.data.isNew ? "API Key 已生成" : "API Key 已重置");
+      } else {
+        message.error(res.message ?? "生成失败");
+      }
+    } finally {
+      setGenerating(false);
+    }
+  };
+
+  const handleCopyScript = () => {
+    if (!apiKey) return;
+    if (!sheetUrl.trim()) {
+      message.warning("请先填写 Google Sheet 链接");
+      return;
+    }
+    const script = generateLinkExchangeScript(
+      apiKey,
+      window?.location?.origin ?? "https://google-data-analysis.top",
+      sheetUrl.trim()
+    );
+    navigator.clipboard.writeText(script).then(() => message.success("脚本已复制，粘贴到 Google Ads Script 即可运行"));
+  };
+
+  return (
+    <div style={{ maxWidth: 560 }}>
+      <Card
+        title={<><CodeOutlined /> 换链接脚本配置</>}
+        size="small"
+        extra={
+          <Button type="primary" size="small" loading={generating} onClick={handleGenerate}>
+            {apiKey ? "重置 Key" : "生成 Key"}
+          </Button>
+        }
+      >
+        {!apiKey ? (
+          <Text type="secondary">尚未生成 API Key，点击右上角「生成 Key」按钮创建。</Text>
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+            <div>
+              <Text type="secondary" style={{ display: "block", marginBottom: 6 }}>API Key</Text>
+              <Input
+                value={apiKey}
+                readOnly
+                style={{ fontFamily: "monospace" }}
+              />
+            </div>
+            <div>
+              <Text type="secondary" style={{ display: "block", marginBottom: 6 }}>Google Sheet 链接</Text>
+              <Input
+                placeholder="https://docs.google.com/spreadsheets/d/..."
+                value={sheetUrl}
+                onChange={(e) => setSheetUrl(e.target.value)}
+                allowClear
+              />
+            </div>
+            <Button
+              type="primary"
+              icon={<CopyOutlined />}
+              onClick={handleCopyScript}
+              block
+            >
+              复制脚本
+            </Button>
+          </div>
+        )}
+      </Card>
+    </div>
+  );
+}
+
 // ==================== 主页面 ====================
 export default function SettingsPage() {
   const [activeTab, setActiveTab] = useState("platforms");
@@ -513,6 +604,7 @@ export default function SettingsPage() {
           { key: "mcc", label: <><GoogleOutlined /> Google Ads MCC</>, children: <MccAccountsTab /> },
           { key: "notifications", label: <><BellOutlined /> 通知设置</>, children: <NotificationPreferencesTab /> },
           { key: "password", label: <><LockOutlined /> 修改密码</>, children: <ChangePasswordTab /> },
+          { key: "script", label: <><FileTextOutlined /> 脚本配置</>, children: <ScriptConfigTab /> },
         ]}
       />
     </div>

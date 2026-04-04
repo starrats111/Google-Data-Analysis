@@ -36,6 +36,8 @@ export type CampaignsAvgAggregateOutputType = {
   network_search: number | null
   network_partners: number | null
   network_display: number | null
+  suffix_exchange_enabled: number | null
+  suffix_click_baseline: number | null
   is_deleted: number | null
 }
 
@@ -49,6 +51,8 @@ export type CampaignsSumAggregateOutputType = {
   network_search: number | null
   network_partners: number | null
   network_display: number | null
+  suffix_exchange_enabled: number | null
+  suffix_click_baseline: number | null
   is_deleted: number | null
 }
 
@@ -72,6 +76,11 @@ export type CampaignsMinAggregateOutputType = {
   status: string | null
   google_status: string | null
   last_google_sync_at: Date | null
+  suffix_exchange_enabled: number | null
+  suffix_last_content: string | null
+  suffix_last_apply_at: Date | null
+  suffix_click_baseline: number | null
+  suffix_click_checkpoint_at: Date | null
   is_deleted: number | null
   created_at: Date | null
   updated_at: Date | null
@@ -97,6 +106,11 @@ export type CampaignsMaxAggregateOutputType = {
   status: string | null
   google_status: string | null
   last_google_sync_at: Date | null
+  suffix_exchange_enabled: number | null
+  suffix_last_content: string | null
+  suffix_last_apply_at: Date | null
+  suffix_click_baseline: number | null
+  suffix_click_checkpoint_at: Date | null
   is_deleted: number | null
   created_at: Date | null
   updated_at: Date | null
@@ -122,6 +136,11 @@ export type CampaignsCountAggregateOutputType = {
   status: number
   google_status: number
   last_google_sync_at: number
+  suffix_exchange_enabled: number
+  suffix_last_content: number
+  suffix_last_apply_at: number
+  suffix_click_baseline: number
+  suffix_click_checkpoint_at: number
   is_deleted: number
   created_at: number
   updated_at: number
@@ -139,6 +158,8 @@ export type CampaignsAvgAggregateInputType = {
   network_search?: true
   network_partners?: true
   network_display?: true
+  suffix_exchange_enabled?: true
+  suffix_click_baseline?: true
   is_deleted?: true
 }
 
@@ -152,6 +173,8 @@ export type CampaignsSumAggregateInputType = {
   network_search?: true
   network_partners?: true
   network_display?: true
+  suffix_exchange_enabled?: true
+  suffix_click_baseline?: true
   is_deleted?: true
 }
 
@@ -175,6 +198,11 @@ export type CampaignsMinAggregateInputType = {
   status?: true
   google_status?: true
   last_google_sync_at?: true
+  suffix_exchange_enabled?: true
+  suffix_last_content?: true
+  suffix_last_apply_at?: true
+  suffix_click_baseline?: true
+  suffix_click_checkpoint_at?: true
   is_deleted?: true
   created_at?: true
   updated_at?: true
@@ -200,6 +228,11 @@ export type CampaignsMaxAggregateInputType = {
   status?: true
   google_status?: true
   last_google_sync_at?: true
+  suffix_exchange_enabled?: true
+  suffix_last_content?: true
+  suffix_last_apply_at?: true
+  suffix_click_baseline?: true
+  suffix_click_checkpoint_at?: true
   is_deleted?: true
   created_at?: true
   updated_at?: true
@@ -225,6 +258,11 @@ export type CampaignsCountAggregateInputType = {
   status?: true
   google_status?: true
   last_google_sync_at?: true
+  suffix_exchange_enabled?: true
+  suffix_last_content?: true
+  suffix_last_apply_at?: true
+  suffix_click_baseline?: true
+  suffix_click_checkpoint_at?: true
   is_deleted?: true
   created_at?: true
   updated_at?: true
@@ -337,6 +375,11 @@ export type CampaignsGroupByOutputType = {
   status: string
   google_status: string
   last_google_sync_at: Date | null
+  suffix_exchange_enabled: number
+  suffix_last_content: string | null
+  suffix_last_apply_at: Date | null
+  suffix_click_baseline: number
+  suffix_click_checkpoint_at: Date | null
   is_deleted: number
   created_at: Date
   updated_at: Date
@@ -385,6 +428,11 @@ export type campaignsWhereInput = {
   status?: Prisma.StringFilter<"campaigns"> | string
   google_status?: Prisma.StringFilter<"campaigns"> | string
   last_google_sync_at?: Prisma.DateTimeNullableFilter<"campaigns"> | Date | string | null
+  suffix_exchange_enabled?: Prisma.IntFilter<"campaigns"> | number
+  suffix_last_content?: Prisma.StringNullableFilter<"campaigns"> | string | null
+  suffix_last_apply_at?: Prisma.DateTimeNullableFilter<"campaigns"> | Date | string | null
+  suffix_click_baseline?: Prisma.IntFilter<"campaigns"> | number
+  suffix_click_checkpoint_at?: Prisma.DateTimeNullableFilter<"campaigns"> | Date | string | null
   is_deleted?: Prisma.IntFilter<"campaigns"> | number
   created_at?: Prisma.DateTimeFilter<"campaigns"> | Date | string
   updated_at?: Prisma.DateTimeFilter<"campaigns"> | Date | string
@@ -410,6 +458,11 @@ export type campaignsOrderByWithRelationInput = {
   status?: Prisma.SortOrder
   google_status?: Prisma.SortOrder
   last_google_sync_at?: Prisma.SortOrderInput | Prisma.SortOrder
+  suffix_exchange_enabled?: Prisma.SortOrder
+  suffix_last_content?: Prisma.SortOrderInput | Prisma.SortOrder
+  suffix_last_apply_at?: Prisma.SortOrderInput | Prisma.SortOrder
+  suffix_click_baseline?: Prisma.SortOrder
+  suffix_click_checkpoint_at?: Prisma.SortOrderInput | Prisma.SortOrder
   is_deleted?: Prisma.SortOrder
   created_at?: Prisma.SortOrder
   updated_at?: Prisma.SortOrder
@@ -439,6 +492,11 @@ export type campaignsWhereUniqueInput = Prisma.AtLeast<{
   status?: Prisma.StringFilter<"campaigns"> | string
   google_status?: Prisma.StringFilter<"campaigns"> | string
   last_google_sync_at?: Prisma.DateTimeNullableFilter<"campaigns"> | Date | string | null
+  suffix_exchange_enabled?: Prisma.IntFilter<"campaigns"> | number
+  suffix_last_content?: Prisma.StringNullableFilter<"campaigns"> | string | null
+  suffix_last_apply_at?: Prisma.DateTimeNullableFilter<"campaigns"> | Date | string | null
+  suffix_click_baseline?: Prisma.IntFilter<"campaigns"> | number
+  suffix_click_checkpoint_at?: Prisma.DateTimeNullableFilter<"campaigns"> | Date | string | null
   is_deleted?: Prisma.IntFilter<"campaigns"> | number
   created_at?: Prisma.DateTimeFilter<"campaigns"> | Date | string
   updated_at?: Prisma.DateTimeFilter<"campaigns"> | Date | string
@@ -464,6 +522,11 @@ export type campaignsOrderByWithAggregationInput = {
   status?: Prisma.SortOrder
   google_status?: Prisma.SortOrder
   last_google_sync_at?: Prisma.SortOrderInput | Prisma.SortOrder
+  suffix_exchange_enabled?: Prisma.SortOrder
+  suffix_last_content?: Prisma.SortOrderInput | Prisma.SortOrder
+  suffix_last_apply_at?: Prisma.SortOrderInput | Prisma.SortOrder
+  suffix_click_baseline?: Prisma.SortOrder
+  suffix_click_checkpoint_at?: Prisma.SortOrderInput | Prisma.SortOrder
   is_deleted?: Prisma.SortOrder
   created_at?: Prisma.SortOrder
   updated_at?: Prisma.SortOrder
@@ -497,6 +560,11 @@ export type campaignsScalarWhereWithAggregatesInput = {
   status?: Prisma.StringWithAggregatesFilter<"campaigns"> | string
   google_status?: Prisma.StringWithAggregatesFilter<"campaigns"> | string
   last_google_sync_at?: Prisma.DateTimeNullableWithAggregatesFilter<"campaigns"> | Date | string | null
+  suffix_exchange_enabled?: Prisma.IntWithAggregatesFilter<"campaigns"> | number
+  suffix_last_content?: Prisma.StringNullableWithAggregatesFilter<"campaigns"> | string | null
+  suffix_last_apply_at?: Prisma.DateTimeNullableWithAggregatesFilter<"campaigns"> | Date | string | null
+  suffix_click_baseline?: Prisma.IntWithAggregatesFilter<"campaigns"> | number
+  suffix_click_checkpoint_at?: Prisma.DateTimeNullableWithAggregatesFilter<"campaigns"> | Date | string | null
   is_deleted?: Prisma.IntWithAggregatesFilter<"campaigns"> | number
   created_at?: Prisma.DateTimeWithAggregatesFilter<"campaigns"> | Date | string
   updated_at?: Prisma.DateTimeWithAggregatesFilter<"campaigns"> | Date | string
@@ -522,6 +590,11 @@ export type campaignsCreateInput = {
   status?: string
   google_status?: string
   last_google_sync_at?: Date | string | null
+  suffix_exchange_enabled?: number
+  suffix_last_content?: string | null
+  suffix_last_apply_at?: Date | string | null
+  suffix_click_baseline?: number
+  suffix_click_checkpoint_at?: Date | string | null
   is_deleted?: number
   created_at?: Date | string
   updated_at?: Date | string
@@ -547,6 +620,11 @@ export type campaignsUncheckedCreateInput = {
   status?: string
   google_status?: string
   last_google_sync_at?: Date | string | null
+  suffix_exchange_enabled?: number
+  suffix_last_content?: string | null
+  suffix_last_apply_at?: Date | string | null
+  suffix_click_baseline?: number
+  suffix_click_checkpoint_at?: Date | string | null
   is_deleted?: number
   created_at?: Date | string
   updated_at?: Date | string
@@ -572,6 +650,11 @@ export type campaignsUpdateInput = {
   status?: Prisma.StringFieldUpdateOperationsInput | string
   google_status?: Prisma.StringFieldUpdateOperationsInput | string
   last_google_sync_at?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
+  suffix_exchange_enabled?: Prisma.IntFieldUpdateOperationsInput | number
+  suffix_last_content?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  suffix_last_apply_at?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
+  suffix_click_baseline?: Prisma.IntFieldUpdateOperationsInput | number
+  suffix_click_checkpoint_at?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
   is_deleted?: Prisma.IntFieldUpdateOperationsInput | number
   created_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updated_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
@@ -597,6 +680,11 @@ export type campaignsUncheckedUpdateInput = {
   status?: Prisma.StringFieldUpdateOperationsInput | string
   google_status?: Prisma.StringFieldUpdateOperationsInput | string
   last_google_sync_at?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
+  suffix_exchange_enabled?: Prisma.IntFieldUpdateOperationsInput | number
+  suffix_last_content?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  suffix_last_apply_at?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
+  suffix_click_baseline?: Prisma.IntFieldUpdateOperationsInput | number
+  suffix_click_checkpoint_at?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
   is_deleted?: Prisma.IntFieldUpdateOperationsInput | number
   created_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updated_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
@@ -622,6 +710,11 @@ export type campaignsCreateManyInput = {
   status?: string
   google_status?: string
   last_google_sync_at?: Date | string | null
+  suffix_exchange_enabled?: number
+  suffix_last_content?: string | null
+  suffix_last_apply_at?: Date | string | null
+  suffix_click_baseline?: number
+  suffix_click_checkpoint_at?: Date | string | null
   is_deleted?: number
   created_at?: Date | string
   updated_at?: Date | string
@@ -647,6 +740,11 @@ export type campaignsUpdateManyMutationInput = {
   status?: Prisma.StringFieldUpdateOperationsInput | string
   google_status?: Prisma.StringFieldUpdateOperationsInput | string
   last_google_sync_at?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
+  suffix_exchange_enabled?: Prisma.IntFieldUpdateOperationsInput | number
+  suffix_last_content?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  suffix_last_apply_at?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
+  suffix_click_baseline?: Prisma.IntFieldUpdateOperationsInput | number
+  suffix_click_checkpoint_at?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
   is_deleted?: Prisma.IntFieldUpdateOperationsInput | number
   created_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updated_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
@@ -672,6 +770,11 @@ export type campaignsUncheckedUpdateManyInput = {
   status?: Prisma.StringFieldUpdateOperationsInput | string
   google_status?: Prisma.StringFieldUpdateOperationsInput | string
   last_google_sync_at?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
+  suffix_exchange_enabled?: Prisma.IntFieldUpdateOperationsInput | number
+  suffix_last_content?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  suffix_last_apply_at?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
+  suffix_click_baseline?: Prisma.IntFieldUpdateOperationsInput | number
+  suffix_click_checkpoint_at?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
   is_deleted?: Prisma.IntFieldUpdateOperationsInput | number
   created_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updated_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
@@ -703,6 +806,11 @@ export type campaignsCountOrderByAggregateInput = {
   status?: Prisma.SortOrder
   google_status?: Prisma.SortOrder
   last_google_sync_at?: Prisma.SortOrder
+  suffix_exchange_enabled?: Prisma.SortOrder
+  suffix_last_content?: Prisma.SortOrder
+  suffix_last_apply_at?: Prisma.SortOrder
+  suffix_click_baseline?: Prisma.SortOrder
+  suffix_click_checkpoint_at?: Prisma.SortOrder
   is_deleted?: Prisma.SortOrder
   created_at?: Prisma.SortOrder
   updated_at?: Prisma.SortOrder
@@ -718,6 +826,8 @@ export type campaignsAvgOrderByAggregateInput = {
   network_search?: Prisma.SortOrder
   network_partners?: Prisma.SortOrder
   network_display?: Prisma.SortOrder
+  suffix_exchange_enabled?: Prisma.SortOrder
+  suffix_click_baseline?: Prisma.SortOrder
   is_deleted?: Prisma.SortOrder
 }
 
@@ -741,6 +851,11 @@ export type campaignsMaxOrderByAggregateInput = {
   status?: Prisma.SortOrder
   google_status?: Prisma.SortOrder
   last_google_sync_at?: Prisma.SortOrder
+  suffix_exchange_enabled?: Prisma.SortOrder
+  suffix_last_content?: Prisma.SortOrder
+  suffix_last_apply_at?: Prisma.SortOrder
+  suffix_click_baseline?: Prisma.SortOrder
+  suffix_click_checkpoint_at?: Prisma.SortOrder
   is_deleted?: Prisma.SortOrder
   created_at?: Prisma.SortOrder
   updated_at?: Prisma.SortOrder
@@ -766,6 +881,11 @@ export type campaignsMinOrderByAggregateInput = {
   status?: Prisma.SortOrder
   google_status?: Prisma.SortOrder
   last_google_sync_at?: Prisma.SortOrder
+  suffix_exchange_enabled?: Prisma.SortOrder
+  suffix_last_content?: Prisma.SortOrder
+  suffix_last_apply_at?: Prisma.SortOrder
+  suffix_click_baseline?: Prisma.SortOrder
+  suffix_click_checkpoint_at?: Prisma.SortOrder
   is_deleted?: Prisma.SortOrder
   created_at?: Prisma.SortOrder
   updated_at?: Prisma.SortOrder
@@ -781,6 +901,8 @@ export type campaignsSumOrderByAggregateInput = {
   network_search?: Prisma.SortOrder
   network_partners?: Prisma.SortOrder
   network_display?: Prisma.SortOrder
+  suffix_exchange_enabled?: Prisma.SortOrder
+  suffix_click_baseline?: Prisma.SortOrder
   is_deleted?: Prisma.SortOrder
 }
 
@@ -806,6 +928,11 @@ export type campaignsSelect<ExtArgs extends runtime.Types.Extensions.InternalArg
   status?: boolean
   google_status?: boolean
   last_google_sync_at?: boolean
+  suffix_exchange_enabled?: boolean
+  suffix_last_content?: boolean
+  suffix_last_apply_at?: boolean
+  suffix_click_baseline?: boolean
+  suffix_click_checkpoint_at?: boolean
   is_deleted?: boolean
   created_at?: boolean
   updated_at?: boolean
@@ -833,12 +960,17 @@ export type campaignsSelectScalar = {
   status?: boolean
   google_status?: boolean
   last_google_sync_at?: boolean
+  suffix_exchange_enabled?: boolean
+  suffix_last_content?: boolean
+  suffix_last_apply_at?: boolean
+  suffix_click_baseline?: boolean
+  suffix_click_checkpoint_at?: boolean
   is_deleted?: boolean
   created_at?: boolean
   updated_at?: boolean
 }
 
-export type campaignsOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"id" | "user_id" | "user_merchant_id" | "google_campaign_id" | "mcc_id" | "customer_id" | "campaign_name" | "daily_budget" | "bidding_strategy" | "max_cpc_limit" | "target_country" | "geo_target" | "language_id" | "network_search" | "network_partners" | "network_display" | "status" | "google_status" | "last_google_sync_at" | "is_deleted" | "created_at" | "updated_at", ExtArgs["result"]["campaigns"]>
+export type campaignsOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"id" | "user_id" | "user_merchant_id" | "google_campaign_id" | "mcc_id" | "customer_id" | "campaign_name" | "daily_budget" | "bidding_strategy" | "max_cpc_limit" | "target_country" | "geo_target" | "language_id" | "network_search" | "network_partners" | "network_display" | "status" | "google_status" | "last_google_sync_at" | "suffix_exchange_enabled" | "suffix_last_content" | "suffix_last_apply_at" | "suffix_click_baseline" | "suffix_click_checkpoint_at" | "is_deleted" | "created_at" | "updated_at", ExtArgs["result"]["campaigns"]>
 
 export type $campaignsPayload<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = {
   name: "campaigns"
@@ -863,6 +995,11 @@ export type $campaignsPayload<ExtArgs extends runtime.Types.Extensions.InternalA
     status: string
     google_status: string
     last_google_sync_at: Date | null
+    suffix_exchange_enabled: number
+    suffix_last_content: string | null
+    suffix_last_apply_at: Date | null
+    suffix_click_baseline: number
+    suffix_click_checkpoint_at: Date | null
     is_deleted: number
     created_at: Date
     updated_at: Date
@@ -1254,6 +1391,11 @@ export interface campaignsFieldRefs {
   readonly status: Prisma.FieldRef<"campaigns", 'String'>
   readonly google_status: Prisma.FieldRef<"campaigns", 'String'>
   readonly last_google_sync_at: Prisma.FieldRef<"campaigns", 'DateTime'>
+  readonly suffix_exchange_enabled: Prisma.FieldRef<"campaigns", 'Int'>
+  readonly suffix_last_content: Prisma.FieldRef<"campaigns", 'String'>
+  readonly suffix_last_apply_at: Prisma.FieldRef<"campaigns", 'DateTime'>
+  readonly suffix_click_baseline: Prisma.FieldRef<"campaigns", 'Int'>
+  readonly suffix_click_checkpoint_at: Prisma.FieldRef<"campaigns", 'DateTime'>
   readonly is_deleted: Prisma.FieldRef<"campaigns", 'Int'>
   readonly created_at: Prisma.FieldRef<"campaigns", 'DateTime'>
   readonly updated_at: Prisma.FieldRef<"campaigns", 'DateTime'>

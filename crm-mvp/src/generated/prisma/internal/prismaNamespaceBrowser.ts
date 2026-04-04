@@ -81,7 +81,12 @@ export const ModelName = {
   mcc_cid_accounts: 'mcc_cid_accounts',
   ad_policy_categories: 'ad_policy_categories',
   merchant_policy_reviews: 'merchant_policy_reviews',
-  mcc_cost_adjustments: 'mcc_cost_adjustments'
+  mcc_cost_adjustments: 'mcc_cost_adjustments',
+  kyads_proxies: 'kyads_proxies',
+  kyads_proxy_users: 'kyads_proxy_users',
+  suffix_pool: 'suffix_pool',
+  suffix_assignments: 'suffix_assignments',
+  kyads_click_tasks: 'kyads_click_tasks'
 } as const
 
 export type ModelName = (typeof ModelName)[keyof typeof ModelName]
@@ -122,6 +127,8 @@ export const UsersScalarFieldEnum = {
   status: 'status',
   team_id: 'team_id',
   display_name: 'display_name',
+  script_api_key: 'script_api_key',
+  link_exchange_click_count: 'link_exchange_click_count',
   is_deleted: 'is_deleted',
   created_at: 'created_at',
   updated_at: 'updated_at'
@@ -219,6 +226,7 @@ export const User_merchantsScalarFieldEnum = {
   link_status: 'link_status',
   link_checked_at: 'link_checked_at',
   link_check_reason: 'link_check_reason',
+  kyads_referer_url: 'kyads_referer_url',
   is_deleted: 'is_deleted',
   created_at: 'created_at',
   updated_at: 'updated_at'
@@ -330,6 +338,11 @@ export const CampaignsScalarFieldEnum = {
   status: 'status',
   google_status: 'google_status',
   last_google_sync_at: 'last_google_sync_at',
+  suffix_exchange_enabled: 'suffix_exchange_enabled',
+  suffix_last_content: 'suffix_last_content',
+  suffix_last_apply_at: 'suffix_last_apply_at',
+  suffix_click_baseline: 'suffix_click_baseline',
+  suffix_click_checkpoint_at: 'suffix_click_checkpoint_at',
   is_deleted: 'is_deleted',
   created_at: 'created_at',
   updated_at: 'updated_at'
@@ -679,6 +692,90 @@ export const Mcc_cost_adjustmentsScalarFieldEnum = {
 export type Mcc_cost_adjustmentsScalarFieldEnum = (typeof Mcc_cost_adjustmentsScalarFieldEnum)[keyof typeof Mcc_cost_adjustmentsScalarFieldEnum]
 
 
+export const Kyads_proxiesScalarFieldEnum = {
+  id: 'id',
+  name: 'name',
+  priority: 'priority',
+  host: 'host',
+  port: 'port',
+  proxy_type: 'proxy_type',
+  status: 'status',
+  is_deleted: 'is_deleted',
+  created_at: 'created_at',
+  updated_at: 'updated_at'
+} as const
+
+export type Kyads_proxiesScalarFieldEnum = (typeof Kyads_proxiesScalarFieldEnum)[keyof typeof Kyads_proxiesScalarFieldEnum]
+
+
+export const Kyads_proxy_usersScalarFieldEnum = {
+  id: 'id',
+  proxy_id: 'proxy_id',
+  user_id: 'user_id',
+  created_at: 'created_at'
+} as const
+
+export type Kyads_proxy_usersScalarFieldEnum = (typeof Kyads_proxy_usersScalarFieldEnum)[keyof typeof Kyads_proxy_usersScalarFieldEnum]
+
+
+export const Suffix_poolScalarFieldEnum = {
+  id: 'id',
+  user_id: 'user_id',
+  campaign_id: 'campaign_id',
+  suffix_content: 'suffix_content',
+  status: 'status',
+  leased_assignment_id: 'leased_assignment_id',
+  expires_at: 'expires_at',
+  is_deleted: 'is_deleted',
+  created_at: 'created_at'
+} as const
+
+export type Suffix_poolScalarFieldEnum = (typeof Suffix_poolScalarFieldEnum)[keyof typeof Suffix_poolScalarFieldEnum]
+
+
+export const Suffix_assignmentsScalarFieldEnum = {
+  id: 'id',
+  user_id: 'user_id',
+  campaign_id: 'campaign_id',
+  suffix_pool_id: 'suffix_pool_id',
+  assignment_id: 'assignment_id',
+  idempotency_key: 'idempotency_key',
+  clicks_at_assignment: 'clicks_at_assignment',
+  window_start_epoch: 'window_start_epoch',
+  script_instance_id: 'script_instance_id',
+  write_success: 'write_success',
+  write_error_message: 'write_error_message',
+  reported_at: 'reported_at',
+  meta: 'meta',
+  is_deleted: 'is_deleted',
+  created_at: 'created_at',
+  updated_at: 'updated_at'
+} as const
+
+export type Suffix_assignmentsScalarFieldEnum = (typeof Suffix_assignmentsScalarFieldEnum)[keyof typeof Suffix_assignmentsScalarFieldEnum]
+
+
+export const Kyads_click_tasksScalarFieldEnum = {
+  id: 'id',
+  user_id: 'user_id',
+  campaign_id: 'campaign_id',
+  proxy_id: 'proxy_id',
+  affiliate_url: 'affiliate_url',
+  referer_url: 'referer_url',
+  target_count: 'target_count',
+  done_count: 'done_count',
+  status: 'status',
+  error_message: 'error_message',
+  started_at: 'started_at',
+  finished_at: 'finished_at',
+  is_deleted: 'is_deleted',
+  created_at: 'created_at',
+  updated_at: 'updated_at'
+} as const
+
+export type Kyads_click_tasksScalarFieldEnum = (typeof Kyads_click_tasksScalarFieldEnum)[keyof typeof Kyads_click_tasksScalarFieldEnum]
+
+
 export const SortOrder = {
   asc: 'asc',
   desc: 'desc'
@@ -724,7 +821,8 @@ export const usersOrderByRelevanceFieldEnum = {
   plain_password: 'plain_password',
   role: 'role',
   status: 'status',
-  display_name: 'display_name'
+  display_name: 'display_name',
+  script_api_key: 'script_api_key'
 } as const
 
 export type usersOrderByRelevanceFieldEnum = (typeof usersOrderByRelevanceFieldEnum)[keyof typeof usersOrderByRelevanceFieldEnum]
@@ -802,7 +900,8 @@ export const user_merchantsOrderByRelevanceFieldEnum = {
   policy_status: 'policy_status',
   policy_category_code: 'policy_category_code',
   link_status: 'link_status',
-  link_check_reason: 'link_check_reason'
+  link_check_reason: 'link_check_reason',
+  kyads_referer_url: 'kyads_referer_url'
 } as const
 
 export type user_merchantsOrderByRelevanceFieldEnum = (typeof user_merchantsOrderByRelevanceFieldEnum)[keyof typeof user_merchantsOrderByRelevanceFieldEnum]
@@ -868,7 +967,8 @@ export const campaignsOrderByRelevanceFieldEnum = {
   geo_target: 'geo_target',
   language_id: 'language_id',
   status: 'status',
-  google_status: 'google_status'
+  google_status: 'google_status',
+  suffix_last_content: 'suffix_last_content'
 } as const
 
 export type campaignsOrderByRelevanceFieldEnum = (typeof campaignsOrderByRelevanceFieldEnum)[keyof typeof campaignsOrderByRelevanceFieldEnum]
@@ -1058,4 +1158,43 @@ export const mcc_cost_adjustmentsOrderByRelevanceFieldEnum = {
 } as const
 
 export type mcc_cost_adjustmentsOrderByRelevanceFieldEnum = (typeof mcc_cost_adjustmentsOrderByRelevanceFieldEnum)[keyof typeof mcc_cost_adjustmentsOrderByRelevanceFieldEnum]
+
+
+export const kyads_proxiesOrderByRelevanceFieldEnum = {
+  name: 'name',
+  host: 'host',
+  proxy_type: 'proxy_type',
+  status: 'status'
+} as const
+
+export type kyads_proxiesOrderByRelevanceFieldEnum = (typeof kyads_proxiesOrderByRelevanceFieldEnum)[keyof typeof kyads_proxiesOrderByRelevanceFieldEnum]
+
+
+export const suffix_poolOrderByRelevanceFieldEnum = {
+  suffix_content: 'suffix_content',
+  status: 'status',
+  leased_assignment_id: 'leased_assignment_id'
+} as const
+
+export type suffix_poolOrderByRelevanceFieldEnum = (typeof suffix_poolOrderByRelevanceFieldEnum)[keyof typeof suffix_poolOrderByRelevanceFieldEnum]
+
+
+export const suffix_assignmentsOrderByRelevanceFieldEnum = {
+  assignment_id: 'assignment_id',
+  idempotency_key: 'idempotency_key',
+  script_instance_id: 'script_instance_id',
+  write_error_message: 'write_error_message'
+} as const
+
+export type suffix_assignmentsOrderByRelevanceFieldEnum = (typeof suffix_assignmentsOrderByRelevanceFieldEnum)[keyof typeof suffix_assignmentsOrderByRelevanceFieldEnum]
+
+
+export const kyads_click_tasksOrderByRelevanceFieldEnum = {
+  affiliate_url: 'affiliate_url',
+  referer_url: 'referer_url',
+  status: 'status',
+  error_message: 'error_message'
+} as const
+
+export type kyads_click_tasksOrderByRelevanceFieldEnum = (typeof kyads_click_tasksOrderByRelevanceFieldEnum)[keyof typeof kyads_click_tasksOrderByRelevanceFieldEnum]
 

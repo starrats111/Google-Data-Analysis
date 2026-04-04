@@ -11,6 +11,7 @@ import {
   AppstoreOutlined,
   SafetyCertificateOutlined,
   AuditOutlined,
+  GlobalOutlined,
 } from "@ant-design/icons";
 import { useRouter, usePathname } from "next/navigation";
 import { useState, useEffect } from "react";
@@ -54,6 +55,14 @@ const menuItems: MenuItem[] = [
     type: "group" as const,
     children: [
       { key: "/admin/sites", icon: <AppstoreOutlined />, label: "站点管理" },
+    ],
+  },
+  {
+    key: "link-exchange-group",
+    label: "换链接",
+    type: "group" as const,
+    children: [
+      { key: "/admin/proxies", icon: <GlobalOutlined />, label: "代理管理" },
     ],
   },
   {

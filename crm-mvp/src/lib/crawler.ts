@@ -508,7 +508,7 @@ async function crawlViaSitemap(url: string): Promise<{ links: { url: string; tex
   };
 
   for (const imgUrl of sitemapImages) {
-    if (images.length >= 25) break;
+    if (images.length >= 60) break;
     addImg(imgUrl, domain);
   }
 
@@ -516,18 +516,18 @@ async function crawlViaSitemap(url: string): Promise<{ links: { url: string; tex
   const pagesToFetch = [url, ...productUrls.slice(0, 6), ...slugUrls.slice(0, 5)];
   const uniquePages = Array.from(new Set(pagesToFetch)).slice(0, 10);
   for (const pageUrl of uniquePages) {
-    if (images.length >= 25) break;
+    if (images.length >= 60) break;
     await randomDelay(200, 600);
     const pageImgs = await fetchPageImages(pageUrl);
     const pd = (() => { try { return new URL(pageUrl).origin; } catch { return domain; } })();
     for (const img of pageImgs) {
-      if (images.length >= 25) break;
+      if (images.length >= 60) break;
       addImg(img, pd);
     }
   }
 
   console.log(`[Crawler] Sitemap 提取: ${links.length} 链接, ${images.length} 图片`);
-  return { links: links.slice(0, 30), images: images.slice(0, 25) };
+  return { links: links.slice(0, 30), images: images.slice(0, 60) };
 }
 
 // ══════════════════════════════════════════════════════
@@ -1074,7 +1074,7 @@ async function crawlViaBackendApi(url: string): Promise<CrawlResult | null> {
       return {
         html: "",
         links: allLinks.slice(0, 30),
-        images: allImages.slice(0, 25),
+        images: allImages.slice(0, 60),
         method: "http",
       };
     }
@@ -1291,13 +1291,13 @@ export function extractLinksAndImages(
 
   // 按评分排序后提取
   candidates.sort((a, b) => b.score - a.score);
-  let images = candidates.map(c => c.url).slice(0, 50);
+  let images = candidates.map(c => c.url).slice(0, 100);
   images = deduplicateCdnImages(images);
   images = upgradeCdnThumbnails(images);
 
   return {
     links: Array.from(linksMap.entries()).map(([url, text]) => ({ url, text })).slice(0, 30),
-    images: images.slice(0, 25),
+    images: images.slice(0, 60),
   };
 }
 

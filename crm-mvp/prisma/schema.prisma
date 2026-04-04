@@ -36,7 +36,9 @@ model users {
   status         String   @default("active") @db.VarChar(16)
   team_id        BigInt?  @db.UnsignedBigInt
   display_name   String?  @db.VarChar(50)
-  is_deleted     Int      @default(0) @db.TinyInt
+  script_api_key            String?  @unique(map: "uk_script_api_key") @db.VarChar(64) // Google Ads Script 鉴权 Key，格式 ky_live_xxx
+  link_exchange_click_count Int      @default(10) @db.UnsignedInt                     // 换链接工作台：上次设置的每广告刷点击数，新同步广告默认沿用
+  is_deleted                Int      @default(0) @db.TinyInt
   created_at     DateTime @default(now()) @db.DateTime(0)
   updated_at     DateTime @default(now()) @updatedAt @db.DateTime(0)
 
@@ -142,6 +144,8 @@ model user_merchants {
   link_status            String  @default("unchecked") @db.VarChar(16)  // unchecked / valid / invalid
   link_checked_at        DateTime? @db.DateTime(0)
   link_check_reason      String? @db.VarChar(255)
+  // 换链接相关
+  kyads_referer_url      String? @db.VarChar(1024) // 手动覆盖来路URL（为空则自动取最新已发布文章URL）
   is_deleted        Int       @default(0) @db.TinyInt
   created_at        DateTime  @default(now()) @db.DateTime(0)
   updated_at        DateTime  @default(now()) @updatedAt @db.DateTime(0)
@@ -262,6 +266,12 @@ model campaigns {
   status             String   @default("active") @db.VarChar(16)
   google_status      String   @default("ENABLED") @db.VarChar(16) // Google Ads 侧真实状态: ENABLED / PAUSED / REMOVED
   last_google_sync_at DateTime? @db.DateTime(0) // 最后一次从 Google 同步状态的时间
+  // 换链接相关字段
+  suffix_exchange_enabled      Int      @default(1) @db.TinyInt    // 是否参与换链（可单独关闭）
+  suffix_last_content          String?  @db.Text                   // 最近一次写入的 Suffix 内容（展示用）
+  suffix_last_apply_at         DateTime? @db.DateTime(0)           // 最近换链时间
+  suffix_click_baseline        Int      @default(0) @db.Int        // 脚本退出前记录的点击数基线，下次启动时读取以跨实例延续
+  suffix_click_checkpoint_at   DateTime? @db.DateTime(0)           // 基线记录时间
   is_deleted         Int      @default(0) @db.TinyInt
   created_at         DateTime @default(now()) @db.DateTime(0)
   updated_at         DateTime @default(now()) @updatedAt @db.DateTime(0)
@@ -667,3 +677,102 @@ model mcc_cost_adjustments {
 // campaign_link_cache 已移除 — CRM 和数据分析平台是独立系统
 // CRM 通过 platform_connections 的 API Key 直接调用联盟平台 API
 // -----------------------------------------------------------
+
+// -----------------------------------------------------------
+// 28. 换链接 — 代理池（管理员维护，用于模拟点击生成 Suffix）
+// -----------------------------------------------------------
+model kyads_proxies {
+  id         BigInt   @id @default(autoincrement()) @db.UnsignedBigInt
+  name       String   @db.VarChar(64)          // 代理名称，如 cliproxy
+  priority   Int      @default(5) @db.TinyInt  // 优先级，数字越小越优先
+  host       String   @db.VarChar(255)         // 代理服务器地址
+  port       Int      @db.UnsignedInt          // 端口
+  proxy_type String   @default("http") @db.VarChar(8) // http / socks5
+  status     String   @default("active") @db.VarChar(16) // active / disabled / testing
+  is_deleted Int      @default(0) @db.TinyInt
+  created_at DateTime @default(now()) @db.DateTime(0)
+  updated_at DateTime @default(now()) @updatedAt @db.DateTime(0)
+
+  @@index([status], map: "idx_proxy_status")
+}
+
+// -----------------------------------------------------------
+// 29. 换链接 — 代理与员工分配关系
+// -----------------------------------------------------------
+model kyads_proxy_users {
+  id         BigInt   @id @default(autoincrement()) @db.UnsignedBigInt
+  proxy_id   BigInt   @db.UnsignedBigInt
+  user_id    BigInt   @db.UnsignedBigInt
+  created_at DateTime @default(now()) @db.DateTime(0)
+
+  @@unique([proxy_id, user_id], map: "uk_proxy_user")
+  @@index([user_id], map: "idx_user")
+}
+
+// -----------------------------------------------------------
+// 30. 换链接 — Suffix 库存池
+// -----------------------------------------------------------
+model suffix_pool {
+  id                   BigInt    @id @default(autoincrement()) @db.UnsignedBigInt
+  user_id              BigInt    @db.UnsignedBigInt
+  campaign_id          BigInt    @db.UnsignedBigInt      // 关联 campaigns.id
+  suffix_content       String    @db.Text                // finalUrlSuffix 字符串
+  status               String    @default("available") @db.VarChar(16) // available / leased / expired
+  leased_assignment_id String?   @db.VarChar(64)         // 当前占用的 assignment_id（leased 状态时非空）
+  expires_at           DateTime? @db.DateTime(0)         // 过期时间（部分平台 Token 有效期限）
+  is_deleted           Int       @default(0) @db.TinyInt
+  created_at           DateTime  @default(now()) @db.DateTime(0)
+
+  @@index([campaign_id, status], map: "idx_campaign_status")
+  @@index([user_id, status], map: "idx_user_status")
+}
+
+// -----------------------------------------------------------
+// 31. 换链接 — Suffix 分配记录（每次换链的完整审计）
+// -----------------------------------------------------------
+model suffix_assignments {
+  id                   BigInt    @id @default(autoincrement()) @db.UnsignedBigInt
+  user_id              BigInt    @db.UnsignedBigInt
+  campaign_id          BigInt    @db.UnsignedBigInt      // 关联 campaigns.id
+  suffix_pool_id       BigInt?   @db.UnsignedBigInt      // 关联 suffix_pool.id
+  assignment_id        String    @unique(map: "uk_assignment_id") @db.VarChar(64) // UUID，返回给 Script
+  idempotency_key      String    @db.VarChar(255)        // campaignId:clicks:windowStart
+  clicks_at_assignment Int       @default(0) @db.UnsignedInt // 分配时的点击数
+  window_start_epoch   BigInt    @default(0) @db.UnsignedBigInt // 时间窗口起点（秒级时间戳）
+  script_instance_id   String?   @db.VarChar(64)         // 哪次 Script 运行
+  write_success        Int?      @db.TinyInt             // NULL=未回传 0=失败 1=成功
+  write_error_message  String?   @db.Text
+  reported_at          DateTime? @db.DateTime(0)         // Script 回传时间
+  meta                 Json?                             // 快照：campaignName/country/cid/mccId
+  is_deleted           Int       @default(0) @db.TinyInt
+  created_at           DateTime  @default(now()) @db.DateTime(0)
+  updated_at           DateTime  @default(now()) @updatedAt @db.DateTime(0)
+
+  @@index([user_id, created_at], map: "idx_user_created")
+  @@index([campaign_id, created_at], map: "idx_campaign_created")
+  @@index([idempotency_key], map: "idx_idempotency_key")
+}
+
+// -----------------------------------------------------------
+// 32. 换链接 — 点击任务队列（Suffix 生成任务）
+// -----------------------------------------------------------
+model kyads_click_tasks {
+  id             BigInt    @id @default(autoincrement()) @db.UnsignedBigInt
+  user_id        BigInt    @db.UnsignedBigInt
+  campaign_id    BigInt    @db.UnsignedBigInt       // 关联 campaigns.id
+  proxy_id       BigInt?   @db.UnsignedBigInt       // NULL=系统自动选，关联 kyads_proxies.id
+  affiliate_url  String    @db.VarChar(1024)        // 本次使用的联盟链接快照
+  referer_url    String    @db.VarChar(1024)        // 本次使用的来路URL快照
+  target_count   Int       @default(10) @db.UnsignedInt // 目标生成数量
+  done_count     Int       @default(0) @db.UnsignedInt  // 已成功生成数量
+  status         String    @default("pending") @db.VarChar(16) // pending / running / done / failed
+  error_message  String?   @db.Text
+  started_at     DateTime? @db.DateTime(0)
+  finished_at    DateTime? @db.DateTime(0)
+  is_deleted     Int       @default(0) @db.TinyInt
+  created_at     DateTime  @default(now()) @db.DateTime(0)
+  updated_at     DateTime  @default(now()) @updatedAt @db.DateTime(0)
+
+  @@index([user_id, status], map: "idx_user_status")
+  @@index([status, created_at], map: "idx_status_created")
+}

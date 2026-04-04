@@ -29,12 +29,14 @@ export type AggregateUsers = {
 export type UsersAvgAggregateOutputType = {
   id: number | null
   team_id: number | null
+  link_exchange_click_count: number | null
   is_deleted: number | null
 }
 
 export type UsersSumAggregateOutputType = {
   id: bigint | null
   team_id: bigint | null
+  link_exchange_click_count: number | null
   is_deleted: number | null
 }
 
@@ -47,6 +49,8 @@ export type UsersMinAggregateOutputType = {
   status: string | null
   team_id: bigint | null
   display_name: string | null
+  script_api_key: string | null
+  link_exchange_click_count: number | null
   is_deleted: number | null
   created_at: Date | null
   updated_at: Date | null
@@ -61,6 +65,8 @@ export type UsersMaxAggregateOutputType = {
   status: string | null
   team_id: bigint | null
   display_name: string | null
+  script_api_key: string | null
+  link_exchange_click_count: number | null
   is_deleted: number | null
   created_at: Date | null
   updated_at: Date | null
@@ -75,6 +81,8 @@ export type UsersCountAggregateOutputType = {
   status: number
   team_id: number
   display_name: number
+  script_api_key: number
+  link_exchange_click_count: number
   is_deleted: number
   created_at: number
   updated_at: number
@@ -85,12 +93,14 @@ export type UsersCountAggregateOutputType = {
 export type UsersAvgAggregateInputType = {
   id?: true
   team_id?: true
+  link_exchange_click_count?: true
   is_deleted?: true
 }
 
 export type UsersSumAggregateInputType = {
   id?: true
   team_id?: true
+  link_exchange_click_count?: true
   is_deleted?: true
 }
 
@@ -103,6 +113,8 @@ export type UsersMinAggregateInputType = {
   status?: true
   team_id?: true
   display_name?: true
+  script_api_key?: true
+  link_exchange_click_count?: true
   is_deleted?: true
   created_at?: true
   updated_at?: true
@@ -117,6 +129,8 @@ export type UsersMaxAggregateInputType = {
   status?: true
   team_id?: true
   display_name?: true
+  script_api_key?: true
+  link_exchange_click_count?: true
   is_deleted?: true
   created_at?: true
   updated_at?: true
@@ -131,6 +145,8 @@ export type UsersCountAggregateInputType = {
   status?: true
   team_id?: true
   display_name?: true
+  script_api_key?: true
+  link_exchange_click_count?: true
   is_deleted?: true
   created_at?: true
   updated_at?: true
@@ -232,6 +248,8 @@ export type UsersGroupByOutputType = {
   status: string
   team_id: bigint | null
   display_name: string | null
+  script_api_key: string | null
+  link_exchange_click_count: number
   is_deleted: number
   created_at: Date
   updated_at: Date
@@ -269,6 +287,8 @@ export type usersWhereInput = {
   status?: Prisma.StringFilter<"users"> | string
   team_id?: Prisma.BigIntNullableFilter<"users"> | bigint | number | null
   display_name?: Prisma.StringNullableFilter<"users"> | string | null
+  script_api_key?: Prisma.StringNullableFilter<"users"> | string | null
+  link_exchange_click_count?: Prisma.IntFilter<"users"> | number
   is_deleted?: Prisma.IntFilter<"users"> | number
   created_at?: Prisma.DateTimeFilter<"users"> | Date | string
   updated_at?: Prisma.DateTimeFilter<"users"> | Date | string
@@ -283,6 +303,8 @@ export type usersOrderByWithRelationInput = {
   status?: Prisma.SortOrder
   team_id?: Prisma.SortOrderInput | Prisma.SortOrder
   display_name?: Prisma.SortOrderInput | Prisma.SortOrder
+  script_api_key?: Prisma.SortOrderInput | Prisma.SortOrder
+  link_exchange_click_count?: Prisma.SortOrder
   is_deleted?: Prisma.SortOrder
   created_at?: Prisma.SortOrder
   updated_at?: Prisma.SortOrder
@@ -292,6 +314,7 @@ export type usersOrderByWithRelationInput = {
 export type usersWhereUniqueInput = Prisma.AtLeast<{
   id?: bigint | number
   username?: string
+  script_api_key?: string
   AND?: Prisma.usersWhereInput | Prisma.usersWhereInput[]
   OR?: Prisma.usersWhereInput[]
   NOT?: Prisma.usersWhereInput | Prisma.usersWhereInput[]
@@ -301,10 +324,11 @@ export type usersWhereUniqueInput = Prisma.AtLeast<{
   status?: Prisma.StringFilter<"users"> | string
   team_id?: Prisma.BigIntNullableFilter<"users"> | bigint | number | null
   display_name?: Prisma.StringNullableFilter<"users"> | string | null
+  link_exchange_click_count?: Prisma.IntFilter<"users"> | number
   is_deleted?: Prisma.IntFilter<"users"> | number
   created_at?: Prisma.DateTimeFilter<"users"> | Date | string
   updated_at?: Prisma.DateTimeFilter<"users"> | Date | string
-}, "id" | "username">
+}, "id" | "username" | "script_api_key">
 
 export type usersOrderByWithAggregationInput = {
   id?: Prisma.SortOrder
@@ -315,6 +339,8 @@ export type usersOrderByWithAggregationInput = {
   status?: Prisma.SortOrder
   team_id?: Prisma.SortOrderInput | Prisma.SortOrder
   display_name?: Prisma.SortOrderInput | Prisma.SortOrder
+  script_api_key?: Prisma.SortOrderInput | Prisma.SortOrder
+  link_exchange_click_count?: Prisma.SortOrder
   is_deleted?: Prisma.SortOrder
   created_at?: Prisma.SortOrder
   updated_at?: Prisma.SortOrder
@@ -337,6 +363,8 @@ export type usersScalarWhereWithAggregatesInput = {
   status?: Prisma.StringWithAggregatesFilter<"users"> | string
   team_id?: Prisma.BigIntNullableWithAggregatesFilter<"users"> | bigint | number | null
   display_name?: Prisma.StringNullableWithAggregatesFilter<"users"> | string | null
+  script_api_key?: Prisma.StringNullableWithAggregatesFilter<"users"> | string | null
+  link_exchange_click_count?: Prisma.IntWithAggregatesFilter<"users"> | number
   is_deleted?: Prisma.IntWithAggregatesFilter<"users"> | number
   created_at?: Prisma.DateTimeWithAggregatesFilter<"users"> | Date | string
   updated_at?: Prisma.DateTimeWithAggregatesFilter<"users"> | Date | string
@@ -351,6 +379,8 @@ export type usersCreateInput = {
   status?: string
   team_id?: bigint | number | null
   display_name?: string | null
+  script_api_key?: string | null
+  link_exchange_click_count?: number
   is_deleted?: number
   created_at?: Date | string
   updated_at?: Date | string
@@ -365,6 +395,8 @@ export type usersUncheckedCreateInput = {
   status?: string
   team_id?: bigint | number | null
   display_name?: string | null
+  script_api_key?: string | null
+  link_exchange_click_count?: number
   is_deleted?: number
   created_at?: Date | string
   updated_at?: Date | string
@@ -379,6 +411,8 @@ export type usersUpdateInput = {
   status?: Prisma.StringFieldUpdateOperationsInput | string
   team_id?: Prisma.NullableBigIntFieldUpdateOperationsInput | bigint | number | null
   display_name?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  script_api_key?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  link_exchange_click_count?: Prisma.IntFieldUpdateOperationsInput | number
   is_deleted?: Prisma.IntFieldUpdateOperationsInput | number
   created_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updated_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
@@ -393,6 +427,8 @@ export type usersUncheckedUpdateInput = {
   status?: Prisma.StringFieldUpdateOperationsInput | string
   team_id?: Prisma.NullableBigIntFieldUpdateOperationsInput | bigint | number | null
   display_name?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  script_api_key?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  link_exchange_click_count?: Prisma.IntFieldUpdateOperationsInput | number
   is_deleted?: Prisma.IntFieldUpdateOperationsInput | number
   created_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updated_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
@@ -407,6 +443,8 @@ export type usersCreateManyInput = {
   status?: string
   team_id?: bigint | number | null
   display_name?: string | null
+  script_api_key?: string | null
+  link_exchange_click_count?: number
   is_deleted?: number
   created_at?: Date | string
   updated_at?: Date | string
@@ -421,6 +459,8 @@ export type usersUpdateManyMutationInput = {
   status?: Prisma.StringFieldUpdateOperationsInput | string
   team_id?: Prisma.NullableBigIntFieldUpdateOperationsInput | bigint | number | null
   display_name?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  script_api_key?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  link_exchange_click_count?: Prisma.IntFieldUpdateOperationsInput | number
   is_deleted?: Prisma.IntFieldUpdateOperationsInput | number
   created_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updated_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
@@ -435,6 +475,8 @@ export type usersUncheckedUpdateManyInput = {
   status?: Prisma.StringFieldUpdateOperationsInput | string
   team_id?: Prisma.NullableBigIntFieldUpdateOperationsInput | bigint | number | null
   display_name?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  script_api_key?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  link_exchange_click_count?: Prisma.IntFieldUpdateOperationsInput | number
   is_deleted?: Prisma.IntFieldUpdateOperationsInput | number
   created_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updated_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
@@ -455,6 +497,8 @@ export type usersCountOrderByAggregateInput = {
   status?: Prisma.SortOrder
   team_id?: Prisma.SortOrder
   display_name?: Prisma.SortOrder
+  script_api_key?: Prisma.SortOrder
+  link_exchange_click_count?: Prisma.SortOrder
   is_deleted?: Prisma.SortOrder
   created_at?: Prisma.SortOrder
   updated_at?: Prisma.SortOrder
@@ -463,6 +507,7 @@ export type usersCountOrderByAggregateInput = {
 export type usersAvgOrderByAggregateInput = {
   id?: Prisma.SortOrder
   team_id?: Prisma.SortOrder
+  link_exchange_click_count?: Prisma.SortOrder
   is_deleted?: Prisma.SortOrder
 }
 
@@ -475,6 +520,8 @@ export type usersMaxOrderByAggregateInput = {
   status?: Prisma.SortOrder
   team_id?: Prisma.SortOrder
   display_name?: Prisma.SortOrder
+  script_api_key?: Prisma.SortOrder
+  link_exchange_click_count?: Prisma.SortOrder
   is_deleted?: Prisma.SortOrder
   created_at?: Prisma.SortOrder
   updated_at?: Prisma.SortOrder
@@ -489,6 +536,8 @@ export type usersMinOrderByAggregateInput = {
   status?: Prisma.SortOrder
   team_id?: Prisma.SortOrder
   display_name?: Prisma.SortOrder
+  script_api_key?: Prisma.SortOrder
+  link_exchange_click_count?: Prisma.SortOrder
   is_deleted?: Prisma.SortOrder
   created_at?: Prisma.SortOrder
   updated_at?: Prisma.SortOrder
@@ -497,6 +546,7 @@ export type usersMinOrderByAggregateInput = {
 export type usersSumOrderByAggregateInput = {
   id?: Prisma.SortOrder
   team_id?: Prisma.SortOrder
+  link_exchange_click_count?: Prisma.SortOrder
   is_deleted?: Prisma.SortOrder
 }
 
@@ -515,6 +565,8 @@ export type usersSelect<ExtArgs extends runtime.Types.Extensions.InternalArgs = 
   status?: boolean
   team_id?: boolean
   display_name?: boolean
+  script_api_key?: boolean
+  link_exchange_click_count?: boolean
   is_deleted?: boolean
   created_at?: boolean
   updated_at?: boolean
@@ -531,12 +583,14 @@ export type usersSelectScalar = {
   status?: boolean
   team_id?: boolean
   display_name?: boolean
+  script_api_key?: boolean
+  link_exchange_click_count?: boolean
   is_deleted?: boolean
   created_at?: boolean
   updated_at?: boolean
 }
 
-export type usersOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"id" | "username" | "password_hash" | "plain_password" | "role" | "status" | "team_id" | "display_name" | "is_deleted" | "created_at" | "updated_at", ExtArgs["result"]["users"]>
+export type usersOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"id" | "username" | "password_hash" | "plain_password" | "role" | "status" | "team_id" | "display_name" | "script_api_key" | "link_exchange_click_count" | "is_deleted" | "created_at" | "updated_at", ExtArgs["result"]["users"]>
 
 export type $usersPayload<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = {
   name: "users"
@@ -550,6 +604,8 @@ export type $usersPayload<ExtArgs extends runtime.Types.Extensions.InternalArgs 
     status: string
     team_id: bigint | null
     display_name: string | null
+    script_api_key: string | null
+    link_exchange_click_count: number
     is_deleted: number
     created_at: Date
     updated_at: Date
@@ -930,6 +986,8 @@ export interface usersFieldRefs {
   readonly status: Prisma.FieldRef<"users", 'String'>
   readonly team_id: Prisma.FieldRef<"users", 'BigInt'>
   readonly display_name: Prisma.FieldRef<"users", 'String'>
+  readonly script_api_key: Prisma.FieldRef<"users", 'String'>
+  readonly link_exchange_click_count: Prisma.FieldRef<"users", 'Int'>
   readonly is_deleted: Prisma.FieldRef<"users", 'Int'>
   readonly created_at: Prisma.FieldRef<"users", 'DateTime'>
   readonly updated_at: Prisma.FieldRef<"users", 'DateTime'>

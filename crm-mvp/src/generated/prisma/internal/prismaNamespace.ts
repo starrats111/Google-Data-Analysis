@@ -414,7 +414,12 @@ export const ModelName = {
   mcc_cid_accounts: 'mcc_cid_accounts',
   ad_policy_categories: 'ad_policy_categories',
   merchant_policy_reviews: 'merchant_policy_reviews',
-  mcc_cost_adjustments: 'mcc_cost_adjustments'
+  mcc_cost_adjustments: 'mcc_cost_adjustments',
+  kyads_proxies: 'kyads_proxies',
+  kyads_proxy_users: 'kyads_proxy_users',
+  suffix_pool: 'suffix_pool',
+  suffix_assignments: 'suffix_assignments',
+  kyads_click_tasks: 'kyads_click_tasks'
 } as const
 
 export type ModelName = (typeof ModelName)[keyof typeof ModelName]
@@ -430,7 +435,7 @@ export type TypeMap<ExtArgs extends runtime.Types.Extensions.InternalArgs = runt
     omit: GlobalOmitOptions
   }
   meta: {
-    modelProps: "teams" | "users" | "ai_providers" | "ai_model_configs" | "system_configs" | "platform_connections" | "user_merchants" | "merchant_violations" | "merchant_recommendations" | "sheet_configs" | "ad_default_settings" | "holiday_calendar" | "campaigns" | "ad_groups" | "keywords" | "ad_creatives" | "publish_sites" | "site_migrations" | "articles" | "ads_daily_stats" | "google_mcc_accounts" | "affiliate_transactions" | "notifications" | "notification_preferences" | "ai_insights" | "operation_logs" | "exchange_rate_snapshots" | "mcc_cid_accounts" | "ad_policy_categories" | "merchant_policy_reviews" | "mcc_cost_adjustments"
+    modelProps: "teams" | "users" | "ai_providers" | "ai_model_configs" | "system_configs" | "platform_connections" | "user_merchants" | "merchant_violations" | "merchant_recommendations" | "sheet_configs" | "ad_default_settings" | "holiday_calendar" | "campaigns" | "ad_groups" | "keywords" | "ad_creatives" | "publish_sites" | "site_migrations" | "articles" | "ads_daily_stats" | "google_mcc_accounts" | "affiliate_transactions" | "notifications" | "notification_preferences" | "ai_insights" | "operation_logs" | "exchange_rate_snapshots" | "mcc_cid_accounts" | "ad_policy_categories" | "merchant_policy_reviews" | "mcc_cost_adjustments" | "kyads_proxies" | "kyads_proxy_users" | "suffix_pool" | "suffix_assignments" | "kyads_click_tasks"
     txIsolationLevel: TransactionIsolationLevel
   }
   model: {
@@ -2480,6 +2485,336 @@ export type TypeMap<ExtArgs extends runtime.Types.Extensions.InternalArgs = runt
         }
       }
     }
+    kyads_proxies: {
+      payload: Prisma.$kyads_proxiesPayload<ExtArgs>
+      fields: Prisma.kyads_proxiesFieldRefs
+      operations: {
+        findUnique: {
+          args: Prisma.kyads_proxiesFindUniqueArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$kyads_proxiesPayload> | null
+        }
+        findUniqueOrThrow: {
+          args: Prisma.kyads_proxiesFindUniqueOrThrowArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$kyads_proxiesPayload>
+        }
+        findFirst: {
+          args: Prisma.kyads_proxiesFindFirstArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$kyads_proxiesPayload> | null
+        }
+        findFirstOrThrow: {
+          args: Prisma.kyads_proxiesFindFirstOrThrowArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$kyads_proxiesPayload>
+        }
+        findMany: {
+          args: Prisma.kyads_proxiesFindManyArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$kyads_proxiesPayload>[]
+        }
+        create: {
+          args: Prisma.kyads_proxiesCreateArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$kyads_proxiesPayload>
+        }
+        createMany: {
+          args: Prisma.kyads_proxiesCreateManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        delete: {
+          args: Prisma.kyads_proxiesDeleteArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$kyads_proxiesPayload>
+        }
+        update: {
+          args: Prisma.kyads_proxiesUpdateArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$kyads_proxiesPayload>
+        }
+        deleteMany: {
+          args: Prisma.kyads_proxiesDeleteManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        updateMany: {
+          args: Prisma.kyads_proxiesUpdateManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        upsert: {
+          args: Prisma.kyads_proxiesUpsertArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$kyads_proxiesPayload>
+        }
+        aggregate: {
+          args: Prisma.Kyads_proxiesAggregateArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.AggregateKyads_proxies>
+        }
+        groupBy: {
+          args: Prisma.kyads_proxiesGroupByArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.Kyads_proxiesGroupByOutputType>[]
+        }
+        count: {
+          args: Prisma.kyads_proxiesCountArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.Kyads_proxiesCountAggregateOutputType> | number
+        }
+      }
+    }
+    kyads_proxy_users: {
+      payload: Prisma.$kyads_proxy_usersPayload<ExtArgs>
+      fields: Prisma.kyads_proxy_usersFieldRefs
+      operations: {
+        findUnique: {
+          args: Prisma.kyads_proxy_usersFindUniqueArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$kyads_proxy_usersPayload> | null
+        }
+        findUniqueOrThrow: {
+          args: Prisma.kyads_proxy_usersFindUniqueOrThrowArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$kyads_proxy_usersPayload>
+        }
+        findFirst: {
+          args: Prisma.kyads_proxy_usersFindFirstArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$kyads_proxy_usersPayload> | null
+        }
+        findFirstOrThrow: {
+          args: Prisma.kyads_proxy_usersFindFirstOrThrowArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$kyads_proxy_usersPayload>
+        }
+        findMany: {
+          args: Prisma.kyads_proxy_usersFindManyArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$kyads_proxy_usersPayload>[]
+        }
+        create: {
+          args: Prisma.kyads_proxy_usersCreateArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$kyads_proxy_usersPayload>
+        }
+        createMany: {
+          args: Prisma.kyads_proxy_usersCreateManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        delete: {
+          args: Prisma.kyads_proxy_usersDeleteArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$kyads_proxy_usersPayload>
+        }
+        update: {
+          args: Prisma.kyads_proxy_usersUpdateArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$kyads_proxy_usersPayload>
+        }
+        deleteMany: {
+          args: Prisma.kyads_proxy_usersDeleteManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        updateMany: {
+          args: Prisma.kyads_proxy_usersUpdateManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        upsert: {
+          args: Prisma.kyads_proxy_usersUpsertArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$kyads_proxy_usersPayload>
+        }
+        aggregate: {
+          args: Prisma.Kyads_proxy_usersAggregateArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.AggregateKyads_proxy_users>
+        }
+        groupBy: {
+          args: Prisma.kyads_proxy_usersGroupByArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.Kyads_proxy_usersGroupByOutputType>[]
+        }
+        count: {
+          args: Prisma.kyads_proxy_usersCountArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.Kyads_proxy_usersCountAggregateOutputType> | number
+        }
+      }
+    }
+    suffix_pool: {
+      payload: Prisma.$suffix_poolPayload<ExtArgs>
+      fields: Prisma.suffix_poolFieldRefs
+      operations: {
+        findUnique: {
+          args: Prisma.suffix_poolFindUniqueArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$suffix_poolPayload> | null
+        }
+        findUniqueOrThrow: {
+          args: Prisma.suffix_poolFindUniqueOrThrowArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$suffix_poolPayload>
+        }
+        findFirst: {
+          args: Prisma.suffix_poolFindFirstArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$suffix_poolPayload> | null
+        }
+        findFirstOrThrow: {
+          args: Prisma.suffix_poolFindFirstOrThrowArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$suffix_poolPayload>
+        }
+        findMany: {
+          args: Prisma.suffix_poolFindManyArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$suffix_poolPayload>[]
+        }
+        create: {
+          args: Prisma.suffix_poolCreateArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$suffix_poolPayload>
+        }
+        createMany: {
+          args: Prisma.suffix_poolCreateManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        delete: {
+          args: Prisma.suffix_poolDeleteArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$suffix_poolPayload>
+        }
+        update: {
+          args: Prisma.suffix_poolUpdateArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$suffix_poolPayload>
+        }
+        deleteMany: {
+          args: Prisma.suffix_poolDeleteManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        updateMany: {
+          args: Prisma.suffix_poolUpdateManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        upsert: {
+          args: Prisma.suffix_poolUpsertArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$suffix_poolPayload>
+        }
+        aggregate: {
+          args: Prisma.Suffix_poolAggregateArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.AggregateSuffix_pool>
+        }
+        groupBy: {
+          args: Prisma.suffix_poolGroupByArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.Suffix_poolGroupByOutputType>[]
+        }
+        count: {
+          args: Prisma.suffix_poolCountArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.Suffix_poolCountAggregateOutputType> | number
+        }
+      }
+    }
+    suffix_assignments: {
+      payload: Prisma.$suffix_assignmentsPayload<ExtArgs>
+      fields: Prisma.suffix_assignmentsFieldRefs
+      operations: {
+        findUnique: {
+          args: Prisma.suffix_assignmentsFindUniqueArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$suffix_assignmentsPayload> | null
+        }
+        findUniqueOrThrow: {
+          args: Prisma.suffix_assignmentsFindUniqueOrThrowArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$suffix_assignmentsPayload>
+        }
+        findFirst: {
+          args: Prisma.suffix_assignmentsFindFirstArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$suffix_assignmentsPayload> | null
+        }
+        findFirstOrThrow: {
+          args: Prisma.suffix_assignmentsFindFirstOrThrowArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$suffix_assignmentsPayload>
+        }
+        findMany: {
+          args: Prisma.suffix_assignmentsFindManyArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$suffix_assignmentsPayload>[]
+        }
+        create: {
+          args: Prisma.suffix_assignmentsCreateArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$suffix_assignmentsPayload>
+        }
+        createMany: {
+          args: Prisma.suffix_assignmentsCreateManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        delete: {
+          args: Prisma.suffix_assignmentsDeleteArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$suffix_assignmentsPayload>
+        }
+        update: {
+          args: Prisma.suffix_assignmentsUpdateArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$suffix_assignmentsPayload>
+        }
+        deleteMany: {
+          args: Prisma.suffix_assignmentsDeleteManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        updateMany: {
+          args: Prisma.suffix_assignmentsUpdateManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        upsert: {
+          args: Prisma.suffix_assignmentsUpsertArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$suffix_assignmentsPayload>
+        }
+        aggregate: {
+          args: Prisma.Suffix_assignmentsAggregateArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.AggregateSuffix_assignments>
+        }
+        groupBy: {
+          args: Prisma.suffix_assignmentsGroupByArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.Suffix_assignmentsGroupByOutputType>[]
+        }
+        count: {
+          args: Prisma.suffix_assignmentsCountArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.Suffix_assignmentsCountAggregateOutputType> | number
+        }
+      }
+    }
+    kyads_click_tasks: {
+      payload: Prisma.$kyads_click_tasksPayload<ExtArgs>
+      fields: Prisma.kyads_click_tasksFieldRefs
+      operations: {
+        findUnique: {
+          args: Prisma.kyads_click_tasksFindUniqueArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$kyads_click_tasksPayload> | null
+        }
+        findUniqueOrThrow: {
+          args: Prisma.kyads_click_tasksFindUniqueOrThrowArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$kyads_click_tasksPayload>
+        }
+        findFirst: {
+          args: Prisma.kyads_click_tasksFindFirstArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$kyads_click_tasksPayload> | null
+        }
+        findFirstOrThrow: {
+          args: Prisma.kyads_click_tasksFindFirstOrThrowArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$kyads_click_tasksPayload>
+        }
+        findMany: {
+          args: Prisma.kyads_click_tasksFindManyArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$kyads_click_tasksPayload>[]
+        }
+        create: {
+          args: Prisma.kyads_click_tasksCreateArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$kyads_click_tasksPayload>
+        }
+        createMany: {
+          args: Prisma.kyads_click_tasksCreateManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        delete: {
+          args: Prisma.kyads_click_tasksDeleteArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$kyads_click_tasksPayload>
+        }
+        update: {
+          args: Prisma.kyads_click_tasksUpdateArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$kyads_click_tasksPayload>
+        }
+        deleteMany: {
+          args: Prisma.kyads_click_tasksDeleteManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        updateMany: {
+          args: Prisma.kyads_click_tasksUpdateManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        upsert: {
+          args: Prisma.kyads_click_tasksUpsertArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$kyads_click_tasksPayload>
+        }
+        aggregate: {
+          args: Prisma.Kyads_click_tasksAggregateArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.AggregateKyads_click_tasks>
+        }
+        groupBy: {
+          args: Prisma.kyads_click_tasksGroupByArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.Kyads_click_tasksGroupByOutputType>[]
+        }
+        count: {
+          args: Prisma.kyads_click_tasksCountArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.Kyads_click_tasksCountAggregateOutputType> | number
+        }
+      }
+    }
   }
 } & {
   other: {
@@ -2541,6 +2876,8 @@ export const UsersScalarFieldEnum = {
   status: 'status',
   team_id: 'team_id',
   display_name: 'display_name',
+  script_api_key: 'script_api_key',
+  link_exchange_click_count: 'link_exchange_click_count',
   is_deleted: 'is_deleted',
   created_at: 'created_at',
   updated_at: 'updated_at'
@@ -2638,6 +2975,7 @@ export const User_merchantsScalarFieldEnum = {
   link_status: 'link_status',
   link_checked_at: 'link_checked_at',
   link_check_reason: 'link_check_reason',
+  kyads_referer_url: 'kyads_referer_url',
   is_deleted: 'is_deleted',
   created_at: 'created_at',
   updated_at: 'updated_at'
@@ -2749,6 +3087,11 @@ export const CampaignsScalarFieldEnum = {
   status: 'status',
   google_status: 'google_status',
   last_google_sync_at: 'last_google_sync_at',
+  suffix_exchange_enabled: 'suffix_exchange_enabled',
+  suffix_last_content: 'suffix_last_content',
+  suffix_last_apply_at: 'suffix_last_apply_at',
+  suffix_click_baseline: 'suffix_click_baseline',
+  suffix_click_checkpoint_at: 'suffix_click_checkpoint_at',
   is_deleted: 'is_deleted',
   created_at: 'created_at',
   updated_at: 'updated_at'
@@ -3098,6 +3441,90 @@ export const Mcc_cost_adjustmentsScalarFieldEnum = {
 export type Mcc_cost_adjustmentsScalarFieldEnum = (typeof Mcc_cost_adjustmentsScalarFieldEnum)[keyof typeof Mcc_cost_adjustmentsScalarFieldEnum]
 
 
+export const Kyads_proxiesScalarFieldEnum = {
+  id: 'id',
+  name: 'name',
+  priority: 'priority',
+  host: 'host',
+  port: 'port',
+  proxy_type: 'proxy_type',
+  status: 'status',
+  is_deleted: 'is_deleted',
+  created_at: 'created_at',
+  updated_at: 'updated_at'
+} as const
+
+export type Kyads_proxiesScalarFieldEnum = (typeof Kyads_proxiesScalarFieldEnum)[keyof typeof Kyads_proxiesScalarFieldEnum]
+
+
+export const Kyads_proxy_usersScalarFieldEnum = {
+  id: 'id',
+  proxy_id: 'proxy_id',
+  user_id: 'user_id',
+  created_at: 'created_at'
+} as const
+
+export type Kyads_proxy_usersScalarFieldEnum = (typeof Kyads_proxy_usersScalarFieldEnum)[keyof typeof Kyads_proxy_usersScalarFieldEnum]
+
+
+export const Suffix_poolScalarFieldEnum = {
+  id: 'id',
+  user_id: 'user_id',
+  campaign_id: 'campaign_id',
+  suffix_content: 'suffix_content',
+  status: 'status',
+  leased_assignment_id: 'leased_assignment_id',
+  expires_at: 'expires_at',
+  is_deleted: 'is_deleted',
+  created_at: 'created_at'
+} as const
+
+export type Suffix_poolScalarFieldEnum = (typeof Suffix_poolScalarFieldEnum)[keyof typeof Suffix_poolScalarFieldEnum]
+
+
+export const Suffix_assignmentsScalarFieldEnum = {
+  id: 'id',
+  user_id: 'user_id',
+  campaign_id: 'campaign_id',
+  suffix_pool_id: 'suffix_pool_id',
+  assignment_id: 'assignment_id',
+  idempotency_key: 'idempotency_key',
+  clicks_at_assignment: 'clicks_at_assignment',
+  window_start_epoch: 'window_start_epoch',
+  script_instance_id: 'script_instance_id',
+  write_success: 'write_success',
+  write_error_message: 'write_error_message',
+  reported_at: 'reported_at',
+  meta: 'meta',
+  is_deleted: 'is_deleted',
+  created_at: 'created_at',
+  updated_at: 'updated_at'
+} as const
+
+export type Suffix_assignmentsScalarFieldEnum = (typeof Suffix_assignmentsScalarFieldEnum)[keyof typeof Suffix_assignmentsScalarFieldEnum]
+
+
+export const Kyads_click_tasksScalarFieldEnum = {
+  id: 'id',
+  user_id: 'user_id',
+  campaign_id: 'campaign_id',
+  proxy_id: 'proxy_id',
+  affiliate_url: 'affiliate_url',
+  referer_url: 'referer_url',
+  target_count: 'target_count',
+  done_count: 'done_count',
+  status: 'status',
+  error_message: 'error_message',
+  started_at: 'started_at',
+  finished_at: 'finished_at',
+  is_deleted: 'is_deleted',
+  created_at: 'created_at',
+  updated_at: 'updated_at'
+} as const
+
+export type Kyads_click_tasksScalarFieldEnum = (typeof Kyads_click_tasksScalarFieldEnum)[keyof typeof Kyads_click_tasksScalarFieldEnum]
+
+
 export const SortOrder = {
   asc: 'asc',
   desc: 'desc'
@@ -3143,7 +3570,8 @@ export const usersOrderByRelevanceFieldEnum = {
   plain_password: 'plain_password',
   role: 'role',
   status: 'status',
-  display_name: 'display_name'
+  display_name: 'display_name',
+  script_api_key: 'script_api_key'
 } as const
 
 export type usersOrderByRelevanceFieldEnum = (typeof usersOrderByRelevanceFieldEnum)[keyof typeof usersOrderByRelevanceFieldEnum]
@@ -3221,7 +3649,8 @@ export const user_merchantsOrderByRelevanceFieldEnum = {
   policy_status: 'policy_status',
   policy_category_code: 'policy_category_code',
   link_status: 'link_status',
-  link_check_reason: 'link_check_reason'
+  link_check_reason: 'link_check_reason',
+  kyads_referer_url: 'kyads_referer_url'
 } as const
 
 export type user_merchantsOrderByRelevanceFieldEnum = (typeof user_merchantsOrderByRelevanceFieldEnum)[keyof typeof user_merchantsOrderByRelevanceFieldEnum]
@@ -3287,7 +3716,8 @@ export const campaignsOrderByRelevanceFieldEnum = {
   geo_target: 'geo_target',
   language_id: 'language_id',
   status: 'status',
-  google_status: 'google_status'
+  google_status: 'google_status',
+  suffix_last_content: 'suffix_last_content'
 } as const
 
 export type campaignsOrderByRelevanceFieldEnum = (typeof campaignsOrderByRelevanceFieldEnum)[keyof typeof campaignsOrderByRelevanceFieldEnum]
@@ -3477,6 +3907,45 @@ export const mcc_cost_adjustmentsOrderByRelevanceFieldEnum = {
 } as const
 
 export type mcc_cost_adjustmentsOrderByRelevanceFieldEnum = (typeof mcc_cost_adjustmentsOrderByRelevanceFieldEnum)[keyof typeof mcc_cost_adjustmentsOrderByRelevanceFieldEnum]
+
+
+export const kyads_proxiesOrderByRelevanceFieldEnum = {
+  name: 'name',
+  host: 'host',
+  proxy_type: 'proxy_type',
+  status: 'status'
+} as const
+
+export type kyads_proxiesOrderByRelevanceFieldEnum = (typeof kyads_proxiesOrderByRelevanceFieldEnum)[keyof typeof kyads_proxiesOrderByRelevanceFieldEnum]
+
+
+export const suffix_poolOrderByRelevanceFieldEnum = {
+  suffix_content: 'suffix_content',
+  status: 'status',
+  leased_assignment_id: 'leased_assignment_id'
+} as const
+
+export type suffix_poolOrderByRelevanceFieldEnum = (typeof suffix_poolOrderByRelevanceFieldEnum)[keyof typeof suffix_poolOrderByRelevanceFieldEnum]
+
+
+export const suffix_assignmentsOrderByRelevanceFieldEnum = {
+  assignment_id: 'assignment_id',
+  idempotency_key: 'idempotency_key',
+  script_instance_id: 'script_instance_id',
+  write_error_message: 'write_error_message'
+} as const
+
+export type suffix_assignmentsOrderByRelevanceFieldEnum = (typeof suffix_assignmentsOrderByRelevanceFieldEnum)[keyof typeof suffix_assignmentsOrderByRelevanceFieldEnum]
+
+
+export const kyads_click_tasksOrderByRelevanceFieldEnum = {
+  affiliate_url: 'affiliate_url',
+  referer_url: 'referer_url',
+  status: 'status',
+  error_message: 'error_message'
+} as const
+
+export type kyads_click_tasksOrderByRelevanceFieldEnum = (typeof kyads_click_tasksOrderByRelevanceFieldEnum)[keyof typeof kyads_click_tasksOrderByRelevanceFieldEnum]
 
 
 
@@ -3673,6 +4142,11 @@ export type GlobalOmitConfig = {
   ad_policy_categories?: Prisma.ad_policy_categoriesOmit
   merchant_policy_reviews?: Prisma.merchant_policy_reviewsOmit
   mcc_cost_adjustments?: Prisma.mcc_cost_adjustmentsOmit
+  kyads_proxies?: Prisma.kyads_proxiesOmit
+  kyads_proxy_users?: Prisma.kyads_proxy_usersOmit
+  suffix_pool?: Prisma.suffix_poolOmit
+  suffix_assignments?: Prisma.suffix_assignmentsOmit
+  kyads_click_tasks?: Prisma.kyads_click_tasksOmit
 }
 
 /* Types for Logging */
