@@ -810,6 +810,15 @@ async function syncTransactionsInline(
       userMerchants.map((m) => [`${normalizePlatformCode(m.platform)}_${m.merchant_id}`, m])
     );
 
+    // 加载当前用户被跨用户归属排除的商家（status='excluded'），同步时永久跳过，不自动创建、不写入交易
+    const excludedMerchants = await prisma.user_merchants.findMany({
+      where: { user_id: userId, status: "excluded" },
+      select: { merchant_id: true, platform: true },
+    });
+    const excludedKeys = new Set(
+      excludedMerchants.map((m) => `${normalizePlatformCode(m.platform)}_${m.merchant_id}`)
+    );
+
     const { fetchAllTransactions } = await import("@/lib/platform-api");
     let totalSynced = 0;
     const errors: string[] = [];
@@ -835,6 +844,8 @@ async function syncTransactionsInline(
           const mid = txn.merchant_id || "";
           if (!mid) continue;
           const key = `${platform}_${mid}`;
+          // 跳过已被标记为跨用户归属排除的商家，不在当前用户下创建
+          if (excludedKeys.has(key)) continue;
           if (!merchantMap.has(key)) {
             try {
               let existing = await prisma.user_merchants.findFirst({
@@ -859,6 +870,8 @@ async function syncTransactionsInline(
             const mid = txn.merchant_id || "";
             const txnId = txn.transaction_id;
             if (!txnId) return null;
+            // 跳过已被标记为跨用户归属排除的商家，不写入当前用户的交易记录
+            if (excludedKeys.has(`${platform}_${mid}`)) return null;
             const merchant = merchantMap.get(`${platform}_${mid}`);
             const userMerchantId = merchant ? merchant.id : BigInt(0);
             const merchantName = txn.merchant || merchant?.merchant_name || "";
