@@ -137,7 +137,18 @@ async function doSyncInBackground(
     dbg(`[DIAG-166377] ${rw166377 ? `✓ 已找到 RW:166377 comm=${rw166377.commission_rate} url=${rw166377.site_url} link=${rw166377.campaign_link}` : "✗ 未找到 RW:166377（Xcaret Hoteles），将被清理删除"}`);
 
     if (rows.length === 0) {
-      await notify(userId, "商家同步失败", `没有获取到商家数据。${errors.join("; ")}`);
+      const failedPlatformNames = errors.map(e => {
+        const PLATFORM_NAMES: Record<string, string> = {
+          CG: "CollabGlow", LH: "LinkHaitao", RW: "Rewardoo",
+          CF: "CreatorFlare", BSH: "BrandSparkHub", PM: "Partnermatic", LB: "LinkBux",
+        };
+        const m = e.match(/^([A-Z]+):/);
+        return m ? (PLATFORM_NAMES[m[1]] ?? m[1]) : "未知平台";
+      });
+      const failMsg0 = failedPlatformNames.length > 0
+        ? `未能获取到商家数据，可能是以下平台连接异常：${[...new Set(failedPlatformNames)].join("、")}。\n请检查平台账号的 API 连接是否正常，或联系管理员排查。`
+        : "未能获取到任何商家数据，请联系管理员检查平台连接设置。";
+      await notify(userId, "商家库同步失败", failMsg0);
       return;
     }
 
@@ -347,15 +358,63 @@ async function doSyncInBackground(
     const failMsg = (updateFailCount + createFailCount) > 0
       ? `，失败 ${updateFailCount + createFailCount} 条`
       : "";
-    const summary = `同步完成（${sec}秒）：${rows.length} 个已批准商家（${platStr}），新增 ${newCount}，更新 ${updatedCount}，清理 ${removedCount}${failMsg}${statusMsg}${policyMsg}${errors.length > 0 ? `。警告: ${errors.join("; ")}` : ""}`;
+    const debugSummary = `同步完成（${sec}秒）：${rows.length} 个已批准商家（${platStr}），新增 ${newCount}，更新 ${updatedCount}，清理 ${removedCount}${failMsg}${statusMsg}${policyMsg}${errors.length > 0 ? `。警告: ${errors.join("; ")}` : ""}`;
+    dbg(`DONE: ${debugSummary}`);
 
-    dbg(`DONE: ${summary}`);
-    await notify(userId, "商家同步完成", summary);
+    // 构建员工友好的通知
+    const PLATFORM_NAMES: Record<string, string> = {
+      CG: "CollabGlow", LH: "LinkHaitao", RW: "Rewardoo",
+      CF: "CreatorFlare", BSH: "BrandSparkHub", PM: "Partnermatic", LB: "LinkBux",
+    };
+    const platReadable = Object.entries(platformCounts)
+      .map(([p, c]) => `${PLATFORM_NAMES[p] ?? p} ${c} 家`)
+      .join("、");
+
+    const lines: string[] = [];
+    lines.push(`本次共获取 ${rows.length} 家可推广商家（${platReadable}）`);
+
+    if (newCount > 0) lines.push(`新增 ${newCount} 家商家，请前往「我的商家」查看`);
+    if (removedCount > 0) lines.push(`移除 ${removedCount} 家已退出/下架商家`);
+
+    // 广告状态（从 statusMsg 中提取数字）
+    const enabledMatch = statusMsg.match(/(\d+) 个投放中/);
+    const pausedMatch = statusMsg.match(/(\d+) 个已暂停/);
+    if (enabledMatch || pausedMatch) {
+      const enabledN = enabledMatch ? enabledMatch[1] : "0";
+      const pausedN = pausedMatch ? pausedMatch[1] : "0";
+      lines.push(`当前广告：${enabledN} 个投放中，${pausedN} 个已暂停`);
+    }
+
+    // 政策提醒（从 policyMsg 中提取）
+    const restrictedMatch = policyMsg.match(/限制 (\d+)/);
+    const prohibitedMatch = policyMsg.match(/禁止 (\d+)/);
+    const restrictedN = restrictedMatch ? Number(restrictedMatch[1]) : 0;
+    const prohibitedN = prohibitedMatch ? Number(prohibitedMatch[1]) : 0;
+    if (prohibitedN > 0) lines.push(`注意：${prohibitedN} 家商家违反广告政策，已自动屏蔽，请勿推广`);
+    else if (restrictedN > 0) lines.push(`提示：${restrictedN} 家商家属于受限类目，推广前请确认合规`);
+
+    // 平台连接警告
+    const failedPlatforms = errors
+      .map(e => { const m = e.match(/^([A-Z]+):/); return m ? (PLATFORM_NAMES[m[1]] ?? m[1]) : null; })
+      .filter(Boolean) as string[];
+    if (failedPlatforms.length > 0) {
+      lines.push(`以下平台本次同步异常，数据可能不完整：${[...new Set(failedPlatforms)].join("、")}`);
+    }
+
+    const notifyTitle = newCount > 0 ? `商家库更新完成（新增 ${newCount} 家）` : "商家库同步完成";
+    const notifyContent = lines.join("\n");
+
+    await notify(userId, notifyTitle, notifyContent);
 
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     dbg(`ERROR: ${msg}`);
-    await notify(userId, "商家同步失败", `同步出错: ${msg}`).catch(() => {});
+    // 避免将技术性报错直接暴露给员工
+    const isChunkError = msg.includes("chunk") || msg.includes("Cannot find module") || msg.includes("MODULE_NOT_FOUND");
+    const employeeMsg = isChunkError
+      ? "系统刚完成更新，同步服务临时不可用，请稍后重新同步。如持续失败请联系管理员。"
+      : "商家同步遇到意外错误，请稍后重试。如持续失败请联系管理员。";
+    await notify(userId, "商家库同步失败", employeeMsg).catch(() => {});
   }
 }
 
