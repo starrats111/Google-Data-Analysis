@@ -53,19 +53,9 @@ const CATEGORY_CN: Record<string, string> = {
   "Cosmetics": "化妆品", "Fragrance": "香水", "Hair Care": "护发",
 };
 const catCn = (v: string | null) => { if (!v) return "-"; return CATEGORY_CN[v] || v; };
-// 佣金率展示：
-// Rewardoo API 的 comm_rate 字段对大量商家返回 "Revshare 70%" 而非真实佣金率，
-// 属于 RW API 数据缺陷（固定佣金商家也可能显示此值）。
-// 对实际百分比（如 10.5%）则直接显示。
 const CommissionCell = ({ v }: { v: string | null }) => {
   if (!v) return <span style={{ color: "#bfbfbf" }}>-</span>;
-  if (/^Revshare\s+\d+%$/i.test(v)) {
-    return (
-      <Tooltip title="Rewardoo API 未返回该商家的真实佣金率，请登录 Rewardoo 后台「商家详情」页查看实际佣金。">
-        <span style={{ color: "#8c8c8c", cursor: "help", textDecoration: "underline dotted" }}>{v}</span>
-      </Tooltip>
-    );
-  }
+  if (/^Revshare\s+\d+%$/i.test(v)) return <span>{v}</span>;
   return <span style={{ fontWeight: 500, color: "#389e0d" }}>{v}</span>;
 };
 // __TYPES__
