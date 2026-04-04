@@ -161,7 +161,6 @@ async function doSyncInBackground(
       const key = `${row.platform_code}:${row.merchant_id}`;
       if (seenInThisBatch.has(key)) continue;
       seenInThisBatch.add(key);
-      platformCounts[row.platform_code] = (platformCounts[row.platform_code] || 0) + 1;
 
       let regions: unknown = null;
       if (row.support_regions) {
@@ -172,6 +171,15 @@ async function doSyncInBackground(
       cat = simplifyCategory(cat);
 
       const ex = map.get(key);
+
+      // status=excluded 的商家已被人工标记为"跨用户归属排除"，同步时永久跳过
+      if (ex?.status === "excluded") {
+        dbg(`[SKIP excluded] ${key}`);
+        continue;
+      }
+
+      platformCounts[row.platform_code] = (platformCounts[row.platform_code] || 0) + 1;
+
       if (ex) {
         const updateData: Record<string, any> = {};
         if (row.merchant_name) updateData.merchant_name = row.merchant_name;
@@ -266,7 +274,7 @@ async function doSyncInBackground(
     const toRemoveIds: bigint[] = [];
     for (const [key, ex] of map.entries()) {
       const [exPlatform] = key.split(":");
-      if (!syncedKeys.has(key) && ex.status !== "claimed" && ex.status !== "paused" && ex.is_deleted === 0 && syncedPlatforms.has(exPlatform)) {
+      if (!syncedKeys.has(key) && ex.status !== "claimed" && ex.status !== "paused" && ex.status !== "excluded" && ex.is_deleted === 0 && syncedPlatforms.has(exPlatform)) {
         toRemoveIds.push(ex.id);
         removedCount++;
       }
