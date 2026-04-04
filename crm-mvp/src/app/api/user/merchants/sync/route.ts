@@ -64,59 +64,72 @@ async function doSyncInBackground(
   let updatedCount = 0;
 
   try {
-    // 1. 从联盟平台 API 并行拉取商家（3 个平台并发）
+    // 1. 从联盟平台 API 拉取商家：跨平台并发，同平台内串行（防止并发请求压垮单一平台 API）
+    // 背景：RW 等平台在多账号同时翻页时会触发超时，导致只能拿到第1-2页（丢失后续商家）。
+    // 改为同平台串行拉取后，每个账号完整取完所有分页再开始下一个，彻底避免竞争。
     const { fetchAllMerchants } = await import("@/lib/platform-api");
     const rows: any[] = [];
 
     const fetchTargets = conns.filter(c => !targetPlatform || c.platform === targetPlatform.toUpperCase());
-    const FETCH_CONCURRENCY = 7;
-    for (let fi = 0; fi < fetchTargets.length; fi += FETCH_CONCURRENCY) {
-      const batch = fetchTargets.slice(fi, fi + FETCH_CONCURRENCY);
-      const results = await Promise.all(
-        batch.map(async (conn) => {
-          dbg(`Fetch ${conn.platform}...`);
-          try {
-            // 传 relationship="joined" 让平台 API 直接只返回已加入品牌，
-            // 避免全量拉取（数十万条）+本地过滤时因 200 页上限漏掉末尾新品牌
-            const r = await fetchAllMerchants(conn.platform, conn.api_key!, "joined");
-            if (r.error) errors.push(r.error);
-            dbg(`  ${conn.platform}: ${r.merchants.length} merchants${r.error ? `, err=${r.error}` : ""}`);
-            if (r.merchants.length > 0) {
-              const s = r.merchants[0];
-              dbg(`  sample: id=${s.merchant_id} cat=${s.category} comm=${s.commission_rate} link=${(s.campaign_link || "").substring(0, 60)}`);
-            }
-            return { conn, merchants: r.merchants };
-          } catch (err) {
-            const msg = `${conn.platform}: ${err instanceof Error ? err.message : String(err)}`;
-            errors.push(msg);
-            dbg(`  ERROR ${msg}`);
-            return { conn, merchants: [] as any[] };
-          }
-        })
-      );
-      for (const { conn, merchants } of results) {
-        for (const m of merchants) {
-          if (m.relationship_status !== "joined") {
-            if (m.relationship_status === "pending") {
-              dbg(`  [SKIP pending] platform=${conn.platform} id=${m.merchant_id} name=${m.merchant_name}`);
-            }
-            continue;
-          }
-          rows.push({
-            platform_code: conn.platform,
-            conn_id: conn.id,
-            merchant_id: m.merchant_id,
-            merchant_name: m.merchant_name,
-            categories: m.category || "",
-            commission_rate: m.commission_rate || "",
-            support_regions: m.supported_regions ? JSON.stringify(m.supported_regions) : null,
-            site_url: m.merchant_url || "",
-            campaign_link: m.campaign_link || "",
-            logo: m.logo_url || "",
-          });
-        }
-      }
+
+    // 按平台分组
+    const byPlatform: Record<string, typeof fetchTargets> = {};
+    for (const conn of fetchTargets) {
+      (byPlatform[conn.platform] = byPlatform[conn.platform] || []).push(conn);
     }
+
+    // 辅助函数：拉取单个连接，追加到 rows
+    const fetchConn = async (conn: typeof fetchTargets[0]) => {
+      dbg(`Fetch ${conn.platform}...`);
+      try {
+        const r = await fetchAllMerchants(conn.platform, conn.api_key!, "joined");
+        if (r.error) errors.push(r.error);
+        dbg(`  ${conn.platform}: ${r.merchants.length} merchants${r.error ? `, err=${r.error}` : ""}`);
+        if (r.merchants.length > 0) {
+          const s = r.merchants[0];
+          dbg(`  sample: id=${s.merchant_id} cat=${s.category} comm=${s.commission_rate} link=${(s.campaign_link || "").substring(0, 60)}`);
+        }
+        return { conn, merchants: r.merchants };
+      } catch (err) {
+        const msg = `${conn.platform}: ${err instanceof Error ? err.message : String(err)}`;
+        errors.push(msg);
+        dbg(`  ERROR ${msg}`);
+        return { conn, merchants: [] as any[] };
+      }
+    };
+
+    const pushMerchants = (conn: typeof fetchTargets[0], merchants: any[]) => {
+      for (const m of merchants) {
+        if (m.relationship_status !== "joined") {
+          if (m.relationship_status === "pending") {
+            dbg(`  [SKIP pending] platform=${conn.platform} id=${m.merchant_id} name=${m.merchant_name}`);
+          }
+          continue;
+        }
+        rows.push({
+          platform_code: conn.platform,
+          conn_id: conn.id,
+          merchant_id: m.merchant_id,
+          merchant_name: m.merchant_name,
+          categories: m.category || "",
+          commission_rate: m.commission_rate || "",
+          support_regions: m.supported_regions ? JSON.stringify(m.supported_regions) : null,
+          site_url: m.merchant_url || "",
+          campaign_link: m.campaign_link || "",
+          logo: m.logo_url || "",
+        });
+      }
+    };
+
+    // 跨平台并发，同平台内串行
+    await Promise.all(
+      Object.values(byPlatform).map(async (platformConns) => {
+        for (const conn of platformConns) {
+          const { conn: c, merchants } = await fetchConn(conn);
+          pushMerchants(c, merchants);
+        }
+      })
+    );
 
     dbg(`Total fetched: ${rows.length}`);
     // 专项诊断：追踪 RW 166377 (Xcaret Hoteles) 是否出现在此次同步结果中

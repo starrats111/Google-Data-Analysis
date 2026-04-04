@@ -81,11 +81,12 @@ const PLATFORM_API_CONFIG: Record<string, PlatformApiConfig> = {
     mode: "post_form",
     url: "https://admin.rewardoo.com/api.php?mod=medium&op=merchant_details",
     pageKey: "page", sizeKey: "limit", maxSize: 1000,
-    // RW 平台真实状态为 Approved/Pending/Reject/Not Join，无"Joined"状态。
-    // 必须传 relationship 参数否则返回 0 条；过滤值使用"Approved"而非"Joined"。
+    // RW API 必须携带 relationship="Joined" 才能返回已批准商家（不传返回 0 条，传"Approved"返回 error 1003）。
+    // UI 界面显示"Approved"，API 过滤值为"Joined"，两者是同一状态的不同术语。
+    // RW 有多个账号（7000+商家每账号），并发请求会导致第3+页超时，故在 sync 层改为串行拉取。
     assumeAllJoined: true,
     requiresRelationshipParam: true,
-    relationshipValue: "Approved",
+    // 不设 relationshipValue，默认使用"Joined"（API 唯一有效的已批准过滤值）
   },
 };
 
