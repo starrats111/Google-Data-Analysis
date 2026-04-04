@@ -68,7 +68,7 @@ const PLATFORM_API_CONFIG: Record<string, PlatformApiConfig> = {
   LH: {
     mode: "post_form",
     url: "https://www.linkhaitao.com/api.php?mod=medium&op=merchantBasicList3",
-    pageKey: "page", sizeKey: "per_page", maxSize: 2000,
+    pageKey: "page", sizeKey: "per_page", maxSize: 200, // 原 2000，LH 服务器单次大查询会 504，改小后每页轻量
     rateLimitMs: 1500,
     assumeAllJoined: true, // merchantBasicList3 只返回已加入商家
   },
