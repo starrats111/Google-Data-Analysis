@@ -1018,83 +1018,97 @@ export async function generateDailyInsight(params: {
     return `## 📊 ${username} 昨日数据洞察 · ${date}\n\n> 昨日无广告花费或联盟佣金数据，跳过分析。如账户已启用，请检查 MCC 数据同步状态。`;
   }
 
-  const roasLabel = metrics.roi < 0 ? "🔴 亏损区" : metrics.roi < 1 ? "🔴 红区（ROI<1）" : metrics.roi < 2 ? "🟡 黄区（1≤ROI<2）" : "🟢 绿区（ROI≥2）";
+  // ROI 区间标注（用净利润率表述，更贴近业务）
+  const roiPct = (metrics.roi * 100).toFixed(1);
+  const roiLabel = metrics.roi < 0
+    ? `亏损 ${Math.abs(metrics.roi * 100).toFixed(1)}%`
+    : metrics.roi < 1
+      ? `净利润率 ${roiPct}%（盈亏边缘）`
+      : metrics.roi < 2
+        ? `净利润率 ${roiPct}%（稳定盈利）`
+        : `净利润率 ${roiPct}%（高效盈利）`;
 
-  const enabledCampaigns = campaigns.filter((c) => c.status === "ENABLED" || c.status === "enabled");
-  const topCampaigns = [...enabledCampaigns].sort((a, b) => b.cost - a.cost).slice(0, 5);
+  const roiZone = metrics.roi < 0 ? "亏损" : metrics.roi < 1 ? "盈亏边缘" : metrics.roi < 2 ? "稳定盈利" : "高效盈利";
+
+  // 佣金说明：来自联盟平台全状态汇总（pending=待结算，approved=已结算，rejected=已拒付）
+  const allCommission = metrics.totalCommission;
+  const pendingPct = allCommission > 0 ? (metrics.totalPendingCommission / allCommission * 100).toFixed(0) : "0";
+  const approvedPct = allCommission > 0 ? (metrics.totalApprovedCommission / allCommission * 100).toFixed(0) : "0";
+  const rejectedPct = allCommission > 0 ? (metrics.totalRejectedCommission / allCommission * 100).toFixed(0) : "0";
+
+  // 按花费排序 Top 5 系列
+  const topCampaigns = [...campaigns].sort((a, b) => b.cost - a.cost).slice(0, 5);
 
   const platformTable = affiliatePlatforms.map((p) => {
-    const rejectedRate = p.total_commission > 0 ? (p.rejected_commission / p.total_commission * 100).toFixed(1) : "0.0";
-    const warn = parseFloat(rejectedRate) > 30 ? " ⚠️" : "";
-    return `| ${p.platform} | $${p.total_commission.toFixed(2)} | ${rejectedRate}%${warn} | $${p.pending_commission.toFixed(2)} | ${p.orders} |`;
+    const rejRate = p.total_commission > 0 ? (p.rejected_commission / p.total_commission * 100).toFixed(0) : "0";
+    const warn = parseFloat(rejRate) > 30 ? " ⚠️" : "";
+    return `| ${p.platform} | $${p.total_commission.toFixed(2)} | $${p.approved_commission.toFixed(2)} | $${p.pending_commission.toFixed(2)} | ${rejRate}%${warn} | ${p.orders} |`;
   }).join("\n");
 
-  const prompt = `你是 Adrian · 数据猎手，一位专注 ROI 导向的 Google Ads 跨境电商广告数据分析师。
+  const prompt = `你是 Adrian · 数据猎手，Google Ads 跨境电商广告数据分析师，专注 ROI 导向投放。
 
-职业信条：
-· "没有坏的产品，只有投错的人群和出不动的价。"
-· "出价策略是引流，素材是饲料，消费路径才是最值钱的。"
+职业信条：「没有坏的产品，只有投错的人群和出不动的价。」
 
-今日任务：为用户「${username}」出具 ${date} 昨日数据洞察报告。
+为用户「${username}」出具 **${date}** 昨日广告数据洞察报告。
 
-═══ 输入数据 ═══
+══════════════════════════
+数据来源说明（必读）：
+- 广告花费/点击/曝光：来自 Google Ads MCC，实时同步
+- 联盟佣金：来自联盟平台 API，**全状态汇总**（待结算+已结算+已拒付）
+  · 待结算(Pending)：订单已生成，平台确认中，一般 7-30天到账
+  · 已结算(Approved)：平台已确认，可提款
+  · 已拒付(Rejected)：订单被取消或违规，不计入实收
+══════════════════════════
 
-【核心指标】
-- 广告总花费：$${metrics.totalCost.toFixed(2)}
-- 联盟总佣金：$${metrics.totalCommission.toFixed(2)}
-- ROI：${metrics.roi.toFixed(2)}（${roasLabel}）
-- 平均 CPC：$${metrics.avgCpc.toFixed(4)}
-- 总点击：${metrics.totalClicks}
-- 总曝光：${metrics.totalImpressions.toLocaleString()}
-- 待确认佣金：$${metrics.totalPendingCommission.toFixed(2)}
-- 被拒佣金：$${metrics.totalRejectedCommission.toFixed(2)}
-- 已批准佣金：$${metrics.totalApprovedCommission.toFixed(2)}
-- ENABLED 系列：${metrics.enabledCount} | PAUSED 系列：${metrics.pausedCount}
+【广告投放总览】
+- 广告花费：**$${metrics.totalCost.toFixed(2)}**
+- 总点击：**${metrics.totalClicks}**（曝光 ${metrics.totalImpressions.toLocaleString()}）
+- 平均 CPC：**$${metrics.avgCpc.toFixed(4)}**
+- 投放中系列：${metrics.enabledCount} 条 | 已暂停系列：${metrics.pausedCount} 条
 
-【广告系列明细（ENABLED，按花费排序，最多5条）】
+【联盟收入总览（全状态）】
+- 联盟佣金总额：**$${allCommission.toFixed(2)}**（含所有状态）
+  · 待结算：**$${metrics.totalPendingCommission.toFixed(2)}**（${pendingPct}%）
+  · 已结算：**$${metrics.totalApprovedCommission.toFixed(2)}**（${approvedPct}%）
+  · 已拒付：**$${metrics.totalRejectedCommission.toFixed(2)}**（${rejectedPct}%）
+- 净利润：**$${(allCommission - metrics.totalCost).toFixed(2)}**（${roiLabel}，处于${roiZone}区）
+
+【各系列明细（按花费排序，最多5条）】
 ${topCampaigns.length > 0 ? topCampaigns.map((c) => {
-  const cRoi = c.commission > 0 && c.cost > 0 ? ((c.commission - c.cost) / c.cost).toFixed(2) : "N/A";
-  const cpc = c.clicks > 0 ? (c.cost / c.clicks).toFixed(4) : "0";
-  return `- ${c.campaign_name}：花费 $${c.cost.toFixed(2)}，点击 ${c.clicks}，CPC $${cpc}，佣金 $${c.commission.toFixed(2)}，ROI ${cRoi}${c.commission > 0 && c.cost > 0 && (c.commission - c.cost) / c.cost < 0 ? " ⚠️" : ""}`;
-}).join("\n") : "（无 ENABLED 系列数据）"}
+  const netProfit = c.commission - c.cost;
+  const cpc = c.clicks > 0 ? (c.cost / c.clicks).toFixed(4) : "N/A";
+  const profitStr = netProfit >= 0 ? `盈利 $${netProfit.toFixed(2)}` : `亏损 $${Math.abs(netProfit).toFixed(2)} ⚠️`;
+  return `- [${c.status}] ${c.campaign_name}：花费 $${c.cost.toFixed(2)}，点击 ${c.clicks}，CPC $${cpc}，佣金 $${c.commission.toFixed(2)} → ${profitStr}`;
+}).join("\n") : "（无系列数据）"}
 
-【联盟平台收入分布】
-| 平台 | 总佣金 | Rejected率 | Pending | 订单数 |
-|------|--------|-----------|---------|--------|
-${platformTable || "| 无数据 | - | - | - | - |"}
+【各平台收入分布】
+| 平台代号 | 佣金总额 | 已结算 | 待结算 | 拒付率 | 订单数 |
+|----------|---------|--------|--------|--------|--------|
+${platformTable || "| 暂无数据 | - | - | - | - | - |"}
 
-═══ 分析要求 ═══
+══════════════════════════
+输出要求：
+- 纯中文 Markdown，数字加粗，使用业务化名词（不用 ENABLED/PAUSED/ROI/ROAS 等英文缩写）
+- 分5段，每段 ## 二级标题
+- 全文严格 600-800 字，不得超出
+- 禁止臆造数据，禁止"一定""保证"等绝对化表达
+- 行动建议必须具体（动词+对象+预期效果），最多3条
+══════════════════════════
 
-按以下5段框架出具报告，使用 Markdown 格式，必须使用 ## 标题：
+## 一、今日数据快照
+用表格或列表呈现核心指标，加粗关键数字，末尾一句话给出 Adrian 对整体状态的直接判断
 
-## 一、核心指标雷达
-- 列出所有核心指标，关键数值加粗
-- 标注 ROAS 区间（${roasLabel}）
-- 一句 Adrian 判断（简洁、直接、有洞察力）
+## 二、系列投放诊断
+逐条分析各系列表现，花费>$1的重点分析。CPC异常（>$1或<$0.05）、有亏损的系列必须点名说明原因和建议动作
 
-## 二、广告系列诊断
-- 逐条分析 ENABLED 系列（如无数据则说明原因）
-- ROI < 0 的系列必须标注 ⚠️ 并给出具体诊断
-- 点击量/曝光量异常的系列给出可能原因
-
-## 三、联盟收入健康度
-- 各平台佣金分布表格
-- Rejected 率 > 30% 触发预警并分析原因
-- Pending 金额风险提示（超7天未结算的资金）
+## 三、联盟收入解读
+解释各平台佣金结构（待结算/已结算/拒付），拒付率>20%要单独预警，同时评估已结算金额是否能覆盖花费
 
 ## 四、今日行动建议
-- 严格最多3条，必须是可立即执行的具体动作
-- 格式：1. [动作] — [理由] — [预期效果]
-- 禁止废话，禁止"继续观察"等无操作价值的建议
+最多3条，格式：**N. [动作]** — 原因 — 预期效果。必须可操作，不写"继续观察""保持关注"等废话
 
-## 五、明日关注重点
-- 一句话，明确说明明天最重要的观察指标
-
-输出要求：
-- 纯 Markdown，所有关键数字加粗（**$X.XX**）
-- 严格控制在 800 字以内
-- 不得臆造任何未在数据中出现的指标
-- 不得使用"一定"、"肯定"、"保证"等绝对化表达`;
+## 五、明日重点盯盘
+一句话，点明明天最值得关注的1个指标或事件`;
 
   try {
     const result = await callAiWithFallback("data_insight", [{ role: "user", content: prompt }], 1500);

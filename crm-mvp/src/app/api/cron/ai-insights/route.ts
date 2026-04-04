@@ -181,8 +181,18 @@ async function doAiInsights(force = false, filterUserId: bigint | null = null) {
       const finalCommission = totalCommission > 0 ? totalCommission : txTotalCommission;
       const roi = totalCost > 0 ? (finalCommission - totalCost) / totalCost : 0;
 
-      const enabledCount = campaignsInfo.filter((c) => String(c.status || "").toUpperCase() === "ENABLED").length;
-      const pausedCount = campaignsInfo.filter((c) => String(c.status || "").toUpperCase() === "PAUSED").length;
+      // campaigns.status 实际值为 "active" / "paused" / "removed" 等小写形式
+      // 不等于 Google Ads API 枚举 ENABLED/PAUSED，需做映射
+      const statusToRunning = (s: string | null) => {
+        const v = (s || "").toLowerCase();
+        return v === "active" || v === "enabled";
+      };
+      const statusToPaused = (s: string | null) => {
+        const v = (s || "").toLowerCase();
+        return v === "paused";
+      };
+      const enabledCount = campaignsInfo.filter((c) => statusToRunning(c.status)).length;
+      const pausedCount = campaignsInfo.filter((c) => statusToPaused(c.status)).length;
 
       const metrics: DailyInsightMetrics = {
         totalCost,
@@ -203,9 +213,12 @@ async function doAiInsights(force = false, filterUserId: bigint | null = null) {
         const campInfo = campaignMap.get(String(r.campaign_id));
         const cost = Number(r.cost ?? 0);
         const commission = Number(r.commission ?? 0);
+        // 将内部 status 标准化为可读状态
+        const rawStatus = campInfo?.status || "unknown";
+        const displayStatus = statusToRunning(rawStatus) ? "投放中" : statusToPaused(rawStatus) ? "已暂停" : rawStatus;
         return {
-          campaign_name: campInfo?.campaign_name || String(r.campaign_id),
-          status: campInfo?.status || "UNKNOWN",
+          campaign_name: campInfo?.campaign_name || `ID-${r.campaign_id}`,
+          status: displayStatus,
           cost,
           clicks: Number(r.clicks ?? 0),
           impressions: Number(r.impressions ?? 0),
