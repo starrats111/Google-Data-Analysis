@@ -119,6 +119,9 @@ async function doSyncInBackground(
     }
 
     dbg(`Total fetched: ${rows.length}`);
+    // 专项诊断：追踪 RW 166377 (Xcaret Hoteles) 是否出现在此次同步结果中
+    const rw166377 = rows.find(r => r.platform_code === "RW" && r.merchant_id === "166377");
+    dbg(`[DIAG-166377] ${rw166377 ? `✓ 已找到 RW:166377 comm=${rw166377.commission_rate} url=${rw166377.site_url} link=${rw166377.campaign_link}` : "✗ 未找到 RW:166377（Xcaret Hoteles），将被清理删除"}`);
 
     if (rows.length === 0) {
       await notify(userId, "商家同步失败", `没有获取到商家数据。${errors.join("; ")}`);

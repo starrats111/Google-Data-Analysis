@@ -74,10 +74,10 @@ const PLATFORM_API_CONFIG: Record<string, PlatformApiConfig> = {
   },
   RW: {
     mode: "post_form",
-    url: "https://admin.rewardoo.com/api.php?mod=medium&op=monetization_api",
+    url: "https://admin.rewardoo.com/api.php?mod=medium&op=merchant_details",
     pageKey: "page", sizeKey: "limit", maxSize: 1000,
     assumeAllJoined: true, // 加 relationship=Joined 过滤后 API 只返回已加入商家
-    requiresRelationshipParam: true, // 必须显式传 relationship:"Joined"；不传时 API 返回全量商家（含 Pending/Rejected），造成脏数据
+    requiresRelationshipParam: true, // 必须显式传 relationship:"Joined"；官方文档 merchant_details 端口支持此过滤
   },
 };
 
