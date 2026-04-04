@@ -427,8 +427,10 @@ export async function POST(req: NextRequest) {
     return new Response(JSON.stringify({ error: "缺少日期参数" }), { status: 400 });
   }
 
-  const userQuestion = question?.trim() ||
-    `请对我 ${date_from} 至 ${date_to} 的 Google Ads 账户进行全面的数据分析，包括：账户总览、各系列 ROI 诊断、联盟平台收入分析、每日趋势，最后给出 3 条可执行的优化建议。`;
+  const baseContext = `分析时间范围：${date_from} 至 ${date_to}`;
+  const userQuestion = question?.trim()
+    ? `${baseContext}\n\n${question.trim()}`
+    : `${baseContext}\n\n请对该时间段的 Google Ads 账户进行全面数据分析，包括：账户总览、各系列 ROI 诊断、联盟平台收入分析、每日趋势，最后给出 3 条可执行的优化建议。`;
 
   // 获取 AI 配置
   let aiConfig: { apiKey: string; baseUrl: string; modelName: string };
@@ -450,13 +452,14 @@ export async function POST(req: NextRequest) {
 - get_roi_diagnosis：ROI 健康诊断（找出亏损/低效/高效系列）
 
 分析原则：
-1. 主动调用多个工具获取完整数据，不做假设
-2. 用业务化中文描述，不用 ENABLED/PAUSED/ROI 等英文缩写，用"投放中""已暂停""投资回报率"
-3. 数据驱动，每条结论必须有数字支撑
-4. 给出 3 条可落地的优化建议，每条建议必须附上量化预期（如：预计 ROI 提升 15%）
-5. 报告用 Markdown 格式，结构清晰，数字加粗
-6. 禁止使用任何 emoji 或表情符号，保持报告的专业性
-7. 如果工具返回无数据或错误，直接说明"指定日期范围内暂无数据，请确认数据已完成同步"，不要猜测原因或列举可能的故障场景`;
+1. 用户消息第一行已包含"分析时间范围：YYYY-MM-DD 至 YYYY-MM-DD"，调用工具时直接使用该范围，禁止再向用户确认日期
+2. 主动调用多个工具获取完整数据，不做假设
+3. 用业务化中文描述，不用 ENABLED/PAUSED/ROI 等英文缩写，用"投放中""已暂停""投资回报率"
+4. 数据驱动，每条结论必须有数字支撑
+5. 给出 3 条可落地的优化建议，每条建议必须附上量化预期（如：预计 ROI 提升 15%）
+6. 报告用 Markdown 格式，结构清晰，数字加粗
+7. 禁止使用任何 emoji 或表情符号，保持报告的专业性
+8. 如果工具返回无数据或错误，直接说明"指定日期范围内暂无数据，请确认数据已完成同步"，不要猜测原因或列举可能的故障场景`;
 
   const messages: Array<{ role: string; content: unknown }> = [
     { role: "user", content: userQuestion },
