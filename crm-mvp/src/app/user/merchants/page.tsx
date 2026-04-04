@@ -53,6 +53,19 @@ const CATEGORY_CN: Record<string, string> = {
   "Cosmetics": "化妆品", "Fragrance": "香水", "Hair Care": "护发",
 };
 const catCn = (v: string | null) => { if (!v) return "-"; return CATEGORY_CN[v] || v; };
+// 佣金率展示：区分"Revshare X%（平台分成模式）"和实际佣金百分比
+const CommissionCell = ({ v }: { v: string | null }) => {
+  if (!v) return <span style={{ color: "#bfbfbf" }}>-</span>;
+  const revshareMatch = v.match(/^Revshare\s+(\d+)%$/i);
+  if (revshareMatch) {
+    return (
+      <Tooltip title={`Rewardoo 平台分成模式：平台将商家支付金额的 ${revshareMatch[1]}% 分给推广者。实际佣金率请登录 Rewardoo 后台查看。`}>
+        <Tag color="purple" style={{ cursor: "help", fontSize: 11 }}>分成 {revshareMatch[1]}%</Tag>
+      </Tooltip>
+    );
+  }
+  return <span style={{ fontWeight: 500, color: "#389e0d" }}>{v}</span>;
+};
 // __TYPES__
 interface Merchant {
   id: string; merchant_name: string; platform: string; merchant_id: string;
@@ -225,7 +238,7 @@ export default function MerchantsPage() {
     { title: "平台", dataIndex: "platform", width: 80, render: (v: string) => <Tag color={PC[v] || "default"} style={{ fontWeight: 600 }}>{v}</Tag> },
     { title: "MID", dataIndex: "merchant_id", width: 100, ellipsis: true },
     { title: "主营业务", dataIndex: "category", width: 130, ellipsis: true, render: (v: string | null) => catCn(v) },
-    { title: "佣金率", dataIndex: "commission_rate", width: 100, sorter: true, sortOrder: colSortOrder("commission_rate") },
+    { title: "佣金率", dataIndex: "commission_rate", width: 110, sorter: true, sortOrder: colSortOrder("commission_rate"), render: (v: string | null) => <CommissionCell v={v} /> },
     { title: "支持地区", dataIndex: "supported_regions", width: 150, render: (v: unknown[] | null) => <RB r={v} /> },
     { title: "状态", dataIndex: "ad_status", width: 90, render: (v: string) => v === "ENABLED" ? <Tag color="green">已投放</Tag> : v === "PAUSED" ? <Tag color="orange">暂停</Tag> : v === "NOT_SUBMITTED" ? <Tag color="blue">已领取</Tag> : <Tag>未知</Tag> },
     { title: "在投人数", dataIndex: "active_advertisers", width: 90, align: "center" as const, render: (v: number, rec: Merchant) => { const n = v || 0; return n > 0 ? <Button size="small" type="link" style={{ padding: 0, fontWeight: 600 }} onClick={() => showActiveAdv(rec)}>{n} 人</Button> : <span style={{ color: "#bfbfbf" }}>0</span>; } },
@@ -237,7 +250,7 @@ export default function MerchantsPage() {
     { title: "平台", dataIndex: "platform", width: 80, render: (v: string) => <Tag color={PC[v] || "default"} style={{ fontWeight: 600 }}>{v}</Tag> },
     { title: "MID", dataIndex: "merchant_id", width: 100, ellipsis: true },
     { title: "主营业务", dataIndex: "category", width: 130, ellipsis: true, render: (v: string | null) => catCn(v) },
-    { title: "佣金率", dataIndex: "commission_rate", width: 100, sorter: true, sortOrder: colSortOrder("commission_rate") },
+    { title: "佣金率", dataIndex: "commission_rate", width: 110, sorter: true, sortOrder: colSortOrder("commission_rate"), render: (v: string | null) => <CommissionCell v={v} /> },
     { title: "支持地区", dataIndex: "supported_regions", width: 150, render: (v: unknown[] | null) => <RB r={v} /> },
     { title: "在投人数", dataIndex: "active_advertisers", width: 90, align: "center" as const, render: (v: number, rec: Merchant) => { const n = v || 0; return n > 0 ? <Button size="small" type="link" style={{ padding: 0, fontWeight: 600 }} onClick={() => showActiveAdv(rec)}>{n} 人</Button> : <span style={{ color: "#bfbfbf" }}>0</span>; } },
     { title: "标签", width: 140, render: (_: unknown, rec: any) => { const labels = rec.labels || []; if (labels.length === 0) return <span style={{ color: "#ccc" }}>-</span>; return <Space size={4} wrap>{labels.map((l: any, i: number) => <Tooltip key={i} title={l.detail}><Tag color={l.color} style={{ cursor: "pointer" }}>{l.text}</Tag></Tooltip>)}</Space>; } },
