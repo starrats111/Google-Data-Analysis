@@ -18,10 +18,15 @@ interface PlatformApiConfig {
   assumeAllJoined?: boolean;
   /**
    * 该平台 API 要求显式携带 relationship 参数才能正常返回数据。
-   * 不传时 API 报错：filter.relationship must be one of the following values: Joined, Pending...
-   * 设为 true 时请求会固定附带 relationship: "Joined"
+   * 设为 true 时请求会附带 relationshipValue（默认 "Joined"）
    */
   requiresRelationshipParam?: boolean;
+  /**
+   * 覆盖默认的 relationship 过滤值（默认 "Joined"）。
+   * 例如 RW (Rewardoo) 平台实际状态为 Approved/Pending/Reject/Not Join，
+   * 不存在 "Joined"，需传 "Approved"。
+   */
+  relationshipValue?: string;
 }
 
 const PLATFORM_API_CONFIG: Record<string, PlatformApiConfig> = {
@@ -76,11 +81,11 @@ const PLATFORM_API_CONFIG: Record<string, PlatformApiConfig> = {
     mode: "post_form",
     url: "https://admin.rewardoo.com/api.php?mod=medium&op=merchant_details",
     pageKey: "page", sizeKey: "limit", maxSize: 1000,
-    // RW API 必须传 relationship 参数，否则返回 0 条数据
-    // 传 Joined 可正常返回 ~2000 已加入商家；
-    // 166377 (Approved) 未出现在 Joined 列表中，属于 Rewardoo 后台状态尚未完全激活，等待自然同步
+    // RW 平台真实状态为 Approved/Pending/Reject/Not Join，无"Joined"状态。
+    // 必须传 relationship 参数否则返回 0 条；过滤值使用"Approved"而非"Joined"。
     assumeAllJoined: true,
     requiresRelationshipParam: true,
+    relationshipValue: "Approved",
   },
 };
 
@@ -303,11 +308,10 @@ export async function fetchAllMerchants(
 
   const assumeAllJoined = config.assumeAllJoined === true;
 
-  // requiresRelationshipParam：该平台 API 必须显式携带 relationship:"Joined"，
-  // 不传时会返回错误（filter.relationship must be one of the following values: Joined...）
-  // assumeAllJoined 但不需要显式参数的平台（LH/LB/RW）不传该字段，避免不兼容
+  // requiresRelationshipParam：该平台 API 必须显式携带 relationship 参数才能返回数据。
+  // 默认值为 "Joined"，各平台可通过 relationshipValue 覆盖（例如 RW 实际状态为 "Approved"）。
   const effectiveRelFilter = config.requiresRelationshipParam
-    ? "Joined"
+    ? (config.relationshipValue ?? "Joined")
     : (assumeAllJoined ? undefined : relationshipFilter);
 
   try {
