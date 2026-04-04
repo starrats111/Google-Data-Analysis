@@ -7,6 +7,7 @@
 import { NextRequest } from "next/server";
 import { getUserFromRequest } from "@/lib/auth";
 import prisma from "@/lib/prisma";
+import { dateColumnStart, dateColumnEndExclusive } from "@/lib/date-utils";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 120;
@@ -100,14 +101,26 @@ const TOOLS = [
 // ──────────────────────────────────────────────
 type ToolArgs = Record<string, unknown>;
 
+/** 获取用户所有广告系列 ID（与 data-center/campaigns 保持一致，通过 campaigns 表中转） */
+async function getUserCampaignIds(userId: bigint): Promise<bigint[]> {
+  const campaigns = await prisma.campaigns.findMany({
+    where: { user_id: userId, is_deleted: 0 },
+    select: { id: true },
+  });
+  return campaigns.map((c) => c.id);
+}
+
 async function executeTool(name: string, args: ToolArgs, userId: bigint): Promise<string> {
   const from = String(args.date_from || "");
   const to   = String(args.date_to   || "");
   const fmtMoney = (v: unknown) => `$${Number(v || 0).toFixed(2)}`;
 
   if (name === "get_account_overview") {
+    const campaignIds = await getUserCampaignIds(userId);
+    if (!campaignIds.length) return JSON.stringify({ error: "当前账户下暂无广告系列" });
+
     const stats = await prisma.ads_daily_stats.findMany({
-      where: { user_id: userId, date: { gte: new Date(from), lte: new Date(to) }, is_deleted: 0 },
+      where: { campaign_id: { in: campaignIds }, date: { gte: dateColumnStart(from), lt: dateColumnEndExclusive(to) }, is_deleted: 0 },
       select: { cost: true, clicks: true, impressions: true, commission: true, orders: true, campaign_id: true },
     });
     if (!stats.length) return JSON.stringify({ error: `${from}~${to} 无广告数据` });
@@ -141,8 +154,11 @@ async function executeTool(name: string, args: ToolArgs, userId: bigint): Promis
     const orderBy = String(args.order_by || "cost");
     const limit = Math.min(Number(args.limit || 20), 50);
 
+    const campaignIds = await getUserCampaignIds(userId);
+    if (!campaignIds.length) return JSON.stringify({ error: "当前账户下暂无广告系列" });
+
     const stats = await prisma.ads_daily_stats.findMany({
-      where: { user_id: userId, date: { gte: new Date(from), lte: new Date(to) }, is_deleted: 0 },
+      where: { campaign_id: { in: campaignIds }, date: { gte: dateColumnStart(from), lt: dateColumnEndExclusive(to) }, is_deleted: 0 },
       select: { campaign_id: true, cost: true, clicks: true, impressions: true, commission: true, orders: true, rejected_commission: true },
     });
     if (!stats.length) return JSON.stringify({ error: "无数据" });
@@ -250,8 +266,11 @@ async function executeTool(name: string, args: ToolArgs, userId: bigint): Promis
   }
 
   if (name === "get_daily_trend") {
+    const campaignIds = await getUserCampaignIds(userId);
+    if (!campaignIds.length) return JSON.stringify({ error: "当前账户下暂无广告系列" });
+
     const stats = await prisma.ads_daily_stats.findMany({
-      where: { user_id: userId, date: { gte: new Date(from), lte: new Date(to) }, is_deleted: 0 },
+      where: { campaign_id: { in: campaignIds }, date: { gte: dateColumnStart(from), lt: dateColumnEndExclusive(to) }, is_deleted: 0 },
       select: { date: true, cost: true, clicks: true, impressions: true, commission: true, orders: true, campaign_id: true },
       orderBy: { date: "asc" },
     });
@@ -285,8 +304,11 @@ async function executeTool(name: string, args: ToolArgs, userId: bigint): Promis
   }
 
   if (name === "get_roi_diagnosis") {
+    const campaignIds = await getUserCampaignIds(userId);
+    if (!campaignIds.length) return JSON.stringify({ error: "当前账户下暂无广告系列" });
+
     const stats = await prisma.ads_daily_stats.findMany({
-      where: { user_id: userId, date: { gte: new Date(from), lte: new Date(to) }, is_deleted: 0 },
+      where: { campaign_id: { in: campaignIds }, date: { gte: dateColumnStart(from), lt: dateColumnEndExclusive(to) }, is_deleted: 0 },
       select: { campaign_id: true, cost: true, commission: true, clicks: true, orders: true },
     });
     if (!stats.length) return JSON.stringify({ error: "无数据，无法诊断" });
@@ -417,7 +439,7 @@ export async function POST(req: NextRequest) {
   }
 
   // Adrian 系统提示词
-  const systemPrompt = `你是 Adrian · 数据猎手，一位精通 Google Ads 搜索广告的顾问。
+  const systemPrompt = `你是 Adrian，一位专注于 Google Ads 搜索广告的数据顾问。
 职业信条：「没有坏的产品，只有投错的人群和出不动的价。」
 
 你有以下数据工具可以调用，工具返回的是当前用户的真实数据：
@@ -432,7 +454,9 @@ export async function POST(req: NextRequest) {
 2. 用业务化中文描述，不用 ENABLED/PAUSED/ROI 等英文缩写，用"投放中""已暂停""投资回报率"
 3. 数据驱动，每条结论必须有数字支撑
 4. 给出 3 条可落地的优化建议，每条建议必须附上量化预期（如：预计 ROI 提升 15%）
-5. 报告用 Markdown 格式，结构清晰，数字加粗`;
+5. 报告用 Markdown 格式，结构清晰，数字加粗
+6. 禁止使用任何 emoji 或表情符号，保持报告的专业性
+7. 如果工具返回无数据或错误，直接说明"指定日期范围内暂无数据，请确认数据已完成同步"，不要猜测原因或列举可能的故障场景`;
 
   const messages: Array<{ role: string; content: unknown }> = [
     { role: "user", content: userQuestion },

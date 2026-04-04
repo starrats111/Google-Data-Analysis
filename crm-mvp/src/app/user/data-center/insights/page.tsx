@@ -6,8 +6,8 @@ import {
   DatePicker, Input, Button, Alert, Divider, Space,
 } from "antd";
 import {
-  BulbOutlined, CalendarOutlined, RobotOutlined,
-  ThunderboltOutlined, LoadingOutlined, SendOutlined,
+  CalendarOutlined, RobotOutlined,
+  ThunderboltOutlined, LoadingOutlined,
 } from "@ant-design/icons";
 import { useApiWithParams } from "@/lib/swr";
 import dayjs from "dayjs";
@@ -52,7 +52,7 @@ const PRESET_QUESTIONS = [
   "每日趋势分析，找出数据异常的日期及原因",
 ];
 
-const ADRIAN_TAGS = ["ROI激进派", "数字驱动运营", "账户诊断专家"];
+const ADRIAN_TAGS = ["数字驱动", "系列诊断", "ROI优化"];
 
 // Adrian 顾问标识卡
 function AdrianCard() {
@@ -61,47 +61,43 @@ function AdrianCard() {
       size="small"
       style={{
         marginBottom: 20,
-        background: "linear-gradient(135deg, #0f0c29 0%, #302b63 50%, #24243e 100%)",
-        border: "1px solid #4a3f8c",
-        borderRadius: 10,
+        background: "#fafafa",
+        border: "1px solid #e8e0ff",
+        borderRadius: 8,
       }}
     >
-      <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
         <Avatar
-          size={52}
+          size={44}
           icon={<RobotOutlined />}
           style={{
             background: "linear-gradient(135deg, #667eea 0%, #764ba2 100%)",
-            border: "2px solid #9b8ed6",
             flexShrink: 0,
           }}
         />
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-            <Text style={{ color: "#e8e0ff", fontWeight: 700, fontSize: 16 }}>
-              Adrian · 数据猎手
-            </Text>
-            <Text style={{ color: "#9b8ed6", fontSize: 12 }}>Google Ads 搜索广告顾问</Text>
-          </div>
-          <div style={{ marginTop: 6, display: "flex", gap: 6, flexWrap: "wrap" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+            <Text style={{ fontWeight: 600, fontSize: 14 }}>Adrian</Text>
+            <Text type="secondary" style={{ fontSize: 12 }}>Google Ads 数据顾问</Text>
             {ADRIAN_TAGS.map((tag) => (
               <Tag
                 key={tag}
                 style={{
-                  background: "rgba(102,126,234,0.2)",
-                  border: "1px solid #667eea",
-                  color: "#b8a9f5",
+                  background: "#f0ecff",
+                  border: "1px solid #d6cef5",
+                  color: "#5a4a9c",
                   fontSize: 11,
                   margin: 0,
+                  borderRadius: 4,
                 }}
               >
                 {tag}
               </Tag>
             ))}
           </div>
-          <div style={{ marginTop: 8 }}>
-            <Text style={{ color: "#7c6fbc", fontSize: 11, fontStyle: "italic" }}>
-              职业信条：「没有坏的产品，只有投错的人群和出不动的价。」
+          <div style={{ marginTop: 4 }}>
+            <Text type="secondary" style={{ fontSize: 11 }}>
+              「没有坏的产品，只有投错的人群和出不动的价。」
             </Text>
           </div>
         </div>
@@ -188,7 +184,7 @@ function LiveAnalysisPanel() {
               if (eventType === "status") {
                 setStatusLogs((prev) => [...prev, payload]);
               } else if (eventType === "tool") {
-                setStatusLogs((prev) => [...prev, `✅ ${payload}`]);
+                setStatusLogs((prev) => [...prev, payload]);
               } else if (eventType === "content") {
                 setContent((prev) => prev + payload);
               } else if (eventType === "error") {
@@ -295,12 +291,12 @@ function LiveAnalysisPanel() {
       {statusLogs.length > 0 && (
         <Card
           size="small"
-          title={<Text style={{ fontSize: 12, color: "#764ba2" }}>⚙️ Adrian 工具调用日志</Text>}
+          title={<Text style={{ fontSize: 12, color: "#764ba2" }}>工具调用日志</Text>}
           style={{ border: "1px solid #e8e0ff", borderRadius: 8 }}
           styles={{ body: { padding: "10px 16px" } }}
         >
           {statusLogs.map((log, i) => (
-            <div key={i} style={{ fontSize: 12, color: "#666", lineHeight: 1.8 }}>
+            <div key={i} style={{ fontSize: 12, color: "#888", lineHeight: 1.8, fontFamily: "monospace" }}>
               {log}
             </div>
           ))}
@@ -455,15 +451,8 @@ export default function InsightsPage() {
     <div>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
         <Title level={4} style={{ margin: 0 }}>
-          <BulbOutlined /> AI 洞察报告
+          AI 分析报告
         </Title>
-        <Tag
-          icon={<SendOutlined />}
-          color="purple"
-          style={{ fontSize: 12 }}
-        >
-          by Adrian · 数据猎手
-        </Tag>
       </div>
 
       <AdrianCard />
