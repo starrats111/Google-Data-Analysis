@@ -35,8 +35,16 @@ export async function GET(req: NextRequest) {
   return NextResponse.json({ ok: true, message: "merchant check started in background" });
 }
 
+// 熔断器：记录本轮 cron 中各平台的连续失败次数，超过阈值则跳过后续用户
+// key = platform code，value = 连续失败次数
+const CIRCUIT_BREAKER_THRESHOLD = 2; // 连续失败 2 次触发熔断
+
 async function doMerchantCheck() {
   const t0 = Date.now();
+
+  // 每次 cron 运行时重置熔断计数
+  const platformFailCounts = new Map<string, number>();
+  const platformCircuitOpen = new Set<string>();
 
   try {
     const users = await prisma.users.findMany({
@@ -48,7 +56,12 @@ async function doMerchantCheck() {
 
     for (const user of users) {
       try {
-        const relResult = await checkUserMerchants(user.id, user.username);
+        const relResult = await checkUserMerchants(
+          user.id,
+          user.username,
+          platformFailCounts,
+          platformCircuitOpen,
+        );
         if (relResult && typeof relResult === "object" && "removed" in relResult) {
           totalRemoved += (relResult as any).removed || 0;
           totalAdded += (relResult as any).added || 0;
@@ -62,7 +75,10 @@ async function doMerchantCheck() {
     }
 
     const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
-    log(`All done in ${elapsed}s — removed: ${totalRemoved}, added: ${totalAdded}, invalidLinks: ${totalInvalidLinks}`);
+    const circuitInfo = platformCircuitOpen.size > 0
+      ? ` | 熔断平台: ${[...platformCircuitOpen].join(", ")}`
+      : "";
+    log(`All done in ${elapsed}s — removed: ${totalRemoved}, added: ${totalAdded}, invalidLinks: ${totalInvalidLinks}${circuitInfo}`);
   } catch (e) {
     log(`FATAL: ${e instanceof Error ? e.message : String(e)}`);
   }
@@ -70,7 +86,15 @@ async function doMerchantCheck() {
 
 // ========== 1. 商家关系状态检查 ==========
 
-async function checkUserMerchants(userId: bigint, username: string): Promise<unknown> {
+// 单次平台 API 调用的最长允许时间（包含内部重试），超过则判为失败
+const PLATFORM_CALL_BUDGET_MS = 35000; // 15s超时×2次 + 2s间隔 = 32s，留3s余量
+
+async function checkUserMerchants(
+  userId: bigint,
+  username: string,
+  platformFailCounts: Map<string, number>,
+  platformCircuitOpen: Set<string>,
+): Promise<unknown> {
   const conns = await prisma.platform_connections.findMany({
     where: { user_id: userId, is_deleted: 0, status: "connected" },
     select: { id: true, platform: true, account_name: true, api_key: true },
@@ -92,8 +116,35 @@ async function checkUserMerchants(userId: bigint, username: string): Promise<unk
 
   for (const conn of validConns) {
     const platform = normalizePlatformCode(conn.platform);
+
+    // 熔断检查：本轮该平台已连续失败 >= 阈值，直接跳过
+    if (platformCircuitOpen.has(platform)) {
+      log(`  [熔断] 跳过 ${platform}（本轮已连续失败 ${platformFailCounts.get(platform)} 次）`);
+      continue;
+    }
+
     try {
-      const r = await fetchAllMerchants(platform, conn.api_key!);
+      // 用 Promise.race 给整个平台调用加一个硬时间预算，防止 fetchAllMerchants 内部多页翻页拖垮
+      const fetchPromise = fetchAllMerchants(platform, conn.api_key!);
+      const timeoutPromise = new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error(`${platform} 平台调用超出时间预算 ${PLATFORM_CALL_BUDGET_MS / 1000}s`)), PLATFORM_CALL_BUDGET_MS)
+      );
+      const r = await Promise.race([fetchPromise, timeoutPromise]);
+
+      if (r.error) {
+        // API 有错误但仍返回了部分数据，记录错误并计入失败
+        log(`  ${conn.account_name || platform}: API 错误 - ${r.error}`);
+        const fails = (platformFailCounts.get(platform) || 0) + 1;
+        platformFailCounts.set(platform, fails);
+        if (fails >= CIRCUIT_BREAKER_THRESHOLD) {
+          platformCircuitOpen.add(platform);
+          log(`  [熔断触发] ${platform} 连续失败 ${fails} 次，本轮后续用户跳过该平台`);
+        }
+      } else {
+        // 成功，重置失败计数
+        platformFailCounts.set(platform, 0);
+      }
+
       for (const m of r.merchants) {
         const key = `${platform}:${m.merchant_id}`;
         platformMerchants.set(key, m.relationship_status);
@@ -107,7 +158,15 @@ async function checkUserMerchants(userId: bigint, username: string): Promise<unk
         }
       }
     } catch (e) {
-      log(`  ${conn.account_name || platform}: ${e instanceof Error ? e.message : String(e)}`);
+      const errMsg = e instanceof Error ? e.message : String(e);
+      log(`  ${conn.account_name || platform}: ${errMsg}`);
+      // 超时或网络异常，计入失败
+      const fails = (platformFailCounts.get(platform) || 0) + 1;
+      platformFailCounts.set(platform, fails);
+      if (fails >= CIRCUIT_BREAKER_THRESHOLD) {
+        platformCircuitOpen.add(platform);
+        log(`  [熔断触发] ${platform} 连续失败 ${fails} 次，本轮后续用户跳过该平台`);
+      }
     }
   }
 

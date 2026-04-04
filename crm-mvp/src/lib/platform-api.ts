@@ -99,6 +99,11 @@ export interface PlatformMerchant {
 const RETRYABLE_STATUS = new Set([502, 503, 504]);
 const MAX_RETRIES = 2;
 
+// 商家列表 API 超时：15s，最多重试 1 次（单页最长 15+2+15=32s）
+// 交易 API 超时更长（120s），保持不变
+const MERCHANT_API_TIMEOUT = 15000;
+const MERCHANT_API_MAX_RETRIES = 1;
+
 async function callPlatformApi(
   config: PlatformApiConfig,
   token: string,
@@ -107,8 +112,9 @@ async function callPlatformApi(
 ): Promise<Record<string, unknown>> {
   const { mode, url, source, pageKey, sizeKey, maxSize } = config;
 
-  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
-    const timeout = 45000;
+  const maxRetries = MERCHANT_API_MAX_RETRIES;
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    const timeout = MERCHANT_API_TIMEOUT;
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeout);
 
@@ -149,9 +155,9 @@ async function callPlatformApi(
       }
 
       if (!resp.ok) {
-        if (RETRYABLE_STATUS.has(resp.status) && attempt < MAX_RETRIES) {
+        if (RETRYABLE_STATUS.has(resp.status) && attempt < maxRetries) {
           const delay = (attempt + 1) * 2000;
-          console.warn(`[Platform] ${url} HTTP ${resp.status}，${delay / 1000}s 后重试 (${attempt + 1}/${MAX_RETRIES})`);
+          console.warn(`[Platform] ${url} HTTP ${resp.status}，${delay / 1000}s 后重试 (${attempt + 1}/${maxRetries})`);
           clearTimeout(timer);
           await sleep(delay);
           continue;
@@ -161,9 +167,9 @@ async function callPlatformApi(
       return await resp.json();
     } catch (err) {
       clearTimeout(timer);
-      if (attempt < MAX_RETRIES && err instanceof Error && (err.name === "AbortError" || err.name === "TimeoutError")) {
+      if (attempt < maxRetries && err instanceof Error && (err.name === "AbortError" || err.name === "TimeoutError")) {
         const delay = (attempt + 1) * 2000;
-        console.warn(`[Platform] ${url} 超时，${delay / 1000}s 后重试 (${attempt + 1}/${MAX_RETRIES})`);
+        console.warn(`[Platform] ${url} 超时，${delay / 1000}s 后重试 (${attempt + 1}/${maxRetries})`);
         await sleep(delay);
         continue;
       }
