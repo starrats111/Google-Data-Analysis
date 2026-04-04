@@ -39,12 +39,13 @@ export const GET = withLeader(async (req: NextRequest, { user }) => {
     ? (isTodayCST(endDate, cstNow) ? cstNow.toDate() : parseCSTDateEndExclusive(endDate))
     : cstNow.toDate();
 
-  // 与数据中心一致：先查 campaigns，过滤掉无 google_campaign_id 的幽灵记录
+  // 与数据中心一致：先查 campaigns，过滤掉无 google_campaign_id 的幽灵记录，且不包含 REMOVED 状态
   const rawCampaigns = await prisma.campaigns.findMany({
     where: {
       user_id: targetId,
       google_campaign_id: { not: null },
       is_deleted: 0,
+      google_status: { not: "REMOVED" },
     },
     orderBy: { id: "desc" },
     select: {
@@ -196,7 +197,20 @@ export const GET = withLeader(async (req: NextRequest, { user }) => {
     };
   });
 
-  campaignDetails.sort((a, b) => b.cost - a.cost);
+  // 与数据中心一致：按状态（ENABLED→PAUSED）排序，同状态内按广告系列名中的序号升序
+  const STATUS_ORDER: Record<string, number> = { ENABLED: 0, PAUSED: 1, REMOVED: 2 };
+  const extractSeq = (name: string): number => {
+    if (!name) return 999999;
+    const first = name.split("-")[0] || "";
+    const digits = first.replace(/^[a-zA-Z]+/, "");
+    return /^\d+$/.test(digits) ? parseInt(digits, 10) : 999999;
+  };
+  campaignDetails.sort((a, b) => {
+    const pa = STATUS_ORDER[a.status || ""] ?? 2;
+    const pb = STATUS_ORDER[b.status || ""] ?? 2;
+    if (pa !== pb) return pa - pb;
+    return extractSeq(a.campaign_name) - extractSeq(b.campaign_name);
+  });
 
   const avgCpc = totalClicks > 0 ? totalCost / totalClicks : 0;
   const totalNet = totalCommissionFromTxn - totalRejectedFromTxn - totalCost;
