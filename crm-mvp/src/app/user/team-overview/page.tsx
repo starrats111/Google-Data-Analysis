@@ -3,10 +3,11 @@
 import { useState, useEffect, useMemo, useCallback } from "react";
 import {
   Card, Table, Tag, Statistic, Row, Col, Progress, Typography, Spin, Empty,
-  Space, DatePicker, Button,
+  Space, DatePicker, Button, Tooltip, notification,
 } from "antd";
 import {
-  TeamOutlined, UserOutlined, TrophyOutlined, ReloadOutlined,
+  TeamOutlined, UserOutlined, TrophyOutlined, ReloadOutlined, SyncOutlined,
+  CloudSyncOutlined,
 } from "@ant-design/icons";
 import dayjs, { Dayjs } from "dayjs";
 import utc from "dayjs/plugin/utc";
@@ -20,14 +21,8 @@ const TZ = "Asia/Shanghai";
 const { Title, Text } = Typography;
 const { RangePicker } = DatePicker;
 
-interface TeamStats {
-  member_count: number;
-  total_cost: number;
-  total_commission: number;
-  rejected_commission: number;
-  net_commission: number;
-  avg_roi: number;
-}
+/** 自动刷新间隔（毫秒） */
+const AUTO_REFRESH_INTERVAL = 60_000;
 
 interface MemberRanking {
   user_id: string;
@@ -42,9 +37,11 @@ interface MemberRanking {
 }
 
 export default function TeamOverviewPage() {
-  const [teamStats, setTeamStats] = useState<TeamStats | null>(null);
   const [memberRanking, setMemberRanking] = useState<MemberRanking[]>([]);
+  const [memberCount, setMemberCount] = useState(0);
   const [loading, setLoading] = useState(false);
+  const [syncing, setSyncing] = useState(false);
+  const [lastUpdated, setLastUpdated] = useState<Dayjs | null>(null);
   const [dateRange, setDateRange] = useState<[Dayjs, Dayjs]>([
     dayjs().tz(TZ).startOf("month"),
     dayjs().tz(TZ),
@@ -55,6 +52,24 @@ export default function TeamOverviewPage() {
     open: boolean; userId: string | null; username?: string; displayName?: string;
   }>({ open: false, userId: null });
 
+  // 团队汇总数据从员工数据派生，确保与排行榜数据完全一致
+  const teamStats = useMemo(() => {
+    if (memberRanking.length === 0 && memberCount === 0) return null;
+    const total_cost = memberRanking.reduce((s, m) => s + m.cost, 0);
+    const total_commission = memberRanking.reduce((s, m) => s + m.commission, 0);
+    const rejected_commission = memberRanking.reduce((s, m) => s + m.rejected_commission, 0);
+    const net_commission = memberRanking.reduce((s, m) => s + m.net_commission, 0);
+    const avg_roi = total_cost > 0 ? (net_commission / total_cost) * 100 : 0;
+    return {
+      member_count: memberCount,
+      total_cost: Math.round(total_cost * 100) / 100,
+      total_commission: Math.round(total_commission * 100) / 100,
+      rejected_commission: Math.round(rejected_commission * 100) / 100,
+      net_commission: Math.round(net_commission * 100) / 100,
+      avg_roi: Math.round(avg_roi * 10) / 10,
+    };
+  }, [memberRanking, memberCount]);
+
   const loadData = useCallback(async () => {
     setLoading(true);
     try {
@@ -64,8 +79,10 @@ export default function TeamOverviewPage() {
       });
       const res = await fetch(`/api/user/team/stats?${params}`).then((r) => r.json());
       if (res.code === 0) {
-        setTeamStats(res.data.team_stats);
         setMemberRanking(res.data.member_ranking);
+        // 成员人数来自服务端（包含零数据成员）
+        setMemberCount(res.data.team_stats?.member_count ?? res.data.member_ranking.length);
+        setLastUpdated(dayjs().tz(TZ));
       }
     } catch (e) {
       console.error("加载小组数据失败:", e);
@@ -74,7 +91,57 @@ export default function TeamOverviewPage() {
     }
   }, [dateRange]);
 
+  /** 同步所有组员今日费用 + 近 7 天佣金，完成后刷新统计 */
+  const handleSync = useCallback(async () => {
+    setSyncing(true);
+    const key = "team-sync";
+    notification.open({
+      key,
+      message: "正在同步数据",
+      description: "正在拉取全员今日广告费用和近 7 天佣金，请稍候…",
+      icon: <SyncOutlined spin style={{ color: "#1677ff" }} />,
+      duration: 0,
+    });
+    try {
+      const res = await fetch("/api/user/team/sync", { method: "POST" }).then((r) => r.json());
+      if (res.code === 0) {
+        const { summary } = res.data;
+        notification.success({
+          key,
+          message: "同步完成",
+          description: `已同步 ${summary.member_count} 名成员：广告数据 ${summary.ads_synced} 条，佣金数据 ${summary.txn_synced} 条`,
+          duration: 5,
+        });
+      } else {
+        notification.error({
+          key,
+          message: "同步失败",
+          description: res.message || "未知错误",
+          duration: 5,
+        });
+      }
+    } catch (e) {
+      console.error("同步失败:", e);
+      notification.error({
+        key,
+        message: "同步失败",
+        description: "网络错误，请稍后重试",
+        duration: 5,
+      });
+    } finally {
+      setSyncing(false);
+      // 同步完成后刷新统计数据
+      await loadData();
+    }
+  }, [loadData]);
+
   useEffect(() => { loadData(); }, [loadData]);
+
+  // 自动轮询刷新
+  useEffect(() => {
+    const timer = setInterval(() => { loadData(); }, AUTO_REFRESH_INTERVAL);
+    return () => clearInterval(timer);
+  }, [loadData]);
 
   const handleViewMember = useCallback((record: MemberRanking) => {
     setModalState({
@@ -151,15 +218,38 @@ export default function TeamOverviewPage() {
 
       {/* 筛选栏 */}
       <Card size="small" style={{ marginBottom: 16 }}>
-        <Space>
-          <Text>日期范围：</Text>
-          <RangePicker
-            value={dateRange}
-            onChange={(v) => { if (v?.[0] && v?.[1]) setDateRange([v[0], v[1]]); }}
-            allowClear={false}
-          />
-          <Button icon={<ReloadOutlined />} onClick={loadData} loading={loading}>刷新</Button>
-        </Space>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
+          <Space>
+            <Text>日期范围：</Text>
+            <RangePicker
+              value={dateRange}
+              onChange={(v) => { if (v?.[0] && v?.[1]) setDateRange([v[0], v[1]]); }}
+              allowClear={false}
+            />
+            <Tooltip title="同步全员今日广告费用 + 近 7 天佣金数据">
+              <Button
+                type="primary"
+                icon={<CloudSyncOutlined />}
+                onClick={handleSync}
+                loading={syncing}
+                disabled={loading}
+              >
+                同步数据
+              </Button>
+            </Tooltip>
+            <Button icon={<ReloadOutlined />} onClick={loadData} loading={loading} disabled={syncing}>
+              刷新
+            </Button>
+          </Space>
+          {lastUpdated && (
+            <Tooltip title={`每 ${AUTO_REFRESH_INTERVAL / 1000} 秒自动刷新`}>
+              <Space style={{ color: "#8c8c8c", fontSize: 12, cursor: "default" }}>
+                <SyncOutlined spin={loading} />
+                <span>上次更新：{lastUpdated.format("HH:mm:ss")}</span>
+              </Space>
+            </Tooltip>
+          )}
+        </div>
       </Card>
 
       <Spin spinning={loading}>
