@@ -106,11 +106,16 @@ function AdrianCard() {
   );
 }
 
+// 前端兜底：去除 AI 偶发 emoji
+function stripEmoji(text: string): string {
+  return text.replace(/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{FE00}-\u{FEFF}]/gu, "").replace(/\s{2,}/g, " ");
+}
+
 // Markdown 渲染
 const markdownStyles: React.CSSProperties = {
-  lineHeight: 1.85,
+  lineHeight: 1.9,
   fontSize: 14,
-  color: "rgba(0,0,0,0.85)",
+  color: "rgba(0,0,0,0.82)",
 };
 
 // ──────────────────────────────────────────────
@@ -186,7 +191,7 @@ function LiveAnalysisPanel() {
               } else if (eventType === "tool") {
                 setStatusLogs((prev) => [...prev, payload]);
               } else if (eventType === "content") {
-                setContent((prev) => prev + payload);
+                setContent((prev) => prev + stripEmoji(payload));
               } else if (eventType === "error") {
                 setError(payload);
               }
@@ -329,7 +334,13 @@ function LiveAnalysisPanel() {
         >
           {content ? (
             <div style={markdownStyles} className="insight-markdown">
-              <ReactMarkdown>{content}</ReactMarkdown>
+              <ReactMarkdown
+                components={{
+                  table: ({ children }) => (
+                    <div className="table-wrapper"><table>{children}</table></div>
+                  ),
+                }}
+              >{content}</ReactMarkdown>
               {isAnalyzing && (
                 <span style={{ display: "inline-block", width: 8, height: 14, background: "#764ba2", animation: "blink 1s step-end infinite", marginLeft: 2, verticalAlign: "text-bottom" }} />
               )}
@@ -343,9 +354,7 @@ function LiveAnalysisPanel() {
         </Card>
       )}
 
-      <style>{`
-        @keyframes blink { 50% { opacity: 0; } }
-      `}</style>
+      <style>{`@keyframes blink { 50% { opacity: 0; } }`}</style>
     </div>
   );
 }
@@ -418,7 +427,13 @@ function HistoryPanel() {
                 }
               >
                 <div style={markdownStyles} className="insight-markdown">
-                  <ReactMarkdown>{item.content}</ReactMarkdown>
+                  <ReactMarkdown
+                    components={{
+                      table: ({ children }) => (
+                        <div className="table-wrapper"><table>{children}</table></div>
+                      ),
+                    }}
+                  >{stripEmoji(item.content)}</ReactMarkdown>
                 </div>
               </Card>
             ))}
@@ -487,57 +502,100 @@ export default function InsightsPage() {
       {activeTab === "live" ? <LiveAnalysisPanel /> : <HistoryPanel />}
 
       <style>{`
+        .insight-markdown {
+          font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        }
+        .insight-markdown h1 {
+          font-size: 18px;
+          font-weight: 700;
+          margin: 0 0 16px;
+          color: #1a1040;
+          border-bottom: 2px solid #e8e0ff;
+          padding-bottom: 8px;
+        }
         .insight-markdown h2 {
           font-size: 15px;
           font-weight: 700;
-          margin: 16px 0 8px;
+          margin: 24px 0 10px;
           color: #302b63;
-          border-bottom: 2px solid #e8e0ff;
-          padding-bottom: 4px;
+          padding: 6px 12px;
+          background: #f4f1ff;
+          border-left: 3px solid #764ba2;
+          border-radius: 0 4px 4px 0;
         }
         .insight-markdown h3 {
-          font-size: 14px;
+          font-size: 13.5px;
           font-weight: 600;
-          margin: 12px 0 6px;
+          margin: 16px 0 8px;
           color: #4a3f8c;
         }
-        .insight-markdown ul, .insight-markdown ol {
-          padding-left: 20px;
+        .insight-markdown p {
           margin: 6px 0;
+          line-height: 1.9;
         }
-        .insight-markdown li { margin: 4px 0; }
-        .insight-markdown strong { color: #302b63; }
+        .insight-markdown ul, .insight-markdown ol {
+          padding-left: 22px;
+          margin: 6px 0 10px;
+        }
+        .insight-markdown li {
+          margin: 5px 0;
+          line-height: 1.75;
+        }
+        .insight-markdown strong {
+          color: #1a1040;
+          font-weight: 700;
+        }
+        .insight-markdown blockquote {
+          border-left: 3px solid #764ba2;
+          margin: 12px 0;
+          padding: 8px 14px;
+          color: #444;
+          background: #f9f7ff;
+          border-radius: 0 6px 6px 0;
+          font-style: normal;
+        }
+        .insight-markdown blockquote p { margin: 0; }
+        .insight-markdown .table-wrapper {
+          overflow-x: auto;
+          margin: 12px 0;
+          border-radius: 6px;
+          border: 1px solid #e0d8f8;
+        }
         .insight-markdown table {
           width: 100%;
           border-collapse: collapse;
           font-size: 13px;
-          margin: 8px 0;
+          min-width: 400px;
+        }
+        .insight-markdown thead tr {
+          background: #f0ecff;
         }
         .insight-markdown th {
-          background: #f0ecff;
-          padding: 6px 10px;
+          padding: 8px 12px;
           text-align: left;
-          border: 1px solid #d6cef5;
           font-weight: 600;
+          color: #302b63;
+          border-bottom: 2px solid #d6cef5;
+          white-space: nowrap;
         }
         .insight-markdown td {
-          padding: 5px 10px;
-          border: 1px solid #e8e0ff;
+          padding: 7px 12px;
+          border-bottom: 1px solid #ede8ff;
+          color: #333;
         }
-        .insight-markdown tr:nth-child(even) td { background: #faf9ff; }
-        .insight-markdown blockquote {
-          border-left: 3px solid #764ba2;
-          margin: 8px 0;
-          padding: 6px 12px;
-          color: #555;
-          background: #f9f7ff;
-        }
-        .insight-markdown p { margin: 4px 0; }
+        .insight-markdown tbody tr:last-child td { border-bottom: none; }
+        .insight-markdown tbody tr:hover td { background: #faf8ff; }
         .insight-markdown code {
           background: #f0ecff;
-          padding: 1px 5px;
+          padding: 1px 6px;
           border-radius: 3px;
           font-size: 12px;
+          font-family: "SF Mono", monospace;
+        }
+        .insight-markdown hr {
+          border: none;
+          border-top: 1px solid #ede8ff;
+          margin: 16px 0;
         }
       `}</style>
     </div>
