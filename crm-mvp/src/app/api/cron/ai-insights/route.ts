@@ -120,13 +120,14 @@ async function doAiInsights(force = false, filterUserId: bigint | null = null) {
       const campaignMap = new Map(campaignsInfo.map((c) => [String(c.id), c]));
 
       // 查询昨日联盟收入
-      const txDateStart = new Date(dateStr + "T00:00:00.000Z");
-      const txDateEnd = new Date(dateStr + "T23:59:59.999Z");
+      // transaction_time 是 DateTime，按北京时间（CST=UTC+8）的昨日范围查询
+      const txDateStart = new Date(dateStr + "T00:00:00.000Z"); // UTC 00:00 of yesterday
+      const txDateEnd = new Date(dateStr + "T23:59:59.999Z");   // UTC 23:59 of yesterday
       const affiliateTx = await prisma.affiliate_transactions.findMany({
         where: {
           user_id: user.id,
           is_deleted: 0,
-          transaction_date: { gte: txDateStart, lte: txDateEnd },
+          transaction_time: { gte: txDateStart, lte: txDateEnd },
         },
         select: {
           platform: true,
