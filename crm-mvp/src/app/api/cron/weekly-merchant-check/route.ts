@@ -86,9 +86,6 @@ async function doMerchantCheck() {
 
 // ========== 1. 商家关系状态检查 ==========
 
-// 单次平台 API 调用的最长允许时间（包含内部重试），超过则判为失败
-const PLATFORM_CALL_BUDGET_MS = 35000; // 15s超时×2次 + 2s间隔 = 32s，留3s余量
-
 async function checkUserMerchants(
   userId: bigint,
   username: string,
@@ -124,12 +121,7 @@ async function checkUserMerchants(
     }
 
     try {
-      // 用 Promise.race 给整个平台调用加一个硬时间预算，防止 fetchAllMerchants 内部多页翻页拖垮
-      const fetchPromise = fetchAllMerchants(platform, conn.api_key!);
-      const timeoutPromise = new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error(`${platform} 平台调用超出时间预算 ${PLATFORM_CALL_BUDGET_MS / 1000}s`)), PLATFORM_CALL_BUDGET_MS)
-      );
-      const r = await Promise.race([fetchPromise, timeoutPromise]);
+      const r = await fetchAllMerchants(platform, conn.api_key!);
 
       if (r.error) {
         // API 有错误但仍返回了部分数据，记录错误并计入失败
