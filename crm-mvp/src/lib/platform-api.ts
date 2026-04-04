@@ -76,10 +76,11 @@ const PLATFORM_API_CONFIG: Record<string, PlatformApiConfig> = {
     mode: "post_form",
     url: "https://admin.rewardoo.com/api.php?mod=medium&op=merchant_details",
     pageKey: "page", sizeKey: "limit", maxSize: 1000,
-    // 不传 relationship 过滤参数：Rewardoo UI 显示"Approved"但 API 过滤器只有 Joined/Pending/Rejected/No Relationship，
-    // "Approved"状态的商家在 relationship=Joined 过滤下不会出现。
-    // 改为读取每条商家的 relationship 字段，由 normalizeStatus 统一映射（"approved"→"joined"）
-    assumeAllJoined: false,
+    // RW API 必须传 relationship 参数，否则返回 0 条数据
+    // 传 Joined 可正常返回 ~2000 已加入商家；
+    // 166377 (Approved) 未出现在 Joined 列表中，属于 Rewardoo 后台状态尚未完全激活，等待自然同步
+    assumeAllJoined: true,
+    requiresRelationshipParam: true,
   },
 };
 
