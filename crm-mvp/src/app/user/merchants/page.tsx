@@ -55,8 +55,7 @@ const CATEGORY_CN: Record<string, string> = {
 const catCn = (v: string | null) => { if (!v) return "-"; return CATEGORY_CN[v] || v; };
 const CommissionCell = ({ v }: { v: string | null }) => {
   if (!v) return <span style={{ color: "#bfbfbf" }}>-</span>;
-  if (/^Revshare\s+\d+%$/i.test(v)) return <span>{v}</span>;
-  return <span style={{ fontWeight: 500, color: "#389e0d" }}>{v}</span>;
+  return <span>{v}</span>;
 };
 // __TYPES__
 interface Merchant {
