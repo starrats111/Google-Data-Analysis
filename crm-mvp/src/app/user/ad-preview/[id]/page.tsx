@@ -13,6 +13,7 @@ import {
   SoundOutlined, CheckCircleOutlined, ExclamationCircleOutlined,
   InboxOutlined, WarningOutlined, TranslationOutlined,
   PhoneOutlined, DollarOutlined, TagOutlined, UnorderedListOutlined,
+  RobotOutlined,
 } from "@ant-design/icons";
 import { useApiWithParams, mutateApi } from "@/lib/swr";
 import { BIDDING_STRATEGIES } from "@/lib/constants";
