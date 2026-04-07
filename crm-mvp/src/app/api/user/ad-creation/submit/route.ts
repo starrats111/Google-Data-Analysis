@@ -712,33 +712,6 @@ export async function POST(req: NextRequest) {
       console.log(`[AdSubmit] 否定关键词: ${validNegativeKws.length} 条`);
     }
 
-    // ─── 10. 并行预加载图片素材（实际提交在主广告创建成功后） ───
-    const MAX_TOTAL_IMAGE_BYTES = 50 * 1024 * 1024;
-    const MAX_IMAGES = 20;
-    let imageAssetsPromise: Promise<{ data: string; name: string }[]> = Promise.resolve([]);
-    if (image_urls.length > 0) {
-      imageAssetsPromise = Promise.all(
-        (image_urls as string[]).slice(0, MAX_IMAGES).map((url) => loadImageAsBase64(url))
-      ).then((results) => {
-        const loaded: { data: string; name: string }[] = [];
-        let totalBytes = 0;
-        for (const img of results) {
-          if (!img) continue;
-          const imgBytes = Buffer.byteLength(img.data, "base64");
-          if (totalBytes + imgBytes > MAX_TOTAL_IMAGE_BYTES) {
-            console.warn(`[AdSubmit] 图片累计体积已达限额 (${Math.round(totalBytes / 1024 / 1024)}MB)，跳过剩余图片`);
-            break;
-          }
-          loaded.push(img);
-          totalBytes += imgBytes;
-        }
-        if (loaded.length > 0) {
-          console.log(`[AdSubmit] 已加载 ${loaded.length} 张图片 (${Math.round(totalBytes / 1024 / 1024)}MB)`);
-        }
-        return loaded;
-      });
-    }
-
     // ─── 发送批量 Mutate 请求（含 DUPLICATE_CAMPAIGN_NAME / POLICY_ERROR 自动重试） ───
     let result: Record<string, unknown>;
     let skippedKeywords: string[] = [];
@@ -823,15 +796,21 @@ export async function POST(req: NextRequest) {
     );
     const googleAdGroupId = adGroupRn.split("/").pop() || "";
 
-    // ─── 11. 图片素材独立提交（第二次 mutate，失败不影响主广告） ───
-    // 搜索广告系列必须使用 AD_IMAGE field_type（MARKETING_IMAGE 不兼容 SEARCH Campaign）
+    // ─── 11. 图片素材独立提交（逐张加载+批量上传，失败不影响主广告） ───
+    const MAX_IMAGES = 20;
+    const MAX_TOTAL_IMAGE_BYTES = 50 * 1024 * 1024;
     const imageUploadResult = { success: 0, failed: 0, errors: [] as string[] };
-    const imageAssets = await imageAssetsPromise;
-    if (imageAssets.length > 0 && campaignRn) {
+    if (image_urls.length > 0 && campaignRn) {
       try {
         const imageOps: Record<string, unknown>[] = [];
         let imgTempId = -100;
-        for (const img of imageAssets) {
+        let totalBytes = 0;
+        for (const url of (image_urls as string[]).slice(0, MAX_IMAGES)) {
+          const img = await loadImageAsBase64(url);
+          if (!img) continue;
+          const imgBytes = Buffer.byteLength(img.data, "base64");
+          if (totalBytes + imgBytes > MAX_TOTAL_IMAGE_BYTES) break;
+          totalBytes += imgBytes;
           const assetRn = `customers/${cid}/assets/${imgTempId}`;
           imageOps.push({
             asset_operation: {
@@ -853,13 +832,15 @@ export async function POST(req: NextRequest) {
           });
           imgTempId--;
         }
-        await mutateGoogleAds(credentials, customerId, imageOps);
-        imageUploadResult.success = imageAssets.length;
-        console.log(`[AdSubmit] 图片素材上传成功: ${imageAssets.length} 张`);
+        if (imageOps.length > 0) {
+          await mutateGoogleAds(credentials, customerId, imageOps);
+          imageUploadResult.success = imageOps.length / 2;
+          console.log(`[AdSubmit] 图片素材上传成功: ${imageUploadResult.success} 张`);
+        }
       } catch (imgErr) {
         const msg = imgErr instanceof Error ? imgErr.message : String(imgErr);
         console.warn("[AdSubmit] 图片素材上传失败（不影响广告创建）:", msg.slice(0, 500));
-        imageUploadResult.failed = imageAssets.length;
+        imageUploadResult.failed = image_urls.length;
         imageUploadResult.errors.push(msg.slice(0, 200));
       }
     }
