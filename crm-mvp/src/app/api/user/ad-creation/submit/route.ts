@@ -176,7 +176,7 @@ export async function POST(req: NextRequest) {
       }
     } catch (preCheckErr) {
       const preMsg = preCheckErr instanceof Error ? preCheckErr.message : String(preCheckErr);
-      if (preMsg.includes("CUSTOMER_NOT_ENABLED") || preMsg.includes("not yet enabled") || preMsg.includes("has been deactivated")) {
+      if (preMsg.includes("CUSTOMER_NOT_ENABLED") || preMsg.includes("not yet enabled") || preMsg.includes("has been deactivated") || preMsg.includes("账户未启用") || preMsg.includes("已停用")) {
         return apiError(`CID ${customerId} 账户未启用或已停用，无法提交广告。请点击「同步 CID」刷新列表，选择其他可用 CID 后重试。`);
       }
       if (preMsg.includes("PERMISSION_DENIED")) {
@@ -756,33 +756,44 @@ export async function POST(req: NextRequest) {
           result = await mutateGoogleAds(credentials, customerId, operations) as Record<string, unknown>;
         } catch (retryErr) {
           const retryMsg = retryErr instanceof Error ? retryErr.message : String(retryErr);
-          if (!retryMsg.includes("POLICY_ERROR") && !retryMsg.includes("policyViolationError")) throw retryErr;
-          // Fall through to policy error handling below
+          const canFallThrough = retryMsg.includes("POLICY_ERROR")
+            || retryMsg.includes("policyViolationError")
+            || retryMsg.includes("assetError")
+            || retryMsg.includes("INVALID_ARGUMENT");
+          if (!canFallThrough) throw retryErr;
           Object.assign(mutateErr as Error, { message: retryMsg });
         }
       }
 
-      // Handle policy violations: remove violating operations and retry
+      // Handle policy violations or asset errors: remove violating operations and retry
       const finalMsg = mutateErr instanceof Error ? mutateErr.message : String(mutateErr);
-      if (finalMsg.includes("POLICY_ERROR") || finalMsg.includes("policyViolationError")) {
-        console.log("[AdSubmit] 检测到政策违规，尝试移除违规操作后重试...");
+      const isRetriableError = finalMsg.includes("POLICY_ERROR")
+        || finalMsg.includes("policyViolationError")
+        || finalMsg.includes("assetError")
+        || finalMsg.includes("CALL_PHONE_NUMBER_NOT_SUPPORTED_FOR_COUNTRY")
+        || finalMsg.includes("INVALID_ARGUMENT");
+      if (isRetriableError) {
+        console.log("[AdSubmit] 检测到可恢复错误，尝试移除违规操作后重试...");
         const violatingIndices = parsePolicyViolationIndices(finalMsg);
 
         if (violatingIndices.size > 0) {
-          // Collect skipped keyword texts for reporting
+          const skippedDetails: string[] = [];
           for (const idx of violatingIndices) {
             const op = operations[idx] as any;
             const kwText = op?.ad_group_criterion_operation?.create?.keyword?.text;
-            if (kwText) skippedKeywords.push(kwText);
+            if (kwText) { skippedKeywords.push(kwText); skippedDetails.push(`关键词: ${kwText}`); }
+            else if (op?.asset_operation?.create?.call_asset) skippedDetails.push("致电扩展");
+            else if (op?.campaign_asset_operation) skippedDetails.push("关联资源");
+            else skippedDetails.push(`操作[${idx}]`);
           }
 
           const filteredOps = operations.filter((_, i) => !violatingIndices.has(i));
-          console.log(`[AdSubmit] 移除 ${violatingIndices.size} 个违规操作 (关键词: ${skippedKeywords.join(", ")}), 剩余 ${filteredOps.length} 个操作`);
+          console.log(`[AdSubmit] 移除 ${violatingIndices.size} 个违规操作 (${skippedDetails.join(", ")}), 剩余 ${filteredOps.length} 个操作`);
 
           if (filteredOps.length >= 6) {
             result = await mutateGoogleAds(credentials, customerId, filteredOps) as Record<string, unknown>;
           } else {
-            throw new Error(`政策违规：关键词 [${skippedKeywords.join(", ")}] 违反 Google Ads 政策，移除后操作数不足，无法创建广告`);
+            throw new Error(`Google Ads 拒绝了 ${violatingIndices.size} 个操作（${skippedDetails.join("、")}），移除后剩余操作数不足，无法创建广告`);
           }
         } else {
           throw mutateErr;
