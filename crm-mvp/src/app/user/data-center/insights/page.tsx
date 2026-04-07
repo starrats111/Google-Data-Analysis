@@ -14,6 +14,7 @@ import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc";
 import timezone from "dayjs/plugin/timezone";
 import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 
 dayjs.extend(utc);
 dayjs.extend(timezone);
@@ -335,6 +336,7 @@ function LiveAnalysisPanel() {
           {content ? (
             <div style={markdownStyles} className="insight-markdown">
               <ReactMarkdown
+                remarkPlugins={[remarkGfm]}
                 components={{
                   table: ({ children }) => (
                     <div className="table-wrapper"><table>{children}</table></div>
@@ -428,6 +430,7 @@ function HistoryPanel() {
               >
                 <div style={markdownStyles} className="insight-markdown">
                   <ReactMarkdown
+                    remarkPlugins={[remarkGfm]}
                     components={{
                       table: ({ children }) => (
                         <div className="table-wrapper"><table>{children}</table></div>

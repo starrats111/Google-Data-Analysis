@@ -121,7 +121,7 @@ async function executeTool(name: string, args: ToolArgs, userId: bigint): Promis
 
     const stats = await prisma.ads_daily_stats.findMany({
       where: { campaign_id: { in: campaignIds }, date: { gte: dateColumnStart(from), lt: dateColumnEndExclusive(to) }, is_deleted: 0 },
-      select: { cost: true, clicks: true, impressions: true, commission: true, orders: true, campaign_id: true },
+      select: { cost: true, clicks: true, impressions: true, commission: true, rejected_commission: true, orders: true, campaign_id: true },
     });
     if (!stats.length) return JSON.stringify({ error: `${from}~${to} 无广告数据` });
 
@@ -129,17 +129,23 @@ async function executeTool(name: string, args: ToolArgs, userId: bigint): Promis
     const totalClicks = stats.reduce((s, r) => s + Number(r.clicks ?? 0), 0);
     const totalImpressions = stats.reduce((s, r) => s + Number(r.impressions ?? 0), 0);
     const totalCommission = stats.reduce((s, r) => s + Number(r.commission ?? 0), 0);
+    const totalRejected = stats.reduce((s, r) => s + Number(r.rejected_commission ?? 0), 0);
     const totalOrders = stats.reduce((s, r) => s + Number(r.orders ?? 0), 0);
     const activeCampaigns = new Set(stats.map((r) => String(r.campaign_id))).size;
-    const roi = totalCost > 0 ? ((totalCommission - totalCost) / totalCost * 100).toFixed(1) : "N/A";
+    // 净佣金 = 总佣金 - 拒付佣金（仍含待结算部分）
+    const netCommission = totalCommission - totalRejected;
+    const roi = totalCost > 0 ? ((netCommission - totalCost) / totalCost * 100).toFixed(1) : "N/A";
     const ctr = totalImpressions > 0 ? (totalClicks / totalImpressions * 100).toFixed(2) : "0";
     const avgCpc = totalClicks > 0 ? totalCost / totalClicks : 0;
 
     return JSON.stringify({
       period: `${from} 至 ${to}`,
       total_cost: fmtMoney(totalCost),
-      total_commission: fmtMoney(totalCommission),
-      net_profit: fmtMoney(totalCommission - totalCost),
+      total_commission_gross: fmtMoney(totalCommission),
+      rejected_commission: fmtMoney(totalRejected),
+      net_commission_excl_rejected: fmtMoney(netCommission),
+      note_commission: "net_commission_excl_rejected 已扣除拒付，但仍含待结算部分；如需已确认收入请调用 get_affiliate_summary",
+      net_profit: fmtMoney(netCommission - totalCost),
       roi_percent: roi,
       total_clicks: totalClicks,
       total_impressions: totalImpressions,
@@ -441,32 +447,35 @@ export async function POST(req: NextRequest) {
   }
 
   // Adrian 系统提示词
-  const systemPrompt = `你是 Adrian，一位专注于 Google Ads 搜索广告的数据顾问。
-职业信条：「没有坏的产品，只有投错的人群和出不动的价。」
+  const systemPrompt = `你是 Adrian，专注于 Google Ads 搜索广告的数据顾问。直接输出报告，不要任何开场白、寒暄或"数据已获取"之类的过渡语。
 
-可用数据工具（工具返回当前用户的真实数据）：
-- get_account_overview：账户总览（花费、佣金、ROI、点击、曝光）
-- get_campaign_performance：各广告系列明细
-- get_affiliate_summary：联盟平台收入汇总
-- get_daily_trend：每日趋势数据
-- get_roi_diagnosis：ROI 健康诊断
+【数据工具】
+- get_account_overview：花费、总佣金（含待结算）、点击、曝光
+- get_campaign_performance：各系列花费/佣金/投资回报率明细
+- get_affiliate_summary：联盟平台佣金明细（按状态分：已确认/待结算/拒付）
+- get_daily_trend：每日花费与佣金趋势
+- get_roi_diagnosis：系列盈亏分类
 
-【输出格式规范 — 严格遵守】
-- 绝对禁止使用任何 emoji、Unicode 符号、颜色图标（🏆🔴✅❌⚠️📊 等一律不得出现）
-- 绝对禁止用竖线 | 和短横线 - 拼接进度条或装饰性分隔行，例如 |---|---|--- 这种写法禁止出现
-- 可以使用标准 Markdown 表格（表头 + 分隔行 + 数据行），表格必须对齐且列数一致
-- 章节用 ## 二级标题，子节用 ### 三级标题，禁止在标题中加数字序号前缀（如"一、"）
-- 数字、金额、百分比用 **加粗**，重要结论用 > 引用块突出
-- 列表用短横线 - 开头，层级最多两层
-- 禁止输出任何纯装饰性内容（如 ===、---、***）
+【佣金口径说明 — 必须遵守】
+- get_account_overview 和 get_campaign_performance 返回的 commission 字段包含全部状态（含待结算），不代表已到账收入
+- 分析实际收益时，必须调用 get_affiliate_summary 并使用其中的 approved（已确认）金额
+- 报告中若引用佣金数据，必须注明是"总佣金（含待结算）"还是"已确认佣金"，不得混用
 
-【分析原则】
-1. 用户消息第一行已包含"分析时间范围：YYYY-MM-DD 至 YYYY-MM-DD"，调用工具时直接使用该范围，禁止再向用户确认日期
-2. 主动调用多个工具获取完整数据，不做假设
-3. 用业务化中文，不用 ENABLED/PAUSED/ROI 等英文缩写，改用"投放中""已暂停""投资回报率"
-4. 每条结论必须有数字支撑
-5. 给出 3 条可落地的优化建议，每条必须附量化预期（如：预计投资回报率提升 15%）
-6. 如工具返回无数据，直接说明"该时段暂无数据，请确认同步状态"，不做任何猜测`;
+【输出格式 — 严格执行】
+1. 直接以 # 报告标题开始，无任何开场白
+2. 章节用 ## 二级标题，子节用 ### 三级标题
+3. 禁止在标题前加序号（如"一、""1."）
+4. 数字、金额用 **加粗**，重要结论用 > 引用块
+5. 数据汇总用标准 Markdown 表格（表头|分隔行|数据行，列数必须完全一致）
+6. 列表用 - 开头，最多两层缩进
+7. 禁止使用任何 emoji 或 Unicode 装饰符号
+8. 禁止用竖线和短横线拼装饰性进度条或分隔线
+
+【分析要求】
+- 用户消息第一行为"分析时间范围：YYYY-MM-DD 至 YYYY-MM-DD"，直接用于工具调用，无需确认
+- 主动调用多个工具，获取完整数据
+- 每条结论附数字，每条建议附量化预期
+- 数据为空时只说"该时段暂无数据，请确认同步状态"，不猜测原因`;
 
   const messages: Array<{ role: string; content: unknown }> = [
     { role: "user", content: userQuestion },
