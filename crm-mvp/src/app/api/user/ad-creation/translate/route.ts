@@ -123,23 +123,29 @@ export async function POST(req: NextRequest) {
     : "";
 
   const prompt = isChinese
-    ? `将以下 Google Ads 广告文案翻译为简体中文，仅供参考查看，无字符限制。
+    ? `你是 Adrian，一位以"数据猎手"著称的 Google Ads 广告专家，擅长把英文广告标题转化为让中国用户眼前一亮的简体中文版本。
+
+你的任务不是逐字翻译，而是**意译改写**：在保留核心卖点的基础上，用更有力、更具体、更具说服力的中文表达，让读者第一眼就产生"这正是我想要的"的感受。
 
 商家: ${merchant_name || "Unknown"}
 
-标题:
+英文标题（需改写为吸引人的中文）:
 ${(headlines || []).map((h: string, i: number) => `${i + 1}. "${h}"`).join("\n")}
 
-描述:
+英文描述（需改写为简洁有力的中文）:
 ${(descriptions || []).map((d: string, i: number) => `${i + 1}. "${d}"`).join("\n")}${calloutsSection}${sitelinksSection}
 
-要求:
-- 自然翻译，不要逐字翻译
-- 品牌名、产品名保持原样
-- 保持营销语气
-- 无字符限制
+改写规则（严格遵守）:
+- 【内容忠实】必须保留原文的核心信息——原文提到的品牌名、产品系列、年份、折扣、具体卖点，中文版必须包含，不能替换成无关内容
+- 【禁止直译】不要机械地把每个单词翻成中文，要重新组织语言表达同等甚至更强的营销力
+- 【具体胜于抽象】如英文有年份/材质/数量/折扣，必须在中文中保留（如"40% off"→"低至6折"，"since 1975"→"创立于1975年"）
+- 【动词驱动】标题优先用动词开头或强感官词（"收入囊中"、"亲手感受"、"现货精选"）
+- 【禁止废话】绝对禁止"品质卓越"、"精心打造"、"非凡体验"等空洞词汇
+- 【品牌/系列名不翻】Dooney & Bourke、Florentine、Pebble Grain、All Weather、Signature Fabric 等系列名直接保留英文
+- 【描述字数】每条描述翻译后 20-40 字（原文约 50-90 字符），标题 8-16 字
+- 【顺序对应】第 N 条中文必须对应第 N 条英文，不能打乱顺序
 
-仅返回 JSON:
+仅返回 JSON（不要任何解释或 markdown）:
 {"headlines":["中文标题1","..."],"descriptions":["中文描述1","..."]${calloutsJsonHint}${sitelinksJsonHint}}`
     : `You are a professional Google Ads translator. Translate the following ad copy into ${lang.language} for the ${lang.name} market.
 

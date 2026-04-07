@@ -208,73 +208,121 @@ export function extractMerchantFeatures(html: string): string[] {
 
 export function extractPromotionInfo(html: string, sourceUrl: string, country: string): Record<string, unknown> | null {
   if (!html) return null;
-  const lower = html.toLowerCase();
   const result: Record<string, unknown> = {};
   const market = getAdMarketConfig(country);
 
-  // 只从促销相关区域（banner/topbar/promo）提取折扣信息，避免匹配到正文中的无关数字
-  const promoZoneRegex = /<(?:div|span|p|a|header|section)[^>]*class=["'][^"']*(?:banner|announcement|promo|hero|notice|topbar|top-bar|sale-bar|offer|discount|coupon|deal)[^"']*["'][^>]*>([\s\S]*?)<\/(?:div|span|p|a|header|section)>/gi;
-  let promoZoneMatch;
-  const promoZoneTexts: string[] = [];
-  while ((promoZoneMatch = promoZoneRegex.exec(html)) !== null) {
-    const text = promoZoneMatch[1].replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
-    if (text.length > 3 && text.length < 200) promoZoneTexts.push(text);
-  }
-  const promoZoneText = promoZoneTexts.join(" ");
+  // ─── 优先：从 <meta name="description"> / <meta property="og:description"> 提取（head 被 htmlToText 删除前保存）
+  const metaDescMatch =
+    html.match(/<meta[^>]+name=["']description["'][^>]+content=["']([^"']{10,300})["']/i) ||
+    html.match(/<meta[^>]+content=["']([^"']{10,300})["'][^>]+name=["']description["']/i) ||
+    html.match(/<meta[^>]+property=["']og:description["'][^>]+content=["']([^"']{10,300})["']/i);
+  const metaDesc = metaDescMatch ? metaDescMatch[1].replace(/&amp;/gi, "&").replace(/&#\d+;|&[a-z]+;/gi, " ") : "";
 
-  // 优先从促销区域提取具体折扣数字，而非全页匹配
-  const zoneToSearch = promoZoneText || "";
-  const percentMatch = zoneToSearch.match(/(?:up\s+to\s+)?(\d{1,2})\s*%\s*(?:off|discount|sale|rabatt|remise|sconto)/i)
-    || zoneToSearch.match(/(?:save|get|enjoy)\s+(\d{1,2})\s*%/i);
+  // 用 htmlToText 得到 body 纯文本（head 已被移除，用 metaDesc 补充）
+  const bodyText = htmlToText(html);
+  // 合并搜索文本：meta description 优先放前面
+  const plainText = (metaDesc ? metaDesc + " " : "") + bodyText;
+
+  // ─── 步骤1：从纯文本直接搜索折扣百分比 ───
+  // 搜索 "up to 40% off" / "save 30%" / "enjoy 20% off" 等模式
+  const percentMatch =
+    plainText.match(/(?:up\s+to\s+)?(\d{1,2})\s*%\s*(?:off|discount|sale|rabatt|remise|sconto)/i) ||
+    plainText.match(/(?:save|get|enjoy)\s+(\d{1,2})\s*%/i);
   if (percentMatch) {
     const pct = parseInt(percentMatch[1], 10);
     if (pct >= 5 && pct <= 90) {
       result.discount_type = "PERCENT";
       result.discount_percent = pct;
+      // 提取该折扣所在的上下文句子作为 promotion_target 原始文本
+      const ctx = plainText.slice(
+        Math.max(0, (percentMatch.index ?? 0) - 60),
+        (percentMatch.index ?? 0) + 80,
+      ).replace(/\s+/g, " ").trim();
+      result._promo_context = ctx;
     }
   }
 
-  const moneyMatch = zoneToSearch.match(/(?:save|get|rabatt|remise|sconto|descuento)\s*(?:[$€£]|chf\s*)?(\d{1,4})/i)
-    || zoneToSearch.match(/(?:[$€£]|chf\s*)(\d{1,4})\s*(?:off|rabatt|remise|sconto|descuento)/i);
-  if (moneyMatch && !result.discount_type) {
-    const amt = parseInt(moneyMatch[1], 10);
-    if (amt >= 1 && amt <= 5000) {
-      result.discount_type = "MONETARY";
-      result.discount_amount = amt;
-      result.currency_code = market.currencyCode;
+  // ─── 步骤2：搜索金额折扣（$X off / save $X） ───
+  if (!result.discount_type) {
+    const moneyMatch =
+      plainText.match(/(?:save|get|rabatt|remise|sconto|descuento)\s*[$€£]?\s*(\d{1,4})/i) ||
+      plainText.match(/[$€£](\d{1,4})\s*(?:off|rabatt|remise|sconto|descuento)/i);
+    if (moneyMatch) {
+      const amt = parseInt(moneyMatch[1], 10);
+      if (amt >= 1 && amt <= 5000) {
+        result.discount_type = "MONETARY";
+        result.discount_amount = amt;
+        result.currency_code = market.currencyCode;
+        const ctx = plainText.slice(
+          Math.max(0, (moneyMatch.index ?? 0) - 60),
+          (moneyMatch.index ?? 0) + 80,
+        ).replace(/\s+/g, " ").trim();
+        result._promo_context = ctx;
+      }
     }
   }
 
-  const codeMatch = html.match(/(?:code|coupon|promo|voucher|gutschein|codice)[:\s]+["']?([A-Z0-9]{3,20})["']?/i)
-    || html.match(/(?:use|enter|apply)\s+(?:code\s+)?["']?([A-Z0-9]{4,20})["']?/i);
+  // ─── 步骤3：优惠码（必须有 code/coupon 关键词，避免 "use strict" 误匹配）───
+  const codeMatch =
+    html.match(/(?:coupon|voucher|gutschein|codice)[:\s]+["']?([A-Z0-9]{4,20})["']?/i) ||
+    html.match(/(?:use|enter|apply)\s+(?:the\s+)?code\s+["']?([A-Z0-9]{4,20})["']?/i) ||
+    html.match(/promo(?:tion)?\s+code[:\s]+["']?([A-Z0-9]{4,20})["']?/i);
   if (codeMatch) result.promo_code = codeMatch[1].toUpperCase();
 
-  if (promoZoneTexts.length > 0 && /\d/.test(promoZoneTexts[0])) {
-    result.promotion_target = smartTruncate(promoZoneTexts[0], 20);
-  }
+  // ─── 步骤4：设置 promotion_target（活动名称，去掉折扣数字） ───
+  if (result.discount_type) {
+    // 优先尝试从 sourceUrl 的 path 段提取活动名（最准确）
+    // 例：/collections/friends-and-family-event → "Friends & Family"
+    let targetFromUrl = "";
+    try {
+      const urlPath = new URL(sourceUrl).pathname;
+      const lastSegment = urlPath.split("/").filter(Boolean).pop() || "";
+      // 移除无意义后缀 event/sale/deals/collection
+      const cleanedSegment = lastSegment
+        .replace(/[-_]?(?:event|sale|deals?|collection|shop)s?$/i, "")
+        .replace(/[-_]/g, " ")
+        .trim();
+      if (cleanedSegment.length >= 3 && !/^(home|index|products|collections|pages|categories)$/i.test(cleanedSegment)) {
+        // 首字母大写
+        targetFromUrl = cleanedSegment.replace(/\b\w/g, (c) => c.toUpperCase());
+        // "and" → "&" 简化
+        targetFromUrl = targetFromUrl.replace(/\band\b/gi, "&");
+      }
+    } catch {}
 
-  const hasFreeShipping = /free\s*(?:standard\s*)?(?:shipping|delivery)|kostenlos(?:e|er)?\s+versand|livraison\s+offerte|env[ií]o\s+gratis|spedizione\s+gratuita/i.test(lower);
-  if (hasFreeShipping && !result.promotion_target) {
-    result.promotion_target = market.genericPromotionTarget;
-  }
-
-  // 仅当 title 中明确含有折扣关键词+数字时才从 title 提取
-  if (!result.promotion_target && !result.discount_type) {
-    const titleMatch2 = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
-    if (titleMatch2) {
-      const title = titleMatch2[1].replace(/\s+/g, " ").trim();
-      if (/\d+%\s*off/i.test(title)) result.promotion_target = smartTruncate(title, 20);
+    if (targetFromUrl.length >= 3) {
+      result.promotion_target = smartTruncate(targetFromUrl, 20);
+    } else if (result._promo_context) {
+      // 备用：从上下文提取，优先找 "during [event]" / "for [event]" 模式
+      const ctx = String(result._promo_context);
+      const eventMatch = ctx.match(/(?:during|for)\s+(?:our|the|a)?\s*([A-Z][a-zA-Z &'-]{2,30}?)(?:\s+(?:event|sale|deals?|offer))?[.,!]/i) ||
+        ctx.match(/([A-Z][a-zA-Z &'-]{2,30}?)\s+(?:event|sale|deals?)/i);
+      if (eventMatch?.[1]?.trim().length >= 3) {
+        result.promotion_target = smartTruncate(eventMatch[1].trim(), 20);
+      } else {
+        // 最终备用：去折扣词后保留事件名
+        const eventName = ctx
+          .replace(/,?\s*up\s+to\s+\d+\s*%\s*(?:off|discount)/gi, "")
+          .replace(/,?\s*\d+\s*%\s*(?:off|discount)/gi, "")
+          .replace(/,?\s*[$€£]\d+\s*(?:off)/gi, "")
+          .replace(/,?\s*save\s+\d+%/gi, "")
+          .replace(/\s+/g, " ").trim();
+        const cleanName = eventName.replace(/[\.\!\?].*$/, "").replace(/\(.*$/, "").trim();
+        if (cleanName.length >= 3) result.promotion_target = smartTruncate(cleanName, 20);
+      }
     }
   }
+  delete result._promo_context;
 
-  // 如果没有具体折扣数字但页面有一般性优惠/促销关键词，仅标记"有优惠"
-  const hasGenericPromo = !result.discount_type && (
-    /(?:sale|deals?|special\s+offer|limited\s+time|clearance)\b/i.test(promoZoneText) ||
-    /(?:sale|deals?|special\s+offer)\b/i.test(html.match(/<title[^>]*>([^<]*)<\/title>/i)?.[1] || "")
-  );
-  if (hasGenericPromo && !result.promotion_target) {
-    result.promotion_target = market.genericPromotionTarget;
-    result.has_generic_promo = true;
+  // ─── 步骤5：通用优惠兜底（无具体折扣但有 sale/deals 关键词） ───
+  if (!result.discount_type) {
+    const hasFreeShipping = /free\s*(?:standard\s*)?(?:shipping|delivery)|kostenlos(?:e|er)?\s+versand|livraison\s+offerte|env[ií]o\s+gratis|spedizione\s+gratuita/i.test(plainText);
+    const hasGenericPromo = /(?:sale|deals?|special\s+offer|limited\s+time|clearance)\b/i.test(plainText);
+    if (hasFreeShipping && !result.promotion_target) result.promotion_target = market.genericPromotionTarget;
+    if (hasGenericPromo && !result.promotion_target) {
+      result.promotion_target = market.genericPromotionTarget;
+      result.has_generic_promo = true;
+    }
   }
 
   result.final_url = sourceUrl;
@@ -283,6 +331,8 @@ export function extractPromotionInfo(html: string, sourceUrl: string, country: s
     result.language_code = market.promotionLanguageCode;
   }
   if (result.discount_type === "MONETARY" && !result.currency_code) result.currency_code = market.currencyCode;
+
+  console.log(`[PromoExtract] discount=${result.discount_type || "none"}, pct=${result.discount_percent ?? "-"}, target="${result.promotion_target ?? ""}"`);
   return Object.keys(result).length > 1 ? result : null;
 }
 
@@ -303,8 +353,11 @@ export function extractPriceInfo(html: string, country: string, sourceUrl?: stri
           for (const o of offers) {
             const price = parseFloat(o.price || o.lowPrice || "0");
             if (price > 0 && items.length < 8) {
+              // 不在提取层截断，route.ts 会做 AI 精简
+              const fullName = String(p.name).trim();
               items.push({
-                header: String(p.name).slice(0, 25), description: String(p.description || p.name).slice(0, 25),
+                header: fullName,
+                description: String(p.description || p.name).slice(0, 80),
                 price, currency: o.priceCurrency || market.currencyCode, url: o.url || p.url || sourceUrl || "",
               });
             }
@@ -329,13 +382,18 @@ export function extractPriceInfo(html: string, country: string, sourceUrl?: stri
       const nameMatch = block.match(/<(?:h[1-6]|a|span|strong)[^>]*class=["'][^"']*(?:product[_-]?(?:name|title)|item[_-]?(?:name|title)|card[_-]?title)[^"']*["'][^>]*>([^<]+)</i)
         || block.match(/<(?:h[2-4]|a)[^>]*>([^<]{3,60})<\/(?:h[2-4]|a)>/i);
       if (nameMatch?.[1]) {
-        productName = decodeHtmlEntities(nameMatch[1].trim()).slice(0, 25);
+        // 保留完整名称，不在提取层截断
+        productName = decodeHtmlEntities(nameMatch[1].trim());
       }
       const linkMatch = block.match(/<a[^>]+href=["']([^"'#][^"']*?)["']/i);
       const productUrl = linkMatch?.[1] || sourceUrl || "";
 
       if (productName && productName.length >= 2) {
-        items.push({ header: productName, description: "", price, currency: market.currencyCode, url: productUrl });
+        // 尝试从 block 中提取短描述（副标题/meta-description 类文本）
+        let shortDesc = "";
+        const descMatch = block.match(/<(?:p|span|div)[^>]*class=["'][^"']*(?:desc|subtitle|sub-title|tagline|caption)[^"']*["'][^>]*>([^<]{5,80})<\/(?:p|span|div)>/i);
+        if (descMatch?.[1]) shortDesc = decodeHtmlEntities(descMatch[1].trim()).slice(0, 80);
+        items.push({ header: productName, description: shortDesc, price, currency: market.currencyCode, url: productUrl });
       }
     }
   }
@@ -477,13 +535,50 @@ function extractPhoneCandidates(html: string, country: string): { country_code: 
   return candidates.slice(0, 3).map((phone) => ({ country_code: countryCode, phone_number: phone }));
 }
 
+/**
+ * 用 while-loop 字符串搜索安全移除指定 HTML 块标签（含内容）。
+ * 不使用正则，避免非贪婪模式被 JS 中的 <\/script> 等字符串截断的问题。
+ */
+function removeTagBlocks(html: string, tagName: string): string {
+  const open = `<${tagName.toLowerCase()}`;
+  const close = `</${tagName.toLowerCase()}>`;
+  let result = html;
+  while (true) {
+    const startIdx = result.toLowerCase().indexOf(open);
+    if (startIdx < 0) break;
+    const endIdx = result.toLowerCase().indexOf(close, startIdx);
+    if (endIdx < 0) {
+      // 没找到闭合标签，截断到此
+      result = result.slice(0, startIdx);
+      break;
+    }
+    result = result.slice(0, startIdx) + " " + result.slice(endIdx + close.length);
+  }
+  return result;
+}
+
 function htmlToText(html: string): string {
-  return html
-    .replace(/<script[\s\S]*?<\/script>/gi, "")
-    .replace(/<style[\s\S]*?<\/style>/gi, "")
-    .replace(/<[^>]+>/g, " ")
+  let text = html;
+  // 先用字符串搜索移除整段 <head>（含 title/meta/所有 head-script）
+  text = removeTagBlocks(text, "head");
+  // 再移除 body 内的 <script> / <noscript> / <style> / <svg>
+  text = removeTagBlocks(text, "script");
+  text = removeTagBlocks(text, "noscript");
+  text = removeTagBlocks(text, "style");
+  text = removeTagBlocks(text, "svg");
+  // 移除所有剩余 HTML 标签
+  text = text.replace(/<[^>]+>/g, " ");
+  // 解码常见 HTML 实体，折叠空白
+  text = text
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#\d+;|&[a-z]{2,8};/gi, " ")
     .replace(/\s+/g, " ")
     .trim();
+  return text;
 }
 
 // ─── 站内链接发现 ───
@@ -672,16 +767,89 @@ export async function buildCrawlCache(
   merchantName: string,
   country: string,
   semrushData?: { titles: string[]; descriptions: string[] },
+  options?: { forcePuppeteer?: boolean },
 ): Promise<CrawlCache> {
   let crawlResult = { html: "", links: [] as { url: string; text: string }[], images: [] as string[], method: "failed", error: "" };
 
   if (merchantUrl) {
-    crawlResult = await crawlPage(merchantUrl);
+    if (options?.forcePuppeteer) {
+      // 促销数据通常由 JS 渲染，直接用 Puppeteer 保证获取完整 DOM
+      const { crawlPageWithPuppeteer } = await import("@/lib/crawler");
+      const puppeteerHtml = await crawlPageWithPuppeteer(merchantUrl);
+      if (puppeteerHtml) {
+        const { extractLinksAndImages } = await import("@/lib/crawler");
+        const { links, images } = extractLinksAndImages(puppeteerHtml, merchantUrl);
+        crawlResult = { html: puppeteerHtml.slice(0, 150000), links, images, method: "puppeteer" };
+        console.log(`[CrawlPipeline] Puppeteer 爬取成功（forcePuppeteer），html 长度: ${crawlResult.html.length}`);
+      } else {
+        // Puppeteer 失败则回退到普通爬取
+        crawlResult = await crawlPage(merchantUrl);
+        console.log(`[CrawlPipeline] Puppeteer 失败，回退 HTTP 爬取`);
+      }
+    } else {
+      crawlResult = await crawlPage(merchantUrl);
+    }
   }
 
   crawlResult.links = crawlResult.links.filter((l) => !isBadSitelinkUrl(l.url));
   const crawlFailed = crawlResult.method === "failed";
-  const html = crawlResult.html;
+  let html = crawlResult.html;
+
+  // sitemap / backend API 路径爬取成功但 html 为空，补发一次 HTTP fetch 用于数据提取
+  if (!crawlFailed && !html && merchantUrl) {
+    try {
+      const fallbackResp = await fetch(merchantUrl, {
+        signal: AbortSignal.timeout(10000),
+        headers: {
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+          "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+          "Accept-Language": "en-US,en;q=0.9",
+          "Cache-Control": "no-cache",
+        },
+      });
+      if (fallbackResp.ok) {
+        const text = await fallbackResp.text();
+        html = text.slice(0, 150000);
+        console.log(`[CrawlPipeline] 补救 fetch 成功，html 长度: ${html.length}`);
+      }
+    } catch {
+      // 补救失败忽略，提取结果为空
+    }
+  }
+
+  // ─── 促销子页面专项爬取：从已发现链接中找促销/活动相关 URL 爬取以补充 meta 描述 ───
+  const extractPromoWithSubPage = async (): Promise<Record<string, unknown> | null> => {
+    // 先从主页 HTML 提取
+    const mainPromo = html ? extractPromotionInfo(html, merchantUrl, country) : null;
+    if (mainPromo?.discount_type) return mainPromo; // 主页已有真实折扣，无需继续
+
+    // 在已发现链接中找促销/活动子页面（sale / promo / event / offer / deal / discount / clearance）
+    const PROMO_PATTERNS = /\/(sale|promo|event|offer|deal|discount|clearance|friends|family|specials?|holiday|seasonal|black[-_]?friday|cyber[-_]?monday)\b/i;
+    const promoLinks = crawlResult.links
+      .filter((l) => PROMO_PATTERNS.test(l.url) && l.url.startsWith("http"))
+      .slice(0, 2); // 最多试 2 个子页
+
+    for (const link of promoLinks) {
+      try {
+        const resp = await fetch(link.url, {
+          signal: AbortSignal.timeout(8000),
+          headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36" },
+        });
+        if (!resp.ok) continue;
+        const subHtml = (await resp.text()).slice(0, 80000);
+        const subPromo = extractPromotionInfo(subHtml, link.url, country);
+        if (subPromo?.discount_type) {
+          // 使用商家主页 URL 作为落地页（不用子页面 URL）
+          subPromo.final_url = merchantUrl;
+          console.log(`[PromoExtract] 从子页面提取成功: ${link.url}`);
+          return subPromo;
+        }
+      } catch {
+        // 子页面爬取失败静默继续
+      }
+    }
+    return mainPromo; // 返回主页结果（可能 null 或仅有通用促销）
+  };
 
   // 并行执行所有提取任务
   const [sitelinkCandidates, images, features, navItems, phoneCandidates, promoRegex, priceRegex, crawledProducts] = await Promise.all([
@@ -690,12 +858,12 @@ export async function buildCrawlCache(
     Promise.resolve(html ? extractMerchantFeatures(html) : []),
     Promise.resolve(html ? extractNavItems(html) : []),
     Promise.resolve(html ? extractPhoneCandidates(html, country) : []),
-    Promise.resolve(html ? extractPromotionInfo(html, merchantUrl, country) : null),
+    extractPromoWithSubPage().catch(() => null),
     Promise.resolve(html ? extractPriceInfo(html, country, merchantUrl) : []),
     Promise.resolve(html ? extractProducts(html, merchantUrl, country) : []),
   ]);
 
-  const pageText = html ? htmlToText(html).slice(0, 4000) : "";
+  const pageText = html ? htmlToText(html).slice(0, 10000) : "";
 
   return {
     links: crawlResult.links,

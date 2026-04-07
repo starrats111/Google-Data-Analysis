@@ -622,7 +622,25 @@ export async function POST(req: NextRequest) {
     }
 
     // ─── 9d. 致电扩展 (Call) ───
-    if (callExtension?.phone_number) {
+    // 提交前校验电话号码是否匹配目标国家，格式不符则跳过（避免 CALL_PHONE_NUMBER_NOT_SUPPORTED_FOR_COUNTRY）
+    const isPhoneValidForCountry = (phone: string, country: string): boolean => {
+      const digits = phone.replace(/\D/g, "");
+      const cc = (country || "US").toUpperCase();
+      if (cc === "US" || cc === "CA") {
+        // 北美：10位纯数字，或以1开头的11位（+1区号）
+        if (digits.length === 10) return true;
+        if (digits.length === 11 && digits.startsWith("1")) return true;
+        return false;
+      }
+      if (cc === "GB" || cc === "UK") return digits.length >= 10 && digits.length <= 11;
+      if (cc === "DE") return digits.length >= 10 && digits.length <= 12;
+      if (cc === "FR") return digits.length === 9 || digits.length === 10;
+      if (cc === "AU") return digits.length >= 9 && digits.length <= 10;
+      if (cc === "JP") return digits.length >= 10 && digits.length <= 11;
+      // 通用：7-15位即可
+      return digits.length >= 7 && digits.length <= 15;
+    };
+    if (callExtension?.phone_number && isPhoneValidForCountry(callExtension.phone_number, countryCode)) {
       const assetTempRn = `customers/${cid}/assets/${assetTempId}`;
       operations.push({
         asset_operation: {
@@ -646,6 +664,8 @@ export async function POST(req: NextRequest) {
         },
       });
       assetTempId--;
+    } else if (callExtension?.phone_number && !isPhoneValidForCountry(callExtension.phone_number, countryCode)) {
+      console.warn(`[Submit] Call 扩展跳过：电话 "${callExtension.phone_number}" 格式与目标国家 "${countryCode}" 不匹配`);
     }
 
     // ─── 9e. 结构化摘要 (Structured Snippet) ───

@@ -1,10 +1,10 @@
 "use client";
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { useParams, useRouter } from "next/navigation";
 import {
   Card, Row, Col, Input, Button, Space, Tag, Typography, Spin, Alert,
   Select, InputNumber, Switch, Divider, App, Tooltip, Popconfirm, Checkbox,
-  Upload, Image, Steps, Avatar,
+  Upload, Image, Steps,
 } from "antd";
 import {
   ThunderboltOutlined, LoadingOutlined,
@@ -13,7 +13,6 @@ import {
   SoundOutlined, CheckCircleOutlined, ExclamationCircleOutlined,
   InboxOutlined, WarningOutlined, TranslationOutlined,
   PhoneOutlined, DollarOutlined, TagOutlined, UnorderedListOutlined,
-  RobotOutlined,
 } from "@ant-design/icons";
 import { useApiWithParams, mutateApi } from "@/lib/swr";
 import { BIDDING_STRATEGIES } from "@/lib/constants";
@@ -80,6 +79,7 @@ interface KeywordItem {
   competition?: string | null;
   suggestedBid?: number | null;
   competitionBand?: string;
+  intentLayer?: string | null;
 }
 
 interface AdPreviewData {
@@ -154,6 +154,8 @@ export default function AdPreviewPage() {
   const [euPoliticalAd, setEuPoliticalAd] = useState(0);
   const [submitting, setSubmitting] = useState(false);
   const [initialized, setInitialized] = useState(false);
+  const autoFetchKwDone = useRef(false);   // 防止重复触发 SemRush 自动拉取
+  const autoNegKwDone = useRef(false);     // 防止重复触发否定关键词自动生成
 
   // 落地页 URL 编辑
   const [editingFinalUrl, setEditingFinalUrl] = useState(false);
@@ -330,61 +332,11 @@ export default function AdPreviewPage() {
       setCrawledImages(existingImages);
       setImageUrls(existingImages);
     }
-    setInitialized(true);
-
-    // 标题/描述为空 → 自动触发 core 一键生成（标题+描述+站内链接+图片）
-    const filledH = h.filter((x: string) => x && x.trim());
-    const filledD = d.filter((x: string) => x && x.trim());
-    const needCore = filledH.length === 0 || filledD.length === 0;
-    if (needCore) {
-      setTimeout(() => generateExtension("core" as any), 100);
-    } else {
-      // 标题描述已有，只补充缺失的站内链接和图片
-      const autoTypes: Array<"sitelinks" | "images"> = [];
-      if (existingSitelinks.length === 0) autoTypes.push("sitelinks");
-      if (existingImages.length === 0) autoTypes.push("images");
-      if (autoTypes.length > 0) {
-        setTimeout(() => generateExtension(...autoTypes), 100);
-      }
-
-      // 标题/描述不完整时自动补全（已有内容但未满）
-      if (filledH.length < 15) {
-        setTimeout(async () => {
-          setGeneratingHeadlines(true);
-          try {
-            const res = await fetch("/api/user/ad-creation/generate-more", {
-              method: "POST", headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ type: "headlines", existing: filledH, merchant_name: preview?.merchant?.merchant_name || "", country: preview?.campaign?.target_country || "US", count: 15, ad_language: adLanguage || undefined }),
-            });
-            const json = await res.json();
-            if (json.code === 0 && json.data?.items?.length > 0) {
-              const combined = [...filledH, ...json.data.items].slice(0, 15);
-              setHeadlines(combined.length >= 15 ? combined : [...combined, ...Array(15 - combined.length).fill("")]);
-              if (json.data.compliance_auto_fix?.length > 0) message.success(`已自动修正 ${json.data.compliance_auto_fix.length} 条违规标题`);
-              if (json.data.compliance_warnings?.length > 0) message.warning({ content: `${json.data.compliance_warnings.length} 条标题仍可能触发政策风险，请手动调整`, duration: 6 });
-            }
-          } catch {} finally { setGeneratingHeadlines(false); }
-        }, 200);
-      }
-      if (filledD.length < 4) {
-        setTimeout(async () => {
-          setGeneratingDescriptions(true);
-          try {
-            const res = await fetch("/api/user/ad-creation/generate-more", {
-              method: "POST", headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ type: "descriptions", existing: filledD, merchant_name: preview?.merchant?.merchant_name || "", country: preview?.campaign?.target_country || "US", count: 4, headlines_for_uniqueness: filledH, ad_language: adLanguage || undefined }),
-            });
-            const json = await res.json();
-            if (json.code === 0 && json.data?.items?.length > 0) {
-              const combined = [...filledD, ...json.data.items].slice(0, 4);
-              setDescriptions(combined.length >= 4 ? combined : [...combined, ...Array(4 - combined.length).fill("")]);
-              if (json.data.compliance_auto_fix?.length > 0) message.success(`已自动修正 ${json.data.compliance_auto_fix.length} 条违规描述`);
-              if (json.data.compliance_warnings?.length > 0) message.warning({ content: `${json.data.compliance_warnings.length} 条描述仍可能触发政策风险，请手动调整`, duration: 6 });
-            }
-          } catch {} finally { setGeneratingDescriptions(false); }
-        }, 200);
-      }
+    // 若 DB 里已有关键词（后台领取时 SemRush 已写入），标记跳过自动拉取
+    if ((preview.keywords || []).length > 0) {
+      autoFetchKwDone.current = true;
     }
+    setInitialized(true);
   }, [preview, initialized]);
 
   // ─── 生成中文翻译（仅参考，不影响广告内容） ───
@@ -502,6 +454,7 @@ export default function AdPreviewPage() {
           bidding_strategy: biddingStrategy,
           count: 4,
           ad_language: adLanguage || undefined,
+          ad_creative_id: preview?.adCreative?.id,
         }),
       });
       const json = await res.json();
@@ -548,6 +501,7 @@ export default function AdPreviewPage() {
         competition: kw.competition != null ? String(kw.competition) : null,
         suggestedBid: kw.suggested_bid != null ? Number(kw.suggested_bid) : kw.cpc != null ? Number(kw.cpc) : null,
         competitionBand: kw.competition_band || "",
+        intentLayer: kw.intent_layer || kw.intentLayer || null,
       }));
   };
 
@@ -593,6 +547,14 @@ export default function AdPreviewPage() {
       setKwFetching(false);
     }
   }, [preview, kwList, message, budget, maxCpc, biddingStrategy]);
+
+  // ─── 初始化后自动拉取关键词（DB 无关键词时兜底：后台任务未完成 / SemRush 失败） ───
+  useEffect(() => {
+    if (initialized && kwList.length === 0 && !autoFetchKwDone.current) {
+      autoFetchKwDone.current = true;
+      fetchKeywordsFromSemrush();
+    }
+  }, [initialized, kwList.length, fetchKeywordsFromSemrush]);
 
   // ─── 通过 3UE 链接获取关键词 ───
   const fetchKeywordsFromUrl = useCallback(async () => {
@@ -728,6 +690,8 @@ export default function AdPreviewPage() {
         if (hs.length > 0) {
           const padded = hs.length >= 15 ? hs.slice(0, 15) : [...hs, ...Array(15 - hs.length).fill("")];
           setHeadlines(padded);
+          // 新标题到来时清空旧中文翻译，避免旧翻译对应新标题产生错位
+          setHeadlinesZh([]);
           message.success(`已生成 ${hs.length} 条标题`);
         }
         return;
@@ -738,6 +702,8 @@ export default function AdPreviewPage() {
         if (ds.length > 0) {
           const padded = ds.length >= 4 ? ds.slice(0, 4) : [...ds, ...Array(4 - ds.length).fill("")];
           setDescriptions(padded);
+          // 新描述到来时清空旧中文翻译，避免旧翻译对应新描述产生错位
+          setDescriptionsZh([]);
           message.success(`已生成 ${ds.length} 条描述`);
         }
         return;
@@ -772,11 +738,13 @@ export default function AdPreviewPage() {
       }
 
       if (type === "images") {
-        const imgs = (data || []) as string[];
+        const allImgs = (data || []) as string[];
+        // 后端已完成 OCR 过滤，前端只取前 20 张展示
+        const imgs = allImgs.slice(0, 20);
         setCrawledImages(imgs); setImageUrls([]);
-        setCrawledImagesTextFlags({}); setCrawledImagesOcrDone(false); setCrawledImagesOcrProgress(0);
+        setCrawledImagesTextFlags({}); setCrawledImagesOcrDone(true); setCrawledImagesOcrProgress(imgs.length);
         if (imgs.length > 0) {
-          message.loading({ content: `已提取 ${imgs.length} 张图片，正在检测含文字图片...`, key: "ocr-filter", duration: 0 });
+          message.success(`已提取 ${imgs.length} 张图片，请勾选需要的图片`);
         } else {
           message.warning(wasCrawlFailed ? "无法爬取商家网站图片，请手动拖入或粘贴图片 URL" : "未找到可用图片，请手动添加");
         }
@@ -785,15 +753,24 @@ export default function AdPreviewPage() {
 
       if (type === "callouts") {
         const calloutData = (data || []) as string[];
-        setCallouts(calloutData.length > 0 ? calloutData : ["", ""]);
-        if (calloutData.length > 0) message.success(`已生成 ${calloutData.length} 条宣传信息`);
-        else message.warning("未能生成宣传信息，请手动添加");
+        if (calloutData.length > 0) {
+          setCallouts(calloutData);
+          setEnableCallouts(true);
+          message.success(`已生成 ${calloutData.length} 条宣传信息`);
+        } else {
+          setCallouts(["", ""]);
+          message.warning("未能生成宣传信息，请手动添加");
+        }
         setCalloutsLoading(false); return;
       }
 
       if (type === "promotion") {
         if (data && typeof data === "object") {
           const p = data as Record<string, unknown>;
+          if (p.skipped) {
+            // 未爬取到真实促销数据，不展示此扩展
+            setPromotionLoading(false); return;
+          }
           setEnablePromotion(true);
           const hasDiscount = p.discount_type === "PERCENT" || p.discount_type === "MONETARY";
           setPromotion((prev) => ({
@@ -809,21 +786,31 @@ export default function AdPreviewPage() {
             language_code: String(p.language_code || prev.language_code || defaultLanguageCode),
           }));
           message.success("已自动提取促销信息");
-        } else if (merchantLandingUrl) {
-          setEnablePromotion(true);
-          setPromotion((prev) => ({ ...prev, final_url: prev.final_url || merchantLandingUrl }));
-          message.warning(wasCrawlFailed ? "未能完整提取促销信息，已先填入商家落地页，请补充其余字段" : "暂未识别到完整促销信息，已先填入商家落地页");
         }
         setPromotionLoading(false); return;
       }
 
       if (type === "price_items") {
-        const priceData = (data || []) as Array<{ header: string; description: string; price: number; currency: string; url: string }>;
-        if (priceData.length > 0) {
-          setEnablePrice(true);
-          const items = priceData.slice(0, 8);
-          setPriceItems(items.map((item) => ({ header: item.header || "", description: item.description || "", price_amount: item.price || 0, currency_code: item.currency || defaultCurrencyCode, final_url: item.url || "" })));
-          message.success(`已自动提取 ${items.length} 条价格信息`);
+        if (data && typeof data === "object" && !Array.isArray(data)) {
+          const d = data as Record<string, unknown>;
+          if (d.skipped) {
+            // 未爬取到真实价格数据，不展示此扩展
+            setPriceLoading(false); return;
+          }
+          if (Array.isArray(d.items) && d.items.length > 0) {
+            setEnablePrice(true);
+            const items = (d.items as Array<{ header: string; description: string; price: number; currency: string; url: string }>).slice(0, 8);
+            setPriceItems(items.map((item) => ({ header: item.header || "", description: item.description || "", price_amount: item.price || 0, currency_code: item.currency || defaultCurrencyCode, final_url: item.url || "" })));
+            message.success(`已自动提取 ${items.length} 条价格信息`);
+          }
+        } else {
+          const priceData = (data || []) as Array<{ header: string; description: string; price: number; currency: string; url: string }>;
+          if (priceData.length > 0) {
+            setEnablePrice(true);
+            const items = priceData.slice(0, 8);
+            setPriceItems(items.map((item) => ({ header: item.header || "", description: item.description || "", price_amount: item.price || 0, currency_code: item.currency || defaultCurrencyCode, final_url: item.url || "" })));
+            message.success(`已自动提取 ${items.length} 条价格信息`);
+          }
         }
         setPriceLoading(false); return;
       }
@@ -831,6 +818,10 @@ export default function AdPreviewPage() {
       if (type === "call") {
         if (data && typeof data === "object") {
           const c = data as Record<string, unknown>;
+          if (c.skipped) {
+            // 未爬取到真实电话，不展示此扩展
+            setCallLoading(false); return;
+          }
           if (c.phone_number) { setEnableCall(true); setCallCountryCode(String(c.country_code || targetCountry || callCountryCode)); setCallPhoneNumber(String(c.phone_number)); message.success("已自动提取联系电话"); }
         }
         setCallLoading(false); return;
@@ -882,7 +873,17 @@ export default function AdPreviewPage() {
       const coreTypes = new Set(["sitelinks", "images"]);
       const needsCore = isCore || requestedTypes.some((t) => coreTypes.has(t));
       if (needsCore) {
-        reqBody = { campaign_id: campaignId, types: ["core"], ad_language: adLanguage || undefined };
+        const confirmedKeywords = kwList
+          .filter((k) => k.selected !== false)
+          .map((k) => k.keyword)
+          .filter(Boolean)
+          .slice(0, 10);
+        reqBody = {
+          campaign_id: campaignId,
+          types: ["core"],
+          ad_language: adLanguage || undefined,
+          keywords: confirmedKeywords.length > 0 ? confirmedKeywords : undefined,
+        };
       } else {
         const optionalSet = new Set(["callouts", "promotion", "price", "call", "snippet"]);
         const isOptionalBatch = requestedTypes.every((t) => optionalSet.has(t));
@@ -1030,58 +1031,7 @@ export default function AdPreviewPage() {
     }
   }, [message]);
 
-  // 爬取图片到达后自动批量 OCR 过滤（规则：不能有文字、必须品牌强相关）
-  useEffect(() => {
-    if (crawledImages.length === 0) return;
-    let cancelled = false;
-    const CONCURRENCY = 3;
-
-    const runOcr = async () => {
-      const flags: Record<string, boolean> = {};
-      let checked = 0;
-
-      for (let i = 0; i < crawledImages.length; i += CONCURRENCY) {
-        if (cancelled) break;
-        const batch = crawledImages.slice(i, i + CONCURRENCY);
-        await Promise.allSettled(
-          batch.map(async (url) => {
-            try {
-              const res = await fetch("/api/user/ad-creation/check-image", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ url }),
-              });
-              const json = await res.json();
-              flags[url] = json.code === 0 && json.data?.has_text === true;
-            } catch {
-              flags[url] = false;
-            }
-          }),
-        );
-        if (!cancelled) {
-          checked = Math.min(i + CONCURRENCY, crawledImages.length);
-          setCrawledImagesOcrProgress(checked);
-          setCrawledImagesTextFlags((prev) => ({ ...prev, ...Object.fromEntries(batch.map((u) => [u, flags[u] ?? false])) }));
-        }
-      }
-
-      if (!cancelled) {
-        setCrawledImagesOcrDone(true);
-        const removedCount = Object.values(flags).filter(Boolean).length;
-        const cleanCount = crawledImages.length - removedCount;
-        message.destroy("ocr-filter");
-        if (removedCount > 0) {
-          message.success(`已过滤 ${removedCount} 张含文字图片，剩余 ${cleanCount} 张可选`);
-        } else {
-          message.success(`已提取 ${cleanCount} 张图片，请勾选需要的图片`);
-        }
-      }
-    };
-
-    runOcr();
-    return () => { cancelled = true; };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [crawledImages]);
+  // OCR 过滤已移至后端（selectBestImages），前端直接展示图片
 
   const handleImageUpload = useCallback(async (file: File) => {
     if (!["image/jpeg", "image/png"].includes(file.type)) {
@@ -1198,6 +1148,82 @@ export default function AdPreviewPage() {
       setSavingFinalUrl(false);
     }
   }, [finalUrlInput, affiliateUrlInput, campaignId, message, mutate]);
+
+  // ─── 否定关键词自动生成（SSE，静默后台执行） ───
+  const triggerNegativeKeywords = useCallback(async () => {
+    if (negKwLoading || negativeKeywords.length > 0) return;
+    setNegKwLoading(true);
+    try {
+      const res = await fetch("/api/user/ad-creation/generate-extensions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ campaign_id: campaignId, types: ["optional"], optionalTypes: ["negative_keywords"], ad_language: adLanguage || undefined }),
+      });
+      if (!res.ok || !res.body) { setNegKwLoading(false); return; }
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const parts = buffer.split("\n\n");
+        buffer = parts.pop() || "";
+        for (const part of parts) {
+          const dataLine = part.split("\n").find((l) => l.startsWith("data:"));
+          if (!dataLine) continue;
+          try {
+            const { type, data } = JSON.parse(dataLine.slice(5).trim());
+            if (type === "negative_keywords" && Array.isArray(data) && data.length > 0) {
+              setNegativeKeywords(data);
+              message.success(`已生成 ${data.length} 条否定关键词`);
+              setNegKwLoading(false);
+            }
+          } catch {}
+        }
+      }
+    } catch {
+      // 静默失败，不影响主流程
+    } finally {
+      setNegKwLoading(false);
+    }
+  }, [campaignId, adLanguage, negKwLoading, negativeKeywords, message]);
+
+  // ─── 关键词列表首次出现时自动生成否定关键词（供员工在步骤1确认） ───
+  useEffect(() => {
+    if (
+      kwList.length > 0 &&
+      negativeKeywords.length === 0 &&
+      !negKwLoading &&
+      initialized &&
+      !autoNegKwDone.current
+    ) {
+      autoNegKwDone.current = true;
+      triggerNegativeKeywords();
+    }
+  }, [kwList.length, negativeKeywords.length, negKwLoading, initialized, triggerNegativeKeywords]);
+
+  // ─── 确认关键词并全自动并行生成文案+扩展 ───
+  const handleConfirmKeywords = useCallback(async () => {
+    if (kwList.length === 0) { message.warning("请先添加至少一个关键词"); return; }
+    // 1. 后台静默触发否定关键词（不阻塞进入步骤2）
+    triggerNegativeKeywords();
+    // 2. 进入步骤2，立即清空旧文案——让用户看到"生成中"状态而非旧缓存
+    setCurrentStep(1);
+    setHeadlines(Array(15).fill(""));
+    setDescriptions(Array(4).fill(""));
+    // 3. 并行触发全部内容生成
+    //    - core: 标题 + 描述（含完整 pageText/商品数据） + 站内链接
+    //    - callouts + snippet: AI 生成
+    //    - promotion + price + call: 从爬取数据提取（无真实数据时返回 skipped，前端自动隐藏）
+    // 注意：标题/描述由 core 统一生成（带完整页面上下文），不单独调 aiGenerateHeadlines/Descriptions
+    // 避免低质量的无上下文版本覆盖 core 的高质量输出
+    await Promise.allSettled([
+      generateExtension("core"),
+      generateExtension("callouts", "snippet"),
+      generateExtension("promotion", "price", "call"),
+    ]);
+  }, [kwList, triggerNegativeKeywords, setCurrentStep, setHeadlines, setDescriptions, generateExtension, aiGenerateHeadlines, aiGenerateDescriptions, message]);
 
   // ─── 提交 ───
   const handleSubmit = useCallback(async () => {
@@ -1325,49 +1351,8 @@ export default function AdPreviewPage() {
 
   return (
     <div style={{ padding: "16px 24px", maxWidth: 1200, margin: "0 auto" }}>
-      {/* Adrian 顾问标识条 */}
-      <Card
-        size="small"
-        style={{
-          marginBottom: 12,
-          background: "linear-gradient(135deg, #0f0c29 0%, #302b63 60%, #24243e 100%)",
-          border: "1px solid #4a3f8c",
-          borderRadius: 8,
-        }}
-        styles={{ body: { padding: "10px 16px" } }}
-      >
-        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-          <Avatar
-            size={38}
-            icon={<RobotOutlined />}
-            style={{ background: "linear-gradient(135deg,#667eea 0%,#764ba2 100%)", border: "1px solid #9b8ed6", flexShrink: 0 }}
-          />
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-              <span style={{ color: "#e8e0ff", fontWeight: 700, fontSize: 14 }}>Adrian · 数据猎手</span>
-              <span style={{ color: "#9b8ed6", fontSize: 11 }}>Google Ads 搜索广告顾问</span>
-              <Tag style={{ background: "rgba(102,126,234,0.2)", border: "1px solid #667eea", color: "#b8a9f5", fontSize: 10, margin: 0 }}>ROI 激进派</Tag>
-              <Tag style={{ background: "rgba(102,126,234,0.2)", border: "1px solid #667eea", color: "#b8a9f5", fontSize: 10, margin: 0 }}>数字驱动运营</Tag>
-            </div>
-            <div style={{ color: "#7c6fbc", fontSize: 11, fontStyle: "italic", marginTop: 2 }}>
-              「没有坏的产品，只有投错的人群和出不动的价。」
-            </div>
-          </div>
-          {currentStep === 0 && kwList.length >= 1 && (
-            <Button
-              type="primary"
-              size="small"
-              style={{ background: "#764ba2", borderColor: "#764ba2", flexShrink: 0 }}
-              onClick={() => setCurrentStep(1)}
-            >
-              关键词已确认 →
-            </Button>
-          )}
-        </div>
-      </Card>
-
       {/* 步骤条 */}
-      <Card size="small" style={{ marginBottom: 12, border: "1px solid #e8e0ff" }} styles={{ body: { padding: "10px 20px" } }}>
+      <Card size="small" style={{ marginBottom: 12 }} styles={{ body: { padding: "10px 20px" } }}>
         <Steps
           current={currentStep}
           size="small"
@@ -1587,6 +1572,16 @@ export default function AdPreviewPage() {
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center", marginBottom: 4 }}>
                       <Text strong>{kw.matchType === "EXACT" ? `[${kw.text}]` : kw.matchType === "PHRASE" ? `"${kw.text}"` : kw.text}</Text>
+                      {kw.intentLayer && (() => {
+                        const intentMap: Record<string, { label: string; color: string }> = {
+                          HIGH_INTENT: { label: "高购买意图", color: "red" },
+                          FEATURE_SCENE: { label: "功能场景", color: "blue" },
+                          BRAND: { label: "品牌词", color: "purple" },
+                          LONG_TAIL: { label: "长尾词", color: "cyan" },
+                        };
+                        const info = intentMap[kw.intentLayer] || { label: kw.intentLayer, color: "default" };
+                        return <Tag color={info.color} style={{ margin: 0, fontSize: 11 }}>{info.label}</Tag>;
+                      })()}
                       {kw.score != null && <Tag color={kw.score >= 70 ? "success" : kw.score >= 50 ? "processing" : "default"} style={{ margin: 0 }}>评分 {kw.score.toFixed(0)}</Tag>}
                       {kw.avgMonthlySearches != null && <Tag style={{ margin: 0 }}>搜索量 {kw.avgMonthlySearches}</Tag>}
                       {kw.suggestedBid != null && <Tag style={{ margin: 0 }}>建议 CPC ${kw.suggestedBid.toFixed(2)}</Tag>}
@@ -1658,26 +1653,22 @@ export default function AdPreviewPage() {
           {currentStep === 0 && (
             <Card
               size="small"
-              style={{ marginBottom: 16, border: "2px solid #764ba2", background: "linear-gradient(135deg,#faf5ff 0%,#f5f0ff 100%)" }}
+              style={{ marginBottom: 16, border: "1px solid #91caff", background: "#e6f4ff" }}
             >
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8 }}>
                 <div>
-                  <Text strong style={{ color: "#4a1d96", fontSize: 14 }}>关键词确认</Text>
+                  <Text strong style={{ color: "#0958d9", fontSize: 14 }}>关键词确认</Text>
                   <Text type="secondary" style={{ display: "block", fontSize: 12, marginTop: 2 }}>
-                    已选 <Text strong>{kwList.length}</Text> 个关键词，确认后 Adrian 将为你生成文案与扩展
+                    已选 <Text strong>{kwList.length}</Text> 个关键词，确认后将自动并行生成文案、站内链接和扩展
                   </Text>
                 </div>
                 <Button
                   type="primary"
                   size="large"
-                  style={{ background: "#764ba2", borderColor: "#764ba2" }}
                   disabled={kwList.length === 0}
-                  onClick={() => {
-                    if (kwList.length === 0) { return; }
-                    setCurrentStep(1);
-                  }}
+                  onClick={handleConfirmKeywords}
                 >
-                  确认关键词，生成广告文案 →
+                  确认关键词，开始生成广告 →
                 </Button>
               </div>
             </Card>

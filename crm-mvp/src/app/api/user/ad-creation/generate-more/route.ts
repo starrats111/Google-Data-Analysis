@@ -17,7 +17,7 @@ export async function POST(req: NextRequest) {
   const user = getUserFromRequest(req);
   if (!user) return apiError("未授权", 401);
 
-  const { type, existing, merchant_name, country, count, keywords = [], headlines_for_uniqueness = [], daily_budget, max_cpc, bidding_strategy, ad_language } = await req.json();
+  const { type, existing, merchant_name, country, count, keywords = [], headlines_for_uniqueness = [], daily_budget, max_cpc, bidding_strategy, ad_language, ad_creative_id } = await req.json();
 
   if (!type || !["headlines", "descriptions"].includes(type)) {
     return apiError("type 必须为 headlines 或 descriptions");
@@ -25,10 +25,21 @@ export async function POST(req: NextRequest) {
 
   const existingItems = Array.isArray(existing) ? existing.filter((s: string) => s?.trim()) : [];
   const targetCount = Math.min(count || (type === "headlines" ? 15 : 4), type === "headlines" ? 15 : 4);
-  const settings = await prisma.ad_default_settings.findFirst({
-    where: { user_id: BigInt(user.userId), is_deleted: 0 },
-    select: { ai_rule_profile: true },
-  });
+  const [settings, adCreative] = await Promise.all([
+    prisma.ad_default_settings.findFirst({
+      where: { user_id: BigInt(user.userId), is_deleted: 0 },
+      select: { ai_rule_profile: true },
+    }),
+    ad_creative_id ? prisma.ad_creatives.findFirst({
+      where: { id: Number(ad_creative_id) },
+      select: { crawl_cache: true },
+    }) : Promise.resolve(null),
+  ]);
+
+  // 从 crawl_cache 提取 pageText 和商品数据，供描述生成使用
+  const crawlCache = adCreative?.crawl_cache as Record<string, unknown> | null;
+  const pageText = typeof crawlCache?.pageText === "string" ? crawlCache.pageText : "";
+  const crawledProducts = Array.isArray(crawlCache?.crawledProducts) ? crawlCache.crawledProducts as Array<{ name: string; price?: number; currency?: string }> : [];
 
   try {
     let newItems: string[];
@@ -56,6 +67,8 @@ export async function POST(req: NextRequest) {
         biddingStrategy: bidding_strategy,
         aiRuleProfile: settings?.ai_rule_profile,
         adLanguageCode: ad_language,
+        pageText: pageText || undefined,
+        crawledProducts: crawledProducts.length > 0 ? crawledProducts : undefined,
       });
       newItems = result.filter((d) => !existingItems.includes(d));
     }

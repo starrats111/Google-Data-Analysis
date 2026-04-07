@@ -769,6 +769,10 @@ const PUPPETEER_ANTI_DETECT_SCRIPT = `
   };
 `;
 
+export async function crawlPageWithPuppeteer(url: string, timeoutMs = 35000): Promise<string | null> {
+  return crawlWithPuppeteer(url, timeoutMs);
+}
+
 async function crawlWithPuppeteer(url: string, timeoutMs = 30000): Promise<string | null> {
   const browserPath = findBrowserPath();
   if (!browserPath) {
@@ -833,7 +837,7 @@ async function crawlWithPuppeteer(url: string, timeoutMs = 30000): Promise<strin
     });
 
     try {
-      await page.goto(url, { waitUntil: "domcontentloaded", timeout: timeoutMs });
+      await page.goto(url, { waitUntil: "networkidle2", timeout: timeoutMs });
     } catch {
       // goto timeout 不致命，页面可能有部分内容
     }
@@ -916,11 +920,18 @@ async function crawlWithPuppeteer(url: string, timeoutMs = 30000): Promise<strin
       } catch {}
     }
 
-    // --- 等待内容加载 ---
+    // --- 等待内容加载（通用 + 价格/促销关键元素）---
     try {
       await page.waitForSelector(
         "img, main, article, .product, [class*='product'], [class*='hero'], [class*='collection']",
         { timeout: 8000 },
+      );
+    } catch {}
+    // 额外等待价格/促销/LD+JSON 元素，提升数据提取成功率
+    try {
+      await page.waitForSelector(
+        'script[type="application/ld+json"], [class*="price"], [class*="promo"], [class*="banner"], [class*="announcement"]',
+        { timeout: 5000 },
       );
     } catch {}
 
@@ -1344,7 +1355,7 @@ export async function crawlPage(url: string): Promise<CrawlResult> {
 
     if (links.length > 0 || images.length > 0) {
       console.log(`[Crawler] HTTP 直接成功: ${links.length} 链接, ${images.length} 图片`);
-      return { html: httpResult.html.slice(0, 10000), links, images, method: "http" };
+      return { html: httpResult.html.slice(0, 150000), links, images, method: "http" };
     }
   }
 
@@ -1366,7 +1377,7 @@ export async function crawlPage(url: string): Promise<CrawlResult> {
       const { links, images } = extractLinksAndImages(puppeteerHtml, url);
       if (links.length > 0 || images.length > 0) {
         console.log(`[Crawler] Puppeteer 成功 (困难站点): ${links.length} 链接, ${images.length} 图片`);
-        return { html: puppeteerHtml.slice(0, 10000), links, images, method: "puppeteer" };
+        return { html: puppeteerHtml.slice(0, 150000), links, images, method: "puppeteer" };
       }
     }
 
@@ -1377,7 +1388,7 @@ export async function crawlPage(url: string): Promise<CrawlResult> {
       const { links, images } = extractLinksAndImages(retryHtml, url);
       if (links.length > 0 || images.length > 0) {
         console.log(`[Crawler] Puppeteer 重试成功: ${links.length} 链接, ${images.length} 图片`);
-        return { html: retryHtml.slice(0, 10000), links, images, method: "puppeteer" };
+        return { html: retryHtml.slice(0, 150000), links, images, method: "puppeteer" };
       }
     }
 
@@ -1394,7 +1405,7 @@ export async function crawlPage(url: string): Promise<CrawlResult> {
       const { links, images } = extractLinksAndImages(puppeteerHtml, url);
       if (links.length > 0 || images.length > 0) {
         console.log(`[Crawler] Puppeteer 成功: ${links.length} 链接, ${images.length} 图片`);
-        return { html: puppeteerHtml.slice(0, 10000), links, images, method: "puppeteer" };
+        return { html: puppeteerHtml.slice(0, 150000), links, images, method: "puppeteer" };
       }
     }
   }
@@ -1406,7 +1417,7 @@ export async function crawlPage(url: string): Promise<CrawlResult> {
     const { links, images } = extractLinksAndImages(cacheHtml, url);
     if (links.length > 0 || images.length > 0) {
       console.log(`[Crawler] 缓存源成功: ${links.length} 链接, ${images.length} 图片`);
-      return { html: cacheHtml.slice(0, 10000), links, images, method: "cache" };
+      return { html: cacheHtml.slice(0, 150000), links, images, method: "cache" };
     }
   }
 
@@ -1415,7 +1426,7 @@ export async function crawlPage(url: string): Promise<CrawlResult> {
     const { links, images } = extractLinksAndImages(httpResult.html, url);
     if (links.length > 0 || images.length > 0) {
       console.log(`[Crawler] 使用低质量 HTTP 结果: ${links.length} 链接, ${images.length} 图片`);
-      return { html: httpResult.html.slice(0, 10000), links, images, method: "http" };
+      return { html: httpResult.html.slice(0, 150000), links, images, method: "http" };
     }
   }
 

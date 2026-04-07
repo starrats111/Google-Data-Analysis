@@ -28,6 +28,10 @@ interface PadCopyOptions {
   aiRuleProfile?: unknown;
   /** 用户在前端选择的广告语言代码（如 "da"），优先于国家推导的语言 */
   adLanguageCode?: string;
+  /** 商家网站爬取文本，供 AI 生成具体描述（避免泛化） */
+  pageText?: string;
+  /** 商家真实产品列表（含名称/价格），供 AI 引用真实数据 */
+  crawledProducts?: Array<{ name: string; price?: number; currency?: string }>;
 }
 
 /** 显示路径（path1/path2）每条 ≤15 字符，字母数字与连字符；用于提升 RSA 完整度与点击率 */
@@ -896,6 +900,14 @@ export async function padDescriptions(
     const langWarning = isNonEnglish
       ? `⚠️ CRITICAL: Write ONLY in ${languageName}. English is FORBIDDEN.\n\n`
       : "";
+    // 如果传入了 pageText/crawledProducts，构建真实上下文块
+    const pageTextBlock = options.pageText
+      ? `\nWebsite content (extract specific materials, collections, USPs — reference real facts):\n${options.pageText.slice(0, 3000)}\n`
+      : "";
+    const productBlock = (options.crawledProducts || []).length > 0
+      ? `\nReal products on website (use names/prices as copy anchors — no fabrication):\n${(options.crawledProducts || []).slice(0, 10).map((p, i) => `${i + 1}. "${p.name}"${p.price ? ` — ${p.currency || ""}${p.price}` : ""}`).join("\n")}\n`
+      : "";
+
     const prompt = `You are Adrian · Data Hunter, a top-tier Google Ads RSA strategist. Write ${needed} descriptions that convert — each one must fill a distinct strategic role.
 ${langWarning}
 Context:
@@ -903,7 +915,7 @@ Context:
 - Market: ${market.countryNameZh} — write in ${languageName}
 - Style: ${market.style}
 - Budget: $${dailyBudget.toFixed(2)}/day, Max CPC $${maxCpc.toFixed(2)}, Strategy: ${biddingStrategy}
-
+${pageTextBlock}${productBlock}
 GOOGLE RSA UNIQUENESS PRINCIPLE (critical for ad strength):
 - Google explicitly penalizes descriptions that repeat headline wording — this drops ad strength to "Poor"
 - Each description must carry a COMPLETELY DIFFERENT message from headlines AND from each other

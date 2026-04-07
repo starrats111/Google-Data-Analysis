@@ -35,12 +35,29 @@ async function condenseOverlong(items: string[], maxLen: number, languageName: s
     .filter((item) => item.text.length > maxLen);
   if (overlong.length === 0) return items;
 
+  // 单条 AI 精简（用于批量失败后的逐条重试）
+  const condenseSingle = async (text: string): Promise<string> => {
+    try {
+      const raw = await callAiWithFallback(
+        "ad_copy",
+        [{
+          role: "user",
+          content: `Rewrite this Google Ads text to fit within ${maxLen} characters. Keep the core meaning, brand names, and key selling points. Remove filler words. Write in ${languageName}.\n\nOriginal (${text.length} chars): "${text}"\n\nOutput ONLY the rewritten text, nothing else. It MUST be ≤${maxLen} characters.`,
+        }],
+        120,
+      );
+      const result = raw.trim().replace(/^["']|["']$/g, "");
+      if (result.length >= 2 && result.length <= maxLen) return result;
+    } catch {}
+    return text; // AI 失败返回原文，不硬截断
+  };
+
   try {
     const condensedPrompt = `Condense each line to ≤${maxLen} characters. Keep the same language (${languageName}). Preserve brand names, numbers, and key selling points. Do NOT add new information.
 
-${overlong.map((item, i) => `${i + 1}. "${item.text}" (${item.text.length} chars)`).join("\n")}
+${overlong.map((item, i) => `${i + 1}. "${item.text}" (${item.text.length} chars → must be ≤${maxLen})`).join("\n")}
 
-Return ONLY a JSON array of condensed strings in the same order.`;
+Return ONLY a JSON array of condensed strings in the same order. Every string MUST be ≤${maxLen} characters.`;
     const rawResult = await callAiWithFallback("ad_copy", [{ role: "user", content: condensedPrompt }], 1024);
     const condensed = JSON.parse(extractJsonFromAi(rawResult));
     if (!Array.isArray(condensed) || condensed.length !== overlong.length) throw new Error("AI 返回数量不匹配");
@@ -51,14 +68,19 @@ Return ONLY a JSON array of condensed strings in the same order.`;
       if (c.length >= 2 && c.length <= maxLen) {
         result[overlong[i].idx] = c;
       } else {
-        result[overlong[i].idx] = smartTruncate(overlong[i].text, maxLen);
+        // 批量精简后仍超长，逐条再精简一次
+        result[overlong[i].idx] = await condenseSingle(overlong[i].text);
       }
     }
     console.log(`[condenseOverlong] AI 缩略 ${overlong.length} 条超长文案 (maxLen=${maxLen})`);
     return result;
   } catch (err) {
-    console.warn("[condenseOverlong] AI 缩略失败，降级为 smartTruncate:", err instanceof Error ? err.message : err);
-    return items.map((text) => text.length > maxLen ? smartTruncate(text, maxLen) : text);
+    console.warn("[condenseOverlong] 批量 AI 缩略失败，逐条重试:", err instanceof Error ? err.message : err);
+    const result = [...items];
+    for (const item of overlong) {
+      result[item.idx] = await condenseSingle(item.text);
+    }
+    return result;
   }
 }
 
@@ -155,7 +177,7 @@ export async function POST(req: NextRequest) {
     console.error("[Extensions] 请求体 JSON 解析失败:", e instanceof Error ? e.message : e);
     return apiError("请求体格式错误");
   }
-  const { campaign_id, types = [], ad_language } = body;
+  const { campaign_id, types = [], ad_language, keywords: requestKeywords = [] } = body;
   if (!campaign_id) {
     console.warn("[Extensions] 400: 缺少 campaign_id, body:", JSON.stringify(body).slice(0, 200));
     return apiError("缺少 campaign_id");
@@ -203,16 +225,53 @@ export async function POST(req: NextRequest) {
   });
   const aiRuleProfile = (adSettings as any)?.ai_rule_profile;
 
-  // 读取或构建爬取缓存（失败的缓存也重新爬取）
+  // 读取或构建爬取缓存（失败/为空/旧数据不足时重新爬取）
   let cache = adCreative?.crawl_cache as CrawlCache | null;
-  if (!cache || !cache.crawledAt || cache.crawlFailed) {
-    console.log(`[Extensions] crawl_cache ${cache?.crawlFailed ? '上次失败，重新' : '为空，现场'}爬取...`);
-    cache = await buildCrawlCache(merchantUrl, merchantName, country);
-    if (adCreative?.id) {
-      await prisma.ad_creatives.update({
-        where: { id: adCreative.id },
-        data: { crawl_cache: cache as any },
-      }).catch(() => {});
+
+  // 判断是否需要重爬：
+  // 1. 无缓存 / 爬取失败
+  // 2. optional 扩展请求了 promotion/price，且缓存在 2026-04-07 之前生成（旧 10KB 截断版本，可能漏掉折扣数据）
+  const needsOptional = (types as string[]).includes("optional");
+  const optionalNeedsPromo = needsOptional && ((body.optionalTypes as string[]) || []).some((t: string) => ["promotion", "price"].includes(t));
+
+  // 促销数据无有效折扣时（discount_percent <= 0 且 discount_amount <= 0）强制重爬
+  // 因为旧缓存可能用 10KB HTML 截断，漏掉了 banner 里的折扣信息
+  const cachedPromo = cache?.promoRegex as Record<string, unknown> | null | undefined;
+  const cachedPromoHasDiscount =
+    (cachedPromo?.discount_percent ? Number(cachedPromo.discount_percent) : 0) > 0 ||
+    (cachedPromo?.discount_amount ? Number(cachedPromo.discount_amount) : 0) > 0;
+  const cacheNeedsRefreshForPromo = optionalNeedsPromo && !cachedPromoHasDiscount;
+
+  if (!cache || !cache.crawledAt || cache.crawlFailed || cacheNeedsRefreshForPromo) {
+    const reason = !cache || !cache.crawledAt ? '为空' : cache.crawlFailed ? '上次失败' : '缓存促销无有效折扣，重爬以获取最新数据';
+    console.log(`[Extensions] crawl_cache ${reason}，重新爬取... forcePuppeteer=${cacheNeedsRefreshForPromo}`);
+    // 促销数据通常由 JS 渲染（如公告栏），forcePuppeteer 保证获取到完整 DOM
+    const newCache = await buildCrawlCache(merchantUrl, merchantName, country, undefined, {
+      forcePuppeteer: cacheNeedsRefreshForPromo,
+    });
+    // 竞态保护：若新 cache 无折扣但旧 cache 已有折扣，不覆盖（防止 core/optional 并发写互相覆盖）
+    const newPromo = newCache.promoRegex as Record<string, unknown> | null;
+    const newHasDiscount = (newPromo?.discount_percent ? Number(newPromo.discount_percent) : 0) > 0 ||
+      (newPromo?.discount_amount ? Number(newPromo.discount_amount) : 0) > 0;
+    const shouldSave = newHasDiscount || !cachedPromoHasDiscount;
+    cache = newCache;
+    if (adCreative?.id && shouldSave) {
+      // 再次读 DB，确认在本次重爬期间没有其他请求已保存了更好的数据
+      const freshRecord = await prisma.ad_creatives.findFirst({ where: { id: adCreative.id }, select: { crawl_cache: true } }).catch(() => null);
+      const freshPromo = (freshRecord?.crawl_cache as any)?.promoRegex as Record<string, unknown> | null;
+      const freshHasDiscount = (freshPromo?.discount_percent ? Number(freshPromo.discount_percent) : 0) > 0 ||
+        (freshPromo?.discount_amount ? Number(freshPromo.discount_amount) : 0) > 0;
+      if (!freshHasDiscount || newHasDiscount) {
+        await prisma.ad_creatives.update({
+          where: { id: adCreative.id },
+          data: { crawl_cache: cache as any },
+        }).catch(() => {});
+        console.log(`[Extensions] cache 已保存，newHasDiscount=${newHasDiscount}`);
+      } else {
+        // DB 已有更好数据，读取并使用 DB 的 cache
+        cache = freshRecord!.crawl_cache as any;
+        console.log(`[Extensions] 保留 DB 中更好的 cache（已有折扣）`);
+      }
     }
   }
 
@@ -230,7 +289,8 @@ export async function POST(req: NextRequest) {
 
         // ─── core: 1 次 AI 生成标题 + 描述 + 站内链接描述 + 图片 ───
         if (types.includes("core")) {
-          tasks.push(generateCore(cache!, merchantName, merchantUrl, country, adSettings, aiRuleProfile, adCreative?.id || null, send, ad_language));
+          const confirmedKeywords = Array.isArray(requestKeywords) ? (requestKeywords as string[]).filter(Boolean).slice(0, 10) : [];
+          tasks.push(generateCore(cache!, merchantName, merchantUrl, country, adSettings, aiRuleProfile, adCreative?.id || null, send, ad_language, confirmedKeywords));
         }
 
         // ─── optional: 1 次 AI 批量生成所有勾选的可选扩展 ───
@@ -276,6 +336,7 @@ async function generateCore(
   adCreativeId: bigint | null,
   send: (type: string, data: unknown) => void,
   adLanguageCode?: string,
+  confirmedKeywords: string[] = [],
 ) {
   const market = getAdMarketConfig(country);
   const languageName = resolveLanguageName(country, adLanguageCode);
@@ -321,7 +382,20 @@ async function generateCore(
   // 爬虫提取的真实产品数据，传给 AI 作为写文案的素材
   const crawledProducts = (cache as any).crawledProducts || [];
   const productBlock = crawledProducts.length > 0
-    ? `\nReal products found on website (use these names in copy, do NOT invent product names):\n${crawledProducts.slice(0, 10).map((p: any, i: number) => `${i + 1}. "${p.name}"${p.price ? ` — ${p.currency || ""}${p.price}` : ""}`).join("\n")}\n`
+    ? `\nReal products found on website (use these names and prices as copy anchors):\n${crawledProducts.slice(0, 15).map((p: any, i: number) => `${i + 1}. "${p.name}"${p.price ? ` — ${p.currency || market.currencyCode}${p.price}` : ""}`).join("\n")}\n`
+    : "";
+
+  // 价格区间分析（给 AI 真实的价格锚点）
+  const prices = crawledProducts.map((p: any) => Number(p.price)).filter((n: number) => n > 0).sort((a: number, b: number) => a - b);
+  const priceRangeBlock = prices.length >= 2
+    ? `\nPrice range on site: ${market.currencyCode}${prices[0]} – ${market.currencyCode}${prices[prices.length - 1]} (median ~${market.currencyCode}${prices[Math.floor(prices.length / 2)]}). Use these real prices as anchors ("From ${market.currencyCode}${prices[0]}", etc.).\n`
+    : prices.length === 1
+    ? `\nEntry price on site: ${market.currencyCode}${prices[0]}. You may reference this.\n`
+    : "";
+
+  // 确认关键词块（员工已确认的高意图词）
+  const keywordsBlock = confirmedKeywords.length > 0
+    ? `\n⚡ CONFIRMED HIGH-INTENT KEYWORDS (employee-selected, build multiple headlines around these):\n${confirmedKeywords.map((k, i) => `${i + 1}. ${k}`).join("\n")}\nAt least 3 headlines MUST directly mirror or include these keywords.\n`
     : "";
 
   const isNonEnglish = market.languageCode !== "en";
@@ -329,11 +403,13 @@ async function generateCore(
     ? `\n⚠️ CRITICAL LANGUAGE RULE: ALL output MUST be written in ${languageName} ONLY. Do NOT use English in headlines, descriptions, or sitelink descriptions. Every single string must be in ${languageName}.\n`
     : "";
 
-  const prompt = `You are a top-tier Google Ads conversion copywriter. Your mission: write ad copy so compelling that users STOP scrolling and click. Every line must earn its place.
+  const prompt = `You are Adrian · 数据猎手 — a ruthlessly data-driven Google Ads RSA strategist. Your single mission: write copy that converts cold searchers into buyers at the lowest possible CPC.
 ${langEnforcement}
-FACTUAL CONSTRAINTS (non-negotiable):
-- Use ONLY facts from the data below. NEVER fabricate product names, prices, or claims.
-- If no discount/shipping data is provided, focus on desire, trust, and brand story instead.
+═══ ADRIAN'S NON-NEGOTIABLE RULES ═══
+1. SPECIFICITY OVER GENERICS: Every headline must contain at least ONE specific fact (price, year, material, collection name, feature). Headlines like "Best Quality" or "Shop Now" are REJECTED.
+2. KEYWORD-FIRST: The confirmed keywords above represent real buyer intent. Mirror them directly in headlines — if a keyword is "leather handbags", a headline must contain "Leather Handbags" or a close variant.
+3. DATA INTEGRITY: Use ONLY the facts provided below. Never invent discounts, prices, or product names.
+4. ZERO AI CLICHÉS: Banned words: premium, top-quality, perfect, amazing, luxury (unless it IS a luxury brand), cutting-edge, seamless, elevate, unlock. Use real product/brand language instead.
 ${discountGuidance}${shippingGuidance}
 
 Context:
@@ -341,11 +417,11 @@ Context:
 - Website: ${merchantUrl}
 - Target market: ${market.countryNameZh} (write in ${languageName})
 - Budget: $${dailyBudget.toFixed(2)}/day, CPC $${maxCpc.toFixed(2)}, Strategy: ${biddingStrategy}
-${productBlock}
-Website content:
-${cache.pageText.slice(0, 2000)}
+${keywordsBlock}${priceRangeBlock}${productBlock}
+Website content (read ALL — extract specific collection names, materials, features):
+${cache.pageText.slice(0, 5000)}
 
-${cache.features.length > 0 ? `Merchant features:\n${cache.features.join("\n")}\n` : ""}${semrushBlock}${sitelinkBlock}${formatAiRuleBlock(aiRuleProfile, "ad_copy")}
+${cache.features.length > 0 ? `Merchant features (these are REAL — use them in copy):\n${cache.features.slice(0, 20).join("\n")}\n` : ""}${semrushBlock}${sitelinkBlock}${formatAiRuleBlock(aiRuleProfile, "ad_copy")}
 ${AD_COPY_ANTI_AI_BLOCK}
 
 Return ONLY a JSON object with this exact structure:
@@ -670,157 +746,202 @@ async function generateOptionalBatch(
   const market = getAdMarketConfig(country);
   const languageName = resolveLanguageName(country, adLanguageCode);
 
-  // ─── call: 电话提取（无 AI，找不到时返回 manual_required） ───
+  // ─── call: 只使用真实爬取的电话，找不到则 skipped ───
   if (optionalTypes.includes("call")) {
     try {
       const phone = await extractPhoneFromCache(cache, merchantUrl, country);
       if (phone) {
-        send("call", { found: true, ...phone });
+        send("call", { found: true, skipped: false, ...phone });
       } else {
-        send("call", { found: false, manual_required: true });
+        send("call", { skipped: true });
+        console.log("[Optional] 致电扩展：未找到真实电话，跳过");
       }
     } catch {
-      send("call", { found: false, manual_required: true });
+      send("call", { skipped: true });
     }
   }
 
-  // ─── promotion: AI 生成结构化建议 ───
+  // ─── promotion: 只使用真实爬取的促销数据，无数据或折扣值无效则 skipped ───
   if (optionalTypes.includes("promotion")) {
-    try {
-      const promoContext = cache.promoRegex
-        ? `Crawled promo data: discount_type=${cache.promoRegex.discount_type}, percent=${cache.promoRegex.discount_percent ?? "N/A"}, amount=${cache.promoRegex.discount_amount ?? "N/A"}`
-        : "No specific promotion found on the crawled page.";
+    const promo = cache.promoRegex as Record<string, unknown> | null;
+    const discountPercent = promo?.discount_percent ? Number(promo.discount_percent) : 0;
+    const discountAmount = promo?.discount_amount ? Number(promo.discount_amount) : 0;
+    const hasRealDiscount = discountPercent > 0 || discountAmount > 0;
 
-      const promoPrompt = `Analyze this merchant and suggest a Google Ads Promotion Extension.
+    if (!promo || !hasRealDiscount) {
+      send("promotion", { skipped: true });
+      console.log(`[Optional] 促销扩展：无真实折扣数值（percent=${discountPercent}, amount=${discountAmount}），跳过`);
+    } else {
+      const occasion = validatePromotionOccasion(String(promo.occasion || "NONE"));
+      const rawTarget = String(promo.promotion_target || "").trim();
 
-Merchant: ${merchantName}
-Website: ${merchantUrl}
-${promoContext}
-Website content excerpt: ${cache.pageText.slice(0, 1500)}
+      // promotion_target 最多 20 字，且只应为活动名称（折扣数字已有单独字段）
+      // 先去掉折扣数字相关文字，再判断是否需要 AI 提炼
+      const stripDiscountFromTarget = (text: string) =>
+        text
+          .replace(/,?\s*up\s+to\s+\d+\s*%\s*off/gi, "")
+          .replace(/,?\s*\d+\s*%\s*off/gi, "")
+          .replace(/,?\s*\$[\d,.]+\s*off/gi, "")
+          .replace(/,?\s*save\s+\d+%/gi, "")
+          .replace(/\s{2,}/g, " ")
+          .trim();
 
-Output a JSON object with this EXACT structure:
-{
-  "promotion_target": "short description of what is being promoted (≤20 chars)",
-  "discount_type": "PERCENT" or "MONETARY",
-  "discount_percent": number or null (only if PERCENT),
-  "discount_amount": number or null (only if MONETARY),
-  "currency_code": "${market.currencyCode}",
-  "occasion": one of: ${GOOGLE_PROMOTION_OCCASIONS.join(", ")},
-  "found": true or false (false = AI suggestion based on page content, not verified)
-}
+      const cleanedTarget = stripDiscountFromTarget(rawTarget);
+      let promotionTarget = cleanedTarget.slice(0, 20);
 
-Rules:
-- If crawled data has a real discount number, use it and set found=true
-- If no real discount found, suggest a reasonable promotion template and set found=false
-- Choose the most appropriate occasion based on current period or merchant type
-- Default to NONE if no occasion is clearly appropriate
-- Do NOT invent specific numbers if not found — use null for discount fields if unknown
+      if (cleanedTarget.length > 20) {
+        try {
+          const aiRaw = await callAiWithFallback("extension", [
+            {
+              role: "user",
+              content: `You are a Google Ads copywriter. Extract ONLY the promotion event name from the text below.\n\nRules:\n- Max 20 characters (including spaces)\n- Output ONLY the event name (e.g. "Friends & Family", "Spring Specials", "Summer Sale")\n- Do NOT include any discount numbers, percentages, or "off"\n- No punctuation at the end\n- English only\n\nText: "${cleanedTarget}"`,
+            },
+          ], 30);
+          const optimized = aiRaw.trim().replace(/^["']|["']$/g, "").slice(0, 20);
+          if (optimized.length >= 3) promotionTarget = optimized;
+          console.log(`[Optional] 促销标题 AI 优化: "${rawTarget}" → cleaned="${cleanedTarget}" → "${promotionTarget}"`);
+        } catch (e) {
+          console.warn(`[Optional] 促销标题 AI 优化失败，回退截断:`, e instanceof Error ? e.message : e);
+        }
+      } else if (cleanedTarget !== rawTarget) {
+        console.log(`[Optional] 促销标题去折扣数字: "${rawTarget}" → "${promotionTarget}"`);
+      }
 
-Return ONLY valid JSON.`;
-
-      const raw = await callAiWithFallback("ad_copy", [{ role: "user", content: promoPrompt }], 512);
-      const parsed = JSON.parse(extractJsonFromAi(raw));
-      parsed.occasion = validatePromotionOccasion(String(parsed.occasion || "NONE"));
-      parsed.final_url = merchantUrl;
-      send("promotion", parsed);
-      console.log(`[Optional] 促销建议生成完成: occasion=${parsed.occasion}, found=${parsed.found}`);
-    } catch (err) {
-      console.error("[Optional] Promotion AI 生成失败:", err instanceof Error ? err.message : err);
-      // 降级：返回最小结构让用户手动填写
       send("promotion", {
-        promotion_target: merchantName.slice(0, 20),
-        discount_type: "PERCENT",
-        discount_percent: null,
-        discount_amount: null,
+        skipped: false,
+        found: true,
+        promotion_target: promotionTarget,
+        discount_type: String(promo.discount_type || "PERCENT"),
+        discount_percent: discountPercent > 0 ? discountPercent : null,
+        discount_amount: discountAmount > 0 ? discountAmount : null,
         currency_code: market.currencyCode,
-        occasion: "NONE",
+        occasion,
         final_url: merchantUrl,
-        found: false,
       });
+      console.log(`[Optional] 促销扩展：折扣=${discountPercent > 0 ? discountPercent + "%" : "$" + discountAmount}，occasion=${occasion}，target="${promotionTarget}"`);
     }
   }
 
-  // ─── price: 爬虫优先，不足3条时 AI 补全 ───
+  // ─── price: 只使用真实爬取的价格数据，无数据则 skipped ───
   if (optionalTypes.includes("price")) {
     const crawledProducts = (cache as any).crawledProducts || [];
-    let items: { header: string; description: string; price: number; currency: string; url: string; ai_suggested?: boolean }[] = [];
+    let items: { header: string; description: string; price: number; currency: string; url: string }[] = [];
+
+    // 将相对路径 URL 转为绝对 URL
+    const toAbsoluteUrl = (url: string) => {
+      if (!url) return merchantUrl;
+      if (url.startsWith("http://") || url.startsWith("https://")) return url;
+      try {
+        const base = merchantUrl.startsWith("http") ? merchantUrl : `https://${merchantUrl}`;
+        return new URL(url, base).toString();
+      } catch { return merchantUrl; }
+    };
 
     if (crawledProducts.length > 0) {
       items = crawledProducts
         .filter((p: any) => p.name && p.price && p.price > 0)
         .slice(0, 8)
         .map((p: any) => ({
-          header: String(p.name).slice(0, 25),
-          description: String(p.description || "").slice(0, 25),
+          header: String(p.name).trim(),
+          description: String(p.description || "").trim(),
           price: Number(p.price),
           currency: String(p.currency || market.currencyCode),
-          url: String(p.url || merchantUrl),
+          url: toAbsoluteUrl(String(p.url || "")),
         }));
     }
 
     if (items.length === 0 && cache.priceRegex.length > 0) {
-      items = cache.priceRegex.map((p) => ({ ...p, url: p.url || merchantUrl }));
+      items = cache.priceRegex.map((p) => ({ ...p, url: toAbsoluteUrl(p.url || "") }));
     }
 
-    // 尝试子页面
-    if (items.length < 3) {
+    // 尝试子页面补充（仅真实数据）
+    if (items.length === 0) {
       const subData = await fetchSubPagesForOptional(cache.links, ["price"]);
-      if (subData.priceItems.length > items.length) {
-        items = subData.priceItems.map((p) => ({ ...p, url: p.url || merchantUrl }));
+      if (subData.priceItems.length > 0) {
+        items = subData.priceItems.map((p) => ({ ...p, url: toAbsoluteUrl(p.url || "") }));
       }
     }
 
-    // 仍然不足3条：AI 推断补全，明确标注 ai_suggested
-    if (items.length < 3) {
-      try {
-        const pricePrompt = `Based on this merchant's website, suggest ${3 - items.length} representative product offerings for a Google Ads Price Extension.
+    if (items.length === 0) {
+      send("price_items", { skipped: true });
+      console.log("[Optional] 价格扩展：未爬取到真实价格数据，跳过");
+    } else {
+      // ── 硬规则：价格标题/描述 ≤25 字符，禁止任何截断，必须 AI 重写到达标为止 ──
 
-Merchant: ${merchantName}
-Website: ${merchantUrl}
-Existing crawled items: ${items.length > 0 ? JSON.stringify(items) : "none"}
-Website content: ${cache.pageText.slice(0, 1500)}
+      const MAX_PRICE_RETRIES = 3;
 
-Output a JSON array of objects:
-[{ "header": "product name ≤25 chars", "description": "brief desc ≤25 chars", "price": number, "currency": "${market.currencyCode}", "url": "${merchantUrl}", "ai_suggested": true }]
+      const aiShortenTo25 = async (text: string, role: "title" | "description", context: string): Promise<string | null> => {
+        for (let attempt = 1; attempt <= MAX_PRICE_RETRIES; attempt++) {
+          try {
+            const strictPrompt = role === "title"
+              ? `You MUST rewrite this product/collection name to fit within 25 characters (currently ${text.length} chars). This is a HARD LIMIT — not 26, not 27, exactly ≤25.\nMerchant: ${merchantName}\nDo NOT include prices or dollar amounts.\nOutput ONLY the rewritten name, nothing else.\n\nOriginal: "${text}"\n\nYour output must be ≤25 characters. Count carefully.`
+              : `You MUST write a product description that fits within 25 characters (currently ${text.length > 0 ? text.length + " chars" : "empty"}).\nMerchant: ${merchantName}\nProduct: "${context}"\n${text.length > 0 ? `Original: "${text}"\nShorten while keeping meaning.` : `Describe what "${context}" is (e.g. "Leather totes & satchels").`}\nOutput ONLY the description, nothing else.\n\nYour output must be ≤25 characters. Count carefully.`;
 
-Rules:
-- Suggest realistic products/categories based on the website content
-- Use reasonable price ranges based on what you can infer from the page
-- Mark all items as ai_suggested: true — the user will verify before submitting
-- Return ONLY the JSON array`;
+            const result = (await callAiWithFallback("ad_copy", [{ role: "user", content: strictPrompt }], 30))
+              .trim().replace(/^["']|["']$/g, "").replace(/\s*[\$€£¥]\d[\d,.]*/g, "").trim();
 
-        const raw = await callAiWithFallback("ad_copy", [{ role: "user", content: pricePrompt }], 512);
-        const aiItems = JSON.parse(extractJsonFromAi(raw));
-        if (Array.isArray(aiItems)) {
-          const cleaned = aiItems
-            .filter((p: any) => p.header && p.price > 0)
-            .map((p: any) => ({
-              header: String(p.header).slice(0, 25),
-              description: String(p.description || "").slice(0, 25),
-              price: Number(p.price),
-              currency: String(p.currency || market.currencyCode),
-              url: String(p.url || merchantUrl),
-              ai_suggested: true,
-            }));
-          items = [...items, ...cleaned].slice(0, 8);
+            if (result.length >= 2 && result.length <= 25) {
+              console.log(`[Price] ${role} AI 精简 (attempt ${attempt}): "${text || context}" → "${result}"`);
+              return result;
+            }
+            console.warn(`[Price] ${role} AI attempt ${attempt} 仍超长: "${result}" (${result.length} chars)`);
+          } catch {}
         }
-      } catch (err) {
-        console.error("[Optional] Price AI 补全失败:", err instanceof Error ? err.message : err);
-      }
+        return null; // 全部失败
+      };
+
+      const optimizePriceTitle = async (raw: string): Promise<string> => {
+        // 先移除标题中的价格信息（价格有独立字段）
+        const withoutPrice = raw
+          .replace(/\s*[\$€£¥]\s*\d[\d,.]*\+?/g, "")
+          .replace(/\s*(?:from|starting\s+at|under)\s+\d[\d,.]*/gi, "")
+          .replace(/\s*[-–—]\s*$/, "")
+          .replace(/\s+/g, " ").trim();
+        const cleaned = withoutPrice.length >= 3 ? withoutPrice : raw.trim();
+        if (cleaned.length <= 25) return cleaned;
+
+        const result = await aiShortenTo25(cleaned, "title", "");
+        if (result) return result;
+
+        // 全部 AI 失败：用商家名作为安全 fallback（永远不截断）
+        const fallback = merchantName.length <= 25 ? merchantName : merchantName.split(/\s+/).slice(0, 2).join(" ").slice(0, 25);
+        console.warn(`[Price] 标题 AI 全部失败，使用 fallback: "${fallback}"`);
+        return fallback;
+      };
+
+      const optimizePriceDescription = async (header: string, rawDesc: string): Promise<string> => {
+        const raw = rawDesc.trim();
+        if (raw.length > 0 && raw.length <= 25) return raw;
+
+        const result = await aiShortenTo25(raw, "description", header);
+        if (result) return result;
+
+        // 全部 AI 失败：用通用安全 fallback
+        const fallback = `Shop ${merchantName}`.length <= 25 ? `Shop ${merchantName}` : "Shop now";
+        console.warn(`[Price] 描述 AI 全部失败，使用 fallback: "${fallback}"`);
+        return fallback;
+      };
+
+      // 并行精简所有条目的 header 和 description
+      items = await Promise.all(
+        items.map(async (item) => {
+          const optimizedHeader = await optimizePriceTitle(item.header);
+          const optimizedDesc = await optimizePriceDescription(optimizedHeader, item.description);
+          return { ...item, header: optimizedHeader, description: optimizedDesc };
+        }),
+      );
+
+      let priceType = "Products";
+      try {
+        if (merchantName.split(" ").length === 1 || /store|shop|brand/i.test(cache.pageText)) {
+          priceType = "Brands";
+        } else if (/service|consult|plan|subscription/i.test(cache.pageText)) {
+          priceType = "Services";
+        }
+      } catch {}
+      send("price_items", { skipped: false, items, type: priceType });
+      console.log(`[Optional] 价格信息: ${items.length} 条（全部来自真实爬取，标题已 AI 精简）`);
     }
-
-    // 推断 type 字段（AI 选择，不默认 BRANDS）
-    let priceType = "Products";
-    try {
-      if (merchantName.split(" ").length === 1 || /store|shop|brand/i.test(cache.pageText)) {
-        priceType = "Brands";
-      } else if (/service|consult|plan|subscription/i.test(cache.pageText)) {
-        priceType = "Services";
-      }
-    } catch {}
-
-    send("price_items", { items, type: priceType, has_ai_suggested: items.some((i) => i.ai_suggested) });
-    console.log(`[Optional] 价格信息: ${items.length} 条（含AI建议=${items.filter(i => i.ai_suggested).length}条）`);
   }
 
   // ─── AI 生成类型：callouts + snippet + negative_keywords ───
@@ -1117,15 +1238,16 @@ async function selectBestImages(rawImages: string[], merchantUrl?: string): Prom
       ]
     : filtered;
 
-  if (ranked.length === 0) return rawImages.slice(0, 60);
+  if (ranked.length === 0) return rawImages.slice(0, 40);
 
+  // Step 1：HEAD 检查——验证可访问 + 非过小文件（并发 10）
   const checked: string[] = [];
-  for (let i = 0; i < ranked.length && checked.length < 80; i += 10) {
+  for (let i = 0; i < ranked.length && checked.length < 40; i += 10) {
     const batch = ranked.slice(i, i + 10);
     const results = await Promise.allSettled(
       batch.map(async (url) => {
         try {
-          const resp = await fetch(url, { method: "HEAD", signal: AbortSignal.timeout(5000), headers: { "User-Agent": "Googlebot-Image/1.0" } });
+          const resp = await fetch(url, { method: "HEAD", signal: AbortSignal.timeout(4000), headers: { "User-Agent": "Googlebot-Image/1.0" } });
           if (!resp.ok) return null;
           const ct = resp.headers.get("content-type") || "";
           if (!ct.startsWith("image/")) return null;
@@ -1136,7 +1258,25 @@ async function selectBestImages(rawImages: string[], merchantUrl?: string): Prom
       }),
     );
     for (const r of results) if (r.status === "fulfilled" && r.value) checked.push(r.value);
+    if (checked.length >= 40) break;
   }
 
-  return checked.length > 0 ? checked.slice(0, 60) : ranked.slice(0, 60);
+  const headPassed = checked.length > 0 ? checked : ranked.slice(0, 40);
+
+  // Step 2：URL 规则过滤——排除 URL 中含文字性关键词的图片（替代 Tesseract OCR，避免 uncaughtException 崩溃流）
+  const TEXT_URL_PATTERNS = [
+    /\/banner[s]?\//i, /\/hero[s]?\//i, /\/slide[r]?\//i, /\/ad[s]?\//i,
+    /\/promo[s]?\//i, /\/sale[s]?\//i, /\/offer[s]?\//i, /\/badge[s]?\//i,
+    /\/label[s]?\//i, /\/text[s]?\//i, /\/overlay/i, /\/campaign/i,
+    /logo/i, /icon/i, /sprite/i, /button/i, /thumb(?:nail)?/i,
+  ];
+  const cleanImages = headPassed.filter((url) => {
+    const lower = url.toLowerCase();
+    // 排除明显含文字/按钮/徽标的 URL
+    if (TEXT_URL_PATTERNS.some((p) => p.test(lower))) return false;
+    // 保留宽高比看起来是产品图的（URL 中含 _500x / _800x / _1000x / _2000x 等 Shopify 图片格式）
+    return true;
+  });
+
+  return cleanImages.length >= 10 ? cleanImages : headPassed;
 }
