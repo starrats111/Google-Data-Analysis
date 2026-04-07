@@ -265,7 +265,13 @@ export const GET = withUser(async (req: NextRequest, { user }) => {
     for (const c of campaigns) {
       const key = c.user_merchant_id.toString();
       const existing = campaignMap.get(key);
-      if (!existing || (c.google_status === "ENABLED" && existing.status !== "ENABLED")) {
+      const hasGcid = !!c.google_campaign_id;
+      const existingHasGcid = !!existing?.campaignId;
+      if (
+        !existing
+        || (hasGcid && !existingHasGcid)
+        || (hasGcid === existingHasGcid && c.google_status === "ENABLED" && existing.status !== "ENABLED")
+      ) {
         campaignMap.set(key, {
           status: c.google_status,
           campaignName: c.campaign_name,
