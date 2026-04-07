@@ -567,7 +567,7 @@ async function upsertSheetRowsBatch(
       const campaign = campaignMap.get(gid)!;
       const updateData: Record<string, unknown> = {
         campaign_name: row.campaign_name, daily_budget: row.budget,
-        google_status: row.status, last_google_sync_at: new Date(),
+        last_google_sync_at: new Date(),
       };
       if (row.customer_id) updateData.customer_id = row.customer_id;
       return prisma.campaigns.update({
@@ -743,18 +743,21 @@ async function updateDailyStatsCommissionByRange(userId: bigint, startDate: Date
     }
 
     if (!wrote) {
-      ops.push(() => prisma.ads_daily_stats.create({
-        data: {
+      const dateObj = new Date(`${txnDateStr}T00:00:00.000Z`);
+      ops.push(() => prisma.ads_daily_stats.upsert({
+        where: { campaign_id_date: { campaign_id: campaignIds[0], date: dateObj } },
+        update: commData,
+        create: {
           user_id: userId,
           user_merchant_id: umid,
           campaign_id: campaignIds[0],
-          date: new Date(`${txnDateStr}T00:00:00.000Z`),
+          date: dateObj,
           cost: 0,
           clicks: 0,
           impressions: 0,
           ...commData,
         },
-      }).catch(() => {}));
+      }));
       updated++;
     }
   }

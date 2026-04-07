@@ -783,22 +783,41 @@ async function updateDailyStatsCommission(userId: bigint, statsStartDate: Date, 
     if (!campaignIds?.length) continue;
 
     const txnDateStr = String(agg.txn_date).split("T")[0];
+    const dateObj = new Date(txnDateStr);
     const commData = {
       commission: Number(agg.total_commission),
       rejected_commission: Number(agg.rejected_commission),
       orders: Number(agg.order_count),
     };
 
+    let wrote = false;
     for (const cid of campaignIds) {
       const existing = await prisma.ads_daily_stats.findFirst({
-        where: { campaign_id: cid, date: new Date(txnDateStr) },
+        where: { campaign_id: cid, date: dateObj },
         select: { id: true },
       });
       if (existing) {
         await prisma.ads_daily_stats.update({ where: { id: existing.id }, data: commData });
+        wrote = true;
         updated++;
         break;
       }
+    }
+
+    if (!wrote) {
+      await prisma.ads_daily_stats.upsert({
+        where: { campaign_id_date: { campaign_id: campaignIds[0], date: dateObj } },
+        update: commData,
+        create: {
+          user_id: userId,
+          user_merchant_id: BigInt(String(agg.user_merchant_id)),
+          campaign_id: campaignIds[0],
+          date: dateObj,
+          cost: 0, clicks: 0, impressions: 0,
+          ...commData,
+        },
+      });
+      updated++;
     }
   }
 
