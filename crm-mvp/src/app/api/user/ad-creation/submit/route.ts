@@ -264,13 +264,6 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    // ─── 0. 先尝试清理同名冲突 ───
-    try {
-      await removeDuplicateCampaigns();
-    } catch (cleanupErr) {
-      console.warn("[AdSubmit] 首次清理同名广告出错（将在创建失败后重试）:", cleanupErr);
-    }
-
     const operations: Record<string, unknown>[] = [];
 
     const budgetTempRn = `customers/${cid}/campaignBudgets/-1`;
@@ -719,26 +712,31 @@ export async function POST(req: NextRequest) {
       console.log(`[AdSubmit] 否定关键词: ${validNegativeKws.length} 条`);
     }
 
-    // ─── 10. 预加载图片素材（串行加载 + 累计内存限额，实际提交在主广告创建成功后） ───
+    // ─── 10. 并行预加载图片素材（实际提交在主广告创建成功后） ───
     const MAX_TOTAL_IMAGE_BYTES = 50 * 1024 * 1024;
     const MAX_IMAGES = 20;
-    const imageAssets: { data: string; name: string }[] = [];
+    let imageAssetsPromise: Promise<{ data: string; name: string }[]> = Promise.resolve([]);
     if (image_urls.length > 0) {
-      let totalBytes = 0;
-      for (const url of (image_urls as string[]).slice(0, MAX_IMAGES)) {
-        const img = await loadImageAsBase64(url);
-        if (!img) continue;
-        const imgBytes = Buffer.byteLength(img.data, "base64");
-        if (totalBytes + imgBytes > MAX_TOTAL_IMAGE_BYTES) {
-          console.warn(`[AdSubmit] 图片累计体积已达限额 (${Math.round(totalBytes / 1024 / 1024)}MB)，跳过剩余图片`);
-          break;
+      imageAssetsPromise = Promise.all(
+        (image_urls as string[]).slice(0, MAX_IMAGES).map((url) => loadImageAsBase64(url))
+      ).then((results) => {
+        const loaded: { data: string; name: string }[] = [];
+        let totalBytes = 0;
+        for (const img of results) {
+          if (!img) continue;
+          const imgBytes = Buffer.byteLength(img.data, "base64");
+          if (totalBytes + imgBytes > MAX_TOTAL_IMAGE_BYTES) {
+            console.warn(`[AdSubmit] 图片累计体积已达限额 (${Math.round(totalBytes / 1024 / 1024)}MB)，跳过剩余图片`);
+            break;
+          }
+          loaded.push(img);
+          totalBytes += imgBytes;
         }
-        imageAssets.push(img);
-        totalBytes += imgBytes;
-      }
-      if (imageAssets.length > 0) {
-        console.log(`[AdSubmit] 已加载 ${imageAssets.length} 张图片 (${Math.round(totalBytes / 1024 / 1024)}MB)`);
-      }
+        if (loaded.length > 0) {
+          console.log(`[AdSubmit] 已加载 ${loaded.length} 张图片 (${Math.round(totalBytes / 1024 / 1024)}MB)`);
+        }
+        return loaded;
+      });
     }
 
     // ─── 发送批量 Mutate 请求（含 DUPLICATE_CAMPAIGN_NAME / POLICY_ERROR 自动重试） ───
@@ -828,6 +826,7 @@ export async function POST(req: NextRequest) {
     // ─── 11. 图片素材独立提交（第二次 mutate，失败不影响主广告） ───
     // 搜索广告系列必须使用 AD_IMAGE field_type（MARKETING_IMAGE 不兼容 SEARCH Campaign）
     const imageUploadResult = { success: 0, failed: 0, errors: [] as string[] };
+    const imageAssets = await imageAssetsPromise;
     if (imageAssets.length > 0 && campaignRn) {
       try {
         const imageOps: Record<string, unknown>[] = [];
@@ -839,7 +838,6 @@ export async function POST(req: NextRequest) {
               create: {
                 resource_name: assetRn,
                 name: `AdImage-${img.name}-${Date.now()}`,
-                // 注意：type 是 output-only 字段，不能在 CREATE 中设置
                 image_asset: { data: img.data },
               },
             },
