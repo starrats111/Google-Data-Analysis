@@ -52,6 +52,9 @@ async function doDailySync() {
     log("Step 2.5: Syncing campaign statuses from Google Ads API...");
     await syncAllCampaignStatuses();
 
+    log("Step 2.6: Syncing merchant statuses from campaign statuses...");
+    await syncAllMerchantStatuses();
+
     log("Step 3: Syncing transaction data for all users...");
     await syncAllUsersTransactions();
 
@@ -469,6 +472,38 @@ async function syncAllCampaignStatuses(): Promise<unknown> {
     }
   }
   return results;
+}
+
+// ── 广告状态同步后，更新所有用户的商家状态 ──
+
+async function syncAllMerchantStatuses(): Promise<void> {
+  const { autoLinkAndCreateMerchants, syncMerchantStatusFromCampaigns } =
+    await import("@/lib/campaign-merchant-link");
+
+  const users = await prisma.users.findMany({
+    where: { is_deleted: 0, status: "active", role: { in: ["user", "leader"] } },
+    select: { id: true, username: true },
+  });
+
+  let totalLinked = 0;
+  let totalUpdated = 0;
+
+  for (const user of users) {
+    try {
+      const linked = await autoLinkAndCreateMerchants(user.id);
+      const updated = await syncMerchantStatusFromCampaigns(user.id);
+      totalLinked += linked;
+      totalUpdated += updated;
+      if (linked > 0 || updated > 0) {
+        log(`  ${user.username}: linked ${linked}, status updated ${updated}`);
+      }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      log(`  ${user.username} merchant sync error: ${msg}`);
+    }
+  }
+
+  log(`  Merchant sync total: linked ${totalLinked}, status updated ${totalUpdated}`);
 }
 
 // ── 同步所有用户的交易数据 ──
