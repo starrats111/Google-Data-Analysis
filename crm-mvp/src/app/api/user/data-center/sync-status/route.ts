@@ -107,11 +107,17 @@ export async function POST(req: NextRequest) {
       }
     }
 
+    // 广告状态变更后立即同步商家状态
+    const { autoLinkAndCreateMerchants, syncMerchantStatusFromCampaigns } = await import("@/lib/campaign-merchant-link");
+    const linked = await autoLinkAndCreateMerchants(userId);
+    const merchantUpdated = await syncMerchantStatusFromCampaigns(userId);
+
     return apiSuccess(serializeData({
       campaignUpdated,
       cidUpdated,
+      merchantUpdated,
       totalStatuses: statuses.length,
-      message: `状态同步完成：${campaignUpdated} 个广告系列，${cidUpdated} 个 CID 已更新`,
+      message: `状态同步完成：${campaignUpdated} 个广告系列，${cidUpdated} 个 CID，${merchantUpdated} 个商家已更新`,
     }));
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
