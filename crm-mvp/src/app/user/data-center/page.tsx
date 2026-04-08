@@ -139,18 +139,16 @@ export default function DataCenterPage() {
   // 本地状态覆盖（toggle 后立即更新，不等 API 刷新）
   const [statusOverrides, setStatusOverrides] = useState<Record<string, string>>({});
 
-  const rows = (campaignData?.rows || [])
+  const rows = useMemo(() => (campaignData?.rows || [])
     .filter((r: IndexedRow) => r.campaign_name && /^\d/.test(r.campaign_name))
     .map((r: IndexedRow) => statusOverrides[r.id] ? { ...r, status: statusOverrides[r.id] } : r)
     .sort((a, b) => {
-      // 已启用优先
       if (a.status === "ENABLED" && b.status !== "ENABLED") return -1;
       if (a.status !== "ENABLED" && b.status === "ENABLED") return 1;
-      // 同状态按序号降序
       const seqA = parseInt(a.campaign_name?.split("-")[0] || "0", 10) || 0;
       const seqB = parseInt(b.campaign_name?.split("-")[0] || "0", 10) || 0;
       return seqB - seqA;
-    });
+    }), [campaignData?.rows, statusOverrides]);
   const costByMcc = campaignData?.costByMcc || [];
   const rowMeta = campaignData?.rowMeta;
 

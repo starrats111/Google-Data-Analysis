@@ -78,6 +78,7 @@ export async function GET(req: NextRequest) {
         orderBy: { created_at: "desc" },
         skip: (page - 1) * pageSize,
         take: pageSize,
+        omit: { content: true },
       }),
     ]);
 

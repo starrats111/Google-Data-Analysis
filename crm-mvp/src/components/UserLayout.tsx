@@ -155,14 +155,6 @@ export default function UserLayout({ children }: { children: React.ReactNode }) 
   );
   const unreadCount = unreadData?.count || 0;
 
-  // ─── 页面可见性控制 — 页面不可见时暂停轮询 ───
-  const [isVisible, setIsVisible] = useState(true);
-  useEffect(() => {
-    const handleVisibility = () => setIsVisible(!document.hidden);
-    document.addEventListener("visibilitychange", handleVisibility);
-    return () => document.removeEventListener("visibilitychange", handleVisibility);
-  }, []);
-
   // 通知列表（仅在打开面板时请求）
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [notifOpen, setNotifOpen] = useState(false);

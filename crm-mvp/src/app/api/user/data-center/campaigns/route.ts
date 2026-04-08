@@ -174,21 +174,50 @@ export async function GET(req: NextRequest) {
     gcidToPrimaryCampaignId.set(c.google_campaign_id || String(c.id), String(c.id));
   }
 
-  // ─── 全量 stats 聚合（按 google_campaign_id + date 去重后求和，消除重复 campaign 导致的数据偏差） ───
+  // ─── 全量 stats 聚合 + 佣金聚合（并行查询） ───
   const allStatsMap = new Map<string, { cost: number; clicks: number; impressions: number }>();
 
-  if (allCampaignIdsIncludingDupes.length > 0) {
-    const rawStatsRows = await prisma.ads_daily_stats.groupBy({
-      by: ["campaign_id", "date"],
-      where: {
-        campaign_id: { in: allCampaignIdsIncludingDupes },
-        date: { gte: statsDateStart, lt: statsDateEnd },
-        is_deleted: 0,
-      } as never,
-      _sum: { cost: true, clicks: true, impressions: true },
-    });
+  const [rawStatsRows, commissionAgg] = await Promise.all([
+    allCampaignIdsIncludingDupes.length > 0
+      ? prisma.ads_daily_stats.groupBy({
+          by: ["campaign_id", "date"],
+          where: {
+            campaign_id: { in: allCampaignIdsIncludingDupes },
+            date: { gte: statsDateStart, lt: statsDateEnd },
+            is_deleted: 0,
+          } as never,
+          _sum: { cost: true, clicks: true, impressions: true },
+        })
+      : [],
+    prisma.$queryRawUnsafe<
+      {
+        user_merchant_id: bigint;
+        merchant_name: string;
+        total_commission: number;
+        rejected_commission: number;
+        approved_commission: number;
+        paid_commission: number;
+        pending_commission: number;
+        order_count: number;
+      }[]
+    >(`
+      SELECT
+        user_merchant_id,
+        MAX(merchant_name) as merchant_name,
+        SUM(CAST(commission_amount AS DECIMAL(12,2))) as total_commission,
+        SUM(CASE WHEN status = 'rejected' THEN CAST(commission_amount AS DECIMAL(12,2)) ELSE 0 END) as rejected_commission,
+        SUM(CASE WHEN status = 'approved' THEN CAST(commission_amount AS DECIMAL(12,2)) ELSE 0 END) as approved_commission,
+        SUM(CASE WHEN status = 'paid' THEN CAST(commission_amount AS DECIMAL(12,2)) ELSE 0 END) as paid_commission,
+        SUM(CASE WHEN status = 'pending' THEN CAST(commission_amount AS DECIMAL(12,2)) ELSE 0 END) as pending_commission,
+        COUNT(*) as order_count
+      FROM affiliate_transactions
+      WHERE user_id = ? AND is_deleted = 0
+        AND transaction_time >= ? AND transaction_time < ?
+      GROUP BY user_merchant_id
+    `, userId, txnStart, txnEnd),
+  ]);
 
-    // 按 (google_campaign_id, date) 去重：同一 gcid+date 取 cost 最大的一条
+  if (rawStatsRows.length > 0) {
     const gcidDateBest = new Map<string, { primaryId: string; cost: number; clicks: number; impressions: number }>();
     for (const s of rawStatsRows) {
       const gcid = campaignIdToGcid.get(String(s.campaign_id));
@@ -204,7 +233,6 @@ export async function GET(req: NextRequest) {
       }
     }
 
-    // 按 primaryId（去重后的 campaign）汇总所有日期
     for (const entry of gcidDateBest.values()) {
       const existing = allStatsMap.get(entry.primaryId);
       if (existing) {
@@ -216,34 +244,6 @@ export async function GET(req: NextRequest) {
       }
     }
   }
-
-  // ─── 全量佣金聚合（按 merchant，与日期范围一致） ───
-  const commissionAgg = await prisma.$queryRawUnsafe<
-    {
-      user_merchant_id: bigint;
-      merchant_name: string;
-      total_commission: number;
-      rejected_commission: number;
-      approved_commission: number;
-      paid_commission: number;
-      pending_commission: number;
-      order_count: number;
-    }[]
-  >(`
-    SELECT
-      user_merchant_id,
-      MAX(merchant_name) as merchant_name,
-      SUM(CAST(commission_amount AS DECIMAL(12,2))) as total_commission,
-      SUM(CASE WHEN status = 'rejected' THEN CAST(commission_amount AS DECIMAL(12,2)) ELSE 0 END) as rejected_commission,
-      SUM(CASE WHEN status = 'approved' THEN CAST(commission_amount AS DECIMAL(12,2)) ELSE 0 END) as approved_commission,
-      SUM(CASE WHEN status = 'paid' THEN CAST(commission_amount AS DECIMAL(12,2)) ELSE 0 END) as paid_commission,
-      SUM(CASE WHEN status = 'pending' THEN CAST(commission_amount AS DECIMAL(12,2)) ELSE 0 END) as pending_commission,
-      COUNT(*) as order_count
-    FROM affiliate_transactions
-    WHERE user_id = ? AND is_deleted = 0
-      AND transaction_time >= ? AND transaction_time < ?
-    GROUP BY user_merchant_id
-  `, userId, txnStart, txnEnd);
 
   const commissionByMerchant = new Map<string, {
     commission: number; rejected: number; approved: number;

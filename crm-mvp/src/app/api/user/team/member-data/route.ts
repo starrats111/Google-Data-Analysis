@@ -95,16 +95,32 @@ export const GET = withLeader(async (req: NextRequest, { user }) => {
 
   const allIdsForStats = [...campaignIds, ...extraCampaignIds];
 
-  // 按 campaign_id 聚合 cost/clicks/impressions（含重复记录，取较高值）
-  const rawStatsAgg = await prisma.ads_daily_stats.groupBy({
-    by: ["campaign_id"],
-    where: {
-      campaign_id: { in: allIdsForStats },
-      date: { gte: statsStart, lt: statsEnd },
-      is_deleted: 0,
-    } as never,
-    _sum: { cost: true, clicks: true, impressions: true },
-  });
+  // 按 campaign_id 聚合 cost/clicks/impressions + 佣金（并行查询）
+  const [rawStatsAgg, commissionAgg] = await Promise.all([
+    prisma.ads_daily_stats.groupBy({
+      by: ["campaign_id"],
+      where: {
+        campaign_id: { in: allIdsForStats },
+        date: { gte: statsStart, lt: statsEnd },
+        is_deleted: 0,
+      } as never,
+      _sum: { cost: true, clicks: true, impressions: true },
+    }),
+    prisma.$queryRawUnsafe<
+      { user_merchant_id: bigint; total_commission: number; rejected_commission: number; approved_commission: number; order_count: number }[]
+    >(`
+      SELECT
+        user_merchant_id,
+        SUM(CAST(commission_amount AS DECIMAL(12,2))) as total_commission,
+        SUM(CASE WHEN status = 'rejected' THEN CAST(commission_amount AS DECIMAL(12,2)) ELSE 0 END) as rejected_commission,
+        SUM(CASE WHEN status = 'approved' THEN CAST(commission_amount AS DECIMAL(12,2)) ELSE 0 END) as approved_commission,
+        COUNT(*) as order_count
+      FROM affiliate_transactions
+      WHERE user_id = ? AND is_deleted = 0
+        AND transaction_time >= ? AND transaction_time < ?
+      GROUP BY user_merchant_id
+    `, targetId, txnStart, txnEnd),
+  ]);
 
   const statsMap = new Map<string, { cost: number; clicks: number; impressions: number }>();
   for (const s of rawStatsAgg) {
@@ -119,22 +135,6 @@ export const GET = withLeader(async (req: NextRequest, { user }) => {
       statsMap.set(key, { cost, clicks, impressions });
     }
   }
-
-  // 佣金统一从 affiliate_transactions 聚合（与数据中心口径一致）
-  const commissionAgg = await prisma.$queryRawUnsafe<
-    { user_merchant_id: bigint; total_commission: number; rejected_commission: number; approved_commission: number; order_count: number }[]
-  >(`
-    SELECT
-      user_merchant_id,
-      SUM(CAST(commission_amount AS DECIMAL(12,2))) as total_commission,
-      SUM(CASE WHEN status = 'rejected' THEN CAST(commission_amount AS DECIMAL(12,2)) ELSE 0 END) as rejected_commission,
-      SUM(CASE WHEN status = 'approved' THEN CAST(commission_amount AS DECIMAL(12,2)) ELSE 0 END) as approved_commission,
-      COUNT(*) as order_count
-    FROM affiliate_transactions
-    WHERE user_id = ? AND is_deleted = 0
-      AND transaction_time >= ? AND transaction_time < ?
-    GROUP BY user_merchant_id
-  `, targetId, txnStart, txnEnd);
 
   const commissionByMerchant = new Map<string, { commission: number; rejected: number; approved: number; orders: number }>();
   let totalCommissionFromTxn = 0;

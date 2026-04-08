@@ -30,6 +30,9 @@ const POLICY_CATEGORY_CN: Record<string, string> = {
   surveillance: "监控设备", bail_bonds: "保释金", payday_loans: "发薪日贷款",
 };
 
+// 冷却 60s：避免每次 GET 都触发 autoLinkAndClaimMerchants
+const _autoLinkCooldown = new Map<string, number>();
+
 /**
  * 批量匹配推荐/违规/政策标签
  * 用 merchant_name 做模糊匹配（大小写不敏感）
@@ -210,11 +213,14 @@ export const GET = withUser(async (req: NextRequest, { user }) => {
   }
 
   if (tab === "claimed") {
-    // ─── 数据一致性修复：自动关联未链接的广告系列 + 同步商家状态 ───
-    try {
-      await autoLinkAndClaimMerchants(userId);
-    } catch (err) {
-      console.error("[Merchants] 自动关联认领失败:", err);
+    // ─── 数据一致性修复：自动关联未链接的广告系列 + 同步商家状态（非阻塞，60s 冷却）───
+    const cooldownKey = String(userId);
+    const lastRun = _autoLinkCooldown.get(cooldownKey) || 0;
+    if (Date.now() - lastRun > 60_000) {
+      _autoLinkCooldown.set(cooldownKey, Date.now());
+      autoLinkAndClaimMerchants(userId).catch((err) =>
+        console.error("[Merchants] 自动关联认领失败:", err),
+      );
     }
 
     // ─── 我的商家：查 status="claimed" 或 "paused" 的商家（paused = 已认领但广告暂停）───

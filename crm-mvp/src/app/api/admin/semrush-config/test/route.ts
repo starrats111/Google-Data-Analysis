@@ -51,7 +51,7 @@ export async function POST(req: NextRequest) {
   try {
     const ts = Date.now();
     const loginUrl = `${LOGIN_URL}?username=${encodeURIComponent(username)}&password=${encodeURIComponent(password)}&ts=${ts}`;
-    const loginRes = curlFetch(loginUrl, {
+    const loginRes = await curlFetch(loginUrl, {
       headers: { "user-agent": USER_AGENT, origin: LOGIN_ORIGIN },
       timeoutMs: 15000,
     });
@@ -83,7 +83,7 @@ export async function POST(req: NextRequest) {
 
   try {
     const initCookieStr = Object.entries(cookies).map(([k, v]) => `${k}=${v}`).join("; ");
-    const pageRes = curlFetch("https://sem.3ue.co/analytics/overview/", {
+    const pageRes = await curlFetch("https://sem.3ue.co/analytics/overview/", {
       headers: {
         "user-agent": USER_AGENT,
         accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
@@ -108,7 +108,7 @@ export async function POST(req: NextRequest) {
       method: "user.Databases",
       params: { userId: parseInt(userId), apiKey },
     };
-    const rpcRes = curlFetch(RPC_URL, {
+    const rpcRes = await curlFetch(RPC_URL, {
       method: "POST",
       headers: {
         "user-agent": USER_AGENT,
@@ -165,7 +165,7 @@ export async function POST(req: NextRequest) {
         apiKey,
       },
     };
-    const kwRes = curlFetch(RPC_URL, {
+    const kwRes = await curlFetch(RPC_URL, {
       method: "POST",
       headers: {
         "user-agent": USER_AGENT,

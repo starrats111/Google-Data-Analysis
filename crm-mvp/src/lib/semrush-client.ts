@@ -6,7 +6,10 @@
  * 安全防护：全局请求队列限流 + 域名结果缓存 + 会话复用
  */
 import { getSystemConfigsByPrefix } from "@/lib/system-config";
-import { execFileSync } from "child_process";
+import { execFile } from "child_process";
+import { promisify } from "util";
+
+const execFileAsync = promisify(execFile);
 
 const USER_AGENT =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36";
@@ -17,8 +20,8 @@ const RPC_ORIGIN = "https://sem.3ue.co";
 
 // ─── 全局安全防护：限流 + 缓存 ───
 
-const MIN_REQUEST_INTERVAL_MS = 4000;
-const RANDOM_JITTER_MAX_MS = 3000;
+const MIN_REQUEST_INTERVAL_MS = 1500;
+const RANDOM_JITTER_MAX_MS = 1000;
 const DOMAIN_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
 const SESSION_TTL_MS = 30 * 60 * 1000;
 
@@ -140,10 +143,10 @@ interface CurlResponse {
   cookies: Record<string, string>;
 }
 
-export function curlFetch(
+export async function curlFetch(
   url: string,
   opts: { method?: string; headers?: Record<string, string>; body?: string; timeoutMs?: number; followRedirects?: boolean } = {},
-): CurlResponse {
+): Promise<CurlResponse> {
   const args: string[] = ["-s", "-i", "--max-time", String(Math.ceil((opts.timeoutMs || 30000) / 1000))];
   if (opts.followRedirects) args.push("-L");
   if (opts.method) args.push("-X", opts.method);
@@ -153,7 +156,7 @@ export function curlFetch(
   if (opts.body) args.push("-d", opts.body);
   args.push(url);
 
-  const raw = execFileSync("curl", args, {
+  const { stdout: raw } = await execFileAsync("curl", args, {
     timeout: (opts.timeoutMs || 30000) + 5000,
     encoding: "utf-8",
     maxBuffer: 10 * 1024 * 1024,
@@ -422,7 +425,7 @@ export class SemRushClient {
     await guard.waitForSlot();
     const ts = Date.now();
     const url = `${LOGIN_URL}?username=${encodeURIComponent(this.creds.username)}&password=${encodeURIComponent(this.creds.password)}&ts=${ts}`;
-    const res = curlFetch(url, {
+    const res = await curlFetch(url, {
       headers: { "user-agent": USER_AGENT, origin: LOGIN_ORIGIN },
       timeoutMs: 20000,
     });
@@ -444,7 +447,7 @@ export class SemRushClient {
     await guard.waitForSlot();
     try {
       const cookieStr = Object.entries(this.cookies).map(([k, v]) => `${k}=${v}`).join("; ");
-      const pageRes = curlFetch("https://sem.3ue.co/analytics/overview/", {
+      const pageRes = await curlFetch("https://sem.3ue.co/analytics/overview/", {
         headers: {
           "user-agent": USER_AGENT,
           accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
@@ -469,7 +472,7 @@ export class SemRushClient {
     if (!this.token) await this.login();
     await guard.waitForSlot();
     const cookieStr = Object.entries(this.cookies).map(([k, v]) => `${k}=${v}`).join("; ");
-    const res = curlFetch(RPC_URL, {
+    const res = await curlFetch(RPC_URL, {
       method: "POST",
       headers: {
         "user-agent": USER_AGENT,
@@ -652,19 +655,81 @@ export class SemRushClient {
     console.log(`[SemRush] 开始查询: ${domain} (db=${this.creds.database})（队列状态: ${JSON.stringify(guard.getStats())}）`);
     await this.login();
 
-    const kws = await this.keywords(domain, 100);
+    // 批量 RPC：keywords + adsOverview + reportToken + ratesDate 合并为一次请求
+    const batchPayload = [
+      {
+        id: 13, jsonrpc: "2.0", method: "organic.PositionsOverview",
+        params: {
+          request_id: crypto.randomUUID(), report: "domain.overview",
+          args: { database: this.creds.database, dateType: "daily", dateFormat: "date", searchItem: domain, searchType: "domain", positionsType: "all" },
+          userId: parseInt(this.creds.userId), apiKey: this.creds.apiKey,
+        },
+      },
+      {
+        id: 14, jsonrpc: "2.0", method: "adwords.PositionsOverview",
+        params: {
+          request_id: crypto.randomUUID(), report: "domain.overview",
+          args: { database: this.creds.database, dateType: "daily", dateFormat: "date", searchItem: domain, searchType: "domain", positionsType: "all" },
+          userId: parseInt(this.creds.userId), apiKey: this.creds.apiKey,
+        },
+      },
+      {
+        id: 11, jsonrpc: "2.0", method: "token.Get",
+        params: {
+          reportType: "adwords.copies", database: this.creds.database,
+          date: Date.now(), dateType: "daily", searchItem: domain,
+          page: 1, pageSize: 100,
+          userId: parseInt(this.creds.userId), apiKey: this.creds.apiKey,
+        },
+      },
+      { id: 1, jsonrpc: "2.0", method: "user.Databases", params: { userId: parseInt(this.creds.userId), apiKey: this.creds.apiKey } },
+      { id: 2, jsonrpc: "2.0", method: "adwords.SnapshotDates", params: { database: this.creds.database, userId: parseInt(this.creds.userId), apiKey: this.creds.apiKey } },
+      { id: 3, jsonrpc: "2.0", method: "currency.Rates", params: { date: Date.now(), userId: parseInt(this.creds.userId), apiKey: this.creds.apiKey } },
+    ];
+
+    const batchResponse = (await this.rpc(batchPayload)) as any[];
+    const byId = new Map(batchResponse.map((r: any) => [r.id, r]));
+
+    const kwRows = byId.get(13)?.result || [];
+    const kws = kwRows.slice(0, 100).map((r: any) => parseKeywordRow(r));
     console.log(`[SemRush] 获取 ${kws.length} 个关键词 for ${domain}`);
 
-    const ads = await this.adsOverview(domain, 20);
+    const adsRows = byId.get(14)?.result || [];
+    const ads = adsRows.slice(0, 20).map((r: any) => ({ title: r.title || "", description: r.description || "" }));
+
+    const reportToken = String(byId.get(11)?.result?.token || "");
+    const dateStr = normalizeReportDate(String(byId.get(2)?.result?.daily?.[0] || ""));
 
     let copiesData: { date: string; total: number; samples: { title: string; description: string }[] } = { date: "", total: 0, samples: [] };
-    try {
-      const reportToken = await this.getReportToken(domain);
-      if (reportToken) {
-        copiesData = await this.copies(domain, reportToken);
+    if (reportToken && dateStr) {
+      try {
+        const copiesPayload = [
+          {
+            id: 5, jsonrpc: "2.0", method: "adwords.Copies",
+            params: {
+              token: reportToken, database: this.creds.database, searchItem: domain, searchType: "domain",
+              date: dateStr, dateType: "daily", filter: {},
+              display: { order: { field: "copy_positions", direction: "desc" }, page: 1, pageSize: 100 },
+              userId: parseInt(this.creds.userId),
+            },
+          },
+          {
+            id: 6, jsonrpc: "2.0", method: "adwords.CopiesTotal",
+            params: {
+              token: reportToken, database: this.creds.database, searchItem: domain, searchType: "domain",
+              date: dateStr, dateType: "daily", filter: {},
+              display: { order: { field: "copy_positions", direction: "desc" }, page: 1, pageSize: 100 },
+              userId: parseInt(this.creds.userId),
+            },
+          },
+        ];
+        const copiesResp = (await this.rpc(copiesPayload)) as any[];
+        const rows = copiesResp[0]?.result || [];
+        const total = copiesResp[1]?.result || 0;
+        copiesData = { date: dateStr, total, samples: rows.slice(0, 100).map((r: any) => ({ title: r.title || "", description: r.description || "" })) };
+      } catch (err) {
+        console.warn("[SemRush] copies 查询失败，使用 ads_overview 数据:", err);
       }
-    } catch (err) {
-      console.warn("[SemRush] copies 查询失败，使用 ads_overview 数据:", err);
     }
 
     const creativeSamples = selectCreativeSamples(ads, copiesData.samples);

@@ -91,18 +91,35 @@ export const GET = withLeader(async (req: NextRequest, { user }) => {
   const allCampaignIds = validCampaigns.map((c) => c.id);
   const allIdsForStats = [...allCampaignIds, ...extraIds];
 
-  // 批量聚合 cost/clicks/impressions（含重复 campaign 的 stats，取较高值）
-  const rawStatsAgg = allIdsForStats.length > 0
-    ? await prisma.ads_daily_stats.groupBy({
-        by: ["campaign_id"],
-        where: {
-          campaign_id: { in: allIdsForStats },
-          date: { gte: statsStart, lt: statsEnd },
-          is_deleted: 0,
-        } as never,
-        _sum: { cost: true, clicks: true, impressions: true },
-      })
-    : [];
+  // 批量聚合 cost/clicks/impressions + 佣金（并行查询）
+  const [rawStatsAgg, commissionAgg] = await Promise.all([
+    allIdsForStats.length > 0
+      ? prisma.ads_daily_stats.groupBy({
+          by: ["campaign_id"],
+          where: {
+            campaign_id: { in: allIdsForStats },
+            date: { gte: statsStart, lt: statsEnd },
+            is_deleted: 0,
+          } as never,
+          _sum: { cost: true, clicks: true, impressions: true },
+        })
+      : [],
+    memberIds.length > 0
+      ? prisma.$queryRawUnsafe<
+          { user_id: bigint; total_commission: number; rejected_commission: number }[]
+        >(`
+          SELECT
+            user_id,
+            SUM(CAST(commission_amount AS DECIMAL(12,2))) as total_commission,
+            SUM(CASE WHEN status = 'rejected' THEN CAST(commission_amount AS DECIMAL(12,2)) ELSE 0 END) as rejected_commission
+          FROM affiliate_transactions
+          WHERE user_id IN (${memberIds.map(() => "?").join(",")}) AND is_deleted = 0
+            AND transaction_time >= ? AND transaction_time < ?
+          GROUP BY user_id
+        `, ...memberIds, txnStart, txnEnd)
+      : [],
+  ]);
+
   const statsAgg: typeof rawStatsAgg = [];
   const mergedStats = new Map<string, typeof rawStatsAgg[0]>();
   for (const s of rawStatsAgg) {
@@ -126,22 +143,6 @@ export const GET = withLeader(async (req: NextRequest, { user }) => {
       },
     ])
   );
-
-  // 佣金+拒付统一从 affiliate_transactions 聚合（与数据中心口径一致，排除未关联交易）
-  const commissionAgg = memberIds.length > 0
-    ? await prisma.$queryRawUnsafe<
-        { user_id: bigint; total_commission: number; rejected_commission: number }[]
-      >(`
-        SELECT
-          user_id,
-          SUM(CAST(commission_amount AS DECIMAL(12,2))) as total_commission,
-          SUM(CASE WHEN status = 'rejected' THEN CAST(commission_amount AS DECIMAL(12,2)) ELSE 0 END) as rejected_commission
-        FROM affiliate_transactions
-        WHERE user_id IN (${memberIds.map(() => "?").join(",")}) AND is_deleted = 0
-          AND transaction_time >= ? AND transaction_time < ?
-        GROUP BY user_id
-      `, ...memberIds, txnStart, txnEnd)
-    : [];
 
   const commissionByUser = new Map<string, { commission: number; rejected: number }>();
   for (const r of commissionAgg) {

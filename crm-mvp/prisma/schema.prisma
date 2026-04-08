@@ -152,6 +152,8 @@ model user_merchants {
 
   @@index([user_id, status], map: "idx_user_status")
   @@index([user_id, platform], map: "idx_user_platform")
+  @@index([user_id, platform, merchant_id], map: "idx_user_plat_mid")
+  @@index([violation_status], map: "idx_violation_status")
 }
 
 // -----------------------------------------------------------
@@ -276,7 +278,9 @@ model campaigns {
   created_at         DateTime @default(now()) @db.DateTime(0)
   updated_at         DateTime @default(now()) @updatedAt @db.DateTime(0)
 
-  @@index([user_id], map: "idx_user")
+  @@index([user_id, is_deleted], map: "idx_user")
+  @@index([user_id, status, is_deleted], map: "idx_user_status_del")
+  @@index([user_id, mcc_id], map: "idx_user_mcc")
   @@index([user_merchant_id], map: "idx_user_merchant")
   @@index([google_campaign_id], map: "idx_google_campaign")
 }
@@ -416,6 +420,8 @@ model articles {
 
   @@index([user_id], map: "idx_user")
   @@index([user_merchant_id], map: "idx_user_merchant")
+  @@index([user_merchant_id, status], map: "idx_merchant_status")
+  @@index([publish_site_id, is_deleted], map: "idx_site_del")
   @@index([status], map: "idx_status")
 }
 
@@ -583,7 +589,6 @@ model exchange_rate_snapshots {
   created_at DateTime @default(now()) @db.DateTime(0)
 
   @@unique([currency, date], map: "uk_currency_date")
-  @@index([currency], map: "idx_currency")
 }
 
 // -----------------------------------------------------------
@@ -775,4 +780,5 @@ model kyads_click_tasks {
 
   @@index([user_id, status], map: "idx_user_status")
   @@index([status, created_at], map: "idx_status_created")
+  @@index([campaign_id], map: "idx_campaign")
 }

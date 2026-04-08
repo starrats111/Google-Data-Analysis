@@ -5,6 +5,21 @@
 import { crawlPage, fetchUrlMeta, fetchPageImages, searchMerchantImages } from "@/lib/crawler";
 import { getAdMarketConfig } from "@/lib/ad-market";
 
+// 全局爬取并发控制：最多 2 个同时执行
+let _crawlActive = 0;
+const MAX_CONCURRENT_CRAWLS = 2;
+
+async function acquireCrawlSlot(): Promise<void> {
+  while (_crawlActive >= MAX_CONCURRENT_CRAWLS) {
+    await new Promise(r => setTimeout(r, 1000));
+  }
+  _crawlActive++;
+}
+
+function releaseCrawlSlot(): void {
+  _crawlActive = Math.max(0, _crawlActive - 1);
+}
+
 // ─── 类型定义 ───
 
 export interface CrawledProduct {
@@ -675,7 +690,7 @@ async function discoverSitelinkCandidates(
 
   if (pageLinks.length > 0) {
     const metaResults = await Promise.all(
-      pageLinks.slice(0, 15).map(async (link) => {
+      pageLinks.slice(0, 5).map(async (link) => {
         try {
           const meta = await fetchUrlMeta(link.url);
           return { link, meta };
@@ -743,10 +758,13 @@ async function collectImages(
 
   if (allImgs.length < 60 && links.length > 0) {
     const subPages = links.slice(0, 9).map((l) => l.url);
-    const batchResults = await Promise.all(subPages.map((u) => fetchPageImages(u).catch(() => [] as string[])));
-    for (const imgs of batchResults) for (const img of imgs) {
-      if (allImgs.length >= 80) break;
-      if (!allImgs.includes(img)) allImgs.push(img);
+    for (let i = 0; i < subPages.length; i += 3) {
+      const batch = subPages.slice(i, i + 3);
+      const batchResults = await Promise.all(batch.map((u) => fetchPageImages(u).catch(() => [] as string[])));
+      for (const imgs of batchResults) for (const img of imgs) {
+        if (allImgs.length >= 80) break;
+        if (!allImgs.includes(img)) allImgs.push(img);
+      }
     }
   }
 
@@ -769,6 +787,8 @@ export async function buildCrawlCache(
   semrushData?: { titles: string[]; descriptions: string[] },
   options?: { forcePuppeteer?: boolean },
 ): Promise<CrawlCache> {
+  await acquireCrawlSlot();
+  try {
   let crawlResult = { html: "", links: [] as { url: string; text: string }[], images: [] as string[], method: "failed", error: "" };
 
   if (merchantUrl) {
@@ -882,4 +902,7 @@ export async function buildCrawlCache(
     crawlMethod: crawlResult.method,
     crawlFailed,
   };
+  } finally {
+    releaseCrawlSlot();
+  }
 }

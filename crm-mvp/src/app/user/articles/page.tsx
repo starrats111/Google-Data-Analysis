@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import {
   Card, Table, Tag, Button, Space, Select, Modal, Form, Typography, Popconfirm, App, Input,
 } from "antd";
@@ -131,7 +131,7 @@ export default function ArticlesPage() {
   const statusColor: Record<string, string> = { generating: "processing", draft: "default", preview: "warning", published: "success", failed: "error" };
   const statusLabel: Record<string, string> = { generating: "生成中", draft: "草稿", preview: "待预览", published: "已发布", failed: "失败" };
 
-  const articleColumns = [
+  const articleColumns = useMemo(() => [
     {
       title: "文章名", dataIndex: "title", ellipsis: true, width: 240,
       render: (v: string | null) => v || <Text type="secondary">生成中...</Text>,
@@ -187,7 +187,7 @@ export default function ArticlesPage() {
         </Space>
       ),
     },
-  ];
+  ], [sites, statusFilter, retrying, handleRetry, handlePublish, handleDelete, copyUrl]);
 
   return (
     <div>
