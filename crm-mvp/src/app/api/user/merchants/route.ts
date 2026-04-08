@@ -210,18 +210,11 @@ export const GET = withUser(async (req: NextRequest, { user }) => {
   }
 
   if (tab === "claimed") {
-    // ─── 数据一致性修复：有 campaigns 但无 claimed/paused 商家时，自动关联 + 认领 ───
-    const [consistCampaignCount, consistClaimedCount] = await Promise.all([
-      prisma.campaigns.count({ where: { user_id: userId, is_deleted: 0, google_campaign_id: { not: null } } }),
-      prisma.user_merchants.count({ where: { user_id: userId, is_deleted: 0, status: { in: ["claimed", "paused"] } } }),
-    ]);
-
-    if (consistCampaignCount > 0 && consistClaimedCount === 0) {
-      try {
-        await autoLinkAndClaimMerchants(userId);
-      } catch (err) {
-        console.error("[Merchants] 自动关联认领失败:", err);
-      }
+    // ─── 数据一致性修复：自动关联未链接的广告系列 + 同步商家状态 ───
+    try {
+      await autoLinkAndClaimMerchants(userId);
+    } catch (err) {
+      console.error("[Merchants] 自动关联认领失败:", err);
     }
 
     // ─── 我的商家：查 status="claimed" 或 "paused" 的商家（paused = 已认领但广告暂停）───
@@ -254,13 +247,31 @@ export const GET = withUser(async (req: NextRequest, { user }) => {
 
     // 通过 user_merchant_id 查关联的广告系列（而非从 campaign_name 解析 MID）
     const merchantIds = merchants.map((m: any) => m.id);
-    const campaigns = merchantIds.length > 0
+    const rawCampaigns = merchantIds.length > 0
       ? await prisma.campaigns.findMany({
           where: { user_id: userId, is_deleted: 0, user_merchant_id: { in: merchantIds } },
-          select: { user_merchant_id: true, google_status: true, google_campaign_id: true, campaign_name: true },
+          select: { id: true, user_merchant_id: true, google_status: true, google_campaign_id: true, campaign_name: true, last_google_sync_at: true },
         })
       : [];
 
+    // 按 google_campaign_id 去重（与数据中心逻辑一致），保留最近同步的版本
+    const gcidDedup = new Map<string, typeof rawCampaigns[0]>();
+    for (const c of rawCampaigns) {
+      const gcid = c.google_campaign_id || `__local_${c.id}`;
+      const existing = gcidDedup.get(gcid);
+      if (!existing) {
+        gcidDedup.set(gcid, c);
+      } else {
+        const cTime = c.last_google_sync_at?.getTime() || 0;
+        const eTime = existing.last_google_sync_at?.getTime() || 0;
+        if (cTime > eTime || (cTime === eTime && Number(c.id) > Number(existing.id))) {
+          gcidDedup.set(gcid, c);
+        }
+      }
+    }
+    const campaigns = [...gcidDedup.values()];
+
+    // 按 user_merchant_id 选出代表广告：ENABLED 优先
     const campaignMap = new Map<string, { status: string | null; campaignName: string | null; campaignId: string | null }>();
     for (const c of campaigns) {
       const key = c.user_merchant_id.toString();

@@ -173,17 +173,34 @@ export async function autoLinkAndCreateMerchants(userId: bigint): Promise<number
  */
 export async function syncMerchantStatusFromCampaigns(userId: bigint): Promise<number> {
   // 拉取所有有关联广告的商家及其广告状态
-  const linkedCampaigns = await prisma.campaigns.findMany({
+  const rawLinked = await prisma.campaigns.findMany({
     where: {
       user_id: userId,
       is_deleted: 0,
       user_merchant_id: { not: BigInt(0) },
       google_campaign_id: { not: null },
     },
-    select: { user_merchant_id: true, google_status: true },
+    select: { id: true, user_merchant_id: true, google_status: true, google_campaign_id: true, last_google_sync_at: true },
   });
 
-  if (linkedCampaigns.length === 0) return 0;
+  if (rawLinked.length === 0) return 0;
+
+  // 按 google_campaign_id 去重，保留最近同步的版本，避免重复记录导致状态不一致
+  const gcidDedup = new Map<string, typeof rawLinked[0]>();
+  for (const c of rawLinked) {
+    const gcid = c.google_campaign_id || `__local_${c.id}`;
+    const existing = gcidDedup.get(gcid);
+    if (!existing) {
+      gcidDedup.set(gcid, c);
+    } else {
+      const cTime = c.last_google_sync_at?.getTime() || 0;
+      const eTime = existing.last_google_sync_at?.getTime() || 0;
+      if (cTime > eTime || (cTime === eTime && Number(c.id) > Number(existing.id))) {
+        gcidDedup.set(gcid, c);
+      }
+    }
+  }
+  const linkedCampaigns = [...gcidDedup.values()];
 
   // 对每个商家判断：是否有任意 ENABLED 广告
   const merchantHasEnabled = new Map<string, boolean>();
