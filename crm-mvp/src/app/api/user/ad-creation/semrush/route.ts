@@ -30,7 +30,7 @@ export async function POST(req: NextRequest) {
       maxCpc: Number(max_cpc || 0),
       biddingStrategy: bidding_strategy,
       aiRuleProfile: settings?.ai_rule_profile,
-      limit: 15,
+      limit: 8,
     });
 
     return apiSuccess(serializeData({

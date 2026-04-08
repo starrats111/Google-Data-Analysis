@@ -25,7 +25,7 @@ export function selectOptimizedKeywords(
   const optimized = optimizeKeywordCandidates(candidates, options);
   if (optimized.length > 0) return optimized;
 
-  const limit = Math.max(1, Math.min(options.limit ?? 10, 20));
+  const limit = Math.max(1, Math.min(options.limit ?? 8, 8));
   return candidates
     .filter((c) => !isPolicyRiskKeyword(c.phrase))
     .slice(0, limit)

@@ -36,7 +36,7 @@ export async function POST(req: NextRequest) {
       maxCpc: Number(max_cpc || 0),
       biddingStrategy: bidding_strategy,
       aiRuleProfile: settings?.ai_rule_profile,
-      limit: 15,
+      limit: 8,
     });
     return apiSuccess(serializeData({
       domain: result.domain,
@@ -61,7 +61,7 @@ export async function POST(req: NextRequest) {
         maxCpc: Number(max_cpc || 0),
         biddingStrategy: bidding_strategy,
         aiRuleProfile: settings?.ai_rule_profile,
-        limit: 15,
+        limit: 8,
       });
       return apiSuccess(serializeData({ domain, keywords: optimizedKeywords, raw_keywords: keywords }));
     }

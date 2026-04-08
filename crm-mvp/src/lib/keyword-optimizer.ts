@@ -234,8 +234,10 @@ function getRecommendedMatchType(score: number, tokenCount: number, dailyBudget:
   return "BROAD";
 }
 
+const MATCH_DESC: Record<KeywordMatchType, string> = { EXACT: "精确匹配", PHRASE: "短语匹配", BROAD: "广泛匹配" };
+
 /**
- * 生成句子级 reason（Adrian 风格：直接、有洞察力）
+ * 生成 Adrian 风格的选词理由 — 每个词要回答"为什么选它"
  */
 function buildSentenceReason(
   intentLayer: KeywordIntentLayer,
@@ -246,51 +248,34 @@ function buildSentenceReason(
   score: number,
   matchType: KeywordMatchType,
 ): string {
-  const intentDesc: Record<KeywordIntentLayer, string> = {
-    HIGH_INTENT: "高意图购买词",
-    FEATURE_SCENE: "功能场景词",
-    BRAND: "品牌/竞品词",
-    LONG_TAIL: "长尾精准词",
-    GENERAL: "通用词",
-  };
-  const matchDesc: Record<KeywordMatchType, string> = {
-    EXACT: "精确匹配",
-    PHRASE: "短语匹配",
-    BROAD: "广泛匹配",
-  };
-  const compDesc: Record<string, string> = {
-    LOW: "竞争度低，性价比高",
-    MEDIUM: "竞争适中，可测试",
-    HIGH: "竞争激烈，需控制出价",
-    UNKNOWN: "竞争数据未知",
-  };
-
   const parts: string[] = [];
-  parts.push(`${intentDesc[intentLayer]}，建议${matchDesc[matchType]}`);
-
-  if (effectiveBid != null) {
-    if (effectiveBid <= maxCpc) {
-      parts.push(`预估 CPC $${effectiveBid.toFixed(2)} 在预算内`);
-    } else {
-      parts.push(`预估 CPC $${effectiveBid.toFixed(2)} 略超目标 $${maxCpc.toFixed(2)}`);
-    }
-  }
-
-  parts.push(compDesc[competitionBand]);
 
   if (intentLayer === "HIGH_INTENT") {
-    parts.push("目标 ROAS ≥ 300%，出价优先级最高");
+    parts.push("高意图购买词，搜索者有明确购买意愿");
+    if (effectiveBid != null && effectiveBid <= maxCpc) {
+      parts.push(`CPC $${effectiveBid.toFixed(2)} 在预算内，转化率高`);
+    } else if (effectiveBid != null) {
+      parts.push(`CPC $${effectiveBid.toFixed(2)} 略高但转化价值大`);
+    }
+  } else if (intentLayer === "FEATURE_SCENE") {
+    parts.push("场景/功能词，精准触达有需求的用户群");
+  } else if (intentLayer === "BRAND") {
+    parts.push("品牌词，搜索者已认知品牌，点击率高");
   } else if (intentLayer === "LONG_TAIL") {
-    parts.push("搜索量小但意图明确，适合 DKI");
-  } else if (volume >= 5000) {
-    parts.push("搜索量充足，流量潜力大");
-  } else if (volume >= 1000) {
-    parts.push("搜索量稳定");
-  } else if (volume > 0) {
-    parts.push("搜索量较小，适合小预算精投");
+    parts.push("长尾精准词，竞争小、意图明确、ROI 优");
+  } else {
+    parts.push(`通用词，建议${MATCH_DESC[matchType]}配合否定词控制`);
   }
 
-  if (score < 30) parts.push("综合评分偏低，谨慎使用");
+  if (volume >= 5000) parts.push(`月搜索量 ${volume.toLocaleString()}，流量充足`);
+  else if (volume >= 1000) parts.push(`月搜索量 ${volume.toLocaleString()}，稳定可投`);
+  else if (volume >= 100) parts.push(`月搜索量 ${volume}，适合精准小预算投放`);
+
+  if (competitionBand === "LOW") parts.push("竞争低，性价比优");
+  else if (competitionBand === "MEDIUM") parts.push("竞争适中");
+  else if (competitionBand === "HIGH" && intentLayer === "HIGH_INTENT") parts.push("竞争高但值得投入");
+
+  parts.push(`建议${MATCH_DESC[matchType]}`);
 
   return parts.join("；") + "。";
 }
@@ -382,7 +367,7 @@ export function optimizeKeywordCandidates(
   const persona = getActivePersona(profile);
   const dailyBudget = parseBudget(options.dailyBudget);
   const maxCpc = parseMaxCpc(options.maxCpc);
-  const limit = Math.max(1, Math.min(options.limit ?? 10, 20));
+  const limit = Math.max(1, Math.min(options.limit ?? 8, 8));
   const seen = new Set<string>();
   const filtered: KeywordCandidate[] = [];
 
@@ -405,7 +390,7 @@ export function optimizeKeywordCandidates(
 
   const scored = filtered
     .map((candidate) => describeOptimizedKeyword(candidate, options))
-    .filter((kw) => kw.score >= 15)
+    .filter((kw) => kw.score >= 25)
     .sort((a, b) => {
       const intentPriority: Record<KeywordIntentLayer, number> = {
         HIGH_INTENT: 4,
@@ -439,14 +424,14 @@ function diversifyKeywordSelection(sorted: OptimizedKeyword[], limit: number): O
     layerBuckets[kw.intent_layer].push(kw);
   }
 
-  const layerOrder: KeywordIntentLayer[] = ["HIGH_INTENT", "FEATURE_SCENE", "BRAND", "LONG_TAIL", "GENERAL"];
+  const layerOrder: KeywordIntentLayer[] = ["HIGH_INTENT", "FEATURE_SCENE", "LONG_TAIL", "BRAND", "GENERAL"];
   for (const layer of layerOrder) {
     const bucket = layerBuckets[layer];
-    const slotCount = layer === "HIGH_INTENT" ? Math.ceil(limit * 0.35) :
-                      layer === "FEATURE_SCENE" ? Math.ceil(limit * 0.25) :
-                      layer === "BRAND" ? Math.ceil(limit * 0.15) :
-                      layer === "LONG_TAIL" ? Math.ceil(limit * 0.15) :
-                      Math.ceil(limit * 0.10);
+    const slotCount = layer === "HIGH_INTENT" ? 3 :
+                      layer === "FEATURE_SCENE" ? 2 :
+                      layer === "LONG_TAIL" ? 2 :
+                      layer === "BRAND" ? 1 :
+                      1;
     for (const kw of bucket) {
       if (result.length >= limit) break;
       if (usedPhrases.has(normalizePhrase(kw.phrase))) continue;
