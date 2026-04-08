@@ -532,11 +532,12 @@ export default function AdPreviewPage() {
       }
       setSemrushFailed(false);
       const kws = json.data?.keywords || [];
+      const rawCount = json.data?.raw_keyword_count ?? kws.length;
       if (kws.length === 0) { message.warning("SemRush 未找到该商家的关键词，请手动输入"); return; }
       const newKws = mergeSemrushKeywords(kws, kwList);
       if (newKws.length > 0) {
         setKwList((prev) => [...prev, ...newKws]);
-        message.success(`已从 SemRush 获取 ${newKws.length} 个关键词`);
+        message.success(`已从 SemRush 获取 ${newKws.length} 个关键词（从 ${rawCount} 个有机排名中精选）`);
       } else {
         message.info("SemRush 关键词已全部存在");
       }

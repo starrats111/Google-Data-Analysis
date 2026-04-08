@@ -30,7 +30,7 @@ export async function POST(req: NextRequest) {
       maxCpc: Number(max_cpc || 0),
       biddingStrategy: bidding_strategy,
       aiRuleProfile: settings?.ai_rule_profile,
-      limit: 5,
+      limit: 15,
     });
 
     return apiSuccess(serializeData({
@@ -39,6 +39,7 @@ export async function POST(req: NextRequest) {
       deduped_descriptions: result.dedupedDescriptions,
       keywords: optimizedKeywords,
       raw_keywords: result.keywords,
+      raw_keyword_count: result.keywords.length,
       total_copies: result.copies.total,
       creative_samples_count: result.creativeSamples.length,
     }));

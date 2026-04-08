@@ -36,12 +36,13 @@ export async function POST(req: NextRequest) {
       maxCpc: Number(max_cpc || 0),
       biddingStrategy: bidding_strategy,
       aiRuleProfile: settings?.ai_rule_profile,
-      limit: 12,
+      limit: 15,
     });
     return apiSuccess(serializeData({
       domain: result.domain,
       keywords: optimizedKeywords,
       raw_keywords: result.keywords,
+      raw_keyword_count: result.keywords.length,
       deduped_titles: result.dedupedTitles,
       deduped_descriptions: result.dedupedDescriptions,
     }));
@@ -60,7 +61,7 @@ export async function POST(req: NextRequest) {
         maxCpc: Number(max_cpc || 0),
         biddingStrategy: bidding_strategy,
         aiRuleProfile: settings?.ai_rule_profile,
-        limit: 12,
+        limit: 15,
       });
       return apiSuccess(serializeData({ domain, keywords: optimizedKeywords, raw_keywords: keywords }));
     }

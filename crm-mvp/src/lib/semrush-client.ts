@@ -261,6 +261,22 @@ export function dedupeAdDescriptions(descriptions: string[]): string[] {
   return items;
 }
 
+function parseKeywordRow(r: any): SemRushKeyword {
+  return {
+    phrase: String(r.phrase || r.keyword || ""),
+    volume: Number(r.volume || r.search_volume || 0),
+    cpc: r.cpc != null ? Number(r.cpc) : null,
+    competition: r.competition ?? r.competition_level ?? null,
+    suggested_bid: r.suggested_bid != null
+      ? Number(r.suggested_bid)
+      : r.suggestedBid != null
+        ? Number(r.suggestedBid)
+        : r.cpc != null
+          ? Number(r.cpc)
+          : null,
+  };
+}
+
 function normalizeReportDate(value: string | number): string {
   const text = String(value).trim();
   if (text.length === 8 && /^\d+$/.test(text)) return text;
@@ -575,19 +591,72 @@ export class SemRushClient {
     };
     const response = (await this.rpc(payload)) as any;
     const rows = response?.result || [];
-    return rows.slice(0, limit).map((r: any) => ({
-      phrase: String(r.phrase || ""),
-      volume: Number(r.volume || 0),
-      cpc: r.cpc != null ? Number(r.cpc) : null,
-      competition: r.competition ?? r.competition_level ?? null,
-      suggested_bid: r.suggested_bid != null
-        ? Number(r.suggested_bid)
-        : r.suggestedBid != null
-          ? Number(r.suggestedBid)
-          : r.cpc != null
-            ? Number(r.cpc)
-            : null,
-    }));
+    return rows.slice(0, limit).map((r: any) => parseKeywordRow(r));
+  }
+
+  /**
+   * 获取域名的完整有机搜索关键词列表（对应 SemRush organic positions 页面）。
+   * 使用 token + 分页，可获取数百个关键词而非概览的 5-10 个。
+   */
+  async organicPositions(domain: string, pageSize = 200): Promise<SemRushKeyword[]> {
+    const tokenPayload = {
+      id: 20, jsonrpc: "2.0", method: "token.Get",
+      params: {
+        reportType: "organic.positions", database: this.creds.database,
+        date: Date.now(), dateType: "daily", searchItem: domain,
+        page: 1, pageSize,
+        userId: parseInt(this.creds.userId), apiKey: this.creds.apiKey,
+      },
+    };
+    const tokenResp = (await this.rpc(tokenPayload)) as any;
+    const token = String(tokenResp?.result?.token || "");
+    if (!token) {
+      console.warn("[SemRush] organic.positions token 获取失败，回退到 overview");
+      return this.keywords(domain, 20);
+    }
+
+    const dateStr = normalizeReportDate(await this.getOrganicDate(domain));
+
+    const dataPayload = [
+      {
+        id: 21, jsonrpc: "2.0", method: "organic.Positions",
+        params: {
+          token, database: this.creds.database, searchItem: domain, searchType: "domain",
+          date: dateStr, dateType: "daily", filter: {},
+          display: { order: { field: "traffic", direction: "desc" }, page: 1, pageSize },
+          userId: parseInt(this.creds.userId),
+        },
+      },
+      {
+        id: 22, jsonrpc: "2.0", method: "organic.PositionsTotal",
+        params: {
+          token, database: this.creds.database, searchItem: domain, searchType: "domain",
+          date: dateStr, dateType: "daily", filter: {},
+          display: { order: { field: "traffic", direction: "desc" }, page: 1, pageSize },
+          userId: parseInt(this.creds.userId),
+        },
+      },
+    ];
+    const response = (await this.rpc(dataPayload)) as any[];
+    const rows = response[0]?.result || [];
+    const total = response[1]?.result || 0;
+    console.log(`[SemRush] organic.Positions: ${rows.length} rows / ${total} total for ${domain} (db=${this.creds.database})`);
+    return rows.map((r: any) => parseKeywordRow(r));
+  }
+
+  private async getOrganicDate(domain: string): Promise<string> {
+    try {
+      const payload = [
+        { id: 1, jsonrpc: "2.0", method: "user.Databases", params: { userId: parseInt(this.creds.userId), apiKey: this.creds.apiKey } },
+        { id: 2, jsonrpc: "2.0", method: "organic.SnapshotDates", params: { database: this.creds.database, userId: parseInt(this.creds.userId), apiKey: this.creds.apiKey } },
+      ];
+      const response = (await this.rpc(payload)) as any[];
+      const dateVal = response[1]?.result?.daily?.[0];
+      if (dateVal) return String(dateVal);
+    } catch (err) {
+      console.warn("[SemRush] organic.SnapshotDates 失败，回退到 adwords 日期:", err);
+    }
+    return await this.getRatesDate(domain);
   }
 
   async adsOverview(domain: string, limit = 10): Promise<{ title: string; description: string }[]> {
@@ -714,7 +783,13 @@ export class SemRushClient {
     console.log(`[SemRush] 开始查询: ${domain} (db=${this.creds.database})（队列状态: ${JSON.stringify(guard.getStats())}）`);
     await this.login();
 
-    const kws = await this.keywords(domain, 10);
+    let kws: SemRushKeyword[];
+    try {
+      kws = await this.organicPositions(domain, 200);
+    } catch (err) {
+      console.warn("[SemRush] organicPositions 失败，回退到 overview:", err);
+      kws = await this.keywords(domain, 20);
+    }
     const ads = await this.adsOverview(domain, 20);
 
     let copiesData: { date: string; total: number; samples: { title: string; description: string }[] } = { date: "", total: 0, samples: [] };

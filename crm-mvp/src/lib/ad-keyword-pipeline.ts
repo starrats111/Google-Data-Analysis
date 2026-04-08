@@ -25,9 +25,9 @@ export function selectOptimizedKeywords(
   const optimized = optimizeKeywordCandidates(candidates, options);
   if (optimized.length > 0) return optimized;
 
-  // Adrian 严选：硬上限 5 个
-  const limit = Math.max(1, Math.min(options.limit ?? 5, 5));
+  const limit = Math.max(1, Math.min(options.limit ?? 10, 20));
   return candidates
+    .filter((c) => !isPolicyRiskKeyword(c.phrase))
     .slice(0, limit)
     .map((candidate) => describeOptimizedKeyword(candidate, options))
     .sort((a, b) => b.score - a.score);

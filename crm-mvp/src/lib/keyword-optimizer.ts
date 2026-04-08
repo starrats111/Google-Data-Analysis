@@ -33,20 +33,25 @@ interface OptimizeKeywordOptions {
 
 const HIGH_INTENT_PATTERNS = [
   /\b(buy|shop|order|purchase|get|checkout|add to cart)\b/i,
-  /\b(case|cover|stand|holder|mount|strap|band|screen protector|charger)\b/i,
-  /\b(magsafe|wireless charging|fast charge|usb-?c)\b/i,
-  /\b(deal|sale|discount|coupon|promo|offer|cheap|price)\b/i,
+  /\b(deal|sale|discount|coupon|promo|offer|cheap|price|best price)\b/i,
+  /\b(delivery|shipping|next day|free shipping|express)\b/i,
+  /\bkit\b/i,
+  /\bfor sale\b/i,
+  /\b(subscribe|subscription|membership)\b/i,
   /\b(kaufen|bestellen|angebot|rabatt)\b/i,
   /\b(acheter|commander|promo|remise)\b/i,
   /\b(comprar|pedir|oferta|descuento)\b/i,
 ];
 
 const FEATURE_SCENE_PATTERNS = [
-  /\b(kickstand|clear|transparent|slim|thin|heavy.?duty|waterproof|shockproof|rugged)\b/i,
-  /\b(protect|protection|drop.?proof|military.?grade|anti.?scratch)\b/i,
-  /\b(compatible|for iphone|for samsung|for galaxy|for pixel)\b/i,
-  /\b(wireless|bluetooth|noise.?cancel|active|passive)\b/i,
+  /\b(how to|guide|beginner|starter|complete|step.?by.?step)\b/i,
+  /\b(indoor|outdoor|home|garden|diy)\b/i,
+  /\b(supply|supplies|equipment|tool|material)\b/i,
+  /\b(organic|natural|premium|professional|grade)\b/i,
   /\b(best|top.?rated|review|comparison|vs|alternative)\b/i,
+  /\b(compatible|for iphone|for samsung|for galaxy|for pixel)\b/i,
+  /\b(wireless|bluetooth|noise.?cancel)\b/i,
+  /\b(protect|protection|waterproof|shockproof)\b/i,
 ];
 
 const BRAND_PATTERNS = [
@@ -377,8 +382,7 @@ export function optimizeKeywordCandidates(
   const persona = getActivePersona(profile);
   const dailyBudget = parseBudget(options.dailyBudget);
   const maxCpc = parseMaxCpc(options.maxCpc);
-  // Adrian 严选：硬上限 5 个
-  const limit = Math.max(1, Math.min(options.limit ?? 5, 5));
+  const limit = Math.max(1, Math.min(options.limit ?? 10, 20));
   const seen = new Set<string>();
   const filtered: KeywordCandidate[] = [];
 
@@ -392,8 +396,8 @@ export function optimizeKeywordCandidates(
     if (persona.forbidden_terms.some((term) => normalized.includes(normalizePhrase(term)))) continue;
 
     const effectiveBid = getEffectiveBid(candidate);
-    if (effectiveBid != null && effectiveBid > maxCpc * 1.4) continue;
-    if (dailyBudget <= 2 && effectiveBid != null && effectiveBid > dailyBudget) continue;
+    if (effectiveBid != null && effectiveBid > maxCpc * 2.5) continue;
+    if (dailyBudget <= 2 && effectiveBid != null && effectiveBid > dailyBudget * 2) continue;
 
     seen.add(normalized);
     filtered.push({ ...candidate, phrase });
@@ -401,10 +405,8 @@ export function optimizeKeywordCandidates(
 
   const scored = filtered
     .map((candidate) => describeOptimizedKeyword(candidate, options))
-    // Adrian 严格阈值：score < 20 直接淘汰
-    .filter((kw) => kw.score >= 20)
+    .filter((kw) => kw.score >= 15)
     .sort((a, b) => {
-      // 意图层优先级排序
       const intentPriority: Record<KeywordIntentLayer, number> = {
         HIGH_INTENT: 4,
         FEATURE_SCENE: 3,
@@ -418,5 +420,50 @@ export function optimizeKeywordCandidates(
       return (b.volume || 0) - (a.volume || 0);
     });
 
-  return scored.slice(0, limit);
+  return diversifyKeywordSelection(scored, limit);
+}
+
+/**
+ * 多样化关键词选择：确保不同意图层都有代表，避免全部集中在同一类型
+ */
+function diversifyKeywordSelection(sorted: OptimizedKeyword[], limit: number): OptimizedKeyword[] {
+  if (sorted.length <= limit) return sorted;
+
+  const result: OptimizedKeyword[] = [];
+  const usedPhrases = new Set<string>();
+
+  const layerBuckets: Record<KeywordIntentLayer, OptimizedKeyword[]> = {
+    HIGH_INTENT: [], FEATURE_SCENE: [], BRAND: [], LONG_TAIL: [], GENERAL: [],
+  };
+  for (const kw of sorted) {
+    layerBuckets[kw.intent_layer].push(kw);
+  }
+
+  const layerOrder: KeywordIntentLayer[] = ["HIGH_INTENT", "FEATURE_SCENE", "BRAND", "LONG_TAIL", "GENERAL"];
+  for (const layer of layerOrder) {
+    const bucket = layerBuckets[layer];
+    const slotCount = layer === "HIGH_INTENT" ? Math.ceil(limit * 0.35) :
+                      layer === "FEATURE_SCENE" ? Math.ceil(limit * 0.25) :
+                      layer === "BRAND" ? Math.ceil(limit * 0.15) :
+                      layer === "LONG_TAIL" ? Math.ceil(limit * 0.15) :
+                      Math.ceil(limit * 0.10);
+    for (const kw of bucket) {
+      if (result.length >= limit) break;
+      if (usedPhrases.has(normalizePhrase(kw.phrase))) continue;
+      result.push(kw);
+      usedPhrases.add(normalizePhrase(kw.phrase));
+      if (result.filter(r => r.intent_layer === layer).length >= slotCount) break;
+    }
+  }
+
+  if (result.length < limit) {
+    for (const kw of sorted) {
+      if (result.length >= limit) break;
+      if (usedPhrases.has(normalizePhrase(kw.phrase))) continue;
+      result.push(kw);
+      usedPhrases.add(normalizePhrase(kw.phrase));
+    }
+  }
+
+  return result.sort((a, b) => b.score - a.score);
 }
