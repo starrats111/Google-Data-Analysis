@@ -535,7 +535,7 @@ function ScriptConfigTab() {
     }
     const script = generateLinkExchangeScript(
       apiKey,
-      window?.location?.origin ?? "https://google-data-analysis.top",
+      window?.location?.origin ?? "https://fengdu-ads.top",
       sheetUrl.trim()
     );
     navigator.clipboard.writeText(script).then(() => message.success("脚本已复制，粘贴到 Google Ads Script 即可运行"));

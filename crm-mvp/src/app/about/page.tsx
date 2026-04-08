@@ -230,19 +230,19 @@ export default function AboutPage() {
               <Paragraph style={{ fontSize: 16, marginBottom: 8 }}>
                 <MailOutlined style={{ marginRight: 8 }} />
                 <Text strong>Email:</Text>{" "}
-                <a href="mailto:admin@google-data-analysis.top">
-                  admin@google-data-analysis.top
+                <a href="mailto:admin@fengdu-ads.top">
+                  admin@fengdu-ads.top
                 </a>
               </Paragraph>
               <Paragraph style={{ fontSize: 16, marginBottom: 0 }}>
                 <GlobalOutlined style={{ marginRight: 8 }} />
                 <Text strong>Website:</Text>{" "}
                 <a
-                  href="https://google-data-analysis.top"
+                  href="https://fengdu-ads.top"
                   target="_blank"
                   rel="noopener noreferrer"
                 >
-                  google-data-analysis.top
+                  fengdu-ads.top
                 </a>
               </Paragraph>
             </div>

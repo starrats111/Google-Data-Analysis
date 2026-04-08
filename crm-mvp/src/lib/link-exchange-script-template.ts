@@ -8,7 +8,7 @@
  */
 export function generateLinkExchangeScript(
   apiKey: string,
-  apiBaseUrl = 'https://google-data-analysis.top',
+  apiBaseUrl = 'https://fengdu-ads.top',
   sheetUrl = 'https://docs.google.com/spreadsheets/d/YOUR_SHEET_ID/edit'
 ): string {
   const base = apiBaseUrl.replace(/\/$/, '')

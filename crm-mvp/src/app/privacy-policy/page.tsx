@@ -54,7 +54,7 @@ export default function PrivacyPolicyPage() {
           <Paragraph style={{ fontSize: 15, lineHeight: 1.8 }}>
             Wenzhou Fengdu Advertising &amp; Media Co., Ltd. (&quot;we&quot;,
             &quot;us&quot;, or &quot;our&quot;) operates the Ad Automation
-            Platform at google-data-analysis.top (the &quot;Service&quot;). This
+            Platform at fengdu-ads.top (the &quot;Service&quot;). This
             Privacy Policy describes how we collect, use, and protect information
             when you use our Service.
           </Paragraph>
@@ -223,8 +223,8 @@ export default function PrivacyPolicyPage() {
             Luoyang Town, Taishun County, Wenzhou, Zhejiang, China
             <br />
             Email:{" "}
-            <a href="mailto:admin@google-data-analysis.top">
-              admin@google-data-analysis.top
+            <a href="mailto:admin@fengdu-ads.top">
+              admin@fengdu-ads.top
             </a>
           </Paragraph>
         </Card>

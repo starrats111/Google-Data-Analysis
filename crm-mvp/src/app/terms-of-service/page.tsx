@@ -251,8 +251,8 @@ export default function TermsOfServicePage() {
             Luoyang Town, Taishun County, Wenzhou, Zhejiang, China
             <br />
             Email:{" "}
-            <a href="mailto:admin@google-data-analysis.top">
-              admin@google-data-analysis.top
+            <a href="mailto:admin@fengdu-ads.top">
+              admin@fengdu-ads.top
             </a>
           </Paragraph>
         </Card>
