@@ -111,6 +111,13 @@ export async function POST(req: NextRequest) {
       }
       for (const [key, { merchantId, name }] of missingMerchants) {
         try {
+          // Skip merchants that have been excluded (regardless of is_deleted)
+          const wasExcluded = await prisma.user_merchants.findFirst({
+            where: { user_id: userId, platform, merchant_id: merchantId, status: "excluded" },
+            select: { id: true },
+          });
+          if (wasExcluded) continue;
+
           let existing = await prisma.user_merchants.findFirst({
             where: { user_id: userId, platform, merchant_id: merchantId, is_deleted: 0 },
             select: { id: true, merchant_id: true, platform: true, merchant_name: true },
@@ -497,6 +504,7 @@ async function reassignTransactionsByRules(sourceUserId: bigint) {
   const results: { targetUserId: number; count: number }[] = [];
 
   for (const rule of applicable) {
+    // Step 1: Move new transactions from source to target user
     const result = await prisma.affiliate_transactions.updateMany({
       where: {
         user_id: BigInt(rule.source_user_id),
@@ -511,9 +519,26 @@ async function reassignTransactionsByRules(sourceUserId: bigint) {
       },
     });
 
-    if (result.count > 0) {
-      console.log(`[sync-txn] reassign: ${result.count} ${rule.platform}/${rule.merchant_id} txns from user ${rule.source_user_id} → ${rule.target_user_id}`);
-      results.push({ targetUserId: rule.target_user_id, count: result.count });
+    // Step 2: Fix previously-reassigned transactions whose user_merchant_id
+    // was overwritten by the sync upsert back to the source user's merchant
+    const fixResult = await prisma.affiliate_transactions.updateMany({
+      where: {
+        user_id: BigInt(rule.target_user_id),
+        platform: rule.platform,
+        merchant_id: rule.merchant_id,
+        user_merchant_id: { not: BigInt(rule.target_user_merchant_id) },
+        is_deleted: 0,
+      },
+      data: {
+        user_merchant_id: BigInt(rule.target_user_merchant_id),
+        campaign_id: BigInt(rule.target_campaign_id),
+      },
+    });
+
+    const total = result.count + fixResult.count;
+    if (total > 0) {
+      console.log(`[sync-txn] reassign: ${result.count} new + ${fixResult.count} fixed ${rule.platform}/${rule.merchant_id} txns for user ${rule.source_user_id} → ${rule.target_user_id}`);
+      results.push({ targetUserId: rule.target_user_id, count: total });
     }
   }
 

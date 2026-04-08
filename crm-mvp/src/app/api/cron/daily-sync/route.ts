@@ -538,17 +538,24 @@ async function syncAllUsersTransactions(): Promise<unknown> {
 
             if (mid && !merchantMap.has(merchantKey)) {
               try {
-                let existing = await prisma.user_merchants.findFirst({
-                  where: { user_id: userId, platform, merchant_id: mid, is_deleted: 0 },
-                  select: { id: true, merchant_id: true, platform: true, merchant_name: true },
+                // Skip merchants that have been excluded (regardless of is_deleted)
+                const wasExcluded = await prisma.user_merchants.findFirst({
+                  where: { user_id: userId, platform, merchant_id: mid, status: "excluded" },
+                  select: { id: true },
                 });
-                if (!existing) {
-                  existing = await prisma.user_merchants.create({
-                    data: { user_id: userId, platform, merchant_id: mid, merchant_name: txn.merchant || "", status: "available" },
+                if (!wasExcluded) {
+                  let existing = await prisma.user_merchants.findFirst({
+                    where: { user_id: userId, platform, merchant_id: mid, is_deleted: 0 },
                     select: { id: true, merchant_id: true, platform: true, merchant_name: true },
                   });
+                  if (!existing) {
+                    existing = await prisma.user_merchants.create({
+                      data: { user_id: userId, platform, merchant_id: mid, merchant_name: txn.merchant || "", status: "available" },
+                      select: { id: true, merchant_id: true, platform: true, merchant_name: true },
+                    });
+                  }
+                  merchantMap.set(merchantKey, existing);
                 }
-                merchantMap.set(merchantKey, existing);
               } catch {
                 // ignore race condition
               }
@@ -864,9 +871,26 @@ async function reassignTransactionsByRules(sourceUserId: bigint) {
       },
     });
 
-    if (result.count > 0) {
-      log(`  reassign: ${result.count} ${rule.platform}/${rule.merchant_id} txns from user ${rule.source_user_id} → ${rule.target_user_id}`);
-      results.push({ targetUserId: rule.target_user_id, count: result.count });
+    // Fix previously-reassigned transactions whose user_merchant_id
+    // was overwritten by the sync upsert back to the source user's merchant
+    const fixResult = await prisma.affiliate_transactions.updateMany({
+      where: {
+        user_id: BigInt(rule.target_user_id),
+        platform: rule.platform,
+        merchant_id: rule.merchant_id,
+        user_merchant_id: { not: BigInt(rule.target_user_merchant_id) },
+        is_deleted: 0,
+      },
+      data: {
+        user_merchant_id: BigInt(rule.target_user_merchant_id),
+        campaign_id: BigInt(rule.target_campaign_id),
+      },
+    });
+
+    const total = result.count + fixResult.count;
+    if (total > 0) {
+      log(`  reassign: ${result.count} new + ${fixResult.count} fixed ${rule.platform}/${rule.merchant_id} txns for user ${rule.source_user_id} → ${rule.target_user_id}`);
+      results.push({ targetUserId: rule.target_user_id, count: total });
     }
   }
 
