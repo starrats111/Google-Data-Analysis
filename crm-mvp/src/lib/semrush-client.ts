@@ -156,11 +156,24 @@ export async function curlFetch(
   if (opts.body) args.push("-d", opts.body);
   args.push(url);
 
-  const { stdout: raw } = await execFileAsync("curl", args, {
-    timeout: (opts.timeoutMs || 30000) + 5000,
-    encoding: "utf-8",
-    maxBuffer: 10 * 1024 * 1024,
-  });
+  let raw: string;
+  try {
+    const result = await execFileAsync("curl", args, {
+      timeout: (opts.timeoutMs || 30000) + 5000,
+      encoding: "utf-8",
+      maxBuffer: 10 * 1024 * 1024,
+    });
+    raw = result.stdout;
+  } catch (execErr: any) {
+    if (execErr?.killed || execErr?.signal === "SIGTERM") {
+      throw new Error("请求超时，请稍后再试");
+    }
+    throw new Error(`网络请求失败: ${execErr?.message?.slice(0, 120) || "未知错误"}`);
+  }
+
+  if (!raw || !raw.trim()) {
+    throw new Error("服务器返回空响应，请稍后再试");
+  }
 
   // 跳过 100 Continue 等中间响应（curl -i 会依次输出所有中间响应）
   let remaining = raw;

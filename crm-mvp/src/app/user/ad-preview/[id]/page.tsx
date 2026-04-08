@@ -524,7 +524,9 @@ export default function AdPreviewPage() {
           bidding_strategy: biddingStrategy,
         }),
       });
-      const json = await res.json();
+      const text = await res.text();
+      let json: any;
+      try { json = JSON.parse(text); } catch { throw new Error("服务器返回异常，请刷新页面后重试"); }
       if (json.code !== 0) {
         setSemrushFailed(true);
         message.error({ content: json.message || "SemRush 自动获取失败，可粘贴 3UE 链接手动获取", duration: 6 });
@@ -575,7 +577,9 @@ export default function AdPreviewPage() {
           bidding_strategy: biddingStrategy,
         }),
       });
-      const json = await res.json();
+      const text = await res.text();
+      let json: any;
+      try { json = JSON.parse(text); } catch { throw new Error("服务器返回异常，请刷新页面后重试"); }
       if (json.code !== 0) { message.error({ content: json.message || "获取失败", duration: 6 }); return; }
       const kws = json.data?.keywords || [];
       if (kws.length === 0) { message.warning("未从该链接获取到关键词，请手动输入"); return; }
