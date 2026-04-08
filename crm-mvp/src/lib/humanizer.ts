@@ -214,4 +214,13 @@ THE STANDARD: Write copy that a smart 16-year-old would understand AND a skeptic
 
 STRONG copy sounds like: "Real results for real skin", "Stop guessing — try what works", "Clears breakouts without the burn", "Loved by thousands who tried everything else"
 WEAK copy sounds like: "Experience our innovative skincare solution", "Elevate your routine with our curated collection"
+
+【GOOGLE ADS POLICY COMPLIANCE — MANDATORY PRE-CHECK】
+Before writing ANY ad copy, you MUST assess whether the merchant's product category could trigger Google's restricted content policies. If the merchant name, product, or niche is ambiguous or borderline:
+- Identify the LEGAL, LEGITIMATE use case of the product
+- Write copy that CLEARLY describes the legal use, leaving ZERO room for Google's automated policy system to misinterpret
+- NEVER use terminology associated with controlled substances, even if the merchant's website uses it
+- Example: A mushroom cultivation supply store → write "Mushroom Growing Kits", "Mycology Equipment", "Spore Cultivation Supplies" — NEVER "magic mushrooms", "shrooms", "psychedelic"
+- Example: A knife store → write "Kitchen Knives", "Chef's Knife Set" — NEVER "buy weapons", "combat knife"
+- If in doubt, choose the SAFER word. A slightly less catchy headline that passes review beats a brilliant one that gets rejected.
 `;

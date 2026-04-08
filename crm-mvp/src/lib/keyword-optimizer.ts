@@ -90,6 +90,56 @@ const LOW_VALUE_PATTERNS = [
   /wikipedia/i,
 ];
 
+/**
+ * Google Ads 受限内容策略过滤 — Adrian 的合规直觉
+ * 匹配到这些模式的关键词会被直接淘汰，不会展示给用户
+ */
+const POLICY_RISK_PATTERNS = [
+  // Controlled substances / recreational drugs
+  /magic\s*mushroom/i,
+  /\bshrooms?\b/i,
+  /\bpsilocybin/i,
+  /\bpsychedelic/i,
+  /\bhallucino/i,
+  /\b(lsd|mdma|ecstasy)\b/i,
+  /\bcocaine\b/i,
+  /\bheroin\b/i,
+  /\bmethamphet/i,
+  /\bkratom\b/i,
+  /\bayahuasca/i,
+  /\bdmt\b/i,
+  /\bketamine/i,
+  /\bopiat/i,
+  /\bopioid/i,
+  /\bfentanyl/i,
+  /\bdelta[\s-]*[89]\b/i,
+  // Cannabis (restricted in most Google Ads regions)
+  /\bmarijuana\b/i,
+  /\bcannabis\b/i,
+  /\b(thc|cbd)\s*(oil|gumm|edible|vape|cart)/i,
+  /\bweed\b(?!\s*(killer|removal|control|garden))/i,
+  // Weapons & explosives
+  /\b(buy|purchase|order|sell)\s+(gun|firearm|rifle|pistol|handgun|shotgun|ammo|ammunition)\b/i,
+  /\bassault\s+(rifle|weapon)/i,
+  /\bexplosive/i,
+  /\bswitchblade/i,
+  // Counterfeit / fraudulent
+  /\b(fake|counterfeit|replica|forged)\s+(id|passport|license|diploma|degree|certificate)\b/i,
+  /\bbuy\s+(fake|forged)/i,
+  // Hacking / surveillance abuse
+  /\bhack\s+(account|password|email|facebook|instagram|wifi)/i,
+  /\bspyware\b/i,
+  /\bkeylogger/i,
+  /\bphishing\s+kit/i,
+  // Tobacco / vaping (restricted)
+  /\b(buy|order|cheap)\s+(cigarette|cigar|tobacco|vape|e[\s-]?cig)/i,
+  // Gambling (restricted, needs certification)
+  /\b(online\s+)?casino\s+(real\s+money|bonus|slot)/i,
+  /\bsports?\s*bet(ting)?\s+(site|app|online)/i,
+  // Academic dishonesty
+  /\b(buy|order|pay)\s+(essay|thesis|homework|assignment|dissertation)\b/i,
+];
+
 const INFORMATIONAL_PATTERNS = [
   /what\s+is|how\s+to|guide|tutorial|review.*only|meaning|definition/i,
 ];
@@ -271,6 +321,7 @@ export function describeOptimizedKeyword(
 
   // 降分项
   if (informational) score -= 10;
+  if (POLICY_RISK_PATTERNS.some((p) => p.test(phrase))) score -= 100;
   if (tokenCount >= 3 && tokenCount <= 5) score += 6;
   if (dailyBudget <= 2 && effectiveBid != null && effectiveBid > dailyBudget * 0.4) score -= 6;
 
@@ -310,6 +361,7 @@ export function optimizeKeywordCandidates(
     if (!phrase || normalized.length < 2) continue;
     if (seen.has(normalized)) continue;
     if (LOW_VALUE_PATTERNS.some((pattern) => pattern.test(phrase))) continue;
+    if (POLICY_RISK_PATTERNS.some((pattern) => pattern.test(phrase))) continue;
     if (persona.forbidden_terms.some((term) => normalized.includes(normalizePhrase(term)))) continue;
 
     const effectiveBid = getEffectiveBid(candidate);
