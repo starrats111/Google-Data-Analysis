@@ -433,44 +433,63 @@ Return ONLY a JSON object with this exact structure:
 }
 Note: "title" in sitelink_descriptions is required. If the original sitelink title is in ALL CAPS or is unclear, rewrite it in Title Case or sentence case (≤25 chars). Otherwise keep it as-is.
 
-═══ COPYWRITING CRAFT — READ BEFORE WRITING ═══
-Great ad copy does ONE of these things per line:
-  • Speaks to a pain: "Tired of products that don't work?"
-  • Promises a specific outcome: "Results you'll actually see"
-  • Builds desire: "The skin you've always wanted"
-  • Creates trust: "Trusted by thousands — see why"
-  • Drives action: "Shop the top-rated collection"
-  • Highlights edge: "No harsh chemicals. Real results."
+═══ ADRIAN'S COPYWRITING CRAFT — THE DIFFERENCE BETWEEN "OKAY" AND "CLICK" ═══
 
-Power words (use freely): proven, real results, fast, works, rated, top-selling, trusted, easy, clear, fresh, effective, new, better, lasting, gentle, visible, simple, best
+Your job is NOT to describe the product. Your job is to make someone who wasn't sure if they wanted it suddenly NEED it.
+
+Three questions before you write each line:
+  1. Would I stop scrolling if I saw this? (ATTENTION)
+  2. Does this give me a SPECIFIC reason to buy? (VALUE)
+  3. Does this sound like a human who cares, or a robot filling space? (SOUL)
+
+DESIRE-BUILDING TOOLKIT:
+  • PAINT THE AFTER: "Wake up to clear skin" > "Effective skincare solution"
+  • NAME THE VILLAIN: "No more breakouts" > "Skincare products"
+  • USE SENSORY WORDS: "buttery soft", "razor sharp", "whisper quiet", "featherlight"
+  • SOCIAL PROOF WITH TEXTURE: "Loved by 12K+ customers who tried everything else first"
+  • CONTRAST CREATES CLARITY: "No chemicals — just results" / "Not mass-produced. Handmade."
+  • SPECIFICITY IS DESIRE: "3 patented ingredients" / "Handcrafted from Italian leather"
+
+Power words (use freely): proven, real, fast, works, rated, top-selling, trusted, easy, clear, fresh, effective, lasting, gentle, visible, simple, best, loved, tested, natural, pure, handmade
 
 BANNED words (auto-rejected): unlock, unleash, elevate, revolutionize, seamless, cutting-edge, game-changer, curated, empower, harness, innovative, transformative, holistic, paradigm, synergy
 
 ═══ HEADLINES — exactly 15, each ≤30 chars ═══
 Build a VARIED set across these angles (mix freely, brand headline MUST be #1):
-  ① Brand (required #1): include "${merchantName}" — make it memorable, not just the name
-  ② Benefit (2-3 lines): specific outcome the customer gets — concrete, vivid
-  ③ Hook/question (1-2 lines): speak to the pain or desire — make them feel seen
-  ④ Trust/proof (1-2 lines): credibility signal — rated, proven, loved, tested
-  ⑤ Product/category (2-3 lines): what they're shopping for — specific, searchable
-  ⑥ Differentiator (1-2 lines): what makes this brand stand out vs. alternatives
-  ⑦ CTA (1-2 lines): what to do next — specific action, not just "Shop Now"
-  ${hasRealDiscount ? "⑧ Discount (1 line): reference the verified discount — be specific" : ""}
-  ${hasRealFreeShipping ? "⑧ Shipping (1 line): mention free shipping as a value hook" : ""}
+  ① Brand (required #1): include "${merchantName}" — make it ownable. "${merchantName} — Built to Last" not just "${merchantName}"
+  ② Benefit (2-3): SPECIFIC outcome they GET — concrete, vivid, measurable. "Visibly Clearer in 14 Days"
+  ③ Pain/desire hook (1-2): speak to the exact itch — "Still Using Products That Fail?"
+  ④ Trust/proof (1-2): credibility that feels real — "4.8★ by 12K+ Customers"
+  ⑤ Product mirror (2-3): echo the search query — specific, searchable, category-matching
+  ⑥ Only-we-do-this (1-2): the thing competitors CAN'T say — "The Only MagSafe That Folds Flat"
+  ⑦ CTA with reason (1-2): action + incentive — "Try Risk-Free for 30 Days"
+  ${hasRealDiscount ? "⑧ Discount (1 line): reference the verified discount — be specific and exciting" : ""}
+  ${hasRealFreeShipping ? "⑧ Free Shipping (1 line): use as a value hook — \"Free Shipping on All Orders\"" : ""}
 
 Rules:
 - Use Title Case or sentence case — NEVER ALL CAPS
 - No dates, expiry, or countdowns
 - No multiple punctuation — at most ONE ! or ? per headline
-- Front-load the most important word
+- Front-load the most important word — readers scan left-to-right
 
 ═══ DESCRIPTIONS — exactly 4, each 50-90 chars ═══
-Write one description per angle — each must open differently and cover a DISTINCT benefit:
+Each description is a micro-sales-pitch. The reader is on the fence — your 90 characters push them over.
 
-  Description 1 — PROBLEM → SOLUTION: Name the customer's real pain, position the product as the fix. Example: "Struggling with X? [Brand] delivers Y that actually works."
-  Description 2 — KEY BENEFIT + CTA: Lead with the strongest product outcome, end with a specific action. Example: "Get [specific result] with [product]. Shop the full range today."
-  Description 3 — TRUST + PROOF: Use credibility — ratings, endorsements, brand heritage, tested/proven claims. Example: "Trusted by [audience]. Dermatologist-tested. See real results."
-  Description 4 — UNIQUE EDGE: What makes this brand different. No harsh chemicals, better formula, exclusive range, etc. Example: "Unlike [generic alternatives], [brand] uses [specific edge] for real results."
+  Desc 1 — THE EMPATHY CLOSE: Start with their frustration, pivot to your solution in one breath.
+     ✓ "Done with breakouts? Our 2-step system clears skin fast. Try it."
+     ✗ "We offer a range of skincare solutions for various needs." (boring, about YOU)
+
+  Desc 2 — THE IRRESISTIBLE OFFER: Stack value until saying no feels like losing something.
+     ✓ "Free shipping + free returns. Shop the best-selling formula now."
+     ✗ "Visit our website to browse our products." (zero value proposition)
+
+  Desc 3 — THE TRUST BUILDER: Remove every reason NOT to buy.
+     ✓ "Rated 4.8★ by 50K+ customers. 30-day money-back guarantee."
+     ✗ "We pride ourselves on customer satisfaction." (empty claim)
+
+  Desc 4 — THE COMPETITIVE WEDGE: One sentence that makes alternatives feel inferior.
+     ✓ "The only formula with 3 patented actives. No generic substitutes."
+     ✗ "Our products are of the highest quality." (says nothing specific)
 
 Rules:
 - Each description MUST open with a different word/phrase — no two can start the same
