@@ -92,13 +92,13 @@ const LOW_VALUE_PATTERNS = [
 
 /**
  * Google Ads 受限内容策略过滤 — Adrian 的合规直觉
- * 匹配到这些模式的关键词会被直接淘汰，不会展示给用户
+ * 单词级正则：直接匹配即判定违规
  */
-const POLICY_RISK_PATTERNS = [
-  // Controlled substances / recreational drugs
-  /magic\s*mushroom/i,
+const POLICY_RISK_SINGLE_PATTERNS = [
+  // Controlled substances — single-word triggers
   /\bshrooms?\b/i,
   /\bpsilocybin/i,
+  /\bpsilocybe/i,
   /\bpsychedelic/i,
   /\bhallucino/i,
   /\b(lsd|mdma|ecstasy)\b/i,
@@ -139,6 +139,33 @@ const POLICY_RISK_PATTERNS = [
   // Academic dishonesty
   /\b(buy|order|pay)\s+(essay|thesis|homework|assignment|dissertation)\b/i,
 ];
+
+/**
+ * 多词组合检测 — 词序无关
+ * 只要短语中同时包含 set 中的所有词根，就判定违规
+ * 例如 "magic" + "mushroom/mush" → 无论 "buy mushrooms magic" 还是 "magic mushroom buy" 都能匹配
+ */
+const POLICY_RISK_COMBO_SETS: Array<{ roots: string[]; label: string }> = [
+  { roots: ["magic", "mushroom"], label: "controlled substance" },
+  { roots: ["magic", "mush"], label: "controlled substance" },
+];
+
+function phraseContainsAllRoots(phrase: string, roots: string[]): boolean {
+  const lower = phrase.toLowerCase();
+  return roots.every((root) => lower.includes(root));
+}
+
+/**
+ * 统一政策风险检查 — 所有关键词链路共用此函数
+ * 返回 true 表示该关键词存在政策风险，应被过滤
+ */
+export function isPolicyRiskKeyword(phrase: string): boolean {
+  if (!phrase || phrase.trim().length < 2) return false;
+  const text = phrase.trim();
+  if (POLICY_RISK_SINGLE_PATTERNS.some((p) => p.test(text))) return true;
+  if (POLICY_RISK_COMBO_SETS.some((combo) => phraseContainsAllRoots(text, combo.roots))) return true;
+  return false;
+}
 
 const INFORMATIONAL_PATTERNS = [
   /what\s+is|how\s+to|guide|tutorial|review.*only|meaning|definition/i,
@@ -321,7 +348,7 @@ export function describeOptimizedKeyword(
 
   // 降分项
   if (informational) score -= 10;
-  if (POLICY_RISK_PATTERNS.some((p) => p.test(phrase))) score -= 100;
+  if (isPolicyRiskKeyword(phrase)) score -= 100;
   if (tokenCount >= 3 && tokenCount <= 5) score += 6;
   if (dailyBudget <= 2 && effectiveBid != null && effectiveBid > dailyBudget * 0.4) score -= 6;
 
@@ -361,7 +388,7 @@ export function optimizeKeywordCandidates(
     if (!phrase || normalized.length < 2) continue;
     if (seen.has(normalized)) continue;
     if (LOW_VALUE_PATTERNS.some((pattern) => pattern.test(phrase))) continue;
-    if (POLICY_RISK_PATTERNS.some((pattern) => pattern.test(phrase))) continue;
+    if (isPolicyRiskKeyword(phrase)) continue;
     if (persona.forbidden_terms.some((term) => normalized.includes(normalizePhrase(term)))) continue;
 
     const effectiveBid = getEffectiveBid(candidate);

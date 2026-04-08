@@ -1,4 +1,4 @@
-import { describeOptimizedKeyword, optimizeKeywordCandidates, type KeywordCandidate, type OptimizedKeyword } from "@/lib/keyword-optimizer";
+import { describeOptimizedKeyword, isPolicyRiskKeyword, optimizeKeywordCandidates, type KeywordCandidate, type OptimizedKeyword } from "@/lib/keyword-optimizer";
 
 export interface KeywordPipelineOptions {
   merchantName?: string;
@@ -48,27 +48,29 @@ export function mapStoredKeywordsForClient(
   records: StoredKeywordRecord[],
   options: KeywordPipelineOptions = {},
 ) {
-  return records.map((record) => {
-    const candidate: KeywordCandidate = {
-      phrase: record.keyword_text,
-      volume: record.avg_monthly_searches ?? 0,
-      competition: record.competition ?? null,
-      suggested_bid: record.suggested_bid != null ? Number(record.suggested_bid) : null,
-      source: "stored",
-    };
-    const optimized = describeOptimizedKeyword(candidate, options);
-    return {
-      id: record.id,
-      keyword_text: record.keyword_text,
-      match_type: record.match_type,
-      avg_monthly_searches: candidate.volume || null,
-      competition: record.competition ?? null,
-      suggested_bid: candidate.suggested_bid,
-      score: optimized.score,
-      reason: optimized.reason,
-      recommended_match_type: optimized.recommended_match_type,
-      competition_band: optimized.competition_band,
-      intent_layer: optimized.intent_layer,
-    };
-  });
+  return records
+    .filter((record) => !isPolicyRiskKeyword(record.keyword_text))
+    .map((record) => {
+      const candidate: KeywordCandidate = {
+        phrase: record.keyword_text,
+        volume: record.avg_monthly_searches ?? 0,
+        competition: record.competition ?? null,
+        suggested_bid: record.suggested_bid != null ? Number(record.suggested_bid) : null,
+        source: "stored",
+      };
+      const optimized = describeOptimizedKeyword(candidate, options);
+      return {
+        id: record.id,
+        keyword_text: record.keyword_text,
+        match_type: record.match_type,
+        avg_monthly_searches: candidate.volume || null,
+        competition: record.competition ?? null,
+        suggested_bid: candidate.suggested_bid,
+        score: optimized.score,
+        reason: optimized.reason,
+        recommended_match_type: optimized.recommended_match_type,
+        competition_band: optimized.competition_band,
+        intent_layer: optimized.intent_layer,
+      };
+    });
 }

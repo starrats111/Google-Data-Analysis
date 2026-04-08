@@ -3,6 +3,8 @@
  * 支持多人设库，员工可自建，系统内置 Adrian 不可删除
  */
 
+import { isPolicyRiskKeyword } from "@/lib/keyword-optimizer";
+
 // ─── 类型定义 ───────────────────────────────────────────────
 
 export type AiPromptSection = "general" | "keywords" | "ad_copy" | "sitelinks" | "compliance";
@@ -293,7 +295,7 @@ const BASIC_POLICY_RISK_PATTERNS: Array<{ label: string; pattern: RegExp }> = [
   { label: "医疗治愈类承诺", pattern: /\bcures?\b|\bmiracle\b|\bheals?\b|治疗|治愈|神药/i },
   { label: "快速致富类承诺", pattern: /\bmake\s+money\s+fast\b|\bget\s+rich\s+quick\b|快速赚钱|暴富/i },
   { label: "误导性前后对比承诺", pattern: /\bbefore\s+and\s+after\b|\bbefore\/after\b|前后对比/i },
-  { label: "管制物质/毒品相关", pattern: /magic\s*mushroom|\bshrooms?\b|\bpsilocybin|\bpsychedelic|\bhallucino|\b(lsd|mdma|ecstasy)\b|\bcocaine|\bheroin|\bmethamphet|\bkratom|\bayahuasca|\bdmt\b|\bketamine|\bopiat|\bopioid|\bfentanyl/i },
+  { label: "管制物质/毒品相关", pattern: /\bshrooms?\b|\bpsilocybin|\bpsilocybe|\bpsychedelic|\bhallucino|\b(lsd|mdma|ecstasy)\b|\bcocaine|\bheroin|\bmethamphet|\bkratom|\bayahuasca|\bdmt\b|\bketamine|\bopiat|\bopioid|\bfentanyl/i },
   { label: "大麻/CBD相关（受限）", pattern: /\bmarijuana\b|\bcannabis\b|\bthc\b|\bcbd\s*(oil|gumm|edible|vape)/i },
   { label: "武器弹药购买", pattern: /\b(buy|purchase|order)\s+(gun|firearm|rifle|pistol|ammo|ammunition)\b|\bassault\s+(rifle|weapon)/i },
   { label: "点击诱饵/夸大宣传", pattern: /\byou\s+won'?t\s+believe\b|\bshocking\s+(truth|secret|result)\b|\bsecret\s+(trick|method|formula)\b/i },
@@ -397,6 +399,9 @@ export function checkItemViolations(
         if (rule.pattern.test(text)) { reasons.push(rule.label); break; }
       }
     }
+    if (isPolicyRiskKeyword(text) && !reasons.some((r) => r.includes("管制") || r.includes("大麻"))) {
+      reasons.push("管制物质/政策风险词（组合检测）");
+    }
     if (reasons.length > 0) results.push({ index: i, text, reasons });
   }
   return results;
@@ -430,6 +435,7 @@ export function collectAiRuleViolations(payload: {
   for (const keyword of keywordTexts) {
     const matched = includesForbiddenTerm(keyword, allForbidden);
     if (matched) violations.push(`关键词「${keyword}」命中了禁止词「${matched}」`);
+    if (isPolicyRiskKeyword(keyword)) violations.push(`关键词「${keyword}」触发政策风险过滤（管制物质/受限内容）`);
   }
 
   const textGroups: Array<{ label: string; items: string[] }> = [
@@ -466,11 +472,16 @@ export function collectAiRuleViolations(payload: {
       )),
     ];
     for (const text of policyTexts) {
+      let matched = false;
       for (const rule of BASIC_POLICY_RISK_PATTERNS) {
         if (rule.pattern.test(text)) {
           violations.push(`内容「${text}」疑似触发 Google Ads 风险表达：${rule.label}`);
+          matched = true;
           break;
         }
+      }
+      if (!matched && isPolicyRiskKeyword(text)) {
+        violations.push(`内容「${text}」疑似触发 Google Ads 风险表达：管制物质/政策风险词（组合检测）`);
       }
     }
   }

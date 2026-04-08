@@ -5,6 +5,7 @@ import prisma from "@/lib/prisma";
 import { getAdMarketConfig } from "@/lib/ad-market";
 import { sanitizeAdText } from "@/lib/crawl-pipeline";
 import { collectAiRuleViolations } from "@/lib/ai-rule-profile";
+import { isPolicyRiskKeyword } from "@/lib/keyword-optimizer";
 import { mutateGoogleAds, dollarsToMicros, queryGoogleAds } from "@/lib/google-ads";
 import { assignFormalCampaignNameBeforeSubmit } from "@/lib/campaign-naming";
 import { readFile } from "fs/promises";
@@ -388,9 +389,13 @@ export async function POST(req: NextRequest) {
       },
     });
 
-    // ─── 7. 关键词 ───
+    // ─── 7. 关键词（政策风险词硬拦截，不发送给 Google） ───
     for (const kw of keywords) {
       const text = typeof kw === "string" ? kw : kw.text;
+      if (isPolicyRiskKeyword(text)) {
+        console.warn(`[AdSubmit] 拦截政策风险关键词，不提交: "${text}"`);
+        continue;
+      }
       const rawMatch = typeof kw === "string" ? "PHRASE" : (kw.matchType || "PHRASE");
       const matchType = rawMatch.toUpperCase();
       operations.push({
