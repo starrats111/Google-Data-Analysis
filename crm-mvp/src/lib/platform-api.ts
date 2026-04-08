@@ -359,11 +359,27 @@ export async function fetchAllMerchants(
       if (!seen.has(m.merchant_id)) { seen.add(m.merchant_id); allMerchants.push(m); }
     }
 
-    let totalPages = getTotalPages(firstPage, config.maxSize);
+    // 分页计算：API 实际返回条数可能小于请求的 maxSize（平台侧限制），
+    // 必须用实际返回条数（而非 maxSize）来计算总页数和判断末页
+    const apiRoot = ((firstPage as any).data || firstPage) as Record<string, unknown>;
+    const apiTotal = Number(apiRoot.total || apiRoot.totalCount || apiRoot.total_mcid || apiRoot.count || 0);
+    const actualPageSize = firstRawCount;
 
-    // 回退：如果无法解析总页数但首页返回了满页原始数据，按逐页拉取直到空页
-    const useProbing = totalPages <= 1 && firstRawCount >= config.maxSize;
-    if (useProbing) totalPages = 200; // 设置一个安全上限
+    let totalPages: number;
+    if (apiTotal > 0 && actualPageSize > 0) {
+      totalPages = Math.ceil(apiTotal / actualPageSize);
+    } else {
+      totalPages = getTotalPages(firstPage, config.maxSize);
+    }
+
+    // 回退：如果无法确定总页数但首页返回了满页数据，按逐页拉取直到空页
+    if (totalPages <= 1 && actualPageSize >= config.maxSize) {
+      totalPages = 200;
+    }
+
+    if (totalPages > 1) {
+      console.log(`[MerchantSync] ${platform}: total=${apiTotal}, page1=${actualPageSize}, totalPages=${totalPages}`);
+    }
 
     // 后续页
     for (let page = 2; page <= Math.min(totalPages, 200); page++) {
@@ -372,21 +388,19 @@ export async function fetchAllMerchants(
 
       const pageData = await callPlatformApi(config, token, page, effectiveRelFilter);
 
-      // 用原始列表数量判断是否是最后一页：
-      // parseMerchants 会过滤掉 merchant_name 为空的行，导致 batch.length < maxSize 误判提前停止
       const pageRoot = ((pageData as any).data || pageData) as Record<string, unknown>;
       const pageRawList = (pageRoot.list || pageRoot.items || pageRoot.merchants || []) as unknown[];
       const pageRawCount = Array.isArray(pageRawList) ? pageRawList.length : 0;
 
-      if (pageRawCount === 0) break; // 真正的空页才停止
+      if (pageRawCount === 0) break;
 
       const batch = parseMerchants(platform, pageData, assumeAllJoined);
       for (const m of batch) {
         if (!seen.has(m.merchant_id)) { seen.add(m.merchant_id); allMerchants.push(m); }
       }
 
-      // 用原始数量判断最后一页（而非 batch.length），避免空名商家过滤导致误判
-      if (pageRawCount < config.maxSize) break;
+      // 用实际页大小（而非 maxSize）判断末页
+      if (pageRawCount < actualPageSize) break;
     }
 
     return { merchants: allMerchants };
