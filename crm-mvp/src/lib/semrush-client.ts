@@ -121,6 +121,10 @@ class SemrushGuard {
     this.sessionCache = null;
   }
 
+  invalidateDomainCache(key: string) {
+    this.domainCache.delete(key);
+  }
+
   getStats() {
     return {
       cacheSize: this.domainCache.size,
@@ -595,56 +599,94 @@ export class SemRushClient {
   }
 
   /**
-   * 获取域名的完整有机搜索关键词列表（对应 SemRush organic positions 页面）。
-   * 使用 token + 分页，可获取数百个关键词而非概览的 5-10 个。
+   * 获取域名的完整有机搜索关键词列表。
+   * 多策略：批量探测 RPC token → 页面抓取 → overview 回退
    */
   async organicPositions(domain: string, pageSize = 200): Promise<SemRushKeyword[]> {
-    const tokenPayload = {
-      id: 20, jsonrpc: "2.0", method: "token.Get",
-      params: {
-        reportType: "organic.positions", database: this.creds.database,
-        date: Date.now(), dateType: "daily", searchItem: domain,
-        page: 1, pageSize,
-        userId: parseInt(this.creds.userId), apiKey: this.creds.apiKey,
-      },
-    };
-    const tokenResp = (await this.rpc(tokenPayload)) as any;
-    const token = String(tokenResp?.result?.token || "");
-    if (!token) {
-      console.warn("[SemRush] organic.positions token 获取失败，回退到 overview");
-      return this.keywords(domain, 20);
+    // 策略 1: 批量探测 — 一次 RPC 尝试多个 reportType，找到能拿到 token 的
+    const reportTypes = ["organic.positions", "organic", "positions", "domain_organic", "domain.organic.positions"];
+    try {
+      const batchTokenPayload = reportTypes.map((rt, i) => ({
+        id: 30 + i, jsonrpc: "2.0", method: "token.Get",
+        params: {
+          reportType: rt, database: this.creds.database,
+          date: Date.now(), dateType: "daily", searchItem: domain,
+          page: 1, pageSize,
+          userId: parseInt(this.creds.userId), apiKey: this.creds.apiKey,
+        },
+      }));
+      const batchResp = (await this.rpc(batchTokenPayload)) as any[];
+      const tokenResults = (Array.isArray(batchResp) ? batchResp : [batchResp])
+        .map((r, i) => ({ reportType: reportTypes[i] || `idx${i}`, token: String(r?.result?.token || ""), id: r?.id }))
+        .filter((t) => t.token.length > 5);
+      console.log(`[SemRush] token 探测结果: ${tokenResults.map((t) => `${t.reportType}=OK`).join(", ") || "全部失败"}`);
+
+      if (tokenResults.length > 0) {
+        const dateStr = normalizeReportDate(await this.getOrganicSnapshotDate());
+        for (const { reportType, token } of tokenResults) {
+          try {
+            const dataPayload = {
+              id: 40, jsonrpc: "2.0", method: "organic.Positions",
+              params: {
+                token, database: this.creds.database, searchItem: domain, searchType: "domain",
+                date: dateStr, dateType: "daily", filter: {},
+                display: { order: { field: "traffic", direction: "desc" }, page: 1, pageSize },
+                userId: parseInt(this.creds.userId),
+              },
+            };
+            const response = (await this.rpc(dataPayload)) as any;
+            const rows = response?.result || [];
+            console.log(`[SemRush] organic.Positions (token via ${reportType}): ${rows.length} rows for ${domain}`);
+            if (rows.length >= 3) return rows.map((r: any) => parseKeywordRow(r));
+          } catch (err) {
+            console.warn(`[SemRush] organic.Positions with token(${reportType}) failed:`, err);
+          }
+        }
+      }
+    } catch (err) {
+      console.warn("[SemRush] 批量 token 探测失败:", err);
     }
 
-    const dateStr = normalizeReportDate(await this.getOrganicDate(domain));
+    // 策略 2: 用 PositionsOverview 但不同 report 参数
+    for (const report of ["domain.positions", "positions", "organic.positions"]) {
+      try {
+        const payload = {
+          id: 50, jsonrpc: "2.0", method: "organic.PositionsOverview",
+          params: {
+            request_id: crypto.randomUUID(), report,
+            args: {
+              database: this.creds.database, dateType: "daily", dateFormat: "date",
+              searchItem: domain, searchType: "domain", positionsType: "all",
+            },
+            userId: parseInt(this.creds.userId), apiKey: this.creds.apiKey,
+          },
+        };
+        const response = (await this.rpc(payload)) as any;
+        const rows = response?.result || [];
+        console.log(`[SemRush] PositionsOverview report="${report}": ${rows.length} rows`);
+        if (rows.length >= 10) return rows.map((r: any) => parseKeywordRow(r));
+      } catch (err) {
+        console.warn(`[SemRush] PositionsOverview report="${report}" failed`);
+      }
+    }
 
-    const dataPayload = [
-      {
-        id: 21, jsonrpc: "2.0", method: "organic.Positions",
-        params: {
-          token, database: this.creds.database, searchItem: domain, searchType: "domain",
-          date: dateStr, dateType: "daily", filter: {},
-          display: { order: { field: "traffic", direction: "desc" }, page: 1, pageSize },
-          userId: parseInt(this.creds.userId),
-        },
-      },
-      {
-        id: 22, jsonrpc: "2.0", method: "organic.PositionsTotal",
-        params: {
-          token, database: this.creds.database, searchItem: domain, searchType: "domain",
-          date: dateStr, dateType: "daily", filter: {},
-          display: { order: { field: "traffic", direction: "desc" }, page: 1, pageSize },
-          userId: parseInt(this.creds.userId),
-        },
-      },
-    ];
-    const response = (await this.rpc(dataPayload)) as any[];
-    const rows = response[0]?.result || [];
-    const total = response[1]?.result || 0;
-    console.log(`[SemRush] organic.Positions: ${rows.length} rows / ${total} total for ${domain} (db=${this.creds.database})`);
-    return rows.map((r: any) => parseKeywordRow(r));
+    // 策略 3: 页面 URL 抓取
+    try {
+      const pageUrl = `${RPC_ORIGIN}/analytics/organic/positions/?db=${this.creds.database}&q=${encodeURIComponent(domain)}&searchType=domain&__gmitm=ayWzA3*l4EVcTpZei43sW*qRvljSdU`;
+      console.log(`[SemRush] 尝试页面抓取: ${pageUrl}`);
+      const pageKws = await this.fetchFromPageUrl(pageUrl);
+      console.log(`[SemRush] 页面抓取结果: ${pageKws.length} 个关键词`);
+      if (pageKws.length >= 3) return pageKws;
+    } catch (err) {
+      console.warn("[SemRush] 页面抓取失败:", err);
+    }
+
+    // 策略 4: overview 回退
+    console.warn("[SemRush] 所有策略失败，回退到 overview for", domain);
+    return this.keywords(domain, 500);
   }
 
-  private async getOrganicDate(domain: string): Promise<string> {
+  private async getOrganicSnapshotDate(): Promise<string> {
     try {
       const payload = [
         { id: 1, jsonrpc: "2.0", method: "user.Databases", params: { userId: parseInt(this.creds.userId), apiKey: this.creds.apiKey } },
@@ -653,10 +695,12 @@ export class SemRushClient {
       const response = (await this.rpc(payload)) as any[];
       const dateVal = response[1]?.result?.daily?.[0];
       if (dateVal) return String(dateVal);
-    } catch (err) {
-      console.warn("[SemRush] organic.SnapshotDates 失败，回退到 adwords 日期:", err);
-    }
-    return await this.getRatesDate(domain);
+    } catch {}
+    try {
+      const adDate = await this.getRatesDate("");
+      if (adDate) return adDate;
+    } catch {}
+    return new Date().toISOString().slice(0, 10).replace(/-/g, "");
   }
 
   async adsOverview(domain: string, limit = 10): Promise<{ title: string; description: string }[]> {
@@ -713,25 +757,69 @@ export class SemRushClient {
         cookie: cookieStr,
         accept: "text/html,application/xhtml+xml,*/*",
       },
-      timeoutMs: 20000,
+      timeoutMs: 25000,
     });
-    if (res.status >= 400) return [];
+    if (res.status >= 400) {
+      console.warn(`[SemRush] fetchFromPageUrl HTTP ${res.status}`);
+      return [];
+    }
     const html = res.body;
-    const patterns = [
-      /window\.__INITIAL_STATE__\s*=\s*(\{[\s\S]*?\});/,
-      /window\.__data\s*=\s*(\{[\s\S]*?\});/,
+    console.log(`[SemRush] fetchFromPageUrl: 收到 ${html.length} 字符 HTML`);
+
+    const statePatterns = [
+      /window\.__INITIAL_STATE__\s*=\s*(\{[\s\S]*?\});\s*<\/script>/,
+      /window\.__data\s*=\s*(\{[\s\S]*?\});\s*<\/script>/,
+      /window\.__PRELOADED_STATE__\s*=\s*(\{[\s\S]*?\});\s*<\/script>/,
+      /window\.__NUXT__\s*=\s*(\{[\s\S]*?\});\s*<\/script>/,
       /__NEXT_DATA__[^>]*>(\{[\s\S]*?\})\s*<\/script>/,
     ];
-    for (const pattern of patterns) {
+    for (const pattern of statePatterns) {
       const match = html.match(pattern);
       if (match?.[1]) {
         try {
           const data = JSON.parse(match[1]);
           const keywords = this.extractKeywordsFromEmbeddedData(data);
-          if (keywords.length > 0) return keywords;
+          if (keywords.length > 0) {
+            console.log(`[SemRush] 从页面状态中提取到 ${keywords.length} 个关键词`);
+            return keywords;
+          }
         } catch {}
       }
     }
+
+    // 尝试从 script[type="application/json"] 中提取
+    const jsonScriptPattern = /<script[^>]*type=["']application\/json["'][^>]*>([\s\S]*?)<\/script>/gi;
+    let jsonMatch;
+    while ((jsonMatch = jsonScriptPattern.exec(html)) !== null) {
+      try {
+        const data = JSON.parse(jsonMatch[1]);
+        const keywords = this.extractKeywordsFromEmbeddedData(data);
+        if (keywords.length > 0) {
+          console.log(`[SemRush] 从 JSON script 中提取到 ${keywords.length} 个关键词`);
+          return keywords;
+        }
+      } catch {}
+    }
+
+    // 尝试从页面中找到内嵌的 JSON 数据（包含 "phrase" 字段）
+    const phrasePattern = /\[\s*\{[^[\]]*?"phrase"\s*:\s*"[^"]+?"[^[\]]*?\}(?:\s*,\s*\{[^[\]]*?"phrase"\s*:\s*"[^"]+?"[^[\]]*?\})+\s*\]/g;
+    const phraseMatch = html.match(phrasePattern);
+    if (phraseMatch) {
+      for (const block of phraseMatch) {
+        try {
+          const arr = JSON.parse(block);
+          if (Array.isArray(arr) && arr.length >= 3) {
+            const keywords = arr.filter((r: any) => r.phrase).map((r: any) => parseKeywordRow(r));
+            if (keywords.length > 0) {
+              console.log(`[SemRush] 从内嵌 JSON 数组中提取到 ${keywords.length} 个关键词`);
+              return keywords;
+            }
+          }
+        } catch {}
+      }
+    }
+
+    console.warn(`[SemRush] fetchFromPageUrl: 未能从 HTML 中提取关键词数据`);
     return [];
   }
 
@@ -775,9 +863,13 @@ export class SemRushClient {
 
     const cacheKey = `${domain}:${this.creds.database}`;
     const cached = guard.getCachedDomain(cacheKey);
-    if (cached) {
+    if (cached && cached.keywords.length >= 5) {
       console.log(`[SemRush] 命中缓存: ${domain} (db=${this.creds.database}, ${cached.keywords.length} 关键词)`);
       return cached;
+    }
+    if (cached && cached.keywords.length < 5) {
+      console.log(`[SemRush] 缓存结果不佳(${cached.keywords.length}个)，重新查询: ${domain}`);
+      guard.invalidateDomainCache(cacheKey);
     }
 
     console.log(`[SemRush] 开始查询: ${domain} (db=${this.creds.database})（队列状态: ${JSON.stringify(guard.getStats())}）`);
@@ -788,8 +880,10 @@ export class SemRushClient {
       kws = await this.organicPositions(domain, 200);
     } catch (err) {
       console.warn("[SemRush] organicPositions 失败，回退到 overview:", err);
-      kws = await this.keywords(domain, 20);
+      kws = await this.keywords(domain, 500);
     }
+    console.log(`[SemRush] 最终获取 ${kws.length} 个关键词 for ${domain}`);
+
     const ads = await this.adsOverview(domain, 20);
 
     let copiesData: { date: string; total: number; samples: { title: string; description: string }[] } = { date: "", total: 0, samples: [] };
@@ -816,8 +910,10 @@ export class SemRushClient {
       dedupedDescriptions: dedupeAdDescriptions(descPool),
     };
 
-    guard.setCachedDomain(cacheKey, result);
-    console.log(`[SemRush] 查询完成并缓存: ${domain} (db=${this.creds.database}, ${kws.length} 关键词, ${ads.length} 广告)`);
+    if (kws.length >= 5) {
+      guard.setCachedDomain(cacheKey, result);
+    }
+    console.log(`[SemRush] 查询完成: ${domain} (db=${this.creds.database}, ${kws.length} 关键词, ${ads.length} 广告, cached=${kws.length >= 5})`);
     return result;
   }
 
