@@ -382,24 +382,45 @@ export async function fetchAllMerchants(
     }
 
     // 后续页
+    // 部分平台（如 LH）会间歇性返回空页（限流/缓存），不能遇空就停，需重试
+    let consecutiveEmpty = 0;
+    const MAX_EMPTY_RETRIES = 2;    // 单页空响应最多重试 2 次
+    const MAX_CONSECUTIVE_EMPTY = 3; // 连续 3 页都为空才放弃
+
     for (let page = 2; page <= Math.min(totalPages, 200); page++) {
       if (config.rateLimitMs) await sleep(config.rateLimitMs);
       else await sleep(100);
 
-      const pageData = await callPlatformApi(config, token, page, effectiveRelFilter);
+      let pageRawCount = 0;
+      let pageData: Record<string, unknown> = {};
 
-      const pageRoot = ((pageData as any).data || pageData) as Record<string, unknown>;
-      const pageRawList = (pageRoot.list || pageRoot.items || pageRoot.merchants || []) as unknown[];
-      const pageRawCount = Array.isArray(pageRawList) ? pageRawList.length : 0;
+      for (let retry = 0; retry <= MAX_EMPTY_RETRIES; retry++) {
+        if (retry > 0) {
+          console.warn(`[MerchantSync] ${platform} page ${page} 空响应，${(retry + 1) * 2}s 后重试 (${retry}/${MAX_EMPTY_RETRIES})`);
+          await sleep((retry + 1) * 2000);
+        }
+        pageData = await callPlatformApi(config, token, page, effectiveRelFilter);
+        const pageRoot = ((pageData as any).data || pageData) as Record<string, unknown>;
+        const pageRawList = (pageRoot.list || pageRoot.items || pageRoot.merchants || []) as unknown[];
+        pageRawCount = Array.isArray(pageRawList) ? pageRawList.length : 0;
+        if (pageRawCount > 0) break;
+      }
 
-      if (pageRawCount === 0) break;
+      if (pageRawCount === 0) {
+        consecutiveEmpty++;
+        if (consecutiveEmpty >= MAX_CONSECUTIVE_EMPTY) {
+          console.warn(`[MerchantSync] ${platform} 连续 ${consecutiveEmpty} 页为空，停止翻页 (page=${page})`);
+          break;
+        }
+        continue; // 跳过空页，继续下一页
+      }
+      consecutiveEmpty = 0;
 
       const batch = parseMerchants(platform, pageData, assumeAllJoined);
       for (const m of batch) {
         if (!seen.has(m.merchant_id)) { seen.add(m.merchant_id); allMerchants.push(m); }
       }
 
-      // 用实际页大小（而非 maxSize）判断末页
       if (pageRawCount < actualPageSize) break;
     }
 
