@@ -911,6 +911,14 @@ export async function POST(req: NextRequest) {
     }
     const successMsg = msgParts.join("，");
 
+    // 广告创建成功，立即同步商家状态（强关联）
+    try {
+      const { syncMerchantStatusForUser } = await import("@/lib/campaign-merchant-link");
+      await syncMerchantStatusForUser(userId);
+    } catch (syncErr) {
+      console.error("[AdSubmit] 商家状态同步失败:", syncErr);
+    }
+
     return apiSuccess(serializeData({
       google_campaign_id: googleCampaignId,
       customer_id: customerId,

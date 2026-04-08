@@ -1023,8 +1023,7 @@ async function triggerArticleGeneration(
  * 3. 将匹配到的商家标记为 claimed
  */
 async function autoLinkAndClaimMerchants(userId: bigint) {
-  const { autoLinkAndCreateMerchants, syncMerchantStatusFromCampaigns } = await import("@/lib/campaign-merchant-link");
-  await autoLinkAndCreateMerchants(userId);
-  await syncMerchantStatusFromCampaigns(userId);
+  const { syncMerchantStatusForUser } = await import("@/lib/campaign-merchant-link");
+  await syncMerchantStatusForUser(userId);
 }
 

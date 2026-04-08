@@ -97,20 +97,15 @@ export async function POST(req: NextRequest) {
     });
   }
 
-  // 4. 释放商家
-  const releaseIds = merchantsToRelease.map((m) => m.id);
-  if (releaseIds.length > 0) {
-    await prisma.user_merchants.updateMany({
-      where: { id: { in: releaseIds } },
-      data: { status: "available", claimed_at: null },
-    });
-  }
+  // 4. 商家状态由同步函数统一处理（强关联广告系列）
+  const { syncMerchantStatusForUser } = await import("@/lib/campaign-merchant-link");
+  await syncMerchantStatusForUser(userId);
 
   return apiSuccess(serializeData({
     dry_run: false,
     username: user.username,
     deleted_campaigns: deleteIds.length,
-    released_merchants: releaseIds.length,
+    released_merchants: merchantsToRelease.length,
     kept_campaigns: toKeep.length,
     details: {
       deleted: toDelete.map((c) => ({ name: c.campaign_name, status: c.google_status })),

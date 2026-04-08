@@ -1,19 +1,23 @@
 /**
- * 广告系列与商家的关联与状态同步
+ * 广告系列 ↔ 商家 强关联同步
  *
- * 商家状态说明：
- *   "available" — 商家在平台商家库中，尚未被任何用户认领
- *   "claimed"   — 商家已被认领，且有 ENABLED 广告系列在投放
- *   "paused"    — 商家已被认领，但关联的所有广告系列均为 PAUSED/REMOVED
+ * 核心规则（重写 2026-04-08）：
+ *   商家状态 100% 由广告系列决定，两者强绑定，实时联动。
  *
- * 核心规则（07 确认，2026-04-01）：
- * 1. 只要广告系列存在该商家，该商家就是「我的商家」，不应释放回「查找商家」
- * 2. 商家状态跟随广告系列：ENABLED → "claimed"，全部 PAUSED → "paused"
- * 3. 系统不自动创建商家——员工手动建广告时，商家应已在系统中，找不到则仅记录日志待人工处理
+ *   1. 有任意 ENABLED 广告系列 → 商家 "claimed"
+ *   2. 所有广告系列均 PAUSED/REMOVED → 商家 "paused"
+ *   3. 没有广告系列关联 → 商家保持原状态（available / 手动设定的状态）
+ *
+ *   同步入口唯一：syncMerchantStatusForUser(userId)
+ *   此函数做两件事：
+ *     A. 自动关联未绑定的广告系列到商家（通过命名规则匹配）
+ *     B. 根据所有已关联广告系列的状态，强制更新商家状态
  */
 
 import prisma from "@/lib/prisma";
 import { normalizePlatformCode } from "@/lib/constants";
+
+// ── 命名解析 ──
 
 export interface ParsedCampaignName {
   platform: string;
@@ -23,13 +27,8 @@ export interface ParsedCampaignName {
 }
 
 /**
- * 从广告系列名中完整提取命名信息
- * 支持两种格式：
- *   破折号: 003-RW-deltachildren-US-0126-117904
- *   空格:   011 CG cellFilter JS 0320 8000389
- *
- * 结构：序号-平台-商家名-国家/地区-日期(MMDD)-MID
- * MID 始终是末尾的纯数字段
+ * 从广告系列名中提取 平台+MID
+ * 格式：序号-平台-商家名-国家-日期-MID （破折号或空格分隔）
  */
 export function parseCampaignNameFull(name: string): ParsedCampaignName | null {
   if (!name) return null;
@@ -51,20 +50,28 @@ export function parseCampaignNameFull(name: string): ParsedCampaignName | null {
   };
 }
 
+// ── 唯一入口：同步用户的商家状态 ──
+
 /**
- * 为 user_merchant_id = 0 的广告系列匹配已有商家并关联
+ * 同步用户所有商家状态（唯一入口）
  *
- * 逻辑：
- * 1. 找出所有 user_merchant_id = 0 的广告系列
- * 2. 解析广告系列名称，获取 platform + MID
- * 3. 在 user_merchants 中查找匹配商家
- *    - 找到 → 关联，并根据广告系列 google_status 设置商家状态：
- *              ENABLED → "claimed"，其余 → "paused"
- *    - 未找到 → 记录警告日志，跳过（不自动创建商家）
+ * Step 1: 自动关联 user_merchant_id=0 的广告系列到对应商家
+ * Step 2: 根据关联的广告系列状态，强制设置商家状态
  *
- * 返回成功关联的广告系列条数。
+ * 调用时机：任何广告系列 google_status 变更之后
  */
-export async function autoLinkAndCreateMerchants(userId: bigint): Promise<number> {
+export async function syncMerchantStatusForUser(userId: bigint): Promise<{
+  linked: number;
+  merchantsUpdated: number;
+}> {
+  const linked = await autoLinkCampaigns(userId);
+  const merchantsUpdated = await forceUpdateMerchantStatus(userId);
+  return { linked, merchantsUpdated };
+}
+
+// ── Step 1: 自动关联未绑定的广告系列 ──
+
+async function autoLinkCampaigns(userId: bigint): Promise<number> {
   const unlinked = await prisma.campaigns.findMany({
     where: {
       user_id: userId,
@@ -72,16 +79,15 @@ export async function autoLinkAndCreateMerchants(userId: bigint): Promise<number
       is_deleted: 0,
       google_campaign_id: { not: null },
     },
-    select: { id: true, campaign_name: true, google_status: true },
+    select: { id: true, campaign_name: true },
     take: 500,
   });
 
   if (unlinked.length === 0) return 0;
 
-  // 预加载当前用户所有商家，构建 platform_mid → merchant 索引
   const userMerchants = await prisma.user_merchants.findMany({
     where: { user_id: userId, is_deleted: 0 },
-    select: { id: true, platform: true, merchant_id: true, status: true },
+    select: { id: true, platform: true, merchant_id: true },
   });
   const merchantIndex = new Map(
     userMerchants.map((m) => [
@@ -91,13 +97,7 @@ export async function autoLinkAndCreateMerchants(userId: bigint): Promise<number
   );
 
   let linked = 0;
-  const pendingOps: Promise<unknown>[] = [];
-
-  const flush = async () => {
-    if (pendingOps.length >= 20) {
-      await Promise.all(pendingOps.splice(0));
-    }
-  };
+  const ops: Promise<unknown>[] = [];
 
   for (const campaign of unlinked) {
     const parsed = parseCampaignNameFull(campaign.campaign_name || "");
@@ -107,7 +107,6 @@ export async function autoLinkAndCreateMerchants(userId: bigint): Promise<number
     const merchant = merchantIndex.get(key);
 
     if (!merchant) {
-      // 商家在系统中不存在，不自动创建，记录日志等待人工在「商家库」中添加
       console.warn(
         `[MerchantAutoLink] 未找到商家: ${key}` +
         ` (campaign: "${campaign.campaign_name}")` +
@@ -116,118 +115,73 @@ export async function autoLinkAndCreateMerchants(userId: bigint): Promise<number
       continue;
     }
 
-    // 关联广告系列到商家
-    pendingOps.push(
+    ops.push(
       prisma.campaigns.update({
         where: { id: campaign.id },
         data: { user_merchant_id: merchant.id },
       })
     );
-
-    // 商家状态跟随广告系列：ENABLED → "claimed"，其余 → "paused"
-    const targetStatus = campaign.google_status === "ENABLED" ? "claimed" : "paused";
-    if (merchant.status !== targetStatus && merchant.status !== "claimed") {
-      // 规则：只升不降（available → claimed/paused，paused → claimed，不把 claimed 降为 paused）
-      // claimed → paused 的降级由 syncMerchantStatusFromCampaigns 统一处理
-      pendingOps.push(
-        prisma.user_merchants.update({
-          where: { id: merchant.id },
-          data: {
-            status: targetStatus,
-            ...(targetStatus === "claimed" ? { claimed_at: new Date() } : {}),
-          },
-        })
-      );
-      merchant.status = targetStatus;
-    } else if (targetStatus === "claimed" && merchant.status !== "claimed") {
-      pendingOps.push(
-        prisma.user_merchants.update({
-          where: { id: merchant.id },
-          data: { status: "claimed", claimed_at: new Date() },
-        })
-      );
-      merchant.status = "claimed";
-    }
-
     linked++;
-    await flush();
+
+    if (ops.length >= 20) {
+      await Promise.all(ops.splice(0));
+    }
   }
 
-  if (pendingOps.length > 0) await Promise.all(pendingOps);
+  if (ops.length > 0) await Promise.all(ops);
 
   if (linked > 0) {
-    console.log(`[MerchantAutoLink] 完成：关联 ${linked} 条广告系列`);
+    console.log(`[MerchantAutoLink] 关联 ${linked} 条广告系列`);
   }
   return linked;
 }
 
+// ── Step 2: 强制更新所有已关联商家的状态 ──
+
 /**
- * 已关联商家的持续状态同步（状态跟随广告系列）：
+ * 核心逻辑：遍历用户所有已关联广告系列，按商家汇总，强制设定状态：
+ *   - 有任意 ENABLED → 商家 claimed
+ *   - 全部 PAUSED/REMOVED → 商家 paused
+ *   - 曾认领但所有广告系列已删除 → 商家 available（释放）
  *
- * - 有任意 ENABLED 广告系列 → 商家状态 = "claimed"
- * - 所有关联广告系列均为 PAUSED/REMOVED → 商家状态 = "paused"
- *
- * 注：两种状态都属于「我的商家」，均不会降回 "available"。
- *
- * 返回被更新的商家条数。
+ * 无条件覆盖，不管商家当前是什么状态。
  */
-export async function syncMerchantStatusFromCampaigns(userId: bigint): Promise<number> {
-  // 拉取所有有关联广告的商家及其广告状态
-  const rawLinked = await prisma.campaigns.findMany({
+async function forceUpdateMerchantStatus(userId: bigint): Promise<number> {
+  const campaigns = await prisma.campaigns.findMany({
     where: {
       user_id: userId,
       is_deleted: 0,
       user_merchant_id: { not: BigInt(0) },
-      google_campaign_id: { not: null },
     },
-    select: { id: true, user_merchant_id: true, google_status: true, google_campaign_id: true, last_google_sync_at: true },
+    select: { user_merchant_id: true, google_status: true },
   });
 
-  if (rawLinked.length === 0) return 0;
-
-  // 按 google_campaign_id 去重，保留最近同步的版本，避免重复记录导致状态不一致
-  const gcidDedup = new Map<string, typeof rawLinked[0]>();
-  for (const c of rawLinked) {
-    const gcid = c.google_campaign_id || `__local_${c.id}`;
-    const existing = gcidDedup.get(gcid);
-    if (!existing) {
-      gcidDedup.set(gcid, c);
-    } else {
-      const cTime = c.last_google_sync_at?.getTime() || 0;
-      const eTime = existing.last_google_sync_at?.getTime() || 0;
-      if (cTime > eTime || (cTime === eTime && Number(c.id) > Number(existing.id))) {
-        gcidDedup.set(gcid, c);
-      }
-    }
-  }
-  const linkedCampaigns = [...gcidDedup.values()];
-
-  // 对每个商家判断：是否有任意 ENABLED 广告
-  const merchantHasEnabled = new Map<string, boolean>();
-  for (const c of linkedCampaigns) {
-    const id = String(c.user_merchant_id);
+  // 按商家 ID 聚合：只要有一条 ENABLED，该商家就是 claimed
+  const merchantTarget = new Map<string, "claimed" | "paused">();
+  for (const c of campaigns) {
+    const mid = String(c.user_merchant_id);
     if (c.google_status === "ENABLED") {
-      merchantHasEnabled.set(id, true);
-    } else if (!merchantHasEnabled.has(id)) {
-      merchantHasEnabled.set(id, false);
+      merchantTarget.set(mid, "claimed");
+    } else if (!merchantTarget.has(mid)) {
+      merchantTarget.set(mid, "paused");
     }
   }
 
-  const enabledMerchantIds = [...merchantHasEnabled.entries()]
-    .filter(([, hasEnabled]) => hasEnabled)
+  const shouldClaim = [...merchantTarget.entries()]
+    .filter(([, s]) => s === "claimed")
     .map(([id]) => BigInt(id));
 
-  const pausedMerchantIds = [...merchantHasEnabled.entries()]
-    .filter(([, hasEnabled]) => !hasEnabled)
+  const shouldPause = [...merchantTarget.entries()]
+    .filter(([, s]) => s === "paused")
     .map(([id]) => BigInt(id));
 
   let updated = 0;
 
-  // 有 ENABLED 广告 → 升为 "claimed"
-  if (enabledMerchantIds.length > 0) {
+  // 有 ENABLED 广告 → claimed
+  if (shouldClaim.length > 0) {
     const r = await prisma.user_merchants.updateMany({
       where: {
-        id: { in: enabledMerchantIds },
+        id: { in: shouldClaim },
         user_id: userId,
         is_deleted: 0,
         status: { not: "claimed" },
@@ -237,21 +191,61 @@ export async function syncMerchantStatusFromCampaigns(userId: bigint): Promise<n
     updated += r.count;
   }
 
-  // 全部 PAUSED/REMOVED → 改为 "paused"
-  // pausedMerchantIds 均来自 user_merchant_id != 0 的广告系列，说明商家已与广告关联，
-  // 无论当前是 "available" 还是 "claimed"，都应归入「我的商家」并标记为暂停状态
-  if (pausedMerchantIds.length > 0) {
+  // 全部暂停/移除 → paused
+  if (shouldPause.length > 0) {
     const r = await prisma.user_merchants.updateMany({
       where: {
-        id: { in: pausedMerchantIds },
+        id: { in: shouldPause },
         user_id: userId,
         is_deleted: 0,
-        status: { not: "paused" }, // 已经是 "paused" 的不重复写
+        status: { not: "paused" },
       },
       data: { status: "paused" },
     });
     updated += r.count;
   }
 
+  // 释放：曾认领/暂停但已无活跃广告系列的商家 → available
+  const hasActiveCampaign = new Set([...shouldClaim, ...shouldPause].map(String));
+  const orphanedMerchants = await prisma.user_merchants.findMany({
+    where: {
+      user_id: userId,
+      is_deleted: 0,
+      status: { in: ["claimed", "paused"] },
+    },
+    select: { id: true },
+  });
+
+  const shouldRelease = orphanedMerchants
+    .filter((m) => !hasActiveCampaign.has(String(m.id)))
+    .map((m) => m.id);
+
+  if (shouldRelease.length > 0) {
+    const r = await prisma.user_merchants.updateMany({
+      where: {
+        id: { in: shouldRelease },
+        user_id: userId,
+        is_deleted: 0,
+      },
+      data: { status: "available", claimed_at: null },
+    });
+    updated += r.count;
+    if (r.count > 0) {
+      console.log(`[MerchantSync] 释放 ${r.count} 个无广告系列的商家回 available`);
+    }
+  }
+
   return updated;
+}
+
+// ── 兼容旧调用名（过渡期，最终所有调用点都应改为 syncMerchantStatusForUser） ──
+
+export async function autoLinkAndCreateMerchants(userId: bigint): Promise<number> {
+  const result = await syncMerchantStatusForUser(userId);
+  return result.linked;
+}
+
+export async function syncMerchantStatusFromCampaigns(userId: bigint): Promise<number> {
+  const result = await syncMerchantStatusForUser(userId);
+  return result.merchantsUpdated;
 }

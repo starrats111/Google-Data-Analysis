@@ -93,6 +93,14 @@ export async function POST(req: NextRequest) {
     });
   }
 
+  // 广告状态变更，同步商家状态（强关联）
+  try {
+    const { syncMerchantStatusForUser } = await import("@/lib/campaign-merchant-link");
+    await syncMerchantStatusForUser(userId);
+  } catch (syncErr) {
+    console.error("[Republish] 商家状态同步失败:", syncErr);
+  }
+
   return apiSuccess(serializeData({
     campaign_id: campaign.id,
     campaign_name: newCampaignName,

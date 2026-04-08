@@ -4,11 +4,10 @@
  *
  * 扩展功能（F-05.1）：
  * - 发现 Google Ads 中存在但 DB 中未记录的新广告系列，自动入库
- * - 新广告入库后调用 autoLinkAndCreateMerchants，根据广告名（平台+MID）自动查找或创建商家
- * - syncMerchantStatusFromCampaigns 确保有 ENABLED 广告的商家处于 claimed 状态
+ * - 同步完成后调用 syncMerchantStatusForUser，商家状态强关联广告系列状态
  */
 import prisma from "@/lib/prisma";
-import { parseCampaignNameFull, autoLinkAndCreateMerchants, syncMerchantStatusFromCampaigns } from "@/lib/campaign-merchant-link";
+import { parseCampaignNameFull, syncMerchantStatusForUser } from "@/lib/campaign-merchant-link";
 
 interface SyncResult {
   mcc: string;
@@ -25,8 +24,7 @@ interface SyncResult {
  * 1. 从 Google Ads API 拉取所有 CID 下的广告系列列表和状态
  * 2. 对 DB 中已有的广告系列：更新 google_status / budget
  * 3. 对 Google 中有但 DB 中没有的广告系列：自动创建 DB 记录
- * 4. 调用 autoLinkAndCreateMerchants 为未匹配商家的广告系列自动关联/创建商家
- * 5. 调用 syncMerchantStatusFromCampaigns 确保 ENABLED 广告对应商家为 claimed
+ * 4. 调用 syncMerchantStatusForUser 自动关联 + 强制同步商家状态
  */
 export async function syncUserCampaignStatuses(userId: bigint): Promise<SyncResult[]> {
   const mccs = await prisma.google_mcc_accounts.findMany({
@@ -124,7 +122,7 @@ export async function syncUserCampaignStatuses(userId: bigint): Promise<SyncResu
           await prisma.campaigns.create({
             data: {
               user_id: userId,
-              // user_merchant_id 先留 0，由 autoLinkAndCreateMerchants 补全
+              // user_merchant_id 先留 0，由 syncMerchantStatusForUser 补全
               user_merchant_id: BigInt(0),
               google_campaign_id: s.campaign_id,
               mcc_id: mcc.id,
@@ -177,13 +175,11 @@ export async function syncUserCampaignStatuses(userId: bigint): Promise<SyncResu
     }
   }
 
-  // ── 5. 全局商家自动关联与状态同步（每次都执行，确保历史数据一致性）───
-  // 不加 anyChange 条件：广告状态即使没变，也需要把 available 商家更新为 paused
-  const linked = await autoLinkAndCreateMerchants(userId);
-  const claimed = await syncMerchantStatusFromCampaigns(userId);
-  if (linked > 0 || claimed > 0) {
+  // ── 5. 商家状态强关联同步 ───
+  const { linked, merchantsUpdated } = await syncMerchantStatusForUser(userId);
+  if (linked > 0 || merchantsUpdated > 0) {
     console.log(
-      `[StatusSync] 商家关联完成：关联 ${linked} 条，更新状态 ${claimed} 个`
+      `[StatusSync] 商家同步：关联 ${linked} 条，状态更新 ${merchantsUpdated} 个`
     );
   }
 

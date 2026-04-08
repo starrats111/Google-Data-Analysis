@@ -68,9 +68,9 @@ export async function POST(req: NextRequest) {
       data: { google_status: confirmedStatus },
     });
 
-    // 广告状态变更后立即同步商家状态
-    const { syncMerchantStatusFromCampaigns } = await import("@/lib/campaign-merchant-link");
-    await syncMerchantStatusFromCampaigns(BigInt(user.userId));
+    // 广告状态变更后立即同步商家状态（强关联）
+    const { syncMerchantStatusForUser } = await import("@/lib/campaign-merchant-link");
+    await syncMerchantStatusForUser(BigInt(user.userId));
 
     return apiSuccess({ status: confirmedStatus }, `广告已${action === "enable" ? "启用" : "暂停"}`);
   } catch (err) {

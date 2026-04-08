@@ -6,7 +6,7 @@ import { syncFromSheet } from "@/lib/sheet-sync";
 import { cacheDelete } from "@/lib/cache";
 import { todayCST, yesterdayCST, nowCST, parseCSTDateStart, parseCSTDateEndExclusive, isTodayCST } from "@/lib/date-utils";
 import { getExchangeRate, preloadRates } from "@/lib/exchange-rate";
-import { autoLinkAndCreateMerchants, syncMerchantStatusFromCampaigns, parseCampaignNameFull } from "@/lib/campaign-merchant-link";
+import { syncMerchantStatusForUser, parseCampaignNameFull } from "@/lib/campaign-merchant-link";
 
 /**
  * POST /api/user/data-center/sync
@@ -69,9 +69,8 @@ export async function POST(req: NextRequest) {
     results.ads = await syncAdsData(mcc, userId, forceFullSync, sync_start_date, sync_end_date);
   }
 
-  // 关联 campaigns 与 merchants（自动查找或创建商家，商家状态跟随广告系列）
-  await autoLinkAndCreateMerchants(userId);
-  await syncMerchantStatusFromCampaigns(userId);
+  // 商家状态强关联同步
+  await syncMerchantStatusForUser(userId);
   await linkTransactionsToMerchants(userId);
 
   // type=all 时同步联盟交易（合并原来独立的 sync-transactions 功能）
@@ -909,8 +908,7 @@ async function syncTransactionsInline(
 
     // 关联交易和 campaigns 到正确的商家（自动创建缺失商家，状态跟随广告）
     await linkTransactionsToMerchants(userId);
-    await autoLinkAndCreateMerchants(userId);
-    await syncMerchantStatusFromCampaigns(userId);
+    await syncMerchantStatusForUser(userId);
 
     await prisma.ads_daily_stats.updateMany({
       where: { user_id: userId, date: { gte: startDate, lt: endExclusive } },

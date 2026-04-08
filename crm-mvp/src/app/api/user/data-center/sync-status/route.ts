@@ -107,10 +107,9 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // 广告状态变更后立即同步商家状态
-    const { autoLinkAndCreateMerchants, syncMerchantStatusFromCampaigns } = await import("@/lib/campaign-merchant-link");
-    const linked = await autoLinkAndCreateMerchants(userId);
-    const merchantUpdated = await syncMerchantStatusFromCampaigns(userId);
+    // 广告状态变更后立即同步商家状态（强关联）
+    const { syncMerchantStatusForUser } = await import("@/lib/campaign-merchant-link");
+    const { linked, merchantsUpdated: merchantUpdated } = await syncMerchantStatusForUser(userId);
 
     return apiSuccess(serializeData({
       campaignUpdated,
