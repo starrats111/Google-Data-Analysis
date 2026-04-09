@@ -71,6 +71,7 @@ export async function GET(req: NextRequest) {
       where.user_merchant_id = { in: matchedMerchants.map((m) => m.id) };
     }
 
+    const isSingleQuery = !!(articleId || slug);
     const [total, articles] = await Promise.all([
       prisma.articles.count({ where: where as never }),
       prisma.articles.findMany({
@@ -78,7 +79,7 @@ export async function GET(req: NextRequest) {
         orderBy: { created_at: "desc" },
         skip: (page - 1) * pageSize,
         take: pageSize,
-        omit: { content: true },
+        ...(isSingleQuery ? {} : { omit: { content: true } }),
       }),
     ]);
 
