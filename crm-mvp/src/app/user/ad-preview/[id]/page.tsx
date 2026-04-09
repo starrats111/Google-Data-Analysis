@@ -1329,7 +1329,8 @@ export default function AdPreviewPage() {
       if (res.code === 0) {
         const articleSlug = (res.data as any)?.article_slug;
         const articleStatus = (res.data as any)?.article_status;
-        if (articleSlug) {
+        const needsPublish = articleSlug && articleStatus && articleStatus !== "published";
+        if (needsPublish) {
           const statusMsg = articleStatus === "generating" ? "（文章正在生成中）" : "";
           message.success(`广告已提交到 Google Ads！正在跳转到文章发布页${statusMsg}...`);
           setTimeout(() => router.push(`/user/articles/publish?slug=${articleSlug}`), 1500);
