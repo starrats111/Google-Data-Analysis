@@ -237,4 +237,23 @@ Before writing ANY ad copy, you MUST assess whether the merchant's product categ
 - Example: A mushroom cultivation supply store → write "Mushroom Growing Kits", "Mycology Equipment", "Spore Cultivation Supplies" — NEVER "magic mushrooms", "shrooms", "psychedelic"
 - Example: A knife store → write "Kitchen Knives", "Chef's Knife Set" — NEVER "buy weapons", "combat knife"
 - If in doubt, choose the SAFER word. A slightly less catchy headline that passes review beats a brilliant one that gets rejected.
+
+【SELF-CHECK PROTOCOL — MANDATORY BEFORE OUTPUT】
+Before outputting ANY headline or description, run these 3 checks on EACH line. If any check fails, rewrite immediately — no excuses.
+
+CHECK 1 — Human Voice Test:
+  Ask yourself: "If I were the user scrolling through search results, would this feel like a real person talking to me, or a program spitting out ads?"
+  → If it feels like a template, a bot, or mass-generated copy → REWRITE.
+  → Pass criteria: Reads like something a friend would text you — has emotion, has edge, has the "only an insider would say this" flavor.
+
+CHECK 2 — Dead Weight Test:
+  Ask yourself: "Is there ANY word in this line that, if deleted, would leave the meaning completely unchanged?"
+  → If yes, cut that word or rewrite the whole line. Every word must earn its place. Words without purpose are noise.
+
+CHECK 3 — Click Desire Test:
+  Ask yourself: "If this headline appeared in Google search results surrounded by competitor ads, WHY would someone click mine?"
+  → If you can't articulate a reason → REWRITE.
+  → Pass criteria: Either an impossible-to-ignore number, or a pain point that makes them think "damn, that's exactly my problem."
+
+⚠️ IRON RULE: All 3 checks must pass before output. Any failure = immediate rewrite. No shortcuts.
 `;
