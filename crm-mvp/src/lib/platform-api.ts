@@ -1,6 +1,6 @@
 /**
  * 联盟平台 API 同步服务
- * 从 7 个联盟平台拉取商家列表，写入 user_merchants 表
+ * 从 8 个联盟平台拉取商家列表，写入 user_merchants 表
  * 完全独立实现，不依赖旧后端
  */
 
@@ -87,6 +87,14 @@ const PLATFORM_API_CONFIG: Record<string, PlatformApiConfig> = {
     assumeAllJoined: true,
     requiresRelationshipParam: true,
     // 不设 relationshipValue，默认使用"Joined"（API 唯一有效的已批准过滤值）
+  },
+  MUI: {
+    mode: "post_json",
+    url: "https://api.ultrainfluence.com/api/monetization",
+    source: "ultrainfluence",
+    pageKey: "curPage", sizeKey: "perPage", maxSize: 2000,
+    assumeAllJoined: true,
+    requiresRelationshipParam: true,
   },
 };
 
@@ -490,6 +498,12 @@ const PLATFORM_TXN_CONFIG: Record<string, PlatformTxnConfig> = {
     url: "https://www.linkbux.com/api.php?mod=medium&op=transaction",
     dateFormat: "snake", pageKey: "page", sizeKey: "limit", maxSize: 2000,
   },
+  MUI: {
+    mode: "post_json",
+    url: "https://api.ultrainfluence.com/api/transaction_v3",
+    source: "ultrainfluence",
+    dateFormat: "camel", pageKey: "curPage", sizeKey: "perPage", maxSize: 2000,
+  },
 };
 
 export interface PlatformTransaction {
@@ -658,8 +672,24 @@ let _diagLogged = new Set<string>();
 
 function parseTransactions(platform: string, data: Record<string, unknown>): PlatformTransaction[] {
   const root = (data.data || data) as Record<string, unknown>;
-  const list = (root.list || root.transactions || root.items || []) as Record<string, unknown>[];
+  let list = (root.list || root.transactions || root.items || []) as Record<string, unknown>[];
   if (!Array.isArray(list)) return [];
+
+  // MUI 交易数据为 订单→商品行 嵌套结构，需展平为逐行记录
+  if (platform === "MUI") {
+    const flat: Record<string, unknown>[] = [];
+    for (const order of list) {
+      const items = (order as any).items;
+      if (Array.isArray(items) && items.length > 0) {
+        for (const sub of items) {
+          flat.push({ ...order, ...sub });
+        }
+      } else {
+        flat.push(order);
+      }
+    }
+    list = flat;
+  }
 
   // 每个平台只打印一次首条交易的原始字段（诊断用）
   if (list.length > 0 && !_diagLogged.has(platform)) {
@@ -692,6 +722,7 @@ function parseTransactions(platform: string, data: Record<string, unknown>): Pla
     // 优先使用平台级商品/明细 ID（每个商品独立），再 fallback 到 order_id
     // API 字段用下划线命名（如 collabgrow_id），代码同时兼容驼峰
     const txnId = String(
+      item.ultrainfluence_id || item.ultrainfluenceId ||
       item.collabgrow_id || item.collabgrowId ||
       item.creatorflare_id || item.creatorflareId ||
       item.brandsparkhub_id || item.brandsparkhubId ||

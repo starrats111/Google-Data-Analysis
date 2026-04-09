@@ -1,6 +1,7 @@
 // 联盟平台代码及全称
 // LH: linkhaitao.com | LB: linkbux.com | RW: rewardoo.com
 // CG: collabglow.com | PM: partnermatic.com | BSH: brandsparkhub.com | CF: creatorflare.com
+// MUI: ultrainfluence.com
 export const PLATFORMS = [
   { code: "CG", name: "CollabGlow", domain: "collabglow.com" },
   { code: "PM", name: "Partnermatic", domain: "partnermatic.com" },
@@ -9,6 +10,7 @@ export const PLATFORMS = [
   { code: "LB", name: "LinkBux", domain: "linkbux.com" },
   { code: "BSH", name: "BrandSparkHub", domain: "brandsparkhub.com" },
   { code: "CF", name: "CreatorFlare", domain: "creatorflare.com" },
+  { code: "MUI", name: "UltraInfluence", domain: "ultrainfluence.com" },
 ] as const;
 
 export type PlatformCode = (typeof PLATFORMS)[number]["code"];
@@ -54,6 +56,13 @@ const _PLATFORM_ALIAS_ENTRIES: [string, PlatformCode][] = [
   ["CF", "CF"], ["cf", "CF"],
   ["CreatorFlare", "CF"], ["creatorflare", "CF"], ["Creator Flare", "CF"], ["creator flare", "CF"],
   ["creatorflare.com", "CF"], ["www.creatorflare.com", "CF"],
+
+  // MUI = UltraInfluence (ultrainfluence.com)
+  ["MUI", "MUI"], ["mui", "MUI"],
+  ["UltraInfluence", "MUI"], ["ultrainfluence", "MUI"],
+  ["Ultra Influence", "MUI"], ["ultra influence", "MUI"],
+  ["ultrainfluence.com", "MUI"], ["app.ultrainfluence.com", "MUI"],
+  ["api.ultrainfluence.com", "MUI"],
 ];
 
 export const PLATFORM_ALIASES: ReadonlyMap<string, PlatformCode> = new Map(_PLATFORM_ALIAS_ENTRIES);
