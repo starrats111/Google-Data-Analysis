@@ -239,25 +239,23 @@ export const GET = withUser(async (req: NextRequest, { user }) => {
       ];
     }
 
+    // ─── 全量获取商家 + 广告系列，计算 ad_status 后再分页 ───
+    // 必须先计算所有商家的 ad_status 才能正确排序，否则 ENABLED 商家可能被分页截断
     const claimedOrderBy = buildOrderBy([
       { recommendation_status: "desc" },
       { updated_at: "desc" },
     ]);
-    const [total, merchants] = await Promise.all([
-      prisma.user_merchants.count({ where: where as never }),
-      prisma.user_merchants.findMany({
-        where: where as never,
-        orderBy: claimedOrderBy as never,
-        skip: (page - 1) * pageSize,
-        take: pageSize,
-      }),
-    ]);
+    const allMerchants = await prisma.user_merchants.findMany({
+      where: where as never,
+      orderBy: claimedOrderBy as never,
+    });
+    const total = allMerchants.length;
 
-    // 通过 user_merchant_id 查关联的广告系列（而非从 campaign_name 解析 MID）
-    const merchantIds = merchants.map((m: any) => m.id);
-    const rawCampaigns = merchantIds.length > 0
+    // 查询所有商家关联的广告系列
+    const allMerchantIds = allMerchants.map((m: any) => m.id);
+    const rawCampaigns = allMerchantIds.length > 0
       ? await prisma.campaigns.findMany({
-          where: { user_id: userId, is_deleted: 0, user_merchant_id: { in: merchantIds } },
+          where: { user_id: userId, is_deleted: 0, user_merchant_id: { in: allMerchantIds } },
           select: { id: true, user_merchant_id: true, google_status: true, google_campaign_id: true, campaign_name: true, last_google_sync_at: true },
         })
       : [];
@@ -299,28 +297,38 @@ export const GET = withUser(async (req: NextRequest, { user }) => {
       }
     }
 
-    const withLabels = await enrichWithLabels(merchants);
-    const advMap = await batchActiveAdvertisers(merchants.map((m: any) => ({ merchant_id: m.merchant_id, platform: m.platform })));
-    const enriched = withLabels.map((m) => {
+    // 计算所有商家的 ad_status 并排序
+    const allWithStatus = allMerchants.map((m: any) => {
       const info = campaignMap.get(m.id.toString());
       let adStatus = "NOT_SUBMITTED";
       if (info?.campaignId) {
         adStatus = info.status || "UNKNOWN";
       }
+      return { _m: m, _adStatus: adStatus, _info: info };
+    });
+
+    if (!sortField) {
+      const STATUS_PRIORITY: Record<string, number> = { ENABLED: 0, PAUSED: 1, NOT_SUBMITTED: 2, UNKNOWN: 3 };
+      allWithStatus.sort((a, b) => (STATUS_PRIORITY[a._adStatus] ?? 9) - (STATUS_PRIORITY[b._adStatus] ?? 9));
+    }
+
+    // 分页：在全局排序后截取当前页
+    const pageSlice = allWithStatus.slice((page - 1) * pageSize, page * pageSize);
+
+    // 仅对当前页的商家做标签/在投人数等富化（避免全量查询开销）
+    const pageMerchants = pageSlice.map(s => s._m);
+    const withLabels = await enrichWithLabels(pageMerchants);
+    const advMap = await batchActiveAdvertisers(pageMerchants.map((m: any) => ({ merchant_id: m.merchant_id, platform: m.platform })));
+    const enriched = withLabels.map((m, i) => {
+      const { _adStatus, _info } = pageSlice[i];
       return {
         ...m,
-        ad_status: adStatus,
-        ad_campaign_name: info?.campaignName || null,
-        ad_campaign_id: info?.campaignId || null,
+        ad_status: _adStatus,
+        ad_campaign_name: _info?.campaignName || null,
+        ad_campaign_id: _info?.campaignId || null,
         active_advertisers: advMap.get(`${m.platform}:${m.merchant_id}`) || 0,
       };
     });
-
-    // 默认排序时，优先显示已启用（ENABLED）的商家
-    if (!sortField) {
-      const STATUS_PRIORITY: Record<string, number> = { ENABLED: 0, PAUSED: 1, NOT_SUBMITTED: 2, UNKNOWN: 3 };
-      enriched.sort((a, b) => (STATUS_PRIORITY[a.ad_status] ?? 9) - (STATUS_PRIORITY[b.ad_status] ?? 9));
-    }
 
     const platformStats = await prisma.user_merchants.groupBy({
       by: ["platform"],
