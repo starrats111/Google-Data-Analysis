@@ -19,7 +19,7 @@ function log(msg: string) {
 /**
  * GET /api/cron/weekly-merchant-check
  *
- * 每 2 天 06:00 自动执行（立即返回，后台异步执行）：
+ * 每天 00:00 自动执行（立即返回，后台异步执行）：
  * 1. 对每个用户，调用联盟平台 API 获取最新商家关系状态，
  *    剔除已非 joined 的 claimed 商家，加入新 joined 商家。
  * 2. 对 claimed 商家的 tracking_link / campaign_link 进行可达性检测，

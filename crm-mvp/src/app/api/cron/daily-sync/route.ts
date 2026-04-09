@@ -20,10 +20,12 @@ function log(msg: string) {
 /**
  * GET /api/cron/daily-sync
  *
- * 每日 00:00 自动执行：
- * 1. 同步 MCC 广告数据（Sheet + API）
- * 2. 同步交易数据（各联盟平台）
- * 3. 同步违规/推荐商家（Google Sheet）
+ * 每日 06:00 自动执行：
+ * 1. 同步违规/推荐商家（Google Sheet）
+ * 2. 同步 MCC 广告数据（Sheet + API）
+ * 3. 同步广告系列状态 & 商家状态
+ * 4. 同步交易数据（各联盟平台）
+ * 5. 自动修复已发布文章
  */
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
