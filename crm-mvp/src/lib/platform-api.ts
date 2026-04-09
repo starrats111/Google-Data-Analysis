@@ -66,9 +66,9 @@ const PLATFORM_API_CONFIG: Record<string, PlatformApiConfig> = {
     mode: "post_form",
     url: "https://www.linkbux.com/api.php?mod=medium&op=monetization_api",
     pageKey: "page", sizeKey: "limit", maxSize: 1000,
-    // LB API 返回所有平台商家（含 Joined/Rejected/No Relationship/Pending），
-    // 必须读取 relationship 字段过滤，不能 assumeAllJoined
-    assumeAllJoined: false,
+    // LB API 对 relationship 参数大小写敏感：必须传 "Joined"（首字母大写），小写 "joined" 返回空列表
+    assumeAllJoined: true,
+    requiresRelationshipParam: true,
   },
   LH: {
     mode: "post_form",
