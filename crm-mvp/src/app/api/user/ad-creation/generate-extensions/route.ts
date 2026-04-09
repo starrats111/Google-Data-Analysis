@@ -400,7 +400,7 @@ async function generateCore(
 
   const isNonEnglish = market.languageCode !== "en";
   const langEnforcement = isNonEnglish
-    ? `\n⚠️ CRITICAL LANGUAGE RULE: ALL output MUST be written in ${languageName} ONLY. Do NOT use English in headlines, descriptions, or sitelink descriptions. Every single string must be in ${languageName}.\n`
+    ? `\n⚠️ CRITICAL LANGUAGE RULE: ALL output (headlines, descriptions, sitelink titles, sitelink descriptions) MUST be written ENTIRELY in ${languageName}. Do NOT use English. Do NOT mix languages. Even if the source website content or examples below are in English, you MUST translate and localize everything into ${languageName}. The target audience speaks ${languageName} — all copy must feel native to them.\n`
     : "";
 
   const prompt = `You are Adrian · 数据猎手 — a ruthlessly data-driven Google Ads RSA strategist. Your single mission: write copy that converts cold searchers into buyers at the lowest possible CPC.
@@ -431,7 +431,7 @@ Return ONLY a JSON object with this exact structure:
   "descriptions": ["d1","d2","d3","d4"],
   "sitelink_descriptions": [{"title":"...","desc1":"...","desc2":"..."},...]
 }
-Note: "title" in sitelink_descriptions is required. If the original sitelink title is in ALL CAPS or is unclear, rewrite it in Title Case or sentence case (≤25 chars). Otherwise keep it as-is.
+Note: "title" in sitelink_descriptions is required. If the original sitelink title is in ALL CAPS or is unclear, rewrite it in Title Case or sentence case (≤25 chars).${isNonEnglish ? ` IMPORTANT: If the original sitelink title is in English, you MUST translate it to ${languageName}. All sitelink titles and descriptions must be in ${languageName}.` : " Otherwise keep it as-is."}
 
 ═══ ADRIAN'S COPYWRITING CRAFT — THE DIFFERENCE BETWEEN "OKAY" AND "CLICK" ═══
 
@@ -505,7 +505,7 @@ Rules:
 4. Make desc1 the main benefit hook, desc2 a supporting detail or CTA
 5. No exclamation marks in titles — desc1/desc2 may use at most one
 
-Return ONLY valid JSON, no explanation.`;
+${isNonEnglish ? `\n⚠️ FINAL REMINDER: ALL headlines, descriptions, sitelink titles, and sitelink descriptions MUST be in ${languageName}. The examples above are English templates for structure reference only — you MUST write the actual output in ${languageName}. Do NOT output any English text.\n` : ""}Return ONLY valid JSON, no explanation.`;
 
   try {
     const raw = await callAiWithFallback("ad_copy", [{ role: "user", content: prompt }], 4096);

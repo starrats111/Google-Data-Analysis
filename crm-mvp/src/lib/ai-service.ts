@@ -438,6 +438,44 @@ function getFallbackHeadlineCandidates(
     ];
   }
 
+  if (market.languageCode === "zh_TW") {
+    return [
+      `${brand} ${product}`,
+      "立即瀏覽優惠",
+      `選購${product}`,
+      "品質值得信賴",
+      "精選好物推薦",
+      "限時優惠進行中",
+      "輕鬆選購好品質",
+      "官方品質保證",
+    ];
+  }
+
+  if (market.languageCode === "zh_CN") {
+    return [
+      `${brand} ${product}`,
+      "立即浏览优惠",
+      `选购${product}`,
+      "品质值得信赖",
+      "精选好物推荐",
+      "限时优惠进行中",
+      "轻松选购好品质",
+      "官方品质保证",
+    ];
+  }
+
+  if (market.languageCode === "ko") {
+    return [
+      `${brand} ${product}`,
+      "할인 혜택 확인",
+      `${product} 지금 쇼핑`,
+      "믿을 수 있는 품질",
+      "인기 상품 모음",
+      "한정 특가 진행 중",
+      "스마트한 쇼핑 선택",
+    ];
+  }
+
   return [
     `${brand} ${product}`,
     "Browse Deals Today",
@@ -523,6 +561,33 @@ function getFallbackDescriptionCandidates(
       `毎日をもっと快適にする${product}を比較しながら選べます。`,
       `納得できる価値と信頼感のある一台を今すぐ見つけましょう。`,
       `${brand}で${product}をチェック。品質と信頼のお買い物体験をお届けします。`,
+    ];
+  }
+
+  if (market.languageCode === "zh_TW") {
+    return [
+      `${brand}提供優質${product}，品質可靠、選購安心。`,
+      `探索精選${product}，為您的生活帶來更多便利與品質。`,
+      `立即查看優惠方案，輕鬆找到最適合您的${product}。`,
+      `在${brand}選購${product}，享受值得信賴的品質與服務。`,
+    ];
+  }
+
+  if (market.languageCode === "zh_CN") {
+    return [
+      `${brand}提供优质${product}，品质可靠、选购安心。`,
+      `探索精选${product}，为您的生活带来更多便利与品质。`,
+      `立即查看优惠方案，轻松找到最适合您的${product}。`,
+      `在${brand}选购${product}，享受值得信赖的品质与服务。`,
+    ];
+  }
+
+  if (market.languageCode === "ko") {
+    return [
+      `${brand}에서 품질 좋은 ${product}을(를) 만나보세요.`,
+      `스마트한 선택을 위한 ${product} 추천 상품을 확인하세요.`,
+      `지금 바로 할인 혜택을 확인하고 최적의 상품을 찾아보세요.`,
+      `${brand}에서 ${product}을(를) 쇼핑하세요. 믿을 수 있는 품질과 가치.`,
     ];
   }
 

@@ -73,7 +73,29 @@ function randomDelay(minMs: number, maxMs: number): Promise<void> {
 // ══════════════════════════════════════════════════════
 // 隐身请求头构建（照搬后端 _build_stealth_headers）
 // ══════════════════════════════════════════════════════
-function buildStealthHeaders(url: string, ua?: string): Record<string, string> {
+const COUNTRY_ACCEPT_LANG: Record<string, string> = {
+  HK: "zh-TW,zh;q=0.9,en;q=0.8", TW: "zh-TW,zh;q=0.9,en;q=0.8",
+  CN: "zh-CN,zh;q=0.9,en;q=0.8", SG: "en-SG,en;q=0.9,zh;q=0.8",
+  JP: "ja,en;q=0.8", KR: "ko,en;q=0.8",
+  DE: "de,en;q=0.8", AT: "de-AT,de;q=0.9,en;q=0.8", CH: "de-CH,de;q=0.9,en;q=0.8",
+  FR: "fr,en;q=0.8", BE: "fr-BE,fr;q=0.9,nl;q=0.8,en;q=0.7",
+  ES: "es,en;q=0.8", MX: "es-MX,es;q=0.9,en;q=0.8",
+  IT: "it,en;q=0.8", PT: "pt,en;q=0.8", BR: "pt-BR,pt;q=0.9,en;q=0.8",
+  NL: "nl,en;q=0.8", PL: "pl,en;q=0.8", SE: "sv,en;q=0.8",
+  NO: "no,en;q=0.8", DK: "da,en;q=0.8", FI: "fi,en;q=0.8",
+  RU: "ru,en;q=0.8", TR: "tr,en;q=0.8", TH: "th,en;q=0.8",
+  VN: "vi,en;q=0.8", ID: "id,en;q=0.8",
+};
+
+export function getAcceptLanguage(country?: string): string {
+  if (country) {
+    const al = COUNTRY_ACCEPT_LANG[country.toUpperCase()];
+    if (al) return al;
+  }
+  return "en-US,en;q=0.9";
+}
+
+function buildStealthHeaders(url: string, ua?: string, country?: string): Record<string, string> {
   const chosenUa = ua || randomUA();
   const isFirefox = chosenUa.includes("Firefox");
   const isSafari = chosenUa.includes("Safari") && !chosenUa.includes("Chrome");
@@ -81,7 +103,7 @@ function buildStealthHeaders(url: string, ua?: string): Record<string, string> {
   const headers: Record<string, string> = {
     "User-Agent": chosenUa,
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
-    "Accept-Language": "en-US,en;q=0.9",
+    "Accept-Language": getAcceptLanguage(country),
     "Accept-Encoding": "gzip, deflate, br",
     "Cache-Control": "no-cache",
     "Upgrade-Insecure-Requests": "1",
@@ -254,7 +276,7 @@ function isTransientError(err: unknown): boolean {
 // ══════════════════════════════════════════════════════
 // 策略 1: HTTP 多级反爬回退（照搬后端 _fetch_with_retry）
 // ══════════════════════════════════════════════════════
-async function crawlWithHttp(url: string): Promise<{ html: string; difficulty: "easy" | "medium" | "hard" } | null> {
+async function crawlWithHttp(url: string, country?: string): Promise<{ html: string; difficulty: "easy" | "medium" | "hard" } | null> {
   const urlsToTry = [url, ...getUrlVariants(url)];
 
   let bestHtml = "";
@@ -268,7 +290,7 @@ async function crawlWithHttp(url: string): Promise<{ html: string; difficulty: "
     for (let i = 0; i < shuffledUAs.length; i++) {
       if (i > 0) await randomDelay(500, 1500);
 
-      const headers = buildStealthHeaders(tryUrl, shuffledUAs[i]);
+      const headers = buildStealthHeaders(tryUrl, shuffledUAs[i], country);
       try {
         const ctrl = new AbortController();
         const t = setTimeout(() => ctrl.abort(), 20000);
@@ -1325,11 +1347,11 @@ export function extractPageMeta(html: string): { title: string; description: str
 // ══════════════════════════════════════════════════════
 // 主爬虫入口（优化策略顺序 + 难度自适应）
 // ══════════════════════════════════════════════════════
-export async function crawlPage(url: string): Promise<CrawlResult> {
-  console.log(`[Crawler] 开始爬取: ${url}`);
+export async function crawlPage(url: string, country?: string): Promise<CrawlResult> {
+  console.log(`[Crawler] 开始爬取: ${url}${country ? ` (country: ${country})` : ""}`);
 
   // 1. HTTP 多 UA 隐身爬取（带内容质量评分 + 难度检测）
-  const httpResult = await crawlWithHttp(url);
+  const httpResult = await crawlWithHttp(url, country);
   if (httpResult) {
     let { links, images } = extractLinksAndImages(httpResult.html, url);
 

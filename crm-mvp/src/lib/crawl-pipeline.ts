@@ -803,11 +803,11 @@ export async function buildCrawlCache(
         console.log(`[CrawlPipeline] Puppeteer 爬取成功（forcePuppeteer），html 长度: ${crawlResult.html.length}`);
       } else {
         // Puppeteer 失败则回退到普通爬取
-        crawlResult = await crawlPage(merchantUrl);
-        console.log(`[CrawlPipeline] Puppeteer 失败，回退 HTTP 爬取`);
-      }
-    } else {
-      crawlResult = await crawlPage(merchantUrl);
+      crawlResult = await crawlPage(merchantUrl, country);
+      console.log(`[CrawlPipeline] Puppeteer 失败，回退 HTTP 爬取`);
+    }
+  } else {
+      crawlResult = await crawlPage(merchantUrl, country);
     }
   }
 
@@ -818,12 +818,13 @@ export async function buildCrawlCache(
   // sitemap / backend API 路径爬取成功但 html 为空，补发一次 HTTP fetch 用于数据提取
   if (!crawlFailed && !html && merchantUrl) {
     try {
+      const { getAcceptLanguage } = await import("@/lib/crawler");
       const fallbackResp = await fetch(merchantUrl, {
         signal: AbortSignal.timeout(10000),
         headers: {
           "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
           "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-          "Accept-Language": "en-US,en;q=0.9",
+          "Accept-Language": getAcceptLanguage(country),
           "Cache-Control": "no-cache",
         },
       });
