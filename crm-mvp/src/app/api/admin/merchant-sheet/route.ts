@@ -18,8 +18,11 @@ let syncState: {
   error: string | null;
 } = { running: false, startedAt: null, progress: "", result: null, error: null };
 
+// 保持对后台 sync Promise 的引用，防止被 GC
+let activeSyncPromise: Promise<void> | null = null;
+
 function log(msg: string) {
-  console.log(`[AdminSheetSync ${new Date().toISOString()}] ${msg}`);
+  console.error(`[AdminSheetSync ${new Date().toISOString()}] ${msg}`);
 }
 
 // ── GET: 获取配置 + 违规/推荐列表 ──
@@ -47,6 +50,10 @@ export async function GET(req: NextRequest) {
   }
 
   if (action === "sync_status") {
+    // 触摸 activeSyncPromise 让 Node.js 保持引用
+    if (activeSyncPromise && syncState.running) {
+      void activeSyncPromise;
+    }
     return apiSuccess({
       running: syncState.running,
       startedAt: syncState.startedAt,
@@ -131,13 +138,13 @@ export async function POST(req: NextRequest) {
 
     syncState = { running: true, startedAt: new Date().toISOString(), progress: "正在获取数据…", result: null, error: null };
 
-    doSyncInBackground(cfg.id, cfg.sheet_url, csvData).catch((e) => {
+    activeSyncPromise = doSyncInBackground(cfg.id, cfg.sheet_url, csvData).catch((e) => {
       const msg = e instanceof Error ? e.message : String(e);
       log(`FATAL: ${msg}`);
       syncState.running = false;
       syncState.error = msg;
       syncState.progress = "同步失败";
-    });
+    }).finally(() => { activeSyncPromise = null; });
 
     return apiSuccess({ async: true }, "同步已启动，正在后台执行…");
   }

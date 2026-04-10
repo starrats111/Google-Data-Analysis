@@ -15,7 +15,8 @@ function verifyCron(req: NextRequest): boolean {
 }
 
 function log(msg: string) {
-  console.log(`[CRON daily-sync ${new Date().toISOString()}] ${msg}`);
+  const ts = new Date().toISOString();
+  console.error(`[CRON daily-sync ${ts}] ${msg}`);
 }
 
 /**
@@ -36,10 +37,14 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  // 立即返回，后台异步执行
-  doDailySync().catch(e => log(`FATAL: ${e instanceof Error ? e.message : String(e)}`));
-
-  return NextResponse.json({ ok: true, message: "daily sync started in background" });
+  try {
+    await doDailySync();
+    return NextResponse.json({ ok: true, message: "daily sync completed" });
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    log(`FATAL: ${msg}`);
+    return NextResponse.json({ ok: false, error: msg }, { status: 500 });
+  }
 }
 
 async function doDailySync() {
