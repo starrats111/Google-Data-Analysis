@@ -22,17 +22,7 @@ export interface OwnershipRule {
   description?: string;
 }
 
-export const MERCHANT_OWNERSHIP_RULES: OwnershipRule[] = [
-  {
-    platform: "CG",
-    merchant_id: "8005157",
-    source_user_id: 8,      // wj07
-    target_user_id: 3,      // wj02
-    target_user_merchant_id: 392,
-    target_campaign_id: 111, // 406-CG1-nasm-US-0305-8005157
-    description: "National Academy of Sports Medicine: novanest CG 账号在 wj07 下，但 NASM 由 wj02 运营",
-  },
-];
+export const MERCHANT_OWNERSHIP_RULES: OwnershipRule[] = [];
 
 /**
  * 检查某笔交易是否需要重定向到其他用户。
