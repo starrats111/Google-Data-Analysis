@@ -482,7 +482,14 @@ export const POST = withUser(async (req: NextRequest, { user }) => {
     if (defaultConn) connId = defaultConn.id;
   }
 
-  // 更新商家状态
+  // 根据选定的 platform_connection_id 从 connection_campaign_links 取对应推广链接
+  let selectedCampaignLink: string | null = null;
+  if (connId && merchant.connection_campaign_links && typeof merchant.connection_campaign_links === "object") {
+    const links = merchant.connection_campaign_links as Record<string, string>;
+    selectedCampaignLink = links[String(connId)] || null;
+  }
+
+  // 更新商家状态（含选定账号的推广链接）
   await prisma.user_merchants.update({
     where: { id: BigInt(merchant_id) },
     data: {
@@ -491,6 +498,7 @@ export const POST = withUser(async (req: NextRequest, { user }) => {
       target_country,
       holiday_name: holiday_name || null,
       platform_connection_id: connId,
+      ...(selectedCampaignLink ? { campaign_link: selectedCampaignLink, tracking_link: selectedCampaignLink } : {}),
     },
   });
 
@@ -545,16 +553,16 @@ export const POST = withUser(async (req: NextRequest, { user }) => {
   });
 
   // 创建空的广告素材（后续由异步任务填充 headlines/descriptions）
-  // campaign_link 是联盟跟踪链接，包含 ?url= 参数时尝试提取真实目标 URL
+  // 使用选定账号的推广链接（优先）或原始链接
+  const effectiveCampaignLink = selectedCampaignLink || merchant.campaign_link;
   let rawUrl = merchant.merchant_url || merchant.tracking_link || "";
-  if (!rawUrl && merchant.campaign_link) {
-    // 从 Linkbux/CollabGlow 等联盟链接的 ?url= 参数中提取真实目标 URL
+  if (!rawUrl && effectiveCampaignLink) {
     try {
-      const parsed = new URL(merchant.campaign_link);
+      const parsed = new URL(effectiveCampaignLink);
       const innerUrl = parsed.searchParams.get("url") || parsed.searchParams.get("new");
-      rawUrl = innerUrl ? decodeURIComponent(innerUrl) : merchant.campaign_link;
+      rawUrl = innerUrl ? decodeURIComponent(innerUrl) : effectiveCampaignLink;
     } catch {
-      rawUrl = merchant.campaign_link;
+      rawUrl = effectiveCampaignLink;
     }
   }
   let finalUrl = rawUrl;
@@ -603,8 +611,8 @@ export const POST = withUser(async (req: NextRequest, { user }) => {
     }
   } catch { /* ignore */ }
 
-  // 追踪链接优先使用 campaign_link（联盟平台推广链接）
-  const articleTrackingLink = merchant.campaign_link || merchant.tracking_link || "";
+  // 追踪链接优先使用选定账号的推广链接
+  const articleTrackingLink = effectiveCampaignLink || merchant.tracking_link || "";
 
   // 异步创建文章生成任务（领取商家时自动触发）
   const initTitle = `${merchant.merchant_name} Review`;

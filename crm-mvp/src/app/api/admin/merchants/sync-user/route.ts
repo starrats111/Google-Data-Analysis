@@ -80,14 +80,13 @@ export const POST = withAdmin(async (req: NextRequest) => {
   // ── 写入数据库 ──
   const existing = await prisma.user_merchants.findMany({
     where: { user_id: uid },
-    select: { id: true, platform: true, merchant_id: true, status: true, is_deleted: true, platform_connection_id: true },
+    select: { id: true, platform: true, merchant_id: true, status: true, is_deleted: true, platform_connection_id: true, connection_campaign_links: true },
   });
 
-  // 清理重复数据：按 platform:merchant_id:connection_id 分组，保留 status=claimed/paused 或 id 最小的一条
-  // 不同 platform_connection_id 的同名商家视为独立记录（多账号各自存储）
+  // 清理重复数据：按 platform:merchant_id 分组（1 条/平台商家），保留 status=claimed/paused 或 id 最小的一条
   const groupedByKey = new Map<string, typeof existing>();
   for (const m of existing) {
-    const k = `${m.platform}:${m.merchant_id}:${m.platform_connection_id ?? ""}`;
+    const k = `${m.platform}:${m.merchant_id}`;
     const arr = groupedByKey.get(k) || [];
     arr.push(m);
     groupedByKey.set(k, arr);
@@ -103,33 +102,36 @@ export const POST = withAdmin(async (req: NextRequest) => {
     }
   }
 
-  const map = new Map(deduped.map((m) => [`${m.platform}:${m.merchant_id}:${m.platform_connection_id ?? ""}`, m]));
+  const map = new Map(deduped.map((m) => [`${m.platform}:${m.merchant_id}`, m]));
+
+  // 先按 platform:merchant_id 聚合各连接的 campaign_link
+  const connLinksMap = new Map<string, Record<string, string>>();
+  const merchantDataMap = new Map<string, typeof fetchedRows[0]>();
+  for (const row of fetchedRows) {
+    const key = `${row.platform_code}:${row.merchant_id}`;
+    const links = connLinksMap.get(key) || {};
+    if (row.campaign_link && row.conn_id) {
+      links[String(row.conn_id)] = row.campaign_link;
+    }
+    connLinksMap.set(key, links);
+    if (!merchantDataMap.has(key)) merchantDataMap.set(key, row);
+  }
 
   const updateOps: Array<{ id: bigint; data: Record<string, unknown> }> = [];
   const createOps: Array<Record<string, unknown>> = [];
-  const seen = new Set<string>();
   const platformCounts: Record<string, number> = {};
 
-  for (const row of fetchedRows) {
-    const key = `${row.platform_code}:${row.merchant_id}:${row.conn_id}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
+  for (const [key, row] of merchantDataMap) {
     platformCounts[row.platform_code] = (platformCounts[row.platform_code] || 0) + 1;
 
     let regions: unknown = null;
     if (row.support_regions) {
       try { regions = JSON.parse(row.support_regions); } catch {}
     }
-    let cat = simplifyCategory(row.categories);
+    const cat = simplifyCategory(row.categories);
+    const connLinks = connLinksMap.get(key) || {};
 
-    // 优先精确匹配 platform:merchant_id:conn_id，回退匹配 connection_id 为空的旧记录
-    const nullKey = `${row.platform_code}:${row.merchant_id}:`;
-    let ex = map.get(key);
-    if (!ex && map.has(nullKey)) {
-      ex = map.get(nullKey);
-      map.delete(nullKey);
-      map.set(key, ex!);
-    }
+    const ex = map.get(key);
     if (ex) {
       const d: Record<string, unknown> = {};
       if (row.merchant_name) d.merchant_name = row.merchant_name;
@@ -141,6 +143,9 @@ export const POST = withAdmin(async (req: NextRequest) => {
       if (row.campaign_link) { d.tracking_link = row.campaign_link; d.campaign_link = row.campaign_link; }
       if (!ex.platform_connection_id && row.conn_id) d.platform_connection_id = row.conn_id;
       if (ex.is_deleted === 1) { d.is_deleted = 0; d.status = "available"; }
+      // 合并已有 + 新抓取的各连接推广链接
+      const prevLinks = (ex.connection_campaign_links && typeof ex.connection_campaign_links === "object" ? ex.connection_campaign_links : {}) as Record<string, string>;
+      d.connection_campaign_links = { ...prevLinks, ...connLinks };
       if (Object.keys(d).length > 0) updateOps.push({ id: ex.id, data: d });
     } else {
       const d: Record<string, unknown> = {
@@ -155,6 +160,7 @@ export const POST = withAdmin(async (req: NextRequest) => {
         tracking_link: row.campaign_link || null,
         campaign_link: row.campaign_link || null,
         platform_connection_id: row.conn_id || null,
+        connection_campaign_links: Object.keys(connLinks).length > 0 ? connLinks : null,
         status: "available",
       };
       if (regions != null) d.supported_regions = regions;
