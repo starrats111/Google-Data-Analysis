@@ -158,10 +158,11 @@ async function doSyncInBackground(
       select: { id: true, platform: true, merchant_id: true, status: true, is_deleted: true, platform_connection_id: true },
     });
 
-    // 清理历史重复数据：保留 status=claimed 或 id 最小的记录，删除其余
+    // 清理历史重复数据：按 platform:merchant_id:connection_id 分组，保留 status=claimed 或 id 最小的记录
+    // 不同 platform_connection_id 的同名商家视为独立记录（多账号各自存储）
     const groupedByKey = new Map<string, typeof existing>();
     for (const m of existing) {
-      const k = `${m.platform}:${m.merchant_id}`;
+      const k = `${m.platform}:${m.merchant_id}:${m.platform_connection_id ?? ""}`;
       const arr = groupedByKey.get(k) || [];
       arr.push(m);
       groupedByKey.set(k, arr);
@@ -178,14 +179,14 @@ async function doSyncInBackground(
       }
     }
 
-    const map = new Map(deduped.map(m => [`${m.platform}:${m.merchant_id}`, m]));
+    const map = new Map(deduped.map(m => [`${m.platform}:${m.merchant_id}:${m.platform_connection_id ?? ""}`, m]));
 
     const seenInThisBatch = new Set<string>();
     const updateOps: Array<{ id: bigint; data: Record<string, unknown> }> = [];
     const createOps: Array<{ key: string; data: Record<string, unknown>; connId: bigint | null }> = [];
 
     for (const row of rows) {
-      const key = `${row.platform_code}:${row.merchant_id}`;
+      const key = `${row.platform_code}:${row.merchant_id}:${row.conn_id}`;
       if (seenInThisBatch.has(key)) continue;
       seenInThisBatch.add(key);
 
@@ -197,7 +198,14 @@ async function doSyncInBackground(
       if (cat.startsWith('"') && cat.endsWith('"')) cat = cat.slice(1, -1);
       cat = simplifyCategory(cat);
 
-      const ex = map.get(key);
+      // 优先精确匹配 platform:merchant_id:conn_id，回退匹配 connection_id 为空的旧记录
+      const nullKey = `${row.platform_code}:${row.merchant_id}:`;
+      let ex = map.get(key);
+      if (!ex && map.has(nullKey)) {
+        ex = map.get(nullKey);
+        map.delete(nullKey);
+        map.set(key, ex!);
+      }
 
       // status=excluded 的商家已被人工标记为"跨用户归属排除"，同步时永久跳过
       if (ex?.status === "excluded") {
@@ -284,7 +292,7 @@ async function doSyncInBackground(
           select: { id: true, platform: true, merchant_id: true, status: true, is_deleted: true, platform_connection_id: true },
         });
         for (const c of created) {
-          map.set(`${c.platform}:${c.merchant_id}`, c);
+          map.set(`${c.platform}:${c.merchant_id}:${c.platform_connection_id ?? ""}`, c);
         }
       } catch (e) {
         createFailCount += batch.length;
@@ -293,15 +301,15 @@ async function doSyncInBackground(
     }
     newCount = createOps.length - createFailCount;
 
-    // 2.5 清理：只清理本次成功返回数据的平台中不再存在的未领取商家
-    // 避免某个平台 API 失败/返回空数据时误删已有商家
-    const syncedKeys = new Set(rows.map(r => `${r.platform_code}:${r.merchant_id}`));
-    const syncedPlatforms = new Set(rows.map(r => r.platform_code));
+    // 2.5 清理：只清理本次成功返回数据的平台连接中不再存在的未领取商家
+    // 避免某个平台/连接 API 失败/返回空数据时误删已有商家
+    const syncedKeys = new Set(rows.map(r => `${r.platform_code}:${r.merchant_id}:${r.conn_id}`));
+    const syncedConnIds = new Set(rows.map(r => String(r.conn_id)));
     let removedCount = 0;
     const toRemoveIds: bigint[] = [];
     for (const [key, ex] of map.entries()) {
-      const [exPlatform] = key.split(":");
-      if (!syncedKeys.has(key) && ex.status !== "claimed" && ex.status !== "paused" && ex.status !== "excluded" && ex.is_deleted === 0 && syncedPlatforms.has(exPlatform)) {
+      const connId = String(ex.platform_connection_id ?? "");
+      if (!syncedKeys.has(key) && ex.status !== "claimed" && ex.status !== "paused" && ex.status !== "excluded" && ex.is_deleted === 0 && syncedConnIds.has(connId)) {
         toRemoveIds.push(ex.id);
         removedCount++;
       }
@@ -309,7 +317,7 @@ async function doSyncInBackground(
     if (toRemoveIds.length > 0) {
       await prisma.user_merchants.deleteMany({ where: { id: { in: toRemoveIds } } });
     }
-    if (removedCount > 0) dbg(`Removed ${removedCount} non-joined merchants (only from synced platforms: ${[...syncedPlatforms].join(",")})`);
+    if (removedCount > 0) dbg(`Removed ${removedCount} non-joined merchants (only from synced connections: ${[...syncedConnIds].join(",")})`);
 
     // 3. 政策审核（仅审核本次成功新增和更新的商家）
     const succeededCreateIds = createOps

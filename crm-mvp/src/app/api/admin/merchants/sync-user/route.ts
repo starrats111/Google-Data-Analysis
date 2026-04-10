@@ -83,10 +83,11 @@ export const POST = withAdmin(async (req: NextRequest) => {
     select: { id: true, platform: true, merchant_id: true, status: true, is_deleted: true, platform_connection_id: true },
   });
 
-  // 清理重复数据：保留 status=claimed/paused 或 id 最小的一条
+  // 清理重复数据：按 platform:merchant_id:connection_id 分组，保留 status=claimed/paused 或 id 最小的一条
+  // 不同 platform_connection_id 的同名商家视为独立记录（多账号各自存储）
   const groupedByKey = new Map<string, typeof existing>();
   for (const m of existing) {
-    const k = `${m.platform}:${m.merchant_id}`;
+    const k = `${m.platform}:${m.merchant_id}:${m.platform_connection_id ?? ""}`;
     const arr = groupedByKey.get(k) || [];
     arr.push(m);
     groupedByKey.set(k, arr);
@@ -102,7 +103,7 @@ export const POST = withAdmin(async (req: NextRequest) => {
     }
   }
 
-  const map = new Map(deduped.map((m) => [`${m.platform}:${m.merchant_id}`, m]));
+  const map = new Map(deduped.map((m) => [`${m.platform}:${m.merchant_id}:${m.platform_connection_id ?? ""}`, m]));
 
   const updateOps: Array<{ id: bigint; data: Record<string, unknown> }> = [];
   const createOps: Array<Record<string, unknown>> = [];
@@ -110,7 +111,7 @@ export const POST = withAdmin(async (req: NextRequest) => {
   const platformCounts: Record<string, number> = {};
 
   for (const row of fetchedRows) {
-    const key = `${row.platform_code}:${row.merchant_id}`;
+    const key = `${row.platform_code}:${row.merchant_id}:${row.conn_id}`;
     if (seen.has(key)) continue;
     seen.add(key);
     platformCounts[row.platform_code] = (platformCounts[row.platform_code] || 0) + 1;
@@ -121,7 +122,14 @@ export const POST = withAdmin(async (req: NextRequest) => {
     }
     let cat = simplifyCategory(row.categories);
 
-    const ex = map.get(key);
+    // 优先精确匹配 platform:merchant_id:conn_id，回退匹配 connection_id 为空的旧记录
+    const nullKey = `${row.platform_code}:${row.merchant_id}:`;
+    let ex = map.get(key);
+    if (!ex && map.has(nullKey)) {
+      ex = map.get(nullKey);
+      map.delete(nullKey);
+      map.set(key, ex!);
+    }
     if (ex) {
       const d: Record<string, unknown> = {};
       if (row.merchant_name) d.merchant_name = row.merchant_name;
