@@ -87,21 +87,42 @@ async function syncMerchantSheet(): Promise<unknown> {
     // 违规
     let vioNew = 0, vioUpdated = 0, vioMarked = 0;
     const violations = await fetchViolations(cfg.sheet_url);
+    log(`  Fetched ${violations.length} violations from sheet`);
     const violationNames = new Set(violations.map(v => v.name.toLowerCase()));
     const violationBaseNames = new Set(violations.map(v => stripCountrySuffix(v.name).toLowerCase()));
 
-    // 清除不再违规的商家
+    // 批量清除不再违规的商家
     const prevViolated = await prisma.user_merchants.findMany({
       where: { is_deleted: 0, violation_status: "violated" },
       select: { id: true, merchant_name: true },
     });
-    for (const m of prevViolated) {
-      const n = (m.merchant_name || "").toLowerCase();
-      const b = stripCountrySuffix(m.merchant_name || "").toLowerCase();
-      if (!violationNames.has(n) && !violationBaseNames.has(b)) {
-        await prisma.user_merchants.update({ where: { id: m.id }, data: { violation_status: "normal", violation_time: null } });
-      }
+    const idsToUnmark = prevViolated
+      .filter((m) => {
+        const n = (m.merchant_name || "").toLowerCase();
+        const b = stripCountrySuffix(m.merchant_name || "").toLowerCase();
+        return !violationNames.has(n) && !violationBaseNames.has(b);
+      })
+      .map((m) => m.id);
+    if (idsToUnmark.length > 0) {
+      await prisma.user_merchants.updateMany({
+        where: { id: { in: idsToUnmark } },
+        data: { violation_status: "normal", violation_time: null },
+      });
+      log(`  Unmarked ${idsToUnmark.length} merchants no longer violated`);
     }
+
+    // 预加载现有违规记录
+    const existingViolations = await prisma.merchant_violations.findMany({
+      where: { is_deleted: 0 },
+      select: { id: true, merchant_name: true, platform: true, merchant_domain: true, violation_time: true, source: true },
+    });
+    const existingMap = new Map(existingViolations.map((v) => [v.merchant_name, v]));
+
+    // 预加载 user_merchants
+    const allUserMerchants = await prisma.user_merchants.findMany({
+      where: { is_deleted: 0 },
+      select: { id: true, merchant_name: true, merchant_url: true, violation_status: true },
+    });
 
     for (const v of violations) {
       let vtime: Date | null = null;
@@ -110,7 +131,7 @@ async function syncMerchantSheet(): Promise<unknown> {
         if (/^\d{8}$/.test(raw)) vtime = new Date(`${raw.slice(0, 4)}-${raw.slice(4, 6)}-${raw.slice(6, 8)}`);
         else { const d = new Date(raw); if (!isNaN(d.getTime())) vtime = d; }
       }
-      const exists = await prisma.merchant_violations.findFirst({ where: { merchant_name: v.name, is_deleted: 0 } });
+      const exists = existingMap.get(v.name);
       if (exists) {
         await prisma.merchant_violations.update({
           where: { id: exists.id },
@@ -118,42 +139,66 @@ async function syncMerchantSheet(): Promise<unknown> {
         });
         vioUpdated++;
       } else {
-        await prisma.merchant_violations.create({
+        const created = await prisma.merchant_violations.create({
           data: { merchant_name: v.name, platform: v.platform, merchant_domain: v.domain || null, violation_reason: v.reason, violation_time: vtime, source: v.source || null, upload_batch: `CRON-VIO-${batchTs}` },
         });
+        existingMap.set(v.name, { id: created.id, merchant_name: v.name, platform: v.platform, merchant_domain: v.domain || null, violation_time: vtime, source: v.source || null });
         vioNew++;
       }
-      // 标记 user_merchants
+
+      // 在内存中匹配 user_merchants，用 updateMany 批量更新
       const baseName = stripCountrySuffix(v.name);
-      const conds: any[] = [{ merchant_name: v.name }];
-      if (baseName !== v.name) conds.push({ merchant_name: baseName });
-      conds.push({ merchant_name: { startsWith: baseName + " " } });
-      if (v.domain) conds.push({ merchant_url: { contains: v.domain } });
-      const matched = await prisma.user_merchants.findMany({ where: { is_deleted: 0, OR: conds } });
-      for (const m of matched) {
-        if (m.violation_status !== "violated") {
-          await prisma.user_merchants.update({ where: { id: m.id }, data: { violation_status: "violated", violation_time: vtime || new Date() } });
-          vioMarked++;
-        }
+      const nameL = v.name.toLowerCase();
+      const baseL = baseName.toLowerCase();
+      const basePrefix = baseL + " ";
+      const toMark = allUserMerchants.filter((m) => {
+        if (m.violation_status === "violated") return false;
+        const mn = (m.merchant_name || "").toLowerCase();
+        if (mn === nameL) return true;
+        if (baseName !== v.name && mn === baseL) return true;
+        if (mn.startsWith(basePrefix)) return true;
+        if (v.domain && m.merchant_url && m.merchant_url.includes(v.domain)) return true;
+        return false;
+      });
+      if (toMark.length > 0) {
+        await prisma.user_merchants.updateMany({
+          where: { id: { in: toMark.map((m) => m.id) } },
+          data: { violation_status: "violated", violation_time: vtime || new Date() },
+        });
+        for (const m of toMark) m.violation_status = "violated";
+        vioMarked += toMark.length;
       }
     }
 
     // 推荐
     let recNew = 0, recSkipped = 0, recMarked = 0;
     const recommendations = await fetchRecommendations(cfg.sheet_url);
+    log(`  Fetched ${recommendations.length} recommendations from sheet`);
+
+    const existingRecs = await prisma.merchant_recommendations.findMany({
+      where: { is_deleted: 0 },
+      select: { merchant_name: true },
+    });
+    const existingRecNames = new Set(existingRecs.map((r) => r.merchant_name));
+
     for (const r of recommendations) {
-      const exists = await prisma.merchant_recommendations.findFirst({ where: { merchant_name: r.name, is_deleted: 0 } });
-      if (exists) { recSkipped++; continue; }
+      if (existingRecNames.has(r.name)) { recSkipped++; continue; }
       await prisma.merchant_recommendations.create({
         data: { merchant_name: r.name, roi_reference: r.roi || null, commission_info: r.commission || null, settlement_info: r.settlement || null, remark: r.remark || null, share_time: r.time || null, upload_batch: `CRON-REC-${batchTs}` },
       });
+      existingRecNames.add(r.name);
       recNew++;
-      const matched = await prisma.user_merchants.findMany({ where: { is_deleted: 0, merchant_name: r.name } });
-      for (const m of matched) {
-        if (m.recommendation_status !== "recommended") {
-          await prisma.user_merchants.update({ where: { id: m.id }, data: { recommendation_status: "recommended", recommendation_time: new Date() } });
-          recMarked++;
-        }
+
+      const matched = await prisma.user_merchants.findMany({
+        where: { is_deleted: 0, merchant_name: r.name, recommendation_status: { not: "recommended" } },
+        select: { id: true },
+      });
+      if (matched.length > 0) {
+        await prisma.user_merchants.updateMany({
+          where: { id: { in: matched.map((m) => m.id) } },
+          data: { recommendation_status: "recommended", recommendation_time: new Date() },
+        });
+        recMarked += matched.length;
       }
     }
 

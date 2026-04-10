@@ -83,13 +83,41 @@ export default function MerchantSheetPage() {
     else message.error(res.message);
   };
 
+  const [syncProgress, setSyncProgress] = useState("");
+
+  const pollSyncStatus = async () => {
+    const maxPoll = 180;
+    for (let i = 0; i < maxPoll; i++) {
+      await new Promise((r) => setTimeout(r, 3000));
+      try {
+        const res = await fetch("/api/admin/merchant-sheet?action=sync_status").then((r) => r.json());
+        if (res.code !== 0) continue;
+        const st = res.data;
+        setSyncProgress(st.progress || "");
+        if (!st.running) {
+          if (st.error) {
+            message.error(`同步失败: ${st.error}`);
+          } else if (st.result) {
+            setSyncResult(st.result);
+            const v = st.result?.violation || {};
+            const r = st.result?.recommendation || {};
+            message.success(`同步完成 — 违规：新增 ${v.new || 0} 条，更新 ${v.updated || 0} 条，标记 ${v.marked || 0} 个 | 推荐：新增 ${r.new || 0} 条，标记 ${r.marked || 0} 个`);
+          }
+          fetchViolations(1);
+          fetchRecommendations(1);
+          fetchConfig();
+          return;
+        }
+      } catch { /* ignore poll error */ }
+    }
+    message.warning("同步仍在后台运行，请稍后刷新页面查看结果");
+  };
+
   const handleSync = async () => {
     setSheetSyncing(true);
     setSyncResult(null);
+    setSyncProgress("正在启动同步…");
     try {
-      // 服务端通过 Service Account API 直接访问 Sheet（支持需要授权的表格）
-      // 如果 SA 不可用，服务端会自动回退到公开 CSV 导出
-      // 浏览器端拉 CSV 作为最后兜底（仅在服务端两种方式都失败时有用）
       let csvData: string | undefined;
       if (!saEmail) {
         const sheetIdMatch = sheetUrl.match(/\/spreadsheets\/d\/([a-zA-Z0-9_-]+)/);
@@ -116,19 +144,24 @@ export default function MerchantSheetPage() {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "sync", ...(csvData ? { csv_data: csvData } : {}) }),
       }).then((r) => r.json());
-      if (res.code === 0) {
+
+      if (res.code === 0 && res.data?.async) {
+        message.info(res.message || "同步已启动，正在后台执行…");
+        await pollSyncStatus();
+      } else if (res.code === 0) {
         setSyncResult(res.data);
-        const v = res.data?.violation || {};
-        const r = res.data?.recommendation || {};
-        message.success(`同步完成 — 违规：新增 ${v.new || 0} 条，标记 ${v.marked || 0} 个 | 推荐：新增 ${r.new || 0} 条，标记 ${r.marked || 0} 个`);
+        message.success(res.message);
         fetchViolations(1);
         fetchRecommendations(1);
         fetchConfig();
-      } else message.error(res.message);
+      } else {
+        message.error(res.message);
+      }
     } catch (e: any) {
       message.error("同步失败: " + e.message);
     } finally {
       setSheetSyncing(false);
+      setSyncProgress("");
     }
   };
 
@@ -160,7 +193,7 @@ export default function MerchantSheetPage() {
           />
           <Button onClick={handleSaveUrl}>保存</Button>
           <Button type="primary" loading={sheetSyncing} onClick={handleSync} disabled={!sheetUrl} icon={<CloudSyncOutlined />}>
-            统一同步
+            {sheetSyncing && syncProgress ? syncProgress : "统一同步"}
           </Button>
           <Tooltip title="从同一个 Google Sheets 链接同步黑名单（gid=0 的 A-F 列）和推荐商家（gid=0 的 G-M 列），按商家名称+域名跨平台匹配">
             <span style={{ fontSize: 12, color: "#999", cursor: "help" }}>ⓘ</span>
@@ -193,7 +226,7 @@ export default function MerchantSheetPage() {
           message={
             (syncResult.violation?.error || syncResult.recommendation?.error)
               ? "部分同步完成（有错误）"
-              : `统一同步完成 — 违规：共 ${syncResult.violation?.total ?? 0} 条，新增 ${syncResult.violation?.new ?? 0} 条，标记 ${syncResult.violation?.marked ?? 0} 个 | 推荐：共 ${syncResult.recommendation?.total ?? 0} 条，新增 ${syncResult.recommendation?.new ?? 0} 条，标记 ${syncResult.recommendation?.marked ?? 0} 个`
+              : `统一同步完成 — 违规：共 ${syncResult.violation?.total ?? 0} 条，新增 ${syncResult.violation?.new ?? 0}，更新 ${syncResult.violation?.updated ?? syncResult.violation?.skipped ?? 0}，标记 ${syncResult.violation?.marked ?? 0} 个 | 推荐：共 ${syncResult.recommendation?.total ?? 0} 条，新增 ${syncResult.recommendation?.new ?? 0}，标记 ${syncResult.recommendation?.marked ?? 0} 个`
           }
           description={
             (syncResult.violation?.error || syncResult.recommendation?.error)

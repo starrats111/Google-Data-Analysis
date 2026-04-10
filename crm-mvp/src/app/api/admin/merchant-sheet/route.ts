@@ -5,8 +5,22 @@ import prisma from "@/lib/prisma";
 import {
   extractSheetId, fetchViolations, fetchRecommendations,
   parseCsv, parseViolationRows, parseRecommendationRows,
+  stripCountrySuffix,
   type ViolationRecord, type RecommendationRecord,
 } from "@/lib/merchant-sheet-sync";
+
+// 同步状态跟踪（进程级别）
+let syncState: {
+  running: boolean;
+  startedAt: string | null;
+  progress: string;
+  result: Record<string, unknown> | null;
+  error: string | null;
+} = { running: false, startedAt: null, progress: "", result: null, error: null };
+
+function log(msg: string) {
+  console.log(`[AdminSheetSync ${new Date().toISOString()}] ${msg}`);
+}
 
 // ── GET: 获取配置 + 违规/推荐列表 ──
 export async function GET(req: NextRequest) {
@@ -14,7 +28,7 @@ export async function GET(req: NextRequest) {
   if (!admin) return apiError("未授权", 401);
 
   const { searchParams } = new URL(req.url);
-  const action = searchParams.get("action") || "config"; // config / violations / recommendations
+  const action = searchParams.get("action") || "config";
 
   if (action === "config") {
     const cfg = await prisma.sheet_configs.findFirst({
@@ -32,7 +46,16 @@ export async function GET(req: NextRequest) {
     });
   }
 
-  // 查询违规/推荐列表
+  if (action === "sync_status") {
+    return apiSuccess({
+      running: syncState.running,
+      startedAt: syncState.startedAt,
+      progress: syncState.progress,
+      result: syncState.result ? serializeData(syncState.result) : null,
+      error: syncState.error,
+    });
+  }
+
   const search = searchParams.get("search") || "";
   const page = parseInt(searchParams.get("page") || "1");
   const pageSize = parseInt(searchParams.get("pageSize") || "50");
@@ -72,9 +95,8 @@ export async function POST(req: NextRequest) {
   if (!admin) return apiError("未授权", 401);
 
   const body = await req.json();
-  const action = body.action; // save_url / sync / delete_violation / delete_recommendation
+  const action = body.action;
 
-  // 保存共享表格链接
   if (action === "save_url") {
     const { sheet_url } = body;
     if (!sheet_url || !extractSheetId(sheet_url)) return apiError("无效的 Google Sheets 链接");
@@ -95,60 +117,130 @@ export async function POST(req: NextRequest) {
     return apiSuccess(null, "共享表格链接已保存");
   }
 
-  // 统一同步
   if (action === "sync") {
+    if (syncState.running) {
+      return apiSuccess({ async: true, progress: syncState.progress }, "同步正在进行中，请稍候…");
+    }
+
     const cfg = await prisma.sheet_configs.findFirst({
       where: { config_type: "merchant_sheet", is_deleted: 0 },
     });
     if (!cfg?.sheet_url) return apiError("未配置共享表格链接");
 
-    const sheetUrl = cfg.sheet_url;
-    const batchTs = new Date().toISOString().replace(/[-:T]/g, "").slice(0, 14);
     const csvData = body.csv_data as string | undefined;
 
-    let violations: ViolationRecord[] = [];
-    let recommendations: RecommendationRecord[] = [];
+    syncState = { running: true, startedAt: new Date().toISOString(), progress: "正在获取数据…", result: null, error: null };
 
-    try {
-      if (csvData) {
-        const rows = parseCsv(csvData);
-        violations = parseViolationRows(rows);
-        recommendations = parseRecommendationRows(rows);
-      } else {
-        violations = await fetchViolations(sheetUrl);
-        recommendations = await fetchRecommendations(sheetUrl);
-      }
-    } catch (e: any) {
-      return apiError(`数据获取/解析失败: ${e?.message || e}`);
+    doSyncInBackground(cfg.id, cfg.sheet_url, csvData).catch((e) => {
+      const msg = e instanceof Error ? e.message : String(e);
+      log(`FATAL: ${msg}`);
+      syncState.running = false;
+      syncState.error = msg;
+      syncState.progress = "同步失败";
+    });
+
+    return apiSuccess({ async: true }, "同步已启动，正在后台执行…");
+  }
+
+  if (action === "delete_violation") {
+    const { id } = body;
+    if (!id) return apiError("缺少 ID");
+    await prisma.merchant_violations.update({ where: { id: BigInt(id) }, data: { is_deleted: 1 } });
+    return apiSuccess(null, "已删除");
+  }
+
+  if (action === "delete_recommendation") {
+    const { id } = body;
+    if (!id) return apiError("缺少 ID");
+    await prisma.merchant_recommendations.update({ where: { id: BigInt(id) }, data: { is_deleted: 1 } });
+    return apiSuccess(null, "已删除");
+  }
+
+  return apiError("未知操作");
+}
+
+// ── 后台异步同步 ──
+
+async function doSyncInBackground(cfgId: bigint, sheetUrl: string, csvData?: string) {
+  const t0 = Date.now();
+  const batchTs = new Date().toISOString().replace(/[-:T]/g, "").slice(0, 14);
+
+  let violations: ViolationRecord[] = [];
+  let recommendations: RecommendationRecord[] = [];
+
+  try {
+    syncState.progress = "正在从 Google Sheets 获取数据…";
+    log("Fetching data from Google Sheets...");
+    if (csvData) {
+      const rows = parseCsv(csvData);
+      violations = parseViolationRows(rows);
+      recommendations = parseRecommendationRows(rows);
+    } else {
+      violations = await fetchViolations(sheetUrl);
+      recommendations = await fetchRecommendations(sheetUrl);
+    }
+    log(`Parsed: ${violations.length} violations, ${recommendations.length} recommendations`);
+  } catch (e: any) {
+    syncState.running = false;
+    syncState.error = `数据获取/解析失败: ${e?.message || e}`;
+    syncState.progress = "数据获取失败";
+    log(`Data fetch failed: ${e?.message || e}`);
+    return;
+  }
+
+  // ── 同步违规商家（批量优化） ──
+  let vioTotal = violations.length, vioNew = 0, vioUpdated = 0, vioMarked = 0;
+  let vioError: string | null = null;
+  try {
+    syncState.progress = `正在同步 ${vioTotal} 条违规商家…`;
+    log(`Syncing ${vioTotal} violations...`);
+    const vioBatch = `SHEET-VIO-${batchTs}`;
+
+    const violationNames = new Set(violations.map((v) => v.name.toLowerCase()));
+    const violationBaseNames = new Set(violations.map((v) => stripCountrySuffix(v.name).toLowerCase()));
+
+    // 批量清除不再违规的商家
+    const previouslyViolated = await prisma.user_merchants.findMany({
+      where: { is_deleted: 0, violation_status: "violated" },
+      select: { id: true, merchant_name: true },
+    });
+    const idsToUnmark = previouslyViolated
+      .filter((m) => {
+        const n = (m.merchant_name || "").toLowerCase();
+        const b = stripCountrySuffix(m.merchant_name || "").toLowerCase();
+        return !violationNames.has(n) && !violationBaseNames.has(b);
+      })
+      .map((m) => m.id);
+    if (idsToUnmark.length > 0) {
+      await prisma.user_merchants.updateMany({
+        where: { id: { in: idsToUnmark } },
+        data: { violation_status: "normal", violation_time: null },
+      });
+      log(`Unmarked ${idsToUnmark.length} merchants no longer violated`);
     }
 
-    // 同步违规商家
-    let vioTotal = 0, vioNew = 0, vioSkipped = 0, vioMarked = 0;
-    let vioError: string | null = null;
-    try {
-      vioTotal = violations.length;
-      const vioBatch = `SHEET-VIO-${batchTs}`;
+    // 预加载现有违规记录到内存中，避免 N+1 查询
+    const existingViolations = await prisma.merchant_violations.findMany({
+      where: { is_deleted: 0 },
+      select: { id: true, merchant_name: true, platform: true, merchant_domain: true, violation_time: true, source: true },
+    });
+    const existingMap = new Map(existingViolations.map((v) => [v.merchant_name, v]));
 
-      const { stripCountrySuffix } = await import("@/lib/merchant-sheet-sync");
-      const violationNames = new Set(violations.map((v) => v.name.toLowerCase()));
-      const violationBaseNames = new Set(violations.map((v) => stripCountrySuffix(v.name).toLowerCase()));
+    // 预加载 user_merchants 用于匹配
+    const allUserMerchants = await prisma.user_merchants.findMany({
+      where: { is_deleted: 0 },
+      select: { id: true, merchant_name: true, merchant_url: true, violation_status: true },
+    });
 
-      const previouslyViolated = await prisma.user_merchants.findMany({
-        where: { is_deleted: 0, violation_status: "violated" },
-        select: { id: true, merchant_name: true },
-      });
-      for (const m of previouslyViolated) {
-        const mName = (m.merchant_name || "").toLowerCase();
-        const mBase = stripCountrySuffix(m.merchant_name || "").toLowerCase();
-        if (!violationNames.has(mName) && !violationBaseNames.has(mBase)) {
-          await prisma.user_merchants.update({
-            where: { id: m.id },
-            data: { violation_status: "normal", violation_time: null },
-          });
-        }
+    // 按批次处理违规记录
+    const BATCH_SIZE = 200;
+    for (let i = 0; i < violations.length; i += BATCH_SIZE) {
+      const batch = violations.slice(i, i + BATCH_SIZE);
+      if (i % 1000 === 0) {
+        syncState.progress = `正在同步违规商家 ${i}/${vioTotal}…`;
       }
 
-      for (const v of violations) {
+      for (const v of batch) {
         let vtime: Date | null = null;
         if (v.time) {
           const raw = v.time.trim();
@@ -156,9 +248,7 @@ export async function POST(req: NextRequest) {
           else { const d = new Date(raw); if (!isNaN(d.getTime())) vtime = d; }
         }
 
-        const exists = await prisma.merchant_violations.findFirst({
-          where: { merchant_name: v.name, is_deleted: 0 },
-        });
+        const exists = existingMap.get(v.name);
         if (exists) {
           await prisma.merchant_violations.update({
             where: { id: exists.id },
@@ -171,122 +261,107 @@ export async function POST(req: NextRequest) {
               upload_batch: vioBatch,
             },
           });
-          vioSkipped++;
+          vioUpdated++;
         } else {
-          await prisma.merchant_violations.create({
+          const created = await prisma.merchant_violations.create({
             data: {
               merchant_name: v.name, platform: v.platform, merchant_domain: v.domain || null,
               violation_reason: v.reason, violation_time: vtime, source: v.source || null, upload_batch: vioBatch,
             },
           });
+          existingMap.set(v.name, { id: created.id, merchant_name: v.name, platform: v.platform, merchant_domain: v.domain || null, violation_time: vtime, source: v.source || null });
           vioNew++;
         }
 
+        // 在内存中匹配 user_merchants
         const baseName = stripCountrySuffix(v.name);
-        const nameConditions: any[] = [{ merchant_name: { equals: v.name } }];
-        if (baseName !== v.name) {
-          nameConditions.push({ merchant_name: { equals: baseName } });
-        }
-        nameConditions.push({ merchant_name: { startsWith: baseName + " " } });
-        if (v.domain) {
-          nameConditions.push({ merchant_url: { contains: v.domain } });
-        }
-        const matched = await prisma.user_merchants.findMany({
-          where: { is_deleted: 0, OR: nameConditions },
+        const nameL = v.name.toLowerCase();
+        const baseL = baseName.toLowerCase();
+        const basePrefix = baseL + " ";
+        const toMark = allUserMerchants.filter((m) => {
+          if (m.violation_status === "violated") return false;
+          const mn = (m.merchant_name || "").toLowerCase();
+          if (mn === nameL) return true;
+          if (baseName !== v.name && mn === baseL) return true;
+          if (mn.startsWith(basePrefix)) return true;
+          if (v.domain && m.merchant_url && m.merchant_url.includes(v.domain)) return true;
+          return false;
         });
-        for (const m of matched) {
-          if (m.violation_status !== "violated") {
-            await prisma.user_merchants.update({
-              where: { id: m.id },
-              data: { violation_status: "violated", violation_time: vtime || new Date() },
-            });
-            vioMarked++;
-          }
-        }
-      }
-    } catch (e: any) {
-      vioError = e?.message || String(e);
-      console.error("[AdminSheetSync] 违规同步失败:", e);
-    }
-
-    // 同步推荐商家
-    let recTotal = 0, recNew = 0, recSkipped = 0, recMarked = 0;
-    let recError: string | null = null;
-    try {
-      recTotal = recommendations.length;
-      const recBatch = `SHEET-REC-${batchTs}`;
-      for (const r of recommendations) {
-        const exists = await prisma.merchant_recommendations.findFirst({
-          where: { merchant_name: r.name, is_deleted: 0 },
-        });
-        if (exists) { recSkipped++; continue; }
-
-        await prisma.merchant_recommendations.create({
-          data: {
-            merchant_name: r.name, roi_reference: r.roi || null, commission_info: r.commission || null,
-            settlement_info: r.settlement || null, remark: r.remark || null, share_time: r.time || null, upload_batch: recBatch,
-          },
-        });
-        recNew++;
-
-        const matched = await prisma.user_merchants.findMany({
-          where: { is_deleted: 0, merchant_name: { equals: r.name } },
-        });
-        for (const m of matched) {
-          if (m.recommendation_status !== "recommended") {
-            await prisma.user_merchants.update({
-              where: { id: m.id },
-              data: {
-                recommendation_status: "recommended",
-                recommendation_time: new Date(),
-                violation_status: "normal",
-                violation_time: null,
-              },
-            });
-            recMarked++;
-          }
+        if (toMark.length > 0) {
+          await prisma.user_merchants.updateMany({
+            where: { id: { in: toMark.map((m) => m.id) } },
+            data: { violation_status: "violated", violation_time: vtime || new Date() },
+          });
+          for (const m of toMark) m.violation_status = "violated";
+          vioMarked += toMark.length;
         }
       }
-    } catch (e: any) {
-      recError = e?.message || String(e);
-      console.error("[AdminSheetSync] 推荐同步失败:", e);
     }
+    log(`Violations done: ${vioNew} new, ${vioUpdated} updated, ${vioMarked} marked`);
+  } catch (e: any) {
+    vioError = e?.message || String(e);
+    log(`Violation sync error: ${vioError}`);
+  }
 
-    // 两个同步都失败时返回错误
-    if (vioError && recError) {
-      return apiError(`同步失败 — 违规: ${vioError} | 推荐: ${recError}`);
+  // ── 同步推荐商家（批量优化） ──
+  let recTotal = recommendations.length, recNew = 0, recSkipped = 0, recMarked = 0;
+  let recError: string | null = null;
+  try {
+    syncState.progress = `正在同步 ${recTotal} 条推荐商家…`;
+    log(`Syncing ${recTotal} recommendations...`);
+    const recBatch = `SHEET-REC-${batchTs}`;
+
+    const existingRecs = await prisma.merchant_recommendations.findMany({
+      where: { is_deleted: 0 },
+      select: { merchant_name: true },
+    });
+    const existingRecNames = new Set(existingRecs.map((r) => r.merchant_name));
+
+    for (const r of recommendations) {
+      if (existingRecNames.has(r.name)) { recSkipped++; continue; }
+
+      await prisma.merchant_recommendations.create({
+        data: {
+          merchant_name: r.name, roi_reference: r.roi || null, commission_info: r.commission || null,
+          settlement_info: r.settlement || null, remark: r.remark || null, share_time: r.time || null, upload_batch: recBatch,
+        },
+      });
+      existingRecNames.add(r.name);
+      recNew++;
+
+      const matched = await prisma.user_merchants.findMany({
+        where: { is_deleted: 0, merchant_name: { equals: r.name }, recommendation_status: { not: "recommended" } },
+        select: { id: true },
+      });
+      if (matched.length > 0) {
+        await prisma.user_merchants.updateMany({
+          where: { id: { in: matched.map((m) => m.id) } },
+          data: { recommendation_status: "recommended", recommendation_time: new Date(), violation_status: "normal", violation_time: null },
+        });
+        recMarked += matched.length;
+      }
     }
-
-    // 至少有一个成功才更新同步时间
-    await prisma.sheet_configs.update({ where: { id: cfg.id }, data: { last_synced_at: new Date() } });
-
-    const msg = vioError
-      ? `部分同步完成（违规同步失败: ${vioError}）`
-      : recError
-        ? `部分同步完成（推荐同步失败: ${recError}）`
-        : "统一同步完成";
-
-    return apiSuccess(serializeData({
-      violation: { total: vioTotal, new: vioNew, skipped: vioSkipped, marked: vioMarked, error: vioError },
-      recommendation: { total: recTotal, new: recNew, skipped: recSkipped, marked: recMarked, error: recError },
-    }), msg);
+    log(`Recommendations done: ${recNew} new, ${recSkipped} skipped, ${recMarked} marked`);
+  } catch (e: any) {
+    recError = e?.message || String(e);
+    log(`Recommendation sync error: ${recError}`);
   }
 
-  // 删除违规记录
-  if (action === "delete_violation") {
-    const { id } = body;
-    if (!id) return apiError("缺少 ID");
-    await prisma.merchant_violations.update({ where: { id: BigInt(id) }, data: { is_deleted: 1 } });
-    return apiSuccess(null, "已删除");
+  // 更新同步时间
+  if (!vioError || !recError) {
+    await prisma.sheet_configs.update({ where: { id: cfgId }, data: { last_synced_at: new Date() } });
   }
 
-  // 删除推荐记录
-  if (action === "delete_recommendation") {
-    const { id } = body;
-    if (!id) return apiError("缺少 ID");
-    await prisma.merchant_recommendations.update({ where: { id: BigInt(id) }, data: { is_deleted: 1 } });
-    return apiSuccess(null, "已删除");
-  }
+  const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
+  const result = {
+    violation: { total: vioTotal, new: vioNew, updated: vioUpdated, marked: vioMarked, error: vioError },
+    recommendation: { total: recTotal, new: recNew, skipped: recSkipped, marked: recMarked, error: recError },
+  };
 
-  return apiError("未知操作");
+  syncState.running = false;
+  syncState.result = result;
+  syncState.error = (vioError && recError) ? `违规: ${vioError} | 推荐: ${recError}` : null;
+  syncState.progress = (vioError && recError) ? "同步失败" : "同步完成";
+
+  log(`Sync completed in ${elapsed}s — VIO: ${vioNew} new / ${vioUpdated} upd / ${vioMarked} marked | REC: ${recNew} new / ${recSkipped} skip / ${recMarked} marked`);
 }
