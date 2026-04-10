@@ -4,6 +4,7 @@ import { normalizePlatformCode } from "@/lib/constants";
 import { getExchangeRate, preloadRates } from "@/lib/exchange-rate";
 import { nowCST, parseCSTDateStart, dateColumnStart } from "@/lib/date-utils";
 import { autoRepairPublishedArticles } from "@/lib/article-auto-repair";
+import { getRedirectedMerchantKeys } from "@/lib/merchant-ownership-rules";
 
 const CRON_SECRET = process.env.CRON_SECRET || "";
 
@@ -546,6 +547,9 @@ async function syncAllUsersTransactions(): Promise<unknown> {
         userMerchants.map((m) => [`${normalizePlatformCode(m.platform)}_${m.merchant_id}`, m])
       );
 
+      // 硬编码的商家归属重定向规则
+      const redirectRules = getRedirectedMerchantKeys(userId);
+
       let totalSynced = 0;
       for (const conn of validConns) {
         const platform = normalizePlatformCode(conn.platform);
@@ -571,9 +575,38 @@ async function syncAllUsersTransactions(): Promise<unknown> {
             const mid = txn.merchant_id || "";
             const merchantKey = `${platform}_${mid}`;
 
+            // 检查硬编码归属规则：将交易直接写入目标用户
+            const rule = redirectRules.get(merchantKey);
+            if (rule) {
+              await prisma.affiliate_transactions.upsert({
+                where: { platform_transaction_id: { platform, transaction_id: txn.transaction_id } },
+                create: {
+                  user_id: BigInt(rule.target_user_id),
+                  user_merchant_id: BigInt(rule.target_user_merchant_id),
+                  campaign_id: BigInt(rule.target_campaign_id),
+                  platform_connection_id: conn.id,
+                  platform, merchant_id: mid, merchant_name: txn.merchant || "",
+                  transaction_id: txn.transaction_id, transaction_time: new Date(txn.transaction_time),
+                  order_amount: txn.order_amount || 0, commission_amount: txn.commission_amount || 0,
+                  currency: "USD", status: txn.status, raw_status: txn.raw_status || "",
+                },
+                update: {
+                  user_id: BigInt(rule.target_user_id),
+                  user_merchant_id: BigInt(rule.target_user_merchant_id),
+                  campaign_id: BigInt(rule.target_campaign_id),
+                  commission_amount: txn.commission_amount || 0,
+                  status: txn.status, raw_status: txn.raw_status || "",
+                  order_amount: txn.order_amount || 0,
+                  merchant_name: txn.merchant || undefined,
+                  is_deleted: 0,
+                },
+              });
+              totalSynced++;
+              continue;
+            }
+
             if (mid && !merchantMap.has(merchantKey)) {
               try {
-                // Skip merchants that have been excluded (regardless of is_deleted)
                 const wasExcluded = await prisma.user_merchants.findFirst({
                   where: { user_id: userId, platform, merchant_id: mid, status: "excluded" },
                   select: { id: true },

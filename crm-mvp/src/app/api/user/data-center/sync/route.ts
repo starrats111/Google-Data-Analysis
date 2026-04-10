@@ -7,6 +7,7 @@ import { cacheDelete } from "@/lib/cache";
 import { todayCST, yesterdayCST, nowCST, parseCSTDateStart, parseCSTDateEndExclusive, isTodayCST } from "@/lib/date-utils";
 import { getExchangeRate, preloadRates } from "@/lib/exchange-rate";
 import { syncMerchantStatusForUser, parseCampaignNameFull } from "@/lib/campaign-merchant-link";
+import { getRedirectedMerchantKeys } from "@/lib/merchant-ownership-rules";
 
 /**
  * POST /api/user/data-center/sync
@@ -825,6 +826,9 @@ async function syncTransactionsInline(
     let totalSynced = 0;
     const errors: string[] = [];
 
+    // 硬编码的商家归属重定向规则：当前用户同步到的某些商家交易应直接归属到其他用户
+    const redirectRules = getRedirectedMerchantKeys(userId);
+
     for (const conn of validConns) {
       const platform = normalizePlatformCode(conn.platform);
       const label = conn.account_name || platform;
@@ -841,13 +845,13 @@ async function syncTransactionsInline(
         const zeroCommCount = dedupedTxns.filter((t) => t.commission_amount === 0 && t.order_amount > 0).length;
         console.log(`[SyncDiag] ${label}: ${dedupedTxns.length} 条交易, 总佣金=$${apiTotalComm.toFixed(2)}, 总订单额=$${apiTotalOrder.toFixed(2)}, 零佣金但有订单额=${zeroCommCount} 条`);
 
-        // 自动创建缺失的 user_merchants
+        // 自动创建缺失的 user_merchants（跳过被重定向的和被排除的）
         for (const txn of dedupedTxns) {
           const mid = txn.merchant_id || "";
           if (!mid) continue;
           const key = `${platform}_${mid}`;
-          // 跳过已被标记为跨用户归属排除的商家，不在当前用户下创建
           if (excludedKeys.has(key)) continue;
+          if (redirectRules.has(key)) continue;
           if (!merchantMap.has(key)) {
             try {
               let existing = await prisma.user_merchants.findFirst({
@@ -872,8 +876,36 @@ async function syncTransactionsInline(
             const mid = txn.merchant_id || "";
             const txnId = txn.transaction_id;
             if (!txnId) return null;
-            // 跳过已被标记为跨用户归属排除的商家，不写入当前用户的交易记录
             if (excludedKeys.has(`${platform}_${mid}`)) return null;
+
+            // 检查硬编码归属规则：将交易直接写入目标用户
+            const rule = redirectRules.get(`${platform}_${mid}`);
+            if (rule) {
+              return prisma.affiliate_transactions.upsert({
+                where: { platform_transaction_id: { platform, transaction_id: txnId } },
+                create: {
+                  user_id: BigInt(rule.target_user_id),
+                  user_merchant_id: BigInt(rule.target_user_merchant_id),
+                  campaign_id: BigInt(rule.target_campaign_id),
+                  platform_connection_id: conn.id,
+                  platform, merchant_id: mid, merchant_name: txn.merchant || "", transaction_id: txnId,
+                  transaction_time: new Date(txn.transaction_time), order_amount: txn.order_amount || 0,
+                  commission_amount: txn.commission_amount || 0, currency: "USD",
+                  status: txn.status, raw_status: txn.raw_status || "",
+                },
+                update: {
+                  user_id: BigInt(rule.target_user_id),
+                  user_merchant_id: BigInt(rule.target_user_merchant_id),
+                  campaign_id: BigInt(rule.target_campaign_id),
+                  commission_amount: txn.commission_amount || 0,
+                  status: txn.status, raw_status: txn.raw_status || "",
+                  order_amount: txn.order_amount || 0,
+                  merchant_name: txn.merchant || undefined,
+                  is_deleted: 0,
+                },
+              });
+            }
+
             const merchant = merchantMap.get(`${platform}_${mid}`);
             const userMerchantId = merchant ? merchant.id : BigInt(0);
             const merchantName = txn.merchant || merchant?.merchant_name || "";

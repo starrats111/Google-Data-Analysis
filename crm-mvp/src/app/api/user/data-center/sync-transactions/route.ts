@@ -3,6 +3,7 @@ import { getUserFromRequest, serializeData } from "@/lib/auth";
 import { apiSuccess, apiError, normalizePlatformCode } from "@/lib/constants";
 import prisma from "@/lib/prisma";
 import { nowCST, parseCSTDateStart, dateColumnStart } from "@/lib/date-utils";
+import { getRedirectedMerchantKeys } from "@/lib/merchant-ownership-rules";
 
 /**
  * POST /api/user/data-center/sync-transactions
@@ -154,12 +155,42 @@ export async function POST(req: NextRequest) {
         }
       }
 
+      const redirectRules = getRedirectedMerchantKeys(userId);
+
       for (let i = 0; i < dedupedTxns.length; i += 50) {
         const batch = dedupedTxns.slice(i, i + 50);
         const ops = batch.map((txn) => {
           const merchantId = txn.merchant_id || "";
           const txnId = txn.transaction_id;
           if (!txnId) { skipped++; return null; }
+
+          // 检查硬编码归属规则：将交易直接写入目标用户
+          const rule = redirectRules.get(`${platform}_${merchantId}`);
+          if (rule) {
+            return prisma.affiliate_transactions.upsert({
+              where: { platform_transaction_id: { platform, transaction_id: txnId } },
+              create: {
+                user_id: BigInt(rule.target_user_id),
+                user_merchant_id: BigInt(rule.target_user_merchant_id),
+                campaign_id: BigInt(rule.target_campaign_id),
+                platform_connection_id: conn.id,
+                platform, merchant_id: merchantId, merchant_name: txn.merchant || "",
+                transaction_id: txnId, transaction_time: new Date(txn.transaction_time),
+                order_amount: txn.order_amount || 0, commission_amount: txn.commission_amount || 0,
+                currency: "USD", status: txn.status, raw_status: txn.raw_status || "",
+              },
+              update: {
+                user_id: BigInt(rule.target_user_id),
+                user_merchant_id: BigInt(rule.target_user_merchant_id),
+                campaign_id: BigInt(rule.target_campaign_id),
+                commission_amount: txn.commission_amount || 0,
+                status: txn.status, raw_status: txn.raw_status || "",
+                order_amount: txn.order_amount || 0,
+                merchant_name: txn.merchant || undefined,
+                is_deleted: 0,
+              },
+            });
+          }
 
           const merchant = merchantMap.get(`${platform}_${merchantId}`);
           const userMerchantId = merchant ? merchant.id : BigInt(0);
