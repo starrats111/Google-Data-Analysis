@@ -3,7 +3,7 @@ import { getUserFromRequest, serializeData } from "@/lib/auth";
 import { apiSuccess, apiError } from "@/lib/constants";
 import prisma from "@/lib/prisma";
 import { removeCampaign } from "@/lib/google-ads";
-import { generateCampaignName } from "@/lib/campaign-naming";
+import { generateCampaignName, resolvePlatformLabel } from "@/lib/campaign-naming";
 
 /**
  * POST /api/user/ad-creation/republish
@@ -55,9 +55,10 @@ export async function POST(req: NextRequest) {
 
   let newCampaignName = campaign.campaign_name;
   if (merchant) {
+    const platLabel = await resolvePlatformLabel(userId, merchant.platform || "", merchant.platform_connection_id);
     newCampaignName = await generateCampaignName(
       userId,
-      merchant.platform || "",
+      platLabel,
       merchant.merchant_name || "",
       campaign.target_country || "US",
       merchant.merchant_id || "",

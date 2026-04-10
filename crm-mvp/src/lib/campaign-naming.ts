@@ -151,6 +151,31 @@ export function campaignNameCleanAndMmdd(merchantName: string): { cleanName: str
   return { cleanName, mmdd };
 }
 
+/**
+ * 根据用户在同一平台下的多个账号连接，解析带账号编号的平台标签（如 PM1, RW2）
+ * 编号 = platform_connection 按 id 升序排列的位置（1-based）
+ */
+export async function resolvePlatformLabel(
+  userId: bigint,
+  platform: string,
+  platformConnectionId: bigint | null | undefined,
+): Promise<string> {
+  if (!platform) return "";
+  if (!platformConnectionId) return `${platform}1`;
+
+  const connections = await prisma.platform_connections.findMany({
+    where: { user_id: userId, platform, is_deleted: 0 },
+    select: { id: true },
+    orderBy: { id: "asc" },
+  });
+
+  if (connections.length === 0) return `${platform}1`;
+
+  const index = connections.findIndex(c => c.id === platformConnectionId);
+  const accountNum = index >= 0 ? index + 1 : 1;
+  return `${platform}${accountNum}`;
+}
+
 /* fetchGoogleAdsMaxCampaignSequence 已移除 — 见文件头部说明 */
 
 export type NextCampaignNameTxArgs = {

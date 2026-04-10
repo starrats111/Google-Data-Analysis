@@ -7,7 +7,7 @@ import { sanitizeAdText } from "@/lib/crawl-pipeline";
 import { collectAiRuleViolations } from "@/lib/ai-rule-profile";
 import { isPolicyRiskKeyword } from "@/lib/keyword-optimizer";
 import { mutateGoogleAds, dollarsToMicros, queryGoogleAds } from "@/lib/google-ads";
-import { assignFormalCampaignNameBeforeSubmit } from "@/lib/campaign-naming";
+import { assignFormalCampaignNameBeforeSubmit, resolvePlatformLabel } from "@/lib/campaign-naming";
 import { readFile } from "fs/promises";
 import { existsSync } from "fs";
 import path from "path";
@@ -191,7 +191,7 @@ export async function POST(req: NextRequest) {
 
   const submitMerchant = await prisma.user_merchants.findFirst({
     where: { id: campaign.user_merchant_id, is_deleted: 0 },
-    select: { merchant_name: true, merchant_id: true, platform: true },
+    select: { merchant_name: true, merchant_id: true, platform: true, platform_connection_id: true },
   });
   if (!submitMerchant) return apiError("商家不存在", 404);
 
@@ -200,12 +200,14 @@ export async function POST(req: NextRequest) {
     select: { naming_rule: true },
   });
 
+  const platformLabel = await resolvePlatformLabel(userId, submitMerchant.platform || "", submitMerchant.platform_connection_id);
+
   const formalName = await assignFormalCampaignNameBeforeSubmit({
     campaignId: campaign.id,
     userId,
     mccId: mccAccount.id,
     namingRule: submitAdSettings?.naming_rule || "global",
-    platformLabel: submitMerchant.platform || "",
+    platformLabel,
     country: campaign.target_country || "US",
     merchantName: submitMerchant.merchant_name || "",
     merchantId: submitMerchant.merchant_id || "",
@@ -362,12 +364,22 @@ export async function POST(req: NextRequest) {
     });
 
     // ─── 6. RSA 广告 ───
-    const headlineAssets = headlines.slice(0, 15).map((h: string) => ({
-      text: sanitizeAdText(h, { allowExclamation: true }).slice(0, 30),
-    }));
-    const descriptionAssets = descriptions.slice(0, 4).map((d: string) => ({
-      text: sanitizeAdText(d, { allowExclamation: true }).slice(0, 90),
-    }));
+    const headlineAssets = headlines
+      .slice(0, 15)
+      .map((h: string) => ({
+        text: sanitizeAdText(h, { allowExclamation: true }).slice(0, 30),
+      }))
+      .filter((h: { text: string }, i: number, arr: { text: string }[]) =>
+        h.text.length > 0 && arr.findIndex((x) => x.text.toLowerCase() === h.text.toLowerCase()) === i
+      );
+    const descriptionAssets = descriptions
+      .slice(0, 4)
+      .map((d: string) => ({
+        text: sanitizeAdText(d, { allowExclamation: true }).slice(0, 90),
+      }))
+      .filter((d: { text: string }, i: number, arr: { text: string }[]) =>
+        d.text.length > 0 && arr.findIndex((x) => x.text.toLowerCase() === d.text.toLowerCase()) === i
+      );
 
     const rsaInfo: Record<string, unknown> = {
       headlines: headlineAssets,
@@ -390,6 +402,7 @@ export async function POST(req: NextRequest) {
     });
 
     // ─── 7. 关键词（政策风险词硬拦截，不发送给 Google） ───
+    const seenKeywords = new Set<string>();
     for (const kw of keywords) {
       const text = typeof kw === "string" ? kw : kw.text;
       if (isPolicyRiskKeyword(text)) {
@@ -398,6 +411,9 @@ export async function POST(req: NextRequest) {
       }
       const rawMatch = typeof kw === "string" ? "PHRASE" : (kw.matchType || "PHRASE");
       const matchType = rawMatch.toUpperCase();
+      const kwKey = `${text.toLowerCase()}|${matchType}`;
+      if (seenKeywords.has(kwKey)) continue;
+      seenKeywords.add(kwKey);
       operations.push({
         ad_group_criterion_operation: {
           create: {
@@ -411,6 +427,7 @@ export async function POST(req: NextRequest) {
 
     // ─── 8. Sitelink 扩展（标题/描述需符合 Google Ads 大写和标点规范） ───
     let assetTempId = -10;
+    const seenSitelinkTexts = new Set<string>();
     for (const sl of sitelinks) {
       const assetTempRn = `customers/${cid}/assets/${assetTempId}`;
       let slUrl = (sl.finalUrl || "").trim();
@@ -424,6 +441,12 @@ export async function POST(req: NextRequest) {
         console.warn(`[AdSubmit] 跳过无效站内链接: title="${sl.title}", url="${slUrl}"`);
         continue;
       }
+      const slKey = linkText.toLowerCase();
+      if (seenSitelinkTexts.has(slKey)) {
+        console.warn(`[AdSubmit] 跳过重复站内链接: "${linkText}"`);
+        continue;
+      }
+      seenSitelinkTexts.add(slKey);
 
       // Google Ads API v23: description1 和 description2 必须同时有值（1-35 字符），
       // 否则必须同时省略。空字符串在 proto3 中视为"未设置"，会触发 REQUIRED 错误。
@@ -465,7 +488,10 @@ export async function POST(req: NextRequest) {
     // ─── 9. Callout 扩展（服务端校验：callout 必须 ≥ 2 条、每条 2-25 字符） ───
     const validCallouts = callouts
       .map((c: string) => sanitizeAdText((c || ""), { allowExclamation: false }).slice(0, 25))
-      .filter((c: string) => c.length >= 2);
+      .filter((c: string) => c.length >= 2)
+      .filter((c: string, i: number, arr: string[]) =>
+        arr.findIndex((x) => x.toLowerCase() === c.toLowerCase()) === i
+      );
     if (validCallouts.length > 0 && validCallouts.length < 2) {
       console.warn(`[AdSubmit] Callout 不足2条（${validCallouts.length}条），Google Ads 要求至少2条才能展示，跳过提交`);
     }
@@ -570,53 +596,64 @@ export async function POST(req: NextRequest) {
       console.warn(`[AdSubmit] Price Extension 仅有 ${price.items.length} 条，Google Ads 要求至少3条，跳过提交`);
     }
     if (price?.items?.length >= 3) {
-      const assetTempRn = `customers/${cid}/assets/${assetTempId}`;
       const VALID_PRICE_UNITS = new Set([
         "PER_HOUR", "PER_DAY", "PER_WEEK", "PER_MONTH", "PER_YEAR", "PER_NIGHT",
       ]);
-      const priceOfferings = price.items.map((item: any) => {
-        const offering: Record<string, unknown> = {
-          header: (item.header || "").slice(0, 25),
-          description: (item.description || "").slice(0, 25),
-          price: {
-            amount_micros: String(Math.round((item.price_amount || 0) * 1_000_000)),
-            currency_code: item.currency_code || market.currencyCode,
-          },
-        };
-        if (item.unit && VALID_PRICE_UNITS.has(item.unit)) {
-          offering.unit = item.unit;
-        }
-        let itemUrl = (item.final_url || item.url || "").trim();
-        try {
-          if (itemUrl && new URL(itemUrl).hostname.replace(/^www\./, "") !== new URL(finalUrl).hostname.replace(/^www\./, "")) {
-            itemUrl = "";
+      const seenPriceHeaders = new Set<string>();
+      const priceOfferings = price.items
+        .map((item: any) => {
+          const header = (item.header || "").slice(0, 25);
+          const headerKey = header.toLowerCase();
+          if (!header || seenPriceHeaders.has(headerKey)) return null;
+          seenPriceHeaders.add(headerKey);
+          const offering: Record<string, unknown> = {
+            header,
+            description: (item.description || "").slice(0, 25),
+            price: {
+              amount_micros: String(Math.round((item.price_amount || 0) * 1_000_000)),
+              currency_code: item.currency_code || market.currencyCode,
+            },
+          };
+          if (item.unit && VALID_PRICE_UNITS.has(item.unit)) {
+            offering.unit = item.unit;
           }
-        } catch { itemUrl = ""; }
-        offering.final_url = itemUrl || finalUrl;
-        return offering;
-      });
-      operations.push({
-        asset_operation: {
-          create: {
-            resource_name: assetTempRn,
-            price_asset: {
-              type: price.type || "BRANDS",
-              language_code: market.priceLanguageCode,
-              price_offerings: priceOfferings,
+          let itemUrl = (item.final_url || item.url || "").trim();
+          try {
+            if (itemUrl && new URL(itemUrl).hostname.replace(/^www\./, "") !== new URL(finalUrl).hostname.replace(/^www\./, "")) {
+              itemUrl = "";
+            }
+          } catch { itemUrl = ""; }
+          offering.final_url = itemUrl || finalUrl;
+          return offering;
+        })
+        .filter(Boolean);
+      if (priceOfferings.length < 3) {
+        console.warn(`[AdSubmit] Price Extension 去重后仅 ${priceOfferings.length} 条，不足3条，跳过提交`);
+      } else {
+        const assetTempRn = `customers/${cid}/assets/${assetTempId}`;
+        operations.push({
+          asset_operation: {
+            create: {
+              resource_name: assetTempRn,
+              price_asset: {
+                type: price.type || "BRANDS",
+                language_code: market.priceLanguageCode,
+                price_offerings: priceOfferings,
+              },
             },
           },
-        },
-      });
-      operations.push({
-        campaign_asset_operation: {
-          create: {
-            asset: assetTempRn,
-            campaign: campaignTempRn,
-            field_type: "PRICE",
+        });
+        operations.push({
+          campaign_asset_operation: {
+            create: {
+              asset: assetTempRn,
+              campaign: campaignTempRn,
+              field_type: "PRICE",
+            },
           },
-        },
-      });
-      assetTempId--;
+        });
+        assetTempId--;
+      }
     }
 
     // ─── 9d. 致电扩展 (Call) ───
@@ -667,7 +704,14 @@ export async function POST(req: NextRequest) {
     }
 
     // ─── 9e. 结构化摘要 (Structured Snippet) ───
-    if (structured_snippet?.values?.length >= 3) {
+    const snippetValues = (structured_snippet?.values || [])
+      .slice(0, 10)
+      .map((v: string) => (v || "").slice(0, 25))
+      .filter((v: string) => v.length > 0)
+      .filter((v: string, i: number, arr: string[]) =>
+        arr.findIndex((x) => x.toLowerCase() === v.toLowerCase()) === i
+      );
+    if (snippetValues.length >= 3) {
       const assetTempRn = `customers/${cid}/assets/${assetTempId}`;
       operations.push({
         asset_operation: {
@@ -675,7 +719,7 @@ export async function POST(req: NextRequest) {
             resource_name: assetTempRn,
             structured_snippet_asset: {
               header: structured_snippet.header || market.snippetHeader,
-              values: structured_snippet.values.slice(0, 10).map((v: string) => (v || "").slice(0, 25)),
+              values: snippetValues,
             },
           },
         },
