@@ -886,78 +886,100 @@ async function generateOptionalBatch(
       send("price_items", { skipped: true });
       console.log("[Optional] 价格扩展：未爬取到真实价格数据，跳过");
     } else {
-      // ── 硬规则：价格标题/描述 ≤25 字符，禁止任何截断，必须 AI 重写到达标为止 ──
+      // ── AI 批量重写价格项的 header + description，和广告文案同等品质 ──
 
-      const MAX_PRICE_RETRIES = 3;
+      const MAX_PRICE_RETRIES = 2;
 
-      const aiShortenTo25 = async (text: string, role: "title" | "description", context: string): Promise<string | null> => {
+      try {
+        const priceRewritePrompt = `You are Adrian — a Google Ads price extension copywriter. Rewrite each product's title and description to be compelling, human, and benefit-driven.
+
+Merchant: ${merchantName}
+Language: ${languageName}
+
+RAW PRODUCTS (from website crawl — these are real products with real prices):
+${items.map((item, i) => `${i + 1}. Name: "${item.header}"${item.description ? ` | Desc: "${item.description}"` : ""} | ${item.currency} ${item.price}`).join("\n")}
+
+YOUR TASK — rewrite each product into a Google Ads Price Extension entry:
+
+HEADER (≤25 chars):
+- Clean, appealing product name — NOT the raw crawl text
+- Fix awkward numbering, spacing, capitalization (e.g. "Diaper rash cream 1 2 3" → "123 Diaper Rash Cream")
+- Use Title Case naturally — "Gentle Cleansing Gel" not "2 in 1 cleansing gel"
+- Keep brand-specific product names if they're already good
+- Do NOT include prices or currency symbols
+- Must sound like a product you'd see in a store, not a database entry
+
+DESCRIPTION (≤25 chars):
+- A benefit hook or what-it-does phrase — NOT a restatement of the header
+- MUST be COMPLETELY DIFFERENT from the header — Google Ads rejects identical header/description
+- Think: what would make a parent/buyer click? "Soothes baby's skin fast" not "Diaper rash cream"
+- Use sensory/emotional language: "gentle", "soothing", "nourishing", "refreshing"
+- Examples of GOOD descriptions: "Gentle daily face wash", "Soothes irritated skin", "Hydrates & protects", "Fresh scent all day"
+- Examples of BAD descriptions: same as header, generic "Shop now", just a category name
+
+Return ONLY a JSON array of objects:
+[{"header": "...", "description": "..."}, ...]
+
+Every header MUST be ≤25 characters. Every description MUST be ≤25 characters.
+Header and description MUST be different for each item. COUNT CAREFULLY.`;
+
+        let rewritten: { header: string; description: string }[] | null = null;
+
         for (let attempt = 1; attempt <= MAX_PRICE_RETRIES; attempt++) {
           try {
-            const strictPrompt = role === "title"
-              ? `You MUST rewrite this product/collection name to fit within 25 characters (currently ${text.length} chars). This is a HARD LIMIT — not 26, not 27, exactly ≤25.\nMerchant: ${merchantName}\nDo NOT include prices or dollar amounts.\nOutput ONLY the rewritten name, nothing else.\n\nOriginal: "${text}"\n\nYour output must be ≤25 characters. Count carefully.`
-              : `You MUST write a product description that fits within 25 characters (currently ${text.length > 0 ? text.length + " chars" : "empty"}).\nMerchant: ${merchantName}\nProduct: "${context}"\n${text.length > 0 ? `Original: "${text}"\nShorten while keeping meaning.` : `Describe what "${context}" is (e.g. "Leather totes & satchels").`}\nCRITICAL: The description MUST be DIFFERENT from the product title "${context}". Do NOT repeat the title.\nOutput ONLY the description, nothing else.\n\nYour output must be ≤25 characters. Count carefully.`;
-
-            const result = (await callAiWithFallback("ad_copy", [{ role: "user", content: strictPrompt }], 30))
-              .trim().replace(/^["']|["']$/g, "").replace(/\s*[\$€£¥]\d[\d,.]*/g, "").trim();
-
-            if (result.length >= 2 && result.length <= 25) {
-              console.log(`[Price] ${role} AI 精简 (attempt ${attempt}): "${text || context}" → "${result}"`);
-              return result;
+            const raw = await callAiWithFallback("ad_copy", [{ role: "user", content: priceRewritePrompt }], 2048);
+            const parsed = JSON.parse(extractJsonFromAi(raw));
+            if (Array.isArray(parsed) && parsed.length >= items.length) {
+              rewritten = parsed.slice(0, items.length);
+              break;
             }
-            console.warn(`[Price] ${role} AI attempt ${attempt} 仍超长: "${result}" (${result.length} chars)`);
-          } catch {}
-        }
-        return null; // 全部失败
-      };
-
-      const optimizePriceTitle = async (raw: string): Promise<string> => {
-        // 先移除标题中的价格信息（价格有独立字段）
-        const withoutPrice = raw
-          .replace(/\s*[\$€£¥]\s*\d[\d,.]*\+?/g, "")
-          .replace(/\s*(?:from|starting\s+at|under)\s+\d[\d,.]*/gi, "")
-          .replace(/\s*[-–—]\s*$/, "")
-          .replace(/\s+/g, " ").trim();
-        const cleaned = withoutPrice.length >= 3 ? withoutPrice : raw.trim();
-        if (cleaned.length <= 25) return cleaned;
-
-        const result = await aiShortenTo25(cleaned, "title", "");
-        if (result) return result;
-
-        // 全部 AI 失败：用商家名作为安全 fallback（永远不截断）
-        const fallback = merchantName.length <= 25 ? merchantName : merchantName.split(/\s+/).slice(0, 2).join(" ").slice(0, 25);
-        console.warn(`[Price] 标题 AI 全部失败，使用 fallback: "${fallback}"`);
-        return fallback;
-      };
-
-      const optimizePriceDescription = async (header: string, rawDesc: string): Promise<string> => {
-        const raw = rawDesc.trim();
-        if (raw.length > 0 && raw.length <= 25 && raw.toLowerCase() !== header.toLowerCase()) return raw;
-
-        // If description equals header or is empty/overlong, generate a distinct one
-        const result = await aiShortenTo25(raw || header, "description", header);
-        if (result && result.toLowerCase() !== header.toLowerCase()) return result;
-
-        // Fallback: ensure it differs from header
-        const fallback = `Shop ${merchantName}`.length <= 25 ? `Shop ${merchantName}` : "Shop now";
-        if (fallback.toLowerCase() === header.toLowerCase()) return "View details";
-        console.warn(`[Price] 描述 AI 全部失败，使用 fallback: "${fallback}"`);
-        return fallback;
-      };
-
-      // 并行精简所有条目的 header 和 description
-      items = await Promise.all(
-        items.map(async (item) => {
-          const optimizedHeader = await optimizePriceTitle(item.header);
-          let optimizedDesc = await optimizePriceDescription(optimizedHeader, item.description);
-          // Google Ads 硬规则：header 和 description 不能相同
-          if (optimizedDesc.toLowerCase() === optimizedHeader.toLowerCase()) {
-            optimizedDesc = `Shop ${merchantName}`.length <= 25 ? `Shop ${merchantName}` : "View details";
-            if (optimizedDesc.toLowerCase() === optimizedHeader.toLowerCase()) optimizedDesc = "View details";
-            console.warn(`[Price] header==description 冲突，替换 desc: "${optimizedHeader}" → "${optimizedDesc}"`);
+            console.warn(`[Price] AI batch rewrite attempt ${attempt}: 返回数量不匹配 (${parsed?.length} vs ${items.length})`);
+          } catch (e) {
+            console.warn(`[Price] AI batch rewrite attempt ${attempt} 失败:`, e instanceof Error ? e.message : e);
           }
-          return { ...item, header: optimizedHeader, description: optimizedDesc };
-        }),
-      );
+        }
+
+        if (rewritten) {
+          items = items.map((item, i) => {
+            const ai = rewritten![i];
+            let header = (ai?.header || "").trim().replace(/\s*[\$€£¥]\d[\d,.]*/g, "").trim();
+            let desc = (ai?.description || "").trim();
+
+            // 长度安全网：超过 25 字符则回退到原始数据清理版
+            if (header.length < 2 || header.length > 25) {
+              header = item.header.replace(/\s*[\$€£¥]\s*\d[\d,.]*\+?/g, "").trim().slice(0, 25);
+            }
+            if (desc.length < 2 || desc.length > 25) {
+              desc = (item.description || "").trim().slice(0, 25);
+            }
+
+            // header == description 冲突解决
+            if (desc.toLowerCase() === header.toLowerCase() || desc.length < 2) {
+              desc = `Shop ${merchantName}`.length <= 25 ? `Shop ${merchantName}` : "View details";
+              if (desc.toLowerCase() === header.toLowerCase()) desc = "View details";
+            }
+
+            return { ...item, header, description: desc };
+          });
+          console.log(`[Price] AI batch rewrite 成功: ${items.length} 条产品标题/描述已重写`);
+        } else {
+          // AI 全部失败时的降级处理：清理原始数据
+          items = items.map((item) => {
+            let header = item.header
+              .replace(/\s*[\$€£¥]\s*\d[\d,.]*\+?/g, "")
+              .replace(/\s+/g, " ").trim().slice(0, 25);
+            let desc = (item.description || "").trim().slice(0, 25);
+            if (desc.toLowerCase() === header.toLowerCase() || desc.length < 2) {
+              desc = `Shop ${merchantName}`.length <= 25 ? `Shop ${merchantName}` : "View details";
+              if (desc.toLowerCase() === header.toLowerCase()) desc = "View details";
+            }
+            return { ...item, header, description: desc };
+          });
+          console.warn(`[Price] AI batch rewrite 全部失败，使用清理后的原始数据`);
+        }
+      } catch (outerErr) {
+        console.error("[Price] AI rewrite 异常:", outerErr instanceof Error ? outerErr.message : outerErr);
+      }
 
       let priceType = "Products";
       try {
@@ -968,7 +990,7 @@ async function generateOptionalBatch(
         }
       } catch {}
       send("price_items", { skipped: false, items, type: priceType });
-      console.log(`[Optional] 价格信息: ${items.length} 条（全部来自真实爬取，标题已 AI 精简）`);
+      console.log(`[Optional] 价格信息: ${items.length} 条（AI 重写标题/描述）`);
     }
   }
 
