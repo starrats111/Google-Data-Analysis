@@ -1197,11 +1197,23 @@ async function extractPhoneFromCache(
   merchantUrl: string,
   country: string,
 ): Promise<{ country_code: string; phone_number: string } | null> {
-  if (cache.phoneCandidates.length > 0) {
-    return cache.phoneCandidates[0];
+  const CC: Record<string, string> = {
+    US: "US", CA: "CA", GB: "GB", UK: "GB", AU: "AU",
+    DE: "DE", FR: "FR", JP: "JP", IT: "IT", ES: "ES", NL: "NL",
+    SE: "SE", NO: "NO", DK: "DK", BR: "BR",
+  };
+  const countryCode = CC[country.toUpperCase()] || "US";
+
+  // 从缓存中选出第一个通过格式校验的号码
+  // 不能盲目取 candidates[0]，历史缓存可能包含格式不正确的号码
+  const { isValidPhoneForCountry: validate } = await import("@/lib/crawl-pipeline");
+  for (const candidate of cache.phoneCandidates) {
+    if (validate(candidate.phone_number, countryCode)) {
+      return { country_code: countryCode, phone_number: candidate.phone_number };
+    }
   }
 
-  // 尝试爬 contact 页面
+  // 缓存无有效号码，尝试爬 contact 页面的 tel: href（最可靠来源）
   const contactLinks = cache.links.filter((l) =>
     /contact|about|impressum|kontakt|nous-contacter/i.test(l.url) || /contact|about/i.test(l.text),
   ).slice(0, 2);
@@ -1218,14 +1230,15 @@ async function extractPhoneFromCache(
       let m;
       while ((m = telRegex.exec(html)) !== null) {
         const phone = decodeURIComponent(m[1]).replace(/\s+/g, "").trim();
-        if (phone.length >= 7 && phone.length <= 20) {
-          const CC: Record<string, string> = { US: "US", CA: "CA", GB: "GB", DE: "DE", FR: "FR", JP: "JP", IT: "IT", ES: "ES", NL: "NL" };
-          return { country_code: CC[country.toUpperCase()] || "US", phone_number: phone };
+        if (validate(phone, countryCode)) {
+          return { country_code: countryCode, phone_number: phone };
         }
       }
     } catch {}
   }
 
+  // 找不到合格号码 → 返回 null，skip call extension
+  console.log(`[Call] 未找到符合 ${countryCode} 格式的电话号码，跳过致电扩展`);
   return null;
 }
 

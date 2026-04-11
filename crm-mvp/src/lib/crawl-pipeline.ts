@@ -522,23 +522,48 @@ function extractNavItems(html: string): string[] {
   return navItems;
 }
 
+/**
+ * 按目标市场校验电话号码格式（导出供其他模块复用）。
+ * 去除所有非数字后，对照各国合法位数范围进行硬校验。
+ * 不合格的号码一律拒绝，宁可不返回也不填错号码。
+ */
+export function isValidPhoneForCountry(raw: string, countryCode: string): boolean {
+  const digits = raw.replace(/\D/g, "");
+  switch (countryCode) {
+    // 北美：10 位本地 或 11 位（1 + 10位）
+    case "US":
+    case "CA":
+      return digits.length === 10 || (digits.length === 11 && digits[0] === "1");
+    // 英国：9–11 位
+    case "GB":
+      return digits.length >= 9 && digits.length <= 11;
+    // 澳大利亚：8–10 位
+    case "AU":
+      return digits.length >= 8 && digits.length <= 10;
+    // 日本：9–11 位
+    case "JP":
+      return digits.length >= 9 && digits.length <= 11;
+    // 巴西：10–11 位
+    case "BR":
+      return digits.length >= 10 && digits.length <= 11;
+    // 欧洲主要国家：7–12 位
+    case "DE":
+    case "FR":
+    case "IT":
+    case "ES":
+    case "NL":
+    case "SE":
+    case "NO":
+    case "DK":
+      return digits.length >= 7 && digits.length <= 12;
+    default:
+      return digits.length >= 7 && digits.length <= 13;
+  }
+}
+
 function extractPhoneCandidates(html: string, country: string): { country_code: string; phone_number: string }[] {
-  const phoneRegex = /(?:\+\d{1,3}[\s.-]?)?\(?\d{2,4}\)?[\s.-]?\d{3,4}[\s.-]?\d{3,4}/g;
   const telRegex = /href=["']tel:([^"']+)["']/gi;
   const candidates: string[] = [];
-
-  let telMatch;
-  while ((telMatch = telRegex.exec(html)) !== null) {
-    const phone = decodeURIComponent(telMatch[1]).replace(/\s+/g, "").trim();
-    if (phone.length >= 7 && phone.length <= 20) candidates.push(phone);
-  }
-
-  const textOnly = html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ");
-  const phoneMatches = textOnly.match(phoneRegex) || [];
-  for (const p of phoneMatches) {
-    const clean = p.replace(/\s+/g, "").trim();
-    if (clean.length >= 7 && clean.length <= 20 && !candidates.includes(clean)) candidates.push(clean);
-  }
 
   const COUNTRY_PHONE_CODE: Record<string, string> = {
     US: "US", CA: "CA", GB: "GB", UK: "GB", AU: "AU",
@@ -546,6 +571,28 @@ function extractPhoneCandidates(html: string, country: string): { country_code: 
     ES: "ES", NL: "NL", SE: "SE", NO: "NO", DK: "DK",
   };
   const countryCode = COUNTRY_PHONE_CODE[country.toUpperCase()] || "US";
+
+  // 优先从 tel: href 提取（最可靠，是商家主动标记的可拨打号码）
+  let telMatch;
+  while ((telMatch = telRegex.exec(html)) !== null) {
+    const phone = decodeURIComponent(telMatch[1]).replace(/\s+/g, "").trim();
+    if (isValidPhoneForCountry(phone, countryCode) && !candidates.includes(phone)) {
+      candidates.push(phone);
+    }
+  }
+
+  // 若 tel: href 无结果，再从正文文本提取并严格校验
+  if (candidates.length === 0) {
+    const phoneRegex = /(?:\+\d{1,3}[\s.-]?)?\(?\d{2,4}\)?[\s.-]?\d{3,4}[\s.-]?\d{3,4}/g;
+    const textOnly = html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ");
+    const phoneMatches = textOnly.match(phoneRegex) || [];
+    for (const p of phoneMatches) {
+      const clean = p.replace(/\s+/g, "").trim();
+      if (isValidPhoneForCountry(clean, countryCode) && !candidates.includes(clean)) {
+        candidates.push(clean);
+      }
+    }
+  }
 
   return candidates.slice(0, 3).map((phone) => ({ country_code: countryCode, phone_number: phone }));
 }
