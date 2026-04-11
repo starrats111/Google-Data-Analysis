@@ -257,6 +257,23 @@ export default function AdPreviewPage() {
   const isReady = preview?.isReady ?? false;
   const targetCountry = String(preview?.campaign?.target_country || "US").toUpperCase();
   const market = getAdMarketConfig(targetCountry);
+
+  // 动态读取激活人设名称，用于标签显示
+  const activePersonaName = (() => {
+    try {
+      const profile = preview?.adSettings?.ai_rule_profile;
+      if (!profile) return "Adrian";
+      const parsed = typeof profile === "string" ? JSON.parse(profile) : profile;
+      const activeId: string = parsed?.active_persona_id || "system_adrian";
+      const personas: { id: string; name: string }[] = parsed?.personas || [];
+      const found = personas.find((p) => p.id === activeId);
+      if (found?.name) return found.name;
+      if (activeId === "system_alden") return "Alden · 转化鬼才";
+      return "Adrian · 数据猎手";
+    } catch {
+      return "Adrian";
+    }
+  })();
   const currencyOptions = Array.from(new Set([market.currencyCode, ...CURRENCY_OPTIONS])).map((value) => ({ value, label: value }));
   const defaultCurrencyCode = getCurrencyCodeByCountry(targetCountry);
   const defaultLanguageCode = getLanguageCodeByCountry(targetCountry);
@@ -1638,7 +1655,7 @@ export default function AdPreviewPage() {
               title={
                 <Space>
                   <span>🚫 否定关键词</span>
-                  <Tag color="orange">Adrian 推荐</Tag>
+                  <Tag color="orange">{activePersonaName.split("·")[0].trim()} 推荐</Tag>
                   <Text type="secondary" style={{ fontSize: 11 }}>{negativeKeywords.length} 条，已广泛匹配</Text>
                 </Space>
               }
