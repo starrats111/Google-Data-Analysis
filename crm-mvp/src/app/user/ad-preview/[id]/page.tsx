@@ -136,7 +136,7 @@ function normalizeImageUrls(items: unknown): string[] {
 export default function AdPreviewPage() {
   const params = useParams();
   const router = useRouter();
-  const { message } = App.useApp();
+  const { message, modal } = App.useApp();
   const campaignId = params.id as string;
 
   // 核心编辑状态
@@ -1336,14 +1336,28 @@ export default function AdPreviewPage() {
           setTimeout(() => router.push("/user/data-center"), 1500);
         }
       } else {
-        message.error(res.message || "提交失败");
+        const errMsg = res.message || "提交失败";
+        if (errMsg.includes("政策违规") || errMsg.includes("政策规定") || errMsg.includes("被拒绝") || errMsg.length > 100) {
+          modal.error({
+            title: "广告创建失败",
+            content: errMsg.split("\n").map((line: string, i: number) => (
+              <div key={i} style={line.startsWith("•") ? { paddingLeft: 8, marginTop: 4 } : { marginTop: i > 0 ? 8 : 0 }}>
+                {line}
+              </div>
+            )),
+            width: 520,
+            okText: "我知道了",
+          });
+        } else {
+          message.error(errMsg);
+        }
       }
     } catch (err: any) {
       message.error(err?.message || "提交失败");
     } finally {
       setSubmitting(false);
     }
-  }, [headlines, descriptions, kwList, budget, maxCpc, biddingStrategy, networkSearch, networkPartners, networkDisplay, campaignId, message, router, sitelinks, imageUrls, enableCallouts, callouts, selectedCid, selectedMccId, adLanguage, euPoliticalAd, fetchAndValidateSitelink, enablePromotion, promotion, enablePrice, priceItems, priceType, enableCall, callPhoneNumber, callCountryCode, enableSnippet, snippetHeader, snippetValues]);
+  }, [headlines, descriptions, kwList, budget, maxCpc, biddingStrategy, networkSearch, networkPartners, networkDisplay, campaignId, message, modal, router, sitelinks, imageUrls, enableCallouts, callouts, selectedCid, selectedMccId, adLanguage, euPoliticalAd, fetchAndValidateSitelink, enablePromotion, promotion, enablePrice, priceItems, priceType, enableCall, callPhoneNumber, callCountryCode, enableSnippet, snippetHeader, snippetValues]);
 
   if (isLoading && !preview) {
     return <div style={{ textAlign: "center", padding: 80 }}><Spin size="large" tip="加载中..." /></div>;

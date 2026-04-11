@@ -223,6 +223,7 @@ export const User_merchantsScalarFieldEnum = {
   policy_status: 'policy_status',
   policy_category_code: 'policy_category_code',
   platform_connection_id: 'platform_connection_id',
+  connection_campaign_links: 'connection_campaign_links',
   link_status: 'link_status',
   link_checked_at: 'link_checked_at',
   link_check_reason: 'link_check_reason',

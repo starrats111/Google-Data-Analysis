@@ -9,8 +9,10 @@ const GOOGLE_ADS_SCOPE = "https://www.googleapis.com/auth/adwords";
 const ADS_API_VERSION = "v23";
 const ADS_BASE_URL = `https://googleads.googleapis.com/${ADS_API_VERSION}`;
 
-const MAX_429_RETRIES = 3;
-const MAX_429_WAIT_MS = 200_000;
+const MAX_429_RETRIES = 1;
+const MAX_429_WAIT_MS = 15_000;
+const QUERY_TIMEOUT_MS = 30_000;
+const MUTATE_TIMEOUT_MS = 60_000;
 
 /** 从 Google Ads 429 错误体中提取 retryDelay（秒） */
 function parseRetryDelay(errBody: string): number {
@@ -19,6 +21,105 @@ function parseRetryDelay(errBody: string): number {
     if (match) return parseInt(match[1], 10);
   } catch {}
   return 0;
+}
+
+/** Google Ads API 错误中单个违规项 */
+export interface GoogleAdsViolation {
+  errorCode: string;
+  message: string;
+  trigger?: string;
+  fieldPath?: string;
+  operationIndex?: number;
+}
+
+/** 从 Google Ads API 原始错误体中解析出结构化违规信息 */
+export function parseGoogleAdsErrors(errBody: string): GoogleAdsViolation[] {
+  const violations: GoogleAdsViolation[] = [];
+  try {
+    const jsonStart = errBody.indexOf("{");
+    const jsonEnd = errBody.lastIndexOf("}");
+    if (jsonStart < 0 || jsonEnd <= jsonStart) return violations;
+    const errObj = JSON.parse(errBody.slice(jsonStart, jsonEnd + 1));
+    const details = errObj?.error?.details || errObj?.details || [];
+    for (const detail of details) {
+      const errors = detail?.errors || [];
+      for (const e of errors) {
+        const codeParts = e?.errorCode ? Object.entries(e.errorCode) : [];
+        const codeStr = codeParts.map(([k, v]) => `${k}:${v}`).join(", ");
+        const elements = e?.location?.fieldPathElements || [];
+        let opIdx: number | undefined;
+        const pathParts: string[] = [];
+        for (const el of elements) {
+          pathParts.push(el.index != null ? `${el.fieldName}[${el.index}]` : el.fieldName);
+          if (el.fieldName === "mutate_operations" && el.index != null) {
+            opIdx = Number(el.index);
+          }
+        }
+        violations.push({
+          errorCode: codeStr || "UNKNOWN",
+          message: e?.message || "",
+          trigger: e?.trigger?.stringValue || e?.trigger?.int64Value || undefined,
+          fieldPath: pathParts.join(" > ") || undefined,
+          operationIndex: opIdx,
+        });
+      }
+    }
+  } catch {}
+  return violations;
+}
+
+const POLICY_ERROR_CODE_LABELS: Record<string, string> = {
+  "POLICY_ERROR": "政策违规",
+  "PROHIBITED_CONTENT": "内容被禁止",
+  "TRADEMARK_VIOLATION": "商标侵权",
+  "ADULT_CONTENT": "成人内容",
+  "GAMBLING_CONTENT": "赌博内容",
+  "HEALTHCARE_CONTENT": "医疗保健受限内容",
+  "ALCOHOL_CONTENT": "酒精相关受限内容",
+};
+
+/** 将结构化违规信息格式化为用户可读的中文描述 */
+export function formatGoogleAdsErrorMessage(violations: GoogleAdsViolation[], rawStatus?: number): string {
+  if (violations.length === 0) return "";
+
+  const hasPolicyError = violations.some((v) =>
+    v.errorCode.includes("POLICY_ERROR") || v.errorCode.includes("policyViolationError")
+  );
+
+  const lines: string[] = [];
+  if (hasPolicyError) {
+    lines.push("广告内容违反了 Google Ads 政策规定，以下内容被拒绝：");
+  } else {
+    lines.push("Google Ads 请求包含无效参数：");
+  }
+
+  const seen = new Set<string>();
+  for (const v of violations) {
+    const parts: string[] = [];
+    if (v.trigger) {
+      const dedup = `trigger:${v.trigger}`;
+      if (seen.has(dedup)) continue;
+      seen.add(dedup);
+      parts.push(`「${v.trigger}」`);
+    }
+    const label = Object.entries(POLICY_ERROR_CODE_LABELS)
+      .find(([code]) => v.errorCode.includes(code))?.[1];
+    if (label) {
+      parts.push(`(${label})`);
+    }
+    if (v.message && !v.message.includes("See PolicyViolationDetails")) {
+      parts.push(`— ${v.message}`);
+    }
+    if (parts.length > 0) {
+      lines.push(`• ${parts.join(" ")}`);
+    }
+  }
+
+  if (hasPolicyError) {
+    lines.push("请修改上述内容后重新提交。如需了解详情，请参阅 Google Ads 广告政策: https://support.google.com/adspolicy/answer/6008942");
+  }
+
+  return lines.join("\n");
 }
 
 /** 等待指定毫秒 */
@@ -86,6 +187,7 @@ export async function queryGoogleAds(
       method: "POST",
       headers,
       body: JSON.stringify({ query }),
+      signal: AbortSignal.timeout(QUERY_TIMEOUT_MS),
     });
 
     if (resp.ok) {
@@ -105,9 +207,9 @@ export async function queryGoogleAds(
 
     if (resp.status === 429 || errBody.includes("RESOURCE_EXHAUSTED")) {
       if (attempt < MAX_429_RETRIES) {
-        const delaySec = parseRetryDelay(errBody) || 30 * (attempt + 1);
+        const delaySec = parseRetryDelay(errBody) || 10;
         const delayMs = Math.min(delaySec * 1000, MAX_429_WAIT_MS);
-        console.log(`[GoogleAds] 查询触发 429 限流，等待 ${delaySec}s 后重试 (${attempt + 1}/${MAX_429_RETRIES})`);
+        console.warn(`[GoogleAds] 查询触发 429 限流，等待 ${delaySec}s 后重试 (${attempt + 1}/${MAX_429_RETRIES})`);
         await sleep(delayMs);
         continue;
       }
@@ -153,6 +255,7 @@ export async function mutateGoogleAds(
       method: "POST",
       headers,
       body: JSON.stringify({ mutate_operations: operations }),
+      signal: AbortSignal.timeout(MUTATE_TIMEOUT_MS),
     });
 
     if (resp.ok) {
@@ -163,9 +266,9 @@ export async function mutateGoogleAds(
 
     if (resp.status === 429 || errBody.includes("RESOURCE_EXHAUSTED")) {
       if (attempt < MAX_429_RETRIES) {
-        const delaySec = parseRetryDelay(errBody) || 30 * (attempt + 1);
+        const delaySec = parseRetryDelay(errBody) || 10;
         const delayMs = Math.min(delaySec * 1000, MAX_429_WAIT_MS);
-        console.log(`[GoogleAds] Mutate 触发 429 限流，等待 ${delaySec}s 后重试 (${attempt + 1}/${MAX_429_RETRIES})`);
+        console.warn(`[GoogleAds] Mutate 触发 429 限流，等待 ${delaySec}s 后重试 (${attempt + 1}/${MAX_429_RETRIES})`);
         await sleep(delayMs);
         continue;
       }
@@ -180,6 +283,14 @@ export async function mutateGoogleAds(
     }
     if (errBody.includes("CUSTOMER_NOT_ENABLED") || errBody.includes("not yet enabled or has been deactivated")) {
       throw new Error(`CID ${customerId} 账户未启用或已停用，无法提交广告。请点击「同步 CID」刷新列表，选择其他可用 CID 后重试。`);
+    }
+    const violations = parseGoogleAdsErrors(errBody);
+    if (violations.length > 0) {
+      const friendlyMsg = formatGoogleAdsErrorMessage(violations, resp.status);
+      const err = new Error(friendlyMsg) as Error & { violations: GoogleAdsViolation[]; rawBody: string };
+      err.violations = violations;
+      err.rawBody = errBody.slice(0, 3000);
+      throw err;
     }
     throw new Error(`Google Ads API 请求失败 (${resp.status}): ${errBody.slice(0, 2000)}`);
   }

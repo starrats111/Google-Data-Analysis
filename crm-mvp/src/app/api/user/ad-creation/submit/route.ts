@@ -6,7 +6,8 @@ import { getAdMarketConfig } from "@/lib/ad-market";
 import { sanitizeAdText } from "@/lib/crawl-pipeline";
 import { collectAiRuleViolations } from "@/lib/ai-rule-profile";
 import { isPolicyRiskKeyword } from "@/lib/keyword-optimizer";
-import { mutateGoogleAds, dollarsToMicros, queryGoogleAds } from "@/lib/google-ads";
+import { mutateGoogleAds, dollarsToMicros, queryGoogleAds, parseGoogleAdsErrors, formatGoogleAdsErrorMessage } from "@/lib/google-ads";
+import type { GoogleAdsViolation } from "@/lib/google-ads";
 import { assignFormalCampaignNameBeforeSubmit, resolvePlatformLabel } from "@/lib/campaign-naming";
 import { readFile } from "fs/promises";
 import { existsSync } from "fs";
@@ -606,9 +607,15 @@ export async function POST(req: NextRequest) {
           const headerKey = header.toLowerCase();
           if (!header || seenPriceHeaders.has(headerKey)) return null;
           seenPriceHeaders.add(headerKey);
+          let description = (item.description || "").slice(0, 25);
+          // Google Ads 硬规则：PriceOffering header 和 description 不能相同
+          if (description.toLowerCase() === header.toLowerCase() || !description) {
+            description = `Shop ${header}`.length <= 25 ? `Shop ${header}` : "View details";
+            if (description.toLowerCase() === header.toLowerCase()) description = "View details";
+          }
           const offering: Record<string, unknown> = {
             header,
-            description: (item.description || "").slice(0, 25),
+            description,
             price: {
               amount_micros: String(Math.round((item.price_amount || 0) * 1_000_000)),
               currency_code: item.currency_code || market.currencyCode,
@@ -813,7 +820,10 @@ export async function POST(req: NextRequest) {
           if (filteredOps.length >= 6) {
             result = await mutateGoogleAds(credentials, customerId, filteredOps) as Record<string, unknown>;
           } else {
-            throw new Error(`Google Ads 拒绝了 ${violatingIndices.size} 个操作（${skippedDetails.join("、")}），移除后剩余操作数不足，无法创建广告`);
+            const violations = (mutateErr as any)?.violations as GoogleAdsViolation[] | undefined;
+            const triggerList = violations?.filter((v) => v.trigger).map((v) => `「${v.trigger}」`) || [];
+            const triggerHint = triggerList.length > 0 ? `（触发违规的内容: ${triggerList.join(", ")}）` : "";
+            throw new Error(`Google Ads 因政策违规拒绝了 ${violatingIndices.size} 个操作（${skippedDetails.join("、")}），移除后剩余操作不足，无法创建广告。${triggerHint}请修改相关关键词或广告文案后重新提交。`);
           }
         } else {
           throw mutateErr;
@@ -976,10 +986,28 @@ export async function POST(req: NextRequest) {
 
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
+    const rawBody = (err as any)?.rawBody as string | undefined;
     console.error("[AdSubmit] Google Ads 创建失败:", msg);
+    if (rawBody) console.error("[AdSubmit] API 原始响应:", rawBody.slice(0, 1500));
+
     if (msg.includes("RESOURCE_EXHAUSTED") || msg.includes("请求频率超限")) {
       return apiError("Google Ads API 请求频率超限，系统已自动重试但仍受限。请等待 3-5 分钟后再重试。（当前 Developer Token 为 explorer access 级别，频率限制较严格）");
     }
+
+    const violations = (err as any)?.violations as GoogleAdsViolation[] | undefined;
+    if (violations && violations.length > 0) {
+      const friendlyMsg = formatGoogleAdsErrorMessage(violations);
+      return apiError(`Google Ads 创建失败:\n${friendlyMsg}`, 400);
+    }
+
+    const looksLikePolicyError = msg.includes("POLICY_ERROR") || msg.includes("policyViolationError");
+    if (looksLikePolicyError) {
+      const parsed = parseGoogleAdsErrors(msg);
+      if (parsed.length > 0) {
+        return apiError(`Google Ads 创建失败:\n${formatGoogleAdsErrorMessage(parsed)}`, 400);
+      }
+    }
+
     return apiError(`Google Ads 创建失败: ${msg.slice(0, 800)}`);
   }
 }

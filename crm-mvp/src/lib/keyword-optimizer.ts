@@ -143,6 +143,18 @@ const POLICY_RISK_SINGLE_PATTERNS = [
   /\bsports?\s*bet(ting)?\s+(site|app|online)/i,
   // Academic dishonesty
   /\b(buy|order|pay)\s+(essay|thesis|homework|assignment|dissertation)\b/i,
+  // Adult / sexual content (Google Ads strictly prohibits)
+  /\b(teen|child|minor|underage)\s*(sex|porn|nude|naked|xxx)/i,
+  /\b(sex|porn|nude|naked|xxx)\s*(teen|child|minor|underage)/i,
+  /\bchild\s*(porn|abuse|exploit)/i,
+  /\b(escort\s*service|sex\s*worker|prostitut)/i,
+  /\b(buy|hire|find)\s+(escort|prostitut)/i,
+  /\bxxx\b/i,
+  /\bpornograph/i,
+  /\bhentai\b/i,
+  /\bincest\b/i,
+  /\bbeastiality\b/i,
+  /\bbestiality\b/i,
 ];
 
 /**
@@ -153,6 +165,13 @@ const POLICY_RISK_SINGLE_PATTERNS = [
 const POLICY_RISK_COMBO_SETS: Array<{ roots: string[]; label: string }> = [
   { roots: ["magic", "mushroom"], label: "controlled substance" },
   { roots: ["magic", "mush"], label: "controlled substance" },
+  { roots: ["teen", "sex"], label: "adult content" },
+  { roots: ["teen", "porn"], label: "adult content" },
+  { roots: ["teen", "nude"], label: "adult content" },
+  { roots: ["teen", "naked"], label: "adult content" },
+  { roots: ["young", "sex"], label: "adult content" },
+  { roots: ["young", "porn"], label: "adult content" },
+  { roots: ["young", "nude"], label: "adult content" },
 ];
 
 function phraseContainsAllRoots(phrase: string, roots: string[]): boolean {

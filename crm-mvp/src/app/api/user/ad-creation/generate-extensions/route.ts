@@ -895,7 +895,7 @@ async function generateOptionalBatch(
           try {
             const strictPrompt = role === "title"
               ? `You MUST rewrite this product/collection name to fit within 25 characters (currently ${text.length} chars). This is a HARD LIMIT — not 26, not 27, exactly ≤25.\nMerchant: ${merchantName}\nDo NOT include prices or dollar amounts.\nOutput ONLY the rewritten name, nothing else.\n\nOriginal: "${text}"\n\nYour output must be ≤25 characters. Count carefully.`
-              : `You MUST write a product description that fits within 25 characters (currently ${text.length > 0 ? text.length + " chars" : "empty"}).\nMerchant: ${merchantName}\nProduct: "${context}"\n${text.length > 0 ? `Original: "${text}"\nShorten while keeping meaning.` : `Describe what "${context}" is (e.g. "Leather totes & satchels").`}\nOutput ONLY the description, nothing else.\n\nYour output must be ≤25 characters. Count carefully.`;
+              : `You MUST write a product description that fits within 25 characters (currently ${text.length > 0 ? text.length + " chars" : "empty"}).\nMerchant: ${merchantName}\nProduct: "${context}"\n${text.length > 0 ? `Original: "${text}"\nShorten while keeping meaning.` : `Describe what "${context}" is (e.g. "Leather totes & satchels").`}\nCRITICAL: The description MUST be DIFFERENT from the product title "${context}". Do NOT repeat the title.\nOutput ONLY the description, nothing else.\n\nYour output must be ≤25 characters. Count carefully.`;
 
             const result = (await callAiWithFallback("ad_copy", [{ role: "user", content: strictPrompt }], 30))
               .trim().replace(/^["']|["']$/g, "").replace(/\s*[\$€£¥]\d[\d,.]*/g, "").trim();
@@ -931,13 +931,15 @@ async function generateOptionalBatch(
 
       const optimizePriceDescription = async (header: string, rawDesc: string): Promise<string> => {
         const raw = rawDesc.trim();
-        if (raw.length > 0 && raw.length <= 25) return raw;
+        if (raw.length > 0 && raw.length <= 25 && raw.toLowerCase() !== header.toLowerCase()) return raw;
 
-        const result = await aiShortenTo25(raw, "description", header);
-        if (result) return result;
+        // If description equals header or is empty/overlong, generate a distinct one
+        const result = await aiShortenTo25(raw || header, "description", header);
+        if (result && result.toLowerCase() !== header.toLowerCase()) return result;
 
-        // 全部 AI 失败：用通用安全 fallback
+        // Fallback: ensure it differs from header
         const fallback = `Shop ${merchantName}`.length <= 25 ? `Shop ${merchantName}` : "Shop now";
+        if (fallback.toLowerCase() === header.toLowerCase()) return "View details";
         console.warn(`[Price] 描述 AI 全部失败，使用 fallback: "${fallback}"`);
         return fallback;
       };
@@ -946,7 +948,13 @@ async function generateOptionalBatch(
       items = await Promise.all(
         items.map(async (item) => {
           const optimizedHeader = await optimizePriceTitle(item.header);
-          const optimizedDesc = await optimizePriceDescription(optimizedHeader, item.description);
+          let optimizedDesc = await optimizePriceDescription(optimizedHeader, item.description);
+          // Google Ads 硬规则：header 和 description 不能相同
+          if (optimizedDesc.toLowerCase() === optimizedHeader.toLowerCase()) {
+            optimizedDesc = `Shop ${merchantName}`.length <= 25 ? `Shop ${merchantName}` : "View details";
+            if (optimizedDesc.toLowerCase() === optimizedHeader.toLowerCase()) optimizedDesc = "View details";
+            console.warn(`[Price] header==description 冲突，替换 desc: "${optimizedHeader}" → "${optimizedDesc}"`);
+          }
           return { ...item, header: optimizedHeader, description: optimizedDesc };
         }),
       );
