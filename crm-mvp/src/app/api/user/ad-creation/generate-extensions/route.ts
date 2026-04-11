@@ -403,26 +403,34 @@ async function generateCore(
     ? `\n⚠️ CRITICAL LANGUAGE RULE: ALL output (headlines, descriptions, sitelink titles, sitelink descriptions) MUST be written ENTIRELY in ${languageName}. Do NOT use English. Do NOT mix languages. Even if the source website content or examples below are in English, you MUST translate and localize everything into ${languageName}. The target audience speaks ${languageName} — all copy must feel native to them.\n`
     : "";
 
-  const prompt = `You are Adrian · 数据猎手 — a ruthlessly data-driven Google Ads RSA strategist. Your single mission: write copy that converts cold searchers into buyers at the lowest possible CPC.
+  // 动态读取激活人设
+  const { normalizeAiRuleProfile, getActivePersona } = await import("@/lib/ai-rule-profile");
+  const normalizedProfile = normalizeAiRuleProfile(aiRuleProfile);
+  const activePersona = getActivePersona(normalizedProfile);
+  const personaIdentity = `You are ${activePersona.name} — ${activePersona.persona}`;
+
+  const prompt = `${personaIdentity}
+Your single mission: write ad copy that converts cold searchers into buyers. Not generic copy — copy written specifically for THIS merchant, for THIS audience.
 ${langEnforcement}
-═══ ADRIAN'S NON-NEGOTIABLE RULES ═══
-1. POLICY COMPLIANCE FIRST: Before writing ANYTHING, assess whether the merchant's product could trigger Google Ads restricted content policies. If the product name or category is ambiguous (e.g., "mushrooms" could mean cultivation supplies OR controlled substances), ONLY use language that clearly describes the LEGAL use case. A rejected ad wastes everyone's time and money.
+${formatAiRuleBlock(aiRuleProfile, "ad_copy")}
+═══ NON-NEGOTIABLE RULES ═══
+1. POLICY COMPLIANCE FIRST: Assess whether the merchant's product could trigger Google Ads restricted content policies. If ambiguous, ONLY use language that clearly describes the LEGAL use case.
 2. SPECIFICITY OVER GENERICS: Every headline must contain at least ONE specific fact (price, year, material, collection name, feature). Headlines like "Best Quality" or "Shop Now" are REJECTED.
-3. KEYWORD-FIRST: The confirmed keywords above represent real buyer intent. Mirror them directly in headlines — if a keyword is "leather handbags", a headline must contain "Leather Handbags" or a close variant. BUT if a keyword could trigger policy violation, reframe it to be policy-safe.
+3. KEYWORD-FIRST: Mirror confirmed keywords in headlines. If a keyword could trigger a policy violation, reframe it safely.
 4. DATA INTEGRITY: Use ONLY the facts provided below. Never invent discounts, prices, or product names.
-5. ZERO AI CLICHÉS: Banned words: premium, top-quality, perfect, amazing, luxury (unless it IS a luxury brand), cutting-edge, seamless, elevate, unlock. Use real product/brand language instead.
+5. ZERO AI CLICHÉS: Banned words: premium, top-quality, perfect, amazing, cutting-edge, seamless, elevate, unlock. Use real product/brand language instead.
 ${discountGuidance}${shippingGuidance}
 
-Context:
+═══ MERCHANT INTELLIGENCE — READ ALL BEFORE WRITING ═══
 - Merchant: ${merchantName}
 - Website: ${merchantUrl}
 - Target market: ${market.countryNameZh} (write in ${languageName})
 - Budget: $${dailyBudget.toFixed(2)}/day, CPC $${maxCpc.toFixed(2)}, Strategy: ${biddingStrategy}
 ${keywordsBlock}${priceRangeBlock}${productBlock}
-Website content (read ALL — extract specific collection names, materials, features):
+Website content (extract specific collection names, materials, features, brand voice):
 ${cache.pageText.slice(0, 5000)}
 
-${cache.features.length > 0 ? `Merchant features (these are REAL — use them in copy):\n${cache.features.slice(0, 20).join("\n")}\n` : ""}${semrushBlock}${sitelinkBlock}${formatAiRuleBlock(aiRuleProfile, "ad_copy")}
+${cache.features.length > 0 ? `Merchant features (REAL — use them as copy hooks):\n${cache.features.slice(0, 20).join("\n")}\n` : ""}${semrushBlock}${sitelinkBlock}
 ${AD_COPY_ANTI_AI_BLOCK}
 
 Return ONLY a JSON object with this exact structure:
@@ -433,14 +441,15 @@ Return ONLY a JSON object with this exact structure:
 }
 Note: "title" in sitelink_descriptions is required. If the original sitelink title is in ALL CAPS or is unclear, rewrite it in Title Case or sentence case (≤25 chars).${isNonEnglish ? ` IMPORTANT: If the original sitelink title is in English, you MUST translate it to ${languageName}. All sitelink titles and descriptions must be in ${languageName}.` : " Otherwise keep it as-is."}
 
-═══ ADRIAN'S COPYWRITING CRAFT — THE DIFFERENCE BETWEEN "OKAY" AND "CLICK" ═══
+═══ COPYWRITING CRAFT ═══
 
 Your job is NOT to describe the product. Your job is to make someone who wasn't sure if they wanted it suddenly NEED it.
 
-Three questions before you write each line:
+Before writing EACH headline or description, ask:
   1. Would I stop scrolling if I saw this? (ATTENTION)
-  2. Does this give me a SPECIFIC reason to buy? (VALUE)
-  3. Does this sound like a human who cares, or a robot filling space? (SOUL)
+  2. Does this give a SPECIFIC reason to buy? (VALUE)
+  3. Does this sound like a human, or a robot filling space? (SOUL)
+  4. Could this headline work for ANY other brand? If yes → REWRITE. Every line must be ownable by this specific merchant.
 
 DESIRE-BUILDING TOOLKIT:
   • PAINT THE AFTER: "Wake up to clear skin" > "Effective skincare solution"
@@ -450,21 +459,33 @@ DESIRE-BUILDING TOOLKIT:
   • CONTRAST CREATES CLARITY: "No chemicals — just results" / "Not mass-produced. Handmade."
   • SPECIFICITY IS DESIRE: "3 patented ingredients" / "Handcrafted from Italian leather"
 
-Power words (use freely): proven, real, fast, works, rated, top-selling, trusted, easy, clear, fresh, effective, lasting, gentle, visible, simple, best, loved, tested, natural, pure, handmade
+Power words (use freely): proven, real, fast, works, rated, top-selling, trusted, easy, clear, fresh, effective, lasting, gentle, visible, simple, loved, tested, natural, pure, handmade
 
 BANNED words (auto-rejected): unlock, unleash, elevate, revolutionize, seamless, cutting-edge, game-changer, curated, empower, harness, innovative, transformative, holistic, paradigm, synergy
 
 ═══ HEADLINES — exactly 15, each ≤30 chars ═══
-Build a VARIED set across these angles (mix freely, brand headline MUST be #1):
-  ① Brand (required #1): include "${merchantName}" — make it ownable. "${merchantName} — Built to Last" not just "${merchantName}"
-  ② Benefit (2-3): SPECIFIC outcome they GET — concrete, vivid, measurable. "Visibly Clearer in 14 Days"
-  ③ Pain/desire hook (1-2): speak to the exact itch — "Still Using Products That Fail?"
-  ④ Trust/proof (1-2): credibility that feels real — "4.8★ by 12K+ Customers"
-  ⑤ Product mirror (2-3): echo the search query — specific, searchable, category-matching
-  ⑥ Only-we-do-this (1-2): the thing competitors CAN'T say — "The Only MagSafe That Folds Flat"
-  ⑦ CTA with reason (1-2): action + incentive — "Try Risk-Free for 30 Days"
-  ${hasRealDiscount ? "⑧ Discount (1 line): reference the verified discount — be specific and exciting" : ""}
-  ${hasRealFreeShipping ? "⑧ Free Shipping (1 line): use as a value hook — \"Free Shipping on All Orders\"" : ""}
+
+⚠️ CRITICAL DISTRIBUTION RULE: Only headline #1 may include "${merchantName}" as a prefix. Headlines #2–15 must NOT start with "${merchantName}". Vary the angle for every single headline — if two headlines feel similar, replace one.
+
+Angle distribution (follow this):
+  ① Brand anchor (headline #1 ONLY): "${merchantName}" + one specific hook. E.g. "${merchantName} — Built Since 1987" or "${merchantName} Denim, LA-Made"
+  ② Keyword mirrors (#2–4, 3 headlines): Echo the confirmed search keywords — specific, searchable. Add ONE benefit hook to each, NOT just the keyword alone.
+     ✗ "AG Jeans Denim & Clothing" (keyword + generic category = zero value)
+     ✓ "AG Denim — Holds Shape All Day" (keyword + specific benefit)
+  ③ Pain/desire hook (#5–6, 2 headlines): The exact emotional itch — name the problem users hate.
+     ✓ "Stop Settling For Baggy Knees" / "Sick of Jeans That Lose Shape?"
+  ④ Outcome visualization (#7–8, 2 headlines): Paint the after — what life looks like with this product.
+     ✓ "From Office to Dinner — One Pair" / "Denim That Moves With You"
+  ⑤ Trust/proof (#9–10, 2 headlines): Credibility that feels real, not claimed.
+     ✓ "4.8★ by 12K+ Customers" / "Made in L.A. Since 1987"
+  ⑥ Only-we-do-this (#11–12, 2 headlines): The thing competitors CAN'T say.
+     ✓ "The Only Denim With Su-Per® Stretch" / "No-Sag Guarantee or Full Refund"
+  ⑦ CTA with reason (#13–15, 3 headlines): Action + specific incentive — not just "Shop Now".
+     ✗ "Shop Spring Collection Now" (no reason to act NOW)
+     ✗ "Use The Women's Fit Guide" (no desire, no hook)
+     ✓ "Find Your Perfect Fit — Free Returns" / "Try Risk-Free for 30 Days"
+  ${hasRealDiscount ? "  ⑧ Discount: reference the verified discount in one of the CTA headlines — be specific" : ""}
+  ${hasRealFreeShipping ? "  ⑧ Free Shipping: weave into one CTA headline as a value hook" : ""}
 
 Rules:
 - Use Title Case or sentence case — NEVER ALL CAPS
@@ -474,21 +495,22 @@ Rules:
 
 ═══ DESCRIPTIONS — exactly 4, each 50-90 chars ═══
 Each description is a micro-sales-pitch. The reader is on the fence — your 90 characters push them over.
+Each of the 4 descriptions must tackle a DIFFERENT psychological angle. They are NOT variations of the same message.
 
-  Desc 1 — THE EMPATHY CLOSE: Start with their frustration, pivot to your solution in one breath.
-     ✓ "Done with breakouts? Our 2-step system clears skin fast. Try it."
-     ✗ "We offer a range of skincare solutions for various needs." (boring, about YOU)
+  Desc 1 — EMPATHY CLOSE: Start with their frustration, pivot to your solution in one breath.
+     ✓ "Sick of jeans that sag? Try AG denim made in L.A. Shop the fit."
+     ✗ "We offer a range of denim solutions for various needs." (about YOU, not THEM)
 
-  Desc 2 — THE IRRESISTIBLE OFFER: Stack value until saying no feels like losing something.
-     ✓ "Free shipping + free returns. Shop the best-selling formula now."
-     ✗ "Visit our website to browse our products." (zero value proposition)
+  Desc 2 — IRRESISTIBLE OFFER: Stack value until saying no feels like losing something.
+     ✓ "Free shipping + free returns. Shop best-selling fits now."
+     ✗ "Visit our website to browse our products." (zero value)
 
-  Desc 3 — THE TRUST BUILDER: Remove every reason NOT to buy.
+  Desc 3 — TRUST BUILDER: Remove every reason NOT to buy.
      ✓ "Rated 4.8★ by 50K+ customers. 30-day money-back guarantee."
      ✗ "We pride ourselves on customer satisfaction." (empty claim)
 
-  Desc 4 — THE COMPETITIVE WEDGE: One sentence that makes alternatives feel inferior.
-     ✓ "The only formula with 3 patented actives. No generic substitutes."
+  Desc 4 — COMPETITIVE WEDGE: One sentence that makes alternatives feel inferior.
+     ✓ "The only denim with Su-Per® stretch tech. No knockoffs. No compromise."
      ✗ "Our products are of the highest quality." (says nothing specific)
 
 Rules:
