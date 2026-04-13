@@ -146,11 +146,12 @@ export async function POST(req: NextRequest) {
       if (sep > 0) rpcBody = rpcBody.slice(sep + (innerSep >= 0 ? 4 : 2)).trim();
     }
     if (!rpcBody) {
-      steps.push({ step: "RPC 调用", status: "fail", detail: "服务器返回空响应（可能是 Session 已过期或被重定向到登录页），请重试" });
+      steps.push({ step: "RPC 调用", status: "fail", detail: `服务器返回空响应（HTTP ${rpcRes.status}），Session 可能已过期或被重定向` });
       return apiSuccess({ steps, overall: "fail" });
     }
     if (rpcBody.startsWith("<")) {
-      steps.push({ step: "RPC 调用", status: "fail", detail: "服务器返回 HTML 而非 JSON（Session 已过期），请重新保存配置后再测试" });
+      const preview = rpcBody.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().slice(0, 120);
+      steps.push({ step: "RPC 调用", status: "fail", detail: `服务器返回 HTML 而非 JSON（HTTP ${rpcRes.status}），内容：${preview}` });
       return apiSuccess({ steps, overall: "fail" });
     }
 
