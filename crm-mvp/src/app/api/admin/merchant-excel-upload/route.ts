@@ -156,7 +156,7 @@ interface ParsedRecord {
  */
 function parseExcelRows(rows: unknown[][], fileName: string, sheetName: string): ParsedRecord[] {
   // 找 header 行：找到某个单元格精确等于 "mcid"（大小写不敏感）的那一行
-  // 用精确匹配而非包含匹配，避免标题行 "Recommended Advertiser List" 中的 "advertiser" 干扰
+  // 用精确匹配，避免标题行（含 "Recommended Advertiser List for April" 等）被误判
   let headerRowIdx = -1;
   for (let i = 0; i < Math.min(rows.length, 5); i++) {
     const row = rows[i] as (unknown | null)[];
@@ -169,11 +169,13 @@ function parseExcelRows(rows: unknown[][], fileName: string, sheetName: string):
   if (headerRowIdx === -1) headerRowIdx = 1; // 默认第2行为 header
 
   const headerRow = rows[headerRowIdx] as (unknown | null)[];
-  // BU 列在 CZ 格式中固定为第一列，精确匹配 "BU"
-  const hasBU = String(headerRow[0] || "").trim().toUpperCase() === "BU";
 
-  // 列索引偏移（CZ 格式有 BU 列在最前面）
-  const offset = hasBU ? 1 : 0;
+  // 找 "mcid" 在 header 行的列索引，以此作为偏移量
+  // CZ 格式：['BU', 'mcid', 'MID', ...] → mcidIdx=1 → offset=1
+  // 其他格式：['mcid', 'MID', ...] → mcidIdx=0 → offset=0
+  // 此方法不依赖 BU 单元格的具体值，对任意前缀列都适用
+  const mcidIdx = headerRow.findIndex((c) => String(c || "").trim().toLowerCase() === "mcid");
+  const offset = mcidIdx >= 0 ? mcidIdx : 0;
 
   const results: ParsedRecord[] = [];
   for (let i = headerRowIdx + 1; i < rows.length; i++) {
@@ -207,7 +209,7 @@ function parseExcelRows(rows: unknown[][], fileName: string, sheetName: string):
     });
   }
 
-  console.error(`[ExcelUpload] ${fileName}/${sheetName}: parsed ${results.length} records (hasBU=${hasBU})`);
+  console.error(`[ExcelUpload] ${fileName}/${sheetName}: parsed ${results.length} records (headerRowIdx=${headerRowIdx}, mcidIdx=${mcidIdx}, offset=${offset})`);
   return results;
 }
 
