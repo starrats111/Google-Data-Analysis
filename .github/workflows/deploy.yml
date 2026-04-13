@@ -46,9 +46,9 @@ jobs:
             export TZ="Asia/Shanghai"
             export NODE_OPTIONS="--max-old-space-size=768"
 
-            if git diff HEAD~1 --name-only | grep -q "crm-mvp/package-lock.json"; then
-              echo "package-lock.json changed, running npm ci..."
-              npm ci --production --ignore-scripts 2>/dev/null || npm install --production
+            if git diff HEAD~1 --name-only | grep -qE "crm-mvp/package(-lock)?\.json"; then
+              echo "package files changed, running npm install..."
+              npm install --omit=dev --ignore-scripts 2>&1 | tail -10
             else
               echo "No dependency changes, skipping npm install"
             fi
