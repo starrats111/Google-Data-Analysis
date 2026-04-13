@@ -6,7 +6,7 @@ import { getAdMarketConfig } from "@/lib/ad-market";
 import { sanitizeAdText } from "@/lib/crawl-pipeline";
 import { collectAiRuleViolations } from "@/lib/ai-rule-profile";
 import { isPolicyRiskKeyword } from "@/lib/keyword-optimizer";
-import { mutateGoogleAds, dollarsToMicros, queryGoogleAds, parseGoogleAdsErrors, formatGoogleAdsErrorMessage } from "@/lib/google-ads";
+import { mutateGoogleAds, dollarsToMicros, queryGoogleAds, parseGoogleAdsErrors, formatGoogleAdsErrorMessage, isOperationNotPermittedError } from "@/lib/google-ads";
 import type { GoogleAdsViolation } from "@/lib/google-ads";
 import { assignFormalCampaignNameBeforeSubmit, resolvePlatformLabel } from "@/lib/campaign-naming";
 import { readFile } from "fs/promises";
@@ -188,7 +188,7 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  const cid = customerId.replace(/-/g, "");
+  let cid = customerId.replace(/-/g, "");
 
   const submitMerchant = await prisma.user_merchants.findFirst({
     where: { id: campaign.user_merchant_id, is_deleted: 0 },
@@ -793,15 +793,49 @@ export async function POST(req: NextRequest) {
       }
 
       // Handle policy violations or asset errors: remove violating operations and retry
+      // NOTE: mutateErr.message may already be transformed to Chinese (via formatGoogleAdsErrorMessage),
+      // so we MUST also check violations[] and rawBody for policy/prohibited keywords.
       const finalMsg = mutateErr instanceof Error ? mutateErr.message : String(mutateErr);
+      const errViolations = (mutateErr as any)?.violations as GoogleAdsViolation[] | undefined;
+      const rawErrBody = (mutateErr as any)?.rawBody as string | undefined;
+
+      const hasViolationRetriable = errViolations?.some((v) =>
+        v.errorCode.toLowerCase().includes("policy")
+        || v.errorCode.toLowerCase().includes("prohibited")
+        || v.message.toLowerCase().includes("disapproved")
+        || v.message.toLowerCase().includes("prohibited")
+        || v.message.toLowerCase().includes("policy")
+      ) ?? false;
+      const hasRawBodyRetriable = !!(rawErrBody && (
+        rawErrBody.includes("POLICY_ERROR")
+        || rawErrBody.includes("policyViolationError")
+        || rawErrBody.includes("PROHIBITED")
+        || rawErrBody.includes("disapproved")
+        || rawErrBody.includes("assetError")
+        || rawErrBody.includes("INVALID_ARGUMENT")
+      ));
+
       const isRetriableError = finalMsg.includes("POLICY_ERROR")
         || finalMsg.includes("policyViolationError")
         || finalMsg.includes("assetError")
         || finalMsg.includes("CALL_PHONE_NUMBER_NOT_SUPPORTED_FOR_COUNTRY")
-        || finalMsg.includes("INVALID_ARGUMENT");
+        || finalMsg.includes("INVALID_ARGUMENT")
+        || finalMsg.includes("PROHIBITED")
+        || finalMsg.includes("disapproved")
+        || hasViolationRetriable
+        || hasRawBodyRetriable;
       if (isRetriableError) {
         console.log("[AdSubmit] 检测到可恢复错误，尝试移除违规操作后重试...");
-        const violatingIndices = parsePolicyViolationIndices(finalMsg);
+        // Parse violating indices: prefer rawBody (raw JSON) > transformed message > violations[].operationIndex
+        let violatingIndices = parsePolicyViolationIndices(finalMsg);
+        if (violatingIndices.size === 0 && rawErrBody) {
+          violatingIndices = parsePolicyViolationIndices(rawErrBody);
+        }
+        if (violatingIndices.size === 0 && errViolations?.length) {
+          for (const v of errViolations) {
+            if (v.operationIndex != null) violatingIndices.add(v.operationIndex);
+          }
+        }
 
         if (violatingIndices.size > 0) {
           const skippedDetails: string[] = [];
@@ -820,16 +854,50 @@ export async function POST(req: NextRequest) {
           if (filteredOps.length >= 6) {
             result = await mutateGoogleAds(credentials, customerId, filteredOps) as Record<string, unknown>;
           } else {
-            const violations = (mutateErr as any)?.violations as GoogleAdsViolation[] | undefined;
-            const triggerList = violations?.filter((v) => v.trigger).map((v) => `「${v.trigger}」`) || [];
+            const triggerList = errViolations?.filter((v) => v.trigger).map((v) => `「${v.trigger}」`) || [];
             const triggerHint = triggerList.length > 0 ? `（触发违规的内容: ${triggerList.join(", ")}）` : "";
             throw new Error(`Google Ads 因政策违规拒绝了 ${violatingIndices.size} 个操作（${skippedDetails.join("、")}），移除后剩余操作不足，无法创建广告。${triggerHint}请修改相关关键词或广告文案后重新提交。`);
           }
         } else {
           throw mutateErr;
         }
-      } else if (!result!) {
-        throw mutateErr;
+      }
+
+      // ─── 自动切换 CID 重试（Operation Not Permitted For Context） ───
+      // 当前 CID 账户不支持该广告操作（如搜索广告），自动切换到其他可用 CID 后重试
+      if (!result!) {
+        const notPermittedViolations = (mutateErr as any)?.violations as GoogleAdsViolation[] | undefined;
+        if (notPermittedViolations && isOperationNotPermittedError(notPermittedViolations)) {
+          console.warn("[AdSubmit] 当前 CID 不支持该广告操作，尝试自动切换 CID...");
+          const { listMccChildAccounts, checkCidAvailability } = await import("@/lib/google-ads/cid");
+          const allCids = await listMccChildAccounts(credentials);
+          let switchedCid = false;
+          for (const alt of allCids) {
+            const altCidRaw = alt.customer_id.replace(/-/g, "");
+            if (altCidRaw === cid) continue;
+            const available = await checkCidAvailability(credentials, alt.customer_id);
+            if (!available) continue;
+            // 用新 CID 替换 operations 中所有临时资源名前缀
+            const newOps = JSON.parse(
+              JSON.stringify(operations).replace(new RegExp(`customers/${cid}/`, "g"), `customers/${altCidRaw}/`)
+            ) as Record<string, unknown>[];
+            try {
+              result = await mutateGoogleAds(credentials, alt.customer_id, newOps) as Record<string, unknown>;
+              customerId = alt.customer_id;
+              cid = altCidRaw;
+              console.log(`[AdSubmit] 自动切换 CID 成功: ${alt.customer_id}`);
+              switchedCid = true;
+              break;
+            } catch (altErr) {
+              console.warn(`[AdSubmit] 备用 CID ${alt.customer_id} 同样失败:`, altErr instanceof Error ? altErr.message.slice(0, 200) : altErr);
+            }
+          }
+          if (!switchedCid) {
+            throw new Error(`所有可用 Google Ads 账户（共 ${allCids.length} 个 CID）均不支持创建搜索广告。请检查 MCC 下各账户的权限设置，或联系 Google Ads 支持后重试。`);
+          }
+        } else {
+          throw mutateErr;
+        }
       }
     }
 
@@ -996,19 +1064,29 @@ export async function POST(req: NextRequest) {
 
     const violations = (err as any)?.violations as GoogleAdsViolation[] | undefined;
     if (violations && violations.length > 0) {
+      // OPERATION_NOT_PERMITTED 类错误：已在内层尝试换 CID 但全部失败，给出清晰指引
+      if (isOperationNotPermittedError(violations)) {
+        const friendlyMsg = formatGoogleAdsErrorMessage(violations);
+        return apiError(`广告创建失败（账户权限不足）：\n${friendlyMsg}`, 400);
+      }
       const friendlyMsg = formatGoogleAdsErrorMessage(violations);
-      return apiError(`Google Ads 创建失败:\n${friendlyMsg}`, 400);
+      return apiError(`Google Ads 创建失败：\n${friendlyMsg}`, 400);
     }
 
     const looksLikePolicyError = msg.includes("POLICY_ERROR") || msg.includes("policyViolationError");
     if (looksLikePolicyError) {
       const parsed = parseGoogleAdsErrors(msg);
       if (parsed.length > 0) {
-        return apiError(`Google Ads 创建失败:\n${formatGoogleAdsErrorMessage(parsed)}`, 400);
+        return apiError(`Google Ads 创建失败：\n${formatGoogleAdsErrorMessage(parsed)}`, 400);
       }
     }
 
-    return apiError(`Google Ads 创建失败: ${msg.slice(0, 800)}`);
+    // 检查是否为 OPERATION_NOT_PERMITTED 原始消息（violations 为空时的兜底）
+    if (msg.includes("not allowed for the given context") || msg.includes("operationNotPermittedForContext")) {
+      return apiError("广告创建失败：当前所有可用 CID 账户均不支持创建搜索广告，请检查 MCC 下各账户权限，或联系 Google Ads 支持开启该广告类型后重试。", 400);
+    }
+
+    return apiError(`Google Ads 创建失败：${msg.slice(0, 800)}`);
   }
 }
 

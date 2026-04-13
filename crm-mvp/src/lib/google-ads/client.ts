@@ -78,6 +78,27 @@ const POLICY_ERROR_CODE_LABELS: Record<string, string> = {
   "ALCOHOL_CONTENT": "酒精相关受限内容",
 };
 
+/** 将 Google Ads API 的技术 trigger 值翻译成人类可读的中文 */
+function translateTrigger(trigger: string, errorCode: string): string {
+  // 临时资源名（如 -2、-3）是级联失败标识，直接返回空表示跳过
+  if (/^-\d+$/.test(trigger.trim())) return "";
+
+  // 已知广告频道类型枚举
+  const channelLabels: Record<string, string> = {
+    "SEARCH": "搜索广告（SEARCH）",
+    "DISPLAY": "展示广告（DISPLAY）",
+    "SHOPPING": "购物广告（SHOPPING）",
+    "VIDEO": "视频广告（VIDEO）",
+    "MULTI_CHANNEL": "多频道广告",
+    "LOCAL": "本地广告",
+    "SMART": "智能广告",
+    "PERFORMANCE_MAX": "效果最大化广告",
+  };
+  if (channelLabels[trigger]) return channelLabels[trigger];
+
+  return `「${trigger}」`;
+}
+
 /** 将结构化违规信息格式化为用户可读的中文描述 */
 export function formatGoogleAdsErrorMessage(violations: GoogleAdsViolation[], rawStatus?: number): string {
   if (violations.length === 0) return "";
@@ -86,7 +107,46 @@ export function formatGoogleAdsErrorMessage(violations: GoogleAdsViolation[], ra
     v.errorCode.includes("POLICY_ERROR") || v.errorCode.includes("policyViolationError")
   );
 
+  // 判断是否为 "操作不被当前账户支持" 类错误（含级联失败）
+  const hasContextError = violations.some((v) =>
+    v.errorCode.includes("operationNotPermittedForContext")
+    || v.errorCode.includes("OPERATION_NOT_PERMITTED")
+    || v.message.toLowerCase().includes("not allowed for the given context")
+  );
+
+  // 过滤掉触发值为临时资源名的纯级联失败（如 "-2"、"-3"），它们不是真正的错误来源
+  const cascadePattern = /^-\d+$/;
+  const primaryViolations = violations.filter((v) => {
+    if (v.trigger && cascadePattern.test(v.trigger.trim())) return false;
+    // 消息为 "Resource was not found" 且触发值为临时资源名，则是级联失败
+    if (v.message?.includes("Resource was not found") && v.trigger && cascadePattern.test(v.trigger.trim())) return false;
+    return true;
+  });
+  const cascadeCount = violations.length - primaryViolations.length;
+
   const lines: string[] = [];
+
+  if (hasContextError && !hasPolicyError) {
+    // 找到具体是哪种资源/频道不被支持
+    const contextViolation = primaryViolations.find((v) =>
+      v.errorCode.includes("operationNotPermittedForContext")
+      || v.message.toLowerCase().includes("not allowed for the given context")
+    );
+    const channelTrigger = contextViolation?.trigger || "";
+    const channelLabel = channelTrigger ? translateTrigger(channelTrigger, contextViolation?.errorCode || "") : "";
+
+    if (channelLabel) {
+      lines.push(`当前 Google Ads 账户（CID）不支持创建「${channelLabel.replace(/（.*?）/, "")}」类型广告，系统将自动尝试切换到其他可用账户。`);
+      lines.push(`如问题持续，请在「MCC 管理」中检查账户权限，或联系 Google Ads 支持开启该广告类型。`);
+    } else {
+      lines.push("当前账户（CID）不支持此广告操作，系统将自动尝试切换到其他可用账户。");
+    }
+    if (cascadeCount > 0) {
+      lines.push(`（另有 ${cascadeCount} 个关联操作因账户限制同步失败，不影响切换后的重新提交）`);
+    }
+    return lines.join("\n");
+  }
+
   if (hasPolicyError) {
     lines.push("广告内容违反了 Google Ads 政策规定，以下内容被拒绝：");
   } else {
@@ -94,18 +154,21 @@ export function formatGoogleAdsErrorMessage(violations: GoogleAdsViolation[], ra
   }
 
   const seen = new Set<string>();
-  for (const v of violations) {
+  const violationsToShow = primaryViolations.length > 0 ? primaryViolations : violations;
+  for (const v of violationsToShow) {
     const parts: string[] = [];
     if (v.trigger) {
       const dedup = `trigger:${v.trigger}`;
       if (seen.has(dedup)) continue;
       seen.add(dedup);
-      parts.push(`「${v.trigger}」`);
+      const label = translateTrigger(v.trigger, v.errorCode);
+      if (!label) continue; // 级联失败，跳过
+      parts.push(label);
     }
-    const label = Object.entries(POLICY_ERROR_CODE_LABELS)
+    const policyLabel = Object.entries(POLICY_ERROR_CODE_LABELS)
       .find(([code]) => v.errorCode.includes(code))?.[1];
-    if (label) {
-      parts.push(`(${label})`);
+    if (policyLabel) {
+      parts.push(`(${policyLabel})`);
     }
     if (v.message && !v.message.includes("See PolicyViolationDetails")) {
       parts.push(`— ${v.message}`);
@@ -115,11 +178,23 @@ export function formatGoogleAdsErrorMessage(violations: GoogleAdsViolation[], ra
     }
   }
 
+  if (cascadeCount > 0 && !hasPolicyError) {
+    lines.push(`（另有 ${cascadeCount} 个操作因上述错误级联失败，已自动忽略）`);
+  }
+
   if (hasPolicyError) {
     lines.push("请修改上述内容后重新提交。如需了解详情，请参阅 Google Ads 广告政策: https://support.google.com/adspolicy/answer/6008942");
   }
 
   return lines.join("\n");
+}
+
+/** 检查 violations 是否为"当前账户不支持此操作"类错误（需要换 CID 重试） */
+export function isOperationNotPermittedError(violations: GoogleAdsViolation[]): boolean {
+  return violations.some((v) =>
+    v.errorCode.includes("operationNotPermittedForContext")
+    || v.message.toLowerCase().includes("not allowed for the given context")
+  );
 }
 
 /** 等待指定毫秒 */
