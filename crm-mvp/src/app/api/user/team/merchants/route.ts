@@ -118,30 +118,41 @@ export const GET = withLeader(async (req: NextRequest, { user }) => {
   const txnMonthStart = parseCSTDateStart(monthStartStr);
   const txnNextMonth = parseCSTDateStart(nextMonthStr);
 
-  // 查询启用中的 campaigns（用于统计在投人数）
-  const rawCampaigns = await prisma.campaigns.findMany({
+  // 查询所有非删除 campaigns（ENABLED + PAUSED，用于花费计算 + 在投人数统计）
+  const rawAllCampaigns = await prisma.campaigns.findMany({
     where: {
       user_merchant_id: { in: pagedUmIds },
       is_deleted: 0,
-      google_status: "ENABLED",
+      google_status: { not: "REMOVED" },
     },
-    select: { id: true, user_id: true, user_merchant_id: true, google_campaign_id: true, customer_id: true },
+    select: { id: true, user_id: true, user_merchant_id: true, google_campaign_id: true, customer_id: true, google_status: true },
     orderBy: { id: "desc" },
   });
 
-  // 去重（防止重复 campaign）
-  const seenKeys = new Set<string>();
-  const campaigns = rawCampaigns.filter((c) => {
+  // 按 user_id + google_campaign_id 去重（优先保留有 customer_id 的记录）
+  const gcidGroups = new Map<string, typeof rawAllCampaigns>();
+  for (const c of rawAllCampaigns) {
     const gcid = c.google_campaign_id || String(c.id);
     const key = `${c.user_id}:${gcid}`;
-    if (seenKeys.has(key)) return false;
-    seenKeys.add(key);
-    return true;
-  });
+    if (!gcidGroups.has(key)) gcidGroups.set(key, []);
+    gcidGroups.get(key)!.push(c);
+  }
+  const allCampaigns: typeof rawAllCampaigns = [];
+  const extraCampaignIds: bigint[] = [];
+  for (const [, group] of gcidGroups) {
+    group.sort((a, b) => {
+      if (a.customer_id && !b.customer_id) return -1;
+      if (!a.customer_id && b.customer_id) return 1;
+      return Number(b.id) - Number(a.id);
+    });
+    allCampaigns.push(group[0]);
+    for (let i = 1; i < group.length; i++) extraCampaignIds.push(group[i].id);
+  }
 
-  // 按 user_merchant_id 聚合在投用户数
+  // 按 user_merchant_id 聚合在投用户数（只统计 ENABLED）
   const activeUsersByUm = new Map<string, Set<string>>();
-  for (const c of campaigns) {
+  for (const c of allCampaigns) {
+    if (c.google_status !== "ENABLED") continue;
     const umKey = c.user_merchant_id.toString();
     if (!activeUsersByUm.has(umKey)) activeUsersByUm.set(umKey, new Set());
     activeUsersByUm.get(umKey)!.add(c.user_id.toString());
@@ -173,16 +184,38 @@ export const GET = withLeader(async (req: NextRequest, { user }) => {
     });
   }
 
-  // cost 聚合（按 user_merchant_id → campaign_id）
-  const allCampaignIds = campaigns.map((c) => c.id);
-  const campaignToUm = new Map<string, string>();
-  for (const c of campaigns) campaignToUm.set(c.id.toString(), c.user_merchant_id.toString());
+  // cost 聚合（全部 campaigns，含 PAUSED）
+  const primaryCampaignIds = allCampaigns.map((c) => c.id);
+  const allIdsForStats = [...primaryCampaignIds, ...extraCampaignIds];
 
-  const statsAgg = allCampaignIds.length > 0
+  // campaign_id → user_merchant_id 映射（含重复记录的 gcid 归并）
+  const gcidToPrimaryId = new Map<string, string>();
+  for (const c of allCampaigns) {
+    gcidToPrimaryId.set(`${c.user_id}:${c.google_campaign_id || String(c.id)}`, c.id.toString());
+  }
+  const dupIdToGcid = new Map<string, string>();
+  for (const c of rawAllCampaigns) {
+    dupIdToGcid.set(c.id.toString(), `${c.user_id}:${c.google_campaign_id || String(c.id)}`);
+  }
+  const campaignToUm = new Map<string, string>();
+  for (const c of allCampaigns) campaignToUm.set(c.id.toString(), c.user_merchant_id.toString());
+  // 重复记录也映射到主记录的 um
+  for (const c of rawAllCampaigns) {
+    if (!campaignToUm.has(c.id.toString())) {
+      const gcidKey = dupIdToGcid.get(c.id.toString());
+      const primaryId = gcidKey ? gcidToPrimaryId.get(gcidKey) : undefined;
+      if (primaryId) {
+        const umKey = campaignToUm.get(primaryId);
+        if (umKey) campaignToUm.set(c.id.toString(), umKey);
+      }
+    }
+  }
+
+  const rawStatsAgg = allIdsForStats.length > 0
     ? await prisma.ads_daily_stats.groupBy({
         by: ["campaign_id"],
         where: {
-          campaign_id: { in: allCampaignIds },
+          campaign_id: { in: allIdsForStats },
           date: { gte: statsMonthStart, lt: statsNextMonth },
           is_deleted: 0,
         },
@@ -190,11 +223,23 @@ export const GET = withLeader(async (req: NextRequest, { user }) => {
       })
     : [];
 
+  // 合并重复 campaign 的花费（取 cost 最大的那条，避免重复计算）
+  const mergedCostByCampaign = new Map<string, number>();
+  for (const s of rawStatsAgg) {
+    const gcidKey = dupIdToGcid.get(s.campaign_id.toString());
+    const primaryId = gcidKey ? gcidToPrimaryId.get(gcidKey) : s.campaign_id.toString();
+    const key = primaryId || s.campaign_id.toString();
+    const cost = Number(s._sum.cost || 0);
+    if (!mergedCostByCampaign.has(key) || cost > mergedCostByCampaign.get(key)!) {
+      mergedCostByCampaign.set(key, cost);
+    }
+  }
+
   const costByUm = new Map<string, number>();
-  for (const s of statsAgg) {
-    const umKey = campaignToUm.get(s.campaign_id.toString());
+  for (const [cid, cost] of mergedCostByCampaign) {
+    const umKey = campaignToUm.get(cid);
     if (!umKey) continue;
-    costByUm.set(umKey, (costByUm.get(umKey) || 0) + Number(s._sum.cost || 0));
+    costByUm.set(umKey, (costByUm.get(umKey) || 0) + cost);
   }
 
   // 组装最终结果
