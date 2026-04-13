@@ -175,30 +175,46 @@ export async function curlFetch(
     throw new Error("服务器返回空响应，请稍后再试");
   }
 
-  // 跳过 100 Continue 等中间响应（curl -i 会依次输出所有中间响应）
+  // 遍历所有中间响应（1xx informational + 3xx redirect），累积 cookies，取最终响应的 status 和 body
   let remaining = raw;
+  let headerSection = "";
+  let body = remaining;
+  const allCookieLines: string[] = [];
+
   while (true) {
-    const sepIdx = remaining.indexOf("\r\n\r\n");
-    if (sepIdx < 0) break;
-    const headerPart = remaining.slice(0, sepIdx);
-    if (/^HTTP\/[\d.]+ 1\d{2}\b/.test(headerPart.trim())) {
-      remaining = remaining.slice(sepIdx + 4);
-      continue;
+    // 尝试 \r\n\r\n 分隔，fallback \n\n
+    let sepIdx = remaining.indexOf("\r\n\r\n");
+    let sepLen = 4;
+    if (sepIdx < 0) { sepIdx = remaining.indexOf("\n\n"); sepLen = 2; }
+    if (sepIdx < 0) { body = remaining; headerSection = ""; break; }
+
+    const hPart = remaining.slice(0, sepIdx);
+    // 收集当前响应的所有 Set-Cookie
+    const partCookies = hPart.match(/^set-cookie:\s*(.+)$/gim) || [];
+    allCookieLines.push(...partCookies);
+
+    const isIntermediate = /^HTTP\/[\d.]+ [13]\d{2}\b/.test(hPart.trim());
+    if (isIntermediate) {
+      // 跳过当前响应头和 body，定位下一个 HTTP 响应
+      const afterHeaders = remaining.slice(sepIdx + sepLen);
+      const nextHttp = afterHeaders.indexOf("HTTP/");
+      if (nextHttp >= 0) {
+        remaining = afterHeaders.slice(nextHttp);
+        continue;
+      }
+      // 没有后续响应，把剩余内容作为 body
+      headerSection = hPart;
+      body = afterHeaders;
+      break;
     }
+
+    // 最终响应
+    headerSection = hPart;
+    body = remaining.slice(sepIdx + sepLen);
     break;
   }
 
-  // 解析 HTTP 响应：头部 + 空行 + body（兼容 \r\n\r\n 和 \n\n）
-  let headerEndIdx = remaining.indexOf("\r\n\r\n");
-  let sepLen = 4;
-  if (headerEndIdx < 0) {
-    headerEndIdx = remaining.indexOf("\n\n");
-    sepLen = 2;
-  }
-  const headerSection = headerEndIdx > 0 ? remaining.slice(0, headerEndIdx) : "";
-  const body = headerEndIdx > 0 ? remaining.slice(headerEndIdx + sepLen) : remaining;
-
-  // 解析状态码（取最后一个 HTTP 状态行，处理重定向链）
+  // 解析状态码（从最终响应头部取）
   let status = 200;
   const statusLines = headerSection.match(/HTTP\/[\d.]+ (\d+)/g) || [];
   if (statusLines.length > 0) {
@@ -206,10 +222,9 @@ export async function curlFetch(
     if (lastStatus) status = parseInt(lastStatus[1]);
   }
 
-  // 解析 Set-Cookie
+  // 解析 Set-Cookie（全链路累积）
   const cookies: Record<string, string> = {};
-  const cookieMatches = headerSection.match(/^set-cookie:\s*(.+)$/gim) || [];
-  for (const line of cookieMatches) {
+  for (const line of allCookieLines) {
     const val = line.replace(/^set-cookie:\s*/i, "");
     const [kv] = val.split(";");
     const eqIdx = kv.indexOf("=");
