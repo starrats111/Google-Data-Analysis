@@ -915,6 +915,11 @@ export async function POST(req: NextRequest) {
     );
     const googleCampaignId = campaignRn.split("/").pop() || "";
 
+    if (!googleCampaignId) {
+      console.error("[AdSubmit] Google Ads 响应未包含广告系列 ID，responses[1]:", JSON.stringify(responses[1] || null));
+      throw new Error("Google Ads 提交返回了成功响应，但未包含广告系列 ID。这通常是 API 响应结构不匹配导致的，请刷新页面后重试，或联系管理员查看服务器日志。");
+    }
+
     const adGroupResp = (responses[4] || {}) as Record<string, Record<string, string>>;
     const adGroupRn = String(
       adGroupResp?.adGroupResult?.resourceName

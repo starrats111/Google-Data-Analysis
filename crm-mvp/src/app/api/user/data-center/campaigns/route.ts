@@ -4,6 +4,7 @@ import { apiSuccess, apiError } from "@/lib/constants";
 import prisma from "@/lib/prisma";
 import { cachedQuery, cacheDelete } from "@/lib/cache";
 import { nowCST, parseCSTDateStart, parseCSTDateEndExclusive, isTodayCST, dateColumnStart, dateColumnEndExclusive, dateColumnTodayEndExclusive } from "@/lib/date-utils";
+import { sqlAffiliateTxnValidPlatformConnection } from "@/lib/affiliate-transaction-sql";
 
 /**
  * GET /api/user/data-center/campaigns
@@ -81,7 +82,10 @@ export async function GET(req: NextRequest) {
   // 构建 campaign 筛选条件
   const campaignWhere: Record<string, unknown> = {
     user_id: userId,
-    google_campaign_id: { not: null },
+    NOT: [
+      { google_campaign_id: null },
+      { google_campaign_id: "" },
+    ],
     is_deleted: 0,
   };
   if (mccAccountId) {
@@ -213,6 +217,7 @@ export async function GET(req: NextRequest) {
       FROM affiliate_transactions
       WHERE user_id = ? AND is_deleted = 0
         AND transaction_time >= ? AND transaction_time < ?
+        AND ${sqlAffiliateTxnValidPlatformConnection("affiliate_transactions")}
       GROUP BY user_merchant_id
     `, userId, txnStart, txnEnd),
   ]);
