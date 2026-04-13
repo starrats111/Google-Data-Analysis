@@ -53,20 +53,23 @@ jobs:
               echo "No dependency changes, skipping npm install"
             fi
 
-            echo "===== 4. Build (service keeps running) ====="
+            echo "===== 4. Generate Prisma Client ====="
+            npx prisma generate 2>&1 | tail -5
+
+            echo "===== 5. Build (service keeps running) ====="
             NODE_OPTIONS="--max-old-space-size=512" npx next build 2>&1 | tail -20
 
-            echo "===== 5. Verify build ====="
+            echo "===== 6. Verify build ====="
             if [ ! -f "$CRM_DIR/.next/BUILD_ID" ]; then
               echo "BUILD FAILED: .next/BUILD_ID not found, aborting deploy"
               exit 1
             fi
             echo "Build verified: BUILD_ID=$(cat $CRM_DIR/.next/BUILD_ID)"
 
-            echo "===== 6. Database migrations ====="
+            echo "===== 7. Database migrations ====="
             npx prisma migrate deploy 2>&1 | tail -5
 
-            echo "===== 7. Reload service (zero-downtime) ====="
+            echo "===== 8. Reload service (zero-downtime) ====="
             cd "$CRM_DIR"
             if command -v pm2 &> /dev/null; then
               if pm2 describe ad-automation > /dev/null 2>&1; then
