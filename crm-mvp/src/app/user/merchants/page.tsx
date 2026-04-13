@@ -3,7 +3,7 @@ import { useState, useCallback, useMemo, useEffect } from "react";
 import { Card, Row, Col, Table, Input, Select, Button, Space, Tag, Modal, Form, Typography, Popconfirm, Switch, InputNumber, Tabs, App, Tooltip } from "antd";
 import { ShopOutlined, SearchOutlined, CheckOutlined, DollarOutlined, CalendarOutlined, SaveOutlined, SyncOutlined, WarningOutlined, StarOutlined, CopyOutlined, ReloadOutlined, RobotOutlined, DeleteOutlined } from "@ant-design/icons";
 import { PLATFORMS, BIDDING_STRATEGIES } from "@/lib/constants";
-import { useApiWithParams, useStaleApi, mutateApi, refreshApi } from "@/lib/swr";
+import { useApiWithParams, useStaleApi, useApi, mutateApi, refreshApi } from "@/lib/swr";
 import { useRouter } from "next/navigation";
 import { normalizeAiRuleProfile, SYSTEM_ADRIAN_PERSONA, type AiRuleProfile, type AiPersona } from "@/lib/ai-rule-profile";
 const { Text } = Typography;
@@ -109,6 +109,11 @@ function RB({ r }: { r: unknown[] | null }) {
 export default function MerchantsPage() {
   const { message } = App.useApp();
   const router = useRouter();
+  const { data: authData } = useApi<{ role: string; userId: string }>("/api/auth/me?role=user", {
+    dedupingInterval: 60000,
+    revalidateOnFocus: false,
+  });
+  const isLeader = authData?.role === "leader";
   const [tab, setTab] = useState("claimed");
   const [platform, setPlatform] = useState("");
   const [search, setSearch] = useState("");
@@ -636,21 +641,31 @@ export default function MerchantsPage() {
         </div>
       )}
     </Modal>
-    <Modal title={`在投详情 — ${advMerchant?.merchant_name || ""}`} open={advModal} onCancel={() => setAdvModal(false)} footer={null} width={720}>
-      {advList.length > 0 && (<div style={{ marginBottom: 12, display: "flex", gap: 24 }}>
+    <Modal title={`在投详情 — ${advMerchant?.merchant_name || ""}`} open={advModal} onCancel={() => setAdvModal(false)} footer={null} width={isLeader ? 860 : 560}>
+      {isLeader && advList.length > 0 && (<div style={{ marginBottom: 12, display: "flex", gap: 24 }}>
         <div><Text type="secondary">总花费（本月）</Text><div style={{ fontSize: 20, fontWeight: 700 }}>${advList.reduce((s, r) => s + parseFloat(r.total_cost || "0"), 0).toFixed(2)}</div></div>
         <div><Text type="secondary">总佣金（本月）</Text><div style={{ fontSize: 20, fontWeight: 700, color: "#52c41a" }}>${advList.reduce((s, r) => s + parseFloat(r.monthly_commission || "0"), 0).toFixed(2)}</div></div>
         <div><Text type="secondary">平均 ROI</Text><div style={{ fontSize: 20, fontWeight: 700 }}>{(() => { const c = advList.reduce((s, r) => s + parseFloat(r.total_cost || "0"), 0); const m = advList.reduce((s, r) => s + parseFloat(r.monthly_commission || "0"), 0); return c > 0 ? (m / c).toFixed(2) : "0.00"; })()}</div></div>
       </div>)}
-      <Table dataSource={advList} rowKey="user_id" loading={advLoading} size="small" pagination={false} columns={[
+      {!isLeader && advList.length > 0 && (<div style={{ marginBottom: 12, display: "flex", gap: 24 }}>
+        <div><Text type="secondary">总花费（本月）</Text><div style={{ fontSize: 20, fontWeight: 700 }}>${advList.reduce((s, r) => s + parseFloat(r.total_cost || "0"), 0).toFixed(2)}</div></div>
+        <div><Text type="secondary">广告系列数</Text><div style={{ fontSize: 20, fontWeight: 700 }}>{advList.reduce((s, r) => s + (r.campaign_count || 0), 0)}</div></div>
+      </div>)}
+      <Table dataSource={advList} rowKey="user_id" loading={advLoading} size="small" pagination={false} columns={isLeader ? [
         { title: "员工", dataIndex: "display_name", width: 100 },
         { title: "广告系列", dataIndex: "campaign_count", width: 80, align: "center" as const },
         { title: "启用", dataIndex: "enabled_count", width: 60, align: "center" as const, render: (v: number) => <Tag color="green">{v}</Tag> },
-        { title: "总花费", dataIndex: "total_cost", width: 100, align: "right" as const, render: (v: string) => `$${v}` },
+        { title: "投放日期", dataIndex: "campaign_created_at", width: 110, render: (v: string) => v ? new Date(v).toLocaleDateString("zh-CN", { timeZone: "Asia/Shanghai" }) : "-" },
+        { title: "总花费", dataIndex: "total_cost", width: 90, align: "right" as const, render: (v: string) => `$${v}` },
         { title: "总点击", dataIndex: "total_clicks", width: 80, align: "right" as const, render: (v: number) => (v || 0).toLocaleString() },
-        { title: "总展示", dataIndex: "total_impressions", width: 80, align: "right" as const, render: (v: number) => (v || 0).toLocaleString() },
         { title: "本月佣金", dataIndex: "monthly_commission", width: 100, align: "right" as const, render: (v: string) => <span style={{ color: "#52c41a", fontWeight: 600 }}>${v}</span> },
         { title: "ROI", dataIndex: "roi", width: 70, align: "right" as const },
+      ] : [
+        { title: "广告系列", dataIndex: "campaign_count", width: 80, align: "center" as const },
+        { title: "启用", dataIndex: "enabled_count", width: 60, align: "center" as const, render: (v: number) => <Tag color="green">{v}</Tag> },
+        { title: "总花费（本月）", dataIndex: "total_cost", width: 120, align: "right" as const, render: (v: string) => `$${v}` },
+        { title: "总点击", dataIndex: "total_clicks", width: 80, align: "right" as const, render: (v: number) => (v || 0).toLocaleString() },
+        { title: "总展示", dataIndex: "total_impressions", width: 90, align: "right" as const, render: (v: number) => (v || 0).toLocaleString() },
       ]} />
     </Modal>
   </div>);

@@ -3,28 +3,33 @@ import { serializeData } from "@/lib/auth";
 import { apiSuccess, apiError } from "@/lib/constants";
 import { withUser } from "@/lib/api-handler";
 import prisma from "@/lib/prisma";
+import { sqlAffiliateTxnValidPlatformConnection } from "@/lib/affiliate-transaction-sql";
 import { dateColumnStart, nowCST, parseCSTDateStart, parseCSTDateEndExclusive } from "@/lib/date-utils";
 
 /**
  * GET /api/user/merchants/active-advertisers?merchant_id=xxx&platform=YY
  *
  * 返回某商家的在投人员明细：
- * - 员工名、广告系列数、本月总花费、点击、展示、本月佣金
+ * - 组长：全员数据（花费、佣金、ROI、投放日期）
+ * - 组员：仅自己的数据
  */
-export const GET = withUser(async (req: NextRequest) => {
+export const GET = withUser(async (req: NextRequest, { user }) => {
   const { searchParams } = new URL(req.url);
   const merchantId = searchParams.get("merchant_id") || "";
   const platform = searchParams.get("platform") || "";
 
   if (!merchantId) return apiError("缺少 merchant_id");
 
-  // 找到所有用户的 user_merchants 中同一个 merchant_id + platform
+  const isLeader = user.role === "leader";
+
+  // 找到符合条件的 user_merchants（组员只查自己，组长查全部）
   const where: Record<string, unknown> = {
     merchant_id: merchantId,
     is_deleted: 0,
     status: { in: ["claimed", "paused"] },
   };
   if (platform) where.platform = platform;
+  if (!isLeader) where.user_id = BigInt(user.userId);
 
   const allUserMerchants = await prisma.user_merchants.findMany({
     where: where as never,
@@ -52,6 +57,7 @@ export const GET = withUser(async (req: NextRequest) => {
       google_status: true,
       google_campaign_id: true,
       customer_id: true,
+      created_at: true,
     },
     orderBy: { id: "desc" },
   });
@@ -72,6 +78,7 @@ export const GET = withUser(async (req: NextRequest) => {
     campaignIds: bigint[];
     campaignCount: number;
     enabledCount: number;
+    earliestCreatedAt: Date | null;
   }>();
 
   for (const c of campaigns) {
@@ -82,12 +89,16 @@ export const GET = withUser(async (req: NextRequest) => {
         campaignIds: [],
         campaignCount: 0,
         enabledCount: 0,
+        earliestCreatedAt: null,
       });
     }
     const entry = userCampaignMap.get(key)!;
     entry.campaignIds.push(c.id);
     entry.campaignCount++;
     if (c.google_status === "ENABLED") entry.enabledCount++;
+    if (c.created_at && (!entry.earliestCreatedAt || c.created_at < entry.earliestCreatedAt)) {
+      entry.earliestCreatedAt = c.created_at;
+    }
   }
 
   // 只返回有至少一个启用广告的用户
@@ -153,6 +164,7 @@ export const GET = withUser(async (req: NextRequest) => {
         WHERE user_merchant_id IN (${umIds.map(() => "?").join(",")}) AND is_deleted = 0
           AND transaction_time >= ? AND transaction_time < ?
           AND user_merchant_id != 0
+          AND ${sqlAffiliateTxnValidPlatformConnection("affiliate_transactions")}
         GROUP BY user_merchant_id, user_id
       `, ...umIds, txnMonthStart, txnNextMonth)
     : [];
@@ -192,7 +204,7 @@ export const GET = withUser(async (req: NextRequest) => {
     }
     const netCommission = totalCommission - totalRejected;
 
-    return {
+    const row: Record<string, unknown> = {
       user_id: entry.userId,
       display_name: userNameMap.get(entry.userId.toString()) || "未知",
       campaign_count: entry.campaignCount,
@@ -203,6 +215,10 @@ export const GET = withUser(async (req: NextRequest) => {
       monthly_commission: totalCommission.toFixed(2),
       roi: totalCost > 0 ? ((netCommission - totalCost) / totalCost).toFixed(2) : "0.00",
     };
+    if (isLeader) {
+      row.campaign_created_at = entry.earliestCreatedAt ?? null;
+    }
+    return row;
   });
 
   return apiSuccess(serializeData(result));
