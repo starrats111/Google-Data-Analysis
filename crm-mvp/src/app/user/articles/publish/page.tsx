@@ -60,6 +60,8 @@ export default function ArticlePublishPage() {
   const articleSlugFromUrl = searchParams.get("slug");
   const [step, setStep] = useState(0);
   const [merchants, setMerchants] = useState<Merchant[]>([]);
+  // 所有商家（已领取 + 可领取），用于有搜索词时全量匹配
+  const [allMerchants, setAllMerchants] = useState<Merchant[]>([]);
   // 已有已发布文章的 user_merchant_id 集合（用于默认视图过滤）
   const [publishedMerchantIds, setPublishedMerchantIds] = useState<Set<string>>(new Set());
   const [sites, setSites] = useState<Site[]>([]);
@@ -70,20 +72,27 @@ export default function ArticlePublishPage() {
   // Step 0: 选择商家
   const [selectedMerchant, setSelectedMerchant] = useState<Merchant | null>(null);
   // O(1) 查找 map，避免 filterOption 回调中 O(n²) 遍历
-  const merchantMap = useMemo(() => new Map(merchants.map((m) => [m.id, m])), [merchants]);
+  // 有搜索词时从全量商家中查找，无搜索词时从已领取商家中查找
+  const claimedMerchantMap = useMemo(() => new Map(merchants.map((m) => [m.id, m])), [merchants]);
+  const allMerchantMap = useMemo(() => new Map(allMerchants.map((m) => [m.id, m])), [allMerchants]);
   const merchantFilterOption = useCallback(
     (input: string, option?: { value?: string | number | bigint | null; label?: React.ReactNode }) => {
       if (!option) return false;
-      const merchant = merchantMap.get(String(option.value ?? ""));
-      if (!merchant) return false;
+      const id = String(option.value ?? "");
       if (!input) {
-        // 无搜索词时：只显示广告已启用且尚无已发布文章的商家
+        // 无搜索词时：只显示广告已启用且尚无已发布文章的已领取商家
+        const merchant = claimedMerchantMap.get(id);
+        if (!merchant) return false;
         if (merchant.ad_status !== "ENABLED") return false;
         if (publishedMerchantIds.has(merchant.id)) return false;
+        return true;
       }
+      // 有搜索词时：全量商家（含未领取），只要名称/MID匹配即可显示
+      const merchant = allMerchantMap.get(id);
+      if (!merchant) return false;
       return String(option.label ?? "").toLowerCase().includes(input.toLowerCase());
     },
-    [merchantMap, publishedMerchantIds],
+    [claimedMerchantMap, allMerchantMap, publishedMerchantIds],
   );
   // Step 1: 确认国家
   const [country, setCountry] = useState("US");
@@ -108,11 +117,31 @@ export default function ArticlePublishPage() {
   const [publishResult, setPublishResult] = useState<{ url: string } | null>(null);
 
   useEffect(() => {
-    // 获取已领取的商家
+    // 获取已领取的商家（用于默认列表）
     fetch("/api/user/merchants?tab=claimed&pageSize=500")
       .then((r) => r.json())
       .then((res) => {
-        if (res.code === 0) setMerchants(res.data.merchants || []);
+        if (res.code === 0) {
+          const claimed = res.data.merchants || [];
+          setMerchants(claimed);
+          // 先用已领取数据填充全量列表，后续 available 数据到达后再合并
+          setAllMerchants((prev) => {
+            const existingIds = new Set(prev.map((m) => m.id));
+            return [...prev, ...claimed.filter((m: Merchant) => !existingIds.has(m.id))];
+          });
+        }
+      }).catch(() => {});
+    // 获取可领取的商家（用于搜索时全量匹配）
+    fetch("/api/user/merchants?tab=available&pageSize=500")
+      .then((r) => r.json())
+      .then((res) => {
+        if (res.code === 0) {
+          const available = res.data.merchants || [];
+          setAllMerchants((prev) => {
+            const existingIds = new Set(prev.map((m) => m.id));
+            return [...prev, ...available.filter((m: Merchant) => !existingIds.has(m.id))];
+          });
+        }
       }).catch(() => {});
     // 获取已发布文章的商家 ID（仅 published 状态，用于默认视图过滤）
     fetch("/api/user/articles?pageSize=500")
@@ -549,7 +578,7 @@ export default function ArticlePublishPage() {
                     setLanguage(getLang(m.target_country));
                   }
                 }}
-                options={merchants
+                options={allMerchants
                   .map((m) => ({
                     value: m.id,
                     label: `${m.merchant_name} [${m.platform}] (MID: ${m.merchant_id})`,
