@@ -203,6 +203,17 @@ Write like a real conversion copywriter who gets paid for results, NOT a generic
 BANNED words (auto-rejected — any use fails quality check):
 unlock, unleash, elevate, transform, discover, revolutionize, game-changer, seamless, seamlessly, cutting-edge, world-class, best-in-class, unmatched, unparalleled, supercharge, empower, harness, navigate, embrace, reimagine, redefine, groundbreaking, innovative, transformative, holistic, synergy, paradigm, bespoke, curated, delve, testament, pivotal, robust, streamline, ecosystem, embark, realm, tapestry, beacon, multifaceted
 
+HEADLINE-ONLY HARD PROHIBITIONS (applies to ALL personas, zero exceptions):
+- NEVER mention returns, refunds, or money-back guarantees in HEADLINES. These belong in descriptions only.
+  ✗ "Free Returns on All Orders" (headline) → REJECTED
+  ✗ "30-Day Money-Back Guarantee" (headline) → REJECTED
+  ✓ "Rated 4.9★ by 20K+ Buyers" (headline) → trust without refund language
+- NEVER mention discount codes, promo codes, or coupon codes in HEADLINES.
+  ✗ "Use Code SAVE20 at Checkout" (headline) → REJECTED
+  ✗ "Enter Promo Code for 20% Off" (headline) → REJECTED
+  ✓ "20% Off — Limited Time" (headline, if verified discount exists) → acceptable
+- These rules apply regardless of which persona is active.
+
 THE GOLD STANDARD: Write copy that makes someone mid-scroll STOP and think "wait, this is exactly what I need."
 A smart 16-year-old should understand it instantly. A skeptical adult should trust it immediately.
 

@@ -419,6 +419,12 @@ ${formatAiRuleBlock(aiRuleProfile, "ad_copy")}
 3. KEYWORD-FIRST: Mirror confirmed keywords in headlines. If a keyword could trigger a policy violation, reframe it safely.
 4. DATA INTEGRITY: Use ONLY the facts provided below. Never invent discounts, prices, or product names.
 5. ZERO AI CLICHÉS: Banned words: premium, top-quality, perfect, amazing, cutting-edge, seamless, elevate, unlock. Use real product/brand language instead.
+6. HEADLINES ONLY — ABSOLUTE PROHIBITIONS (no exceptions, no persona overrides):
+   · NO return/refund/money-back language in headlines. Put it in descriptions if needed.
+     ✗ "Free Returns on All Orders" / "30-Day Money-Back Guarantee" → REJECTED from headlines
+   · NO discount codes or promo codes in headlines. Ever.
+     ✗ "Use Code SAVE20" / "Enter Promo Code for 20% Off" → REJECTED from headlines
+     ✓ Verified percentage off ("20% Off Sitewide") is allowed in headlines if confirmed on the website.
 ${discountGuidance}${shippingGuidance}
 
 ═══ MERCHANT INTELLIGENCE — READ ALL BEFORE WRITING ═══
