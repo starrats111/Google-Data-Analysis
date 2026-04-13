@@ -176,7 +176,7 @@ model merchant_violations {
 }
 
 // -----------------------------------------------------------
-// 6c. 推荐商家记录表（从 Google Sheets 同步）
+// 6c. 推荐商家记录表（从 Google Sheets 同步 或 Excel 上传）
 // -----------------------------------------------------------
 model merchant_recommendations {
   id               BigInt    @id @default(autoincrement()) @db.UnsignedBigInt
@@ -187,10 +187,23 @@ model merchant_recommendations {
   remark           String?   @db.Text           // 标记/备注
   share_time       String?   @db.VarChar(32)    // 分享时间
   upload_batch     String    @db.VarChar(64)
+  // Excel 导入扩展字段
+  source           String    @default("sheets") @db.VarChar(16) // sheets / excel
+  mcid             String?   @db.VarChar(64)    // 平台内部商家代码
+  mid              String?   @db.VarChar(64)    // 数字型商家 ID
+  affiliate        String?   @db.VarChar(128)   // 所属联盟平台（Impact/Rakuten/PHG 等）
+  website          String?   @db.VarChar(512)   // 商家官网
+  merchant_base    String?   @db.VarChar(128)   // 商家地区（如 US/GB/CA）
+  epc              Decimal?  @db.Decimal(12, 4) // 每次点击收益
+  commission_cap   String?   @db.VarChar(256)   // 预计最高AFF佣金上限（可能是数字或文本）
+  avg_commission_rate Decimal? @db.Decimal(12, 6) // 平均佣金率（Payout，小数）
+  avg_order_commission Decimal? @db.Decimal(12, 4) // 平均带单佣金（Payout，美元）
   is_deleted       Int       @default(0) @db.TinyInt
   created_at       DateTime  @default(now()) @db.DateTime(0)
 
   @@index([merchant_name], map: "idx_rec_name")
+  @@index([mid], map: "idx_rec_mid")
+  @@index([source], map: "idx_rec_source")
 }
 
 // -----------------------------------------------------------

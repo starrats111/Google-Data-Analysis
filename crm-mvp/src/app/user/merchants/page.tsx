@@ -310,12 +310,39 @@ export default function MerchantsPage() {
     { title: "名单来源", dataIndex: "source", width: 100, render: (v: string) => v || "-" },
   ], []);
   const recCols = useMemo(() => [
-    { title: "商家名称", dataIndex: "merchant_name", width: 200, ellipsis: true },
-    { title: "ROI参考", dataIndex: "roi_reference", width: 100, render: (v: string) => v || "-" },
-    { title: "佣金率", dataIndex: "commission_info", width: 100, render: (v: string) => v || "-" },
-    { title: "结算率", dataIndex: "settlement_info", width: 100, render: (v: string) => v || "-" },
-    { title: "备注", dataIndex: "remark", width: 200, render: (v: string) => v ? <Button type="link" size="small" onClick={() => { setRTitle("推荐详情"); setRContent(v); setRModal(true); }}>查看</Button> : "-" },
-    { title: "分享时间", dataIndex: "share_time", width: 100, render: (v: string) => v || "-" },
+    { title: "商家名称", dataIndex: "merchant_name", width: 180, ellipsis: true,
+      render: (v: string, rec: any) => (
+        <Space size={4}>
+          {rec.website ? (
+            <a href={rec.website.startsWith("http") ? rec.website : `https://${rec.website}`} target="_blank" rel="noreferrer" style={{ fontWeight: 600 }}>{v}</a>
+          ) : <span style={{ fontWeight: 600 }}>{v}</span>}
+        </Space>
+      ),
+    },
+    { title: "联盟平台", dataIndex: "affiliate", width: 100,
+      render: (v: string, rec: any) => rec.source === "excel" ? (v ? <Tag color="blue">{v}</Tag> : "-") : (rec.roi_reference || "-"),
+    },
+    { title: "商家地区", dataIndex: "merchant_base", width: 80,
+      render: (v: string, rec: any) => rec.source === "excel" ? (v ? <Tag>{v}</Tag> : "-") : (rec.settlement_info || "-"),
+    },
+    { title: "EPC", dataIndex: "epc", width: 80, align: "right" as const,
+      render: (v: number | null, rec: any) => rec.source === "excel" ? (v != null ? `$${Number(v).toFixed(2)}` : "-") : (rec.commission_info || "-"),
+    },
+    { title: "平均佣金率", dataIndex: "avg_commission_rate", width: 100, align: "right" as const,
+      render: (v: number | null, rec: any) => {
+        if (rec.source !== "excel") return rec.share_time || "-";
+        if (v == null) return "-";
+        const n = Number(v);
+        // 如果大于 1 说明是固定金额而非百分比
+        return n > 1 ? `$${n.toFixed(2)}` : `${(n * 100).toFixed(2)}%`;
+      },
+    },
+    { title: "带单佣金", dataIndex: "avg_order_commission", width: 90, align: "right" as const,
+      render: (v: number | null, rec: any) => rec.source === "excel" ? (v != null ? `$${Number(v).toFixed(2)}` : "-") : "-",
+    },
+    { title: "佣金上限", dataIndex: "commission_cap", width: 110, ellipsis: true,
+      render: (v: string | null, rec: any) => rec.source === "excel" ? (v || "无限制") : (rec.remark ? <Button type="link" size="small" onClick={() => { setRTitle("推荐详情"); setRContent(rec.remark); setRModal(true); }}>查看</Button> : "-"),
+    },
   ], []);
   return (<div style={{ maxWidth: 1600, margin: "0 auto" }}>
     <Form form={adForm} component={false} layout="vertical" size="small">

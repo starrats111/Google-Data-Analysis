@@ -7,7 +7,9 @@
     "build": "NODE_OPTIONS='--max-old-space-size=512' next build",
     "start": "NODE_OPTIONS='--max-old-space-size=768' next start -p 20050",
     "lint": "eslint .",
-    "seed": "npx tsx prisma/seed.ts"
+    "seed": "npx tsx prisma/seed.ts",
+    "cleanup:affiliate-invalid-connection": "npx tsx scripts/cleanup-affiliate-txns-invalid-connection.ts",
+    "diag:wj02-cg-keys": "npx tsx scripts/compare-wj02-cg-api-keys.ts"
   },
   "dependencies": {
     "@ant-design/icons": "^6.1.0",
@@ -35,7 +37,8 @@
     "ssh2": "^1.17.0",
     "swr": "^2.3.3",
     "tesseract.js": "^5.1.1",
-    "uuid": "^13.0.0"
+    "uuid": "^13.0.0",
+    "xlsx": "^0.18.5"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",

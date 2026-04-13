@@ -1,12 +1,14 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import {
-  Card, Table, Input, Button, Space, Tag, Tabs, Alert, Tooltip, Modal, Popconfirm, App,
+  Card, Table, Input, Button, Space, Tag, Tabs, Alert, Tooltip, Modal, Popconfirm, App, Upload, Progress,
 } from "antd";
 import {
   SearchOutlined, CloudSyncOutlined, WarningOutlined, StarOutlined, DeleteOutlined, LinkOutlined,
+  UploadOutlined, InboxOutlined,
 } from "@ant-design/icons";
+import type { UploadFile } from "antd/es/upload/interface";
 
 export default function MerchantSheetPage() {
   const { message } = App.useApp();
@@ -34,6 +36,11 @@ export default function MerchantSheetPage() {
 
   // Service Account
   const [saEmail, setSaEmail] = useState<string | null>(null);
+
+  // Excel 上传
+  const [excelFiles, setExcelFiles] = useState<UploadFile[]>([]);
+  const [excelUploading, setExcelUploading] = useState(false);
+  const [excelResult, setExcelResult] = useState<any>(null);
 
   // 详情弹窗
   const [detailModal, setDetailModal] = useState(false);
@@ -177,6 +184,31 @@ export default function MerchantSheetPage() {
     } else message.error(res.message);
   };
 
+  const handleExcelUpload = async () => {
+    if (excelFiles.length === 0) { message.warning("请先选择 Excel 文件"); return; }
+    setExcelUploading(true);
+    setExcelResult(null);
+    try {
+      const fd = new FormData();
+      for (const f of excelFiles) {
+        if (f.originFileObj) fd.append("files", f.originFileObj);
+      }
+      const res = await fetch("/api/admin/merchant-excel-upload", { method: "POST", body: fd }).then((r) => r.json());
+      if (res.code === 0) {
+        message.success(res.message);
+        setExcelResult(res.data);
+        setExcelFiles([]);
+        fetchRecommendations(1);
+      } else {
+        message.error(res.message);
+      }
+    } catch (e: any) {
+      message.error("上传失败: " + e.message);
+    } finally {
+      setExcelUploading(false);
+    }
+  };
+
   return (
     <div>
       {/* 共享表格配置区 */}
@@ -215,6 +247,44 @@ export default function MerchantSheetPage() {
           <Alert
             type="warning" showIcon style={{ marginTop: 12 }}
             message="未检测到 Service Account，仅支持公开的 Google Sheet。如需访问授权表格，请在 MCC 设置中配置 Service Account。"
+          />
+        )}
+      </Card>
+
+      {/* Excel 推荐商家导入区 */}
+      <Card size="small" style={{ marginBottom: 16 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", marginBottom: 12 }}>
+          <UploadOutlined style={{ fontSize: 16, color: "#52c41a" }} />
+          <span style={{ fontWeight: 600 }}>Excel 推荐商家导入</span>
+          <span style={{ fontSize: 12, color: "#999" }}>支持同时上传多个文件（PM / CZ / RW / LinkHaitao），导入后将全量替换现有 Excel 推荐数据</span>
+        </div>
+        <div style={{ display: "flex", gap: 12, alignItems: "flex-start", flexWrap: "wrap" }}>
+          <Upload
+            multiple
+            accept=".xlsx,.xls"
+            fileList={excelFiles}
+            beforeUpload={() => false}
+            onChange={({ fileList }) => setExcelFiles(fileList)}
+            onRemove={(f) => setExcelFiles((prev) => prev.filter((x) => x.uid !== f.uid))}
+          >
+            <Button icon={<UploadOutlined />}>选择 Excel 文件</Button>
+          </Upload>
+          <Button
+            type="primary"
+            icon={<InboxOutlined />}
+            loading={excelUploading}
+            disabled={excelFiles.length === 0}
+            onClick={handleExcelUpload}
+          >
+            {excelUploading ? "导入中…" : `导入（${excelFiles.length} 个文件）`}
+          </Button>
+        </div>
+        {excelResult && (
+          <Alert
+            type="success" showIcon closable style={{ marginTop: 12 }}
+            message={`导入完成：解析 ${excelResult.parsed} 条，去重后写入 ${excelResult.inserted} 条（原有 ${excelResult.deleted} 条已替换），匹配标记 ${excelResult.marked} 个商家`}
+            description={excelResult.parseErrors ? `部分文件解析警告: ${excelResult.parseErrors.join("; ")}` : undefined}
+            onClose={() => setExcelResult(null)}
           />
         )}
       </Card>
@@ -292,17 +362,43 @@ export default function MerchantSheetPage() {
                 <Button type="primary" size="small" onClick={() => fetchRecommendations(1)}>查询</Button>
               </Space>
             </div>
-            <Table rowKey="id" loading={recLoading} dataSource={recommendations} size="small" scroll={{ x: 1000 }}
+            <Table rowKey="id" loading={recLoading} dataSource={recommendations} size="small" scroll={{ x: 1200 }}
               pagination={{ current: recPage, pageSize: 50, total: recTotal, showTotal: (t) => `共 ${t} 条`, onChange: (p) => fetchRecommendations(p) }}
               columns={[
-                { title: "商家名称", dataIndex: "merchant_name", width: 200, ellipsis: true },
-                { title: "ROI参考", dataIndex: "roi_reference", width: 100, render: (v: string) => v || "-" },
-                { title: "佣金率", dataIndex: "commission_info", width: 100, render: (v: string) => v || "-" },
-                { title: "结算率", dataIndex: "settlement_info", width: 100, render: (v: string) => v || "-" },
-                { title: "备注/标记", dataIndex: "remark", width: 200,
-                  render: (v: string) => v ? <Button type="link" size="small" onClick={() => { setDetailTitle("推荐详情"); setDetailContent(v); setDetailModal(true); }}>查看</Button> : "-" },
-                { title: "分享时间", dataIndex: "share_time", width: 100, render: (v: string) => v || "-" },
-                { title: "同步批次", dataIndex: "upload_batch", width: 200, ellipsis: true },
+                { title: "商家名称", dataIndex: "merchant_name", width: 180, ellipsis: true,
+                  render: (v: string, rec: any) => rec.website
+                    ? <a href={rec.website.startsWith("http") ? rec.website : `https://${rec.website}`} target="_blank" rel="noreferrer">{v}</a>
+                    : v,
+                },
+                { title: "来源", dataIndex: "source", width: 70,
+                  render: (v: string) => v === "excel" ? <Tag color="green">Excel</Tag> : <Tag color="blue">Sheets</Tag>,
+                },
+                { title: "联盟平台", dataIndex: "affiliate", width: 100,
+                  render: (v: string, rec: any) => rec.source === "excel" ? (v || "-") : (rec.roi_reference || "-"),
+                },
+                { title: "地区", dataIndex: "merchant_base", width: 70,
+                  render: (v: string, rec: any) => rec.source === "excel" ? (v ? <Tag>{v}</Tag> : "-") : (rec.settlement_info || "-"),
+                },
+                { title: "EPC", dataIndex: "epc", width: 80, align: "right" as const,
+                  render: (v: number | null, rec: any) => rec.source === "excel" ? (v != null ? `$${Number(v).toFixed(2)}` : "-") : (rec.commission_info || "-"),
+                },
+                { title: "平均佣金率", dataIndex: "avg_commission_rate", width: 100, align: "right" as const,
+                  render: (v: number | null, rec: any) => {
+                    if (rec.source !== "excel") return rec.share_time || "-";
+                    if (v == null) return "-";
+                    const n = Number(v);
+                    return n > 1 ? `$${n.toFixed(2)}` : `${(n * 100).toFixed(2)}%`;
+                  },
+                },
+                { title: "带单佣金", dataIndex: "avg_order_commission", width: 90, align: "right" as const,
+                  render: (v: number | null, rec: any) => rec.source === "excel" ? (v != null ? `$${Number(v).toFixed(2)}` : "-") : "-",
+                },
+                { title: "佣金上限", dataIndex: "commission_cap", width: 120, ellipsis: true,
+                  render: (v: string | null, rec: any) => rec.source === "excel"
+                    ? (v || "无限制")
+                    : (rec.remark ? <Button type="link" size="small" onClick={() => { setDetailTitle("推荐详情"); setDetailContent(rec.remark); setDetailModal(true); }}>查看</Button> : "-"),
+                },
+                { title: "批次", dataIndex: "upload_batch", width: 130, ellipsis: true },
                 { title: "操作", width: 80, fixed: "right" as const,
                   render: (_: unknown, record: any) => (
                     <Popconfirm title="确认删除？" onConfirm={() => handleDelete("recommendation", record.id)}>
