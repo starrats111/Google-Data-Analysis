@@ -112,6 +112,9 @@ export default function ArticlePublishPage() {
   // Step 5: 确认时间 & 发布
   const [publishTime, setPublishTime] = useState(dayjs().tz(TZ));
   const [selectedSite, setSelectedSite] = useState<string>("");
+  // 当商家平台有多个连接时，让用户选择具体用哪个连接（对应哪个发布站点）
+  const [multipleConns, setMultipleConns] = useState<PlatformConnection[]>([]);
+  const [selectedConnId, setSelectedConnId] = useState<string>("");
   const [publishing, setPublishing] = useState(false);
   const [savingDraft, setSavingDraft] = useState(false);
   const [publishResult, setPublishResult] = useState<{ url: string } | null>(null);
@@ -169,18 +172,29 @@ export default function ArticlePublishPage() {
       }).catch(() => {});
   }, []);
 
-  // 选择商家后，自动根据平台连接匹配绑定站点
+  // 选择商家后，自动根据平台连接匹配绑定站点；若有多个连接则让用户手动选择
   useEffect(() => {
     if (!selectedMerchant || platformConns.length === 0 || sites.length === 0) return;
-    const conn = platformConns.find((c) => c.platform === selectedMerchant.platform && c.publish_site_id);
-    if (conn?.publish_site_id) {
-      const siteId = String(conn.publish_site_id);
+    const matched = platformConns.filter((c) => c.platform === selectedMerchant.platform && c.publish_site_id);
+    if (matched.length === 1) {
+      // 只有一个连接，直接自动选中
+      const siteId = String(matched[0].publish_site_id);
       setSelectedSite(siteId);
       const site = sites.find((s) => String(s.id) === siteId);
       setBoundSiteName(site ? `${site.site_name} (${site.domain})` : "");
+      setMultipleConns([]);
+      setSelectedConnId("");
+    } else if (matched.length > 1) {
+      // 多个连接，清空自动选择，让用户在 Step 0 中手动选择
+      setMultipleConns(matched);
+      setSelectedSite("");
+      setBoundSiteName("");
+      setSelectedConnId("");
     } else {
       setSelectedSite("");
       setBoundSiteName("");
+      setMultipleConns([]);
+      setSelectedConnId("");
     }
   }, [selectedMerchant, platformConns, sites]);
 
@@ -599,7 +613,42 @@ export default function ArticlePublishPage() {
                 </Space>
               </div>
             )}
-            <Button type="primary" disabled={!selectedMerchant} onClick={() => setStep(1)}>
+            {/* 同一平台有多个账号连接时，需要用户选择发布到哪个站点 */}
+            {multipleConns.length > 1 && (
+              <Form.Item
+                label={<><GlobalOutlined style={{ marginRight: 4 }} />选择发布站点账号</>}
+                required
+                help={`该商家属于 ${selectedMerchant?.platform} 平台，您有多个账号连接，请确认要发布到哪个站点`}
+              >
+                <Select
+                  placeholder="请选择发布站点"
+                  value={selectedConnId || undefined}
+                  onChange={(connId) => {
+                    setSelectedConnId(connId);
+                    const conn = multipleConns.find((c) => c.id === connId);
+                    if (conn?.publish_site_id) {
+                      const siteId = String(conn.publish_site_id);
+                      setSelectedSite(siteId);
+                      const site = sites.find((s) => String(s.id) === siteId);
+                      setBoundSiteName(site ? `${site.site_name} (${site.domain})` : "");
+                    }
+                  }}
+                  options={multipleConns.map((c) => {
+                    const site = sites.find((s) => String(s.id) === String(c.publish_site_id));
+                    return {
+                      value: c.id,
+                      label: `${c.account_name} → ${site ? `${site.site_name} (${site.domain})` : `站点 #${c.publish_site_id}`}`,
+                    };
+                  })}
+                  style={{ width: "100%" }}
+                />
+              </Form.Item>
+            )}
+            <Button
+              type="primary"
+              disabled={!selectedMerchant || (multipleConns.length > 1 && !selectedConnId)}
+              onClick={() => setStep(1)}
+            >
               下一步
             </Button>
           </Form>
