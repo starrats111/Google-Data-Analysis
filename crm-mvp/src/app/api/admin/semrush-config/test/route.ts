@@ -137,7 +137,31 @@ export async function POST(req: NextRequest) {
       return apiSuccess({ steps, overall: "fail" });
     }
 
-    const rpcData = JSON.parse(rpcRes.body);
+    let rpcBody = rpcRes.body.trim();
+    // 剥离残留的嵌套 HTTP 响应头（100 Continue 等）
+    if (rpcBody.startsWith("HTTP/")) {
+      const innerSep = rpcBody.indexOf("\r\n\r\n");
+      const innerSep2 = rpcBody.indexOf("\n\n");
+      const sep = innerSep >= 0 ? innerSep : innerSep2;
+      if (sep > 0) rpcBody = rpcBody.slice(sep + (innerSep >= 0 ? 4 : 2)).trim();
+    }
+    if (!rpcBody) {
+      steps.push({ step: "RPC 调用", status: "fail", detail: "服务器返回空响应（可能是 Session 已过期或被重定向到登录页），请重试" });
+      return apiSuccess({ steps, overall: "fail" });
+    }
+    if (rpcBody.startsWith("<")) {
+      steps.push({ step: "RPC 调用", status: "fail", detail: "服务器返回 HTML 而非 JSON（Session 已过期），请重新保存配置后再测试" });
+      return apiSuccess({ steps, overall: "fail" });
+    }
+
+    let rpcData: unknown;
+    try {
+      rpcData = JSON.parse(rpcBody);
+    } catch {
+      const preview = rpcBody.slice(0, 100);
+      steps.push({ step: "RPC 调用", status: "fail", detail: `响应不是合法 JSON：${preview}` });
+      return apiSuccess({ steps, overall: "fail" });
+    }
     const databases = rpcData?.result;
     if (databases) {
       const dbList = Array.isArray(databases) ? databases.slice(0, 5).join(", ") : JSON.stringify(databases).slice(0, 100);
@@ -184,8 +208,25 @@ export async function POST(req: NextRequest) {
       steps.push({ step: "关键词查询", status: "fail", detail: `HTTP ${kwRes.status}` });
       return apiSuccess({ steps, overall: "fail" });
     }
-    const kwData = JSON.parse(kwRes.body);
-    const rows = kwData?.result || [];
+    let kwBody = kwRes.body.trim();
+    if (kwBody.startsWith("HTTP/")) {
+      const innerSep = kwBody.indexOf("\r\n\r\n");
+      const innerSep2 = kwBody.indexOf("\n\n");
+      const sep = innerSep >= 0 ? innerSep : innerSep2;
+      if (sep > 0) kwBody = kwBody.slice(sep + (innerSep >= 0 ? 4 : 2)).trim();
+    }
+    if (!kwBody || kwBody.startsWith("<")) {
+      steps.push({ step: "关键词查询", status: "fail", detail: "服务器返回空响应或 HTML，Session 可能已过期" });
+      return apiSuccess({ steps, overall: "fail" });
+    }
+    let kwData: unknown;
+    try {
+      kwData = JSON.parse(kwBody);
+    } catch {
+      steps.push({ step: "关键词查询", status: "fail", detail: `响应不是合法 JSON：${kwBody.slice(0, 100)}` });
+      return apiSuccess({ steps, overall: "fail" });
+    }
+    const rows = (kwData as any)?.result || [];
     steps.push({
       step: "关键词查询",
       status: "success",
