@@ -155,20 +155,22 @@ interface ParsedRecord {
  * - CZ 格式（11列）: BU / mcid / MID / Name / Affiliate / Website / Base / EPC / Cap / Rate / OrderCommission
  */
 function parseExcelRows(rows: unknown[][], fileName: string, sheetName: string): ParsedRecord[] {
-  // 找 header 行（通常是第2行，index=1）
+  // 找 header 行：找到某个单元格精确等于 "mcid"（大小写不敏感）的那一行
+  // 用精确匹配而非包含匹配，避免标题行 "Recommended Advertiser List" 中的 "advertiser" 干扰
   let headerRowIdx = -1;
   for (let i = 0; i < Math.min(rows.length, 5); i++) {
-    const row = rows[i] as (string | null)[];
-    const rowStr = row.map((c) => String(c || "").toLowerCase()).join(" ");
-    if (rowStr.includes("mcid") || rowStr.includes("mid") || rowStr.includes("advertiser")) {
+    const row = rows[i] as (unknown | null)[];
+    const hasMcid = row.some((c) => String(c || "").trim().toLowerCase() === "mcid");
+    if (hasMcid) {
       headerRowIdx = i;
       break;
     }
   }
   if (headerRowIdx === -1) headerRowIdx = 1; // 默认第2行为 header
 
-  const headerRow = rows[headerRowIdx] as (string | null)[];
-  const hasBU = headerRow.some((c) => String(c || "").toUpperCase() === "BU");
+  const headerRow = rows[headerRowIdx] as (unknown | null)[];
+  // BU 列在 CZ 格式中固定为第一列，精确匹配 "BU"
+  const hasBU = String(headerRow[0] || "").trim().toUpperCase() === "BU";
 
   // 列索引偏移（CZ 格式有 BU 列在最前面）
   const offset = hasBU ? 1 : 0;
