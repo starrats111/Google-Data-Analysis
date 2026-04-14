@@ -199,18 +199,21 @@ export const GET = withLeader(async (req: NextRequest, { user }) => {
     };
   });
 
-  // ─── 第二步：服务端排序（支持 monthly_commission / active_advertisers）───
+  // ─── 第二步：只保留有人在投的商家 ───
+  const activeEntries = entriesWithComm.filter((e) => e.active_advertisers > 0);
+
+  // ─── 第三步：服务端排序（支持 monthly_commission / active_advertisers）───
   const validSortFields = ["monthly_commission", "active_advertisers"];
   const field = validSortFields.includes(sortField) ? sortField : "monthly_commission";
-  entriesWithComm.sort((a, b) => {
+  activeEntries.sort((a, b) => {
     const diff = (a[field as keyof MerchantWithComm] as number) - (b[field as keyof MerchantWithComm] as number);
     return sortOrder === "asc" ? diff : -diff;
   });
 
-  const total = entriesWithComm.length;
+  const total = activeEntries.length;
 
-  // ─── 第三步：分页 ───
-  const pagedEntries = entriesWithComm.slice((page - 1) * pageSize, page * pageSize);
+  // ─── 第四步：分页 ───
+  const pagedEntries = activeEntries.slice((page - 1) * pageSize, page * pageSize);
 
   if (pagedEntries.length === 0) {
     return apiSuccess(serializeData({ merchants: [], total, page, pageSize }));
@@ -218,7 +221,7 @@ export const GET = withLeader(async (req: NextRequest, { user }) => {
 
   const pagedUmIds = pagedEntries.flatMap((e) => e.umIds);
 
-  // ─── 第四步：仅对当前页计算花费（用于 ROI 展示）───
+  // ─── 第五步：仅对当前页计算花费（用于 ROI 展示）───
   // campaigns 数据复用全局查询结果，过滤出当前页的 um_ids
   const pagedUmIdSet = new Set(pagedUmIds.map((id) => id.toString()));
   const pagedCampaigns = allCampaignsGlobal.filter((c) => pagedUmIdSet.has(c.user_merchant_id.toString()));
