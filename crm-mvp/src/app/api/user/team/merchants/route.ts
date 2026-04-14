@@ -113,11 +113,13 @@ export const GET = withLeader(async (req: NextRequest, { user }) => {
   const allUmIds = merchantEntries.flatMap((e) => e.umIds);
 
   // 全量 campaigns（ENABLED + PAUSED，不分页）
+  // customer_id IS NOT NULL 过滤草稿广告（DRAFT-），只统计真实在 Google Ads 中运行的广告系列
   const rawAllCampaignsGlobal = await prisma.campaigns.findMany({
     where: {
       user_merchant_id: { in: allUmIds },
       is_deleted: 0,
       google_status: { not: "REMOVED" },
+      customer_id: { not: null },
     },
     select: { id: true, user_id: true, user_merchant_id: true, google_campaign_id: true, customer_id: true, google_status: true },
     orderBy: { id: "desc" },

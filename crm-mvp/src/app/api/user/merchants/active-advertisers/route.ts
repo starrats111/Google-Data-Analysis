@@ -43,11 +43,13 @@ export const GET = withUser(async (req: NextRequest, { user }) => {
   const umIds = allUserMerchants.map((um) => um.id);
   const userIdMap = new Map(allUserMerchants.map((um) => [um.id, um.user_id]));
 
-  // 查找关联的 campaigns（启用状态），按 google_campaign_id 去重
+  // 查找关联的 campaigns，按 google_campaign_id 去重
+  // customer_id IS NOT NULL 过滤掉草稿广告（DRAFT-），只统计真实在 Google Ads 中存在的广告系列
   const rawCampaigns = await prisma.campaigns.findMany({
     where: {
       user_merchant_id: { in: umIds },
       is_deleted: 0,
+      customer_id: { not: null },
     },
     select: {
       id: true,
