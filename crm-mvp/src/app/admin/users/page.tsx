@@ -1,7 +1,7 @@
 "use client";
 
 import { Table, Button, Modal, Form, Input, Select, Tag, Space, Typography, App, Popconfirm, Tooltip } from "antd";
-import { PlusOutlined, EditOutlined, DeleteOutlined, SyncOutlined, ShopOutlined } from "@ant-design/icons";
+import { PlusOutlined, EditOutlined, DeleteOutlined, SyncOutlined, ShopOutlined, ToolOutlined } from "@ant-design/icons";
 import { useState, useMemo, useCallback } from "react";
 import { useApi, mutateApi } from "@/lib/swr";
 
@@ -26,6 +26,9 @@ export default function UsersPage() {
   const [form] = Form.useForm();
   const [syncingId, setSyncingId] = useState<string | null>(null);
   const [syncResultModal, setSyncResultModal] = useState<{ open: boolean; title: string; content: string }>({ open: false, title: "", content: "" });
+  const [fixCampModal, setFixCampModal] = useState<{ open: boolean; user: User | null; step: "confirm" | "preview" | "done"; loading: boolean; previewContent: string; resultContent: string }>({
+    open: false, user: null, step: "confirm", loading: false, previewContent: "", resultContent: "",
+  });
 
   // ─── SWR 缓存用户列表 ───
   const { data: userData, isLoading: loading, mutate } = useApi<{ list: User[]; total: number }>("/api/admin/users");
@@ -95,6 +98,82 @@ export default function UsersPage() {
     }
   }, [mutate]);
 
+  // ─── 修复广告系列（删除非CF + 重编号）───
+  const handleFixCampaigns = useCallback((user: User) => {
+    setFixCampModal({ open: true, user, step: "confirm", loading: false, previewContent: "", resultContent: "" });
+  }, []);
+
+  const handleFixCampPreview = useCallback(async () => {
+    const user = fixCampModal.user;
+    if (!user) return;
+    setFixCampModal((prev) => ({ ...prev, loading: true }));
+    try {
+      const res = await mutateApi("/api/admin/fix-user-platform-campaigns", {
+        method: "POST",
+        body: { username: user.username, keep_platform: "CF", dry_run: true },
+      });
+      if (res.code === 0) {
+        const d = res.data as {
+          delete_count: number; keep_count: number; release_merchant_count: number;
+          campaigns_to_delete: { name: string; status: string }[];
+          campaigns_to_rename: { old_name: string; new_name: string }[];
+        };
+        const deleteLines = (d.campaigns_to_delete || []).map((c) => `  [-] ${c.name}  (${c.status})`).join("\n");
+        const renameLines = (d.campaigns_to_rename || []).map((r) => `  [→] ${r.old_name}\n      ↳ ${r.new_name}`).join("\n");
+        const content = [
+          `将删除非 CF 广告系列：${d.delete_count} 条`,
+          deleteLines || "  （无）",
+          "",
+          `保留并重编号 CF 广告系列：${d.keep_count} 条`,
+          renameLines || "  （无）",
+          "",
+          `关联商家将被释放：${d.release_merchant_count} 条`,
+        ].join("\n");
+        setFixCampModal((prev) => ({ ...prev, loading: false, step: "preview", previewContent: content }));
+      } else {
+        message.error(res.message || "预览失败");
+        setFixCampModal((prev) => ({ ...prev, loading: false }));
+      }
+    } catch {
+      message.error("请求失败，请稍后重试");
+      setFixCampModal((prev) => ({ ...prev, loading: false }));
+    }
+  }, [fixCampModal.user, message]);
+
+  const handleFixCampExecute = useCallback(async () => {
+    const user = fixCampModal.user;
+    if (!user) return;
+    setFixCampModal((prev) => ({ ...prev, loading: true }));
+    try {
+      const res = await mutateApi("/api/admin/fix-user-platform-campaigns", {
+        method: "POST",
+        body: { username: user.username, keep_platform: "CF", dry_run: false },
+      });
+      if (res.code === 0) {
+        const d = res.data as {
+          deleted_campaigns: number; renamed_campaigns: number; released_merchants: number;
+          details: { deleted: { name: string }[]; renamed: { old_name: string; new_name: string }[]; kept_unchanged: { name: string }[] };
+        };
+        const renamedLines = (d.details?.renamed || []).map((r) => `  ${r.old_name}\n  ↳ ${r.new_name}`).join("\n");
+        const content = [
+          `✅ 操作完成`,
+          `  已删除非CF广告系列：${d.deleted_campaigns} 条`,
+          `  已重命名CF广告系列：${d.renamed_campaigns} 条`,
+          `  释放商家：${d.released_merchants} 条`,
+          renamedLines ? `\n重命名详情：\n${renamedLines}` : "",
+        ].filter(Boolean).join("\n");
+        setFixCampModal((prev) => ({ ...prev, loading: false, step: "done", resultContent: content }));
+        mutate();
+      } else {
+        message.error(res.message || "操作失败");
+        setFixCampModal((prev) => ({ ...prev, loading: false }));
+      }
+    } catch {
+      message.error("请求失败，请稍后重试");
+      setFixCampModal((prev) => ({ ...prev, loading: false }));
+    }
+  }, [fixCampModal.user, message, mutate]);
+
   // ─── columns ───
   const columns = useMemo(() => [
     { title: "ID", dataIndex: "id", width: 70 },
@@ -130,13 +209,22 @@ export default function UsersPage() {
               同步商家
             </Button>
           </Tooltip>
+          <Tooltip title="删除非CF平台广告系列，并对CF广告系列从001重新编号">
+            <Button
+              size="small"
+              icon={<ToolOutlined />}
+              onClick={() => handleFixCampaigns(record)}
+            >
+              修复广告系列
+            </Button>
+          </Tooltip>
           <Popconfirm title="确认删除？" onConfirm={() => handleDelete(record.id)}>
             <Button size="small" danger icon={<DeleteOutlined />}>删除</Button>
           </Popconfirm>
         </Space>
       ),
     },
-  ], [handleEdit, handleDelete, handleSync, syncingId]);
+  ], [handleEdit, handleDelete, handleSync, handleFixCampaigns, syncingId]);
 
   return (
     <div>
@@ -204,6 +292,57 @@ export default function UsersPage() {
         <pre style={{ whiteSpace: "pre-wrap", fontFamily: "monospace", fontSize: 13, background: "#f5f5f5", padding: 12, borderRadius: 4 }}>
           {syncResultModal.content}
         </pre>
+      </Modal>
+
+      {/* 修复广告系列 Modal */}
+      <Modal
+        title={`修复广告系列 — ${fixCampModal.user?.username}`}
+        open={fixCampModal.open}
+        onCancel={() => setFixCampModal((prev) => ({ ...prev, open: false }))}
+        footer={
+          fixCampModal.step === "confirm" ? (
+            <Space>
+              <Button onClick={() => setFixCampModal((prev) => ({ ...prev, open: false }))}>取消</Button>
+              <Button type="primary" loading={fixCampModal.loading} onClick={handleFixCampPreview}>
+                预览变更
+              </Button>
+            </Space>
+          ) : fixCampModal.step === "preview" ? (
+            <Space>
+              <Button onClick={() => setFixCampModal((prev) => ({ ...prev, step: "confirm" }))}>返回</Button>
+              <Button type="primary" danger loading={fixCampModal.loading} onClick={handleFixCampExecute}>
+                确认执行
+              </Button>
+            </Space>
+          ) : (
+            <Button type="primary" onClick={() => setFixCampModal((prev) => ({ ...prev, open: false }))}>
+              关闭
+            </Button>
+          )
+        }
+        width={680}
+      >
+        {fixCampModal.step === "confirm" && (
+          <div>
+            <p>将对用户 <strong>{fixCampModal.user?.username}</strong> 执行以下操作：</p>
+            <ul style={{ paddingLeft: 20 }}>
+              <li>软删除所有 <strong>非 CF 平台</strong>（如 LH1、LH11 等）的广告系列</li>
+              <li>将保留的 CF 广告系列按创建顺序从 <strong>001</strong> 开始重新编号</li>
+              <li>释放仅关联到被删除广告系列的商家</li>
+            </ul>
+            <p style={{ color: "#faad14" }}>⚠️ 此操作不可逆，建议先点击「预览变更」确认后再执行。</p>
+          </div>
+        )}
+        {fixCampModal.step === "preview" && (
+          <pre style={{ whiteSpace: "pre-wrap", fontFamily: "monospace", fontSize: 12, background: "#f5f5f5", padding: 12, borderRadius: 4, maxHeight: 420, overflow: "auto" }}>
+            {fixCampModal.previewContent}
+          </pre>
+        )}
+        {fixCampModal.step === "done" && (
+          <pre style={{ whiteSpace: "pre-wrap", fontFamily: "monospace", fontSize: 12, background: "#f6ffed", padding: 12, borderRadius: 4, maxHeight: 420, overflow: "auto" }}>
+            {fixCampModal.resultContent}
+          </pre>
+        )}
       </Modal>
     </div>
   );
