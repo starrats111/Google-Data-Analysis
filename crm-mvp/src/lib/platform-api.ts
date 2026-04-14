@@ -429,7 +429,11 @@ export async function fetchAllMerchants(
         if (!seen.has(m.merchant_id)) { seen.add(m.merchant_id); allMerchants.push(m); }
       }
 
-      if (pageRawCount < actualPageSize) break;
+      // 仅当 totalPages 是由 fallback（200）估算时，才用末页判断提前终止；
+      // 若 API 已返回准确总数（totalPages 由 apiTotal 计算），则完全信任总页数，
+      // 避免某页因网络抖动/限流返回不完整数据时错误截断后续分页。
+      const totalPagesFromApi = apiTotal > 0 && actualPageSize > 0;
+      if (!totalPagesFromApi && pageRawCount < actualPageSize) break;
     }
 
     return { merchants: allMerchants };
