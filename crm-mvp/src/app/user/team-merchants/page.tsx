@@ -194,8 +194,10 @@ export default function TeamMerchantsPage() {
     {
       title: "在投人数",
       dataIndex: "active_advertisers",
-      width: 90,
+      width: 100,
       align: "center" as const,
+      sorter: true,
+      sortOrder: sortField === "active_advertisers" ? (sortOrder === "asc" ? "ascend" : "descend") : undefined,
       render: (v: number, rec: TeamMerchant) =>
         v > 0 ? (
           <Button size="small" type="link" style={{ padding: 0, fontWeight: 600 }} onClick={() => showActiveAdv(rec)}>

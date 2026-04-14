@@ -109,8 +109,45 @@ export const GET = withLeader(async (req: NextRequest, { user }) => {
   const txnMonthStart = parseCSTDateStart(monthStartStr);
   const txnNextMonth = parseCSTDateStart(nextMonthStr);
 
-  // ─── 第一步：全量计算佣金（所有商家，不分页）───
+  // ─── 第一步：全量查询 campaigns（所有商家，用于在投人数 + 后续花费）───
   const allUmIds = merchantEntries.flatMap((e) => e.umIds);
+
+  // 全量 campaigns（ENABLED + PAUSED，不分页）
+  const rawAllCampaignsGlobal = await prisma.campaigns.findMany({
+    where: {
+      user_merchant_id: { in: allUmIds },
+      is_deleted: 0,
+      google_status: { not: "REMOVED" },
+    },
+    select: { id: true, user_id: true, user_merchant_id: true, google_campaign_id: true, customer_id: true, google_status: true },
+    orderBy: { id: "desc" },
+  });
+
+  // 按 user_id + google_campaign_id 去重
+  const gcidGroupsGlobal = new Map<string, typeof rawAllCampaignsGlobal>();
+  for (const c of rawAllCampaignsGlobal) {
+    const key = `${c.user_id}:${c.google_campaign_id || String(c.id)}`;
+    if (!gcidGroupsGlobal.has(key)) gcidGroupsGlobal.set(key, []);
+    gcidGroupsGlobal.get(key)!.push(c);
+  }
+  const allCampaignsGlobal: typeof rawAllCampaignsGlobal = [];
+  for (const [, group] of gcidGroupsGlobal) {
+    group.sort((a, b) => {
+      if (a.customer_id && !b.customer_id) return -1;
+      if (!a.customer_id && b.customer_id) return 1;
+      return Number(b.id) - Number(a.id);
+    });
+    allCampaignsGlobal.push(group[0]);
+  }
+
+  // 全局在投人数：每个 user_merchant_id → 有几个不同用户在 ENABLED 投放
+  const activeUsersByUmGlobal = new Map<string, Set<string>>();
+  for (const c of allCampaignsGlobal) {
+    if (c.google_status !== "ENABLED") continue;
+    const umKey = c.user_merchant_id.toString();
+    if (!activeUsersByUmGlobal.has(umKey)) activeUsersByUmGlobal.set(umKey, new Set());
+    activeUsersByUmGlobal.get(umKey)!.add(c.user_id.toString());
+  }
 
   const commissionAgg = await prisma.$queryRawUnsafe<
     { user_merchant_id: bigint; total_commission: number; rejected_commission: number }[]
@@ -135,28 +172,33 @@ export const GET = withLeader(async (req: NextRequest, { user }) => {
     });
   }
 
-  // 为每个商家计算佣金汇总（用于排序）
+  // 为每个商家计算佣金 + 在投人数（用于排序）
   type MerchantWithComm = (typeof merchantEntries)[0] & {
     monthly_commission: number;
     net_commission: number;
+    active_advertisers: number;
   };
   const entriesWithComm: MerchantWithComm[] = merchantEntries.map((entry) => {
     let totalCommission = 0;
     let totalRejected = 0;
+    const activeUserSet = new Set<string>();
     for (const umId of entry.umIds) {
-      const c = commByUm.get(umId.toString());
+      const umKey = umId.toString();
+      const c = commByUm.get(umKey);
       if (c) { totalCommission += c.total; totalRejected += c.rejected; }
+      const activeUsers = activeUsersByUmGlobal.get(umKey);
+      if (activeUsers) { for (const uid of activeUsers) activeUserSet.add(uid); }
     }
     return {
       ...entry,
       monthly_commission: Math.round(totalCommission * 100) / 100,
       net_commission: Math.round((totalCommission - totalRejected) * 100) / 100,
+      active_advertisers: activeUserSet.size,
     };
   });
 
-  // ─── 第二步：服务端排序（支持 monthly_commission / roi，默认佣金降序）───
-  // roi 需要花费，此阶段先按佣金排；roi 排序在后续步骤计算花费后实现（本期先支持佣金排序）
-  const validSortFields = ["monthly_commission"];
+  // ─── 第二步：服务端排序（支持 monthly_commission / active_advertisers）───
+  const validSortFields = ["monthly_commission", "active_advertisers"];
   const field = validSortFields.includes(sortField) ? sortField : "monthly_commission";
   entriesWithComm.sort((a, b) => {
     const diff = (a[field as keyof MerchantWithComm] as number) - (b[field as keyof MerchantWithComm] as number);
@@ -174,67 +216,28 @@ export const GET = withLeader(async (req: NextRequest, { user }) => {
 
   const pagedUmIds = pagedEntries.flatMap((e) => e.umIds);
 
-  // ─── 第四步：仅对当前页计算花费和在投人数 ───
-  const rawAllCampaigns = await prisma.campaigns.findMany({
-    where: {
-      user_merchant_id: { in: pagedUmIds },
-      is_deleted: 0,
-      google_status: { not: "REMOVED" },
-    },
-    select: { id: true, user_id: true, user_merchant_id: true, google_campaign_id: true, customer_id: true, google_status: true },
-    orderBy: { id: "desc" },
-  });
+  // ─── 第四步：仅对当前页计算花费（用于 ROI 展示）───
+  // campaigns 数据复用全局查询结果，过滤出当前页的 um_ids
+  const pagedUmIdSet = new Set(pagedUmIds.map((id) => id.toString()));
+  const pagedCampaigns = allCampaignsGlobal.filter((c) => pagedUmIdSet.has(c.user_merchant_id.toString()));
+  const pagedRawCampaigns = rawAllCampaignsGlobal.filter((c) => pagedUmIdSet.has(c.user_merchant_id.toString()));
 
-  // 按 user_id + google_campaign_id 去重
-  const gcidGroups = new Map<string, typeof rawAllCampaigns>();
-  for (const c of rawAllCampaigns) {
-    const key = `${c.user_id}:${c.google_campaign_id || String(c.id)}`;
-    if (!gcidGroups.has(key)) gcidGroups.set(key, []);
-    gcidGroups.get(key)!.push(c);
+  // 当前页主记录 ID
+  const pagedPrimaryCampaignIds = pagedCampaigns.map((c) => c.id);
+  // 当前页重复记录 ID（用于花费合并）
+  const pagedGcidToPrimary = new Map<string, string>();
+  for (const c of pagedCampaigns) {
+    pagedGcidToPrimary.set(`${c.user_id}:${c.google_campaign_id || String(c.id)}`, c.id.toString());
   }
-  const allCampaigns: typeof rawAllCampaigns = [];
-  const extraCampaignIds: bigint[] = [];
-  for (const [, group] of gcidGroups) {
-    group.sort((a, b) => {
-      if (a.customer_id && !b.customer_id) return -1;
-      if (!a.customer_id && b.customer_id) return 1;
-      return Number(b.id) - Number(a.id);
-    });
-    allCampaigns.push(group[0]);
-    for (let i = 1; i < group.length; i++) extraCampaignIds.push(group[i].id);
+  const pagedDupToGcid = new Map<string, string>();
+  for (const c of pagedRawCampaigns) {
+    pagedDupToGcid.set(c.id.toString(), `${c.user_id}:${c.google_campaign_id || String(c.id)}`);
   }
+  const pagedExtraIds = pagedRawCampaigns
+    .filter((c) => !pagedCampaigns.find((p) => p.id === c.id))
+    .map((c) => c.id);
 
-  // 在投人数（ENABLED）
-  const activeUsersByUm = new Map<string, Set<string>>();
-  for (const c of allCampaigns) {
-    if (c.google_status !== "ENABLED") continue;
-    const umKey = c.user_merchant_id.toString();
-    if (!activeUsersByUm.has(umKey)) activeUsersByUm.set(umKey, new Set());
-    activeUsersByUm.get(umKey)!.add(c.user_id.toString());
-  }
-
-  // 花费聚合
-  const dupIdToGcid = new Map<string, string>();
-  for (const c of rawAllCampaigns) {
-    dupIdToGcid.set(c.id.toString(), `${c.user_id}:${c.google_campaign_id || String(c.id)}`);
-  }
-  const gcidToPrimaryId = new Map<string, string>();
-  for (const c of allCampaigns) {
-    gcidToPrimaryId.set(`${c.user_id}:${c.google_campaign_id || String(c.id)}`, c.id.toString());
-  }
-  const campaignToUm = new Map<string, string>();
-  for (const c of allCampaigns) campaignToUm.set(c.id.toString(), c.user_merchant_id.toString());
-  for (const c of rawAllCampaigns) {
-    if (campaignToUm.has(c.id.toString())) continue;
-    const gcidKey = dupIdToGcid.get(c.id.toString());
-    const primaryId = gcidKey ? gcidToPrimaryId.get(gcidKey) : undefined;
-    if (primaryId) {
-      const umKey = campaignToUm.get(primaryId);
-      if (umKey) campaignToUm.set(c.id.toString(), umKey);
-    }
-  }
-
-  const allIdsForStats = [...allCampaigns.map((c) => c.id), ...extraCampaignIds];
+  const allIdsForStats = [...pagedPrimaryCampaignIds, ...pagedExtraIds];
   const rawStatsAgg = allIdsForStats.length > 0
     ? await prisma.ads_daily_stats.groupBy({
         by: ["campaign_id"],
@@ -247,10 +250,22 @@ export const GET = withLeader(async (req: NextRequest, { user }) => {
       })
     : [];
 
+  const campaignToUm = new Map<string, string>();
+  for (const c of pagedCampaigns) campaignToUm.set(c.id.toString(), c.user_merchant_id.toString());
+  for (const c of pagedRawCampaigns) {
+    if (campaignToUm.has(c.id.toString())) continue;
+    const gcidKey = pagedDupToGcid.get(c.id.toString());
+    const primaryId = gcidKey ? pagedGcidToPrimary.get(gcidKey) : undefined;
+    if (primaryId) {
+      const umKey = campaignToUm.get(primaryId);
+      if (umKey) campaignToUm.set(c.id.toString(), umKey);
+    }
+  }
+
   const mergedCostByCampaign = new Map<string, number>();
   for (const s of rawStatsAgg) {
-    const gcidKey = dupIdToGcid.get(s.campaign_id.toString());
-    const primaryId = gcidKey ? gcidToPrimaryId.get(gcidKey) : s.campaign_id.toString();
+    const gcidKey = pagedDupToGcid.get(s.campaign_id.toString());
+    const primaryId = gcidKey ? pagedGcidToPrimary.get(gcidKey) : s.campaign_id.toString();
     const key = primaryId || s.campaign_id.toString();
     const cost = Number(s._sum.cost || 0);
     if (!mergedCostByCampaign.has(key) || cost > mergedCostByCampaign.get(key)!) {
@@ -268,12 +283,8 @@ export const GET = withLeader(async (req: NextRequest, { user }) => {
   // ─── 组装结果 ───
   const merchants = pagedEntries.map((entry) => {
     let totalCost = 0;
-    const activeUserSet = new Set<string>();
     for (const umId of entry.umIds) {
-      const umKey = umId.toString();
-      totalCost += costByUm.get(umKey) || 0;
-      const activeUsers = activeUsersByUm.get(umKey);
-      if (activeUsers) { for (const uid of activeUsers) activeUserSet.add(uid); }
+      totalCost += costByUm.get(umId.toString()) || 0;
     }
     const roi = totalCost > 0 ? ((entry.net_commission - totalCost) / totalCost) * 100 : 0;
     return {
@@ -283,7 +294,7 @@ export const GET = withLeader(async (req: NextRequest, { user }) => {
       merchant_name: entry.merchant_name,
       merchant_url: entry.merchant_url,
       category: entry.category,
-      active_advertisers: activeUserSet.size,
+      active_advertisers: entry.active_advertisers,
       monthly_commission: entry.monthly_commission,
       roi: Math.round(roi * 10) / 10,
       total_cost: Math.round(totalCost * 100) / 100,
