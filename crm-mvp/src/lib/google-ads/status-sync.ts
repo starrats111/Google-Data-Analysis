@@ -107,22 +107,19 @@ export async function syncUserCampaignStatuses(userId: bigint): Promise<SyncResu
         const existing = campaignMap.get(s.campaign_id);
 
         if (existing) {
-          // 更新状态（不覆盖 campaign_name，防止冲突）
-          const needsUpdate =
-            existing.google_status !== s.status ||
-            (!existing.customer_id && s.customer_id);
-          if (needsUpdate) {
-            const updateData: Record<string, unknown> = {
-              google_status: s.status,
-              last_google_sync_at: new Date(),
-            };
-            if (!existing.customer_id && s.customer_id) {
-              updateData.customer_id = s.customer_id;
-            }
-            await prisma.campaigns.update({
-              where: { id: existing.id },
-              data: updateData,
-            });
+          // 每次同步都更新 last_google_sync_at，确保时间戳准确反映最近同步时间
+          const statusChanged = existing.google_status !== s.status;
+          const cidFilling = !existing.customer_id && s.customer_id;
+          const updateData: Record<string, unknown> = {
+            last_google_sync_at: new Date(),
+          };
+          if (statusChanged) updateData.google_status = s.status;
+          if (cidFilling) updateData.customer_id = s.customer_id;
+          await prisma.campaigns.update({
+            where: { id: existing.id },
+            data: updateData,
+          });
+          if (statusChanged || cidFilling) {
             updated++;
           }
         } else {
