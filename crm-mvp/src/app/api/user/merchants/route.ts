@@ -150,9 +150,9 @@ async function batchActiveAdvertisers(merchants: { merchant_id: string; platform
 
   const umIds = allClaimed.map(um => um.id);
 
-  // 查启用的 campaigns
+  // 查启用的 campaigns（customer_id IS NOT NULL：排除草稿/幽灵 campaign，只统计真实在 Google Ads 运行的）
   const campaigns = await prisma.campaigns.findMany({
-    where: { user_merchant_id: { in: umIds }, is_deleted: 0, google_status: "ENABLED" },
+    where: { user_merchant_id: { in: umIds }, is_deleted: 0, google_status: "ENABLED", customer_id: { not: null } },
     select: { user_id: true, user_merchant_id: true },
   });
 
@@ -256,7 +256,7 @@ export const GET = withUser(async (req: NextRequest, { user }) => {
     const rawCampaigns = allMerchantIds.length > 0
       ? await prisma.campaigns.findMany({
           where: { user_id: userId, is_deleted: 0, user_merchant_id: { in: allMerchantIds } },
-          select: { id: true, user_merchant_id: true, google_status: true, google_campaign_id: true, campaign_name: true, last_google_sync_at: true },
+          select: { id: true, user_merchant_id: true, google_status: true, google_campaign_id: true, campaign_name: true, last_google_sync_at: true, customer_id: true },
         })
       : [];
 
@@ -277,22 +277,29 @@ export const GET = withUser(async (req: NextRequest, { user }) => {
     }
     const campaigns = [...gcidDedup.values()];
 
-    // 按 user_merchant_id 选出代表广告：ENABLED 优先
-    const campaignMap = new Map<string, { status: string | null; campaignName: string | null; campaignId: string | null }>();
+    // 按 user_merchant_id 选出代表广告：
+    // 1. 有 customer_id（已发布到 Google Ads 的真实 campaign）优先于幽灵草稿
+    // 2. 同层级内取最近同步时间最新的
+    // 不使用 ENABLED 覆盖 PAUSED 逻辑：应以最新同步状态为准，避免旧 ENABLED 幽灵 campaign 覆盖当前 PAUSED 的真实状态
+    const campaignMap = new Map<string, { status: string | null; campaignName: string | null; campaignId: string | null; syncTime: number; hasCid: boolean }>();
     for (const c of campaigns) {
       const key = c.user_merchant_id.toString();
       const existing = campaignMap.get(key);
-      const hasGcid = !!c.google_campaign_id;
-      const existingHasGcid = !!existing?.campaignId;
+      const hasCid = !!c.customer_id;
+      const existingHasCid = existing?.hasCid ?? false;
+      const cSyncTime = c.last_google_sync_at?.getTime() || 0;
+      const existingSyncTime = existing?.syncTime || 0;
       if (
         !existing
-        || (hasGcid && !existingHasGcid)
-        || (hasGcid === existingHasGcid && c.google_status === "ENABLED" && existing.status !== "ENABLED")
+        || (hasCid && !existingHasCid)                           // 真实 campaign > 幽灵草稿
+        || (hasCid === existingHasCid && cSyncTime > existingSyncTime)  // 同层级取最新同步
       ) {
         campaignMap.set(key, {
           status: c.google_status,
           campaignName: c.campaign_name,
           campaignId: c.google_campaign_id,
+          syncTime: cSyncTime,
+          hasCid,
         });
       }
     }
