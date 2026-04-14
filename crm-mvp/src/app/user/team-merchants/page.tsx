@@ -101,13 +101,17 @@ export default function TeamMerchantsPage() {
   const [searchInput, setSearchInput] = useState("");
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
+  const [sortField, setSortField] = useState("monthly_commission");
+  const [sortOrder, setSortOrder] = useState<"asc" | "desc">("desc");
 
   const params = useMemo(() => ({
     page,
     pageSize: 50,
+    sortField,
+    sortOrder,
     ...(platform ? { platform } : {}),
     ...(search ? { search } : {}),
-  }), [page, platform, search]);
+  }), [page, platform, search, sortField, sortOrder]);
 
   const { data, isLoading, mutate } = useApiWithParams<ApiResponse>(
     "/api/user/team/merchants",
@@ -119,7 +123,19 @@ export default function TeamMerchantsPage() {
   const total = data?.total || 0;
 
   const doSearch = useCallback(() => { setSearch(searchInput); setPage(1); }, [searchInput]);
-  const doReset = useCallback(() => { setSearchInput(""); setSearch(""); setPlatform(""); setPage(1); }, []);
+  const doReset = useCallback(() => {
+    setSearchInput(""); setSearch(""); setPlatform(""); setPage(1);
+    setSortField("monthly_commission"); setSortOrder("desc");
+  }, []);
+
+  const handleTableChange = useCallback((_p: unknown, _f: unknown, sorter: any) => {
+    const s = Array.isArray(sorter) ? sorter[0] : sorter;
+    if (s?.field && s?.order) {
+      setSortField(s.field as string);
+      setSortOrder(s.order === "ascend" ? "asc" : "desc");
+      setPage(1);
+    }
+  }, []);
 
   // 在投详情弹窗
   const [advModal, setAdvModal] = useState(false);
@@ -194,7 +210,8 @@ export default function TeamMerchantsPage() {
       dataIndex: "monthly_commission",
       width: 110,
       align: "right" as const,
-      sorter: (a: TeamMerchant, b: TeamMerchant) => a.monthly_commission - b.monthly_commission,
+      sorter: true,
+      sortOrder: sortField === "monthly_commission" ? (sortOrder === "asc" ? "ascend" : "descend") : undefined,
       render: (v: number) => (
         <span style={{ color: v > 0 ? "#52c41a" : "#999", fontWeight: v > 0 ? 600 : 400 }}>
           ${v.toFixed(2)}
@@ -206,13 +223,12 @@ export default function TeamMerchantsPage() {
       dataIndex: "roi",
       width: 90,
       align: "right" as const,
-      sorter: (a: TeamMerchant, b: TeamMerchant) => a.roi - b.roi,
       render: (v: number) => {
         const color = v > 0 ? "#52c41a" : v < 0 ? "#ff4d4f" : "#999";
         return <span style={{ color, fontWeight: 600 }}>{v.toFixed(1)}%</span>;
       },
     },
-  ], [showActiveAdv]);
+  ], [showActiveAdv, sortField, sortOrder]);
 
   // 在投详情弹窗汇总数据
   const advTotalCost = advList.reduce((s, r) => s + parseFloat(r.total_cost || "0"), 0);
@@ -273,6 +289,7 @@ export default function TeamMerchantsPage() {
           loading={isLoading}
           size="small"
           scroll={{ x: 800 }}
+          onChange={handleTableChange}
           pagination={{
             current: page,
             pageSize: 50,
