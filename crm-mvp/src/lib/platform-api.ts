@@ -117,10 +117,11 @@ export interface PlatformMerchant {
 const RETRYABLE_STATUS = new Set([502, 503, 504]);
 const MAX_RETRIES = 2;
 
-// 商家列表 API 超时：30s，最多重试 1 次（单页最长 30+2+30=62s）
-// RW 平台实测 page1~page2 响应 17~25s，需要更长超时
-const MERCHANT_API_TIMEOUT = 30000;
-const MERCHANT_API_MAX_RETRIES = 1;
+// 商家列表 API 超时：60s，最多重试 2 次（单页最长 60+2+60+4+60=186s）
+// PM 实测大账号（16k+商家）单页响应偶尔超 30s；RW page1~page2 响应 17~25s。
+// 增大超时与重试次数，确保每页都能完整拉回，避免大账号被截断。
+const MERCHANT_API_TIMEOUT = 60000;
+const MERCHANT_API_MAX_RETRIES = 2;
 
 async function callPlatformApi(
   config: PlatformApiConfig,
@@ -404,10 +405,18 @@ export async function fetchAllMerchants(
 
       for (let retry = 0; retry <= MAX_EMPTY_RETRIES; retry++) {
         if (retry > 0) {
-          console.warn(`[MerchantSync] ${platform} page ${page} 空响应，${(retry + 1) * 2}s 后重试 (${retry}/${MAX_EMPTY_RETRIES})`);
+          console.warn(`[MerchantSync] ${platform} page ${page} 空/错误响应，${(retry + 1) * 2}s 后重试 (${retry}/${MAX_EMPTY_RETRIES})`);
           await sleep((retry + 1) * 2000);
         }
-        pageData = await callPlatformApi(config, token, page, effectiveRelFilter);
+        try {
+          pageData = await callPlatformApi(config, token, page, effectiveRelFilter);
+        } catch (pageErr) {
+          // 单页请求彻底失败（超时/网络），降级为空页处理，让 consecutiveEmpty 机制决定是否放弃，
+          // 而不是直接 throw 中断整个同步（避免大账号因一页故障丢失后续数百页数据）
+          console.warn(`[MerchantSync] ${platform} page ${page} 请求失败 (${retry}/${MAX_EMPTY_RETRIES}): ${pageErr instanceof Error ? pageErr.message : String(pageErr)}`);
+          pageRawCount = 0;
+          continue;
+        }
         const pageRoot = ((pageData as any).data || pageData) as Record<string, unknown>;
         const pageRawList = (pageRoot.list || pageRoot.items || pageRoot.merchants || []) as unknown[];
         pageRawCount = Array.isArray(pageRawList) ? pageRawList.length : 0;
