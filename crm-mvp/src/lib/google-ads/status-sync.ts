@@ -53,9 +53,18 @@ export async function syncUserCampaignStatuses(userId: bigint): Promise<SyncResu
           is_available: { not: "D" },
         },
       });
-      if (cids.length === 0) continue;
 
-      const customerIds = cids.map((c) => c.customer_id);
+      // 当 mcc_cid_accounts 为空时，从已有 campaigns 的 customer_id 字段推导 CID 列表
+      let customerIds = cids.map((c) => c.customer_id);
+      if (customerIds.length === 0) {
+        const campaignCids = await prisma.campaigns.findMany({
+          where: { user_id: userId, mcc_id: mcc.id, is_deleted: 0, customer_id: { not: null } },
+          select: { customer_id: true },
+          distinct: ["customer_id"],
+        });
+        customerIds = campaignCids.map((c) => c.customer_id!).filter(Boolean);
+      }
+      if (customerIds.length === 0) continue;
       const { statuses, disabledCids } = await fetchAllCampaignStatuses(credentials, customerIds);
       let updated = 0;
       let newCampaigns = 0;

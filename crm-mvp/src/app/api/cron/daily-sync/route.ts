@@ -5,6 +5,7 @@ import { getExchangeRate, preloadRates } from "@/lib/exchange-rate";
 import { nowCST, parseCSTDateStart, dateColumnStart } from "@/lib/date-utils";
 import { autoRepairPublishedArticles } from "@/lib/article-auto-repair";
 import { getRedirectedMerchantKeys } from "@/lib/merchant-ownership-rules";
+import { sqlAffiliateTxnValidPlatformConnection } from "@/lib/affiliate-transaction-sql";
 
 const CRON_SECRET = process.env.CRON_SECRET || "";
 
@@ -468,9 +469,23 @@ async function syncAllCampaignStatuses(): Promise<unknown> {
       const cids = await prisma.mcc_cid_accounts.findMany({
         where: { mcc_account_id: mcc.id, is_deleted: 0, status: "active" },
       });
-      if (cids.length === 0) continue;
 
-      const customerIds = cids.map((c) => c.customer_id);
+      // 当 mcc_cid_accounts 为空时，从已有 campaigns 的 customer_id 字段推导 CID 列表
+      // 避免因 CID 表未注册而跳过整个 MCC，导致 campaigns 状态永久无法更新
+      let customerIds = cids.map((c) => c.customer_id);
+      if (customerIds.length === 0) {
+        const campaignCids = await prisma.campaigns.findMany({
+          where: { mcc_id: mcc.id, is_deleted: 0, customer_id: { not: null } },
+          select: { customer_id: true },
+          distinct: ["customer_id"],
+        });
+        customerIds = campaignCids.map((c) => c.customer_id!).filter(Boolean);
+        if (customerIds.length > 0) {
+          log(`  MCC ${mcc.mcc_name || mcc.mcc_id}: no active CIDs in table, derived ${customerIds.length} CIDs from campaigns`);
+        }
+      }
+      if (customerIds.length === 0) continue;
+
       log(`  MCC ${mcc.mcc_name || mcc.mcc_id}: syncing statuses for ${customerIds.length} CIDs...`);
 
       const { statuses, disabledCids } = await fetchAllCampaignStatuses(credentials, customerIds);
@@ -574,7 +589,9 @@ async function syncAllUsersTransactions(): Promise<unknown> {
         where: { user_id: userId, is_deleted: 0, status: "connected" },
         select: { id: true, platform: true, account_name: true, api_key: true },
       });
-      const validConns = conns.filter(c => c.api_key && c.api_key.length > 5);
+      const validConns = conns
+        .filter((c) => c.api_key && c.api_key.length > 5)
+        .sort((a, b) => Number(b.id) - Number(a.id));
       if (validConns.length === 0) {
         results[user.username] = { skipped: true, reason: "no connections" };
         continue;
@@ -605,6 +622,10 @@ async function syncAllUsersTransactions(): Promise<unknown> {
         const platform = normalizePlatformCode(conn.platform);
         try {
           const r = await fetchAllTransactions(platform, conn.api_key!, startStr, endStr);
+          if (r.error && r.transactions.length === 0) {
+            log(`    ${conn.account_name || platform} API: ${r.error}`);
+            continue;
+          }
           if (!r.transactions.length) continue;
 
           // 预清理：删除数据库中以 order_id 作为 transaction_id 的旧记录（防重复）
@@ -640,16 +661,17 @@ async function syncAllUsersTransactions(): Promise<unknown> {
                   order_amount: txn.order_amount || 0, commission_amount: txn.commission_amount || 0,
                   currency: "USD", status: txn.status, raw_status: txn.raw_status || "",
                 },
-                update: {
-                  user_id: BigInt(rule.target_user_id),
-                  user_merchant_id: BigInt(rule.target_user_merchant_id),
-                  campaign_id: BigInt(rule.target_campaign_id),
-                  commission_amount: txn.commission_amount || 0,
-                  status: txn.status, raw_status: txn.raw_status || "",
-                  order_amount: txn.order_amount || 0,
-                  merchant_name: txn.merchant || undefined,
-                  is_deleted: 0,
-                },
+              update: {
+                user_id: BigInt(rule.target_user_id),
+                user_merchant_id: BigInt(rule.target_user_merchant_id),
+                campaign_id: BigInt(rule.target_campaign_id),
+                commission_amount: txn.commission_amount || 0,
+                status: txn.status, raw_status: txn.raw_status || "",
+                order_amount: txn.order_amount || 0,
+                merchant_name: txn.merchant || undefined,
+                is_deleted: 0,
+                // 不覆盖 platform_connection_id：保留首次写入的联盟账号归属
+              },
               });
               totalSynced++;
               continue;
@@ -693,7 +715,6 @@ async function syncAllUsersTransactions(): Promise<unknown> {
                 currency: "USD", status: txn.status, raw_status: txn.raw_status || "",
               },
               update: {
-                platform_connection_id: conn.id,
                 merchant_id: mid,
                 merchant_name: merchantName || undefined,
                 order_amount: txn.order_amount || 0,
@@ -702,6 +723,7 @@ async function syncAllUsersTransactions(): Promise<unknown> {
                 raw_status: txn.raw_status || "",
                 is_deleted: 0,
                 ...(umId !== BigInt(0) ? { user_merchant_id: umId } : {}),
+                // 不覆盖 platform_connection_id：同平台多 Key 时按连接 id 降序先同步，避免后写抢走「按账号」统计
               },
             });
             totalSynced++;
@@ -873,6 +895,7 @@ async function updateDailyStatsCommission(userId: bigint, statsStartDate: Date, 
       COUNT(*) as order_count
     FROM affiliate_transactions
     WHERE user_id = ? AND is_deleted = 0 AND transaction_time >= ?
+      AND ${sqlAffiliateTxnValidPlatformConnection("affiliate_transactions")}
     GROUP BY user_merchant_id, DATE(transaction_time)
   `, userId, txnStartDate);
 
