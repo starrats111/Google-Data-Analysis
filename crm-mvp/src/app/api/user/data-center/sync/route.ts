@@ -8,6 +8,7 @@ import { todayCST, yesterdayCST, nowCST, parseCSTDateStart, parseCSTDateEndExclu
 import { getExchangeRate, preloadRates } from "@/lib/exchange-rate";
 import { syncMerchantStatusForUser, parseCampaignNameFull } from "@/lib/campaign-merchant-link";
 import { getRedirectedMerchantKeys } from "@/lib/merchant-ownership-rules";
+import { sqlAffiliateTxnValidPlatformConnection } from "@/lib/affiliate-transaction-sql";
 
 /**
  * POST /api/user/data-center/sync
@@ -343,8 +344,10 @@ async function syncAdsData(
             operations.push(() => prisma.ads_daily_stats.update({ where: { id: existingStatsId }, data: statsData }));
             totalUpdated++;
           } else {
-            operations.push(() => prisma.ads_daily_stats.create({
-              data: { user_id: userId, user_merchant_id: BigInt(0), campaign_id: campaign!.id, date: dateObj, ...statsData },
+            operations.push(() => prisma.ads_daily_stats.upsert({
+              where: { campaign_id_date: { campaign_id: campaign!.id, date: dateObj } },
+              update: statsData,
+              create: { user_id: userId, user_merchant_id: BigInt(0), campaign_id: campaign!.id, date: dateObj, ...statsData },
             }).then(s => { recentStatsMap.set(`${campaign!.id}_${dataDate}`, s.id); }));
             totalInserted++;
           }
@@ -540,8 +543,10 @@ async function upsertSheetRowsBatch(
         });
       } else {
         inserted++;
-        await prisma.ads_daily_stats.create({
-          data: { user_id: userId, user_merchant_id: BigInt(0), campaign_id: campaign.id, date: new Date(row.date), budget: convertedBudget, cost: convertedCost, clicks: row.clicks, impressions: row.impressions, cpc: convertedCpc, data_source: "sheet" },
+        await prisma.ads_daily_stats.upsert({
+          where: { campaign_id_date: { campaign_id: campaign.id, date: new Date(row.date) } },
+          update: { budget: convertedBudget, cost: convertedCost, clicks: row.clicks, impressions: row.impressions, cpc: convertedCpc, data_source: "sheet" },
+          create: { user_id: userId, user_merchant_id: BigInt(0), campaign_id: campaign.id, date: new Date(row.date), budget: convertedBudget, cost: convertedCost, clicks: row.clicks, impressions: row.impressions, cpc: convertedCpc, data_source: "sheet" },
         });
       }
     }));
@@ -658,6 +663,7 @@ async function updateDailyStatsCommissionByRange(userId: bigint, startDate: Date
       COUNT(*) as order_count
     FROM affiliate_transactions
     WHERE user_id = ? AND is_deleted = 0 AND transaction_time >= ? AND transaction_time < ?
+      AND ${sqlAffiliateTxnValidPlatformConnection("affiliate_transactions")}
     GROUP BY user_merchant_id, DATE_FORMAT(transaction_time, '%Y-%m-%d')
   `, userId, startDate, endExclusive);
 
@@ -782,7 +788,9 @@ async function syncTransactionsInline(
       where: { user_id: userId, is_deleted: 0, status: "connected" },
       select: { id: true, platform: true, account_name: true, api_key: true },
     });
-    const validConns = connections.filter((c) => c.api_key && c.api_key.length > 5);
+    const validConns = connections
+      .filter((c) => c.api_key && c.api_key.length > 5)
+      .sort((a, b) => Number(b.id) - Number(a.id));
     if (validConns.length === 0) return { synced: 0, message: "无可用平台连接" };
 
     const cstNow = nowCST();
@@ -920,7 +928,7 @@ async function syncTransactionsInline(
                 status: txn.status, raw_status: txn.raw_status || "",
               },
               update: {
-                platform_connection_id: conn.id, merchant_id: mid,
+                merchant_id: mid,
                 ...(userMerchantId !== BigInt(0) ? { user_merchant_id: userMerchantId } : {}),
                 commission_amount: txn.commission_amount || 0,
                 status: txn.status, raw_status: txn.raw_status || "",

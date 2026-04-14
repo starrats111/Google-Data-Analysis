@@ -119,6 +119,8 @@ export async function syncUserCampaignStatuses(userId: bigint): Promise<SyncResu
         } else {
           // Google Ads 中存在但 DB 中没有 → 员工自建广告，自动入库
           const parsed = parseCampaignNameFull(s.name);
+          const rawCountry = parsed?.country || "US";
+          const targetCountry = /^[A-Z]{2,6}$/.test(rawCountry) ? rawCountry : "US";
           await prisma.campaigns.create({
             data: {
               user_id: userId,
@@ -129,7 +131,7 @@ export async function syncUserCampaignStatuses(userId: bigint): Promise<SyncResu
               customer_id: s.customer_id,
               campaign_name: s.name,
               daily_budget: s.budget_dollars,
-              target_country: parsed?.country || "US",
+              target_country: targetCountry,
               google_status: s.status,
               last_google_sync_at: new Date(),
             },

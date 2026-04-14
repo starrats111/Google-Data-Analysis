@@ -4,6 +4,7 @@ import { apiSuccess, apiError, normalizePlatformCode } from "@/lib/constants";
 import prisma from "@/lib/prisma";
 import { nowCST, parseCSTDateStart, dateColumnStart } from "@/lib/date-utils";
 import { getRedirectedMerchantKeys } from "@/lib/merchant-ownership-rules";
+import { sqlAffiliateTxnValidPlatformConnection } from "@/lib/affiliate-transaction-sql";
 
 /**
  * POST /api/user/data-center/sync-transactions
@@ -34,7 +35,9 @@ export async function POST(req: NextRequest) {
       select: { id: true, platform: true, account_name: true, api_key: true },
     });
 
-    const validConns = connections.filter((c) => c.api_key && c.api_key.length > 5);
+    const validConns = connections
+      .filter((c) => c.api_key && c.api_key.length > 5)
+      .sort((a, b) => Number(b.id) - Number(a.id));
     if (validConns.length === 0) {
       return apiError("没有可用的平台连接，请先在「个人设置 → 联盟平台连接」中配置 API Key", 400);
     }
@@ -207,7 +210,7 @@ export async function POST(req: NextRequest) {
               commission_amount: newComm, currency: "USD", status: txn.status, raw_status: txn.raw_status || "",
             },
             update: {
-              platform_connection_id: conn.id, merchant_id: merchantId,
+              merchant_id: merchantId,
               ...(userMerchantId !== BigInt(0) ? { user_merchant_id: userMerchantId } : {}),
               commission_amount: newComm,
               status: txn.status, raw_status: txn.raw_status || "",
@@ -406,6 +409,7 @@ async function updateDailyStatsCommission(userId: bigint, statsStartDate: Date, 
       COUNT(*) as order_count
     FROM affiliate_transactions
     WHERE user_id = ? AND is_deleted = 0 AND transaction_time >= ?
+      AND ${sqlAffiliateTxnValidPlatformConnection("affiliate_transactions")}
     GROUP BY user_merchant_id, DATE_FORMAT(transaction_time, '%Y-%m-%d')
   `, userId, txnStartDate);
 
@@ -491,10 +495,13 @@ async function updateDailyStatsCommission(userId: bigint, statsStartDate: Date, 
     }
 
     if (!wrote) {
-      ops.push(() => prisma.ads_daily_stats.create({
-        data: {
+      const txnDate = new Date(`${txnDateStr}T00:00:00.000Z`);
+      ops.push(() => prisma.ads_daily_stats.upsert({
+        where: { campaign_id_date: { campaign_id: campaignIds[0], date: txnDate } },
+        update: commData,
+        create: {
           user_id: userId, user_merchant_id: umid, campaign_id: campaignIds[0],
-          date: new Date(`${txnDateStr}T00:00:00.000Z`), cost: 0, clicks: 0, impressions: 0, ...commData,
+          date: txnDate, cost: 0, clicks: 0, impressions: 0, ...commData,
         },
       }).catch(() => {}));
       updated++;
