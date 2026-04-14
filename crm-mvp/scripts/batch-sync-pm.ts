@@ -147,32 +147,34 @@ async function main() {
   log(`PM 批量同步脚本启动  DRY_RUN=${IS_DRY_RUN}  STOP_ON_ERROR=${STOP_ON_ERROR}  TARGET_USER=${TARGET_USER ?? "ALL"}`);
   log("════════════════════════════════════════");
 
-  // 查询所有有有效 PM 连接的用户（过滤明显无效 key，如 yz123456）
+  // 查询所有有有效 PM 连接
+  const PLACEHOLDER_KEYS = new Set(["yz123456", "test", "demo", "placeholder"]);
   const connections = await prisma.platform_connections.findMany({
-    where: {
-      platform: "PM",
-      is_deleted: 0,
-      status: "connected",
-    },
-    include: { users: { select: { id: true, username: true } } },
+    where: { platform: "PM", is_deleted: 0, status: "connected" },
     orderBy: { user_id: "asc" },
   });
 
-  // 过滤：key 长度要 >= 16 且不是明显占位符
-  const PLACEHOLDER_KEYS = new Set(["yz123456", "test", "demo", "placeholder"]);
+  // 过滤明显无效 key
   const validConns = connections.filter(
     (c) =>
       c.api_key &&
       c.api_key.length >= 16 &&
-      !PLACEHOLDER_KEYS.has(c.api_key.toLowerCase()) &&
-      c.users
+      !PLACEHOLDER_KEYS.has(c.api_key.toLowerCase())
   );
+
+  // 查询用户名
+  const userIds = [...new Set(validConns.map((c) => c.user_id))];
+  const users = await prisma.users.findMany({
+    where: { id: { in: userIds } },
+    select: { id: true, username: true },
+  });
+  const userMap = new Map(users.map((u) => [u.id.toString(), u.username]));
 
   // 按用户分组
   const byUser = new Map<string, { userId: bigint; username: string; conns: typeof validConns }>();
   for (const c of validConns) {
-    if (!c.users) continue;
-    const username = c.users.username;
+    const username = userMap.get(c.user_id.toString());
+    if (!username) continue;
     if (TARGET_USER && username !== TARGET_USER) continue;
     if (!byUser.has(username)) {
       byUser.set(username, { userId: c.user_id, username, conns: [] });
