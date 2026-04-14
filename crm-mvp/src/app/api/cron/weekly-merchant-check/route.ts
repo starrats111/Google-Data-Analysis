@@ -103,13 +103,16 @@ async function checkUserMerchants(
 
   const { fetchAllMerchants } = await import("@/lib/platform-api");
 
-  const platformMerchants = new Map<string, string>();
+  // joined 商家 map：key = platform:merchant_id → 商家详情
   const joinedMerchants = new Map<string, {
     platform: string; merchant_id: string; merchant_name: string;
     category: string; commission_rate: string; merchant_url: string;
     campaign_link: string; supported_regions: string[];
     conn_id: bigint;
   }>();
+  // 本次成功拉取到数据的平台集合（API 无报错且返回了至少一条数据）
+  // 用于区分"平台 API 失败"和"商家真的不在 joined 列表里"
+  const successfulPlatforms = new Set<string>();
 
   for (const conn of validConns) {
     const platform = normalizePlatformCode(conn.platform);
@@ -124,7 +127,6 @@ async function checkUserMerchants(
       const r = await fetchAllMerchants(platform, conn.api_key!);
 
       if (r.error) {
-        // API 有错误但仍返回了部分数据，记录错误并计入失败
         log(`  ${conn.account_name || platform}: API 错误 - ${r.error}`);
         const fails = (platformFailCounts.get(platform) || 0) + 1;
         platformFailCounts.set(platform, fails);
@@ -132,15 +134,16 @@ async function checkUserMerchants(
           platformCircuitOpen.add(platform);
           log(`  [熔断触发] ${platform} 连续失败 ${fails} 次，本轮后续用户跳过该平台`);
         }
+        // 有错误但仍有部分数据时继续处理，但不标记平台为成功（避免误删）
+        if (r.merchants.length === 0) continue;
       } else {
-        // 成功，重置失败计数
         platformFailCounts.set(platform, 0);
       }
 
+      // 所有平台均为 assumeAllJoined=true，fetchAllMerchants 返回的均是 joined 商家
       for (const m of r.merchants) {
-        const key = `${platform}:${m.merchant_id}`;
-        platformMerchants.set(key, m.relationship_status);
         if (m.relationship_status === "joined") {
+          const key = `${platform}:${m.merchant_id}`;
           joinedMerchants.set(key, {
             platform, merchant_id: m.merchant_id, merchant_name: m.merchant_name,
             category: m.category, commission_rate: m.commission_rate,
@@ -149,10 +152,14 @@ async function checkUserMerchants(
           });
         }
       }
+
+      // 无 error 且至少返回一条数据，才标记为成功（用于后续剔除判断）
+      if (!r.error && r.merchants.length > 0) {
+        successfulPlatforms.add(platform);
+      }
     } catch (e) {
       const errMsg = e instanceof Error ? e.message : String(e);
       log(`  ${conn.account_name || platform}: ${errMsg}`);
-      // 超时或网络异常，计入失败
       const fails = (platformFailCounts.get(platform) || 0) + 1;
       platformFailCounts.set(platform, fails);
       if (fails >= CIRCUIT_BREAKER_THRESHOLD) {
@@ -162,31 +169,38 @@ async function checkUserMerchants(
     }
   }
 
-  if (platformMerchants.size === 0) return { skipped: true, reason: "no data from API" };
+  if (joinedMerchants.size === 0 && successfulPlatforms.size === 0) {
+    return { skipped: true, reason: "no data from API" };
+  }
 
   const claimedMerchants = await prisma.user_merchants.findMany({
-    where: { user_id: userId, is_deleted: 0, status: "claimed" },
-    select: { id: true, platform: true, merchant_id: true, merchant_name: true },
+    where: { user_id: userId, is_deleted: 0, status: { in: ["claimed", "paused"] } },
+    select: { id: true, platform: true, merchant_id: true, merchant_name: true, status: true },
   });
 
   let removed = 0, added = 0;
   const removedList: { name: string; platform: string }[] = [];
   const addedList: { name: string; platform: string }[] = [];
+  // 合作状态变更通知（joined→pending/removed），需单独提醒用户
+  const statusChangedList: { name: string; platform: string }[] = [];
 
   for (const m of claimedMerchants) {
     const platform = normalizePlatformCode(m.platform);
     const key = `${platform}:${m.merchant_id}`;
-    const currentStatus = platformMerchants.get(key);
-    if (currentStatus === undefined) continue;
 
-    if (currentStatus !== "joined") {
+    // 仅处理本次成功拉取过数据的平台；未成功的平台跳过，避免因 API 失败误删商家
+    if (!successfulPlatforms.has(platform)) continue;
+
+    if (!joinedMerchants.has(key)) {
+      // 商家不在本次 joined 列表里，说明合作状态已变更（可能变为 pending / 被移除）
       await prisma.user_merchants.update({
         where: { id: m.id },
         data: { status: "available", claimed_at: null },
       });
       removed++;
       removedList.push({ name: m.merchant_name, platform });
-      log(`  REMOVED: ${m.merchant_name} [${platform}] → ${currentStatus}`);
+      statusChangedList.push({ name: m.merchant_name, platform });
+      log(`  REMOVED: ${m.merchant_name} [${platform}] → no longer in joined list`);
     }
   }
 
@@ -217,9 +231,24 @@ async function checkUserMerchants(
     log(`  ADDED: ${m.merchant_name} [${m.platform}]`);
   }
 
+  if (statusChangedList.length > 0) {
+    const names = statusChangedList.slice(0, 5).map(e => `${e.name}（${e.platform}）`).join("、");
+    const suffix = statusChangedList.length > 5 ? ` 等 ${statusChangedList.length} 个` : "";
+    const detail = statusChangedList.map(e => `· ${e.name}（${e.platform}）`).join("\n");
+    await prisma.notifications.create({
+      data: {
+        user_id: userId,
+        title: "商家合作状态变更提醒",
+        content: `以下商家已不在平台 joined 列表中，可能已变为 pending 或被移除，CRM 已自动降级为可选状态：\n${names}${suffix}\n\n请登录对应平台确认合作状态，如已恢复 joined 请重新同步商家库。\n\n详情：\n${detail}`,
+        metadata: JSON.stringify({ statusChanged: statusChangedList }),
+        type: "warning",
+      },
+    }).catch(() => {});
+  }
+
   if (removed > 0 || added > 0) {
     const parts: string[] = [];
-    if (removed > 0) parts.push(`剔除 ${removed} 个非 joined 商家`);
+    if (removed > 0) parts.push(`降级 ${removed} 个合作状态变更商家`);
     if (added > 0) parts.push(`新增 ${added} 个 joined 商家`);
     const metadata = JSON.stringify({ removed: removedList, added: addedList });
     await prisma.notifications.create({

@@ -3,6 +3,7 @@ import { serializeData } from "@/lib/auth";
 import { apiSuccess, apiError } from "@/lib/constants";
 import { withLeader } from "@/lib/api-handler";
 import prisma from "@/lib/prisma";
+import { sqlAffiliateTxnValidPlatformConnection } from "@/lib/affiliate-transaction-sql";
 import { nowCST, parseCSTDateStart, parseCSTDateEndExclusive, isTodayCST, dateColumnStart, dateColumnEndExclusive, dateColumnTodayEndExclusive } from "@/lib/date-utils";
 
 /**
@@ -118,6 +119,7 @@ export const GET = withLeader(async (req: NextRequest, { user }) => {
       FROM affiliate_transactions
       WHERE user_id = ? AND is_deleted = 0
         AND transaction_time >= ? AND transaction_time < ?
+        AND ${sqlAffiliateTxnValidPlatformConnection("affiliate_transactions")}
       GROUP BY user_merchant_id
     `, targetId, txnStart, txnEnd),
   ]);

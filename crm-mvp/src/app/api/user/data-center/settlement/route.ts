@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { getUserFromRequest, serializeData } from "@/lib/auth";
 import { apiSuccess, apiError } from "@/lib/constants";
 import prisma from "@/lib/prisma";
+import { sqlAffiliateTxnValidPlatformConnection } from "@/lib/affiliate-transaction-sql";
 import { nowCST, TZ, parseCSTDateStart, parseCSTDateEndExclusive, isTodayCST } from "@/lib/date-utils";
 
 /**
@@ -91,8 +92,10 @@ export async function GET(req: NextRequest) {
   let platformClause = "";
   if (platform) { platformClause = " AND platform = ?"; baseParams.push(platform); }
 
+  const txnConnValid = sqlAffiliateTxnValidPlatformConnection("affiliate_transactions");
   const baseWhere = `user_id IN (${uidPlaceholders}) AND is_deleted = 0
-    AND transaction_time >= ? AND transaction_time < ?${midClause}${platformClause}`;
+    AND transaction_time >= ? AND transaction_time < ?${midClause}${platformClause}
+    AND ${txnConnValid}`;
 
   // ── 1. 汇总（单次聚合，不拉原始行） ──────────────────────────────────────
   const summaryRows = await prisma.$queryRawUnsafe<{

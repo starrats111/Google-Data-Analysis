@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { getUserFromRequest, serializeData } from "@/lib/auth";
 import { apiSuccess, apiError } from "@/lib/constants";
 import prisma from "@/lib/prisma";
+import { sqlAffiliateTxnValidPlatformConnection } from "@/lib/affiliate-transaction-sql";
 import { nowCST, parseCSTDateStart, parseCSTDateEndExclusive, isTodayCST } from "@/lib/date-utils";
 
 /**
@@ -22,6 +23,8 @@ export async function GET(req: NextRequest) {
   const endDate = dateEnd
     ? (isTodayCST(dateEnd, cstNow) ? cstNow.toDate() : parseCSTDateEndExclusive(dateEnd))
     : cstNow.toDate();
+
+  const txnConnValid = sqlAffiliateTxnValidPlatformConnection("t");
 
   // ─── 维度一：按平台账号聚合 ───
   const byAccountRows = await prisma.$queryRawUnsafe<{
@@ -45,10 +48,11 @@ export async function GET(req: NextRequest) {
       SUM(CASE WHEN status = 'pending' THEN CAST(commission_amount AS DECIMAL(12,2)) ELSE 0 END) as pending_commission,
       COUNT(*) as order_count,
       SUM(CAST(order_amount AS DECIMAL(12,2))) as order_amount
-    FROM affiliate_transactions
-    WHERE user_id = ? AND is_deleted = 0
-      AND transaction_time >= ? AND transaction_time < ?
-    GROUP BY platform_connection_id, platform
+    FROM affiliate_transactions t
+    WHERE t.user_id = ? AND t.is_deleted = 0
+      AND t.transaction_time >= ? AND t.transaction_time < ?
+      AND ${txnConnValid}
+    GROUP BY t.platform_connection_id, t.platform
     ORDER BY total_commission DESC
   `, userId, startDate, endDate);
 
@@ -106,10 +110,11 @@ export async function GET(req: NextRequest) {
       SUM(CASE WHEN status = 'pending' THEN CAST(commission_amount AS DECIMAL(12,2)) ELSE 0 END) as pending_commission,
       COUNT(*) as order_count,
       SUM(CAST(order_amount AS DECIMAL(12,2))) as order_amount
-    FROM affiliate_transactions
-    WHERE user_id = ? AND is_deleted = 0
-      AND transaction_time >= ? AND transaction_time < ?
-    GROUP BY user_merchant_id
+    FROM affiliate_transactions t
+    WHERE t.user_id = ? AND t.is_deleted = 0
+      AND t.transaction_time >= ? AND t.transaction_time < ?
+      AND ${txnConnValid}
+    GROUP BY t.user_merchant_id
     ORDER BY total_commission DESC
   `, userId, startDate, endDate);
 

@@ -5,6 +5,7 @@ import { withLeader } from "@/lib/api-handler";
 import prisma from "@/lib/prisma";
 import { todayCST, yesterdayCST, nowCST, parseCSTDateStart } from "@/lib/date-utils";
 import { getExchangeRate, preloadRates } from "@/lib/exchange-rate";
+import { sqlAffiliateTxnValidPlatformConnection } from "@/lib/affiliate-transaction-sql";
 
 /**
  * POST /api/user/team/sync
@@ -256,7 +257,9 @@ async function syncRecentTransactionsForUser(
     select: { id: true, platform: true, account_name: true, api_key: true },
   });
 
-  const validConns = connections.filter((c) => c.api_key && c.api_key.length > 5);
+  const validConns = connections
+    .filter((c) => c.api_key && c.api_key.length > 5)
+    .sort((a, b) => Number(b.id) - Number(a.id));
   if (validConns.length === 0) return { synced: 0, message: "无平台连接" };
 
   const userMerchants = await prisma.user_merchants.findMany({
@@ -339,7 +342,6 @@ async function syncRecentTransactionsForUser(
                 raw_status: txn.raw_status || "",
               },
               update: {
-                platform_connection_id: conn.id,
                 merchant_id: mid,
                 ...(userMerchantId !== BigInt(0) ? { user_merchant_id: userMerchantId } : {}),
                 commission_amount: txn.commission_amount || 0,
@@ -402,6 +404,7 @@ async function updateCommissionForUser(
     FROM affiliate_transactions
     WHERE user_id = ? AND is_deleted = 0
       AND transaction_time >= ? AND transaction_time < ?
+      AND ${sqlAffiliateTxnValidPlatformConnection("affiliate_transactions")}
     GROUP BY user_merchant_id, DATE_FORMAT(transaction_time, '%Y-%m-%d')`,
     userId,
     txnStartDate,
