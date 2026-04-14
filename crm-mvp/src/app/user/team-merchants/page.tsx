@@ -4,10 +4,18 @@ import {
   Card, Table, Input, Select, Button, Space, Tag, Modal, Typography, Tooltip, App,
 } from "antd";
 import {
-  ShopOutlined, SearchOutlined, SyncOutlined, TeamOutlined,
+  ShopOutlined, SearchOutlined, SyncOutlined, TeamOutlined, CalendarOutlined,
 } from "@ant-design/icons";
 import { PLATFORMS } from "@/lib/constants";
 import { useApiWithParams } from "@/lib/swr";
+
+function getCurrentMonthRange() {
+  const now = new Date();
+  const y = now.getFullYear();
+  const m = String(now.getMonth() + 1).padStart(2, "0");
+  const lastDay = new Date(y, now.getMonth() + 1, 0).getDate();
+  return `${y}-${m}-01 ~ ${y}-${m}-${String(lastDay).padStart(2, "0")}`;
+}
 
 const { Text } = Typography;
 
@@ -222,9 +230,17 @@ export default function TeamMerchantsPage() {
           </Space>
         }
         extra={
-          <Button size="small" icon={<SyncOutlined />} onClick={() => mutate()}>
-            刷新
-          </Button>
+          <Space size={12}>
+            <Space size={4} style={{ color: "#8c8c8c", fontSize: 13 }}>
+              <CalendarOutlined />
+              <span>数据区间：</span>
+              <Tag color="orange" style={{ margin: 0 }}>本月</Tag>
+              <span style={{ color: "#bfbfbf" }}>{getCurrentMonthRange()}</span>
+            </Space>
+            <Button size="small" icon={<SyncOutlined />} onClick={() => mutate()}>
+              刷新
+            </Button>
+          </Space>
         }
       >
         <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap", alignItems: "center" }}>
