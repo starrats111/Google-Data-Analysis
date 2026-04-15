@@ -142,6 +142,16 @@ export const CONFIG_GROUPS = {
       { key: "google_sheets_sa_json", label: "Service Account JSON", placeholder: "粘贴 Google Cloud Service Account 密钥 JSON 全文（与 MCC 使用同一个即可）", required: true, isTextarea: true },
     ] as ConfigField[],
   },
+  crawl_proxy: {
+    title: "爬取代理",
+    icon: "GlobalOutlined",
+    description: "配置用于广告扩展爬取的国家 IP 代理（SOCKS5）。模板格式：host:port:username_**:password，其中 ** 会被自动替换为目标国家代码（如 US、GB、AU）。启用后，系统通过目标国家 IP 探查商户网站，确保爬取到正确地区的 URL。",
+    prefix: "crawl_proxy_",
+    fields: [
+      { key: "crawl_proxy_template", label: "代理模板（** 为国家代码占位符）", placeholder: "如：sp.ipipbright.net:1000:username_**_rest:password", required: true },
+      { key: "crawl_proxy_enabled", label: "启用代理爬取（填 1 启用，0 或留空停用）", placeholder: "1" },
+    ] as ConfigField[],
+  },
 } as const;
 
 // 所有配置 key 的描述映射（用于 upsert 时写入 description）
