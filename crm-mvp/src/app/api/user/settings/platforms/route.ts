@@ -73,9 +73,52 @@ export async function DELETE(req: NextRequest) {
   const { id } = await req.json();
   if (!id) return apiError("缺少 ID");
 
+  const userId = BigInt(user.userId);
+  const connId = BigInt(id);
+
+  // 先查出连接信息（平台代码），确认归属当前用户
+  const conn = await prisma.platform_connections.findFirst({
+    where: { id: connId, user_id: userId, is_deleted: 0 },
+    select: { id: true, platform: true },
+  });
+  if (!conn) return apiError("连接不存在");
+
+  // 软删除平台连接
   await prisma.platform_connections.update({
-    where: { id: BigInt(id) },
+    where: { id: connId },
     data: { is_deleted: 1 },
   });
+
+  // 联动清理：软删除该连接带来的非领取商家
+  // 规则：已领取（claimed）或已暂停（paused）的不动，其余清除
+  const KEEP_STATUSES = ["claimed", "paused"];
+
+  await prisma.user_merchants.updateMany({
+    where: {
+      user_id: userId,
+      platform_connection_id: connId,
+      status: { notIn: KEEP_STATUSES },
+      is_deleted: 0,
+    },
+    data: { is_deleted: 1 },
+  });
+
+  // 若该平台已无其他有效连接，同步清理无 platform_connection_id 的平台残余商家
+  const otherActiveConns = await prisma.platform_connections.count({
+    where: { user_id: userId, platform: conn.platform, is_deleted: 0 },
+  });
+  if (otherActiveConns === 0) {
+    await prisma.user_merchants.updateMany({
+      where: {
+        user_id: userId,
+        platform: conn.platform,
+        platform_connection_id: null,
+        status: { notIn: KEEP_STATUSES },
+        is_deleted: 0,
+      },
+      data: { is_deleted: 1 },
+    });
+  }
+
   return apiSuccess(null, "删除成功");
 }
