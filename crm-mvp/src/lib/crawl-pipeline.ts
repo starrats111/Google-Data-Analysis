@@ -724,15 +724,40 @@ async function probeUrlReal(probeUrl: string, merchantDomain: string, proxyUrl?:
   return null;
 }
 
-function getCommonProbePaths(merchantUrl: string): string[] {
+/**
+ * 生成候选 probe 路径。
+ * - targetLocale: 若站点使用 /xx-yy/ locale 前缀（如 en-us），优先生成带 locale 的路径，
+ *   避免直连从服务器 IP 访问时被重定向到首页（pathname="/"）而被过滤掉。
+ * - 同时兜底生成不带 locale 的路径（适用于无 locale 前缀的站点）。
+ */
+function getCommonProbePaths(merchantUrl: string, targetLocale?: string): string[] {
   let origin = "";
   try { origin = new URL(merchantUrl).origin; } catch { return []; }
-  return [
-    `${origin}/collections`, `${origin}/collections/all`, `${origin}/products`, `${origin}/shop`,
-    `${origin}/sale`, `${origin}/new`, `${origin}/new-arrivals`, `${origin}/best-sellers`,
-    `${origin}/about`, `${origin}/contact`, `${origin}/pages/about`, `${origin}/pages/contact`,
-    `${origin}/categories`, `${origin}/catalog`, `${origin}/promo`, `${origin}/men`, `${origin}/women`,
+
+  const AD_PATHS = [
+    "men", "women", "kids", "children",
+    "sale", "outlet", "new-arrivals", "new",
+    "best-sellers", "featured", "collections",
+    "shoes", "boots", "sneakers", "loafers", "sandals",
+    "accessories", "bags", "clothing",
+    "shop", "products", "promo",
   ];
+
+  const paths: string[] = [];
+
+  // 优先带 locale 前缀的路径（确保重定向后落在正确 locale，不会退回首页）
+  if (targetLocale) {
+    const locBase = `${origin}/${targetLocale}`;
+    for (const p of AD_PATHS) paths.push(`${locBase}/${p}`);
+  }
+
+  // 不带 locale 的路径作为兜底（适用于无 locale 前缀的站点）
+  for (const p of AD_PATHS) {
+    const plain = `${origin}/${p}`;
+    if (!paths.includes(plain)) paths.push(plain);
+  }
+
+  return paths;
 }
 
 const BAD_LINK_TEXTS = ["click here", "read more", "learn more", "see more", "view more", "here", "link", "click"];
@@ -801,7 +826,7 @@ async function discoverSitelinkCandidates(
     // /en-sg/ 之类的路径段，需替换为目标国家 locale（如 /en-us/）再探查
     const linksToTry = prioritized
       .filter(l => { try { return !new URL(l.url).search; } catch { return true; } })
-      .slice(0, 15)
+      .slice(0, 20)
       .map(l => country ? { ...l, url: normalizeLocaleInUrl(l.url, country) } : l);
 
     const metaResults = await Promise.all(
@@ -847,7 +872,23 @@ async function discoverSitelinkCandidates(
   }
 
   if (candidates.length < 6 && merchantUrl) {
-    const probePaths = getCommonProbePaths(merchantUrl);
+    // 检测站点是否使用 /xx-yy/ locale 前缀（从 pageLinks 或 merchantUrl 推断）
+    let detectedLocaleInSite = false;
+    const localeSegRe = /^\/([a-z]{2}[-_][a-z]{2})\//i;
+    if (localeSegRe.test((() => { try { return new URL(merchantUrl).pathname; } catch { return ""; } })())) {
+      detectedLocaleInSite = true;
+    } else {
+      detectedLocaleInSite = pageLinks.slice(0, 20).some(l => {
+        try { return localeSegRe.test(new URL(l.url).pathname); } catch { return false; }
+      });
+    }
+    // 只有确认站点使用 locale 前缀时才传 targetLocale，避免对无 locale 的站点生成错误路径
+    const targetLocale = detectedLocaleInSite && country
+      ? (COUNTRY_TO_LOCALE[country.toUpperCase()] ?? undefined)
+      : undefined;
+    if (targetLocale) console.log(`[Sitelinks] 检测到 locale 前缀站点，使用 /${targetLocale}/ 生成探查路径`);
+
+    const probePaths = getCommonProbePaths(merchantUrl, targetLocale);
     const existingNormalized = new Set(candidates.map((c) => c.url.replace(/\/$/, "").replace(/^http:/, "https:")));
     for (let i = 0; i < probePaths.length && candidates.length < 6; i += 5) {
       const results = await Promise.all(probePaths.slice(i, i + 5).map((p) => probeUrlReal(p, merchantDomain, proxyUrl)));
