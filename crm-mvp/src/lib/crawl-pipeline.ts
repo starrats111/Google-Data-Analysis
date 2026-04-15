@@ -1039,18 +1039,18 @@ export async function buildCrawlCache(
     return mainPromo; // 返回主页结果（可能 null 或仅有通用促销）
   };
 
-  // ─── 价格子页面专项爬取：主页通常是类目页或 JS 渲染，价格在产品详情页 ───
+  // ─── 价格子页面专项爬取：主页通常是类目/JS 渲染页，价格在产品详情页 ───
+  // 策略：HTTP 快速尝试 → 若无结果则 Puppeteer 渲染（能拿到 JS 动态价格数据）
   const extractPriceWithProductPages = async (): Promise<ReturnType<typeof extractPriceInfo>> => {
     // 先从主页 HTML 提取
     const mainPrices = html ? extractPriceInfo(html, country, merchantUrl) : [];
     if (mainPrices.length >= 3) return mainPrices; // 主页已够用
 
-    // 从已发现链接中找产品详情页（路径层级深 ≥3，且含产品相关关键词）
+    // 从已发现链接中找产品详情页（路径层级深 ≥3，优先含产品关键词）
     const PRODUCT_URL_RE = /\/(product|item|shoes?|boot|loafer|sneaker|sandal|bag|accessor)/i;
     const deepLinks = crawlResult.links.filter(l => {
       try {
-        const parts = new URL(l.url).pathname.split("/").filter(Boolean);
-        return parts.length >= 3;
+        return new URL(l.url).pathname.split("/").filter(Boolean).length >= 3;
       } catch { return false; }
     });
     const productLinks = (deepLinks.filter(l => PRODUCT_URL_RE.test(l.url)).length > 0
@@ -1058,6 +1058,9 @@ export async function buildCrawlCache(
       : deepLinks
     ).slice(0, 3);
 
+    if (productLinks.length === 0) return mainPrices;
+
+    // 阶段1：HTTP 快速尝试（省时，适合有 JSON-LD 的标准站点）
     const combined = [...mainPrices];
     for (const link of productLinks) {
       if (combined.length >= 8) break;
@@ -1072,8 +1075,24 @@ export async function buildCrawlCache(
         for (const p of subPrices) {
           if (combined.length < 8 && !combined.some(r => r.header === p.header)) combined.push(p);
         }
-        if (combined.length >= 3) break; // 够了就停
       } catch {}
+    }
+    if (combined.length >= 1) return combined; // HTTP 拿到了就直接用
+
+    // 阶段2：Puppeteer 渲染（JS 动态加载价格的站点，如 React/Next.js 商城）
+    console.log(`[PriceExtract] HTTP 未获取到价格，尝试 Puppeteer 渲染: ${productLinks[0].url}`);
+    try {
+      const { crawlPageWithPuppeteer } = await import("@/lib/crawler");
+      const puppeteerHtml = await crawlPageWithPuppeteer(productLinks[0].url, 25000);
+      if (puppeteerHtml) {
+        const puppeteerPrices = extractPriceInfo(puppeteerHtml, country, productLinks[0].url);
+        if (puppeteerPrices.length > 0) {
+          console.log(`[PriceExtract] Puppeteer 获取到 ${puppeteerPrices.length} 条价格`);
+          return puppeteerPrices;
+        }
+      }
+    } catch (e) {
+      console.warn("[PriceExtract] Puppeteer 价格提取失败:", e instanceof Error ? e.message : String(e));
     }
     return combined;
   };
