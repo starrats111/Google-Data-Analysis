@@ -582,9 +582,21 @@ function isQualityImageUrl(url: string): boolean {
   const lower = url.toLowerCase().split("?")[0];
   const validExts = [".jpg", ".jpeg", ".png", ".webp", ".avif"];
   if (!validExts.some(ext => lower.endsWith(ext))) {
-    const cdnPatterns = ["cdn.shopify", "cloudinary", "imgix", "cloudfront",
-      "squarespace", "wixstatic", "bigcommerce", "pexels.com",
-      "unsplash.com", "images.unsplash"];
+    const cdnPatterns = [
+      // 主流电商/建站平台 CDN
+      "cdn.shopify", "cloudinary", "imgix", "cloudfront",
+      "squarespace", "wixstatic", "bigcommerce",
+      // 图库
+      "pexels.com", "unsplash.com", "images.unsplash",
+      // CMS/无头内容平台
+      "ctfassets.net", "contentful.com", "prismic.io",
+      "graphassets.com", "sanity.io", "dato-cms",
+      // 企业 CDN
+      "akamaized.net", "akamai.net", "azureedge.net",
+      "fastly.net", "r2.cloudflarestorage.com",
+      // 品牌图片子域通配（images.xxx.com / media.xxx.com / cdn.xxx.com / assets.xxx.com）
+      "images.", "media.", "/media/", "/assets/products", "/products/images",
+    ];
     if (!cdnPatterns.some(p => lower.includes(p))) return false;
   }
   if (FILTERED_IMG_KEYWORDS.some(kw => lower.includes(kw))) return false;

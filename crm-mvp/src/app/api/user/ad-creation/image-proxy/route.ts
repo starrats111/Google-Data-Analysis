@@ -1,19 +1,42 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getUserFromRequest } from "@/lib/auth";
 
-const ALLOWED_TYPES = ["image/jpeg", "image/png", "image/webp", "image/gif", "image/svg+xml"];
+// avif 需包含在内：Cloudinary f_auto 在 Accept:image/* 下会优先返回 avif
+const ALLOWED_TYPES = ["image/jpeg", "image/png", "image/webp", "image/gif", "image/avif", "image/svg+xml"];
 const MAX_SIZE = 10 * 1024 * 1024;
 const CACHE_TTL = 86400;
 
 const USER_AGENTS = [
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36",
-  "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)",
   "Googlebot-Image/1.0",
+  "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)",
 ];
+
+/** 从 CDN URL 推断商家网站 Referer（防盗链通常要求 Referer 来自商家域名） */
+function inferReferer(imageUrl: string): string[] {
+  try {
+    const u = new URL(imageUrl);
+    const cdn = u.hostname;
+    // Cloudinary: res.cloudinary.com/<account>/... → 无法直接推断，用 google 兜底
+    if (cdn === "res.cloudinary.com") {
+      return ["https://www.google.com/", u.origin + "/"];
+    }
+    // 品牌自有子域 CDN（如 images.scarosso.com）→ 推断主域名
+    const parts = cdn.split(".");
+    if (parts.length >= 3) {
+      const apex = parts.slice(-2).join(".");
+      return [`https://www.${apex}/`, `https://${apex}/`, u.origin + "/`"];
+    }
+    return [u.origin + "/"];
+  } catch {
+    return ["https://www.google.com/"];
+  }
+}
 
 /**
  * GET /api/user/ad-creation/image-proxy?url=xxx
- * 服务端代理外部图片，绕过商家网站防盗链/CORS 限制
+ * 服务端代理外部图片，绕过商家网站防盗链/CORS 限制。
+ * 支持 avif（Cloudinary f_auto 默认返回格式）。
  */
 export async function GET(req: NextRequest) {
   const user = getUserFromRequest(req);
@@ -32,29 +55,33 @@ export async function GET(req: NextRequest) {
     return new NextResponse("Only http(s) allowed", { status: 400 });
   }
 
+  const referers = inferReferer(url);
   let lastError = "";
+
   for (const ua of USER_AGENTS) {
-    try {
-      const resp = await fetch(url, {
-        headers: {
-          "User-Agent": ua,
-          Accept: "image/*,*/*;q=0.8",
-          Referer: new URL(url).origin + "/",
-        },
-        signal: AbortSignal.timeout(15000),
-        redirect: "follow",
-      });
+    for (const referer of referers) {
+      try {
+        const resp = await fetch(url, {
+          headers: {
+            "User-Agent": ua,
+            // 优先 webp/jpeg，兜底接受 avif；避免 CDN 因 Accept:image/* 优先返回 avif 导致误判
+            Accept: "image/webp,image/jpeg,image/png,image/avif,image/*;q=0.8",
+            Referer: referer,
+          },
+          signal: AbortSignal.timeout(15000),
+          redirect: "follow",
+        });
 
-      if (!resp.ok) {
-        lastError = `HTTP ${resp.status}`;
-        continue;
-      }
+        if (!resp.ok) {
+          lastError = `HTTP ${resp.status} (referer=${referer})`;
+          continue;
+        }
 
-      const ct = resp.headers.get("content-type") || "";
-      if (!ALLOWED_TYPES.some((t) => ct.startsWith(t))) {
-        lastError = `Not image: ${ct}`;
-        continue;
-      }
+        const ct = resp.headers.get("content-type") || "";
+        if (!ALLOWED_TYPES.some((t) => ct.startsWith(t))) {
+          lastError = `Not image: ${ct}`;
+          continue;
+        }
 
       const cl = parseInt(resp.headers.get("content-length") || "0", 10);
       if (cl > MAX_SIZE) {
@@ -78,10 +105,11 @@ export async function GET(req: NextRequest) {
           "Access-Control-Allow-Origin": "*",
         },
       });
-    } catch (err) {
-      lastError = err instanceof Error ? err.message : String(err);
-    }
-  }
+      } catch (err) {
+        lastError = err instanceof Error ? err.message : String(err);
+      }
+    }  // end for referer
+  }  // end for ua
 
   console.warn("[ImageProxy] all attempts failed:", url, lastError);
   return new NextResponse("Fetch failed", { status: 502 });
