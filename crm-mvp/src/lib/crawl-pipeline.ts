@@ -4,6 +4,7 @@
  */
 import { crawlPage, fetchUrlMeta, fetchPageImages, searchMerchantImages } from "@/lib/crawler";
 import { getAdMarketConfig } from "@/lib/ad-market";
+import { getProxyUrlForCountry, fetchViaProxy } from "@/lib/crawl-proxy";
 
 // 全局爬取并发控制：最多 2 个同时执行
 let _crawlActive = 0;
@@ -660,7 +661,7 @@ const PROBE_UAS = [
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36",
 ];
 
-async function probeUrlReal(probeUrl: string, merchantDomain: string): Promise<{ url: string; title: string; desc: string } | null> {
+async function probeUrlReal(probeUrl: string, merchantDomain: string, proxyUrl?: string): Promise<{ url: string; title: string; desc: string } | null> {
   let lastFinalUrl = probeUrl;
   let wasBlocked = false;
 
@@ -668,12 +669,13 @@ async function probeUrlReal(probeUrl: string, merchantDomain: string): Promise<{
     try {
       const ctrl = new AbortController();
       const t = setTimeout(() => ctrl.abort(), 10000);
-      const res = await fetch(probeUrl, {
-        method: "GET", redirect: "follow", signal: ctrl.signal,
-        headers: { "User-Agent": ua, Accept: "text/html,application/xhtml+xml,*/*", "Accept-Language": "en-US,en;q=0.9" },
-      });
+      const probeHeaders = { "User-Agent": ua, Accept: "text/html,application/xhtml+xml,*/*", "Accept-Language": "en-US,en;q=0.9" };
+      // 若有目标国家代理，通过代理探查，确保重定向后落在正确 locale（如 /en-us/）
+      const res = proxyUrl
+        ? await fetchViaProxy(probeUrl, { headers: probeHeaders, signal: ctrl.signal }, proxyUrl)
+        : await fetch(probeUrl, { method: "GET", redirect: "follow", signal: ctrl.signal, headers: probeHeaders });
       clearTimeout(t);
-      const finalUrl = res.url || probeUrl;
+      const finalUrl = (res as { url: string }).url || probeUrl;
       lastFinalUrl = finalUrl;
 
       try {
@@ -738,9 +740,12 @@ const BAD_LINK_TEXTS = ["click here", "read more", "learn more", "see more", "vi
 async function discoverSitelinkCandidates(
   merchantUrl: string,
   pageLinks: { url: string; text: string }[],
+  country?: string,
 ): Promise<{ url: string; title: string; description: string }[]> {
   let merchantDomain = "";
   try { merchantDomain = new URL(merchantUrl).hostname.replace(/^www\./, ""); } catch {}
+  const proxyUrl = country ? (getProxyUrlForCountry(country) ?? undefined) : undefined;
+  if (proxyUrl) console.log(`[Sitelinks] 使用 ${country} 代理探查候选链接`);
 
   const candidates: { url: string; title: string; description: string }[] = [];
   const usedFinalUrls = new Set<string>();
@@ -801,7 +806,7 @@ async function discoverSitelinkCandidates(
     const probePaths = getCommonProbePaths(merchantUrl);
     const existingNormalized = new Set(candidates.map((c) => c.url.replace(/\/$/, "").replace(/^http:/, "https:")));
     for (let i = 0; i < probePaths.length && candidates.length < 6; i += 5) {
-      const results = await Promise.all(probePaths.slice(i, i + 5).map((p) => probeUrlReal(p, merchantDomain)));
+      const results = await Promise.all(probePaths.slice(i, i + 5).map((p) => probeUrlReal(p, merchantDomain, proxyUrl)));
       for (const r of results) {
         if (!r || candidates.length >= 6) continue;
         const norm = r.url.replace(/\/$/, "").replace(/^http:/, "https:");
@@ -943,7 +948,7 @@ export async function buildCrawlCache(
 
   // 并行执行所有提取任务
   const [sitelinkCandidates, images, features, navItems, phoneCandidates, promoRegex, priceRegex, crawledProducts] = await Promise.all([
-    discoverSitelinkCandidates(merchantUrl, crawlResult.links).catch(() => []),
+    discoverSitelinkCandidates(merchantUrl, crawlResult.links, country).catch(() => []),
     collectImages(crawlResult.images, crawlResult.links, merchantUrl, merchantName).catch(() => [] as string[]),
     Promise.resolve(html ? extractMerchantFeatures(html) : []),
     Promise.resolve(html ? extractNavItems(html) : []),

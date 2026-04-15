@@ -1,5 +1,6 @@
 import { existsSync } from "fs";
 import { getBackendConfig } from "@/lib/system-config";
+import { getProxyUrlForCountry, fetchViaProxy } from "@/lib/crawl-proxy";
 
 // ══════════════════════════════════════════════════════
 // 浏览器路径发现
@@ -276,7 +277,7 @@ function isTransientError(err: unknown): boolean {
 // ══════════════════════════════════════════════════════
 // 策略 1: HTTP 多级反爬回退（照搬后端 _fetch_with_retry）
 // ══════════════════════════════════════════════════════
-async function crawlWithHttp(url: string, country?: string): Promise<{ html: string; difficulty: "easy" | "medium" | "hard" } | null> {
+async function crawlWithHttp(url: string, country?: string, proxyUrl?: string): Promise<{ html: string; difficulty: "easy" | "medium" | "hard" } | null> {
   const urlsToTry = [url, ...getUrlVariants(url)];
 
   let bestHtml = "";
@@ -294,7 +295,10 @@ async function crawlWithHttp(url: string, country?: string): Promise<{ html: str
       try {
         const ctrl = new AbortController();
         const t = setTimeout(() => ctrl.abort(), 20000);
-        const res = await fetch(tryUrl, { signal: ctrl.signal, headers, redirect: "follow" });
+        // 若配置了目标国家代理，走代理发出请求（让目标网站按 IP 地理位置返回正确 locale）
+        const res = proxyUrl
+          ? await fetchViaProxy(tryUrl, { headers: headers as Record<string, string>, signal: ctrl.signal }, proxyUrl)
+          : await fetch(tryUrl, { signal: ctrl.signal, headers, redirect: "follow" });
         clearTimeout(t);
 
         if (res.status === 403) {
@@ -1348,10 +1352,12 @@ export function extractPageMeta(html: string): { title: string; description: str
 // 主爬虫入口（优化策略顺序 + 难度自适应）
 // ══════════════════════════════════════════════════════
 export async function crawlPage(url: string, country?: string): Promise<CrawlResult> {
-  console.log(`[Crawler] 开始爬取: ${url}${country ? ` (country: ${country})` : ""}`);
+  const proxyUrl = country ? getProxyUrlForCountry(country) : null;
+  if (proxyUrl) console.log(`[Crawler] 使用 ${country} 代理爬取: ${url}`);
+  else console.log(`[Crawler] 开始爬取: ${url}${country ? ` (country: ${country})` : ""}`);
 
   // 1. HTTP 多 UA 隐身爬取（带内容质量评分 + 难度检测）
-  const httpResult = await crawlWithHttp(url, country);
+  const httpResult = await crawlWithHttp(url, country, proxyUrl ?? undefined);
   if (httpResult) {
     let { links, images } = extractLinksAndImages(httpResult.html, url);
 
