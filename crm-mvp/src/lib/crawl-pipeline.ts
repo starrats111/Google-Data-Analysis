@@ -737,6 +737,43 @@ function getCommonProbePaths(merchantUrl: string): string[] {
 
 const BAD_LINK_TEXTS = ["click here", "read more", "learn more", "see more", "view more", "here", "link", "click"];
 
+/**
+ * 国家代码到标准 locale URL 段的映射（xx-yy 格式）。
+ * 当爬取结果中的 locale 与目标国家不匹配时，用此表替换。
+ */
+const COUNTRY_TO_LOCALE: Record<string, string> = {
+  US: "en-us", GB: "en-gb", AU: "en-au", CA: "en-ca",
+  IE: "en-ie", NZ: "en-nz", SG: "en-sg", IN: "en-in",
+  DE: "de-de", AT: "de-at", CH: "de-ch",
+  FR: "fr-fr", IT: "it-it", ES: "es-es",
+  NL: "nl-nl", BE: "nl-be", SE: "sv-se",
+  NO: "nb-no", DK: "da-dk", FI: "fi-fi",
+  JP: "ja-jp", KR: "ko-kr", CN: "zh-cn", TW: "zh-tw",
+  BR: "pt-br", PT: "pt-pt", MX: "es-mx",
+};
+
+/**
+ * 检测 URL 路径开头的 locale 段（如 /en-sg/ /fr-fr/）。
+ * 若与 targetCountry 不匹配，尝试替换为目标 locale；不认识的 locale 则剥离。
+ */
+function normalizeLocaleInUrl(url: string, targetCountry: string): string {
+  try {
+    const u = new URL(url);
+    const m = u.pathname.match(/^\/([a-z]{2}[-_][a-z]{2})\//i);
+    if (!m) return url;
+    const existingLocale = m[1].toLowerCase().replace("_", "-");
+    const existingCountry = existingLocale.split("-")[1]?.toUpperCase();
+    if (existingCountry === targetCountry.toUpperCase()) return url;
+    const targetLocale = COUNTRY_TO_LOCALE[targetCountry.toUpperCase()];
+    if (targetLocale) {
+      u.pathname = "/" + targetLocale + u.pathname.slice(m[0].length - 1);
+    } else {
+      u.pathname = "/" + u.pathname.slice(m[0].length);
+    }
+    return u.toString();
+  } catch { return url; }
+}
+
 async function discoverSitelinkCandidates(
   merchantUrl: string,
   pageLinks: { url: string; text: string }[],
@@ -744,8 +781,9 @@ async function discoverSitelinkCandidates(
 ): Promise<{ url: string; title: string; description: string }[]> {
   let merchantDomain = "";
   try { merchantDomain = new URL(merchantUrl).hostname.replace(/^www\./, ""); } catch {}
-  const proxyUrl = country ? (getProxyUrlForCountry(country) ?? undefined) : undefined;
+  const proxyUrl = country ? (await getProxyUrlForCountry(country) ?? undefined) : undefined;
   if (proxyUrl) console.log(`[Sitelinks] 使用 ${country} 代理探查候选链接`);
+  else if (country) console.log(`[Sitelinks] 无 ${country} 代理，直连探查（locale 将按目标国家规范化）`);
 
   const candidates: { url: string; title: string; description: string }[] = [];
   const usedFinalUrls = new Set<string>();
@@ -759,14 +797,17 @@ async function discoverSitelinkCandidates(
         return pa - pb;
       } catch { return 0; }
     });
+    // 对提取到的链接先做 locale 规范化：若无代理，直连从新加坡 IP 爬取的页面会包含
+    // /en-sg/ 之类的路径段，需替换为目标国家 locale（如 /en-us/）再探查
     const linksToTry = prioritized
       .filter(l => { try { return !new URL(l.url).search; } catch { return true; } })
-      .slice(0, 15);
+      .slice(0, 15)
+      .map(l => country ? { ...l, url: normalizeLocaleInUrl(l.url, country) } : l);
 
     const metaResults = await Promise.all(
       linksToTry.map(async (link) => {
         try {
-          const meta = await fetchUrlMeta(link.url);
+          const meta = await fetchUrlMeta(link.url, proxyUrl);
           return { link, meta };
         } catch {
           return { link, meta: { title: "", description: "", ok: false, finalUrl: link.url, isSoft404: false } };
@@ -776,7 +817,10 @@ async function discoverSitelinkCandidates(
 
     for (const { link, meta } of metaResults) {
       if (candidates.length >= 6) break;
-      const realUrl = meta.finalUrl || link.url;
+      // 对 finalUrl 也做 locale 规范化：即使站点因 IP 地理位置重定向回了错误 locale，
+      // 也将其纠正为目标国家 locale，确保提交给 Google Ads 的链接与目标市场一致
+      const rawUrl = meta.finalUrl || link.url;
+      const realUrl = country ? normalizeLocaleInUrl(rawUrl, country) : rawUrl;
       if (meta.isSoft404) continue;
       // 非 200 的 URL Google Ads 审核会拒登
       if (!meta.ok) continue;
@@ -809,10 +853,12 @@ async function discoverSitelinkCandidates(
       const results = await Promise.all(probePaths.slice(i, i + 5).map((p) => probeUrlReal(p, merchantDomain, proxyUrl)));
       for (const r of results) {
         if (!r || candidates.length >= 6) continue;
-        const norm = r.url.replace(/\/$/, "").replace(/^http:/, "https:");
+        // 对 probeUrlReal 的结果也做 locale 规范化
+        const rUrl = country ? normalizeLocaleInUrl(r.url, country) : r.url;
+        const norm = rUrl.replace(/\/$/, "").replace(/^http:/, "https:");
         if (existingNormalized.has(norm)) continue;
         existingNormalized.add(norm);
-        candidates.push({ url: r.url, title: r.title, description: r.desc });
+        candidates.push({ url: rUrl, title: r.title, description: r.desc });
       }
     }
   }

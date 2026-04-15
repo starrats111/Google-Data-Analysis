@@ -1345,7 +1345,7 @@ export function extractPageMeta(html: string): { title: string; description: str
 // 主爬虫入口（优化策略顺序 + 难度自适应）
 // ══════════════════════════════════════════════════════
 export async function crawlPage(url: string, country?: string): Promise<CrawlResult> {
-  const proxyUrl = country ? getProxyUrlForCountry(country) : null;
+  const proxyUrl = country ? await getProxyUrlForCountry(country) : null;
   if (proxyUrl) console.log(`[Crawler] 使用 ${country} 代理爬取: ${url}`);
   else console.log(`[Crawler] 开始爬取: ${url}${country ? ` (country: ${country})` : ""}`);
 
@@ -1462,7 +1462,7 @@ export async function crawlPage(url: string, country?: string): Promise<CrawlRes
  * 爬取单个 URL 的标题、描述和最终真实 URL
  * 跟踪重定向获取真实落地页 URL，检测软 404
  */
-export async function fetchUrlMeta(url: string): Promise<{ title: string; description: string; ok: boolean; finalUrl: string; isSoft404: boolean }> {
+export async function fetchUrlMeta(url: string, proxyUrl?: string): Promise<{ title: string; description: string; ok: boolean; finalUrl: string; isSoft404: boolean }> {
   const uas = [GOOGLEBOT_UA, ...UA_POOL.sort(() => Math.random() - 0.5).slice(0, 3)];
 
   const SOFT_404_SIGNALS = [
@@ -1480,7 +1480,9 @@ export async function fetchUrlMeta(url: string): Promise<{ title: string; descri
       const ctrl = new AbortController();
       const t = setTimeout(() => ctrl.abort(), 12000);
       const headers = buildStealthHeaders(url, ua);
-      const res = await fetch(url, { signal: ctrl.signal, headers, redirect: "follow" });
+      const res = proxyUrl
+        ? await fetchViaProxy(url, { headers: headers as Record<string, string>, signal: ctrl.signal }, proxyUrl)
+        : await fetch(url, { signal: ctrl.signal, headers, redirect: "follow" });
       clearTimeout(t);
 
       const finalUrl = res.url || url;
