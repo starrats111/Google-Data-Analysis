@@ -316,25 +316,40 @@ export function extractPromotionInfo(html: string, sourceUrl: string, country: s
       if (eventMatch?.[1]?.trim().length >= 3) {
         result.promotion_target = smartTruncate(eventMatch[1].trim(), 20);
       } else {
-        // 最终备用：去折扣词后尝试提取事件名，必须通过"像活动名"的验证
-        const eventName = ctx
-          .replace(/,?\s*up\s+to\s+\d+\s*%\s*(?:off|discount)/gi, "")
-          .replace(/,?\s*\d+\s*%\s*(?:off|discount)/gi, "")
-          .replace(/,?\s*[$€£]\d+\s*(?:off)/gi, "")
-          .replace(/,?\s*save\s+\d+%/gi, "")
-          .replace(/\s+/g, " ").trim();
-        const cleanName = eventName.replace(/[\.\!\?].*$/, "").replace(/\(.*$/, "").trim();
-        // 验证：不能以介词/冠词/连词结尾（说明是句子碎片，不是活动名称）
-        const STOP_WORD_ENDS = /\b(on|the|a|an|for|to|in|at|from|with|and|or|but|of|men|women|all)\s*$/i;
-        // 验证：不能包含超过 4 个单词（活动名通常短）且不以大写开头（不像专有名词/标题）
-        const words = cleanName.split(/\s+/).filter(Boolean);
-        const looksLikeEventName = cleanName.length >= 3
-          && !STOP_WORD_ENDS.test(cleanName)
-          && words.length <= 5
-          && words.length > 0
-          && /^[A-Z&]/.test(cleanName); // 必须以大写或 & 开头（像专有名词）
-        if (looksLikeEventName) result.promotion_target = smartTruncate(cleanName, 20);
-        // 验证不通过时不设置 promotion_target，让步骤5的通用兜底接管
+        // ── 专项场景识别（优先级高于通用事件名提取）──
+        // 1. "first order" / "new customer" / "first purchase" → promotion_target = "First Order"
+        if (/first[\s-]?order|new[\s-]?customer|new[\s-]?subscriber|first[\s-]?purchase|first[\s-]?time/i.test(ctx)) {
+          result.promotion_target = "First Order";
+        }
+        // 2. "newsletter" / "subscribe" / "sign up" / "email" → promotion_target = "Newsletter"
+        else if (/newsletter|subscri(?:be|ption)|email\s*sign[\s-]?up|join\s*(our|the)\s*(list|club|newsletter)/i.test(ctx)) {
+          result.promotion_target = "Newsletter";
+        }
+        // 3. "referral" / "refer a friend" → promotion_target = "Referral"
+        else if (/refer(?:ral|a\s*friend)|invite\s*a?\s*friend/i.test(ctx)) {
+          result.promotion_target = "Referral";
+        }
+        // 4. 通用事件名提取：去折扣词后尝试，必须通过"像活动名"的验证
+        else {
+          const eventName = ctx
+            .replace(/,?\s*up\s+to\s+\d+\s*%\s*(?:off|discount)/gi, "")
+            .replace(/,?\s*\d+\s*%\s*(?:off|discount)/gi, "")
+            .replace(/,?\s*[$€£]\d+\s*(?:off)/gi, "")
+            .replace(/,?\s*save\s+\d+%/gi, "")
+            .replace(/\s+/g, " ").trim();
+          const cleanName = eventName.replace(/[\.\!\?].*$/, "").replace(/\(.*$/, "").trim();
+          // 验证：不能以介词/冠词/连词结尾（说明是句子碎片，不是活动名称）
+          const STOP_WORD_ENDS = /\b(on|the|a|an|for|to|in|at|from|with|and|or|but|of|men|women|all)\s*$/i;
+          // 验证：不能包含超过 4 个单词且不以大写开头（不像专有名词/标题）
+          const words = cleanName.split(/\s+/).filter(Boolean);
+          const looksLikeEventName = cleanName.length >= 3
+            && !STOP_WORD_ENDS.test(cleanName)
+            && words.length <= 5
+            && words.length > 0
+            && /^[A-Z&]/.test(cleanName);
+          if (looksLikeEventName) result.promotion_target = smartTruncate(cleanName, 20);
+          // 验证不通过时不设置 promotion_target，让步骤4.5的通用兜底接管
+        }
       }
     }
   }
@@ -741,11 +756,18 @@ function getCommonProbePaths(merchantUrl: string, targetLocale?: string): string
   try { origin = new URL(merchantUrl).origin; } catch { return []; }
 
   const AD_PATHS = [
+    // 主要品类
     "men", "women", "kids", "children",
+    // 促销/活动
     "sale", "outlet", "new-arrivals", "new",
     "best-sellers", "featured", "collections",
+    // 内容/品牌页面（时尚品牌常见）
+    "discover", "studio", "editorial", "lookbook", "stories",
+    // 鞋类
     "shoes", "boots", "sneakers", "loafers", "sandals",
+    // 配件/服装
     "accessories", "bags", "clothing",
+    // 通用
     "shop", "products", "promo",
   ];
 

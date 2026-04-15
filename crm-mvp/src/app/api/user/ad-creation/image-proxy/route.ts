@@ -17,15 +17,37 @@ function inferReferer(imageUrl: string): string[] {
   try {
     const u = new URL(imageUrl);
     const cdn = u.hostname;
-    // Cloudinary: res.cloudinary.com/<account>/... → 无法直接推断，用 google 兜底
+    // Cloudinary: res.cloudinary.com/<account>/...
     if (cdn === "res.cloudinary.com") {
+      // Cloudinary URL 路径第一段是账户名，即品牌名，尝试构造品牌 URL
+      const account = u.pathname.split("/").filter(Boolean)[0] || "";
+      if (account) {
+        return [
+          `https://www.${account}.com/`,
+          "https://www.google.com/",
+          u.origin + "/",
+        ];
+      }
       return ["https://www.google.com/", u.origin + "/"];
     }
-    // 品牌自有子域 CDN（如 images.scarosso.com）→ 推断主域名
+    // Salesforce Commerce Cloud / contentsvc CDN: assets.contentsvc.com/<brand>/...
+    // 路径第一段是品牌名
+    if (cdn.includes("contentsvc.com") || cdn.includes("commercecloud.salesforce.com")) {
+      const brand = u.pathname.split("/").filter(Boolean)[0] || "";
+      if (brand) {
+        return [
+          `https://www.${brand}.com/`,
+          `https://${brand}.com/`,
+          "https://www.google.com/",
+        ];
+      }
+      return ["https://www.google.com/"];
+    }
+    // 品牌自有子域 CDN（如 images.scarosso.com）→ 推断主域名（去掉子域前缀）
     const parts = cdn.split(".");
     if (parts.length >= 3) {
       const apex = parts.slice(-2).join(".");
-      return [`https://www.${apex}/`, `https://${apex}/`, u.origin + "/`"];
+      return [`https://www.${apex}/`, `https://${apex}/`, u.origin + "/"];
     }
     return [u.origin + "/"];
   } catch {

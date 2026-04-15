@@ -761,6 +761,23 @@ export async function fetchPageImages(pageUrl: string): Promise<string[]> {
         if (resolved) imgs.push(resolved);
       }
 
+      // React/Next.js/SFCC PWA：图片 URL 以 Unicode 转义方式内嵌于 JSON 数据中
+      // 形如 "url":"https:\u002F\u002Fassets.contentsvc.com\u002F...\u002FLoafers.jpg"
+      // 直接正则匹配原始字符串无效，需单独提取后 decode
+      const unicodeImgRe = /https?:\\u002[Ff]\\u002[Ff]([^"'\\<>\s]{8,}\\u002[Ff][^"'\\<>\s]*\.(?:jpg|jpeg|png|webp|avif))(?:[\\u0022"']|$)/gi;
+      let um;
+      while ((um = unicodeImgRe.exec(html)) !== null && imgs.length < 50) {
+        try {
+          const decoded = ("https://" + um[1])
+            .replace(/\\u002[Ff]/gi, "/")
+            .replace(/\\u003[Aa]/gi, ":")
+            .replace(/\\u0026/gi, "&")
+            .replace(/\\u0020/gi, " ");
+          const resolved = resolve(decoded);
+          if (resolved) imgs.push(resolved);
+        } catch {}
+      }
+
       if (imgs.length > 0) break;
     } catch {}
   }
