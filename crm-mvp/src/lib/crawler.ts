@@ -6,13 +6,16 @@ import { getProxyUrlForCountry, fetchViaProxy } from "@/lib/crawl-proxy";
 // 浏览器路径发现
 // ══════════════════════════════════════════════════════
 const BROWSER_CANDIDATES = [
+  // Linux 生产服务器（chromium-browser snap 安装在此路径）
+  "/usr/bin/chromium-browser", "/usr/bin/chromium",
+  "/usr/bin/google-chrome-stable", "/usr/bin/google-chrome",
+  "/usr/bin/microsoft-edge-stable", "/usr/bin/microsoft-edge",
+  // Windows
   "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
   "C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe",
   "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
   "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe",
-  "/usr/bin/google-chrome-stable", "/usr/bin/google-chrome",
-  "/usr/bin/chromium-browser", "/usr/bin/chromium",
-  "/usr/bin/microsoft-edge-stable", "/usr/bin/microsoft-edge",
+  // macOS
   "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
   "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
 ];
@@ -810,7 +813,7 @@ async function crawlWithPuppeteer(url: string, timeoutMs = 30000): Promise<strin
     "--no-sandbox", "--disable-setuid-sandbox",
     "--disable-blink-features=AutomationControlled",
     "--window-size=1920,1080",
-    "--disable-dev-shm-usage",
+    "--disable-dev-shm-usage",         // 必须：服务器 /dev/shm 通常很小
     "--disable-web-security",
     "--disable-features=VizDisplayCompositor",
     "--disable-infobars",
@@ -818,6 +821,9 @@ async function crawlWithPuppeteer(url: string, timeoutMs = 30000): Promise<strin
     "--disable-background-timer-throttling",
     "--disable-backgrounding-occluded-windows",
     "--disable-renderer-backgrounding",
+    "--disable-gpu",                   // 无头服务器无 GPU
+    "--disable-software-rasterizer",
+    "--ignore-certificate-errors",     // 部分站点证书问题
   ];
 
   let browser: any = null;
@@ -991,15 +997,13 @@ async function crawlWithPuppeteer(url: string, timeoutMs = 30000): Promise<strin
 }
 
 // ══════════════════════════════════════════════════════
-// 策略 4: Google Cache / Wayback Machine（照搬后端）
+// 策略 4: Wayback Machine 缓存（Google Cache 已于2024年3月永久关停，仅保留 Wayback）
 // ══════════════════════════════════════════════════════
 async function crawlViaCache(url: string): Promise<string | null> {
   const currentYear = new Date().getFullYear();
-  let targetDomain = "";
-  try { targetDomain = new URL(url).hostname.replace("www.", "").split(".")[0].toLowerCase(); } catch {}
 
+  // 注意：webcache.googleusercontent.com 已于 2024 年 3 月永久停服，不再使用
   const cacheUrls = [
-    `https://webcache.googleusercontent.com/search?q=cache:${encodeURIComponent(url)}`,
     `https://web.archive.org/web/${currentYear}/${url}`,
     `https://web.archive.org/web/${currentYear - 1}/${url}`,
   ];
@@ -1017,25 +1021,14 @@ async function crawlViaCache(url: string): Promise<string | null> {
       if (html.length < 3000 || isBlockedPage(html)) continue;
 
       const htmlLower = html.toLowerCase();
+      if (htmlLower.includes("wayback machine") && html.length < 10000) continue;
 
-      if (cacheUrl.includes("webcache.googleusercontent.com")) {
-        const isSearchPage = htmlLower.includes('id="search"') ||
-          htmlLower.includes("google.com/search") ||
-          htmlLower.slice(0, 500).includes("<title>google");
-        const hasTarget = targetDomain ? htmlLower.includes(targetDomain) : false;
-        if (isSearchPage && !hasTarget) continue;
-      }
-
-      if (cacheUrl.includes("web.archive.org")) {
-        if (htmlLower.includes("wayback machine") && html.length < 10000) continue;
-      }
-
-      console.log(`[Crawler] 缓存命中 (${html.length} bytes): ${cacheUrl.slice(0, 60)}`);
+      console.log(`[Crawler] Wayback Machine 命中 (${html.length} bytes): ${cacheUrl.slice(0, 60)}`);
       return html;
     } catch {}
   }
 
-  console.log("[Crawler] 所有缓存源均未命中");
+  console.log("[Crawler] Wayback Machine 未命中");
   return null;
 }
 

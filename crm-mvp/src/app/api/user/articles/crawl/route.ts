@@ -66,16 +66,10 @@ async function doCrawl(opts: {
 }) {
   const { merchantUrl, merchantName, country, signal } = opts;
 
-  // ── 1. 优先调用后端 Python 爬虫 ──
-  let backendConfig: { apiUrl: string; apiToken: string } | null = null;
+  // ── 1. 优先调用后端 Python 爬虫（如已在 system_configs 配置 backend_api_url 则启用）──
   try {
-    backendConfig = await getBackendConfig();
-  } catch (err) {
-    console.warn("[ArticleCrawl] 读取后端配置失败:", err);
-  }
-
-  if (backendConfig?.apiUrl) {
-    try {
+    const backendConfig = await getBackendConfig();
+    if (backendConfig?.apiUrl) {
       const headers: Record<string, string> = { "Content-Type": "application/json" };
       if (backendConfig.apiToken) headers["Authorization"] = `Bearer ${backendConfig.apiToken}`;
 
@@ -103,10 +97,10 @@ async function doCrawl(opts: {
           };
         }
       }
-    } catch (err) {
-      if (signal.aborted) throw err; // 总超时，直接抛出
-      console.error("[ArticleCrawl] 后端爬取失败，使用本地爬虫:", err);
     }
+  } catch (err) {
+    if ((err as Error)?.name === "AbortError" && signal.aborted) throw err;
+    console.warn("[ArticleCrawl] 后端爬虫不可用，使用本地爬虫:", (err as Error)?.message || err);
   }
 
   // ── 2. 本地爬虫兜底 ──
