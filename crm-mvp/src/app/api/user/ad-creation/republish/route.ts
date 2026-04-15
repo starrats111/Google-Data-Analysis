@@ -3,7 +3,7 @@ import { getUserFromRequest, serializeData } from "@/lib/auth";
 import { apiSuccess, apiError } from "@/lib/constants";
 import prisma from "@/lib/prisma";
 import { removeCampaign } from "@/lib/google-ads";
-import { generateCampaignName, resolvePlatformLabel } from "@/lib/campaign-naming";
+import { generateCampaignName, hasAssignedFormalCampaignName, resolvePlatformLabel } from "@/lib/campaign-naming";
 
 /**
  * POST /api/user/ad-creation/republish
@@ -43,18 +43,17 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  // 2. 重新生成正确的广告系列名称
+  // 2. 沿用旧名称（重发不重新命名）；仅当旧名称不符合正式格式时才重新生成
   const merchant = await prisma.user_merchants.findFirst({
     where: { id: campaign.user_merchant_id, is_deleted: 0 },
     select: { platform: true, merchant_name: true, merchant_id: true, platform_connection_id: true },
   });
 
-  const adSettings = await prisma.ad_default_settings.findFirst({
-    where: { user_id: userId, is_deleted: 0 },
-  });
-
   let newCampaignName = campaign.campaign_name;
-  if (merchant) {
+  if (!hasAssignedFormalCampaignName(campaign.campaign_name) && merchant) {
+    const adSettings = await prisma.ad_default_settings.findFirst({
+      where: { user_id: userId, is_deleted: 0 },
+    });
     const platLabel = await resolvePlatformLabel(userId, merchant.platform || "", merchant.platform_connection_id);
     newCampaignName = await generateCampaignName(
       userId,
@@ -105,5 +104,5 @@ export async function POST(req: NextRequest) {
   return apiSuccess(serializeData({
     campaign_id: campaign.id,
     campaign_name: newCampaignName,
-  }), "旧广告已移除，名称已更新，可重新提交发布");
+  }), "旧广告已移除，可重新提交发布");
 }

@@ -1157,7 +1157,7 @@ export default function AdPreviewPage() {
         }),
       });
       const data = await res.json();
-      if (data.success) {
+      if (data.code === 0) {
         message.success("落地页 URL 已保存");
         setEditingFinalUrl(false);
         mutate();
