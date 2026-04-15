@@ -210,9 +210,12 @@ function parseMerchants(platform: string, data: Record<string, unknown>, assumeA
 
   return list.map((item, idx) => {
     // LH 的字段命名和其他平台相反：mcid=数字MID，m_id=slug MCID
+    // PM/BSH/CF/CG/MUI：mid 已被 API 文档标注为 deprecated（将来会移除），
+    // 正式 ID 为 brand_id（数值）和 mcid（字符串 slug），两者当前与 mid 同值。
+    // 提前将 brand_id 加入兜底链，避免未来 mid 字段消失后 merchant_id 全为空。
     const mid = platform === "LH"
       ? String(item.mcid || item.mid || item.m_id || item.id || "")
-      : String(item.mid || item.m_id || item.merchant_id || item.id || "");
+      : String(item.mid || item.brand_id || item.m_id || item.merchant_id || item.id || "");
     // RW 部分商家 merchant_name 为空字符串，用 site_url 域名或 mcid 兜底，避免被过滤掉
     const rawName = String(item.merchant_name || item.name || item.merchantName || "");
     const nameFallback = (() => {
@@ -225,7 +228,7 @@ function parseMerchants(platform: string, data: Record<string, unknown>, assumeA
     })();
     const name = nameFallback;
     const category = String(item.category || item.categories || item.category_name || item.categoryName || "");
-    // PM (Partnermatic) 返回 camelCase 字段名（commRate / siteUrl / supportRegion），其余平台为 snake_case
+    // 各平台均返回 snake_case 字段名（comm_rate / site_url / support_region），同时兼容 camelCase 备用
     const commission = String(item.comm_rate || item.commRate || item.commission_rate || item.commissionRate || item.commission || "");
     const regions = parseRegions(item.support_region || item.supportRegion || item.supported_regions || item.regions || item.country || "");
     const url = String(item.site_url || item.siteUrl || item.merchant_url || item.url || item.website || item.domain || item.homepage || "");
@@ -336,9 +339,19 @@ export async function fetchAllMerchants(
 
   try {
     const firstPage = await callPlatformApi(config, token, 1, effectiveRelFilter);
-    const code = String((firstPage as Record<string, unknown>).code ?? "0");
-    if (code !== "0" && code !== "200") {
-      const msg = String((firstPage as Record<string, unknown>).message || "API 返回错误");
+    // 兼容两种错误格式：
+    //   1. PM/BSH/CF/CG/MUI：{ "code": "1001", "message": "..." }（顶层 code）
+    //   2. LB/LH/RW：{ "status": { "code": 1000, "msg": "..." }, "data": {...} }（status 包装层）
+    const topCode = String((firstPage as Record<string, unknown>).code ?? "");
+    const statusCode = (firstPage as any).status?.code;
+    const effectiveCode = topCode && topCode !== "0" ? topCode
+      : (statusCode != null && statusCode !== 0 ? String(statusCode) : "0");
+    if (effectiveCode !== "0" && effectiveCode !== "200") {
+      const msg = String(
+        (firstPage as Record<string, unknown>).message ||
+        (firstPage as any).status?.msg ||
+        "API 返回错误"
+      );
       return { merchants: [], error: `${platform}: ${msg}` };
     }
 
