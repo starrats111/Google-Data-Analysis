@@ -7,6 +7,7 @@ import {
 import {
   PlusOutlined, EditOutlined, DeleteOutlined, SaveOutlined,
   CloudServerOutlined, ApiOutlined, DatabaseOutlined, SettingOutlined, GoogleOutlined,
+  GlobalOutlined,
 } from "@ant-design/icons";
 import { useEffect, useState, useCallback } from "react";
 
@@ -58,6 +59,24 @@ const CONFIG_GROUPS: Record<string, {
     description: "用于访问需要邮箱授权的 Google Sheet（违规/推荐商家名单）。粘贴 Service Account JSON 密钥，并将 Sheet 共享给该服务账号邮箱（查看者权限）。与 wj07 的 MCC 服务账号一致。",
     fields: [
       { key: "google_sheets_sa_json", label: "Service Account JSON", placeholder: "粘贴 Google Cloud Service Account 密钥 JSON 全文", required: true, isTextarea: true },
+    ],
+  },
+  crawl_proxy: {
+    title: "爬取代理",
+    icon: <GlobalOutlined />,
+    description: "配置用于广告扩展爬取的国家 IP 代理（SOCKS5）。模板格式：host:port:username_with_**:password，其中 ** 会被自动替换为目标国家代码（如 US、GB、AU）。启用后，系统将通过目标国家 IP 探查商户网站，确保爬取到正确地区的 URL 和内容。",
+    fields: [
+      {
+        key: "crawl_proxy_template",
+        label: "代理模板（** 为国家代码占位符）",
+        placeholder: "如：sp.ipipbright.net:1000:bru30036_area-**_life-3_session-xxx:password",
+        required: true,
+      },
+      {
+        key: "crawl_proxy_enabled",
+        label: "启用代理爬取（填 1 启用，0 或留空停用）",
+        placeholder: "1",
+      },
     ],
   },
 };
@@ -256,6 +275,13 @@ export default function SystemConfigPage() {
               label: <><GoogleOutlined /> Google Sheets</>,
               children: (
                 <ConfigGroupCard groupKey="google_sheets" group={CONFIG_GROUPS.google_sheets} configValues={configValues} onSaved={fetchAll} />
+              ),
+            },
+            {
+              key: "crawl_proxy",
+              label: <><GlobalOutlined /> 爬取代理</>,
+              children: (
+                <ConfigGroupCard groupKey="crawl_proxy" group={CONFIG_GROUPS.crawl_proxy} configValues={configValues} onSaved={fetchAll} />
               ),
             },
             {

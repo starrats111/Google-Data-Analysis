@@ -91,6 +91,12 @@ export const GOOGLE_SHEETS_CONFIG_KEYS = {
   SA_JSON: "google_sheets_sa_json",
 } as const;
 
+// ─── 爬取代理配置 key 常量 ───
+export const CRAWL_PROXY_CONFIG_KEYS = {
+  TEMPLATE: "crawl_proxy_template",  // 格式: host:port:username_with_**_placeholder:password
+  ENABLED:  "crawl_proxy_enabled",   // "1" = 启用, "0" / 空 = 停用
+} as const;
+
 // ─── 配置分组定义（前端表单渲染用）───
 export interface ConfigField {
   key: string;
@@ -193,4 +199,18 @@ export async function getMysqlConfig() {
  */
 export async function getGoogleSheetsSaJson(): Promise<string | null> {
   return getSystemConfig(GOOGLE_SHEETS_CONFIG_KEYS.SA_JSON);
+}
+
+/**
+ * 获取爬取代理配置
+ * 模板格式: host:port:username_with_**:password
+ * 返回 null 表示未配置或已停用
+ */
+export async function getCrawlProxyTemplate(): Promise<string | null> {
+  const [template, enabled] = await Promise.all([
+    getSystemConfig(CRAWL_PROXY_CONFIG_KEYS.TEMPLATE),
+    getSystemConfig(CRAWL_PROXY_CONFIG_KEYS.ENABLED),
+  ]);
+  if (!template || enabled !== "1") return null;
+  return template.trim();
 }
