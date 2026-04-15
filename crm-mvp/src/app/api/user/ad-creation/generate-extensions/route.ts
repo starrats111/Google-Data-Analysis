@@ -1252,10 +1252,9 @@ async function extractPhoneFromCache(
 
 const IMG_BLACKLIST = [
   "logo", "favicon", "icon", "avatar", "payment", "badge", "social", "flag", "arrow",
-  "spinner", "loading", "placeholder", "blank", "banner", "footer", "newsletter",
+  "spinner", "loading", "placeholder", "blank", "footer", "newsletter",
   "trustpilot", "captcha", "pixel", "tracking", "facebook", "twitter", "instagram",
-  "visa", "mastercard", "paypal", "ssl", "shipping-", "emoji", "bg-", "background",
-  "1x1", "spacer",
+  "visa", "mastercard", "paypal", "ssl", "emoji", "1x1", "spacer",
 ];
 
 // 社交媒体域名 - 非品牌相关图片（规则：不能有文字、必须品牌强相关）
@@ -1271,17 +1270,15 @@ const SOCIAL_MEDIA_DOMAINS = [
   "tumblr.com",
 ];
 
-// URL 路径中的促销/文字内容特征词（此类图片通常带大量文字）
+// URL 路径中的促销/文字内容特征词（此类图片通常带大量文字覆盖，不是纯产品图）
+// 注意：不过滤 /hero/ /banner/ /slide/ — 电商品牌常用这些路径存放产品主图
 const TEXT_PROMO_URL_PATTERNS = [
-  "/sale", "_sale", "-sale",
-  "/promo", "_promo", "-promo",
-  "/offer", "_offer", "-offer",
-  "/deal", "_deal", "-deal",
-  "/coupon", "/clearance", "/flyer", "/poster",
-  "/announce", "/campaign", "/ad-", "/ads-",
+  "/flyer", "/poster",
+  "/announce", "/ad-creative", "/ads-creative",
   "percent-off", "pct-off", "%-off",
   "/graphic", "/infographic",
   "before-after", "before_after", "beforeafter",
+  "/coupon",
 ];
 
 async function selectBestImages(rawImages: string[], merchantUrl?: string): Promise<string[]> {
@@ -1355,12 +1352,13 @@ async function selectBestImages(rawImages: string[], merchantUrl?: string): Prom
 
   const headPassed = checked.length > 0 ? checked : ranked.slice(0, 40);
 
-  // Step 2：URL 规则过滤——排除 URL 中含文字性关键词的图片（替代 Tesseract OCR，避免 uncaughtException 崩溃流）
+  // Step 2：URL 规则过滤——排除 URL 中含明显非产品图特征的关键词
+  // 不过滤 /hero/ /banner/ /slide/ /thumb/ — 电商品牌常用这些路径存放产品主图和轮播图
   const TEXT_URL_PATTERNS = [
-    /\/banner[s]?\//i, /\/hero[s]?\//i, /\/slide[r]?\//i, /\/ad[s]?\//i,
-    /\/promo[s]?\//i, /\/sale[s]?\//i, /\/offer[s]?\//i, /\/badge[s]?\//i,
-    /\/label[s]?\//i, /\/text[s]?\//i, /\/overlay/i, /\/campaign/i,
-    /logo/i, /icon/i, /sprite/i, /button/i, /thumb(?:nail)?/i,
+    /\/badge[s]?\//i,
+    /\/label[s]?\//i, /\/text[s]?\//i, /\/overlay/i,
+    /\/sprite[s]?\//i, /\/button[s]?\//i,
+    /\bfavicon\b/i,
   ];
   const cleanImages = headPassed.filter((url) => {
     const lower = url.toLowerCase();

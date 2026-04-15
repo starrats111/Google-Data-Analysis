@@ -315,7 +315,7 @@ export function extractPromotionInfo(html: string, sourceUrl: string, country: s
       if (eventMatch?.[1]?.trim().length >= 3) {
         result.promotion_target = smartTruncate(eventMatch[1].trim(), 20);
       } else {
-        // 最终备用：去折扣词后保留事件名
+        // 最终备用：去折扣词后尝试提取事件名，必须通过"像活动名"的验证
         const eventName = ctx
           .replace(/,?\s*up\s+to\s+\d+\s*%\s*(?:off|discount)/gi, "")
           .replace(/,?\s*\d+\s*%\s*(?:off|discount)/gi, "")
@@ -323,7 +323,17 @@ export function extractPromotionInfo(html: string, sourceUrl: string, country: s
           .replace(/,?\s*save\s+\d+%/gi, "")
           .replace(/\s+/g, " ").trim();
         const cleanName = eventName.replace(/[\.\!\?].*$/, "").replace(/\(.*$/, "").trim();
-        if (cleanName.length >= 3) result.promotion_target = smartTruncate(cleanName, 20);
+        // 验证：不能以介词/冠词/连词结尾（说明是句子碎片，不是活动名称）
+        const STOP_WORD_ENDS = /\b(on|the|a|an|for|to|in|at|from|with|and|or|but|of|men|women|all)\s*$/i;
+        // 验证：不能包含超过 4 个单词（活动名通常短）且不以大写开头（不像专有名词/标题）
+        const words = cleanName.split(/\s+/).filter(Boolean);
+        const looksLikeEventName = cleanName.length >= 3
+          && !STOP_WORD_ENDS.test(cleanName)
+          && words.length <= 5
+          && words.length > 0
+          && /^[A-Z&]/.test(cleanName); // 必须以大写或 & 开头（像专有名词）
+        if (looksLikeEventName) result.promotion_target = smartTruncate(cleanName, 20);
+        // 验证不通过时不设置 promotion_target，让步骤5的通用兜底接管
       }
     }
   }
@@ -672,8 +682,8 @@ async function probeUrlReal(probeUrl: string, merchantDomain: string): Promise<{
       } catch { return null; }
 
       try { const p = new URL(finalUrl).pathname; if (p === "/" || p === "") return null; } catch {}
-      // 400+ 状态码说明 Google 爬虫也访问不了，直接排除
-      if (res.status >= 400) return null;
+      // 403 可能是反爬但页面仍可读取，继续尝试下一个 UA；其余 4xx 直接排除
+      if (res.status >= 400 && res.status !== 403) return null;
 
       const html = await res.text();
       if (!html || html.length < 500) continue;
@@ -736,8 +746,20 @@ async function discoverSitelinkCandidates(
   const usedFinalUrls = new Set<string>();
 
   if (pageLinks.length > 0) {
+    // 优先取路径层级浅（≤3段）、无查询参数的链接，最多尝试 15 条（之前 5 条太少）
+    const prioritized = [...pageLinks].sort((a, b) => {
+      try {
+        const pa = new URL(a.url).pathname.split("/").filter(Boolean).length;
+        const pb = new URL(b.url).pathname.split("/").filter(Boolean).length;
+        return pa - pb;
+      } catch { return 0; }
+    });
+    const linksToTry = prioritized
+      .filter(l => { try { return !new URL(l.url).search; } catch { return true; } })
+      .slice(0, 15);
+
     const metaResults = await Promise.all(
-      pageLinks.slice(0, 5).map(async (link) => {
+      linksToTry.map(async (link) => {
         try {
           const meta = await fetchUrlMeta(link.url);
           return { link, meta };
