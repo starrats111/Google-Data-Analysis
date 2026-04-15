@@ -288,22 +288,27 @@ async function syncAllUsersMcc(): Promise<unknown> {
                   const sample = firstRowByGcid.get(gcid);
                   if (!sample) continue;
                   try {
-                    const newC = await prisma.campaigns.upsert({
-                      where: { google_campaign_id: gcid } as never,
-                      update: {},
-                      create: {
-                        user_id: uid, user_merchant_id: BigInt(0),
-                        google_campaign_id: gcid, mcc_id: mcc.id,
-                        customer_id: sample.customer_id || null,
-                        campaign_name: sample.campaign_name,
-                        daily_budget: sample.budget,
-                        target_country: "US",
-                        google_status: sample.status,
-                        last_google_sync_at: new Date(),
-                      },
+                    // google_campaign_id 在 schema 中非 unique，不能用 upsert，改用 findFirst + create
+                    let newC = await prisma.campaigns.findFirst({
+                      where: { user_id: uid, google_campaign_id: gcid, is_deleted: 0 },
+                      select: { id: true, google_campaign_id: true, customer_id: true },
                     });
+                    if (!newC) {
+                      newC = await prisma.campaigns.create({
+                        data: {
+                          user_id: uid, user_merchant_id: BigInt(0),
+                          google_campaign_id: gcid, mcc_id: mcc.id,
+                          customer_id: sample.customer_id || null,
+                          campaign_name: sample.campaign_name,
+                          daily_budget: sample.budget,
+                          target_country: "US",
+                          google_status: sample.status,
+                          last_google_sync_at: new Date(),
+                        },
+                      });
+                      log(`  [新campaign] ${gcid} ${sample.campaign_name} (from Sheet)`);
+                    }
                     campaignByGcid.set(gcid, { id: newC.id, google_campaign_id: gcid, customer_id: newC.customer_id });
-                    log(`  [新campaign] ${gcid} ${sample.campaign_name} (from Sheet)`);
                   } catch (e) {
                     log(`  [新campaign创建失败] ${gcid}: ${e instanceof Error ? e.message.slice(0, 80) : String(e)}`);
                   }
@@ -385,24 +390,34 @@ async function syncAllUsersMcc(): Promise<unknown> {
                       let campaign = campaignByGcid.get(cd.campaign_id);
                       if (!campaign) {
                         // API 发现了 DB 中不存在的新广告系列，自动补录
+                        // google_campaign_id 在 schema 中非 unique，不能用 upsert，改用 findFirst + create/update
                         try {
-                          const newC = await prisma.campaigns.upsert({
-                            where: { google_campaign_id: cd.campaign_id } as never,
-                            update: { customer_id: cd.customer_id || undefined, google_status: cd.campaign_status },
-                            create: {
-                              user_id: uid, user_merchant_id: BigInt(0),
-                              google_campaign_id: cd.campaign_id, mcc_id: mcc.id,
-                              customer_id: cd.customer_id,
-                              campaign_name: cd.campaign_name,
-                              daily_budget: cd.budget_dollars,
-                              target_country: "US",
-                              google_status: cd.campaign_status,
-                              last_google_sync_at: new Date(),
-                            },
+                          let newC = await prisma.campaigns.findFirst({
+                            where: { user_id: uid, google_campaign_id: cd.campaign_id, is_deleted: 0 },
+                            select: { id: true, google_campaign_id: true, customer_id: true },
                           });
+                          if (!newC) {
+                            newC = await prisma.campaigns.create({
+                              data: {
+                                user_id: uid, user_merchant_id: BigInt(0),
+                                google_campaign_id: cd.campaign_id, mcc_id: mcc.id,
+                                customer_id: cd.customer_id,
+                                campaign_name: cd.campaign_name,
+                                daily_budget: cd.budget_dollars,
+                                target_country: "US",
+                                google_status: cd.campaign_status,
+                                last_google_sync_at: new Date(),
+                              },
+                            });
+                            log(`  [新campaign] ${cd.campaign_id} ${cd.campaign_name} (from API)`);
+                          } else {
+                            await prisma.campaigns.update({
+                              where: { id: newC.id },
+                              data: { customer_id: cd.customer_id || undefined, google_status: cd.campaign_status },
+                            });
+                          }
                           campaign = { id: newC.id, google_campaign_id: cd.campaign_id, customer_id: newC.customer_id };
                           campaignByGcid.set(cd.campaign_id, campaign);
-                          log(`  [新campaign] ${cd.campaign_id} ${cd.campaign_name} (from API)`);
                         } catch (e) {
                           log(`  [新campaign创建失败] ${cd.campaign_id}: ${e instanceof Error ? e.message.slice(0, 80) : String(e)}`);
                           continue;
