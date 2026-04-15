@@ -1,9 +1,20 @@
 "use client";
 
-import { Table, Button, Modal, Form, Input, Select, Tag, Space, Typography, App, Popconfirm, Tooltip } from "antd";
+import { Table, Button, Modal, Form, Input, Select, Tag, Space, Typography, App, Popconfirm, Tooltip, Radio } from "antd";
 import { PlusOutlined, EditOutlined, DeleteOutlined, SyncOutlined, ShopOutlined, ToolOutlined } from "@ant-design/icons";
 import { useState, useMemo, useCallback } from "react";
 import { useApi, mutateApi } from "@/lib/swr";
+
+const PLATFORM_OPTIONS = [
+  { value: "CF", label: "CF — Commission Factory" },
+  { value: "CG", label: "CG — Commission Group" },
+  { value: "BSH", label: "BSH — Bshareit" },
+  { value: "PM", label: "PM — PartnerMate" },
+  { value: "LB", label: "LB — LinkBridge" },
+  { value: "LH", label: "LH — LinkHaitao" },
+  { value: "RW", label: "RW — Rewardoo" },
+  { value: "MUI", label: "MUI — Muii" },
+];
 
 const { Title, Text } = Typography;
 
@@ -26,6 +37,9 @@ export default function UsersPage() {
   const [form] = Form.useForm();
   const [syncingId, setSyncingId] = useState<string | null>(null);
   const [syncResultModal, setSyncResultModal] = useState<{ open: boolean; title: string; content: string }>({ open: false, title: "", content: "" });
+  const [syncOptModal, setSyncOptModal] = useState<{ open: boolean; user: User | null; mode: "all" | "single"; platform: string }>({
+    open: false, user: null, mode: "all", platform: "CF",
+  });
   const [fixCampModal, setFixCampModal] = useState<{ open: boolean; user: User | null; step: "confirm" | "preview" | "done"; loading: boolean; previewContent: string; resultContent: string }>({
     open: false, user: null, step: "confirm", loading: false, previewContent: "", resultContent: "",
   });
@@ -70,12 +84,23 @@ export default function UsersPage() {
     else message.error(res.message);
   }, [mutate]);
 
-  // ─── 触发商家同步 ───
-  const handleSync = useCallback(async (user: User) => {
+  // ─── 打开同步选项 Modal ───
+  const handleOpenSyncOpt = useCallback((user: User) => {
+    setSyncOptModal({ open: true, user, mode: "all", platform: "CF" });
+  }, []);
+
+  // ─── 执行商家同步 ───
+  const handleSync = useCallback(async () => {
+    const { user, mode, platform } = syncOptModal;
+    if (!user) return;
+    setSyncOptModal((prev) => ({ ...prev, open: false }));
     setSyncingId(user.id);
-    const hide = message.loading(`正在同步 ${user.username} 的商家数据...`, 0);
+    const platformLabel = mode === "single" ? `[${platform}]` : "（全量）";
+    const hide = message.loading(`正在同步 ${user.username} ${platformLabel} 商家数据...`, 0);
     try {
-      const res = await mutateApi("/api/admin/merchants/sync-user", { method: "POST", body: { userId: user.id } });
+      const body: Record<string, string> = { userId: user.id };
+      if (mode === "single") body.platform = platform;
+      const res = await mutateApi("/api/admin/merchants/sync-user", { method: "POST", body });
       hide();
       if (res.code === 0) {
         const d = res.data as { newCount: number; updatedCount: number; total: number; platformCounts: Record<string, number>; errors: string[] };
@@ -83,10 +108,10 @@ export default function UsersPage() {
         const errLines = (d.errors || []).length ? `\n\n错误信息：\n${d.errors.join("\n")}` : "";
         setSyncResultModal({
           open: true,
-          title: `${user.username} 同步完成`,
+          title: `${user.username} 同步完成 ${platformLabel}`,
           content: `新增: ${d.newCount}  |  更新: ${d.updatedCount}  |  合计: ${d.total}\n\n各平台商家数：\n${platformLines}${errLines}`,
         });
-        mutate(); // 刷新列表（更新商家数量）
+        mutate();
       } else {
         message.error(res.message || "同步失败");
       }
@@ -96,7 +121,7 @@ export default function UsersPage() {
     } finally {
       setSyncingId(null);
     }
-  }, [mutate]);
+  }, [syncOptModal, mutate, message]);
 
   // ─── 修复广告系列（删除非CF + 重编号）───
   const handleFixCampaigns = useCallback((user: User) => {
@@ -198,11 +223,11 @@ export default function UsersPage() {
       title: "操作", render: (_: unknown, record: User) => (
         <Space>
           <Button size="small" icon={<EditOutlined />} onClick={() => handleEdit(record)}>编辑</Button>
-          <Tooltip title="触发该用户所有平台的商家同步（实时执行，稍等片刻）">
+          <Tooltip title="选择平台同步该用户的商家库（实时执行，稍等片刻）">
             <Button
               size="small"
               icon={<SyncOutlined spin={syncingId === record.id} />}
-              onClick={() => handleSync(record)}
+              onClick={() => handleOpenSyncOpt(record)}
               loading={syncingId === record.id}
               disabled={!!syncingId && syncingId !== record.id}
             >
@@ -224,7 +249,7 @@ export default function UsersPage() {
         </Space>
       ),
     },
-  ], [handleEdit, handleDelete, handleSync, handleFixCampaigns, syncingId]);
+  ], [handleEdit, handleDelete, handleOpenSyncOpt, handleFixCampaigns, syncingId]);
 
   return (
     <div>
@@ -279,6 +304,40 @@ export default function UsersPage() {
             </>
           )}
         </Form>
+      </Modal>
+
+      {/* 同步选项 Modal */}
+      <Modal
+        title={`同步商家 — ${syncOptModal.user?.username}`}
+        open={syncOptModal.open}
+        onOk={handleSync}
+        okText="开始同步"
+        onCancel={() => setSyncOptModal((prev) => ({ ...prev, open: false }))}
+        width={440}
+      >
+        <div style={{ marginBottom: 16 }}>
+          <div style={{ marginBottom: 8, color: "#666", fontSize: 13 }}>选择同步范围：</div>
+          <Radio.Group
+            value={syncOptModal.mode}
+            onChange={(e) => setSyncOptModal((prev) => ({ ...prev, mode: e.target.value }))}
+            style={{ display: "flex", flexDirection: "column", gap: 12 }}
+          >
+            <Radio value="all">全量同步（所有已配置平台）</Radio>
+            <Radio value="single">单平台同步</Radio>
+          </Radio.Group>
+        </div>
+        {syncOptModal.mode === "single" && (
+          <Select
+            style={{ width: "100%" }}
+            value={syncOptModal.platform}
+            onChange={(v) => setSyncOptModal((prev) => ({ ...prev, platform: v }))}
+            options={PLATFORM_OPTIONS}
+            placeholder="选择要同步的平台"
+          />
+        )}
+        <div style={{ marginTop: 12, color: "#faad14", fontSize: 12 }}>
+          ⚠️ 同步为实时执行，商家数量较多时请耐心等待（约 10–60 秒）
+        </div>
       </Modal>
 
       {/* 同步结果详情 Modal */}

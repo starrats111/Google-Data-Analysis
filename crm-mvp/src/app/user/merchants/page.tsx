@@ -1,6 +1,6 @@
 "use client";
 import { useState, useCallback, useMemo, useEffect } from "react";
-import { Card, Row, Col, Table, Input, Select, Button, Space, Tag, Modal, Form, Typography, Popconfirm, Switch, InputNumber, Tabs, App, Tooltip } from "antd";
+import { Card, Row, Col, Table, Input, Select, Button, Space, Tag, Modal, Form, Typography, Popconfirm, Switch, InputNumber, Tabs, App, Tooltip, Radio } from "antd";
 import { ShopOutlined, SearchOutlined, CheckOutlined, DollarOutlined, CalendarOutlined, SaveOutlined, SyncOutlined, WarningOutlined, StarOutlined, CopyOutlined, ReloadOutlined, RobotOutlined, DeleteOutlined } from "@ant-design/icons";
 import { PLATFORMS, BIDDING_STRATEGIES } from "@/lib/constants";
 import { useApiWithParams, useStaleApi, useApi, mutateApi, refreshApi } from "@/lib/swr";
@@ -188,7 +188,23 @@ export default function MerchantsPage() {
     finally { setAdvLoading(false); }
   }, []);
   const [syncing, setSyncing] = useState(false);
-  const doSync = useCallback(async () => { setSyncing(true); try { const r = await fetch("/api/user/merchants/sync", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }).then(r => r.json()); if (r.code === 0) { message.success(r.data?.message || "商家同步已开始，完成后将通知您"); setTimeout(() => refreshApi(/\/api\/user\/merchants/), 5000); setTimeout(() => refreshApi(/\/api\/user\/merchants/), 15000); setTimeout(() => refreshApi(/\/api\/user\/merchants/), 30000); setTimeout(() => refreshApi(/\/api\/user\/merchants/), 60000); } else message.error(r.message); } catch { message.error("同步失败"); } finally { setSyncing(false); } }, [message]);
+  const [syncOptModal, setSyncOptModal] = useState<{ open: boolean; mode: "all" | "single"; platform: string }>({ open: false, mode: "all", platform: "CF" });
+  const doSync = useCallback(async (platform?: string) => {
+    setSyncing(true);
+    setSyncOptModal((prev) => ({ ...prev, open: false }));
+    try {
+      const body = platform ? JSON.stringify({ platform }) : "{}";
+      const r = await fetch("/api/user/merchants/sync", { method: "POST", headers: { "Content-Type": "application/json" }, body }).then(r => r.json());
+      if (r.code === 0) {
+        message.success(r.data?.message || "商家同步已开始，完成后将通知您");
+        setTimeout(() => refreshApi(/\/api\/user\/merchants/), 5000);
+        setTimeout(() => refreshApi(/\/api\/user\/merchants/), 15000);
+        setTimeout(() => refreshApi(/\/api\/user\/merchants/), 30000);
+        setTimeout(() => refreshApi(/\/api\/user\/merchants/), 60000);
+      } else message.error(r.message);
+    } catch { message.error("同步失败"); }
+    finally { setSyncing(false); }
+  }, [message]);
   const saveAd = useCallback(async () => { const v = adForm.getFieldsValue(); const r = await mutateApi("/api/user/ad-settings", { method: "PUT", body: v }, ["/api/user/ad-settings"]); if (r.code === 0) message.success("已保存"); else message.error(r.message); }, [adForm, message]);
 
   const savePersonaProfile = useCallback(async (updatedProfile: AiRuleProfile) => {
@@ -437,7 +453,7 @@ export default function MerchantsPage() {
           <Button type="primary" size="small" icon={<SearchOutlined />} onClick={doSearch}>查询</Button>
           <Button size="small" icon={<SyncOutlined />} onClick={() => { setSearchInput(""); setSearch(""); setPlatform(""); setLabelFilter(""); setPage(1); setSortField(""); setSortOrder(""); }}>重置</Button>
           <div style={{ flex: 1 }} />
-          <Button size="small" type="dashed" icon={<SyncOutlined spin={syncing} />} loading={syncing} onClick={doSync}>同步商家库</Button>
+          <Button size="small" type="dashed" icon={<SyncOutlined spin={syncing} />} loading={syncing} onClick={() => setSyncOptModal({ open: true, mode: "all", platform: "CF" })}>同步商家库</Button>
         </div>
       )}
       {tab === "claimed" && <Table columns={claimedCols} dataSource={merchants} rowKey="id" loading={ml} onChange={handleTableChange} pagination={{ current: page, pageSize: 50, total, onChange: setPage, showTotal: (t: number) => `共 ${t} 条` }} scroll={{ x: 1000 }} size="small" />}
@@ -457,6 +473,38 @@ export default function MerchantsPage() {
         <div className="filter-bar"><Input allowClear placeholder="搜索商家名" style={{ width: 240 }} prefix={<SearchOutlined />} size="small" value={recSearch} onChange={(e) => setRecSearch(e.target.value)} onPressEnter={() => setRecPage(1)} /><Button type="primary" size="small" icon={<SearchOutlined />} onClick={() => setRecPage(1)}>查询</Button><Button size="small" icon={<ReloadOutlined />} onClick={() => recMutate()}>刷新</Button></div>
         <Table rowKey="id" loading={rl} dataSource={recData?.items || []} size="small" scroll={{ x: 1000 }} pagination={{ current: recPage, pageSize: 50, total: recData?.total || 0, showTotal: (t: number) => `共 ${t} 条`, onChange: setRecPage }} columns={recCols} /></div>)}
     </Card>
+    <Modal
+      title="同步商家库"
+      open={syncOptModal.open}
+      onOk={() => doSync(syncOptModal.mode === "single" ? syncOptModal.platform : undefined)}
+      okText="开始同步"
+      onCancel={() => setSyncOptModal((prev) => ({ ...prev, open: false }))}
+      width={420}
+    >
+      <div style={{ marginBottom: 16 }}>
+        <div style={{ marginBottom: 8, color: "#666", fontSize: 13 }}>选择同步范围：</div>
+        <Radio.Group
+          value={syncOptModal.mode}
+          onChange={(e) => setSyncOptModal((prev) => ({ ...prev, mode: e.target.value }))}
+          style={{ display: "flex", flexDirection: "column", gap: 12 }}
+        >
+          <Radio value="all">全量同步（所有已配置平台）</Radio>
+          <Radio value="single">单平台同步</Radio>
+        </Radio.Group>
+      </div>
+      {syncOptModal.mode === "single" && (
+        <Select
+          style={{ width: "100%" }}
+          value={syncOptModal.platform}
+          onChange={(v) => setSyncOptModal((prev) => ({ ...prev, platform: v }))}
+          options={PLATFORMS.map((p) => ({ value: p.code, label: p.code }))}
+          placeholder="选择要同步的平台"
+        />
+      )}
+      <div style={{ marginTop: 12, color: "#faad14", fontSize: 12 }}>
+        ⚠️ 同步为后台异步执行，完成后系统将推送通知，请勿重复点击
+      </div>
+    </Modal>
     <Modal title={`领取商家: ${claimM?.merchant_name}`} open={claimModal} onOk={submitClaim} onCancel={() => setClaimModal(false)}>
       {claimM?.policy_status === "restricted" && (<div style={{ marginBottom: 16, padding: "8px 12px", background: "#fff7e6", border: "1px solid #ffd591", borderRadius: 6 }}><WarningOutlined style={{ color: "#fa8c16", marginRight: 6 }} /><Text type="warning" style={{ fontSize: 13 }}>该商家属于受限类别{claimM.policy_category_code ? `（${PN[claimM.policy_category_code] || claimM.policy_category_code}）` : ""}，投放将受限。</Text></div>)}
       <Form form={claimForm} layout="vertical">
