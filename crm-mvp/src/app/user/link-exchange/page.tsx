@@ -412,12 +412,20 @@ export default function LinkExchangePage() {
           size="small"
           loading={loading}
           pagination={{ pageSize: 50, showTotal: (t) => `共 ${t} 条`, showSizeChanger: false }}
-          rowClassName={(row) => (!row.matched ? "row-unmatched" : "")}
+          rowClassName={(row) => {
+            if (row.matched && row.linkStatus === "invalid") return "row-invalid-link";
+            if (!row.matched) return "row-unmatched";
+            return "";
+          }}
           scroll={{ x: 980 }}
         />
       </Card>
 
-      <style>{`.row-unmatched td { background: #fff7f7 !important; }`}</style>
+      <style>{`
+        .row-unmatched td { background: #fff7f7 !important; }
+        .row-invalid-link td { background: #fff1f0 !important; }
+        .row-invalid-link td:first-child { border-left: 3px solid #ff4d4f !important; }
+      `}</style>
     </div>
   );
 }

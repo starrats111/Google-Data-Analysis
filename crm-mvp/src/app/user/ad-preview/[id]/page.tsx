@@ -1775,8 +1775,9 @@ export default function AdPreviewPage() {
                         <Card key={i} size="small"
                           style={{
                             marginBottom: 8,
-                            background: sl.urlStatus === "invalid" ? "#fff2f0" : sl.urlStatus === "valid" ? "#f6ffed" : "#fafafa",
-                            borderColor: sl.urlStatus === "invalid" ? "#ffccc7" : sl.urlStatus === "valid" ? "#b7eb8f" : undefined,
+                            background: sl.urlStatus === "invalid" ? "#fff1f0" : sl.urlStatus === "valid" ? "#f6ffed" : "#fafafa",
+                            borderColor: sl.urlStatus === "invalid" ? "#ff4d4f" : sl.urlStatus === "valid" ? "#b7eb8f" : undefined,
+                            borderWidth: sl.urlStatus === "invalid" ? 2 : undefined,
                           }}
                           extra={
                             <Space size={4}>
