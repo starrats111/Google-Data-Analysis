@@ -340,6 +340,12 @@ export function extractPromotionInfo(html: string, sourceUrl: string, country: s
   }
   delete result._promo_context;
 
+  // ─── 步骤4.5：找到折扣但未能提取活动名时，用通用兜底补充 promotion_target ───
+  // 场景：页面有 "15% off" 但没有明确的活动名称（如只写 "Enjoy 15% off all orders"）
+  if (result.discount_type && !result.promotion_target) {
+    result.promotion_target = market.genericPromotionTarget;
+  }
+
   // ─── 步骤5：通用优惠兜底（无具体折扣但有 sale/deals 关键词） ───
   if (!result.discount_type) {
     const hasFreeShipping = /free\s*(?:standard\s*)?(?:shipping|delivery)|kostenlos(?:e|er)?\s+versand|livraison\s+offerte|env[ií]o\s+gratis|spedizione\s+gratuita/i.test(plainText);
@@ -1033,6 +1039,45 @@ export async function buildCrawlCache(
     return mainPromo; // 返回主页结果（可能 null 或仅有通用促销）
   };
 
+  // ─── 价格子页面专项爬取：主页通常是类目页或 JS 渲染，价格在产品详情页 ───
+  const extractPriceWithProductPages = async (): Promise<ReturnType<typeof extractPriceInfo>> => {
+    // 先从主页 HTML 提取
+    const mainPrices = html ? extractPriceInfo(html, country, merchantUrl) : [];
+    if (mainPrices.length >= 3) return mainPrices; // 主页已够用
+
+    // 从已发现链接中找产品详情页（路径层级深 ≥3，且含产品相关关键词）
+    const PRODUCT_URL_RE = /\/(product|item|shoes?|boot|loafer|sneaker|sandal|bag|accessor)/i;
+    const deepLinks = crawlResult.links.filter(l => {
+      try {
+        const parts = new URL(l.url).pathname.split("/").filter(Boolean);
+        return parts.length >= 3;
+      } catch { return false; }
+    });
+    const productLinks = (deepLinks.filter(l => PRODUCT_URL_RE.test(l.url)).length > 0
+      ? deepLinks.filter(l => PRODUCT_URL_RE.test(l.url))
+      : deepLinks
+    ).slice(0, 3);
+
+    const combined = [...mainPrices];
+    for (const link of productLinks) {
+      if (combined.length >= 8) break;
+      try {
+        const resp = await fetch(link.url, {
+          signal: AbortSignal.timeout(8000),
+          headers: { "User-Agent": "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)", Accept: "text/html" },
+        });
+        if (!resp.ok) continue;
+        const subHtml = (await resp.text()).slice(0, 100000);
+        const subPrices = extractPriceInfo(subHtml, country, link.url);
+        for (const p of subPrices) {
+          if (combined.length < 8 && !combined.some(r => r.header === p.header)) combined.push(p);
+        }
+        if (combined.length >= 3) break; // 够了就停
+      } catch {}
+    }
+    return combined;
+  };
+
   // 并行执行所有提取任务
   const [sitelinkCandidates, images, features, navItems, phoneCandidates, promoRegex, priceRegex, crawledProducts] = await Promise.all([
     discoverSitelinkCandidates(merchantUrl, crawlResult.links, country).catch(() => []),
@@ -1041,7 +1086,7 @@ export async function buildCrawlCache(
     Promise.resolve(html ? extractNavItems(html) : []),
     Promise.resolve(html ? extractPhoneCandidates(html, country) : []),
     extractPromoWithSubPage().catch(() => null),
-    Promise.resolve(html ? extractPriceInfo(html, country, merchantUrl) : []),
+    extractPriceWithProductPages().catch(() => [] as ReturnType<typeof extractPriceInfo>),
     Promise.resolve(html ? extractProducts(html, merchantUrl, country) : []),
   ]);
 
