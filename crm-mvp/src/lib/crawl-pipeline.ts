@@ -48,6 +48,7 @@ export interface CrawlCache {
   crawledAt: string;
   crawlMethod: string;
   crawlFailed: boolean;
+  localizedMerchantUrl?: string;
 }
 
 // ─── 共享常量和工具函数 ───
@@ -1227,6 +1228,35 @@ export async function buildCrawlCache(
 
   const pageText = html ? htmlToText(html).slice(0, 10000) : "";
 
+  // 检测站点是否使用 /xx-yy/ locale 前缀，若是则为当前目标国家计算本地化落地页 URL
+  let localizedMerchantUrl: string | undefined;
+  if (merchantUrl && country) {
+    const localeSegRe = /^\/([a-z]{2}[-_][a-z]{2})\//i;
+    const siteUsesLocale = crawlResult.links.slice(0, 30).some(l => {
+      try { return localeSegRe.test(new URL(l.url).pathname); } catch { return false; }
+    });
+    if (siteUsesLocale) {
+      const targetLocale = COUNTRY_TO_LOCALE[country.toUpperCase()];
+      if (targetLocale) {
+        try {
+          const u = new URL(merchantUrl);
+          const existingLocaleMatch = u.pathname.match(/^\/([a-z]{2}[-_][a-z]{2})(\/|$)/i);
+          if (existingLocaleMatch) {
+            // 替换已有的 locale 前缀
+            u.pathname = "/" + targetLocale + u.pathname.slice(existingLocaleMatch[0].length - 1);
+          } else {
+            // 插入 locale 前缀（保留原有路径）
+            u.pathname = "/" + targetLocale + (u.pathname === "/" ? "/" : u.pathname);
+          }
+          localizedMerchantUrl = u.toString();
+          if (localizedMerchantUrl !== merchantUrl) {
+            console.log(`[CrawlPipeline] 检测到 locale 站点，落地页本地化: ${merchantUrl} → ${localizedMerchantUrl}`);
+          }
+        } catch {}
+      }
+    }
+  }
+
   return {
     links: crawlResult.links,
     images,
@@ -1243,6 +1273,7 @@ export async function buildCrawlCache(
     crawledAt: new Date().toISOString(),
     crawlMethod: crawlResult.method,
     crawlFailed,
+    localizedMerchantUrl,
   };
   } finally {
     releaseCrawlSlot();

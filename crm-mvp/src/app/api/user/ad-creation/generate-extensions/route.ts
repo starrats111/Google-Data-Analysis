@@ -216,7 +216,7 @@ export async function POST(req: NextRequest) {
 
   // 优先使用用户明确设定的落地页 URL（用户可能已改成本地化路径如 /en-us/）
   // merchant_url 是商家层面的默认 URL，可能带旧地区前缀（如 /en-sg/）
-  const merchantUrl = adCreative?.final_url || merchant.merchant_url || "";
+  let merchantUrl = adCreative?.final_url || merchant.merchant_url || "";
   const merchantName = merchant.merchant_name || "";
   const country = campaign.target_country || "US";
   const market = getAdMarketConfig(country);
@@ -275,6 +275,17 @@ export async function POST(req: NextRequest) {
         console.log(`[Extensions] 保留 DB 中更好的 cache（已有折扣）`);
       }
     }
+  }
+
+  // 若爬取时检测到站点使用 locale 前缀，用本地化 URL 更新 merchantUrl 和 DB 的 final_url
+  const localizedUrl = (cache as CrawlCache | null)?.localizedMerchantUrl;
+  if (localizedUrl && localizedUrl !== merchantUrl && adCreative?.id) {
+    merchantUrl = localizedUrl;
+    await prisma.ad_creatives.update({
+      where: { id: adCreative.id },
+      data: { final_url: localizedUrl },
+    }).catch(() => {});
+    console.log(`[Extensions] final_url 本地化: ${adCreative?.final_url || merchant.merchant_url} → ${localizedUrl}`);
   }
 
   const encoder = new TextEncoder();
