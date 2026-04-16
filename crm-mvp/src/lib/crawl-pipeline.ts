@@ -1204,9 +1204,34 @@ export async function buildCrawlCache(
 
   // ─── 促销子页面专项爬取：从已发现链接中找促销/活动相关 URL 爬取以补充 meta 描述 ───
   const extractPromoWithSubPage = async (): Promise<Record<string, unknown> | null> => {
-    // 先从主页 HTML 提取
+    // 先从主页 HTML 提取（可能被 150K 截断，作为快速路径）
     const mainPromo = html ? extractPromotionInfo(html, merchantUrl, country) : null;
     if (mainPromo?.discount_type) return mainPromo; // 主页已有真实折扣，无需继续
+
+    // 截断可能导致遗漏了页面后半段（footer/newsletter 区域）的促销信息
+    // 补：对主页做一次专项 HTTP fetch，不截断，专门用于促销提取
+    const promoFetchUrl = localeUrl ?? merchantUrl;
+    if (promoFetchUrl) {
+      try {
+        const { getAcceptLanguage } = await import("@/lib/crawler");
+        const fullResp = await fetch(promoFetchUrl, {
+          signal: AbortSignal.timeout(15000),
+          headers: {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept-Language": getAcceptLanguage(country),
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+          },
+        });
+        if (fullResp.ok) {
+          // 取全量 HTML（不截断），专门用于促销文字检索
+          const fullHtml = await fullResp.text();
+          const fullPromo = extractPromotionInfo(fullHtml, promoFetchUrl, country);
+          if (fullPromo?.discount_type) return fullPromo;
+        }
+      } catch {
+        // 专项 fetch 失败忽略，继续尝试子页面
+      }
+    }
 
     // 在已发现链接中找促销/活动子页面（sale / promo / event / offer / deal / discount / clearance）
     const PROMO_PATTERNS = /\/(sale|promo|event|offer|deal|discount|clearance|friends|family|specials?|holiday|seasonal|black[-_]?friday|cyber[-_]?monday)\b/i;
@@ -1226,7 +1251,7 @@ export async function buildCrawlCache(
         if (subPromo?.discount_type) {
           // 使用商家主页 URL 作为落地页（不用子页面 URL）
           subPromo.final_url = merchantUrl;
-          console.log(`[PromoExtract] 从子页面提取成功: ${link.url}`);
+          console.warn(`[PromoExtract] 从子页面提取成功: ${link.url}`);
           return subPromo;
         }
       } catch {
