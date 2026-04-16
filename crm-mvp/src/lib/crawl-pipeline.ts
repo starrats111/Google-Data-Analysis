@@ -1224,16 +1224,40 @@ export async function buildCrawlCache(
         });
         if (fullResp.ok) {
           const rawHtml = await fullResp.text();
-          // 只取可见 HTML 部分（__NEXT_DATA__ 之前），避免 1MB+ 的 JSON 干扰 htmlToText 解析
-          const nextDataIdx = rawHtml.indexOf('<script id="__NEXT_DATA__"');
-          const promoHtml = nextDataIdx > 5000
-            ? rawHtml.slice(0, nextDataIdx)      // 取可见 HTML（head+body 可见内容）
-            : rawHtml.slice(0, 300000);           // 兜底：取前 300K
-          const fullPromo = extractPromotionInfo(promoHtml, promoFetchUrl, country);
-          console.error(`[PromoFetch] ok rawLen=${rawHtml.length} promoHtmlLen=${promoHtml.length} result=${JSON.stringify(fullPromo)}`);
-          if (fullPromo?.discount_type) return fullPromo;
-          // 即使未找到折扣类型，如果有促销目标也返回（如"First Order"等）
-          if (fullPromo?.promotion_target) return fullPromo;
+          // 策略1：先对前 300K 的可见 HTML 尝试结构化提取
+          const sliceHtml = rawHtml.slice(0, 300000);
+          const slicePromo = extractPromotionInfo(sliceHtml, promoFetchUrl, country);
+          if (slicePromo?.discount_type) return slicePromo;
+
+          // 策略2：全量 HTML 直接正则搜索 <a>/<h*>/<p>/<div>/<span> 标签中的促销文字
+          // 绕过 htmlToText 管道，专门应对超大 HTML（如 Next.js App Router 的 1.8MB 响应）
+          const TAG_PROMO_RE = /<(?:a|h[1-6]|p|div|span|li)[^>]*>([^<]{5,200})<\/(?:a|h[1-6]|p|div|span|li)>/gi;
+          const PCT_RE = /(\d{1,2})\s*%\s*(?:off|discount|sale)/i;
+          const FIRST_ORDER_RE = /first[\s-]?order|new[\s-]?customer|new[\s-]?subscriber|sign[\s-]?up/i;
+          const NEWSLETTER_RE = /newsletter|subscri(?:be|ption)|email/i;
+          let tagMatch: RegExpExecArray | null;
+          // eslint-disable-next-line no-cond-assign
+          while ((tagMatch = TAG_PROMO_RE.exec(rawHtml)) !== null) {
+            const text = tagMatch[1].trim();
+            const pctMatch = PCT_RE.exec(text);
+            if (!pctMatch) continue;
+            const pct = parseInt(pctMatch[1], 10);
+            if (pct < 5 || pct > 90) continue;
+            const target = FIRST_ORDER_RE.test(text) ? "First Order"
+              : NEWSLETTER_RE.test(text) ? "Newsletter"
+              : null;
+            if (!target) continue;
+            const market = getAdMarketConfig(country);
+            console.error(`[PromoFetch] direct-match pct=${pct} target=${target} text="${text.slice(0, 80)}"`);
+            return {
+              discount_type: "PERCENT",
+              discount_percent: pct,
+              promotion_target: target,
+              language_code: market.promotionLanguageCode,
+              final_url: promoFetchUrl,
+            };
+          }
+          console.error(`[PromoFetch] rawLen=${rawHtml.length} slicePromo=${JSON.stringify(slicePromo)} no-direct-match`);
         }
       } catch (e) {
         console.error(`[PromoFetch] failed: ${e instanceof Error ? e.message : e}`);
