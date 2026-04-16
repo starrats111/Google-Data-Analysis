@@ -1,15 +1,12 @@
 /**
- * 联盟交易 SQL 片段：排除已删除平台连接、或连接归属用户不一致的脏数据。
- * platform_connection_id 为 NULL 时仍计入（历史数据）。
+ * 联盟交易 SQL 片段（已废弃过滤逻辑，保留函数签名以兼容现有调用方）。
+ *
+ * 设计原则：affiliate_transactions 一旦写入，即通过 user_id 永久归属于该用户，
+ * 与 platform_connections 的后续状态（删除、修改）完全无关。
+ * 跨用户去重由同步写入阶段负责，统计查询只需 WHERE user_id = ? 即可保证隔离。
+ * 因此此处直接返回恒真条件，不再对 platform_connections 做二次联查。
  */
-export function sqlAffiliateTxnValidPlatformConnection(tableAlias: string): string {
-  return `(
-    ${tableAlias}.platform_connection_id IS NULL
-    OR EXISTS (
-      SELECT 1 FROM platform_connections _pc
-      WHERE _pc.id = ${tableAlias}.platform_connection_id
-        AND _pc.user_id = ${tableAlias}.user_id
-        AND _pc.is_deleted = 0
-    )
-  )`;
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+export function sqlAffiliateTxnValidPlatformConnection(_tableAlias: string): string {
+  return "1=1";
 }
