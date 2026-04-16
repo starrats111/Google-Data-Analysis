@@ -244,11 +244,17 @@ export async function POST(req: NextRequest) {
     (cachedPromo?.discount_amount ? Number(cachedPromo.discount_amount) : 0) > 0;
   const cacheNeedsRefreshForPromo = optionalNeedsPromo && !cachedPromoHasDiscount;
 
-  // 若缓存的 links 为空（曾爬到 splash 页），也强制重新爬取
-  const cacheHasEmptyLinks = cache && Array.isArray(cache.links) && cache.links.length === 0;
+  // 质量分驱动的缓存失效：score < 40 说明上次爬取质量低下（splash 页、被封、内容稀薄等）
+  const cacheLowQuality = typeof cache?.crawlQualityScore === "number" && cache.crawlQualityScore < 40;
+  // 兼容旧缓存（无质量分字段）：links 为空则视为低质量
+  const cacheHasEmptyLinks = !cacheLowQuality && cache && Array.isArray(cache.links) && cache.links.length === 0;
 
-  if (!cache || !cache.crawledAt || cache.crawlFailed || cacheNeedsRefreshForPromo || cacheHasEmptyLinks) {
-    const reason = !cache || !cache.crawledAt ? '为空' : cache.crawlFailed ? '上次失败' : cacheHasEmptyLinks ? 'links 为空（旧爬取命中 splash 页），重新深度爬取' : '缓存促销无有效折扣，重爬以获取最新数据';
+  if (!cache || !cache.crawledAt || cache.crawlFailed || cacheNeedsRefreshForPromo || cacheLowQuality || cacheHasEmptyLinks) {
+    const reason = !cache || !cache.crawledAt ? '为空'
+      : cache.crawlFailed ? '上次失败'
+      : cacheLowQuality ? `质量低（score=${cache.crawlQualityScore}, issues=[${cache.crawlQualityIssues?.join(",")}]）`
+      : cacheHasEmptyLinks ? 'links 为空（旧缓存命中 splash 页）'
+      : '缓存促销无有效折扣，重爬';
     console.log(`[Extensions] crawl_cache ${reason}，重新爬取... forcePuppeteer=${cacheNeedsRefreshForPromo}`);
     // 促销数据通常由 JS 渲染（如公告栏），forcePuppeteer 保证获取到完整 DOM
     const newCache = await buildCrawlCache(merchantUrl, merchantName, country, undefined, {

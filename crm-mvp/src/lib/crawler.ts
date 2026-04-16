@@ -1752,3 +1752,47 @@ export async function searchMerchantImages(merchantUrl: string, merchantName: st
   console.log(`[Images] 搜索引擎图片回退总计: ${images.length} 张`);
   return images;
 }
+
+// ══════════════════════════════════════════════════════
+// 爬取质量评分（Crawl Quality Gate）
+// 统一量化一次爬取结果的质量，用于驱动策略瀑布流和缓存失效决策
+// ══════════════════════════════════════════════════════
+export function assessCrawlQuality(result: CrawlResult): {
+  score: number;                                          // 0-100
+  tier: "good" | "degraded" | "poor" | "failed";
+  issues: string[];                                       // 质量问题标签
+} {
+  if (result.method === "failed") {
+    return { score: 0, tier: "failed", issues: ["crawl_failed"] };
+  }
+
+  let score = 100;
+  const issues: string[] = [];
+
+  // 链接质量（权重最高：links=0 意味着 splash 页/被封，所有下游提取均失败）
+  if (result.links.length === 0)       { score -= 40; issues.push("no_links"); }
+  else if (result.links.length < 5)    { score -= 20; issues.push("few_links"); }
+
+  // 图片质量
+  if (result.images.length === 0)      { score -= 20; issues.push("no_images"); }
+  else if (result.images.length < 2)   { score -= 10; issues.push("few_images"); }
+
+  // 内容质量
+  if (!result.html || result.html.length < 3000) { score -= 15; issues.push("thin_content"); }
+
+  // Splash 页面强信号：无链接 + 图片文件名含 splash
+  if (result.links.length === 0 && result.images.some(i => /splash/i.test(i))) {
+    score -= 20; issues.push("splash_page");
+  }
+
+  // Sitemap 路径：有链接但无 HTML，后续信息提取能力受限
+  if (result.method === "sitemap") { score -= 10; issues.push("sitemap_only"); }
+
+  const finalScore = Math.max(0, score);
+  const tier = finalScore >= 70 ? "good"
+    : finalScore >= 40 ? "degraded"
+    : finalScore > 0  ? "poor"
+    : "failed";
+
+  return { score: finalScore, tier, issues };
+}

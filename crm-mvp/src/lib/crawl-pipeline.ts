@@ -49,6 +49,8 @@ export interface CrawlCache {
   crawlMethod: string;
   crawlFailed: boolean;
   localizedMerchantUrl?: string;
+  crawlQualityScore?: number;    // 0-100，本次爬取质量评分
+  crawlQualityIssues?: string[]; // 质量问题标签，如 ['no_links','splash_page']
 }
 
 // ─── 共享常量和工具函数 ───
@@ -1055,25 +1057,71 @@ export async function buildCrawlCache(
 ): Promise<CrawlCache> {
   await acquireCrawlSlot();
   try {
-  let crawlResult = { html: "", links: [] as { url: string; text: string }[], images: [] as string[], method: "failed", error: "" };
+  // ══════════════════════════════════════════════════════
+  // 策略瀑布流（Crawl Quality Gate）
+  // locale URL 永远优先于 root URL，HTTP 优先于 Puppeteer
+  // 达到质量阈值（score >= 40）即停止，否则取得分最高的结果
+  // ══════════════════════════════════════════════════════
+  const { assessCrawlQuality, crawlWithPuppeteerFull, crawlPageWithPuppeteer, extractLinksAndImages } = await import("@/lib/crawler");
+  const QUALITY_THRESHOLD = 40;
 
+  // 计算 locale URL（在 merchantUrl 无 locale 前缀时构造）
+  let localeUrl: string | null = null;
+  if (merchantUrl && country) {
+    const loc = COUNTRY_TO_LOCALE[country.toUpperCase()];
+    if (loc) {
+      try {
+        const u = new URL(merchantUrl);
+        if (!u.pathname.match(/^\/[a-z]{2}[-_][a-z]{2}\//i)) {
+          u.pathname = "/" + loc + "/";
+          localeUrl = u.toString();
+        }
+      } catch {}
+    }
+  }
+
+  type CrawlResultType = { html: string; links: { url: string; text: string }[]; images: string[]; method: string; error?: string };
+
+  // Puppeteer 爬取辅助：返回 CrawlResult 格式
+  const runPuppeteer = async (url: string): Promise<CrawlResultType> => {
+    const puppeteerHtml = await crawlPageWithPuppeteer(url);
+    if (!puppeteerHtml) throw new Error("Puppeteer 返回空 HTML");
+    const { links, images } = extractLinksAndImages(puppeteerHtml, url);
+    return { html: puppeteerHtml.slice(0, 150000), links, images, method: "puppeteer" };
+  };
+
+  // 构造策略列表：locale 优先，HTTP 优先于 Puppeteer
+  type Strategy = { name: string; run: () => Promise<CrawlResultType> };
+  const strategies: Strategy[] = [];
   if (merchantUrl) {
     if (options?.forcePuppeteer) {
-      // 促销数据通常由 JS 渲染，直接用 Puppeteer 保证获取完整 DOM
-      const { crawlPageWithPuppeteer } = await import("@/lib/crawler");
-      const puppeteerHtml = await crawlPageWithPuppeteer(merchantUrl);
-      if (puppeteerHtml) {
-        const { extractLinksAndImages } = await import("@/lib/crawler");
-        const { links, images } = extractLinksAndImages(puppeteerHtml, merchantUrl);
-        crawlResult = { html: puppeteerHtml.slice(0, 150000), links, images, method: "puppeteer" };
-        console.log(`[CrawlPipeline] Puppeteer 爬取成功（forcePuppeteer），html 长度: ${crawlResult.html.length}`);
-      } else {
-        // Puppeteer 失败则回退到普通爬取
-      crawlResult = await crawlPage(merchantUrl, country);
-      console.log(`[CrawlPipeline] Puppeteer 失败，回退 HTTP 爬取`);
+      // forcePuppeteer 模式：只用 Puppeteer，locale 优先
+      if (localeUrl) strategies.push({ name: "puppeteer_locale", run: () => runPuppeteer(localeUrl!) });
+      strategies.push({ name: "puppeteer_root", run: () => runPuppeteer(merchantUrl) });
+    } else {
+      // 普通模式：locale HTTP → root HTTP → locale Puppeteer → root Puppeteer
+      if (localeUrl) strategies.push({ name: "http_locale", run: () => crawlPage(localeUrl!, country) });
+      strategies.push({ name: "http_root", run: () => crawlPage(merchantUrl, country) });
+      if (localeUrl) strategies.push({ name: "puppeteer_locale", run: () => runPuppeteer(localeUrl!) });
+      strategies.push({ name: "puppeteer_root", run: () => runPuppeteer(merchantUrl) });
     }
-  } else {
-      crawlResult = await crawlPage(merchantUrl, country);
+  }
+
+  let crawlResult: CrawlResultType = { html: "", links: [], images: [], method: "failed", error: "未配置商家 URL" };
+  let crawlQuality = { score: 0, tier: "failed" as const, issues: ["no_url"] };
+
+  for (const strategy of strategies) {
+    try {
+      const result = await strategy.run();
+      const quality = assessCrawlQuality(result as Parameters<typeof assessCrawlQuality>[0]);
+      console.log(`[CrawlPipeline] 策略 ${strategy.name}: score=${quality.score} tier=${quality.tier} issues=[${quality.issues}]`);
+      if (quality.score > crawlQuality.score) {
+        crawlResult = result;
+        crawlQuality = quality;
+      }
+      if (quality.score >= QUALITY_THRESHOLD) break; // 达标即止
+    } catch (e) {
+      console.warn(`[CrawlPipeline] 策略 ${strategy.name} 失败:`, e instanceof Error ? e.message : e);
     }
   }
 
@@ -1085,7 +1133,8 @@ export async function buildCrawlCache(
   if (!crawlFailed && !html && merchantUrl) {
     try {
       const { getAcceptLanguage } = await import("@/lib/crawler");
-      const fallbackResp = await fetch(merchantUrl, {
+      const fetchTarget = localeUrl ?? merchantUrl;
+      const fallbackResp = await fetch(fetchTarget, {
         signal: AbortSignal.timeout(10000),
         headers: {
           "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -1100,69 +1149,56 @@ export async function buildCrawlCache(
         console.log(`[CrawlPipeline] 补救 fetch 成功，html 长度: ${html.length}`);
       }
     } catch {
-      // 补救失败忽略，提取结果为空
+      // 补救失败忽略
     }
   }
 
-  // ─── Splash 页面检测：links=0 时说明爬到的是引导/启动画面，直接尝试 locale 专属 URL ───
-  if (crawlResult.links.length === 0 && merchantUrl && country) {
-    const targetLocale = COUNTRY_TO_LOCALE[country.toUpperCase()];
-    if (targetLocale) {
-      try {
-        const u = new URL(merchantUrl);
-        // 仅在 merchantUrl 本身没有 locale 前缀时才追加
-        if (!u.pathname.match(/^\/[a-z]{2}[-_][a-z]{2}\//i)) {
-          u.pathname = "/" + targetLocale + "/";
-          const localeUrl = u.toString();
-          console.log(`[CrawlPipeline] links=0（可能是 splash 页），尝试 locale URL: ${localeUrl}`);
-          const localeCrawlResult = await crawlPage(localeUrl, country);
-          if (localeCrawlResult.links.length > 0) {
-            crawlResult = localeCrawlResult;
-            html = localeCrawlResult.html || html;
-            console.log(`[CrawlPipeline] locale URL 爬取成功，links: ${crawlResult.links.length}, images: ${crawlResult.images.length}`);
-          }
-        }
-      } catch (e) {
-        console.warn("[CrawlPipeline] locale URL 尝试失败:", e instanceof Error ? e.message : e);
-      }
-    }
-    // 重新过滤坏链接（locale 爬取的结果可能带新链接）
-    crawlResult.links = crawlResult.links.filter((l) => !isBadSitelinkUrl(l.url));
-  }
-
-  // ─── 数据充足性检测：图片 < 3 或有效链接 < 8 时，启动 Puppeteer 全量抓取 ───
+  // ─── Puppeteer 补充：质量分 < 阈值时（非 puppeteer 路径），用 Puppeteer 全量抓取补充图片/链接/HTML ───
   let puppeteerCache: import("@/lib/crawler").PuppeteerPageData | null = null;
-  if (crawlResult.method !== "puppeteer" && merchantUrl && (crawlResult.images.length < 3 || crawlResult.links.length < 8)) {
-    console.log(`[CrawlPipeline] 数据不足（images: ${crawlResult.images.length}, links: ${crawlResult.links.length}），启动 Puppeteer 全量抓取`);
+  if (crawlQuality.score < QUALITY_THRESHOLD && crawlResult.method !== "puppeteer" && merchantUrl) {
+    console.log(`[CrawlPipeline] 质量不足（score=${crawlQuality.score}），启动 Puppeteer 补充抓取`);
     try {
-      const { crawlWithPuppeteerFull } = await import("@/lib/crawler");
-      // 使用已检测的 locale URL（如果存在）进行 Puppeteer 全量抓取
-      const crawlTarget = (() => {
-        if (!country) return merchantUrl;
-        const loc = COUNTRY_TO_LOCALE[country.toUpperCase()];
-        if (!loc) return merchantUrl;
-        try {
-          const u = new URL(merchantUrl);
-          if (!u.pathname.match(/^\/[a-z]{2}[-_][a-z]{2}\//i)) {
-            u.pathname = "/" + loc + "/";
-            return u.toString();
-          }
-        } catch {}
-        return merchantUrl;
-      })();
-      puppeteerCache = await crawlWithPuppeteerFull(crawlTarget);
+      const puppeteerTarget = localeUrl ?? merchantUrl;
+      puppeteerCache = await crawlWithPuppeteerFull(puppeteerTarget);
       if (puppeteerCache) {
-        if (!html) html = puppeteerCache.html.slice(0, 150000);
+        const httpHtmlLen = html?.length ?? 0;
+        if (!html || puppeteerCache.html.length > httpHtmlLen + 5000) {
+          html = puppeteerCache.html.slice(0, 150000);
+          console.log(`[CrawlPipeline] 采用 Puppeteer HTML（更丰富），puppeteer=${puppeteerCache.html.length} vs http=${httpHtmlLen}`);
+        }
         const newImgs = puppeteerCache.images.filter(i => !crawlResult.images.includes(i));
         crawlResult.images = [...crawlResult.images, ...newImgs];
-        // 若 Puppeteer 从 locale URL 获取到了链接，也更新 crawlResult.links
         if (crawlResult.links.length === 0 && puppeteerCache.navLinks.length > 0) {
           crawlResult.links = puppeteerCache.navLinks.filter(l => !isBadSitelinkUrl(l.url));
         }
-        console.log(`[CrawlPipeline] Puppeteer 全量抓取成功，navLinks: ${puppeteerCache.navLinks.length}, images: ${puppeteerCache.images.length}`);
+        // 重新评估质量
+        crawlQuality = assessCrawlQuality(crawlResult as Parameters<typeof assessCrawlQuality>[0]);
+        console.log(`[CrawlPipeline] Puppeteer 补充完成，重新评分: score=${crawlQuality.score}, navLinks=${puppeteerCache.navLinks.length}, images=${puppeteerCache.images.length}`);
       }
     } catch (e) {
-      console.warn("[CrawlPipeline] crawlWithPuppeteerFull 失败:", e instanceof Error ? e.message : e);
+      console.warn("[CrawlPipeline] Puppeteer 补充失败:", e instanceof Error ? e.message : e);
+    }
+  } else if (crawlResult.method !== "puppeteer" && merchantUrl && (crawlResult.images.length < 3 || crawlResult.links.length < 8)) {
+    // 即使质量已达标，图片或链接仍不足时，用 Puppeteer 补充数据（不替换 HTML）
+    console.log(`[CrawlPipeline] 数据尚不充足（images=${crawlResult.images.length}, links=${crawlResult.links.length}），Puppeteer 补充图片/链接`);
+    try {
+      const puppeteerTarget = localeUrl ?? merchantUrl;
+      puppeteerCache = await crawlWithPuppeteerFull(puppeteerTarget);
+      if (puppeteerCache) {
+        const httpHtmlLen = html?.length ?? 0;
+        if (!html || puppeteerCache.html.length > httpHtmlLen + 5000) {
+          html = puppeteerCache.html.slice(0, 150000);
+          console.log(`[CrawlPipeline] 采用 Puppeteer HTML（更丰富），puppeteer=${puppeteerCache.html.length} vs http=${httpHtmlLen}`);
+        }
+        const newImgs = puppeteerCache.images.filter(i => !crawlResult.images.includes(i));
+        crawlResult.images = [...crawlResult.images, ...newImgs];
+        if (crawlResult.links.length === 0 && puppeteerCache.navLinks.length > 0) {
+          crawlResult.links = puppeteerCache.navLinks.filter(l => !isBadSitelinkUrl(l.url));
+        }
+        console.log(`[CrawlPipeline] Puppeteer 补充图片/链接完成，navLinks=${puppeteerCache.navLinks.length}, images=${puppeteerCache.images.length}`);
+      }
+    } catch (e) {
+      console.warn("[CrawlPipeline] Puppeteer 补充失败:", e instanceof Error ? e.message : e);
     }
   }
 
@@ -1323,6 +1359,8 @@ export async function buildCrawlCache(
     crawlMethod: crawlResult.method,
     crawlFailed,
     localizedMerchantUrl,
+    crawlQualityScore: crawlQuality.score,
+    crawlQualityIssues: crawlQuality.issues,
   };
   } finally {
     releaseCrawlSlot();
