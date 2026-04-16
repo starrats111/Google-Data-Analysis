@@ -32,6 +32,13 @@ export interface CrawledProduct {
   imageUrl?: string;
 }
 
+/** 从完整 HTML 直接采集的原始文字片段，按类型分桶，供 AI 润色时用作 grounding 数据 */
+export interface RawMentions {
+  promo: string[];    // 促销原文（含百分比折扣/首单/注册优惠等）
+  shipping: string[]; // 物流/售后原文（免运费/免费退换等）
+  features: string[]; // 品牌/商家特性原文（工艺/产地/认证等）
+}
+
 export interface CrawlCache {
   links: { url: string; text: string }[];
   images: string[];
@@ -51,6 +58,7 @@ export interface CrawlCache {
   localizedMerchantUrl?: string;
   crawlQualityScore?: number;    // 0-100，本次爬取质量评分
   crawlQualityIssues?: string[]; // 质量问题标签，如 ['no_links','splash_page']
+  rawMentions?: RawMentions;     // 全量 HTML 直接提取的原文片段，不依赖 htmlToText 管道
 }
 
 // ─── 共享常量和工具函数 ───
@@ -230,6 +238,65 @@ export function extractMerchantFeatures(html: string, extraFeatures?: string[]):
   }
 
   return features;
+}
+
+// ─── 全量 HTML 原文采集（不走 htmlToText 管道）───────────────────────────────
+/**
+ * 直接从完整原始 HTML 中提取各类原文片段，绕过 htmlToText 截断/解析问题。
+ * 适用于超大页面（如 Next.js App Router 生成的 1MB+ HTML），专门用于给 AI 提供 grounding 数据。
+ */
+export function extractRawMentions(rawHtml: string): RawMentions {
+  const promo: string[] = [];
+  const shipping: string[] = [];
+  const features: string[] = [];
+
+  // 匹配 inline 标签（a/h1-6/p/li/span/strong/div 单行内容），提取纯文字
+  const TAG_RE = /<(?:a|h[1-6]|p|li|span|strong|em|b|td|th)[^>]*>([^<\n]{8,300})<\/(?:a|h[1-6]|p|li|span|strong|em|b|td|th)>/gi;
+
+  // 促销：含折扣数字 + 触发词（off/discount/sale），或首单/新用户/注册/订阅 + 折扣
+  const PROMO_RE =
+    /(\d{1,2})\s*%\s*(?:off|discount|sale|rabatt|remise|sconto|descuento|korting)|(?:save|get|earn|enjoy|receive)\s+(?:up\s+to\s+)?(\d{1,2})\s*%|(?:first[\s-]?order|new[\s-]?customer|new[\s-]?subscriber|sign[\s-]?up|subscri(?:be|ption))[^%<]{0,80}(\d{1,2})\s*%|(\d{1,2})\s*%[^<]{0,80}(?:first[\s-]?order|new[\s-]?customer|sign[\s-]?up|subscri(?:be|ption))/i;
+
+  // 物流售后：免运费/免费退换/隔日达等
+  const SHIP_RE =
+    /free\s*(?:standard\s*)?(?:shipping|delivery|returns?)|(?:next|same)[\s-]?day[\s-]?(?:shipping|delivery)|(?:\d{1,3})[\s-]?day[\s-]?(?:returns?|refund)|express\s*(?:shipping|delivery)/i;
+
+  // 品牌特性：产地/工艺/认证/材质等高信任词
+  const FEAT_RE =
+    /hand[\s-]?craft|made\s+in\s+(?:italy|france|usa|uk|germany|japan|spain|portugal)|premium\s+(?:leather|material|quality)|luxury|award[\s-]?win|certified|genuine\s+(?:leather|suede)|artisan|bespoke|sustainabl/i;
+
+  const seen = new Set<string>();
+
+  let m: RegExpExecArray | null;
+  // eslint-disable-next-line no-cond-assign
+  while ((m = TAG_RE.exec(rawHtml)) !== null) {
+    const text = m[1].trim().replace(/\s+/g, " ");
+    const key = text.toLowerCase().slice(0, 80);
+    if (seen.has(key)) continue;
+    seen.add(key);
+
+    const snippet = text.slice(0, 200);
+    if (PROMO_RE.test(text) && promo.length < 10) {
+      promo.push(snippet);
+    } else if (SHIP_RE.test(text) && shipping.length < 6) {
+      shipping.push(snippet);
+    } else if (FEAT_RE.test(text) && features.length < 8) {
+      features.push(snippet);
+    }
+  }
+
+  // 补充：从 meta description 和 og:description 提取（未被 htmlToText 去掉的高密度摘要）
+  const META_RE =
+    /<meta[^>]+(?:name=["']description["']|property=["']og:description["'])[^>]+content=["']([^"']{20,400})["']/gi;
+  let metaM: RegExpExecArray | null;
+  // eslint-disable-next-line no-cond-assign
+  while ((metaM = META_RE.exec(rawHtml)) !== null) {
+    const text = metaM[1].replace(/&amp;/gi, "&").replace(/&#\d+;|&[a-z]+;/gi, " ").trim();
+    if (PROMO_RE.test(text) && promo.length < 10) promo.push(text.slice(0, 200));
+    if (SHIP_RE.test(text) && shipping.length < 6) shipping.push(text.slice(0, 200));
+  }
+
+  return { promo, shipping, features };
 }
 
 export function extractPromotionInfo(html: string, sourceUrl: string, country: string): Record<string, unknown> | null {
@@ -1398,6 +1465,18 @@ export async function buildCrawlCache(
     }
   }
 
+  // ─── 从完整 HTML 提取原文片段（RawMentions），供 AI 润色时 grounding 使用 ───
+  // 优先使用 Puppeteer 抓取的完整 HTML（未截断）；退而使用 crawlResult.html；再用 http truncated html
+  const rawHtmlForMentions =
+    (puppeteerCache && puppeteerCache.html.length > 5000 ? puppeteerCache.html : null) ??
+    crawlResult.html ??
+    html ??
+    "";
+  const rawMentions: RawMentions = extractRawMentions(rawHtmlForMentions);
+  console.log(
+    `[CrawlPipeline] rawMentions 采集完毕 promo=${rawMentions.promo.length} shipping=${rawMentions.shipping.length} features=${rawMentions.features.length}`
+  );
+
   return {
     links: crawlResult.links,
     images,
@@ -1417,6 +1496,7 @@ export async function buildCrawlCache(
     localizedMerchantUrl,
     crawlQualityScore: crawlQuality.score,
     crawlQualityIssues: crawlQuality.issues,
+    rawMentions,
   };
   } finally {
     releaseCrawlSlot();

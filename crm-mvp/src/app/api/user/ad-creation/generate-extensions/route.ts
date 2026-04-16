@@ -865,31 +865,49 @@ async function generateOptionalBatch(
     }
   }
 
-  // ─── promotion: 只使用真实爬取的促销数据，无数据或折扣值无效则 skipped ───
+  // ─── promotion: 三层流水线 —— regex结构化数据 → rawMentions AI解析 → 数字一致性校验 ───
   if (optionalTypes.includes("promotion")) {
     const promo = cache.promoRegex as Record<string, unknown> | null;
     const discountPercent = promo?.discount_percent ? Number(promo.discount_percent) : 0;
     const discountAmount = promo?.discount_amount ? Number(promo.discount_amount) : 0;
     const hasRealDiscount = discountPercent > 0 || discountAmount > 0;
 
-    if (!promo || !hasRealDiscount) {
-      send("promotion", { skipped: true });
-      console.log(`[Optional] 促销扩展：无真实折扣数值（percent=${discountPercent}, amount=${discountAmount}），跳过`);
-    } else {
+    // 辅助：去除 target 中的折扣数字文本
+    const stripDiscountFromTarget = (text: string) =>
+      text
+        .replace(/,?\s*up\s+to\s+\d+\s*%\s*off/gi, "")
+        .replace(/,?\s*\d+\s*%\s*off/gi, "")
+        .replace(/,?\s*\$[\d,.]+\s*off/gi, "")
+        .replace(/,?\s*save\s+\d+%/gi, "")
+        .replace(/\s{2,}/g, " ")
+        .trim();
+
+    /**
+     * verifyPromoResult: 校验 AI 生成的折扣数值是否确实出现在原文 rawMentions.promo 中。
+     * 若校验失败，返回 false（需要跳过或重试）。
+     */
+    const verifyPromoResult = (
+      aiPercent: number,
+      aiAmount: number,
+      sources: string[],
+    ): boolean => {
+      if (sources.length === 0) return true; // 无原文时不校验，放行
+      const combined = sources.join(" ").toLowerCase();
+      if (aiPercent > 0) {
+        // 原文中必须有这个百分比数字
+        return new RegExp(`\\b${aiPercent}\\s*%`).test(combined);
+      }
+      if (aiAmount > 0) {
+        // 原文中必须有这个金额数字（含货币符号或数字）
+        return new RegExp(`\\b${aiAmount}\\b`).test(combined);
+      }
+      return true;
+    };
+
+    // 层 1：regex 结构化结果已有真实折扣
+    if (hasRealDiscount && promo) {
       const occasion = validatePromotionOccasion(String(promo.occasion || "NONE"));
       const rawTarget = String(promo.promotion_target || "").trim();
-
-      // promotion_target 最多 20 字，且只应为活动名称（折扣数字已有单独字段）
-      // 先去掉折扣数字相关文字，再判断是否需要 AI 提炼
-      const stripDiscountFromTarget = (text: string) =>
-        text
-          .replace(/,?\s*up\s+to\s+\d+\s*%\s*off/gi, "")
-          .replace(/,?\s*\d+\s*%\s*off/gi, "")
-          .replace(/,?\s*\$[\d,.]+\s*off/gi, "")
-          .replace(/,?\s*save\s+\d+%/gi, "")
-          .replace(/\s{2,}/g, " ")
-          .trim();
-
       const cleanedTarget = stripDiscountFromTarget(rawTarget);
       let promotionTarget = cleanedTarget.slice(0, 20);
 
@@ -903,12 +921,9 @@ async function generateOptionalBatch(
           ], 30);
           const optimized = aiRaw.trim().replace(/^["']|["']$/g, "").slice(0, 20);
           if (optimized.length >= 3) promotionTarget = optimized;
-          console.log(`[Optional] 促销标题 AI 优化: "${rawTarget}" → cleaned="${cleanedTarget}" → "${promotionTarget}"`);
         } catch (e) {
-          console.warn(`[Optional] 促销标题 AI 优化失败，回退截断:`, e instanceof Error ? e.message : e);
+          console.warn(`[Optional] 促销标题 AI 优化失败:`, e instanceof Error ? e.message : e);
         }
-      } else if (cleanedTarget !== rawTarget) {
-        console.log(`[Optional] 促销标题去折扣数字: "${rawTarget}" → "${promotionTarget}"`);
       }
 
       send("promotion", {
@@ -922,7 +937,86 @@ async function generateOptionalBatch(
         occasion,
         final_url: merchantUrl,
       });
-      console.log(`[Optional] 促销扩展：折扣=${discountPercent > 0 ? discountPercent + "%" : "$" + discountAmount}，occasion=${occasion}，target="${promotionTarget}"`);
+      console.log(`[Optional] 促销扩展[层1-regex]：${discountPercent > 0 ? discountPercent + "%" : "$" + discountAmount}，target="${promotionTarget}"`);
+    }
+    // 层 2：regex 无结果，但 rawMentions.promo 有原文 → 交给 AI 解析
+    else {
+      const promoSnippets = (cache as any).rawMentions?.promo as string[] | undefined;
+
+      if (!promoSnippets || promoSnippets.length === 0) {
+        send("promotion", { skipped: true });
+        console.log(`[Optional] 促销扩展：regex无折扣且无 rawMentions，跳过`);
+      } else {
+        console.log(`[Optional] 促销扩展[层2-AI]：rawMentions.promo=${promoSnippets.length} 条，发送 AI 解析`);
+        const snippetsText = promoSnippets.slice(0, 8).map((s, i) => `${i + 1}. "${s}"`).join("\n");
+
+        const aiPrompt = `You are a Google Ads promotion data extractor. Read the following REAL snippets from the merchant's website and extract the promotion details.
+
+Snippets from website:
+${snippetsText}
+
+Return ONLY a JSON object (no markdown, no explanation):
+{
+  "discount_type": "PERCENT" | "MONETARY" | "NONE",
+  "discount_percent": <number or null>,
+  "discount_amount": <number or null>,
+  "promotion_target": "<max 20 chars, event name only, e.g. First Order, Newsletter, Summer Sale>",
+  "found": <true if a real discount exists, false otherwise>
+}
+
+Rules:
+- ONLY extract numbers that EXPLICITLY appear in the snippets above. NEVER invent numbers.
+- discount_type "PERCENT" requires a "%" sign in the snippets.
+- discount_type "MONETARY" requires a "$"/"€"/"£" amount in the snippets.
+- promotion_target must be the event/occasion name without discount numbers (max 20 chars).
+- If no real discount is found, set found: false.`;
+
+        let aiPromo: { discount_type: string; discount_percent: number | null; discount_amount: number | null; promotion_target: string; found: boolean } | null = null;
+        let retries = 2;
+        while (retries-- > 0 && !aiPromo) {
+          try {
+            const aiRaw = await callAiWithFallback("extension", [{ role: "user", content: aiPrompt }], 256);
+            const parsed = extractJsonFromAi(aiRaw);
+            if (parsed && parsed.found === true) {
+              const pct = parsed.discount_percent ? Number(parsed.discount_percent) : 0;
+              const amt = parsed.discount_amount ? Number(parsed.discount_amount) : 0;
+              if (pct > 0 || amt > 0) {
+                // 层 3：数字一致性校验 —— AI 输出的数字必须在原文中真实存在
+                const verified = verifyPromoResult(pct, amt, promoSnippets);
+                if (verified) {
+                  aiPromo = { ...parsed, discount_percent: pct || null, discount_amount: amt || null };
+                  console.log(`[Optional] 促销扩展[层3-验证通过]：pct=${pct}, amt=${amt}, target="${parsed.promotion_target}"`);
+                } else {
+                  console.warn(`[Optional] 促销扩展[层3-验证失败]：AI 输出 pct=${pct}/amt=${amt} 在原文中未找到，重试(${retries})`);
+                  aiPromo = null;
+                }
+              }
+            }
+          } catch (e) {
+            console.warn(`[Optional] 促销 AI 解析失败:`, e instanceof Error ? e.message : e);
+          }
+        }
+
+        if (aiPromo) {
+          const occasion = validatePromotionOccasion("NONE");
+          const promotionTarget = stripDiscountFromTarget(String(aiPromo.promotion_target || "")).slice(0, 20) || "Special Offer";
+          send("promotion", {
+            skipped: false,
+            found: true,
+            promotion_target: promotionTarget,
+            discount_type: aiPromo.discount_type || "PERCENT",
+            discount_percent: aiPromo.discount_percent,
+            discount_amount: aiPromo.discount_amount,
+            currency_code: market.currencyCode,
+            occasion,
+            final_url: merchantUrl,
+          });
+          console.log(`[Optional] 促销扩展[层2+3]：输出 target="${promotionTarget}"，pct=${aiPromo.discount_percent}`);
+        } else {
+          send("promotion", { skipped: true });
+          console.log(`[Optional] 促销扩展：AI 解析后数字校验均未通过，跳过`);
+        }
+      }
     }
   }
 
