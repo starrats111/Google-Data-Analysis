@@ -286,12 +286,18 @@ export function extractRawMentions(rawHtml: string): RawMentions {
   }
 
   // 补充：从 meta description 和 og:description 提取（未被 htmlToText 去掉的高密度摘要）
-  const META_RE =
-    /<meta[^>]+(?:name=["']description["']|property=["']og:description["'])[^>]+content=["']([^"']{20,400})["']/gi;
-  let metaM: RegExpExecArray | null;
+  // 需兼容两种属性顺序：name/property 在前 或 content 在前
+  const META_TAG_RE = /<meta\s[^>]+>/gi;
+  const META_CONTENT_RE = /content=["']([^"']{20,400})["']/i;
+  const META_NAME_RE = /(?:name|property)=["'](?:description|og:description)["']/i;
+  let metaTagM: RegExpExecArray | null;
   // eslint-disable-next-line no-cond-assign
-  while ((metaM = META_RE.exec(rawHtml)) !== null) {
-    const text = metaM[1].replace(/&amp;/gi, "&").replace(/&#\d+;|&[a-z]+;/gi, " ").trim();
+  while ((metaTagM = META_TAG_RE.exec(rawHtml)) !== null) {
+    const tag = metaTagM[0];
+    if (!META_NAME_RE.test(tag)) continue;
+    const contentMatch = META_CONTENT_RE.exec(tag);
+    if (!contentMatch) continue;
+    const text = contentMatch[1].replace(/&amp;/gi, "&").replace(/&#\d+;|&[a-z]+;/gi, " ").trim();
     if (PROMO_RE.test(text) && promo.length < 10) promo.push(text.slice(0, 200));
     if (SHIP_RE.test(text) && shipping.length < 6) shipping.push(text.slice(0, 200));
   }

@@ -941,7 +941,7 @@ async function generateOptionalBatch(
     }
     // 层 2：regex 无结果，但 rawMentions.promo 有原文 → 交给 AI 解析
     else {
-      const promoSnippets = (cache as any).rawMentions?.promo as string[] | undefined;
+      const promoSnippets = cache.rawMentions?.promo;
 
       if (!promoSnippets || promoSnippets.length === 0) {
         send("promotion", { skipped: true });
@@ -976,8 +976,8 @@ Rules:
         while (retries-- > 0 && !aiPromo) {
           try {
             const aiRaw = await callAiWithFallback("extension", [{ role: "user", content: aiPrompt }], 256);
-            const parsed = extractJsonFromAi(aiRaw);
-            if (parsed && parsed.found === true) {
+            const parsed = JSON.parse(extractJsonFromAi(aiRaw)) as Record<string, unknown>;
+            if (parsed && (parsed.found === true || parsed.found === "true")) {
               const pct = parsed.discount_percent ? Number(parsed.discount_percent) : 0;
               const amt = parsed.discount_amount ? Number(parsed.discount_amount) : 0;
               if (pct > 0 || amt > 0) {
