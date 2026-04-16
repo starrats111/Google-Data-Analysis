@@ -1222,16 +1222,18 @@ export async function buildCrawlCache(
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
           },
         });
-        console.error(`[PromoFetch] url=${promoFetchUrl} status=${fullResp.status} ok=${fullResp.ok}`);
         if (fullResp.ok) {
-          // 取全量 HTML（不截断），专门用于促销文字检索
-          const fullHtml = await fullResp.text();
-          const has15 = fullHtml.includes("15%");
-          const hasFirstOrder = /first.order/i.test(fullHtml);
-          console.error(`[PromoFetch] htmlLen=${fullHtml.length} has15%=${has15} hasFirstOrder=${hasFirstOrder}`);
-          const fullPromo = extractPromotionInfo(fullHtml, promoFetchUrl, country);
-          console.error(`[PromoFetch] extractResult=${JSON.stringify(fullPromo)}`);
+          const rawHtml = await fullResp.text();
+          // 只取可见 HTML 部分（__NEXT_DATA__ 之前），避免 1MB+ 的 JSON 干扰 htmlToText 解析
+          const nextDataIdx = rawHtml.indexOf('<script id="__NEXT_DATA__"');
+          const promoHtml = nextDataIdx > 5000
+            ? rawHtml.slice(0, nextDataIdx)      // 取可见 HTML（head+body 可见内容）
+            : rawHtml.slice(0, 300000);           // 兜底：取前 300K
+          const fullPromo = extractPromotionInfo(promoHtml, promoFetchUrl, country);
+          console.error(`[PromoFetch] ok rawLen=${rawHtml.length} promoHtmlLen=${promoHtml.length} result=${JSON.stringify(fullPromo)}`);
           if (fullPromo?.discount_type) return fullPromo;
+          // 即使未找到折扣类型，如果有促销目标也返回（如"First Order"等）
+          if (fullPromo?.promotion_target) return fullPromo;
         }
       } catch (e) {
         console.error(`[PromoFetch] failed: ${e instanceof Error ? e.message : e}`);
