@@ -1222,14 +1222,19 @@ export async function buildCrawlCache(
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
           },
         });
+        console.error(`[PromoFetch] url=${promoFetchUrl} status=${fullResp.status} ok=${fullResp.ok}`);
         if (fullResp.ok) {
           // 取全量 HTML（不截断），专门用于促销文字检索
           const fullHtml = await fullResp.text();
+          const has15 = fullHtml.includes("15%");
+          const hasFirstOrder = /first.order/i.test(fullHtml);
+          console.error(`[PromoFetch] htmlLen=${fullHtml.length} has15%=${has15} hasFirstOrder=${hasFirstOrder}`);
           const fullPromo = extractPromotionInfo(fullHtml, promoFetchUrl, country);
+          console.error(`[PromoFetch] extractResult=${JSON.stringify(fullPromo)}`);
           if (fullPromo?.discount_type) return fullPromo;
         }
-      } catch {
-        // 专项 fetch 失败忽略，继续尝试子页面
+      } catch (e) {
+        console.error(`[PromoFetch] failed: ${e instanceof Error ? e.message : e}`);
       }
     }
 
