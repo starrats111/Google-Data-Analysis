@@ -35,20 +35,37 @@ export async function getProxyUrlForCountry(country: string): Promise<string | n
 }
 
 /**
- * 将 host:port:username_with_**:password 模板 + 国家代码
- * 组装为 socks5://username:password@host:port
+ * 将代理模板 + 国家代码组装为代理 URL。
+ *
+ * 模板格式：[protocol://]host:port:username_with_**:password
+ *   - 可在模板头部显式指定协议，如 "http://us.cliproxy.io:443:user-**:pass"
+ *   - 无协议前缀时：端口 443 → https，其余端口 → socks5
+ *   - username 中的 ** 会被替换为国家代码（US / GB / AU 等）
  */
 export function buildSocks5Url(template: string, country: string): string {
-  const parts = template.split(":");
-  if (parts.length < 4) throw new Error(`代理模板格式错误，应为 host:port:username:password，实际: ${template}`);
+  // 提取可选的协议前缀（http:// / https:// / socks5://）
+  let proto = "";
+  let rest = template.trim();
+  const protoMatch = rest.match(/^(https?|socks5):\/\//i);
+  if (protoMatch) {
+    proto = protoMatch[1].toLowerCase();
+    rest = rest.slice(protoMatch[0].length);
+  }
+
+  const parts = rest.split(":");
+  if (parts.length < 4) throw new Error(`代理模板格式错误，应为 [proto://]host:port:username:password，实际: ${template}`);
 
   const host     = parts[0].trim();
   const port     = parts[1].trim();
-  // username 可能含有 ':' 被拆分了（理论上不应该，但保险处理）
   const password = parts[parts.length - 1].trim();
   const username = parts.slice(2, parts.length - 1).join(":").replace(/\*\*/g, country.toUpperCase().trim());
 
-  return `socks5://${encodeURIComponent(username)}:${encodeURIComponent(password)}@${host}:${port}`;
+  // 无显式协议时，根据端口推断：443 → https（HTTP CONNECT），其余 → socks5
+  if (!proto) {
+    proto = port === "443" ? "https" : "socks5";
+  }
+
+  return `${proto}://${encodeURIComponent(username)}:${encodeURIComponent(password)}@${host}:${port}`;
 }
 
 interface ProxyFetchResponse {
