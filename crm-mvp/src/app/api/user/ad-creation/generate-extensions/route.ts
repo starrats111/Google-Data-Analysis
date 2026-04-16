@@ -246,8 +246,11 @@ export async function POST(req: NextRequest) {
 
   // 质量分驱动的缓存失效：score < 40 说明上次爬取质量低下（splash 页、被封、内容稀薄等）
   const cacheLowQuality = typeof cache?.crawlQualityScore === "number" && cache.crawlQualityScore < 40;
-  // 兼容旧缓存（无质量分字段）：links 为空则视为低质量
-  const cacheHasEmptyLinks = !cacheLowQuality && cache && Array.isArray(cache.links) && cache.links.length === 0;
+  // 旧缓存（无质量分字段）+ 明显质量问题（links=0 或 crawlFailed），也视为低质量
+  const cacheHasEmptyLinks = !cacheLowQuality && cache && (
+    (Array.isArray(cache.links) && cache.links.length === 0) ||
+    (cache.crawlQualityScore === undefined && Array.isArray(cache.links) && cache.links.length < 3)
+  );
 
   if (!cache || !cache.crawledAt || cache.crawlFailed || cacheNeedsRefreshForPromo || cacheLowQuality || cacheHasEmptyLinks) {
     const reason = !cache || !cache.crawledAt ? '为空'
