@@ -2,6 +2,15 @@ import { existsSync } from "fs";
 import { getBackendConfig } from "@/lib/system-config";
 import { getProxyUrlForCountry, fetchViaProxy } from "@/lib/crawl-proxy";
 
+export interface PuppeteerPageData {
+  html: string;
+  navLinks: { url: string; text: string }[];
+  images: string[];
+  heroTexts: string[];
+  uspTexts: string[];
+  categoryNames: string[];
+}
+
 // ══════════════════════════════════════════════════════
 // 浏览器路径发现
 // ══════════════════════════════════════════════════════
@@ -577,7 +586,7 @@ const FILTERED_IMG_KEYWORDS = [
   "doubleclick", "googlesyndication", "facebook.com/tr",
 ];
 
-function isQualityImageUrl(url: string): boolean {
+export function isQualityImageUrl(url: string): boolean {
   if (JUNK_IMG_PATTERN.test(url)) return false;
   const lower = url.toLowerCase().split("?")[0];
   const validExts = [".jpg", ".jpeg", ".png", ".webp", ".avif"];
@@ -831,7 +840,13 @@ export async function crawlPageWithPuppeteer(url: string, timeoutMs = 35000): Pr
   return crawlWithPuppeteer(url, timeoutMs);
 }
 
+// 包装器：向后兼容，内部调用 crawlWithPuppeteerFull 后只返回 html
 async function crawlWithPuppeteer(url: string, timeoutMs = 30000): Promise<string | null> {
+  const result = await crawlWithPuppeteerFull(url, timeoutMs);
+  return result?.html ?? null;
+}
+
+export async function crawlWithPuppeteerFull(url: string, timeoutMs = 30000): Promise<PuppeteerPageData | null> {
   const browserPath = findBrowserPath();
   if (!browserPath) {
     console.log("[Crawler] Puppeteer: 未找到浏览器");
@@ -1015,8 +1030,34 @@ async function crawlWithPuppeteer(url: string, timeoutMs = 30000): Promise<strin
       return null;
     }
 
-    console.log(`[Crawler] Puppeteer 成功: ${html.length} bytes`);
-    return html;
+    // DOM 结构化提取（独立 catch，失败不丢 html）
+    let domData: Omit<PuppeteerPageData, "html"> = {
+      navLinks: [], images: [], heroTexts: [], uspTexts: [], categoryNames: [],
+    };
+    try {
+      domData = await page.evaluate(() => {
+        const navLinks = Array.from(document.querySelectorAll("nav a, header a, [role=navigation] a"))
+          .map(a => ({ url: (a as HTMLAnchorElement).href, text: (a as HTMLElement).innerText.trim() }))
+          .filter(l => l.url && l.text.length >= 2 && l.text.length <= 40);
+        const imgSrcs = new Set<string>();
+        document.querySelectorAll("img[src], img[data-src]").forEach(img => {
+          const src = (img as HTMLImageElement).dataset.src || (img as HTMLImageElement).src;
+          if (src && src.startsWith("http")) imgSrcs.add(src);
+        });
+        const heroTexts = Array.from(document.querySelectorAll("h1, [class*=hero] p, [class*=banner] p, [class*=headline]"))
+          .map(el => (el as HTMLElement).innerText.trim()).filter(t => t.length >= 5 && t.length <= 200);
+        const uspTexts = Array.from(document.querySelectorAll("[class*=usp], [class*=trust], [class*=benefit], [class*=feature]"))
+          .map(el => (el as HTMLElement).innerText.trim()).filter(t => t.length >= 5 && t.length <= 200);
+        const categoryNames = Array.from(document.querySelectorAll("nav a, [class*=category] a"))
+          .map(a => (a as HTMLElement).innerText.trim()).filter(t => t.length >= 2 && t.length <= 30);
+        return { navLinks, images: [...imgSrcs].slice(0, 100), heroTexts, uspTexts, categoryNames };
+      });
+    } catch (evalErr) {
+      console.warn("[Crawler] page.evaluate() DOM extraction failed:", evalErr instanceof Error ? evalErr.message : evalErr);
+    }
+
+    console.log(`[Crawler] Puppeteer 成功: ${html.length} bytes, navLinks: ${domData.navLinks.length}, images: ${domData.images.length}`);
+    return { html, ...domData };
   } catch (err) {
     console.log(`[Crawler] Puppeteer 失败: ${err instanceof Error ? err.message : err}`);
     return null;

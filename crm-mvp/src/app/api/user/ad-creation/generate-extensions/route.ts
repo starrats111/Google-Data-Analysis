@@ -214,7 +214,9 @@ export async function POST(req: NextRequest) {
     })
     : null;
 
-  const merchantUrl = merchant.merchant_url || adCreative?.final_url || "";
+  // 优先使用用户明确设定的落地页 URL（用户可能已改成本地化路径如 /en-us/）
+  // merchant_url 是商家层面的默认 URL，可能带旧地区前缀（如 /en-sg/）
+  const merchantUrl = adCreative?.final_url || merchant.merchant_url || "";
   const merchantName = merchant.merchant_name || "";
   const country = campaign.target_country || "US";
   const market = getAdMarketConfig(country);
@@ -1077,7 +1079,9 @@ Return ONLY single words or short phrases. No match-type brackets.`);
 
     if (sections.length === 0) { await Promise.resolve(); return; }
 
-    const prompt = `Analyze this merchant and generate the requested Google Ads extensions.
+    const prompt = `${AD_COPY_ANTI_AI_BLOCK}
+
+Analyze this merchant and generate the requested Google Ads extensions.
 
 CRITICAL: Only use facts from the website content. Do NOT invent product names, prices, or claims.
 
@@ -1117,6 +1121,7 @@ Return ONLY a valid JSON object with the applicable keys:
         const calloutFix = await complianceAutoFix(callouts, "headline", merchantName, languageName, aiRuleProfile, 25, 2);
         callouts = calloutFix.items;
         if (calloutFix.fixed.length > 0) send("compliance_auto_fix", { fixed: calloutFix.fixed, count: calloutFix.fixed.length });
+        callouts = humanizeAdCopyBatch(callouts, 2, 25);
         send("callouts", callouts.slice(0, 6));
       }
 
@@ -1124,10 +1129,11 @@ Return ONLY a valid JSON object with the applicable keys:
         const snippet = parsed.snippet;
         if (snippet?.header && Array.isArray(snippet.values) && snippet.values.length >= 3) {
           const validHeader = validateSnippetHeader(String(snippet.header));
-          const values = snippet.values
+          let values = snippet.values
             .map((v: string) => String(v || "").trim())
             .filter((v: string) => v.length >= 2 && v.length <= 25)
             .slice(0, 10);
+          values = humanizeAdCopyBatch(values, 2, 25);
           send("structured_snippet", values.length >= 3 ? { header: validHeader, values } : null);
         } else {
           send("structured_snippet", null);

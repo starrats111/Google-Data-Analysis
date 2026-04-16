@@ -171,7 +171,7 @@ export function extractJsonFromAi(raw: string): string {
   return text;
 }
 
-export function extractMerchantFeatures(html: string): string[] {
+export function extractMerchantFeatures(html: string, extraFeatures?: string[]): string[] {
   const features: string[] = [];
   const lower = html.toLowerCase();
 
@@ -218,6 +218,13 @@ export function extractMerchantFeatures(html: string): string[] {
     if (text.length > 5 && text.length < 200) bannerTexts.push(text);
   }
   if (bannerTexts.length > 0) features.push(`Banner text: ${bannerTexts.join(" | ")}`);
+
+  if (extraFeatures && extraFeatures.length > 0) {
+    for (const ef of extraFeatures) {
+      const trimmed = ef.trim();
+      if (trimmed.length >= 5 && !features.includes(trimmed)) features.push(trimmed);
+    }
+  }
 
   return features;
 }
@@ -539,7 +546,7 @@ export function extractProducts(html: string, sourceUrl: string, country: string
   return products;
 }
 
-function extractNavItems(html: string): string[] {
+function extractNavItems(html: string, extraItems?: string[]): string[] {
   const navItems: string[] = [];
   const navRegex = /<nav[^>]*>([\s\S]*?)<\/nav>/gi;
   let navMatch;
@@ -549,6 +556,12 @@ function extractNavItems(html: string): string[] {
     while ((linkMatch = linkRegex.exec(navMatch[1])) !== null) {
       const text = decodeHtmlEntities(linkMatch[1].trim());
       if (text.length >= 2 && text.length <= 25 && !navItems.includes(text)) navItems.push(text);
+    }
+  }
+  if (extraItems && extraItems.length > 0) {
+    for (const item of extraItems) {
+      const trimmed = item.trim();
+      if (trimmed.length >= 2 && trimmed.length <= 25 && !navItems.includes(trimmed)) navItems.push(trimmed);
     }
   }
   return navItems;
@@ -831,6 +844,7 @@ async function discoverSitelinkCandidates(
   merchantUrl: string,
   pageLinks: { url: string; text: string }[],
   country?: string,
+  puppeteerNavLinks?: { url: string; text: string }[],
 ): Promise<{ url: string; title: string; description: string }[]> {
   let merchantDomain = "";
   try { merchantDomain = new URL(merchantUrl).hostname.replace(/^www\./, ""); } catch {}
@@ -900,34 +914,85 @@ async function discoverSitelinkCandidates(
   }
 
   if (candidates.length < 6 && merchantUrl) {
-    // 检测站点是否使用 /xx-yy/ locale 前缀（从 pageLinks 或 merchantUrl 推断）
-    let detectedLocaleInSite = false;
-    const localeSegRe = /^\/([a-z]{2}[-_][a-z]{2})\//i;
-    if (localeSegRe.test((() => { try { return new URL(merchantUrl).pathname; } catch { return ""; } })())) {
-      detectedLocaleInSite = true;
-    } else {
-      detectedLocaleInSite = pageLinks.slice(0, 20).some(l => {
-        try { return localeSegRe.test(new URL(l.url).pathname); } catch { return false; }
-      });
-    }
-    // 只有确认站点使用 locale 前缀时才传 targetLocale，避免对无 locale 的站点生成错误路径
-    const targetLocale = detectedLocaleInSite && country
-      ? (COUNTRY_TO_LOCALE[country.toUpperCase()] ?? undefined)
-      : undefined;
-    if (targetLocale) console.log(`[Sitelinks] 检测到 locale 前缀站点，使用 /${targetLocale}/ 生成探查路径`);
-
-    const probePaths = getCommonProbePaths(merchantUrl, targetLocale);
     const existingNormalized = new Set(candidates.map((c) => c.url.replace(/\/$/, "").replace(/^http:/, "https:")));
-    for (let i = 0; i < probePaths.length && candidates.length < 6; i += 5) {
-      const results = await Promise.all(probePaths.slice(i, i + 5).map((p) => probeUrlReal(p, merchantDomain, proxyUrl)));
-      for (const r of results) {
-        if (!r || candidates.length >= 6) continue;
-        // 对 probeUrlReal 的结果也做 locale 规范化
-        const rUrl = country ? normalizeLocaleInUrl(r.url, country) : r.url;
-        const norm = rUrl.replace(/\/$/, "").replace(/^http:/, "https:");
+
+    // 优先使用 Puppeteer 从真实 DOM 提取的 nav links（动态站点的实际导航）
+    if (puppeteerNavLinks && puppeteerNavLinks.length > 0) {
+      console.log(`[Sitelinks] 使用 Puppeteer nav links 探查（${puppeteerNavLinks.length} 条）`);
+      const navLinksFiltered = puppeteerNavLinks
+        .filter(l => {
+          try {
+            const u = new URL(l.url);
+            return u.hostname.includes(merchantDomain) && !new URL(l.url).search && l.text.length >= 2;
+          } catch { return false; }
+        })
+        .map(l => country ? { ...l, url: normalizeLocaleInUrl(l.url, country) } : l)
+        .slice(0, 20);
+
+      const navMetaResults = await Promise.all(
+        navLinksFiltered.map(async (link) => {
+          try {
+            const meta = await fetchUrlMeta(link.url, proxyUrl);
+            return { link, meta };
+          } catch {
+            return { link, meta: { title: "", description: "", ok: false, finalUrl: link.url, isSoft404: false } };
+          }
+        }),
+      );
+
+      for (const { link, meta } of navMetaResults) {
+        if (candidates.length >= 6) break;
+        const rawUrl = meta.finalUrl || link.url;
+        const realUrl = country ? normalizeLocaleInUrl(rawUrl, country) : rawUrl;
+        if (meta.isSoft404 || !meta.ok) continue;
+        try { const p = new URL(realUrl).pathname; if (p === "/" || p === "") continue; } catch {}
+        const norm = realUrl.replace(/\/$/, "").replace(/^http:/, "https:");
         if (existingNormalized.has(norm)) continue;
         existingNormalized.add(norm);
-        candidates.push({ url: rUrl, title: r.title, description: r.desc });
+        let title = "";
+        if (meta.title && !isBlockedTitle(meta.title)) {
+          title = sanitizeAdText(smartTruncate(decodeHtmlEntities(meta.title).replace(/\s*[\|–—]\s*[^|–—]{0,40}$/, "").replace(/\s*-\s*[A-Z][a-zA-Z\s]{0,30}$/, "").trim(), 25));
+        }
+        if (!title || title.length < 2) {
+          const cleanLinkText = sanitizeAdText(decodeHtmlEntities(link.text.trim()));
+          if (cleanLinkText.length >= 2 && !BAD_LINK_TEXTS.includes(cleanLinkText.toLowerCase())) title = smartTruncate(cleanLinkText, 25);
+        }
+        if (!title || title.length < 2) title = titleFromUrlPath(realUrl);
+        let desc = "";
+        if (meta.description) desc = sanitizeAdText(smartTruncate(decodeHtmlEntities(meta.description), 35), { allowExclamation: true });
+        if (title.length >= 2) candidates.push({ url: realUrl, title, description: desc });
+      }
+    }
+
+    // 仍不足 6 条时，回退到 getCommonProbePaths（通用探查路径）
+    if (candidates.length < 6) {
+      // 检测站点是否使用 /xx-yy/ locale 前缀（从 pageLinks 或 merchantUrl 推断）
+      let detectedLocaleInSite = false;
+      const localeSegRe = /^\/([a-z]{2}[-_][a-z]{2})\//i;
+      if (localeSegRe.test((() => { try { return new URL(merchantUrl).pathname; } catch { return ""; } })())) {
+        detectedLocaleInSite = true;
+      } else {
+        detectedLocaleInSite = pageLinks.slice(0, 20).some(l => {
+          try { return localeSegRe.test(new URL(l.url).pathname); } catch { return false; }
+        });
+      }
+      // 只有确认站点使用 locale 前缀时才传 targetLocale，避免对无 locale 的站点生成错误路径
+      const targetLocale = detectedLocaleInSite && country
+        ? (COUNTRY_TO_LOCALE[country.toUpperCase()] ?? undefined)
+        : undefined;
+      if (targetLocale) console.log(`[Sitelinks] 检测到 locale 前缀站点，使用 /${targetLocale}/ 生成探查路径`);
+
+      const probePaths = getCommonProbePaths(merchantUrl, targetLocale);
+      for (let i = 0; i < probePaths.length && candidates.length < 6; i += 5) {
+        const results = await Promise.all(probePaths.slice(i, i + 5).map((p) => probeUrlReal(p, merchantDomain, proxyUrl)));
+        for (const r of results) {
+          if (!r || candidates.length >= 6) continue;
+          const rUrl = country ? normalizeLocaleInUrl(r.url, country) : r.url;
+          const norm = rUrl.replace(/\/$/, "").replace(/^http:/, "https:");
+          if (existingNormalized.has(norm)) continue;
+          existingNormalized.add(norm);
+          candidates.push({ url: rUrl, title: r.title, description: r.desc });
+        }
       }
     }
   }
@@ -942,6 +1007,7 @@ async function collectImages(
   links: { url: string; text: string }[],
   merchantUrl: string,
   merchantName: string,
+  puppeteerImages?: string[],
 ): Promise<string[]> {
   const allImgs = [...crawlImages];
 
@@ -962,6 +1028,16 @@ async function collectImages(
       const searchImgs = await searchMerchantImages(merchantUrl, merchantName);
       for (const img of searchImgs) { if (allImgs.length >= 80) break; if (!allImgs.includes(img)) allImgs.push(img); }
     } catch {}
+  }
+
+  // Puppeteer DOM 提取的图片：图片仍不足时补充
+  if (allImgs.length < 3 && puppeteerImages && puppeteerImages.length > 0) {
+    const { isQualityImageUrl } = await import("@/lib/crawler");
+    for (const img of puppeteerImages) {
+      if (allImgs.length >= 80) break;
+      if (!allImgs.includes(img) && isQualityImageUrl(img)) allImgs.push(img);
+    }
+    console.log(`[CollectImages] Puppeteer 补图后，图片数量: ${allImgs.length}`);
   }
 
   return allImgs;
@@ -1024,6 +1100,24 @@ export async function buildCrawlCache(
       }
     } catch {
       // 补救失败忽略，提取结果为空
+    }
+  }
+
+  // ─── 数据充足性检测：图片 < 3 或有效链接 < 8 时，启动 Puppeteer 全量抓取 ───
+  let puppeteerCache: import("@/lib/crawler").PuppeteerPageData | null = null;
+  if (crawlResult.method !== "puppeteer" && merchantUrl && (crawlResult.images.length < 3 || crawlResult.links.length < 8)) {
+    console.log(`[CrawlPipeline] 数据不足（images: ${crawlResult.images.length}, links: ${crawlResult.links.length}），启动 Puppeteer 全量抓取`);
+    try {
+      const { crawlWithPuppeteerFull } = await import("@/lib/crawler");
+      puppeteerCache = await crawlWithPuppeteerFull(merchantUrl);
+      if (puppeteerCache) {
+        if (!html) html = puppeteerCache.html.slice(0, 150000);
+        const newImgs = puppeteerCache.images.filter(i => !crawlResult.images.includes(i));
+        crawlResult.images = [...crawlResult.images, ...newImgs];
+        console.log(`[CrawlPipeline] Puppeteer 全量抓取成功，navLinks: ${puppeteerCache.navLinks.length}, images: ${puppeteerCache.images.length}`);
+      }
+    } catch (e) {
+      console.warn("[CrawlPipeline] crawlWithPuppeteerFull 失败:", e instanceof Error ? e.message : e);
     }
   }
 
@@ -1121,10 +1215,10 @@ export async function buildCrawlCache(
 
   // 并行执行所有提取任务
   const [sitelinkCandidates, images, features, navItems, phoneCandidates, promoRegex, priceRegex, crawledProducts] = await Promise.all([
-    discoverSitelinkCandidates(merchantUrl, crawlResult.links, country).catch(() => []),
-    collectImages(crawlResult.images, crawlResult.links, merchantUrl, merchantName).catch(() => [] as string[]),
-    Promise.resolve(html ? extractMerchantFeatures(html) : []),
-    Promise.resolve(html ? extractNavItems(html) : []),
+    discoverSitelinkCandidates(merchantUrl, crawlResult.links, country, puppeteerCache?.navLinks).catch(() => []),
+    collectImages(crawlResult.images, crawlResult.links, merchantUrl, merchantName, puppeteerCache?.images).catch(() => [] as string[]),
+    Promise.resolve(html ? extractMerchantFeatures(html, [...(puppeteerCache?.heroTexts ?? []), ...(puppeteerCache?.uspTexts ?? [])]) : []),
+    Promise.resolve(html ? extractNavItems(html, puppeteerCache?.categoryNames) : []),
     Promise.resolve(html ? extractPhoneCandidates(html, country) : []),
     extractPromoWithSubPage().catch(() => null),
     extractPriceWithProductPages().catch(() => [] as ReturnType<typeof extractPriceInfo>),
