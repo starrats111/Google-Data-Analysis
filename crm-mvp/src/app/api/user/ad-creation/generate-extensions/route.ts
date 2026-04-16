@@ -244,8 +244,11 @@ export async function POST(req: NextRequest) {
     (cachedPromo?.discount_amount ? Number(cachedPromo.discount_amount) : 0) > 0;
   const cacheNeedsRefreshForPromo = optionalNeedsPromo && !cachedPromoHasDiscount;
 
-  if (!cache || !cache.crawledAt || cache.crawlFailed || cacheNeedsRefreshForPromo) {
-    const reason = !cache || !cache.crawledAt ? '为空' : cache.crawlFailed ? '上次失败' : '缓存促销无有效折扣，重爬以获取最新数据';
+  // 若缓存的 links 为空（曾爬到 splash 页），也强制重新爬取
+  const cacheHasEmptyLinks = cache && Array.isArray(cache.links) && cache.links.length === 0;
+
+  if (!cache || !cache.crawledAt || cache.crawlFailed || cacheNeedsRefreshForPromo || cacheHasEmptyLinks) {
+    const reason = !cache || !cache.crawledAt ? '为空' : cache.crawlFailed ? '上次失败' : cacheHasEmptyLinks ? 'links 为空（旧爬取命中 splash 页），重新深度爬取' : '缓存促销无有效折扣，重爬以获取最新数据';
     console.log(`[Extensions] crawl_cache ${reason}，重新爬取... forcePuppeteer=${cacheNeedsRefreshForPromo}`);
     // 促销数据通常由 JS 渲染（如公告栏），forcePuppeteer 保证获取到完整 DOM
     const newCache = await buildCrawlCache(merchantUrl, merchantName, country, undefined, {
@@ -278,7 +281,38 @@ export async function POST(req: NextRequest) {
   }
 
   // 若爬取时检测到站点使用 locale 前缀，用本地化 URL 更新 merchantUrl 和 DB 的 final_url
-  const localizedUrl = (cache as CrawlCache | null)?.localizedMerchantUrl;
+  // 优先使用缓存中已存储的 localizedMerchantUrl；若旧缓存没有该字段，则从 cache.links 实时推断
+  let localizedUrl = (cache as CrawlCache | null)?.localizedMerchantUrl;
+  if (!localizedUrl && cache?.links && cache.links.length > 0 && country) {
+    const localeSegRe = /^\/([a-z]{2}[-_][a-z]{2})\//i;
+    const siteUsesLocale = (cache.links as { url: string; text: string }[]).slice(0, 30).some(l => {
+      try { return localeSegRe.test(new URL(l.url).pathname); } catch { return false; }
+    });
+    if (siteUsesLocale) {
+      const LOCALE_MAP: Record<string, string> = {
+        US: "en-us", GB: "en-gb", AU: "en-au", CA: "en-ca", IE: "en-ie",
+        DE: "de-de", AT: "de-at", CH: "de-ch", FR: "fr-fr", BE: "fr-be",
+        ES: "es-es", MX: "es-mx", IT: "it-it", NL: "nl-nl", PT: "pt-pt",
+        BR: "pt-br", JP: "ja-jp", KR: "ko-kr", CN: "zh-cn", TW: "zh-tw",
+        SG: "en-sg", HK: "en-hk", IN: "en-in", NZ: "en-nz",
+        SE: "sv-se", NO: "nb-no", DK: "da-dk", FI: "fi-fi", PL: "pl-pl",
+      };
+      const targetLocale = LOCALE_MAP[country.toUpperCase()];
+      if (targetLocale) {
+        try {
+          const u = new URL(merchantUrl);
+          const existingLocaleMatch = u.pathname.match(/^\/([a-z]{2}[-_][a-z]{2})(\/|$)/i);
+          if (existingLocaleMatch) {
+            u.pathname = "/" + targetLocale + u.pathname.slice(existingLocaleMatch[0].length - 1);
+          } else {
+            u.pathname = "/" + targetLocale + (u.pathname === "/" ? "/" : u.pathname);
+          }
+          localizedUrl = u.toString();
+          console.log(`[Extensions] 从 cache.links 推断 locale URL: ${merchantUrl} → ${localizedUrl}`);
+        } catch {}
+      }
+    }
+  }
   if (localizedUrl && localizedUrl !== merchantUrl && adCreative?.id) {
     merchantUrl = localizedUrl;
     await prisma.ad_creatives.update({

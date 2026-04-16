@@ -584,6 +584,8 @@ const FILTERED_IMG_KEYWORDS = [
   "dreamstime.com", "stock-photo", "stock_photo",
   "ad-banner", "advertisement", "tracking-pixel", "analytics",
   "doubleclick", "googlesyndication", "facebook.com/tr",
+  "/splash", "splash_", "splash-",  // 启动动画/引导页图片，非产品图
+  "adnxs.com", "ib.adnxs",         // 广告追踪像素
 ];
 
 export function isQualityImageUrl(url: string): boolean {
@@ -1200,7 +1202,9 @@ export function extractLinksAndImages(
   const linksMap = new Map<string, string>();
   let match;
   while ((match = linkRegex.exec(html)) !== null) {
-    let href = match[1].trim();
+    let href = match[1].trim()
+      .replace(/&amp;/gi, "&")
+      .replace(/&#38;/gi, "&");
     const rawText = match[2].replace(/<[^>]*>/g, "").trim().replace(/\s+/g, " ");
     if (!href || /^(javascript|mailto|tel):/.test(href)) continue;
     if (href.startsWith("/")) href = baseDomain + href;
@@ -1226,7 +1230,12 @@ export function extractLinksAndImages(
   const seenImgs = new Set<string>();
 
   const resolveImgUrl = (raw: string): string => {
-    let src = raw.trim();
+    // 解码 HTML 实体（HTML 中 & 被编码为 &amp;，需还原为正常 URL 字符）
+    let src = raw.trim()
+      .replace(/&amp;/gi, "&")
+      .replace(/&#38;/gi, "&")
+      .replace(/&lt;/gi, "<")
+      .replace(/&gt;/gi, ">");
     if (!src || src.startsWith("data:") || src.startsWith("blob:")) return "";
     if (src.startsWith("//")) src = "https:" + src;
     if (src.startsWith("/")) src = baseDomain + src;
