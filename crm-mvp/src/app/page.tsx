@@ -8,6 +8,7 @@ import {
   BarChartOutlined,
   SettingOutlined,
   UserOutlined,
+  PlayCircleOutlined,
 } from "@ant-design/icons";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
@@ -114,6 +115,14 @@ export default function HomePage() {
           >
             进入总控制台
           </Button>
+          <Button
+            size="large"
+            icon={<PlayCircleOutlined />}
+            onClick={() => router.push("/demo")}
+            style={{ height: 48, paddingInline: 32, fontSize: 16 }}
+          >
+            Platform Demo
+          </Button>
         </Space>
       </div>
 
@@ -171,6 +180,7 @@ export default function HomePage() {
         </Text>
         <Space split={<Divider type="vertical" />} size={4}>
           <Link href="/about" style={{ color: "#999", fontSize: 13 }}>About Us</Link>
+          <Link href="/demo" style={{ color: "#999", fontSize: 13 }}>Platform Demo</Link>
           <Link href="/privacy-policy" style={{ color: "#999", fontSize: 13 }}>Privacy Policy</Link>
           <Link href="/terms-of-service" style={{ color: "#999", fontSize: 13 }}>Terms of Service</Link>
         </Space>
