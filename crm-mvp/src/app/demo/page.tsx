@@ -18,7 +18,17 @@ import Image from "next/image";
 
 const { Title, Paragraph, Text } = Typography;
 
-const screenshots = [
+interface Screenshot {
+  src?: string;
+  images?: { src: string; caption: string }[];
+  title: string;
+  icon: React.ReactNode;
+  apiTag: string;
+  description: string;
+  features: string[];
+}
+
+const screenshots: Screenshot[] = [
   {
     src: "/images/demo/data-center.png",
     title: "Data Center — Campaign Performance Dashboard",
@@ -34,7 +44,23 @@ const screenshots = [
     ],
   },
   {
-    src: "/images/demo/ad-creation.png",
+    images: [
+      {
+        src: "/images/demo/ad-creation-1.png",
+        caption:
+          "Step 1: Campaign setup — RSA headlines & descriptions, keyword configuration, MCC/CID account selection, budget, CPC, language, and network settings",
+      },
+      {
+        src: "/images/demo/ad-creation-2.png",
+        caption:
+          "Step 2: Ad extensions — Sitelinks with URL validation, merchant image generation & upload for Google Ads compliance",
+      },
+      {
+        src: "/images/demo/ad-creation-3.png",
+        caption:
+          "Step 3: Additional extensions — Callouts, Promotions, Price, Call, and Structured Snippets, all auto-generated from merchant data",
+      },
+    ],
     title: "Ad Creation — Full Campaign Setup & Submission",
     icon: <SettingOutlined style={{ color: "#1A7FDB" }} />,
     apiTag: "googleAds:mutate",
@@ -185,23 +211,64 @@ export default function DemoPage() {
                 </Tag>
               </div>
 
-              <div
-                style={{
-                  border: "1px solid #f0f0f0",
-                  borderRadius: 8,
-                  overflow: "hidden",
-                  background: "#fafafa",
-                }}
-              >
-                <Image
-                  src={s.src}
-                  alt={s.title}
-                  width={920}
-                  height={0}
-                  style={{ width: "100%", height: "auto" }}
-                  unoptimized
-                />
-              </div>
+              {s.images ? (
+                <Space
+                  direction="vertical"
+                  size={16}
+                  style={{ width: "100%" }}
+                >
+                  {s.images.map((img, ii) => (
+                    <div key={ii}>
+                      <div
+                        style={{
+                          border: "1px solid #f0f0f0",
+                          borderRadius: 8,
+                          overflow: "hidden",
+                          background: "#fafafa",
+                        }}
+                      >
+                        <Image
+                          src={img.src}
+                          alt={img.caption}
+                          width={920}
+                          height={0}
+                          style={{ width: "100%", height: "auto" }}
+                          unoptimized
+                        />
+                      </div>
+                      <Text
+                        type="secondary"
+                        style={{
+                          display: "block",
+                          textAlign: "center",
+                          marginTop: 8,
+                          fontSize: 13,
+                        }}
+                      >
+                        {img.caption}
+                      </Text>
+                    </div>
+                  ))}
+                </Space>
+              ) : (
+                <div
+                  style={{
+                    border: "1px solid #f0f0f0",
+                    borderRadius: 8,
+                    overflow: "hidden",
+                    background: "#fafafa",
+                  }}
+                >
+                  <Image
+                    src={s.src!}
+                    alt={s.title}
+                    width={920}
+                    height={0}
+                    style={{ width: "100%", height: "auto" }}
+                    unoptimized
+                  />
+                </div>
+              )}
 
               <Paragraph style={{ fontSize: 15, lineHeight: 1.8 }}>
                 {s.description}
