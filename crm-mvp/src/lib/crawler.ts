@@ -890,10 +890,27 @@ export async function crawlWithPuppeteerFull(url: string, timeoutMs = 30000, pro
     "--ignore-certificate-errors",     // 部分站点证书问题
   ];
 
-  // 注入代理：Chromium 支持 --proxy-server 同时接受 socks5:// 和 http(s)://
+  // 解析代理 URL，分离 host:port 和认证信息
+  // Chromium --proxy-server 只接受 protocol://host:port（不带凭据）
+  // 凭据需通过 page.authenticate() 单独设置
+  let proxyServerArg: string | null = null;
+  let proxyAuth: { username: string; password: string } | null = null;
   if (proxyUrl) {
-    launchArgs.push(`--proxy-server=${proxyUrl}`);
-    console.log(`[Crawler] Puppeteer 使用代理: ${proxyUrl.replace(/:([^:@]+)@/, ":***@")}`);
+    try {
+      const parsed = new URL(proxyUrl);
+      proxyServerArg = `${parsed.protocol}//${parsed.hostname}:${parsed.port}`;
+      if (parsed.username) {
+        proxyAuth = {
+          username: decodeURIComponent(parsed.username),
+          password: decodeURIComponent(parsed.password),
+        };
+      }
+      launchArgs.push(`--proxy-server=${proxyServerArg}`);
+      console.log(`[Crawler] Puppeteer 使用代理: ${proxyServerArg} user=${proxyAuth?.username ?? "none"}`);
+    } catch {
+      // 解析失败则直接传原始 URL（兼容旧格式）
+      launchArgs.push(`--proxy-server=${proxyUrl}`);
+    }
   }
 
   let browser: any = null;
@@ -921,6 +938,10 @@ export async function crawlWithPuppeteerFull(url: string, timeoutMs = 30000, pro
     }
 
     const page = await browser.newPage();
+    // 设置代理认证（必须在 goto 之前）
+    if (proxyAuth) {
+      await page.authenticate(proxyAuth);
+    }
     const ua = randomDesktopUA();
     await page.setUserAgent(ua);
     await page.setViewport({ width: 1920, height: 1080 });
