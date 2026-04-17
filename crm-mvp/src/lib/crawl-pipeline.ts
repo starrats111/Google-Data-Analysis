@@ -1224,10 +1224,17 @@ export async function buildCrawlCache(
   // 读取国家代理 URL（用于 Puppeteer，确保 IP 出口与目标国家一致）
   const proxyUrl = country ? (await getProxyUrlForCountry(country).catch(() => null)) : null;
 
-  // Puppeteer 爬取辅助：返回 CrawlResult 格式，透传代理
+  // Puppeteer 爬取辅助：带代理（内部代理失败时自动降级直连）
   const runPuppeteer = async (url: string): Promise<CrawlResultType> => {
     const puppeteerHtml = await crawlPageWithPuppeteer(url, 35000, proxyUrl ?? undefined);
     if (!puppeteerHtml) throw new Error("Puppeteer 返回空 HTML");
+    const { links, images } = extractLinksAndImages(puppeteerHtml, url);
+    return { html: puppeteerHtml.slice(0, 150000), links, images, method: "puppeteer" };
+  };
+  // Puppeteer 直连（不走代理，作为最终兜底）
+  const runPuppeteerDirect = async (url: string): Promise<CrawlResultType> => {
+    const puppeteerHtml = await crawlPageWithPuppeteer(url, 35000);
+    if (!puppeteerHtml) throw new Error("Puppeteer 直连返回空 HTML");
     const { links, images } = extractLinksAndImages(puppeteerHtml, url);
     return { html: puppeteerHtml.slice(0, 150000), links, images, method: "puppeteer" };
   };
@@ -1251,6 +1258,8 @@ export async function buildCrawlCache(
         if (localeUrl) strategies.push({ name: "http_locale", run: () => crawlPage(localeUrl!, country) });
         strategies.push({ name: "http_root", run: () => crawlPage(merchantUrl, country) });
       }
+      // 最终兜底：Puppeteer 直连（不带代理），保证 JS 渲染结果
+      strategies.push({ name: "puppeteer_direct_fallback", run: () => runPuppeteerDirect(merchantUrl) });
     } else {
       // 无代理：HTTP 先（快），Puppeteer 兜底
       if (localeUrlShort) strategies.push({ name: "http_locale_short", run: () => crawlPage(localeUrlShort!, country) });

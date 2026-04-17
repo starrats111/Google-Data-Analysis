@@ -1129,7 +1129,13 @@ export async function crawlWithPuppeteerFull(url: string, timeoutMs = 30000, pro
     console.log(`[Crawler] Puppeteer 成功: ${html.length} bytes, navLinks: ${domData.navLinks.length}, images: ${domData.images.length}`);
     return { html, ...domData };
   } catch (err) {
-    console.log(`[Crawler] Puppeteer 失败: ${err instanceof Error ? err.message : err}`);
+    const msg = err instanceof Error ? err.message : String(err);
+    console.log(`[Crawler] Puppeteer 失败: ${msg}`);
+    // 代理连接失败时自动降级到直连重试（避免因代理故障丢失整个 Puppeteer 结果）
+    if (proxyUrl && /SOCKS|proxy|ERR_PROXY|ERR_SOCKS|connection failed/i.test(msg)) {
+      console.log("[Crawler] 代理不可用，降级到 Puppeteer 直连重试...");
+      return crawlWithPuppeteerFull(url, timeoutMs); // 不传 proxyUrl = 直连
+    }
     return null;
   } finally {
     if (browser) try { await browser.close(); } catch {}
