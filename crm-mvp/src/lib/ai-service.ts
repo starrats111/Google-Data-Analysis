@@ -423,15 +423,6 @@ function getFallbackHeadlineCandidates(
       "Kwaliteit die overtuigt",
       "Sterke deals online",
       "Ontdek slim winkelen",
-      "Snel geleverd thuis",
-      "Voordelig online kopen",
-      "Profiteer van topdeals",
-      "Vertrouwde merken online",
-      "Altijd de slimste keuze",
-      "Bestel nu eenvoudig",
-      "Meer voor jouw geld",
-      "Perfecte prijs-kwaliteit",
-      "Geen gedoe, gewoon goed",
     ];
   }
 

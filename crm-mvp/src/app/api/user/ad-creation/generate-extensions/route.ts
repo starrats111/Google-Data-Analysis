@@ -35,6 +35,14 @@ async function condenseOverlong(items: string[], maxLen: number, languageName: s
     .filter((item) => item.text.length > maxLen);
   if (overlong.length === 0) return items;
 
+  // 词边界截断：最后兜底用，确保结果一定 ≤ maxLen
+  const truncateAtWord = (text: string): string => {
+    if (text.length <= maxLen) return text;
+    const cut = text.slice(0, maxLen);
+    const lastSpace = cut.lastIndexOf(" ");
+    return (lastSpace > maxLen * 0.5 ? cut.slice(0, lastSpace) : cut).trim();
+  };
+
   // 单条 AI 精简（用于批量失败后的逐条重试）
   const condenseSingle = async (text: string): Promise<string> => {
     try {
@@ -49,7 +57,8 @@ async function condenseOverlong(items: string[], maxLen: number, languageName: s
       const result = raw.trim().replace(/^["']|["']$/g, "");
       if (result.length >= 2 && result.length <= maxLen) return result;
     } catch {}
-    return text; // AI 失败返回原文，不硬截断
+    // AI 失败时按词边界截断，确保不丢弃这条文案
+    return truncateAtWord(text);
   };
 
   try {
@@ -82,6 +91,97 @@ Return ONLY a JSON array of condensed strings in the same order. Every string MU
     }
     return result;
   }
+}
+
+/**
+ * AI 返工补全：当已有标题不足 count 条时，明确告知 AI 还差几条，让它重新生成。
+ * 最多重试 maxRetries 次，仍不足时以现有数量返回（不用静态 fallback）。
+ */
+async function retryMissingHeadlines(
+  existing: string[],
+  count: number,
+  merchantName: string,
+  languageName: string,
+  maxRetries = 2,
+): Promise<string[]> {
+  let result = [...existing];
+  for (let attempt = 0; attempt < maxRetries && result.length < count; attempt++) {
+    const needed = count - result.length;
+    const existingList = result.map((h, i) => `${i + 1}. "${h}"`).join("\n");
+    const prompt = `You are writing Google Ads headlines for "${merchantName}".
+
+You must generate exactly ${needed} NEW headlines in ${languageName}.
+
+STRICT RULES:
+1. Each headline MUST be ≤ 30 characters (count EVERY character including spaces and punctuation)
+2. Write ONLY in ${languageName} — no English unless it is the brand name
+3. Do NOT duplicate or rephrase any of these existing headlines:
+${existingList}
+4. No dates, no fabricated discount numbers
+5. Each headline must start with a DIFFERENT word
+
+Return ONLY a JSON array of exactly ${needed} strings. Example: ["Headline one","Headline two"]`;
+
+    try {
+      const raw = await callAiWithFallback("ad_copy", [{ role: "user", content: prompt }], 1024);
+      const parsed = JSON.parse(extractJsonFromAi(raw)) as string[];
+      if (!Array.isArray(parsed)) continue;
+      const condensed = await condenseOverlong(parsed, 30, languageName);
+      const valid = condensed
+        .map((h) => h.trim().replace(/^["']|["']$/g, ""))
+        .filter((h) => h.length >= 2 && h.length <= 30 && !result.includes(h));
+      result = [...result, ...valid].slice(0, count);
+      console.log(`[retryHeadlines] 第${attempt + 1}次补充 +${valid.length} 条，当前共 ${result.length}/${count}`);
+    } catch (e) {
+      console.warn(`[retryHeadlines] 第${attempt + 1}次补充失败:`, e instanceof Error ? e.message : e);
+    }
+  }
+  return result;
+}
+
+/**
+ * AI 返工补全：描述不足 count 条时，明确告知 AI 还差几条，让它重新生成。
+ */
+async function retryMissingDescriptions(
+  existing: string[],
+  count: number,
+  merchantName: string,
+  languageName: string,
+  maxRetries = 2,
+): Promise<string[]> {
+  let result = [...existing];
+  for (let attempt = 0; attempt < maxRetries && result.length < count; attempt++) {
+    const needed = count - result.length;
+    const existingList = result.map((d, i) => `${i + 1}. "${d}"`).join("\n");
+    const prompt = `You are writing Google Ads descriptions for "${merchantName}".
+
+Generate exactly ${needed} NEW descriptions in ${languageName}.
+
+STRICT RULES:
+1. Each description MUST be between 40 and 90 characters (count EVERY character including spaces)
+2. Write ONLY in ${languageName}
+3. Do NOT duplicate or closely rephrase any of these existing descriptions:
+${existingList}
+4. No fabricated discounts or unverified claims
+5. Each description must open with a DIFFERENT word
+
+Return ONLY a JSON array of exactly ${needed} strings.`;
+
+    try {
+      const raw = await callAiWithFallback("ad_copy", [{ role: "user", content: prompt }], 1024);
+      const parsed = JSON.parse(extractJsonFromAi(raw)) as string[];
+      if (!Array.isArray(parsed)) continue;
+      const condensed = await condenseOverlong(parsed, 90, languageName);
+      const valid = condensed
+        .map((d) => d.trim().replace(/^["']|["']$/g, ""))
+        .filter((d) => d.length >= 40 && d.length <= 90 && !result.includes(d));
+      result = [...result, ...valid].slice(0, count);
+      console.log(`[retryDescriptions] 第${attempt + 1}次补充 +${valid.length} 条，当前共 ${result.length}/${count}`);
+    } catch (e) {
+      console.warn(`[retryDescriptions] 第${attempt + 1}次补充失败:`, e instanceof Error ? e.message : e);
+    }
+  }
+  return result;
 }
 
 const MAX_COMPLIANCE_RETRIES = 3;
@@ -628,43 +728,23 @@ ${isNonEnglish ? `\n⚠️ FINAL REMINDER: ALL headlines, descriptions, sitelink
     rawHeadlines = await condenseOverlong(rawHeadlines, 30, languageName);
     let headlines = rawHeadlines.filter((h: string) => h.length >= 2 && h.length <= 30).slice(0, 15);
 
-    // 标题不足15条时，用 padHeadlines 补全
+    // 标题不足15条时，让 AI 返工补齐（不用静态 fallback）
     if (headlines.length < 15) {
-      try {
-        const { padHeadlines } = await import("@/lib/ai-service");
-        headlines = await padHeadlines(headlines, merchantName, country, 15, {
-          referenceItems: cache.semrushTitles,
-          dailyBudget: Number(adSettings?.daily_budget || 2),
-          maxCpc: Number(adSettings?.max_cpc || 0.3),
-          biddingStrategy: adSettings?.bidding_strategy || "MAXIMIZE_CLICKS",
-          aiRuleProfile,
-          adLanguageCode,
-        });
-      } catch (padErr) {
-        console.warn("[Core] padHeadlines 补全失败:", padErr instanceof Error ? padErr.message : padErr);
-      }
+      console.log(`[Core] 标题 ${headlines.length}/15 不足，AI 返工补充`);
+      headlines = await retryMissingHeadlines(headlines, 15, merchantName, languageName);
     }
+
     // 合规自动修复：标题
     const headlineFix = await complianceAutoFix(headlines, "headline", merchantName, languageName, aiRuleProfile, 30, 2);
     headlines = headlineFix.items;
 
-    // 违规项被删除后，不足 15 条时补全一次（不再做二次合规，避免循环）
+    // 合规删除后仍不足，再次让 AI 返工（不再做二次合规，避免循环）
     if (headlines.length < 15) {
-      try {
-        const { padHeadlines } = await import("@/lib/ai-service");
-        const padded = await padHeadlines(headlines, merchantName, country, 15, {
-          referenceItems: cache.semrushTitles,
-          dailyBudget: Number(adSettings?.daily_budget || 2),
-          maxCpc: Number(adSettings?.max_cpc || 0.3),
-          biddingStrategy: adSettings?.bidding_strategy || "MAXIMIZE_CLICKS",
-          aiRuleProfile,
-          adLanguageCode,
-        });
-        const newOnly = padded.filter((h: string) => !headlines.includes(h));
-        const cleanNew = newOnly.filter((h: string) => checkItemViolations([h], aiRuleProfile).length === 0);
-        headlines = [...headlines, ...cleanNew].slice(0, 15);
-        console.log(`[Core] 合规删除后补全标题: +${cleanNew.length} 条 (总${headlines.length})`);
-      } catch (e) { console.warn("[Core] 合规后补全标题失败:", e instanceof Error ? e.message : e); }
+      console.log(`[Core] 合规删除后标题 ${headlines.length}/15，AI 再次返工`);
+      const patched = await retryMissingHeadlines(headlines, 15, merchantName, languageName);
+      const cleanNew = patched.filter((h: string) => !headlines.includes(h) && checkItemViolations([h], aiRuleProfile).length === 0);
+      headlines = [...headlines, ...cleanNew].slice(0, 15);
+      console.log(`[Core] 合规后返工补充: +${cleanNew.length} 条 (总${headlines.length})`);
     }
     send("headlines", headlines);
 
@@ -676,44 +756,23 @@ ${isNonEnglish ? `\n⚠️ FINAL REMINDER: ALL headlines, descriptions, sitelink
     rawDescs = await condenseOverlong(rawDescs, 90, languageName);
     let descriptions = rawDescs.filter((d: string) => d.length >= 40 && d.length <= 90).slice(0, 4);
 
-    // 描述不足4条时，用 padDescriptions 补全
+    // 描述不足4条时，让 AI 返工补齐（不用静态 fallback）
     if (descriptions.length < 4) {
-      try {
-        const { padDescriptions } = await import("@/lib/ai-service");
-        descriptions = await padDescriptions(descriptions, merchantName, country, 4, {
-          referenceItems: cache.semrushDescriptions,
-          dailyBudget: Number(adSettings?.daily_budget || 2),
-          maxCpc: Number(adSettings?.max_cpc || 0.3),
-          biddingStrategy: adSettings?.bidding_strategy || "MAXIMIZE_CLICKS",
-          aiRuleProfile,
-          adLanguageCode,
-        });
-      } catch (padErr) {
-        console.warn("[Core] padDescriptions 补全失败:", padErr instanceof Error ? padErr.message : padErr);
-      }
+      console.log(`[Core] 描述 ${descriptions.length}/4 不足，AI 返工补充`);
+      descriptions = await retryMissingDescriptions(descriptions, 4, merchantName, languageName);
     }
 
     // 合规自动修复：描述
     const descFix = await complianceAutoFix(descriptions, "description", merchantName, languageName, aiRuleProfile, 90, 40);
     descriptions = descFix.items;
 
-    // 违规项被删除后，不足 4 条时补全一次
+    // 合规删除后仍不足，再次让 AI 返工
     if (descriptions.length < 4) {
-      try {
-        const { padDescriptions } = await import("@/lib/ai-service");
-        const padded = await padDescriptions(descriptions, merchantName, country, 4, {
-          referenceItems: cache.semrushDescriptions,
-          dailyBudget: Number(adSettings?.daily_budget || 2),
-          maxCpc: Number(adSettings?.max_cpc || 0.3),
-          biddingStrategy: adSettings?.bidding_strategy || "MAXIMIZE_CLICKS",
-          aiRuleProfile,
-          adLanguageCode,
-        });
-        const newOnly = padded.filter((d: string) => !descriptions.includes(d));
-        const cleanNew = newOnly.filter((d: string) => checkItemViolations([d], aiRuleProfile).length === 0);
-        descriptions = [...descriptions, ...cleanNew].slice(0, 4);
-        console.log(`[Core] 合规删除后补全描述: +${cleanNew.length} 条 (总${descriptions.length})`);
-      } catch (e) { console.warn("[Core] 合规后补全描述失败:", e instanceof Error ? e.message : e); }
+      console.log(`[Core] 合规删除后描述 ${descriptions.length}/4，AI 再次返工`);
+      const patched = await retryMissingDescriptions(descriptions, 4, merchantName, languageName);
+      const cleanNew = patched.filter((d: string) => !descriptions.includes(d) && checkItemViolations([d], aiRuleProfile).length === 0);
+      descriptions = [...descriptions, ...cleanNew].slice(0, 4);
+      console.log(`[Core] 合规后返工补充描述: +${cleanNew.length} 条 (总${descriptions.length})`);
     }
     send("descriptions", descriptions);
 
