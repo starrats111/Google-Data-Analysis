@@ -1078,6 +1078,9 @@ async function discoverSitelinkCandidates(
 
 // ─── 图片收集 ───
 
+// 目标：缓存层至少积累 60 张原始图片候选，保证前端过滤后仍有 20+ 张可用
+const IMG_COLLECT_TARGET = 60;
+
 async function collectImages(
   crawlImages: string[],
   links: { url: string; text: string }[],
@@ -1086,36 +1089,45 @@ async function collectImages(
   puppeteerImages?: string[],
 ): Promise<string[]> {
   const allImgs = [...crawlImages];
+  const seen = new Set<string>(allImgs);
+  const addImg = (img: string) => { if (!seen.has(img)) { seen.add(img); allImgs.push(img); } };
 
-  if (allImgs.length < 60 && links.length > 0) {
-    const subPages = links.slice(0, 9).map((l) => l.url);
-    for (let i = 0; i < subPages.length; i += 3) {
+  // ① 从站内链接子页面抓图：优先抓分类页/产品列表页，足量为止
+  if (allImgs.length < IMG_COLLECT_TARGET && links.length > 0) {
+    // 优先使用产品/分类类子页面（含 collection/category/shop/women/men/sale 等路径）
+    const productLinks = links.filter(l => /\/(collection|category|shop|women|men|kids|sale|new|all|products?)\b/i.test(l.url));
+    const otherLinks = links.filter(l => !/\/(collection|category|shop|women|men|kids|sale|new|all|products?)\b/i.test(l.url));
+    const subPages = [...productLinks, ...otherLinks].slice(0, 15).map((l) => l.url);
+    for (let i = 0; i < subPages.length && allImgs.length < IMG_COLLECT_TARGET; i += 3) {
       const batch = subPages.slice(i, i + 3);
       const batchResults = await Promise.all(batch.map((u) => fetchPageImages(u).catch(() => [] as string[])));
       for (const imgs of batchResults) for (const img of imgs) {
-        if (allImgs.length >= 80) break;
-        if (!allImgs.includes(img)) allImgs.push(img);
+        if (allImgs.length >= 100) break;
+        addImg(img);
       }
     }
   }
 
-  if (allImgs.length === 0 && merchantUrl) {
-    try {
-      const searchImgs = await searchMerchantImages(merchantUrl, merchantName);
-      for (const img of searchImgs) { if (allImgs.length >= 80) break; if (!allImgs.includes(img)) allImgs.push(img); }
-    } catch {}
-  }
-
-  // Puppeteer DOM 提取的图片：图片仍不足时补充
-  if (allImgs.length < 3 && puppeteerImages && puppeteerImages.length > 0) {
+  // ② Puppeteer DOM 图片：只要数量不足就补充（门槛从 3 提升到 30）
+  if (allImgs.length < 30 && puppeteerImages && puppeteerImages.length > 0) {
     const { isQualityImageUrl } = await import("@/lib/crawler");
     for (const img of puppeteerImages) {
-      if (allImgs.length >= 80) break;
-      if (!allImgs.includes(img) && isQualityImageUrl(img)) allImgs.push(img);
+      if (allImgs.length >= 100) break;
+      if (isQualityImageUrl(img)) addImg(img);
     }
     console.log(`[CollectImages] Puppeteer 补图后，图片数量: ${allImgs.length}`);
   }
 
+  // ③ 搜索兜底：图片仍严重不足时搜索补充
+  if (allImgs.length < 20 && merchantUrl) {
+    try {
+      const searchImgs = await searchMerchantImages(merchantUrl, merchantName);
+      for (const img of searchImgs) { if (allImgs.length >= 100) break; addImg(img); }
+      if (searchImgs.length > 0) console.log(`[CollectImages] 搜索补图后，图片数量: ${allImgs.length}`);
+    } catch {}
+  }
+
+  console.log(`[CollectImages] 最终原始图片候选数: ${allImgs.length}`);
   return allImgs;
 }
 

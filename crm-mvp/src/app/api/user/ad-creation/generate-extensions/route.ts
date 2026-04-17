@@ -1443,6 +1443,9 @@ const TEXT_PROMO_URL_PATTERNS = [
   "/coupon",
 ];
 
+// 前端最少接收图片数，无论如何必须达到
+const MIN_IMAGES_TO_FRONTEND = 20;
+
 async function selectBestImages(rawImages: string[], merchantUrl?: string): Promise<string[]> {
   // 解析商家主域名，用于品牌相关性判断
   let merchantDomain = "";
@@ -1453,48 +1456,45 @@ async function selectBestImages(rawImages: string[], merchantUrl?: string): Prom
     } catch { /* ignore */ }
   }
 
-  const filtered = rawImages.filter((url) => {
+  // 核心过滤（绝对黑名单：SVG / data-URI / 明确小图 / 社交域名 / 明显文字图片）
+  const hardFilter = (url: string): boolean => {
     const lower = url.toLowerCase();
     if (IMG_BLACKLIST.some((kw) => lower.includes(kw))) return false;
     if (lower.endsWith(".svg") || lower.startsWith("data:")) return false;
     const tinyMatch = lower.match(/[/_-](\d+)x(\d+)/);
     if (tinyMatch && (parseInt(tinyMatch[1]) < 150 || parseInt(tinyMatch[2]) < 150)) return false;
-
-    // 过滤社交媒体域名图片（与品牌不强相关）
     try {
       const imgHostname = new URL(url).hostname.toLowerCase();
       if (SOCIAL_MEDIA_DOMAINS.some((d) => imgHostname === d || imgHostname.endsWith("." + d))) return false;
-      // 如果商家域名已知，且图片来自完全无关的第三方域（非主流CDN），降低优先级
-      // 但不直接过滤，避免误伤合法CDN
     } catch { /* ignore */ }
-
-    // 过滤 URL 中含有明显促销/文字内容特征的图片
     const urlPath = lower.split("?")[0];
     if (TEXT_PROMO_URL_PATTERNS.some((p) => urlPath.includes(p))) return false;
-
     return true;
-  });
+  };
+
+  // 软过滤（URL 含按钮/徽标/精灵图特征）
+  const TEXT_URL_PATTERNS = [/\/badge[s]?\//i, /\/label[s]?\//i, /\/text[s]?\//i, /\/overlay/i, /\/sprite[s]?\//i, /\/button[s]?\//i, /\bfavicon\b/i];
+  const softFilter = (url: string): boolean => !TEXT_URL_PATTERNS.some((p) => p.test(url.toLowerCase()));
+
+  const filtered = rawImages.filter(hardFilter);
 
   // 若商家域名已知，将同域图片排在前面
-  const ranked = merchantDomain
+  const rank = (imgs: string[]) => merchantDomain
     ? [
-        ...filtered.filter((url) => {
-          try { return new URL(url).hostname.replace(/^www\./, "").includes(merchantDomain); }
-          catch { return false; }
-        }),
-        ...filtered.filter((url) => {
-          try { return !new URL(url).hostname.replace(/^www\./, "").includes(merchantDomain); }
-          catch { return true; }
-        }),
+        ...imgs.filter((url) => { try { return new URL(url).hostname.replace(/^www\./, "").includes(merchantDomain); } catch { return false; } }),
+        ...imgs.filter((url) => { try { return !new URL(url).hostname.replace(/^www\./, "").includes(merchantDomain); } catch { return true; } }),
       ]
-    : filtered;
+    : imgs;
 
-  if (ranked.length === 0) return rawImages.slice(0, 40);
+  const ranked = rank(filtered);
 
-  // Step 1：HEAD 检查——验证可访问 + 非过小文件（并发 10）
+  // 兜底：硬过滤后太少，直接用原始列表（不过滤）
+  const pool = ranked.length >= MIN_IMAGES_TO_FRONTEND ? ranked : rank(rawImages.filter(u => !u.startsWith("data:") && !u.endsWith(".svg")));
+
+  // Step 1：HEAD 检查——验证可访问 + 非过小文件（并发 10，最多检查 80 张）
   const checked: string[] = [];
-  for (let i = 0; i < ranked.length && checked.length < 40; i += 10) {
-    const batch = ranked.slice(i, i + 10);
+  for (let i = 0; i < pool.length && checked.length < 80; i += 10) {
+    const batch = pool.slice(i, i + 10);
     const results = await Promise.allSettled(
       batch.map(async (url) => {
         try {
@@ -1505,30 +1505,26 @@ async function selectBestImages(rawImages: string[], merchantUrl?: string): Prom
           const cl = parseInt(resp.headers.get("content-length") || "0", 10);
           if (cl > 0 && cl < 5000) return null;
           return url;
-        } catch { return url; }
+        } catch { return url; } // 超时/报错：不过滤，保留
       }),
     );
     for (const r of results) if (r.status === "fulfilled" && r.value) checked.push(r.value);
+    // 已通过 HEAD 检查的够用就停（节省时间）
     if (checked.length >= 40) break;
   }
 
-  const headPassed = checked.length > 0 ? checked : ranked.slice(0, 40);
+  const headPassed = checked.length >= MIN_IMAGES_TO_FRONTEND ? checked : (checked.length > 0 ? [...checked, ...pool.filter(u => !checked.includes(u))].slice(0, 80) : pool.slice(0, 80));
 
-  // Step 2：URL 规则过滤——排除 URL 中含明显非产品图特征的关键词
-  // 不过滤 /hero/ /banner/ /slide/ /thumb/ — 电商品牌常用这些路径存放产品主图和轮播图
-  const TEXT_URL_PATTERNS = [
-    /\/badge[s]?\//i,
-    /\/label[s]?\//i, /\/text[s]?\//i, /\/overlay/i,
-    /\/sprite[s]?\//i, /\/button[s]?\//i,
-    /\bfavicon\b/i,
-  ];
-  const cleanImages = headPassed.filter((url) => {
-    const lower = url.toLowerCase();
-    // 排除明显含文字/按钮/徽标的 URL
-    if (TEXT_URL_PATTERNS.some((p) => p.test(lower))) return false;
-    // 保留宽高比看起来是产品图的（URL 中含 _500x / _800x / _1000x / _2000x 等 Shopify 图片格式）
-    return true;
-  });
+  // Step 2：软过滤
+  const cleanImages = headPassed.filter(softFilter);
 
-  return cleanImages.length >= 10 ? cleanImages : headPassed;
+  // ─── 硬保障：至少返回 MIN_IMAGES_TO_FRONTEND 张 ───
+  // 逐层放宽：软过滤结果 → HEAD通过结果 → 原始 pool → 原始 rawImages
+  const result = cleanImages.length >= MIN_IMAGES_TO_FRONTEND ? cleanImages
+    : headPassed.length >= MIN_IMAGES_TO_FRONTEND ? headPassed
+    : pool.length >= MIN_IMAGES_TO_FRONTEND ? pool
+    : [...pool, ...rawImages.filter(u => !pool.includes(u) && !u.startsWith("data:"))];
+
+  console.log(`[SelectImages] raw=${rawImages.length} filtered=${filtered.length} headPassed=${headPassed.length} clean=${cleanImages.length} final=${Math.min(result.length, 40)}`);
+  return result.slice(0, 40);
 }
