@@ -2,7 +2,7 @@
  * 统一爬取管线 — 一次爬取，缓存复用
  * 被 merchants/route.ts（认领时缓存）和 generate-extensions/route.ts（AI 生成时读取）共用
  */
-import { crawlPage, fetchUrlMeta, fetchPageImages, searchMerchantImages } from "@/lib/crawler";
+import { crawlPage, fetchUrlMeta, fetchPageImages, searchMerchantImages, crawlViaSitemap } from "@/lib/crawler";
 import { getAdMarketConfig } from "@/lib/ad-market";
 import { getProxyUrlForCountry, fetchViaProxy } from "@/lib/crawl-proxy";
 
@@ -1122,9 +1122,26 @@ async function collectImages(
   const addImg = (img: string) => { if (!seen.has(img)) { seen.add(img); allImgs.push(img); } };
 
   // ① 从站内链接子页面 HTTP 抓图：优先产品/分类页，足量为止
-  if (allImgs.length < IMG_COLLECT_TARGET && links.length > 0) {
-    const productLinks = links.filter(l => /\/(collection|category|shop|women|men|kids|sale|new|all|products?)\b/i.test(l.url));
-    const otherLinks = links.filter(l => !/\/(collection|category|shop|women|men|kids|sale|new|all|products?)\b/i.test(l.url));
+  // 如果 links=0（SPA 站点常见），尝试常见电商路径作为子页面候选
+  let effectiveLinks = links;
+  if (links.length === 0 && merchantUrl && allImgs.length < IMG_COLLECT_TARGET) {
+    try {
+      const baseUrl = new URL(merchantUrl.startsWith("http") ? merchantUrl : `https://${merchantUrl}`);
+      const COMMON_PATHS = [
+        "/collections/all", "/collections", "/shop", "/products", "/catalog",
+        "/category", "/store", "/sale", "/new-arrivals", "/women", "/men",
+      ];
+      effectiveLinks = COMMON_PATHS.map(p => ({
+        url: `${baseUrl.origin}${p}`,
+        text: p.replace("/", ""),
+      }));
+      console.log(`[CollectImages] links=0，生成 ${effectiveLinks.length} 个常见产品路径候选`);
+    } catch {}
+  }
+
+  if (allImgs.length < IMG_COLLECT_TARGET && effectiveLinks.length > 0) {
+    const productLinks = effectiveLinks.filter(l => /\/(collection|category|shop|women|men|kids|sale|new|all|products?)\b/i.test(l.url));
+    const otherLinks = effectiveLinks.filter(l => !/\/(collection|category|shop|women|men|kids|sale|new|all|products?)\b/i.test(l.url));
     const subPages = [...productLinks, ...otherLinks].slice(0, 15).map((l) => l.url);
     for (let i = 0; i < subPages.length && allImgs.length < IMG_COLLECT_TARGET; i += 3) {
       const batch = subPages.slice(i, i + 3);
@@ -1146,11 +1163,11 @@ async function collectImages(
   }
 
   // ③ Puppeteer 子页面补图：HTTP 抓取不足且有代理时，用 Puppeteer 爬前 3 个子页面
-  if (allImgs.length < 20 && links.length > 0) {
+  if (allImgs.length < 20 && effectiveLinks.length > 0) {
     try {
       const { crawlPageWithPuppeteer } = await import("@/lib/crawler");
-      const productLinks = links.filter(l => /\/(collection|category|shop|women|men|kids|sale|new|all|products?)\b/i.test(l.url));
-      const subPageUrls = [...productLinks, ...links].slice(0, 3).map(l => l.url);
+      const productLinks = effectiveLinks.filter(l => /\/(collection|category|shop|women|men|kids|sale|new|all|products?)\b/i.test(l.url));
+      const subPageUrls = [...productLinks, ...effectiveLinks].slice(0, 3).map(l => l.url);
       for (const subUrl of subPageUrls) {
         if (allImgs.length >= IMG_COLLECT_TARGET) break;
         const subCache = await crawlPageWithPuppeteer(subUrl, 25000, proxyUrl).catch(() => null);
@@ -1283,7 +1300,11 @@ export async function buildCrawlCache(
         crawlResult = result;
         crawlQuality = quality;
       }
-      if (quality.score >= QUALITY_THRESHOLD) break; // 达标即止
+      // 达标即止：但 no_links + no_images 组合分数恰好 = 40，属于边界退化结果，
+      // 继续尝试其他策略以获得更多图片和链接
+      const hasMinLinks = result.links.length >= 3;
+      const hasMinImages = result.images.length >= 5;
+      if (quality.score >= QUALITY_THRESHOLD && (hasMinLinks || hasMinImages)) break;
     } catch (e) {
       console.warn(`[CrawlPipeline] 策略 ${strategy.name} 失败:`, e instanceof Error ? e.message : e);
     }
@@ -1292,6 +1313,32 @@ export async function buildCrawlCache(
   crawlResult.links = crawlResult.links.filter((l) => !isBadSitelinkUrl(l.url));
   const crawlFailed = crawlResult.method === "failed";
   let html = crawlResult.html;
+
+  // ─── Sitemap 兜底：links=0 时（SPA 无法抽取导航链接），尝试从 sitemap 补充链接和图片 ───
+  // SPA/Vite/React 站点常见：Puppeteer 渲染成功但导航链接无法提取，此时 sitemap 是获取产品 URL 的可靠途径
+  if (!crawlFailed && merchantUrl && crawlResult.links.length === 0) {
+    try {
+      console.log(`[CrawlPipeline] links=0，尝试 Sitemap 补充链接和图片: ${merchantUrl}`);
+      const sitemapRes = await crawlViaSitemap(merchantUrl);
+      if (sitemapRes) {
+        const newLinks = (sitemapRes.links || []).filter((l) => !isBadSitelinkUrl(l.url));
+        if (newLinks.length > 0) {
+          crawlResult.links = newLinks;
+          console.log(`[CrawlPipeline] Sitemap 补充 ${newLinks.length} 个链接`);
+        }
+        const sitemapImgs: string[] = sitemapRes.images || [];
+        const existingImgSet = new Set<string>(crawlResult.images);
+        for (const img of sitemapImgs) {
+          if (!existingImgSet.has(img)) { existingImgSet.add(img); crawlResult.images.push(img); }
+        }
+        if (sitemapImgs.length > 0) {
+          console.log(`[CrawlPipeline] Sitemap 补充 ${sitemapImgs.length} 张图片，共 ${crawlResult.images.length} 张`);
+        }
+      }
+    } catch (e) {
+      console.warn("[CrawlPipeline] Sitemap 兜底失败:", e instanceof Error ? e.message : e);
+    }
+  }
 
   // sitemap / backend API 路径爬取成功但 html 为空，补发一次 HTTP fetch 用于数据提取
   if (!crawlFailed && !html && merchantUrl) {

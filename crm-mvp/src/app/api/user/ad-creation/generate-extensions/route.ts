@@ -332,10 +332,13 @@ export async function POST(req: NextRequest) {
   }
 
   const encoder = new TextEncoder();
+  // 用 isClosed flag 跟踪 controller 状态，避免客户端断开后继续写入导致的 "Controller is already closed" 异常
+  let isClosed = false;
   const stream = new ReadableStream({
     async start(controller) {
       const send = (eventType: string, payload: unknown) => {
-        try { controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: eventType, data: serializeData(payload) })}\n\n`)); } catch {}
+        if (isClosed) return;
+        try { controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: eventType, data: serializeData(payload) })}\n\n`)); } catch { isClosed = true; }
       };
 
       try {
@@ -356,16 +359,24 @@ export async function POST(req: NextRequest) {
         }
 
         await Promise.all(tasks);
-        controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+        if (!isClosed) {
+          try { controller.enqueue(encoder.encode("data: [DONE]\n\n")); } catch { isClosed = true; }
+        }
       } catch (err) {
-        console.error("[Extensions] 流式生成未捕获异常:", err instanceof Error ? err.message : err);
-        try { controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: "error", data: "生成失败，请重试" })}\n\n`)); } catch {}
+        if (!isClosed) {
+          console.error("[Extensions] 流式生成未捕获异常:", err instanceof Error ? err.message : err);
+          try { controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: "error", data: "生成失败，请重试" })}\n\n`)); } catch { isClosed = true; }
+        }
       } finally {
-        try { controller.close(); } catch {}
+        if (!isClosed) {
+          isClosed = true;
+          try { controller.close(); } catch {}
+        }
       }
     },
     cancel() {
-      // 客户端主动断开连接时静默处理，避免抛出未捕获异常
+      // 客户端主动断开连接时设置 isClosed，避免后续 enqueue 操作抛出异常
+      isClosed = true;
     },
   });
 

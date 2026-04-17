@@ -401,7 +401,7 @@ async function crawlWithHttp(url: string, country?: string, proxyUrl?: string): 
 // ══════════════════════════════════════════════════════
 // 策略 2: Sitemap 提取（增强版 - 不受 Cloudflare 影响）
 // ══════════════════════════════════════════════════════
-async function crawlViaSitemap(url: string): Promise<{ links: { url: string; text: string }[]; images: string[] } | null> {
+export async function crawlViaSitemap(url: string): Promise<{ links: { url: string; text: string }[]; images: string[] } | null> {
   const domain = (() => { try { return new URL(url).origin; } catch { return ""; } })();
   if (!domain) return null;
 
