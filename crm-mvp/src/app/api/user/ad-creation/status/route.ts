@@ -112,6 +112,8 @@ export async function GET(req: NextRequest) {
       sitelinks: adCreative.sitelinks,
       callouts: adCreative.callouts,
       image_urls: adCreative.image_urls,
+      // 爬虫检测到的实际页面语言（存在时比 language_id 国家默认更精准）
+      detectedLanguageCode: (adCreative.crawl_cache as any)?.detectedLanguageCode ?? null,
     } : null,
     keywords: keywordView,
     adSettings: adSettings ? {

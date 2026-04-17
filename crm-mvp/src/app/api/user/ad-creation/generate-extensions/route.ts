@@ -344,6 +344,12 @@ export async function POST(req: NextRequest) {
       try {
         send("crawl_status", { crawl_failed: cache!.crawlFailed, crawl_method: cache!.crawlMethod });
 
+        // 若爬虫检测到了实际页面语言（比国家配置更准确），推送给前端
+        if (cache!.detectedLanguageCode) {
+          send("detected_language", { code: cache!.detectedLanguageCode });
+          console.log(`[Extensions] 推送检测到的页面语言: ${cache!.detectedLanguageCode}`);
+        }
+
         const tasks: Promise<void>[] = [];
 
         // ─── core: 1 次 AI 生成标题 + 描述 + 站内链接描述 + 图片 ───

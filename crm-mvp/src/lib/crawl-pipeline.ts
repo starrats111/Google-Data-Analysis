@@ -59,6 +59,8 @@ export interface CrawlCache {
   crawlQualityScore?: number;    // 0-100，本次爬取质量评分
   crawlQualityIssues?: string[]; // 质量问题标签，如 ['no_links','splash_page']
   rawMentions?: RawMentions;     // 全量 HTML 直接提取的原文片段，不依赖 htmlToText 管道
+  /** 从爬取 HTML lang 属性或本地化 URL 检测到的实际语言 code（如 "nl", "fr", "en"），优先于国家默认语言 */
+  detectedLanguageCode?: string;
 }
 
 // ─── 共享常量和工具函数 ───
@@ -1653,6 +1655,13 @@ export async function buildCrawlCache(
     `[CrawlPipeline] rawMentions 采集完毕 promo=${rawMentions.promo.length} shipping=${rawMentions.shipping.length} features=${rawMentions.features.length}`
   );
 
+  // ─── 检测爬取到的实际语言（优先于国家默认配置） ───
+  // 适用场景：比利时（BE）→ 荷兰语/法语由网站实际内容决定，而非国家默认
+  const detectedLanguageCode = detectPageLanguage(html, localizedMerchantUrl ?? crawlResult.method !== "failed" ? (localeUrl ?? merchantUrl) : undefined);
+  if (detectedLanguageCode) {
+    console.log(`[CrawlPipeline] 检测到页面实际语言: ${detectedLanguageCode}（来源: HTML lang 属性或 URL 路径）`);
+  }
+
   return {
     links: crawlResult.links,
     images,
@@ -1673,8 +1682,92 @@ export async function buildCrawlCache(
     crawlQualityScore: crawlQuality.score,
     crawlQualityIssues: crawlQuality.issues,
     rawMentions,
+    detectedLanguageCode: detectedLanguageCode ?? undefined,
   };
   } finally {
     releaseCrawlSlot();
   }
+}
+
+/**
+ * 从爬取的 HTML 和 URL 路径中检测网页实际语言。
+ * 优先级：
+ *   1. URL 路径语言前缀（最可靠：服务器按访客 IP 已做重定向）
+ *   2. <html lang="..."> 属性
+ *   3. <meta http-equiv="content-language" content="...">
+ *
+ * 返回 Google Ads 语言 code（如 "nl", "fr", "de"），检测不到返回 null。
+ */
+export function detectPageLanguage(html: string | null | undefined, pageUrl?: string): string | null {
+  // HTML BCP-47 tag → Google Ads lang code 映射表
+  const BCP47_TO_GADS: Record<string, string> = {
+    en: "en", "en-us": "en", "en-gb": "en", "en-au": "en", "en-ca": "en",
+    "en-ie": "en", "en-nz": "en", "en-sg": "en", "en-in": "en", "en-hk": "en",
+    nl: "nl", "nl-nl": "nl", "nl-be": "nl",
+    fr: "fr", "fr-fr": "fr", "fr-be": "fr", "fr-ch": "fr",
+    de: "de", "de-de": "de", "de-at": "de", "de-ch": "de",
+    es: "es", "es-es": "es", "es-mx": "es", "es-ar": "es",
+    it: "it", "it-it": "it",
+    pt: "pt", "pt-pt": "pt", "pt-br": "pt",
+    ja: "ja", "ja-jp": "ja",
+    ko: "ko", "ko-kr": "ko",
+    zh: "zh_CN", "zh-cn": "zh_CN", "zh-hans": "zh_CN",
+    "zh-tw": "zh_TW", "zh-hant": "zh_TW", "zh-hk": "zh_TW",
+    sv: "sv", "sv-se": "sv",
+    da: "da", "da-dk": "da",
+    no: "no", nb: "no", "nb-no": "no",
+    fi: "fi", "fi-fi": "fi",
+    pl: "pl", "pl-pl": "pl",
+    cs: "cs", "cs-cz": "cs",
+    ru: "ru", "ru-ru": "ru",
+    tr: "tr", "tr-tr": "tr",
+    th: "th", "th-th": "th",
+    vi: "vi", "vi-vn": "vi",
+    id: "id", "id-id": "id",
+    ms: "ms", "ms-my": "ms",
+    ar: "ar", "ar-sa": "ar", "ar-ae": "ar",
+    he: "iw", "he-il": "iw", iw: "iw",
+    el: "el", "el-gr": "el",
+    ro: "ro", "ro-ro": "ro",
+    hu: "hu", "hu-hu": "hu",
+    bg: "bg", "bg-bg": "bg",
+    hi: "hi", "hi-in": "hi",
+    uk: "uk", "uk-ua": "uk",
+  };
+
+  // 优先检测：URL 路径语言/locale 前缀
+  // /nl/ /nl-be/ /fr/ /fr-be/ /en-us/ /de/ 等
+  if (pageUrl) {
+    try {
+      const pathname = new URL(pageUrl).pathname.toLowerCase();
+      // 匹配 /xx/ 或 /xx-yy/ 开头
+      const m = pathname.match(/^\/([a-z]{2}(?:-[a-z]{2})?)\//);
+      if (m) {
+        const seg = m[1];
+        const mapped = BCP47_TO_GADS[seg];
+        if (mapped) return mapped;
+      }
+    } catch {}
+  }
+
+  if (!html) return null;
+
+  // 检测 <html lang="...">
+  const htmlTagMatch = html.match(/<html[^>]+\blang=["']([^"']+)["']/i);
+  if (htmlTagMatch) {
+    const raw = htmlTagMatch[1].toLowerCase().trim();
+    const mapped = BCP47_TO_GADS[raw] ?? BCP47_TO_GADS[raw.split("-")[0]];
+    if (mapped) return mapped;
+  }
+
+  // 检测 <meta http-equiv="content-language" content="...">
+  const metaLangMatch = html.match(/<meta[^>]+http-equiv=["']content-language["'][^>]+content=["']([^"']+)["']/i)
+    ?? html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+http-equiv=["']content-language["']/i);
+  if (metaLangMatch) {
+    const raw = metaLangMatch[1].toLowerCase().trim().split(",")[0].trim();
+    const mapped = BCP47_TO_GADS[raw] ?? BCP47_TO_GADS[raw.split("-")[0]];
+    if (mapped) return mapped;
+  }
+
+  return null;
 }

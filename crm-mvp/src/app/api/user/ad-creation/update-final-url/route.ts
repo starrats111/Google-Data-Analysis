@@ -5,12 +5,14 @@ import prisma from "@/lib/prisma";
 
 /**
  * PATCH /api/user/ad-creation/update-final-url
- * 更新广告素材的落地页 URL（final_url），同时可更新商家的 tracking_link / campaign_link
+ * 更新广告素材的落地页 URL（final_url），同时可更新商家的 tracking_link / campaign_link，
+ * 以及广告系列的广告语言（language_id）
  *
  * Body:
  *   campaign_id     - 广告系列 ID（必填）
- *   final_url       - 广告落地页 URL（必填，必须以 https:// 开头）
+ *   final_url       - 广告落地页 URL（与 language_id 至少填一个）
  *   affiliate_url   - 联盟跟踪链接（选填，保存到 user_merchants.tracking_link + campaign_link）
+ *   language_id     - 广告语言 code（选填，如 "nl", "fr"，由爬虫自动检测或用户手动设置）
  */
 export async function PATCH(req: NextRequest) {
   const user = getUserFromRequest(req);
@@ -23,18 +25,24 @@ export async function PATCH(req: NextRequest) {
     return apiError("请求体解析失败", 400);
   }
 
-  const { campaign_id, final_url, affiliate_url } = body as {
+  const { campaign_id, final_url, affiliate_url, language_id } = body as {
     campaign_id?: string;
     final_url?: string;
     affiliate_url?: string;
+    language_id?: string;
   };
 
   if (!campaign_id) return apiError("缺少 campaign_id");
 
-  let fixedUrl = (final_url || "").trim();
-  if (!fixedUrl) return apiError("落地页 URL 不能为空");
-  if (!fixedUrl.startsWith("http")) return apiError("落地页 URL 必须以 http:// 或 https:// 开头");
-  if (fixedUrl.startsWith("http://")) fixedUrl = fixedUrl.replace("http://", "https://");
+  const hasUrl = final_url && String(final_url).trim();
+  const hasLang = language_id && String(language_id).trim();
+  if (!hasUrl && !hasLang) return apiError("final_url 和 language_id 至少填一个");
+
+  let fixedUrl = hasUrl ? (final_url as string).trim() : "";
+  if (fixedUrl) {
+    if (!fixedUrl.startsWith("http")) return apiError("落地页 URL 必须以 http:// 或 https:// 开头");
+    if (fixedUrl.startsWith("http://")) fixedUrl = fixedUrl.replace("http://", "https://");
+  }
 
   const userId = BigInt(user.userId);
 
@@ -58,22 +66,36 @@ export async function PATCH(req: NextRequest) {
   });
   if (!adCreative) return apiError("广告素材不存在");
 
+  const updates: Promise<unknown>[] = [];
+
   // 更新 final_url
-  await prisma.ad_creatives.update({
-    where: { id: adCreative.id },
-    data: { final_url: fixedUrl },
-  });
+  if (fixedUrl) {
+    updates.push(prisma.ad_creatives.update({
+      where: { id: adCreative.id },
+      data: { final_url: fixedUrl },
+    }));
+  }
+
+  // 更新广告语言（保存到 campaigns.language_id）
+  if (language_id && typeof language_id === "string") {
+    updates.push(prisma.campaigns.update({
+      where: { id: campaign.id },
+      data: { language_id: language_id.trim() },
+    }));
+  }
 
   // 若提供了联盟跟踪链接，同步更新商家记录
   if (affiliate_url && typeof affiliate_url === "string" && affiliate_url.startsWith("http")) {
-    await prisma.user_merchants.update({
+    updates.push(prisma.user_merchants.update({
       where: { id: campaign.user_merchant_id },
       data: {
         tracking_link: affiliate_url,
         campaign_link: affiliate_url,
       },
-    });
+    }));
   }
 
-  return apiSuccess({ message: "落地页 URL 已更新" });
+  await Promise.all(updates);
+
+  return apiSuccess({ message: "已更新" });
 }
