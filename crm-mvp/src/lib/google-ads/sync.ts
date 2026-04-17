@@ -106,7 +106,18 @@ export async function fetchAllCampaignStatuses(
   const all: { customer_id: string; campaign_id: string; status: string; name: string; budget_micros: number; budget_dollars: number }[] = [];
   const disabledCids: string[] = [];
 
-  const PERM_DENIED_ERRORS = ["CUSTOMER_NOT_ENABLED", "not yet enabled", "USER_PERMISSION_DENIED", "PERMISSION_DENIED", "未启用或已停用"];
+  // 触发"账号视同停用"的错误关键字：包含权限拒绝、政策违规中止、账号不可用等情形
+  const PERM_DENIED_ERRORS = [
+    "CUSTOMER_NOT_ENABLED",
+    "not yet enabled",
+    "USER_PERMISSION_DENIED",
+    "PERMISSION_DENIED",
+    "未启用或已停用",
+    "ACCOUNT_SUSPENDED",             // 账号被 Google 中止（政策违规等）
+    "account has been suspended",    // Google Ads 政策邮件标准措辞
+    "UNACCEPTABLE_BUSINESS_PRACTICES", // 不可接受的商业行为
+    "invalid_client",                // OAuth 凭证因账号中止失效
+  ];
 
   const fetchOne = async (cid: string) => {
     try {

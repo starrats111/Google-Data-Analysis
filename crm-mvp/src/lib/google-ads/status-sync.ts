@@ -69,8 +69,11 @@ export async function syncUserCampaignStatuses(userId: bigint): Promise<SyncResu
       let updated = 0;
       let newCampaigns = 0;
 
-      // ── 1. 处理被停用的 CID ──────────────────────────────────────────────
+      // ── 1. 处理被停用/中止的 CID ─────────────────────────────────────────
+      // 覆盖场景：账号未启用、权限撤销、政策违规中止（如"不可接受的商业行为"）
+      // 同步更新 google_status（Google侧）和 status（内部展示侧）均为暂停
       if (disabledCids.length > 0) {
+        console.log(`[StatusSync] 检测到 ${disabledCids.length} 个停用/中止 CID:`, disabledCids);
         const r = await prisma.campaigns.updateMany({
           where: {
             user_id: userId,
@@ -78,7 +81,11 @@ export async function syncUserCampaignStatuses(userId: bigint): Promise<SyncResu
             is_deleted: 0,
             google_status: { not: "PAUSED" },
           },
-          data: { google_status: "PAUSED", last_google_sync_at: new Date() },
+          data: {
+            google_status: "PAUSED",
+            status: "paused",            // 同步内部状态字段，确保前端"状态"列显示"已暂停"
+            last_google_sync_at: new Date(),
+          },
         });
         updated += r.count;
         await prisma.mcc_cid_accounts.updateMany({
