@@ -1,13 +1,13 @@
 "use client";
 
-import { useState, useEffect, useMemo, useCallback } from "react";
+import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import {
   Card, Table, Tag, Statistic, Row, Col, Progress, Typography, Spin, Empty,
-  Space, DatePicker, Button, Tooltip, notification,
+  Space, DatePicker, Button, Tooltip, notification, Badge,
 } from "antd";
 import {
   TeamOutlined, UserOutlined, TrophyOutlined, ReloadOutlined, SyncOutlined,
-  CloudSyncOutlined,
+  CloudSyncOutlined, ShopOutlined, ClockCircleOutlined,
 } from "@ant-design/icons";
 import dayjs, { Dayjs } from "dayjs";
 import utc from "dayjs/plugin/utc";
@@ -21,13 +21,15 @@ const TZ = "Asia/Shanghai";
 const { Title, Text } = Typography;
 const { RangePicker } = DatePicker;
 
-/** 自动刷新间隔（毫秒） */
-const AUTO_REFRESH_INTERVAL = 60_000;
+/** 自动刷新间隔（毫秒）—— 30 秒保证数据接近实时 */
+const AUTO_REFRESH_INTERVAL = 30_000;
 
 interface MemberRanking {
   user_id: string;
   username: string;
   display_name: string | null;
+  status: string;
+  active_merchants: number;
   cost: number;
   commission: number;
   rejected_commission: number;
@@ -36,12 +38,24 @@ interface MemberRanking {
   clicks: number;
 }
 
+interface TeamStats {
+  member_count: number;
+  active_merchants: number;
+  total_cost: number;
+  total_commission: number;
+  rejected_commission: number;
+  net_commission: number;
+  avg_roi: number;
+}
+
 export default function TeamOverviewPage() {
   const [memberRanking, setMemberRanking] = useState<MemberRanking[]>([]);
   const [memberCount, setMemberCount] = useState(0);
+  const [teamActiveMerchants, setTeamActiveMerchants] = useState(0);
   const [loading, setLoading] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [lastUpdated, setLastUpdated] = useState<Dayjs | null>(null);
+  const [countdown, setCountdown] = useState(AUTO_REFRESH_INTERVAL / 1000);
   const [dateRange, setDateRange] = useState<[Dayjs, Dayjs]>([
     dayjs().tz(TZ).startOf("month"),
     dayjs().tz(TZ),
@@ -53,7 +67,7 @@ export default function TeamOverviewPage() {
   }>({ open: false, userId: null });
 
   // 团队汇总数据从员工数据派生，确保与排行榜数据完全一致
-  const teamStats = useMemo(() => {
+  const teamStats = useMemo((): TeamStats | null => {
     if (memberRanking.length === 0 && memberCount === 0) return null;
     const total_cost = memberRanking.reduce((s, m) => s + m.cost, 0);
     const total_commission = memberRanking.reduce((s, m) => s + m.commission, 0);
@@ -62,13 +76,14 @@ export default function TeamOverviewPage() {
     const avg_roi = total_cost > 0 ? (net_commission / total_cost) * 100 : 0;
     return {
       member_count: memberCount,
+      active_merchants: teamActiveMerchants,
       total_cost: Math.round(total_cost * 100) / 100,
       total_commission: Math.round(total_commission * 100) / 100,
       rejected_commission: Math.round(rejected_commission * 100) / 100,
       net_commission: Math.round(net_commission * 100) / 100,
       avg_roi: Math.round(avg_roi * 10) / 10,
     };
-  }, [memberRanking, memberCount]);
+  }, [memberRanking, memberCount, teamActiveMerchants]);
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -80,9 +95,10 @@ export default function TeamOverviewPage() {
       const res = await fetch(`/api/user/team/stats?${params}`).then((r) => r.json());
       if (res.code === 0) {
         setMemberRanking(res.data.member_ranking);
-        // 成员人数来自服务端（包含零数据成员）
         setMemberCount(res.data.team_stats?.member_count ?? res.data.member_ranking.length);
+        setTeamActiveMerchants(res.data.team_stats?.active_merchants ?? 0);
         setLastUpdated(dayjs().tz(TZ));
+        setCountdown(AUTO_REFRESH_INTERVAL / 1000);
       }
     } catch (e) {
       console.error("加载小组数据失败:", e);
@@ -130,18 +146,27 @@ export default function TeamOverviewPage() {
       });
     } finally {
       setSyncing(false);
-      // 同步完成后刷新统计数据
       await loadData();
     }
   }, [loadData]);
 
   useEffect(() => { loadData(); }, [loadData]);
 
-  // 自动轮询刷新
+  // 自动轮询刷新（30 秒）
+  const loadDataRef = useRef(loadData);
+  loadDataRef.current = loadData;
   useEffect(() => {
-    const timer = setInterval(() => { loadData(); }, AUTO_REFRESH_INTERVAL);
+    const timer = setInterval(() => { loadDataRef.current(); }, AUTO_REFRESH_INTERVAL);
     return () => clearInterval(timer);
-  }, [loadData]);
+  }, []);
+
+  // 倒计时显示
+  useEffect(() => {
+    const tick = setInterval(() => {
+      setCountdown((c) => (c <= 1 ? AUTO_REFRESH_INTERVAL / 1000 : c - 1));
+    }, 1000);
+    return () => clearInterval(tick);
+  }, []);
 
   const handleViewMember = useCallback((record: MemberRanking) => {
     setModalState({
@@ -154,7 +179,7 @@ export default function TeamOverviewPage() {
 
   const columns = useMemo(() => [
     {
-      title: "排名", key: "rank", width: 70,
+      title: "排名", key: "rank", width: 60,
       render: (_: unknown, __: unknown, index: number) => {
         if (index === 0) return <Tag color="gold">1</Tag>;
         if (index === 1) return <Tag color="default">2</Tag>;
@@ -169,8 +194,22 @@ export default function TeamOverviewPage() {
           <Space>
             <UserOutlined />
             <Text strong>{record.display_name || text}</Text>
+            {record.status === "inactive" && <Tag color="default" style={{ fontSize: 11 }}>停用</Tag>}
           </Space>
         </Button>
+      ),
+    },
+    {
+      title: "在跑商家",
+      dataIndex: "active_merchants",
+      key: "active_merchants",
+      align: "center" as const,
+      width: 100,
+      sorter: (a: MemberRanking, b: MemberRanking) => a.active_merchants - b.active_merchants,
+      render: (v: number) => (
+        v > 0
+          ? <Badge count={v} color="#52c41a" overflowCount={99} style={{ fontSize: 12 }} />
+          : <Text type="secondary">—</Text>
       ),
     },
     {
@@ -241,14 +280,22 @@ export default function TeamOverviewPage() {
               刷新
             </Button>
           </Space>
-          {lastUpdated && (
-            <Tooltip title={`每 ${AUTO_REFRESH_INTERVAL / 1000} 秒自动刷新`}>
-              <Space style={{ color: "#8c8c8c", fontSize: 12, cursor: "default" }}>
+          <Space style={{ color: "#8c8c8c", fontSize: 12 }}>
+            {lastUpdated && (
+              <>
                 <SyncOutlined spin={loading} />
                 <span>上次更新：{lastUpdated.format("HH:mm:ss")}</span>
-              </Space>
-            </Tooltip>
-          )}
+                <Tooltip title={`每 ${AUTO_REFRESH_INTERVAL / 1000} 秒自动刷新`}>
+                  <Space style={{ cursor: "default" }}>
+                    <ClockCircleOutlined />
+                    <span style={{ color: countdown <= 5 ? "#faad14" : "#8c8c8c" }}>
+                      {countdown}s 后刷新
+                    </span>
+                  </Space>
+                </Tooltip>
+              </>
+            )}
+          </Space>
         </div>
       </Card>
 
@@ -264,6 +311,16 @@ export default function TeamOverviewPage() {
             <Row gutter={16}>
               <Col xs={12} sm={8} md={4}>
                 <Statistic title="小组成员" value={teamStats.member_count} suffix="人" prefix={<TeamOutlined />} />
+              </Col>
+              <Col xs={12} sm={8} md={4}>
+                <Tooltip title="全组正在跑广告的商家数（跨成员去重）">
+                  <Statistic
+                    title={<Space><ShopOutlined />在跑商家</Space>}
+                    value={teamStats.active_merchants}
+                    suffix="家"
+                    styles={{ content: { color: teamStats.active_merchants > 0 ? "#52c41a" : "#8c8c8c" } }}
+                  />
+                </Tooltip>
               </Col>
               <Col xs={12} sm={8} md={4}>
                 <Statistic title="总费用" value={teamStats.total_cost} precision={2} prefix="$"
@@ -302,6 +359,7 @@ export default function TeamOverviewPage() {
               rowKey="user_id"
               pagination={false}
               columns={columns}
+              rowClassName={(record) => record.active_merchants > 0 ? "" : "row-no-active"}
             />
           ) : (
             <Empty description="暂无数据" />

@@ -34,6 +34,47 @@ export const GET = withLeader(async (req: NextRequest, { user }) => {
 
   const memberIds = members.map((m) => m.id);
 
+  // 查询每位成员的在跑商家数（有 ENABLED 广告系列的商家去重计数）
+  const activeMerchantsByUser = new Map<string, number>();
+  let teamActiveMerchantCount = 0;
+  if (memberIds.length > 0) {
+    const activeUms = await prisma.user_merchants.findMany({
+      where: { user_id: { in: memberIds }, is_deleted: 0, status: { in: ["claimed", "paused"] } },
+      select: { id: true, user_id: true, merchant_id: true, platform: true },
+    });
+    if (activeUms.length > 0) {
+      const umIds = activeUms.map((um) => um.id);
+      const umToMerchant = new Map(activeUms.map((um) => [um.id.toString(), `${um.merchant_id}:${um.platform}`]));
+
+      const activeCampaigns = await prisma.campaigns.findMany({
+        where: {
+          user_merchant_id: { in: umIds },
+          google_status: "ENABLED",
+          customer_id: { not: null },
+          is_deleted: 0,
+        },
+        select: { user_id: true, user_merchant_id: true },
+      });
+
+      // 按成员统计有 ENABLED 广告的去重商家数，同时统计团队级别去重集合
+      const userMerchantSets = new Map<string, Set<string>>();
+      const teamMerchantSet = new Set<string>();
+      for (const c of activeCampaigns) {
+        const uid = c.user_id.toString();
+        const umKey = c.user_merchant_id.toString();
+        const merchantKey = umToMerchant.get(umKey);
+        if (!merchantKey) continue;
+        if (!userMerchantSets.has(uid)) userMerchantSets.set(uid, new Set());
+        userMerchantSets.get(uid)!.add(merchantKey);
+        teamMerchantSet.add(merchantKey);
+      }
+      for (const [uid, merchantSet] of userMerchantSets) {
+        activeMerchantsByUser.set(uid, merchantSet.size);
+      }
+      teamActiveMerchantCount = teamMerchantSet.size;
+    }
+  }
+
   const cstNow = nowCST();
   const monthStartStr = cstNow.startOf("month").format("YYYY-MM-DD");
   const statsStart = startDate ? dateColumnStart(startDate) : dateColumnStart(monthStartStr);
@@ -179,6 +220,8 @@ export const GET = withLeader(async (req: NextRequest, { user }) => {
       user_id: uid,
       username: member.username,
       display_name: member.display_name,
+      status: member.status,
+      active_merchants: activeMerchantsByUser.get(uid) || 0,
       cost: Math.round(cost * 100) / 100,
       commission: Math.round(commission * 100) / 100,
       rejected_commission: Math.round(rejected * 100) / 100,
@@ -191,10 +234,13 @@ export const GET = withLeader(async (req: NextRequest, { user }) => {
 
   memberStats.sort((a, b) => b.roi - a.roi);
 
-  // team_stats 汇总数据由前端从 member_ranking 派生，此处仅返回 member_count
+  // team_stats 汇总数据由前端从 member_ranking 派生，此处仅返回 member_count 和 active_merchants
   // （包含无 campaign 数据的成员，前端无法从 member_ranking 获知）
   return apiSuccess(serializeData({
-    team_stats: { member_count: members.length },
+    team_stats: {
+      member_count: members.length,
+      active_merchants: teamActiveMerchantCount,
+    },
     member_ranking: memberStats,
   }));
 });
