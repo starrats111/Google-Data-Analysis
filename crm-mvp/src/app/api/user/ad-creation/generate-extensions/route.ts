@@ -35,30 +35,20 @@ async function condenseOverlong(items: string[], maxLen: number, languageName: s
     .filter((item) => item.text.length > maxLen);
   if (overlong.length === 0) return items;
 
-  // 词边界截断：最后兜底用，确保结果一定 ≤ maxLen
-  const truncateAtWord = (text: string): string => {
-    if (text.length <= maxLen) return text;
-    const cut = text.slice(0, maxLen);
-    const lastSpace = cut.lastIndexOf(" ");
-    return (lastSpace > maxLen * 0.5 ? cut.slice(0, lastSpace) : cut).trim();
-  };
-
   // 单条 AI 精简（用于批量失败后的逐条重试）
+  // 失败时返回空字符串，由下游 retryMissingHeadlines 补一条语义完整的新标题
   const condenseSingle = async (text: string): Promise<string> => {
-    try {
-      const raw = await callAiWithFallback(
-        "ad_copy",
-        [{
-          role: "user",
-          content: `Rewrite this Google Ads text to fit within ${maxLen} characters. Keep the core meaning, brand names, and key selling points. Remove filler words. Write in ${languageName}.\n\nOriginal (${text.length} chars): "${text}"\n\nOutput ONLY the rewritten text, nothing else. It MUST be ≤${maxLen} characters.`,
-        }],
-        120,
-      );
-      const result = raw.trim().replace(/^["']|["']$/g, "");
-      if (result.length >= 2 && result.length <= maxLen) return result;
-    } catch {}
-    // AI 失败时按词边界截断，确保不丢弃这条文案
-    return truncateAtWord(text);
+    const rewritePrompt = `Rewrite this Google Ads text into a semantically complete phrase within ${maxLen} characters. Keep the core meaning. Write in ${languageName}.\n\nOriginal (${text.length} chars): "${text}"\n\nOutput ONLY the rewritten text. It MUST be ≤${maxLen} characters and must be a complete, meaningful phrase — do NOT truncate mid-word or mid-idea.`;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const raw = await callAiWithFallback("ad_copy", [{ role: "user", content: rewritePrompt }], 120);
+        const result = raw.trim().replace(/^["']|["']$/g, "");
+        if (result.length >= 2 && result.length <= maxLen) return result;
+      } catch {}
+    }
+    // 两次返工均失败：返回空字符串，由 retryMissingHeadlines 补一条全新的完整文案
+    console.warn(`[condenseOverlong] "${text.slice(0, 30)}..." 无法压缩至 ${maxLen} 字符，丢弃并由返工流程补充`);
+    return "";
   };
 
   try {
