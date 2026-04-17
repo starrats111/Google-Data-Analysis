@@ -30,9 +30,11 @@ const SITELINK_DESC_MAX = 35;
 const CALLOUT_MAX = 25;
 const IMAGE_FALLBACK = "data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iODAiIGhlaWdodD0iODAiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+PHJlY3Qgd2lkdGg9IjgwIiBoZWlnaHQ9IjgwIiBmaWxsPSIjZjVmNWY1Ii8+PHRleHQgeD0iNDAiIHk9IjQ0IiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmaWxsPSIjYmZiZmJmIiBmb250LXNpemU9IjEyIj7ml6Dms5XliqDovb08L3RleHQ+PC9zdmc+";
 
-function proxyImageUrl(url: string): string {
+function proxyImageUrl(url: string, merchantUrl?: string): string {
   if (!url || url.startsWith("/") || url.startsWith("data:")) return url;
-  return `/api/user/ad-creation/image-proxy?url=${encodeURIComponent(url)}`;
+  const base = `/api/user/ad-creation/image-proxy?url=${encodeURIComponent(url)}`;
+  if (merchantUrl) return `${base}&ref=${encodeURIComponent(merchantUrl)}`;
+  return base;
 }
 
 function formatCid(cid: string): string {
@@ -1947,7 +1949,7 @@ export default function AdPreviewPage() {
                                       style={{ position: "relative", display: "inline-block", cursor: "pointer" }}
                                     >
                                       <Image
-                                        src={proxyImageUrl(url)} alt={`crawled-${i}`}
+                                        src={proxyImageUrl(url, preview?.merchant?.merchant_url)} alt={`crawled-${i}`}
                                         width={80} height={80}
                                         preview={false}
                                         style={{
@@ -1984,7 +1986,7 @@ export default function AdPreviewPage() {
                               return (
                               <div key={`manual-${url}-${i}`} style={{ position: "relative", display: "inline-block" }}>
                                 <Image
-                                  src={proxyImageUrl(url)} alt={`manual-${i}`}
+                                  src={proxyImageUrl(url, preview?.merchant?.merchant_url)} alt={`manual-${i}`}
                                   width={80} height={80}
                                   style={{
                                     objectFit: "cover", borderRadius: 6,

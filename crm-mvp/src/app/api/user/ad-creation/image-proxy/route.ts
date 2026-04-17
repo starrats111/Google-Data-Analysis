@@ -77,7 +77,12 @@ export async function GET(req: NextRequest) {
     return new NextResponse("Only http(s) allowed", { status: 400 });
   }
 
-  const referers = inferReferer(url);
+  // 前端可传入商家真实 URL 作为 Referer 提示，优先于自动推断（提高防盗链通过率）
+  const refHint = req.nextUrl.searchParams.get("ref");
+  const inferredReferers = inferReferer(url);
+  const referers = refHint
+    ? [refHint, ...inferredReferers.filter((r) => r !== refHint)]
+    : inferredReferers;
   let lastError = "";
 
   for (const ua of USER_AGENTS) {
