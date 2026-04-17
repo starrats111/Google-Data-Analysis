@@ -1430,6 +1430,49 @@ const IMG_BLACKLIST = [
   "visa", "mastercard", "paypal", "ssl", "emoji", "1x1", "spacer",
 ];
 
+// 已知图片 CDN 域名 — 跳过 HEAD 验证（这些域名只提供图片）
+const KNOWN_IMAGE_CDNS = [
+  "sensershop.com",           // senser.net Aliyun OSS CDN
+  "cloudinary.com",
+  "imgix.net",
+  "cdn.shopify.com", "shopifycdn.com",
+  "squarespace-cdn.com",
+  "wixstatic.com",
+  "akamaized.net",
+  "cloudfront.net",
+  "amazonaws.com",
+];
+
+// 基于 URL 路径给图片打相关性分数（越高越可能是产品图）
+const imageRelevanceScore = (url: string): number => {
+  const lower = url.toLowerCase();
+  const path = (() => { try { return new URL(url).pathname.toLowerCase(); } catch { return lower.split("?")[0]; } })();
+  let score = 0;
+  // Positive: product-related paths
+  if (/\/prd\/image\//i.test(path)) score += 60;
+  if (/\/products?\//i.test(path)) score += 50;
+  if (/\/catalog\/product/i.test(path)) score += 50;
+  if (/\/media\/catalog/i.test(path)) score += 45;
+  if (/\/(goods|item|sku)\//i.test(path)) score += 45;
+  if (/\/(collection|shop)\//i.test(path)) score += 30;
+  if (/\/upload\//i.test(path)) score += 25;
+  // UUID in path = CDN-hosted media
+  if (/\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i.test(path)) score += 15;
+  // Aliyun OSS resize/interlace params = verified image
+  if (url.includes("x-oss-process=image")) score += 25;
+  // Large size hint
+  const sizeMatch = lower.match(/[/_-](\d+)x(\d+)/);
+  if (sizeMatch) { const w = parseInt(sizeMatch[1]); if (w >= 600) score += 20; else if (w >= 300) score += 8; }
+  // Negative: site chrome / editorial / about pages
+  if (/\/assets\/static\//i.test(path)) score -= 90;
+  if (/aboutus|about[-_]us/i.test(path)) score -= 80;
+  if (/\/icons?\//i.test(path)) score -= 70;
+  if (/-title\.(png|jpg|webp)$/i.test(path)) score -= 60;
+  if (/\/(header|footer|nav|menu|sidebar)\//i.test(path)) score -= 70;
+  if (/\/(email|newsletter|subscribe)\//i.test(path)) score -= 60;
+  return score;
+};
+
 // 社交媒体域名 - 非品牌相关图片（规则：不能有文字、必须品牌强相关）
 const SOCIAL_MEDIA_DOMAINS = [
   "instagram.com", "cdninstagram.com",
@@ -1467,19 +1510,25 @@ async function selectBestImages(rawImages: string[], merchantUrl?: string): Prom
     } catch { /* ignore */ }
   }
 
-  // 核心过滤（绝对黑名单：SVG / data-URI / 明确小图 / 社交域名 / 明显文字图片）
+  const BROWSER_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+
+  // 核心过滤（绝对黑名单：SVG / data-URI / 明确小图 / 社交域名 / 明显文字图片 / 追踪像素 / 站点外壳图）
   const hardFilter = (url: string): boolean => {
     const lower = url.toLowerCase();
     if (IMG_BLACKLIST.some((kw) => lower.includes(kw))) return false;
     if (lower.endsWith(".svg") || lower.startsWith("data:")) return false;
+    // 追踪像素域名
+    try { const h = new URL(url).hostname.toLowerCase(); if (/bat\.bing\.net|doubleclick\.net|googletagmanager\.com|analytics\./i.test(h)) return false; } catch {}
     const tinyMatch = lower.match(/[/_-](\d+)x(\d+)/);
     if (tinyMatch && (parseInt(tinyMatch[1]) < 150 || parseInt(tinyMatch[2]) < 150)) return false;
     try {
       const imgHostname = new URL(url).hostname.toLowerCase();
       if (SOCIAL_MEDIA_DOMAINS.some((d) => imgHostname === d || imgHostname.endsWith("." + d))) return false;
     } catch { /* ignore */ }
-    const urlPath = lower.split("?")[0];
+    const urlPath = (() => { try { return new URL(url).pathname.toLowerCase(); } catch { return lower.split("?")[0]; } })();
     if (TEXT_PROMO_URL_PATTERNS.some((p) => urlPath.includes(p))) return false;
+    // 站点外壳图：Vue/React 构建产物静态资源、about 页图片、标题文字叠加图
+    if (/\/assets\/static\/|aboutus|about[-_]us|-title\.(png|jpg|webp)$/i.test(urlPath)) return false;
     return true;
   };
 
@@ -1489,53 +1538,65 @@ async function selectBestImages(rawImages: string[], merchantUrl?: string): Prom
 
   const filtered = rawImages.filter(hardFilter);
 
-  // 若商家域名已知，将同域图片排在前面
-  const rank = (imgs: string[]) => merchantDomain
-    ? [
-        ...imgs.filter((url) => { try { return new URL(url).hostname.replace(/^www\./, "").includes(merchantDomain); } catch { return false; } }),
-        ...imgs.filter((url) => { try { return !new URL(url).hostname.replace(/^www\./, "").includes(merchantDomain); } catch { return true; } }),
-      ]
-    : imgs;
+  // 按产品相关性评分排序（高分 = 产品图，低分 = 品牌外壳图）
+  const brandSuffix = merchantDomain ? merchantDomain.replace(/^[^.]+\./, "") : "";
+  const scored = filtered.map(url => {
+    let score = imageRelevanceScore(url);
+    // 品牌 CDN 加成：主域名同后缀的 CDN 域名（如 sensershop.com 对应 senser.net）
+    try {
+      const h = new URL(url).hostname.toLowerCase().replace(/^www\./, "");
+      if (merchantDomain && (h.includes(merchantDomain) || (brandSuffix && h.endsWith(brandSuffix)))) score += 5;
+    } catch {}
+    return { url, score };
+  });
+  scored.sort((a, b) => b.score - a.score);
+  const ranked = scored.map(s => s.url);
 
-  const ranked = rank(filtered);
+  // 兜底：硬过滤后太少，补入原始列表
+  const pool = ranked.length >= MIN_IMAGES_TO_FRONTEND ? ranked
+    : [...ranked, ...rawImages.filter(u => !ranked.includes(u) && !u.startsWith("data:") && !u.endsWith(".svg"))];
 
-  // 兜底：硬过滤后太少，直接用原始列表（不过滤）
-  const pool = ranked.length >= MIN_IMAGES_TO_FRONTEND ? ranked : rank(rawImages.filter(u => !u.startsWith("data:") && !u.endsWith(".svg")));
-
-  // Step 1：HEAD 检查——验证可访问 + 非过小文件（并发 10，最多检查 80 张）
+  // Step 1：HEAD 检查——使用浏览器 UA 避免 CDN 403；已知图片 CDN 跳过检查
+  const isKnownImageCDN = (url: string): boolean => {
+    try { const h = new URL(url).hostname.toLowerCase(); return KNOWN_IMAGE_CDNS.some(cdn => h === cdn || h.endsWith("." + cdn)); } catch { return false; }
+  };
   const checked: string[] = [];
   for (let i = 0; i < pool.length && checked.length < 80; i += 10) {
     const batch = pool.slice(i, i + 10);
     const results = await Promise.allSettled(
       batch.map(async (url) => {
+        // 已知图片 CDN / Aliyun OSS process 参数 → 确定是图片，跳过 HEAD
+        if (isKnownImageCDN(url) || url.includes("x-oss-process=image")) return url;
         try {
-          const resp = await fetch(url, { method: "HEAD", signal: AbortSignal.timeout(4000), headers: { "User-Agent": "Googlebot-Image/1.0" } });
-          if (!resp.ok) return null;
+          const resp = await fetch(url, { method: "HEAD", signal: AbortSignal.timeout(4000), headers: { "User-Agent": BROWSER_UA } });
+          // 非 2xx 不一定不是图片（部分 CDN 不支持 HEAD 返回 403/405），保留
+          if (!resp.ok) return url;
           const ct = resp.headers.get("content-type") || "";
-          if (!ct.startsWith("image/")) return null;
+          // 明确返回了非图片 content-type 才过滤（如 text/html → 确实不是图片）
+          if (ct && !ct.startsWith("image/") && !ct.includes("octet-stream")) return null;
           const cl = parseInt(resp.headers.get("content-length") || "0", 10);
-          if (cl > 0 && cl < 5000) return null;
+          if (cl > 0 && cl < 5000) return null; // 文件太小（< 5KB）
           return url;
         } catch { return url; } // 超时/报错：不过滤，保留
       }),
     );
     for (const r of results) if (r.status === "fulfilled" && r.value) checked.push(r.value);
-    // 已通过 HEAD 检查的够用就停（节省时间）
     if (checked.length >= 40) break;
   }
 
-  const headPassed = checked.length >= MIN_IMAGES_TO_FRONTEND ? checked : (checked.length > 0 ? [...checked, ...pool.filter(u => !checked.includes(u))].slice(0, 80) : pool.slice(0, 80));
+  const headPassed = checked.length >= MIN_IMAGES_TO_FRONTEND ? checked
+    : (checked.length > 0 ? [...checked, ...pool.filter(u => !checked.includes(u))].slice(0, 80) : pool.slice(0, 80));
 
   // Step 2：软过滤
   const cleanImages = headPassed.filter(softFilter);
 
   // ─── 硬保障：至少返回 MIN_IMAGES_TO_FRONTEND 张 ───
-  // 逐层放宽：软过滤结果 → HEAD通过结果 → 原始 pool → 原始 rawImages
   const result = cleanImages.length >= MIN_IMAGES_TO_FRONTEND ? cleanImages
     : headPassed.length >= MIN_IMAGES_TO_FRONTEND ? headPassed
     : pool.length >= MIN_IMAGES_TO_FRONTEND ? pool
     : [...pool, ...rawImages.filter(u => !pool.includes(u) && !u.startsWith("data:"))];
 
-  console.log(`[SelectImages] raw=${rawImages.length} filtered=${filtered.length} headPassed=${headPassed.length} clean=${cleanImages.length} final=${Math.min(result.length, 40)}`);
+  const topScores = scored.slice(0, 5).map(s => `${s.score}:${s.url.slice(-40)}`).join(" | ");
+  console.log(`[SelectImages] raw=${rawImages.length} hardFiltered=${filtered.length} headPassed=${headPassed.length} clean=${cleanImages.length} final=${Math.min(result.length, 40)} | topScores: ${topScores}`);
   return result.slice(0, 40);
 }
