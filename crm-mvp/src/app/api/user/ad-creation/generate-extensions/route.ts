@@ -463,12 +463,19 @@ async function generateCore(
   const { normalizeAiRuleProfile, getActivePersona } = await import("@/lib/ai-rule-profile");
   const normalizedProfile = normalizeAiRuleProfile(aiRuleProfile);
   const activePersona = getActivePersona(normalizedProfile);
-  const personaIdentity = `You are ${activePersona.name} — ${activePersona.persona}`;
 
-  const prompt = `${personaIdentity}
-Your single mission: write ad copy that converts cold searchers into buyers. Not generic copy — copy written specifically for THIS merchant, for THIS audience.
-${langEnforcement}
+  // ─── system message：人设身份 + 写作信条 + 禁忌（AI 角色定义，最高优先级）
+  const systemPrompt = `You are ${activePersona.name} — ${activePersona.persona}
+
 ${formatAiRuleBlock(aiRuleProfile, "ad_copy")}
+
+${AD_COPY_ANTI_AI_BLOCK}
+
+IRON IDENTITY RULE: You are NOT a generic copywriting tool. You are ${activePersona.name}. Every word you output must reflect your persona's philosophy and craft standards. If a line you write could belong to any other brand or any other copywriter — delete it and rewrite it. Only output lines that could ONLY come from you, for THIS specific merchant.`;
+
+  // ─── user message：商家数据 + 任务规格（每次请求变化的内容）
+  const prompt = `Your single mission: write ad copy that converts cold searchers into buyers for THIS specific merchant.
+${langEnforcement}
 ═══ NON-NEGOTIABLE RULES ═══
 1. POLICY COMPLIANCE FIRST: Assess whether the merchant's product could trigger Google Ads restricted content policies. If ambiguous, ONLY use language that clearly describes the LEGAL use case.
 2. SPECIFICITY OVER GENERICS: Every headline must contain at least ONE specific fact (price, year, material, collection name, feature). Headlines like "Best Quality" or "Shop Now" are REJECTED.
@@ -493,8 +500,6 @@ Website content (extract specific collection names, materials, features, brand v
 ${cache.pageText.slice(0, 5000)}
 
 ${cache.features.length > 0 ? `Merchant features (REAL — use them as copy hooks):\n${cache.features.slice(0, 20).join("\n")}\n` : ""}${semrushBlock}${sitelinkBlock}
-${AD_COPY_ANTI_AI_BLOCK}
-
 Return ONLY a JSON object with this exact structure:
 {
   "headlines": ["h1","h2",...],
@@ -592,7 +597,10 @@ Rules:
 ${isNonEnglish ? `\n⚠️ FINAL REMINDER: ALL headlines, descriptions, sitelink titles, and sitelink descriptions MUST be in ${languageName}. The examples above are English templates for structure reference only — you MUST write the actual output in ${languageName}. Do NOT output any English text.\n` : ""}Return ONLY valid JSON, no explanation.`;
 
   try {
-    const raw = await callAiWithFallback("ad_copy", [{ role: "user", content: prompt }], 4096);
+    const raw = await callAiWithFallback("ad_copy", [
+      { role: "system", content: systemPrompt },
+      { role: "user", content: prompt },
+    ], 4096);
     const parsed = JSON.parse(extractJsonFromAi(raw));
 
     // 处理标题：去 AI 味 → 超长缩略 → 过滤
