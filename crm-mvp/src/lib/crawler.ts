@@ -838,17 +838,12 @@ const PUPPETEER_ANTI_DETECT_SCRIPT = `
   };
 `;
 
-export async function crawlPageWithPuppeteer(url: string, timeoutMs = 35000): Promise<string | null> {
-  return crawlWithPuppeteer(url, timeoutMs);
-}
-
-// 包装器：向后兼容，内部调用 crawlWithPuppeteerFull 后只返回 html
-async function crawlWithPuppeteer(url: string, timeoutMs = 30000): Promise<string | null> {
-  const result = await crawlWithPuppeteerFull(url, timeoutMs);
+export async function crawlPageWithPuppeteer(url: string, timeoutMs = 35000, proxyUrl?: string): Promise<string | null> {
+  const result = await crawlWithPuppeteerFull(url, timeoutMs, proxyUrl);
   return result?.html ?? null;
 }
 
-export async function crawlWithPuppeteerFull(url: string, timeoutMs = 30000): Promise<PuppeteerPageData | null> {
+export async function crawlWithPuppeteerFull(url: string, timeoutMs = 30000, proxyUrl?: string): Promise<PuppeteerPageData | null> {
   const browserPath = findBrowserPath();
   if (!browserPath) {
     console.log("[Crawler] Puppeteer: 未找到浏览器");
@@ -871,6 +866,12 @@ export async function crawlWithPuppeteerFull(url: string, timeoutMs = 30000): Pr
     "--disable-software-rasterizer",
     "--ignore-certificate-errors",     // 部分站点证书问题
   ];
+
+  // 注入代理：Chromium 支持 --proxy-server 同时接受 socks5:// 和 http(s)://
+  if (proxyUrl) {
+    launchArgs.push(`--proxy-server=${proxyUrl}`);
+    console.log(`[Crawler] Puppeteer 使用代理: ${proxyUrl.replace(/:([^:@]+)@/, ":***@")}`);
+  }
 
   let browser: any = null;
   try {

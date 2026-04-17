@@ -1196,31 +1196,43 @@ export async function buildCrawlCache(
 
   type CrawlResultType = { html: string; links: { url: string; text: string }[]; images: string[]; method: string; error?: string };
 
-  // Puppeteer 爬取辅助：返回 CrawlResult 格式
+  // 读取国家代理 URL（用于 Puppeteer，确保 IP 出口与目标国家一致）
+  const proxyUrl = country ? (await getProxyUrlForCountry(country).catch(() => null)) : null;
+
+  // Puppeteer 爬取辅助：返回 CrawlResult 格式，透传代理
   const runPuppeteer = async (url: string): Promise<CrawlResultType> => {
-    const puppeteerHtml = await crawlPageWithPuppeteer(url);
+    const puppeteerHtml = await crawlPageWithPuppeteer(url, 35000, proxyUrl ?? undefined);
     if (!puppeteerHtml) throw new Error("Puppeteer 返回空 HTML");
     const { links, images } = extractLinksAndImages(puppeteerHtml, url);
     return { html: puppeteerHtml.slice(0, 150000), links, images, method: "puppeteer" };
   };
 
-  // 构造策略列表：locale 优先，HTTP 优先于 Puppeteer
-  // 同时尝试 /en-us/ 和 /us/ 两种 locale 前缀格式
+  // ══════════════════════════════════════════════════════
+  // 策略优先级：
+  //   有代理  → Puppeteer+代理 最优（JS渲染 + 正确 IP 出口）→ HTTP+代理 兜底
+  //   无代理  → HTTP locale 先（省资源）→ Puppeteer locale 补充
+  // ══════════════════════════════════════════════════════
   type Strategy = { name: string; run: () => Promise<CrawlResultType> };
   const strategies: Strategy[] = [];
   if (merchantUrl) {
-    if (options?.forcePuppeteer) {
-      // forcePuppeteer 模式：只用 Puppeteer，locale 优先
-      if (localeUrl) strategies.push({ name: "puppeteer_locale", run: () => runPuppeteer(localeUrl!) });
-      if (localeUrlShort) strategies.push({ name: "puppeteer_locale_short", run: () => runPuppeteer(localeUrlShort!) });
-      strategies.push({ name: "puppeteer_root", run: () => runPuppeteer(merchantUrl) });
+    if (options?.forcePuppeteer || proxyUrl) {
+      // 有代理 或 forcePuppeteer：优先 Puppeteer（带代理），确保 JS 渲染 + IP 出口正确
+      if (localeUrlShort) strategies.push({ name: "puppeteer_locale_short+proxy", run: () => runPuppeteer(localeUrlShort!) });
+      if (localeUrl) strategies.push({ name: "puppeteer_locale+proxy", run: () => runPuppeteer(localeUrl!) });
+      strategies.push({ name: "puppeteer_root+proxy", run: () => runPuppeteer(merchantUrl) });
+      // HTTP 作为兜底（Puppeteer 失败时）
+      if (!options?.forcePuppeteer) {
+        if (localeUrlShort) strategies.push({ name: "http_locale_short", run: () => crawlPage(localeUrlShort!, country) });
+        if (localeUrl) strategies.push({ name: "http_locale", run: () => crawlPage(localeUrl!, country) });
+        strategies.push({ name: "http_root", run: () => crawlPage(merchantUrl, country) });
+      }
     } else {
-      // 普通模式：locale HTTP（长） → locale HTTP（短） → root HTTP → locale Puppeteer → root Puppeteer
-      if (localeUrl) strategies.push({ name: "http_locale", run: () => crawlPage(localeUrl!, country) });
+      // 无代理：HTTP 先（快），Puppeteer 兜底
       if (localeUrlShort) strategies.push({ name: "http_locale_short", run: () => crawlPage(localeUrlShort!, country) });
+      if (localeUrl) strategies.push({ name: "http_locale", run: () => crawlPage(localeUrl!, country) });
       strategies.push({ name: "http_root", run: () => crawlPage(merchantUrl, country) });
-      if (localeUrl) strategies.push({ name: "puppeteer_locale", run: () => runPuppeteer(localeUrl!) });
       if (localeUrlShort) strategies.push({ name: "puppeteer_locale_short", run: () => runPuppeteer(localeUrlShort!) });
+      if (localeUrl) strategies.push({ name: "puppeteer_locale", run: () => runPuppeteer(localeUrl!) });
       strategies.push({ name: "puppeteer_root", run: () => runPuppeteer(merchantUrl) });
     }
   }
