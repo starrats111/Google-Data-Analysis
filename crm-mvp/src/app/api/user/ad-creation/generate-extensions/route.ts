@@ -1295,10 +1295,10 @@ Rules:
       ])].slice(0, 30);
       sections.push(`## Structured Snippet (结构化摘要)
 IMPORTANT: Choose header ONLY from this exact list (case-sensitive):
-${GOOGLE_SNIPPET_HEADERS.map((h) => `"${h}"`).join(", ")}
+${GOOGLE_SNIPPET_HEADERS.map((h) => '"' + h + '"').join(", ")}
 
 Extract 3-10 real category values (each ≤25 chars) from merchant content.
-Available nav/link items: ${contextItems.slice(0, 20).map((t) => `"${t}"`).join(", ")}
+Available nav/link items: ${contextItems.slice(0, 20).map((t) => '"' + t + '"').join(", ")}
 
 Choose the most appropriate header for this merchant type.`;
     }
