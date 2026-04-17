@@ -1,10 +1,10 @@
 "use client";
-import { useState, useCallback, useMemo } from "react";
+import { useState, useCallback, useMemo, useEffect } from "react";
 import {
   Card, Table, Input, Select, Button, Space, Tag, Modal, Typography, Tooltip, App,
 } from "antd";
 import {
-  ShopOutlined, SearchOutlined, SyncOutlined, TeamOutlined, CalendarOutlined,
+  ShopOutlined, SearchOutlined, SyncOutlined, TeamOutlined, CalendarOutlined, ClockCircleOutlined,
 } from "@ant-design/icons";
 import { PLATFORMS } from "@/lib/constants";
 import { useApiWithParams } from "@/lib/swr";
@@ -16,6 +16,9 @@ function getCurrentMonthRange() {
   const lastDay = new Date(y, now.getMonth() + 1, 0).getDate();
   return `${y}-${m}-01 ~ ${y}-${m}-${String(lastDay).padStart(2, "0")}`;
 }
+
+/** 组下商家在跑人数自动轮询间隔（毫秒） */
+const POLL_INTERVAL = 30_000;
 
 const { Text } = Typography;
 
@@ -103,6 +106,8 @@ export default function TeamMerchantsPage() {
   const [page, setPage] = useState(1);
   const [sortField, setSortField] = useState("monthly_commission");
   const [sortOrder, setSortOrder] = useState<"asc" | "desc">("desc");
+  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+  const [countdown, setCountdown] = useState(POLL_INTERVAL / 1000);
 
   const params = useMemo(() => ({
     page,
@@ -116,8 +121,24 @@ export default function TeamMerchantsPage() {
   const { data, isLoading, mutate } = useApiWithParams<ApiResponse>(
     "/api/user/team/merchants",
     params,
-    { keepPreviousData: true }
+    { keepPreviousData: true, refreshInterval: POLL_INTERVAL, revalidateOnFocus: true }
   );
+
+  // 记录上次成功更新时间，并重置倒计时
+  useEffect(() => {
+    if (data) {
+      setLastUpdated(new Date());
+      setCountdown(POLL_INTERVAL / 1000);
+    }
+  }, [data]);
+
+  // 倒计时
+  useEffect(() => {
+    const tick = setInterval(() => {
+      setCountdown((c) => (c <= 1 ? POLL_INTERVAL / 1000 : c - 1));
+    }, 1000);
+    return () => clearInterval(tick);
+  }, []);
 
   const merchants = data?.merchants || [];
   const total = data?.total || 0;
@@ -248,15 +269,25 @@ export default function TeamMerchantsPage() {
           </Space>
         }
         extra={
-          <Space size={12}>
+          <Space size={12} wrap>
             <Space size={4} style={{ color: "#8c8c8c", fontSize: 13 }}>
               <CalendarOutlined />
               <span>数据区间：</span>
               <Tag color="orange" style={{ margin: 0 }}>本月</Tag>
               <span style={{ color: "#bfbfbf" }}>{getCurrentMonthRange()}</span>
             </Space>
-            <Button size="small" icon={<SyncOutlined />} onClick={() => mutate()}>
-              刷新
+            {lastUpdated && (
+              <Tooltip title={`每 ${POLL_INTERVAL / 1000} 秒自动刷新在跑人数`}>
+                <Space size={4} style={{ color: "#8c8c8c", fontSize: 12, cursor: "default" }}>
+                  <SyncOutlined spin={isLoading} />
+                  <span>{lastUpdated.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}</span>
+                  <ClockCircleOutlined style={{ color: countdown <= 5 ? "#faad14" : "#d9d9d9" }} />
+                  <span style={{ color: countdown <= 5 ? "#faad14" : "#8c8c8c" }}>{countdown}s</span>
+                </Space>
+              </Tooltip>
+            )}
+            <Button size="small" icon={<SyncOutlined />} loading={isLoading} onClick={() => mutate()}>
+              立即刷新
             </Button>
           </Space>
         }
