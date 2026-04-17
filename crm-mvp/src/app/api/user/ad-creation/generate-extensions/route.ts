@@ -731,7 +731,7 @@ ${isNonEnglish ? `\n⚠️ FINAL REMINDER: ALL headlines, descriptions, sitelink
 
     // 处理站内链接（标题/描述需符合 Google Ads 规范：不能全大写、不能有多余标点）
     const sitelinkDescs = Array.isArray(parsed.sitelink_descriptions) ? parsed.sitelink_descriptions : [];
-    const sitelinks = cache.sitelinkCandidates.map((s, i) => {
+    let sitelinks = cache.sitelinkCandidates.map((s, i) => {
       const aiDesc = sitelinkDescs[i] || {};
       const brandName = merchantName.replace(/[.。,，!！?？]+/g, "").trim().slice(0, 15);
 
@@ -759,6 +759,20 @@ ${isNonEnglish ? `\n⚠️ FINAL REMINDER: ALL headlines, descriptions, sitelink
         ),
       };
     });
+
+    // 爬虫未找到站内链接时，用 AI 生成通用备用链接
+    if (sitelinks.length === 0) {
+      try {
+        const fallback = await generateAiFallbackSitelinks(merchantUrl, merchantName, languageName);
+        if (fallback.length > 0) {
+          sitelinks = fallback;
+          console.log(`[Core] 使用 AI 备用站内链接: ${fallback.length} 条`);
+        }
+      } catch (e) {
+        console.warn("[Core] AI 备用站内链接生成失败:", e instanceof Error ? e.message : e);
+      }
+    }
+
     send("sitelinks", sitelinks);
 
     // 保存到 DB
@@ -859,6 +873,51 @@ function validateSnippetHeader(val: string): SnippetHeader {
     (h) => h.toLowerCase() === val.toLowerCase()
   );
   return found ?? "Types";
+}
+
+/**
+ * 当爬虫无法提取站内链接时，让 AI 根据商家 URL 和常见电商页面路径生成备用 sitelinks
+ */
+async function generateAiFallbackSitelinks(
+  merchantUrl: string,
+  merchantName: string,
+  languageName: string,
+): Promise<{ title: string; url: string; desc1: string; desc2: string }[]> {
+  const baseUrl = merchantUrl.replace(/\/+$/, "");
+  const prompt = `You are a Google Ads sitelinks specialist. The website crawler failed to extract navigation links from "${merchantUrl}".
+
+Generate exactly 4 sitelinks for the merchant "${merchantName}". Use realistic page paths that a typical e-commerce website of this type would have.
+
+Language: ALL titles and descriptions MUST be written in ${languageName}. No English unless it's a brand or product name.
+
+Rules:
+- url: Construct FULL URLs using "${baseUrl}" + a common page path (e.g. /products, /contact, /about, /service, /faq, /shop, /collections)
+- title: ≤25 chars, Title Case or sentence case, in ${languageName}, NEVER ALL CAPS
+- desc1: ≤35 chars, main benefit or description, in ${languageName}
+- desc2: ≤35 chars, supporting detail or CTA, in ${languageName}
+- All 4 sitelinks must link to different pages (no duplicates)
+- Do NOT include discount percentages or fabricated offers
+
+Return ONLY a JSON array, no explanation:
+[
+  {"url":"...","title":"...","desc1":"...","desc2":"..."},
+  {"url":"...","title":"...","desc1":"...","desc2":"..."},
+  {"url":"...","title":"...","desc1":"...","desc2":"..."},
+  {"url":"...","title":"...","desc1":"...","desc2":"..."}
+]`;
+
+  const raw = await callAiWithFallback("extension", [{ role: "user", content: prompt }], 512);
+  const parsed = JSON.parse(extractJsonFromAi(raw));
+  if (!Array.isArray(parsed)) return [];
+  return parsed
+    .filter((s: Record<string, unknown>) => s.url && s.title && s.desc1 && s.desc2)
+    .map((s: Record<string, unknown>) => ({
+      url: String(s.url).slice(0, 2048),
+      title: sanitizeAdText(String(s.title)).slice(0, 25),
+      desc1: sanitizeAdText(String(s.desc1), { allowExclamation: true }).slice(0, 35),
+      desc2: sanitizeAdText(String(s.desc2), { allowExclamation: true }).slice(0, 35),
+    }))
+    .slice(0, 6);
 }
 
 // ─── 可选扩展批量生成 ───
@@ -1207,34 +1266,42 @@ Header and description MUST be different for each item. COUNT CAREFULLY.`;
     const sections: string[] = [];
 
     if (needsAi.includes("callouts")) {
+      const crawlDataAvailable = cache.features.length > 0 || (cache.pageText || "").length > 20;
       const featuresText = cache.features.length > 0
         ? cache.features.join(", ")
-        : cache.pageText.slice(0, 500);
+        : (cache.pageText || "").slice(0, 500);
+      const crawlFailNote = !crawlDataAvailable
+        ? `⚠️ NOTE: The website could not be crawled. Generate 6 plausible callouts based on the merchant name "${merchantName}" and typical ${languageName}-language e-commerce standards. Keep them truthful — do NOT fabricate specific numbers, certificates, or unverified claims.\n`
+        : "";
       sections.push(`## Callouts (宣传信息)
-Generate exactly 6 callout extensions based ONLY on real merchant features.
-Each callout: 2-25 characters STRICTLY. No generic placeholder text.
-Merchant features / page content: ${featuresText}
+${crawlFailNote}Generate exactly 6 callout extensions${crawlDataAvailable ? " based ONLY on real merchant features" : " based on merchant context"}.
+Each callout: 2-25 characters STRICTLY. Write in ${languageName}.
+${featuresText ? `Merchant features / page content: ${featuresText}` : `Merchant: ${merchantName} (${market.countryNameZh})`}
 
 Rules:
-- Must be specific to THIS merchant (not generic like "Best Quality", "Shop Now")
+- ${crawlDataAvailable ? `Must be specific to THIS merchant (not generic like "Best Quality", "Shop Now")` : `Use typical e-commerce trust signals relevant to ${languageName} market`}
 - If free shipping confirmed: include it. If returns confirmed: include it.
 - Focus on concrete features: materials, certifications, guarantees, unique attributes
 - Do NOT fabricate discounts, numbers, or unverified claims`);
     }
 
     if (needsAi.includes("snippet")) {
-      const contextItems = [...new Set([
+      const crawlDataAvailable = cache.navItems.length > 0 || cache.links.length > 0;
+      const contextItems = crawlDataAvailable ? [...new Set([
         ...cache.navItems,
         ...cache.links.map((l) => l.text).filter((t) => t.length >= 2 && t.length <= 30),
-      ])].slice(0, 30);
+      ])].slice(0, 30) : [];
+      const snippetCrawlNote = !crawlDataAvailable
+        ? `⚠️ NOTE: Website crawl failed. Infer plausible product/service categories from merchant name "${merchantName}". Generate typical values for this type of merchant.\n`
+        : "";
       sections.push(`## Structured Snippet (结构化摘要)
-IMPORTANT: Choose header ONLY from this exact list (case-sensitive):
+${snippetCrawlNote}IMPORTANT: Choose header ONLY from this exact list (case-sensitive):
 ${GOOGLE_SNIPPET_HEADERS.map((h) => `"${h}"`).join(", ")}
 
-Extract 3-10 real category values (each ≤25 chars) from merchant content.
-Available nav/link items: ${contextItems.slice(0, 20).map((t) => `"${t}"`).join(", ")}
+Extract 3-10 ${crawlDataAvailable ? "real" : "plausible"} category values (each ≤25 chars) from merchant content.
+${contextItems.length > 0 ? `Available nav/link items: ${contextItems.slice(0, 20).map((t) => `"${t}"`).join(", ")}` : `Merchant context: ${merchantName} — ${market.countryNameZh}`}
 
-Choose the most appropriate header for this merchant type.`);
+Choose the most appropriate header for this merchant type.`;
     }
 
     if (needsAi.includes("negative_keywords")) {
