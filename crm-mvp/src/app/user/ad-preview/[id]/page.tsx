@@ -310,20 +310,10 @@ export default function AdPreviewPage() {
     setNetworkSearch(c?.network_search === 1 || s?.network_search === 1);
     setNetworkPartners(c?.network_partners === 1 || s?.network_partners === 1);
     setNetworkDisplay(c?.network_display === 1 || s?.network_display === 1);
-    // 初始化广告语言优先级：
-    //   1. DB 中已保存的 language_id（用户确认过的，最优先）
-    //   2. crawl_cache.detectedLanguageCode（爬虫从网页 lang 属性检测，比国家默认更准确）
-    //   3. 国家默认语言（兜底）
-    const savedLang = c?.language_id || "";
+    // 广告语言唯一来源：crawl_cache.detectedLanguageCode（爬虫用目标国家 IP 访问网站后从 HTML lang 属性检测）
+    // 若尚未爬取（缓存不存在），则置空等待「一键生成」触发爬取后自动检测并回填
     const detectedLang = (preview.adCreative as any)?.detectedLanguageCode || "";
-    if (savedLang) {
-      setAdLanguage(savedLang);
-    } else if (detectedLang) {
-      setAdLanguage(detectedLang);
-    } else {
-      const country = (c?.target_country || "").toUpperCase();
-      setAdLanguage(getLanguageCodeByCountry(country) || "en");
-    }
+    setAdLanguage(detectedLang);
     setPromotion((prev) => ({
       ...prev,
       currency_code: marketCfg.currencyCode,
@@ -715,17 +705,12 @@ export default function AdPreviewPage() {
         return;
       }
 
-      // 爬虫从 HTML lang 属性或 locale URL 检测到实际语言（比国家默认更准确）
+      // 爬虫从 HTML lang 属性或 locale URL 检测到实际语言
+      // 唯一来源：crawl_cache.detectedLanguageCode，不写 DB language_id
       if (type === "detected_language") {
         const d = data as { code: string };
         if (d?.code) {
           setAdLanguage(d.code);
-          // 同步保存到 DB（campaigns.language_id），避免下次刷新页面又恢复国家默认值
-          fetch(`/api/user/ad-creation/update-final-url`, {
-            method: "PATCH",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ campaign_id: campaignId, language_id: d.code }),
-          }).catch(() => {});
           const langName = GOOGLE_ADS_LANGUAGES.find((l) => l.code === d.code)?.name || d.code;
           message.info(`广告语言已根据网站内容自动设置为 ${langName}`);
         }
