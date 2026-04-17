@@ -814,7 +814,10 @@ ${isNonEnglish ? `\n⚠️ FINAL REMINDER: ALL headlines, descriptions, sitelink
   }
 
   // 图片筛选：社交域名 + 促销URL过滤 + 商家同域优先
-  const images = await selectBestImages(cache.images, merchantUrl);
+  const images = await selectBestImages(cache.images, merchantUrl, {
+    pageText: cache.pageText,
+    features: cache.features,
+  });
   send("images", images);
   if (adCreativeId) {
     await prisma.ad_creatives.update({
@@ -1464,8 +1467,8 @@ const imageRelevanceScore = (url: string): number => {
   const sizeMatch = lower.match(/[/_-](\d+)x(\d+)/);
   if (sizeMatch) { const w = parseInt(sizeMatch[1]); if (w >= 600) score += 20; else if (w >= 300) score += 8; }
   // Negative: site chrome / editorial / about pages
-  if (/\/assets\/static\//i.test(path)) score -= 90;
-  if (/aboutus|about[-_]us/i.test(path)) score -= 80;
+  if (/\/assets\/static\//i.test(path)) score -= 30;   // 降分不过滤（07确认：避免误杀部分产品图）
+  if (/aboutus|about[-_]us/i.test(path)) score -= 40;
   if (/\/icons?\//i.test(path)) score -= 70;
   if (/-title\.(png|jpg|webp)$/i.test(path)) score -= 60;
   if (/\/(header|footer|nav|menu|sidebar)\//i.test(path)) score -= 70;
@@ -1500,7 +1503,63 @@ const TEXT_PROMO_URL_PATTERNS = [
 // 前端最少接收图片数，无论如何必须达到
 const MIN_IMAGES_TO_FRONTEND = 20;
 
-async function selectBestImages(rawImages: string[], merchantUrl?: string): Promise<string[]> {
+/**
+ * 移除 Aliyun OSS 残缺的图片处理参数。
+ * 不完整的 x-oss-process=image/resize（缺少 w_/h_ 尺寸）会导致 OSS 返回 400。
+ * 07确认：直接移除参数，让 CDN 返回原图。
+ */
+function normalizeImageUrl(url: string): string {
+  try {
+    const u = new URL(url);
+    if (u.searchParams.has("x-oss-process")) {
+      const processParam = (u.searchParams.get("x-oss-process") || "").trim();
+      // 仅移除残缺参数：值为 "image/resize" 且无尺寸规格（有尺寸时如 image/resize,w_800 则保留）
+      if (/^image\/resize\s*$/.test(processParam)) {
+        u.searchParams.delete("x-oss-process");
+        return u.toString();
+      }
+    }
+    return url;
+  } catch {
+    return url;
+  }
+}
+
+/**
+ * 从商家页面内容提取主营业务关键词，用于提升产品图的相关性评分。
+ * 若页面文本中有 ≥2 个来自同一品类的词，则认为商家主营该品类。
+ */
+function extractBusinessKeywords(pageText: string, features: string[]): string[] {
+  const text = (pageText + " " + features.join(" ")).toLowerCase().slice(0, 3000);
+
+  const DOMAIN_GROUPS: string[][] = [
+    ["clothing", "apparel", "dress", "shirt", "jeans", "pants", "jacket", "coat", "fashion", "wear", "garment"],
+    ["shoe", "boot", "sneaker", "footwear", "heel", "loafer", "sandal", "stiletto"],
+    ["skincare", "moisturizer", "serum", "cleanser", "beauty", "cosmetic", "makeup", "cream", "lotion"],
+    ["furniture", "sofa", "chair", "table", "bedroom", "kitchen", "decor", "interior"],
+    ["outdoor", "camping", "hiking", "sports", "fitness", "gym", "running", "athletic"],
+    ["jewelry", "necklace", "bracelet", "ring", "earring", "pendant", "diamond", "gemstone"],
+    ["bag", "handbag", "backpack", "wallet", "purse", "luggage", "tote", "satchel"],
+    ["electronics", "laptop", "phone", "tablet", "camera", "gadget", "headphone", "speaker"],
+    ["food", "organic", "supplement", "nutrition", "vitamin", "snack", "beverage", "grocery"],
+    ["book", "stationery", "notebook", "art", "craft"],
+    ["toy", "children", "kids", "game", "puzzle", "educational"],
+    ["pet", "dog", "cat", "animal", "veterinary"],
+  ];
+
+  const result: string[] = [];
+  for (const group of DOMAIN_GROUPS) {
+    const matches = group.filter((kw) => text.includes(kw));
+    if (matches.length >= 2) result.push(...group);
+  }
+  return [...new Set(result)];
+}
+
+async function selectBestImages(
+  rawImages: string[],
+  merchantUrl?: string,
+  merchantContext?: { pageText?: string; features?: string[] },
+): Promise<string[]> {
   // 解析商家主域名，用于品牌相关性判断
   let merchantDomain = "";
   if (merchantUrl) {
@@ -1527,8 +1586,9 @@ async function selectBestImages(rawImages: string[], merchantUrl?: string): Prom
     } catch { /* ignore */ }
     const urlPath = (() => { try { return new URL(url).pathname.toLowerCase(); } catch { return lower.split("?")[0]; } })();
     if (TEXT_PROMO_URL_PATTERNS.some((p) => urlPath.includes(p))) return false;
-    // 站点外壳图：Vue/React 构建产物静态资源、about 页图片、标题文字叠加图
-    if (/\/assets\/static\/|aboutus|about[-_]us|-title\.(png|jpg|webp)$/i.test(urlPath)) return false;
+    // 标题文字叠加图（确定含大量文字水印，直接丢弃）
+    // /assets/static/ 和 aboutus 改为评分降权，不再硬过滤（避免误杀部分商家产品图）
+    if (/-title\.(png|jpg|webp)$/i.test(urlPath)) return false;
     return true;
   };
 
@@ -1536,12 +1596,38 @@ async function selectBestImages(rawImages: string[], merchantUrl?: string): Prom
   const TEXT_URL_PATTERNS = [/\/badge[s]?\//i, /\/label[s]?\//i, /\/text[s]?\//i, /\/overlay/i, /\/sprite[s]?\//i, /\/button[s]?\//i, /\bfavicon\b/i];
   const softFilter = (url: string): boolean => !TEXT_URL_PATTERNS.some((p) => p.test(url.toLowerCase()));
 
-  const filtered = rawImages.filter(hardFilter);
+  // URL 规范化：移除 Aliyun OSS 残缺参数（x-oss-process=image/resize 无尺寸 → CDN返回400）
+  // 07确认：移除参数，让 CDN 返回原图
+  const seenUrls = new Set<string>();
+  const normalizedImages = rawImages
+    .map(normalizeImageUrl)
+    .filter((url) => {
+      if (seenUrls.has(url)) return false;
+      seenUrls.add(url);
+      return true;
+    });
+
+  const filtered = normalizedImages.filter(hardFilter);
+
+  // 商家主营业务关键词（用于提升产品图相关性评分）
+  const businessKeywords = merchantContext?.pageText
+    ? extractBusinessKeywords(merchantContext.pageText, merchantContext.features || [])
+    : [];
+  if (businessKeywords.length > 0) {
+    console.log(`[SelectImages] 检测到业务关键词: ${businessKeywords.slice(0, 8).join(", ")}`);
+  }
 
   // 按产品相关性评分排序（高分 = 产品图，低分 = 品牌外壳图）
   const brandSuffix = merchantDomain ? merchantDomain.replace(/^[^.]+\./, "") : "";
-  const scored = filtered.map(url => {
+  const scored = filtered.map((url) => {
     let score = imageRelevanceScore(url);
+    // 商家业务关键词加成：URL 路径含主营业务词则加分
+    if (businessKeywords.length > 0) {
+      const urlPath = (() => {
+        try { return new URL(url).pathname.toLowerCase(); } catch { return url.toLowerCase().split("?")[0]; }
+      })();
+      if (businessKeywords.some((kw) => urlPath.includes(kw))) score += 25;
+    }
     // 品牌 CDN 加成：主域名同后缀的 CDN 域名（如 sensershop.com 对应 senser.net）
     try {
       const h = new URL(url).hostname.toLowerCase().replace(/^www\./, "");
@@ -1552,9 +1638,9 @@ async function selectBestImages(rawImages: string[], merchantUrl?: string): Prom
   scored.sort((a, b) => b.score - a.score);
   const ranked = scored.map(s => s.url);
 
-  // 兜底：硬过滤后太少，补入原始列表
+  // 兜底：硬过滤后太少，补入规范化后的原始列表
   const pool = ranked.length >= MIN_IMAGES_TO_FRONTEND ? ranked
-    : [...ranked, ...rawImages.filter(u => !ranked.includes(u) && !u.startsWith("data:") && !u.endsWith(".svg"))];
+    : [...ranked, ...normalizedImages.filter((u) => !ranked.includes(u) && !u.startsWith("data:") && !u.endsWith(".svg"))];
 
   // Step 1：HEAD 检查——使用浏览器 UA 避免 CDN 403；已知图片 CDN 跳过检查
   const isKnownImageCDN = (url: string): boolean => {
@@ -1590,13 +1676,35 @@ async function selectBestImages(rawImages: string[], merchantUrl?: string): Prom
   // Step 2：软过滤
   const cleanImages = headPassed.filter(softFilter);
 
-  // ─── 硬保障：至少返回 MIN_IMAGES_TO_FRONTEND 张 ───
-  const result = cleanImages.length >= MIN_IMAGES_TO_FRONTEND ? cleanImages
-    : headPassed.length >= MIN_IMAGES_TO_FRONTEND ? headPassed
-    : pool.length >= MIN_IMAGES_TO_FRONTEND ? pool
-    : [...pool, ...rawImages.filter(u => !pool.includes(u) && !u.startsWith("data:"))];
+  // Step 3：OCR 文字检测（07需求）—— 扫描 TOP 30 候选，词数 > 5 的含文字图直接丢弃
+  // 超时 / 出错 / 不可达 → 保留（不影响主流程）
+  const ocrCandidates = cleanImages.slice(0, 30);
+  let ocrPassed: string[] = ocrCandidates;
+  try {
+    const { ocrFilterImages } = await import("@/lib/ocr-filter");
+    ocrPassed = await ocrFilterImages(ocrCandidates, { wordThreshold: 5, imageTimeoutMs: 8000 });
+  } catch (e) {
+    console.warn("[SelectImages] OCR 过滤异常，保留原始候选:", e instanceof Error ? e.message : e);
+  }
 
-  const topScores = scored.slice(0, 5).map(s => `${s.score}:${s.url.slice(-40)}`).join(" | ");
-  console.log(`[SelectImages] raw=${rawImages.length} hardFiltered=${filtered.length} headPassed=${headPassed.length} clean=${cleanImages.length} final=${Math.min(result.length, 40)} | topScores: ${topScores}`);
-  return result.slice(0, 40);
+  // ─── 硬保障：精确返回 20 张（07确认） ───
+  // 优先 OCR 通过的图片；不足时依次从 cleanImages → headPassed → pool → 原始列表补充
+  let result: string[];
+  if (ocrPassed.length >= MIN_IMAGES_TO_FRONTEND) {
+    result = ocrPassed;
+  } else {
+    const supplemental = [
+      ...cleanImages.filter((u) => !ocrCandidates.includes(u)),
+      ...headPassed.filter((u) => !cleanImages.includes(u)),
+      ...pool.filter((u) => !headPassed.includes(u)),
+      ...normalizedImages.filter((u) => !pool.includes(u) && !u.startsWith("data:") && !u.endsWith(".svg")),
+    ];
+    result = [...ocrPassed, ...supplemental];
+  }
+
+  const topScores = scored.slice(0, 5).map((s) => `${s.score}:${s.url.slice(-40)}`).join(" | ");
+  console.log(
+    `[SelectImages] raw=${rawImages.length} normalized=${normalizedImages.length} filtered=${filtered.length} headPassed=${headPassed.length} clean=${cleanImages.length} ocrPassed=${ocrPassed.length} final=${Math.min(result.length, 20)} | topScores: ${topScores}`,
+  );
+  return result.slice(0, 20);
 }
