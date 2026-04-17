@@ -2,7 +2,7 @@
 
 import {
   Table, Button, Modal, Form, Input, Space, Typography,
-  Popconfirm, Card, Tabs, Spin, App,
+  Popconfirm, Card, Tabs, Spin, App, Switch,
 } from "antd";
 import {
   PlusOutlined, EditOutlined, DeleteOutlined, SaveOutlined,
@@ -22,6 +22,7 @@ interface ConfigField {
   required?: boolean;
   isPassword?: boolean;
   isTextarea?: boolean;
+  isSwitch?: boolean;
   type?: string;
 }
 
@@ -74,8 +75,9 @@ const CONFIG_GROUPS: Record<string, {
       },
       {
         key: "crawl_proxy_enabled",
-        label: "启用代理爬取（填 1 启用，0 或留空停用）",
+        label: "启用代理爬取",
         placeholder: "1",
+        isSwitch: true,
       },
     ],
   },
@@ -112,15 +114,28 @@ function ConfigGroupCard({
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    const values: Record<string, string> = {};
+    const values: Record<string, string | boolean> = {};
     for (const f of group.fields) {
-      values[f.key] = configValues[f.key] || "";
+      if (f.isSwitch) {
+        values[f.key] = configValues[f.key] === "1";
+      } else {
+        values[f.key] = configValues[f.key] || "";
+      }
     }
     form.setFieldsValue(values);
   }, [configValues, form, group.fields]);
 
   const handleSave = async () => {
-    const values = await form.validateFields();
+    const rawValues = await form.validateFields();
+    // 将 Switch 布尔值转为 "1" / "0"
+    const values: Record<string, string> = {};
+    for (const f of group.fields) {
+      if (f.isSwitch) {
+        values[f.key] = rawValues[f.key] ? "1" : "0";
+      } else {
+        values[f.key] = rawValues[f.key] ?? "";
+      }
+    }
     setSaving(true);
     try {
       const res = await fetch("/api/admin/system-config/batch", {
@@ -161,10 +176,13 @@ function ConfigGroupCard({
               key={field.key}
               name={field.key}
               label={field.label}
+              valuePropName={field.isSwitch ? "checked" : "value"}
               rules={field.required ? [{ required: true, message: `请输入${field.label}` }] : undefined}
               style={(field.key.includes("base_url") || field.key.includes("key_path") || field.isTextarea) ? { gridColumn: "1 / -1" } : undefined}
             >
-              {field.isPassword ? (
+              {field.isSwitch ? (
+                <Switch checkedChildren="已启用" unCheckedChildren="已停用" />
+              ) : field.isPassword ? (
                 <Password placeholder={field.placeholder} />
               ) : field.isTextarea ? (
                 <TextArea rows={6} placeholder={field.placeholder} style={{ fontFamily: "monospace", fontSize: 12 }} />
