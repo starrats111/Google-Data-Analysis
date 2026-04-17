@@ -42,6 +42,16 @@ export async function getProxyUrlForCountry(country: string): Promise<string | n
  *   - 无协议前缀时默认 socks5://（适用于 cliproxy / ipipbright 等 SOCKS5 供应商）
  *   - username 中的 ** 会被替换为国家代码（US / GB / AU 等）
  */
+/** 生成 8 位随机字母数字字符串，用于 sid 替换，确保每次爬取拿到全新节点 */
+function randomSid(len = 8): string {
+  const chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+  let result = "";
+  for (let i = 0; i < len; i++) {
+    result += chars[Math.floor(Math.random() * chars.length)];
+  }
+  return result;
+}
+
 export function buildSocks5Url(template: string, country: string): string {
   // 提取可选的协议前缀（http:// / https:// / socks5://）
   let proto = "socks5";
@@ -58,7 +68,10 @@ export function buildSocks5Url(template: string, country: string): string {
   const host     = parts[0].trim();
   const port     = parts[1].trim();
   const password = parts[parts.length - 1].trim();
-  const username = parts.slice(2, parts.length - 1).join(":").replace(/\*\*/g, country.toUpperCase().trim());
+  // 替换国家代码（**），并将 sid-XXXX 替换为随机值避免 Sticky IP 锁定到错误地区
+  const username = parts.slice(2, parts.length - 1).join(":")
+    .replace(/\*\*/g, country.toUpperCase().trim())
+    .replace(/(?<=sid-)([A-Za-z0-9]+)/, randomSid());
 
   return `${proto}://${encodeURIComponent(username)}:${encodeURIComponent(password)}@${host}:${port}`;
 }
