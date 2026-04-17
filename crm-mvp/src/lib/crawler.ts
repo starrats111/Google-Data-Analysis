@@ -594,6 +594,8 @@ const FILTERED_IMG_KEYWORDS = [
  */
 export function isQualityImageUrl(url: string, allowedDomain?: string): boolean {
   if (JUNK_IMG_PATTERN.test(url)) return false;
+  // 过滤占位图（懒加载未完成的破图）
+  if (/\/undefined(\?|$)/i.test(url) || url.endsWith("/undefined")) return false;
   const lower = url.toLowerCase().split("?")[0];
   const validExts = [".jpg", ".jpeg", ".png", ".webp", ".avif"];
   const hasValidExt = validExts.some(ext => lower.endsWith(ext));
@@ -624,6 +626,10 @@ export function isQualityImageUrl(url: string, allowedDomain?: string): boolean 
       "fastly.net", "r2.cloudflarestorage.com",
       // 品牌图片子域通配（images.xxx.com / media.xxx.com / cdn.xxx.com / assets.xxx.com）
       "images.", "media.", "/media/", "/assets/products", "/products/images",
+      // 图片 CDN 子域通配：*-img.xxx.com / img.xxx.com / pics.xxx.com
+      "-img.", "img.", "pics.", "photo.", "static.",
+      // OSS / 对象存储（阿里云 OSS、腾讯云 COS 等）
+      ".aliyuncs.com", ".myqcloud.com", ".oss-cn-", ".cos.ap-",
     ];
     if (!cdnPatterns.some(p => lower.includes(p))) return false;
   }
@@ -1060,9 +1066,32 @@ export async function crawlWithPuppeteerFull(url: string, timeoutMs = 30000, pro
           .map(a => ({ url: (a as HTMLAnchorElement).href, text: (a as HTMLElement).innerText.trim() }))
           .filter(l => l.url && l.text.length >= 2 && l.text.length <= 40);
         const imgSrcs = new Set<string>();
-        document.querySelectorAll("img[src], img[data-src]").forEach(img => {
-          const src = (img as HTMLImageElement).dataset.src || (img as HTMLImageElement).src;
-          if (src && src.startsWith("http")) imgSrcs.add(src);
+        // 收集所有可能携带真实图片 URL 的属性（含懒加载）
+        document.querySelectorAll("img, [data-src], [data-original], [data-lazy-src], [data-img], [data-background]").forEach(el => {
+          const img = el as HTMLImageElement;
+          const candidates = [
+            img.src,
+            img.dataset.src,
+            img.dataset.original,
+            (img.dataset as Record<string,string>)["lazySrc"],
+            (img.dataset as Record<string,string>)["lazyOriginal"],
+            img.dataset.img,
+            img.dataset.background,
+            img.getAttribute("data-srcset"),
+            img.getAttribute("srcset"),
+          ];
+          for (const c of candidates) {
+            if (!c) continue;
+            // srcset 可能含多个 URL，取第一个
+            const url = c.split(",")[0].split(" ")[0].trim();
+            if (url && url.startsWith("http") && !url.includes("undefined")) imgSrcs.add(url);
+          }
+        });
+        // CSS background-image
+        document.querySelectorAll("[style*='background-image'], [style*='background:']").forEach(el => {
+          const style = (el as HTMLElement).style.backgroundImage || "";
+          const m = style.match(/url\(["']?(https?[^"')]+)["']?\)/);
+          if (m && !m[1].includes("undefined")) imgSrcs.add(m[1]);
         });
         const heroTexts = Array.from(document.querySelectorAll("h1, [class*=hero] p, [class*=banner] p, [class*=headline]"))
           .map(el => (el as HTMLElement).innerText.trim()).filter(t => t.length >= 5 && t.length <= 200);
