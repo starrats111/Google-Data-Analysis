@@ -1300,7 +1300,7 @@ ${GOOGLE_SNIPPET_HEADERS.map((h) => '"' + h + '"').join(", ")}
 Extract 3-10 real category values (each ≤25 chars) from merchant content.
 Available nav/link items: ${contextItems.slice(0, 20).map((t) => '"' + t + '"').join(", ")}
 
-Choose the most appropriate header for this merchant type.`;
+Choose the most appropriate header for this merchant type.`);
     }
 
     if (needsAi.includes("negative_keywords")) {
