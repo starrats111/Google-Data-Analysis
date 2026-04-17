@@ -1109,14 +1109,20 @@ async function collectImages(
   merchantUrl: string,
   merchantName: string,
   puppeteerImages?: string[],
+  proxyUrl?: string,
 ): Promise<string[]> {
+  const { isQualityImageUrl } = await import("@/lib/crawler");
+
+  // 提取商家域名，用于同域图片放行
+  let merchantDomain: string | undefined;
+  try { merchantDomain = new URL(merchantUrl).hostname; } catch { /* ignore */ }
+
   const allImgs = [...crawlImages];
   const seen = new Set<string>(allImgs);
   const addImg = (img: string) => { if (!seen.has(img)) { seen.add(img); allImgs.push(img); } };
 
-  // ① 从站内链接子页面抓图：优先抓分类页/产品列表页，足量为止
+  // ① 从站内链接子页面 HTTP 抓图：优先产品/分类页，足量为止
   if (allImgs.length < IMG_COLLECT_TARGET && links.length > 0) {
-    // 优先使用产品/分类类子页面（含 collection/category/shop/women/men/sale 等路径）
     const productLinks = links.filter(l => /\/(collection|category|shop|women|men|kids|sale|new|all|products?)\b/i.test(l.url));
     const otherLinks = links.filter(l => !/\/(collection|category|shop|women|men|kids|sale|new|all|products?)\b/i.test(l.url));
     const subPages = [...productLinks, ...otherLinks].slice(0, 15).map((l) => l.url);
@@ -1130,17 +1136,36 @@ async function collectImages(
     }
   }
 
-  // ② Puppeteer DOM 图片：只要数量不足就补充（门槛从 3 提升到 30）
+  // ② Puppeteer 主页面图片：数量不足时补充，用同域放行规则
   if (allImgs.length < 30 && puppeteerImages && puppeteerImages.length > 0) {
-    const { isQualityImageUrl } = await import("@/lib/crawler");
     for (const img of puppeteerImages) {
       if (allImgs.length >= 100) break;
-      if (isQualityImageUrl(img)) addImg(img);
+      if (isQualityImageUrl(img, merchantDomain)) addImg(img);
     }
     console.log(`[CollectImages] Puppeteer 补图后，图片数量: ${allImgs.length}`);
   }
 
-  // ③ 搜索兜底：图片仍严重不足时搜索补充
+  // ③ Puppeteer 子页面补图：HTTP 抓取不足且有代理时，用 Puppeteer 爬前 3 个子页面
+  if (allImgs.length < 20 && links.length > 0) {
+    try {
+      const { crawlPageWithPuppeteer } = await import("@/lib/crawler");
+      const productLinks = links.filter(l => /\/(collection|category|shop|women|men|kids|sale|new|all|products?)\b/i.test(l.url));
+      const subPageUrls = [...productLinks, ...links].slice(0, 3).map(l => l.url);
+      for (const subUrl of subPageUrls) {
+        if (allImgs.length >= IMG_COLLECT_TARGET) break;
+        const subCache = await crawlPageWithPuppeteer(subUrl, 25000, proxyUrl).catch(() => null);
+        if (subCache?.images) {
+          for (const img of subCache.images) {
+            if (allImgs.length >= 100) break;
+            if (isQualityImageUrl(img, merchantDomain)) addImg(img);
+          }
+          console.log(`[CollectImages] Puppeteer 子页面 ${subUrl} 补图后，图片数量: ${allImgs.length}`);
+        }
+      }
+    } catch { /* 降级处理 */ }
+  }
+
+  // ④ 搜索兜底：图片仍严重不足时搜索补充
   if (allImgs.length < 20 && merchantUrl) {
     try {
       const searchImgs = await searchMerchantImages(merchantUrl, merchantName);
@@ -1483,7 +1508,7 @@ export async function buildCrawlCache(
   // 并行执行所有提取任务
   const [sitelinkCandidates, images, features, navItems, phoneCandidates, promoRegex, priceRegex, crawledProducts] = await Promise.all([
     discoverSitelinkCandidates(merchantUrl, crawlResult.links, country, puppeteerCache?.navLinks).catch(() => []),
-    collectImages(crawlResult.images, crawlResult.links, merchantUrl, merchantName, puppeteerCache?.images).catch(() => [] as string[]),
+    collectImages(crawlResult.images, crawlResult.links, merchantUrl, merchantName, puppeteerCache?.images, proxyUrl ?? undefined).catch(() => [] as string[]),
     Promise.resolve(html ? extractMerchantFeatures(html, [...(puppeteerCache?.heroTexts ?? []), ...(puppeteerCache?.uspTexts ?? [])]) : []),
     Promise.resolve(html ? extractNavItems(html, puppeteerCache?.categoryNames) : []),
     Promise.resolve(html ? extractPhoneCandidates(html, country) : []),

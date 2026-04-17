@@ -588,11 +588,28 @@ const FILTERED_IMG_KEYWORDS = [
   "adnxs.com", "ib.adnxs",         // 广告追踪像素
 ];
 
-export function isQualityImageUrl(url: string): boolean {
+/**
+ * @param url         图片 URL
+ * @param allowedDomain 商家域名（如 senser.net）。同域 + 有效扩展名直接放行，避免 CDN 白名单过滤掉 SPA 构建产物图片。
+ */
+export function isQualityImageUrl(url: string, allowedDomain?: string): boolean {
   if (JUNK_IMG_PATTERN.test(url)) return false;
   const lower = url.toLowerCase().split("?")[0];
   const validExts = [".jpg", ".jpeg", ".png", ".webp", ".avif"];
-  if (!validExts.some(ext => lower.endsWith(ext))) {
+  const hasValidExt = validExts.some(ext => lower.endsWith(ext));
+
+  // 同域图片 + 有效扩展名：直接放行（适用于 SPA 构建产物、自建图床等）
+  if (hasValidExt && allowedDomain) {
+    try {
+      const imgHost = new URL(url).hostname.replace(/^www\./, "");
+      const merchantHost = allowedDomain.replace(/^www\./, "").replace(/^https?:\/\//, "").split("/")[0];
+      if (imgHost === merchantHost || imgHost.endsWith("." + merchantHost)) {
+        if (!FILTERED_IMG_KEYWORDS.some(kw => lower.includes(kw))) return true;
+      }
+    } catch { /* ignore */ }
+  }
+
+  if (!hasValidExt) {
     const cdnPatterns = [
       // 主流电商/建站平台 CDN
       "cdn.shopify", "cloudinary", "imgix", "cloudfront",
