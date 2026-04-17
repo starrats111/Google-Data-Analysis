@@ -895,24 +895,46 @@ const COUNTRY_TO_LOCALE: Record<string, string> = {
 };
 
 /**
- * 检测 URL 路径开头的 locale 段（如 /en-sg/ /fr-fr/）。
- * 若与 targetCountry 不匹配，尝试替换为目标 locale；不认识的 locale 则剥离。
+ * 检测 URL 路径开头的 locale/country 段，替换为目标国家对应的正确前缀。
+ *
+ * 支持两种格式：
+ *   - 全 locale 格式：/en-sg/ /fr-fr/ /de-de/  → 替换为目标 locale（如 /en-us/）
+ *   - 2 字母国家码格式：/sg/ /us/ /de/          → 替换为目标国家码（如 /us/）
  */
 function normalizeLocaleInUrl(url: string, targetCountry: string): string {
   try {
     const u = new URL(url);
-    const m = u.pathname.match(/^\/([a-z]{2}[-_][a-z]{2})\//i);
-    if (!m) return url;
-    const existingLocale = m[1].toLowerCase().replace("_", "-");
-    const existingCountry = existingLocale.split("-")[1]?.toUpperCase();
-    if (existingCountry === targetCountry.toUpperCase()) return url;
-    const targetLocale = COUNTRY_TO_LOCALE[targetCountry.toUpperCase()];
-    if (targetLocale) {
-      u.pathname = "/" + targetLocale + u.pathname.slice(m[0].length - 1);
-    } else {
-      u.pathname = "/" + u.pathname.slice(m[0].length);
+    const target = targetCountry.toUpperCase();
+
+    // Case 1：完整 locale 前缀（en-sg, fr-fr 等）
+    const m1 = u.pathname.match(/^\/([a-z]{2}[-_][a-z]{2})\//i);
+    if (m1) {
+      const existingCountry = m1[1].toLowerCase().replace("_", "-").split("-")[1]?.toUpperCase();
+      if (existingCountry === target) return url; // 已正确
+      const targetLocale = COUNTRY_TO_LOCALE[target];
+      u.pathname = targetLocale
+        ? "/" + targetLocale + u.pathname.slice(m1[0].length - 1)
+        : "/" + u.pathname.slice(m1[0].length); // 未知 locale 则剥离前缀
+      return u.toString();
     }
-    return u.toString();
+
+    // Case 2：纯 2 字母国家码前缀（/sg/ /us/ /de/ 等）
+    const m2 = u.pathname.match(/^\/([a-z]{2})\//i);
+    if (m2) {
+      // 排除常见非国家码的 2 字母路径段（页面路径可能恰好 2 字母，如 /en/ 是语言不是国家）
+      const KNOWN_COUNTRY_CODES = new Set([
+        "us", "gb", "au", "ca", "ie", "nz", "sg", "in", "hk",
+        "de", "at", "ch", "fr", "it", "es", "nl", "be", "se",
+        "no", "dk", "fi", "jp", "kr", "cn", "tw", "br", "pt", "mx",
+      ]);
+      const existing2 = m2[1].toLowerCase();
+      if (!KNOWN_COUNTRY_CODES.has(existing2)) return url; // 非国家码，不处理
+      if (existing2 === target.toLowerCase()) return url; // 已正确
+      u.pathname = "/" + target.toLowerCase() + u.pathname.slice(m2[0].length - 1);
+      return u.toString();
+    }
+
+    return url;
   } catch { return url; }
 }
 
@@ -1150,19 +1172,26 @@ export async function buildCrawlCache(
   const { assessCrawlQuality, crawlWithPuppeteerFull, crawlPageWithPuppeteer, extractLinksAndImages } = await import("@/lib/crawler");
   const QUALITY_THRESHOLD = 40;
 
-  // 计算 locale URL（在 merchantUrl 无 locale 前缀时构造）
-  let localeUrl: string | null = null;
+  // 计算 locale URL — 同时生成完整 locale（/en-us/）和纯国家码（/us/）两种格式
+  // 不同电商建站平台偏好不同：Shopify 国际化常用 /en-us/，部分品牌自建站用 /us/
+  let localeUrl: string | null = null;       // 完整 locale：/en-us/
+  let localeUrlShort: string | null = null;  // 纯国家码：/us/
   if (merchantUrl && country) {
-    const loc = COUNTRY_TO_LOCALE[country.toUpperCase()];
-    if (loc) {
-      try {
-        const u = new URL(merchantUrl);
-        if (!u.pathname.match(/^\/[a-z]{2}[-_][a-z]{2}\//i)) {
-          u.pathname = "/" + loc + "/";
-          localeUrl = u.toString();
+    const LOCALE_PREFIX_RE = /^\/([a-z]{2}[-_][a-z]{2}|[a-z]{2})\//i;
+    try {
+      const u = new URL(merchantUrl);
+      if (!LOCALE_PREFIX_RE.test(u.pathname)) {
+        const loc = COUNTRY_TO_LOCALE[country.toUpperCase()]; // en-us
+        if (loc) {
+          const u1 = new URL(merchantUrl);
+          u1.pathname = "/" + loc + "/";
+          localeUrl = u1.toString();
         }
-      } catch {}
-    }
+        const u2 = new URL(merchantUrl);
+        u2.pathname = "/" + country.toLowerCase() + "/";      // us
+        localeUrlShort = u2.toString();
+      }
+    } catch {}
   }
 
   type CrawlResultType = { html: string; links: { url: string; text: string }[]; images: string[]; method: string; error?: string };
@@ -1176,18 +1205,22 @@ export async function buildCrawlCache(
   };
 
   // 构造策略列表：locale 优先，HTTP 优先于 Puppeteer
+  // 同时尝试 /en-us/ 和 /us/ 两种 locale 前缀格式
   type Strategy = { name: string; run: () => Promise<CrawlResultType> };
   const strategies: Strategy[] = [];
   if (merchantUrl) {
     if (options?.forcePuppeteer) {
       // forcePuppeteer 模式：只用 Puppeteer，locale 优先
       if (localeUrl) strategies.push({ name: "puppeteer_locale", run: () => runPuppeteer(localeUrl!) });
+      if (localeUrlShort) strategies.push({ name: "puppeteer_locale_short", run: () => runPuppeteer(localeUrlShort!) });
       strategies.push({ name: "puppeteer_root", run: () => runPuppeteer(merchantUrl) });
     } else {
-      // 普通模式：locale HTTP → root HTTP → locale Puppeteer → root Puppeteer
+      // 普通模式：locale HTTP（长） → locale HTTP（短） → root HTTP → locale Puppeteer → root Puppeteer
       if (localeUrl) strategies.push({ name: "http_locale", run: () => crawlPage(localeUrl!, country) });
+      if (localeUrlShort) strategies.push({ name: "http_locale_short", run: () => crawlPage(localeUrlShort!, country) });
       strategies.push({ name: "http_root", run: () => crawlPage(merchantUrl, country) });
       if (localeUrl) strategies.push({ name: "puppeteer_locale", run: () => runPuppeteer(localeUrl!) });
+      if (localeUrlShort) strategies.push({ name: "puppeteer_locale_short", run: () => runPuppeteer(localeUrlShort!) });
       strategies.push({ name: "puppeteer_root", run: () => runPuppeteer(merchantUrl) });
     }
   }
@@ -1449,30 +1482,62 @@ export async function buildCrawlCache(
 
   const pageText = html ? htmlToText(html).slice(0, 10000) : "";
 
-  // 检测站点是否使用 /xx-yy/ locale 前缀，若是则为当前目标国家计算本地化落地页 URL
+  // 检测站点是否使用 locale/country 前缀（/en-sg/ 或 /sg/ 两种格式），
+  // 若是则为当前目标国家计算本地化落地页 URL
   let localizedMerchantUrl: string | undefined;
   if (merchantUrl && country) {
-    const localeSegRe = /^\/([a-z]{2}[-_][a-z]{2})\//i;
+    // 同时检测完整 locale（/en-sg/）和纯国家码（/sg/）
+    const localeSegRe = /^\/([a-z]{2}[-_][a-z]{2}|[a-z]{2})\//i;
+    const KNOWN_COUNTRY_CODES_SET = new Set([
+      "us", "gb", "au", "ca", "ie", "nz", "sg", "in", "hk",
+      "de", "at", "ch", "fr", "it", "es", "nl", "be", "se",
+      "no", "dk", "fi", "jp", "kr", "cn", "tw", "br", "pt", "mx",
+    ]);
     // 优先从 crawlResult.links 检测，其次从 Puppeteer navLinks 补充
     const allLinksForLocaleCheck = [
       ...crawlResult.links.slice(0, 30),
       ...(puppeteerCache?.navLinks ?? []).slice(0, 20),
     ];
     const siteUsesLocale = allLinksForLocaleCheck.some(l => {
-      try { return localeSegRe.test(new URL(l.url).pathname); } catch { return false; }
+      try {
+        const pathname = new URL(l.url).pathname;
+        const m = pathname.match(/^\/([a-z]{2}[-_][a-z]{2}|[a-z]{2})\//i);
+        if (!m) return false;
+        const seg = m[1].toLowerCase();
+        // 区分完整 locale（en-sg）和纯国家码（sg）
+        if (seg.length === 5 || seg.length === 6) return true; // en-sg / en_sg
+        return KNOWN_COUNTRY_CODES_SET.has(seg); // 纯国家码
+      } catch { return false; }
+    });
+    // 检测站点用的是哪种格式（完整 locale 还是纯国家码）
+    const usesShortCountryCode = !allLinksForLocaleCheck.some(l => {
+      try { return /^\/[a-z]{2}[-_][a-z]{2}\//i.test(new URL(l.url).pathname); } catch { return false; }
+    }) && allLinksForLocaleCheck.some(l => {
+      try {
+        const m = new URL(l.url).pathname.match(/^\/([a-z]{2})\//i);
+        return m ? KNOWN_COUNTRY_CODES_SET.has(m[1].toLowerCase()) : false;
+      } catch { return false; }
     });
     if (siteUsesLocale) {
-      const targetLocale = COUNTRY_TO_LOCALE[country.toUpperCase()];
-      if (targetLocale) {
+      const targetLocale = COUNTRY_TO_LOCALE[country.toUpperCase()]; // en-us
+      const targetShort = country.toLowerCase(); // us
+      if (targetLocale || targetShort) {
         try {
           const u = new URL(merchantUrl);
-          const existingLocaleMatch = u.pathname.match(/^\/([a-z]{2}[-_][a-z]{2})(\/|$)/i);
-          if (existingLocaleMatch) {
-            // 替换已有的 locale 前缀
-            u.pathname = "/" + targetLocale + u.pathname.slice(existingLocaleMatch[0].length - 1);
+          // 检测 merchantUrl 自身是否已有前缀
+          const existingLongMatch = u.pathname.match(/^\/([a-z]{2}[-_][a-z]{2})(\/|$)/i);
+          const existingShortMatch = u.pathname.match(/^\/([a-z]{2})(\/|$)/i);
+          const existingShort = existingShortMatch && KNOWN_COUNTRY_CODES_SET.has(existingShortMatch[1].toLowerCase()) ? existingShortMatch : null;
+          if (existingLongMatch) {
+            // 替换已有的完整 locale 前缀
+            u.pathname = "/" + (usesShortCountryCode ? targetShort : targetLocale!) + u.pathname.slice(existingLongMatch[0].length - 1);
+          } else if (existingShort) {
+            // 替换已有的纯国家码前缀
+            u.pathname = "/" + (usesShortCountryCode ? targetShort : targetLocale!) + u.pathname.slice(existingShort[0].length - 1);
           } else {
-            // 插入 locale 前缀（保留原有路径）
-            u.pathname = "/" + targetLocale + (u.pathname === "/" ? "/" : u.pathname);
+            // 插入前缀（保留原有路径）
+            const prefix = usesShortCountryCode ? targetShort : (targetLocale || targetShort);
+            u.pathname = "/" + prefix + (u.pathname === "/" ? "/" : u.pathname);
           }
           localizedMerchantUrl = u.toString();
           if (localizedMerchantUrl !== merchantUrl) {
