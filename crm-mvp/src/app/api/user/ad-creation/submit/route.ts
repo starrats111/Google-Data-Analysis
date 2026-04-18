@@ -132,6 +132,103 @@ export async function POST(req: NextRequest) {
     return apiError(`AI 设定硬规则未通过：${aiRuleViolations.join("；")}`);
   }
 
+  // ═════════════════════════════════════════════════════════════════
+  // C-016: Google 官方政策 + 事实证据 软闸（自动重写，不阻断提交）
+  //   - collectGooglePolicyViolations：绝对化/承诺/符号/国家标签泄漏
+  //   - validateClaims：百分比/货币/电话/年限/免运/保修 对证据
+  //   - 有违规 → rewriteViolationsOnly 3 轮 AI 单条重写 + safe-template 兜底
+  //   - 仍有失败条目 → 允许继续提交（safe-template 已保证 Google 政策合规）
+  // ═════════════════════════════════════════════════════════════════
+  try {
+    const { collectGooglePolicyViolations } = await import("@/lib/ai-rule-profile");
+    const { validateClaims } = await import("@/lib/claim-validator");
+    const { rewriteViolationsOnly } = await import("@/lib/ai-retry-loop");
+    const { extractBrandRoot } = await import("@/lib/country-url-resolver");
+
+    const merchantRec = await prisma.user_merchants.findFirst({
+      where: { id: campaign.user_merchant_id, is_deleted: 0 },
+      select: { merchant_name: true },
+    });
+    const brandRoot = extractBrandRoot(merchantRec?.merchant_name || "");
+    const market = getAdMarketConfig(campaign.target_country || "US");
+    const country = campaign.target_country || "US";
+    const languageCode = (ad_language as string | undefined) || market.languageCode || "en";
+    const languageName = market.languageCode ? market.languageCode : "English";
+
+    const evidence = {
+      rawMentions: (adCreative.crawl_cache as any)?.rawMentions,
+      promoRegex: (adCreative.crawl_cache as any)?.promoRegex,
+      phone: ((adCreative.crawl_cache as any)?.phoneCandidates || [])[0] || null,
+      features: (adCreative.crawl_cache as any)?.features || [],
+    };
+
+    const runGate = async (items: string[], field: "headline" | "description", maxLen: number, minLen: number): Promise<string[]> => {
+      const gv = collectGooglePolicyViolations(
+        field === "headline"
+          ? { headlines: items, brandRoot }
+          : { descriptions: items, brandRoot }
+      ).filter((v) => v.field === field);
+      const cv = validateClaims({
+        texts: items.map((t, i) => ({ field, index: i, text: t })),
+        evidence,
+        country,
+      });
+      const map = new Map<number, string[]>();
+      for (const v of gv) {
+        if (!map.has(v.index)) map.set(v.index, []);
+        map.get(v.index)!.push(v.hint);
+      }
+      for (const u of cv.unsupported) {
+        if (!map.has(u.index)) map.set(u.index, []);
+        map.get(u.index)!.push(u.hint);
+      }
+      if (map.size === 0) return items;
+      const hints = [...map.entries()].map(([index, h]) => ({ index, hint: h.join(" | ") }));
+      console.warn(`[AdSubmit] C-016 ${field} 违规 ${hints.length} 条，触发自动重写`);
+      const result = await rewriteViolationsOnly({
+        items,
+        violations: hints,
+        opts: {
+          field,
+          brandRoot,
+          country,
+          languageCode,
+          languageName,
+          maxLen,
+          minLen,
+          maxRounds: 3,
+        },
+        validateAfterFn: (text) => {
+          const gv2 = collectGooglePolicyViolations(
+            field === "headline" ? { headlines: [text], brandRoot } : { descriptions: [text], brandRoot }
+          );
+          if (gv2.length > 0) return false;
+          const cv2 = validateClaims({ texts: [{ field, index: 0, text }], evidence, country });
+          return cv2.ok;
+        },
+      });
+      console.warn(`[AdSubmit] ${field} 重写：成功 ${result.rewritten.length}，兜底 ${result.degraded.length}`);
+      return result.items;
+    };
+
+    const newHeadlines = await runGate(headlines as string[], "headline", 30, 2);
+    const newDescriptions = await runGate(descriptions as string[], "description", 90, 40);
+    // 写回本次 body 使用的变量（submit 后续逻辑会读 headlines/descriptions 本地变量）
+    headlines.splice(0, headlines.length, ...newHeadlines);
+    descriptions.splice(0, descriptions.length, ...newDescriptions);
+
+    // 持久化改写结果
+    await prisma.ad_creatives.update({
+      where: { id: adCreative.id },
+      data: {
+        headlines: newHeadlines as any,
+        descriptions: newDescriptions as any,
+      },
+    }).catch((e) => console.warn("[AdSubmit] 政策重写写回 DB 失败:", e instanceof Error ? e.message : e));
+  } catch (gateErr) {
+    console.warn("[AdSubmit] C-016 软闸异常（不阻断提交）:", gateErr instanceof Error ? gateErr.message : gateErr);
+  }
+
   if (sitelinks.length > 0) {
     const badLinks: string[] = [];
     for (const sl of sitelinks as { finalUrl?: string; title?: string }[]) {
@@ -845,7 +942,18 @@ export async function POST(req: NextRequest) {
             if (kwText) { skippedKeywords.push(kwText); skippedDetails.push(`关键词: ${kwText}`); }
             else if (op?.asset_operation?.create?.call_asset) skippedDetails.push("致电扩展");
             else if (op?.campaign_asset_operation) skippedDetails.push("关联资源");
+            else if (op?.ad_group_ad_operation) skippedDetails.push("RSA广告素材");
             else skippedDetails.push(`操作[${idx}]`);
+          }
+
+          // RSA 广告（ad_group_ad_operation）固定在 index 5，是核心操作，不能被移除。
+          // 若广告本身触发政策违规，必须直接报错让用户修改文案，不能静默跳过导致
+          // Google 上只有广告系列+广告组、没有广告的"空壳"状态。
+          const RSA_AD_INDEX = 5;
+          if (violatingIndices.has(RSA_AD_INDEX)) {
+            const triggerList = errViolations?.filter((v) => v.trigger).map((v) => `「${v.trigger}」`) || [];
+            const triggerHint = triggerList.length > 0 ? `（违规内容: ${triggerList.join(", ")}）` : "";
+            throw new Error(`Google Ads 拒绝了 RSA 广告素材${triggerHint}，请修改标题或描述中的违规文案后重新提交。（违规操作: ${skippedDetails.join("、")}）`);
           }
 
           const filteredOps = operations.filter((_, i) => !violatingIndices.has(i));

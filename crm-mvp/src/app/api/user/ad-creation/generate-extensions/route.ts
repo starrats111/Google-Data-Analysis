@@ -306,11 +306,38 @@ export async function POST(req: NextRequest) {
 
   // 优先使用用户明确设定的落地页 URL（用户可能已改成本地化路径如 /en-us/）
   // merchant_url 是商家层面的默认 URL，可能带旧地区前缀（如 /en-sg/）
-  let merchantUrl = adCreative?.final_url || merchant.merchant_url || "";
-  // C-015 §3：merchantName 在 TLD 切换分支里可能被剥国家后缀，须 let
-  let merchantName = merchant.merchant_name || "";
+  const originalMerchantUrl = adCreative?.final_url || merchant.merchant_url || "";
   const country = campaign.target_country || "US";
   const market = getAdMarketConfig(country);
+
+  // ═════════════════════════════════════════════════════════════════
+  // C-016: 国别 URL 解析（DNS + TCP 443，不走 HTTP，不触发 WAF/CF）
+  //   - aerosus.nl + BE → aerosus.be（若 DNS+TCP 通）
+  //   - 已是目标国 ccTLD / 无对应 ccTLD → 保持原样
+  //   - 失败（timeout）→ 短 TTL 缓存，下次重试
+  // 副作用：切换时只更新 ad_creatives.final_url + 清 crawl_cache 触发重爬
+  //         严禁动 user_merchants（平台 API 数据不可污染）
+  // ═════════════════════════════════════════════════════════════════
+  const { resolveCountryUrl, extractBrandRoot } = await import("@/lib/country-url-resolver");
+  const resolverResult = await resolveCountryUrl(originalMerchantUrl, country);
+  let merchantUrl = resolverResult.finalUrl || originalMerchantUrl;
+  // brandRoot 只影响 prompt，不改 DB（剥 merchant_name 末尾的平台内部国家标签如 " NL"）
+  const merchantName = extractBrandRoot(merchant.merchant_name || "");
+
+  if (resolverResult.switched && adCreative?.id) {
+    console.warn(`[Extensions] C-016 ccTLD 切换: ${originalMerchantUrl} → ${merchantUrl}（reason=${resolverResult.reason}）`);
+    await prisma.ad_creatives.update({
+      where: { id: adCreative.id },
+      data: { final_url: merchantUrl, crawl_cache: null as any },
+    }).catch((e) => {
+      console.warn("[Extensions] 写 final_url/清 cache 失败:", e instanceof Error ? e.message : e);
+    });
+    // 让下游重走爬取
+    (adCreative as any).crawl_cache = null;
+    (adCreative as any).final_url = merchantUrl;
+  } else if (process.env.NODE_ENV !== "production") {
+    console.log(`[Extensions] C-016 resolver reason=${resolverResult.reason}, switched=${resolverResult.switched}, brandRoot="${merchantName}"`);
+  }
 
   const adSettings = await prisma.ad_default_settings.findFirst({
     where: { user_id: BigInt(user.userId), is_deleted: 0 },
@@ -380,93 +407,18 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  // 若爬取时检测到站点使用 locale 前缀，用本地化 URL 更新 merchantUrl 和 DB 的 final_url
-  // 优先使用缓存中已存储的 localizedMerchantUrl；若旧缓存没有该字段，则从 cache.links 实时推断
-  let localizedUrl = (cache as CrawlCache | null)?.localizedMerchantUrl;
-  if (!localizedUrl && cache?.links && cache.links.length > 0 && country) {
-    const localeSegRe = /^\/([a-z]{2}[-_][a-z]{2})\//i;
-    const siteUsesLocale = (cache.links as { url: string; text: string }[]).slice(0, 30).some(l => {
-      try { return localeSegRe.test(new URL(l.url).pathname); } catch { return false; }
-    });
-    if (siteUsesLocale) {
-      const LOCALE_MAP: Record<string, string> = {
-        US: "en-us", GB: "en-gb", AU: "en-au", CA: "en-ca", IE: "en-ie",
-        DE: "de-de", AT: "de-at", CH: "de-ch", FR: "fr-fr", BE: "fr-be",
-        ES: "es-es", MX: "es-mx", IT: "it-it", NL: "nl-nl", PT: "pt-pt",
-        BR: "pt-br", JP: "ja-jp", KR: "ko-kr", CN: "zh-cn", TW: "zh-tw",
-        SG: "en-sg", HK: "en-hk", IN: "en-in", NZ: "en-nz",
-        SE: "sv-se", NO: "nb-no", DK: "da-dk", FI: "fi-fi", PL: "pl-pl",
-      };
-      const targetLocale = LOCALE_MAP[country.toUpperCase()];
-      if (targetLocale) {
-        try {
-          const u = new URL(merchantUrl);
-          const existingLocaleMatch = u.pathname.match(/^\/([a-z]{2}[-_][a-z]{2})(\/|$)/i);
-          if (existingLocaleMatch) {
-            u.pathname = "/" + targetLocale + u.pathname.slice(existingLocaleMatch[0].length - 1);
-          } else {
-            u.pathname = "/" + targetLocale + (u.pathname === "/" ? "/" : u.pathname);
-          }
-          localizedUrl = u.toString();
-          console.log(`[Extensions] 从 cache.links 推断 locale URL: ${merchantUrl} → ${localizedUrl}`);
-        } catch {}
-      }
-    }
-  }
+  // C-016: 路径级 locale（Sephora 型 /en-sg/ → /en-us/）由 crawl-pipeline 内部生成，
+  // 仅在 cache.localizedMerchantUrl 与当前 merchantUrl 不同时写回 ad_creatives.final_url。
+  // ccTLD 级切换（aerosus.nl → aerosus.be）已在 crawl_cache 读取前由 resolveCountryUrl 完成。
+  const localizedUrl = (cache as CrawlCache | null)?.localizedMerchantUrl;
   if (localizedUrl && localizedUrl !== merchantUrl && adCreative?.id) {
+    const prevUrl = merchantUrl;
     merchantUrl = localizedUrl;
     await prisma.ad_creatives.update({
       where: { id: adCreative.id },
       data: { final_url: localizedUrl },
     }).catch(() => {});
-    console.log(`[Extensions] final_url 本地化: ${adCreative?.final_url || merchant.merchant_url} → ${localizedUrl}`);
-  }
-
-  // F-CRAWLER-LOCALIZE-TLD：多顶级域本地化（如 aerosus.nl → aerosus.be）静默替换
-  // cache.resolvedMerchantUrl 由 buildCrawlCache 写入，只有命中 hreflang / switcher / ccTLD 三层之一时才非空
-  // 切换范围：同步更新 user_merchants.merchant_url + ad_creatives.final_url；对用户透明（无弹窗）
-  const resolvedMerchantUrl = (cache as CrawlCache | null)?.resolvedMerchantUrl;
-  if (resolvedMerchantUrl && resolvedMerchantUrl !== (merchant.merchant_url || "")) {
-    const originalUrl = merchant.merchant_url || "";
-    merchantUrl = resolvedMerchantUrl;
-
-    // C-015 §3：TLD 切换时同步剥离 merchant_name 末尾的国家/区域后缀
-    // 场景：源数据 "Aerosus NL" 被切到 aerosus.be（BE 国家），再让 AI 写 BE 语境广告时
-    //      若把 "Aerosus NL" 原样喂 prompt，headline 会出现 "Aerosus NL - 2 Jaar Garantie"
-    //      —— 这对 BE 投放属于国家错配（07 2026-04-18 反馈）。
-    // 原则：只剥尾部单词，不动核心品牌名；无后缀的商家完全不触发
-    const COUNTRY_SUFFIXES = [
-      "NL", "BE", "DE", "FR", "UK", "GB", "IT", "ES", "AT", "CH",
-      "DACH", "EU", "US", "USA", "CA", "AU", "NZ", "JP", "KR", "CN", "TW", "HK", "SG", "IN",
-      "SE", "NO", "DK", "FI", "PL", "CZ", "PT", "BR", "MX", "AR",
-    ];
-    const countrySuffixRe = new RegExp(`\\s+(${COUNTRY_SUFFIXES.join("|")})\\s*$`, "i");
-    let nameUpdated = false;
-    if (merchantName && countrySuffixRe.test(merchantName)) {
-      const stripped = merchantName.replace(countrySuffixRe, "").trim();
-      if (stripped.length >= 2) {
-        console.warn(`[Extensions] C-015 §3 merchant_name 剥离国家后缀: "${merchantName}" → "${stripped}"（因 TLD 切到 ${country}）`);
-        merchantName = stripped;
-        nameUpdated = true;
-      }
-    }
-
-    await prisma.user_merchants.update({
-      where: { id: merchant.id },
-      data: {
-        merchant_url: resolvedMerchantUrl,
-        ...(nameUpdated ? { merchant_name: merchantName } : {}),
-      },
-    }).catch((e) => {
-      console.warn(`[Extensions] user_merchants 更新失败:`, e instanceof Error ? e.message : e);
-    });
-    if (adCreative?.id) {
-      await prisma.ad_creatives.update({
-        where: { id: adCreative.id },
-        data: { final_url: resolvedMerchantUrl },
-      }).catch(() => {});
-    }
-    console.warn(`[Extensions] TLD 本地化静默替换: ${originalUrl} → ${resolvedMerchantUrl}（user_merchants + ad_creatives 同步更新，name 剥后缀=${nameUpdated}）`);
+    console.log(`[Extensions] 路径级 locale 命中: ${prevUrl} → ${localizedUrl}`);
   }
 
   const encoder = new TextEncoder();
@@ -826,6 +778,125 @@ ${isNonEnglish ? `\n⚠️ FINAL REMINDER: ALL headlines, descriptions, sitelink
       console.log(`[Core] 合规警告: ${allRemaining.length} 条仍有风险（已达最大重试次数）`);
     }
 
+    // ═════════════════════════════════════════════════════════════════
+    // C-016: Google Ads 官方政策闸 + 事实证据闸（软闸，违规条目走单条 mini-retry）
+    //   - collectGooglePolicyViolations: 绝对化/无证据承诺/夸大/禁用符号/国家标签泄漏/DKI
+    //   - validateClaims: 百分比/货币/电话/年限/免运/保修 对 rawMentions/promoRegex/features/phone
+    //   - rewriteViolationsOnly: 最多 3 轮 AI 单条重写，失败 → safe-ad-template 兜底
+    // ═════════════════════════════════════════════════════════════════
+    try {
+      const { collectGooglePolicyViolations } = await import("@/lib/ai-rule-profile");
+      const { validateClaims } = await import("@/lib/claim-validator");
+      const { rewriteViolationsOnly } = await import("@/lib/ai-retry-loop");
+
+      const evidence = {
+        rawMentions: cache.rawMentions,
+        promoRegex: cache.promoRegex,
+        phone: cache.phoneCandidates && cache.phoneCandidates.length > 0 ? cache.phoneCandidates[0] : null,
+        features: cache.features,
+      };
+
+      const buildHintMap = (items: string[], field: "headline" | "description") => {
+        const gv = collectGooglePolicyViolations(
+          field === "headline"
+            ? { headlines: items, brandRoot: merchantName }
+            : { descriptions: items, brandRoot: merchantName }
+        ).filter((v) => v.field === field);
+        const cv = validateClaims({
+          texts: items.map((t, i) => ({ field, index: i, text: t })),
+          evidence,
+          country,
+        });
+        const map = new Map<number, string[]>();
+        for (const v of gv) {
+          if (!map.has(v.index)) map.set(v.index, []);
+          map.get(v.index)!.push(v.hint);
+        }
+        for (const u of cv.unsupported) {
+          if (!map.has(u.index)) map.set(u.index, []);
+          map.get(u.index)!.push(u.hint);
+        }
+        return [...map.entries()].map(([index, hints]) => ({ index, hint: hints.join(" | ") }));
+      };
+
+      const validateAfter = (text: string, field: "headline" | "description"): boolean => {
+        const gv = collectGooglePolicyViolations(
+          field === "headline"
+            ? { headlines: [text], brandRoot: merchantName }
+            : { descriptions: [text], brandRoot: merchantName }
+        );
+        if (gv.length > 0) return false;
+        const cv = validateClaims({
+          texts: [{ field, index: 0, text }],
+          evidence,
+          country,
+        });
+        return cv.ok;
+      };
+
+      const hlHints = buildHintMap(headlines, "headline");
+      if (hlHints.length > 0) {
+        console.warn(`[Core] C-016 headlines 政策/证据违规 ${hlHints.length} 条，触发单条 mini-retry`);
+        const result = await rewriteViolationsOnly({
+          items: headlines,
+          violations: hlHints,
+          opts: {
+            field: "headline",
+            brandRoot: merchantName,
+            country,
+            languageCode: adLanguageCode || market.languageCode,
+            languageName,
+            maxLen: 30,
+            minLen: 2,
+            maxRounds: 3,
+          },
+          validateAfterFn: (text) => validateAfter(text, "headline"),
+        });
+        headlines = result.items;
+        send("headlines", headlines); // 原位推送新版本（前端 CSS transition 平滑替换）
+        if (result.rewritten.length > 0 || result.degraded.length > 0) {
+          send("compliance_policy_fix", {
+            field: "headline",
+            rewritten: result.rewritten.length,
+            degraded: result.degraded.length,
+          });
+          console.warn(`[Core] headlines 政策重写：成功 ${result.rewritten.length}，兜底 ${result.degraded.length}`);
+        }
+      }
+
+      const dlHints = buildHintMap(descriptions, "description");
+      if (dlHints.length > 0) {
+        console.warn(`[Core] C-016 descriptions 政策/证据违规 ${dlHints.length} 条，触发单条 mini-retry`);
+        const result = await rewriteViolationsOnly({
+          items: descriptions,
+          violations: dlHints,
+          opts: {
+            field: "description",
+            brandRoot: merchantName,
+            country,
+            languageCode: adLanguageCode || market.languageCode,
+            languageName,
+            maxLen: 90,
+            minLen: 40,
+            maxRounds: 3,
+          },
+          validateAfterFn: (text) => validateAfter(text, "description"),
+        });
+        descriptions = result.items;
+        send("descriptions", descriptions);
+        if (result.rewritten.length > 0 || result.degraded.length > 0) {
+          send("compliance_policy_fix", {
+            field: "description",
+            rewritten: result.rewritten.length,
+            degraded: result.degraded.length,
+          });
+          console.warn(`[Core] descriptions 政策重写：成功 ${result.rewritten.length}，兜底 ${result.degraded.length}`);
+        }
+      }
+    } catch (gateErr) {
+      console.warn("[Core] C-016 政策/证据闸异常（不阻断）:", gateErr instanceof Error ? gateErr.message : gateErr);
+    }
+
     // 处理站内链接（标题/描述需符合 Google Ads 规范：不能全大写、不能有多余标点）
     const sitelinkDescs = Array.isArray(parsed.sitelink_descriptions) ? parsed.sitelink_descriptions : [];
     const sitelinks = cache.sitelinkCandidates.map((s, i) => {
@@ -863,7 +934,7 @@ ${isNonEnglish ? `\n⚠️ FINAL REMINDER: ALL headlines, descriptions, sitelink
     }
     send("sitelinks", sitelinks);
 
-    // 保存到 DB
+    // 保存到 DB（初版）
     if (adCreativeId) {
       const pathSuggest = suggestDisplayPaths(merchantName, [], country);
       await prisma.ad_creatives.update({
@@ -876,6 +947,41 @@ ${isNonEnglish ? `\n⚠️ FINAL REMINDER: ALL headlines, descriptions, sitelink
           display_path2: pathSuggest.path2,
         },
       });
+    }
+
+    // ═════════════════════════════════════════════════════════════════
+    // C-016: sitelink 自动扩源（< 4 时触发：sitemap.xml → robots.txt → 常见路径）
+    // 完成后推送 `sitelinks_update` 事件，前端 CSS transition 平滑展开
+    // ═════════════════════════════════════════════════════════════════
+    if (sitelinks.length < 4) {
+      try {
+        const { autoExpandSitelinks } = await import("@/lib/sitelink-auto-expand");
+        const expanded = await autoExpandSitelinks({
+          merchantUrl,
+          country,
+          existing: sitelinks.map((s: any) => ({ url: s.url, title: s.title, description: s.desc1 })),
+          targetCount: 4,
+        });
+        if (expanded.length > sitelinks.length) {
+          const newItems = expanded.slice(sitelinks.length).map((s) => ({
+            title: sanitizeAdText(s.title).slice(0, 25),
+            url: s.url,
+            desc1: sanitizeAdText(s.description || merchantName.slice(0, 35), { allowExclamation: true }),
+            desc2: sanitizeAdText(merchantName.slice(0, 35), { allowExclamation: true }),
+          }));
+          const merged = [...sitelinks, ...newItems];
+          send("sitelinks_update", merged);
+          if (adCreativeId) {
+            await prisma.ad_creatives.update({
+              where: { id: adCreativeId },
+              data: { sitelinks: merged as any },
+            }).catch(() => {});
+          }
+          console.warn(`[Core] C-016 sitelink 扩源：${sitelinks.length} → ${merged.length}`);
+        }
+      } catch (expandErr) {
+        console.warn("[Core] sitelink 扩源失败（不阻断）:", expandErr instanceof Error ? expandErr.message : expandErr);
+      }
     }
 
     console.log(`[Core] AI 生成完成: ${headlines.length} 标题, ${descriptions.length} 描述, ${sitelinks.length} 站内链接`);

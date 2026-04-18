@@ -886,6 +886,30 @@ export default function AdPreviewPage() {
         return;
       }
 
+      // C-016: Google 政策/事实证据闸 自动重写统计
+      if (type === "compliance_policy_fix") {
+        const d = data as { field: string; rewritten: number; degraded: number };
+        if (d?.rewritten > 0 || d?.degraded > 0) {
+          const fieldName = d.field === "headline" ? "标题" : d.field === "description" ? "描述" : d.field;
+          const parts: string[] = [];
+          if (d.rewritten > 0) parts.push(`${d.rewritten} 条已 AI 重写`);
+          if (d.degraded > 0) parts.push(`${d.degraded} 条降级为安全模板`);
+          message.info(`Google 政策/证据校验：${fieldName} ${parts.join("，")}`);
+        }
+        return;
+      }
+
+      // C-016: sitelink 异步扩源结果（sitemap.xml/robots.txt/常见路径）
+      if (type === "sitelinks_update") {
+        const raw = data as Array<Record<string, string>> | null;
+        if (raw && raw.length > 0) {
+          const items = normalizeSitelinkItems(raw).map((item) => ({ ...item, urlStatus: "valid" as const }));
+          setSitelinks(items);
+          message.success(`站内链接扩源完成：共 ${items.length} 条`);
+        }
+        return;
+      }
+
       if (type === "negative_keywords") {
         const kws = data as string[];
         if (Array.isArray(kws) && kws.length > 0) {

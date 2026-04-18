@@ -765,3 +765,154 @@ export function collectAiRuleViolations(payload: {
 
   return Array.from(new Set(violations));
 }
+
+// ─── C-016 Google Ads 官方政策硬规则（结构化输出） ────────────────
+// 与 collectAiRuleViolations（用户自定义规则）互补：
+//   - 本函数只检测 Google 官方政策风险（多语言），用于 retry loop 的定位
+//   - 返回结构化结果，便于 rewriteViolationsOnly 只重写违规条目
+
+export interface GooglePolicyViolation {
+  field: "headline" | "description" | "sitelink" | "callout";
+  index: number;
+  text: string;
+  rule: string;   // 命中的规则 id
+  hint: string;   // 注入 AI prompt 的重写建议
+}
+
+export interface PolicyCheckInput {
+  headlines?: string[];
+  descriptions?: string[];
+  callouts?: string[];
+  sitelinks?: Array<{ title?: string | null; desc1?: string | null; desc2?: string | null; description?: string | null }>;
+  /** 商家品牌根名（去国家后缀后），用于"国家标签泄漏"检测 */
+  brandRoot?: string;
+}
+
+// 绝对化/无证据承诺词（多语言，拼写无严格排序）
+const ABSOLUTE_CLAIM_PATTERNS: Array<{ re: RegExp; label: string; hint: string }> = [
+  { re: /\b(?:#\s*1|number\s*one|no\.?\s*1)\b/i, label: "absolute_ranking", hint: "Remove '#1'/'number one' — Google Ads requires verifiable superlative claims." },
+  { re: /\bbest\s+(?:price|deal|quality|in\s+the\s+world)\b/i, label: "absolute_best", hint: "Remove absolute 'best ...' claim; use specific benefit instead." },
+  { re: /\bguarantee(?:d)?\b/i, label: "guarantee", hint: "Remove 'guarantee' — must be verified on the landing page." },
+  { re: /\b(?:100|99)\s*%\s*(?:safe|pure|organic|natural|effective|satisfaction)\b/i, label: "absolute_percentage", hint: "Remove absolute-percentage claim — use 'trusted' or 'proven' style without numbers." },
+  { re: /\blifetime\s+(?:warranty|guarantee|support|access)\b/i, label: "lifetime_claim", hint: "Remove 'lifetime ...' claim unless explicitly offered by the merchant." },
+  { re: /\b(?:perfect|flawless|miracle|magical)\b/i, label: "absolute_adjective", hint: "Replace 'perfect/miracle' style absolute claim with a concrete benefit." },
+  { re: /\b(?:cure|heal|treat|prevent)\s+(?:cancer|covid|disease|diabetes|hiv|aids)\b/i, label: "medical_claim", hint: "Remove medical claim — strictly prohibited by Google Ads healthcare policy." },
+  { re: /\b(?:lose|burn)\s+\d+\s*(?:lbs?|kg|pounds?|kilos?)\b/i, label: "weight_loss_claim", hint: "Remove specific weight-loss outcome — healthcare/weight policy." },
+  // 多语言
+  { re: /\b(?:garantiert|garantiere)\b/i, label: "guarantee_de", hint: "Entfernen Sie 'garantiert' — nur mit verifizierbarem Nachweis erlaubt." },
+  { re: /\bbeste[rs]?\s+(?:preis|qualität|deal|welt)\b/i, label: "absolute_best_de", hint: "Entfernen Sie absolute 'beste' Behauptung." },
+  { re: /\bgarantie\b/i, label: "guarantee_nl_fr_it", hint: "Remove 'garantie/guarantee' claim unless verified on the merchant page." },
+  { re: /\bmeilleur[e]?\s+(?:prix|qualité|du\s+monde)\b/i, label: "absolute_best_fr", hint: "Retirez la mention 'meilleur ...' absolue." },
+  { re: /\bmigliore?\s+(?:prezzo|qualità|del\s+mondo)\b/i, label: "absolute_best_it", hint: "Rimuovere la pretesa assoluta 'migliore ...'." },
+  { re: /\bmejor\s+(?:precio|calidad|del\s+mundo)\b/i, label: "absolute_best_es", hint: "Elimine la afirmación absoluta 'mejor ...'." },
+];
+
+// 无凭据承诺 / 过度承诺（多语言）
+const UNVERIFIED_PROMISE_PATTERNS: Array<{ re: RegExp; label: string; hint: string }> = [
+  { re: /\b(?:risk\s*[-\s]*free|zero\s+risk|no\s+risk)\b/i, label: "risk_free", hint: "Remove 'risk-free' claim unless explicitly offered on site." },
+  { re: /\b(?:money[-\s]*back|refund\s+guarantee)\b/i, label: "refund_guarantee", hint: "Remove money-back/refund guarantee in headline — move to description only if verified." },
+  { re: /\b(?:never\s+lose|always\s+win|unbeatable|unmatched|unparalleled)\b/i, label: "unverified_superlative", hint: "Remove unverifiable superlative — use specific, provable benefit." },
+  { re: /\bkostenlose\s*(?:rückgabe|rücksendung|retoure)\b/i, label: "refund_guarantee_de", hint: "Entfernen Sie Rückgabe-Garantie-Anspruch im Titel; nur in Beschreibung, wenn verifiziert." },
+];
+
+// 禁用符号 / 格式（Google Ads Editorial Standard）
+const FORMAT_VIOLATION_PATTERNS: Array<{ re: RegExp; label: string; hint: string }> = [
+  { re: /[!?.]{2,}/, label: "repeated_punctuation", hint: "Remove repeated punctuation (!! or ??)." },
+  { re: /[A-Z]{4,}/, label: "all_caps_word", hint: "Avoid ALL CAPS words; use Title Case instead." },
+  { re: /[✓✔★☆♥♡❤🎁🔥💯✨]/, label: "decorative_symbol", hint: "Remove decorative symbols (✓★♥🔥 etc.) — Google Ads disallows them." },
+  { re: /\{\s*(?:KeyWord|keyword|param\d)\s*:/i, label: "dki_misuse", hint: "DKI placeholders like {KeyWord:…} must follow exact Google Ads syntax; remove if misused." },
+];
+
+// 国家标签泄漏（brand + " NL"/"BE"/"DE"/"FR" 等）
+function makeCountryTagLeakRegex(brandRoot: string): RegExp | null {
+  if (!brandRoot || brandRoot.length < 2) return null;
+  const esc = brandRoot.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  // 商家名后紧跟国家代码
+  return new RegExp(`\\b${esc}\\s+(?:NL|BE|DE|FR|UK|GB|IT|ES|AT|CH|US|USA|CA|AU|NZ|JP|KR|CN|TW|HK|SG|IN|SE|NO|DK|FI|PL|CZ|PT|BR|MX|AR|GR|IE|DACH|EU)\\b`, "i");
+}
+
+function checkOneText(
+  text: string,
+  field: GooglePolicyViolation["field"],
+  index: number,
+  brandLeakRe: RegExp | null,
+): GooglePolicyViolation[] {
+  const out: GooglePolicyViolation[] = [];
+  if (!text || text.trim().length < 2) return out;
+
+  for (const rule of ABSOLUTE_CLAIM_PATTERNS) {
+    if (rule.re.test(text)) {
+      out.push({ field, index, text, rule: rule.label, hint: rule.hint });
+      return out; // 一条违规先返回，便于 rewrite
+    }
+  }
+  for (const rule of UNVERIFIED_PROMISE_PATTERNS) {
+    if (rule.re.test(text)) {
+      out.push({ field, index, text, rule: rule.label, hint: rule.hint });
+      return out;
+    }
+  }
+  for (const rule of FORMAT_VIOLATION_PATTERNS) {
+    if (rule.re.test(text)) {
+      out.push({ field, index, text, rule: rule.label, hint: rule.hint });
+      return out;
+    }
+  }
+  if (brandLeakRe && brandLeakRe.test(text)) {
+    out.push({
+      field,
+      index,
+      text,
+      rule: "country_tag_leak",
+      hint: "Remove the country suffix (NL/BE/DE/…) after the brand name — it is an internal platform tag, not part of the brand.",
+    });
+    return out;
+  }
+  // 管控物质 / 关键词级政策风险
+  if (isPolicyRiskKeyword(text)) {
+    out.push({
+      field,
+      index,
+      text,
+      rule: "restricted_content",
+      hint: "Rewrite without controlled-substance or restricted-content terms (Google Ads restricted content policy).",
+    });
+    return out;
+  }
+  return out;
+}
+
+/**
+ * 结构化收集 Google Ads 官方政策违规
+ *
+ * 与 collectAiRuleViolations 的区别：
+ *   - 返回 GooglePolicyViolation[]（按字段 + index 定位）
+ *   - 多语言覆盖
+ *   - 供 ai-retry-loop.rewriteViolationsOnly 精准重写
+ */
+export function collectGooglePolicyViolations(input: PolicyCheckInput): GooglePolicyViolation[] {
+  const result: GooglePolicyViolation[] = [];
+  const brandLeakRe = input.brandRoot ? makeCountryTagLeakRegex(input.brandRoot) : null;
+
+  (input.headlines || []).forEach((t, i) => {
+    result.push(...checkOneText(t || "", "headline", i, brandLeakRe));
+  });
+  (input.descriptions || []).forEach((t, i) => {
+    result.push(...checkOneText(t || "", "description", i, brandLeakRe));
+  });
+  (input.callouts || []).forEach((t, i) => {
+    result.push(...checkOneText(t || "", "callout", i, brandLeakRe));
+  });
+  (input.sitelinks || []).forEach((sl, i) => {
+    const parts = [sl?.title || "", sl?.desc1 || sl?.description || "", sl?.desc2 || ""];
+    for (const p of parts) {
+      const violations = checkOneText(p, "sitelink", i, brandLeakRe);
+      if (violations.length > 0) {
+        result.push(...violations);
+        break; // 一条 sitelink 出现一次即可
+      }
+    }
+  });
+
+  return result;
+}

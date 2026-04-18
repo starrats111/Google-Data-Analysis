@@ -5,7 +5,7 @@
 import { crawlPage, fetchUrlMeta, fetchPageImages, searchMerchantImages, crawlViaSitemap } from "@/lib/crawler";
 import { getAdMarketConfig } from "@/lib/ad-market";
 import { getProxyUrlForCountry } from "@/lib/crawl-proxy";
-import { resolveLocalizedUrl } from "@/lib/crawler-localize";
+// C-016: ccTLD 切换逻辑移出 crawl-pipeline，改由 country-url-resolver 在 route 层调度
 
 // 全局爬取并发控制：最多 2 个同时执行
 let _crawlActive = 0;
@@ -57,13 +57,7 @@ export interface CrawlCache {
   crawlMethod: string;
   crawlFailed: boolean;
   localizedMerchantUrl?: string;
-  /**
-   * F-CRAWLER-LOCALIZE-TLD：多顶级域本地化命中后的新 URL。
-   * 与 localizedMerchantUrl（路径级 locale，如 /en-sg/ → /en-us/）不同，
-   * 这个字段是 ccTLD 级切换（aerosus.nl → aerosus.be）。
-   * 仅在实际发生切换时有值；未命中时 undefined。
-   */
-  resolvedMerchantUrl?: string;
+  // C-016: resolvedMerchantUrl 已废弃 — ccTLD 切换由 country-url-resolver 在 route 层完成
   crawlQualityScore?: number;    // 0-100，本次爬取质量评分
   crawlQualityIssues?: string[]; // 质量问题标签，如 ['no_links','splash_page']
   rawMentions?: RawMentions;     // 全量 HTML 直接提取的原文片段，不依赖 htmlToText 管道
@@ -1177,27 +1171,8 @@ export async function buildCrawlCache(
   const { assessCrawlQuality, crawlWithPuppeteerFull, crawlPageWithPuppeteer, extractLinksAndImages } = await import("@/lib/crawler");
   const QUALITY_THRESHOLD = 40;
 
-  // ══════════════════════════════════════════════════════
-  // F-CRAWLER-LOCALIZE-TLD：多顶级域本地化探测（在 locale URL 计算之前做）
-  // 场景：商家填 aerosus.nl + 国家 BE → 切到 aerosus.be（hreflang / 站内切换器 / ccTLD 三层）
-  // 命中时静默替换 merchantUrl，后续所有爬取 / sitelinks / 图片 / 扩展 全部基于新 URL
-  // 替换结果通过 resolvedMerchantUrl 字段返回，由 route 层 UPDATE 到 DB
-  // ══════════════════════════════════════════════════════
-  const originalMerchantUrl = merchantUrl;
-  let resolvedMerchantUrl: string | undefined;
-  if (merchantUrl && country) {
-    try {
-      const _preProxy = await getProxyUrlForCountry(country).catch(() => null);
-      const resolved = await resolveLocalizedUrl(merchantUrl, country, _preProxy ?? undefined);
-      if (resolved.url !== originalMerchantUrl) {
-        console.log(`[CrawlPipeline] TLD 本地化命中（via=${resolved.via}）：${originalMerchantUrl} → ${resolved.url}`);
-        merchantUrl = resolved.url;
-        resolvedMerchantUrl = resolved.url;
-      }
-    } catch (e) {
-      console.warn("[CrawlPipeline] resolveLocalizedUrl 异常（不阻断主流程）:", e instanceof Error ? e.message : e);
-    }
-  }
+  // C-016: ccTLD 切换（aerosus.nl → aerosus.be 等）已移至 country-url-resolver 在 route 层完成。
+  // 进入本函数的 merchantUrl 已经是 route 层解析后的最终域名，这里只做路径级 locale 推断（Sephora 型 /en-sg/）。
 
   // 计算 locale URL — 同时生成完整 locale（/en-us/）和纯国家码（/us/）两种格式
   // 不同电商建站平台偏好不同：Shopify 国际化常用 /en-us/，部分品牌自建站用 /us/
@@ -1662,7 +1637,6 @@ export async function buildCrawlCache(
     crawlMethod: crawlResult.method,
     crawlFailed,
     localizedMerchantUrl,
-    resolvedMerchantUrl,
     crawlQualityScore: crawlQuality.score,
     crawlQualityIssues: crawlQuality.issues,
     rawMentions,
