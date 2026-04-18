@@ -85,6 +85,13 @@ export function isBadSitelinkUrl(url: string): boolean {
   const lower = url.toLowerCase();
   if (lower.includes("/search?q=cache:") || lower.includes("webcache.googleusercontent.com")) return true;
   if (/google\.\w+\/search/i.test(url) || /bing\.com\/search/i.test(url)) return true;
+  // C-016: 非页面资源（sitemap 索引、静态资源、媒体文件）禁用为 sitelink
+  try {
+    const pathname = new URL(url).pathname;
+    if (/\.(xml|xml\.gz|txt|gz|pdf|jpe?g|png|gif|webp|svg|ico|css|js|zip|tar|mp4|mp3|woff2?)$/i.test(pathname)) return true;
+  } catch {
+    return false;
+  }
   return false;
 }
 

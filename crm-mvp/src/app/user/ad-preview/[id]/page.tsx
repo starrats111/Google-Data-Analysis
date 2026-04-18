@@ -346,6 +346,10 @@ export default function AdPreviewPage() {
     if (existingImages.length > 0) {
       setCrawledImages(existingImages);
       setImageUrls(existingImages);
+      // C-016: 后端已完成 OCR 过滤，初始化时直接标记为 done，避免前端误显示"正在检测含文字图片..."
+      setCrawledImagesOcrDone(true);
+      setCrawledImagesOcrProgress(existingImages.length);
+      setCrawledImagesTextFlags({});
     }
     // 若 DB 里已有关键词（后台领取时 SemRush 已写入），标记跳过自动拉取
     if ((preview.keywords || []).length > 0) {

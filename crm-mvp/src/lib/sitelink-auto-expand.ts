@@ -91,8 +91,27 @@ function absolutize(base: string, href: string): string | null {
   }
 }
 
+// 非页面扩展名（sitemap / 静态资源 / 压缩包）
+const NON_PAGE_EXT_RE = /\.(xml|xml\.gz|txt|gz|pdf|jpe?g|png|gif|webp|svg|ico|css|js|zip|tar|mp4|mp3|woff2?)$/i;
+
+function parseSitemapLocs(xml: string, limit: number): string[] {
+  const out: string[] = [];
+  const locRe = /<loc>\s*([^<\s]+)\s*<\/loc>/gi;
+  let m: RegExpExecArray | null;
+  while ((m = locRe.exec(xml)) !== null) {
+    const u = m[1].trim();
+    if (u) out.push(u);
+    if (out.length >= limit) break;
+  }
+  return out;
+}
+
+/**
+ * 抽取 sitemap 下的页面 URL。
+ * 关键：自动识别 sitemap-of-sitemaps（嵌套索引），递归一层展开；
+ * 最终结果过滤所有非页面扩展名（.xml/.txt/.gz/.pdf/媒体文件等）。
+ */
 async function extractFromSitemap(merchantUrl: string, proxyUrl: string | null): Promise<string[]> {
-  const urls: string[] = [];
   for (const path of SITEMAP_URLS) {
     let sm: string | null;
     try {
@@ -101,17 +120,35 @@ async function extractFromSitemap(merchantUrl: string, proxyUrl: string | null):
       continue;
     }
     if (!sm) continue;
-    // 简单抽 <loc>URL</loc>
-    const locRe = /<loc>\s*([^<\s]+)\s*<\/loc>/gi;
-    let m: RegExpExecArray | null;
-    while ((m = locRe.exec(sm)) !== null) {
-      const u = m[1].trim();
-      if (u) urls.push(u);
-      if (urls.length >= 100) break; // 取样即可
+
+    const locs = parseSitemapLocs(sm, 200);
+    if (locs.length === 0) continue;
+
+    // 判定嵌套：<sitemapindex> 标签 or 所有 loc 都指向 .xml
+    const isNested =
+      /<sitemapindex[\s>]/i.test(sm) ||
+      locs.every((u) => /\.xml(\.gz)?(\?|$)/i.test(u));
+
+    let pageUrls: string[] = [];
+    if (isNested) {
+      // 展开前 3 个子 sitemap，每个最多取 40 条页面 URL
+      for (const child of locs.slice(0, 3)) {
+        const childSm = await fetchText(child, proxyUrl).catch(() => null);
+        if (!childSm) continue;
+        const childLocs = parseSitemapLocs(childSm, 40);
+        pageUrls.push(...childLocs);
+        if (pageUrls.length >= 100) break;
+      }
+    } else {
+      pageUrls = locs;
     }
-    if (urls.length > 0) break; // 一个 sitemap 够用
+
+    // 过滤所有非页面扩展名
+    pageUrls = pageUrls.filter((u) => !NON_PAGE_EXT_RE.test(new URL(u, merchantUrl).pathname));
+
+    if (pageUrls.length > 0) return pageUrls;
   }
-  return urls;
+  return [];
 }
 
 async function extractFromRobots(merchantUrl: string, proxyUrl: string | null): Promise<string[]> {
@@ -125,17 +162,31 @@ async function extractFromRobots(merchantUrl: string, proxyUrl: string | null): 
       if (m) {
         const sm = await fetchText(m[1], proxyUrl);
         if (sm) {
-          const locRe = /<loc>\s*([^<\s]+)\s*<\/loc>/gi;
-          let lm: RegExpExecArray | null;
-          while ((lm = locRe.exec(sm)) !== null) {
-            urls.push(lm[1].trim());
-            if (urls.length >= 60) break;
+          const locs = parseSitemapLocs(sm, 60);
+          const isNested =
+            /<sitemapindex[\s>]/i.test(sm) ||
+            locs.every((u) => /\.xml(\.gz)?(\?|$)/i.test(u));
+          if (isNested) {
+            for (const child of locs.slice(0, 3)) {
+              const childSm = await fetchText(child, proxyUrl).catch(() => null);
+              if (!childSm) continue;
+              urls.push(...parseSitemapLocs(childSm, 40));
+              if (urls.length >= 60) break;
+            }
+          } else {
+            urls.push(...locs);
           }
         }
       }
       if (urls.length >= 60) break;
     }
-    return urls;
+    return urls.filter((u) => {
+      try {
+        return !NON_PAGE_EXT_RE.test(new URL(u, merchantUrl).pathname);
+      } catch {
+        return false;
+      }
+    });
   } catch {
     return [];
   }
