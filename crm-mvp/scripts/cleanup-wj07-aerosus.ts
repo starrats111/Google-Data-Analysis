@@ -108,7 +108,6 @@ async function main() {
   const updated = await prisma.ad_creatives.update({
     where: { id: TARGET_AD_CREATIVE_ID },
     data: {
-      final_url: null,
       headlines: null as any,
       descriptions: null as any,
       sitelinks: null as any,
