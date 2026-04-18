@@ -865,23 +865,45 @@ async function discoverSitelinkCandidates(
 
   // 拒因计数（最终一次性汇总到 console.warn，避免刷屏）
   const rejectStats = { notOk: 0, rootPath: 0, duplicate: 0, titleShort: 0, botBlockFallback: 0 };
+
+  // C-017 bot-block 决策：只有当**同批多条**子页都被重定向到首页时，才视为 WAF 整站保护、
+  // 信任原 link.url；单条合法 301（老 URL 下线/季节过期）不触发回退，该 URL 按 rootPath 规则拒掉，
+  // 避免生成"点进去回首页"的虚假 sitelink 被 Google Ads 判为 misleading。
+  const BOT_BLOCK_THRESHOLD = 2;
+  let botBlockSignals = 0;
+
+  /** 单条 meta 是否呈现"子页被 302/301 到根路径"的 bot-block 信号 */
+  const isHomeRedirect = (
+    link: { url: string; text: string },
+    meta: { ok: boolean; finalUrl: string; isSoft404: boolean },
+  ): boolean => {
+    if (!meta.ok || meta.isSoft404) return false;
+    const rawUrl = meta.finalUrl || link.url;
+    let rawPath = ""; try { rawPath = new URL(rawUrl).pathname; } catch {}
+    let linkPath = ""; try { linkPath = new URL(link.url).pathname; } catch {}
+    return (rawPath === "/" || rawPath === "") && linkPath !== "/" && linkPath !== "";
+  };
+
   /** 把单条 meta 结果 + link 转为 candidate（共用给 HTTP / Puppeteer 两个来源），命中则 push */
-  const tryPushCandidate = (link: { url: string; text: string }, meta: { title: string; description: string; ok: boolean; finalUrl: string; isSoft404: boolean }): boolean => {
+  const tryPushCandidate = (
+    link: { url: string; text: string },
+    meta: { title: string; description: string; ok: boolean; finalUrl: string; isSoft404: boolean },
+    botBlockMode: boolean = false,
+  ): boolean => {
     if (candidates.length >= 6) return false;
     if (meta.isSoft404 || !meta.ok) {
       rejectStats.notOk++;
       return false;
     }
     const rawUrl = meta.finalUrl || link.url;
-    // bot-block 回退：部分站点（Cloudflare/WAF）会把爬虫子页请求整站跳转到首页，
-    // 此时 finalUrl.pathname==="/" 但原 link 是真实子页 URL。
-    // 策略：信任原 link.url（站点 HTML 里实际存在的导航链接），并丢弃 meta.title/desc
-    // （那是首页内容，不代表子页），title 走 link.text → titleFromUrlPath 兜底。
+    // bot-block 回退仅在 botBlockMode=true 时激活（调用方已统计信号数达到阈值）。
+    // botBlockMode=false 时，finalUrl.pathname==="/" 的子页会进入下面的 rootPath 分支被拒，
+    // 避免把合法的 301→首页 URL 当作 sitelink 生成。
     let rawPath = "";
     try { rawPath = new URL(rawUrl).pathname; } catch {}
     let linkPath = "";
     try { linkPath = new URL(link.url).pathname; } catch {}
-    const isBotBlockRedirect = (rawPath === "/" || rawPath === "") && linkPath !== "/" && linkPath !== "";
+    const isBotBlockRedirect = botBlockMode && (rawPath === "/" || rawPath === "") && linkPath !== "/" && linkPath !== "";
     const usedRawUrl = isBotBlockRedirect ? link.url : rawUrl;
     const useMetaText = !isBotBlockRedirect;
     if (isBotBlockRedirect) rejectStats.botBlockFallback++;
@@ -922,6 +944,11 @@ async function discoverSitelinkCandidates(
     return true;
   };
 
+  // C-017：pageLinks 分支改为两阶段（收集 meta → 决策 botBlockMode → 统一 push），
+  // 避免"边爬边 push"时因阈值未到就拒掉 home-redirect，或因阈值已到但此前已误拒的不一致。
+  type MetaEntry = { link: { url: string; text: string }; meta: { title: string; description: string; ok: boolean; finalUrl: string; isSoft404: boolean } };
+  const pageLinkDeferred: MetaEntry[] = [];
+
   if (pageLinks.length > 0) {
     const prioritized = [...pageLinks].sort((a, b) => {
       try {
@@ -951,23 +978,19 @@ async function discoverSitelinkCandidates(
 
     let httpOkCount = 0;
     for (const { link, meta } of metaResults) {
-      if (candidates.length >= 6) break;
-      if (!meta.ok) {
-        httpFailedLinks.push(link);
-        continue;
-      }
+      if (!meta.ok) { httpFailedLinks.push(link); continue; }
       httpOkCount++;
-      tryPushCandidate(link, meta);
+      if (isHomeRedirect(link, meta)) botBlockSignals++;
+      pageLinkDeferred.push({ link, meta });
     }
-    // C-015 §4：HTTP 轮次汇总（console.warn → 落 PM2 error.log）
-    console.warn(`[Sitelinks] HTTP L0 完成: 尝试=${metaResults.length} ok=${httpOkCount} 失败=${httpFailedLinks.length} 当前候选=${candidates.length}`);
+    console.warn(`[Sitelinks] HTTP L0 完成: 尝试=${metaResults.length} ok=${httpOkCount} 失败=${httpFailedLinks.length} signals=${botBlockSignals}`);
   }
 
   // ══════════════════════════════════════════════════════
   // C-014 §2.2：HTTP 代理识别导致 ok=false 的 URL，用共享 browser 的 Puppeteer 批量真实访问兜底
   // 这是 L0 的一部分（真实访问，不是降级），只是换用更重的浏览器栈绕过指纹识别。
   // ══════════════════════════════════════════════════════
-  if (candidates.length < 6 && httpFailedLinks.length > 0) {
+  if (pageLinkDeferred.length < 6 && httpFailedLinks.length > 0) {
     const needed = Math.min(httpFailedLinks.length, 8);
     const retryUrls = httpFailedLinks.slice(0, needed).map(l => l.url);
     console.warn(`[Sitelinks] HTTP L0 失败 ${httpFailedLinks.length} 条，Puppeteer 共享 browser 兜底验证前 ${needed} 条`);
@@ -980,16 +1003,27 @@ async function discoverSitelinkCandidates(
       const linkByUrl = new Map(httpFailedLinks.map(l => [l.url, l]));
       let puppeteerOk = 0;
       for (const [url, meta] of puppeteerMetas.entries()) {
-        if (candidates.length >= 6) break;
         const link = linkByUrl.get(url);
         if (!link) continue;
-        if (meta.ok) puppeteerOk++;
-        tryPushCandidate(link, meta);
+        if (!meta.ok) continue;
+        puppeteerOk++;
+        if (isHomeRedirect(link, meta)) botBlockSignals++;
+        pageLinkDeferred.push({ link, meta });
       }
-      console.warn(`[Sitelinks] Puppeteer 兜底完成: 尝试=${puppeteerMetas.size} ok=${puppeteerOk} 总候选=${candidates.length}`);
+      console.warn(`[Sitelinks] Puppeteer 兜底完成: 尝试=${puppeteerMetas.size} ok=${puppeteerOk} signals=${botBlockSignals}`);
     } catch (e) {
       console.warn(`[Sitelinks] Puppeteer 批量兜底异常:`, e instanceof Error ? e.message : e);
     }
+  }
+
+  // C-017 阶段 3：决策 botBlockMode + 统一 push（按收集顺序，维持原优先级）
+  let botBlockMode = botBlockSignals >= BOT_BLOCK_THRESHOLD;
+  if (botBlockMode) {
+    console.warn(`[Sitelinks] bot-block 模式已触发 (signals=${botBlockSignals} ≥ ${BOT_BLOCK_THRESHOLD})，回退使用原 link.url`);
+  }
+  for (const { link, meta } of pageLinkDeferred) {
+    if (candidates.length >= 6) break;
+    tryPushCandidate(link, meta, botBlockMode);
   }
 
   if (candidates.length < 6 && merchantUrl) {
@@ -1020,16 +1054,53 @@ async function discoverSitelinkCandidates(
         }),
       );
 
+      // C-017：navLinks 分支同样改为两阶段（收集 → 决策 → 统一 push），
+      // botBlockSignals 与 pageLinks 分支共享（同一商家同一批探查视为一批）。
+      const navDeferred: MetaEntry[] = [];
       const navHttpFailed: { url: string; text: string }[] = [];
       for (const { link, meta } of navMetaResults) {
-        if (candidates.length >= 6) break;
         if (!meta.ok) { navHttpFailed.push(link); continue; }
         if (meta.isSoft404) continue;
+        if (isHomeRedirect(link, meta)) botBlockSignals++;
+        navDeferred.push({ link, meta });
+      }
+
+      // navLinks 分支也走 Puppeteer 兜底
+      if (navDeferred.length < 6 && navHttpFailed.length > 0) {
+        const needed = Math.min(navHttpFailed.length, 6);
+        const retryUrls = navHttpFailed.slice(0, needed).map(l => l.url);
+        console.log(`[Sitelinks] navLinks HTTP L0 失败 ${navHttpFailed.length} 条，Puppeteer 兜底前 ${needed} 条`);
+        try {
+          const { batchFetchMetaViaPuppeteer } = await import("@/lib/crawler");
+          const puppeteerMetas = await batchFetchMetaViaPuppeteer(retryUrls, proxyUrl, { concurrency: 2, perPageTimeoutMs: 10000 });
+          const linkByUrl = new Map(navHttpFailed.map(l => [l.url, l]));
+          for (const [url, meta] of puppeteerMetas.entries()) {
+            const link = linkByUrl.get(url);
+            if (!link) continue;
+            if (!meta.ok || meta.isSoft404) continue;
+            if (isHomeRedirect(link, meta)) botBlockSignals++;
+            navDeferred.push({ link, meta });
+          }
+          console.warn(`[Sitelinks] navLinks Puppeteer 兜底完成，deferred=${navDeferred.length} signals=${botBlockSignals}`);
+        } catch (e) {
+          console.warn(`[Sitelinks] navLinks Puppeteer 批量兜底异常:`, e instanceof Error ? e.message : e);
+        }
+      }
+
+      // 决策可能因为 navLinks 新增了信号而升级（如 pageLinks 信号不足但 nav 补上阈值）
+      const botBlockModeNav = botBlockSignals >= BOT_BLOCK_THRESHOLD;
+      if (botBlockModeNav && !botBlockMode) {
+        botBlockMode = true;
+        console.warn(`[Sitelinks] bot-block 模式在 navLinks 阶段升级触发 (signals=${botBlockSignals})`);
+      }
+      for (const { link, meta } of navDeferred) {
+        if (candidates.length >= 6) break;
+        // navLinks 分支的 push 仍保留原独立实现（existingNormalized 与 pageLinks 的 usedFinalUrls 去重维度不同），
+        // 但 bot-block 回退语义与 tryPushCandidate 保持一致。
         const rawUrl = meta.finalUrl || link.url;
-        // bot-block 回退（navLinks/HTTP 分支）
         let rawPath = ""; try { rawPath = new URL(rawUrl).pathname; } catch {}
         let linkPath = ""; try { linkPath = new URL(link.url).pathname; } catch {}
-        const isBotBlockRedirect = (rawPath === "/" || rawPath === "") && linkPath !== "/" && linkPath !== "";
+        const isBotBlockRedirect = botBlockMode && (rawPath === "/" || rawPath === "") && linkPath !== "/" && linkPath !== "";
         const usedRawUrl = isBotBlockRedirect ? link.url : rawUrl;
         const useMetaText = !isBotBlockRedirect;
         const realUrl = country ? normalizeLocaleInUrl(usedRawUrl, country) : usedRawUrl;
@@ -1049,50 +1120,6 @@ async function discoverSitelinkCandidates(
         let desc = "";
         if (useMetaText && meta.description) desc = sanitizeAdText(smartTruncate(decodeHtmlEntities(meta.description), 35), { allowExclamation: true });
         if (title.length >= 2) candidates.push({ url: realUrl, title, description: desc });
-      }
-
-      // navLinks 分支也走 Puppeteer 兜底
-      if (candidates.length < 6 && navHttpFailed.length > 0) {
-        const needed = Math.min(navHttpFailed.length, 6);
-        const retryUrls = navHttpFailed.slice(0, needed).map(l => l.url);
-        console.log(`[Sitelinks] navLinks HTTP L0 失败 ${navHttpFailed.length} 条，Puppeteer 兜底前 ${needed} 条`);
-        try {
-          const { batchFetchMetaViaPuppeteer } = await import("@/lib/crawler");
-          const puppeteerMetas = await batchFetchMetaViaPuppeteer(retryUrls, proxyUrl, { concurrency: 2, perPageTimeoutMs: 10000 });
-          const linkByUrl = new Map(navHttpFailed.map(l => [l.url, l]));
-          for (const [url, meta] of puppeteerMetas.entries()) {
-            if (candidates.length >= 6) break;
-            const link = linkByUrl.get(url);
-            if (!link) continue;
-            if (!meta.ok || meta.isSoft404) continue;
-            const rawUrl = meta.finalUrl || link.url;
-            let rawPath = ""; try { rawPath = new URL(rawUrl).pathname; } catch {}
-            let linkPath = ""; try { linkPath = new URL(link.url).pathname; } catch {}
-            const isBotBlockRedirect = (rawPath === "/" || rawPath === "") && linkPath !== "/" && linkPath !== "";
-            const usedRawUrl = isBotBlockRedirect ? link.url : rawUrl;
-            const useMetaText = !isBotBlockRedirect;
-            const realUrl = country ? normalizeLocaleInUrl(usedRawUrl, country) : usedRawUrl;
-            try { const p = new URL(realUrl).pathname; if (p === "/" || p === "") continue; } catch {}
-            const norm = realUrl.replace(/\/$/, "").replace(/^http:/, "https:");
-            if (existingNormalized.has(norm)) continue;
-            existingNormalized.add(norm);
-            let title = "";
-            if (useMetaText && meta.title && !isBlockedTitle(meta.title)) {
-              title = sanitizeAdText(smartTruncate(decodeHtmlEntities(meta.title).replace(/\s*[\|–—]\s*[^|–—]{0,40}$/, "").replace(/\s*-\s*[A-Z][a-zA-Z\s]{0,30}$/, "").trim(), 25));
-            }
-            if (!title || title.length < 2) {
-              const cleanLinkText = sanitizeAdText(decodeHtmlEntities(link.text.trim()));
-              if (cleanLinkText.length >= 2 && !BAD_LINK_TEXTS.includes(cleanLinkText.toLowerCase())) title = smartTruncate(cleanLinkText, 25);
-            }
-            if (!title || title.length < 2) title = titleFromUrlPath(realUrl);
-            let desc = "";
-            if (useMetaText && meta.description) desc = sanitizeAdText(smartTruncate(decodeHtmlEntities(meta.description), 35), { allowExclamation: true });
-            if (title.length >= 2) candidates.push({ url: realUrl, title, description: desc });
-          }
-          console.warn(`[Sitelinks] navLinks Puppeteer 兜底完成，总候选数 ${candidates.length}`);
-        } catch (e) {
-          console.warn(`[Sitelinks] navLinks Puppeteer 批量兜底异常:`, e instanceof Error ? e.message : e);
-        }
       }
     }
   }
