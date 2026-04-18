@@ -16,7 +16,7 @@
 
 import { callAiWithFallback } from "@/lib/ai-service";
 import { resolveLanguageName } from "@/lib/ad-market";
-import { sanitizeAdText, smartTruncate, titleFromUrlPath, decodeHtmlEntities } from "@/lib/crawl-pipeline";
+import { sanitizeAdText, smartTruncate, titleFromUrlPath, decodeHtmlEntities, extractJsonFromAi } from "@/lib/crawl-pipeline";
 
 export interface SitelinkInput {
   url: string;
@@ -134,14 +134,23 @@ ${block}`;
 
   let parsed: unknown;
   try {
-    const text = raw
-      .trim()
-      .replace(/^```(?:json)?\s*/i, "")
-      .replace(/\s*```\s*$/i, "")
-      .trim();
-    parsed = JSON.parse(text);
+    // 先剥离 reasoning 模型的 <think>…</think> 块（DeepSeek R1 / o1 等会在 JSON 前输出思考链）
+    let cleaned = raw.replace(/<think>[\s\S]*?<\/think>/gi, "").trim();
+    // 再剥离残留的未闭合 <think>... 前缀（模型意外截断）
+    const thinkStart = cleaned.indexOf("<think>");
+    if (thinkStart >= 0) {
+      const afterOpen = cleaned.slice(thinkStart + "<think>".length);
+      const firstJson = afterOpen.search(/[\{\[]/);
+      if (firstJson >= 0) cleaned = afterOpen.slice(firstJson);
+    }
+    // 用统一的 JSON 提取器（去 markdown fence + 定位 {…} / […] 片段）
+    parsed = JSON.parse(extractJsonFromAi(cleaned));
   } catch (e) {
-    console.warn("[SitelinkAI] JSON 解析失败，使用页面 meta 兜底:", e instanceof Error ? e.message : e);
+    console.warn(
+      "[SitelinkAI] JSON 解析失败，使用页面 meta 兜底:",
+      e instanceof Error ? e.message : e,
+      "raw_preview:", raw.slice(0, 200).replace(/\s+/g, " "),
+    );
     return fallbackAll(candidates, brand);
   }
 

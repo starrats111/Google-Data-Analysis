@@ -370,11 +370,20 @@ export async function POST(req: NextRequest) {
     (cache.crawlQualityScore === undefined && Array.isArray(cache.links) && cache.links.length < 3)
   );
 
-  if (!cache || !cache.crawledAt || cache.crawlFailed || cacheNeedsRefreshForPromo || cacheLowQuality || cacheHasEmptyLinks) {
+  // C-017: "重新爬取"按钮显式要求强制重爬 sitelinks 候选
+  //   触发条件：types=["sitelinks"]（单独 sitelinks 请求 = 用户点了重新爬取）
+  //              或 cache.sitelinkCandidates 数量 < 3（历史低质 cache 挤掉 sitelink）
+  const forceRecrawlForSitelinks =
+    (types as string[]).includes("sitelinks") && !(types as string[]).includes("core")
+      ? true
+      : (cache?.sitelinkCandidates?.length ?? 0) < 3 && !!cache;
+
+  if (!cache || !cache.crawledAt || cache.crawlFailed || cacheNeedsRefreshForPromo || cacheLowQuality || cacheHasEmptyLinks || forceRecrawlForSitelinks) {
     const reason = !cache || !cache.crawledAt ? '为空'
       : cache.crawlFailed ? '上次失败'
       : cacheLowQuality ? `质量低（score=${cache.crawlQualityScore}, issues=[${cache.crawlQualityIssues?.join(",")}]）`
       : cacheHasEmptyLinks ? 'links 为空（旧缓存命中 splash 页）'
+      : forceRecrawlForSitelinks ? `用户点重新爬取 or sitelinkCandidates(${cache?.sitelinkCandidates?.length ?? 0})<3`
       : '缓存促销无有效折扣，重爬';
     console.log(`[Extensions] crawl_cache ${reason}，重新爬取... forcePuppeteer=${cacheNeedsRefreshForPromo}`);
     // 促销数据通常由 JS 渲染（如公告栏），forcePuppeteer 保证获取到完整 DOM
@@ -452,6 +461,23 @@ export async function POST(req: NextRequest) {
         if (types.includes("optional")) {
           const optionalTypes: string[] = body.optionalTypes || [];
           tasks.push(generateOptionalBatch(cache!, merchantName, merchantUrl, country, optionalTypes, aiRuleProfile, send, ad_language));
+        }
+
+        // ─── sitelinks 单独重爬（前端"重新爬取"按钮）───
+        //   不跑 headlines/descriptions/images，只重跑 discover + auto-expand + sitelink AI writer
+        //   cache 已在上方按需重爬；这里仅基于最新 cache 走 sitelink 独立流水
+        if (types.includes("sitelinks") && !types.includes("core")) {
+          tasks.push(
+            generateSitelinksOnly(
+              cache!,
+              merchantName,
+              merchantUrl,
+              country,
+              adCreative?.id || null,
+              send,
+              ad_language,
+            ),
+          );
         }
 
         await Promise.all(tasks);
@@ -1022,6 +1048,87 @@ ${isNonEnglish ? `\n⚠️ FINAL REMINDER: ALL headlines and descriptions MUST b
   await sitelinkPipeline.catch((e) => {
     console.warn("[Core] await sitelinkPipeline 异常:", e instanceof Error ? e.message : e);
   });
+}
+
+/**
+ * C-017: "重新爬取"按钮专用分支。
+ *   - 只跑 discover + autoExpandSitelinks + sitelink AI writer
+ *   - 复用已重爬的 cache.sitelinkCandidates
+ *   - 回写 ad_creatives.sitelinks，同步推 SSE sitelinks 事件
+ * 不跑 headlines / descriptions / images，避免用户点"重新爬取"时误触其它字段。
+ */
+async function generateSitelinksOnly(
+  cache: CrawlCache,
+  merchantName: string,
+  merchantUrl: string,
+  country: string,
+  adCreativeId: bigint | null,
+  send: (type: string, data: unknown) => void,
+  adLanguageCode?: string,
+): Promise<void> {
+  try {
+    const market = getAdMarketConfig(country);
+    const { autoExpandSitelinks } = await import("@/lib/sitelink-auto-expand");
+    const { generateSitelinkTexts } = await import("@/lib/sitelink-ai-writer");
+
+    const baseline = (cache.sitelinkCandidates || []).map((s) => ({
+      url: s.url,
+      title: s.title,
+      description: s.description,
+    }));
+    const expanded = await autoExpandSitelinks({
+      merchantUrl,
+      country,
+      existing: baseline,
+      targetCount: 6,
+    });
+
+    const unique: typeof expanded = [];
+    const seen = new Set<string>();
+    for (const s of expanded) {
+      const norm = s.url.replace(/\/$/, "").replace(/^http:/, "https:").toLowerCase();
+      if (seen.has(norm)) continue;
+      seen.add(norm);
+      unique.push(s);
+      if (unique.length >= 8) break;
+    }
+
+    if (unique.length === 0) {
+      console.warn(`[SitelinksOnly] 无候选，推空 sitelinks`);
+      send("sitelinks", []);
+      if (adCreativeId) {
+        await prisma.ad_creatives
+          .update({ where: { id: adCreativeId }, data: { sitelinks: [] as any } })
+          .catch((e) => console.warn("[SitelinksOnly] 清空 sitelinks 失败:", e instanceof Error ? e.message : e));
+      }
+      return;
+    }
+
+    const aiInputs = unique.map((s) => ({
+      url: s.url,
+      pageTitle: s.title,
+      pageDescription: s.description,
+    }));
+    const written = await generateSitelinkTexts(aiInputs, {
+      brandRoot: merchantName,
+      country,
+      languageCode: adLanguageCode || market.languageCode,
+    });
+    const final = written.slice(0, 6);
+
+    send("sitelinks", final);
+    if (adCreativeId) {
+      await prisma.ad_creatives
+        .update({ where: { id: adCreativeId }, data: { sitelinks: final as any } })
+        .catch((e) => console.warn("[SitelinksOnly] 持久化失败:", e instanceof Error ? e.message : e));
+    }
+    console.warn(
+      `[SitelinksOnly] discover=${baseline.length} expanded=${expanded.length} ai_written=${written.length} final=${final.length}`,
+    );
+  } catch (e) {
+    console.error("[SitelinksOnly] 异常（推空）:", e instanceof Error ? e.message : e);
+    send("sitelinks", []);
+  }
 }
 
 // Google Ads 审批的 Promotion occasion 枚举
