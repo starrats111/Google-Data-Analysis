@@ -507,13 +507,77 @@ async function generateCore(
   const maxCpc = Number(adSettings?.max_cpc || 0.3);
   const biddingStrategy = adSettings?.bidding_strategy || "MAXIMIZE_CLICKS";
 
-  const sitelinkBlock = cache.sitelinkCandidates.length > 0
-    ? `\nVerified sitelinks (for each: if title is in ALL CAPS or unclear, rewrite it; write desc1+desc2):\n${cache.sitelinkCandidates.map((s, i) => {
-        const isAllCaps = /^[A-Z0-9\s#&!?',.-]+$/.test(s.title.trim()) && s.title.trim().length > 3;
-        const titleNote = isAllCaps ? ` ← ALL CAPS, MUST rewrite to Title Case` : "";
-        return `${i + 1}. title: "${s.title}"${titleNote} → ${s.url}${s.description ? ` (meta: "${s.description}")` : ""}`;
-      }).join("\n")}\n`
-    : "";
+  // ═════════════════════════════════════════════════════════════════
+  // C-016: sitelink 独立 pipeline（与主 AI 流并行，不阻塞 headlines/descriptions）
+  //   1) discover + autoExpandSitelinks 扩源到 ≥ 6 条真实页面 URL
+  //   2) 调用 sitelink-ai-writer 独立 AI，根据页面 meta 写 title/desc1/desc2
+  //   3) 只在候选收齐 + AI 写完后**一次性** send("sitelinks", final)
+  //   4) 不再推"空 sitelinks"让前端过早显示"未找到"
+  // ═════════════════════════════════════════════════════════════════
+  const sitelinkPipeline = (async () => {
+    try {
+      const { autoExpandSitelinks } = await import("@/lib/sitelink-auto-expand");
+      const { generateSitelinkTexts } = await import("@/lib/sitelink-ai-writer");
+
+      const baseline = (cache.sitelinkCandidates || []).map((s) => ({
+        url: s.url,
+        title: s.title,
+        description: s.description,
+      }));
+      const expanded = await autoExpandSitelinks({
+        merchantUrl,
+        country,
+        existing: baseline,
+        targetCount: 6,
+      });
+
+      // 去重（保序），最多取前 8 条作为 AI 输入缓冲
+      const unique: typeof expanded = [];
+      const seen = new Set<string>();
+      for (const s of expanded) {
+        const norm = s.url.replace(/\/$/, "").replace(/^http:/, "https:").toLowerCase();
+        if (seen.has(norm)) continue;
+        seen.add(norm);
+        unique.push(s);
+        if (unique.length >= 8) break;
+      }
+
+      if (unique.length === 0) {
+        console.warn(`[Core] C-016 sitelink pipeline: 无候选，推送空 sitelinks`);
+        send("sitelinks", []);
+        return [] as Array<{ url: string; title: string; desc1: string; desc2: string }>;
+      }
+
+      const aiInputs = unique.map((s) => ({
+        url: s.url,
+        pageTitle: s.title,
+        pageDescription: s.description,
+      }));
+      const written = await generateSitelinkTexts(aiInputs, {
+        brandRoot: merchantName,
+        country,
+        languageCode: adLanguageCode || market.languageCode,
+      });
+      const final = written.slice(0, 6);
+
+      send("sitelinks", final);
+      if (adCreativeId) {
+        await prisma.ad_creatives
+          .update({ where: { id: adCreativeId }, data: { sitelinks: final as any } })
+          .catch((e) => {
+            console.warn("[Core] sitelink 持久化失败:", e instanceof Error ? e.message : e);
+          });
+      }
+      console.warn(
+        `[Core] C-016 sitelink pipeline: discover=${baseline.length} expanded=${expanded.length} ai_written=${written.length} final=${final.length}`,
+      );
+      return final;
+    } catch (e) {
+      console.warn("[Core] sitelink pipeline 异常（推空）:", e instanceof Error ? e.message : e);
+      send("sitelinks", []);
+      return [] as Array<{ url: string; title: string; desc1: string; desc2: string }>;
+    }
+  })();
 
   const semrushBlock = cache.semrushTitles.length > 0
     ? `\nCompetitor headline references (inspiration only, do NOT copy):\n${cache.semrushTitles.slice(0, 8).map((t, i) => `${i + 1}. "${t}"`).join("\n")}\n`
@@ -563,7 +627,7 @@ async function generateCore(
 
   const isNonEnglish = market.languageCode !== "en";
   const langEnforcement = isNonEnglish
-    ? `\n⚠️ CRITICAL LANGUAGE RULE: ALL output (headlines, descriptions, sitelink titles, sitelink descriptions) MUST be written ENTIRELY in ${languageName}. Do NOT use English. Do NOT mix languages. Even if the source website content or examples below are in English, you MUST translate and localize everything into ${languageName}. The target audience speaks ${languageName} — all copy must feel native to them.\n`
+    ? `\n⚠️ CRITICAL LANGUAGE RULE: ALL output (headlines + descriptions) MUST be written ENTIRELY in ${languageName}. Do NOT use English. Do NOT mix languages. Even if the source website content or examples below are in English, you MUST translate and localize everything into ${languageName}. The target audience speaks ${languageName} — all copy must feel native to them.\n`
     : "";
 
   // 动态读取激活人设
@@ -606,14 +670,12 @@ ${keywordsBlock}${priceRangeBlock}${productBlock}
 Website content (extract specific collection names, materials, features, brand voice):
 ${cache.pageText.slice(0, 5000)}
 
-${cache.features.length > 0 ? `Merchant features (REAL — use them as copy hooks):\n${cache.features.slice(0, 20).join("\n")}\n` : ""}${semrushBlock}${sitelinkBlock}
-Return ONLY a JSON object with this exact structure:
+${cache.features.length > 0 ? `Merchant features (REAL — use them as copy hooks):\n${cache.features.slice(0, 20).join("\n")}\n` : ""}${semrushBlock}
+Return ONLY a JSON object with this exact structure (sitelinks are generated by a separate pipeline — DO NOT output sitelink fields here):
 {
   "headlines": ["h1","h2",...],
-  "descriptions": ["d1","d2","d3","d4"],
-  "sitelink_descriptions": [{"title":"...","desc1":"...","desc2":"..."},...]
+  "descriptions": ["d1","d2","d3","d4"]
 }
-Note: "title" in sitelink_descriptions is required. If the original sitelink title is in ALL CAPS or is unclear, rewrite it in Title Case or sentence case (≤25 chars).${isNonEnglish ? ` IMPORTANT: If the original sitelink title is in English, you MUST translate it to ${languageName}. All sitelink titles and descriptions must be in ${languageName}.` : " Otherwise keep it as-is."}
 
 ═══ COPYWRITING CRAFT ═══
 
@@ -694,14 +756,7 @@ Rules:
 - NEVER write in ALL CAPS
 - Must be clearly distinct from headlines (Google penalizes repetition)
 
-═══ SITELINK DESCRIPTIONS — ${cache.sitelinkCandidates.length} entries ═══
-1. "title" REQUIRED — ≤25 chars, Title Case/sentence case, NEVER ALL CAPS
-2. If title is marked "← ALL CAPS, MUST rewrite" — provide a natural, clear replacement
-3. desc1 and desc2 each ≤35 chars — both required
-4. Make desc1 the main benefit hook, desc2 a supporting detail or CTA
-5. No exclamation marks in titles — desc1/desc2 may use at most one
-
-${isNonEnglish ? `\n⚠️ FINAL REMINDER: ALL headlines, descriptions, sitelink titles, and sitelink descriptions MUST be in ${languageName}. The examples above are English templates for structure reference only — you MUST write the actual output in ${languageName}. Do NOT output any English text.\n` : ""}Return ONLY valid JSON, no explanation.`;
+${isNonEnglish ? `\n⚠️ FINAL REMINDER: ALL headlines and descriptions MUST be in ${languageName}. The examples above are English templates for structure reference only — you MUST write the actual output in ${languageName}. Do NOT output any English text.\n` : ""}Return ONLY valid JSON, no explanation.`;
 
   try {
     const raw = await callAiWithFallback("ad_copy", [
@@ -897,44 +952,8 @@ ${isNonEnglish ? `\n⚠️ FINAL REMINDER: ALL headlines, descriptions, sitelink
       console.warn("[Core] C-016 政策/证据闸异常（不阻断）:", gateErr instanceof Error ? gateErr.message : gateErr);
     }
 
-    // 处理站内链接（标题/描述需符合 Google Ads 规范：不能全大写、不能有多余标点）
-    const sitelinkDescs = Array.isArray(parsed.sitelink_descriptions) ? parsed.sitelink_descriptions : [];
-    const sitelinks = cache.sitelinkCandidates.map((s, i) => {
-      const aiDesc = sitelinkDescs[i] || {};
-      const brandName = merchantName.replace(/[.。,，!！?？]+/g, "").trim().slice(0, 15);
-
-      // 优先使用 AI 建议的 title（需通过验证：非全大写、长度合法）
-      const rawCrawlTitle = sanitizeAdText(s.title);
-      let finalTitle = rawCrawlTitle;
-      if (aiDesc.title && typeof aiDesc.title === "string") {
-        const aiTitle = sanitizeAdText(aiDesc.title.trim());
-        const isAllCaps = /^[A-Z0-9\s#&!?',.-]+$/.test(aiTitle) && /[A-Z]{2,}/.test(aiTitle);
-        if (!isAllCaps && aiTitle.length >= 2 && aiTitle.length <= 25) {
-          finalTitle = aiTitle;
-        }
-      }
-
-      return {
-        title: finalTitle.slice(0, 25),
-        url: s.url,
-        desc1: sanitizeAdText(
-          (aiDesc.desc1 && aiDesc.desc1.length <= 35) ? aiDesc.desc1 : (s.description || brandName).slice(0, 35),
-          { allowExclamation: true },
-        ),
-        desc2: sanitizeAdText(
-          (aiDesc.desc2 && aiDesc.desc2.length <= 35) ? aiDesc.desc2 : (brandName || titleFromUrlPath(s.url)).slice(0, 35),
-          { allowExclamation: true },
-        ),
-      };
-    });
-
-    // 爬虫未找到导航链接时直接返回空（真实性原则：不用 AI 伪造 URL）
-    if (sitelinks.length === 0) {
-      console.log("[Core] 爬虫未找到导航链接，站内链接为空（真实性原则，不伪造 URL）");
-    }
-    send("sitelinks", sitelinks);
-
-    // 保存到 DB（初版）
+    // C-016: sitelinks 已由独立 pipeline 产出（见 generateCore 顶部 sitelinkPipeline）。
+    // 此处只持久化 headlines / descriptions / display_path，sitelinks 由 pipeline 自行写入 DB。
     if (adCreativeId) {
       const pathSuggest = suggestDisplayPaths(merchantName, [], country);
       await prisma.ad_creatives.update({
@@ -942,49 +961,13 @@ ${isNonEnglish ? `\n⚠️ FINAL REMINDER: ALL headlines, descriptions, sitelink
         data: {
           headlines: headlines as any,
           descriptions: descriptions as any,
-          sitelinks: sitelinks as any,
           display_path1: pathSuggest.path1,
           display_path2: pathSuggest.path2,
         },
       });
     }
 
-    // ═════════════════════════════════════════════════════════════════
-    // C-016: sitelink 自动扩源（< 4 时触发：sitemap.xml → robots.txt → 常见路径）
-    // 完成后推送 `sitelinks_update` 事件，前端 CSS transition 平滑展开
-    // ═════════════════════════════════════════════════════════════════
-    if (sitelinks.length < 4) {
-      try {
-        const { autoExpandSitelinks } = await import("@/lib/sitelink-auto-expand");
-        const expanded = await autoExpandSitelinks({
-          merchantUrl,
-          country,
-          existing: sitelinks.map((s: any) => ({ url: s.url, title: s.title, description: s.desc1 })),
-          targetCount: 4,
-        });
-        if (expanded.length > sitelinks.length) {
-          const newItems = expanded.slice(sitelinks.length).map((s) => ({
-            title: sanitizeAdText(s.title).slice(0, 25),
-            url: s.url,
-            desc1: sanitizeAdText(s.description || merchantName.slice(0, 35), { allowExclamation: true }),
-            desc2: sanitizeAdText(merchantName.slice(0, 35), { allowExclamation: true }),
-          }));
-          const merged = [...sitelinks, ...newItems];
-          send("sitelinks_update", merged);
-          if (adCreativeId) {
-            await prisma.ad_creatives.update({
-              where: { id: adCreativeId },
-              data: { sitelinks: merged as any },
-            }).catch(() => {});
-          }
-          console.warn(`[Core] C-016 sitelink 扩源：${sitelinks.length} → ${merged.length}`);
-        }
-      } catch (expandErr) {
-        console.warn("[Core] sitelink 扩源失败（不阻断）:", expandErr instanceof Error ? expandErr.message : expandErr);
-      }
-    }
-
-    console.log(`[Core] AI 生成完成: ${headlines.length} 标题, ${descriptions.length} 描述, ${sitelinks.length} 站内链接`);
+    console.log(`[Core] AI 主流完成: ${headlines.length} 标题, ${descriptions.length} 描述（sitelinks 走独立 pipeline）`);
   } catch (err) {
     console.error("[Core] AI 生成失败:", err instanceof Error ? err.message : err);
     // fallback: 使用 padHeadlines/padDescriptions
@@ -1008,22 +991,17 @@ ${isNonEnglish ? `\n⚠️ FINAL REMINDER: ALL headlines, descriptions, sitelink
         adLanguageCode,
       });
       send("descriptions", descriptions);
-      const sitelinks = cache.sitelinkCandidates.map((s) => ({
-        title: sanitizeAdText(s.title).slice(0, 25), url: s.url,
-        desc1: sanitizeAdText(s.description || merchantName.slice(0, 35), { allowExclamation: true }),
-        desc2: sanitizeAdText(merchantName.slice(0, 35), { allowExclamation: true }),
-      }));
-      send("sitelinks", sitelinks);
+      // C-016: sitelinks 由独立 pipeline 负责（不在 fallback 分支重复生成）
       if (adCreativeId) {
         const pathSuggest2 = suggestDisplayPaths(merchantName, [], country);
         await prisma.ad_creatives.update({
           where: { id: adCreativeId },
-          data: { headlines: headlines as any, descriptions: descriptions as any, sitelinks: sitelinks as any, display_path1: pathSuggest2.path1, display_path2: pathSuggest2.path2 },
+          data: { headlines: headlines as any, descriptions: descriptions as any, display_path1: pathSuggest2.path1, display_path2: pathSuggest2.path2 },
         });
       }
     } catch (fallbackErr) {
       console.error("[Core] Fallback 也失败:", fallbackErr);
-      send("headlines", []); send("descriptions", []); send("sitelinks", []);
+      send("headlines", []); send("descriptions", []);
     }
   }
 
@@ -1039,6 +1017,11 @@ ${isNonEnglish ? `\n⚠️ FINAL REMINDER: ALL headlines, descriptions, sitelink
       data: { image_urls: images as any },
     }).catch(() => {});
   }
+
+  // C-016: 等独立 sitelink pipeline 完成（确保 SSE 在 stream 关闭前推送完 sitelinks）
+  await sitelinkPipeline.catch((e) => {
+    console.warn("[Core] await sitelinkPipeline 异常:", e instanceof Error ? e.message : e);
+  });
 }
 
 // Google Ads 审批的 Promotion occasion 枚举

@@ -243,7 +243,8 @@ export async function autoExpandSitelinks(opts: {
   targetCount?: number;
 }): Promise<SitelinkItem[]> {
   const { merchantUrl, country, existing } = opts;
-  const targetCount = opts.targetCount ?? 4;
+  // C-016: Google Ads 允许最多 6 条 sitelinks，默认扩到 6
+  const targetCount = opts.targetCount ?? 6;
   if (!merchantUrl) return existing;
   if (existing.length >= targetCount) return existing;
 

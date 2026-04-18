@@ -903,17 +903,6 @@ export default function AdPreviewPage() {
         return;
       }
 
-      // C-016: sitelink 异步扩源结果（sitemap.xml/robots.txt/常见路径）
-      if (type === "sitelinks_update") {
-        const raw = data as Array<Record<string, string>> | null;
-        if (raw && raw.length > 0) {
-          const items = normalizeSitelinkItems(raw).map((item) => ({ ...item, urlStatus: "valid" as const }));
-          setSitelinks(items);
-          message.success(`站内链接扩源完成：共 ${items.length} 条`);
-        }
-        return;
-      }
-
       if (type === "negative_keywords") {
         const kws = data as string[];
         if (Array.isArray(kws) && kws.length > 0) {
