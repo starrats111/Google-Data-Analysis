@@ -19,7 +19,17 @@
  *   npx tsx scripts/cleanup-wj07-aerosus.ts          # dry-run
  *   npx tsx scripts/cleanup-wj07-aerosus.ts --apply  # 真正执行
  */
-import "dotenv/config";
+import * as fs from "fs";
+import * as path from "path";
+const envPath = path.join(process.cwd(), ".env");
+if (fs.existsSync(envPath)) {
+  for (const line of fs.readFileSync(envPath, "utf8").split("\n")) {
+    const m = line.match(/^\s*([A-Z0-9_]+)\s*=\s*(.*)$/);
+    if (m && !process.env[m[1]]) {
+      process.env[m[1]] = m[2].replace(/^["']|["']$/g, "");
+    }
+  }
+}
 import prisma from "../src/lib/prisma";
 
 const APPLY = process.argv.slice(2).includes("--apply");
