@@ -4,7 +4,8 @@
  */
 import { crawlPage, fetchUrlMeta, fetchPageImages, searchMerchantImages, crawlViaSitemap } from "@/lib/crawler";
 import { getAdMarketConfig } from "@/lib/ad-market";
-import { getProxyUrlForCountry, fetchViaProxy } from "@/lib/crawl-proxy";
+import { getProxyUrlForCountry } from "@/lib/crawl-proxy";
+import { resolveLocalizedUrl } from "@/lib/crawler-localize";
 
 // 全局爬取并发控制：最多 2 个同时执行
 let _crawlActive = 0;
@@ -56,6 +57,13 @@ export interface CrawlCache {
   crawlMethod: string;
   crawlFailed: boolean;
   localizedMerchantUrl?: string;
+  /**
+   * F-CRAWLER-LOCALIZE-TLD：多顶级域本地化命中后的新 URL。
+   * 与 localizedMerchantUrl（路径级 locale，如 /en-sg/ → /en-us/）不同，
+   * 这个字段是 ccTLD 级切换（aerosus.nl → aerosus.be）。
+   * 仅在实际发生切换时有值；未命中时 undefined。
+   */
+  resolvedMerchantUrl?: string;
   crawlQualityScore?: number;    // 0-100，本次爬取质量评分
   crawlQualityIssues?: string[]; // 质量问题标签，如 ['no_links','splash_page']
   rawMentions?: RawMentions;     // 全量 HTML 直接提取的原文片段，不依赖 htmlToText 管道
@@ -768,117 +776,6 @@ function htmlToText(html: string): string {
 
 // ─── 站内链接发现 ───
 
-const PROBE_UAS = [
-  "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)",
-  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36",
-];
-
-async function probeUrlReal(probeUrl: string, merchantDomain: string, proxyUrl?: string): Promise<{ url: string; title: string; desc: string } | null> {
-  let lastFinalUrl = probeUrl;
-  let wasBlocked = false;
-
-  for (const ua of PROBE_UAS) {
-    try {
-      const ctrl = new AbortController();
-      const t = setTimeout(() => ctrl.abort(), 10000);
-      const probeHeaders = { "User-Agent": ua, Accept: "text/html,application/xhtml+xml,*/*", "Accept-Language": "en-US,en;q=0.9" };
-      // 若有目标国家代理，通过代理探查，确保重定向后落在正确 locale（如 /en-us/）
-      const res = proxyUrl
-        ? await fetchViaProxy(probeUrl, { headers: probeHeaders, signal: ctrl.signal }, proxyUrl)
-        : await fetch(probeUrl, { method: "GET", redirect: "follow", signal: ctrl.signal, headers: probeHeaders });
-      clearTimeout(t);
-      const finalUrl = (res as { url: string }).url || probeUrl;
-      lastFinalUrl = finalUrl;
-
-      try {
-        const finalDomain = new URL(finalUrl).hostname.replace(/^www\./, "");
-        if (!finalDomain.includes(merchantDomain) && !merchantDomain.includes(finalDomain)) return null;
-      } catch { return null; }
-
-      try { const p = new URL(finalUrl).pathname; if (p === "/" || p === "") return null; } catch {}
-      // 403 可能是反爬但页面仍可读取，继续尝试下一个 UA；其余 4xx 直接排除
-      if (res.status >= 400 && res.status !== 403) return null;
-
-      const html = await res.text();
-      if (!html || html.length < 500) continue;
-
-      // 检测 Cloudflare/反爬拦截页面（Google Ads 审核时也会被拦截）
-      if (/cf-browser-verification|cf-challenge|challenge-platform|turnstile/i.test(html)) return null;
-
-      const lower = html.toLowerCase();
-      const soft404 = ["page not found", "page introuvable", "seite nicht gefunden", "404", "not found", "does not exist"];
-      const titleMatch = html.match(/<title[^>]*>([^<]*)<\/title>/i);
-      const pageTitle = (titleMatch?.[1] || "").trim();
-      if (soft404.some((s) => pageTitle.toLowerCase().includes(s))) return null;
-      if (html.length < 5000 && soft404.some((s) => lower.includes(s))) return null;
-      if (isBlockedTitle(pageTitle)) { wasBlocked = true; continue; }
-
-      const cleanTitle = sanitizeAdText(smartTruncate(
-        decodeHtmlEntities(pageTitle).replace(/\s*[\|–—]\s*[^|–—]{0,40}$/, "").replace(/\s*-\s*[A-Z][a-zA-Z\s]{0,30}$/, "").trim(), 25));
-
-      const descMatch = html.match(/<meta[^>]+name=["']description["'][^>]+content=["']([^"']*)/i)
-        || html.match(/<meta[^>]+content=["']([^"']*?)["'][^>]+name=["']description["']/i);
-      const desc = sanitizeAdText(smartTruncate(decodeHtmlEntities((descMatch?.[1] || "").trim()), 35), { allowExclamation: true });
-
-      if (!cleanTitle || cleanTitle.length < 2) {
-        const pathTitle = titleFromUrlPath(finalUrl);
-        if (pathTitle.length >= 2) return { url: finalUrl, title: pathTitle, desc };
-        continue;
-      }
-      return { url: finalUrl, title: cleanTitle, desc };
-    } catch {}
-  }
-
-  if (wasBlocked) {
-    const pathTitle = titleFromUrlPath(lastFinalUrl);
-    if (pathTitle.length >= 2) return { url: lastFinalUrl, title: pathTitle, desc: "" };
-  }
-  return null;
-}
-
-/**
- * 生成候选 probe 路径。
- * - targetLocale: 若站点使用 /xx-yy/ locale 前缀（如 en-us），优先生成带 locale 的路径，
- *   避免直连从服务器 IP 访问时被重定向到首页（pathname="/"）而被过滤掉。
- * - 同时兜底生成不带 locale 的路径（适用于无 locale 前缀的站点）。
- */
-function getCommonProbePaths(merchantUrl: string, targetLocale?: string): string[] {
-  let origin = "";
-  try { origin = new URL(merchantUrl).origin; } catch { return []; }
-
-  const AD_PATHS = [
-    // 主要品类
-    "men", "women", "kids", "children",
-    // 促销/活动
-    "sale", "outlet", "new-arrivals", "new",
-    "best-sellers", "featured", "collections",
-    // 内容/品牌页面（时尚品牌常见）
-    "discover", "studio", "editorial", "lookbook", "stories",
-    // 鞋类
-    "shoes", "boots", "sneakers", "loafers", "sandals",
-    // 配件/服装
-    "accessories", "bags", "clothing",
-    // 通用
-    "shop", "products", "promo",
-  ];
-
-  const paths: string[] = [];
-
-  // 优先带 locale 前缀的路径（确保重定向后落在正确 locale，不会退回首页）
-  if (targetLocale) {
-    const locBase = `${origin}/${targetLocale}`;
-    for (const p of AD_PATHS) paths.push(`${locBase}/${p}`);
-  }
-
-  // 不带 locale 的路径作为兜底（适用于无 locale 前缀的站点）
-  for (const p of AD_PATHS) {
-    const plain = `${origin}/${p}`;
-    if (!paths.includes(plain)) paths.push(plain);
-  }
-
-  return paths;
-}
-
 const BAD_LINK_TEXTS = ["click here", "read more", "learn more", "see more", "view more", "here", "link", "click"];
 
 /**
@@ -1063,38 +960,6 @@ async function discoverSitelinkCandidates(
         if (title.length >= 2) candidates.push({ url: realUrl, title, description: desc });
       }
     }
-
-    // 仍不足 6 条时，回退到 getCommonProbePaths（通用探查路径）
-    if (candidates.length < 6) {
-      // 检测站点是否使用 /xx-yy/ locale 前缀（从 pageLinks 或 merchantUrl 推断）
-      let detectedLocaleInSite = false;
-      const localeSegRe = /^\/([a-z]{2}[-_][a-z]{2})\//i;
-      if (localeSegRe.test((() => { try { return new URL(merchantUrl).pathname; } catch { return ""; } })())) {
-        detectedLocaleInSite = true;
-      } else {
-        detectedLocaleInSite = pageLinks.slice(0, 20).some(l => {
-          try { return localeSegRe.test(new URL(l.url).pathname); } catch { return false; }
-        });
-      }
-      // 只有确认站点使用 locale 前缀时才传 targetLocale，避免对无 locale 的站点生成错误路径
-      const targetLocale = detectedLocaleInSite && country
-        ? (COUNTRY_TO_LOCALE[country.toUpperCase()] ?? undefined)
-        : undefined;
-      if (targetLocale) console.log(`[Sitelinks] 检测到 locale 前缀站点，使用 /${targetLocale}/ 生成探查路径`);
-
-      const probePaths = getCommonProbePaths(merchantUrl, targetLocale);
-      for (let i = 0; i < probePaths.length && candidates.length < 6; i += 5) {
-        const results = await Promise.all(probePaths.slice(i, i + 5).map((p) => probeUrlReal(p, merchantDomain, proxyUrl)));
-        for (const r of results) {
-          if (!r || candidates.length >= 6) continue;
-          const rUrl = country ? normalizeLocaleInUrl(r.url, country) : r.url;
-          const norm = rUrl.replace(/\/$/, "").replace(/^http:/, "https:");
-          if (existingNormalized.has(norm)) continue;
-          existingNormalized.add(norm);
-          candidates.push({ url: rUrl, title: r.title, description: r.desc });
-        }
-      }
-    }
   }
 
   return candidates.slice(0, 6);
@@ -1129,9 +994,10 @@ async function collectImages(
   if (links.length === 0 && merchantUrl && allImgs.length < IMG_COLLECT_TARGET) {
     try {
       const baseUrl = new URL(merchantUrl.startsWith("http") ? merchantUrl : `https://${merchantUrl}`);
+      // 行业无关的通用产品/分类路径候选。历史版本里混了大量服装向词（/women /men /new-arrivals），
+      // 对非服装类商家（汽车/家具/3C/美妆）只是无效请求 → 已剔除。
       const COMMON_PATHS = [
-        "/collections/all", "/collections", "/shop", "/products", "/catalog",
-        "/category", "/store", "/sale", "/new-arrivals", "/women", "/men",
+        "/collections", "/shop", "/products", "/catalog", "/category", "/store",
       ];
       effectiveLinks = COMMON_PATHS.map(p => ({
         url: `${baseUrl.origin}${p}`,
@@ -1215,6 +1081,28 @@ export async function buildCrawlCache(
   // ══════════════════════════════════════════════════════
   const { assessCrawlQuality, crawlWithPuppeteerFull, crawlPageWithPuppeteer, extractLinksAndImages } = await import("@/lib/crawler");
   const QUALITY_THRESHOLD = 40;
+
+  // ══════════════════════════════════════════════════════
+  // F-CRAWLER-LOCALIZE-TLD：多顶级域本地化探测（在 locale URL 计算之前做）
+  // 场景：商家填 aerosus.nl + 国家 BE → 切到 aerosus.be（hreflang / 站内切换器 / ccTLD 三层）
+  // 命中时静默替换 merchantUrl，后续所有爬取 / sitelinks / 图片 / 扩展 全部基于新 URL
+  // 替换结果通过 resolvedMerchantUrl 字段返回，由 route 层 UPDATE 到 DB
+  // ══════════════════════════════════════════════════════
+  const originalMerchantUrl = merchantUrl;
+  let resolvedMerchantUrl: string | undefined;
+  if (merchantUrl && country) {
+    try {
+      const _preProxy = await getProxyUrlForCountry(country).catch(() => null);
+      const resolved = await resolveLocalizedUrl(merchantUrl, country, _preProxy ?? undefined);
+      if (resolved.url !== originalMerchantUrl) {
+        console.log(`[CrawlPipeline] TLD 本地化命中（via=${resolved.via}）：${originalMerchantUrl} → ${resolved.url}`);
+        merchantUrl = resolved.url;
+        resolvedMerchantUrl = resolved.url;
+      }
+    } catch (e) {
+      console.warn("[CrawlPipeline] resolveLocalizedUrl 异常（不阻断主流程）:", e instanceof Error ? e.message : e);
+    }
+  }
 
   // 计算 locale URL — 同时生成完整 locale（/en-us/）和纯国家码（/us/）两种格式
   // 不同电商建站平台偏好不同：Shopify 国际化常用 /en-us/，部分品牌自建站用 /us/
@@ -1679,6 +1567,7 @@ export async function buildCrawlCache(
     crawlMethod: crawlResult.method,
     crawlFailed,
     localizedMerchantUrl,
+    resolvedMerchantUrl,
     crawlQualityScore: crawlQuality.score,
     crawlQualityIssues: crawlQuality.issues,
     rawMentions,

@@ -1,5 +1,4 @@
 import { existsSync } from "fs";
-import { getBackendConfig } from "@/lib/system-config";
 import { getProxyUrlForCountry, fetchViaProxy } from "@/lib/crawl-proxy";
 
 export interface PuppeteerPageData {
@@ -43,7 +42,7 @@ export interface CrawlResult {
   html: string;
   links: { url: string; text: string }[];
   images: string[];
-  method: "http" | "sitemap" | "puppeteer" | "cache" | "failed";
+  method: "http" | "sitemap" | "puppeteer" | "failed";
   error?: string;
 }
 
@@ -1143,124 +1142,6 @@ export async function crawlWithPuppeteerFull(url: string, timeoutMs = 30000, pro
 }
 
 // ══════════════════════════════════════════════════════
-// 策略 4: Wayback Machine 缓存（Google Cache 已于2024年3月永久关停，仅保留 Wayback）
-// ══════════════════════════════════════════════════════
-async function crawlViaCache(url: string): Promise<string | null> {
-  const currentYear = new Date().getFullYear();
-
-  // 注意：webcache.googleusercontent.com 已于 2024 年 3 月永久停服，不再使用
-  const cacheUrls = [
-    `https://web.archive.org/web/${currentYear}/${url}`,
-    `https://web.archive.org/web/${currentYear - 1}/${url}`,
-  ];
-
-  for (const cacheUrl of cacheUrls) {
-    try {
-      const headers = buildStealthHeaders(cacheUrl);
-      const ctrl = new AbortController();
-      const t = setTimeout(() => ctrl.abort(), 15000);
-      const res = await fetch(cacheUrl, { signal: ctrl.signal, headers, redirect: "follow" });
-      clearTimeout(t);
-
-      if (!res.ok) continue;
-      const html = await res.text();
-      if (html.length < 3000 || isBlockedPage(html)) continue;
-
-      const htmlLower = html.toLowerCase();
-      if (htmlLower.includes("wayback machine") && html.length < 10000) continue;
-
-      console.log(`[Crawler] Wayback Machine 命中 (${html.length} bytes): ${cacheUrl.slice(0, 60)}`);
-      return html;
-    } catch {}
-  }
-
-  console.log("[Crawler] Wayback Machine 未命中");
-  return null;
-}
-
-// ══════════════════════════════════════════════════════
-// 策略 5: 调用后端 Python 爬虫 API
-// ══════════════════════════════════════════════════════
-async function crawlViaBackendApi(url: string): Promise<CrawlResult | null> {
-  let backendUrl = process.env.BACKEND_API_URL || "";
-  let apiToken = "";
-
-  if (!backendUrl) {
-    try {
-      const config = await getBackendConfig();
-      backendUrl = config.apiUrl;
-      apiToken = config.apiToken;
-    } catch (err) {
-      console.log("[Crawler] 读取后端配置失败:", err instanceof Error ? err.message : err);
-    }
-  }
-
-  if (!backendUrl) {
-    console.log("[Crawler] 未配置后端爬虫 API 地址，跳过后端爬虫");
-    return null;
-  }
-
-  try {
-    console.log(`[Crawler] 调用后端爬虫 API: ${backendUrl}/api/article-gen/crawl`);
-    const ctrl = new AbortController();
-    const t = setTimeout(() => ctrl.abort(), 60000);
-    const headers: Record<string, string> = { "Content-Type": "application/json" };
-    if (apiToken) headers["Authorization"] = `Bearer ${apiToken}`;
-    const res = await fetch(`${backendUrl}/api/article-gen/crawl`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({ url, language: "en" }),
-      signal: ctrl.signal,
-    });
-    clearTimeout(t);
-
-    if (!res.ok) {
-      console.log(`[Crawler] 后端 API 返回 ${res.status}`);
-      return null;
-    }
-
-    const data = await res.json();
-    if (data.crawl_failed && !data.partial) return null;
-
-    const pages: { images?: string[]; links?: { url: string; text: string }[] }[] = data.pages || [];
-    const allImages: string[] = [];
-    const allLinks: { url: string; text: string }[] = [];
-    const seenImgs = new Set<string>();
-
-    for (const page of pages) {
-      if (page.images) {
-        for (const img of page.images) {
-          if (!seenImgs.has(img)) { seenImgs.add(img); allImages.push(img); }
-        }
-      }
-      if (page.links) allLinks.push(...page.links);
-    }
-
-    const subPages: { url: string; images?: string[] }[] = data.sub_pages || [];
-    for (const sp of subPages) {
-      if (sp.images) {
-        for (const img of sp.images) {
-          if (!seenImgs.has(img)) { seenImgs.add(img); allImages.push(img); }
-        }
-      }
-    }
-
-    if (allImages.length > 0 || allLinks.length > 0) {
-      console.log(`[Crawler] 后端 API 成功: ${allLinks.length} 链接, ${allImages.length} 图片`);
-      return {
-        html: "",
-        links: allLinks.slice(0, 30),
-        images: allImages.slice(0, 60),
-        method: "http",
-      };
-    }
-  } catch (err) {
-    console.log(`[Crawler] 后端 API 失败: ${err instanceof Error ? err.message : err}`);
-  }
-  return null;
-}
-
-// ══════════════════════════════════════════════════════
 // HTML 解析工具（增强版：更多图片提取源 + 质量过滤）
 // ══════════════════════════════════════════════════════
 export function extractLinksAndImages(
@@ -1504,32 +1385,46 @@ export async function crawlPage(url: string, country?: string): Promise<CrawlRes
 
   // 1. HTTP 多 UA 隐身爬取（带内容质量评分 + 难度检测）
   const httpResult = await crawlWithHttp(url, country, proxyUrl ?? undefined);
+  // HTTP 抓到的 links/images，用于后续判定"是否已经足够"
+  let httpLinks: { url: string; text: string }[] = [];
+  let httpImages: string[] = [];
   if (httpResult) {
-    let { links, images } = extractLinksAndImages(httpResult.html, url);
+    const extracted = extractLinksAndImages(httpResult.html, url);
+    httpLinks = extracted.links;
+    httpImages = extracted.images;
 
-    // 如果有链接但图片不足，尝试从子页面补充图片
-    if (links.length > 0 && images.length < 3) {
-      console.log(`[Crawler] HTTP 链接够但图片不足 (${images.length})，尝试子页面补图...`);
-      const subPages = links.slice(0, 5).map((l) => l.url);
-      for (const subUrl of subPages) {
-        if (images.length >= 10) break;
-        await randomDelay(200, 500);
-        const subImgs = await fetchPageImages(subUrl);
-        const subDomain = (() => { try { return new URL(subUrl).origin; } catch { return ""; } })();
-        for (const img of subImgs) {
-          let src = img.trim();
-          if (!src || src.startsWith("data:")) continue;
-          if (src.startsWith("//")) src = "https:" + src;
-          if (src.startsWith("/")) src = subDomain + src;
-          if (!src.startsWith("http") || !isQualityImageUrl(src)) continue;
-          if (!images.includes(src)) images.push(src);
+    // 有链接但图片不足时，从前 3 个子页并发（2 路）补图，单请求 10s 超时
+    if (httpLinks.length > 0 && httpImages.length < 3) {
+      console.log(`[Crawler] HTTP 链接够但图片不足 (${httpImages.length})，尝试子页面补图（并发 2 / 最多 3 子页）...`);
+      const subPages = httpLinks.slice(0, 3).map((l) => l.url);
+      for (let i = 0; i < subPages.length && httpImages.length < 10; i += 2) {
+        const batch = subPages.slice(i, i + 2);
+        const batchResults = await Promise.all(
+          batch.map((u) => fetchPageImages(u).catch(() => [] as string[])),
+        );
+        for (let bi = 0; bi < batch.length; bi++) {
+          const subImgs = batchResults[bi];
+          const subDomain = (() => { try { return new URL(batch[bi]).origin; } catch { return ""; } })();
+          for (const img of subImgs) {
+            let src = img.trim();
+            if (!src || src.startsWith("data:")) continue;
+            if (src.startsWith("//")) src = "https:" + src;
+            if (src.startsWith("/")) src = subDomain + src;
+            if (!src.startsWith("http") || !isQualityImageUrl(src)) continue;
+            if (!httpImages.includes(src)) httpImages.push(src);
+          }
         }
       }
     }
 
-    if (links.length > 0 || images.length > 0) {
-      console.log(`[Crawler] HTTP 直接成功: ${links.length} 链接, ${images.length} 图片`);
-      return { html: httpResult.html.slice(0, 150000), links, images, method: "http" };
+    // 放宽触发条件：链接 ≥ 5 或 图 ≥ 10 才视为"HTTP 已足够"，否则继续走 Puppeteer
+    // 对 aerosus.nl 这类 Magento 站（HTTP 200 KB 但 <a> 仅 1 条）关键 —— 直接进 Puppeteer 取真实 navLinks
+    if (httpLinks.length >= 5 || httpImages.length >= 10) {
+      console.log(`[Crawler] HTTP 直接成功: ${httpLinks.length} 链接, ${httpImages.length} 图片`);
+      return { html: httpResult.html.slice(0, 150000), links: httpLinks, images: httpImages, method: "http" };
+    }
+    if (httpLinks.length > 0 || httpImages.length > 0) {
+      console.log(`[Crawler] HTTP 获得结果但不足量 (links=${httpLinks.length}, images=${httpImages.length})，继续走 Puppeteer 补充`);
     }
   }
 
@@ -1540,24 +1435,23 @@ export async function crawlPage(url: string, country?: string): Promise<CrawlRes
     return { html: "", links: sitemapResult.links, images: sitemapResult.images, method: "sitemap" };
   }
 
-  // 3. 根据难度选择下一步策略
+  // 3. Puppeteer 渲染（处理 JS 动态站点）
   const difficulty = httpResult?.difficulty || "medium";
-  console.log(`[Crawler] 站点难度: ${difficulty}，启用高级爬取策略`);
+  console.log(`[Crawler] 站点难度: ${difficulty}，启用 Puppeteer 渲染`);
 
-  if (difficulty === "hard") {
-    // 困难站点：先 Puppeteer（渲染 JS），再后端 API
-    const puppeteerHtml = await crawlWithPuppeteer(url, 35000);
-    if (puppeteerHtml) {
-      const { links, images } = extractLinksAndImages(puppeteerHtml, url);
-      if (links.length > 0 || images.length > 0) {
-        console.log(`[Crawler] Puppeteer 成功 (困难站点): ${links.length} 链接, ${images.length} 图片`);
-        return { html: puppeteerHtml.slice(0, 150000), links, images, method: "puppeteer" };
-      }
+  const puppeteerHtml = await crawlPageWithPuppeteer(url, 35000);
+  if (puppeteerHtml) {
+    const { links, images } = extractLinksAndImages(puppeteerHtml, url);
+    if (links.length > 0 || images.length > 0) {
+      console.log(`[Crawler] Puppeteer 成功: ${links.length} 链接, ${images.length} 图片`);
+      return { html: puppeteerHtml.slice(0, 150000), links, images, method: "puppeteer" };
     }
+  }
 
-    // Puppeteer 重试一次（增加超时）
-    console.log("[Crawler] Puppeteer 首次失败，增加超时重试...");
-    const retryHtml = await crawlWithPuppeteer(url, 50000);
+  // 困难站点：Puppeteer 重试一次（增加超时）
+  if (difficulty === "hard") {
+    console.log("[Crawler] Puppeteer 首次无结果，困难站点增加超时重试...");
+    const retryHtml = await crawlPageWithPuppeteer(url, 50000);
     if (retryHtml) {
       const { links, images } = extractLinksAndImages(retryHtml, url);
       if (links.length > 0 || images.length > 0) {
@@ -1565,43 +1459,12 @@ export async function crawlPage(url: string, country?: string): Promise<CrawlRes
         return { html: retryHtml.slice(0, 150000), links, images, method: "puppeteer" };
       }
     }
-
-    // 后端 API
-    const backendResult = await crawlViaBackendApi(url);
-    if (backendResult) return backendResult;
-  } else {
-    // 标准/中等站点：先后端 API，再 Puppeteer
-    const backendResult = await crawlViaBackendApi(url);
-    if (backendResult) return backendResult;
-
-    const puppeteerHtml = await crawlWithPuppeteer(url);
-    if (puppeteerHtml) {
-      const { links, images } = extractLinksAndImages(puppeteerHtml, url);
-      if (links.length > 0 || images.length > 0) {
-        console.log(`[Crawler] Puppeteer 成功: ${links.length} 链接, ${images.length} 图片`);
-        return { html: puppeteerHtml.slice(0, 150000), links, images, method: "puppeteer" };
-      }
-    }
   }
 
-  // 4. Google Cache / Wayback Machine（最终回退）
-  console.log("[Crawler] 所有直接方案失败，尝试缓存源...");
-  const cacheHtml = await crawlViaCache(url);
-  if (cacheHtml) {
-    const { links, images } = extractLinksAndImages(cacheHtml, url);
-    if (links.length > 0 || images.length > 0) {
-      console.log(`[Crawler] 缓存源成功: ${links.length} 链接, ${images.length} 图片`);
-      return { html: cacheHtml.slice(0, 150000), links, images, method: "cache" };
-    }
-  }
-
-  // 5. 全部失败：如果 HTTP 有低质量结果，尝试提取
-  if (httpResult?.html) {
-    const { links, images } = extractLinksAndImages(httpResult.html, url);
-    if (links.length > 0 || images.length > 0) {
-      console.log(`[Crawler] 使用低质量 HTTP 结果: ${links.length} 链接, ${images.length} 图片`);
-      return { html: httpResult.html.slice(0, 150000), links, images, method: "http" };
-    }
+  // 4. 全部策略无果，若 HTTP 有部分结果则兜底返回（同一份 HTML 不再重复提取）
+  if (httpResult?.html && (httpLinks.length > 0 || httpImages.length > 0)) {
+    console.log(`[Crawler] 全策略失败，回退 HTTP 部分结果: ${httpLinks.length} 链接, ${httpImages.length} 图片`);
+    return { html: httpResult.html.slice(0, 150000), links: httpLinks, images: httpImages, method: "http" };
   }
 
   console.log(`[Crawler] 所有策略均失败: ${url}`);

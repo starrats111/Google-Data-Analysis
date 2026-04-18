@@ -421,6 +421,28 @@ export async function POST(req: NextRequest) {
     console.log(`[Extensions] final_url 本地化: ${adCreative?.final_url || merchant.merchant_url} → ${localizedUrl}`);
   }
 
+  // F-CRAWLER-LOCALIZE-TLD：多顶级域本地化（如 aerosus.nl → aerosus.be）静默替换
+  // cache.resolvedMerchantUrl 由 buildCrawlCache 写入，只有命中 hreflang / switcher / ccTLD 三层之一时才非空
+  // 切换范围：同步更新 user_merchants.merchant_url + ad_creatives.final_url；对用户透明（无弹窗）
+  const resolvedMerchantUrl = (cache as CrawlCache | null)?.resolvedMerchantUrl;
+  if (resolvedMerchantUrl && resolvedMerchantUrl !== (merchant.merchant_url || "")) {
+    const originalUrl = merchant.merchant_url || "";
+    merchantUrl = resolvedMerchantUrl;
+    await prisma.user_merchants.update({
+      where: { id: merchant.id },
+      data: { merchant_url: resolvedMerchantUrl },
+    }).catch((e) => {
+      console.warn(`[Extensions] user_merchants.merchant_url 更新失败:`, e instanceof Error ? e.message : e);
+    });
+    if (adCreative?.id) {
+      await prisma.ad_creatives.update({
+        where: { id: adCreative.id },
+        data: { final_url: resolvedMerchantUrl },
+      }).catch(() => {});
+    }
+    console.log(`[Extensions] TLD 本地化静默替换: ${originalUrl} → ${resolvedMerchantUrl}（user_merchants + ad_creatives 同步更新）`);
+  }
+
   const encoder = new TextEncoder();
   // 用 isClosed flag 跟踪 controller 状态，避免客户端断开后继续写入导致的 "Controller is already closed" 异常
   let isClosed = false;
