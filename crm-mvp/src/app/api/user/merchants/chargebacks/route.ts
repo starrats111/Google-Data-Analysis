@@ -3,8 +3,9 @@ import { apiSuccess, apiError, PLATFORMS } from "@/lib/constants";
 import { withUser } from "@/lib/api-handler";
 import prisma from "@/lib/prisma";
 
-// C-019 R1.1：全员拒付商家聚合（见设计方案 §19.6.3 + §19.6.7）
+// C-019 R1.2：全员拒付商家聚合（见设计方案 §19.6.3 + §19.6.7 + §19.6.8）
 // 非按 user_id 过滤 —— 所有登录用户平权见同一份全员数据（07 决议 ⑥）
+// R1.2 口径：拒付率 = rejected / SUM(commission_amount){全部状态}（§19.6.8）
 
 const DEFAULT_DATE_START = "2025-11-01";
 const VALID_PLATFORMS = new Set<string>(PLATFORMS.map((p) => p.code));
@@ -59,10 +60,10 @@ export const GET = withUser(async (req: NextRequest) => {
                      THEN CAST(commission_amount AS DECIMAL(14,4)) ELSE 0 END), 2) AS total_settled,
       ROUND(SUM(CASE WHEN status = 'rejected'
                      THEN CAST(commission_amount AS DECIMAL(14,4)) ELSE 0 END), 2) AS rejected,
+      -- R1.2：分母改为 SUM(commission_amount) 全部状态（§19.6.8）
       ROUND(
         SUM(CASE WHEN status = 'rejected' THEN CAST(commission_amount AS DECIMAL(14,4)) ELSE 0 END)
-        / NULLIF(SUM(CASE WHEN status IN ('approved','rejected')
-                          THEN CAST(commission_amount AS DECIMAL(14,4)) ELSE 0 END), 0) * 100,
+        / NULLIF(SUM(CAST(commission_amount AS DECIMAL(14,4))), 0) * 100,
         2
       ) AS rate
     FROM affiliate_transactions
@@ -73,7 +74,7 @@ export const GET = withUser(async (req: NextRequest) => {
       ${searchClause}
     GROUP BY platform, merchant_id
     HAVING rate >= ?
-    ORDER BY rate DESC, total_settled DESC
+    ORDER BY rate DESC, total_all DESC
     LIMIT 1000
   `;
 
