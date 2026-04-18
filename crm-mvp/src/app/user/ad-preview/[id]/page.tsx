@@ -158,6 +158,7 @@ export default function AdPreviewPage() {
   const [initialized, setInitialized] = useState(false);
   const autoFetchKwDone = useRef(false);   // 防止重复触发 SemRush 自动拉取
   const autoNegKwDone = useRef(false);     // 防止重复触发否定关键词自动生成
+  const generationInflightRef = useRef<Set<string>>(new Set()); // 防止同类型生成任务重复发起（→ nginx 499）
 
   // 落地页 URL 编辑
   const [editingFinalUrl, setEditingFinalUrl] = useState(false);
@@ -688,6 +689,13 @@ export default function AdPreviewPage() {
     };
 
     const isCore = requestedTypes.includes("core" as any);
+    // 并发去重：防止用户连点按钮 / React StrictMode 重复挂载导致同一 SSE 被提前中断（nginx 499）
+    const inflightKey = isCore ? "core" : [...requestedTypes].sort().join(",");
+    if (generationInflightRef.current.has(inflightKey)) {
+      message.warning("正在生成中，请等待当前任务完成");
+      return;
+    }
+    generationInflightRef.current.add(inflightKey);
     if (isCore) {
       setCoreGenerating(true);
       setSitelinksLoading(true);
@@ -978,6 +986,7 @@ export default function AdPreviewPage() {
     } catch (err: unknown) {
       message.error((err instanceof Error ? err.message : null) || "生成失败，请手动填写");
     } finally {
+      generationInflightRef.current.delete(inflightKey);
       if (isCore) {
         setCoreGenerating(false);
         setSitelinksLoading(false);

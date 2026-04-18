@@ -863,19 +863,46 @@ async function discoverSitelinkCandidates(
   // C-014 §2.2：记录第一轮 HTTP 代理失败的 URL，用于 Puppeteer 批量兜底
   const httpFailedLinks: { url: string; text: string }[] = [];
 
+  // 拒因计数（最终一次性汇总到 console.warn，避免刷屏）
+  const rejectStats = { notOk: 0, rootPath: 0, duplicate: 0, titleShort: 0, botBlockFallback: 0 };
   /** 把单条 meta 结果 + link 转为 candidate（共用给 HTTP / Puppeteer 两个来源），命中则 push */
   const tryPushCandidate = (link: { url: string; text: string }, meta: { title: string; description: string; ok: boolean; finalUrl: string; isSoft404: boolean }): boolean => {
     if (candidates.length >= 6) return false;
-    if (meta.isSoft404 || !meta.ok) return false;
+    if (meta.isSoft404 || !meta.ok) {
+      rejectStats.notOk++;
+      return false;
+    }
     const rawUrl = meta.finalUrl || link.url;
-    const realUrl = country ? normalizeLocaleInUrl(rawUrl, country) : rawUrl;
-    try { const p = new URL(realUrl).pathname; if (p === "/" || p === "") return false; } catch {}
+    // bot-block 回退：部分站点（Cloudflare/WAF）会把爬虫子页请求整站跳转到首页，
+    // 此时 finalUrl.pathname==="/" 但原 link 是真实子页 URL。
+    // 策略：信任原 link.url（站点 HTML 里实际存在的导航链接），并丢弃 meta.title/desc
+    // （那是首页内容，不代表子页），title 走 link.text → titleFromUrlPath 兜底。
+    let rawPath = "";
+    try { rawPath = new URL(rawUrl).pathname; } catch {}
+    let linkPath = "";
+    try { linkPath = new URL(link.url).pathname; } catch {}
+    const isBotBlockRedirect = (rawPath === "/" || rawPath === "") && linkPath !== "/" && linkPath !== "";
+    const usedRawUrl = isBotBlockRedirect ? link.url : rawUrl;
+    const useMetaText = !isBotBlockRedirect;
+    if (isBotBlockRedirect) rejectStats.botBlockFallback++;
+
+    const realUrl = country ? normalizeLocaleInUrl(usedRawUrl, country) : usedRawUrl;
+    try {
+      const p = new URL(realUrl).pathname;
+      if (p === "/" || p === "") {
+        rejectStats.rootPath++;
+        return false;
+      }
+    } catch {}
     const normalizedUrl = realUrl.replace(/\/$/, "").replace(/^http:/, "https:");
-    if (usedFinalUrls.has(normalizedUrl)) return false;
+    if (usedFinalUrls.has(normalizedUrl)) {
+      rejectStats.duplicate++;
+      return false;
+    }
     usedFinalUrls.add(normalizedUrl);
 
     let title = "";
-    if (meta.title && !isBlockedTitle(meta.title)) {
+    if (useMetaText && meta.title && !isBlockedTitle(meta.title)) {
       title = sanitizeAdText(smartTruncate(decodeHtmlEntities(meta.title).replace(/\s*[\|–—]\s*[^|–—]{0,40}$/, "").replace(/\s*-\s*[A-Z][a-zA-Z\s]{0,30}$/, "").trim(), 25));
     }
     if (!title || title.length < 2) {
@@ -883,10 +910,13 @@ async function discoverSitelinkCandidates(
       if (cleanLinkText.length >= 2 && !BAD_LINK_TEXTS.includes(cleanLinkText.toLowerCase())) title = smartTruncate(cleanLinkText, 25);
     }
     if (!title || title.length < 2) title = titleFromUrlPath(realUrl);
-    if (title.length < 2) return false;
+    if (title.length < 2) {
+      rejectStats.titleShort++;
+      return false;
+    }
 
     let desc = "";
-    if (meta.description) desc = sanitizeAdText(smartTruncate(decodeHtmlEntities(meta.description), 35), { allowExclamation: true });
+    if (useMetaText && meta.description) desc = sanitizeAdText(smartTruncate(decodeHtmlEntities(meta.description), 35), { allowExclamation: true });
 
     candidates.push({ url: realUrl, title, description: desc });
     return true;
@@ -994,15 +1024,21 @@ async function discoverSitelinkCandidates(
       for (const { link, meta } of navMetaResults) {
         if (candidates.length >= 6) break;
         if (!meta.ok) { navHttpFailed.push(link); continue; }
-        const rawUrl = meta.finalUrl || link.url;
-        const realUrl = country ? normalizeLocaleInUrl(rawUrl, country) : rawUrl;
         if (meta.isSoft404) continue;
+        const rawUrl = meta.finalUrl || link.url;
+        // bot-block 回退（navLinks/HTTP 分支）
+        let rawPath = ""; try { rawPath = new URL(rawUrl).pathname; } catch {}
+        let linkPath = ""; try { linkPath = new URL(link.url).pathname; } catch {}
+        const isBotBlockRedirect = (rawPath === "/" || rawPath === "") && linkPath !== "/" && linkPath !== "";
+        const usedRawUrl = isBotBlockRedirect ? link.url : rawUrl;
+        const useMetaText = !isBotBlockRedirect;
+        const realUrl = country ? normalizeLocaleInUrl(usedRawUrl, country) : usedRawUrl;
         try { const p = new URL(realUrl).pathname; if (p === "/" || p === "") continue; } catch {}
         const norm = realUrl.replace(/\/$/, "").replace(/^http:/, "https:");
         if (existingNormalized.has(norm)) continue;
         existingNormalized.add(norm);
         let title = "";
-        if (meta.title && !isBlockedTitle(meta.title)) {
+        if (useMetaText && meta.title && !isBlockedTitle(meta.title)) {
           title = sanitizeAdText(smartTruncate(decodeHtmlEntities(meta.title).replace(/\s*[\|–—]\s*[^|–—]{0,40}$/, "").replace(/\s*-\s*[A-Z][a-zA-Z\s]{0,30}$/, "").trim(), 25));
         }
         if (!title || title.length < 2) {
@@ -1011,7 +1047,7 @@ async function discoverSitelinkCandidates(
         }
         if (!title || title.length < 2) title = titleFromUrlPath(realUrl);
         let desc = "";
-        if (meta.description) desc = sanitizeAdText(smartTruncate(decodeHtmlEntities(meta.description), 35), { allowExclamation: true });
+        if (useMetaText && meta.description) desc = sanitizeAdText(smartTruncate(decodeHtmlEntities(meta.description), 35), { allowExclamation: true });
         if (title.length >= 2) candidates.push({ url: realUrl, title, description: desc });
       }
 
@@ -1030,13 +1066,18 @@ async function discoverSitelinkCandidates(
             if (!link) continue;
             if (!meta.ok || meta.isSoft404) continue;
             const rawUrl = meta.finalUrl || link.url;
-            const realUrl = country ? normalizeLocaleInUrl(rawUrl, country) : rawUrl;
+            let rawPath = ""; try { rawPath = new URL(rawUrl).pathname; } catch {}
+            let linkPath = ""; try { linkPath = new URL(link.url).pathname; } catch {}
+            const isBotBlockRedirect = (rawPath === "/" || rawPath === "") && linkPath !== "/" && linkPath !== "";
+            const usedRawUrl = isBotBlockRedirect ? link.url : rawUrl;
+            const useMetaText = !isBotBlockRedirect;
+            const realUrl = country ? normalizeLocaleInUrl(usedRawUrl, country) : usedRawUrl;
             try { const p = new URL(realUrl).pathname; if (p === "/" || p === "") continue; } catch {}
             const norm = realUrl.replace(/\/$/, "").replace(/^http:/, "https:");
             if (existingNormalized.has(norm)) continue;
             existingNormalized.add(norm);
             let title = "";
-            if (meta.title && !isBlockedTitle(meta.title)) {
+            if (useMetaText && meta.title && !isBlockedTitle(meta.title)) {
               title = sanitizeAdText(smartTruncate(decodeHtmlEntities(meta.title).replace(/\s*[\|–—]\s*[^|–—]{0,40}$/, "").replace(/\s*-\s*[A-Z][a-zA-Z\s]{0,30}$/, "").trim(), 25));
             }
             if (!title || title.length < 2) {
@@ -1045,7 +1086,7 @@ async function discoverSitelinkCandidates(
             }
             if (!title || title.length < 2) title = titleFromUrlPath(realUrl);
             let desc = "";
-            if (meta.description) desc = sanitizeAdText(smartTruncate(decodeHtmlEntities(meta.description), 35), { allowExclamation: true });
+            if (useMetaText && meta.description) desc = sanitizeAdText(smartTruncate(decodeHtmlEntities(meta.description), 35), { allowExclamation: true });
             if (title.length >= 2) candidates.push({ url: realUrl, title, description: desc });
           }
           console.warn(`[Sitelinks] navLinks Puppeteer 兜底完成，总候选数 ${candidates.length}`);
@@ -1056,8 +1097,11 @@ async function discoverSitelinkCandidates(
     }
   }
 
-  // C-015 §4：最终汇总行（console.warn 必落盘，方便事后诊断）
-  console.warn(`[Sitelinks] 最终候选 ${candidates.length} 条 / merchantDomain=${merchantDomain} country=${country ?? "-"}`);
+  // C-015 §4：最终汇总行 + 拒因统计（console.warn 必落盘，方便事后诊断）
+  console.warn(
+    `[Sitelinks] 最终候选 ${candidates.length} 条 / merchantDomain=${merchantDomain} country=${country ?? "-"} ` +
+    `| 拒因: notOk=${rejectStats.notOk} rootPath=${rejectStats.rootPath} dup=${rejectStats.duplicate} titleShort=${rejectStats.titleShort} botBlockFallback=${rejectStats.botBlockFallback}`,
+  );
   return candidates.slice(0, 6);
 }
 
