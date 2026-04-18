@@ -968,8 +968,13 @@ export default function AdPreviewPage() {
       } else {
         for (const t of requestedTypes) if (!arrived.has(t) && !arrived.has(t === "price" ? "price_items" : t === "snippet" ? "structured_snippet" : t)) loadingSetters[t]?.(false);
       }
+      // C-014 §1：后端可能在 generate-extensions 内静默替换 TLD（aerosus.nl → aerosus.be）
+      // 此时 user_merchants.merchant_url / ad_creatives.final_url 已 UPDATE，但前端 preview
+      // 是首次 fetch 的快照，需重新 mutate 才能显示最新 URL。
+      // initialized 守门保证不会覆盖用户已编辑的 headlines/descriptions。
+      try { mutate(); } catch {}
     }
-  }, [campaignId, message, callCountryCode, defaultCurrencyCode, defaultLanguageCode, defaultSnippetHeader, targetCountry, preview, adLanguage]);
+  }, [campaignId, message, callCountryCode, defaultCurrencyCode, defaultLanguageCode, defaultSnippetHeader, targetCountry, preview, adLanguage, mutate]);
 
   // ─── 手动输入 URL → 自动获取标题和描述 + 验证 ───
   const fetchAndValidateSitelink = useCallback(async (idx: number) => {

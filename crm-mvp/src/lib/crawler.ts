@@ -865,6 +865,157 @@ export async function crawlPageWithPuppeteer(url: string, timeoutMs = 35000, pro
   return result?.html ?? null;
 }
 
+/**
+ * C-014 §2.2：共享 browser 的批量 Puppeteer meta 抽取。
+ *
+ * 用于 `fetchUrlMeta` HTTP 全挂（被代理身份识别）后的兜底：
+ * 对一批 URL 用真实 headless Chromium 访问，抽 `document.title` / `meta[name=description]` /
+ * `location.href`（作为 finalUrl）。**这仍是 L0 真实访问**，只是换用更重的浏览器栈，绝不放行未验证的候选。
+ *
+ * 并发 2 默认，每条 goto 用 domcontentloaded（不等 networkidle，速度优先）。
+ * 共享同一个 browser 实例减少内存/启动开销；服务器 3.7G 内存下，2 page 峰值 ~80MB 额外。
+ */
+export async function batchFetchMetaViaPuppeteer(
+  urls: string[],
+  proxyUrl?: string,
+  options: { concurrency?: number; perPageTimeoutMs?: number } = {},
+): Promise<Map<string, { title: string; description: string; finalUrl: string; ok: boolean; isSoft404: boolean }>> {
+  const result = new Map<string, { title: string; description: string; finalUrl: string; ok: boolean; isSoft404: boolean }>();
+  if (urls.length === 0) return result;
+
+  const concurrency = Math.max(1, Math.min(options.concurrency ?? 2, 3));
+  const perPageTimeoutMs = options.perPageTimeoutMs ?? 10000;
+
+  const browserPath = findBrowserPath();
+  if (!browserPath) {
+    console.log("[Crawler] batchFetchMetaViaPuppeteer: 未找到浏览器，跳过");
+    return result;
+  }
+
+  const launchArgs = [
+    "--no-sandbox", "--disable-setuid-sandbox",
+    "--disable-blink-features=AutomationControlled",
+    "--window-size=1920,1080",
+    "--disable-dev-shm-usage",
+    "--disable-web-security",
+    "--disable-features=VizDisplayCompositor",
+    "--disable-infobars", "--disable-extensions",
+    "--disable-background-timer-throttling",
+    "--disable-backgrounding-occluded-windows",
+    "--disable-renderer-backgrounding",
+    "--disable-gpu", "--disable-software-rasterizer",
+    "--ignore-certificate-errors",
+  ];
+
+  let proxyServerArg: string | null = null;
+  let proxyAuth: { username: string; password: string } | null = null;
+  if (proxyUrl) {
+    try {
+      const parsed = new URL(proxyUrl);
+      proxyServerArg = `${parsed.protocol}//${parsed.hostname}:${parsed.port}`;
+      if (parsed.username) {
+        proxyAuth = {
+          username: decodeURIComponent(parsed.username),
+          password: decodeURIComponent(parsed.password),
+        };
+      }
+      launchArgs.push(`--proxy-server=${proxyServerArg}`);
+    } catch {
+      launchArgs.push(`--proxy-server=${proxyUrl}`);
+    }
+  }
+
+  let browser: any = null;
+  try {
+    try {
+      const puppeteerExtra = await import("puppeteer-extra");
+      const StealthPlugin = await import("puppeteer-extra-plugin-stealth");
+      const stealthMod = StealthPlugin as any;
+      const stealthFn = stealthMod.default || stealthMod;
+      puppeteerExtra.default.use(stealthFn());
+      browser = await puppeteerExtra.default.launch({
+        executablePath: browserPath,
+        headless: "new" as any,
+        args: launchArgs,
+      });
+    } catch {
+      const puppeteerCore = await import("puppeteer-core");
+      const launcher = puppeteerCore.default || puppeteerCore;
+      browser = await launcher.launch({
+        executablePath: browserPath,
+        headless: "new" as any,
+        args: launchArgs,
+      });
+    }
+
+    const SOFT_404_SIGNALS = [
+      "page not found", "page introuvable", "seite nicht gefunden",
+      "página no encontrada", "pagina non trovata",
+      "404", "not found", "does not exist", "n'existe pas",
+      "nichts gefunden",
+    ];
+
+    const fetchOne = async (url: string) => {
+      let page: any = null;
+      try {
+        page = await browser.newPage();
+        if (proxyAuth) await page.authenticate(proxyAuth);
+        await page.setUserAgent(randomDesktopUA());
+        await page.setViewport({ width: 1366, height: 900 });
+        await page.evaluateOnNewDocument(PUPPETEER_ANTI_DETECT_SCRIPT);
+        await page.setRequestInterception(true);
+        page.on("request", (req: any) => {
+          const t = req.resourceType();
+          if (t === "image" || t === "media" || t === "font" || t === "stylesheet") return req.abort();
+          const u = req.url().toLowerCase();
+          if (/analytics|gtag|fbevents|hotjar|segment|mixpanel|doubleclick|googlesyndication/.test(u)) return req.abort();
+          req.continue();
+        });
+
+        try {
+          await page.goto(url, { waitUntil: "domcontentloaded", timeout: perPageTimeoutMs });
+        } catch {
+          // goto 超时不致命，仍尝试提取
+        }
+
+        const data = await page.evaluate(() => {
+          const title = (document.title || "").trim();
+          const descEl = document.querySelector('meta[name="description"], meta[property="og:description"]') as HTMLMetaElement | null;
+          const description = (descEl?.content || "").trim();
+          return { title, description, finalUrl: location.href };
+        }) as { title: string; description: string; finalUrl: string };
+
+        const titleLower = data.title.toLowerCase();
+        const isSoft404 = SOFT_404_SIGNALS.some((s) => titleLower.includes(s));
+        const ok = !!data.title && data.title.length >= 2;
+        result.set(url, {
+          title: data.title,
+          description: data.description,
+          finalUrl: data.finalUrl || url,
+          ok,
+          isSoft404,
+        });
+      } catch (e) {
+        result.set(url, { title: "", description: "", finalUrl: url, ok: false, isSoft404: false });
+      } finally {
+        try { if (page) await page.close(); } catch {}
+      }
+    };
+
+    // 并发控制：分批
+    for (let i = 0; i < urls.length; i += concurrency) {
+      const batch = urls.slice(i, i + concurrency);
+      await Promise.all(batch.map(fetchOne));
+    }
+  } catch (e) {
+    console.log("[Crawler] batchFetchMetaViaPuppeteer 异常:", e instanceof Error ? e.message : e);
+  } finally {
+    try { if (browser) await browser.close(); } catch {}
+  }
+
+  return result;
+}
+
 export async function crawlWithPuppeteerFull(url: string, timeoutMs = 30000, proxyUrl?: string): Promise<PuppeteerPageData | null> {
   const browserPath = findBrowserPath();
   if (!browserPath) {
@@ -1082,7 +1233,15 @@ export async function crawlWithPuppeteerFull(url: string, timeoutMs = 30000, pro
     };
     try {
       domData = await page.evaluate(() => {
-        const navLinks = Array.from(document.querySelectorAll("nav a, header a, [role=navigation] a"))
+        // C-014 §3：覆盖 Magento / Shopify / WordPress / 企业站常见菜单容器。
+        // 原 "nav a, header a, [role=navigation] a" 对 aerosus.be（Magento）这类站点的
+        // ul.menu / .navigation 结构完全未命中 → navLinks=[]。
+        const navLinks = Array.from(document.querySelectorAll(
+          "nav a, header a, [role=navigation] a, " +
+          "ul.menu a, .navigation a, .main-menu a, .mega-menu a, " +
+          ".site-nav a, .top-menu a, .primary-menu a, " +
+          ".main-navigation a, .header-nav a, .nav-menu a",
+        ))
           .map(a => ({ url: (a as HTMLAnchorElement).href, text: (a as HTMLElement).innerText.trim() }))
           .filter(l => l.url && l.text.length >= 2 && l.text.length <= 40);
         const imgSrcs = new Set<string>();
@@ -1477,9 +1636,24 @@ export async function crawlPage(url: string, country?: string): Promise<CrawlRes
 /**
  * 爬取单个 URL 的标题、描述和最终真实 URL
  * 跟踪重定向获取真实落地页 URL，检测软 404
+ *
+ * C-014 §2.1：L0 层强化
+ *   - 新增 `country` 参数：传入后每轮 UA retry 重新调 getProxyUrlForCountry
+ *     拿新代理 IP（底层 buildSocks5Url 每次 sid 轮换 → 不同出口 IP），4 UA × 4 IP
+ *     避免单 IP 被 Cloudflare/Datadome/PerimeterX 识别后全军覆没
+ *   - html.length < 500 阈值放宽到 < 200（Magento/SPA 首屏 HTML 很短但非 blocked）
+ *   - UA 数 4 → 6
+ *
+ * 兼容性：外部已显式传 `proxyUrl` 的调用保持原行为（仍复用同 IP）；
+ *        仅当同时传了 `country` 但未传 `proxyUrl`，或传 `country` 且希望每轮换 IP 时，
+ *        才启用动态轮换。
  */
-export async function fetchUrlMeta(url: string, proxyUrl?: string): Promise<{ title: string; description: string; ok: boolean; finalUrl: string; isSoft404: boolean }> {
-  const uas = [GOOGLEBOT_UA, ...UA_POOL.sort(() => Math.random() - 0.5).slice(0, 3)];
+export async function fetchUrlMeta(
+  url: string,
+  proxyUrl?: string,
+  country?: string,
+): Promise<{ title: string; description: string; ok: boolean; finalUrl: string; isSoft404: boolean }> {
+  const uas = [GOOGLEBOT_UA, ...UA_POOL.sort(() => Math.random() - 0.5).slice(0, 5)];
 
   const SOFT_404_SIGNALS = [
     "page not found", "page introuvable", "seite nicht gefunden",
@@ -1491,13 +1665,25 @@ export async function fetchUrlMeta(url: string, proxyUrl?: string): Promise<{ ti
   let lastFinalUrl = url;
   let wasBlocked = false;
 
+  // 动态 IP 轮换：若传了 country 且未显式 pin 一个 proxyUrl，则每轮换 IP
+  const shouldRotateIp = !!country && !proxyUrl;
+
   for (const ua of uas) {
+    // 每轮拿一个新 proxy URL（底层 sid 随机 → 出口 IP 变）
+    let currentProxy = proxyUrl;
+    if (shouldRotateIp && country) {
+      try {
+        const { getProxyUrlForCountry } = await import("@/lib/crawl-proxy");
+        currentProxy = (await getProxyUrlForCountry(country)) ?? undefined;
+      } catch {}
+    }
+
     try {
       const ctrl = new AbortController();
       const t = setTimeout(() => ctrl.abort(), 12000);
       const headers = buildStealthHeaders(url, ua);
-      const res = proxyUrl
-        ? await fetchViaProxy(url, { headers: headers as Record<string, string>, signal: ctrl.signal }, proxyUrl)
+      const res = currentProxy
+        ? await fetchViaProxy(url, { headers: headers as Record<string, string>, signal: ctrl.signal }, currentProxy)
         : await fetch(url, { signal: ctrl.signal, headers, redirect: "follow" });
       clearTimeout(t);
 
@@ -1506,7 +1692,7 @@ export async function fetchUrlMeta(url: string, proxyUrl?: string): Promise<{ ti
 
       if (res.ok || res.status < 400) {
         const html = await res.text();
-        if (isBlockedPage(html) || html.length < 500) {
+        if (isBlockedPage(html) || html.length < 200) {
           wasBlocked = true;
           continue;
         }

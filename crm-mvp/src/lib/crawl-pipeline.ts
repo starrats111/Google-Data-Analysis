@@ -69,6 +69,12 @@ export interface CrawlCache {
   rawMentions?: RawMentions;     // 全量 HTML 直接提取的原文片段，不依赖 htmlToText 管道
   /** 从爬取 HTML lang 属性或本地化 URL 检测到的实际语言 code（如 "nl", "fr", "en"），优先于国家默认语言 */
   detectedLanguageCode?: string;
+  /**
+   * C-014 §3：Puppeteer 从真实 DOM（扩容后的选择器）抽取的导航链接。
+   * 与 `navItems`（纯文字数组，用于 Structured Snippet）不同，这里是 { url, text } 对，
+   * 供 `discoverSitelinkCandidates` 作为 Sitelinks 候选来源之一。
+   */
+  navLinks?: { url: string; text: string }[];
 }
 
 // ─── 共享常量和工具函数 ───
@@ -852,8 +858,39 @@ async function discoverSitelinkCandidates(
   const candidates: { url: string; title: string; description: string }[] = [];
   const usedFinalUrls = new Set<string>();
 
+  // C-014 §2.2：记录第一轮 HTTP 代理失败的 URL，用于 Puppeteer 批量兜底
+  const httpFailedLinks: { url: string; text: string }[] = [];
+
+  /** 把单条 meta 结果 + link 转为 candidate（共用给 HTTP / Puppeteer 两个来源），命中则 push */
+  const tryPushCandidate = (link: { url: string; text: string }, meta: { title: string; description: string; ok: boolean; finalUrl: string; isSoft404: boolean }): boolean => {
+    if (candidates.length >= 6) return false;
+    if (meta.isSoft404 || !meta.ok) return false;
+    const rawUrl = meta.finalUrl || link.url;
+    const realUrl = country ? normalizeLocaleInUrl(rawUrl, country) : rawUrl;
+    try { const p = new URL(realUrl).pathname; if (p === "/" || p === "") return false; } catch {}
+    const normalizedUrl = realUrl.replace(/\/$/, "").replace(/^http:/, "https:");
+    if (usedFinalUrls.has(normalizedUrl)) return false;
+    usedFinalUrls.add(normalizedUrl);
+
+    let title = "";
+    if (meta.title && !isBlockedTitle(meta.title)) {
+      title = sanitizeAdText(smartTruncate(decodeHtmlEntities(meta.title).replace(/\s*[\|–—]\s*[^|–—]{0,40}$/, "").replace(/\s*-\s*[A-Z][a-zA-Z\s]{0,30}$/, "").trim(), 25));
+    }
+    if (!title || title.length < 2) {
+      const cleanLinkText = sanitizeAdText(decodeHtmlEntities(link.text.trim()));
+      if (cleanLinkText.length >= 2 && !BAD_LINK_TEXTS.includes(cleanLinkText.toLowerCase())) title = smartTruncate(cleanLinkText, 25);
+    }
+    if (!title || title.length < 2) title = titleFromUrlPath(realUrl);
+    if (title.length < 2) return false;
+
+    let desc = "";
+    if (meta.description) desc = sanitizeAdText(smartTruncate(decodeHtmlEntities(meta.description), 35), { allowExclamation: true });
+
+    candidates.push({ url: realUrl, title, description: desc });
+    return true;
+  };
+
   if (pageLinks.length > 0) {
-    // 优先取路径层级浅（≤3段）、无查询参数的链接，最多尝试 15 条（之前 5 条太少）
     const prioritized = [...pageLinks].sort((a, b) => {
       try {
         const pa = new URL(a.url).pathname.split("/").filter(Boolean).length;
@@ -871,7 +908,8 @@ async function discoverSitelinkCandidates(
     const metaResults = await Promise.all(
       linksToTry.map(async (link) => {
         try {
-          const meta = await fetchUrlMeta(link.url, proxyUrl);
+          // C-014 §2.1：传 country，让 fetchUrlMeta 每轮 UA 换新代理 IP
+          const meta = await fetchUrlMeta(link.url, proxyUrl, country);
           return { link, meta };
         } catch {
           return { link, meta: { title: "", description: "", ok: false, finalUrl: link.url, isSoft404: false } };
@@ -881,32 +919,38 @@ async function discoverSitelinkCandidates(
 
     for (const { link, meta } of metaResults) {
       if (candidates.length >= 6) break;
-      // 对 finalUrl 也做 locale 规范化：即使站点因 IP 地理位置重定向回了错误 locale，
-      // 也将其纠正为目标国家 locale，确保提交给 Google Ads 的链接与目标市场一致
-      const rawUrl = meta.finalUrl || link.url;
-      const realUrl = country ? normalizeLocaleInUrl(rawUrl, country) : rawUrl;
-      if (meta.isSoft404) continue;
-      // 非 200 的 URL Google Ads 审核会拒登
-      if (!meta.ok) continue;
-      try { const p = new URL(realUrl).pathname; if (p === "/" || p === "") continue; } catch {}
-      const normalizedUrl = realUrl.replace(/\/$/, "").replace(/^http:/, "https:");
-      if (usedFinalUrls.has(normalizedUrl)) continue;
-      usedFinalUrls.add(normalizedUrl);
-
-      let title = "";
-      if (meta.title && !isBlockedTitle(meta.title)) {
-        title = sanitizeAdText(smartTruncate(decodeHtmlEntities(meta.title).replace(/\s*[\|–—]\s*[^|–—]{0,40}$/, "").replace(/\s*-\s*[A-Z][a-zA-Z\s]{0,30}$/, "").trim(), 25));
+      if (!meta.ok) {
+        httpFailedLinks.push(link);
+        continue;
       }
-      if (!title || title.length < 2) {
-        const cleanLinkText = sanitizeAdText(decodeHtmlEntities(link.text.trim()));
-        if (cleanLinkText.length >= 2 && !BAD_LINK_TEXTS.includes(cleanLinkText.toLowerCase())) title = smartTruncate(cleanLinkText, 25);
+      tryPushCandidate(link, meta);
+    }
+  }
+
+  // ══════════════════════════════════════════════════════
+  // C-014 §2.2：HTTP 代理识别导致 ok=false 的 URL，用共享 browser 的 Puppeteer 批量真实访问兜底
+  // 这是 L0 的一部分（真实访问，不是降级），只是换用更重的浏览器栈绕过指纹识别。
+  // ══════════════════════════════════════════════════════
+  if (candidates.length < 6 && httpFailedLinks.length > 0) {
+    const needed = Math.min(httpFailedLinks.length, 8);
+    const retryUrls = httpFailedLinks.slice(0, needed).map(l => l.url);
+    console.log(`[Sitelinks] HTTP L0 失败 ${httpFailedLinks.length} 条，Puppeteer 共享 browser 兜底验证前 ${needed} 条`);
+    try {
+      const { batchFetchMetaViaPuppeteer } = await import("@/lib/crawler");
+      const puppeteerMetas = await batchFetchMetaViaPuppeteer(retryUrls, proxyUrl, {
+        concurrency: 2,
+        perPageTimeoutMs: 10000,
+      });
+      const linkByUrl = new Map(httpFailedLinks.map(l => [l.url, l]));
+      for (const [url, meta] of puppeteerMetas.entries()) {
+        if (candidates.length >= 6) break;
+        const link = linkByUrl.get(url);
+        if (!link) continue;
+        tryPushCandidate(link, meta);
       }
-      if (!title || title.length < 2) title = titleFromUrlPath(realUrl);
-
-      let desc = "";
-      if (meta.description) desc = sanitizeAdText(smartTruncate(decodeHtmlEntities(meta.description), 35), { allowExclamation: true });
-
-      if (title.length >= 2) candidates.push({ url: realUrl, title, description: desc });
+      console.log(`[Sitelinks] Puppeteer 兜底完成，总候选数 ${candidates.length}`);
+    } catch (e) {
+      console.warn(`[Sitelinks] Puppeteer 批量兜底异常:`, e instanceof Error ? e.message : e);
     }
   }
 
@@ -929,7 +973,8 @@ async function discoverSitelinkCandidates(
       const navMetaResults = await Promise.all(
         navLinksFiltered.map(async (link) => {
           try {
-            const meta = await fetchUrlMeta(link.url, proxyUrl);
+            // C-014 §2.1：同第一段，传 country 启用 IP 轮换
+            const meta = await fetchUrlMeta(link.url, proxyUrl, country);
             return { link, meta };
           } catch {
             return { link, meta: { title: "", description: "", ok: false, finalUrl: link.url, isSoft404: false } };
@@ -937,11 +982,13 @@ async function discoverSitelinkCandidates(
         }),
       );
 
+      const navHttpFailed: { url: string; text: string }[] = [];
       for (const { link, meta } of navMetaResults) {
         if (candidates.length >= 6) break;
+        if (!meta.ok) { navHttpFailed.push(link); continue; }
         const rawUrl = meta.finalUrl || link.url;
         const realUrl = country ? normalizeLocaleInUrl(rawUrl, country) : rawUrl;
-        if (meta.isSoft404 || !meta.ok) continue;
+        if (meta.isSoft404) continue;
         try { const p = new URL(realUrl).pathname; if (p === "/" || p === "") continue; } catch {}
         const norm = realUrl.replace(/\/$/, "").replace(/^http:/, "https:");
         if (existingNormalized.has(norm)) continue;
@@ -958,6 +1005,45 @@ async function discoverSitelinkCandidates(
         let desc = "";
         if (meta.description) desc = sanitizeAdText(smartTruncate(decodeHtmlEntities(meta.description), 35), { allowExclamation: true });
         if (title.length >= 2) candidates.push({ url: realUrl, title, description: desc });
+      }
+
+      // navLinks 分支也走 Puppeteer 兜底
+      if (candidates.length < 6 && navHttpFailed.length > 0) {
+        const needed = Math.min(navHttpFailed.length, 6);
+        const retryUrls = navHttpFailed.slice(0, needed).map(l => l.url);
+        console.log(`[Sitelinks] navLinks HTTP L0 失败 ${navHttpFailed.length} 条，Puppeteer 兜底前 ${needed} 条`);
+        try {
+          const { batchFetchMetaViaPuppeteer } = await import("@/lib/crawler");
+          const puppeteerMetas = await batchFetchMetaViaPuppeteer(retryUrls, proxyUrl, { concurrency: 2, perPageTimeoutMs: 10000 });
+          const linkByUrl = new Map(navHttpFailed.map(l => [l.url, l]));
+          for (const [url, meta] of puppeteerMetas.entries()) {
+            if (candidates.length >= 6) break;
+            const link = linkByUrl.get(url);
+            if (!link) continue;
+            if (!meta.ok || meta.isSoft404) continue;
+            const rawUrl = meta.finalUrl || link.url;
+            const realUrl = country ? normalizeLocaleInUrl(rawUrl, country) : rawUrl;
+            try { const p = new URL(realUrl).pathname; if (p === "/" || p === "") continue; } catch {}
+            const norm = realUrl.replace(/\/$/, "").replace(/^http:/, "https:");
+            if (existingNormalized.has(norm)) continue;
+            existingNormalized.add(norm);
+            let title = "";
+            if (meta.title && !isBlockedTitle(meta.title)) {
+              title = sanitizeAdText(smartTruncate(decodeHtmlEntities(meta.title).replace(/\s*[\|–—]\s*[^|–—]{0,40}$/, "").replace(/\s*-\s*[A-Z][a-zA-Z\s]{0,30}$/, "").trim(), 25));
+            }
+            if (!title || title.length < 2) {
+              const cleanLinkText = sanitizeAdText(decodeHtmlEntities(link.text.trim()));
+              if (cleanLinkText.length >= 2 && !BAD_LINK_TEXTS.includes(cleanLinkText.toLowerCase())) title = smartTruncate(cleanLinkText, 25);
+            }
+            if (!title || title.length < 2) title = titleFromUrlPath(realUrl);
+            let desc = "";
+            if (meta.description) desc = sanitizeAdText(smartTruncate(decodeHtmlEntities(meta.description), 35), { allowExclamation: true });
+            if (title.length >= 2) candidates.push({ url: realUrl, title, description: desc });
+          }
+          console.log(`[Sitelinks] navLinks Puppeteer 兜底完成，总候选数 ${candidates.length}`);
+        } catch (e) {
+          console.warn(`[Sitelinks] navLinks Puppeteer 批量兜底异常:`, e instanceof Error ? e.message : e);
+        }
       }
     }
   }
@@ -1572,6 +1658,7 @@ export async function buildCrawlCache(
     crawlQualityIssues: crawlQuality.issues,
     rawMentions,
     detectedLanguageCode: detectedLanguageCode ?? undefined,
+    navLinks: puppeteerCache?.navLinks?.slice(0, 50),
   };
   } finally {
     releaseCrawlSlot();
