@@ -17,6 +17,7 @@ import {
   decodeHtmlEntities,
   sanitizeAdText,
 } from "@/lib/crawl-pipeline";
+import { buildCrawlKey, withCrawlInflightLock } from "@/lib/crawl-inflight-lock";
 import { humanizeAdCopyBatch, AD_COPY_ANTI_AI_BLOCK } from "@/lib/humanizer";
 
 function formatAiRuleBlock(profile: unknown | null | undefined, section: "sitelinks" | "ad_copy" | "compliance"): string {
@@ -386,10 +387,16 @@ export async function POST(req: NextRequest) {
       : forceRecrawlForSitelinks ? `用户点重新爬取 or sitelinkCandidates(${cache?.sitelinkCandidates?.length ?? 0})<3`
       : '缓存促销无有效折扣，重爬';
     console.log(`[Extensions] crawl_cache ${reason}，重新爬取... forcePuppeteer=${cacheNeedsRefreshForPromo}`);
+    // C-027 FIX-B：同一 merchantUrl × country 的并发 buildCrawlCache 去重，
+    //   3 路前端并发（Promise.allSettled[core, callouts, promotion]）共享同一个 Promise，
+    //   避免对同商家反复启动 HTTP L0 / Puppeteer（§26.1 F-11 实证 6 轮→1 轮）。
     // 促销数据通常由 JS 渲染（如公告栏），forcePuppeteer 保证获取到完整 DOM
-    const newCache = await buildCrawlCache(merchantUrl, merchantName, country, undefined, {
-      forcePuppeteer: cacheNeedsRefreshForPromo,
-    });
+    const crawlKey = buildCrawlKey(merchantUrl, country);
+    const newCache = await withCrawlInflightLock(crawlKey, () =>
+      buildCrawlCache(merchantUrl, merchantName, country, undefined, {
+        forcePuppeteer: cacheNeedsRefreshForPromo,
+      }),
+    );
     // 竞态保护：若新 cache 无折扣但旧 cache 已有折扣，不覆盖（防止 core/optional 并发写互相覆盖）
     const newPromo = newCache.promoRegex as Record<string, unknown> | null;
     const newHasDiscount = (newPromo?.discount_percent ? Number(newPromo.discount_percent) : 0) > 0 ||

@@ -964,17 +964,51 @@ async function discoverSitelinkCandidates(
       .slice(0, 20)
       .map(l => country ? { ...l, url: normalizeLocaleInUrl(l.url, country) } : l);
 
-    const metaResults = await Promise.all(
-      linksToTry.map(async (link) => {
-        try {
-          // C-014 §2.1：传 country，让 fetchUrlMeta 每轮 UA 换新代理 IP
-          const meta = await fetchUrlMeta(link.url, proxyUrl, country);
-          return { link, meta };
-        } catch {
-          return { link, meta: { title: "", description: "", ok: false, finalUrl: link.url, isSoft404: false } };
-        }
-      }),
+    // C-027 FIX-C：HTTP L0 快速短路
+    //   对 CF 整站保护型站点（如 aerosus.be），HTTP L0 长期 ok=0/20。
+    //   改为先探 4 条（probe 波），若 ok=0 立即跳过剩余 16 条直接走 Puppeteer 兜底。
+    //   收益：aerosus.be 类站 HTTP L0 从 ~16s → ~5s（§26.11.3 实测节约 11s/次）。
+    const PROBE_SIZE = 4;
+    const PROBE_TIMEOUT_MS = 5000;
+    const probeLinks = linksToTry.slice(0, PROBE_SIZE);
+    const remainingLinks = linksToTry.slice(PROBE_SIZE);
+
+    const fetchWithLinkTimeout = async (link: { url: string; text: string }, timeoutMs?: number) => {
+      try {
+        const p = fetchUrlMeta(link.url, proxyUrl, country);
+        const meta = timeoutMs
+          ? await Promise.race([
+              p,
+              new Promise<never>((_, reject) =>
+                setTimeout(() => reject(new Error("probe-timeout")), timeoutMs),
+              ),
+            ])
+          : await p;
+        return { link, meta };
+      } catch {
+        return { link, meta: { title: "", description: "", ok: false, finalUrl: link.url, isSoft404: false } };
+      }
+    };
+
+    const probeResults = await Promise.all(
+      probeLinks.map((link) => fetchWithLinkTimeout(link, PROBE_TIMEOUT_MS)),
     );
+
+    const probeOkCount = probeResults.filter((r) => r.meta.ok).length;
+    const probeShortCircuit = probeLinks.length >= PROBE_SIZE && probeOkCount === 0;
+
+    const metaResults: MetaEntry[] = [...probeResults];
+    if (probeShortCircuit) {
+      console.warn(`[Sitelinks] HTTP L0 probe ${probeLinks.length}/${probeLinks.length} 全灭，短路跳过剩余 ${remainingLinks.length} 条，直接进 Puppeteer 兜底（CF 保护站快速路径）`);
+      for (const link of remainingLinks) {
+        metaResults.push({ link, meta: { title: "", description: "", ok: false, finalUrl: link.url, isSoft404: false } });
+      }
+    } else if (remainingLinks.length > 0) {
+      const restResults = await Promise.all(
+        remainingLinks.map((link) => fetchWithLinkTimeout(link)),
+      );
+      metaResults.push(...restResults);
+    }
 
     let httpOkCount = 0;
     for (const { link, meta } of metaResults) {
@@ -983,7 +1017,7 @@ async function discoverSitelinkCandidates(
       if (isHomeRedirect(link, meta)) botBlockSignals++;
       pageLinkDeferred.push({ link, meta });
     }
-    console.warn(`[Sitelinks] HTTP L0 完成: 尝试=${metaResults.length} ok=${httpOkCount} 失败=${httpFailedLinks.length} signals=${botBlockSignals}`);
+    console.warn(`[Sitelinks] HTTP L0 完成: 尝试=${metaResults.length} ok=${httpOkCount} 失败=${httpFailedLinks.length} signals=${botBlockSignals}${probeShortCircuit ? " (probe短路)" : ""}`);
   }
 
   // ══════════════════════════════════════════════════════

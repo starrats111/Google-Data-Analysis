@@ -1,5 +1,6 @@
 import { existsSync } from "fs";
 import { getProxyUrlForCountry, fetchViaProxy } from "@/lib/crawl-proxy";
+import { acquirePuppeteerSlot, puppeteerSemaphoreStats } from "@/lib/puppeteer-semaphore";
 
 export interface PuppeteerPageData {
   html: string;
@@ -925,6 +926,16 @@ export async function batchFetchMetaViaPuppeteer(
     }
   }
 
+  // C-027 FIX-A：全进程 Puppeteer browser 并发锁在 browser.launch 前
+  let releasePuppeteerSlot: () => void = () => {};
+  try {
+    releasePuppeteerSlot = await acquirePuppeteerSlot(45000);
+  } catch (e) {
+    const stats = puppeteerSemaphoreStats();
+    console.warn(`[Crawler] batchFetchMetaViaPuppeteer 等待 Puppeteer slot 超时 (${stats.active}/${stats.max}, queued=${stats.queued})，降级返回空结果: ${e instanceof Error ? e.message : e}`);
+    return result;
+  }
+
   let browser: any = null;
   try {
     try {
@@ -1039,6 +1050,7 @@ export async function batchFetchMetaViaPuppeteer(
     console.warn("[Crawler] batchFetchMetaViaPuppeteer 异常:", e instanceof Error ? e.message : e);
   } finally {
     try { if (browser) await browser.close(); } catch {}
+    releasePuppeteerSlot();
   }
 
   // C-015 §2 proxy fallback：若传了代理且本轮全军覆没（所有条都 ok=false），再跑一次**无代理** batch
@@ -1106,6 +1118,16 @@ export async function crawlWithPuppeteerFull(url: string, timeoutMs = 30000, pro
       // 解析失败则直接传原始 URL（兼容旧格式）
       launchArgs.push(`--proxy-server=${proxyUrl}`);
     }
+  }
+
+  // C-027 FIX-A：全进程 Puppeteer browser 并发锁在 browser.launch 前
+  let releasePuppeteerSlot: () => void = () => {};
+  try {
+    releasePuppeteerSlot = await acquirePuppeteerSlot(45000);
+  } catch (e) {
+    const stats = puppeteerSemaphoreStats();
+    console.warn(`[Crawler] crawlWithPuppeteerFull 等待 Puppeteer slot 超时 (${stats.active}/${stats.max}, queued=${stats.queued})，降级返回 null: ${e instanceof Error ? e.message : e}`);
+    return null;
   }
 
   let browser: any = null;
@@ -1342,6 +1364,7 @@ export async function crawlWithPuppeteerFull(url: string, timeoutMs = 30000, pro
     return null;
   } finally {
     if (browser) try { await browser.close(); } catch {}
+    releasePuppeteerSlot();
   }
 }
 
