@@ -155,12 +155,38 @@ ${block}`;
   }
 
   const arr = Array.isArray((parsed as any)?.sitelinks) ? (parsed as any).sitelinks : [];
-  const byUrl = new Map<string, { title?: string; desc1?: string; desc2?: string }>();
+
+  // URL 归一化：去尾斜杠 / 统一 https / 小写 host
+  const normUrl = (u: string): string => {
+    try {
+      const parsed = new URL(u);
+      return `https://${parsed.host.toLowerCase()}${parsed.pathname.replace(/\/+$/, "")}${parsed.search}`;
+    } catch {
+      return u.trim().toLowerCase().replace(/\/+$/, "").replace(/^http:/, "https:");
+    }
+  };
+
+  // 归一化 map（URL 匹配的兜底）
+  const byNormUrl = new Map<string, { title?: string; desc1?: string; desc2?: string }>();
   for (const r of arr as Array<{ url?: string; title?: string; desc1?: string; desc2?: string }>) {
-    if (r?.url && typeof r.url === "string") byUrl.set(r.url, r);
+    if (r?.url && typeof r.url === "string") byNormUrl.set(normUrl(r.url), r);
   }
 
-  return candidates.map((c) => buildOne(c, byUrl.get(c.url), brand));
+  // 匹配策略：① 按索引顺序配对（prompt 是按 1..N 编号给 AI 的，顺序最可靠）
+  //            ② 索引落空时用归一化 URL 兜底
+  let matched = 0;
+  const results = candidates.map((c, i) => {
+    const aiByIdx = arr[i] as { url?: string; title?: string; desc1?: string; desc2?: string } | undefined;
+    const aiByUrl = byNormUrl.get(normUrl(c.url));
+    const ai = aiByIdx && (aiByIdx.desc1 || aiByIdx.desc2 || aiByIdx.title) ? aiByIdx : aiByUrl;
+    if (ai && (ai.desc1 || ai.desc2)) matched++;
+    return buildOne(c, ai, brand);
+  });
+
+  console.warn(
+    `[SitelinkAI] AI 映射匹配 ${matched}/${candidates.length}（arr_len=${arr.length}）`,
+  );
+  return results;
 }
 
 function buildOne(
