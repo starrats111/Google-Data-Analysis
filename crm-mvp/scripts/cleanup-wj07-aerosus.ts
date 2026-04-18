@@ -21,6 +21,7 @@
  */
 import * as fs from "fs";
 import * as path from "path";
+
 const envPath = path.join(process.cwd(), ".env");
 if (fs.existsSync(envPath)) {
   for (const line of fs.readFileSync(envPath, "utf8").split("\n")) {
@@ -30,12 +31,13 @@ if (fs.existsSync(envPath)) {
     }
   }
 }
-import prisma from "../src/lib/prisma";
 
 const APPLY = process.argv.slice(2).includes("--apply");
 const TARGET_AD_CREATIVE_ID = BigInt(390);
 
 async function main() {
+  const { default: prisma } = await import("../src/lib/prisma");
+
   console.log(`=== C-016 wj07 Aerosus 清洗 ===`);
   console.log(`模式: ${APPLY ? "APPLY（真正执行）" : "DRY-RUN（仅输出计划）"}`);
   console.log(`目标 ad_creatives.id = ${TARGET_AD_CREATIVE_ID}\n`);
@@ -99,6 +101,7 @@ async function main() {
     console.log(`  - crawl_cache → null（触发重爬）`);
     console.log(`  - 不动 user_merchants（07 明确要求）`);
     console.log(`\n[DRY-RUN] 未写入。再次用 --apply 真正执行。`);
+    await prisma.$disconnect();
     return;
   }
 
@@ -125,13 +128,11 @@ async function main() {
   console.log(`  4. 重新爬取 aerosus.be 全链路（生成合规 crawl_cache）`);
   console.log(`  5. AI 用荷语（BE 国家默认）生成全新 headlines/descriptions/sitelinks/callouts`);
   console.log(`  6. 走 C-016 Google 政策闸 + claim 验证软闸`);
+
+  await prisma.$disconnect();
 }
 
-main()
-  .catch((err) => {
-    console.error("❌ 清洗脚本异常:", err);
-    process.exit(1);
-  })
-  .finally(async () => {
-    await prisma.$disconnect();
-  });
+main().catch((err) => {
+  console.error("❌ 清洗脚本异常:", err);
+  process.exit(1);
+});
