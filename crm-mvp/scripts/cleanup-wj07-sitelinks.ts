@@ -28,7 +28,9 @@ if (fs.existsSync(envPath)) {
 }
 
 const APPLY = process.argv.slice(2).includes("--apply");
-const TARGET_AD_CREATIVE_ID = BigInt(390);
+// 支持 --id=<n> 参数覆盖（默认 401 = wj07 Aerosus BE 当前活跃 creative）
+const idArg = process.argv.find((a) => a.startsWith("--id="));
+const TARGET_AD_CREATIVE_ID = BigInt(idArg ? idArg.split("=")[1] : "401");
 
 async function main() {
   const { default: prisma } = await import("../src/lib/prisma");
