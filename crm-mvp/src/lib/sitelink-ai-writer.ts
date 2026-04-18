@@ -111,8 +111,8 @@ Strict rules:
 - Do not use ALL CAPS words longer than 3 characters.
 - Keep brand voice consistent (${brand}).
 
-Return STRICT JSON, no markdown fences, no explanation:
-{"sitelinks":[{"url":"<original url>","title":"...","desc1":"...","desc2":"..."}, ...]}
+Return STRICT JSON, no markdown fences, no explanation. Keep the SAME ORDER as the numbered entries below (index 1..${candidates.length}). Do NOT output url field — only title/desc1/desc2:
+{"sitelinks":[{"title":"...","desc1":"...","desc2":"..."}, ...]}
 
 Entries:
 ${block}`;
@@ -130,6 +130,14 @@ ${block}`;
   } catch (e) {
     console.warn("[SitelinkAI] 调用失败，使用页面 meta 兜底:", e instanceof Error ? e.message : e);
     return fallbackAll(candidates, brand);
+  }
+
+  // C-023 诊断开关：SITELINK_AI_DUMP=1 时 dump AI 原始响应全文（仅排查期打开，生产默认关闭）
+  const dumpRaw = process.env.SITELINK_AI_DUMP === "1";
+  if (dumpRaw) {
+    console.warn(
+      `[SitelinkAI-RAW] len=${raw.length} head=${JSON.stringify(raw.slice(0, 1200))}`,
+    );
   }
 
   let parsed: unknown;
@@ -154,32 +162,21 @@ ${block}`;
     return fallbackAll(candidates, brand);
   }
 
-  const arr = Array.isArray((parsed as any)?.sitelinks) ? (parsed as any).sitelinks : [];
+  const arr: Array<{ title?: string; desc1?: string; desc2?: string }> =
+    Array.isArray((parsed as any)?.sitelinks) ? (parsed as any).sitelinks : [];
 
-  // URL 归一化：去尾斜杠 / 统一 https / 小写 host
-  const normUrl = (u: string): string => {
-    try {
-      const parsed = new URL(u);
-      return `https://${parsed.host.toLowerCase()}${parsed.pathname.replace(/\/+$/, "")}${parsed.search}`;
-    } catch {
-      return u.trim().toLowerCase().replace(/\/+$/, "").replace(/^http:/, "https:");
-    }
-  };
-
-  // 归一化 map（URL 匹配的兜底）
-  const byNormUrl = new Map<string, { title?: string; desc1?: string; desc2?: string }>();
-  for (const r of arr as Array<{ url?: string; title?: string; desc1?: string; desc2?: string }>) {
-    if (r?.url && typeof r.url === "string") byNormUrl.set(normUrl(r.url), r);
+  if (dumpRaw) {
+    console.warn(
+      `[SitelinkAI-PARSED] arr_len=${arr.length} first=${JSON.stringify(arr[0] ?? null)}`,
+    );
   }
 
-  // 匹配策略：① 按索引顺序配对（prompt 是按 1..N 编号给 AI 的，顺序最可靠）
-  //            ② 索引落空时用归一化 URL 兜底
+  // 严格按索引配对：prompt 给 AI 的就是 1..N 编号，URL 不让 AI 回传（避免幻觉）。
+  // 数组长度不等 / 单项字段缺失 → 该条进 fallback（不再做 URL 兜底匹配）。
   let matched = 0;
   const results = candidates.map((c, i) => {
-    const aiByIdx = arr[i] as { url?: string; title?: string; desc1?: string; desc2?: string } | undefined;
-    const aiByUrl = byNormUrl.get(normUrl(c.url));
-    const ai = aiByIdx && (aiByIdx.desc1 || aiByIdx.desc2 || aiByIdx.title) ? aiByIdx : aiByUrl;
-    if (ai && (ai.desc1 || ai.desc2)) matched++;
+    const ai = arr[i];
+    if (ai && (ai.desc1 || ai.desc2 || ai.title)) matched++;
     return buildOne(c, ai, brand);
   });
 
