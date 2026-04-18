@@ -71,7 +71,7 @@ async function main() {
   }
   const campaign = await prisma.campaigns.findFirst({
     where: { id: adGroup.campaign_id, is_deleted: 0 },
-    select: { id: true, user_id: true, user_merchant_id: true, target_country: true, name: true },
+    select: { id: true, user_id: true, user_merchant_id: true, target_country: true, campaign_name: true },
   });
   if (!campaign) {
     console.error(`❌ 未找到 campaign.id=${adGroup.campaign_id}，终止`);
@@ -82,7 +82,7 @@ async function main() {
     select: { id: true, merchant_name: true, merchant_url: true },
   });
 
-  console.log(`[Target] campaign=${campaign.name} user_id=${campaign.user_id} target_country=${campaign.target_country}`);
+  console.log(`[Target] campaign=${campaign.campaign_name} user_id=${campaign.user_id} target_country=${campaign.target_country}`);
   console.log(`[Target] merchant=${merchant?.merchant_name} (${merchant?.merchant_url})`);
   console.log(`[Before] final_url=${ac.final_url}`);
   console.log(`[Before] headlines=${Array.isArray(ac.headlines) ? (ac.headlines as unknown[]).length : 0} 条`);
