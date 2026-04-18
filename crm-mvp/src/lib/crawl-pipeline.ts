@@ -852,8 +852,9 @@ async function discoverSitelinkCandidates(
   let merchantDomain = "";
   try { merchantDomain = new URL(merchantUrl).hostname.replace(/^www\./, ""); } catch {}
   const proxyUrl = country ? (await getProxyUrlForCountry(country) ?? undefined) : undefined;
-  if (proxyUrl) console.log(`[Sitelinks] 使用 ${country} 代理探查候选链接`);
-  else if (country) console.log(`[Sitelinks] 无 ${country} 代理，直连探查（locale 将按目标国家规范化）`);
+  // C-015 §4：用 console.warn 以便 Next.js 16 prod 下也能落进 PM2 error.log 用于诊断
+  if (proxyUrl) console.warn(`[Sitelinks] 使用 ${country} 代理探查候选链接，pageLinks=${pageLinks.length} navLinks=${puppeteerNavLinks?.length ?? 0}`);
+  else if (country) console.warn(`[Sitelinks] 无 ${country} 代理，直连探查（locale 按目标国家规范化），pageLinks=${pageLinks.length}`);
 
   const candidates: { url: string; title: string; description: string }[] = [];
   const usedFinalUrls = new Set<string>();
@@ -917,14 +918,18 @@ async function discoverSitelinkCandidates(
       }),
     );
 
+    let httpOkCount = 0;
     for (const { link, meta } of metaResults) {
       if (candidates.length >= 6) break;
       if (!meta.ok) {
         httpFailedLinks.push(link);
         continue;
       }
+      httpOkCount++;
       tryPushCandidate(link, meta);
     }
+    // C-015 §4：HTTP 轮次汇总（console.warn → 落 PM2 error.log）
+    console.warn(`[Sitelinks] HTTP L0 完成: 尝试=${metaResults.length} ok=${httpOkCount} 失败=${httpFailedLinks.length} 当前候选=${candidates.length}`);
   }
 
   // ══════════════════════════════════════════════════════
@@ -934,7 +939,7 @@ async function discoverSitelinkCandidates(
   if (candidates.length < 6 && httpFailedLinks.length > 0) {
     const needed = Math.min(httpFailedLinks.length, 8);
     const retryUrls = httpFailedLinks.slice(0, needed).map(l => l.url);
-    console.log(`[Sitelinks] HTTP L0 失败 ${httpFailedLinks.length} 条，Puppeteer 共享 browser 兜底验证前 ${needed} 条`);
+    console.warn(`[Sitelinks] HTTP L0 失败 ${httpFailedLinks.length} 条，Puppeteer 共享 browser 兜底验证前 ${needed} 条`);
     try {
       const { batchFetchMetaViaPuppeteer } = await import("@/lib/crawler");
       const puppeteerMetas = await batchFetchMetaViaPuppeteer(retryUrls, proxyUrl, {
@@ -942,13 +947,15 @@ async function discoverSitelinkCandidates(
         perPageTimeoutMs: 10000,
       });
       const linkByUrl = new Map(httpFailedLinks.map(l => [l.url, l]));
+      let puppeteerOk = 0;
       for (const [url, meta] of puppeteerMetas.entries()) {
         if (candidates.length >= 6) break;
         const link = linkByUrl.get(url);
         if (!link) continue;
+        if (meta.ok) puppeteerOk++;
         tryPushCandidate(link, meta);
       }
-      console.log(`[Sitelinks] Puppeteer 兜底完成，总候选数 ${candidates.length}`);
+      console.warn(`[Sitelinks] Puppeteer 兜底完成: 尝试=${puppeteerMetas.size} ok=${puppeteerOk} 总候选=${candidates.length}`);
     } catch (e) {
       console.warn(`[Sitelinks] Puppeteer 批量兜底异常:`, e instanceof Error ? e.message : e);
     }
@@ -1040,7 +1047,7 @@ async function discoverSitelinkCandidates(
             if (meta.description) desc = sanitizeAdText(smartTruncate(decodeHtmlEntities(meta.description), 35), { allowExclamation: true });
             if (title.length >= 2) candidates.push({ url: realUrl, title, description: desc });
           }
-          console.log(`[Sitelinks] navLinks Puppeteer 兜底完成，总候选数 ${candidates.length}`);
+          console.warn(`[Sitelinks] navLinks Puppeteer 兜底完成，总候选数 ${candidates.length}`);
         } catch (e) {
           console.warn(`[Sitelinks] navLinks Puppeteer 批量兜底异常:`, e instanceof Error ? e.message : e);
         }
@@ -1048,6 +1055,8 @@ async function discoverSitelinkCandidates(
     }
   }
 
+  // C-015 §4：最终汇总行（console.warn 必落盘，方便事后诊断）
+  console.warn(`[Sitelinks] 最终候选 ${candidates.length} 条 / merchantDomain=${merchantDomain} country=${country ?? "-"}`);
   return candidates.slice(0, 6);
 }
 

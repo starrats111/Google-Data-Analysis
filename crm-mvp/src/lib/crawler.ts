@@ -955,6 +955,18 @@ export async function batchFetchMetaViaPuppeteer(
       "nichts gefunden",
     ];
 
+    // C-015 §2：Cloudflare / Datadome / PerimeterX 挑战页标题黑名单
+    // 命中则视为未通过（ok=false, isSoft404=true），不会被当成合法 sitelink 候选
+    const CHALLENGE_TITLES = [
+      "just a moment",
+      "attention required",
+      "checking your browser",
+      "one moment, please",
+      "access denied",
+      "please wait...",
+      "bot verification",
+    ];
+
     const fetchOne = async (url: string) => {
       let page: any = null;
       try {
@@ -978,6 +990,21 @@ export async function batchFetchMetaViaPuppeteer(
           // goto 超时不致命，仍尝试提取
         }
 
+        // C-015 §2：给 Cloudflare JS 挑战 6s 窗口。若 title 从"Just a moment..."变成真实 title 就立刻继续
+        try {
+          await page.waitForFunction(
+            () => {
+              const t = (document.title || "").toLowerCase();
+              if (!t) return false;
+              const bad = ["just a moment", "attention required", "checking your browser", "one moment, please"];
+              return !bad.some(b => t.includes(b));
+            },
+            { timeout: 6000, polling: 500 },
+          );
+        } catch {
+          // 6s 内挑战页没过也继续走；下面的 CHALLENGE_TITLES 判定会把它标记为 ok=false
+        }
+
         const data = await page.evaluate(() => {
           const title = (document.title || "").trim();
           const descEl = document.querySelector('meta[name="description"], meta[property="og:description"]') as HTMLMetaElement | null;
@@ -986,14 +1013,15 @@ export async function batchFetchMetaViaPuppeteer(
         }) as { title: string; description: string; finalUrl: string };
 
         const titleLower = data.title.toLowerCase();
-        const isSoft404 = SOFT_404_SIGNALS.some((s) => titleLower.includes(s));
-        const ok = !!data.title && data.title.length >= 2;
+        const isChallenge = CHALLENGE_TITLES.some((s) => titleLower.includes(s));
+        const isSoft404 = !isChallenge && SOFT_404_SIGNALS.some((s) => titleLower.includes(s));
+        const ok = !isChallenge && !!data.title && data.title.length >= 2;
         result.set(url, {
-          title: data.title,
-          description: data.description,
+          title: isChallenge ? "" : data.title,
+          description: isChallenge ? "" : data.description,
           finalUrl: data.finalUrl || url,
           ok,
-          isSoft404,
+          isSoft404: isChallenge || isSoft404,
         });
       } catch (e) {
         result.set(url, { title: "", description: "", finalUrl: url, ok: false, isSoft404: false });
@@ -1008,9 +1036,26 @@ export async function batchFetchMetaViaPuppeteer(
       await Promise.all(batch.map(fetchOne));
     }
   } catch (e) {
-    console.log("[Crawler] batchFetchMetaViaPuppeteer 异常:", e instanceof Error ? e.message : e);
+    console.warn("[Crawler] batchFetchMetaViaPuppeteer 异常:", e instanceof Error ? e.message : e);
   } finally {
     try { if (browser) await browser.close(); } catch {}
+  }
+
+  // C-015 §2 proxy fallback：若传了代理且本轮全军覆没（所有条都 ok=false），再跑一次**无代理** batch
+  // 原理同 fetchUrlMeta 的 L0b：服务器直连出口可达 ≈ 审核可达
+  const hasProxy = !!proxyUrl;
+  const allFailed = result.size > 0 && Array.from(result.values()).every(v => !v.ok);
+  if (hasProxy && allFailed) {
+    console.warn(`[Crawler] batchFetchMetaViaPuppeteer 代理全灭 (${result.size} 条全败)，回退无代理再试一次`);
+    // 递归一次但去掉 proxyUrl；失败结果允许被覆盖
+    try {
+      const fallbackResult = await batchFetchMetaViaPuppeteer(urls, undefined, options);
+      for (const [u, v] of fallbackResult.entries()) {
+        if (v.ok) result.set(u, v); // 只覆盖 ok=true 的，避免退化
+      }
+    } catch (e) {
+      console.warn(`[Crawler] batchFetchMetaViaPuppeteer 无代理 fallback 异常:`, e instanceof Error ? e.message : e);
+    }
   }
 
   return result;
@@ -1668,52 +1713,82 @@ export async function fetchUrlMeta(
   // 动态 IP 轮换：若传了 country 且未显式 pin 一个 proxyUrl，则每轮换 IP
   const shouldRotateIp = !!country && !proxyUrl;
 
-  for (const ua of uas) {
-    // 每轮拿一个新 proxy URL（底层 sid 随机 → 出口 IP 变）
-    let currentProxy = proxyUrl;
-    if (shouldRotateIp && country) {
-      try {
-        const { getProxyUrlForCountry } = await import("@/lib/crawl-proxy");
-        currentProxy = (await getProxyUrlForCountry(country)) ?? undefined;
-      } catch {}
-    }
-
-    try {
-      const ctrl = new AbortController();
-      const t = setTimeout(() => ctrl.abort(), 12000);
-      const headers = buildStealthHeaders(url, ua);
-      const res = currentProxy
-        ? await fetchViaProxy(url, { headers: headers as Record<string, string>, signal: ctrl.signal }, currentProxy)
-        : await fetch(url, { signal: ctrl.signal, headers, redirect: "follow" });
-      clearTimeout(t);
-
-      const finalUrl = res.url || url;
-      lastFinalUrl = finalUrl;
-
-      if (res.ok || res.status < 400) {
-        const html = await res.text();
-        if (isBlockedPage(html) || html.length < 200) {
-          wasBlocked = true;
-          continue;
-        }
-
-        const meta = extractPageMeta(html);
-
-        // 软 404 检测：标题或内容包含"not found"等
-        const titleLower = (meta.title || "").toLowerCase();
-        const isSoft404 = SOFT_404_SIGNALS.some((s) => titleLower.includes(s))
-          || (html.length < 5000 && SOFT_404_SIGNALS.some((s) => html.toLowerCase().includes(s)));
-
-        if (meta.title) {
-          return { ...meta, ok: true, finalUrl, isSoft404 };
+  // C-015 §1：把单轮"一套 UA 列表 + 指定代理策略"抽成内部函数，好在"代理失败"后复用同样的 UA 扫一遍无代理
+  // 返回：命中则返回 ok 结果，否则返回 undefined；过程中更新 lastFinalUrl / wasBlocked
+  const runUaLoop = async (useProxy: boolean, uasForRound: string[]) => {
+    for (const ua of uasForRound) {
+      let currentProxy: string | undefined;
+      if (useProxy) {
+        currentProxy = proxyUrl;
+        if (shouldRotateIp && country) {
+          try {
+            const { getProxyUrlForCountry } = await import("@/lib/crawl-proxy");
+            currentProxy = (await getProxyUrlForCountry(country)) ?? undefined;
+          } catch {}
         }
       }
-    } catch {}
-  }
 
-  // 所有 UA 被拦截（如 Cloudflare）→ Google Ads 审核也会被拦截 → 标记为不可用
-  if (wasBlocked) {
-    return { title: "", description: "", ok: false, finalUrl: lastFinalUrl, isSoft404: false };
+      try {
+        const ctrl = new AbortController();
+        const t = setTimeout(() => ctrl.abort(), 12000);
+        const headers = buildStealthHeaders(url, ua);
+        const res = currentProxy
+          ? await fetchViaProxy(url, { headers: headers as Record<string, string>, signal: ctrl.signal }, currentProxy)
+          : await fetch(url, { signal: ctrl.signal, headers, redirect: "follow" });
+        clearTimeout(t);
+
+        const finalUrl = res.url || url;
+        lastFinalUrl = finalUrl;
+
+        if (res.ok || res.status < 400) {
+          const html = await res.text();
+          if (isBlockedPage(html) || html.length < 200) {
+            wasBlocked = true;
+            continue;
+          }
+
+          const meta = extractPageMeta(html);
+
+          // 软 404 检测：标题或内容包含"not found"等
+          const titleLower = (meta.title || "").toLowerCase();
+          const isSoft404 = SOFT_404_SIGNALS.some((s) => titleLower.includes(s))
+            || (html.length < 5000 && SOFT_404_SIGNALS.some((s) => html.toLowerCase().includes(s)));
+
+          if (meta.title) {
+            return { ...meta, ok: true, finalUrl, isSoft404 };
+          }
+        }
+      } catch {}
+    }
+    return undefined;
+  };
+
+  // L0a：通过代理（或显式 proxyUrl）多 UA 轮询
+  const hasProxyPath = !!proxyUrl || !!country; // 只要指定了 country 就算进入"有代理层"
+  const first = await runUaLoop(hasProxyPath, uas);
+  if (first) return first;
+
+  // ══════════════════════════════════════════════════════
+  // C-015 §1：代理全灭 fallback —— 用服务器直连出口再试一轮（3 UA），仍属 L0 真实访问
+  //
+  // 为什么安全：
+  //   - Google Ads 审核机器人也是从 Google 全球节点请求（非目标国），服务器出口可达 ≈ 审核可达
+  //   - 本站 SG 出口对 aerosus.be 等站点完全可达（2026-04-18 实测 status=200 + 真 title + desc）
+  //   - 不是"信赖已爬链接"降级，是换一个真实访问路径
+  //
+  // 触发条件：
+  //   - 第一轮有使用代理（hasProxyPath）
+  //   - 且第一轮至少发生过一次"被 blocked"信号（wasBlocked=true，说明确实是代理 IP 被识别而非 URL 失效）
+  //   - 避免把"URL 本身 404"的场景多请求 3 次
+  // ══════════════════════════════════════════════════════
+  if (hasProxyPath && wasBlocked) {
+    console.warn(`[Crawler] fetchUrlMeta 代理层全灭，回退无代理直连再试 3 UA: ${url}`);
+    const fallbackUas = [GOOGLEBOT_UA, ...UA_POOL.slice(0, 2)];
+    const second = await runUaLoop(false, fallbackUas);
+    if (second) {
+      console.warn(`[Crawler] fetchUrlMeta 无代理直连 fallback 成功: ${url}`);
+      return second;
+    }
   }
 
   return { title: "", description: "", ok: false, finalUrl: lastFinalUrl, isSoft404: false };

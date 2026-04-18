@@ -307,7 +307,8 @@ export async function POST(req: NextRequest) {
   // 优先使用用户明确设定的落地页 URL（用户可能已改成本地化路径如 /en-us/）
   // merchant_url 是商家层面的默认 URL，可能带旧地区前缀（如 /en-sg/）
   let merchantUrl = adCreative?.final_url || merchant.merchant_url || "";
-  const merchantName = merchant.merchant_name || "";
+  // C-015 §3：merchantName 在 TLD 切换分支里可能被剥国家后缀，须 let
+  let merchantName = merchant.merchant_name || "";
   const country = campaign.target_country || "US";
   const market = getAdMarketConfig(country);
 
@@ -428,11 +429,36 @@ export async function POST(req: NextRequest) {
   if (resolvedMerchantUrl && resolvedMerchantUrl !== (merchant.merchant_url || "")) {
     const originalUrl = merchant.merchant_url || "";
     merchantUrl = resolvedMerchantUrl;
+
+    // C-015 §3：TLD 切换时同步剥离 merchant_name 末尾的国家/区域后缀
+    // 场景：源数据 "Aerosus NL" 被切到 aerosus.be（BE 国家），再让 AI 写 BE 语境广告时
+    //      若把 "Aerosus NL" 原样喂 prompt，headline 会出现 "Aerosus NL - 2 Jaar Garantie"
+    //      —— 这对 BE 投放属于国家错配（07 2026-04-18 反馈）。
+    // 原则：只剥尾部单词，不动核心品牌名；无后缀的商家完全不触发
+    const COUNTRY_SUFFIXES = [
+      "NL", "BE", "DE", "FR", "UK", "GB", "IT", "ES", "AT", "CH",
+      "DACH", "EU", "US", "USA", "CA", "AU", "NZ", "JP", "KR", "CN", "TW", "HK", "SG", "IN",
+      "SE", "NO", "DK", "FI", "PL", "CZ", "PT", "BR", "MX", "AR",
+    ];
+    const countrySuffixRe = new RegExp(`\\s+(${COUNTRY_SUFFIXES.join("|")})\\s*$`, "i");
+    let nameUpdated = false;
+    if (merchantName && countrySuffixRe.test(merchantName)) {
+      const stripped = merchantName.replace(countrySuffixRe, "").trim();
+      if (stripped.length >= 2) {
+        console.warn(`[Extensions] C-015 §3 merchant_name 剥离国家后缀: "${merchantName}" → "${stripped}"（因 TLD 切到 ${country}）`);
+        merchantName = stripped;
+        nameUpdated = true;
+      }
+    }
+
     await prisma.user_merchants.update({
       where: { id: merchant.id },
-      data: { merchant_url: resolvedMerchantUrl },
+      data: {
+        merchant_url: resolvedMerchantUrl,
+        ...(nameUpdated ? { merchant_name: merchantName } : {}),
+      },
     }).catch((e) => {
-      console.warn(`[Extensions] user_merchants.merchant_url 更新失败:`, e instanceof Error ? e.message : e);
+      console.warn(`[Extensions] user_merchants 更新失败:`, e instanceof Error ? e.message : e);
     });
     if (adCreative?.id) {
       await prisma.ad_creatives.update({
@@ -440,7 +466,7 @@ export async function POST(req: NextRequest) {
         data: { final_url: resolvedMerchantUrl },
       }).catch(() => {});
     }
-    console.log(`[Extensions] TLD 本地化静默替换: ${originalUrl} → ${resolvedMerchantUrl}（user_merchants + ad_creatives 同步更新）`);
+    console.warn(`[Extensions] TLD 本地化静默替换: ${originalUrl} → ${resolvedMerchantUrl}（user_merchants + ad_creatives 同步更新，name 剥后缀=${nameUpdated}）`);
   }
 
   const encoder = new TextEncoder();
