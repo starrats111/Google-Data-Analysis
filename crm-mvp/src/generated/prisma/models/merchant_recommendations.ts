@@ -28,11 +28,17 @@ export type AggregateMerchant_recommendations = {
 
 export type Merchant_recommendationsAvgAggregateOutputType = {
   id: number | null
+  epc: runtime.Decimal | null
+  avg_commission_rate: runtime.Decimal | null
+  avg_order_commission: runtime.Decimal | null
   is_deleted: number | null
 }
 
 export type Merchant_recommendationsSumAggregateOutputType = {
   id: bigint | null
+  epc: runtime.Decimal | null
+  avg_commission_rate: runtime.Decimal | null
+  avg_order_commission: runtime.Decimal | null
   is_deleted: number | null
 }
 
@@ -45,6 +51,16 @@ export type Merchant_recommendationsMinAggregateOutputType = {
   remark: string | null
   share_time: string | null
   upload_batch: string | null
+  source: string | null
+  mcid: string | null
+  mid: string | null
+  affiliate: string | null
+  website: string | null
+  merchant_base: string | null
+  epc: runtime.Decimal | null
+  commission_cap: string | null
+  avg_commission_rate: runtime.Decimal | null
+  avg_order_commission: runtime.Decimal | null
   is_deleted: number | null
   created_at: Date | null
 }
@@ -58,6 +74,16 @@ export type Merchant_recommendationsMaxAggregateOutputType = {
   remark: string | null
   share_time: string | null
   upload_batch: string | null
+  source: string | null
+  mcid: string | null
+  mid: string | null
+  affiliate: string | null
+  website: string | null
+  merchant_base: string | null
+  epc: runtime.Decimal | null
+  commission_cap: string | null
+  avg_commission_rate: runtime.Decimal | null
+  avg_order_commission: runtime.Decimal | null
   is_deleted: number | null
   created_at: Date | null
 }
@@ -71,6 +97,16 @@ export type Merchant_recommendationsCountAggregateOutputType = {
   remark: number
   share_time: number
   upload_batch: number
+  source: number
+  mcid: number
+  mid: number
+  affiliate: number
+  website: number
+  merchant_base: number
+  epc: number
+  commission_cap: number
+  avg_commission_rate: number
+  avg_order_commission: number
   is_deleted: number
   created_at: number
   _all: number
@@ -79,11 +115,17 @@ export type Merchant_recommendationsCountAggregateOutputType = {
 
 export type Merchant_recommendationsAvgAggregateInputType = {
   id?: true
+  epc?: true
+  avg_commission_rate?: true
+  avg_order_commission?: true
   is_deleted?: true
 }
 
 export type Merchant_recommendationsSumAggregateInputType = {
   id?: true
+  epc?: true
+  avg_commission_rate?: true
+  avg_order_commission?: true
   is_deleted?: true
 }
 
@@ -96,6 +138,16 @@ export type Merchant_recommendationsMinAggregateInputType = {
   remark?: true
   share_time?: true
   upload_batch?: true
+  source?: true
+  mcid?: true
+  mid?: true
+  affiliate?: true
+  website?: true
+  merchant_base?: true
+  epc?: true
+  commission_cap?: true
+  avg_commission_rate?: true
+  avg_order_commission?: true
   is_deleted?: true
   created_at?: true
 }
@@ -109,6 +161,16 @@ export type Merchant_recommendationsMaxAggregateInputType = {
   remark?: true
   share_time?: true
   upload_batch?: true
+  source?: true
+  mcid?: true
+  mid?: true
+  affiliate?: true
+  website?: true
+  merchant_base?: true
+  epc?: true
+  commission_cap?: true
+  avg_commission_rate?: true
+  avg_order_commission?: true
   is_deleted?: true
   created_at?: true
 }
@@ -122,6 +184,16 @@ export type Merchant_recommendationsCountAggregateInputType = {
   remark?: true
   share_time?: true
   upload_batch?: true
+  source?: true
+  mcid?: true
+  mid?: true
+  affiliate?: true
+  website?: true
+  merchant_base?: true
+  epc?: true
+  commission_cap?: true
+  avg_commission_rate?: true
+  avg_order_commission?: true
   is_deleted?: true
   created_at?: true
   _all?: true
@@ -222,6 +294,16 @@ export type Merchant_recommendationsGroupByOutputType = {
   remark: string | null
   share_time: string | null
   upload_batch: string
+  source: string
+  mcid: string | null
+  mid: string | null
+  affiliate: string | null
+  website: string | null
+  merchant_base: string | null
+  epc: runtime.Decimal | null
+  commission_cap: string | null
+  avg_commission_rate: runtime.Decimal | null
+  avg_order_commission: runtime.Decimal | null
   is_deleted: number
   created_at: Date
   _count: Merchant_recommendationsCountAggregateOutputType | null
@@ -258,6 +340,16 @@ export type merchant_recommendationsWhereInput = {
   remark?: Prisma.StringNullableFilter<"merchant_recommendations"> | string | null
   share_time?: Prisma.StringNullableFilter<"merchant_recommendations"> | string | null
   upload_batch?: Prisma.StringFilter<"merchant_recommendations"> | string
+  source?: Prisma.StringFilter<"merchant_recommendations"> | string
+  mcid?: Prisma.StringNullableFilter<"merchant_recommendations"> | string | null
+  mid?: Prisma.StringNullableFilter<"merchant_recommendations"> | string | null
+  affiliate?: Prisma.StringNullableFilter<"merchant_recommendations"> | string | null
+  website?: Prisma.StringNullableFilter<"merchant_recommendations"> | string | null
+  merchant_base?: Prisma.StringNullableFilter<"merchant_recommendations"> | string | null
+  epc?: Prisma.DecimalNullableFilter<"merchant_recommendations"> | runtime.Decimal | runtime.DecimalJsLike | number | string | null
+  commission_cap?: Prisma.StringNullableFilter<"merchant_recommendations"> | string | null
+  avg_commission_rate?: Prisma.DecimalNullableFilter<"merchant_recommendations"> | runtime.Decimal | runtime.DecimalJsLike | number | string | null
+  avg_order_commission?: Prisma.DecimalNullableFilter<"merchant_recommendations"> | runtime.Decimal | runtime.DecimalJsLike | number | string | null
   is_deleted?: Prisma.IntFilter<"merchant_recommendations"> | number
   created_at?: Prisma.DateTimeFilter<"merchant_recommendations"> | Date | string
 }
@@ -271,6 +363,16 @@ export type merchant_recommendationsOrderByWithRelationInput = {
   remark?: Prisma.SortOrderInput | Prisma.SortOrder
   share_time?: Prisma.SortOrderInput | Prisma.SortOrder
   upload_batch?: Prisma.SortOrder
+  source?: Prisma.SortOrder
+  mcid?: Prisma.SortOrderInput | Prisma.SortOrder
+  mid?: Prisma.SortOrderInput | Prisma.SortOrder
+  affiliate?: Prisma.SortOrderInput | Prisma.SortOrder
+  website?: Prisma.SortOrderInput | Prisma.SortOrder
+  merchant_base?: Prisma.SortOrderInput | Prisma.SortOrder
+  epc?: Prisma.SortOrderInput | Prisma.SortOrder
+  commission_cap?: Prisma.SortOrderInput | Prisma.SortOrder
+  avg_commission_rate?: Prisma.SortOrderInput | Prisma.SortOrder
+  avg_order_commission?: Prisma.SortOrderInput | Prisma.SortOrder
   is_deleted?: Prisma.SortOrder
   created_at?: Prisma.SortOrder
   _relevance?: Prisma.merchant_recommendationsOrderByRelevanceInput
@@ -288,6 +390,16 @@ export type merchant_recommendationsWhereUniqueInput = Prisma.AtLeast<{
   remark?: Prisma.StringNullableFilter<"merchant_recommendations"> | string | null
   share_time?: Prisma.StringNullableFilter<"merchant_recommendations"> | string | null
   upload_batch?: Prisma.StringFilter<"merchant_recommendations"> | string
+  source?: Prisma.StringFilter<"merchant_recommendations"> | string
+  mcid?: Prisma.StringNullableFilter<"merchant_recommendations"> | string | null
+  mid?: Prisma.StringNullableFilter<"merchant_recommendations"> | string | null
+  affiliate?: Prisma.StringNullableFilter<"merchant_recommendations"> | string | null
+  website?: Prisma.StringNullableFilter<"merchant_recommendations"> | string | null
+  merchant_base?: Prisma.StringNullableFilter<"merchant_recommendations"> | string | null
+  epc?: Prisma.DecimalNullableFilter<"merchant_recommendations"> | runtime.Decimal | runtime.DecimalJsLike | number | string | null
+  commission_cap?: Prisma.StringNullableFilter<"merchant_recommendations"> | string | null
+  avg_commission_rate?: Prisma.DecimalNullableFilter<"merchant_recommendations"> | runtime.Decimal | runtime.DecimalJsLike | number | string | null
+  avg_order_commission?: Prisma.DecimalNullableFilter<"merchant_recommendations"> | runtime.Decimal | runtime.DecimalJsLike | number | string | null
   is_deleted?: Prisma.IntFilter<"merchant_recommendations"> | number
   created_at?: Prisma.DateTimeFilter<"merchant_recommendations"> | Date | string
 }, "id">
@@ -301,6 +413,16 @@ export type merchant_recommendationsOrderByWithAggregationInput = {
   remark?: Prisma.SortOrderInput | Prisma.SortOrder
   share_time?: Prisma.SortOrderInput | Prisma.SortOrder
   upload_batch?: Prisma.SortOrder
+  source?: Prisma.SortOrder
+  mcid?: Prisma.SortOrderInput | Prisma.SortOrder
+  mid?: Prisma.SortOrderInput | Prisma.SortOrder
+  affiliate?: Prisma.SortOrderInput | Prisma.SortOrder
+  website?: Prisma.SortOrderInput | Prisma.SortOrder
+  merchant_base?: Prisma.SortOrderInput | Prisma.SortOrder
+  epc?: Prisma.SortOrderInput | Prisma.SortOrder
+  commission_cap?: Prisma.SortOrderInput | Prisma.SortOrder
+  avg_commission_rate?: Prisma.SortOrderInput | Prisma.SortOrder
+  avg_order_commission?: Prisma.SortOrderInput | Prisma.SortOrder
   is_deleted?: Prisma.SortOrder
   created_at?: Prisma.SortOrder
   _count?: Prisma.merchant_recommendationsCountOrderByAggregateInput
@@ -322,6 +444,16 @@ export type merchant_recommendationsScalarWhereWithAggregatesInput = {
   remark?: Prisma.StringNullableWithAggregatesFilter<"merchant_recommendations"> | string | null
   share_time?: Prisma.StringNullableWithAggregatesFilter<"merchant_recommendations"> | string | null
   upload_batch?: Prisma.StringWithAggregatesFilter<"merchant_recommendations"> | string
+  source?: Prisma.StringWithAggregatesFilter<"merchant_recommendations"> | string
+  mcid?: Prisma.StringNullableWithAggregatesFilter<"merchant_recommendations"> | string | null
+  mid?: Prisma.StringNullableWithAggregatesFilter<"merchant_recommendations"> | string | null
+  affiliate?: Prisma.StringNullableWithAggregatesFilter<"merchant_recommendations"> | string | null
+  website?: Prisma.StringNullableWithAggregatesFilter<"merchant_recommendations"> | string | null
+  merchant_base?: Prisma.StringNullableWithAggregatesFilter<"merchant_recommendations"> | string | null
+  epc?: Prisma.DecimalNullableWithAggregatesFilter<"merchant_recommendations"> | runtime.Decimal | runtime.DecimalJsLike | number | string | null
+  commission_cap?: Prisma.StringNullableWithAggregatesFilter<"merchant_recommendations"> | string | null
+  avg_commission_rate?: Prisma.DecimalNullableWithAggregatesFilter<"merchant_recommendations"> | runtime.Decimal | runtime.DecimalJsLike | number | string | null
+  avg_order_commission?: Prisma.DecimalNullableWithAggregatesFilter<"merchant_recommendations"> | runtime.Decimal | runtime.DecimalJsLike | number | string | null
   is_deleted?: Prisma.IntWithAggregatesFilter<"merchant_recommendations"> | number
   created_at?: Prisma.DateTimeWithAggregatesFilter<"merchant_recommendations"> | Date | string
 }
@@ -335,6 +467,16 @@ export type merchant_recommendationsCreateInput = {
   remark?: string | null
   share_time?: string | null
   upload_batch: string
+  source?: string
+  mcid?: string | null
+  mid?: string | null
+  affiliate?: string | null
+  website?: string | null
+  merchant_base?: string | null
+  epc?: runtime.Decimal | runtime.DecimalJsLike | number | string | null
+  commission_cap?: string | null
+  avg_commission_rate?: runtime.Decimal | runtime.DecimalJsLike | number | string | null
+  avg_order_commission?: runtime.Decimal | runtime.DecimalJsLike | number | string | null
   is_deleted?: number
   created_at?: Date | string
 }
@@ -348,6 +490,16 @@ export type merchant_recommendationsUncheckedCreateInput = {
   remark?: string | null
   share_time?: string | null
   upload_batch: string
+  source?: string
+  mcid?: string | null
+  mid?: string | null
+  affiliate?: string | null
+  website?: string | null
+  merchant_base?: string | null
+  epc?: runtime.Decimal | runtime.DecimalJsLike | number | string | null
+  commission_cap?: string | null
+  avg_commission_rate?: runtime.Decimal | runtime.DecimalJsLike | number | string | null
+  avg_order_commission?: runtime.Decimal | runtime.DecimalJsLike | number | string | null
   is_deleted?: number
   created_at?: Date | string
 }
@@ -361,6 +513,16 @@ export type merchant_recommendationsUpdateInput = {
   remark?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   share_time?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   upload_batch?: Prisma.StringFieldUpdateOperationsInput | string
+  source?: Prisma.StringFieldUpdateOperationsInput | string
+  mcid?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  mid?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  affiliate?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  website?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  merchant_base?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  epc?: Prisma.NullableDecimalFieldUpdateOperationsInput | runtime.Decimal | runtime.DecimalJsLike | number | string | null
+  commission_cap?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  avg_commission_rate?: Prisma.NullableDecimalFieldUpdateOperationsInput | runtime.Decimal | runtime.DecimalJsLike | number | string | null
+  avg_order_commission?: Prisma.NullableDecimalFieldUpdateOperationsInput | runtime.Decimal | runtime.DecimalJsLike | number | string | null
   is_deleted?: Prisma.IntFieldUpdateOperationsInput | number
   created_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
 }
@@ -374,6 +536,16 @@ export type merchant_recommendationsUncheckedUpdateInput = {
   remark?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   share_time?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   upload_batch?: Prisma.StringFieldUpdateOperationsInput | string
+  source?: Prisma.StringFieldUpdateOperationsInput | string
+  mcid?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  mid?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  affiliate?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  website?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  merchant_base?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  epc?: Prisma.NullableDecimalFieldUpdateOperationsInput | runtime.Decimal | runtime.DecimalJsLike | number | string | null
+  commission_cap?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  avg_commission_rate?: Prisma.NullableDecimalFieldUpdateOperationsInput | runtime.Decimal | runtime.DecimalJsLike | number | string | null
+  avg_order_commission?: Prisma.NullableDecimalFieldUpdateOperationsInput | runtime.Decimal | runtime.DecimalJsLike | number | string | null
   is_deleted?: Prisma.IntFieldUpdateOperationsInput | number
   created_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
 }
@@ -387,6 +559,16 @@ export type merchant_recommendationsCreateManyInput = {
   remark?: string | null
   share_time?: string | null
   upload_batch: string
+  source?: string
+  mcid?: string | null
+  mid?: string | null
+  affiliate?: string | null
+  website?: string | null
+  merchant_base?: string | null
+  epc?: runtime.Decimal | runtime.DecimalJsLike | number | string | null
+  commission_cap?: string | null
+  avg_commission_rate?: runtime.Decimal | runtime.DecimalJsLike | number | string | null
+  avg_order_commission?: runtime.Decimal | runtime.DecimalJsLike | number | string | null
   is_deleted?: number
   created_at?: Date | string
 }
@@ -400,6 +582,16 @@ export type merchant_recommendationsUpdateManyMutationInput = {
   remark?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   share_time?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   upload_batch?: Prisma.StringFieldUpdateOperationsInput | string
+  source?: Prisma.StringFieldUpdateOperationsInput | string
+  mcid?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  mid?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  affiliate?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  website?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  merchant_base?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  epc?: Prisma.NullableDecimalFieldUpdateOperationsInput | runtime.Decimal | runtime.DecimalJsLike | number | string | null
+  commission_cap?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  avg_commission_rate?: Prisma.NullableDecimalFieldUpdateOperationsInput | runtime.Decimal | runtime.DecimalJsLike | number | string | null
+  avg_order_commission?: Prisma.NullableDecimalFieldUpdateOperationsInput | runtime.Decimal | runtime.DecimalJsLike | number | string | null
   is_deleted?: Prisma.IntFieldUpdateOperationsInput | number
   created_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
 }
@@ -413,6 +605,16 @@ export type merchant_recommendationsUncheckedUpdateManyInput = {
   remark?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   share_time?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   upload_batch?: Prisma.StringFieldUpdateOperationsInput | string
+  source?: Prisma.StringFieldUpdateOperationsInput | string
+  mcid?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  mid?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  affiliate?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  website?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  merchant_base?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  epc?: Prisma.NullableDecimalFieldUpdateOperationsInput | runtime.Decimal | runtime.DecimalJsLike | number | string | null
+  commission_cap?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  avg_commission_rate?: Prisma.NullableDecimalFieldUpdateOperationsInput | runtime.Decimal | runtime.DecimalJsLike | number | string | null
+  avg_order_commission?: Prisma.NullableDecimalFieldUpdateOperationsInput | runtime.Decimal | runtime.DecimalJsLike | number | string | null
   is_deleted?: Prisma.IntFieldUpdateOperationsInput | number
   created_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
 }
@@ -432,12 +634,25 @@ export type merchant_recommendationsCountOrderByAggregateInput = {
   remark?: Prisma.SortOrder
   share_time?: Prisma.SortOrder
   upload_batch?: Prisma.SortOrder
+  source?: Prisma.SortOrder
+  mcid?: Prisma.SortOrder
+  mid?: Prisma.SortOrder
+  affiliate?: Prisma.SortOrder
+  website?: Prisma.SortOrder
+  merchant_base?: Prisma.SortOrder
+  epc?: Prisma.SortOrder
+  commission_cap?: Prisma.SortOrder
+  avg_commission_rate?: Prisma.SortOrder
+  avg_order_commission?: Prisma.SortOrder
   is_deleted?: Prisma.SortOrder
   created_at?: Prisma.SortOrder
 }
 
 export type merchant_recommendationsAvgOrderByAggregateInput = {
   id?: Prisma.SortOrder
+  epc?: Prisma.SortOrder
+  avg_commission_rate?: Prisma.SortOrder
+  avg_order_commission?: Prisma.SortOrder
   is_deleted?: Prisma.SortOrder
 }
 
@@ -450,6 +665,16 @@ export type merchant_recommendationsMaxOrderByAggregateInput = {
   remark?: Prisma.SortOrder
   share_time?: Prisma.SortOrder
   upload_batch?: Prisma.SortOrder
+  source?: Prisma.SortOrder
+  mcid?: Prisma.SortOrder
+  mid?: Prisma.SortOrder
+  affiliate?: Prisma.SortOrder
+  website?: Prisma.SortOrder
+  merchant_base?: Prisma.SortOrder
+  epc?: Prisma.SortOrder
+  commission_cap?: Prisma.SortOrder
+  avg_commission_rate?: Prisma.SortOrder
+  avg_order_commission?: Prisma.SortOrder
   is_deleted?: Prisma.SortOrder
   created_at?: Prisma.SortOrder
 }
@@ -463,12 +688,25 @@ export type merchant_recommendationsMinOrderByAggregateInput = {
   remark?: Prisma.SortOrder
   share_time?: Prisma.SortOrder
   upload_batch?: Prisma.SortOrder
+  source?: Prisma.SortOrder
+  mcid?: Prisma.SortOrder
+  mid?: Prisma.SortOrder
+  affiliate?: Prisma.SortOrder
+  website?: Prisma.SortOrder
+  merchant_base?: Prisma.SortOrder
+  epc?: Prisma.SortOrder
+  commission_cap?: Prisma.SortOrder
+  avg_commission_rate?: Prisma.SortOrder
+  avg_order_commission?: Prisma.SortOrder
   is_deleted?: Prisma.SortOrder
   created_at?: Prisma.SortOrder
 }
 
 export type merchant_recommendationsSumOrderByAggregateInput = {
   id?: Prisma.SortOrder
+  epc?: Prisma.SortOrder
+  avg_commission_rate?: Prisma.SortOrder
+  avg_order_commission?: Prisma.SortOrder
   is_deleted?: Prisma.SortOrder
 }
 
@@ -483,6 +721,16 @@ export type merchant_recommendationsSelect<ExtArgs extends runtime.Types.Extensi
   remark?: boolean
   share_time?: boolean
   upload_batch?: boolean
+  source?: boolean
+  mcid?: boolean
+  mid?: boolean
+  affiliate?: boolean
+  website?: boolean
+  merchant_base?: boolean
+  epc?: boolean
+  commission_cap?: boolean
+  avg_commission_rate?: boolean
+  avg_order_commission?: boolean
   is_deleted?: boolean
   created_at?: boolean
 }, ExtArgs["result"]["merchant_recommendations"]>
@@ -498,11 +746,21 @@ export type merchant_recommendationsSelectScalar = {
   remark?: boolean
   share_time?: boolean
   upload_batch?: boolean
+  source?: boolean
+  mcid?: boolean
+  mid?: boolean
+  affiliate?: boolean
+  website?: boolean
+  merchant_base?: boolean
+  epc?: boolean
+  commission_cap?: boolean
+  avg_commission_rate?: boolean
+  avg_order_commission?: boolean
   is_deleted?: boolean
   created_at?: boolean
 }
 
-export type merchant_recommendationsOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"id" | "merchant_name" | "roi_reference" | "commission_info" | "settlement_info" | "remark" | "share_time" | "upload_batch" | "is_deleted" | "created_at", ExtArgs["result"]["merchant_recommendations"]>
+export type merchant_recommendationsOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"id" | "merchant_name" | "roi_reference" | "commission_info" | "settlement_info" | "remark" | "share_time" | "upload_batch" | "source" | "mcid" | "mid" | "affiliate" | "website" | "merchant_base" | "epc" | "commission_cap" | "avg_commission_rate" | "avg_order_commission" | "is_deleted" | "created_at", ExtArgs["result"]["merchant_recommendations"]>
 
 export type $merchant_recommendationsPayload<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = {
   name: "merchant_recommendations"
@@ -516,6 +774,16 @@ export type $merchant_recommendationsPayload<ExtArgs extends runtime.Types.Exten
     remark: string | null
     share_time: string | null
     upload_batch: string
+    source: string
+    mcid: string | null
+    mid: string | null
+    affiliate: string | null
+    website: string | null
+    merchant_base: string | null
+    epc: runtime.Decimal | null
+    commission_cap: string | null
+    avg_commission_rate: runtime.Decimal | null
+    avg_order_commission: runtime.Decimal | null
     is_deleted: number
     created_at: Date
   }, ExtArgs["result"]["merchant_recommendations"]>
@@ -895,6 +1163,16 @@ export interface merchant_recommendationsFieldRefs {
   readonly remark: Prisma.FieldRef<"merchant_recommendations", 'String'>
   readonly share_time: Prisma.FieldRef<"merchant_recommendations", 'String'>
   readonly upload_batch: Prisma.FieldRef<"merchant_recommendations", 'String'>
+  readonly source: Prisma.FieldRef<"merchant_recommendations", 'String'>
+  readonly mcid: Prisma.FieldRef<"merchant_recommendations", 'String'>
+  readonly mid: Prisma.FieldRef<"merchant_recommendations", 'String'>
+  readonly affiliate: Prisma.FieldRef<"merchant_recommendations", 'String'>
+  readonly website: Prisma.FieldRef<"merchant_recommendations", 'String'>
+  readonly merchant_base: Prisma.FieldRef<"merchant_recommendations", 'String'>
+  readonly epc: Prisma.FieldRef<"merchant_recommendations", 'Decimal'>
+  readonly commission_cap: Prisma.FieldRef<"merchant_recommendations", 'String'>
+  readonly avg_commission_rate: Prisma.FieldRef<"merchant_recommendations", 'Decimal'>
+  readonly avg_order_commission: Prisma.FieldRef<"merchant_recommendations", 'Decimal'>
   readonly is_deleted: Prisma.FieldRef<"merchant_recommendations", 'Int'>
   readonly created_at: Prisma.FieldRef<"merchant_recommendations", 'DateTime'>
 }

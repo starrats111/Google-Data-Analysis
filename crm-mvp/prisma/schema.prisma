@@ -131,6 +131,9 @@ model user_merchants {
   holiday_name      String?   @db.VarChar(128)
   tracking_link     String?   @db.VarChar(1024)
   campaign_link     String?   @db.Text           // 联盟平台推广链接
+  // C-020 URL 直投来源标记（R1.1 入档 §20.5.2）
+  source            String    @default("platform") @db.VarChar(16) // platform / url_direct
+  listing_status    String    @default("active")   @db.VarChar(16) // active / offline / url_only
   // 违规/推荐标记（从 Google Sheets 同步）
   violation_status       String  @default("normal") @db.VarChar(20)  // normal / violated
   violation_time         DateTime? @db.DateTime(0)
@@ -155,6 +158,7 @@ model user_merchants {
   @@index([user_id, platform], map: "idx_user_platform")
   @@index([user_id, platform, merchant_id], map: "idx_user_plat_mid")
   @@index([violation_status], map: "idx_violation_status")
+  @@index([user_id, source], map: "idx_user_source")
 }
 
 // -----------------------------------------------------------

@@ -59,6 +59,8 @@ export type User_merchantsMinAggregateOutputType = {
   holiday_name: string | null
   tracking_link: string | null
   campaign_link: string | null
+  source: string | null
+  listing_status: string | null
   violation_status: string | null
   violation_time: Date | null
   recommendation_status: string | null
@@ -92,6 +94,8 @@ export type User_merchantsMaxAggregateOutputType = {
   holiday_name: string | null
   tracking_link: string | null
   campaign_link: string | null
+  source: string | null
+  listing_status: string | null
   violation_status: string | null
   violation_time: Date | null
   recommendation_status: string | null
@@ -126,6 +130,8 @@ export type User_merchantsCountAggregateOutputType = {
   holiday_name: number
   tracking_link: number
   campaign_link: number
+  source: number
+  listing_status: number
   violation_status: number
   violation_time: number
   recommendation_status: number
@@ -178,6 +184,8 @@ export type User_merchantsMinAggregateInputType = {
   holiday_name?: true
   tracking_link?: true
   campaign_link?: true
+  source?: true
+  listing_status?: true
   violation_status?: true
   violation_time?: true
   recommendation_status?: true
@@ -211,6 +219,8 @@ export type User_merchantsMaxAggregateInputType = {
   holiday_name?: true
   tracking_link?: true
   campaign_link?: true
+  source?: true
+  listing_status?: true
   violation_status?: true
   violation_time?: true
   recommendation_status?: true
@@ -245,6 +255,8 @@ export type User_merchantsCountAggregateInputType = {
   holiday_name?: true
   tracking_link?: true
   campaign_link?: true
+  source?: true
+  listing_status?: true
   violation_status?: true
   violation_time?: true
   recommendation_status?: true
@@ -367,6 +379,8 @@ export type User_merchantsGroupByOutputType = {
   holiday_name: string | null
   tracking_link: string | null
   campaign_link: string | null
+  source: string
+  listing_status: string
   violation_status: string
   violation_time: Date | null
   recommendation_status: string
@@ -425,6 +439,8 @@ export type user_merchantsWhereInput = {
   holiday_name?: Prisma.StringNullableFilter<"user_merchants"> | string | null
   tracking_link?: Prisma.StringNullableFilter<"user_merchants"> | string | null
   campaign_link?: Prisma.StringNullableFilter<"user_merchants"> | string | null
+  source?: Prisma.StringFilter<"user_merchants"> | string
+  listing_status?: Prisma.StringFilter<"user_merchants"> | string
   violation_status?: Prisma.StringFilter<"user_merchants"> | string
   violation_time?: Prisma.DateTimeNullableFilter<"user_merchants"> | Date | string | null
   recommendation_status?: Prisma.StringFilter<"user_merchants"> | string
@@ -460,6 +476,8 @@ export type user_merchantsOrderByWithRelationInput = {
   holiday_name?: Prisma.SortOrderInput | Prisma.SortOrder
   tracking_link?: Prisma.SortOrderInput | Prisma.SortOrder
   campaign_link?: Prisma.SortOrderInput | Prisma.SortOrder
+  source?: Prisma.SortOrder
+  listing_status?: Prisma.SortOrder
   violation_status?: Prisma.SortOrder
   violation_time?: Prisma.SortOrderInput | Prisma.SortOrder
   recommendation_status?: Prisma.SortOrder
@@ -499,6 +517,8 @@ export type user_merchantsWhereUniqueInput = Prisma.AtLeast<{
   holiday_name?: Prisma.StringNullableFilter<"user_merchants"> | string | null
   tracking_link?: Prisma.StringNullableFilter<"user_merchants"> | string | null
   campaign_link?: Prisma.StringNullableFilter<"user_merchants"> | string | null
+  source?: Prisma.StringFilter<"user_merchants"> | string
+  listing_status?: Prisma.StringFilter<"user_merchants"> | string
   violation_status?: Prisma.StringFilter<"user_merchants"> | string
   violation_time?: Prisma.DateTimeNullableFilter<"user_merchants"> | Date | string | null
   recommendation_status?: Prisma.StringFilter<"user_merchants"> | string
@@ -534,6 +554,8 @@ export type user_merchantsOrderByWithAggregationInput = {
   holiday_name?: Prisma.SortOrderInput | Prisma.SortOrder
   tracking_link?: Prisma.SortOrderInput | Prisma.SortOrder
   campaign_link?: Prisma.SortOrderInput | Prisma.SortOrder
+  source?: Prisma.SortOrder
+  listing_status?: Prisma.SortOrder
   violation_status?: Prisma.SortOrder
   violation_time?: Prisma.SortOrderInput | Prisma.SortOrder
   recommendation_status?: Prisma.SortOrder
@@ -577,6 +599,8 @@ export type user_merchantsScalarWhereWithAggregatesInput = {
   holiday_name?: Prisma.StringNullableWithAggregatesFilter<"user_merchants"> | string | null
   tracking_link?: Prisma.StringNullableWithAggregatesFilter<"user_merchants"> | string | null
   campaign_link?: Prisma.StringNullableWithAggregatesFilter<"user_merchants"> | string | null
+  source?: Prisma.StringWithAggregatesFilter<"user_merchants"> | string
+  listing_status?: Prisma.StringWithAggregatesFilter<"user_merchants"> | string
   violation_status?: Prisma.StringWithAggregatesFilter<"user_merchants"> | string
   violation_time?: Prisma.DateTimeNullableWithAggregatesFilter<"user_merchants"> | Date | string | null
   recommendation_status?: Prisma.StringWithAggregatesFilter<"user_merchants"> | string
@@ -612,6 +636,8 @@ export type user_merchantsCreateInput = {
   holiday_name?: string | null
   tracking_link?: string | null
   campaign_link?: string | null
+  source?: string
+  listing_status?: string
   violation_status?: string
   violation_time?: Date | string | null
   recommendation_status?: string
@@ -647,6 +673,8 @@ export type user_merchantsUncheckedCreateInput = {
   holiday_name?: string | null
   tracking_link?: string | null
   campaign_link?: string | null
+  source?: string
+  listing_status?: string
   violation_status?: string
   violation_time?: Date | string | null
   recommendation_status?: string
@@ -682,6 +710,8 @@ export type user_merchantsUpdateInput = {
   holiday_name?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   tracking_link?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   campaign_link?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  source?: Prisma.StringFieldUpdateOperationsInput | string
+  listing_status?: Prisma.StringFieldUpdateOperationsInput | string
   violation_status?: Prisma.StringFieldUpdateOperationsInput | string
   violation_time?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
   recommendation_status?: Prisma.StringFieldUpdateOperationsInput | string
@@ -717,6 +747,8 @@ export type user_merchantsUncheckedUpdateInput = {
   holiday_name?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   tracking_link?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   campaign_link?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  source?: Prisma.StringFieldUpdateOperationsInput | string
+  listing_status?: Prisma.StringFieldUpdateOperationsInput | string
   violation_status?: Prisma.StringFieldUpdateOperationsInput | string
   violation_time?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
   recommendation_status?: Prisma.StringFieldUpdateOperationsInput | string
@@ -752,6 +784,8 @@ export type user_merchantsCreateManyInput = {
   holiday_name?: string | null
   tracking_link?: string | null
   campaign_link?: string | null
+  source?: string
+  listing_status?: string
   violation_status?: string
   violation_time?: Date | string | null
   recommendation_status?: string
@@ -787,6 +821,8 @@ export type user_merchantsUpdateManyMutationInput = {
   holiday_name?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   tracking_link?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   campaign_link?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  source?: Prisma.StringFieldUpdateOperationsInput | string
+  listing_status?: Prisma.StringFieldUpdateOperationsInput | string
   violation_status?: Prisma.StringFieldUpdateOperationsInput | string
   violation_time?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
   recommendation_status?: Prisma.StringFieldUpdateOperationsInput | string
@@ -822,6 +858,8 @@ export type user_merchantsUncheckedUpdateManyInput = {
   holiday_name?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   tracking_link?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   campaign_link?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  source?: Prisma.StringFieldUpdateOperationsInput | string
+  listing_status?: Prisma.StringFieldUpdateOperationsInput | string
   violation_status?: Prisma.StringFieldUpdateOperationsInput | string
   violation_time?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
   recommendation_status?: Prisma.StringFieldUpdateOperationsInput | string
@@ -863,6 +901,8 @@ export type user_merchantsCountOrderByAggregateInput = {
   holiday_name?: Prisma.SortOrder
   tracking_link?: Prisma.SortOrder
   campaign_link?: Prisma.SortOrder
+  source?: Prisma.SortOrder
+  listing_status?: Prisma.SortOrder
   violation_status?: Prisma.SortOrder
   violation_time?: Prisma.SortOrder
   recommendation_status?: Prisma.SortOrder
@@ -905,6 +945,8 @@ export type user_merchantsMaxOrderByAggregateInput = {
   holiday_name?: Prisma.SortOrder
   tracking_link?: Prisma.SortOrder
   campaign_link?: Prisma.SortOrder
+  source?: Prisma.SortOrder
+  listing_status?: Prisma.SortOrder
   violation_status?: Prisma.SortOrder
   violation_time?: Prisma.SortOrder
   recommendation_status?: Prisma.SortOrder
@@ -938,6 +980,8 @@ export type user_merchantsMinOrderByAggregateInput = {
   holiday_name?: Prisma.SortOrder
   tracking_link?: Prisma.SortOrder
   campaign_link?: Prisma.SortOrder
+  source?: Prisma.SortOrder
+  listing_status?: Prisma.SortOrder
   violation_status?: Prisma.SortOrder
   violation_time?: Prisma.SortOrder
   recommendation_status?: Prisma.SortOrder
@@ -982,6 +1026,8 @@ export type user_merchantsSelect<ExtArgs extends runtime.Types.Extensions.Intern
   holiday_name?: boolean
   tracking_link?: boolean
   campaign_link?: boolean
+  source?: boolean
+  listing_status?: boolean
   violation_status?: boolean
   violation_time?: boolean
   recommendation_status?: boolean
@@ -1019,6 +1065,8 @@ export type user_merchantsSelectScalar = {
   holiday_name?: boolean
   tracking_link?: boolean
   campaign_link?: boolean
+  source?: boolean
+  listing_status?: boolean
   violation_status?: boolean
   violation_time?: boolean
   recommendation_status?: boolean
@@ -1036,7 +1084,7 @@ export type user_merchantsSelectScalar = {
   updated_at?: boolean
 }
 
-export type user_merchantsOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"id" | "user_id" | "platform" | "merchant_id" | "merchant_name" | "merchant_url" | "logo_url" | "category" | "commission_rate" | "cookie_duration" | "supported_regions" | "status" | "claimed_at" | "target_country" | "holiday_name" | "tracking_link" | "campaign_link" | "violation_status" | "violation_time" | "recommendation_status" | "recommendation_time" | "policy_status" | "policy_category_code" | "platform_connection_id" | "connection_campaign_links" | "link_status" | "link_checked_at" | "link_check_reason" | "kyads_referer_url" | "is_deleted" | "created_at" | "updated_at", ExtArgs["result"]["user_merchants"]>
+export type user_merchantsOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"id" | "user_id" | "platform" | "merchant_id" | "merchant_name" | "merchant_url" | "logo_url" | "category" | "commission_rate" | "cookie_duration" | "supported_regions" | "status" | "claimed_at" | "target_country" | "holiday_name" | "tracking_link" | "campaign_link" | "source" | "listing_status" | "violation_status" | "violation_time" | "recommendation_status" | "recommendation_time" | "policy_status" | "policy_category_code" | "platform_connection_id" | "connection_campaign_links" | "link_status" | "link_checked_at" | "link_check_reason" | "kyads_referer_url" | "is_deleted" | "created_at" | "updated_at", ExtArgs["result"]["user_merchants"]>
 
 export type $user_merchantsPayload<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = {
   name: "user_merchants"
@@ -1059,6 +1107,8 @@ export type $user_merchantsPayload<ExtArgs extends runtime.Types.Extensions.Inte
     holiday_name: string | null
     tracking_link: string | null
     campaign_link: string | null
+    source: string
+    listing_status: string
     violation_status: string
     violation_time: Date | null
     recommendation_status: string
@@ -1460,6 +1510,8 @@ export interface user_merchantsFieldRefs {
   readonly holiday_name: Prisma.FieldRef<"user_merchants", 'String'>
   readonly tracking_link: Prisma.FieldRef<"user_merchants", 'String'>
   readonly campaign_link: Prisma.FieldRef<"user_merchants", 'String'>
+  readonly source: Prisma.FieldRef<"user_merchants", 'String'>
+  readonly listing_status: Prisma.FieldRef<"user_merchants", 'String'>
   readonly violation_status: Prisma.FieldRef<"user_merchants", 'String'>
   readonly violation_time: Prisma.FieldRef<"user_merchants", 'DateTime'>
   readonly recommendation_status: Prisma.FieldRef<"user_merchants", 'String'>

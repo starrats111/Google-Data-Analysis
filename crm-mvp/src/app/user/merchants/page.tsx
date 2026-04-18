@@ -1,10 +1,11 @@
 "use client";
 import { useState, useCallback, useMemo, useEffect } from "react";
-import { Card, Row, Col, Table, Input, Select, Button, Space, Tag, Modal, Form, Typography, Popconfirm, Switch, InputNumber, Tabs, App, Tooltip, Radio } from "antd";
-import { ShopOutlined, SearchOutlined, CheckOutlined, DollarOutlined, CalendarOutlined, SaveOutlined, SyncOutlined, WarningOutlined, StarOutlined, CopyOutlined, ReloadOutlined, RobotOutlined, DeleteOutlined } from "@ant-design/icons";
+import { Card, Row, Col, Table, Input, Select, Button, Space, Tag, Modal, Form, Typography, Popconfirm, Switch, InputNumber, Tabs, App, Tooltip, Radio, DatePicker, Slider, Progress } from "antd";
+import { ShopOutlined, SearchOutlined, CheckOutlined, DollarOutlined, CalendarOutlined, SaveOutlined, SyncOutlined, WarningOutlined, StarOutlined, CopyOutlined, ReloadOutlined, RobotOutlined, DeleteOutlined, CloseCircleOutlined } from "@ant-design/icons";
 import { PLATFORMS, BIDDING_STRATEGIES } from "@/lib/constants";
 import { useApiWithParams, useStaleApi, useApi, mutateApi, refreshApi } from "@/lib/swr";
 import { useRouter } from "next/navigation";
+import dayjs, { type Dayjs } from "dayjs";
 import { normalizeAiRuleProfile, SYSTEM_ADRIAN_PERSONA, type AiRuleProfile, type AiPersona } from "@/lib/ai-rule-profile";
 const { Text } = Typography;
 const { TextArea } = Input;
@@ -159,6 +160,44 @@ export default function MerchantsPage() {
   const [recSearch, setRecSearch] = useState(""); const [recPage, setRecPage] = useState(1);
   const { data: vioData, isLoading: vl, error: vioError, mutate: vioMutate } = useApiWithParams<{ items: any[]; total: number }>(tab === "violations" ? "/api/user/merchants/sheet-sync" : null, { type: "violation", page: vioPage, pageSize: 50, ...(vioSearch ? { search: vioSearch } : {}) });
   const { data: recData, isLoading: rl, error: recError, mutate: recMutate } = useApiWithParams<{ items: any[]; total: number }>(tab === "recommendations" ? "/api/user/merchants/sheet-sync" : null, { type: "recommendation", page: recPage, pageSize: 50, ...(recSearch ? { search: recSearch } : {}) });
+  // C-019 拒付商家 Tab 状态（见 §19.6）
+  const [cbDateRange, setCbDateRange] = useState<[Dayjs, Dayjs]>(() => [dayjs("2025-11-01"), dayjs()]);
+  const [cbThreshold, setCbThreshold] = useState(50);
+  const [cbThresholdDebounced, setCbThresholdDebounced] = useState(50);
+  const [cbPlatform, setCbPlatform] = useState("");
+  const [cbSearch, setCbSearch] = useState("");
+  const [cbSearchInput, setCbSearchInput] = useState("");
+  useEffect(() => {
+    const t = setTimeout(() => setCbThresholdDebounced(cbThreshold), 300);
+    return () => clearTimeout(t);
+  }, [cbThreshold]);
+  const cbParams = useMemo(() => ({
+    date_start: cbDateRange[0].format("YYYY-MM-DD"),
+    date_end: cbDateRange[1].format("YYYY-MM-DD"),
+    threshold: cbThresholdDebounced,
+    ...(cbPlatform ? { platform: cbPlatform } : {}),
+    ...(cbSearch ? { search: cbSearch } : {}),
+  }), [cbDateRange, cbThresholdDebounced, cbPlatform, cbSearch]);
+  const { data: cbData, isLoading: cbLoading } = useApiWithParams<{
+    items: Array<{ platform: string; merchant_id: string; merchant_name: string; orders: number; total_all: number; total_settled: number; rejected: number; rate: number }>;
+    total: number;
+  }>(tab === "chargebacks" ? "/api/user/merchants/chargebacks" : null, cbParams);
+  // 选取商家 Tab 的拒付命中集合（固定阈值 50%，默认时间窗 2025-11-01 至今）
+  const cbHitsParams = useMemo(() => ({
+    date_start: "2025-11-01",
+    date_end: dayjs().format("YYYY-MM-DD"),
+    threshold: 50,
+  }), []);
+  const { data: cbHitsData } = useApiWithParams<{
+    items: Array<{ platform: string; merchant_id: string; rate: number }>;
+  }>(tab === "available" ? "/api/user/merchants/chargebacks" : null, cbHitsParams);
+  const chargebackHitMap = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const it of cbHitsData?.items || []) {
+      m.set(`${it.platform}-${it.merchant_id}`, it.rate);
+    }
+    return m;
+  }, [cbHitsData]);
   const [cc, setCc] = useState(""); const [qc, setQc] = useState("");
   const { data: holidays, isLoading: hl } = useApiWithParams<Holiday[]>(qc ? "/api/user/holidays" : null, { country: qc });
   const [claimModal, setClaimModal] = useState(false); const [claimM, setClaimM] = useState<Merchant | null>(null); const [claimForm] = Form.useForm();
@@ -260,7 +299,7 @@ export default function MerchantsPage() {
     const ok = await savePersonaProfile(updated);
     if (ok) { setNewPersonaName(""); setNewPersonaTags([]); setNewPersonaDesc(""); setNewPersonaPrompt(""); setPersonaTab("library"); }
   }, [personaProfile, newPersonaName, newPersonaTags, newPersonaDesc, newPersonaPrompt, savePersonaProfile, message]);
-  const doClaim = useCallback(async (m: Merchant) => {
+  const openClaimModal = useCallback(async (m: Merchant) => {
     setClaimM(m); claimForm.resetFields(); setClaimModal(true);
     try {
       const [platRes, mccRes] = await Promise.all([
@@ -279,6 +318,28 @@ export default function MerchantsPage() {
       }
     } catch { /* ignore */ }
   }, [claimForm]);
+  const doClaim = useCallback((m: Merchant) => {
+    const hitKey = `${m.platform}-${m.merchant_id}`;
+    const hitRate = chargebackHitMap.get(hitKey);
+    if (hitRate !== undefined && hitRate >= 50) {
+      Modal.confirm({
+        title: "该商家近期拒付率较高",
+        content: (
+          <div>
+            <div>商家：<b>{m.merchant_name}</b>（{m.platform} / {m.merchant_id}）</div>
+            <div>近期全员拒付率：<b style={{ color: "#ff4d4f" }}>{hitRate.toFixed(2)}%</b></div>
+            <div style={{ marginTop: 8, color: "#999" }}>拒付商家数据来自全员已结算交易聚合，时间窗默认从 2025-11-01 至今。</div>
+          </div>
+        ),
+        okText: "继续领取",
+        okButtonProps: { danger: true },
+        cancelText: "取消",
+        onOk: () => { void openClaimModal(m); },
+      });
+    } else {
+      void openClaimModal(m);
+    }
+  }, [chargebackHitMap, openClaimModal]);
   const submitClaim = useCallback(async () => { const v = await claimForm.validateFields(); const r = await mutateApi("/api/user/merchants", { method: "POST", body: { merchant_id: claimM?.id, ...v } }, [/\/api\/user\/merchants/]); if (r.code === 0) { message.success("领取成功！正在跳转到广告预览..."); setClaimModal(false); const cid = (r.data as any)?.campaign_id; if (cid) { setTimeout(() => router.push(`/user/ad-preview/${cid}`), 800); } else { setTab("claimed"); } } else message.error(r.message); }, [claimForm, claimM, message, router]);
   const doRelease = useCallback(async (id: string) => { const r = await mutateApi("/api/user/merchants", { method: "PUT", body: { action: "release", ids: [id] } }, [/\/api\/user\/merchants/]); if (r.code === 0) message.success("已取消领取"); else message.error(r.message); }, [message]);
   const doSearch = useCallback(() => { setSearch(searchInput); setPage(1); }, [searchInput]);
@@ -312,7 +373,19 @@ export default function MerchantsPage() {
     { title: "操作", width: 100, render: (_: unknown, rec: Merchant) => <Popconfirm title="确认取消领取？" onConfirm={() => doRelease(rec.id)}><Button size="small" danger>取消领取</Button></Popconfirm> },
   ], [doRelease, showActiveAdv, copyLink, sortField, sortOrder]);
   const availCols = useMemo(() => [
-    { title: "商家名称", dataIndex: "merchant_name", width: 240, sorter: true, sortOrder: colSortOrder("merchant_name"), render: (_: string, rec: Merchant) => <MerchantNameCell rec={rec} onCopy={copyLink} /> },
+    { title: "商家名称", dataIndex: "merchant_name", width: 280, sorter: true, sortOrder: colSortOrder("merchant_name"), render: (_: string, rec: Merchant) => {
+      const hitRate = chargebackHitMap.get(`${rec.platform}-${rec.merchant_id}`);
+      return (
+        <Space size={6} wrap>
+          <MerchantNameCell rec={rec} onCopy={copyLink} />
+          {hitRate !== undefined && hitRate >= 50 && (
+            <Tooltip title={`该商家近期全员拒付率 ${hitRate.toFixed(2)}%，领取前请三思`}>
+              <Tag color="red" icon={<WarningOutlined />} style={{ margin: 0 }}>拒付 {hitRate.toFixed(0)}%</Tag>
+            </Tooltip>
+          )}
+        </Space>
+      );
+    } },
     { title: "平台", dataIndex: "platform", width: 80, render: (v: string) => <Tag color={PC[v] || "default"} style={{ fontWeight: 600 }}>{v}</Tag> },
     { title: "MID", dataIndex: "merchant_id", width: 100, ellipsis: true },
     { title: "主营业务", dataIndex: "category", width: 130, ellipsis: true, render: (v: string | null) => catCn(v) },
@@ -321,7 +394,31 @@ export default function MerchantsPage() {
     { title: "在投人数", dataIndex: "active_advertisers", width: 90, align: "center" as const, render: (v: number, rec: Merchant) => { const n = v || 0; return n > 0 ? <Button size="small" type="link" style={{ padding: 0, fontWeight: 600 }} onClick={() => showActiveAdv(rec)}>{n} 人</Button> : <span style={{ color: "#bfbfbf" }}>0</span>; } },
     { title: "标签", width: 140, render: (_: unknown, rec: any) => { const labels = rec.labels || []; if (labels.length === 0) return <span style={{ color: "#ccc" }}>-</span>; return <Space size={4} wrap>{labels.map((l: any, i: number) => <Tooltip key={i} title={l.detail}><Tag color={l.color} style={{ cursor: "pointer" }}>{l.text}</Tag></Tooltip>)}</Space>; } },
     { title: "操作", width: 100, render: (_: unknown, rec: Merchant) => rec.policy_status === "prohibited" ? <Button size="small" disabled>禁止领取</Button> : <Button type="primary" size="small" icon={<CheckOutlined />} onClick={() => doClaim(rec)}>{rec.policy_status === "restricted" ? "领取(限制)" : "领取"}</Button> },
-  ], [doClaim, showActiveAdv, copyLink, sortField, sortOrder]);
+  ], [doClaim, showActiveAdv, copyLink, sortField, sortOrder, chargebackHitMap]);
+  // C-019 拒付商家 Tab 的列定义
+  const chargebackCols = useMemo(() => [
+    { title: "平台", dataIndex: "platform", width: 80, render: (v: string) => <Tag color={PC[v] || "default"} style={{ fontWeight: 600 }}>{v}</Tag> },
+    { title: "MID", dataIndex: "merchant_id", width: 120, ellipsis: true },
+    { title: "商家名称", dataIndex: "merchant_name", width: 240, ellipsis: true, render: (v: string) => <span style={{ fontWeight: 600 }}>{v || "-"}</span> },
+    { title: "订单数", dataIndex: "orders", width: 90, align: "right" as const, render: (v: number) => Number(v || 0).toLocaleString() },
+    { title: "总佣金（含待结算）", dataIndex: "total_all", width: 140, align: "right" as const, render: (v: number, rec: any) => (
+      <Tooltip title={`已结算：$${Number(rec.total_settled || 0).toFixed(2)}`}>
+        <span>${Number(v || 0).toFixed(2)}</span>
+      </Tooltip>
+    ) },
+    { title: "已结算佣金", dataIndex: "total_settled", width: 120, align: "right" as const, render: (v: number) => <span>${Number(v || 0).toFixed(2)}</span> },
+    { title: "拒付金额", dataIndex: "rejected", width: 120, align: "right" as const, render: (v: number) => <span style={{ color: "#ff4d4f", fontWeight: 600 }}>${Number(v || 0).toFixed(2)}</span> },
+    { title: "拒付率", dataIndex: "rate", width: 140, align: "center" as const, render: (v: number) => {
+      const n = Number(v || 0);
+      const color = n >= 50 ? "#ff4d4f" : n >= 20 ? "#faad14" : "#52c41a";
+      return (
+        <Space size={6}>
+          <Progress type="circle" size={32} percent={Math.min(100, n)} strokeColor={color} format={() => ""} />
+          <span style={{ fontWeight: 600, color }}>{n.toFixed(2)}%</span>
+        </Space>
+      );
+    } },
+  ], []);
   const vioCols = useMemo(() => [
     { title: "商家名称", dataIndex: "merchant_name", width: 200, ellipsis: true },
     { title: "平台", dataIndex: "platform", width: 80, render: (v: string) => v ? <Tag>{v}</Tag> : <Tag>全平台</Tag> },
@@ -444,7 +541,13 @@ export default function MerchantsPage() {
     </Form>
     <Card className="merchant-table-card">
       <Tabs activeKey={tab} onChange={(v) => { setTab(v); setPage(1); setSortField(""); setSortOrder(""); }} style={{ marginBottom: 0 }}
-        items={[{ key: "claimed", label: "我的商家" }, { key: "available", label: "选取商家" }, { key: "violations", label: <span><WarningOutlined style={{ color: "#ff4d4f", marginRight: 4 }} />违规商家</span> }, { key: "recommendations", label: <span><StarOutlined style={{ color: "#52c41a", marginRight: 4 }} />推荐商家</span> }]} />
+        items={[
+          { key: "claimed", label: "我的商家" },
+          { key: "available", label: "选取商家" },
+          { key: "violations", label: <span><WarningOutlined style={{ color: "#ff4d4f", marginRight: 4 }} />违规商家</span> },
+          { key: "recommendations", label: <span><StarOutlined style={{ color: "#52c41a", marginRight: 4 }} />推荐商家</span> },
+          { key: "chargebacks", label: <span><CloseCircleOutlined style={{ color: "#ff4d4f", marginRight: 4 }} />拒付商家</span> },
+        ]} />
       {(tab === "claimed" || tab === "available") && (
         <div className="filter-bar">
           <Select placeholder="平台" allowClear style={{ width: 120 }} size="small" value={platform || undefined} onChange={(v) => { setPlatform(v || ""); setPage(1); }} options={PLATFORMS.map((p) => ({ value: p.code, label: p.code }))} />
@@ -472,6 +575,49 @@ export default function MerchantsPage() {
         </div>}
         <div className="filter-bar"><Input allowClear placeholder="搜索商家名" style={{ width: 240 }} prefix={<SearchOutlined />} size="small" value={recSearch} onChange={(e) => setRecSearch(e.target.value)} onPressEnter={() => setRecPage(1)} /><Button type="primary" size="small" icon={<SearchOutlined />} onClick={() => setRecPage(1)}>查询</Button><Button size="small" icon={<ReloadOutlined />} onClick={() => recMutate()}>刷新</Button></div>
         <Table rowKey="id" loading={rl} dataSource={recData?.items || []} size="small" scroll={{ x: 1000 }} pagination={{ current: recPage, pageSize: 50, total: recData?.total || 0, showTotal: (t: number) => `共 ${t} 条`, onChange: setRecPage }} columns={recCols} /></div>)}
+      {tab === "chargebacks" && (<div>
+        <div style={{ marginBottom: 12, padding: "8px 12px", background: "#fffbe6", border: "1px solid #ffe58f", borderRadius: 6, fontSize: 12, color: "#666" }}>
+          <WarningOutlined style={{ color: "#faad14", marginRight: 6 }} />
+          全员拒付率聚合数据（时间窗默认 2025-11-01 至今）。分母基于「已结算 + 已拒付」金额，待结算订单不计入。
+        </div>
+        <div className="filter-bar" style={{ flexWrap: "wrap", gap: 12 }}>
+          <span style={{ fontSize: 12, color: "#666" }}>时间：</span>
+          <DatePicker.RangePicker
+            size="small"
+            value={cbDateRange}
+            onChange={(v) => { if (v && v[0] && v[1]) setCbDateRange([v[0], v[1]]); }}
+            allowClear={false}
+            style={{ width: 240 }}
+          />
+          <Select placeholder="平台" allowClear style={{ width: 120 }} size="small" value={cbPlatform || undefined} onChange={(v) => setCbPlatform(v || "")} options={PLATFORMS.map((p) => ({ value: p.code, label: p.code }))} />
+          <Input
+            placeholder="搜索商家名/MID"
+            prefix={<SearchOutlined />}
+            style={{ width: 200 }}
+            size="small"
+            value={cbSearchInput}
+            onChange={(e) => setCbSearchInput(e.target.value)}
+            onPressEnter={() => setCbSearch(cbSearchInput)}
+            allowClear
+          />
+          <Button type="primary" size="small" icon={<SearchOutlined />} onClick={() => setCbSearch(cbSearchInput)}>查询</Button>
+          <Button size="small" icon={<ReloadOutlined />} onClick={() => { setCbSearchInput(""); setCbSearch(""); setCbPlatform(""); setCbThreshold(50); setCbDateRange([dayjs("2025-11-01"), dayjs()]); }}>重置</Button>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 260 }}>
+            <span style={{ fontSize: 12, color: "#666" }}>拒付率阈值：</span>
+            <Slider min={0} max={100} step={1} value={cbThreshold} onChange={setCbThreshold} style={{ flex: 1, minWidth: 140 }} />
+            <Tag color={cbThreshold >= 50 ? "red" : cbThreshold >= 20 ? "orange" : "green"} style={{ margin: 0, minWidth: 56, textAlign: "center" }}>≥ {cbThreshold}%</Tag>
+          </div>
+        </div>
+        <Table
+          rowKey={(r) => `${r.platform}-${r.merchant_id}`}
+          loading={cbLoading}
+          dataSource={cbData?.items || []}
+          columns={chargebackCols}
+          pagination={{ pageSize: 50, showTotal: (t: number) => `共 ${t} 条` }}
+          scroll={{ x: 1000 }}
+          size="small"
+        />
+      </div>)}
     </Card>
     <Modal
       title="同步商家库"

@@ -8,6 +8,7 @@ import {
   UnorderedListOutlined, DeleteOutlined, EyeOutlined, SendOutlined, CopyOutlined, LinkOutlined, SearchOutlined, ReloadOutlined,
 } from "@ant-design/icons";
 import { sanitizeHtml } from "@/lib/sanitize";
+import PublishSiteSelect from "@/components/PublishSiteSelect";
 
 const { Title, Text, Paragraph } = Typography;
 
@@ -24,6 +25,7 @@ interface Article {
 
 interface Site {
   id: string; site_name: string; domain: string; site_type: string | null; verified: number; status: string;
+  is_deleted?: number;
 }
 
 export default function ArticlesPage() {
@@ -272,7 +274,15 @@ export default function ArticlesPage() {
       >
         <Form form={publishForm} layout="vertical">
           <Form.Item name="publish_site_id" label="发布到" rules={[{ required: true, message: "请选择站点" }]}>
-            <Select disabled={publishing} options={sites.filter((s) => s.status === "active" && s.verified === 1).map((s) => ({ value: s.id, label: `${s.site_name} (${s.domain})` }))} />
+            <PublishSiteSelect
+              sites={sites.map((s) => ({
+                ...s,
+                id: String(s.id),
+                is_deleted: s.is_deleted ?? 0,
+              }))}
+              disabled={publishing}
+              placeholder="搜索站点名或域名"
+            />
           </Form.Item>
         </Form>
         {publishing && (

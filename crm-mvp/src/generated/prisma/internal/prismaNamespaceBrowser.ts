@@ -216,6 +216,8 @@ export const User_merchantsScalarFieldEnum = {
   holiday_name: 'holiday_name',
   tracking_link: 'tracking_link',
   campaign_link: 'campaign_link',
+  source: 'source',
+  listing_status: 'listing_status',
   violation_status: 'violation_status',
   violation_time: 'violation_time',
   recommendation_status: 'recommendation_status',
@@ -261,6 +263,16 @@ export const Merchant_recommendationsScalarFieldEnum = {
   remark: 'remark',
   share_time: 'share_time',
   upload_batch: 'upload_batch',
+  source: 'source',
+  mcid: 'mcid',
+  mid: 'mid',
+  affiliate: 'affiliate',
+  website: 'website',
+  merchant_base: 'merchant_base',
+  epc: 'epc',
+  commission_cap: 'commission_cap',
+  avg_commission_rate: 'avg_commission_rate',
+  avg_order_commission: 'avg_order_commission',
   is_deleted: 'is_deleted',
   created_at: 'created_at'
 } as const
@@ -896,6 +908,8 @@ export const user_merchantsOrderByRelevanceFieldEnum = {
   holiday_name: 'holiday_name',
   tracking_link: 'tracking_link',
   campaign_link: 'campaign_link',
+  source: 'source',
+  listing_status: 'listing_status',
   violation_status: 'violation_status',
   recommendation_status: 'recommendation_status',
   policy_status: 'policy_status',
@@ -927,7 +941,14 @@ export const merchant_recommendationsOrderByRelevanceFieldEnum = {
   settlement_info: 'settlement_info',
   remark: 'remark',
   share_time: 'share_time',
-  upload_batch: 'upload_batch'
+  upload_batch: 'upload_batch',
+  source: 'source',
+  mcid: 'mcid',
+  mid: 'mid',
+  affiliate: 'affiliate',
+  website: 'website',
+  merchant_base: 'merchant_base',
+  commission_cap: 'commission_cap'
 } as const
 
 export type merchant_recommendationsOrderByRelevanceFieldEnum = (typeof merchant_recommendationsOrderByRelevanceFieldEnum)[keyof typeof merchant_recommendationsOrderByRelevanceFieldEnum]

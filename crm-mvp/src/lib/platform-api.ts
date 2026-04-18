@@ -110,6 +110,10 @@ export interface PlatformMerchant {
   logo_url: string;
   campaign_link: string;
   relationship_status: string; // joined / not_joined / pending
+  /** 近30天每次点击收益（EPC），从平台 API 提取；若平台不提供则为 null */
+  epc_30d: number | null;
+  /** 商家在平台的入驻日期（YYYY-MM-DD），从平台 API 提取；若平台不提供则为 null */
+  join_date: string | null;
 }
 
 // ── API 请求 ──
@@ -262,6 +266,38 @@ function parseMerchants(platform: string, data: Record<string, unknown>, assumeA
       }
     }
 
+    // ── 近30天 EPC ─────────────────────────────────────────────────────────
+    // 所有平台文档均未暴露 EPC 字段；若未来 API 新增则自动捕获
+    const epc30d = (() => {
+      const raw =
+        item.epc_30  ?? item.epc30  ?? item.epc_30d ??
+        item.thirty_day_epc ?? item.thirtyDayEpc   ??
+        item.epc_value ?? item.clicks_epc           ??
+        item.epc      ?? null;
+      if (raw == null) return null;
+      const n = parseFloat(String(raw));
+      return isNaN(n) ? null : n;
+    })();
+
+    // ── 入驻时间（商家在平台的加入日期） ───────────────────────────────────
+    // API 文档确认：8个平台均使用 "datetime" 字段
+    //   - CG/MUI/BSH/CF/PM/LB/RW: Unix 秒级时间戳（如 1761036243）
+    //   - LH: 日期字符串（如 "2022-07-27 09:40:03"）
+    const joinDate = (() => {
+      const raw = item.datetime ?? null;
+      if (raw == null) return null;
+      const s = String(raw).trim();
+      if (!s || s === "0") return null;
+      // Unix 秒级时间戳
+      if (/^\d{9,10}$/.test(s)) return new Date(Number(s) * 1000).toISOString().slice(0, 10);
+      // Unix 毫秒级时间戳
+      if (/^\d{13}$/.test(s)) return new Date(Number(s)).toISOString().slice(0, 10);
+      // LH 日期字符串 "YYYY-MM-DD HH:MM:SS"（视为 UTC）
+      const normalized = s.includes("T") ? s : s.replace(" ", "T") + "Z";
+      const d = new Date(normalized);
+      return isNaN(d.getTime()) ? null : d.toISOString().slice(0, 10);
+    })();
+
     return {
       merchant_id: mid,
       merchant_name: name,
@@ -272,6 +308,8 @@ function parseMerchants(platform: string, data: Record<string, unknown>, assumeA
       logo_url: logo,
       campaign_link: campaignLink,
       relationship_status: relationshipStatus,
+      epc_30d: epc30d,
+      join_date: joinDate,
     };
   }).filter((m) => m.merchant_id && m.merchant_name);
 }
@@ -542,6 +580,7 @@ export interface PlatformTransaction {
   commission_amount: number;
   status: string; // approved / pending / rejected
   raw_status: string;
+  merchant_url?: string; // 平台返回的商家/着陆/点击 URL（用于 url_direct 商家 domain 兜底，C-020）
 }
 
 async function callTxnApi(
@@ -794,6 +833,17 @@ function parseTransactions(platform: string, data: Record<string, unknown>): Pla
       item.order_time || item.orderTime || item.transaction_time || item.report_time || item.created_at
     );
 
+    const merchantUrl = String(
+      item.merchant_url || item.merchantUrl ||
+      item.shop_url || item.shopUrl ||
+      item.click_url || item.clickUrl ||
+      item.landing_url || item.landingUrl ||
+      item.link_url || item.linkUrl ||
+      item.product_url || item.productUrl ||
+      item.website || item.web_url ||
+      ""
+    );
+
     return {
       transaction_id: txnId,
       order_id: rawOrderId || undefined,
@@ -804,6 +854,7 @@ function parseTransactions(platform: string, data: Record<string, unknown>): Pla
       commission_amount: commissionAmount,
       status: normalizeTxnStatus(rawStatus),
       raw_status: rawStatus,
+      merchant_url: merchantUrl || undefined,
     };
   }).filter((t) => t.transaction_id);
 }

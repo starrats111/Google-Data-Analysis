@@ -15,6 +15,7 @@ import { generateLinkExchangeScript } from "@/lib/link-exchange-script-template"
 import {
   PLATFORMS,
 } from "@/lib/constants";
+import PublishSiteSelect, { type PublishSite } from "@/components/PublishSiteSelect";
 
 const { Title, Text } = Typography;
 
@@ -22,7 +23,7 @@ const { Title, Text } = Typography;
 function PlatformConnectionsTab() {
   const { message } = App.useApp();
   const [connections, setConnections] = useState<Record<string, unknown>[]>([]);
-  const [sites, setSites] = useState<{ id: string; site_name: string; domain: string }[]>([]);
+  const [sites, setSites] = useState<PublishSite[]>([]);
   const [modalOpen, setModalOpen] = useState(false);
   const [editConn, setEditConn] = useState<Record<string, unknown> | null>(null);
   const [form] = Form.useForm();
@@ -153,11 +154,7 @@ function PlatformConnectionsTab() {
             <Input.Password placeholder={editConn ? "已保存（留空则不修改）" : "请输入 API Key"} />
           </Form.Item>
           <Form.Item name="publish_site_id" label="绑定站点" tooltip="选择该账号对应的发布站点，领取商家后文章将自动发布到此站点">
-            <Select
-              allowClear
-              placeholder="选择发布站点"
-              options={sites.map((s) => ({ value: String(s.id), label: `${s.site_name} (${s.domain})` }))}
-            />
+            <PublishSiteSelect sites={sites} placeholder="选择发布站点（可搜索站点名或域名）" />
           </Form.Item>
         </Form>
       </Modal>

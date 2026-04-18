@@ -160,6 +160,27 @@ export async function POST(req: NextRequest) {
 
       const redirectRules = getRedirectedMerchantKeys(userId);
 
+      // C-020 R1.1：domain 兜底——仅对 source=url_direct 的商家，按 domain 回填 user_merchant_id
+      const urlDirectMerchants = await prisma.user_merchants.findMany({
+        where: {
+          user_id: userId,
+          platform_connection_id: conn.id,
+          source: "url_direct",
+          is_deleted: 0,
+        },
+        select: { id: true, merchant_id: true, platform: true, merchant_name: true, merchant_url: true },
+      });
+      const extractDomain = (u: string | null | undefined): string => {
+        if (!u) return "";
+        try { return new URL(u).hostname.replace(/^www\./i, "").toLowerCase(); }
+        catch { return ""; }
+      };
+      const urlDirectByDomain = new Map<string, typeof urlDirectMerchants[0]>();
+      for (const m of urlDirectMerchants) {
+        const d = extractDomain(m.merchant_url);
+        if (d && !urlDirectByDomain.has(d)) urlDirectByDomain.set(d, m);
+      }
+
       for (let i = 0; i < dedupedTxns.length; i += 50) {
         const batch = dedupedTxns.slice(i, i + 50);
         const ops = batch.map((txn) => {
@@ -195,7 +216,12 @@ export async function POST(req: NextRequest) {
             });
           }
 
-          const merchant = merchantMap.get(`${platform}_${merchantId}`);
+          let merchant = merchantMap.get(`${platform}_${merchantId}`);
+          // domain 兜底：精确匹配失败时，仅在 source=url_direct 范围内按 domain 匹配（C-020 R1.1）
+          if (!merchant && txn.merchant_url) {
+            const d = extractDomain(txn.merchant_url);
+            if (d) merchant = urlDirectByDomain.get(d);
+          }
           const userMerchantId = merchant ? merchant.id : BigInt(0);
           const merchantName = txn.merchant || merchant?.merchant_name || "";
           const newComm = txn.commission_amount || 0;

@@ -13,6 +13,7 @@ import {
   InboxOutlined, LinkOutlined,
 } from "@ant-design/icons";
 import { sanitizeHtml } from "@/lib/sanitize";
+import PublishSiteSelect from "@/components/PublishSiteSelect";
 import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc";
 import timezone from "dayjs/plugin/timezone";
@@ -38,6 +39,7 @@ interface PlatformConnection {
 
 interface Site {
   id: string; site_name: string; domain: string; verified: number; status: string;
+  is_deleted?: number;
 }
 
 interface CrawlResult {
@@ -71,6 +73,19 @@ export default function ArticlePublishPage() {
 
   // Step 0: 选择商家
   const [selectedMerchant, setSelectedMerchant] = useState<Merchant | null>(null);
+  // Step 0 B 块：按 URL 创建（C-020）
+  const [urlFormUrl, setUrlFormUrl] = useState("");
+  const [urlFormMid, setUrlFormMid] = useState("");
+  const [urlFormName, setUrlFormName] = useState("");
+  const [urlFormTracking, setUrlFormTracking] = useState("");
+  const [urlFormConnId, setUrlFormConnId] = useState("");
+  const [urlFormCountry, setUrlFormCountry] = useState("");
+  const [urlFormSiteId, setUrlFormSiteId] = useState("");
+  const [urlSubmitting, setUrlSubmitting] = useState(false);
+  const isUrlBlockFilled = !!(urlFormUrl && urlFormConnId && urlFormCountry && urlFormSiteId);
+  const activeBlock: "platform" | "url" | null = selectedMerchant
+    ? "platform"
+    : (isUrlBlockFilled ? "url" : null);
   // O(1) 查找 map，避免 filterOption 回调中 O(n²) 遍历
   // 有搜索词时从全量商家中查找，无搜索词时从已领取商家中查找
   const claimedMerchantMap = useMemo(() => new Map(merchants.map((m) => [m.id, m])), [merchants]);
@@ -574,16 +589,19 @@ export default function ArticlePublishPage() {
         ]}
       />
 
-      {/* Step 0: 选择商家 */}
+      {/* Step 0: 选择商家（A 块）+ 按 URL 创建（B 块，C-020） */}
       {step === 0 && (
         <Card>
           <Form layout="vertical" style={{ maxWidth: 600 }}>
-            <Form.Item label="选择推广商家" required>
+            <Form.Item label="选择推广商家" required={activeBlock !== "url"}>
               <Select
                 placeholder="默认显示已启用商家，输入商家名或MID可搜索所有已领取商家"
                 showSearch
+                allowClear
+                disabled={activeBlock === "url"}
                 filterOption={merchantFilterOption}
                 style={{ width: "100%" }}
+                value={selectedMerchant?.id}
                 onChange={(v) => {
                   const m = merchants.find((m) => m.id === v);
                   setSelectedMerchant(m || null);
@@ -614,7 +632,7 @@ export default function ArticlePublishPage() {
               </div>
             )}
             {/* 同一平台有多个账号连接时，需要用户选择发布到哪个站点 */}
-            {multipleConns.length > 1 && (
+            {multipleConns.length > 1 && activeBlock !== "url" && (
               <Form.Item
                 label={<><GlobalOutlined style={{ marginRight: 4 }} />选择发布站点账号</>}
                 required
@@ -644,10 +662,136 @@ export default function ArticlePublishPage() {
                 />
               </Form.Item>
             )}
+
+            {/* C-020 B 块：按 URL 创建（与 A 块互斥） */}
+            <div style={{ margin: "16px 0", borderTop: "1px dashed #d9d9d9", position: "relative" }}>
+              <span style={{ position: "absolute", top: -10, left: 20, background: "#fff", padding: "0 12px", color: "#999", fontSize: 12 }}>或者</span>
+            </div>
+            <Card
+              size="small"
+              title={<Space><LinkOutlined />按 URL 创建</Space>}
+              style={{ marginBottom: 16, opacity: activeBlock === "platform" ? 0.55 : 1 }}
+              styles={{ body: activeBlock === "platform" ? { pointerEvents: "none" as const } : undefined }}
+            >
+              <Text type="secondary" style={{ fontSize: 12, display: "block", marginBottom: 12 }}>
+                平台已下架或与 CRM 不同步时，可直接输入商家 URL 创建。4 项带 * 为必填；A 块已选商家则此块置灰。
+              </Text>
+              <Form.Item label="商家 URL" required style={{ marginBottom: 12 }}>
+                <Input placeholder="https://shop.example.com/..." value={urlFormUrl} onChange={(e) => setUrlFormUrl(e.target.value)} allowClear />
+              </Form.Item>
+              <Form.Item label="平台账号" required style={{ marginBottom: 12 }}>
+                <Select
+                  placeholder="选择用于发起这次投放的平台账号"
+                  value={urlFormConnId || undefined}
+                  onChange={(v) => setUrlFormConnId(v || "")}
+                  options={platformConns.map((c) => ({
+                    value: c.id,
+                    label: `${c.platform} · ${c.account_name}`,
+                  }))}
+                  allowClear
+                />
+              </Form.Item>
+              <Form.Item label="目标国家" required style={{ marginBottom: 12 }}>
+                <Select
+                  placeholder="选择国家"
+                  showSearch
+                  optionFilterProp="label"
+                  value={urlFormCountry || undefined}
+                  onChange={(v) => setUrlFormCountry(v || "")}
+                  options={countryOptions}
+                  allowClear
+                />
+              </Form.Item>
+              <Form.Item label="发布站点" required style={{ marginBottom: 12 }}>
+                <PublishSiteSelect
+                  value={urlFormSiteId || undefined}
+                  onChange={(v) => setUrlFormSiteId((v as string) || "")}
+                  sites={sites.map((s) => ({
+                    ...s,
+                    id: String(s.id),
+                    is_deleted: s.is_deleted ?? 0,
+                  }))}
+                  placeholder="搜索站点名或域名"
+                />
+              </Form.Item>
+              <Form.Item label="商家名称（选填）" style={{ marginBottom: 12 }}>
+                <Input placeholder="留空则用 URL 域名（去 www.）" value={urlFormName} onChange={(e) => setUrlFormName(e.target.value)} />
+              </Form.Item>
+              <Form.Item label="商家 MID（选填）" style={{ marginBottom: 12 }}>
+                <Input placeholder="平台有就填，没有留空" value={urlFormMid} onChange={(e) => setUrlFormMid(e.target.value)} />
+              </Form.Item>
+              <Form.Item label="联盟链接（选填）" style={{ marginBottom: 0 }}>
+                <Input placeholder="联盟后台的 tracking 链接" value={urlFormTracking} onChange={(e) => setUrlFormTracking(e.target.value)} />
+              </Form.Item>
+            </Card>
+
             <Button
               type="primary"
-              disabled={!selectedMerchant || (multipleConns.length > 1 && !selectedConnId)}
-              onClick={() => setStep(1)}
+              loading={urlSubmitting}
+              disabled={
+                activeBlock === null ||
+                (activeBlock === "platform" && multipleConns.length > 1 && !selectedConnId)
+              }
+              onClick={async () => {
+                if (activeBlock === "platform") {
+                  setStep(1);
+                  return;
+                }
+                if (activeBlock !== "url") return;
+                setUrlSubmitting(true);
+                try {
+                  const r = await fetch("/api/user/articles/by-url", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                      merchant_url: urlFormUrl.trim(),
+                      platform_connection_id: urlFormConnId,
+                      country: urlFormCountry,
+                      publish_site_id: urlFormSiteId,
+                      merchant_id: urlFormMid.trim(),
+                      merchant_name: urlFormName.trim(),
+                      tracking_link: urlFormTracking.trim(),
+                    }),
+                  }).then((r) => r.json());
+                  if (r.code !== 0) {
+                    message.error(r.message || "创建失败");
+                    return;
+                  }
+                  const data = r.data || {};
+                  const conn = platformConns.find((c) => c.id === urlFormConnId);
+                  const fallbackName = urlFormName.trim() || (() => {
+                    try { return new URL(urlFormUrl).hostname.replace(/^www\./i, ""); } catch { return urlFormUrl; }
+                  })();
+                  setSelectedMerchant({
+                    id: data.user_merchant_id,
+                    merchant_name: fallbackName,
+                    platform: conn?.platform || "",
+                    merchant_id: urlFormMid.trim(),
+                    merchant_url: urlFormUrl.trim(),
+                    target_country: urlFormCountry,
+                    supported_regions: null,
+                    platform_connection_id: urlFormConnId || null,
+                    ad_status: "NOT_SUBMITTED",
+                  });
+                  setCountry(urlFormCountry);
+                  setLanguage(getLang(urlFormCountry));
+                  setSelectedSite(urlFormSiteId);
+                  setSelectedConnId(urlFormConnId);
+                  const site = sites.find((s) => String(s.id) === urlFormSiteId);
+                  setBoundSiteName(site ? `${site.site_name} (${site.domain})` : "");
+                  if (data.reused) {
+                    message.info("已复用已有商家记录");
+                  } else {
+                    const statusMap: Record<string, string> = { offline: "已下架", url_only: "无平台数据", active: "平台镜像" };
+                    message.success(`已创建 URL 直投商家（${statusMap[data.listing_status] || data.listing_status}）`);
+                  }
+                  setStep(1);
+                } catch (e) {
+                  message.error("创建失败，请检查网络");
+                } finally {
+                  setUrlSubmitting(false);
+                }
+              }}
             >
               下一步
             </Button>
@@ -845,11 +989,15 @@ export default function ArticlePublishPage() {
               </Form.Item>
             ) : (
               <Form.Item label="发布站点" required>
-                <Select
+                <PublishSiteSelect
                   placeholder="选择发布站点（建议在个人设置中为平台绑定站点）"
                   value={selectedSite || undefined}
-                  onChange={setSelectedSite}
-                  options={activeSites.map((s) => ({ value: s.id, label: `${s.site_name} (${s.domain})` }))}
+                  onChange={(v) => setSelectedSite(v as string)}
+                  sites={sites.map((s) => ({
+                    ...s,
+                    id: String(s.id),
+                    is_deleted: s.is_deleted ?? 0,
+                  }))}
                 />
               </Form.Item>
             )}
