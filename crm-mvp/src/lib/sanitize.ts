@@ -151,6 +151,59 @@ export function sanitizeHtml(html: string): string {
 }
 
 /**
+ * 剥离推理模型的 reasoning 残留（<think>/<thinking>/<scratchpad>/<reasoning>/<reflection> 块）
+ *
+ * 背景（C-028）：DeepSeek-R1 / Gemini Thinking / 某些推理模型偶发会把 reasoning
+ * 内容以 `<think>…</think>` 标签形式塞进 JSON 的 content 字段里。sanitizeHtml 的
+ * 标签白名单只剥标签却保留内部文本，导致 `**Defining the Scope**` 这类 markdown
+ * 字符原样泄漏到前端。这里统一把这些 reasoning 块（含内部文本）一次性删干净。
+ *
+ * 兼容：
+ * - <think>…</think>、<thinking>…</thinking> 等闭合完整的情况
+ * - 开头就是 `<think>`、但 AI 忘了写 `</think>`：从 `<think>` 删到第一个 HTML 块级标签前
+ * - markdown fence 版本（```thinking … ```）
+ */
+const REASONING_TAG_NAMES = [
+  "think",
+  "thinking",
+  "scratchpad",
+  "reasoning",
+  "reflection",
+  "analysis",
+  "plan",
+];
+
+export function stripReasoningArtifacts(raw: string): string {
+  if (!raw || typeof raw !== "string") return raw || "";
+  let text = raw;
+
+  for (const tag of REASONING_TAG_NAMES) {
+    // 1. 闭合完整：<tag …>…</tag>（包含可选属性 + 多行）
+    const closedRe = new RegExp(`<${tag}\\b[^>]*>[\\s\\S]*?<\\/${tag}>`, "gi");
+    text = text.replace(closedRe, "");
+
+    // 2. 未闭合：开头直接 <tag>，但没有 </tag>
+    //    只有当整段文本里有 <tag> 却没有 </tag> 时才兜底
+    const openRe = new RegExp(`<${tag}\\b[^>]*>`, "gi");
+    const closeRe = new RegExp(`<\\/${tag}>`, "gi");
+    if (openRe.test(text) && !closeRe.test(text)) {
+      // 从 <tag> 删到第一个 HTML 块级标签前（h1-h6 / p / article / section / div / img）
+      text = text.replace(
+        new RegExp(`<${tag}\\b[^>]*>[\\s\\S]*?(?=<(?:h[1-6]|p|article|section|div|img)\\b)`, "i"),
+        "",
+      );
+      // 如果还没命中（没有任何 HTML 块），直接把 <tag> 开始到结尾全删（拒绝全 reasoning 的脏输出）
+      text = text.replace(new RegExp(`<${tag}\\b[^>]*>[\\s\\S]*$`, "i"), "");
+    }
+  }
+
+  // 3. markdown fence：```thinking … ``` / ```think … ```
+  text = text.replace(/```(?:think|thinking|scratchpad|reasoning|reflection|analysis|plan)[\s\S]*?```/gi, "");
+
+  return text.trim();
+}
+
+/**
  * 清洗 AI 生成的脏内容（JSON 包裹、转义符等），提取纯净 HTML
  * 用于修复数据库中已损坏的文章内容
  */
@@ -159,6 +212,14 @@ export function cleanArticleContent(raw: string): { cleaned: string; wasDirty: b
 
   let content = raw;
   let wasDirty = false;
+
+  // C-028：先剥掉 <think>/<thinking>/<scratchpad> 等 reasoning 残留，
+  // 避免它们把后续 JSON 检测 / HTML 起始位置判断带偏。
+  const deReasoned = stripReasoningArtifacts(content);
+  if (deReasoned !== content) {
+    content = deReasoned;
+    wasDirty = true;
+  }
 
   // 去掉外层 <p>...</p> 包裹
   const stripped = content.replace(/^<p>\s*/i, "").replace(/\s*<\/p>\s*$/i, "");

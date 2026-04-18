@@ -221,9 +221,10 @@ export function rebuildArticleContentWithLayout(content: string, layout: Article
 function buildArticleImageTag(src: string, title: string, isHero: boolean, imageIndex: number): string {
   const safeTitle = (title || "Article").replace(/"/g, "&quot;").trim() || "Article";
   const alt = isHero ? `${safeTitle} hero image` : `${safeTitle} image ${imageIndex}`;
+  // C-028：加 referrerpolicy="no-referrer" 绕过外链图床的 hotlink / Referer 防盗链
   return isHero
-    ? `<img src="${src}" alt="${alt}" style="width:100%;max-height:400px;object-fit:cover;border-radius:12px;margin:0 0 24px 0" loading="lazy" />`
-    : `<img src="${src}" alt="${alt}" style="max-width:100%;border-radius:8px;margin:16px 0" loading="lazy" />`;
+    ? `<img src="${src}" alt="${alt}" referrerpolicy="no-referrer" style="width:100%;max-height:400px;object-fit:cover;border-radius:12px;margin:0 0 24px 0" loading="lazy" />`
+    : `<img src="${src}" alt="${alt}" referrerpolicy="no-referrer" style="max-width:100%;border-radius:8px;margin:16px 0" loading="lazy" />`;
 }
 
 function isSameImageSource(expected: string, actual: string): boolean {

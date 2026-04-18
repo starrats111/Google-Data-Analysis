@@ -1724,9 +1724,10 @@ async function syncArticleImages(
 
 function buildArticleImageTag(src: string, alt: string, isHero: boolean): string {
   const safeAlt = alt.replace(/"/g, "&quot;");
+  // C-028：外链图床常开启 hotlink 防盗链；发布到外站后浏览器也要绕过 Referer 校验
   return isHero
-    ? `<img src="${src}" alt="${safeAlt}" style="width:100%;max-height:400px;object-fit:cover;border-radius:12px;margin:0 0 24px 0" loading="lazy" />`
-    : `<img src="${src}" alt="${safeAlt}" style="max-width:100%;border-radius:8px;margin:16px 0" loading="lazy" />`;
+    ? `<img src="${src}" alt="${safeAlt}" referrerpolicy="no-referrer" style="width:100%;max-height:400px;object-fit:cover;border-radius:12px;margin:0 0 24px 0" loading="lazy" />`
+    : `<img src="${src}" alt="${safeAlt}" referrerpolicy="no-referrer" style="max-width:100%;border-radius:8px;margin:16px 0" loading="lazy" />`;
 }
 
 function ensurePublishContentImages(content: string, title: string, imagesJson?: unknown): string {

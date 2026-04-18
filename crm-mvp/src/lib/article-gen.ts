@@ -5,7 +5,7 @@
 import { callAiWithFallback } from "@/lib/ai-service";
 import { humanize } from "@/lib/humanizer";
 import prisma from "@/lib/prisma";
-import { emphasizeArticleHyperlinks } from "@/lib/sanitize";
+import { emphasizeArticleHyperlinks, stripReasoningArtifacts } from "@/lib/sanitize";
 
 const COUNTRY_LANG_MAP: Record<string, string> = {
   US: "English", UK: "English", CA: "English", AU: "English",
@@ -154,9 +154,9 @@ You MUST insert images into the article HTML. Available images:${images.slice(0,
 
 Rules:
 1. HERO IMAGE: The FIRST image MUST be placed right after the article title (before the first paragraph) as a hero/banner image. Use full width:
-   <img src="${images[0]}" alt="descriptive alt" style="width:100%;max-height:400px;object-fit:cover;border-radius:12px;margin:0 0 24px 0" />
+   <img src="${images[0]}" alt="descriptive alt" referrerpolicy="no-referrer" style="width:100%;max-height:400px;object-fit:cover;border-radius:12px;margin:0 0 24px 0" />
 2. BODY IMAGES: Insert ${Math.min(images.length - 1, 4)} more images evenly throughout the article between sections:
-   <img src="URL" alt="descriptive alt" style="max-width:100%;border-radius:8px;margin:16px 0" />
+   <img src="URL" alt="descriptive alt" referrerpolicy="no-referrer" style="max-width:100%;border-radius:8px;margin:16px 0" />
 3. Use ALL ${Math.min(images.length, 5)} of the first images. Do NOT skip any.
 4. Every <img> tag must have a meaningful alt attribute describing the image content.`
     : "";
@@ -197,16 +197,24 @@ ${extraPrompt ? `- Additional instructions: ${extraPrompt}` : ""}
 
 CRITICAL: Output ONLY raw JSON, no markdown, no explanation, no preamble.
 Do NOT say 'I will write' or 'Let me create'. Start directly with {.
+Do NOT include <think>, <thinking>, <scratchpad>, <reasoning>, <reflection>, <analysis>, <plan>, or ANY internal reasoning tags / tool-call blocks / chain-of-thought prefix. No **bold headers** summarizing your plan. Output the JSON object only.
 JSON schema: {"content":"<full article HTML with h2/h3/p tags, 10-15 hyperlinks>","excerpt":"100-char plain text summary","meta_title":"SEO title","meta_description":"160-char description","meta_keywords":"comma separated","category":"one of: health,tech,lifestyle,fashion,beauty,fitness,food,travel,finance,general","author":"a realistic pen name matching the article language"}`;
 
   const keywordStr = keywords.length > 0 ? `\nSEO keywords (weave naturally): ${keywords.join(", ")}` : "";
   const userMsg = `Title: ${title}\nBrand: ${merchantName}\nProducts: ${products.join(", ")}\nSelling points: ${sellingPoints.join(", ")}\nPromo: \nLink: ${trackingLink}${keywordStr}`;
 
   try {
-    const raw = await callAiWithFallback("article", [
+    const rawOriginal = await callAiWithFallback("article", [
       { role: "system", content: systemPrompt },
       { role: "user", content: userMsg },
     ], 16384);
+
+    // C-028：AI 返回后、解析之前，先剥掉 <think>/<thinking>/<scratchpad> 等推理残留，
+    // 避免这些标签把 JSON 包在外面、或被 extractJson 当成合法 content 吞进去。
+    const raw = stripReasoningArtifacts(rawOriginal);
+    if (raw !== rawOriginal) {
+      console.warn(`[generateMerchantArticle] 检测并剥离 AI reasoning 残留（原 ${rawOriginal.length} 字 → ${raw.length} 字）`);
+    }
 
     let result: any;
     try {
@@ -221,12 +229,27 @@ JSON schema: {"content":"<full article HTML with h2/h3/p tags, 10-15 hyperlinks>
         result = JSON.parse(jsonStr);
       }
     } catch {
-      // JSON 解析失败，尝试用正则提取 content 字段
+      // JSON 解析失败：尝试用正则提取 content 字段；仍失败则 throw，
+      // 绝不把 raw 整段当成品落盘（C-028：老版本 <p>${raw}</p> fallback 会把
+      // reasoning 写进 DB，导致前端看到 **Defining the Scope** 等脏字符）。
       const fallbackContent = extractContentFallback(raw);
       if (fallbackContent) {
         result = { content: fallbackContent, excerpt: "", meta_title: title, meta_description: "", meta_keywords: title, category: "general" };
       } else {
-        result = { content: `<p>${raw}</p>`, excerpt: raw.slice(0, 100), meta_title: title, meta_description: raw.slice(0, 160), meta_keywords: title, category: "general" };
+        console.error(`[generateMerchantArticle] AI 返回无法解析为 JSON，也无法回退出 content 字段。head=${raw.slice(0, 200)}`);
+        throw new Error("AI 返回内容无法解析为合法 JSON，拒绝落盘");
+      }
+    }
+
+    // C-028：对 content/excerpt/meta_* 字段统一再过一遍 reasoning 剥离器
+    // （有些模型把 <think> 嵌在 JSON 的 content 字段内部，JSON.parse 能成功但 content 已污染）
+    for (const key of ["content", "excerpt", "meta_title", "meta_description"] as const) {
+      if (typeof result[key] === "string" && result[key]) {
+        const cleaned = stripReasoningArtifacts(result[key]);
+        if (cleaned !== result[key]) {
+          console.warn(`[generateMerchantArticle] 字段 ${key} 检测到 reasoning 残留，已清洗（原 ${result[key].length} 字 → ${cleaned.length} 字）`);
+          result[key] = cleaned;
+        }
       }
     }
 
@@ -264,9 +287,12 @@ JSON schema: {"content":"<full article HTML with h2/h3/p tags, 10-15 hyperlinks>
  */
 function buildImageTag(src: string, alt: string, isHero: boolean): string {
   const safeAlt = alt.replace(/"/g, "&quot;");
+  // C-028：外链图（如 aerosus.be）常开启 hotlink / referer 保护，
+  // 加 referrerpolicy="no-referrer" 后，浏览器不发送 Referer，可绕过绝大多数
+  // 图床的跨域图片防盗链；对自家 /api/user/ad-creation/upload-image 也无负面影响。
   return isHero
-    ? `<img src="${src}" alt="${safeAlt}" style="width:100%;max-height:400px;object-fit:cover;border-radius:12px;margin:0 0 24px 0" loading="lazy" />`
-    : `<img src="${src}" alt="${safeAlt}" style="max-width:100%;border-radius:8px;margin:16px 0" loading="lazy" />`;
+    ? `<img src="${src}" alt="${safeAlt}" referrerpolicy="no-referrer" style="width:100%;max-height:400px;object-fit:cover;border-radius:12px;margin:0 0 24px 0" loading="lazy" />`
+    : `<img src="${src}" alt="${safeAlt}" referrerpolicy="no-referrer" style="max-width:100%;border-radius:8px;margin:16px 0" loading="lazy" />`;
 }
 
 function ensureImagesPresent(html: string, images: string[], merchantName: string, title: string): string {
