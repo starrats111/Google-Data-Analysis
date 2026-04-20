@@ -352,8 +352,16 @@ JSON schema: {"content":"<full article HTML with h2/h3/p tags, 10-15 hyperlinks>
       }
     }
 
+    const finalContent = (result.content || "").trim();
+    // 最终守卫：内容长度低于阈值视为失败，绝不落盘空 / 占位文章
+    // （拦截 "AI 返回的 JSON 缺 content 字段" / "humanize 把内容洗成空" / SSE 聚合空字符串 等场景）
+    if (finalContent.length < 200) {
+      console.error(`[generateMerchantArticle] 最终 content 长度不足 (${finalContent.length} 字)，拒绝落盘。raw head=${rawOriginal.slice(0, 200)}`);
+      throw new Error(`AI 生成内容过短（${finalContent.length} 字），拒绝落盘`);
+    }
+
     return {
-      content: result.content || "",
+      content: finalContent,
       excerpt: result.excerpt || "",
       metaTitle: result.meta_title || title,
       metaDescription: result.meta_description || "",

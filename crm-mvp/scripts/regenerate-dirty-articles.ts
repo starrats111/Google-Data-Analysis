@@ -17,10 +17,15 @@ import path from "path";
 
 const IS_DRY_RUN = process.argv.includes("--dry-run");
 const INCLUDE_DELETED = process.argv.includes("--include-deleted");
+const INCLUDE_EMPTY = process.argv.includes("--include-empty");
 const KEEP_GOING = process.argv.includes("--keep-going");
 const ONLY_ID = (() => {
   const arg = process.argv.find((a) => a.startsWith("--only-id="));
   return arg ? arg.split("=")[1] : null;
+})();
+const RECENT_DAYS = (() => {
+  const arg = process.argv.find((a) => a.startsWith("--recent-days="));
+  return arg ? parseInt(arg.split("=")[1] || "0", 10) : 0;
 })();
 const BASE_URL = (() => {
   const arg = process.argv.find((a) => a.startsWith("--base="));
@@ -69,7 +74,12 @@ interface DirtyItem {
 }
 
 async function fetchDirtyList(): Promise<DirtyItem[]> {
-  const url = `${BASE_URL}/api/admin/regenerate-clean-article?includeDeleted=${INCLUDE_DELETED ? 1 : 0}`;
+  const params = new URLSearchParams({
+    includeDeleted: INCLUDE_DELETED ? "1" : "0",
+    includeEmpty: INCLUDE_EMPTY ? "1" : "0",
+    recentDays: String(RECENT_DAYS),
+  });
+  const url = `${BASE_URL}/api/admin/regenerate-clean-article?${params.toString()}`;
   const res = await fetch(url, { headers: HEADERS });
   if (!res.ok) {
     throw new Error(`GET ${url} → ${res.status} ${await res.text().catch(() => "")}`);
@@ -89,7 +99,7 @@ async function regenerateOne(id: string): Promise<{ ok: boolean; data: any }> {
 
 async function main() {
   log(`模式: ${IS_DRY_RUN ? "DRY-RUN" : "REAL-RUN"} | base=${BASE_URL}`);
-  log(`include-deleted: ${INCLUDE_DELETED} | only-id: ${ONLY_ID ?? "(all dirty)"} | keep-going: ${KEEP_GOING}`);
+  log(`include-deleted: ${INCLUDE_DELETED} | include-empty: ${INCLUDE_EMPTY} | recent-days: ${RECENT_DAYS || "(no limit)"} | only-id: ${ONLY_ID ?? "(all dirty)"} | keep-going: ${KEEP_GOING}`);
 
   let targets: DirtyItem[];
   if (ONLY_ID) {

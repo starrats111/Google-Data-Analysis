@@ -37,6 +37,10 @@ function isDirty(content: string | null): boolean {
   return /<(?:think|thinking|scratchpad|reasoning|reflection|analysis|plan)\b/i.test(content);
 }
 
+function isTooShort(content: string | null, threshold = 200): boolean {
+  return (content || "").trim().length < threshold;
+}
+
 async function ensureVerifiedSite(siteId: bigint) {
   const site = await prisma.publish_sites.findFirst({
     where: { id: siteId, is_deleted: 0, status: "active" },
@@ -62,6 +66,10 @@ export async function GET(req: NextRequest) {
   }
   const { searchParams } = new URL(req.url);
   const includeDeleted = searchParams.get("includeDeleted") === "1";
+  // 显式开启时，把过短 content（<200 字）也算需重生成。
+  // 默认关闭，避免把"原本就没生成完"的历史文章误拉进来。
+  const includeEmpty = searchParams.get("includeEmpty") === "1";
+  const onlyRecentDays = parseInt(searchParams.get("recentDays") || "0", 10);
 
   const where: Record<string, unknown> = {};
   if (!includeDeleted) where.is_deleted = 0;
@@ -77,12 +85,22 @@ export async function GET(req: NextRequest) {
       is_deleted: true,
       publish_site_id: true,
       created_at: true,
+      updated_at: true,
       content: true,
     },
   });
 
+  const cutoff = onlyRecentDays > 0 ? Date.now() - onlyRecentDays * 86400_000 : 0;
+
   const dirty = all
-    .filter((a) => isDirty(a.content))
+    .filter((a) => {
+      if (isDirty(a.content)) return true;
+      if (includeEmpty && isTooShort(a.content)) {
+        if (cutoff && a.updated_at && a.updated_at.getTime() < cutoff) return false;
+        return true;
+      }
+      return false;
+    })
     .map((a) => ({
       id: a.id.toString(),
       title: a.title,
@@ -91,6 +109,7 @@ export async function GET(req: NextRequest) {
       is_deleted: a.is_deleted,
       publish_site_id: a.publish_site_id ? a.publish_site_id.toString() : null,
       created_at: a.created_at,
+      reason: isDirty(a.content) ? "reasoning_residue" : "too_short",
     }));
 
   return NextResponse.json({ ok: true, scanned: all.length, dirty_count: dirty.length, dirty });
