@@ -56,7 +56,84 @@ function extractContentFallback(raw: string): string | null {
     }
     return raw.slice(htmlStart);
   }
+  // C-028 v2：模型有时直接吐合法 markdown 文章而忘了包 JSON。
+  // 检测：含至少 1 个 # 标题、长度 ≥ 800 字 → 视为可救文章，markdown → HTML
+  const trimmed = raw.trim();
+  const hasHeading = /^#{1,3}\s+\S/m.test(trimmed);
+  if (hasHeading && trimmed.length >= 800) {
+    return simpleMarkdownToHtml(trimmed);
+  }
   return null;
+}
+
+/**
+ * 极简 markdown → HTML（仅覆盖文章常用结构，避免引入第三方依赖）
+ * 仅用于 fallback：当 AI 直接吐 markdown 文章而非 JSON 时救场，否则文章会丢。
+ */
+function simpleMarkdownToHtml(md: string): string {
+  const escapeAttr = (s: string) => s.replace(/"/g, "&quot;");
+  const inline = (s: string): string => {
+    let t = s;
+    t = t.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (_m, alt, src) =>
+      `<img src="${escapeAttr(src)}" alt="${escapeAttr(alt)}" referrerpolicy="no-referrer" style="max-width:100%;border-radius:8px;margin:16px 0" loading="lazy" />`,
+    );
+    t = t.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_m, text, url) =>
+      `<a href="${escapeAttr(url)}" target="_blank" rel="noopener">${text}</a>`,
+    );
+    t = t.replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>");
+    t = t.replace(/(^|[^*])\*([^*\n]+)\*(?!\*)/g, "$1<em>$2</em>");
+    t = t.replace(/`([^`\n]+)`/g, "<code>$1</code>");
+    return t;
+  };
+
+  const lines = md.split(/\r?\n/);
+  const out: string[] = [];
+  let paraBuf: string[] = [];
+  let listBuf: string[] = [];
+
+  const flushPara = () => {
+    if (paraBuf.length === 0) return;
+    out.push(`<p>${inline(paraBuf.join(" ").trim())}</p>`);
+    paraBuf = [];
+  };
+  const flushList = () => {
+    if (listBuf.length === 0) return;
+    out.push(`<ul>${listBuf.map((li) => `<li>${inline(li)}</li>`).join("")}</ul>`);
+    listBuf = [];
+  };
+
+  for (const rawLine of lines) {
+    const line = rawLine.trimEnd();
+    if (!line.trim()) {
+      flushPara();
+      flushList();
+      continue;
+    }
+    const h = line.match(/^(#{1,6})\s+(.+)$/);
+    if (h) {
+      flushPara();
+      flushList();
+      const lvl = Math.min(h[1].length, 6);
+      out.push(`<h${lvl}>${inline(h[2].trim())}</h${lvl}>`);
+      continue;
+    }
+    const li = line.match(/^[-*]\s+(.+)$/);
+    if (li) {
+      flushPara();
+      listBuf.push(li[1]);
+      continue;
+    }
+    if (/^\s*<\/?(?:p|div|h[1-6]|img|ul|ol|li|a|strong|em|br|hr)\b/i.test(line)) {
+      flushPara();
+      flushList();
+      out.push(line);
+      continue;
+    }
+    paraBuf.push(line);
+  }
+  flushPara();
+  flushList();
+  return out.join("\n");
 }
 
 /** 分析商家 URL，推断品牌/品类/关键词/标题 */
@@ -234,7 +311,11 @@ JSON schema: {"content":"<full article HTML with h2/h3/p tags, 10-15 hyperlinks>
       // reasoning 写进 DB，导致前端看到 **Defining the Scope** 等脏字符）。
       const fallbackContent = extractContentFallback(raw);
       if (fallbackContent) {
-        result = { content: fallbackContent, excerpt: "", meta_title: title, meta_description: "", meta_keywords: title, category: "general" };
+        const plain = fallbackContent.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+        const excerpt = plain.slice(0, 200);
+        const metaDesc = plain.slice(0, 160);
+        console.warn(`[generateMerchantArticle] JSON parse 失败，已用 fallback 抢救 content（${fallbackContent.length} 字）`);
+        result = { content: fallbackContent, excerpt, meta_title: title, meta_description: metaDesc, meta_keywords: title, category: "general" };
       } else {
         console.error(`[generateMerchantArticle] AI 返回无法解析为 JSON，也无法回退出 content 字段。head=${raw.slice(0, 200)}`);
         throw new Error("AI 返回内容无法解析为合法 JSON，拒绝落盘");
