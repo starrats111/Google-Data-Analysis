@@ -126,9 +126,9 @@ function AdrianCard() {
   );
 }
 
-// 前端兜底：去除 AI 偶发 emoji
+// 前端兜底：去除 AI 偶发 emoji（不能碰空格/换行，会破坏 Markdown 结构）
 function stripEmoji(text: string): string {
-  return text.replace(/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{FE00}-\u{FEFF}]/gu, "").replace(/\s{2,}/g, " ");
+  return text.replace(/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{FE00}-\u{FEFF}]/gu, "");
 }
 
 // Markdown 渲染
