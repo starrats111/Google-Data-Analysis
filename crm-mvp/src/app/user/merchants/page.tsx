@@ -121,9 +121,10 @@ export default function MerchantsPage() {
   const [searchInput, setSearchInput] = useState("");
   const [labelFilter, setLabelFilter] = useState("");
   const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(50);
   const [sortField, setSortField] = useState("");
   const [sortOrder, setSortOrder] = useState<"asc" | "desc" | "">("");
-  const mp = useMemo(() => ({ tab, page, pageSize: 50, ...(platform ? { platform } : {}), ...(search ? { search } : {}), ...(labelFilter ? { label: labelFilter } : {}), ...(sortField ? { sortField, sortOrder } : {}) }), [tab, platform, search, labelFilter, page, sortField, sortOrder]);
+  const mp = useMemo(() => ({ tab, page, pageSize, ...(platform ? { platform } : {}), ...(search ? { search } : {}), ...(labelFilter ? { label: labelFilter } : {}), ...(sortField ? { sortField, sortOrder } : {}) }), [tab, platform, search, labelFilter, page, pageSize, sortField, sortOrder]);
   const { data: md, isLoading: ml } = useApiWithParams<MerchantResponse>((tab === "claimed" || tab === "available") ? "/api/user/merchants" : null, mp, { keepPreviousData: false });
   const merchants = md?.merchants || [];
   const total = md?.total || 0;
@@ -156,10 +157,10 @@ export default function MerchantsPage() {
       ...(ai ? { ai_rule_profile: ai } : {}),
     });
   }, [adData, adForm]);
-  const [vioSearch, setVioSearch] = useState(""); const [vioPage, setVioPage] = useState(1);
-  const [recSearch, setRecSearch] = useState(""); const [recPage, setRecPage] = useState(1);
-  const { data: vioData, isLoading: vl, error: vioError, mutate: vioMutate } = useApiWithParams<{ items: any[]; total: number }>(tab === "violations" ? "/api/user/merchants/sheet-sync" : null, { type: "violation", page: vioPage, pageSize: 50, ...(vioSearch ? { search: vioSearch } : {}) });
-  const { data: recData, isLoading: rl, error: recError, mutate: recMutate } = useApiWithParams<{ items: any[]; total: number }>(tab === "recommendations" ? "/api/user/merchants/sheet-sync" : null, { type: "recommendation", page: recPage, pageSize: 50, ...(recSearch ? { search: recSearch } : {}) });
+  const [vioSearch, setVioSearch] = useState(""); const [vioPage, setVioPage] = useState(1); const [vioPageSize, setVioPageSize] = useState(50);
+  const [recSearch, setRecSearch] = useState(""); const [recPage, setRecPage] = useState(1); const [recPageSize, setRecPageSize] = useState(50);
+  const { data: vioData, isLoading: vl, error: vioError, mutate: vioMutate } = useApiWithParams<{ items: any[]; total: number }>(tab === "violations" ? "/api/user/merchants/sheet-sync" : null, { type: "violation", page: vioPage, pageSize: vioPageSize, ...(vioSearch ? { search: vioSearch } : {}) });
+  const { data: recData, isLoading: rl, error: recError, mutate: recMutate } = useApiWithParams<{ items: any[]; total: number }>(tab === "recommendations" ? "/api/user/merchants/sheet-sync" : null, { type: "recommendation", page: recPage, pageSize: recPageSize, ...(recSearch ? { search: recSearch } : {}) });
   // C-019 拒付商家 Tab 状态（见 §19.6）
   const [cbDateRange, setCbDateRange] = useState<[Dayjs, Dayjs]>(() => [dayjs("2025-11-01"), dayjs()]);
   const [cbThreshold, setCbThreshold] = useState(50);
@@ -167,6 +168,8 @@ export default function MerchantsPage() {
   const [cbPlatform, setCbPlatform] = useState("");
   const [cbSearch, setCbSearch] = useState("");
   const [cbSearchInput, setCbSearchInput] = useState("");
+  const [cbPage, setCbPage] = useState(1);
+  const [cbPageSize, setCbPageSize] = useState(50);
   useEffect(() => {
     const t = setTimeout(() => setCbThresholdDebounced(cbThreshold), 300);
     return () => clearTimeout(t);
@@ -559,22 +562,22 @@ export default function MerchantsPage() {
           <Button size="small" type="dashed" icon={<SyncOutlined spin={syncing} />} loading={syncing} onClick={() => setSyncOptModal({ open: true, mode: "all", platform: "CF" })}>同步商家库</Button>
         </div>
       )}
-      {tab === "claimed" && <Table columns={claimedCols} dataSource={merchants} rowKey="id" loading={ml} onChange={handleTableChange} pagination={{ current: page, pageSize: 50, total, onChange: setPage, showTotal: (t: number) => `共 ${t} 条` }} scroll={{ x: 1000 }} size="small" />}
-      {tab === "available" && <Table columns={availCols} dataSource={merchants} rowKey="id" loading={ml} onChange={handleTableChange} pagination={{ current: page, pageSize: 50, total, onChange: setPage, showTotal: (t: number) => `共 ${t} 条` }} scroll={{ x: 1100 }} size="small" />}
+      {tab === "claimed" && <Table columns={claimedCols} dataSource={merchants} rowKey="id" loading={ml} onChange={handleTableChange} pagination={{ current: page, pageSize, total, showSizeChanger: true, pageSizeOptions: ["10", "20", "50", "100"], showTotal: (t: number) => `共 ${t} 条`, onChange: (p, ps) => { if (ps !== pageSize) { setPageSize(ps); setPage(1); } else setPage(p); } }} scroll={{ x: 1000 }} size="small" />}
+      {tab === "available" && <Table columns={availCols} dataSource={merchants} rowKey="id" loading={ml} onChange={handleTableChange} pagination={{ current: page, pageSize, total, showSizeChanger: true, pageSizeOptions: ["10", "20", "50", "100"], showTotal: (t: number) => `共 ${t} 条`, onChange: (p, ps) => { if (ps !== pageSize) { setPageSize(ps); setPage(1); } else setPage(p); } }} scroll={{ x: 1100 }} size="small" />}
       {tab === "violations" && (<div>
         {vioError && <div style={{ marginBottom: 12, padding: "8px 12px", background: "#fff2f0", border: "1px solid #ffccc7", borderRadius: 6, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
           <span><WarningOutlined style={{ color: "#ff4d4f", marginRight: 6 }} />加载违规商家失败：{vioError.message || "请求异常"}</span>
           <Button size="small" icon={<ReloadOutlined />} onClick={() => vioMutate()}>重试</Button>
         </div>}
         <div className="filter-bar"><Input allowClear placeholder="搜索商家名" style={{ width: 240 }} prefix={<SearchOutlined />} size="small" value={vioSearch} onChange={(e) => setVioSearch(e.target.value)} onPressEnter={() => setVioPage(1)} /><Button type="primary" size="small" icon={<SearchOutlined />} onClick={() => setVioPage(1)}>查询</Button><Button size="small" icon={<ReloadOutlined />} onClick={() => vioMutate()}>刷新</Button></div>
-        <Table rowKey="id" loading={vl} dataSource={vioData?.items || []} size="small" scroll={{ x: 1000 }} pagination={{ current: vioPage, pageSize: 50, total: vioData?.total || 0, showTotal: (t: number) => `共 ${t} 条`, onChange: setVioPage }} columns={vioCols} /></div>)}
+        <Table rowKey="id" loading={vl} dataSource={vioData?.items || []} size="small" scroll={{ x: 1000 }} pagination={{ current: vioPage, pageSize: vioPageSize, total: vioData?.total || 0, showSizeChanger: true, pageSizeOptions: ["10", "20", "50", "100"], showTotal: (t: number) => `共 ${t} 条`, onChange: (p, ps) => { if (ps !== vioPageSize) { setVioPageSize(ps); setVioPage(1); } else setVioPage(p); } }} columns={vioCols} /></div>)}
       {tab === "recommendations" && (<div>
         {recError && <div style={{ marginBottom: 12, padding: "8px 12px", background: "#fff2f0", border: "1px solid #ffccc7", borderRadius: 6, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
           <span><WarningOutlined style={{ color: "#ff4d4f", marginRight: 6 }} />加载推荐商家失败：{recError.message || "请求异常"}</span>
           <Button size="small" icon={<ReloadOutlined />} onClick={() => recMutate()}>重试</Button>
         </div>}
         <div className="filter-bar"><Input allowClear placeholder="搜索商家名" style={{ width: 240 }} prefix={<SearchOutlined />} size="small" value={recSearch} onChange={(e) => setRecSearch(e.target.value)} onPressEnter={() => setRecPage(1)} /><Button type="primary" size="small" icon={<SearchOutlined />} onClick={() => setRecPage(1)}>查询</Button><Button size="small" icon={<ReloadOutlined />} onClick={() => recMutate()}>刷新</Button></div>
-        <Table rowKey="id" loading={rl} dataSource={recData?.items || []} size="small" scroll={{ x: 1000 }} pagination={{ current: recPage, pageSize: 50, total: recData?.total || 0, showTotal: (t: number) => `共 ${t} 条`, onChange: setRecPage }} columns={recCols} /></div>)}
+        <Table rowKey="id" loading={rl} dataSource={recData?.items || []} size="small" scroll={{ x: 1000 }} pagination={{ current: recPage, pageSize: recPageSize, total: recData?.total || 0, showSizeChanger: true, pageSizeOptions: ["10", "20", "50", "100"], showTotal: (t: number) => `共 ${t} 条`, onChange: (p, ps) => { if (ps !== recPageSize) { setRecPageSize(ps); setRecPage(1); } else setRecPage(p); } }} columns={recCols} /></div>)}
       {tab === "chargebacks" && (<div>
         <div style={{ marginBottom: 12, padding: "8px 12px", background: "#fffbe6", border: "1px solid #ffe58f", borderRadius: 6, fontSize: 12, color: "#666" }}>
           <WarningOutlined style={{ color: "#faad14", marginRight: 6 }} />
@@ -597,11 +600,11 @@ export default function MerchantsPage() {
             size="small"
             value={cbSearchInput}
             onChange={(e) => setCbSearchInput(e.target.value)}
-            onPressEnter={() => setCbSearch(cbSearchInput)}
+            onPressEnter={() => { setCbSearch(cbSearchInput); setCbPage(1); }}
             allowClear
           />
-          <Button type="primary" size="small" icon={<SearchOutlined />} onClick={() => setCbSearch(cbSearchInput)}>查询</Button>
-          <Button size="small" icon={<ReloadOutlined />} onClick={() => { setCbSearchInput(""); setCbSearch(""); setCbPlatform(""); setCbThreshold(50); setCbDateRange([dayjs("2025-11-01"), dayjs()]); }}>重置</Button>
+          <Button type="primary" size="small" icon={<SearchOutlined />} onClick={() => { setCbSearch(cbSearchInput); setCbPage(1); }}>查询</Button>
+          <Button size="small" icon={<ReloadOutlined />} onClick={() => { setCbSearchInput(""); setCbSearch(""); setCbPlatform(""); setCbThreshold(50); setCbDateRange([dayjs("2025-11-01"), dayjs()]); setCbPage(1); }}>重置</Button>
           <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 260 }}>
             <span style={{ fontSize: 12, color: "#666" }}>拒付率阈值：</span>
             <Slider min={0} max={100} step={1} value={cbThreshold} onChange={setCbThreshold} style={{ flex: 1, minWidth: 140 }} />
@@ -613,7 +616,7 @@ export default function MerchantsPage() {
           loading={cbLoading}
           dataSource={cbData?.items || []}
           columns={chargebackCols}
-          pagination={{ pageSize: 50, showTotal: (t: number) => `共 ${t} 条` }}
+          pagination={{ current: cbPage, pageSize: cbPageSize, total: cbData?.items?.length || 0, showSizeChanger: true, pageSizeOptions: ["10", "20", "50", "100"], showTotal: (t: number) => `共 ${t} 条`, onChange: (p, ps) => { if (ps !== cbPageSize) { setCbPageSize(ps); setCbPage(1); } else setCbPage(p); } }}
           scroll={{ x: 1000 }}
           size="small"
         />
