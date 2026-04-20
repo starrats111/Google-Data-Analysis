@@ -14,7 +14,8 @@
  * - 保留原 title / slug / publish_site_id / tracking_link（外站 URL 不变）
  * - 仅覆盖 content / excerpt / meta_title / meta_description / category
  * - status=published 且未 deleted 的，重推外站覆盖
- * - is_deleted=1 的处理完后恢复 is_deleted=0 + status=preview
+ * - is_deleted=1 且 status=failed 的：恢复 is_deleted=0 + status=preview（C-028 中的 1215/1230）
+ * - is_deleted=1 且 status≠failed 的（老作废）：保留 is_deleted=1 与原 status，仅洗内容
  * - 若新生成 content 仍含 reasoning 残留 → 视为修复未生效，返回 5xx 不写 DB
  */
 
@@ -246,13 +247,14 @@ export async function POST(req: NextRequest) {
     });
     repushed = true;
     publishedUrl = publishRes.url || null;
-  } else if (a.is_deleted === 1) {
+  } else if (a.is_deleted === 1 && a.status === "failed") {
     await prisma.articles.update({
       where: { id: a.id },
       data: { is_deleted: 0, status: "preview", updated_at: new Date() },
     });
     restoredFromDeleted = true;
   }
+  // 其它 is_deleted=1 的（老作废，status=preview/published 等）：仅洗内容，不改状态
 
   return NextResponse.json({
     ok: true,
