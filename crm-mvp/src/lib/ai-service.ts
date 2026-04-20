@@ -735,9 +735,10 @@ function extractAiText(rawBody: string): string {
   }
 
   // ── 2. SSE 流 ────────────────────────────────────────────────
+  // SSE 是强契约：一旦识别，聚合结果就是最终答案（即便为空 —— 意味着 provider
+  // 确实没生成任何文字，应当触发上层 fallback 链，不要再退回到原始 data: 文本）。
   if (looksLikeSseStream(trimmed)) {
-    const sse = aggregateSseStream(trimmed);
-    if (sse.trim()) return sse;
+    return aggregateSseStream(trimmed);
   }
 
   // ── 3. 兜底：从任意字符串里抠 "content":"..." ───────────────────
