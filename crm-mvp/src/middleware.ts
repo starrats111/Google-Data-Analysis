@@ -30,6 +30,19 @@ export function middleware(request: NextRequest) {
     return NextResponse.next();
   }
 
+  // C-028 批量重生成 admin API 走 Bearer CRON_SECRET 鉴权（脚本 / cron 用，没有 cookie）
+  if (pathname === "/api/admin/regenerate-clean-article") {
+    const auth = request.headers.get("authorization");
+    const expected = process.env.CRON_SECRET;
+    if (expected && auth === `Bearer ${expected}`) {
+      return NextResponse.next();
+    }
+    return NextResponse.json(
+      { code: -1, message: "未授权（缺少有效 Bearer CRON_SECRET）", data: null },
+      { status: 401 }
+    );
+  }
+
   // ─── 管理员路由保护 ───
   if (pathname.startsWith("/admin") || pathname.startsWith("/api/admin")) {
     const token = request.cookies.get("admin_token")?.value;
