@@ -704,6 +704,154 @@ function isConnectError(err: unknown): boolean {
 }
 
 /** 调用 AI API（OpenAI 兼容格式），连接超时自动重试，429 自动退避 */
+/**
+ * 通用 AI HTTP 响应文本提取器：把任意 OpenAI / Anthropic / Gemini 兼容 provider
+ * 的响应（标准 JSON / SSE 流 / SSE 嵌入 message.content / 数组型 content）
+ * 规整成单一字符串，让上层完全不关心 wire format。
+ *
+ * 添加新 provider 时只需要往 pickContentFromJson / aggregateSseStream 加 case。
+ */
+function extractAiText(rawBody: string): string {
+  if (!rawBody) return "";
+  const trimmed = rawBody.trim();
+  if (!trimmed) return "";
+
+  // ── 1. 标准 JSON 响应 ─────────────────────────────────────────
+  if (trimmed[0] === "{" || trimmed[0] === "[") {
+    try {
+      const data = JSON.parse(trimmed);
+      const fromJson = pickContentFromJson(data);
+      if (fromJson) {
+        // JSON 字段里也可能嵌着 SSE 流（某些不规范 provider 的玩法）
+        if (looksLikeSseStream(fromJson)) {
+          const sse = aggregateSseStream(fromJson);
+          if (sse.trim()) return sse;
+        }
+        return fromJson;
+      }
+    } catch {
+      /* 顶层不是合法 JSON，落到 SSE / 兜底 */
+    }
+  }
+
+  // ── 2. SSE 流 ────────────────────────────────────────────────
+  if (looksLikeSseStream(trimmed)) {
+    const sse = aggregateSseStream(trimmed);
+    if (sse.trim()) return sse;
+  }
+
+  // ── 3. 兜底：从任意字符串里抠 "content":"..." ───────────────────
+  const m = trimmed.match(/"content"\s*:\s*"((?:\\.|[^"\\])*)"/);
+  if (m) {
+    try {
+      return JSON.parse(`"${m[1]}"`);
+    } catch {
+      return m[1].replace(/\\n/g, "\n").replace(/\\"/g, '"').replace(/\\\\/g, "\\");
+    }
+  }
+
+  // ── 4. 实在没招，原样返回让上层按文本处理 ────────────────────
+  return trimmed;
+}
+
+function pickContentFromJson(data: unknown): string {
+  if (!data || typeof data !== "object") return "";
+  const d = data as Record<string, unknown>;
+
+  // OpenAI chat.completions
+  const choices = (d.choices as unknown[]) || [];
+  if (choices.length > 0) {
+    const first = choices[0] as Record<string, unknown>;
+    const msg = first?.message as Record<string, unknown> | undefined;
+    const msgContent = msg?.content;
+    if (typeof msgContent === "string") return msgContent;
+    if (Array.isArray(msgContent)) {
+      return msgContent
+        .map((p) => (typeof p === "string" ? p : ((p as Record<string, unknown>)?.text as string) || ""))
+        .join("");
+    }
+    // legacy completions
+    if (typeof first?.text === "string") return first.text as string;
+  }
+
+  // Anthropic Messages API：{"content":[{"type":"text","text":"..."}]}
+  if (Array.isArray(d.content)) {
+    return (d.content as unknown[])
+      .map((p) => (typeof p === "string" ? p : ((p as Record<string, unknown>)?.text as string) || ""))
+      .join("");
+  }
+  if (typeof d.content === "string") return d.content as string;
+
+  // Gemini：{"candidates":[{"content":{"parts":[{"text":"..."}]}}]}
+  const candidates = (d.candidates as unknown[]) || [];
+  if (candidates.length > 0) {
+    const cand = candidates[0] as Record<string, unknown>;
+    const candContent = cand?.content as Record<string, unknown> | undefined;
+    const parts = candContent?.parts as unknown[] | undefined;
+    if (Array.isArray(parts)) {
+      return parts
+        .map((p) => ((p as Record<string, unknown>)?.text as string) || "")
+        .join("");
+    }
+  }
+
+  // 最后试一下顶层 text
+  if (typeof d.text === "string") return d.text as string;
+
+  return "";
+}
+
+function looksLikeSseStream(s: string): boolean {
+  return /^\s*(?:event:\s|data:\s)/m.test(s);
+}
+
+/**
+ * 聚合任意 SSE 流：OpenAI delta / OpenAI 单块 message / Anthropic content_block_delta
+ * / Gemini stream，全部支持。无法识别的 data 行静默跳过。
+ */
+function aggregateSseStream(raw: string): string {
+  let acc = "";
+  for (const line of raw.split(/\r?\n/)) {
+    const m = line.match(/^\s*data:\s*(.+?)\s*$/);
+    if (!m) continue;
+    const payload = m[1].trim();
+    if (!payload || payload === "[DONE]") continue;
+    let j: any;
+    try {
+      j = JSON.parse(payload);
+    } catch {
+      continue;
+    }
+
+    // OpenAI streaming delta
+    const delta = j?.choices?.[0]?.delta?.content;
+    if (typeof delta === "string") { acc += delta; continue; }
+    if (Array.isArray(delta)) {
+      acc += delta.map((p: unknown) => (typeof p === "string" ? p : (p as Record<string, unknown>)?.text || "")).join("");
+      continue;
+    }
+
+    // 单块 message（某些 provider 的 SSE 直接给完整 message）
+    const msg = j?.choices?.[0]?.message?.content;
+    if (typeof msg === "string") { acc += msg; continue; }
+    if (Array.isArray(msg)) {
+      acc += msg.map((p: unknown) => (typeof p === "string" ? p : (p as Record<string, unknown>)?.text || "")).join("");
+      continue;
+    }
+
+    // Anthropic content_block_delta
+    if (typeof j?.delta?.text === "string") { acc += j.delta.text; continue; }
+
+    // Gemini stream
+    const gParts = j?.candidates?.[0]?.content?.parts;
+    if (Array.isArray(gParts)) {
+      acc += gParts.map((p: any) => p?.text || "").join("");
+      continue;
+    }
+  }
+  return acc;
+}
+
 async function callAi(
   config: AiModelConfig,
   messages: { role: string; content: string }[],
@@ -756,9 +904,12 @@ async function callAi(
       const text = await res.text().catch(() => "");
       throw new Error(`AI API 错误 (${config.modelName}): HTTP ${res.status} - ${text.slice(0, 200)}`);
     }
-    const data = await res.json();
-    const content = data?.choices?.[0]?.message?.content;
-    if (!content?.trim()) throw new Error(`AI 返回空内容 (${config.modelName})`);
+    const rawText = await res.text();
+    const content = extractAiText(rawText);
+    if (!content?.trim()) {
+      console.warn(`[AI] ${config.modelName} 响应解析为空，head=${rawText.slice(0, 200)}`);
+      throw new Error(`AI 返回空内容 (${config.modelName})`);
+    }
     return content.trim();
   }
 

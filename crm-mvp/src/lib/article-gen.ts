@@ -36,39 +36,6 @@ function extractJson(raw: string): string {
 }
 
 /** 从 AI 原始响应中尽力提取 content 字段 */
-/**
- * 某些 OpenAI 兼容 provider（尤其是新接入的模型）会把 SSE 流原样塞进 message.content 返回，
- * 形如 "      data: {\"choices\":[{\"delta\":{\"content\":\"...\"}}]}\n      data: [DONE]"。
- * 把这种字符串重组回原始文本。
- */
-function tryParseSseStream(raw: string): string | null {
-  if (!/^\s*data:\s*[\{\[]/m.test(raw)) return null;
-  const lines = raw.split(/\r?\n/);
-  let acc = "";
-  let hits = 0;
-  for (const line of lines) {
-    const m = line.match(/^\s*data:\s*(.+?)\s*$/);
-    if (!m) continue;
-    const payload = m[1].trim();
-    if (payload === "[DONE]") continue;
-    try {
-      const j = JSON.parse(payload);
-      const piece =
-        j?.choices?.[0]?.delta?.content ??
-        j?.choices?.[0]?.message?.content ??
-        "";
-      if (typeof piece === "string" && piece) {
-        acc += piece;
-        hits++;
-      }
-    } catch {
-      /* 单条无法解析跳过 */
-    }
-  }
-  if (hits === 0 || !acc.trim()) return null;
-  return acc.trim();
-}
-
 function extractContentFallback(raw: string): string | null {
   // 尝试匹配 "content":"..." 或 "content": "..."
   const m = raw.match(/"content"\s*:\s*"([\s\S]*?)"\s*[,}]/);
@@ -315,18 +282,13 @@ JSON schema: {"content":"<full article HTML with h2/h3/p tags, 10-15 hyperlinks>
   const userMsg = `Title: ${title}\nBrand: ${merchantName}\nProducts: ${products.join(", ")}\nSelling points: ${sellingPoints.join(", ")}\nPromo: \nLink: ${trackingLink}${keywordStr}`;
 
   try {
-    let rawOriginal = await callAiWithFallback("article", [
+    const rawOriginal = await callAiWithFallback("article", [
       { role: "system", content: systemPrompt },
       { role: "user", content: userMsg },
     ], 16384);
 
-    // C-028 v3：部分 OpenAI 兼容 provider 把 SSE 流原样塞进 message.content 返回。
-    // 在剥 reasoning 之前先识别并聚合 SSE 流，避免后续所有解析步骤都拿到 "data: {…}" 残骸。
-    const sseAssembled = tryParseSseStream(rawOriginal);
-    if (sseAssembled) {
-      console.warn(`[generateMerchantArticle] 检测到 provider 把 SSE 流当 content 返回，已聚合（原 ${rawOriginal.length} 字 → ${sseAssembled.length} 字）`);
-      rawOriginal = sseAssembled;
-    }
+    // 注：wire format 规整（标准 JSON / SSE / 嵌入式 SSE / Anthropic / Gemini …）
+    // 已下沉到 ai-service.ts 的 extractAiText，这里拿到的一定是"AI 输出文本"。
 
     // C-028：AI 返回后、解析之前，先剥掉 <think>/<thinking>/<scratchpad> 等推理残留，
     // 避免这些标签把 JSON 包在外面、或被 extractJson 当成合法 content 吞进去。
