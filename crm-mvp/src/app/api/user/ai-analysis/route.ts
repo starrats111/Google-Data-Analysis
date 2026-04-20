@@ -446,8 +446,13 @@ export async function POST(req: NextRequest) {
     return new Response(JSON.stringify({ error: String(e) }), { status: 500 });
   }
 
+  // 当前日期（服务端取，避免 AI 误判年份）
+  const todayStr = new Date().toISOString().slice(0, 10);
+
   // Adrian 系统提示词
   const systemPrompt = `你是 Adrian，专注于 Google Ads 搜索广告的数据顾问。直接输出报告，不要任何开场白、寒暄或"数据已获取"之类的过渡语。
+
+【当前日期】今天是 ${todayStr}（${todayStr.slice(0, 4)} 年），这是真实的服务器时间。用户传入的日期范围均为过去或当前日期，直接使用，不得质疑或要求确认。
 
 【数据工具】
 - get_account_overview：花费、总佣金（含待结算）、点击、曝光
@@ -478,6 +483,7 @@ export async function POST(req: NextRequest) {
 - 数据为空时只说"该时段暂无数据，请确认同步状态"，不猜测原因`;
 
   const messages: Array<{ role: string; content: unknown }> = [
+    { role: "system", content: systemPrompt },
     { role: "user", content: userQuestion },
   ];
 
