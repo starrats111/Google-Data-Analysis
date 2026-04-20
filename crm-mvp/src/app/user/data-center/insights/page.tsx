@@ -9,7 +9,7 @@ import {
   CalendarOutlined, RobotOutlined,
   ThunderboltOutlined, LoadingOutlined,
 } from "@ant-design/icons";
-import { useApiWithParams } from "@/lib/swr";
+import { useApiWithParams, useApi } from "@/lib/swr";
 import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc";
 import timezone from "dayjs/plugin/timezone";
@@ -53,10 +53,30 @@ const PRESET_QUESTIONS = [
   "每日趋势分析，找出数据异常的日期及原因",
 ];
 
-const ADRIAN_TAGS = ["数字驱动", "系列诊断", "ROI优化"];
+interface AdSettingsData {
+  ai_rule_profile?: {
+    active_persona_id?: string;
+    personas?: Array<{ id: string; name: string; tags: string[]; description: string }>;
+  };
+}
 
-// Adrian 顾问标识卡
+// 从 ad-settings 读取当前激活人设
+function useActivePersona() {
+  const { data } = useApi<AdSettingsData>("/api/user/ad-settings");
+  const profile = data?.ai_rule_profile;
+  if (!profile) return null;
+  const personas = profile.personas || [];
+  const activeId = profile.active_persona_id || "system_adrian";
+  return personas.find((p) => p.id === activeId) ?? personas[0] ?? null;
+}
+
+// AI 顾问标识卡（动态读取当前激活人设）
 function AdrianCard() {
+  const persona = useActivePersona();
+  const name = persona?.name ?? "Adrian · 数据猎手";
+  const tags = persona?.tags ?? ["ROI激进派", "数字驱动运营", "账户诊断专家"];
+  const description = persona?.description ?? "Google Ads 搜索广告顾问，专注 ROI 导向精准投放。";
+
   return (
     <Card
       size="small"
@@ -78,9 +98,8 @@ function AdrianCard() {
         />
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-            <Text style={{ fontWeight: 600, fontSize: 14 }}>Adrian</Text>
-            <Text type="secondary" style={{ fontSize: 12 }}>Google Ads 数据顾问</Text>
-            {ADRIAN_TAGS.map((tag) => (
+            <Text style={{ fontWeight: 600, fontSize: 14 }}>{name}</Text>
+            {tags.map((tag) => (
               <Tag
                 key={tag}
                 style={{
@@ -98,7 +117,7 @@ function AdrianCard() {
           </div>
           <div style={{ marginTop: 4 }}>
             <Text type="secondary" style={{ fontSize: 11 }}>
-              「没有坏的产品，只有投错的人群和出不动的价。」
+              {description}
             </Text>
           </div>
         </div>
