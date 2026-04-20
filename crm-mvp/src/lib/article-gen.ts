@@ -57,10 +57,11 @@ function extractContentFallback(raw: string): string | null {
     return raw.slice(htmlStart);
   }
   // C-028 v2：模型有时直接吐合法 markdown 文章而忘了包 JSON。
-  // 检测：含至少 1 个 # 标题、长度 ≥ 800 字 → 视为可救文章，markdown → HTML
+  // raw 已被 stripReasoningArtifacts 剥过 reasoning 块，且 API 层 (regenerate-clean-article)
+  // 还会做第二道 isDirty 自检，所以这里只用长度阈值放过即可，避免因为标题写法不规整
+  // （比如用 **xxx** 当伪标题而非 #）就把整篇文章丢掉。
   const trimmed = raw.trim();
-  const hasHeading = /^#{1,3}\s+\S/m.test(trimmed);
-  if (hasHeading && trimmed.length >= 800) {
+  if (trimmed.length >= 800) {
     return simpleMarkdownToHtml(trimmed);
   }
   return null;
