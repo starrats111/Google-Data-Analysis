@@ -312,134 +312,15 @@ export async function POST(req: NextRequest) {
   const country = campaign.target_country || "US";
   const market = getAdMarketConfig(country);
 
-  // ═════════════════════════════════════════════════════════════════
-  // C-016: 国别 URL 解析（DNS + TCP 443，不走 HTTP，不触发 WAF/CF）
-  //   - aerosus.nl + BE → aerosus.be（若 DNS+TCP 通）
-  //   - 已是目标国 ccTLD / 无对应 ccTLD → 保持原样
-  //   - 失败（timeout）→ 短 TTL 缓存，下次重试
-  // 副作用：切换时只更新 ad_creatives.final_url + 清 crawl_cache 触发重爬
-  //         严禁动 user_merchants（平台 API 数据不可污染）
-  // ═════════════════════════════════════════════════════════════════
-  const { resolveCountryUrl, extractBrandRoot } = await import("@/lib/country-url-resolver");
-  const resolverResult = await resolveCountryUrl(originalMerchantUrl, country);
-  let merchantUrl = resolverResult.finalUrl || originalMerchantUrl;
-  // brandRoot 只影响 prompt，不改 DB（剥 merchant_name 末尾的平台内部国家标签如 " NL"）
-  const merchantName = extractBrandRoot(merchant.merchant_name || "");
-
-  if (resolverResult.switched && adCreative?.id) {
-    console.warn(`[Extensions] C-016 ccTLD 切换: ${originalMerchantUrl} → ${merchantUrl}（reason=${resolverResult.reason}）`);
-    await prisma.ad_creatives.update({
-      where: { id: adCreative.id },
-      data: { final_url: merchantUrl, crawl_cache: null as any },
-    }).catch((e) => {
-      console.warn("[Extensions] 写 final_url/清 cache 失败:", e instanceof Error ? e.message : e);
-    });
-    // 让下游重走爬取
-    (adCreative as any).crawl_cache = null;
-    (adCreative as any).final_url = merchantUrl;
-  } else if (process.env.NODE_ENV !== "production") {
-    console.log(`[Extensions] C-016 resolver reason=${resolverResult.reason}, switched=${resolverResult.switched}, brandRoot="${merchantName}"`);
-  }
-
-  const adSettings = await prisma.ad_default_settings.findFirst({
-    where: { user_id: BigInt(user.userId), is_deleted: 0 },
-    select: { ai_rule_profile: true, daily_budget: true, max_cpc: true, bidding_strategy: true },
-  });
-  const aiRuleProfile = (adSettings as any)?.ai_rule_profile;
-
-  // 读取或构建爬取缓存（失败/为空/旧数据不足时重新爬取）
-  let cache = adCreative?.crawl_cache as CrawlCache | null;
-
-  // 判断是否需要重爬：
-  // 1. 无缓存 / 爬取失败
-  // 2. optional 扩展请求了 promotion/price，且缓存在 2026-04-07 之前生成（旧 10KB 截断版本，可能漏掉折扣数据）
+  // C-035 FIX：立即开启 SSE 流 —— 将 resolveCountryUrl（DNS 探测）+ buildCrawlCache
+  // （Puppeteer 爬取，最坏 90 s+）全部移入 stream.start() 内部，让 new Response(stream)
+  // 立即返回 HTTP 200 + text/event-stream 头，Cloudflare 收到头后不再计 100 s 超时。
   const needsOptional = (types as string[]).includes("optional");
   const optionalNeedsPromo = needsOptional && ((body.optionalTypes as string[]) || []).some((t: string) => ["promotion", "price"].includes(t));
-
-  // 促销数据无有效折扣时（discount_percent <= 0 且 discount_amount <= 0）强制重爬
-  // 因为旧缓存可能用 10KB HTML 截断，漏掉了 banner 里的折扣信息
-  const cachedPromo = cache?.promoRegex as Record<string, unknown> | null | undefined;
-  const cachedPromoHasDiscount =
-    (cachedPromo?.discount_percent ? Number(cachedPromo.discount_percent) : 0) > 0 ||
-    (cachedPromo?.discount_amount ? Number(cachedPromo.discount_amount) : 0) > 0;
-  const cacheNeedsRefreshForPromo = optionalNeedsPromo && !cachedPromoHasDiscount;
-
-  // 质量分驱动的缓存失效：score < 40 说明上次爬取质量低下（splash 页、被封、内容稀薄等）
-  const cacheLowQuality = typeof cache?.crawlQualityScore === "number" && cache.crawlQualityScore < 40;
-  // 旧缓存（无质量分字段）+ 明显质量问题（links=0 或 crawlFailed），也视为低质量
-  const cacheHasEmptyLinks = !cacheLowQuality && cache && (
-    (Array.isArray(cache.links) && cache.links.length === 0) ||
-    (cache.crawlQualityScore === undefined && Array.isArray(cache.links) && cache.links.length < 3)
-  );
-
-  // C-017: "重新爬取"按钮显式要求强制重爬 sitelinks 候选
-  //   触发条件：types=["sitelinks"]（单独 sitelinks 请求 = 用户点了重新爬取）
-  //              或 cache.sitelinkCandidates 数量 < 3（历史低质 cache 挤掉 sitelink）
-  const forceRecrawlForSitelinks =
-    (types as string[]).includes("sitelinks") && !(types as string[]).includes("core")
-      ? true
-      : (cache?.sitelinkCandidates?.length ?? 0) < 3 && !!cache;
-
-  if (!cache || !cache.crawledAt || cache.crawlFailed || cacheNeedsRefreshForPromo || cacheLowQuality || cacheHasEmptyLinks || forceRecrawlForSitelinks) {
-    const reason = !cache || !cache.crawledAt ? '为空'
-      : cache.crawlFailed ? '上次失败'
-      : cacheLowQuality ? `质量低（score=${cache.crawlQualityScore}, issues=[${cache.crawlQualityIssues?.join(",")}]）`
-      : cacheHasEmptyLinks ? 'links 为空（旧缓存命中 splash 页）'
-      : forceRecrawlForSitelinks ? `用户点重新爬取 or sitelinkCandidates(${cache?.sitelinkCandidates?.length ?? 0})<3`
-      : '缓存促销无有效折扣，重爬';
-    console.log(`[Extensions] crawl_cache ${reason}，重新爬取... forcePuppeteer=${cacheNeedsRefreshForPromo}`);
-    // C-027 FIX-B：同一 merchantUrl × country 的并发 buildCrawlCache 去重，
-    //   3 路前端并发（Promise.allSettled[core, callouts, promotion]）共享同一个 Promise，
-    //   避免对同商家反复启动 HTTP L0 / Puppeteer（§26.1 F-11 实证 6 轮→1 轮）。
-    // 促销数据通常由 JS 渲染（如公告栏），forcePuppeteer 保证获取到完整 DOM
-    const crawlKey = buildCrawlKey(merchantUrl, country);
-    const newCache = await withCrawlInflightLock(crawlKey, () =>
-      buildCrawlCache(merchantUrl, merchantName, country, undefined, {
-        forcePuppeteer: cacheNeedsRefreshForPromo,
-      }),
-    );
-    // 竞态保护：若新 cache 无折扣但旧 cache 已有折扣，不覆盖（防止 core/optional 并发写互相覆盖）
-    const newPromo = newCache.promoRegex as Record<string, unknown> | null;
-    const newHasDiscount = (newPromo?.discount_percent ? Number(newPromo.discount_percent) : 0) > 0 ||
-      (newPromo?.discount_amount ? Number(newPromo.discount_amount) : 0) > 0;
-    const shouldSave = newHasDiscount || !cachedPromoHasDiscount;
-    cache = newCache;
-    if (adCreative?.id && shouldSave) {
-      // 再次读 DB，确认在本次重爬期间没有其他请求已保存了更好的数据
-      const freshRecord = await prisma.ad_creatives.findFirst({ where: { id: adCreative.id }, select: { crawl_cache: true } }).catch(() => null);
-      const freshPromo = (freshRecord?.crawl_cache as any)?.promoRegex as Record<string, unknown> | null;
-      const freshHasDiscount = (freshPromo?.discount_percent ? Number(freshPromo.discount_percent) : 0) > 0 ||
-        (freshPromo?.discount_amount ? Number(freshPromo.discount_amount) : 0) > 0;
-      if (!freshHasDiscount || newHasDiscount) {
-        await prisma.ad_creatives.update({
-          where: { id: adCreative.id },
-          data: { crawl_cache: cache as any },
-        }).catch(() => {});
-        console.log(`[Extensions] cache 已保存，newHasDiscount=${newHasDiscount}`);
-      } else {
-        // DB 已有更好数据，读取并使用 DB 的 cache
-        cache = freshRecord!.crawl_cache as any;
-        console.log(`[Extensions] 保留 DB 中更好的 cache（已有折扣）`);
-      }
-    }
-  }
-
-  // C-016: 路径级 locale（Sephora 型 /en-sg/ → /en-us/）由 crawl-pipeline 内部生成，
-  // 仅在 cache.localizedMerchantUrl 与当前 merchantUrl 不同时写回 ad_creatives.final_url。
-  // ccTLD 级切换（aerosus.nl → aerosus.be）已在 crawl_cache 读取前由 resolveCountryUrl 完成。
-  const localizedUrl = (cache as CrawlCache | null)?.localizedMerchantUrl;
-  if (localizedUrl && localizedUrl !== merchantUrl && adCreative?.id) {
-    const prevUrl = merchantUrl;
-    merchantUrl = localizedUrl;
-    await prisma.ad_creatives.update({
-      where: { id: adCreative.id },
-      data: { final_url: localizedUrl },
-    }).catch(() => {});
-    console.log(`[Extensions] 路径级 locale 命中: ${prevUrl} → ${localizedUrl}`);
-  }
+  const adCreativeId = adCreative?.id || null;
+  const initialCache = adCreative?.crawl_cache as CrawlCache | null;
 
   const encoder = new TextEncoder();
-  // 用 isClosed flag 跟踪 controller 状态，避免客户端断开后继续写入导致的 "Controller is already closed" 异常
   let isClosed = false;
   const stream = new ReadableStream({
     async start(controller) {
@@ -449,9 +330,106 @@ export async function POST(req: NextRequest) {
       };
 
       try {
+        // ─── Step 1：国别 URL 解析（DNS + TCP，可能 5-30 s）───
+        // C-016: aerosus.nl + BE → aerosus.be（若 DNS+TCP 通）
+        const { resolveCountryUrl, extractBrandRoot } = await import("@/lib/country-url-resolver");
+        const resolverResult = await resolveCountryUrl(originalMerchantUrl, country);
+        let merchantUrl = resolverResult.finalUrl || originalMerchantUrl;
+        const merchantName = extractBrandRoot(merchant.merchant_name || "");
+
+        if (resolverResult.switched && adCreativeId) {
+          console.warn(`[Extensions] C-016 ccTLD 切换: ${originalMerchantUrl} → ${merchantUrl}（reason=${resolverResult.reason}）`);
+          await prisma.ad_creatives.update({
+            where: { id: adCreativeId },
+            data: { final_url: merchantUrl, crawl_cache: null as any },
+          }).catch((e) => {
+            console.warn("[Extensions] 写 final_url/清 cache 失败:", e instanceof Error ? e.message : e);
+          });
+        } else if (process.env.NODE_ENV !== "production") {
+          console.log(`[Extensions] C-016 resolver reason=${resolverResult.reason}, switched=${resolverResult.switched}, brandRoot="${merchantName}"`);
+        }
+
+        // ─── Step 2：读取 ad_default_settings ───
+        const adSettings = await prisma.ad_default_settings.findFirst({
+          where: { user_id: BigInt(user.userId), is_deleted: 0 },
+          select: { ai_rule_profile: true, daily_budget: true, max_cpc: true, bidding_strategy: true },
+        });
+        const aiRuleProfile = (adSettings as any)?.ai_rule_profile;
+
+        // ─── Step 3：读取或构建爬取缓存（Puppeteer 可能 60-90 s）───
+        // ccTLD 切换时需清空缓存（切换后新域名无缓存）
+        let cache: CrawlCache | null = resolverResult.switched ? null : initialCache;
+
+        const cachedPromo = cache?.promoRegex as Record<string, unknown> | null | undefined;
+        const cachedPromoHasDiscount =
+          (cachedPromo?.discount_percent ? Number(cachedPromo.discount_percent) : 0) > 0 ||
+          (cachedPromo?.discount_amount ? Number(cachedPromo.discount_amount) : 0) > 0;
+        const cacheNeedsRefreshForPromo = optionalNeedsPromo && !cachedPromoHasDiscount;
+
+        const cacheLowQuality = typeof cache?.crawlQualityScore === "number" && cache.crawlQualityScore < 40;
+        const cacheHasEmptyLinks = !cacheLowQuality && cache && (
+          (Array.isArray(cache.links) && cache.links.length === 0) ||
+          (cache.crawlQualityScore === undefined && Array.isArray(cache.links) && cache.links.length < 3)
+        );
+
+        const forceRecrawlForSitelinks =
+          (types as string[]).includes("sitelinks") && !(types as string[]).includes("core")
+            ? true
+            : (cache?.sitelinkCandidates?.length ?? 0) < 3 && !!cache;
+
+        if (!cache || !cache.crawledAt || cache.crawlFailed || cacheNeedsRefreshForPromo || cacheLowQuality || cacheHasEmptyLinks || forceRecrawlForSitelinks) {
+          const reason = !cache || !cache.crawledAt ? '为空'
+            : cache.crawlFailed ? '上次失败'
+            : cacheLowQuality ? `质量低（score=${cache.crawlQualityScore}, issues=[${cache.crawlQualityIssues?.join(",")}]）`
+            : cacheHasEmptyLinks ? 'links 为空（旧缓存命中 splash 页）'
+            : forceRecrawlForSitelinks ? `用户点重新爬取 or sitelinkCandidates(${cache?.sitelinkCandidates?.length ?? 0})<3`
+            : '缓存促销无有效折扣，重爬';
+          console.log(`[Extensions] crawl_cache ${reason}，重新爬取... forcePuppeteer=${cacheNeedsRefreshForPromo}`);
+          // C-027 FIX-B：同一 merchantUrl × country 并发去重（共享同一个 Promise）
+          const crawlKey = buildCrawlKey(merchantUrl, country);
+          const newCache = await withCrawlInflightLock(crawlKey, () =>
+            buildCrawlCache(merchantUrl, merchantName, country, undefined, {
+              forcePuppeteer: cacheNeedsRefreshForPromo,
+            }),
+          );
+          const newPromo = newCache.promoRegex as Record<string, unknown> | null;
+          const newHasDiscount = (newPromo?.discount_percent ? Number(newPromo.discount_percent) : 0) > 0 ||
+            (newPromo?.discount_amount ? Number(newPromo.discount_amount) : 0) > 0;
+          const shouldSave = newHasDiscount || !cachedPromoHasDiscount;
+          cache = newCache;
+          if (adCreativeId && shouldSave) {
+            const freshRecord = await prisma.ad_creatives.findFirst({ where: { id: adCreativeId }, select: { crawl_cache: true } }).catch(() => null);
+            const freshPromo = (freshRecord?.crawl_cache as any)?.promoRegex as Record<string, unknown> | null;
+            const freshHasDiscount = (freshPromo?.discount_percent ? Number(freshPromo.discount_percent) : 0) > 0 ||
+              (freshPromo?.discount_amount ? Number(freshPromo.discount_amount) : 0) > 0;
+            if (!freshHasDiscount || newHasDiscount) {
+              await prisma.ad_creatives.update({
+                where: { id: adCreativeId },
+                data: { crawl_cache: cache as any },
+              }).catch(() => {});
+              console.log(`[Extensions] cache 已保存，newHasDiscount=${newHasDiscount}`);
+            } else {
+              cache = freshRecord!.crawl_cache as any;
+              console.log(`[Extensions] 保留 DB 中更好的 cache（已有折扣）`);
+            }
+          }
+        }
+
+        // C-016: 路径级 locale 写回（/en-sg/ → /en-us/）
+        const localizedUrl = (cache as CrawlCache | null)?.localizedMerchantUrl;
+        if (localizedUrl && localizedUrl !== merchantUrl && adCreativeId) {
+          const prevUrl = merchantUrl;
+          merchantUrl = localizedUrl;
+          await prisma.ad_creatives.update({
+            where: { id: adCreativeId },
+            data: { final_url: localizedUrl },
+          }).catch(() => {});
+          console.log(`[Extensions] 路径级 locale 命中: ${prevUrl} → ${localizedUrl}`);
+        }
+
+        // ─── Step 4：推送爬取状态 + 开始生成 ───
         send("crawl_status", { crawl_failed: cache!.crawlFailed, crawl_method: cache!.crawlMethod });
 
-        // 若爬虫检测到了实际页面语言（比国家配置更准确），推送给前端
         if (cache!.detectedLanguageCode) {
           send("detected_language", { code: cache!.detectedLanguageCode });
           console.log(`[Extensions] 推送检测到的页面语言: ${cache!.detectedLanguageCode}`);
@@ -459,21 +437,16 @@ export async function POST(req: NextRequest) {
 
         const tasks: Promise<void>[] = [];
 
-        // ─── core: 1 次 AI 生成标题 + 描述 + 站内链接描述 + 图片 ───
         if (types.includes("core")) {
           const confirmedKeywords = Array.isArray(requestKeywords) ? (requestKeywords as string[]).filter(Boolean).slice(0, 10) : [];
-          tasks.push(generateCore(cache!, merchantName, merchantUrl, country, adSettings, aiRuleProfile, adCreative?.id || null, send, ad_language, confirmedKeywords));
+          tasks.push(generateCore(cache!, merchantName, merchantUrl, country, adSettings, aiRuleProfile, adCreativeId, send, ad_language, confirmedKeywords));
         }
 
-        // ─── optional: 1 次 AI 批量生成所有勾选的可选扩展 ───
         if (types.includes("optional")) {
           const optionalTypes: string[] = body.optionalTypes || [];
           tasks.push(generateOptionalBatch(cache!, merchantName, merchantUrl, country, optionalTypes, aiRuleProfile, send, ad_language));
         }
 
-        // ─── sitelinks 单独重爬（前端"重新爬取"按钮）───
-        //   不跑 headlines/descriptions/images，只重跑 discover + auto-expand + sitelink AI writer
-        //   cache 已在上方按需重爬；这里仅基于最新 cache 走 sitelink 独立流水
         if (types.includes("sitelinks") && !types.includes("core")) {
           tasks.push(
             generateSitelinksOnly(
@@ -481,7 +454,7 @@ export async function POST(req: NextRequest) {
               merchantName,
               merchantUrl,
               country,
-              adCreative?.id || null,
+              adCreativeId,
               send,
               ad_language,
             ),
@@ -505,7 +478,6 @@ export async function POST(req: NextRequest) {
       }
     },
     cancel() {
-      // 客户端主动断开连接时设置 isClosed，避免后续 enqueue 操作抛出异常
       isClosed = true;
     },
   });
