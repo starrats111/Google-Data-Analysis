@@ -12,7 +12,7 @@ import {
   CalendarOutlined, SendOutlined, CheckCircleOutlined, LoadingOutlined, SaveOutlined,
   InboxOutlined, LinkOutlined,
 } from "@ant-design/icons";
-import { sanitizeHtml } from "@/lib/sanitize";
+import { sanitizeHtml, proxifyImgSrcs } from "@/lib/sanitize";
 import PublishSiteSelect from "@/components/PublishSiteSelect";
 import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc";
@@ -975,7 +975,7 @@ export default function ArticlePublishPage() {
             maxHeight: 500, overflowY: "auto", background: "#fafafa",
           }}>
             <Title level={3}>{articlePreview.title}</Title>
-            <div dangerouslySetInnerHTML={{ __html: sanitizeHtml(articlePreview.content) }} />
+            <div dangerouslySetInnerHTML={{ __html: proxifyImgSrcs(sanitizeHtml(articlePreview.content)) }} />
           </div>
 
           <Form layout="vertical" style={{ maxWidth: 600 }}>

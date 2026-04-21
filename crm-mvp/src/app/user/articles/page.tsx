@@ -7,7 +7,7 @@ import {
 import {
   UnorderedListOutlined, DeleteOutlined, EyeOutlined, SendOutlined, CopyOutlined, LinkOutlined, SearchOutlined, ReloadOutlined,
 } from "@ant-design/icons";
-import { sanitizeHtml } from "@/lib/sanitize";
+import { sanitizeHtml, proxifyImgSrcs } from "@/lib/sanitize";
 import PublishSiteSelect from "@/components/PublishSiteSelect";
 
 const { Title, Text, Paragraph } = Typography;
@@ -254,7 +254,7 @@ export default function ArticlesPage() {
               </div>
             )}
             <Paragraph>
-              <div dangerouslySetInnerHTML={{ __html: sanitizeHtml(previewArticle.content || "<p>内容生成中...</p>") }} />
+              <div dangerouslySetInnerHTML={{ __html: proxifyImgSrcs(sanitizeHtml(previewArticle.content || "<p>内容生成中...</p>")) }} />
             </Paragraph>
           </div>
         )}

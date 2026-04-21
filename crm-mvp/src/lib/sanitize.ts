@@ -275,3 +275,19 @@ export function stripHtml(html: string): string {
   if (!html) return "";
   return html.replace(/<[^>]*>/g, "").trim();
 }
+
+/**
+ * 将文章 HTML 中的外部图片 src 替换为经 image-proxy 代理的路径。
+ * 用于文章预览渲染，绕过商家 CDN 的 geo-block / 热链保护。
+ * 仅处理 http(s):// 开头的外部 URL，本地路径不变。
+ */
+export function proxifyImgSrcs(html: string): string {
+  if (!html || !/<img\b/i.test(html)) return html;
+  return html.replace(
+    /(<img\b[^>]*?\s)src=(["'])(https?:\/\/[^"']+)\2/gi,
+    (_match, prefix, _quote, src) => {
+      const proxied = `/api/user/ad-creation/image-proxy?url=${encodeURIComponent(src)}`;
+      return `${prefix}src="${proxied}"`;
+    },
+  );
+}
