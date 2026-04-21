@@ -770,6 +770,21 @@ function upgradeCdnThumbnails(images: string[]): string[] {
     } else if (["squarespace", "wixstatic", "imgix"].some(cdn => lower.includes(cdn))) {
       const newUrl = imgUrl.replace(/[?&](?:w|h|width|height)=\d{1,3}(?=&|$)/g, "").replace(/[?&]$/, "");
       upgraded.push(newUrl || imgUrl);
+    } else if (lower.includes("wedeliverlocal.co.uk") || lower.includes("wedeliverlocal.com")) {
+      // C-031: wedeliverlocal CDN（Beelivery 供应商）用 ?w=N 控制宽度，
+      // 默认爬取时返回 w=200（13KB 缩略图），升级到 1200px（~170KB 清晰图）。
+      try {
+        const u = new URL(imgUrl);
+        const w = parseInt(u.searchParams.get("w") || "0", 10);
+        if (w > 0 && w < 600) {
+          u.searchParams.set("w", "1200");
+          upgraded.push(u.toString());
+        } else {
+          upgraded.push(imgUrl);
+        }
+      } catch {
+        upgraded.push(imgUrl);
+      }
     } else {
       upgraded.push(imgUrl);
     }
