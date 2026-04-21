@@ -147,6 +147,70 @@ function buildStealthHeaders(url: string, ua?: string, country?: string): Record
 }
 
 // ══════════════════════════════════════════════════════
+// 追踪/统计像素域名黑名单（C-031）
+// 这些域名的 URL 出现在 HTML 里通常是 1×1 像素或统计 JS，
+// 不是真实图片，必须在 resolve 阶段过滤。
+// ══════════════════════════════════════════════════════
+const TRACKING_DOMAINS = new Set([
+  // 广告追踪
+  "bat.bing.com", "bing.com",
+  "t.co", "analytics.twitter.com", "static.ads-twitter.com",
+  "facebook.com", "connect.facebook.net",
+  "doubleclick.net", "googleadservices.com", "googlesyndication.com",
+  "google-analytics.com", "googletagmanager.com", "googletagservices.com",
+  "analytics.google.com",
+  "ad.doubleclick.net", "securepubads.g.doubleclick.net",
+  // 其他常见统计
+  "scorecardresearch.com", "omtrdc.net", "demdex.net",
+  "adobedtm.com", "nr-data.net", "newrelic.com",
+  "cloudfront.net",              // 慎用——只在 src 是 ?action= 类追踪 URL 时才拦
+  "cdn.mxpnl.com", "api.segment.io",
+  "clarity.ms", "hotjar.com", "mouseflow.com",
+  "tiktok.com", "analytics.tiktok.com",
+  "snap.licdn.com", "px.ads.linkedin.com",
+  "trk.pinterest.com", "ct.pinterest.com",
+  "px.owneriq.net", "sb.scorecardresearch.com",
+]);
+
+/** 是否是追踪/像素域名 */
+function isTrackingUrl(url: string): boolean {
+  try {
+    const host = new URL(url).hostname.toLowerCase();
+    // 精确匹配或子域匹配（如 abc.bat.bing.com）
+    return TRACKING_DOMAINS.has(host) ||
+      [...TRACKING_DOMAINS].some(d => host === d || host.endsWith("." + d));
+  } catch {
+    return false;
+  }
+}
+
+// ══════════════════════════════════════════════════════
+// 错误页 URL 模式（C-031）
+// 当 fetch(redirect:"follow") 后的最终 URL 命中这些模式时，
+// 说明商家网站把请求重定向到应用错误页，此时抓取结果无效。
+// ══════════════════════════════════════════════════════
+const ERROR_URL_PATTERNS = [
+  /\/[Ee]rror(\?|\/|$)/,           // /Error?aspxerrorpath=... / /error/
+  /\/404(\?|\/|$)/,
+  /\/500(\?|\/|$)/,
+  /\/not[-_]?found(\?|\/|$)/i,
+  /\/page[-_]?not[-_]?found(\?|\/|$)/i,
+  /[?&]aspxerrorpath=/i,            // ASP.NET 错误页特征
+  /\/oops(\?|\/|$)/i,
+  /\/sorry(\?|\/|$)/i,
+];
+
+function isFinalUrlErrorPage(url: string): boolean {
+  try {
+    const u = new URL(url);
+    const path = u.pathname + u.search;
+    return ERROR_URL_PATTERNS.some(p => p.test(path));
+  } catch {
+    return false;
+  }
+}
+
+// ══════════════════════════════════════════════════════
 // 拦截页检测（照搬后端 _is_blocked_page + 增强）
 // ══════════════════════════════════════════════════════
 const BLOCKED_TITLES = new Set([
@@ -728,16 +792,27 @@ export async function fetchPageImages(pageUrl: string): Promise<string[]> {
       const res = await fetch(pageUrl, { signal: ctrl.signal, headers, redirect: "follow" });
       clearTimeout(t);
       if (!res.ok && res.status !== 403) continue;
+
+      // C-031：redirect:"follow" 后检测最终落地 URL 是否为应用错误页
+      const finalUrl = res.url || pageUrl;
+      if (isFinalUrlErrorPage(finalUrl)) {
+        console.warn(`[Crawler] fetchPageImages: final URL is error page, skip. original=${pageUrl} final=${finalUrl}`);
+        break; // 错误页对同一个 pageUrl 无需继续重试其他 UA
+      }
+
       const html = await res.text();
       if (isBlockedPage(html) || html.length < 800) continue;
 
-      const baseDomain = (() => { try { return new URL(pageUrl).origin; } catch { return ""; } })();
+      const baseDomain = (() => { try { return new URL(finalUrl).origin; } catch { return new URL(pageUrl).origin || ""; } })();
       const resolve = (raw: string) => {
         let s = raw.trim();
         if (!s || s.startsWith("data:") || s.startsWith("blob:")) return "";
         if (s.startsWith("//")) s = "https:" + s;
         if (s.startsWith("/")) s = baseDomain + s;
-        return s.startsWith("http") ? s : "";
+        if (!s.startsWith("http")) return "";
+        // C-031：过滤追踪/统计域名（Bing pixel、Twitter adsct 等）
+        if (isTrackingUrl(s)) return "";
+        return s;
       };
 
       // og:image / twitter:image
@@ -1426,6 +1501,8 @@ export function extractLinksAndImages(
     if (src.startsWith("//")) src = "https:" + src;
     if (src.startsWith("/")) src = baseDomain + src;
     if (!src.startsWith("http")) return "";
+    // C-031：过滤追踪/统计域名（Bing pixel、Twitter adsct 等）
+    if (isTrackingUrl(src)) return "";
     return src;
   };
 
