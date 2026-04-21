@@ -96,6 +96,19 @@ const PLATFORM_API_CONFIG: Record<string, PlatformApiConfig> = {
     assumeAllJoined: true,
     requiresRelationshipParam: true,
   },
+  // C-029 R1.2：AD (AdsDoubler) 商家 API
+  // 关键差异（§设计方案.md §28.12~§28.13）：
+  //   - GET + 所有参数走 URL query
+  //   - 必须显式传 channelId（由 fetchAllMerchants 的 extra 参数注入）
+  //   - 返回整 channel 全集（含 To Apply/Applying/Rejected/Approved 四态），
+  //     因此 assumeAllJoined=false；parseMerchants AD 分支内按 cmStatus id===4 强过滤
+  //   - 无 relationship 参数，不设 requiresRelationshipParam
+  AD: {
+    mode: "get",
+    url: "https://api.adsdoubler.com/user/merchants/list",
+    pageKey: "page", sizeKey: "pageSize", maxSize: 1000,
+    assumeAllJoined: false,
+  },
 };
 
 // ── 统一商家数据结构 ──
@@ -114,6 +127,8 @@ export interface PlatformMerchant {
   epc_30d: number | null;
   /** 商家在平台的入驻日期（YYYY-MM-DD），从平台 API 提取；若平台不提供则为 null */
   join_date: string | null;
+  /** C-029 AD：cookie 时长（天）。其他平台不提供，字段可缺省 */
+  cookie_duration?: number | null;
 }
 
 // ── API 请求 ──
@@ -132,6 +147,7 @@ async function callPlatformApi(
   token: string,
   page: number,
   relationship?: string,
+  extra?: { channelId?: string },  // C-029：AD 平台渠道 ID 注入
 ): Promise<Record<string, unknown>> {
   const { mode, url, source, pageKey, sizeKey, maxSize } = config;
 
@@ -174,7 +190,11 @@ async function callPlatformApi(
           token, [pageKey]: String(page), [sizeKey]: String(maxSize),
         });
         if (relationship) params.set("relationship", relationship);
-        resp = await fetch(`${url}&${params}`, { signal: controller.signal });
+        if (extra?.channelId) params.set("channelId", extra.channelId);
+        // LH/LB 的 URL 已经带 ?mod=...&op=...，继续用 & 拼接；
+        // AD 的 URL 是裸路径，需要 ? 开头
+        const sep = url.includes("?") ? "&" : "?";
+        resp = await fetch(`${url}${sep}${params}`, { signal: controller.signal });
       }
 
       if (!resp.ok) {
@@ -206,11 +226,21 @@ async function callPlatformApi(
 
 // ── 解析商家数据（各平台返回格式不同，统一提取） ──
 
-function parseMerchants(platform: string, data: Record<string, unknown>, assumeAllJoined = false): PlatformMerchant[] {
+function parseMerchants(
+  platform: string,
+  data: Record<string, unknown>,
+  assumeAllJoined = false,
+  context?: { adSettings?: import("./ad-settings-cache").AdSettings | null },
+): PlatformMerchant[] {
   const root = (data.data || data) as Record<string, unknown>;
   const list = (root.list || root.items || root.merchants || []) as Record<string, unknown>[];
 
   if (!Array.isArray(list)) return [];
+
+  // C-029 R1.2：AD (AdsDoubler) 独立解析分支（字段完全不同于其他平台）
+  if (platform === "AD") {
+    return parseAdMerchants(list, context?.adSettings || null);
+  }
 
   return list.map((item, idx) => {
     // LH 的字段命名和其他平台相反：mcid=数字MID，m_id=slug MCID
@@ -314,6 +344,70 @@ function parseMerchants(platform: string, data: Record<string, unknown>, assumeA
   }).filter((m) => m.merchant_id && m.merchant_name);
 }
 
+/**
+ * C-029 R1.2：AD (AdsDoubler) 专用商家解析
+ * - 字段名全独立（cmId / merchantId 数字 / status 数字 / supportRegionIds 逗号字符串 / category 文案）
+ * - QA10：按 cmStatus id===4 "Approved" 强过滤；Settings 不可用时 fallback 到不过滤
+ * - category 直接取 item.category 文案（实证 §28.12.2）
+ */
+function parseAdMerchants(
+  list: Record<string, unknown>[],
+  settings: import("./ad-settings-cache").AdSettings | null,
+): PlatformMerchant[] {
+  const out: PlatformMerchant[] = [];
+  let skipped = 0;
+
+  for (const item of list) {
+    const statusId = Number(item.status);
+    // Settings 可用时强过滤（Approved = 4）；不可用时不过滤（QA9 fallback）
+    const approved = settings ? statusId === 4 : true;
+    if (!approved) {
+      skipped++;
+      continue;
+    }
+
+    const mid = String(item.merchantId ?? "").trim();
+    const name = String(item.merchantName ?? "").trim();
+    if (!mid || !name) continue;
+
+    // supportRegionIds 是字符串逗号分隔（§28.12.3）
+    const rawRegions = String(item.supportRegionIds ?? "").trim();
+    const regionIds: number[] = rawRegions
+      ? rawRegions.split(",").map(s => Number(s.trim())).filter(n => Number.isFinite(n) && n > 0)
+      : [];
+    const primary = Number(item.primaryRegionId);
+    if (Number.isFinite(primary) && primary > 0 && !regionIds.includes(primary)) {
+      regionIds.unshift(primary);
+    }
+    const regions = settings
+      ? Array.from(new Set(regionIds.map(id => settings.regionMap.get(id)).filter((x): x is string => Boolean(x))))
+      : [];
+
+    const cookieDays = Number(item.cookieExpiryDays);
+    const cookieDuration = Number.isFinite(cookieDays) && cookieDays > 0 ? cookieDays : null;
+
+    out.push({
+      merchant_id: mid,
+      merchant_name: name,
+      category: String(item.category ?? "").trim(),
+      commission_rate: String(item.baseCommission ?? "").trim(),
+      supported_regions: regions,
+      merchant_url: String(item.website ?? "").trim(),
+      logo_url: String(item.logo ?? "").trim(),
+      campaign_link: String(item.trackingLink ?? "").trim(),
+      relationship_status: "joined",
+      epc_30d: null,
+      join_date: null,
+      cookie_duration: cookieDuration,
+    });
+  }
+
+  if (skipped > 0) {
+    console.log(`[MerchantDiag] AD parseAdMerchants: kept=${out.length} skipped_non_approved=${skipped}`);
+  }
+  return out;
+}
+
 function parseRegions(raw: unknown): string[] {
   if (Array.isArray(raw)) return raw.map(String);
   if (typeof raw === "string" && raw) return raw.split(/[,;|]/).map((s) => s.trim()).filter(Boolean);
@@ -355,14 +449,21 @@ export interface SyncResult {
 /**
  * 从单个平台拉取全部商家列表
  * @param relationshipFilter 可选：传 "joined" 让 API 只返回已加入的品牌（更高效，避免翻页上限漏掉末尾品牌）
+ * @param extra 可选：平台专属额外参数（C-029：AD 的 channelId）
  */
 export async function fetchAllMerchants(
   platform: string,
   token: string,
   relationshipFilter?: string,
+  extra?: { channelId?: string },
 ): Promise<{ merchants: PlatformMerchant[]; error?: string }> {
   const config = PLATFORM_API_CONFIG[platform];
   if (!config) return { merchants: [], error: `不支持的平台: ${platform}` };
+
+  // C-029：AD 商家 API 必填 channelId
+  if (platform === "AD" && !extra?.channelId) {
+    return { merchants: [], error: `AD: 缺少 channelId，请在平台连接中配置渠道 ID` };
+  }
 
   const allMerchants: PlatformMerchant[] = [];
   const seen = new Set<string>();
@@ -375,8 +476,20 @@ export async function fetchAllMerchants(
     ? (config.relationshipValue ?? "Joined")
     : (assumeAllJoined ? undefined : relationshipFilter);
 
+  // C-029 R1.2：AD 前置并发拉 Settings（region/cmStatus 字典），失败回退到 null
+  let adSettings: import("./ad-settings-cache").AdSettings | null = null;
+  if (platform === "AD") {
+    const { getAdSettings } = await import("./ad-settings-cache");
+    adSettings = await getAdSettings(token).catch(() => null);
+    if (!adSettings) {
+      console.warn(`[MerchantSync] AD Settings 拉取失败，本次同步将不过滤 cmStatus、supported_regions 置空（fallback）`);
+    }
+  }
+
+  const parseCtx = { adSettings };
+
   try {
-    const firstPage = await callPlatformApi(config, token, 1, effectiveRelFilter);
+    const firstPage = await callPlatformApi(config, token, 1, effectiveRelFilter, extra);
     // 兼容两种错误格式：
     //   1. PM/BSH/CF/CG/MUI：{ "code": "1001", "message": "..." }（顶层 code）
     //   2. LB/LH/RW：{ "status": { "code": 1000, "msg": "..." }, "data": {...} }（status 包装层）
@@ -414,7 +527,7 @@ export async function fetchAllMerchants(
     const firstRawList = (firstRoot.list || firstRoot.items || firstRoot.merchants || []) as unknown[];
     const firstRawCount = Array.isArray(firstRawList) ? firstRawList.length : 0;
 
-    const firstBatch = parseMerchants(platform, firstPage, assumeAllJoined);
+    const firstBatch = parseMerchants(platform, firstPage, assumeAllJoined, parseCtx);
     for (const m of firstBatch) {
       if (!seen.has(m.merchant_id)) { seen.add(m.merchant_id); allMerchants.push(m); }
     }
@@ -460,7 +573,7 @@ export async function fetchAllMerchants(
           await sleep((retry + 1) * 2000);
         }
         try {
-          pageData = await callPlatformApi(config, token, page, effectiveRelFilter);
+          pageData = await callPlatformApi(config, token, page, effectiveRelFilter, extra);
         } catch (pageErr) {
           // 单页请求彻底失败（超时/网络），降级为空页处理，让 consecutiveEmpty 机制决定是否放弃，
           // 而不是直接 throw 中断整个同步（避免大账号因一页故障丢失后续数百页数据）
@@ -484,7 +597,7 @@ export async function fetchAllMerchants(
       }
       consecutiveEmpty = 0;
 
-      const batch = parseMerchants(platform, pageData, assumeAllJoined);
+      const batch = parseMerchants(platform, pageData, assumeAllJoined, parseCtx);
       for (const m of batch) {
         if (!seen.has(m.merchant_id)) { seen.add(m.merchant_id); allMerchants.push(m); }
       }
@@ -514,11 +627,21 @@ interface PlatformTxnConfig {
   mode: "post_json" | "post_form" | "get";
   url: string;
   source?: string;
-  dateFormat: "camel" | "snake"; // beginDate/endDate vs begin_date/end_date
+  /**
+   * 日期参数命名：
+   *   - "camel"：beginDate/endDate（CG/CF/PM/BSH/MUI）
+   *   - "snake"：begin_date/end_date（RW/LH/LB）
+   *   - "ad"   ：transactionStart/transactionEnd（C-029 AD）
+   */
+  dateFormat: "camel" | "snake" | "ad";
   pageKey: string;
   sizeKey: string;
   maxSize: number;
   rateLimitMs?: number;
+  /** C-029：AD 不要 status:"all" 等伪过滤参数 */
+  omitStatusAll?: boolean;
+  /** C-029 AD：日期跨度上限（天），splitDateRange 按此切片 */
+  maxDateSpanDays?: number;
 }
 
 const PLATFORM_TXN_CONFIG: Record<string, PlatformTxnConfig> = {
@@ -568,6 +691,20 @@ const PLATFORM_TXN_CONFIG: Record<string, PlatformTxnConfig> = {
     source: "ultrainfluence",
     dateFormat: "camel", pageKey: "curPage", sizeKey: "perPage", maxSize: 2000,
   },
+  // C-029 R1.2：AD (AdsDoubler) 交易 API
+  // - GET + 所有参数走 URL query
+  // - 日期参数命名独立：transactionStart/transactionEnd
+  // - 状态为数字 1/2/3（pending/approved/rejected），由 TXN_STATUS_MAP 统一映射
+  // - 无 status:"all" 过滤参数，由 omitStatusAll 屏蔽
+  // - QA4 封板：30 天保守切片（文档错误码 50003 暗示有上限但未给数）
+  AD: {
+    mode: "get",
+    url: "https://api.adsdoubler.com/user/report/transactionList",
+    dateFormat: "ad",
+    pageKey: "page", sizeKey: "pageSize", maxSize: 1000,
+    omitStatusAll: true,
+    maxDateSpanDays: 30,
+  },
 };
 
 export interface PlatformTransaction {
@@ -590,10 +727,15 @@ async function callTxnApi(
   endDate: string,
   page: number,
 ): Promise<Record<string, unknown>> {
-  const { mode, url, source, dateFormat, pageKey, sizeKey, maxSize } = config;
+  const { mode, url, source, dateFormat, pageKey, sizeKey, maxSize, omitStatusAll } = config;
 
-  const beginKey = dateFormat === "camel" ? "beginDate" : "begin_date";
-  const endKey = dateFormat === "camel" ? "endDate" : "end_date";
+  // C-029：AD 用 transactionStart/transactionEnd；其他沿用 camel/snake
+  const beginKey =
+    dateFormat === "ad" ? "transactionStart" :
+    dateFormat === "camel" ? "beginDate" : "begin_date";
+  const endKey =
+    dateFormat === "ad" ? "transactionEnd" :
+    dateFormat === "camel" ? "endDate" : "end_date";
 
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
     const controller = new AbortController();
@@ -606,8 +748,8 @@ async function callTxnApi(
         const payload: Record<string, unknown> = {
           token, [beginKey]: startDate, [endKey]: endDate,
           [pageKey]: page, [sizeKey]: maxSize,
-          status: ["All"],
         };
+        if (!omitStatusAll) payload.status = ["All"];
         if (source) payload.source = source;
         resp = await fetch(url, {
           method: "POST",
@@ -622,7 +764,7 @@ async function callTxnApi(
         form.set(endKey, endDate);
         form.set(pageKey, String(page));
         form.set(sizeKey, String(maxSize));
-        form.set("status", "all");
+        if (!omitStatusAll) form.set("status", "all");
         resp = await fetch(url, {
           method: "POST",
           headers: { "Content-Type": "application/x-www-form-urlencoded" },
@@ -636,9 +778,11 @@ async function callTxnApi(
           [endKey]: endDate,
           [pageKey]: String(page),
           [sizeKey]: String(maxSize),
-          status: "all",
         });
-        resp = await fetch(`${url}&${params}`, { signal: controller.signal });
+        if (!omitStatusAll) params.set("status", "all");
+        // LH/LB 的 URL 已经带 ?mod=...&op=...；AD 是裸路径，需要 ? 开头
+        const sep = url.includes("?") ? "&" : "?";
+        resp = await fetch(`${url}${sep}${params}`, { signal: controller.signal });
       }
 
       if (!resp.ok) {
@@ -706,6 +850,8 @@ const TXN_STATUS_MAP: Record<string, string> = {
   rejected: "rejected", declined: "rejected", reversed: "rejected",
   invalid: "rejected", adjusted: "rejected", cancelled: "rejected",
   voided: "rejected", expired: "rejected", "preliminary expired": "rejected",
+  // C-029 QA6 封板：AD 交易 status 是数字（Settings orderStatus 实证一致）
+  "1": "pending", "2": "approved", "3": "rejected",
 };
 
 function normalizeTxnStatus(s: string): string {
@@ -830,7 +976,8 @@ function parseTransactions(platform: string, data: Record<string, unknown>): Pla
     const rawStatus = String(item.status || item.raw_status || "pending");
 
     const txnTime = parseTimestamp(
-      item.order_time || item.orderTime || item.transaction_time || item.report_time || item.created_at
+      // C-029 AD 的字段名：transactionTime（camelCase）
+      item.order_time || item.orderTime || item.transaction_time || item.transactionTime || item.report_time || item.created_at
     );
 
     const merchantUrl = String(
@@ -883,8 +1030,9 @@ export async function fetchAllTransactions(
   const allTxns: PlatformTransaction[] = [];
   const txnIndex = new Map<string, number>(); // transaction_id → index in allTxns
 
-  // CG API 限制查询跨度不超过 62 天，统一用 60 天切片
-  const maxDays = 60;
+  // CG API 限制查询跨度不超过 62 天，统一用 60 天切片；
+  // C-029 AD 上限未知（错误码 50003 暗示有限制），QA4 封板用 30 天保守切片
+  const maxDays = config.maxDateSpanDays ?? 60;
   const dateChunks = splitDateRange(startDate, endDate, maxDays);
 
   const mergeTxn = (t: PlatformTransaction) => {

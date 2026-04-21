@@ -33,9 +33,14 @@ export async function POST(req: NextRequest) {
   // 检查是否有可用的平台连接
   const conns = await prisma.platform_connections.findMany({
     where: { user_id: userId, is_deleted: 0 },
-    select: { id: true, platform: true, account_name: true, api_key: true },
+    select: { id: true, platform: true, account_name: true, api_key: true, channel_id: true },
   });
-  const valid = conns.filter(c => c.api_key && c.api_key.length > 5);
+  // C-029：AD 平台连接必须配置 channel_id，否则视为不可用
+  const valid = conns.filter(c => {
+    if (!c.api_key || c.api_key.length <= 5) return false;
+    if (c.platform === "AD" && !(c.channel_id && c.channel_id.trim())) return false;
+    return true;
+  });
 
   dbg(`SYNC userId=${user.userId} conns=${conns.length} valid=${valid.length}`);
 
@@ -54,7 +59,7 @@ export async function POST(req: NextRequest) {
 // ─── 后台异步同步 ───
 async function doSyncInBackground(
   userId: bigint,
-  conns: { id: bigint; platform: string; account_name: string; api_key: string | null }[],
+  conns: { id: bigint; platform: string; account_name: string; api_key: string | null; channel_id: string | null }[],
   targetPlatform?: string,
 ) {
   const t0 = Date.now();
@@ -82,7 +87,11 @@ async function doSyncInBackground(
     const fetchConn = async (conn: typeof fetchTargets[0]) => {
       dbg(`Fetch ${conn.platform}...`);
       try {
-        const r = await fetchAllMerchants(conn.platform, conn.api_key!, "joined");
+        // C-029：AD 需要透传 channelId；其他平台 extra 保持为空
+        const extra = conn.platform === "AD" && conn.channel_id
+          ? { channelId: conn.channel_id }
+          : undefined;
+        const r = await fetchAllMerchants(conn.platform, conn.api_key!, "joined", extra);
         if (r.error) errors.push(r.error);
         dbg(`  ${conn.platform}: ${r.merchants.length} merchants${r.error ? `, err=${r.error}` : ""}`);
         if (r.merchants.length > 0) {
@@ -117,6 +126,8 @@ async function doSyncInBackground(
           site_url: m.merchant_url || "",
           campaign_link: m.campaign_link || "",
           logo: m.logo_url || "",
+          // C-029：AD 返回 cookieExpiryDays，其他平台为 undefined
+          cookie_duration: typeof m.cookie_duration === "number" ? m.cookie_duration : null,
         });
       }
     };
@@ -141,6 +152,7 @@ async function doSyncInBackground(
         const PLATFORM_NAMES: Record<string, string> = {
           CG: "CollabGlow", LH: "LinkHaitao", RW: "Rewardoo",
           CF: "CreatorFlare", BSH: "BrandSparkHub", PM: "Partnermatic", LB: "LinkBux",
+          MUI: "UltraInfluence", AD: "AdsDoubler",
         };
         const m = e.match(/^([A-Z]+):/);
         return m ? (PLATFORM_NAMES[m[1]] ?? m[1]) : "未知平台";
@@ -227,6 +239,10 @@ async function doSyncInBackground(
           updateData.tracking_link = row.campaign_link;
           updateData.campaign_link = row.campaign_link;
         }
+        // C-029：AD 提供 cookieExpiryDays，按回写更新
+        if (typeof row.cookie_duration === "number" && row.cookie_duration > 0) {
+          updateData.cookie_duration = row.cookie_duration;
+        }
         if (!ex.platform_connection_id && row.conn_id) {
           updateData.platform_connection_id = row.conn_id;
         }
@@ -256,6 +272,10 @@ async function doSyncInBackground(
           status: "available",
         };
         if (regions != null) createData.supported_regions = regions;
+        // C-029：AD 提供 cookieExpiryDays，新增时一并写入
+        if (typeof row.cookie_duration === "number" && row.cookie_duration > 0) {
+          createData.cookie_duration = row.cookie_duration;
+        }
         createOps.push({ key, connId: row.conn_id || null, data: createData });
       }
     }
@@ -376,6 +396,7 @@ async function doSyncInBackground(
     const PLATFORM_NAMES: Record<string, string> = {
       CG: "CollabGlow", LH: "LinkHaitao", RW: "Rewardoo",
       CF: "CreatorFlare", BSH: "BrandSparkHub", PM: "Partnermatic", LB: "LinkBux",
+      MUI: "UltraInfluence", AD: "AdsDoubler",
     };
     const platReadable = Object.entries(platformCounts)
       .map(([p, c]) => `${PLATFORM_NAMES[p] ?? p} ${c} 家`)

@@ -122,6 +122,7 @@ function PlatformConnectionsTab() {
                                 form.setFieldsValue({
                                   platform: conn.platform,
                                   account_name: conn.account_name,
+                                  channel_id: (conn.channel_id as string) || undefined,
                                   publish_site_id: conn.publish_site_id ? String(conn.publish_site_id) : undefined,
                                 });
                                 setModalOpen(true);
@@ -152,6 +153,22 @@ function PlatformConnectionsTab() {
           </Form.Item>
           <Form.Item name="api_key" label="API Key" rules={editConn ? [] : [{ required: true }]}>
             <Input.Password placeholder={editConn ? "已保存（留空则不修改）" : "请输入 API Key"} />
+          </Form.Item>
+          {/* C-029：AD 平台必填渠道 ID（channelId） */}
+          <Form.Item
+            noStyle
+            shouldUpdate={(prev, cur) => prev.platform !== cur.platform}
+          >
+            {({ getFieldValue }) => getFieldValue("platform") === "AD" ? (
+              <Form.Item
+                name="channel_id"
+                label="渠道 ID（channelId）"
+                tooltip="AdsDoubler 后台 → 渠道列表 → 复制 channelId，AD 平台必填"
+                rules={[{ required: true, message: "AD 平台必须填写渠道 ID" }]}
+              >
+                <Input placeholder="如 74" />
+              </Form.Item>
+            ) : null}
           </Form.Item>
           <Form.Item name="publish_site_id" label="绑定站点" tooltip="选择该账号对应的发布站点，领取商家后文章将自动发布到此站点">
             <PublishSiteSelect sites={sites} placeholder="选择发布站点（可搜索站点名或域名）" />

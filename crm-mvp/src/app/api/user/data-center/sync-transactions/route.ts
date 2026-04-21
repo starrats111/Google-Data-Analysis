@@ -32,11 +32,16 @@ export async function POST(req: NextRequest) {
     // 1. 获取用户的所有平台连接
     const connections = await prisma.platform_connections.findMany({
       where: { user_id: userId, is_deleted: 0, status: "connected" },
-      select: { id: true, platform: true, account_name: true, api_key: true },
+      select: { id: true, platform: true, account_name: true, api_key: true, channel_id: true },
     });
 
+    // C-029：AD 平台必须同时具备 api_key 和 channel_id，才视为可用连接
     const validConns = connections
-      .filter((c) => c.api_key && c.api_key.length > 5)
+      .filter((c) => {
+        if (!c.api_key || c.api_key.length <= 5) return false;
+        if (c.platform === "AD" && !(c.channel_id && c.channel_id.trim())) return false;
+        return true;
+      })
       .sort((a, b) => Number(b.id) - Number(a.id));
     if (validConns.length === 0) {
       return apiError("没有可用的平台连接，请先在「个人设置 → 联盟平台连接」中配置 API Key", 400);

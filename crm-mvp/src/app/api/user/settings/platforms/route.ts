@@ -18,10 +18,16 @@ export async function POST(req: NextRequest) {
   const user = getUserFromRequest(req);
   if (!user) return apiError("未授权", 401);
 
-  const { id, platform, account_name, api_key, publish_site_id } = await req.json();
+  const { id, platform, account_name, api_key, channel_id, publish_site_id } = await req.json();
   if (!platform) return apiError("平台代码不能为空");
 
   const userId = BigInt(user.userId);
+
+  // C-029：AD 平台必填 channel_id
+  const normalizedChannelId = typeof channel_id === "string" ? channel_id.trim() : "";
+  if (platform === "AD" && !id && !normalizedChannelId) {
+    return apiError("AD 平台必须填写渠道 ID（channelId）");
+  }
 
   // 编辑模式：按 id 更新
   if (id) {
@@ -30,11 +36,17 @@ export async function POST(req: NextRequest) {
     });
     if (!existing) return apiError("连接不存在");
 
+    // AD 编辑时若清空了 channel_id，也应拦截
+    if (existing.platform === "AD" && channel_id !== undefined && !normalizedChannelId) {
+      return apiError("AD 平台的渠道 ID 不能为空");
+    }
+
     const data: Record<string, unknown> = {
       publish_site_id: publish_site_id ? BigInt(publish_site_id) : null,
     };
     if (account_name !== undefined) data.account_name = account_name;
     if (api_key && api_key.trim()) data.api_key = api_key;
+    if (channel_id !== undefined) data.channel_id = normalizedChannelId || null;
 
     await prisma.platform_connections.update({ where: { id: existing.id }, data });
     return apiSuccess(null, "保存成功");
@@ -58,6 +70,8 @@ export async function POST(req: NextRequest) {
       platform,
       account_name: finalName,
       api_key,
+      // 仅 AD 平台保存 channel_id，其他平台一律 NULL，避免字段污染
+      channel_id: platform === "AD" ? (normalizedChannelId || null) : null,
       publish_site_id: publish_site_id ? BigInt(publish_site_id) : null,
       status: "connected",
     },
