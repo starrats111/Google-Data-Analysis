@@ -150,5 +150,19 @@ export async function GET(req: NextRequest) {
     placeholderFixed ? "(placeholder-fixed)" : "",
     lastError,
   );
-  return new NextResponse("Fetch failed", { status: 502 });
+  // 返回 1×1 透明 PNG 而非 502，让浏览器显示空白占位图而不是红叉错误
+  // 前端通过 onerror 处理即可，不影响页面整体功能
+  const TRANSPARENT_PNG = Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==",
+    "base64",
+  );
+  return new NextResponse(TRANSPARENT_PNG, {
+    status: 200,
+    headers: {
+      "Content-Type": "image/png",
+      "Content-Length": String(TRANSPARENT_PNG.length),
+      "Cache-Control": "public, max-age=300",
+      "X-Image-Proxy-Fallback": "true",
+    },
+  });
 }

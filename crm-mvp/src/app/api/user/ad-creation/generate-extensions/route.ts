@@ -328,8 +328,17 @@ export async function POST(req: NextRequest) {
         if (isClosed) return;
         try { controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: eventType, data: serializeData(payload) })}\n\n`)); } catch { isClosed = true; }
       };
+      // SSE keepalive：每 20s 发一个注释行，防止 Cloudflare 因 SSE 流静默超过 100s 关闭连接
+      // （特别是爬取 bot-protected 商家时 buildCrawlCache 可占用 60-90s）
+      const heartbeat = setInterval(() => {
+        if (isClosed) { clearInterval(heartbeat); return; }
+        try { controller.enqueue(encoder.encode(": keepalive\n\n")); } catch { isClosed = true; }
+      }, 20000);
 
       try {
+        // 立即告知前端正在爬取中（避免前端因无事件超时）
+        send("crawl_pending", { status: "crawling" });
+
         // ─── Step 1：国别 URL 解析（DNS + TCP，可能 5-30 s）───
         // C-016: aerosus.nl + BE → aerosus.be（若 DNS+TCP 通）
         const { resolveCountryUrl, extractBrandRoot } = await import("@/lib/country-url-resolver");
@@ -471,6 +480,7 @@ export async function POST(req: NextRequest) {
           try { controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: "error", data: "生成失败，请重试" })}\n\n`)); } catch { isClosed = true; }
         }
       } finally {
+        clearInterval(heartbeat);
         if (!isClosed) {
           isClosed = true;
           try { controller.close(); } catch {}
