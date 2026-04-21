@@ -4,11 +4,15 @@ import type { Prisma } from "@/generated/prisma/client";
 type TxClient = Prisma.TransactionClient;
 
 /* ────────────────────────────────────────────────────────────────────────────
- * 序号来源说明（2026-03-28 修正）
+ * 序号来源说明（2026-03-28 修正；2026-04-21 补丁）
  *
  * 所有广告系列都通过本系统创建，DB 是唯一序号来源。
  * 之前的 Google Ads API 扫描会把同一 MCC 下其他用户 / 其他系统创建的广告系列序号
  * 也计入 max，导致序号暴涨（如 032 → 071）。故已移除 API 扫描。
+ *
+ * 2026-04-21 补丁：序号计算改为用户全局（跨所有 MCC），不再按 MCC 单独计数。
+ * 原按-MCC 计数会导致不同 MCC 各自维护独立序号，用户看到"倒退"命名（如全局
+ * 已有 313 条，但新建 mcc=17 的广告系列仍被命名为 306）。锁也改为用户级。
  * ──────────────────────────────────────────────────────────────────────── */
 
 /**
@@ -45,29 +49,20 @@ function extractSeqFromName(name: string, namingRule: string, platformLabel?: st
 }
 
 /**
- * MCC 范围：与历史逻辑一致（当前 MCC 或尚未写入 mcc 的行）
- */
-function campaignMccScope(userId: bigint, mccId?: bigint | null): Record<string, unknown> {
-  const w: Record<string, unknown> = { user_id: userId };
-  if (mccId) {
-    w.OR = [{ mcc_id: mccId }, { mcc_id: null }];
-  }
-  return w;
-}
-
-/**
  * 仅「已提交 Google 且未删除」的广告系列参与三位序号统计与占号（草稿、已删不占号）
+ * 序号跨用户下所有 MCC 全局计算，避免不同 MCC 各自计数导致序号"倒退"。
  */
-export function campaignFormalSequenceWhere(userId: bigint, mccId?: bigint | null): Record<string, unknown> {
+export function campaignFormalSequenceWhere(userId: bigint, _mccId?: bigint | null): Record<string, unknown> {
   return {
-    ...campaignMccScope(userId, mccId),
+    user_id: userId,
     is_deleted: 0,
     google_campaign_id: { not: null },
   };
 }
 
-function lockKeyForCampaignSeq(userId: bigint, mccId?: bigint | null): string {
-  return `campseq_${userId}_${mccId ?? BigInt(0)}`;
+/** 锁粒度：用户级（跨 MCC），确保同一用户并发提交时序号全局唯一 */
+function lockKeyForCampaignSeq(userId: bigint, _mccId?: bigint | null): string {
+  return `campseq_${userId}`;
 }
 
 function escapeMySqlString(s: string): string {
@@ -109,17 +104,19 @@ function computeDbMaxSeqFromTx(
   return max;
 }
 
-/** 任意未删除行占用此前缀即视为冲突（含历史遗留的 NNN- 草稿，避免与新建正式名撞号） */
+/** 任意未删除行占用此前缀即视为冲突（含历史遗留的 NNN- 草稿，避免与新建正式名撞号）
+ *  冲突检测跨用户所有 MCC，确保序号全局唯一。
+ */
 async function seqPrefixTakenInTx(
   tx: TxClient,
   userId: bigint,
-  mccId: bigint | null | undefined,
+  _mccId: bigint | null | undefined,
   seq: number,
   excludeCampaignId?: bigint,
 ): Promise<boolean> {
   const prefix = `${String(seq).padStart(3, "0")}-`;
   const where: Record<string, unknown> = {
-    ...campaignMccScope(userId, mccId),
+    user_id: userId,
     is_deleted: 0,
     campaign_name: { startsWith: prefix },
   };
