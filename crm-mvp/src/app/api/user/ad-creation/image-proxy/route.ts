@@ -144,14 +144,67 @@ export async function GET(req: NextRequest) {
     }  // end for referer
   }  // end for ua
 
+  // 直连全部失败 → 尝试通过动态出口代理重试（绕过商家 CDN 的 IP/地域封锁）
+  try {
+    const { getProxyUrlForCountry, fetchViaProxy } = await import("@/lib/crawl-proxy");
+    // 从图片 URL hostname 推断商家所在国家（CDN 通常与商家同地域，默认 US）
+    let proxyCountry = "US";
+    try {
+      const imgHost = new URL(url).hostname.toLowerCase();
+      if (imgHost.endsWith(".co.uk") || imgHost.endsWith(".uk")) proxyCountry = "GB";
+      else if (imgHost.endsWith(".de")) proxyCountry = "DE";
+      else if (imgHost.endsWith(".fr")) proxyCountry = "FR";
+      else if (imgHost.endsWith(".au")) proxyCountry = "AU";
+      else if (imgHost.endsWith(".ca")) proxyCountry = "CA";
+    } catch {}
+
+    const proxyUrl = await getProxyUrlForCountry(proxyCountry);
+    if (proxyUrl) {
+      const referer = inferReferer(url)[0] || "";
+      const proxyResp = await fetchViaProxy(
+        url,
+        {
+          headers: {
+            "User-Agent": USER_AGENTS[0],
+            "Accept": "image/webp,image/jpeg,image/png,image/avif,image/*;q=0.8",
+            ...(referer ? { "Referer": referer } : {}),
+          },
+          signal: AbortSignal.timeout(20000),
+        },
+        proxyUrl,
+      );
+      if (proxyResp.ok) {
+        const ct = (proxyResp.headers["content-type"] as string) || "image/jpeg";
+        if (ALLOWED_TYPES.some((t) => ct.startsWith(t))) {
+          const buf = await proxyResp.buffer();
+          if (buf.length >= 100 && buf.length <= MAX_SIZE) {
+            console.log(`[ImageProxy] 代理重试成功: ${url.slice(0, 80)} (${proxyCountry}, ${buf.length}B)`);
+            return new NextResponse(buf, {
+              headers: {
+                "Content-Type": ct,
+                "Content-Length": String(buf.length),
+                "Cache-Control": `public, max-age=${CACHE_TTL}`,
+                "Access-Control-Allow-Origin": "*",
+              },
+            });
+          }
+        }
+      }
+      console.warn(`[ImageProxy] 代理重试也失败: ${url.slice(0, 80)} status=${proxyResp.status}`);
+    } else {
+      console.warn(`[ImageProxy] 无可用代理配置，跳过代理重试`);
+    }
+  } catch (proxyErr) {
+    console.warn(`[ImageProxy] 代理重试异常: ${proxyErr instanceof Error ? proxyErr.message : proxyErr}`);
+  }
+
   console.warn(
-    "[ImageProxy] all attempts failed:",
+    "[ImageProxy] all attempts failed (incl. proxy):",
     url,
     placeholderFixed ? "(placeholder-fixed)" : "",
     lastError,
   );
-  // 返回 1×1 透明 PNG 而非 502，让浏览器显示空白占位图而不是红叉错误
-  // 前端通过 onerror 处理即可，不影响页面整体功能
+  // 代理也失败时返回 1×1 透明 PNG，避免浏览器显示红叉破图
   const TRANSPARENT_PNG = Buffer.from(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==",
     "base64",
@@ -161,7 +214,7 @@ export async function GET(req: NextRequest) {
     headers: {
       "Content-Type": "image/png",
       "Content-Length": String(TRANSPARENT_PNG.length),
-      "Cache-Control": "public, max-age=300",
+      "Cache-Control": "public, max-age=60",
       "X-Image-Proxy-Fallback": "true",
     },
   });

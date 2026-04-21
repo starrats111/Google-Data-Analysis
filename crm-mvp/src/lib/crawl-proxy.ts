@@ -81,6 +81,7 @@ interface ProxyFetchResponse {
   url: string;
   ok: boolean;
   text(): Promise<string>;
+  buffer(): Promise<Buffer>;
   headers: Record<string, string | string[]>;
 }
 
@@ -146,12 +147,13 @@ export async function fetchViaProxy(
         const chunks: Buffer[] = [];
         res.on("data", (chunk: Buffer) => chunks.push(chunk));
         res.on("end", () => {
-          const body = Buffer.concat(chunks).toString("utf8");
+          const rawBuf = Buffer.concat(chunks);
           resolve({
             status,
             url: targetUrl,
             ok: status >= 200 && status < 400,
-            text: () => Promise.resolve(body),
+            text: () => Promise.resolve(rawBuf.toString("utf8")),
+            buffer: () => Promise.resolve(rawBuf),
             headers: res.headers as Record<string, string | string[]>,
           });
         });
