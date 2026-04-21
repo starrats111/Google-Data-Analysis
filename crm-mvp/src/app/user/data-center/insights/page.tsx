@@ -142,6 +142,9 @@ const markdownStyles: React.CSSProperties = {
 // 实时分析面板
 // ──────────────────────────────────────────────
 function LiveAnalysisPanel() {
+  const persona = useActivePersona();
+  const personaName = persona?.name ?? "Adrian · 数据猎手";
+
   const [dateRange, setDateRange] = useState<[dayjs.Dayjs, dayjs.Dayjs]>([
     dayjs().subtract(7, "day"),
     dayjs().subtract(1, "day"),
@@ -303,7 +306,7 @@ function LiveAnalysisPanel() {
               disabled={isAnalyzing}
               style={{ background: "#764ba2", borderColor: "#764ba2" }}
             >
-              {isAnalyzing ? "Adrian 正在分析..." : "开始分析"}
+              {isAnalyzing ? `${personaName} 正在分析...` : "开始分析"}
             </Button>
             {isAnalyzing && (
               <Button onClick={stopAnalysis}>停止</Button>
@@ -345,7 +348,7 @@ function LiveAnalysisPanel() {
           title={
             <span>
               <RobotOutlined style={{ color: "#764ba2", marginRight: 8 }} />
-              <Text strong style={{ color: "#302b63" }}>Adrian 分析报告</Text>
+              <Text strong style={{ color: "#302b63" }}>{personaName} 分析报告</Text>
               {isAnalyzing && !content && (
                 <Text type="secondary" style={{ fontSize: 12, marginLeft: 8 }}>正在生成中...</Text>
               )}
@@ -369,7 +372,7 @@ function LiveAnalysisPanel() {
           ) : (
             <div style={{ textAlign: "center", padding: "24px 0" }}>
               <Spin indicator={<LoadingOutlined style={{ fontSize: 24, color: "#764ba2" }} />} />
-              <div style={{ marginTop: 12, color: "#9b8ed6", fontSize: 13 }}>Adrian 正在调用工具获取数据...</div>
+              <div style={{ marginTop: 12, color: "#9b8ed6", fontSize: 13 }}>{personaName} 正在调用工具获取数据...</div>
             </div>
           )}
         </Card>

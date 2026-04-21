@@ -513,7 +513,7 @@ export async function POST(req: NextRequest) {
 
         while (round < MAX_ROUNDS) {
           round++;
-          send("status", `[第${round}轮] Adrian 正在思考...`);
+          send("status", `[第${round}轮] ${activePersona.name} 正在思考...`);
 
           const base = aiConfig.baseUrl.replace(/\/+$/, "").replace(/\/v1\/messages$/, "").replace(/\/v1$/, "");
           const url = `${base}/v1/chat/completions`;
