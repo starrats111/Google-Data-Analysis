@@ -736,49 +736,55 @@ export default function DataCenterPage() {
 
       {/* ========== 佣金详情弹窗（含汇总指标 + 按平台账号明细） ========== */}
       <Modal title="佣金详情" open={commissionModal} onCancel={() => setCommissionModal(false)} footer={null} width={900}>
-        {/* 汇总指标 */}
-        <Row gutter={[12, 12]} style={{ marginBottom: 16 }}>
-          <Col span={8}>
-            <Card size="small" styles={{ body: { padding: "8px 12px" } }}>
-              <Statistic title="总佣金" value={summary.totalCommission} prefix="$" precision={2} styles={{ content: { fontSize: 16, color: summary.totalCommission > 0 ? "#389e0d" : undefined } }} />
-            </Card>
-          </Col>
-          <Col span={8}>
-            <Card size="small" styles={{ body: { padding: "8px 12px" } }}>
-              <Statistic title="已确认佣金" value={summary.totalApprovedCommission} prefix="$" precision={2} styles={{ content: { fontSize: 16, color: summary.totalApprovedCommission > 0 ? "#1890ff" : undefined } }} />
-            </Card>
-          </Col>
-          <Col span={8}>
-            <Card size="small" styles={{ body: { padding: "8px 12px" } }}>
-              <Statistic title="待审核佣金"
-                value={summary.totalPendingCommission}
-                prefix="$" precision={2}
-                styles={{ content: { fontSize: 16, color: summary.totalPendingCommission > 0 ? "#faad14" : undefined } }} />
-            </Card>
-          </Col>
-          <Col span={8}>
-            <Card size="small" styles={{ body: { padding: "8px 12px" } }}>
-              <Statistic title="拒付佣金" value={summary.totalRejectedCommission} prefix="$" precision={2} styles={{ content: { fontSize: 16, color: summary.totalRejectedCommission > 0 ? "#cf1322" : undefined } }} />
-            </Card>
-          </Col>
-          <Col span={8}>
-            <Card size="small" styles={{ body: { padding: "8px 12px" } }}>
-              <Statistic title="平均 CPC" value={summary.avgCpc} prefix="$" precision={4} styles={{ content: { fontSize: 16 } }} />
-            </Card>
-          </Col>
-          <Col span={8}>
-            <Card size="small" styles={{ body: { padding: "8px 12px" } }}>
-              <Statistic title="ROI" value={summary.roi} precision={2}
-                prefix={summary.roi >= 0 ? <RiseOutlined /> : <FallOutlined />}
-                styles={{ content: { fontSize: 16, color: summary.roi >= 0 ? "#389e0d" : "#cf1322" } }} />
-            </Card>
-          </Col>
-          <Col span={8}>
-            <Card size="small" styles={{ body: { padding: "8px 12px" } }}>
-              <Statistic title="广告系列" value={`${summary.enabledCount} 启用 / ${summary.pausedCount} 暂停`} styles={{ content: { fontSize: 13 } }} />
-            </Card>
-          </Col>
-        </Row>
+        {/* 汇总指标 — 与下方明细表同源（commission-by-account API 实时拉取），避免与 campaigns SWR 缓存口径不一 */}
+        {(() => {
+          const src = commissionByAccount.length > 0 ? commissionByAccount : commissionByMerchant;
+          const modalTotal     = src.reduce((s, r) => s + r.total_commission, 0);
+          const modalApproved  = src.reduce((s, r) => s + r.approved_commission + r.paid_commission, 0);
+          const modalPending   = src.reduce((s, r) => s + r.pending_commission, 0);
+          const modalRejected  = src.reduce((s, r) => s + r.rejected_commission, 0);
+          return (
+            <Row gutter={[12, 12]} style={{ marginBottom: 16 }}>
+              <Col span={8}>
+                <Card size="small" styles={{ body: { padding: "8px 12px" } }}>
+                  <Statistic title="总佣金" value={modalTotal} prefix="$" precision={2} styles={{ content: { fontSize: 16, color: modalTotal > 0 ? "#389e0d" : undefined } }} />
+                </Card>
+              </Col>
+              <Col span={8}>
+                <Card size="small" styles={{ body: { padding: "8px 12px" } }}>
+                  <Statistic title="已确认佣金" value={modalApproved} prefix="$" precision={2} styles={{ content: { fontSize: 16, color: modalApproved > 0 ? "#1890ff" : undefined } }} />
+                </Card>
+              </Col>
+              <Col span={8}>
+                <Card size="small" styles={{ body: { padding: "8px 12px" } }}>
+                  <Statistic title="待审核佣金" value={modalPending} prefix="$" precision={2} styles={{ content: { fontSize: 16, color: modalPending > 0 ? "#faad14" : undefined } }} />
+                </Card>
+              </Col>
+              <Col span={8}>
+                <Card size="small" styles={{ body: { padding: "8px 12px" } }}>
+                  <Statistic title="拒付佣金" value={modalRejected} prefix="$" precision={2} styles={{ content: { fontSize: 16, color: modalRejected > 0 ? "#cf1322" : undefined } }} />
+                </Card>
+              </Col>
+              <Col span={8}>
+                <Card size="small" styles={{ body: { padding: "8px 12px" } }}>
+                  <Statistic title="平均 CPC" value={summary.avgCpc} prefix="$" precision={4} styles={{ content: { fontSize: 16 } }} />
+                </Card>
+              </Col>
+              <Col span={8}>
+                <Card size="small" styles={{ body: { padding: "8px 12px" } }}>
+                  <Statistic title="ROI" value={summary.roi} precision={2}
+                    prefix={summary.roi >= 0 ? <RiseOutlined /> : <FallOutlined />}
+                    styles={{ content: { fontSize: 16, color: summary.roi >= 0 ? "#389e0d" : "#cf1322" } }} />
+                </Card>
+              </Col>
+              <Col span={8}>
+                <Card size="small" styles={{ body: { padding: "8px 12px" } }}>
+                  <Statistic title="广告系列" value={`${summary.enabledCount} 启用 / ${summary.pausedCount} 暂停`} styles={{ content: { fontSize: 13 } }} />
+                </Card>
+              </Col>
+            </Row>
+          );
+        })()}
 
         {/* 佣金明细 Tabs：按商家 / 按平台账号 */}
         <Tabs activeKey={commissionTab} onChange={(k) => setCommissionTab(k as "merchant" | "account")} size="small" items={[
