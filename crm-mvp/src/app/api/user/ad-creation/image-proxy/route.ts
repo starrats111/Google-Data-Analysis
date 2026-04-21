@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getUserFromRequest } from "@/lib/auth";
+import { normalizeImageUrl, hasLiquidPlaceholder } from "@/lib/image-url-normalize";
 
 // avif 需包含在内：Cloudinary f_auto 在 Accept:image/* 下会优先返回 avif
 const ALLOWED_TYPES = ["image/jpeg", "image/png", "image/webp", "image/gif", "image/avif", "image/svg+xml"];
@@ -64,8 +65,13 @@ export async function GET(req: NextRequest) {
   const user = getUserFromRequest(req);
   if (!user) return new NextResponse("Unauthorized", { status: 401 });
 
-  const url = req.nextUrl.searchParams.get("url");
-  if (!url) return new NextResponse("Missing url", { status: 400 });
+  const rawUrl = req.nextUrl.searchParams.get("url");
+  if (!rawUrl) return new NextResponse("Missing url", { status: 400 });
+
+  // C-030：兜底清洗 Shopify Liquid 模板占位符（{width}/{height}），
+  // 防止历史爬虫未替换导致 CDN 返回 404。
+  const url = normalizeImageUrl(rawUrl);
+  const placeholderFixed = hasLiquidPlaceholder(rawUrl) && !hasLiquidPlaceholder(url);
 
   try {
     new URL(url);
@@ -138,6 +144,11 @@ export async function GET(req: NextRequest) {
     }  // end for referer
   }  // end for ua
 
-  console.warn("[ImageProxy] all attempts failed:", url, lastError);
+  console.warn(
+    "[ImageProxy] all attempts failed:",
+    url,
+    placeholderFixed ? "(placeholder-fixed)" : "",
+    lastError,
+  );
   return new NextResponse("Fetch failed", { status: 502 });
 }

@@ -1,6 +1,7 @@
 import { existsSync } from "fs";
 import { getProxyUrlForCountry, fetchViaProxy } from "@/lib/crawl-proxy";
 import { acquirePuppeteerSlot, puppeteerSemaphoreStats } from "@/lib/puppeteer-semaphore";
+import { normalizeImageUrl } from "@/lib/image-url-normalize";
 
 export interface PuppeteerPageData {
   html: string;
@@ -680,7 +681,10 @@ function deduplicateCdnImages(images: string[]): string[] {
 
 function upgradeCdnThumbnails(images: string[]): string[] {
   const upgraded: string[] = [];
-  for (const imgUrl of images) {
+  for (const rawUrl of images) {
+    // C-030：先把 Shopify Liquid 模板占位符 {width}/{height} 替换成具体尺寸，
+    // 否则 CDN 会返回 404，下游 image-proxy 取不到图。
+    const imgUrl = normalizeImageUrl(rawUrl);
     const lower = imgUrl.toLowerCase();
 
     if (lower.includes("cdn.shopify") || lower.includes("/cdn/shop/")) {
