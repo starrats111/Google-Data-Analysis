@@ -646,7 +646,7 @@ export function buildAiRuleSummary(profileRaw: unknown) {
 
 // ─── 违规检查 ──────────────────────────────────────────────────
 
-function includesForbiddenTerm(text: string, forbiddenTerms: string[]): string | null {
+export function includesForbiddenTerm(text: string, forbiddenTerms: string[]): string | null {
   const lower = text.toLowerCase();
   for (const term of forbiddenTerms) {
     if (lower.includes(term.toLowerCase())) return term;

@@ -4,7 +4,9 @@ import { apiSuccess, apiError } from "@/lib/constants";
 import prisma from "@/lib/prisma";
 import { getAdMarketConfig } from "@/lib/ad-market";
 import { sanitizeAdText } from "@/lib/crawl-pipeline";
-import { collectAiRuleViolations } from "@/lib/ai-rule-profile";
+import { collectAiRuleViolations, normalizeAiRuleProfile, getActivePersona, includesForbiddenTerm } from "@/lib/ai-rule-profile";
+import { callAiWithFallback } from "@/lib/ai-service";
+import { extractJsonFromAi } from "@/lib/crawl-pipeline";
 import { isPolicyRiskKeyword } from "@/lib/keyword-optimizer";
 import { mutateGoogleAds, dollarsToMicros, queryGoogleAds, parseGoogleAdsErrors, formatGoogleAdsErrorMessage, isOperationNotPermittedError } from "@/lib/google-ads";
 import type { GoogleAdsViolation } from "@/lib/google-ads";
@@ -118,6 +120,112 @@ export async function POST(req: NextRequest) {
   }
   if (finalUrl.startsWith("http://")) {
     finalUrl = finalUrl.replace("http://", "https://");
+  }
+
+  // ═════════════════════════════════════════════════════════════════
+  // C-033: Sitelinks 禁止词预筛 → AI 自动返工（最多3轮），仍违规则移除该条
+  //   - keywords/headlines/descriptions/callouts 不在此处处理，保持原有硬阻断
+  //   - Sitelinks 由 AI 生成，员工难以手动修改，故改为 AI 自动返工
+  //   - QA-1=B: 最多3轮 / QA-2=B: 3轮仍违规整条移除 / QA-3=A: 写回DB
+  // ═════════════════════════════════════════════════════════════════
+  try {
+    const _profile = normalizeAiRuleProfile(adSettings?.ai_rule_profile);
+    const _persona = getActivePersona(_profile);
+    const _allForbidden = [...new Set([..._persona.forbidden_terms, ..._profile.forbidden_terms])];
+
+    if (_allForbidden.length > 0 && Array.isArray(sitelinks) && sitelinks.length > 0) {
+      type SitelinkItem = { title?: string | null; desc1?: string | null; desc2?: string | null; description1?: string | null; description2?: string | null; url?: string | null; finalUrl?: string | null };
+      const slArr = sitelinks as SitelinkItem[];
+
+      // 检查单条 sitelink 是否有禁止词，返回命中词列表
+      const getSlViolations = (sl: SitelinkItem): string[] => {
+        const fields = [sl.title, sl.desc1, sl.desc2, sl.description1, sl.description2].map((v) => String(v || "").trim()).filter(Boolean);
+        const hits: string[] = [];
+        for (const f of fields) {
+          const matched = includesForbiddenTerm(f, _allForbidden);
+          if (matched && !hits.includes(matched)) hits.push(matched);
+        }
+        return hits;
+      };
+
+      // 找出需要返工的条目下标
+      const violatingIdxs = slArr.map((sl, i) => ({ i, hits: getSlViolations(sl) })).filter((x) => x.hits.length > 0);
+
+      if (violatingIdxs.length > 0) {
+        console.warn(`[C-033] Sitelinks 禁止词命中 ${violatingIdxs.length} 条，启动 AI 返工`);
+
+        // AI 返工：每条违规 sitelink 独立调用，最多 3 轮
+        const toRemove = new Set<number>();
+        for (const { i, hits } of violatingIdxs) {
+          const sl = slArr[i];
+          const titleOrig = String(sl.title || "").trim();
+          const desc1Orig = String(sl.desc1 || sl.description1 || "").trim();
+          const desc2Orig = String(sl.desc2 || sl.description2 || "").trim();
+          let rewritten: { title: string; desc1: string; desc2: string } | null = null;
+
+          for (let round = 1; round <= 3; round++) {
+            try {
+              const raw = await callAiWithFallback("sitelink_rewrite", [
+                {
+                  role: "user",
+                  content: [
+                    `You are a Google Ads copywriter. Rewrite the sitelink to avoid ALL forbidden words.`,
+                    `Forbidden words (do NOT use these words or close variants/synonyms): ${JSON.stringify(hits)}`,
+                    `Original title (max 25 chars): "${titleOrig}"`,
+                    `Original desc1 (max 35 chars): "${desc1Orig}"`,
+                    `Original desc2 (max 35 chars): "${desc2Orig}"`,
+                    `Rules:`,
+                    `1. Keep the same page intent and meaning.`,
+                    `2. Stay within char limits: title≤25, desc1≤35, desc2≤35.`,
+                    `3. Return ONLY valid JSON, no extra text: {"title":"...","desc1":"...","desc2":"..."}`,
+                  ].join("\n"),
+                },
+              ], 120);
+
+              const parsed = JSON.parse(extractJsonFromAi(raw)) as { title?: string; desc1?: string; desc2?: string };
+              const t = String(parsed.title || "").trim().slice(0, 25);
+              const d1 = String(parsed.desc1 || "").trim().slice(0, 35);
+              const d2 = String(parsed.desc2 || "").trim().slice(0, 35);
+
+              // 校验：重写后是否仍有禁止词
+              const stillViolates = [t, d1, d2].some((f) => f && includesForbiddenTerm(f, _allForbidden));
+              if (!stillViolates && t.length >= 2) {
+                rewritten = { title: t, desc1: d1, desc2: d2 };
+                console.warn(`[C-033] Sitelink[${i}] 第 ${round} 轮返工成功: "${titleOrig}" → "${t}"`);
+                break;
+              }
+              console.warn(`[C-033] Sitelink[${i}] 第 ${round} 轮返工仍违规，继续重试`);
+            } catch (e) {
+              console.warn(`[C-033] Sitelink[${i}] 第 ${round} 轮 AI 调用失败:`, e instanceof Error ? e.message : e);
+            }
+          }
+
+          if (rewritten) {
+            // 替换回原数组（兼容两种字段名格式）
+            slArr[i] = { ...sl, title: rewritten.title, desc1: rewritten.desc1, desc2: rewritten.desc2, description1: rewritten.desc1, description2: rewritten.desc2 };
+          } else {
+            // 3 轮仍违规 → 标记移除（QA-2=B）
+            console.warn(`[C-033] Sitelink[${i}] 3 轮返工失败，移除该条: "${titleOrig}"`);
+            toRemove.add(i);
+          }
+        }
+
+        // 移除失败条目，写回 sitelinks 数组
+        const cleaned = slArr.filter((_, i) => !toRemove.has(i));
+        sitelinks.splice(0, sitelinks.length, ...cleaned);
+
+        // QA-3: 写回 DB
+        await prisma.ad_creatives.update({
+          where: { id: adCreative.id },
+          data: { sitelinks: cleaned as any },
+        }).catch((e) => console.warn("[C-033] sitelinks 写回 DB 失败:", e instanceof Error ? e.message : e));
+
+        console.warn(`[C-033] Sitelinks 返工完成：原 ${slArr.length + toRemove.size} 条 → 保留 ${cleaned.length} 条`);
+      }
+    }
+  } catch (e) {
+    // C-033 返工异常不阻断提交，仅记录日志
+    console.warn("[C-033] Sitelinks 禁止词返工异常（不阻断提交）:", e instanceof Error ? e.message : e);
   }
 
   const aiRuleViolations = collectAiRuleViolations({
