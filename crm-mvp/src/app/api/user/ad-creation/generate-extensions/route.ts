@@ -5,6 +5,7 @@ import prisma from "@/lib/prisma";
 import { callAiWithFallback, suggestDisplayPaths } from "@/lib/ai-service";
 import { getAdMarketConfig, resolveLanguageName } from "@/lib/ad-market";
 import { buildAiRulePrompt, checkItemViolations } from "@/lib/ai-rule-profile";
+import { isLowValueSitelink } from "@/lib/sitelink-filter";
 import {
   type CrawlCache,
   buildCrawlCache,
@@ -591,7 +592,12 @@ async function generateCore(
         country,
         languageCode: adLanguageCode || market.languageCode,
       });
-      const final = written.slice(0, 6);
+      // C-032 QA-1 A：第二层过滤——AI 输出后再过一遍黑名单，防止扩源阶段混入低价值链接
+      const filtered = written.filter((s) => !isLowValueSitelink(s.url, s.title));
+      if (filtered.length < written.length) {
+        console.warn(`[SitelinkFilter] L2 过滤 AI 输出: 原 ${written.length} 条 → 保留 ${filtered.length} 条`);
+      }
+      const final = filtered.slice(0, 6);
 
       send("sitelinks", final);
       if (adCreativeId) {

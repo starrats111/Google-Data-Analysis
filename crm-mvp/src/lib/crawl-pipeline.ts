@@ -5,6 +5,7 @@
 import { crawlPage, fetchUrlMeta, fetchPageImages, searchMerchantImages, crawlViaSitemap } from "@/lib/crawler";
 import { getAdMarketConfig } from "@/lib/ad-market";
 import { getProxyUrlForCountry } from "@/lib/crawl-proxy";
+import { isLowValueSitelink } from "@/lib/sitelink-filter";
 // C-016: ccTLD 切换逻辑移出 crawl-pipeline，改由 country-url-resolver 在 route 层调度
 
 // 全局爬取并发控制：最多 2 个同时执行
@@ -940,6 +941,12 @@ async function discoverSitelinkCandidates(
     let desc = "";
     if (useMetaText && meta.description) desc = sanitizeAdText(smartTruncate(decodeHtmlEntities(meta.description), 35), { allowExclamation: true });
 
+    // C-032 QA-1 A：第一层过滤——URL 路径 + 标题黑名单
+    if (isLowValueSitelink(realUrl, title)) {
+      console.warn(`[SitelinkFilter] L1 过滤低价值链接: url=${realUrl.slice(0, 80)} title="${title}"`);
+      return false;
+    }
+
     candidates.push({ url: realUrl, title, description: desc });
     return true;
   };
@@ -1153,9 +1160,78 @@ async function discoverSitelinkCandidates(
         if (!title || title.length < 2) title = titleFromUrlPath(realUrl);
         let desc = "";
         if (useMetaText && meta.description) desc = sanitizeAdText(smartTruncate(decodeHtmlEntities(meta.description), 35), { allowExclamation: true });
-        if (title.length >= 2) candidates.push({ url: realUrl, title, description: desc });
+        if (title.length >= 2) {
+          // C-032 QA-1 A：第一层过滤（navLinks 分支）
+          if (isLowValueSitelink(realUrl, title)) {
+            console.warn(`[SitelinkFilter] L1-nav 过滤低价值链接: url=${realUrl.slice(0, 80)} title="${title}"`);
+          } else {
+            candidates.push({ url: realUrl, title, description: desc });
+          }
+        }
       }
     }
+  }
+
+  // C-032 QA-2 C：候选过滤后不足 3 条 → 深度+1 爬取 navLinks 二级页扩充候选池
+  if (candidates.length < 3 && puppeteerNavLinks && puppeteerNavLinks.length > 0) {
+    console.warn(`[SitelinkFilter] 候选不足 3 条（当前 ${candidates.length}），触发深度+1 爬取`);
+    const depth1Targets = puppeteerNavLinks
+      .filter((l) => {
+        try {
+          const u = new URL(l.url);
+          return u.hostname.includes(merchantDomain) && !u.search;
+        } catch { return false; }
+      })
+      .slice(0, 3);
+
+    for (const target of depth1Targets) {
+      if (candidates.length >= 6) break;
+      try {
+        const res = await fetch(target.url, {
+          headers: { "User-Agent": "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)" },
+          signal: AbortSignal.timeout(8000),
+        });
+        if (!res.ok) continue;
+        const html = await res.text();
+
+        // 从二级页面提取内部 <a href> 链接
+        const depth1Links: { url: string; text: string }[] = [];
+        const anchorRe = /<a\s[^>]*href=["']([^"'#][^"']*)["'][^>]*>([\s\S]*?)<\/a>/gi;
+        let m: RegExpExecArray | null;
+        while ((m = anchorRe.exec(html)) !== null) {
+          const href = m[1].trim();
+          const text = m[2].replace(/<[^>]+>/g, "").trim();
+          if (!href || !text || text.length < 2) continue;
+          try {
+            const abs = new URL(href, target.url).toString();
+            const u = new URL(abs);
+            if (!u.hostname.includes(merchantDomain) || u.search) continue;
+            if (u.pathname === "/" || u.pathname === "") continue;
+            depth1Links.push({ url: abs, text });
+          } catch { continue; }
+        }
+        console.warn(`[SitelinkFilter] 深度+1 ${target.url} → 提取 ${depth1Links.length} 条子链接`);
+
+        const depth1ToTry = depth1Links.slice(0, 12);
+        const depth1Metas = await Promise.all(
+          depth1ToTry.map(async (link) => {
+            try {
+              const meta = await fetchUrlMeta(link.url, proxyUrl, country);
+              return { link, meta };
+            } catch {
+              return { link, meta: { title: "", description: "", ok: false, finalUrl: link.url, isSoft404: false } };
+            }
+          }),
+        );
+        for (const { link, meta } of depth1Metas) {
+          if (candidates.length >= 6) break;
+          tryPushCandidate(link, meta, botBlockMode);
+        }
+      } catch (e) {
+        console.warn(`[SitelinkFilter] 深度+1 ${target.url} 异常:`, e instanceof Error ? e.message : e);
+      }
+    }
+    console.warn(`[SitelinkFilter] 深度+1 完成，候选数: ${candidates.length}`);
   }
 
   // C-015 §4：最终汇总行 + 拒因统计（console.warn 必落盘，方便事后诊断）
