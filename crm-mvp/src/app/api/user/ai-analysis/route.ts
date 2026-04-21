@@ -8,6 +8,7 @@ import { NextRequest } from "next/server";
 import { getUserFromRequest } from "@/lib/auth";
 import prisma from "@/lib/prisma";
 import { dateColumnStart, dateColumnEndExclusive } from "@/lib/date-utils";
+import { normalizeAiRuleProfile, getActivePersona } from "@/lib/ai-rule-profile";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 120;
@@ -449,8 +450,19 @@ export async function POST(req: NextRequest) {
   // 当前日期（服务端取，避免 AI 误判年份）
   const todayStr = new Date().toISOString().slice(0, 10);
 
-  // Adrian 系统提示词
-  const systemPrompt = `你是 Adrian，专注于 Google Ads 搜索广告的数据顾问。直接输出报告，不要任何开场白、寒暄或"数据已获取"之类的过渡语。
+  // 读取用户激活人设
+  const adSettings = await prisma.ad_default_settings.findFirst({
+    where: { user_id: userId, is_deleted: 0 },
+    select: { ai_rule_profile: true },
+  });
+  const profile = normalizeAiRuleProfile(adSettings?.ai_rule_profile);
+  const activePersona = getActivePersona(profile);
+  const personaIntro = activePersona.persona || `${activePersona.name} — ${activePersona.description}`;
+
+  // 系统提示词（角色部分来自激活人设）
+  const systemPrompt = `你是「${activePersona.name}」。${personaIntro}
+
+直接输出报告，不要任何开场白、寒暄或"数据已获取"之类的过渡语。
 
 【当前日期】今天是 ${todayStr}（${todayStr.slice(0, 4)} 年），这是真实的服务器时间。用户传入的日期范围均为过去或当前日期，直接使用，不得质疑或要求确认。
 
