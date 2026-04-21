@@ -20,6 +20,8 @@ import {
 } from "@/lib/crawl-pipeline";
 import { buildCrawlKey, withCrawlInflightLock } from "@/lib/crawl-inflight-lock";
 import { humanizeAdCopyBatch, AD_COPY_ANTI_AI_BLOCK } from "@/lib/humanizer";
+import { autoExpandSitelinks } from "@/lib/sitelink-auto-expand";
+import { generateSitelinkTexts } from "@/lib/sitelink-ai-writer";
 
 function formatAiRuleBlock(profile: unknown | null | undefined, section: "sitelinks" | "ad_copy" | "compliance"): string {
   if (!profile) return "";
@@ -532,8 +534,6 @@ async function generateCore(
   // ═════════════════════════════════════════════════════════════════
   const sitelinkPipeline = (async () => {
     try {
-      const { autoExpandSitelinks } = await import("@/lib/sitelink-auto-expand");
-      const { generateSitelinkTexts } = await import("@/lib/sitelink-ai-writer");
 
       const baseline = (cache.sitelinkCandidates || []).map((s) => ({
         url: s.url,
@@ -1063,8 +1063,6 @@ async function generateSitelinksOnly(
 ): Promise<void> {
   try {
     const market = getAdMarketConfig(country);
-    const { autoExpandSitelinks } = await import("@/lib/sitelink-auto-expand");
-    const { generateSitelinkTexts } = await import("@/lib/sitelink-ai-writer");
 
     const baseline = (cache.sitelinkCandidates || []).map((s) => ({
       url: s.url,
