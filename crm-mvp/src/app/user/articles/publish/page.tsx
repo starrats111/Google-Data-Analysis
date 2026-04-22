@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useSearchParams } from "next/navigation";
 import {
   Card, Steps, Form, Select, Button, Typography, Space, App, Spin, Image,
@@ -61,9 +61,15 @@ export default function ArticlePublishPage() {
   const searchParams = useSearchParams();
   const articleSlugFromUrl = searchParams.get("slug");
   const [step, setStep] = useState(0);
+  // 已领取商家（用于默认显示）
   const [merchants, setMerchants] = useState<Merchant[]>([]);
-  // 所有商家（已领取 + 可领取），用于有搜索词时全量匹配
+  // 已知商家 map（claimed + 搜索结果），用于 onChange 时查找完整对象
   const [allMerchants, setAllMerchants] = useState<Merchant[]>([]);
+  // 远端搜索状态
+  const [searchValue, setSearchValue] = useState("");
+  const [searchOptions, setSearchOptions] = useState<{ value: string; label: string }[]>([]);
+  const [searching, setSearching] = useState(false);
+  const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // 已有已发布文章的 user_merchant_id 集合（用于默认视图过滤）
   const [publishedMerchantIds, setPublishedMerchantIds] = useState<Set<string>>(new Set());
   const [sites, setSites] = useState<Site[]>([]);
@@ -86,29 +92,61 @@ export default function ArticlePublishPage() {
   const activeBlock: "platform" | "url" | null = selectedMerchant
     ? "platform"
     : (isUrlBlockFilled ? "url" : null);
-  // O(1) 查找 map，避免 filterOption 回调中 O(n²) 遍历
-  // 有搜索词时从全量商家中查找，无搜索词时从已领取商家中查找
-  const claimedMerchantMap = useMemo(() => new Map(merchants.map((m) => [m.id, m])), [merchants]);
-  const allMerchantMap = useMemo(() => new Map(allMerchants.map((m) => [m.id, m])), [allMerchants]);
-  const merchantFilterOption = useCallback(
-    (input: string, option?: { value?: string | number | bigint | null; label?: React.ReactNode }) => {
-      if (!option) return false;
-      const id = String(option.value ?? "");
-      if (!input) {
-        // 无搜索词时：只显示广告已启用且尚无已发布文章的已领取商家
-        const merchant = claimedMerchantMap.get(id);
-        if (!merchant) return false;
-        if (merchant.ad_status !== "ENABLED") return false;
-        if (publishedMerchantIds.has(merchant.id)) return false;
-        return true;
+  // 无搜索词时：只展示 ENABLED 且未发布文章的已领取商家
+  // 有搜索词时：展示远端搜索返回的结果（filterOption=false，由服务端过滤）
+  const selectOptions = useMemo(() => {
+    if (searchValue) return searchOptions;
+    return merchants
+      .filter((m) => m.ad_status === "ENABLED" && !publishedMerchantIds.has(m.id))
+      .map((m) => ({
+        value: m.id,
+        label: `${m.merchant_name} [${m.platform}] (MID: ${m.merchant_id})`,
+      }));
+  }, [searchValue, searchOptions, merchants, publishedMerchantIds]);
+
+  // 远端搜索：防抖 350ms，同时查 claimed + available 并去重
+  const handleMerchantSearch = useCallback((kw: string) => {
+    setSearchValue(kw);
+    if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
+    if (!kw.trim()) {
+      setSearchOptions([]);
+      setSearching(false);
+      return;
+    }
+    setSearching(true);
+    searchTimerRef.current = setTimeout(async () => {
+      try {
+        const [r1, r2] = await Promise.all([
+          fetch(`/api/user/merchants?tab=claimed&search=${encodeURIComponent(kw)}&pageSize=50`).then((r) => r.json()),
+          fetch(`/api/user/merchants?tab=available&search=${encodeURIComponent(kw)}&pageSize=50`).then((r) => r.json()),
+        ]);
+        const list: Merchant[] = [
+          ...(r1.code === 0 ? r1.data.merchants || [] : []),
+          ...(r2.code === 0 ? r2.data.merchants || [] : []),
+        ];
+        const seen = new Set<string>();
+        const deduped = list.filter((m) => {
+          const k = String(m.id);
+          if (seen.has(k)) return false;
+          seen.add(k);
+          return true;
+        });
+        setSearchOptions(deduped.map((m) => ({
+          value: m.id,
+          label: `${m.merchant_name} [${m.platform}] (MID: ${m.merchant_id})`,
+        })));
+        // 把搜索结果合并进 allMerchants，供 onChange 查找完整对象
+        setAllMerchants((prev) => {
+          const existingIds = new Set(prev.map((m) => m.id));
+          return [...prev, ...deduped.filter((m) => !existingIds.has(m.id))];
+        });
+      } catch {
+        // ignore
+      } finally {
+        setSearching(false);
       }
-      // 有搜索词时：全量商家（含未领取），只要名称/MID匹配即可显示
-      const merchant = allMerchantMap.get(id);
-      if (!merchant) return false;
-      return String(option.label ?? "").toLowerCase().includes(input.toLowerCase());
-    },
-    [claimedMerchantMap, allMerchantMap, publishedMerchantIds],
-  );
+    }, 350);
+  }, []);
   // Step 1: 确认国家
   const [country, setCountry] = useState("US");
   const [language, setLanguage] = useState("en");
@@ -142,23 +180,7 @@ export default function ArticlePublishPage() {
         if (res.code === 0) {
           const claimed = res.data.merchants || [];
           setMerchants(claimed);
-          // 先用已领取数据填充全量列表，后续 available 数据到达后再合并
-          setAllMerchants((prev) => {
-            const existingIds = new Set(prev.map((m) => m.id));
-            return [...prev, ...claimed.filter((m: Merchant) => !existingIds.has(m.id))];
-          });
-        }
-      }).catch(() => {});
-    // 获取可领取的商家（用于搜索时全量匹配）
-    fetch("/api/user/merchants?tab=available&pageSize=500")
-      .then((r) => r.json())
-      .then((res) => {
-        if (res.code === 0) {
-          const available = res.data.merchants || [];
-          setAllMerchants((prev) => {
-            const existingIds = new Set(prev.map((m) => m.id));
-            return [...prev, ...available.filter((m: Merchant) => !existingIds.has(m.id))];
-          });
+          setAllMerchants(claimed);
         }
       }).catch(() => {});
     // 获取已发布文章的商家 ID（仅 published 状态，用于默认视图过滤）
@@ -599,7 +621,10 @@ export default function ArticlePublishPage() {
                 showSearch
                 allowClear
                 disabled={activeBlock === "url"}
-                filterOption={merchantFilterOption}
+                filterOption={false}
+                loading={searching}
+                onSearch={handleMerchantSearch}
+                onClear={() => { setSearchValue(""); setSearchOptions([]); }}
                 style={{ width: "100%" }}
                 value={selectedMerchant?.id}
                 onChange={(v) => {
@@ -610,11 +635,7 @@ export default function ArticlePublishPage() {
                     setLanguage(getLang(m.target_country));
                   }
                 }}
-                options={allMerchants
-                  .map((m) => ({
-                    value: m.id,
-                    label: `${m.merchant_name} [${m.platform}] (MID: ${m.merchant_id})`,
-                  }))}
+                options={selectOptions}
               />
             </Form.Item>
             {selectedMerchant && (
