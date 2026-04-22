@@ -595,7 +595,7 @@ export default function ArticlePublishPage() {
           <Form layout="vertical" style={{ maxWidth: 600 }}>
             <Form.Item label="选择推广商家" required={activeBlock !== "url"}>
               <Select
-                placeholder="默认显示已启用商家，输入商家名或MID可搜索所有已领取商家"
+                placeholder="默认显示已启用商家，输入商家名或MID可搜索所有商家"
                 showSearch
                 allowClear
                 disabled={activeBlock === "url"}
@@ -603,7 +603,7 @@ export default function ArticlePublishPage() {
                 style={{ width: "100%" }}
                 value={selectedMerchant?.id}
                 onChange={(v) => {
-                  const m = merchants.find((m) => m.id === v);
+                  const m = allMerchants.find((m) => m.id === v);
                   setSelectedMerchant(m || null);
                   if (m?.target_country) {
                     setCountry(m.target_country);
