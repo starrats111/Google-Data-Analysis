@@ -21,7 +21,7 @@ const TOOLS = [
     type: "function",
     function: {
       name: "get_account_overview",
-      description: "获取用户广告账户总览：花费、佣金、ROI、点击量、曝光量，支持自定义日期范围",
+      description: "获取用户广告账户总览：花费、总佣金（Google Ads统计）、ROI、点击量、曝光量，支持自定义日期范围。返回total_commission为总佣金，需配合get_affiliate_summary获取已确认金额",
       parameters: {
         type: "object",
         properties: {
@@ -36,7 +36,7 @@ const TOOLS = [
     type: "function",
     function: {
       name: "get_campaign_performance",
-      description: "获取各广告系列的花费/佣金/ROI/CPC明细，可按花费或ROI排序",
+      description: "获取各广告系列的花费/总佣金/ROI/CPC明细，可按花费或ROI排序。total_commission为总佣金（Google Ads统计含全状态）",
       parameters: {
         type: "object",
         properties: {
@@ -142,10 +142,10 @@ async function executeTool(name: string, args: ToolArgs, userId: bigint): Promis
     return JSON.stringify({
       period: `${from} 至 ${to}`,
       total_cost: fmtMoney(totalCost),
-      total_commission_gross: fmtMoney(totalCommission),
+      total_commission: fmtMoney(totalCommission),
       rejected_commission: fmtMoney(totalRejected),
-      net_commission_excl_rejected: fmtMoney(netCommission),
-      note_commission: "net_commission_excl_rejected 已扣除拒付，但仍含待结算部分；如需已确认收入请调用 get_affiliate_summary",
+      net_commission: fmtMoney(netCommission),
+      note: "total_commission 来自 Google Ads 统计（含全状态）；已确认金额请调用 get_affiliate_summary 取 approved 字段",
       net_profit: fmtMoney(netCommission - totalCost),
       roi_percent: roi,
       total_clicks: totalClicks,
@@ -467,31 +467,35 @@ export async function POST(req: NextRequest) {
 【当前日期】今天是 ${todayStr}（${todayStr.slice(0, 4)} 年），这是真实的服务器时间。用户传入的日期范围均为过去或当前日期，直接使用，不得质疑或要求确认。
 
 【数据工具】
-- get_account_overview：花费、总佣金（含待结算）、点击、曝光
-- get_campaign_performance：各系列花费/佣金/投资回报率明细
-- get_affiliate_summary：联盟平台佣金明细（按状态分：已确认/待结算/拒付）
+- get_account_overview：花费、总佣金（Google Ads统计）、ROI、点击、曝光
+- get_campaign_performance：各系列花费/总佣金/ROI 明细
+- get_affiliate_summary：联盟平台收入明细（已确认/待结算/拒付 分类）
 - get_daily_trend：每日花费与佣金趋势
-- get_roi_diagnosis：系列盈亏分类
+- get_roi_diagnosis：系列盈亏分类诊断
 
 【佣金口径说明 — 必须遵守】
-- get_account_overview 和 get_campaign_performance 返回的 commission 字段包含全部状态（含待结算），不代表已到账收入
-- 分析实际收益时，必须调用 get_affiliate_summary 并使用其中的 approved（已确认）金额
-- 报告中若引用佣金数据，必须注明是"总佣金（含待结算）"还是"已确认佣金"，不得混用
+- get_account_overview 和 get_campaign_performance 返回的 total_commission 来自 Google Ads 统计，含全部联盟状态，报告中称「总佣金」
+- 实际到账收入需调用 get_affiliate_summary，取其中 approved 金额，报告中称「已确认」
+- 引用佣金时只用「总佣金」或「已确认」，禁止出现「总佣金（含待结算）」「已确认佣金」「净佣金」等变体
 
 【输出格式 — 严格执行】
-1. 直接以 # 报告标题开始，无任何开场白
+1. 直接以 # 标题开始，无任何开场白
 2. 章节用 ## 二级标题，子节用 ### 三级标题
 3. 禁止在标题前加序号（如"一、""1."）
 4. 数字、金额用 **加粗**，重要结论用 > 引用块
-5. 数据汇总用标准 Markdown 表格（表头|分隔行|数据行，列数必须完全一致）
+5. 表格仅用于多系列横向对比，禁止用表格罗列单一账户的 KPI 指标（如"指标|数值"两列表）
 6. 列表用 - 开头，最多两层缩进
 7. 禁止使用任何 emoji 或 Unicode 装饰符号
 8. 禁止用竖线和短横线拼装饰性进度条或分隔线
 
-【分析要求】
+【分析要求 — 核心】
+- 这是「数据分析」，不是「数据报告」。两者的区别：
+  - 数据报告：罗列数字（花费 $X，ROI -100%，系列 N 条）→ 禁止
+  - 数据分析：解释原因、识别模式、给出判断（花费 $X 零成单，说明问题在 XX，建议 YY）→ 必须做到
+- 每个章节的结构：先写结论/判断（1-2句话），再用数据佐证，最后给出可执行建议
+- 每条建议必须具体到操作层面（说哪几条系列、做什么操作、预期效果是什么），不允许写"可以考虑优化"之类的模糊建议
 - 用户消息第一行为"分析时间范围：YYYY-MM-DD 至 YYYY-MM-DD"，直接用于工具调用，无需确认
-- 主动调用多个工具，获取完整数据
-- 每条结论附数字，每条建议附量化预期
+- 主动调用多个工具，获取完整数据再开始分析
 - 数据为空时只说"该时段暂无数据，请确认同步状态"，不猜测原因`;
 
   const messages: Array<{ role: string; content: unknown }> = [
