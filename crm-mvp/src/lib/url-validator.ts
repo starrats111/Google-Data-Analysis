@@ -191,7 +191,34 @@ async function getAndCheck(url: string, ua: string): Promise<GetResult> {
 }
 
 /**
+ * 根据 URL 的 TLD / 二级域推断目标国家代码，用于代理路由。
+ * 支持常见欧洲 ccTLD 和澳大利亚/加拿大等地区域名。
+ */
+function inferCountryFromUrl(url: string): string {
+  try {
+    const hostname = new URL(url).hostname.toLowerCase();
+    if (hostname.endsWith(".de")) return "DE";
+    if (hostname.endsWith(".co.uk") || hostname.endsWith(".uk")) return "GB";
+    if (hostname.endsWith(".fr")) return "FR";
+    if (hostname.endsWith(".es")) return "ES";
+    if (hostname.endsWith(".it")) return "IT";
+    if (hostname.endsWith(".nl")) return "NL";
+    if (hostname.endsWith(".be")) return "BE";
+    if (hostname.endsWith(".au") || hostname.endsWith(".com.au")) return "AU";
+    if (hostname.endsWith(".ca")) return "CA";
+    if (hostname.endsWith(".jp")) return "JP";
+    if (hostname.endsWith(".eu")) return "DE";  // EU 域名默认走 DE 代理
+    if (hostname.endsWith(".se") || hostname.endsWith(".no") || hostname.endsWith(".dk")) return "SE";
+    if (hostname.endsWith(".ch")) return "CH";
+    if (hostname.endsWith(".at")) return "AT";
+    if (hostname.endsWith(".pl")) return "PL";
+  } catch { /* ignore */ }
+  return "US";
+}
+
+/**
  * 验证 URL 是否可达且有效（含软 404、Invalid Link 检测）。
+ * 直连失败后自动切换动态 IP 代理重试（根据 URL TLD 推断目标国家）。
  * 适用于交互式和批量场景。
  */
 export async function tryValidateUrl(url: string): Promise<UrlCheckResult> {
@@ -264,7 +291,55 @@ export async function tryValidateUrl(url: string): Promise<UrlCheckResult> {
     return { ok: true, status: 200, finalUrl: url, reason: "Cloudflare 保护，无法验证页面内容" };
   }
 
-  return { ok: false, status: 0, finalUrl: url, reason: "所有验证方式均失败" };
+  // 直连全部失败：尝试通过目标国家动态 IP 代理重试一次
+  // 典型场景：欧洲区域性网站（.de/.fr/.co.uk 等）封锁非本地 IP
+  try {
+    const { getProxyUrlForCountry, fetchViaProxy } = await import("@/lib/crawl-proxy");
+    const country = inferCountryFromUrl(url);
+    const proxyUrl = await getProxyUrlForCountry(country);
+    if (proxyUrl) {
+      const ua = UA_POOL[0];
+      const proxyResp = await fetchViaProxy(
+        url,
+        {
+          method: "GET",
+          headers: buildStealthHeaders(ua),
+          signal: AbortSignal.timeout(20000),
+        },
+        proxyUrl,
+      );
+      if (proxyResp.ok) {
+        const html = await proxyResp.text().catch(() => "");
+        if (isCloudflareChallenge(html)) {
+          return { ok: true, status: proxyResp.status, finalUrl: proxyResp.url, reason: `代理验证通过（${country}，Cloudflare 保护）` };
+        }
+        const invalidLink = checkInvalidLink(html);
+        if (invalidLink.isInvalid) {
+          return { ok: false, status: proxyResp.status, finalUrl: proxyResp.url, reason: invalidLink.reason };
+        }
+        const soft = checkSoft404(html);
+        if (soft.isSoft404) {
+          return { ok: false, status: proxyResp.status, finalUrl: proxyResp.url, reason: soft.reason };
+        }
+        return { ok: true, status: proxyResp.status, finalUrl: proxyResp.url, reason: `代理验证通过（${country}）` };
+      }
+      // 代理响应非 ok（4xx/5xx）：软 404 判断
+      const errHtml = await proxyResp.text().catch(() => "");
+      const soft = checkSoft404(errHtml);
+      if (soft.isSoft404) {
+        return { ok: false, status: proxyResp.status, finalUrl: proxyResp.url, reason: soft.reason };
+      }
+      if (proxyResp.status === 404 || proxyResp.status === 410) {
+        return { ok: false, status: proxyResp.status, finalUrl: proxyResp.url, reason: `页面返回 ${proxyResp.status}（页面不存在）` };
+      }
+      // 其他非 ok 状态（403/5xx 等）：保守放行，站点可能仍拦截爬虫
+      return { ok: true, status: proxyResp.status, finalUrl: proxyResp.url, reason: `代理访问返回 ${proxyResp.status}，保守放行` };
+    }
+  } catch (proxyErr) {
+    console.warn(`[UrlValidator] 代理重试异常: ${proxyErr instanceof Error ? proxyErr.message : proxyErr}`);
+  }
+
+  return { ok: false, status: 0, finalUrl: url, reason: "所有验证方式均失败（含代理）" };
 }
 
 /**
