@@ -27,7 +27,7 @@ const i18n = {
     bizP1Pre: "Wenzhou Fengdu Advertising & Media Co., Ltd. is an ",
     bizP1Bold: "affiliate marketing company",
     bizP1Post:
-      ". Our business involves identifying commercial opportunities through major international affiliate networks — including CollabGlow, Partnermatic, LinkHaiTao, Rewardoo, LinkBux, BrandSparkHub, and CreatorFlare — and promoting these partner merchants by running Google Search Advertising campaigns that drive qualified traffic to their websites. We earn commissions on resulting sales or conversions.",
+      ". We source partner merchants from affiliate sub-networks — CollabGlow, Partnermatic, LinkHaiTao, Rewardoo, LinkBux, BrandSparkHub, and CreatorFlare — platforms that aggregate advertiser programs from major retail brands. Our team evaluates merchant products, selects high-intent commercial keywords, and runs Google Search Advertising campaigns to drive purchase-intent traffic to those merchants' websites. We earn commissions on resulting sales or conversions.",
     bizP2:
       "Our internal team of advertising professionals manages all Google Ads campaigns in-house. To operate this affiliate marketing business at scale across multiple international markets and languages, we have developed the Ad Automation CRM — an internal platform that integrates with the Google Ads API to automate and streamline the full campaign management workflow.",
     bizP3:
@@ -77,7 +77,7 @@ const i18n = {
     bizP1Pre: "温州丰度广告传媒有限公司是一家",
     bizP1Bold: "联盟营销公司",
     bizP1Post:
-      "。我们通过国际联盟网络——包括 CollabGlow、Partnermatic、LinkHaiTao、Rewardoo、LinkBux、BrandSparkHub、CreatorFlare——发现商业机会，并为合作商家投放 Google 搜索广告，引导精准流量到其网站，从中赚取销售或转化佣金。",
+      "。我们从联盟子网络——CollabGlow、Partnermatic、LinkHaiTao、Rewardoo、LinkBux、BrandSparkHub、CreatorFlare——中挖掘合作商家；这些平台汇聚了各大零售品牌的广告主项目。我们的团队评估商家产品，挑选高购买意向的商业关键词，并投放 Google 搜索广告，将具有购买意向的流量引导至商家网站，从中赚取销售或转化佣金。",
     bizP2:
       "公司广告团队全部由内部员工管理所有 Google Ads 广告系列。为了在多个国际市场和语言环境下规模化运营联盟营销业务，我们开发了 Ad Automation CRM——一个集成 Google Ads API 的内部平台，自动化并简化整个广告管理流程。",
     bizP3:
