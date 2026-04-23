@@ -636,7 +636,9 @@ export async function crawlViaSitemap(url: string): Promise<{ links: { url: stri
 // ══════════════════════════════════════════════════════
 // 图片质量过滤（照搬后端 _is_quality_image + FILTERED_IMG_KEYWORDS）
 // ══════════════════════════════════════════════════════
-const JUNK_IMG_PATTERN = /(?:\.gif(?:\?|$)|\.svg(?:\?|$)|\/(?:pixel|spacer|blank|1x1|clear)\.|(?:_|-)(?:16|24|32|48|64|72)x|\/(?:icon|logo|badge|flag)s?[/_\-.]|\/emoji\/|gravatar\.com|\.ico(?:\?|$))/i;
+// activestorage/representations/redirect 是 Rails Active Storage 的有时效签名跳转链接，
+// 写入 DB 后数小时内过期，图片代理访问后会返回 403/404，必须在爬取阶段过滤掉。
+const JUNK_IMG_PATTERN = /(?:\.gif(?:\?|$)|\.svg(?:\?|$)|\/(?:pixel|spacer|blank|1x1|clear)\.|(?:_|-)(?:16|24|32|48|64|72)x|\/(?:icon|logo|badge|flag)s?[/_\-.]|\/emoji\/|gravatar\.com|\.ico(?:\?|$)|activestorage\/representations\/redirect\/)/i;
 
 const FILTERED_IMG_KEYWORDS = [
   "icon", "logo", "svg+xml", "pixel", "spacer", "blank", "1x1",
@@ -651,6 +653,8 @@ const FILTERED_IMG_KEYWORDS = [
   "doubleclick", "googlesyndication", "facebook.com/tr",
   "/splash", "splash_", "splash-",  // 启动动画/引导页图片，非产品图
   "adnxs.com", "ib.adnxs",         // 广告追踪像素
+  "close-modal", "close_modal",    // UI 关闭按钮图标
+  "/blog/", "/news/", "/post/",    // 博客/新闻内容页，非产品图
 ];
 
 /**
