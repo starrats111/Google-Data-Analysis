@@ -588,7 +588,8 @@ export async function POST(req: NextRequest) {
   - 数据报告：罗列数字（花费 $X，ROI -100%，系列 N 条）→ 禁止
   - 数据分析：解释原因、识别模式、给出判断（花费 $X 零成单，说明问题在 XX，建议 YY）→ 必须做到
 - 每个章节的结构：先写结论/判断（1-2句话），再用数据佐证，最后给出可执行建议
-- 每条建议必须具体到操作层面（说哪几条系列、做什么操作、预期效果是什么），不允许写"可以考虑优化"之类的模糊建议
+- 每条建议必须具体到操作层面（说清楚做什么操作、预期效果是什么），不允许写"可以考虑优化"之类的模糊建议
+- 亏损/低效系列不要逐条列举，按共同模式分组描述（如"17条零佣金亏损系列的共性是..."），最多举2-3个代表性例子说明，其余不展开
 - 用户消息第一行为"分析时间范围：YYYY-MM-DD 至 YYYY-MM-DD"，直接用于工具调用，无需确认
 - 主动调用多个工具，获取完整数据再开始分析
 - 数据为空时只说"该时段暂无数据，请确认同步状态"，不猜测原因`;
@@ -620,7 +621,7 @@ export async function POST(req: NextRequest) {
           const requestBody: Record<string, unknown> = {
             model: aiConfig.modelName,
             messages,
-            max_tokens: 4096,
+            max_tokens: 8192,
             temperature: 0.3,
             stream: false,
           };
