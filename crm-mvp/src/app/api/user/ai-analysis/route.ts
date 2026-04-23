@@ -21,7 +21,7 @@ const TOOLS = [
     type: "function",
     function: {
       name: "get_account_overview",
-      description: "获取用户广告账户总览：花费、总佣金（Google Ads统计）、ROI、点击量、曝光量，支持自定义日期范围。返回total_commission为总佣金，需配合get_affiliate_summary获取已确认金额",
+      description: "获取用户广告账户总览：花费、总佣金（联盟平台实际数据）、已确认、待结算、ROI、点击量、曝光量，支持自定义日期范围",
       parameters: {
         type: "object",
         properties: {
@@ -36,7 +36,7 @@ const TOOLS = [
     type: "function",
     function: {
       name: "get_campaign_performance",
-      description: "获取各广告系列的花费/总佣金/ROI/CPC明细，可按花费或ROI排序。total_commission为总佣金（Google Ads统计含全状态）",
+      description: "获取各广告系列的花费/总佣金/已确认/ROI/CPC明细，佣金来自联盟平台实际交易数据，可按花费或ROI排序",
       parameters: {
         type: "object",
         properties: {
@@ -102,13 +102,64 @@ const TOOLS = [
 // ──────────────────────────────────────────────
 type ToolArgs = Record<string, unknown>;
 
-/** 获取用户所有广告系列 ID（与 data-center/campaigns 保持一致，通过 campaigns 表中转） */
-async function getUserCampaignIds(userId: bigint): Promise<bigint[]> {
-  const campaigns = await prisma.campaigns.findMany({
-    where: { user_id: userId, is_deleted: 0 },
-    select: { id: true },
+/** 获取用户所有广告系列（id + user_merchant_id），与 data-center/campaigns 保持一致 */
+async function getUserCampaigns(userId: bigint): Promise<{ id: bigint; user_merchant_id: bigint | null }[]> {
+  return prisma.campaigns.findMany({
+    where: {
+      user_id: userId,
+      is_deleted: 0,
+      NOT: [{ google_campaign_id: null }, { google_campaign_id: "" }],
+    },
+    select: { id: true, user_merchant_id: true },
   });
-  return campaigns.map((c) => c.id);
+}
+
+/**
+ * 从 affiliate_transactions 查佣金（与数据中心口径一致）。
+ * 返回按 user_merchant_id 分组的佣金 Map，以及汇总合计。
+ * 日期用 CST（+08:00）午夜对齐，与 data-center/campaigns 的 txnStart/txnEnd 一致。
+ */
+async function getCommissionFromTxn(userId: bigint, from: string, to: string): Promise<{
+  byMerchant: Map<string, { total: number; approved: number; rejected: number; pending: number; orders: number }>;
+  total: number; approved: number; rejected: number; pending: number;
+}> {
+  const txnStart = new Date(`${from}T00:00:00+08:00`);
+  const txnEnd   = new Date(`${to}T23:59:59+08:00`);
+
+  const rows = await prisma.$queryRawUnsafe<{
+    user_merchant_id: bigint;
+    total_c: number; approved_c: number; rejected_c: number; pending_c: number; orders: number;
+  }[]>(`
+    SELECT
+      user_merchant_id,
+      SUM(CAST(commission_amount AS DECIMAL(12,2))) AS total_c,
+      SUM(CASE WHEN status IN ('approved','confirmed','paid') THEN CAST(commission_amount AS DECIMAL(12,2)) ELSE 0 END) AS approved_c,
+      SUM(CASE WHEN status IN ('rejected','declined','invalid') THEN CAST(commission_amount AS DECIMAL(12,2)) ELSE 0 END) AS rejected_c,
+      SUM(CASE WHEN status IN ('pending','open') THEN CAST(commission_amount AS DECIMAL(12,2)) ELSE 0 END) AS pending_c,
+      COUNT(*) AS orders
+    FROM affiliate_transactions
+    WHERE user_id = ? AND is_deleted = 0
+      AND transaction_time >= ? AND transaction_time <= ?
+    GROUP BY user_merchant_id
+  `, userId, txnStart, txnEnd);
+
+  const byMerchant = new Map<string, { total: number; approved: number; rejected: number; pending: number; orders: number }>();
+  let totalAgg = 0, approvedAgg = 0, rejectedAgg = 0, pendingAgg = 0;
+  for (const r of rows) {
+    const key = String(r.user_merchant_id);
+    byMerchant.set(key, {
+      total:    Number(r.total_c    || 0),
+      approved: Number(r.approved_c || 0),
+      rejected: Number(r.rejected_c || 0),
+      pending:  Number(r.pending_c  || 0),
+      orders:   Number(r.orders     || 0),
+    });
+    totalAgg    += Number(r.total_c    || 0);
+    approvedAgg += Number(r.approved_c || 0);
+    rejectedAgg += Number(r.rejected_c || 0);
+    pendingAgg  += Number(r.pending_c  || 0);
+  }
+  return { byMerchant, total: totalAgg, approved: approvedAgg, rejected: rejectedAgg, pending: pendingAgg };
 }
 
 async function executeTool(name: string, args: ToolArgs, userId: bigint): Promise<string> {
@@ -117,100 +168,112 @@ async function executeTool(name: string, args: ToolArgs, userId: bigint): Promis
   const fmtMoney = (v: unknown) => `$${Number(v || 0).toFixed(2)}`;
 
   if (name === "get_account_overview") {
-    const campaignIds = await getUserCampaignIds(userId);
-    if (!campaignIds.length) return JSON.stringify({ error: "当前账户下暂无广告系列" });
+    const campaigns = await getUserCampaigns(userId);
+    if (!campaigns.length) return JSON.stringify({ error: "当前账户下暂无广告系列" });
 
+    const campaignIds = campaigns.map((c) => c.id);
+
+    // cost/clicks/impressions/orders 来自 ads_daily_stats
     const stats = await prisma.ads_daily_stats.findMany({
       where: { campaign_id: { in: campaignIds }, date: { gte: dateColumnStart(from), lt: dateColumnEndExclusive(to) }, is_deleted: 0 },
-      select: { cost: true, clicks: true, impressions: true, commission: true, rejected_commission: true, orders: true, campaign_id: true },
+      select: { cost: true, clicks: true, impressions: true, orders: true, campaign_id: true },
     });
-    if (!stats.length) return JSON.stringify({ error: `${from}~${to} 无广告数据` });
 
-    const totalCost = stats.reduce((s, r) => s + Number(r.cost ?? 0), 0);
-    const totalClicks = stats.reduce((s, r) => s + Number(r.clicks ?? 0), 0);
+    const totalCost        = stats.reduce((s, r) => s + Number(r.cost ?? 0), 0);
+    const totalClicks      = stats.reduce((s, r) => s + Number(r.clicks ?? 0), 0);
     const totalImpressions = stats.reduce((s, r) => s + Number(r.impressions ?? 0), 0);
-    const totalCommission = stats.reduce((s, r) => s + Number(r.commission ?? 0), 0);
-    const totalRejected = stats.reduce((s, r) => s + Number(r.rejected_commission ?? 0), 0);
-    const totalOrders = stats.reduce((s, r) => s + Number(r.orders ?? 0), 0);
-    const activeCampaigns = new Set(stats.map((r) => String(r.campaign_id))).size;
-    // 净佣金 = 总佣金 - 拒付佣金（仍含待结算部分）
-    const netCommission = totalCommission - totalRejected;
-    const roi = totalCost > 0 ? ((netCommission - totalCost) / totalCost * 100).toFixed(1) : "N/A";
+    const totalOrders      = stats.reduce((s, r) => s + Number(r.orders ?? 0), 0);
+    const activeCampaigns  = new Set(stats.map((r) => String(r.campaign_id))).size;
+
+    // 佣金来自 affiliate_transactions（与数据中心口径一致）
+    const comm = await getCommissionFromTxn(userId, from, to);
+    const netProfit = comm.total - comm.rejected - totalCost;
+    const roi = totalCost > 0 ? ((comm.total - comm.rejected - totalCost) / totalCost * 100).toFixed(1) : "N/A";
     const ctr = totalImpressions > 0 ? (totalClicks / totalImpressions * 100).toFixed(2) : "0";
     const avgCpc = totalClicks > 0 ? totalCost / totalClicks : 0;
 
+    if (totalCost === 0 && comm.total === 0) return JSON.stringify({ error: `${from}~${to} 无广告数据` });
+
     return JSON.stringify({
       period: `${from} 至 ${to}`,
-      total_cost: fmtMoney(totalCost),
-      total_commission: fmtMoney(totalCommission),
-      rejected_commission: fmtMoney(totalRejected),
-      net_commission: fmtMoney(netCommission),
-      note: "total_commission 来自 Google Ads 统计（含全状态）；已确认金额请调用 get_affiliate_summary 取 approved 字段",
-      net_profit: fmtMoney(netCommission - totalCost),
-      roi_percent: roi,
-      total_clicks: totalClicks,
+      total_cost:    fmtMoney(totalCost),
+      total_commission: fmtMoney(comm.total),
+      confirmed:     fmtMoney(comm.approved),
+      rejected:      fmtMoney(comm.rejected),
+      pending:       fmtMoney(comm.pending),
+      net_profit:    fmtMoney(netProfit),
+      roi_percent:   roi,
+      total_clicks:  totalClicks,
       total_impressions: totalImpressions,
-      ctr_percent: ctr,
-      avg_cpc: fmtMoney(avgCpc),
-      total_orders: totalOrders,
+      ctr_percent:   ctr,
+      avg_cpc:       fmtMoney(avgCpc),
+      total_orders:  totalOrders,
       active_campaigns: activeCampaigns,
     });
   }
 
   if (name === "get_campaign_performance") {
     const orderBy = String(args.order_by || "cost");
-    const limit = Math.min(Number(args.limit || 20), 50);
+    const limit   = Math.min(Number(args.limit || 20), 50);
 
-    const campaignIds = await getUserCampaignIds(userId);
-    if (!campaignIds.length) return JSON.stringify({ error: "当前账户下暂无广告系列" });
+    const campaigns = await getUserCampaigns(userId);
+    if (!campaigns.length) return JSON.stringify({ error: "当前账户下暂无广告系列" });
 
+    const campaignIds = campaigns.map((c) => c.id);
+
+    // cost/clicks/impressions/orders 来自 ads_daily_stats
     const stats = await prisma.ads_daily_stats.findMany({
       where: { campaign_id: { in: campaignIds }, date: { gte: dateColumnStart(from), lt: dateColumnEndExclusive(to) }, is_deleted: 0 },
-      select: { campaign_id: true, cost: true, clicks: true, impressions: true, commission: true, orders: true, rejected_commission: true },
+      select: { campaign_id: true, cost: true, clicks: true, impressions: true, orders: true },
     });
     if (!stats.length) return JSON.stringify({ error: "无数据" });
 
-    const grouped: Record<string, { cost: number; clicks: number; impressions: number; commission: number; orders: number; rejected: number }> = {};
+    // 佣金来自 affiliate_transactions，按 user_merchant_id 分组
+    const comm = await getCommissionFromTxn(userId, from, to);
+    // campaign → user_merchant_id 映射
+    const campMerchantMap = new Map(campaigns.map((c) => [String(c.id), c.user_merchant_id ? String(c.user_merchant_id) : null]));
+
+    const grouped: Record<string, { cost: number; clicks: number; orders: number }> = {};
     for (const r of stats) {
       const id = String(r.campaign_id);
-      if (!grouped[id]) grouped[id] = { cost: 0, clicks: 0, impressions: 0, commission: 0, orders: 0, rejected: 0 };
-      grouped[id].cost += Number(r.cost ?? 0);
+      if (!grouped[id]) grouped[id] = { cost: 0, clicks: 0, orders: 0 };
+      grouped[id].cost   += Number(r.cost ?? 0);
       grouped[id].clicks += Number(r.clicks ?? 0);
-      grouped[id].impressions += Number(r.impressions ?? 0);
-      grouped[id].commission += Number(r.commission ?? 0);
       grouped[id].orders += Number(r.orders ?? 0);
-      grouped[id].rejected += Number(r.rejected_commission ?? 0);
     }
 
     const groupedIds = Object.keys(grouped).map((id) => BigInt(id));
-    const campaigns = await prisma.campaigns.findMany({
+    const campInfos = await prisma.campaigns.findMany({
       where: { id: { in: groupedIds }, is_deleted: 0 },
       select: { id: true, campaign_name: true, status: true, daily_budget: true },
     });
-    const campMap = new Map(campaigns.map((c) => [String(c.id), c]));
+    const campInfoMap = new Map(campInfos.map((c) => [String(c.id), c]));
 
     const rows = Object.entries(grouped).map(([id, g]) => {
-      const info = campMap.get(id);
-      const roi = g.cost > 0 ? (g.commission - g.cost) / g.cost * 100 : 0;
-      const rawStatus = (info?.status || "").toLowerCase();
-      const status = rawStatus === "active" ? "投放中" : rawStatus === "paused" ? "已暂停" : rawStatus || "未知";
+      const info      = campInfoMap.get(id);
+      const mid       = campMerchantMap.get(id);
+      const commData  = mid ? (comm.byMerchant.get(mid) ?? { total: 0, approved: 0, rejected: 0, orders: 0 }) : { total: 0, approved: 0, rejected: 0, orders: 0 };
+      const commission = commData.total - commData.rejected;
+      const roi        = g.cost > 0 ? (commission - g.cost) / g.cost * 100 : 0;
+      const rawStatus  = (info?.status || "").toLowerCase();
+      const status     = rawStatus === "active" ? "投放中" : rawStatus === "paused" ? "已暂停" : rawStatus || "未知";
       return {
-        campaign_name: info?.campaign_name || `ID-${id}`,
+        campaign_name:     info?.campaign_name || `ID-${id}`,
         status,
-        daily_budget: info?.daily_budget != null ? fmtMoney(Number(info.daily_budget)) : null,
-        total_cost: fmtMoney(g.cost),
-        total_commission: fmtMoney(g.commission),
-        net_profit: fmtMoney(g.commission - g.cost),
-        roi_percent: `${roi.toFixed(1)}%`,
-        health: roi < 0 ? "亏损" : roi < 50 ? "低效" : "盈利",
-        total_clicks: g.clicks,
-        total_orders: g.orders,
-        cpc: fmtMoney(g.clicks > 0 ? g.cost / g.clicks : 0),
-        rejected_commission: fmtMoney(g.rejected),
-        _sort_cost: g.cost,
-        _sort_roi: roi,
-        _sort_clicks: g.clicks,
-        _sort_commission: g.commission,
+        daily_budget:      info?.daily_budget != null ? fmtMoney(Number(info.daily_budget)) : null,
+        total_cost:        fmtMoney(g.cost),
+        total_commission:  fmtMoney(commData.total),
+        confirmed:         fmtMoney(commData.approved),
+        net_profit:        fmtMoney(commission - g.cost),
+        roi_percent:       `${roi.toFixed(1)}%`,
+        health:            roi < 0 ? "亏损" : roi < 50 ? "低效" : "盈利",
+        total_clicks:      g.clicks,
+        total_orders:      g.orders,
+        cpc:               fmtMoney(g.clicks > 0 ? g.cost / g.clicks : 0),
+        _sort_cost:        g.cost,
+        _sort_roi:         roi,
+        _sort_clicks:      g.clicks,
+        _sort_commission:  commData.total,
       };
     });
 
@@ -227,7 +290,7 @@ async function executeTool(name: string, args: ToolArgs, userId: bigint): Promis
       where: {
         user_id: userId,
         is_deleted: 0,
-        transaction_time: { gte: new Date(`${from}T00:00:00.000Z`), lte: new Date(`${to}T23:59:59.999Z`) },
+        transaction_time: { gte: new Date(`${from}T00:00:00+08:00`), lte: new Date(`${to}T23:59:59+08:00`) },
       },
       select: { platform: true, merchant_name: true, commission_amount: true, status: true, transaction_time: true },
     });
@@ -235,7 +298,7 @@ async function executeTool(name: string, args: ToolArgs, userId: bigint): Promis
 
     const groupFn = (tx: typeof txs[0]) =>
       breakdown === "merchant" ? String(tx.merchant_name || "unknown") :
-      breakdown === "daily" ? String(tx.transaction_time).slice(0, 10) :
+      breakdown === "daily"    ? new Date(String(tx.transaction_time)).toLocaleDateString("sv-SE", { timeZone: "Asia/Shanghai" }) :
       String(tx.platform || "unknown");
 
     const grouped: Record<string, { total: number; approved: number; pending: number; rejected: number; orders: number }> = {};
@@ -243,11 +306,11 @@ async function executeTool(name: string, args: ToolArgs, userId: bigint): Promis
       const key = groupFn(tx);
       if (!grouped[key]) grouped[key] = { total: 0, approved: 0, pending: 0, rejected: 0, orders: 0 };
       const amt = Number(tx.commission_amount || 0);
-      const st = String(tx.status || "").toLowerCase();
+      const st  = String(tx.status || "").toLowerCase();
       grouped[key].total += amt;
       grouped[key].orders++;
       if (["rejected", "declined", "invalid"].includes(st)) grouped[key].rejected += amt;
-      else if (["pending", "open"].includes(st)) grouped[key].pending += amt;
+      else if (["pending", "open"].includes(st))             grouped[key].pending  += amt;
       else if (["approved", "confirmed", "paid"].includes(st)) grouped[key].approved += amt;
     }
 
@@ -255,121 +318,153 @@ async function executeTool(name: string, args: ToolArgs, userId: bigint): Promis
     const result = Object.entries(grouped)
       .sort((a, b) => b[1].total - a[1].total)
       .map(([key, g]) => ({
-        group: key,
-        total: fmtMoney(g.total),
-        approved: fmtMoney(g.approved),
-        pending: fmtMoney(g.pending),
-        rejected: fmtMoney(g.rejected),
+        group:          key,
+        total:          fmtMoney(g.total),
+        confirmed:      fmtMoney(g.approved),
+        pending:        fmtMoney(g.pending),
+        rejected:       fmtMoney(g.rejected),
         rejection_rate: g.total > 0 ? `${(g.rejected / g.total * 100).toFixed(0)}%` : "0%",
-        orders: g.orders,
+        orders:         g.orders,
       }));
 
     return JSON.stringify({
-      period: `${from} 至 ${to}`,
+      period:       `${from} 至 ${to}`,
       breakdown_by: breakdown,
-      grand_total: fmtMoney(grandTotal),
-      groups: result,
+      grand_total:  fmtMoney(grandTotal),
+      groups:       result,
     });
   }
 
   if (name === "get_daily_trend") {
-    const campaignIds = await getUserCampaignIds(userId);
-    if (!campaignIds.length) return JSON.stringify({ error: "当前账户下暂无广告系列" });
+    const campaigns = await getUserCampaigns(userId);
+    if (!campaigns.length) return JSON.stringify({ error: "当前账户下暂无广告系列" });
 
+    const campaignIds = campaigns.map((c) => c.id);
+
+    // cost/clicks/impressions/orders 按 ads_daily_stats.date 汇总
     const stats = await prisma.ads_daily_stats.findMany({
       where: { campaign_id: { in: campaignIds }, date: { gte: dateColumnStart(from), lt: dateColumnEndExclusive(to) }, is_deleted: 0 },
-      select: { date: true, cost: true, clicks: true, impressions: true, commission: true, orders: true, campaign_id: true },
+      select: { date: true, cost: true, clicks: true, orders: true, campaign_id: true },
       orderBy: { date: "asc" },
     });
     if (!stats.length) return JSON.stringify({ error: "无趋势数据" });
 
-    const daily: Record<string, { cost: number; clicks: number; impressions: number; commission: number; orders: number; campaigns: Set<string> }> = {};
+    // 佣金按 affiliate_transactions.transaction_time（CST）每日汇总
+    const txnRows = await prisma.$queryRawUnsafe<{ dt: string; total_c: number; approved_c: number }[]>(`
+      SELECT
+        DATE(CONVERT_TZ(transaction_time, '+00:00', '+08:00')) AS dt,
+        SUM(CAST(commission_amount AS DECIMAL(12,2))) AS total_c,
+        SUM(CASE WHEN status IN ('approved','confirmed','paid') THEN CAST(commission_amount AS DECIMAL(12,2)) ELSE 0 END) AS approved_c
+      FROM affiliate_transactions
+      WHERE user_id = ? AND is_deleted = 0
+        AND transaction_time >= ? AND transaction_time <= ?
+      GROUP BY dt
+      ORDER BY dt
+    `, userId, new Date(`${from}T00:00:00+08:00`), new Date(`${to}T23:59:59+08:00`));
+
+    const dailyComm = new Map(txnRows.map((r) => [String(r.dt), { total: Number(r.total_c || 0), approved: Number(r.approved_c || 0) }]));
+
+    const daily: Record<string, { cost: number; clicks: number; orders: number; campaigns: Set<string> }> = {};
     for (const r of stats) {
       const dt = String(r.date).slice(0, 10);
-      if (!daily[dt]) daily[dt] = { cost: 0, clicks: 0, impressions: 0, commission: 0, orders: 0, campaigns: new Set() };
-      daily[dt].cost += Number(r.cost ?? 0);
+      if (!daily[dt]) daily[dt] = { cost: 0, clicks: 0, orders: 0, campaigns: new Set() };
+      daily[dt].cost   += Number(r.cost ?? 0);
       daily[dt].clicks += Number(r.clicks ?? 0);
-      daily[dt].impressions += Number(r.impressions ?? 0);
-      daily[dt].commission += Number(r.commission ?? 0);
       daily[dt].orders += Number(r.orders ?? 0);
       daily[dt].campaigns.add(String(r.campaign_id));
     }
 
-    const trend = Object.entries(daily).map(([dt, g]) => ({
-      date: dt,
-      cost: fmtMoney(g.cost),
-      commission: fmtMoney(g.commission),
-      net_profit: fmtMoney(g.commission - g.cost),
-      roi_percent: g.cost > 0 ? `${((g.commission - g.cost) / g.cost * 100).toFixed(1)}%` : "N/A",
-      cpc: fmtMoney(g.clicks > 0 ? g.cost / g.clicks : 0),
-      clicks: g.clicks,
-      orders: g.orders,
-      active_campaigns: g.campaigns.size,
-    }));
+    // 合并所有出现的日期（cost 可能有数据但 commission 当天为 0，反之亦然）
+    const allDates = new Set([...Object.keys(daily), ...dailyComm.keys()]);
+    const trend = [...allDates].sort().map((dt) => {
+      const d    = daily[dt] ?? { cost: 0, clicks: 0, orders: 0, campaigns: new Set() };
+      const c    = dailyComm.get(dt) ?? { total: 0, approved: 0 };
+      const net  = c.total - d.cost;
+      return {
+        date:             dt,
+        cost:             fmtMoney(d.cost),
+        total_commission: fmtMoney(c.total),
+        confirmed:        fmtMoney(c.approved),
+        net_profit:       fmtMoney(net),
+        roi_percent:      d.cost > 0 ? `${(net / d.cost * 100).toFixed(1)}%` : "N/A",
+        cpc:              fmtMoney(d.clicks > 0 ? d.cost / d.clicks : 0),
+        clicks:           d.clicks,
+        orders:           d.orders,
+        active_campaigns: d.campaigns.size,
+      };
+    });
 
     return JSON.stringify({ period: `${from} 至 ${to}`, daily_trend: trend });
   }
 
   if (name === "get_roi_diagnosis") {
-    const campaignIds = await getUserCampaignIds(userId);
-    if (!campaignIds.length) return JSON.stringify({ error: "当前账户下暂无广告系列" });
+    const campaigns = await getUserCampaigns(userId);
+    if (!campaigns.length) return JSON.stringify({ error: "当前账户下暂无广告系列" });
+
+    const campaignIds = campaigns.map((c) => c.id);
 
     const stats = await prisma.ads_daily_stats.findMany({
       where: { campaign_id: { in: campaignIds }, date: { gte: dateColumnStart(from), lt: dateColumnEndExclusive(to) }, is_deleted: 0 },
-      select: { campaign_id: true, cost: true, commission: true, clicks: true, orders: true },
+      select: { campaign_id: true, cost: true, clicks: true, orders: true },
     });
     if (!stats.length) return JSON.stringify({ error: "无数据，无法诊断" });
 
-    const grouped: Record<string, { cost: number; commission: number; clicks: number; orders: number }> = {};
+    const comm = await getCommissionFromTxn(userId, from, to);
+    const campMerchantMap = new Map(campaigns.map((c) => [String(c.id), c.user_merchant_id ? String(c.user_merchant_id) : null]));
+
+    const grouped: Record<string, { cost: number; clicks: number; orders: number }> = {};
     for (const r of stats) {
       const id = String(r.campaign_id);
-      if (!grouped[id]) grouped[id] = { cost: 0, commission: 0, clicks: 0, orders: 0 };
-      grouped[id].cost += Number(r.cost ?? 0);
-      grouped[id].commission += Number(r.commission ?? 0);
+      if (!grouped[id]) grouped[id] = { cost: 0, clicks: 0, orders: 0 };
+      grouped[id].cost   += Number(r.cost ?? 0);
       grouped[id].clicks += Number(r.clicks ?? 0);
       grouped[id].orders += Number(r.orders ?? 0);
     }
 
     const ids = Object.keys(grouped).map((id) => BigInt(id));
-    const campaigns = await prisma.campaigns.findMany({
+    const campInfos = await prisma.campaigns.findMany({
       where: { id: { in: ids }, is_deleted: 0 },
       select: { id: true, campaign_name: true, status: true },
     });
-    const campMap = new Map(campaigns.map((c) => [String(c.id), c]));
+    const campInfoMap = new Map(campInfos.map((c) => [String(c.id), c]));
 
     const categorized = Object.entries(grouped).map(([id, g]) => {
-      const info = campMap.get(id);
-      const roi = g.cost > 0 ? (g.commission - g.cost) / g.cost * 100 : 0;
-      const status = ((info?.status || "")).toLowerCase();
+      const info     = campInfoMap.get(id);
+      const mid      = campMerchantMap.get(id);
+      const commData = mid ? (comm.byMerchant.get(mid) ?? { total: 0, approved: 0, rejected: 0, orders: 0 }) : { total: 0, approved: 0, rejected: 0, orders: 0 };
+      const netComm  = commData.total - commData.rejected;
+      const roi      = g.cost > 0 ? (netComm - g.cost) / g.cost * 100 : 0;
+      const rawSt    = (info?.status || "").toLowerCase();
       return {
-        campaign_name: info?.campaign_name || `ID-${id}`,
-        status: status === "active" ? "投放中" : status === "paused" ? "已暂停" : status,
-        cost: fmtMoney(g.cost),
-        commission: fmtMoney(g.commission),
-        net_profit: fmtMoney(g.commission - g.cost),
-        roi_percent: `${roi.toFixed(1)}%`,
-        cpc: fmtMoney(g.clicks > 0 ? g.cost / g.clicks : 0),
-        orders: g.orders,
-        category: roi < 0 ? "亏损" : roi < 50 ? "低效" : "盈利",
-        _roi: roi,
+        campaign_name:    info?.campaign_name || `ID-${id}`,
+        status:           rawSt === "active" ? "投放中" : rawSt === "paused" ? "已暂停" : rawSt,
+        cost:             fmtMoney(g.cost),
+        total_commission: fmtMoney(commData.total),
+        confirmed:        fmtMoney(commData.approved),
+        net_profit:       fmtMoney(netComm - g.cost),
+        roi_percent:      `${roi.toFixed(1)}%`,
+        cpc:              fmtMoney(g.clicks > 0 ? g.cost / g.clicks : 0),
+        orders:           g.orders,
+        category:         roi < 0 ? "亏损" : roi < 50 ? "低效" : "盈利",
+        _roi:             roi,
       };
     });
 
     categorized.sort((a, b) => a._roi - b._roi);
-    const losing = categorized.filter((r) => r.category === "亏损");
-    const breakeven = categorized.filter((r) => r.category === "低效");
+    const losing     = categorized.filter((r) => r.category === "亏损");
+    const breakeven  = categorized.filter((r) => r.category === "低效");
     const profitable = categorized.filter((r) => r.category === "盈利");
 
     return JSON.stringify({
-      period: `${from} 至 ${to}`,
+      period:  `${from} 至 ${to}`,
       summary: {
         total_campaigns: categorized.length,
-        losing: losing.length,
-        breakeven: breakeven.length,
+        losing:     losing.length,
+        breakeven:  breakeven.length,
         profitable: profitable.length,
       },
-      losing_campaigns: losing.map(({ _roi: _, ...r }) => r),
-      breakeven_campaigns: breakeven.map(({ _roi: _, ...r }) => r),
+      losing_campaigns:     losing.map(({ _roi: _, ...r }) => r),
+      breakeven_campaigns:  breakeven.map(({ _roi: _, ...r }) => r),
       profitable_campaigns: profitable.map(({ _roi: _, ...r }) => r),
     });
   }
@@ -467,16 +562,16 @@ export async function POST(req: NextRequest) {
 【当前日期】今天是 ${todayStr}（${todayStr.slice(0, 4)} 年），这是真实的服务器时间。用户传入的日期范围均为过去或当前日期，直接使用，不得质疑或要求确认。
 
 【数据工具】
-- get_account_overview：花费、总佣金（Google Ads统计）、ROI、点击、曝光
-- get_campaign_performance：各系列花费/总佣金/ROI 明细
-- get_affiliate_summary：联盟平台收入明细（已确认/待结算/拒付 分类）
-- get_daily_trend：每日花费与佣金趋势
+- get_account_overview：花费、总佣金、已确认、ROI、点击、曝光（佣金来自联盟平台实际数据）
+- get_campaign_performance：各系列花费/总佣金/已确认/ROI 明细（佣金按商家映射）
+- get_affiliate_summary：联盟平台收入明细（按平台/商家/日期分组）
+- get_daily_trend：每日花费与佣金趋势（成本来自Google Ads，佣金来自联盟平台）
 - get_roi_diagnosis：系列盈亏分类诊断
 
 【佣金口径说明 — 必须遵守】
-- get_account_overview 和 get_campaign_performance 返回的 total_commission 来自 Google Ads 统计，含全部联盟状态，报告中称「总佣金」
-- 实际到账收入需调用 get_affiliate_summary，取其中 approved 金额，报告中称「已确认」
-- 引用佣金时只用「总佣金」或「已确认」，禁止出现「总佣金（含待结算）」「已确认佣金」「净佣金」等变体
+- 所有工具的佣金数据均来自联盟平台实际交易，与数据中心显示的数值完全一致
+- 字段含义：total_commission=总佣金（全状态）；confirmed=已确认；rejected=拒付；pending=待结算
+- 报告中只用「总佣金」「已确认」，禁止出现「总佣金（含待结算）」「已确认佣金」「净佣金」等变体
 
 【输出格式 — 严格执行】
 1. 直接以 # 标题开始，无任何开场白
