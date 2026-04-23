@@ -634,7 +634,7 @@ export async function POST(req: NextRequest) {
 
       try {
         let round = 0;
-        const MAX_ROUNDS = 8;
+        const MAX_ROUNDS = 14; // 工具调用最多8轮 + 续写最多6轮
 
         while (round < MAX_ROUNDS) {
           round++;
@@ -738,6 +738,14 @@ export async function POST(req: NextRequest) {
               await new Promise((r) => setTimeout(r, 15));
             }
           }
+
+          // finish_reason === "length" 表示模型输出被 token 上限截断，续写
+          if (choice.finish_reason === "length" && content) {
+            send("status", "内容未完，继续生成...");
+            messages.push({ role: "user", content: "请继续，从上文截断处接着写，不要重复已写内容。" });
+            continue;
+          }
+
           send("done", "分析完成");
           controller.close();
           return;
