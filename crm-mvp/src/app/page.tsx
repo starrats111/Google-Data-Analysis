@@ -31,7 +31,7 @@ const i18n = {
     btnDemo: "Platform Demo",
     capTitle: "Platform Capabilities",
     features: [
-      { title: "Affiliate Merchant Management", desc: "Source and manage partner merchants from major international affiliate networks (CJ, Impact, ShareASale, Awin, Rakuten, etc.) and assign campaigns to team members." },
+      { title: "Affiliate Merchant Management", desc: "Source and manage partner merchants from major international affiliate networks (CollabGlow, Partnermatic, LinkHaiTao, Rewardoo, LinkBux, BrandSparkHub, CreatorFlare, etc.) and assign campaigns to team members." },
       { title: "Google Ads Campaign Automation", desc: "Automate the full Google Search campaign lifecycle — creation, keyword setup, bidding strategy, geographic/language targeting, RSA composition, and asset management." },
       { title: "Performance & ROI Analytics", desc: "Track spend, clicks, impressions, conversions, affiliate commissions, and ROI across all campaigns in a unified real-time dashboard." },
       { title: "Content & Publishing Automation", desc: "AI-powered SEO article generation and multi-site publishing to support organic traffic alongside paid search campaigns for each affiliate merchant." },

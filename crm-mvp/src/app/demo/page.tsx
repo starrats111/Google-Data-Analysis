@@ -116,7 +116,7 @@ function getScreenshots(lang: "en" | "zh"): ScreenshotItem[] {
         icon: <ShopOutlined style={{ color: "#eb2f96" }} />,
         apiTag: "Business Context",
         description:
-          "Our team sources merchants from major international affiliate networks such as CJ (Commission Junction), Impact, ShareASale, Awin, Rakuten, Creatorflare, and others. Each merchant is assigned to a team member who then creates and manages Google Ads Search campaigns to promote the merchant's products. Commissions earned from resulting sales are tracked in our platform's data center.",
+          "Our team sources merchants from major international affiliate networks such as CollabGlow, Partnermatic, LinkHaiTao, Rewardoo, LinkBux, BrandSparkHub, and CreatorFlare. Each merchant is assigned to a team member who then creates and manages Google Ads Search campaigns to promote the merchant's products. Commissions earned from resulting sales are tracked in our platform's data center.",
         featuresLabel: "Key Features:",
         features: [
           "Merchant discovery from 7+ international affiliate networks",
@@ -213,7 +213,7 @@ function getScreenshots(lang: "en" | "zh"): ScreenshotItem[] {
       icon: <ShopOutlined style={{ color: "#eb2f96" }} />,
       apiTag: "Business Context",
       description:
-        "团队从国际主流联盟网络获取商家，包括 CJ (Commission Junction)、Impact、ShareASale、Awin、Rakuten、Creatorflare 等。每个商家分配给团队成员，由其创建和管理 Google Ads 搜索广告系列来推广商家产品。销售产生的佣金在平台数据中心中追踪。",
+        "团队从国际联盟网络获取商家，包括 CollabGlow、Partnermatic、LinkHaiTao、Rewardoo、LinkBux、BrandSparkHub、CreatorFlare 等。每个商家分配给团队成员，由其创建和管理 Google Ads 搜索广告系列来推广商家产品。销售产生的佣金在平台数据中心中追踪。",
       featuresLabel: "核心功能：",
       features: [
         "从 7+ 个国际联盟网络发现商家",
