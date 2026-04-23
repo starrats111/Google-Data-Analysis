@@ -21,7 +21,7 @@ const i18n = {
   en: {
     heroTitle: "Ad Automation CRM",
     heroDesc:
-      "An internal affiliate marketing operations platform developed by Wenzhou Fengdu Advertising & Media Co., Ltd. Our team uses this platform to manage Google Ads Search campaigns for affiliate merchants sourced from major international affiliate networks, track ROI and commissions, and automate content publishing — all within a single, internally-operated system.",
+      "An internal affiliate marketing operations platform developed by Wenzhou Fengdu Advertising & Media Co., Ltd. Our team uses this platform to manage Google Ads Search campaigns for affiliate merchants sourced from affiliate sub-networks (CollabGlow, Partnermatic, LinkHaiTao, Rewardoo, LinkBux, BrandSparkHub, CreatorFlare) that aggregate retail brand advertiser programs — tracking ROI, commissions, and automating content publishing in one internally-operated system.",
     heroNote:
       "This platform is used exclusively by our internal advertising team and is not offered as a service to third parties. For company information, please visit our",
     aboutLink: "About Us",
@@ -31,7 +31,7 @@ const i18n = {
     btnDemo: "Platform Demo",
     capTitle: "Platform Capabilities",
     features: [
-      { title: "Affiliate Merchant Management", desc: "Source and manage partner merchants from major international affiliate networks (CollabGlow, Partnermatic, LinkHaiTao, Rewardoo, LinkBux, BrandSparkHub, CreatorFlare, etc.) and assign campaigns to team members." },
+      { title: "Affiliate Merchant Management", desc: "Source and manage partner merchants from affiliate sub-networks (CollabGlow, Partnermatic, LinkHaiTao, Rewardoo, LinkBux, BrandSparkHub, CreatorFlare) — platforms that aggregate retail brand advertiser programs — and assign campaigns to team members." },
       { title: "Google Ads Campaign Automation", desc: "Automate the full Google Search campaign lifecycle — creation, keyword setup, bidding strategy, geographic/language targeting, RSA composition, and asset management." },
       { title: "Performance & ROI Analytics", desc: "Track spend, clicks, impressions, conversions, affiliate commissions, and ROI across all campaigns in a unified real-time dashboard." },
       { title: "Content & Publishing Automation", desc: "AI-powered SEO article generation and multi-site publishing to support organic traffic alongside paid search campaigns for each affiliate merchant." },
@@ -40,7 +40,7 @@ const i18n = {
   zh: {
     heroTitle: "广告自动化发布平台",
     heroDesc:
-      "温州丰度广告传媒有限公司内部运营平台。团队通过本平台管理来自国际联盟网络的商家，统一创建和优化 Google Ads 搜索广告系列，追踪 ROI 与佣金，并自动化内容发布 — 实现一站式闭环管理。",
+      "温州丰度广告传媒有限公司内部运营平台。团队通过本平台管理来自联盟子网络（CollabGlow、Partnermatic、LinkHaiTao、Rewardoo、LinkBux、BrandSparkHub、CreatorFlare）的商家，这些平台汇聚各大零售品牌广告主项目，统一创建和优化 Google Ads 搜索广告系列，追踪 ROI 与佣金 — 实现一站式内部闭环管理。",
     heroNote: "本平台仅供公司内部广告团队使用，不对外提供服务。公司信息请访问",
     aboutLink: "关于我们",
     heroNoteSuffix: "页面。",
