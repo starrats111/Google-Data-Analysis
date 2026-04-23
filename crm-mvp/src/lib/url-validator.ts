@@ -306,6 +306,7 @@ export async function tryValidateUrl(url: string): Promise<UrlCheckResult> {
     const { getProxyUrlForCountry, fetchViaProxy } = await import("@/lib/crawl-proxy");
     const country = inferCountryFromUrl(url);
     const proxyUrl = await getProxyUrlForCountry(country);
+    console.log(`[UrlValidator] 代理重试触发: url=${url.slice(0, 80)} country=${country} hasProxy=${!!proxyUrl} geo=${geoDomainRedirectCount} cf=${cloudflareCount}`);
     if (proxyUrl) {
       const ua = UA_POOL[0];
       const proxyResp = await fetchViaProxy(
@@ -317,6 +318,7 @@ export async function tryValidateUrl(url: string): Promise<UrlCheckResult> {
         },
         proxyUrl,
       );
+      console.log(`[UrlValidator] 代理响应: status=${proxyResp.status} ok=${proxyResp.ok} url=${url.slice(0, 60)}`);
       if (proxyResp.ok) {
         const html = await proxyResp.text().catch(() => "");
         if (isCloudflareChallenge(html)) {
