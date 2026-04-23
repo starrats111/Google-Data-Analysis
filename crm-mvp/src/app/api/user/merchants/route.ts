@@ -131,18 +131,26 @@ async function enrichWithLabels(merchants: any[]) {
 
 /**
  * 批量计算在投人数：对一批商家 (merchant_id + platform)，
- * 统计有多少个用户有 ENABLED 的 campaigns
+ * 统计有多少个不同用户有 ENABLED 的 campaigns
+ *
+ * Fix C-041：
+ *  1. 改用 OR 精确配对 (merchant_id, platform)，避免笛卡尔积误统计
+ *  2. 合并 user_id Set 去重，避免多条 user_merchants 导致虚增
+ *  3. status 扩展为 ["claimed", "paused"]，与弹窗逻辑一致
  */
 async function batchActiveAdvertisers(merchants: { merchant_id: string; platform: string }[]) {
   if (merchants.length === 0) return new Map<string, number>();
 
-  const keys = [...new Set(merchants.map(m => `${m.platform}:${m.merchant_id}`))];
-  const mids = [...new Set(merchants.map(m => m.merchant_id))];
-  const platforms = [...new Set(merchants.map(m => m.platform))];
+  // 精确配对去重：每个 (merchant_id, platform) 只查一次
+  const pairs = [...new Map(merchants.map(m => [`${m.platform}:${m.merchant_id}`, m])).values()];
 
-  // 找所有用户中 claimed 的相同 merchant_id + platform
+  // OR 精确匹配，避免笛卡尔积
   const allClaimed = await prisma.user_merchants.findMany({
-    where: { merchant_id: { in: mids }, platform: { in: platforms }, status: "claimed", is_deleted: 0 },
+    where: {
+      OR: pairs.map(p => ({ merchant_id: p.merchant_id, platform: p.platform })),
+      status: { in: ["claimed", "paused"] },
+      is_deleted: 0,
+    },
     select: { id: true, user_id: true, merchant_id: true, platform: true },
   });
 
@@ -150,13 +158,13 @@ async function batchActiveAdvertisers(merchants: { merchant_id: string; platform
 
   const umIds = allClaimed.map(um => um.id);
 
-  // 查启用的 campaigns（customer_id IS NOT NULL：排除草稿/幽灵 campaign，只统计真实在 Google Ads 运行的）
+  // 查启用的 campaigns（customer_id IS NOT NULL：排除草稿/幽灵 campaign）
   const campaigns = await prisma.campaigns.findMany({
     where: { user_merchant_id: { in: umIds }, is_deleted: 0, google_status: "ENABLED", customer_id: { not: null } },
     select: { user_id: true, user_merchant_id: true },
   });
 
-  // user_merchant_id → user_ids
+  // user_merchant_id → Set<userId>
   const umUserMap = new Map<string, Set<string>>();
   for (const c of campaigns) {
     const key = c.user_merchant_id.toString();
@@ -164,21 +172,20 @@ async function batchActiveAdvertisers(merchants: { merchant_id: string; platform
     umUserMap.get(key)!.add(c.user_id.toString());
   }
 
-  // merchant_id:platform → unique user count
-  const result = new Map<string, number>();
+  // merchant_id:platform → 合并所有 user_merchant 条目的 user_id Set，最后取 size
+  const userSetMap = new Map<string, Set<string>>();
   for (const um of allClaimed) {
     const k = `${um.platform}:${um.merchant_id}`;
+    if (!userSetMap.has(k)) userSetMap.set(k, new Set());
     const users = umUserMap.get(um.id.toString());
     if (users) {
-      const existing = result.get(k) || 0;
-      // 需要去重 — 合并 user_id 集合
-      if (!result.has(k)) {
-        result.set(k, users.size);
-      } else {
-        // 简单追加（同一个用户可能有多个 user_merchants 条目但概率低）
-        result.set(k, existing + users.size);
-      }
+      for (const uid of users) userSetMap.get(k)!.add(uid);
     }
+  }
+
+  const result = new Map<string, number>();
+  for (const [k, userSet] of userSetMap) {
+    if (userSet.size > 0) result.set(k, userSet.size);
   }
 
   return result;
