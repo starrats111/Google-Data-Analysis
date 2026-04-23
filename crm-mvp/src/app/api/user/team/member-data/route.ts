@@ -40,13 +40,15 @@ export const GET = withLeader(async (req: NextRequest, { user }) => {
     ? (isTodayCST(endDate, cstNow) ? cstNow.toDate() : parseCSTDateEndExclusive(endDate))
     : cstNow.toDate();
 
-  // 与数据中心一致：先查 campaigns，过滤掉无 google_campaign_id 的幽灵记录，且不包含 REMOVED 状态
+  // 与数据中心一致：排除无 google_campaign_id 和空字符串的幽灵记录
   const rawCampaigns = await prisma.campaigns.findMany({
     where: {
       user_id: targetId,
-      google_campaign_id: { not: null },
+      NOT: [
+        { google_campaign_id: null },
+        { google_campaign_id: "" },
+      ],
       is_deleted: 0,
-      google_status: { not: "REMOVED" },
     },
     orderBy: { id: "desc" },
     select: {
@@ -96,17 +98,19 @@ export const GET = withLeader(async (req: NextRequest, { user }) => {
 
   const allIdsForStats = [...campaignIds, ...extraCampaignIds];
 
-  // 按 campaign_id 聚合 cost/clicks/impressions + 佣金（并行查询）
-  const [rawStatsAgg, commissionAgg] = await Promise.all([
-    prisma.ads_daily_stats.groupBy({
-      by: ["campaign_id"],
-      where: {
-        campaign_id: { in: allIdsForStats },
-        date: { gte: statsStart, lt: statsEnd },
-        is_deleted: 0,
-      } as never,
-      _sum: { cost: true, clicks: true, impressions: true },
-    }),
+  // 按 (campaign_id, date) 分天聚合 + 佣金（并行查询）— 与 data-center/campaigns 逻辑完全一致
+  const [rawStatsRows, commissionAgg] = await Promise.all([
+    allIdsForStats.length > 0
+      ? prisma.ads_daily_stats.groupBy({
+          by: ["campaign_id", "date"],
+          where: {
+            campaign_id: { in: allIdsForStats },
+            date: { gte: statsStart, lt: statsEnd },
+            is_deleted: 0,
+          } as never,
+          _sum: { cost: true, clicks: true, impressions: true },
+        })
+      : [],
     prisma.$queryRawUnsafe<
       { user_merchant_id: bigint; total_commission: number; rejected_commission: number; approved_commission: number; order_count: number }[]
     >(`
@@ -124,17 +128,32 @@ export const GET = withLeader(async (req: NextRequest, { user }) => {
     `, targetId, txnStart, txnEnd),
   ]);
 
+  // 按 (gcid, date) 去重取 max cost，再按天累加 → 与 data-center/campaigns 完全一致
   const statsMap = new Map<string, { cost: number; clicks: number; impressions: number }>();
-  for (const s of rawStatsAgg) {
-    const gcid = cIdToGcid.get(String(s.campaign_id));
-    const primaryId = gcid ? gcidToPrimary.get(gcid) : String(s.campaign_id);
-    const key = primaryId || String(s.campaign_id);
-    const existing = statsMap.get(key);
-    const cost = Number(s._sum?.cost || 0);
-    const clicks = Number(s._sum?.clicks || 0);
-    const impressions = Number(s._sum?.impressions || 0);
-    if (!existing || cost > existing.cost) {
-      statsMap.set(key, { cost, clicks, impressions });
+  if (rawStatsRows.length > 0) {
+    const gcidDateBest = new Map<string, { primaryId: string; cost: number; clicks: number; impressions: number }>();
+    for (const s of rawStatsRows) {
+      const gcid = cIdToGcid.get(String(s.campaign_id));
+      const primaryId = gcid ? (gcidToPrimary.get(gcid) || String(s.campaign_id)) : String(s.campaign_id);
+      const dateKey = s.date instanceof Date ? s.date.toISOString().split("T")[0] : String(s.date);
+      const dedupKey = `${primaryId}_${dateKey}`;
+      const cost = Number(s._sum?.cost || 0);
+      const clicks = Number(s._sum?.clicks || 0);
+      const impressions = Number(s._sum?.impressions || 0);
+      const prev = gcidDateBest.get(dedupKey);
+      if (!prev || cost > prev.cost) {
+        gcidDateBest.set(dedupKey, { primaryId, cost, clicks, impressions });
+      }
+    }
+    for (const entry of gcidDateBest.values()) {
+      const existing = statsMap.get(entry.primaryId);
+      if (existing) {
+        existing.cost += entry.cost;
+        existing.clicks += entry.clicks;
+        existing.impressions += entry.impressions;
+      } else {
+        statsMap.set(entry.primaryId, { cost: entry.cost, clicks: entry.clicks, impressions: entry.impressions });
+      }
     }
   }
 
@@ -198,6 +217,15 @@ export const GET = withLeader(async (req: NextRequest, { user }) => {
       roi: Math.round(roi * 10) / 10,
     };
   });
+
+  // 与数据中心一致：叠加 MCC 误差费用调整
+  const queryMonth = (startDate || cstNow.startOf("month").format("YYYY-MM-DD")).slice(0, 7);
+  const adjustments = await prisma.mcc_cost_adjustments.findMany({
+    where: { user_id: targetId, month: queryMonth, is_deleted: 0 },
+  });
+  for (const adj of adjustments) {
+    totalCost += Number(adj.amount || 0);
+  }
 
   // 与数据中心一致：按状态（ENABLED→PAUSED）排序，同状态内按广告系列名中的序号升序
   const STATUS_ORDER: Record<string, number> = { ENABLED: 0, PAUSED: 1, REMOVED: 2 };
