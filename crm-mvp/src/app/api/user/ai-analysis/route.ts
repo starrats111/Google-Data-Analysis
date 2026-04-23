@@ -36,7 +36,7 @@ const TOOLS = [
     type: "function",
     function: {
       name: "get_campaign_performance",
-      description: "获取各广告系列的花费/总佣金/已确认/ROI/CPC明细，佣金来自联盟平台实际交易数据，可按花费或ROI排序",
+      description: "获取各广告系列的完整诊断数据：花费/总佣金/拒付/ROI/CTR/CPC/曝光量/运行天数/最高出价(max_cpc)，佣金来自联盟平台，可按花费或ROI排序",
       parameters: {
         type: "object",
         properties: {
@@ -84,7 +84,7 @@ const TOOLS = [
     type: "function",
     function: {
       name: "get_roi_diagnosis",
-      description: "ROI健康诊断：找出亏损/低效/高效系列，给出数据驱动的优化建议",
+      description: "ROI健康诊断：返回每条系列的花费/佣金/拒付/ROI/CTR/CPC/运行天数/最高出价，按亏损/低效/盈利分类，用于深度诊断",
       parameters: {
         type: "object",
         properties: {
@@ -233,41 +233,49 @@ async function executeTool(name: string, args: ToolArgs, userId: bigint): Promis
     // campaign → user_merchant_id 映射
     const campMerchantMap = new Map(campaigns.map((c) => [String(c.id), c.user_merchant_id ? String(c.user_merchant_id) : null]));
 
-    const grouped: Record<string, { cost: number; clicks: number; orders: number }> = {};
+    const grouped: Record<string, { cost: number; clicks: number; impressions: number; orders: number }> = {};
     for (const r of stats) {
       const id = String(r.campaign_id);
-      if (!grouped[id]) grouped[id] = { cost: 0, clicks: 0, orders: 0 };
-      grouped[id].cost   += Number(r.cost ?? 0);
-      grouped[id].clicks += Number(r.clicks ?? 0);
-      grouped[id].orders += Number(r.orders ?? 0);
+      if (!grouped[id]) grouped[id] = { cost: 0, clicks: 0, impressions: 0, orders: 0 };
+      grouped[id].cost        += Number(r.cost ?? 0);
+      grouped[id].clicks      += Number(r.clicks ?? 0);
+      grouped[id].impressions += Number(r.impressions ?? 0);
+      grouped[id].orders      += Number(r.orders ?? 0);
     }
 
     const groupedIds = Object.keys(grouped).map((id) => BigInt(id));
     const campInfos = await prisma.campaigns.findMany({
       where: { id: { in: groupedIds }, is_deleted: 0 },
-      select: { id: true, campaign_name: true, status: true, daily_budget: true },
+      select: { id: true, campaign_name: true, status: true, daily_budget: true, max_cpc_limit: true, created_at: true },
     });
     const campInfoMap = new Map(campInfos.map((c) => [String(c.id), c]));
+    const today = new Date();
 
     const rows = Object.entries(grouped).map(([id, g]) => {
-      const info      = campInfoMap.get(id);
-      const mid       = campMerchantMap.get(id);
-      const commData  = mid ? (comm.byMerchant.get(mid) ?? { total: 0, approved: 0, rejected: 0, orders: 0 }) : { total: 0, approved: 0, rejected: 0, orders: 0 };
+      const info       = campInfoMap.get(id);
+      const mid        = campMerchantMap.get(id);
+      const commData   = mid ? (comm.byMerchant.get(mid) ?? { total: 0, approved: 0, rejected: 0, orders: 0 }) : { total: 0, approved: 0, rejected: 0, orders: 0 };
       const commission = commData.total - commData.rejected;
       const roi        = g.cost > 0 ? (commission - g.cost) / g.cost * 100 : 0;
       const rawStatus  = (info?.status || "").toLowerCase();
       const status     = rawStatus === "active" ? "投放中" : rawStatus === "paused" ? "已暂停" : rawStatus || "未知";
+      const ctr        = g.impressions > 0 ? (g.clicks / g.impressions * 100).toFixed(2) + "%" : "N/A";
+      const daysRunning = info?.created_at ? Math.floor((today.getTime() - new Date(info.created_at).getTime()) / 86400000) : null;
       return {
         campaign_name:     info?.campaign_name || `ID-${id}`,
         status,
         daily_budget:      info?.daily_budget != null ? fmtMoney(Number(info.daily_budget)) : null,
+        max_cpc:           info?.max_cpc_limit != null ? fmtMoney(Number(info.max_cpc_limit)) : null,
+        days_running:      daysRunning,
         total_cost:        fmtMoney(g.cost),
         total_commission:  fmtMoney(commData.total),
-        confirmed:         fmtMoney(commData.approved),
+        rejected_commission: fmtMoney(commData.rejected),
         net_profit:        fmtMoney(commission - g.cost),
         roi_percent:       `${roi.toFixed(1)}%`,
         health:            roi < 0 ? "亏损" : roi < 50 ? "低效" : "盈利",
         total_clicks:      g.clicks,
+        impressions:       g.impressions,
+        ctr,
         total_orders:      g.orders,
         cpc:               fmtMoney(g.clicks > 0 ? g.cost / g.clicks : 0),
         _sort_cost:        g.cost,
@@ -405,28 +413,30 @@ async function executeTool(name: string, args: ToolArgs, userId: bigint): Promis
 
     const stats = await prisma.ads_daily_stats.findMany({
       where: { campaign_id: { in: campaignIds }, date: { gte: dateColumnStart(from), lt: dateColumnEndExclusive(to) }, is_deleted: 0 },
-      select: { campaign_id: true, cost: true, clicks: true, orders: true },
+      select: { campaign_id: true, cost: true, clicks: true, impressions: true, orders: true },
     });
     if (!stats.length) return JSON.stringify({ error: "无数据，无法诊断" });
 
     const comm = await getCommissionFromTxn(userId, from, to);
     const campMerchantMap = new Map(campaigns.map((c) => [String(c.id), c.user_merchant_id ? String(c.user_merchant_id) : null]));
 
-    const grouped: Record<string, { cost: number; clicks: number; orders: number }> = {};
+    const grouped: Record<string, { cost: number; clicks: number; impressions: number; orders: number }> = {};
     for (const r of stats) {
       const id = String(r.campaign_id);
-      if (!grouped[id]) grouped[id] = { cost: 0, clicks: 0, orders: 0 };
-      grouped[id].cost   += Number(r.cost ?? 0);
-      grouped[id].clicks += Number(r.clicks ?? 0);
-      grouped[id].orders += Number(r.orders ?? 0);
+      if (!grouped[id]) grouped[id] = { cost: 0, clicks: 0, impressions: 0, orders: 0 };
+      grouped[id].cost        += Number(r.cost ?? 0);
+      grouped[id].clicks      += Number(r.clicks ?? 0);
+      grouped[id].impressions += Number(r.impressions ?? 0);
+      grouped[id].orders      += Number(r.orders ?? 0);
     }
 
     const ids = Object.keys(grouped).map((id) => BigInt(id));
     const campInfos = await prisma.campaigns.findMany({
       where: { id: { in: ids }, is_deleted: 0 },
-      select: { id: true, campaign_name: true, status: true },
+      select: { id: true, campaign_name: true, status: true, max_cpc_limit: true, created_at: true },
     });
     const campInfoMap = new Map(campInfos.map((c) => [String(c.id), c]));
+    const todayD = new Date();
 
     const categorized = Object.entries(grouped).map(([id, g]) => {
       const info     = campInfoMap.get(id);
@@ -435,18 +445,25 @@ async function executeTool(name: string, args: ToolArgs, userId: bigint): Promis
       const netComm  = commData.total - commData.rejected;
       const roi      = g.cost > 0 ? (netComm - g.cost) / g.cost * 100 : 0;
       const rawSt    = (info?.status || "").toLowerCase();
+      const ctr      = g.impressions > 0 ? (g.clicks / g.impressions * 100).toFixed(2) + "%" : "N/A";
+      const daysRunning = info?.created_at ? Math.floor((todayD.getTime() - new Date(info.created_at).getTime()) / 86400000) : null;
       return {
-        campaign_name:    info?.campaign_name || `ID-${id}`,
-        status:           rawSt === "active" ? "投放中" : rawSt === "paused" ? "已暂停" : rawSt,
-        cost:             fmtMoney(g.cost),
-        total_commission: fmtMoney(commData.total),
-        confirmed:        fmtMoney(commData.approved),
-        net_profit:       fmtMoney(netComm - g.cost),
-        roi_percent:      `${roi.toFixed(1)}%`,
-        cpc:              fmtMoney(g.clicks > 0 ? g.cost / g.clicks : 0),
-        orders:           g.orders,
-        category:         roi < 0 ? "亏损" : roi < 50 ? "低效" : "盈利",
-        _roi:             roi,
+        campaign_name:       info?.campaign_name || `ID-${id}`,
+        status:              rawSt === "active" ? "投放中" : rawSt === "paused" ? "已暂停" : rawSt,
+        days_running:        daysRunning,
+        max_cpc:             info?.max_cpc_limit != null ? fmtMoney(Number(info.max_cpc_limit)) : null,
+        cost:                fmtMoney(g.cost),
+        total_commission:    fmtMoney(commData.total),
+        rejected_commission: fmtMoney(commData.rejected),
+        net_profit:          fmtMoney(netComm - g.cost),
+        roi_percent:         `${roi.toFixed(1)}%`,
+        ctr,
+        cpc:                 fmtMoney(g.clicks > 0 ? g.cost / g.clicks : 0),
+        clicks:              g.clicks,
+        impressions:         g.impressions,
+        orders:              g.orders,
+        category:            roi < 0 ? "亏损" : roi < 50 ? "低效" : "盈利",
+        _roi:                roi,
       };
     });
 
@@ -591,7 +608,13 @@ export async function POST(req: NextRequest) {
   - 数据分析：解释原因、识别模式、给出判断（花费 $X 零成单，说明问题在 XX，建议 YY）→ 必须做到
 - 每个章节的结构：先写结论/判断（1-2句话），再用数据佐证，最后给出可执行建议
 - 每条建议必须具体到操作层面（说清楚做什么操作、预期效果是什么），不允许写"可以考虑优化"之类的模糊建议
-- 亏损/低效系列不要逐条列举，按共同模式分组描述（如"17条零佣金亏损系列的共性是..."），最多举2-3个代表性例子说明，其余不展开
+- 亏损/低效系列不要逐条列举，按共同模式分组描述，最多举2-3个代表性例子，其余不展开
+- 利用以下字段做深度诊断（这些字段都在工具返回值中）：
+  - days_running（运行天数）+ orders=0 → 运行超过30天零佣金 = 结构性失败，建议直接暂停
+  - ctr（点击率）高但 total_commission=0 → 广告吸引力OK，问题在落地页/Tracking链路
+  - max_cpc 与实际 cpc 对比 → max_cpc 过低会限制流量，发现时直接指出具体数值
+  - 花费极低（<$5）但 ctr 强劲的系列 → 预算受限潜力股，建议扩量并给出百分比
+  - rejected_commission 占比高的系列 → 拒付风险警示
 - 用户消息第一行为"分析时间范围：YYYY-MM-DD 至 YYYY-MM-DD"，直接用于工具调用，无需确认
 - 主动调用多个工具，获取完整数据再开始分析
 - 数据为空时只说"该时段暂无数据，请确认同步状态"，不猜测原因`;
