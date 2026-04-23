@@ -227,6 +227,9 @@ export async function tryValidateUrl(url: string): Promise<UrlCheckResult> {
   // 这是代理重试的强信号——不能立即返回 ok: false，需用目标国家 IP 再验证
   let geoDomainRedirectCount = 0;
   let lastGeoDomainReason = "";
+  // 直连最终失败原因（传递给代理重试失败后的兜底返回）
+  let lastDirectFailReason = "所有验证方式均失败";
+  let lastDirectFailStatus = 0;
 
   for (let i = 0; i < UA_POOL.length; i++) {
     const ua = UA_POOL[i];
@@ -250,6 +253,7 @@ export async function tryValidateUrl(url: string): Promise<UrlCheckResult> {
             // 继续尝试其他 UA，最终走代理重试，不能直接返回 ok: false
             geoDomainRedirectCount++;
             lastGeoDomainReason = `链接被重定向到不同域名 ${finalDomain}`;
+            lastDirectFailReason = lastGeoDomainReason;
             if (i < UA_POOL.length - 1) continue;
             break; // 全部 UA 均跨域重定向 → 走代理重试
           }
@@ -264,6 +268,7 @@ export async function tryValidateUrl(url: string): Promise<UrlCheckResult> {
         const getResult = await getAndCheck(url, ua);
         if (getResult.type === "ok") return getResult;
         if (getResult.type === "cloudflare") { cloudflareCount++; if (i < UA_POOL.length - 1) continue; break; }
+        // 404/410 是真实不存在，不走代理重试，直接失败
         if (i < UA_POOL.length - 1) continue;
         return { ok: false, status: res.status, finalUrl: url, reason: `页面返回 ${res.status}（页面不存在）` };
       }
@@ -272,25 +277,33 @@ export async function tryValidateUrl(url: string): Promise<UrlCheckResult> {
         const getResult = await getAndCheck(url, ua);
         if (getResult.type === "ok") return getResult;
         if (getResult.type === "cloudflare") { cloudflareCount++; if (i < UA_POOL.length - 1) continue; break; }
+        // 403 可能是地理封锁，需走代理重试 → break 到代理段
+        lastDirectFailReason = `请求被拒绝 ${res.status}（可能为地理封锁）`;
+        lastDirectFailStatus = res.status;
         if (i < UA_POOL.length - 1) continue;
-        return { ok: false, status: res.status, finalUrl: url, reason: `请求失败 ${res.status}` };
+        break; // 全部 UA 均被 403 拒绝 → 走代理重试
       }
 
       if (res.status >= 500) {
+        lastDirectFailReason = `服务器错误 ${res.status}`;
+        lastDirectFailStatus = res.status;
         if (i < UA_POOL.length - 1) continue;
-        return { ok: false, status: res.status, finalUrl: url, reason: `服务器错误 ${res.status}` };
+        break; // 服务器错误也值得代理重试
       }
 
       const getResult = await getAndCheck(url, ua);
       if (getResult.type === "ok") return getResult;
       if (getResult.type === "cloudflare") { cloudflareCount++; if (i < UA_POOL.length - 1) continue; break; }
+      lastDirectFailReason = `请求失败 ${res.status}`;
+      lastDirectFailStatus = res.status;
       if (i < UA_POOL.length - 1) continue;
-      return { ok: false, status: res.status, finalUrl: url, reason: `请求失败 ${res.status}` };
+      break;
     } catch (err) {
       const msg = err instanceof Error ? err.message : "";
       if (msg.includes("abort")) {
+        lastDirectFailReason = "请求超时";
         if (i < UA_POOL.length - 1) continue;
-        return { ok: false, status: 0, finalUrl: url, reason: "请求超时" };
+        break;
       }
       if (i < UA_POOL.length - 1) continue;
     }
@@ -352,12 +365,7 @@ export async function tryValidateUrl(url: string): Promise<UrlCheckResult> {
     console.warn(`[UrlValidator] 代理重试异常: ${proxyErr instanceof Error ? proxyErr.message : proxyErr}`);
   }
 
-  // 如果是地理封锁导致的跨域重定向，明确返回该原因
-  if (geoDomainRedirectCount > 0) {
-    return { ok: false, status: 0, finalUrl: url, reason: lastGeoDomainReason };
-  }
-
-  return { ok: false, status: 0, finalUrl: url, reason: "所有验证方式均失败（含代理）" };
+  return { ok: false, status: lastDirectFailStatus, finalUrl: url, reason: `${lastDirectFailReason}（含代理重试）` };
 }
 
 /**
