@@ -59,17 +59,17 @@ export async function PUT(req: NextRequest) {
     }
   }
 
-  // 逐个 upsert
+  // 逐个 upsert：findFirst 不过滤 is_deleted，避免软删除后 create 触发唯一约束冲突
   for (const def of SEMRUSH_KEYS) {
     const value = config[def.key]?.trim() || ("default" in def ? def.default : "") as string;
     const existing = await prisma.system_configs.findFirst({
-      where: { config_key: def.key, is_deleted: 0 },
+      where: { config_key: def.key },
     });
 
     if (existing) {
       await prisma.system_configs.update({
         where: { id: existing.id },
-        data: { config_value: value, description: `SemRush ${def.label}` },
+        data: { config_value: value, description: `SemRush ${def.label}`, is_deleted: 0 },
       });
     } else {
       await prisma.system_configs.create({
