@@ -635,6 +635,8 @@ export async function POST(req: NextRequest) {
       try {
         let round = 0;
         const MAX_ROUNDS = 14; // 工具调用最多8轮 + 续写最多6轮
+        // 一旦进入正文生成阶段，就不再传工具定义（防止续写轮重新触发工具调用）
+        let generationStarted = false;
 
         while (round < MAX_ROUNDS) {
           round++;
@@ -651,10 +653,10 @@ export async function POST(req: NextRequest) {
             stream: false,
           };
 
-          // 如果还在工具调用阶段，传入工具定义
+          // 工具定义只在工具调用阶段传入，一旦开始生成正文就不再传
           const hasToolResults = messages.some((m) => m.role === "tool");
           const isFirstRound = round === 1;
-          if (isFirstRound || hasToolResults) {
+          if (!generationStarted && (isFirstRound || hasToolResults)) {
             requestBody.tools = TOOLS;
             requestBody.tool_choice = "auto";
           }
@@ -728,7 +730,8 @@ export async function POST(req: NextRequest) {
             continue; // 继续下一轮
           }
 
-          // 没有工具调用，输出最终内容
+          // 没有工具调用 → 正文生成阶段
+          generationStarted = true;
           const content = msg.content || "";
           if (content) {
             // 分块流式发送（模拟 streaming）
@@ -739,7 +742,8 @@ export async function POST(req: NextRequest) {
             }
           }
 
-          // finish_reason === "length" 表示模型输出被 token 上限截断，续写
+          // finish_reason === "length" 表示模型被 token 上限截断，续写
+          // 此时 generationStarted=true，下一轮不会再传工具定义
           if (choice.finish_reason === "length" && content) {
             send("status", "内容未完，继续生成...");
             messages.push({ role: "user", content: "请继续，从上文截断处接着写，不要重复已写内容。" });
