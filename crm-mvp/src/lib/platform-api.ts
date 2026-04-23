@@ -96,6 +96,14 @@ const PLATFORM_API_CONFIG: Record<string, PlatformApiConfig> = {
     assumeAllJoined: true,
     requiresRelationshipParam: true,
   },
+  EV: {
+    mode: "post_json",
+    url: "https://api.engagevantage.com/api/monetization",
+    source: "engagevantage",
+    pageKey: "curPage", sizeKey: "perPage", maxSize: 2000,
+    assumeAllJoined: true,
+    requiresRelationshipParam: true,
+  },
   // C-029 R1.2：AD (AdsDoubler) 商家 API
   // 关键差异（§设计方案.md §28.12~§28.13）：
   //   - GET + 所有参数走 URL query
@@ -691,6 +699,12 @@ const PLATFORM_TXN_CONFIG: Record<string, PlatformTxnConfig> = {
     source: "ultrainfluence",
     dateFormat: "camel", pageKey: "curPage", sizeKey: "perPage", maxSize: 2000,
   },
+  EV: {
+    mode: "post_json",
+    url: "https://api.engagevantage.com/api/transaction_v3",
+    source: "engagevantage",
+    dateFormat: "camel", pageKey: "curPage", sizeKey: "perPage", maxSize: 2000,
+  },
   // C-029 R1.2：AD (AdsDoubler) 交易 API
   // - GET + 所有参数走 URL query
   // - 日期参数命名独立：transactionStart/transactionEnd
@@ -886,8 +900,9 @@ function parseTransactions(platform: string, data: Record<string, unknown>): Pla
   let list = (root.list || root.transactions || root.items || []) as Record<string, unknown>[];
   if (!Array.isArray(list)) return [];
 
-  // MUI 交易数据为 订单→商品行 嵌套结构，需展平为逐行记录
-  if (platform === "MUI") {
+  // MUI / EV 交易数据为 订单→商品行 嵌套结构，需展平为逐行记录
+  // EV 结构：order 字段（oid/mid/mcid/order_time）+ items[].engagevantage_id/sale_amount/sale_comm/status
+  if (platform === "MUI" || platform === "EV") {
     const flat: Record<string, unknown>[] = [];
     for (const order of list) {
       const items = (order as any).items;
@@ -933,6 +948,7 @@ function parseTransactions(platform: string, data: Record<string, unknown>): Pla
     // 优先使用平台级商品/明细 ID（每个商品独立），再 fallback 到 order_id
     // API 字段用下划线命名（如 collabgrow_id），代码同时兼容驼峰
     const txnId = String(
+      item.engagevantage_id || item.engagevantageId ||
       item.ultrainfluence_id || item.ultrainfluenceId ||
       item.collabgrow_id || item.collabgrowId ||
       item.creatorflare_id || item.creatorflareId ||

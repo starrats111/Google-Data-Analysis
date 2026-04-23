@@ -1,7 +1,7 @@
 // 联盟平台代码及全称
 // LH: linkhaitao.com | LB: linkbux.com | RW: rewardoo.com
 // CG: collabglow.com | PM: partnermatic.com | BSH: brandsparkhub.com | CF: creatorflare.com
-// MUI: ultrainfluence.com | AD: adsdoubler.com (C-029)
+// MUI: ultrainfluence.com | AD: adsdoubler.com (C-029) | EV: engagevantage.com
 export const PLATFORMS = [
   { code: "CG", name: "CollabGlow", domain: "collabglow.com" },
   { code: "PM", name: "Partnermatic", domain: "partnermatic.com" },
@@ -12,6 +12,7 @@ export const PLATFORMS = [
   { code: "CF", name: "CreatorFlare", domain: "creatorflare.com" },
   { code: "MUI", name: "UltraInfluence", domain: "ultrainfluence.com" },
   { code: "AD", name: "AdsDoubler", domain: "adsdoubler.com" },
+  { code: "EV", name: "EngageVantage", domain: "engagevantage.com" },
 ] as const;
 
 export type PlatformCode = (typeof PLATFORMS)[number]["code"];
@@ -69,6 +70,11 @@ const _PLATFORM_ALIAS_ENTRIES: [string, PlatformCode][] = [
   ["AD", "AD"], ["ad", "AD"],
   ["AdsDoubler", "AD"], ["adsdoubler", "AD"], ["Ads Doubler", "AD"], ["ads doubler", "AD"],
   ["adsdoubler.com", "AD"], ["api.adsdoubler.com", "AD"], ["r.adsdoubler.com", "AD"],
+
+  // EV = EngageVantage (engagevantage.com)
+  ["EV", "EV"], ["ev", "EV"],
+  ["EngageVantage", "EV"], ["engagevantage", "EV"], ["Engage Vantage", "EV"], ["engage vantage", "EV"],
+  ["engagevantage.com", "EV"], ["app.engagevantage.com", "EV"], ["api.engagevantage.com", "EV"],
 ];
 
 export const PLATFORM_ALIASES: ReadonlyMap<string, PlatformCode> = new Map(_PLATFORM_ALIAS_ENTRIES);
