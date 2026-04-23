@@ -46,10 +46,9 @@ export default function SemRushConfigPage() {
 
   useEffect(() => { fetchConfig(); }, [fetchConfig]);
 
-  const handleSave = async () => {
+  const handleSave = async (values: Record<string, string>) => {
+    setSaving(true);
     try {
-      const values = await form.validateFields();
-      setSaving(true);
       const res = await fetch("/api/admin/semrush-config", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
@@ -59,10 +58,10 @@ export default function SemRushConfigPage() {
         message.success("保存成功");
         setHasConfig(true);
       } else {
-        message.error(res.message);
+        message.error(res.message || "保存失败");
       }
     } catch {
-      message.error("请填写必填项");
+      message.error("网络请求失败，请重试");
     }
     setSaving(false);
   };
@@ -137,7 +136,7 @@ export default function SemRushConfigPage() {
 
       <Spin spinning={loading}>
         <Card>
-          <Form form={form} layout="vertical" style={{ maxWidth: 560 }}>
+          <Form form={form} layout="vertical" style={{ maxWidth: 560 }} onFinish={handleSave}>
             {fields.map((field) => (
               <Form.Item
                 key={field.key}
@@ -160,7 +159,7 @@ export default function SemRushConfigPage() {
 
             <Form.Item style={{ marginTop: 24 }}>
               <Space>
-                <Button type="primary" icon={<SaveOutlined />} onClick={handleSave} loading={saving} size="large">
+                <Button type="primary" htmlType="submit" icon={<SaveOutlined />} loading={saving} size="large">
                   保存配置
                 </Button>
                 {hasConfig && (
