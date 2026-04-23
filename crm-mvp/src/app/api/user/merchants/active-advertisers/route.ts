@@ -29,7 +29,7 @@ export const GET = withUser(async (req: NextRequest, { user }) => {
     status: { in: ["claimed", "paused"] },
   };
   if (platform) where.platform = platform;
-  if (!isLeader) where.user_id = BigInt(user.userId);
+  // 组长和组员都查全员在投情况；财务数据（花费/佣金/ROI）仅组长可见
 
   const allUserMerchants = await prisma.user_merchants.findMany({
     where: where as never,
@@ -211,14 +211,16 @@ export const GET = withUser(async (req: NextRequest, { user }) => {
       display_name: userNameMap.get(entry.userId.toString()) || "未知",
       campaign_count: entry.campaignCount,
       enabled_count: entry.enabledCount,
-      total_cost: totalCost.toFixed(2),
-      total_clicks: totalClicks,
-      total_impressions: totalImpressions,
-      monthly_commission: totalCommission.toFixed(2),
-      roi: totalCost > 0 ? ((netCommission - totalCost) / totalCost).toFixed(2) : "0.00",
+      // 投放日期对所有角色可见（不含财务数据）
+      campaign_created_at: entry.earliestCreatedAt ?? null,
     };
+    // 财务数据仅组长可见
     if (isLeader) {
-      row.campaign_created_at = entry.earliestCreatedAt ?? null;
+      row.total_cost = totalCost.toFixed(2);
+      row.total_clicks = totalClicks;
+      row.total_impressions = totalImpressions;
+      row.monthly_commission = totalCommission.toFixed(2);
+      row.roi = totalCost > 0 ? ((netCommission - totalCost) / totalCost).toFixed(2) : "0.00";
     }
     return row;
   });

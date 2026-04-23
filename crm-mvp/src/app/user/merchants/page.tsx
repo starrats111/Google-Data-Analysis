@@ -838,15 +838,14 @@ export default function MerchantsPage() {
         </div>
       )}
     </Modal>
-    <Modal title={`在投详情 — ${advMerchant?.merchant_name || ""}`} open={advModal} onCancel={() => setAdvModal(false)} footer={null} width={isLeader ? 860 : 560}>
+    <Modal title={`在投详情 — ${advMerchant?.merchant_name || ""}`} open={advModal} onCancel={() => setAdvModal(false)} footer={null} width={isLeader ? 860 : 640}>
       {isLeader && advList.length > 0 && (<div style={{ marginBottom: 12, display: "flex", gap: 24 }}>
         <div><Text type="secondary">总花费（本月）</Text><div style={{ fontSize: 20, fontWeight: 700 }}>${advList.reduce((s, r) => s + parseFloat(r.total_cost || "0"), 0).toFixed(2)}</div></div>
         <div><Text type="secondary">总佣金（本月）</Text><div style={{ fontSize: 20, fontWeight: 700, color: "#52c41a" }}>${advList.reduce((s, r) => s + parseFloat(r.monthly_commission || "0"), 0).toFixed(2)}</div></div>
         <div><Text type="secondary">平均 ROI</Text><div style={{ fontSize: 20, fontWeight: 700 }}>{(() => { const c = advList.reduce((s, r) => s + parseFloat(r.total_cost || "0"), 0); const m = advList.reduce((s, r) => s + parseFloat(r.monthly_commission || "0"), 0); return c > 0 ? (m / c).toFixed(2) : "0.00"; })()}</div></div>
       </div>)}
       {!isLeader && advList.length > 0 && (<div style={{ marginBottom: 12, display: "flex", gap: 24 }}>
-        <div><Text type="secondary">总花费（本月）</Text><div style={{ fontSize: 20, fontWeight: 700 }}>${advList.reduce((s, r) => s + parseFloat(r.total_cost || "0"), 0).toFixed(2)}</div></div>
-        <div><Text type="secondary">广告系列数</Text><div style={{ fontSize: 20, fontWeight: 700 }}>{advList.reduce((s, r) => s + (r.campaign_count || 0), 0)}</div></div>
+        <div><Text type="secondary">在投人数</Text><div style={{ fontSize: 20, fontWeight: 700 }}>{advList.length} 人</div></div>
       </div>)}
       <Table dataSource={advList} rowKey="user_id" loading={advLoading} size="small" pagination={false} columns={isLeader ? [
         { title: "员工", dataIndex: "display_name", width: 100 },
@@ -858,11 +857,10 @@ export default function MerchantsPage() {
         { title: "本月佣金", dataIndex: "monthly_commission", width: 100, align: "right" as const, render: (v: string) => <span style={{ color: "#52c41a", fontWeight: 600 }}>${v}</span> },
         { title: "ROI", dataIndex: "roi", width: 70, align: "right" as const },
       ] : [
+        { title: "投放人", dataIndex: "display_name", width: 120 },
         { title: "广告系列", dataIndex: "campaign_count", width: 80, align: "center" as const },
         { title: "启用", dataIndex: "enabled_count", width: 60, align: "center" as const, render: (v: number) => <Tag color="green">{v}</Tag> },
-        { title: "总花费（本月）", dataIndex: "total_cost", width: 120, align: "right" as const, render: (v: string) => `$${v}` },
-        { title: "总点击", dataIndex: "total_clicks", width: 80, align: "right" as const, render: (v: number) => (v || 0).toLocaleString() },
-        { title: "总展示", dataIndex: "total_impressions", width: 90, align: "right" as const, render: (v: number) => (v || 0).toLocaleString() },
+        { title: "投放日期", dataIndex: "campaign_created_at", width: 130, render: (v: string) => v ? new Date(v).toLocaleDateString("zh-CN", { timeZone: "Asia/Shanghai" }) : "-" },
       ]} />
     </Modal>
   </div>);
