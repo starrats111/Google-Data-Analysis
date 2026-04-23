@@ -223,6 +223,10 @@ function inferCountryFromUrl(url: string): string {
  */
 export async function tryValidateUrl(url: string): Promise<UrlCheckResult> {
   let cloudflareCount = 0;
+  // 跨域重定向计数：直连时目标站因地理封锁跳转到不同域名（如 .de → .com），
+  // 这是代理重试的强信号——不能立即返回 ok: false，需用目标国家 IP 再验证
+  let geoDomainRedirectCount = 0;
+  let lastGeoDomainReason = "";
 
   for (let i = 0; i < UA_POOL.length; i++) {
     const ua = UA_POOL[i];
@@ -242,7 +246,12 @@ export async function tryValidateUrl(url: string): Promise<UrlCheckResult> {
           const origDomain = new URL(url).hostname.replace(/^www\./, "");
           const finalDomain = new URL(finalUrl).hostname.replace(/^www\./, "");
           if (origDomain !== finalDomain && !finalDomain.includes(origDomain) && !origDomain.includes(finalDomain)) {
-            return { ok: false, status: res.status, finalUrl, reason: `链接被重定向到不同域名 ${finalDomain}` };
+            // 跨域重定向：可能是地理封锁（如 .de 在非德国 IP 下跳转到 .com）
+            // 继续尝试其他 UA，最终走代理重试，不能直接返回 ok: false
+            geoDomainRedirectCount++;
+            lastGeoDomainReason = `链接被重定向到不同域名 ${finalDomain}`;
+            if (i < UA_POOL.length - 1) continue;
+            break; // 全部 UA 均跨域重定向 → 走代理重试
           }
         } catch {}
 
@@ -291,7 +300,7 @@ export async function tryValidateUrl(url: string): Promise<UrlCheckResult> {
     return { ok: true, status: 200, finalUrl: url, reason: "Cloudflare 保护，无法验证页面内容" };
   }
 
-  // 直连全部失败：尝试通过目标国家动态 IP 代理重试一次
+  // 直连全部失败（含地理封锁跨域重定向）：尝试通过目标国家动态 IP 代理重试一次
   // 典型场景：欧洲区域性网站（.de/.fr/.co.uk 等）封锁非本地 IP
   try {
     const { getProxyUrlForCountry, fetchViaProxy } = await import("@/lib/crawl-proxy");
@@ -337,6 +346,11 @@ export async function tryValidateUrl(url: string): Promise<UrlCheckResult> {
     }
   } catch (proxyErr) {
     console.warn(`[UrlValidator] 代理重试异常: ${proxyErr instanceof Error ? proxyErr.message : proxyErr}`);
+  }
+
+  // 如果是地理封锁导致的跨域重定向，明确返回该原因
+  if (geoDomainRedirectCount > 0) {
+    return { ok: false, status: 0, finalUrl: url, reason: lastGeoDomainReason };
   }
 
   return { ok: false, status: 0, finalUrl: url, reason: "所有验证方式均失败（含代理）" };
