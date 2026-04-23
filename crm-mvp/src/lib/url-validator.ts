@@ -320,6 +320,7 @@ export async function tryValidateUrl(url: string): Promise<UrlCheckResult> {
       if (proxyResp.ok) {
         const html = await proxyResp.text().catch(() => "");
         if (isCloudflareChallenge(html)) {
+          console.log(`[UrlValidator] 代理验证通过-CF (${country}): ${url.slice(0, 80)}`);
           return { ok: true, status: proxyResp.status, finalUrl: proxyResp.url, reason: `代理验证通过（${country}，Cloudflare 保护）` };
         }
         const invalidLink = checkInvalidLink(html);
@@ -330,6 +331,7 @@ export async function tryValidateUrl(url: string): Promise<UrlCheckResult> {
         if (soft.isSoft404) {
           return { ok: false, status: proxyResp.status, finalUrl: proxyResp.url, reason: soft.reason };
         }
+        console.log(`[UrlValidator] 代理验证通过 (${country}): ${url.slice(0, 80)}`);
         return { ok: true, status: proxyResp.status, finalUrl: proxyResp.url, reason: `代理验证通过（${country}）` };
       }
       // 代理响应非 ok（4xx/5xx）：软 404 判断
