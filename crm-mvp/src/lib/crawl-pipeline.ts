@@ -1392,15 +1392,16 @@ export async function buildCrawlCache(
   const proxyUrl = country ? (await getProxyUrlForCountry(country).catch(() => null)) : null;
 
   // Puppeteer 爬取辅助：带代理（内部代理失败时自动降级直连）
+  // 单次超时从 35s 缩短至 20s，减少策略瀑布总耗时
   const runPuppeteer = async (url: string): Promise<CrawlResultType> => {
-    const puppeteerHtml = await crawlPageWithPuppeteer(url, 35000, proxyUrl ?? undefined);
+    const puppeteerHtml = await crawlPageWithPuppeteer(url, 20000, proxyUrl ?? undefined);
     if (!puppeteerHtml) throw new Error("Puppeteer 返回空 HTML");
     const { links, images } = extractLinksAndImages(puppeteerHtml, url);
     return { html: puppeteerHtml.slice(0, 150000), links, images, method: "puppeteer" };
   };
   // Puppeteer 直连（不走代理，作为最终兜底）
   const runPuppeteerDirect = async (url: string): Promise<CrawlResultType> => {
-    const puppeteerHtml = await crawlPageWithPuppeteer(url, 35000);
+    const puppeteerHtml = await crawlPageWithPuppeteer(url, 20000);
     if (!puppeteerHtml) throw new Error("Puppeteer 直连返回空 HTML");
     const { links, images } = extractLinksAndImages(puppeteerHtml, url);
     return { html: puppeteerHtml.slice(0, 150000), links, images, method: "puppeteer" };
@@ -1441,11 +1442,20 @@ export async function buildCrawlCache(
   let crawlResult: CrawlResultType = { html: "", links: [], images: [], method: "failed", error: "未配置商家 URL" };
   let crawlQuality = { score: 0, tier: "failed" as const, issues: ["no_url"] };
 
+  // 整体爬取时间预算：超过 50s 跳出策略循环，避免单个商家拖慢整个请求
+  const STRATEGY_BUDGET_MS = 50_000;
+  const strategyStartedAt = Date.now();
+
   for (const strategy of strategies) {
+    const elapsed = Date.now() - strategyStartedAt;
+    if (elapsed > STRATEGY_BUDGET_MS) {
+      console.warn(`[CrawlPipeline] 总时间已达 ${elapsed}ms > ${STRATEGY_BUDGET_MS}ms，跳过剩余策略（已完成质量 score=${crawlQuality.score}）`);
+      break;
+    }
     try {
       const result = await strategy.run();
       const quality = assessCrawlQuality(result as Parameters<typeof assessCrawlQuality>[0]);
-      console.log(`[CrawlPipeline] 策略 ${strategy.name}: score=${quality.score} tier=${quality.tier} issues=[${quality.issues}]`);
+      console.log(`[CrawlPipeline] 策略 ${strategy.name}: score=${quality.score} tier=${quality.tier} issues=[${quality.issues}] elapsed=${Date.now() - strategyStartedAt}ms`);
       if (quality.score > crawlQuality.score) {
         crawlResult = result;
         crawlQuality = quality;
