@@ -93,8 +93,9 @@ export const GOOGLE_SHEETS_CONFIG_KEYS = {
 
 // ─── 爬取代理配置 key 常量 ───
 export const CRAWL_PROXY_CONFIG_KEYS = {
-  TEMPLATE: "crawl_proxy_template",  // 格式: host:port:username_with_**_placeholder:password
-  ENABLED:  "crawl_proxy_enabled",   // "1" = 启用, "0" / 空 = 停用
+  TEMPLATE: "crawl_proxy_template",       // 格式: host:port:username_with_**_placeholder:password（SOCKS5，供 Node.js HTTP 请求使用）
+  ENABLED:  "crawl_proxy_enabled",        // "1" = 启用, "0" / 空 = 停用
+  HTTP_TEMPLATE: "crawl_proxy_http_template", // 格式: protocol://host:port:username_with_**:password（HTTP 代理，供 Puppeteer Chrome 使用）
 } as const;
 
 // ─── 配置分组定义（前端表单渲染用）───
@@ -212,13 +213,27 @@ export async function getGoogleSheetsSaJson(): Promise<string | null> {
 }
 
 /**
- * 获取爬取代理配置
+ * 获取爬取代理配置（SOCKS5，供 Node.js HTTP 请求使用）
  * 模板格式: host:port:username_with_**:password
  * 返回 null 表示未配置或已停用
  */
 export async function getCrawlProxyTemplate(): Promise<string | null> {
   const [template, enabled] = await Promise.all([
     getSystemConfig(CRAWL_PROXY_CONFIG_KEYS.TEMPLATE),
+    getSystemConfig(CRAWL_PROXY_CONFIG_KEYS.ENABLED),
+  ]);
+  if (!template || enabled !== "1") return null;
+  return template.trim();
+}
+
+/**
+ * 获取 HTTP 代理配置（供 Puppeteer/Chrome 使用，Chrome 不支持 SOCKS5 认证）
+ * 模板格式: protocol://host:port:username_with_**:password
+ * 若未配置 HTTP 模板则返回 null
+ */
+export async function getCrawlHttpProxyTemplate(): Promise<string | null> {
+  const [template, enabled] = await Promise.all([
+    getSystemConfig(CRAWL_PROXY_CONFIG_KEYS.HTTP_TEMPLATE),
     getSystemConfig(CRAWL_PROXY_CONFIG_KEYS.ENABLED),
   ]);
   if (!template || enabled !== "1") return null;

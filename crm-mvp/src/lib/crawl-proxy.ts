@@ -35,6 +35,29 @@ export async function getProxyUrlForCountry(country: string): Promise<string | n
 }
 
 /**
+ * 获取 HTTP 代理 URL（专供 Puppeteer/Chrome 使用）。
+ * Chrome 不支持 SOCKS5 代理认证，必须使用 HTTP/HTTPS 代理并配合 page.authenticate()。
+ * 优先读 crawl_proxy_http_template；若未配置则返回 null（调用方应降级到直连）。
+ */
+export async function getHttpProxyUrlForCountry(country: string): Promise<string | null> {
+  if (!country) return null;
+
+  try {
+    const { getCrawlHttpProxyTemplate } = await import("@/lib/system-config");
+    const template = await getCrawlHttpProxyTemplate();
+    if (template) {
+      return buildSocks5Url(template, country); // buildSocks5Url 支持 http:// 前缀
+    }
+  } catch {
+    // 忽略
+  }
+
+  // env 兜底：CRAWL_PROXY_HTTP_US / CRAWL_PROXY_HTTP_URL
+  const envKey = `CRAWL_PROXY_HTTP_${country.trim().toUpperCase()}`;
+  return process.env[envKey] || process.env.CRAWL_PROXY_HTTP_URL || null;
+}
+
+/**
  * 将代理模板 + 国家代码组装为代理 URL。
  *
  * 模板格式：[protocol://]host:port:username_with_**:password

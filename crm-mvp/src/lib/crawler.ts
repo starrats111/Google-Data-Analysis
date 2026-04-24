@@ -1,5 +1,5 @@
 import { existsSync } from "fs";
-import { getProxyUrlForCountry, fetchViaProxy } from "@/lib/crawl-proxy";
+import { getProxyUrlForCountry, getHttpProxyUrlForCountry, fetchViaProxy } from "@/lib/crawl-proxy";
 import { acquirePuppeteerSlot, puppeteerSemaphoreStats } from "@/lib/puppeteer-semaphore";
 import { normalizeImageUrl } from "@/lib/image-url-normalize";
 

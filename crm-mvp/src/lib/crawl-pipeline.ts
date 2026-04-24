@@ -4,7 +4,7 @@
  */
 import { crawlPage, fetchUrlMeta, fetchPageImages, searchMerchantImages, crawlViaSitemap } from "@/lib/crawler";
 import { getAdMarketConfig } from "@/lib/ad-market";
-import { getProxyUrlForCountry } from "@/lib/crawl-proxy";
+import { getProxyUrlForCountry, getHttpProxyUrlForCountry } from "@/lib/crawl-proxy";
 import { isLowValueSitelink } from "@/lib/sitelink-filter";
 // C-016: ccTLD 切换逻辑移出 crawl-pipeline，改由 country-url-resolver 在 route 层调度
 
@@ -1388,13 +1388,16 @@ export async function buildCrawlCache(
 
   type CrawlResultType = { html: string; links: { url: string; text: string }[]; images: string[]; method: string; error?: string };
 
-  // 读取国家代理 URL（用于 Puppeteer，确保 IP 出口与目标国家一致）
+  // SOCKS5 代理（供 Node.js HTTP 请求使用，如 fetchViaProxy）
   const proxyUrl = country ? (await getProxyUrlForCountry(country).catch(() => null)) : null;
+  // HTTP 代理（专供 Puppeteer/Chrome 使用，Chrome 不支持 SOCKS5 认证）
+  const puppeteerProxyUrl = country ? (await getHttpProxyUrlForCountry(country).catch(() => null)) : null;
+  if (puppeteerProxyUrl) console.log(`[CrawlPipeline] Puppeteer 将使用 HTTP 代理: ${puppeteerProxyUrl.replace(/:[^@]+@/, ':***@')}`);
 
-  // Puppeteer 爬取辅助：带代理（内部代理失败时自动降级直连）
+  // Puppeteer 爬取辅助：带 HTTP 代理（内部代理失败时自动降级直连）
   // 单次超时从 35s 缩短至 20s，减少策略瀑布总耗时
   const runPuppeteer = async (url: string): Promise<CrawlResultType> => {
-    const puppeteerHtml = await crawlPageWithPuppeteer(url, 20000, proxyUrl ?? undefined);
+    const puppeteerHtml = await crawlPageWithPuppeteer(url, 20000, puppeteerProxyUrl ?? undefined);
     if (!puppeteerHtml) throw new Error("Puppeteer 返回空 HTML");
     const { links, images } = extractLinksAndImages(puppeteerHtml, url);
     return { html: puppeteerHtml.slice(0, 150000), links, images, method: "puppeteer" };
@@ -1538,7 +1541,7 @@ export async function buildCrawlCache(
     console.log(`[CrawlPipeline] 质量不足（score=${crawlQuality.score}），启动 Puppeteer 补充抓取`);
     try {
       const puppeteerTarget = localeUrl ?? merchantUrl;
-      puppeteerCache = await crawlWithPuppeteerFull(puppeteerTarget);
+      puppeteerCache = await crawlWithPuppeteerFull(puppeteerTarget, 30000, puppeteerProxyUrl ?? undefined);
       if (puppeteerCache) {
         const httpHtmlLen = html?.length ?? 0;
         if (!html || puppeteerCache.html.length > httpHtmlLen + 5000) {
@@ -1562,7 +1565,7 @@ export async function buildCrawlCache(
     console.log(`[CrawlPipeline] 数据尚不充足（images=${crawlResult.images.length}, links=${crawlResult.links.length}），Puppeteer 补充图片/链接`);
     try {
       const puppeteerTarget = localeUrl ?? merchantUrl;
-      puppeteerCache = await crawlWithPuppeteerFull(puppeteerTarget);
+      puppeteerCache = await crawlWithPuppeteerFull(puppeteerTarget, 30000, puppeteerProxyUrl ?? undefined);
       if (puppeteerCache) {
         const httpHtmlLen = html?.length ?? 0;
         if (!html || puppeteerCache.html.length > httpHtmlLen + 5000) {
