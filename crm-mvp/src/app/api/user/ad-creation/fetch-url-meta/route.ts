@@ -17,7 +17,9 @@ export async function GET(req: NextRequest) {
   const user = getUserFromRequest(req);
   if (!user) return apiError("未授权", 401);
 
-  const url = new URL(req.url).searchParams.get("url");
+  const { searchParams } = new URL(req.url);
+  const url = searchParams.get("url");
+  const country = (searchParams.get("country") || "").toUpperCase() || undefined;
   if (!url) return apiError("缺少 url 参数");
 
   try {
@@ -26,7 +28,8 @@ export async function GET(req: NextRequest) {
     return apiError("URL 格式无效");
   }
 
-  let meta = await fetchUrlMeta(url);
+  // 传入 country 以便 fetchUrlMeta 使用对应国家代理（避免国家 IP 封锁导致 title 获取失败）
+  let meta = await fetchUrlMeta(url, undefined, country);
 
   // 如果失败且是 JS 重定向 URL，尝试获取基础域名的信息
   if (!meta.ok && JS_REDIRECT_PATTERNS.some((p) => p.test(url))) {

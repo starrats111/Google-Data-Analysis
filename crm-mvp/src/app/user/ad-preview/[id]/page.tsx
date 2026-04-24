@@ -1030,9 +1030,10 @@ export default function AdPreviewPage() {
 
     setSitelinks((prev) => { const n = [...prev]; n[idx] = { ...n[idx], urlStatus: "checking" }; return n; });
     try {
+      const country = (preview?.campaign?.target_country || "US").toUpperCase();
       const [checkRes, metaRes] = await Promise.all([
         fetch(`/api/user/ad-creation/check-url?url=${encodeURIComponent(url)}`),
-        fetch(`/api/user/ad-creation/fetch-url-meta?url=${encodeURIComponent(url)}`),
+        fetch(`/api/user/ad-creation/fetch-url-meta?url=${encodeURIComponent(url)}&country=${country}`),
       ]);
       const checkData = await checkRes.json();
       const metaData = await metaRes.json();
