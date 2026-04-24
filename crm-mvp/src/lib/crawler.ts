@@ -1880,6 +1880,10 @@ export async function fetchUrlMeta(
           if (meta.title) {
             return { ...meta, ok: true, finalUrl, isSoft404 };
           }
+        } else if (useProxy && res.status >= 400) {
+          // 代理 IP 被目标站点直接拒绝（403/429/503 等），标记 wasBlocked
+          // 以便外层 fallback 用服务器直连再试（直连出口 IP 往往可达）
+          wasBlocked = true;
         }
       } catch {}
     }
