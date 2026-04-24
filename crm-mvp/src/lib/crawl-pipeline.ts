@@ -852,12 +852,17 @@ async function discoverSitelinkCandidates(
   pageLinks: { url: string; text: string }[],
   country?: string,
   puppeteerNavLinks?: { url: string; text: string }[],
+  puppeteerProxyUrlOverride?: string | null,
 ): Promise<{ url: string; title: string; description: string }[]> {
   let merchantDomain = "";
   try { merchantDomain = new URL(merchantUrl).hostname.replace(/^www\./, ""); } catch {}
   const proxyUrl = country ? (await getProxyUrlForCountry(country) ?? undefined) : undefined;
+  // Puppeteer 专用 HTTP 代理（Chrome 不支持 SOCKS5 认证，必须用 HTTP proxy）
+  const puppeteerProxyUrl = puppeteerProxyUrlOverride !== undefined
+    ? (puppeteerProxyUrlOverride ?? undefined)
+    : country ? (await getHttpProxyUrlForCountry(country).catch(() => null) ?? undefined) : undefined;
   // C-015 §4：用 console.warn 以便 Next.js 16 prod 下也能落进 PM2 error.log 用于诊断
-  if (proxyUrl) console.warn(`[Sitelinks] 使用 ${country} 代理探查候选链接，pageLinks=${pageLinks.length} navLinks=${puppeteerNavLinks?.length ?? 0}`);
+  if (proxyUrl) console.warn(`[Sitelinks] 使用 ${country} 代理探查候选链接，pageLinks=${pageLinks.length} navLinks=${puppeteerNavLinks?.length ?? 0} puppeteerProxy=${puppeteerProxyUrl ? "yes" : "no"}`);
   else if (country) console.warn(`[Sitelinks] 无 ${country} 代理，直连探查（locale 按目标国家规范化），pageLinks=${pageLinks.length}`);
 
   const candidates: { url: string; title: string; description: string }[] = [];
@@ -1039,7 +1044,7 @@ async function discoverSitelinkCandidates(
     console.warn(`[Sitelinks] HTTP L0 失败 ${httpFailedLinks.length} 条，Puppeteer 共享 browser 兜底验证前 ${needed} 条`);
     try {
       const { batchFetchMetaViaPuppeteer } = await import("@/lib/crawler");
-      const puppeteerMetas = await batchFetchMetaViaPuppeteer(retryUrls, proxyUrl, {
+      const puppeteerMetas = await batchFetchMetaViaPuppeteer(retryUrls, puppeteerProxyUrl, {
         concurrency: 2,
         perPageTimeoutMs: 10000,
       });
@@ -1115,7 +1120,7 @@ async function discoverSitelinkCandidates(
         console.log(`[Sitelinks] navLinks HTTP L0 失败 ${navHttpFailed.length} 条，Puppeteer 兜底前 ${needed} 条`);
         try {
           const { batchFetchMetaViaPuppeteer } = await import("@/lib/crawler");
-          const puppeteerMetas = await batchFetchMetaViaPuppeteer(retryUrls, proxyUrl, { concurrency: 2, perPageTimeoutMs: 10000 });
+          const puppeteerMetas = await batchFetchMetaViaPuppeteer(retryUrls, puppeteerProxyUrl, { concurrency: 2, perPageTimeoutMs: 10000 });
           const linkByUrl = new Map(navHttpFailed.map(l => [l.url, l]));
           for (const [url, meta] of puppeteerMetas.entries()) {
             const link = linkByUrl.get(url);
@@ -1734,7 +1739,7 @@ export async function buildCrawlCache(
 
   // 并行执行所有提取任务
   const [sitelinkCandidates, images, features, navItems, phoneCandidates, promoRegex, priceRegex, crawledProducts] = await Promise.all([
-    discoverSitelinkCandidates(merchantUrl, crawlResult.links, country, puppeteerCache?.navLinks).catch(() => []),
+    discoverSitelinkCandidates(merchantUrl, crawlResult.links, country, puppeteerCache?.navLinks, puppeteerProxyUrl).catch(() => []),
     collectImages(crawlResult.images, crawlResult.links, merchantUrl, merchantName, puppeteerCache?.images, proxyUrl ?? undefined).catch(() => [] as string[]),
     Promise.resolve(html ? extractMerchantFeatures(html, [...(puppeteerCache?.heroTexts ?? []), ...(puppeteerCache?.uspTexts ?? [])]) : []),
     Promise.resolve(html ? extractNavItems(html, puppeteerCache?.categoryNames) : []),
