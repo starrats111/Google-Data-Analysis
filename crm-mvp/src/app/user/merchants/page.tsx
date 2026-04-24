@@ -98,7 +98,7 @@ interface MerchantResponse {
   stats: { total: number; claimed: number; byPlatform: { platform: string; _count: number }[] };
 }
 interface Holiday { id: string; holiday_name: string; holiday_date: string; holiday_type: string; country_code: string; }
-const PC: Record<string, string> = { RW: "#7c3aed", LH: "#16a34a", CG: "#2563eb", PM: "#ea580c", LB: "#0891b2", BSH: "#be185d", CF: "#ca8a04", AD: "#0f766e", MUI: "#9333ea", EV: "#0369a1" };
+const PC: Record<string, string> = { RW: "#7c3aed", LH: "#16a34a", CG: "#2563eb", PM: "#ea580c", LB: "#0891b2", BSH: "#be185d", CF: "#ca8a04", AD: "#0f766e", MUI: "#b91c1c", EV: "#4338ca" };
 const PN: Record<string, string> = { alcohol: "酒精类", gambling: "赌博类", healthcare: "医疗保健", financial: "金融服务", adult: "成人内容", weapons: "武器/刀具", cannabis: "大麻类", tobacco: "烟草类" };
 function RB({ r }: { r: unknown[] | null }) {
   if (!r || !Array.isArray(r) || r.length === 0) return <span>-</span>;

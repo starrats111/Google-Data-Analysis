@@ -24,7 +24,7 @@ const { Text } = Typography;
 
 const PC: Record<string, string> = {
   RW: "#7c3aed", LH: "#16a34a", CG: "#2563eb", PM: "#ea580c",
-  LB: "#0891b2", BSH: "#be185d", CF: "#ca8a04", AD: "#0f766e", MUI: "#9333ea", EV: "#0369a1",
+  LB: "#0891b2", BSH: "#be185d", CF: "#ca8a04", AD: "#0f766e", MUI: "#b91c1c", EV: "#4338ca",
 };
 
 const CATEGORY_CN: Record<string, string> = {
