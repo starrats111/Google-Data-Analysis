@@ -202,18 +202,27 @@ function probeCommonPaths(merchantUrl: string): string[] {
 }
 
 async function headIsOk(url: string, proxyUrl: string | null): Promise<boolean> {
-  try {
-    const ctrl = new AbortController();
-    const t = setTimeout(() => ctrl.abort(), 5000);
-    const headers = { "User-Agent": "Mozilla/5.0 (compatible; SitelinkExpander/1.0)" };
-    const res = proxyUrl
-      ? await fetchViaProxy(url, { method: "HEAD", headers, signal: ctrl.signal }, proxyUrl)
-      : await fetch(url, { method: "HEAD", signal: ctrl.signal, headers, redirect: "follow" });
-    clearTimeout(t);
-    return res.ok || res.status < 400;
-  } catch {
-    return false;
+  const doHead = async (useProxy: boolean): Promise<boolean> => {
+    try {
+      const ctrl = new AbortController();
+      const t = setTimeout(() => ctrl.abort(), 5000);
+      const headers = { "User-Agent": "Mozilla/5.0 (compatible; SitelinkExpander/1.0)" };
+      const res = useProxy && proxyUrl
+        ? await fetchViaProxy(url, { method: "HEAD", headers, signal: ctrl.signal }, proxyUrl)
+        : await fetch(url, { method: "HEAD", signal: ctrl.signal, headers, redirect: "follow" });
+      clearTimeout(t);
+      return res.ok || res.status < 400;
+    } catch {
+      return false;
+    }
+  };
+  if (proxyUrl) {
+    // 先代理；代理失败再直连（代理 IP 被封但服务器直连可达的情况）
+    const viaProxy = await doHead(true);
+    if (viaProxy) return true;
+    return doHead(false);
   }
+  return doHead(false);
 }
 
 function toSitelinkItem(url: string, fallbackTitle: string, meta?: { title?: string; description?: string }): SitelinkItem {

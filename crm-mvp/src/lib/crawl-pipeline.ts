@@ -1474,9 +1474,10 @@ export async function buildCrawlCache(
   const crawlFailed = crawlResult.method === "failed";
   let html = crawlResult.html;
 
-  // ─── Sitemap 兜底：links=0 时（SPA 无法抽取导航链接），尝试从 sitemap 补充链接和图片 ───
-  // SPA/Vite/React 站点常见：Puppeteer 渲染成功但导航链接无法提取，此时 sitemap 是获取产品 URL 的可靠途径
-  if (!crawlFailed && merchantUrl && crawlResult.links.length === 0) {
+  // ─── Sitemap 兜底：links=0 时（SPA 无法抽取导航链接 或 主爬取全失败），尝试从 sitemap 补充链接和图片 ───
+  // SPA/Vite/React 站点常见：Puppeteer 渲染成功但导航链接无法提取，此时 sitemap 是获取产品 URL 的可靠途径。
+  // 主爬取彻底失败（crawlFailed=true）时同样尝试，因 sitemap 仅需一次 HTTP GET，不依赖 Puppeteer。
+  if (merchantUrl && crawlResult.links.length === 0) {
     try {
       console.log(`[CrawlPipeline] links=0，尝试 Sitemap 补充链接和图片: ${merchantUrl}`);
       const sitemapRes = await crawlViaSitemap(merchantUrl);
