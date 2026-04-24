@@ -486,17 +486,6 @@ function getFallbackHeadlineCandidates(
     "Premium Picks Online",
     "Smart Value For Home",
     "Find Your Best Match",
-    "Exclusive Styles Online",
-    "Discover New Arrivals",
-    "Shop The Best Sellers",
-    "Trusted by Thousands",
-    "Style Meets Function",
-    "Your Perfect Match Awaits",
-    "Shop With Confidence",
-    "Curated Picks For You",
-    "Explore Our Collection",
-    "Deals You'll Love",
-    "Shop Smarter Today",
   ];
 }
 
@@ -988,7 +977,8 @@ function extractJson(raw: string): string {
     if (text.trimEnd().endsWith("```")) text = text.trimEnd().slice(0, -3);
     text = text.trim();
   }
-  if (text[0] === "{" || text[0] === "[") return text;
+  // 不做早返回：即使文本以 { 或 [ 开头，AI 也可能在 JSON 后追加说明文字，
+  // 始终用 lastIndexOf 裁切尾部，避免 JSON.parse 报错。
   for (const [open, close] of [["{", "}"], ["[", "]"]] as const) {
     const idx = text.indexOf(open);
     if (idx >= 0) {
@@ -1008,7 +998,7 @@ export async function padHeadlines(
 ): Promise<string[]> {
   const market = getAdMarketConfig(country);
   const languageName = resolveLanguageName(country, options.adLanguageCode);
-  const locked = sanitizeHeadlineCandidates(existing, merchantName, 30, count);
+  let locked = sanitizeHeadlineCandidates(existing, merchantName, 30, count);
   if (locked.length >= count) return locked.slice(0, count);
 
   const references = sanitizeHeadlineCandidates(options.referenceItems || [], merchantName, 30, 12);
@@ -1018,7 +1008,8 @@ export async function padHeadlines(
   const biddingStrategy = options.biddingStrategy || "MAXIMIZE_CLICKS";
   const aiRulePrompt = buildAiRulePrompt(options.aiRuleProfile, "ad_copy");
 
-  {
+  // 最多 3 轮：每轮 AI 返工补齐不足的部分，直到达到 count 为止
+  for (let attempt = 0; attempt < 3; attempt++) {
     const needed = count - locked.length;
     const isNonEnglish = market.languageCode !== "en";
     const langWarning = isNonEnglish
@@ -1101,26 +1092,24 @@ Return ONLY a valid JSON array of strings. No explanation, no extra text.`;
         return combined.slice(0, count);
       }
 
-      // AI 生成了有效内容但不足或首条非品牌：混合静态候选补齐，不全丢弃
+      // AI 生成了有效内容但不足（或首条非品牌）：保留已生成的，下一轮 AI 补齐剩余
       if (combined.length >= 3) {
-        console.warn(`[padHeadlines] AI 输出${combined.length}/${count}条，品牌首条=${firstIsBrand}，静态混合补齐`);
-        const fallbackCandidates = getFallbackHeadlineCandidates(merchantName, market, keywords);
-        const mixed = sanitizeHeadlineCandidates([...combined, ...fallbackCandidates], merchantName, 30, count);
-        if (mixed.length >= count) {
-          return mixed.slice(0, count);
-        }
-        // 混合后仍不足：继续尝试下一轮 AI 或最终静态兜底
-        console.warn(`[padHeadlines] 混合后仍只有${mixed.length}条，继续尝试`);
-      } else {
-        console.warn(`[padHeadlines] AI 输出校验未通过（品牌首条=${firstIsBrand}, 共${combined.length}条），使用 fallback`);
+        console.warn(`[padHeadlines] 第${attempt + 1}轮：${combined.length}/${count}条，品牌首条=${firstIsBrand}，AI 返工补齐剩余`);
+        locked = combined;
+        continue; // 进下一轮 for 循环
       }
-    } catch (err) {
-      console.error("[padHeadlines] AI 生成失败:", err);
-    }
-  }
 
+      console.warn(`[padHeadlines] 第${attempt + 1}轮：AI 输出 ${combined.length} 条（不足3条，重试）`);
+    } catch (err) {
+      console.error(`[padHeadlines] 第${attempt + 1}轮 AI 失败:`, err instanceof Error ? err.message : err);
+    }
+  } // end for
+
+  // AI 全轮结束后若仍不足：静态兜底（绝对最后手段，避免页面空白）
+  if (locked.length >= count) return locked.slice(0, count);
   const fallbackCandidates = getFallbackHeadlineCandidates(merchantName, market, keywords);
   const fallback = sanitizeHeadlineCandidates([...locked, ...fallbackCandidates], merchantName, 30, count);
+  console.warn(`[padHeadlines] AI 全轮失败，静态兜底 ${fallback.length} 条`);
   return fallback.slice(0, count);
 }
 

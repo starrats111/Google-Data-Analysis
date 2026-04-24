@@ -189,7 +189,9 @@ export function extractJsonFromAi(raw: string): string {
     if (text.trimEnd().endsWith("```")) text = text.trimEnd().slice(0, -3);
     text = text.trim();
   }
-  if (text[0] === "{" || text[0] === "[") return text;
+  // 不做早返回：即使文本以 { 或 [ 开头，AI 也可能在 JSON 后追加说明文字，
+  // 必须始终用 lastIndexOf 定位最后一个合法闭括号并裁切，避免 JSON.parse 报
+  // "Unexpected non-whitespace character after JSON at position N"。
   for (const [open, close] of [["{", "}"], ["[", "]"]]) {
     const idx = text.indexOf(open);
     if (idx >= 0) {
