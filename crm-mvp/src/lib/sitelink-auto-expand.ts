@@ -25,11 +25,12 @@ export interface SitelinkItem {
 
 const COMMON_PATHS = [
   "/shop", "/products", "/collections",
+  "/catalog", "/categories", "/store",
   "/deals", "/sale", "/offers",
   "/about", "/about-us",
   "/contact", "/contact-us",
   "/faq", "/support", "/help",
-  "/blog", "/news",
+  "/blog", "/news", "/resources",
 ];
 
 const SITEMAP_URLS = [
@@ -301,12 +302,25 @@ export async function autoExpandSitelinks(opts: {
     if (ok) verified.push(u);
   }
 
-  // 拉 meta 构造 SitelinkItem
+  // 拉 meta 构造 SitelinkItem，同时记录同源子域名重定向目标
   const results: SitelinkItem[] = [];
+  const discoveredSubdomainRoots = new Set<string>(); // e.g. "https://knowledge.carolina.com"
+  const origHostBase = (() => { try { return new URL(merchantUrl).hostname.replace(/^www\./, "").toLowerCase(); } catch { return ""; } })();
+
   for (const u of verified) {
     if (results.length + existing.length >= targetCount) break;
     try {
       const meta = await fetchUrlMeta(u, proxyUrl ?? undefined, country);
+      // 若目标 URL 301 到同源子域名，记录以便后续扩展
+      if (meta.ok && meta.finalUrl && meta.finalUrl !== u) {
+        try {
+          const finalHost = new URL(meta.finalUrl).hostname.replace(/^www\./, "").toLowerCase();
+          const finalOrigin = new URL(meta.finalUrl).origin;
+          if (finalHost !== origHostBase && finalHost.endsWith(`.${origHostBase}`)) {
+            discoveredSubdomainRoots.add(finalOrigin);
+          }
+        } catch {}
+      }
       const item = toSitelinkItem(u, titleFromUrlPath(u), meta.ok ? { title: meta.title, description: meta.description } : undefined);
       if (item.title && item.title.length >= 2) {
         results.push(item);
@@ -314,6 +328,49 @@ export async function autoExpandSitelinks(opts: {
     } catch {
       const item = toSitelinkItem(u, titleFromUrlPath(u));
       if (item.title && item.title.length >= 2) results.push(item);
+    }
+  }
+
+  // ── 子域名扩展：当发现候选 URL 重定向到同源子域（如 knowledge.carolina.com）时，
+  //    抓取该子域首页的导航链接作为额外候选，弥补主域被 WAF 封锁的问题
+  if (results.length + existing.length < targetCount && discoveredSubdomainRoots.size > 0) {
+    for (const subRoot of discoveredSubdomainRoots) {
+      if (results.length + existing.length >= targetCount) break;
+      try {
+        const subHtml = await fetchText(subRoot + "/", proxyUrl, 10000);
+        if (!subHtml) continue;
+        // 提取 href 中的路径，补全为绝对 URL，过滤同源 top-level 路径
+        const hrefRe = /href="((?:https?:\/\/[^"]+|\/[^"?#<> ]+))"/gi;
+        const subCandidates: string[] = [];
+        let hm: RegExpExecArray | null;
+        while ((hm = hrefRe.exec(subHtml)) !== null) {
+          try {
+            const abs = new URL(hm[1], subRoot).toString();
+            if (sameOrigin(abs, merchantUrl) && isTopLevelPath(abs) && !isBadSitelinkUrl(abs) && !usedUrls.has(abs)) {
+              subCandidates.push(abs);
+            }
+          } catch {}
+          if (subCandidates.length >= 20) break;
+        }
+        // HEAD 验证 + 拉 meta
+        for (const u of subCandidates) {
+          if (results.length + existing.length >= targetCount) break;
+          const ok = await headIsOk(u, proxyUrl);
+          if (!ok) continue;
+          usedUrls.add(u);
+          try {
+            const meta = await fetchUrlMeta(u, proxyUrl ?? undefined, country);
+            const item = toSitelinkItem(u, titleFromUrlPath(u), meta.ok ? { title: meta.title, description: meta.description } : undefined);
+            if (item.title && item.title.length >= 2) results.push(item);
+          } catch {
+            const item = toSitelinkItem(u, titleFromUrlPath(u));
+            if (item.title && item.title.length >= 2) results.push(item);
+          }
+        }
+        console.warn(`[SitelinkExpand] 子域名 ${subRoot} 扩源，新增 ${results.length} 条`);
+      } catch (e) {
+        console.warn(`[SitelinkExpand] 子域名 ${subRoot} 扩源失败:`, e instanceof Error ? e.message : e);
+      }
     }
   }
 

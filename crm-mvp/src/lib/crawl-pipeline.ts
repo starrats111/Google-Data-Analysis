@@ -1453,7 +1453,14 @@ export async function buildCrawlCache(
       break;
     }
     try {
-      const result = await strategy.run();
+      // 单策略硬超时 22s：防止 crawlPage 内部 Puppeteer 独占 35s+ 导致整体超时失控
+      const SINGLE_STRATEGY_TIMEOUT_MS = 22_000;
+      const result = await Promise.race([
+        strategy.run(),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error(`strategy-timeout-${strategy.name}`)), SINGLE_STRATEGY_TIMEOUT_MS),
+        ),
+      ]);
       const quality = assessCrawlQuality(result as Parameters<typeof assessCrawlQuality>[0]);
       console.log(`[CrawlPipeline] 策略 ${strategy.name}: score=${quality.score} tier=${quality.tier} issues=[${quality.issues}] elapsed=${Date.now() - strategyStartedAt}ms`);
       if (quality.score > crawlQuality.score) {
