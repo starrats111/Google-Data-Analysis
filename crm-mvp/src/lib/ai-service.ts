@@ -486,6 +486,17 @@ function getFallbackHeadlineCandidates(
     "Premium Picks Online",
     "Smart Value For Home",
     "Find Your Best Match",
+    "Exclusive Styles Online",
+    "Discover New Arrivals",
+    "Shop The Best Sellers",
+    "Trusted by Thousands",
+    "Style Meets Function",
+    "Your Perfect Match Awaits",
+    "Shop With Confidence",
+    "Curated Picks For You",
+    "Explore Our Collection",
+    "Deals You'll Love",
+    "Shop Smarter Today",
   ];
 }
 
@@ -1090,7 +1101,19 @@ Return ONLY a valid JSON array of strings. No explanation, no extra text.`;
         return combined.slice(0, count);
       }
 
-      console.warn(`[padHeadlines] AI 输出校验未通过（品牌首条=${firstIsBrand}, 共${combined.length}条），使用 fallback`);
+      // AI 生成了有效内容但不足或首条非品牌：混合静态候选补齐，不全丢弃
+      if (combined.length >= 3) {
+        console.warn(`[padHeadlines] AI 输出${combined.length}/${count}条，品牌首条=${firstIsBrand}，静态混合补齐`);
+        const fallbackCandidates = getFallbackHeadlineCandidates(merchantName, market, keywords);
+        const mixed = sanitizeHeadlineCandidates([...combined, ...fallbackCandidates], merchantName, 30, count);
+        if (mixed.length >= count) {
+          return mixed.slice(0, count);
+        }
+        // 混合后仍不足：继续尝试下一轮 AI 或最终静态兜底
+        console.warn(`[padHeadlines] 混合后仍只有${mixed.length}条，继续尝试`);
+      } else {
+        console.warn(`[padHeadlines] AI 输出校验未通过（品牌首条=${firstIsBrand}, 共${combined.length}条），使用 fallback`);
+      }
     } catch (err) {
       console.error("[padHeadlines] AI 生成失败:", err);
     }
