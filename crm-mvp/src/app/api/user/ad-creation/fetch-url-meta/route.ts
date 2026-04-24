@@ -50,12 +50,32 @@ export async function GET(req: NextRequest) {
       .trim();
   }
 
+  // 当页面 title 无法获取时（代理/直连均被 WAF 拦截），从 URL 路径生成兜底 title，
+  // 让用户有一个合理的填写起点而不是完全空白
+  let fallbackTitle = "";
+  if (!cleanTitle) {
+    try {
+      const segs = new URL(url).pathname
+        .replace(/\.(html?|php|aspx?|ct|cfm|asp)$/i, "")
+        .split("/")
+        .filter((s) => s.length > 1);
+      if (segs.length > 0) {
+        fallbackTitle = segs
+          .map((s) => s.replace(/[-_+]/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()))
+          .join(" ")
+          .slice(0, 25)
+          .trim();
+      }
+    } catch {}
+  }
+
   return apiSuccess({
-    title: cleanTitle.slice(0, 25),
+    title: (cleanTitle || fallbackTitle).slice(0, 25),
     description: meta.description.slice(0, 35),
     fullTitle: meta.title,
     fullDescription: meta.description,
     ok: meta.ok && !meta.isSoft404,
+    isFallbackTitle: !meta.ok && !!fallbackTitle,
     finalUrl: meta.finalUrl,
     isSoft404: meta.isSoft404,
   });

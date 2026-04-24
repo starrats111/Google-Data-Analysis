@@ -1039,15 +1039,19 @@ export default function AdPreviewPage() {
       const metaData = await metaRes.json();
       const checkOk = checkData?.data?.ok === true;
       const metaOk = metaData.code === 0 && metaData.data?.ok;
+      const isFallbackTitle = metaData?.data?.isFallbackTitle === true;
       const isSoft404 = metaData?.data?.isSoft404 === true;
       const isValid = checkOk && !isSoft404;
+      // fallback title 来自 URL 路径，metaOk=false 时也可用
+      const autoTitle = metaData.code === 0 ? (metaData.data?.title || "") : "";
+      const autoDesc = metaOk ? (metaData.data?.description || "") : "";
 
       setSitelinks((prev) => {
         const n = [...prev];
         n[idx] = {
           ...n[idx],
-          title: n[idx].title || (metaOk ? metaData.data.title : "") || "",
-          desc1: n[idx].desc1 || (metaOk ? metaData.data.description : "") || "",
+          title: n[idx].title || autoTitle,
+          desc1: n[idx].desc1 || autoDesc,
           urlStatus: isValid ? "valid" : "invalid",
         };
         return n;
@@ -1057,6 +1061,8 @@ export default function AdPreviewPage() {
         message.error("链接页面显示「页面不存在」（软 404）");
       } else if (metaOk && isValid) {
         message.success("已自动获取页面标题和描述");
+      } else if (isValid && isFallbackTitle) {
+        message.info("链接有效，无法获取页面信息，已从 URL 路径生成标题（可手动修改）");
       } else if (isValid) {
         message.info("链接有效，但无法获取页面信息，请手动填写标题");
       } else {
