@@ -1046,7 +1046,7 @@ async function discoverSitelinkCandidates(
       const { batchFetchMetaViaPuppeteer } = await import("@/lib/crawler");
       const puppeteerMetas = await batchFetchMetaViaPuppeteer(retryUrls, puppeteerProxyUrl, {
         concurrency: 2,
-        perPageTimeoutMs: 10000,
+        perPageTimeoutMs: 25000,
       });
       const linkByUrl = new Map(httpFailedLinks.map(l => [l.url, l]));
       let puppeteerOk = 0;
@@ -1120,7 +1120,7 @@ async function discoverSitelinkCandidates(
         console.log(`[Sitelinks] navLinks HTTP L0 失败 ${navHttpFailed.length} 条，Puppeteer 兜底前 ${needed} 条`);
         try {
           const { batchFetchMetaViaPuppeteer } = await import("@/lib/crawler");
-          const puppeteerMetas = await batchFetchMetaViaPuppeteer(retryUrls, puppeteerProxyUrl, { concurrency: 2, perPageTimeoutMs: 10000 });
+          const puppeteerMetas = await batchFetchMetaViaPuppeteer(retryUrls, puppeteerProxyUrl, { concurrency: 2, perPageTimeoutMs: 25000 });
           const linkByUrl = new Map(navHttpFailed.map(l => [l.url, l]));
           for (const [url, meta] of puppeteerMetas.entries()) {
             const link = linkByUrl.get(url);
@@ -1450,8 +1450,8 @@ export async function buildCrawlCache(
   let crawlResult: CrawlResultType = { html: "", links: [], images: [], method: "failed", error: "未配置商家 URL" };
   let crawlQuality = { score: 0, tier: "failed" as const, issues: ["no_url"] };
 
-  // 整体爬取时间预算：超过 50s 跳出策略循环，避免单个商家拖慢整个请求
-  const STRATEGY_BUDGET_MS = 50_000;
+  // 整体爬取时间预算：有代理时给 Puppeteer 足够时间（DataDome 站点需 35s+），无代理快速退出
+  const STRATEGY_BUDGET_MS = puppeteerProxyUrl ? 110_000 : 50_000;
   const strategyStartedAt = Date.now();
 
   for (const strategy of strategies) {
@@ -1461,8 +1461,9 @@ export async function buildCrawlCache(
       break;
     }
     try {
-      // 单策略硬超时 22s：防止 crawlPage 内部 Puppeteer 独占 35s+ 导致整体超时失控
-      const SINGLE_STRATEGY_TIMEOUT_MS = 22_000;
+      // 单策略超时：Puppeteer 策略给 38s（DataDome/WAF 站点需要更长时间），HTTP 策略 22s
+      const isPuppeteerStrategy = strategy.name.includes("puppeteer");
+      const SINGLE_STRATEGY_TIMEOUT_MS = isPuppeteerStrategy ? 38_000 : 22_000;
       const result = await Promise.race([
         strategy.run(),
         new Promise<never>((_, reject) =>
