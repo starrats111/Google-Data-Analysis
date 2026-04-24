@@ -1004,6 +1004,7 @@ export async function batchFetchMetaViaPuppeteer(
     "--disable-renderer-backgrounding",
     "--disable-gpu", "--disable-software-rasterizer",
     "--ignore-certificate-errors",
+    "--ozone-platform=headless",
   ];
 
   let proxyServerArg: string | null = null;
@@ -1193,6 +1194,7 @@ export async function crawlWithPuppeteerFull(url: string, timeoutMs = 30000, pro
     "--disable-gpu",                   // 无头服务器无 GPU
     "--disable-software-rasterizer",
     "--ignore-certificate-errors",     // 部分站点证书问题
+    "--ozone-platform=headless",       // Chrome 112+ 无 X11 环境下必须显式指定
   ];
 
   // 解析代理 URL，分离 host:port 和认证信息
