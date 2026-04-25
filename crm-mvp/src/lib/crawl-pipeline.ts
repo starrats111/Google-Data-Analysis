@@ -2,7 +2,12 @@
  * 统一爬取管线 — 一次爬取，缓存复用
  * 被 merchants/route.ts（认领时缓存）和 generate-extensions/route.ts（AI 生成时读取）共用
  */
-import { crawlPage, fetchUrlMeta, fetchPageImages, searchMerchantImages, crawlViaSitemap } from "@/lib/crawler";
+import {
+  crawlPage, fetchUrlMeta, fetchPageImages, searchMerchantImages, crawlViaSitemap,
+  batchFetchMetaViaPuppeteer, crawlWithPuppeteerFull, crawlPageWithPuppeteer,
+  extractLinksAndImages, assessCrawlQuality, isQualityImageUrl,
+  harvestImagesFromPagesWithPuppeteer, getAcceptLanguage,
+} from "@/lib/crawler";
 import { getAdMarketConfig } from "@/lib/ad-market";
 import { getProxyUrlForCountry, getHttpProxyUrlForCountry } from "@/lib/crawl-proxy";
 import { isLowValueSitelink } from "@/lib/sitelink-filter";
@@ -1043,7 +1048,6 @@ async function discoverSitelinkCandidates(
     const retryUrls = httpFailedLinks.slice(0, needed).map(l => l.url);
     console.warn(`[Sitelinks] HTTP L0 失败 ${httpFailedLinks.length} 条，Puppeteer 共享 browser 兜底验证前 ${needed} 条`);
     try {
-      const { batchFetchMetaViaPuppeteer } = await import("@/lib/crawler");
       const puppeteerMetas = await batchFetchMetaViaPuppeteer(retryUrls, puppeteerProxyUrl, {
         concurrency: 2,
         perPageTimeoutMs: 25000,
@@ -1119,7 +1123,6 @@ async function discoverSitelinkCandidates(
         const retryUrls = navHttpFailed.slice(0, needed).map(l => l.url);
         console.log(`[Sitelinks] navLinks HTTP L0 失败 ${navHttpFailed.length} 条，Puppeteer 兜底前 ${needed} 条`);
         try {
-          const { batchFetchMetaViaPuppeteer } = await import("@/lib/crawler");
           const puppeteerMetas = await batchFetchMetaViaPuppeteer(retryUrls, puppeteerProxyUrl, { concurrency: 2, perPageTimeoutMs: 25000 });
           const linkByUrl = new Map(navHttpFailed.map(l => [l.url, l]));
           for (const [url, meta] of puppeteerMetas.entries()) {
@@ -1264,8 +1267,6 @@ async function collectImages(
   puppeteerProxyUrl?: string,
   prioritySubpageUrls?: string[], // F-12: 已验证可达的高优先级子页面 URL（如 sitelinkCandidates）
 ): Promise<string[]> {
-  const { isQualityImageUrl } = await import("@/lib/crawler");
-
   // 提取商家域名，用于同域图片放行
   let merchantDomain: string | undefined;
   try { merchantDomain = new URL(merchantUrl).hostname; } catch { /* ignore */ }
@@ -1331,7 +1332,6 @@ async function collectImages(
   //   优先级：prioritySubpageUrls（已验证可达，如 sitelinkCandidates）→ 产品/分类/体验链接 → 其他链接。
   if (allImgs.length < 30) {
     try {
-      const { harvestImagesFromPagesWithPuppeteer } = await import("@/lib/crawler");
       const PRODUCT_LINK_RE = /\/(collection|category|shop|women|men|kids|sale|new|all|products?|tour|experience|activit|menu|service|item|detail)\b/i;
       const productLinks = effectiveLinks.filter((l) => PRODUCT_LINK_RE.test(l.url)).map((l) => l.url);
       const otherLinks = effectiveLinks.filter((l) => !PRODUCT_LINK_RE.test(l.url)).map((l) => l.url);
@@ -1397,7 +1397,6 @@ export async function buildCrawlCache(
   // locale URL 永远优先于 root URL，HTTP 优先于 Puppeteer
   // 达到质量阈值（score >= 40）即停止，否则取得分最高的结果
   // ══════════════════════════════════════════════════════
-  const { assessCrawlQuality, crawlWithPuppeteerFull, crawlPageWithPuppeteer, extractLinksAndImages } = await import("@/lib/crawler");
   const QUALITY_THRESHOLD = 40;
 
   // C-016: ccTLD 切换（aerosus.nl → aerosus.be 等）已移至 country-url-resolver 在 route 层完成。
@@ -1554,7 +1553,6 @@ export async function buildCrawlCache(
   // sitemap / backend API 路径爬取成功但 html 为空，补发一次 HTTP fetch 用于数据提取
   if (!crawlFailed && !html && merchantUrl) {
     try {
-      const { getAcceptLanguage } = await import("@/lib/crawler");
       const fetchTarget = localeUrl ?? merchantUrl;
       const fallbackResp = await fetch(fetchTarget, {
         signal: AbortSignal.timeout(10000),
@@ -1635,7 +1633,6 @@ export async function buildCrawlCache(
     const promoFetchUrl = localeUrl ?? merchantUrl;
     if (promoFetchUrl) {
       try {
-        const { getAcceptLanguage } = await import("@/lib/crawler");
         const fullResp = await fetch(promoFetchUrl, {
           signal: AbortSignal.timeout(15000),
           headers: {
@@ -1757,7 +1754,6 @@ export async function buildCrawlCache(
     // 阶段2：Puppeteer 渲染（JS 动态加载价格的站点，如 React/Next.js 商城）
     console.log(`[PriceExtract] HTTP 未获取到价格，尝试 Puppeteer 渲染: ${productLinks[0].url}`);
     try {
-      const { crawlPageWithPuppeteer } = await import("@/lib/crawler");
       const puppeteerHtml = await crawlPageWithPuppeteer(productLinks[0].url, 25000);
       if (puppeteerHtml) {
         const puppeteerPrices = extractPriceInfo(puppeteerHtml, country, productLinks[0].url);
