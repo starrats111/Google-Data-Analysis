@@ -649,18 +649,28 @@ const FILTERED_IMG_KEYWORDS = [
   "flag-icon", "star-rating", "review-star",
   "shutterstock.com", "istockphoto.com", "gettyimages.com",
   "dreamstime.com", "stock-photo", "stock_photo",
-  "pexels.com", "unsplash.com",   // 版权图库，非商家真实产品图
+  "pexels.com", "unsplash.com",          // 版权图库，非商家真实产品图
+  "media-cdn.tripadvisor.com",           // TripAdvisor 防盗链 CDN，外站无法加载
   "ad-banner", "advertisement", "tracking-pixel", "analytics",
   "doubleclick", "googlesyndication", "facebook.com/tr",
-  "/splash", "splash_", "splash-",  // 启动动画/引导页图片，非产品图
-  "adnxs.com", "ib.adnxs",         // 广告追踪像素
-  "close-modal", "close_modal",    // UI 关闭按钮图标
-  "/blog/", "/news/", "/post/",    // 博客/新闻内容页，非产品图
-  "/header-menu/", "/nav-menu/", "/main-nav/", "/site-nav/", "/mega-menu/", // 导航菜单图，非产品图
-  "/profile", "/profiles/", "/person/", "/people/", "/users/",   // 用户/个人头像
-  "/placeholder", "/placeholders/", "/decoration", "/bg-texture", // 占位图/背景纹理
-  "/generic-", "/default-image", "/no-image",                    // 通用占位图
-  "-placeholder", "_placeholder",                                 // 占位图后缀
+  "/splash", "splash_", "splash-",       // 启动动画/引导页图片，非产品图
+  "adnxs.com", "ib.adnxs",              // 广告追踪像素
+  "close-modal", "close_modal",          // UI 关闭按钮图标
+  "/blog/", "/news/", "/post/",          // 博客/新闻内容页，非产品图
+  "/header-menu/", "/nav-menu/", "/main-nav/", "/site-nav/", "/mega-menu/",
+  "/profile", "/profiles/", "/person/", "/people/", "/users/",
+  "/placeholder", "/placeholders/", "/decoration", "/bg-texture",
+  "/generic-", "/default-image", "/no-image",
+  "-placeholder", "_placeholder",
+  // 常见 UI 静态资源文件名（不含路径，覆盖各类 CDN 的 /static/ UI 图标）
+  "chevron", "diagonal-line", "diagonal_line",
+  "blossom.png", "blossom.webp",
+  "-confirmation.", "_confirmation.",
+  "-concierge.", "_concierge.",
+  "private-option", "private_option",
+  "select-", "select_chevron",
+  "bowl-chopstick", "bowl_chopstick",
+  "instant-confirm", "instant_confirm",
 ];
 
 /**
@@ -1670,9 +1680,9 @@ export function extractLinksAndImages(
     if (["<nav", "<footer", "<header"].some(kw => nearContext.slice(-200).includes(kw))) {
       score -= 30;
     }
-    // 功能特性/好处/步骤图标区域扣分
-    if (["feature", "benefit", "why-choose", "how-it-works", "our-service",
-      "step-", "value-prop", "selling-point", "usp-"].some(kw => nearContext.includes(kw))) {
+    // 好处/步骤图标区域扣分（不含 feature，太宽泛会误伤产品图）
+    if (["benefit-icon", "why-choose", "how-it-works-icon",
+      "value-prop-icon", "selling-point-icon", "usp-icon", "step-icon"].some(kw => nearContext.includes(kw))) {
       score -= 15;
     }
 
@@ -1708,9 +1718,9 @@ export function extractLinksAndImages(
     addCandidate(match[1], 12);
   }
 
-  // 按评分排序后提取，过滤低分噪音图（候选数多时阈值更严）
+  // 按评分排序后提取，过滤低分噪音图
   candidates.sort((a, b) => b.score - a.score);
-  const minScore = candidates.length > 20 ? 10 : candidates.length > 10 ? 5 : 0;
+  const minScore = candidates.length > 15 ? 5 : 0;
   let images = candidates.filter(c => c.score >= minScore).map(c => c.url).slice(0, 100);
   images = deduplicateCdnImages(images);
   images = upgradeCdnThumbnails(images);
