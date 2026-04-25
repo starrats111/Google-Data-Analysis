@@ -98,6 +98,47 @@ export default function HomePage() {
         </Space>
       </div>
 
+      {/* Google Ads API Integration Evidence Block */}
+      <div style={{ background: "#f6ffed", borderTop: "2px solid #52c41a", borderBottom: "2px solid #52c41a", padding: "32px 20px" }}>
+        <div style={{ maxWidth: 900, margin: "0 auto" }}>
+          <Title level={4} style={{ color: "#237804", marginBottom: 16, textAlign: "center" }}>
+            Google Ads API v23 Integration — How We Use the API
+          </Title>
+          <Row gutter={[16, 16]}>
+            <Col xs={24} sm={12}>
+              <Card size="small" style={{ background: "#fff", borderRadius: 8, border: "1px solid #b7eb8f" }}>
+                <Text strong style={{ color: "#237804" }}>Read Operations — googleAds:searchStream</Text>
+                <ul style={{ margin: "8px 0 0", paddingLeft: 16, fontSize: 13, color: "#444" }}>
+                  <li>Daily campaign metrics (cost, clicks, impressions, conversions)</li>
+                  <li>Campaign status and budget queries via GAQL</li>
+                  <li>MCC child account enumeration (customer_client)</li>
+                  <li>CID availability checking before campaign creation</li>
+                </ul>
+              </Card>
+            </Col>
+            <Col xs={24} sm={12}>
+              <Card size="small" style={{ background: "#fff", borderRadius: 8, border: "1px solid #b7eb8f" }}>
+                <Text strong style={{ color: "#237804" }}>Write Operations — googleAds:mutate</Text>
+                <ul style={{ margin: "8px 0 0", paddingLeft: 16, fontSize: 13, color: "#444" }}>
+                  <li>Campaign + budget + ad group + RSA creation</li>
+                  <li>Keyword addition (Broad / Phrase / Exact match)</li>
+                  <li>Ad assets: sitelinks, callouts, promotions, price, call, snippets</li>
+                  <li>Real-time budget and CPC bid adjustments</li>
+                </ul>
+              </Card>
+            </Col>
+          </Row>
+          <div style={{ textAlign: "center", marginTop: 16 }}>
+            <Text style={{ color: "#555", fontSize: 13 }}>
+              Managing <strong>15+ Google Ads sub-accounts</strong> under our MCC across <strong>7 affiliate merchant networks</strong>.
+              Basic Access (15,000 ops/day) required — Explorer Access quota exceeded by daily batch operations.
+              &nbsp;→&nbsp;
+            </Text>
+            <a href="/demo" style={{ color: "#237804", fontWeight: 600, fontSize: 13 }}>View Platform Demo with Screenshots</a>
+          </div>
+        </div>
+      </div>
+
       <div style={{ maxWidth: 1060, margin: "0 auto", padding: "48px 20px 80px" }}>
         <Title level={3} style={{ textAlign: "center", color: "#333", marginBottom: 32 }}>
           {t.capTitle}
