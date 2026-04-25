@@ -928,7 +928,19 @@ export async function fetchPageImages(pageUrl: string): Promise<string[]> {
       if (imgs.length > 0) break;
     } catch {}
   }
-  return imgs;
+  // 关键：返回前统一做质量过滤（去重 + isQualityImageUrl）
+  // 保证下游 collectImages 拿到的就是已过滤的高质量候选
+  const seen = new Set<string>();
+  const filtered: string[] = [];
+  let pageHost = "";
+  try { pageHost = new URL(pageUrl).hostname.replace(/^www\./, ""); } catch {}
+  for (const img of imgs) {
+    if (seen.has(img)) continue;
+    if (!isQualityImageUrl(img, pageHost)) continue;
+    seen.add(img);
+    filtered.push(img);
+  }
+  return filtered;
 }
 
 // ══════════════════════════════════════════════════════

@@ -1269,9 +1269,18 @@ async function collectImages(
   let merchantDomain: string | undefined;
   try { merchantDomain = new URL(merchantUrl).hostname; } catch { /* ignore */ }
 
-  const allImgs = [...crawlImages];
-  const seen = new Set<string>(allImgs);
-  const addImg = (img: string) => { if (!seen.has(img)) { seen.add(img); allImgs.push(img); } };
+  // 关键防御：所有进入 allImgs 的图片必须通过 isQualityImageUrl 过滤
+  // （fetchPageImages 内部不做质量过滤，依赖此处统一把关）
+  const allImgs: string[] = [];
+  const seen = new Set<string>();
+  const addImg = (img: string) => {
+    if (seen.has(img)) return;
+    if (!isQualityImageUrl(img, merchantDomain)) return;
+    seen.add(img);
+    allImgs.push(img);
+  };
+  // 初始爬取的图片也要过滤
+  for (const img of crawlImages) addImg(img);
 
   // ① 从站内链接子页面 HTTP 抓图：优先产品/分类页，足量为止
   // 如果 links=0（SPA 站点常见），尝试常见电商路径作为子页面候选
@@ -1293,8 +1302,8 @@ async function collectImages(
   }
 
   if (allImgs.length < IMG_COLLECT_TARGET && effectiveLinks.length > 0) {
-    const productLinks = effectiveLinks.filter(l => /\/(collection|category|shop|women|men|kids|sale|new|all|products?)\b/i.test(l.url));
-    const otherLinks = effectiveLinks.filter(l => !/\/(collection|category|shop|women|men|kids|sale|new|all|products?)\b/i.test(l.url));
+    const productLinks = effectiveLinks.filter(l => /\/(collection|category|shop|women|men|kids|sale|new|all|products?|tour|experience|activit|menu|service)\b/i.test(l.url));
+    const otherLinks = effectiveLinks.filter(l => !/\/(collection|category|shop|women|men|kids|sale|new|all|products?|tour|experience|activit|menu|service)\b/i.test(l.url));
     const subPages = [...productLinks, ...otherLinks].slice(0, 15).map((l) => l.url);
     for (let i = 0; i < subPages.length && allImgs.length < IMG_COLLECT_TARGET; i += 3) {
       const batch = subPages.slice(i, i + 3);
