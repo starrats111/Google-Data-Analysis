@@ -1262,6 +1262,7 @@ async function collectImages(
   puppeteerImages?: string[],
   proxyUrl?: string,
   puppeteerProxyUrl?: string,
+  prioritySubpageUrls?: string[], // F-12: 已验证可达的高优先级子页面 URL（如 sitelinkCandidates）
 ): Promise<string[]> {
   const { isQualityImageUrl } = await import("@/lib/crawler");
 
@@ -1324,28 +1325,47 @@ async function collectImages(
     console.log(`[CollectImages] Puppeteer 补图后，图片数量: ${allImgs.length}`);
   }
 
-  // ③ Puppeteer 子页面补图：HTTP 抓取不足时，用 Puppeteer 爬前 3 个子页面
-  // 注意：crawlPageWithPuppeteer 返回 HTML 字符串，需用 extractLinksAndImages 提取图片
-  if (allImgs.length < 20 && effectiveLinks.length > 0) {
+  // ③ F-12 修复：Puppeteer 共享 browser 多页面采集
+  //   原方案每页新建 browser（5-10s 启动 × N 页），单页 25s 超时，CF 站根本来不及。
+  //   新方案：单 browser 多 tab 串行，单页 40s（CF 挑战 + scroll lazy-load 充足），最多采 6 个页面。
+  //   优先级：prioritySubpageUrls（已验证可达，如 sitelinkCandidates）→ 产品/分类/体验链接 → 其他链接。
+  if (allImgs.length < 30) {
     try {
-      const { crawlPageWithPuppeteer, extractLinksAndImages } = await import("@/lib/crawler");
-      // 优先爬产品/分类/体验类页面，覆盖电商和服务类商家（tours/experiences/activities）
-      const productLinks = effectiveLinks.filter(l => /\/(collection|category|shop|women|men|kids|sale|new|all|products?|tour|experience|activit|menu|service)\b/i.test(l.url));
-      const subPageUrls = [...productLinks, ...effectiveLinks].slice(0, 3).map(l => l.url);
-      for (const subUrl of subPageUrls) {
-        if (allImgs.length >= IMG_COLLECT_TARGET) break;
-        const subHtml = await crawlPageWithPuppeteer(subUrl, 25000, puppeteerProxyUrl ?? proxyUrl).catch(() => null);
-        if (subHtml) {
-          const { images: subImgs } = extractLinksAndImages(subHtml, subUrl);
+      const { harvestImagesFromPagesWithPuppeteer } = await import("@/lib/crawler");
+      const PRODUCT_LINK_RE = /\/(collection|category|shop|women|men|kids|sale|new|all|products?|tour|experience|activit|menu|service|item|detail)\b/i;
+      const productLinks = effectiveLinks.filter((l) => PRODUCT_LINK_RE.test(l.url)).map((l) => l.url);
+      const otherLinks = effectiveLinks.filter((l) => !PRODUCT_LINK_RE.test(l.url)).map((l) => l.url);
+      const merged: string[] = [];
+      const seenSubUrl = new Set<string>();
+      for (const u of [...(prioritySubpageUrls || []), ...productLinks, ...otherLinks]) {
+        if (!u || seenSubUrl.has(u)) continue;
+        seenSubUrl.add(u);
+        merged.push(u);
+        if (merged.length >= 6) break;
+      }
+      if (merged.length > 0) {
+        console.log(`[CollectImages] Puppeteer 共享浏览器子页面采集 ${merged.length} 个: ${merged.map((u) => u.replace(/^https?:\/\/[^/]+/, "")).join(", ")}`);
+        const harvest = await harvestImagesFromPagesWithPuppeteer(merged, puppeteerProxyUrl ?? proxyUrl, {
+          perPageTimeoutMs: 40000,
+          maxImagesPerPage: 50,
+        });
+        let totalAdded = 0;
+        for (const [subUrl, subImgs] of harvest.entries()) {
           let added = 0;
           for (const img of subImgs) {
             if (allImgs.length >= 100) break;
-            if (isQualityImageUrl(img, merchantDomain)) { addImg(img); added++; }
+            const before = allImgs.length;
+            addImg(img);
+            if (allImgs.length > before) added++;
           }
-          if (added > 0) console.log(`[CollectImages] Puppeteer 子页面 ${subUrl} 补图 ${added} 张，累计: ${allImgs.length}`);
+          totalAdded += added;
+          if (added > 0) console.log(`[CollectImages] 子页面 ${subUrl} 补图 ${added} 张，累计: ${allImgs.length}`);
         }
+        console.log(`[CollectImages] Puppeteer 子页面汇总补图 ${totalAdded} 张`);
       }
-    } catch { /* 降级处理 */ }
+    } catch (e) {
+      console.warn(`[CollectImages] Puppeteer 子页面采集异常: ${e instanceof Error ? e.message : e}`);
+    }
   }
 
   // ④ 搜索兜底：图片仍严重不足时搜索补充
@@ -1752,10 +1772,16 @@ export async function buildCrawlCache(
     return combined;
   };
 
-  // 并行执行所有提取任务
-  const [sitelinkCandidates, images, features, navItems, phoneCandidates, promoRegex, priceRegex, crawledProducts] = await Promise.all([
-    discoverSitelinkCandidates(merchantUrl, crawlResult.links, country, puppeteerCache?.navLinks, puppeteerProxyUrl).catch(() => []),
-    collectImages(crawlResult.images, crawlResult.links, merchantUrl, merchantName, puppeteerCache?.images, proxyUrl ?? undefined, puppeteerProxyUrl ?? undefined).catch(() => [] as string[]),
+  // F-12 修复：sitelinkCandidates 必须先于 collectImages 完成
+  //   原方案 collectImages 与 sitelinks 并行 → collectImages 拿不到 sitelinks 已验证的真实子页面 URL，
+  //   只能从主页 a 标签随便选，对 byfood.com 这类 SPA + CF 强保护站，主页几乎没有产品图链接 → 子页爬空。
+  //   新方案：先 await sitelinkCandidates，把 url 列表作为 prioritySubpageUrls 传给 collectImages。
+  //   其余轻量任务继续并行。
+  const sitelinkCandidates = await discoverSitelinkCandidates(merchantUrl, crawlResult.links, country, puppeteerCache?.navLinks, puppeteerProxyUrl).catch(() => [] as Awaited<ReturnType<typeof discoverSitelinkCandidates>>);
+  const sitelinkUrls = (sitelinkCandidates || []).map((c) => c.url).filter(Boolean);
+
+  const [images, features, navItems, phoneCandidates, promoRegex, priceRegex, crawledProducts] = await Promise.all([
+    collectImages(crawlResult.images, crawlResult.links, merchantUrl, merchantName, puppeteerCache?.images, proxyUrl ?? undefined, puppeteerProxyUrl ?? undefined, sitelinkUrls).catch(() => [] as string[]),
     Promise.resolve(html ? extractMerchantFeatures(html, [...(puppeteerCache?.heroTexts ?? []), ...(puppeteerCache?.uspTexts ?? [])]) : []),
     Promise.resolve(html ? extractNavItems(html, puppeteerCache?.categoryNames) : []),
     Promise.resolve(html ? extractPhoneCandidates(html, country) : []),

@@ -1199,6 +1199,199 @@ export async function batchFetchMetaViaPuppeteer(
   return result;
 }
 
+/**
+ * F-12 修复：共享 browser 的多页面图片采集
+ *
+ * 背景：byfood.com 等 Cloudflare 强保护站，
+ *   主页通常只有装饰图，真正的产品图在子页面（/japan-tours、/products 等）。
+ *   原 collectImages 中循环调 crawlPageWithPuppeteer 每次新建 browser（5-10s 启动）+
+ *   单页 25s 超时，叠加 CF 挑战 6s + scroll 3-6s，根本来不及完成。
+ *
+ * 本函数针对图片采集场景做了 4 项优化：
+ *   1. 共享同一 browser，每个 URL 单独 tab（启动开销摊薄）
+ *   2. 串行 1 个 tab（避免 2 核 CPU 上的资源竞争 + 代理 IP 被识别为爬虫）
+ *   3. 单页 40s 超时（CF 挑战 + lazy-load 充足）
+ *   4. 仅提取图片 URL（不保留 HTML，节省内存）
+ */
+export async function harvestImagesFromPagesWithPuppeteer(
+  urls: string[],
+  proxyUrl?: string,
+  options: { perPageTimeoutMs?: number; maxImagesPerPage?: number } = {},
+): Promise<Map<string, string[]>> {
+  const result = new Map<string, string[]>();
+  if (urls.length === 0) return result;
+
+  const perPageTimeoutMs = options.perPageTimeoutMs ?? 40000;
+  const maxImagesPerPage = options.maxImagesPerPage ?? 50;
+
+  const browserPath = findBrowserPath();
+  if (!browserPath) {
+    console.log("[Crawler] harvestImagesFromPagesWithPuppeteer: 未找到浏览器，跳过");
+    return result;
+  }
+
+  const launchArgs = [
+    "--no-sandbox", "--disable-setuid-sandbox",
+    "--disable-blink-features=AutomationControlled",
+    "--window-size=1920,1080",
+    "--disable-dev-shm-usage",
+    "--disable-web-security",
+    "--disable-features=VizDisplayCompositor",
+    "--disable-infobars", "--disable-extensions",
+    "--disable-background-timer-throttling",
+    "--disable-backgrounding-occluded-windows",
+    "--disable-renderer-backgrounding",
+    "--disable-gpu", "--disable-software-rasterizer",
+    "--ignore-certificate-errors",
+    "--ozone-platform=headless",
+  ];
+
+  let proxyServerArg: string | null = null;
+  let proxyAuth: { username: string; password: string } | null = null;
+  if (proxyUrl) {
+    try {
+      const parsed = new URL(proxyUrl);
+      proxyServerArg = `${parsed.protocol}//${parsed.hostname}:${parsed.port}`;
+      if (parsed.username) {
+        proxyAuth = {
+          username: decodeURIComponent(parsed.username),
+          password: decodeURIComponent(parsed.password),
+        };
+      }
+      launchArgs.push(`--proxy-server=${proxyServerArg}`);
+    } catch {
+      launchArgs.push(`--proxy-server=${proxyUrl}`);
+    }
+  }
+
+  let releasePuppeteerSlot: () => void = () => {};
+  try {
+    releasePuppeteerSlot = await acquirePuppeteerSlot(45000);
+  } catch (e) {
+    console.warn(`[Crawler] harvestImagesFromPagesWithPuppeteer 等待 slot 超时，跳过: ${e instanceof Error ? e.message : e}`);
+    return result;
+  }
+
+  let browser: any = null;
+  try {
+    try {
+      const puppeteerExtra = await import("puppeteer-extra");
+      const StealthPlugin = await import("puppeteer-extra-plugin-stealth");
+      const stealthMod = StealthPlugin as any;
+      const stealthFn = stealthMod.default || stealthMod;
+      puppeteerExtra.default.use(stealthFn());
+      browser = await puppeteerExtra.default.launch({
+        executablePath: browserPath,
+        headless: "new" as any,
+        args: launchArgs,
+      });
+    } catch {
+      const puppeteerCore = await import("puppeteer-core");
+      const launcher = puppeteerCore.default || puppeteerCore;
+      browser = await launcher.launch({
+        executablePath: browserPath,
+        headless: "new" as any,
+        args: launchArgs,
+      });
+    }
+
+    for (const url of urls) {
+      let page: any = null;
+      try {
+        page = await browser.newPage();
+        if (proxyAuth) await page.authenticate(proxyAuth);
+        await page.setUserAgent(randomDesktopUA());
+        await page.setViewport({ width: 1920, height: 1080 });
+        await page.evaluateOnNewDocument(PUPPETEER_ANTI_DETECT_SCRIPT);
+
+        await page.setRequestInterception(true);
+        page.on("request", (req: any) => {
+          const t = req.resourceType();
+          // 图片采集不需要实际加载图片字节，只要 DOM/srcset 即可
+          if (t === "image" || t === "media" || t === "font") return req.abort();
+          const u = req.url().toLowerCase();
+          if (/analytics|gtag|fbevents|hotjar|segment|mixpanel|doubleclick|googlesyndication/.test(u)) return req.abort();
+          req.continue();
+        });
+
+        try {
+          await page.goto(url, { waitUntil: "domcontentloaded", timeout: perPageTimeoutMs });
+        } catch {
+          // goto timeout 不致命
+        }
+
+        // CF 挑战等待：最多 8s
+        try {
+          await page.waitForFunction(
+            () => {
+              const t = (document.title || "").toLowerCase();
+              if (!t) return false;
+              const bad = ["just a moment", "attention required", "checking your browser", "one moment, please"];
+              return !bad.some(b => t.includes(b));
+            },
+            { timeout: 8000, polling: 500 },
+          );
+        } catch {}
+
+        // scroll 触发 lazy-load
+        try {
+          const totalHeight: number = await page.evaluate(() => document.body?.scrollHeight || 3000);
+          const step = Math.max(Math.floor(totalHeight / 5), 400);
+          for (let y = 0; y <= totalHeight + step; y += step) {
+            await page.evaluate((scrollY: number) => window.scrollTo(0, scrollY), y);
+            await sleep(450);
+          }
+          await sleep(1200);
+        } catch {}
+
+        const imgs: string[] = await page.evaluate((maxCount: number) => {
+          const imgSet = new Set<string>();
+          document.querySelectorAll("img, [data-src], [data-original], [data-lazy-src], [data-img], [data-background], picture source").forEach((el) => {
+            const img = el as HTMLImageElement;
+            const candidates = [
+              img.src,
+              img.dataset?.src,
+              img.dataset?.original,
+              (img.dataset as Record<string, string> | undefined)?.["lazySrc"],
+              (img.dataset as Record<string, string> | undefined)?.["lazyOriginal"],
+              img.dataset?.img,
+              img.dataset?.background,
+              img.getAttribute("srcset"),
+              img.getAttribute("data-srcset"),
+            ];
+            for (const c of candidates) {
+              if (!c) continue;
+              const url = c.split(",")[0].split(" ")[0].trim();
+              if (url && url.startsWith("http") && !url.includes("undefined")) imgSet.add(url);
+            }
+          });
+          document.querySelectorAll("[style*='background-image'], [style*='background:']").forEach((el) => {
+            const style = (el as HTMLElement).style.backgroundImage || "";
+            const m = style.match(/url\(["']?(https?[^"')]+)["']?\)/);
+            if (m && !m[1].includes("undefined")) imgSet.add(m[1]);
+          });
+          return Array.from(imgSet).slice(0, maxCount);
+        }, maxImagesPerPage);
+
+        result.set(url, imgs);
+        console.log(`[HarvestImages] ${url} → ${imgs.length} 张图`);
+      } catch (e) {
+        result.set(url, []);
+        console.warn(`[HarvestImages] ${url} 失败: ${e instanceof Error ? e.message : e}`);
+      } finally {
+        try { if (page) await page.close(); } catch {}
+      }
+    }
+  } catch (e) {
+    console.warn(`[Crawler] harvestImagesFromPagesWithPuppeteer 异常: ${e instanceof Error ? e.message : e}`);
+  } finally {
+    try { if (browser) await browser.close(); } catch {}
+    releasePuppeteerSlot();
+  }
+
+  return result;
+}
+
 export async function crawlWithPuppeteerFull(url: string, timeoutMs = 30000, proxyUrl?: string): Promise<PuppeteerPageData | null> {
   const browserPath = findBrowserPath();
   if (!browserPath) {
