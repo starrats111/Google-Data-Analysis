@@ -649,6 +649,7 @@ const FILTERED_IMG_KEYWORDS = [
   "flag-icon", "star-rating", "review-star",
   "shutterstock.com", "istockphoto.com", "gettyimages.com",
   "dreamstime.com", "stock-photo", "stock_photo",
+  "pexels.com", "unsplash.com",   // 版权图库，非商家真实产品图
   "ad-banner", "advertisement", "tracking-pixel", "analytics",
   "doubleclick", "googlesyndication", "facebook.com/tr",
   "/splash", "splash_", "splash-",  // 启动动画/引导页图片，非产品图
@@ -656,6 +657,10 @@ const FILTERED_IMG_KEYWORDS = [
   "close-modal", "close_modal",    // UI 关闭按钮图标
   "/blog/", "/news/", "/post/",    // 博客/新闻内容页，非产品图
   "/header-menu/", "/nav-menu/", "/main-nav/", "/site-nav/", "/mega-menu/", // 导航菜单图，非产品图
+  "/profile", "/profiles/", "/person/", "/people/", "/users/",   // 用户/个人头像
+  "/placeholder", "/placeholders/", "/decoration", "/bg-texture", // 占位图/背景纹理
+  "/generic-", "/default-image", "/no-image",                    // 通用占位图
+  "-placeholder", "_placeholder",                                 // 占位图后缀
 ];
 
 /**
@@ -686,8 +691,7 @@ export function isQualityImageUrl(url: string, allowedDomain?: string): boolean 
       // 主流电商/建站平台 CDN
       "cdn.shopify", "cloudinary", "imgix", "cloudfront",
       "squarespace", "wixstatic", "bigcommerce",
-      // 图库
-      "pexels.com", "unsplash.com", "images.unsplash",
+      // 图库（pexels/unsplash 为版权图库，已在 FILTERED_IMG_KEYWORDS 中屏蔽）
       // CMS/无头内容平台
       "ctfassets.net", "contentful.com", "prismic.io",
       "graphassets.com", "sanity.io", "dato-cms",
@@ -1635,8 +1639,13 @@ export function extractLinksAndImages(
 
     // 产品图关键词加分
     const productKws = ["product", "item", "hero", "banner", "feature", "main", "gallery",
-      "collection", "shop", "catalog", "lifestyle", "photo", "img-large"];
+      "collection", "shop", "catalog", "photo", "img-large", "experience", "tour", "food", "menu"];
     if (productKws.some(kw => imgUrlLower.includes(kw) || altText.includes(kw))) score += 20;
+
+    // 非产品类关键词扣分
+    const noiseKws = ["lifestyle", "stock", "illustration", "decoration", "bg-", "background",
+      "texture", "pattern", "divider", "separator"];
+    if (noiseKws.some(kw => imgUrlLower.includes(kw))) score -= 15;
 
     // srcset 加分
     if (tag.includes("srcset")) score += 10;
@@ -1683,9 +1692,10 @@ export function extractLinksAndImages(
     addCandidate(match[1], 12);
   }
 
-  // 按评分排序后提取
+  // 按评分排序后提取，过滤低分（score < 5）噪音图
   candidates.sort((a, b) => b.score - a.score);
-  let images = candidates.map(c => c.url).slice(0, 100);
+  const minScore = candidates.length > 20 ? 5 : 0;
+  let images = candidates.filter(c => c.score >= minScore).map(c => c.url).slice(0, 100);
   images = deduplicateCdnImages(images);
   images = upgradeCdnThumbnails(images);
 
