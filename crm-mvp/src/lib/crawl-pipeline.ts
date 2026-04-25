@@ -1315,21 +1315,25 @@ async function collectImages(
     console.log(`[CollectImages] Puppeteer 补图后，图片数量: ${allImgs.length}`);
   }
 
-  // ③ Puppeteer 子页面补图：HTTP 抓取不足且有代理时，用 Puppeteer 爬前 3 个子页面
+  // ③ Puppeteer 子页面补图：HTTP 抓取不足时，用 Puppeteer 爬前 3 个子页面
+  // 注意：crawlPageWithPuppeteer 返回 HTML 字符串，需用 extractLinksAndImages 提取图片
   if (allImgs.length < 20 && effectiveLinks.length > 0) {
     try {
-      const { crawlPageWithPuppeteer } = await import("@/lib/crawler");
-      const productLinks = effectiveLinks.filter(l => /\/(collection|category|shop|women|men|kids|sale|new|all|products?)\b/i.test(l.url));
+      const { crawlPageWithPuppeteer, extractLinksAndImages } = await import("@/lib/crawler");
+      // 优先爬产品/分类/体验类页面，覆盖电商和服务类商家（tours/experiences/activities）
+      const productLinks = effectiveLinks.filter(l => /\/(collection|category|shop|women|men|kids|sale|new|all|products?|tour|experience|activit|menu|service)\b/i.test(l.url));
       const subPageUrls = [...productLinks, ...effectiveLinks].slice(0, 3).map(l => l.url);
       for (const subUrl of subPageUrls) {
         if (allImgs.length >= IMG_COLLECT_TARGET) break;
-        const subCache = await crawlPageWithPuppeteer(subUrl, 25000, puppeteerProxyUrl ?? proxyUrl).catch(() => null);
-        if (subCache?.images) {
-          for (const img of subCache.images) {
+        const subHtml = await crawlPageWithPuppeteer(subUrl, 25000, puppeteerProxyUrl ?? proxyUrl).catch(() => null);
+        if (subHtml) {
+          const { images: subImgs } = extractLinksAndImages(subHtml, subUrl);
+          let added = 0;
+          for (const img of subImgs) {
             if (allImgs.length >= 100) break;
-            if (isQualityImageUrl(img, merchantDomain)) addImg(img);
+            if (isQualityImageUrl(img, merchantDomain)) { addImg(img); added++; }
           }
-          console.log(`[CollectImages] Puppeteer 子页面 ${subUrl} 补图后，图片数量: ${allImgs.length}`);
+          if (added > 0) console.log(`[CollectImages] Puppeteer 子页面 ${subUrl} 补图 ${added} 张，累计: ${allImgs.length}`);
         }
       }
     } catch { /* 降级处理 */ }
