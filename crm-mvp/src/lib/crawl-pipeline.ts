@@ -1261,6 +1261,7 @@ async function collectImages(
   merchantName: string,
   puppeteerImages?: string[],
   proxyUrl?: string,
+  puppeteerProxyUrl?: string,
 ): Promise<string[]> {
   const { isQualityImageUrl } = await import("@/lib/crawler");
 
@@ -1322,7 +1323,7 @@ async function collectImages(
       const subPageUrls = [...productLinks, ...effectiveLinks].slice(0, 3).map(l => l.url);
       for (const subUrl of subPageUrls) {
         if (allImgs.length >= IMG_COLLECT_TARGET) break;
-        const subCache = await crawlPageWithPuppeteer(subUrl, 25000, proxyUrl).catch(() => null);
+        const subCache = await crawlPageWithPuppeteer(subUrl, 25000, puppeteerProxyUrl ?? proxyUrl).catch(() => null);
         if (subCache?.images) {
           for (const img of subCache.images) {
             if (allImgs.length >= 100) break;
@@ -1741,7 +1742,7 @@ export async function buildCrawlCache(
   // 并行执行所有提取任务
   const [sitelinkCandidates, images, features, navItems, phoneCandidates, promoRegex, priceRegex, crawledProducts] = await Promise.all([
     discoverSitelinkCandidates(merchantUrl, crawlResult.links, country, puppeteerCache?.navLinks, puppeteerProxyUrl).catch(() => []),
-    collectImages(crawlResult.images, crawlResult.links, merchantUrl, merchantName, puppeteerCache?.images, proxyUrl ?? undefined).catch(() => [] as string[]),
+    collectImages(crawlResult.images, crawlResult.links, merchantUrl, merchantName, puppeteerCache?.images, proxyUrl ?? undefined, puppeteerProxyUrl ?? undefined).catch(() => [] as string[]),
     Promise.resolve(html ? extractMerchantFeatures(html, [...(puppeteerCache?.heroTexts ?? []), ...(puppeteerCache?.uspTexts ?? [])]) : []),
     Promise.resolve(html ? extractNavItems(html, puppeteerCache?.categoryNames) : []),
     Promise.resolve(html ? extractPhoneCandidates(html, country) : []),
