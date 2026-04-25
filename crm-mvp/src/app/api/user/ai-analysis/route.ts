@@ -490,35 +490,27 @@ async function executeTool(name: string, args: ToolArgs, userId: bigint): Promis
 }
 
 // ──────────────────────────────────────────────
-// 获取场景 AI 配置（data_insight 场景）
+// 获取场景 AI 配置（data_insight 场景）— 严格使用控制台配置，不做任何兜底
 // ──────────────────────────────────────────────
-async function getInsightAiConfig() {
+type AiConfig = { apiKey: string; baseUrl: string; modelName: string };
+
+async function getInsightAiConfig(): Promise<AiConfig> {
   const models = await prisma.ai_model_configs.findMany({
-    where: { scene: "data_insight", is_deleted: 0 },
+    where: { scene: "data_insight", is_deleted: 0, is_active: 1 },
     orderBy: { priority: "asc" },
-    take: 3,
+    take: 1,
   });
-  if (!models.length) {
-    const allModels = await prisma.ai_model_configs.findMany({
-      where: { is_deleted: 0 },
-      orderBy: { priority: "asc" },
-      take: 3,
-    });
-    if (!allModels.length) throw new Error("无可用 AI 模型配置");
-    models.push(...allModels);
-  }
-  const providerIds = [...new Set(models.map((m) => m.provider_id))];
-  const providers = await prisma.ai_providers.findMany({
-    where: { id: { in: providerIds }, status: "active", is_deleted: 0 },
+  if (!models.length) throw new Error("未在控制台配置 data_insight 场景的 AI 模型");
+  const m = models[0];
+  const provider = await prisma.ai_providers.findFirst({
+    where: { id: m.provider_id, status: "active", is_deleted: 0 },
   });
-  const providerMap = new Map(providers.map((p) => [String(p.id), p]));
-  for (const m of models) {
-    const p = providerMap.get(String(m.provider_id));
-    if (p?.api_key) {
-      return { apiKey: p.api_key, baseUrl: p.api_base_url || "https://api.openai.com", modelName: m.model_name };
-    }
-  }
-  throw new Error("无可用 AI Provider");
+  if (!provider?.api_key) throw new Error("data_insight 场景关联的 AI Provider 不可用或未配置 API Key");
+  return {
+    apiKey: provider.api_key,
+    baseUrl: provider.api_base_url || "https://api.openai.com",
+    modelName: m.model_name,
+  };
 }
 
 // ──────────────────────────────────────────────
@@ -551,8 +543,8 @@ export async function POST(req: NextRequest) {
     ? `${baseContext}\n\n${question.trim()}`
     : `${baseContext}\n\n请对该时间段的 Google Ads 账户进行全面数据分析，包括：账户总览、各系列 ROI 诊断、联盟平台收入分析、每日趋势，最后给出 3 条可执行的优化建议。`;
 
-  // 获取 AI 配置
-  let aiConfig: { apiKey: string; baseUrl: string; modelName: string };
+  // 获取 AI 配置（严格使用控制台配置，不兜底）
+  let aiConfig: AiConfig;
   try {
     aiConfig = await getInsightAiConfig();
   } catch (e) {
