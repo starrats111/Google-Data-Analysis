@@ -638,7 +638,7 @@ export async function crawlViaSitemap(url: string): Promise<{ links: { url: stri
 // ══════════════════════════════════════════════════════
 // activestorage/representations/redirect 是 Rails Active Storage 的有时效签名跳转链接，
 // 写入 DB 后数小时内过期，图片代理访问后会返回 403/404，必须在爬取阶段过滤掉。
-const JUNK_IMG_PATTERN = /(?:\.gif(?:\?|$)|\.svg(?:\?|$)|\/(?:pixel|spacer|blank|1x1|clear)\.|(?:_|-)(?:16|24|32|48|64|72)x|\/(?:icon|logo|badge|flag)s?[/_\-.]|\/emoji\/|gravatar\.com|\.ico(?:\?|$)|activestorage\/representations\/redirect\/)/i;
+const JUNK_IMG_PATTERN = /(?:\.gif(?:\?|$)|\.svg(?:\?|$)|\/(?:pixel|spacer|blank|1x1|clear)\.|(?:_|-)(?:16|24|32|48|64|72|96|128)x|\/(?:icon|logo|badge|flag|symbol|picto|bullet)s?[/_\-.]|\/emoji\/|gravatar\.com|\.ico(?:\?|$)|activestorage\/representations\/redirect\/)/i;
 
 const FILTERED_IMG_KEYWORDS = [
   "icon", "logo", "svg+xml", "pixel", "spacer", "blank", "1x1",
@@ -1599,14 +1599,20 @@ export function extractLinksAndImages(
     let score = 0;
     const imgUrlLower = imgSrc.toLowerCase();
     const altText = (tag.match(/alt=["']([^"']*)/i)?.[1] || "").toLowerCase();
+    const imgClass = (tag.match(/class=["']([^"']*)/i)?.[1] || "").toLowerCase();
 
-    // 检查是否在 press/testimonial/social 区域（通过上下文 HTML 近似判断）
+    // 检查是否在 press/testimonial/social/icon 区域（通过上下文 HTML 近似判断）
     const contextStart = Math.max(0, match.index! - 500);
     const context = html.slice(contextStart, match.index!).toLowerCase();
     if (["press-logo", "media-logo", "as-seen", "seen-on", "trusted-by",
       "testimonial", "review-section", "social-proof", "instagram-feed"].some(kw => context.includes(kw))) {
       continue;
     }
+
+    // 图标 CSS class 检测：class 含 icon/badge/symbol/step 直接跳过
+    const iconClassKws = ["icon", "badge", "symbol", "emblem", "step-img", "feature-img",
+      "benefit-img", "service-img", "picto", "bullet-img", "check-mark"];
+    if (iconClassKws.some(kw => imgClass.includes(kw))) continue;
 
     // 同域名加分
     const resolvedUrl = resolveImgUrl(imgSrc);
@@ -1625,39 +1631,49 @@ export function extractLinksAndImages(
       } catch {}
     }
 
-    // 尺寸评分
+    // 尺寸评分：小图（150以下）降低分数而不是直接跳过
     const wMatch = tag.match(/width=["']?(\d+)/i);
     const hMatch = tag.match(/height=["']?(\d+)/i);
     if (wMatch && hMatch) {
       const w = parseInt(wMatch[1]), h = parseInt(hMatch[1]);
       if (w >= 400 && h >= 300) score += 30;
       else if (w >= 200 && h >= 200) score += 15;
+      else if (w >= 150 && h >= 150) score += 5;
       else if (w < 100 || h < 100) continue;
+      else score -= 10; // 100~150 小图扣分
     } else {
       score += 3;
     }
 
     // 产品图关键词加分
-    const productKws = ["product", "item", "hero", "banner", "feature", "main", "gallery",
-      "collection", "shop", "catalog", "photo", "img-large", "experience", "tour", "food", "menu"];
+    const productKws = ["product", "item", "hero", "main", "gallery",
+      "collection", "shop", "catalog", "photo", "img-large", "experience", "tour", "food", "menu",
+      "restaurant", "dish", "cuisine", "recipe", "cooking"];
     if (productKws.some(kw => imgUrlLower.includes(kw) || altText.includes(kw))) score += 20;
 
-    // 非产品类关键词扣分
+    // 非产品类 URL 路径扣分
     const noiseKws = ["lifestyle", "stock", "illustration", "decoration", "bg-", "background",
-      "texture", "pattern", "divider", "separator"];
-    if (noiseKws.some(kw => imgUrlLower.includes(kw))) score -= 15;
+      "texture", "pattern", "divider", "separator", "/icon", "/icons/", "/symbol", "/picto",
+      "/badge", "/sprite", "/ui/", "/asset/icons", "feature-icon", "benefit-icon"];
+    if (noiseKws.some(kw => imgUrlLower.includes(kw))) score -= 20;
 
-    // srcset 加分
+    // srcset 加分（真实产品图通常有 srcset 响应式）
     if (tag.includes("srcset")) score += 10;
 
-    // 主内容区域检测（通过上下文近似判断）
+    // 主内容区域加分
     const nearContext = html.slice(Math.max(0, match.index! - 300), match.index!).toLowerCase();
     if (["<main", "<article", '<section', 'class="product', 'class="hero', 'class="gallery',
       'class="content', 'class="shop', 'class="collection'].some(kw => nearContext.includes(kw))) {
       score += 15;
     }
+    // 导航/页脚/图标区域扣分
     if (["<nav", "<footer", "<header"].some(kw => nearContext.slice(-200).includes(kw))) {
       score -= 30;
+    }
+    // 功能特性/好处/步骤图标区域扣分
+    if (["feature", "benefit", "why-choose", "how-it-works", "our-service",
+      "step-", "value-prop", "selling-point", "usp-"].some(kw => nearContext.includes(kw))) {
+      score -= 15;
     }
 
     addCandidate(imgSrc, score);
@@ -1692,9 +1708,9 @@ export function extractLinksAndImages(
     addCandidate(match[1], 12);
   }
 
-  // 按评分排序后提取，过滤低分（score < 5）噪音图
+  // 按评分排序后提取，过滤低分噪音图（候选数多时阈值更严）
   candidates.sort((a, b) => b.score - a.score);
-  const minScore = candidates.length > 20 ? 5 : 0;
+  const minScore = candidates.length > 20 ? 10 : candidates.length > 10 ? 5 : 0;
   let images = candidates.filter(c => c.score >= minScore).map(c => c.url).slice(0, 100);
   images = deduplicateCdnImages(images);
   images = upgradeCdnThumbnails(images);
