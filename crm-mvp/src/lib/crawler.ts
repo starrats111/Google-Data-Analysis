@@ -655,6 +655,7 @@ const FILTERED_IMG_KEYWORDS = [
   "adnxs.com", "ib.adnxs",         // 广告追踪像素
   "close-modal", "close_modal",    // UI 关闭按钮图标
   "/blog/", "/news/", "/post/",    // 博客/新闻内容页，非产品图
+  "/header-menu/", "/nav-menu/", "/main-nav/", "/site-nav/", "/mega-menu/", // 导航菜单图，非产品图
 ];
 
 /**
