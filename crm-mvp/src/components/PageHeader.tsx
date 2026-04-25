@@ -26,8 +26,11 @@ export default function PageHeader({ showHome = false }: { showHome?: boolean })
     >
       <Space>
         <RocketOutlined style={{ fontSize: 28, color: "#4DA6FF" }} />
-        <Text strong style={{ fontSize: 20, color: "#1A7FDB" }}>
-          {lang === "en" ? "Ad Automation Platform" : "广告自动化发布"}
+        <Text strong style={{ fontSize: 16, color: "#1A7FDB" }}>
+          {lang === "en" ? "Wenzhou Fengdu Advertising & Media" : "温州丰度广告传媒有限公司"}
+        </Text>
+        <Text style={{ fontSize: 12, color: "#888", marginLeft: 4 }}>
+          {lang === "en" ? "· Internal Ad Automation CRM" : "· 内部广告管理系统"}
         </Text>
       </Space>
       <Space>
