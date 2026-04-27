@@ -359,6 +359,24 @@ export default function AdPreviewPage() {
     setInitialized(true);
   }, [preview, initialized]);
 
+  // F-15: 图片数据后到（爬取完成后 SWR 刷新），同步更新 crawledImages（前提：用户尚未手动选图）
+  const prevImageUrlsRef = React.useRef<string>("");
+  useEffect(() => {
+    if (!initialized || !preview?.adCreative?.image_urls) return;
+    const freshImages = normalizeImageUrls(preview.adCreative.image_urls);
+    const freshKey = freshImages.join(",");
+    if (freshKey === prevImageUrlsRef.current) return;
+    prevImageUrlsRef.current = freshKey;
+    // 仅当当前无图（爬取完成补图）或图片有变动时才更新
+    if (freshImages.length > 0 && crawledImages.length === 0) {
+      setCrawledImages(freshImages);
+      setImageUrls(freshImages);
+      setCrawledImagesOcrDone(true);
+      setCrawledImagesOcrProgress(freshImages.length);
+      setCrawledImagesTextFlags({});
+    }
+  }, [preview?.adCreative?.image_urls, initialized, crawledImages.length]);
+
   // ─── 生成中文翻译（仅参考，不影响广告内容） ───
   const generateZhTranslation = useCallback(async () => {
     const validH = headlines.filter((h) => h.trim().length > 0);
