@@ -360,7 +360,7 @@ export default function AdPreviewPage() {
   }, [preview, initialized]);
 
   // F-15: 图片数据后到（爬取完成后 SWR 刷新），同步更新 crawledImages（前提：用户尚未手动选图）
-  const prevImageUrlsRef = React.useRef<string>("");
+  const prevImageUrlsRef = useRef<string>("");
   useEffect(() => {
     if (!initialized || !preview?.adCreative?.image_urls) return;
     const freshImages = normalizeImageUrls(preview.adCreative.image_urls);
