@@ -56,6 +56,17 @@ function cleanDesc(raw: string | undefined): string {
   return sanitizeAdText(decodeHtmlEntities(raw), { allowExclamation: true }).trim();
 }
 
+/**
+ * 从商家全称中提取简短商标名。
+ * "Project Bound, Inc, DBA Nisolo" → "Nisolo"
+ * "Hampden Clothing, LLC" → "Hampden Clothing"
+ */
+function extractTradeName(brand: string): string {
+  const dba = brand.match(/\bDBA\s+(.+)$/i);
+  if (dba) return dba[1].trim();
+  return brand.replace(/,?\s*(LLC|Inc\.?|Ltd\.?|Corp\.?|Co\.|Company|International|Holdings?)\.?\s*$/i, "").trim() || brand;
+}
+
 function pickFallbackTitle(c: SitelinkInput): string {
   // linkText 优先（discover 阶段抽到的 <a> 文本通常最贴合导航语义）
   if (c.linkText) {
@@ -120,7 +131,7 @@ ${block}`;
   let raw: string;
   try {
     raw = await callAiWithFallback(
-      "ad_copy_generation",
+      "ad_copy",
       [
         { role: "system", content: "You write concise, multilingual, policy-compliant Google Ads sitelink copy." },
         { role: "user", content: prompt },
