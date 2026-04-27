@@ -696,6 +696,10 @@ export function isQualityImageUrl(url: string, allowedDomain?: string): boolean 
     } catch { /* ignore */ }
   }
 
+  // 过滤极小缩略图（width/w ≤ 120 的 CDN 参数，如头像、星标等 48/90px 小图）
+  const widthParam = url.match(/[?&](?:width|w)=(\d+)/i);
+  if (widthParam && parseInt(widthParam[1], 10) <= 120) return false;
+
   if (!hasValidExt) {
     const cdnPatterns = [
       // 主流电商/建站平台 CDN
@@ -708,14 +712,21 @@ export function isQualityImageUrl(url: string, allowedDomain?: string): boolean 
       // 企业 CDN
       "akamaized.net", "akamai.net", "azureedge.net",
       "fastly.net", "r2.cloudflarestorage.com",
+      // BunnyCDN（b-cdn.net）—— 广泛用于 byfood、中小电商站点，URL 末尾无扩展名，以 optimizer=image 标记
+      "b-cdn.net",
       // 品牌图片子域通配（images.xxx.com / media.xxx.com / cdn.xxx.com / assets.xxx.com）
       "images.", "media.", "/media/", "/assets/products", "/products/images",
+      // 无头 CMS 资产端点（如 /api/public/assets/）
+      "/public/assets/", "/api/assets/",
       // 图片 CDN 子域通配：*-img.xxx.com / img.xxx.com / pics.xxx.com
       "-img.", "img.", "pics.", "photo.", "static.",
       // OSS / 对象存储（阿里云 OSS、腾讯云 COS 等）
       ".aliyuncs.com", ".myqcloud.com", ".oss-cn-", ".cos.ap-",
+      // 通用图片 CDN 标记：URL 带 optimizer=image 的通常是图片 CDN 的无扩展名 URL
+      "optimizer=image",
     ];
-    if (!cdnPatterns.some(p => lower.includes(p))) return false;
+    // 注意：这里用原始 url (含 query) 检查 optimizer=image，其余用 lower (去 query)
+    if (!cdnPatterns.some(p => (p === "optimizer=image" ? url.toLowerCase().includes(p) : lower.includes(p)))) return false;
   }
   if (FILTERED_IMG_KEYWORDS.some(kw => lower.includes(kw))) return false;
   return true;
