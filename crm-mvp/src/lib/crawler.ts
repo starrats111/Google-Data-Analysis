@@ -638,7 +638,7 @@ export async function crawlViaSitemap(url: string): Promise<{ links: { url: stri
 // ══════════════════════════════════════════════════════
 // activestorage/representations/redirect 是 Rails Active Storage 的有时效签名跳转链接，
 // 写入 DB 后数小时内过期，图片代理访问后会返回 403/404，必须在爬取阶段过滤掉。
-const JUNK_IMG_PATTERN = /(?:\.gif(?:\?|$)|\.svg(?:\?|$)|\/(?:pixel|spacer|blank|1x1|clear)\.|(?:_|-)(?:16|24|32|48|64|72|96|128)x|\/(?:icon|logo|badge|flag|symbol|picto|bullet)s?[/_\-.]|\/emoji\/|gravatar\.com|\.ico(?:\?|$)|activestorage\/representations\/redirect\/)/i;
+const JUNK_IMG_PATTERN = /(?:\.gif(?:\?|$)|\.svg(?:\?|$)|\.woff2?(?:\?|$)|\.ttf(?:\?|$)|\.otf(?:\?|$)|\.eot(?:\?|$)|\/(?:pixel|spacer|blank|1x1|clear)\.|(?:_|-)(?:16|24|32|48|64|72|96|128)x|\/(?:icon|logo|badge|flag|symbol|picto|bullet)s?[/_\-.]|\/emoji\/|gravatar\.com|\.ico(?:\?|$)|activestorage\/representations\/redirect\/)/i;
 
 const FILTERED_IMG_KEYWORDS = [
   "icon", "logo", "svg+xml", "pixel", "spacer", "blank", "1x1",
@@ -665,6 +665,8 @@ const FILTERED_IMG_KEYWORDS = [
   // 常见 UI 静态资源文件名（不含路径，覆盖各类 CDN 的 /static/ UI 图标）
   "chevron", "diagonal-line", "diagonal_line",
   "blossom.png", "blossom.webp",
+  // 字体/非图片资源路径关键字（配合 JUNK_IMG_PATTERN 双重兜底）
+  "/hosted-fonts/", "/fonts/", "/webfonts/",
   "-confirmation.", "_confirmation.",
   "-concierge.", "_concierge.",
   "private-option", "private_option",
