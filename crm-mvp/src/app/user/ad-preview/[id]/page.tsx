@@ -2386,29 +2386,6 @@ export default function AdPreviewPage() {
               )}
             </div>
 
-            {/* 批量生成按钮：勾选后一键 AI 生成所有可选扩展 */}
-            {(enableCallouts || enablePromotion || enablePrice || enableCall || enableSnippet) && (
-              <>
-                <Divider style={{ margin: "12px 0" }} />
-                <Button
-                  type="primary"
-                  icon={<ReloadOutlined />}
-                  loading={calloutsLoading || promotionLoading || priceLoading || callLoading || snippetLoading}
-                  onClick={() => {
-                    const types: Array<"callouts" | "promotion" | "price" | "call" | "snippet"> = [];
-                    if (enableCallouts) types.push("callouts");
-                    if (enablePromotion) types.push("promotion");
-                    if (enablePrice) types.push("price");
-                    if (enableCall) types.push("call");
-                    if (enableSnippet) types.push("snippet");
-                    if (types.length > 0) generateExtension(...types);
-                  }}
-                  block
-                >
-                  一键生成已勾选的可选扩展
-                </Button>
-              </>
-            )}
           </Card>}
 
           {/* 步骤 2 返回 */}
