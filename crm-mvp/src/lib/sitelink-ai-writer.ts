@@ -206,7 +206,7 @@ function buildOne(
   const aiDesc2 = ai?.desc2 && typeof ai.desc2 === "string" ? cleanDesc(ai.desc2) : "";
   const desc2Check = aiDesc2.length >= 2 && aiDesc2.length <= 45 && aiDesc2.toLowerCase() !== aiDesc1.toLowerCase();
   // #region agent log
-  fetch('http://127.0.0.1:7366/ingest/05d05002-39c6-4179-a54f-bba78c014ee4',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'bc879e'},body:JSON.stringify({sessionId:'bc879e',location:'sitelink-ai-writer.ts:buildOne',message:'desc2 check',data:{url:c.url,brand,aiDesc2,aiDesc2Len:aiDesc2.length,aiDesc1,desc2Check,failReason:!desc2Check?(aiDesc2.length<2?'too_short':aiDesc2.length>45?'too_long':'dup_desc1'):'ok'},timestamp:Date.now(),hypothesisId:'A-B-C'})}).catch(()=>{});
+  console.warn(`[bc879e][buildOne] url=${c.url} brand=${JSON.stringify(brand)} aiDesc2=${JSON.stringify(aiDesc2)} aiDesc2Len=${aiDesc2.length} desc2Check=${desc2Check} failReason=${!desc2Check?(aiDesc2.length<2?'too_short':aiDesc2.length>45?'too_long':'dup_desc1'):'ok'} aiDesc1=${JSON.stringify(aiDesc1)}`);
   // #endregion
   const desc2Raw =
     desc2Check
