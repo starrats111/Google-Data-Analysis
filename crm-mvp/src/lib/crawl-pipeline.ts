@@ -1578,8 +1578,10 @@ export async function buildCrawlCache(
   if (crawlQuality.score < QUALITY_THRESHOLD && crawlResult.method !== "puppeteer" && merchantUrl) {
     console.log(`[CrawlPipeline] 质量不足（score=${crawlQuality.score}），启动 Puppeteer 补充抓取`);
     try {
-      const puppeteerTarget = localeUrl ?? merchantUrl;
-      puppeteerCache = await crawlWithPuppeteerFull(puppeteerTarget, 30000, puppeteerProxyUrl ?? undefined);
+      // F-13 fix: 质量补充必须爬根 URL（merchantUrl），根页面懒加载更多产品图（100张）。
+      // 用 localeUrl（如 /en-us/）会得到少得多的页面内容（31张），因为该子页面渲染不完整。
+      const puppeteerTarget = merchantUrl;
+      puppeteerCache = await crawlWithPuppeteerFull(puppeteerTarget, 40000, puppeteerProxyUrl ?? undefined);
       if (puppeteerCache) {
         const httpHtmlLen = html?.length ?? 0;
         if (!html || puppeteerCache.html.length > httpHtmlLen + 5000) {
@@ -1602,8 +1604,8 @@ export async function buildCrawlCache(
     // 即使质量已达标，图片或链接仍不足时，用 Puppeteer 补充数据（不替换 HTML）
     console.log(`[CrawlPipeline] 数据尚不充足（images=${crawlResult.images.length}, links=${crawlResult.links.length}），Puppeteer 补充图片/链接`);
     try {
-      const puppeteerTarget = localeUrl ?? merchantUrl;
-      puppeteerCache = await crawlWithPuppeteerFull(puppeteerTarget, 30000, puppeteerProxyUrl ?? undefined);
+      const puppeteerTarget = merchantUrl; // 同 F-13 fix：用根 URL 获得更完整的懒加载内容
+      puppeteerCache = await crawlWithPuppeteerFull(puppeteerTarget, 40000, puppeteerProxyUrl ?? undefined);
       if (puppeteerCache) {
         const httpHtmlLen = html?.length ?? 0;
         if (!html || puppeteerCache.html.length > httpHtmlLen + 5000) {
