@@ -451,6 +451,27 @@ export async function POST(req: NextRequest) {
         if (types.includes("core")) {
           const confirmedKeywords = Array.isArray(requestKeywords) ? (requestKeywords as string[]).filter(Boolean).slice(0, 10) : [];
           tasks.push(generateCore(cache!, merchantName, merchantUrl, country, adSettings, aiRuleProfile, adCreativeId, send, ad_language, confirmedKeywords));
+
+          // F-15: 图片提取独立于 AI 生成流程，并行运行，避免 AI/OCR 异常导致图片丢失
+          tasks.push((async () => {
+            try {
+              const rawImgs = cache!.images || [];
+              const images = rawImgs.length > 0
+                ? await selectBestImages(rawImgs, merchantUrl, { pageText: cache!.pageText, features: cache!.features })
+                : [];
+              send("images", images);
+              if (adCreativeId && images.length > 0) {
+                await prisma.ad_creatives.update({
+                  where: { id: adCreativeId },
+                  data: { image_urls: images as any },
+                }).catch((e) => console.warn("[Extensions] image_urls 写入失败:", e instanceof Error ? e.message : e));
+              }
+              console.warn(`[Extensions] 图片提取完成: ${images.length} 张 (raw=${rawImgs.length})`);
+            } catch (imgErr) {
+              console.warn("[Extensions] 图片提取异常（不阻断生成）:", imgErr instanceof Error ? imgErr.message : imgErr);
+              send("images", []);
+            }
+          })());
         }
 
         if (types.includes("optional")) {
@@ -1024,19 +1045,6 @@ ${isNonEnglish ? `\n⚠️ FINAL REMINDER: ALL headlines and descriptions MUST b
       console.error("[Core] Fallback 也失败:", fallbackErr);
       send("headlines", []); send("descriptions", []);
     }
-  }
-
-  // 图片筛选：社交域名 + 促销URL过滤 + 商家同域优先
-  const images = await selectBestImages(cache.images, merchantUrl, {
-    pageText: cache.pageText,
-    features: cache.features,
-  });
-  send("images", images);
-  if (adCreativeId) {
-    await prisma.ad_creatives.update({
-      where: { id: adCreativeId },
-      data: { image_urls: images as any },
-    }).catch(() => {});
   }
 
   // C-016: 等独立 sitelink pipeline 完成（确保 SSE 在 stream 关闭前推送完 sitelinks）
