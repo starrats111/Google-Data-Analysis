@@ -31,11 +31,13 @@ export interface SemRushKeyword {
   cpc?: number | null;
   competition?: string | number | null;
   suggested_bid?: number | null;
+  trafficPercent?: number | null;
 }
 
 export interface SemRushResult {
   domain: string;
   keywords: SemRushKeyword[];
+  paidKeywords: SemRushKeyword[];
   adsOverview: { title: string; description: string }[];
   copies: { date: string; total: number; samples: { title: string; description: string }[] };
   creativeSamples: { title: string; description: string }[];
@@ -305,6 +307,7 @@ function parseKeywordRow(r: any): SemRushKeyword {
         : r.cpc != null
           ? Number(r.cpc)
           : null,
+    trafficPercent: r.trafficPercent != null ? Number(r.trafficPercent) : null,
   };
 }
 
@@ -724,6 +727,10 @@ export class SemRushClient {
 
     const adsRows = byId.get(14)?.result || [];
     const ads = adsRows.slice(0, 20).map((r: any) => ({ title: r.title || "", description: r.description || "" }));
+    const paidKws = adsRows
+      .slice(0, 50)
+      .map((r: any) => parseKeywordRow(r))
+      .filter((kw) => kw.phrase);
 
     const reportToken = String(byId.get(11)?.result?.token || "");
     const dateStr = normalizeReportDate(String(byId.get(2)?.result?.daily?.[0] || ""));
@@ -767,6 +774,7 @@ export class SemRushClient {
     const result: SemRushResult = {
       domain,
       keywords: kws,
+      paidKeywords: paidKws,
       adsOverview: ads,
       copies: copiesData,
       creativeSamples,

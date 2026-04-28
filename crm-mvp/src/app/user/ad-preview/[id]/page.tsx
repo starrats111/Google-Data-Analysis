@@ -82,6 +82,7 @@ interface KeywordItem {
   suggestedBid?: number | null;
   competitionBand?: string;
   intentLayer?: string | null;
+  source?: string | null;
 }
 
 interface AdPreviewData {
@@ -540,6 +541,7 @@ export default function AdPreviewPage() {
         suggestedBid: kw.suggested_bid != null ? Number(kw.suggested_bid) : kw.cpc != null ? Number(kw.cpc) : null,
         competitionBand: kw.competition_band || "",
         intentLayer: kw.intent_layer || kw.intentLayer || null,
+        source: kw.source || null,
       }));
   };
 
@@ -577,7 +579,12 @@ export default function AdPreviewPage() {
       const newKws = mergeSemrushKeywords(kws, kwList);
       if (newKws.length > 0) {
         setKwList((prev) => [...prev, ...newKws]);
-        message.success(`已从 SemRush 获取 ${newKws.length} 个关键词（从 ${rawCount} 个有机排名中精选）`);
+        const paidCount = newKws.filter((k) => k.source === "semrush_paid").length;
+        const aiCount = newKws.filter((k) => k.source === "ai_generated").length;
+        const parts: string[] = [];
+        if (paidCount > 0) parts.push(`${paidCount} 个付费词`);
+        if (aiCount > 0) parts.push(`${aiCount} 个 AI 词`);
+        message.success(`已获取 ${newKws.length} 个关键词（${parts.join(" + ")}）`);
       } else {
         message.info("SemRush 关键词已全部存在");
       }
@@ -1672,6 +1679,8 @@ export default function AdPreviewPage() {
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center", marginBottom: 4 }}>
                       <Text strong>{kw.matchType === "EXACT" ? `[${kw.text}]` : kw.matchType === "PHRASE" ? `"${kw.text}"` : kw.text}</Text>
+                      {kw.source === "semrush_paid" && <Tag color="volcano" style={{ margin: 0, fontSize: 11 }}>SEMrush付费</Tag>}
+                      {kw.source === "ai_generated" && <Tag color="geekblue" style={{ margin: 0, fontSize: 11 }}>AI生成</Tag>}
                       {kw.intentLayer && (() => {
                         const intentMap: Record<string, { label: string; color: string }> = {
                           HIGH_INTENT: { label: "高购买意图", color: "red" },
