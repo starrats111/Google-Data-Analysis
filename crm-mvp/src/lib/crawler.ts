@@ -2020,10 +2020,11 @@ export async function crawlPage(url: string, country?: string): Promise<CrawlRes
   }
 
   // 3. Puppeteer 渲染（处理 JS 动态站点）
+  // 注意：必须传入 proxyUrl，否则 Chromium 走服务器本地 DNS，对部分国际域名会 SERVFAIL 挂死
   const difficulty = httpResult?.difficulty || "medium";
-  console.log(`[Crawler] 站点难度: ${difficulty}，启用 Puppeteer 渲染`);
+  console.log(`[Crawler] 站点难度: ${difficulty}，启用 Puppeteer 渲染${proxyUrl ? "（代理）" : ""}`);
 
-  const puppeteerHtml = await crawlPageWithPuppeteer(url, 35000);
+  const puppeteerHtml = await crawlPageWithPuppeteer(url, 35000, proxyUrl ?? undefined);
   if (puppeteerHtml) {
     const { links, images } = extractLinksAndImages(puppeteerHtml, url);
     if (links.length > 0 || images.length > 0) {
@@ -2035,7 +2036,7 @@ export async function crawlPage(url: string, country?: string): Promise<CrawlRes
   // 困难站点：Puppeteer 重试一次（增加超时）
   if (difficulty === "hard") {
     console.log("[Crawler] Puppeteer 首次无结果，困难站点增加超时重试...");
-    const retryHtml = await crawlPageWithPuppeteer(url, 50000);
+    const retryHtml = await crawlPageWithPuppeteer(url, 50000, proxyUrl ?? undefined);
     if (retryHtml) {
       const { links, images } = extractLinksAndImages(retryHtml, url);
       if (links.length > 0 || images.length > 0) {
