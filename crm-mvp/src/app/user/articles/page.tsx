@@ -1,11 +1,12 @@
 "use client";
 
 import { useState, useEffect, useCallback, useMemo } from "react";
+import dayjs, { Dayjs } from "dayjs";
 import {
-  Card, Table, Tag, Button, Space, Select, Modal, Form, Typography, Popconfirm, App, Input,
+  Card, Table, Tag, Button, Space, Select, Modal, Form, Typography, Popconfirm, App, Input, DatePicker,
 } from "antd";
 import {
-  UnorderedListOutlined, DeleteOutlined, EyeOutlined, SendOutlined, CopyOutlined, LinkOutlined, SearchOutlined, ReloadOutlined,
+  UnorderedListOutlined, DeleteOutlined, EyeOutlined, SendOutlined, CopyOutlined, LinkOutlined, SearchOutlined, ReloadOutlined, CalendarOutlined,
 } from "@ant-design/icons";
 import { sanitizeHtml, proxifyImgSrcs } from "@/lib/sanitize";
 import PublishSiteSelect from "@/components/PublishSiteSelect";
@@ -47,6 +48,11 @@ export default function ArticlesPage() {
   const [publishArticle, setPublishArticle] = useState<Article | null>(null);
   const [publishForm] = Form.useForm();
   const [publishing, setPublishing] = useState(false);
+  // 修改日期
+  const [dateModal, setDateModal] = useState(false);
+  const [dateArticle, setDateArticle] = useState<Article | null>(null);
+  const [dateValue, setDateValue] = useState<Dayjs>(dayjs());
+  const [updatingDate, setUpdatingDate] = useState(false);
 
   const fetchArticles = useCallback(async () => {
     setLoading(true);
@@ -84,9 +90,14 @@ export default function ArticlesPage() {
     setPublishing(true);
     message.loading({ content: "正在发布，图片处理中，请耐心等待...", key: "publish", duration: 0 });
     try {
+      const publishTime: Dayjs = values.publish_time || dayjs();
       const res = await fetch("/api/user/articles/publish-to-site", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ article_id: publishArticle?.id, site_id: values.publish_site_id }),
+        body: JSON.stringify({
+          article_id: publishArticle?.id,
+          site_id: values.publish_site_id,
+          publish_time: publishTime.toISOString(),
+        }),
         signal: AbortSignal.timeout(180000),
       }).then((r) => r.json());
       if (res.code === 0) {
@@ -102,6 +113,34 @@ export default function ArticlesPage() {
       message.error({ content: errMsg, key: "publish" });
     } finally {
       setPublishing(false);
+    }
+  };
+
+  const handleEditDate = (article: Article) => {
+    setDateArticle(article);
+    setDateValue(article.published_at ? dayjs(article.published_at) : dayjs());
+    setDateModal(true);
+  };
+
+  const submitEditDate = async () => {
+    if (!dateArticle) return;
+    setUpdatingDate(true);
+    try {
+      const res = await fetch("/api/user/articles/publish-to-site", {
+        method: "PATCH", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ article_id: dateArticle.id, publish_time: dateValue.toISOString() }),
+      }).then((r) => r.json());
+      if (res.code === 0) {
+        message.success("发布时间已更新");
+        setDateModal(false);
+        fetchArticles();
+      } else {
+        message.error(res.message || "更新失败");
+      }
+    } catch {
+      message.error("请求失败");
+    } finally {
+      setUpdatingDate(false);
     }
   };
 
@@ -182,6 +221,9 @@ export default function ArticlesPage() {
           )}
           {(record.status === "preview" || record.status === "draft") && (
             <Button size="small" type="primary" icon={<SendOutlined />} onClick={() => handlePublish(record)}>发布</Button>
+          )}
+          {record.status === "published" && (
+            <Button size="small" icon={<CalendarOutlined />} onClick={() => handleEditDate(record)}>修改日期</Button>
           )}
           <Popconfirm title="确认删除？" onConfirm={() => handleDelete(record.id)}>
             <Button size="small" danger icon={<DeleteOutlined />}>删除</Button>
@@ -284,12 +326,37 @@ export default function ArticlesPage() {
               placeholder="搜索站点名或域名"
             />
           </Form.Item>
+          <Form.Item name="publish_time" label="发布时间" initialValue={dayjs()}>
+            <DatePicker showTime style={{ width: "100%" }} disabled={publishing} />
+          </Form.Item>
         </Form>
         {publishing && (
           <div style={{ color: "#888", fontSize: 12, marginTop: 8 }}>
             发布过程包含图片下载和本地化处理，可能需要 30-60 秒，请勿关闭此窗口。
           </div>
         )}
+      </Modal>
+
+      {/* 修改发布日期弹窗 */}
+      <Modal
+        title="修改文章发布日期"
+        open={dateModal}
+        onOk={submitEditDate}
+        onCancel={() => !updatingDate && setDateModal(false)}
+        confirmLoading={updatingDate}
+        okText="确认修改"
+        cancelButtonProps={{ disabled: updatingDate }}
+      >
+        <div style={{ marginBottom: 8, color: "#666", fontSize: 13 }}>
+          修改后将同步更新站点上的文章显示日期。
+        </div>
+        <DatePicker
+          showTime
+          value={dateValue}
+          onChange={(v) => v && setDateValue(v)}
+          style={{ width: "100%" }}
+          disabled={updatingDate}
+        />
       </Modal>
     </div>
   );

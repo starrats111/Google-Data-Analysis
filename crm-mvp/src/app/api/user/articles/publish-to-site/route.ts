@@ -2,7 +2,7 @@ import { NextRequest } from "next/server";
 import { getUserFromRequest, serializeData } from "@/lib/auth";
 import { apiSuccess, apiError } from "@/lib/constants";
 import prisma from "@/lib/prisma";
-import { publishArticleToSite, unpublishArticleFromSite } from "@/lib/remote-publisher";
+import { publishArticleToSite, unpublishArticleFromSite, updateArticleDateOnSite } from "@/lib/remote-publisher";
 
 // POST — 发布文章到站点（SSH 推送文件到宝塔）
 export async function POST(req: NextRequest) {
@@ -17,8 +17,12 @@ export async function POST(req: NextRequest) {
       return apiError("请求体解析失败", 400);
     }
 
-    const { article_id, site_id } = body as { article_id?: string; site_id?: string };
+    const { article_id, site_id, publish_time } = body as { article_id?: string; site_id?: string; publish_time?: string };
     if (!article_id || !site_id) return apiError("缺少文章 ID 或站点 ID");
+
+    // 解析用户指定的发布时间（无效时降级为当前时间）
+    const publishDate = publish_time ? new Date(publish_time) : new Date();
+    const resolvedDate = isNaN(publishDate.getTime()) ? new Date() : publishDate;
 
     // 查询文章
     const article = await prisma.articles.findFirst({
@@ -59,7 +63,8 @@ export async function POST(req: NextRequest) {
         article_var_name: site.article_var_name,
         article_html_pattern: site.article_html_pattern,
         domain: site.domain,
-      }
+      },
+      resolvedDate,
     );
 
     if (!result.success) {
@@ -73,7 +78,7 @@ export async function POST(req: NextRequest) {
         publish_site_id: BigInt(site_id),
         slug,
         status: "published",
-        published_at: new Date(),
+        published_at: resolvedDate,
         published_url: result.url || null,
         content: result.updatedContent || article.content,
       },
@@ -143,5 +148,64 @@ export async function DELETE(req: NextRequest) {
   } catch (err) {
     console.error("[PublishToSite] DELETE 异常:", err);
     return apiError("撤回文章失败，请稍后重试", 500);
+  }
+}
+
+// PATCH — 修改已发布文章的显示日期（不重新发布全文）
+export async function PATCH(req: NextRequest) {
+  try {
+    const user = getUserFromRequest(req);
+    if (!user) return apiError("未授权", 401);
+
+    let body: Record<string, unknown>;
+    try {
+      body = await req.json();
+    } catch {
+      return apiError("请求体解析失败", 400);
+    }
+
+    const { article_id, publish_time } = body as { article_id?: string; publish_time?: string };
+    if (!article_id || !publish_time) return apiError("缺少文章 ID 或发布时间");
+
+    const resolvedDate = new Date(publish_time);
+    if (isNaN(resolvedDate.getTime())) return apiError("发布时间格式无效");
+
+    const article = await prisma.articles.findFirst({
+      where: { id: BigInt(article_id), user_id: BigInt(user.userId), is_deleted: 0 },
+      select: { id: true, publish_site_id: true, slug: true, status: true },
+    });
+    if (!article) return apiError("文章不存在", 404);
+
+    // 更新 DB published_at
+    await prisma.articles.update({
+      where: { id: BigInt(article_id) },
+      data: { published_at: resolvedDate },
+    });
+
+    // 若文章已发布到站点，同步更新站点上的文章日期
+    if (article.publish_site_id) {
+      const site = await prisma.publish_sites.findFirst({
+        where: { id: article.publish_site_id, is_deleted: 0 },
+      });
+      if (site?.site_path && site.domain) {
+        await updateArticleDateOnSite(
+          String(article.id),
+          {
+            site_path: site.site_path,
+            site_type: site.site_type,
+            data_js_path: site.data_js_path,
+            article_var_name: site.article_var_name,
+            article_html_pattern: site.article_html_pattern,
+            domain: site.domain,
+          },
+          resolvedDate,
+        ).catch((e) => console.warn("[PublishToSite] PATCH 站点日期更新失败（不阻断）:", e));
+      }
+    }
+
+    return apiSuccess(null, "发布时间已更新");
+  } catch (err) {
+    console.error("[PublishToSite] PATCH 异常:", err);
+    return apiError("修改发布时间失败，请稍后重试", 500);
   }
 }

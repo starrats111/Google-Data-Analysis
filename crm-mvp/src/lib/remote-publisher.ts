@@ -1898,7 +1898,8 @@ export async function verifyArticlePresenceOnSite(
 
 export async function publishArticleToSite(
   article: ArticlePayload,
-  site: SiteConfig
+  site: SiteConfig,
+  publishDate?: Date,
 ): Promise<{ success: boolean; url?: string; error?: string; updatedContent?: string }> {
   let client: Client | null = null;
   try {
@@ -1952,7 +1953,7 @@ export async function publishArticleToSite(
       console.warn(`[Publisher] 文章 ${article.id} 未找到头图`);
     }
 
-    const now = new Date();
+    const now = publishDate instanceof Date && !isNaN(publishDate.getTime()) ? publishDate : new Date();
     const dateLabel = now.toLocaleDateString("en-US", {
       timeZone: "Asia/Shanghai",
       year: "numeric",
@@ -2168,3 +2169,62 @@ export async function unpublishArticleFromSite(
   }
 }
 
+/**
+ * 轻量更新已发布文章的显示日期（不重新发布全文内容）。
+ * 仅修改 js/articles/{id}.json 的 date 字段 + articles-index.js 对应条目的 date 字段。
+ */
+export async function updateArticleDateOnSite(
+  articleId: string,
+  site: SiteConfig,
+  publishDate: Date,
+): Promise<{ success: boolean; error?: string }> {
+  let client: import("ssh2").Client | null = null;
+  try {
+    client = await connectSSH();
+    const sftp = await getSFTP(client);
+    const siteRoot = site.site_path;
+
+    const dateLabel = publishDate.toLocaleDateString("en-US", {
+      timeZone: "Asia/Shanghai",
+      year: "numeric",
+      month: "short",
+      day: "numeric",
+    });
+
+    // 1. 更新 js/articles/{id}.json 中的 date 字段
+    const articleJsonPath = `${siteRoot}/js/articles/${articleId}.json`;
+    try {
+      const raw = await sftpReadFile(sftp, articleJsonPath);
+      const obj = JSON.parse(raw) as Record<string, unknown>;
+      obj.date = dateLabel;
+      await sftpWriteFile(sftp, articleJsonPath, JSON.stringify(obj));
+    } catch {
+      // 文章 JSON 不存在时忽略（可能未使用静态 JSON 模式）
+    }
+
+    // 2. 更新 articles-index.js 中对应条目的 date 字段
+    const dataJsPath = site.data_js_path || "js/articles-index.js";
+    const varName = site.article_var_name || "articlesIndex";
+    const fullDataPath = `${siteRoot}/${dataJsPath}`;
+    try {
+      const dataContent = await sftpReadFile(sftp, fullDataPath);
+      const existing = parseJsArrayLiteral(dataContent, varName);
+      if (existing) {
+        const idx = existing.findIndex((e) => String(e.id) === articleId);
+        if (idx >= 0) {
+          existing[idx] = { ...existing[idx], date: dateLabel, dateISO: publishDate.toISOString().slice(0, 10), dateLabel };
+          const newContent = `${buildArrayAssignmentStatement(varName, existing)}\n`;
+          await sftpWriteFile(sftp, fullDataPath, newContent);
+        }
+      }
+    } catch {
+      // 索引文件操作失败时不阻断
+    }
+
+    client.end();
+    return { success: true };
+  } catch (err) {
+    client?.end();
+    return { success: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}

@@ -508,6 +508,7 @@ export default function ArticlePublishPage() {
         body: JSON.stringify({
           article_id: articlePreview.id,
           site_id: selectedSite,
+          publish_time: publishTime.toISOString(),
         }),
       }).then((r) => r.json());
 
