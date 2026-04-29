@@ -332,6 +332,7 @@ model keywords {
   avg_monthly_searches Int?     @db.UnsignedInt
   competition          String?  @db.VarChar(16)
   suggested_bid        Decimal? @db.Decimal(10, 2)
+  source               String?  @db.VarChar(32)   // semrush_paid / ai_generated / null(旧数据)
   is_deleted           Int      @default(0) @db.TinyInt
   created_at           DateTime @default(now()) @db.DateTime(0)
   updated_at           DateTime @default(now()) @updatedAt @db.DateTime(0)

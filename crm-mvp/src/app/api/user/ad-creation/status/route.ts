@@ -2,7 +2,6 @@ import { NextRequest } from "next/server";
 import { getUserFromRequest, serializeData } from "@/lib/auth";
 import { apiSuccess, apiError } from "@/lib/constants";
 import prisma from "@/lib/prisma";
-import { mapStoredKeywordsForClient } from "@/lib/ad-keyword-pipeline";
 
 /**
  * GET /api/user/ad-creation/status?campaign_id=xxx
@@ -53,6 +52,7 @@ export async function GET(req: NextRequest) {
     avg_monthly_searches: number | null;
     competition: string | null;
     suggested_bid: unknown;
+    source: string | null;
   }[] = [];
   if (adGroup) {
     const [creative, kws] = await Promise.all([
@@ -61,7 +61,7 @@ export async function GET(req: NextRequest) {
       }),
       prisma.keywords.findMany({
         where: { ad_group_id: adGroup.id, is_deleted: 0 },
-        select: { id: true, keyword_text: true, match_type: true, avg_monthly_searches: true, competition: true, suggested_bid: true },
+        select: { id: true, keyword_text: true, match_type: true, avg_monthly_searches: true, competition: true, suggested_bid: true, source: true },
       }),
     ]);
     adCreative = creative;
@@ -74,13 +74,6 @@ export async function GET(req: NextRequest) {
 
   const zhH = ((adCreative as any)?.headlines_zh as string[]) || [];
   const zhD = ((adCreative as any)?.descriptions_zh as string[]) || [];
-  const keywordView = mapStoredKeywordsForClient(keywords, {
-    merchantName: merchant?.merchant_name || "",
-    dailyBudget: Number(campaign.daily_budget || adSettings?.daily_budget || 1.5),
-    maxCpc: Number(campaign.max_cpc_limit || adSettings?.max_cpc || 0.3),
-    biddingStrategy: campaign.bidding_strategy || adSettings?.bidding_strategy || "MAXIMIZE_CLICKS",
-    aiRuleProfile: (adSettings as any)?.ai_rule_profile,
-  });
 
   return apiSuccess(serializeData({
     campaign: {
@@ -115,7 +108,15 @@ export async function GET(req: NextRequest) {
       // 爬虫检测到的实际页面语言（存在时比 language_id 国家默认更精准）
       detectedLanguageCode: (adCreative.crawl_cache as any)?.detectedLanguageCode ?? null,
     } : null,
-    keywords: keywordView,
+    keywords: keywords.map((k) => ({
+      id: k.id,
+      keyword_text: k.keyword_text,
+      match_type: k.match_type,
+      avg_monthly_searches: k.avg_monthly_searches ?? null,
+      competition: k.competition ?? null,
+      suggested_bid: k.suggested_bid != null ? Number(k.suggested_bid) : null,
+      source: k.source ?? null,
+    })),
     adSettings: adSettings ? {
       bidding_strategy: adSettings.bidding_strategy,
       max_cpc: adSettings.max_cpc,

@@ -93,13 +93,10 @@ interface AdPreviewData {
     id: string;
     keyword_text: string;
     match_type: string;
-    score?: number;
-    reason?: string;
     avg_monthly_searches?: number | null;
     competition?: string | null;
     suggested_bid?: number | null;
-    competition_band?: string;
-    recommended_match_type?: string;
+    source?: string | null;
   }>;
   adSettings: any;
   merchant: any;
@@ -296,12 +293,10 @@ export default function AdPreviewPage() {
       id: k.id,
       text: k.keyword_text,
       matchType: k.match_type,
-      score: k.score ?? null,
-      reason: k.reason || "",
       avgMonthlySearches: k.avg_monthly_searches ?? null,
       competition: k.competition ?? null,
       suggestedBid: k.suggested_bid != null ? Number(k.suggested_bid) : null,
-      competitionBand: k.competition_band || "",
+      source: k.source ?? null,
     })));
     const c = preview.campaign;
     const s = preview.adSettings;
@@ -578,13 +573,20 @@ export default function AdPreviewPage() {
       if (kws.length === 0) { message.warning("SemRush 未找到该商家的关键词，请手动输入"); return; }
       const newKws = mergeSemrushKeywords(kws, kwList);
       if (newKws.length > 0) {
-        setKwList((prev) => [...prev, ...newKws]);
+        const merged = [...kwList, ...newKws];
+        setKwList(merged);
         const paidCount = newKws.filter((k) => k.source === "semrush_paid").length;
         const aiCount = newKws.filter((k) => k.source === "ai_generated").length;
         const parts: string[] = [];
         if (paidCount > 0) parts.push(`${paidCount} 个付费词`);
         if (aiCount > 0) parts.push(`${aiCount} 个 AI 词`);
         message.success(`已获取 ${newKws.length} 个关键词（${parts.join(" + ")}）`);
+        // 自动持久化到 DB（替换旧关键词）
+        fetch("/api/user/ad-creation/keywords", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ campaign_id: campaignId, keywords: merged }),
+        }).catch(() => {/* 静默失败，不影响UI */});
       } else {
         message.info("SemRush 关键词已全部存在");
       }
@@ -594,7 +596,7 @@ export default function AdPreviewPage() {
     } finally {
       setKwFetching(false);
     }
-  }, [preview, kwList, message, budget, maxCpc, biddingStrategy]);
+  }, [preview, kwList, campaignId, message, budget, maxCpc, biddingStrategy]);
 
   // ─── 初始化后自动拉取关键词（DB 无关键词时兜底：后台任务未完成 / SemRush 失败） ───
   useEffect(() => {
@@ -630,10 +632,17 @@ export default function AdPreviewPage() {
       if (kws.length === 0) { message.warning("未从该链接获取到关键词，请手动输入"); return; }
       const newKws = mergeSemrushKeywords(kws, kwList);
       if (newKws.length > 0) {
-        setKwList((prev) => [...prev, ...newKws]);
+        const merged = [...kwList, ...newKws];
+        setKwList(merged);
         setSemrushFailed(false);
         setSemrushUrl("");
         message.success(`已从链接获取 ${newKws.length} 个关键词`);
+        // 自动持久化到 DB
+        fetch("/api/user/ad-creation/keywords", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ campaign_id: campaignId, keywords: merged }),
+        }).catch(() => {/* 静默失败 */});
       } else {
         message.info("关键词已全部存在");
       }
@@ -642,7 +651,7 @@ export default function AdPreviewPage() {
     } finally {
       setSemrushUrlFetching(false);
     }
-  }, [semrushUrl, preview, kwList, message, budget, maxCpc, biddingStrategy]);
+  }, [semrushUrl, preview, kwList, campaignId, message, budget, maxCpc, biddingStrategy]);
 
   // ─── MCC/CID 操作 ───
   const loadCidList = useCallback(async (mccAccountId: string) => {

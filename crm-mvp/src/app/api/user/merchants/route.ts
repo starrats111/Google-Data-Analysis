@@ -4,7 +4,7 @@ import { apiSuccess, apiError } from "@/lib/constants";
 import { withUser } from "@/lib/api-handler";
 import prisma from "@/lib/prisma";
 import { buildDraftCampaignName } from "@/lib/campaign-naming";
-import { buildKeywordCreateManyInput, selectOptimizedKeywords } from "@/lib/ad-keyword-pipeline";
+import { buildKeywordCreateManyInput } from "@/lib/ad-keyword-pipeline";
 
 // 国家 → Google Ads 语言代码（创建 campaign 时自动设置）
 const COUNTRY_TO_LANG_CODE: Record<string, string> = {
@@ -803,33 +803,38 @@ async function triggerAdCopyGeneration(
 
     let dedupedTitles: string[] = [];
     let dedupedDescriptions: string[] = [];
-    let keywords: Array<{ phrase: string; volume: number; competition?: string | number | null; suggested_bid?: number | null; cpc?: number | null }> = [];
+    let paidKeywordsForDb: Array<{ phrase: string; volume: number; competition?: string | number | null; suggested_bid?: number | null; cpc?: number | null; source: string; recommended_match_type: string }> = [];
 
     if (merchantUrl) {
       try {
+        const { isPolicyRiskKeyword } = await import("@/lib/keyword-optimizer");
         const client = await SemRushClient.fromConfig(country);
         const result = await client.queryDomain(merchantUrl);
         dedupedTitles = result.dedupedTitles;
         dedupedDescriptions = result.dedupedDescriptions;
-        keywords = result.keywords;
-        console.log(`[DataCollect] SemRush 获取成功: ${dedupedTitles.length} 标题, ${dedupedDescriptions.length} 描述, ${keywords.length} 关键词`);
+        // 从付费关键词中按 trafficPercent × volume 取 top 2，带 source 标记
+        paidKeywordsForDb = result.paidKeywords
+          .filter((kw) => kw.phrase && !isPolicyRiskKeyword(kw.phrase))
+          .sort((a, b) => ((b.trafficPercent ?? 0) * (b.volume ?? 0)) - ((a.trafficPercent ?? 0) * (a.volume ?? 0)))
+          .slice(0, 2)
+          .map((kw) => ({
+            phrase: kw.phrase,
+            volume: kw.volume ?? 0,
+            competition: kw.competition ?? null,
+            suggested_bid: kw.suggested_bid ?? kw.cpc ?? null,
+            cpc: kw.cpc ?? null,
+            source: "semrush_paid",
+            recommended_match_type: "EXACT",
+          }));
+        console.log(`[DataCollect] SemRush 获取成功: ${dedupedTitles.length} 标题, ${dedupedDescriptions.length} 描述, 付费词 ${paidKeywordsForDb.length} 个`);
       } catch (err) {
         console.warn("[DataCollect] SemRush 获取失败:", err);
       }
     }
 
-    // 关键词写入 DB
-    const optimizedKeywords = selectOptimizedKeywords(keywords, {
-      merchantName,
-      dailyBudget: options.dailyBudget,
-      maxCpc: options.maxCpc,
-      biddingStrategy: options.biddingStrategy,
-      aiRuleProfile: options.aiRuleProfile,
-      limit: 12,
-    });
-
-    const keywordsTask = optimizedKeywords.length > 0
-      ? prisma.keywords.createMany({ data: buildKeywordCreateManyInput(adGroupId, optimizedKeywords) })
+    // 关键词写入 DB（仅付费词，source=semrush_paid）
+    const keywordsTask = paidKeywordsForDb.length > 0
+      ? prisma.keywords.createMany({ data: buildKeywordCreateManyInput(adGroupId, paidKeywordsForDb) })
       : Promise.resolve();
 
     // 爬取主站 + 构建缓存（含站内链接发现、图片收集、特征提取等）

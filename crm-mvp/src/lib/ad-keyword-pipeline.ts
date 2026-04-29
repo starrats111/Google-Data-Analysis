@@ -33,7 +33,7 @@ export function selectOptimizedKeywords(
     .sort((a, b) => b.score - a.score);
 }
 
-export function buildKeywordCreateManyInput(adGroupId: bigint, keywords: OptimizedKeyword[]) {
+export function buildKeywordCreateManyInput(adGroupId: bigint, keywords: (OptimizedKeyword & { source?: string | null })[]) {
   return keywords.map((keyword) => ({
     ad_group_id: adGroupId,
     keyword_text: keyword.phrase,
@@ -41,6 +41,7 @@ export function buildKeywordCreateManyInput(adGroupId: bigint, keywords: Optimiz
     avg_monthly_searches: keyword.volume || null,
     competition: keyword.competition != null ? String(keyword.competition) : null,
     suggested_bid: keyword.suggested_bid ?? keyword.cpc ?? null,
+    source: keyword.source ?? null,
   }));
 }
 
