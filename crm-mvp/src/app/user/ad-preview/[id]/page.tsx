@@ -598,13 +598,16 @@ export default function AdPreviewPage() {
     }
   }, [preview, kwList, campaignId, message, budget, maxCpc, biddingStrategy]);
 
-  // ─── 初始化后自动拉取关键词（DB 无关键词时兜底：后台任务未完成 / SemRush 失败） ───
+  // ─── 初始化后自动拉取关键词 ───
+  // 触发条件：① DB 无关键词，或 ② 所有关键词均为旧格式（source=null，未经过新 SEMrush pipeline）
   useEffect(() => {
-    if (initialized && kwList.length === 0 && !autoFetchKwDone.current) {
+    if (!initialized || autoFetchKwDone.current) return;
+    const hasNewStyleKw = kwList.some((k) => k.source === "semrush_paid" || k.source === "ai_generated");
+    if (kwList.length === 0 || !hasNewStyleKw) {
       autoFetchKwDone.current = true;
       fetchKeywordsFromSemrush();
     }
-  }, [initialized, kwList.length, fetchKeywordsFromSemrush]);
+  }, [initialized, kwList, fetchKeywordsFromSemrush]);
 
   // ─── 通过 3UE 链接获取关键词 ───
   const fetchKeywordsFromUrl = useCallback(async () => {
