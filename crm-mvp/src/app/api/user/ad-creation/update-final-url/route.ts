@@ -58,7 +58,7 @@ export async function PATCH(req: NextRequest) {
     where: { campaign_id: campaign.id, is_deleted: 0 },
     select: { id: true },
   });
-  if (!adGroup) return apiError("广告组不存在");
+  if (!adGroup) return apiError("广告系列正在初始化，请稍等 1 分钟后刷新页面再试");
 
   const adCreative = await prisma.ad_creatives.findFirst({
     where: { ad_group_id: adGroup.id, is_deleted: 0 },

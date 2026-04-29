@@ -1467,6 +1467,17 @@ export default function AdPreviewPage() {
 
   return (
     <div style={{ padding: "16px 24px", maxWidth: 1200, margin: "0 auto" }}>
+      {/* 广告组尚未初始化时的提示 */}
+      {!preview.adGroup && (
+        <Alert
+          type="warning"
+          showIcon
+          style={{ marginBottom: 12 }}
+          message="广告系列正在初始化"
+          description="后台正在准备广告素材，通常需要 1-2 分钟。请稍等后刷新页面，部分操作在初始化完成前暂时不可用。"
+          action={<Button size="small" onClick={() => mutate()}>刷新</Button>}
+        />
+      )}
       {/* 步骤条 */}
       <Card size="small" style={{ marginBottom: 12 }} styles={{ body: { padding: "10px 20px" } }}>
         <Steps
