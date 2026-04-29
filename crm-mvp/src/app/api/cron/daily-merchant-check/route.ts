@@ -234,7 +234,7 @@ async function checkUserMerchants(
   if (statusChangedList.length > 0) {
     const names = statusChangedList.slice(0, 5).map(e => `${e.name}?${e.platform}?`).join("?");
     const suffix = statusChangedList.length > 5 ? ` ? ${statusChangedList.length} ?` : "";
-    const detail = statusChangedList.map(e => `· ${e.name}?${e.platform}?`).join("\n");
+    const detail = statusChangedList.map(e => `Â· ${e.name}?${e.platform}?`).join("\n");
     await prisma.notifications.create({
       data: {
         user_id: userId,
