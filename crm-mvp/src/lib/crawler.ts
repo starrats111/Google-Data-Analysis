@@ -1510,11 +1510,15 @@ export async function crawlWithPuppeteerFull(url: string, timeoutMs = 30000, pro
     });
 
     try {
-      await page.goto(url, { waitUntil: "networkidle2", timeout: timeoutMs });
+      // domcontentloaded：DOM 加载即返回（~3s），无需等待所有异步网络请求静止
+      // 对 Next.js / Shopify 等 SSR 重站比 networkidle2（需等全部请求 ≤2 个，常 >20s）快 5-10 倍
+      await page.goto(url, { waitUntil: "domcontentloaded", timeout: timeoutMs });
     } catch {
       // goto timeout 不致命，页面可能有部分内容
     }
 
+    // goto 后额外等待 2s，让 React/Vue 客户端组件完成首屏渲染（覆盖 SPA 站点）
+    await sleep(2000);
     await randomDelay(1500, 3000);
 
     // --- Cloudflare Turnstile / challenge 等待 ---
