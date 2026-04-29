@@ -1517,8 +1517,8 @@ export async function crawlWithPuppeteerFull(url: string, timeoutMs = 30000, pro
       // goto timeout 不致命，页面可能有部分内容
     }
 
-    // goto 后额外等待 2s，让 React/Vue 客户端组件完成首屏渲染（覆盖 SPA 站点）
-    await sleep(2000);
+    // goto 后额外等待 3s，让 React/Vue 客户端组件完成首屏渲染，也给 IntersectionObserver 等懒加载 JS 时间完成初始化
+    await sleep(3000);
     await randomDelay(1500, 3000);
 
     // --- Cloudflare Turnstile / challenge 等待 ---
@@ -1622,7 +1622,9 @@ export async function crawlWithPuppeteerFull(url: string, timeoutMs = 30000, pro
       }
       await randomDelay(800, 1500);
       await page.evaluate(() => window.scrollTo(0, 0));
-      await sleep(300);
+      // domcontentloaded 下，IntersectionObserver 触发懒加载后图片仍需时间完成 src 更新，
+      // 额外等待 3s 确保 page.content() 能捕获到已更新的 img src
+      await sleep(3000);
     } catch {}
 
     const html = await page.content();
