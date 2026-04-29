@@ -749,27 +749,47 @@ async function syncAllUsersTransactions(): Promise<unknown> {
       }
 
       if (totalSynced > 0) {
-        await linkTransactionsToMerchants(userId);
-        await linkCampaignsToMerchants(userId);
-        await claimLinkedMerchants(userId);
+        try {
+          await linkTransactionsToMerchants(userId);
+        } catch (e) {
+          log(`    ${user.username} linkTransactions error: ${e instanceof Error ? e.message : String(e)}`);
+        }
+        try {
+          await linkCampaignsToMerchants(userId);
+        } catch (e) {
+          log(`    ${user.username} linkCampaigns error: ${e instanceof Error ? e.message : String(e)}`);
+        }
+        try {
+          await claimLinkedMerchants(userId);
+        } catch (e) {
+          log(`    ${user.username} claimMerchants error: ${e instanceof Error ? e.message : String(e)}`);
+        }
 
-        // 按规则将特定商家的交易转移给实际投放人
-        const reassigned = await reassignTransactionsByRules(userId);
+        let reassigned: { targetUserId: number; count: number }[] = [];
+        try {
+          reassigned = await reassignTransactionsByRules(userId);
+        } catch (e) {
+          log(`    ${user.username} reassign error: ${e instanceof Error ? e.message : String(e)}`);
+        }
 
-        const commUpdated = await updateDailyStatsCommission(userId, statsSyncStart, syncStart);
-        log(`    ${user.username}: updated ${commUpdated} commission records in ads_daily_stats`);
-
-        // 转移后更新目标用户的佣金聚合
-        for (const r of reassigned) {
-          const targetCommUpdated = await updateDailyStatsCommission(BigInt(r.targetUserId), statsSyncStart, syncStart);
-          log(`    → reassigned ${r.count} txns to user ${r.targetUserId}, updated ${targetCommUpdated} commission records`);
+        try {
+          const commUpdated = await updateDailyStatsCommission(userId, statsSyncStart, syncStart);
+          log(`    ${user.username}: updated ${commUpdated} commission records in ads_daily_stats`);
+          for (const r of reassigned) {
+            const targetCommUpdated = await updateDailyStatsCommission(BigInt(r.targetUserId), statsSyncStart, syncStart);
+            log(`    → reassigned ${r.count} txns to user ${r.targetUserId}, updated ${targetCommUpdated} commission records`);
+          }
+        } catch (e) {
+          log(`    ${user.username} updateCommission error: ${e instanceof Error ? e.message : String(e)}`);
         }
       }
 
       results[user.username] = { synced: totalSynced };
       log(`    ${user.username}: ${totalSynced} transactions synced`);
     } catch (e) {
-      results[user.username] = { error: e instanceof Error ? e.message : String(e) };
+      const msg = e instanceof Error ? e.message : String(e);
+      log(`    ${user.username} sync FAILED: ${msg}`);
+      results[user.username] = { error: msg };
     }
   }
   return results;
@@ -777,22 +797,47 @@ async function syncAllUsersTransactions(): Promise<unknown> {
 
 // ── 复用的关联逻辑（简化版） ──
 
+/**
+ * MySQL 死锁（错误 1213）重试封装。
+ * 并发 cron + 手动 sync 同时操作同一用户行时可能产生死锁，重试 3 次即可消除。
+ */
+async function executeRawRetry(sql: string, ...params: unknown[]): Promise<number> {
+  const MAX_RETRIES = 3;
+  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      return await prisma.$executeRawUnsafe(sql, ...params);
+    } catch (e) {
+      const isDeadlock =
+        e instanceof Error &&
+        (e.message.includes("1213") || e.message.toLowerCase().includes("deadlock"));
+      if (isDeadlock && attempt < MAX_RETRIES) {
+        const delayMs = attempt * 600;
+        log(`  [deadlock] retry ${attempt}/${MAX_RETRIES - 1} in ${delayMs}ms`);
+        await new Promise((r) => setTimeout(r, delayMs));
+        continue;
+      }
+      throw e;
+    }
+  }
+  return 0;
+}
+
 async function linkTransactionsToMerchants(userId: bigint) {
   await normalizeExistingTransactionPlatforms(userId);
 
-  await prisma.$executeRawUnsafe(`
+  await executeRawRetry(`
     UPDATE affiliate_transactions t
     JOIN user_merchants m ON t.user_id = m.user_id AND t.merchant_id = m.merchant_id AND t.platform = m.platform
     SET t.user_merchant_id = m.id
     WHERE t.user_id = ? AND t.user_merchant_id = 0 AND t.is_deleted = 0 AND m.is_deleted = 0 AND t.merchant_id != ''
   `, userId);
-  await prisma.$executeRawUnsafe(`
+  await executeRawRetry(`
     UPDATE affiliate_transactions t
     JOIN user_merchants m ON t.user_id = m.user_id AND t.merchant_id = m.merchant_id
     SET t.user_merchant_id = m.id
     WHERE t.user_id = ? AND t.user_merchant_id = 0 AND t.is_deleted = 0 AND m.is_deleted = 0 AND t.merchant_id != ''
   `, userId);
-  await prisma.$executeRawUnsafe(`
+  await executeRawRetry(`
     UPDATE affiliate_transactions t
     JOIN user_merchants m ON t.user_id = m.user_id AND t.merchant_name = m.merchant_name AND t.platform = m.platform
     SET t.user_merchant_id = m.id
