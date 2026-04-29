@@ -1993,13 +1993,14 @@ async function selectBestImages(
   // Step 2：软过滤
   const cleanImages = headPassed.filter(softFilter);
 
-  // Step 3：OCR 文字检测（07需求）—— 扫描 TOP 30 候选，词数 > 5 的含文字图直接丢弃
+  // Step 3：OCR 文字检测（07需求）—— 扫描 TOP 30 候选，词数 > 25 的文字密集图直接丢弃
+  // 阈值调整：5→25，避免过度过滤产品图（Google Ads 禁止纯文字 banner，但允许产品上有少量文字）
   // 超时 / 出错 / 不可达 → 保留（不影响主流程）
   const ocrCandidates = cleanImages.slice(0, 30);
   let ocrPassed: string[] = ocrCandidates;
   try {
     const { ocrFilterImages } = await import("@/lib/ocr-filter");
-    ocrPassed = await ocrFilterImages(ocrCandidates, { wordThreshold: 5, imageTimeoutMs: 8000 });
+    ocrPassed = await ocrFilterImages(ocrCandidates, { wordThreshold: 25, imageTimeoutMs: 8000 });
   } catch (e) {
     console.warn("[SelectImages] OCR 过滤异常，保留原始候选:", e instanceof Error ? e.message : e);
   }

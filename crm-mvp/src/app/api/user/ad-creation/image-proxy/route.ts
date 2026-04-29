@@ -7,10 +7,10 @@ const ALLOWED_TYPES = ["image/jpeg", "image/png", "image/webp", "image/gif", "im
 const MAX_SIZE = 10 * 1024 * 1024;
 const CACHE_TTL = 86400;
 
+// 只保留两个 UA：Chrome + Googlebot，减少无效重试次数
 const USER_AGENTS = [
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36",
   "Googlebot-Image/1.0",
-  "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)",
 ];
 
 /** 从 CDN URL 推断商家网站 Referer（防盗链通常要求 Referer 来自商家域名） */
@@ -86,9 +86,11 @@ export async function GET(req: NextRequest) {
   // 前端可传入商家真实 URL 作为 Referer 提示，优先于自动推断（提高防盗链通过率）
   const refHint = req.nextUrl.searchParams.get("ref");
   const inferredReferers = inferReferer(url);
-  const referers = refHint
+  // 最多取 2 个 Referer：用户 hint（最准确）+ 推断的第一个；避免 12 次全组合占用服务器
+  const allReferers = refHint
     ? [refHint, ...inferredReferers.filter((r) => r !== refHint)]
     : inferredReferers;
+  const referers = allReferers.slice(0, 2);
   let lastError = "";
 
   for (const ua of USER_AGENTS) {
@@ -101,7 +103,8 @@ export async function GET(req: NextRequest) {
             Accept: "image/webp,image/jpeg,image/png,image/avif,image/*;q=0.8",
             Referer: referer,
           },
-          signal: AbortSignal.timeout(15000),
+          // 5s 快速失败：CDN 无声丢包时避免单次等待 15s × 12 组合 = 3 分钟阻塞服务器
+          signal: AbortSignal.timeout(5000),
           redirect: "follow",
         });
 
@@ -169,7 +172,7 @@ export async function GET(req: NextRequest) {
             "Accept": "image/webp,image/jpeg,image/png,image/avif,image/*;q=0.8",
             ...(referer ? { "Referer": referer } : {}),
           },
-          signal: AbortSignal.timeout(20000),
+          signal: AbortSignal.timeout(10000),
         },
         proxyUrl,
       );
