@@ -315,11 +315,15 @@ export async function tryValidateUrl(url: string): Promise<UrlCheckResult> {
 
   // 直连全部失败（含地理封锁跨域重定向）：尝试通过目标国家动态 IP 代理重试一次
   // 典型场景：欧洲区域性网站（.de/.fr/.co.uk 等）封锁非本地 IP
+  // 策略：优先 HTTP 代理（实测可达），不可用时降级 SOCKS5
   try {
-    const { getProxyUrlForCountry, fetchViaProxy } = await import("@/lib/crawl-proxy");
+    const { getHttpProxyUrlForCountry, getProxyUrlForCountry, fetchViaProxy } = await import("@/lib/crawl-proxy");
     const country = inferCountryFromUrl(url);
-    const proxyUrl = await getProxyUrlForCountry(country);
-    console.log(`[UrlValidator] 代理重试触发: url=${url.slice(0, 80)} country=${country} hasProxy=${!!proxyUrl} geo=${geoDomainRedirectCount} cf=${cloudflareCount}`);
+    const httpProxyUrl = await getHttpProxyUrlForCountry(country).catch(() => null);
+    const socks5ProxyUrl = await getProxyUrlForCountry(country).catch(() => null);
+    const proxyUrl = httpProxyUrl ?? socks5ProxyUrl;
+    const proxyType = httpProxyUrl ? "HTTP" : "SOCKS5";
+    console.log(`[UrlValidator] 代理重试触发: url=${url.slice(0, 80)} country=${country} type=${proxyType} geo=${geoDomainRedirectCount} cf=${cloudflareCount}`);
     if (proxyUrl) {
       const ua = UA_POOL[0];
       const proxyResp = await fetchViaProxy(
@@ -327,15 +331,15 @@ export async function tryValidateUrl(url: string): Promise<UrlCheckResult> {
         {
           method: "GET",
           headers: buildStealthHeaders(ua),
-          signal: AbortSignal.timeout(20000),
+          signal: AbortSignal.timeout(12000),
         },
         proxyUrl,
       );
-      console.log(`[UrlValidator] 代理响应: status=${proxyResp.status} ok=${proxyResp.ok} url=${url.slice(0, 60)}`);
+      console.log(`[UrlValidator] ${proxyType}代理响应: status=${proxyResp.status} ok=${proxyResp.ok} url=${url.slice(0, 60)}`);
       if (proxyResp.ok) {
         const html = await proxyResp.text().catch(() => "");
         if (isCloudflareChallenge(html)) {
-          console.log(`[UrlValidator] 代理验证通过-CF (${country}): ${url.slice(0, 80)}`);
+          console.log(`[UrlValidator] ${proxyType}代理验证通过-CF (${country}): ${url.slice(0, 80)}`);
           return { ok: true, status: proxyResp.status, finalUrl: proxyResp.url, reason: `代理验证通过（${country}，Cloudflare 保护）` };
         }
         const invalidLink = checkInvalidLink(html);
@@ -346,7 +350,7 @@ export async function tryValidateUrl(url: string): Promise<UrlCheckResult> {
         if (soft.isSoft404) {
           return { ok: false, status: proxyResp.status, finalUrl: proxyResp.url, reason: soft.reason };
         }
-        console.log(`[UrlValidator] 代理验证通过 (${country}): ${url.slice(0, 80)}`);
+        console.log(`[UrlValidator] ${proxyType}代理验证通过 (${country}): ${url.slice(0, 80)}`);
         return { ok: true, status: proxyResp.status, finalUrl: proxyResp.url, reason: `代理验证通过（${country}）` };
       }
       // 代理响应非 ok（4xx/5xx）：软 404 判断

@@ -103,8 +103,8 @@ export async function GET(req: NextRequest) {
             Accept: "image/webp,image/jpeg,image/png,image/avif,image/*;q=0.8",
             Referer: referer,
           },
-          // 5s 快速失败：CDN 无声丢包时避免单次等待 15s × 12 组合 = 3 分钟阻塞服务器
-          signal: AbortSignal.timeout(5000),
+          // 8s 快速失败：CDN 无声丢包时避免长时间阻塞服务器（原 5s 对大图/高延迟 CDN 过于激进）
+          signal: AbortSignal.timeout(8000),
           redirect: "follow",
         });
 
@@ -148,8 +148,9 @@ export async function GET(req: NextRequest) {
   }  // end for ua
 
   // 直连全部失败 → 尝试通过动态出口代理重试（绕过商家 CDN 的 IP/地域封锁）
+  // 策略：优先 HTTP 代理（Chrome 兼容、实测可达），不可用时降级 SOCKS5
   try {
-    const { getProxyUrlForCountry, fetchViaProxy } = await import("@/lib/crawl-proxy");
+    const { getHttpProxyUrlForCountry, getProxyUrlForCountry, fetchViaProxy } = await import("@/lib/crawl-proxy");
     // 从图片 URL hostname 推断商家所在国家（CDN 通常与商家同地域，默认 US）
     let proxyCountry = "US";
     try {
@@ -161,39 +162,48 @@ export async function GET(req: NextRequest) {
       else if (imgHost.endsWith(".ca")) proxyCountry = "CA";
     } catch {}
 
-    const proxyUrl = await getProxyUrlForCountry(proxyCountry);
+    // HTTP 代理优先：实测 arxlabs HTTP 可达，SOCKS5 连接挂起导致 10s Aborted
+    const httpProxyUrl = await getHttpProxyUrlForCountry(proxyCountry).catch(() => null);
+    const socks5ProxyUrl = await getProxyUrlForCountry(proxyCountry).catch(() => null);
+    const proxyUrl = httpProxyUrl ?? socks5ProxyUrl;
+
     if (proxyUrl) {
+      const proxyType = httpProxyUrl ? "HTTP" : "SOCKS5";
       const referer = inferReferer(url)[0] || "";
-      const proxyResp = await fetchViaProxy(
-        url,
-        {
-          headers: {
-            "User-Agent": USER_AGENTS[0],
-            "Accept": "image/webp,image/jpeg,image/png,image/avif,image/*;q=0.8",
-            ...(referer ? { "Referer": referer } : {}),
+      try {
+        const proxyResp = await fetchViaProxy(
+          url,
+          {
+            headers: {
+              "User-Agent": USER_AGENTS[0],
+              "Accept": "image/webp,image/jpeg,image/png,image/avif,image/*;q=0.8",
+              ...(referer ? { "Referer": referer } : {}),
+            },
+            signal: AbortSignal.timeout(12000),
           },
-          signal: AbortSignal.timeout(10000),
-        },
-        proxyUrl,
-      );
-      if (proxyResp.ok) {
-        const ct = (proxyResp.headers["content-type"] as string) || "image/jpeg";
-        if (ALLOWED_TYPES.some((t) => ct.startsWith(t))) {
-          const buf = await proxyResp.buffer();
-          if (buf.length >= 100 && buf.length <= MAX_SIZE) {
-            console.log(`[ImageProxy] 代理重试成功: ${url.slice(0, 80)} (${proxyCountry}, ${buf.length}B)`);
-            return new NextResponse(buf, {
-              headers: {
-                "Content-Type": ct,
-                "Content-Length": String(buf.length),
-                "Cache-Control": `public, max-age=${CACHE_TTL}`,
-                "Access-Control-Allow-Origin": "*",
-              },
-            });
+          proxyUrl,
+        );
+        if (proxyResp.ok) {
+          const ct = (proxyResp.headers["content-type"] as string) || "image/jpeg";
+          if (ALLOWED_TYPES.some((t) => ct.startsWith(t))) {
+            const buf = await proxyResp.buffer();
+            if (buf.length >= 100 && buf.length <= MAX_SIZE) {
+              console.log(`[ImageProxy] ${proxyType}代理成功: ${url.slice(0, 80)} (${proxyCountry}, ${buf.length}B)`);
+              return new NextResponse(buf, {
+                headers: {
+                  "Content-Type": ct,
+                  "Content-Length": String(buf.length),
+                  "Cache-Control": `public, max-age=${CACHE_TTL}`,
+                  "Access-Control-Allow-Origin": "*",
+                },
+              });
+            }
           }
         }
+        console.warn(`[ImageProxy] ${proxyType}代理也失败: ${url.slice(0, 80)} status=${proxyResp.status}`);
+      } catch (proxyErr) {
+        console.warn(`[ImageProxy] ${proxyType}代理异常: ${proxyErr instanceof Error ? proxyErr.message : proxyErr}`);
       }
-      console.warn(`[ImageProxy] 代理重试也失败: ${url.slice(0, 80)} status=${proxyResp.status}`);
     } else {
       console.warn(`[ImageProxy] 无可用代理配置，跳过代理重试`);
     }
