@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useMemo, useCallback, useEffect, useRef } from "react";
+import { globalMutate } from "@/lib/swr";
 import {
   Card, Table, Row, Col, Statistic, Select, Space, Typography, Tag, Button,
   DatePicker, Tooltip, App, Input, Modal, Tabs, Form, InputNumber, Alert,
@@ -165,6 +166,34 @@ export default function DataCenterPage() {
         }
       })
       .catch(() => {});
+  }, []);
+
+  // 交易数据轮询：每 60 秒检查版本戳，有变动时静默刷新交易相关数据
+  const txnVersionRef = useRef<string>("");
+  useEffect(() => {
+    const poll = async () => {
+      try {
+        const res = await fetch("/api/user/data-center/txn-version").then((r) => r.json());
+        if (res.code !== 0) return;
+        const version: string = res.data?.version ?? "";
+        if (!txnVersionRef.current) {
+          // 首次初始化版本基线，不触发刷新
+          txnVersionRef.current = version;
+          return;
+        }
+        if (version !== txnVersionRef.current) {
+          txnVersionRef.current = version;
+          // 静默刷新数据中心所有 SWR 缓存（含 campaigns、settlement）
+          globalMutate((key) => typeof key === "string" && key.startsWith("/api/user/data-center"), undefined, { revalidate: true });
+        }
+      } catch {
+        // 网络异常静默忽略，不影响页面正常使用
+      }
+    };
+    // 页面加载后 5s 首次执行（避免与 refresh-status 撞车）
+    const init = setTimeout(poll, 5000);
+    const timer = setInterval(poll, 60000);
+    return () => { clearTimeout(init); clearInterval(timer); };
   }, []);
   const summary = campaignData?.summary || {
     totalCost: 0,

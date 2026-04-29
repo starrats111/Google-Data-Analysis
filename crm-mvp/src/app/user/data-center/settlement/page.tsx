@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import {
   Card, Input, Button, Row, Col, Statistic, Table, Segmented, Space, Typography,
   Empty, Progress, Select, DatePicker, Tag, App,
@@ -128,6 +128,31 @@ export default function SettlementPage() {
   }, [range, dateRange, platform, mid, memberId, message]);
 
   useEffect(() => { doSearch(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // 交易数据轮询：每 60 秒检查版本戳，有变动时静默重新查询
+  const txnVersionRef = useRef<string>("");
+  useEffect(() => {
+    const poll = async () => {
+      try {
+        const res = await fetch("/api/user/data-center/txn-version").then((r) => r.json());
+        if (res.code !== 0) return;
+        const version: string = res.data?.version ?? "";
+        if (!txnVersionRef.current) {
+          txnVersionRef.current = version;
+          return;
+        }
+        if (version !== txnVersionRef.current) {
+          txnVersionRef.current = version;
+          doSearch();
+        }
+      } catch {
+        // 静默忽略
+      }
+    };
+    const init = setTimeout(poll, 5000);
+    const timer = setInterval(poll, 60000);
+    return () => { clearTimeout(init); clearInterval(timer); };
+  }, [doSearch]);
 
   const merchantColumns: ColumnsType<MerchantRow> = [
     {
