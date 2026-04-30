@@ -29,6 +29,7 @@ interface MemberRanking {
   username: string;
   display_name: string | null;
   status: string;
+  today_merchants: number | null;
   active_merchants: number;
   cost: number;
   commission: number;
@@ -198,6 +199,25 @@ export default function TeamOverviewPage() {
           </Space>
         </Button>
       ),
+    },
+    {
+      title: (
+        <Tooltip title="每小时从 Google Sheet 同步，统计今日 ENABLED 状态广告系列对应的去重商家数">
+          今日投放商家
+        </Tooltip>
+      ),
+      dataIndex: "today_merchants",
+      key: "today_merchants",
+      align: "center" as const,
+      width: 120,
+      sorter: (a: MemberRanking, b: MemberRanking) =>
+        (a.today_merchants ?? -1) - (b.today_merchants ?? -1),
+      render: (v: number | null) => {
+        if (v === null) return <Text type="secondary" style={{ fontSize: 11 }}>未配置</Text>;
+        return v > 0
+          ? <Badge count={v} color="#52c41a" overflowCount={99} style={{ fontSize: 12 }} />
+          : <Text type="secondary">—</Text>;
+      },
     },
     {
       title: "在跑商家",

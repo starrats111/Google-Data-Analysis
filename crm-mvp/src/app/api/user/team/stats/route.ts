@@ -4,7 +4,7 @@ import { apiSuccess, apiError } from "@/lib/constants";
 import { withLeader } from "@/lib/api-handler";
 import prisma from "@/lib/prisma";
 import { sqlAffiliateTxnValidPlatformConnection } from "@/lib/affiliate-transaction-sql";
-import { nowCST, parseCSTDateStart, parseCSTDateEndExclusive, isTodayCST, dateColumnStart, dateColumnEndExclusive, dateColumnTodayEndExclusive } from "@/lib/date-utils";
+import { nowCST, parseCSTDateStart, parseCSTDateEndExclusive, isTodayCST, dateColumnStart, dateColumnEndExclusive, dateColumnTodayEndExclusive, todayCST } from "@/lib/date-utils";
 
 /**
  * 获取小组统计数据（组长专用）
@@ -195,6 +195,33 @@ export const GET = withLeader(async (req: NextRequest, { user }) => {
     });
   }
 
+  // 读取今日投放商家缓存（system_configs: today_merchants_{userId}）
+  const todayStr = todayCST();
+  const todayMerchantsMap = new Map<string, number>();
+  try {
+    const cacheRows = await prisma.system_configs.findMany({
+      where: {
+        config_key: { startsWith: "today_merchants_" },
+        is_deleted: 0,
+      },
+      select: { config_key: true, config_value: true },
+    });
+    for (const row of cacheRows) {
+      const uid = row.config_key.replace("today_merchants_", "");
+      if (!memberIds.map(String).includes(uid)) continue;
+      try {
+        const parsed = JSON.parse(row.config_value ?? "{}") as {
+          count?: number;
+          date?: string;
+        };
+        // 只使用今日的缓存，过期数据显示 0
+        if (parsed.date === todayStr && typeof parsed.count === "number") {
+          todayMerchantsMap.set(uid, parsed.count);
+        }
+      } catch { /* 忽略解析错误 */ }
+    }
+  } catch { /* 读取失败不影响主流程 */ }
+
   // 汇总每个成员的数据
   const memberStats = members.map((member) => {
     const uid = String(member.id);
@@ -221,6 +248,7 @@ export const GET = withLeader(async (req: NextRequest, { user }) => {
       username: member.username,
       display_name: member.display_name,
       status: member.status,
+      today_merchants: todayMerchantsMap.get(uid) ?? null,
       active_merchants: activeMerchantsByUser.get(uid) || 0,
       cost: Math.round(cost * 100) / 100,
       commission: Math.round(commission * 100) / 100,
