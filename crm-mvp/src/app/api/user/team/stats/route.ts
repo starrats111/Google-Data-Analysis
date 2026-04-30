@@ -4,7 +4,7 @@ import { apiSuccess, apiError } from "@/lib/constants";
 import { withLeader } from "@/lib/api-handler";
 import prisma from "@/lib/prisma";
 import { sqlAffiliateTxnValidPlatformConnection } from "@/lib/affiliate-transaction-sql";
-import { nowCST, parseCSTDateStart, parseCSTDateEndExclusive, isTodayCST, dateColumnStart, dateColumnEndExclusive, dateColumnTodayEndExclusive, todayCST } from "@/lib/date-utils";
+import { nowCST, parseCSTDateStart, parseCSTDateEndExclusive, isTodayCST, dateColumnStart, dateColumnEndExclusive, dateColumnTodayEndExclusive } from "@/lib/date-utils";
 
 /**
  * 获取小组统计数据（组长专用）
@@ -195,32 +195,30 @@ export const GET = withLeader(async (req: NextRequest, { user }) => {
     });
   }
 
-  // 读取今日投放商家缓存（system_configs: today_merchants_{userId}）
-  const todayStr = todayCST();
+  // 今日投放商家：今日 CST 零点后新建的广告系列，按 user_id 统计去重商家数
+  // 定义：当天在 CRM 中新建（created_at >= 今日零点CST）的广告系列所对应的商家
+  const todayStartUTC = cstNow.startOf("day").toDate(); // CST 00:00 → UTC（复用上方 cstNow）
   const todayMerchantsMap = new Map<string, number>();
   try {
-    const cacheRows = await prisma.system_configs.findMany({
+    const todayCampaigns = await prisma.campaigns.findMany({
       where: {
-        config_key: { startsWith: "today_merchants_" },
+        user_id: { in: memberIds },
         is_deleted: 0,
+        created_at: { gte: todayStartUTC },
       },
-      select: { config_key: true, config_value: true },
+      select: { user_id: true, user_merchant_id: true },
     });
-    for (const row of cacheRows) {
-      const uid = row.config_key.replace("today_merchants_", "");
-      if (!memberIds.map(String).includes(uid)) continue;
-      try {
-        const parsed = JSON.parse(row.config_value ?? "{}") as {
-          count?: number;
-          date?: string;
-        };
-        // 只使用今日的缓存，过期数据显示 0
-        if (parsed.date === todayStr && typeof parsed.count === "number") {
-          todayMerchantsMap.set(uid, parsed.count);
-        }
-      } catch { /* 忽略解析错误 */ }
+    // 按 user_id 统计去重商家数
+    const userMerchantSets = new Map<string, Set<string>>();
+    for (const c of todayCampaigns) {
+      const uid = String(c.user_id);
+      if (!userMerchantSets.has(uid)) userMerchantSets.set(uid, new Set());
+      userMerchantSets.get(uid)!.add(String(c.user_merchant_id));
     }
-  } catch { /* 读取失败不影响主流程 */ }
+    for (const [uid, set] of userMerchantSets) {
+      todayMerchantsMap.set(uid, set.size);
+    }
+  } catch { /* 查询失败不影响主流程 */ }
 
   // 汇总每个成员的数据
   const memberStats = members.map((member) => {
