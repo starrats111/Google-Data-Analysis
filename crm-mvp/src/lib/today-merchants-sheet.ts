@@ -67,7 +67,22 @@ async function getSheetTabs(sheetId: string, token: string): Promise<string[]> {
 }
 
 /**
- * 解析一张 DailyData 表，返回今日启用的 campaign ID 集合
+ * 从数据行中找出最新日期（不早于 cutoffDate）
+ * 脚本写入的是近90天含今日数据，取最新一天作为"当前投放"的基准
+ */
+function findLatestDate(rows: string[][], dateIdx: number, cutoffDate: string): string | null {
+  let latest: string | null = null;
+  for (const row of rows.slice(1)) {
+    const d = (row[dateIdx] ?? "").trim();
+    if (!d || d < cutoffDate) continue; // 忽略 3 天以前的数据
+    if (!latest || d > latest) latest = d;
+  }
+  return latest;
+}
+
+/**
+ * 解析一张 DailyData 表，返回最新日期中启用的 campaign ID 集合
+ * 使用最新可用日期（而非严格今日），兼容脚本在不同时段写入的情况
  */
 function parseDailyDataRows(rows: string[][], todayStr: string): Set<string> {
   if (rows.length < 2) return new Set();
@@ -79,14 +94,21 @@ function parseDailyDataRows(rows: string[][], todayStr: string): Set<string> {
 
   if (dateIdx < 0 || campaignIdIdx < 0) return new Set();
 
+  // 取最近 3 天内的最新日期（允许今日或昨日数据）
+  const threeDaysAgo = new Date(todayStr);
+  threeDaysAgo.setDate(threeDaysAgo.getDate() - 3);
+  const cutoff = threeDaysAgo.toISOString().slice(0, 10);
+  const latestDate = findLatestDate(rows, dateIdx, cutoff);
+  if (!latestDate) return new Set(); // 3 天内无数据
+
   const hasStatus = statusIdx >= 0;
   const result = new Set<string>();
 
   for (const row of rows.slice(1)) {
     const rowDate = (row[dateIdx] ?? "").trim();
-    if (rowDate !== todayStr) continue;
+    if (rowDate !== latestDate) continue;
 
-    // 无 Status 列 → 取全部今日行；有 Status 列 → 只取 ENABLED
+    // 无 Status 列 → 取全部行；有 Status 列 → 只取 ENABLED
     if (hasStatus) {
       const status = (row[statusIdx] ?? "").trim().toUpperCase();
       if (status !== "ENABLED") continue;

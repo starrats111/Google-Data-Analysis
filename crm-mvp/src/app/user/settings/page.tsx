@@ -187,27 +187,28 @@ function generateMccScript(sheetUrl: string, mccId?: string, mccName?: string): 
 // 生成时间: ${ts}
 //
 // 功能：
-//   1. 将除今天外的所有广告数据写入 DailyData 工作表
+//   1. 将近 90 天（含今日）的广告数据写入 DailyData 工作表
 //   2. 将所有子账号 CID 列表写入 CID_List 工作表
+// 注意：先采集全部数据再清空写入，避免清空后写入失败导致表格丢失数据
 
 function main() {
   var spreadsheet = SpreadsheetApp.openByUrl('${sheetUrl}');
-  var sheet = spreadsheet.getSheetByName('DailyData') || spreadsheet.insertSheet('DailyData');
-  sheet.clear();
   var headers = ['Date', 'Account', 'AccountName', 'CampaignId', 'CampaignName', 'Status', 'Budget', 'Impressions', 'Clicks', 'Cost', 'Conversions', 'ConversionValue', 'Currency'];
-  sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
   var allRows = [];
   var cidRows = [];
+
+  // 第一步：采集所有账号数据（先采集，后写入，避免清空后失败）
   var accountIterator = AdsManagerApp.accounts().get();
   while (accountIterator.hasNext()) {
     var account = accountIterator.next();
     cidRows.push([account.getCustomerId(), account.getName() || '']);
     AdsManagerApp.select(account);
     var tz = AdsApp.currentAccount().getTimeZone();
-    var yesterday = new Date();
-    yesterday.setDate(yesterday.getDate() - 1);
-    var endDate = Utilities.formatDate(yesterday, tz, 'yyyy-MM-dd');
-    var startDate = '2020-01-01';
+    var today = new Date();
+    var startD = new Date();
+    startD.setDate(startD.getDate() - 90);
+    var endDate = Utilities.formatDate(today, tz, 'yyyy-MM-dd');
+    var startDate = Utilities.formatDate(startD, tz, 'yyyy-MM-dd');
     try {
       var report = AdsApp.report(
         "SELECT segments.date, customer.id, customer.descriptive_name, campaign.id, campaign.name, campaign.status, campaign_budget.amount_micros, metrics.impressions, metrics.clicks, metrics.cost_micros, metrics.conversions, metrics.conversions_value, customer.currency_code FROM campaign WHERE segments.date BETWEEN '" + startDate + "' AND '" + endDate + "'"
@@ -219,12 +220,19 @@ function main() {
       }
     } catch (e) { Logger.log('Account ' + account.getName() + ' error: ' + e.message); }
   }
+
+  // 第二步：数据采集完成后再清空并写入（原子操作，避免清空后写入失败）
+  var sheet = spreadsheet.getSheetByName('DailyData') || spreadsheet.insertSheet('DailyData');
+  sheet.clearContents();
+  sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
   if (allRows.length > 0) {
     sheet.getRange(2, 1, allRows.length, headers.length).setValues(allRows);
   }
+  sheet.setFrozenRows(1);
   Logger.log('DailyData: ' + allRows.length + ' rows');
+
   var cidSheet = spreadsheet.getSheetByName('CID_List') || spreadsheet.insertSheet('CID_List');
-  cidSheet.clear();
+  cidSheet.clearContents();
   cidSheet.getRange(1, 1, 1, 2).setValues([['CustomerID', 'AccountName']]);
   cidRows.sort(function(a, b) { return a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0; });
   if (cidRows.length > 0) {
