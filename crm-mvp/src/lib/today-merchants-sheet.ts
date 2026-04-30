@@ -1,9 +1,10 @@
 /**
  * 今日投放商家 — Google Sheet 读取与解析
  *
- * 数据来源：每个 MCC 账户的 sheet_url（DailyData Tab）
- * 逻辑：筛出 Date = 今日CST、Status = ENABLED（无 Status 列则取全部）的行
+ * 数据来源：每个 MCC 账户的 sheet_url（CampaignInfo Tab）
+ * 逻辑：筛出 CreationDateCST = 今日CST 的行（即今天创建的广告系列）
  *       通过 google_campaign_id 关联 campaigns 表，按 user_id 统计去重商家数
+ *       对不走 CRM 建系列的成员同样有效（Google Ads Script 会导出全部系列）
  */
 import { JWT } from "google-auth-library";
 import prisma from "@/lib/prisma";
@@ -67,57 +68,26 @@ async function getSheetTabs(sheetId: string, token: string): Promise<string[]> {
 }
 
 /**
- * 从数据行中找出最新日期（不早于 cutoffDate）
- * 脚本写入的是近90天含今日数据，取最新一天作为"当前投放"的基准
+ * 解析 CampaignInfo 表，返回今日（CST）创建的 campaign ID 集合
+ * 列结构：CampaignId | CampaignName | Status | CreationDateCST | CustomerId
+ * CreationDateCST 由脚本将账户时区的 creation_time 转为 Asia/Shanghai 日期
  */
-function findLatestDate(rows: string[][], dateIdx: number, cutoffDate: string): string | null {
-  let latest: string | null = null;
-  for (const row of rows.slice(1)) {
-    const d = (row[dateIdx] ?? "").trim();
-    if (!d || d < cutoffDate) continue; // 忽略 3 天以前的数据
-    if (!latest || d > latest) latest = d;
-  }
-  return latest;
-}
-
-/**
- * 解析一张 DailyData 表，返回最新日期中启用的 campaign ID 集合
- * 使用最新可用日期（而非严格今日），兼容脚本在不同时段写入的情况
- */
-function parseDailyDataRows(rows: string[][], todayStr: string): Set<string> {
+function parseCampaignInfoRows(rows: string[][], todayStr: string): Set<string> {
   if (rows.length < 2) return new Set();
 
   const headers = rows[0].map((h) => h.trim());
-  const dateIdx = headers.indexOf("Date");
-  const statusIdx = headers.indexOf("Status");
   const campaignIdIdx = headers.indexOf("CampaignId");
+  const creationDateIdx = headers.indexOf("CreationDateCST");
 
-  if (dateIdx < 0 || campaignIdIdx < 0) return new Set();
+  if (campaignIdIdx < 0 || creationDateIdx < 0) return new Set();
 
-  // 取最近 3 天内的最新日期（允许今日或昨日数据）
-  const threeDaysAgo = new Date(todayStr);
-  threeDaysAgo.setDate(threeDaysAgo.getDate() - 3);
-  const cutoff = threeDaysAgo.toISOString().slice(0, 10);
-  const latestDate = findLatestDate(rows, dateIdx, cutoff);
-  if (!latestDate) return new Set(); // 3 天内无数据
-
-  const hasStatus = statusIdx >= 0;
   const result = new Set<string>();
-
   for (const row of rows.slice(1)) {
-    const rowDate = (row[dateIdx] ?? "").trim();
-    if (rowDate !== latestDate) continue;
-
-    // 无 Status 列 → 取全部行；有 Status 列 → 只取 ENABLED
-    if (hasStatus) {
-      const status = (row[statusIdx] ?? "").trim().toUpperCase();
-      if (status !== "ENABLED") continue;
-    }
-
+    const creationDate = (row[creationDateIdx] ?? "").trim();
+    if (creationDate !== todayStr) continue;
     const campaignId = (row[campaignIdIdx] ?? "").trim();
     if (campaignId) result.add(campaignId);
   }
-
   return result;
 }
 
@@ -178,12 +148,13 @@ export async function fetchTodayMerchantsFromSheets(): Promise<TodayMerchantsRes
     try {
       const token = await getTokenForMcc(mccDbId, mcc.service_account_json);
 
-      // 查找 DailyData tab（名称可能有大小写变体）
+      // 查找 CampaignInfo tab（名称可能有大小写变体）
       const tabs = await getSheetTabs(sheetId, token);
-      const dailyTab = tabs.find((t) => t.toLowerCase() === "dailydata") ?? "DailyData";
+      const infoTab = tabs.find((t) => t.toLowerCase() === "campaigninfo") ?? "CampaignInfo";
 
-      const rows = await fetchSheetValues(sheetId, dailyTab, token);
-      const campaignIds = parseDailyDataRows(rows, todayStr);
+      // CampaignInfo tab 数据量小（每系列一行，无日期维度），取前 5000 行足够
+      const rows = await fetchSheetValues(sheetId, infoTab, token, "A1:E5000");
+      const campaignIds = parseCampaignInfoRows(rows, todayStr);
 
       if (campaignIds.size > 0) {
         mccWithData++;

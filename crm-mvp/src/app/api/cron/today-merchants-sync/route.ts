@@ -2,7 +2,7 @@
  * GET /api/cron/today-merchants-sync
  *
  * 每小时整点（crontab: 0 * * * *）执行：
- * 读取所有 MCC 的 Google Sheet DailyData Tab，
+ * 读取所有 MCC 的 Google Sheet CampaignInfo Tab，
  * 统计今日投放商家数，按 user_id 写入 system_configs 缓存。
  *
  * 缓存 key 格式：today_merchants_{userId}

@@ -189,6 +189,7 @@ function generateMccScript(sheetUrl: string, mccId?: string, mccName?: string): 
 // 功能：
 //   1. 将近 90 天（含今日）的广告数据写入 DailyData 工作表
 //   2. 将所有子账号 CID 列表写入 CID_List 工作表
+//   3. 将所有广告系列（含 CST 创建日期）写入 CampaignInfo 工作表，供「今日投放商家」统计使用
 // 注意：先采集全部数据再清空写入，避免清空后写入失败导致表格丢失数据
 
 function main() {
@@ -196,6 +197,7 @@ function main() {
   var headers = ['Date', 'Account', 'AccountName', 'CampaignId', 'CampaignName', 'Status', 'Budget', 'Impressions', 'Clicks', 'Cost', 'Conversions', 'ConversionValue', 'Currency'];
   var allRows = [];
   var cidRows = [];
+  var campaignInfoRows = [];
 
   // 第一步：采集所有账号数据（先采集，后写入，避免清空后失败）
   var accountIterator = AdsManagerApp.accounts().get();
@@ -219,6 +221,29 @@ function main() {
         allRows.push([row['segments.date'], row['customer.id'], row['customer.descriptive_name'], row['campaign.id'], row['campaign.name'], row['campaign.status'], row['campaign_budget.amount_micros'], row['metrics.impressions'], row['metrics.clicks'], row['metrics.cost_micros'], row['metrics.conversions'], row['metrics.conversions_value'], row['customer.currency_code']]);
       }
     } catch (e) { Logger.log('Account ' + account.getName() + ' error: ' + e.message); }
+
+    // 采集广告系列创建信息（用于「今日投放商家」，creation_time 在账户时区）
+    try {
+      var infoReport = AdsApp.report(
+        "SELECT campaign.id, campaign.name, campaign.status, campaign.creation_time FROM campaign WHERE campaign.status != 'REMOVED'"
+      );
+      var infoRows = infoReport.rows();
+      while (infoRows.hasNext()) {
+        var infoRow = infoRows.next();
+        var creationTime = infoRow['campaign.creation_time'] || '';
+        var creationDateCST = '';
+        if (creationTime) {
+          try {
+            // creation_time 在账户时区，转换为北京时间 (Asia/Shanghai) 日期
+            var parsedDt = Utilities.parseDate(creationTime, tz, 'yyyy-MM-dd HH:mm:ss');
+            creationDateCST = Utilities.formatDate(parsedDt, 'Asia/Shanghai', 'yyyy-MM-dd');
+          } catch(pe) {
+            creationDateCST = creationTime.slice(0, 10);
+          }
+        }
+        campaignInfoRows.push([infoRow['campaign.id'], infoRow['campaign.name'], infoRow['campaign.status'], creationDateCST, account.getCustomerId()]);
+      }
+    } catch (e) { Logger.log('CampaignInfo error for ' + account.getName() + ': ' + e.message); }
   }
 
   // 第二步：数据采集完成后再清空并写入（原子操作，避免清空后写入失败）
@@ -240,6 +265,17 @@ function main() {
   }
   cidSheet.setFrozenRows(1);
   Logger.log('CID_List: ' + cidRows.length + ' accounts');
+
+  // 写入 CampaignInfo tab（今日投放商家统计数据源）
+  var infoSheet = spreadsheet.getSheetByName('CampaignInfo') || spreadsheet.insertSheet('CampaignInfo');
+  var infoHeaders = ['CampaignId', 'CampaignName', 'Status', 'CreationDateCST', 'CustomerId'];
+  infoSheet.clearContents();
+  infoSheet.getRange(1, 1, 1, infoHeaders.length).setValues([infoHeaders]);
+  if (campaignInfoRows.length > 0) {
+    infoSheet.getRange(2, 1, campaignInfoRows.length, infoHeaders.length).setValues(campaignInfoRows);
+  }
+  infoSheet.setFrozenRows(1);
+  Logger.log('CampaignInfo: ' + campaignInfoRows.length + ' campaigns');
 }
 `;
 }
