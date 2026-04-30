@@ -253,9 +253,9 @@ async function syncAllUsersMcc(): Promise<unknown> {
 
           let sheetUpserted = 0;
 
-          // 1. Sheet 同步（近7天）
+          // 1. Sheet 同步（近31天，截止昨日——今日数据不完整，只用于统计投放商家数，不计入费用）
           if (mcc.sheet_url) {
-            const sheetResult = await syncFromSheet(mcc.sheet_url, startStr, endStr);
+            const sheetResult = await syncFromSheet(mcc.sheet_url, startStr, yesterdayStr);
             if (sheetResult.success && sheetResult.rows.length > 0) {
               const gcids = [...new Set(sheetResult.rows.map(r => r.campaign_id).filter(Boolean))];
               const existingCampaigns = gcids.length > 0
