@@ -91,6 +91,7 @@ export async function GET(req: NextRequest) {
       google_campaign_id: campaign.google_campaign_id,
       customer_id: campaign.customer_id,
       mcc_id: campaign.mcc_id,
+      final_url_suffix: (campaign as any).final_url_suffix ?? null,
     },
     adGroup: adGroup ? { id: adGroup.id, ad_group_name: adGroup.ad_group_name, keyword_match_type: adGroup.keyword_match_type } : null,
     adCreative: adCreative ? {

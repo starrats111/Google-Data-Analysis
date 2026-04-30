@@ -164,6 +164,12 @@ export default function AdPreviewPage() {
   const [affiliateUrlInput, setAffiliateUrlInput] = useState("");
   const [savingFinalUrl, setSavingFinalUrl] = useState(false);
 
+  // 最终到达网址后缀
+  const [suffixInput, setSuffixInput] = useState("");
+  const [savingSuffix, setSavingSuffix] = useState(false);
+  const [suffixTestState, setSuffixTestState] = useState<"idle" | "testing" | "ok" | "fail">("idle");
+  const [suffixTestMsg, setSuffixTestMsg] = useState("");
+
   // MCC / CID 选择
   const [selectedMccId, setSelectedMccId] = useState<string>("");
   const [selectedCid, setSelectedCid] = useState<string>("");
@@ -307,6 +313,8 @@ export default function AdPreviewPage() {
     setNetworkSearch(c?.network_search === 1 || s?.network_search === 1);
     setNetworkPartners(c?.network_partners === 1 || s?.network_partners === 1);
     setNetworkDisplay(c?.network_display === 1 || s?.network_display === 1);
+    // 初始化最终到达网址后缀
+    setSuffixInput((c as any)?.final_url_suffix ?? "");
     // 广告语言唯一来源：crawl_cache.detectedLanguageCode（爬虫用目标国家 IP 访问网站后从 HTML lang 属性检测）
     // 若尚未爬取（缓存不存在），则置空等待「一键生成」触发爬取后自动检测并回填
     const detectedLang = (preview.adCreative as any)?.detectedLanguageCode || "";
@@ -1255,6 +1263,57 @@ export default function AdPreviewPage() {
       setSavingFinalUrl(false);
     }
   }, [finalUrlInput, affiliateUrlInput, campaignId, message, mutate]);
+
+  // ─── 保存最终到达网址后缀 ───
+  const handleSaveSuffix = useCallback(async () => {
+    setSavingSuffix(true);
+    try {
+      const res = await fetch("/api/user/ad-creation/update-final-url", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ campaign_id: campaignId, final_url_suffix: suffixInput.trim() }),
+      });
+      const data = await res.json();
+      if (data.code === 0) {
+        message.success("后缀已保存");
+        setSuffixTestState("idle");
+        mutate();
+      } else {
+        message.error(data.message || "保存失败");
+      }
+    } catch {
+      message.error("保存失败，请重试");
+    } finally {
+      setSavingSuffix(false);
+    }
+  }, [suffixInput, campaignId, message, mutate]);
+
+  // ─── 测试最终到达网址后缀（拼接落地页 URL + 后缀，检查可达性） ───
+  const handleTestSuffix = useCallback(async () => {
+    const landingUrl = preview?.adCreative?.final_url || preview?.merchant?.merchant_url || "";
+    const suffix = suffixInput.trim();
+    if (!landingUrl) { message.warning("请先设置落地页 URL 再测试"); return; }
+    if (!suffix) { message.warning("后缀为空，无需测试"); return; }
+    // 拼接：landingUrl 已有 ? 则用 &，否则用 ?
+    const testUrl = landingUrl.includes("?")
+      ? `${landingUrl}&${suffix}`
+      : `${landingUrl}?${suffix}`;
+    setSuffixTestState("testing");
+    setSuffixTestMsg(testUrl);
+    try {
+      const res = await fetch(`/api/user/ad-creation/check-url?url=${encodeURIComponent(testUrl)}`).then((r) => r.json());
+      if (res.code === 0 && res.data?.ok === true) {
+        setSuffixTestState("ok");
+        setSuffixTestMsg(testUrl);
+      } else {
+        setSuffixTestState("fail");
+        setSuffixTestMsg(res.data?.reason || res.message || "无法访问");
+      }
+    } catch {
+      setSuffixTestState("fail");
+      setSuffixTestMsg("测试请求失败");
+    }
+  }, [suffixInput, preview, message]);
 
   // ─── 否定关键词自动生成（SSE，静默后台执行） ───
   const triggerNegativeKeywords = useCallback(async () => {
@@ -2632,6 +2691,61 @@ export default function AdPreviewPage() {
                 </div>
               )}
             </div>
+            {/* ── 最终到达网址后缀 ── */}
+            {!preview.campaign?.google_campaign_id && (
+              <div style={{ marginTop: 10 }}>
+                <Text type="secondary" style={{ fontSize: 12 }}>最终到达网址后缀：</Text>
+                <div style={{ marginTop: 4, display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+                  <Input
+                    size="small"
+                    placeholder="utm_source=partnerize&utm_medium=affiliate&utm_campaign=..."
+                    value={suffixInput}
+                    onChange={(e) => { setSuffixInput(e.target.value); setSuffixTestState("idle"); }}
+                    style={{ flex: 1, minWidth: 200 }}
+                    allowClear
+                  />
+                  <Button
+                    size="small"
+                    icon={suffixTestState === "testing" ? <LoadingOutlined /> : <CheckCircleOutlined />}
+                    onClick={handleTestSuffix}
+                    loading={suffixTestState === "testing"}
+                    disabled={!suffixInput.trim() || !preview.adCreative?.final_url}
+                  >测试</Button>
+                  <Button
+                    size="small"
+                    type="primary"
+                    loading={savingSuffix}
+                    onClick={handleSaveSuffix}
+                  >保存</Button>
+                </div>
+                {suffixTestState === "ok" && (
+                  <div style={{ marginTop: 4, fontSize: 11, color: "#52c41a" }}>
+                    <CheckCircleOutlined /> 测试通过 — 已找到落地页
+                    <div style={{ color: "#888", wordBreak: "break-all", marginTop: 2 }}>{suffixTestMsg}</div>
+                  </div>
+                )}
+                {suffixTestState === "fail" && (
+                  <div style={{ marginTop: 4, fontSize: 11, color: "#ff4d4f" }}>
+                    <ExclamationCircleOutlined /> 测试失败：{suffixTestMsg}
+                    <div style={{ color: "#888", wordBreak: "break-all", marginTop: 2 }}>{suffixInput.trim() && preview.adCreative?.final_url ? (preview.adCreative.final_url.includes("?") ? `${preview.adCreative.final_url}&${suffixInput.trim()}` : `${preview.adCreative.final_url}?${suffixInput.trim()}`) : ""}</div>
+                  </div>
+                )}
+                {(preview as any).campaign?.final_url_suffix && suffixTestState === "idle" && !suffixInput && (
+                  <div style={{ marginTop: 4, fontSize: 11, color: "#888" }}>
+                    当前已保存：<Text code style={{ fontSize: 11 }}>{(preview as any).campaign.final_url_suffix}</Text>
+                  </div>
+                )}
+                <div style={{ marginTop: 3, fontSize: 11, color: "#aaa" }}>
+                  提交 Google Ads 后会自动附加到所有落地页 URL 末尾（如 utm 追踪参数）
+                </div>
+              </div>
+            )}
+            {preview.campaign?.google_campaign_id && (preview as any).campaign?.final_url_suffix && (
+              <div style={{ marginTop: 10 }}>
+                <Text type="secondary" style={{ fontSize: 12 }}>最终到达网址后缀：</Text>
+                <Text code style={{ fontSize: 11, marginLeft: 4 }}>{(preview as any).campaign.final_url_suffix}</Text>
+              </div>
+            )}
           </Card>
 
           {!preview.adCreative?.final_url && !preview.campaign?.google_campaign_id && (
@@ -2656,13 +2770,13 @@ export default function AdPreviewPage() {
             onConfirm={handleSubmit}
             okText="确认提交"
             cancelText="取消"
-            disabled={coreGenerating || submitting || !!preview.campaign?.google_campaign_id || headlines.filter(h => h.trim()).length === 0}
+            disabled={submitting || !!preview.campaign?.google_campaign_id || headlines.filter(h => h.trim()).length < 3}
           >
             <Button
               type="primary" size="large" block
               icon={submitting ? <LoadingOutlined /> : <RocketOutlined />}
               loading={submitting}
-              disabled={coreGenerating || !!preview.campaign?.google_campaign_id || headlines.filter(h => h.trim()).length === 0}
+              disabled={submitting || !!preview.campaign?.google_campaign_id || headlines.filter(h => h.trim()).length < 3}
             >
               {preview.campaign?.google_campaign_id ? "已提交到 Google Ads" : submitting ? "提交中..." : "提交到 Google Ads"}
             </Button>

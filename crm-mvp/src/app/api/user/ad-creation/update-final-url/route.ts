@@ -25,18 +25,20 @@ export async function PATCH(req: NextRequest) {
     return apiError("请求体解析失败", 400);
   }
 
-  const { campaign_id, final_url, affiliate_url, language_id } = body as {
+  const { campaign_id, final_url, affiliate_url, language_id, final_url_suffix } = body as {
     campaign_id?: string;
     final_url?: string;
     affiliate_url?: string;
     language_id?: string;
+    final_url_suffix?: string;
   };
 
   if (!campaign_id) return apiError("缺少 campaign_id");
 
   const hasUrl = final_url && String(final_url).trim();
   const hasLang = language_id && String(language_id).trim();
-  if (!hasUrl && !hasLang) return apiError("final_url 和 language_id 至少填一个");
+  const hasSuffix = final_url_suffix !== undefined;
+  if (!hasUrl && !hasLang && !hasSuffix) return apiError("final_url、language_id、final_url_suffix 至少填一个");
 
   let fixedUrl = hasUrl ? (final_url as string).trim() : "";
   if (fixedUrl) {
@@ -81,6 +83,15 @@ export async function PATCH(req: NextRequest) {
     updates.push(prisma.campaigns.update({
       where: { id: campaign.id },
       data: { language_id: language_id.trim() },
+    }));
+  }
+
+  // 更新最终到达网址后缀（保存到 campaigns.final_url_suffix）
+  if (hasSuffix) {
+    const suffixVal = typeof final_url_suffix === "string" ? final_url_suffix.trim() : null;
+    updates.push(prisma.campaigns.update({
+      where: { id: campaign.id },
+      data: { final_url_suffix: suffixVal || null } as any,
     }));
   }
 

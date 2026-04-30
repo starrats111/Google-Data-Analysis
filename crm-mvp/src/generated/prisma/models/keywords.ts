@@ -53,6 +53,7 @@ export type KeywordsMinAggregateOutputType = {
   avg_monthly_searches: number | null
   competition: string | null
   suggested_bid: runtime.Decimal | null
+  source: string | null
   is_deleted: number | null
   created_at: Date | null
   updated_at: Date | null
@@ -67,6 +68,7 @@ export type KeywordsMaxAggregateOutputType = {
   avg_monthly_searches: number | null
   competition: string | null
   suggested_bid: runtime.Decimal | null
+  source: string | null
   is_deleted: number | null
   created_at: Date | null
   updated_at: Date | null
@@ -81,6 +83,7 @@ export type KeywordsCountAggregateOutputType = {
   avg_monthly_searches: number
   competition: number
   suggested_bid: number
+  source: number
   is_deleted: number
   created_at: number
   updated_at: number
@@ -115,6 +118,7 @@ export type KeywordsMinAggregateInputType = {
   avg_monthly_searches?: true
   competition?: true
   suggested_bid?: true
+  source?: true
   is_deleted?: true
   created_at?: true
   updated_at?: true
@@ -129,6 +133,7 @@ export type KeywordsMaxAggregateInputType = {
   avg_monthly_searches?: true
   competition?: true
   suggested_bid?: true
+  source?: true
   is_deleted?: true
   created_at?: true
   updated_at?: true
@@ -143,6 +148,7 @@ export type KeywordsCountAggregateInputType = {
   avg_monthly_searches?: true
   competition?: true
   suggested_bid?: true
+  source?: true
   is_deleted?: true
   created_at?: true
   updated_at?: true
@@ -244,6 +250,7 @@ export type KeywordsGroupByOutputType = {
   avg_monthly_searches: number | null
   competition: string | null
   suggested_bid: runtime.Decimal | null
+  source: string | null
   is_deleted: number
   created_at: Date
   updated_at: Date
@@ -281,6 +288,7 @@ export type keywordsWhereInput = {
   avg_monthly_searches?: Prisma.IntNullableFilter<"keywords"> | number | null
   competition?: Prisma.StringNullableFilter<"keywords"> | string | null
   suggested_bid?: Prisma.DecimalNullableFilter<"keywords"> | runtime.Decimal | runtime.DecimalJsLike | number | string | null
+  source?: Prisma.StringNullableFilter<"keywords"> | string | null
   is_deleted?: Prisma.IntFilter<"keywords"> | number
   created_at?: Prisma.DateTimeFilter<"keywords"> | Date | string
   updated_at?: Prisma.DateTimeFilter<"keywords"> | Date | string
@@ -295,6 +303,7 @@ export type keywordsOrderByWithRelationInput = {
   avg_monthly_searches?: Prisma.SortOrderInput | Prisma.SortOrder
   competition?: Prisma.SortOrderInput | Prisma.SortOrder
   suggested_bid?: Prisma.SortOrderInput | Prisma.SortOrder
+  source?: Prisma.SortOrderInput | Prisma.SortOrder
   is_deleted?: Prisma.SortOrder
   created_at?: Prisma.SortOrder
   updated_at?: Prisma.SortOrder
@@ -313,6 +322,7 @@ export type keywordsWhereUniqueInput = Prisma.AtLeast<{
   avg_monthly_searches?: Prisma.IntNullableFilter<"keywords"> | number | null
   competition?: Prisma.StringNullableFilter<"keywords"> | string | null
   suggested_bid?: Prisma.DecimalNullableFilter<"keywords"> | runtime.Decimal | runtime.DecimalJsLike | number | string | null
+  source?: Prisma.StringNullableFilter<"keywords"> | string | null
   is_deleted?: Prisma.IntFilter<"keywords"> | number
   created_at?: Prisma.DateTimeFilter<"keywords"> | Date | string
   updated_at?: Prisma.DateTimeFilter<"keywords"> | Date | string
@@ -327,6 +337,7 @@ export type keywordsOrderByWithAggregationInput = {
   avg_monthly_searches?: Prisma.SortOrderInput | Prisma.SortOrder
   competition?: Prisma.SortOrderInput | Prisma.SortOrder
   suggested_bid?: Prisma.SortOrderInput | Prisma.SortOrder
+  source?: Prisma.SortOrderInput | Prisma.SortOrder
   is_deleted?: Prisma.SortOrder
   created_at?: Prisma.SortOrder
   updated_at?: Prisma.SortOrder
@@ -349,6 +360,7 @@ export type keywordsScalarWhereWithAggregatesInput = {
   avg_monthly_searches?: Prisma.IntNullableWithAggregatesFilter<"keywords"> | number | null
   competition?: Prisma.StringNullableWithAggregatesFilter<"keywords"> | string | null
   suggested_bid?: Prisma.DecimalNullableWithAggregatesFilter<"keywords"> | runtime.Decimal | runtime.DecimalJsLike | number | string | null
+  source?: Prisma.StringNullableWithAggregatesFilter<"keywords"> | string | null
   is_deleted?: Prisma.IntWithAggregatesFilter<"keywords"> | number
   created_at?: Prisma.DateTimeWithAggregatesFilter<"keywords"> | Date | string
   updated_at?: Prisma.DateTimeWithAggregatesFilter<"keywords"> | Date | string
@@ -363,6 +375,7 @@ export type keywordsCreateInput = {
   avg_monthly_searches?: number | null
   competition?: string | null
   suggested_bid?: runtime.Decimal | runtime.DecimalJsLike | number | string | null
+  source?: string | null
   is_deleted?: number
   created_at?: Date | string
   updated_at?: Date | string
@@ -377,6 +390,7 @@ export type keywordsUncheckedCreateInput = {
   avg_monthly_searches?: number | null
   competition?: string | null
   suggested_bid?: runtime.Decimal | runtime.DecimalJsLike | number | string | null
+  source?: string | null
   is_deleted?: number
   created_at?: Date | string
   updated_at?: Date | string
@@ -391,6 +405,7 @@ export type keywordsUpdateInput = {
   avg_monthly_searches?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
   competition?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   suggested_bid?: Prisma.NullableDecimalFieldUpdateOperationsInput | runtime.Decimal | runtime.DecimalJsLike | number | string | null
+  source?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   is_deleted?: Prisma.IntFieldUpdateOperationsInput | number
   created_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updated_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
@@ -405,6 +420,7 @@ export type keywordsUncheckedUpdateInput = {
   avg_monthly_searches?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
   competition?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   suggested_bid?: Prisma.NullableDecimalFieldUpdateOperationsInput | runtime.Decimal | runtime.DecimalJsLike | number | string | null
+  source?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   is_deleted?: Prisma.IntFieldUpdateOperationsInput | number
   created_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updated_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
@@ -419,6 +435,7 @@ export type keywordsCreateManyInput = {
   avg_monthly_searches?: number | null
   competition?: string | null
   suggested_bid?: runtime.Decimal | runtime.DecimalJsLike | number | string | null
+  source?: string | null
   is_deleted?: number
   created_at?: Date | string
   updated_at?: Date | string
@@ -433,6 +450,7 @@ export type keywordsUpdateManyMutationInput = {
   avg_monthly_searches?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
   competition?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   suggested_bid?: Prisma.NullableDecimalFieldUpdateOperationsInput | runtime.Decimal | runtime.DecimalJsLike | number | string | null
+  source?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   is_deleted?: Prisma.IntFieldUpdateOperationsInput | number
   created_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updated_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
@@ -447,6 +465,7 @@ export type keywordsUncheckedUpdateManyInput = {
   avg_monthly_searches?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
   competition?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   suggested_bid?: Prisma.NullableDecimalFieldUpdateOperationsInput | runtime.Decimal | runtime.DecimalJsLike | number | string | null
+  source?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   is_deleted?: Prisma.IntFieldUpdateOperationsInput | number
   created_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updated_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
@@ -467,6 +486,7 @@ export type keywordsCountOrderByAggregateInput = {
   avg_monthly_searches?: Prisma.SortOrder
   competition?: Prisma.SortOrder
   suggested_bid?: Prisma.SortOrder
+  source?: Prisma.SortOrder
   is_deleted?: Prisma.SortOrder
   created_at?: Prisma.SortOrder
   updated_at?: Prisma.SortOrder
@@ -490,6 +510,7 @@ export type keywordsMaxOrderByAggregateInput = {
   avg_monthly_searches?: Prisma.SortOrder
   competition?: Prisma.SortOrder
   suggested_bid?: Prisma.SortOrder
+  source?: Prisma.SortOrder
   is_deleted?: Prisma.SortOrder
   created_at?: Prisma.SortOrder
   updated_at?: Prisma.SortOrder
@@ -504,6 +525,7 @@ export type keywordsMinOrderByAggregateInput = {
   avg_monthly_searches?: Prisma.SortOrder
   competition?: Prisma.SortOrder
   suggested_bid?: Prisma.SortOrder
+  source?: Prisma.SortOrder
   is_deleted?: Prisma.SortOrder
   created_at?: Prisma.SortOrder
   updated_at?: Prisma.SortOrder
@@ -529,6 +551,7 @@ export type keywordsSelect<ExtArgs extends runtime.Types.Extensions.InternalArgs
   avg_monthly_searches?: boolean
   competition?: boolean
   suggested_bid?: boolean
+  source?: boolean
   is_deleted?: boolean
   created_at?: boolean
   updated_at?: boolean
@@ -545,12 +568,13 @@ export type keywordsSelectScalar = {
   avg_monthly_searches?: boolean
   competition?: boolean
   suggested_bid?: boolean
+  source?: boolean
   is_deleted?: boolean
   created_at?: boolean
   updated_at?: boolean
 }
 
-export type keywordsOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"id" | "ad_group_id" | "keyword_text" | "match_type" | "is_negative" | "avg_monthly_searches" | "competition" | "suggested_bid" | "is_deleted" | "created_at" | "updated_at", ExtArgs["result"]["keywords"]>
+export type keywordsOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"id" | "ad_group_id" | "keyword_text" | "match_type" | "is_negative" | "avg_monthly_searches" | "competition" | "suggested_bid" | "source" | "is_deleted" | "created_at" | "updated_at", ExtArgs["result"]["keywords"]>
 
 export type $keywordsPayload<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = {
   name: "keywords"
@@ -564,6 +588,7 @@ export type $keywordsPayload<ExtArgs extends runtime.Types.Extensions.InternalAr
     avg_monthly_searches: number | null
     competition: string | null
     suggested_bid: runtime.Decimal | null
+    source: string | null
     is_deleted: number
     created_at: Date
     updated_at: Date
@@ -944,6 +969,7 @@ export interface keywordsFieldRefs {
   readonly avg_monthly_searches: Prisma.FieldRef<"keywords", 'Int'>
   readonly competition: Prisma.FieldRef<"keywords", 'String'>
   readonly suggested_bid: Prisma.FieldRef<"keywords", 'Decimal'>
+  readonly source: Prisma.FieldRef<"keywords", 'String'>
   readonly is_deleted: Prisma.FieldRef<"keywords", 'Int'>
   readonly created_at: Prisma.FieldRef<"keywords", 'DateTime'>
   readonly updated_at: Prisma.FieldRef<"keywords", 'DateTime'>

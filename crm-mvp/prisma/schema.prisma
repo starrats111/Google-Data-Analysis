@@ -287,6 +287,8 @@ model campaigns {
   status             String   @default("active") @db.VarChar(16)
   google_status      String   @default("ENABLED") @db.VarChar(16) // Google Ads 侧真实状态: ENABLED / PAUSED / REMOVED
   last_google_sync_at DateTime? @db.DateTime(0) // 最后一次从 Google 同步状态的时间
+  // Google Ads 网址选项
+  final_url_suffix             String?  @db.VarChar(500)           // 最终到达网址后缀（附加到落地页 URL 末尾的 UTM 参数等）
   // 换链接相关字段
   suffix_exchange_enabled      Int      @default(1) @db.TinyInt    // 是否参与换链（可单独关闭）
   suffix_last_content          String?  @db.Text                   // 最近一次写入的 Suffix 内容（展示用）

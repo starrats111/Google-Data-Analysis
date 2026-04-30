@@ -352,6 +352,7 @@ export const CampaignsScalarFieldEnum = {
   status: 'status',
   google_status: 'google_status',
   last_google_sync_at: 'last_google_sync_at',
+  final_url_suffix: 'final_url_suffix',
   suffix_exchange_enabled: 'suffix_exchange_enabled',
   suffix_last_content: 'suffix_last_content',
   suffix_last_apply_at: 'suffix_last_apply_at',
@@ -388,6 +389,7 @@ export const KeywordsScalarFieldEnum = {
   avg_monthly_searches: 'avg_monthly_searches',
   competition: 'competition',
   suggested_bid: 'suggested_bid',
+  source: 'source',
   is_deleted: 'is_deleted',
   created_at: 'created_at',
   updated_at: 'updated_at'
@@ -992,6 +994,7 @@ export const campaignsOrderByRelevanceFieldEnum = {
   language_id: 'language_id',
   status: 'status',
   google_status: 'google_status',
+  final_url_suffix: 'final_url_suffix',
   suffix_last_content: 'suffix_last_content'
 } as const
 
@@ -1010,7 +1013,8 @@ export type ad_groupsOrderByRelevanceFieldEnum = (typeof ad_groupsOrderByRelevan
 export const keywordsOrderByRelevanceFieldEnum = {
   keyword_text: 'keyword_text',
   match_type: 'match_type',
-  competition: 'competition'
+  competition: 'competition',
+  source: 'source'
 } as const
 
 export type keywordsOrderByRelevanceFieldEnum = (typeof keywordsOrderByRelevanceFieldEnum)[keyof typeof keywordsOrderByRelevanceFieldEnum]

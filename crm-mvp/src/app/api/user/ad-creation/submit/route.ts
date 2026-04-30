@@ -64,6 +64,8 @@ export async function POST(req: NextRequest) {
     promotion, price, call: callExtension, structured_snippet,
     negative_keywords = [],
   } = body;
+  // 从 body 中读取最终到达网址后缀（前端若未传则从 campaign DB 记录取）
+  const bodyFinalUrlSuffix: string | undefined = body.final_url_suffix ?? undefined;
 
   if (!campaign_id) return apiError("缺少 campaign_id");
   if (!headlines?.length || headlines.length < 3) return apiError("至少需要 3 条标题");
@@ -503,6 +505,10 @@ export async function POST(req: NextRequest) {
       ? "CONTAINS_EU_POLITICAL_ADVERTISING"
       : "DOES_NOT_CONTAIN_EU_POLITICAL_ADVERTISING";
 
+    // 最终到达网址后缀：优先使用前端传入值，其次取 DB 中保存的值
+    const finalUrlSuffix: string | undefined =
+      (bodyFinalUrlSuffix ?? ((campaign as any).final_url_suffix as string | null) ?? undefined) || undefined;
+
     operations.push({
       campaign_operation: {
         create: {
@@ -519,6 +525,7 @@ export async function POST(req: NextRequest) {
             target_partner_search_network: false,
           },
           contains_eu_political_advertising: euPoliticalValue,
+          ...(finalUrlSuffix ? { final_url_suffix: finalUrlSuffix } : {}),
         },
       },
     });
