@@ -150,11 +150,16 @@ export async function GET(req: NextRequest) {
             const umId = merchant ? merchant.id : BigInt(0);
             const merchantName = txn.merchant || merchant?.merchant_name || "";
 
-            // 防止 API Key 共享时跨用户抢注：若该商家已被其他用户认领，
-            // 跳过 create（交易留给真正拥有该商家的用户写入），但已存在的记录仍 update 状态
+            // 防止 API Key 共享时跨用户抢注：
+            // 若该商家在其他用户下存在且有关联的 campaign，跳过当前用户的 create
             if (!merchant && mid) {
               const claimedByOther = await prisma.user_merchants.findFirst({
-                where: { platform, merchant_id: mid, is_deleted: 0, status: "claimed", user_id: { not: userId } },
+                where: {
+                  platform, merchant_id: mid, is_deleted: 0,
+                  user_id: { not: userId },
+                  status: { in: ["claimed", "paused", "running"] },
+                  campaigns: { some: { is_deleted: 0 } },
+                },
                 select: { id: true },
               });
               if (claimedByOther) {
