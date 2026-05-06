@@ -28,6 +28,7 @@ module.exports = {
         NODE_OPTIONS: '--max-old-space-size=768',
         PORT: '20050',
         TZ: 'Asia/Shanghai',
+        CRON_SECRET: 'crm-daily-sync-2026',
       },
 
       // 日志配置（B-5）

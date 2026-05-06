@@ -33,7 +33,7 @@ export function middleware(request: NextRequest) {
   // C-028 批量重生成 admin API 走 Bearer CRON_SECRET 鉴权（脚本 / cron 用，没有 cookie）
   if (pathname === "/api/admin/regenerate-clean-article") {
     const auth = request.headers.get("authorization");
-    const expected = process.env.CRON_SECRET;
+    const expected = process.env["CRON_SECRET"];
     if (expected && auth === `Bearer ${expected}`) {
       return NextResponse.next();
     }

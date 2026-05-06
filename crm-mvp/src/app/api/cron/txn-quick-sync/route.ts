@@ -4,14 +4,13 @@ import { normalizePlatformCode } from "@/lib/constants";
 import { nowCST } from "@/lib/date-utils";
 import { getRedirectedMerchantKeys } from "@/lib/merchant-ownership-rules";
 
-const CRON_SECRET = process.env.CRON_SECRET || "";
 /** 快速同步的时间窗口（天）：覆盖所有状态活跃中的订单 */
 const QUICK_SYNC_DAYS = 14;
 
 function verifyCron(req: NextRequest): boolean {
-  if (!CRON_SECRET) return false;
-  const auth = req.headers.get("authorization");
-  return auth === `Bearer ${CRON_SECRET}`;
+  const secret = process.env.CRON_SECRET;
+  if (!secret) return false;
+  return req.headers.get("authorization") === `Bearer ${secret}`;
 }
 
 function log(msg: string) {

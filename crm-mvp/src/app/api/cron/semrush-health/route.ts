@@ -4,11 +4,10 @@ import { testConnection, trySwitchNode, refreshApiKey } from "@/lib/semrush-auto
 export const dynamic = "force-dynamic";
 export const maxDuration = 120;
 
-const CRON_SECRET = process.env.CRON_SECRET || "";
-
 function verifyCron(req: NextRequest): boolean {
-  if (!CRON_SECRET) return false;
-  return req.headers.get("authorization") === `Bearer ${CRON_SECRET}`;
+  const secret = process.env.CRON_SECRET;
+  if (!secret) return false;
+  return req.headers.get("authorization") === `Bearer ${secret}`;
 }
 
 function log(msg: string) {

@@ -8,7 +8,6 @@ import { HttpsProxyAgent } from 'https-proxy-agent'
 // 每次最多处理 20 条 pending 任务，每任务按 target_count 发起代理点击
 // ---------------------------------------------------------------
 
-const CRON_SECRET = process.env.CRON_SECRET ?? ''
 const BATCH_SIZE = 20       // 每次 cron 处理的最大任务数
 const CLICK_TIMEOUT_MS = 10000  // 单次点击超时
 
@@ -74,6 +73,7 @@ export async function GET(req: NextRequest) {
   }
   // 简单鉴权：验证 cron secret（生产中通过 Vercel/GitHub Actions 传入）
   const secret = req.headers.get('x-cron-secret') ?? req.nextUrl.searchParams.get('secret') ?? ''
+  const CRON_SECRET = process.env.CRON_SECRET ?? ''
   if (CRON_SECRET && secret !== CRON_SECRET) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }

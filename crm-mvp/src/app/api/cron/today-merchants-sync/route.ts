@@ -12,12 +12,10 @@ import { NextRequest, NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 import { fetchTodayMerchantsFromSheets } from "@/lib/today-merchants-sheet";
 
-const CRON_SECRET = process.env.CRON_SECRET || "";
-
 function verifyCron(req: NextRequest): boolean {
-  if (!CRON_SECRET) return false;
-  const auth = req.headers.get("authorization");
-  return auth === `Bearer ${CRON_SECRET}`;
+  const secret = process.env.CRON_SECRET;
+  if (!secret) return false;
+  return req.headers.get("authorization") === `Bearer ${secret}`;
 }
 
 function log(msg: string) {
