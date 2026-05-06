@@ -703,17 +703,22 @@ async function syncAllUsersTransactions(): Promise<unknown> {
                   });
                   if (!existing) {
                     // 防止 API Key 共享时跨用户抢注：
-                    // 若该商家在其他用户下存在且有关联的 campaign（claimed/paused/running），
-                    // 则跳过当前用户的新建，交易将由商家真正归属的用户同步写入。
-                    const claimedByOther = await prisma.user_merchants.findFirst({
+                    // 若该商家在其他用户下存在且有关联的 campaign，则跳过当前用户的新建，
+                    // 交易将由商家真正归属的用户同步写入。
+                    const otherMerchant = await prisma.user_merchants.findFirst({
                       where: {
                         platform, merchant_id: mid, is_deleted: 0,
                         user_id: { not: userId },
                         status: { in: ["claimed", "paused", "running"] },
-                        campaigns: { some: { is_deleted: 0 } },
                       },
                       select: { id: true, user_id: true },
                     });
+                    const claimedByOther = otherMerchant
+                      ? await prisma.campaigns.findFirst({
+                          where: { user_merchant_id: otherMerchant.id, is_deleted: 0 },
+                          select: { id: true },
+                        })
+                      : null;
                     if (claimedByOther) {
                       // 跳过：让真正拥有该商家的用户来写交易
                       continue;

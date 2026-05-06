@@ -153,15 +153,20 @@ export async function GET(req: NextRequest) {
             // 防止 API Key 共享时跨用户抢注：
             // 若该商家在其他用户下存在且有关联的 campaign，跳过当前用户的 create
             if (!merchant && mid) {
-              const claimedByOther = await prisma.user_merchants.findFirst({
+              const otherMerchant = await prisma.user_merchants.findFirst({
                 where: {
                   platform, merchant_id: mid, is_deleted: 0,
                   user_id: { not: userId },
                   status: { in: ["claimed", "paused", "running"] },
-                  campaigns: { some: { is_deleted: 0 } },
                 },
                 select: { id: true },
               });
+              const claimedByOther = otherMerchant
+                ? await prisma.campaigns.findFirst({
+                    where: { user_merchant_id: otherMerchant.id, is_deleted: 0 },
+                    select: { id: true },
+                  })
+                : null;
               if (claimedByOther) {
                 // 仅更新已存在的同记录状态，不创建新记录
                 await prisma.affiliate_transactions.updateMany({
