@@ -150,6 +150,23 @@ export async function GET(req: NextRequest) {
             const umId = merchant ? merchant.id : BigInt(0);
             const merchantName = txn.merchant || merchant?.merchant_name || "";
 
+            // 防止 API Key 共享时跨用户抢注：若该商家已被其他用户认领，
+            // 跳过 create（交易留给真正拥有该商家的用户写入），但已存在的记录仍 update 状态
+            if (!merchant && mid) {
+              const claimedByOther = await prisma.user_merchants.findFirst({
+                where: { platform, merchant_id: mid, is_deleted: 0, status: "claimed", user_id: { not: userId } },
+                select: { id: true },
+              });
+              if (claimedByOther) {
+                // 仅更新已存在的同记录状态，不创建新记录
+                await prisma.affiliate_transactions.updateMany({
+                  where: { platform, transaction_id: txn.transaction_id, is_deleted: 0 },
+                  data: { status: txn.status, raw_status: txn.raw_status || "", commission_amount: txn.commission_amount || 0, order_amount: txn.order_amount || 0 },
+                });
+                continue;
+              }
+            }
+
             await prisma.affiliate_transactions.upsert({
               where: { platform_transaction_id: { platform, transaction_id: txn.transaction_id } },
               create: {

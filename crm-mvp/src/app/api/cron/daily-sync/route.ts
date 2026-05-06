@@ -702,6 +702,16 @@ async function syncAllUsersTransactions(): Promise<unknown> {
                     select: { id: true, merchant_id: true, platform: true, merchant_name: true },
                   });
                   if (!existing) {
+                    // 防止 API Key 共享时跨用户抢注：若该商家已被其他用户认领（status=claimed），
+                    // 则跳过当前用户的新建，交易将由商家真正归属的用户同步写入。
+                    const claimedByOther = await prisma.user_merchants.findFirst({
+                      where: { platform, merchant_id: mid, is_deleted: 0, status: "claimed", user_id: { not: userId } },
+                      select: { id: true, user_id: true },
+                    });
+                    if (claimedByOther) {
+                      // 跳过：让真正拥有该商家的用户来写交易
+                      continue;
+                    }
                     existing = await prisma.user_merchants.create({
                       data: { user_id: userId, platform, merchant_id: mid, merchant_name: txn.merchant || "", status: "available" },
                       select: { id: true, merchant_id: true, platform: true, merchant_name: true },

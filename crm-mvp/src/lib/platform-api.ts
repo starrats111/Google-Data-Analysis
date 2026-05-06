@@ -1088,13 +1088,41 @@ export async function fetchAllTransactions(
 
       const totalPages = getTxnTotalPages(firstPage, config.maxSize);
 
+      let consecutiveEmptyTxn = 0;
+      const MAX_EMPTY_TXN_RETRIES = 2;
+      const MAX_CONSECUTIVE_EMPTY_TXN = 3;
+
       for (let page = 2; page <= Math.min(totalPages, 50); page++) {
         if (config.rateLimitMs) await sleep(config.rateLimitMs);
         else await sleep(100);
 
-        const pageData = await callTxnApi(config, token, chunk.start, chunk.end, page);
-        const batch = parseTransactions(platform, pageData);
-        if (batch.length === 0) break;
+        let pageData: Record<string, unknown> = {};
+        let batch: PlatformTransaction[] = [];
+
+        for (let retry = 0; retry <= MAX_EMPTY_TXN_RETRIES; retry++) {
+          if (retry > 0) {
+            console.warn(`[TxnSync] ${platform} page ${page} 空响应，${(retry + 1) * 2}s 后重试 (${retry}/${MAX_EMPTY_TXN_RETRIES})`);
+            await sleep((retry + 1) * 2000);
+          }
+          try {
+            pageData = await callTxnApi(config, token, chunk.start, chunk.end, page);
+          } catch (pageErr) {
+            console.warn(`[TxnSync] ${platform} page ${page} 请求失败 (${retry}/${MAX_EMPTY_TXN_RETRIES}): ${pageErr instanceof Error ? pageErr.message : String(pageErr)}`);
+            continue;
+          }
+          batch = parseTransactions(platform, pageData);
+          if (batch.length > 0) break;
+        }
+
+        if (batch.length === 0) {
+          consecutiveEmptyTxn++;
+          if (consecutiveEmptyTxn >= MAX_CONSECUTIVE_EMPTY_TXN) {
+            console.warn(`[TxnSync] ${platform} 连续 ${consecutiveEmptyTxn} 页为空，停止翻页 (page=${page})`);
+            break;
+          }
+          continue;
+        }
+        consecutiveEmptyTxn = 0;
 
         for (const t of batch) mergeTxn(t);
       }
