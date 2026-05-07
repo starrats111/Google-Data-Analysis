@@ -90,9 +90,12 @@ export default function TeamReportPage() {
     platform: string | null   // null = 全平台
   ): number => {
     if (!report) return 0;
-    // net 递归计算避免重复逻辑
     if (metric === "net") {
-      return getStat("active", monthKey, userId, platform) - getStat("adSpend", monthKey, userId, platform);
+      // 平台列：只显示有效佣金（广告费无法按平台拆分，不在此扣）
+      // 小计/合计列（platform===null）：有效佣金 - 广告费 = 真实净收益
+      const active = getStat("active", monthKey, userId, platform);
+      const spend  = platform === null ? getStat("adSpend", monthKey, userId, null) : 0;
+      return active - spend;
     }
 
     const months = monthKey ? [monthKey] : report.months;
@@ -102,6 +105,8 @@ export default function TeamReportPage() {
     for (const m of months) {
       for (const uid of userIds) {
         if (metric === "adSpend") {
+          // 广告费无平台维度：只有"全平台汇总"(platform===null)才返回实际值
+          if (platform !== null) return 0;
           total += report.adSpend[m]?.[uid] || 0;
           continue;
         }
