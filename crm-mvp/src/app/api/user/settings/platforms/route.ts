@@ -103,7 +103,14 @@ export async function DELETE(req: NextRequest) {
     data: { is_deleted: 1 },
   });
 
-  // 联动清理：软删除该连接带来的非领取商家
+  // 联动清理一：软删除该连接下的所有联盟交易记录
+  // 连接删除后，其历史交易数据不再属于用户的有效数据
+  await prisma.affiliate_transactions.updateMany({
+    where: { user_id: userId, platform_connection_id: connId, is_deleted: 0 },
+    data: { is_deleted: 1 },
+  });
+
+  // 联动清理二：软删除该连接带来的非领取商家
   // 规则：已领取（claimed）或已暂停（paused）的不动，其余清除
   const KEEP_STATUSES = ["claimed", "paused"];
 
