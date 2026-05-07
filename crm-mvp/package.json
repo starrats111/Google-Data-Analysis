@@ -19,6 +19,7 @@
     "antd": "^6.3.3",
     "bcryptjs": "^3.0.3",
     "dayjs": "^1.11.20",
+    "exceljs": "^4.4.0",
     "google-ads-api": "^23.0.0",
     "google-auth-library": "^10.6.2",
     "https-proxy-agent": "^9.0.0",

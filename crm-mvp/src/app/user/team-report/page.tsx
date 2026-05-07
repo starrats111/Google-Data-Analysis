@@ -10,7 +10,6 @@ import {
   DollarOutlined, MinusCircleOutlined, CheckCircleOutlined,
 } from "@ant-design/icons";
 import type { ColumnsType } from "antd/es/table";
-import * as XLSX from "xlsx";
 import dayjs from "dayjs";
 
 const { Title, Text } = Typography;
@@ -260,101 +259,27 @@ export default function TeamReportPage() {
     return { columns: [...fixedCol, ...dynamicCols], dataSource };
   }, [report, activeMonth, getStat]);
 
-  // ── Excel 导出 ──────────────────────────────────────────────────────
-  const handleExport = useCallback(() => {
+  // ── Excel 导出（调用服务端，保留完整格式） ──────────────────────────
+  const handleExport = useCallback(async () => {
     if (!report) return;
-    message.loading("正在生成 Excel...", 0);
-
+    const hide = message.loading("正在生成 Excel，请稍候...", 0);
     try {
-      const wb = XLSX.utils.book_new();
-      const PLATFORMS = report.platforms;
-      const allMonths = report.months;
-
-      // 生成一个 sheet（月份或全年）
-      const makeSheet = (monthKeys: string[], sheetLabel: string) => {
-        const rows: (string | number)[][] = [];
-
-        // 标题行
-        rows.push([`${report.year}年 ${sheetLabel} 收支统计`]);
-        rows.push([]);
-
-        // MCC 分组标题
-        const headerRow1: (string | number)[] = ["指标"];
-        headerRow1.push("合计", ...Array(PLATFORMS.length - 1).fill(""), "小计");
-        for (const mem of report.members) {
-          headerRow1.push(mem.display_name, ...Array(PLATFORMS.length - 1).fill(""), "小计");
-        }
-        rows.push(headerRow1);
-
-        // 平台行
-        const headerRow2: (string | number)[] = [""];
-        headerRow2.push(...PLATFORMS, "");
-        for (let i = 0; i < report.members.length; i++) {
-          headerRow2.push(...PLATFORMS, "");
-        }
-        rows.push(headerRow2);
-
-        // 数据行（按指标）
-        for (const { key, label } of METRICS) {
-          const row: (string | number)[] = [label];
-          // 合计列
-          for (const p of PLATFORMS) {
-            row.push(+getStat(key as MetricKey, monthKeys.length === 1 ? monthKeys[0] : null, null, p).toFixed(2));
-          }
-          row.push(+getStat(key as MetricKey, monthKeys.length === 1 ? monthKeys[0] : null, null, null).toFixed(2));
-          // 各成员列
-          for (const mem of report.members) {
-            for (const p of PLATFORMS) {
-              row.push(+getStat(key as MetricKey, monthKeys.length === 1 ? monthKeys[0] : null, mem.id, p).toFixed(2));
-            }
-            row.push(+getStat(key as MetricKey, monthKeys.length === 1 ? monthKeys[0] : null, mem.id, null).toFixed(2));
-          }
-          rows.push(row);
-        }
-
-        const ws = XLSX.utils.aoa_to_sheet(rows);
-        // 设置列宽
-        ws["!cols"] = [{ wch: 12 }, ...Array(1 + (PLATFORMS.length + 1) * (1 + report.members.length)).fill({ wch: 10 })];
-        return ws;
-      };
-
-      // 全年汇总 sheet
-      const annualRows: (string | number)[][] = [];
-      annualRows.push([`${report.year}年 全年汇总`]);
-      annualRows.push([]);
-      annualRows.push(["指标", ...allMonths.map(monthLabel), "年合计"]);
-      for (const { key, label } of METRICS) {
-        const row: (string | number)[] = [label];
-        let yearly = 0;
-        for (const m of allMonths) {
-          const val = +getStat(key as MetricKey, m, null, null).toFixed(2);
-          row.push(val);
-          yearly += val;
-        }
-        // net 全年合计 = 全年 active - 全年 adSpend，不能直接累加每月 net（精度一致）
-        row.push(key === "net"
-          ? +(getStat("active", null, null, null) - getStat("adSpend", null, null, null)).toFixed(2)
-          : +yearly.toFixed(2));
-        annualRows.push(row);
-      }
-      const annualWs = XLSX.utils.aoa_to_sheet(annualRows);
-      annualWs["!cols"] = [{ wch: 12 }, ...Array(14).fill({ wch: 10 })];
-      XLSX.utils.book_append_sheet(wb, annualWs, "全年汇总");
-
-      // 各月 sheet
-      for (const m of allMonths) {
-        const ws = makeSheet([m], monthLabel(m));
-        XLSX.utils.book_append_sheet(wb, ws, monthLabel(m));
-      }
-
-      XLSX.writeFile(wb, `${report.year}年度收支报表.xlsx`);
-      message.destroy();
+      const res = await fetch(`/api/user/team/report/export?year=${year}`);
+      if (!res.ok) throw new Error(await res.text());
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${year}年度收支报表.xlsx`;
+      a.click();
+      URL.revokeObjectURL(url);
+      hide();
       message.success("Excel 已导出");
     } catch (e) {
-      message.destroy();
-      message.error("导出失败: " + String(e));
+      hide();
+      message.error("导出失败：" + String(e));
     }
-  }, [report, getStat, message]);
+  }, [report, year, message]);
 
   // ── 顶部汇总卡片 ────────────────────────────────────────────────────
   const summaryStats = useMemo(() => {
