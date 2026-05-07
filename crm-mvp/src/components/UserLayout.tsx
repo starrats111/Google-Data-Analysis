@@ -17,6 +17,7 @@ import {
   TeamOutlined,
   BulbOutlined,
   RightOutlined,
+  BarChartOutlined,
 } from "@ant-design/icons";
 import { useRouter, usePathname } from "next/navigation";
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
@@ -78,6 +79,7 @@ const leaderMenuItems: MenuItem[] = [
       { key: "/user/team-overview", icon: <FundOutlined />, label: "小组总览" },
       { key: "/user/team-members", icon: <TeamOutlined />, label: "员工管理" },
       { key: "/user/team-merchants", icon: <ShopOutlined />, label: "组下商家" },
+      { key: "/user/team-report", icon: <BarChartOutlined />, label: "收支报表" },
     ],
   },
   {
@@ -226,6 +228,7 @@ export default function UserLayout({ children }: { children: React.ReactNode }) 
     if (pathname === "/user/team-overview") return "/user/team-overview";
     if (pathname === "/user/team-members") return "/user/team-members";
     if (pathname === "/user/team-merchants") return "/user/team-merchants";
+    if (pathname === "/user/team-report") return "/user/team-report";
     return pathname;
   }, [pathname]);
 
