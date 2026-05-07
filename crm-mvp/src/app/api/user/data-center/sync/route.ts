@@ -4,7 +4,7 @@ import { apiSuccess, apiError, normalizePlatformCode } from "@/lib/constants";
 import prisma from "@/lib/prisma";
 import { syncFromSheet } from "@/lib/sheet-sync";
 import { cacheDelete } from "@/lib/cache";
-import { todayCST, yesterdayCST, nowCST, parseCSTDateStart, parseCSTDateEndExclusive, isTodayCST } from "@/lib/date-utils";
+import { todayCST, yesterdayCST, nowCST, isTodayCST, parseTxnDateStart, parseTxnDateEndExclusive } from "@/lib/date-utils";
 import { getExchangeRate, preloadRates } from "@/lib/exchange-rate";
 import { syncMerchantStatusForUser, parseCampaignNameFull } from "@/lib/campaign-merchant-link";
 import { getRedirectedMerchantKeys } from "@/lib/merchant-ownership-rules";
@@ -808,8 +808,8 @@ async function syncTransactionsInline(
           ? cstNow.subtract(365, "day").format("YYYY-MM-DD")
           : cstNow.subtract(120, "day").format("YYYY-MM-DD"));
     const endStr = options.endDate || cstNow.format("YYYY-MM-DD");
-    const startDate = parseCSTDateStart(startStr);
-    const endExclusive = isTodayCST(endStr, cstNow) ? cstNow.toDate() : parseCSTDateEndExclusive(endStr);
+    const startDate = parseTxnDateStart(startStr);
+    const endExclusive = isTodayCST(endStr, cstNow) ? cstNow.toDate() : parseTxnDateEndExclusive(endStr);
 
     console.log(`[Sync] 交易同步范围: ${startStr} → ${endStr} (${options.forceFullSync ? "手动全量" : customRange ? "指定时间" : isFirstTxnSync ? "首次-全量" : "增量120天"})`);
 

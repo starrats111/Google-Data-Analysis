@@ -3,7 +3,7 @@ import { serializeData } from "@/lib/auth";
 import { apiSuccess, apiError, normalizePlatformCode } from "@/lib/constants";
 import { withLeader } from "@/lib/api-handler";
 import prisma from "@/lib/prisma";
-import { todayCST, yesterdayCST, nowCST, parseCSTDateStart } from "@/lib/date-utils";
+import { todayCST, yesterdayCST, nowCST, parseTxnDateStart } from "@/lib/date-utils";
 import { getExchangeRate, preloadRates } from "@/lib/exchange-rate";
 import { sqlAffiliateTxnValidPlatformConnection } from "@/lib/affiliate-transaction-sql";
 
@@ -247,7 +247,7 @@ async function syncRecentTransactionsForUser(
   const cstNow = nowCST();
   const startStr = cstNow.subtract(days, "day").format("YYYY-MM-DD");
   const endStr = cstNow.format("YYYY-MM-DD");
-  const startDate = parseCSTDateStart(startStr);
+  const startDate = parseTxnDateStart(startStr);
   const endDate = cstNow.toDate();
   // DATE 列用 UTC 午夜作为比较起点（与数据中心口径一致）
   const statsStartDate = new Date(startStr + "T00:00:00.000Z");

@@ -4,7 +4,7 @@ import { apiSuccess, apiError } from "@/lib/constants";
 import { withLeader } from "@/lib/api-handler";
 import prisma from "@/lib/prisma";
 import { sqlAffiliateTxnValidPlatformConnection } from "@/lib/affiliate-transaction-sql";
-import { nowCST, parseCSTDateStart, parseCSTDateEndExclusive, isTodayCST, dateColumnStart, dateColumnEndExclusive, dateColumnTodayEndExclusive } from "@/lib/date-utils";
+import { nowCST, isTodayCST, dateColumnStart, dateColumnEndExclusive, dateColumnTodayEndExclusive, parseTxnDateStart, parseTxnDateEndExclusive, txnStartOfMonthUTC } from "@/lib/date-utils";
 
 /**
  * 获取指定组员的详细数据（组长专用）
@@ -35,9 +35,9 @@ export const GET = withLeader(async (req: NextRequest, { user }) => {
   const statsEnd = endDate
     ? (isTodayCST(endDate, cstNow) ? dateColumnTodayEndExclusive() : dateColumnEndExclusive(endDate))
     : dateColumnTodayEndExclusive();
-  const txnStart = startDate ? parseCSTDateStart(startDate) : cstNow.startOf("month").toDate();
+  const txnStart = startDate ? parseTxnDateStart(startDate) : txnStartOfMonthUTC();
   const txnEnd = endDate
-    ? (isTodayCST(endDate, cstNow) ? cstNow.toDate() : parseCSTDateEndExclusive(endDate))
+    ? (isTodayCST(endDate, cstNow) ? cstNow.toDate() : parseTxnDateEndExclusive(endDate))
     : cstNow.toDate();
 
   // 与数据中心一致：排除无 google_campaign_id 和空字符串的幽灵记录

@@ -2,7 +2,7 @@ import { NextRequest } from "next/server";
 import { getUserFromRequest, serializeData } from "@/lib/auth";
 import { apiSuccess, apiError, normalizePlatformCode } from "@/lib/constants";
 import prisma from "@/lib/prisma";
-import { nowCST, parseCSTDateStart, dateColumnStart } from "@/lib/date-utils";
+import { nowCST, dateColumnStart, parseTxnDateStart } from "@/lib/date-utils";
 import { getRedirectedMerchantKeys } from "@/lib/merchant-ownership-rules";
 import { sqlAffiliateTxnValidPlatformConnection } from "@/lib/affiliate-transaction-sql";
 
@@ -24,7 +24,7 @@ export async function POST(req: NextRequest) {
   const startStr = body.days
     ? cstNow.subtract(body.days, "day").format("YYYY-MM-DD")
     : DEFAULT_START;
-  const startDate = parseCSTDateStart(startStr);
+  const startDate = parseTxnDateStart(startStr);
   const statsStartDate = dateColumnStart(startStr);
   const endStr = cstNow.format("YYYY-MM-DD");
 

@@ -80,3 +80,32 @@ export function dateColumnTodayEndExclusive(): Date {
 export function startOfMonthCST() {
   return dayjs().tz(TZ).startOf("month");
 }
+
+/**
+ * affiliate_transactions DATETIME 列专用：UTC 日期零点起始（独占下界）。
+ * 各联盟平台 API 返回的 order_time 均以 UTC（或平台本地时间直接存储）为基准，
+ * 平台月度报告按 UTC 日期归月。使用 UTC 边界可保证 CRM 与平台数据口径一致，
+ * 避免 CST 时区偏移导致月末数小时数据被错误归入下一个月。
+ */
+export function parseTxnDateStart(dateStr: string): Date {
+  return new Date(dateStr + "T00:00:00.000Z");
+}
+
+/**
+ * affiliate_transactions DATETIME 列专用：UTC 日期次日零点（独占上界）。
+ * 与 parseTxnDateStart 配对使用，确保整个 UTC 日期的数据都被包含。
+ */
+export function parseTxnDateEndExclusive(dateStr: string): Date {
+  const d = new Date(dateStr + "T00:00:00.000Z");
+  d.setUTCDate(d.getUTCDate() + 1);
+  return d;
+}
+
+/**
+ * affiliate_transactions 专用：UTC 月初零点（用于"本月"默认范围）。
+ * 等价于将当前 CST 日期对应的 UTC 年月第一天零点。
+ */
+export function txnStartOfMonthUTC(): Date {
+  const cstYearMonth = dayjs().tz(TZ).format("YYYY-MM");
+  return new Date(cstYearMonth + "-01T00:00:00.000Z");
+}

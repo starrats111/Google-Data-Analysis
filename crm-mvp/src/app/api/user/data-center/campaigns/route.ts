@@ -3,7 +3,7 @@ import { getUserFromRequest, serializeData } from "@/lib/auth";
 import { apiSuccess, apiError } from "@/lib/constants";
 import prisma from "@/lib/prisma";
 import { cachedQuery, cacheDelete } from "@/lib/cache";
-import { nowCST, parseCSTDateStart, parseCSTDateEndExclusive, isTodayCST, dateColumnStart, dateColumnEndExclusive, dateColumnTodayEndExclusive } from "@/lib/date-utils";
+import { nowCST, isTodayCST, dateColumnStart, dateColumnEndExclusive, dateColumnTodayEndExclusive, parseTxnDateStart, parseTxnDateEndExclusive, txnStartOfMonthUTC } from "@/lib/date-utils";
 import { sqlAffiliateTxnValidPlatformConnection } from "@/lib/affiliate-transaction-sql";
 
 /**
@@ -73,10 +73,10 @@ export async function GET(req: NextRequest) {
     ? (isTodayCST(dateEnd, cstNow) ? dateColumnTodayEndExclusive() : dateColumnEndExclusive(dateEnd))
     : dateColumnTodayEndExclusive();
 
-  // affiliate_transactions.transaction_time 是 DATETIME 列，用 CST 转换是正确的
-  const txnStart = dateStart ? parseCSTDateStart(dateStart) : cstNow.startOf("month").toDate();
+  // affiliate_transactions.transaction_time 按 UTC 存储，使用 UTC 边界与平台报告口径一致
+  const txnStart = dateStart ? parseTxnDateStart(dateStart) : txnStartOfMonthUTC();
   const txnEnd = dateEnd
-    ? (isTodayCST(dateEnd, cstNow) ? cstNow.toDate() : parseCSTDateEndExclusive(dateEnd))
+    ? (isTodayCST(dateEnd, cstNow) ? cstNow.toDate() : parseTxnDateEndExclusive(dateEnd))
     : cstNow.toDate();
 
   // 构建 campaign 筛选条件

@@ -4,7 +4,7 @@ import { apiSuccess, apiError } from "@/lib/constants";
 import { withLeader } from "@/lib/api-handler";
 import prisma from "@/lib/prisma";
 import { sqlAffiliateTxnValidPlatformConnection } from "@/lib/affiliate-transaction-sql";
-import { nowCST, parseCSTDateStart, parseCSTDateEndExclusive, isTodayCST, dateColumnStart, dateColumnEndExclusive, dateColumnTodayEndExclusive, todayCST } from "@/lib/date-utils";
+import { nowCST, isTodayCST, dateColumnStart, dateColumnEndExclusive, dateColumnTodayEndExclusive, todayCST, parseTxnDateStart, parseTxnDateEndExclusive, txnStartOfMonthUTC } from "@/lib/date-utils";
 
 /**
  * 获取小组统计数据（组长专用）
@@ -81,9 +81,9 @@ export const GET = withLeader(async (req: NextRequest, { user }) => {
   const statsEnd = endDate
     ? (isTodayCST(endDate, cstNow) ? dateColumnTodayEndExclusive() : dateColumnEndExclusive(endDate))
     : dateColumnTodayEndExclusive();
-  const txnStart = startDate ? parseCSTDateStart(startDate) : cstNow.startOf("month").toDate();
+  const txnStart = startDate ? parseTxnDateStart(startDate) : txnStartOfMonthUTC();
   const txnEnd = endDate
-    ? (isTodayCST(endDate, cstNow) ? cstNow.toDate() : parseCSTDateEndExclusive(endDate))
+    ? (isTodayCST(endDate, cstNow) ? cstNow.toDate() : parseTxnDateEndExclusive(endDate))
     : cstNow.toDate();
 
   // 查询所有组员的有效 campaigns（排除幽灵记录，统一去重）
