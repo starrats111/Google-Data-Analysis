@@ -151,7 +151,7 @@ export async function queryMerchantAtc(opts: {
   // 1. 检查团队共享缓存
   if (!forceRefresh) {
     const cached = await prisma.merchant_atc_snapshots.findUnique({
-      where: { uk_domain_region: { domain, region } },
+      where: { domain_region: { domain, region } },
     });
     if (cached && Date.now() - cached.fetched_at.getTime() < CACHE_TTL_MS) {
       // 缓存命中：更新 user_merchants 统计，不消耗 SerpApi 额度
@@ -230,7 +230,7 @@ export async function queryMerchantAtc(opts: {
 
     // 6. 写入团队缓存
     await prisma.merchant_atc_snapshots.upsert({
-      where: { uk_domain_region: { domain, region } },
+      where: { domain_region: { domain, region } },
       create: {
         domain,
         region,
