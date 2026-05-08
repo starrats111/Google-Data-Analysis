@@ -226,12 +226,19 @@ export async function queryMerchantAtc(opts: {
   try {
     // 3. 调用 SerpApi
     // 用品牌词（去掉 TLD）搜索，platform=SEARCH 只取谷歌搜索广告
+    // end_date=昨天，start_date=30天前（无日期范围 ATC 常返回空结果）
     const brandText = extractBrand(domain);
     const serpRegion = toSerpApiRegion(region);
+    const yesterday = new Date(); yesterday.setDate(yesterday.getDate() - 1);
+    const monthAgo   = new Date(); monthAgo.setDate(monthAgo.getDate() - 31);
+    const fmt = (d: Date) =>
+      `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, "0")}${String(d.getDate()).padStart(2, "0")}`;
     const params: Record<string, string> = {
       engine: "google_ads_transparency_center",
       text: brandText,
       platform: "SEARCH",
+      start_date: fmt(monthAgo),
+      end_date:   fmt(yesterday),
       num: "100",
     };
     if (serpRegion) params.region = serpRegion;
@@ -352,10 +359,16 @@ export async function searchIntelligence(opts: {
   const serpApiKey = pickApiKey(serpApiKeys);
 
   const serpRegion = toSerpApiRegion(region);
+  const yesterday2 = new Date(); yesterday2.setDate(yesterday2.getDate() - 1);
+  const monthAgo2   = new Date(); monthAgo2.setDate(monthAgo2.getDate() - 31);
+  const fmt2 = (d: Date) =>
+    `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, "0")}${String(d.getDate()).padStart(2, "0")}`;
   const params: Record<string, string> = {
     engine: "google_ads_transparency_center",
     text,
     platform: "SEARCH",
+    start_date: fmt2(monthAgo2),
+    end_date:   fmt2(yesterday2),
     num: "100",
   };
   if (serpRegion) params.region = serpRegion;
