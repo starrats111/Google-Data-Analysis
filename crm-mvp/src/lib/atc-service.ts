@@ -95,6 +95,22 @@ export function extractDomain(url: string | null | undefined): string | null {
   }
 }
 
+/**
+ * 从域名提取品牌词用于 ATC 搜索。
+ * 例：ta3swim.com → "ta3swim"，shopbop.com → "shopbop"
+ * 多级 TLD（.co.uk / .com.au）也能正确处理。
+ */
+export function extractBrand(domain: string): string {
+  // 去掉端口
+  const host = domain.split(":")[0];
+  // 去掉已知多级 TLD
+  const multiTld = host.match(/^(.+)\.(com\.[a-z]{2}|net\.[a-z]{2}|org\.[a-z]{2}|co\.[a-z]{2})$/i);
+  if (multiTld) return multiTld[1].replace(/^www\./, "");
+  // 普通域名取最后一个点左边的部分
+  const parts = host.split(".");
+  return parts.length >= 2 ? parts[parts.length - 2] : host;
+}
+
 // ─── 只保留搜索/文字广告 ───
 // Google ATC 返回的 format 字段：text / image / video / html5 / display / shopping / app 等
 // 只统计搜索广告（文字广告）对应的广告主，排除展示/视频/购物广告
@@ -209,13 +225,13 @@ export async function queryMerchantAtc(opts: {
 
   try {
     // 3. 调用 SerpApi
-    // text=domain 搜索，platform=SEARCH 只取谷歌搜索广告，creative_format=text 只取文字广告
+    // 用品牌词（去掉 TLD）搜索，platform=SEARCH 只取谷歌搜索广告
+    const brandText = extractBrand(domain);
     const serpRegion = toSerpApiRegion(region);
     const params: Record<string, string> = {
       engine: "google_ads_transparency_center",
-      text: domain,
+      text: brandText,
       platform: "SEARCH",
-      creative_format: "text",
       num: "100",
     };
     if (serpRegion) params.region = serpRegion;
@@ -338,7 +354,6 @@ export async function searchIntelligence(opts: {
     engine: "google_ads_transparency_center",
     text,
     platform: "SEARCH",
-    creative_format: "text",
     num: "100",
   };
   if (serpRegion) params.region = serpRegion;
