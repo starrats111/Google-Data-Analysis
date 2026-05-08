@@ -216,6 +216,21 @@ export default function MerchantsPage() {
     fetch("/api/user/settings/serpapi").then((r) => r.json()).then((res) => {
       if (res.code === 0) setSerpApiConfigured((res.data as { has_key: boolean; masked_key: string | null }).has_key);
     }).catch(() => {});
+    // 加载已持久化的 ATC 快照
+    fetch("/api/user/atc/snapshots").then((r) => r.json()).then((res) => {
+      if (res.code === 0 && res.data) {
+        const data = res.data as Record<string, { count: number; region: string; topAdvertisers: { id: string; name: string }[]; syncedAt: string }>;
+        setAtcLocalData((prev) => {
+          const merged = { ...prev };
+          for (const [id, snap] of Object.entries(data)) {
+            if (!merged[id]) { // 不覆盖本次会话中已查询的最新数据
+              merged[id] = { count: snap.count, region: snap.region, topAdvertisers: snap.topAdvertisers, syncedAt: snap.syncedAt };
+            }
+          }
+          return merged;
+        });
+      }
+    }).catch(() => {});
   }, []);
   const getAtcRegion = useCallback((id: string) => atcRegions[id] ?? "US", [atcRegions]);
   const setAtcRegion = useCallback((id: string, region: string) => {
