@@ -87,7 +87,14 @@ export default function IntelligencePage() {
         // 0 结果时自动在本地快照中搜同名广告主（AR ID）
         if (res.data.total === 0 && nameForLocal) {
           const lr = await fetch(`/api/user/atc/find-advertiser?name=${encodeURIComponent(nameForLocal)}`).then(r => r.json());
-          if (lr.code === 0) setLocalHits(lr.data ?? []);
+          const hits = lr.code === 0 ? (lr.data ?? []) : [];
+          // 只有唯一匹配时自动触发精确查询，省去手动点击
+          if (hits.length === 1) {
+            setSearchText(hits[0].name || hits[0].id);
+            doSearch(new URLSearchParams({ advertiser_id: hits[0].id, region }).toString());
+            return;
+          }
+          setLocalHits(hits);
         }
       } else if (res.message?.includes("SerpApi Key")) setNoKey(true);
       else message.error(res.message ?? "查询失败");
@@ -214,8 +221,11 @@ export default function IntelligencePage() {
       <Title level={4} style={{ marginBottom: 4 }}>
         <EyeOutlined /> 广告情报
       </Title>
-      <Text type="secondary" style={{ display: "block", marginBottom: 16 }}>
+      <Text type="secondary" style={{ display: "block", marginBottom: 4 }}>
         按广告主名称/域名搜索，查看其在 Google 全平台投放的广告创意，筛选持续投放的高价值广告。
+      </Text>
+      <Text type="secondary" style={{ display: "block", marginBottom: 16, fontSize: 12, color: "#faad14" }}>
+        ⚠️ 中文广告主名称（如"包新蕾"）无法通过名称直接搜索——建议先在「我的商家」页查竞争度，系统会自动记录 AR ID；或输入 AR 编号（如 AR123456789）精确查询。
       </Text>
 
       {noKey && (
