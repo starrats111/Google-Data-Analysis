@@ -1,12 +1,12 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import {
   Card, Input, Button, Select, Space, Table, Tag, Typography,
   Collapse, Empty, Alert, App, Tooltip, Switch, InputNumber, Badge,
 } from "antd";
 import { SearchOutlined, EyeOutlined, LinkOutlined, SettingOutlined, FireOutlined } from "@ant-design/icons";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 
 const { Title, Text } = Typography;
 
@@ -68,34 +68,48 @@ function isPersistent(ad: AtcAd, minDays: number): boolean {
 export default function IntelligencePage() {
   const { message } = App.useApp();
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [searchText, setSearchText]   = useState("");
   const [region, setRegion]           = useState("US");
   const [loading, setLoading]         = useState(false);
   const [result, setResult]           = useState<{ advertisers: AdvertiserGroup[]; total: number } | null>(null);
   const [noKey, setNoKey]             = useState(false);
-  const [persistOnly, setPersistOnly] = useState(true);   // 默认只看持续投放
-  const [minDays, setMinDays]         = useState(15);     // 默认 15 天
+  const [persistOnly, setPersistOnly] = useState(true);
+  const [minDays, setMinDays]         = useState(15);
+
+  const doSearch = async (qs: string) => {
+    setLoading(true); setNoKey(false);
+    try {
+      const res = await fetch(`/api/user/atc/intelligence?${qs}`).then((r) => r.json());
+      if (res.code === 0) setResult(res.data);
+      else if (res.message?.includes("SerpApi Key")) setNoKey(true);
+      else message.error(res.message ?? "查询失败");
+    } catch { message.error("网络错误，请稍后重试"); }
+    finally { setLoading(false); }
+  };
+
+  // 从 URL 参数自动触发搜索（从商家广告主列表点「查情报」跳转过来）
+  useEffect(() => {
+    const arId = searchParams.get("advertiser_id") ?? "";
+    const name = searchParams.get("name") ?? "";
+    const rgn  = (searchParams.get("region") ?? "US").toUpperCase();
+    if (arId) {
+      setSearchText(name || arId);
+      setRegion(rgn);
+      doSearch(new URLSearchParams({ advertiser_id: arId, region: rgn }).toString());
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const handleSearch = async () => {
     const text = searchText.trim();
     if (!text) { message.warning("请输入广告主名称或域名"); return; }
-    setLoading(true);
-    setNoKey(false);
-    try {
-      const qs = new URLSearchParams({ text, region }).toString();
-      const res = await fetch(`/api/user/atc/intelligence?${qs}`).then((r) => r.json());
-      if (res.code === 0) {
-        setResult(res.data);
-      } else if (res.message?.includes("SerpApi Key")) {
-        setNoKey(true);
-      } else {
-        message.error(res.message ?? "查询失败");
-      }
-    } catch {
-      message.error("网络错误，请稍后重试");
-    } finally {
-      setLoading(false);
-    }
+    // 自动识别 AR ID 格式，精确查询
+    const isArId = /^AR\d+$/i.test(text);
+    const qs = isArId
+      ? new URLSearchParams({ advertiser_id: text, region }).toString()
+      : new URLSearchParams({ text, region }).toString();
+    doSearch(qs);
   };
 
   // 应用持续投放过滤

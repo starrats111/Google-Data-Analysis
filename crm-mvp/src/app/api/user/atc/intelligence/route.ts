@@ -6,11 +6,12 @@ import { searchIntelligence } from "@/lib/atc-service";
 export const GET = withUser(async (req: NextRequest, { user }) => {
   const userId = BigInt(user.userId);
   const { searchParams } = req.nextUrl;
-  const text = (searchParams.get("text") ?? "").trim();
-  const region = (searchParams.get("region") ?? "US").toUpperCase();
+  const text          = (searchParams.get("text") ?? "").trim();
+  const advertiser_id = (searchParams.get("advertiser_id") ?? "").trim();
+  const region        = (searchParams.get("region") ?? "US").toUpperCase();
 
-  if (!text) {
-    return NextResponse.json({ code: -1, message: "请输入广告主名称" }, { status: 400 });
+  if (!text && !advertiser_id) {
+    return NextResponse.json({ code: -1, message: "请输入广告主名称或 ID" }, { status: 400 });
   }
 
   // 读取用户 SerpApi Key 池
@@ -24,7 +25,8 @@ export const GET = withUser(async (req: NextRequest, { user }) => {
   }
 
   const result = await searchIntelligence({
-    text,
+    text:          text || undefined,
+    advertiser_id: advertiser_id || undefined,
     region,
     serpApiKeys,
   });

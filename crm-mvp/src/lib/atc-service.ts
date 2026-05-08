@@ -350,27 +350,32 @@ export async function queryMerchantAtc(opts: {
 // ─── 广告情报：按广告主名称搜索 ───
 
 export async function searchIntelligence(opts: {
-  text: string;
+  text?: string;
+  advertiser_id?: string;   // AR... 格式，精确查指定广告主
   region?: string;
   serpApiKeys: string[];
 }): Promise<AtcIntelligenceResult> {
-  const { text, region = "US", serpApiKeys } = opts;
+  const { text, advertiser_id, region = "US", serpApiKeys } = opts;
   const serpApiKey = pickApiKey(serpApiKeys);
 
   // 情报搜索：不限平台，用近 30 天范围（让用户能看到广告主全平台投放）
   const serpRegion = toSerpApiRegion(region);
-  const endDate2   = new Date(); endDate2.setDate(endDate2.getDate() - 1);   // 昨天
-  const startDate2 = new Date(); startDate2.setDate(startDate2.getDate() - 31); // 31 天前
+  const endDate2   = new Date(); endDate2.setDate(endDate2.getDate() - 1);
+  const startDate2 = new Date(); startDate2.setDate(startDate2.getDate() - 31);
   const fmt2 = (d: Date) =>
     `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, "0")}${String(d.getDate()).padStart(2, "0")}`;
   const params: Record<string, string> = {
     engine: "google_ads_transparency_center",
-    text,
-    // 不加 platform 过滤，允许全平台（Search/Display/YouTube 等）
     start_date: fmt2(startDate2),
     end_date:   fmt2(endDate2),
     num: "100",
   };
+  // advertiser_id 优先（精确查询），否则用 text 文字搜索
+  if (advertiser_id) {
+    params.advertiser_id = advertiser_id;
+  } else if (text) {
+    params.text = text;
+  }
   if (serpRegion) params.region = serpRegion;
   const data = await callSerpApi(params, serpApiKey);
 

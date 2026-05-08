@@ -1030,7 +1030,7 @@ export default function MerchantsPage() {
       title={`广告主列表 — ${atcDetailModal?.merchantName ?? ""} (${atcDetailModal?.region ?? ""})`}
       footer={null}
       onCancel={() => setAtcDetailModal(null)}
-      width={480}
+      width={520}
     >
       {atcDetailModal && (
         atcDetailModal.advertisers.length === 0 ? (
@@ -1052,11 +1052,20 @@ export default function MerchantsPage() {
                 ),
               },
               {
-                title: "ATC",
+                title: "操作",
                 dataIndex: "id",
-                width: 60,
-                render: (id: string) => id.startsWith("AR") ? (
-                  <a href={`https://adstransparency.google.com/advertiser/${id}`} target="_blank" rel="noreferrer">查看</a>
+                width: 120,
+                render: (id: string, row: { id: string; name: string }) => id.startsWith("AR") ? (
+                  <Space size={4}>
+                    <a href={`https://adstransparency.google.com/advertiser/${id}`} target="_blank" rel="noreferrer">ATC</a>
+                    <Button
+                      size="small" type="link" style={{ padding: 0 }}
+                      onClick={() => {
+                        setAtcDetailModal(null);
+                        router.push(`/user/intelligence?advertiser_id=${id}&name=${encodeURIComponent(row.name)}&region=${atcDetailModal?.region ?? "US"}`);
+                      }}
+                    >查情报</Button>
+                  </Space>
                 ) : null,
               },
             ]}
