@@ -15,12 +15,13 @@ export const POST = withUser(async (req: NextRequest, { user }) => {
   const forceRefresh = body.force_refresh === true;
   const region = (body.region ?? "US").toUpperCase();
 
-  // 1. 读取用户 SerpApi Key
-  const userRow = await prisma.users.findUnique({
-    where: { id: userId },
-    select: { serpapi_key: true },
+  // 1. 读取用户 SerpApi Key 池（取所有启用的 Key）
+  const keyRows = await prisma.user_serpapi_keys.findMany({
+    where: { user_id: userId, is_active: 1, is_deleted: 0 },
+    select: { api_key: true },
   });
-  if (!userRow?.serpapi_key) {
+  const serpApiKeys = keyRows.map((r) => r.api_key);
+  if (serpApiKeys.length === 0) {
     return NextResponse.json({ code: -1, message: "请先在「个人设置 → 广告情报」中配置 SerpApi Key" }, { status: 400 });
   }
 
@@ -44,7 +45,7 @@ export const POST = withUser(async (req: NextRequest, { user }) => {
     merchantName: merchant.merchant_name,
     domain,
     region,
-    serpApiKey: userRow.serpapi_key,
+    serpApiKeys,
     forceRefresh,
   });
 

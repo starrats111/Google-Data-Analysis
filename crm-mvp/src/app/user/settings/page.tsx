@@ -647,96 +647,201 @@ function ScriptConfigTab() {
 }
 
 // ==================== 广告情报 Tab ====================
+interface SerpApiKeyRow {
+  id: string;
+  key_name: string;
+  masked_key: string;
+  is_active: boolean;
+  created_at: string;
+}
+
 function SerpApiTab() {
   const { message } = App.useApp();
-  const [keyInput, setKeyInput] = useState("");
-  const [hasKey, setHasKey] = useState(false);
-  const [maskedKey, setMaskedKey] = useState<string | null>(null);
-  const [saving, setSaving] = useState(false);
-  const [testing, setTesting] = useState(false);
+  const [keys, setKeys] = useState<SerpApiKeyRow[]>([]);
   const [loading, setLoading] = useState(true);
+  const [addVisible, setAddVisible] = useState(false);
+  const [newKey, setNewKey] = useState("");
+  const [newKeyName, setNewKeyName] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [testingId, setTestingId] = useState<string | null>(null);
+  const [testKeyInput, setTestKeyInput] = useState("");
+  const [testingNew, setTestingNew] = useState(false);
 
-  const fetchKey = async () => {
+  const fetchKeys = async () => {
     setLoading(true);
     const res = await fetch("/api/user/settings/serpapi").then((r) => r.json());
-    if (res.code === 0) {
-      setHasKey(res.data.has_key);
-      setMaskedKey(res.data.masked_key);
-    }
+    if (res.code === 0) setKeys(res.data);
     setLoading(false);
   };
 
-  useEffect(() => { fetchKey(); }, []);
+  useEffect(() => { fetchKeys(); }, []);
 
-  const handleSave = async () => {
-    const key = keyInput.trim();
+  const handleAdd = async () => {
+    const key = newKey.trim();
     if (!key) { message.warning("请输入 API Key"); return; }
     setSaving(true);
     const res = await fetch("/api/user/settings/serpapi", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ serpapi_key: key }),
+      body: JSON.stringify({ api_key: key, key_name: newKeyName.trim() || undefined }),
     }).then((r) => r.json());
     setSaving(false);
-    if (res.code === 0) { message.success("保存成功"); setKeyInput(""); fetchKey(); }
+    if (res.code === 0) {
+      message.success("添加成功");
+      setNewKey(""); setNewKeyName(""); setAddVisible(false); fetchKeys();
+    } else message.error(res.message);
+  };
+
+  const handleDelete = async (id: string) => {
+    const res = await fetch("/api/user/settings/serpapi", {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id }),
+    }).then((r) => r.json());
+    if (res.code === 0) { message.success("已删除"); fetchKeys(); }
     else message.error(res.message);
   };
 
-  const handleTest = async () => {
-    const key = keyInput.trim();
-    setTesting(true);
+  const handleToggle = async (id: string, is_active: boolean) => {
+    const res = await fetch("/api/user/settings/serpapi", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id, is_active: !is_active }),
+    }).then((r) => r.json());
+    if (res.code === 0) { message.success(is_active ? "已禁用" : "已启用"); fetchKeys(); }
+    else message.error(res.message);
+  };
+
+  const handleTestExisting = async (id: string) => {
+    setTestingId(id);
     const res = await fetch("/api/user/settings/serpapi", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ serpapi_key: key || undefined }),
+      body: JSON.stringify({ id }),
     }).then((r) => r.json());
-    setTesting(false);
+    setTestingId(null);
     if (res.code === 0) message.success(res.message);
     else message.error(res.message);
   };
 
-  const handleDelete = async () => {
+  const handleTestNew = async () => {
+    const key = testKeyInput.trim() || newKey.trim();
+    if (!key) { message.warning("请先输入 Key"); return; }
+    setTestingNew(true);
     const res = await fetch("/api/user/settings/serpapi", {
-      method: "POST",
+      method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action: "delete" }),
+      body: JSON.stringify({ api_key: key }),
     }).then((r) => r.json());
-    if (res.code === 0) { message.success("已删除"); setHasKey(false); setMaskedKey(null); }
+    setTestingNew(false);
+    if (res.code === 0) message.success(res.message);
     else message.error(res.message);
   };
 
+  const totalQuota = keys.filter((k) => k.is_active).length * 250;
+
+  const columns = [
+    { title: "备注名", dataIndex: "key_name", width: 120, render: (v: string) => <Text strong>{v}</Text> },
+    { title: "Key（脱敏）", dataIndex: "masked_key", render: (v: string) => <Text code style={{ fontSize: 12 }}>{v}</Text> },
+    {
+      title: "状态", dataIndex: "is_active", width: 80,
+      render: (v: boolean) => v ? <Tag color="green">启用</Tag> : <Tag color="default">禁用</Tag>,
+    },
+    {
+      title: "操作", width: 200,
+      render: (_: unknown, rec: SerpApiKeyRow) => (
+        <Space size={4}>
+          <Button
+            size="small"
+            loading={testingId === rec.id}
+            onClick={() => handleTestExisting(rec.id)}
+          >
+            测试
+          </Button>
+          <Button
+            size="small"
+            onClick={() => handleToggle(rec.id, rec.is_active)}
+          >
+            {rec.is_active ? "禁用" : "启用"}
+          </Button>
+          <Popconfirm title="确认删除此 Key？" onConfirm={() => handleDelete(rec.id)}>
+            <Button size="small" danger>删除</Button>
+          </Popconfirm>
+        </Space>
+      ),
+    },
+  ];
+
   return (
-    <div style={{ maxWidth: 560 }}>
-      <Card title={<><EyeOutlined /> 广告情报设置</>} size="small" loading={loading}>
+    <div style={{ maxWidth: 680 }}>
+      <Card
+        title={<><EyeOutlined /> 广告情报 — SerpApi Key 管理</>}
+        size="small"
+        extra={
+          <Button type="primary" size="small" icon={<PlusOutlined />} onClick={() => setAddVisible(true)}>
+            添加 Key
+          </Button>
+        }
+        loading={loading}
+      >
         <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-          {hasKey && (
-            <div>
-              <Text type="secondary" style={{ display: "block", marginBottom: 4 }}>当前已配置 Key</Text>
-              <Space>
-                <Text code>{maskedKey}</Text>
-                <Button size="small" danger onClick={handleDelete}>删除</Button>
-              </Space>
+          {keys.length > 0 && (
+            <div style={{ background: "#f0f7ff", borderRadius: 6, padding: "8px 14px", fontSize: 12, color: "#1677ff" }}>
+              已配置 <strong>{keys.length}</strong> 个 Key，启用 <strong>{keys.filter(k => k.is_active).length}</strong> 个 ·
+              合计免费额度 <strong>{totalQuota}</strong> 次/月
             </div>
           )}
-          <div>
-            <Text type="secondary" style={{ display: "block", marginBottom: 4 }}>
-              {hasKey ? "更新 SerpApi API Key" : "配置 SerpApi API Key"}
-            </Text>
-            <Space.Compact style={{ width: "100%" }}>
-              <Input.Password
-                placeholder="输入 SerpApi API Key"
-                value={keyInput}
-                onChange={(e) => setKeyInput(e.target.value)}
-                style={{ flex: 1 }}
-              />
-              <Button loading={testing} onClick={handleTest}>测试</Button>
-              <Button type="primary" loading={saving} icon={<SaveOutlined />} onClick={handleSave}>保存</Button>
-            </Space.Compact>
-          </div>
+
+          {keys.length === 0 ? (
+            <div style={{ textAlign: "center", padding: "24px 0", color: "#bfbfbf" }}>
+              <EyeOutlined style={{ fontSize: 32, marginBottom: 8 }} />
+              <div>尚未配置 SerpApi Key，点击右上角「添加 Key」开始使用</div>
+            </div>
+          ) : (
+            <Table
+              dataSource={keys}
+              columns={columns}
+              rowKey="id"
+              size="small"
+              pagination={false}
+            />
+          )}
+
+          {addVisible && (
+            <Card size="small" style={{ background: "#fafafa" }} title="添加新 Key">
+              <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                <div>
+                  <Text type="secondary" style={{ display: "block", marginBottom: 4 }}>备注名（选填）</Text>
+                  <Input
+                    placeholder={`Key ${keys.length + 1}`}
+                    value={newKeyName}
+                    onChange={(e) => setNewKeyName(e.target.value)}
+                    style={{ maxWidth: 200 }}
+                  />
+                </div>
+                <div>
+                  <Text type="secondary" style={{ display: "block", marginBottom: 4 }}>SerpApi API Key</Text>
+                  <Space.Compact style={{ width: "100%" }}>
+                    <Input.Password
+                      placeholder="粘贴 SerpApi API Key"
+                      value={newKey}
+                      onChange={(e) => { setNewKey(e.target.value); setTestKeyInput(e.target.value); }}
+                      style={{ flex: 1 }}
+                    />
+                    <Button loading={testingNew} onClick={handleTestNew}>测试</Button>
+                    <Button type="primary" loading={saving} icon={<SaveOutlined />} onClick={handleAdd}>添加</Button>
+                    <Button onClick={() => { setAddVisible(false); setNewKey(""); setNewKeyName(""); }}>取消</Button>
+                  </Space.Compact>
+                </div>
+              </div>
+            </Card>
+          )}
+
           <div style={{ background: "#f6f8fa", borderRadius: 6, padding: "10px 14px", fontSize: 12, color: "#666", lineHeight: "1.8" }}>
-            <div><strong>免费额度</strong>：每月 250 次查询</div>
+            <div><strong>免费额度</strong>：每人每账号 250 次/月，多 Key 额度叠加</div>
             <div><strong>获取地址</strong>：<a href="https://serpapi.com/manage-api-key" target="_blank" rel="noreferrer">serpapi.com → Dashboard → API Key</a></div>
-            <div><strong>团队共享缓存</strong>：同一商家域名 24 小时内只消耗 1 次额度</div>
+            <div><strong>选取策略</strong>：每次查询随机从启用的 Key 中选取，均匀分摊用量</div>
+            <div><strong>团队缓存</strong>：同一商家域名 24h 内只消耗 1 次额度</div>
           </div>
         </div>
       </Card>

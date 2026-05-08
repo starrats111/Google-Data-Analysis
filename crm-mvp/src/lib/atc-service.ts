@@ -113,6 +113,13 @@ interface SerpApiResponse {
   error?: string;
 }
 
+// ─── 从 Key 池中随机选一个可用 Key ───
+export function pickApiKey(keys: string[]): string {
+  const active = keys.filter((k) => k && k.trim());
+  if (active.length === 0) throw new Error("请先配置 SerpApi Key");
+  return active[Math.floor(Math.random() * active.length)];
+}
+
 async function callSerpApi(params: Record<string, string>, apiKey: string): Promise<SerpApiResponse> {
   const qs = new URLSearchParams({ ...params, api_key: apiKey }).toString();
   const res = await fetch(`https://serpapi.com/search?${qs}`, {
@@ -135,10 +142,11 @@ export async function queryMerchantAtc(opts: {
   merchantName: string;
   domain: string;
   region?: string;
-  serpApiKey: string;
+  serpApiKeys: string[];
   forceRefresh?: boolean;
 }): Promise<AtcMerchantResult> {
-  const { merchantId, merchantName, domain, region = "US", serpApiKey, forceRefresh = false } = opts;
+  const { merchantId, merchantName, domain, region = "US", serpApiKeys, forceRefresh = false } = opts;
+  const serpApiKey = pickApiKey(serpApiKeys);
 
   // 1. 检查团队共享缓存
   if (!forceRefresh) {
@@ -275,9 +283,10 @@ export async function queryMerchantAtc(opts: {
 export async function searchIntelligence(opts: {
   text: string;
   region?: string;
-  serpApiKey: string;
+  serpApiKeys: string[];
 }): Promise<AtcIntelligenceResult> {
-  const { text, region = "US", serpApiKey } = opts;
+  const { text, region = "US", serpApiKeys } = opts;
+  const serpApiKey = pickApiKey(serpApiKeys);
 
   const data = await callSerpApi(
     { engine: "google_ads_transparency_center", text, region, num: "100" },
