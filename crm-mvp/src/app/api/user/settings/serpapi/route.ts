@@ -45,7 +45,7 @@ export const PUT = withUser(async (req: NextRequest, { user }) => {
     if (!row?.serpapi_key) return NextResponse.json({ code: -1, message: "尚未配置 SerpApi Key" }, { status: 400 });
   }
 
-  const testKey = keyToTest || (await prisma.users.findUnique({ where: { id: userId }, select: { serpapi_key: true } }))?.serpapi_key ?? "";
+  const testKey = keyToTest || ((await prisma.users.findUnique({ where: { id: userId }, select: { serpapi_key: true } }))?.serpapi_key ?? "");
 
   try {
     const qs = new URLSearchParams({
