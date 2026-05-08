@@ -174,6 +174,31 @@ async function callSerpApi(params: Record<string, string>, apiKey: string): Prom
   return res.json() as Promise<SerpApiResponse>;
 }
 
+/**
+ * 通过 Google 搜索 "name site:adstransparency.google.com" 来发现广告主的 AR ID。
+ * ATC 广告主主页 URL 格式：https://adstransparency.google.com/advertiser/AR123456789
+ * 适用于中文等无法通过 ATC text 参数搜索的广告主名称。
+ */
+export async function findArIdByName(name: string, apiKey: string): Promise<string | null> {
+  try {
+    const params: Record<string, string> = {
+      engine: "google",
+      q: `"${name}" site:adstransparency.google.com`,
+      num: "10",
+      hl: "zh-CN",
+    };
+    const data = await callSerpApi(params, apiKey) as Record<string, unknown>;
+    const results = (data.organic_results ?? []) as Array<{ link?: string; title?: string }>;
+    for (const r of results) {
+      const m = (r.link ?? "").match(/adstransparency\.google\.com\/advertiser\/(AR\d+)/i);
+      if (m) return m[1];
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 // ─── 核心：商家竞争度查询（带缓存）───
 
 const CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 小时
