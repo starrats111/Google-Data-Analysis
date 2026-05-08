@@ -237,7 +237,9 @@ export async function queryMerchantAtc(opts: {
     if (serpRegion) params.region = serpRegion;
     const data = await callSerpApi(params, serpApiKey);
 
-    if (data.error) throw new Error(data.error);
+    // "no results" 视为合法的 0 结果，而非错误
+    const NO_RESULTS_MSG = "hasn't returned any results";
+    if (data.error && !data.error.includes(NO_RESULTS_MSG)) throw new Error(data.error);
 
     const allAds: SerpApiAd[] = data.ads ?? [];
 
@@ -359,7 +361,8 @@ export async function searchIntelligence(opts: {
   if (serpRegion) params.region = serpRegion;
   const data = await callSerpApi(params, serpApiKey);
 
-  if (data.error) throw new Error(data.error);
+  const NO_RESULTS_MSG = "hasn't returned any results";
+  if (data.error && !data.error.includes(NO_RESULTS_MSG)) throw new Error(data.error);
 
   const allAds: SerpApiAd[] = data.ads ?? [];
   // 只保留搜索/文字广告
