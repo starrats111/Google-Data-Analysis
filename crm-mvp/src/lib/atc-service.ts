@@ -95,6 +95,15 @@ export function extractDomain(url: string | null | undefined): string | null {
   }
 }
 
+// ─── 只保留搜索/文字广告 ───
+// Google ATC 返回的 format 字段：text / image / video / html5 / display / shopping / app 等
+// 只统计搜索广告（文字广告）对应的广告主，排除展示/视频/购物广告
+function isSearchAd(format: string | undefined): boolean {
+  if (!format) return true; // 无 format 字段时保留
+  const f = format.toLowerCase();
+  return f === "text" || f === "text_ad" || f === "search" || !["image", "video", "html5", "display", "shopping", "app"].some((x) => f.includes(x));
+}
+
 // ─── SerpApi 调用 ───
 
 interface SerpApiAd {
@@ -191,18 +200,31 @@ export async function queryMerchantAtc(opts: {
 
     if (data.error) throw new Error(data.error);
 
-    const ads: SerpApiAd[] = data.ads ?? [];
+    const allAds: SerpApiAd[] = data.ads ?? [];
 
-    // 4. 去重广告主
-    const advertiserMap = new Map<string, string>();
+    // 4a. 只保留搜索/文字广告
+    const searchAds = allAds.filter((ad) => isSearchAd(ad.format));
+
+    // 4b. 按 advertiser_id 严格去重（优先用 id，无 id 则用 name 去重）
+    const advertiserMap = new Map<string, string>(); // id → name
+    const seenNames = new Set<string>();             // 无 id 时用 name 去重
     const sampleAds: AtcAd[] = [];
-    for (const ad of ads) {
-      const advId = ad.advertiser_id ?? "";
-      const advName = ad.advertiser_name ?? "";
-      if (advId && !advertiserMap.has(advId)) {
-        advertiserMap.set(advId, advName);
+
+    for (const ad of searchAds) {
+      const advId = (ad.advertiser_id ?? "").trim();
+      const advName = (ad.advertiser_name ?? "").trim();
+
+      if (advId) {
+        if (!advertiserMap.has(advId)) advertiserMap.set(advId, advName);
+      } else if (advName) {
+        const normName = normalize(advName);
+        if (!seenNames.has(normName)) {
+          seenNames.add(normName);
+          advertiserMap.set(`_name_${normName}`, advName);
+        }
       }
-      if (sampleAds.length < 10) {
+
+      if (sampleAds.length < 10 && isSearchAd(ad.format)) {
         sampleAds.push({
           format: ad.format ?? "text",
           title: ad.title,
@@ -295,12 +317,22 @@ export async function searchIntelligence(opts: {
 
   if (data.error) throw new Error(data.error);
 
-  const ads: SerpApiAd[] = data.ads ?? [];
+  const allAds: SerpApiAd[] = data.ads ?? [];
+  // 只保留搜索/文字广告
+  const ads = allAds.filter((ad) => isSearchAd(ad.format));
 
-  // 按广告主分组
+  // 按广告主分组（严格去重：优先用 advertiser_id）
   const advertiserAdsMap = new Map<string, { name: string; ads: AtcAd[] }>();
+  const seenNames = new Set<string>();
   for (const ad of ads) {
-    const advId = ad.advertiser_id ?? `unknown_${Math.random()}`;
+    const rawId = (ad.advertiser_id ?? "").trim();
+    const rawName = (ad.advertiser_name ?? "未知广告主").trim();
+    const advId = rawId || `_name_${normalize(rawName)}`;
+    if (!rawId) {
+      const normName = normalize(rawName);
+      if (seenNames.has(normName)) continue;
+      seenNames.add(normName);
+    }
     const advName = ad.advertiser_name ?? "未知广告主";
     if (!advertiserAdsMap.has(advId)) {
       advertiserAdsMap.set(advId, { name: advName, ads: [] });

@@ -207,23 +207,32 @@ export default function MerchantsPage() {
   }, [cbHitsData]);
   // ATC 广告情报状态
   const [atcLoading, setAtcLoading] = useState<Record<string, boolean>>({});
-  const [atcLocalData, setAtcLocalData] = useState<Record<string, { count: number; syncedAt: string }>>({});
+  const [atcLocalData, setAtcLocalData] = useState<Record<string, { count: number; syncedAt: string; region: string }>>({});
+  const [atcPopover, setAtcPopover] = useState<Record<string, boolean>>({}); // popover 开关
+  const [atcRegions, setAtcRegions] = useState<Record<string, string>>({}); // 每行选择的地区
   const [serpApiConfigured, setSerpApiConfigured] = useState<boolean | null>(null);
   useEffect(() => {
     fetch("/api/user/settings/serpapi").then((r) => r.json()).then((res) => {
-      if (res.code === 0) setSerpApiConfigured(res.data.has_key);
+      if (res.code === 0) setSerpApiConfigured((res.data as { has_key: boolean; masked_key: string | null }).has_key);
     }).catch(() => {});
   }, []);
-  const triggerAtcQuery = useCallback(async (rec: Merchant, force = false) => {
+  const getAtcRegion = useCallback((id: string) => atcRegions[id] ?? "US", [atcRegions]);
+  const setAtcRegion = useCallback((id: string, region: string) => {
+    setAtcRegions((prev) => ({ ...prev, [id]: region }));
+  }, []);
+  const openAtcPopover = useCallback((id: string) => setAtcPopover((p) => ({ ...p, [id]: true })), []);
+  const closeAtcPopover = useCallback((id: string) => setAtcPopover((p) => ({ ...p, [id]: false })), []);
+  const triggerAtcQuery = useCallback(async (rec: Merchant, region: string, force = false) => {
+    closeAtcPopover(rec.id);
     setAtcLoading((prev) => ({ ...prev, [rec.id]: true }));
     try {
       const res = await fetch("/api/user/atc/merchant-count", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ merchant_id: rec.id, force_refresh: force }),
+        body: JSON.stringify({ merchant_id: rec.id, force_refresh: force, region }),
       }).then((r) => r.json());
       if (res.code === 0) {
-        setAtcLocalData((prev) => ({ ...prev, [rec.id]: { count: res.data.real_count, syncedAt: res.data.fetched_at } }));
+        setAtcLocalData((prev) => ({ ...prev, [rec.id]: { count: res.data.real_count, syncedAt: res.data.fetched_at, region } }));
       } else {
         message.error(res.message);
       }
@@ -232,7 +241,7 @@ export default function MerchantsPage() {
     } finally {
       setAtcLoading((prev) => ({ ...prev, [rec.id]: false }));
     }
-  }, [message]);
+  }, [message, closeAtcPopover]);
 
   const [cc, setCc] = useState(""); const [qc, setQc] = useState("");
   const { data: holidays, isLoading: hl } = useApiWithParams<Holiday[]>(qc ? "/api/user/holidays" : null, { country: qc });
@@ -404,27 +413,108 @@ export default function MerchantsPage() {
     { title: "佣金率", dataIndex: "commission_rate", width: 110, sorter: true, sortOrder: colSortOrder("commission_rate"), render: (v: string | null) => <CommissionCell v={v} /> },
     { title: "支持地区", dataIndex: "supported_regions", width: 150, render: (v: unknown[] | null) => <RB r={v} /> },
     { title: "状态", dataIndex: "ad_status", width: 90, render: (v: string) => v === "ENABLED" ? <Tag color="green">已启用</Tag> : v === "PAUSED" ? <Tag color="orange">已暂停</Tag> : v === "NOT_SUBMITTED" ? <Tag color="blue">已领取</Tag> : <Tag>未知</Tag> },
-    { title: "ATC竞争度", width: 150, render: (_: unknown, rec: Merchant) => {
+    { title: "ATC竞争度", width: 180, render: (_: unknown, rec: Merchant) => {
       const loading = atcLoading[rec.id];
       const local = atcLocalData[rec.id];
       const count = local?.count ?? rec.atc_advertiser_count ?? null;
       const status = local ? "done" : (rec.atc_sync_status ?? "idle");
+      const region = getAtcRegion(rec.id);
+      const popoverOpen = atcPopover[rec.id] ?? false;
+
       if (serpApiConfigured === false) {
-        return <Button size="small" type="link" style={{ padding: 0, fontSize: 12 }} onClick={() => router.push("/user/settings?tab=serpapi")}>配置Key</Button>;
+        return <Button size="small" type="link" style={{ padding: 0, fontSize: 12 }} onClick={() => router.push("/user/settings")}>配置Key</Button>;
       }
-      if (loading || status === "syncing") return <span style={{ color: "#1677ff" }}><SyncOutlined spin /> 查询中</span>;
+      if (loading || status === "syncing") {
+        return <span style={{ color: "#1677ff", fontSize: 12 }}><SyncOutlined spin /> 查询中…</span>;
+      }
+
+      const regionPopoverContent = (
+        <div style={{ width: 200 }}>
+          <div style={{ marginBottom: 8, fontSize: 12, color: "#666" }}>选择查询国家（仅统计搜索广告）</div>
+          <Select
+            value={region}
+            onChange={(v) => setAtcRegion(rec.id, v)}
+            style={{ width: "100%", marginBottom: 10 }}
+            options={[
+              { value: "US", label: "🇺🇸 美国 (US)" },
+              { value: "GB", label: "🇬🇧 英国 (GB)" },
+              { value: "AU", label: "🇦🇺 澳大利亚 (AU)" },
+              { value: "CA", label: "🇨🇦 加拿大 (CA)" },
+              { value: "DE", label: "🇩🇪 德国 (DE)" },
+              { value: "FR", label: "🇫🇷 法国 (FR)" },
+              { value: "IT", label: "🇮🇹 意大利 (IT)" },
+              { value: "ES", label: "🇪🇸 西班牙 (ES)" },
+              { value: "NL", label: "🇳🇱 荷兰 (NL)" },
+              { value: "SE", label: "🇸🇪 瑞典 (SE)" },
+              { value: "NO", label: "🇳🇴 挪威 (NO)" },
+              { value: "DK", label: "🇩🇰 丹麦 (DK)" },
+              { value: "JP", label: "🇯🇵 日本 (JP)" },
+              { value: "SG", label: "🇸🇬 新加坡 (SG)" },
+            ]}
+            popupMatchSelectWidth={false}
+          />
+          <Button type="primary" size="small" block onClick={() => triggerAtcQuery(rec, region, true)}>
+            开始查询
+          </Button>
+        </div>
+      );
+
       if (status === "done" && count !== null) {
         const color = count >= 50 ? "#f5222d" : count >= 10 ? "#fa8c16" : "#52c41a";
         const label = count >= 100 ? "100+" : String(count);
-        return <Space size={4}><span style={{ color, fontWeight: 600 }}>{label}个</span><Tooltip title="强制刷新"><Button size="small" icon={<ReloadOutlined />} type="text" onClick={() => triggerAtcQuery(rec, true)} /></Tooltip></Space>;
+        const shownRegion = local?.region ?? "US";
+        return (
+          <Space size={4}>
+            <span style={{ color, fontWeight: 600 }}>{label}个</span>
+            <Tag style={{ fontSize: 11, padding: "0 4px", margin: 0 }}>{shownRegion}</Tag>
+            <Tooltip title="更换国家或刷新">
+              <Popover
+                open={popoverOpen}
+                onOpenChange={(v) => v ? openAtcPopover(rec.id) : closeAtcPopover(rec.id)}
+                content={regionPopoverContent}
+                title={null}
+                trigger="click"
+                placement="bottomRight"
+              >
+                <Button size="small" icon={<ReloadOutlined />} type="text" />
+              </Popover>
+            </Tooltip>
+          </Space>
+        );
       }
-      if (status === "error") return <Space size={4}><span style={{ color: "#f5222d" }}>失败</span><Button size="small" onClick={() => triggerAtcQuery(rec)}>重试</Button></Space>;
-      return <Button size="small" onClick={() => triggerAtcQuery(rec)}>查竞争度</Button>;
+
+      if (status === "error") {
+        return (
+          <Popover
+            open={popoverOpen}
+            onOpenChange={(v) => v ? openAtcPopover(rec.id) : closeAtcPopover(rec.id)}
+            content={regionPopoverContent}
+            title={null}
+            trigger="click"
+            placement="bottomRight"
+          >
+            <Button size="small" danger>重新查询</Button>
+          </Popover>
+        );
+      }
+
+      return (
+        <Popover
+          open={popoverOpen}
+          onOpenChange={(v) => v ? openAtcPopover(rec.id) : closeAtcPopover(rec.id)}
+          content={regionPopoverContent}
+          title={null}
+          trigger="click"
+          placement="bottomRight"
+        >
+          <Button size="small">查竞争度</Button>
+        </Popover>
+      );
     }},
     { title: "在投人数", dataIndex: "active_advertisers", width: 90, align: "center" as const, render: (v: number, rec: Merchant) => { const n = v || 0; return n > 0 ? <Button size="small" type="link" style={{ padding: 0, fontWeight: 600 }} onClick={() => showActiveAdv(rec)}>{n} 人</Button> : <span style={{ color: "#bfbfbf" }}>0</span>; } },
     { title: "标签", width: 120, render: (_: unknown, rec: any) => { const labels = rec.labels || []; if (labels.length === 0) return <span style={{ color: "#ccc" }}>-</span>; return <Space size={4} wrap>{labels.map((l: any, i: number) => <Tooltip key={i} title={l.detail}><Tag color={l.color} style={{ cursor: "pointer" }}>{l.text}</Tag></Tooltip>)}</Space>; } },
     { title: "操作", width: 100, render: (_: unknown, rec: Merchant) => <Popconfirm title="确认取消领取？" onConfirm={() => doRelease(rec.id)}><Button size="small" danger>取消领取</Button></Popconfirm> },
-  ], [doRelease, showActiveAdv, copyLink, sortField, sortOrder, atcLoading, atcLocalData, serpApiConfigured, triggerAtcQuery, router]);
+  ], [doRelease, showActiveAdv, copyLink, sortField, sortOrder, atcLoading, atcLocalData, serpApiConfigured, triggerAtcQuery, router, getAtcRegion, setAtcRegion, atcPopover, openAtcPopover, closeAtcPopover]);
   const availCols = useMemo(() => [
     { title: "商家名称", dataIndex: "merchant_name", width: 280, sorter: true, sortOrder: colSortOrder("merchant_name"), render: (_: string, rec: Merchant) => {
       const hitRate = chargebackHitMap.get(`${rec.platform}-${rec.merchant_id}`);
