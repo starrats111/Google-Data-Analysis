@@ -207,7 +207,8 @@ export default function MerchantsPage() {
   }, [cbHitsData]);
   // ATC 广告情报状态
   const [atcLoading, setAtcLoading] = useState<Record<string, boolean>>({});
-  const [atcLocalData, setAtcLocalData] = useState<Record<string, { count: number; syncedAt: string; region: string }>>({});
+  const [atcLocalData, setAtcLocalData] = useState<Record<string, { count: number; syncedAt: string; region: string; topAdvertisers?: { id: string; name: string }[] }>>({});
+  const [atcDetailModal, setAtcDetailModal] = useState<{ open: boolean; merchantName: string; advertisers: { id: string; name: string }[]; region: string } | null>(null);
   const [atcPopover, setAtcPopover] = useState<Record<string, boolean>>({}); // popover 开关
   const [atcRegions, setAtcRegions] = useState<Record<string, string>>({}); // 每行选择的地区
   const [serpApiConfigured, setSerpApiConfigured] = useState<boolean | null>(null);
@@ -232,7 +233,7 @@ export default function MerchantsPage() {
         body: JSON.stringify({ merchant_id: rec.id, force_refresh: force, region }),
       }).then((r) => r.json());
       if (res.code === 0) {
-        setAtcLocalData((prev) => ({ ...prev, [rec.id]: { count: res.data.real_count, syncedAt: res.data.fetched_at, region } }));
+        setAtcLocalData((prev) => ({ ...prev, [rec.id]: { count: res.data.real_count, syncedAt: res.data.fetched_at, region, topAdvertisers: res.data.top_advertisers ?? [] } }));
       } else {
         message.error(res.message);
       }
@@ -463,9 +464,13 @@ export default function MerchantsPage() {
         const color = count >= 50 ? "#f5222d" : count >= 10 ? "#fa8c16" : "#52c41a";
         const label = count >= 100 ? "100+" : String(count);
         const shownRegion = local?.region ?? "US";
+        const advertisers = local?.topAdvertisers ?? [];
         return (
           <Space size={4}>
-            <span style={{ color, fontWeight: 600 }}>{label}个</span>
+            <span
+              style={{ color, fontWeight: 600, cursor: advertisers.length > 0 ? "pointer" : "default", textDecoration: advertisers.length > 0 ? "underline" : "none" }}
+              onClick={() => advertisers.length > 0 && setAtcDetailModal({ open: true, merchantName: rec.merchant_name, advertisers, region: shownRegion })}
+            >{label}个</span>
             <Tag style={{ fontSize: 11, padding: "0 4px", margin: 0 }}>{shownRegion}</Tag>
             <Tooltip title="更换国家或刷新">
               <Popover
@@ -1002,6 +1007,47 @@ export default function MerchantsPage() {
         { title: "启用", dataIndex: "enabled_count", width: 60, align: "center" as const, render: (v: number) => <Tag color="green">{v}</Tag> },
         { title: "投放日期", dataIndex: "campaign_created_at", width: 130, render: (v: string) => v ? new Date(v).toLocaleDateString("zh-CN", { timeZone: "Asia/Shanghai" }) : "-" },
       ]} />
+    </Modal>
+
+    {/* ATC 广告主详情弹窗 */}
+    <Modal
+      open={atcDetailModal?.open ?? false}
+      title={`广告主列表 — ${atcDetailModal?.merchantName ?? ""} (${atcDetailModal?.region ?? ""})`}
+      footer={null}
+      onCancel={() => setAtcDetailModal(null)}
+      width={480}
+    >
+      {atcDetailModal && (
+        atcDetailModal.advertisers.length === 0 ? (
+          <div style={{ textAlign: "center", color: "#999", padding: "24px 0" }}>暂无广告主数据</div>
+        ) : (
+          <Table
+            dataSource={atcDetailModal.advertisers.map((a, i) => ({ ...a, key: i }))}
+            pagination={false}
+            size="small"
+            columns={[
+              { title: "#", dataIndex: "key", width: 40, render: (v: number) => v + 1 },
+              {
+                title: "广告主",
+                dataIndex: "name",
+                render: (name: string, row: { id: string; name: string }) => (
+                  row.id.startsWith("AR") ? (
+                    <a href={`https://adstransparency.google.com/advertiser/${row.id}`} target="_blank" rel="noreferrer">{name || row.id}</a>
+                  ) : name
+                ),
+              },
+              {
+                title: "ATC",
+                dataIndex: "id",
+                width: 60,
+                render: (id: string) => id.startsWith("AR") ? (
+                  <a href={`https://adstransparency.google.com/advertiser/${id}`} target="_blank" rel="noreferrer">查看</a>
+                ) : null,
+              },
+            ]}
+          />
+        )
+      )}
     </Modal>
   </div>);
 }
