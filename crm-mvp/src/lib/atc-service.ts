@@ -193,8 +193,9 @@ export async function queryMerchantAtc(opts: {
 
   try {
     // 3. 调用 SerpApi
+    // 用 text=domain 搜索，platform=SEARCH 只取谷歌搜索广告，creative_format=text 只取文字广告
     const data = await callSerpApi(
-      { engine: "google_ads_transparency_center", domain, region, num: "100" },
+      { engine: "google_ads_transparency_center", text: domain, platform: "SEARCH", creative_format: "text", region, num: "100" },
       serpApiKey
     );
 
@@ -311,7 +312,7 @@ export async function searchIntelligence(opts: {
   const serpApiKey = pickApiKey(serpApiKeys);
 
   const data = await callSerpApi(
-    { engine: "google_ads_transparency_center", text, region, num: "100" },
+    { engine: "google_ads_transparency_center", text, platform: "SEARCH", creative_format: "text", region, num: "100" },
     serpApiKey
   );
 
