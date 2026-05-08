@@ -19,6 +19,7 @@ export interface AtcAd {
   first_shown?: number;  // Unix 秒级时间戳
   last_shown?: number;   // Unix 秒级时间戳
   thumbnail?: string;
+  creative_id?: string;  // 内部用于 creative 跨查询匹配，前端可忽略
 }
 
 export interface AtcMerchantResult {
@@ -141,6 +142,7 @@ function toSerpApiRegion(region: string | undefined): string | undefined {
 interface SerpApiAd {
   advertiser_id?: string;
   advertiser?: string;       // SerpApi 实际字段名（非 advertiser_name）
+  ad_creative_id?: string;   // 创意唯一 ID，用于跨查询匹配
   format?: string;
   title?: string;
   target_domain?: string;    // 域名搜索时返回
@@ -426,7 +428,93 @@ function mergeAdsIntoMap(
       first_shown: ad.first_shown,
       last_shown:  ad.last_shown,
       thumbnail: ad.image,
+      creative_id: ad.ad_creative_id,
     });
+  }
+}
+
+/**
+ * 域名反查富化：通过本地快照找到该 AR ID 出现过的域名，
+ * 对每个域名做 SerpApi domain 搜索，按 ad_creative_id 匹配，
+ * 补全 advertiserAdsMap 中缺失的 domain 字段，并追加新增 creative。
+ * 根因：SerpApi advertiser_id 查询不返回 target_domain，但 domain 搜索会返回。
+ */
+async function enrichDomainsFromSnapshots(
+  arId: string,
+  serpApiKey: string,
+  serpRegion: string | undefined,
+  advertiserAdsMap: Map<string, { name: string; ads: AtcAd[] }>,
+) {
+  // 1. 从本地快照找该 AR ID 出现过的所有域名
+  const allSnaps = await prisma.merchant_atc_snapshots.findMany({
+    select: { domain: true, top_advertisers_json: true },
+    where: { top_advertisers_json: { not: null } },
+  });
+
+  const matchDomains: string[] = [];
+  for (const snap of allSnaps) {
+    const list = snap.top_advertisers_json as { id: string; name: string }[] | null;
+    if (Array.isArray(list) && list.some((a) => a.id === arId)) {
+      matchDomains.push(snap.domain);
+    }
+  }
+  if (matchDomains.length === 0) return;
+
+  // 2. 建 creative_id → {mapKey, adIdx} 映射（用于快速定位并更新 domain）
+  const creativeMap = new Map<string, { mapKey: string; adIdx: number }>();
+  for (const [mapKey, { ads }] of advertiserAdsMap) {
+    ads.forEach((ad, adIdx) => {
+      if (ad.creative_id) creativeMap.set(ad.creative_id, { mapKey, adIdx });
+    });
+  }
+
+  const NO_RESULTS_MSG = "hasn't returned any results";
+
+  // 3. 对每个已知域名做 domain 搜索，匹配 creative_id 补全 domain
+  for (const domain of matchDomains.slice(0, 5)) {
+    const params: Record<string, string> = {
+      engine: "google_ads_transparency_center",
+      text: domain,
+      num: "100",
+    };
+    if (serpRegion) params.region = serpRegion;
+
+    try {
+      const data = await callSerpApi(params, serpApiKey);
+      if (data.error && !data.error.includes(NO_RESULTS_MSG)) continue;
+
+      for (const ad of data.ad_creatives ?? []) {
+        if (ad.advertiser_id !== arId || !ad.ad_creative_id || !ad.target_domain) continue;
+
+        const existing = creativeMap.get(ad.ad_creative_id);
+        if (existing) {
+          // 已有该 creative → 补全缺失的 domain
+          const { mapKey, adIdx } = existing;
+          const entry = advertiserAdsMap.get(mapKey);
+          if (entry && !entry.ads[adIdx].domain) {
+            entry.ads[adIdx].domain = ad.target_domain;
+          }
+        } else {
+          // advertiser_id 查询未返回此 creative → 追加（增加总数）
+          if (!advertiserAdsMap.has(arId)) {
+            advertiserAdsMap.set(arId, { name: ad.advertiser ?? "未知广告主", ads: [] });
+          }
+          const newIdx = advertiserAdsMap.get(arId)!.ads.length;
+          advertiserAdsMap.get(arId)!.ads.push({
+            format: ad.format ?? "text",
+            title: ad.title,
+            domain: ad.target_domain,
+            first_shown: ad.first_shown,
+            last_shown: ad.last_shown,
+            thumbnail: ad.image,
+            creative_id: ad.ad_creative_id,
+          });
+          creativeMap.set(ad.ad_creative_id, { mapKey: arId, adIdx: newIdx });
+        }
+      }
+    } catch {
+      // 单个域名搜索失败不影响主流程
+    }
   }
 }
 
@@ -444,18 +532,21 @@ export async function searchIntelligence(opts: {
   const advertiserAdsMap = new Map<string, { name: string; ads: AtcAd[] }>();
 
   if (advertiser_id) {
-    // ── 精确查询（AR ID）：BUG-1 修复：日期窗口由 31 天改为 15 天 ──
+    // ── 精确查询（AR ID）：不加日期限制，获取该广告主全量历史广告 ──
+    // 注：SerpApi advertiser_id 查询不返回 target_domain，通过后续域名反查补全
     const params: Record<string, string> = {
       engine: "google_ads_transparency_center",
       advertiser_id,
       num: "100",
-      ...buildDateRangeParams(15),
     };
     if (serpRegion) params.region = serpRegion;
 
     const data = await callSerpApi(params, serpApiKey);
     if (data.error && !data.error.includes(NO_RESULTS_MSG)) throw new Error(data.error);
     mergeAdsIntoMap(data.ad_creatives ?? [], advertiserAdsMap);
+
+    // ── 域名反查富化：从本地快照找已知域名 → 补全 target_domain + 追加遗漏 creative ──
+    await enrichDomainsFromSnapshots(advertiser_id, serpApiKey, serpRegion, advertiserAdsMap);
 
   } else if (text) {
     // ── 文字/域名搜索：不加日期，对齐 ATC 网站默认行为 ──
