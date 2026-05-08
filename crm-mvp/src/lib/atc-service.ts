@@ -104,6 +104,22 @@ function isSearchAd(format: string | undefined): boolean {
   return f === "text" || f === "text_ad" || f === "search" || !["image", "video", "html5", "display", "shopping", "app"].some((x) => f.includes(x));
 }
 
+// ─── SerpApi Region 映射（2 字母 ISO → SerpApi 数字码）───
+const REGION_CODE_MAP: Record<string, string> = {
+  US: "2840", GB: "2826", AU: "2036", CA: "2124", DE: "2276", FR: "2250",
+  IT: "2380", ES: "2724", NL: "2528", SE: "2752", NO: "2578", DK: "2208",
+  FI: "2246", PL: "2616", AT: "2040", CH: "2756", BE: "2056", IE: "2372",
+  PT: "2620", JP: "2392", SG: "2702", KR: "2410", IN: "2356", NZ: "2554",
+  BR: "2076", MX: "2484",
+};
+
+/** 将前端传入的 2 字母 ISO 地区码转为 SerpApi 数字码；若已是数字码则原样返回 */
+function toSerpApiRegion(region: string | undefined): string | undefined {
+  if (!region) return undefined;
+  if (/^\d+$/.test(region)) return region; // 已是数字码
+  return REGION_CODE_MAP[region.toUpperCase()] ?? undefined;
+}
+
 // ─── SerpApi 调用 ───
 
 interface SerpApiAd {
@@ -193,11 +209,17 @@ export async function queryMerchantAtc(opts: {
 
   try {
     // 3. 调用 SerpApi
-    // 用 text=domain 搜索，platform=SEARCH 只取谷歌搜索广告，creative_format=text 只取文字广告
-    const data = await callSerpApi(
-      { engine: "google_ads_transparency_center", text: domain, platform: "SEARCH", creative_format: "text", region, num: "100" },
-      serpApiKey
-    );
+    // text=domain 搜索，platform=SEARCH 只取谷歌搜索广告，creative_format=text 只取文字广告
+    const serpRegion = toSerpApiRegion(region);
+    const params: Record<string, string> = {
+      engine: "google_ads_transparency_center",
+      text: domain,
+      platform: "SEARCH",
+      creative_format: "text",
+      num: "100",
+    };
+    if (serpRegion) params.region = serpRegion;
+    const data = await callSerpApi(params, serpApiKey);
 
     if (data.error) throw new Error(data.error);
 
@@ -311,10 +333,16 @@ export async function searchIntelligence(opts: {
   const { text, region = "US", serpApiKeys } = opts;
   const serpApiKey = pickApiKey(serpApiKeys);
 
-  const data = await callSerpApi(
-    { engine: "google_ads_transparency_center", text, platform: "SEARCH", creative_format: "text", region, num: "100" },
-    serpApiKey
-  );
+  const serpRegion = toSerpApiRegion(region);
+  const params: Record<string, string> = {
+    engine: "google_ads_transparency_center",
+    text,
+    platform: "SEARCH",
+    creative_format: "text",
+    num: "100",
+  };
+  if (serpRegion) params.region = serpRegion;
+  const data = await callSerpApi(params, serpApiKey);
 
   if (data.error) throw new Error(data.error);
 
