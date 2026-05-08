@@ -1,11 +1,11 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import {
   Card, Input, Button, Select, Space, Table, Tag, Typography,
-  Collapse, Empty, Alert, App, Tooltip,
+  Collapse, Empty, Alert, App, Tooltip, Switch, InputNumber, Badge,
 } from "antd";
-import { SearchOutlined, EyeOutlined, LinkOutlined, SettingOutlined } from "@ant-design/icons";
+import { SearchOutlined, EyeOutlined, LinkOutlined, SettingOutlined, FireOutlined } from "@ant-design/icons";
 import { useRouter } from "next/navigation";
 
 const { Title, Text } = Typography;
@@ -14,8 +14,8 @@ interface AtcAd {
   format: string;
   title?: string;
   domain?: string;
-  first_shown?: string;
-  last_shown?: string;
+  first_shown?: number;  // Unix 秒级时间戳
+  last_shown?: number;   // Unix 秒级时间戳
   thumbnail?: string;
 }
 
@@ -44,44 +44,41 @@ const REGIONS = [
   { value: "SG", label: "新加坡 (SG)" },
 ];
 
-const AD_COLS = [
-  { title: "格式", dataIndex: "format", width: 80, render: (v: string) => <Tag>{v || "text"}</Tag> },
-  {
-    title: "广告预览",
-    dataIndex: "thumbnail",
-    width: 120,
-    render: (src: string | undefined, rec: AtcAd) =>
-      src
-        ? <img src={src} alt="" style={{ maxWidth: 100, maxHeight: 60, objectFit: "contain" }} />
-        : <Text type="secondary" style={{ fontSize: 12 }}>{rec.title || "-"}</Text>,
-  },
-  {
-    title: "投放域名",
-    dataIndex: "domain",
-    width: 180,
-    render: (v: string | undefined) =>
-      v ? (
-        <a href={`https://${v}`} target="_blank" rel="noreferrer">
-          <LinkOutlined /> {v}
-        </a>
-      ) : <span style={{ color: "#bfbfbf" }}>-</span>,
-  },
-  { title: "首次投放", dataIndex: "first_shown", width: 110, render: (v?: string) => v ?? "-" },
-  { title: "最近投放", dataIndex: "last_shown", width: 110, render: (v?: string) => v ?? "-" },
-];
+/** 将 Unix 秒时间戳格式化为 YYYY-MM-DD */
+function fmtTs(ts?: number): string {
+  if (!ts) return "-";
+  return new Date(ts * 1000).toISOString().slice(0, 10);
+}
+
+/** 计算广告持续天数 */
+function adDays(ad: AtcAd): number | null {
+  if (!ad.first_shown || !ad.last_shown) return null;
+  return Math.round((ad.last_shown - ad.first_shown) / 86400);
+}
+
+/** 判断广告是否满足"持续投放 N 天且昨天仍在投"条件 */
+function isPersistent(ad: AtcAd, minDays: number): boolean {
+  if (!ad.first_shown || !ad.last_shown) return false;
+  const nowSec = Date.now() / 1000;
+  const twoDaysAgo = nowSec - 2 * 86400;
+  const nDaysAgo   = nowSec - minDays * 86400;
+  return ad.first_shown <= nDaysAgo && ad.last_shown >= twoDaysAgo;
+}
 
 export default function IntelligencePage() {
   const { message } = App.useApp();
   const router = useRouter();
-  const [searchText, setSearchText] = useState("");
-  const [region, setRegion] = useState("US");
-  const [loading, setLoading] = useState(false);
-  const [result, setResult] = useState<{ advertisers: AdvertiserGroup[]; total: number } | null>(null);
-  const [noKey, setNoKey] = useState(false);
+  const [searchText, setSearchText]   = useState("");
+  const [region, setRegion]           = useState("US");
+  const [loading, setLoading]         = useState(false);
+  const [result, setResult]           = useState<{ advertisers: AdvertiserGroup[]; total: number } | null>(null);
+  const [noKey, setNoKey]             = useState(false);
+  const [persistOnly, setPersistOnly] = useState(true);   // 默认只看持续投放
+  const [minDays, setMinDays]         = useState(15);     // 默认 15 天
 
   const handleSearch = async () => {
     const text = searchText.trim();
-    if (!text) { message.warning("请输入广告主名称"); return; }
+    if (!text) { message.warning("请输入广告主名称或域名"); return; }
     setLoading(true);
     setNoKey(false);
     try {
@@ -101,19 +98,84 @@ export default function IntelligencePage() {
     }
   };
 
-  const collapseItems = (result?.advertisers ?? []).map((adv) => ({
+  // 应用持续投放过滤
+  const filteredAdvertisers = useMemo(() => {
+    if (!result) return [];
+    return result.advertisers.map((adv) => {
+      const filteredAds = persistOnly
+        ? adv.ads.filter((ad) => isPersistent(ad, minDays))
+        : adv.ads;
+      return { ...adv, ads: filteredAds, filteredCount: filteredAds.length };
+    }).filter((adv) => !persistOnly || adv.filteredCount > 0);
+  }, [result, persistOnly, minDays]);
+
+  const totalFiltered = useMemo(
+    () => filteredAdvertisers.reduce((s, a) => s + a.filteredCount, 0),
+    [filteredAdvertisers]
+  );
+
+  const adColumns = [
+    {
+      title: "持续天数",
+      key: "days",
+      width: 90,
+      sorter: (a: AtcAd, b: AtcAd) => (adDays(a) ?? 0) - (adDays(b) ?? 0),
+      defaultSortOrder: "descend" as const,
+      render: (_: unknown, rec: AtcAd) => {
+        const d = adDays(rec);
+        if (d === null) return <span style={{ color: "#bfbfbf" }}>-</span>;
+        const color = d >= 30 ? "#f5222d" : d >= 15 ? "#fa8c16" : "#52c41a";
+        return (
+          <Space size={2}>
+            {d >= 15 && <FireOutlined style={{ color: "#fa8c16", fontSize: 12 }} />}
+            <span style={{ color, fontWeight: 600 }}>{d}天</span>
+          </Space>
+        );
+      },
+    },
+    { title: "格式", dataIndex: "format", width: 70, render: (v: string) => <Tag style={{ fontSize: 11 }}>{v || "text"}</Tag> },
+    {
+      title: "广告内容",
+      key: "content",
+      render: (_: unknown, rec: AtcAd) =>
+        rec.thumbnail
+          ? <img src={rec.thumbnail} alt="" style={{ maxWidth: 100, maxHeight: 50, objectFit: "contain" }} />
+          : <Text type="secondary" style={{ fontSize: 12 }}>{rec.title || "-"}</Text>,
+    },
+    {
+      title: "投放域名",
+      dataIndex: "domain",
+      width: 180,
+      render: (v?: string) =>
+        v ? <a href={`https://${v}`} target="_blank" rel="noreferrer"><LinkOutlined /> {v}</a>
+          : <span style={{ color: "#bfbfbf" }}>-</span>,
+    },
+    { title: "首次投放", key: "first", width: 100, render: (_: unknown, rec: AtcAd) => fmtTs(rec.first_shown) },
+    { title: "最近投放", key: "last",  width: 100, render: (_: unknown, rec: AtcAd) => fmtTs(rec.last_shown) },
+  ];
+
+  const collapseItems = filteredAdvertisers.map((adv) => ({
     key: adv.id,
     label: (
       <Space>
-        <Text strong>{adv.name}</Text>
-        <Tag color="blue">{adv.adCount} 条广告</Tag>
-        <Text type="secondary" style={{ fontSize: 12 }}>ID: {adv.id}</Text>
+        <Text strong>{adv.name || adv.id}</Text>
+        <Badge count={adv.filteredCount} style={{ backgroundColor: persistOnly ? "#fa8c16" : "#1677ff" }}
+          title={persistOnly ? `持续投放 ${minDays} 天+` : "全部广告"} />
+        {adv.filteredCount < adv.adCount && (
+          <Text type="secondary" style={{ fontSize: 12 }}>共 {adv.adCount} 条，筛选后 {adv.filteredCount} 条</Text>
+        )}
+        {adv.id.startsWith("AR") && (
+          <a href={`https://adstransparency.google.com/advertiser/${adv.id}`} target="_blank" rel="noreferrer"
+            style={{ fontSize: 12 }} onClick={(e) => e.stopPropagation()}>
+            ATC ↗
+          </a>
+        )}
       </Space>
     ),
     children: (
       <Table
         dataSource={adv.ads}
-        columns={AD_COLS}
+        columns={adColumns}
         rowKey={(_, i) => String(i)}
         size="small"
         pagination={adv.ads.length > 20 ? { pageSize: 20, size: "small" } : false}
@@ -124,78 +186,89 @@ export default function IntelligencePage() {
 
   return (
     <div>
-      <Title level={4} style={{ marginBottom: 16 }}>
+      <Title level={4} style={{ marginBottom: 4 }}>
         <EyeOutlined /> 广告情报
       </Title>
-      <Text type="secondary" style={{ display: "block", marginBottom: 20 }}>
-        按广告主名称搜索，查看其在 Google 全平台投放的广告创意，反向发现优质商家。
+      <Text type="secondary" style={{ display: "block", marginBottom: 16 }}>
+        按广告主名称/域名搜索，查看其在 Google 全平台投放的广告创意，筛选持续投放的高价值广告。
       </Text>
 
       {noKey && (
-        <Alert
-          type="warning"
-          showIcon
-          style={{ marginBottom: 16 }}
+        <Alert type="warning" showIcon style={{ marginBottom: 16 }}
           message="尚未配置 SerpApi Key"
           description={
             <span>
-              请先前往「个人设置 → 广告情报」配置您的 SerpApi API Key。
-              <Button
-                type="link"
-                size="small"
-                icon={<SettingOutlined />}
-                style={{ padding: "0 4px" }}
-                onClick={() => router.push("/user/settings")}
-              >
-                去配置
-              </Button>
+              请先前往「个人设置 → 广告情报」配置 API Key。
+              <Button type="link" size="small" icon={<SettingOutlined />} style={{ padding: "0 4px" }}
+                onClick={() => router.push("/user/settings")}>去配置</Button>
             </span>
           }
         />
       )}
 
-      <Card size="small" style={{ marginBottom: 20 }}>
+      <Card size="small" style={{ marginBottom: 16 }}>
         <Space wrap>
           <Input
-            placeholder="输入广告主名称，如：Nike Inc."
+            placeholder="广告主名称或域名，如：Nike / ta3swim.com"
             value={searchText}
             onChange={(e) => setSearchText(e.target.value)}
             onPressEnter={handleSearch}
-            style={{ width: 320 }}
+            style={{ width: 300 }}
             prefix={<SearchOutlined style={{ color: "#bfbfbf" }} />}
             allowClear
           />
-          <Select
-            value={region}
-            onChange={setRegion}
-            options={REGIONS}
-            style={{ width: 160 }}
-          />
-          <Button
-            type="primary"
-            icon={<SearchOutlined />}
-            loading={loading}
-            onClick={handleSearch}
-          >
-            搜索
-          </Button>
+          <Select value={region} onChange={setRegion} options={REGIONS} style={{ width: 150 }} />
+          <Button type="primary" icon={<SearchOutlined />} loading={loading} onClick={handleSearch}>搜索</Button>
         </Space>
+
+        {/* 持续投放过滤器 */}
+        <div style={{ marginTop: 12, display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+          <Switch
+            checked={persistOnly}
+            onChange={setPersistOnly}
+            checkedChildren={<FireOutlined />}
+            unCheckedChildren="全部"
+            size="small"
+          />
+          <Text style={{ fontSize: 13 }}>只看持续投放</Text>
+          <InputNumber
+            min={1} max={90} value={minDays}
+            onChange={(v) => setMinDays(v ?? 15)}
+            disabled={!persistOnly}
+            size="small" style={{ width: 60 }}
+            addonAfter="天"
+          />
+          <Text type="secondary" style={{ fontSize: 12 }}>
+            （首次投放 ≥ {minDays} 天前 且 昨天仍在投放）
+          </Text>
+        </div>
       </Card>
 
       {result && (
         <>
           <div style={{ marginBottom: 12 }}>
             <Text type="secondary">
-              找到 <Text strong>{result.advertisers.length}</Text> 个匹配广告主 ·
-              共 <Text strong>{result.total}</Text> 条广告创意
+              {persistOnly ? (
+                <>持续投放 <Text strong style={{ color: "#fa8c16" }}>{minDays}天+</Text> 的广告：
+                  <Text strong>{filteredAdvertisers.length}</Text> 个广告主 ·
+                  <Text strong style={{ color: "#fa8c16" }}>{totalFiltered}</Text> 条
+                  <Text type="secondary">（原始共 {result.advertisers.length} 个广告主 · {result.total} 条）</Text>
+                </>
+              ) : (
+                <>找到 <Text strong>{result.advertisers.length}</Text> 个广告主 · 共 <Text strong>{result.total}</Text> 条广告</>
+              )}
             </Text>
           </div>
-          {result.advertisers.length === 0 ? (
-            <Empty description="未找到匹配的广告主，请尝试其他关键词" />
+          {filteredAdvertisers.length === 0 ? (
+            <Empty description={
+              persistOnly
+                ? `未找到持续投放 ${minDays} 天以上的广告，可降低天数或关闭过滤`
+                : "未找到匹配的广告，请尝试其他关键词"
+            } />
           ) : (
             <Collapse
               items={collapseItems}
-              defaultActiveKey={result.advertisers.length === 1 ? [result.advertisers[0].id] : []}
+              defaultActiveKey={filteredAdvertisers.length === 1 ? [filteredAdvertisers[0].id] : []}
             />
           )}
         </>
@@ -204,7 +277,7 @@ export default function IntelligencePage() {
       {!result && !loading && (
         <div style={{ textAlign: "center", padding: "60px 0", color: "#bfbfbf" }}>
           <EyeOutlined style={{ fontSize: 48, marginBottom: 16 }} />
-          <div>输入广告主名称，开始探索竞争对手的广告策略</div>
+          <div>输入广告主名称，发现持续投放的高价值广告素材</div>
           <div style={{ fontSize: 12, marginTop: 8 }}>
             <Tooltip title="每次查询消耗 1 次 SerpApi 额度，免费额度 250 次/月">
               <Text type="secondary" style={{ cursor: "help", textDecoration: "underline dotted" }}>

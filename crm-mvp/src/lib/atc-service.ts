@@ -16,8 +16,8 @@ export interface AtcAd {
   format: string;
   title?: string;
   domain?: string;
-  first_shown?: string;
-  last_shown?: string;
+  first_shown?: number;  // Unix 秒级时间戳
+  last_shown?: number;   // Unix 秒级时间戳
   thumbnail?: string;
 }
 
@@ -275,9 +275,9 @@ export async function queryMerchantAtc(opts: {
         sampleAds.push({
           format: ad.format ?? "text",
           title: ad.title,
-          domain: ad.target_domain,    // 正确字段名
-          first_shown: ad.first_shown ? String(ad.first_shown) : undefined,
-          last_shown:  ad.last_shown  ? String(ad.last_shown)  : undefined,
+          domain: ad.target_domain,
+          first_shown: ad.first_shown,
+          last_shown:  ad.last_shown,
           thumbnail: ad.image,
         });
       }
@@ -399,9 +399,9 @@ export async function searchIntelligence(opts: {
     advertiserAdsMap.get(advId)!.ads.push({
       format: ad.format ?? "text",
       title: ad.title,
-      domain: ad.target_domain,        // 正确字段名
-      first_shown: ad.first_shown ? String(ad.first_shown) : undefined,
-      last_shown:  ad.last_shown  ? String(ad.last_shown)  : undefined,
+      domain: ad.target_domain,
+      first_shown: ad.first_shown,
+      last_shown:  ad.last_shown,
       thumbnail: ad.image,
     });
   }
