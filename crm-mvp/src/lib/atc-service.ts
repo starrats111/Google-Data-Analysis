@@ -388,60 +388,37 @@ export async function queryMerchantAtc(opts: {
 
 // ─── 广告情报：按广告主名称搜索 ───
 
-export async function searchIntelligence(opts: {
-  text?: string;
-  advertiser_id?: string;   // AR... 格式，精确查指定广告主
-  region?: string;
-  serpApiKeys: string[];
-}): Promise<AtcIntelligenceResult> {
-  const { text, advertiser_id, region = "US", serpApiKeys } = opts;
-  const serpApiKey = pickApiKey(serpApiKeys);
+/** 日期格式化工具（YYYYMMDD） */
+function fmtDate(d: Date): string {
+  return `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, "0")}${String(d.getDate()).padStart(2, "0")}`;
+}
 
-  // 情报搜索：对齐 ATC 网站行为，不限平台、不限日期
-  // advertiser_id 精确查询时可加日期范围，text 搜索不加（避免漏掉历史广告主）
-  const serpRegion = toSerpApiRegion(region);
-  const params: Record<string, string> = {
-    engine: "google_ads_transparency_center",
-    num: "100",
-  };
-  if (advertiser_id) {
-    // 精确查广告主：加近 30 天范围看最新投放
-    const endD   = new Date(); endD.setDate(endD.getDate() - 1);
-    const startD = new Date(); startD.setDate(startD.getDate() - 31);
-    const fmt = (d: Date) =>
-      `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, "0")}${String(d.getDate()).padStart(2, "0")}`;
-    params.advertiser_id = advertiser_id;
-    params.start_date    = fmt(startD);
-    params.end_date      = fmt(endD);
-  } else if (text) {
-    // 名称/域名搜索：不加日期，对齐 ATC 网站默认行为
-    params.text = text;
-  }
-  if (serpRegion) params.region = serpRegion;
-  const data = await callSerpApi(params, serpApiKey);
+/** 构建近 N 天的查询日期范围参数（end=昨天，start=N天前） */
+function buildDateRangeParams(days: number): { start_date: string; end_date: string } {
+  const endD   = new Date(); endD.setDate(endD.getDate() - 1);
+  const startD = new Date(); startD.setDate(startD.getDate() - days);
+  return { start_date: fmtDate(startD), end_date: fmtDate(endD) };
+}
 
-  const NO_RESULTS_MSG = "hasn't returned any results";
-  if (data.error && !data.error.includes(NO_RESULTS_MSG)) throw new Error(data.error);
-
-  const allAds: SerpApiAd[] = data.ad_creatives ?? [];
-  // 情报页展示全部格式的广告
-  const ads = allAds;
-
-  // 按广告主分组（严格去重：优先用 advertiser_id）
-  const advertiserAdsMap = new Map<string, { name: string; ads: AtcAd[] }>();
-  const seenNames = new Set<string>();
+/** 将 SerpApiAd 数组归并进 advertiserAdsMap（修复 BUG-3：无 AR ID 去重 bug） */
+function mergeAdsIntoMap(
+  ads: SerpApiAd[],
+  advertiserAdsMap: Map<string, { name: string; ads: AtcAd[] }>,
+  overwrite = false,
+) {
   for (const ad of ads) {
     const rawId   = (ad.advertiser_id ?? "").trim();
-    const rawName = (ad.advertiser    ?? "未知广告主").trim(); // 正确字段名
+    const rawName = (ad.advertiser    ?? "未知广告主").trim();
+    // BUG-3 修复：用 advId（AR ID 或名称衍生 key）作唯一 key，不再用 seenNames 提前 continue
     const advId = rawId || `_name_${normalize(rawName)}`;
-    if (!rawId) {
-      const normName = normalize(rawName);
-      if (seenNames.has(normName)) continue;
-      seenNames.add(normName);
-    }
+
     if (!advertiserAdsMap.has(advId)) {
       advertiserAdsMap.set(advId, { name: rawName, ads: [] });
+    } else if (overwrite) {
+      // overwrite 模式：用 advertiser_id 精确查结果替换文字搜索的不完整结果
+      advertiserAdsMap.get(advId)!.ads = [];
     }
+
     advertiserAdsMap.get(advId)!.ads.push({
       format: ad.format ?? "text",
       title: ad.title,
@@ -450,6 +427,78 @@ export async function searchIntelligence(opts: {
       last_shown:  ad.last_shown,
       thumbnail: ad.image,
     });
+  }
+}
+
+export async function searchIntelligence(opts: {
+  text?: string;
+  advertiser_id?: string;   // AR... 格式，精确查指定广告主
+  region?: string;
+  serpApiKeys: string[];
+}): Promise<AtcIntelligenceResult> {
+  const { text, advertiser_id, region = "US", serpApiKeys } = opts;
+  const serpApiKey = pickApiKey(serpApiKeys);
+  const serpRegion = toSerpApiRegion(region);
+  const NO_RESULTS_MSG = "hasn't returned any results";
+
+  const advertiserAdsMap = new Map<string, { name: string; ads: AtcAd[] }>();
+
+  if (advertiser_id) {
+    // ── 精确查询（AR ID）：BUG-1 修复：日期窗口由 31 天改为 15 天 ──
+    const params: Record<string, string> = {
+      engine: "google_ads_transparency_center",
+      advertiser_id,
+      num: "100",
+      ...buildDateRangeParams(15),
+    };
+    if (serpRegion) params.region = serpRegion;
+
+    const data = await callSerpApi(params, serpApiKey);
+    if (data.error && !data.error.includes(NO_RESULTS_MSG)) throw new Error(data.error);
+    mergeAdsIntoMap(data.ad_creatives ?? [], advertiserAdsMap);
+
+  } else if (text) {
+    // ── 文字/域名搜索：不加日期，对齐 ATC 网站默认行为 ──
+    const params: Record<string, string> = {
+      engine: "google_ads_transparency_center",
+      text,
+      num: "100",
+    };
+    if (serpRegion) params.region = serpRegion;
+
+    const data = await callSerpApi(params, serpApiKey);
+    if (data.error && !data.error.includes(NO_RESULTS_MSG)) throw new Error(data.error);
+    mergeAdsIntoMap(data.ad_creatives ?? [], advertiserAdsMap);
+
+    // ── BUG-2 修复：自动追查 AR ID ──
+    // 文字搜索拿到 AR ID 后，逐一用 advertiser_id 精确查，
+    // 获取完整广告列表（含 url 字段→domain）并覆盖原先的不完整结果
+    const arIds = Array.from(advertiserAdsMap.keys())
+      .filter((id) => /^AR\d+$/i.test(id))
+      .slice(0, 3); // 最多追查 3 个，防止过多消耗额度
+
+    for (const arId of arIds) {
+      const followParams: Record<string, string> = {
+        engine: "google_ads_transparency_center",
+        advertiser_id: arId,
+        num: "100",
+        ...buildDateRangeParams(15),
+      };
+      if (serpRegion) followParams.region = serpRegion;
+
+      try {
+        const followData = await callSerpApi(followParams, serpApiKey);
+        if (!followData.error || followData.error.includes(NO_RESULTS_MSG)) {
+          const followAds = followData.ad_creatives ?? [];
+          if (followAds.length > 0) {
+            // overwrite=true：用精确查询的完整结果（含域名）替换文字搜索结果
+            mergeAdsIntoMap(followAds, advertiserAdsMap, true);
+          }
+        }
+      } catch {
+        // 追查失败不影响主流程，保留文字搜索已有结果
+      }
+    }
   }
 
   const advertisers = Array.from(advertiserAdsMap.entries()).map(([id, v]) => ({
@@ -461,6 +510,6 @@ export async function searchIntelligence(opts: {
 
   return {
     advertisers,
-    total: ads.length,
+    total: advertisers.reduce((s, a) => s + a.adCount, 0),
   };
 }
