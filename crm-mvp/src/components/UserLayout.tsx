@@ -18,6 +18,7 @@ import {
   BulbOutlined,
   RightOutlined,
   BarChartOutlined,
+  EyeOutlined,
 } from "@ant-design/icons";
 import { useRouter, usePathname } from "next/navigation";
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
@@ -38,6 +39,7 @@ const userMenuItems: MenuItem[] = [
     type: "group" as const,
     children: [
       { key: "/user/merchants", icon: <ShopOutlined />, label: "我的商家" },
+      { key: "/user/intelligence", icon: <EyeOutlined />, label: "广告情报" },
     ],
   },
   {

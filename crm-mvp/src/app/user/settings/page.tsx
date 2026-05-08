@@ -9,7 +9,7 @@ import {
   SettingOutlined, ApiOutlined, GoogleOutlined,
   PlusOutlined, DeleteOutlined, SaveOutlined, EditOutlined, BellOutlined,
   InboxOutlined, FileTextOutlined, CheckCircleOutlined, LockOutlined, CopyOutlined,
-  CodeOutlined,
+  CodeOutlined, EyeOutlined,
 } from "@ant-design/icons";
 import { generateLinkExchangeScript } from "@/lib/link-exchange-script-template";
 import {
@@ -646,6 +646,104 @@ function ScriptConfigTab() {
   );
 }
 
+// ==================== 广告情报 Tab ====================
+function SerpApiTab() {
+  const { message } = App.useApp();
+  const [keyInput, setKeyInput] = useState("");
+  const [hasKey, setHasKey] = useState(false);
+  const [maskedKey, setMaskedKey] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [loading, setLoading] = useState(true);
+
+  const fetchKey = async () => {
+    setLoading(true);
+    const res = await fetch("/api/user/settings/serpapi").then((r) => r.json());
+    if (res.code === 0) {
+      setHasKey(res.data.has_key);
+      setMaskedKey(res.data.masked_key);
+    }
+    setLoading(false);
+  };
+
+  useEffect(() => { fetchKey(); }, []);
+
+  const handleSave = async () => {
+    const key = keyInput.trim();
+    if (!key) { message.warning("请输入 API Key"); return; }
+    setSaving(true);
+    const res = await fetch("/api/user/settings/serpapi", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ serpapi_key: key }),
+    }).then((r) => r.json());
+    setSaving(false);
+    if (res.code === 0) { message.success("保存成功"); setKeyInput(""); fetchKey(); }
+    else message.error(res.message);
+  };
+
+  const handleTest = async () => {
+    const key = keyInput.trim();
+    setTesting(true);
+    const res = await fetch("/api/user/settings/serpapi", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ serpapi_key: key || undefined }),
+    }).then((r) => r.json());
+    setTesting(false);
+    if (res.code === 0) message.success(res.message);
+    else message.error(res.message);
+  };
+
+  const handleDelete = async () => {
+    const res = await fetch("/api/user/settings/serpapi", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "delete" }),
+    }).then((r) => r.json());
+    if (res.code === 0) { message.success("已删除"); setHasKey(false); setMaskedKey(null); }
+    else message.error(res.message);
+  };
+
+  return (
+    <div style={{ maxWidth: 560 }}>
+      <Card title={<><EyeOutlined /> 广告情报设置</>} size="small" loading={loading}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+          {hasKey && (
+            <div>
+              <Text type="secondary" style={{ display: "block", marginBottom: 4 }}>当前已配置 Key</Text>
+              <Space>
+                <Text code>{maskedKey}</Text>
+                <Button size="small" danger onClick={handleDelete}>删除</Button>
+              </Space>
+            </div>
+          )}
+          <div>
+            <Text type="secondary" style={{ display: "block", marginBottom: 4 }}>
+              {hasKey ? "更新 SerpApi API Key" : "配置 SerpApi API Key"}
+            </Text>
+            <Space.Compact style={{ width: "100%" }}>
+              <Input.Password
+                placeholder="输入 SerpApi API Key"
+                value={keyInput}
+                onChange={(e) => setKeyInput(e.target.value)}
+                style={{ flex: 1 }}
+              />
+              <Button loading={testing} onClick={handleTest}>测试</Button>
+              <Button type="primary" loading={saving} icon={<SaveOutlined />} onClick={handleSave}>保存</Button>
+            </Space.Compact>
+          </div>
+          <div style={{ background: "#f6f8fa", borderRadius: 6, padding: "10px 14px", fontSize: 12, color: "#666", lineHeight: "1.8" }}>
+            <div><strong>免费额度</strong>：每月 250 次查询</div>
+            <div><strong>获取地址</strong>：<a href="https://serpapi.com/manage-api-key" target="_blank" rel="noreferrer">serpapi.com → Dashboard → API Key</a></div>
+            <div><strong>团队共享缓存</strong>：同一商家域名 24 小时内只消耗 1 次额度</div>
+          </div>
+        </div>
+      </Card>
+    </div>
+  );
+}
+
 // ==================== 主页面 ====================
 export default function SettingsPage() {
   const [activeTab, setActiveTab] = useState("platforms");
@@ -663,6 +761,7 @@ export default function SettingsPage() {
           { key: "notifications", label: <><BellOutlined /> 通知设置</>, children: <NotificationPreferencesTab /> },
           { key: "password", label: <><LockOutlined /> 修改密码</>, children: <ChangePasswordTab /> },
           { key: "script", label: <><FileTextOutlined /> 脚本配置</>, children: <ScriptConfigTab /> },
+          { key: "serpapi", label: <><EyeOutlined /> 广告情报</>, children: <SerpApiTab /> },
         ]}
       />
     </div>

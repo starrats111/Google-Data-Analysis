@@ -60,6 +60,10 @@ interface Merchant {
   ad_status?: string; ad_campaign_name?: string; ad_campaign_id?: string;
   tracking_link?: string | null; campaign_link?: string | null;
   logo_url?: string | null;
+  // ATC 广告情报字段
+  atc_advertiser_count?: number | null;
+  atc_last_synced_at?: string | null;
+  atc_sync_status?: string;
 }
 function getFaviconUrl(merchantUrl: string | null | undefined): string | null {
   if (!merchantUrl) return null;
@@ -201,6 +205,35 @@ export default function MerchantsPage() {
     }
     return m;
   }, [cbHitsData]);
+  // ATC 广告情报状态
+  const [atcLoading, setAtcLoading] = useState<Record<string, boolean>>({});
+  const [atcLocalData, setAtcLocalData] = useState<Record<string, { count: number; syncedAt: string }>>({});
+  const [serpApiConfigured, setSerpApiConfigured] = useState<boolean | null>(null);
+  useEffect(() => {
+    fetch("/api/user/settings/serpapi").then((r) => r.json()).then((res) => {
+      if (res.code === 0) setSerpApiConfigured(res.data.has_key);
+    }).catch(() => {});
+  }, []);
+  const triggerAtcQuery = useCallback(async (rec: Merchant, force = false) => {
+    setAtcLoading((prev) => ({ ...prev, [rec.id]: true }));
+    try {
+      const res = await fetch("/api/user/atc/merchant-count", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ merchant_id: rec.id, force_refresh: force }),
+      }).then((r) => r.json());
+      if (res.code === 0) {
+        setAtcLocalData((prev) => ({ ...prev, [rec.id]: { count: res.data.real_count, syncedAt: res.data.fetched_at } }));
+      } else {
+        message.error(res.message);
+      }
+    } catch {
+      message.error("查询失败，请稍后重试");
+    } finally {
+      setAtcLoading((prev) => ({ ...prev, [rec.id]: false }));
+    }
+  }, [message]);
+
   const [cc, setCc] = useState(""); const [qc, setQc] = useState("");
   const { data: holidays, isLoading: hl } = useApiWithParams<Holiday[]>(qc ? "/api/user/holidays" : null, { country: qc });
   const [claimModal, setClaimModal] = useState(false); const [claimM, setClaimM] = useState<Merchant | null>(null); const [claimForm] = Form.useForm();
@@ -371,10 +404,27 @@ export default function MerchantsPage() {
     { title: "佣金率", dataIndex: "commission_rate", width: 110, sorter: true, sortOrder: colSortOrder("commission_rate"), render: (v: string | null) => <CommissionCell v={v} /> },
     { title: "支持地区", dataIndex: "supported_regions", width: 150, render: (v: unknown[] | null) => <RB r={v} /> },
     { title: "状态", dataIndex: "ad_status", width: 90, render: (v: string) => v === "ENABLED" ? <Tag color="green">已启用</Tag> : v === "PAUSED" ? <Tag color="orange">已暂停</Tag> : v === "NOT_SUBMITTED" ? <Tag color="blue">已领取</Tag> : <Tag>未知</Tag> },
+    { title: "ATC竞争度", width: 150, render: (_: unknown, rec: Merchant) => {
+      const loading = atcLoading[rec.id];
+      const local = atcLocalData[rec.id];
+      const count = local?.count ?? rec.atc_advertiser_count ?? null;
+      const status = local ? "done" : (rec.atc_sync_status ?? "idle");
+      if (serpApiConfigured === false) {
+        return <Button size="small" type="link" style={{ padding: 0, fontSize: 12 }} onClick={() => router.push("/user/settings?tab=serpapi")}>配置Key</Button>;
+      }
+      if (loading || status === "syncing") return <span style={{ color: "#1677ff" }}><SyncOutlined spin /> 查询中</span>;
+      if (status === "done" && count !== null) {
+        const color = count >= 50 ? "#f5222d" : count >= 10 ? "#fa8c16" : "#52c41a";
+        const label = count >= 100 ? "100+" : String(count);
+        return <Space size={4}><span style={{ color, fontWeight: 600 }}>{label}个</span><Tooltip title="强制刷新"><Button size="small" icon={<ReloadOutlined />} type="text" onClick={() => triggerAtcQuery(rec, true)} /></Tooltip></Space>;
+      }
+      if (status === "error") return <Space size={4}><span style={{ color: "#f5222d" }}>失败</span><Button size="small" onClick={() => triggerAtcQuery(rec)}>重试</Button></Space>;
+      return <Button size="small" onClick={() => triggerAtcQuery(rec)}>查竞争度</Button>;
+    }},
     { title: "在投人数", dataIndex: "active_advertisers", width: 90, align: "center" as const, render: (v: number, rec: Merchant) => { const n = v || 0; return n > 0 ? <Button size="small" type="link" style={{ padding: 0, fontWeight: 600 }} onClick={() => showActiveAdv(rec)}>{n} 人</Button> : <span style={{ color: "#bfbfbf" }}>0</span>; } },
     { title: "标签", width: 120, render: (_: unknown, rec: any) => { const labels = rec.labels || []; if (labels.length === 0) return <span style={{ color: "#ccc" }}>-</span>; return <Space size={4} wrap>{labels.map((l: any, i: number) => <Tooltip key={i} title={l.detail}><Tag color={l.color} style={{ cursor: "pointer" }}>{l.text}</Tag></Tooltip>)}</Space>; } },
     { title: "操作", width: 100, render: (_: unknown, rec: Merchant) => <Popconfirm title="确认取消领取？" onConfirm={() => doRelease(rec.id)}><Button size="small" danger>取消领取</Button></Popconfirm> },
-  ], [doRelease, showActiveAdv, copyLink, sortField, sortOrder]);
+  ], [doRelease, showActiveAdv, copyLink, sortField, sortOrder, atcLoading, atcLocalData, serpApiConfigured, triggerAtcQuery, router]);
   const availCols = useMemo(() => [
     { title: "商家名称", dataIndex: "merchant_name", width: 280, sorter: true, sortOrder: colSortOrder("merchant_name"), render: (_: string, rec: Merchant) => {
       const hitRate = chargebackHitMap.get(`${rec.platform}-${rec.merchant_id}`);

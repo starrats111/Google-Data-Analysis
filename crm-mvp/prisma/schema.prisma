@@ -38,6 +38,7 @@ model users {
   display_name   String?  @db.VarChar(50)
   script_api_key            String?  @unique(map: "uk_script_api_key") @db.VarChar(64) // Google Ads Script 鉴权 Key，格式 ky_live_xxx
   link_exchange_click_count Int      @default(10) @db.UnsignedInt                     // 换链接工作台：上次设置的每广告刷点击数，新同步广告默认沿用
+  serpapi_key               String?  @db.VarChar(128)                                 // 个人 SerpApi API Key（广告情报功能）
   is_deleted                Int      @default(0) @db.TinyInt
   created_at     DateTime @default(now()) @db.DateTime(0)
   updated_at     DateTime @default(now()) @updatedAt @db.DateTime(0)
@@ -151,6 +152,10 @@ model user_merchants {
   link_check_reason      String? @db.VarChar(255)
   // 换链接相关
   kyads_referer_url      String? @db.VarChar(1024) // 手动覆盖来路URL（为空则自动取最新已发布文章URL）
+  // ATC 广告情报字段
+  atc_advertiser_count  Int?     @db.UnsignedInt   // ATC 真实广告主数（已过滤商家自身和代理商）
+  atc_last_synced_at    DateTime? @db.DateTime(0)  // 最后 ATC 同步时间
+  atc_sync_status       String   @default("idle") @db.VarChar(16) // idle / syncing / done / error
   is_deleted        Int       @default(0) @db.TinyInt
   created_at        DateTime  @default(now()) @db.DateTime(0)
   updated_at        DateTime  @default(now()) @updatedAt @db.DateTime(0)
@@ -803,4 +808,39 @@ model kyads_click_tasks {
   @@index([user_id, status], map: "idx_user_status")
   @@index([status, created_at], map: "idx_status_created")
   @@index([campaign_id], map: "idx_campaign")
+}
+
+// -----------------------------------------------------------
+// 33. ATC 广告情报 — 团队共享缓存快照
+// -----------------------------------------------------------
+model merchant_atc_snapshots {
+  id                    BigInt   @id @default(autoincrement()) @db.UnsignedBigInt
+  domain                String   @db.VarChar(255)
+  region                String   @default("US") @db.VarChar(8)
+  raw_advertiser_count  Int      @default(0) @db.UnsignedInt
+  real_advertiser_count Int      @default(0) @db.UnsignedInt
+  top_advertisers_json  Json?
+  sample_ads_json       Json?
+  fetched_at            DateTime @db.DateTime(0)
+  created_at            DateTime @default(now()) @db.DateTime(0)
+  updated_at            DateTime @default(now()) @updatedAt @db.DateTime(0)
+
+  @@unique([domain, region], map: "uk_domain_region")
+}
+
+// -----------------------------------------------------------
+// 34. ATC 广告情报 — 商家监控告警规则（Phase 2 预建）
+// -----------------------------------------------------------
+model merchant_monitor_rules {
+  id                  BigInt   @id @default(autoincrement()) @db.UnsignedBigInt
+  user_id             BigInt   @db.UnsignedBigInt
+  user_merchant_id    BigInt   @db.UnsignedBigInt
+  rule_type           String   @db.VarChar(32)
+  threshold_pct       Int      @default(20) @db.UnsignedTinyInt
+  is_active           Int      @default(1) @db.TinyInt
+  is_deleted          Int      @default(0) @db.TinyInt
+  created_at          DateTime @default(now()) @db.DateTime(0)
+  updated_at          DateTime @default(now()) @updatedAt @db.DateTime(0)
+
+  @@index([user_id], map: "idx_user")
 }
