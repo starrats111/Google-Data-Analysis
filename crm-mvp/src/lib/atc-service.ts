@@ -143,10 +143,24 @@ interface SerpApiAd {
   advertiser?: string;       // SerpApi 实际字段名（非 advertiser_name）
   format?: string;
   title?: string;
-  target_domain?: string;    // SerpApi 实际字段名（非 domain）
+  target_domain?: string;    // 域名搜索时返回
+  domain?: string;           // 部分接口返回
+  url?: string;              // advertiser_id 搜索时返回完整 URL
   first_shown?: number;
   last_shown?: number;
   image?: string;
+}
+
+/** 从 SerpApi Ad 对象中提取投放域名 */
+function extractAdDomain(ad: SerpApiAd): string | undefined {
+  if (ad.target_domain) return ad.target_domain;
+  if (ad.domain) return ad.domain;
+  if (ad.url) {
+    try {
+      return new URL(ad.url).hostname.replace(/^www\./, "");
+    } catch { /* ignore */ }
+  }
+  return undefined;
 }
 
 interface SerpApiResponse {
@@ -300,7 +314,7 @@ export async function queryMerchantAtc(opts: {
         sampleAds.push({
           format: ad.format ?? "text",
           title: ad.title,
-          domain: ad.target_domain,
+          domain: extractAdDomain(ad),
           first_shown: ad.first_shown,
           last_shown:  ad.last_shown,
           thumbnail: ad.image,
@@ -431,7 +445,7 @@ export async function searchIntelligence(opts: {
     advertiserAdsMap.get(advId)!.ads.push({
       format: ad.format ?? "text",
       title: ad.title,
-      domain: ad.target_domain,
+      domain: extractAdDomain(ad),
       first_shown: ad.first_shown,
       last_shown:  ad.last_shown,
       thumbnail: ad.image,
