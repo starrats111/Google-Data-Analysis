@@ -358,22 +358,24 @@ export async function searchIntelligence(opts: {
   const { text, advertiser_id, region = "US", serpApiKeys } = opts;
   const serpApiKey = pickApiKey(serpApiKeys);
 
-  // 情报搜索：不限平台，用近 30 天范围（让用户能看到广告主全平台投放）
+  // 情报搜索：对齐 ATC 网站行为，不限平台、不限日期
+  // advertiser_id 精确查询时可加日期范围，text 搜索不加（避免漏掉历史广告主）
   const serpRegion = toSerpApiRegion(region);
-  const endDate2   = new Date(); endDate2.setDate(endDate2.getDate() - 1);
-  const startDate2 = new Date(); startDate2.setDate(startDate2.getDate() - 31);
-  const fmt2 = (d: Date) =>
-    `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, "0")}${String(d.getDate()).padStart(2, "0")}`;
   const params: Record<string, string> = {
     engine: "google_ads_transparency_center",
-    start_date: fmt2(startDate2),
-    end_date:   fmt2(endDate2),
     num: "100",
   };
-  // advertiser_id 优先（精确查询），否则用 text 文字搜索
   if (advertiser_id) {
+    // 精确查广告主：加近 30 天范围看最新投放
+    const endD   = new Date(); endD.setDate(endD.getDate() - 1);
+    const startD = new Date(); startD.setDate(startD.getDate() - 31);
+    const fmt = (d: Date) =>
+      `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, "0")}${String(d.getDate()).padStart(2, "0")}`;
     params.advertiser_id = advertiser_id;
+    params.start_date    = fmt(startD);
+    params.end_date      = fmt(endD);
   } else if (text) {
+    // 名称/域名搜索：不加日期，对齐 ATC 网站默认行为
     params.text = text;
   }
   if (serpRegion) params.region = serpRegion;

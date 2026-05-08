@@ -76,19 +76,26 @@ export default function IntelligencePage() {
   const [noKey, setNoKey]             = useState(false);
   const [persistOnly, setPersistOnly] = useState(true);
   const [minDays, setMinDays]         = useState(15);
+  const [localHits, setLocalHits]     = useState<{ id: string; name: string; domains: string[] }[]>([]);
 
-  const doSearch = async (qs: string) => {
-    setLoading(true); setNoKey(false);
+  const doSearch = async (qs: string, nameForLocal?: string) => {
+    setLoading(true); setNoKey(false); setLocalHits([]);
     try {
       const res = await fetch(`/api/user/atc/intelligence?${qs}`).then((r) => r.json());
-      if (res.code === 0) setResult(res.data);
-      else if (res.message?.includes("SerpApi Key")) setNoKey(true);
+      if (res.code === 0) {
+        setResult(res.data);
+        // 0 结果时自动在本地快照中搜同名广告主（AR ID）
+        if (res.data.total === 0 && nameForLocal) {
+          const lr = await fetch(`/api/user/atc/find-advertiser?name=${encodeURIComponent(nameForLocal)}`).then(r => r.json());
+          if (lr.code === 0) setLocalHits(lr.data ?? []);
+        }
+      } else if (res.message?.includes("SerpApi Key")) setNoKey(true);
       else message.error(res.message ?? "查询失败");
     } catch { message.error("网络错误，请稍后重试"); }
     finally { setLoading(false); }
   };
 
-  // 从 URL 参数自动触发搜索（从商家广告主列表点「查情报」跳转过来）
+  // 从 URL 参数自动触发搜索（从商家广告主列表点「查情报」跳转）
   useEffect(() => {
     const arId = searchParams.get("advertiser_id") ?? "";
     const name = searchParams.get("name") ?? "";
@@ -104,12 +111,16 @@ export default function IntelligencePage() {
   const handleSearch = async () => {
     const text = searchText.trim();
     if (!text) { message.warning("请输入广告主名称或域名"); return; }
-    // 自动识别 AR ID 格式，精确查询
     const isArId = /^AR\d+$/i.test(text);
     const qs = isArId
       ? new URLSearchParams({ advertiser_id: text, region }).toString()
       : new URLSearchParams({ text, region }).toString();
-    doSearch(qs);
+    doSearch(qs, isArId ? undefined : text);
+  };
+
+  const doSearchByArId = (arId: string, name: string) => {
+    setSearchText(name || arId);
+    doSearch(new URLSearchParams({ advertiser_id: arId, region }).toString());
   };
 
   // 应用持续投放过滤
@@ -273,6 +284,41 @@ export default function IntelligencePage() {
               )}
             </Text>
           </div>
+
+          {/* 0 结果时显示本地快照中匹配的广告主，供直接用 AR ID 精确查询 */}
+          {result.total === 0 && localHits.length > 0 && (
+            <Alert
+              type="info"
+              showIcon
+              style={{ marginBottom: 16 }}
+              message="在本系统已记录的广告主中发现以下匹配，可点击直接精确查询"
+              description={
+                <div style={{ marginTop: 8 }}>
+                  {localHits.map((h) => (
+                    <div key={h.id} style={{ marginBottom: 6 }}>
+                      <Button
+                        type="link"
+                        size="small"
+                        style={{ padding: 0, fontWeight: 600 }}
+                        onClick={() => doSearchByArId(h.id, h.name)}
+                      >
+                        {h.name || h.id}
+                      </Button>
+                      <Text type="secondary" style={{ marginLeft: 8, fontSize: 12 }}>
+                        {h.id}
+                      </Text>
+                      {h.domains.length > 0 && (
+                        <Text type="secondary" style={{ marginLeft: 8, fontSize: 12 }}>
+                          · 曾推广：{h.domains.slice(0, 3).join(" / ")}
+                        </Text>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              }
+            />
+          )}
+
           {filteredAdvertisers.length === 0 ? (
             <Empty description={
               persistOnly
