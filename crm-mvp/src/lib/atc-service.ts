@@ -140,17 +140,17 @@ function toSerpApiRegion(region: string | undefined): string | undefined {
 
 interface SerpApiAd {
   advertiser_id?: string;
-  advertiser_name?: string;
+  advertiser?: string;       // SerpApi 实际字段名（非 advertiser_name）
   format?: string;
   title?: string;
-  domain?: string;
-  first_shown?: string;
-  last_shown?: string;
-  thumbnail?: string;
+  target_domain?: string;    // SerpApi 实际字段名（非 domain）
+  first_shown?: number;
+  last_shown?: number;
+  image?: string;
 }
 
 interface SerpApiResponse {
-  ads?: SerpApiAd[];
+  ad_creatives?: SerpApiAd[]; // SerpApi 实际字段名（非 ads）
   error?: string;
 }
 
@@ -247,9 +247,9 @@ export async function queryMerchantAtc(opts: {
     const NO_RESULTS_MSG = "hasn't returned any results";
     if (data.error && !data.error.includes(NO_RESULTS_MSG)) throw new Error(data.error);
 
-    const allAds: SerpApiAd[] = data.ads ?? [];
+    const allAds: SerpApiAd[] = data.ad_creatives ?? [];
 
-    // 4a. 只保留搜索/文字广告
+    // 4a. 只保留搜索/文字广告（format=text 或无 format）
     const searchAds = allAds.filter((ad) => isSearchAd(ad.format));
 
     // 4b. 按 advertiser_id 严格去重（优先用 id，无 id 则用 name 去重）
@@ -258,8 +258,8 @@ export async function queryMerchantAtc(opts: {
     const sampleAds: AtcAd[] = [];
 
     for (const ad of searchAds) {
-      const advId = (ad.advertiser_id ?? "").trim();
-      const advName = (ad.advertiser_name ?? "").trim();
+      const advId   = (ad.advertiser_id ?? "").trim();
+      const advName = (ad.advertiser    ?? "").trim(); // 正确字段名
 
       if (advId) {
         if (!advertiserMap.has(advId)) advertiserMap.set(advId, advName);
@@ -271,14 +271,14 @@ export async function queryMerchantAtc(opts: {
         }
       }
 
-      if (sampleAds.length < 10 && isSearchAd(ad.format)) {
+      if (sampleAds.length < 10) {
         sampleAds.push({
           format: ad.format ?? "text",
           title: ad.title,
-          domain: ad.domain,
-          first_shown: ad.first_shown,
-          last_shown: ad.last_shown,
-          thumbnail: ad.thumbnail,
+          domain: ad.target_domain,    // 正确字段名
+          first_shown: ad.first_shown ? String(ad.first_shown) : undefined,
+          last_shown:  ad.last_shown  ? String(ad.last_shown)  : undefined,
+          thumbnail: ad.image,
         });
       }
     }
@@ -376,7 +376,7 @@ export async function searchIntelligence(opts: {
   const NO_RESULTS_MSG = "hasn't returned any results";
   if (data.error && !data.error.includes(NO_RESULTS_MSG)) throw new Error(data.error);
 
-  const allAds: SerpApiAd[] = data.ads ?? [];
+  const allAds: SerpApiAd[] = data.ad_creatives ?? [];
   // 只保留搜索/文字广告
   const ads = allAds.filter((ad) => isSearchAd(ad.format));
 
@@ -384,25 +384,24 @@ export async function searchIntelligence(opts: {
   const advertiserAdsMap = new Map<string, { name: string; ads: AtcAd[] }>();
   const seenNames = new Set<string>();
   for (const ad of ads) {
-    const rawId = (ad.advertiser_id ?? "").trim();
-    const rawName = (ad.advertiser_name ?? "未知广告主").trim();
+    const rawId   = (ad.advertiser_id ?? "").trim();
+    const rawName = (ad.advertiser    ?? "未知广告主").trim(); // 正确字段名
     const advId = rawId || `_name_${normalize(rawName)}`;
     if (!rawId) {
       const normName = normalize(rawName);
       if (seenNames.has(normName)) continue;
       seenNames.add(normName);
     }
-    const advName = ad.advertiser_name ?? "未知广告主";
     if (!advertiserAdsMap.has(advId)) {
-      advertiserAdsMap.set(advId, { name: advName, ads: [] });
+      advertiserAdsMap.set(advId, { name: rawName, ads: [] });
     }
     advertiserAdsMap.get(advId)!.ads.push({
       format: ad.format ?? "text",
       title: ad.title,
-      domain: ad.domain,
-      first_shown: ad.first_shown,
-      last_shown: ad.last_shown,
-      thumbnail: ad.thumbnail,
+      domain: ad.target_domain,        // 正确字段名
+      first_shown: ad.first_shown ? String(ad.first_shown) : undefined,
+      last_shown:  ad.last_shown  ? String(ad.last_shown)  : undefined,
+      thumbnail: ad.image,
     });
   }
 
