@@ -357,17 +357,18 @@ export async function searchIntelligence(opts: {
   const { text, region = "US", serpApiKeys } = opts;
   const serpApiKey = pickApiKey(serpApiKeys);
 
+  // 情报搜索：不限平台，用近 30 天范围（让用户能看到广告主全平台投放）
   const serpRegion = toSerpApiRegion(region);
-  const yesterday2 = new Date(); yesterday2.setDate(yesterday2.getDate() - 1);
-  const today2     = new Date();
+  const endDate2   = new Date(); endDate2.setDate(endDate2.getDate() - 1);   // 昨天
+  const startDate2 = new Date(); startDate2.setDate(startDate2.getDate() - 31); // 31 天前
   const fmt2 = (d: Date) =>
     `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, "0")}${String(d.getDate()).padStart(2, "0")}`;
   const params: Record<string, string> = {
     engine: "google_ads_transparency_center",
     text,
-    platform: "SEARCH",
-    start_date: fmt2(yesterday2),
-    end_date:   fmt2(today2),
+    // 不加 platform 过滤，允许全平台（Search/Display/YouTube 等）
+    start_date: fmt2(startDate2),
+    end_date:   fmt2(endDate2),
     num: "100",
   };
   if (serpRegion) params.region = serpRegion;
@@ -377,8 +378,8 @@ export async function searchIntelligence(opts: {
   if (data.error && !data.error.includes(NO_RESULTS_MSG)) throw new Error(data.error);
 
   const allAds: SerpApiAd[] = data.ad_creatives ?? [];
-  // 只保留搜索/文字广告
-  const ads = allAds.filter((ad) => isSearchAd(ad.format));
+  // 情报页展示全部格式的广告
+  const ads = allAds;
 
   // 按广告主分组（严格去重：优先用 advertiser_id）
   const advertiserAdsMap = new Map<string, { name: string; ads: AtcAd[] }>();
