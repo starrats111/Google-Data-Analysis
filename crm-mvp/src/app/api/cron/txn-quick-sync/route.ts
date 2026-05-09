@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 import { normalizePlatformCode } from "@/lib/constants";
-import { nowCST } from "@/lib/date-utils";
+import { nowCST, dateColumnStart, dateColumnEndExclusive } from "@/lib/date-utils";
 import { getRedirectedMerchantKeys } from "@/lib/merchant-ownership-rules";
+import { applyAffiliateCommissionToDailyStats } from "@/lib/daily-stats-commission";
 
 /** 快速同步的时间窗口（天）：覆盖所有状态活跃中的订单 */
 const QUICK_SYNC_DAYS = 14;
@@ -70,8 +71,13 @@ export async function GET(req: NextRequest) {
   const startStr = cstNow.subtract(QUICK_SYNC_DAYS, "day").format("YYYY-MM-DD");
   const endStr = cstNow.format("YYYY-MM-DD");
 
+  // 用于 ads_daily_stats 佣金回写的 UTC 边界（DATE 列按 UTC 日期对齐）
+  const statsRangeStart = dateColumnStart(startStr);
+  const statsRangeEnd = dateColumnEndExclusive(endStr);
+
   const results: Record<string, unknown> = {};
   let totalChanged = 0;
+  let totalCommissionUpdated = 0;
 
   for (const user of users) {
     const userId = user.id;
@@ -210,15 +216,36 @@ export async function GET(req: NextRequest) {
       // 变更检测：同步后再取一次 updated_at，有变化则更新版本戳
       const afterTs = await getMaxUpdatedAt(userId);
       const hasChange = afterTs !== beforeTs;
+
+      // 佣金回写到 ads_daily_stats（数据中心广告系列页面读这张表显示佣金/订单）
+      // 即使 upserted=0、hasChange=false 也执行：极轻量（仅 14 天聚合），可保证状态一致性
+      let commissionUpdated = 0;
+      try {
+        commissionUpdated = await applyAffiliateCommissionToDailyStats(userId, statsRangeStart, statsRangeEnd);
+        totalCommissionUpdated += commissionUpdated;
+      } catch (e) {
+        log(`  ${user.username} commission writeback error: ${e instanceof Error ? e.message : String(e)}`);
+      }
+
       if (hasChange) {
         await updateTxnVersion(userId, afterTs);
         totalChanged++;
-        log(`  ${user.username}: changed ✓ (${upserted} upserted)`);
+        log(`  ${user.username}: changed ✓ (${upserted} upserted, ${commissionUpdated} commission rows)`);
+      } else if (commissionUpdated > 0) {
+        // 即使 affiliate_transactions 没有 updated_at 变动（比如纯重写），
+        // 但 ads_daily_stats 实际有写入：依然推进版本戳，让前端轮询拿到新数据
+        await updateTxnVersion(userId, afterTs);
+        log(`  ${user.username}: commission writeback only (${commissionUpdated} rows)`);
       } else {
-        log(`  ${user.username}: no change (${upserted} upserted)`);
+        log(`  ${user.username}: no change`);
       }
 
-      results[user.username] = { upserted, changed: hasChange, platforms: platformStats };
+      results[user.username] = {
+        upserted,
+        changed: hasChange,
+        commission_updated: commissionUpdated,
+        platforms: platformStats,
+      };
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       log(`  ${user.username} fatal: ${msg}`);
@@ -227,7 +254,7 @@ export async function GET(req: NextRequest) {
   }
 
   const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
-  log(`快速同步完成：${totalChanged}/${users.length} 用户有变动，耗时 ${elapsed}s`);
+  log(`快速同步完成：${totalChanged}/${users.length} 用户有变动，回写佣金 ${totalCommissionUpdated} 行，耗时 ${elapsed}s`);
 
   return NextResponse.json({
     ok: true,
@@ -235,6 +262,7 @@ export async function GET(req: NextRequest) {
     users_changed: totalChanged,
     users_total: users.length,
     window_days: QUICK_SYNC_DAYS,
+    commission_updated_total: totalCommissionUpdated,
     results,
   });
 }
