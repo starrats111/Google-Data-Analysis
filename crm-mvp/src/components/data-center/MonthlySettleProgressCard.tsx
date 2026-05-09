@@ -1,9 +1,12 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Card, Row, Col, Tag, Tooltip, Typography, Empty, Spin, Space } from "antd";
-import { CheckCircleFilled, ClockCircleOutlined } from "@ant-design/icons";
+import { Card, Row, Col, Tag, Tooltip, Typography, Empty, Spin, Space, Button } from "antd";
+import { CheckCircleFilled, ClockCircleOutlined, DownOutlined, UpOutlined } from "@ant-design/icons";
 import { COLORS } from "@/styles/themeConfig";
+
+/** 折叠状态本地持久化 key（同一浏览器下次进来保持上次选择） */
+const COLLAPSE_STORAGE_KEY = "crm.monthlyProgress.collapsed";
 
 const { Text } = Typography;
 
@@ -73,6 +76,24 @@ export default function MonthlySettleProgressCard({ memberId }: Props) {
   const [data, setData] = useState<ProgressData | null>(null);
   const [loading, setLoading] = useState(true);
   const [hoverMonth, setHoverMonth] = useState<string | null>(null);
+  // 折叠状态：默认展开；恢复 localStorage 上次选择
+  const [collapsed, setCollapsed] = useState<boolean>(false);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const saved = window.localStorage.getItem(COLLAPSE_STORAGE_KEY);
+    if (saved === "1") setCollapsed(true);
+  }, []);
+
+  const toggleCollapsed = () => {
+    setCollapsed((prev) => {
+      const next = !prev;
+      if (typeof window !== "undefined") {
+        window.localStorage.setItem(COLLAPSE_STORAGE_KEY, next ? "1" : "0");
+      }
+      return next;
+    });
+  };
 
   useEffect(() => {
     const ac = new AbortController();
@@ -110,6 +131,13 @@ export default function MonthlySettleProgressCard({ memberId }: Props) {
 
   const s = data.summary;
 
+  // 全月份汇总三段比例（折叠时的概览条）
+  const sumTotal = s.total_amount > 0 ? s.total_amount : 1;
+  const sumApprovedConfirmed = s.approved_amount + s.paid_amount;
+  const sumGreenPct = (sumApprovedConfirmed / sumTotal) * 100;
+  const sumRedPct = (s.rejected_amount / sumTotal) * 100;
+  const sumYellowPct = (s.pending_amount / sumTotal) * 100;
+
   return (
     <Card
       size="small"
@@ -128,8 +156,64 @@ export default function MonthlySettleProgressCard({ memberId }: Props) {
           </Text>
         </Space>
       }
+      extra={
+        <Button
+          type="text"
+          size="small"
+          icon={collapsed ? <DownOutlined /> : <UpOutlined />}
+          onClick={toggleCollapsed}
+          style={{ color: COLORS.textSecondary, fontSize: 12 }}
+        >
+          {collapsed ? "展开" : "折叠"}
+        </Button>
+      }
     >
-      <Row gutter={[12, 12]}>
+      {collapsed ? (
+        // 折叠时的精简概览：一条三段式总进度条 + 三色金额
+        <div>
+          <div
+            style={{
+              display: "flex",
+              height: 10,
+              borderRadius: 5,
+              overflow: "hidden",
+              background: TRACK_BG,
+              marginBottom: 8,
+            }}
+          >
+            {sumGreenPct > 0 && (
+              <div style={{ width: `${sumGreenPct}%`, background: SEG_GREEN, transition: "width 0.3s ease" }} />
+            )}
+            {sumRedPct > 0 && (
+              <div style={{ width: `${sumRedPct}%`, background: SEG_RED, transition: "width 0.3s ease" }} />
+            )}
+            {sumYellowPct > 0 && (
+              <div style={{ width: `${sumYellowPct}%`, background: SEG_YELLOW, transition: "width 0.3s ease" }} />
+            )}
+          </div>
+          <Space size={16} wrap style={{ fontSize: 12 }}>
+            {sumApprovedConfirmed > 0 && (
+              <span style={{ color: SEG_GREEN }}>
+                已确认 ${sumApprovedConfirmed.toLocaleString()}
+              </span>
+            )}
+            {s.rejected_amount > 0 && (
+              <span style={{ color: SEG_RED }}>
+                拒付 ${s.rejected_amount.toLocaleString()}
+              </span>
+            )}
+            {s.pending_amount > 0 && (
+              <span style={{ color: SEG_YELLOW }}>
+                待确认 ${s.pending_amount.toLocaleString()}
+              </span>
+            )}
+            <Text type="secondary" style={{ fontSize: 12 }}>
+              （展开查看每月明细）
+            </Text>
+          </Space>
+        </div>
+      ) : (
+        <Row gutter={[12, 12]}>
         {data.months.map((m) => {
           const settled = m.is_settled;
           const isHover = hoverMonth === m.month;
@@ -303,7 +387,8 @@ export default function MonthlySettleProgressCard({ memberId }: Props) {
             </Col>
           );
         })}
-      </Row>
+        </Row>
+      )}
     </Card>
   );
 }
