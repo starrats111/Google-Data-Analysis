@@ -830,12 +830,12 @@ export default function DataCenterPage() {
                 scroll={{ x: 820 }}
                 columns={[
                   { title: "商家", dataIndex: "merchant_name", width: 160, ellipsis: true, render: (v: string) => <Tag color="geekblue">{v}</Tag> },
-                  { title: "总佣金", dataIndex: "total_commission", width: 100, align: "right" as const, render: (v: number) => <Text style={{ color: v > 0 ? "#389e0d" : undefined }}>${v.toFixed(2)}</Text> },
-                  { title: "已确认", dataIndex: "approved_commission", width: 100, align: "right" as const, render: (v: number) => <Text style={{ color: v > 0 ? "#1890ff" : undefined }}>${v.toFixed(2)}</Text> },
-                  { title: "已支付", dataIndex: "paid_commission", width: 100, align: "right" as const, render: (v: number) => <Text style={{ color: v > 0 ? "#13c2c2" : undefined }}>${v.toFixed(2)}</Text> },
-                  { title: "待审核", dataIndex: "pending_commission", width: 100, align: "right" as const, render: (v: number) => <Text style={{ color: v > 0 ? "#faad14" : undefined }}>${v.toFixed(2)}</Text> },
-                  { title: "拒付", dataIndex: "rejected_commission", width: 90, align: "right" as const, render: (v: number) => <Text type={v > 0 ? "danger" : "secondary"}>${v.toFixed(2)}</Text> },
-                  { title: "订单数", dataIndex: "order_count", width: 70, align: "right" as const },
+                  { title: "总佣金", dataIndex: "total_commission", width: 100, align: "right" as const, sorter: (a: typeof commissionByMerchant[0], b: typeof commissionByMerchant[0]) => a.total_commission - b.total_commission, defaultSortOrder: "descend" as const, render: (v: number) => <Text style={{ color: v > 0 ? "#389e0d" : undefined }}>${v.toFixed(2)}</Text> },
+                  { title: "已确认", dataIndex: "approved_commission", width: 100, align: "right" as const, sorter: (a: typeof commissionByMerchant[0], b: typeof commissionByMerchant[0]) => a.approved_commission - b.approved_commission, render: (v: number) => <Text style={{ color: v > 0 ? "#1890ff" : undefined }}>${v.toFixed(2)}</Text> },
+                  { title: "已支付", dataIndex: "paid_commission", width: 100, align: "right" as const, sorter: (a: typeof commissionByMerchant[0], b: typeof commissionByMerchant[0]) => a.paid_commission - b.paid_commission, render: (v: number) => <Text style={{ color: v > 0 ? "#13c2c2" : undefined }}>${v.toFixed(2)}</Text> },
+                  { title: "待审核", dataIndex: "pending_commission", width: 100, align: "right" as const, sorter: (a: typeof commissionByMerchant[0], b: typeof commissionByMerchant[0]) => a.pending_commission - b.pending_commission, render: (v: number) => <Text style={{ color: v > 0 ? "#faad14" : undefined }}>${v.toFixed(2)}</Text> },
+                  { title: "拒付", dataIndex: "rejected_commission", width: 90, align: "right" as const, sorter: (a: typeof commissionByMerchant[0], b: typeof commissionByMerchant[0]) => a.rejected_commission - b.rejected_commission, render: (v: number) => <Text type={v > 0 ? "danger" : "secondary"}>${v.toFixed(2)}</Text> },
+                  { title: "订单数", dataIndex: "order_count", width: 70, align: "right" as const, sorter: (a: typeof commissionByMerchant[0], b: typeof commissionByMerchant[0]) => a.order_count - b.order_count },
                 ]}
                 summary={() => {
                   if (commissionByMerchant.length === 0) return null;
@@ -871,12 +871,12 @@ export default function DataCenterPage() {
                 scroll={{ x: 820 }}
                 columns={[
                   { title: "账号", dataIndex: "account_name", width: 160, ellipsis: true, render: (v: string, r: (typeof commissionByAccount)[0]) => <Tag color="blue">{v} ({r.platform})</Tag> },
-                  { title: "总佣金", dataIndex: "total_commission", width: 100, align: "right" as const, render: (v: number) => <Text style={{ color: v > 0 ? "#389e0d" : undefined }}>${v.toFixed(2)}</Text> },
-                  { title: "已确认", dataIndex: "approved_commission", width: 100, align: "right" as const, render: (v: number) => <Text style={{ color: v > 0 ? "#1890ff" : undefined }}>${v.toFixed(2)}</Text> },
-                  { title: "已支付", dataIndex: "paid_commission", width: 100, align: "right" as const, render: (v: number) => <Text style={{ color: v > 0 ? "#13c2c2" : undefined }}>${v.toFixed(2)}</Text> },
-                  { title: "待审核", dataIndex: "pending_commission", width: 100, align: "right" as const, render: (v: number) => <Text style={{ color: v > 0 ? "#faad14" : undefined }}>${v.toFixed(2)}</Text> },
-                  { title: "拒付", dataIndex: "rejected_commission", width: 90, align: "right" as const, render: (v: number) => <Text type={v > 0 ? "danger" : "secondary"}>${v.toFixed(2)}</Text> },
-                  { title: "订单数", dataIndex: "order_count", width: 70, align: "right" as const },
+                  { title: "总佣金", dataIndex: "total_commission", width: 100, align: "right" as const, sorter: (a: typeof commissionByAccount[0], b: typeof commissionByAccount[0]) => a.total_commission - b.total_commission, defaultSortOrder: "descend" as const, render: (v: number) => <Text style={{ color: v > 0 ? "#389e0d" : undefined }}>${v.toFixed(2)}</Text> },
+                  { title: "已确认", dataIndex: "approved_commission", width: 100, align: "right" as const, sorter: (a: typeof commissionByAccount[0], b: typeof commissionByAccount[0]) => a.approved_commission - b.approved_commission, render: (v: number) => <Text style={{ color: v > 0 ? "#1890ff" : undefined }}>${v.toFixed(2)}</Text> },
+                  { title: "已支付", dataIndex: "paid_commission", width: 100, align: "right" as const, sorter: (a: typeof commissionByAccount[0], b: typeof commissionByAccount[0]) => a.paid_commission - b.paid_commission, render: (v: number) => <Text style={{ color: v > 0 ? "#13c2c2" : undefined }}>${v.toFixed(2)}</Text> },
+                  { title: "待审核", dataIndex: "pending_commission", width: 100, align: "right" as const, sorter: (a: typeof commissionByAccount[0], b: typeof commissionByAccount[0]) => a.pending_commission - b.pending_commission, render: (v: number) => <Text style={{ color: v > 0 ? "#faad14" : undefined }}>${v.toFixed(2)}</Text> },
+                  { title: "拒付", dataIndex: "rejected_commission", width: 90, align: "right" as const, sorter: (a: typeof commissionByAccount[0], b: typeof commissionByAccount[0]) => a.rejected_commission - b.rejected_commission, render: (v: number) => <Text type={v > 0 ? "danger" : "secondary"}>${v.toFixed(2)}</Text> },
+                  { title: "订单数", dataIndex: "order_count", width: 70, align: "right" as const, sorter: (a: typeof commissionByAccount[0], b: typeof commissionByAccount[0]) => a.order_count - b.order_count },
                 ]}
                 summary={() => {
                   if (commissionByAccount.length === 0) return null;

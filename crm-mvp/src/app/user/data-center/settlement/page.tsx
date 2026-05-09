@@ -178,18 +178,22 @@ export default function SettlementPage() {
     },
     {
       title: "已确认($)", dataIndex: "approved", width: 100, align: "right",
+      sorter: (a, b) => a.approved - b.approved,
       render: (v: number) => <span style={{ color: v > 0 ? COLORS.successGreen : undefined }}>${v.toFixed(2)}</span>,
     },
     {
       title: "已支付($)", dataIndex: "paid", width: 100, align: "right",
+      sorter: (a, b) => a.paid - b.paid,
       render: (v: number) => <span style={{ color: v > 0 ? "#1890ff" : undefined }}>${v.toFixed(2)}</span>,
     },
     {
       title: "拒付($)", dataIndex: "rejected", width: 100, align: "right",
+      sorter: (a, b) => a.rejected - b.rejected,
       render: (v: number) => <span style={{ color: v > 0 ? "#cf1322" : undefined, fontWeight: v > 0 ? 600 : 400 }}>${v.toFixed(2)}</span>,
     },
     {
       title: "待审核($)", dataIndex: "pending", width: 100, align: "right",
+      sorter: (a, b) => a.pending - b.pending,
       render: (v: number) => <span style={{ color: v > 0 ? "#faad14" : undefined }}>${v.toFixed(2)}</span>,
     },
     {
@@ -212,14 +216,17 @@ export default function SettlementPage() {
     },
     {
       title: "已确认($)", dataIndex: "approved", width: 120,
+      sorter: (a, b) => a.approved - b.approved,
       render: (v: number) => <span style={{ color: COLORS.successGreen }}>${v.toFixed(2)}</span>,
     },
     {
       title: "已支付($)", dataIndex: "paid", width: 120,
+      sorter: (a, b) => a.paid - b.paid,
       render: (v: number) => <span style={{ color: "#1890ff" }}>${v.toFixed(2)}</span>,
     },
     {
       title: "拒付($)", dataIndex: "rejected", width: 120,
+      sorter: (a, b) => a.rejected - b.rejected,
       render: (v: number) => (
         <span style={{ color: v > 0 ? "#cf1322" : undefined, fontWeight: v > 0 ? 600 : 400 }}>
           ${v.toFixed(2)}
@@ -228,9 +235,10 @@ export default function SettlementPage() {
     },
     {
       title: "待审核($)", dataIndex: "pending", width: 120,
+      sorter: (a, b) => a.pending - b.pending,
       render: (v: number) => <span style={{ color: "#faad14" }}>${v.toFixed(2)}</span>,
     },
-    { title: "订单数", dataIndex: "orders", width: 90 },
+    { title: "订单数", dataIndex: "orders", width: 90, sorter: (a, b) => a.orders - b.orders },
   ];
 
   const memberColumns: ColumnsType<MemberRow> = [
@@ -250,18 +258,22 @@ export default function SettlementPage() {
     },
     {
       title: "已确认($)", dataIndex: "approved", width: 100, align: "right",
+      sorter: (a, b) => a.approved - b.approved,
       render: (v: number) => <span style={{ color: v > 0 ? COLORS.successGreen : undefined }}>${v.toFixed(2)}</span>,
     },
     {
       title: "已支付($)", dataIndex: "paid", width: 100, align: "right",
+      sorter: (a, b) => a.paid - b.paid,
       render: (v: number) => <span style={{ color: v > 0 ? "#1890ff" : undefined }}>${v.toFixed(2)}</span>,
     },
     {
       title: "拒付($)", dataIndex: "rejected", width: 100, align: "right",
+      sorter: (a, b) => a.rejected - b.rejected,
       render: (v: number) => <span style={{ color: v > 0 ? "#cf1322" : undefined, fontWeight: v > 0 ? 600 : 400 }}>${v.toFixed(2)}</span>,
     },
     {
       title: "待审核($)", dataIndex: "pending", width: 100, align: "right",
+      sorter: (a, b) => a.pending - b.pending,
       render: (v: number) => <span style={{ color: v > 0 ? "#faad14" : undefined }}>${v.toFixed(2)}</span>,
     },
     {
