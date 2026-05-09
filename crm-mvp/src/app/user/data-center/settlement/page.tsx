@@ -12,6 +12,7 @@ import {
 import type { ColumnsType } from "antd/es/table";
 import { COLORS } from "@/styles/themeConfig";
 import { PLATFORMS } from "@/lib/constants";
+import MonthlySettleProgressCard from "@/components/data-center/MonthlySettleProgressCard";
 import dayjs, { Dayjs } from "dayjs";
 
 const { Title, Text } = Typography;
@@ -396,6 +397,9 @@ export default function SettlementPage() {
               </Card>
             </Col>
           </Row>
+
+          {/* 月份结算进度（每月一张卡，跨整个项目周期不限于筛选时间） */}
+          <MonthlySettleProgressCard memberId={memberId || undefined} />
 
           {/* 明细切换 */}
           <Card

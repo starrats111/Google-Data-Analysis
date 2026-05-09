@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 import { normalizePlatformCode } from "@/lib/constants";
 import { getExchangeRate, preloadRates } from "@/lib/exchange-rate";
-import { nowCST, parseCSTDateStart, dateColumnStart } from "@/lib/date-utils";
+import { nowCST, dateColumnStart, parseTxnDateStart } from "@/lib/date-utils";
 import { autoRepairPublishedArticles } from "@/lib/article-auto-repair";
 import { getRedirectedMerchantKeys } from "@/lib/merchant-ownership-rules";
 import { sqlAffiliateTxnValidPlatformConnection } from "@/lib/affiliate-transaction-sql";
@@ -613,11 +613,24 @@ async function syncAllUsersTransactions(): Promise<unknown> {
       log(`  Transactions for ${user.username} (${validConns.length} connections)...`);
 
       const { fetchAllTransactions } = await import("@/lib/platform-api");
+      const { listUnsettledMonthsForUser, recomputeMonthlySettlementForUser } = await import("@/lib/monthly-settlement-tracker");
       const cstNow = nowCST();
-      const startStr = cstNow.subtract(180, "day").format("YYYY-MM-DD");
-      const syncStart = parseCSTDateStart(startStr);
+
+      // 月度结算驱动：找出该用户「最早未结算月」作为同步起点
+      // 已结算月（pending = 0）跳过不再请求平台 API，节省调用次数
+      // 极端兜底：若用户尚无任何 monthly_settlement_status 记录，按 365 天向前拉
+      const unsettledMonths = await listUnsettledMonthsForUser(userId);
+      let startStr: string;
+      if (unsettledMonths.length > 0) {
+        startStr = `${unsettledMonths[0]}-01`;
+      } else {
+        startStr = cstNow.subtract(365, "day").format("YYYY-MM-DD");
+      }
+      const syncStart = parseTxnDateStart(startStr);
       const statsSyncStart = dateColumnStart(startStr);
       const endStr = cstNow.format("YYYY-MM-DD");
+
+      log(`    range: ${startStr} → ${endStr} (${unsettledMonths.length} unsettled month(s))`);
 
       const userMerchants = await prisma.user_merchants.findMany({
         where: { user_id: userId, is_deleted: 0 },
@@ -803,8 +816,18 @@ async function syncAllUsersTransactions(): Promise<unknown> {
         }
       }
 
-      results[user.username] = { synced: totalSynced };
-      log(`    ${user.username}: ${totalSynced} transactions synced`);
+      // 无论 totalSynced 是否大于 0，都要重算月份结算状态：
+      // 即使本轮没有新交易，已有交易 status 可能被联盟平台改了（pending → approved）
+      // 而 affiliate_transactions 已被前面的 upsert 写入，重算后才会反映到 monthly_settlement_status
+      let monthsUpdated = 0;
+      try {
+        monthsUpdated = await recomputeMonthlySettlementForUser(userId);
+      } catch (e) {
+        log(`    ${user.username} recomputeMonthlySettlement error: ${e instanceof Error ? e.message : String(e)}`);
+      }
+
+      results[user.username] = { synced: totalSynced, months_recomputed: monthsUpdated };
+      log(`    ${user.username}: ${totalSynced} transactions synced, ${monthsUpdated} months recomputed`);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       log(`    ${user.username} sync FAILED: ${msg}`);
