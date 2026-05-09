@@ -204,10 +204,15 @@ export async function findArIdByName(name: string, apiKey: string): Promise<stri
       hl: "zh-CN",
     };
     const data = await callSerpApi(params, apiKey) as Record<string, unknown>;
-    const results = (data.organic_results ?? []) as Array<{ link?: string; title?: string }>;
+    const results = (data.organic_results ?? []) as Array<{ link?: string; title?: string; snippet?: string }>;
+    const lowerName = name.toLowerCase();
+
     for (const r of results) {
       const m = (r.link ?? "").match(/adstransparency\.google\.com\/advertiser\/(AR\d+)/i);
-      if (m) return m[1];
+      if (!m) continue;
+      // 验证：Google 搜索结果标题或摘要须包含被搜索的名称，防止返回无关广告主的 AR ID
+      const pageText = ((r.title ?? "") + " " + (r.snippet ?? "")).toLowerCase();
+      if (pageText.includes(lowerName)) return m[1];
     }
     return null;
   } catch {
@@ -266,19 +271,14 @@ export async function queryMerchantAtc(opts: {
 
   try {
     // 3. 调用 SerpApi
-    // 用完整域名搜索（ATC 会返回所有指向该域名的广告），日期="昨天"
-    // 说明：SerpApi 的"单天"需要 end_date = start_date + 1 天
+    // 用完整域名搜索（ATC 会返回所有指向该域名的广告）
+    // 使用近 7 天窗口（与 Google ATC 网站默认"过去 7 天"一致），覆盖偶尔投放的广告主
     const serpRegion = toSerpApiRegion(region);
-    const yesterday = new Date(); yesterday.setDate(yesterday.getDate() - 1);
-    const today     = new Date();
-    const fmt = (d: Date) =>
-      `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, "0")}${String(d.getDate()).padStart(2, "0")}`;
     const params: Record<string, string> = {
       engine: "google_ads_transparency_center",
       text: domain,
       platform: "SEARCH",
-      start_date: fmt(yesterday),
-      end_date:   fmt(today),
+      ...buildDateRangeParams(7),
       num: "100",
     };
     if (serpRegion) params.region = serpRegion;
