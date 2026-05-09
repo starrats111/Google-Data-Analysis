@@ -12,7 +12,9 @@ import prisma from "@/lib/prisma";
  *   理由：联盟平台 approved 之后到 paid 中间是平台打款流程，不影响数据准确性
  *   被 rejected 的也算结清（钱不会再变化）
  *
- * 时间口径：transaction_time 按 UTC 存储，按 DATE_FORMAT(transaction_time, '%Y-%m') 分组
+ * 时间口径：transaction_time 按 UTC 存储，
+ * C-074 起按 CST/北京时间归月（DATE_FORMAT(CONVERT_TZ(transaction_time, '+00:00', '+08:00'), '%Y-%m')），
+ * 与联盟平台后台与 ads_daily_stats 的 CST 切日完全对齐。
  */
 
 export interface MonthSummary {
@@ -56,7 +58,7 @@ export async function recomputeMonthlySettlementForUser(userId: bigint): Promise
     rejected_amount: number;
   }[]>(`
     SELECT
-      DATE_FORMAT(transaction_time, '%Y-%m') AS month,
+      DATE_FORMAT(CONVERT_TZ(transaction_time, '+00:00', '+08:00'), '%Y-%m') AS month,
       COUNT(*) AS total_count,
       SUM(CAST(commission_amount AS DECIMAL(14,4))) AS total_amount,
       SUM(CASE WHEN status = 'pending'  THEN 1 ELSE 0 END) AS pending_count,
@@ -69,7 +71,7 @@ export async function recomputeMonthlySettlementForUser(userId: bigint): Promise
       SUM(CASE WHEN status = 'rejected' THEN CAST(commission_amount AS DECIMAL(14,4)) ELSE 0 END) AS rejected_amount
     FROM affiliate_transactions
     WHERE user_id = ? AND is_deleted = 0
-    GROUP BY DATE_FORMAT(transaction_time, '%Y-%m')
+    GROUP BY DATE_FORMAT(CONVERT_TZ(transaction_time, '+00:00', '+08:00'), '%Y-%m')
   `, userId);
 
   if (!monthRows.length) return 0;

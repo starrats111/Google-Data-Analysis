@@ -170,14 +170,14 @@ export async function GET(req: NextRequest) {
     order_amount: fix2(Number(m.order_amount)),
   }));
 
-  // ── 3. 按月聚合 ───────────────────────────────────────────────────────────
+  // ── 3. 按月聚合（C-074：按 CST/北京时间归月，与联盟平台后台一致）─────────
   const monthlyRows = await prisma.$queryRawUnsafe<{
     month: string;
     total: number; approved: number; rejected: number; paid: number; pending: number;
     orders: number;
   }[]>(`
     SELECT
-      DATE_FORMAT(transaction_time, '%Y-%m') AS month,
+      DATE_FORMAT(CONVERT_TZ(transaction_time, '+00:00', '+08:00'), '%Y-%m') AS month,
       SUM(CAST(commission_amount AS DECIMAL(14,4))) AS total,
       SUM(CASE WHEN status = 'approved' THEN CAST(commission_amount AS DECIMAL(14,4)) ELSE 0 END) AS approved,
       SUM(CASE WHEN status = 'rejected' THEN CAST(commission_amount AS DECIMAL(14,4)) ELSE 0 END) AS rejected,

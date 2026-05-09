@@ -434,14 +434,14 @@ async function updateDailyStatsCommission(userId: bigint, statsStartDate: Date, 
   >(`
     SELECT 
       user_merchant_id,
-      DATE_FORMAT(transaction_time, '%Y-%m-%d') as txn_date,
+      DATE_FORMAT(CONVERT_TZ(transaction_time, '+00:00', '+08:00'), '%Y-%m-%d') as txn_date,
       SUM(CAST(commission_amount AS DECIMAL(12,2))) as total_commission,
       SUM(CASE WHEN status = 'rejected' THEN CAST(commission_amount AS DECIMAL(12,2)) ELSE 0 END) as rejected_commission,
       COUNT(*) as order_count
     FROM affiliate_transactions
     WHERE user_id = ? AND is_deleted = 0 AND transaction_time >= ?
       AND ${sqlAffiliateTxnValidPlatformConnection("affiliate_transactions")}
-    GROUP BY user_merchant_id, DATE_FORMAT(transaction_time, '%Y-%m-%d')
+    GROUP BY user_merchant_id, DATE_FORMAT(CONVERT_TZ(transaction_time, '+00:00', '+08:00'), '%Y-%m-%d')
   `, userId, txnStartDate);
 
   if (!txnAgg || txnAgg.length === 0) return 0;
