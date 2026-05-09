@@ -56,13 +56,11 @@ function adDays(ad: AtcAd): number | null {
   return Math.round((ad.last_shown - ad.first_shown) / 86400);
 }
 
-/** 判断广告是否满足"持续投放 N 天且昨天仍在投"条件 */
+/** 判断广告是否满足"持续投放 N 天"条件（按总时长计算，不要求当前仍在投）*/
 function isPersistent(ad: AtcAd, minDays: number): boolean {
   if (!ad.first_shown || !ad.last_shown) return false;
-  const nowSec = Date.now() / 1000;
-  const twoDaysAgo = nowSec - 2 * 86400;
-  const nDaysAgo   = nowSec - minDays * 86400;
-  return ad.first_shown <= nDaysAgo && ad.last_shown >= twoDaysAgo;
+  const daysRan = (ad.last_shown - ad.first_shown) / 86400;
+  return daysRan >= minDays;
 }
 
 export default function IntelligencePage() {
@@ -274,7 +272,7 @@ export default function IntelligencePage() {
             addonAfter="天"
           />
           <Text type="secondary" style={{ fontSize: 12 }}>
-            （首次投放 ≥ {minDays} 天前 且 昨天仍在投放）
+            （广告总持续时长 ≥ {minDays} 天）
           </Text>
         </div>
       </Card>
@@ -332,7 +330,7 @@ export default function IntelligencePage() {
           {filteredAdvertisers.length === 0 ? (
             <Empty description={
               persistOnly
-                ? `未找到持续投放 ${minDays} 天以上的广告，可降低天数或关闭过滤`
+                ? `未找到持续时长超过 ${minDays} 天的广告，可降低天数或关闭过滤`
                 : "未找到匹配的广告，请尝试其他关键词"
             } />
           ) : (
