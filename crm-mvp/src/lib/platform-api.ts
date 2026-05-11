@@ -844,8 +844,10 @@ function parseTimestamp(raw: unknown): string {
     const d = new Date(s);
     if (!isNaN(d.getTime())) return d.toISOString();
   }
-  // PM/CG/BSH/CF/MUI 平台的 last_update_time 格式："MM-DD-YYYY"
+  // "MM-DD-YYYY" 格式（PM/CG/BSH/CF/MUI 平台某些字段如 last_update_time）
   // 例：「04-30-2026」→「2026-04-30T00:00:00.000Z」
+  // 注：C-082 起 transaction_time 不再使用 last_update_time，但本格式仍可能
+  // 出现在其他字段（如未来新增的 attribution_date 字段），保留解析能力。
   const mdyMatch = s.match(/^(\d{2})-(\d{2})-(\d{4})$/);
   if (mdyMatch) {
     const d = new Date(`${mdyMatch[3]}-${mdyMatch[1]}-${mdyMatch[2]}T00:00:00Z`);
@@ -999,19 +1001,16 @@ function parseTransactions(platform: string, data: Record<string, unknown>): Pla
 
     const rawStatus = String(item.status || item.raw_status || "pending");
 
-    // 时间戳解析：优先使用平台月报归属时间（last_update_time），
-    // 原因：PM/CG/BSH/CF/MUI 等平台的月度报告按 last_update_time 归月（即最后状态变更日），
-    // 而非按 order_time（下单日）。3月下单、4月确认的订单，平台计入4月，
-    // 用 last_update_time 可保证 CRM 与平台月度报告一致。
-    // last_update_time 格式为 "MM-DD-YYYY"（如 "04-30-2026"），parseTimestamp 已支持此格式。
-    // 若 last_update_time 为空或 "null"，则回退到 order_time。
-    const rawUpdateTime = item.last_update_time || item.lastUpdateTime || item.update_time || item.updateTime;
-    const hasValidUpdateTime = rawUpdateTime && String(rawUpdateTime).trim() !== "" && String(rawUpdateTime).trim() !== "null" && String(rawUpdateTime).trim() !== "0";
+    // C-082: transaction_time 严格使用 order_time（订单下单时间，唯一不变）。
+    // 历史 commit 1788f95f 曾把 last_update_time 写入 transaction_time，
+    // 导致：① 同 last_update 日的不同订单被错误聚合；② 订单状态变更后
+    // last_update_time 漂移、update 路径不刷 transaction_time → 同一订单
+    // 的不同 line items 跨组双计。语义层面 transaction_time 必须 = 下单
+    // 时间（订单标识的天然时间锚），absolutely 不允许写入 last_update_time。
+    // 若月度归月需要按 last_update_time 切分，应单独加字段，不可复用本字段。
     const txnTime = parseTimestamp(
-      hasValidUpdateTime
-        ? rawUpdateTime
-        // C-029 AD 的字段名：transactionTime（camelCase）
-        : (item.order_time || item.orderTime || item.transaction_time || item.transactionTime || item.report_time || item.created_at)
+      // C-029 AD 的字段名：transactionTime（camelCase）
+      item.order_time || item.orderTime || item.transaction_time || item.transactionTime || item.report_time || item.created_at
     );
 
     const merchantUrl = String(

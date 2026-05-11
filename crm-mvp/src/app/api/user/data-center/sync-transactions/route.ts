@@ -210,6 +210,9 @@ export async function POST(req: NextRequest) {
                 user_id: BigInt(rule.target_user_id),
                 user_merchant_id: BigInt(rule.target_user_merchant_id),
                 campaign_id: BigInt(rule.target_campaign_id),
+                // C-082：transaction_time 必须随 sync 刷新为 API 的 order_time，
+                // 修复历史 commit 1788f95f 导致的 last_update_time 写错。
+                transaction_time: new Date(txn.transaction_time),
                 commission_amount: txn.commission_amount || 0,
                 status: txn.status, raw_status: txn.raw_status || "",
                 order_amount: txn.order_amount || 0,
@@ -241,6 +244,9 @@ export async function POST(req: NextRequest) {
             update: {
               merchant_id: merchantId,
               ...(userMerchantId !== BigInt(0) ? { user_merchant_id: userMerchantId } : {}),
+              // C-082：transaction_time 必须随 sync 刷新为 API 的 order_time，
+              // 修复历史 commit 1788f95f 导致的 last_update_time 写错。
+              transaction_time: new Date(txn.transaction_time),
               commission_amount: newComm,
               status: txn.status, raw_status: txn.raw_status || "",
               order_amount: newAmt,
