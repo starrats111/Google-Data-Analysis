@@ -14,19 +14,18 @@ const TZ = "Asia/Shanghai";
 /**
  * GET /api/cron/recompute-historical-commissions
  *
- * C-074 配套运维端点：对所有用户全部历史月份重算 ads_daily_stats.commission。
+ * C-074 / C-080 配套运维端点：对所有用户全部历史月份重算 ads_daily_stats.commission。
  *
- * 背景：C-074 把 affiliate_transactions 的查询/分桶视角从 UTC 切到 CST。
- * txn-quick-sync 自动覆盖了"近 14 天"，但更早的月份（2025-09 ~ 2026-04）
- * 仍按旧的 UTC 视角分桶在 ads_daily_stats，跨日订单挂错日期需要全量重算。
+ * 背景：C-080 把 affiliate_transactions 的查询/分桶视角从 CST 改回 UTC（与联盟平台后台一致）。
+ * 跨日订单需按 UTC 重新分桶到 ads_daily_stats，monthly_settlement_status 也需按 UTC 月归档。
  *
  * 行为：
  *   1. 列出所有非删除用户
  *   2. 对每个用户：
- *      a. 找最早 affiliate_transactions 的月初（CST 月初）
+ *      a. 找最早 affiliate_transactions 的月初（UTC 月初）
  *      b. 调 applyAffiliateCommissionToDailyStats(userId, earliest, now+1d)
- *         （内部会先 updateMany 清零区间，再按 CST 视角重新写入）
- *      c. 调 recomputeMonthlySettlementForUser 重算月度结算状态
+ *         （内部会先 updateMany 清零区间，再按 UTC 视角重新写入）
+ *      c. 调 recomputeMonthlySettlementForUser 按 UTC 月归档
  *   3. 不调用任何外部联盟 API，纯本地数据库操作
  *
  * 鉴权：CRON_SECRET (Authorization: Bearer ...)
@@ -89,9 +88,9 @@ export async function GET(req: NextRequest) {
         continue;
       }
 
-      // CST 视角：从最早交易所在月的 CST 月初，到 CST 明天 0 点
-      const earliestUtc = dayjs(earliest.transaction_time).tz(TZ).startOf("month").toDate();
-      const endExclusive = dayjs().tz(TZ).startOf("day").add(1, "day").toDate();
+      // C-080：UTC 视角 — 从最早交易所在月的 UTC 月初，到 UTC 明天 0 点
+      const earliestUtc = dayjs.utc(earliest.transaction_time).startOf("month").toDate();
+      const endExclusive = dayjs.utc().startOf("day").add(1, "day").toDate();
 
       const rowsUpdated = await applyAffiliateCommissionToDailyStats(userId, earliestUtc, endExclusive);
       const monthsUpdated = await recomputeMonthlySettlementForUser(userId);
