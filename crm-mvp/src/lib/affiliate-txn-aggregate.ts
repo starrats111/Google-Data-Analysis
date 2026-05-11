@@ -3,6 +3,25 @@ import type { PlatformTransaction } from "@/lib/platform-api";
 /**
  * 联盟平台返回的"原始 line items"聚合工具（A 方案）。
  *
+ * ┌────────────────────────────────────────────────────────────────────────┐
+ * │ ⚠ 强制规约：所有写入 affiliate_transactions 的代码路径必须先经过本函数。│
+ * │                                                                        │
+ * │ 当前已强制走 aggregate 的入口（不要新增绕过路径）：                    │
+ * │   1. /api/cron/daily-sync                                              │
+ * │   2. /api/cron/txn-quick-sync                                          │
+ * │   3. /api/user/data-center/sync                                        │
+ * │   4. /api/user/data-center/sync-transactions                           │
+ * │   5. /api/user/team/sync                                               │
+ * │                                                                        │
+ * │ 新接入联盟平台时，sync 代码必须：                                       │
+ * │   const aggRes = aggregateRawTransactions(rawTxns);                    │
+ * │   for (const txn of aggRes.aggregated) { await prisma.upsert(...) }    │
+ * │                                                                        │
+ * │ 即使漏调本函数，prisma.ts 的运行时闸门（C-081）也会兜底：               │
+ * │   - 0/0 行自动 is_deleted=1                                            │
+ * │   - 同 (user, platform, merchant, time) 多 transaction_id 自动合并    │
+ * └────────────────────────────────────────────────────────────────────────┘
+ *
  * 背景：CG/MUI/EV/BSH/LH 等平台对一笔订单常会拆成多个 line items 分别返回，
  * 每条都有独立的 transaction_id。CRM 历史实现按 transaction_id 唯一键写入，
  * 导致同一笔订单在数据库里展开成 N 行，订单数被严重高估（C-079）。
@@ -20,6 +39,17 @@ import type { PlatformTransaction } from "@/lib/platform-api";
  * 注意：仅当 merchant_id 非空时才参与跨 id 聚合；merchant_id 缺失的保留原样
  * （fallback 按 transaction_id 自身去重），避免错聚不同商家的交易。
  */
+
+/**
+ * 品牌类型：经过 aggregateRawTransactions 处理后的"安全"交易。
+ *
+ * 用法（推荐）：函数签名声明参数为 AggregatedTransaction 时，调用方必须先调用
+ * aggregateRawTransactions 才能得到该类型的实例，TS 编译器会强制规约。
+ *
+ * 注意：这是类型层提示而非运行时强制。运行时强制由 prisma.ts 闸门负责（C-081）。
+ */
+declare const AGGREGATED_BRAND: unique symbol;
+export type AggregatedTransaction = PlatformTransaction & { readonly [AGGREGATED_BRAND]: true };
 const STATUS_PRIORITY: Record<string, number> = {
   rejected: 4,
   paid: 3,
@@ -34,7 +64,7 @@ function pickHigherPriorityStatus(a: string, b: string): string {
 }
 
 export interface AggregateResult {
-  aggregated: PlatformTransaction[];
+  aggregated: AggregatedTransaction[];
   stats: {
     raw_count: number;
     after_id_dedup: number;
@@ -116,7 +146,7 @@ export function aggregateRawTransactions(raw: PlatformTransaction[]): AggregateR
   }
   for (const t of noMerchantId) afterLineMerge.push(t);
 
-  const aggregated: PlatformTransaction[] = [];
+  const aggregated: AggregatedTransaction[] = [];
   let droppedGhosts = 0;
   for (const t of afterLineMerge) {
     const c = t.commission_amount || 0;
@@ -125,7 +155,7 @@ export function aggregateRawTransactions(raw: PlatformTransaction[]): AggregateR
       droppedGhosts++;
       continue;
     }
-    aggregated.push(t);
+    aggregated.push(t as AggregatedTransaction);
   }
 
   return {
