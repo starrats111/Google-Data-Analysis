@@ -3,7 +3,7 @@ import { getUserFromRequest, serializeData } from "@/lib/auth";
 import { apiSuccess, apiError } from "@/lib/constants";
 import prisma from "@/lib/prisma";
 import { sqlAffiliateTxnValidPlatformConnection } from "@/lib/affiliate-transaction-sql";
-import { nowCST, isTodayCST, parseTxnDateStart, parseTxnDateEndExclusive, txnStartOfMonthUTC } from "@/lib/date-utils";
+import { parseTxnDateStart, parseTxnDateEndExclusive, txnStartOfMonthUTC } from "@/lib/date-utils";
 
 /**
  * GET /api/user/data-center/commission-by-account
@@ -18,12 +18,9 @@ export async function GET(req: NextRequest) {
   const dateEnd = searchParams.get("date_end");
 
   const userId = BigInt(user.userId);
-  const cstNow = nowCST();
-  // affiliate_transactions 按 UTC 存储，使用 UTC 边界与平台报告口径一致
+  // C-080：affiliate_transactions 按 UTC 切日，与平台后台口径一致
   const startDate = dateStart ? parseTxnDateStart(dateStart) : txnStartOfMonthUTC();
-  const endDate = dateEnd
-    ? (isTodayCST(dateEnd, cstNow) ? cstNow.toDate() : parseTxnDateEndExclusive(dateEnd))
-    : cstNow.toDate();
+  const endDate = dateEnd ? parseTxnDateEndExclusive(dateEnd) : new Date();
 
   const txnConnValid = sqlAffiliateTxnValidPlatformConnection("t");
 

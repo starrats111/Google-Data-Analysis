@@ -35,10 +35,9 @@ export const GET = withLeader(async (req: NextRequest, { user }) => {
   const statsEnd = endDate
     ? (isTodayCST(endDate, cstNow) ? dateColumnTodayEndExclusive() : dateColumnEndExclusive(endDate))
     : dateColumnTodayEndExclusive();
+  // C-080：affiliate_transactions 按 UTC 切日，与平台后台口径一致
   const txnStart = startDate ? parseTxnDateStart(startDate) : txnStartOfMonthUTC();
-  const txnEnd = endDate
-    ? (isTodayCST(endDate, cstNow) ? cstNow.toDate() : parseTxnDateEndExclusive(endDate))
-    : cstNow.toDate();
+  const txnEnd = endDate ? parseTxnDateEndExclusive(endDate) : new Date();
 
   // 与数据中心一致：排除无 google_campaign_id 和空字符串的幽灵记录
   const rawCampaigns = await prisma.campaigns.findMany({

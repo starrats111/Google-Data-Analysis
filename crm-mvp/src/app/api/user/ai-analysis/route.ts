@@ -357,10 +357,10 @@ async function executeTool(name: string, args: ToolArgs, userId: bigint): Promis
     });
     if (!stats.length) return JSON.stringify({ error: "无趋势数据" });
 
-    // 佣金按 affiliate_transactions.transaction_time（CST）每日汇总
+    // C-080：佣金按 affiliate_transactions.transaction_time（UTC）每日汇总
     const txnRows = await prisma.$queryRawUnsafe<{ dt: string; total_c: number; approved_c: number }[]>(`
       SELECT
-        DATE(CONVERT_TZ(transaction_time, '+00:00', '+08:00')) AS dt,
+        DATE(transaction_time) AS dt,
         SUM(CAST(commission_amount AS DECIMAL(12,2))) AS total_c,
         SUM(CASE WHEN status IN ('approved','confirmed','paid') THEN CAST(commission_amount AS DECIMAL(12,2)) ELSE 0 END) AS approved_c
       FROM affiliate_transactions
@@ -368,7 +368,7 @@ async function executeTool(name: string, args: ToolArgs, userId: bigint): Promis
         AND transaction_time >= ? AND transaction_time <= ?
       GROUP BY dt
       ORDER BY dt
-    `, userId, new Date(`${from}T00:00:00+08:00`), new Date(`${to}T23:59:59+08:00`));
+    `, userId, new Date(`${from}T00:00:00.000Z`), new Date(`${to}T23:59:59.999Z`));
 
     const dailyComm = new Map(txnRows.map((r) => [String(r.dt), { total: Number(r.total_c || 0), approved: Number(r.approved_c || 0) }]));
 

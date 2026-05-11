@@ -3,7 +3,7 @@ import { getUserFromRequest, serializeData } from "@/lib/auth";
 import { apiSuccess, apiError } from "@/lib/constants";
 import prisma from "@/lib/prisma";
 import { sqlAffiliateTxnValidPlatformConnection } from "@/lib/affiliate-transaction-sql";
-import { nowCST, isTodayCST, parseTxnDateStart, parseTxnDateEndExclusive, txnStartOfMonthUTC } from "@/lib/date-utils";
+import { parseTxnDateStart, parseTxnDateEndExclusive, txnStartOfMonthUTC } from "@/lib/date-utils";
 
 /**
  * GET /api/user/data-center/settlement
@@ -32,9 +32,8 @@ export async function GET(req: NextRequest) {
 
   const userId = BigInt(user.userId);
   const isLeader = user.role === "leader" && user.teamId;
-  const cstNow = nowCST();
 
-  // affiliate_transactions 的时间字段按 UTC 存储，使用 UTC 边界确保与平台数据口径一致
+  // C-080: affiliate_transactions 按 UTC 切日，边界与联盟平台后台对齐
   const start = dateStart
     ? parseTxnDateStart(dateStart)
     : (() => {
@@ -47,9 +46,7 @@ export async function GET(req: NextRequest) {
             return txnStartOfMonthUTC();
         }
       })();
-  const end = dateEnd
-    ? (isTodayCST(dateEnd, cstNow) ? cstNow.toDate() : parseTxnDateEndExclusive(dateEnd))
-    : cstNow.toDate();
+  const end = dateEnd ? parseTxnDateEndExclusive(dateEnd) : new Date();
 
   // 确定查询范围的用户 ID 列表
   let userIds: bigint[] = [];
@@ -170,14 +167,14 @@ export async function GET(req: NextRequest) {
     order_amount: fix2(Number(m.order_amount)),
   }));
 
-  // ── 3. 按月聚合（C-074：按 CST/北京时间归月，与联盟平台后台一致）─────────
+  // ── 3. 按月聚合（C-080：按 UTC 归月，与联盟平台后台「Date 5/1-5/11」筛选口径一致）─────────
   const monthlyRows = await prisma.$queryRawUnsafe<{
     month: string;
     total: number; approved: number; rejected: number; paid: number; pending: number;
     orders: number;
   }[]>(`
     SELECT
-      DATE_FORMAT(CONVERT_TZ(transaction_time, '+00:00', '+08:00'), '%Y-%m') AS month,
+      DATE_FORMAT(transaction_time, '%Y-%m') AS month,
       SUM(CAST(commission_amount AS DECIMAL(14,4))) AS total,
       SUM(CASE WHEN status = 'approved' THEN CAST(commission_amount AS DECIMAL(14,4)) ELSE 0 END) AS approved,
       SUM(CASE WHEN status = 'rejected' THEN CAST(commission_amount AS DECIMAL(14,4)) ELSE 0 END) AS rejected,

@@ -4,7 +4,7 @@ import { apiSuccess, apiError } from "@/lib/constants";
 import { withLeader } from "@/lib/api-handler";
 import prisma from "@/lib/prisma";
 import { sqlAffiliateTxnValidPlatformConnection } from "@/lib/affiliate-transaction-sql";
-import { nowCST, dateColumnStart, parseTxnDateStart } from "@/lib/date-utils";
+import { nowCST, dateColumnStart, txnStartOfMonthUTC } from "@/lib/date-utils";
 
 /**
  * GET /api/user/team/merchants?page=1&pageSize=50&search=xxx&platform=CG&sortField=monthly_commission&sortOrder=desc
@@ -100,14 +100,18 @@ export const GET = withLeader(async (req: NextRequest, { user }) => {
     return apiSuccess(serializeData({ merchants: [], total: 0, page, pageSize }));
   }
 
-  // 本月时间范围
+  // 本月时间范围（C-080：ads_daily_stats 按 CST 月初；affiliate_transactions 按 UTC 月初）
   const cstNow = nowCST();
   const monthStartStr = cstNow.startOf("month").format("YYYY-MM-DD");
   const nextMonthStr = cstNow.startOf("month").add(1, "month").format("YYYY-MM-DD");
   const statsMonthStart = dateColumnStart(monthStartStr);
   const statsNextMonth = dateColumnStart(nextMonthStr);
-  const txnMonthStart = parseTxnDateStart(monthStartStr);
-  const txnNextMonth = parseTxnDateStart(nextMonthStr);
+  const txnMonthStart = txnStartOfMonthUTC();
+  const txnNextMonth = new Date(Date.UTC(
+    txnMonthStart.getUTCMonth() === 11 ? txnMonthStart.getUTCFullYear() + 1 : txnMonthStart.getUTCFullYear(),
+    (txnMonthStart.getUTCMonth() + 1) % 12,
+    1
+  ));
 
   // ─── 第一步：全量查询 campaigns（所有商家，用于在投人数 + 后续花费）───
   const allUmIds = merchantEntries.flatMap((e) => e.umIds);

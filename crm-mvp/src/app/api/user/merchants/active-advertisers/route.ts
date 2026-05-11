@@ -4,7 +4,7 @@ import { apiSuccess, apiError } from "@/lib/constants";
 import { withUser } from "@/lib/api-handler";
 import prisma from "@/lib/prisma";
 import { sqlAffiliateTxnValidPlatformConnection } from "@/lib/affiliate-transaction-sql";
-import { dateColumnStart, nowCST, parseTxnDateStart } from "@/lib/date-utils";
+import { dateColumnStart, nowCST, txnStartOfMonthUTC } from "@/lib/date-utils";
 
 /**
  * GET /api/user/merchants/active-advertisers?merchant_id=xxx&platform=YY
@@ -118,14 +118,18 @@ export const GET = withUser(async (req: NextRequest, { user }) => {
   });
   const userNameMap = new Map(users.map((u) => [u.id.toString(), u.display_name || u.username]));
 
-  // DATE 列用 UTC 午夜对齐；DATETIME 列用 CST 转换
+  // C-080：ads_daily_stats.date 按 CST 月初对齐；affiliate_transactions 按 UTC 月初对齐
   const cstNow = nowCST();
   const monthStartStr = cstNow.startOf("month").format("YYYY-MM-DD");
   const nextMonthStr = cstNow.startOf("month").add(1, "month").format("YYYY-MM-DD");
   const statsMonthStart = dateColumnStart(monthStartStr);
   const statsNextMonth = dateColumnStart(nextMonthStr);
-  const txnMonthStart = parseTxnDateStart(monthStartStr);
-  const txnNextMonth = parseTxnDateStart(nextMonthStr);
+  const txnMonthStart = txnStartOfMonthUTC();
+  const txnNextMonth = new Date(Date.UTC(
+    txnMonthStart.getUTCMonth() === 11 ? txnMonthStart.getUTCFullYear() + 1 : txnMonthStart.getUTCFullYear(),
+    (txnMonthStart.getUTCMonth() + 1) % 12,
+    1
+  ));
 
   const allCampaignIds = activeUserIds.flatMap((e) => e.campaignIds);
 

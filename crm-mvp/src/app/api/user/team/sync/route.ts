@@ -3,7 +3,7 @@ import { serializeData } from "@/lib/auth";
 import { apiSuccess, apiError, normalizePlatformCode } from "@/lib/constants";
 import { withLeader } from "@/lib/api-handler";
 import prisma from "@/lib/prisma";
-import { todayCST, yesterdayCST, nowCST, parseTxnDateStart } from "@/lib/date-utils";
+import { todayCST, yesterdayCST, nowCST, nowUTC, parseTxnDateStart } from "@/lib/date-utils";
 import { getExchangeRate, preloadRates } from "@/lib/exchange-rate";
 import { sqlAffiliateTxnValidPlatformConnection } from "@/lib/affiliate-transaction-sql";
 import { aggregateRawTransactions } from "@/lib/affiliate-txn-aggregate";
@@ -245,11 +245,12 @@ async function syncRecentTransactionsForUser(
   userId: bigint,
   days: number = 7
 ): Promise<{ synced: number; message: string }> {
-  const cstNow = nowCST();
-  const startStr = cstNow.subtract(days, "day").format("YYYY-MM-DD");
-  const endStr = cstNow.format("YYYY-MM-DD");
+  // C-080：联盟交易同步按 UTC 切日，与平台后台口径一致
+  const utcNow = nowUTC();
+  const startStr = utcNow.subtract(days, "day").format("YYYY-MM-DD");
+  const endStr = utcNow.format("YYYY-MM-DD");
   const startDate = parseTxnDateStart(startStr);
-  const endDate = cstNow.toDate();
+  const endDate = utcNow.toDate();
   // DATE 列用 UTC 午夜作为比较起点（与数据中心口径一致）
   const statsStartDate = new Date(startStr + "T00:00:00.000Z");
 
@@ -403,7 +404,7 @@ async function updateCommissionForUser(
   >(
     `SELECT
       user_merchant_id,
-      DATE_FORMAT(CONVERT_TZ(transaction_time, '+00:00', '+08:00'), '%Y-%m-%d') as txn_date,
+      DATE_FORMAT(transaction_time, '%Y-%m-%d') as txn_date,
       SUM(CAST(commission_amount AS DECIMAL(12,2))) as total_commission,
       SUM(CASE WHEN status = 'rejected' THEN CAST(commission_amount AS DECIMAL(12,2)) ELSE 0 END) as rejected_commission,
       COUNT(*) as order_count
@@ -411,7 +412,7 @@ async function updateCommissionForUser(
     WHERE user_id = ? AND is_deleted = 0
       AND transaction_time >= ? AND transaction_time < ?
       AND ${sqlAffiliateTxnValidPlatformConnection("affiliate_transactions")}
-    GROUP BY user_merchant_id, DATE_FORMAT(CONVERT_TZ(transaction_time, '+00:00', '+08:00'), '%Y-%m-%d')`,
+    GROUP BY user_merchant_id, DATE_FORMAT(transaction_time, '%Y-%m-%d')`,
     userId,
     txnStartDate,
     txnEndDate

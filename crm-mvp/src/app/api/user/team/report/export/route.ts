@@ -304,7 +304,7 @@ export const GET = withLeader(async (req: NextRequest, { user }) => {
     user_id: bigint; month: string; platform: string;
     total_commission: number; rejected_commission: number;
   }[]>(`
-    SELECT user_id, DATE_FORMAT(CONVERT_TZ(transaction_time, '+00:00', '+08:00'),'%Y-%m') AS month, platform,
+    SELECT user_id, DATE_FORMAT(transaction_time,'%Y-%m') AS month, platform,
       SUM(CAST(commission_amount AS DECIMAL(14,4))) AS total_commission,
       SUM(CASE WHEN status='rejected' THEN CAST(commission_amount AS DECIMAL(14,4)) ELSE 0 END) AS rejected_commission
     FROM affiliate_transactions

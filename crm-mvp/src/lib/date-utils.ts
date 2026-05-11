@@ -40,6 +40,17 @@ export function nowCST() {
   return dayjs().tz(TZ);
 }
 
+/** 获取 UTC 今天日期字符串 YYYY-MM-DD（与联盟平台后台日期归档一致） */
+export function todayUTC(): string {
+  const d = new Date();
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-${String(d.getUTCDate()).padStart(2, "0")}`;
+}
+
+/** 获取 UTC 当前时间的 dayjs 实例 */
+export function nowUTC() {
+  return dayjs.utc();
+}
+
 /** 解析东八区日期字符串为当天起始时间 */
 export function parseCSTDateStart(dateStr: string): Date {
   return dayjs.tz(`${dateStr} 00:00:00`, TZ).toDate();
@@ -82,32 +93,37 @@ export function startOfMonthCST() {
 }
 
 /**
- * affiliate_transactions DATETIME 列专用：CST（北京时间）日期零点对应的 UTC 时刻。
+ * affiliate_transactions DATETIME 列专用：UTC 日期零点。
  *
- * C-074 起统一为 CST 视角：
- *   - 联盟平台后台（CG/LB/PM/MUI/EV 等中国联盟）一律用 CST/北京时间筛选与归月，
- *     order_time 的 Unix 时间戳虽然是 UTC 秒，但展示与归属都按 CST 切日。
- *   - ads_daily_stats.date 的存储时区也是 Asia/Shanghai（Google Ads 默认），CST 切日。
- *   - 故 affiliate_transactions 的查询边界也按 CST 切日，跨日订单不再错位 8 小时。
+ * C-080 起从 CST 视角改回 UTC 视角：
+ *   - 联盟平台后台（CG/LB/PM/MUI/EV/UltraInfluence/Engagevantage 等）对日期范围的解释
+ *     用的是 UTC（实测 wj07 MUI 5/1-5/11 按 UTC 切日 95 笔与平台 1:1 命中）。
+ *   - 用户浏览器虽然显示北京时间，但平台后台 SQL 后端按 UTC 归日。
+ *   - 故 affiliate_transactions 的查询边界也按 UTC 切日，与平台后台 100% 对齐。
+ *   - 注：ads_daily_stats.date 仍按 Google Ads MCC 时区（CST）归日；
+ *     佣金回写到 ads_daily_stats 时按 UTC 切日，可能与 cost 错 8 小时（边缘订单 < 2%）。
  *
- * 例：parseTxnDateStart("2026-05-01") → 2026-04-30T16:00:00.000Z（= 2026-05-01 00:00 CST）。
+ * 例：parseTxnDateStart("2026-05-01") → 2026-05-01T00:00:00.000Z（UTC 5/1 0 点）。
  */
 export function parseTxnDateStart(dateStr: string): Date {
-  return dayjs.tz(`${dateStr} 00:00:00`, TZ).toDate();
+  return new Date(`${dateStr}T00:00:00.000Z`);
 }
 
 /**
- * affiliate_transactions DATETIME 列专用：CST 次日零点对应的 UTC 时刻（独占上界）。
- * 与 parseTxnDateStart 配对，覆盖整个 CST 自然日。
+ * affiliate_transactions DATETIME 列专用：UTC 次日零点（独占上界）。
+ * 与 parseTxnDateStart 配对，覆盖整个 UTC 自然日。
  */
 export function parseTxnDateEndExclusive(dateStr: string): Date {
-  return dayjs.tz(`${dateStr} 00:00:00`, TZ).add(1, "day").toDate();
+  const d = new Date(`${dateStr}T00:00:00.000Z`);
+  d.setUTCDate(d.getUTCDate() + 1);
+  return d;
 }
 
 /**
- * affiliate_transactions 专用：CST 当月月初零点对应的 UTC 时刻（"本月"默认起点）。
- * 例：CST 当前 2026-05-09 → CST 2026-05-01 00:00 → UTC 2026-04-30 16:00。
+ * affiliate_transactions 专用：UTC 当月月初零点（"本月"默认起点）。
+ * 例：当前 2026-05-09 → UTC 2026-05-01 00:00:00。
  */
 export function txnStartOfMonthUTC(): Date {
-  return dayjs().tz(TZ).startOf("month").toDate();
+  const now = new Date();
+  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1, 0, 0, 0, 0));
 }

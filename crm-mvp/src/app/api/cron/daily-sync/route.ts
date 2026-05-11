@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 import { normalizePlatformCode } from "@/lib/constants";
 import { getExchangeRate, preloadRates } from "@/lib/exchange-rate";
-import { nowCST, dateColumnStart, parseTxnDateStart } from "@/lib/date-utils";
+import { nowCST, nowUTC, dateColumnStart, parseTxnDateStart } from "@/lib/date-utils";
 import { autoRepairPublishedArticles } from "@/lib/article-auto-repair";
 import { getRedirectedMerchantKeys } from "@/lib/merchant-ownership-rules";
 import { sqlAffiliateTxnValidPlatformConnection } from "@/lib/affiliate-transaction-sql";
@@ -615,7 +615,8 @@ async function syncAllUsersTransactions(): Promise<unknown> {
 
       const { fetchAllTransactions } = await import("@/lib/platform-api");
       const { listUnsettledMonthsForUser, recomputeMonthlySettlementForUser } = await import("@/lib/monthly-settlement-tracker");
-      const cstNow = nowCST();
+      // C-080：联盟交易同步按 UTC 切日，与平台后台口径一致
+      const utcNow = nowUTC();
 
       // 月度结算驱动：找出该用户「最早未结算月」作为同步起点
       // 已结算月（pending = 0）跳过不再请求平台 API，节省调用次数
@@ -625,11 +626,11 @@ async function syncAllUsersTransactions(): Promise<unknown> {
       if (unsettledMonths.length > 0) {
         startStr = `${unsettledMonths[0]}-01`;
       } else {
-        startStr = cstNow.subtract(365, "day").format("YYYY-MM-DD");
+        startStr = utcNow.subtract(365, "day").format("YYYY-MM-DD");
       }
       const syncStart = parseTxnDateStart(startStr);
       const statsSyncStart = dateColumnStart(startStr);
-      const endStr = cstNow.format("YYYY-MM-DD");
+      const endStr = utcNow.format("YYYY-MM-DD");
 
       log(`    range: ${startStr} → ${endStr} (${unsettledMonths.length} unsettled month(s))`);
 
@@ -999,14 +1000,14 @@ async function updateDailyStatsCommission(userId: bigint, statsStartDate: Date, 
   >(`
     SELECT
       user_merchant_id,
-      DATE_FORMAT(CONVERT_TZ(transaction_time, '+00:00', '+08:00'), '%Y-%m-%d') as txn_date,
+      DATE_FORMAT(transaction_time, '%Y-%m-%d') as txn_date,
       SUM(CAST(commission_amount AS DECIMAL(12,2))) as total_commission,
       SUM(CASE WHEN status = 'rejected' THEN CAST(commission_amount AS DECIMAL(12,2)) ELSE 0 END) as rejected_commission,
       COUNT(*) as order_count
     FROM affiliate_transactions
     WHERE user_id = ? AND is_deleted = 0 AND transaction_time >= ?
       AND ${sqlAffiliateTxnValidPlatformConnection("affiliate_transactions")}
-    GROUP BY user_merchant_id, DATE_FORMAT(CONVERT_TZ(transaction_time, '+00:00', '+08:00'), '%Y-%m-%d')
+    GROUP BY user_merchant_id, DATE_FORMAT(transaction_time, '%Y-%m-%d')
   `, userId, txnStartDate);
 
   if (!txnAgg || txnAgg.length === 0) return 0;

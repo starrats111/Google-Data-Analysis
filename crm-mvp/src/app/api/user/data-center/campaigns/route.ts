@@ -73,11 +73,9 @@ export async function GET(req: NextRequest) {
     ? (isTodayCST(dateEnd, cstNow) ? dateColumnTodayEndExclusive() : dateColumnEndExclusive(dateEnd))
     : dateColumnTodayEndExclusive();
 
-  // affiliate_transactions.transaction_time 按 UTC 存储，使用 UTC 边界与平台报告口径一致
+  // C-080：affiliate_transactions.transaction_time 按 UTC 切日，与平台后台口径一致
   const txnStart = dateStart ? parseTxnDateStart(dateStart) : txnStartOfMonthUTC();
-  const txnEnd = dateEnd
-    ? (isTodayCST(dateEnd, cstNow) ? cstNow.toDate() : parseTxnDateEndExclusive(dateEnd))
-    : cstNow.toDate();
+  const txnEnd = dateEnd ? parseTxnDateEndExclusive(dateEnd) : new Date();
 
   // 构建 campaign 筛选条件
   const campaignWhere: Record<string, unknown> = {

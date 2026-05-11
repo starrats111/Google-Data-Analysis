@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 import { normalizePlatformCode } from "@/lib/constants";
-import { nowCST, dateColumnStart, dateColumnEndExclusive } from "@/lib/date-utils";
+import { nowUTC, dateColumnStart, dateColumnEndExclusive } from "@/lib/date-utils";
 import { getRedirectedMerchantKeys } from "@/lib/merchant-ownership-rules";
 import { applyAffiliateCommissionToDailyStats } from "@/lib/daily-stats-commission";
 import { aggregateRawTransactions } from "@/lib/affiliate-txn-aggregate";
@@ -68,9 +68,10 @@ export async function GET(req: NextRequest) {
     select: { id: true, username: true },
   });
 
-  const cstNow = nowCST();
-  const startStr = cstNow.subtract(QUICK_SYNC_DAYS, "day").format("YYYY-MM-DD");
-  const endStr = cstNow.format("YYYY-MM-DD");
+  // C-080：联盟交易同步按 UTC 切日，与平台后台口径一致
+  const utcNow = nowUTC();
+  const startStr = utcNow.subtract(QUICK_SYNC_DAYS, "day").format("YYYY-MM-DD");
+  const endStr = utcNow.format("YYYY-MM-DD");
 
   // 用于 ads_daily_stats 佣金回写的 UTC 边界（DATE 列按 UTC 日期对齐）
   const statsRangeStart = dateColumnStart(startStr);

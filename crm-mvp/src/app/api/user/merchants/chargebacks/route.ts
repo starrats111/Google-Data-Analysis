@@ -68,8 +68,8 @@ export const GET = withUser(async (req: NextRequest) => {
       ) AS rate
     FROM affiliate_transactions
     WHERE is_deleted = 0
-      AND transaction_time >= CONVERT_TZ(?, '+08:00', '+00:00')
-      AND transaction_time < CONVERT_TZ(DATE_ADD(?, INTERVAL 1 DAY), '+08:00', '+00:00')
+      AND transaction_time >= ?
+      AND transaction_time < DATE_ADD(?, INTERVAL 1 DAY)
       ${platformClause}
       ${searchClause}
     GROUP BY platform, merchant_id

@@ -81,10 +81,9 @@ export const GET = withLeader(async (req: NextRequest, { user }) => {
   const statsEnd = endDate
     ? (isTodayCST(endDate, cstNow) ? dateColumnTodayEndExclusive() : dateColumnEndExclusive(endDate))
     : dateColumnTodayEndExclusive();
+  // C-080：affiliate_transactions 按 UTC 切日，与平台后台口径一致
   const txnStart = startDate ? parseTxnDateStart(startDate) : txnStartOfMonthUTC();
-  const txnEnd = endDate
-    ? (isTodayCST(endDate, cstNow) ? cstNow.toDate() : parseTxnDateEndExclusive(endDate))
-    : cstNow.toDate();
+  const txnEnd = endDate ? parseTxnDateEndExclusive(endDate) : new Date();
 
   // 查询所有组员的有效 campaigns（排除幽灵记录，统一去重）
   const rawCampaigns = await prisma.campaigns.findMany({
