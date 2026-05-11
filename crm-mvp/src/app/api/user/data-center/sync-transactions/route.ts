@@ -5,6 +5,7 @@ import prisma from "@/lib/prisma";
 import { nowCST, dateColumnStart, parseTxnDateStart } from "@/lib/date-utils";
 import { getRedirectedMerchantKeys } from "@/lib/merchant-ownership-rules";
 import { sqlAffiliateTxnValidPlatformConnection } from "@/lib/affiliate-transaction-sql";
+import { aggregateRawTransactions } from "@/lib/affiliate-txn-aggregate";
 
 /**
  * POST /api/user/data-center/sync-transactions
@@ -95,18 +96,15 @@ export async function POST(req: NextRequest) {
         continue;
       }
 
-      const grouped = new Map<string, typeof transactions[0]>();
-      for (const txn of transactions) {
-        if (!txn.transaction_id) continue;
-        const existing = grouped.get(txn.transaction_id);
-        if (existing) {
-          existing.commission_amount = (existing.commission_amount || 0) + (txn.commission_amount || 0);
-          existing.order_amount = (existing.order_amount || 0) + (txn.order_amount || 0);
-        } else {
-          grouped.set(txn.transaction_id, { ...txn });
-        }
+      // C-079：API line items 聚合 + 0/0 幽灵过滤
+      // 同 (merchant, transaction_time) 多 transaction_id 视为同一笔订单的 line items，
+      // 合并为 1 行（代表 id = 字典序最小，commission/order_amount 取 SUM），
+      // 同时丢弃 commission=0 AND order=0 的幽灵行。
+      const aggRes = aggregateRawTransactions(transactions);
+      const dedupedTxns = aggRes.aggregated;
+      if (aggRes.stats.merged_line_items > 0 || aggRes.stats.dropped_ghosts > 0) {
+        console.log(`[sync-txn] ${platform}/${label}: raw=${aggRes.stats.raw_count} → ${dedupedTxns.length} (merged line items=${aggRes.stats.merged_line_items}, dropped ghosts=${aggRes.stats.dropped_ghosts})`);
       }
-      const dedupedTxns = [...grouped.values()];
 
       // 自动创建缺失的 user_merchants（交易中有但商家表没有的）
       const missingMerchants = new Map<string, { merchantId: string; name: string }>();

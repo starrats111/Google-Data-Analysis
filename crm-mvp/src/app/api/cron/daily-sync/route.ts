@@ -6,6 +6,7 @@ import { nowCST, dateColumnStart, parseTxnDateStart } from "@/lib/date-utils";
 import { autoRepairPublishedArticles } from "@/lib/article-auto-repair";
 import { getRedirectedMerchantKeys } from "@/lib/merchant-ownership-rules";
 import { sqlAffiliateTxnValidPlatformConnection } from "@/lib/affiliate-transaction-sql";
+import { aggregateRawTransactions } from "@/lib/affiliate-txn-aggregate";
 
 function verifyCron(req: NextRequest): boolean {
   const secret = process.env.CRON_SECRET;
@@ -654,8 +655,15 @@ async function syncAllUsersTransactions(): Promise<unknown> {
           }
           if (!r.transactions.length) continue;
 
+          // C-079：line items 聚合 + 0/0 幽灵过滤
+          const aggRes = aggregateRawTransactions(r.transactions);
+          const aggregatedTxns = aggRes.aggregated;
+          if (aggRes.stats.merged_line_items > 0 || aggRes.stats.dropped_ghosts > 0) {
+            log(`    ${user.username} ${platform}: raw=${aggRes.stats.raw_count} → ${aggregatedTxns.length} (merged=${aggRes.stats.merged_line_items}, dropped=${aggRes.stats.dropped_ghosts})`);
+          }
+
           // 预清理：删除数据库中以 order_id 作为 transaction_id 的旧记录（防重复）
-          const orderIdsToClean = r.transactions
+          const orderIdsToClean = aggregatedTxns
             .filter((txn) => txn.order_id && txn.transaction_id !== txn.order_id)
             .map((txn) => txn.order_id!);
           if (orderIdsToClean.length > 0) {
@@ -667,7 +675,7 @@ async function syncAllUsersTransactions(): Promise<unknown> {
             }
           }
 
-          for (const txn of r.transactions) {
+          for (const txn of aggregatedTxns) {
             if (!txn.transaction_id) continue;
             const mid = txn.merchant_id || "";
             const merchantKey = `${platform}_${mid}`;

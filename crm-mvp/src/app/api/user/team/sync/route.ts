@@ -6,6 +6,7 @@ import prisma from "@/lib/prisma";
 import { todayCST, yesterdayCST, nowCST, parseTxnDateStart } from "@/lib/date-utils";
 import { getExchangeRate, preloadRates } from "@/lib/exchange-rate";
 import { sqlAffiliateTxnValidPlatformConnection } from "@/lib/affiliate-transaction-sql";
+import { aggregateRawTransactions } from "@/lib/affiliate-txn-aggregate";
 
 /**
  * POST /api/user/team/sync
@@ -282,7 +283,12 @@ async function syncRecentTransactionsForUser(
       if (r.error) errors.push(`${label}: ${r.error}`);
       if (r.transactions.length === 0) continue;
 
-      const dedupedTxns = r.transactions.filter((t) => !!t.transaction_id);
+      // C-079：API line items 聚合 + 0/0 幽灵过滤
+      const aggRes = aggregateRawTransactions(r.transactions);
+      const dedupedTxns = aggRes.aggregated;
+      if (aggRes.stats.merged_line_items > 0 || aggRes.stats.dropped_ghosts > 0) {
+        console.log(`[team-sync] ${label}: raw=${aggRes.stats.raw_count} → ${dedupedTxns.length} (merged=${aggRes.stats.merged_line_items}, dropped=${aggRes.stats.dropped_ghosts})`);
+      }
 
       // 自动补充缺失商家
       for (const txn of dedupedTxns) {

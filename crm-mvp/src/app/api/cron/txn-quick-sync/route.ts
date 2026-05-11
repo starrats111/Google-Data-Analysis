@@ -4,6 +4,7 @@ import { normalizePlatformCode } from "@/lib/constants";
 import { nowCST, dateColumnStart, dateColumnEndExclusive } from "@/lib/date-utils";
 import { getRedirectedMerchantKeys } from "@/lib/merchant-ownership-rules";
 import { applyAffiliateCommissionToDailyStats } from "@/lib/daily-stats-commission";
+import { aggregateRawTransactions } from "@/lib/affiliate-txn-aggregate";
 
 /** 快速同步的时间窗口（天）：覆盖所有状态活跃中的订单 */
 const QUICK_SYNC_DAYS = 14;
@@ -118,7 +119,14 @@ export async function GET(req: NextRequest) {
           if (r.error && r.transactions.length === 0) continue;
           if (!r.transactions.length) continue;
 
-          for (const txn of r.transactions) {
+          // C-079：line items 聚合 + 0/0 幽灵过滤
+          const aggRes = aggregateRawTransactions(r.transactions);
+          const aggregatedTxns = aggRes.aggregated;
+          if (aggRes.stats.merged_line_items > 0 || aggRes.stats.dropped_ghosts > 0) {
+            log(`  ${user.username} ${platform}: raw=${aggRes.stats.raw_count} → ${aggregatedTxns.length} (merged=${aggRes.stats.merged_line_items}, dropped=${aggRes.stats.dropped_ghosts})`);
+          }
+
+          for (const txn of aggregatedTxns) {
             if (!txn.transaction_id) continue;
             const mid = txn.merchant_id || "";
             const merchantKey = `${platform}_${mid}`;

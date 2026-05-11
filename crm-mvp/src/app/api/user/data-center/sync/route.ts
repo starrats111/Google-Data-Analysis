@@ -9,6 +9,7 @@ import { getExchangeRate, preloadRates } from "@/lib/exchange-rate";
 import { syncMerchantStatusForUser, parseCampaignNameFull } from "@/lib/campaign-merchant-link";
 import { getRedirectedMerchantKeys } from "@/lib/merchant-ownership-rules";
 import { applyAffiliateCommissionToDailyStats } from "@/lib/daily-stats-commission";
+import { aggregateRawTransactions } from "@/lib/affiliate-txn-aggregate";
 
 /**
  * POST /api/user/data-center/sync
@@ -725,13 +726,14 @@ async function syncTransactionsInline(
         if (r.error) errors.push(`${label}: ${r.error}`);
         if (r.transactions.length === 0) continue;
 
-        const dedupedTxns = r.transactions.filter((t) => !!t.transaction_id);
+        // C-079：API line items 聚合 + 0/0 幽灵过滤（同 merchant+txn_time 的多条合并为一笔订单）
+        const aggRes = aggregateRawTransactions(r.transactions);
+        const dedupedTxns = aggRes.aggregated;
 
-        // 诊断日志：打印 API 拉取总览，帮助验证佣金准确性
         const apiTotalComm = dedupedTxns.reduce((s, t) => s + (t.commission_amount || 0), 0);
         const apiTotalOrder = dedupedTxns.reduce((s, t) => s + (t.order_amount || 0), 0);
         const zeroCommCount = dedupedTxns.filter((t) => t.commission_amount === 0 && t.order_amount > 0).length;
-        console.log(`[SyncDiag] ${label}: ${dedupedTxns.length} 条交易, 总佣金=$${apiTotalComm.toFixed(2)}, 总订单额=$${apiTotalOrder.toFixed(2)}, 零佣金但有订单额=${zeroCommCount} 条`);
+        console.log(`[SyncDiag] ${label}: raw=${aggRes.stats.raw_count} → ${dedupedTxns.length} 笔订单, 总佣金=$${apiTotalComm.toFixed(2)}, 总订单额=$${apiTotalOrder.toFixed(2)}, 零佣金有订单额=${zeroCommCount} 条, 合并 line items=${aggRes.stats.merged_line_items}, 过滤幽灵=${aggRes.stats.dropped_ghosts}`);
 
         // 自动创建缺失的 user_merchants（跳过被重定向的和被排除的）
         for (const txn of dedupedTxns) {
