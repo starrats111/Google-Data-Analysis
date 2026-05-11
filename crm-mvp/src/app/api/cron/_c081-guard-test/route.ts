@@ -1,12 +1,22 @@
 /**
  * 临时端点：验证 C-081 affiliate_transactions 写入闸门。
- * 写完一次性测试数据 → 校验规则 A/B 是否生效 → 清理 → 返回结果。
+ * 用 cron token 调用，写一次性测试数据 → 校验规则 A/B → 清理 → 返回结果。
  * 完成验证后此文件会被删除。
  */
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 
-export async function GET() {
+function verifyCron(req: NextRequest): boolean {
+  const secret = process.env.CRON_SECRET;
+  if (!secret) return false;
+  return req.headers.get("authorization") === `Bearer ${secret}`;
+}
+
+export async function GET(req: NextRequest) {
+  if (!verifyCron(req)) {
+    return NextResponse.json({ ok: false, error: "unauthorized" }, { status: 401 });
+  }
+
   const USER_ID = BigInt(1);
   const PLATFORM = "GTST";
   const TIME = new Date("2026-05-11T10:00:00Z");
