@@ -1,11 +1,14 @@
 "use client";
 
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo, useEffect, useRef } from "react";
 import {
   Card, Input, Button, Select, Space, Table, Tag, Typography,
   Collapse, Empty, Alert, App, Tooltip, Switch, InputNumber, Badge,
 } from "antd";
-import { SearchOutlined, EyeOutlined, LinkOutlined, SettingOutlined, FireOutlined } from "@ant-design/icons";
+import {
+  SearchOutlined, EyeOutlined, LinkOutlined, SettingOutlined,
+  FireOutlined, LoadingOutlined,
+} from "@ant-design/icons";
 import { useRouter, useSearchParams } from "next/navigation";
 
 const { Title, Text } = Typography;
@@ -17,6 +20,8 @@ interface AtcAd {
   first_shown?: number;  // Unix 秒级时间戳
   last_shown?: number;   // Unix 秒级时间戳
   thumbnail?: string;
+  /** C-088：domain 缺失但 OCR 已入队，前端显示"识别中..." */
+  _ocrPending?: boolean;
 }
 
 interface AdvertiserGroup {
@@ -113,6 +118,84 @@ export default function IntelligencePage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // C-088：OCR 轮询 — result 变化时启动；命中 success/failed 后局部更新 state；60s 总超时
+  const ocrTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const ocrStartRef = useRef<number>(0);
+  useEffect(() => {
+    if (ocrTimerRef.current) {
+      clearInterval(ocrTimerRef.current);
+      ocrTimerRef.current = null;
+    }
+    if (!result) return;
+
+    const pendingUrls = new Set<string>();
+    for (const adv of result.advertisers) {
+      for (const ad of adv.ads) {
+        if (ad._ocrPending && ad.thumbnail) pendingUrls.add(ad.thumbnail);
+      }
+    }
+    if (pendingUrls.size === 0) return;
+
+    ocrStartRef.current = Date.now();
+    const tick = async () => {
+      try {
+        const urls = Array.from(pendingUrls);
+        if (urls.length === 0 || Date.now() - ocrStartRef.current > 60_000) {
+          if (ocrTimerRef.current) {
+            clearInterval(ocrTimerRef.current);
+            ocrTimerRef.current = null;
+          }
+          return;
+        }
+        const resp = await fetch("/api/user/intelligence/ocr-status", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ urls }),
+        }).then((r) => r.json());
+        if (resp.code !== 0 || !resp.data) return;
+
+        setResult((prev) => {
+          if (!prev) return prev;
+          let changed = false;
+          const next = {
+            ...prev,
+            advertisers: prev.advertisers.map((adv) => ({
+              ...adv,
+              ads: adv.ads.map((ad) => {
+                if (!ad._ocrPending || !ad.thumbnail) return ad;
+                const hit = resp.data[ad.thumbnail];
+                if (!hit) return ad;
+                if (hit.status === "success" && hit.domain) {
+                  changed = true;
+                  pendingUrls.delete(ad.thumbnail);
+                  return { ...ad, domain: hit.domain, _ocrPending: false };
+                }
+                if (hit.status === "failed" || hit.status === "permanent_failure") {
+                  changed = true;
+                  pendingUrls.delete(ad.thumbnail);
+                  return { ...ad, _ocrPending: false };
+                }
+                return ad;
+              }),
+            })),
+          };
+          return changed ? next : prev;
+        });
+      } catch {
+        /* 轮询失败静默重试，不打扰用户 */
+      }
+    };
+
+    void tick();
+    ocrTimerRef.current = setInterval(tick, 5_000);
+    return () => {
+      if (ocrTimerRef.current) {
+        clearInterval(ocrTimerRef.current);
+        ocrTimerRef.current = null;
+      }
+    };
+  }, [result]);
+
   const handleSearch = async () => {
     const text = searchText.trim();
     if (!text) { message.warning("请输入广告主名称或域名"); return; }
@@ -176,9 +259,25 @@ export default function IntelligencePage() {
       title: "投放域名",
       dataIndex: "domain",
       width: 180,
-      render: (v?: string) =>
-        v ? <a href={`https://${v}`} target="_blank" rel="noreferrer"><LinkOutlined /> {v}</a>
-          : <span style={{ color: "#bfbfbf" }}>-</span>,
+      render: (v: string | undefined, rec: AtcAd) => {
+        if (v) {
+          return (
+            <a href={`https://${v}`} target="_blank" rel="noreferrer">
+              <LinkOutlined /> {v}
+            </a>
+          );
+        }
+        if (rec._ocrPending) {
+          return (
+            <Tooltip title="正在用 AI 识别图中的域名，5 秒后自动刷新">
+              <span style={{ color: "#1677ff", fontSize: 12 }}>
+                <LoadingOutlined spin /> 识别中…
+              </span>
+            </Tooltip>
+          );
+        }
+        return <span style={{ color: "#bfbfbf" }}>-</span>;
+      },
     },
     { title: "首次投放", key: "first", width: 100, render: (_: unknown, rec: AtcAd) => fmtTs(rec.first_shown) },
     { title: "最近投放", key: "last",  width: 100, render: (_: unknown, rec: AtcAd) => fmtTs(rec.last_shown) },

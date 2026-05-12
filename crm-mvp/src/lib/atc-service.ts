@@ -20,6 +20,8 @@ export interface AtcAd {
   last_shown?: number;   // Unix 秒级时间戳
   thumbnail?: string;
   creative_id?: string;  // 内部用于 creative 跨查询匹配，前端可忽略
+  /** C-088：domain 缺失但 thumbnail 已入队 OCR，前端显示"识别中..." */
+  _ocrPending?: boolean;
 }
 
 export interface AtcMerchantResult {
@@ -592,6 +594,9 @@ export async function searchIntelligence(opts: {
     }
   }
 
+  // C-088：OCR 兜底补 domain（命中缓存即用，未命中异步入队）
+  await applyOcrDomainEnrichment(advertiserAdsMap);
+
   const advertisers = Array.from(advertiserAdsMap.entries()).map(([id, v]) => ({
     id,
     name: v.name,
@@ -603,4 +608,55 @@ export async function searchIntelligence(opts: {
     advertisers,
     total: advertisers.reduce((s, a) => s + a.adCount, 0),
   };
+}
+
+/**
+ * C-088：对缺 domain 但有 thumbnail 的 ad 做 OCR 兜底补全
+ *  - 同步：批量查 ad_image_ocr_cache，命中 success → 立即 fill ad.domain
+ *  - 异步：未命中 / pending → 标 _ocrPending=true，入队让 cron worker 后台处理
+ *  - 全局开关关闭时直接 noop
+ */
+async function applyOcrDomainEnrichment(
+  advertiserAdsMap: Map<string, { name: string; ads: AtcAd[] }>,
+) {
+  // 懒加载 ocr-domain，避免 atc 模块在没用到 OCR 的请求里也加载 ai-providers
+  const { isOcrEnabled, queryCachedDomains, enqueueOcrTasks } = await import("./ocr-domain");
+
+  if (!(await isOcrEnabled())) return;
+
+  // 1) 收集所有"缺 domain 但有 thumbnail"的 ad
+  const targets: Array<{ ad: AtcAd; url: string }> = [];
+  for (const { ads } of advertiserAdsMap.values()) {
+    for (const ad of ads) {
+      if (!ad.domain && ad.thumbnail) {
+        targets.push({ ad, url: ad.thumbnail });
+      }
+    }
+  }
+  if (targets.length === 0) return;
+
+  // 2) 批量查缓存
+  const uniqueUrls = Array.from(new Set(targets.map((t) => t.url)));
+  const cache = await queryCachedDomains(uniqueUrls);
+
+  // 3) 命中 success → fill；其他状态 / 未命中 → 标 pending
+  const toEnqueue: string[] = [];
+  for (const { ad, url } of targets) {
+    const hit = cache.get(url);
+    if (hit?.status === "success" && hit.domain) {
+      ad.domain = hit.domain;
+    } else if (hit?.status === "failed" || hit?.status === "permanent_failure") {
+      // 已经诊断失败：不显示"识别中"，保留 domain=undefined → 前端显示 "-"
+    } else {
+      ad._ocrPending = true;
+      if (!hit) toEnqueue.push(url);
+    }
+  }
+
+  // 4) 把未入库的 URL 入队（不等结果，让 cron worker 后台处理）
+  if (toEnqueue.length > 0) {
+    await enqueueOcrTasks(toEnqueue).catch((err) => {
+      console.warn("[C-088] enqueueOcrTasks 失败（不影响主流程）:", err);
+    });
+  }
 }

@@ -857,6 +857,28 @@ model merchant_atc_snapshots {
 }
 
 // -----------------------------------------------------------
+// 34b. C-088 ATC 广告 — OCR 投放域名提取缓存
+// 维度：image_url 全局唯一，跨用户/跨商家共享
+// -----------------------------------------------------------
+model ad_image_ocr_cache {
+  id                BigInt   @id @default(autoincrement()) @db.UnsignedBigInt
+  image_url         String   @unique(map: "uk_image_url") @db.VarChar(768)
+  status            String   @default("pending") @db.VarChar(20)
+  extracted_domain  String?  @db.VarChar(255)
+  raw_output        String?  @db.VarChar(512)
+  tries             Int      @default(0) @db.UnsignedInt
+  last_error        String?  @db.VarChar(512)
+  model_used        String?  @db.VarChar(64)
+  prompt_tokens     Int?     @db.UnsignedInt
+  completion_tokens Int?     @db.UnsignedInt
+  lock_at           DateTime? @db.DateTime(0)
+  created_at        DateTime @default(now()) @db.DateTime(0)
+  updated_at        DateTime @default(now()) @updatedAt @db.DateTime(0)
+
+  @@index([status, lock_at], map: "idx_status_lock")
+}
+
+// -----------------------------------------------------------
 // 34. ATC 广告情报 — 用户 SerpApi Key 多账号池
 // -----------------------------------------------------------
 model user_serpapi_keys {
