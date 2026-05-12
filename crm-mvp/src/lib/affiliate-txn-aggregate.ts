@@ -1,7 +1,7 @@
 import type { PlatformTransaction } from "@/lib/platform-api";
 
 /**
- * 联盟平台返回的"原始 line items"聚合工具（A 方案）。
+ * 联盟平台返回的"原始 line items"聚合工具（A+C 方案，C-086 修订）。
  *
  * ┌────────────────────────────────────────────────────────────────────────┐
  * │ ⚠ 强制规约：所有写入 affiliate_transactions 的代码路径必须先经过本函数。│
@@ -17,9 +17,7 @@ import type { PlatformTransaction } from "@/lib/platform-api";
  * │   const aggRes = aggregateRawTransactions(rawTxns);                    │
  * │   for (const txn of aggRes.aggregated) { await prisma.upsert(...) }    │
  * │                                                                        │
- * │ 即使漏调本函数，prisma.ts 的运行时闸门（C-081）也会兜底：               │
- * │   - 0/0 行自动 is_deleted=1                                            │
- * │   - 同 (user, platform, merchant, time) 多 transaction_id 自动合并    │
+ * │ 即使漏调本函数，prisma.ts 的运行时闸门（C-081）也会兜底合并 line items │
  * └────────────────────────────────────────────────────────────────────────┘
  *
  * 背景：CG/MUI/EV/BSH/LH 等平台对一笔订单常会拆成多个 line items 分别返回，
@@ -28,13 +26,18 @@ import type { PlatformTransaction } from "@/lib/platform-api";
  *
  * 本函数在写入数据库前对 API 原始返回做两层聚合：
  *  1. 同 transaction_id 内部去重（同一 id 重复返回时合并 commission/order_amount）
- *  2. 同 (merchant_id, transaction_time) 跨 transaction_id 聚合 line items
+ *  2. 跨 transaction_id 聚合 line items
+ *     - **C-086 起聚合 key = `(merchant_id, order_id)`**（保 order_id 时）
+ *       fallback `(merchant_id, transaction_time)`（无 order_id 时，与 C-079 一致）
+ *     - 1 个聚合组 = 1 个真实订单（与联盟平台后台 distinct order_id 口径对齐）
  *     - 选稳定主 id = 字典序最小的 transaction_id（与 API 返回顺序无关，幂等）
  *     - commission_amount = SUM, order_amount = SUM
  *     - status 按优先级取最高（已审核状态优先于待审核）
  *     - 被淘汰的 line items 不写入 DB（同步代码直接跳过它们）
  *
- * 同时过滤 0/0 幽灵行（commission_amount=0 AND order_amount=0），防止再次产生。
+ * **C-086 起不再过滤 0/0 幽灵组**：平台后台显示 distinct order_id 时会包含整单
+ * commission=0 amount=0 的 lead 订单（如 Rula 的"未转化"订单），CRM 必须保留以对齐
+ * 平台后台单数。0/0 组写入时 is_deleted=0 / 正常计入订单数与 ROI 分母（金额为 0）。
  *
  * 注意：仅当 merchant_id 非空时才参与跨 id 聚合；merchant_id 缺失的保留原样
  * （fallback 按 transaction_id 自身去重），避免错聚不同商家的交易。
@@ -109,7 +112,10 @@ export function aggregateRawTransactions(raw: PlatformTransaction[]): AggregateR
       noMerchantId.push(t);
       continue;
     }
-    const key = `${mid}|${t.transaction_time}`;
+    // C-086: 优先按 order_id 聚合（与平台后台 distinct order_id 口径对齐）。
+    // 若 API 未返回 order_id（部分老平台），降级回 C-079 的 transaction_time 维度。
+    const orderKey = (t.order_id && t.order_id.trim()) || "";
+    const key = orderKey ? `${mid}|oid:${orderKey}` : `${mid}|t:${t.transaction_time}`;
     const g = groups.get(key);
     if (g) {
       g.sumCommission += (t.commission_amount || 0);
@@ -146,14 +152,17 @@ export function aggregateRawTransactions(raw: PlatformTransaction[]): AggregateR
   }
   for (const t of noMerchantId) afterLineMerge.push(t);
 
+  // C-086: 不再过滤整单 0/0 ghost。
+  // 平台后台显示 distinct order_id 时本就包含整单 commission=0 amount=0 的 lead 订单
+  // （如 Rula 的"未转化"订单），CRM 必须保留这些行以对齐平台后台单数与 ROI 分母。
+  // 仍统计 ghost 数（dropped_ghosts 这里改为"保留的 ghost 组数"用于日志诊断）。
   const aggregated: AggregatedTransaction[] = [];
-  let droppedGhosts = 0;
+  let ghostKeptCount = 0;
   for (const t of afterLineMerge) {
     const c = t.commission_amount || 0;
     const a = t.order_amount || 0;
     if (c === 0 && a === 0) {
-      droppedGhosts++;
-      continue;
+      ghostKeptCount++;
     }
     aggregated.push(t as AggregatedTransaction);
   }
@@ -166,7 +175,7 @@ export function aggregateRawTransactions(raw: PlatformTransaction[]): AggregateR
       after_line_items_merge: afterLineMerge.length,
       after_ghost_filter: aggregated.length,
       merged_line_items: mergedLineItems,
-      dropped_ghosts: droppedGhosts,
+      dropped_ghosts: ghostKeptCount,
     },
   };
 }
