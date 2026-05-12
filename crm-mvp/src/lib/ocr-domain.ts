@@ -35,9 +35,11 @@ export interface OcrCacheLookup {
 const DEFAULTS = {
   enabled: 1,
   maxTries: 3,
-  batchSize: 5,
-  concurrent: 3,
+  batchSize: 10,
+  concurrent: 1,
   processingTimeoutSec: 120,
+  maxBatchesPerRun: 5,
+  batchPauseMs: 2000,
 } as const;
 
 async function readSystemConfigInt(key: string, fallback: number): Promise<number> {
@@ -236,20 +238,30 @@ export interface OcrWorkerResult {
   failed: number;
   permanentFailure: number;
   zombieReset: number;
+  batchesRun: number;
   skipped: boolean;
   reason?: string;
 }
 
 /**
- * 处理一批 pending 任务。
- * - 先把超时 processing 重置为 pending
- * - SELECT ... LIMIT batch_size FOR UPDATE SKIP LOCKED（多 worker 安全）
- * - 并发 concurrent 路调 vision API
- * - 解析结果 → 更新 cache
+ * Worker 入口（cron / inline 调用）
+ *
+ * C-088 修复 v3：批节奏（07 要求 "10 个 10 个跑，避免一次性太多被限流"）
+ * - 单次 worker 调用最多跑 `ocr_worker_max_batches_per_run` 批（默认 5）
+ * - 每批拉 `ocr_worker_batch_size` 行（默认 10）
+ * - 批内并发 `ocr_worker_concurrent` 路（默认 1，最保守）
+ * - 批与批之间 sleep `ocr_worker_batch_pause_ms`（默认 2000ms）
+ *
+ * 默认参数最大单次容量 5 批 × 10 = 50 张图，
+ * 单图 ~2-3s 串行 ≈ 50 × 2.5 + 4 × 2s = 133s ≈ 2.2 分钟
+ * 完全在前端 300s 轮询窗口内。
+ *
+ * 若队列剩余 > 50，下一次 cron / inline 触发会继续消化。
  */
 export async function runOcrWorker(): Promise<OcrWorkerResult> {
   const res: OcrWorkerResult = {
-    picked: 0, success: 0, failed: 0, permanentFailure: 0, zombieReset: 0, skipped: false,
+    picked: 0, success: 0, failed: 0, permanentFailure: 0,
+    zombieReset: 0, batchesRun: 0, skipped: false,
   };
 
   if (!(await isOcrEnabled())) {
@@ -272,8 +284,10 @@ export async function runOcrWorker(): Promise<OcrWorkerResult> {
   ));
   const maxTries = await readSystemConfigInt("ocr_max_tries", DEFAULTS.maxTries);
   const timeoutSec = await readSystemConfigInt("ocr_processing_timeout_sec", DEFAULTS.processingTimeoutSec);
+  const maxBatchesPerRun = Math.max(1, await readSystemConfigInt("ocr_worker_max_batches_per_run", DEFAULTS.maxBatchesPerRun));
+  const batchPauseMs = Math.max(0, await readSystemConfigInt("ocr_worker_batch_pause_ms", DEFAULTS.batchPauseMs));
 
-  // ── 1. 僵尸重置：processing 超过 timeoutSec → pending ──
+  // ── 1. 僵尸重置（整个 run 只做一次）：processing 超过 timeoutSec → pending ──
   const zombie = await prisma.$executeRawUnsafe(
     `UPDATE ad_image_ocr_cache
        SET status='pending', lock_at=NULL
@@ -284,43 +298,11 @@ export async function runOcrWorker(): Promise<OcrWorkerResult> {
   );
   res.zombieReset = Number(zombie) || 0;
 
-  // ── 2. 拉取一批 pending（用 FOR UPDATE SKIP LOCKED 防多 worker 抢同行）──
-  // Prisma 不支持 SKIP LOCKED 语法糖，用原生 SQL
-  // 注意：$queryRawUnsafe 在 MySQL/MariaDB 上对 BIGINT/INT UNSIGNED 列返回 BigInt，
-  // 必须 cast 为 number 才能做算术，否则 `row.tries + 1` 抛 TypeError
-  const pickedRowsRaw = await prisma.$queryRawUnsafe<Array<{ id: bigint; image_url: string; tries: bigint | number }>>(
-    `SELECT id, image_url, tries
-       FROM ad_image_ocr_cache
-      WHERE status='pending' AND tries < ?
-      ORDER BY id ASC
-      LIMIT ?
-      FOR UPDATE SKIP LOCKED`,
-    maxTries,
-    batchSize,
-  );
-
-  if (pickedRowsRaw.length === 0) return res;
-  res.picked = pickedRowsRaw.length;
-
-  // 立刻把它们标 processing，避免被其他 worker 重复拾起（事务在 raw query 之外，单独 update）
-  const ids = pickedRowsRaw.map((r) => r.id);
-  await prisma.ad_image_ocr_cache.updateMany({
-    where: { id: { in: ids } },
-    data: { status: "processing", lock_at: new Date() },
-  });
-
-  // ── 3. 并发处理 ──
-  // 把 BigInt tries 统一转 number，防止 async function 同步阶段抛 TypeError
-  const tasks: Array<{ id: bigint; image_url: string; tries: number }> = pickedRowsRaw.map((r) => ({
-    id: r.id,
-    image_url: r.image_url,
-    tries: Number(r.tries),
-  }));
-
+  // 单行任务处理函数（闭包 cfg / maxTries / res）
   async function processOne(row: { id: bigint; image_url: string; tries: number }) {
     const newTries = row.tries + 1;
     try {
-      const out = await callVisionForDomain(row.image_url, cfg);
+      const out = await callVisionForDomain(row.image_url, cfg!);
       const domain = normalizeDomain(out.raw);
 
       if (domain) {
@@ -331,7 +313,7 @@ export async function runOcrWorker(): Promise<OcrWorkerResult> {
             extracted_domain: domain,
             raw_output: out.raw.slice(0, 512),
             tries: newTries,
-            model_used: cfg.modelName,
+            model_used: cfg!.modelName,
             prompt_tokens: out.promptTokens,
             completion_tokens: out.completionTokens,
             lock_at: null,
@@ -340,14 +322,13 @@ export async function runOcrWorker(): Promise<OcrWorkerResult> {
         });
         res.success++;
       } else {
-        // 模型明确返回 none 或返回值不像域名 → 标 failed（不再重试）
         await prisma.ad_image_ocr_cache.update({
           where: { id: row.id },
           data: {
             status: "failed",
             raw_output: out.raw.slice(0, 512),
             tries: newTries,
-            model_used: cfg.modelName,
+            model_used: cfg!.modelName,
             prompt_tokens: out.promptTokens,
             completion_tokens: out.completionTokens,
             lock_at: null,
@@ -359,9 +340,6 @@ export async function runOcrWorker(): Promise<OcrWorkerResult> {
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       const isImgGone = /HTTP 4(?:0[34]|10)/.test(msg);
-      // C-088 修复 v2：识别 provider 限流类错误为「软失败」——
-      // 不消耗 tries，立刻把行放回 pending 等下一轮重试。
-      // 大肘子 gpt-4o 报 "Vision HTTP 400: rate_limit_exceed" / "429" / "too many requests"
       const isRateLimit = /rate[_ ]?limit|HTTP 429|too many requests|quota[_ ]?exceed/i.test(msg);
 
       if (isRateLimit) {
@@ -393,19 +371,65 @@ export async function runOcrWorker(): Promise<OcrWorkerResult> {
     }
   }
 
-  // 简单 worker pool 实现：分批
-  console.log(`[C-088 ocr-worker] picked ${tasks.length} tasks, concurrent=${concurrent}, model=${cfg.modelName}`);
-  while (tasks.length > 0) {
-    const slice = tasks.splice(0, concurrent);
-    const results = await Promise.allSettled(slice.map(processOne));
-    for (const r of results) {
-      if (r.status === "rejected") {
-        console.warn(`[C-088 ocr-worker] processOne rejected:`, r.reason);
+  console.log(`[C-088 ocr-worker] start: batchSize=${batchSize} concurrent=${concurrent} maxBatches=${maxBatchesPerRun} pauseMs=${batchPauseMs} model=${cfg.modelName}`);
+
+  // ── 2. 多批循环 ──
+  for (let batchIdx = 0; batchIdx < maxBatchesPerRun; batchIdx++) {
+    // 2a. 拉一批 pending
+    // 注意：$queryRawUnsafe 在 MySQL/MariaDB 上对 BIGINT/INT UNSIGNED 列返回 BigInt
+    const pickedRowsRaw = await prisma.$queryRawUnsafe<Array<{ id: bigint; image_url: string; tries: bigint | number }>>(
+      `SELECT id, image_url, tries
+         FROM ad_image_ocr_cache
+        WHERE status='pending' AND tries < ?
+        ORDER BY id ASC
+        LIMIT ?
+        FOR UPDATE SKIP LOCKED`,
+      maxTries,
+      batchSize,
+    );
+
+    if (pickedRowsRaw.length === 0) {
+      console.log(`[C-088 ocr-worker] batch ${batchIdx + 1}/${maxBatchesPerRun}: no pending, exit`);
+      break;
+    }
+
+    res.picked += pickedRowsRaw.length;
+    res.batchesRun++;
+
+    // 2b. 标 processing
+    const ids = pickedRowsRaw.map((r) => r.id);
+    await prisma.ad_image_ocr_cache.updateMany({
+      where: { id: { in: ids } },
+      data: { status: "processing", lock_at: new Date() },
+    });
+
+    // 2c. 把 BigInt tries cast 为 number（避免同步算术 TypeError）
+    const tasks: Array<{ id: bigint; image_url: string; tries: number }> = pickedRowsRaw.map((r) => ({
+      id: r.id,
+      image_url: r.image_url,
+      tries: Number(r.tries),
+    }));
+
+    console.log(`[C-088 ocr-worker] batch ${batchIdx + 1}/${maxBatchesPerRun}: picked ${tasks.length}`);
+
+    // 2d. 批内并发处理
+    while (tasks.length > 0) {
+      const slice = tasks.splice(0, concurrent);
+      const results = await Promise.allSettled(slice.map(processOne));
+      for (const r of results) {
+        if (r.status === "rejected") {
+          console.warn(`[C-088 ocr-worker] processOne rejected:`, r.reason);
+        }
       }
     }
-    // C-088 修复 v2：批与批之间 sleep 800ms，避免大肘子 gpt-4o RPM 限流
-    if (tasks.length > 0) await new Promise((r) => setTimeout(r, 800));
+
+    // 2e. 批与批之间 sleep（让 provider 限流窗口刷新）
+    if (batchIdx < maxBatchesPerRun - 1) {
+      console.log(`[C-088 ocr-worker] batch done, pause ${batchPauseMs}ms before next`);
+      await new Promise((r) => setTimeout(r, batchPauseMs));
+    }
   }
 
+  console.log(`[C-088 ocr-worker] end: batchesRun=${res.batchesRun} picked=${res.picked} success=${res.success} failed=${res.failed} permFail=${res.permanentFailure}`);
   return res;
 }
