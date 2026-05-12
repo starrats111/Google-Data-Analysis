@@ -286,7 +286,9 @@ export async function runOcrWorker(): Promise<OcrWorkerResult> {
 
   // ── 2. 拉取一批 pending（用 FOR UPDATE SKIP LOCKED 防多 worker 抢同行）──
   // Prisma 不支持 SKIP LOCKED 语法糖，用原生 SQL
-  const pickedRows = await prisma.$queryRawUnsafe<Array<{ id: bigint; image_url: string; tries: number }>>(
+  // 注意：$queryRawUnsafe 在 MySQL/MariaDB 上对 BIGINT/INT UNSIGNED 列返回 BigInt，
+  // 必须 cast 为 number 才能做算术，否则 `row.tries + 1` 抛 TypeError
+  const pickedRowsRaw = await prisma.$queryRawUnsafe<Array<{ id: bigint; image_url: string; tries: bigint | number }>>(
     `SELECT id, image_url, tries
        FROM ad_image_ocr_cache
       WHERE status='pending' AND tries < ?
@@ -297,18 +299,23 @@ export async function runOcrWorker(): Promise<OcrWorkerResult> {
     batchSize,
   );
 
-  if (pickedRows.length === 0) return res;
-  res.picked = pickedRows.length;
+  if (pickedRowsRaw.length === 0) return res;
+  res.picked = pickedRowsRaw.length;
 
   // 立刻把它们标 processing，避免被其他 worker 重复拾起（事务在 raw query 之外，单独 update）
-  const ids = pickedRows.map((r) => r.id);
+  const ids = pickedRowsRaw.map((r) => r.id);
   await prisma.ad_image_ocr_cache.updateMany({
     where: { id: { in: ids } },
     data: { status: "processing", lock_at: new Date() },
   });
 
   // ── 3. 并发处理 ──
-  const tasks: Array<{ id: bigint; image_url: string; tries: number }> = pickedRows;
+  // 把 BigInt tries 统一转 number，防止 async function 同步阶段抛 TypeError
+  const tasks: Array<{ id: bigint; image_url: string; tries: number }> = pickedRowsRaw.map((r) => ({
+    id: r.id,
+    image_url: r.image_url,
+    tries: Number(r.tries),
+  }));
 
   async function processOne(row: { id: bigint; image_url: string; tries: number }) {
     const newTries = row.tries + 1;
@@ -369,9 +376,15 @@ export async function runOcrWorker(): Promise<OcrWorkerResult> {
   }
 
   // 简单 worker pool 实现：分批
+  console.log(`[C-088 ocr-worker] picked ${tasks.length} tasks, concurrent=${concurrent}, model=${cfg.modelName}`);
   while (tasks.length > 0) {
     const slice = tasks.splice(0, concurrent);
-    await Promise.allSettled(slice.map(processOne));
+    const results = await Promise.allSettled(slice.map(processOne));
+    for (const r of results) {
+      if (r.status === "rejected") {
+        console.warn(`[C-088 ocr-worker] processOne rejected:`, r.reason);
+      }
+    }
   }
 
   return res;
