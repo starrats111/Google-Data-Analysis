@@ -2,7 +2,7 @@ import { NextRequest } from "next/server";
 import { getUserFromRequest, serializeData } from "@/lib/auth";
 import { apiSuccess, apiError, normalizePlatformCode } from "@/lib/constants";
 import prisma from "@/lib/prisma";
-import { nowUTC, dateColumnStart, parseTxnDateStart } from "@/lib/date-utils";
+import { nowCST, dateColumnStart, parseTxnDateStart } from "@/lib/date-utils";
 import { getRedirectedMerchantKeys } from "@/lib/merchant-ownership-rules";
 import { sqlAffiliateTxnValidPlatformConnection } from "@/lib/affiliate-transaction-sql";
 import { aggregateRawTransactions } from "@/lib/affiliate-txn-aggregate";
@@ -20,7 +20,8 @@ export async function POST(req: NextRequest) {
   const userId = BigInt(user.userId);
   const body = await req.json().catch(() => ({}));
 
-  const now = nowUTC();
+  // C-084：联盟交易同步按 CST 切日（推翻 C-080）
+  const now = nowCST();
   const DEFAULT_START = "2025-01-01";
   const startStr = body.days
     ? now.subtract(body.days, "day").format("YYYY-MM-DD")
@@ -438,14 +439,14 @@ async function updateDailyStatsCommission(userId: bigint, statsStartDate: Date, 
   >(`
     SELECT 
       user_merchant_id,
-      DATE_FORMAT(transaction_time, '%Y-%m-%d') as txn_date,
+      DATE_FORMAT(CONVERT_TZ(transaction_time, '+00:00', '+08:00'), '%Y-%m-%d') as txn_date,
       SUM(CAST(commission_amount AS DECIMAL(12,2))) as total_commission,
       SUM(CASE WHEN status = 'rejected' THEN CAST(commission_amount AS DECIMAL(12,2)) ELSE 0 END) as rejected_commission,
       COUNT(*) as order_count
     FROM affiliate_transactions
     WHERE user_id = ? AND is_deleted = 0 AND transaction_time >= ?
       AND ${sqlAffiliateTxnValidPlatformConnection("affiliate_transactions")}
-    GROUP BY user_merchant_id, DATE_FORMAT(transaction_time, '%Y-%m-%d')
+    GROUP BY user_merchant_id, DATE_FORMAT(CONVERT_TZ(transaction_time, '+00:00', '+08:00'), '%Y-%m-%d')
   `, userId, txnStartDate);
 
   if (!txnAgg || txnAgg.length === 0) return 0;

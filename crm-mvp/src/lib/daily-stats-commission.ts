@@ -16,13 +16,14 @@ import { sqlAffiliateTxnValidPlatformConnection } from "@/lib/affiliate-transact
  *   3. 同一商家有多条 campaign 时，主行写入聚合值，其余行清零（避免重复计算）。
  *   4. 该商家在该日期完全没有 ads_daily_stats 行时，自动 upsert 一行（cost=0）。
  *
- * 时间口径（C-080）：按 UTC 切日聚合 affiliate_transactions 并写入 ads_daily_stats.date，
- * 与联盟平台后台日期归档对齐。ads_daily_stats.cost 仍按 Google Ads MCC 时区（CST）归日，
- * 边界订单（UTC/CST 8h 错位）影响 < 2%。
+ * 时间口径（C-084 推翻 C-080）：按 CST 切日聚合 affiliate_transactions 并写入 ads_daily_stats.date，
+ * 与联盟平台后台日期归档对齐（实测 wj02 CG 5/1-5/12 CST 切 = 平台 $3729.28 1:1 命中）。
+ * ads_daily_stats.cost 也按 CST 归日（Google Ads MCC 时区），与 commission 同 CST 口径，
+ * **完全对齐，无 8h 错位**。
  *
  * @param userId         需要纠正的用户 ID
- * @param startDate      开始时间（含，UTC Date 对象，对齐 ads_daily_stats.date 列的 00:00:00 UTC）
- * @param endExclusive   结束时间（不含，UTC Date 对象）
+ * @param startDate      开始时间（含，UTC Date 对象，但代表 CST 自然日的起始点）
+ * @param endExclusive   结束时间（不含，UTC Date 对象，但代表 CST 自然日的次日起始点）
  * @returns 受影响的行数
  */
 export async function applyAffiliateCommissionToDailyStats(
@@ -42,14 +43,14 @@ export async function applyAffiliateCommissionToDailyStats(
   >(`
     SELECT 
       user_merchant_id,
-      DATE_FORMAT(transaction_time, '%Y-%m-%d') as txn_date,
+      DATE_FORMAT(CONVERT_TZ(transaction_time, '+00:00', '+08:00'), '%Y-%m-%d') as txn_date,
       SUM(CAST(commission_amount AS DECIMAL(12,2))) as total_commission,
       SUM(CASE WHEN status = 'rejected' THEN CAST(commission_amount AS DECIMAL(12,2)) ELSE 0 END) as rejected_commission,
       COUNT(*) as order_count
     FROM affiliate_transactions
     WHERE user_id = ? AND is_deleted = 0 AND transaction_time >= ? AND transaction_time < ?
       AND ${sqlAffiliateTxnValidPlatformConnection("affiliate_transactions")}
-    GROUP BY user_merchant_id, DATE_FORMAT(transaction_time, '%Y-%m-%d')
+    GROUP BY user_merchant_id, DATE_FORMAT(CONVERT_TZ(transaction_time, '+00:00', '+08:00'), '%Y-%m-%d')
   `, userId, startDate, endExclusive);
 
   if (!txnAgg || txnAgg.length === 0) return 0;

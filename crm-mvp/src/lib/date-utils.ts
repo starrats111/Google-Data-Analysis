@@ -93,37 +93,39 @@ export function startOfMonthCST() {
 }
 
 /**
- * affiliate_transactions DATETIME 列专用：UTC 日期零点。
+ * affiliate_transactions DATETIME 列专用：CST（东八区）日期零点对应的 UTC 时间。
  *
- * C-080 起从 CST 视角改回 UTC 视角：
- *   - 联盟平台后台（CG/LB/PM/MUI/EV/UltraInfluence/Engagevantage 等）对日期范围的解释
- *     用的是 UTC（实测 wj07 MUI 5/1-5/11 按 UTC 切日 95 笔与平台 1:1 命中）。
- *   - 用户浏览器虽然显示北京时间，但平台后台 SQL 后端按 UTC 归日。
- *   - 故 affiliate_transactions 的查询边界也按 UTC 切日，与平台后台 100% 对齐。
+ * C-084 起从 UTC 视角改回 CST 视角（推翻 C-080）：
+ *   - 实测 wj02 CG 5/1-5/12：CST 切日 462 单 / $3729.28 = 平台后台 100% 命中；
+ *     UTC 切日只有 305 单 / $3565.50，差 7 行 / $163.78（边界 UTC 4/30 16:00-23:59）。
+ *   - C-080 当时只用 wj07 MUI 验证，恰巧那段时间 UTC/CST 边界无数据，导致片面结论。
+ *   - 此次以 CG 验证（数据量最大）反证：联盟平台后台按本地 CST 切日，CRM 也用 CST。
  *   - 注：ads_daily_stats.date 仍按 Google Ads MCC 时区（CST）归日；
- *     佣金回写到 ads_daily_stats 时按 UTC 切日，可能与 cost 错 8 小时（边缘订单 < 2%）。
+ *     佣金回写到 ads_daily_stats 时按 CST 切日，与 cost 同 CST 时间口径，**完全对齐**。
  *
- * 例：parseTxnDateStart("2026-05-01") → 2026-05-01T00:00:00.000Z（UTC 5/1 0 点）。
+ * 例（北京时间）：parseTxnDateStart("2026-05-01") → CST 2026-05-01 00:00:00 = UTC 2026-04-30T16:00:00.000Z。
  */
 export function parseTxnDateStart(dateStr: string): Date {
-  return new Date(`${dateStr}T00:00:00.000Z`);
+  return dayjs.tz(`${dateStr} 00:00:00`, TZ).toDate();
 }
 
 /**
- * affiliate_transactions DATETIME 列专用：UTC 次日零点（独占上界）。
- * 与 parseTxnDateStart 配对，覆盖整个 UTC 自然日。
+ * affiliate_transactions DATETIME 列专用：CST 次日零点（独占上界）对应的 UTC 时间。
+ * 与 parseTxnDateStart 配对，覆盖整个 CST 自然日。
+ *
+ * 例：parseTxnDateEndExclusive("2026-05-01") → CST 2026-05-02 00:00:00 = UTC 2026-05-01T16:00:00.000Z。
  */
 export function parseTxnDateEndExclusive(dateStr: string): Date {
-  const d = new Date(`${dateStr}T00:00:00.000Z`);
-  d.setUTCDate(d.getUTCDate() + 1);
-  return d;
+  return dayjs.tz(`${dateStr} 00:00:00`, TZ).add(1, "day").toDate();
 }
 
 /**
- * affiliate_transactions 专用：UTC 当月月初零点（"本月"默认起点）。
- * 例：当前 2026-05-09 → UTC 2026-05-01 00:00:00。
+ * affiliate_transactions 专用：CST 当月月初零点（"本月"默认起点）对应的 UTC 时间。
+ * 例：当前 2026-05-09 → CST 2026-05-01 00:00:00 = UTC 2026-04-30T16:00:00.000Z。
+ *
+ * 函数名仍叫 txnStartOfMonthUTC 是为了避免大范围改名，但语义已改为 CST 月初；
+ * 函数返回值仍是 Date 对象（UTC 时间戳），与 transaction_time 列存储语义一致。
  */
 export function txnStartOfMonthUTC(): Date {
-  const now = new Date();
-  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1, 0, 0, 0, 0));
+  return dayjs().tz(TZ).startOf("month").toDate();
 }

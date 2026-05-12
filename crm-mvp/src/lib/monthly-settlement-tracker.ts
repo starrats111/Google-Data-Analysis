@@ -13,8 +13,10 @@ import prisma from "@/lib/prisma";
  *   被 rejected 的也算结清（钱不会再变化）
  *
  * 时间口径：transaction_time 按 UTC 存储，
- * C-080 起按 UTC 归月（DATE_FORMAT(transaction_time, '%Y-%m')），
- * 与 MUI/EV/CG 等联盟平台后台「Date 2026-05-01 ~ 2026-05-11」筛选口径 1:1 对齐。
+ * C-084 起按 CST（东八区）归月（推翻 C-080）：
+ * `DATE_FORMAT(CONVERT_TZ(transaction_time, '+00:00', '+08:00'), '%Y-%m')`，
+ * 与 CG/MUI/EV 等联盟平台后台本地日期归档 1:1 对齐
+ * （实测 wj02 CG 5/1-5/12 CST 切 = 平台 $3729.28 1:1 命中）。
  */
 
 export interface MonthSummary {
@@ -58,7 +60,7 @@ export async function recomputeMonthlySettlementForUser(userId: bigint): Promise
     rejected_amount: number;
   }[]>(`
     SELECT
-      DATE_FORMAT(transaction_time, '%Y-%m') AS month,
+      DATE_FORMAT(CONVERT_TZ(transaction_time, '+00:00', '+08:00'), '%Y-%m') AS month,
       COUNT(*) AS total_count,
       SUM(CAST(commission_amount AS DECIMAL(14,4))) AS total_amount,
       SUM(CASE WHEN status = 'pending'  THEN 1 ELSE 0 END) AS pending_count,
@@ -71,7 +73,7 @@ export async function recomputeMonthlySettlementForUser(userId: bigint): Promise
       SUM(CASE WHEN status = 'rejected' THEN CAST(commission_amount AS DECIMAL(14,4)) ELSE 0 END) AS rejected_amount
     FROM affiliate_transactions
     WHERE user_id = ? AND is_deleted = 0
-    GROUP BY DATE_FORMAT(transaction_time, '%Y-%m')
+    GROUP BY DATE_FORMAT(CONVERT_TZ(transaction_time, '+00:00', '+08:00'), '%Y-%m')
   `, userId);
 
   if (!monthRows.length) return 0;
@@ -152,7 +154,7 @@ export async function recomputeMonthlySettlementForUser(userId: bigint): Promise
 export async function listUnsettledMonthsForUser(userId: bigint): Promise<string[]> {
   // 步骤 1：找出该用户最早交易月份
   const firstTxn = await prisma.$queryRawUnsafe<{ first_month: string | null }[]>(`
-    SELECT DATE_FORMAT(MIN(transaction_time), '%Y-%m') AS first_month
+    SELECT DATE_FORMAT(CONVERT_TZ(MIN(transaction_time), '+00:00', '+08:00'), '%Y-%m') AS first_month
     FROM affiliate_transactions
     WHERE user_id = ? AND is_deleted = 0
   `, userId);
@@ -160,11 +162,11 @@ export async function listUnsettledMonthsForUser(userId: bigint): Promise<string
   const firstMonth = firstTxn[0]?.first_month;
   if (!firstMonth) {
     // 该用户尚无任何交易：只返回当前月
-    return [formatMonthUTC(new Date())];
+    return [formatMonthCST(new Date())];
   }
 
   // 步骤 2：列出 firstMonth → 当前月 的所有月份
-  const allMonths = enumerateMonthsInclusive(firstMonth, formatMonthUTC(new Date()));
+  const allMonths = enumerateMonthsInclusive(firstMonth, formatMonthCST(new Date()));
 
   // 步骤 3：剔除已结算月份
   const settled = await prisma.monthly_settlement_status.findMany({
@@ -174,7 +176,7 @@ export async function listUnsettledMonthsForUser(userId: bigint): Promise<string
   const settledSet = new Set(settled.map((s) => s.month));
 
   // 当前月始终保留（即使暂时被标记结算，下条新交易又会拉回未结算）
-  const currentMonth = formatMonthUTC(new Date());
+  const currentMonth = formatMonthCST(new Date());
   return allMonths.filter((m) => m === currentMonth || !settledSet.has(m));
 }
 
@@ -214,10 +216,11 @@ export async function getMonthlyProgressForUser(userId: bigint): Promise<MonthSu
   });
 }
 
-/** 形如 "2026-05"（按 UTC 计算，与联盟平台后台月度归档一致） */
-function formatMonthUTC(date: Date): string {
-  const y = date.getUTCFullYear();
-  const m = String(date.getUTCMonth() + 1).padStart(2, "0");
+/** 形如 "2026-05"（按 CST/东八区计算，与联盟平台后台月度归档一致；C-084 推翻 C-080） */
+function formatMonthCST(date: Date): string {
+  const dt = new Date(date.getTime() + 8 * 60 * 60 * 1000);
+  const y = dt.getUTCFullYear();
+  const m = String(dt.getUTCMonth() + 1).padStart(2, "0");
   return `${y}-${m}`;
 }
 
@@ -240,13 +243,19 @@ function enumerateMonthsInclusive(from: string, to: string): string[] {
 }
 
 /**
- * 把 "YYYY-MM" 转为 [start, endExclusive] 的 UTC Date 对象，用于 affiliate_transactions
- * 时间字段按 UTC 存储的边界过滤。
+ * 把 "YYYY-MM" 转为 [start, endExclusive] 的 UTC Date 对象，
+ * 但代表 CST 月初/次月月初的边界，用于 affiliate_transactions 时间字段过滤
+ * （transaction_time 按 UTC 存储，但比较时按 CST 月归档语义）。
+ * C-084 起改 CST，与联盟平台后台月度归档对齐。
+ *
+ * 例：monthRangeToUtcDates("2026-05") → start=UTC 2026-04-30 16:00:00 (= CST 5/1 0:00),
+ *     endExclusive=UTC 2026-05-31 16:00:00 (= CST 6/1 0:00)
  */
 export function monthRangeToUtcDates(monthStr: string): { start: Date; endExclusive: Date } {
   const [y, m] = monthStr.split("-").map((x) => parseInt(x, 10));
-  const start = new Date(Date.UTC(y, m - 1, 1, 0, 0, 0));
-  const endExclusive = new Date(Date.UTC(m === 12 ? y + 1 : y, m === 12 ? 0 : m, 1, 0, 0, 0));
+  // CST 月初 = UTC 当月 1 日 -8h
+  const start = new Date(Date.UTC(y, m - 1, 1, 0, 0, 0) - 8 * 60 * 60 * 1000);
+  const endExclusive = new Date(Date.UTC(m === 12 ? y + 1 : y, m === 12 ? 0 : m, 1, 0, 0, 0) - 8 * 60 * 60 * 1000);
   return { start, endExclusive };
 }
 
@@ -255,10 +264,11 @@ export function monthRangeToUtcDates(monthStr: string): { start: Date; endExclus
  * 用于平台 API 拉取（API 多用日期字符串入参）。
  *
  * 当月直接用今天作为 end，避免拉到未来日期。
- * C-080 起 "今天" 按 UTC 计算，与平台后台日期归档一致。
+ * C-084 起 "今天" 按 CST 计算（推翻 C-080），与平台后台日期归档一致。
  */
 export function monthRangeToApiDateStrings(monthStr: string, now: Date): { startStr: string; endStr: string } {
-  const todayStr = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, "0")}-${String(now.getUTCDate()).padStart(2, "0")}`;
+  const cstNow = new Date(now.getTime() + 8 * 60 * 60 * 1000);
+  const todayStr = `${cstNow.getUTCFullYear()}-${String(cstNow.getUTCMonth() + 1).padStart(2, "0")}-${String(cstNow.getUTCDate()).padStart(2, "0")}`;
 
   const [y, m] = monthStr.split("-").map((x) => parseInt(x, 10));
   const startStr = `${y}-${String(m).padStart(2, "0")}-01`;

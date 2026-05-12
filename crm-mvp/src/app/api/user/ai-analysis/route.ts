@@ -357,10 +357,10 @@ async function executeTool(name: string, args: ToolArgs, userId: bigint): Promis
     });
     if (!stats.length) return JSON.stringify({ error: "无趋势数据" });
 
-    // C-080：佣金按 affiliate_transactions.transaction_time（UTC）每日汇总
+    // C-084：佣金按 affiliate_transactions.transaction_time（CST）每日汇总（推翻 C-080）
     const txnRows = await prisma.$queryRawUnsafe<{ dt: string; total_c: number; approved_c: number }[]>(`
       SELECT
-        DATE(transaction_time) AS dt,
+        DATE(CONVERT_TZ(transaction_time, '+00:00', '+08:00')) AS dt,
         SUM(CAST(commission_amount AS DECIMAL(12,2))) AS total_c,
         SUM(CASE WHEN status IN ('approved','confirmed','paid') THEN CAST(commission_amount AS DECIMAL(12,2)) ELSE 0 END) AS approved_c
       FROM affiliate_transactions

@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { apiSuccess, apiError, PLATFORMS } from "@/lib/constants";
 import { withUser } from "@/lib/api-handler";
 import prisma from "@/lib/prisma";
+import { parseTxnDateStart, parseTxnDateEndExclusive } from "@/lib/date-utils";
 
 // C-019 R1.2：全员拒付商家聚合（见设计方案 §19.6.3 + §19.6.7 + §19.6.8）
 // 非按 user_id 过滤 —— 所有登录用户平权见同一份全员数据（07 决议 ⑥）
@@ -44,7 +45,11 @@ export const GET = withUser(async (req: NextRequest) => {
     searchParams.push(like, like);
   }
 
-  const params: unknown[] = [dateStartRaw, dateEndRaw];
+  // C-084：按 CST 切日（与平台后台口径一致）
+  const startDateUtc = parseTxnDateStart(dateStartRaw);
+  const endDateExclusiveUtc = parseTxnDateEndExclusive(dateEndRaw);
+
+  const params: unknown[] = [startDateUtc, endDateExclusiveUtc];
   if (platformRaw) params.push(platformRaw);
   params.push(...searchParams);
   params.push(threshold);
@@ -69,7 +74,7 @@ export const GET = withUser(async (req: NextRequest) => {
     FROM affiliate_transactions
     WHERE is_deleted = 0
       AND transaction_time >= ?
-      AND transaction_time < DATE_ADD(?, INTERVAL 1 DAY)
+      AND transaction_time < ?
       ${platformClause}
       ${searchClause}
     GROUP BY platform, merchant_id

@@ -4,7 +4,7 @@ import { apiSuccess, apiError, normalizePlatformCode } from "@/lib/constants";
 import prisma from "@/lib/prisma";
 import { syncFromSheet } from "@/lib/sheet-sync";
 import { cacheDelete } from "@/lib/cache";
-import { todayCST, yesterdayCST, nowCST, nowUTC, parseTxnDateStart, parseTxnDateEndExclusive } from "@/lib/date-utils";
+import { todayCST, yesterdayCST, nowCST, parseTxnDateStart, parseTxnDateEndExclusive } from "@/lib/date-utils";
 import { getExchangeRate, preloadRates } from "@/lib/exchange-rate";
 import { syncMerchantStatusForUser, parseCampaignNameFull } from "@/lib/campaign-merchant-link";
 import { getRedirectedMerchantKeys } from "@/lib/merchant-ownership-rules";
@@ -674,8 +674,8 @@ async function syncTransactionsInline(
       .sort((a, b) => Number(b.id) - Number(a.id));
     if (validConns.length === 0) return { synced: 0, message: "无可用平台连接" };
 
-    // C-080：联盟交易按 UTC 切日（与平台后台口径一致）
-    const utcNow = nowUTC();
+    // C-084：联盟交易按 CST 切日（与平台后台口径一致，推翻 C-080）
+    const cstNow = nowCST();
 
     // 检测首次交易同步：是否有该用户的交易数据
     const existingTxnCount = await prisma.affiliate_transactions.count({
@@ -687,9 +687,9 @@ async function syncTransactionsInline(
       || (options.forceFullSync
         ? TRANSACTION_FULL_SYNC_START
         : isFirstTxnSync
-          ? utcNow.subtract(365, "day").format("YYYY-MM-DD")
-          : utcNow.subtract(120, "day").format("YYYY-MM-DD"));
-    const endStr = options.endDate || utcNow.format("YYYY-MM-DD");
+          ? cstNow.subtract(365, "day").format("YYYY-MM-DD")
+          : cstNow.subtract(120, "day").format("YYYY-MM-DD"));
+    const endStr = options.endDate || cstNow.format("YYYY-MM-DD");
     const startDate = parseTxnDateStart(startStr);
     const endExclusive = parseTxnDateEndExclusive(endStr);
 

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc";
+import timezone from "dayjs/plugin/timezone";
 import prisma from "@/lib/prisma";
 import { normalizePlatformCode } from "@/lib/constants";
 import { aggregateRawTransactions } from "@/lib/affiliate-txn-aggregate";
@@ -9,6 +10,9 @@ import { recomputeMonthlySettlementForUser } from "@/lib/monthly-settlement-trac
 import type { PlatformTransaction } from "@/lib/platform-api";
 
 dayjs.extend(utc);
+dayjs.extend(timezone);
+
+const TZ = "Asia/Shanghai";
 
 /**
  * POST /api/cron/c082-fix-user
@@ -55,7 +59,8 @@ export async function POST(req: NextRequest) {
 
   const startedAt = Date.now();
   const startStr = "2025-01-01";
-  const endStr = dayjs.utc().format("YYYY-MM-DD");
+  // C-084：CST 切日（推翻 C-080），与平台后台口径一致
+  const endStr = dayjs().tz(TZ).format("YYYY-MM-DD");
 
   log(`begin user_id=${userId}, range=${startStr}..${endStr}`);
 
@@ -236,8 +241,9 @@ export async function POST(req: NextRequest) {
   let recomputeRangeStart: string | null = null;
   let recomputeRangeEnd: string | null = null;
   if (earliest?.transaction_time) {
-    const rangeStart = dayjs.utc(earliest.transaction_time).startOf("month").toDate();
-    const rangeEnd = dayjs.utc().startOf("day").add(1, "day").toDate();
+    // C-084：CST 切日，与平台后台口径一致
+    const rangeStart = dayjs(earliest.transaction_time).tz(TZ).startOf("month").toDate();
+    const rangeEnd = dayjs().tz(TZ).startOf("day").add(1, "day").toDate();
     recomputeRangeStart = rangeStart.toISOString();
     recomputeRangeEnd = rangeEnd.toISOString();
     commissionRowsUpdated = await applyAffiliateCommissionToDailyStats(userId, rangeStart, rangeEnd);
