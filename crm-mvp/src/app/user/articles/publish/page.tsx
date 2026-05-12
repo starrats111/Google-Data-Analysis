@@ -1001,28 +1001,28 @@ export default function ArticlePublishPage() {
           </div>
 
           <Form layout="vertical" style={{ maxWidth: 600 }}>
-            {boundSiteName ? (
-              <Form.Item label="发布站点">
-                <div style={{ padding: "8px 12px", background: "#f6ffed", border: "1px solid #b7eb8f", borderRadius: 6 }}>
-                  <CheckCircleOutlined style={{ color: "#52c41a", marginRight: 8 }} />
-                  <Text strong>{boundSiteName}</Text>
-                  <Text type="secondary" style={{ marginLeft: 8, fontSize: 12 }}>（平台绑定站点）</Text>
+            <Form.Item label="发布站点" required>
+              {boundSiteName && (
+                <div style={{
+                  padding: "6px 10px", background: "#f6ffed", border: "1px solid #b7eb8f",
+                  borderRadius: 6, marginBottom: 8, fontSize: 12,
+                }}>
+                  <CheckCircleOutlined style={{ color: "#52c41a", marginRight: 6 }} />
+                  平台绑定站点：<Text strong>{boundSiteName}</Text>
+                  <Text type="secondary" style={{ marginLeft: 8 }}>（已默认选中，可在下方修改）</Text>
                 </div>
-              </Form.Item>
-            ) : (
-              <Form.Item label="发布站点" required>
-                <PublishSiteSelect
-                  placeholder="选择发布站点（建议在个人设置中为平台绑定站点）"
-                  value={selectedSite || undefined}
-                  onChange={(v) => setSelectedSite(v as string)}
-                  sites={sites.map((s) => ({
-                    ...s,
-                    id: String(s.id),
-                    is_deleted: s.is_deleted ?? 0,
-                  }))}
-                />
-              </Form.Item>
-            )}
+              )}
+              <PublishSiteSelect
+                placeholder={boundSiteName ? "已选择绑定站点，可手动修改" : "选择发布站点（建议在个人设置中为平台绑定站点）"}
+                value={selectedSite || undefined}
+                onChange={(v) => setSelectedSite((v as string) || "")}
+                sites={sites.map((s) => ({
+                  ...s,
+                  id: String(s.id),
+                  is_deleted: s.is_deleted ?? 0,
+                }))}
+              />
+            </Form.Item>
             <Form.Item label="发布时间">
               <DatePicker
                 showTime
