@@ -653,10 +653,18 @@ async function applyOcrDomainEnrichment(
     }
   }
 
-  // 4) 把未入库的 URL 入队（不等结果，让 cron worker 后台处理）
+  // 4) 把未入库的 URL 入队
   if (toEnqueue.length > 0) {
     await enqueueOcrTasks(toEnqueue).catch((err) => {
       console.warn("[C-088] enqueueOcrTasks 失败（不影响主流程）:", err);
     });
   }
+
+  // 5) Fire-and-forget 立即触发一次 worker：让本批次任务 5-15s 内被消化，
+  //    前端轮询第一次就能拿到结果，避免等 cron 5 分钟周期。
+  //    不 await（响应继续返回），错误兜底打印。
+  const { runOcrWorker } = await import("./ocr-domain");
+  void runOcrWorker()
+    .then((r) => console.log("[C-088] inline worker triggered:", JSON.stringify(r)))
+    .catch((err) => console.warn("[C-088] inline worker failed:", err));
 }

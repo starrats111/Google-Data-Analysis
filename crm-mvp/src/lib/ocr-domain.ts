@@ -359,6 +359,24 @@ export async function runOcrWorker(): Promise<OcrWorkerResult> {
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       const isImgGone = /HTTP 4(?:0[34]|10)/.test(msg);
+      // C-088 修复 v2：识别 provider 限流类错误为「软失败」——
+      // 不消耗 tries，立刻把行放回 pending 等下一轮重试。
+      // 大肘子 gpt-4o 报 "Vision HTTP 400: rate_limit_exceed" / "429" / "too many requests"
+      const isRateLimit = /rate[_ ]?limit|HTTP 429|too many requests|quota[_ ]?exceed/i.test(msg);
+
+      if (isRateLimit) {
+        await prisma.ad_image_ocr_cache.update({
+          where: { id: row.id },
+          data: {
+            status: "pending",
+            tries: row.tries,
+            last_error: msg.slice(0, 512),
+            lock_at: null,
+          },
+        });
+        return;
+      }
+
       const reachedMax = newTries >= maxTries;
       const finalStatus: OcrCacheStatus = isImgGone || reachedMax ? "permanent_failure" : "pending";
 
@@ -385,6 +403,8 @@ export async function runOcrWorker(): Promise<OcrWorkerResult> {
         console.warn(`[C-088 ocr-worker] processOne rejected:`, r.reason);
       }
     }
+    // C-088 修复 v2：批与批之间 sleep 800ms，避免大肘子 gpt-4o RPM 限流
+    if (tasks.length > 0) await new Promise((r) => setTimeout(r, 800));
   }
 
   return res;

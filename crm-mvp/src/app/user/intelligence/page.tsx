@@ -140,7 +140,8 @@ export default function IntelligencePage() {
     const tick = async () => {
       try {
         const urls = Array.from(pendingUrls);
-        if (urls.length === 0 || Date.now() - ocrStartRef.current > 60_000) {
+        // C-088 修复 v2：超时从 60s 调到 5 分钟（300s）—— 配合 cron 5 分钟周期 + inline worker 触发
+        if (urls.length === 0 || Date.now() - ocrStartRef.current > 300_000) {
           if (ocrTimerRef.current) {
             clearInterval(ocrTimerRef.current);
             ocrTimerRef.current = null;
