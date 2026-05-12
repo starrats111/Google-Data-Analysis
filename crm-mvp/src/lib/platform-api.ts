@@ -1008,7 +1008,15 @@ function parseTransactions(platform: string, data: Record<string, unknown>): Pla
     // 的不同 line items 跨组双计。语义层面 transaction_time 必须 = 下单
     // 时间（订单标识的天然时间锚），absolutely 不允许写入 last_update_time。
     // 若月度归月需要按 last_update_time 切分，应单独加字段，不可复用本字段。
+    //
+    // C-087：MUI/EV 等 v3 端点平台同时返回 `ori_order_time`（Unix 秒，无时区歧义）
+    // 和 `order_time`（"YYYY-MM-DD HH:MM:SS"，**实测是 CST 字符串**）。parseTimestamp
+    // 对无时区字符串强制按 UTC 解析（line ~857），会导致 CST 字符串被错解为 UTC，
+    // 产生 8h 偏移：4/30 16:00-24:00 CST 下单的订单会被错放到 5/1。
+    // 必须优先用 ori_order_time（Unix 秒）保证时区正确。
     const txnTime = parseTimestamp(
+      // C-087：Unix 秒字段优先（无时区歧义）
+      item.ori_order_time || item.oriOrderTime ||
       // C-029 AD 的字段名：transactionTime（camelCase）
       item.order_time || item.orderTime || item.transaction_time || item.transactionTime || item.report_time || item.created_at
     );
