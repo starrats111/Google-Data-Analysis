@@ -910,3 +910,37 @@ model merchant_monitor_rules {
 
   @@index([user_id], map: "idx_user")
 }
+
+// -----------------------------------------------------------
+// 36. C-089 ATC 广告情报 — 用户关注的广告主（watchlist）
+// -----------------------------------------------------------
+model user_atc_watchlist {
+  id              BigInt   @id @default(autoincrement()) @db.UnsignedBigInt
+  user_id         BigInt   @db.UnsignedBigInt
+  advertiser_id   String   @db.VarChar(64)
+  advertiser_name String?  @db.VarChar(255)
+  region          String   @default("US") @db.VarChar(8)
+  min_days        Int      @default(15)
+  is_deleted      Int      @default(0) @db.TinyInt
+  created_at      DateTime @default(now()) @db.DateTime(0)
+  updated_at      DateTime @default(now()) @updatedAt @db.DateTime(0)
+
+  @@unique([user_id, advertiser_id, region], map: "uk_user_adv_region")
+  @@index([user_id, is_deleted], map: "idx_user_deleted")
+}
+
+// -----------------------------------------------------------
+// 37. C-089 ATC 广告情报 — 防重复推送日志（每 creative 对每用户只推一次）
+// -----------------------------------------------------------
+model user_atc_alert_log {
+  id            BigInt   @id @default(autoincrement()) @db.UnsignedBigInt
+  user_id       BigInt   @db.UnsignedBigInt
+  watchlist_id  BigInt   @db.UnsignedBigInt
+  advertiser_id String   @db.VarChar(64)
+  creative_id   String   @db.VarChar(64)
+  days          Int
+  alerted_at    DateTime @default(now()) @db.DateTime(0)
+
+  @@unique([user_id, creative_id], map: "uk_user_creative")
+  @@index([watchlist_id], map: "idx_watchlist")
+}

@@ -7,7 +7,7 @@ import {
 } from "antd";
 import {
   SearchOutlined, EyeOutlined, LinkOutlined, SettingOutlined,
-  FireOutlined, LoadingOutlined,
+  FireOutlined, LoadingOutlined, StarOutlined, StarFilled,
 } from "@ant-design/icons";
 import { useRouter, useSearchParams } from "next/navigation";
 
@@ -82,6 +82,78 @@ export default function IntelligencePage() {
   const [persistOnly, setPersistOnly] = useState(true);
   const [minDays, setMinDays]         = useState(15);
   const [localHits, setLocalHits]     = useState<{ id: string; name: string; domains: string[] }[]>([]);
+  // C-089：已关注的 advertiser_id（按 region 区分），值是 watchlist 行 id 用于 DELETE
+  const [watchedMap, setWatchedMap]   = useState<Map<string, string>>(new Map());
+  const [watchToggling, setWatchToggling] = useState<Set<string>>(new Set());
+
+  // C-089：watchedMap 的 key 用 `${advertiserId}#${region}` 形式
+  const watchKey = (advId: string, rgn: string) => `${advId}#${rgn}`;
+
+  // C-089：拉取当前用户全部 watchlist，填到 watchedMap
+  const loadWatchlist = async () => {
+    try {
+      const res = await fetch("/api/user/atc/watchlist").then((r) => r.json());
+      if (res.code === 0 && Array.isArray(res.data)) {
+        const m = new Map<string, string>();
+        for (const w of res.data as Array<{ id: string; advertiser_id: string; region: string }>) {
+          m.set(watchKey(w.advertiser_id, w.region), w.id);
+        }
+        setWatchedMap(m);
+      }
+    } catch { /* 静默：不影响搜索主流程 */ }
+  };
+
+  // C-089：切换关注状态
+  const toggleWatch = async (advId: string, advName: string, rgn: string) => {
+    const key = watchKey(advId, rgn);
+    if (watchToggling.has(key)) return;
+    setWatchToggling((prev) => new Set(prev).add(key));
+    try {
+      const existingId = watchedMap.get(key);
+      if (existingId) {
+        const res = await fetch(`/api/user/atc/watchlist/${existingId}`, { method: "DELETE" }).then(r => r.json());
+        if (res.code === 0) {
+          setWatchedMap((prev) => {
+            const next = new Map(prev);
+            next.delete(key);
+            return next;
+          });
+          message.success(`已取消关注 ${advName || advId}`);
+        } else {
+          message.error(res.message || "取消关注失败");
+        }
+      } else {
+        const res = await fetch("/api/user/atc/watchlist", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            advertiser_id: advId,
+            advertiser_name: advName || undefined,
+            region: rgn,
+            min_days: minDays,
+          }),
+        }).then(r => r.json());
+        if (res.code === 0) {
+          setWatchedMap((prev) => {
+            const next = new Map(prev);
+            next.set(key, String(res.data.id));
+            return next;
+          });
+          message.success(`已关注 ${advName || advId}，每天 8:00 自动盯`);
+        } else {
+          message.error(res.message || "关注失败");
+        }
+      }
+    } catch {
+      message.error("网络错误，请稍后重试");
+    } finally {
+      setWatchToggling((prev) => {
+        const next = new Set(prev);
+        next.delete(key);
+        return next;
+      });
+    }
+  };
 
   const doSearch = async (qs: string, nameForLocal?: string) => {
     setLoading(true); setNoKey(false); setLocalHits([]);
@@ -117,6 +189,8 @@ export default function IntelligencePage() {
       setRegion(rgn);
       doSearch(new URLSearchParams({ advertiser_id: arId, region: rgn }).toString());
     }
+    // C-089：初次进页面就拉一次 watchlist，决定关注按钮状态
+    loadWatchlist();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -331,6 +405,24 @@ export default function IntelligencePage() {
             ATC ↗
           </a>
         )}
+        {/* C-089：关注按钮 — 仅 AR 开头广告主可关注（watchlist cron 需 AR ID） */}
+        {adv.id.startsWith("AR") && (() => {
+          const key = watchKey(adv.id, region);
+          const isWatched = watchedMap.has(key);
+          const isToggling = watchToggling.has(key);
+          return (
+            <Tooltip title={isWatched
+              ? "已加入 watchlist：每天 8:00 自动盯，新发现『持续 N 天+』的广告会站内通知"
+              : `加入 watchlist：每天 8:00 自动跑一次，新增持续 ${minDays} 天+ 广告时站内通知（顶部 bell）`}>
+              <Button size="small" type={isWatched ? "primary" : "default"}
+                loading={isToggling}
+                icon={isWatched ? <StarFilled /> : <StarOutlined />}
+                onClick={(e) => { e.stopPropagation(); toggleWatch(adv.id, adv.name, region); }}>
+                {isWatched ? "已关注" : "关注"}
+              </Button>
+            </Tooltip>
+          );
+        })()}
       </Space>
     ),
     children: (
