@@ -404,7 +404,18 @@ function buildDateRangeParams(days: number): { start_date: string; end_date: str
   return { start_date: fmtDate(startD), end_date: fmtDate(endD) };
 }
 
-/** 将 SerpApiAd 数组归并进 advertiserAdsMap（修复 BUG-3：无 AR ID 去重 bug） */
+/**
+ * 将 SerpApiAd 数组归并进 advertiserAdsMap。
+ *
+ * C-089 v1（07 伙伴诉求："广告 ID 一致才能统计累计天数"）：
+ * 同一 creative_id 在数据中多次出现时（不同 SerpApi 接口 / 不同 region /
+ * 接口分页返回重复 / advertiser_id 查询 + domain 反查 富化路径都命中同一 creative），
+ * 合并为一条：
+ *   - first_shown = min(全部出现的 first_shown)
+ *   - last_shown  = max(全部出现的 last_shown)
+ *   - domain / thumbnail / title / format = 首次非空值（即不被后续 null 覆盖）
+ * 没有 creative_id 的 ad（极少数 SerpApi 返回缺该字段）保留原行为：逐条独立累加。
+ */
 function mergeAdsIntoMap(
   ads: SerpApiAd[],
   advertiserAdsMap: Map<string, { name: string; ads: AtcAd[] }>,
@@ -413,25 +424,45 @@ function mergeAdsIntoMap(
   for (const ad of ads) {
     const rawId   = (ad.advertiser_id ?? "").trim();
     const rawName = (ad.advertiser    ?? "未知广告主").trim();
-    // BUG-3 修复：用 advId（AR ID 或名称衍生 key）作唯一 key，不再用 seenNames 提前 continue
     const advId = rawId || `_name_${normalize(rawName)}`;
 
     if (!advertiserAdsMap.has(advId)) {
       advertiserAdsMap.set(advId, { name: rawName, ads: [] });
     } else if (overwrite) {
-      // overwrite 模式：用 advertiser_id 精确查结果替换文字搜索的不完整结果
       advertiserAdsMap.get(advId)!.ads = [];
     }
 
-    advertiserAdsMap.get(advId)!.ads.push({
-      format: ad.format ?? "text",
-      title: ad.title,
-      domain: extractAdDomain(ad),
-      first_shown: ad.first_shown,
-      last_shown:  ad.last_shown,
-      thumbnail: ad.image,
-      creative_id: ad.ad_creative_id,
-    });
+    const entry = advertiserAdsMap.get(advId)!;
+    const creativeId = ad.ad_creative_id;
+
+    // 同一 creative_id 已存在 → 合并；不存在或无 creative_id → 新增
+    const existing = creativeId
+      ? entry.ads.find((a) => a.creative_id === creativeId)
+      : undefined;
+
+    if (existing) {
+      if (ad.first_shown && (!existing.first_shown || ad.first_shown < existing.first_shown)) {
+        existing.first_shown = ad.first_shown;
+      }
+      if (ad.last_shown && (!existing.last_shown || ad.last_shown > existing.last_shown)) {
+        existing.last_shown = ad.last_shown;
+      }
+      // 缺失字段补全（保留首次非空，避免后续 null 覆盖）
+      if (!existing.domain)    existing.domain    = extractAdDomain(ad);
+      if (!existing.thumbnail) existing.thumbnail = ad.image;
+      if (!existing.title)     existing.title     = ad.title;
+      if (!existing.format && ad.format) existing.format = ad.format;
+    } else {
+      entry.ads.push({
+        format: ad.format ?? "text",
+        title: ad.title,
+        domain: extractAdDomain(ad),
+        first_shown: ad.first_shown,
+        last_shown:  ad.last_shown,
+        thumbnail: ad.image,
+        creative_id: ad.ad_creative_id,
+      });
+    }
   }
 }
 
@@ -490,11 +521,19 @@ async function enrichDomainsFromSnapshots(
 
         const existing = creativeMap.get(ad.ad_creative_id);
         if (existing) {
-          // 已有该 creative → 补全缺失的 domain
+          // 已有该 creative → 补全缺失的 domain + 同步合并 first/last 边界
+          // C-089 v1：保证 creative_id 一致的记录累计天数 = 全部出现的最早→最近
           const { mapKey, adIdx } = existing;
           const entry = advertiserAdsMap.get(mapKey);
-          if (entry && !entry.ads[adIdx].domain) {
-            entry.ads[adIdx].domain = ad.target_domain;
+          if (entry) {
+            const cur = entry.ads[adIdx];
+            if (!cur.domain) cur.domain = ad.target_domain;
+            if (ad.first_shown && (!cur.first_shown || ad.first_shown < cur.first_shown)) {
+              cur.first_shown = ad.first_shown;
+            }
+            if (ad.last_shown && (!cur.last_shown || ad.last_shown > cur.last_shown)) {
+              cur.last_shown = ad.last_shown;
+            }
           }
         } else {
           // advertiser_id 查询未返回此 creative → 追加（增加总数）
