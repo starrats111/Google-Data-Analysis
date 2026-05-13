@@ -81,6 +81,8 @@ export default function IntelligencePage() {
   const [noKey, setNoKey]             = useState(false);
   const [persistOnly, setPersistOnly] = useState(true);
   const [minDays, setMinDays]         = useState(15);
+  // C-092：默认隐藏单一域名广告主（品牌自投/营销号），仅显示投多个域名的「同行联盟客」
+  const [peersOnly, setPeersOnly]     = useState(true);
   const [localHits, setLocalHits]     = useState<{ id: string; name: string; domains: string[] }[]>([]);
   // C-089：已关注的 advertiser_id（按 region 区分），值是 watchlist 行 id 用于 DELETE
   const [watchedMap, setWatchedMap]   = useState<Map<string, string>>(new Map());
@@ -288,16 +290,47 @@ export default function IntelligencePage() {
     doSearch(new URLSearchParams({ advertiser_id: arId, region }).toString());
   };
 
-  // 应用持续投放过滤
-  const filteredAdvertisers = useMemo(() => {
+  // C-092：先按持续天数过滤每个广告主下的广告，再判定每个广告主类型
+  // - 单一域名广告主（品牌自投/营销号）：归类为"品牌自投"，peersOnly=true 时隐藏
+  // - 多域名广告主（联盟客/同行）：归类为"同行联盟客"，保留
+  // - 仍有 OCR pending 的广告主：暂时保留（等 OCR 完成后再判定，避免误杀）
+  const advertisersWithMeta = useMemo(() => {
     if (!result) return [];
     return result.advertisers.map((adv) => {
       const filteredAds = persistOnly
         ? adv.ads.filter((ad) => isPersistent(ad, minDays))
         : adv.ads;
-      return { ...adv, ads: filteredAds, filteredCount: filteredAds.length };
+      // 仅统计已识别成功的非空 domain（pending 的不算）
+      const knownDomains = new Set<string>();
+      let hasPending = false;
+      for (const ad of filteredAds) {
+        if (ad._ocrPending) hasPending = true;
+        if (ad.domain) knownDomains.add(ad.domain.toLowerCase());
+      }
+      const uniqueDomainCount = knownDomains.size;
+      // 判定"品牌自投"：已识别域名 = 1 个 + 没有 pending（pending 仍在识别中，可能再多出域名）
+      const isBrandSelf = uniqueDomainCount === 1 && !hasPending && filteredAds.length > 0;
+      return {
+        ...adv,
+        ads: filteredAds,
+        filteredCount: filteredAds.length,
+        uniqueDomainCount,
+        isBrandSelf,
+        hasPending,
+      };
     }).filter((adv) => !persistOnly || adv.filteredCount > 0);
   }, [result, persistOnly, minDays]);
+
+  // 按 peersOnly 隐藏品牌自投
+  const filteredAdvertisers = useMemo(
+    () => peersOnly ? advertisersWithMeta.filter((a) => !a.isBrandSelf) : advertisersWithMeta,
+    [advertisersWithMeta, peersOnly]
+  );
+
+  const hiddenBrandSelfCount = useMemo(
+    () => advertisersWithMeta.filter((a) => a.isBrandSelf).length,
+    [advertisersWithMeta]
+  );
 
   const totalFiltered = useMemo(
     () => filteredAdvertisers.reduce((s, a) => s + a.filteredCount, 0),
@@ -498,6 +531,23 @@ export default function IntelligencePage() {
             （广告总持续时长 ≥ {minDays} 天）
           </Text>
         </div>
+
+        {/* C-092：同行广告主过滤器（隐藏单一域名的品牌自投账号） */}
+        <div style={{ marginTop: 8, display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+          <Switch
+            checked={peersOnly}
+            onChange={setPeersOnly}
+            checkedChildren="同行"
+            unCheckedChildren="全部"
+            size="small"
+          />
+          <Text style={{ fontSize: 13 }}>只看同行广告主</Text>
+          <Tooltip title="同行广告主：投放 2 个及以上不同域名（联盟客 / CPS 同行），有学习价值。品牌自投：只投自家一个域名（如 evryjewels.com 只投 evryjewels.com），通常是品牌方官方账号，不参考。OCR 仍在识别中的广告主会暂时保留，避免误判。">
+            <Text type="secondary" style={{ fontSize: 12, cursor: "help", textDecoration: "underline dotted" }}>
+              （独立域名 ≥ 2 个）
+            </Text>
+          </Tooltip>
+        </div>
       </Card>
 
       {result && (
@@ -512,6 +562,12 @@ export default function IntelligencePage() {
                 </>
               ) : (
                 <>找到 <Text strong>{result.advertisers.length}</Text> 个广告主 · 共 <Text strong>{result.total}</Text> 条广告</>
+              )}
+              {/* C-092：被过滤掉的品牌自投广告主提示 */}
+              {peersOnly && hiddenBrandSelfCount > 0 && (
+                <Text type="secondary" style={{ marginLeft: 8 }}>
+                  · 已隐藏 <Text strong style={{ color: "#999" }}>{hiddenBrandSelfCount}</Text> 个品牌自投广告主（关闭"只看同行"可查看）
+                </Text>
               )}
             </Text>
           </div>
