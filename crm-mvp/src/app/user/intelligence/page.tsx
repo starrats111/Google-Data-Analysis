@@ -228,7 +228,9 @@ export default function IntelligencePage() {
     [filteredAdvertisers]
   );
 
-  const adColumns = [
+  // 为每个广告主 Table 单独构造 columns，让"投放域名"列能拿到当前 advId + region
+  // 用于跳转到 Google ATC 的「该广告主 × 该域名」筛选页（而非商家官网）
+  const makeAdColumns = (advId: string, currentRegion: string) => [
     {
       title: "持续天数",
       key: "days",
@@ -262,10 +264,20 @@ export default function IntelligencePage() {
       width: 180,
       render: (v: string | undefined, rec: AtcAd) => {
         if (v) {
+          // 跳转到 ATC 中"该广告主 × 该域名"的广告列表页（而非直接跳商家官网）
+          // 仅当 advId 是 AR 开头时构造 ATC URL；否则降级为商家官网
+          const atcUrl = advId.startsWith("AR")
+            ? `https://adstransparency.google.com/advertiser/${advId}?region=${currentRegion}&domain=${encodeURIComponent(v)}`
+            : `https://${v}`;
+          const tooltipTitle = advId.startsWith("AR")
+            ? `在 Google 广告透明度中心查看该广告主对 ${v} 的所有广告`
+            : `打开 ${v}`;
           return (
-            <a href={`https://${v}`} target="_blank" rel="noreferrer">
-              <LinkOutlined /> {v}
-            </a>
+            <Tooltip title={tooltipTitle}>
+              <a href={atcUrl} target="_blank" rel="noreferrer">
+                <LinkOutlined /> {v}
+              </a>
+            </Tooltip>
           );
         }
         if (rec._ocrPending) {
@@ -314,7 +326,7 @@ export default function IntelligencePage() {
     children: (
       <Table
         dataSource={adv.ads}
-        columns={adColumns}
+        columns={makeAdColumns(adv.id, region)}
         rowKey={(_, i) => String(i)}
         size="small"
         pagination={adv.ads.length > 20 ? { pageSize: 20, size: "small" } : false}
