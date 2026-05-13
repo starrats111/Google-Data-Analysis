@@ -44,6 +44,33 @@ const CATEGORY_CN: Record<string, string> = {
   "Cosmetics": "化妆品", "Fragrance": "香水", "Hair Care": "护发",
 };
 const catCn = (v: string | null) => { if (!v) return "-"; return CATEGORY_CN[v] || v; };
+// C-094.4：领取广告 / 批量查 ATC 共用的国家列表（按平台覆盖度排序，覆盖 SerpApi 支持的主流国家）
+const ALL_COUNTRIES: Array<{ code: string; name: string; flag: string }> = [
+  { code: "US", name: "美国", flag: "🇺🇸" }, { code: "GB", name: "英国", flag: "🇬🇧" },
+  { code: "AU", name: "澳大利亚", flag: "🇦🇺" }, { code: "CA", name: "加拿大", flag: "🇨🇦" },
+  { code: "DE", name: "德国", flag: "🇩🇪" }, { code: "FR", name: "法国", flag: "🇫🇷" },
+  { code: "JP", name: "日本", flag: "🇯🇵" }, { code: "IT", name: "意大利", flag: "🇮🇹" },
+  { code: "ES", name: "西班牙", flag: "🇪🇸" }, { code: "NL", name: "荷兰", flag: "🇳🇱" },
+  { code: "BR", name: "巴西", flag: "🇧🇷" }, { code: "MX", name: "墨西哥", flag: "🇲🇽" },
+  { code: "IN", name: "印度", flag: "🇮🇳" }, { code: "KR", name: "韩国", flag: "🇰🇷" },
+  { code: "SG", name: "新加坡", flag: "🇸🇬" }, { code: "NZ", name: "新西兰", flag: "🇳🇿" },
+  { code: "SE", name: "瑞典", flag: "🇸🇪" }, { code: "NO", name: "挪威", flag: "🇳🇴" },
+  { code: "DK", name: "丹麦", flag: "🇩🇰" }, { code: "FI", name: "芬兰", flag: "🇫🇮" },
+  { code: "PL", name: "波兰", flag: "🇵🇱" }, { code: "AT", name: "奥地利", flag: "🇦🇹" },
+  { code: "CH", name: "瑞士", flag: "🇨🇭" }, { code: "BE", name: "比利时", flag: "🇧🇪" },
+  { code: "IE", name: "爱尔兰", flag: "🇮🇪" }, { code: "PT", name: "葡萄牙", flag: "🇵🇹" },
+  { code: "HK", name: "香港", flag: "🇭🇰" }, { code: "TW", name: "台湾", flag: "🇹🇼" },
+  { code: "MY", name: "马来西亚", flag: "🇲🇾" }, { code: "TH", name: "泰国", flag: "🇹🇭" },
+  { code: "ID", name: "印度尼西亚", flag: "🇮🇩" }, { code: "PH", name: "菲律宾", flag: "🇵🇭" },
+  { code: "VN", name: "越南", flag: "🇻🇳" }, { code: "TR", name: "土耳其", flag: "🇹🇷" },
+  { code: "AE", name: "阿联酋", flag: "🇦🇪" }, { code: "SA", name: "沙特阿拉伯", flag: "🇸🇦" },
+  { code: "IL", name: "以色列", flag: "🇮🇱" }, { code: "ZA", name: "南非", flag: "🇿🇦" },
+  { code: "AR", name: "阿根廷", flag: "🇦🇷" }, { code: "CL", name: "智利", flag: "🇨🇱" },
+  { code: "CO", name: "哥伦比亚", flag: "🇨🇴" }, { code: "PE", name: "秘鲁", flag: "🇵🇪" },
+  { code: "RU", name: "俄罗斯", flag: "🇷🇺" }, { code: "UA", name: "乌克兰", flag: "🇺🇦" },
+  { code: "GR", name: "希腊", flag: "🇬🇷" }, { code: "CZ", name: "捷克", flag: "🇨🇿" },
+  { code: "RO", name: "罗马尼亚", flag: "🇷🇴" }, { code: "HU", name: "匈牙利", flag: "🇭🇺" },
+];
 const CommissionCell = ({ v }: { v: string | null }) => {
   if (!v) return <span style={{ color: "#bfbfbf" }}>-</span>;
   return <span>{v}</span>;
@@ -920,24 +947,39 @@ export default function MerchantsPage() {
                 value={batchRegion}
                 onChange={setBatchRegion}
                 size="small"
-                style={{ width: 130 }}
+                style={{ width: 220 }}
                 disabled={batchRunning}
-                options={[
-                  { value: "US", label: "🇺🇸 美国 (US)" },
-                  { value: "GB", label: "🇬🇧 英国 (GB)" },
-                  { value: "AU", label: "🇦🇺 澳大利亚" },
-                  { value: "CA", label: "🇨🇦 加拿大" },
-                  { value: "DE", label: "🇩🇪 德国" },
-                  { value: "FR", label: "🇫🇷 法国" },
-                  { value: "IT", label: "🇮🇹 意大利" },
-                  { value: "ES", label: "🇪🇸 西班牙" },
-                  { value: "NL", label: "🇳🇱 荷兰" },
-                  { value: "SE", label: "🇸🇪 瑞典" },
-                  { value: "NO", label: "🇳🇴 挪威" },
-                  { value: "DK", label: "🇩🇰 丹麦" },
-                  { value: "JP", label: "🇯🇵 日本" },
-                  { value: "SG", label: "🇸🇬 新加坡" },
-                ]}
+                showSearch
+                optionFilterProp="label"
+                placeholder="选择或搜索国家"
+                options={(() => {
+                  // C-094.4：聚合选中商家的 supported_regions 并集，排到列表最前面（带 ⭐）
+                  // 其余国家从 ALL_COUNTRIES 兜底，与领取广告 modal 用同一份国家库
+                  const supported = new Set<string>();
+                  for (const m of batchSelectedMap.values()) {
+                    const regions = (m as Merchant).supported_regions;
+                    if (Array.isArray(regions)) {
+                      for (const r of regions) {
+                        const code = typeof r === "string" ? r : ((r as { code?: string })?.code ?? "");
+                        if (code) supported.add(String(code).toUpperCase());
+                      }
+                    }
+                  }
+                  const star = ALL_COUNTRIES.filter((c) => supported.has(c.code)).map((c) => ({
+                    value: c.code, label: `⭐ ${c.flag} ${c.code} - ${c.name}`,
+                  }));
+                  const rest = ALL_COUNTRIES.filter((c) => !supported.has(c.code)).map((c) => ({
+                    value: c.code, label: `${c.flag} ${c.code} - ${c.name}`,
+                  }));
+                  // 商家 supported_regions 里如果出现 ALL_COUNTRIES 没收录的国家，也补在中间
+                  const extra: Array<{ value: string; label: string }> = [];
+                  for (const code of supported) {
+                    if (!ALL_COUNTRIES.find((c) => c.code === code)) {
+                      extra.push({ value: code, label: `⭐ ${code} - 支持地区` });
+                    }
+                  }
+                  return [...star, ...extra, ...rest];
+                })()}
               />
               <Tooltip title="跳过已查：选中商家中已经有 ATC 数据的会被跳过，节省 SerpApi 配额；强制刷新：忽略缓存全部重查">
                 <Switch
@@ -1115,25 +1157,24 @@ export default function MerchantsPage() {
             optionFilterProp="label"
             options={(() => {
               const regions = claimM?.supported_regions;
-              const codes = regions && Array.isArray(regions) ? regions.map((r) => typeof r === "string" ? r : (r as any).code || String(r)) : [];
-              const allCountries = [
-                { value: "US", label: "US - 美国" }, { value: "GB", label: "GB - 英国" }, { value: "AU", label: "AU - 澳洲" },
-                { value: "CA", label: "CA - 加拿大" }, { value: "DE", label: "DE - 德国" }, { value: "FR", label: "FR - 法国" },
-                { value: "JP", label: "JP - 日本" }, { value: "IT", label: "IT - 意大利" }, { value: "ES", label: "ES - 西班牙" },
-                { value: "NL", label: "NL - 荷兰" }, { value: "BR", label: "BR - 巴西" }, { value: "MX", label: "MX - 墨西哥" },
-                { value: "IN", label: "IN - 印度" }, { value: "KR", label: "KR - 韩国" }, { value: "SG", label: "SG - 新加坡" },
-                { value: "NZ", label: "NZ - 新西兰" }, { value: "SE", label: "SE - 瑞典" }, { value: "NO", label: "NO - 挪威" },
-                { value: "DK", label: "DK - 丹麦" }, { value: "FI", label: "FI - 芬兰" }, { value: "PL", label: "PL - 波兰" },
-                { value: "AT", label: "AT - 奥地利" }, { value: "CH", label: "CH - 瑞士" }, { value: "BE", label: "BE - 比利时" },
-                { value: "IE", label: "IE - 爱尔兰" }, { value: "PT", label: "PT - 葡萄牙" },
-              ];
-              // 把支持地区放在最前面并标记
-              const supported = codes.map((c) => {
-                const found = allCountries.find((a) => a.value === c);
-                return { value: c, label: found ? `⭐ ${found.label}` : `⭐ ${c} - 支持地区` };
-              });
-              const rest = allCountries.filter((a) => !codes.includes(a.value));
-              return [...supported, ...rest];
+              const codes = regions && Array.isArray(regions)
+                ? regions.map((r) => (typeof r === "string" ? r : (r as { code?: string }).code || String(r))).map((c) => String(c).toUpperCase())
+                : [];
+              const codeSet = new Set(codes);
+              const star = ALL_COUNTRIES.filter((c) => codeSet.has(c.code)).map((c) => ({
+                value: c.code, label: `⭐ ${c.flag} ${c.code} - ${c.name}`,
+              }));
+              const rest = ALL_COUNTRIES.filter((c) => !codeSet.has(c.code)).map((c) => ({
+                value: c.code, label: `${c.flag} ${c.code} - ${c.name}`,
+              }));
+              // supported_regions 里有 ALL_COUNTRIES 没收录的国家时也保留
+              const extra: Array<{ value: string; label: string }> = [];
+              for (const code of codes) {
+                if (!ALL_COUNTRIES.find((c) => c.code === code)) {
+                  extra.push({ value: code, label: `⭐ ${code} - 支持地区` });
+                }
+              }
+              return [...star, ...extra, ...rest];
             })()}
           />
         </Form.Item>
