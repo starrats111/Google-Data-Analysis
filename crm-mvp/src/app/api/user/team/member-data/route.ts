@@ -175,11 +175,29 @@ export const GET = withLeader(async (req: NextRequest, { user }) => {
     totalOrdersFromTxn += Number(r.order_count || 0);
   }
 
-  const merchantWritten = new Set<string>();
+  // C-094：与用户自己视角口径对齐 —— 先按 (ENABLED→PAUSED→REMOVED + extractSeq) 排序，
+  // 再按排序后顺序分配 commission（商家维度互斥），最终 commission 总是落在
+  // "ENABLED 优先 + 序号小" 的那一条 campaign 上。
+  // 否则若按 prisma id desc 原始顺序分配，可能把 commission 误落在已暂停的旧 campaign 上，
+  // 导致 ENABLED 的当前活跃 campaign 显示 commission=0 / ROI=-100%，与用户自己看到的不一致。
+  const STATUS_ORDER: Record<string, number> = { ENABLED: 0, PAUSED: 1, REMOVED: 2 };
+  const extractSeq = (name: string | null): number => {
+    if (!name) return 999999;
+    const first = name.split("-")[0] || "";
+    const digits = first.replace(/^[a-zA-Z]+/, "");
+    return /^\d+$/.test(digits) ? parseInt(digits, 10) : 999999;
+  };
+  const orderedCampaigns = [...campaigns].sort((a, b) => {
+    const pa = STATUS_ORDER[a.google_status || ""] ?? 2;
+    const pb = STATUS_ORDER[b.google_status || ""] ?? 2;
+    if (pa !== pb) return pa - pb;
+    return extractSeq(a.campaign_name) - extractSeq(b.campaign_name);
+  });
 
+  const merchantWritten = new Set<string>();
   let totalCost = 0, totalClicks = 0, totalImpressions = 0;
 
-  const campaignDetails = campaigns.map((c) => {
+  const campaignDetails = orderedCampaigns.map((c) => {
     const s = statsMap.get(String(c.id));
     const cost = s?.cost || 0;
     const clicks = s?.clicks || 0;
@@ -225,21 +243,6 @@ export const GET = withLeader(async (req: NextRequest, { user }) => {
   for (const adj of adjustments) {
     totalCost += Number(adj.amount || 0);
   }
-
-  // 与数据中心一致：按状态（ENABLED→PAUSED）排序，同状态内按广告系列名中的序号升序
-  const STATUS_ORDER: Record<string, number> = { ENABLED: 0, PAUSED: 1, REMOVED: 2 };
-  const extractSeq = (name: string): number => {
-    if (!name) return 999999;
-    const first = name.split("-")[0] || "";
-    const digits = first.replace(/^[a-zA-Z]+/, "");
-    return /^\d+$/.test(digits) ? parseInt(digits, 10) : 999999;
-  };
-  campaignDetails.sort((a, b) => {
-    const pa = STATUS_ORDER[a.status || ""] ?? 2;
-    const pb = STATUS_ORDER[b.status || ""] ?? 2;
-    if (pa !== pb) return pa - pb;
-    return extractSeq(a.campaign_name) - extractSeq(b.campaign_name);
-  });
 
   const avgCpc = totalClicks > 0 ? totalCost / totalClicks : 0;
   const totalNet = totalCommissionFromTxn - totalRejectedFromTxn - totalCost;
