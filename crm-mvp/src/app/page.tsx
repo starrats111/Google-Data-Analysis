@@ -21,9 +21,9 @@ const i18n = {
   en: {
     heroTitle: "Ad Automation CRM",
     heroDesc:
-      "An internal affiliate marketing operations platform developed by Wenzhou Fengdu Advertising & Media Co., Ltd. Our team uses this platform to manage Google Ads Search campaigns for affiliate merchants sourced from affiliate sub-networks (CollabGlow, Partnermatic, LinkHaiTao, Rewardoo, LinkBux, BrandSparkHub, CreatorFlare) that aggregate retail brand advertiser programs — tracking ROI, commissions, and automating content publishing in one internally-operated system.",
+      "Wenzhou Fengdu Advertising & Media Co., Ltd. is an affiliate marketing company. Our internal advertising team uses this in-house platform to manage Google Ads Search and Performance Max campaigns under our own Google Ads Manager (MCC) account — all advertising budgets are paid for by our company directly to Google. We do not manage campaigns on behalf of third-party clients.",
     heroNote:
-      "This platform is used exclusively by our internal advertising team and is not offered as a service to third parties. For company information, please visit our",
+      "This platform is used exclusively by our internal advertising team and is not offered as a service or product to any third party. All campaigns comply with the Google Ads Affiliate Program Policy. For company information, please visit our",
     aboutLink: "About Us",
     heroNoteSuffix: "page.",
     btnUser: "User Portal",
@@ -31,17 +31,17 @@ const i18n = {
     btnDemo: "Platform Demo",
     capTitle: "Platform Capabilities",
     features: [
-      { title: "Affiliate Merchant Management", desc: "Source and manage partner merchants from affiliate sub-networks (CollabGlow, Partnermatic, LinkHaiTao, Rewardoo, LinkBux, BrandSparkHub, CreatorFlare) — platforms that aggregate retail brand advertiser programs — and assign campaigns to team members." },
-      { title: "Google Ads Campaign Automation", desc: "Automate the full Google Search campaign lifecycle — creation, keyword setup, bidding strategy, geographic/language targeting, RSA composition, and asset management." },
+      { title: "Merchant & Campaign Workflow", desc: "Source partner merchants from international affiliate networks and assign campaigns to internal team members for end-to-end management." },
+      { title: "Google Ads Campaign Automation", desc: "Automate the full Google Search and Performance Max campaign lifecycle — creation, keyword setup, bidding strategy, geographic/language targeting, RSA composition, and asset management." },
       { title: "Performance & ROI Analytics", desc: "Track spend, clicks, impressions, conversions, affiliate commissions, and ROI across all campaigns in a unified real-time dashboard." },
-      { title: "Content & Publishing Automation", desc: "AI-powered SEO article generation and multi-site publishing to support organic traffic alongside paid search campaigns for each affiliate merchant." },
+      { title: "Content & Publishing Automation", desc: "AI-powered SEO article generation and multi-site publishing to support organic traffic alongside paid search campaigns." },
     ],
   },
   zh: {
     heroTitle: "广告自动化发布平台",
     heroDesc:
-      "温州丰度广告传媒有限公司内部运营平台。团队通过本平台管理来自联盟子网络（CollabGlow、Partnermatic、LinkHaiTao、Rewardoo、LinkBux、BrandSparkHub、CreatorFlare）的商家，这些平台汇聚各大零售品牌广告主项目，统一创建和优化 Google Ads 搜索广告系列，追踪 ROI 与佣金 — 实现一站式内部闭环管理。",
-    heroNote: "本平台仅供公司内部广告团队使用，不对外提供服务。公司信息请访问",
+      "温州丰度广告传媒有限公司是一家联盟营销公司。公司内部广告团队通过本平台在我们自有的 Google Ads 经理账户（MCC）下管理 Google 搜索广告与效果最大化广告，所有广告预算均由本公司直接向 Google 支付。我们不为任何第三方客户管理广告。",
+    heroNote: "本平台仅供公司内部广告团队使用，不向任何第三方提供产品或服务。所有广告均遵守 Google Ads 联盟营销计划政策（Affiliate Program Policy）。公司信息请访问",
     aboutLink: "关于我们",
     heroNoteSuffix: "页面。",
     btnUser: "进入用户平台",
@@ -49,8 +49,8 @@ const i18n = {
     btnDemo: "平台演示",
     capTitle: "平台核心能力",
     features: [
-      { title: "商家管理", desc: "统一管理 7 大联盟平台商家，一键领取、自动分配给团队成员创建广告。" },
-      { title: "智能投放", desc: "自动化 Google 搜索广告全流程 — 广告系列创建、关键词设置、出价策略、地域/语言定向、RSA 组合及素材管理。" },
+      { title: "商家与广告流程", desc: "从国际联盟网络发掘合作商家，分配给内部团队成员进行端到端的广告管理。" },
+      { title: "智能投放", desc: "自动化 Google 搜索广告与效果最大化广告全流程 — 广告系列创建、关键词设置、出价策略、地域/语言定向、RSA 组合及素材管理。" },
       { title: "数据看板", desc: "实时可视化看板，费用、点击、展示、转化、佣金、ROI 一目了然。" },
       { title: "文章管理", desc: "AI 自动生成 SEO 文章，支持多站点一键发布，配合付费搜索广告提升自然流量。" },
     ],
@@ -130,7 +130,7 @@ export default function HomePage() {
           </Row>
           <div style={{ textAlign: "center", marginTop: 16 }}>
             <Text style={{ color: "#555", fontSize: 13 }}>
-              Managing <strong>15+ Google Ads sub-accounts</strong> under our MCC across <strong>7 affiliate merchant networks</strong>.
+              Managing multiple <strong>Google Ads sub-accounts under our own MCC</strong> with all advertising spend funded directly by our company.
               Basic Access (15,000 ops/day) required — Explorer Access quota exceeded by daily batch operations.
               &nbsp;→&nbsp;
             </Text>

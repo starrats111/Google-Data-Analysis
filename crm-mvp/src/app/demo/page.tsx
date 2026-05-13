@@ -116,11 +116,11 @@ function getScreenshots(lang: "en" | "zh"): ScreenshotItem[] {
         icon: <ShopOutlined style={{ color: "#eb2f96" }} />,
         apiTag: "Business Context",
         description:
-          "Our team sources merchants from affiliate sub-networks — CollabGlow, Partnermatic, LinkHaiTao, Rewardoo, LinkBux, BrandSparkHub, and CreatorFlare — that aggregate retail brand advertiser programs. Each merchant is assigned to a team member who creates and manages Google Search Ads campaigns to drive purchase-intent traffic to the merchant's products. Commissions earned from resulting sales are tracked in our platform's data center.",
+          "Our team sources partner merchants from international affiliate networks. Each merchant is assigned to an internal team member who creates and manages Google Search and Performance Max campaigns under our own Google Ads MCC to drive purchase-intent traffic to the merchant's products. All advertising spend is funded by our company directly to Google. Commissions earned from resulting sales are tracked in our platform's data center.",
         featuresLabel: "Key Features:",
         features: [
-          "Merchant discovery from 7+ international affiliate networks",
-          "Merchant assignment to team members for campaign management",
+          "Merchant discovery from international affiliate networks",
+          "Merchant assignment to internal team members for campaign management",
           "Commission and ROI tracking per merchant/campaign",
         ],
       },
@@ -213,11 +213,11 @@ function getScreenshots(lang: "en" | "zh"): ScreenshotItem[] {
       icon: <ShopOutlined style={{ color: "#eb2f96" }} />,
       apiTag: "Business Context",
       description:
-        "团队从联盟子网络——CollabGlow、Partnermatic、LinkHaiTao、Rewardoo、LinkBux、BrandSparkHub、CreatorFlare——发掘商家；这些平台汇聚各大零售品牌广告主项目。商家分配给团队成员后，由其投放 Google 搜索广告，引导具有购买意向的流量至商家产品页。佣金在平台数据中心中追踪。",
+        "团队从国际联盟网络发掘合作商家。每个商家分配给内部团队成员后，由其在我们自有的 Google Ads MCC 下投放 Google 搜索广告与效果最大化广告，引导具有购买意向的流量至商家产品页。所有广告预算均由本公司直接向 Google 支付。佣金在平台数据中心中追踪。",
       featuresLabel: "核心功能：",
       features: [
-        "从 7 个联盟子网络发现零售品牌商家",
-        "将商家分配给团队成员管理广告",
+        "从国际联盟网络发掘合作商家",
+        "将商家分配给内部团队成员管理广告",
         "按商家/广告追踪佣金和 ROI",
       ],
     },

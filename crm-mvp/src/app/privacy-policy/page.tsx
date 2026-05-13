@@ -15,7 +15,7 @@ const i18n = {
     sections: [
       {
         title: "1. Introduction",
-        content: 'Wenzhou Fengdu Advertising & Media Co., Ltd. ("we", "us", or "our") operates the Ad Automation Platform at fengdu-ads.top (the "Service"). This Privacy Policy describes how we collect, use, and protect information when you use our Service.',
+        content: 'Wenzhou Fengdu Advertising & Media Co., Ltd. ("we", "us", or "our") is an affiliate marketing company that operates the Ad Automation CRM platform at fengdu-ads.top (the "Service"). The Service is an internal tool used exclusively by our employees to manage our own Google Ads campaigns under our own Google Ads Manager (MCC) account. This Privacy Policy describes how we collect, use, and protect information when authorized employees use our Service.',
       },
       {
         title: "2. Information We Collect",
@@ -90,7 +90,7 @@ const i18n = {
     sections: [
       {
         title: "1. 简介",
-        content: "温州丰度广告传媒有限公司（以下简称\u201c我们\u201d）运营位于 fengdu-ads.top 的 Ad Automation 平台（以下简称\u201c本服务\u201d）。本隐私政策说明我们在您使用本服务时如何收集、使用和保护信息。",
+        content: "温州丰度广告传媒有限公司（以下简称\u201c我们\u201d）是一家联盟营销公司，运营位于 fengdu-ads.top 的 Ad Automation CRM 平台（以下简称\u201c本服务\u201d）。本服务为内部工具，仅供公司员工在我们自有的 Google Ads 经理账户（MCC）下管理自有的 Google 广告。本隐私政策说明授权员工使用本服务时我们如何收集、使用和保护信息。",
       },
       {
         title: "2. 我们收集的信息",
@@ -199,7 +199,7 @@ export default function PrivacyPolicyPage() {
                 {s.contact.addr}
                 <br />
                 {s.contact.emailLabel}
-                <a href="mailto:admin@fengdu-ads.top">admin@fengdu-ads.top</a>
+                <a href="mailto:google-ads-api@fengdu-ads.top">google-ads-api@fengdu-ads.top</a>
               </Paragraph>
             )}
           </Card>

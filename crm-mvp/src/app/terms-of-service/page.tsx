@@ -213,7 +213,7 @@ export default function TermsOfServicePage() {
                 {s.contact.addr}
                 <br />
                 {s.contact.emailLabel}
-                <a href="mailto:admin@fengdu-ads.top">admin@fengdu-ads.top</a>
+                <a href="mailto:google-ads-api@fengdu-ads.top">google-ads-api@fengdu-ads.top</a>
               </Paragraph>
             )}
           </Card>
