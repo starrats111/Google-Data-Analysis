@@ -219,6 +219,14 @@ export const GET = withUser(async (req: NextRequest, { user }) => {
     return defaultOrder;
   }
 
+  // C-090：用户当前活跃连接的平台集合，用于「选取商家」过滤孤儿
+  const connectedPlatformRows = await prisma.platform_connections.findMany({
+    where: { user_id: userId, is_deleted: 0 },
+    select: { platform: true },
+    distinct: ["platform"],
+  });
+  const connectedPlatforms = [...new Set(connectedPlatformRows.map(c => c.platform))];
+
   if (tab === "claimed") {
     // ─── 数据一致性修复：自动关联未链接的广告系列 + 同步商家状态（阻塞执行，60s 冷却）───
     const cooldownKey = String(userId);
@@ -364,10 +372,22 @@ export const GET = withUser(async (req: NextRequest, { user }) => {
 
   } else {
     // ─── 选取商家：仅查询 status="available" 的商家 ───
+    // C-090：仅显示用户当前有活跃连接的平台的商家，杜绝孤儿
+    if (connectedPlatforms.length === 0) {
+      return apiSuccess(serializeData({
+        merchants: [],
+        total: 0,
+        page,
+        pageSize,
+        stats: { total: 0, claimed: 0, byPlatform: [] },
+      }));
+    }
+
     const where: Record<string, unknown> = {
       user_id: userId,
       is_deleted: 0,
       status: "available",
+      platform: { in: connectedPlatforms },
     };
     if (platform) where.platform = platform;
     if (search) {
@@ -431,15 +451,22 @@ export const GET = withUser(async (req: NextRequest, { user }) => {
       });
     }
 
-    // 统计（全量，不分 tab）
+    // C-090：stats 也按活跃连接平台过滤
+    // - totalAll：当前用户可推广商家总数（剔除孤儿平台）
+    // - claimedCount：已领取/已暂停（保留历史平台，便于核对历史投放）
+    // - platformStats：仅返回活跃连接平台的分布
     const [platformStats, totalAll, claimedCount] = await Promise.all([
       prisma.user_merchants.groupBy({
         by: ["platform"],
-        where: { user_id: userId, is_deleted: 0 },
+        where: { user_id: userId, is_deleted: 0, platform: { in: connectedPlatforms } } as never,
         _count: true,
       }),
-      prisma.user_merchants.count({ where: { user_id: userId, is_deleted: 0 } }),
-      prisma.user_merchants.count({ where: { user_id: userId, is_deleted: 0, status: { in: ["claimed", "paused"] } } }),
+      prisma.user_merchants.count({
+        where: { user_id: userId, is_deleted: 0, platform: { in: connectedPlatforms } } as never,
+      }),
+      prisma.user_merchants.count({
+        where: { user_id: userId, is_deleted: 0, status: { in: ["claimed", "paused"] } } as never,
+      }),
     ]);
 
     return apiSuccess(serializeData({

@@ -112,7 +112,8 @@ export async function DELETE(req: NextRequest) {
 
   // 联动清理二：软删除该连接带来的非领取商家
   // 规则：已领取（claimed）或已暂停（paused）的不动，其余清除
-  const KEEP_STATUSES = ["claimed", "paused"];
+  // C-090：保留 excluded 是因为这是用户主动排除的标记，不应被覆盖
+  const KEEP_STATUSES = ["claimed", "paused", "excluded"];
 
   await prisma.user_merchants.updateMany({
     where: {
@@ -124,7 +125,8 @@ export async function DELETE(req: NextRequest) {
     data: { is_deleted: 1 },
   });
 
-  // 若该平台已无其他有效连接，同步清理无 platform_connection_id 的平台残余商家
+  // C-090：若该平台已无其他有效连接，按 platform 全量清理 available 商家
+  // 修复前只清 platform_connection_id=NULL 的，会漏掉指向其他历史 connId 的孤儿
   const otherActiveConns = await prisma.platform_connections.count({
     where: { user_id: userId, platform: conn.platform, is_deleted: 0 },
   });
@@ -133,7 +135,6 @@ export async function DELETE(req: NextRequest) {
       where: {
         user_id: userId,
         platform: conn.platform,
-        platform_connection_id: null,
         status: { notIn: KEEP_STATUSES },
         is_deleted: 0,
       },
