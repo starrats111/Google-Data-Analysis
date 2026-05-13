@@ -421,103 +421,82 @@ export default function MerchantsPage() {
   const copyLink = useCallback((link: string) => {
     navigator.clipboard.writeText(link).then(() => message.success("追踪链接已复制")).catch(() => message.error("复制失败"));
   }, [message]);
-  const claimedCols = useMemo(() => [
-    { title: "商家名称", dataIndex: "merchant_name", width: 240, sorter: true, sortOrder: colSortOrder("merchant_name"), render: (_: string, rec: Merchant) => <MerchantNameCell rec={rec} onCopy={copyLink} /> },
-    { title: "平台", dataIndex: "platform", width: 80, render: (v: string) => <Tag color={PC[v] || "default"} style={{ fontWeight: 600 }}>{v}</Tag> },
-    { title: "MID", dataIndex: "merchant_id", width: 100, ellipsis: true },
-    { title: "主营业务", dataIndex: "category", width: 130, ellipsis: true, render: (v: string | null) => catCn(v) },
-    { title: "佣金率", dataIndex: "commission_rate", width: 110, sorter: true, sortOrder: colSortOrder("commission_rate"), render: (v: string | null) => <CommissionCell v={v} /> },
-    { title: "支持地区", dataIndex: "supported_regions", width: 150, render: (v: unknown[] | null) => <RB r={v} /> },
-    { title: "状态", dataIndex: "ad_status", width: 90, render: (v: string) => v === "ENABLED" ? <Tag color="green">已启用</Tag> : v === "PAUSED" ? <Tag color="orange">已暂停</Tag> : v === "NOT_SUBMITTED" ? <Tag color="blue">已领取</Tag> : <Tag>未知</Tag> },
-    { title: "ATC竞争度", width: 180, render: (_: unknown, rec: Merchant) => {
-      const loading = atcLoading[rec.id];
-      const local = atcLocalData[rec.id];
-      const count = local?.count ?? rec.atc_advertiser_count ?? null;
-      const status = local ? "done" : (rec.atc_sync_status ?? "idle");
-      const region = getAtcRegion(rec.id);
-      const popoverOpen = atcPopover[rec.id] ?? false;
+  // C-091：ATC 竞争度列 render（claimed/available 共用），抽出来避免 100 行复粘
+  const renderAtcCompetitionCol = useCallback((_: unknown, rec: Merchant) => {
+    const loading = atcLoading[rec.id];
+    const local = atcLocalData[rec.id];
+    const count = local?.count ?? rec.atc_advertiser_count ?? null;
+    const status = local ? "done" : (rec.atc_sync_status ?? "idle");
+    const region = getAtcRegion(rec.id);
+    const popoverOpen = atcPopover[rec.id] ?? false;
 
-      if (serpApiConfigured === false) {
-        return <Button size="small" type="link" style={{ padding: 0, fontSize: 12 }} onClick={() => router.push("/user/settings")}>配置Key</Button>;
-      }
-      if (loading || status === "syncing") {
-        return <span style={{ color: "#1677ff", fontSize: 12 }}><SyncOutlined spin /> 查询中…</span>;
-      }
+    if (serpApiConfigured === false) {
+      return <Button size="small" type="link" style={{ padding: 0, fontSize: 12 }} onClick={() => router.push("/user/settings")}>配置Key</Button>;
+    }
+    if (loading || status === "syncing") {
+      return <span style={{ color: "#1677ff", fontSize: 12 }}><SyncOutlined spin /> 查询中…</span>;
+    }
 
-      const regionPopoverContent = (
-        <div style={{ width: 200 }}>
-          <div style={{ marginBottom: 8, fontSize: 12, color: "#666" }}>选择查询国家（仅统计搜索广告）</div>
-          <Select
-            value={region}
-            onChange={(v) => setAtcRegion(rec.id, v)}
-            style={{ width: "100%", marginBottom: 10 }}
-            options={[
-              { value: "US", label: "🇺🇸 美国 (US)" },
-              { value: "GB", label: "🇬🇧 英国 (GB)" },
-              { value: "AU", label: "🇦🇺 澳大利亚 (AU)" },
-              { value: "CA", label: "🇨🇦 加拿大 (CA)" },
-              { value: "DE", label: "🇩🇪 德国 (DE)" },
-              { value: "FR", label: "🇫🇷 法国 (FR)" },
-              { value: "IT", label: "🇮🇹 意大利 (IT)" },
-              { value: "ES", label: "🇪🇸 西班牙 (ES)" },
-              { value: "NL", label: "🇳🇱 荷兰 (NL)" },
-              { value: "SE", label: "🇸🇪 瑞典 (SE)" },
-              { value: "NO", label: "🇳🇴 挪威 (NO)" },
-              { value: "DK", label: "🇩🇰 丹麦 (DK)" },
-              { value: "JP", label: "🇯🇵 日本 (JP)" },
-              { value: "SG", label: "🇸🇬 新加坡 (SG)" },
-            ]}
-            popupMatchSelectWidth={false}
-          />
-          <Button type="primary" size="small" block onClick={() => triggerAtcQuery(rec, region, true)}>
-            开始查询
-          </Button>
-        </div>
+    const regionPopoverContent = (
+      <div style={{ width: 200 }}>
+        <div style={{ marginBottom: 8, fontSize: 12, color: "#666" }}>选择查询国家（仅统计搜索广告）</div>
+        <Select
+          value={region}
+          onChange={(v) => setAtcRegion(rec.id, v)}
+          style={{ width: "100%", marginBottom: 10 }}
+          options={[
+            { value: "US", label: "🇺🇸 美国 (US)" },
+            { value: "GB", label: "🇬🇧 英国 (GB)" },
+            { value: "AU", label: "🇦🇺 澳大利亚 (AU)" },
+            { value: "CA", label: "🇨🇦 加拿大 (CA)" },
+            { value: "DE", label: "🇩🇪 德国 (DE)" },
+            { value: "FR", label: "🇫🇷 法国 (FR)" },
+            { value: "IT", label: "🇮🇹 意大利 (IT)" },
+            { value: "ES", label: "🇪🇸 西班牙 (ES)" },
+            { value: "NL", label: "🇳🇱 荷兰 (NL)" },
+            { value: "SE", label: "🇸🇪 瑞典 (SE)" },
+            { value: "NO", label: "🇳🇴 挪威 (NO)" },
+            { value: "DK", label: "🇩🇰 丹麦 (DK)" },
+            { value: "JP", label: "🇯🇵 日本 (JP)" },
+            { value: "SG", label: "🇸🇬 新加坡 (SG)" },
+          ]}
+          popupMatchSelectWidth={false}
+        />
+        <Button type="primary" size="small" block onClick={() => triggerAtcQuery(rec, region, true)}>
+          开始查询
+        </Button>
+      </div>
+    );
+
+    if (status === "done" && count !== null) {
+      const color = count >= 50 ? "#f5222d" : count >= 10 ? "#fa8c16" : "#52c41a";
+      const label = count >= 100 ? "100+" : String(count);
+      const shownRegion = local?.region ?? "US";
+      const advertisers = local?.topAdvertisers ?? [];
+      return (
+        <Space size={4}>
+          <span
+            style={{ color, fontWeight: 600, cursor: advertisers.length > 0 ? "pointer" : "default", textDecoration: advertisers.length > 0 ? "underline" : "none" }}
+            onClick={() => advertisers.length > 0 && setAtcDetailModal({ open: true, merchantName: rec.merchant_name, advertisers, region: shownRegion })}
+          >{label}个</span>
+          <Tag style={{ fontSize: 11, padding: "0 4px", margin: 0 }}>{shownRegion}</Tag>
+          <Tooltip title="更换国家或刷新">
+            <Popover
+              open={popoverOpen}
+              onOpenChange={(v) => v ? openAtcPopover(rec.id) : closeAtcPopover(rec.id)}
+              content={regionPopoverContent}
+              title={null}
+              trigger="click"
+              placement="bottomRight"
+            >
+              <Button size="small" icon={<ReloadOutlined />} type="text" />
+            </Popover>
+          </Tooltip>
+        </Space>
       );
+    }
 
-      if (status === "done" && count !== null) {
-        const color = count >= 50 ? "#f5222d" : count >= 10 ? "#fa8c16" : "#52c41a";
-        const label = count >= 100 ? "100+" : String(count);
-        const shownRegion = local?.region ?? "US";
-        const advertisers = local?.topAdvertisers ?? [];
-        return (
-          <Space size={4}>
-            <span
-              style={{ color, fontWeight: 600, cursor: advertisers.length > 0 ? "pointer" : "default", textDecoration: advertisers.length > 0 ? "underline" : "none" }}
-              onClick={() => advertisers.length > 0 && setAtcDetailModal({ open: true, merchantName: rec.merchant_name, advertisers, region: shownRegion })}
-            >{label}个</span>
-            <Tag style={{ fontSize: 11, padding: "0 4px", margin: 0 }}>{shownRegion}</Tag>
-            <Tooltip title="更换国家或刷新">
-              <Popover
-                open={popoverOpen}
-                onOpenChange={(v) => v ? openAtcPopover(rec.id) : closeAtcPopover(rec.id)}
-                content={regionPopoverContent}
-                title={null}
-                trigger="click"
-                placement="bottomRight"
-              >
-                <Button size="small" icon={<ReloadOutlined />} type="text" />
-              </Popover>
-            </Tooltip>
-          </Space>
-        );
-      }
-
-      if (status === "error") {
-        return (
-          <Popover
-            open={popoverOpen}
-            onOpenChange={(v) => v ? openAtcPopover(rec.id) : closeAtcPopover(rec.id)}
-            content={regionPopoverContent}
-            title={null}
-            trigger="click"
-            placement="bottomRight"
-          >
-            <Button size="small" danger>重新查询</Button>
-          </Popover>
-        );
-      }
-
+    if (status === "error") {
       return (
         <Popover
           open={popoverOpen}
@@ -527,14 +506,38 @@ export default function MerchantsPage() {
           trigger="click"
           placement="bottomRight"
         >
-          <Button size="small">查竞争度</Button>
+          <Button size="small" danger>重新查询</Button>
         </Popover>
       );
-    }},
+    }
+
+    return (
+      <Popover
+        open={popoverOpen}
+        onOpenChange={(v) => v ? openAtcPopover(rec.id) : closeAtcPopover(rec.id)}
+        content={regionPopoverContent}
+        title={null}
+        trigger="click"
+        placement="bottomRight"
+      >
+        <Button size="small">查竞争度</Button>
+      </Popover>
+    );
+  }, [atcLoading, atcLocalData, serpApiConfigured, triggerAtcQuery, router, getAtcRegion, setAtcRegion, atcPopover, openAtcPopover, closeAtcPopover]);
+
+  const claimedCols = useMemo(() => [
+    { title: "商家名称", dataIndex: "merchant_name", width: 240, sorter: true, sortOrder: colSortOrder("merchant_name"), render: (_: string, rec: Merchant) => <MerchantNameCell rec={rec} onCopy={copyLink} /> },
+    { title: "平台", dataIndex: "platform", width: 80, render: (v: string) => <Tag color={PC[v] || "default"} style={{ fontWeight: 600 }}>{v}</Tag> },
+    { title: "MID", dataIndex: "merchant_id", width: 100, ellipsis: true },
+    { title: "主营业务", dataIndex: "category", width: 130, ellipsis: true, render: (v: string | null) => catCn(v) },
+    { title: "佣金率", dataIndex: "commission_rate", width: 110, sorter: true, sortOrder: colSortOrder("commission_rate"), render: (v: string | null) => <CommissionCell v={v} /> },
+    { title: "支持地区", dataIndex: "supported_regions", width: 150, render: (v: unknown[] | null) => <RB r={v} /> },
+    { title: "状态", dataIndex: "ad_status", width: 90, render: (v: string) => v === "ENABLED" ? <Tag color="green">已启用</Tag> : v === "PAUSED" ? <Tag color="orange">已暂停</Tag> : v === "NOT_SUBMITTED" ? <Tag color="blue">已领取</Tag> : <Tag>未知</Tag> },
+    { title: "ATC竞争度", width: 180, render: renderAtcCompetitionCol },
     { title: "在投人数", dataIndex: "active_advertisers", width: 90, align: "center" as const, render: (v: number, rec: Merchant) => { const n = v || 0; return n > 0 ? <Button size="small" type="link" style={{ padding: 0, fontWeight: 600 }} onClick={() => showActiveAdv(rec)}>{n} 人</Button> : <span style={{ color: "#bfbfbf" }}>0</span>; } },
     { title: "标签", width: 120, render: (_: unknown, rec: any) => { const labels = rec.labels || []; if (labels.length === 0) return <span style={{ color: "#ccc" }}>-</span>; return <Space size={4} wrap>{labels.map((l: any, i: number) => <Tooltip key={i} title={l.detail}><Tag color={l.color} style={{ cursor: "pointer" }}>{l.text}</Tag></Tooltip>)}</Space>; } },
     { title: "操作", width: 100, render: (_: unknown, rec: Merchant) => <Popconfirm title="确认取消领取？" onConfirm={() => doRelease(rec.id)}><Button size="small" danger>取消领取</Button></Popconfirm> },
-  ], [doRelease, showActiveAdv, copyLink, sortField, sortOrder, atcLoading, atcLocalData, serpApiConfigured, triggerAtcQuery, router, getAtcRegion, setAtcRegion, atcPopover, openAtcPopover, closeAtcPopover]);
+  ], [doRelease, showActiveAdv, copyLink, sortField, sortOrder, renderAtcCompetitionCol]);
   const availCols = useMemo(() => [
     { title: "商家名称", dataIndex: "merchant_name", width: 280, sorter: true, sortOrder: colSortOrder("merchant_name"), render: (_: string, rec: Merchant) => {
       const hitRate = chargebackHitMap.get(`${rec.platform}-${rec.merchant_id}`);
@@ -554,10 +557,13 @@ export default function MerchantsPage() {
     { title: "主营业务", dataIndex: "category", width: 130, ellipsis: true, render: (v: string | null) => catCn(v) },
     { title: "佣金率", dataIndex: "commission_rate", width: 110, sorter: true, sortOrder: colSortOrder("commission_rate"), render: (v: string | null) => <CommissionCell v={v} /> },
     { title: "支持地区", dataIndex: "supported_regions", width: 150, render: (v: unknown[] | null) => <RB r={v} /> },
+    // C-091：选取商家 tab 也加 ATC 竞争度列，与"我的商家"完全一致——
+    // 点 N 个 → 弹广告主列表 Modal → 操作列「查情报」跳转 /user/intelligence
+    { title: "ATC竞争度", width: 180, render: renderAtcCompetitionCol },
     { title: "在投人数", dataIndex: "active_advertisers", width: 90, align: "center" as const, render: (v: number, rec: Merchant) => { const n = v || 0; return n > 0 ? <Button size="small" type="link" style={{ padding: 0, fontWeight: 600 }} onClick={() => showActiveAdv(rec)}>{n} 人</Button> : <span style={{ color: "#bfbfbf" }}>0</span>; } },
     { title: "标签", width: 140, render: (_: unknown, rec: any) => { const labels = rec.labels || []; if (labels.length === 0) return <span style={{ color: "#ccc" }}>-</span>; return <Space size={4} wrap>{labels.map((l: any, i: number) => <Tooltip key={i} title={l.detail}><Tag color={l.color} style={{ cursor: "pointer" }}>{l.text}</Tag></Tooltip>)}</Space>; } },
     { title: "操作", width: 100, render: (_: unknown, rec: Merchant) => rec.policy_status === "prohibited" ? <Button size="small" disabled>禁止领取</Button> : <Button type="primary" size="small" icon={<CheckOutlined />} onClick={() => doClaim(rec)}>{rec.policy_status === "restricted" ? "领取(限制)" : "领取"}</Button> },
-  ], [doClaim, showActiveAdv, copyLink, sortField, sortOrder, chargebackHitMap]);
+  ], [doClaim, showActiveAdv, copyLink, sortField, sortOrder, chargebackHitMap, renderAtcCompetitionCol]);
   // C-019 拒付商家 Tab 的列定义
   const chargebackCols = useMemo(() => [
     { title: "平台", dataIndex: "platform", width: 80, render: (v: string) => <Tag color={PC[v] || "default"} style={{ fontWeight: 600 }}>{v}</Tag> },
@@ -723,7 +729,7 @@ export default function MerchantsPage() {
         </div>
       )}
       {tab === "claimed" && <Table columns={claimedCols} dataSource={merchants} rowKey="id" loading={ml} onChange={handleTableChange} pagination={{ current: page, pageSize, total, showSizeChanger: true, pageSizeOptions: ["10", "20", "50", "100"], showTotal: (t: number) => `共 ${t} 条`, onChange: (p, ps) => { if (ps !== pageSize) { setPageSize(ps); setPage(1); } else setPage(p); } }} scroll={{ x: 1000 }} size="small" />}
-      {tab === "available" && <Table columns={availCols} dataSource={merchants} rowKey="id" loading={ml} onChange={handleTableChange} pagination={{ current: page, pageSize, total, showSizeChanger: true, pageSizeOptions: ["10", "20", "50", "100"], showTotal: (t: number) => `共 ${t} 条`, onChange: (p, ps) => { if (ps !== pageSize) { setPageSize(ps); setPage(1); } else setPage(p); } }} scroll={{ x: 1100 }} size="small" />}
+      {tab === "available" && <Table columns={availCols} dataSource={merchants} rowKey="id" loading={ml} onChange={handleTableChange} pagination={{ current: page, pageSize, total, showSizeChanger: true, pageSizeOptions: ["10", "20", "50", "100"], showTotal: (t: number) => `共 ${t} 条`, onChange: (p, ps) => { if (ps !== pageSize) { setPageSize(ps); setPage(1); } else setPage(p); } }} scroll={{ x: 1280 }} size="small" />}
       {tab === "violations" && (<div>
         {vioError && <div style={{ marginBottom: 12, padding: "8px 12px", background: "#fff2f0", border: "1px solid #ffccc7", borderRadius: 6, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
           <span><WarningOutlined style={{ color: "#ff4d4f", marginRight: 6 }} />加载违规商家失败：{vioError.message || "请求异常"}</span>
