@@ -240,8 +240,19 @@ export async function findArIdByName(name: string, apiKey: string): Promise<stri
 
 const CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 小时
 
-// C-093：广告主域名分布快照 TTL（7 天，团队级共享）
-const ADVERTISER_SNAPSHOT_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+// C-093：广告主域名分布快照 TTL（差异化）
+//   - peer（同行联盟客，>=2 域名）：30 天 —— 长期稳定，不会突然变品牌自投
+//   - brand_self（品牌自投，=1 域名）：7 天 —— 偶尔会扩到第二个域名，需要重检
+//   - unknown（SerpApi 未返回）：1 天 —— 多数是临时问题/失败，尽快重试
+const ADVERTISER_SNAPSHOT_TTL_PEER_MS = 30 * 24 * 60 * 60 * 1000;
+const ADVERTISER_SNAPSHOT_TTL_BRAND_SELF_MS = 7 * 24 * 60 * 60 * 1000;
+const ADVERTISER_SNAPSHOT_TTL_UNKNOWN_MS = 1 * 24 * 60 * 60 * 1000;
+
+function ttlForCachedSnapshot(uniqueDomainCount: number): number {
+  if (uniqueDomainCount >= 2) return ADVERTISER_SNAPSHOT_TTL_PEER_MS;
+  if (uniqueDomainCount === 1) return ADVERTISER_SNAPSHOT_TTL_BRAND_SELF_MS;
+  return ADVERTISER_SNAPSHOT_TTL_UNKNOWN_MS;
+}
 
 /**
  * C-093：反查一个广告主名下所有广告的 domain 分布，用于判定「同行 vs 品牌自投」。
@@ -275,12 +286,13 @@ export async function getOrFetchAdvertiserDomainSnapshot(opts: {
     };
   }
 
-  // 1. 缓存命中（7 天 TTL）
+  // 1. 缓存命中（差异化 TTL：peer 30天 / brand_self 7天 / unknown 1天）
   if (!forceRefresh) {
     const cached = await prisma.atc_advertiser_domain_snapshot.findUnique({
       where: { advertiser_id_region: { advertiser_id: advertiserId, region } },
     });
-    if (cached && Date.now() - cached.fetched_at.getTime() < ADVERTISER_SNAPSHOT_TTL_MS) {
+    const ttl = cached ? ttlForCachedSnapshot(cached.unique_domain_count) : 0;
+    if (cached && Date.now() - cached.fetched_at.getTime() < ttl) {
       const domains = (cached.domains_json as string[]) ?? [];
       return {
         advertiserId,
