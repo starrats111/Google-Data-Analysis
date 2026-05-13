@@ -1,7 +1,7 @@
 "use client";
 import { useState, useCallback, useMemo, useEffect } from "react";
-import { Card, Row, Col, Table, Input, Select, Button, Space, Tag, Modal, Form, Typography, Popconfirm, Popover, Switch, InputNumber, Tabs, App, Tooltip, Radio, DatePicker, Slider, Progress } from "antd";
-import { ShopOutlined, SearchOutlined, CheckOutlined, DollarOutlined, CalendarOutlined, SaveOutlined, SyncOutlined, WarningOutlined, StarOutlined, CopyOutlined, ReloadOutlined, RobotOutlined, DeleteOutlined, CloseCircleOutlined } from "@ant-design/icons";
+import { Card, Row, Col, Table, Input, Select, Button, Space, Tag, Modal, Form, Typography, Popconfirm, Popover, Switch, InputNumber, Tabs, App, Tooltip, Radio, DatePicker, Slider, Progress, Alert } from "antd";
+import { ShopOutlined, SearchOutlined, CheckOutlined, DollarOutlined, CalendarOutlined, SaveOutlined, SyncOutlined, WarningOutlined, StarOutlined, CopyOutlined, ReloadOutlined, RobotOutlined, DeleteOutlined, CloseCircleOutlined, ThunderboltOutlined } from "@ant-design/icons";
 import { PLATFORMS, BIDDING_STRATEGIES } from "@/lib/constants";
 import { useApiWithParams, useStaleApi, useApi, mutateApi, refreshApi } from "@/lib/swr";
 import { useRouter } from "next/navigation";
@@ -212,6 +212,18 @@ export default function MerchantsPage() {
   const [atcPopover, setAtcPopover] = useState<Record<string, boolean>>({}); // popover 开关
   const [atcRegions, setAtcRegions] = useState<Record<string, string>>({}); // 每行选择的地区
   const [serpApiConfigured, setSerpApiConfigured] = useState<boolean | null>(null);
+  // C-091.5：批量 ATC 竞争度查询（支持跨页选择）
+  const [batchSelectedKeys, setBatchSelectedKeys] = useState<string[]>([]);
+  // 维护被选中的完整 merchant 对象（跨页保留），避免翻页后丢失跨页选中条目的数据
+  const [batchSelectedMap, setBatchSelectedMap] = useState<Map<string, Merchant>>(new Map());
+  const [batchRegion, setBatchRegion] = useState("US");
+  const [batchForce, setBatchForce] = useState(false);
+  const [batchRunning, setBatchRunning] = useState(false);
+  const [batchProgress, setBatchProgress] = useState<{ done: number; total: number; failed: number }>({ done: 0, total: 0, failed: 0 });
+  const clearBatchSelection = useCallback(() => {
+    setBatchSelectedKeys([]);
+    setBatchSelectedMap(new Map());
+  }, []);
   useEffect(() => {
     fetch("/api/user/settings/serpapi").then((r) => r.json()).then((res) => {
       if (res.code === 0) setSerpApiConfigured((res.data as { has_key: boolean; masked_key: string | null }).has_key);
@@ -238,7 +250,7 @@ export default function MerchantsPage() {
   }, []);
   const openAtcPopover = useCallback((id: string) => setAtcPopover((p) => ({ ...p, [id]: true })), []);
   const closeAtcPopover = useCallback((id: string) => setAtcPopover((p) => ({ ...p, [id]: false })), []);
-  const triggerAtcQuery = useCallback(async (rec: Merchant, region: string, force = false) => {
+  const triggerAtcQuery = useCallback(async (rec: Merchant, region: string, force = false, silent = false) => {
     closeAtcPopover(rec.id);
     setAtcLoading((prev) => ({ ...prev, [rec.id]: true }));
     try {
@@ -249,15 +261,67 @@ export default function MerchantsPage() {
       }).then((r) => r.json());
       if (res.code === 0) {
         setAtcLocalData((prev) => ({ ...prev, [rec.id]: { count: res.data.real_count, syncedAt: res.data.fetched_at, region, topAdvertisers: res.data.top_advertisers ?? [] } }));
+        return { ok: true };
       } else {
-        message.error(res.message);
+        if (!silent) message.error(res.message);
+        return { ok: false, error: res.message };
       }
-    } catch {
-      message.error("查询失败，请稍后重试");
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "查询失败，请稍后重试";
+      if (!silent) message.error(msg);
+      return { ok: false, error: msg };
     } finally {
       setAtcLoading((prev) => ({ ...prev, [rec.id]: false }));
     }
   }, [message, closeAtcPopover]);
+
+  // C-091.5：一键批量查 ATC 竞争度（并发 3，避免 SerpApi 限流）
+  // - batchForce=false：自动跳过已有 ATC 数据的商家（节省 SerpApi 配额）
+  // - batchForce=true：所有选中商家全部重新查询
+  const doBatchAtcQuery = useCallback(async (selectedMerchants: Merchant[]) => {
+    if (selectedMerchants.length === 0) return;
+    if (serpApiConfigured === false) {
+      message.error("请先在「个人设置 → 广告情报」中配置 SerpApi Key");
+      return;
+    }
+
+    const targets = batchForce
+      ? selectedMerchants
+      : selectedMerchants.filter(m => !atcLocalData[m.id] && !(m.atc_advertiser_count != null && m.atc_sync_status === "done"));
+
+    if (targets.length === 0) {
+      message.info(`已选 ${selectedMerchants.length} 个商家全部已有 ATC 数据；如需重查请打开「强制刷新」`);
+      return;
+    }
+
+    setBatchRunning(true);
+    setBatchProgress({ done: 0, total: targets.length, failed: 0 });
+
+    const queue = [...targets];
+    let done = 0, failed = 0;
+
+    const worker = async () => {
+      while (queue.length > 0) {
+        const m = queue.shift();
+        if (!m) break;
+        const r = await triggerAtcQuery(m, batchRegion, batchForce, true);
+        if (!r?.ok) failed++;
+        done++;
+        setBatchProgress({ done, total: targets.length, failed });
+      }
+    };
+
+    // 3 并发，配合 SerpApi 单 Key 的速率限制
+    await Promise.all([worker(), worker(), worker()]);
+
+    setBatchRunning(false);
+    const ok = done - failed;
+    if (failed === 0) {
+      message.success(`批量查询完成：${ok} 个商家已更新 ATC 竞争度`);
+    } else {
+      message.warning(`批量查询完成：${ok} 成功 / ${failed} 失败`);
+    }
+  }, [serpApiConfigured, batchForce, atcLocalData, batchRegion, triggerAtcQuery, message]);
 
   const [cc, setCc] = useState(""); const [qc, setQc] = useState("");
   const { data: holidays, isLoading: hl } = useApiWithParams<Holiday[]>(qc ? "/api/user/holidays" : null, { country: qc });
@@ -709,7 +773,7 @@ export default function MerchantsPage() {
       </Row>
     </Form>
     <Card className="merchant-table-card">
-      <Tabs activeKey={tab} onChange={(v) => { setTab(v); setPage(1); setSortField(""); setSortOrder(""); }} style={{ marginBottom: 0 }}
+      <Tabs activeKey={tab} onChange={(v) => { setTab(v); setPage(1); setSortField(""); setSortOrder(""); clearBatchSelection(); }} style={{ marginBottom: 0 }}
         items={[
           { key: "claimed", label: "我的商家" },
           { key: "available", label: "选取商家" },
@@ -728,8 +792,108 @@ export default function MerchantsPage() {
           <Button size="small" type="dashed" icon={<SyncOutlined spin={syncing} />} loading={syncing} onClick={() => setSyncOptModal({ open: true, mode: "all", platform: "CF" })}>同步商家库</Button>
         </div>
       )}
-      {tab === "claimed" && <Table columns={claimedCols} dataSource={merchants} rowKey="id" loading={ml} onChange={handleTableChange} pagination={{ current: page, pageSize, total, showSizeChanger: true, pageSizeOptions: ["10", "20", "50", "100"], showTotal: (t: number) => `共 ${t} 条`, onChange: (p, ps) => { if (ps !== pageSize) { setPageSize(ps); setPage(1); } else setPage(p); } }} scroll={{ x: 1000 }} size="small" />}
-      {tab === "available" && <Table columns={availCols} dataSource={merchants} rowKey="id" loading={ml} onChange={handleTableChange} pagination={{ current: page, pageSize, total, showSizeChanger: true, pageSizeOptions: ["10", "20", "50", "100"], showTotal: (t: number) => `共 ${t} 条`, onChange: (p, ps) => { if (ps !== pageSize) { setPageSize(ps); setPage(1); } else setPage(p); } }} scroll={{ x: 1280 }} size="small" />}
+      {(tab === "claimed" || tab === "available") && batchSelectedKeys.length > 0 && (
+        <Alert
+          type="info"
+          showIcon={false}
+          style={{ marginTop: 8, marginBottom: 8 }}
+          message={
+            <Space wrap size={8}>
+              <Text style={{ fontWeight: 600 }}>已选 {batchSelectedKeys.length} 个商家</Text>
+              <Select
+                value={batchRegion}
+                onChange={setBatchRegion}
+                size="small"
+                style={{ width: 130 }}
+                disabled={batchRunning}
+                options={[
+                  { value: "US", label: "🇺🇸 美国 (US)" },
+                  { value: "GB", label: "🇬🇧 英国 (GB)" },
+                  { value: "AU", label: "🇦🇺 澳大利亚" },
+                  { value: "CA", label: "🇨🇦 加拿大" },
+                  { value: "DE", label: "🇩🇪 德国" },
+                  { value: "FR", label: "🇫🇷 法国" },
+                  { value: "IT", label: "🇮🇹 意大利" },
+                  { value: "ES", label: "🇪🇸 西班牙" },
+                  { value: "NL", label: "🇳🇱 荷兰" },
+                  { value: "SE", label: "🇸🇪 瑞典" },
+                  { value: "NO", label: "🇳🇴 挪威" },
+                  { value: "DK", label: "🇩🇰 丹麦" },
+                  { value: "JP", label: "🇯🇵 日本" },
+                  { value: "SG", label: "🇸🇬 新加坡" },
+                ]}
+              />
+              <Tooltip title="跳过已查：选中商家中已经有 ATC 数据的会被跳过，节省 SerpApi 配额；强制刷新：忽略缓存全部重查">
+                <Switch
+                  checked={batchForce}
+                  onChange={setBatchForce}
+                  size="small"
+                  disabled={batchRunning}
+                  checkedChildren="强制刷新"
+                  unCheckedChildren="跳过已查"
+                />
+              </Tooltip>
+              <Button
+                type="primary"
+                size="small"
+                icon={<ThunderboltOutlined />}
+                loading={batchRunning}
+                onClick={() => {
+                  // 优先用跨页 Map 里的完整对象；兜底用当前页过滤
+                  const fromMap = Array.from(batchSelectedMap.values());
+                  const selected = fromMap.length > 0
+                    ? fromMap
+                    : (merchants as Merchant[]).filter(m => batchSelectedKeys.includes(m.id));
+                  doBatchAtcQuery(selected);
+                }}
+              >
+                一键查 ATC 竞争度
+              </Button>
+              {batchRunning && (
+                <Text type="secondary" style={{ fontSize: 12 }}>
+                  进度 {batchProgress.done}/{batchProgress.total}
+                  {batchProgress.failed > 0 ? `，失败 ${batchProgress.failed}` : ""}
+                </Text>
+              )}
+              <Button size="small" type="link" disabled={batchRunning} onClick={clearBatchSelection}>清空选择</Button>
+            </Space>
+          }
+        />
+      )}
+      {tab === "claimed" && <Table columns={claimedCols} dataSource={merchants} rowKey="id" loading={ml} onChange={handleTableChange}
+        rowSelection={{
+          selectedRowKeys: batchSelectedKeys,
+          preserveSelectedRowKeys: true,
+          onChange: (keys, rows) => {
+            const keyStrs = keys.map(String);
+            setBatchSelectedKeys(keyStrs);
+            setBatchSelectedMap((prev) => {
+              const next = new Map(prev);
+              for (const r of rows as Merchant[]) next.set(r.id, r);
+              for (const k of Array.from(next.keys())) if (!keyStrs.includes(k)) next.delete(k);
+              return next;
+            });
+          },
+          getCheckboxProps: () => ({ disabled: batchRunning }),
+        }}
+        pagination={{ current: page, pageSize, total, showSizeChanger: true, pageSizeOptions: ["10", "20", "50", "100"], showTotal: (t: number) => `共 ${t} 条`, onChange: (p, ps) => { if (ps !== pageSize) { setPageSize(ps); setPage(1); } else setPage(p); } }} scroll={{ x: 1000 }} size="small" />}
+      {tab === "available" && <Table columns={availCols} dataSource={merchants} rowKey="id" loading={ml} onChange={handleTableChange}
+        rowSelection={{
+          selectedRowKeys: batchSelectedKeys,
+          preserveSelectedRowKeys: true,
+          onChange: (keys, rows) => {
+            const keyStrs = keys.map(String);
+            setBatchSelectedKeys(keyStrs);
+            setBatchSelectedMap((prev) => {
+              const next = new Map(prev);
+              for (const r of rows as Merchant[]) next.set(r.id, r);
+              for (const k of Array.from(next.keys())) if (!keyStrs.includes(k)) next.delete(k);
+              return next;
+            });
+          },
+          getCheckboxProps: () => ({ disabled: batchRunning }),
+        }}
+        pagination={{ current: page, pageSize, total, showSizeChanger: true, pageSizeOptions: ["10", "20", "50", "100"], showTotal: (t: number) => `共 ${t} 条`, onChange: (p, ps) => { if (ps !== pageSize) { setPageSize(ps); setPage(1); } else setPage(p); } }} scroll={{ x: 1280 }} size="small" />}
       {tab === "violations" && (<div>
         {vioError && <div style={{ marginBottom: 12, padding: "8px 12px", background: "#fff2f0", border: "1px solid #ffccc7", borderRadius: 6, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
           <span><WarningOutlined style={{ color: "#ff4d4f", marginRight: 6 }} />加载违规商家失败：{vioError.message || "请求异常"}</span>
