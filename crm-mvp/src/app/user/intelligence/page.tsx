@@ -20,6 +20,8 @@ interface AtcAd {
   first_shown?: number;  // Unix 秒级时间戳
   last_shown?: number;   // Unix 秒级时间戳
   thumbnail?: string;
+  /** SerpApi 返回的 ad_creative_id，用于构造 ATC creative 详情页跳转链接 */
+  creative_id?: string;
   /** C-088：domain 缺失但 OCR 已入队，前端显示"识别中..." */
   _ocrPending?: boolean;
 }
@@ -264,14 +266,22 @@ export default function IntelligencePage() {
       width: 180,
       render: (v: string | undefined, rec: AtcAd) => {
         if (v) {
-          // 跳转到 ATC 中"该广告主 × 该域名"的广告列表页（而非直接跳商家官网）
-          // 仅当 advId 是 AR 开头时构造 ATC URL；否则降级为商家官网
-          const atcUrl = advId.startsWith("AR")
-            ? `https://adstransparency.google.com/advertiser/${advId}?region=${currentRegion}&domain=${encodeURIComponent(v)}`
-            : `https://${v}`;
-          const tooltipTitle = advId.startsWith("AR")
-            ? `在 Google 广告透明度中心查看该广告主对 ${v} 的所有广告`
-            : `打开 ${v}`;
+          // 点击跳 Google 广告透明度中心：
+          //   - 有 creative_id：定位到该广告创意详情页 /advertiser/{AR}/creative/{CR}?region=
+          //   - 无 creative_id（罕见降级）：跳广告主主页 /advertiser/{AR}?region=
+          //   - 广告主非 AR 开头（极少数本地降级数据）：跳商家官网
+          let atcUrl: string;
+          let tooltipTitle: string;
+          if (advId.startsWith("AR") && rec.creative_id) {
+            atcUrl = `https://adstransparency.google.com/advertiser/${advId}/creative/${rec.creative_id}?region=${currentRegion}`;
+            tooltipTitle = `在 Google 广告透明度中心查看该广告详情`;
+          } else if (advId.startsWith("AR")) {
+            atcUrl = `https://adstransparency.google.com/advertiser/${advId}?region=${currentRegion}`;
+            tooltipTitle = `在 Google 广告透明度中心查看该广告主全部广告`;
+          } else {
+            atcUrl = `https://${v}`;
+            tooltipTitle = `打开 ${v}`;
+          }
           return (
             <Tooltip title={tooltipTitle}>
               <a href={atcUrl} target="_blank" rel="noreferrer">
