@@ -235,6 +235,34 @@ export default function MerchantsPage() {
   const [classifyMap, setClassifyMap] = useState<Record<string, AdvertiserClassItem>>({});
   const [classifyLoading, setClassifyLoading] = useState(false);
   const [peersOnly, setPeersOnly] = useState(true);
+  // C-094.3：广告主列表的关注状态（key=`${advertiserId}|${region}`，value=watchlist record id）
+  const [watchlistMap, setWatchlistMap] = useState<Record<string, string>>({});
+  const [watchlistBusy, setWatchlistBusy] = useState<Record<string, boolean>>({});
+  const toggleWatchlist = useCallback(async (advertiserId: string, advertiserName: string, region: string) => {
+    const key = `${advertiserId}|${region}`;
+    if (watchlistBusy[key]) return;
+    setWatchlistBusy((p) => ({ ...p, [key]: true }));
+    try {
+      const watchId = watchlistMap[key];
+      if (watchId) {
+        // 已关注 → 取消
+        const r = await fetch(`/api/user/atc/watchlist/${watchId}`, { method: "DELETE" }).then((x) => x.json());
+        if (r.code === 0) setWatchlistMap((p) => { const n = { ...p }; delete n[key]; return n; });
+      } else {
+        // 未关注 → 新增
+        const r = await fetch("/api/user/atc/watchlist", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ advertiser_id: advertiserId, advertiser_name: advertiserName, region, min_days: 30 }),
+        }).then((x) => x.json());
+        if (r.code === 0 && r.data?.id) setWatchlistMap((p) => ({ ...p, [key]: String(r.data.id) }));
+      }
+    } catch {
+      // 忽略，下次重试
+    } finally {
+      setWatchlistBusy((p) => { const n = { ...p }; delete n[key]; return n; });
+    }
+  }, [watchlistBusy, watchlistMap]);
   // C-091.5：批量 ATC 竞争度查询（支持跨页选择）
   const [batchSelectedKeys, setBatchSelectedKeys] = useState<string[]>([]);
   // 维护被选中的完整 merchant 对象（跨页保留），避免翻页后丢失跨页选中条目的数据
@@ -269,6 +297,7 @@ export default function MerchantsPage() {
   }, []);
   // C-093 / C-094.1：Modal 打开时异步反查每个广告主的域名分布（团队级缓存）
   // pending 状态（OCR 未跑完）会触发自动轮询，最多 5 次每次 15s，等 OCR worker 补全后重判。
+  // C-094.3：同时 fetch 当前用户的 watchlist 填充 watchlistMap（用于操作列「已关注」状态显示）
   useEffect(() => {
     if (!atcDetailModal?.open) return;
     const arIds = atcDetailModal.advertisers.map((a) => a.id).filter((id) => /^AR\d+$/i.test(id));
@@ -276,6 +305,18 @@ export default function MerchantsPage() {
       setClassifyMap({});
       return;
     }
+
+    // C-094.3：拉 watchlist 填充关注状态（只在 modal 打开时拉一次）
+    fetch("/api/user/atc/watchlist")
+      .then((r) => r.json())
+      .then((res) => {
+        if (res.code !== 0) return;
+        const items = (res.data ?? []) as Array<{ id: string; advertiser_id: string; region: string }>;
+        const map: Record<string, string> = {};
+        for (const it of items) map[`${it.advertiser_id}|${it.region}`] = it.id;
+        setWatchlistMap(map);
+      })
+      .catch(() => {});
 
     let cancelled = false;
     let pollCount = 0;
@@ -1408,19 +1449,33 @@ export default function MerchantsPage() {
                   {
                     title: "操作",
                     dataIndex: "id",
-                    width: 120,
-                    render: (id: string, row: { id: string; name: string }) => id.startsWith("AR") ? (
-                      <Space size={4}>
-                        <a href={`https://adstransparency.google.com/advertiser/${id}`} target="_blank" rel="noreferrer">ATC</a>
-                        <Button
-                          size="small" type="link" style={{ padding: 0 }}
-                          onClick={() => {
-                            setAtcDetailModal(null);
-                            router.push(`/user/intelligence?advertiser_id=${id}&name=${encodeURIComponent(row.name)}&region=${atcDetailModal?.region ?? "US"}`);
-                          }}
-                        >查情报</Button>
-                      </Space>
-                    ) : null,
+                    width: 170,
+                    render: (id: string, row: { id: string; name: string }) => {
+                      if (!id.startsWith("AR")) return null;
+                      const region = atcDetailModal?.region ?? "US";
+                      const watchKey = `${id}|${region}`;
+                      const watched = !!watchlistMap[watchKey];
+                      const busy = !!watchlistBusy[watchKey];
+                      return (
+                        <Space size={4} wrap>
+                          <a href={`https://adstransparency.google.com/advertiser/${id}`} target="_blank" rel="noreferrer">ATC</a>
+                          <Button
+                            size="small" type="link" style={{ padding: 0 }}
+                            onClick={() => {
+                              setAtcDetailModal(null);
+                              router.push(`/user/intelligence?advertiser_id=${id}&name=${encodeURIComponent(row.name)}&region=${region}`);
+                            }}
+                          >查情报</Button>
+                          <Tooltip title={watched ? "取消关注（不再接收持续 30 天的提醒）" : "加入关注列表，OCR 检测到持续投放 ≥30 天创意时自动提醒"}>
+                            <Button
+                              size="small" type="link" style={{ padding: 0 }} loading={busy}
+                              onClick={() => toggleWatchlist(id, row.name, region)}
+                              icon={watched ? <CheckOutlined /> : <StarOutlined />}
+                            >{watched ? "已关注" : "关注"}</Button>
+                          </Tooltip>
+                        </Space>
+                      );
+                    },
                   },
                 ]}
               />

@@ -322,6 +322,79 @@ function isNewDomainsFormat(
   return typeof first === "object" && first !== null && "has_long_running_creative" in first;
 }
 
+/** C-094.3：持久化到 sampled_ads_json 的最小 ad creative 结构（让 cache 命中时能复算分类） */
+interface SampledAd {
+  image: string;
+  first_shown?: number;
+  last_shown?: number;
+}
+
+/** OCR 反查 + 缺图入队 + fire-and-forget worker。返回 {url→domain 已识别映射, 仍有 pending OCR 任务} */
+async function queryOcrCacheAndEnqueue(imageUrls: string[]): Promise<{
+  urlToDomain: Map<string, string>;
+  hasPendingOcr: boolean;
+}> {
+  const urlToDomain = new Map<string, string>();
+  let hasPendingOcr = false;
+  if (imageUrls.length === 0) return { urlToDomain, hasPendingOcr };
+
+  const { isOcrEnabled, queryCachedDomains, enqueueOcrTasks, runOcrWorker } = await import("./ocr-domain");
+  if (!(await isOcrEnabled())) return { urlToDomain, hasPendingOcr };
+
+  const cache = await queryCachedDomains(imageUrls);
+  const toEnqueue: string[] = [];
+
+  for (const url of imageUrls) {
+    const hit = cache.get(url);
+    if (hit?.status === "success" && hit.domain) {
+      urlToDomain.set(url, hit.domain.toLowerCase());
+    } else if (hit?.status === "failed" || hit?.status === "permanent_failure") {
+      // 已识别失败 / 永久失败 → 跳过（这张图就是没域名/无法识别）
+    } else {
+      hasPendingOcr = true;
+      if (!hit) toEnqueue.push(url);
+    }
+  }
+
+  if (toEnqueue.length > 0) {
+    await enqueueOcrTasks(toEnqueue).catch((err) => {
+      console.warn("[C-094.3] enqueueOcrTasks failed:", err);
+    });
+    // Fire-and-forget 触发 worker，让本批 image 5-15s 内被消化
+    void runOcrWorker()
+      .then((r) => console.log("[C-094.3] inline worker:", JSON.stringify(r)))
+      .catch((err) => console.warn("[C-094.3] inline worker failed:", err));
+  }
+
+  return { urlToDomain, hasPendingOcr };
+}
+
+/** 按 domain 聚合采样的 ad creatives → 每个 domain 的统计（creative 数 / 是否有持续 ≥30 天创意） */
+function aggregateDomainStats(sampledAds: SampledAd[], urlToDomain: Map<string, string>): DomainCreativeStat[] {
+  const domainStats = new Map<string, DomainCreativeStat>();
+  for (const ad of sampledAds) {
+    const domain = urlToDomain.get(ad.image);
+    if (!domain) continue; // 还没 OCR 出来 / 已 failed → 跳过
+
+    const stat = domainStats.get(domain) ?? {
+      domain,
+      creative_count: 0,
+      has_long_running_creative: false,
+      max_creative_days: 0,
+    };
+    stat.creative_count++;
+
+    if (ad.first_shown && ad.last_shown && ad.last_shown > ad.first_shown) {
+      const days = Math.floor((ad.last_shown - ad.first_shown) / 86400);
+      if (days > stat.max_creative_days) stat.max_creative_days = days;
+      if (days >= ADVERTISER_MIN_DOMAIN_DAYS) stat.has_long_running_creative = true;
+    }
+
+    domainStats.set(domain, stat);
+  }
+  return Array.from(domainStats.values());
+}
+
 /**
  * C-094.1：判定一个广告主是「同行 vs 品牌自投」。
  *
@@ -336,8 +409,11 @@ function isNewDomainsFormat(
  *   4. 按 domain 聚合所有 ad → 算每个 domain 上最长单广告投放天数
  *   5. 数 "合格 domain"（最长单广告 ≥30 天）→ ≥3 即同行
  *
- * 团队级共享缓存（atc_advertiser_domain_snapshot）：peer 30d / brand_self 7d / pending 1h / unknown 1d。
- * 每次反查消耗 1 次 SerpApi + ≤30 次 OCR（gpt-4o，首次后命中缓存复用）。
+ * C-094.3 新增：sampled_ads_json 持久化采样的 image+timestamps，
+ * cache 命中且 ocr_pending=1 时直接复用采样列表重查 OCR cache 重算分类，
+ * 完全不消耗 SerpApi quota。OCR worker 后台跑完后，下次访问就能拿到正确结果。
+ *
+ * 团队级共享缓存 TTL：peer 30d / brand_self 7d / pending 1h / unknown 1d。
  */
 export async function getOrFetchAdvertiserDomainSnapshot(opts: {
   advertiserId: string;
@@ -360,33 +436,83 @@ export async function getOrFetchAdvertiserDomainSnapshot(opts: {
     };
   }
 
-  // 1. 缓存命中（按 classification 差异化 TTL）。旧格式（string[]）跳过缓存强制重算。
-  // C-094.2：从 snapshot 读取 ocr_pending 持久化字段，正确还原 pending 状态。
+  // 1. 缓存命中
   if (!forceRefresh) {
     const cached = await prisma.atc_advertiser_domain_snapshot.findUnique({
       where: { advertiser_id_region: { advertiser_id: advertiserId, region } },
     });
     if (cached && isNewDomainsFormat(cached.domains_json, cached.ad_count, cached.ocr_pending)) {
-      const details = cached.domains_json as DomainCreativeStat[];
-      const qualifyingCount = details.filter((d) => d.has_long_running_creative).length;
+      const cachedDetails = cached.domains_json as DomainCreativeStat[];
       const wasPending = cached.ocr_pending === 1;
-      const cls = classifyByQualifying(qualifyingCount, wasPending, cached.ad_count > 0);
-      const ttl = ttlForClassification(cls);
-      if (Date.now() - cached.fetched_at.getTime() < ttl) {
+      const provisionalCls = classifyByQualifying(
+        cachedDetails.filter((d) => d.has_long_running_creative).length,
+        wasPending,
+        cached.ad_count > 0,
+      );
+      const ttl = ttlForClassification(provisionalCls);
+      const within = Date.now() - cached.fetched_at.getTime() < ttl;
+
+      // 1a. 非 pending 状态 + TTL 内 → 直接命中，立即返回。
+      if (within && !wasPending) {
         return {
           advertiserId, region,
           advertiserName: cached.advertiser_name,
           uniqueDomainCount: cached.unique_domain_count,
-          qualifyingDomainCount: qualifyingCount,
+          qualifyingDomainCount: cached.qualifying_domain_count,
           adCount: cached.ad_count,
-          domains: details.map((d) => d.domain),
-          domainDetails: details,
-          classification: cls,
-          ocrPending: wasPending,
+          domains: cachedDetails.map((d) => d.domain),
+          domainDetails: cachedDetails,
+          classification: provisionalCls,
+          ocrPending: false,
           fetchedAt: cached.fetched_at,
           fromCache: true,
         };
       }
+
+      // 1b. C-094.3：pending 状态 + TTL 内 + 有 sampled_ads_json
+      //     → 复用采样列表重查 OCR cache，无需调 SerpApi
+      const sampledAdsCached = Array.isArray(cached.sampled_ads_json)
+        ? (cached.sampled_ads_json as unknown as SampledAd[])
+        : null;
+      if (within && wasPending && sampledAdsCached && sampledAdsCached.length > 0) {
+        const imageUrls = sampledAdsCached.map((a) => a.image).filter((u) => typeof u === "string");
+        const { urlToDomain, hasPendingOcr } = await queryOcrCacheAndEnqueue(imageUrls);
+        const newDetails = aggregateDomainStats(sampledAdsCached, urlToDomain);
+        const newQualifyingCount = newDetails.filter((d) => d.has_long_running_creative).length;
+        const newCls = classifyByQualifying(newQualifyingCount, hasPendingOcr, cached.ad_count > 0);
+
+        // 状态变化（OCR 出新结果 / 全跑完）→ 更新 snapshot，不刷新 fetched_at（保持原 SerpApi 时间）
+        const changed =
+          newDetails.length !== cachedDetails.length ||
+          newQualifyingCount !== cached.qualifying_domain_count ||
+          (hasPendingOcr ? 1 : 0) !== cached.ocr_pending;
+        if (changed) {
+          await prisma.atc_advertiser_domain_snapshot.update({
+            where: { advertiser_id_region: { advertiser_id: advertiserId, region } },
+            data: {
+              unique_domain_count: newDetails.length,
+              qualifying_domain_count: newQualifyingCount,
+              domains_json: newDetails as unknown as object,
+              ocr_pending: hasPendingOcr ? 1 : 0,
+            },
+          });
+        }
+
+        return {
+          advertiserId, region,
+          advertiserName: cached.advertiser_name,
+          uniqueDomainCount: newDetails.length,
+          qualifyingDomainCount: newQualifyingCount,
+          adCount: cached.ad_count,
+          domains: newDetails.map((d) => d.domain),
+          domainDetails: newDetails,
+          classification: newCls,
+          ocrPending: hasPendingOcr,
+          fetchedAt: cached.fetched_at,
+          fromCache: true,
+        };
+      }
+      // 1c. pending 但无 sampled_ads_json（C-094.3 之前的旧记录）→ 落到下面 SerpApi 重拉
     }
   }
 
@@ -410,72 +536,26 @@ export async function getOrFetchAdvertiserDomainSnapshot(opts: {
   const advertiserName = ads[0]?.advertiser ?? null;
   const now = new Date();
 
-  // 3. 抽前 30 张带 image 的 ad（用户决策：控制 OCR 成本上限）
-  const sampledAds = ads.filter((a) => !!a.image).slice(0, ADVERTISER_OCR_SAMPLE_LIMIT);
+  // 3. 抽前 30 张带 image 的 ad
+  const sampledAds: SampledAd[] = ads
+    .filter((a) => !!a.image)
+    .slice(0, ADVERTISER_OCR_SAMPLE_LIMIT)
+    .map((a) => ({
+      image: a.image as string,
+      first_shown: a.first_shown,
+      last_shown: a.last_shown,
+    }));
 
   // 4. OCR 反查 + 入队补全
-  const { isOcrEnabled, queryCachedDomains, enqueueOcrTasks, runOcrWorker } = await import("./ocr-domain");
-  const imageUrls = sampledAds.map((a) => a.image as string);
-  const urlToDomain = new Map<string, string>();
-  let hasPendingOcr = false;
+  const imageUrls = sampledAds.map((a) => a.image);
+  const { urlToDomain, hasPendingOcr } = await queryOcrCacheAndEnqueue(imageUrls);
 
-  if (imageUrls.length > 0 && (await isOcrEnabled())) {
-    const cache = await queryCachedDomains(imageUrls);
-    const toEnqueue: string[] = [];
-
-    for (const url of imageUrls) {
-      const hit = cache.get(url);
-      if (hit?.status === "success" && hit.domain) {
-        urlToDomain.set(url, hit.domain.toLowerCase());
-      } else if (hit?.status === "failed" || hit?.status === "permanent_failure") {
-        // 已识别失败，跳过（这张图就是没域名/无法识别）
-      } else {
-        hasPendingOcr = true;
-        if (!hit) toEnqueue.push(url);
-      }
-    }
-
-    if (toEnqueue.length > 0) {
-      await enqueueOcrTasks(toEnqueue).catch((err) => {
-        console.warn("[C-094.1] enqueueOcrTasks failed:", err);
-      });
-      // Fire-and-forget 触发 worker，让本批 image 5-15s 内被消化
-      void runOcrWorker()
-        .then((r) => console.log("[C-094.1] inline worker:", JSON.stringify(r)))
-        .catch((err) => console.warn("[C-094.1] inline worker failed:", err));
-    }
-  }
-
-  // 5. 按 domain 聚合 sampled ads → 算每个 domain 上最长单广告投放天数
-  const domainStats = new Map<string, DomainCreativeStat>();
-  for (const ad of sampledAds) {
-    const url = ad.image as string;
-    const domain = urlToDomain.get(url);
-    if (!domain) continue; // 还没 OCR 出来 / 已 failed → 跳过本轮统计
-
-    const stat = domainStats.get(domain) ?? {
-      domain,
-      creative_count: 0,
-      has_long_running_creative: false,
-      max_creative_days: 0,
-    };
-    stat.creative_count++;
-
-    if (ad.first_shown && ad.last_shown && ad.last_shown > ad.first_shown) {
-      const days = Math.floor((ad.last_shown - ad.first_shown) / 86400);
-      if (days > stat.max_creative_days) stat.max_creative_days = days;
-      if (days >= ADVERTISER_MIN_DOMAIN_DAYS) stat.has_long_running_creative = true;
-    }
-
-    domainStats.set(domain, stat);
-  }
-
-  const domainDetails = Array.from(domainStats.values());
+  // 5. 按 domain 聚合 sampled ads
+  const domainDetails = aggregateDomainStats(sampledAds, urlToDomain);
   const qualifyingCount = domainDetails.filter((d) => d.has_long_running_creative).length;
   const classification = classifyByQualifying(qualifyingCount, hasPendingOcr, ads.length > 0);
 
-  // 6. 写入团队级快照（C-094.2：持久化 qualifying_domain_count 和 ocr_pending，
-  // 避免 cache 重读时把 pending 误判为 unknown，也避免重复打 SerpApi）
+  // 6. 写入团队级快照（C-094.3：sampled_ads_json 持久化采样列表）
   await prisma.atc_advertiser_domain_snapshot.upsert({
     where: { advertiser_id_region: { advertiser_id: advertiserId, region } },
     create: {
@@ -486,6 +566,7 @@ export async function getOrFetchAdvertiserDomainSnapshot(opts: {
       ad_count: ads.length,
       domains_json: domainDetails as unknown as object,
       ocr_pending: hasPendingOcr ? 1 : 0,
+      sampled_ads_json: sampledAds as unknown as object,
       fetched_at: now,
     },
     update: {
@@ -495,6 +576,7 @@ export async function getOrFetchAdvertiserDomainSnapshot(opts: {
       ad_count: ads.length,
       domains_json: domainDetails as unknown as object,
       ocr_pending: hasPendingOcr ? 1 : 0,
+      sampled_ads_json: sampledAds as unknown as object,
       fetched_at: now,
     },
   });
