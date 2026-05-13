@@ -41,7 +41,8 @@ export const POST = withUser(async (req: NextRequest, { user }) => {
 
   const advertiserId = (body.advertiser_id ?? "").trim();
   const region = (body.region ?? "US").trim().toUpperCase();
-  const minDays = Number.isFinite(body.min_days) ? Math.max(1, Math.min(365, Number(body.min_days))) : 15;
+  // v2：默认 30 天（07 二次反馈"30 天以上"的硬性阈值）
+  const minDays = Number.isFinite(body.min_days) ? Math.max(1, Math.min(365, Number(body.min_days))) : 30;
   const advertiserName = (body.advertiser_name ?? "").trim() || null;
 
   if (!advertiserId.startsWith("AR")) {

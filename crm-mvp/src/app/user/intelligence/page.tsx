@@ -130,7 +130,7 @@ export default function IntelligencePage() {
             advertiser_id: advId,
             advertiser_name: advName || undefined,
             region: rgn,
-            min_days: minDays,
+            // v2：min_days 不再从前端 state 取（页面 minDays 是"显示筛选"用），让后端用 default=30
           }),
         }).then(r => r.json());
         if (res.code === 0) {
@@ -139,7 +139,7 @@ export default function IntelligencePage() {
             next.set(key, String(res.data.id));
             return next;
           });
-          message.success(`已关注 ${advName || advId}，每天 8:00 自动盯`);
+          message.success(`已关注 ${advName || advId}，每天 8:00 推送『30 天+ 且昨日还活跃』的广告`);
         } else {
           message.error(res.message || "关注失败");
         }
@@ -412,8 +412,8 @@ export default function IntelligencePage() {
           const isToggling = watchToggling.has(key);
           return (
             <Tooltip title={isWatched
-              ? "已加入 watchlist：每天 8:00 自动盯，新发现『持续 N 天+』的广告会站内通知"
-              : `加入 watchlist：每天 8:00 自动跑一次，新增持续 ${minDays} 天+ 广告时站内通知（顶部 bell）`}>
+              ? "已加入 watchlist：每天 8:00 推送『持续 30 天+ 且昨日还活跃』的广告，跨天可重推（日报语义）"
+              : "加入 watchlist：每天 8:00 推送『持续 30 天+ 且昨日还活跃』的广告（顶部 bell 红点）"}>
               <Button size="small" type={isWatched ? "primary" : "default"}
                 loading={isToggling}
                 icon={isWatched ? <StarFilled /> : <StarOutlined />}

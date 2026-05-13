@@ -913,6 +913,7 @@ model merchant_monitor_rules {
 
 // -----------------------------------------------------------
 // 36. C-089 ATC 广告情报 — 用户关注的广告主（watchlist）
+// min_days 默认 30（v2：07 明确要求 30 天+ 才推）
 // -----------------------------------------------------------
 model user_atc_watchlist {
   id              BigInt   @id @default(autoincrement()) @db.UnsignedBigInt
@@ -920,7 +921,7 @@ model user_atc_watchlist {
   advertiser_id   String   @db.VarChar(64)
   advertiser_name String?  @db.VarChar(255)
   region          String   @default("US") @db.VarChar(8)
-  min_days        Int      @default(15)
+  min_days        Int      @default(30)
   is_deleted      Int      @default(0) @db.TinyInt
   created_at      DateTime @default(now()) @db.DateTime(0)
   updated_at      DateTime @default(now()) @updatedAt @db.DateTime(0)
@@ -930,7 +931,8 @@ model user_atc_watchlist {
 }
 
 // -----------------------------------------------------------
-// 37. C-089 ATC 广告情报 — 防重复推送日志（每 creative 对每用户只推一次）
+// 37. C-089 v2 ATC 广告情报 — 推送日志（每 creative 每天只推一次，跨天可重推）
+// uk_user_creative_date 实现"日报"语义：同 user × 同 creative × 同 alerted_date 唯一
 // -----------------------------------------------------------
 model user_atc_alert_log {
   id            BigInt   @id @default(autoincrement()) @db.UnsignedBigInt
@@ -939,8 +941,9 @@ model user_atc_alert_log {
   advertiser_id String   @db.VarChar(64)
   creative_id   String   @db.VarChar(64)
   days          Int
+  alerted_date  DateTime @db.Date // CST 推送当天的日期
   alerted_at    DateTime @default(now()) @db.DateTime(0)
 
-  @@unique([user_id, creative_id], map: "uk_user_creative")
+  @@unique([user_id, creative_id, alerted_date], map: "uk_user_creative_date")
   @@index([watchlist_id], map: "idx_watchlist")
 }
