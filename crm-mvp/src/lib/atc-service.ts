@@ -303,13 +303,20 @@ function classifyByQualifying(
   return "unknown";
 }
 
-/** 判断 domains_json 是否为新格式（DomainCreativeStat[]）。旧格式是 string[]，需重新计算。 */
-function isNewDomainsFormat(domainsJson: unknown, adCount: number): domainsJson is DomainCreativeStat[] {
+/**
+ * 判断 domains_json 是否为新格式（DomainCreativeStat[]）。旧格式是 string[]，需重新计算。
+ * C-094.2：增加 ocrPending 参数。空数组+adCount>0+ocrPending=1 表示「OCR 还在跑」的合法 pending 状态，
+ * 视为新格式，避免重复打 SerpApi；空数组+adCount>0+ocrPending=0 才是 C-093 旧 bug 数据需重算。
+ */
+function isNewDomainsFormat(
+  domainsJson: unknown,
+  adCount: number,
+  ocrPending: number = 0,
+): domainsJson is DomainCreativeStat[] {
   if (!Array.isArray(domainsJson)) return false;
   if (domainsJson.length === 0) {
-    // 空数组：若有 ad（adCount>0）但 0 domain，是 C-093 旧 bug 数据需重算；
-    // 若 adCount=0 也无 ads，是真实 unknown，可信任缓存。
-    return adCount === 0;
+    if (adCount === 0) return true; // 真无 ads
+    return ocrPending === 1;         // 有 ads 但 OCR 还在跑 → 合法 pending 快照
   }
   const first = domainsJson[0];
   return typeof first === "object" && first !== null && "has_long_running_creative" in first;
@@ -354,14 +361,16 @@ export async function getOrFetchAdvertiserDomainSnapshot(opts: {
   }
 
   // 1. 缓存命中（按 classification 差异化 TTL）。旧格式（string[]）跳过缓存强制重算。
+  // C-094.2：从 snapshot 读取 ocr_pending 持久化字段，正确还原 pending 状态。
   if (!forceRefresh) {
     const cached = await prisma.atc_advertiser_domain_snapshot.findUnique({
       where: { advertiser_id_region: { advertiser_id: advertiserId, region } },
     });
-    if (cached && isNewDomainsFormat(cached.domains_json, cached.ad_count)) {
+    if (cached && isNewDomainsFormat(cached.domains_json, cached.ad_count, cached.ocr_pending)) {
       const details = cached.domains_json as DomainCreativeStat[];
       const qualifyingCount = details.filter((d) => d.has_long_running_creative).length;
-      const cls = classifyByQualifying(qualifyingCount, false, cached.ad_count > 0);
+      const wasPending = cached.ocr_pending === 1;
+      const cls = classifyByQualifying(qualifyingCount, wasPending, cached.ad_count > 0);
       const ttl = ttlForClassification(cls);
       if (Date.now() - cached.fetched_at.getTime() < ttl) {
         return {
@@ -373,7 +382,7 @@ export async function getOrFetchAdvertiserDomainSnapshot(opts: {
           domains: details.map((d) => d.domain),
           domainDetails: details,
           classification: cls,
-          ocrPending: false,
+          ocrPending: wasPending,
           fetchedAt: cached.fetched_at,
           fromCache: true,
         };
@@ -465,22 +474,27 @@ export async function getOrFetchAdvertiserDomainSnapshot(opts: {
   const qualifyingCount = domainDetails.filter((d) => d.has_long_running_creative).length;
   const classification = classifyByQualifying(qualifyingCount, hasPendingOcr, ads.length > 0);
 
-  // 6. 写入团队级快照（domains_json 存详细统计，向后不兼容旧的 string[] 格式）
+  // 6. 写入团队级快照（C-094.2：持久化 qualifying_domain_count 和 ocr_pending，
+  // 避免 cache 重读时把 pending 误判为 unknown，也避免重复打 SerpApi）
   await prisma.atc_advertiser_domain_snapshot.upsert({
     where: { advertiser_id_region: { advertiser_id: advertiserId, region } },
     create: {
       advertiser_id: advertiserId, region,
       advertiser_name: advertiserName,
       unique_domain_count: domainDetails.length,
+      qualifying_domain_count: qualifyingCount,
       ad_count: ads.length,
       domains_json: domainDetails as unknown as object,
+      ocr_pending: hasPendingOcr ? 1 : 0,
       fetched_at: now,
     },
     update: {
       advertiser_name: advertiserName,
       unique_domain_count: domainDetails.length,
+      qualifying_domain_count: qualifyingCount,
       ad_count: ads.length,
       domains_json: domainDetails as unknown as object,
+      ocr_pending: hasPendingOcr ? 1 : 0,
       fetched_at: now,
     },
   });

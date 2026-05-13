@@ -863,16 +863,21 @@ model merchant_atc_snapshots {
 //   每次反查消耗 1 次 SerpApi，缓存 7 天供整个团队复用
 // -----------------------------------------------------------
 model atc_advertiser_domain_snapshot {
-  id                  BigInt   @id @default(autoincrement()) @db.UnsignedBigInt
-  advertiser_id       String   @db.VarChar(64)
-  region              String   @default("US") @db.VarChar(8)
-  advertiser_name     String?  @db.VarChar(255)
-  unique_domain_count Int      @default(0) @db.UnsignedInt
-  ad_count            Int      @default(0) @db.UnsignedInt
-  domains_json        Json?    // ["evryjewels.com", "polkaudio.com", ...]
-  fetched_at          DateTime @db.DateTime(0)
-  created_at          DateTime @default(now()) @db.DateTime(0)
-  updated_at          DateTime @default(now()) @updatedAt @db.DateTime(0)
+  id                       BigInt   @id @default(autoincrement()) @db.UnsignedBigInt
+  advertiser_id            String   @db.VarChar(64)
+  region                   String   @default("US") @db.VarChar(8)
+  advertiser_name          String?  @db.VarChar(255)
+  unique_domain_count      Int      @default(0) @db.UnsignedInt
+  /** C-094.1：满足「单广告持续 ≥30 天」的 domain 数（判定 peer 的核心字段） */
+  qualifying_domain_count  Int      @default(0) @db.UnsignedInt
+  ad_count                 Int      @default(0) @db.UnsignedInt
+  /** C-094.1 后存 DomainCreativeStat[]；C-093 旧数据是 string[]；空数组+ad_count>0 视为旧 bug 重算 */
+  domains_json             Json?
+  /** C-094.2：本快照写入时是否仍有 OCR 任务未完成（true 时 service 重读应返回 pending） */
+  ocr_pending              Int      @default(0) @db.TinyInt
+  fetched_at               DateTime @db.DateTime(0)
+  created_at               DateTime @default(now()) @db.DateTime(0)
+  updated_at               DateTime @default(now()) @updatedAt @db.DateTime(0)
 
   @@unique([advertiser_id, region], map: "uk_advertiser_region")
   @@index([fetched_at], map: "idx_fetched_at")

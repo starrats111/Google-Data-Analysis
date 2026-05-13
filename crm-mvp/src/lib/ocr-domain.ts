@@ -342,16 +342,20 @@ export async function runOcrWorker(): Promise<OcrWorkerResult> {
       const isImgGone = /HTTP 4(?:0[34]|10)/.test(msg);
       const isRateLimit = /rate[_ ]?limit|HTTP 429|too many requests|quota[_ ]?exceed/i.test(msg);
 
+      // C-094.2：rate_limit 也累加 tries，避免上游一直限流时同一张图被无限重抢导致 worker 空转。
+      // 超过 maxTries 标 permanent_failure，让 service 层 hasPendingOcr 判定为 false 不再卡 pending。
       if (isRateLimit) {
+        const reachedMax = newTries >= maxTries;
         await prisma.ad_image_ocr_cache.update({
           where: { id: row.id },
           data: {
-            status: "pending",
-            tries: row.tries,
+            status: reachedMax ? "permanent_failure" : "pending",
+            tries: newTries,
             last_error: msg.slice(0, 512),
             lock_at: null,
           },
         });
+        if (reachedMax) res.permanentFailure++;
         return;
       }
 
