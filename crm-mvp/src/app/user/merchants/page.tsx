@@ -212,6 +212,19 @@ export default function MerchantsPage() {
   const [atcPopover, setAtcPopover] = useState<Record<string, boolean>>({}); // popover 开关
   const [atcRegions, setAtcRegions] = useState<Record<string, string>>({}); // 每行选择的地区
   const [serpApiConfigured, setSerpApiConfigured] = useState<boolean | null>(null);
+  // C-093：广告主分类（同行 vs 品牌自投），Modal 内异步反查
+  type AdvertiserClassItem = {
+    advertiser_id: string;
+    classification: "peer" | "brand_self" | "unknown";
+    unique_domain_count: number;
+    ad_count: number;
+    domains: string[];
+    from_cache: boolean;
+    error?: string;
+  };
+  const [classifyMap, setClassifyMap] = useState<Record<string, AdvertiserClassItem>>({});
+  const [classifyLoading, setClassifyLoading] = useState(false);
+  const [peersOnly, setPeersOnly] = useState(true);
   // C-091.5：批量 ATC 竞争度查询（支持跨页选择）
   const [batchSelectedKeys, setBatchSelectedKeys] = useState<string[]>([]);
   // 维护被选中的完整 merchant 对象（跨页保留），避免翻页后丢失跨页选中条目的数据
@@ -244,6 +257,34 @@ export default function MerchantsPage() {
       }
     }).catch(() => {});
   }, []);
+  // C-093：Modal 打开时异步反查每个广告主的域名分布（团队级 7 天缓存）
+  useEffect(() => {
+    if (!atcDetailModal?.open) return;
+    const arIds = atcDetailModal.advertisers.map((a) => a.id).filter((id) => /^AR\d+$/i.test(id));
+    if (arIds.length === 0) {
+      setClassifyMap({});
+      return;
+    }
+    setClassifyLoading(true);
+    setClassifyMap({});
+    fetch("/api/user/atc/advertiser-classify", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ advertiser_ids: arIds, region: atcDetailModal.region }),
+    })
+      .then((r) => r.json())
+      .then((res) => {
+        if (res.code === 0) {
+          const items = (res.data?.items ?? []) as AdvertiserClassItem[];
+          const map: Record<string, AdvertiserClassItem> = {};
+          for (const it of items) map[it.advertiser_id] = it;
+          setClassifyMap(map);
+        }
+      })
+      .catch(() => {})
+      .finally(() => setClassifyLoading(false));
+  }, [atcDetailModal?.open, atcDetailModal?.region, atcDetailModal?.advertisers]);
+
   const getAtcRegion = useCallback((id: string) => atcRegions[id] ?? "US", [atcRegions]);
   const setAtcRegion = useCallback((id: string, region: string) => {
     setAtcRegions((prev) => ({ ...prev, [id]: region }));
@@ -1194,54 +1235,132 @@ export default function MerchantsPage() {
       ]} />
     </Modal>
 
-    {/* ATC 广告主详情弹窗 */}
+    {/* ATC 广告主详情弹窗（C-093 加入同行/品牌自投判定） */}
     <Modal
       open={atcDetailModal?.open ?? false}
       title={`广告主列表 — ${atcDetailModal?.merchantName ?? ""} (${atcDetailModal?.region ?? ""})`}
       footer={null}
       onCancel={() => setAtcDetailModal(null)}
-      width={520}
+      width={680}
     >
-      {atcDetailModal && (
-        atcDetailModal.advertisers.length === 0 ? (
-          <div style={{ textAlign: "center", color: "#999", padding: "24px 0" }}>暂无广告主数据</div>
-        ) : (
-          <Table
-            dataSource={atcDetailModal.advertisers.map((a, i) => ({ ...a, key: i }))}
-            pagination={false}
-            size="small"
-            columns={[
-              { title: "#", dataIndex: "key", width: 40, render: (v: number) => v + 1 },
-              {
-                title: "广告主",
-                dataIndex: "name",
-                render: (name: string, row: { id: string; name: string }) => (
-                  row.id.startsWith("AR") ? (
-                    <a href={`https://adstransparency.google.com/advertiser/${row.id}`} target="_blank" rel="noreferrer">{name || row.id}</a>
-                  ) : name
-                ),
-              },
-              {
-                title: "操作",
-                dataIndex: "id",
-                width: 120,
-                render: (id: string, row: { id: string; name: string }) => id.startsWith("AR") ? (
-                  <Space size={4}>
-                    <a href={`https://adstransparency.google.com/advertiser/${id}`} target="_blank" rel="noreferrer">ATC</a>
-                    <Button
-                      size="small" type="link" style={{ padding: 0 }}
-                      onClick={() => {
-                        setAtcDetailModal(null);
-                        router.push(`/user/intelligence?advertiser_id=${id}&name=${encodeURIComponent(row.name)}&region=${atcDetailModal?.region ?? "US"}`);
-                      }}
-                    >查情报</Button>
-                  </Space>
-                ) : null,
-              },
-            ]}
-          />
-        )
-      )}
+      {atcDetailModal && (() => {
+        const all = atcDetailModal.advertisers.map((a, i) => ({ ...a, key: i }));
+        const classifyOf = (id: string) => classifyMap[id];
+        const isBrandSelf = (id: string) => classifyOf(id)?.classification === "brand_self";
+        const filtered = peersOnly ? all.filter((r) => !isBrandSelf(r.id)) : all;
+        const hiddenBrandSelfCount = all.filter((r) => isBrandSelf(r.id)).length;
+        const peerCount = all.filter((r) => classifyOf(r.id)?.classification === "peer").length;
+        const unknownCount = all.filter((r) => {
+          const c = classifyOf(r.id);
+          return !c || c.classification === "unknown";
+        }).length;
+        return (
+          <>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12, flexWrap: "wrap", gap: 8 }}>
+              <Space size={4} wrap>
+                <Switch
+                  checked={peersOnly}
+                  onChange={setPeersOnly}
+                  size="small"
+                  checkedChildren="同行"
+                  unCheckedChildren="全部"
+                />
+                <Tooltip title={
+                  <div style={{ fontSize: 12, lineHeight: 1.6 }}>
+                    <div><Text style={{ color: "#fff" }}>判定规则（基于广告主在 ATC 上的全部广告）：</Text></div>
+                    <div>• <Tag color="green">同行</Tag>独立域名 ≥ 2 个（联盟客）</div>
+                    <div>• <Tag color="orange">品牌自投</Tag>独立域名 = 1 个（自家品牌官方账号）</div>
+                    <div>• <Tag>未知</Tag>SerpApi 未返回域名或反查失败</div>
+                    <div style={{ marginTop: 6, color: "#bbb" }}>每个广告主消耗 1 次 SerpApi，团队共享缓存 7 天。</div>
+                  </div>
+                }>
+                  <Text type="secondary" style={{ fontSize: 12, cursor: "help", textDecoration: "underline dotted" }}>只看同行广告主</Text>
+                </Tooltip>
+              </Space>
+              <Space size={6} style={{ fontSize: 12 }}>
+                {classifyLoading ? (
+                  <Text type="secondary"><SyncOutlined spin /> 判定中…</Text>
+                ) : (
+                  <>
+                    <Tag color="green">同行 {peerCount}</Tag>
+                    <Tag color="orange">品牌自投 {hiddenBrandSelfCount}</Tag>
+                    {unknownCount > 0 && <Tag>未知 {unknownCount}</Tag>}
+                  </>
+                )}
+              </Space>
+            </div>
+            {filtered.length === 0 ? (
+              <div style={{ textAlign: "center", color: "#999", padding: "24px 0" }}>
+                {all.length === 0 ? "暂无广告主数据" : `已隐藏 ${hiddenBrandSelfCount} 个品牌自投广告主（关闭"只看同行"可查看）`}
+              </div>
+            ) : (
+              <Table
+                dataSource={filtered}
+                pagination={false}
+                size="small"
+                columns={[
+                  { title: "#", dataIndex: "key", width: 40, render: (v: number) => v + 1 },
+                  {
+                    title: "广告主",
+                    dataIndex: "name",
+                    render: (name: string, row: { id: string; name: string }) => (
+                      row.id.startsWith("AR") ? (
+                        <a href={`https://adstransparency.google.com/advertiser/${row.id}`} target="_blank" rel="noreferrer">{name || row.id}</a>
+                      ) : name
+                    ),
+                  },
+                  {
+                    title: "分类",
+                    dataIndex: "id",
+                    width: 140,
+                    render: (id: string) => {
+                      if (!id.startsWith("AR")) return <Tag>非 AR</Tag>;
+                      const c = classifyOf(id);
+                      if (!c) return classifyLoading ? <Tag icon={<SyncOutlined spin />}>判定中</Tag> : <Tag>未判定</Tag>;
+                      if (c.classification === "peer") {
+                        return (
+                          <Tooltip title={`独立域名：${c.domains.slice(0, 5).join(", ")}${c.domains.length > 5 ? " 等" : ""}（共 ${c.unique_domain_count} 个）`}>
+                            <Tag color="green">同行 · {c.unique_domain_count} 域名</Tag>
+                          </Tooltip>
+                        );
+                      }
+                      if (c.classification === "brand_self") {
+                        return (
+                          <Tooltip title={`只投放：${c.domains[0] ?? "(未知域名)"}`}>
+                            <Tag color="orange">品牌自投</Tag>
+                          </Tooltip>
+                        );
+                      }
+                      return (
+                        <Tooltip title={c.error ? `反查失败：${c.error}` : "SerpApi 未返回域名信息"}>
+                          <Tag>未知</Tag>
+                        </Tooltip>
+                      );
+                    },
+                  },
+                  {
+                    title: "操作",
+                    dataIndex: "id",
+                    width: 120,
+                    render: (id: string, row: { id: string; name: string }) => id.startsWith("AR") ? (
+                      <Space size={4}>
+                        <a href={`https://adstransparency.google.com/advertiser/${id}`} target="_blank" rel="noreferrer">ATC</a>
+                        <Button
+                          size="small" type="link" style={{ padding: 0 }}
+                          onClick={() => {
+                            setAtcDetailModal(null);
+                            router.push(`/user/intelligence?advertiser_id=${id}&name=${encodeURIComponent(row.name)}&region=${atcDetailModal?.region ?? "US"}`);
+                          }}
+                        >查情报</Button>
+                      </Space>
+                    ) : null,
+                  },
+                ]}
+              />
+            )}
+          </>
+        );
+      })()}
     </Modal>
   </div>);
 }

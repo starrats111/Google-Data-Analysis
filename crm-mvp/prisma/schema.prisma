@@ -857,6 +857,28 @@ model merchant_atc_snapshots {
 }
 
 // -----------------------------------------------------------
+// 34c. C-093 广告主域名分布快照（团队级共享，TTL 7 天）
+//   维度：(advertiser_id, region) 全局唯一
+//   用途：判定一个 advertiser 是「同行联盟客（多域名）」还是「品牌自投（单域名）」
+//   每次反查消耗 1 次 SerpApi，缓存 7 天供整个团队复用
+// -----------------------------------------------------------
+model atc_advertiser_domain_snapshot {
+  id                  BigInt   @id @default(autoincrement()) @db.UnsignedBigInt
+  advertiser_id       String   @db.VarChar(64)
+  region              String   @default("US") @db.VarChar(8)
+  advertiser_name     String?  @db.VarChar(255)
+  unique_domain_count Int      @default(0) @db.UnsignedInt
+  ad_count            Int      @default(0) @db.UnsignedInt
+  domains_json        Json?    // ["evryjewels.com", "polkaudio.com", ...]
+  fetched_at          DateTime @db.DateTime(0)
+  created_at          DateTime @default(now()) @db.DateTime(0)
+  updated_at          DateTime @default(now()) @updatedAt @db.DateTime(0)
+
+  @@unique([advertiser_id, region], map: "uk_advertiser_region")
+  @@index([fetched_at], map: "idx_fetched_at")
+}
+
+// -----------------------------------------------------------
 // 34b. C-088 ATC 广告 — OCR 投放域名提取缓存
 // 维度：image_url 全局唯一，跨用户/跨商家共享
 // -----------------------------------------------------------

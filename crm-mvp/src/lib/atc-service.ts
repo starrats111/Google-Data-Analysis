@@ -45,6 +45,20 @@ export interface AtcIntelligenceResult {
   total: number;
 }
 
+// C-093 广告主域名分布快照（同行 vs 品牌自投判定）
+export type AdvertiserClass = "peer" | "brand_self" | "unknown";
+export interface AdvertiserDomainSnapshot {
+  advertiserId: string;
+  region: string;
+  advertiserName: string | null;
+  uniqueDomainCount: number;
+  adCount: number;
+  domains: string[];
+  classification: AdvertiserClass;
+  fetchedAt: Date;
+  fromCache: boolean;
+}
+
 // ─── 代理商关键词过滤列表 ───
 const AGENCY_KEYWORDS = [
   "agency", "media", "marketing", "digital", "advertising",
@@ -225,6 +239,129 @@ export async function findArIdByName(name: string, apiKey: string): Promise<stri
 // ─── 核心：商家竞争度查询（带缓存）───
 
 const CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 小时
+
+// C-093：广告主域名分布快照 TTL（7 天，团队级共享）
+const ADVERTISER_SNAPSHOT_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+
+/**
+ * C-093：反查一个广告主名下所有广告的 domain 分布，用于判定「同行 vs 品牌自投」。
+ *   - unique_domain_count >= 2  → peer（同行联盟客）
+ *   - unique_domain_count == 1  → brand_self（品牌自投）
+ *   - unique_domain_count == 0  → unknown（无数据，可能 SerpApi 未返回域名）
+ *
+ * 团队级共享缓存（atc_advertiser_domain_snapshot），TTL 7 天。
+ * 每次反查消耗 1 次 SerpApi（advertiser_id 查询）。
+ */
+export async function getOrFetchAdvertiserDomainSnapshot(opts: {
+  advertiserId: string;
+  region?: string;
+  serpApiKeys: string[];
+  forceRefresh?: boolean;
+}): Promise<AdvertiserDomainSnapshot> {
+  const { advertiserId, region = "US", serpApiKeys, forceRefresh = false } = opts;
+
+  // AR ID 校验：非 AR 开头的 id 无法反查（如 _name_xxx）
+  if (!/^AR\d+$/i.test(advertiserId)) {
+    return {
+      advertiserId,
+      region,
+      advertiserName: null,
+      uniqueDomainCount: 0,
+      adCount: 0,
+      domains: [],
+      classification: "unknown",
+      fetchedAt: new Date(),
+      fromCache: false,
+    };
+  }
+
+  // 1. 缓存命中（7 天 TTL）
+  if (!forceRefresh) {
+    const cached = await prisma.atc_advertiser_domain_snapshot.findUnique({
+      where: { advertiser_id_region: { advertiser_id: advertiserId, region } },
+    });
+    if (cached && Date.now() - cached.fetched_at.getTime() < ADVERTISER_SNAPSHOT_TTL_MS) {
+      const domains = (cached.domains_json as string[]) ?? [];
+      return {
+        advertiserId,
+        region,
+        advertiserName: cached.advertiser_name,
+        uniqueDomainCount: cached.unique_domain_count,
+        adCount: cached.ad_count,
+        domains,
+        classification: classifyByDomains(cached.unique_domain_count),
+        fetchedAt: cached.fetched_at,
+        fromCache: true,
+      };
+    }
+  }
+
+  // 2. 调 SerpApi（advertiser_id 精确查询，不富化、不 OCR，纯轻量）
+  const serpApiKey = pickApiKey(serpApiKeys);
+  const serpRegion = toSerpApiRegion(region);
+  const params: Record<string, string> = {
+    engine: "google_ads_transparency_center",
+    advertiser_id: advertiserId,
+    num: "100",
+  };
+  if (serpRegion) params.region = serpRegion;
+
+  const NO_RESULTS_MSG = "hasn't returned any results";
+  const data = await callSerpApi(params, serpApiKey);
+  if (data.error && !data.error.includes(NO_RESULTS_MSG)) {
+    throw new Error(data.error);
+  }
+
+  const ads = data.ad_creatives ?? [];
+  const advertiserName = ads[0]?.advertiser ?? null;
+
+  const domainSet = new Set<string>();
+  for (const ad of ads) {
+    const d = extractAdDomain(ad);
+    if (d) domainSet.add(d.toLowerCase());
+  }
+  const domains = Array.from(domainSet);
+  const now = new Date();
+
+  // 3. 写入团队级快照
+  await prisma.atc_advertiser_domain_snapshot.upsert({
+    where: { advertiser_id_region: { advertiser_id: advertiserId, region } },
+    create: {
+      advertiser_id: advertiserId,
+      region,
+      advertiser_name: advertiserName,
+      unique_domain_count: domains.length,
+      ad_count: ads.length,
+      domains_json: domains,
+      fetched_at: now,
+    },
+    update: {
+      advertiser_name: advertiserName,
+      unique_domain_count: domains.length,
+      ad_count: ads.length,
+      domains_json: domains,
+      fetched_at: now,
+    },
+  });
+
+  return {
+    advertiserId,
+    region,
+    advertiserName,
+    uniqueDomainCount: domains.length,
+    adCount: ads.length,
+    domains,
+    classification: classifyByDomains(domains.length),
+    fetchedAt: now,
+    fromCache: false,
+  };
+}
+
+function classifyByDomains(n: number): AdvertiserClass {
+  if (n >= 2) return "peer";
+  if (n === 1) return "brand_self";
+  return "unknown";
+}
 
 export async function queryMerchantAtc(opts: {
   merchantId: bigint;

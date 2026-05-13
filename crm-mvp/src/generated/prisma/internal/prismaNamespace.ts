@@ -415,11 +415,19 @@ export const ModelName = {
   ad_policy_categories: 'ad_policy_categories',
   merchant_policy_reviews: 'merchant_policy_reviews',
   mcc_cost_adjustments: 'mcc_cost_adjustments',
+  monthly_settlement_status: 'monthly_settlement_status',
   kyads_proxies: 'kyads_proxies',
   kyads_proxy_users: 'kyads_proxy_users',
   suffix_pool: 'suffix_pool',
   suffix_assignments: 'suffix_assignments',
-  kyads_click_tasks: 'kyads_click_tasks'
+  kyads_click_tasks: 'kyads_click_tasks',
+  merchant_atc_snapshots: 'merchant_atc_snapshots',
+  atc_advertiser_domain_snapshot: 'atc_advertiser_domain_snapshot',
+  ad_image_ocr_cache: 'ad_image_ocr_cache',
+  user_serpapi_keys: 'user_serpapi_keys',
+  merchant_monitor_rules: 'merchant_monitor_rules',
+  user_atc_watchlist: 'user_atc_watchlist',
+  user_atc_alert_log: 'user_atc_alert_log'
 } as const
 
 export type ModelName = (typeof ModelName)[keyof typeof ModelName]
@@ -435,7 +443,7 @@ export type TypeMap<ExtArgs extends runtime.Types.Extensions.InternalArgs = runt
     omit: GlobalOmitOptions
   }
   meta: {
-    modelProps: "teams" | "users" | "ai_providers" | "ai_model_configs" | "system_configs" | "platform_connections" | "user_merchants" | "merchant_violations" | "merchant_recommendations" | "sheet_configs" | "ad_default_settings" | "holiday_calendar" | "campaigns" | "ad_groups" | "keywords" | "ad_creatives" | "publish_sites" | "site_migrations" | "articles" | "ads_daily_stats" | "google_mcc_accounts" | "affiliate_transactions" | "notifications" | "notification_preferences" | "ai_insights" | "operation_logs" | "exchange_rate_snapshots" | "mcc_cid_accounts" | "ad_policy_categories" | "merchant_policy_reviews" | "mcc_cost_adjustments" | "kyads_proxies" | "kyads_proxy_users" | "suffix_pool" | "suffix_assignments" | "kyads_click_tasks"
+    modelProps: "teams" | "users" | "ai_providers" | "ai_model_configs" | "system_configs" | "platform_connections" | "user_merchants" | "merchant_violations" | "merchant_recommendations" | "sheet_configs" | "ad_default_settings" | "holiday_calendar" | "campaigns" | "ad_groups" | "keywords" | "ad_creatives" | "publish_sites" | "site_migrations" | "articles" | "ads_daily_stats" | "google_mcc_accounts" | "affiliate_transactions" | "notifications" | "notification_preferences" | "ai_insights" | "operation_logs" | "exchange_rate_snapshots" | "mcc_cid_accounts" | "ad_policy_categories" | "merchant_policy_reviews" | "mcc_cost_adjustments" | "monthly_settlement_status" | "kyads_proxies" | "kyads_proxy_users" | "suffix_pool" | "suffix_assignments" | "kyads_click_tasks" | "merchant_atc_snapshots" | "atc_advertiser_domain_snapshot" | "ad_image_ocr_cache" | "user_serpapi_keys" | "merchant_monitor_rules" | "user_atc_watchlist" | "user_atc_alert_log"
     txIsolationLevel: TransactionIsolationLevel
   }
   model: {
@@ -2485,6 +2493,72 @@ export type TypeMap<ExtArgs extends runtime.Types.Extensions.InternalArgs = runt
         }
       }
     }
+    monthly_settlement_status: {
+      payload: Prisma.$monthly_settlement_statusPayload<ExtArgs>
+      fields: Prisma.monthly_settlement_statusFieldRefs
+      operations: {
+        findUnique: {
+          args: Prisma.monthly_settlement_statusFindUniqueArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$monthly_settlement_statusPayload> | null
+        }
+        findUniqueOrThrow: {
+          args: Prisma.monthly_settlement_statusFindUniqueOrThrowArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$monthly_settlement_statusPayload>
+        }
+        findFirst: {
+          args: Prisma.monthly_settlement_statusFindFirstArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$monthly_settlement_statusPayload> | null
+        }
+        findFirstOrThrow: {
+          args: Prisma.monthly_settlement_statusFindFirstOrThrowArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$monthly_settlement_statusPayload>
+        }
+        findMany: {
+          args: Prisma.monthly_settlement_statusFindManyArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$monthly_settlement_statusPayload>[]
+        }
+        create: {
+          args: Prisma.monthly_settlement_statusCreateArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$monthly_settlement_statusPayload>
+        }
+        createMany: {
+          args: Prisma.monthly_settlement_statusCreateManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        delete: {
+          args: Prisma.monthly_settlement_statusDeleteArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$monthly_settlement_statusPayload>
+        }
+        update: {
+          args: Prisma.monthly_settlement_statusUpdateArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$monthly_settlement_statusPayload>
+        }
+        deleteMany: {
+          args: Prisma.monthly_settlement_statusDeleteManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        updateMany: {
+          args: Prisma.monthly_settlement_statusUpdateManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        upsert: {
+          args: Prisma.monthly_settlement_statusUpsertArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$monthly_settlement_statusPayload>
+        }
+        aggregate: {
+          args: Prisma.Monthly_settlement_statusAggregateArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.AggregateMonthly_settlement_status>
+        }
+        groupBy: {
+          args: Prisma.monthly_settlement_statusGroupByArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.Monthly_settlement_statusGroupByOutputType>[]
+        }
+        count: {
+          args: Prisma.monthly_settlement_statusCountArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.Monthly_settlement_statusCountAggregateOutputType> | number
+        }
+      }
+    }
     kyads_proxies: {
       payload: Prisma.$kyads_proxiesPayload<ExtArgs>
       fields: Prisma.kyads_proxiesFieldRefs
@@ -2815,6 +2889,468 @@ export type TypeMap<ExtArgs extends runtime.Types.Extensions.InternalArgs = runt
         }
       }
     }
+    merchant_atc_snapshots: {
+      payload: Prisma.$merchant_atc_snapshotsPayload<ExtArgs>
+      fields: Prisma.merchant_atc_snapshotsFieldRefs
+      operations: {
+        findUnique: {
+          args: Prisma.merchant_atc_snapshotsFindUniqueArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$merchant_atc_snapshotsPayload> | null
+        }
+        findUniqueOrThrow: {
+          args: Prisma.merchant_atc_snapshotsFindUniqueOrThrowArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$merchant_atc_snapshotsPayload>
+        }
+        findFirst: {
+          args: Prisma.merchant_atc_snapshotsFindFirstArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$merchant_atc_snapshotsPayload> | null
+        }
+        findFirstOrThrow: {
+          args: Prisma.merchant_atc_snapshotsFindFirstOrThrowArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$merchant_atc_snapshotsPayload>
+        }
+        findMany: {
+          args: Prisma.merchant_atc_snapshotsFindManyArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$merchant_atc_snapshotsPayload>[]
+        }
+        create: {
+          args: Prisma.merchant_atc_snapshotsCreateArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$merchant_atc_snapshotsPayload>
+        }
+        createMany: {
+          args: Prisma.merchant_atc_snapshotsCreateManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        delete: {
+          args: Prisma.merchant_atc_snapshotsDeleteArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$merchant_atc_snapshotsPayload>
+        }
+        update: {
+          args: Prisma.merchant_atc_snapshotsUpdateArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$merchant_atc_snapshotsPayload>
+        }
+        deleteMany: {
+          args: Prisma.merchant_atc_snapshotsDeleteManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        updateMany: {
+          args: Prisma.merchant_atc_snapshotsUpdateManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        upsert: {
+          args: Prisma.merchant_atc_snapshotsUpsertArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$merchant_atc_snapshotsPayload>
+        }
+        aggregate: {
+          args: Prisma.Merchant_atc_snapshotsAggregateArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.AggregateMerchant_atc_snapshots>
+        }
+        groupBy: {
+          args: Prisma.merchant_atc_snapshotsGroupByArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.Merchant_atc_snapshotsGroupByOutputType>[]
+        }
+        count: {
+          args: Prisma.merchant_atc_snapshotsCountArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.Merchant_atc_snapshotsCountAggregateOutputType> | number
+        }
+      }
+    }
+    atc_advertiser_domain_snapshot: {
+      payload: Prisma.$atc_advertiser_domain_snapshotPayload<ExtArgs>
+      fields: Prisma.atc_advertiser_domain_snapshotFieldRefs
+      operations: {
+        findUnique: {
+          args: Prisma.atc_advertiser_domain_snapshotFindUniqueArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$atc_advertiser_domain_snapshotPayload> | null
+        }
+        findUniqueOrThrow: {
+          args: Prisma.atc_advertiser_domain_snapshotFindUniqueOrThrowArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$atc_advertiser_domain_snapshotPayload>
+        }
+        findFirst: {
+          args: Prisma.atc_advertiser_domain_snapshotFindFirstArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$atc_advertiser_domain_snapshotPayload> | null
+        }
+        findFirstOrThrow: {
+          args: Prisma.atc_advertiser_domain_snapshotFindFirstOrThrowArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$atc_advertiser_domain_snapshotPayload>
+        }
+        findMany: {
+          args: Prisma.atc_advertiser_domain_snapshotFindManyArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$atc_advertiser_domain_snapshotPayload>[]
+        }
+        create: {
+          args: Prisma.atc_advertiser_domain_snapshotCreateArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$atc_advertiser_domain_snapshotPayload>
+        }
+        createMany: {
+          args: Prisma.atc_advertiser_domain_snapshotCreateManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        delete: {
+          args: Prisma.atc_advertiser_domain_snapshotDeleteArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$atc_advertiser_domain_snapshotPayload>
+        }
+        update: {
+          args: Prisma.atc_advertiser_domain_snapshotUpdateArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$atc_advertiser_domain_snapshotPayload>
+        }
+        deleteMany: {
+          args: Prisma.atc_advertiser_domain_snapshotDeleteManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        updateMany: {
+          args: Prisma.atc_advertiser_domain_snapshotUpdateManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        upsert: {
+          args: Prisma.atc_advertiser_domain_snapshotUpsertArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$atc_advertiser_domain_snapshotPayload>
+        }
+        aggregate: {
+          args: Prisma.Atc_advertiser_domain_snapshotAggregateArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.AggregateAtc_advertiser_domain_snapshot>
+        }
+        groupBy: {
+          args: Prisma.atc_advertiser_domain_snapshotGroupByArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.Atc_advertiser_domain_snapshotGroupByOutputType>[]
+        }
+        count: {
+          args: Prisma.atc_advertiser_domain_snapshotCountArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.Atc_advertiser_domain_snapshotCountAggregateOutputType> | number
+        }
+      }
+    }
+    ad_image_ocr_cache: {
+      payload: Prisma.$ad_image_ocr_cachePayload<ExtArgs>
+      fields: Prisma.ad_image_ocr_cacheFieldRefs
+      operations: {
+        findUnique: {
+          args: Prisma.ad_image_ocr_cacheFindUniqueArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$ad_image_ocr_cachePayload> | null
+        }
+        findUniqueOrThrow: {
+          args: Prisma.ad_image_ocr_cacheFindUniqueOrThrowArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$ad_image_ocr_cachePayload>
+        }
+        findFirst: {
+          args: Prisma.ad_image_ocr_cacheFindFirstArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$ad_image_ocr_cachePayload> | null
+        }
+        findFirstOrThrow: {
+          args: Prisma.ad_image_ocr_cacheFindFirstOrThrowArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$ad_image_ocr_cachePayload>
+        }
+        findMany: {
+          args: Prisma.ad_image_ocr_cacheFindManyArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$ad_image_ocr_cachePayload>[]
+        }
+        create: {
+          args: Prisma.ad_image_ocr_cacheCreateArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$ad_image_ocr_cachePayload>
+        }
+        createMany: {
+          args: Prisma.ad_image_ocr_cacheCreateManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        delete: {
+          args: Prisma.ad_image_ocr_cacheDeleteArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$ad_image_ocr_cachePayload>
+        }
+        update: {
+          args: Prisma.ad_image_ocr_cacheUpdateArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$ad_image_ocr_cachePayload>
+        }
+        deleteMany: {
+          args: Prisma.ad_image_ocr_cacheDeleteManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        updateMany: {
+          args: Prisma.ad_image_ocr_cacheUpdateManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        upsert: {
+          args: Prisma.ad_image_ocr_cacheUpsertArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$ad_image_ocr_cachePayload>
+        }
+        aggregate: {
+          args: Prisma.Ad_image_ocr_cacheAggregateArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.AggregateAd_image_ocr_cache>
+        }
+        groupBy: {
+          args: Prisma.ad_image_ocr_cacheGroupByArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.Ad_image_ocr_cacheGroupByOutputType>[]
+        }
+        count: {
+          args: Prisma.ad_image_ocr_cacheCountArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.Ad_image_ocr_cacheCountAggregateOutputType> | number
+        }
+      }
+    }
+    user_serpapi_keys: {
+      payload: Prisma.$user_serpapi_keysPayload<ExtArgs>
+      fields: Prisma.user_serpapi_keysFieldRefs
+      operations: {
+        findUnique: {
+          args: Prisma.user_serpapi_keysFindUniqueArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$user_serpapi_keysPayload> | null
+        }
+        findUniqueOrThrow: {
+          args: Prisma.user_serpapi_keysFindUniqueOrThrowArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$user_serpapi_keysPayload>
+        }
+        findFirst: {
+          args: Prisma.user_serpapi_keysFindFirstArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$user_serpapi_keysPayload> | null
+        }
+        findFirstOrThrow: {
+          args: Prisma.user_serpapi_keysFindFirstOrThrowArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$user_serpapi_keysPayload>
+        }
+        findMany: {
+          args: Prisma.user_serpapi_keysFindManyArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$user_serpapi_keysPayload>[]
+        }
+        create: {
+          args: Prisma.user_serpapi_keysCreateArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$user_serpapi_keysPayload>
+        }
+        createMany: {
+          args: Prisma.user_serpapi_keysCreateManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        delete: {
+          args: Prisma.user_serpapi_keysDeleteArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$user_serpapi_keysPayload>
+        }
+        update: {
+          args: Prisma.user_serpapi_keysUpdateArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$user_serpapi_keysPayload>
+        }
+        deleteMany: {
+          args: Prisma.user_serpapi_keysDeleteManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        updateMany: {
+          args: Prisma.user_serpapi_keysUpdateManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        upsert: {
+          args: Prisma.user_serpapi_keysUpsertArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$user_serpapi_keysPayload>
+        }
+        aggregate: {
+          args: Prisma.User_serpapi_keysAggregateArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.AggregateUser_serpapi_keys>
+        }
+        groupBy: {
+          args: Prisma.user_serpapi_keysGroupByArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.User_serpapi_keysGroupByOutputType>[]
+        }
+        count: {
+          args: Prisma.user_serpapi_keysCountArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.User_serpapi_keysCountAggregateOutputType> | number
+        }
+      }
+    }
+    merchant_monitor_rules: {
+      payload: Prisma.$merchant_monitor_rulesPayload<ExtArgs>
+      fields: Prisma.merchant_monitor_rulesFieldRefs
+      operations: {
+        findUnique: {
+          args: Prisma.merchant_monitor_rulesFindUniqueArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$merchant_monitor_rulesPayload> | null
+        }
+        findUniqueOrThrow: {
+          args: Prisma.merchant_monitor_rulesFindUniqueOrThrowArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$merchant_monitor_rulesPayload>
+        }
+        findFirst: {
+          args: Prisma.merchant_monitor_rulesFindFirstArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$merchant_monitor_rulesPayload> | null
+        }
+        findFirstOrThrow: {
+          args: Prisma.merchant_monitor_rulesFindFirstOrThrowArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$merchant_monitor_rulesPayload>
+        }
+        findMany: {
+          args: Prisma.merchant_monitor_rulesFindManyArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$merchant_monitor_rulesPayload>[]
+        }
+        create: {
+          args: Prisma.merchant_monitor_rulesCreateArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$merchant_monitor_rulesPayload>
+        }
+        createMany: {
+          args: Prisma.merchant_monitor_rulesCreateManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        delete: {
+          args: Prisma.merchant_monitor_rulesDeleteArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$merchant_monitor_rulesPayload>
+        }
+        update: {
+          args: Prisma.merchant_monitor_rulesUpdateArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$merchant_monitor_rulesPayload>
+        }
+        deleteMany: {
+          args: Prisma.merchant_monitor_rulesDeleteManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        updateMany: {
+          args: Prisma.merchant_monitor_rulesUpdateManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        upsert: {
+          args: Prisma.merchant_monitor_rulesUpsertArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$merchant_monitor_rulesPayload>
+        }
+        aggregate: {
+          args: Prisma.Merchant_monitor_rulesAggregateArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.AggregateMerchant_monitor_rules>
+        }
+        groupBy: {
+          args: Prisma.merchant_monitor_rulesGroupByArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.Merchant_monitor_rulesGroupByOutputType>[]
+        }
+        count: {
+          args: Prisma.merchant_monitor_rulesCountArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.Merchant_monitor_rulesCountAggregateOutputType> | number
+        }
+      }
+    }
+    user_atc_watchlist: {
+      payload: Prisma.$user_atc_watchlistPayload<ExtArgs>
+      fields: Prisma.user_atc_watchlistFieldRefs
+      operations: {
+        findUnique: {
+          args: Prisma.user_atc_watchlistFindUniqueArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$user_atc_watchlistPayload> | null
+        }
+        findUniqueOrThrow: {
+          args: Prisma.user_atc_watchlistFindUniqueOrThrowArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$user_atc_watchlistPayload>
+        }
+        findFirst: {
+          args: Prisma.user_atc_watchlistFindFirstArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$user_atc_watchlistPayload> | null
+        }
+        findFirstOrThrow: {
+          args: Prisma.user_atc_watchlistFindFirstOrThrowArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$user_atc_watchlistPayload>
+        }
+        findMany: {
+          args: Prisma.user_atc_watchlistFindManyArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$user_atc_watchlistPayload>[]
+        }
+        create: {
+          args: Prisma.user_atc_watchlistCreateArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$user_atc_watchlistPayload>
+        }
+        createMany: {
+          args: Prisma.user_atc_watchlistCreateManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        delete: {
+          args: Prisma.user_atc_watchlistDeleteArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$user_atc_watchlistPayload>
+        }
+        update: {
+          args: Prisma.user_atc_watchlistUpdateArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$user_atc_watchlistPayload>
+        }
+        deleteMany: {
+          args: Prisma.user_atc_watchlistDeleteManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        updateMany: {
+          args: Prisma.user_atc_watchlistUpdateManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        upsert: {
+          args: Prisma.user_atc_watchlistUpsertArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$user_atc_watchlistPayload>
+        }
+        aggregate: {
+          args: Prisma.User_atc_watchlistAggregateArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.AggregateUser_atc_watchlist>
+        }
+        groupBy: {
+          args: Prisma.user_atc_watchlistGroupByArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.User_atc_watchlistGroupByOutputType>[]
+        }
+        count: {
+          args: Prisma.user_atc_watchlistCountArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.User_atc_watchlistCountAggregateOutputType> | number
+        }
+      }
+    }
+    user_atc_alert_log: {
+      payload: Prisma.$user_atc_alert_logPayload<ExtArgs>
+      fields: Prisma.user_atc_alert_logFieldRefs
+      operations: {
+        findUnique: {
+          args: Prisma.user_atc_alert_logFindUniqueArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$user_atc_alert_logPayload> | null
+        }
+        findUniqueOrThrow: {
+          args: Prisma.user_atc_alert_logFindUniqueOrThrowArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$user_atc_alert_logPayload>
+        }
+        findFirst: {
+          args: Prisma.user_atc_alert_logFindFirstArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$user_atc_alert_logPayload> | null
+        }
+        findFirstOrThrow: {
+          args: Prisma.user_atc_alert_logFindFirstOrThrowArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$user_atc_alert_logPayload>
+        }
+        findMany: {
+          args: Prisma.user_atc_alert_logFindManyArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$user_atc_alert_logPayload>[]
+        }
+        create: {
+          args: Prisma.user_atc_alert_logCreateArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$user_atc_alert_logPayload>
+        }
+        createMany: {
+          args: Prisma.user_atc_alert_logCreateManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        delete: {
+          args: Prisma.user_atc_alert_logDeleteArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$user_atc_alert_logPayload>
+        }
+        update: {
+          args: Prisma.user_atc_alert_logUpdateArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$user_atc_alert_logPayload>
+        }
+        deleteMany: {
+          args: Prisma.user_atc_alert_logDeleteManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        updateMany: {
+          args: Prisma.user_atc_alert_logUpdateManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        upsert: {
+          args: Prisma.user_atc_alert_logUpsertArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$user_atc_alert_logPayload>
+        }
+        aggregate: {
+          args: Prisma.User_atc_alert_logAggregateArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.AggregateUser_atc_alert_log>
+        }
+        groupBy: {
+          args: Prisma.user_atc_alert_logGroupByArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.User_atc_alert_logGroupByOutputType>[]
+        }
+        count: {
+          args: Prisma.user_atc_alert_logCountArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.User_atc_alert_logCountAggregateOutputType> | number
+        }
+      }
+    }
   }
 } & {
   other: {
@@ -2878,6 +3414,7 @@ export const UsersScalarFieldEnum = {
   display_name: 'display_name',
   script_api_key: 'script_api_key',
   link_exchange_click_count: 'link_exchange_click_count',
+  serpapi_key: 'serpapi_key',
   is_deleted: 'is_deleted',
   created_at: 'created_at',
   updated_at: 'updated_at'
@@ -2980,6 +3517,9 @@ export const User_merchantsScalarFieldEnum = {
   link_checked_at: 'link_checked_at',
   link_check_reason: 'link_check_reason',
   kyads_referer_url: 'kyads_referer_url',
+  atc_advertiser_count: 'atc_advertiser_count',
+  atc_last_synced_at: 'atc_last_synced_at',
+  atc_sync_status: 'atc_sync_status',
   is_deleted: 'is_deleted',
   created_at: 'created_at',
   updated_at: 'updated_at'
@@ -3457,6 +3997,31 @@ export const Mcc_cost_adjustmentsScalarFieldEnum = {
 export type Mcc_cost_adjustmentsScalarFieldEnum = (typeof Mcc_cost_adjustmentsScalarFieldEnum)[keyof typeof Mcc_cost_adjustmentsScalarFieldEnum]
 
 
+export const Monthly_settlement_statusScalarFieldEnum = {
+  id: 'id',
+  user_id: 'user_id',
+  month: 'month',
+  total_count: 'total_count',
+  total_amount: 'total_amount',
+  pending_count: 'pending_count',
+  pending_amount: 'pending_amount',
+  approved_count: 'approved_count',
+  approved_amount: 'approved_amount',
+  paid_count: 'paid_count',
+  paid_amount: 'paid_amount',
+  rejected_count: 'rejected_count',
+  rejected_amount: 'rejected_amount',
+  is_settled: 'is_settled',
+  settled_at: 'settled_at',
+  last_synced_at: 'last_synced_at',
+  is_deleted: 'is_deleted',
+  created_at: 'created_at',
+  updated_at: 'updated_at'
+} as const
+
+export type Monthly_settlement_statusScalarFieldEnum = (typeof Monthly_settlement_statusScalarFieldEnum)[keyof typeof Monthly_settlement_statusScalarFieldEnum]
+
+
 export const Kyads_proxiesScalarFieldEnum = {
   id: 'id',
   name: 'name',
@@ -3541,6 +4106,115 @@ export const Kyads_click_tasksScalarFieldEnum = {
 export type Kyads_click_tasksScalarFieldEnum = (typeof Kyads_click_tasksScalarFieldEnum)[keyof typeof Kyads_click_tasksScalarFieldEnum]
 
 
+export const Merchant_atc_snapshotsScalarFieldEnum = {
+  id: 'id',
+  domain: 'domain',
+  region: 'region',
+  raw_advertiser_count: 'raw_advertiser_count',
+  real_advertiser_count: 'real_advertiser_count',
+  top_advertisers_json: 'top_advertisers_json',
+  sample_ads_json: 'sample_ads_json',
+  fetched_at: 'fetched_at',
+  created_at: 'created_at',
+  updated_at: 'updated_at'
+} as const
+
+export type Merchant_atc_snapshotsScalarFieldEnum = (typeof Merchant_atc_snapshotsScalarFieldEnum)[keyof typeof Merchant_atc_snapshotsScalarFieldEnum]
+
+
+export const Atc_advertiser_domain_snapshotScalarFieldEnum = {
+  id: 'id',
+  advertiser_id: 'advertiser_id',
+  region: 'region',
+  advertiser_name: 'advertiser_name',
+  unique_domain_count: 'unique_domain_count',
+  ad_count: 'ad_count',
+  domains_json: 'domains_json',
+  fetched_at: 'fetched_at',
+  created_at: 'created_at',
+  updated_at: 'updated_at'
+} as const
+
+export type Atc_advertiser_domain_snapshotScalarFieldEnum = (typeof Atc_advertiser_domain_snapshotScalarFieldEnum)[keyof typeof Atc_advertiser_domain_snapshotScalarFieldEnum]
+
+
+export const Ad_image_ocr_cacheScalarFieldEnum = {
+  id: 'id',
+  image_url: 'image_url',
+  status: 'status',
+  extracted_domain: 'extracted_domain',
+  raw_output: 'raw_output',
+  tries: 'tries',
+  last_error: 'last_error',
+  model_used: 'model_used',
+  prompt_tokens: 'prompt_tokens',
+  completion_tokens: 'completion_tokens',
+  lock_at: 'lock_at',
+  created_at: 'created_at',
+  updated_at: 'updated_at'
+} as const
+
+export type Ad_image_ocr_cacheScalarFieldEnum = (typeof Ad_image_ocr_cacheScalarFieldEnum)[keyof typeof Ad_image_ocr_cacheScalarFieldEnum]
+
+
+export const User_serpapi_keysScalarFieldEnum = {
+  id: 'id',
+  user_id: 'user_id',
+  key_name: 'key_name',
+  api_key: 'api_key',
+  is_active: 'is_active',
+  is_deleted: 'is_deleted',
+  created_at: 'created_at',
+  updated_at: 'updated_at'
+} as const
+
+export type User_serpapi_keysScalarFieldEnum = (typeof User_serpapi_keysScalarFieldEnum)[keyof typeof User_serpapi_keysScalarFieldEnum]
+
+
+export const Merchant_monitor_rulesScalarFieldEnum = {
+  id: 'id',
+  user_id: 'user_id',
+  user_merchant_id: 'user_merchant_id',
+  rule_type: 'rule_type',
+  threshold_pct: 'threshold_pct',
+  is_active: 'is_active',
+  is_deleted: 'is_deleted',
+  created_at: 'created_at',
+  updated_at: 'updated_at'
+} as const
+
+export type Merchant_monitor_rulesScalarFieldEnum = (typeof Merchant_monitor_rulesScalarFieldEnum)[keyof typeof Merchant_monitor_rulesScalarFieldEnum]
+
+
+export const User_atc_watchlistScalarFieldEnum = {
+  id: 'id',
+  user_id: 'user_id',
+  advertiser_id: 'advertiser_id',
+  advertiser_name: 'advertiser_name',
+  region: 'region',
+  min_days: 'min_days',
+  is_deleted: 'is_deleted',
+  created_at: 'created_at',
+  updated_at: 'updated_at'
+} as const
+
+export type User_atc_watchlistScalarFieldEnum = (typeof User_atc_watchlistScalarFieldEnum)[keyof typeof User_atc_watchlistScalarFieldEnum]
+
+
+export const User_atc_alert_logScalarFieldEnum = {
+  id: 'id',
+  user_id: 'user_id',
+  watchlist_id: 'watchlist_id',
+  advertiser_id: 'advertiser_id',
+  creative_id: 'creative_id',
+  days: 'days',
+  alerted_date: 'alerted_date',
+  alerted_at: 'alerted_at'
+} as const
+
+export type User_atc_alert_logScalarFieldEnum = (typeof User_atc_alert_logScalarFieldEnum)[keyof typeof User_atc_alert_logScalarFieldEnum]
+
+
 export const SortOrder = {
   asc: 'asc',
   desc: 'desc'
@@ -3587,7 +4261,8 @@ export const usersOrderByRelevanceFieldEnum = {
   role: 'role',
   status: 'status',
   display_name: 'display_name',
-  script_api_key: 'script_api_key'
+  script_api_key: 'script_api_key',
+  serpapi_key: 'serpapi_key'
 } as const
 
 export type usersOrderByRelevanceFieldEnum = (typeof usersOrderByRelevanceFieldEnum)[keyof typeof usersOrderByRelevanceFieldEnum]
@@ -3669,7 +4344,8 @@ export const user_merchantsOrderByRelevanceFieldEnum = {
   policy_category_code: 'policy_category_code',
   link_status: 'link_status',
   link_check_reason: 'link_check_reason',
-  kyads_referer_url: 'kyads_referer_url'
+  kyads_referer_url: 'kyads_referer_url',
+  atc_sync_status: 'atc_sync_status'
 } as const
 
 export type user_merchantsOrderByRelevanceFieldEnum = (typeof user_merchantsOrderByRelevanceFieldEnum)[keyof typeof user_merchantsOrderByRelevanceFieldEnum]
@@ -3937,6 +4613,13 @@ export const mcc_cost_adjustmentsOrderByRelevanceFieldEnum = {
 export type mcc_cost_adjustmentsOrderByRelevanceFieldEnum = (typeof mcc_cost_adjustmentsOrderByRelevanceFieldEnum)[keyof typeof mcc_cost_adjustmentsOrderByRelevanceFieldEnum]
 
 
+export const monthly_settlement_statusOrderByRelevanceFieldEnum = {
+  month: 'month'
+} as const
+
+export type monthly_settlement_statusOrderByRelevanceFieldEnum = (typeof monthly_settlement_statusOrderByRelevanceFieldEnum)[keyof typeof monthly_settlement_statusOrderByRelevanceFieldEnum]
+
+
 export const kyads_proxiesOrderByRelevanceFieldEnum = {
   name: 'name',
   host: 'host',
@@ -3974,6 +4657,67 @@ export const kyads_click_tasksOrderByRelevanceFieldEnum = {
 } as const
 
 export type kyads_click_tasksOrderByRelevanceFieldEnum = (typeof kyads_click_tasksOrderByRelevanceFieldEnum)[keyof typeof kyads_click_tasksOrderByRelevanceFieldEnum]
+
+
+export const merchant_atc_snapshotsOrderByRelevanceFieldEnum = {
+  domain: 'domain',
+  region: 'region'
+} as const
+
+export type merchant_atc_snapshotsOrderByRelevanceFieldEnum = (typeof merchant_atc_snapshotsOrderByRelevanceFieldEnum)[keyof typeof merchant_atc_snapshotsOrderByRelevanceFieldEnum]
+
+
+export const atc_advertiser_domain_snapshotOrderByRelevanceFieldEnum = {
+  advertiser_id: 'advertiser_id',
+  region: 'region',
+  advertiser_name: 'advertiser_name'
+} as const
+
+export type atc_advertiser_domain_snapshotOrderByRelevanceFieldEnum = (typeof atc_advertiser_domain_snapshotOrderByRelevanceFieldEnum)[keyof typeof atc_advertiser_domain_snapshotOrderByRelevanceFieldEnum]
+
+
+export const ad_image_ocr_cacheOrderByRelevanceFieldEnum = {
+  image_url: 'image_url',
+  status: 'status',
+  extracted_domain: 'extracted_domain',
+  raw_output: 'raw_output',
+  last_error: 'last_error',
+  model_used: 'model_used'
+} as const
+
+export type ad_image_ocr_cacheOrderByRelevanceFieldEnum = (typeof ad_image_ocr_cacheOrderByRelevanceFieldEnum)[keyof typeof ad_image_ocr_cacheOrderByRelevanceFieldEnum]
+
+
+export const user_serpapi_keysOrderByRelevanceFieldEnum = {
+  key_name: 'key_name',
+  api_key: 'api_key'
+} as const
+
+export type user_serpapi_keysOrderByRelevanceFieldEnum = (typeof user_serpapi_keysOrderByRelevanceFieldEnum)[keyof typeof user_serpapi_keysOrderByRelevanceFieldEnum]
+
+
+export const merchant_monitor_rulesOrderByRelevanceFieldEnum = {
+  rule_type: 'rule_type'
+} as const
+
+export type merchant_monitor_rulesOrderByRelevanceFieldEnum = (typeof merchant_monitor_rulesOrderByRelevanceFieldEnum)[keyof typeof merchant_monitor_rulesOrderByRelevanceFieldEnum]
+
+
+export const user_atc_watchlistOrderByRelevanceFieldEnum = {
+  advertiser_id: 'advertiser_id',
+  advertiser_name: 'advertiser_name',
+  region: 'region'
+} as const
+
+export type user_atc_watchlistOrderByRelevanceFieldEnum = (typeof user_atc_watchlistOrderByRelevanceFieldEnum)[keyof typeof user_atc_watchlistOrderByRelevanceFieldEnum]
+
+
+export const user_atc_alert_logOrderByRelevanceFieldEnum = {
+  advertiser_id: 'advertiser_id',
+  creative_id: 'creative_id'
+} as const
+
+export type user_atc_alert_logOrderByRelevanceFieldEnum = (typeof user_atc_alert_logOrderByRelevanceFieldEnum)[keyof typeof user_atc_alert_logOrderByRelevanceFieldEnum]
 
 
 
@@ -4170,11 +4914,19 @@ export type GlobalOmitConfig = {
   ad_policy_categories?: Prisma.ad_policy_categoriesOmit
   merchant_policy_reviews?: Prisma.merchant_policy_reviewsOmit
   mcc_cost_adjustments?: Prisma.mcc_cost_adjustmentsOmit
+  monthly_settlement_status?: Prisma.monthly_settlement_statusOmit
   kyads_proxies?: Prisma.kyads_proxiesOmit
   kyads_proxy_users?: Prisma.kyads_proxy_usersOmit
   suffix_pool?: Prisma.suffix_poolOmit
   suffix_assignments?: Prisma.suffix_assignmentsOmit
   kyads_click_tasks?: Prisma.kyads_click_tasksOmit
+  merchant_atc_snapshots?: Prisma.merchant_atc_snapshotsOmit
+  atc_advertiser_domain_snapshot?: Prisma.atc_advertiser_domain_snapshotOmit
+  ad_image_ocr_cache?: Prisma.ad_image_ocr_cacheOmit
+  user_serpapi_keys?: Prisma.user_serpapi_keysOmit
+  merchant_monitor_rules?: Prisma.merchant_monitor_rulesOmit
+  user_atc_watchlist?: Prisma.user_atc_watchlistOmit
+  user_atc_alert_log?: Prisma.user_atc_alert_logOmit
 }
 
 /* Types for Logging */

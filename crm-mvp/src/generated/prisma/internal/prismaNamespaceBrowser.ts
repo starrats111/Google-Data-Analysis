@@ -82,11 +82,19 @@ export const ModelName = {
   ad_policy_categories: 'ad_policy_categories',
   merchant_policy_reviews: 'merchant_policy_reviews',
   mcc_cost_adjustments: 'mcc_cost_adjustments',
+  monthly_settlement_status: 'monthly_settlement_status',
   kyads_proxies: 'kyads_proxies',
   kyads_proxy_users: 'kyads_proxy_users',
   suffix_pool: 'suffix_pool',
   suffix_assignments: 'suffix_assignments',
-  kyads_click_tasks: 'kyads_click_tasks'
+  kyads_click_tasks: 'kyads_click_tasks',
+  merchant_atc_snapshots: 'merchant_atc_snapshots',
+  atc_advertiser_domain_snapshot: 'atc_advertiser_domain_snapshot',
+  ad_image_ocr_cache: 'ad_image_ocr_cache',
+  user_serpapi_keys: 'user_serpapi_keys',
+  merchant_monitor_rules: 'merchant_monitor_rules',
+  user_atc_watchlist: 'user_atc_watchlist',
+  user_atc_alert_log: 'user_atc_alert_log'
 } as const
 
 export type ModelName = (typeof ModelName)[keyof typeof ModelName]
@@ -129,6 +137,7 @@ export const UsersScalarFieldEnum = {
   display_name: 'display_name',
   script_api_key: 'script_api_key',
   link_exchange_click_count: 'link_exchange_click_count',
+  serpapi_key: 'serpapi_key',
   is_deleted: 'is_deleted',
   created_at: 'created_at',
   updated_at: 'updated_at'
@@ -231,6 +240,9 @@ export const User_merchantsScalarFieldEnum = {
   link_checked_at: 'link_checked_at',
   link_check_reason: 'link_check_reason',
   kyads_referer_url: 'kyads_referer_url',
+  atc_advertiser_count: 'atc_advertiser_count',
+  atc_last_synced_at: 'atc_last_synced_at',
+  atc_sync_status: 'atc_sync_status',
   is_deleted: 'is_deleted',
   created_at: 'created_at',
   updated_at: 'updated_at'
@@ -708,6 +720,31 @@ export const Mcc_cost_adjustmentsScalarFieldEnum = {
 export type Mcc_cost_adjustmentsScalarFieldEnum = (typeof Mcc_cost_adjustmentsScalarFieldEnum)[keyof typeof Mcc_cost_adjustmentsScalarFieldEnum]
 
 
+export const Monthly_settlement_statusScalarFieldEnum = {
+  id: 'id',
+  user_id: 'user_id',
+  month: 'month',
+  total_count: 'total_count',
+  total_amount: 'total_amount',
+  pending_count: 'pending_count',
+  pending_amount: 'pending_amount',
+  approved_count: 'approved_count',
+  approved_amount: 'approved_amount',
+  paid_count: 'paid_count',
+  paid_amount: 'paid_amount',
+  rejected_count: 'rejected_count',
+  rejected_amount: 'rejected_amount',
+  is_settled: 'is_settled',
+  settled_at: 'settled_at',
+  last_synced_at: 'last_synced_at',
+  is_deleted: 'is_deleted',
+  created_at: 'created_at',
+  updated_at: 'updated_at'
+} as const
+
+export type Monthly_settlement_statusScalarFieldEnum = (typeof Monthly_settlement_statusScalarFieldEnum)[keyof typeof Monthly_settlement_statusScalarFieldEnum]
+
+
 export const Kyads_proxiesScalarFieldEnum = {
   id: 'id',
   name: 'name',
@@ -792,6 +829,115 @@ export const Kyads_click_tasksScalarFieldEnum = {
 export type Kyads_click_tasksScalarFieldEnum = (typeof Kyads_click_tasksScalarFieldEnum)[keyof typeof Kyads_click_tasksScalarFieldEnum]
 
 
+export const Merchant_atc_snapshotsScalarFieldEnum = {
+  id: 'id',
+  domain: 'domain',
+  region: 'region',
+  raw_advertiser_count: 'raw_advertiser_count',
+  real_advertiser_count: 'real_advertiser_count',
+  top_advertisers_json: 'top_advertisers_json',
+  sample_ads_json: 'sample_ads_json',
+  fetched_at: 'fetched_at',
+  created_at: 'created_at',
+  updated_at: 'updated_at'
+} as const
+
+export type Merchant_atc_snapshotsScalarFieldEnum = (typeof Merchant_atc_snapshotsScalarFieldEnum)[keyof typeof Merchant_atc_snapshotsScalarFieldEnum]
+
+
+export const Atc_advertiser_domain_snapshotScalarFieldEnum = {
+  id: 'id',
+  advertiser_id: 'advertiser_id',
+  region: 'region',
+  advertiser_name: 'advertiser_name',
+  unique_domain_count: 'unique_domain_count',
+  ad_count: 'ad_count',
+  domains_json: 'domains_json',
+  fetched_at: 'fetched_at',
+  created_at: 'created_at',
+  updated_at: 'updated_at'
+} as const
+
+export type Atc_advertiser_domain_snapshotScalarFieldEnum = (typeof Atc_advertiser_domain_snapshotScalarFieldEnum)[keyof typeof Atc_advertiser_domain_snapshotScalarFieldEnum]
+
+
+export const Ad_image_ocr_cacheScalarFieldEnum = {
+  id: 'id',
+  image_url: 'image_url',
+  status: 'status',
+  extracted_domain: 'extracted_domain',
+  raw_output: 'raw_output',
+  tries: 'tries',
+  last_error: 'last_error',
+  model_used: 'model_used',
+  prompt_tokens: 'prompt_tokens',
+  completion_tokens: 'completion_tokens',
+  lock_at: 'lock_at',
+  created_at: 'created_at',
+  updated_at: 'updated_at'
+} as const
+
+export type Ad_image_ocr_cacheScalarFieldEnum = (typeof Ad_image_ocr_cacheScalarFieldEnum)[keyof typeof Ad_image_ocr_cacheScalarFieldEnum]
+
+
+export const User_serpapi_keysScalarFieldEnum = {
+  id: 'id',
+  user_id: 'user_id',
+  key_name: 'key_name',
+  api_key: 'api_key',
+  is_active: 'is_active',
+  is_deleted: 'is_deleted',
+  created_at: 'created_at',
+  updated_at: 'updated_at'
+} as const
+
+export type User_serpapi_keysScalarFieldEnum = (typeof User_serpapi_keysScalarFieldEnum)[keyof typeof User_serpapi_keysScalarFieldEnum]
+
+
+export const Merchant_monitor_rulesScalarFieldEnum = {
+  id: 'id',
+  user_id: 'user_id',
+  user_merchant_id: 'user_merchant_id',
+  rule_type: 'rule_type',
+  threshold_pct: 'threshold_pct',
+  is_active: 'is_active',
+  is_deleted: 'is_deleted',
+  created_at: 'created_at',
+  updated_at: 'updated_at'
+} as const
+
+export type Merchant_monitor_rulesScalarFieldEnum = (typeof Merchant_monitor_rulesScalarFieldEnum)[keyof typeof Merchant_monitor_rulesScalarFieldEnum]
+
+
+export const User_atc_watchlistScalarFieldEnum = {
+  id: 'id',
+  user_id: 'user_id',
+  advertiser_id: 'advertiser_id',
+  advertiser_name: 'advertiser_name',
+  region: 'region',
+  min_days: 'min_days',
+  is_deleted: 'is_deleted',
+  created_at: 'created_at',
+  updated_at: 'updated_at'
+} as const
+
+export type User_atc_watchlistScalarFieldEnum = (typeof User_atc_watchlistScalarFieldEnum)[keyof typeof User_atc_watchlistScalarFieldEnum]
+
+
+export const User_atc_alert_logScalarFieldEnum = {
+  id: 'id',
+  user_id: 'user_id',
+  watchlist_id: 'watchlist_id',
+  advertiser_id: 'advertiser_id',
+  creative_id: 'creative_id',
+  days: 'days',
+  alerted_date: 'alerted_date',
+  alerted_at: 'alerted_at'
+} as const
+
+export type User_atc_alert_logScalarFieldEnum = (typeof User_atc_alert_logScalarFieldEnum)[keyof typeof User_atc_alert_logScalarFieldEnum]
+
+
 export const SortOrder = {
   asc: 'asc',
   desc: 'desc'
@@ -838,7 +984,8 @@ export const usersOrderByRelevanceFieldEnum = {
   role: 'role',
   status: 'status',
   display_name: 'display_name',
-  script_api_key: 'script_api_key'
+  script_api_key: 'script_api_key',
+  serpapi_key: 'serpapi_key'
 } as const
 
 export type usersOrderByRelevanceFieldEnum = (typeof usersOrderByRelevanceFieldEnum)[keyof typeof usersOrderByRelevanceFieldEnum]
@@ -920,7 +1067,8 @@ export const user_merchantsOrderByRelevanceFieldEnum = {
   policy_category_code: 'policy_category_code',
   link_status: 'link_status',
   link_check_reason: 'link_check_reason',
-  kyads_referer_url: 'kyads_referer_url'
+  kyads_referer_url: 'kyads_referer_url',
+  atc_sync_status: 'atc_sync_status'
 } as const
 
 export type user_merchantsOrderByRelevanceFieldEnum = (typeof user_merchantsOrderByRelevanceFieldEnum)[keyof typeof user_merchantsOrderByRelevanceFieldEnum]
@@ -1188,6 +1336,13 @@ export const mcc_cost_adjustmentsOrderByRelevanceFieldEnum = {
 export type mcc_cost_adjustmentsOrderByRelevanceFieldEnum = (typeof mcc_cost_adjustmentsOrderByRelevanceFieldEnum)[keyof typeof mcc_cost_adjustmentsOrderByRelevanceFieldEnum]
 
 
+export const monthly_settlement_statusOrderByRelevanceFieldEnum = {
+  month: 'month'
+} as const
+
+export type monthly_settlement_statusOrderByRelevanceFieldEnum = (typeof monthly_settlement_statusOrderByRelevanceFieldEnum)[keyof typeof monthly_settlement_statusOrderByRelevanceFieldEnum]
+
+
 export const kyads_proxiesOrderByRelevanceFieldEnum = {
   name: 'name',
   host: 'host',
@@ -1225,4 +1380,65 @@ export const kyads_click_tasksOrderByRelevanceFieldEnum = {
 } as const
 
 export type kyads_click_tasksOrderByRelevanceFieldEnum = (typeof kyads_click_tasksOrderByRelevanceFieldEnum)[keyof typeof kyads_click_tasksOrderByRelevanceFieldEnum]
+
+
+export const merchant_atc_snapshotsOrderByRelevanceFieldEnum = {
+  domain: 'domain',
+  region: 'region'
+} as const
+
+export type merchant_atc_snapshotsOrderByRelevanceFieldEnum = (typeof merchant_atc_snapshotsOrderByRelevanceFieldEnum)[keyof typeof merchant_atc_snapshotsOrderByRelevanceFieldEnum]
+
+
+export const atc_advertiser_domain_snapshotOrderByRelevanceFieldEnum = {
+  advertiser_id: 'advertiser_id',
+  region: 'region',
+  advertiser_name: 'advertiser_name'
+} as const
+
+export type atc_advertiser_domain_snapshotOrderByRelevanceFieldEnum = (typeof atc_advertiser_domain_snapshotOrderByRelevanceFieldEnum)[keyof typeof atc_advertiser_domain_snapshotOrderByRelevanceFieldEnum]
+
+
+export const ad_image_ocr_cacheOrderByRelevanceFieldEnum = {
+  image_url: 'image_url',
+  status: 'status',
+  extracted_domain: 'extracted_domain',
+  raw_output: 'raw_output',
+  last_error: 'last_error',
+  model_used: 'model_used'
+} as const
+
+export type ad_image_ocr_cacheOrderByRelevanceFieldEnum = (typeof ad_image_ocr_cacheOrderByRelevanceFieldEnum)[keyof typeof ad_image_ocr_cacheOrderByRelevanceFieldEnum]
+
+
+export const user_serpapi_keysOrderByRelevanceFieldEnum = {
+  key_name: 'key_name',
+  api_key: 'api_key'
+} as const
+
+export type user_serpapi_keysOrderByRelevanceFieldEnum = (typeof user_serpapi_keysOrderByRelevanceFieldEnum)[keyof typeof user_serpapi_keysOrderByRelevanceFieldEnum]
+
+
+export const merchant_monitor_rulesOrderByRelevanceFieldEnum = {
+  rule_type: 'rule_type'
+} as const
+
+export type merchant_monitor_rulesOrderByRelevanceFieldEnum = (typeof merchant_monitor_rulesOrderByRelevanceFieldEnum)[keyof typeof merchant_monitor_rulesOrderByRelevanceFieldEnum]
+
+
+export const user_atc_watchlistOrderByRelevanceFieldEnum = {
+  advertiser_id: 'advertiser_id',
+  advertiser_name: 'advertiser_name',
+  region: 'region'
+} as const
+
+export type user_atc_watchlistOrderByRelevanceFieldEnum = (typeof user_atc_watchlistOrderByRelevanceFieldEnum)[keyof typeof user_atc_watchlistOrderByRelevanceFieldEnum]
+
+
+export const user_atc_alert_logOrderByRelevanceFieldEnum = {
+  advertiser_id: 'advertiser_id',
+  creative_id: 'creative_id'
+} as const
+
+export type user_atc_alert_logOrderByRelevanceFieldEnum = (typeof user_atc_alert_logOrderByRelevanceFieldEnum)[keyof typeof user_atc_alert_logOrderByRelevanceFieldEnum]
 

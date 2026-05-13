@@ -173,6 +173,13 @@ export type merchant_policy_reviews = Prisma.merchant_policy_reviewsModel
  */
 export type mcc_cost_adjustments = Prisma.mcc_cost_adjustmentsModel
 /**
+ * Model monthly_settlement_status
+ * 月度结算追踪表
+ * 每个用户每个月一行，记录该月佣金的状态分布与是否已结算。
+ * 当 pending_count = 0 时自动标记 is_settled=1，daily-sync 不再请求该月平台 API。
+ */
+export type monthly_settlement_status = Prisma.monthly_settlement_statusModel
+/**
  * Model kyads_proxies
  * 
  */
@@ -197,3 +204,38 @@ export type suffix_assignments = Prisma.suffix_assignmentsModel
  * 
  */
 export type kyads_click_tasks = Prisma.kyads_click_tasksModel
+/**
+ * Model merchant_atc_snapshots
+ * 
+ */
+export type merchant_atc_snapshots = Prisma.merchant_atc_snapshotsModel
+/**
+ * Model atc_advertiser_domain_snapshot
+ * 
+ */
+export type atc_advertiser_domain_snapshot = Prisma.atc_advertiser_domain_snapshotModel
+/**
+ * Model ad_image_ocr_cache
+ * 
+ */
+export type ad_image_ocr_cache = Prisma.ad_image_ocr_cacheModel
+/**
+ * Model user_serpapi_keys
+ * 
+ */
+export type user_serpapi_keys = Prisma.user_serpapi_keysModel
+/**
+ * Model merchant_monitor_rules
+ * 
+ */
+export type merchant_monitor_rules = Prisma.merchant_monitor_rulesModel
+/**
+ * Model user_atc_watchlist
+ * 
+ */
+export type user_atc_watchlist = Prisma.user_atc_watchlistModel
+/**
+ * Model user_atc_alert_log
+ * 
+ */
+export type user_atc_alert_log = Prisma.user_atc_alert_logModel
