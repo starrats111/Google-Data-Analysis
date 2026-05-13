@@ -212,13 +212,23 @@ export default function MerchantsPage() {
   const [atcPopover, setAtcPopover] = useState<Record<string, boolean>>({}); // popover 开关
   const [atcRegions, setAtcRegions] = useState<Record<string, string>>({}); // 每行选择的地区
   const [serpApiConfigured, setSerpApiConfigured] = useState<boolean | null>(null);
-  // C-093：广告主分类（同行 vs 品牌自投），Modal 内异步反查
+  // C-093 / C-094.1：广告主分类（同行 vs 品牌自投），Modal 内异步反查
+  type DomainDetail = {
+    domain: string;
+    creative_count: number;
+    has_long_running_creative: boolean;
+    max_creative_days: number;
+  };
   type AdvertiserClassItem = {
     advertiser_id: string;
-    classification: "peer" | "brand_self" | "unknown";
+    advertiser_name?: string | null;
+    classification: "peer" | "brand_self" | "pending" | "unknown";
     unique_domain_count: number;
+    qualifying_domain_count: number;
     ad_count: number;
     domains: string[];
+    domain_details?: DomainDetail[];
+    ocr_pending?: boolean;
     from_cache: boolean;
     error?: string;
   };
@@ -257,7 +267,8 @@ export default function MerchantsPage() {
       }
     }).catch(() => {});
   }, []);
-  // C-093：Modal 打开时异步反查每个广告主的域名分布（团队级 7 天缓存）
+  // C-093 / C-094.1：Modal 打开时异步反查每个广告主的域名分布（团队级缓存）
+  // pending 状态（OCR 未跑完）会触发自动轮询，最多 5 次每次 15s，等 OCR worker 补全后重判。
   useEffect(() => {
     if (!atcDetailModal?.open) return;
     const arIds = atcDetailModal.advertisers.map((a) => a.id).filter((id) => /^AR\d+$/i.test(id));
@@ -265,24 +276,47 @@ export default function MerchantsPage() {
       setClassifyMap({});
       return;
     }
-    setClassifyLoading(true);
-    setClassifyMap({});
-    fetch("/api/user/atc/advertiser-classify", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ advertiser_ids: arIds, region: atcDetailModal.region }),
-    })
-      .then((r) => r.json())
-      .then((res) => {
-        if (res.code === 0) {
-          const items = (res.data?.items ?? []) as AdvertiserClassItem[];
-          const map: Record<string, AdvertiserClassItem> = {};
-          for (const it of items) map[it.advertiser_id] = it;
-          setClassifyMap(map);
-        }
+
+    let cancelled = false;
+    let pollCount = 0;
+    const MAX_POLLS = 5;
+    const POLL_INTERVAL_MS = 15000;
+
+    const doFetch = (isInitial: boolean) => {
+      if (isInitial) {
+        setClassifyLoading(true);
+        setClassifyMap({});
+      }
+      fetch("/api/user/atc/advertiser-classify", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ advertiser_ids: arIds, region: atcDetailModal.region }),
       })
-      .catch(() => {})
-      .finally(() => setClassifyLoading(false));
+        .then((r) => r.json())
+        .then((res) => {
+          if (cancelled) return;
+          if (res.code === 0) {
+            const items = (res.data?.items ?? []) as AdvertiserClassItem[];
+            const map: Record<string, AdvertiserClassItem> = {};
+            for (const it of items) map[it.advertiser_id] = it;
+            setClassifyMap(map);
+
+            // 仍有 pending 状态 → 继续轮询等 OCR 完成
+            const stillPending = items.some((it) => it.classification === "pending");
+            if (stillPending && pollCount < MAX_POLLS) {
+              pollCount++;
+              setTimeout(() => !cancelled && doFetch(false), POLL_INTERVAL_MS);
+            }
+          }
+        })
+        .catch(() => {})
+        .finally(() => {
+          if (!cancelled && isInitial) setClassifyLoading(false);
+        });
+    };
+
+    doFetch(true);
+    return () => { cancelled = true; };
   }, [atcDetailModal?.open, atcDetailModal?.region, atcDetailModal?.advertisers]);
 
   const getAtcRegion = useCallback((id: string) => atcRegions[id] ?? "US", [atcRegions]);
@@ -1250,6 +1284,7 @@ export default function MerchantsPage() {
         const filtered = peersOnly ? all.filter((r) => !isBrandSelf(r.id)) : all;
         const hiddenBrandSelfCount = all.filter((r) => isBrandSelf(r.id)).length;
         const peerCount = all.filter((r) => classifyOf(r.id)?.classification === "peer").length;
+        const pendingCount = all.filter((r) => classifyOf(r.id)?.classification === "pending").length;
         const unknownCount = all.filter((r) => {
           const c = classifyOf(r.id);
           return !c || c.classification === "unknown";
@@ -1267,11 +1302,13 @@ export default function MerchantsPage() {
                 />
                 <Tooltip title={
                   <div style={{ fontSize: 12, lineHeight: 1.6 }}>
-                    <div><Text style={{ color: "#fff" }}>判定规则（基于广告主在 ATC 上的全部广告）：</Text></div>
-                    <div>• <Tag color="green">同行</Tag>独立域名 ≥ 2 个（联盟客）</div>
-                    <div>• <Tag color="orange">品牌自投</Tag>独立域名 = 1 个（自家品牌官方账号）</div>
-                    <div>• <Tag>未知</Tag>SerpApi 未返回域名或反查失败</div>
-                    <div style={{ marginTop: 6, color: "#bbb" }}>每个广告主消耗 1 次 SerpApi，团队共享缓存 7 天。</div>
+                    <div><Text style={{ color: "#fff" }}>判定规则（C-094.1）：</Text></div>
+                    <div>• <Tag color="green">同行</Tag>合格域名 ≥ 3 个（联盟客）</div>
+                    <div>• <Tag color="orange">品牌自投</Tag>合格域名 1~2 个（小范围自投）</div>
+                    <div>• <Tag color="blue">判定中</Tag>OCR 还在跑，1 小时后重判</div>
+                    <div>• <Tag>未知</Tag>无 ATC 数据 / 全部 OCR 失败</div>
+                    <div style={{ marginTop: 6, color: "#bbb" }}>合格域名 = 该域名上至少 1 个广告创意持续投放 ≥ 30 天。</div>
+                    <div style={{ color: "#bbb" }}>每个广告主消耗 1 次 SerpApi，OCR 异步补全；同行缓存 30 天复用。</div>
                   </div>
                 }>
                   <Text type="secondary" style={{ fontSize: 12, cursor: "help", textDecoration: "underline dotted" }}>只看同行广告主</Text>
@@ -1284,6 +1321,7 @@ export default function MerchantsPage() {
                   <>
                     <Tag color="green">同行 {peerCount}</Tag>
                     <Tag color="orange">品牌自投 {hiddenBrandSelfCount}</Tag>
+                    {pendingCount > 0 && <Tag color="blue" icon={<SyncOutlined spin />}>判定中 {pendingCount}</Tag>}
                     {unknownCount > 0 && <Tag>未知 {unknownCount}</Tag>}
                   </>
                 )}
@@ -1312,27 +1350,56 @@ export default function MerchantsPage() {
                   {
                     title: "分类",
                     dataIndex: "id",
-                    width: 140,
+                    width: 160,
                     render: (id: string) => {
                       if (!id.startsWith("AR")) return <Tag>非 AR</Tag>;
                       const c = classifyOf(id);
                       if (!c) return classifyLoading ? <Tag icon={<SyncOutlined spin />}>判定中</Tag> : <Tag>未判定</Tag>;
+                      const details = c.domain_details ?? [];
+                      const qualifying = details.filter((d) => d.has_long_running_creative);
+                      const tip = (() => {
+                        if (qualifying.length > 0) {
+                          return (
+                            <div style={{ fontSize: 12, lineHeight: 1.6 }}>
+                              <div>合格域名（投放 ≥ 30 天）：</div>
+                              {qualifying.slice(0, 5).map((d) => (
+                                <div key={d.domain}>• {d.domain} <Text style={{ color: "#bbb" }}>（最长 {d.max_creative_days} 天 / {d.creative_count} 创意）</Text></div>
+                              ))}
+                              {qualifying.length > 5 && <div>... 共 {qualifying.length} 个</div>}
+                              {details.length > qualifying.length && (
+                                <div style={{ color: "#888", marginTop: 4 }}>另有 {details.length - qualifying.length} 个不合格域名（投放 &lt; 30 天）</div>
+                              )}
+                            </div>
+                          );
+                        }
+                        if (details.length > 0) {
+                          return `OCR 已识别 ${details.length} 个域名，均未达 30 天持续投放门槛`;
+                        }
+                        return "SerpApi 返回的广告暂未识别出域名";
+                      })();
                       if (c.classification === "peer") {
                         return (
-                          <Tooltip title={`独立域名：${c.domains.slice(0, 5).join(", ")}${c.domains.length > 5 ? " 等" : ""}（共 ${c.unique_domain_count} 个）`}>
-                            <Tag color="green">同行 · {c.unique_domain_count} 域名</Tag>
+                          <Tooltip title={tip}>
+                            <Tag color="green">同行 · {c.qualifying_domain_count} 合格域名</Tag>
                           </Tooltip>
                         );
                       }
                       if (c.classification === "brand_self") {
                         return (
-                          <Tooltip title={`只投放：${c.domains[0] ?? "(未知域名)"}`}>
-                            <Tag color="orange">品牌自投</Tag>
+                          <Tooltip title={tip}>
+                            <Tag color="orange">品牌自投 · {c.qualifying_domain_count} 域名</Tag>
+                          </Tooltip>
+                        );
+                      }
+                      if (c.classification === "pending") {
+                        return (
+                          <Tooltip title={`已查 ${c.ad_count} 个广告，OCR 正在识别域名，约 30~60s 后自动重判`}>
+                            <Tag color="blue" icon={<SyncOutlined spin />}>判定中</Tag>
                           </Tooltip>
                         );
                       }
                       return (
-                        <Tooltip title={c.error ? `反查失败：${c.error}` : "SerpApi 未返回域名信息"}>
+                        <Tooltip title={c.error ? `反查失败：${c.error}` : "SerpApi 未返回数据 / OCR 未识别出任何域名"}>
                           <Tag>未知</Tag>
                         </Tooltip>
                       );

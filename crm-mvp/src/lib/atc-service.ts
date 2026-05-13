@@ -45,16 +45,40 @@ export interface AtcIntelligenceResult {
   total: number;
 }
 
-// C-093 广告主域名分布快照（同行 vs 品牌自投判定）
-export type AdvertiserClass = "peer" | "brand_self" | "unknown";
+// C-093 / C-094.1 广告主域名分布快照（同行 vs 品牌自投判定）
+//   classification:
+//     - peer        同行联盟客（合格 domain ≥3）
+//     - brand_self  品牌自投（合格 domain 1~2）
+//     - pending     等待 OCR 完成（部分 image 未识别）
+//     - unknown     无数据或非 AR ID
+export type AdvertiserClass = "peer" | "brand_self" | "pending" | "unknown";
+
+// C-094.1：domain 详细统计，存到 atc_advertiser_domain_snapshot.domains_json
+export interface DomainCreativeStat {
+  domain: string;
+  /** 该 domain 上 OCR 命中的广告创意数 */
+  creative_count: number;
+  /** 该 domain 上是否存在「单广告持续 ≥30 天」的创意（用户定义的合格条件） */
+  has_long_running_creative: boolean;
+  /** 该 domain 上最长的单广告投放天数（last_shown - first_shown），用于显示 */
+  max_creative_days: number;
+}
+
 export interface AdvertiserDomainSnapshot {
   advertiserId: string;
   region: string;
   advertiserName: string | null;
   uniqueDomainCount: number;
+  /** C-094.1：满足「单广告持续 ≥30 天」的 domain 数（判定 peer 的核心字段） */
+  qualifyingDomainCount: number;
   adCount: number;
+  /** 简化的 domain 列表（向后兼容） */
   domains: string[];
+  /** C-094.1：每个 domain 的详细统计 */
+  domainDetails: DomainCreativeStat[];
   classification: AdvertiserClass;
+  /** 是否还有 OCR 任务未完成（pending 状态时为 true） */
+  ocrPending: boolean;
   fetchedAt: Date;
   fromCache: boolean;
 }
@@ -240,28 +264,73 @@ export async function findArIdByName(name: string, apiKey: string): Promise<stri
 
 const CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 小时
 
-// C-093：广告主域名分布快照 TTL（差异化）
-//   - peer（同行联盟客，>=2 域名）：30 天 —— 长期稳定，不会突然变品牌自投
-//   - brand_self（品牌自投，=1 域名）：7 天 —— 偶尔会扩到第二个域名，需要重检
-//   - unknown（SerpApi 未返回）：1 天 —— 多数是临时问题/失败，尽快重试
+// C-094.1：广告主同行判定参数
+//   阈值 30 天 + 至少 3 个合格 domain → peer
+const ADVERTISER_MIN_DOMAIN_DAYS = 30;
+const ADVERTISER_MIN_QUALIFYING_DOMAINS_FOR_PEER = 3;
+/** 每个 advertiser 最多 OCR 前 N 张 image，控制成本（用户决策：30 张） */
+const ADVERTISER_OCR_SAMPLE_LIMIT = 30;
+
+// C-094.1：广告主域名分布快照 TTL（按 classification 差异化）
+//   - peer       (≥3 合格 domain)：30 天 — 同行身份长期稳定
+//   - brand_self (1~2 合格 domain)：7 天 — 可能扩展，定期重检
+//   - pending    (OCR 未完成)：     1 小时 — 等 worker 跑完后重判
+//   - unknown    (无数据)：         1 天  — 临时失败尽快重试
 const ADVERTISER_SNAPSHOT_TTL_PEER_MS = 30 * 24 * 60 * 60 * 1000;
 const ADVERTISER_SNAPSHOT_TTL_BRAND_SELF_MS = 7 * 24 * 60 * 60 * 1000;
+const ADVERTISER_SNAPSHOT_TTL_PENDING_MS = 1 * 60 * 60 * 1000;
 const ADVERTISER_SNAPSHOT_TTL_UNKNOWN_MS = 1 * 24 * 60 * 60 * 1000;
 
-function ttlForCachedSnapshot(uniqueDomainCount: number): number {
-  if (uniqueDomainCount >= 2) return ADVERTISER_SNAPSHOT_TTL_PEER_MS;
-  if (uniqueDomainCount === 1) return ADVERTISER_SNAPSHOT_TTL_BRAND_SELF_MS;
-  return ADVERTISER_SNAPSHOT_TTL_UNKNOWN_MS;
+function ttlForClassification(cls: AdvertiserClass): number {
+  switch (cls) {
+    case "peer": return ADVERTISER_SNAPSHOT_TTL_PEER_MS;
+    case "brand_self": return ADVERTISER_SNAPSHOT_TTL_BRAND_SELF_MS;
+    case "pending": return ADVERTISER_SNAPSHOT_TTL_PENDING_MS;
+    case "unknown":
+    default: return ADVERTISER_SNAPSHOT_TTL_UNKNOWN_MS;
+  }
+}
+
+function classifyByQualifying(
+  qualifyingCount: number,
+  hasPendingOcr: boolean,
+  hasAnyAds: boolean,
+): AdvertiserClass {
+  if (qualifyingCount >= ADVERTISER_MIN_QUALIFYING_DOMAINS_FOR_PEER) return "peer";
+  if (qualifyingCount >= 1) return "brand_self";
+  if (hasPendingOcr) return "pending";
+  if (!hasAnyAds) return "unknown";
+  return "unknown";
+}
+
+/** 判断 domains_json 是否为新格式（DomainCreativeStat[]）。旧格式是 string[]，需重新计算。 */
+function isNewDomainsFormat(domainsJson: unknown, adCount: number): domainsJson is DomainCreativeStat[] {
+  if (!Array.isArray(domainsJson)) return false;
+  if (domainsJson.length === 0) {
+    // 空数组：若有 ad（adCount>0）但 0 domain，是 C-093 旧 bug 数据需重算；
+    // 若 adCount=0 也无 ads，是真实 unknown，可信任缓存。
+    return adCount === 0;
+  }
+  const first = domainsJson[0];
+  return typeof first === "object" && first !== null && "has_long_running_creative" in first;
 }
 
 /**
- * C-093：反查一个广告主名下所有广告的 domain 分布，用于判定「同行 vs 品牌自投」。
- *   - unique_domain_count >= 2  → peer（同行联盟客）
- *   - unique_domain_count == 1  → brand_self（品牌自投）
- *   - unique_domain_count == 0  → unknown（无数据，可能 SerpApi 未返回域名）
+ * C-094.1：判定一个广告主是「同行 vs 品牌自投」。
  *
- * 团队级共享缓存（atc_advertiser_domain_snapshot），TTL 7 天。
- * 每次反查消耗 1 次 SerpApi（advertiser_id 查询）。
+ * 用户定义：
+ *   - 在 Google ATC 上有 ≥3 个不同 domain，且每个 domain 上至少存在「单广告创意持续投放 ≥30 天」
+ *   - 满足以上 → peer（同行联盟客）
+ *
+ * 实现路径（SerpApi advertiser_id 查询不返回 target_domain 是核心限制）：
+ *   1. 调 1 次 SerpApi advertiser_id 查询 → 拿到 ad_creatives 列表（含 image / first_shown / last_shown）
+ *   2. 抽前 30 张 image → 反查 ad_image_ocr_cache（OCR 系统已积累的 image→domain 映射）
+ *   3. 未识别的 image → 入队 + fire-and-forget 触发 worker（异步补 OCR）
+ *   4. 按 domain 聚合所有 ad → 算每个 domain 上最长单广告投放天数
+ *   5. 数 "合格 domain"（最长单广告 ≥30 天）→ ≥3 即同行
+ *
+ * 团队级共享缓存（atc_advertiser_domain_snapshot）：peer 30d / brand_self 7d / pending 1h / unknown 1d。
+ * 每次反查消耗 1 次 SerpApi + ≤30 次 OCR（gpt-4o，首次后命中缓存复用）。
  */
 export async function getOrFetchAdvertiserDomainSnapshot(opts: {
   advertiserId: string;
@@ -274,41 +343,45 @@ export async function getOrFetchAdvertiserDomainSnapshot(opts: {
   // AR ID 校验：非 AR 开头的 id 无法反查（如 _name_xxx）
   if (!/^AR\d+$/i.test(advertiserId)) {
     return {
-      advertiserId,
-      region,
+      advertiserId, region,
       advertiserName: null,
-      uniqueDomainCount: 0,
-      adCount: 0,
-      domains: [],
+      uniqueDomainCount: 0, qualifyingDomainCount: 0, adCount: 0,
+      domains: [], domainDetails: [],
       classification: "unknown",
-      fetchedAt: new Date(),
-      fromCache: false,
+      ocrPending: false,
+      fetchedAt: new Date(), fromCache: false,
     };
   }
 
-  // 1. 缓存命中（差异化 TTL：peer 30天 / brand_self 7天 / unknown 1天）
+  // 1. 缓存命中（按 classification 差异化 TTL）。旧格式（string[]）跳过缓存强制重算。
   if (!forceRefresh) {
     const cached = await prisma.atc_advertiser_domain_snapshot.findUnique({
       where: { advertiser_id_region: { advertiser_id: advertiserId, region } },
     });
-    const ttl = cached ? ttlForCachedSnapshot(cached.unique_domain_count) : 0;
-    if (cached && Date.now() - cached.fetched_at.getTime() < ttl) {
-      const domains = (cached.domains_json as string[]) ?? [];
-      return {
-        advertiserId,
-        region,
-        advertiserName: cached.advertiser_name,
-        uniqueDomainCount: cached.unique_domain_count,
-        adCount: cached.ad_count,
-        domains,
-        classification: classifyByDomains(cached.unique_domain_count),
-        fetchedAt: cached.fetched_at,
-        fromCache: true,
-      };
+    if (cached && isNewDomainsFormat(cached.domains_json, cached.ad_count)) {
+      const details = cached.domains_json as DomainCreativeStat[];
+      const qualifyingCount = details.filter((d) => d.has_long_running_creative).length;
+      const cls = classifyByQualifying(qualifyingCount, false, cached.ad_count > 0);
+      const ttl = ttlForClassification(cls);
+      if (Date.now() - cached.fetched_at.getTime() < ttl) {
+        return {
+          advertiserId, region,
+          advertiserName: cached.advertiser_name,
+          uniqueDomainCount: cached.unique_domain_count,
+          qualifyingDomainCount: qualifyingCount,
+          adCount: cached.ad_count,
+          domains: details.map((d) => d.domain),
+          domainDetails: details,
+          classification: cls,
+          ocrPending: false,
+          fetchedAt: cached.fetched_at,
+          fromCache: true,
+        };
+      }
     }
   }
 
-  // 2. 调 SerpApi（advertiser_id 精确查询，不富化、不 OCR，纯轻量）
+  // 2. 调 1 次 SerpApi advertiser_id 查询（拿全部 ad_creatives，含 image/first_shown/last_shown）
   const serpApiKey = pickApiKey(serpApiKeys);
   const serpRegion = toSerpApiRegion(region);
   const params: Record<string, string> = {
@@ -326,53 +399,104 @@ export async function getOrFetchAdvertiserDomainSnapshot(opts: {
 
   const ads = data.ad_creatives ?? [];
   const advertiserName = ads[0]?.advertiser ?? null;
-
-  const domainSet = new Set<string>();
-  for (const ad of ads) {
-    const d = extractAdDomain(ad);
-    if (d) domainSet.add(d.toLowerCase());
-  }
-  const domains = Array.from(domainSet);
   const now = new Date();
 
-  // 3. 写入团队级快照
+  // 3. 抽前 30 张带 image 的 ad（用户决策：控制 OCR 成本上限）
+  const sampledAds = ads.filter((a) => !!a.image).slice(0, ADVERTISER_OCR_SAMPLE_LIMIT);
+
+  // 4. OCR 反查 + 入队补全
+  const { isOcrEnabled, queryCachedDomains, enqueueOcrTasks, runOcrWorker } = await import("./ocr-domain");
+  const imageUrls = sampledAds.map((a) => a.image as string);
+  const urlToDomain = new Map<string, string>();
+  let hasPendingOcr = false;
+
+  if (imageUrls.length > 0 && (await isOcrEnabled())) {
+    const cache = await queryCachedDomains(imageUrls);
+    const toEnqueue: string[] = [];
+
+    for (const url of imageUrls) {
+      const hit = cache.get(url);
+      if (hit?.status === "success" && hit.domain) {
+        urlToDomain.set(url, hit.domain.toLowerCase());
+      } else if (hit?.status === "failed" || hit?.status === "permanent_failure") {
+        // 已识别失败，跳过（这张图就是没域名/无法识别）
+      } else {
+        hasPendingOcr = true;
+        if (!hit) toEnqueue.push(url);
+      }
+    }
+
+    if (toEnqueue.length > 0) {
+      await enqueueOcrTasks(toEnqueue).catch((err) => {
+        console.warn("[C-094.1] enqueueOcrTasks failed:", err);
+      });
+      // Fire-and-forget 触发 worker，让本批 image 5-15s 内被消化
+      void runOcrWorker()
+        .then((r) => console.log("[C-094.1] inline worker:", JSON.stringify(r)))
+        .catch((err) => console.warn("[C-094.1] inline worker failed:", err));
+    }
+  }
+
+  // 5. 按 domain 聚合 sampled ads → 算每个 domain 上最长单广告投放天数
+  const domainStats = new Map<string, DomainCreativeStat>();
+  for (const ad of sampledAds) {
+    const url = ad.image as string;
+    const domain = urlToDomain.get(url);
+    if (!domain) continue; // 还没 OCR 出来 / 已 failed → 跳过本轮统计
+
+    const stat = domainStats.get(domain) ?? {
+      domain,
+      creative_count: 0,
+      has_long_running_creative: false,
+      max_creative_days: 0,
+    };
+    stat.creative_count++;
+
+    if (ad.first_shown && ad.last_shown && ad.last_shown > ad.first_shown) {
+      const days = Math.floor((ad.last_shown - ad.first_shown) / 86400);
+      if (days > stat.max_creative_days) stat.max_creative_days = days;
+      if (days >= ADVERTISER_MIN_DOMAIN_DAYS) stat.has_long_running_creative = true;
+    }
+
+    domainStats.set(domain, stat);
+  }
+
+  const domainDetails = Array.from(domainStats.values());
+  const qualifyingCount = domainDetails.filter((d) => d.has_long_running_creative).length;
+  const classification = classifyByQualifying(qualifyingCount, hasPendingOcr, ads.length > 0);
+
+  // 6. 写入团队级快照（domains_json 存详细统计，向后不兼容旧的 string[] 格式）
   await prisma.atc_advertiser_domain_snapshot.upsert({
     where: { advertiser_id_region: { advertiser_id: advertiserId, region } },
     create: {
-      advertiser_id: advertiserId,
-      region,
+      advertiser_id: advertiserId, region,
       advertiser_name: advertiserName,
-      unique_domain_count: domains.length,
+      unique_domain_count: domainDetails.length,
       ad_count: ads.length,
-      domains_json: domains,
+      domains_json: domainDetails as unknown as object,
       fetched_at: now,
     },
     update: {
       advertiser_name: advertiserName,
-      unique_domain_count: domains.length,
+      unique_domain_count: domainDetails.length,
       ad_count: ads.length,
-      domains_json: domains,
+      domains_json: domainDetails as unknown as object,
       fetched_at: now,
     },
   });
 
   return {
-    advertiserId,
-    region,
+    advertiserId, region,
     advertiserName,
-    uniqueDomainCount: domains.length,
+    uniqueDomainCount: domainDetails.length,
+    qualifyingDomainCount: qualifyingCount,
     adCount: ads.length,
-    domains,
-    classification: classifyByDomains(domains.length),
-    fetchedAt: now,
-    fromCache: false,
+    domains: domainDetails.map((d) => d.domain),
+    domainDetails,
+    classification,
+    ocrPending: hasPendingOcr,
+    fetchedAt: now, fromCache: false,
   };
-}
-
-function classifyByDomains(n: number): AdvertiserClass {
-  if (n >= 2) return "peer";
-  if (n === 1) return "brand_self";
-  return "unknown";
 }
 
 export async function queryMerchantAtc(opts: {
