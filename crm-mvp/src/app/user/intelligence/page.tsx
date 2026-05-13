@@ -280,8 +280,17 @@ export default function IntelligencePage() {
         return <span style={{ color: "#bfbfbf" }}>-</span>;
       },
     },
-    { title: "首次投放", key: "first", width: 100, render: (_: unknown, rec: AtcAd) => fmtTs(rec.first_shown) },
-    { title: "最近投放", key: "last",  width: 100, render: (_: unknown, rec: AtcAd) => fmtTs(rec.last_shown) },
+    {
+      title: "首次投放", key: "first", width: 100,
+      sorter: (a: AtcAd, b: AtcAd) => (a.first_shown ?? 0) - (b.first_shown ?? 0),
+      render: (_: unknown, rec: AtcAd) => fmtTs(rec.first_shown),
+    },
+    {
+      title: "最近投放", key: "last", width: 100,
+      sorter: (a: AtcAd, b: AtcAd) => (a.last_shown ?? 0) - (b.last_shown ?? 0),
+      defaultSortOrder: "descend" as const,
+      render: (_: unknown, rec: AtcAd) => fmtTs(rec.last_shown),
+    },
   ];
 
   const collapseItems = filteredAdvertisers.map((adv) => ({
