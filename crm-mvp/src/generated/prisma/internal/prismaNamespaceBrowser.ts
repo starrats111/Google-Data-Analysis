@@ -138,6 +138,7 @@ export const UsersScalarFieldEnum = {
   script_api_key: 'script_api_key',
   link_exchange_click_count: 'link_exchange_click_count',
   serpapi_key: 'serpapi_key',
+  atc_default_min_days: 'atc_default_min_days',
   is_deleted: 'is_deleted',
   created_at: 'created_at',
   updated_at: 'updated_at'
@@ -851,8 +852,11 @@ export const Atc_advertiser_domain_snapshotScalarFieldEnum = {
   region: 'region',
   advertiser_name: 'advertiser_name',
   unique_domain_count: 'unique_domain_count',
+  qualifying_domain_count: 'qualifying_domain_count',
   ad_count: 'ad_count',
   domains_json: 'domains_json',
+  ocr_pending: 'ocr_pending',
+  sampled_ads_json: 'sampled_ads_json',
   fetched_at: 'fetched_at',
   created_at: 'created_at',
   updated_at: 'updated_at'
@@ -916,6 +920,7 @@ export const User_atc_watchlistScalarFieldEnum = {
   advertiser_name: 'advertiser_name',
   region: 'region',
   min_days: 'min_days',
+  is_shared: 'is_shared',
   is_deleted: 'is_deleted',
   created_at: 'created_at',
   updated_at: 'updated_at'

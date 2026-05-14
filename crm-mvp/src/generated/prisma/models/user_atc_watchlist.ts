@@ -30,6 +30,7 @@ export type User_atc_watchlistAvgAggregateOutputType = {
   id: number | null
   user_id: number | null
   min_days: number | null
+  is_shared: number | null
   is_deleted: number | null
 }
 
@@ -37,6 +38,7 @@ export type User_atc_watchlistSumAggregateOutputType = {
   id: bigint | null
   user_id: bigint | null
   min_days: number | null
+  is_shared: number | null
   is_deleted: number | null
 }
 
@@ -47,6 +49,7 @@ export type User_atc_watchlistMinAggregateOutputType = {
   advertiser_name: string | null
   region: string | null
   min_days: number | null
+  is_shared: number | null
   is_deleted: number | null
   created_at: Date | null
   updated_at: Date | null
@@ -59,6 +62,7 @@ export type User_atc_watchlistMaxAggregateOutputType = {
   advertiser_name: string | null
   region: string | null
   min_days: number | null
+  is_shared: number | null
   is_deleted: number | null
   created_at: Date | null
   updated_at: Date | null
@@ -71,6 +75,7 @@ export type User_atc_watchlistCountAggregateOutputType = {
   advertiser_name: number
   region: number
   min_days: number
+  is_shared: number
   is_deleted: number
   created_at: number
   updated_at: number
@@ -82,6 +87,7 @@ export type User_atc_watchlistAvgAggregateInputType = {
   id?: true
   user_id?: true
   min_days?: true
+  is_shared?: true
   is_deleted?: true
 }
 
@@ -89,6 +95,7 @@ export type User_atc_watchlistSumAggregateInputType = {
   id?: true
   user_id?: true
   min_days?: true
+  is_shared?: true
   is_deleted?: true
 }
 
@@ -99,6 +106,7 @@ export type User_atc_watchlistMinAggregateInputType = {
   advertiser_name?: true
   region?: true
   min_days?: true
+  is_shared?: true
   is_deleted?: true
   created_at?: true
   updated_at?: true
@@ -111,6 +119,7 @@ export type User_atc_watchlistMaxAggregateInputType = {
   advertiser_name?: true
   region?: true
   min_days?: true
+  is_shared?: true
   is_deleted?: true
   created_at?: true
   updated_at?: true
@@ -123,6 +132,7 @@ export type User_atc_watchlistCountAggregateInputType = {
   advertiser_name?: true
   region?: true
   min_days?: true
+  is_shared?: true
   is_deleted?: true
   created_at?: true
   updated_at?: true
@@ -222,6 +232,7 @@ export type User_atc_watchlistGroupByOutputType = {
   advertiser_name: string | null
   region: string
   min_days: number
+  is_shared: number
   is_deleted: number
   created_at: Date
   updated_at: Date
@@ -257,6 +268,7 @@ export type user_atc_watchlistWhereInput = {
   advertiser_name?: Prisma.StringNullableFilter<"user_atc_watchlist"> | string | null
   region?: Prisma.StringFilter<"user_atc_watchlist"> | string
   min_days?: Prisma.IntFilter<"user_atc_watchlist"> | number
+  is_shared?: Prisma.IntFilter<"user_atc_watchlist"> | number
   is_deleted?: Prisma.IntFilter<"user_atc_watchlist"> | number
   created_at?: Prisma.DateTimeFilter<"user_atc_watchlist"> | Date | string
   updated_at?: Prisma.DateTimeFilter<"user_atc_watchlist"> | Date | string
@@ -269,6 +281,7 @@ export type user_atc_watchlistOrderByWithRelationInput = {
   advertiser_name?: Prisma.SortOrderInput | Prisma.SortOrder
   region?: Prisma.SortOrder
   min_days?: Prisma.SortOrder
+  is_shared?: Prisma.SortOrder
   is_deleted?: Prisma.SortOrder
   created_at?: Prisma.SortOrder
   updated_at?: Prisma.SortOrder
@@ -286,6 +299,7 @@ export type user_atc_watchlistWhereUniqueInput = Prisma.AtLeast<{
   advertiser_name?: Prisma.StringNullableFilter<"user_atc_watchlist"> | string | null
   region?: Prisma.StringFilter<"user_atc_watchlist"> | string
   min_days?: Prisma.IntFilter<"user_atc_watchlist"> | number
+  is_shared?: Prisma.IntFilter<"user_atc_watchlist"> | number
   is_deleted?: Prisma.IntFilter<"user_atc_watchlist"> | number
   created_at?: Prisma.DateTimeFilter<"user_atc_watchlist"> | Date | string
   updated_at?: Prisma.DateTimeFilter<"user_atc_watchlist"> | Date | string
@@ -298,6 +312,7 @@ export type user_atc_watchlistOrderByWithAggregationInput = {
   advertiser_name?: Prisma.SortOrderInput | Prisma.SortOrder
   region?: Prisma.SortOrder
   min_days?: Prisma.SortOrder
+  is_shared?: Prisma.SortOrder
   is_deleted?: Prisma.SortOrder
   created_at?: Prisma.SortOrder
   updated_at?: Prisma.SortOrder
@@ -318,6 +333,7 @@ export type user_atc_watchlistScalarWhereWithAggregatesInput = {
   advertiser_name?: Prisma.StringNullableWithAggregatesFilter<"user_atc_watchlist"> | string | null
   region?: Prisma.StringWithAggregatesFilter<"user_atc_watchlist"> | string
   min_days?: Prisma.IntWithAggregatesFilter<"user_atc_watchlist"> | number
+  is_shared?: Prisma.IntWithAggregatesFilter<"user_atc_watchlist"> | number
   is_deleted?: Prisma.IntWithAggregatesFilter<"user_atc_watchlist"> | number
   created_at?: Prisma.DateTimeWithAggregatesFilter<"user_atc_watchlist"> | Date | string
   updated_at?: Prisma.DateTimeWithAggregatesFilter<"user_atc_watchlist"> | Date | string
@@ -330,6 +346,7 @@ export type user_atc_watchlistCreateInput = {
   advertiser_name?: string | null
   region?: string
   min_days?: number
+  is_shared?: number
   is_deleted?: number
   created_at?: Date | string
   updated_at?: Date | string
@@ -342,6 +359,7 @@ export type user_atc_watchlistUncheckedCreateInput = {
   advertiser_name?: string | null
   region?: string
   min_days?: number
+  is_shared?: number
   is_deleted?: number
   created_at?: Date | string
   updated_at?: Date | string
@@ -354,6 +372,7 @@ export type user_atc_watchlistUpdateInput = {
   advertiser_name?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   region?: Prisma.StringFieldUpdateOperationsInput | string
   min_days?: Prisma.IntFieldUpdateOperationsInput | number
+  is_shared?: Prisma.IntFieldUpdateOperationsInput | number
   is_deleted?: Prisma.IntFieldUpdateOperationsInput | number
   created_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updated_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
@@ -366,6 +385,7 @@ export type user_atc_watchlistUncheckedUpdateInput = {
   advertiser_name?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   region?: Prisma.StringFieldUpdateOperationsInput | string
   min_days?: Prisma.IntFieldUpdateOperationsInput | number
+  is_shared?: Prisma.IntFieldUpdateOperationsInput | number
   is_deleted?: Prisma.IntFieldUpdateOperationsInput | number
   created_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updated_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
@@ -378,6 +398,7 @@ export type user_atc_watchlistCreateManyInput = {
   advertiser_name?: string | null
   region?: string
   min_days?: number
+  is_shared?: number
   is_deleted?: number
   created_at?: Date | string
   updated_at?: Date | string
@@ -390,6 +411,7 @@ export type user_atc_watchlistUpdateManyMutationInput = {
   advertiser_name?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   region?: Prisma.StringFieldUpdateOperationsInput | string
   min_days?: Prisma.IntFieldUpdateOperationsInput | number
+  is_shared?: Prisma.IntFieldUpdateOperationsInput | number
   is_deleted?: Prisma.IntFieldUpdateOperationsInput | number
   created_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updated_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
@@ -402,6 +424,7 @@ export type user_atc_watchlistUncheckedUpdateManyInput = {
   advertiser_name?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   region?: Prisma.StringFieldUpdateOperationsInput | string
   min_days?: Prisma.IntFieldUpdateOperationsInput | number
+  is_shared?: Prisma.IntFieldUpdateOperationsInput | number
   is_deleted?: Prisma.IntFieldUpdateOperationsInput | number
   created_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updated_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
@@ -426,6 +449,7 @@ export type user_atc_watchlistCountOrderByAggregateInput = {
   advertiser_name?: Prisma.SortOrder
   region?: Prisma.SortOrder
   min_days?: Prisma.SortOrder
+  is_shared?: Prisma.SortOrder
   is_deleted?: Prisma.SortOrder
   created_at?: Prisma.SortOrder
   updated_at?: Prisma.SortOrder
@@ -435,6 +459,7 @@ export type user_atc_watchlistAvgOrderByAggregateInput = {
   id?: Prisma.SortOrder
   user_id?: Prisma.SortOrder
   min_days?: Prisma.SortOrder
+  is_shared?: Prisma.SortOrder
   is_deleted?: Prisma.SortOrder
 }
 
@@ -445,6 +470,7 @@ export type user_atc_watchlistMaxOrderByAggregateInput = {
   advertiser_name?: Prisma.SortOrder
   region?: Prisma.SortOrder
   min_days?: Prisma.SortOrder
+  is_shared?: Prisma.SortOrder
   is_deleted?: Prisma.SortOrder
   created_at?: Prisma.SortOrder
   updated_at?: Prisma.SortOrder
@@ -457,6 +483,7 @@ export type user_atc_watchlistMinOrderByAggregateInput = {
   advertiser_name?: Prisma.SortOrder
   region?: Prisma.SortOrder
   min_days?: Prisma.SortOrder
+  is_shared?: Prisma.SortOrder
   is_deleted?: Prisma.SortOrder
   created_at?: Prisma.SortOrder
   updated_at?: Prisma.SortOrder
@@ -466,6 +493,7 @@ export type user_atc_watchlistSumOrderByAggregateInput = {
   id?: Prisma.SortOrder
   user_id?: Prisma.SortOrder
   min_days?: Prisma.SortOrder
+  is_shared?: Prisma.SortOrder
   is_deleted?: Prisma.SortOrder
 }
 
@@ -478,6 +506,7 @@ export type user_atc_watchlistSelect<ExtArgs extends runtime.Types.Extensions.In
   advertiser_name?: boolean
   region?: boolean
   min_days?: boolean
+  is_shared?: boolean
   is_deleted?: boolean
   created_at?: boolean
   updated_at?: boolean
@@ -492,12 +521,13 @@ export type user_atc_watchlistSelectScalar = {
   advertiser_name?: boolean
   region?: boolean
   min_days?: boolean
+  is_shared?: boolean
   is_deleted?: boolean
   created_at?: boolean
   updated_at?: boolean
 }
 
-export type user_atc_watchlistOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"id" | "user_id" | "advertiser_id" | "advertiser_name" | "region" | "min_days" | "is_deleted" | "created_at" | "updated_at", ExtArgs["result"]["user_atc_watchlist"]>
+export type user_atc_watchlistOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"id" | "user_id" | "advertiser_id" | "advertiser_name" | "region" | "min_days" | "is_shared" | "is_deleted" | "created_at" | "updated_at", ExtArgs["result"]["user_atc_watchlist"]>
 
 export type $user_atc_watchlistPayload<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = {
   name: "user_atc_watchlist"
@@ -509,6 +539,10 @@ export type $user_atc_watchlistPayload<ExtArgs extends runtime.Types.Extensions.
     advertiser_name: string | null
     region: string
     min_days: number
+    /**
+     * * C-094.6：是否分享给同事（出现在「推荐广告主」列表）
+     */
+    is_shared: number
     is_deleted: number
     created_at: Date
     updated_at: Date
@@ -887,6 +921,7 @@ export interface user_atc_watchlistFieldRefs {
   readonly advertiser_name: Prisma.FieldRef<"user_atc_watchlist", 'String'>
   readonly region: Prisma.FieldRef<"user_atc_watchlist", 'String'>
   readonly min_days: Prisma.FieldRef<"user_atc_watchlist", 'Int'>
+  readonly is_shared: Prisma.FieldRef<"user_atc_watchlist", 'Int'>
   readonly is_deleted: Prisma.FieldRef<"user_atc_watchlist", 'Int'>
   readonly created_at: Prisma.FieldRef<"user_atc_watchlist", 'DateTime'>
   readonly updated_at: Prisma.FieldRef<"user_atc_watchlist", 'DateTime'>

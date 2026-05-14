@@ -30,6 +30,7 @@ export type UsersAvgAggregateOutputType = {
   id: number | null
   team_id: number | null
   link_exchange_click_count: number | null
+  atc_default_min_days: number | null
   is_deleted: number | null
 }
 
@@ -37,6 +38,7 @@ export type UsersSumAggregateOutputType = {
   id: bigint | null
   team_id: bigint | null
   link_exchange_click_count: number | null
+  atc_default_min_days: number | null
   is_deleted: number | null
 }
 
@@ -52,6 +54,7 @@ export type UsersMinAggregateOutputType = {
   script_api_key: string | null
   link_exchange_click_count: number | null
   serpapi_key: string | null
+  atc_default_min_days: number | null
   is_deleted: number | null
   created_at: Date | null
   updated_at: Date | null
@@ -69,6 +72,7 @@ export type UsersMaxAggregateOutputType = {
   script_api_key: string | null
   link_exchange_click_count: number | null
   serpapi_key: string | null
+  atc_default_min_days: number | null
   is_deleted: number | null
   created_at: Date | null
   updated_at: Date | null
@@ -86,6 +90,7 @@ export type UsersCountAggregateOutputType = {
   script_api_key: number
   link_exchange_click_count: number
   serpapi_key: number
+  atc_default_min_days: number
   is_deleted: number
   created_at: number
   updated_at: number
@@ -97,6 +102,7 @@ export type UsersAvgAggregateInputType = {
   id?: true
   team_id?: true
   link_exchange_click_count?: true
+  atc_default_min_days?: true
   is_deleted?: true
 }
 
@@ -104,6 +110,7 @@ export type UsersSumAggregateInputType = {
   id?: true
   team_id?: true
   link_exchange_click_count?: true
+  atc_default_min_days?: true
   is_deleted?: true
 }
 
@@ -119,6 +126,7 @@ export type UsersMinAggregateInputType = {
   script_api_key?: true
   link_exchange_click_count?: true
   serpapi_key?: true
+  atc_default_min_days?: true
   is_deleted?: true
   created_at?: true
   updated_at?: true
@@ -136,6 +144,7 @@ export type UsersMaxAggregateInputType = {
   script_api_key?: true
   link_exchange_click_count?: true
   serpapi_key?: true
+  atc_default_min_days?: true
   is_deleted?: true
   created_at?: true
   updated_at?: true
@@ -153,6 +162,7 @@ export type UsersCountAggregateInputType = {
   script_api_key?: true
   link_exchange_click_count?: true
   serpapi_key?: true
+  atc_default_min_days?: true
   is_deleted?: true
   created_at?: true
   updated_at?: true
@@ -257,6 +267,7 @@ export type UsersGroupByOutputType = {
   script_api_key: string | null
   link_exchange_click_count: number
   serpapi_key: string | null
+  atc_default_min_days: number
   is_deleted: number
   created_at: Date
   updated_at: Date
@@ -297,6 +308,7 @@ export type usersWhereInput = {
   script_api_key?: Prisma.StringNullableFilter<"users"> | string | null
   link_exchange_click_count?: Prisma.IntFilter<"users"> | number
   serpapi_key?: Prisma.StringNullableFilter<"users"> | string | null
+  atc_default_min_days?: Prisma.IntFilter<"users"> | number
   is_deleted?: Prisma.IntFilter<"users"> | number
   created_at?: Prisma.DateTimeFilter<"users"> | Date | string
   updated_at?: Prisma.DateTimeFilter<"users"> | Date | string
@@ -314,6 +326,7 @@ export type usersOrderByWithRelationInput = {
   script_api_key?: Prisma.SortOrderInput | Prisma.SortOrder
   link_exchange_click_count?: Prisma.SortOrder
   serpapi_key?: Prisma.SortOrderInput | Prisma.SortOrder
+  atc_default_min_days?: Prisma.SortOrder
   is_deleted?: Prisma.SortOrder
   created_at?: Prisma.SortOrder
   updated_at?: Prisma.SortOrder
@@ -335,6 +348,7 @@ export type usersWhereUniqueInput = Prisma.AtLeast<{
   display_name?: Prisma.StringNullableFilter<"users"> | string | null
   link_exchange_click_count?: Prisma.IntFilter<"users"> | number
   serpapi_key?: Prisma.StringNullableFilter<"users"> | string | null
+  atc_default_min_days?: Prisma.IntFilter<"users"> | number
   is_deleted?: Prisma.IntFilter<"users"> | number
   created_at?: Prisma.DateTimeFilter<"users"> | Date | string
   updated_at?: Prisma.DateTimeFilter<"users"> | Date | string
@@ -352,6 +366,7 @@ export type usersOrderByWithAggregationInput = {
   script_api_key?: Prisma.SortOrderInput | Prisma.SortOrder
   link_exchange_click_count?: Prisma.SortOrder
   serpapi_key?: Prisma.SortOrderInput | Prisma.SortOrder
+  atc_default_min_days?: Prisma.SortOrder
   is_deleted?: Prisma.SortOrder
   created_at?: Prisma.SortOrder
   updated_at?: Prisma.SortOrder
@@ -377,6 +392,7 @@ export type usersScalarWhereWithAggregatesInput = {
   script_api_key?: Prisma.StringNullableWithAggregatesFilter<"users"> | string | null
   link_exchange_click_count?: Prisma.IntWithAggregatesFilter<"users"> | number
   serpapi_key?: Prisma.StringNullableWithAggregatesFilter<"users"> | string | null
+  atc_default_min_days?: Prisma.IntWithAggregatesFilter<"users"> | number
   is_deleted?: Prisma.IntWithAggregatesFilter<"users"> | number
   created_at?: Prisma.DateTimeWithAggregatesFilter<"users"> | Date | string
   updated_at?: Prisma.DateTimeWithAggregatesFilter<"users"> | Date | string
@@ -394,6 +410,7 @@ export type usersCreateInput = {
   script_api_key?: string | null
   link_exchange_click_count?: number
   serpapi_key?: string | null
+  atc_default_min_days?: number
   is_deleted?: number
   created_at?: Date | string
   updated_at?: Date | string
@@ -411,6 +428,7 @@ export type usersUncheckedCreateInput = {
   script_api_key?: string | null
   link_exchange_click_count?: number
   serpapi_key?: string | null
+  atc_default_min_days?: number
   is_deleted?: number
   created_at?: Date | string
   updated_at?: Date | string
@@ -428,6 +446,7 @@ export type usersUpdateInput = {
   script_api_key?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   link_exchange_click_count?: Prisma.IntFieldUpdateOperationsInput | number
   serpapi_key?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  atc_default_min_days?: Prisma.IntFieldUpdateOperationsInput | number
   is_deleted?: Prisma.IntFieldUpdateOperationsInput | number
   created_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updated_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
@@ -445,6 +464,7 @@ export type usersUncheckedUpdateInput = {
   script_api_key?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   link_exchange_click_count?: Prisma.IntFieldUpdateOperationsInput | number
   serpapi_key?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  atc_default_min_days?: Prisma.IntFieldUpdateOperationsInput | number
   is_deleted?: Prisma.IntFieldUpdateOperationsInput | number
   created_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updated_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
@@ -462,6 +482,7 @@ export type usersCreateManyInput = {
   script_api_key?: string | null
   link_exchange_click_count?: number
   serpapi_key?: string | null
+  atc_default_min_days?: number
   is_deleted?: number
   created_at?: Date | string
   updated_at?: Date | string
@@ -479,6 +500,7 @@ export type usersUpdateManyMutationInput = {
   script_api_key?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   link_exchange_click_count?: Prisma.IntFieldUpdateOperationsInput | number
   serpapi_key?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  atc_default_min_days?: Prisma.IntFieldUpdateOperationsInput | number
   is_deleted?: Prisma.IntFieldUpdateOperationsInput | number
   created_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updated_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
@@ -496,6 +518,7 @@ export type usersUncheckedUpdateManyInput = {
   script_api_key?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   link_exchange_click_count?: Prisma.IntFieldUpdateOperationsInput | number
   serpapi_key?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  atc_default_min_days?: Prisma.IntFieldUpdateOperationsInput | number
   is_deleted?: Prisma.IntFieldUpdateOperationsInput | number
   created_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updated_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
@@ -519,6 +542,7 @@ export type usersCountOrderByAggregateInput = {
   script_api_key?: Prisma.SortOrder
   link_exchange_click_count?: Prisma.SortOrder
   serpapi_key?: Prisma.SortOrder
+  atc_default_min_days?: Prisma.SortOrder
   is_deleted?: Prisma.SortOrder
   created_at?: Prisma.SortOrder
   updated_at?: Prisma.SortOrder
@@ -528,6 +552,7 @@ export type usersAvgOrderByAggregateInput = {
   id?: Prisma.SortOrder
   team_id?: Prisma.SortOrder
   link_exchange_click_count?: Prisma.SortOrder
+  atc_default_min_days?: Prisma.SortOrder
   is_deleted?: Prisma.SortOrder
 }
 
@@ -543,6 +568,7 @@ export type usersMaxOrderByAggregateInput = {
   script_api_key?: Prisma.SortOrder
   link_exchange_click_count?: Prisma.SortOrder
   serpapi_key?: Prisma.SortOrder
+  atc_default_min_days?: Prisma.SortOrder
   is_deleted?: Prisma.SortOrder
   created_at?: Prisma.SortOrder
   updated_at?: Prisma.SortOrder
@@ -560,6 +586,7 @@ export type usersMinOrderByAggregateInput = {
   script_api_key?: Prisma.SortOrder
   link_exchange_click_count?: Prisma.SortOrder
   serpapi_key?: Prisma.SortOrder
+  atc_default_min_days?: Prisma.SortOrder
   is_deleted?: Prisma.SortOrder
   created_at?: Prisma.SortOrder
   updated_at?: Prisma.SortOrder
@@ -569,6 +596,7 @@ export type usersSumOrderByAggregateInput = {
   id?: Prisma.SortOrder
   team_id?: Prisma.SortOrder
   link_exchange_click_count?: Prisma.SortOrder
+  atc_default_min_days?: Prisma.SortOrder
   is_deleted?: Prisma.SortOrder
 }
 
@@ -590,6 +618,7 @@ export type usersSelect<ExtArgs extends runtime.Types.Extensions.InternalArgs = 
   script_api_key?: boolean
   link_exchange_click_count?: boolean
   serpapi_key?: boolean
+  atc_default_min_days?: boolean
   is_deleted?: boolean
   created_at?: boolean
   updated_at?: boolean
@@ -609,12 +638,13 @@ export type usersSelectScalar = {
   script_api_key?: boolean
   link_exchange_click_count?: boolean
   serpapi_key?: boolean
+  atc_default_min_days?: boolean
   is_deleted?: boolean
   created_at?: boolean
   updated_at?: boolean
 }
 
-export type usersOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"id" | "username" | "password_hash" | "plain_password" | "role" | "status" | "team_id" | "display_name" | "script_api_key" | "link_exchange_click_count" | "serpapi_key" | "is_deleted" | "created_at" | "updated_at", ExtArgs["result"]["users"]>
+export type usersOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"id" | "username" | "password_hash" | "plain_password" | "role" | "status" | "team_id" | "display_name" | "script_api_key" | "link_exchange_click_count" | "serpapi_key" | "atc_default_min_days" | "is_deleted" | "created_at" | "updated_at", ExtArgs["result"]["users"]>
 
 export type $usersPayload<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = {
   name: "users"
@@ -631,6 +661,7 @@ export type $usersPayload<ExtArgs extends runtime.Types.Extensions.InternalArgs 
     script_api_key: string | null
     link_exchange_click_count: number
     serpapi_key: string | null
+    atc_default_min_days: number
     is_deleted: number
     created_at: Date
     updated_at: Date
@@ -1014,6 +1045,7 @@ export interface usersFieldRefs {
   readonly script_api_key: Prisma.FieldRef<"users", 'String'>
   readonly link_exchange_click_count: Prisma.FieldRef<"users", 'Int'>
   readonly serpapi_key: Prisma.FieldRef<"users", 'String'>
+  readonly atc_default_min_days: Prisma.FieldRef<"users", 'Int'>
   readonly is_deleted: Prisma.FieldRef<"users", 'Int'>
   readonly created_at: Prisma.FieldRef<"users", 'DateTime'>
   readonly updated_at: Prisma.FieldRef<"users", 'DateTime'>
