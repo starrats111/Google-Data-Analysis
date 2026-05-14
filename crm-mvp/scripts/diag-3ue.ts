@@ -13,8 +13,10 @@
 import { loadEnvFromProjectRoot } from "./load-env-from-dotenv-file";
 loadEnvFromProjectRoot();
 
-const LOGIN_URL = "https://api.3ue.co/api/v1/login";
-const RPC_URL = "https://api.3ue.co/api/v1/rpc";
+const LOGIN_URL = "https://dash.3ue.co/api/account/login";
+const RPC_URL = "https://sem.3ue.co/dpa/rpc?__gmitm=ayWzA3*l4EVcTpZei43sW*qRvljSdU";
+const LOGIN_ORIGIN = "https://dash.3ue.co";
+const RPC_ORIGIN = "https://sem.3ue.co";
 const USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
 
 async function main() {
@@ -50,7 +52,7 @@ async function main() {
   const ts = Date.now();
   const loginUrl = `${LOGIN_URL}?username=${encodeURIComponent(username)}&password=${encodeURIComponent(password)}&ts=${ts}`;
   const loginRes = await fetch(loginUrl, {
-    headers: { "user-agent": USER_AGENT, origin: "https://sem.3ue.co" },
+    headers: { "user-agent": USER_AGENT, origin: LOGIN_ORIGIN },
     signal: AbortSignal.timeout(20000),
   });
   console.log(`[diag] login status = ${loginRes.status} ${loginRes.statusText}`);
@@ -94,7 +96,7 @@ async function main() {
     headers: {
       "user-agent": USER_AGENT,
       "content-type": "application/json; charset=utf-8",
-      origin: "https://sem.3ue.co",
+      origin: RPC_ORIGIN,
       referer: "https://sem.3ue.co/analytics/overview/",
       accept: "application/json, text/plain, */*",
       "accept-language": "zh-CN,zh;q=0.9,en;q=0.8",
@@ -129,7 +131,7 @@ async function main() {
       headers: {
         "user-agent": USER_AGENT,
         "content-type": "application/json; charset=utf-8",
-        origin: "https://sem.3ue.co",
+        origin: RPC_ORIGIN,
         referer: "https://sem.3ue.co/analytics/overview/",
         accept: "application/json, text/plain, */*",
         cookie: cookieStr,
