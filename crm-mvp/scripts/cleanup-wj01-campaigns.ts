@@ -31,7 +31,7 @@ loadEnvFromProjectRoot();
 const args = process.argv.slice(2);
 const APPLY = args.includes("--apply");
 const PHASE = (args.find((a) => a.startsWith("--phase="))?.split("=")[1] ?? "dump") as
-  | "dump" | "legacy" | "purge" | "reorder" | "verify";
+  | "dump" | "legacy" | "purge" | "reorder" | "verify" | "patch-disabled";
 
 const TARGET_USERNAME = "wj01";
 const CUTOFF = "2026-05-09 00:00:00"; // 0509 分界线（CST，DB datetime 也按 CST 存）
@@ -244,11 +244,15 @@ async function phasePurge() {
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
     const ts = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
     const file = path.join(dir, `wj01-purge-failed-${ts}.json`);
-    fs.writeFileSync(file, JSON.stringify(failedRows, null, 2));
+    fs.writeFileSync(file, JSON.stringify(failedRows, bigintReplacer, 2), "utf8");
     log(`[purge] ${failedRows.length} 条 Google REMOVE 失败已记录: ${file}`);
   }
 
   await prisma.$disconnect();
+}
+
+function bigintReplacer(_k: string, v: unknown): unknown {
+  return typeof v === "bigint" ? v.toString() : v;
 }
 
 /** 阶段 4：41 个 0509+ 规范命名 → 按 created_at ASC 重排 001-041（DB + Google 同步 rename） */
@@ -357,7 +361,7 @@ async function phaseReorder() {
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
     const ts = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
     const file = path.join(dir, `wj01-reorder-failed-${ts}.json`);
-    fs.writeFileSync(file, JSON.stringify(failedRows, null, 2));
+    fs.writeFileSync(file, JSON.stringify(failedRows, bigintReplacer, 2), "utf8");
     log(`[reorder] ${failedRows.length} 条失败已记录: ${file}`);
   }
 
@@ -407,6 +411,37 @@ async function phaseVerify() {
   await prisma.$disconnect();
 }
 
+/** patch-disabled：把账户已停用、Google rename 失败的广告也加 LEGACY- 前缀 + 软删，让它们脱离序号空间 */
+async function phasePatchDisabled() {
+  const { prisma } = await loadDeps();
+  const user = await getUser(prisma);
+
+  // 这 3 个 CID 在 Google 侧已停用，无法 rename / 投放
+  const disabledIds = [8213n, 8312n, 8600n];
+  const rows = await prisma.campaigns.findMany({
+    where: { id: { in: disabledIds }, user_id: user.id, is_deleted: 0 },
+    select: { id: true, campaign_name: true, google_status: true, customer_id: true },
+  });
+
+  log(`[patch-disabled] 处理 Google rename 失败（账户已停用）的广告 (mode=${APPLY ? "APPLY" : "DRY-RUN"})`);
+  for (const r of rows) {
+    if ((r.campaign_name ?? "").startsWith("LEGACY-")) {
+      log(`  [=] id=${r.id} 已是 LEGACY- 前缀，跳过`);
+      continue;
+    }
+    const newName = `LEGACY-${r.campaign_name}`;
+    log(`  [→] id=${r.id} CID=${r.customer_id} ${r.campaign_name} → ${newName}`);
+    if (APPLY) {
+      await prisma.campaigns.update({
+        where: { id: r.id },
+        data: { campaign_name: newName, is_deleted: 1 },
+      });
+    }
+  }
+  if (!APPLY) log(`[patch-disabled] dry-run；加 --apply 真改`);
+  await prisma.$disconnect();
+}
+
 async function main() {
   log(`=== C-095 wj01 广告清洗 phase=${PHASE} mode=${APPLY ? "APPLY" : "DRY-RUN"} ===\n`);
   switch (PHASE) {
@@ -415,6 +450,7 @@ async function main() {
     case "purge": await phasePurge(); break;
     case "reorder": await phaseReorder(); break;
     case "verify": await phaseVerify(); break;
+    case "patch-disabled": await phasePatchDisabled(); break;
     default:
       console.error(`未知 phase: ${PHASE}`);
       process.exit(1);
