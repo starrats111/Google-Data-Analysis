@@ -114,6 +114,35 @@ export async function removeCampaign(
 }
 
 /**
+ * 重命名广告系列（仅改 Google 侧 campaign.name）
+ */
+export async function renameCampaign(
+  credentials: MccCredentials,
+  customerId: string,
+  campaignId: string,
+  newName: string,
+): Promise<{ success: boolean; message: string }> {
+  try {
+    const cid = customerId.replace(/-/g, "");
+    const resourceName = `customers/${cid}/campaigns/${campaignId}`;
+
+    await mutateGoogleAds(credentials, customerId, [{
+      campaign_operation: {
+        update: {
+          resource_name: resourceName,
+          name: newName,
+        },
+        update_mask: "name",
+      },
+    }]);
+
+    return { success: true, message: `广告系列已重命名为 ${newName}` };
+  } catch (err) {
+    return { success: false, message: `重命名失败: ${err instanceof Error ? err.message : String(err)}` };
+  }
+}
+
+/**
  * 暂停/启用广告系列
  */
 export async function updateCampaignStatus(

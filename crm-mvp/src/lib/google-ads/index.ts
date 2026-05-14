@@ -2,4 +2,4 @@ export { createGoogleAdsClient, createServiceAccountCustomer, queryGoogleAds, mu
 export type { MccCredentials, GoogleAdsViolation } from "./client";
 export { listMccChildAccounts, checkCidAvailability } from "./cid";
 export { fetchTodayCampaignData, fetchCampaignDataByDateRange, fetchAllCampaignStatuses } from "./sync";
-export { updateCampaignBudget, updateCampaignMaxCpc, updateCampaignStatus, removeCampaign } from "./mutate";
+export { updateCampaignBudget, updateCampaignMaxCpc, updateCampaignStatus, removeCampaign, renameCampaign } from "./mutate";
