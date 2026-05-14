@@ -322,8 +322,9 @@ export default function MerchantsPage() {
       }
     }).catch(() => {});
   }, []);
-  // C-093 / C-094.1：Modal 打开时异步反查每个广告主的域名分布（团队级缓存）
-  // pending 状态（OCR 未跑完）会触发自动轮询，最多 5 次每次 15s，等 OCR worker 补全后重判。
+  // C-093 / C-094.1 / C-094.7：Modal 打开时异步反查每个广告主的域名分布（团队级缓存）
+  // pending 状态（OCR 未跑完）会触发自动轮询：每 15s 一次，最多 20 次（5 分钟），
+  // 足够覆盖单广告主 5 张图、多广告主串行的 OCR 耗时（典型 ~10s/张）。
   // C-094.3：同时 fetch 当前用户的 watchlist 填充 watchlistMap（用于操作列「已关注」状态显示）
   useEffect(() => {
     if (!atcDetailModal?.open) return;
@@ -333,7 +334,6 @@ export default function MerchantsPage() {
       return;
     }
 
-    // C-094.3：拉 watchlist 填充关注状态（只在 modal 打开时拉一次）
     fetch("/api/user/atc/watchlist")
       .then((r) => r.json())
       .then((res) => {
@@ -347,7 +347,7 @@ export default function MerchantsPage() {
 
     let cancelled = false;
     let pollCount = 0;
-    const MAX_POLLS = 5;
+    const MAX_POLLS = 20;
     const POLL_INTERVAL_MS = 15000;
 
     const doFetch = (isInitial: boolean) => {
@@ -369,9 +369,12 @@ export default function MerchantsPage() {
             for (const it of items) map[it.advertiser_id] = it;
             setClassifyMap(map);
 
-            // 仍有 pending 状态 → 继续轮询等 OCR 完成
-            const stillPending = items.some((it) => it.classification === "pending");
-            if (stillPending && pollCount < MAX_POLLS) {
+            // C-094.7：pending 或暂时性 error 都触发轮询。
+            // error 路径（SerpApi 限流/超时）下次轮询自然重试，避免一次失败永久「未知」。
+            const stillBusy = items.some((it) =>
+              it.classification === "pending" || (it.classification === "unknown" && it.error)
+            );
+            if (stillBusy && pollCount < MAX_POLLS) {
               pollCount++;
               setTimeout(() => !cancelled && doFetch(false), POLL_INTERVAL_MS);
             }
@@ -386,6 +389,41 @@ export default function MerchantsPage() {
     doFetch(true);
     return () => { cancelled = true; };
   }, [atcDetailModal?.open, atcDetailModal?.region, atcDetailModal?.advertisers]);
+
+  // C-094.7：单广告主手动重试（force_refresh 绕过 cache）。
+  const retryClassifyOne = useCallback(async (advertiserId: string) => {
+    if (!atcDetailModal?.open) return;
+    setClassifyMap((prev) => {
+      const next = { ...prev };
+      delete next[advertiserId];
+      return next;
+    });
+    try {
+      const res = await fetch("/api/user/atc/advertiser-classify", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          advertiser_ids: [advertiserId],
+          region: atcDetailModal.region,
+          force_refresh: true,
+        }),
+      }).then((r) => r.json());
+      if (res.code === 0) {
+        const items = (res.data?.items ?? []) as AdvertiserClassItem[];
+        const it = items.find((x) => x.advertiser_id === advertiserId);
+        if (it) {
+          setClassifyMap((prev) => ({ ...prev, [advertiserId]: it }));
+          if (it.classification === "pending") message.info("OCR 进行中，几十秒后会自动重判");
+          else if (it.classification === "unknown") message.warning(it.error || "仍未识别，可稍后再试");
+          else message.success("已重新判定");
+        }
+      } else {
+        message.error(res.message || "重试失败");
+      }
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : "重试失败");
+    }
+  }, [atcDetailModal, message]);
 
   const getAtcRegion = useCallback((id: string) => atcRegions[id] ?? "US", [atcRegions]);
   const setAtcRegion = useCallback((id: string, region: string) => {
@@ -1480,10 +1518,17 @@ export default function MerchantsPage() {
                           </Tooltip>
                         );
                       }
+                      // C-094.7：未知状态显示 Tag + 「重试」链接，便于失败重试。
                       return (
-                        <Tooltip title={c.error ? `反查失败：${c.error}` : "SerpApi 未返回数据 / OCR 未识别出任何域名"}>
-                          <Tag>未知</Tag>
-                        </Tooltip>
+                        <Space size={4} wrap>
+                          <Tooltip title={c.error ? `反查失败：${c.error}` : "SerpApi 未返回数据 / OCR 未识别出任何域名"}>
+                            <Tag>未知</Tag>
+                          </Tooltip>
+                          <Button size="small" type="link" style={{ padding: 0, fontSize: 12 }}
+                            icon={<SyncOutlined />}
+                            onClick={() => retryClassifyOne(id)}
+                          >重试</Button>
+                        </Space>
                       );
                     },
                   },

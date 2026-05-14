@@ -6,14 +6,35 @@
  *
  * 内部并发限流 5，缓存命中 7 天 TTL 不消耗 SerpApi。
  * 单个 advertiser 反查失败不阻塞整体，以 unknown 占位返回。
+ *
+ * C-094.7：
+ *   1. 并发从 5 降到 2，缓解 SerpApi 同 key 并发限流。
+ *   2. catch 路径标识为「临时错误」，前端会自动轮询重试（避免一次失败永久未知）。
  */
 import { NextRequest, NextResponse } from "next/server";
 import { withUser } from "@/lib/api-handler";
 import prisma from "@/lib/prisma";
 import { getOrFetchAdvertiserDomainSnapshot, type AdvertiserDomainSnapshot } from "@/lib/atc-service";
 
-const CONCURRENCY = 5;
+const CONCURRENCY = 2; // C-094.7：从 5 降到 2，缓解 SerpApi 同 key 并发限流
 const MAX_BATCH = 50; // 单次请求最多 50 个广告主，避免 SerpApi 配额爆炸
+
+/** C-094.7：判定错误是否是「临时性」（值得前端轮询重试） */
+function isTransientError(message: string): boolean {
+  const lower = message.toLowerCase();
+  return (
+    lower.includes("429") ||
+    lower.includes("rate limit") ||
+    lower.includes("too many requests") ||
+    lower.includes("timeout") ||
+    lower.includes("etimedout") ||
+    lower.includes("econnreset") ||
+    lower.includes("network") ||
+    lower.includes("fetch failed") ||
+    lower.includes("503") ||
+    lower.includes("502")
+  );
+}
 
 export const POST = withUser(async (req: NextRequest, { user }) => {
   const userId = BigInt(user.userId);
@@ -91,17 +112,20 @@ export const POST = withUser(async (req: NextRequest, { user }) => {
       };
     }
     if ("error" in r) {
+      // C-094.7：临时性错误返回 pending（前端会轮询自动重试），非临时错误才返回 unknown 终态。
+      const transient = isTransientError(r.error);
       return {
         advertiser_id: advertiserId,
-        classification: "unknown" as const,
+        classification: (transient ? "pending" : "unknown") as "pending" | "unknown",
         unique_domain_count: 0,
         qualifying_domain_count: 0,
         ad_count: 0,
         domains: [] as string[],
         domain_details: [] as unknown[],
-        ocr_pending: false,
+        ocr_pending: transient,
         from_cache: false,
         error: r.error,
+        transient,
       };
     }
     return {
