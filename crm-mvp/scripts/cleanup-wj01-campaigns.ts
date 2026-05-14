@@ -31,7 +31,8 @@ loadEnvFromProjectRoot();
 const args = process.argv.slice(2);
 const APPLY = args.includes("--apply");
 const PHASE = (args.find((a) => a.startsWith("--phase="))?.split("=")[1] ?? "dump") as
-  | "dump" | "legacy" | "purge" | "reorder" | "verify" | "patch-disabled";
+  | "dump" | "legacy" | "purge" | "reorder" | "verify" | "patch-disabled"
+  | "legacy-to-sr" | "fix-118" | "fix-8619-google";
 
 const TARGET_USERNAME = "wj01";
 const CUTOFF = "2026-05-09 00:00:00"; // 0509 分界线（CST，DB datetime 也按 CST 存）
@@ -442,6 +443,234 @@ async function phasePatchDisabled() {
   await prisma.$disconnect();
 }
 
+/**
+ * legacy-to-sr：DB 把所有 LEGACY- 前缀改为 SR-；Google 端如果还没前缀则同步加 SR-。
+ *
+ * 背景：phaseLegacy 当初只改了 DB，Google 端没动。后来用户在 Google Ads 后台手动给
+ * 部分 campaign 加了 SR- 前缀。本 phase 统一前缀为 SR-（DB 全改 + Google 端补齐缺失）。
+ *
+ * 幂等：跳过已是 SR- 的；Google 端如果当前名字已 startsWith SR- 也跳过。
+ */
+async function phaseLegacyToSr() {
+  const { prisma, renameCampaign } = await loadDeps();
+  const user = await getUser(prisma);
+
+  const rows = await prisma.campaigns.findMany({
+    where: {
+      user_id: user.id,
+      is_deleted: 0,
+      OR: [
+        { campaign_name: { startsWith: "LEGACY-" } },
+        { campaign_name: { startsWith: "SR-" } },
+      ],
+    },
+    select: {
+      id: true, campaign_name: true, google_campaign_id: true,
+      customer_id: true, mcc_id: true, google_status: true,
+    },
+  });
+
+  log(`[legacy-to-sr] 共 ${rows.length} 条 LEGACY-/SR- 前缀广告 (mode=${APPLY ? "APPLY" : "DRY-RUN"})`);
+
+  // 目标名：剥掉 LEGACY-/SR- 前缀后加 SR-（幂等）
+  const targets = rows.map((r) => {
+    const name = r.campaign_name ?? "";
+    let bare = name;
+    if (bare.startsWith("LEGACY-")) bare = bare.slice("LEGACY-".length);
+    if (bare.startsWith("SR-")) bare = bare.slice("SR-".length);
+    const newName = `SR-${bare}`;
+    return { row: r, oldName: name, newName, needDb: name !== newName };
+  });
+
+  for (const t of targets) {
+    log(`  ${t.needDb ? "[→]" : "[=]"} id=${t.row.id} ${t.oldName}${t.needDb ? `\n         ↳ ${t.newName}` : ""}`);
+  }
+
+  if (!APPLY) {
+    log(`[legacy-to-sr] dry-run；加 --apply 真改 DB+Google`);
+    await prisma.$disconnect();
+    return;
+  }
+
+  // DB 改名（不论 Google rename 是否成功都改 DB，让 DB 保持目标态）
+  let dbRenamed = 0;
+  for (const t of targets) {
+    if (!t.needDb) continue;
+    await prisma.campaigns.update({ where: { id: t.row.id }, data: { campaign_name: t.newName } });
+    dbRenamed++;
+  }
+  log(`[legacy-to-sr] DB 重命名: ${dbRenamed} 条`);
+
+  // Google 端 rename：只对有 gcid+customer_id+mcc_id 的；并发 2
+  const googleTargets = targets.filter((t) => t.row.google_campaign_id && t.row.customer_id && t.row.mcc_id != null);
+  const mccIds = new Set<bigint>();
+  for (const t of googleTargets) if (t.row.mcc_id != null) mccIds.add(t.row.mcc_id);
+  const mccMap = await loadMccCache(prisma, mccIds);
+
+  let okGoogle = 0, failGoogle = 0, skipGoogle = 0;
+  const failedRows: Array<{ id: bigint; oldName: string; newName: string; err: string }> = [];
+
+  await runPool(googleTargets, CONCURRENCY, async (t, idx) => {
+    const mcc = mccMap.get(String(t.row.mcc_id));
+    if (!mcc || !mcc.developer_token || !mcc.service_account_json) {
+      skipGoogle++;
+      log(`  [${idx + 1}/${googleTargets.length}] SKIP id=${t.row.id}（mcc 凭证缺失）`);
+      return;
+    }
+    const creds = { mcc_id: mcc.mcc_id, developer_token: mcc.developer_token, service_account_json: mcc.service_account_json };
+    try {
+      const result = await renameCampaign(creds, t.row.customer_id!, t.row.google_campaign_id!, t.newName);
+      if (result.success) {
+        okGoogle++;
+        log(`  [${idx + 1}/${googleTargets.length}] OK id=${t.row.id} → ${t.newName}`);
+      } else {
+        failGoogle++;
+        failedRows.push({ id: t.row.id, oldName: t.oldName, newName: t.newName, err: result.message });
+        log(`  [${idx + 1}/${googleTargets.length}] FAIL id=${t.row.id}: ${result.message.slice(0, 120)}`);
+      }
+    } catch (e) {
+      failGoogle++;
+      const err = e instanceof Error ? e.message : String(e);
+      failedRows.push({ id: t.row.id, oldName: t.oldName, newName: t.newName, err });
+      log(`  [${idx + 1}/${googleTargets.length}] ERR id=${t.row.id}: ${err.slice(0, 120)}`);
+    }
+  });
+  log(`[legacy-to-sr] Google rename: ok=${okGoogle} fail=${failGoogle} skip=${skipGoogle}`);
+
+  if (failedRows.length > 0) {
+    const dir = path.join(process.cwd(), "tmp");
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    const ts = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+    const file = path.join(dir, `wj01-legacy-to-sr-failed-${ts}.json`);
+    fs.writeFileSync(file, JSON.stringify(failedRows, bigintReplacer, 2), "utf8");
+    log(`[legacy-to-sr] ${failedRows.length} 条失败已记录: ${file}`);
+  }
+
+  await prisma.$disconnect();
+}
+
+/**
+ * fix-118：把 wj01 新建的 118-PM1-WalkingPadUSUKEU 改名为 041-PM1-WalkingPadUSUKEU
+ *
+ * 背景：清洗后 0509+ 重排到 001-040；但因 2 条漏网 REMOVED 占着 117，
+ * 之后用户新建的广告被分配到了 118。现在 117 已清掉，把 118 改回 041。
+ *
+ * 幂等：若 campaign_name 已是 041- 开头则跳过。
+ */
+async function phaseFix118() {
+  const { prisma, renameCampaign } = await loadDeps();
+  const user = await getUser(prisma);
+
+  const TARGET_ID = 8621n;
+  const row = await prisma.campaigns.findFirst({
+    where: { id: TARGET_ID, user_id: user.id, is_deleted: 0 },
+    select: {
+      id: true, campaign_name: true, google_campaign_id: true,
+      customer_id: true, mcc_id: true,
+    },
+  });
+  if (!row) {
+    log(`[fix-118] id=${TARGET_ID} 不存在或已软删，跳过`);
+    await prisma.$disconnect();
+    return;
+  }
+
+  const oldName = row.campaign_name ?? "";
+  const parts = oldName.split("-");
+  if (parts[0] === "041") {
+    log(`[fix-118] id=${row.id} 已是 041 开头：${oldName}，幂等跳过`);
+    await prisma.$disconnect();
+    return;
+  }
+  const rest = parts.slice(1).join("-");
+  const newName = `041-${rest}`;
+  log(`[fix-118] id=${row.id} (mode=${APPLY ? "APPLY" : "DRY-RUN"})`);
+  log(`  [→] ${oldName}\n         ↳ ${newName}`);
+
+  if (!APPLY) {
+    log(`[fix-118] dry-run；加 --apply 真改 DB+Google`);
+    await prisma.$disconnect();
+    return;
+  }
+
+  if (!row.google_campaign_id || !row.customer_id || row.mcc_id == null) {
+    log(`[fix-118] 缺少 gcid/customer_id/mcc_id，无法 Google rename`);
+    await prisma.$disconnect();
+    return;
+  }
+  const mccMap = await loadMccCache(prisma, new Set([row.mcc_id]));
+  const mcc = mccMap.get(String(row.mcc_id));
+  if (!mcc || !mcc.developer_token || !mcc.service_account_json) {
+    log(`[fix-118] mcc 凭证缺失，跳过`);
+    await prisma.$disconnect();
+    return;
+  }
+
+  const creds = { mcc_id: mcc.mcc_id, developer_token: mcc.developer_token, service_account_json: mcc.service_account_json };
+  const result = await renameCampaign(creds, row.customer_id, row.google_campaign_id, newName);
+  if (!result.success) {
+    log(`[fix-118] ❌ Google rename 失败: ${result.message}`);
+    await prisma.$disconnect();
+    return;
+  }
+  log(`[fix-118] ✅ Google rename 成功`);
+  await prisma.campaigns.update({ where: { id: row.id }, data: { campaign_name: newName } });
+  log(`[fix-118] ✅ DB 同步 ${oldName} → ${newName}`);
+  await prisma.$disconnect();
+}
+
+/**
+ * fix-8619-google：把 8619 Google 端的名字同步成 DB 的 040-PM1-wwwfreeskycyclecom-US-0514-92029
+ *
+ * 背景：reorder 阶段 DB 已改成 040-PM1-...，但 Google 端疑似未生效（仍为 40-PM-US-freeskycycle-0514-92029）。
+ */
+async function phaseFix8619Google() {
+  const { prisma, renameCampaign } = await loadDeps();
+  const user = await getUser(prisma);
+
+  const TARGET_ID = 8619n;
+  const row = await prisma.campaigns.findFirst({
+    where: { id: TARGET_ID, user_id: user.id, is_deleted: 0 },
+    select: {
+      id: true, campaign_name: true, google_campaign_id: true,
+      customer_id: true, mcc_id: true,
+    },
+  });
+  if (!row) {
+    log(`[fix-8619-google] id=${TARGET_ID} 不存在`);
+    await prisma.$disconnect();
+    return;
+  }
+
+  log(`[fix-8619-google] id=${row.id} DB 名: ${row.campaign_name} (mode=${APPLY ? "APPLY" : "DRY-RUN"})`);
+  log(`  目标：让 Google 端名字 = DB 名字（${row.campaign_name}）`);
+
+  if (!APPLY) {
+    log(`[fix-8619-google] dry-run；加 --apply 真改 Google`);
+    await prisma.$disconnect();
+    return;
+  }
+
+  if (!row.google_campaign_id || !row.customer_id || row.mcc_id == null) {
+    log(`[fix-8619-google] 缺少 gcid/customer_id/mcc_id，跳过`);
+    await prisma.$disconnect();
+    return;
+  }
+  const mccMap = await loadMccCache(prisma, new Set([row.mcc_id]));
+  const mcc = mccMap.get(String(row.mcc_id));
+  if (!mcc || !mcc.developer_token || !mcc.service_account_json) {
+    log(`[fix-8619-google] mcc 凭证缺失，跳过`);
+    await prisma.$disconnect();
+    return;
+  }
+
+  const creds = { mcc_id: mcc.mcc_id, developer_token: mcc.developer_token, service_account_json: mcc.service_account_json };
+  const result = await renameCampaign(creds, row.customer_id, row.google_campaign_id, row.campaign_name!);
+  if (result.success) log(`[fix-8619-google] ✅ Google rename 成功`);
+  else log(`[fix-8619-google] ❌ Google rename 失败: ${result.message}`);
+  await prisma.$disconnect();
+}
+
 async function main() {
   log(`=== C-095 wj01 广告清洗 phase=${PHASE} mode=${APPLY ? "APPLY" : "DRY-RUN"} ===\n`);
   switch (PHASE) {
@@ -451,6 +680,9 @@ async function main() {
     case "reorder": await phaseReorder(); break;
     case "verify": await phaseVerify(); break;
     case "patch-disabled": await phasePatchDisabled(); break;
+    case "legacy-to-sr": await phaseLegacyToSr(); break;
+    case "fix-118": await phaseFix118(); break;
+    case "fix-8619-google": await phaseFix8619Google(); break;
     default:
       console.error(`未知 phase: ${PHASE}`);
       process.exit(1);
