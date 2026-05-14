@@ -1462,14 +1462,24 @@ export default function MerchantsPage() {
       {atcDetailModal && (() => {
         const all = atcDetailModal.advertisers.map((a, i) => ({ ...a, key: i }));
         const classifyOf = (id: string) => classifyMap[id];
-        const isBrandSelf = (id: string) => classifyOf(id)?.classification === "brand_self";
+        // C-094.14：把 unknown 但 unique>=1 的（OCR 识别到域名只是未达 30 天）当作 brand-ish 处理，
+        // 既在"只看同行"开关下被过滤掉，也从"未知"计数里剔除，与 Tag 渲染保持一致。
+        const isBrandSelf = (id: string) => {
+          const c = classifyOf(id);
+          if (!c) return false;
+          if (c.classification === "brand_self") return true;
+          if (c.classification === "unknown" && c.unique_domain_count >= 1) return true;
+          return false;
+        };
         const filtered = peersOnly ? all.filter((r) => !isBrandSelf(r.id)) : all;
         const hiddenBrandSelfCount = all.filter((r) => isBrandSelf(r.id)).length;
         const peerCount = all.filter((r) => classifyOf(r.id)?.classification === "peer").length;
         const pendingCount = all.filter((r) => classifyOf(r.id)?.classification === "pending").length;
         const unknownCount = all.filter((r) => {
           const c = classifyOf(r.id);
-          return !c || c.classification === "unknown";
+          if (!c) return true;
+          // 真未知 = classification=unknown 且 OCR 未识别出任何域名
+          return c.classification === "unknown" && c.unique_domain_count === 0;
         }).length;
         return (
           <>
@@ -1487,8 +1497,10 @@ export default function MerchantsPage() {
                     <div><Text style={{ color: "#fff" }}>判定规则（C-094.1）：</Text></div>
                     <div>• <Tag color="green">同行</Tag>合格域名 ≥ 3 个（联盟客）</div>
                     <div>• <Tag color="orange">品牌自投</Tag>合格域名 1~2 个（小范围自投）</div>
+                    <div>• <Tag color="gold">投放中</Tag>OCR 识别出域名，但单条广告未投满 30 天</div>
                     <div>• <Tag color="blue">判定中</Tag>OCR 还在跑，1 小时后重判</div>
-                    <div>• <Tag>未知</Tag>无 ATC 数据 / 全部 OCR 失败</div>
+                    <div>• <Tag>无可识别域名</Tag>有广告但 OCR 全部失败</div>
+                    <div>• <Tag>无 ATC 数据</Tag>SerpApi 未返回该广告主任何广告</div>
                     <div style={{ marginTop: 6, color: "#bbb" }}>合格域名 = 该域名上至少 1 个广告创意持续投放 ≥ 30 天。</div>
                     <div style={{ color: "#bbb" }}>每个广告主消耗 1 次 SerpApi，OCR 异步补全；同行缓存 30 天复用。</div>
                   </div>
@@ -1581,10 +1593,20 @@ export default function MerchantsPage() {
                         );
                       }
                       // C-094.7：未知状态显示 Tag + 「重试」链接，便于失败重试。
+                      // C-094.14：若 OCR 已识别出 ≥1 个域名（只是未达 30 天合格），
+                      //   单独显示「投放中 · N 域名」让用户知道 OCR 成功只是未触发合格条件，
+                      //   而不是"完全无数据"。重试按钮在该状态下隐藏（OCR 已完成无需重试）。
+                      if (c.unique_domain_count >= 1) {
+                        return (
+                          <Tooltip title={tip}>
+                            <Tag color="gold">投放中 · {c.unique_domain_count} 域名（&lt; 30 天）</Tag>
+                          </Tooltip>
+                        );
+                      }
                       return (
                         <Space size={4} wrap>
-                          <Tooltip title={c.error ? `反查失败：${c.error}` : "SerpApi 未返回数据 / OCR 未识别出任何域名"}>
-                            <Tag>未知</Tag>
+                          <Tooltip title={c.error ? `反查失败：${c.error}` : c.ad_count > 0 ? `已查 ${c.ad_count} 个广告，但 OCR 未识别出任何域名（多为图片/视频纯创意）` : "SerpApi 未返回该广告主的广告数据"}>
+                            <Tag>{c.ad_count > 0 ? "无可识别域名" : "无 ATC 数据"}</Tag>
                           </Tooltip>
                           <Button size="small" type="link" style={{ padding: 0, fontSize: 12 }}
                             icon={<SyncOutlined />}
