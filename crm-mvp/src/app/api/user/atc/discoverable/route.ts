@@ -7,7 +7,7 @@
  *   （这张表本身就是团队级共享缓存，按 (advertiser_id, region) 唯一约束去重）
  *   - 默认 min_qualifying=3 → 只展示同行（peer）
  *   - 排序：合格域名数 desc → ad_count desc
- *   - watched_by_me 标记当前用户是否已关注
+ *   - 自动剔除当前用户已关注的 (advertiser_id, region)（剩下的才是"可关注"）
  *   - 附带前 5 个合格域名（按 max_creative_days desc）供 UI 显示
  */
 import { NextRequest, NextResponse } from "next/server";
@@ -30,9 +30,20 @@ export const GET = withUser(async (req: NextRequest, { user }) => {
   const q = (url.searchParams.get("q") ?? "").trim();
   const minQualifying = Math.max(1, parseInt(url.searchParams.get("min_qualifying") || "3", 10) || 3);
 
+  // 先取当前用户所有已关注的 (advertiser_id, region)，从结果集排除
+  const myWatchedAll = await prisma.user_atc_watchlist.findMany({
+    where: { user_id: userId, is_deleted: 0 },
+    select: { advertiser_id: true, region: true },
+  });
+
   const where: Prisma.atc_advertiser_domain_snapshotWhereInput = {
     qualifying_domain_count: { gte: minQualifying },
   };
+  if (myWatchedAll.length > 0) {
+    where.NOT = {
+      OR: myWatchedAll.map((w) => ({ advertiser_id: w.advertiser_id, region: w.region })),
+    };
+  }
   if (q) {
     where.OR = [
       { advertiser_id: { contains: q } },
@@ -65,18 +76,6 @@ export const GET = withUser(async (req: NextRequest, { user }) => {
     });
   }
 
-  // 取当前用户已经关注的 (advertiser_id, region) 集合
-  const pairs = rows.map((r) => ({ advertiser_id: r.advertiser_id, region: r.region }));
-  const myWatched = await prisma.user_atc_watchlist.findMany({
-    where: {
-      user_id: userId,
-      is_deleted: 0,
-      OR: pairs.map((p) => ({ advertiser_id: p.advertiser_id, region: p.region })),
-    },
-    select: { advertiser_id: true, region: true },
-  });
-  const myWatchedSet = new Set(myWatched.map((w) => `${w.advertiser_id}|${w.region}`));
-
   const items = rows.map((r) => {
     // 取前 5 个合格域名（按 max_creative_days desc）
     let topQualifying: Array<{ domain: string; max_creative_days: number }> = [];
@@ -96,7 +95,7 @@ export const GET = withUser(async (req: NextRequest, { user }) => {
       ad_count: r.ad_count,
       top_qualifying_domains: topQualifying,
       fetched_at: r.fetched_at,
-      watched_by_me: myWatchedSet.has(`${r.advertiser_id}|${r.region}`),
+      watched_by_me: false, // 已关注的已在 where.NOT 排除，剩下的都是可关注
     };
   });
 
