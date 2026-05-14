@@ -207,8 +207,14 @@ export default function AdvertisersPage() {
     }
   }, [message]);
 
-  const jumpToMerchants = useCallback((domain: string) => {
-    router.push(`/user/merchants?q=${encodeURIComponent(domain)}`);
+  // C-094.12：跳转「我的商家」时根据 active-domains 返回的 merchant.status 选对应 tab
+  //  - claimed / paused → 我的商家 tab（claimed）
+  //  - available 或未匹配到 CRM 商家 → 选取商家 tab（available，搜索范围最大）
+  const jumpToMerchants = useCallback((domain: string, merchant: ActiveDomainItem["merchant"]) => {
+    const tab = merchant && (merchant.status === "claimed" || merchant.status === "paused")
+      ? "claimed"
+      : "available";
+    router.push(`/user/merchants?q=${encodeURIComponent(domain)}&tab=${tab}`);
   }, [router]);
 
   const loadDiscoverable = useCallback(async () => {
@@ -739,9 +745,11 @@ export default function AdvertisersPage() {
                   render: (_: unknown, row) =>
                     row.merchant ? (
                       <Space size={4} wrap>
-                        <Tag color="green">{row.merchant.platform}</Tag>
+                        <Tag color="blue">{row.merchant.platform}</Tag>
                         <Text>{row.merchant.name}</Text>
-                        <Tag>{row.merchant.status}</Tag>
+                        {row.merchant.status === "claimed" && <Tag color="green">已认领</Tag>}
+                        {row.merchant.status === "paused" && <Tag color="orange">已暂停</Tag>}
+                        {row.merchant.status === "available" && <Tag>可领取</Tag>}
                       </Space>
                     ) : (
                       <Text type="secondary">未在 CRM 商家库</Text>
@@ -749,13 +757,23 @@ export default function AdvertisersPage() {
                 },
                 {
                   title: "操作",
-                  width: 120,
+                  width: 140,
                   render: (_: unknown, row) => (
-                    <Button size="small" type="link" icon={<ShopOutlined />}
-                      onClick={() => jumpToMerchants(row.domain)}
+                    <Tooltip
+                      title={
+                        row.merchant
+                          ? row.merchant.status === "claimed" || row.merchant.status === "paused"
+                            ? "跳到「我的商家」"
+                            : "跳到「选取商家」"
+                          : "在「选取商家」里搜索（命中商家库则可领取）"
+                      }
                     >
-                      去商家页面
-                    </Button>
+                      <Button size="small" type="link" icon={<ShopOutlined />}
+                        onClick={() => jumpToMerchants(row.domain, row.merchant)}
+                      >
+                        去商家页面
+                      </Button>
+                    </Tooltip>
                   ),
                 },
               ]}
