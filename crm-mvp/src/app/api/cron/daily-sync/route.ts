@@ -287,11 +287,20 @@ async function syncAllUsersMcc(): Promise<unknown> {
                   const sample = firstRowByGcid.get(gcid);
                   if (!sample) continue;
                   try {
-                    // google_campaign_id 在 schema 中非 unique，不能用 upsert，改用 findFirst + create
-                    let newC = await prisma.campaigns.findFirst({
-                      where: { user_id: uid, google_campaign_id: gcid, is_deleted: 0 },
-                      select: { id: true, google_campaign_id: true, customer_id: true },
+                    // 防回灌：先查所有同 gcid 行（含已软删）。
+                    // 若已存在软删行，说明被刻意清洗（如 C-095），跳过不要 INSERT 新行；
+                    // 完全无任何同 gcid 行时才补录。
+                    const existingAny = await prisma.campaigns.findFirst({
+                      where: { user_id: uid, google_campaign_id: gcid },
+                      select: { id: true, google_campaign_id: true, customer_id: true, is_deleted: true },
+                      orderBy: { id: "desc" },
                     });
+                    if (existingAny && existingAny.is_deleted === 1) {
+                      log(`  [跳过软删 gcid] ${gcid}（避免回灌已清洗的 campaign）`);
+                      continue;
+                    }
+                    let newC: { id: bigint; google_campaign_id: string | null; customer_id: string | null } | null =
+                      existingAny ? { id: existingAny.id, google_campaign_id: existingAny.google_campaign_id, customer_id: existingAny.customer_id } : null;
                     if (!newC) {
                       newC = await prisma.campaigns.create({
                         data: {
@@ -388,14 +397,18 @@ async function syncAllUsersMcc(): Promise<unknown> {
                     for (const cd of data) {
                       let campaign = campaignByGcid.get(cd.campaign_id);
                       if (!campaign) {
-                        // API 发现了 DB 中不存在的新广告系列，自动补录
-                        // google_campaign_id 在 schema 中非 unique，不能用 upsert，改用 findFirst + create/update
                         try {
-                          let newC = await prisma.campaigns.findFirst({
-                            where: { user_id: uid, google_campaign_id: cd.campaign_id, is_deleted: 0 },
-                            select: { id: true, google_campaign_id: true, customer_id: true },
+                          const existingAny = await prisma.campaigns.findFirst({
+                            where: { user_id: uid, google_campaign_id: cd.campaign_id },
+                            select: { id: true, google_campaign_id: true, customer_id: true, is_deleted: true },
+                            orderBy: { id: "desc" },
                           });
-                          if (!newC) {
+                          if (existingAny && existingAny.is_deleted === 1) {
+                            log(`  [跳过软删 gcid] ${cd.campaign_id}（避免回灌已清洗的 campaign）`);
+                            continue;
+                          }
+                          let newC: { id: bigint; google_campaign_id: string | null; customer_id: string | null } | null = null;
+                          if (!existingAny) {
                             newC = await prisma.campaigns.create({
                               data: {
                                 user_id: uid, user_merchant_id: BigInt(0),
@@ -411,9 +424,10 @@ async function syncAllUsersMcc(): Promise<unknown> {
                             log(`  [新campaign] ${cd.campaign_id} ${cd.campaign_name} (from API)`);
                           } else {
                             await prisma.campaigns.update({
-                              where: { id: newC.id },
+                              where: { id: existingAny.id },
                               data: { customer_id: cd.customer_id || undefined, google_status: cd.campaign_status },
                             });
+                            newC = { id: existingAny.id, google_campaign_id: existingAny.google_campaign_id, customer_id: existingAny.customer_id };
                           }
                           campaign = { id: newC.id, google_campaign_id: cd.campaign_id, customer_id: newC.customer_id };
                           campaignByGcid.set(cd.campaign_id, campaign);
