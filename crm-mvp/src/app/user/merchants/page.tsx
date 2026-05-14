@@ -445,8 +445,9 @@ export default function MerchantsPage() {
         body: JSON.stringify({ merchant_id: rec.id, force_refresh: force, region }),
       }).then((r) => r.json());
       if (res.code === 0) {
-        setAtcLocalData((prev) => ({ ...prev, [rec.id]: { count: res.data.real_count, syncedAt: res.data.fetched_at, region, topAdvertisers: res.data.top_advertisers ?? [] } }));
-        return { ok: true };
+        const topAdvertisers = (res.data.top_advertisers ?? []) as Array<{ id: string; name: string }>;
+        setAtcLocalData((prev) => ({ ...prev, [rec.id]: { count: res.data.real_count, syncedAt: res.data.fetched_at, region, topAdvertisers } }));
+        return { ok: true, topAdvertisers, region };
       } else {
         if (!silent) message.error(res.message);
         return { ok: false, error: res.message };
@@ -463,6 +464,10 @@ export default function MerchantsPage() {
   // C-091.5：一键批量查 ATC 竞争度（并发 3，避免 SerpApi 限流）
   // - batchForce=false：自动跳过已有 ATC 数据的商家（节省 SerpApi 配额）
   // - batchForce=true：所有选中商家全部重新查询
+  //
+  // C-094.10：竞争度查完后，自动后台分类每个商家的 top_advertisers，
+  //   peer 类型(合格域名 ≥ 3) 会写入 atc_advertiser_domain_snapshot，
+  //   随后自动出现在「我的广告主 → 可关注广告主」列表里。
   const doBatchAtcQuery = useCallback(async (selectedMerchants: Merchant[]) => {
     if (selectedMerchants.length === 0) return;
     if (serpApiConfigured === false) {
@@ -484,13 +489,23 @@ export default function MerchantsPage() {
 
     const queue = [...targets];
     let done = 0, failed = 0;
+    // C-094.10：收集所有商家查到的 top_advertisers（按 region 分组，跨商家去重）
+    const advByRegion = new Map<string, Set<string>>();
 
     const worker = async () => {
       while (queue.length > 0) {
         const m = queue.shift();
         if (!m) break;
         const r = await triggerAtcQuery(m, batchRegion, batchForce, true);
-        if (!r?.ok) failed++;
+        if (!r?.ok) {
+          failed++;
+        } else if (r.topAdvertisers && r.region) {
+          let set = advByRegion.get(r.region);
+          if (!set) { set = new Set(); advByRegion.set(r.region, set); }
+          for (const adv of r.topAdvertisers) {
+            if (/^AR\d+$/i.test(adv.id)) set.add(adv.id);
+          }
+        }
         done++;
         setBatchProgress({ done, total: targets.length, failed });
       }
@@ -500,12 +515,55 @@ export default function MerchantsPage() {
     await Promise.all([worker(), worker(), worker()]);
 
     setBatchRunning(false);
+
+    // ── C-094.10：后台分类所有 top_advertisers，peer 自动入「可关注」库 ──
+    let totalAdv = 0;
+    for (const set of advByRegion.values()) totalAdv += set.size;
+
     const ok = done - failed;
     if (failed === 0) {
-      message.success(`批量查询完成：${ok} 个商家已更新 ATC 竞争度`);
+      if (totalAdv > 0) {
+        message.success(`批量查询完成：${ok} 个商家已更新 ATC 竞争度，正在后台分类 ${totalAdv} 个同行广告主…`);
+      } else {
+        message.success(`批量查询完成：${ok} 个商家已更新 ATC 竞争度`);
+      }
     } else {
       message.warning(`批量查询完成：${ok} 成功 / ${failed} 失败`);
     }
+
+    if (totalAdv === 0) return;
+
+    // fire-and-forget：分批 30 个一调（后端 MAX_BATCH=50，留点余量），每个 region 单独提交
+    const CLASSIFY_BATCH = 30;
+    const fireClassify = async () => {
+      let classified = 0, peerCount = 0;
+      for (const [region, set] of advByRegion) {
+        const ids = Array.from(set);
+        for (let i = 0; i < ids.length; i += CLASSIFY_BATCH) {
+          const slice = ids.slice(i, i + CLASSIFY_BATCH);
+          try {
+            const res = await fetch("/api/user/atc/advertiser-classify", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ advertiser_ids: slice, region }),
+            }).then((r) => r.json());
+            if (res.code === 0) {
+              const items = (res.data?.items ?? []) as Array<{ classification: string }>;
+              classified += items.length;
+              peerCount += items.filter((x) => x.classification === "peer").length;
+            }
+          } catch { /* swallow */ }
+        }
+      }
+      if (classified > 0) {
+        message.success(
+          peerCount > 0
+            ? `后台分类完成：识别出 ${peerCount} 个同行（合格域名 ≥ 3），已加入「可关注广告主」`
+            : `后台分类完成：${classified} 个广告主已建立快照，暂无新增同行`
+        );
+      }
+    };
+    void fireClassify();
   }, [serpApiConfigured, batchForce, atcLocalData, batchRegion, triggerAtcQuery, message]);
 
   const [cc, setCc] = useState(""); const [qc, setQc] = useState("");
