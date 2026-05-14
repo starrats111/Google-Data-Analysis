@@ -8,7 +8,7 @@
  */
 "use client";
 import { useState, useMemo, useCallback, useEffect } from "react";
-import { App, Button, Card, Input, Modal, Space, Table, Tabs, Tag, Tooltip, Typography, Popconfirm, Empty } from "antd";
+import { App, Button, Card, Input, InputNumber, Modal, Space, Table, Tabs, Tag, Tooltip, Typography, Popconfirm, Empty } from "antd";
 import { ShareAltOutlined, StarFilled, StarOutlined, DeleteOutlined, SearchOutlined, ReloadOutlined, ThunderboltOutlined, EyeOutlined, ShopOutlined, FireOutlined } from "@ant-design/icons";
 import { useRouter } from "next/navigation";
 import type { ColumnsType } from "antd/es/table";
@@ -257,6 +257,30 @@ export default function AdvertisersPage() {
     }
   }, [loadMine, message]);
 
+  // C-094.9：直接在「我的广告主」修改时间阈值（min_days）
+  const updateMinDays = useCallback(async (id: string, nextDays: number) => {
+    // 客户端先 clamp 到 1~365，与后端 PATCH 一致
+    const clamped = Math.max(1, Math.min(365, Math.floor(nextDays)));
+    // 先本地乐观更新，避免输入框抖动；失败回滚
+    setMineRows((rows) => rows.map((r) => (r.id === id ? { ...r, min_days: clamped } : r)));
+    try {
+      const r = await fetch(`/api/user/atc/watchlist/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ min_days: clamped }),
+      }).then((x) => x.json());
+      if (r.code === 0) {
+        message.success(`已更新阈值为 ≥ ${clamped} 天`);
+      } else {
+        message.error(r.message || "更新失败");
+        void loadMine();
+      }
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : "更新失败");
+      void loadMine();
+    }
+  }, [loadMine, message]);
+
   const follow = useCallback(async (item: { advertiser_id: string; advertiser_name?: string | null; region: string }, afterDone?: () => void) => {
     const r = await fetch("/api/user/atc/watchlist", {
       method: "POST",
@@ -320,7 +344,29 @@ export default function AdvertisersPage() {
     { title: "Advertiser ID", dataIndex: "advertiser_id", width: 240, render: (v: string) => <Text copyable={{ text: v }} style={{ fontFamily: "monospace", fontSize: 12 }}>{v}</Text> },
     { title: "区域", dataIndex: "region", width: 60 },
     { title: "分类", width: 180, render: (_: unknown, row) => <QualifyingTag q={row.qualifying_domain_count} /> },
-    { title: "提醒阈值", dataIndex: "min_days", width: 90, render: (v: number) => `≥ ${v} 天` },
+    {
+      title: <Tooltip title="单创意持续投放达到该天数即视为合格；同时也是「查看」弹窗筛选活跃域名的最低门槛">阈值（天）</Tooltip>,
+      dataIndex: "min_days", width: 130,
+      render: (v: number, row) => (
+        <InputNumber
+          size="small"
+          min={1}
+          max={365}
+          value={v}
+          addonBefore="≥"
+          addonAfter="天"
+          style={{ width: 130 }}
+          onBlur={(e) => {
+            const next = Number(e.currentTarget.value);
+            if (Number.isFinite(next) && next !== v) updateMinDays(row.id, next);
+          }}
+          onPressEnter={(e) => {
+            const next = Number((e.target as HTMLInputElement).value);
+            if (Number.isFinite(next) && next !== v) updateMinDays(row.id, next);
+          }}
+        />
+      ),
+    },
     {
       title: "分享状态", dataIndex: "is_shared", width: 140,
       render: (v: boolean, row) => (
@@ -347,7 +393,7 @@ export default function AdvertisersPage() {
         </Space>
       ),
     },
-  ], [router, toggleShare, unfollow, openViewModal]);
+  ], [router, toggleShare, unfollow, openViewModal, updateMinDays]);
 
   const recCols = useMemo<ColumnsType<RecommendedItem>>(() => [
     { title: "广告主", dataIndex: "advertiser_name", render: (_: string, row) => <AtcAdvertiserLink id={row.advertiser_id} name={row.advertiser_name} /> },
