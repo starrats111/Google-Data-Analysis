@@ -40,26 +40,44 @@ export const POST = withUser(async (req: NextRequest, { user }) => {
   }
 
   // 3. 查询（带缓存）
-  const result = await queryMerchantAtc({
-    merchantId: merchant.id,
-    merchantName: merchant.merchant_name,
-    domain,
-    region,
-    serpApiKeys,
-    forceRefresh,
-  });
+  try {
+    const result = await queryMerchantAtc({
+      merchantId: merchant.id,
+      merchantName: merchant.merchant_name,
+      domain,
+      region,
+      serpApiKeys,
+      forceRefresh,
+    });
 
-  return NextResponse.json({
-    code: 0,
-    data: {
-      domain: result.domain,
-      region: result.region,
-      real_count: result.realCount,
-      raw_count: result.rawCount,
-      top_advertisers: result.topAdvertisers,
-      sample_ads: result.sampleAds,
-      fetched_at: result.fetchedAt,
-      from_cache: result.fromCache,
-    },
-  });
+    return NextResponse.json({
+      code: 0,
+      data: {
+        domain: result.domain,
+        region: result.region,
+        real_count: result.realCount,
+        raw_count: result.rawCount,
+        top_advertisers: result.topAdvertisers,
+        sample_ads: result.sampleAds,
+        fetched_at: result.fetchedAt,
+        from_cache: result.fromCache,
+      },
+    });
+  } catch (err) {
+    // SerpApi 配额/限流/超时类错误返回 429，让前端给出明确提示而非「服务器内部错误」。
+    const msg = err instanceof Error ? err.message : String(err);
+    if (/SerpApi HTTP 429/i.test(msg)) {
+      return NextResponse.json(
+        { code: -1, message: "SerpApi 配额暂时已用尽，请稍后再试（或在「个人设置 → 广告情报」补充更多 Key）" },
+        { status: 429 },
+      );
+    }
+    if (/SerpApi HTTP 5\d{2}/i.test(msg) || /AbortError|timeout/i.test(msg)) {
+      return NextResponse.json(
+        { code: -1, message: "SerpApi 暂时不可达，请稍后重试" },
+        { status: 503 },
+      );
+    }
+    throw err; // 其它未知错误交给全局 handler
+  }
 });

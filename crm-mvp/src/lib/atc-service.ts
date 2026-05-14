@@ -277,11 +277,12 @@ const ADVERTISER_MIN_QUALIFYING_DOMAINS_FOR_PEER = 3;
 const ADVERTISER_OCR_SAMPLE_LIMIT = 5;
 
 // C-094.1：广告主域名分布快照 TTL（按 classification 差异化）
-//   - peer       (≥3 合格 domain)：30 天 — 同行身份长期稳定
+//   - peer       (≥3 合格 domain)：90 天 — 同行身份长期稳定；C-094.15 由 30 天延长至 90 天，
+//                                          覆盖「可关注广告主」持久度诉求，减少重复 SerpApi 反查。
 //   - brand_self (1~2 合格 domain)：7 天 — 可能扩展，定期重检
 //   - pending    (OCR 未完成)：     1 小时 — 等 worker 跑完后重判
 //   - unknown    (无数据)：         1 天  — 临时失败尽快重试
-const ADVERTISER_SNAPSHOT_TTL_PEER_MS = 30 * 24 * 60 * 60 * 1000;
+const ADVERTISER_SNAPSHOT_TTL_PEER_MS = 90 * 24 * 60 * 60 * 1000;
 const ADVERTISER_SNAPSHOT_TTL_BRAND_SELF_MS = 7 * 24 * 60 * 60 * 1000;
 const ADVERTISER_SNAPSHOT_TTL_PENDING_MS = 1 * 60 * 60 * 1000;
 const ADVERTISER_SNAPSHOT_TTL_UNKNOWN_MS = 1 * 24 * 60 * 60 * 1000;
@@ -418,7 +419,7 @@ function aggregateDomainStats(sampledAds: SampledAd[], urlToDomain: Map<string, 
  * cache 命中且 ocr_pending=1 时直接复用采样列表重查 OCR cache 重算分类，
  * 完全不消耗 SerpApi quota。OCR worker 后台跑完后，下次访问就能拿到正确结果。
  *
- * 团队级共享缓存 TTL：peer 30d / brand_self 7d / pending 1h / unknown 1d。
+ * 团队级共享缓存 TTL：peer 90d / brand_self 7d / pending 1h / unknown 1d。
  */
 export async function getOrFetchAdvertiserDomainSnapshot(opts: {
   advertiserId: string;
