@@ -251,6 +251,7 @@ export const GET = withUser(async (req: NextRequest, { user }) => {
       where.OR = [
         { merchant_name: { contains: search } },
         { merchant_id: { contains: search } },
+        { merchant_url: { contains: search } }, // C-094.8：允许按域名搜索
       ];
     }
 
@@ -394,6 +395,7 @@ export const GET = withUser(async (req: NextRequest, { user }) => {
       where.OR = [
         { merchant_name: { contains: search } },
         { merchant_id: { contains: search } },
+        { merchant_url: { contains: search } }, // C-094.8：允许按域名搜索
       ];
     }
 

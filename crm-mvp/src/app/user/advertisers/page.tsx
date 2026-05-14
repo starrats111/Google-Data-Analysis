@@ -8,8 +8,8 @@
  */
 "use client";
 import { useState, useMemo, useCallback, useEffect } from "react";
-import { App, Button, Card, Input, Space, Table, Tabs, Tag, Tooltip, Typography, Popconfirm } from "antd";
-import { ShareAltOutlined, StarFilled, StarOutlined, DeleteOutlined, SearchOutlined, ReloadOutlined, ThunderboltOutlined, EyeOutlined } from "@ant-design/icons";
+import { App, Button, Card, Input, Modal, Space, Table, Tabs, Tag, Tooltip, Typography, Popconfirm, Empty } from "antd";
+import { ShareAltOutlined, StarFilled, StarOutlined, DeleteOutlined, SearchOutlined, ReloadOutlined, ThunderboltOutlined, EyeOutlined, ShopOutlined, FireOutlined } from "@ant-design/icons";
 import { useRouter } from "next/navigation";
 import type { ColumnsType } from "antd/es/table";
 
@@ -38,6 +38,36 @@ interface RecommendedItem {
   ad_count: number | null;
   unique_domain_count: number | null;
   watched_by_me: boolean;
+}
+
+interface ActiveDomainItem {
+  domain: string;
+  max_creative_days: number;
+  last_shown_ts: number;
+  first_shown_ts: number;
+  creative_count: number;
+  qualifying?: boolean;
+  merchant: null | {
+    id: string;
+    merchant_id: string;
+    name: string;
+    platform: string;
+    url: string | null;
+    status: string;
+  };
+}
+
+interface ActiveDomainsResp {
+  advertiser_id: string;
+  advertiser_name: string | null;
+  region: string;
+  min_days: number;
+  items: ActiveDomainItem[];
+  all_domains: ActiveDomainItem[];
+  ocr_pending: boolean;
+  sampled_count?: number;
+  ocr_success_count?: number;
+  hint?: string;
 }
 
 interface DiscoverableItem {
@@ -146,6 +176,35 @@ export default function AdvertisersPage() {
   // 跨页保留所选行的完整对象 (key = `${advertiser_id}|${region}`)
   const [discSelectedMap, setDiscSelectedMap] = useState<Map<string, DiscoverableItem>>(new Map());
   const [batchRunning, setBatchRunning] = useState(false);
+
+  // ─── 查看活跃域名 Modal ─────────────────────────────────
+  const [viewOpen, setViewOpen] = useState(false);
+  const [viewLoading, setViewLoading] = useState(false);
+  const [viewData, setViewData] = useState<ActiveDomainsResp | null>(null);
+  const [viewMode, setViewMode] = useState<"recent" | "all">("recent");
+
+  const openViewModal = useCallback(async (watchlistId: string) => {
+    setViewOpen(true);
+    setViewMode("recent");
+    setViewLoading(true);
+    setViewData(null);
+    try {
+      const r = await fetch(`/api/user/atc/watchlist/${watchlistId}/active-domains`).then((x) => x.json());
+      if (r.code === 0) {
+        setViewData(r.data);
+      } else {
+        message.error(r.message || "加载失败");
+      }
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : "加载失败");
+    } finally {
+      setViewLoading(false);
+    }
+  }, [message]);
+
+  const jumpToMerchants = useCallback((domain: string) => {
+    router.push(`/user/merchants?q=${encodeURIComponent(domain)}`);
+  }, [router]);
 
   const loadDiscoverable = useCallback(async () => {
     setDiscLoading(true);
@@ -275,17 +334,20 @@ export default function AdvertisersPage() {
       ),
     },
     {
-      title: "操作", width: 180,
+      title: "操作", width: 220,
       render: (_: unknown, row) => (
-        <Space size={4}>
-          <Button size="small" type="link" icon={<EyeOutlined />} onClick={() => router.push(`/user/intelligence?advertiser_id=${row.advertiser_id}&name=${encodeURIComponent(row.advertiser_name ?? "")}&region=${row.region}`)}>查情报</Button>
+        <Space size={4} wrap>
+          <Tooltip title={`查看持续投放 ≥ ${row.min_days} 天且近 2 天还在投的域名 / CRM 商家`}>
+            <Button size="small" type="link" icon={<EyeOutlined />} onClick={() => openViewModal(row.id)}>查看</Button>
+          </Tooltip>
+          <Button size="small" type="link" onClick={() => router.push(`/user/intelligence?advertiser_id=${row.advertiser_id}&name=${encodeURIComponent(row.advertiser_name ?? "")}&region=${row.region}`)}>查情报</Button>
           <Popconfirm title="确认取消关注？" onConfirm={() => unfollow(row.id)}>
             <Button size="small" danger type="link" icon={<DeleteOutlined />}>取消</Button>
           </Popconfirm>
         </Space>
       ),
     },
-  ], [router, toggleShare, unfollow]);
+  ], [router, toggleShare, unfollow, openViewModal]);
 
   const recCols = useMemo<ColumnsType<RecommendedItem>>(() => [
     { title: "广告主", dataIndex: "advertiser_name", render: (_: string, row) => <AtcAdvertiserLink id={row.advertiser_id} name={row.advertiser_name} /> },
@@ -510,6 +572,126 @@ export default function AdvertisersPage() {
           ]}
         />
       </Card>
+
+      <Modal
+        open={viewOpen}
+        onCancel={() => setViewOpen(false)}
+        footer={null}
+        width={900}
+        title={
+          viewData ? (
+            <Space>
+              <ShopOutlined />
+              <span>{viewData.advertiser_name || viewData.advertiser_id}</span>
+              <Tag color="blue">{viewData.region}</Tag>
+              <Tag>≥ {viewData.min_days} 天 · 近 2 天还在投</Tag>
+            </Space>
+          ) : "查看活跃域名"
+        }
+      >
+        {viewLoading ? (
+          <div style={{ padding: 40, textAlign: "center" }}>加载中…</div>
+        ) : !viewData ? (
+          <Empty />
+        ) : viewData.hint && viewData.items.length === 0 && viewData.all_domains.length === 0 ? (
+          <div style={{ padding: 40, textAlign: "center", color: "#8c8c8c" }}>{viewData.hint}</div>
+        ) : (
+          <>
+            <div style={{ marginBottom: 12, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <Space>
+                <Button
+                  size="small"
+                  type={viewMode === "recent" ? "primary" : "default"}
+                  onClick={() => setViewMode("recent")}
+                >
+                  近 2 天活跃 ({viewData.items.length})
+                </Button>
+                <Button
+                  size="small"
+                  type={viewMode === "all" ? "primary" : "default"}
+                  onClick={() => setViewMode("all")}
+                >
+                  全部已采样域名 ({viewData.all_domains.length})
+                </Button>
+              </Space>
+              {viewData.ocr_pending && (
+                <Tag color="blue">部分图片 OCR 仍在识别中</Tag>
+              )}
+            </div>
+            <Table<ActiveDomainItem>
+              rowKey="domain"
+              size="small"
+              pagination={false}
+              dataSource={viewMode === "recent" ? viewData.items : viewData.all_domains}
+              locale={{ emptyText: viewMode === "recent" ? "暂无满足「持续 ≥ 阈值 + 近 2 天还在投」的域名" : "无采样域名" }}
+              columns={[
+                {
+                  title: "域名",
+                  dataIndex: "domain",
+                  render: (v: string, row) => (
+                    <Space size={6}>
+                      {row.qualifying !== false && <FireOutlined style={{ color: "#fa8c16" }} />}
+                      <Text strong>{v}</Text>
+                    </Space>
+                  ),
+                },
+                {
+                  title: "持续天数",
+                  dataIndex: "max_creative_days",
+                  width: 100,
+                  sorter: (a, b) => a.max_creative_days - b.max_creative_days,
+                  render: (v: number) => {
+                    const color = v >= 60 ? "#f5222d" : v >= 30 ? "#fa8c16" : "#52c41a";
+                    return <span style={{ color, fontWeight: 600 }}>{v} 天</span>;
+                  },
+                },
+                {
+                  title: "最近投放",
+                  dataIndex: "last_shown_ts",
+                  width: 110,
+                  render: (v: number) => v > 0 ? new Date(v * 1000).toISOString().slice(0, 10) : "-",
+                },
+                {
+                  title: "创意数",
+                  dataIndex: "creative_count",
+                  width: 80,
+                  render: (v: number) => <Tag>{v}</Tag>,
+                },
+                {
+                  title: "CRM 命中商家",
+                  width: 280,
+                  render: (_: unknown, row) =>
+                    row.merchant ? (
+                      <Space size={4} wrap>
+                        <Tag color="green">{row.merchant.platform}</Tag>
+                        <Text>{row.merchant.name}</Text>
+                        <Tag>{row.merchant.status}</Tag>
+                      </Space>
+                    ) : (
+                      <Text type="secondary">未在 CRM 商家库</Text>
+                    ),
+                },
+                {
+                  title: "操作",
+                  width: 120,
+                  render: (_: unknown, row) => (
+                    <Button size="small" type="link" icon={<ShopOutlined />}
+                      onClick={() => jumpToMerchants(row.domain)}
+                    >
+                      去商家页面
+                    </Button>
+                  ),
+                },
+              ]}
+            />
+            {viewData.sampled_count !== undefined && (
+              <div style={{ marginTop: 8, fontSize: 12, color: "#8c8c8c" }}>
+                共采样 {viewData.sampled_count} 张广告创意，OCR 成功 {viewData.ocr_success_count} 张
+              </div>
+            )}
+          </>
+        )}
+      </Modal>
     </div>
   );
 }

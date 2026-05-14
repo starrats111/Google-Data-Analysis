@@ -4,7 +4,7 @@ import { Card, Row, Col, Table, Input, Select, Button, Space, Tag, Modal, Form, 
 import { ShopOutlined, SearchOutlined, CheckOutlined, DollarOutlined, CalendarOutlined, SaveOutlined, SyncOutlined, WarningOutlined, StarOutlined, CopyOutlined, ReloadOutlined, RobotOutlined, DeleteOutlined, CloseCircleOutlined, ThunderboltOutlined } from "@ant-design/icons";
 import { PLATFORMS, BIDDING_STRATEGIES } from "@/lib/constants";
 import { useApiWithParams, useStaleApi, useApi, mutateApi, refreshApi } from "@/lib/swr";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import dayjs, { type Dayjs } from "dayjs";
 import { normalizeAiRuleProfile, SYSTEM_ADRIAN_PERSONA, type AiRuleProfile, type AiPersona } from "@/lib/ai-rule-profile";
 const { Text } = Typography;
@@ -146,10 +146,14 @@ export default function MerchantsPage() {
     revalidateOnFocus: false,
   });
   const isLeader = authData?.role === "leader";
-  const [tab, setTab] = useState("claimed");
+  // C-094.8：支持 ?q=xxx 自动填入搜索框（来自「我的广告主 → 查看」或「广告情报 → 投放域名」跳转）
+  const searchParams = useSearchParams();
+  const initialQ = searchParams?.get("q") ?? "";
+  const initialTab = searchParams?.get("tab") ?? "claimed";
+  const [tab, setTab] = useState(initialTab);
   const [platform, setPlatform] = useState("");
-  const [search, setSearch] = useState("");
-  const [searchInput, setSearchInput] = useState("");
+  const [search, setSearch] = useState(initialQ);
+  const [searchInput, setSearchInput] = useState(initialQ);
   const [labelFilter, setLabelFilter] = useState("");
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(50);

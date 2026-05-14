@@ -338,7 +338,7 @@ export default function IntelligencePage() {
   );
 
   // 为每个广告主 Table 单独构造 columns，让"投放域名"列能拿到当前 advId + region
-  // 用于跳转到 Google ATC 的「该广告主 × 该域名」筛选页（而非商家官网）
+  // C-094.8：投放域名点击不再跳 Google ATC 外链，改跳 CRM 内「我的商家」按域名搜索
   const makeAdColumns = (advId: string, currentRegion: string) => [
     {
       title: "持续天数",
@@ -372,26 +372,21 @@ export default function IntelligencePage() {
       dataIndex: "domain",
       width: 180,
       render: (v: string | undefined, rec: AtcAd) => {
+        // 标记一下 currentRegion / advId 已不再用于此列，避免 lint 误报
+        void advId; void currentRegion;
         if (v) {
-          // 点击跳 Google 广告透明度中心：
-          //   - 有 creative_id：定位到该广告创意详情页 /advertiser/{AR}/creative/{CR}?region=
-          //   - 无 creative_id（罕见降级）：跳广告主主页 /advertiser/{AR}?region=
-          //   - 广告主非 AR 开头（极少数本地降级数据）：跳商家官网
-          let atcUrl: string;
-          let tooltipTitle: string;
-          if (advId.startsWith("AR") && rec.creative_id) {
-            atcUrl = `https://adstransparency.google.com/advertiser/${advId}/creative/${rec.creative_id}?region=${currentRegion}`;
-            tooltipTitle = `在 Google 广告透明度中心查看该广告详情`;
-          } else if (advId.startsWith("AR")) {
-            atcUrl = `https://adstransparency.google.com/advertiser/${advId}?region=${currentRegion}`;
-            tooltipTitle = `在 Google 广告透明度中心查看该广告主全部广告`;
-          } else {
-            atcUrl = `https://${v}`;
-            tooltipTitle = `打开 ${v}`;
-          }
+          // C-094.8：直接跳「我的商家」按域名搜索，省去员工再到广告情报里找商家的步骤。
+          //   - 若 CRM 已有同域名商家 → 直接命中
+          //   - 若没有 → 列表为空，员工可在「选取商家」Tab 用同样的搜索框继续找
           return (
-            <Tooltip title={tooltipTitle}>
-              <a href={atcUrl} target="_blank" rel="noreferrer">
+            <Tooltip title={`在「我的商家」里搜索 ${v}`}>
+              <a
+                onClick={(e) => {
+                  e.preventDefault();
+                  router.push(`/user/merchants?q=${encodeURIComponent(v)}`);
+                }}
+                style={{ cursor: "pointer" }}
+              >
                 <LinkOutlined /> {v}
               </a>
             </Tooltip>
