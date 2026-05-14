@@ -1475,7 +1475,7 @@ export default function MerchantsPage() {
                       }
                       if (c.classification === "pending") {
                         return (
-                          <Tooltip title={`已查 ${c.ad_count} 个广告，OCR 正在识别域名，约 30~60s 后自动重判`}>
+                          <Tooltip title={`已查 ${c.ad_count} 个广告，OCR 正在识别域名，约 10~20s 后自动重判`}>
                             <Tag color="blue" icon={<SyncOutlined spin />}>判定中</Tag>
                           </Tooltip>
                         );

@@ -268,8 +268,13 @@ const CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 小时
 //   阈值 30 天 + 至少 3 个合格 domain → peer
 const ADVERTISER_MIN_DOMAIN_DAYS = 30;
 const ADVERTISER_MIN_QUALIFYING_DOMAINS_FOR_PEER = 3;
-/** 每个 advertiser 最多 OCR 前 N 张 image，控制成本（用户决策：30 张） */
-const ADVERTISER_OCR_SAMPLE_LIMIT = 30;
+/**
+ * 每个 advertiser 最多 OCR 前 N 张 image，控制成本。
+ * C-094.5：从 30 张下调至 5 张（用户决策）。
+ *   依据：真同行通常每个域名都投了多张创意，5 张样本即可命中 3+ 不同 domain；
+ *   且 OCR 配额节省 6x、单次反查耗时从 ~60s 降至 ~10s。
+ */
+const ADVERTISER_OCR_SAMPLE_LIMIT = 5;
 
 // C-094.1：广告主域名分布快照 TTL（按 classification 差异化）
 //   - peer       (≥3 合格 domain)：30 天 — 同行身份长期稳定
@@ -404,7 +409,7 @@ function aggregateDomainStats(sampledAds: SampledAd[], urlToDomain: Map<string, 
  *
  * 实现路径（SerpApi advertiser_id 查询不返回 target_domain 是核心限制）：
  *   1. 调 1 次 SerpApi advertiser_id 查询 → 拿到 ad_creatives 列表（含 image / first_shown / last_shown）
- *   2. 抽前 30 张 image → 反查 ad_image_ocr_cache（OCR 系统已积累的 image→domain 映射）
+ *   2. 抽前 N 张 image（N=ADVERTISER_OCR_SAMPLE_LIMIT）→ 反查 ad_image_ocr_cache
  *   3. 未识别的 image → 入队 + fire-and-forget 触发 worker（异步补 OCR）
  *   4. 按 domain 聚合所有 ad → 算每个 domain 上最长单广告投放天数
  *   5. 数 "合格 domain"（最长单广告 ≥30 天）→ ≥3 即同行
@@ -536,7 +541,7 @@ export async function getOrFetchAdvertiserDomainSnapshot(opts: {
   const advertiserName = ads[0]?.advertiser ?? null;
   const now = new Date();
 
-  // 3. 抽前 30 张带 image 的 ad
+  // 3. 抽前 N 张带 image 的 ad（N=ADVERTISER_OCR_SAMPLE_LIMIT）
   const sampledAds: SampledAd[] = ads
     .filter((a) => !!a.image)
     .slice(0, ADVERTISER_OCR_SAMPLE_LIMIT)
