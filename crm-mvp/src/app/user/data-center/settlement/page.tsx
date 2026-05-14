@@ -472,7 +472,7 @@ export default function SettlementPage() {
                 rowKey={(r) => `${r.platform}:${r.merchant_id}`}
                 size="small"
                 scroll={{ x: 900 }}
-                pagination={{ pageSize: 50, showTotal: (t) => `共 ${t} 个商家`, showSizeChanger: true }}
+                pagination={{ defaultPageSize: 50, showTotal: (t) => `共 ${t} 个商家`, showSizeChanger: true, pageSizeOptions: ["10", "20", "50", "100"] }}
                 summary={() => {
                   if (!data?.merchants.length) return null;
                   const totals = data.merchants.reduce(

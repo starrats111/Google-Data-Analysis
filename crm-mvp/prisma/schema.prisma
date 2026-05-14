@@ -951,12 +951,15 @@ model user_atc_watchlist {
   advertiser_name String?  @db.VarChar(255)
   region          String   @default("US") @db.VarChar(8)
   min_days        Int      @default(30)
+  /** C-094.6：是否分享给同事（出现在「推荐广告主」列表） */
+  is_shared       Int      @default(0) @db.TinyInt
   is_deleted      Int      @default(0) @db.TinyInt
   created_at      DateTime @default(now()) @db.DateTime(0)
   updated_at      DateTime @default(now()) @updatedAt @db.DateTime(0)
 
   @@unique([user_id, advertiser_id, region], map: "uk_user_adv_region")
   @@index([user_id, is_deleted], map: "idx_user_deleted")
+  @@index([is_shared, is_deleted], map: "idx_shared")
 }
 
 // -----------------------------------------------------------

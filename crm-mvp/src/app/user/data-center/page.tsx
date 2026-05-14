@@ -673,7 +673,7 @@ export default function DataCenterPage() {
           rowKey="id" loading={isLoading} dataSource={rows} columns={columns}
           size="small" scroll={{ x: DATA_CENTER_TABLE_SCROLL_X }}
           className="data-center-campaigns-table"
-          pagination={{ pageSize: 50, showTotal: (t) => `共 ${t} 条`, showSizeChanger: true, pageSizeOptions: ["20", "50", "100"] }}
+          pagination={{ defaultPageSize: 50, showTotal: (t) => `共 ${t} 条`, showSizeChanger: true, pageSizeOptions: ["20", "50", "100"] }}
           summary={() => {
             if (rows.length === 0) return null;
             return (

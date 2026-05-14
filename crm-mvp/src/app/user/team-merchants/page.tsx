@@ -109,14 +109,15 @@ export default function TeamMerchantsPage() {
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const [countdown, setCountdown] = useState(POLL_INTERVAL / 1000);
 
+  const [pageSize, setPageSize] = useState(50);
   const params = useMemo(() => ({
     page,
-    pageSize: 50,
+    pageSize,
     sortField,
     sortOrder,
     ...(platform ? { platform } : {}),
     ...(search ? { search } : {}),
-  }), [page, platform, search, sortField, sortOrder]);
+  }), [page, pageSize, platform, search, sortField, sortOrder]);
 
   const { data, isLoading, mutate } = useApiWithParams<ApiResponse>(
     "/api/user/team/merchants",
@@ -325,10 +326,15 @@ export default function TeamMerchantsPage() {
           onChange={handleTableChange}
           pagination={{
             current: page,
-            pageSize: 50,
+            pageSize,
             total,
-            onChange: setPage,
+            showSizeChanger: true,
+            pageSizeOptions: ["10", "20", "50", "100"],
             showTotal: (t) => `共 ${t} 个商家`,
+            onChange: (p, ps) => {
+              if (ps !== pageSize) { setPageSize(ps); setPage(1); }
+              else setPage(p);
+            },
           }}
         />
       </Card>
