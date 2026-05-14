@@ -1008,8 +1008,13 @@ export async function padHeadlines(
   const biddingStrategy = options.biddingStrategy || "MAXIMIZE_CLICKS";
   const aiRulePrompt = buildAiRulePrompt(options.aiRuleProfile, "ad_copy");
 
-  // 最多 3 轮：每轮 AI 返工补齐不足的部分，直到达到 count 为止
-  for (let attempt = 0; attempt < 3; attempt++) {
+  // 早退：references 充足 + locked 已不少，第 1 轮 AI 拿到大部分后直接静态兜底补齐，
+  // 避免连跑 2-3 轮 AI 累计 10-20s。
+  const earlyExitThreshold = (combinedLen: number, attempt: number) =>
+    attempt >= 1 && references.length >= 8 && combinedLen >= Math.max(3, count - 3);
+
+  // 最多 2 轮：每轮 AI 返工补齐不足的部分，仍不足则静态兜底（haiku 速度下 2 轮已经足够稳）。
+  for (let attempt = 0; attempt < 2; attempt++) {
     const needed = count - locked.length;
     const isNonEnglish = market.languageCode !== "en";
     const langWarning = isNonEnglish
@@ -1094,8 +1099,13 @@ Return ONLY a valid JSON array of strings. No explanation, no extra text.`;
 
       // AI 生成了有效内容但不足（或首条非品牌）：保留已生成的，下一轮 AI 补齐剩余
       if (combined.length >= 3) {
-        console.warn(`[padHeadlines] 第${attempt + 1}轮：${combined.length}/${count}条，品牌首条=${firstIsBrand}，AI 返工补齐剩余`);
         locked = combined;
+        // ⑥ 早退：references 充足 + 已拿到足够多条，跳过下一轮 AI，让静态 fallback 补齐
+        if (earlyExitThreshold(combined.length, attempt)) {
+          console.warn(`[padHeadlines] 第${attempt + 1}轮：${combined.length}/${count} 条 + references=${references.length} 充足 → 早退用静态兜底补齐`);
+          break;
+        }
+        console.warn(`[padHeadlines] 第${attempt + 1}轮：${combined.length}/${count}条，品牌首条=${firstIsBrand}，AI 返工补齐剩余`);
         continue; // 进下一轮 for 循环
       }
 

@@ -965,6 +965,16 @@ export default function AdPreviewPage() {
         setNegKwLoading(false);
         return;
       }
+
+      // L2 守门：上下文不足，AI 文案被跳过
+      if (type === "context_insufficient") {
+        const d = data as { reason?: string; suggestion?: string; page_text_len?: number; semrush_titles?: number; products?: number };
+        message.warning({
+          content: `无法自动生成文案：${d?.reason || "网站内容无法解析"}（pageText=${d?.page_text_len ?? 0}, SemRush=${d?.semrush_titles ?? 0}, 商品=${d?.products ?? 0}）。${d?.suggestion || "请手动填写或重新爬取"}`,
+          duration: 12,
+        });
+        return;
+      }
     };
 
     try {

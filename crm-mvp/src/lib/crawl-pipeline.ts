@@ -789,6 +789,83 @@ function htmlToText(html: string): string {
   return text;
 }
 
+/**
+ * L3: 从 HTML <head> 抽 OG / meta description / title / h1 / h2 拼成结构化摘要文本。
+ *
+ * 适用场景：SPA / React / Vue 首屏 body 完全空（typical Cloudflare / 反爬保护后端），
+ * htmlToText 抽出来 0 字符；但 <head> 仍然带有商家自写的 og:description / meta description
+ * （SEO 必备）—— 这是描述主营业务最高质量的来源，把它喂给 AI 能根治"Camplify→Spa"这种
+ * 业务漂移。
+ *
+ * 输出格式（多源拼接，每行一行，便于 AI prompt 切片）：
+ *   Title: {title}
+ *   Description: {og:description ?? meta description}
+ *   H1: {h1[0]}
+ *   H1: {h1[1]}
+ *   H2: {h2[0]} ...
+ */
+function extractStructuredMeta(html: string): string {
+  if (!html) return "";
+  const lines: string[] = [];
+
+  const decode = (s: string): string => s
+    .replace(/&amp;/gi, "&").replace(/&lt;/gi, "<").replace(/&gt;/gi, ">")
+    .replace(/&nbsp;/gi, " ").replace(/&quot;/gi, '"').replace(/&#39;/gi, "'")
+    .replace(/&#(\d+);/g, (_, n) => String.fromCharCode(Number(n)))
+    .replace(/\s+/g, " ").trim();
+
+  // 1) <title>
+  const titleMatch = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
+  const title = titleMatch ? decode(titleMatch[1]) : "";
+  if (title) lines.push(`Title: ${title}`);
+
+  // 2) og:title 和 og:description（SEO 必备，商家自写）
+  const ogTitleMatch = html.match(/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']/i)
+    || html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:title["']/i);
+  const ogTitle = ogTitleMatch ? decode(ogTitleMatch[1]) : "";
+  if (ogTitle && ogTitle !== title) lines.push(`OG Title: ${ogTitle}`);
+
+  const ogDescMatch = html.match(/<meta[^>]+property=["']og:description["'][^>]+content=["']([^"']+)["']/i)
+    || html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:description["']/i);
+  const ogDesc = ogDescMatch ? decode(ogDescMatch[1]) : "";
+  if (ogDesc) lines.push(`Description: ${ogDesc}`);
+
+  // 3) <meta name="description">（备用，若 OG 缺失）
+  if (!ogDesc) {
+    const metaDescMatch = html.match(/<meta[^>]+name=["']description["'][^>]+content=["']([^"']+)["']/i)
+      || html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+name=["']description["']/i);
+    const metaDesc = metaDescMatch ? decode(metaDescMatch[1]) : "";
+    if (metaDesc) lines.push(`Description: ${metaDesc}`);
+  }
+
+  // 4) <meta name="keywords">（部分商家会标主营品类）
+  const kwMatch = html.match(/<meta[^>]+name=["']keywords["'][^>]+content=["']([^"']+)["']/i);
+  const kw = kwMatch ? decode(kwMatch[1]) : "";
+  if (kw && kw.length <= 200) lines.push(`Keywords: ${kw}`);
+
+  // 5) 全文 <h1>（最多 3 个，商家通常用 H1 写主标语）
+  const h1Re = /<h1[^>]*>([\s\S]*?)<\/h1>/gi;
+  const h1List: string[] = [];
+  for (const m of html.matchAll(h1Re)) {
+    const t = decode(m[1].replace(/<[^>]+>/g, " "));
+    if (t && t.length <= 200 && !h1List.includes(t)) h1List.push(t);
+    if (h1List.length >= 3) break;
+  }
+  for (const h of h1List) lines.push(`H1: ${h}`);
+
+  // 6) <h2>（最多 4 个，常用于卖点 / 服务分类）
+  const h2Re = /<h2[^>]*>([\s\S]*?)<\/h2>/gi;
+  const h2List: string[] = [];
+  for (const m of html.matchAll(h2Re)) {
+    const t = decode(m[1].replace(/<[^>]+>/g, " "));
+    if (t && t.length <= 200 && !h2List.includes(t)) h2List.push(t);
+    if (h2List.length >= 4) break;
+  }
+  for (const h of h2List) lines.push(`H2: ${h}`);
+
+  return lines.join("\n");
+}
+
 // ─── 站内链接发现 ───
 
 const BAD_LINK_TEXTS = ["click here", "read more", "learn more", "see more", "view more", "here", "link", "click"];
@@ -1788,7 +1865,17 @@ export async function buildCrawlCache(
     Promise.resolve(html ? extractProducts(html, merchantUrl, country) : []),
   ]);
 
-  const pageText = html ? htmlToText(html).slice(0, 10000) : "";
+  // L3: 始终把 <head> 抽出的结构化摘要（OG / meta description / title / h1 / h2）
+  //     拼到 pageText 前面 —— SEO 必备字段是商家自写的主营业务描述，质量远高于 body 噪声，
+  //     且 SPA 站 body 常常为空时 meta 仍非空，能彻底避免 AI 凭商家名瞎猜（如 Camplify→Spa）。
+  const metaText = html ? extractStructuredMeta(html) : "";
+  const bodyText = html ? htmlToText(html).slice(0, 9000) : "";
+  const pageText = metaText
+    ? (bodyText ? `${metaText}\n\n${bodyText}` : metaText).slice(0, 10000)
+    : bodyText;
+  if (metaText) {
+    console.log(`[CrawlPipeline] L3 meta 兜底已注入: ${metaText.length} 字符（body=${bodyText.length}）`);
+  }
 
   // 检测站点是否使用 locale/country 前缀（/en-sg/ 或 /sg/ 两种格式），
   // 若是则为当前目标国家计算本地化落地页 URL

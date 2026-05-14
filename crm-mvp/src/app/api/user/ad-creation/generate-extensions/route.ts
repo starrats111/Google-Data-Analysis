@@ -448,9 +448,62 @@ export async function POST(req: NextRequest) {
 
         const tasks: Promise<void>[] = [];
 
-        if (types.includes("core")) {
+        // ─── L2: 上下文不足守门 ───
+        // 当爬虫拿到的 pageText 极短（< 200 字符，L3 meta 兜底后仍空）+ SemRush 标题为 0
+        // + 没爬到任何商品时，AI 输入只剩商家名，会从字面瞎猜业务（如 Camplify→Spa）。
+        // 此时不再调用 AI，而是直接给员工一个明确的错误提示，让人工介入。
+        const ctxPageTextLen = (cache!.pageText ?? "").length;
+        const ctxSemrushTitles = Array.isArray(cache!.semrushTitles) ? cache!.semrushTitles.length : 0;
+        const ctxProducts = Array.isArray((cache as any).crawledProducts) ? (cache as any).crawledProducts.length : 0;
+        const ctxFeatures = Array.isArray(cache!.features) ? cache!.features.length : 0;
+        const ctxInsufficient =
+          ctxPageTextLen < 200 &&
+          ctxSemrushTitles === 0 &&
+          ctxProducts === 0 &&
+          ctxFeatures < 3;
+
+        const merchantCategory = merchant.category ?? null;
+
+        if (ctxInsufficient && types.includes("core")) {
+          console.warn(
+            `[Extensions] L2 守门触发：上下文不足（pageText=${ctxPageTextLen} semrush=${ctxSemrushTitles} products=${ctxProducts} features=${ctxFeatures}），跳过 AI 文案生成`,
+          );
+          send("context_insufficient", {
+            page_text_len: ctxPageTextLen,
+            semrush_titles: ctxSemrushTitles,
+            products: ctxProducts,
+            features: ctxFeatures,
+            reason: cache!.crawlFailed
+              ? "网站爬取失败"
+              : "网站为 SPA 或反爬保护，主页内容无法解析",
+            suggestion: "请尝试『重新爬取』或在『商家库』中手动补充商家网站描述后再生成文案",
+          });
+          // 守门仍保留图片提取：员工至少能拿到 logo/banner
+          if (types.includes("core")) {
+            tasks.push((async () => {
+              try {
+                const rawImgs = cache!.images || [];
+                const images = rawImgs.length > 0
+                  ? await selectBestImages(rawImgs, merchantUrl, { pageText: cache!.pageText, features: cache!.features })
+                  : [];
+                send("images", images);
+                if (adCreativeId && images.length > 0) {
+                  await prisma.ad_creatives.update({
+                    where: { id: adCreativeId },
+                    data: { image_urls: images as any },
+                  }).catch(() => {});
+                }
+              } catch (imgErr) {
+                console.warn("[Extensions] L2 守门：图片提取异常:", imgErr instanceof Error ? imgErr.message : imgErr);
+                send("images", []);
+              }
+            })());
+          }
+          // 跳过 generateCore，但继续走 optional 和 sitelinks 已有逻辑（这些都依赖 cache，没有上下文也无法生成）
+          // 不进入主 if 分支，跳过下面的 generateCore
+        } else if (types.includes("core")) {
           const confirmedKeywords = Array.isArray(requestKeywords) ? (requestKeywords as string[]).filter(Boolean).slice(0, 10) : [];
-          tasks.push(generateCore(cache!, merchantName, merchantUrl, country, adSettings, aiRuleProfile, adCreativeId, send, ad_language, confirmedKeywords));
+          tasks.push(generateCore(cache!, merchantName, merchantUrl, country, adSettings, aiRuleProfile, adCreativeId, send, ad_language, confirmedKeywords, merchantCategory));
 
           // F-15: 图片提取独立于 AI 生成流程，并行运行，避免 AI/OCR 异常导致图片丢失
           tasks.push((async () => {
@@ -539,11 +592,49 @@ async function generateCore(
   send: (type: string, data: unknown) => void,
   adLanguageCode?: string,
   confirmedKeywords: string[] = [],
+  merchantCategory: string | null = null,
 ) {
   const market = getAdMarketConfig(country);
   const languageName = resolveLanguageName(country, adLanguageCode);
   const dailyBudget = Number(adSettings?.daily_budget || 2);
   const maxCpc = Number(adSettings?.max_cpc || 0.3);
+
+  // ─── L1: 业务摘要（提前并行触发，与 sitelinkPipeline 一起跑，不阻塞主 AI prompt 准备） ───
+  // 优先用 cache.businessSummary（持久化），没有就 haiku 提炼一段 30-150 字英文摘要，
+  // 让主 AI prompt 一开始就知道商家"实际是干嘛的"，根治 Camplify→Spa 这种业务漂移。
+  const businessSummaryPromise = (async () => {
+    const cachedSummary = (cache as any).businessSummary as import("@/lib/business-summary").BusinessSummary | null | undefined;
+    if (cachedSummary && cachedSummary.summary_en) return cachedSummary;
+    try {
+      const { extractBusinessSummary } = await import("@/lib/business-summary");
+      const summary = await extractBusinessSummary({
+        merchantName,
+        merchantUrl,
+        category: merchantCategory,
+        pageText: cache.pageText || "",
+        features: cache.features || [],
+        countryName: market.countryNameZh,
+      });
+      if (summary && adCreativeId) {
+        // 持久化到 crawl_cache，下次直接命中
+        try {
+          const merged = { ...(cache as any), businessSummary: summary };
+          await prisma.ad_creatives.update({
+            where: { id: adCreativeId },
+            data: { crawl_cache: merged as any },
+          });
+          (cache as any).businessSummary = summary;
+          console.log(`[Core] L1 业务摘要已生成并持久化: confidence=${summary.confidence}, len=${summary.summary_en.length}`);
+        } catch (persistErr) {
+          console.warn("[Core] L1 业务摘要持久化失败（非阻断）:", persistErr instanceof Error ? persistErr.message : persistErr);
+        }
+      }
+      return summary;
+    } catch (err) {
+      console.warn("[Core] L1 业务摘要提炼失败（非阻断）:", err instanceof Error ? err.message : err);
+      return null;
+    }
+  })();
   const biddingStrategy = adSettings?.bidding_strategy || "MAXIMIZE_CLICKS";
 
   // ═════════════════════════════════════════════════════════════════
@@ -677,6 +768,11 @@ async function generateCore(
   const normalizedProfile = normalizeAiRuleProfile(aiRuleProfile);
   const activePersona = getActivePersona(normalizedProfile);
 
+  // L1: 等业务摘要准备完毕（与 sitelinkPipeline 同期并行触发），注入到 prompt 顶部
+  const businessSummary = await businessSummaryPromise;
+  const { formatBusinessSummaryBlock } = await import("@/lib/business-summary");
+  const businessSummaryBlock = formatBusinessSummaryBlock(businessSummary, merchantCategory);
+
   // ─── system message：人设身份 + 写作信条 + 禁忌（AI 角色定义，最高优先级）
   const systemPrompt = `You are ${activePersona.name} — ${activePersona.persona}
 
@@ -708,7 +804,7 @@ ${discountGuidance}${shippingGuidance}
 - Website: ${merchantUrl}
 - Target market: ${market.countryNameZh} (write in ${languageName})
 - Budget: $${dailyBudget.toFixed(2)}/day, CPC $${maxCpc.toFixed(2)}, Strategy: ${biddingStrategy}
-${keywordsBlock}${priceRangeBlock}${productBlock}
+${businessSummaryBlock}${keywordsBlock}${priceRangeBlock}${productBlock}
 Website content (extract specific collection names, materials, features, brand voice):
 ${cache.pageText.slice(0, 5000)}
 
@@ -807,61 +903,67 @@ ${isNonEnglish ? `\n⚠️ FINAL REMINDER: ALL headlines and descriptions MUST b
     ], 4096);
     const parsed = JSON.parse(extractJsonFromAi(raw));
 
-    // 处理标题：去 AI 味 → 超长缩略 → 过滤
-    let rawHeadlines = Array.isArray(parsed.headlines)
-      ? parsed.headlines.filter((h: string) => h && h.trim())
-      : [];
-    rawHeadlines = humanizeAdCopyBatch(rawHeadlines, 2, 30);
-    rawHeadlines = await condenseOverlong(rawHeadlines, 30, languageName);
-    let headlines = rawHeadlines.filter((h: string) => h.length >= 2 && h.length <= 30).slice(0, 15);
+    // ⑤+③ 把 headlines / descriptions 两条独立 pipeline 改并行（之前是串行 11-15s，
+    //      并行后等于较慢那条的耗时，节省约 50%。两条 pipeline 无交叉依赖。）
+    const processHeadlines = async () => {
+      let rawHeadlines = Array.isArray(parsed.headlines)
+        ? parsed.headlines.filter((h: string) => h && h.trim())
+        : [];
+      rawHeadlines = humanizeAdCopyBatch(rawHeadlines, 2, 30);
+      rawHeadlines = await condenseOverlong(rawHeadlines, 30, languageName);
+      let headlines = rawHeadlines.filter((h: string) => h.length >= 2 && h.length <= 30).slice(0, 15);
 
-    // 标题不足15条时，让 AI 返工补齐（不用静态 fallback）
-    if (headlines.length < 15) {
-      console.log(`[Core] 标题 ${headlines.length}/15 不足，AI 返工补充`);
-      headlines = await retryMissingHeadlines(headlines, 15, merchantName, languageName);
-    }
+      if (headlines.length < 15) {
+        console.log(`[Core] 标题 ${headlines.length}/15 不足，AI 返工补充`);
+        headlines = await retryMissingHeadlines(headlines, 15, merchantName, languageName);
+      }
 
-    // 合规自动修复：标题
-    const headlineFix = await complianceAutoFix(headlines, "headline", merchantName, languageName, aiRuleProfile, 30, 2);
-    headlines = headlineFix.items;
+      const headlineFix = await complianceAutoFix(headlines, "headline", merchantName, languageName, aiRuleProfile, 30, 2);
+      headlines = headlineFix.items;
 
-    // 合规删除后仍不足，再次让 AI 返工（不再做二次合规，避免循环）
-    if (headlines.length < 15) {
-      console.log(`[Core] 合规删除后标题 ${headlines.length}/15，AI 再次返工`);
-      const patched = await retryMissingHeadlines(headlines, 15, merchantName, languageName);
-      const cleanNew = patched.filter((h: string) => !headlines.includes(h) && checkItemViolations([h], aiRuleProfile).length === 0);
-      headlines = [...headlines, ...cleanNew].slice(0, 15);
-      console.log(`[Core] 合规后返工补充: +${cleanNew.length} 条 (总${headlines.length})`);
-    }
-    send("headlines", headlines);
+      if (headlines.length < 15) {
+        console.log(`[Core] 合规删除后标题 ${headlines.length}/15，AI 再次返工`);
+        const patched = await retryMissingHeadlines(headlines, 15, merchantName, languageName);
+        const cleanNew = patched.filter((h: string) => !headlines.includes(h) && checkItemViolations([h], aiRuleProfile).length === 0);
+        headlines = [...headlines, ...cleanNew].slice(0, 15);
+        console.log(`[Core] 合规后返工补充: +${cleanNew.length} 条 (总${headlines.length})`);
+      }
+      send("headlines", headlines);
+      return { items: headlines, fix: headlineFix };
+    };
 
-    // 处理描述：去 AI 味 → 超长缩略 → 过滤
-    let rawDescs = Array.isArray(parsed.descriptions)
-      ? parsed.descriptions.filter((d: string) => d && d.trim())
-      : [];
-    rawDescs = humanizeAdCopyBatch(rawDescs, 40, 90);
-    rawDescs = await condenseOverlong(rawDescs, 90, languageName);
-    let descriptions = rawDescs.filter((d: string) => d.length >= 40 && d.length <= 90).slice(0, 4);
+    const processDescriptions = async () => {
+      let rawDescs = Array.isArray(parsed.descriptions)
+        ? parsed.descriptions.filter((d: string) => d && d.trim())
+        : [];
+      rawDescs = humanizeAdCopyBatch(rawDescs, 40, 90);
+      rawDescs = await condenseOverlong(rawDescs, 90, languageName);
+      let descriptions = rawDescs.filter((d: string) => d.length >= 40 && d.length <= 90).slice(0, 4);
 
-    // 描述不足4条时，让 AI 返工补齐（不用静态 fallback）
-    if (descriptions.length < 4) {
-      console.log(`[Core] 描述 ${descriptions.length}/4 不足，AI 返工补充`);
-      descriptions = await retryMissingDescriptions(descriptions, 4, merchantName, languageName);
-    }
+      if (descriptions.length < 4) {
+        console.log(`[Core] 描述 ${descriptions.length}/4 不足，AI 返工补充`);
+        descriptions = await retryMissingDescriptions(descriptions, 4, merchantName, languageName);
+      }
 
-    // 合规自动修复：描述
-    const descFix = await complianceAutoFix(descriptions, "description", merchantName, languageName, aiRuleProfile, 90, 40);
-    descriptions = descFix.items;
+      const descFix = await complianceAutoFix(descriptions, "description", merchantName, languageName, aiRuleProfile, 90, 40);
+      descriptions = descFix.items;
 
-    // 合规删除后仍不足，再次让 AI 返工
-    if (descriptions.length < 4) {
-      console.log(`[Core] 合规删除后描述 ${descriptions.length}/4，AI 再次返工`);
-      const patched = await retryMissingDescriptions(descriptions, 4, merchantName, languageName);
-      const cleanNew = patched.filter((d: string) => !descriptions.includes(d) && checkItemViolations([d], aiRuleProfile).length === 0);
-      descriptions = [...descriptions, ...cleanNew].slice(0, 4);
-      console.log(`[Core] 合规后返工补充描述: +${cleanNew.length} 条 (总${descriptions.length})`);
-    }
-    send("descriptions", descriptions);
+      if (descriptions.length < 4) {
+        console.log(`[Core] 合规删除后描述 ${descriptions.length}/4，AI 再次返工`);
+        const patched = await retryMissingDescriptions(descriptions, 4, merchantName, languageName);
+        const cleanNew = patched.filter((d: string) => !descriptions.includes(d) && checkItemViolations([d], aiRuleProfile).length === 0);
+        descriptions = [...descriptions, ...cleanNew].slice(0, 4);
+        console.log(`[Core] 合规后返工补充描述: +${cleanNew.length} 条 (总${descriptions.length})`);
+      }
+      send("descriptions", descriptions);
+      return { items: descriptions, fix: descFix };
+    };
+
+    const [hlResult, descResult] = await Promise.all([processHeadlines(), processDescriptions()]);
+    let headlines = hlResult.items;
+    let descriptions = descResult.items;
+    const headlineFix = hlResult.fix;
+    const descFix = descResult.fix;
 
     // 汇总合规修复结果
     const allAutoFixed = [...headlineFix.fixed, ...descFix.fixed];
@@ -931,63 +1033,56 @@ ${isNonEnglish ? `\n⚠️ FINAL REMINDER: ALL headlines and descriptions MUST b
         return cv.ok;
       };
 
-      const hlHints = buildHintMap(headlines, "headline");
-      if (hlHints.length > 0) {
-        console.warn(`[Core] C-016 headlines 政策/证据违规 ${hlHints.length} 条，触发单条 mini-retry`);
+      // ⑤+③ 政策闸 headlines / descriptions 改并行（两者独立，原串行 6-20s → 并行约一半）
+      const runGateFor = async (field: "headline" | "description", items: string[]) => {
+        const hints = buildHintMap(items, field);
+        if (hints.length === 0) return null;
+        console.warn(`[Core] C-016 ${field} 政策/证据违规 ${hints.length} 条，触发单条 mini-retry`);
         const result = await rewriteViolationsOnly({
-          items: headlines,
-          violations: hlHints,
+          items,
+          violations: hints,
           opts: {
-            field: "headline",
+            field,
             brandRoot: merchantName,
             country,
             languageCode: adLanguageCode || market.languageCode,
             languageName,
-            maxLen: 30,
-            minLen: 2,
+            maxLen: field === "headline" ? 30 : 90,
+            minLen: field === "headline" ? 2 : 40,
             maxRounds: 3,
           },
-          validateAfterFn: (text) => validateAfter(text, "headline"),
+          validateAfterFn: (text) => validateAfter(text, field),
         });
-        headlines = result.items;
-        send("headlines", headlines); // 原位推送新版本（前端 CSS transition 平滑替换）
-        if (result.rewritten.length > 0 || result.degraded.length > 0) {
+        return result;
+      };
+
+      const [hlGate, dlGate] = await Promise.all([
+        runGateFor("headline", headlines),
+        runGateFor("description", descriptions),
+      ]);
+
+      if (hlGate) {
+        headlines = hlGate.items;
+        send("headlines", headlines);
+        if (hlGate.rewritten.length > 0 || hlGate.degraded.length > 0) {
           send("compliance_policy_fix", {
             field: "headline",
-            rewritten: result.rewritten.length,
-            degraded: result.degraded.length,
+            rewritten: hlGate.rewritten.length,
+            degraded: hlGate.degraded.length,
           });
-          console.warn(`[Core] headlines 政策重写：成功 ${result.rewritten.length}，兜底 ${result.degraded.length}`);
+          console.warn(`[Core] headlines 政策重写：成功 ${hlGate.rewritten.length}，兜底 ${hlGate.degraded.length}`);
         }
       }
-
-      const dlHints = buildHintMap(descriptions, "description");
-      if (dlHints.length > 0) {
-        console.warn(`[Core] C-016 descriptions 政策/证据违规 ${dlHints.length} 条，触发单条 mini-retry`);
-        const result = await rewriteViolationsOnly({
-          items: descriptions,
-          violations: dlHints,
-          opts: {
-            field: "description",
-            brandRoot: merchantName,
-            country,
-            languageCode: adLanguageCode || market.languageCode,
-            languageName,
-            maxLen: 90,
-            minLen: 40,
-            maxRounds: 3,
-          },
-          validateAfterFn: (text) => validateAfter(text, "description"),
-        });
-        descriptions = result.items;
+      if (dlGate) {
+        descriptions = dlGate.items;
         send("descriptions", descriptions);
-        if (result.rewritten.length > 0 || result.degraded.length > 0) {
+        if (dlGate.rewritten.length > 0 || dlGate.degraded.length > 0) {
           send("compliance_policy_fix", {
             field: "description",
-            rewritten: result.rewritten.length,
-            degraded: result.degraded.length,
+            rewritten: dlGate.rewritten.length,
+            degraded: dlGate.degraded.length,
           });
-          console.warn(`[Core] descriptions 政策重写：成功 ${result.rewritten.length}，兜底 ${result.degraded.length}`);
+          console.warn(`[Core] descriptions 政策重写：成功 ${dlGate.rewritten.length}，兜底 ${dlGate.degraded.length}`);
         }
       }
     } catch (gateErr) {

@@ -85,7 +85,7 @@ interface CacheEntry {
   expiresAt: number;
 }
 
-const MAX_CACHE_ENTRIES = 500;
+const MAX_CACHE_ENTRIES = 2000;
 const cache = new Map<string, CacheEntry>();
 
 function cacheSet(key: string, result: ResolveResult) {
@@ -93,10 +93,12 @@ function cacheSet(key: string, result: ResolveResult) {
   switch (result.reason) {
     case "cc_tld_ok":
     case "same_tld":
-      ttlMs = 60 * 60 * 1000; // 60m
+      // ccTLD 判定稳定（域名注册 / DNS 配置半年内基本不变），24h 缓存可节省每次广告创建 5-30s DNS+TCP 探测
+      ttlMs = 24 * 60 * 60 * 1000; // 24h
       break;
     case "nxdomain":
-      ttlMs = 30 * 60 * 1000; // 30m
+      // DNS 不存在的候选 host 几乎永远不会变成存在，缓存 24h
+      ttlMs = 24 * 60 * 60 * 1000; // 24h
       break;
     case "tcp_timeout":
       ttlMs = 5 * 60 * 1000; // 5m（可能是临时故障，短 TTL）
