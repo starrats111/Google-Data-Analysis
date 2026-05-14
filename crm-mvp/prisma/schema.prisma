@@ -39,6 +39,7 @@ model users {
   script_api_key            String?  @unique(map: "uk_script_api_key") @db.VarChar(64) // Google Ads Script 鉴权 Key，格式 ky_live_xxx
   link_exchange_click_count Int      @default(10) @db.UnsignedInt // 换链接工作台：上次设置的每广告刷点击数，新同步广告默认沿用
   serpapi_key               String?  @db.VarChar(128) // 个人 SerpApi API Key（广告情报功能）
+  atc_default_min_days      Int      @default(30) @db.UnsignedInt // 我的广告主-全局阈值，新增关注 / 统一设置时使用
   is_deleted                Int      @default(0) @db.TinyInt
   created_at                DateTime @default(now()) @db.DateTime(0)
   updated_at                DateTime @default(now()) @updatedAt @db.DateTime(0)

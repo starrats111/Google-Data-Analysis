@@ -8,8 +8,8 @@
  */
 "use client";
 import { useState, useMemo, useCallback, useEffect } from "react";
-import { App, Button, Card, Input, InputNumber, Modal, Space, Table, Tabs, Tag, Tooltip, Typography, Popconfirm, Empty } from "antd";
-import { ShareAltOutlined, StarFilled, StarOutlined, DeleteOutlined, SearchOutlined, ReloadOutlined, ThunderboltOutlined, EyeOutlined, ShopOutlined, FireOutlined } from "@ant-design/icons";
+import { App, Button, Card, Input, InputNumber, Modal, Space, Switch, Table, Tabs, Tag, Tooltip, Typography, Popconfirm, Empty } from "antd";
+import { StarFilled, StarOutlined, DeleteOutlined, SearchOutlined, ReloadOutlined, ThunderboltOutlined, EyeOutlined, ShopOutlined, FireOutlined } from "@ant-design/icons";
 import { useRouter } from "next/navigation";
 import type { ColumnsType } from "antd/es/table";
 
@@ -114,6 +114,11 @@ export default function AdvertisersPage() {
   const [mineQ, setMineQ] = useState("");
   const [mineQInput, setMineQInput] = useState("");
   const [mineLoading, setMineLoading] = useState(false);
+
+  // C-094.11：用户级全局阈值（顶部控件管理；不再每行单独编辑）
+  const [defaultMinDays, setDefaultMinDays] = useState<number>(30);
+  const [thresholdInput, setThresholdInput] = useState<number>(30);
+  const [thresholdSaving, setThresholdSaving] = useState(false);
 
   const loadMine = useCallback(async () => {
     setMineLoading(true);
@@ -232,6 +237,47 @@ export default function AdvertisersPage() {
   useEffect(() => { if (tab === "recommended") void loadRecommended(); }, [tab, loadRecommended]);
   useEffect(() => { if (tab === "discoverable") void loadDiscoverable(); }, [tab, loadDiscoverable]);
 
+  // C-094.11：加载用户全局阈值
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await fetch("/api/user/atc/settings").then((x) => x.json());
+        if (!cancelled && r.code === 0) {
+          setDefaultMinDays(r.data.default_min_days);
+          setThresholdInput(r.data.default_min_days);
+        }
+      } catch { /* ignore */ }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  const applyThreshold = useCallback(async () => {
+    const next = Math.max(1, Math.min(365, Math.floor(thresholdInput)));
+    if (next === defaultMinDays) {
+      message.info("阈值未变更");
+      return;
+    }
+    setThresholdSaving(true);
+    try {
+      const r = await fetch("/api/user/atc/settings", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ default_min_days: next }),
+      }).then((x) => x.json());
+      if (r.code === 0) {
+        setDefaultMinDays(next);
+        setThresholdInput(next);
+        message.success(`阈值已统一更新为 ≥ ${next} 天，已应用到 ${r.data.applied_rows} 个广告主`);
+        if (tab === "mine") void loadMine();
+      } else {
+        message.error(r.message || "更新失败");
+      }
+    } finally {
+      setThresholdSaving(false);
+    }
+  }, [thresholdInput, defaultMinDays, tab, loadMine, message]);
+
   // ─── 操作 ───────────────────────────────────────────────
   const unfollow = useCallback(async (id: string) => {
     const r = await fetch(`/api/user/atc/watchlist/${id}`, { method: "DELETE" }).then((x) => x.json());
@@ -257,29 +303,7 @@ export default function AdvertisersPage() {
     }
   }, [loadMine, message]);
 
-  // C-094.9：直接在「我的广告主」修改时间阈值（min_days）
-  const updateMinDays = useCallback(async (id: string, nextDays: number) => {
-    // 客户端先 clamp 到 1~365，与后端 PATCH 一致
-    const clamped = Math.max(1, Math.min(365, Math.floor(nextDays)));
-    // 先本地乐观更新，避免输入框抖动；失败回滚
-    setMineRows((rows) => rows.map((r) => (r.id === id ? { ...r, min_days: clamped } : r)));
-    try {
-      const r = await fetch(`/api/user/atc/watchlist/${id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ min_days: clamped }),
-      }).then((x) => x.json());
-      if (r.code === 0) {
-        message.success(`已更新阈值为 ≥ ${clamped} 天`);
-      } else {
-        message.error(r.message || "更新失败");
-        void loadMine();
-      }
-    } catch (e) {
-      message.error(e instanceof Error ? e.message : "更新失败");
-      void loadMine();
-    }
-  }, [loadMine, message]);
+  // C-094.11：行级 min_days 已下线 —— 全局阈值统一管理（顶部控件）
 
   const follow = useCallback(async (item: { advertiser_id: string; advertiser_name?: string | null; region: string }, afterDone?: () => void) => {
     const r = await fetch("/api/user/atc/watchlist", {
@@ -289,7 +313,7 @@ export default function AdvertisersPage() {
         advertiser_id: item.advertiser_id,
         advertiser_name: item.advertiser_name ?? null,
         region: item.region,
-        min_days: 30,
+        // 不传 min_days：后端会用 users.atc_default_min_days
       }),
     }).then((x) => x.json());
     if (r.code === 0) {
@@ -321,7 +345,7 @@ export default function AdvertisersPage() {
             advertiser_name: it.advertiser_name,
             region: it.region,
           })),
-          min_days: 30,
+          // 不传 min_days：后端会用 users.atc_default_min_days（全局阈值）
         }),
       }).then((x) => x.json());
       if (r.code === 0) {
@@ -339,51 +363,31 @@ export default function AdvertisersPage() {
   }, [discSelectedMap, discRows, discSelected, message, loadDiscoverable]);
 
   // ─── 表格列 ─────────────────────────────────────────────
+  // C-094.11：移除行级"阈值（天）"列（全局阈值在顶部统一管理）
+  //          "分享给同事"按钮 → Switch 小开关（与系统其他页面风格一致）
   const mineCols = useMemo<ColumnsType<WatchlistItem>>(() => [
     { title: "广告主", dataIndex: "advertiser_name", render: (_: string, row) => <AtcAdvertiserLink id={row.advertiser_id} name={row.advertiser_name} /> },
     { title: "Advertiser ID", dataIndex: "advertiser_id", width: 240, render: (v: string) => <Text copyable={{ text: v }} style={{ fontFamily: "monospace", fontSize: 12 }}>{v}</Text> },
     { title: "区域", dataIndex: "region", width: 60 },
     { title: "分类", width: 180, render: (_: unknown, row) => <QualifyingTag q={row.qualifying_domain_count} /> },
     {
-      title: <Tooltip title="单创意持续投放达到该天数即视为合格；同时也是「查看」弹窗筛选活跃域名的最低门槛">阈值（天）</Tooltip>,
-      dataIndex: "min_days", width: 130,
-      render: (v: number, row) => (
-        <InputNumber
+      title: <Tooltip title="开启后会出现在同事的「推荐广告主」中">分享</Tooltip>,
+      dataIndex: "is_shared", width: 80, align: "center" as const,
+      render: (v: boolean, row) => (
+        <Switch
           size="small"
-          min={1}
-          max={365}
-          value={v}
-          addonBefore="≥"
-          addonAfter="天"
-          style={{ width: 130 }}
-          onBlur={(e) => {
-            const next = Number(e.currentTarget.value);
-            if (Number.isFinite(next) && next !== v) updateMinDays(row.id, next);
-          }}
-          onPressEnter={(e) => {
-            const next = Number((e.target as HTMLInputElement).value);
-            if (Number.isFinite(next) && next !== v) updateMinDays(row.id, next);
-          }}
+          checked={v}
+          onChange={(c) => toggleShare(row.id, c)}
+          checkedChildren="开"
+          unCheckedChildren="关"
         />
       ),
     },
     {
-      title: "分享状态", dataIndex: "is_shared", width: 140,
-      render: (v: boolean, row) => (
-        <Button
-          size="small" type={v ? "primary" : "default"}
-          icon={v ? <StarFilled /> : <ShareAltOutlined />}
-          onClick={() => toggleShare(row.id, !v)}
-        >
-          {v ? "已分享" : "分享给同事"}
-        </Button>
-      ),
-    },
-    {
-      title: "操作", width: 220,
+      title: "操作", width: 200,
       render: (_: unknown, row) => (
-        <Space size={4} wrap>
-          <Tooltip title={`查看持续投放 ≥ ${row.min_days} 天且近 2 天还在投的域名 / CRM 商家`}>
+        <Space size={4}>
+          <Tooltip title={`查看持续投放 ≥ ${defaultMinDays} 天且近 2 天还在投的域名 / CRM 商家`}>
             <Button size="small" type="link" icon={<EyeOutlined />} onClick={() => openViewModal(row.id)}>查看</Button>
           </Tooltip>
           <Button size="small" type="link" onClick={() => router.push(`/user/intelligence?advertiser_id=${row.advertiser_id}&name=${encodeURIComponent(row.advertiser_name ?? "")}&region=${row.region}`)}>查情报</Button>
@@ -393,7 +397,7 @@ export default function AdvertisersPage() {
         </Space>
       ),
     },
-  ], [router, toggleShare, unfollow, openViewModal, updateMinDays]);
+  ], [router, toggleShare, unfollow, openViewModal, defaultMinDays]);
 
   const recCols = useMemo<ColumnsType<RecommendedItem>>(() => [
     { title: "广告主", dataIndex: "advertiser_name", render: (_: string, row) => <AtcAdvertiserLink id={row.advertiser_id} name={row.advertiser_name} /> },
@@ -466,7 +470,7 @@ export default function AdvertisersPage() {
         bodyStyle={{ padding: 16 }}
         extra={
           <Text type="secondary" style={{ fontSize: 12 }}>
-            关注同行广告主, 接收持续投放 ≥30 天的提醒; 分享给团队让协作更轻松
+            关注同行广告主，接收持续投放 ≥ {defaultMinDays} 天的提醒；分享给团队让协作更轻松
           </Text>
         }
       >
@@ -479,7 +483,7 @@ export default function AdvertisersPage() {
               label: `我的关注${mineTotal > 0 ? ` (${mineTotal})` : ""}`,
               children: (
                 <>
-                  <div style={{ marginBottom: 12, display: "flex", gap: 8 }}>
+                  <div style={{ marginBottom: 12, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
                     <Input
                       placeholder="搜索 ID / 名称"
                       prefix={<SearchOutlined />}
@@ -492,6 +496,32 @@ export default function AdvertisersPage() {
                     />
                     <Button icon={<SearchOutlined />} onClick={() => { setMineQ(mineQInput); setMinePage(1); }}>搜索</Button>
                     <Button icon={<ReloadOutlined />} onClick={() => loadMine()}>刷新</Button>
+                    {/* C-094.11：右侧统一阈值设置（所有关注的广告主共用同一个阈值） */}
+                    <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8, padding: "4px 12px", background: "#fafafa", border: "1px solid #f0f0f0", borderRadius: 6 }}>
+                      <Tooltip title="所有关注的广告主共用同一阈值：单创意持续投放达到该天数即视为合格；也是「查看」弹窗筛选活跃域名的最低门槛">
+                        <Text type="secondary" style={{ fontSize: 13 }}>统一阈值</Text>
+                      </Tooltip>
+                      <InputNumber
+                        size="small"
+                        min={1}
+                        max={365}
+                        value={thresholdInput}
+                        addonBefore="≥"
+                        addonAfter="天"
+                        style={{ width: 130 }}
+                        onChange={(v) => setThresholdInput(Number(v) || 1)}
+                        onPressEnter={() => applyThreshold()}
+                      />
+                      <Button
+                        size="small"
+                        type="primary"
+                        loading={thresholdSaving}
+                        disabled={thresholdInput === defaultMinDays}
+                        onClick={() => applyThreshold()}
+                      >
+                        应用
+                      </Button>
+                    </div>
                   </div>
                   <Table<WatchlistItem>
                     rowKey="id"

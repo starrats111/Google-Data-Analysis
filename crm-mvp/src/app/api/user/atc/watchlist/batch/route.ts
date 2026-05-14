@@ -33,9 +33,14 @@ export const POST = withUser(async (req: NextRequest, { user }) => {
   }
 
   const items = rawItems.slice(0, BATCH_MAX);
-  const minDays = Number.isFinite(body.min_days)
-    ? Math.max(1, Math.min(365, Number(body.min_days)))
-    : 30;
+  // C-094.11：未传 min_days 时从 users.atc_default_min_days 取（全局阈值）
+  let minDays: number;
+  if (Number.isFinite(body.min_days)) {
+    minDays = Math.max(1, Math.min(365, Number(body.min_days)));
+  } else {
+    const u = await prisma.users.findFirst({ where: { id: userId }, select: { atc_default_min_days: true } });
+    minDays = u?.atc_default_min_days ?? 30;
+  }
 
   let created = 0, reactivated = 0, skipped = 0, invalid = 0;
 
