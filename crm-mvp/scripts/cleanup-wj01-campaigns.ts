@@ -257,13 +257,14 @@ async function phaseReorder() {
   const user = await getUser(prisma);
   const rows = await fetchAllActive(prisma, user.id);
 
+  // 放宽校验：只要首段是纯数字且至少 5 段就算"有序号的规范命名"
+  // 兼容 MUI1 变体（country 在 parts[2]）和标准格式（country 在 parts[3]）
+  // 孤儿命名 "01"/"02"/"03"（只有 1 段）和 "AC-..." (parts[0] 非数字) 都会被排除
   const isStandardName = (n: string | null) => {
     if (!n || n.startsWith("LEGACY-") || n.startsWith("DRAFT-")) return false;
     const p = n.split("-");
-    if (p.length < 6) return false;
+    if (p.length < 5) return false;
     if (!/^\d+$/.test(p[0])) return false;
-    if (!/^[A-Z]{2}$/i.test(p[3])) return false;
-    if (!/^\d{4}$/.test(p[4])) return false;
     return true;
   };
 
@@ -373,8 +374,10 @@ async function phaseVerify() {
   const after = rows.filter((r) => r.created_at >= new Date(CUTOFF));
   const legacy = rows.filter((r) => (r.campaign_name ?? "").startsWith("LEGACY-"));
   const standardAfter = after.filter((r) => {
-    const p = (r.campaign_name ?? "").split("-");
-    return p.length >= 6 && /^\d{3}$/.test(p[0]);
+    const n = r.campaign_name ?? "";
+    if (n.startsWith("LEGACY-") || n.startsWith("DRAFT-")) return false;
+    const p = n.split("-");
+    return p.length >= 5 && /^\d+$/.test(p[0]);
   });
   const seqList = standardAfter
     .map((r) => parseInt((r.campaign_name ?? "").split("-")[0], 10))
