@@ -231,14 +231,14 @@ async function checkUserMerchants(
   }
 
   if (statusChangedList.length > 0) {
-    const names = statusChangedList.slice(0, 5).map(e => `${e.name}?${e.platform}?`).join("?");
-    const suffix = statusChangedList.length > 5 ? ` ? ${statusChangedList.length} ?` : "";
-    const detail = statusChangedList.map(e => `· ${e.name}?${e.platform}?`).join("\n");
+    const names = statusChangedList.slice(0, 5).map(e => `${e.name}（${e.platform}）`).join("、");
+    const suffix = statusChangedList.length > 5 ? ` 等 ${statusChangedList.length} 个` : "";
+    const detail = statusChangedList.map(e => `· ${e.name}（${e.platform}）`).join("\n");
     await prisma.notifications.create({
       data: {
         user_id: userId,
-        title: "??????????",
-        content: `????????? joined ????????? pending ?????CRM ???????????\n${names}${suffix}\n\n?????????????????? joined ?????????\n\n???\n${detail}`,
+        title: "商家状态变更提醒",
+        content: `以下商家在平台已经 joined，但您 CRM 内的状态仍是 pending，请到 CRM 平台手动更新状态：\n${names}${suffix}\n\n如不及时处理，您的广告可能投向未生效的商家，请尽快同步。\n\n详情：\n${detail}`,
         metadata: JSON.stringify({ statusChanged: statusChangedList }),
         type: "warning",
       },
@@ -247,11 +247,11 @@ async function checkUserMerchants(
 
   if (removed > 0 || added > 0) {
     const parts: string[] = [];
-    if (removed > 0) parts.push(`?? ${removed} ?????????`);
-    if (added > 0) parts.push(`?? ${added} ? joined ??`);
+    if (removed > 0) parts.push(`减少 ${removed} 个 joined 商家`);
+    if (added > 0) parts.push(`新增 ${added} 个 joined 商家`);
     const metadata = JSON.stringify({ removed: removedList, added: addedList });
     await prisma.notifications.create({
-      data: { user_id: userId, title: "????????", content: parts.join("?"), metadata, type: "system" },
+      data: { user_id: userId, title: "商家清单变更", content: parts.join("、"), metadata, type: "system" },
     }).catch(() => {});
   }
 
@@ -293,11 +293,11 @@ async function checkUserMerchantLinks(
     } catch {
       await prisma.user_merchants.update({
         where: { id: m.id },
-        data: { link_status: "invalid", link_checked_at: new Date(), link_check_reason: "URL ????" },
+        data: { link_status: "invalid", link_checked_at: new Date(), link_check_reason: "URL 格式错误" },
       });
       invalidCount++;
       invalidMerchants.push(m.merchant_name);
-      invalidDetails.push({ name: m.merchant_name, platform: m.platform, reason: "URL ????" });
+      invalidDetails.push({ name: m.merchant_name, platform: m.platform, reason: "URL 格式错误" });
       log(`  INVALID URL format: ${m.merchant_name} [${m.platform}]`);
       continue;
     }
@@ -317,7 +317,7 @@ async function checkUserMerchantLinks(
       if (!result.ok) {
         invalidCount++;
         invalidMerchants.push(m.merchant_name);
-        invalidDetails.push({ name: m.merchant_name, platform: m.platform, reason: result.reason || "??" });
+        invalidDetails.push({ name: m.merchant_name, platform: m.platform, reason: result.reason || "未知" });
         log(`  INVALID LINK: ${m.merchant_name} [${m.platform}] ? ${result.reason}`);
       }
     } catch (e) {
@@ -332,8 +332,8 @@ async function checkUserMerchantLinks(
     await prisma.notifications.create({
       data: {
         user_id: userId,
-        title: "??????",
-        content: `??? ${invalidCount} ????????${invalidMerchants.slice(0, 5).join("?")}${invalidMerchants.length > 5 ? ` ? ${invalidMerchants.length} ?` : ""}`,
+        title: "链接失效提醒",
+        content: `检测到 ${invalidCount} 个失效链接：${invalidMerchants.slice(0, 5).join("、")}${invalidMerchants.length > 5 ? ` 等 ${invalidMerchants.length} 个` : ""}`,
         metadata,
         type: "warning",
       },

@@ -19,6 +19,7 @@ import {
   RightOutlined,
   BarChartOutlined,
   EyeOutlined,
+  StarOutlined,
 } from "@ant-design/icons";
 import { useRouter, usePathname } from "next/navigation";
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
@@ -40,6 +41,7 @@ const userMenuItems: MenuItem[] = [
     children: [
       { key: "/user/merchants", icon: <ShopOutlined />, label: "我的商家" },
       { key: "/user/intelligence", icon: <EyeOutlined />, label: "广告情报" },
+      { key: "/user/advertisers", icon: <StarOutlined />, label: "我的广告主" },
     ],
   },
   {
@@ -90,6 +92,7 @@ const leaderMenuItems: MenuItem[] = [
     type: "group" as const,
     children: [
       { key: "/user/data-center/settlement", icon: <AccountBookOutlined />, label: "结算查询" },
+      { key: "/user/advertisers", icon: <StarOutlined />, label: "我的广告主" },
     ],
   },
 ];
