@@ -686,7 +686,6 @@ export const POST = withUser(async (req: NextRequest, { user }) => {
       maxCpc: Number(adSettings?.max_cpc || 0.3),
       biddingStrategy: adSettings?.bidding_strategy || "MAXIMIZE_CLICKS",
       aiRuleProfile: (adSettings as any)?.ai_rule_profile,
-      category: merchant.category ?? null,
     },
   ).catch((err) => console.error("[异步] 广告文案生成失败:", err));
 
@@ -819,7 +818,6 @@ async function triggerAdCopyGeneration(
     maxCpc?: number;
     biddingStrategy?: string;
     aiRuleProfile?: unknown;
-    category?: string | null;
   } = {},
 ) {
   const lockKey = `adcopy-${adCreativeId}`;
@@ -874,24 +872,8 @@ async function triggerAdCopyGeneration(
       descriptions: dedupedDescriptions,
     });
 
-    // ① 预热：同步生成业务摘要塞进 cache。这样员工进 ad-preview 时 L1 prompt 直接命中，
-    //          省 1-2s haiku 调用 + AI 上下文一开始就具备主营业务认知。
-    try {
-      const { extractBusinessSummary } = await import("@/lib/business-summary");
-      const summary = await extractBusinessSummary({
-        merchantName,
-        merchantUrl,
-        category: options.category ?? null,
-        pageText: crawlCache.pageText || "",
-        features: crawlCache.features || [],
-      });
-      if (summary) {
-        (crawlCache as any).businessSummary = summary;
-        console.log(`[DataCollect] L1 业务摘要已预生成: confidence=${summary.confidence}, len=${summary.summary_en.length}`);
-      }
-    } catch (sumErr) {
-      console.warn("[DataCollect] L1 业务摘要预生成失败（不阻断）:", sumErr instanceof Error ? sumErr.message : sumErr);
-    }
+    // 注意：业务摘要 L1 不在领取阶段预生成 —— 留给 generate-extensions 每次现场生成，
+    //       保证多次"重新生成"广告时 prompt 上下文有轻微抖动、文案保持差异化。
 
     // 并行：关键词写入 + 缓存存储
     await Promise.all([

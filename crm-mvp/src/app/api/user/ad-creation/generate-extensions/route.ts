@@ -600,11 +600,11 @@ async function generateCore(
   const maxCpc = Number(adSettings?.max_cpc || 0.3);
 
   // ─── L1: 业务摘要（提前并行触发，与 sitelinkPipeline 一起跑，不阻塞主 AI prompt 准备） ───
-  // 优先用 cache.businessSummary（持久化），没有就 haiku 提炼一段 30-150 字英文摘要，
-  // 让主 AI prompt 一开始就知道商家"实际是干嘛的"，根治 Camplify→Spa 这种业务漂移。
+  // 用 haiku 现场提炼 30-150 字主营业务摘要，让主 AI prompt 一开始就知道商家"实际是干嘛的"，
+  // 根治 Camplify→Spa 这种业务漂移。
+  // 注意：故意 不持久化、不复用 —— 广告创建本身就需要差异化，每次摘要轻微抖动有助于
+  //       AI 在多次"重新生成"间产出不同角度的文案，否则同一 prompt 会让标题趋同。
   const businessSummaryPromise = (async () => {
-    const cachedSummary = (cache as any).businessSummary as import("@/lib/business-summary").BusinessSummary | null | undefined;
-    if (cachedSummary && cachedSummary.summary_en) return cachedSummary;
     try {
       const { extractBusinessSummary } = await import("@/lib/business-summary");
       const summary = await extractBusinessSummary({
@@ -615,19 +615,8 @@ async function generateCore(
         features: cache.features || [],
         countryName: market.countryNameZh,
       });
-      if (summary && adCreativeId) {
-        // 持久化到 crawl_cache，下次直接命中
-        try {
-          const merged = { ...(cache as any), businessSummary: summary };
-          await prisma.ad_creatives.update({
-            where: { id: adCreativeId },
-            data: { crawl_cache: merged as any },
-          });
-          (cache as any).businessSummary = summary;
-          console.log(`[Core] L1 业务摘要已生成并持久化: confidence=${summary.confidence}, len=${summary.summary_en.length}`);
-        } catch (persistErr) {
-          console.warn("[Core] L1 业务摘要持久化失败（非阻断）:", persistErr instanceof Error ? persistErr.message : persistErr);
-        }
+      if (summary) {
+        console.log(`[Core] L1 业务摘要现场生成: confidence=${summary.confidence}, len=${summary.summary_en.length}`);
       }
       return summary;
     } catch (err) {
