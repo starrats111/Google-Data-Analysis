@@ -5,7 +5,7 @@
 import {
   crawlPage, fetchUrlMeta, fetchPageImages, searchMerchantImages, crawlViaSitemap,
   batchFetchMetaViaPuppeteer, crawlWithPuppeteerFull, crawlPageWithPuppeteer,
-  extractLinksAndImages, assessCrawlQuality, isQualityImageUrl,
+  assessCrawlQuality, isQualityImageUrl,
   harvestImagesFromPagesWithPuppeteer, getAcceptLanguage,
 } from "@/lib/crawler";
 import { getAdMarketConfig } from "@/lib/ad-market";
@@ -1533,48 +1533,64 @@ export async function buildCrawlCache(
   // 切片上限 300KB：camplify.es 等现代 SPA 的 head 区（preload/fonts/CSS）单独就占 100KB+，
   // body 真实文字在 150-250KB 偏后位置。150KB 上限会切掉真实文字段，导致 htmlToText=0。
   const PUPPETEER_HTML_SLICE = 300_000;
+
+  // puppeteerCache 用于把 PuppeteerPageData 的额外字段（navLinks/heroTexts/uspTexts/categoryNames）
+  // 透传给后续 sitelinks/collectImages/features/navItems 流程。
+  // 之前由两段重复的 "Puppeteer 补充流程" 二次调用 crawlWithPuppeteerFull 填充——
+  // 已删除补充段，改由主策略 runPuppeteer 跑成功时一次性填充，节省 40s 重复抓取。
+  // 注：用 `as` 拓宽类型，否则闭包内赋值不会让 TS 在外层 narrow 出 union 类型（会卡死在 null/never）。
+  let puppeteerCache = null as import("@/lib/crawler").PuppeteerPageData | null;
   const runPuppeteer = async (url: string): Promise<CrawlResultType> => {
-    const puppeteerHtml = await crawlPageWithPuppeteer(url, PUPPETEER_INNER_TIMEOUT, puppeteerProxyUrl ?? undefined);
-    if (!puppeteerHtml) throw new Error("Puppeteer 返回空 HTML");
-    const { links, images } = extractLinksAndImages(puppeteerHtml, url);
-    return { html: puppeteerHtml.slice(0, PUPPETEER_HTML_SLICE), links, images, method: "puppeteer" };
+    const pageData = await crawlWithPuppeteerFull(url, PUPPETEER_INNER_TIMEOUT, puppeteerProxyUrl ?? undefined);
+    if (!pageData) throw new Error("Puppeteer 返回空 HTML");
+    // 把完整 PageData 缓存供后续 sitelinks/collectImages 使用（仅当策略最终被采纳时才覆盖）
+    puppeteerCache = pageData;
+    // CrawlResultType 只需 html/links/images：links 用 nav/header 提取的更精准，images 直接复用
+    return {
+      html: pageData.html.slice(0, PUPPETEER_HTML_SLICE),
+      links: pageData.navLinks,
+      images: pageData.images,
+      method: "puppeteer",
+    };
   };
   // Puppeteer 直连（不走代理，作为最终兜底）
   const runPuppeteerDirect = async (url: string): Promise<CrawlResultType> => {
-    const puppeteerHtml = await crawlPageWithPuppeteer(url, PUPPETEER_INNER_TIMEOUT);
-    if (!puppeteerHtml) throw new Error("Puppeteer 直连返回空 HTML");
-    const { links, images } = extractLinksAndImages(puppeteerHtml, url);
-    return { html: puppeteerHtml.slice(0, PUPPETEER_HTML_SLICE), links, images, method: "puppeteer" };
+    const pageData = await crawlWithPuppeteerFull(url, PUPPETEER_INNER_TIMEOUT);
+    if (!pageData) throw new Error("Puppeteer 直连返回空 HTML");
+    puppeteerCache = pageData;
+    return {
+      html: pageData.html.slice(0, PUPPETEER_HTML_SLICE),
+      links: pageData.navLinks,
+      images: pageData.images,
+      method: "puppeteer",
+    };
   };
 
   // ══════════════════════════════════════════════════════
-  // 策略优先级：
-  //   有代理  → Puppeteer+代理 最优（JS渲染 + 正确 IP 出口）→ HTTP+代理 兜底
-  //   无代理  → HTTP locale 先（省资源）→ Puppeteer locale 补充
+  // 策略优先级（精简版 — 只留经实战验证有效的路径）：
+  //
+  //   有代理  → Puppeteer+代理 最优（JS 渲染 + IP 出口校验过）
+  //             先 root，再 locale_short 兜底（root 重定向到错国时），最后直连兜底（代理彻底挂）
+  //   无代理  → HTTP 先（root + locale_short），实在不行才 Puppeteer 兜底（资源敏感）
+  //
+  // 历史上 13 个策略已删 7 个：
+  //   - locale+proxy / locale 完整 locale (/en-us/) → locale_short (/us/) 已覆盖，重复
+  //   - 有代理分支的 http_* 三连 → puppeteer 已 break，永远走不到，dead code
   // ══════════════════════════════════════════════════════
   type Strategy = { name: string; run: () => Promise<CrawlResultType> };
   const strategies: Strategy[] = [];
   if (merchantUrl) {
     if (options?.forcePuppeteer || proxyUrl) {
-      // 有代理 或 forcePuppeteer：优先 Puppeteer（带代理），确保 JS 渲染 + IP 出口正确
-      if (localeUrlShort) strategies.push({ name: "puppeteer_locale_short+proxy", run: () => runPuppeteer(localeUrlShort!) });
-      if (localeUrl) strategies.push({ name: "puppeteer_locale+proxy", run: () => runPuppeteer(localeUrl!) });
+      // 有代理 或 forcePuppeteer：优先 Puppeteer，确保 JS 渲染 + IP 出口正确
       strategies.push({ name: "puppeteer_root+proxy", run: () => runPuppeteer(merchantUrl) });
-      // HTTP 作为兜底（Puppeteer 失败时）
-      if (!options?.forcePuppeteer) {
-        if (localeUrlShort) strategies.push({ name: "http_locale_short", run: () => crawlPage(localeUrlShort!, country) });
-        if (localeUrl) strategies.push({ name: "http_locale", run: () => crawlPage(localeUrl!, country) });
-        strategies.push({ name: "http_root", run: () => crawlPage(merchantUrl, country) });
-      }
-      // 最终兜底：Puppeteer 直连（不带代理），保证 JS 渲染结果
+      // locale_short 仅在 ccTLD 未匹配（通用 TLD 站如 sephora.com + ES 需 /es/）才生成
+      if (localeUrlShort) strategies.push({ name: "puppeteer_locale_short+proxy", run: () => runPuppeteer(localeUrlShort!) });
+      // 代理彻底挂（IP 校验失败/sid 全错国/网络异常）时的最后兜底
       strategies.push({ name: "puppeteer_direct_fallback", run: () => runPuppeteerDirect(merchantUrl) });
     } else {
-      // 无代理：HTTP 先（快），Puppeteer 兜底
-      if (localeUrlShort) strategies.push({ name: "http_locale_short", run: () => crawlPage(localeUrlShort!, country) });
-      if (localeUrl) strategies.push({ name: "http_locale", run: () => crawlPage(localeUrl!, country) });
+      // 无代理：HTTP 先（快、省资源），Puppeteer 兜底
       strategies.push({ name: "http_root", run: () => crawlPage(merchantUrl, country) });
-      if (localeUrlShort) strategies.push({ name: "puppeteer_locale_short", run: () => runPuppeteer(localeUrlShort!) });
-      if (localeUrl) strategies.push({ name: "puppeteer_locale", run: () => runPuppeteer(localeUrl!) });
+      if (localeUrlShort) strategies.push({ name: "http_locale_short", run: () => crawlPage(localeUrlShort!, country) });
       strategies.push({ name: "puppeteer_root", run: () => runPuppeteer(merchantUrl) });
     }
   }
@@ -1681,56 +1697,14 @@ export async function buildCrawlCache(
     }
   }
 
-  // ─── Puppeteer 补充：质量分 < 阈值时（非 puppeteer 路径），用 Puppeteer 全量抓取补充图片/链接/HTML ───
-  let puppeteerCache: import("@/lib/crawler").PuppeteerPageData | null = null;
-  if (crawlQuality.score < QUALITY_THRESHOLD && crawlResult.method !== "puppeteer" && merchantUrl) {
-    console.log(`[CrawlPipeline] 质量不足（score=${crawlQuality.score}），启动 Puppeteer 补充抓取`);
-    try {
-      // F-13 fix: 质量补充必须爬根 URL（merchantUrl），根页面懒加载更多产品图（100张）。
-      // 用 localeUrl（如 /en-us/）会得到少得多的页面内容（31张），因为该子页面渲染不完整。
-      const puppeteerTarget = merchantUrl;
-      puppeteerCache = await crawlWithPuppeteerFull(puppeteerTarget, 40000, puppeteerProxyUrl ?? undefined);
-      if (puppeteerCache) {
-        const httpHtmlLen = html?.length ?? 0;
-        if (!html || puppeteerCache.html.length > httpHtmlLen + 5000) {
-          html = puppeteerCache.html.slice(0, 150000);
-          console.log(`[CrawlPipeline] 采用 Puppeteer HTML（更丰富），puppeteer=${puppeteerCache.html.length} vs http=${httpHtmlLen}`);
-        }
-        const newImgs = puppeteerCache.images.filter(i => !crawlResult.images.includes(i));
-        crawlResult.images = [...crawlResult.images, ...newImgs];
-        if (crawlResult.links.length === 0 && puppeteerCache.navLinks.length > 0) {
-          crawlResult.links = puppeteerCache.navLinks.filter(l => !isBadSitelinkUrl(l.url));
-        }
-        // 重新评估质量
-        crawlQuality = assessCrawlQuality(crawlResult as Parameters<typeof assessCrawlQuality>[0]);
-        console.log(`[CrawlPipeline] Puppeteer 补充完成，重新评分: score=${crawlQuality.score}, navLinks=${puppeteerCache.navLinks.length}, images=${puppeteerCache.images.length}`);
-      }
-    } catch (e) {
-      console.warn("[CrawlPipeline] Puppeteer 补充失败:", e instanceof Error ? e.message : e);
-    }
-  } else if (crawlResult.method !== "puppeteer" && merchantUrl && (crawlResult.images.length < 3 || crawlResult.links.length < 8)) {
-    // 即使质量已达标，图片或链接仍不足时，用 Puppeteer 补充数据（不替换 HTML）
-    console.log(`[CrawlPipeline] 数据尚不充足（images=${crawlResult.images.length}, links=${crawlResult.links.length}），Puppeteer 补充图片/链接`);
-    try {
-      const puppeteerTarget = merchantUrl; // 同 F-13 fix：用根 URL 获得更完整的懒加载内容
-      puppeteerCache = await crawlWithPuppeteerFull(puppeteerTarget, 40000, puppeteerProxyUrl ?? undefined);
-      if (puppeteerCache) {
-        const httpHtmlLen = html?.length ?? 0;
-        if (!html || puppeteerCache.html.length > httpHtmlLen + 5000) {
-          html = puppeteerCache.html.slice(0, 150000);
-          console.log(`[CrawlPipeline] 采用 Puppeteer HTML（更丰富），puppeteer=${puppeteerCache.html.length} vs http=${httpHtmlLen}`);
-        }
-        const newImgs = puppeteerCache.images.filter(i => !crawlResult.images.includes(i));
-        crawlResult.images = [...crawlResult.images, ...newImgs];
-        if (crawlResult.links.length === 0 && puppeteerCache.navLinks.length > 0) {
-          crawlResult.links = puppeteerCache.navLinks.filter(l => !isBadSitelinkUrl(l.url));
-        }
-        console.log(`[CrawlPipeline] Puppeteer 补充图片/链接完成，navLinks=${puppeteerCache.navLinks.length}, images=${puppeteerCache.images.length}`);
-      }
-    } catch (e) {
-      console.warn("[CrawlPipeline] Puppeteer 补充失败:", e instanceof Error ? e.message : e);
-    }
-  }
+  // 历史上这里有两段 "crawlWithPuppeteerFull 补充" 流程，已删除：
+  //   - 第一段(质量补充): method !== "puppeteer" && score < QUALITY_THRESHOLD → 触发
+  //   - 第二段(图片/链接补充): method !== "puppeteer" && (images<3 || links<8) → 触发
+  // 删除理由：
+  //   1. 主策略表已含 puppeteer_root，HTTP 分数不够会被 puppeteer 接管，结果直接落进 crawlResult
+  //   2. puppeteerCache 现已在 runPuppeteer 内一次性填充（见前面），无需二次调用 crawlWithPuppeteerFull
+  //   3. 图片/链接不足的场景由后面 collectImages → harvestImagesFromPagesWithPuppeteer 多页采图覆盖
+  //   4. 节省 40s 重复抓取，2H4G 服务器算力受益明显
 
   // ─── 促销子页面专项爬取：从已发现链接中找促销/活动相关 URL 爬取以补充 meta 描述 ───
   const extractPromoWithSubPage = async (): Promise<Record<string, unknown> | null> => {
