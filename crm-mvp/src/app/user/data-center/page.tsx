@@ -23,9 +23,12 @@ dayjs.extend(utc);
 dayjs.extend(timezone);
 const TZ = "Asia/Shanghai";
 
-/** 各列 width 之和，scroll.x 须 ≥ 此值否则固定列（CID / 操作）会与表体错位 */
+/** 各列 width 之和，scroll.x 须 ≥ 此值否则固定列（CID / 操作）会与表体错位
+ *  顺序：CID 110 | 广告系列 280 | 状态 100 | 预算 70 | 最高出价 90
+ *       | 展示 95 | 点击 85 | 平均CPC 80 | 花费 85 | 佣金 70 | 拒付佣金 80 | 净利润 85 | 操作 80
+ */
 const DATA_CENTER_TABLE_SCROLL_X =
-  110 + 280 + 100 + 70 + 90 + 80 + 85 + 70 + 80 + 85 + 75 + 80;
+  110 + 280 + 100 + 70 + 90 + 95 + 85 + 80 + 85 + 70 + 80 + 85 + 80;
 
 const { Text } = Typography;
 const { RangePicker } = DatePicker;
@@ -62,9 +65,8 @@ interface Summary {
   pausedCount: number;
 }
 
-function calcCtr(clicks: number, impressions: number): number {
-  if (!impressions) return 0;
-  return (clicks / impressions) * 100;
+function formatInt(value: number | null | undefined): string {
+  return (value ?? 0).toLocaleString("en-US");
 }
 
 function calcNetProfit(commission: number, rejectedCommission: number, cost: number): number {
@@ -507,6 +509,26 @@ export default function DataCenterPage() {
       ),
     },
     {
+      title: (
+        <Tooltip title="来自 Google Ads，与「花费」同源">
+          <span>展示</span>
+        </Tooltip>
+      ),
+      dataIndex: "impressions", width: 95, align: "right",
+      sorter: (a, b) => (a.impressions ?? 0) - (b.impressions ?? 0),
+      render: (v: number | null | undefined) => <Text style={{ fontSize: 12 }}>{formatInt(v)}</Text>,
+    },
+    {
+      title: (
+        <Tooltip title="来自 Google Ads，与「花费」同源">
+          <span>点击</span>
+        </Tooltip>
+      ),
+      dataIndex: "clicks", width: 85, align: "right",
+      sorter: (a, b) => (a.clicks ?? 0) - (b.clicks ?? 0),
+      render: (v: number | null | undefined) => <Text style={{ fontSize: 12 }}>{formatInt(v)}</Text>,
+    },
+    {
       title: "平均CPC", dataIndex: "cpc", width: 80, align: "right",
       render: (v: number) => <Text style={{ fontSize: 12 }}>${v?.toFixed(4)}</Text>,
     },
@@ -536,11 +558,6 @@ export default function DataCenterPage() {
         const value = calcNetProfit(r.commission, r.rejected_commission, r.cost);
         return <Text style={{ fontSize: 12, color: value >= 0 ? "#389e0d" : "#cf1322" }}>${value.toFixed(2)}</Text>;
       },
-    },
-    {
-      title: "点击率", key: "ctr", width: 75, align: "right",
-      sorter: (a, b) => calcCtr(a.clicks, a.impressions) - calcCtr(b.clicks, b.impressions),
-      render: (_: unknown, r: IndexedRow) => <Text style={{ fontSize: 12 }}>{calcCtr(r.clicks, r.impressions).toFixed(2)}%</Text>,
     },
     {
       title: "操作", width: 80, align: "center", fixed: "right",
@@ -660,6 +677,7 @@ export default function DataCenterPage() {
       {/* ========== 口径说明 + 行数限制提示 ========== */}
       <div style={{ marginBottom: 8, padding: "4px 8px", background: "#fafafa", borderRadius: 4, fontSize: 12, color: "#888", lineHeight: 1.8 }}>
         <span>统计口径：总花费 / 总佣金 / ROI 基于全部去重 Campaign 聚合，不受表格展示行数限制。</span>
+        <span style={{ marginLeft: 8 }}>展示 / 点击与花费同源于 Google Ads。</span>
         {rowMeta?.isLimited && (
           <span style={{ color: "#fa8c16", marginLeft: 8 }}>
             表格仅展示 {rowMeta.displayedCount} / {rowMeta.totalCount} 条 Campaign 行，合计行与上方总览一致。
@@ -682,13 +700,14 @@ export default function DataCenterPage() {
                   <Table.Summary.Cell index={0} colSpan={3}><Text strong>合计</Text></Table.Summary.Cell>
                   <Table.Summary.Cell index={3} />
                   <Table.Summary.Cell index={4} />
-                  <Table.Summary.Cell index={5} align="right"><Text strong>${summary.avgCpc.toFixed(4)}</Text></Table.Summary.Cell>
-                  <Table.Summary.Cell index={6} align="right"><Text strong style={{ color: "#cf1322" }}>${summary.totalCost.toFixed(2)}</Text></Table.Summary.Cell>
-                  <Table.Summary.Cell index={7} align="right"><Text strong style={{ color: "#389e0d" }}>${summary.totalCommission.toFixed(2)}</Text></Table.Summary.Cell>
-                  <Table.Summary.Cell index={8} align="right"><Text strong type="danger">${summary.totalRejectedCommission.toFixed(2)}</Text></Table.Summary.Cell>
-                  <Table.Summary.Cell index={9} align="right"><Text strong style={{ color: calcNetProfit(summary.totalCommission, summary.totalRejectedCommission, summary.totalCost) >= 0 ? "#389e0d" : "#cf1322" }}>${calcNetProfit(summary.totalCommission, summary.totalRejectedCommission, summary.totalCost).toFixed(2)}</Text></Table.Summary.Cell>
-                  <Table.Summary.Cell index={10} align="right"><Text strong>{calcCtr(summary.totalClicks, summary.totalImpressions).toFixed(2)}%</Text></Table.Summary.Cell>
-                  <Table.Summary.Cell index={11} />
+                  <Table.Summary.Cell index={5} align="right"><Text strong>{formatInt(summary.totalImpressions)}</Text></Table.Summary.Cell>
+                  <Table.Summary.Cell index={6} align="right"><Text strong>{formatInt(summary.totalClicks)}</Text></Table.Summary.Cell>
+                  <Table.Summary.Cell index={7} align="right"><Text strong>${summary.avgCpc.toFixed(4)}</Text></Table.Summary.Cell>
+                  <Table.Summary.Cell index={8} align="right"><Text strong style={{ color: "#cf1322" }}>${summary.totalCost.toFixed(2)}</Text></Table.Summary.Cell>
+                  <Table.Summary.Cell index={9} align="right"><Text strong style={{ color: "#389e0d" }}>${summary.totalCommission.toFixed(2)}</Text></Table.Summary.Cell>
+                  <Table.Summary.Cell index={10} align="right"><Text strong type="danger">${summary.totalRejectedCommission.toFixed(2)}</Text></Table.Summary.Cell>
+                  <Table.Summary.Cell index={11} align="right"><Text strong style={{ color: calcNetProfit(summary.totalCommission, summary.totalRejectedCommission, summary.totalCost) >= 0 ? "#389e0d" : "#cf1322" }}>${calcNetProfit(summary.totalCommission, summary.totalRejectedCommission, summary.totalCost).toFixed(2)}</Text></Table.Summary.Cell>
+                  <Table.Summary.Cell index={12} />
                 </Table.Summary.Row>
               </Table.Summary>
             );
