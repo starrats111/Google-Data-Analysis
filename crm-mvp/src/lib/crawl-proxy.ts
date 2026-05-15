@@ -109,6 +109,79 @@ interface ProxyFetchResponse {
 }
 
 /**
+ * 探测代理实际出口 IP 与所属国家。
+ *
+ * 通过同一代理访问 ipinfo.io/json（免认证，response 含 ISO 国家码 `country`）。
+ * 失败/超时直接抛错；成功返回 `{ip, country}`。
+ *
+ * 用途：sid 抽到错国出口时（如 region-ES 实际出在 NL）能识别并换 sid 重试。
+ */
+async function checkProxyEgress(proxyUrl: string, timeoutMs = 5000): Promise<{ ip: string; country: string }> {
+  const ctrl = new AbortController();
+  const tm = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    const resp = await fetchViaProxy(
+      "https://ipinfo.io/json",
+      { signal: ctrl.signal },
+      proxyUrl,
+      3,
+    );
+    if (!resp.ok) throw new Error(`ipinfo HTTP ${resp.status}`);
+    const text = await resp.text();
+    const json = JSON.parse(text) as { ip?: string; country?: string };
+    if (!json.ip || !json.country) throw new Error("ipinfo 缺少 ip/country 字段");
+    return { ip: json.ip, country: json.country.toUpperCase() };
+  } finally {
+    clearTimeout(tm);
+  }
+}
+
+/**
+ * 获取经过出口国校验的 HTTP 代理 URL（供 Puppeteer 使用）。
+ *
+ * 流程：
+ *   1. 调 getHttpProxyUrlForCountry(country) 拿原始 proxyUrl（含按国家模板替换 + 随机 sid）
+ *   2. 通过 proxyUrl 调 ipinfo.io 探活，校验出口 country 是否与目标一致
+ *   3. 不一致或探活失败 → 重新调一次（buildSocks5Url 内部会重新生成 sid）→ 重试
+ *   4. maxRetries 次都失败 → 返回 null，让上层降级到直连（无代理）
+ *
+ * 校验通过的 proxyUrl 才返回，避免后续 puppeteer 抓取被错国出口 IP 浪费 100s+。
+ */
+export async function ensureCountryEgressHttpProxy(
+  country: string,
+  options: { maxRetries?: number; checkTimeoutMs?: number } = {},
+): Promise<string | null> {
+  if (!country) return null;
+  const maxRetries = options.maxRetries ?? 3;
+  const checkTimeoutMs = options.checkTimeoutMs ?? 5000;
+  const targetCountry = country.toUpperCase().trim();
+
+  let lastProxyUrl: string | null = null;
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    const proxyUrl = await getHttpProxyUrlForCountry(country).catch(() => null);
+    if (!proxyUrl) {
+      console.warn(`[CrawlProxy] getHttpProxyUrlForCountry(${country}) 返回 null，放弃代理`);
+      return null;
+    }
+    lastProxyUrl = proxyUrl;
+    try {
+      const egress = await checkProxyEgress(proxyUrl, checkTimeoutMs);
+      if (egress.country === targetCountry) {
+        console.log(`[CrawlProxy] 代理出口校验通过 (尝试${attempt}/${maxRetries}): country=${egress.country} ip=${egress.ip}`);
+        return proxyUrl;
+      }
+      console.warn(`[CrawlProxy] 代理出口国不符 (尝试${attempt}/${maxRetries}): 期望=${targetCountry} 实际=${egress.country} ip=${egress.ip}，换 sid 重试`);
+    } catch (err) {
+      console.warn(`[CrawlProxy] 代理探活失败 (尝试${attempt}/${maxRetries}): ${err instanceof Error ? err.message : err}，换 sid 重试`);
+    }
+  }
+  console.warn(`[CrawlProxy] 代理出口校验 ${maxRetries} 次均不符 ${targetCountry}，降级处理`);
+  // 校验失败：返回 null 让上层降级直连（直连虽然出口在腾讯云 CN，但很多站点接受）；
+  // 经验数据：直连拿 4000+ 字 vs 错国代理拿 0 字，直连胜出
+  return null;
+}
+
+/**
  * 通过 SOCKS5/HTTP 代理发起请求（支持自动跟随重定向，最多 8 次）
  * 使用 socks-proxy-agent + Node.js 原生 https.request，无需 undici。
  */

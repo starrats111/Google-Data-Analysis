@@ -9,7 +9,7 @@ import {
   harvestImagesFromPagesWithPuppeteer, getAcceptLanguage,
 } from "@/lib/crawler";
 import { getAdMarketConfig } from "@/lib/ad-market";
-import { getProxyUrlForCountry, getHttpProxyUrlForCountry } from "@/lib/crawl-proxy";
+import { getProxyUrlForCountry, getHttpProxyUrlForCountry, ensureCountryEgressHttpProxy } from "@/lib/crawl-proxy";
 import { isLowValueSitelink } from "@/lib/sitelink-filter";
 // C-016: ccTLD 切换逻辑移出 crawl-pipeline，改由 country-url-resolver 在 route 层调度
 
@@ -1506,8 +1506,13 @@ export async function buildCrawlCache(
   // SOCKS5 代理（供 Node.js HTTP 请求使用，如 fetchViaProxy）
   const proxyUrl = country ? (await getProxyUrlForCountry(country).catch(() => null)) : null;
   // HTTP 代理（专供 Puppeteer/Chrome 使用，Chrome 不支持 SOCKS5 认证）
-  const puppeteerProxyUrl = country ? (await getHttpProxyUrlForCountry(country).catch(() => null)) : null;
+  //
+  // 关键：ensureCountryEgressHttpProxy 内部会先调 ipinfo.io 校验出口 IP 国家是否匹配 country，
+  // 不匹配则换 sid 重试（最多 3 次）。每次重试都会重新生成随机 sid，确保 sid 实时更新。
+  // 校验通过的 proxyUrl 才返回；3 次都不符 → 返回 null，上层降级直连，避免错国出口浪费 100s+ 抓取时间。
+  const puppeteerProxyUrl = country ? (await ensureCountryEgressHttpProxy(country).catch(() => null)) : null;
   if (puppeteerProxyUrl) console.log(`[CrawlPipeline] Puppeteer 将使用 HTTP 代理: ${puppeteerProxyUrl.replace(/:[^@]+@/, ':***@')}`);
+  else if (country) console.warn(`[CrawlPipeline] ${country} 代理不可用或出口国校验失败，降级为直连`);
 
   // Puppeteer 爬取辅助：带 HTTP 代理（内部代理失败时自动降级直连）
   // 单次超时从 35s 缩短至 20s，减少策略瀑布总耗时
