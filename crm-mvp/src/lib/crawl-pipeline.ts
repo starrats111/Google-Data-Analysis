@@ -11,6 +11,7 @@ import {
 import { getAdMarketConfig } from "@/lib/ad-market";
 import { getProxyUrlForCountry, getHttpProxyUrlForCountry, ensureCountryEgressHttpProxy } from "@/lib/crawl-proxy";
 import { isLowValueSitelink } from "@/lib/sitelink-filter";
+import { hostMatchesCountryTld } from "@/lib/country-url-resolver";
 // C-016: ccTLD 切换逻辑移出 crawl-pipeline，改由 country-url-resolver 在 route 层调度
 
 // 全局爬取并发控制：最多 2 个同时执行
@@ -1487,7 +1488,10 @@ export async function buildCrawlCache(
     const LOCALE_PREFIX_RE = /^\/([a-z]{2}[-_][a-z]{2}|[a-z]{2})\//i;
     try {
       const u = new URL(merchantUrl);
-      if (!LOCALE_PREFIX_RE.test(u.pathname)) {
+      // ccTLD 已对应目标国家时（如 camplify.es + ES，aerosus.de + DE），根路径本身就是本地化首页，
+      // 强加 /es/ 等子路径只会拿到 SPA 404 占位（880KB JS + body=0）。直接跳过 locale 推断。
+      const alreadyCountryTld = hostMatchesCountryTld(u.hostname, country);
+      if (!LOCALE_PREFIX_RE.test(u.pathname) && !alreadyCountryTld) {
         const loc = COUNTRY_TO_LOCALE[country.toUpperCase()]; // en-us
         if (loc) {
           const u1 = new URL(merchantUrl);
@@ -1497,6 +1501,8 @@ export async function buildCrawlCache(
         const u2 = new URL(merchantUrl);
         u2.pathname = "/" + country.toLowerCase() + "/";      // us
         localeUrlShort = u2.toString();
+      } else if (alreadyCountryTld) {
+        console.log(`[CrawlPipeline] ${u.hostname} 已是 ${country} ccTLD，跳过 /${country.toLowerCase()}/ locale 推断`);
       }
     } catch {}
   }

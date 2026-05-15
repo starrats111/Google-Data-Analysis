@@ -174,9 +174,15 @@ function buildCandidateHosts(originalHost: string, country: string): string[] {
 }
 
 /**
- * 判定当前 host 是否已经是目标国 ccTLD
+ * 判定当前 host 是否已经是目标国 ccTLD（已导出供 crawl-pipeline 使用）
+ *
+ * 例：host="camplify.es" + country="ES" → true（.es 是西班牙 ccTLD）
+ *     host="aerosus.com" + country="ES" → false（.com 是通用 TLD）
+ *
+ * 用途：抓取阶段决定是否需要再追加 /es/ 或 /es-es/ 子路径。
+ * 已是国家 ccTLD 的站，根路径就是本地化首页，强加 /es/ 反而 404。
  */
-function hostMatchesCountryTld(host: string, country: string): boolean {
+export function hostMatchesCountryTld(host: string, country: string): boolean {
   const up = country.toUpperCase();
   const tlds = COUNTRY_TLD_MAP[up];
   if (!tlds) return false;
