@@ -1528,18 +1528,21 @@ export async function buildCrawlCache(
   // 后续 sleep(3s) + scroll + page.content() 取到的 HTML 文字几乎为空（实测 17 字符）。
   // 35s 留足水合余量，再叠加外层 strategy race 50s 兜底，整体能拿到 4000+ 字真实文本。
   const PUPPETEER_INNER_TIMEOUT = 35_000;
+  // 切片上限 300KB：camplify.es 等现代 SPA 的 head 区（preload/fonts/CSS）单独就占 100KB+，
+  // body 真实文字在 150-250KB 偏后位置。150KB 上限会切掉真实文字段，导致 htmlToText=0。
+  const PUPPETEER_HTML_SLICE = 300_000;
   const runPuppeteer = async (url: string): Promise<CrawlResultType> => {
     const puppeteerHtml = await crawlPageWithPuppeteer(url, PUPPETEER_INNER_TIMEOUT, puppeteerProxyUrl ?? undefined);
     if (!puppeteerHtml) throw new Error("Puppeteer 返回空 HTML");
     const { links, images } = extractLinksAndImages(puppeteerHtml, url);
-    return { html: puppeteerHtml.slice(0, 150000), links, images, method: "puppeteer" };
+    return { html: puppeteerHtml.slice(0, PUPPETEER_HTML_SLICE), links, images, method: "puppeteer" };
   };
   // Puppeteer 直连（不走代理，作为最终兜底）
   const runPuppeteerDirect = async (url: string): Promise<CrawlResultType> => {
     const puppeteerHtml = await crawlPageWithPuppeteer(url, PUPPETEER_INNER_TIMEOUT);
     if (!puppeteerHtml) throw new Error("Puppeteer 直连返回空 HTML");
     const { links, images } = extractLinksAndImages(puppeteerHtml, url);
-    return { html: puppeteerHtml.slice(0, 150000), links, images, method: "puppeteer" };
+    return { html: puppeteerHtml.slice(0, PUPPETEER_HTML_SLICE), links, images, method: "puppeteer" };
   };
 
   // ══════════════════════════════════════════════════════
