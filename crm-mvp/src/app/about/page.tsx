@@ -62,10 +62,19 @@ const i18n = {
     companyName: "Wenzhou Fengdu Advertising & Media Co., Ltd.",
     cnLabel: "Chinese Name:",
     cnName: "温州丰度广告传媒有限公司",
+    foundedLabel: "Founded:",
+    foundedValue: "December 9, 2025",
+    countryLabel: "Country of Operation:",
+    countryValue: "China",
     addrLabel: "Address:",
     address: "Room 1110-2, Building 29, Huahong Xin Plaza, Xincheng Avenue, Luoyang Town, Taishun County, Wenzhou, Zhejiang, China",
+    phoneLabel: "Phone (China):",
+    phoneValue: "+86 13958988973",
     emailLabel: "Email:",
     webLabel: "Website:",
+    contactCta: "Full contact details on the",
+    contactCtaLink: "Contact Us",
+    contactCtaSuffix: "page.",
   },
   zh: {
     pageTitle: "关于我们",
@@ -112,10 +121,19 @@ const i18n = {
     companyName: "温州丰度广告传媒有限公司",
     cnLabel: "英文名称：",
     cnName: "Wenzhou Fengdu Advertising & Media Co., Ltd.",
-    addrLabel: "地址：",
-    address: "浙江省温州市泰顺县罗阳镇新城大道华鸿心广场29幢1110室-2",
-    emailLabel: "邮箱：",
-    webLabel: "网站：",
+    foundedLabel: "成立时间：",
+    foundedValue: "2025 年 12 月 9 日",
+    countryLabel: "运营所在国家：",
+    countryValue: "中国",
+    addrLabel: "中国联系地址：",
+    address: "中国 浙江省 温州市 泰顺县 罗阳镇 新城大道 华鸿心广场 29 幢 1110 室-2",
+    phoneLabel: "中国联系电话：",
+    phoneValue: "+86 13958988973",
+    emailLabel: "电子邮箱：",
+    webLabel: "公司网址：",
+    contactCta: "更多联系方式请访问",
+    contactCtaLink: "联系我们",
+    contactCtaSuffix: "页面。",
   },
 };
 
@@ -134,7 +152,7 @@ export default function AboutPage() {
 
         <Card style={{ borderRadius: 12, marginBottom: 32 }}>
           <Space direction="vertical" size={16} style={{ width: "100%" }}>
-            <Title level={3} style={{ margin: 0 }}>
+            <Title level={2} style={{ margin: 0, fontSize: 22 }}>
               <TeamOutlined style={{ marginRight: 8, color: "#4DA6FF" }} />
               {t.overview}
             </Title>
@@ -145,7 +163,7 @@ export default function AboutPage() {
 
         <Card style={{ borderRadius: 12, marginBottom: 32 }}>
           <Space direction="vertical" size={16} style={{ width: "100%" }}>
-            <Title level={3} style={{ margin: 0 }}>
+            <Title level={2} style={{ margin: 0, fontSize: 22 }}>
               <DollarOutlined style={{ marginRight: 8, color: "#fa8c16" }} />
               {t.bizTitle}
             </Title>
@@ -159,7 +177,7 @@ export default function AboutPage() {
 
         <Card style={{ borderRadius: 12, marginBottom: 32 }}>
           <Space direction="vertical" size={16} style={{ width: "100%" }}>
-            <Title level={3} style={{ margin: 0 }}>
+            <Title level={2} style={{ margin: 0, fontSize: 22 }}>
               <GlobalOutlined style={{ marginRight: 8, color: "#52c41a" }} />
               {t.capTitle}
             </Title>
@@ -174,7 +192,7 @@ export default function AboutPage() {
 
         <Card style={{ borderRadius: 12, marginBottom: 32 }}>
           <Space direction="vertical" size={16} style={{ width: "100%" }}>
-            <Title level={3} style={{ margin: 0 }}>
+            <Title level={2} style={{ margin: 0, fontSize: 22 }}>
               <LinkOutlined style={{ marginRight: 8, color: "#722ed1" }} />
               {t.apiTitle}
             </Title>
@@ -190,7 +208,7 @@ export default function AboutPage() {
 
         <Card style={{ borderRadius: 12, marginBottom: 32 }}>
           <Space direction="vertical" size={16} style={{ width: "100%" }}>
-            <Title level={3} style={{ margin: 0 }}>
+            <Title level={2} style={{ margin: 0, fontSize: 22 }}>
               <EnvironmentOutlined style={{ marginRight: 8, color: "#fa8c16" }} />
               {t.contactTitle}
             </Title>
@@ -202,17 +220,32 @@ export default function AboutPage() {
                 <Text strong>{t.cnLabel}</Text> {t.cnName}
               </Paragraph>
               <Paragraph style={{ fontSize: 16, marginBottom: 8 }}>
+                <Text strong>{t.foundedLabel}</Text> {t.foundedValue}
+              </Paragraph>
+              <Paragraph style={{ fontSize: 16, marginBottom: 8 }}>
+                <Text strong>{t.countryLabel}</Text> {t.countryValue}
+              </Paragraph>
+              <Paragraph style={{ fontSize: 16, marginBottom: 8 }}>
                 <Text strong>{t.addrLabel}</Text> {t.address}
+              </Paragraph>
+              <Paragraph style={{ fontSize: 16, marginBottom: 8 }}>
+                <Text strong>{t.phoneLabel}</Text>{" "}
+                <a href={`tel:${t.phoneValue.replace(/\s/g, "")}`}>{t.phoneValue}</a>
               </Paragraph>
               <Paragraph style={{ fontSize: 16, marginBottom: 8 }}>
                 <MailOutlined style={{ marginRight: 8 }} />
                 <Text strong>{t.emailLabel}</Text>{" "}
                 <a href="mailto:google-ads-api@fengdu-ads.top">google-ads-api@fengdu-ads.top</a>
               </Paragraph>
-              <Paragraph style={{ fontSize: 16, marginBottom: 0 }}>
+              <Paragraph style={{ fontSize: 16, marginBottom: 8 }}>
                 <GlobalOutlined style={{ marginRight: 8 }} />
                 <Text strong>{t.webLabel}</Text>{" "}
                 <a href="https://fengdu-ads.top" target="_blank" rel="noopener noreferrer">fengdu-ads.top</a>
+              </Paragraph>
+              <Paragraph style={{ fontSize: 14, color: "#888", marginBottom: 0, marginTop: 12 }}>
+                {t.contactCta}{" "}
+                <a href="/contact" style={{ color: "#1A7FDB", fontWeight: 600 }}>{t.contactCtaLink}</a>{" "}
+                {t.contactCtaSuffix}
               </Paragraph>
             </div>
           </Space>

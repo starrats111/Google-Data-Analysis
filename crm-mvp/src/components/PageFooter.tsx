@@ -1,14 +1,14 @@
 "use client";
 
-import { Typography, Space, Divider } from "antd";
+import { Typography, Space } from "antd";
 import Link from "next/link";
 import { useLanguage } from "@/contexts/LanguageContext";
 
 const { Paragraph } = Typography;
 
 const links = {
-  en: { about: "About Us", demo: "Platform Demo", privacy: "Privacy Policy", terms: "Terms of Service" },
-  zh: { about: "关于我们", demo: "平台演示", privacy: "隐私政策", terms: "服务条款" },
+  en: { about: "About Us", demo: "Platform Demo", contact: "Contact Us", privacy: "Privacy Policy", terms: "Terms of Service" },
+  zh: { about: "关于我们", demo: "平台演示", contact: "联系我们", privacy: "隐私政策", terms: "服务条款" },
 };
 
 export default function PageFooter() {
@@ -22,9 +22,13 @@ export default function PageFooter() {
           ? "© 2026 Wenzhou Fengdu Advertising & Media Co., Ltd. All rights reserved."
           : "© 2026 温州丰度广告传媒有限公司 版权所有"}
       </Paragraph>
-      <Space split={<Divider type="vertical" />} size={4}>
+      <Space
+        split={<span style={{ color: "#d9d9d9", fontSize: 13 }}>|</span>}
+        size={8}
+      >
         <Link href="/about" style={{ color: "#999", fontSize: 13 }}>{t.about}</Link>
         <Link href="/demo" style={{ color: "#999", fontSize: 13 }}>{t.demo}</Link>
+        <Link href="/contact" style={{ color: "#999", fontSize: 13 }}>{t.contact}</Link>
         <Link href="/privacy-policy" style={{ color: "#999", fontSize: 13 }}>{t.privacy}</Link>
         <Link href="/terms-of-service" style={{ color: "#999", fontSize: 13 }}>{t.terms}</Link>
       </Space>

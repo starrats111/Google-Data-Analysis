@@ -194,7 +194,7 @@ export default function TermsOfServicePage() {
 
         {t.sections.map((s) => (
           <Card key={s.title} style={{ borderRadius: 12, marginBottom: 24 }}>
-            <Title level={3}>{s.title}</Title>
+            <Title level={2} style={{ fontSize: 22 }}>{s.title}</Title>
             <Paragraph style={{ fontSize: 15, lineHeight: 1.8 }}>{s.content}</Paragraph>
             {s.items && (
               <ul style={{ fontSize: 15, lineHeight: 2 }}>

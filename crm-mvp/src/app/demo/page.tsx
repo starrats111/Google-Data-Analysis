@@ -307,7 +307,7 @@ export default function DemoPage() {
             <Space direction="vertical" size={16} style={{ width: "100%" }}>
               <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
                 {s.icon}
-                <Title level={3} style={{ margin: 0, flex: 1 }}>{s.title}</Title>
+                <Title level={2} style={{ margin: 0, flex: 1, fontSize: 22 }}>{s.title}</Title>
                 <Tag color="blue" style={{ fontSize: 13, padding: "2px 10px" }}>API: {s.apiTag}</Tag>
               </div>
 
@@ -342,18 +342,18 @@ export default function DemoPage() {
         ))}
 
         <Card style={{ borderRadius: 12, marginBottom: 32, background: "#f6f9fc" }}>
-          <Title level={3} style={{ textAlign: "center" }}>{summary.title}</Title>
+          <Title level={2} style={{ textAlign: "center", fontSize: 22 }}>{summary.title}</Title>
           <Paragraph style={{ textAlign: "center", fontSize: 15, lineHeight: 1.8 }}>{summary.desc}</Paragraph>
           <div style={{ display: "flex", gap: 24, justifyContent: "center", flexWrap: "wrap", marginTop: 16 }}>
             <Card style={{ flex: 1, minWidth: 300, borderRadius: 8 }}>
-              <Title level={4} style={{ color: "#1A7FDB" }}>{summary.readTitle}</Title>
+              <Title level={3} style={{ color: "#1A7FDB", fontSize: 18 }}>{summary.readTitle}</Title>
               <Paragraph><code>POST /customers/&#123;id&#125;/googleAds:searchStream</code></Paragraph>
               <ul style={{ fontSize: 14, lineHeight: 2 }}>
                 {summary.readItems.map((item) => (<li key={item}>{item}</li>))}
               </ul>
             </Card>
             <Card style={{ flex: 1, minWidth: 300, borderRadius: 8 }}>
-              <Title level={4} style={{ color: "#52c41a" }}>{summary.writeTitle}</Title>
+              <Title level={3} style={{ color: "#52c41a", fontSize: 18 }}>{summary.writeTitle}</Title>
               <Paragraph><code>POST /customers/&#123;id&#125;/googleAds:mutate</code></Paragraph>
               <ul style={{ fontSize: 14, lineHeight: 2 }}>
                 {summary.writeItems.map((item) => (<li key={item}>{item}</li>))}

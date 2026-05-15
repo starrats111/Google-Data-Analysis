@@ -9,6 +9,7 @@ import {
   SettingOutlined,
   UserOutlined,
   PlayCircleOutlined,
+  ContactsOutlined,
 } from "@ant-design/icons";
 import { useRouter } from "next/navigation";
 import { useLanguage } from "@/contexts/LanguageContext";
@@ -29,6 +30,7 @@ const i18n = {
     btnUser: "User Portal",
     btnAdmin: "Admin Console",
     btnDemo: "Platform Demo",
+    btnContact: "Contact Us",
     capTitle: "Platform Capabilities",
     features: [
       { title: "Merchant & Campaign Workflow", desc: "Source partner merchants from international affiliate networks and assign campaigns to internal team members for end-to-end management." },
@@ -47,6 +49,7 @@ const i18n = {
     btnUser: "进入用户平台",
     btnAdmin: "进入总控制台",
     btnDemo: "平台演示",
+    btnContact: "联系我们",
     capTitle: "平台核心能力",
     features: [
       { title: "商家与广告流程", desc: "从国际联盟网络发掘合作商家，分配给内部团队成员进行端到端的广告管理。" },
@@ -95,13 +98,29 @@ export default function HomePage() {
           <Button size="large" icon={<PlayCircleOutlined />} onClick={() => router.push("/demo")} style={{ height: 48, paddingInline: 32, fontSize: 16 }}>
             {t.btnDemo}
           </Button>
+          <Button
+            size="large"
+            icon={<ContactsOutlined />}
+            onClick={() => router.push("/contact")}
+            style={{
+              height: 48,
+              paddingInline: 32,
+              fontSize: 16,
+              background: "#fa8c16",
+              borderColor: "#fa8c16",
+              color: "#fff",
+              fontWeight: 600,
+            }}
+          >
+            {t.btnContact}
+          </Button>
         </Space>
       </div>
 
       {/* Google Ads API Integration Evidence Block */}
       <div style={{ background: "#f6ffed", borderTop: "2px solid #52c41a", borderBottom: "2px solid #52c41a", padding: "32px 20px" }}>
         <div style={{ maxWidth: 900, margin: "0 auto" }}>
-          <Title level={4} style={{ color: "#237804", marginBottom: 16, textAlign: "center" }}>
+          <Title level={2} style={{ color: "#237804", marginBottom: 16, textAlign: "center", fontSize: 20 }}>
             Google Ads API v23 Integration — How We Use the API
           </Title>
           <Row gutter={[16, 16]}>
@@ -140,7 +159,7 @@ export default function HomePage() {
       </div>
 
       <div style={{ maxWidth: 1060, margin: "0 auto", padding: "48px 20px 80px" }}>
-        <Title level={3} style={{ textAlign: "center", color: "#333", marginBottom: 32 }}>
+        <Title level={2} style={{ textAlign: "center", color: "#333", marginBottom: 32 }}>
           {t.capTitle}
         </Title>
         <Row gutter={[24, 24]}>
@@ -149,7 +168,7 @@ export default function HomePage() {
               <Card hoverable style={{ height: "100%", borderRadius: 12 }}>
                 <Space direction="vertical" size={12}>
                   {featureIcons[i]}
-                  <Title level={4} style={{ margin: 0 }}>{f.title}</Title>
+                  <Title level={3} style={{ margin: 0, fontSize: 18 }}>{f.title}</Title>
                   <Text type="secondary">{f.desc}</Text>
                 </Space>
               </Card>
