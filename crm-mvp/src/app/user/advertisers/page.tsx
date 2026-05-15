@@ -8,12 +8,21 @@
  */
 "use client";
 import { useState, useMemo, useCallback, useEffect } from "react";
-import { App, Button, Card, Input, InputNumber, Modal, Space, Switch, Table, Tabs, Tag, Tooltip, Typography, Popconfirm, Empty } from "antd";
-import { StarFilled, StarOutlined, DeleteOutlined, SearchOutlined, ReloadOutlined, ThunderboltOutlined, EyeOutlined, ShopOutlined, FireOutlined } from "@ant-design/icons";
+import { App, Button, Card, Col, Input, InputNumber, Modal, Row, Space, Statistic, Switch, Table, Tabs, Tag, Tooltip, Typography, Popconfirm, Empty } from "antd";
+import { StarFilled, StarOutlined, DeleteOutlined, SearchOutlined, ReloadOutlined, ThunderboltOutlined, EyeOutlined, ShopOutlined, FireOutlined, CheckOutlined, GiftOutlined, CalendarOutlined, GlobalOutlined } from "@ant-design/icons";
 import { useRouter } from "next/navigation";
 import type { ColumnsType } from "antd/es/table";
+import MerchantNameCell from "@/components/MerchantNameCell";
+import MerchantClaimModal, { type ClaimMerchant } from "@/components/MerchantClaimModal";
+import { getCountryFlag } from "@/lib/constants";
 
 const { Text } = Typography;
+
+// 平台代码 → 主题色（与 user/merchants/page.tsx 保持一致）
+const PLATFORM_COLOR: Record<string, string> = {
+  RW: "#7c3aed", LH: "#16a34a", CG: "#2563eb", PM: "#ea580c", LB: "#0891b2",
+  BSH: "#be185d", CF: "#ca8a04", AD: "#0f766e", MUI: "#b91c1c", EV: "#4338ca",
+};
 
 interface WatchlistItem {
   id: string;
@@ -82,6 +91,46 @@ interface DiscoverableItem {
   watched_by_me: boolean;
 }
 
+// D-004：今日广告 Tab 数据类型
+interface ConnectionAccount {
+  id: string;
+  account_name: string;
+  platform: string;
+  link: string;
+}
+interface MatchedMerchant {
+  id: string;
+  merchant_id: string;
+  merchant_name: string;
+  merchant_url: string | null;
+  platform: string;
+  status: string;
+  policy_status: string | null;
+  policy_category_code: string | null;
+  supported_regions: unknown;
+  campaign_link: string | null;
+  tracking_link: string | null;
+  logo_url: string | null;
+  connection_accounts: ConnectionAccount[];
+}
+interface TodayAdItem {
+  notification_id: string;
+  advertiser_id: string;
+  advertiser_name: string | null;
+  creative_id: string;
+  region: string;
+  days: number;
+  domain: string | null;
+  atc_url: string;
+  title: string;
+  created_at: string;
+  matched_merchant: MatchedMerchant | null;
+}
+interface TodayAdsResp {
+  stats: { total: number; matched: number; available: number; claimed_or_paused: number };
+  items: TodayAdItem[];
+}
+
 const COMMON_PAGINATION = {
   showSizeChanger: true,
   pageSizeOptions: ["10", "20", "50", "100"],
@@ -104,7 +153,27 @@ const QualifyingTag = ({ q }: { q: number | null | undefined }) => {
 export default function AdvertisersPage() {
   const router = useRouter();
   const { message } = App.useApp();
-  const [tab, setTab] = useState<"mine" | "recommended" | "discoverable">("mine");
+  const [tab, setTab] = useState<"mine" | "recommended" | "discoverable" | "today">("mine");
+
+  // ─── D-004 今日广告 Tab ───────────────────────────────────
+  const [todayData, setTodayData] = useState<TodayAdsResp | null>(null);
+  const [todayLoading, setTodayLoading] = useState(false);
+  const [claimingMerchant, setClaimingMerchant] = useState<ClaimMerchant | null>(null);
+
+  const loadToday = useCallback(async () => {
+    setTodayLoading(true);
+    try {
+      const r = await fetch("/api/user/atc/today-ads").then((x) => x.json());
+      if (r.code === 0) {
+        setTodayData(r.data as TodayAdsResp);
+      } else {
+        message.error(r.message || "加载失败");
+      }
+    } finally {
+      setTodayLoading(false);
+    }
+  }, [message]);
+
 
   // ─── 我的关注 ───────────────────────────────────────────
   const [mineRows, setMineRows] = useState<WatchlistItem[]>([]);
@@ -242,6 +311,7 @@ export default function AdvertisersPage() {
   useEffect(() => { if (tab === "mine") void loadMine(); }, [tab, loadMine]);
   useEffect(() => { if (tab === "recommended") void loadRecommended(); }, [tab, loadRecommended]);
   useEffect(() => { if (tab === "discoverable") void loadDiscoverable(); }, [tab, loadDiscoverable]);
+  useEffect(() => { if (tab === "today") void loadToday(); }, [tab, loadToday]);
 
   // C-094.11：加载用户全局阈值
   useEffect(() => {
@@ -436,6 +506,138 @@ export default function AdvertisersPage() {
     },
   ], [router, follow, loadRecommended]);
 
+  // D-004 今日广告 Tab 列定义
+  const todayCols = useMemo<ColumnsType<TodayAdItem>>(() => [
+    {
+      title: "商家名",
+      key: "merchant",
+      width: 260,
+      render: (_: unknown, row) => {
+        const m = row.matched_merchant;
+        if (!m) {
+          return (
+            <Tooltip title="该广告主的域名未在你的我的商家库中匹配到商家。可联系管理员同步商家库或换平台。">
+              <Text type="secondary" style={{ fontStyle: "italic" }}>未在我的商家库</Text>
+            </Tooltip>
+          );
+        }
+        return (
+          <MerchantNameCell
+            rec={{
+              merchant_name: m.merchant_name,
+              merchant_url: m.merchant_url,
+              campaign_link: m.campaign_link,
+              tracking_link: m.tracking_link,
+              connection_accounts: m.connection_accounts,
+            }}
+          />
+        );
+      },
+    },
+    {
+      title: "平台",
+      key: "platform",
+      width: 70,
+      render: (_: unknown, row) => row.matched_merchant
+        ? <Tag color={PLATFORM_COLOR[row.matched_merchant.platform] || "default"} style={{ fontWeight: 600 }}>{row.matched_merchant.platform}</Tag>
+        : <span style={{ color: "#bfbfbf" }}>-</span>,
+    },
+    {
+      title: "MID",
+      key: "mid",
+      width: 100,
+      ellipsis: true,
+      render: (_: unknown, row) => row.matched_merchant?.merchant_id ?? <span style={{ color: "#bfbfbf" }}>-</span>,
+    },
+    {
+      title: <Tooltip title="该广告创意对应的着陆页根域名（来自 SerpApi 返回的广告 metadata.domain；部分广告不返回 domain 字段则为空）">域名</Tooltip>,
+      dataIndex: "domain",
+      width: 150,
+      render: (v: string | null) => v
+        ? <Tag color="blue" style={{ margin: 0 }}>{v}</Tag>
+        : <Tooltip title="该广告未带 domain 字段（SerpApi 不返回时）"><span style={{ color: "#bfbfbf" }}>-</span></Tooltip>,
+    },
+    {
+      title: "广告主",
+      key: "advertiser",
+      render: (_: unknown, row) => (
+        <a
+          href={`https://adstransparency.google.com/advertiser/${row.advertiser_id}${row.region ? `?region=${row.region}` : ""}`}
+          target="_blank"
+          rel="noreferrer"
+          title="在 ATC 上查看该广告主"
+        >
+          {row.advertiser_name || row.advertiser_id}
+        </a>
+      ),
+    },
+    {
+      title: <Tooltip title="该广告创意持续投放的天数；≥180 天为长期主推（红）/ ≥60 橙 / ≥30 绿">投放时间</Tooltip>,
+      dataIndex: "days",
+      width: 100,
+      align: "center" as const,
+      sorter: (a, b) => a.days - b.days,
+      defaultSortOrder: "descend" as const,
+      render: (v: number) => {
+        const color = v >= 180 ? "#f5222d" : v >= 60 ? "#fa8c16" : v >= 30 ? "#52c41a" : "#8c8c8c";
+        return <span style={{ color, fontWeight: 600 }}>{v} 天</span>;
+      },
+    },
+    {
+      title: "国家",
+      dataIndex: "region",
+      width: 80,
+      align: "center" as const,
+      render: (v: string) => {
+        const flag = getCountryFlag(v);
+        return <span style={{ fontWeight: 500 }}>{flag ? `${flag} ` : ""}{v}</span>;
+      },
+    },
+    {
+      title: "操作",
+      key: "action",
+      width: 140,
+      fixed: "right" as const,
+      render: (_: unknown, row) => {
+        const m = row.matched_merchant;
+        if (!m) return <Button size="small" disabled>无匹配商家</Button>;
+        if (m.status === "claimed" || m.status === "paused") {
+          return (
+            <Tooltip title="已在你名下，去我的商家页面查看">
+              <Button
+                size="small"
+                type="link"
+                icon={<CheckOutlined />}
+                onClick={() => router.push(`/user/merchants?q=${encodeURIComponent(m.merchant_name || m.merchant_id)}&tab=claimed`)}
+              >已领取</Button>
+            </Tooltip>
+          );
+        }
+        if (m.policy_status === "prohibited") {
+          return <Button size="small" disabled>禁止领取</Button>;
+        }
+        return (
+          <Button
+            type="primary"
+            size="small"
+            icon={<GiftOutlined />}
+            onClick={() => setClaimingMerchant({
+              id: m.id,
+              merchant_name: m.merchant_name,
+              merchant_id: m.merchant_id,
+              platform: m.platform,
+              policy_status: m.policy_status ?? undefined,
+              policy_category_code: m.policy_category_code ?? undefined,
+              supported_regions: Array.isArray(m.supported_regions) ? (m.supported_regions as unknown[]) : null,
+            })}
+          >
+            {m.policy_status === "restricted" ? "领取(限制)" : "领取"}
+          </Button>
+        );
+      },
+    },
+  ], [router]);
+
   const discCols = useMemo<ColumnsType<DiscoverableItem>>(() => [
     { title: "广告主", dataIndex: "advertiser_name", render: (_: string, row) => <AtcAdvertiserLink id={row.advertiser_id} name={row.advertiser_name} /> },
     { title: "Advertiser ID", dataIndex: "advertiser_id", width: 240, render: (v: string) => <Text copyable={{ text: v }} style={{ fontFamily: "monospace", fontSize: 12 }}>{v}</Text> },
@@ -482,7 +684,7 @@ export default function AdvertisersPage() {
       >
         <Tabs
           activeKey={tab}
-          onChange={(k) => setTab(k as "mine" | "recommended" | "discoverable")}
+          onChange={(k) => setTab(k as "mine" | "recommended" | "discoverable" | "today")}
           items={[
             {
               key: "mine",
@@ -651,9 +853,101 @@ export default function AdvertisersPage() {
                 </>
               ),
             },
+            // D-004 第 4 个 Tab：今日广告
+            {
+              key: "today",
+              label: `今日广告${todayData?.stats.total ? ` (${todayData.stats.total})` : ""}`,
+              children: (
+                <>
+                  <Row gutter={[12, 12]} style={{ marginBottom: 16 }}>
+                    <Col xs={12} sm={6}>
+                      <Card size="small" bodyStyle={{ padding: "10px 14px" }}>
+                        <Statistic
+                          title={<span style={{ fontSize: 12 }}>今日推送</span>}
+                          value={todayData?.stats.total ?? 0}
+                          loading={todayLoading}
+                          prefix={<CalendarOutlined style={{ color: "#1677ff" }} />}
+                          valueStyle={{ fontSize: 22, fontWeight: 700 }}
+                        />
+                      </Card>
+                    </Col>
+                    <Col xs={12} sm={6}>
+                      <Card size="small" bodyStyle={{ padding: "10px 14px" }}>
+                        <Statistic
+                          title={<span style={{ fontSize: 12 }}>命中商家库</span>}
+                          value={todayData?.stats.matched ?? 0}
+                          loading={todayLoading}
+                          prefix={<ShopOutlined style={{ color: "#722ed1" }} />}
+                          valueStyle={{ fontSize: 22, fontWeight: 700, color: "#722ed1" }}
+                        />
+                      </Card>
+                    </Col>
+                    <Col xs={12} sm={6}>
+                      <Card size="small" bodyStyle={{ padding: "10px 14px" }}>
+                        <Statistic
+                          title={<span style={{ fontSize: 12 }}>待领取</span>}
+                          value={todayData?.stats.available ?? 0}
+                          loading={todayLoading}
+                          prefix={<GiftOutlined style={{ color: "#52c41a" }} />}
+                          valueStyle={{ fontSize: 22, fontWeight: 700, color: "#52c41a" }}
+                        />
+                      </Card>
+                    </Col>
+                    <Col xs={12} sm={6}>
+                      <Card size="small" bodyStyle={{ padding: "10px 14px" }}>
+                        <Statistic
+                          title={<span style={{ fontSize: 12 }}>已领取/暂停</span>}
+                          value={todayData?.stats.claimed_or_paused ?? 0}
+                          loading={todayLoading}
+                          prefix={<CheckOutlined style={{ color: "#fa8c16" }} />}
+                          valueStyle={{ fontSize: 22, fontWeight: 700, color: "#fa8c16" }}
+                        />
+                      </Card>
+                    </Col>
+                  </Row>
+                  <div style={{ marginBottom: 12, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                    <Button icon={<ReloadOutlined />} onClick={() => void loadToday()}>刷新</Button>
+                    <Text type="secondary" style={{ fontSize: 12 }}>
+                      <GlobalOutlined style={{ marginRight: 4 }} />
+                      数据来自 ATC scanner 今日推送（CST 0:00 起）；按持续天数降序，颜色 ≥180 红 / ≥60 橙 / ≥30 绿
+                    </Text>
+                  </div>
+                  <Table<TodayAdItem>
+                    rowKey="notification_id"
+                    loading={todayLoading}
+                    dataSource={todayData?.items ?? []}
+                    columns={todayCols}
+                    size="small"
+                    scroll={{ x: 1180 }}
+                    pagination={{
+                      pageSize: 50,
+                      showSizeChanger: true,
+                      pageSizeOptions: ["20", "50", "100", "200"],
+                      showTotal: (t: number) => `共 ${t} 条`,
+                    }}
+                    locale={{ emptyText: <Empty description="今日还没有新的广告推送（cron 每天 08:00 CST 自动跑）" /> }}
+                  />
+                </>
+              ),
+            },
           ]}
         />
       </Card>
+
+      {/* D-004：今日广告 Tab 领取 Modal */}
+      <MerchantClaimModal
+        open={!!claimingMerchant}
+        merchant={claimingMerchant}
+        onCancel={() => setClaimingMerchant(null)}
+        onClaimed={(campaignId) => {
+          setClaimingMerchant(null);
+          // 领取后刷新今日列表（状态会变 claimed）
+          void loadToday();
+          if (campaignId) {
+            setTimeout(() => router.push(`/user/ad-preview/${campaignId}`), 800);
+          }
+        }}
+      />
 
       <Modal
         open={viewOpen}

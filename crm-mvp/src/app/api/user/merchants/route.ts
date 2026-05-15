@@ -5,6 +5,7 @@ import { withUser } from "@/lib/api-handler";
 import prisma from "@/lib/prisma";
 import { buildDraftCampaignName } from "@/lib/campaign-naming";
 import { buildKeywordCreateManyInput } from "@/lib/ad-keyword-pipeline";
+import { loadConnectionAccountMap, buildConnectionAccounts } from "@/lib/merchant-connection";
 
 // 国家 → Google Ads 语言代码（创建 campaign 时自动设置）
 const COUNTRY_TO_LANG_CODE: Record<string, string> = {
@@ -342,6 +343,8 @@ export const GET = withUser(async (req: NextRequest, { user }) => {
     const pageMerchants = pageSlice.map(s => s._m);
     const withLabels = await enrichWithLabels(pageMerchants);
     const advMap = await batchActiveAdvertisers(pageMerchants.map((m: any) => ({ merchant_id: m.merchant_id, platform: m.platform })));
+    // D-004 F-15：解析 connection_campaign_links → connection_accounts[]（只保留属于 current_user 的 conn_id）
+    const connAccountMap = await loadConnectionAccountMap(pageMerchants, userId);
     const enriched = withLabels.map((m, i) => {
       const { _adStatus, _info } = pageSlice[i];
       return {
@@ -350,6 +353,7 @@ export const GET = withUser(async (req: NextRequest, { user }) => {
         ad_campaign_name: _info?.campaignName || null,
         ad_campaign_id: _info?.campaignId || null,
         active_advertisers: advMap.get(`${m.platform}:${m.merchant_id}`) || 0,
+        connection_accounts: buildConnectionAccounts((m as { connection_campaign_links?: unknown }).connection_campaign_links, connAccountMap),
       };
     });
 
@@ -441,8 +445,14 @@ export const GET = withUser(async (req: NextRequest, { user }) => {
     // 附加推荐/违规标签 + 在投人数
     const withLabels = await enrichWithLabels(merchants);
     const advMap = await batchActiveAdvertisers(merchants.map((m: any) => ({ merchant_id: m.merchant_id, platform: m.platform })));
+    // D-004 F-15：解析 connection_campaign_links → connection_accounts[]
+    const connAccountMapAvail = await loadConnectionAccountMap(merchants, userId);
     for (const m of withLabels) {
       m.active_advertisers = advMap.get(`${m.platform}:${m.merchant_id}`) || 0;
+      (m as { connection_accounts?: unknown }).connection_accounts = buildConnectionAccounts(
+        (m as { connection_campaign_links?: unknown }).connection_campaign_links,
+        connAccountMapAvail,
+      );
     }
     // 仅在无用户指定排序时，推荐商家优先
     if (!sortField) {

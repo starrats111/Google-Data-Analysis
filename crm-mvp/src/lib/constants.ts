@@ -203,6 +203,46 @@ export const HOLIDAY_TYPES = [
   { value: "religious", label: "宗教节日" },
 ] as const;
 
+// D-004：所有支持的国家列表（按平台覆盖度排序，与 SerpApi region 参数一致）
+// 抽取自 user/merchants/page.tsx（原 C-094.4）；共享给「领取 Modal」、「批量查 ATC」、「今日广告 Tab」等
+export const ALL_COUNTRIES: Array<{ code: string; name: string; flag: string }> = [
+  { code: "US", name: "美国", flag: "🇺🇸" }, { code: "GB", name: "英国", flag: "🇬🇧" },
+  { code: "AU", name: "澳大利亚", flag: "🇦🇺" }, { code: "CA", name: "加拿大", flag: "🇨🇦" },
+  { code: "DE", name: "德国", flag: "🇩🇪" }, { code: "FR", name: "法国", flag: "🇫🇷" },
+  { code: "JP", name: "日本", flag: "🇯🇵" }, { code: "IT", name: "意大利", flag: "🇮🇹" },
+  { code: "ES", name: "西班牙", flag: "🇪🇸" }, { code: "NL", name: "荷兰", flag: "🇳🇱" },
+  { code: "BR", name: "巴西", flag: "🇧🇷" }, { code: "MX", name: "墨西哥", flag: "🇲🇽" },
+  { code: "IN", name: "印度", flag: "🇮🇳" }, { code: "KR", name: "韩国", flag: "🇰🇷" },
+  { code: "SG", name: "新加坡", flag: "🇸🇬" }, { code: "NZ", name: "新西兰", flag: "🇳🇿" },
+  { code: "SE", name: "瑞典", flag: "🇸🇪" }, { code: "NO", name: "挪威", flag: "🇳🇴" },
+  { code: "DK", name: "丹麦", flag: "🇩🇰" }, { code: "FI", name: "芬兰", flag: "🇫🇮" },
+  { code: "PL", name: "波兰", flag: "🇵🇱" }, { code: "AT", name: "奥地利", flag: "🇦🇹" },
+  { code: "CH", name: "瑞士", flag: "🇨🇭" }, { code: "BE", name: "比利时", flag: "🇧🇪" },
+  { code: "IE", name: "爱尔兰", flag: "🇮🇪" }, { code: "PT", name: "葡萄牙", flag: "🇵🇹" },
+  { code: "HK", name: "香港", flag: "🇭🇰" }, { code: "TW", name: "台湾", flag: "🇹🇼" },
+  { code: "MY", name: "马来西亚", flag: "🇲🇾" }, { code: "TH", name: "泰国", flag: "🇹🇭" },
+  { code: "ID", name: "印度尼西亚", flag: "🇮🇩" }, { code: "PH", name: "菲律宾", flag: "🇵🇭" },
+  { code: "VN", name: "越南", flag: "🇻🇳" }, { code: "TR", name: "土耳其", flag: "🇹🇷" },
+  { code: "AE", name: "阿联酋", flag: "🇦🇪" }, { code: "SA", name: "沙特阿拉伯", flag: "🇸🇦" },
+  { code: "IL", name: "以色列", flag: "🇮🇱" }, { code: "ZA", name: "南非", flag: "🇿🇦" },
+  { code: "AR", name: "阿根廷", flag: "🇦🇷" }, { code: "CL", name: "智利", flag: "🇨🇱" },
+  { code: "CO", name: "哥伦比亚", flag: "🇨🇴" }, { code: "PE", name: "秘鲁", flag: "🇵🇪" },
+  { code: "RU", name: "俄罗斯", flag: "🇷🇺" }, { code: "UA", name: "乌克兰", flag: "🇺🇦" },
+  { code: "GR", name: "希腊", flag: "🇬🇷" }, { code: "CZ", name: "捷克", flag: "🇨🇿" },
+  { code: "RO", name: "罗马尼亚", flag: "🇷🇴" }, { code: "HU", name: "匈牙利", flag: "🇭🇺" },
+];
+
+export type CountryCode = (typeof ALL_COUNTRIES)[number]["code"];
+
+/**
+ * 取 ALL_COUNTRIES 里的 flag emoji，若不在列表则返回 null
+ */
+export function getCountryFlag(code: string | null | undefined): string | null {
+  if (!code) return null;
+  const c = ALL_COUNTRIES.find((x) => x.code === code.toUpperCase());
+  return c?.flag ?? null;
+}
+
 // 通用 API 响应
 export function apiSuccess<T>(data: T, message = "success") {
   return Response.json({ code: 0, message, data });

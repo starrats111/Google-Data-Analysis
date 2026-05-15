@@ -1,8 +1,11 @@
 "use client";
 import { useState, useCallback, useMemo, useEffect } from "react";
 import { Card, Row, Col, Table, Input, Select, Button, Space, Tag, Modal, Form, Typography, Popconfirm, Popover, Switch, InputNumber, Tabs, App, Tooltip, Radio, DatePicker, Slider, Progress, Alert } from "antd";
-import { ShopOutlined, SearchOutlined, CheckOutlined, DollarOutlined, CalendarOutlined, SaveOutlined, SyncOutlined, WarningOutlined, StarOutlined, CopyOutlined, ReloadOutlined, RobotOutlined, DeleteOutlined, CloseCircleOutlined, ThunderboltOutlined } from "@ant-design/icons";
-import { PLATFORMS, BIDDING_STRATEGIES } from "@/lib/constants";
+import { ShopOutlined, SearchOutlined, CheckOutlined, DollarOutlined, CalendarOutlined, SaveOutlined, SyncOutlined, WarningOutlined, StarOutlined, ReloadOutlined, RobotOutlined, DeleteOutlined, CloseCircleOutlined, ThunderboltOutlined } from "@ant-design/icons";
+import { PLATFORMS, BIDDING_STRATEGIES, ALL_COUNTRIES } from "@/lib/constants";
+// D-004：使用共享 MerchantNameCell（支持多账号 Popover 修复 BUG-1）
+import MerchantNameCell from "@/components/MerchantNameCell";
+import type { ConnectionAccount } from "@/components/MerchantNameCell";
 import { useApiWithParams, useStaleApi, useApi, mutateApi, refreshApi } from "@/lib/swr";
 import { useRouter, useSearchParams } from "next/navigation";
 import dayjs, { type Dayjs } from "dayjs";
@@ -44,33 +47,7 @@ const CATEGORY_CN: Record<string, string> = {
   "Cosmetics": "化妆品", "Fragrance": "香水", "Hair Care": "护发",
 };
 const catCn = (v: string | null) => { if (!v) return "-"; return CATEGORY_CN[v] || v; };
-// C-094.4：领取广告 / 批量查 ATC 共用的国家列表（按平台覆盖度排序，覆盖 SerpApi 支持的主流国家）
-const ALL_COUNTRIES: Array<{ code: string; name: string; flag: string }> = [
-  { code: "US", name: "美国", flag: "🇺🇸" }, { code: "GB", name: "英国", flag: "🇬🇧" },
-  { code: "AU", name: "澳大利亚", flag: "🇦🇺" }, { code: "CA", name: "加拿大", flag: "🇨🇦" },
-  { code: "DE", name: "德国", flag: "🇩🇪" }, { code: "FR", name: "法国", flag: "🇫🇷" },
-  { code: "JP", name: "日本", flag: "🇯🇵" }, { code: "IT", name: "意大利", flag: "🇮🇹" },
-  { code: "ES", name: "西班牙", flag: "🇪🇸" }, { code: "NL", name: "荷兰", flag: "🇳🇱" },
-  { code: "BR", name: "巴西", flag: "🇧🇷" }, { code: "MX", name: "墨西哥", flag: "🇲🇽" },
-  { code: "IN", name: "印度", flag: "🇮🇳" }, { code: "KR", name: "韩国", flag: "🇰🇷" },
-  { code: "SG", name: "新加坡", flag: "🇸🇬" }, { code: "NZ", name: "新西兰", flag: "🇳🇿" },
-  { code: "SE", name: "瑞典", flag: "🇸🇪" }, { code: "NO", name: "挪威", flag: "🇳🇴" },
-  { code: "DK", name: "丹麦", flag: "🇩🇰" }, { code: "FI", name: "芬兰", flag: "🇫🇮" },
-  { code: "PL", name: "波兰", flag: "🇵🇱" }, { code: "AT", name: "奥地利", flag: "🇦🇹" },
-  { code: "CH", name: "瑞士", flag: "🇨🇭" }, { code: "BE", name: "比利时", flag: "🇧🇪" },
-  { code: "IE", name: "爱尔兰", flag: "🇮🇪" }, { code: "PT", name: "葡萄牙", flag: "🇵🇹" },
-  { code: "HK", name: "香港", flag: "🇭🇰" }, { code: "TW", name: "台湾", flag: "🇹🇼" },
-  { code: "MY", name: "马来西亚", flag: "🇲🇾" }, { code: "TH", name: "泰国", flag: "🇹🇭" },
-  { code: "ID", name: "印度尼西亚", flag: "🇮🇩" }, { code: "PH", name: "菲律宾", flag: "🇵🇭" },
-  { code: "VN", name: "越南", flag: "🇻🇳" }, { code: "TR", name: "土耳其", flag: "🇹🇷" },
-  { code: "AE", name: "阿联酋", flag: "🇦🇪" }, { code: "SA", name: "沙特阿拉伯", flag: "🇸🇦" },
-  { code: "IL", name: "以色列", flag: "🇮🇱" }, { code: "ZA", name: "南非", flag: "🇿🇦" },
-  { code: "AR", name: "阿根廷", flag: "🇦🇷" }, { code: "CL", name: "智利", flag: "🇨🇱" },
-  { code: "CO", name: "哥伦比亚", flag: "🇨🇴" }, { code: "PE", name: "秘鲁", flag: "🇵🇪" },
-  { code: "RU", name: "俄罗斯", flag: "🇷🇺" }, { code: "UA", name: "乌克兰", flag: "🇺🇦" },
-  { code: "GR", name: "希腊", flag: "🇬🇷" }, { code: "CZ", name: "捷克", flag: "🇨🇿" },
-  { code: "RO", name: "罗马尼亚", flag: "🇷🇴" }, { code: "HU", name: "匈牙利", flag: "🇭🇺" },
-];
+// D-004：ALL_COUNTRIES 已抽到 @/lib/constants，下方代码统一 import 复用
 const CommissionCell = ({ v }: { v: string | null }) => {
   if (!v) return <span style={{ color: "#bfbfbf" }}>-</span>;
   return <span>{v}</span>;
@@ -91,39 +68,11 @@ interface Merchant {
   atc_advertiser_count?: number | null;
   atc_last_synced_at?: string | null;
   atc_sync_status?: string;
+  // D-004：API GET 返回的属于 current_user 的账号链接列表（多账号修复 BUG-1）
+  connection_accounts?: ConnectionAccount[];
 }
-function getFaviconUrl(merchantUrl: string | null | undefined): string | null {
-  if (!merchantUrl) return null;
-  try {
-    const domain = new URL(merchantUrl.startsWith("http") ? merchantUrl : `https://${merchantUrl}`).hostname;
-    return `https://www.google.com/s2/favicons?domain=${domain}&sz=128`;
-  } catch { return null; }
-}
-function MerchantIcon({ rec }: { rec: Merchant }) {
-  const [failed, setFailed] = useState(false);
-  const iconUrl = getFaviconUrl(rec.merchant_url);
-  if (iconUrl && !failed) {
-    return <img src={iconUrl} alt="" style={{ width: 22, height: 22, borderRadius: 4, objectFit: "contain", flexShrink: 0 }} onError={() => setFailed(true)} />;
-  }
-  return <ShopOutlined style={{ fontSize: 18, color: "#bfbfbf", flexShrink: 0 }} />;
-}
-function MerchantNameCell({ rec, onCopy }: { rec: Merchant; onCopy: (link: string) => void }) {
-  const copyLink = rec.campaign_link || rec.tracking_link;
-  return (
-    <Space size={6}>
-      <MerchantIcon rec={rec} />
-      <span style={{ fontWeight: 600 }}>{rec.merchant_name || "-"}</span>
-      {copyLink && (
-        <Tooltip title="复制追踪链接">
-          <CopyOutlined
-            style={{ color: "#1677ff", cursor: "pointer", fontSize: 13 }}
-            onClick={(e) => { e.stopPropagation(); onCopy(copyLink); }}
-          />
-        </Tooltip>
-      )}
-    </Space>
-  );
-}
+// D-004：MerchantIcon / MerchantNameCell 已抽到共享组件 @/components/MerchantNameCell
+// 支持多账号 Popover；单账号场景行为不变
 interface MerchantResponse {
   merchants: Merchant[]; total: number; page: number; pageSize: number;
   stats: { total: number; claimed: number; byPlatform: { platform: string; _count: number }[] };
@@ -725,9 +674,7 @@ export default function MerchantsPage() {
   }, []);
   const colSortOrder = (field: string) => sortField === field ? (sortOrder === "asc" ? "ascend" as const : "descend" as const) : null;
 // __COLUMNS__
-  const copyLink = useCallback((link: string) => {
-    navigator.clipboard.writeText(link).then(() => message.success("追踪链接已复制")).catch(() => message.error("复制失败"));
-  }, [message]);
+  // D-004：复制逻辑已转移到共享 MerchantNameCell 组件内部（支持多账号 Popover）
   // C-091：ATC 竞争度列 render（claimed/available 共用），抽出来避免 100 行复粘
   const renderAtcCompetitionCol = useCallback((_: unknown, rec: Merchant) => {
     const loading = atcLoading[rec.id];
@@ -833,7 +780,7 @@ export default function MerchantsPage() {
   }, [atcLoading, atcLocalData, serpApiConfigured, triggerAtcQuery, router, getAtcRegion, setAtcRegion, atcPopover, openAtcPopover, closeAtcPopover]);
 
   const claimedCols = useMemo(() => [
-    { title: "商家名称", dataIndex: "merchant_name", width: 240, sorter: true, sortOrder: colSortOrder("merchant_name"), render: (_: string, rec: Merchant) => <MerchantNameCell rec={rec} onCopy={copyLink} /> },
+    { title: "商家名称", dataIndex: "merchant_name", width: 240, sorter: true, sortOrder: colSortOrder("merchant_name"), render: (_: string, rec: Merchant) => <MerchantNameCell rec={rec} /> },
     { title: "平台", dataIndex: "platform", width: 80, render: (v: string) => <Tag color={PC[v] || "default"} style={{ fontWeight: 600 }}>{v}</Tag> },
     { title: "MID", dataIndex: "merchant_id", width: 100, ellipsis: true },
     { title: "主营业务", dataIndex: "category", width: 130, ellipsis: true, render: (v: string | null) => catCn(v) },
@@ -844,13 +791,13 @@ export default function MerchantsPage() {
     { title: "在投人数", dataIndex: "active_advertisers", width: 90, align: "center" as const, render: (v: number, rec: Merchant) => { const n = v || 0; return n > 0 ? <Button size="small" type="link" style={{ padding: 0, fontWeight: 600 }} onClick={() => showActiveAdv(rec)}>{n} 人</Button> : <span style={{ color: "#bfbfbf" }}>0</span>; } },
     { title: "标签", width: 120, render: (_: unknown, rec: any) => { const labels = rec.labels || []; if (labels.length === 0) return <span style={{ color: "#ccc" }}>-</span>; return <Space size={4} wrap>{labels.map((l: any, i: number) => <Tooltip key={i} title={l.detail}><Tag color={l.color} style={{ cursor: "pointer" }}>{l.text}</Tag></Tooltip>)}</Space>; } },
     { title: "操作", width: 100, render: (_: unknown, rec: Merchant) => <Popconfirm title="确认取消领取？" onConfirm={() => doRelease(rec.id)}><Button size="small" danger>取消领取</Button></Popconfirm> },
-  ], [doRelease, showActiveAdv, copyLink, sortField, sortOrder, renderAtcCompetitionCol]);
+  ], [doRelease, showActiveAdv, sortField, sortOrder, renderAtcCompetitionCol]);
   const availCols = useMemo(() => [
     { title: "商家名称", dataIndex: "merchant_name", width: 280, sorter: true, sortOrder: colSortOrder("merchant_name"), render: (_: string, rec: Merchant) => {
       const hitRate = chargebackHitMap.get(`${rec.platform}-${rec.merchant_id}`);
       return (
         <Space size={6} wrap>
-          <MerchantNameCell rec={rec} onCopy={copyLink} />
+          <MerchantNameCell rec={rec} />
           {hitRate !== undefined && hitRate >= 50 && (
             <Tooltip title={`该商家近期全员拒付率 ${hitRate.toFixed(2)}%，领取前请三思`}>
               <Tag color="red" icon={<WarningOutlined />} style={{ margin: 0 }}>拒付 {hitRate.toFixed(0)}%</Tag>
@@ -870,7 +817,7 @@ export default function MerchantsPage() {
     { title: "在投人数", dataIndex: "active_advertisers", width: 90, align: "center" as const, render: (v: number, rec: Merchant) => { const n = v || 0; return n > 0 ? <Button size="small" type="link" style={{ padding: 0, fontWeight: 600 }} onClick={() => showActiveAdv(rec)}>{n} 人</Button> : <span style={{ color: "#bfbfbf" }}>0</span>; } },
     { title: "标签", width: 140, render: (_: unknown, rec: any) => { const labels = rec.labels || []; if (labels.length === 0) return <span style={{ color: "#ccc" }}>-</span>; return <Space size={4} wrap>{labels.map((l: any, i: number) => <Tooltip key={i} title={l.detail}><Tag color={l.color} style={{ cursor: "pointer" }}>{l.text}</Tag></Tooltip>)}</Space>; } },
     { title: "操作", width: 100, render: (_: unknown, rec: Merchant) => rec.policy_status === "prohibited" ? <Button size="small" disabled>禁止领取</Button> : <Button type="primary" size="small" icon={<CheckOutlined />} onClick={() => doClaim(rec)}>{rec.policy_status === "restricted" ? "领取(限制)" : "领取"}</Button> },
-  ], [doClaim, showActiveAdv, copyLink, sortField, sortOrder, chargebackHitMap, renderAtcCompetitionCol]);
+  ], [doClaim, showActiveAdv, sortField, sortOrder, chargebackHitMap, renderAtcCompetitionCol]);
   // C-019 拒付商家 Tab 的列定义
   const chargebackCols = useMemo(() => [
     { title: "平台", dataIndex: "platform", width: 80, render: (v: string) => <Tag color={PC[v] || "default"} style={{ fontWeight: 600 }}>{v}</Tag> },
