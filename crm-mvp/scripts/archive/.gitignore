@@ -1,0 +1,4 @@
+# archive/ 仅保留 README，其它历史排障脚本不纳入 git
+*
+!.gitignore
+!README.md
