@@ -3,6 +3,7 @@
  *
  * 用法（服务器端运行）：
  *   cd /home/ubuntu/Google-Data-Analysis/crm-mvp
+ *   set -a; source .env; set +a       # 加载 JWT_SECRET / DATABASE_URL
  *   npx tsx scripts/test-ad-generation.ts "Camplify Spain" "NASM" "Adidas"
  *
  * 验证维度：
@@ -13,7 +14,6 @@
  *
  * 注意：会消耗实际 AI token 调用，不要批量乱跑
  */
-import "dotenv/config";
 import jwt from "jsonwebtoken";
 import prisma from "../src/lib/prisma";
 
@@ -56,14 +56,37 @@ interface CampaignTarget {
   userRole: "user" | "leader";
 }
 
-async function pickCampaign(merchantNameLike: string): Promise<CampaignTarget | null> {
-  // 找一个含此商家、已有 ad_creative 的 campaign
+async function pickCampaign(
+  merchantNameLike: string,
+  preferAcId?: bigint,
+): Promise<CampaignTarget | null> {
+  // 直接传 ad_creative_id 走精准路径
+  if (preferAcId) {
+    const ac = await prisma.ad_creatives.findFirst({ where: { id: preferAcId, is_deleted: 0 } });
+    if (!ac) return null;
+    const ag = await prisma.ad_groups.findFirst({ where: { id: ac.ad_group_id, is_deleted: 0 } });
+    if (!ag) return null;
+    const camp = await prisma.campaigns.findFirst({ where: { id: ag.campaign_id, is_deleted: 0 } });
+    if (!camp) return null;
+    const m = await prisma.user_merchants.findFirst({ where: { id: camp.user_merchant_id, is_deleted: 0 } });
+    if (!m) return null;
+    const user = await prisma.users.findFirst({ where: { id: camp.user_id, is_deleted: 0 } });
+    if (!user || (user.role !== "user" && user.role !== "leader")) return null;
+    return {
+      campaignId: camp.id,
+      merchant: m.merchant_name,
+      merchantUrl: m.merchant_url || "",
+      country: camp.target_country || "US",
+      adCreativeId: ac.id,
+      userId: user.id,
+      username: user.username,
+      userRole: user.role as "user" | "leader",
+    };
+  }
+  // 按商家名搜
   const merchants = await prisma.user_merchants.findMany({
-    where: {
-      is_deleted: 0,
-      merchant_name: { contains: merchantNameLike },
-    },
-    take: 20,
+    where: { is_deleted: 0, merchant_name: { contains: merchantNameLike } },
+    take: 200,
     orderBy: { id: "desc" },
   });
   for (const m of merchants) {
@@ -261,8 +284,8 @@ function printRun(r: RunResult) {
 async function main() {
   const queries = process.argv.slice(2);
   if (queries.length === 0) {
-    console.error("用法: tsx scripts/test-ad-generation.ts <商家关键字1> [商家关键字2]...");
-    console.error("例:  tsx scripts/test-ad-generation.ts 'Camplify Spain' 'NASM' 'Adidas'");
+    console.error("用法: tsx scripts/test-ad-generation.ts <商家关键字 | ac:<ad_creative_id>>...");
+    console.error("例:  tsx scripts/test-ad-generation.ts 'Camplify Spain' ac:167 ac:90");
     process.exit(1);
   }
 
@@ -290,7 +313,10 @@ async function main() {
     console.log(`商家: ${q}`);
     console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
 
-    const target = await pickCampaign(q);
+    const acMatch = q.match(/^ac:(\d+)$/);
+    const target = acMatch
+      ? await pickCampaign("", BigInt(acMatch[1]))
+      : await pickCampaign(q);
     if (!target) {
       console.warn(`  × 找不到匹配的商家/广告系列：${q}`);
       continue;
