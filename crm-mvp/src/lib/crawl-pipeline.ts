@@ -1576,7 +1576,7 @@ export async function buildCrawlCache(
   //   无代理 → 80s（至少容纳 1 次 puppeteer 55s 完整流程 + 余量）
   //   注意：单 puppeteer 流程 ~55s（goto 35s + sleep/scroll/waitForSelector 共 20s），
   //         总预算必须 ≥ 单 puppeteer 流程，否则 SPA 站永远拿不到水合后的 HTML。
-  const STRATEGY_BUDGET_MS = puppeteerProxyUrl ? 130_000 : 80_000;
+  const STRATEGY_BUDGET_MS = puppeteerProxyUrl ? 160_000 : 90_000;
   const strategyStartedAt = Date.now();
 
   for (const strategy of strategies) {
@@ -1591,7 +1591,9 @@ export async function buildCrawlCache(
       //     之前 38s 经常在 page.content() 取 HTML 前就被 race 砍断（实测 SPA 站只拿到 17 字文本）
       //   HTTP 策略 22s
       const isPuppeteerStrategy = strategy.name.includes("puppeteer");
-      const SINGLE_STRATEGY_TIMEOUT_MS = isPuppeteerStrategy ? 55_000 : 22_000;
+      // Puppeteer 单策略上限：goto 35s + sleep/randomDelay ~5s + waitForSelector 8+5s
+      // + SPA hydration 等待 10s + 滚动收尾 8s + content/evaluate 1s ≈ 最坏 72s，给 75s buffer
+      const SINGLE_STRATEGY_TIMEOUT_MS = isPuppeteerStrategy ? 75_000 : 22_000;
       const result = await Promise.race([
         strategy.run(),
         new Promise<never>((_, reject) =>

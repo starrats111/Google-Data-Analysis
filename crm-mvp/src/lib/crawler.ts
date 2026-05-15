@@ -1612,6 +1612,30 @@ export async function crawlWithPuppeteerFull(url: string, timeoutMs = 30000, pro
       );
     } catch {}
 
+    // --- SPA hydration 守门：body 还空时再等最多 10s（典型 React/Vue CSR 站）---
+    //
+    // 背景：Camplify Spain 等纯 CSR 站，domcontentloaded 后 HTML 已 880KB（全是 JS bundle），
+    // 但 body innerText 仍 = 0，因为 React/Vue 还没 mount。如果直接走到 page.content() 提取，
+    // page.evaluate(document.body.innerText) 会拿 0 字，导致 pageText 仅靠 meta 兜底（17 字）。
+    //
+    // 此处只在 body 仍很短时（< 200 字）触发额外等待，普通 SSR 站不会浪费时间。
+    try {
+      const earlyBodyLen: number = await page.evaluate(() => (document.body?.innerText?.length ?? 0));
+      if (earlyBodyLen < 200) {
+        console.log(`[Crawler] body 仅 ${earlyBodyLen} 字，疑似 SPA hydration 未完成，等待最多 10s...`);
+        try {
+          await page.waitForFunction(
+            () => (document.body?.innerText?.length ?? 0) >= 200,
+            { timeout: 10000, polling: 500 },
+          );
+          const finalBodyLen: number = await page.evaluate(() => (document.body?.innerText?.length ?? 0));
+          console.log(`[Crawler] SPA hydration 完成: body=${finalBodyLen} 字`);
+        } catch {
+          console.log("[Crawler] SPA hydration 等待 10s 仍 < 200 字，继续后续流程");
+        }
+      }
+    } catch {}
+
     // --- 滚动触发懒加载图片 ---
     try {
       const totalHeight: number = await page.evaluate(() => document.body?.scrollHeight || 3000);
