@@ -757,8 +757,10 @@ function removeTagBlocks(html: string, tagName: string): string {
     if (startIdx < 0) break;
     const endIdx = result.toLowerCase().indexOf(close, startIdx);
     if (endIdx < 0) {
-      // 没找到闭合标签，截断到此
-      result = result.slice(0, startIdx);
+      // 找不到闭合标签（HTML 被切片截断或异常巨大）：
+      // 旧逻辑 result = result.slice(0, startIdx) 会丢弃所有后续内容，
+      // 导致 camplify.es 等 head 区超过 300KB 的站，整个 body 真实文字被砍掉 → htmlToText=0。
+      // 改为直接 break：剩余 HTML 完整保留，后续 `<[^>]+>` 通配剥离会处理悬空标签。
       break;
     }
     result = result.slice(0, startIdx) + " " + result.slice(endIdx + close.length);
