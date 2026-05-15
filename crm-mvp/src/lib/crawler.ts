@@ -1618,23 +1618,30 @@ export async function crawlWithPuppeteerFull(url: string, timeoutMs = 30000, pro
     // 但 body innerText 仍 = 0，因为 React/Vue 还没 mount。如果直接走到 page.content() 提取，
     // page.evaluate(document.body.innerText) 会拿 0 字，导致 pageText 仅靠 meta 兜底（17 字）。
     //
-    // 此处只在 body 仍很短时（< 200 字）触发额外等待，普通 SSR 站不会浪费时间。
+    // 此处只在 body 仍很短时（< 600 字）触发额外等待，普通 SSR 站不会浪费时间。
+    // 阈值用 600 而非 200：camplify.es 这类站初期 body innerText 可能因 noscript / 占位文字
+    // 撑到 100-300 字但 htmlToText（去 script/style/noscript 后）仍是 0，所以阈值要更高。
     try {
       const earlyBodyLen: number = await page.evaluate(() => (document.body?.innerText?.length ?? 0));
-      if (earlyBodyLen < 200) {
-        console.log(`[Crawler] body 仅 ${earlyBodyLen} 字，疑似 SPA hydration 未完成，等待最多 10s...`);
+      console.log(`[Crawler] hydration 守门 earlyBodyLen=${earlyBodyLen}`);
+      if (earlyBodyLen < 600) {
+        console.log(`[Crawler] body 仅 ${earlyBodyLen} 字，疑似 SPA hydration 未完成，等待最多 12s...`);
         try {
           await page.waitForFunction(
-            () => (document.body?.innerText?.length ?? 0) >= 200,
-            { timeout: 10000, polling: 500 },
+            () => (document.body?.innerText?.length ?? 0) >= 600,
+            { timeout: 12000, polling: 500 },
           );
           const finalBodyLen: number = await page.evaluate(() => (document.body?.innerText?.length ?? 0));
           console.log(`[Crawler] SPA hydration 完成: body=${finalBodyLen} 字`);
         } catch {
-          console.log("[Crawler] SPA hydration 等待 10s 仍 < 200 字，继续后续流程");
+          const finalBodyLen: number = await page.evaluate(() => (document.body?.innerText?.length ?? 0)).catch(() => -1);
+          const bodySnippet: string = await page.evaluate(() => (document.body?.innerText || "").slice(0, 200)).catch(() => "");
+          console.log(`[Crawler] SPA hydration 等待 12s 后仍 body=${finalBodyLen} 字，前 200 字: ${JSON.stringify(bodySnippet)}`);
         }
       }
-    } catch {}
+    } catch (err) {
+      console.warn(`[Crawler] hydration 守门异常: ${err instanceof Error ? err.message : err}`);
+    }
 
     // --- 滚动触发懒加载图片 ---
     try {
