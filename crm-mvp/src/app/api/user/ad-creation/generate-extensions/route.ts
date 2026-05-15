@@ -383,16 +383,23 @@ export async function POST(req: NextRequest) {
           (cache.crawlQualityScore === undefined && Array.isArray(cache.links) && cache.links.length < 3)
         );
 
+        // 旧脏 cache 兼容：score 是新增字段，部分历史数据评分 90 但 pageText=0
+        // （SPA 站当初被 assessCrawlQuality 漏判）→ 用 pageText 长度独立判定，不依赖 score。
+        const cachePageTextTooShort =
+          !!cache && (cache.pageText ?? "").length < 200 &&
+          (!Array.isArray(cache.semrushTitles) || cache.semrushTitles.length === 0);
+
         const forceRecrawlForSitelinks =
           (types as string[]).includes("sitelinks") && !(types as string[]).includes("core")
             ? true
             : (cache?.sitelinkCandidates?.length ?? 0) < 3 && !!cache;
 
-        if (!cache || !cache.crawledAt || cache.crawlFailed || cacheNeedsRefreshForPromo || cacheLowQuality || cacheHasEmptyLinks || forceRecrawlForSitelinks) {
+        if (!cache || !cache.crawledAt || cache.crawlFailed || cacheNeedsRefreshForPromo || cacheLowQuality || cacheHasEmptyLinks || cachePageTextTooShort || forceRecrawlForSitelinks) {
           const reason = !cache || !cache.crawledAt ? '为空'
             : cache.crawlFailed ? '上次失败'
             : cacheLowQuality ? `质量低（score=${cache.crawlQualityScore}, issues=[${cache.crawlQualityIssues?.join(",")}]）`
             : cacheHasEmptyLinks ? 'links 为空（旧缓存命中 splash 页）'
+            : cachePageTextTooShort ? `pageText 过短 (${(cache.pageText ?? "").length}<200) 且无 SemRush，旧脏 cache 重爬`
             : forceRecrawlForSitelinks ? `用户点重新爬取 or sitelinkCandidates(${cache?.sitelinkCandidates?.length ?? 0})<3`
             : '缓存促销无有效折扣，重爬';
           console.log(`[Extensions] crawl_cache ${reason}，重新爬取... forcePuppeteer=${cacheNeedsRefreshForPromo}`);

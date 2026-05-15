@@ -2369,6 +2369,26 @@ export function assessCrawlQuality(result: CrawlResult): {
   // 内容质量
   if (!result.html || result.html.length < 3000) { score -= 15; issues.push("thin_content"); }
 
+  // SPA 站点反作弊：HTML 字节数可能 100k+，但去标签后可见文字接近 0（React/Vue 占位骨架）。
+  // 用一次轻量正则估算 body 可见文字长度（去 head/script/style/标签），低于阈值视为内容空。
+  //   < 300 字符 → -30 分（基本不可用，需重爬）
+  //   < 1000 字符 → -15 分（疑似首屏未水合，下游 AI 文案极易翻车）
+  // 评分系统底层不要持有"曾经修过 30 万字节 HTML 但 0 文字"的脏数据被判 90 分的盲点。
+  if (result.html) {
+    const bodyTextLen = (() => {
+      let t = result.html;
+      t = t.replace(/<head[\s\S]*?<\/head>/i, "");
+      t = t.replace(/<script[\s\S]*?<\/script>/gi, "");
+      t = t.replace(/<style[\s\S]*?<\/style>/gi, "");
+      t = t.replace(/<svg[\s\S]*?<\/svg>/gi, "");
+      t = t.replace(/<[^>]+>/g, " ");
+      t = t.replace(/\s+/g, " ").trim();
+      return t.length;
+    })();
+    if (bodyTextLen < 300) { score -= 30; issues.push("empty_body_text"); }
+    else if (bodyTextLen < 1000) { score -= 15; issues.push("thin_body_text"); }
+  }
+
   // Splash 页面强信号：无链接 + 图片文件名含 splash
   if (result.links.length === 0 && result.images.some(i => /splash/i.test(i))) {
     score -= 20; issues.push("splash_page");
