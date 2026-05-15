@@ -1511,15 +1511,21 @@ export async function buildCrawlCache(
 
   // Puppeteer 爬取辅助：带 HTTP 代理（内部代理失败时自动降级直连）
   // 单次超时从 35s 缩短至 20s，减少策略瀑布总耗时
+  // Puppeteer page.goto 超时：35s。
+  // 之前 20s 对 Next.js/React SPA 站不够：camplify.es 这类站 domcontentloaded 本身 20-25s 才完成，
+  // goto 20s 后被 chrome 强制超时 → catch 吞掉错误，但 DOM 实际尚未水合，
+  // 后续 sleep(3s) + scroll + page.content() 取到的 HTML 文字几乎为空（实测 17 字符）。
+  // 35s 留足水合余量，再叠加外层 strategy race 50s 兜底，整体能拿到 4000+ 字真实文本。
+  const PUPPETEER_INNER_TIMEOUT = 35_000;
   const runPuppeteer = async (url: string): Promise<CrawlResultType> => {
-    const puppeteerHtml = await crawlPageWithPuppeteer(url, 20000, puppeteerProxyUrl ?? undefined);
+    const puppeteerHtml = await crawlPageWithPuppeteer(url, PUPPETEER_INNER_TIMEOUT, puppeteerProxyUrl ?? undefined);
     if (!puppeteerHtml) throw new Error("Puppeteer 返回空 HTML");
     const { links, images } = extractLinksAndImages(puppeteerHtml, url);
     return { html: puppeteerHtml.slice(0, 150000), links, images, method: "puppeteer" };
   };
   // Puppeteer 直连（不走代理，作为最终兜底）
   const runPuppeteerDirect = async (url: string): Promise<CrawlResultType> => {
-    const puppeteerHtml = await crawlPageWithPuppeteer(url, 20000);
+    const puppeteerHtml = await crawlPageWithPuppeteer(url, PUPPETEER_INNER_TIMEOUT);
     if (!puppeteerHtml) throw new Error("Puppeteer 直连返回空 HTML");
     const { links, images } = extractLinksAndImages(puppeteerHtml, url);
     return { html: puppeteerHtml.slice(0, 150000), links, images, method: "puppeteer" };
@@ -1560,8 +1566,12 @@ export async function buildCrawlCache(
   let crawlResult: CrawlResultType = { html: "", links: [], images: [], method: "failed", error: "未配置商家 URL" };
   let crawlQuality = { score: 0, tier: "failed" as const, issues: ["no_url"] };
 
-  // 整体爬取时间预算：有代理时给 Puppeteer 足够时间（DataDome 站点需 35s+），无代理快速退出
-  const STRATEGY_BUDGET_MS = puppeteerProxyUrl ? 110_000 : 50_000;
+  // 整体爬取时间预算：
+  //   有代理 → 130s（最多容纳 2 次 puppeteer 完整流程 + HTTP 兜底）
+  //   无代理 → 80s（至少容纳 1 次 puppeteer 55s 完整流程 + 余量）
+  //   注意：单 puppeteer 流程 ~55s（goto 35s + sleep/scroll/waitForSelector 共 20s），
+  //         总预算必须 ≥ 单 puppeteer 流程，否则 SPA 站永远拿不到水合后的 HTML。
+  const STRATEGY_BUDGET_MS = puppeteerProxyUrl ? 130_000 : 80_000;
   const strategyStartedAt = Date.now();
 
   for (const strategy of strategies) {
@@ -1571,9 +1581,12 @@ export async function buildCrawlCache(
       break;
     }
     try {
-      // 单策略超时：Puppeteer 策略给 38s（DataDome/WAF 站点需要更长时间），HTTP 策略 22s
+      // 单策略超时：
+      //   Puppeteer 策略给 55s —— page.goto 35s + sleep(3s) + scroll + waitForSelector + content
+      //     之前 38s 经常在 page.content() 取 HTML 前就被 race 砍断（实测 SPA 站只拿到 17 字文本）
+      //   HTTP 策略 22s
       const isPuppeteerStrategy = strategy.name.includes("puppeteer");
-      const SINGLE_STRATEGY_TIMEOUT_MS = isPuppeteerStrategy ? 38_000 : 22_000;
+      const SINGLE_STRATEGY_TIMEOUT_MS = isPuppeteerStrategy ? 55_000 : 22_000;
       const result = await Promise.race([
         strategy.run(),
         new Promise<never>((_, reject) =>
