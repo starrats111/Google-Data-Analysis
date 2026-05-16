@@ -1,12 +1,15 @@
 /**
- * D-004 「今日广告」Tab 数据接口
+ * D-004 「今日广告」Tab 数据接口（D-008 F-13/F-14 兜底升级）
  *
  * GET /api/user/atc/today-ads
  *
- * 数据流（设计方案.md §四·D-004 §5）：
+ * 数据流（设计方案.md §四·D-004 §5 + §四·D-008 §4）：
  *   notifications (type='ad', 今日 CST) → 解析 metadata
  *   → 关联 user_atc_watchlist 补 advertiser_name
- *   → metadata.domain → 用根域名严格匹配 user_merchants（F-4）
+ *   → D-008 F-13：metadata.domain 优先；空时从 atc_advertiser_domain_snapshot.domains_json 取
+ *                 全部 qualifying domain 兜底（has_long_running_creative=true 优先排序）
+ *   → D-008 F-14：matched_merchant 用 domains 列表全部尝试根域名匹配 user_merchants，
+ *                 第一个命中即返回；status=available > claimed/paused 优先
  *   → user_merchants.connection_campaign_links → 过滤只保留 current_user 的 conn_id（F-15）
  *   → JOIN platform_connections 拿 account_name
  *
@@ -16,13 +19,12 @@
  *     items: [
  *       {
  *         notification_id, advertiser_id, advertiser_name, region, days,
- *         creative_id, domain, atc_url,
- *         matched_merchant: null | {
- *           id, merchant_name, merchant_id, platform, merchant_url, status,
- *           policy_status, policy_category_code, supported_regions,
- *           campaign_link, tracking_link,
- *           connection_accounts: [{ id, account_name, platform, link }]
- *         }
+ *         creative_id,
+ *         domain: string | null,              // 第一个 domain（保持向后兼容）
+ *         domains: string[],                  // D-008 F-13/F-15：全部 domain（最多 5 个）
+ *         domain_source: 'meta'|'snapshot'|null, // D-008 F-13/D：UI 区分来源
+ *         atc_url,
+ *         matched_merchant: null | { ... 同 D-004 结构 }
  *       }
  *     ]
  *   }
@@ -138,9 +140,11 @@ export const GET = withUser(async (_req: NextRequest, { user }) => {
     creative_id: string;
     region: string;
     days: number;
-    domain: string | null;
+    /** metadata 里的 domain（可能 null）；D-008 F-13 后域名展示走下面 enrichedDomains */
+    metaDomain: string | null;
     atc_url: string;
-    rootDomain: string | null;
+    /** metadata.domain 的根域名 */
+    metaRootDomain: string | null;
     created_at: string;
     title: string;
   };
@@ -152,16 +156,16 @@ export const GET = withUser(async (_req: NextRequest, { user }) => {
     const advId = String(meta.advertiser_id ?? "");
     const creativeId = String(meta.creative_id ?? "");
     if (!advId || !creativeId) continue;
-    const domain = meta.domain ? String(meta.domain) : null;
+    const metaDomain = meta.domain ? String(meta.domain) : null;
     parsed.push({
       notification_id: n.id.toString(),
       advertiser_id: advId,
       creative_id: creativeId,
       region: String(meta.region ?? "US"),
       days: typeof meta.days === "number" ? meta.days : 0,
-      domain,
+      metaDomain,
       atc_url: String(meta.atc_url ?? ""),
-      rootDomain: extractRootDomain(domain),
+      metaRootDomain: extractRootDomain(metaDomain),
       created_at: n.created_at.toISOString(),
       title: n.title,
     });
@@ -184,6 +188,51 @@ export const GET = withUser(async (_req: NextRequest, { user }) => {
   for (const w of watchlists) {
     advNameMap.set(`${w.advertiser_id}|${w.region}`, w.advertiser_name ?? "");
     if (!advNameMap.has(w.advertiser_id)) advNameMap.set(w.advertiser_id, w.advertiser_name ?? "");
+  }
+
+  // ─── 2.5 D-008 F-13：拉 atc_advertiser_domain_snapshot 兜底 domain ───
+  // 收集 (advertiser_id, region) 二元组，一次性查所有快照
+  const advRegionPairs = Array.from(
+    new Set(parsed.map((p) => `${p.advertiser_id}|${p.region}`))
+  ).map((s) => {
+    const [advertiser_id, region] = s.split("|");
+    return { advertiser_id, region };
+  });
+  const advSnapshots = advRegionPairs.length > 0
+    ? await prisma.atc_advertiser_domain_snapshot.findMany({
+        where: {
+          OR: advRegionPairs.map((p) => ({
+            advertiser_id: p.advertiser_id,
+            region: p.region,
+          })),
+        },
+        select: {
+          advertiser_id: true,
+          region: true,
+          domains_json: true,
+          qualifying_domain_count: true,
+        },
+      })
+    : [];
+
+  // advertiser_id|region → 兜底 domain 列表（按 has_long_running_creative=true 优先 + creative_count desc 排序）
+  type DomainStat = { domain: string; creative_count?: number; has_long_running_creative?: boolean };
+  const advSnapshotDomains = new Map<string, string[]>();
+  for (const s of advSnapshots) {
+    const list = Array.isArray(s.domains_json) ? (s.domains_json as DomainStat[]) : [];
+    const sorted = list
+      .filter((d) => d && typeof d.domain === "string" && d.domain.length > 0)
+      .sort((a, b) => {
+        const aQ = a.has_long_running_creative ? 1 : 0;
+        const bQ = b.has_long_running_creative ? 1 : 0;
+        if (aQ !== bQ) return bQ - aQ; // qualifying 优先
+        return (b.creative_count ?? 0) - (a.creative_count ?? 0); // 再按创意数 desc
+      })
+      .map((d) => d.domain.toLowerCase())
+      .slice(0, 5); // 最多 5 个 domain（前端 chip "+2" 形式展开）
+    if (sorted.length > 0) {
+      advSnapshotDomains.set(`${s.advertiser_id}|${s.region}`, sorted);
+    }
   }
 
   // ─── 3. 拉当前用户所有 user_merchants（用于根域名严格匹配 + connection_campaign_links） ───
@@ -231,26 +280,62 @@ export const GET = withUser(async (_req: NextRequest, { user }) => {
   }
 
   // ─── 4&5. 解析涉及到的 platform_connections（F-15 跨用户安全已经由 helper 保证） ───
-  // 只对真正 matched 到的 merchants 拉 connection map（避免无关 merchant 的 conn 也被加载）
+  // D-008 F-14：matched_merchant 用 multi-domain 列表全部尝试根域名匹配 user_merchants
+  //
+  // 每条 parsed 的候选 domain 池 = metaDomain 优先 + advSnapshot 兜底（去重，最多 5 个）
+  // 匹配优先级：候选 domain 顺序（metaDomain 优先于 snapshot）→ user_merchants STATUS_PRIORITY
+  function buildCandidateDomains(p: ParsedNotif): { domains: string[]; source: "meta" | "snapshot" | null } {
+    const list: string[] = [];
+    let source: "meta" | "snapshot" | null = null;
+    if (p.metaDomain) {
+      const root = extractRootDomain(p.metaDomain);
+      if (root) {
+        list.push(root.toLowerCase());
+        source = "meta";
+      }
+    }
+    const fb = advSnapshotDomains.get(`${p.advertiser_id}|${p.region}`) ?? [];
+    for (const d of fb) {
+      const root = extractRootDomain(d);
+      if (root && !list.includes(root.toLowerCase())) {
+        list.push(root.toLowerCase());
+        if (source === null) source = "snapshot";
+      }
+    }
+    return { domains: list, source };
+  }
+
+  // 先算每条 parsed 的候选 domains（用于后续 matched_merchant + UI 展示）
+  const parsedWithDomains = parsed.map((p) => {
+    const { domains, source } = buildCandidateDomains(p);
+    return { p, domains, source };
+  });
+
+  // 收集所有 matched 到的 merchants 用于一次性 loadConnectionAccountMap
   const matchedMerchants: typeof allMerchants = [];
   const matchedSet = new Set<string>();
-  for (const p of parsed) {
-    if (!p.rootDomain) continue;
-    const m = merchantByRoot.get(p.rootDomain);
-    if (m && !matchedSet.has(m.id.toString())) {
-      matchedMerchants.push(m);
-      matchedSet.add(m.id.toString());
+  for (const item of parsedWithDomains) {
+    for (const root of item.domains) {
+      const m = merchantByRoot.get(root);
+      if (m && !matchedSet.has(m.id.toString())) {
+        matchedMerchants.push(m);
+        matchedSet.add(m.id.toString());
+        break; // 第一个命中即可
+      }
     }
   }
   const connAccountMap = await loadConnectionAccountMap(matchedMerchants, userId);
 
   // ─── 6. 组装 items ───
-  const items = parsed.map((p) => {
+  const items = parsedWithDomains.map(({ p, domains, source }) => {
     const advName = advNameMap.get(`${p.advertiser_id}|${p.region}`) || advNameMap.get(p.advertiser_id) || null;
     let matched: ReturnType<typeof formatMerchant> | null = null;
-    if (p.rootDomain) {
-      const m = merchantByRoot.get(p.rootDomain);
-      if (m) matched = formatMerchant(m, connAccountMap);
+    for (const root of domains) {
+      const m = merchantByRoot.get(root);
+      if (m) {
+        matched = formatMerchant(m, connAccountMap);
+        break; // 第一个命中即可（domains 已按 metaDomain 优先 → snapshot qualifying 排序）
+      }
     }
     return {
       notification_id: p.notification_id,
@@ -259,7 +344,12 @@ export const GET = withUser(async (_req: NextRequest, { user }) => {
       creative_id: p.creative_id,
       region: p.region,
       days: p.days,
-      domain: p.domain,
+      // 向后兼容：domain 字段保留，取第一个候选
+      domain: domains[0] ?? p.metaDomain ?? null,
+      // D-008 F-13/F-15：全部候选 domain（前端 chip 多 domain 展示）
+      domains,
+      // D-008 F-13/D：UI 区分来源（meta=metadata.domain；snapshot=兜底；null=都没有）
+      domain_source: source,
       atc_url: p.atc_url,
       title: p.title,
       created_at: p.created_at,

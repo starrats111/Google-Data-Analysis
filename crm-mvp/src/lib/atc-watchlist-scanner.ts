@@ -92,6 +92,30 @@ async function processOneWatchlist(
       return { alertsCreated: 0 };
     }
 
+    // D-008 F-17=C：scanner 写库前从 atc_advertiser_domain_snapshot 拿 fallback domain 列表
+    // SerpApi advertiser_id 查询不返回 target_domain，导致 ad.domain 大量空（实测 38.74%）；
+    // snapshot 表是团队共享缓存（按 advertiser_id+region 全局唯一），命中率高且不消耗额外 SerpApi quota。
+    type DomainStat = { domain: string; creative_count?: number; has_long_running_creative?: boolean };
+    let snapshotFallbackDomain: string | null = null;
+    try {
+      const snap = await prisma.atc_advertiser_domain_snapshot.findUnique({
+        where: { advertiser_id_region: { advertiser_id: watchlist.advertiser_id, region: watchlist.region } },
+        select: { domains_json: true },
+      });
+      const list = Array.isArray(snap?.domains_json) ? (snap!.domains_json as DomainStat[]) : [];
+      const sorted = list
+        .filter((d) => d && typeof d.domain === "string" && d.domain.length > 0)
+        .sort((a, b) => {
+          const aQ = a.has_long_running_creative ? 1 : 0;
+          const bQ = b.has_long_running_creative ? 1 : 0;
+          if (aQ !== bQ) return bQ - aQ;
+          return (b.creative_count ?? 0) - (a.creative_count ?? 0);
+        });
+      snapshotFallbackDomain = sorted[0]?.domain.toLowerCase() ?? null;
+    } catch {
+      // snapshot 拉取失败不影响主流程，仅丢 fallback 能力
+    }
+
     // 该用户今天已经推过的 creative_id 集合（同 user × 同 creative × 同日期不重复推）
     const todayDate = parseDateStr(todayCst);
     const alreadyAlertedToday = await prisma.user_atc_alert_log.findMany({
@@ -118,7 +142,11 @@ async function processOneWatchlist(
 
       const atcUrl = `https://adstransparency.google.com/advertiser/${watchlist.advertiser_id}/creative/${ad.creative_id}?region=${watchlist.region}`;
       const advName = adv.name || watchlist.advertiser_name || watchlist.advertiser_id;
-      const domainPart = ad.domain ? `；域名 ${ad.domain}` : "";
+      // D-008 F-17=C：metadata.domain 优先 ad.domain，其次 snapshot fallback；标 source 让下游知道来源
+      const finalDomain = ad.domain ?? snapshotFallbackDomain ?? null;
+      const domainSource: "meta" | "snapshot" | null =
+        ad.domain ? "meta" : (snapshotFallbackDomain ? "snapshot" : null);
+      const domainPart = finalDomain ? `；域名 ${finalDomain}` : "";
       const firstStr = ymdCst(ad.first_shown);
       const lastStr = ymdCst(ad.last_shown);
 
@@ -146,7 +174,8 @@ async function processOneWatchlist(
                 creative_id: ad.creative_id,
                 region: watchlist.region,
                 days,
-                domain: ad.domain ?? null,
+                domain: finalDomain,
+                domain_source: domainSource,
                 atc_url: atcUrl,
               }),
             },

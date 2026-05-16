@@ -33,23 +33,35 @@ interface AdvertiserGroup {
   ads: AtcAd[];
 }
 
-const REGIONS = [
-  { value: "US", label: "美国 (US)" },
-  { value: "GB", label: "英国 (GB)" },
-  { value: "AU", label: "澳大利亚 (AU)" },
-  { value: "CA", label: "加拿大 (CA)" },
-  { value: "DE", label: "德国 (DE)" },
-  { value: "FR", label: "法国 (FR)" },
-  { value: "IT", label: "意大利 (IT)" },
-  { value: "ES", label: "西班牙 (ES)" },
-  { value: "NL", label: "荷兰 (NL)" },
-  { value: "SE", label: "瑞典 (SE)" },
-  { value: "NO", label: "挪威 (NO)" },
-  { value: "DK", label: "丹麦 (DK)" },
-  { value: "JP", label: "日本 (JP)" },
-  { value: "KR", label: "韩国 (KR)" },
-  { value: "SG", label: "新加坡 (SG)" },
+// D-008 F-1=C：region 列表改为异步从 /api/user/atc/regions 拉（单一信源 lib/atc-regions.ts）
+// SSR fallback：仅显示 US，等 useEffect 加载后展开 26 国
+interface RegionOption {
+  value: string;
+  label: string;
+  flag?: string;
+  zhName?: string;
+}
+const REGIONS_FALLBACK: RegionOption[] = [
+  { value: "US", label: "🇺🇸 美国 (US)", flag: "🇺🇸", zhName: "美国" },
 ];
+
+// D-008 F-5：localStorage 持久化用户上次选择的 region（intelligence 入口专用 key）
+const REGION_STORAGE_KEY = "atc_intelligence_region";
+function loadStoredRegion(): string {
+  if (typeof window === "undefined") return "US";
+  try {
+    const v = window.localStorage.getItem(REGION_STORAGE_KEY);
+    return v && /^[A-Z]{2}$/.test(v) ? v : "US";
+  } catch {
+    return "US";
+  }
+}
+function saveStoredRegion(region: string) {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(REGION_STORAGE_KEY, region);
+  } catch { /* 忽略 quota / private mode 错误 */ }
+}
 
 /** 将 Unix 秒时间戳格式化为 YYYY-MM-DD */
 function fmtTs(ts?: number): string {
@@ -75,7 +87,14 @@ export default function IntelligencePage() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const [searchText, setSearchText]   = useState("");
-  const [region, setRegion]           = useState("US");
+  const [region, setRegionState]      = useState<string>(() => loadStoredRegion());
+  // D-008 F-5：包装 setRegion，每次切换同步 localStorage
+  const setRegion = (v: string) => {
+    setRegionState(v);
+    saveStoredRegion(v);
+  };
+  // D-008 F-1=C：异步加载 region 列表
+  const [regionOptions, setRegionOptions] = useState<RegionOption[]>(REGIONS_FALLBACK);
   const [loading, setLoading]         = useState(false);
   const [result, setResult]           = useState<{ advertisers: AdvertiserGroup[]; total: number } | null>(null);
   const [noKey, setNoKey]             = useState(false);
@@ -185,14 +204,25 @@ export default function IntelligencePage() {
   useEffect(() => {
     const arId = searchParams.get("advertiser_id") ?? "";
     const name = searchParams.get("name") ?? "";
-    const rgn  = (searchParams.get("region") ?? "US").toUpperCase();
+    // URL 显式指定 region 优先；否则用 localStorage（loadStoredRegion fallback US）
+    const urlRegion = (searchParams.get("region") ?? "").toUpperCase();
     if (arId) {
+      const rgn = urlRegion || loadStoredRegion();
       setSearchText(name || arId);
       setRegion(rgn);
       doSearch(new URLSearchParams({ advertiser_id: arId, region: rgn }).toString());
     }
     // C-089：初次进页面就拉一次 watchlist，决定关注按钮状态
     loadWatchlist();
+    // D-008 F-1=C：异步加载 region 选项（成功后会扩展到 26 国，失败则保留 fallback US）
+    fetch("/api/user/atc/regions")
+      .then((r) => r.json())
+      .then((res) => {
+        if (res.code === 0 && Array.isArray(res.data?.regions)) {
+          setRegionOptions(res.data.regions as RegionOption[]);
+        }
+      })
+      .catch(() => { /* 静默：失败保留 fallback US */ });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -501,7 +531,7 @@ export default function IntelligencePage() {
             prefix={<SearchOutlined style={{ color: "#bfbfbf" }} />}
             allowClear
           />
-          <Select value={region} onChange={setRegion} options={REGIONS} style={{ width: 150 }} />
+          <Select value={region} onChange={setRegion} options={regionOptions} style={{ width: 180 }} popupMatchSelectWidth={false} />
           <Button type="primary" icon={<SearchOutlined />} loading={loading} onClick={handleSearch}>搜索</Button>
         </Space>
 

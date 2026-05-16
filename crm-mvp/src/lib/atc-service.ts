@@ -161,14 +161,10 @@ function isSearchAd(format: string | undefined): boolean {
   return f === "text" || f === "text_ad" || f === "search" || !["image", "video", "html5", "display", "shopping", "app"].some((x) => f.includes(x));
 }
 
-// ─── SerpApi Region 映射（2 字母 ISO → SerpApi 数字码）───
-const REGION_CODE_MAP: Record<string, string> = {
-  US: "2840", GB: "2826", AU: "2036", CA: "2124", DE: "2276", FR: "2250",
-  IT: "2380", ES: "2724", NL: "2528", SE: "2752", NO: "2578", DK: "2208",
-  FI: "2246", PL: "2616", AT: "2040", CH: "2756", BE: "2056", IE: "2372",
-  PT: "2620", JP: "2392", SG: "2702", KR: "2410", IN: "2356", NZ: "2554",
-  BR: "2076", MX: "2484",
-};
+// ─── SerpApi Region 映射 ───
+// D-008 F-1：REGION_CODE_MAP 统一从 lib/atc-regions.ts 引入（单一信源，26 国），
+// 维护新国家只改 atc-regions.ts，前后端零额外改动
+import { REGION_CODE_MAP } from "./atc-regions";
 
 /** 将前端传入的 2 字母 ISO 地区码转为 SerpApi 数字码；若已是数字码则原样返回 */
 function toSerpApiRegion(region: string | undefined): string | undefined {

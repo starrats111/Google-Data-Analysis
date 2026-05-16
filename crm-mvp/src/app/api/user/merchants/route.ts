@@ -6,6 +6,7 @@ import prisma from "@/lib/prisma";
 import { buildDraftCampaignName } from "@/lib/campaign-naming";
 import { buildKeywordCreateManyInput } from "@/lib/ad-keyword-pipeline";
 import { loadConnectionAccountMap, buildConnectionAccounts } from "@/lib/merchant-connection";
+import { extractDomain } from "@/lib/atc-service";
 
 // 国家 → Google Ads 语言代码（创建 campaign 时自动设置）
 const COUNTRY_TO_LANG_CODE: Record<string, string> = {
@@ -193,6 +194,73 @@ async function batchActiveAdvertisers(merchants: { merchant_id: string; platform
 }
 
 /**
+ * D-008 F-7=A：批量为商家注入团队级 ATC 共享数据
+ *
+ * 数据来源 `merchant_atc_snapshots`（按 domain+region 全局共享，0 user_id 字段）。
+ * 字段语义：
+ *   - team_atc_count：团队最近一次该 domain 的真实同行广告主数（已过滤代理商/自身）
+ *   - team_atc_synced_at：团队最近一次该 domain 的查询时间
+ *   - team_atc_region：团队快照对应的 region（决定 UI 显示哪个国家的数据）
+ *
+ * 与 user_merchants.atc_advertiser_count 字段并存：
+ *   - atc_advertiser_count = "我自己查过的"
+ *   - team_atc_count = "团队查过的"（含我自己）
+ * 前端可同时显示，用灰"团队"Tag 区分。
+ *
+ * 默认 region=US（实测全员 watchlist 96.6% US；GB 占 3.5%）。
+ * 同一 domain 多 region 时优先取 US；若 merchant.supported_regions 含 GB 等其他国家可在未来扩展。
+ */
+async function enrichWithTeamAtc(
+  merchants: Array<{ id: bigint; merchant_url?: string | null }>,
+): Promise<Map<string, { count: number; syncedAt: Date; region: string }>> {
+  const result = new Map<string, { count: number; syncedAt: Date; region: string }>();
+  if (merchants.length === 0) return result;
+
+  // 1. 提取所有商家的 domain
+  const domainToMerchantIds = new Map<string, string[]>();
+  for (const m of merchants) {
+    const d = extractDomain(m.merchant_url);
+    if (!d) continue;
+    if (!domainToMerchantIds.has(d)) domainToMerchantIds.set(d, []);
+    domainToMerchantIds.get(d)!.push(m.id.toString());
+  }
+  if (domainToMerchantIds.size === 0) return result;
+
+  // 2. 一次性查 merchant_atc_snapshots：domain ∈ 提取列表 AND region=US
+  const snapshots = await prisma.merchant_atc_snapshots.findMany({
+    where: {
+      domain: { in: Array.from(domainToMerchantIds.keys()) },
+      region: "US",
+    },
+    select: {
+      domain: true,
+      region: true,
+      real_advertiser_count: true,
+      fetched_at: true,
+    },
+  });
+
+  // 3. 建 domain → snapshot 映射；按 fetched_at desc 去重（同 domain 多 region 时取最新，同 region 主键唯一）
+  const domainSnap = new Map<string, { count: number; syncedAt: Date; region: string }>();
+  for (const s of snapshots) {
+    domainSnap.set(s.domain, {
+      count: s.real_advertiser_count,
+      syncedAt: s.fetched_at,
+      region: s.region,
+    });
+  }
+
+  // 4. 翻译回 merchant.id → snapshot
+  for (const [domain, mids] of domainToMerchantIds) {
+    const snap = domainSnap.get(domain);
+    if (!snap) continue;
+    for (const mid of mids) result.set(mid, snap);
+  }
+
+  return result;
+}
+
+/**
  * GET /api/user/merchants
  *
  * tab=claimed  → "我的商家"：从 campaigns 表提取 MID，关联 user_merchants，附带广告系列状态
@@ -345,8 +413,11 @@ export const GET = withUser(async (req: NextRequest, { user }) => {
     const advMap = await batchActiveAdvertisers(pageMerchants.map((m: any) => ({ merchant_id: m.merchant_id, platform: m.platform })));
     // D-004 F-15：解析 connection_campaign_links → connection_accounts[]（只保留属于 current_user 的 conn_id）
     const connAccountMap = await loadConnectionAccountMap(pageMerchants, userId);
+    // D-008 F-7=A：注入团队级 ATC 共享数据
+    const teamAtcMap = await enrichWithTeamAtc(pageMerchants);
     const enriched = withLabels.map((m, i) => {
       const { _adStatus, _info } = pageSlice[i];
+      const teamAtc = teamAtcMap.get(m.id.toString());
       return {
         ...m,
         ad_status: _adStatus,
@@ -354,6 +425,9 @@ export const GET = withUser(async (req: NextRequest, { user }) => {
         ad_campaign_id: _info?.campaignId || null,
         active_advertisers: advMap.get(`${m.platform}:${m.merchant_id}`) || 0,
         connection_accounts: buildConnectionAccounts((m as { connection_campaign_links?: unknown }).connection_campaign_links, connAccountMap),
+        team_atc_count: teamAtc?.count ?? null,
+        team_atc_synced_at: teamAtc?.syncedAt ?? null,
+        team_atc_region: teamAtc?.region ?? null,
       };
     });
 
@@ -447,12 +521,18 @@ export const GET = withUser(async (req: NextRequest, { user }) => {
     const advMap = await batchActiveAdvertisers(merchants.map((m: any) => ({ merchant_id: m.merchant_id, platform: m.platform })));
     // D-004 F-15：解析 connection_campaign_links → connection_accounts[]
     const connAccountMapAvail = await loadConnectionAccountMap(merchants, userId);
+    // D-008 F-7=A：注入团队级 ATC 共享数据
+    const teamAtcMapAvail = await enrichWithTeamAtc(merchants);
     for (const m of withLabels) {
       m.active_advertisers = advMap.get(`${m.platform}:${m.merchant_id}`) || 0;
       (m as { connection_accounts?: unknown }).connection_accounts = buildConnectionAccounts(
         (m as { connection_campaign_links?: unknown }).connection_campaign_links,
         connAccountMapAvail,
       );
+      const teamAtc = teamAtcMapAvail.get(m.id.toString());
+      (m as { team_atc_count?: number | null }).team_atc_count = teamAtc?.count ?? null;
+      (m as { team_atc_synced_at?: Date | null }).team_atc_synced_at = teamAtc?.syncedAt ?? null;
+      (m as { team_atc_region?: string | null }).team_atc_region = teamAtc?.region ?? null;
     }
     // 仅在无用户指定排序时，推荐商家优先
     if (!sortField) {

@@ -121,6 +121,10 @@ interface TodayAdItem {
   region: string;
   days: number;
   domain: string | null;
+  // D-008 F-13/F-15：全部候选 domain（API 已按 metaDomain 优先 + qualifying domain 排序），最多 5 个
+  domains?: string[];
+  // D-008 F-13/D：domain 来源，UI 可显示 [历史] 灰 Tag 标识 snapshot 兜底
+  domain_source?: "meta" | "snapshot" | null;
   atc_url: string;
   title: string;
   created_at: string;
@@ -159,6 +163,50 @@ export default function AdvertisersPage() {
   const [todayData, setTodayData] = useState<TodayAdsResp | null>(null);
   const [todayLoading, setTodayLoading] = useState(false);
   const [claimingMerchant, setClaimingMerchant] = useState<ClaimMerchant | null>(null);
+  // D-008 F-4：今日广告 Tab 顶部国家筛选（"all" = 不过滤）
+  const [todayRegionFilter, setTodayRegionFilter] = useState<string>("all");
+  // D-008 F-1=C：异步加载 region 选项
+  const [todayRegionOptions, setTodayRegionOptions] = useState<Array<{ value: string; label: string }>>(
+    [{ value: "all", label: "全部国家" }, { value: "US", label: "🇺🇸 美国 (US)" }]
+  );
+  useEffect(() => {
+    fetch("/api/user/atc/regions")
+      .then((r) => r.json())
+      .then((res) => {
+        if (res.code === 0 && Array.isArray(res.data?.regions)) {
+          setTodayRegionOptions([
+            { value: "all", label: "全部国家" },
+            ...res.data.regions,
+          ]);
+        }
+      })
+      .catch(() => { /* 静默：失败保留 fallback */ });
+  }, []);
+
+  // 派生：根据 todayRegionFilter 过滤 items 和 stats
+  const todayFilteredData = useMemo<TodayAdsResp | null>(() => {
+    if (!todayData) return null;
+    if (todayRegionFilter === "all") return todayData;
+    const filteredItems = todayData.items.filter((it) => it.region === todayRegionFilter);
+    let matchedCount = 0, availableCount = 0, claimedOrPausedCount = 0;
+    for (const it of filteredItems) {
+      if (it.matched_merchant) {
+        matchedCount++;
+        const s = it.matched_merchant.status;
+        if (s === "available") availableCount++;
+        else if (s === "claimed" || s === "paused") claimedOrPausedCount++;
+      }
+    }
+    return {
+      stats: {
+        total: filteredItems.length,
+        matched: matchedCount,
+        available: availableCount,
+        claimed_or_paused: claimedOrPausedCount,
+      },
+      items: filteredItems,
+    };
+  }, [todayData, todayRegionFilter]);
 
   const loadToday = useCallback(async () => {
     setTodayLoading(true);
@@ -550,12 +598,39 @@ export default function AdvertisersPage() {
       render: (_: unknown, row) => row.matched_merchant?.merchant_id ?? <span style={{ color: "#bfbfbf" }}>-</span>,
     },
     {
-      title: <Tooltip title="该广告创意对应的着陆页根域名（来自 SerpApi 返回的广告 metadata.domain；部分广告不返回 domain 字段则为空）">域名</Tooltip>,
-      dataIndex: "domain",
-      width: 150,
-      render: (v: string | null) => v
-        ? <Tag color="blue" style={{ margin: 0 }}>{v}</Tag>
-        : <Tooltip title="该广告未带 domain 字段（SerpApi 不返回时）"><span style={{ color: "#bfbfbf" }}>-</span></Tooltip>,
+      title: <Tooltip title="该广告主投放的着陆页域名。 优先取该广告 metadata.domain；空时从该广告主历史合格 domain 兜底（标 [历史]）">域名</Tooltip>,
+      key: "domain",
+      width: 220,
+      render: (_: unknown, row: TodayAdItem) => {
+        // D-008 F-13/F-15：多 domain chip 展示
+        const list: string[] = Array.isArray(row.domains) && row.domains.length > 0
+          ? row.domains
+          : (row.domain ? [row.domain] : []);
+        if (list.length === 0) {
+          return (
+            <Tooltip title="该广告未带 domain 字段，且该广告主在团队历史快照中也无 qualifying domain"><span style={{ color: "#bfbfbf" }}>-</span></Tooltip>
+          );
+        }
+        const isHistory = row.domain_source === "snapshot";
+        const head = list.slice(0, 1);
+        const more = list.length - 1;
+        const tipFull = list.join(" / ");
+        return (
+          <Tooltip title={`${tipFull}${isHistory ? "（来自团队历史快照）" : ""}`}>
+            <Space size={4} wrap style={{ rowGap: 2 }}>
+              {head.map((d) => (
+                <Tag color="blue" key={d} style={{ margin: 0 }}>{d}</Tag>
+              ))}
+              {more > 0 && (
+                <Tag style={{ margin: 0, fontSize: 11 }}>+{more}</Tag>
+              )}
+              {isHistory && (
+                <Tag color="default" style={{ margin: 0, fontSize: 11, color: "#999" }}>历史</Tag>
+              )}
+            </Space>
+          </Tooltip>
+        );
+      },
     },
     {
       title: "广告主",
@@ -863,8 +938,8 @@ export default function AdvertisersPage() {
                     <Col xs={12} sm={6}>
                       <Card size="small" bodyStyle={{ padding: "10px 14px" }}>
                         <Statistic
-                          title={<span style={{ fontSize: 12 }}>今日推送</span>}
-                          value={todayData?.stats.total ?? 0}
+                          title={<span style={{ fontSize: 12 }}>今日推送{todayRegionFilter !== "all" && ` (${todayRegionFilter})`}</span>}
+                          value={todayFilteredData?.stats.total ?? 0}
                           loading={todayLoading}
                           prefix={<CalendarOutlined style={{ color: "#1677ff" }} />}
                           valueStyle={{ fontSize: 22, fontWeight: 700 }}
@@ -875,7 +950,7 @@ export default function AdvertisersPage() {
                       <Card size="small" bodyStyle={{ padding: "10px 14px" }}>
                         <Statistic
                           title={<span style={{ fontSize: 12 }}>命中商家库</span>}
-                          value={todayData?.stats.matched ?? 0}
+                          value={todayFilteredData?.stats.matched ?? 0}
                           loading={todayLoading}
                           prefix={<ShopOutlined style={{ color: "#722ed1" }} />}
                           valueStyle={{ fontSize: 22, fontWeight: 700, color: "#722ed1" }}
@@ -886,7 +961,7 @@ export default function AdvertisersPage() {
                       <Card size="small" bodyStyle={{ padding: "10px 14px" }}>
                         <Statistic
                           title={<span style={{ fontSize: 12 }}>待领取</span>}
-                          value={todayData?.stats.available ?? 0}
+                          value={todayFilteredData?.stats.available ?? 0}
                           loading={todayLoading}
                           prefix={<GiftOutlined style={{ color: "#52c41a" }} />}
                           valueStyle={{ fontSize: 22, fontWeight: 700, color: "#52c41a" }}
@@ -897,7 +972,7 @@ export default function AdvertisersPage() {
                       <Card size="small" bodyStyle={{ padding: "10px 14px" }}>
                         <Statistic
                           title={<span style={{ fontSize: 12 }}>已领取/暂停</span>}
-                          value={todayData?.stats.claimed_or_paused ?? 0}
+                          value={todayFilteredData?.stats.claimed_or_paused ?? 0}
                           loading={todayLoading}
                           prefix={<CheckOutlined style={{ color: "#fa8c16" }} />}
                           valueStyle={{ fontSize: 22, fontWeight: 700, color: "#fa8c16" }}
@@ -905,8 +980,17 @@ export default function AdvertisersPage() {
                       </Card>
                     </Col>
                   </Row>
+                  {/* D-008 F-4：今日广告 Tab 顶部国家筛选 */}
                   <div style={{ marginBottom: 12, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
                     <Button icon={<ReloadOutlined />} onClick={() => void loadToday()}>刷新</Button>
+                    <Select
+                      value={todayRegionFilter}
+                      onChange={setTodayRegionFilter}
+                      options={todayRegionOptions}
+                      style={{ width: 180 }}
+                      popupMatchSelectWidth={false}
+                      size="small"
+                    />
                     <Text type="secondary" style={{ fontSize: 12 }}>
                       <GlobalOutlined style={{ marginRight: 4 }} />
                       数据来自 ATC scanner 今日推送（CST 0:00 起）；按持续天数降序，颜色 ≥180 红 / ≥60 橙 / ≥30 绿
@@ -915,7 +999,7 @@ export default function AdvertisersPage() {
                   <Table<TodayAdItem>
                     rowKey="notification_id"
                     loading={todayLoading}
-                    dataSource={todayData?.items ?? []}
+                    dataSource={todayFilteredData?.items ?? []}
                     columns={todayCols}
                     size="small"
                     scroll={{ x: 1180 }}

@@ -64,10 +64,14 @@ interface Merchant {
   ad_status?: string; ad_campaign_name?: string; ad_campaign_id?: string;
   tracking_link?: string | null; campaign_link?: string | null;
   logo_url?: string | null;
-  // ATC 广告情报字段
+  // ATC 广告情报字段（"我自己查的"）
   atc_advertiser_count?: number | null;
   atc_last_synced_at?: string | null;
   atc_sync_status?: string;
+  // D-008 F-7=A：团队级 ATC 共享数据（merchant_atc_snapshots 全局共享）
+  team_atc_count?: number | null;
+  team_atc_synced_at?: string | null;
+  team_atc_region?: string | null;
   // D-004：API GET 返回的属于 current_user 的账号链接列表（多账号修复 BUG-1）
   connection_accounts?: ConnectionAccount[];
 }
@@ -192,6 +196,21 @@ export default function MerchantsPage() {
   const [atcPopover, setAtcPopover] = useState<Record<string, boolean>>({}); // popover 开关
   const [atcRegions, setAtcRegions] = useState<Record<string, string>>({}); // 每行选择的地区
   const [serpApiConfigured, setSerpApiConfigured] = useState<boolean | null>(null);
+  // D-008 F-1=C：异步加载 ATC region 选项（单一信源 lib/atc-regions.ts）
+  // SSR fallback：仅 US；useEffect 加载后展开 26 国
+  const [atcRegionOptions, setAtcRegionOptions] = useState<Array<{ value: string; label: string }>>(
+    [{ value: "US", label: "🇺🇸 美国 (US)" }]
+  );
+  useEffect(() => {
+    fetch("/api/user/atc/regions")
+      .then((r) => r.json())
+      .then((res) => {
+        if (res.code === 0 && Array.isArray(res.data?.regions)) {
+          setAtcRegionOptions(res.data.regions);
+        }
+      })
+      .catch(() => { /* 静默：失败保留 fallback US */ });
+  }, []);
   // C-093 / C-094.1：广告主分类（同行 vs 品牌自投），Modal 内异步反查
   type DomainDetail = {
     domain: string;
@@ -676,11 +695,16 @@ export default function MerchantsPage() {
 // __COLUMNS__
   // D-004：复制逻辑已转移到共享 MerchantNameCell 组件内部（支持多账号 Popover）
   // C-091：ATC 竞争度列 render（claimed/available 共用），抽出来避免 100 行复粘
+  // D-008 F-7=A：count fallback 链 = local（刚点） > 我自己查的（user_merchants） > 团队查的（snapshot）
   const renderAtcCompetitionCol = useCallback((_: unknown, rec: Merchant) => {
     const loading = atcLoading[rec.id];
     const local = atcLocalData[rec.id];
-    const count = local?.count ?? rec.atc_advertiser_count ?? null;
-    const status = local ? "done" : (rec.atc_sync_status ?? "idle");
+    const myCount = rec.atc_advertiser_count ?? null;
+    const teamCount = rec.team_atc_count ?? null;
+    // 数据来源优先级：local > 自己查的 > 团队查的
+    const count = local?.count ?? myCount ?? teamCount ?? null;
+    const isTeamFallback = local == null && myCount == null && teamCount != null;
+    const status = local ? "done" : (myCount != null ? "done" : (teamCount != null ? "done" : (rec.atc_sync_status ?? "idle")));
     const region = getAtcRegion(rec.id);
     const popoverOpen = atcPopover[rec.id] ?? false;
 
@@ -692,28 +716,14 @@ export default function MerchantsPage() {
     }
 
     const regionPopoverContent = (
-      <div style={{ width: 200 }}>
+      <div style={{ width: 220 }}>
         <div style={{ marginBottom: 8, fontSize: 12, color: "#666" }}>选择查询国家（仅统计搜索广告）</div>
+        {/* D-008 F-1=C：选项来自 /api/user/atc/regions（单一信源，26 国） */}
         <Select
           value={region}
           onChange={(v) => setAtcRegion(rec.id, v)}
           style={{ width: "100%", marginBottom: 10 }}
-          options={[
-            { value: "US", label: "🇺🇸 美国 (US)" },
-            { value: "GB", label: "🇬🇧 英国 (GB)" },
-            { value: "AU", label: "🇦🇺 澳大利亚 (AU)" },
-            { value: "CA", label: "🇨🇦 加拿大 (CA)" },
-            { value: "DE", label: "🇩🇪 德国 (DE)" },
-            { value: "FR", label: "🇫🇷 法国 (FR)" },
-            { value: "IT", label: "🇮🇹 意大利 (IT)" },
-            { value: "ES", label: "🇪🇸 西班牙 (ES)" },
-            { value: "NL", label: "🇳🇱 荷兰 (NL)" },
-            { value: "SE", label: "🇸🇪 瑞典 (SE)" },
-            { value: "NO", label: "🇳🇴 挪威 (NO)" },
-            { value: "DK", label: "🇩🇰 丹麦 (DK)" },
-            { value: "JP", label: "🇯🇵 日本 (JP)" },
-            { value: "SG", label: "🇸🇬 新加坡 (SG)" },
-          ]}
+          options={atcRegionOptions}
           popupMatchSelectWidth={false}
         />
         <Button type="primary" size="small" block onClick={() => triggerAtcQuery(rec, region, true)}>
@@ -725,8 +735,12 @@ export default function MerchantsPage() {
     if (status === "done" && count !== null) {
       const color = count >= 50 ? "#f5222d" : count >= 10 ? "#fa8c16" : "#52c41a";
       const label = count >= 100 ? "100+" : String(count);
-      const shownRegion = local?.region ?? "US";
+      const shownRegion = local?.region ?? rec.team_atc_region ?? "US";
       const advertisers = local?.topAdvertisers ?? [];
+      // D-008 F-8：团队 fallback 时附加灰色 Tag + Tooltip 标识来源
+      const teamSyncedAtTip = isTeamFallback && rec.team_atc_synced_at
+        ? `团队最近一次查询时间：${new Date(rec.team_atc_synced_at).toLocaleString("zh-CN", { hour12: false })}`
+        : "";
       return (
         <Space size={4}>
           <span
@@ -734,6 +748,11 @@ export default function MerchantsPage() {
             onClick={() => advertisers.length > 0 && setAtcDetailModal({ open: true, merchantName: rec.merchant_name, advertisers, region: shownRegion })}
           >{label}个</span>
           <Tag style={{ fontSize: 11, padding: "0 4px", margin: 0 }}>{shownRegion}</Tag>
+          {isTeamFallback && (
+            <Tooltip title={`${teamSyncedAtTip}；点击右侧图标可重新查询自己的最新结果`}>
+              <Tag color="default" style={{ fontSize: 11, padding: "0 4px", margin: 0, color: "#999" }}>团队</Tag>
+            </Tooltip>
+          )}
           <Tooltip title="更换国家或刷新">
             <Popover
               open={popoverOpen}
@@ -777,7 +796,7 @@ export default function MerchantsPage() {
         <Button size="small">查竞争度</Button>
       </Popover>
     );
-  }, [atcLoading, atcLocalData, serpApiConfigured, triggerAtcQuery, router, getAtcRegion, setAtcRegion, atcPopover, openAtcPopover, closeAtcPopover]);
+  }, [atcLoading, atcLocalData, serpApiConfigured, triggerAtcQuery, router, getAtcRegion, setAtcRegion, atcPopover, openAtcPopover, closeAtcPopover, atcRegionOptions]);
 
   const claimedCols = useMemo(() => [
     { title: "商家名称", dataIndex: "merchant_name", width: 240, sorter: true, sortOrder: colSortOrder("merchant_name"), render: (_: string, rec: Merchant) => <MerchantNameCell rec={rec} /> },
