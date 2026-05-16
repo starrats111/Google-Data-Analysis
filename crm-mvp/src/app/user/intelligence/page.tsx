@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import { useState, useMemo, useEffect, useRef } from "react";
 import {
@@ -10,8 +10,10 @@ import {
   FireOutlined, LoadingOutlined, StarOutlined, StarFilled,
 } from "@ant-design/icons";
 import { useRouter, useSearchParams } from "next/navigation";
+import AppPageHeader from "@/components/AppPageHeader";
+import { COLORS } from "@/styles/themeConfig";
 
-const { Title, Text } = Typography;
+const { Text } = Typography;
 
 interface AtcAd {
   format: string;
@@ -497,13 +499,13 @@ export default function IntelligencePage() {
 
   return (
     <div>
-      <Title level={4} style={{ marginBottom: 4 }}>
-        <EyeOutlined /> 广告情报
-      </Title>
-      <Text type="secondary" style={{ display: "block", marginBottom: 4 }}>
-        按广告主名称/域名搜索，查看其在 Google 全平台投放的广告创意，筛选持续投放的高价值广告。
-      </Text>
-      <Text type="secondary" style={{ display: "block", marginBottom: 16, fontSize: 12, color: "#faad14" }}>
+      <AppPageHeader
+        icon={<EyeOutlined />}
+        title="广告情报"
+        subtitle="按广告主名称/域名搜索，查看其在 Google 全平台投放的广告创意，筛选持续投放的高价值广告"
+        marginBottom={8}
+      />
+      <Text type="secondary" style={{ display: "block", marginBottom: 16, fontSize: 12, color: COLORS.warningOrange }}>
         ⚠️ 中文广告主名称（如"包新蕾"）无法通过名称直接搜索——建议先在「我的商家」页查竞争度，系统会自动记录 AR ID；或输入 AR 编号（如 AR123456789）精确查询。
       </Text>
 

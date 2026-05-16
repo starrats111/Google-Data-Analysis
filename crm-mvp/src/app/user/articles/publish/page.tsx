@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useSearchParams } from "next/navigation";
@@ -14,6 +14,7 @@ import {
 } from "@ant-design/icons";
 import { sanitizeHtml, proxifyImgSrcs } from "@/lib/sanitize";
 import PublishSiteSelect from "@/components/PublishSiteSelect";
+import AppPageHeader from "@/components/AppPageHeader";
 import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc";
 import timezone from "dayjs/plugin/timezone";
@@ -581,7 +582,7 @@ export default function ArticlePublishPage() {
   if (loadingArticle) {
     return (
       <div>
-        <Title level={4}><FileTextOutlined /> 文章发布</Title>
+        <AppPageHeader icon={<FileTextOutlined />} title="文章发布" />
         <Card style={{ textAlign: "center", padding: 48 }}>
           <Spin size="large" tip="正在加载已生成的文章...">
             <div style={{ minHeight: 200 }} />
@@ -596,7 +597,7 @@ export default function ArticlePublishPage() {
 
   return (
     <div>
-      <Title level={4}><FileTextOutlined /> {articleSlugFromUrl ? "文章发布" : "快速发布文章"}</Title>
+      <AppPageHeader icon={<FileTextOutlined />} title={articleSlugFromUrl ? "文章发布" : "快速发布文章"} />
 
       <Steps
         current={step}

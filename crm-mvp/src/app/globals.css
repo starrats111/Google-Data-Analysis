@@ -111,19 +111,29 @@ body {
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
 }
 
-/* ─── 统计卡片 ─── */
+/* ─────────────────────────────────────────────────────────────
+ * D-009 F-8 @deprecated：以下 5 套业务命名类已被共享组件替代
+ * 新代码请使用：
+ *   <SectionCard padding="md">  替代 .merchant-table-card / 默认 Card
+ *   <StatCard ... />            替代 .stat-card-hero / .func-card-*
+ *   <FilterBar>                 替代 .filter-bar
+ * 保留这些类仅为兼容老页面渐进迁移，下个迭代删除
+ * ─────────────────────────────────────────────────────────────
+ */
+
+/* @deprecated D-009 改用 <StatCard /> */
 .stat-card-hero {
   border: 1px solid #f0f0f0 !important;
 }
 
-/* ─── 功能卡片 ─── */
+/* @deprecated D-009 改用 <StatCard /> */
 .func-card-ad,
 .func-card-holiday,
 .func-card-ai {
   border: 1px solid #f0f0f0 !important;
 }
 
-/* ─── 表格卡片 ─── */
+/* @deprecated D-009 改用 <SectionCard padding="lg" /> */
 .merchant-table-card {
   border-radius: 12px !important;
 }
@@ -141,7 +151,7 @@ body {
   font-weight: 600 !important;
 }
 
-/* ─── 筛选栏 ─── */
+/* @deprecated D-009 改用 <FilterBar /> */
 .filter-bar {
   display: flex;
   align-items: center;

@@ -1,4 +1,4 @@
-/**
+﻿/**
  * C-094.6 我的广告主页面
  *
  * 3 个 Tab:
@@ -15,6 +15,7 @@ import type { ColumnsType } from "antd/es/table";
 import MerchantNameCell from "@/components/MerchantNameCell";
 import MerchantClaimModal, { type ClaimMerchant } from "@/components/MerchantClaimModal";
 import { getCountryFlag } from "@/lib/constants";
+import AppPageHeader from "@/components/AppPageHeader";
 
 const { Text } = Typography;
 
@@ -748,15 +749,12 @@ export default function AdvertisersPage() {
 
   return (
     <div style={{ padding: 16 }}>
-      <Card
-        title={<><StarFilled style={{ color: "#faad14", marginRight: 8 }} />我的广告主</>}
-        bodyStyle={{ padding: 16 }}
-        extra={
-          <Text type="secondary" style={{ fontSize: 12 }}>
-            关注同行广告主，接收持续投放 ≥ {defaultMinDays} 天的提醒；分享给团队让协作更轻松
-          </Text>
-        }
-      >
+      <AppPageHeader
+        icon={<StarFilled />}
+        title="我的广告主"
+        subtitle={`关注同行广告主，接收持续投放 ≥ ${defaultMinDays} 天的提醒；分享给团队让协作更轻松`}
+      />
+      <Card styles={{ body: { padding: 16 } }}>
         <Tabs
           activeKey={tab}
           onChange={(k) => setTab(k as "mine" | "recommended" | "discoverable" | "today")}

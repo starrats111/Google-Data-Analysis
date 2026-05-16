@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import { useState, useRef, useCallback } from "react";
 import {
@@ -7,9 +7,10 @@ import {
 } from "antd";
 import {
   CalendarOutlined, RobotOutlined,
-  ThunderboltOutlined, LoadingOutlined,
+  ThunderboltOutlined, LoadingOutlined, BulbOutlined,
 } from "@ant-design/icons";
 import { useApiWithParams, useApi } from "@/lib/swr";
+import AppPageHeader from "@/components/AppPageHeader";
 import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc";
 import timezone from "dayjs/plugin/timezone";
@@ -489,11 +490,7 @@ export default function InsightsPage() {
 
   return (
     <div>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
-        <Title level={4} style={{ margin: 0 }}>
-          AI 分析报告
-        </Title>
-      </div>
+      <AppPageHeader icon={<BulbOutlined />} title="AI 分析报告" />
 
       <AdrianCard />
 

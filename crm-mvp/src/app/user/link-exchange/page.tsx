@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import { notFound } from "next/navigation";
 import { useState, useEffect, useCallback, useRef } from "react";
@@ -12,8 +12,9 @@ import {
   SyncOutlined, ThunderboltOutlined, LinkOutlined, EditOutlined,
   CheckOutlined, CloseOutlined, ReloadOutlined, FileTextOutlined,
 } from "@ant-design/icons";
+import AppPageHeader from "@/components/AppPageHeader";
 
-const { Text, Title } = Typography;
+const { Text } = Typography;
 
 interface CampaignRow {
   campaignId: string;
@@ -332,15 +333,11 @@ export default function LinkExchangePage() {
 
   return (
     <div>
-      {/* 标题栏 */}
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
-        <Title level={4} style={{ margin: 0 }}>
-          <ThunderboltOutlined /> 换链接工作台
-        </Title>
-        <Button icon={<ReloadOutlined />} onClick={handleRefresh} loading={loading}>
-          刷新并重新验证
-        </Button>
-      </div>
+      <AppPageHeader
+        icon={<ThunderboltOutlined />}
+        title="换链接工作台"
+        extra={<Button icon={<ReloadOutlined />} onClick={handleRefresh} loading={loading}>刷新并重新验证</Button>}
+      />
 
       {/* 统计卡 */}
       <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
@@ -411,7 +408,7 @@ export default function LinkExchangePage() {
           rowKey="campaignId"
           size="small"
           loading={loading}
-          pagination={{ pageSize: 50, showTotal: (t) => `共 ${t} 条`, showSizeChanger: false }}
+          pagination={{ defaultPageSize: 50, showTotal: (t) => `共 ${t} 条`, showSizeChanger: true, pageSizeOptions: ["10", "20", "50", "100"] }}
           rowClassName={(row) => {
             if (row.matched && row.linkStatus === "invalid") return "row-invalid-link";
             if (!row.matched) return "row-unmatched";

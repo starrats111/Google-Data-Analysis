@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import { useState, useEffect, useCallback, useRef } from "react";
 import {
@@ -12,8 +12,9 @@ import {
   CloudServerOutlined, SaveOutlined, UploadOutlined, KeyOutlined,
   SyncOutlined, InboxOutlined, DatabaseOutlined,
 } from "@ant-design/icons";
+import AppPageHeader from "@/components/AppPageHeader";
 
-const { Title, Text } = Typography;
+const { Text } = Typography;
 const { Password } = Input;
 const { Dragger } = Upload;
 
@@ -720,7 +721,7 @@ export default function AdminSitesPage() {
 
   return (
     <div>
-      <Title level={4} style={{ marginBottom: 16 }}><GlobalOutlined /> 站点管理</Title>
+      <AppPageHeader icon={<GlobalOutlined />} title="站点管理" />
 
       <Tabs
         defaultActiveKey="sites"

@@ -1,11 +1,11 @@
-"use client";
+﻿"use client";
 
 import { useState, useEffect } from "react";
-import { Card, Form, Select, Switch, InputNumber, Button, Typography, App, Tooltip } from "antd";
+import { Card, Form, Select, Switch, InputNumber, Button, App, Tooltip } from "antd";
 import { DollarOutlined, SaveOutlined, InfoCircleOutlined } from "@ant-design/icons";
 import { BIDDING_STRATEGIES } from "@/lib/constants";
+import AppPageHeader from "@/components/AppPageHeader";
 
-const { Title } = Typography;
 
 interface AdSettings {
   bidding_strategy: string; ecpc_enabled: number; max_cpc: number;
@@ -43,7 +43,7 @@ export default function AdSettingsPage() {
 
   return (
     <div>
-      <Title level={4} style={{ marginBottom: 16 }}><DollarOutlined /> 广告投放设置</Title>
+      <AppPageHeader icon={<DollarOutlined />} title="广告投放设置" />
       <Card>
         {adSettings && (
           <Form form={form} layout="vertical" style={{ maxWidth: 600 }}>

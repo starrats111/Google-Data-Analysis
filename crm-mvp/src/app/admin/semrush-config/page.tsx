@@ -1,15 +1,16 @@
-"use client";
+﻿"use client";
 
 import {
   Card, Form, Input, Button, Typography, Space, Spin, Popconfirm, Alert, Descriptions, Tag, App,
 } from "antd";
 import {
   SaveOutlined, DeleteOutlined, ReloadOutlined, CheckCircleOutlined, ExclamationCircleOutlined,
-  ApiOutlined, LoadingOutlined, CloseCircleOutlined,
+  ApiOutlined, LoadingOutlined, CloseCircleOutlined, ToolOutlined,
 } from "@ant-design/icons";
 import { useEffect, useState, useCallback } from "react";
+import AppPageHeader from "@/components/AppPageHeader";
 
-const { Title, Text } = Typography;
+const { Text } = Typography;
 
 interface SemRushField {
   key: string;
@@ -109,15 +110,21 @@ export default function SemRushConfigPage() {
 
   return (
     <div>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
-        <Space>
-          <Title level={4} style={{ margin: 0 }}>SemRush 竞品分析配置</Title>
-          {hasConfig ? (
-            <Tag icon={<CheckCircleOutlined />} color="success">已配置</Tag>
-          ) : (
-            <Tag icon={<ExclamationCircleOutlined />} color="warning">未配置</Tag>
-          )}
-        </Space>
+      <AppPageHeader
+        icon={<ToolOutlined />}
+        title={
+          <Space>
+            SemRush 竞品分析配置
+            {hasConfig ? (
+              <Tag icon={<CheckCircleOutlined />} color="success">已配置</Tag>
+            ) : (
+              <Tag icon={<ExclamationCircleOutlined />} color="warning">未配置</Tag>
+            )}
+          </Space>
+        }
+        extra={null}
+      />
+      <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 16 }}>
         <Space>
           <Button icon={<ReloadOutlined />} onClick={fetchConfig}>刷新</Button>
           <Popconfirm title="确认清除所有 SemRush 配置？" onConfirm={handleClear} okText="确认" cancelText="取消">

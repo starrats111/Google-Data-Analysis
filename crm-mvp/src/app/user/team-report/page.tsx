@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import { useState, useEffect, useMemo, useCallback } from "react";
 import {
@@ -11,8 +11,9 @@ import {
 } from "@ant-design/icons";
 import type { ColumnsType } from "antd/es/table";
 import dayjs from "dayjs";
+import AppPageHeader from "@/components/AppPageHeader";
 
-const { Title, Text } = Typography;
+const { Text } = Typography;
 const { Option } = Select;
 
 // ────────── 类型定义 ──────────────────────────────────────────────────────────
@@ -298,28 +299,28 @@ export default function TeamReportPage() {
   return (
     <div style={{ padding: "16px 24px" }}>
       <Space direction="vertical" style={{ width: "100%" }} size={16}>
-        {/* 页头 */}
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8 }}>
-          <Title level={4} style={{ margin: 0 }}>
-            <BarChartOutlined style={{ marginRight: 8, color: "#1677ff" }} />
-            团队收支报表
-          </Title>
-          <Space>
-            <Select value={year} onChange={(v) => setYear(v)} style={{ width: 100 }}>
-              {yearOptions.map((y) => <Option key={y} value={y}>{y}年</Option>)}
-            </Select>
-            <Button icon={<ReloadOutlined />} onClick={fetchReport} loading={loading}>刷新</Button>
-            <Button
-              type="primary"
-              icon={<FileExcelOutlined />}
-              onClick={handleExport}
-              disabled={!report}
-              style={{ background: "#217346", borderColor: "#217346" }}
-            >
-              导出 Excel
-            </Button>
-          </Space>
-        </div>
+        <AppPageHeader
+          icon={<BarChartOutlined />}
+          title="团队收支报表"
+          marginBottom={0}
+          extra={
+            <Space>
+              <Select value={year} onChange={(v) => setYear(v)} style={{ width: 100 }}>
+                {yearOptions.map((y) => <Option key={y} value={y}>{y}年</Option>)}
+              </Select>
+              <Button icon={<ReloadOutlined />} onClick={fetchReport} loading={loading}>刷新</Button>
+              <Button
+                type="primary"
+                icon={<FileExcelOutlined />}
+                onClick={handleExport}
+                disabled={!report}
+                style={{ background: "#217346", borderColor: "#217346" }}
+              >
+                导出 Excel
+              </Button>
+            </Space>
+          }
+        />
 
         {/* 汇总卡片 */}
         {summaryStats && (

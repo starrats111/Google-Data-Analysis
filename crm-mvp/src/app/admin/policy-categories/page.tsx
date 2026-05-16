@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import { useState, useEffect, useCallback } from "react";
 import {
@@ -9,6 +9,7 @@ import {
   PlusOutlined, EditOutlined, DeleteOutlined, AuditOutlined, SyncOutlined,
 } from "@ant-design/icons";
 import { RESTRICTION_LEVELS } from "@/lib/constants";
+import AppPageHeader from "@/components/AppPageHeader";
 
 const { Text } = Typography;
 const { TextArea } = Input;
@@ -207,8 +208,9 @@ export default function PolicyCategoriesPage() {
 
   return (
     <div>
-      <Card
-        title={<><AuditOutlined /> Google Ads 政策类别管理</>}
+      <AppPageHeader
+        icon={<AuditOutlined />}
+        title="Google Ads 政策类别管理"
         extra={
           <Space>
             <Popconfirm
@@ -227,7 +229,8 @@ export default function PolicyCategoriesPage() {
             </Button>
           </Space>
         }
-      >
+      />
+      <Card>
         <div style={{ marginBottom: 12 }}>
           <Text type="secondary" style={{ fontSize: 13 }}>
             管理 Google Ads 广告政策限制类别。商家同步时会自动根据关键词和域名匹配政策类别，标记为"限制"或"禁止"。

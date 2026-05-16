@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import { useState, useEffect, useCallback, useRef } from "react";
 import {
@@ -6,9 +6,10 @@ import {
 } from "antd";
 import {
   SearchOutlined, CloudSyncOutlined, WarningOutlined, StarOutlined, DeleteOutlined, LinkOutlined,
-  UploadOutlined, InboxOutlined,
+  UploadOutlined, InboxOutlined, SafetyCertificateOutlined,
 } from "@ant-design/icons";
 import type { UploadFile } from "antd/es/upload/interface";
+import AppPageHeader from "@/components/AppPageHeader";
 
 export default function MerchantSheetPage() {
   const { message } = App.useApp();
@@ -211,6 +212,7 @@ export default function MerchantSheetPage() {
 
   return (
     <div>
+      <AppPageHeader icon={<SafetyCertificateOutlined />} title="商家黑名单与推荐" />
       {/* 共享表格配置区 */}
       <Card size="small" style={{ marginBottom: 16 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>

@@ -1,16 +1,15 @@
-"use client";
+﻿"use client";
 
-import { Tabs, Typography } from "antd";
+import { Tabs } from "antd";
 import { ApiOutlined, RobotOutlined } from "@ant-design/icons";
 import AIProvidersTab from "./ProvidersTab";
 import AIModelsTab from "./ModelsTab";
-
-const { Title } = Typography;
+import AppPageHeader from "@/components/AppPageHeader";
 
 export default function AIConfigPage() {
   return (
     <div>
-      <Title level={4} style={{ marginBottom: 16 }}>AI 配置</Title>
+      <AppPageHeader icon={<RobotOutlined />} title="AI 配置" />
       <Tabs
         defaultActiveKey="providers"
         items={[

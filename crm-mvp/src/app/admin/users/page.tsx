@@ -1,9 +1,10 @@
-"use client";
+﻿"use client";
 
 import { Table, Button, Modal, Form, Input, Select, Tag, Space, Typography, App, Popconfirm, Tooltip, Radio } from "antd";
-import { PlusOutlined, EditOutlined, DeleteOutlined, SyncOutlined, ShopOutlined, ToolOutlined } from "@ant-design/icons";
+import { PlusOutlined, EditOutlined, DeleteOutlined, SyncOutlined, ShopOutlined, ToolOutlined, UserOutlined } from "@ant-design/icons";
 import { useState, useMemo, useCallback } from "react";
 import { useApi, mutateApi } from "@/lib/swr";
+import AppPageHeader from "@/components/AppPageHeader";
 
 const PLATFORM_OPTIONS = [
   { value: "CF", label: "CF — Commission Factory" },
@@ -16,7 +17,7 @@ const PLATFORM_OPTIONS = [
   { value: "MUI", label: "MUI — Muii" },
 ];
 
-const { Title, Text } = Typography;
+const { Text } = Typography;
 
 interface User {
   id: string;
@@ -253,10 +254,11 @@ export default function UsersPage() {
 
   return (
     <div>
-      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 16 }}>
-        <Title level={4} style={{ margin: 0 }}>用户管理</Title>
-        <Button type="primary" icon={<PlusOutlined />} onClick={handleCreate}>创建用户</Button>
-      </div>
+      <AppPageHeader
+        icon={<UserOutlined />}
+        title="用户管理"
+        extra={<Button type="primary" icon={<PlusOutlined />} onClick={handleCreate}>创建用户</Button>}
+      />
       <Table
         columns={columns}
         dataSource={users}

@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import { useState, useEffect, useCallback, useMemo } from "react";
 import dayjs, { Dayjs } from "dayjs";
@@ -10,6 +10,7 @@ import {
 } from "@ant-design/icons";
 import { sanitizeHtml, proxifyImgSrcs } from "@/lib/sanitize";
 import PublishSiteSelect from "@/components/PublishSiteSelect";
+import AppPageHeader from "@/components/AppPageHeader";
 
 const { Title, Text, Paragraph } = Typography;
 
@@ -235,7 +236,7 @@ export default function ArticlesPage() {
 
   return (
     <div>
-      <Title level={4}><UnorderedListOutlined /> 文章管理</Title>
+      <AppPageHeader icon={<UnorderedListOutlined />} title="文章管理" />
 
       <Card>
         <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 16 }}>

@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import { useState, useMemo, useCallback, useEffect, useRef } from "react";
 import { globalMutate } from "@/lib/swr";
@@ -10,7 +10,9 @@ import {
   RiseOutlined, FallOutlined, SyncOutlined,
   CloudDownloadOutlined, EditOutlined, SearchOutlined,
   PlayCircleOutlined, PauseCircleOutlined, RedoOutlined, PlusOutlined,
+  TableOutlined,
 } from "@ant-design/icons";
+import AppPageHeader from "@/components/AppPageHeader";
 import type { ColumnsType } from "antd/es/table";
 import { PLATFORMS } from "@/lib/constants";
 import dayjs, { Dayjs } from "dayjs";
@@ -581,6 +583,7 @@ export default function DataCenterPage() {
 
   return (
     <div>
+      <AppPageHeader icon={<TableOutlined />} title="数据中心" subtitle="按 MCC / 平台维度查看广告系列实时数据" />
       {/* ========== 顶部筛选栏 ========== */}
       <Card size="small" style={{ marginBottom: 12 }}>
         <Row gutter={[8, 8]} align="middle">

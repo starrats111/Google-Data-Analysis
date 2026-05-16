@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import { useState, useEffect, useMemo } from "react";
 import {
@@ -16,8 +16,9 @@ import {
   PLATFORMS,
 } from "@/lib/constants";
 import PublishSiteSelect, { type PublishSite } from "@/components/PublishSiteSelect";
+import AppPageHeader from "@/components/AppPageHeader";
 
-const { Title, Text } = Typography;
+const { Text } = Typography;
 
 // ==================== 平台连接 Tab ====================
 function PlatformConnectionsTab() {
@@ -349,7 +350,7 @@ function MccAccountsTab() {
         <Text>Google Ads MCC 账户管理</Text>
         <Button icon={<PlusOutlined />} onClick={() => { setEditItem(null); form.resetFields(); setJsonFileName(""); setModalOpen(true); }}>添加 MCC</Button>
       </div>
-      <Table columns={columns} dataSource={accounts} rowKey="id" size="small" pagination={{ pageSize: 10, showTotal: (t) => `共 ${t} 条` }} />
+      <Table columns={columns} dataSource={accounts} rowKey="id" size="small" pagination={{ defaultPageSize: 10, showTotal: (t) => `共 ${t} 条`, showSizeChanger: true, pageSizeOptions: ["10", "20", "50", "100"] }} />
       <Modal title={editItem ? "编辑 MCC" : "添加 MCC"} open={modalOpen} onOk={handleSubmit} onCancel={() => setModalOpen(false)}>
         <Form form={form} layout="vertical">
           <Form.Item name="mcc_id" label="MCC ID" rules={[{ required: true }]}>
@@ -855,7 +856,7 @@ export default function SettingsPage() {
 
   return (
     <div>
-      <Title level={4} style={{ marginBottom: 16 }}><SettingOutlined /> 个人设置</Title>
+      <AppPageHeader icon={<SettingOutlined />} title="个人设置" />
       <Tabs
         activeKey={activeTab}
         onChange={setActiveTab}

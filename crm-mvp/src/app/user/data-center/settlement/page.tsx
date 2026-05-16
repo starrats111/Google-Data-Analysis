@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import { useState, useCallback, useEffect, useRef } from "react";
 import {
@@ -14,8 +14,9 @@ import { COLORS } from "@/styles/themeConfig";
 import { PLATFORMS } from "@/lib/constants";
 import MonthlySettleProgressCard from "@/components/data-center/MonthlySettleProgressCard";
 import dayjs, { Dayjs } from "dayjs";
+import AppPageHeader from "@/components/AppPageHeader";
 
-const { Title, Text } = Typography;
+const { Text } = Typography;
 const { RangePicker } = DatePicker;
 
 interface Summary {
@@ -292,14 +293,13 @@ export default function SettlementPage() {
 
   return (
     <div>
+      <AppPageHeader
+        icon={<AccountBookOutlined />}
+        title={<>结算查询{isLeader && <Tag color="blue" style={{ marginLeft: 8 }}>组长视图</Tag>}</>}
+      />
       {/* 筛选栏 */}
       <Card size="small" style={{ marginBottom: 12 }}>
         <Row gutter={[8, 8]} align="middle">
-          <Col>
-            <Title level={5} style={{ margin: 0 }}>
-              <AccountBookOutlined /> 结算查询{isLeader && <Tag color="blue" style={{ marginLeft: 8 }}>组长视图</Tag>}
-            </Title>
-          </Col>
           <Col flex="auto">
             <Space size={8} wrap>
               <Segmented

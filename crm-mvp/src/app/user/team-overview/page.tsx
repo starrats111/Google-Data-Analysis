@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import {
@@ -13,12 +13,13 @@ import dayjs, { Dayjs } from "dayjs";
 import utc from "dayjs/plugin/utc";
 import timezone from "dayjs/plugin/timezone";
 import MemberDataModal from "@/components/team/MemberDataModal";
+import AppPageHeader from "@/components/AppPageHeader";
 
 dayjs.extend(utc);
 dayjs.extend(timezone);
 const TZ = "Asia/Shanghai";
 
-const { Title, Text } = Typography;
+const { Text } = Typography;
 const { RangePicker } = DatePicker;
 
 /** 自动刷新间隔（毫秒）—— 30 秒保证数据接近实时 */
@@ -270,10 +271,7 @@ export default function TeamOverviewPage() {
 
   return (
     <div>
-      <Title level={3}>
-        <TeamOutlined style={{ marginRight: 12 }} />
-        小组总览
-      </Title>
+      <AppPageHeader icon={<TeamOutlined />} title="小组总览" />
 
       {/* 筛选栏 */}
       <Card size="small" style={{ marginBottom: 16 }}>

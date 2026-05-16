@@ -1,16 +1,16 @@
-"use client";
+﻿"use client";
 
 import { useState, useMemo, useCallback } from "react";
 import {
-  Table, Button, Modal, Form, Input, Select, Tag, Space, Typography, App, Popconfirm,
+  Table, Button, Modal, Form, Input, Select, Tag, Space, App, Popconfirm,
 } from "antd";
 import {
   PlusOutlined, EditOutlined, DeleteOutlined, EyeOutlined, TeamOutlined,
 } from "@ant-design/icons";
 import { useApi, mutateApi } from "@/lib/swr";
 import MemberDataModal from "@/components/team/MemberDataModal";
+import AppPageHeader from "@/components/AppPageHeader";
 
-const { Title } = Typography;
 
 interface Member {
   id: string;
@@ -109,19 +109,18 @@ export default function TeamMembersPage() {
 
   return (
     <div>
-      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 16 }}>
-        <Title level={4} style={{ margin: 0 }}>
-          <TeamOutlined style={{ marginRight: 8 }} />员工管理
-        </Title>
-        <Button type="primary" icon={<PlusOutlined />} onClick={handleCreate}>添加组员</Button>
-      </div>
+      <AppPageHeader
+        icon={<TeamOutlined />}
+        title="员工管理"
+        extra={<Button type="primary" icon={<PlusOutlined />} onClick={handleCreate}>添加组员</Button>}
+      />
 
       <Table
         columns={columns}
         dataSource={members}
         rowKey="id"
         loading={isLoading}
-        pagination={{ pageSize: 20, showTotal: (t) => `共 ${t} 条` }}
+        pagination={{ defaultPageSize: 20, showTotal: (t) => `共 ${t} 条`, showSizeChanger: true, pageSizeOptions: ["10", "20", "50", "100"] }}
       />
 
       {/* 创建/编辑弹窗 */}

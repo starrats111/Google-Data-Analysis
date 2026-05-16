@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import {
   Table, Button, Modal, Form, Input, Space, Typography,
@@ -10,8 +10,9 @@ import {
   GlobalOutlined,
 } from "@ant-design/icons";
 import { useEffect, useState, useCallback } from "react";
+import AppPageHeader from "@/components/AppPageHeader";
 
-const { Title, Text } = Typography;
+const { Text } = Typography;
 const { TextArea, Password } = Input;
 
 // ─── 配置分组定义（与 system-config.ts 的 CONFIG_GROUPS 保持一致）───
@@ -384,9 +385,7 @@ export default function SystemConfigPage() {
 
   return (
     <div>
-      <Title level={4} style={{ marginBottom: 24 }}>
-        <SettingOutlined /> 系统配置
-      </Title>
+      <AppPageHeader icon={<SettingOutlined />} title="系统配置" />
 
       <Spin spinning={loading}>
         <Tabs

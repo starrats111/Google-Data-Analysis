@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 import { useState, useCallback, useMemo, useEffect } from "react";
 import { Card, Row, Col, Table, Input, Select, Button, Space, Tag, Modal, Form, Typography, Popconfirm, Popover, Switch, InputNumber, Tabs, App, Tooltip, Radio, DatePicker, Slider, Progress, Alert } from "antd";
 import { ShopOutlined, SearchOutlined, CheckOutlined, DollarOutlined, CalendarOutlined, SaveOutlined, SyncOutlined, WarningOutlined, StarOutlined, ReloadOutlined, RobotOutlined, DeleteOutlined, CloseCircleOutlined, ThunderboltOutlined } from "@ant-design/icons";
@@ -6,6 +6,7 @@ import { PLATFORMS, BIDDING_STRATEGIES, ALL_COUNTRIES } from "@/lib/constants";
 // D-004：使用共享 MerchantNameCell（支持多账号 Popover 修复 BUG-1）
 import MerchantNameCell from "@/components/MerchantNameCell";
 import type { ConnectionAccount } from "@/components/MerchantNameCell";
+import AppPageHeader from "@/components/AppPageHeader";
 import { useApiWithParams, useStaleApi, useApi, mutateApi, refreshApi } from "@/lib/swr";
 import { useRouter, useSearchParams } from "next/navigation";
 import dayjs, { type Dayjs } from "dayjs";
@@ -905,6 +906,7 @@ export default function MerchantsPage() {
     },
   ], []);
   return (<div style={{ maxWidth: 1600, margin: "0 auto" }}>
+    <AppPageHeader icon={<ShopOutlined />} title="我的商家" subtitle="关注、领取、配置广告投放，所有商家运营围绕这一页" />
     <Form form={adForm} component={false} layout="vertical" size="small">
       <Row gutter={[20, 20]} align="stretch" style={{ marginBottom: 20 }}>
         <Col xs={24} sm={12} md={6}><Card size="small" className="stat-card-hero" title={<><ShopOutlined style={{ color: "#999", marginRight: 6 }} />我的商家</>} style={{ height: "100%" }}>

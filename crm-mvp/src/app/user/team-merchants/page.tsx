@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 import { useState, useCallback, useMemo, useEffect } from "react";
 import {
   Card, Table, Input, Select, Button, Space, Tag, Modal, Typography, Tooltip, App,
@@ -8,6 +8,8 @@ import {
 } from "@ant-design/icons";
 import { PLATFORMS } from "@/lib/constants";
 import { useApiWithParams } from "@/lib/swr";
+import AppPageHeader from "@/components/AppPageHeader";
+import { COLORS, FONT_SIZE } from "@/styles/themeConfig";
 
 function getCurrentMonthRange() {
   const now = new Date();
@@ -261,29 +263,24 @@ export default function TeamMerchantsPage() {
 
   return (
     <div style={{ maxWidth: 1400, margin: "0 auto" }}>
-      <Card
-        title={
-          <Space>
-            <TeamOutlined style={{ color: "#1677ff" }} />
-            <span style={{ fontWeight: 700 }}>组下商家</span>
-            {total > 0 && <Tag color="blue">{total} 个商家</Tag>}
-          </Space>
-        }
+      <AppPageHeader
+        icon={<TeamOutlined />}
+        title={<Space>组下商家{total > 0 && <Tag color="blue">{total} 个商家</Tag>}</Space>}
         extra={
           <Space size={12} wrap>
-            <Space size={4} style={{ color: "#8c8c8c", fontSize: 13 }}>
+            <Space size={4} style={{ color: COLORS.textTertiary, fontSize: FONT_SIZE.md }}>
               <CalendarOutlined />
               <span>数据区间：</span>
               <Tag color="orange" style={{ margin: 0 }}>本月</Tag>
-              <span style={{ color: "#bfbfbf" }}>{getCurrentMonthRange()}</span>
+              <span style={{ color: COLORS.textDisabled }}>{getCurrentMonthRange()}</span>
             </Space>
             {lastUpdated && (
               <Tooltip title={`每 ${POLL_INTERVAL / 1000} 秒自动刷新在跑人数`}>
-                <Space size={4} style={{ color: "#8c8c8c", fontSize: 12, cursor: "default" }}>
+                <Space size={4} style={{ color: COLORS.textTertiary, fontSize: FONT_SIZE.sm, cursor: "default" }}>
                   <SyncOutlined spin={isLoading} />
                   <span>{lastUpdated.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}</span>
-                  <ClockCircleOutlined style={{ color: countdown <= 5 ? "#faad14" : "#d9d9d9" }} />
-                  <span style={{ color: countdown <= 5 ? "#faad14" : "#8c8c8c" }}>{countdown}s</span>
+                  <ClockCircleOutlined style={{ color: countdown <= 5 ? COLORS.warningOrange : "#d9d9d9" }} />
+                  <span style={{ color: countdown <= 5 ? COLORS.warningOrange : COLORS.textTertiary }}>{countdown}s</span>
                 </Space>
               </Tooltip>
             )}
@@ -292,7 +289,8 @@ export default function TeamMerchantsPage() {
             </Button>
           </Space>
         }
-      >
+      />
+      <Card styles={{ body: { padding: 16 } }}>
         <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap", alignItems: "center" }}>
           <Select
             placeholder="平台"

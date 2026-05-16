@@ -1,10 +1,11 @@
-"use client";
+﻿"use client";
 
 import { useState } from "react";
 import { Card, Input, Button, Space, List, Typography } from "antd";
 import { CalendarOutlined, GlobalOutlined, SearchOutlined } from "@ant-design/icons";
+import AppPageHeader from "@/components/AppPageHeader";
 
-const { Title, Text } = Typography;
+const { Text } = Typography;
 
 interface Holiday {
   id: string; holiday_name: string; holiday_date: string; holiday_type: string;
@@ -26,7 +27,7 @@ export default function HolidaysPage() {
 
   return (
     <div>
-      <Title level={4} style={{ marginBottom: 16 }}><CalendarOutlined /> 节日营销</Title>
+      <AppPageHeader icon={<CalendarOutlined />} title="节日营销" />
       <Card>
         <Space style={{ marginBottom: 24 }}>
           <Input

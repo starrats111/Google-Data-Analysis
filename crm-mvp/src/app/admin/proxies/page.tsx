@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import {
   Table, Button, Modal, Form, Input, Select, Tag, Space, Typography,
@@ -10,8 +10,9 @@ import {
   GlobalOutlined, CheckCircleOutlined,
 } from "@ant-design/icons";
 import { useState, useEffect, useCallback } from "react";
+import AppPageHeader from "@/components/AppPageHeader";
 
-const { Title, Text } = Typography;
+const { Text } = Typography;
 
 interface Proxy {
   id: string;
@@ -246,23 +247,24 @@ export default function ProxiesPage() {
 
   return (
     <div>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
-        <Title level={4} style={{ margin: 0 }}>
-          <GlobalOutlined /> 代理管理
-        </Title>
-        <Button
-          type="primary"
-          icon={<PlusOutlined />}
-          onClick={() => {
-            setEditProxy(null);
-            form.resetFields();
-            form.setFieldsValue({ proxyType: "http", priority: 5, status: "active" });
-            setModalOpen(true);
-          }}
-        >
-          添加代理
-        </Button>
-      </div>
+      <AppPageHeader
+        icon={<GlobalOutlined />}
+        title="代理管理"
+        extra={
+          <Button
+            type="primary"
+            icon={<PlusOutlined />}
+            onClick={() => {
+              setEditProxy(null);
+              form.resetFields();
+              form.setFieldsValue({ proxyType: "http", priority: 5, status: "active" });
+              setModalOpen(true);
+            }}
+          >
+            添加代理
+          </Button>
+        }
+      />
 
       <Table
         columns={columns}
