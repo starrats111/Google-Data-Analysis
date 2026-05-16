@@ -524,6 +524,13 @@ export async function POST(req: NextRequest) {
             target_content_network: network_display,
             target_partner_search_network: false,
           },
+          // D-015: 地理位置定位类型 = "所在地"（PRESENCE）
+          // 默认 PRESENCE_OR_INTEREST 会把"对该地区表现出兴趣"的用户也算进去，预算会被分散到非目标人群
+          // PRESENCE 仅匹配真实位于该地理位置的用户，对联盟营销 ROI 更准、更可控
+          geo_target_type_setting: {
+            positive_geo_target_type: "PRESENCE",
+            negative_geo_target_type: "PRESENCE",
+          },
           contains_eu_political_advertising: euPoliticalValue,
           ...(finalUrlSuffix ? { final_url_suffix: finalUrlSuffix } : {}),
         },
