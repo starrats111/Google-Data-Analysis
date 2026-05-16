@@ -7,14 +7,15 @@ import {
 } from "@ant-design/icons";
 import { useRouter } from "next/navigation";
 import { useLanguage } from "@/contexts/LanguageContext";
+import BrandLogo from "@/components/BrandLogo";
 
 const { Text } = Typography;
 
 /**
- * D-010：公开页（marketing）顶部 nav bar
- * - 保留品牌绿色（#0F4C35 → #1A7A50），是 fengdu-ads 品牌色
- * - 微调：减小内边距、统一字号、按钮 outline 风格更现代
- * - 高度 64px（标准 SaaS nav）
+ * D-011：公开页（marketing）顶部 nav bar
+ * - 与 app dashboard 主色统一：蓝色 brand gradient #1A7FDB → #4DA6FF（Google Ads 派）
+ * - 64px 标准 SaaS nav 高度
+ * - 共享 BrandLogo（F + 琥珀点）作品牌 mark
  */
 export default function PageHeader({ showHome = false }: { showHome?: boolean }) {
   const router = useRouter();
@@ -28,37 +29,20 @@ export default function PageHeader({ showHome = false }: { showHome?: boolean })
         display: "flex",
         justifyContent: "space-between",
         alignItems: "center",
-        background: "linear-gradient(135deg, #0F4C35 0%, #1A7A50 100%)",
-        boxShadow: "0 1px 0 rgba(255,255,255,0.05) inset, 0 2px 12px rgba(15,76,53,0.18)",
+        background: "linear-gradient(135deg, #1A7FDB 0%, #4DA6FF 100%)",
+        boxShadow: "0 1px 0 rgba(255,255,255,0.10) inset, 0 2px 12px rgba(26,127,219,0.20)",
         position: "sticky",
         top: 0,
         zIndex: 100,
       }}
     >
       <Space size={12} align="center">
-        <div
-          style={{
-            width: 36,
-            height: 36,
-            borderRadius: 10,
-            background: "rgba(255,255,255,0.15)",
-            border: "1.5px solid rgba(255,255,255,0.32)",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-          }}
-          aria-hidden="true"
-        >
-          <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
-            <path d="M3 14 L9 4 L15 14 Z" fill="white" opacity="0.92" />
-            <circle cx="9" cy="13.5" r="1.6" fill="#4ADE80" />
-          </svg>
-        </div>
+        <BrandLogo size={36} withShadow={false} />
         <div style={{ display: "flex", flexDirection: "column", lineHeight: 1.15 }}>
           <Text strong style={{ fontSize: 17, color: "#ffffff", letterSpacing: 0.4 }}>
             fengdu-ads
           </Text>
-          <Text style={{ fontSize: 11, color: "rgba(255,255,255,0.62)", letterSpacing: 0.3 }}>
+          <Text style={{ fontSize: 11, color: "rgba(255,255,255,0.72)", letterSpacing: 0.3 }}>
             {lang === "en" ? "Ad Automation CRM" : "广告自动化平台"}
           </Text>
         </div>

@@ -132,7 +132,7 @@ function TrustBadge({ children }: { children: React.ReactNode }) {
         boxShadow: MARKETING.shadowSoft,
       }}
     >
-      <CheckCircleOutlined style={{ color: MARKETING.accentGreen, fontSize: 13 }} />
+      <CheckCircleOutlined style={{ color: MARKETING.primaryDark, fontSize: 13 }} />
       {children}
     </span>
   );

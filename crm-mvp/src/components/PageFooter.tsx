@@ -4,6 +4,7 @@ import { Space } from "antd";
 import Link from "next/link";
 import { useLanguage } from "@/contexts/LanguageContext";
 import { MARKETING, MK_SPACING } from "@/styles/marketingTokens";
+import BrandLogo from "@/components/BrandLogo";
 
 const i18n = {
   en: {
@@ -76,24 +77,7 @@ export default function PageFooter() {
         {/* 品牌列 */}
         <div>
           <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
-            <div
-              style={{
-                width: 32,
-                height: 32,
-                borderRadius: 8,
-                background: "linear-gradient(135deg,#0F4C35 0%,#1A7A50 100%)",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                boxShadow: MARKETING.shadowSoft,
-              }}
-              aria-hidden="true"
-            >
-              <svg width="16" height="16" viewBox="0 0 18 18" fill="none">
-                <path d="M3 14 L9 4 L15 14 Z" fill="white" opacity="0.9" />
-                <circle cx="9" cy="13.5" r="1.5" fill="#4ADE80" />
-              </svg>
-            </div>
+            <BrandLogo size={32} />
             <span style={{ fontSize: 16, fontWeight: 700, color: MARKETING.text, letterSpacing: 0.3 }}>
               fengdu-ads
             </span>
