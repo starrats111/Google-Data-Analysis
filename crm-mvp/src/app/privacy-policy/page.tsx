@@ -1,10 +1,11 @@
 "use client";
 
-import { Typography, Space, Card, Divider } from "antd";
+import { Typography } from "antd";
 import { SafetyOutlined } from "@ant-design/icons";
 import { useLanguage } from "@/contexts/LanguageContext";
 import PageHeader from "@/components/PageHeader";
 import PageFooter from "@/components/PageFooter";
+import { MARKETING, MK_SPACING, MK_RADIUS } from "@/styles/marketingTokens";
 
 const { Title, Paragraph, Text } = Typography;
 
@@ -166,48 +167,108 @@ export default function PrivacyPolicyPage() {
   const t = i18n[lang];
 
   return (
-    <div style={{ minHeight: "100vh", background: "#fff" }}>
+    <div style={{ minHeight: "100vh", background: MARKETING.bgPage, color: MARKETING.text }}>
       <PageHeader showHome />
 
-      <div style={{ maxWidth: 800, margin: "0 auto", padding: "40px 20px 80px" }}>
-        <Title level={1} style={{ color: "#1A7FDB", textAlign: "center" }}>
-          <SafetyOutlined style={{ marginRight: 12 }} />
-          {t.pageTitle}
-        </Title>
-        <Paragraph style={{ textAlign: "center", color: "#999", marginBottom: 40 }}>
-          {t.lastUpdated}
-        </Paragraph>
+      {/* Hero */}
+      <section
+        style={{
+          background: MARKETING.bgHeroGradient,
+          padding: `${MK_SPACING.hero}px 24px ${MK_SPACING.lg}px`,
+          textAlign: "center",
+          borderBottom: `1px solid ${MARKETING.border}`,
+        }}
+      >
+        <div style={{ maxWidth: 720, margin: "0 auto" }}>
+          <div
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              justifyContent: "center",
+              width: 56,
+              height: 56,
+              borderRadius: MK_RADIUS.lg,
+              background: MARKETING.primaryLight,
+              color: MARKETING.primaryDark,
+              fontSize: 24,
+              marginBottom: 20,
+              boxShadow: MARKETING.shadowMedium,
+            }}
+          >
+            <SafetyOutlined />
+          </div>
+          <Title
+            style={{
+              fontSize: "clamp(28px, 4.5vw, 40px)",
+              fontWeight: 800,
+              color: MARKETING.text,
+              margin: "0 0 12px",
+              letterSpacing: -0.3,
+              lineHeight: 1.15,
+            }}
+          >
+            {t.pageTitle}
+          </Title>
+          <Paragraph style={{ color: MARKETING.textMuted, fontSize: 14, margin: 0 }}>
+            {t.lastUpdated}
+          </Paragraph>
+        </div>
+      </section>
 
+      <div style={{ maxWidth: 880, margin: "0 auto", padding: `${MK_SPACING.lg}px 24px ${MK_SPACING.xl}px` }}>
         {t.sections.map((s) => (
-          <Card key={s.title} style={{ borderRadius: 12, marginBottom: 24 }}>
-            <Title level={2} style={{ fontSize: 22 }}>{s.title}</Title>
-            <Paragraph style={{ fontSize: 15, lineHeight: 1.8 }}>{s.content}</Paragraph>
+          <div
+            key={s.title}
+            style={{
+              background: MARKETING.bgCard,
+              border: `1px solid ${MARKETING.border}`,
+              borderRadius: MK_RADIUS.lg,
+              padding: `${MK_SPACING.md}px ${MK_SPACING.lg}px`,
+              boxShadow: MARKETING.shadowMedium,
+              marginBottom: MK_SPACING.md,
+            }}
+          >
+            <Title level={2} style={{ fontSize: 20, fontWeight: 700, color: MARKETING.text, marginTop: 0, marginBottom: 12 }}>
+              {s.title}
+            </Title>
+            <Paragraph style={{ fontSize: 15, lineHeight: 1.8, color: MARKETING.textSub }}>{s.content}</Paragraph>
             {s.items && (
-              <ul style={{ fontSize: 15, lineHeight: 2 }}>
+              <ul style={{ fontSize: 15, lineHeight: 1.95, paddingLeft: 20, color: MARKETING.textSub }}>
                 {s.items.map((item, i) => (
-                  <li key={i}>
-                    {item.bold && <Text strong>{item.bold}</Text>}
+                  <li key={i} style={{ marginBottom: 4 }}>
+                    {item.bold && <Text strong style={{ color: MARKETING.text }}>{item.bold}</Text>}
                     {item.text}
                   </li>
                 ))}
               </ul>
             )}
             {s.contact && (
-              <Paragraph style={{ fontSize: 15 }}>
-                <Text strong>{s.contact.name}</Text>
+              <div
+                style={{
+                  marginTop: 12,
+                  padding: 14,
+                  background: MARKETING.primaryLight,
+                  borderRadius: MK_RADIUS.md,
+                  fontSize: 14.5,
+                  color: MARKETING.text,
+                  lineHeight: 1.75,
+                }}
+              >
+                <Text strong style={{ color: MARKETING.text }}>{s.contact.name}</Text>
                 <br />
                 {s.contact.addr}
                 <br />
                 {s.contact.emailLabel}
-                <a href="mailto:google-ads-api@fengdu-ads.top">google-ads-api@fengdu-ads.top</a>
-              </Paragraph>
+                <a href="mailto:connect@fengdu-ads.top" style={{ color: MARKETING.primaryDark, fontWeight: 600 }}>
+                  connect@fengdu-ads.top
+                </a>
+              </div>
             )}
-          </Card>
+          </div>
         ))}
-
-        <Divider />
-        <PageFooter />
       </div>
+
+      <PageFooter />
     </div>
   );
 }

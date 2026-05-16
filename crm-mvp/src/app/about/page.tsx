@@ -1,6 +1,6 @@
 "use client";
 
-import { Typography, Space, Card, Divider } from "antd";
+import { Typography } from "antd";
 import {
   EnvironmentOutlined,
   MailOutlined,
@@ -8,16 +8,19 @@ import {
   GlobalOutlined,
   LinkOutlined,
   DollarOutlined,
+  InfoCircleOutlined,
 } from "@ant-design/icons";
 import { useLanguage } from "@/contexts/LanguageContext";
 import PageHeader from "@/components/PageHeader";
 import PageFooter from "@/components/PageFooter";
+import { MARKETING, MK_SPACING, MK_FONT, MK_RADIUS } from "@/styles/marketingTokens";
 
 const { Title, Paragraph, Text } = Typography;
 
 const i18n = {
   en: {
     pageTitle: "About Us",
+    pageSubtitle: "Wenzhou Fengdu Advertising & Media — affiliate marketing × Google Ads automation.",
     overview: "Company Overview",
     overviewP1:
       "Wenzhou Fengdu Advertising & Media Co., Ltd. (温州丰度广告传媒有限公司) is an affiliate marketing company based in Wenzhou, Zhejiang, China. Our business model is to drive purchase-intent traffic to partner merchants' websites through Google Search and Performance Max advertising, and we earn commissions on resulting sales.",
@@ -58,26 +61,27 @@ const i18n = {
     apiP2:
       "All Google Ads data accessed through the API is used solely for our internal campaign management and reporting. We do not share, resell, or expose this data to external parties. All advertising operations comply with the Google Ads API Terms and Conditions and the Google Ads Affiliate Program Policy.",
     contactTitle: "Contact Information",
-    companyLabel: "Company Name:",
+    companyLabel: "Company Name",
     companyName: "Wenzhou Fengdu Advertising & Media Co., Ltd.",
-    cnLabel: "Chinese Name:",
+    cnLabel: "Chinese Name",
     cnName: "温州丰度广告传媒有限公司",
-    foundedLabel: "Founded:",
+    foundedLabel: "Founded",
     foundedValue: "December 9, 2025",
-    countryLabel: "Country of Operation:",
+    countryLabel: "Country of Operation",
     countryValue: "China",
-    addrLabel: "Address:",
+    addrLabel: "Address",
     address: "Room 1110-2, Building 29, Huahong Xin Plaza, Xincheng Avenue, Luoyang Town, Taishun County, Wenzhou, Zhejiang, China",
-    phoneLabel: "Phone (China):",
+    phoneLabel: "Phone (China)",
     phoneValue: "+86 13958988973",
-    emailLabel: "Email:",
-    webLabel: "Website:",
+    emailLabel: "Email",
+    webLabel: "Website",
     contactCta: "Full contact details on the",
     contactCtaLink: "Contact Us",
     contactCtaSuffix: "page.",
   },
   zh: {
     pageTitle: "关于我们",
+    pageSubtitle: "温州丰度广告传媒有限公司 — 联盟营销 × Google Ads 自动化。",
     overview: "公司概况",
     overviewP1:
       "温州丰度广告传媒有限公司是一家位于浙江温州的联盟营销公司。我们的商业模式是通过 Google 搜索广告与效果最大化广告，为合作商家网站引导具有购买意向的流量，并从最终销售中赚取佣金。",
@@ -117,24 +121,88 @@ const i18n = {
     apiP2:
       "通过 API 访问的所有 Google Ads 数据仅用于公司内部广告管理和报告。我们不会向外部方共享、转售或公开这些数据。所有广告操作均遵守 Google Ads API 条款与条件以及 Google Ads 联盟营销计划政策。",
     contactTitle: "联系方式",
-    companyLabel: "公司名称：",
+    companyLabel: "公司名称",
     companyName: "温州丰度广告传媒有限公司",
-    cnLabel: "英文名称：",
+    cnLabel: "英文名称",
     cnName: "Wenzhou Fengdu Advertising & Media Co., Ltd.",
-    foundedLabel: "成立时间：",
+    foundedLabel: "成立时间",
     foundedValue: "2025 年 12 月 9 日",
-    countryLabel: "运营所在国家：",
+    countryLabel: "运营所在国家",
     countryValue: "中国",
-    addrLabel: "中国联系地址：",
+    addrLabel: "中国联系地址",
     address: "中国 浙江省 温州市 泰顺县 罗阳镇 新城大道 华鸿心广场 29 幢 1110 室-2",
-    phoneLabel: "中国联系电话：",
+    phoneLabel: "中国联系电话",
     phoneValue: "+86 13958988973",
-    emailLabel: "电子邮箱：",
-    webLabel: "公司网址：",
+    emailLabel: "电子邮箱",
+    webLabel: "公司网址",
     contactCta: "更多联系方式请访问",
     contactCtaLink: "联系我们",
     contactCtaSuffix: "页面。",
   },
+} as const;
+
+function Section({
+  icon,
+  title,
+  children,
+}: {
+  icon: React.ReactNode;
+  title: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <section
+      style={{
+        background: MARKETING.bgCard,
+        border: `1px solid ${MARKETING.border}`,
+        borderRadius: MK_RADIUS.lg,
+        padding: `${MK_SPACING.md}px ${MK_SPACING.lg}px`,
+        boxShadow: MARKETING.shadowMedium,
+        marginBottom: MK_SPACING.md,
+      }}
+    >
+      <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 16 }}>
+        <div
+          style={{
+            width: 36,
+            height: 36,
+            borderRadius: MK_RADIUS.md,
+            background: MARKETING.primaryLight,
+            color: MARKETING.primaryDark,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            fontSize: 16,
+          }}
+        >
+          {icon}
+        </div>
+        <Title
+          level={2}
+          style={{ margin: 0, fontSize: 22, fontWeight: 700, color: MARKETING.text }}
+        >
+          {title}
+        </Title>
+      </div>
+      {children}
+    </section>
+  );
+}
+
+const paraStyle: React.CSSProperties = {
+  fontSize: 15.5,
+  lineHeight: 1.8,
+  color: MARKETING.textSub,
+  marginBottom: 12,
+};
+
+const infoLineStyle: React.CSSProperties = {
+  display: "flex",
+  padding: "8px 0",
+  borderBottom: `1px solid ${MARKETING.border}`,
+  gap: 12,
+  fontSize: 14.5,
+  color: MARKETING.text,
 };
 
 export default function AboutPage() {
@@ -142,118 +210,149 @@ export default function AboutPage() {
   const t = i18n[lang];
 
   return (
-    <div style={{ minHeight: "100vh", background: "#fff" }}>
+    <div style={{ minHeight: "100vh", background: MARKETING.bgPage, color: MARKETING.text }}>
       <PageHeader showHome />
 
-      <div style={{ maxWidth: 800, margin: "0 auto", padding: "40px 20px 80px" }}>
-        <Title level={1} style={{ color: "#1A7FDB", textAlign: "center" }}>
-          {t.pageTitle}
-        </Title>
+      {/* Hero */}
+      <section
+        style={{
+          background: MARKETING.bgHeroGradient,
+          padding: `${MK_SPACING.hero}px 24px ${MK_SPACING.lg}px`,
+          textAlign: "center",
+          borderBottom: `1px solid ${MARKETING.border}`,
+        }}
+      >
+        <div style={{ maxWidth: 720, margin: "0 auto" }}>
+          <Title
+            style={{
+              fontSize: "clamp(32px, 5vw, 44px)",
+              fontWeight: 800,
+              color: MARKETING.text,
+              margin: "0 0 12px",
+              letterSpacing: -0.3,
+            }}
+          >
+            {t.pageTitle}
+          </Title>
+          <Paragraph style={{ color: MARKETING.textSub, fontSize: MK_FONT.body, margin: 0, lineHeight: 1.7 }}>
+            {t.pageSubtitle}
+          </Paragraph>
+        </div>
+      </section>
 
-        <Card style={{ borderRadius: 12, marginBottom: 32 }}>
-          <Space direction="vertical" size={16} style={{ width: "100%" }}>
-            <Title level={2} style={{ margin: 0, fontSize: 22 }}>
-              <TeamOutlined style={{ marginRight: 8, color: "#4DA6FF" }} />
-              {t.overview}
-            </Title>
-            <Paragraph style={{ fontSize: 16, lineHeight: 1.8 }}>{t.overviewP1}</Paragraph>
-            <Paragraph style={{ fontSize: 16, lineHeight: 1.8 }}>{t.overviewP2}</Paragraph>
-          </Space>
-        </Card>
+      {/* Sections */}
+      <div style={{ maxWidth: 880, margin: "0 auto", padding: `${MK_SPACING.lg}px 24px ${MK_SPACING.xl}px` }}>
+        <Section icon={<TeamOutlined />} title={t.overview}>
+          <Paragraph style={paraStyle}>{t.overviewP1}</Paragraph>
+          <Paragraph style={{ ...paraStyle, marginBottom: 0 }}>{t.overviewP2}</Paragraph>
+        </Section>
 
-        <Card style={{ borderRadius: 12, marginBottom: 32 }}>
-          <Space direction="vertical" size={16} style={{ width: "100%" }}>
-            <Title level={2} style={{ margin: 0, fontSize: 22 }}>
-              <DollarOutlined style={{ marginRight: 8, color: "#fa8c16" }} />
-              {t.bizTitle}
-            </Title>
-            <Paragraph style={{ fontSize: 16, lineHeight: 1.8 }}>
-              {t.bizP1Pre}<Text strong>{t.bizP1Bold}</Text>{t.bizP1Post}
-            </Paragraph>
-            <Paragraph style={{ fontSize: 16, lineHeight: 1.8 }}>{t.bizP2}</Paragraph>
-            <Paragraph style={{ fontSize: 16, lineHeight: 1.8 }}>{t.bizP3}</Paragraph>
-          </Space>
-        </Card>
+        <Section icon={<DollarOutlined />} title={t.bizTitle}>
+          <Paragraph style={paraStyle}>
+            {t.bizP1Pre}
+            <Text strong style={{ color: MARKETING.text }}>{t.bizP1Bold}</Text>
+            {t.bizP1Post}
+          </Paragraph>
+          <Paragraph style={paraStyle}>{t.bizP2}</Paragraph>
+          <Paragraph style={{ ...paraStyle, marginBottom: 0 }}>{t.bizP3}</Paragraph>
+        </Section>
 
-        <Card style={{ borderRadius: 12, marginBottom: 32 }}>
-          <Space direction="vertical" size={16} style={{ width: "100%" }}>
-            <Title level={2} style={{ margin: 0, fontSize: 22 }}>
-              <GlobalOutlined style={{ marginRight: 8, color: "#52c41a" }} />
-              {t.capTitle}
-            </Title>
-            <Paragraph style={{ fontSize: 16, lineHeight: 1.8 }}>{t.capIntro}</Paragraph>
-            <ul style={{ fontSize: 16, lineHeight: 2.2, paddingLeft: 24 }}>
-              {t.caps.map((c) => (
-                <li key={c.bold}><Text strong>{c.bold}</Text>{c.text}</li>
-              ))}
-            </ul>
-          </Space>
-        </Card>
+        <Section icon={<GlobalOutlined />} title={t.capTitle}>
+          <Paragraph style={paraStyle}>{t.capIntro}</Paragraph>
+          <ul style={{ fontSize: 15, lineHeight: 1.95, paddingLeft: 20, marginBottom: 0, color: MARKETING.textSub }}>
+            {t.caps.map((c) => (
+              <li key={c.bold} style={{ marginBottom: 8 }}>
+                <Text strong style={{ color: MARKETING.text }}>{c.bold}</Text>
+                {c.text}
+              </li>
+            ))}
+          </ul>
+        </Section>
 
-        <Card style={{ borderRadius: 12, marginBottom: 32 }}>
-          <Space direction="vertical" size={16} style={{ width: "100%" }}>
-            <Title level={2} style={{ margin: 0, fontSize: 22 }}>
-              <LinkOutlined style={{ marginRight: 8, color: "#722ed1" }} />
-              {t.apiTitle}
-            </Title>
-            <Paragraph style={{ fontSize: 16, lineHeight: 1.8 }}>{t.apiP1}</Paragraph>
-            <ul style={{ fontSize: 16, lineHeight: 2.2, paddingLeft: 24 }}>
-              {t.apiItems.map((item) => (
-                <li key={item}>{item}</li>
-              ))}
-            </ul>
-            <Paragraph style={{ fontSize: 16, lineHeight: 1.8 }}>{t.apiP2}</Paragraph>
-          </Space>
-        </Card>
+        <Section icon={<LinkOutlined />} title={t.apiTitle}>
+          <Paragraph style={paraStyle}>{t.apiP1}</Paragraph>
+          <ul style={{ fontSize: 15, lineHeight: 1.95, paddingLeft: 20, color: MARKETING.textSub, marginBottom: 16 }}>
+            {t.apiItems.map((item) => (
+              <li key={item} style={{ marginBottom: 6 }}>{item}</li>
+            ))}
+          </ul>
+          <Paragraph style={{ ...paraStyle, marginBottom: 0 }}>{t.apiP2}</Paragraph>
+        </Section>
 
-        <Card style={{ borderRadius: 12, marginBottom: 32 }}>
-          <Space direction="vertical" size={16} style={{ width: "100%" }}>
-            <Title level={2} style={{ margin: 0, fontSize: 22 }}>
-              <EnvironmentOutlined style={{ marginRight: 8, color: "#fa8c16" }} />
-              {t.contactTitle}
-            </Title>
-            <div>
-              <Paragraph style={{ fontSize: 16, marginBottom: 8 }}>
-                <Text strong>{t.companyLabel}</Text> {t.companyName}
-              </Paragraph>
-              <Paragraph style={{ fontSize: 16, marginBottom: 8 }}>
-                <Text strong>{t.cnLabel}</Text> {t.cnName}
-              </Paragraph>
-              <Paragraph style={{ fontSize: 16, marginBottom: 8 }}>
-                <Text strong>{t.foundedLabel}</Text> {t.foundedValue}
-              </Paragraph>
-              <Paragraph style={{ fontSize: 16, marginBottom: 8 }}>
-                <Text strong>{t.countryLabel}</Text> {t.countryValue}
-              </Paragraph>
-              <Paragraph style={{ fontSize: 16, marginBottom: 8 }}>
-                <Text strong>{t.addrLabel}</Text> {t.address}
-              </Paragraph>
-              <Paragraph style={{ fontSize: 16, marginBottom: 8 }}>
-                <Text strong>{t.phoneLabel}</Text>{" "}
-                <a href={`tel:${t.phoneValue.replace(/\s/g, "")}`}>{t.phoneValue}</a>
-              </Paragraph>
-              <Paragraph style={{ fontSize: 16, marginBottom: 8 }}>
-                <MailOutlined style={{ marginRight: 8 }} />
-                <Text strong>{t.emailLabel}</Text>{" "}
-                <a href="mailto:google-ads-api@fengdu-ads.top">google-ads-api@fengdu-ads.top</a>
-              </Paragraph>
-              <Paragraph style={{ fontSize: 16, marginBottom: 8 }}>
-                <GlobalOutlined style={{ marginRight: 8 }} />
-                <Text strong>{t.webLabel}</Text>{" "}
-                <a href="https://fengdu-ads.top" target="_blank" rel="noopener noreferrer">fengdu-ads.top</a>
-              </Paragraph>
-              <Paragraph style={{ fontSize: 14, color: "#888", marginBottom: 0, marginTop: 12 }}>
-                {t.contactCta}{" "}
-                <a href="/contact" style={{ color: "#1A7FDB", fontWeight: 600 }}>{t.contactCtaLink}</a>{" "}
-                {t.contactCtaSuffix}
-              </Paragraph>
+        <Section icon={<EnvironmentOutlined />} title={t.contactTitle}>
+          {[
+            [t.companyLabel, t.companyName],
+            [t.cnLabel, t.cnName],
+            [t.foundedLabel, t.foundedValue],
+            [t.countryLabel, t.countryValue],
+            [t.addrLabel, t.address],
+          ].map(([label, value]) => (
+            <div key={label} style={infoLineStyle}>
+              <div style={{ width: 160, color: MARKETING.textMuted, fontWeight: 500, flexShrink: 0 }}>
+                {label}
+              </div>
+              <div style={{ flex: 1 }}>{value}</div>
             </div>
-          </Space>
-        </Card>
+          ))}
+          <div style={infoLineStyle}>
+            <div style={{ width: 160, color: MARKETING.textMuted, fontWeight: 500, flexShrink: 0 }}>
+              {t.phoneLabel}
+            </div>
+            <div style={{ flex: 1 }}>
+              <a href={`tel:${t.phoneValue.replace(/\s/g, "")}`} style={{ color: MARKETING.primaryDark, fontWeight: 600 }}>
+                {t.phoneValue}
+              </a>
+            </div>
+          </div>
+          <div style={infoLineStyle}>
+            <div style={{ width: 160, color: MARKETING.textMuted, fontWeight: 500, flexShrink: 0 }}>
+              <MailOutlined style={{ marginRight: 6 }} />
+              {t.emailLabel}
+            </div>
+            <div style={{ flex: 1 }}>
+              <a href="mailto:connect@fengdu-ads.top" style={{ color: MARKETING.primaryDark, fontWeight: 600 }}>
+                connect@fengdu-ads.top
+              </a>
+            </div>
+          </div>
+          <div style={{ ...infoLineStyle, borderBottom: "none" }}>
+            <div style={{ width: 160, color: MARKETING.textMuted, fontWeight: 500, flexShrink: 0 }}>
+              <GlobalOutlined style={{ marginRight: 6 }} />
+              {t.webLabel}
+            </div>
+            <div style={{ flex: 1 }}>
+              <a href="https://fengdu-ads.top" target="_blank" rel="noopener noreferrer" style={{ color: MARKETING.primaryDark, fontWeight: 600 }}>
+                fengdu-ads.top
+              </a>
+            </div>
+          </div>
 
-        <Divider />
-        <PageFooter />
+          <div
+            style={{
+              marginTop: 16,
+              padding: `10px 14px`,
+              background: MARKETING.primaryLight,
+              borderRadius: MK_RADIUS.md,
+              fontSize: 13.5,
+              color: MARKETING.primaryDark,
+              display: "flex",
+              alignItems: "center",
+              gap: 8,
+            }}
+          >
+            <InfoCircleOutlined />
+            <span>
+              {t.contactCta}{" "}
+              <a href="/contact" style={{ color: MARKETING.primaryDark, fontWeight: 700, textDecoration: "underline" }}>
+                {t.contactCtaLink}
+              </a>{" "}
+              {t.contactCtaSuffix}
+            </span>
+          </div>
+        </Section>
       </div>
+
+      <PageFooter />
     </div>
   );
 }

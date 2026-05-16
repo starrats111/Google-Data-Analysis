@@ -1,6 +1,6 @@
 "use client";
 
-import { Typography, Space, Card, Divider, Tag } from "antd";
+import { Typography, Space, Tag } from "antd";
 import {
   ApiOutlined,
   BarChartOutlined,
@@ -14,6 +14,7 @@ import Image from "next/image";
 import { useLanguage } from "@/contexts/LanguageContext";
 import PageHeader from "@/components/PageHeader";
 import PageFooter from "@/components/PageFooter";
+import { MARKETING, MK_SPACING, MK_FONT, MK_RADIUS } from "@/styles/marketingTokens";
 
 const { Title, Paragraph, Text } = Typography;
 
@@ -289,84 +290,201 @@ export default function DemoPage() {
   const summary = summaryI18n[lang];
 
   return (
-    <div style={{ minHeight: "100vh", background: "#fff" }}>
+    <div style={{ minHeight: "100vh", background: MARKETING.bgPage, color: MARKETING.text }}>
       <PageHeader showHome />
 
-      <div style={{ maxWidth: 960, margin: "0 auto", padding: "40px 20px 80px" }}>
-        <Title level={1} style={{ color: "#1A7FDB", textAlign: "center" }}>
-          <ApiOutlined style={{ marginRight: 12 }} />
-          {intro.title}
-        </Title>
-        <Paragraph style={{ textAlign: "center", color: "#666", fontSize: 16, maxWidth: 700, margin: "0 auto 16px" }}>
-          {intro.desc}
-        </Paragraph>
-        <Paragraph style={{ textAlign: "center", color: "#999", marginBottom: 48 }}>
-          {intro.note}
-        </Paragraph>
+      {/* Hero */}
+      <section
+        style={{
+          background: MARKETING.bgHeroGradient,
+          padding: `${MK_SPACING.hero}px 24px ${MK_SPACING.lg}px`,
+          textAlign: "center",
+          borderBottom: `1px solid ${MARKETING.border}`,
+        }}
+      >
+        <div style={{ maxWidth: 760, margin: "0 auto" }}>
+          <div
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              justifyContent: "center",
+              width: 64,
+              height: 64,
+              borderRadius: MK_RADIUS.lg,
+              background: MARKETING.primaryLight,
+              color: MARKETING.primaryDark,
+              fontSize: 28,
+              marginBottom: 20,
+              boxShadow: MARKETING.shadowMedium,
+            }}
+          >
+            <ApiOutlined />
+          </div>
+          <Title
+            style={{
+              fontSize: "clamp(32px, 5vw, 44px)",
+              fontWeight: 800,
+              color: MARKETING.text,
+              margin: "0 0 12px",
+              letterSpacing: -0.3,
+              lineHeight: 1.15,
+            }}
+          >
+            {intro.title}
+          </Title>
+          <Paragraph style={{ color: MARKETING.textSub, fontSize: MK_FONT.body, maxWidth: 680, margin: "0 auto 8px", lineHeight: 1.7 }}>
+            {intro.desc}
+          </Paragraph>
+          <Paragraph style={{ color: MARKETING.textMuted, fontSize: 13.5, margin: 0 }}>
+            {intro.note}
+          </Paragraph>
+        </div>
+      </section>
 
+      <div style={{ maxWidth: 1000, margin: "0 auto", padding: `${MK_SPACING.lg}px 24px ${MK_SPACING.xl}px` }}>
         {screenshots.map((s, idx) => (
-          <Card key={idx} style={{ borderRadius: 12, marginBottom: 32, overflow: "hidden" }}>
+          <div
+            key={idx}
+            style={{
+              background: MARKETING.bgCard,
+              border: `1px solid ${MARKETING.border}`,
+              borderRadius: MK_RADIUS.lg,
+              padding: `${MK_SPACING.md}px ${MK_SPACING.lg}px`,
+              boxShadow: MARKETING.shadowMedium,
+              marginBottom: MK_SPACING.md,
+              overflow: "hidden",
+            }}
+          >
             <Space direction="vertical" size={16} style={{ width: "100%" }}>
               <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
-                {s.icon}
-                <Title level={2} style={{ margin: 0, flex: 1, fontSize: 22 }}>{s.title}</Title>
-                <Tag color="blue" style={{ fontSize: 13, padding: "2px 10px" }}>API: {s.apiTag}</Tag>
+                <div
+                  style={{
+                    width: 36,
+                    height: 36,
+                    borderRadius: MK_RADIUS.md,
+                    background: MARKETING.primaryLight,
+                    color: MARKETING.primaryDark,
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    fontSize: 16,
+                  }}
+                >
+                  {s.icon}
+                </div>
+                <Title level={2} style={{ margin: 0, flex: 1, fontSize: 20, fontWeight: 700, color: MARKETING.text }}>
+                  {s.title}
+                </Title>
+                <Tag
+                  style={{
+                    fontSize: 12,
+                    padding: "2px 10px",
+                    background: MARKETING.primaryLight,
+                    color: MARKETING.primaryDark,
+                    border: `1px solid ${MARKETING.border}`,
+                    borderRadius: MK_RADIUS.pill,
+                    fontWeight: 600,
+                  }}
+                >
+                  API: {s.apiTag}
+                </Tag>
               </div>
 
               {s.images ? (
                 <Space direction="vertical" size={16} style={{ width: "100%" }}>
                   {s.images.map((img, ii) => (
                     <div key={ii}>
-                      <div style={{ border: "1px solid #f0f0f0", borderRadius: 8, overflow: "hidden", background: "#fafafa" }}>
+                      <div style={{ border: `1px solid ${MARKETING.border}`, borderRadius: MK_RADIUS.md, overflow: "hidden", background: MARKETING.bgSection }}>
                         <Image src={img.src} alt={img.caption} width={920} height={0} style={{ width: "100%", height: "auto" }} unoptimized />
                       </div>
-                      <Text type="secondary" style={{ display: "block", textAlign: "center", marginTop: 8, fontSize: 13 }}>
+                      <Text type="secondary" style={{ display: "block", textAlign: "center", marginTop: 8, fontSize: 13, color: MARKETING.textMuted }}>
                         {img.caption}
                       </Text>
                     </div>
                   ))}
                 </Space>
               ) : (
-                <div style={{ border: "1px solid #f0f0f0", borderRadius: 8, overflow: "hidden", background: "#fafafa" }}>
+                <div style={{ border: `1px solid ${MARKETING.border}`, borderRadius: MK_RADIUS.md, overflow: "hidden", background: MARKETING.bgSection }}>
                   <Image src={s.src!} alt={s.title} width={920} height={0} style={{ width: "100%", height: "auto" }} unoptimized />
                 </div>
               )}
 
-              <Paragraph style={{ fontSize: 15, lineHeight: 1.8 }}>{s.description}</Paragraph>
+              <Paragraph style={{ fontSize: 15, lineHeight: 1.8, color: MARKETING.textSub, marginBottom: 0 }}>
+                {s.description}
+              </Paragraph>
               <div>
-                <Text strong style={{ fontSize: 14 }}>{s.featuresLabel}</Text>
-                <ul style={{ fontSize: 14, lineHeight: 2, marginTop: 4 }}>
-                  {s.features.map((f, fi) => (<li key={fi}>{f}</li>))}
+                <Text strong style={{ fontSize: 14, color: MARKETING.text }}>{s.featuresLabel}</Text>
+                <ul style={{ fontSize: 14, lineHeight: 1.95, marginTop: 4, paddingLeft: 20, color: MARKETING.textSub }}>
+                  {s.features.map((f, fi) => (<li key={fi} style={{ marginBottom: 4 }}>{f}</li>))}
                 </ul>
               </div>
             </Space>
-          </Card>
+          </div>
         ))}
 
-        <Card style={{ borderRadius: 12, marginBottom: 32, background: "#f6f9fc" }}>
-          <Title level={2} style={{ textAlign: "center", fontSize: 22 }}>{summary.title}</Title>
-          <Paragraph style={{ textAlign: "center", fontSize: 15, lineHeight: 1.8 }}>{summary.desc}</Paragraph>
-          <div style={{ display: "flex", gap: 24, justifyContent: "center", flexWrap: "wrap", marginTop: 16 }}>
-            <Card style={{ flex: 1, minWidth: 300, borderRadius: 8 }}>
-              <Title level={3} style={{ color: "#1A7FDB", fontSize: 18 }}>{summary.readTitle}</Title>
-              <Paragraph><code>POST /customers/&#123;id&#125;/googleAds:searchStream</code></Paragraph>
-              <ul style={{ fontSize: 14, lineHeight: 2 }}>
+        <div
+          style={{
+            background: MARKETING.bgSection,
+            border: `1px solid ${MARKETING.border}`,
+            borderRadius: MK_RADIUS.lg,
+            padding: MK_SPACING.lg,
+            marginBottom: MK_SPACING.md,
+          }}
+        >
+          <Title level={2} style={{ textAlign: "center", fontSize: 22, fontWeight: 700, color: MARKETING.text, marginTop: 0 }}>
+            {summary.title}
+          </Title>
+          <Paragraph style={{ textAlign: "center", fontSize: 15, lineHeight: 1.7, color: MARKETING.textSub }}>
+            {summary.desc}
+          </Paragraph>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 16, marginTop: 16 }}>
+            <div
+              style={{
+                background: MARKETING.bgCard,
+                border: `1px solid ${MARKETING.border}`,
+                borderRadius: MK_RADIUS.md,
+                padding: MK_SPACING.md,
+                boxShadow: MARKETING.shadowSoft,
+              }}
+            >
+              <Title level={3} style={{ color: MARKETING.primaryDark, fontSize: 16, fontWeight: 700, marginTop: 0 }}>
+                {summary.readTitle}
+              </Title>
+              <Paragraph style={{ marginBottom: 8 }}>
+                <code style={{ background: MARKETING.bgSection, padding: "2px 6px", borderRadius: 4, fontSize: 12.5, color: MARKETING.text }}>
+                  POST /customers/&#123;id&#125;/googleAds:searchStream
+                </code>
+              </Paragraph>
+              <ul style={{ fontSize: 13.5, lineHeight: 1.95, paddingLeft: 18, color: MARKETING.textSub, marginBottom: 0 }}>
                 {summary.readItems.map((item) => (<li key={item}>{item}</li>))}
               </ul>
-            </Card>
-            <Card style={{ flex: 1, minWidth: 300, borderRadius: 8 }}>
-              <Title level={3} style={{ color: "#52c41a", fontSize: 18 }}>{summary.writeTitle}</Title>
-              <Paragraph><code>POST /customers/&#123;id&#125;/googleAds:mutate</code></Paragraph>
-              <ul style={{ fontSize: 14, lineHeight: 2 }}>
+            </div>
+            <div
+              style={{
+                background: MARKETING.bgCard,
+                border: `1px solid ${MARKETING.border}`,
+                borderRadius: MK_RADIUS.md,
+                padding: MK_SPACING.md,
+                boxShadow: MARKETING.shadowSoft,
+              }}
+            >
+              <Title level={3} style={{ color: MARKETING.accentGreen, fontSize: 16, fontWeight: 700, marginTop: 0 }}>
+                {summary.writeTitle}
+              </Title>
+              <Paragraph style={{ marginBottom: 8 }}>
+                <code style={{ background: MARKETING.bgSection, padding: "2px 6px", borderRadius: 4, fontSize: 12.5, color: MARKETING.text }}>
+                  POST /customers/&#123;id&#125;/googleAds:mutate
+                </code>
+              </Paragraph>
+              <ul style={{ fontSize: 13.5, lineHeight: 1.95, paddingLeft: 18, color: MARKETING.textSub, marginBottom: 0 }}>
                 {summary.writeItems.map((item) => (<li key={item}>{item}</li>))}
               </ul>
-            </Card>
+            </div>
           </div>
-        </Card>
-
-        <Divider />
-        <PageFooter />
+        </div>
       </div>
+
+      <PageFooter />
     </div>
   );
 }
