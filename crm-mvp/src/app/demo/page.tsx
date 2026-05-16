@@ -83,15 +83,16 @@ function getScreenshots(lang: "en" | "zh"): ScreenshotItem[] {
       },
       {
         src: "/images/demo/mcc-accounts.png",
-        title: "MCC Account Management — CID Selection & Availability",
+        title: "MCC Account Management — CID Selection & Campaign Counts",
         icon: <TeamOutlined style={{ color: "#722ed1" }} />,
         apiTag: "googleAds:searchStream (customer_client)",
         description:
-          "MCC (Manager Account) sub-account management. When creating a new campaign, the platform queries the Google Ads API to list all child accounts (CIDs) under the selected MCC, checks each CID's availability (whether it already has active campaigns), and displays the status. Available CIDs are marked in green; occupied ones are marked as taken.",
+          "MCC (Manager Account) sub-account management. When creating a new campaign, the platform queries the Google Ads API to list all child accounts (CIDs) under the selected MCC and displays the current ENABLED campaign count next to each CID. All active CIDs are selectable (no occupied/available restriction); a one-click \"Refresh counts\" button pulls live status from Google Ads API to correct any local sync lag.",
         featuresLabel: "Key Features:",
         features: [
           "List child accounts via customer_client GAQL query",
-          "Real-time CID availability checking (active campaign detection)",
+          "Per-CID ENABLED / PAUSED / REMOVED campaign count (tooltip)",
+          "One-click refresh to sync live counts from Google Ads API",
           "Support for multiple MCC accounts per user",
         ],
       },
@@ -180,15 +181,16 @@ function getScreenshots(lang: "en" | "zh"): ScreenshotItem[] {
     },
     {
       src: "/images/demo/mcc-accounts.png",
-      title: "MCC 账户管理 — CID 选择与可用性",
+      title: "MCC 账户管理 — CID 选择与广告数量",
       icon: <TeamOutlined style={{ color: "#722ed1" }} />,
       apiTag: "googleAds:searchStream (customer_client)",
       description:
-        "MCC（管理账户）子账户管理。创建新广告时，平台通过 Google Ads API 查询所选 MCC 下的所有子账户（CID），检查每个 CID 的可用性（是否已有活跃广告），并显示状态。可用 CID 标记为绿色；已占用的标记为已占用。",
+        "MCC（管理账户）子账户管理。创建新广告时，平台通过 Google Ads API 查询所选 MCC 下的所有子账户（CID），并在每个 CID 旁显示当前 ENABLED 广告系列数量。所有 active CID 均可选（不再有占用/可用二元限制）；一键「刷新广告数量」按钮可从 Google Ads API 实时同步状态，修正本地同步滞后。",
       featuresLabel: "核心功能：",
       features: [
         "通过 customer_client GAQL 查询列出子账户",
-        "实时 CID 可用性检查（活跃广告检测）",
+        "每个 CID 显示 ENABLED / PAUSED / REMOVED 广告系列数（悬浮 Tooltip）",
+        "一键从 Google Ads API 实时刷新数量",
         "支持每个用户多个 MCC 账户",
       ],
     },

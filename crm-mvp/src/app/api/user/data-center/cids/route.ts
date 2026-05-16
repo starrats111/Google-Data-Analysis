@@ -5,8 +5,12 @@ import prisma from "@/lib/prisma";
 
 /**
  * GET /api/user/data-center/cids?mcc_account_id=xxx
- * 获取指定 MCC 下所有 CID 列表（含可用状态）
- * 动态查询 campaigns 表判断 CID 是否已被占用
+ * 获取指定 MCC 下所有 CID 列表 + 每个 CID 当前的广告系列计数
+ *
+ * D-007（2026-05-16）：
+ * - 取消"占用/可用"二元限制，前端不再 disabled，所有 active CID 均可选
+ * - 新增 enabled_count / paused_count / removed_count 三段计数（来自本地 campaigns 表）
+ * - 保留 is_available 字段向后兼容（仍按"有 ≥1 ENABLED 即 N"计算）
  */
 export async function GET(req: NextRequest) {
   const user = getUserFromRequest(req);
@@ -26,25 +30,43 @@ export async function GET(req: NextRequest) {
     orderBy: { customer_id: "asc" },
   });
 
-  // 只有该 CID 下有 ENABLED 状态的广告系列才算占用
-  const occupiedCampaigns = await prisma.campaigns.findMany({
+  // 一次 groupBy 同时拿到三种状态计数，cheap
+  const campaignCounts = await prisma.campaigns.groupBy({
+    by: ["customer_id", "google_status"],
     where: {
       mcc_id: BigInt(mccAccountId),
       customer_id: { not: null },
       google_campaign_id: { not: null },
       is_deleted: 0,
-      google_status: "ENABLED",
     },
-    select: { customer_id: true },
+    _count: { _all: true },
   });
-  const occupiedCids = new Set(occupiedCampaigns.map((c) => c.customer_id).filter(Boolean));
 
-  const cidsWithAvailability = cids.map((cid) => ({
-    ...cid,
-    is_available: occupiedCids.has(cid.customer_id) ? "N" : "Y",
-  }));
+  const countsByCid = new Map<string, { enabled: number; paused: number; removed: number }>();
+  for (const row of campaignCounts) {
+    if (!row.customer_id) continue;
+    const slot = countsByCid.get(row.customer_id) || { enabled: 0, paused: 0, removed: 0 };
+    const status = String(row.google_status || "").toUpperCase();
+    const n = row._count._all;
+    if (status === "ENABLED") slot.enabled += n;
+    else if (status === "PAUSED") slot.paused += n;
+    else if (status === "REMOVED") slot.removed += n;
+    countsByCid.set(row.customer_id, slot);
+  }
 
-  return apiSuccess(serializeData(cidsWithAvailability));
+  const cidsWithCounts = cids.map((cid) => {
+    const c = countsByCid.get(cid.customer_id) || { enabled: 0, paused: 0, removed: 0 };
+    return {
+      ...cid,
+      enabled_count: c.enabled,
+      paused_count: c.paused,
+      removed_count: c.removed,
+      // 保留 is_available 向后兼容：有 ≥1 ENABLED 标 N，否则 Y
+      is_available: c.enabled > 0 ? "N" : "Y",
+    };
+  });
+
+  return apiSuccess(serializeData(cidsWithCounts));
 }
 
 /**
@@ -119,26 +141,43 @@ export async function POST(req: NextRequest) {
       orderBy: { customer_id: "asc" },
     });
 
-    // 只有该 CID 下有 ENABLED 状态的广告系列才算占用
-    const occupiedCampaigns = await prisma.campaigns.findMany({
+    // D-007：同 GET 路径一致，groupBy 拿三段计数
+    const campaignCounts = await prisma.campaigns.groupBy({
+      by: ["customer_id", "google_status"],
       where: {
         mcc_id: BigInt(mcc_account_id),
         customer_id: { not: null },
         google_campaign_id: { not: null },
         is_deleted: 0,
-        google_status: "ENABLED",
       },
-      select: { customer_id: true },
+      _count: { _all: true },
     });
-    const occupiedCids = new Set(occupiedCampaigns.map((c) => c.customer_id).filter(Boolean));
 
-    const cidsWithAvailability = allCids.map((cid) => ({
-      ...cid,
-      is_available: occupiedCids.has(cid.customer_id) ? "N" : "Y",
-    }));
+    const countsByCid = new Map<string, { enabled: number; paused: number; removed: number }>();
+    for (const row of campaignCounts) {
+      if (!row.customer_id) continue;
+      const slot = countsByCid.get(row.customer_id) || { enabled: 0, paused: 0, removed: 0 };
+      const status = String(row.google_status || "").toUpperCase();
+      const n = row._count._all;
+      if (status === "ENABLED") slot.enabled += n;
+      else if (status === "PAUSED") slot.paused += n;
+      else if (status === "REMOVED") slot.removed += n;
+      countsByCid.set(row.customer_id, slot);
+    }
+
+    const cidsWithCounts = allCids.map((cid) => {
+      const c = countsByCid.get(cid.customer_id) || { enabled: 0, paused: 0, removed: 0 };
+      return {
+        ...cid,
+        enabled_count: c.enabled,
+        paused_count: c.paused,
+        removed_count: c.removed,
+        is_available: c.enabled > 0 ? "N" : "Y",
+      };
+    });
 
     return apiSuccess(serializeData({
-      cids: cidsWithAvailability,
+      cids: cidsWithCounts,
       synced: { created, updated, cancelled, total: allCids.length },
     }));
   } catch (err) {

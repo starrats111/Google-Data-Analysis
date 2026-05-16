@@ -4,7 +4,7 @@ import { useParams, useRouter } from "next/navigation";
 import {
   Card, Row, Col, Input, Button, Space, Tag, Typography, Spin, Alert,
   Select, InputNumber, Switch, Divider, App, Tooltip, Popconfirm, Checkbox,
-  Upload, Image, Steps,
+  Upload, Image, Steps, Badge,
 } from "antd";
 import {
   ThunderboltOutlined, LoadingOutlined,
@@ -171,11 +171,22 @@ export default function AdPreviewPage() {
   const [suffixTestMsg, setSuffixTestMsg] = useState("");
 
   // MCC / CID 选择
+  // D-007（2026-05-16）：CID 选择器去"占用/可用"二元限制，改为显示三段计数 + 「刷新数量」按钮
   const [selectedMccId, setSelectedMccId] = useState<string>("");
   const [selectedCid, setSelectedCid] = useState<string>("");
-  const [cidList, setCidList] = useState<{ customer_id: string; customer_name: string; is_available: string }[]>([]);
+  const [cidList, setCidList] = useState<{
+    customer_id: string;
+    customer_name: string;
+    is_available: string;
+    enabled_count?: number;
+    paused_count?: number;
+    removed_count?: number;
+    last_synced_at?: string | null;
+  }[]>([]);
   const [cidLoading, setCidLoading] = useState(false);
   const [cidSyncing, setCidSyncing] = useState(false);
+  const [cidRefreshing, setCidRefreshing] = useState(false);
+  const [cidRefreshedAt, setCidRefreshedAt] = useState<number | null>(null);
 
   // 扩展模块
   const [sitelinks, setSitelinks] = useState<SitelinkItem[]>([]);
@@ -665,6 +676,20 @@ export default function AdPreviewPage() {
   }, [semrushUrl, preview, kwList, campaignId, message, budget, maxCpc, biddingStrategy]);
 
   // ─── MCC/CID 操作 ───
+  // D-007（2026-05-16）：自动选 CID 改为"当前数量最少 → customer_name 数字最小"优先；不再依赖 is_available
+  const pickDefaultCid = useCallback((cids: any[]): string | undefined => {
+    if (!cids.length) return undefined;
+    const sorted = [...cids].sort((a, b) => {
+      const ae = a.enabled_count ?? (a.is_available === "Y" ? 0 : 1);
+      const be = b.enabled_count ?? (b.is_available === "Y" ? 0 : 1);
+      if (ae !== be) return ae - be;
+      const an = Number(a.customer_name) || 0;
+      const bn = Number(b.customer_name) || 0;
+      return an - bn;
+    });
+    return sorted[0]?.customer_id;
+  }, []);
+
   const loadCidList = useCallback(async (mccAccountId: string) => {
     if (!mccAccountId) { setCidList([]); return; }
     setCidLoading(true);
@@ -673,18 +698,17 @@ export default function AdPreviewPage() {
       const json = await res.json();
       if (json.code === 0 && Array.isArray(json.data)) {
         setCidList(json.data);
-        // 如果当前没有选中的 CID 或选中的不在列表中，自动选第一个可用的
         if (json.data.length > 0) {
           const current = json.data.find((c: any) => c.customer_id === selectedCid);
           if (!current) {
-            const available = json.data.find((c: any) => c.is_available === "Y");
-            if (available) setSelectedCid(available.customer_id);
+            const def = pickDefaultCid(json.data);
+            if (def) setSelectedCid(def);
           }
         }
       }
     } catch { /* ignore */ }
     finally { setCidLoading(false); }
-  }, [selectedCid]);
+  }, [selectedCid, pickDefaultCid]);
 
   // MCC 变更时加载 CID 列表
   useEffect(() => {
@@ -695,6 +719,7 @@ export default function AdPreviewPage() {
     setSelectedMccId(mccId);
     setSelectedCid("");
     setCidList([]);
+    setCidRefreshedAt(null);
   }, []);
 
   const syncCids = useCallback(async () => {
@@ -711,10 +736,10 @@ export default function AdPreviewPage() {
         const synced = json.data?.synced || {};
         const cids = json.data?.cids || [];
         setCidList(cids);
-        message.success(`CID 同步完成：共 ${synced.total || cids.length} 个 (新增 ${synced.created || 0})`);
+        message.success(`CID 列表同步完成：共 ${synced.total || cids.length} 个 (新增 ${synced.created || 0})`);
         if (cids.length > 0 && !selectedCid) {
-          const available = cids.find((c: any) => c.is_available === "Y");
-          if (available) setSelectedCid(available.customer_id);
+          const def = pickDefaultCid(cids);
+          if (def) setSelectedCid(def);
         }
       } else {
         message.error(json.message || "CID 同步失败");
@@ -724,7 +749,37 @@ export default function AdPreviewPage() {
     } finally {
       setCidSyncing(false);
     }
-  }, [selectedMccId, selectedCid, message]);
+  }, [selectedMccId, selectedCid, message, pickDefaultCid]);
+
+  // D-007：实时刷新该 MCC 下每个 CID 的广告数量（调 Google Ads API 实查）
+  const refreshCidCounts = useCallback(async () => {
+    if (!selectedMccId) { message.warning("请先选择 MCC 账户"); return; }
+    setCidRefreshing(true);
+    try {
+      const res = await fetch("/api/user/data-center/cids/refresh-counts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mcc_account_id: Number(selectedMccId) }),
+      });
+      const json = await res.json();
+      if (json.code === 0) {
+        const cids = json.data?.cids || [];
+        const refreshed = json.data?.refreshed || {};
+        setCidList(cids);
+        setCidRefreshedAt(Date.now());
+        const dbUpdated = Number(refreshed.db_updated || 0);
+        message.success(
+          `广告数量已刷新（${refreshed.customer_ids || cids.length} 个 CID / 拉到 ${refreshed.statuses_pulled || 0} 条广告${dbUpdated > 0 ? ` / 同步 ${dbUpdated} 条状态变更` : ""}）`,
+        );
+      } else {
+        message.error(json.message || "刷新广告数量失败");
+      }
+    } catch (err: any) {
+      message.error(err?.message || "刷新广告数量失败");
+    } finally {
+      setCidRefreshing(false);
+    }
+  }, [selectedMccId, message]);
 
   // ─── 爬虫生成扩展（SSE 流式接收，逐项更新 UI） ───
   const generateExtension = useCallback(async (...requestedTypes: Array<"core" | "sitelinks" | "images" | "callouts" | "promotion" | "price" | "call" | "snippet">) => {
@@ -2534,41 +2589,77 @@ export default function AdPreviewPage() {
               />
             </div>
             <div>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 4 }}>
                 <Text type="secondary">CID 客户账户</Text>
                 {selectedMccId && (
-                  <Button
-                    size="small" type="link"
-                    icon={<ReloadOutlined />}
-                    loading={cidSyncing}
-                    onClick={syncCids}
-                  >
-                    {cidList.length === 0 ? "从 MCC 同步 CID" : "重新同步"}
-                  </Button>
+                  <Space size={4}>
+                    <Tooltip title="从 Google Ads MCC 拉取最新子账号列表（新增 / 注销）">
+                      <Button
+                        size="small" type="link"
+                        icon={<ReloadOutlined />}
+                        loading={cidSyncing}
+                        onClick={syncCids}
+                        style={{ paddingInline: 4 }}
+                      >
+                        {cidList.length === 0 ? "从 MCC 同步 CID" : "同步 CID 列表"}
+                      </Button>
+                    </Tooltip>
+                    {cidList.length > 0 && (
+                      <Tooltip title="实时从 Google Ads API 拉每个 CID 的广告系列状态并写回本地（修正同步滞后导致的数量偏差）">
+                        <Button
+                          size="small" type="link"
+                          icon={<ReloadOutlined />}
+                          loading={cidRefreshing}
+                          onClick={refreshCidCounts}
+                          style={{ paddingInline: 4 }}
+                        >
+                          刷新广告数量
+                        </Button>
+                      </Tooltip>
+                    )}
+                  </Space>
                 )}
               </div>
               <Select
                 value={selectedCid || undefined}
                 onChange={setSelectedCid}
-                placeholder={cidLoading ? "加载中..." : cidSyncing ? "同步中..." : "选择 CID"}
-                loading={cidLoading || cidSyncing}
+                placeholder={cidLoading ? "加载中..." : cidSyncing ? "同步中..." : cidRefreshing ? "刷新中..." : "选择 CID"}
+                loading={cidLoading || cidSyncing || cidRefreshing}
                 style={{ width: "100%", marginTop: 4 }}
                 showSearch
                 optionFilterProp="label"
-                options={cidList.map((c) => ({
-                  value: c.customer_id,
-                  label: `${formatCid(c.customer_id)}${c.customer_name ? ` - ${c.customer_name}` : ""}`,
-                  disabled: c.is_available !== "Y",
-                }))}
+                options={[...cidList]
+                  .sort((a, b) => (Number(a.customer_name) || 0) - (Number(b.customer_name) || 0))
+                  .map((c) => ({
+                    value: c.customer_id,
+                    label: `${formatCid(c.customer_id)}${c.customer_name ? ` - ${c.customer_name}` : ""}`,
+                  }))}
                 optionRender={(option) => {
                   const cid = cidList.find((c) => c.customer_id === option.value);
+                  const enabled = cid?.enabled_count ?? (cid?.is_available === "Y" ? 0 : 1);
+                  const paused = cid?.paused_count ?? 0;
+                  const removed = cid?.removed_count ?? 0;
                   return (
-                    <Space>
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", width: "100%", paddingRight: 5 }}>
                       <Text>{option.label}</Text>
-                      {cid?.is_available === "Y"
-                        ? <Tag color="green" style={{ fontSize: 10, lineHeight: "16px", margin: 0 }}>可用</Tag>
-                        : <Tag color="red" style={{ fontSize: 10, lineHeight: "16px", margin: 0 }}>已占用</Tag>}
-                    </Space>
+                      <Tooltip title={`ENABLED ${enabled} · PAUSED ${paused} · REMOVED ${removed}（来源：CRM 本地，必要时点上方"刷新广告数量"实时同步）`}>
+                        <Badge
+                          count={enabled}
+                          showZero
+                          overflowCount={999}
+                          style={{
+                            backgroundColor: "#f0f0f0",
+                            color: "#595959",
+                            boxShadow: "0 0 0 1px #d9d9d9 inset",
+                            fontSize: 11,
+                            minWidth: 18,
+                            height: 18,
+                            lineHeight: "18px",
+                            padding: "0 5px",
+                          }}
+                        />
+                      </Tooltip>
+                    </div>
                   );
                 }}
                 notFoundContent={
@@ -2583,6 +2674,12 @@ export default function AdPreviewPage() {
                     : "请先选择 MCC 账户"
                 }
               />
+              {cidList.length > 0 && (
+                <Text type="secondary" style={{ fontSize: 11, display: "block", marginTop: 4 }}>
+                  右侧数字为该 CID 当前 ENABLED 广告数（D-007：取消占用限制，所有 active CID 均可选）
+                  {cidRefreshedAt && <span style={{ marginLeft: 6 }}>· 已刷新于 {new Date(cidRefreshedAt).toLocaleTimeString()}</span>}
+                </Text>
+              )}
             </div>
             {selectedCid && (
               <div style={{ marginTop: 8, padding: "6px 8px", background: "#f6ffed", borderRadius: 4, border: "1px solid #b7eb8f" }}>
