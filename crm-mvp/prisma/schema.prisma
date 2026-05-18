@@ -166,6 +166,10 @@ model user_merchants {
   @@index([user_id, platform, merchant_id], map: "idx_user_plat_mid")
   @@index([violation_status], map: "idx_violation_status")
   @@index([user_id, source], map: "idx_user_source")
+  // C-079：从 MariaDB 慢查询日志发现，txn-quick-sync / 商家归属重定向等场景大量
+  // WHERE merchant_id + platform 查询无前缀 user_id，旧索引全部失效导致全表扫描 644K 行 / 6.6s。
+  // 加 (merchant_id, platform) 复合索引后单次查询 < 5ms。
+  @@index([merchant_id, platform], map: "idx_merchant_platform")
 }
 
 // -----------------------------------------------------------

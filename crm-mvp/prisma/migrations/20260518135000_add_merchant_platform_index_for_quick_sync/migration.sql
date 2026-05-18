@@ -1,0 +1,16 @@
+-- C-079 套餐 B 续：从 MariaDB 慢查询日志发现 user_merchants 缺少 (merchant_id, platform) 复合索引
+--
+-- 背景：开启慢查询日志（C-078c, long_query_time=2）5 分钟内捕获 316 行慢查询，
+-- 其中绝大多数是 txn-quick-sync 在做商家归属重定向时执行的：
+--   SELECT id, user_id, merchant_id, platform FROM user_merchants
+--   WHERE merchant_id = ? AND platform = ? AND status IN ('claimed','paused') AND is_deleted = 0;
+-- EXPLAIN 显示 type=ALL（全表扫描），rows=651086，耗时 5~7s。
+-- 旧 5 个索引全部以 user_id 开头，对 WHERE 不带 user_id 的查询完全失效。
+--
+-- 加 (merchant_id, platform) 复合索引后：
+--   * 单次查询 < 5ms
+--   * txn-quick-sync 预计从 380s/cron 降至 < 50s
+--
+-- MariaDB 10.6+ 添加 secondary index 默认就是 ALGORITHM=INPLACE / LOCK=NONE（在线 DDL，不锁表）
+-- 仅消耗 CPU/IO，不影响业务读写，user_merchants 651K 行预计 < 30s 完成
+CREATE INDEX `idx_merchant_platform` ON `user_merchants`(`merchant_id`, `platform`);
