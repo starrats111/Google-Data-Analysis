@@ -92,7 +92,7 @@ interface DiscoverableItem {
   watched_by_me: boolean;
 }
 
-// D-004：今日广告 Tab 数据类型
+// D-018：今日广告 Tab 数据类型（v1.16 重写：列表主体 = domain，未命中商家不返回）
 interface ConnectionAccount {
   id: string;
   account_name: string;
@@ -115,24 +115,26 @@ interface MatchedMerchant {
   connection_accounts: ConnectionAccount[];
 }
 interface TodayAdItem {
-  notification_id: string;
+  row_key: string;                    // `${advertiser_id}|${region}|${domain}` 唯一
   advertiser_id: string;
   advertiser_name: string | null;
-  creative_id: string;
   region: string;
-  days: number;
-  domain: string | null;
-  // D-008 F-13/F-15：全部候选 domain（API 已按 metaDomain 优先 + qualifying domain 排序），最多 5 个
-  domains?: string[];
-  // D-008 F-13/D：domain 来源，UI 可显示 [历史] 灰 Tag 标识 snapshot 兜底
-  domain_source?: "meta" | "snapshot" | null;
+  domain: string;                     // 单个 domain（D-018 重写：不再 +N 多 domain chip）
+  days: number;                       // snapshot.max_creative_days
+  qualifying: boolean;                // snapshot.has_long_running_creative
+  creative_count: number;
+  in_today_notification: boolean;     // 该 advertiser 今日是否有 ATC 推送
   atc_url: string;
-  title: string;
-  created_at: string;
-  matched_merchant: MatchedMerchant | null;
+  matched_merchant: MatchedMerchant;  // D-018：必然非 null（未命中已在后端过滤）
 }
 interface TodayAdsResp {
-  stats: { total: number; matched: number; available: number; claimed_or_paused: number };
+  stats: {
+    total: number;
+    matched: number;
+    available: number;
+    claimed_or_paused: number;
+    today_only_count: number;
+  };
   items: TodayAdItem[];
 }
 
@@ -160,12 +162,14 @@ export default function AdvertisersPage() {
   const { message } = App.useApp();
   const [tab, setTab] = useState<"mine" | "recommended" | "discoverable" | "today">("mine");
 
-  // ─── D-004 今日广告 Tab ───────────────────────────────────
+  // ─── D-018 今日广告 Tab（v1.16 重写） ─────────────────────
   const [todayData, setTodayData] = useState<TodayAdsResp | null>(null);
   const [todayLoading, setTodayLoading] = useState(false);
   const [claimingMerchant, setClaimingMerchant] = useState<ClaimMerchant | null>(null);
   // D-008 F-4：今日广告 Tab 顶部国家筛选（"all" = 不过滤）
   const [todayRegionFilter, setTodayRegionFilter] = useState<string>("all");
+  // D-018: 仅看今日推送 Switch（默认 false = 看全部 watchlist + snapshot）
+  const [todayOnly, setTodayOnly] = useState<boolean>(false);
   // D-008 F-1=C：异步加载 region 选项
   const [todayRegionOptions, setTodayRegionOptions] = useState<Array<{ value: string; label: string }>>(
     [{ value: "all", label: "全部国家" }, { value: "US", label: "🇺🇸 美国 (US)" }]
@@ -184,26 +188,25 @@ export default function AdvertisersPage() {
       .catch(() => { /* 静默：失败保留 fallback */ });
   }, []);
 
-  // 派生：根据 todayRegionFilter 过滤 items 和 stats
+  // 派生：根据 todayRegionFilter 过滤 items 和 stats（todayOnly 已在 API 端过滤）
   const todayFilteredData = useMemo<TodayAdsResp | null>(() => {
     if (!todayData) return null;
     if (todayRegionFilter === "all") return todayData;
     const filteredItems = todayData.items.filter((it) => it.region === todayRegionFilter);
-    let matchedCount = 0, availableCount = 0, claimedOrPausedCount = 0;
+    let availableCount = 0, claimedOrPausedCount = 0, todayCount = 0;
     for (const it of filteredItems) {
-      if (it.matched_merchant) {
-        matchedCount++;
-        const s = it.matched_merchant.status;
-        if (s === "available") availableCount++;
-        else if (s === "claimed" || s === "paused") claimedOrPausedCount++;
-      }
+      const s = it.matched_merchant.status;
+      if (s === "available") availableCount++;
+      else if (s === "claimed" || s === "paused") claimedOrPausedCount++;
+      if (it.in_today_notification) todayCount++;
     }
     return {
       stats: {
         total: filteredItems.length,
-        matched: matchedCount,
+        matched: filteredItems.length,
         available: availableCount,
         claimed_or_paused: claimedOrPausedCount,
+        today_only_count: todayCount,
       },
       items: filteredItems,
     };
@@ -212,7 +215,9 @@ export default function AdvertisersPage() {
   const loadToday = useCallback(async () => {
     setTodayLoading(true);
     try {
-      const r = await fetch("/api/user/atc/today-ads").then((x) => x.json());
+      const params = new URLSearchParams(todayOnly ? { today: "1" } : {});
+      const qs = params.toString();
+      const r = await fetch(`/api/user/atc/today-ads${qs ? `?${qs}` : ""}`).then((x) => x.json());
       if (r.code === 0) {
         setTodayData(r.data as TodayAdsResp);
       } else {
@@ -221,7 +226,7 @@ export default function AdvertisersPage() {
     } finally {
       setTodayLoading(false);
     }
-  }, [message]);
+  }, [todayOnly, message]);
 
 
   // ─── 我的关注 ───────────────────────────────────────────
@@ -555,7 +560,7 @@ export default function AdvertisersPage() {
     },
   ], [router, follow, loadRecommended]);
 
-  // D-004 今日广告 Tab 列定义
+  // D-018 今日广告 Tab 列定义（v1.16 重写：单 domain / matched_merchant 必非 null / 仅显示命中商家行）
   const todayCols = useMemo<ColumnsType<TodayAdItem>>(() => [
     {
       title: "商家名",
@@ -563,13 +568,6 @@ export default function AdvertisersPage() {
       width: 260,
       render: (_: unknown, row) => {
         const m = row.matched_merchant;
-        if (!m) {
-          return (
-            <Tooltip title="该广告主的域名未在你的我的商家库中匹配到商家。可联系管理员同步商家库或换平台。">
-              <Text type="secondary" style={{ fontStyle: "italic" }}>未在我的商家库</Text>
-            </Tooltip>
-          );
-        }
         return (
           <MerchantNameCell
             rec={{
@@ -587,58 +585,41 @@ export default function AdvertisersPage() {
       title: "平台",
       key: "platform",
       width: 70,
-      render: (_: unknown, row) => row.matched_merchant
-        ? <Tag color={PLATFORM_COLOR[row.matched_merchant.platform] || "default"} style={{ fontWeight: 600 }}>{row.matched_merchant.platform}</Tag>
-        : <span style={{ color: "#bfbfbf" }}>-</span>,
+      render: (_: unknown, row) => (
+        <Tag color={PLATFORM_COLOR[row.matched_merchant.platform] || "default"} style={{ fontWeight: 600 }}>
+          {row.matched_merchant.platform}
+        </Tag>
+      ),
     },
     {
       title: "MID",
       key: "mid",
-      width: 100,
+      width: 110,
       ellipsis: true,
-      render: (_: unknown, row) => row.matched_merchant?.merchant_id ?? <span style={{ color: "#bfbfbf" }}>-</span>,
+      render: (_: unknown, row) => row.matched_merchant.merchant_id,
     },
     {
-      title: <Tooltip title="该广告主投放的着陆页域名。 优先取该广告 metadata.domain；空时从该广告主历史合格 domain 兜底（标 [历史]）">域名</Tooltip>,
+      title: <Tooltip title="匹配到该商家的合格域名（来自该广告主的 ATC 快照）">域名</Tooltip>,
+      dataIndex: "domain",
       key: "domain",
       width: 220,
-      render: (_: unknown, row: TodayAdItem) => {
-        // D-008 F-13/F-15：多 domain chip 展示
-        const list: string[] = Array.isArray(row.domains) && row.domains.length > 0
-          ? row.domains
-          : (row.domain ? [row.domain] : []);
-        if (list.length === 0) {
-          return (
-            <Tooltip title="该广告未带 domain 字段，且该广告主在团队历史快照中也无 qualifying domain"><span style={{ color: "#bfbfbf" }}>-</span></Tooltip>
-          );
-        }
-        const isHistory = row.domain_source === "snapshot";
-        const head = list.slice(0, 1);
-        const more = list.length - 1;
-        const tipFull = list.join(" / ");
-        return (
-          <Tooltip title={`${tipFull}${isHistory ? "（来自团队历史快照）" : ""}`}>
-            <Space size={4} wrap style={{ rowGap: 2 }}>
-              {head.map((d) => (
-                <Tag color="blue" key={d} style={{ margin: 0 }}>{d}</Tag>
-              ))}
-              {more > 0 && (
-                <Tag style={{ margin: 0, fontSize: 11 }}>+{more}</Tag>
-              )}
-              {isHistory && (
-                <Tag color="default" style={{ margin: 0, fontSize: 11, color: "#999" }}>历史</Tag>
-              )}
-            </Space>
-          </Tooltip>
-        );
-      },
+      render: (v: string, row) => (
+        <Space size={4}>
+          <Tag color="blue" style={{ margin: 0 }}>{v}</Tag>
+          {row.in_today_notification && (
+            <Tooltip title="该广告主今日 (CST 0 点起) 有 ATC 新推送">
+              <Tag color="orange" style={{ margin: 0, fontSize: 11 }}>今</Tag>
+            </Tooltip>
+          )}
+        </Space>
+      ),
     },
     {
       title: "广告主",
       key: "advertiser",
       render: (_: unknown, row) => (
         <a
-          href={`https://adstransparency.google.com/advertiser/${row.advertiser_id}${row.region ? `?region=${row.region}` : ""}`}
+          href={row.atc_url}
           target="_blank"
           rel="noreferrer"
           title="在 ATC 上查看该广告主"
@@ -648,15 +629,20 @@ export default function AdvertisersPage() {
       ),
     },
     {
-      title: <Tooltip title="该广告创意持续投放的天数；≥180 天为长期主推（红）/ ≥60 橙 / ≥30 绿">投放时间</Tooltip>,
+      title: <Tooltip title="该域名下最长创意持续投放天数（snapshot.max_creative_days）；≥180 天为长期主推（红）/ ≥60 橙 / ≥30 绿；🔥 = 该域名是 qualifying（has_long_running_creative）">投放时间</Tooltip>,
       dataIndex: "days",
-      width: 100,
+      width: 130,
       align: "center" as const,
       sorter: (a, b) => a.days - b.days,
       defaultSortOrder: "descend" as const,
-      render: (v: number) => {
+      render: (v: number, row) => {
         const color = v >= 180 ? "#f5222d" : v >= 60 ? "#fa8c16" : v >= 30 ? "#52c41a" : "#8c8c8c";
-        return <span style={{ color, fontWeight: 600 }}>{v} 天</span>;
+        return (
+          <Space size={4}>
+            {row.qualifying && <FireOutlined style={{ color: "#fa8c16" }} />}
+            <span style={{ color, fontWeight: 600 }}>{v} 天</span>
+          </Space>
+        );
       },
     },
     {
@@ -676,7 +662,6 @@ export default function AdvertisersPage() {
       fixed: "right" as const,
       render: (_: unknown, row) => {
         const m = row.matched_merchant;
-        if (!m) return <Button size="small" disabled>无匹配商家</Button>;
         if (m.status === "claimed" || m.status === "paused") {
           return (
             <Tooltip title="已在你名下，去我的商家页面查看">
@@ -926,7 +911,7 @@ export default function AdvertisersPage() {
                 </>
               ),
             },
-            // D-004 第 4 个 Tab：今日广告
+            // D-018 第 4 个 Tab：今日广告（v1.16 重写：列表 = 关注广告主合格域名 × 我的商家库）
             {
               key: "today",
               label: `今日广告${todayData?.stats.total ? ` (${todayData.stats.total})` : ""}`,
@@ -936,22 +921,11 @@ export default function AdvertisersPage() {
                     <Col xs={12} sm={6}>
                       <Card size="small" bodyStyle={{ padding: "10px 14px" }}>
                         <Statistic
-                          title={<span style={{ fontSize: 12 }}>今日推送{todayRegionFilter !== "all" && ` (${todayRegionFilter})`}</span>}
+                          title={<span style={{ fontSize: 12 }}>命中商家域名{todayRegionFilter !== "all" && ` (${todayRegionFilter})`}</span>}
                           value={todayFilteredData?.stats.total ?? 0}
                           loading={todayLoading}
-                          prefix={<CalendarOutlined style={{ color: "#1677ff" }} />}
+                          prefix={<ShopOutlined style={{ color: "#1677ff" }} />}
                           valueStyle={{ fontSize: 22, fontWeight: 700 }}
-                        />
-                      </Card>
-                    </Col>
-                    <Col xs={12} sm={6}>
-                      <Card size="small" bodyStyle={{ padding: "10px 14px" }}>
-                        <Statistic
-                          title={<span style={{ fontSize: 12 }}>命中商家库</span>}
-                          value={todayFilteredData?.stats.matched ?? 0}
-                          loading={todayLoading}
-                          prefix={<ShopOutlined style={{ color: "#722ed1" }} />}
-                          valueStyle={{ fontSize: 22, fontWeight: 700, color: "#722ed1" }}
                         />
                       </Card>
                     </Col>
@@ -977,8 +951,19 @@ export default function AdvertisersPage() {
                         />
                       </Card>
                     </Col>
+                    <Col xs={12} sm={6}>
+                      <Card size="small" bodyStyle={{ padding: "10px 14px" }}>
+                        <Statistic
+                          title={<span style={{ fontSize: 12 }}>今日 ATC 推送</span>}
+                          value={todayFilteredData?.stats.today_only_count ?? 0}
+                          loading={todayLoading}
+                          prefix={<CalendarOutlined style={{ color: "#722ed1" }} />}
+                          valueStyle={{ fontSize: 22, fontWeight: 700, color: "#722ed1" }}
+                        />
+                      </Card>
+                    </Col>
                   </Row>
-                  {/* D-008 F-4：今日广告 Tab 顶部国家筛选 */}
+                  {/* D-018 toolbar：刷新 + 国家筛选 + 仅看今日推送 Switch */}
                   <div style={{ marginBottom: 12, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
                     <Button icon={<ReloadOutlined />} onClick={() => void loadToday()}>刷新</Button>
                     <Select
@@ -989,13 +974,19 @@ export default function AdvertisersPage() {
                       popupMatchSelectWidth={false}
                       size="small"
                     />
+                    <Tooltip title="开启后仅显示今日 (CST 0 点起) 有 ATC 新推送的广告主对应行；关闭则显示所有 watchlist 当前快照的合格域名匹配项">
+                      <Space size={6}>
+                        <Switch size="small" checked={todayOnly} onChange={setTodayOnly} />
+                        <Text style={{ fontSize: 12 }}>仅看今日 ATC 推送</Text>
+                      </Space>
+                    </Tooltip>
                     <Text type="secondary" style={{ fontSize: 12 }}>
                       <GlobalOutlined style={{ marginRight: 4 }} />
-                      数据来自 ATC scanner 今日推送（CST 0:00 起）；按持续天数降序，颜色 ≥180 红 / ≥60 橙 / ≥30 绿
+                      列表 = 关注广告主合格域名 × 我的商家库（未命中商家不显示）；🔥 = qualifying / 颜色 ≥180 红/≥60 橙/≥30 绿
                     </Text>
                   </div>
                   <Table<TodayAdItem>
-                    rowKey="notification_id"
+                    rowKey="row_key"
                     loading={todayLoading}
                     dataSource={todayFilteredData?.items ?? []}
                     columns={todayCols}
@@ -1007,7 +998,7 @@ export default function AdvertisersPage() {
                       pageSizeOptions: ["20", "50", "100", "200"],
                       showTotal: (t: number) => `共 ${t} 条`,
                     }}
-                    locale={{ emptyText: <Empty description="今日还没有新的广告推送（cron 每天 08:00 CST 自动跑）" /> }}
+                    locale={{ emptyText: <Empty description={todayOnly ? "今日还没有新的 ATC 推送命中你的商家库" : "你关注的广告主当前快照中暂无合格域名命中你的商家库；可去「可关注广告主」tab 添加更多广告主"} /> }}
                   />
                 </>
               ),

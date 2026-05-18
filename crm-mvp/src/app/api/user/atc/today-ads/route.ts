@@ -1,35 +1,42 @@
 /**
- * D-004 「今日广告」Tab 数据接口（D-008 F-13/F-14 兜底升级）
+ * D-018 「今日广告」Tab 数据接口（v1.16 重写：彻底修正 D-008/D-004 业务模型）
  *
- * GET /api/user/atc/today-ads
+ * GET /api/user/atc/today-ads?today=0|1
  *
- * 数据流（设计方案.md §四·D-004 §5 + §四·D-008 §4）：
- *   notifications (type='ad', 今日 CST) → 解析 metadata
- *   → 关联 user_atc_watchlist 补 advertiser_name
- *   → D-008 F-13：metadata.domain 优先；空时从 atc_advertiser_domain_snapshot.domains_json 取
- *                 全部 qualifying domain 兜底（has_long_running_creative=true 优先排序）
- *   → D-008 F-14：matched_merchant 用 domains 列表全部尝试根域名匹配 user_merchants，
- *                 第一个命中即返回；status=available > claimed/paused 优先
- *   → user_merchants.connection_campaign_links → 过滤只保留 current_user 的 conn_id（F-15）
- *   → JOIN platform_connections 拿 account_name
+ * 业务模型（07 D-018 拍板）：
+ *   "列表的主体是【域名】，不是 notification。从关注广告主的合格商家域名
+ *    挑出每个 domain，根据 root domain 匹配 user_merchants，没匹配的不显示"
+ *
+ * 数据流：
+ *   1. 拉 user_atc_watchlist（07 关注的所有广告主，is_deleted=0）
+ *   2. 拉对应 atc_advertiser_domain_snapshot.domains_json（按 advertiser_id+region）
+ *   3. 拉 user_merchants 建 merchantByRoot Map（含 STATUS_PRIORITY 去重）
+ *   4. FOR EACH watchlist (advertiser_id, region):
+ *        FOR EACH snapshot.domains_json[i]:
+ *          merchant = merchantByRoot.get(extractRootDomain(domain))
+ *          IF merchant:
+ *            items.push({ ... domain 单值, days = max_creative_days, merchant ... })
+ *          ELSE 跳过
+ *   5. 排序：has_long_running_creative=true 优先 → max_creative_days desc
+ *   6. today=1 时：advertiser+region 必须在今日 type='ad' notifications 出现过
  *
  * 返回：
  *   {
- *     stats: { total, matched, available, claimed_or_paused },
- *     items: [
- *       {
- *         notification_id, advertiser_id, advertiser_name, region, days,
- *         creative_id,
- *         domain: string | null,              // 第一个 domain（保持向后兼容）
- *         domains: string[],                  // D-008 F-13/F-15：全部 domain（最多 5 个）
- *         domain_source: 'meta'|'snapshot'|null, // D-008 F-13/D：UI 区分来源
- *         atc_url,
- *         matched_merchant: null | { ... 同 D-004 结构 }
- *       }
- *     ]
+ *     stats: { total, matched, available, claimed_or_paused, today_only_count },
+ *     items: [{
+ *       row_key,                // `${advertiser_id}|${region}|${domain}` 唯一
+ *       advertiser_id, advertiser_name, region,
+ *       domain,                 // 单个 domain（不再 +N）
+ *       days,                   // snapshot.max_creative_days
+ *       qualifying,             // snapshot.has_long_running_creative
+ *       creative_count,         // snapshot.creative_count
+ *       in_today_notification,  // 该 advertiser 今天是否有 ATC 推送（UI 可加 [今] 标）
+ *       atc_url,                // ATC 广告主链接（按 advertiser+region 拼）
+ *       matched_merchant: { ... 同 D-004 结构，必然非 null }
+ *     }]
  *   }
  *
- * 排序：按 days 降序（F-9）
+ * 排序：has_long_running_creative=true 优先 + max_creative_days desc
  */
 
 import { NextRequest } from "next/server";
@@ -39,30 +46,14 @@ import { serializeData } from "@/lib/auth";
 import prisma from "@/lib/prisma";
 import { loadConnectionAccountMap, buildConnectionAccounts, type ConnectionAccount } from "@/lib/merchant-connection";
 
-/**
- * 今日 CST 00:00 对应的 UTC Date（用于 created_at 比较）
- * 服务器 process 是 UTC，CST = UTC+8，今天 00:00 CST = 昨天 16:00 UTC
- */
+/** 今日 CST 00:00 对应的 UTC Date（CST=UTC+8，今天 00:00 CST = 昨天 16:00 UTC） */
 function todayCstStartUtc(): Date {
   const now = new Date();
-  // 转 CST 后取 00:00
   const cst = new Date(now.getTime() + 8 * 3600 * 1000);
   cst.setUTCHours(0, 0, 0, 0);
-  // 再转回 UTC（减 8h）
   return new Date(cst.getTime() - 8 * 3600 * 1000);
 }
 
-/**
- * 从 URL/hostname 提取根域名（用于 F-4 严格匹配）
- *
- *  - https://www.acegolfs.com/ → acegolfs.com
- *  - https://shop.acegolfs.com/path → acegolfs.com
- *  - acegolfs.com → acegolfs.com
- *  - acegolfs.co.uk → acegolfs.co.uk（保留二级 ccTLD）
- *  - https://www.example.com:8080/ → example.com
- *
- * MVP 策略：strip `www.` 前缀；对常见二级 ccTLD 保留 3 段
- */
 const SECOND_LEVEL_TLD = new Set([
   "co.uk", "co.jp", "co.kr", "co.in", "co.nz", "co.za", "co.id", "co.th", "co.il",
   "com.au", "com.br", "com.mx", "com.sg", "com.hk", "com.tw", "com.tr", "com.cn",
@@ -74,18 +65,13 @@ function extractRootDomain(input: string | null | undefined): string | null {
   if (!input || typeof input !== "string") return null;
   let host = input.trim().toLowerCase();
   if (!host) return null;
-  // 支持纯 hostname / 完整 URL 两种输入
   try {
-    if (host.includes("://")) {
-      host = new URL(host).hostname;
-    } else if (host.includes("/")) {
-      host = host.split("/")[0];
-    }
+    if (host.includes("://")) host = new URL(host).hostname;
+    else if (host.includes("/")) host = host.split("/")[0];
   } catch {
     return null;
   }
   if (host.startsWith("www.")) host = host.slice(4);
-  // 去掉端口
   if (host.includes(":")) host = host.split(":")[0];
   const parts = host.split(".").filter(Boolean);
   if (parts.length < 2) return host || null;
@@ -96,147 +82,49 @@ function extractRootDomain(input: string | null | undefined): string | null {
   return lastTwo;
 }
 
-/**
- * 解析 notifications.metadata（可能是 JSON 字符串或 null）
- */
-function parseMetadata(raw: string | null | undefined): {
-  source?: string;
-  advertiser_id?: string;
-  creative_id?: string;
-  region?: string;
-  days?: number;
-  domain?: string | null;
-  atc_url?: string;
-} | null {
-  if (!raw) return null;
-  try {
-    const m = JSON.parse(raw);
-    if (m && typeof m === "object") return m as Record<string, unknown> as never;
-    return null;
-  } catch {
-    return null;
-  }
-}
+/** snapshot.domains_json 单项类型（与 ETL 写入约定一致） */
+type SnapshotDomain = {
+  domain: string;
+  creative_count?: number;
+  has_long_running_creative?: boolean;
+  max_creative_days?: number;
+};
 
-export const GET = withUser(async (_req: NextRequest, { user }) => {
+export const GET = withUser(async (req: NextRequest, { user }) => {
   const userId = BigInt(user.userId);
-  const since = todayCstStartUtc();
+  const url = new URL(req.url);
+  const todayOnly = url.searchParams.get("today") === "1";
 
-  // ─── 1. 拉今日 type=ad 通知（source=atc_watchlist） ───
-  const notifications = await prisma.notifications.findMany({
-    where: {
-      user_id: userId,
-      type: "ad",
-      is_deleted: 0,
-      created_at: { gte: since },
-    },
-    orderBy: { id: "desc" },
+  // ─── 1. 拉 watchlist（07 关注的所有广告主） ───
+  const watchlists = await prisma.user_atc_watchlist.findMany({
+    where: { user_id: userId, is_deleted: 0 },
+    select: { advertiser_id: true, advertiser_name: true, region: true },
   });
-
-  // 解析 metadata + 仅保留 atc_watchlist 来源
-  type ParsedNotif = {
-    notification_id: string;
-    advertiser_id: string;
-    creative_id: string;
-    region: string;
-    days: number;
-    /** metadata 里的 domain（可能 null）；D-008 F-13 后域名展示走下面 enrichedDomains */
-    metaDomain: string | null;
-    atc_url: string;
-    /** metadata.domain 的根域名 */
-    metaRootDomain: string | null;
-    created_at: string;
-    title: string;
-  };
-  const parsed: ParsedNotif[] = [];
-  for (const n of notifications) {
-    const meta = parseMetadata(n.metadata ?? null);
-    if (!meta) continue;
-    if (meta.source && meta.source !== "atc_watchlist") continue;
-    const advId = String(meta.advertiser_id ?? "");
-    const creativeId = String(meta.creative_id ?? "");
-    if (!advId || !creativeId) continue;
-    const metaDomain = meta.domain ? String(meta.domain) : null;
-    parsed.push({
-      notification_id: n.id.toString(),
-      advertiser_id: advId,
-      creative_id: creativeId,
-      region: String(meta.region ?? "US"),
-      days: typeof meta.days === "number" ? meta.days : 0,
-      metaDomain,
-      atc_url: String(meta.atc_url ?? ""),
-      metaRootDomain: extractRootDomain(metaDomain),
-      created_at: n.created_at.toISOString(),
-      title: n.title,
-    });
-  }
-
-  if (parsed.length === 0) {
+  if (watchlists.length === 0) {
     return apiSuccess(serializeData({
-      stats: { total: 0, matched: 0, available: 0, claimed_or_paused: 0 },
+      stats: { total: 0, matched: 0, available: 0, claimed_or_paused: 0, today_only_count: 0 },
       items: [],
     }));
   }
 
-  // ─── 2. 关联 watchlist 补 advertiser_name ───
-  const advIds = Array.from(new Set(parsed.map((p) => p.advertiser_id)));
-  const watchlists = await prisma.user_atc_watchlist.findMany({
-    where: { user_id: userId, advertiser_id: { in: advIds }, is_deleted: 0 },
-    select: { advertiser_id: true, advertiser_name: true, region: true },
+  // ─── 2. 拉对应 snapshot ───
+  const snapshots = await prisma.atc_advertiser_domain_snapshot.findMany({
+    where: {
+      OR: watchlists.map((w) => ({ advertiser_id: w.advertiser_id, region: w.region })),
+    },
+    select: {
+      advertiser_id: true,
+      region: true,
+      domains_json: true,
+    },
   });
-  const advNameMap = new Map<string, string>();
-  for (const w of watchlists) {
-    advNameMap.set(`${w.advertiser_id}|${w.region}`, w.advertiser_name ?? "");
-    if (!advNameMap.has(w.advertiser_id)) advNameMap.set(w.advertiser_id, w.advertiser_name ?? "");
+  const snapshotByKey = new Map<string, SnapshotDomain[]>();
+  for (const s of snapshots) {
+    const list = Array.isArray(s.domains_json) ? (s.domains_json as SnapshotDomain[]) : [];
+    if (list.length > 0) snapshotByKey.set(`${s.advertiser_id}|${s.region}`, list);
   }
 
-  // ─── 2.5 D-008 F-13：拉 atc_advertiser_domain_snapshot 兜底 domain ───
-  // 收集 (advertiser_id, region) 二元组，一次性查所有快照
-  const advRegionPairs = Array.from(
-    new Set(parsed.map((p) => `${p.advertiser_id}|${p.region}`))
-  ).map((s) => {
-    const [advertiser_id, region] = s.split("|");
-    return { advertiser_id, region };
-  });
-  const advSnapshots = advRegionPairs.length > 0
-    ? await prisma.atc_advertiser_domain_snapshot.findMany({
-        where: {
-          OR: advRegionPairs.map((p) => ({
-            advertiser_id: p.advertiser_id,
-            region: p.region,
-          })),
-        },
-        select: {
-          advertiser_id: true,
-          region: true,
-          domains_json: true,
-          qualifying_domain_count: true,
-        },
-      })
-    : [];
-
-  // advertiser_id|region → 兜底 domain 列表（按 has_long_running_creative=true 优先 + creative_count desc 排序）
-  type DomainStat = { domain: string; creative_count?: number; has_long_running_creative?: boolean };
-  const advSnapshotDomains = new Map<string, string[]>();
-  for (const s of advSnapshots) {
-    const list = Array.isArray(s.domains_json) ? (s.domains_json as DomainStat[]) : [];
-    const sorted = list
-      .filter((d) => d && typeof d.domain === "string" && d.domain.length > 0)
-      .sort((a, b) => {
-        const aQ = a.has_long_running_creative ? 1 : 0;
-        const bQ = b.has_long_running_creative ? 1 : 0;
-        if (aQ !== bQ) return bQ - aQ; // qualifying 优先
-        return (b.creative_count ?? 0) - (a.creative_count ?? 0); // 再按创意数 desc
-      })
-      .map((d) => d.domain.toLowerCase())
-      .slice(0, 5); // 最多 5 个 domain（前端 chip "+2" 形式展开）
-    if (sorted.length > 0) {
-      advSnapshotDomains.set(`${s.advertiser_id}|${s.region}`, sorted);
-    }
-  }
-
-  // ─── 3. 拉当前用户所有 user_merchants（用于根域名严格匹配 + connection_campaign_links） ───
-  // 一次性加载，建 rootDomain → merchant 的 Map（user_id=8 实测 17,376 行，内存 OK）
+  // ─── 3. 拉 user_merchants 建 merchantByRoot Map ───
   const allMerchants = await prisma.user_merchants.findMany({
     where: { user_id: userId, is_deleted: 0 },
     select: {
@@ -256,8 +144,6 @@ export const GET = withUser(async (_req: NextRequest, { user }) => {
     },
   });
   type MerchantRow = (typeof allMerchants)[number];
-
-  // F-4：rootDomain → merchant；多个候选时按 status=available > claimed/paused > 其他 优先
   const STATUS_PRIORITY: Record<string, number> = {
     available: 0,
     claimed: 1,
@@ -279,115 +165,139 @@ export const GET = withUser(async (_req: NextRequest, { user }) => {
     if (myPriority < exPriority) merchantByRoot.set(root, m);
   }
 
-  // ─── 4&5. 解析涉及到的 platform_connections（F-15 跨用户安全已经由 helper 保证） ───
-  // D-008 F-14：matched_merchant 用 multi-domain 列表全部尝试根域名匹配 user_merchants
-  //
-  // 每条 parsed 的候选 domain 池 = metaDomain 优先 + advSnapshot 兜底（去重，最多 5 个）
-  // 匹配优先级：候选 domain 顺序（metaDomain 优先于 snapshot）→ user_merchants STATUS_PRIORITY
-  function buildCandidateDomains(p: ParsedNotif): { domains: string[]; source: "meta" | "snapshot" | null } {
-    const list: string[] = [];
-    let source: "meta" | "snapshot" | null = null;
-    if (p.metaDomain) {
-      const root = extractRootDomain(p.metaDomain);
-      if (root) {
-        list.push(root.toLowerCase());
-        source = "meta";
-      }
-    }
-    const fb = advSnapshotDomains.get(`${p.advertiser_id}|${p.region}`) ?? [];
-    for (const d of fb) {
-      const root = extractRootDomain(d);
-      if (root && !list.includes(root.toLowerCase())) {
-        list.push(root.toLowerCase());
-        if (source === null) source = "snapshot";
-      }
-    }
-    return { domains: list, source };
+  // ─── 4. 拉今日 notification 涉及的 advertiser+region 集合（同时支持 todayOnly filter + in_today_notification 标志）───
+  const since = todayCstStartUtc();
+  const todayNotifs = await prisma.notifications.findMany({
+    where: {
+      user_id: userId,
+      type: "ad",
+      is_deleted: 0,
+      created_at: { gte: since },
+    },
+    select: { metadata: true },
+  });
+  const todayAdvSet = new Set<string>();
+  for (const n of todayNotifs) {
+    if (!n.metadata) continue;
+    try {
+      const meta = JSON.parse(n.metadata) as { source?: string; advertiser_id?: unknown; region?: unknown };
+      if (meta.source && meta.source !== "atc_watchlist") continue;
+      const advId = meta.advertiser_id ? String(meta.advertiser_id) : "";
+      const region = meta.region ? String(meta.region) : "US";
+      if (advId) todayAdvSet.add(`${advId}|${region}`);
+    } catch { /* skip */ }
   }
 
-  // 先算每条 parsed 的候选 domains（用于后续 matched_merchant + UI 展示）
-  const parsedWithDomains = parsed.map((p) => {
-    const { domains, source } = buildCandidateDomains(p);
-    return { p, domains, source };
-  });
+  // ─── 5. 笛卡尔积过滤：watchlist × snapshot.domains → merchant 命中即保留 ───
+  type Item = {
+    row_key: string;
+    advertiser_id: string;
+    advertiser_name: string | null;
+    region: string;
+    domain: string;
+    days: number;
+    qualifying: boolean;
+    creative_count: number;
+    in_today_notification: boolean;
+    atc_url: string;
+    matched_merchant: ReturnType<typeof formatMerchant>;
+  };
+  const matchedMerchantRows: MerchantRow[] = [];
+  const matchedMerchantIdSet = new Set<string>();
+  const pendingItems: Array<{
+    row_key: string;
+    advertiser_id: string;
+    advertiser_name: string | null;
+    region: string;
+    domain: string;
+    days: number;
+    qualifying: boolean;
+    creative_count: number;
+    in_today_notification: boolean;
+    atc_url: string;
+    merchant: MerchantRow;
+  }> = [];
 
-  // 收集所有 matched 到的 merchants 用于一次性 loadConnectionAccountMap
-  const matchedMerchants: typeof allMerchants = [];
-  const matchedSet = new Set<string>();
-  for (const item of parsedWithDomains) {
-    for (const root of item.domains) {
-      const m = merchantByRoot.get(root);
-      if (m && !matchedSet.has(m.id.toString())) {
-        matchedMerchants.push(m);
-        matchedSet.add(m.id.toString());
-        break; // 第一个命中即可
+  for (const w of watchlists) {
+    const advKey = `${w.advertiser_id}|${w.region}`;
+    if (todayOnly && !todayAdvSet.has(advKey)) continue;
+    const inToday = todayAdvSet.has(advKey);
+
+    const snapshotDomains = snapshotByKey.get(advKey) ?? [];
+    for (const sd of snapshotDomains) {
+      if (!sd || typeof sd.domain !== "string" || sd.domain.length === 0) continue;
+      const root = extractRootDomain(sd.domain);
+      if (!root) continue;
+      const merchant = merchantByRoot.get(root);
+      if (!merchant) continue;
+      if (!matchedMerchantIdSet.has(merchant.id.toString())) {
+        matchedMerchantRows.push(merchant);
+        matchedMerchantIdSet.add(merchant.id.toString());
       }
+      pendingItems.push({
+        row_key: `${w.advertiser_id}|${w.region}|${root}`,
+        advertiser_id: w.advertiser_id,
+        advertiser_name: w.advertiser_name,
+        region: w.region,
+        domain: root,
+        days: typeof sd.max_creative_days === "number" ? sd.max_creative_days : 0,
+        qualifying: sd.has_long_running_creative === true,
+        creative_count: typeof sd.creative_count === "number" ? sd.creative_count : 0,
+        in_today_notification: inToday,
+        atc_url: `https://adstransparency.google.com/advertiser/${w.advertiser_id}${w.region ? `?region=${w.region}` : ""}`,
+        merchant,
+      });
     }
   }
-  const connAccountMap = await loadConnectionAccountMap(matchedMerchants, userId);
 
-  // ─── 6. 组装 items ───
-  const items = parsedWithDomains.map(({ p, domains, source }) => {
-    const advName = advNameMap.get(`${p.advertiser_id}|${p.region}`) || advNameMap.get(p.advertiser_id) || null;
-    let matched: ReturnType<typeof formatMerchant> | null = null;
-    for (const root of domains) {
-      const m = merchantByRoot.get(root);
-      if (m) {
-        matched = formatMerchant(m, connAccountMap);
-        break; // 第一个命中即可（domains 已按 metaDomain 优先 → snapshot qualifying 排序）
-      }
-    }
-    return {
-      notification_id: p.notification_id,
-      advertiser_id: p.advertiser_id,
-      advertiser_name: advName,
-      creative_id: p.creative_id,
-      region: p.region,
-      days: p.days,
-      // 向后兼容：domain 字段保留，取第一个候选
-      domain: domains[0] ?? p.metaDomain ?? null,
-      // D-008 F-13/F-15：全部候选 domain（前端 chip 多 domain 展示）
-      domains,
-      // D-008 F-13/D：UI 区分来源（meta=metadata.domain；snapshot=兜底；null=都没有）
-      domain_source: source,
-      atc_url: p.atc_url,
-      title: p.title,
-      created_at: p.created_at,
-      matched_merchant: matched,
-    };
+  // 一次性加载 conn account map
+  const connAccountMap = await loadConnectionAccountMap(matchedMerchantRows, userId);
+
+  // 组装最终 items
+  const items: Item[] = pendingItems.map((p) => ({
+    row_key: p.row_key,
+    advertiser_id: p.advertiser_id,
+    advertiser_name: p.advertiser_name,
+    region: p.region,
+    domain: p.domain,
+    days: p.days,
+    qualifying: p.qualifying,
+    creative_count: p.creative_count,
+    in_today_notification: p.in_today_notification,
+    atc_url: p.atc_url,
+    matched_merchant: formatMerchant(p.merchant, connAccountMap),
+  }));
+
+  // ─── 6. 排序：qualifying 优先 + days desc + advertiser_name asc ───
+  items.sort((a, b) => {
+    if (a.qualifying !== b.qualifying) return a.qualifying ? -1 : 1;
+    if (b.days !== a.days) return b.days - a.days;
+    return (a.advertiser_name ?? "").localeCompare(b.advertiser_name ?? "");
   });
 
-  // F-9：按 days 降序
-  items.sort((a, b) => b.days - a.days);
-
-  // ─── 7. 统计 stats ───
-  let matchedCount = 0;
+  // ─── 7. 统计 ───
   let availableCount = 0;
   let claimedOrPausedCount = 0;
+  let todayCount = 0;
   for (const it of items) {
-    if (it.matched_merchant) {
-      matchedCount++;
-      const s = it.matched_merchant.status;
-      if (s === "available") availableCount++;
-      else if (s === "claimed" || s === "paused") claimedOrPausedCount++;
-    }
+    const s = it.matched_merchant.status;
+    if (s === "available") availableCount++;
+    else if (s === "claimed" || s === "paused") claimedOrPausedCount++;
+    if (it.in_today_notification) todayCount++;
   }
 
   return apiSuccess(serializeData({
     stats: {
       total: items.length,
-      matched: matchedCount,
+      matched: items.length, // 新模型下 items 全是 matched
       available: availableCount,
       claimed_or_paused: claimedOrPausedCount,
+      today_only_count: todayCount,
     },
     items,
   }));
 });
 
-/**
- * 把 user_merchant 行格式化为前端可消费的 merchant 对象，
- * 并把 connection_campaign_links 解析为 connection_accounts[]（用共享 helper）。
- */
 function formatMerchant(
   m: {
     id: bigint;
