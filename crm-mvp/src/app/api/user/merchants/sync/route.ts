@@ -9,7 +9,9 @@ import fs from "fs";
 const logPath = "debug-4fc40c.log";
 const dbg = (msg: string) => { fs.appendFileSync(logPath, `[${new Date().toISOString()}] ${msg}\n`); };
 
-const syncingUsers = new Set<string>();
+// D-012: 改 export 以让其他路由（如 settings/platforms POST 新增 conn 后 auto-sync）复用同一把 lock，
+// 避免重复 sync 与并发竞争。Set 的 module-scope 在 Next.js Node 进程内是单例。
+export const syncingUsers = new Set<string>();
 
 /**
  * POST /api/user/merchants/sync
@@ -57,7 +59,8 @@ export async function POST(req: NextRequest) {
 }
 
 // ─── 后台异步同步 ───
-async function doSyncInBackground(
+// D-012: 改 export 以让 settings/platforms POST 新增 conn 后 fire-and-forget 复用此引擎触发该平台 sync。
+export async function doSyncInBackground(
   userId: bigint,
   conns: { id: bigint; platform: string; account_name: string; api_key: string | null; channel_id: string | null }[],
   targetPlatform?: string,

@@ -77,7 +77,50 @@ export async function POST(req: NextRequest) {
     },
   });
 
+  // D-012: 新增 conn 后 fire-and-forget 触发该平台 sync，
+  // 让新 conn 的商家数据立即入库 → 与同平台其他 conn 自然合并形成 MULTI_KEY
+  // 治本未来"加了 conn 但 user 没手动点同步导致 user_merchants 缺该 conn 的 link"问题
+  triggerAutoSyncAfterCreate(userId, platform).catch((e) => {
+    console.error(`[D-012 auto-sync] init failed for user=${userId} platform=${platform}:`, e);
+  });
+
   return apiSuccess(null, "保存成功");
+}
+
+// D-012: 新增 platform_connection 后自动触发该 user 该平台的 sync
+// 失败不影响主流程（已被 conn 创建成功后调用，不阻塞响应）
+async function triggerAutoSyncAfterCreate(userId: bigint, platform: string) {
+  // 复用 sync engine（dynamic import 避免循环依赖 + 共享 syncingUsers 单例 lock）
+  const { syncingUsers, doSyncInBackground } = await import("@/app/api/user/merchants/sync/route");
+  const platformUpper = platform.toUpperCase();
+  const lockKey = `${userId.toString()}:${platformUpper}`;
+  if (syncingUsers.has(lockKey)) {
+    console.log(`[D-012 auto-sync] skipped: user=${userId} platform=${platformUpper} already syncing`);
+    return;
+  }
+
+  // 拉该 user 在该 platform 的所有 active conn（含刚新增的）
+  const conns = await prisma.platform_connections.findMany({
+    where: { user_id: userId, platform: platformUpper, is_deleted: 0 },
+    select: { id: true, platform: true, account_name: true, api_key: true, channel_id: true },
+  });
+  const valid = conns.filter((c) => {
+    if (!c.api_key || c.api_key.length <= 5) return false;
+    if (c.platform === "AD" && !(c.channel_id && c.channel_id.trim())) return false;
+    return true;
+  });
+  if (valid.length === 0) {
+    console.log(`[D-012 auto-sync] no valid conns for user=${userId} platform=${platformUpper}`);
+    return;
+  }
+
+  syncingUsers.add(lockKey);
+  console.log(`[D-012 auto-sync] triggered user=${userId} platform=${platformUpper} conns=${valid.length}`);
+
+  // fire-and-forget：sync 自己在后台跑，本函数立即返回不阻塞主响应
+  doSyncInBackground(userId, valid, platformUpper)
+    .catch((e) => console.error(`[D-012 auto-sync ${platformUpper}] doSync failed for user=${userId}:`, e))
+    .finally(() => { syncingUsers.delete(lockKey); });
 }
 
 export async function DELETE(req: NextRequest) {
