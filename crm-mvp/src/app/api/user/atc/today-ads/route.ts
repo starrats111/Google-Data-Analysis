@@ -1,42 +1,45 @@
 /**
- * D-018 「今日广告」Tab 数据接口（v1.16 重写：彻底修正 D-008/D-004 业务模型）
+ * D-018 v2「今日广告」Tab API（v1.18 二次重写：07 二次纠正后的最终业务模型）
  *
- * GET /api/user/atc/today-ads?today=0|1
+ * GET /api/user/atc/today-ads
  *
- * 业务模型（07 D-018 拍板）：
- *   "列表的主体是【域名】，不是 notification。从关注广告主的合格商家域名
- *    挑出每个 domain，根据 root domain 匹配 user_merchants，没匹配的不显示"
+ * 业务定义（07 v1.18 拍板）：
+ *   "今日广告应该是符合阈值，且在昨天依旧有投放的广告"
+ *
+ * 真实数据源 = notifications 表（不是 snapshot.domains_json）
+ *   理由：atc-watchlist-scanner (C-089 v2) 每日 cron 已严格按 07 规则过滤后写 notifications：
+ *     - days ≥ watchlist.min_days
+ *     - last_shown 是 CST 昨天（昨天还在投放）
+ *     - 同 user × 同 creative × 同日期不重复推
  *
  * 数据流：
- *   1. 拉 user_atc_watchlist（07 关注的所有广告主，is_deleted=0）
- *   2. 拉对应 atc_advertiser_domain_snapshot.domains_json（按 advertiser_id+region）
- *   3. 拉 user_merchants 建 merchantByRoot Map（含 STATUS_PRIORITY 去重）
- *   4. FOR EACH watchlist (advertiser_id, region):
- *        FOR EACH snapshot.domains_json[i]:
- *          merchant = merchantByRoot.get(extractRootDomain(domain))
- *          IF merchant:
- *            items.push({ ... domain 单值, days = max_creative_days, merchant ... })
- *          ELSE 跳过
- *   5. 排序：has_long_running_creative=true 优先 → max_creative_days desc
- *   6. today=1 时：advertiser+region 必须在今日 type='ad' notifications 出现过
+ *   1. SELECT notifications WHERE user_id=X AND type='ad' AND source='atc_watchlist'
+ *        AND is_deleted=0 AND created_at >= today_cst_00:00
+ *      → 解析 metadata: { advertiser_id, region, domain, creative_id, days, source }
+ *   2. 对每条 notif 取 metadata.domain → extractRootDomain → merchantByRoot.get(root)
+ *   3. 未命中商家 → 跳过（07 D-018 v1 既有规则保留）
+ *   4. 同 (root, merchant_id) 合并为 1 row：days 取最大值 + creative_count = N（兼顾去重 + 信息密度）
+ *   5. 排序：days desc
+ *
+ * 删除 D-018 v1 的：
+ *   - watchlist + snapshot.domains_json 笛卡尔积逻辑（snapshot 缓存数据有 4 天延迟，不符"昨天还在投放"）
+ *   - ?today=1 query 参数 + 「仅看今日推送」Switch（默认就是今日，本来就是 today-ads）
+ *   - qualifying / has_long_running_creative 字段（scanner 已隐含过滤）
+ *   - in_today_notification 标志（list 本身就全是今日）
  *
  * 返回：
  *   {
- *     stats: { total, matched, available, claimed_or_paused, today_only_count },
+ *     stats: { total, available, claimed_or_paused, advertiser_count },
  *     items: [{
- *       row_key,                // `${advertiser_id}|${region}|${domain}` 唯一
+ *       row_key,           // `${advertiser_id}|${region}|${domain}` 唯一
  *       advertiser_id, advertiser_name, region,
- *       domain,                 // 单个 domain（不再 +N）
- *       days,                   // snapshot.max_creative_days
- *       qualifying,             // snapshot.has_long_running_creative
- *       creative_count,         // snapshot.creative_count
- *       in_today_notification,  // 该 advertiser 今天是否有 ATC 推送（UI 可加 [今] 标）
- *       atc_url,                // ATC 广告主链接（按 advertiser+region 拼）
- *       matched_merchant: { ... 同 D-004 结构，必然非 null }
+ *       domain,            // 单 root domain
+ *       days,              // 该 (adv, domain) 下最大 days（最长的那条 creative）
+ *       creative_count,    // 该 (adv, domain) 下今日 notif 条数
+ *       atc_url,
+ *       matched_merchant,  // 必非 null
  *     }]
  *   }
- *
- * 排序：has_long_running_creative=true 优先 + max_creative_days desc
  */
 
 import { NextRequest } from "next/server";
@@ -82,49 +85,107 @@ function extractRootDomain(input: string | null | undefined): string | null {
   return lastTwo;
 }
 
-/** snapshot.domains_json 单项类型（与 ETL 写入约定一致） */
-type SnapshotDomain = {
-  domain: string;
-  creative_count?: number;
-  has_long_running_creative?: boolean;
-  max_creative_days?: number;
+type NotifMeta = {
+  source?: string;
+  advertiser_id?: unknown;
+  region?: unknown;
+  domain?: unknown;
+  creative_id?: unknown;
+  days?: unknown;
+  atc_url?: unknown;
 };
 
-export const GET = withUser(async (req: NextRequest, { user }) => {
+export const GET = withUser(async (_req: NextRequest, { user }) => {
   const userId = BigInt(user.userId);
-  const url = new URL(req.url);
-  const todayOnly = url.searchParams.get("today") === "1";
 
-  // ─── 1. 拉 watchlist（07 关注的所有广告主） ───
-  const watchlists = await prisma.user_atc_watchlist.findMany({
-    where: { user_id: userId, is_deleted: 0 },
-    select: { advertiser_id: true, advertiser_name: true, region: true },
+  // ─── 1. 拉今日 (CST 0:00 起) ATC notifications ───
+  const since = todayCstStartUtc();
+  const notifs = await prisma.notifications.findMany({
+    where: {
+      user_id: userId,
+      type: "ad",
+      is_deleted: 0,
+      created_at: { gte: since },
+    },
+    select: {
+      id: true,
+      title: true,
+      metadata: true,
+      created_at: true,
+    },
+    orderBy: { created_at: "desc" },
   });
-  if (watchlists.length === 0) {
+
+  // ─── 2. 解析 metadata + 取 root domain（过滤无 source/domain 的）───
+  type ParsedNotif = {
+    notif_id: bigint;
+    advertiser_id: string;
+    region: string;
+    root: string;
+    days: number;
+    atc_url: string;
+  };
+  const parsed: ParsedNotif[] = [];
+  for (const n of notifs) {
+    if (!n.metadata) continue;
+    let meta: NotifMeta;
+    try {
+      meta = JSON.parse(n.metadata) as NotifMeta;
+    } catch {
+      continue;
+    }
+    // 兼容老 notif（无 source 字段 = 早期 scanner 写的，仍按 atc_watchlist 处理）
+    if (meta.source && meta.source !== "atc_watchlist") continue;
+    const advId = meta.advertiser_id ? String(meta.advertiser_id) : "";
+    if (!advId) continue;
+    const region = meta.region ? String(meta.region) : "US";
+    const rawDomain = meta.domain ? String(meta.domain) : "";
+    if (!rawDomain) continue;
+    const root = extractRootDomain(rawDomain);
+    if (!root) continue;
+    const days = typeof meta.days === "number"
+      ? meta.days
+      : (typeof meta.days === "string" ? Number.parseInt(meta.days, 10) || 0 : 0);
+    const atcUrl = meta.atc_url ? String(meta.atc_url)
+      : `https://adstransparency.google.com/advertiser/${advId}${region ? `?region=${region}` : ""}`;
+    parsed.push({
+      notif_id: n.id,
+      advertiser_id: advId,
+      region,
+      root,
+      days,
+      atc_url: atcUrl,
+    });
+  }
+
+  if (parsed.length === 0) {
     return apiSuccess(serializeData({
-      stats: { total: 0, matched: 0, available: 0, claimed_or_paused: 0, today_only_count: 0 },
+      stats: { total: 0, available: 0, claimed_or_paused: 0, advertiser_count: 0 },
       items: [],
     }));
   }
 
-  // ─── 2. 拉对应 snapshot ───
-  const snapshots = await prisma.atc_advertiser_domain_snapshot.findMany({
-    where: {
-      OR: watchlists.map((w) => ({ advertiser_id: w.advertiser_id, region: w.region })),
-    },
-    select: {
-      advertiser_id: true,
-      region: true,
-      domains_json: true,
-    },
+  // ─── 3. 拉相关 advertiser_name（从 user_atc_watchlist + notification.title fallback）───
+  const advRegionPairs = Array.from(
+    new Set(parsed.map((p) => `${p.advertiser_id}|${p.region}`))
+  ).map((s) => {
+    const [advId, region] = s.split("|");
+    return { advertiser_id: advId, region };
   });
-  const snapshotByKey = new Map<string, SnapshotDomain[]>();
-  for (const s of snapshots) {
-    const list = Array.isArray(s.domains_json) ? (s.domains_json as SnapshotDomain[]) : [];
-    if (list.length > 0) snapshotByKey.set(`${s.advertiser_id}|${s.region}`, list);
+  const watchRows = await prisma.user_atc_watchlist.findMany({
+    where: {
+      user_id: userId,
+      is_deleted: 0,
+      OR: advRegionPairs,
+    },
+    select: { advertiser_id: true, region: true, advertiser_name: true },
+  });
+  const advNameMap = new Map<string, string>();
+  for (const w of watchRows) {
+    if (w.advertiser_name) advNameMap.set(`${w.advertiser_id}|${w.region}`, w.advertiser_name);
   }
 
-  // ─── 3. 拉 user_merchants 建 merchantByRoot Map ───
+  // ─── 4. 拉 user_merchants 建 merchantByRoot Map ───
   const allMerchants = await prisma.user_merchants.findMany({
     where: { user_id: userId, is_deleted: 0 },
     select: {
@@ -165,30 +226,54 @@ export const GET = withUser(async (req: NextRequest, { user }) => {
     if (myPriority < exPriority) merchantByRoot.set(root, m);
   }
 
-  // ─── 4. 拉今日 notification 涉及的 advertiser+region 集合（同时支持 todayOnly filter + in_today_notification 标志）───
-  const since = todayCstStartUtc();
-  const todayNotifs = await prisma.notifications.findMany({
-    where: {
-      user_id: userId,
-      type: "ad",
-      is_deleted: 0,
-      created_at: { gte: since },
-    },
-    select: { metadata: true },
-  });
-  const todayAdvSet = new Set<string>();
-  for (const n of todayNotifs) {
-    if (!n.metadata) continue;
-    try {
-      const meta = JSON.parse(n.metadata) as { source?: string; advertiser_id?: unknown; region?: unknown };
-      if (meta.source && meta.source !== "atc_watchlist") continue;
-      const advId = meta.advertiser_id ? String(meta.advertiser_id) : "";
-      const region = meta.region ? String(meta.region) : "US";
-      if (advId) todayAdvSet.add(`${advId}|${region}`);
-    } catch { /* skip */ }
+  // ─── 5. notification → merchant 匹配 + 同 (root, advertiser) 合并 ───
+  // key = `${advertiser_id}|${region}|${root}`
+  type AggRow = {
+    row_key: string;
+    advertiser_id: string;
+    advertiser_name: string | null;
+    region: string;
+    domain: string;
+    days: number;          // max
+    creative_count: number; // count
+    atc_url: string;
+    merchant: MerchantRow;
+  };
+  const aggMap = new Map<string, AggRow>();
+  const matchedMerchantSet = new Set<string>();
+  const matchedMerchantRows: MerchantRow[] = [];
+
+  for (const p of parsed) {
+    const merchant = merchantByRoot.get(p.root);
+    if (!merchant) continue;
+    if (!matchedMerchantSet.has(merchant.id.toString())) {
+      matchedMerchantSet.add(merchant.id.toString());
+      matchedMerchantRows.push(merchant);
+    }
+    const key = `${p.advertiser_id}|${p.region}|${p.root}`;
+    const existing = aggMap.get(key);
+    if (!existing) {
+      aggMap.set(key, {
+        row_key: key,
+        advertiser_id: p.advertiser_id,
+        advertiser_name: advNameMap.get(`${p.advertiser_id}|${p.region}`) ?? null,
+        region: p.region,
+        domain: p.root,
+        days: p.days,
+        creative_count: 1,
+        atc_url: p.atc_url,
+        merchant,
+      });
+    } else {
+      if (p.days > existing.days) existing.days = p.days;
+      existing.creative_count += 1;
+    }
   }
 
-  // ─── 5. 笛卡尔积过滤：watchlist × snapshot.domains → merchant 命中即保留 ───
+  // 一次性加载 conn account map
+  const connAccountMap = await loadConnectionAccountMap(matchedMerchantRows, userId);
+
+  // ─── 6. 组装 items + 排序 ───
   type Item = {
     row_key: string;
     advertiser_id: string;
@@ -196,81 +281,23 @@ export const GET = withUser(async (req: NextRequest, { user }) => {
     region: string;
     domain: string;
     days: number;
-    qualifying: boolean;
     creative_count: number;
-    in_today_notification: boolean;
     atc_url: string;
     matched_merchant: ReturnType<typeof formatMerchant>;
   };
-  const matchedMerchantRows: MerchantRow[] = [];
-  const matchedMerchantIdSet = new Set<string>();
-  const pendingItems: Array<{
-    row_key: string;
-    advertiser_id: string;
-    advertiser_name: string | null;
-    region: string;
-    domain: string;
-    days: number;
-    qualifying: boolean;
-    creative_count: number;
-    in_today_notification: boolean;
-    atc_url: string;
-    merchant: MerchantRow;
-  }> = [];
-
-  for (const w of watchlists) {
-    const advKey = `${w.advertiser_id}|${w.region}`;
-    if (todayOnly && !todayAdvSet.has(advKey)) continue;
-    const inToday = todayAdvSet.has(advKey);
-
-    const snapshotDomains = snapshotByKey.get(advKey) ?? [];
-    for (const sd of snapshotDomains) {
-      if (!sd || typeof sd.domain !== "string" || sd.domain.length === 0) continue;
-      const root = extractRootDomain(sd.domain);
-      if (!root) continue;
-      const merchant = merchantByRoot.get(root);
-      if (!merchant) continue;
-      if (!matchedMerchantIdSet.has(merchant.id.toString())) {
-        matchedMerchantRows.push(merchant);
-        matchedMerchantIdSet.add(merchant.id.toString());
-      }
-      pendingItems.push({
-        row_key: `${w.advertiser_id}|${w.region}|${root}`,
-        advertiser_id: w.advertiser_id,
-        advertiser_name: w.advertiser_name,
-        region: w.region,
-        domain: root,
-        days: typeof sd.max_creative_days === "number" ? sd.max_creative_days : 0,
-        qualifying: sd.has_long_running_creative === true,
-        creative_count: typeof sd.creative_count === "number" ? sd.creative_count : 0,
-        in_today_notification: inToday,
-        atc_url: `https://adstransparency.google.com/advertiser/${w.advertiser_id}${w.region ? `?region=${w.region}` : ""}`,
-        merchant,
-      });
-    }
-  }
-
-  // 一次性加载 conn account map
-  const connAccountMap = await loadConnectionAccountMap(matchedMerchantRows, userId);
-
-  // 组装最终 items
-  const items: Item[] = pendingItems.map((p) => ({
-    row_key: p.row_key,
-    advertiser_id: p.advertiser_id,
-    advertiser_name: p.advertiser_name,
-    region: p.region,
-    domain: p.domain,
-    days: p.days,
-    qualifying: p.qualifying,
-    creative_count: p.creative_count,
-    in_today_notification: p.in_today_notification,
-    atc_url: p.atc_url,
-    matched_merchant: formatMerchant(p.merchant, connAccountMap),
+  const items: Item[] = Array.from(aggMap.values()).map((a) => ({
+    row_key: a.row_key,
+    advertiser_id: a.advertiser_id,
+    advertiser_name: a.advertiser_name,
+    region: a.region,
+    domain: a.domain,
+    days: a.days,
+    creative_count: a.creative_count,
+    atc_url: a.atc_url,
+    matched_merchant: formatMerchant(a.merchant, connAccountMap),
   }));
 
-  // ─── 6. 排序：qualifying 优先 + days desc + advertiser_name asc ───
   items.sort((a, b) => {
-    if (a.qualifying !== b.qualifying) return a.qualifying ? -1 : 1;
     if (b.days !== a.days) return b.days - a.days;
     return (a.advertiser_name ?? "").localeCompare(b.advertiser_name ?? "");
   });
@@ -278,21 +305,20 @@ export const GET = withUser(async (req: NextRequest, { user }) => {
   // ─── 7. 统计 ───
   let availableCount = 0;
   let claimedOrPausedCount = 0;
-  let todayCount = 0;
+  const advSet = new Set<string>();
   for (const it of items) {
     const s = it.matched_merchant.status;
     if (s === "available") availableCount++;
     else if (s === "claimed" || s === "paused") claimedOrPausedCount++;
-    if (it.in_today_notification) todayCount++;
+    advSet.add(`${it.advertiser_id}|${it.region}`);
   }
 
   return apiSuccess(serializeData({
     stats: {
       total: items.length,
-      matched: items.length, // 新模型下 items 全是 matched
       available: availableCount,
       claimed_or_paused: claimedOrPausedCount,
-      today_only_count: todayCount,
+      advertiser_count: advSet.size,
     },
     items,
   }));
