@@ -56,15 +56,31 @@ async function fetchSheetValues(
   return json.values ?? [];
 }
 
-async function getSheetTabs(sheetId: string, token: string): Promise<string[]> {
+async function getSheetTabs(sheetId: string, token: string): Promise<string[] | null> {
+  // C-078：返回 null 表示调用失败（区别于 sheet 真的没有 tab），便于上层精确错误分类
   const url = `${SHEETS_API}/${sheetId}?fields=sheets.properties.title`;
   const resp = await fetch(url, {
     headers: { Authorization: `Bearer ${token}` },
     signal: AbortSignal.timeout(10_000),
   });
-  if (!resp.ok) return [];
+  if (!resp.ok) {
+    const body = await resp.text();
+    throw new Error(`Sheets metadata ${resp.status}: ${body.slice(0, 200)}`);
+  }
   const json = (await resp.json()) as { sheets?: { properties: { title: string } }[] };
   return (json.sheets ?? []).map((s) => s.properties.title);
+}
+
+/**
+ * C-078：将 Google Sheets API 错误归类，便于 07 一眼看出根因。
+ * 返回：API_DISABLED | MISSING_TAB | PERMISSION_DENIED | SHEET_NOT_FOUND | OTHER
+ */
+function classifySheetError(msg: string): string {
+  if (/API has not been used.*before or it is disabled/i.test(msg)) return "API_DISABLED";
+  if (/Unable to parse range/i.test(msg)) return "MISSING_TAB";
+  if (/The caller does not have permission/i.test(msg) || /403/.test(msg)) return "PERMISSION_DENIED";
+  if (/Requested entity was not found|404/i.test(msg)) return "SHEET_NOT_FOUND";
+  return "OTHER";
 }
 
 /**
@@ -150,7 +166,17 @@ export async function fetchTodayMerchantsFromSheets(): Promise<TodayMerchantsRes
 
       // 查找 CampaignInfo tab（名称可能有大小写变体）
       const tabs = await getSheetTabs(sheetId, token);
-      const infoTab = tabs.find((t) => t.toLowerCase() === "campaigninfo") ?? "CampaignInfo";
+      if (!tabs || tabs.length === 0) {
+        errors.push(`MCC ${mcc.mcc_id} [MISSING_TAB]: sheet 中无任何 tab，需 Google Ads Script 先生成 CampaignInfo`);
+        continue;
+      }
+      const infoTab = tabs.find((t) => t.toLowerCase() === "campaigninfo");
+      if (!infoTab) {
+        errors.push(
+          `MCC ${mcc.mcc_id} [MISSING_TAB]: sheet 缺 CampaignInfo tab，现有 tabs: ${tabs.slice(0, 10).join(", ")}`
+        );
+        continue;
+      }
 
       // CampaignInfo tab 数据量小（每系列一行，无日期维度），取前 5000 行足够
       const rows = await fetchSheetValues(sheetId, infoTab, token, "A1:E5000");
@@ -163,7 +189,8 @@ export async function fetchTodayMerchantsFromSheets(): Promise<TodayMerchantsRes
       }
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      errors.push(`MCC ${mcc.mcc_id}: ${msg.slice(0, 200)}`);
+      const category = classifySheetError(msg);
+      errors.push(`MCC ${mcc.mcc_id} [${category}]: ${msg.slice(0, 200)}`);
     }
   }
 

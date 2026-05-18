@@ -9,6 +9,15 @@ import { aggregateRawTransactions } from "@/lib/affiliate-txn-aggregate";
 /** 快速同步的时间窗口（天）：覆盖所有状态活跃中的订单 */
 const QUICK_SYNC_DAYS = 14;
 
+/**
+ * C-078 互斥锁过期时间（毫秒）。
+ * 实测 quick-sync 平均 396s / 峰值 939s，cron 改为每 15 分钟一跑后，
+ * lock TTL 设为 20 分钟（1200000ms），覆盖 1.3 倍峰值并预留余量。
+ * 超过 TTL 的 lock 视为僵尸，新 cron 可强制接管。
+ */
+const QUICK_SYNC_LOCK_KEY = "txn_quick_sync_lock";
+const QUICK_SYNC_LOCK_TTL_MS = 20 * 60 * 1000;
+
 function verifyCron(req: NextRequest): boolean {
   const secret = process.env.CRON_SECRET;
   if (!secret) return false;
@@ -18,6 +27,54 @@ function verifyCron(req: NextRequest): boolean {
 function log(msg: string) {
   const ts = new Date().toISOString();
   console.error(`[CRON txn-quick-sync ${ts}] ${msg}`);
+}
+
+/**
+ * C-078 互斥锁实现 — 防止 quick-sync 实例堆叠。
+ * 返回 { acquired: true } 表示成功获取锁，调用方必须在 finally 中调 releaseQuickSyncLock。
+ * 返回 { acquired: false, age_s } 表示锁被占用且未过期，调用方应直接 return skipped。
+ */
+async function acquireQuickSyncLock(): Promise<{ acquired: boolean; age_s?: number }> {
+  const now = new Date();
+  const nowIso = now.toISOString();
+
+  const existing = await prisma.system_configs.findUnique({
+    where: { config_key: QUICK_SYNC_LOCK_KEY },
+  });
+
+  if (existing && existing.is_deleted === 0 && existing.config_value) {
+    const lockedAt = new Date(existing.config_value);
+    const ageMs = now.getTime() - lockedAt.getTime();
+    if (!isNaN(ageMs) && ageMs < QUICK_SYNC_LOCK_TTL_MS) {
+      return { acquired: false, age_s: Math.round(ageMs / 1000) };
+    }
+    // 过期锁，强制接管
+    log(`检测到过期锁（${Math.round(ageMs / 1000)}s ago），强制接管`);
+  }
+
+  await prisma.system_configs.upsert({
+    where: { config_key: QUICK_SYNC_LOCK_KEY },
+    create: {
+      config_key: QUICK_SYNC_LOCK_KEY,
+      config_value: nowIso,
+      description: "C-078 txn-quick-sync 互斥锁；value=ISO 时间戳；超 20 分钟视为僵尸",
+      is_deleted: 0,
+    },
+    update: { config_value: nowIso, is_deleted: 0 },
+  });
+
+  return { acquired: true };
+}
+
+async function releaseQuickSyncLock(): Promise<void> {
+  try {
+    await prisma.system_configs.updateMany({
+      where: { config_key: QUICK_SYNC_LOCK_KEY },
+      data: { is_deleted: 1 },
+    });
+  } catch (e) {
+    log(`释放锁失败（不影响业务）: ${e instanceof Error ? e.message : String(e)}`);
+  }
 }
 
 /**
@@ -60,9 +117,29 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
+  // C-078：获取互斥锁，防止实例堆叠
+  const lockResult = await acquireQuickSyncLock();
+  if (!lockResult.acquired) {
+    log(`跳过本次：上一次 quick-sync 仍在运行（${lockResult.age_s}s ago）`);
+    return NextResponse.json({
+      ok: true,
+      skipped: true,
+      reason: "previous_run_in_progress",
+      previous_lock_age_s: lockResult.age_s,
+    });
+  }
+
   const startTime = Date.now();
   log("开始快速交易同步...");
 
+  try {
+    return await runQuickSync(startTime);
+  } finally {
+    await releaseQuickSyncLock();
+  }
+}
+
+async function runQuickSync(startTime: number): Promise<NextResponse> {
   const users = await prisma.users.findMany({
     where: { is_deleted: 0, status: "active", role: { in: ["user", "leader"] } },
     select: { id: true, username: true },
