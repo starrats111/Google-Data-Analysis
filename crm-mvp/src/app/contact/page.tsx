@@ -28,7 +28,7 @@ const i18n = {
   en: {
     pageTitle: "Get in touch",
     pageSubtitle:
-      "We welcome inquiries from partner merchants, affiliate networks, and Google business representatives.",
+      "Wenzhou Fengdu Advertising & Media Co., Ltd., founded December 2025 — we welcome inquiries from partner merchants, affiliate networks, and Google business representatives.",
     contactBlock: "Contact Information",
     companyLabel: "Company",
     companyName: "Wenzhou Fengdu Advertising & Media Co., Ltd.",
@@ -51,7 +51,8 @@ const i18n = {
   },
   zh: {
     pageTitle: "联系我们",
-    pageSubtitle: "我们欢迎合作商家、联盟营销网络以及 Google 业务方的咨询。",
+    pageSubtitle:
+      "温州丰度广告传媒有限公司成立于 2025 年 12 月，欢迎合作商家、联盟营销网络以及 Google 业务方的咨询。",
     contactBlock: "联系方式",
     companyLabel: "公司名称",
     companyName: "温州丰度广告传媒有限公司",

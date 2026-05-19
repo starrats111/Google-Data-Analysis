@@ -20,10 +20,11 @@ const { Title, Paragraph, Text } = Typography;
 const i18n = {
   en: {
     pageTitle: "About Us",
-    pageSubtitle: "Wenzhou Fengdu Advertising & Media — affiliate marketing × Google Ads automation.",
+    pageSubtitle:
+      "Wenzhou Fengdu Advertising & Media — founded December 2025 — affiliate marketing × Google Ads automation.",
     overview: "Company Overview",
     overviewP1:
-      "Wenzhou Fengdu Advertising & Media Co., Ltd. (温州丰度广告传媒有限公司) is an affiliate marketing company based in Wenzhou, Zhejiang, China. Our business model is to drive purchase-intent traffic to partner merchants' websites through Google Search and Performance Max advertising, and we earn commissions on resulting sales.",
+      "Wenzhou Fengdu Advertising & Media Co., Ltd. (温州丰度广告传媒有限公司) was founded in December 2025 and is an affiliate marketing company based in Wenzhou, Zhejiang, China. Our business model is to drive purchase-intent traffic to partner merchants' websites through Google Search and Performance Max advertising, and we earn commissions on resulting sales.",
     overviewP2:
       "All Google Ads campaigns are operated by our own internal advertising team under our own Google Ads Manager (MCC) account. All advertising budgets are paid for by our company directly to Google. We do not manage campaigns on behalf of third-party clients. All campaigns comply with the Google Ads Affiliate Program Policy.",
     bizTitle: "Our Business Model",
@@ -81,10 +82,10 @@ const i18n = {
   },
   zh: {
     pageTitle: "关于我们",
-    pageSubtitle: "温州丰度广告传媒有限公司 — 联盟营销 × Google Ads 自动化。",
+    pageSubtitle: "温州丰度广告传媒有限公司 — 成立于 2025 年 12 月 — 联盟营销 × Google Ads 自动化。",
     overview: "公司概况",
     overviewP1:
-      "温州丰度广告传媒有限公司是一家位于浙江温州的联盟营销公司。我们的商业模式是通过 Google 搜索广告与效果最大化广告，为合作商家网站引导具有购买意向的流量，并从最终销售中赚取佣金。",
+      "温州丰度广告传媒有限公司成立于 2025 年 12 月，是一家位于浙江温州的联盟营销公司。我们的商业模式是通过 Google 搜索广告与效果最大化广告，为合作商家网站引导具有购买意向的流量，并从最终销售中赚取佣金。",
     overviewP2:
       "所有 Google Ads 广告均由公司内部广告团队在我们自有的 Google Ads 经理账户（MCC）下运营，所有广告预算均由本公司直接向 Google 支付。我们不为任何第三方客户管理广告。所有广告均遵守 Google Ads 联盟营销计划政策（Affiliate Program Policy）。",
     bizTitle: "商业模式",
