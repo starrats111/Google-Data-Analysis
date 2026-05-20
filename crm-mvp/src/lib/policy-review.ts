@@ -53,6 +53,63 @@ function extractDomain(url: string): string {
 }
 
 /**
+ * 解析 match_domains / match_keywords 字段。
+ *
+ * 历史缺陷：DB 里这两个 longtext 字段是**双重 JSON 编码**
+ * （写入时被 Prisma JSON 序列化一次得到字符串 `[...]`，再被外层 JSON 序列化一次得到 `"[...]"`）。
+ * 旧实现只 `JSON.parse()` 一次得到的还是字符串，`for...of` 会**遍历字符串字符**
+ * （`b`, `e`, `t`, ...），导致几乎所有商家被随便一个字符命中而误判。
+ * 此处兜底做两次 parse，保证拿到真正的 string[]。
+ */
+function parseStringList(raw: unknown): string[] {
+  if (!raw) return [];
+  if (Array.isArray(raw)) return raw.map((s) => String(s));
+  if (typeof raw !== "string") return [];
+  try {
+    let v: unknown = JSON.parse(raw);
+    if (typeof v === "string") v = JSON.parse(v);
+    if (Array.isArray(v)) return v.map((s) => String(s));
+  } catch {
+    /* ignore */
+  }
+  return [];
+}
+
+/** 正则元字符转义 */
+function escapeRegex(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * 关键词匹配：使用词边界，避免 `loan` 命中 `loandsons.com` 这种误判。
+ * 中文关键词无 `\b` 边界概念，退化为子串匹配（兼容现有中文规则）。
+ */
+function keywordMatches(text: string, kw: string): boolean {
+  const k = kw.trim().toLowerCase();
+  if (!k) return false;
+  // 全为 ASCII 单词字符 → 走词边界正则
+  if (/^[\w\s.+-]+$/.test(k)) {
+    try {
+      return new RegExp(`\\b${escapeRegex(k)}\\b`, "i").test(text);
+    } catch {
+      return text.includes(k);
+    }
+  }
+  // 含中文/特殊字符 → 子串匹配
+  return text.includes(k);
+}
+
+/**
+ * 域名匹配：精确等值或子域后缀（`domain === d || domain.endsWith('.' + d)`），
+ * 避免 `loandsons.com` 被 `loan` 这种短串包含命中。
+ */
+function domainMatches(domain: string, d: string): boolean {
+  const dd = d.trim().toLowerCase();
+  if (!dd || !domain) return false;
+  return domain === dd || domain.endsWith("." + dd);
+}
+
+/**
  * 审核单个商家的政策合规性
  */
 export async function reviewMerchantPolicy(
@@ -70,11 +127,10 @@ export async function reviewMerchantPolicy(
   ].join(" ").toLowerCase();
 
   for (const cat of categories!) {
-    // 1. 精确域名匹配（优先级最高）
-    const rawDomains = cat.match_domains;
-    const matchDomains: string[] = typeof rawDomains === "string" ? JSON.parse(rawDomains) : (rawDomains as string[] || []);
+    // 1. 域名匹配（精确或子域后缀；不再用子串 includes）
+    const matchDomains = parseStringList(cat.match_domains);
     for (const d of matchDomains) {
-      if (domain && domain.includes(d.toLowerCase())) {
+      if (domainMatches(domain, d)) {
         return {
           policy_status: cat.restriction_level as "restricted" | "prohibited",
           policy_category_code: cat.category_code,
@@ -85,11 +141,10 @@ export async function reviewMerchantPolicy(
       }
     }
 
-    // 2. 关键词匹配
-    const rawKeywords = cat.match_keywords;
-    const matchKeywords: string[] = typeof rawKeywords === "string" ? JSON.parse(rawKeywords) : (rawKeywords as string[] || []);
+    // 2. 关键词匹配（词边界，避免 loan 命中 loandsons）
+    const matchKeywords = parseStringList(cat.match_keywords);
     for (const kw of matchKeywords) {
-      if (searchText.includes(kw.toLowerCase())) {
+      if (keywordMatches(searchText, kw)) {
         return {
           policy_status: cat.restriction_level as "restricted" | "prohibited",
           policy_category_code: cat.category_code,
@@ -144,10 +199,9 @@ export async function batchReviewMerchants(
     let matched = false;
 
     for (const cat of categories!) {
-      const rawDomains = cat.match_domains;
-      const matchDomains: string[] = typeof rawDomains === "string" ? JSON.parse(rawDomains) : (rawDomains as string[] || []);
+      const matchDomains = parseStringList(cat.match_domains);
       for (const d of matchDomains) {
-        if (domain && domain.includes(d.toLowerCase())) {
+        if (domainMatches(domain, d)) {
           taggedMerchants.push({ ...m, result: { policy_status: cat.restriction_level as "restricted" | "prohibited", policy_category_code: cat.category_code, policy_category_id: cat.id, matched_rule: `domain:${d}`, restriction_level: cat.restriction_level } });
           if (cat.restriction_level === "restricted") restricted++;
           if (cat.restriction_level === "prohibited") prohibited++;
@@ -157,10 +211,9 @@ export async function batchReviewMerchants(
       }
       if (matched) break;
 
-      const rawKeywords = cat.match_keywords;
-      const matchKeywords: string[] = typeof rawKeywords === "string" ? JSON.parse(rawKeywords) : (rawKeywords as string[] || []);
+      const matchKeywords = parseStringList(cat.match_keywords);
       for (const kw of matchKeywords) {
-        if (searchText.includes(kw.toLowerCase())) {
+        if (keywordMatches(searchText, kw)) {
           taggedMerchants.push({ ...m, result: { policy_status: cat.restriction_level as "restricted" | "prohibited", policy_category_code: cat.category_code, policy_category_id: cat.id, matched_rule: `keyword:${kw}`, restriction_level: cat.restriction_level } });
           if (cat.restriction_level === "restricted") restricted++;
           if (cat.restriction_level === "prohibited") prohibited++;
