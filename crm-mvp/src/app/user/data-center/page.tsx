@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 import { useState, useMemo, useCallback, useEffect, useRef } from "react";
 import { globalMutate } from "@/lib/swr";
@@ -144,16 +144,30 @@ export default function DataCenterPage() {
   // 本地状态覆盖（toggle 后立即更新，不等 API 刷新）
   const [statusOverrides, setStatusOverrides] = useState<Record<string, string>>({});
 
-  const rows = useMemo(() => (campaignData?.rows || [])
-    .filter((r: IndexedRow) => r.campaign_name && /^\d/.test(r.campaign_name))
-    .map((r: IndexedRow) => statusOverrides[r.id] ? { ...r, status: statusOverrides[r.id] } : r)
-    .sort((a, b) => {
-      if (a.status === "ENABLED" && b.status !== "ENABLED") return -1;
-      if (a.status !== "ENABLED" && b.status === "ENABLED") return 1;
-      const seqA = parseInt(a.campaign_name?.split("-")[0] || "0", 10) || 0;
-      const seqB = parseInt(b.campaign_name?.split("-")[0] || "0", 10) || 0;
-      return seqB - seqA;
-    }), [campaignData?.rows, statusOverrides]);
+  const rows = useMemo(() => {
+    // 提取广告系列名前缀里的数字序号，用于排序。
+    // 非数字命名（如 "Campaign #1"、手动创建的测试 Campaign）返回 -1，排到该状态末尾，
+    // 但仍然展示出来 —— 不能直接 filter 掉，否则用户视角会丢失这些花费 / 佣金不为零的 Campaign，
+    // 而组长视角又能看到，造成"组长能看 wj08 看不到"的诡异现象。
+    const extractSeq = (name: string | null | undefined): number => {
+      if (!name) return -1;
+      const head = name.split("-")[0] || "";
+      const digits = head.replace(/^[a-zA-Z]+/, "");
+      return /^\d+$/.test(digits) ? parseInt(digits, 10) : -1;
+    };
+    return (campaignData?.rows || [])
+      .map((r: IndexedRow) => statusOverrides[r.id] ? { ...r, status: statusOverrides[r.id] } : r)
+      .sort((a, b) => {
+        if (a.status === "ENABLED" && b.status !== "ENABLED") return -1;
+        if (a.status !== "ENABLED" && b.status === "ENABLED") return 1;
+        const seqA = extractSeq(a.campaign_name);
+        const seqB = extractSeq(b.campaign_name);
+        // 非数字命名 (seq=-1) 排到末尾；数字命名按 DESC
+        if (seqA === -1 && seqB !== -1) return 1;
+        if (seqA !== -1 && seqB === -1) return -1;
+        return seqB - seqA;
+      });
+  }, [campaignData?.rows, statusOverrides]);
   const costByMcc = campaignData?.costByMcc || [];
   const rowMeta = campaignData?.rowMeta;
 
