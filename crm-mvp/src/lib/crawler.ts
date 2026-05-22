@@ -1878,6 +1878,41 @@ export async function crawlWithPuppeteerFull(url: string, timeoutMs = 30000, pro
         ))
           .map(a => ({ url: (a as HTMLAnchorElement).href, text: (a as HTMLElement).innerText.trim() }))
           .filter(l => l.url && l.text.length >= 2 && l.text.length <= 40);
+
+        // D-032：CSS Modules 哈希类名站点（zenhotels.com 的 HeaderB2C-module__main--2bLbR、
+        // 部分 Next.js / Vue 站点）上面 13 个 selector 全军覆没 → 启用全量 a[href] fallback。
+        // 思路：同域名 + 有有意义文字 + 路径深度 ≥1 + 排除 legal/cookie/account 等典型 utility 链接。
+        // 下游 discoverSitelinkCandidates 还会做 fetchMeta 验证 + 路径去重 + 最多 6 条筛选，
+        // 这里宽松输出 40 条候选不会污染最终结果。
+        if (navLinks.length === 0) {
+          const myHost = location.hostname.replace(/^www\./, "").toLowerCase();
+          // 典型 legal / utility / event-tracking 路径黑名单
+          const excludePathRe = /\/(legal|privacy|terms|cookie|gdpr|sitemap|robots|account|login|signin|signup|register|cart|checkout|wishlist|favourites?|favorite|fav|404|error|policy|conditions|copyright|disclaimer|complaint|career|jobs|press[-\/])\b|\/hc\/event/i;
+          // 排除按钮型短文字（图标按钮、cookie 横幅等）
+          const excludeTextRe = /^(agree|accept|reject|deny|ok|close|cancel|x|menu|search|cart|sign\s?in|sign\s?up|log\s?in|log\s?out|register|account|profile|help|faq|contact\s?us|en|us|gb|de|fr|es|it|jp|cn|ko|home)$/i;
+
+          const seen = new Set<string>();
+          const fallback: { url: string; text: string }[] = [];
+          for (const a of Array.from(document.querySelectorAll("a[href]"))) {
+            const text = ((a as HTMLElement).innerText
+              || a.getAttribute("aria-label")
+              || a.getAttribute("title")
+              || "").trim();
+            if (text.length < 2 || text.length > 40) continue;
+            if (excludeTextRe.test(text)) continue;
+            let u: URL;
+            try { u = new URL((a as HTMLAnchorElement).href); } catch { continue; }
+            if (u.hostname.replace(/^www\./, "").toLowerCase() !== myHost) continue;
+            if (u.pathname === "/" || u.pathname === "") continue;
+            if (excludePathRe.test(u.pathname)) continue;
+            const key = (u.origin + u.pathname).replace(/\/$/, "").toLowerCase();
+            if (seen.has(key)) continue;
+            seen.add(key);
+            fallback.push({ url: u.toString(), text });
+            if (fallback.length >= 40) break;
+          }
+          navLinks.push(...fallback);
+        }
         const imgSrcs = new Set<string>();
         // 收集所有可能携带真实图片 URL 的属性（含懒加载）
         document.querySelectorAll("img, [data-src], [data-original], [data-lazy-src], [data-img], [data-background]").forEach(el => {
