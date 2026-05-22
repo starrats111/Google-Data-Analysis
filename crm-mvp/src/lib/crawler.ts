@@ -2213,6 +2213,47 @@ export async function fetchUrlMeta(
     }
   }
 
+  // ══════════════════════════════════════════════════════
+  // D-029：L1 Puppeteer 真人指纹兜底
+  //
+  // 背景：drsturm.com / amazon.com 等用 Cloudflare bot challenge / Datadome 强反爬，
+  // HTTP 层（无论代理还是直连）一律返回 403 + "Just a moment..." 挑战页，
+  // L0a/L0b 都无法获取真实内容。
+  //
+  // batchFetchMetaViaPuppeteer 早就实现了完整的 puppeteer-extra + Stealth 方案
+  // （注释明确写"用于 fetchUrlMeta HTTP 全挂的兜底"），但实际从未被 fetchUrlMeta 调用，
+  // 导致整套设计上的 Puppeteer 兜底层缺位。
+  //
+  // 触发条件：与 L0b 一致 —— 至少发生过 wasBlocked 信号才上 Puppeteer，
+  // 避免对纯 404 / DNS 失败的 URL 浪费 browser 资源。
+  // 单 URL 调用 batchFetchMetaViaPuppeteer，函数内部有 acquirePuppeteerSlot 全局限流，
+  // 不会击穿 2 核 3.7G 服务器。
+  // ══════════════════════════════════════════════════════
+  if (wasBlocked) {
+    try {
+      console.warn(`[Crawler] fetchUrlMeta L0 全灭，启动 L1 Puppeteer 真人指纹兜底: ${url}`);
+      let puppeteerProxy: string | undefined;
+      if (country) {
+        try {
+          const { getHttpProxyUrlForCountry } = await import("@/lib/crawl-proxy");
+          puppeteerProxy = (await getHttpProxyUrlForCountry(country)) ?? undefined;
+        } catch {}
+      }
+      const puppMap = await batchFetchMetaViaPuppeteer([url], puppeteerProxy, {
+        concurrency: 1,
+        perPageTimeoutMs: 25000,
+      });
+      const m = puppMap.get(url);
+      if (m && m.ok) {
+        console.warn(`[Crawler] fetchUrlMeta L1 Puppeteer 兜底成功: ${url} title="${m.title.slice(0, 60)}"`);
+        return { title: m.title, description: m.description, ok: true, finalUrl: m.finalUrl, isSoft404: m.isSoft404 };
+      }
+      console.warn(`[Crawler] fetchUrlMeta L1 Puppeteer 仍未通过（可能 Cloudflare hard block 或 URL 失效）: ${url}`);
+    } catch (e) {
+      console.warn(`[Crawler] fetchUrlMeta L1 Puppeteer 兜底异常: ${e instanceof Error ? e.message : e}`);
+    }
+  }
+
   return { title: "", description: "", ok: false, finalUrl: lastFinalUrl, isSoft404: false };
 }
 
