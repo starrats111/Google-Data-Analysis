@@ -1,6 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getUserFromRequest } from "@/lib/auth";
 import { normalizeImageUrl, hasLiquidPlaceholder } from "@/lib/image-url-normalize";
+import {
+  getHostKey,
+  isHostChallenged,
+  markHostChallenged,
+} from "@/lib/crawl-host-cache";
 
 // avif 需包含在内：Cloudinary f_auto 在 Accept:image/* 下会优先返回 avif
 const ALLOWED_TYPES = ["image/jpeg", "image/png", "image/webp", "image/gif", "image/avif", "image/svg+xml"];
@@ -13,14 +18,158 @@ const USER_AGENTS = [
   "Googlebot-Image/1.0",
 ];
 
-/** 从 CDN URL 推断商家网站 Referer（防盗链通常要求 Referer 来自商家域名） */
+// =====================================================================
+// D-031：进程内 LRU 图片缓存（5 分钟 TTL）
+// =====================================================================
+// 同一商家多人同时查看 / 单次预览页面 14 个 <img> 并发请求时，避免重复下载
+// 同一张图。命中走超快路径（直接返回 Buffer，0 网络开销）。
+
+interface CachedImage {
+  buffer: Buffer;
+  contentType: string;
+  expireAt: number;
+}
+
+const IMAGE_CACHE_TTL_MS = 5 * 60 * 1000;
+const IMAGE_CACHE_MAX = 1000;
+const imageCache = new Map<string, CachedImage>();
+
+function getImageCache(url: string): CachedImage | null {
+  const v = imageCache.get(url);
+  if (!v) return null;
+  if (Date.now() > v.expireAt) {
+    imageCache.delete(url);
+    return null;
+  }
+  return v;
+}
+
+function setImageCache(url: string, buffer: Buffer, contentType: string): void {
+  imageCache.set(url, {
+    buffer,
+    contentType,
+    expireAt: Date.now() + IMAGE_CACHE_TTL_MS,
+  });
+  if (imageCache.size > IMAGE_CACHE_MAX) {
+    const now = Date.now();
+    for (const [k, v] of imageCache) {
+      if (now > v.expireAt) imageCache.delete(k);
+      if (imageCache.size <= IMAGE_CACHE_MAX * 0.9) break;
+    }
+    // 仍超量则按插入序删最早的（Map 遍历是插入序）
+    while (imageCache.size > IMAGE_CACHE_MAX) {
+      const first = imageCache.keys().next().value;
+      if (!first) break;
+      imageCache.delete(first);
+    }
+  }
+}
+
+// =====================================================================
+// D-031：同 host 200ms 批量 coalescer（L1 Puppeteer）
+// =====================================================================
+// 前端 14 个 <img> 几乎同时打到 image-proxy，按 host 收集成 1 个 batch，
+// 由 fetchImagesViaPuppeteerBatch 共享 1 个 browser 一次性下载全部。
+
+type ImageResolver = (v: { buffer: Buffer; contentType: string } | null) => void;
+
+interface PendingImageBatch {
+  refererOrigin: string;
+  urls: Set<string>;
+  resolvers: Map<string, ImageResolver[]>;
+  timer: NodeJS.Timeout | null;
+}
+
+const IMAGE_COALESCE_WINDOW_MS = 200;
+const pendingImageBatches = new Map<string, PendingImageBatch>();
+
+function coalescedPuppeteerImageFetch(
+  url: string,
+  refererOrigin: string,
+): Promise<{ buffer: Buffer; contentType: string } | null> {
+  return new Promise<{ buffer: Buffer; contentType: string } | null>((resolve) => {
+    let batch = pendingImageBatches.get(refererOrigin);
+    if (!batch) {
+      batch = {
+        refererOrigin,
+        urls: new Set(),
+        resolvers: new Map(),
+        timer: null,
+      };
+      pendingImageBatches.set(refererOrigin, batch);
+      batch.timer = setTimeout(() => {
+        fireImageBatch(refererOrigin).catch((e) =>
+          console.warn("[ImageProxy] fireImageBatch 异常:", e instanceof Error ? e.message : e),
+        );
+      }, IMAGE_COALESCE_WINDOW_MS);
+    }
+    batch.urls.add(url);
+    const arr = batch.resolvers.get(url) || [];
+    arr.push(resolve);
+    batch.resolvers.set(url, arr);
+  });
+}
+
+async function fireImageBatch(refererOrigin: string): Promise<void> {
+  const batch = pendingImageBatches.get(refererOrigin);
+  if (!batch) return;
+  // 立刻摘掉，让窗口期后新进来的请求开新 batch
+  pendingImageBatches.delete(refererOrigin);
+  if (batch.timer) clearTimeout(batch.timer);
+
+  const urls = Array.from(batch.urls);
+  let result = new Map<string, { buffer: Buffer; contentType: string }>();
+
+  try {
+    const { fetchImagesViaPuppeteerBatch } = await import("@/lib/crawler");
+    const { getHttpProxyUrlForCountry, getProxyUrlForCountry } = await import("@/lib/crawl-proxy");
+
+    let proxyCountry = "US";
+    try {
+      const h = new URL(refererOrigin).hostname.toLowerCase();
+      if (h.endsWith(".co.uk") || h.endsWith(".uk")) proxyCountry = "GB";
+      else if (h.endsWith(".de")) proxyCountry = "DE";
+      else if (h.endsWith(".fr")) proxyCountry = "FR";
+      else if (h.endsWith(".au")) proxyCountry = "AU";
+      else if (h.endsWith(".ca")) proxyCountry = "CA";
+    } catch {}
+
+    const httpProxyUrl = await getHttpProxyUrlForCountry(proxyCountry).catch(() => null);
+    const socks5ProxyUrl = httpProxyUrl ? null : await getProxyUrlForCountry(proxyCountry).catch(() => null);
+    const proxyUrl = httpProxyUrl ?? socks5ProxyUrl ?? undefined;
+
+    console.warn(
+      `[ImageProxy] L1 Puppeteer 批量启动: referer=${refererOrigin} urls=${urls.length} proxy=${proxyUrl ? proxyCountry : "direct"}`,
+    );
+
+    const t0 = Date.now();
+    result = await fetchImagesViaPuppeteerBatch(urls, refererOrigin, proxyUrl, {
+      perFetchTimeoutMs: 15000,
+      navigationTimeoutMs: 20000,
+    });
+    console.warn(
+      `[ImageProxy] L1 Puppeteer 批量完成: 成功 ${result.size}/${urls.length} 张, 耗时 ${Date.now() - t0}ms`,
+    );
+  } catch (e) {
+    console.warn("[ImageProxy] L1 Puppeteer batch 异常:", e instanceof Error ? e.message : e);
+  }
+
+  for (const u of urls) {
+    const v = result.get(u) || null;
+    if (v) setImageCache(u, v.buffer, v.contentType);
+    const resolvers = batch.resolvers.get(u) || [];
+    for (const r of resolvers) r(v);
+  }
+}
+
+// =====================================================================
+// 工具：从 CDN URL 推断 Referer
+// =====================================================================
 function inferReferer(imageUrl: string): string[] {
   try {
     const u = new URL(imageUrl);
     const cdn = u.hostname;
-    // Cloudinary: res.cloudinary.com/<account>/...
     if (cdn === "res.cloudinary.com") {
-      // Cloudinary URL 路径第一段是账户名，即品牌名，尝试构造品牌 URL
       const account = u.pathname.split("/").filter(Boolean)[0] || "";
       if (account) {
         return [
@@ -31,8 +180,6 @@ function inferReferer(imageUrl: string): string[] {
       }
       return ["https://www.google.com/", u.origin + "/"];
     }
-    // Salesforce Commerce Cloud / contentsvc CDN: assets.contentsvc.com/<brand>/...
-    // 路径第一段是品牌名
     if (cdn.includes("contentsvc.com") || cdn.includes("commercecloud.salesforce.com")) {
       const brand = u.pathname.split("/").filter(Boolean)[0] || "";
       if (brand) {
@@ -44,7 +191,6 @@ function inferReferer(imageUrl: string): string[] {
       }
       return ["https://www.google.com/"];
     }
-    // 品牌自有子域 CDN（如 images.scarosso.com）→ 推断主域名（去掉子域前缀）
     const parts = cdn.split(".");
     if (parts.length >= 3) {
       const apex = parts.slice(-2).join(".");
@@ -56,10 +202,34 @@ function inferReferer(imageUrl: string): string[] {
   }
 }
 
+/** 从 image url + refHint 取出 L1 Puppeteer navigate 的目标 origin */
+function pickRefererOrigin(imageUrl: string, refHint: string | null): string {
+  if (refHint) {
+    try {
+      return new URL(refHint).origin;
+    } catch {}
+  }
+  const inferred = inferReferer(imageUrl)[0] || "";
+  try {
+    return new URL(inferred).origin;
+  } catch {
+    try {
+      return new URL(imageUrl).origin;
+    } catch {
+      return "https://www.google.com";
+    }
+  }
+}
+
 /**
- * GET /api/user/ad-creation/image-proxy?url=xxx
+ * GET /api/user/ad-creation/image-proxy?url=xxx&ref=yyy
  * 服务端代理外部图片，绕过商家网站防盗链/CORS 限制。
- * 支持 avif（Cloudinary f_auto 默认返回格式）。
+ *
+ * D-031 三层兜底：
+ *   L-cache: 进程内 LRU 5 分钟命中 → 0s 返回
+ *   L0a 直连 2 UA × 2 Referer
+ *   L0b HTTP/SOCKS5 出口代理
+ *   L1 Puppeteer 真人指纹（同 host 200ms 批量）—— 过 Cloudflare 防盗链
  */
 export async function GET(req: NextRequest) {
   const user = getUserFromRequest(req);
@@ -68,8 +238,6 @@ export async function GET(req: NextRequest) {
   const rawUrl = req.nextUrl.searchParams.get("url");
   if (!rawUrl) return new NextResponse("Missing url", { status: 400 });
 
-  // C-030：兜底清洗 Shopify Liquid 模板占位符（{width}/{height}），
-  // 防止历史爬虫未替换导致 CDN 返回 404。
   const url = normalizeImageUrl(rawUrl);
   const placeholderFixed = hasLiquidPlaceholder(rawUrl) && !hasLiquidPlaceholder(url);
 
@@ -83,146 +251,193 @@ export async function GET(req: NextRequest) {
     return new NextResponse("Only http(s) allowed", { status: 400 });
   }
 
-  // 前端可传入商家真实 URL 作为 Referer 提示，优先于自动推断（提高防盗链通过率）
+  // -------- L-cache：进程内 LRU --------
+  const cached = getImageCache(url);
+  if (cached) {
+    return new NextResponse(new Uint8Array(cached.buffer), {
+      headers: {
+        "Content-Type": cached.contentType,
+        "Content-Length": String(cached.buffer.length),
+        "Cache-Control": `public, max-age=${CACHE_TTL}`,
+        "Access-Control-Allow-Origin": "*",
+        "X-Image-Proxy-Source": "lru",
+      },
+    });
+  }
+
   const refHint = req.nextUrl.searchParams.get("ref");
   const inferredReferers = inferReferer(url);
-  // 最多取 2 个 Referer：用户 hint（最准确）+ 推断的第一个；避免 12 次全组合占用服务器
   const allReferers = refHint
     ? [refHint, ...inferredReferers.filter((r) => r !== refHint)]
     : inferredReferers;
   const referers = allReferers.slice(0, 2);
   let lastError = "";
 
-  for (const ua of USER_AGENTS) {
-    for (const referer of referers) {
-      try {
-        const resp = await fetch(url, {
-          headers: {
-            "User-Agent": ua,
-            // 优先 webp/jpeg，兜底接受 avif；避免 CDN 因 Accept:image/* 优先返回 avif 导致误判
-            Accept: "image/webp,image/jpeg,image/png,image/avif,image/*;q=0.8",
-            Referer: referer,
-          },
-          // 8s 快速失败：CDN 无声丢包时避免长时间阻塞服务器（原 5s 对大图/高延迟 CDN 过于激进）
-          signal: AbortSignal.timeout(8000),
-          redirect: "follow",
-        });
+  const imgHost = getHostKey(url);
+  const hostChallenged = imgHost ? isHostChallenged(imgHost) : false;
 
-        if (!resp.ok) {
-          lastError = `HTTP ${resp.status} (referer=${referer})`;
-          continue;
-        }
-
-        const ct = resp.headers.get("content-type") || "";
-        if (!ALLOWED_TYPES.some((t) => ct.startsWith(t))) {
-          lastError = `Not image: ${ct}`;
-          continue;
-        }
-
-      const cl = parseInt(resp.headers.get("content-length") || "0", 10);
-      if (cl > MAX_SIZE) {
-        return new NextResponse("Image too large", { status: 413 });
-      }
-
-      const buffer = Buffer.from(await resp.arrayBuffer());
-      if (buffer.length > MAX_SIZE) {
-        return new NextResponse("Image too large", { status: 413 });
-      }
-      if (buffer.length < 100) {
-        lastError = "Image too small (likely placeholder)";
-        continue;
-      }
-
-      return new NextResponse(buffer, {
-        headers: {
-          "Content-Type": ct,
-          "Content-Length": String(buffer.length),
-          "Cache-Control": `public, max-age=${CACHE_TTL}`,
-          "Access-Control-Allow-Origin": "*",
-        },
-      });
-      } catch (err) {
-        lastError = err instanceof Error ? err.message : String(err);
-      }
-    }  // end for referer
-  }  // end for ua
-
-  // 直连全部失败 → 尝试通过动态出口代理重试（绕过商家 CDN 的 IP/地域封锁）
-  // 策略：优先 HTTP 代理（Chrome 兼容、实测可达），不可用时降级 SOCKS5
-  try {
-    const { getHttpProxyUrlForCountry, getProxyUrlForCountry, fetchViaProxy } = await import("@/lib/crawl-proxy");
-    // 从图片 URL hostname 推断商家所在国家（CDN 通常与商家同地域，默认 US）
-    let proxyCountry = "US";
-    try {
-      const imgHost = new URL(url).hostname.toLowerCase();
-      if (imgHost.endsWith(".co.uk") || imgHost.endsWith(".uk")) proxyCountry = "GB";
-      else if (imgHost.endsWith(".de")) proxyCountry = "DE";
-      else if (imgHost.endsWith(".fr")) proxyCountry = "FR";
-      else if (imgHost.endsWith(".au")) proxyCountry = "AU";
-      else if (imgHost.endsWith(".ca")) proxyCountry = "CA";
-    } catch {}
-
-    // HTTP 代理优先：实测 arxlabs HTTP 可达，SOCKS5 连接挂起导致 10s Aborted
-    const httpProxyUrl = await getHttpProxyUrlForCountry(proxyCountry).catch(() => null);
-    const socks5ProxyUrl = await getProxyUrlForCountry(proxyCountry).catch(() => null);
-    const proxyUrl = httpProxyUrl ?? socks5ProxyUrl;
-
-    if (proxyUrl) {
-      const proxyType = httpProxyUrl ? "HTTP" : "SOCKS5";
-      const referer = inferReferer(url)[0] || "";
-      try {
-        const proxyResp = await fetchViaProxy(
-          url,
-          {
+  // -------- L0a + L0b：仅当 host 未被标记反爬时跑 --------
+  // 已知反爬 host 直接跳 L1，省 5-10s 浪费
+  if (!hostChallenged) {
+    for (const ua of USER_AGENTS) {
+      for (const referer of referers) {
+        try {
+          const resp = await fetch(url, {
             headers: {
-              "User-Agent": USER_AGENTS[0],
-              "Accept": "image/webp,image/jpeg,image/png,image/avif,image/*;q=0.8",
-              ...(referer ? { "Referer": referer } : {}),
+              "User-Agent": ua,
+              Accept: "image/webp,image/jpeg,image/png,image/avif,image/*;q=0.8",
+              Referer: referer,
             },
-            signal: AbortSignal.timeout(12000),
-          },
-          proxyUrl,
-        );
-        if (proxyResp.ok) {
-          const ct = (proxyResp.headers["content-type"] as string) || "image/jpeg";
-          if (ALLOWED_TYPES.some((t) => ct.startsWith(t))) {
-            const buf = await proxyResp.buffer();
-            if (buf.length >= 100 && buf.length <= MAX_SIZE) {
-              console.log(`[ImageProxy] ${proxyType}代理成功: ${url.slice(0, 80)} (${proxyCountry}, ${buf.length}B)`);
-              return new NextResponse(buf, {
-                headers: {
-                  "Content-Type": ct,
-                  "Content-Length": String(buf.length),
-                  "Cache-Control": `public, max-age=${CACHE_TTL}`,
-                  "Access-Control-Allow-Origin": "*",
-                },
-              });
+            signal: AbortSignal.timeout(8000),
+            redirect: "follow",
+          });
+
+          if (!resp.ok) {
+            lastError = `HTTP ${resp.status} (referer=${referer})`;
+            continue;
+          }
+
+          const ct = resp.headers.get("content-type") || "";
+          if (!ALLOWED_TYPES.some((t) => ct.startsWith(t))) {
+            lastError = `Not image: ${ct}`;
+            continue;
+          }
+
+          const cl = parseInt(resp.headers.get("content-length") || "0", 10);
+          if (cl > MAX_SIZE) {
+            return new NextResponse("Image too large", { status: 413 });
+          }
+
+          const buffer = Buffer.from(await resp.arrayBuffer());
+          if (buffer.length > MAX_SIZE) {
+            return new NextResponse("Image too large", { status: 413 });
+          }
+          if (buffer.length < 100) {
+            lastError = "Image too small (likely placeholder)";
+            continue;
+          }
+
+          setImageCache(url, buffer, ct);
+          return new NextResponse(new Uint8Array(buffer), {
+            headers: {
+              "Content-Type": ct,
+              "Content-Length": String(buffer.length),
+              "Cache-Control": `public, max-age=${CACHE_TTL}`,
+              "Access-Control-Allow-Origin": "*",
+              "X-Image-Proxy-Source": "direct",
+            },
+          });
+        } catch (err) {
+          lastError = err instanceof Error ? err.message : String(err);
+        }
+      }
+    }
+
+    // -------- L0b：动态出口代理 --------
+    try {
+      const { getHttpProxyUrlForCountry, getProxyUrlForCountry, fetchViaProxy } = await import("@/lib/crawl-proxy");
+      let proxyCountry = "US";
+      try {
+        const h = new URL(url).hostname.toLowerCase();
+        if (h.endsWith(".co.uk") || h.endsWith(".uk")) proxyCountry = "GB";
+        else if (h.endsWith(".de")) proxyCountry = "DE";
+        else if (h.endsWith(".fr")) proxyCountry = "FR";
+        else if (h.endsWith(".au")) proxyCountry = "AU";
+        else if (h.endsWith(".ca")) proxyCountry = "CA";
+      } catch {}
+
+      const httpProxyUrl = await getHttpProxyUrlForCountry(proxyCountry).catch(() => null);
+      const socks5ProxyUrl = await getProxyUrlForCountry(proxyCountry).catch(() => null);
+      const proxyUrl = httpProxyUrl ?? socks5ProxyUrl;
+
+      if (proxyUrl) {
+        const proxyType = httpProxyUrl ? "HTTP" : "SOCKS5";
+        const referer = inferReferer(url)[0] || "";
+        try {
+          const proxyResp = await fetchViaProxy(
+            url,
+            {
+              headers: {
+                "User-Agent": USER_AGENTS[0],
+                "Accept": "image/webp,image/jpeg,image/png,image/avif,image/*;q=0.8",
+                ...(referer ? { "Referer": referer } : {}),
+              },
+              signal: AbortSignal.timeout(12000),
+            },
+            proxyUrl,
+          );
+          if (proxyResp.ok) {
+            const ct = (proxyResp.headers["content-type"] as string) || "image/jpeg";
+            if (ALLOWED_TYPES.some((t) => ct.startsWith(t))) {
+              const buf = await proxyResp.buffer();
+              if (buf.length >= 100 && buf.length <= MAX_SIZE) {
+                console.log(`[ImageProxy] ${proxyType}代理成功: ${url.slice(0, 80)} (${proxyCountry}, ${buf.length}B)`);
+                setImageCache(url, buf, ct);
+                return new NextResponse(new Uint8Array(buf), {
+                  headers: {
+                    "Content-Type": ct,
+                    "Content-Length": String(buf.length),
+                    "Cache-Control": `public, max-age=${CACHE_TTL}`,
+                    "Access-Control-Allow-Origin": "*",
+                    "X-Image-Proxy-Source": "proxy",
+                  },
+                });
+              }
             }
           }
+          lastError = `proxy HTTP ${proxyResp.status}`;
+        } catch (proxyErr) {
+          lastError = `${proxyType} 代理异常: ${proxyErr instanceof Error ? proxyErr.message : proxyErr}`;
         }
-        console.warn(`[ImageProxy] ${proxyType}代理也失败: ${url.slice(0, 80)} status=${proxyResp.status}`);
-      } catch (proxyErr) {
-        console.warn(`[ImageProxy] ${proxyType}代理异常: ${proxyErr instanceof Error ? proxyErr.message : proxyErr}`);
+      } else {
+        lastError = "无可用代理配置";
       }
-    } else {
-      console.warn(`[ImageProxy] 无可用代理配置，跳过代理重试`);
+    } catch (proxyErr) {
+      lastError = `代理重试异常: ${proxyErr instanceof Error ? proxyErr.message : proxyErr}`;
     }
-  } catch (proxyErr) {
-    console.warn(`[ImageProxy] 代理重试异常: ${proxyErr instanceof Error ? proxyErr.message : proxyErr}`);
+
+    // L0a + L0b 全军覆没 → 标记 host 反爬，后续同 host 跳直入 L1
+    if (imgHost) markHostChallenged(imgHost);
+  }
+
+  // -------- L1：Puppeteer 真人指纹（同 host 200ms 批量） --------
+  try {
+    const refererOrigin = pickRefererOrigin(url, refHint);
+    const puppResult = await coalescedPuppeteerImageFetch(url, refererOrigin);
+    if (puppResult) {
+      const { buffer, contentType } = puppResult;
+      if (buffer.length >= 100 && buffer.length <= MAX_SIZE) {
+        return new NextResponse(new Uint8Array(buffer), {
+          headers: {
+            "Content-Type": contentType,
+            "Content-Length": String(buffer.length),
+            "Cache-Control": `public, max-age=${CACHE_TTL}`,
+            "Access-Control-Allow-Origin": "*",
+            "X-Image-Proxy-Source": "puppeteer",
+          },
+        });
+      }
+    }
+    lastError = lastError ? `${lastError}; L1 Puppeteer 失败` : "L1 Puppeteer 失败";
+  } catch (e) {
+    lastError = lastError
+      ? `${lastError}; L1 异常 ${e instanceof Error ? e.message : e}`
+      : `L1 异常 ${e instanceof Error ? e.message : e}`;
   }
 
   console.warn(
-    "[ImageProxy] all attempts failed (incl. proxy):",
+    "[ImageProxy] all attempts failed (incl. proxy + puppeteer):",
     url,
     placeholderFixed ? "(placeholder-fixed)" : "",
+    hostChallenged ? "(host pre-challenged)" : "",
     lastError,
   );
-  // 代理也失败时返回 1×1 透明 PNG，避免浏览器显示红叉破图
+
   const TRANSPARENT_PNG = Buffer.from(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==",
     "base64",
   );
-  return new NextResponse(TRANSPARENT_PNG, {
+  return new NextResponse(new Uint8Array(TRANSPARENT_PNG), {
     status: 200,
     headers: {
       "Content-Type": "image/png",

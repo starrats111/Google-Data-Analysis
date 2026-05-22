@@ -2,6 +2,7 @@ import { existsSync } from "fs";
 import { getProxyUrlForCountry, getHttpProxyUrlForCountry, fetchViaProxy } from "@/lib/crawl-proxy";
 import { acquirePuppeteerSlot, puppeteerSemaphoreStats } from "@/lib/puppeteer-semaphore";
 import { normalizeImageUrl } from "@/lib/image-url-normalize";
+import { getHostKey, isHostChallenged, markHostChallenged } from "@/lib/crawl-host-cache";
 
 export interface PuppeteerPageData {
   html: string;
@@ -1213,6 +1214,202 @@ export async function batchFetchMetaViaPuppeteer(
 }
 
 /**
+ * D-031：image-proxy 的 L1 Puppeteer 兜底。
+ *
+ * 背景：drsturm.com 等 Cloudflare 严防盗链站点，HTTP 直连 + 出口 HTTP/SOCKS5 代理拉
+ * 图片均稳定返回 403（CF Bot Fight Mode 对图片资源也强制 JS 挑战）。
+ *
+ * 思路：用 puppeteer-extra + Stealth 真人指纹先 navigate 到商家主页过一次 CF 挑战，
+ * 取到 cf_clearance / __cf_bm cookie 后，在同一 page context 内并发 fetch 多张图片，
+ * 直接拿到二进制 → base64 → 返 Buffer。一次 browser 启动摊薄 N 张图的开销。
+ *
+ * 性能：~10-15s 拿到 1-20 张图（含 5s browser 启动 + 5s navigate + 6s CF 挑战 +
+ * 并发下载）。同 host 后续请求由调用方自行做 LRU/coalesce 避免重复。
+ */
+export async function fetchImagesViaPuppeteerBatch(
+  imageUrls: string[],
+  refererOrigin: string,
+  proxyUrl?: string,
+  options: { perFetchTimeoutMs?: number; navigationTimeoutMs?: number } = {},
+): Promise<Map<string, { buffer: Buffer; contentType: string }>> {
+  const result = new Map<string, { buffer: Buffer; contentType: string }>();
+  if (imageUrls.length === 0) return result;
+
+  const perFetchTimeoutMs = options.perFetchTimeoutMs ?? 15000;
+  const navigationTimeoutMs = options.navigationTimeoutMs ?? 20000;
+
+  const browserPath = findBrowserPath();
+  if (!browserPath) {
+    console.warn("[Crawler] fetchImagesViaPuppeteerBatch: 未找到浏览器，跳过");
+    return result;
+  }
+
+  const launchArgs = [
+    "--no-sandbox", "--disable-setuid-sandbox",
+    "--disable-blink-features=AutomationControlled",
+    "--window-size=1920,1080",
+    "--disable-dev-shm-usage",
+    "--disable-web-security",
+    "--disable-features=VizDisplayCompositor",
+    "--disable-infobars", "--disable-extensions",
+    "--disable-background-timer-throttling",
+    "--disable-backgrounding-occluded-windows",
+    "--disable-renderer-backgrounding",
+    "--disable-gpu", "--disable-software-rasterizer",
+    "--ignore-certificate-errors",
+    "--ozone-platform=headless",
+  ];
+
+  let proxyAuth: { username: string; password: string } | null = null;
+  if (proxyUrl) {
+    try {
+      const parsed = new URL(proxyUrl);
+      const proxyServerArg = `${parsed.protocol}//${parsed.hostname}:${parsed.port}`;
+      if (parsed.username) {
+        proxyAuth = {
+          username: decodeURIComponent(parsed.username),
+          password: decodeURIComponent(parsed.password),
+        };
+      }
+      launchArgs.push(`--proxy-server=${proxyServerArg}`);
+    } catch {
+      launchArgs.push(`--proxy-server=${proxyUrl}`);
+    }
+  }
+
+  let releasePuppeteerSlot: () => void = () => {};
+  try {
+    releasePuppeteerSlot = await acquirePuppeteerSlot(30000);
+  } catch (e) {
+    const stats = puppeteerSemaphoreStats();
+    console.warn(`[Crawler] fetchImagesViaPuppeteerBatch 等待 Puppeteer slot 超时 (${stats.active}/${stats.max}, queued=${stats.queued}): ${e instanceof Error ? e.message : e}`);
+    return result;
+  }
+
+  let browser: any = null;
+  try {
+    try {
+      const puppeteerExtra = await import("puppeteer-extra");
+      const StealthPlugin = await import("puppeteer-extra-plugin-stealth");
+      const stealthMod = StealthPlugin as any;
+      const stealthFn = stealthMod.default || stealthMod;
+      puppeteerExtra.default.use(stealthFn());
+      browser = await puppeteerExtra.default.launch({
+        executablePath: browserPath,
+        headless: "new" as any,
+        args: launchArgs,
+      });
+    } catch {
+      const puppeteerCore = await import("puppeteer-core");
+      const launcher = puppeteerCore.default || puppeteerCore;
+      browser = await launcher.launch({
+        executablePath: browserPath,
+        headless: "new" as any,
+        args: launchArgs,
+      });
+    }
+
+    const page = await browser.newPage();
+    try {
+      if (proxyAuth) await page.authenticate(proxyAuth);
+      await page.setUserAgent(randomDesktopUA());
+      await page.setViewport({ width: 1366, height: 900 });
+      await page.evaluateOnNewDocument(PUPPETEER_ANTI_DETECT_SCRIPT);
+
+      // 不开 setRequestInterception —— 拿 cookie 阶段不需要 abort，且后续 page.evaluate
+      // 里的 fetch 走的是浏览器 fetch API，不会被这里的 interception 影响
+
+      try {
+        await page.goto(refererOrigin, {
+          waitUntil: "domcontentloaded",
+          timeout: navigationTimeoutMs,
+        });
+      } catch {
+        // navigation 超时不致命，部分 CF 挑战页本身就一直 pending，留给下面的 waitForFunction 判定
+      }
+
+      // CF JS 挑战 6s 窗口
+      try {
+        await page.waitForFunction(
+          () => {
+            const t = (document.title || "").toLowerCase();
+            if (!t) return false;
+            const bad = ["just a moment", "attention required", "checking your browser", "one moment, please"];
+            return !bad.some((b) => t.includes(b));
+          },
+          { timeout: 8000, polling: 500 },
+        );
+      } catch {
+        // 8s 内没过挑战也继续，下面 fetch 大概率仍 403，但极少数情况下 cookie 已经下发
+      }
+
+      // 在 page context 内并发 fetch 所有图片，转 base64 + content-type
+      const pageOut = await page.evaluate(
+        async (urls: string[], ref: string, timeoutMs: number) => {
+          const out: Record<string, { dataUrl: string; ct: string } | { err: string }> = {};
+          await Promise.all(
+            urls.map(async (u) => {
+              const ac = new AbortController();
+              const tm = setTimeout(() => ac.abort(), timeoutMs);
+              try {
+                const r = await fetch(u, {
+                  referrer: ref,
+                  credentials: "include",
+                  signal: ac.signal,
+                });
+                clearTimeout(tm);
+                if (!r.ok) {
+                  out[u] = { err: `HTTP ${r.status}` };
+                  return;
+                }
+                const ct = r.headers.get("content-type") || "image/jpeg";
+                const blob = await r.blob();
+                const dataUrl: string = await new Promise((resolve, reject) => {
+                  const fr = new FileReader();
+                  fr.onload = () => resolve(fr.result as string);
+                  fr.onerror = () => reject(new Error("FileReader failed"));
+                  fr.readAsDataURL(blob);
+                });
+                out[u] = { dataUrl, ct };
+              } catch (e: any) {
+                clearTimeout(tm);
+                out[u] = { err: e?.message || String(e) };
+              }
+            }),
+          );
+          return out;
+        },
+        imageUrls,
+        refererOrigin,
+        perFetchTimeoutMs,
+      );
+
+      for (const [u, v] of Object.entries(pageOut || {})) {
+        if (!v || typeof v !== "object") continue;
+        const dataUrl = (v as { dataUrl?: unknown }).dataUrl;
+        if (typeof dataUrl !== "string" || dataUrl.length === 0) continue;
+        const idx = dataUrl.indexOf(",");
+        if (idx <= 0) continue;
+        const buf = Buffer.from(dataUrl.slice(idx + 1), "base64");
+        if (buf.length < 100) continue;
+        const ctRaw = (v as { ct?: unknown }).ct;
+        const ct = typeof ctRaw === "string" && ctRaw.length > 0 ? ctRaw : "image/jpeg";
+        result.set(u, { buffer: buf, contentType: ct });
+      }
+    } finally {
+      try { await page.close(); } catch {}
+    }
+  } catch (e) {
+    console.warn("[Crawler] fetchImagesViaPuppeteerBatch 异常:", e instanceof Error ? e.message : e);
+  } finally {
+    try { if (browser) await browser.close(); } catch {}
+    releasePuppeteerSlot();
+  }
+
+  return result;
+}
+
+/**
  * F-12 修复：共享 browser 的多页面图片采集
  *
  * 背景：byfood.com 等 Cloudflare 强保护站，
@@ -2114,32 +2311,8 @@ export async function crawlPage(url: string, country?: string): Promise<CrawlRes
 //      UA 6→3、timeout 12s→8s 配合，L0a 上限 72s → 24s。
 // ══════════════════════════════════════════════════════
 
-const CHALLENGED_HOST_TTL_MS = 30 * 60 * 1000;
-const challengedHosts = new Map<string, number>();
-
-function getHostKey(url: string): string | null {
-  try { return new URL(url).hostname.toLowerCase(); } catch { return null; }
-}
-
-function isHostChallenged(host: string): boolean {
-  const exp = challengedHosts.get(host);
-  if (!exp) return false;
-  if (Date.now() > exp) {
-    challengedHosts.delete(host);
-    return false;
-  }
-  return true;
-}
-
-function markHostChallenged(host: string): void {
-  challengedHosts.set(host, Date.now() + CHALLENGED_HOST_TTL_MS);
-  if (challengedHosts.size > 500) {
-    const now = Date.now();
-    for (const [h, e] of challengedHosts) {
-      if (now > e) challengedHosts.delete(h);
-    }
-  }
-}
+// D-031：challengedHosts / getHostKey 等已抽到 @/lib/crawl-host-cache 共享模块，
+// 让 image-proxy 等其他模块也能复用同一份"站点是否反爬"指纹
 
 interface PuppeteerMeta {
   title: string;
