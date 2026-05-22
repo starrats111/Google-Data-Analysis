@@ -4,6 +4,12 @@ import { normalizePlatformCode } from "@/lib/constants";
 import { quickCheckUrl } from "@/lib/url-validator";
 
 export const dynamic = "force-dynamic";
+// D-028：next start 的 Node 进程里，HTTP handler 一旦 return，
+// fire-and-forget 的后台 Promise 会被立即解除引用，
+// 导致 doMerchantCheck() 实际上从未跑完（PM2 日志里完全搜不到
+// "Checking relations" / "All done in" 输出，全用户全平台 0 新增即是证据）。
+// 改为 await 等待整个 check 完成；maxDuration 跟 daily-sync 对齐到 4 小时上限。
+export const maxDuration = 14400;
 
 function verifyCron(req: NextRequest): boolean {
   const secret = process.env.CRON_SECRET;
@@ -18,20 +24,27 @@ function log(msg: string) {
 /**
  * GET /api/cron/daily-merchant-check
  *
- * ?? 00:00 CST ??????????????????
- * 1. ???????????? API ???????????
- *    ???? joined ? claimed ?????? joined ???
- * 2. ? claimed ??? tracking_link / campaign_link ????????
- *    ????????????
+ * 每天 00:00 CST 执行：
+ * 1. 对每个用户的每个平台连接，调 fetchAllMerchants 拉所有 joined 商家：
+ *    - API 仍标 joined 但 CRM 内 claimed 商家 → 不动
+ *    - API 不再返回但 CRM 内 claimed 商家 → status 改回 available
+ *    - API 新增 joined 商家 → CRM 自动 create user_merchants 记录
+ * 2. 对 claimed 商家校验 tracking_link / campaign_link 是否可访问，
+ *    失活链接发通知给用户。
  */
 export async function GET(req: NextRequest) {
   if (!verifyCron(req)) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  doMerchantCheck().catch(e => log(`FATAL: ${e instanceof Error ? e.message : String(e)}`));
-
-  return NextResponse.json({ ok: true, message: "merchant check started in background" });
+  try {
+    await doMerchantCheck();
+    return NextResponse.json({ ok: true });
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    log(`FATAL: ${msg}`);
+    return NextResponse.json({ ok: false, error: msg }, { status: 500 });
+  }
 }
 
 // ???????? cron ???????????????????????
