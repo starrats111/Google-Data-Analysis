@@ -2096,27 +2096,151 @@ export async function crawlPage(url: string, country?: string): Promise<CrawlRes
   };
 }
 
+// ══════════════════════════════════════════════════════
+// D-030：站级反爬指纹缓存 + Puppeteer 调用合并 + L0 早退
+//
+// 背景：drsturm.com 类 Cloudflare bot challenge 强保护站，L0a 代理 + L0b 直连
+// 一定失败（每条净浪费 5-15s + Puppeteer 启动 5-10s）。批量 enrich 同商家
+// 10 URL 时，每条都重跑 L0a/L0b + 各自启 1 次 browser，单商家可达 5 分钟。
+//
+// 优化：
+//   1) 站级 challenged 缓存（host → expireAt，TTL 30 分钟）：
+//      首次 L0a 命中 wasBlocked 后标记 host。后续同 host 入口直接走 L1 通道，
+//      跳过 L0a/L0b，节省 5-15s/条。
+//   2) Puppeteer 调用合并（coalescing）：L1 路径不立即开 browser，而是把 URL
+//      塞进同 host 的 200ms 收集窗口；窗口结束时一次 batchFetchMetaViaPuppeteer
+//      共享 1 个 browser 跑全部 URL，分发结果到各 caller。
+//   3) L0a 早退：单 IP 被 CF 识别后换 UA 无效，wasBlocked 出现立即 break。
+//      UA 6→3、timeout 12s→8s 配合，L0a 上限 72s → 24s。
+// ══════════════════════════════════════════════════════
+
+const CHALLENGED_HOST_TTL_MS = 30 * 60 * 1000;
+const challengedHosts = new Map<string, number>();
+
+function getHostKey(url: string): string | null {
+  try { return new URL(url).hostname.toLowerCase(); } catch { return null; }
+}
+
+function isHostChallenged(host: string): boolean {
+  const exp = challengedHosts.get(host);
+  if (!exp) return false;
+  if (Date.now() > exp) {
+    challengedHosts.delete(host);
+    return false;
+  }
+  return true;
+}
+
+function markHostChallenged(host: string): void {
+  challengedHosts.set(host, Date.now() + CHALLENGED_HOST_TTL_MS);
+  if (challengedHosts.size > 500) {
+    const now = Date.now();
+    for (const [h, e] of challengedHosts) {
+      if (now > e) challengedHosts.delete(h);
+    }
+  }
+}
+
+interface PuppeteerMeta {
+  title: string;
+  description: string;
+  finalUrl: string;
+  ok: boolean;
+  isSoft404: boolean;
+}
+interface PuppeteerBatch {
+  urls: Set<string>;
+  resolvers: Map<string, ((m: PuppeteerMeta) => void)[]>;
+  proxy?: string;
+  timer: NodeJS.Timeout;
+}
+const pendingPuppeteerBatch = new Map<string, PuppeteerBatch>();
+const COALESCE_WINDOW_MS = 200;
+
+async function firePuppeteerBatch(host: string): Promise<void> {
+  const batch = pendingPuppeteerBatch.get(host);
+  if (!batch) return;
+  pendingPuppeteerBatch.delete(host);
+
+  const urls = Array.from(batch.urls);
+  const concurrency = Math.min(urls.length, 2);
+  console.warn(`[Crawler] L1 Puppeteer 批量启动 host=${host} urls=${urls.length} concurrency=${concurrency}`);
+  let result: Map<string, PuppeteerMeta>;
+  try {
+    result = await batchFetchMetaViaPuppeteer(urls, batch.proxy, { concurrency, perPageTimeoutMs: 25000 });
+  } catch (e) {
+    console.warn(`[Crawler] L1 Puppeteer 批量异常 host=${host}: ${e instanceof Error ? e.message : e}`);
+    result = new Map();
+  }
+  for (const [url, resolvers] of batch.resolvers) {
+    const meta = result.get(url) ?? { title: "", description: "", finalUrl: url, ok: false, isSoft404: false };
+    for (const r of resolvers) r(meta);
+  }
+}
+
+function coalescedPuppeteerFetch(url: string, proxy: string | undefined): Promise<PuppeteerMeta> {
+  const host = getHostKey(url);
+  if (!host) {
+    return Promise.resolve({ title: "", description: "", finalUrl: url, ok: false, isSoft404: false });
+  }
+  let batch = pendingPuppeteerBatch.get(host);
+  if (!batch) {
+    batch = {
+      urls: new Set<string>(),
+      resolvers: new Map<string, ((m: PuppeteerMeta) => void)[]>(),
+      proxy,
+      timer: setTimeout(() => { firePuppeteerBatch(host).catch(() => {}); }, COALESCE_WINDOW_MS),
+    };
+    pendingPuppeteerBatch.set(host, batch);
+  }
+  batch.urls.add(url);
+  return new Promise<PuppeteerMeta>((resolve) => {
+    const arr = batch!.resolvers.get(url) ?? [];
+    arr.push(resolve);
+    batch!.resolvers.set(url, arr);
+  });
+}
+
 /**
  * 爬取单个 URL 的标题、描述和最终真实 URL
  * 跟踪重定向获取真实落地页 URL，检测软 404
  *
- * C-014 §2.1：L0 层强化
- *   - 新增 `country` 参数：传入后每轮 UA retry 重新调 getProxyUrlForCountry
- *     拿新代理 IP（底层 buildSocks5Url 每次 sid 轮换 → 不同出口 IP），4 UA × 4 IP
- *     避免单 IP 被 Cloudflare/Datadome/PerimeterX 识别后全军覆没
- *   - html.length < 500 阈值放宽到 < 200（Magento/SPA 首屏 HTML 很短但非 blocked）
- *   - UA 数 4 → 6
+ * 三层 fallback 策略：
+ *   L0a：代理 IP + 多 UA 轮询（3 UA × 8s timeout，wasBlocked 一次即跳出）
+ *   L0b：服务器直连 + 2 UA（代理被 CF 拒绝时尝试，直连出口可达 ≈ Google 审核可达）
+ *   L1 ：Puppeteer 真人指纹（puppeteer-extra + Stealth + 6s CF 挑战窗口）
  *
- * 兼容性：外部已显式传 `proxyUrl` 的调用保持原行为（仍复用同 IP）；
- *        仅当同时传了 `country` 但未传 `proxyUrl`，或传 `country` 且希望每轮换 IP 时，
- *        才启用动态轮换。
+ * D-030 §1：host 命中 challenged 缓存 → 直接走 L1，跳过 L0a/L0b
+ * D-030 §2：L1 通过 coalescedPuppeteerFetch 进入 200ms 收集窗口，同 host
+ *           多 URL 共享 1 个 browser 实例，避免重复启动开销
  */
 export async function fetchUrlMeta(
   url: string,
   proxyUrl?: string,
   country?: string,
 ): Promise<{ title: string; description: string; ok: boolean; finalUrl: string; isSoft404: boolean }> {
-  const uas = [GOOGLEBOT_UA, ...UA_POOL.sort(() => Math.random() - 0.5).slice(0, 5)];
+  const host = getHostKey(url);
+
+  // D-030 §1：站级 challenged 缓存命中 → 跳过 L0a/L0b 直接走 L1 coalesce 通道
+  // 既然这个 host 30 分钟内已被确认 CF/Datadome 强反爬，L0 100% 失败，没必要再浪费 5-15s
+  if (host && isHostChallenged(host)) {
+    let cachedProxy: string | undefined;
+    if (country) {
+      try {
+        const { getHttpProxyUrlForCountry } = await import("@/lib/crawl-proxy");
+        cachedProxy = (await getHttpProxyUrlForCountry(country)) ?? undefined;
+      } catch {}
+    }
+    console.warn(`[Crawler] fetchUrlMeta host=${host} 已 challenged，跳 L0 直接 L1 coalesce: ${url}`);
+    const m = await coalescedPuppeteerFetch(url, cachedProxy);
+    return {
+      title: m.title, description: m.description,
+      ok: m.ok, finalUrl: m.finalUrl, isSoft404: m.isSoft404,
+    };
+  }
+
+  // D-030 §3：UA 6→3（Googlebot + 2 主流浏览器），timeout 12s→8s
+  const uas = [GOOGLEBOT_UA, ...UA_POOL.sort(() => Math.random() - 0.5).slice(0, 2)];
 
   const SOFT_404_SIGNALS = [
     "page not found", "page introuvable", "seite nicht gefunden",
@@ -2132,7 +2256,7 @@ export async function fetchUrlMeta(
   const shouldRotateIp = !!country && !proxyUrl;
 
   // C-015 §1：把单轮"一套 UA 列表 + 指定代理策略"抽成内部函数，好在"代理失败"后复用同样的 UA 扫一遍无代理
-  // 返回：命中则返回 ok 结果，否则返回 undefined；过程中更新 lastFinalUrl / wasBlocked
+  // D-030 §3：useProxy 路径下 wasBlocked 立即跳出（同 IP 被 CF 识别后换 UA 无效）
   const runUaLoop = async (useProxy: boolean, uasForRound: string[]) => {
     for (const ua of uasForRound) {
       let currentProxy: string | undefined;
@@ -2148,7 +2272,7 @@ export async function fetchUrlMeta(
 
       try {
         const ctrl = new AbortController();
-        const t = setTimeout(() => ctrl.abort(), 12000);
+        const t = setTimeout(() => ctrl.abort(), 8000); // D-030 §3
         const headers = buildStealthHeaders(url, ua);
         const res = currentProxy
           ? await fetchViaProxy(url, { headers: headers as Record<string, string>, signal: ctrl.signal }, currentProxy)
@@ -2162,6 +2286,7 @@ export async function fetchUrlMeta(
           const html = await res.text();
           if (isBlockedPage(html) || html.length < 200) {
             wasBlocked = true;
+            if (useProxy) break; // D-030 §3
             continue;
           }
 
@@ -2176,9 +2301,9 @@ export async function fetchUrlMeta(
             return { ...meta, ok: true, finalUrl, isSoft404 };
           }
         } else if (useProxy && res.status >= 400) {
-          // 代理 IP 被目标站点直接拒绝（403/429/503 等），标记 wasBlocked
-          // 以便外层 fallback 用服务器直连再试（直连出口 IP 往往可达）
+          // 代理 IP 被目标站点直接拒绝（403/429/503 等）
           wasBlocked = true;
+          break; // D-030 §3
         }
       } catch {}
     }
@@ -2186,26 +2311,20 @@ export async function fetchUrlMeta(
   };
 
   // L0a：通过代理（或显式 proxyUrl）多 UA 轮询
-  const hasProxyPath = !!proxyUrl || !!country; // 只要指定了 country 就算进入"有代理层"
+  const hasProxyPath = !!proxyUrl || !!country;
   const first = await runUaLoop(hasProxyPath, uas);
   if (first) return first;
 
+  // D-030 §1：L0a 触发 wasBlocked → 标记 host challenged，让后续同 host 跳过 L0
+  if (host && wasBlocked) markHostChallenged(host);
+
   // ══════════════════════════════════════════════════════
-  // C-015 §1：代理全灭 fallback —— 用服务器直连出口再试一轮（3 UA），仍属 L0 真实访问
-  //
-  // 为什么安全：
-  //   - Google Ads 审核机器人也是从 Google 全球节点请求（非目标国），服务器出口可达 ≈ 审核可达
-  //   - 本站 SG 出口对 aerosus.be 等站点完全可达（2026-04-18 实测 status=200 + 真 title + desc）
-  //   - 不是"信赖已爬链接"降级，是换一个真实访问路径
-  //
-  // 触发条件：
-  //   - 第一轮有使用代理（hasProxyPath）
-  //   - 且第一轮至少发生过一次"被 blocked"信号（wasBlocked=true，说明确实是代理 IP 被识别而非 URL 失效）
-  //   - 避免把"URL 本身 404"的场景多请求 3 次
+  // C-015 §1：L0a 全灭 fallback —— 用服务器直连出口再试一轮（2 UA），仍属 L0 真实访问
+  // 触发条件：第一轮使用了代理 + 至少发生过 wasBlocked（避免对 URL 本身 404 多请求）
   // ══════════════════════════════════════════════════════
   if (hasProxyPath && wasBlocked) {
-    console.warn(`[Crawler] fetchUrlMeta 代理层全灭，回退无代理直连再试 3 UA: ${url}`);
-    const fallbackUas = [GOOGLEBOT_UA, ...UA_POOL.slice(0, 2)];
+    console.warn(`[Crawler] fetchUrlMeta 代理层全灭，回退无代理直连再试 2 UA: ${url}`);
+    const fallbackUas = [GOOGLEBOT_UA, ...UA_POOL.slice(0, 1)]; // D-030 §3: 3 → 2
     const second = await runUaLoop(false, fallbackUas);
     if (second) {
       console.warn(`[Crawler] fetchUrlMeta 无代理直连 fallback 成功: ${url}`);
@@ -2214,24 +2333,11 @@ export async function fetchUrlMeta(
   }
 
   // ══════════════════════════════════════════════════════
-  // D-029：L1 Puppeteer 真人指纹兜底
-  //
-  // 背景：drsturm.com / amazon.com 等用 Cloudflare bot challenge / Datadome 强反爬，
-  // HTTP 层（无论代理还是直连）一律返回 403 + "Just a moment..." 挑战页，
-  // L0a/L0b 都无法获取真实内容。
-  //
-  // batchFetchMetaViaPuppeteer 早就实现了完整的 puppeteer-extra + Stealth 方案
-  // （注释明确写"用于 fetchUrlMeta HTTP 全挂的兜底"），但实际从未被 fetchUrlMeta 调用，
-  // 导致整套设计上的 Puppeteer 兜底层缺位。
-  //
-  // 触发条件：与 L0b 一致 —— 至少发生过 wasBlocked 信号才上 Puppeteer，
-  // 避免对纯 404 / DNS 失败的 URL 浪费 browser 资源。
-  // 单 URL 调用 batchFetchMetaViaPuppeteer，函数内部有 acquirePuppeteerSlot 全局限流，
-  // 不会击穿 2 核 3.7G 服务器。
+  // D-029 + D-030 §2：L1 Puppeteer 真人指纹兜底（走 coalesce 通道）
+  // 同 host 200ms 窗口内多 URL 共享 1 个 browser，避免重复启动开销
   // ══════════════════════════════════════════════════════
   if (wasBlocked) {
     try {
-      console.warn(`[Crawler] fetchUrlMeta L0 全灭，启动 L1 Puppeteer 真人指纹兜底: ${url}`);
       let puppeteerProxy: string | undefined;
       if (country) {
         try {
@@ -2239,12 +2345,9 @@ export async function fetchUrlMeta(
           puppeteerProxy = (await getHttpProxyUrlForCountry(country)) ?? undefined;
         } catch {}
       }
-      const puppMap = await batchFetchMetaViaPuppeteer([url], puppeteerProxy, {
-        concurrency: 1,
-        perPageTimeoutMs: 25000,
-      });
-      const m = puppMap.get(url);
-      if (m && m.ok) {
+      console.warn(`[Crawler] fetchUrlMeta L0 全灭，进入 L1 coalesce: ${url}`);
+      const m = await coalescedPuppeteerFetch(url, puppeteerProxy);
+      if (m.ok) {
         console.warn(`[Crawler] fetchUrlMeta L1 Puppeteer 兜底成功: ${url} title="${m.title.slice(0, 60)}"`);
         return { title: m.title, description: m.description, ok: true, finalUrl: m.finalUrl, isSoft404: m.isSoft404 };
       }
