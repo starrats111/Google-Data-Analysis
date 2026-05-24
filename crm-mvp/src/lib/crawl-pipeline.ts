@@ -187,6 +187,40 @@ export function sanitizeAdText(text: string, opts?: { allowExclamation?: boolean
   return s;
 }
 
+/**
+ * C-082 Part B (RC-1)：按括号配对扫描，跳过 string 内部转义引号，找出从 startChar 开始的第一个完整 JSON 对象/数组的精确边界。
+ * 处理 "AI 返回内部嵌套深 lastIndexOf 错位" 和 "AI 返回多个 JSON 对象拼一起" 两种 L1 兜不住的 case。
+ */
+function scanFirstCompleteJson(text: string, open: string, close: string): string | null {
+  const startIdx = text.indexOf(open);
+  if (startIdx < 0) return null;
+  let depth = 0;
+  let inString = false;
+  let escape = false;
+  for (let i = startIdx; i < text.length; i++) {
+    const ch = text[i];
+    if (escape) {
+      escape = false;
+      continue;
+    }
+    if (ch === "\\") {
+      escape = true;
+      continue;
+    }
+    if (ch === '"') {
+      inString = !inString;
+      continue;
+    }
+    if (inString) continue;
+    if (ch === open) depth++;
+    else if (ch === close) {
+      depth--;
+      if (depth === 0) return text.slice(startIdx, i + 1);
+    }
+  }
+  return null;
+}
+
 export function extractJsonFromAi(raw: string): string {
   let text = raw.trim();
   if (text.startsWith("```")) {
@@ -195,15 +229,39 @@ export function extractJsonFromAi(raw: string): string {
     if (text.trimEnd().endsWith("```")) text = text.trimEnd().slice(0, -3);
     text = text.trim();
   }
-  // 不做早返回：即使文本以 { 或 [ 开头，AI 也可能在 JSON 后追加说明文字，
-  // 必须始终用 lastIndexOf 定位最后一个合法闭括号并裁切，避免 JSON.parse 报
-  // "Unexpected non-whitespace character after JSON at position N"。
-  for (const [open, close] of [["{", "}"], ["[", "]"]]) {
+  // L1（C-048 修复）：lastIndexOf 裁切尾部多余说明文字。仍按 { 优先、[ 次之顺序尝试。
+  // L2 + L3（C-082 RC-1）：L1 sliced 解析失败时，依次尝试"清控制字符"和"括号配对扫描"，
+  //   全部失败才退回 L1 sliced（保持向后兼容，让上层 JSON.parse 抛错）。
+  for (const [open, close] of [["{", "}"], ["[", "]"]] as const) {
     const idx = text.indexOf(open);
-    if (idx >= 0) {
-      const ridx = text.lastIndexOf(close);
-      if (ridx > idx) return text.slice(idx, ridx + 1);
+    if (idx < 0) continue;
+    const ridx = text.lastIndexOf(close);
+    if (ridx <= idx) continue;
+    const sliced = text.slice(idx, ridx + 1);
+    try {
+      JSON.parse(sliced);
+      return sliced;
+    } catch {
+      // L2：清理 string 内部非法裸控制字符（U+0000-U+0008、U+000B、U+000C、U+000E-U+001F），
+      //     保留 \t (0x09) \n (0x0A) \r (0x0D)。Yoin BE 事故的 position 1054 报错就属此类。
+      const cleaned = sliced.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, "");
+      try {
+        JSON.parse(cleaned);
+        return cleaned;
+      } catch {
+        // L3：括号配对扫描精确截取第一个完整 JSON 对象（跳过字符串内 \" 转义）。
+        const bracketScanned = scanFirstCompleteJson(cleaned, open, close);
+        if (bracketScanned) {
+          try {
+            JSON.parse(bracketScanned);
+            return bracketScanned;
+          } catch {
+            // 三层全败，落到下面的 return sliced
+          }
+        }
+      }
     }
+    return sliced;
   }
   return text;
 }

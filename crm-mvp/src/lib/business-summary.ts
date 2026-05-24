@@ -27,6 +27,11 @@ export interface BusinessSummary {
   confidence: "high" | "medium" | "low"; // 输入充足度自评
   source_tokens: number; // 输入 token 估算（用于调试）
   generated_at: string;
+  // C-082 Part C (RC-3)：标记摘要来源，便于下游 prompt 适配可信度
+  //   "ai"           = AI 正常生成（confidence=high/medium/low 来自 AI 自评）
+  //   "ai_retry"     = AI 第一次失败、第二次重试成功
+  //   "raw_quote"    = AI 全部失败，从 pageText 前若干字符强制摘取（confidence 强制 low）
+  source?: "ai" | "ai_retry" | "raw_quote";
 }
 
 const MIN_PAGE_TEXT = 80; // 少于 80 字的 pageText 不调 AI（避免浪费 token）
@@ -39,6 +44,58 @@ const MIN_PAGE_TEXT = 80; // 少于 80 字的 pageText 不调 AI（避免浪费 
  *   - 输入不足时返回 confidence="low" + 简短说明，让上层决定是否注入 prompt
  *   - 永远返回结构化 JSON，方便上层判断和持久化
  */
+/**
+ * C-082 Part C (RC-3)：当 AI 摘要全部失败时，从 pageText 强制摘取 raw_quote 兜底摘要。
+ * 永不返回 null，保证 buildBusinessContextBlock 始终能走"★★★ MERCHANT REAL BUSINESS"强约束分支。
+ *
+ * 摘取策略：
+ *   1) 从 features[0]（page title）截取（如有）作为开头标记
+ *   2) 从 pageText 前 200 字符截取（去除多余空白 + 换行）
+ *   3) 拼接为 "RAW PAGE QUOTE: <title>. <pageText 200 chars>"
+ *   4) 标 confidence="low" + source="raw_quote"，下游 prompt 会自动加 "low confidence, prefer page content" 提示
+ */
+function buildRawQuoteSummary(input: BusinessSummaryInput): BusinessSummary {
+  const { pageText, features = [], category } = input;
+  const cleanText = (s: string) => s.replace(/\s+/g, " ").trim();
+  const titlePart = features.length > 0 ? cleanText(features[0]).slice(0, 120) : "";
+  const textPart = cleanText(pageText).slice(0, 200);
+  const summary = [titlePart, textPart].filter(Boolean).join(". ").slice(0, 280);
+  return {
+    summary_en: summary.length >= 20 ? `RAW PAGE QUOTE: ${summary}` : `RAW PAGE QUOTE: ${pageText.slice(0, 280)}`,
+    category_guess: category ? `Affiliate-platform tag: ${category}` : "",
+    confidence: "low",
+    source_tokens: Math.ceil(pageText.length / 4),
+    generated_at: new Date().toISOString(),
+    source: "raw_quote",
+  };
+}
+
+/**
+ * 内部：单次 AI 调用 + 严格校验，成功返回 BusinessSummary、失败抛错（让上层 retry/fallback）。
+ */
+async function tryAiSummaryOnce(
+  input: BusinessSummaryInput,
+  prompt: string,
+): Promise<BusinessSummary> {
+  const raw = await callAiWithFallback("ad_copy", [{ role: "user", content: prompt }], 512);
+  const parsed = JSON.parse(extractJsonFromAi(raw)) as Partial<BusinessSummary>;
+  if (!parsed.summary_en || typeof parsed.summary_en !== "string") {
+    throw new Error("AI 返回缺少 summary_en");
+  }
+  const trimmed = parsed.summary_en.trim();
+  if (trimmed.length < 20) {
+    throw new Error(`AI 返回 summary_en 过短 (len=${trimmed.length})`);
+  }
+  return {
+    summary_en: trimmed.slice(0, 300),
+    category_guess: (parsed.category_guess || "").toString().slice(0, 120),
+    confidence: (["high", "medium", "low"].includes(parsed.confidence as string) ? parsed.confidence : "medium") as BusinessSummary["confidence"],
+    source_tokens: Math.ceil((input.pageText || "").length / 4),
+    generated_at: new Date().toISOString(),
+    source: "ai",
+  };
+}
+
 export async function extractBusinessSummary(
   input: BusinessSummaryInput,
 ): Promise<BusinessSummary | null> {
@@ -70,22 +127,27 @@ Rules:
 2. Never repeat the merchant name in summary_en more than once.
 3. Output VALID JSON only. No explanation outside JSON.`;
 
+  // C-082 Part C (RC-3)：三层兜底
+  //   1) 首次 AI 调用（callAiWithFallback 内部已有模型 fallback 链）
+  //   2) 失败则重试 1 次（同 prompt，复用模型 fallback 链；通常一次足以覆盖偶发限流/超时）
+  //   3) 全部失败 → buildRawQuoteSummary 从 pageText 强制摘取，永不返回 null
   try {
-    const raw = await callAiWithFallback("ad_copy", [{ role: "user", content: prompt }], 512);
-    const parsed = JSON.parse(extractJsonFromAi(raw)) as Partial<BusinessSummary>;
-    if (!parsed.summary_en || typeof parsed.summary_en !== "string") return null;
-    const trimmed = parsed.summary_en.trim();
-    if (trimmed.length < 20) return null; // 过短摘要不存（不如不存）
-    return {
-      summary_en: trimmed.slice(0, 300),
-      category_guess: (parsed.category_guess || "").toString().slice(0, 120),
-      confidence: (["high", "medium", "low"].includes(parsed.confidence as string) ? parsed.confidence : "medium") as BusinessSummary["confidence"],
-      source_tokens: Math.ceil(pageText.length / 4),
-      generated_at: new Date().toISOString(),
-    };
-  } catch (err) {
-    console.warn("[BusinessSummary] AI 摘要失败:", err instanceof Error ? err.message : err);
-    return null;
+    const first = await tryAiSummaryOnce(input, prompt);
+    console.log(`[BusinessSummary] AI 摘要成功（首次）: source=${first.source} confidence=${first.confidence} len=${first.summary_en.length}`);
+    return first;
+  } catch (err1) {
+    console.warn("[BusinessSummary] AI 摘要首次失败，重试 1 次:", err1 instanceof Error ? err1.message : err1);
+    try {
+      const second = await tryAiSummaryOnce(input, prompt);
+      second.source = "ai_retry";
+      console.log(`[BusinessSummary] AI 摘要成功（重试）: source=${second.source} confidence=${second.confidence} len=${second.summary_en.length}`);
+      return second;
+    } catch (err2) {
+      console.warn("[BusinessSummary] AI 摘要重试也失败，降级 raw_quote:", err2 instanceof Error ? err2.message : err2);
+      const fallback = buildRawQuoteSummary(input);
+      console.log(`[BusinessSummary] raw_quote 兜底已生成: len=${fallback.summary_en.length}`);
+      return fallback;
+    }
   }
 }
 

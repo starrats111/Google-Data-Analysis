@@ -32,6 +32,17 @@ interface PadCopyOptions {
   pageText?: string;
   /** 商家真实产品列表（含名称/价格），供 AI 引用真实数据 */
   crawledProducts?: Array<{ name: string; price?: number; currency?: string }>;
+  // ─── D-025 R-1.A 新增：业务上下文字段，避免 fallback 路径 AI 朝模板范例方向乱写 ───
+  /** 商家官网 URL（让 AI 从域名/路径推断业务）*/
+  merchantUrl?: string;
+  /** 联盟平台给的 category 标签（可能不准，仅作弱信号）*/
+  category?: string | null;
+  /** L1 业务摘要 summary_en（最强信号，由 extractBusinessSummary 产出）*/
+  businessSummary?: string | null;
+  /** L1 业务模型描述 category_guess（如 "P2P RV rental marketplace"）*/
+  businessCategoryGuess?: string | null;
+  /** 爬虫抓到的关键信号列表（含 Page title / Banner text / Detected features 等）*/
+  features?: string[];
 }
 
 /** 显示路径（path1/path2）每条 ≤15 字符，字母数字与连字符；用于提升 RSA 完整度与点击率 */
@@ -968,7 +979,47 @@ export async function callAiWithFallback(
   throw lastError || new Error("所有 AI 模型均失败");
 }
 
-/** 从 AI 响应中提取 JSON */
+/**
+ * C-082 Part B (RC-1)：括号配对扫描，跳过 string 内部转义，找出第一个完整 JSON 对象边界。
+ * 此函数与 crawl-pipeline.ts:scanFirstCompleteJson 保持完全同步（两份手动镜像，避免跨文件依赖循环）。
+ */
+function scanFirstCompleteJson(text: string, open: string, close: string): string | null {
+  const startIdx = text.indexOf(open);
+  if (startIdx < 0) return null;
+  let depth = 0;
+  let inString = false;
+  let escape = false;
+  for (let i = startIdx; i < text.length; i++) {
+    const ch = text[i];
+    if (escape) {
+      escape = false;
+      continue;
+    }
+    if (ch === "\\") {
+      escape = true;
+      continue;
+    }
+    if (ch === '"') {
+      inString = !inString;
+      continue;
+    }
+    if (inString) continue;
+    if (ch === open) depth++;
+    else if (ch === close) {
+      depth--;
+      if (depth === 0) return text.slice(startIdx, i + 1);
+    }
+  }
+  return null;
+}
+
+/**
+ * 从 AI 响应中提取 JSON。
+ * C-082 Part B (RC-1)：三级容错。本函数与 crawl-pipeline.ts:extractJsonFromAi 保持完全同步。
+ *   L1：lastIndexOf 裁切尾部说明文字（C-048 修复）
+ *   L2：清理 string 内部裸控制字符（U+0000-U+0008、U+000B、U+000C、U+000E-U+001F）
+ *   L3：括号配对扫描精确截取第一个完整 JSON 对象
+ */
 function extractJson(raw: string): string {
   let text = raw.trim();
   if (text.startsWith("```")) {
@@ -977,16 +1028,89 @@ function extractJson(raw: string): string {
     if (text.trimEnd().endsWith("```")) text = text.trimEnd().slice(0, -3);
     text = text.trim();
   }
-  // 不做早返回：即使文本以 { 或 [ 开头，AI 也可能在 JSON 后追加说明文字，
-  // 始终用 lastIndexOf 裁切尾部，避免 JSON.parse 报错。
   for (const [open, close] of [["{", "}"], ["[", "]"]] as const) {
     const idx = text.indexOf(open);
-    if (idx >= 0) {
-      const ridx = text.lastIndexOf(close);
-      if (ridx > idx) return text.slice(idx, ridx + 1);
+    if (idx < 0) continue;
+    const ridx = text.lastIndexOf(close);
+    if (ridx <= idx) continue;
+    const sliced = text.slice(idx, ridx + 1);
+    try {
+      JSON.parse(sliced);
+      return sliced;
+    } catch {
+      const cleaned = sliced.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, "");
+      try {
+        JSON.parse(cleaned);
+        return cleaned;
+      } catch {
+        const bracketScanned = scanFirstCompleteJson(cleaned, open, close);
+        if (bracketScanned) {
+          try {
+            JSON.parse(bracketScanned);
+            return bracketScanned;
+          } catch {
+            // 三层全败，落到下面的 return sliced
+          }
+        }
+      }
     }
+    return sliced;
   }
   return text;
+}
+
+/**
+ * D-025 R-1.A：把商家真实业务上下文构造成统一 block，注入到 padHeadlines/padDescriptions 的 prompt 顶部。
+ *
+ * 优先级（强 → 弱）：
+ *   1. businessSummary（L1 业务摘要，最准确）
+ *   2. pageText（爬虫原文，≥ 80 字符才用）
+ *   3. features（爬虫信号列表，含 Page title / Banner text 等）
+ *   4. category（联盟平台标签，最弱仅作 fallback）
+ *   5. 都没有 → 输出明确 WARNING 让 AI 写安全 brand-anchor 文案，不要臆造产品属性
+ *
+ * 这是 D-025 修复的核心：之前 padHeadlines fallback 路径完全不知道商家是干嘛的，
+ * 导致 AI 跟着 prompt 里 7-ANGLE FRAMEWORK 的 fashion/D2C 范例 100% 朝服装方向写。
+ */
+function buildBusinessContextBlock(merchantName: string, options: PadCopyOptions): string {
+  const url = options.merchantUrl?.trim();
+  const cat = options.category?.trim();
+  const urlLine = url ? `Website: ${url}\n` : "";
+
+  if (options.businessSummary && options.businessSummary.trim().length >= 20) {
+    return `\n★★★ MERCHANT REAL BUSINESS (THIS IS THE TRUTH — IGNORE ANY GENERIC EXAMPLES BELOW) ★★★
+${urlLine}${options.businessSummary.trim()}${options.businessCategoryGuess ? `\nBusiness model: ${options.businessCategoryGuess}` : ""}${cat ? `\nAffiliate-platform tag: ${cat}` : ""}
+═══════════════════════════════════════════════════════════════════
+`;
+  }
+
+  const pageText = options.pageText?.trim();
+  if (pageText && pageText.length >= 80) {
+    return `\n★★★ MERCHANT WEBSITE EXTRACT (use ONLY this to infer the merchant's real business — IGNORE generic examples in any framework below) ★★★
+${urlLine}${pageText.slice(0, 2500)}
+═══════════════════════════════════════════════════════════════════
+${cat ? `\nAffiliate-platform tag (may be inaccurate, prefer the website extract above): ${cat}\n` : ""}`;
+  }
+
+  const features = (options.features || []).filter((f) => typeof f === "string" && f.trim()).slice(0, 12);
+  if (features.length > 0) {
+    return `\n★★★ MERCHANT DETECTED SIGNALS (use ONLY these to infer the merchant's real business — IGNORE generic examples below) ★★★
+${urlLine}${features.join("\n")}
+═══════════════════════════════════════════════════════════════════
+${cat ? `\nAffiliate-platform tag (may be inaccurate, prefer signals above): ${cat}\n` : ""}`;
+  }
+
+  if (cat) {
+    return `\n⚠️ NO WEBSITE/SUMMARY/SIGNALS — ONLY an affiliate-platform category tag is available: "${cat}"
+This tag is OFTEN INACCURATE for niche merchants. Write SAFE brand-anchor headlines that do NOT invent product attributes (no specific materials, no specific use cases, no fabricated benefits).
+═══════════════════════════════════════════════════════════════════
+`;
+  }
+
+  return `\n⚠️ NO MERCHANT BUSINESS DATA AVAILABLE
+You MUST write ONLY safe brand-anchor headlines (e.g. "${merchantName} — Official Site", "${merchantName} Verified Offers"). DO NOT invent product attributes, materials, or use cases.
+═══════════════════════════════════════════════════════════════════
+`;
 }
 
 export async function padHeadlines(
@@ -1007,6 +1131,8 @@ export async function padHeadlines(
   const maxCpc = Number(options.maxCpc) > 0 ? Number(options.maxCpc) : 0.3;
   const biddingStrategy = options.biddingStrategy || "MAXIMIZE_CLICKS";
   const aiRulePrompt = buildAiRulePrompt(options.aiRuleProfile, "ad_copy");
+  // D-025 R-1.A：构造业务上下文 block，prompt 顶部强制注入
+  const businessContextBlock = buildBusinessContextBlock(merchantName, options);
 
   // 早退：references 充足 + locked 已不少，第 1 轮 AI 拿到大部分后直接静态兜底补齐，
   // 避免连跑 2-3 轮 AI 累计 10-20s。
@@ -1021,7 +1147,7 @@ export async function padHeadlines(
       ? `⚠️ CRITICAL: Write ONLY in ${languageName}. English is FORBIDDEN.\n\n`
       : "";
     const prompt = `You are Adrian · Data Hunter — not just a strategist, but a conversion copywriter who has written 10,000+ Google Ads headlines and knows exactly which words make people click. Your copy doesn't just fill space — it stops the scroll, sparks desire, and drives action.
-${langWarning}
+${langWarning}${businessContextBlock}
 Context:
 - Merchant: ${merchantName}
 - Market: ${market.countryNameZh} — write in ${languageName}
@@ -1040,35 +1166,31 @@ Generate exactly ${needed} NEW headlines. Return ONLY a JSON array of exactly ${
 A great headline does ONE thing in under 30 characters: it makes the searcher think "this is for me."
 Bad headlines describe the product. Great headlines describe the FEELING of owning it.
 
-7-ANGLE FRAMEWORK — distribute across these angles:
-  ① PAIN/DESIRE HOOK: Name the exact itch they're trying to scratch. Be specific enough to make them feel caught.
-     ✗ "Skin Care Products" (boring, generic, invisible)
-     ✓ "Breakouts? Not Anymore" (emotional, personal, specific)
-     ✓ "Finally — Chargers That Last" (relief, frustration solved)
-  ② RESULT YOU CAN SEE: Paint the after-picture in concrete terms. Numbers, timeframes, visible outcomes.
-     ✗ "Great Quality" (meaningless)
-     ✓ "Visibly Clearer in 14 Days" (timeline + outcome)
-     ✓ "2x Faster — Proven" (measurable, credible)
-  ③ TRUST MAGNET: Make skeptics feel safe. Real proof, not empty claims.
-     ✓ "4.8★ by 12K+ Customers" / "As Featured in Forbes" / "Lab-Tested Formula"
-  ④ SEARCH MIRROR: Echo EXACTLY what they typed. The brain scans for pattern matches.
-     Searched "leather laptop bag" → "Leather Laptop Bags — Handmade"
-     Searched "wireless charger stand" → "Wireless Charger Stand"
-  ⑤ ONLY-WE-DO-THIS: The thing competitors can't say. Must be real, must be specific.
-     ✓ "No Chemicals — Ever" / "The Only MagSafe That Folds" / "Handcrafted in Italy"
-  ⑥ ACTION WITH REASON: Don't just say "Shop" — give them a reason to act NOW.
-     ✗ "Shop Now" (why now? why you?)
-     ✓ "Get Yours — Free Returns" / "Try Risk-Free for 30 Days"
-  ⑦ BRAND ANCHOR: Make "${merchantName}" memorable, not just present.
-     ✗ "${merchantName}" (just a name, zero information)
-     ✓ "${merchantName} — Where Style Meets Durability"
+⚠️ CRITICAL: The MERCHANT REAL BUSINESS / MERCHANT WEBSITE EXTRACT / MERCHANT DETECTED SIGNALS block at the very TOP of this prompt is the ONLY source of truth about what this merchant sells. The 7-ANGLE patterns below are SYNTAX/STRUCTURE templates — do NOT borrow vocabulary, products, materials, or use cases from the example phrases. If the merchant is e.g. a telecom carrier, your headlines must be about plans/network/data/eSIM — NOT about clothing/skincare/electronics just because example phrases happen to mention those.
 
-POWER TECHNIQUES (use at least 3 across your ${needed} headlines):
-  • CONTRAST: "Without the Harsh Chemicals" / "Not Another Generic Brand"
-  • SPECIFICITY: "3 Active Ingredients" / "Made from Organic Bamboo"
-  • QUESTION HOOK: "Still Using Products That Don't Work?"
-  • URGENCY (without dates): "Limited Stock" / "Selling Fast"
-  • SENSORY LANGUAGE: "Buttery Soft Leather" / "Crystal Clear Sound"
+7-ANGLE FRAMEWORK — distribute across these angles (read each example as "[pattern shape]" — substitute the merchant's REAL business vocabulary):
+  ① PAIN/DESIRE HOOK: Name the exact itch THIS merchant's customers feel.
+     Pattern: "[Pain phrase]? [Solution promise]" — pain & solution must come from MERCHANT REAL BUSINESS above.
+     ✗ Never write generic category nouns like "Skin Care Products" / "Quality Goods".
+  ② RESULT YOU CAN SEE: Concrete outcome THIS merchant credibly delivers (numbers/timeframes only if supported by the merchant block).
+     Pattern: "[Outcome] in [Timeframe]" or "[Quantified result] — [Proof noun]".
+     ✗ Never write meaningless adjectives like "Great Quality" / "Premium".
+  ③ TRUST MAGNET: Real proof from MERCHANT REAL BUSINESS (rating / customer count / certification / press mention). Skip if not supported.
+  ④ SEARCH MIRROR: Echo a high-intent keyword for THIS specific business — directly from the merchant block or the keywords list, not invented.
+     Pattern: "[merchant's actual product/service noun] — [qualifier from merchant block]".
+  ⑤ ONLY-WE-DO-THIS: The differentiator the merchant ACTUALLY claims on its own site (from MERCHANT REAL BUSINESS). Skip if no clear differentiator exists.
+  ⑥ ACTION WITH REASON: Give them a reason to act NOW grounded in THIS merchant's model (trial / returns / free X — only if mentioned in merchant block).
+     ✗ Plain "Shop Now" with no reason.
+  ⑦ BRAND ANCHOR: Make "${merchantName}" memorable, tied to the merchant's core promise from MERCHANT REAL BUSINESS.
+     Pattern: "${merchantName} — [core promise in 1-3 words from merchant block]".
+     ✗ Never invent a tagline that contradicts the merchant block (e.g. "Where Style Meets Durability" for a non-fashion merchant).
+
+POWER TECHNIQUES (use at least 3 across your ${needed} headlines — apply to THIS merchant's real vocabulary, do NOT borrow words from the example phrases):
+  • CONTRAST: "Without [pain point]" / "Not Another [competitor archetype]"
+  • SPECIFICITY: Use real numbers/specs only if they appear in MERCHANT REAL BUSINESS above.
+  • QUESTION HOOK: "Still [old painful way]? [Hint at new way]"
+  • URGENCY (without dates): "Limited [something real]" / "Selling Fast" — only if merchant block supports scarcity.
+  • SENSORY LANGUAGE: Use only senses relevant to THIS merchant's product (e.g. "Crystal Clear" for audio, "Lightning Fast" for tech, "Soft" for textile — pick what fits).
 
 MANDATORY RULES:
 1. Headline #1 MUST include "${merchantName}" — make it ownable and memorable.
@@ -1141,6 +1263,8 @@ export async function padDescriptions(
   const maxCpc = Number(options.maxCpc) > 0 ? Number(options.maxCpc) : 0.3;
   const biddingStrategy = options.biddingStrategy || "MAXIMIZE_CLICKS";
   const aiRulePrompt = buildAiRulePrompt(options.aiRuleProfile, "ad_copy");
+  // D-025 R-1.A：业务上下文 block（强信号 → 弱信号 → WARNING）
+  const businessContextBlock = buildBusinessContextBlock(merchantName, options);
   const uniqHeadlines = (options.headlinesForUniqueness || [])
     .map((h) => normalizeWhitespace(h))
     .filter(Boolean)
@@ -1169,7 +1293,7 @@ export async function padDescriptions(
       : "";
 
     const prompt = `You are Adrian · Data Hunter — a conversion copywriter who treats every description as a 90-character sales pitch. Each description is a micro-ad: it must make someone who's on the fence lean forward and click.
-${langWarning}
+${langWarning}${businessContextBlock}
 Context:
 - Merchant: ${merchantName}
 - Market: ${market.countryNameZh} — write in ${languageName}
@@ -1192,28 +1316,24 @@ Generate exactly ${needed} NEW descriptions. Return ONLY a JSON array of exactly
 
 A headline gets the click-glance. A description closes it. Think of each description as your elevator pitch: you have 90 characters to make someone trust you enough to click.
 
-4-ANGLE FRAMEWORK — one per description:
+⚠️ CRITICAL: The MERCHANT REAL BUSINESS / MERCHANT WEBSITE EXTRACT / MERCHANT DETECTED SIGNALS block at the very TOP of this prompt is the ONLY source of truth about what this merchant sells. The 4-ANGLE patterns below are SYNTAX templates — do NOT borrow vocabulary, products, or use cases from the example phrases.
 
-  Angle A — THE EMPATHY CLOSE: Start where the customer IS, not where you want them to be.
-     Name their frustration, then pivot to the solution in one breath.
-     ✗ "We offer high-quality skincare products for all skin types." (about YOU, boring)
-     ✓ "Done with breakouts? Our 2-step system clears skin in 14 days." (about THEM, specific)
-     ✓ "Tired of chargers that die? Ours lasts 3x longer — guaranteed." (pain → proof → promise)
+4-ANGLE FRAMEWORK — one per description (read each example as "[pattern shape]" — substitute the merchant's REAL vocabulary from MERCHANT REAL BUSINESS above):
 
-  Angle B — THE IRRESISTIBLE OFFER: Lead with the ONE thing that makes this a no-brainer.
-     Then tell them exactly what to do next.
-     ✗ "Shop our collection of premium products today." (zero value, zero urgency)
-     ✓ "Free shipping + free returns. Shop the best-selling collection now." (value stack + action)
-     ✓ "From $19.99. Get the top-rated formula thousands swear by." (price anchor + social proof)
+  Angle A — THE EMPATHY CLOSE: Start where THIS merchant's customer IS — name a pain mentioned (or implied) in MERCHANT REAL BUSINESS above, then pivot to the solution.
+     Pattern: "[Pain question or statement]? [Specific solution + proof in one breath]."
+     ✗ Never write "We offer high-quality [X]" — boring, about you, not the customer.
 
-  Angle C — THE TRUST BUILDER: Remove every reason NOT to buy.
-     Address the unspoken objection: "Is this legit? Will it work for me?"
-     ✓ "Loved by 50K+ customers. 30-day money-back, no questions asked." (crowd + safety net)
-     ✓ "Dermatologist-tested. Clinically proven. See why it's rated 4.8★." (authority + data)
+  Angle B — THE IRRESISTIBLE OFFER: Lead with the ONE thing in MERCHANT REAL BUSINESS that makes this a no-brainer (free trial / free shipping / price anchor / starter package — only if explicitly supported by the merchant block).
+     Pattern: "[Concrete offer from merchant block]. [Specific CTA]."
+     ✗ Never invent discounts, prices, or shipping terms not present in the merchant block.
 
-  Angle D — THE COMPETITIVE WEDGE: One sentence that makes every alternative feel inferior.
-     ✓ "The only formula with 3 patented ingredients. No generic substitutes." (exclusivity)
-     ✓ "Handmade in Italy — not mass-produced. Feel the difference." (craft vs. commodity)
+  Angle C — THE TRUST BUILDER: Remove the unspoken objection using REAL proof from MERCHANT REAL BUSINESS (rating / customer count / certification / press / "powered by [partner]" — only if supported).
+     Pattern: "[Real social proof or certification]. [Risk-removal statement]."
+
+  Angle D — THE COMPETITIVE WEDGE: One sentence that makes every alternative feel inferior — based on THIS merchant's claimed differentiator (from MERCHANT REAL BUSINESS).
+     Pattern: "[Real differentiator]. [Why it matters in one short clause]."
+     ✗ Never invent differentiators (e.g. "handmade in Italy" for a non-craft merchant, "patented ingredients" for a non-supplement merchant).
 
 AVOID HEADLINE MIRRORING — mandatory check before output:
   - Do NOT repeat the first 3 words of any headline

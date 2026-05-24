@@ -178,6 +178,139 @@ Return ONLY a JSON array of exactly ${needed} strings.`;
   return result;
 }
 
+/**
+ * C-082 Part D (RC-4)：主题一致性后置校验。
+ * 防御 AI 即使有 pageText/keywords/category 也被品牌名 prior 拉偏到错误品类（Yoin BE → 服装事故）。
+ *
+ * 用便宜 AI 调用判断 headlines 描述的语义品类是否与商家真实业务一致。
+ *   aligned=true   → 一致，不做任何动作
+ *   aligned=false  → 配合 expected_category 触发按品类重写 retry
+ *
+ * 失败保守处理（假设对齐），避免误判把正确 headlines 重写错。
+ */
+type AlignmentVerdict = {
+  aligned: boolean;
+  expectedCategory: string;
+  detectedCategory: string;
+  driftReason: string;
+};
+
+async function verifyHeadlinesAlignment(
+  headlines: string[],
+  pageText: string,
+  category: string | null,
+  keywords: string[],
+  businessSummary: { summary_en?: string; category_guess?: string; source?: string } | null,
+  _merchantName: string,
+): Promise<AlignmentVerdict> {
+  if (headlines.length === 0) {
+    return { aligned: true, expectedCategory: "", detectedCategory: "", driftReason: "no headlines" };
+  }
+  const sample = headlines.slice(0, 8);
+  const summaryHint = businessSummary?.summary_en
+    ? `Business summary (source=${businessSummary.source || "ai"}): ${businessSummary.summary_en}\n${businessSummary.category_guess ? `Business model: ${businessSummary.category_guess}\n` : ""}`
+    : "";
+  const keywordsHint = keywords.length > 0 ? `Confirmed keywords: ${keywords.slice(0, 10).join(", ")}\n` : "";
+  const categoryHint = category ? `Affiliate-platform category tag: ${category}\n` : "";
+
+  const prompt = `You are a topic-alignment auditor for Google Ads.
+
+The merchant's TRUE business comes from these signals (priority: summary > keywords > website excerpt > affiliate tag):
+${summaryHint}${keywordsHint}${categoryHint}
+Real website content excerpt (first 500 chars):
+${(pageText || "").slice(0, 500)}
+
+The generated headlines are:
+${sample.map((h, i) => `${i + 1}. "${h}"`).join("\n")}
+
+Task: Determine if the SEMANTIC THEME of the headlines matches what the merchant actually sells.
+- "Matched"  = headlines describe the merchant's real product/service category
+- "Drifted"  = headlines describe a completely different product category (e.g. headlines talk about clothing but the merchant sells mobile phone plans)
+
+Return ONLY a JSON object:
+{
+  "aligned": true | false,
+  "expected_category": "<5-15 word description of what the merchant ACTUALLY sells, grounded in the signals above>",
+  "detected_category": "<5-15 word description of what the headlines DESCRIBE>",
+  "drift_reason": "<short reason if aligned=false, empty string if aligned=true>"
+}
+
+Rules:
+1. Set aligned=true ONLY if the headlines clearly describe the merchant's real business
+2. Be STRICT — minor stylistic difference is OK, but cross-category drift (e.g. clothing vs telecom) is NOT OK
+3. expected_category MUST be grounded in the signals (never invented from the brand name)
+4. Output VALID JSON only, no extra text`;
+
+  try {
+    const raw = await callAiWithFallback("ad_copy", [{ role: "user", content: prompt }], 320);
+    const parsed = JSON.parse(extractJsonFromAi(raw)) as Record<string, unknown>;
+    return {
+      aligned: parsed.aligned === true,
+      expectedCategory: String(parsed.expected_category || "").slice(0, 200),
+      detectedCategory: String(parsed.detected_category || "").slice(0, 200),
+      driftReason: String(parsed.drift_reason || "").slice(0, 300),
+    };
+  } catch (err) {
+    console.warn("[Core] 主题对齐校验 AI 失败，保守假设对齐:", err instanceof Error ? err.message : err);
+    return { aligned: true, expectedCategory: "", detectedCategory: "", driftReason: "verify failed" };
+  }
+}
+
+/**
+ * C-082 Part D (RC-4)：按真实品类强制重写 15 条 headlines，绝对不写错误品类的词。
+ * 仅在 verifyHeadlinesAlignment 报告 aligned=false 时调用，最多调一次。
+ */
+async function rewriteHeadlinesForCategory(
+  originalHeadlines: string[],
+  expectedCategory: string,
+  wrongDirection: string,
+  merchantName: string,
+  pageText: string,
+  keywords: string[],
+  languageName: string,
+  count = 15,
+): Promise<string[]> {
+  const keywordBlock = keywords.length > 0
+    ? `\nTarget keywords (write at least 4 headlines that include or mirror these):\n${keywords.slice(0, 10).map((k, i) => `${i + 1}. ${k}`).join("\n")}\n`
+    : "";
+  const prompt = `URGENT CATEGORY REWRITE — the previous headlines completely missed what this merchant actually sells.
+
+The merchant is a ${expectedCategory}, NOT a ${wrongDirection || "different category"}.
+
+Merchant: ${merchantName}
+Real website content (use ONLY this to infer angles):
+${(pageText || "").slice(0, 2000)}
+${keywordBlock}
+REJECTED PREVIOUS HEADLINES (do NOT repeat or borrow vocabulary from these):
+${originalHeadlines.slice(0, 15).map((h, i) => `${i + 1}. "${h}"`).join("\n")}
+
+RULES:
+1. Write EXACTLY ${count} headlines in ${languageName}
+2. Each headline ≤ 30 characters (count every character)
+3. EVERY single headline MUST be about ${expectedCategory} (the merchant's real business)
+4. Headline #1 MUST include "${merchantName}"
+5. ZERO words from the "${wrongDirection || "wrong"}" semantic field
+6. Each headline must start with a DIFFERENT word
+7. No fabricated discounts or dates
+8. Vary syntax: questions, statements, commands, noun phrases
+
+Return ONLY a JSON array of exactly ${count} strings.`;
+
+  try {
+    const raw = await callAiWithFallback("ad_copy", [{ role: "user", content: prompt }], 2048);
+    const parsed = JSON.parse(extractJsonFromAi(raw));
+    if (!Array.isArray(parsed)) return originalHeadlines;
+    const valid = parsed
+      .map((h) => String(h || "").trim().replace(/^["']|["']$/g, ""))
+      .filter((h) => h.length >= 2 && h.length <= 30);
+    if (valid.length >= count - 2) return valid.slice(0, count);
+    return originalHeadlines;
+  } catch (err) {
+    console.warn("[Core] 按品类重写失败，保留原 headlines:", err instanceof Error ? err.message : err);
+    return originalHeadlines;
+  }
+}
+
 const MAX_COMPLIANCE_RETRIES = 3;
 
 async function complianceAutoFix(
@@ -301,6 +434,17 @@ export async function POST(req: NextRequest) {
     where: { campaign_id: campaign.id, is_deleted: 0 },
     select: { id: true },
   });
+  // C-082 Part A (RC-2)：预查 ad_group 上的正向关键词，作为 generateCore fallback 路径的 keywords 兜底。
+  // 主路径用 confirmedKeywords（前端 body.keywords，员工已确认）；fallback 路径若 confirmedKeywords 为空，
+  // 必须改用本数组，否则 padHeadlines 在零方向标下被品牌名 prior 拉偏（Yoin BE → 服装文案事故）。
+  const dbKeywordsForFallback: string[] = adGroup
+    ? (await prisma.keywords.findMany({
+        where: { ad_group_id: adGroup.id, is_deleted: 0, is_negative: 0 },
+        select: { keyword_text: true },
+        orderBy: { id: "asc" },
+        take: 12,
+      })).map((k) => k.keyword_text.trim()).filter(Boolean)
+    : [];
   const adCreative = adGroup
     ? await prisma.ad_creatives.findFirst({
       where: { ad_group_id: adGroup.id, is_deleted: 0 },
@@ -510,7 +654,7 @@ export async function POST(req: NextRequest) {
           // 不进入主 if 分支，跳过下面的 generateCore
         } else if (types.includes("core")) {
           const confirmedKeywords = Array.isArray(requestKeywords) ? (requestKeywords as string[]).filter(Boolean).slice(0, 10) : [];
-          tasks.push(generateCore(cache!, merchantName, merchantUrl, country, adSettings, aiRuleProfile, adCreativeId, send, ad_language, confirmedKeywords, merchantCategory));
+          tasks.push(generateCore(cache!, merchantName, merchantUrl, country, adSettings, aiRuleProfile, adCreativeId, send, ad_language, confirmedKeywords, merchantCategory, dbKeywordsForFallback));
 
           // F-15: 图片提取独立于 AI 生成流程，并行运行，避免 AI/OCR 异常导致图片丢失
           tasks.push((async () => {
@@ -600,6 +744,7 @@ async function generateCore(
   adLanguageCode?: string,
   confirmedKeywords: string[] = [],
   merchantCategory: string | null = null,
+  dbKeywordsForFallback: string[] = [],
 ) {
   const market = getAdMarketConfig(country);
   const languageName = resolveLanguageName(country, adLanguageCode);
@@ -957,6 +1102,60 @@ ${isNonEnglish ? `\n⚠️ FINAL REMINDER: ALL headlines and descriptions MUST b
 
     const [hlResult, descResult] = await Promise.all([processHeadlines(), processDescriptions()]);
     let headlines = hlResult.items;
+
+    // ═════════════════════════════════════════════════════════════════
+    // C-082 Part D (RC-4)：主题一致性后置校验 + 按品类重写 retry
+    //   防御 AI 即使有 pageText/keywords/category 仍被品牌名 prior 拉偏到错误品类
+    //   （Yoin BE 真实业务=手机套餐，但 AI 写出服装文案的事故）。
+    //   失败保守处理（假设对齐），不阻塞主流程；触发重写时只调一次。
+    // ═════════════════════════════════════════════════════════════════
+    try {
+      const alignmentKeywords = (confirmedKeywords.length > 0 ? confirmedKeywords : dbKeywordsForFallback)
+        .map((k) => k.trim())
+        .filter(Boolean)
+        .slice(0, 10);
+      const verdict = await verifyHeadlinesAlignment(
+        headlines,
+        cache.pageText,
+        merchantCategory,
+        alignmentKeywords,
+        businessSummary,
+        merchantName,
+      );
+      console.warn(
+        `[Core] 主题对齐校验：aligned=${verdict.aligned} expected="${verdict.expectedCategory}" detected="${verdict.detectedCategory}" drift="${verdict.driftReason}"`,
+      );
+      if (!verdict.aligned && verdict.expectedCategory && verdict.expectedCategory.length >= 3) {
+        console.warn(
+          `[Core] 主题漂移命中，触发按品类重写: "${verdict.detectedCategory}" → "${verdict.expectedCategory}"`,
+        );
+        const rewritten = await rewriteHeadlinesForCategory(
+          headlines,
+          verdict.expectedCategory,
+          verdict.detectedCategory || "the wrong category",
+          merchantName,
+          cache.pageText,
+          alignmentKeywords,
+          languageName,
+          15,
+        );
+        if (rewritten !== headlines && rewritten.length >= 8) {
+          headlines = rewritten;
+          send("headlines", headlines);
+          send("alignment_rewrite", {
+            expected: verdict.expectedCategory,
+            detected: verdict.detectedCategory,
+            count: rewritten.length,
+          });
+          console.warn(`[Core] 按品类重写完成，新 headlines=${rewritten.length} 条`);
+        } else {
+          console.warn("[Core] 按品类重写未达数量阈值，保留原 headlines");
+        }
+      }
+    } catch (alignErr) {
+      console.warn("[Core] 主题对齐校验异常（不阻断）:", alignErr instanceof Error ? alignErr.message : alignErr);
+    }
+
     let descriptions = descResult.items;
     const headlineFix = hlResult.fix;
     const descFix = descResult.fix;
@@ -1104,26 +1303,95 @@ ${isNonEnglish ? `\n⚠️ FINAL REMINDER: ALL headlines and descriptions MUST b
   } catch (err) {
     console.error("[Core] AI 生成失败:", err instanceof Error ? err.message : err);
     // fallback: 使用 padHeadlines/padDescriptions
+    // D-025 R-1.A：fallback 路径必须把已抓到的商家上下文全部传下去，避免 AI 在零信号下
+    //                跟着 7-ANGLE FRAMEWORK 的范例方向乱写（详见 §四·D-025 §4.2 RC-1）
     try {
       const { padHeadlines, padDescriptions } = await import("@/lib/ai-service");
-      const headlines = await padHeadlines([], merchantName, country, 15, {
+      // C-082 Part A (RC-2)：fallback 路径必须传 keywords — D-025 只补了被动信息（pageText/summary/features/category），
+      // 漏修了"主动方向标"keywords。本案例 Yoin BE 5 条手机套餐关键词正等着用，但 fallback 完全没传 → AI 失去强约束。
+      // 优先级：confirmedKeywords（员工已确认）> dbKeywordsForFallback（DB 兜底）。
+      const fallbackKeywords = (confirmedKeywords.length > 0 ? confirmedKeywords : dbKeywordsForFallback)
+        .map((k) => k.trim())
+        .filter(Boolean)
+        .slice(0, 10);
+      console.warn(
+        `[Core] fallback 启动: confirmedKeywords=${confirmedKeywords.length} dbKeywords=${dbKeywordsForFallback.length} effective=${fallbackKeywords.length} → padHeadlines`,
+      );
+      const sharedBusinessContext = {
+        pageText: cache.pageText,
+        merchantUrl,
+        category: merchantCategory ?? undefined,
+        businessSummary: businessSummary?.summary_en ?? null,
+        businessCategoryGuess: businessSummary?.category_guess ?? null,
+        features: cache.features,
+        crawledProducts: cache.crawledProducts,
+      } as const;
+      let headlines = await padHeadlines([], merchantName, country, 15, {
         referenceItems: cache.semrushTitles,
+        keywords: fallbackKeywords,
         dailyBudget: Number(adSettings?.daily_budget || 2),
         maxCpc: Number(adSettings?.max_cpc || 0.3),
         biddingStrategy: adSettings?.bidding_strategy || "MAXIMIZE_CLICKS",
         aiRuleProfile,
         adLanguageCode,
+        ...sharedBusinessContext,
       });
       send("headlines", headlines);
       const descriptions = await padDescriptions([], merchantName, country, 4, {
         referenceItems: cache.semrushDescriptions,
+        keywords: fallbackKeywords,
         dailyBudget: Number(adSettings?.daily_budget || 2),
         maxCpc: Number(adSettings?.max_cpc || 0.3),
         biddingStrategy: adSettings?.bidding_strategy || "MAXIMIZE_CLICKS",
         aiRuleProfile,
         adLanguageCode,
+        ...sharedBusinessContext,
       });
       send("descriptions", descriptions);
+
+      // C-082 Part D (RC-4)：fallback 路径同样做主题对齐校验 + 按品类重写 retry。
+      // Yoin BE 事故现场的真实路径就是 fallback，必须在此兜底。
+      try {
+        const verdictFb = await verifyHeadlinesAlignment(
+          headlines,
+          cache.pageText,
+          merchantCategory,
+          fallbackKeywords,
+          businessSummary,
+          merchantName,
+        );
+        console.warn(
+          `[Core] fallback 主题对齐校验：aligned=${verdictFb.aligned} expected="${verdictFb.expectedCategory}" detected="${verdictFb.detectedCategory}" drift="${verdictFb.driftReason}"`,
+        );
+        if (!verdictFb.aligned && verdictFb.expectedCategory && verdictFb.expectedCategory.length >= 3) {
+          console.warn(
+            `[Core] fallback 主题漂移命中，触发按品类重写: "${verdictFb.detectedCategory}" → "${verdictFb.expectedCategory}"`,
+          );
+          const rewritten = await rewriteHeadlinesForCategory(
+            headlines,
+            verdictFb.expectedCategory,
+            verdictFb.detectedCategory || "the wrong category",
+            merchantName,
+            cache.pageText,
+            fallbackKeywords,
+            languageName,
+            15,
+          );
+          if (rewritten !== headlines && rewritten.length >= 8) {
+            headlines = rewritten;
+            send("headlines", headlines);
+            send("alignment_rewrite", {
+              expected: verdictFb.expectedCategory,
+              detected: verdictFb.detectedCategory,
+              count: rewritten.length,
+            });
+            console.warn(`[Core] fallback 按品类重写完成，新 headlines=${rewritten.length} 条`);
+          }
+        }
+      } catch (alignErr) {
+        console.warn("[Core] fallback 主题对齐校验异常（不阻断）:", alignErr instanceof Error ? alignErr.message : alignErr);
+      }
+
       // C-016: sitelinks 由独立 pipeline 负责（不在 fallback 分支重复生成）
       if (adCreativeId) {
         const pathSuggest2 = suggestDisplayPaths(merchantName, [], country);
