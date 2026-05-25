@@ -30,6 +30,7 @@ export type Platform_connectionsAvgAggregateOutputType = {
   id: number | null
   user_id: number | null
   publish_site_id: number | null
+  consecutive_failures: number | null
   is_deleted: number | null
 }
 
@@ -37,6 +38,7 @@ export type Platform_connectionsSumAggregateOutputType = {
   id: bigint | null
   user_id: bigint | null
   publish_site_id: bigint | null
+  consecutive_failures: number | null
   is_deleted: number | null
 }
 
@@ -50,6 +52,9 @@ export type Platform_connectionsMinAggregateOutputType = {
   publish_site_id: bigint | null
   status: string | null
   last_synced_at: Date | null
+  last_sync_attempt_at: Date | null
+  last_error: string | null
+  consecutive_failures: number | null
   is_deleted: number | null
   created_at: Date | null
   updated_at: Date | null
@@ -65,6 +70,9 @@ export type Platform_connectionsMaxAggregateOutputType = {
   publish_site_id: bigint | null
   status: string | null
   last_synced_at: Date | null
+  last_sync_attempt_at: Date | null
+  last_error: string | null
+  consecutive_failures: number | null
   is_deleted: number | null
   created_at: Date | null
   updated_at: Date | null
@@ -80,6 +88,9 @@ export type Platform_connectionsCountAggregateOutputType = {
   publish_site_id: number
   status: number
   last_synced_at: number
+  last_sync_attempt_at: number
+  last_error: number
+  consecutive_failures: number
   is_deleted: number
   created_at: number
   updated_at: number
@@ -91,6 +102,7 @@ export type Platform_connectionsAvgAggregateInputType = {
   id?: true
   user_id?: true
   publish_site_id?: true
+  consecutive_failures?: true
   is_deleted?: true
 }
 
@@ -98,6 +110,7 @@ export type Platform_connectionsSumAggregateInputType = {
   id?: true
   user_id?: true
   publish_site_id?: true
+  consecutive_failures?: true
   is_deleted?: true
 }
 
@@ -111,6 +124,9 @@ export type Platform_connectionsMinAggregateInputType = {
   publish_site_id?: true
   status?: true
   last_synced_at?: true
+  last_sync_attempt_at?: true
+  last_error?: true
+  consecutive_failures?: true
   is_deleted?: true
   created_at?: true
   updated_at?: true
@@ -126,6 +142,9 @@ export type Platform_connectionsMaxAggregateInputType = {
   publish_site_id?: true
   status?: true
   last_synced_at?: true
+  last_sync_attempt_at?: true
+  last_error?: true
+  consecutive_failures?: true
   is_deleted?: true
   created_at?: true
   updated_at?: true
@@ -141,6 +160,9 @@ export type Platform_connectionsCountAggregateInputType = {
   publish_site_id?: true
   status?: true
   last_synced_at?: true
+  last_sync_attempt_at?: true
+  last_error?: true
+  consecutive_failures?: true
   is_deleted?: true
   created_at?: true
   updated_at?: true
@@ -243,6 +265,9 @@ export type Platform_connectionsGroupByOutputType = {
   publish_site_id: bigint | null
   status: string
   last_synced_at: Date | null
+  last_sync_attempt_at: Date | null
+  last_error: string | null
+  consecutive_failures: number
   is_deleted: number
   created_at: Date
   updated_at: Date
@@ -281,6 +306,9 @@ export type platform_connectionsWhereInput = {
   publish_site_id?: Prisma.BigIntNullableFilter<"platform_connections"> | bigint | number | null
   status?: Prisma.StringFilter<"platform_connections"> | string
   last_synced_at?: Prisma.DateTimeNullableFilter<"platform_connections"> | Date | string | null
+  last_sync_attempt_at?: Prisma.DateTimeNullableFilter<"platform_connections"> | Date | string | null
+  last_error?: Prisma.StringNullableFilter<"platform_connections"> | string | null
+  consecutive_failures?: Prisma.IntFilter<"platform_connections"> | number
   is_deleted?: Prisma.IntFilter<"platform_connections"> | number
   created_at?: Prisma.DateTimeFilter<"platform_connections"> | Date | string
   updated_at?: Prisma.DateTimeFilter<"platform_connections"> | Date | string
@@ -296,6 +324,9 @@ export type platform_connectionsOrderByWithRelationInput = {
   publish_site_id?: Prisma.SortOrderInput | Prisma.SortOrder
   status?: Prisma.SortOrder
   last_synced_at?: Prisma.SortOrderInput | Prisma.SortOrder
+  last_sync_attempt_at?: Prisma.SortOrderInput | Prisma.SortOrder
+  last_error?: Prisma.SortOrderInput | Prisma.SortOrder
+  consecutive_failures?: Prisma.SortOrder
   is_deleted?: Prisma.SortOrder
   created_at?: Prisma.SortOrder
   updated_at?: Prisma.SortOrder
@@ -315,6 +346,9 @@ export type platform_connectionsWhereUniqueInput = Prisma.AtLeast<{
   publish_site_id?: Prisma.BigIntNullableFilter<"platform_connections"> | bigint | number | null
   status?: Prisma.StringFilter<"platform_connections"> | string
   last_synced_at?: Prisma.DateTimeNullableFilter<"platform_connections"> | Date | string | null
+  last_sync_attempt_at?: Prisma.DateTimeNullableFilter<"platform_connections"> | Date | string | null
+  last_error?: Prisma.StringNullableFilter<"platform_connections"> | string | null
+  consecutive_failures?: Prisma.IntFilter<"platform_connections"> | number
   is_deleted?: Prisma.IntFilter<"platform_connections"> | number
   created_at?: Prisma.DateTimeFilter<"platform_connections"> | Date | string
   updated_at?: Prisma.DateTimeFilter<"platform_connections"> | Date | string
@@ -330,6 +364,9 @@ export type platform_connectionsOrderByWithAggregationInput = {
   publish_site_id?: Prisma.SortOrderInput | Prisma.SortOrder
   status?: Prisma.SortOrder
   last_synced_at?: Prisma.SortOrderInput | Prisma.SortOrder
+  last_sync_attempt_at?: Prisma.SortOrderInput | Prisma.SortOrder
+  last_error?: Prisma.SortOrderInput | Prisma.SortOrder
+  consecutive_failures?: Prisma.SortOrder
   is_deleted?: Prisma.SortOrder
   created_at?: Prisma.SortOrder
   updated_at?: Prisma.SortOrder
@@ -353,6 +390,9 @@ export type platform_connectionsScalarWhereWithAggregatesInput = {
   publish_site_id?: Prisma.BigIntNullableWithAggregatesFilter<"platform_connections"> | bigint | number | null
   status?: Prisma.StringWithAggregatesFilter<"platform_connections"> | string
   last_synced_at?: Prisma.DateTimeNullableWithAggregatesFilter<"platform_connections"> | Date | string | null
+  last_sync_attempt_at?: Prisma.DateTimeNullableWithAggregatesFilter<"platform_connections"> | Date | string | null
+  last_error?: Prisma.StringNullableWithAggregatesFilter<"platform_connections"> | string | null
+  consecutive_failures?: Prisma.IntWithAggregatesFilter<"platform_connections"> | number
   is_deleted?: Prisma.IntWithAggregatesFilter<"platform_connections"> | number
   created_at?: Prisma.DateTimeWithAggregatesFilter<"platform_connections"> | Date | string
   updated_at?: Prisma.DateTimeWithAggregatesFilter<"platform_connections"> | Date | string
@@ -368,6 +408,9 @@ export type platform_connectionsCreateInput = {
   publish_site_id?: bigint | number | null
   status?: string
   last_synced_at?: Date | string | null
+  last_sync_attempt_at?: Date | string | null
+  last_error?: string | null
+  consecutive_failures?: number
   is_deleted?: number
   created_at?: Date | string
   updated_at?: Date | string
@@ -383,6 +426,9 @@ export type platform_connectionsUncheckedCreateInput = {
   publish_site_id?: bigint | number | null
   status?: string
   last_synced_at?: Date | string | null
+  last_sync_attempt_at?: Date | string | null
+  last_error?: string | null
+  consecutive_failures?: number
   is_deleted?: number
   created_at?: Date | string
   updated_at?: Date | string
@@ -398,6 +444,9 @@ export type platform_connectionsUpdateInput = {
   publish_site_id?: Prisma.NullableBigIntFieldUpdateOperationsInput | bigint | number | null
   status?: Prisma.StringFieldUpdateOperationsInput | string
   last_synced_at?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
+  last_sync_attempt_at?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
+  last_error?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  consecutive_failures?: Prisma.IntFieldUpdateOperationsInput | number
   is_deleted?: Prisma.IntFieldUpdateOperationsInput | number
   created_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updated_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
@@ -413,6 +462,9 @@ export type platform_connectionsUncheckedUpdateInput = {
   publish_site_id?: Prisma.NullableBigIntFieldUpdateOperationsInput | bigint | number | null
   status?: Prisma.StringFieldUpdateOperationsInput | string
   last_synced_at?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
+  last_sync_attempt_at?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
+  last_error?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  consecutive_failures?: Prisma.IntFieldUpdateOperationsInput | number
   is_deleted?: Prisma.IntFieldUpdateOperationsInput | number
   created_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updated_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
@@ -428,6 +480,9 @@ export type platform_connectionsCreateManyInput = {
   publish_site_id?: bigint | number | null
   status?: string
   last_synced_at?: Date | string | null
+  last_sync_attempt_at?: Date | string | null
+  last_error?: string | null
+  consecutive_failures?: number
   is_deleted?: number
   created_at?: Date | string
   updated_at?: Date | string
@@ -443,6 +498,9 @@ export type platform_connectionsUpdateManyMutationInput = {
   publish_site_id?: Prisma.NullableBigIntFieldUpdateOperationsInput | bigint | number | null
   status?: Prisma.StringFieldUpdateOperationsInput | string
   last_synced_at?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
+  last_sync_attempt_at?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
+  last_error?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  consecutive_failures?: Prisma.IntFieldUpdateOperationsInput | number
   is_deleted?: Prisma.IntFieldUpdateOperationsInput | number
   created_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updated_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
@@ -458,6 +516,9 @@ export type platform_connectionsUncheckedUpdateManyInput = {
   publish_site_id?: Prisma.NullableBigIntFieldUpdateOperationsInput | bigint | number | null
   status?: Prisma.StringFieldUpdateOperationsInput | string
   last_synced_at?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
+  last_sync_attempt_at?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
+  last_error?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  consecutive_failures?: Prisma.IntFieldUpdateOperationsInput | number
   is_deleted?: Prisma.IntFieldUpdateOperationsInput | number
   created_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updated_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
@@ -479,6 +540,9 @@ export type platform_connectionsCountOrderByAggregateInput = {
   publish_site_id?: Prisma.SortOrder
   status?: Prisma.SortOrder
   last_synced_at?: Prisma.SortOrder
+  last_sync_attempt_at?: Prisma.SortOrder
+  last_error?: Prisma.SortOrder
+  consecutive_failures?: Prisma.SortOrder
   is_deleted?: Prisma.SortOrder
   created_at?: Prisma.SortOrder
   updated_at?: Prisma.SortOrder
@@ -488,6 +552,7 @@ export type platform_connectionsAvgOrderByAggregateInput = {
   id?: Prisma.SortOrder
   user_id?: Prisma.SortOrder
   publish_site_id?: Prisma.SortOrder
+  consecutive_failures?: Prisma.SortOrder
   is_deleted?: Prisma.SortOrder
 }
 
@@ -501,6 +566,9 @@ export type platform_connectionsMaxOrderByAggregateInput = {
   publish_site_id?: Prisma.SortOrder
   status?: Prisma.SortOrder
   last_synced_at?: Prisma.SortOrder
+  last_sync_attempt_at?: Prisma.SortOrder
+  last_error?: Prisma.SortOrder
+  consecutive_failures?: Prisma.SortOrder
   is_deleted?: Prisma.SortOrder
   created_at?: Prisma.SortOrder
   updated_at?: Prisma.SortOrder
@@ -516,6 +584,9 @@ export type platform_connectionsMinOrderByAggregateInput = {
   publish_site_id?: Prisma.SortOrder
   status?: Prisma.SortOrder
   last_synced_at?: Prisma.SortOrder
+  last_sync_attempt_at?: Prisma.SortOrder
+  last_error?: Prisma.SortOrder
+  consecutive_failures?: Prisma.SortOrder
   is_deleted?: Prisma.SortOrder
   created_at?: Prisma.SortOrder
   updated_at?: Prisma.SortOrder
@@ -525,6 +596,7 @@ export type platform_connectionsSumOrderByAggregateInput = {
   id?: Prisma.SortOrder
   user_id?: Prisma.SortOrder
   publish_site_id?: Prisma.SortOrder
+  consecutive_failures?: Prisma.SortOrder
   is_deleted?: Prisma.SortOrder
 }
 
@@ -544,6 +616,9 @@ export type platform_connectionsSelect<ExtArgs extends runtime.Types.Extensions.
   publish_site_id?: boolean
   status?: boolean
   last_synced_at?: boolean
+  last_sync_attempt_at?: boolean
+  last_error?: boolean
+  consecutive_failures?: boolean
   is_deleted?: boolean
   created_at?: boolean
   updated_at?: boolean
@@ -561,12 +636,15 @@ export type platform_connectionsSelectScalar = {
   publish_site_id?: boolean
   status?: boolean
   last_synced_at?: boolean
+  last_sync_attempt_at?: boolean
+  last_error?: boolean
+  consecutive_failures?: boolean
   is_deleted?: boolean
   created_at?: boolean
   updated_at?: boolean
 }
 
-export type platform_connectionsOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"id" | "user_id" | "platform" | "account_name" | "api_key" | "channel_id" | "publish_site_id" | "status" | "last_synced_at" | "is_deleted" | "created_at" | "updated_at", ExtArgs["result"]["platform_connections"]>
+export type platform_connectionsOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"id" | "user_id" | "platform" | "account_name" | "api_key" | "channel_id" | "publish_site_id" | "status" | "last_synced_at" | "last_sync_attempt_at" | "last_error" | "consecutive_failures" | "is_deleted" | "created_at" | "updated_at", ExtArgs["result"]["platform_connections"]>
 
 export type $platform_connectionsPayload<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = {
   name: "platform_connections"
@@ -581,6 +659,9 @@ export type $platform_connectionsPayload<ExtArgs extends runtime.Types.Extension
     publish_site_id: bigint | null
     status: string
     last_synced_at: Date | null
+    last_sync_attempt_at: Date | null
+    last_error: string | null
+    consecutive_failures: number
     is_deleted: number
     created_at: Date
     updated_at: Date
@@ -962,6 +1043,9 @@ export interface platform_connectionsFieldRefs {
   readonly publish_site_id: Prisma.FieldRef<"platform_connections", 'BigInt'>
   readonly status: Prisma.FieldRef<"platform_connections", 'String'>
   readonly last_synced_at: Prisma.FieldRef<"platform_connections", 'DateTime'>
+  readonly last_sync_attempt_at: Prisma.FieldRef<"platform_connections", 'DateTime'>
+  readonly last_error: Prisma.FieldRef<"platform_connections", 'String'>
+  readonly consecutive_failures: Prisma.FieldRef<"platform_connections", 'Int'>
   readonly is_deleted: Prisma.FieldRef<"platform_connections", 'Int'>
   readonly created_at: Prisma.FieldRef<"platform_connections", 'DateTime'>
   readonly updated_at: Prisma.FieldRef<"platform_connections", 'DateTime'>

@@ -10,6 +10,7 @@ import { syncMerchantStatusForUser, parseCampaignNameFull } from "@/lib/campaign
 import { getRedirectedMerchantKeys } from "@/lib/merchant-ownership-rules";
 import { applyAffiliateCommissionToDailyStats } from "@/lib/daily-stats-commission";
 import { aggregateRawTransactions } from "@/lib/affiliate-txn-aggregate";
+import { markConnectionSuccess, markConnectionAttempted, markConnectionFailure } from "@/lib/connection-health";
 
 /**
  * POST /api/user/data-center/sync
@@ -724,8 +725,17 @@ async function syncTransactionsInline(
       const label = conn.account_name || platform;
       try {
         const r = await fetchAllTransactions(platform, conn.api_key!, startStr, endStr);
-        if (r.error) errors.push(`${label}: ${r.error}`);
-        if (r.transactions.length === 0) continue;
+        // D-026: 显式 log + 写库
+        if (r.error) {
+          errors.push(`${label}: ${r.error}`);
+          await markConnectionFailure(conn.id, r.error);
+          if (r.transactions.length === 0) continue;
+        } else if (r.transactions.length === 0) {
+          await markConnectionAttempted(conn.id);
+          continue;
+        } else {
+          await markConnectionSuccess(conn.id);
+        }
 
         // C-079：API line items 聚合 + 0/0 幽灵过滤（同 merchant+txn_time 的多条合并为一笔订单）
         const aggRes = aggregateRawTransactions(r.transactions);

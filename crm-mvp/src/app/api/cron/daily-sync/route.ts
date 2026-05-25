@@ -7,6 +7,7 @@ import { autoRepairPublishedArticles } from "@/lib/article-auto-repair";
 import { getRedirectedMerchantKeys } from "@/lib/merchant-ownership-rules";
 import { sqlAffiliateTxnValidPlatformConnection } from "@/lib/affiliate-transaction-sql";
 import { aggregateRawTransactions } from "@/lib/affiliate-txn-aggregate";
+import { markConnectionSuccess, markConnectionAttempted, markConnectionFailure } from "@/lib/connection-health";
 
 function verifyCron(req: NextRequest): boolean {
   const secret = process.env.CRON_SECRET;
@@ -664,11 +665,17 @@ async function syncAllUsersTransactions(): Promise<unknown> {
         const platform = normalizePlatformCode(conn.platform);
         try {
           const r = await fetchAllTransactions(platform, conn.api_key!, startStr, endStr);
-          if (r.error && r.transactions.length === 0) {
-            log(`    ${conn.account_name || platform} API: ${r.error}`);
+          // D-026: 显式 log + 写库（替代 silent continue）
+          if (r.error) {
+            log(`    ${conn.account_name || platform} [${platform}] ERROR: ${r.error}`);
+            await markConnectionFailure(conn.id, r.error);
+            if (r.transactions.length === 0) continue;
+          } else if (r.transactions.length === 0) {
+            await markConnectionAttempted(conn.id);
             continue;
+          } else {
+            await markConnectionSuccess(conn.id);
           }
-          if (!r.transactions.length) continue;
 
           // C-079：line items 聚合 + 0/0 幽灵过滤
           const aggRes = aggregateRawTransactions(r.transactions);

@@ -201,6 +201,9 @@ export const Platform_connectionsScalarFieldEnum = {
   publish_site_id: 'publish_site_id',
   status: 'status',
   last_synced_at: 'last_synced_at',
+  last_sync_attempt_at: 'last_sync_attempt_at',
+  last_error: 'last_error',
+  consecutive_failures: 'consecutive_failures',
   is_deleted: 'is_deleted',
   created_at: 'created_at',
   updated_at: 'updated_at'
@@ -1028,7 +1031,8 @@ export const platform_connectionsOrderByRelevanceFieldEnum = {
   account_name: 'account_name',
   api_key: 'api_key',
   channel_id: 'channel_id',
-  status: 'status'
+  status: 'status',
+  last_error: 'last_error'
 } as const
 
 export type platform_connectionsOrderByRelevanceFieldEnum = (typeof platform_connectionsOrderByRelevanceFieldEnum)[keyof typeof platform_connectionsOrderByRelevanceFieldEnum]

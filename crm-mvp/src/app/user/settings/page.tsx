@@ -3,13 +3,13 @@
 import { useState, useEffect, useMemo } from "react";
 import {
   Card, Tabs, Form, Input, Button, Select, Table, Space, Tag, Typography,
-  Popconfirm, Modal, Switch, Upload, Row, Col, App, Tooltip,
+  Popconfirm, Modal, Switch, Upload, Row, Col, App, Tooltip, Alert,
 } from "antd";
 import {
   SettingOutlined, ApiOutlined, GoogleOutlined,
   PlusOutlined, DeleteOutlined, SaveOutlined, EditOutlined, BellOutlined,
   InboxOutlined, FileTextOutlined, CheckCircleOutlined, LockOutlined, CopyOutlined,
-  CodeOutlined, EyeOutlined,
+  CodeOutlined, EyeOutlined, ExclamationCircleOutlined, CheckOutlined, SyncOutlined,
 } from "@ant-design/icons";
 import { generateLinkExchangeScript } from "@/lib/link-exchange-script-template";
 import {
@@ -21,6 +21,9 @@ import AppPageHeader from "@/components/AppPageHeader";
 const { Text } = Typography;
 
 // ==================== 平台连接 Tab ====================
+// D-026: 增加测试连接 + 健康状态展示 + 保存前强制测试
+type TestResult = { ok: boolean; msg?: string; error?: string; suggest?: string; sample_count?: number; elapsed_ms?: number };
+
 function PlatformConnectionsTab() {
   const { message } = App.useApp();
   const [connections, setConnections] = useState<Record<string, unknown>[]>([]);
@@ -28,6 +31,11 @@ function PlatformConnectionsTab() {
   const [modalOpen, setModalOpen] = useState(false);
   const [editConn, setEditConn] = useState<Record<string, unknown> | null>(null);
   const [form] = Form.useForm();
+  // D-026 新增 state
+  const [testingConnId, setTestingConnId] = useState<string | null>(null); // 卡片上点测试
+  const [modalTesting, setModalTesting] = useState(false);                 // 弹窗里点测试
+  const [modalTestResult, setModalTestResult] = useState<TestResult | null>(null); // 弹窗内测试结果
+  const [modalTestPassed, setModalTestPassed] = useState(false);            // 当前表单值是否已测试通过
 
   const fetchData = async () => {
     const [connRes, siteRes] = await Promise.all([
@@ -40,17 +48,107 @@ function PlatformConnectionsTab() {
 
   useEffect(() => { fetchData(); }, []);
 
+  // D-026: 测试已有连接（卡片上的"测试连接"按钮）
+  const handleTestConn = async (conn: Record<string, unknown>) => {
+    const connId = String(conn.id);
+    setTestingConnId(connId);
+    try {
+      const res = await fetch("/api/user/settings/platforms/test-connection", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ conn_id: connId }),
+      }).then((r) => r.json());
+      const data: TestResult = res.data || {};
+      if (data.ok) {
+        message.success(data.msg || "API 连接正常");
+      } else {
+        message.error({
+          content: data.error || res.message || "测试失败",
+          duration: 6,
+        });
+      }
+      fetchData(); // 刷新状态字段
+    } catch (e) {
+      message.error("测试请求异常：" + (e instanceof Error ? e.message : String(e)));
+    } finally {
+      setTestingConnId(null);
+    }
+  };
+
+  // D-026: 弹窗内"测试连接"按钮（用当前表单值，未保存）
+  const handleModalTest = async () => {
+    const values = await form.validateFields().catch(() => null);
+    if (!values) return;
+    const apiKey = values.api_key || (editConn?.api_key as string) || "";
+    if (!apiKey || !apiKey.trim()) {
+      message.warning("请先填写 API Key");
+      return;
+    }
+    setModalTesting(true);
+    setModalTestResult(null);
+    try {
+      const res = await fetch("/api/user/settings/platforms/test-connection", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          platform: values.platform || editConn?.platform,
+          api_key: apiKey,
+          channel_id: values.channel_id,
+          conn_id: editConn ? String(editConn.id) : undefined,
+        }),
+      }).then((r) => r.json());
+      const data: TestResult = res.data || {};
+      setModalTestResult(data);
+      setModalTestPassed(!!data.ok);
+      if (data.ok) message.success(data.msg || "测试通过");
+    } catch (e) {
+      const errMsg = e instanceof Error ? e.message : String(e);
+      setModalTestResult({ ok: false, error: errMsg });
+      setModalTestPassed(false);
+    } finally {
+      setModalTesting(false);
+    }
+  };
+
   const handleSave = async () => {
     const values = await form.validateFields();
-    if (editConn && (!values.api_key || values.api_key === "")) {
+    const isEditingWithUnchangedKey = !!editConn && (!values.api_key || values.api_key === "");
+    // D-026: 强制测试通过才能保存（编辑模式且未改 key 时跳过此校验，因为不是新 key）
+    if (!isEditingWithUnchangedKey && !modalTestPassed) {
+      message.warning("请先点击「测试连接」验证 API Key 通过后再保存");
+      return;
+    }
+    if (isEditingWithUnchangedKey) {
       delete values.api_key;
     }
     if (editConn) values.id = editConn.id;
     const res = await fetch("/api/user/settings/platforms", {
       method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(values),
     }).then((r) => r.json());
-    if (res.code === 0) { message.success("保存成功"); setModalOpen(false); setEditConn(null); fetchData(); }
-    else message.error(res.message);
+    if (res.code === 0) {
+      message.success("保存成功");
+      setModalOpen(false);
+      setEditConn(null);
+      setModalTestResult(null);
+      setModalTestPassed(false);
+      fetchData();
+    } else {
+      message.error(res.message);
+    }
+  };
+
+  const openEditModal = (conn: Record<string, unknown>) => {
+    setEditConn(conn);
+    setModalTestResult(null);
+    // 编辑模式：API Key 未改时算作"已通过"（无需重测既有连接才能保存其它字段）
+    setModalTestPassed(true);
+    form.setFieldsValue({
+      platform: conn.platform,
+      account_name: conn.account_name,
+      channel_id: (conn.channel_id as string) || undefined,
+      publish_site_id: conn.publish_site_id ? String(conn.publish_site_id) : undefined,
+    });
+    setModalOpen(true);
   };
 
   const handleDelete = async (id: string) => {
@@ -78,11 +176,30 @@ function PlatformConnectionsTab() {
     return map;
   }, [connections]);
 
+  // D-026: 计算连接健康等级
+  const computeHealthLevel = (conn: Record<string, unknown>): "ok" | "warn" | "error" => {
+    const status = String(conn.status || "");
+    const consecutiveFailures = Number(conn.consecutive_failures || 0);
+    if (status === "error" || consecutiveFailures >= 1) return "error";
+    if (status === "unverified") return "warn";
+    const lastSyncedAt = conn.last_synced_at;
+    if (!lastSyncedAt) return "warn";
+    const ageHours = (Date.now() - new Date(String(lastSyncedAt)).getTime()) / 3600000;
+    if (ageHours > 24) return "warn";
+    return "ok";
+  };
+
   return (
     <div>
       <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 16 }}>
         <Text>配置联盟平台 API 连接（支持同一平台多个账号）</Text>
-        <Button icon={<PlusOutlined />} onClick={() => { setEditConn(null); form.resetFields(); setModalOpen(true); }}>添加连接</Button>
+        <Button icon={<PlusOutlined />} onClick={() => {
+          setEditConn(null);
+          form.resetFields();
+          setModalTestResult(null);
+          setModalTestPassed(false);
+          setModalOpen(true);
+        }}>添加连接</Button>
       </div>
       <Row gutter={[16, 16]}>
         {PLATFORMS.map((p) => {
@@ -97,6 +214,8 @@ function PlatformConnectionsTab() {
                     setEditConn(null);
                     form.resetFields();
                     form.setFieldsValue({ platform: p.code });
+                    setModalTestResult(null);
+                    setModalTestPassed(false);
                     setModalOpen(true);
                   }}>添加</Button>
                 }
@@ -108,32 +227,68 @@ function PlatformConnectionsTab() {
                     {conns.map((conn) => {
                       const siteName = getSiteName(conn.publish_site_id as string);
                       const accName = (conn.account_name as string) || p.code;
+                      // D-026: 三态健康展示
+                      const health = computeHealthLevel(conn);
+                      const tagColor = health === "ok" ? "green" : health === "warn" ? "gold" : "red";
+                      const tagText = health === "ok" ? accName : health === "warn" ? `${accName} (待验证)` : `${accName} (异常)`;
+                      const lastError = (conn.last_error as string) || "";
+                      const lastSync = conn.last_synced_at ? new Date(String(conn.last_synced_at)).toLocaleString("zh-CN") : "从未";
+                      const lastAttempt = conn.last_sync_attempt_at ? new Date(String(conn.last_sync_attempt_at)).toLocaleString("zh-CN") : "—";
+                      const isTesting = testingConnId === String(conn.id);
                       return (
-                        <div key={conn.id as string} style={{ padding: "6px 8px", background: "#fafafa", borderRadius: 4, border: "1px solid #f0f0f0" }}>
+                        <div key={conn.id as string} style={{
+                          padding: "6px 8px",
+                          background: health === "error" ? "#fff1f0" : "#fafafa",
+                          borderRadius: 4,
+                          border: health === "error" ? "1px solid #ffa39e" : "1px solid #f0f0f0",
+                        }}>
                           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                             <Space size={4}>
-                              <Tag color="green" style={{ margin: 0 }}>{accName}</Tag>
+                              <Tag color={tagColor} style={{ margin: 0 }} icon={
+                                health === "ok" ? <CheckCircleOutlined /> :
+                                health === "error" ? <ExclamationCircleOutlined /> : undefined
+                              }>{tagText}</Tag>
                               <Text type="secondary" style={{ fontSize: 11 }}>
                                 {(conn.api_key as string)?.slice(0, 6)}...
                               </Text>
                             </Space>
                             <Space size={0}>
-                              <Button size="small" type="link" icon={<EditOutlined />} onClick={() => {
-                                setEditConn(conn);
-                                form.setFieldsValue({
-                                  platform: conn.platform,
-                                  account_name: conn.account_name,
-                                  channel_id: (conn.channel_id as string) || undefined,
-                                  publish_site_id: conn.publish_site_id ? String(conn.publish_site_id) : undefined,
-                                });
-                                setModalOpen(true);
-                              }} />
+                              <Tooltip title="测试 API 连接">
+                                <Button size="small" type="link" icon={isTesting ? <SyncOutlined spin /> : <CheckOutlined />} loading={isTesting} onClick={() => handleTestConn(conn)} />
+                              </Tooltip>
+                              <Tooltip title={health === "error" ? "重新配置" : "编辑"}>
+                                <Button size="small" type="link" icon={<EditOutlined />} onClick={() => openEditModal(conn)} />
+                              </Tooltip>
                               <Popconfirm title="确认断开此账号？" onConfirm={() => handleDelete(conn.id as string)}>
                                 <Button size="small" danger type="link" icon={<DeleteOutlined />} />
                               </Popconfirm>
                             </Space>
                           </div>
-                          {siteName && <Text type="secondary" style={{ fontSize: 11 }}>站点: {siteName}</Text>}
+                          {siteName && <Text type="secondary" style={{ fontSize: 11, display: "block" }}>站点: {siteName}</Text>}
+                          {/* D-026: 连接异常 Alert + 引导重新配置 */}
+                          {health === "error" && lastError && (
+                            <Alert
+                              type="error"
+                              showIcon
+                              style={{ marginTop: 6, padding: "4px 8px" }}
+                              message={<Text style={{ fontSize: 11 }}>该连接 API Key 已失效</Text>}
+                              description={
+                                <div style={{ fontSize: 11 }}>
+                                  <div><Text type="danger" style={{ fontSize: 11 }}>错误：{lastError}</Text></div>
+                                  <div>上次成功同步：{lastSync}</div>
+                                  <Button danger size="small" style={{ marginTop: 4 }} onClick={() => openEditModal(conn)}>
+                                    重新配置 API Key
+                                  </Button>
+                                </div>
+                              }
+                            />
+                          )}
+                          {/* D-026: 健康状态信息条（小字灰色） */}
+                          {health !== "error" && (
+                            <Text type="secondary" style={{ fontSize: 10, display: "block", marginTop: 2 }}>
+                              上次同步: {lastSync}{lastAttempt !== lastSync && ` | 尝试: ${lastAttempt}`}
+                            </Text>
+                          )}
                         </div>
                       );
                     })}
@@ -144,8 +299,44 @@ function PlatformConnectionsTab() {
           );
         })}
       </Row>
-      <Modal title={editConn ? "编辑平台连接" : "添加平台连接"} open={modalOpen} onOk={handleSave} onCancel={() => { setModalOpen(false); setEditConn(null); }}>
-        <Form form={form} layout="vertical">
+      <Modal
+        title={editConn ? "编辑平台连接" : "添加平台连接"}
+        open={modalOpen}
+        onCancel={() => {
+          setModalOpen(false);
+          setEditConn(null);
+          setModalTestResult(null);
+          setModalTestPassed(false);
+        }}
+        width={560}
+        footer={[
+          <Button key="cancel" onClick={() => {
+            setModalOpen(false);
+            setEditConn(null);
+            setModalTestResult(null);
+            setModalTestPassed(false);
+          }}>取消</Button>,
+          <Button key="test" type="default" icon={<CheckOutlined />} loading={modalTesting} onClick={handleModalTest}>
+            测试连接
+          </Button>,
+          <Tooltip key="save" title={!modalTestPassed && !editConn ? "请先测试连接通过" : ""}>
+            <Button
+              type="primary"
+              onClick={handleSave}
+              disabled={!modalTestPassed && !editConn}
+            >
+              保存
+            </Button>
+          </Tooltip>,
+        ]}
+      >
+        <Form form={form} layout="vertical" onValuesChange={(changed) => {
+          // D-026: 用户改了 api_key / channel_id / platform → 上次测试失效，必须重测
+          if ("api_key" in changed || "channel_id" in changed || "platform" in changed) {
+            setModalTestPassed(false);
+            setModalTestResult(null);
+          }
+        }}>
           <Form.Item name="platform" label="平台" rules={[{ required: true }]}>
             <Select disabled={!!editConn} options={PLATFORMS.map((p) => ({ value: p.code, label: `${p.code} — ${p.name}` }))} />
           </Form.Item>
@@ -174,6 +365,28 @@ function PlatformConnectionsTab() {
           <Form.Item name="publish_site_id" label="绑定站点" tooltip="选择该账号对应的发布站点，领取商家后文章将自动发布到此站点">
             <PublishSiteSelect sites={sites} placeholder="选择发布站点（可搜索站点名或域名）" />
           </Form.Item>
+
+          {/* D-026: 测试结果展示 */}
+          {modalTestResult && (
+            <Alert
+              type={modalTestResult.ok ? "success" : "error"}
+              showIcon
+              message={modalTestResult.ok ? "API 连接测试通过" : "API 连接测试失败"}
+              description={
+                modalTestResult.ok
+                  ? <span>{modalTestResult.msg}（耗时 {modalTestResult.elapsed_ms}ms）</span>
+                  : <div>
+                      <div>错误：{modalTestResult.error}</div>
+                      {modalTestResult.suggest && <div style={{ marginTop: 4 }}>建议：{modalTestResult.suggest}</div>}
+                    </div>
+              }
+            />
+          )}
+          {!editConn && !modalTestPassed && (
+            <Text type="secondary" style={{ fontSize: 12, display: "block", marginTop: 8 }}>
+              提示：保存前必须先点击「测试连接」验证 API Key 有效
+            </Text>
+          )}
         </Form>
       </Modal>
     </div>

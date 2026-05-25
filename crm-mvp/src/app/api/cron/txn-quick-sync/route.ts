@@ -5,6 +5,7 @@ import { nowCST, dateColumnStart, dateColumnEndExclusive } from "@/lib/date-util
 import { getRedirectedMerchantKeys } from "@/lib/merchant-ownership-rules";
 import { applyAffiliateCommissionToDailyStats } from "@/lib/daily-stats-commission";
 import { aggregateRawTransactions } from "@/lib/affiliate-txn-aggregate";
+import { markConnectionSuccess, markConnectionAttempted, markConnectionFailure } from "@/lib/connection-health";
 
 /** 快速同步的时间窗口（天）：覆盖所有状态活跃中的订单 */
 const QUICK_SYNC_DAYS = 14;
@@ -194,8 +195,21 @@ async function runQuickSync(startTime: number): Promise<NextResponse> {
         const platform = normalizePlatformCode(conn.platform);
         try {
           const r = await fetchAllTransactions(platform, conn.api_key!, startStr, endStr);
-          if (r.error && r.transactions.length === 0) continue;
-          if (!r.transactions.length) continue;
+
+          // D-026: API 错误必须显式 log + 写库（不再静默吞错）
+          if (r.error) {
+            log(`  ${user.username} ${conn.account_name || platform} [${platform}] ERROR: ${r.error}`);
+            await markConnectionFailure(conn.id, r.error);
+            if (r.transactions.length === 0) continue;
+            // 有 partial 数据时不阻塞继续处理，但状态已记为失败
+          } else if (r.transactions.length === 0) {
+            // 成功但 0 单：仅刷新 attempt 时间，不动 status
+            await markConnectionAttempted(conn.id);
+            continue;
+          } else {
+            // 成功有数据：完整健康状态写库（last_synced_at + 清 error + 恢复 connected）
+            await markConnectionSuccess(conn.id);
+          }
 
           // C-079：line items 聚合 + 0/0 幽灵过滤
           const aggRes = aggregateRawTransactions(r.transactions);

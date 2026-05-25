@@ -6,6 +6,7 @@ import { nowCST, dateColumnStart, parseTxnDateStart } from "@/lib/date-utils";
 import { getRedirectedMerchantKeys } from "@/lib/merchant-ownership-rules";
 import { sqlAffiliateTxnValidPlatformConnection } from "@/lib/affiliate-transaction-sql";
 import { aggregateRawTransactions } from "@/lib/affiliate-txn-aggregate";
+import { markConnectionSuccess, markConnectionAttempted, markConnectionFailure } from "@/lib/connection-health";
 
 /**
  * POST /api/user/data-center/sync-transactions
@@ -88,6 +89,14 @@ export async function POST(req: NextRequest) {
     let totalSkipped = 0;
 
     for (const { conn, platform, label, transactions, error } of fetched) {
+      // D-026: 写连接健康状态
+      if (error) {
+        await markConnectionFailure(conn.id, error);
+      } else if (transactions.length === 0) {
+        await markConnectionAttempted(conn.id);
+      } else {
+        await markConnectionSuccess(conn.id);
+      }
       if (error && transactions.length === 0) {
         accountResults.push({ account_name: label, platform, synced: 0, total_fetched: 0, error });
         continue;
