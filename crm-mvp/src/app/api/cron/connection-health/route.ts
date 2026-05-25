@@ -177,5 +177,7 @@ export async function GET(req: NextRequest) {
     elapsed_ms: elapsed,
   };
   log(`完成：${JSON.stringify(result)}`);
-  return NextResponse.json(result);
+  // 防止 raw query 返回的 BigInt 字段污染（用 replacer 把所有 BigInt 转字符串）
+  const safeBody = JSON.parse(JSON.stringify(result, (_, v) => (typeof v === "bigint" ? v.toString() : v)));
+  return NextResponse.json(safeBody);
 }
