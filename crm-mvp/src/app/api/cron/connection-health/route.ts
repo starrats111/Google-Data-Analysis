@@ -42,7 +42,7 @@ export async function GET(req: NextRequest) {
   const cutoff = new Date(Date.now() - 24 * 3600 * 1000);
 
   // 扫所有未删除的连接 + 关联 user + team（组长在 teams.leader_id）
-  const rawConns: Array<{
+  type RawConnRow = {
     id: bigint;
     user_id: bigint;
     platform: string;
@@ -50,10 +50,11 @@ export async function GET(req: NextRequest) {
     status: string;
     last_synced_at: Date | null;
     last_error: string | null;
-    consecutive_failures: number;
+    consecutive_failures: bigint | number;
     username: string;
     leader_id: bigint | null;
-  }> = await prisma.$queryRawUnsafe(`
+  };
+  const rawRows: RawConnRow[] = await prisma.$queryRawUnsafe(`
     SELECT pc.id, pc.user_id, pc.platform, pc.account_name, pc.status,
            pc.last_synced_at, pc.last_error, pc.consecutive_failures,
            u.username, t.leader_id
@@ -65,6 +66,20 @@ export async function GET(req: NextRequest) {
       AND (pc.status = 'error' OR pc.last_synced_at IS NULL OR pc.last_synced_at < ?)
     ORDER BY pc.user_id, pc.platform
   `, cutoff);
+
+  // raw query 的 unsigned int / bigint 字段统一 normalize（防 JSON.stringify TypeError）
+  const rawConns = rawRows.map((r) => ({
+    id: typeof r.id === "bigint" ? r.id : BigInt(r.id as unknown as string),
+    user_id: typeof r.user_id === "bigint" ? r.user_id : BigInt(r.user_id as unknown as string),
+    platform: r.platform,
+    account_name: r.account_name,
+    status: r.status,
+    last_synced_at: r.last_synced_at,
+    last_error: r.last_error,
+    consecutive_failures: Number(r.consecutive_failures ?? 0),
+    username: r.username,
+    leader_id: r.leader_id == null ? null : (typeof r.leader_id === "bigint" ? r.leader_id : BigInt(r.leader_id as unknown as string)),
+  }));
 
   log(`扫描完成：异常连接 ${rawConns.length} 条`);
 
@@ -103,21 +118,23 @@ export async function GET(req: NextRequest) {
       },
     });
     if (recentDup === 0) {
+      // 防 BigInt 序列化：所有 BigInt 字段都 toString
+      const metadata = JSON.stringify({
+        source: "D-026 connection-health",
+        conn_id: c.id.toString(),
+        platform: c.platform,
+        account_name: c.account_name,
+        status: c.status,
+        last_synced_at: c.last_synced_at?.toISOString() ?? null,
+        consecutive_failures: Number(c.consecutive_failures ?? 0),
+      }, (_, v) => (typeof v === "bigint" ? v.toString() : v));
       await prisma.notifications.create({
         data: {
           user_id: c.user_id,
           type: "alert",
           title,
           content,
-          metadata: JSON.stringify({
-            source: "D-026 connection-health",
-            conn_id: c.id.toString(),
-            platform: c.platform,
-            account_name: c.account_name,
-            status: c.status,
-            last_synced_at: c.last_synced_at?.toISOString() ?? null,
-            consecutive_failures: c.consecutive_failures,
-          }),
+          metadata,
         },
       });
       notifsCreated++;
