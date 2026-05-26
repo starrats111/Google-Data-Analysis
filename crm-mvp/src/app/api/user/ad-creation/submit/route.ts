@@ -66,6 +66,8 @@ export async function POST(req: NextRequest) {
   } = body;
   // 从 body 中读取最终到达网址后缀（前端若未传则从 campaign DB 记录取）
   const bodyFinalUrlSuffix: string | undefined = body.final_url_suffix ?? undefined;
+  // C-088: 用户在广告预览页"广告系列名(可修改)"输入框填的值（可选）
+  const bodyCampaignNameCustom: string | undefined = body.campaign_name_custom ?? undefined;
 
   if (!campaign_id) return apiError("缺少 campaign_id");
   if (!headlines?.length || headlines.length < 3) return apiError("至少需要 3 条标题");
@@ -410,16 +412,31 @@ export async function POST(req: NextRequest) {
 
   const platformLabel = await resolvePlatformLabel(userId, submitMerchant.platform || "", submitMerchant.platform_connection_id);
 
-  const formalName = await assignFormalCampaignNameBeforeSubmit({
-    campaignId: campaign.id,
-    userId,
-    mccId: mccAccount.id,
-    namingRule: submitAdSettings?.naming_rule || "global",
-    platformLabel,
-    country: campaign.target_country || "US",
-    merchantName: submitMerchant.merchant_name || "",
-    merchantId: submitMerchant.merchant_id || "",
-  });
+  // C-088: 用户自定义命名优先（最低 3 项保护：非空、≤120 字符、不能 DRAFT- 前缀）
+  // Q3=C 不做撞名/格式校验，留给 Google Ads 处理
+  let formalName: string;
+  const customNameTrimmed = (bodyCampaignNameCustom || "").trim();
+  if (customNameTrimmed) {
+    if (customNameTrimmed.length > 120) return apiError("广告系列名过长（最多 120 字符）");
+    if (customNameTrimmed.startsWith("DRAFT-")) return apiError("广告系列名不能以 DRAFT- 开头");
+    await prisma.campaigns.update({
+      where: { id: campaign.id },
+      data: { campaign_name: customNameTrimmed },
+    });
+    formalName = customNameTrimmed;
+    console.log(`[AdSubmit] C-088 使用用户自定义命名: "${customNameTrimmed}" (campaign_id=${campaign.id})`);
+  } else {
+    formalName = await assignFormalCampaignNameBeforeSubmit({
+      campaignId: campaign.id,
+      userId,
+      mccId: mccAccount.id,
+      namingRule: submitAdSettings?.naming_rule || "global",
+      platformLabel,
+      country: campaign.target_country || "US",
+      merchantName: submitMerchant.merchant_name || "",
+      merchantId: submitMerchant.merchant_id || "",
+    });
+  }
 
   const campaignFresh = await prisma.campaigns.findFirst({
     where: { id: campaign.id, user_id: userId, is_deleted: 0 },

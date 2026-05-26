@@ -174,6 +174,10 @@ export default function AdPreviewPage() {
   // D-007（2026-05-16）：CID 选择器去"占用/可用"二元限制，改为显示三段计数 + 「刷新数量」按钮
   const [selectedMccId, setSelectedMccId] = useState<string>("");
   const [selectedCid, setSelectedCid] = useState<string>("");
+  // C-088: 广告系列名(可修改) — 进入页面 / 切换 MCC 时拉预测名预填，用户可任意修改
+  const [campaignNameDraft, setCampaignNameDraft] = useState<string>("");
+  const [campaignNameLoading, setCampaignNameLoading] = useState<boolean>(false);
+  const [campaignNameAlreadyAssigned, setCampaignNameAlreadyAssigned] = useState<boolean>(false);
   const [cidList, setCidList] = useState<{
     customer_id: string;
     customer_name: string;
@@ -714,6 +718,28 @@ export default function AdPreviewPage() {
   useEffect(() => {
     if (selectedMccId) loadCidList(selectedMccId);
   }, [selectedMccId, loadCidList]);
+
+  // C-088: 进入页面 / 切换 MCC 时拉预测的广告系列名
+  useEffect(() => {
+    if (!campaignId) return;
+    let cancelled = false;
+    setCampaignNameLoading(true);
+    const url = `/api/user/ad-creation/preview-name?campaign_id=${encodeURIComponent(campaignId)}${
+      selectedMccId ? `&mcc_account_id=${encodeURIComponent(selectedMccId)}` : ""
+    }`;
+    fetch(url)
+      .then((r) => r.json())
+      .then((json) => {
+        if (cancelled) return;
+        if (json?.code === 0 && json?.data?.predictedName) {
+          setCampaignNameDraft(json.data.predictedName);
+          setCampaignNameAlreadyAssigned(!!json.data.alreadyAssigned);
+        }
+      })
+      .catch(() => { /* 静默失败，用户仍可手动输入 */ })
+      .finally(() => { if (!cancelled) setCampaignNameLoading(false); });
+    return () => { cancelled = true; };
+  }, [campaignId, selectedMccId]);
 
   const handleMccChange = useCallback((mccId: string) => {
     setSelectedMccId(mccId);
@@ -1539,6 +1565,10 @@ export default function AdPreviewPage() {
         ad_language: adLanguage || "en",
         eu_political_ad: euPoliticalAd,
       };
+      // C-088: 携带用户自定义广告系列名（非空则后端优先使用，否则自动分配）
+      if (campaignNameDraft && campaignNameDraft.trim()) {
+        submitBody.campaign_name_custom = campaignNameDraft.trim();
+      }
       {
         const sl = sitelinks.filter((s) => s.title.trim() && s.url.trim());
         if (sl.length > 0) submitBody.sitelinks = sl.map((s) => ({ title: s.title, description1: s.desc1, description2: s.desc2, finalUrl: s.url }));
@@ -1597,7 +1627,7 @@ export default function AdPreviewPage() {
     } finally {
       setSubmitting(false);
     }
-  }, [headlines, descriptions, kwList, budget, maxCpc, biddingStrategy, networkSearch, networkPartners, networkDisplay, campaignId, message, modal, router, sitelinks, imageUrls, enableCallouts, callouts, selectedCid, selectedMccId, adLanguage, euPoliticalAd, fetchAndValidateSitelink, enablePromotion, promotion, enablePrice, priceItems, priceType, enableCall, callPhoneNumber, callCountryCode, enableSnippet, snippetHeader, snippetValues]);
+  }, [headlines, descriptions, kwList, budget, maxCpc, biddingStrategy, networkSearch, networkPartners, networkDisplay, campaignId, message, modal, router, sitelinks, imageUrls, enableCallouts, callouts, selectedCid, selectedMccId, adLanguage, euPoliticalAd, fetchAndValidateSitelink, enablePromotion, promotion, enablePrice, priceItems, priceType, enableCall, callPhoneNumber, callCountryCode, enableSnippet, snippetHeader, snippetValues, campaignNameDraft]);
 
   if (isLoading && !preview) {
     return <div style={{ textAlign: "center", padding: 80 }}><Spin size="large" tip="加载中..." /></div>;
@@ -2700,6 +2730,29 @@ export default function AdPreviewPage() {
                 <Text style={{ fontSize: 12 }}>将发布到 CID: <Text strong copyable style={{ fontSize: 12 }}>{formatCid(selectedCid)}</Text></Text>
               </div>
             )}
+            {/* C-088: 广告系列名（可修改）— 默认按规则预测填充，用户可任意改任一段 */}
+            <div style={{ marginTop: 12 }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4 }}>
+                <Text type="secondary" style={{ fontSize: 12 }}>广告系列名（可修改）</Text>
+                {campaignNameAlreadyAssigned && (
+                  <Tooltip title="该广告系列已分配过名称，再次修改将覆盖现有名">
+                    <Tag color="blue" style={{ fontSize: 10, padding: "0 6px", lineHeight: "18px" }}>已分配</Tag>
+                  </Tooltip>
+                )}
+              </div>
+              <Input
+                value={campaignNameDraft}
+                onChange={(e) => setCampaignNameDraft(e.target.value)}
+                placeholder={campaignNameLoading ? "加载预测名…" : "留空 = 提交时按规则自动生成"}
+                maxLength={120}
+                showCount
+                disabled={campaignNameLoading}
+                size="small"
+              />
+              <Text type="secondary" style={{ fontSize: 11, display: "block", marginTop: 2 }}>
+                格式：序号-平台-商家-国家-日期(MMDD/CZS)-MID；可改任意一段，留空则自动分配序号
+              </Text>
+            </div>
           </Card>
 
           <Card title={<><ThunderboltOutlined /> 广告设置</>} size="small" style={{ marginBottom: 16 }}>

@@ -16,14 +16,16 @@ type TxClient = Prisma.TransactionClient;
  * ──────────────────────────────────────────────────────────────────────── */
 
 /**
- * 校验名称是否符合系统命名格式: 序号-平台-商家名-国家(2字母)-日期(MMDD)-MID
- * 至少 6 段，且国家位(parts[3])为 2 位字母、日期位(parts[4])为 4 位数字
+ * 校验名称是否符合系统命名格式: 序号-平台-商家名-国家-日期-MID
+ *
+ * C-088（2026-05-26）放宽：去掉 parts[3] 国家段和 parts[4] 日期段的格式校验。
+ * 仅要求 parts.length≥6 且首段为纯数字序号即视为已分配正式名。
+ * 这是为了让用户在广告预览页自定义任意命名段（如把日期改为 CZS / 把商家改为别名）
+ * 后，重新提交时不被 hasAssignedFormalCampaignName 误判为"未分配"而触发重新分配序号。
  */
 function isSystemCampaignName(parts: string[]): boolean {
   if (parts.length < 6) return false;
   if (!/^\d+$/.test(parts[0])) return false;
-  if (!/^[A-Z]{2}$/i.test(parts[3])) return false;
-  if (!/^\d{4}$/.test(parts[4])) return false;
   return true;
 }
 
