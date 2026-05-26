@@ -110,6 +110,12 @@ function coalescedPuppeteerImageFetch(
   });
 }
 
+// D-028 v6：单 host 同时只允许 1 个 batch 在跑，避免 5 个 batch 同时挤 puppeteer slot
+// 实证 trace（narscosmetics.co.uk 13:15:36-13:16:07）：5 batch × 5 url = 20 url 同时
+// 启动，3 个 normal slot（实际 2 个）扛不住，normalQ=3 → 后 3 个 batch 等 30s slot 超时
+// 失败 0/5。改为 host 级互斥锁，前一个 batch 完成后再跑下一个。
+const hostBatchLocks = new Map<string, Promise<void>>();
+
 async function fireImageBatch(refererOrigin: string): Promise<void> {
   const batch = pendingImageBatches.get(refererOrigin);
   if (!batch) return;
@@ -117,42 +123,62 @@ async function fireImageBatch(refererOrigin: string): Promise<void> {
   pendingImageBatches.delete(refererOrigin);
   if (batch.timer) clearTimeout(batch.timer);
 
+  // D-028 v6：host 级互斥锁，等前一个 batch 完成
+  let host = "";
+  try { host = new URL(refererOrigin).hostname.toLowerCase(); } catch {}
+  if (host) {
+    const prev = hostBatchLocks.get(host);
+    if (prev) {
+      try { await prev; } catch {}
+    }
+  }
+
   const urls = Array.from(batch.urls);
   let result = new Map<string, { buffer: Buffer; contentType: string }>();
 
-  try {
-    const { fetchImagesViaPuppeteerBatch } = await import("@/lib/crawler");
-    const { getHttpProxyUrlForCountry, getProxyUrlForCountry } = await import("@/lib/crawl-proxy");
-
-    let proxyCountry = "US";
+  const work = (async () => {
     try {
-      const h = new URL(refererOrigin).hostname.toLowerCase();
-      if (h.endsWith(".co.uk") || h.endsWith(".uk")) proxyCountry = "GB";
-      else if (h.endsWith(".de")) proxyCountry = "DE";
-      else if (h.endsWith(".fr")) proxyCountry = "FR";
-      else if (h.endsWith(".au")) proxyCountry = "AU";
-      else if (h.endsWith(".ca")) proxyCountry = "CA";
-    } catch {}
+      const { fetchImagesViaPuppeteerBatch } = await import("@/lib/crawler");
+      const { getHttpProxyUrlForCountry, getProxyUrlForCountry } = await import("@/lib/crawl-proxy");
 
-    const httpProxyUrl = await getHttpProxyUrlForCountry(proxyCountry).catch(() => null);
-    const socks5ProxyUrl = httpProxyUrl ? null : await getProxyUrlForCountry(proxyCountry).catch(() => null);
-    const proxyUrl = httpProxyUrl ?? socks5ProxyUrl ?? undefined;
+      let proxyCountry = "US";
+      try {
+        const h = new URL(refererOrigin).hostname.toLowerCase();
+        if (h.endsWith(".co.uk") || h.endsWith(".uk")) proxyCountry = "GB";
+        else if (h.endsWith(".de")) proxyCountry = "DE";
+        else if (h.endsWith(".fr")) proxyCountry = "FR";
+        else if (h.endsWith(".au")) proxyCountry = "AU";
+        else if (h.endsWith(".ca")) proxyCountry = "CA";
+      } catch {}
 
-    console.warn(
-      `[ImageProxy] L1 Puppeteer 批量启动: referer=${refererOrigin} urls=${urls.length} proxy=${proxyUrl ? proxyCountry : "direct"}`,
-    );
+      const httpProxyUrl = await getHttpProxyUrlForCountry(proxyCountry).catch(() => null);
+      const socks5ProxyUrl = httpProxyUrl ? null : await getProxyUrlForCountry(proxyCountry).catch(() => null);
+      const proxyUrl = httpProxyUrl ?? socks5ProxyUrl ?? undefined;
 
-    const t0 = Date.now();
-    result = await fetchImagesViaPuppeteerBatch(urls, refererOrigin, proxyUrl, {
-      perFetchTimeoutMs: 15000,
-      navigationTimeoutMs: 20000,
+      console.warn(
+        `[ImageProxy] L1 Puppeteer 批量启动: referer=${refererOrigin} urls=${urls.length} proxy=${proxyUrl ? proxyCountry : "direct"}`,
+      );
+
+      const t0 = Date.now();
+      result = await fetchImagesViaPuppeteerBatch(urls, refererOrigin, proxyUrl, {
+        perFetchTimeoutMs: 15000,
+        navigationTimeoutMs: 20000,
+      });
+      console.warn(
+        `[ImageProxy] L1 Puppeteer 批量完成: 成功 ${result.size}/${urls.length} 张, 耗时 ${Date.now() - t0}ms`,
+      );
+    } catch (e) {
+      console.warn("[ImageProxy] L1 Puppeteer batch 异常:", e instanceof Error ? e.message : e);
+    }
+  })();
+
+  if (host) {
+    hostBatchLocks.set(host, work);
+    work.finally(() => {
+      if (hostBatchLocks.get(host) === work) hostBatchLocks.delete(host);
     });
-    console.warn(
-      `[ImageProxy] L1 Puppeteer 批量完成: 成功 ${result.size}/${urls.length} 张, 耗时 ${Date.now() - t0}ms`,
-    );
-  } catch (e) {
-    console.warn("[ImageProxy] L1 Puppeteer batch 异常:", e instanceof Error ? e.message : e);
   }
+  await work;
 
   for (const u of urls) {
     const v = result.get(u) || null;

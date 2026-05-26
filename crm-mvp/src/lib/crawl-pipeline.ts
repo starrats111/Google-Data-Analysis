@@ -1325,17 +1325,27 @@ async function discoverSitelinkCandidates(
         .map(l => country ? { ...l, url: normalizeLocaleInUrl(l.url, country) } : l)
         .slice(0, 20);
 
-      const navMetaResults = await Promise.all(
-        navLinksFiltered.map(async (link) => {
-          try {
-            // C-014 §2.1：同第一段，传 country 启用 IP 轮换
-            const meta = await fetchUrlMeta(link.url, proxyUrl, country);
-            return { link, meta };
-          } catch {
-            return { link, meta: { title: "", description: "", ok: false, finalUrl: link.url, isSoft404: false } };
-          }
-        }),
-      );
+      // D-028 v6：challenged host 上跳过对 navLinksFiltered 的 fetchUrlMeta 调用。
+      // 实证 trace（narscosmetics.co.uk 13:12:44）：v3 sitelinks 主流程已短路，
+      // 但本段仍对 20 条 navLinks 逐个 fetchUrlMeta，进入 coalescedPuppeteerFetch
+      // 合并成 17 URL Puppeteer batch × concurrency 2 ≈ 30s 浪费。
+      // 改为：challenged host 直接全部标记 ok=false 跳到下面的 v3 短路（信任 link.text）。
+      const navMetaResults = merchantHostChallenged
+        ? navLinksFiltered.map((link) => ({
+            link,
+            meta: { title: "", description: "", ok: false, finalUrl: link.url, isSoft404: false },
+          }))
+        : await Promise.all(
+            navLinksFiltered.map(async (link) => {
+              try {
+                // C-014 §2.1：同第一段，传 country 启用 IP 轮换
+                const meta = await fetchUrlMeta(link.url, proxyUrl, country);
+                return { link, meta };
+              } catch {
+                return { link, meta: { title: "", description: "", ok: false, finalUrl: link.url, isSoft404: false } };
+              }
+            }),
+          );
 
       // C-017：navLinks 分支同样改为两阶段（收集 → 决策 → 统一 push），
       // botBlockSignals 与 pageLinks 分支共享（同一商家同一批探查视为一批）。
