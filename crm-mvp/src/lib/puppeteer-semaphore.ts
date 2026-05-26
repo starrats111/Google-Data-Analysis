@@ -15,12 +15,19 @@
  *   - 改造：MAX_SLOTS 2→3；其中 RESERVED_MAIN_CRAWL=1 个仅供主页主爬路径使用，
  *     普通调用（sitelinks 兜底 / image proxy）只能用剩下 NORMAL_SLOTS=2 个。
  *
+ * D-028 收紧（2026-05-26，2C/3.6G 服务器 swap 抖动事件）：
+ *   - 实证：MAX=3 时同时 3 个 Chrome 总 RSS≈2.1GB，吃掉 60% 内存，挤压 next/mariadb
+ *     进入 swap，高峰期 load 飙到 9-10、iowait 32%+。
+ *   - 改造：MAX_SLOTS 3→2；保留 RESERVED_MAIN_CRAWL=1 给主爬独占，NORMAL=1 给
+ *     sitelinks 兜底/image proxy 排队使用，单 Chrome 高峰内存上限 ≤ 1.4GB（节省 700MB）。
+ *   - 服务器升级到 4C/8G 后可放回 MAX=4 / MAIN=1 / NORMAL=3（见 D-028 P3）。
+ *
  * 环境变量 PUPPETEER_SEMAPHORE_OFF=1 可一键 bypass（用于快速回滚定位）。
  */
 
-const MAX_PUPPETEER_SLOTS = 3;
+const MAX_PUPPETEER_SLOTS = 2;
 const RESERVED_MAIN_CRAWL_SLOTS = 1;
-const NORMAL_SLOTS = MAX_PUPPETEER_SLOTS - RESERVED_MAIN_CRAWL_SLOTS;  // 2
+const NORMAL_SLOTS = MAX_PUPPETEER_SLOTS - RESERVED_MAIN_CRAWL_SLOTS;  // 1
 
 let _active = 0;
 const _waitersMain: Array<(released: () => void) => void> = [];
