@@ -34,6 +34,42 @@ const IMAGE_CACHE_TTL_MS = 5 * 60 * 1000;
 const IMAGE_CACHE_MAX = 1000;
 const imageCache = new Map<string, CachedImage>();
 
+// =====================================================================
+// D-028 v8：image host 失败计数器（避免 challenged host 反复 30s 超时）
+// =====================================================================
+// 实证 trace（pixibeauty.com 13:40:12-13:41:12）：CF hard-block 站连 puppeteer
+// 也访问不到，每张图 30s 超时失败 0/N，5 个 batch × 30s = 2.5 分钟纯浪费。
+// 解决：单 host L1 puppeteer 连续失败 ≥ 3 次后，5 分钟内对该 host 所有图片
+// 直接返回占位图，跳过 puppeteer。
+const IMAGE_HOST_FAIL_THRESHOLD = 3;
+const IMAGE_HOST_FAIL_TTL_MS = 5 * 60 * 1000;
+const imageHostFailCount = new Map<string, { count: number; expireAt: number }>();
+
+function isImageHostBlocked(host: string): boolean {
+  const v = imageHostFailCount.get(host);
+  if (!v) return false;
+  if (Date.now() > v.expireAt) {
+    imageHostFailCount.delete(host);
+    return false;
+  }
+  return v.count >= IMAGE_HOST_FAIL_THRESHOLD;
+}
+
+function recordImageHostFail(host: string): void {
+  const v = imageHostFailCount.get(host);
+  const now = Date.now();
+  if (!v || now > v.expireAt) {
+    imageHostFailCount.set(host, { count: 1, expireAt: now + IMAGE_HOST_FAIL_TTL_MS });
+  } else {
+    v.count += 1;
+    v.expireAt = now + IMAGE_HOST_FAIL_TTL_MS;
+  }
+}
+
+function recordImageHostSuccess(host: string): void {
+  imageHostFailCount.delete(host);
+}
+
 function getImageCache(url: string): CachedImage | null {
   const v = imageCache.get(url);
   if (!v) return null;
@@ -160,9 +196,11 @@ async function fireImageBatch(refererOrigin: string): Promise<void> {
       );
 
       const t0 = Date.now();
+      // D-028 v8：图片单张 timeout 15s→8s，CF 强反爬站快速放弃，
+      // 让 host 失败计数器更快累计到 3 次触发 fast-fail，避免无效等待
       result = await fetchImagesViaPuppeteerBatch(urls, refererOrigin, proxyUrl, {
-        perFetchTimeoutMs: 15000,
-        navigationTimeoutMs: 20000,
+        perFetchTimeoutMs: 8000,
+        navigationTimeoutMs: 12000,
       });
       console.warn(
         `[ImageProxy] L1 Puppeteer 批量完成: 成功 ${result.size}/${urls.length} 张, 耗时 ${Date.now() - t0}ms`,
@@ -302,6 +340,25 @@ export async function GET(req: NextRequest) {
   const imgHost = getHostKey(url);
   const hostChallenged = imgHost ? isHostChallenged(imgHost) : false;
 
+  // D-028 v8：若该 host 最近 5 分钟内 L1 puppeteer 连续失败 ≥ 3 次，
+  // 直接返回占位图，跳过 30s × N 次的无效尝试。pixibeauty.com 实证节省 ~90s。
+  if (imgHost && isImageHostBlocked(imgHost)) {
+    console.warn(`[ImageProxy] D-028 v8：host=${imgHost} 最近 L1 连续失败，直接返回占位图：${url.slice(0, 80)}`);
+    const TRANSPARENT_PNG = Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==",
+      "base64",
+    );
+    return new NextResponse(new Uint8Array(TRANSPARENT_PNG), {
+      status: 200,
+      headers: {
+        "Content-Type": "image/png",
+        "Content-Length": String(TRANSPARENT_PNG.length),
+        "Cache-Control": "public, max-age=60",
+        "X-Image-Proxy-Fallback": "host-blocked",
+      },
+    });
+  }
+
   // -------- L0a + L0b：仅当 host 未被标记反爬时跑 --------
   // 已知反爬 host 直接跳 L1，省 5-10s 浪费
   if (!hostChallenged) {
@@ -433,6 +490,8 @@ export async function GET(req: NextRequest) {
     if (puppResult) {
       const { buffer, contentType } = puppResult;
       if (buffer.length >= 100 && buffer.length <= MAX_SIZE) {
+        // D-028 v8：成功 → 重置该 host 失败计数
+        if (imgHost) recordImageHostSuccess(imgHost);
         return new NextResponse(new Uint8Array(buffer), {
           headers: {
             "Content-Type": contentType,
@@ -445,10 +504,13 @@ export async function GET(req: NextRequest) {
       }
     }
     lastError = lastError ? `${lastError}; L1 Puppeteer 失败` : "L1 Puppeteer 失败";
+    // D-028 v8：L1 失败 → 累加该 host 失败计数（≥3 次则后续 fast-fail）
+    if (imgHost) recordImageHostFail(imgHost);
   } catch (e) {
     lastError = lastError
       ? `${lastError}; L1 异常 ${e instanceof Error ? e.message : e}`
       : `L1 异常 ${e instanceof Error ? e.message : e}`;
+    if (imgHost) recordImageHostFail(imgHost);
   }
 
   console.warn(
