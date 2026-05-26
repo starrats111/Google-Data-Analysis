@@ -614,8 +614,26 @@ async function syncAllUsersTransactions(): Promise<unknown> {
   for (const user of users) {
     try {
       const userId = user.id;
+      // D-030：包含 status='error' 但已退避 12h 的连接（daily-sync 每天一次，
+      //   退避窗口应至少跨过 1 个 cron 周期 + 缓冲）。
+      //   实证：5/26 wj07 EV / 12 个 CG / MUI 504 连接因一次失败 status=error
+      //   后被本 cron 永久跳过，需手动 SQL 干预。
+      const backoffCutoff = new Date(Date.now() - 12 * 60 * 60 * 1000);
       const conns = await prisma.platform_connections.findMany({
-        where: { user_id: userId, is_deleted: 0, status: "connected" },
+        where: {
+          user_id: userId,
+          is_deleted: 0,
+          OR: [
+            { status: "connected" },
+            {
+              status: "error",
+              OR: [
+                { last_sync_attempt_at: null },
+                { last_sync_attempt_at: { lt: backoffCutoff } },
+              ],
+            },
+          ],
+        },
         select: { id: true, platform: true, account_name: true, api_key: true },
       });
       const validConns = conns
@@ -1042,8 +1060,22 @@ async function updateDailyStatsCommission(userId: bigint, statsStartDate: Date, 
   const merchantIds = [...new Set(txnAgg.map(t => t.user_merchant_id))].filter(id => id && id !== BigInt(0));
   if (merchantIds.length === 0) return 0;
 
+  // C-095 RC-3：排除挂在已删 MCC 下的 campaigns，避免幽灵 stats 双重写入
+  const deletedMccs = await prisma.google_mcc_accounts.findMany({
+    where: { user_id: userId, is_deleted: 1 },
+    select: { id: true },
+  });
+  const deletedMccIds = deletedMccs.map((m) => m.id);
+
   const allCampaigns = await prisma.campaigns.findMany({
-    where: { user_id: userId, user_merchant_id: { in: merchantIds }, is_deleted: 0 },
+    where: {
+      user_id: userId,
+      user_merchant_id: { in: merchantIds },
+      is_deleted: 0,
+      ...(deletedMccIds.length > 0
+        ? { OR: [{ mcc_id: null }, { mcc_id: { notIn: deletedMccIds } }] }
+        : {}),
+    },
     select: { id: true, user_merchant_id: true, google_status: true, updated_at: true },
   });
 

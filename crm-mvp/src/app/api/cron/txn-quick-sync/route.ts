@@ -162,9 +162,29 @@ async function runQuickSync(startTime: number): Promise<NextResponse> {
   for (const user of users) {
     const userId = user.id;
     try {
+      // D-030：包含 status='error' 但已退避足够久的连接，避免一次临时 504/网关
+      //   错误导致永久断连（5/26 实证 wj07 EV mevora + 11 个其它 504 连接因
+      //   markConnectionFailure 切 error 后 cron 完全跳过，需要人工 SQL 干预）。
+      //   退避策略：error 状态下若 last_sync_attempt_at < NOW() - 30min 则重试。
+      //   成功一次会被 markConnectionSuccess 自动转回 connected + 清空 failures。
+      const RETRY_BACKOFF_MIN = 30;
+      const backoffCutoff = new Date(Date.now() - RETRY_BACKOFF_MIN * 60 * 1000);
       const conns = await prisma.platform_connections.findMany({
-        where: { user_id: userId, is_deleted: 0, status: "connected" },
-        select: { id: true, platform: true, account_name: true, api_key: true },
+        where: {
+          user_id: userId,
+          is_deleted: 0,
+          OR: [
+            { status: "connected" },
+            {
+              status: "error",
+              OR: [
+                { last_sync_attempt_at: null },
+                { last_sync_attempt_at: { lt: backoffCutoff } },
+              ],
+            },
+          ],
+        },
+        select: { id: true, platform: true, account_name: true, api_key: true, status: true },
       });
       const validConns = conns
         .filter((c) => c.api_key && c.api_key.length > 5)
