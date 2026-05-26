@@ -19,6 +19,7 @@ import {
   sanitizeAdText,
 } from "@/lib/crawl-pipeline";
 import { buildCrawlKey, withCrawlInflightLock } from "@/lib/crawl-inflight-lock";
+import { isHostChallenged, getHostKey } from "@/lib/crawl-host-cache";
 import { humanizeAdCopyBatch, AD_COPY_ANTI_AI_BLOCK } from "@/lib/humanizer";
 import { autoExpandSitelinks } from "@/lib/sitelink-auto-expand";
 import { generateSitelinkTexts } from "@/lib/sitelink-ai-writer";
@@ -549,15 +550,25 @@ export async function POST(req: NextRequest) {
           console.log(`[Extensions] crawl_cache ${reason}，重新爬取... forcePuppeteer=${cacheNeedsRefreshForPromo}`);
           // C-027 FIX-B：同一 merchantUrl × country 并发去重（共享同一个 Promise）
           const crawlKey = buildCrawlKey(merchantUrl, country);
-          // D-028 v9.2：buildCrawlCache 30s 总超时（避免 producer 卡 60s 才被强制释放）
-          //   trace 实证 scarosso.com 14:00:31 inflight age=48818ms → 14:00:43 强制释放
-          //   v9 bug：占位 cache 字段缺失导致下游 `.length` 崩溃（hertzmexico 14:35:59 实证）
-          //   v9.2：完整匹配 CrawlCache interface 所有必填字段
+          // D-028 v9.3：智能超时 — 默认 30s，但 host 已 markChallenged → 推到 75s
+          //   CF 强反爬站实测 buildCrawlCache 需 80-90s（hertzmexico trace 实证）
+          //   v9 设 30s 太短 → 99% CF 站都触发占位 cache → 图片永远空。
+          //   v9.3 spec：未 challenged 走 30s（快速失败让用户感知），已 challenged 走 75s
+          //   （反正都要走 puppeteer，给到完整时间拿到 cache）
+          let merchantHostForTimeout = "";
+          try {
+            merchantHostForTimeout = new URL(merchantUrl).hostname.toLowerCase();
+          } catch {}
+          const hostKey = merchantHostForTimeout ? getHostKey(merchantHostForTimeout) : "";
+          const hostChallengedForTimeout = hostKey ? isHostChallenged(hostKey) : false;
+          const TIMEOUT_MS = hostChallengedForTimeout ? 75000 : 30000;
+          if (hostChallengedForTimeout) {
+            console.log(`[Extensions] D-028 v9.3：host=${merchantHostForTimeout} 已 challenged，buildCrawlCache 超时上调至 75s`);
+          }
           const newCache: CrawlCache = await withCrawlInflightLock(crawlKey, async () => {
-            const TIMEOUT_MS = 30000;
             const timeout = new Promise<CrawlCache>((_, reject) =>
               setTimeout(
-                () => reject(new Error("buildCrawlCache-timeout-30s")),
+                () => reject(new Error("buildCrawlCache-timeout")),
                 TIMEOUT_MS,
               ).unref?.(),
             );
@@ -570,8 +581,8 @@ export async function POST(req: NextRequest) {
               ]);
             } catch (err) {
               const msg = err instanceof Error ? err.message : String(err);
-              if (msg === "buildCrawlCache-timeout-30s") {
-                console.warn(`[Extensions] D-028 v9.2：buildCrawlCache 30s 超时降级，使用完整占位 cache：merchantUrl=${merchantUrl}`);
+              if (msg === "buildCrawlCache-timeout") {
+                console.warn(`[Extensions] D-028 v9.3：buildCrawlCache ${TIMEOUT_MS / 1000}s 超时降级，使用完整占位 cache：merchantUrl=${merchantUrl}`);
                 const stub: CrawlCache = {
                   links: [],
                   images: [],
@@ -589,7 +600,7 @@ export async function POST(req: NextRequest) {
                   crawlMethod: "timeout-stub",
                   crawlFailed: true,
                   crawlQualityScore: 0,
-                  crawlQualityIssues: ["timeout_30s"],
+                  crawlQualityIssues: [`timeout_${TIMEOUT_MS / 1000}s`],
                   navLinks: [],
                 };
                 return stub;
