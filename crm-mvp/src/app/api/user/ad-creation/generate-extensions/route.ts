@@ -550,21 +550,26 @@ export async function POST(req: NextRequest) {
           console.log(`[Extensions] crawl_cache ${reason}，重新爬取... forcePuppeteer=${cacheNeedsRefreshForPromo}`);
           // C-027 FIX-B：同一 merchantUrl × country 并发去重（共享同一个 Promise）
           const crawlKey = buildCrawlKey(merchantUrl, country);
-          // D-028 v9.3：智能超时 — 默认 30s，但 host 已 markChallenged → 推到 75s
-          //   CF 强反爬站实测 buildCrawlCache 需 80-90s（hertzmexico trace 实证）
-          //   v9 设 30s 太短 → 99% CF 站都触发占位 cache → 图片永远空。
-          //   v9.3 spec：未 challenged 走 30s（快速失败让用户感知），已 challenged 走 75s
-          //   （反正都要走 puppeteer，给到完整时间拿到 cache）
+          // D-028 v9.4：超时大幅放宽（trace 实证 2 核服务器普通站需 30-50s，CF 站 60-90s）
+          //   v9 设 30s → lovevery 1.5M HTML 实际 40-50s → 几乎全部商家触发占位降级（trace 15:05）
+          //   v9.4 spec：
+          //     普通站   60s（覆盖 90% 普通站）
+          //     challenged 站 90s（CF 强反爬，puppeteer + JS challenge 实际耗时）
+          //   一旦超时 → crawlFailed=true 占位 cache，前端正确显示"网站爬取失败"提示，
+          //   用户可点"重新爬取"手动重试（cache 已 inflight lock 释放）。
+          //   附带：起始打 timer，记录 buildCrawlCache 实际耗时方便后续调参。
           let merchantHostForTimeout = "";
           try {
             merchantHostForTimeout = new URL(merchantUrl).hostname.toLowerCase();
           } catch {}
           const hostKey = merchantHostForTimeout ? getHostKey(merchantHostForTimeout) : "";
           const hostChallengedForTimeout = hostKey ? isHostChallenged(hostKey) : false;
-          const TIMEOUT_MS = hostChallengedForTimeout ? 75000 : 30000;
-          if (hostChallengedForTimeout) {
-            console.log(`[Extensions] D-028 v9.3：host=${merchantHostForTimeout} 已 challenged，buildCrawlCache 超时上调至 75s`);
-          }
+          const TIMEOUT_MS = hostChallengedForTimeout ? 90000 : 60000;
+          // lock 强制释放时间稍长于 producer timeout，确保 inflight caller 一定能
+          // 拿到 producer 的最终结果（stub or real cache），不会被 lock 提前释放。
+          const LOCK_TIMEOUT_MS_LOCAL = TIMEOUT_MS + 10000;
+          console.log(`[Extensions] D-028 v9.4：buildCrawlCache 启动 timeout=${TIMEOUT_MS / 1000}s host=${merchantHostForTimeout} challenged=${hostChallengedForTimeout}`);
+          const buildStartedAt = Date.now();
           const newCache: CrawlCache = await withCrawlInflightLock(crawlKey, async () => {
             const timeout = new Promise<CrawlCache>((_, reject) =>
               setTimeout(
@@ -573,16 +578,20 @@ export async function POST(req: NextRequest) {
               ).unref?.(),
             );
             try {
-              return await Promise.race([
+              const result = await Promise.race([
                 buildCrawlCache(merchantUrl, merchantName, country, undefined, {
                   forcePuppeteer: cacheNeedsRefreshForPromo,
                 }),
                 timeout,
               ]);
+              const elapsedMs = Date.now() - buildStartedAt;
+              console.log(`[Extensions] D-028 v9.4：buildCrawlCache 完成耗时=${elapsedMs}ms timeout=${TIMEOUT_MS}ms host=${merchantHostForTimeout}`);
+              return result;
             } catch (err) {
               const msg = err instanceof Error ? err.message : String(err);
+              const elapsedMs = Date.now() - buildStartedAt;
               if (msg === "buildCrawlCache-timeout") {
-                console.warn(`[Extensions] D-028 v9.3：buildCrawlCache ${TIMEOUT_MS / 1000}s 超时降级，使用完整占位 cache：merchantUrl=${merchantUrl}`);
+                console.warn(`[Extensions] D-028 v9.4：buildCrawlCache ${TIMEOUT_MS / 1000}s 超时降级，使用完整占位 cache：merchantUrl=${merchantUrl} elapsedMs=${elapsedMs}`);
                 const stub: CrawlCache = {
                   links: [],
                   images: [],
@@ -607,7 +616,7 @@ export async function POST(req: NextRequest) {
               }
               throw err;
             }
-          });
+          }, LOCK_TIMEOUT_MS_LOCAL);
           const newPromo = newCache.promoRegex as Record<string, unknown> | null;
           const newHasDiscount = (newPromo?.discount_percent ? Number(newPromo.discount_percent) : 0) > 0 ||
             (newPromo?.discount_amount ? Number(newPromo.discount_amount) : 0) > 0;
