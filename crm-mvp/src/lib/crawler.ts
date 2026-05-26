@@ -2568,6 +2568,17 @@ export async function fetchUrlMeta(
       console.warn(`[Crawler] fetchUrlMeta L0 全灭，进入 L1 coalesce: ${url}`);
       const m = await coalescedPuppeteerFetch(url, puppeteerProxy);
       if (m.ok) {
+        // D-028 v9：title 层 404/Error 探测——scarosso.com 实证反爬把请求重定向到 404
+        // 页面，puppeteer 返回 ok=true 但 title="404 Error - Page Not Found | Scarosso®"
+        // 这会污染 sitelinks 候选。识别后改为 isSoft404=true，上游会拒收。
+        const titleLow = m.title.toLowerCase();
+        const looks404 =
+          /^\s*404\b/.test(titleLow) ||
+          /\b(page not found|not found|error\s*page|seite nicht gefunden|pagina non trovata|página no encontrada)\b/i.test(m.title);
+        if (looks404) {
+          console.warn(`[Crawler] fetchUrlMeta L1 Puppeteer 兜底返回 404 页面，判定 isSoft404: ${url} title="${m.title.slice(0, 60)}"`);
+          return { title: m.title, description: m.description, ok: false, finalUrl: m.finalUrl, isSoft404: true };
+        }
         console.warn(`[Crawler] fetchUrlMeta L1 Puppeteer 兜底成功: ${url} title="${m.title.slice(0, 60)}"`);
         return { title: m.title, description: m.description, ok: true, finalUrl: m.finalUrl, isSoft404: m.isSoft404 };
       }

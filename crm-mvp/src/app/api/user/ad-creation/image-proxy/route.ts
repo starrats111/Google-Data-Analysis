@@ -159,20 +159,22 @@ async function fireImageBatch(refererOrigin: string): Promise<void> {
   pendingImageBatches.delete(refererOrigin);
   if (batch.timer) clearTimeout(batch.timer);
 
-  // D-028 v6：host 级互斥锁，等前一个 batch 完成
+  // D-028 v9：修复 v6 互斥锁竞态条件
+  // v6 bug：多个 batch 同时 await 同一个 prev，prev 完成后它们同时进入 work
+  //        → 实证 trace（scarosso.com 14:04:53-14:05:17）4-7 个 batch 并发挤 slot
+  // v9 fix：用 chain 模式，每个新 batch 创建一个包含 "await prev + 执行 work" 的串行
+  //        Promise，并立即 set 为新锁。后来者 await 的总是最新的链尾。
   let host = "";
   try { host = new URL(refererOrigin).hostname.toLowerCase(); } catch {}
-  if (host) {
-    const prev = hostBatchLocks.get(host);
-    if (prev) {
-      try { await prev; } catch {}
-    }
-  }
+  const prev = host ? hostBatchLocks.get(host) : undefined;
 
   const urls = Array.from(batch.urls);
   let result = new Map<string, { buffer: Buffer; contentType: string }>();
 
   const work = (async () => {
+    if (prev) {
+      try { await prev; } catch {}
+    }
     try {
       const { fetchImagesViaPuppeteerBatch } = await import("@/lib/crawler");
       const { getHttpProxyUrlForCountry, getProxyUrlForCountry } = await import("@/lib/crawl-proxy");
@@ -210,6 +212,7 @@ async function fireImageBatch(refererOrigin: string): Promise<void> {
     }
   })();
 
+  // 在 work 真正开始之前就 set 锁，后来者 await 的就是这个 work（包含 await prev 链）
   if (host) {
     hostBatchLocks.set(host, work);
     work.finally(() => {

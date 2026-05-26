@@ -549,12 +549,43 @@ export async function POST(req: NextRequest) {
           console.log(`[Extensions] crawl_cache ${reason}，重新爬取... forcePuppeteer=${cacheNeedsRefreshForPromo}`);
           // C-027 FIX-B：同一 merchantUrl × country 并发去重（共享同一个 Promise）
           const crawlKey = buildCrawlKey(merchantUrl, country);
-          // D-028 v7：inflight lock 不再 fail-fast，直接 await 原 promise（最坏 60s 锁释放）
-          const newCache = await withCrawlInflightLock(crawlKey, () =>
-            buildCrawlCache(merchantUrl, merchantName, country, undefined, {
-              forcePuppeteer: cacheNeedsRefreshForPromo,
-            }),
-          );
+          // D-028 v9：buildCrawlCache 30s 总超时（避免 producer 卡 60s 才被强制释放）
+          //   trace 实证 scarosso.com 14:00:31 inflight age=48818ms → 14:00:43 强制释放
+          //   超时后用空 cache 兜底（headlines 仍可由 cache=null 触发 catch 降级）
+          const newCache: CrawlCache = await withCrawlInflightLock(crawlKey, async () => {
+            const TIMEOUT_MS = 30000;
+            const timeout = new Promise<CrawlCache>((_, reject) =>
+              setTimeout(
+                () => reject(new Error("buildCrawlCache-timeout-30s")),
+                TIMEOUT_MS,
+              ).unref?.(),
+            );
+            try {
+              return await Promise.race([
+                buildCrawlCache(merchantUrl, merchantName, country, undefined, {
+                  forcePuppeteer: cacheNeedsRefreshForPromo,
+                }),
+                timeout,
+              ]);
+            } catch (err) {
+              const msg = err instanceof Error ? err.message : String(err);
+              if (msg === "buildCrawlCache-timeout-30s") {
+                console.warn(`[Extensions] D-028 v9：buildCrawlCache 30s 超时降级，使用最小占位 cache：merchantUrl=${merchantUrl}`);
+                return {
+                  pageLinks: [],
+                  navLinks: [],
+                  images: [],
+                  rawText: "",
+                  title: merchantName || "",
+                  description: "",
+                  promoRegex: null,
+                  detectedLanguageCode: undefined,
+                  finalUrl: merchantUrl,
+                } as unknown as CrawlCache;
+              }
+              throw err;
+            }
+          });
           const newPromo = newCache.promoRegex as Record<string, unknown> | null;
           const newHasDiscount = (newPromo?.discount_percent ? Number(newPromo.discount_percent) : 0) > 0 ||
             (newPromo?.discount_amount ? Number(newPromo.discount_amount) : 0) > 0;

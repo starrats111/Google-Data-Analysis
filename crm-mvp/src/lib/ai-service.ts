@@ -867,17 +867,24 @@ function aggregateSseStream(raw: string): string {
 async function callAi(
   config: AiModelConfig,
   messages: { role: string; content: string }[],
-  maxTokens?: number,
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  _maxTokens?: number,
 ): Promise<string> {
   const base = config.baseUrl
     .replace(/\/+$/, "")
     .replace(/\/v1\/messages$/, "")
     .replace(/\/v1$/, "");
   const url = `${base}/v1/chat/completions`;
+  // D-028 v9：07 指示"不要限制 MAX token"。
+  // 调用方传入的 maxTokens 硬编码值（120/320/512/1024/1500/2048 等）被忽略，
+  // 始终使用 DB ai_model_configs.max_tokens（默认 10000）。
+  // 原因：硬编码上限太低 → AI 输出被截断 → JSON 解析失败 → 触发 padHeadlines/
+  //   padDescriptions 重试 → 单次广告创建 AI 调用次数从 10 次膨胀到 40+ 次 →
+  //   按次扣费的 [按次]claude-* 余额快速烧光（trace 实证 14:04:44 $-0.079 欠费）。
   const body = JSON.stringify({
     model: config.modelName,
     messages,
-    max_tokens: maxTokens || config.maxTokens,
+    max_tokens: config.maxTokens,
     temperature: config.temperature,
   });
 
