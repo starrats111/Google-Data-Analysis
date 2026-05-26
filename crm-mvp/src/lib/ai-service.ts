@@ -867,24 +867,24 @@ function aggregateSseStream(raw: string): string {
 async function callAi(
   config: AiModelConfig,
   messages: { role: string; content: string }[],
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  _maxTokens?: number,
+  maxTokens?: number,
 ): Promise<string> {
   const base = config.baseUrl
     .replace(/\/+$/, "")
     .replace(/\/v1\/messages$/, "")
     .replace(/\/v1$/, "");
   const url = `${base}/v1/chat/completions`;
-  // D-028 v9：07 指示"不要限制 MAX token"。
-  // 调用方传入的 maxTokens 硬编码值（120/320/512/1024/1500/2048 等）被忽略，
-  // 始终使用 DB ai_model_configs.max_tokens（默认 10000）。
-  // 原因：硬编码上限太低 → AI 输出被截断 → JSON 解析失败 → 触发 padHeadlines/
-  //   padDescriptions 重试 → 单次广告创建 AI 调用次数从 10 次膨胀到 40+ 次 →
-  //   按次扣费的 [按次]claude-* 余额快速烧光（trace 实证 14:04:44 $-0.079 欠费）。
+  // D-028 v9.1：紧急回滚 v9 的 "强制使用 DB max_tokens" 改动。
+  // 真凶发现（trace 14:01:11）：API 网关 [特价]claude-sonnet-4-6 是**按 max_tokens
+  // 预扣费**，max_tokens=10000 时单次预扣 ¥16。v9 错误地把所有调用方传入的小值
+  // （1024 → 预扣 ¥1.6）忽略掉强制用 10000 → 单次预扣 ¥16 → 一次广告 10 次 AI
+  // 预扣 ¥160 → 余额秒空。
+  // 修复方向：尊重调用方传入的 maxTokens（120/320/512/1024 等小值更经济），
+  // 只在调用方完全不传时才用 DB 配置。
   const body = JSON.stringify({
     model: config.modelName,
     messages,
-    max_tokens: config.maxTokens,
+    max_tokens: maxTokens || config.maxTokens,
     temperature: config.temperature,
   });
 
