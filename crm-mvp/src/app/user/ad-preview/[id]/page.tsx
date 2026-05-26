@@ -796,6 +796,8 @@ export default function AdPreviewPage() {
       return;
     }
     generationInflightRef.current.add(inflightKey);
+    // D-027 P0：开始新一轮重爬时，清除旧的「爬取失败」状态，避免老 alert 残留
+    setCrawlFailed(false);
     if (isCore) {
       setCoreGenerating(true);
       setSitelinksLoading(true);
@@ -813,7 +815,14 @@ export default function AdPreviewPage() {
 
       if (type === "crawl_status") {
         const cs = data as Record<string, unknown>;
-        if (cs?.crawl_failed) { setCrawlFailed(true); wasCrawlFailed = true; }
+        // D-027 P0：crawl_status 是后端 push 的最新状态，必须双向同步（含明确 false）
+        if (cs?.crawl_failed) {
+          setCrawlFailed(true);
+          wasCrawlFailed = true;
+        } else {
+          setCrawlFailed(false);
+          wasCrawlFailed = false;
+        }
         return;
       }
 
@@ -859,6 +868,11 @@ export default function AdPreviewPage() {
           const items = normalizeSitelinkItems(raw).map((item) => ({ ...item, urlStatus: item.url ? "" as const : item.urlStatus }));
           setSitelinks(items);
           setSitelinksLoading(false);
+          // D-027 P0：sitemap 兜底拿到了候选链接 → 主页主爬其实是间接成功的，
+          // 应消除「爬取失败」假象（即便 crawl_status 之前推过 true）
+          if (items.some((it) => it.url && it.url.startsWith("http"))) {
+            setCrawlFailed(false);
+          }
           message.loading({ content: `已获取 ${items.length} 条链接，正在逐条验证...`, key: "sl-auto-check", duration: 0 });
           const checkResults = await Promise.all(
             items.map(async (item, idx) => {

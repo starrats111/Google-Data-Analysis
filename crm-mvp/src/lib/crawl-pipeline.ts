@@ -1599,7 +1599,8 @@ export async function buildCrawlCache(
   // 注：用 `as` 拓宽类型，否则闭包内赋值不会让 TS 在外层 narrow 出 union 类型（会卡死在 null/never）。
   let puppeteerCache = null as import("@/lib/crawler").PuppeteerPageData | null;
   const runPuppeteer = async (url: string): Promise<CrawlResultType> => {
-    const pageData = await crawlWithPuppeteerFull(url, PUPPETEER_INNER_TIMEOUT, puppeteerProxyUrl ?? undefined);
+    // D-027：主爬走预留 slot，避免被 image proxy / sitelinks 兜底饿死
+    const pageData = await crawlWithPuppeteerFull(url, PUPPETEER_INNER_TIMEOUT, puppeteerProxyUrl ?? undefined, { useMainCrawlSlot: true });
     if (!pageData) throw new Error("Puppeteer 返回空 HTML");
     // 把完整 PageData 缓存供后续 sitelinks/collectImages 使用（仅当策略最终被采纳时才覆盖）
     puppeteerCache = pageData;
@@ -1613,7 +1614,8 @@ export async function buildCrawlCache(
   };
   // Puppeteer 直连（不走代理，作为最终兜底）
   const runPuppeteerDirect = async (url: string): Promise<CrawlResultType> => {
-    const pageData = await crawlWithPuppeteerFull(url, PUPPETEER_INNER_TIMEOUT);
+    // D-027：主爬走预留 slot
+    const pageData = await crawlWithPuppeteerFull(url, PUPPETEER_INNER_TIMEOUT, undefined, { useMainCrawlSlot: true });
     if (!pageData) throw new Error("Puppeteer 直连返回空 HTML");
     puppeteerCache = pageData;
     return {

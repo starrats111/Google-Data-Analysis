@@ -1,6 +1,6 @@
 import { existsSync } from "fs";
 import { getProxyUrlForCountry, getHttpProxyUrlForCountry, fetchViaProxy } from "@/lib/crawl-proxy";
-import { acquirePuppeteerSlot, puppeteerSemaphoreStats } from "@/lib/puppeteer-semaphore";
+import { acquirePuppeteerSlot, acquireMainCrawlSlot, puppeteerSemaphoreStats } from "@/lib/puppeteer-semaphore";
 import { normalizeImageUrl } from "@/lib/image-url-normalize";
 import { getHostKey, isHostChallenged, markHostChallenged } from "@/lib/crawl-host-cache";
 
@@ -1072,7 +1072,7 @@ export async function batchFetchMetaViaPuppeteer(
     releasePuppeteerSlot = await acquirePuppeteerSlot(45000);
   } catch (e) {
     const stats = puppeteerSemaphoreStats();
-    console.warn(`[Crawler] batchFetchMetaViaPuppeteer 等待 Puppeteer slot 超时 (${stats.active}/${stats.max}, queued=${stats.queued})，降级返回空结果: ${e instanceof Error ? e.message : e}`);
+    console.warn(`[Crawler] batchFetchMetaViaPuppeteer 等待 Puppeteer slot 超时 (${stats.active}/${stats.max}, normalQ=${stats.queuedNormal} mainQ=${stats.queuedMain})，降级返回空结果: ${e instanceof Error ? e.message : e}`);
     return result;
   }
 
@@ -1282,7 +1282,7 @@ export async function fetchImagesViaPuppeteerBatch(
     releasePuppeteerSlot = await acquirePuppeteerSlot(30000);
   } catch (e) {
     const stats = puppeteerSemaphoreStats();
-    console.warn(`[Crawler] fetchImagesViaPuppeteerBatch 等待 Puppeteer slot 超时 (${stats.active}/${stats.max}, queued=${stats.queued}): ${e instanceof Error ? e.message : e}`);
+    console.warn(`[Crawler] fetchImagesViaPuppeteerBatch 等待 Puppeteer slot 超时 (${stats.active}/${stats.max}, normalQ=${stats.queuedNormal} mainQ=${stats.queuedMain}): ${e instanceof Error ? e.message : e}`);
     return result;
   }
 
@@ -1602,7 +1602,12 @@ export async function harvestImagesFromPagesWithPuppeteer(
   return result;
 }
 
-export async function crawlWithPuppeteerFull(url: string, timeoutMs = 30000, proxyUrl?: string): Promise<PuppeteerPageData | null> {
+export async function crawlWithPuppeteerFull(
+  url: string,
+  timeoutMs = 30000,
+  proxyUrl?: string,
+  options: { useMainCrawlSlot?: boolean } = {},
+): Promise<PuppeteerPageData | null> {
   const browserPath = findBrowserPath();
   if (!browserPath) {
     console.log("[Crawler] Puppeteer: 未找到浏览器");
@@ -1651,12 +1656,16 @@ export async function crawlWithPuppeteerFull(url: string, timeoutMs = 30000, pro
   }
 
   // C-027 FIX-A：全进程 Puppeteer browser 并发锁在 browser.launch 前
+  // D-027：主爬路径用预留 slot（acquireMainCrawlSlot, 60s），普通路径用 acquirePuppeteerSlot（45s）
+  //        避免 image proxy / sitelinks 兜底把 slot 全吃光导致主页主爬饥饿
   let releasePuppeteerSlot: () => void = () => {};
   try {
-    releasePuppeteerSlot = await acquirePuppeteerSlot(45000);
+    releasePuppeteerSlot = options.useMainCrawlSlot
+      ? await acquireMainCrawlSlot(60000)
+      : await acquirePuppeteerSlot(45000);
   } catch (e) {
     const stats = puppeteerSemaphoreStats();
-    console.warn(`[Crawler] crawlWithPuppeteerFull 等待 Puppeteer slot 超时 (${stats.active}/${stats.max}, queued=${stats.queued})，降级返回 null: ${e instanceof Error ? e.message : e}`);
+    console.warn(`[Crawler] crawlWithPuppeteerFull 等待 Puppeteer slot 超时 (${stats.active}/${stats.max}, normalQ=${stats.queuedNormal} mainQ=${stats.queuedMain}, useMainCrawlSlot=${!!options.useMainCrawlSlot})，降级返回 null: ${e instanceof Error ? e.message : e}`);
     return null;
   }
 
@@ -1961,7 +1970,7 @@ export async function crawlWithPuppeteerFull(url: string, timeoutMs = 30000, pro
     // 代理连接失败时自动降级到直连重试（避免因代理故障丢失整个 Puppeteer 结果）
     if (proxyUrl && /SOCKS|proxy|ERR_PROXY|ERR_SOCKS|connection failed/i.test(msg)) {
       console.log("[Crawler] 代理不可用，降级到 Puppeteer 直连重试...");
-      return crawlWithPuppeteerFull(url, timeoutMs); // 不传 proxyUrl = 直连
+      return crawlWithPuppeteerFull(url, timeoutMs, undefined, options); // 不传 proxyUrl = 直连，保留 useMainCrawlSlot
     }
     return null;
   } finally {
