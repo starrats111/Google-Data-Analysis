@@ -12,7 +12,7 @@ import { getAdMarketConfig } from "@/lib/ad-market";
 import { getProxyUrlForCountry, getHttpProxyUrlForCountry, ensureCountryEgressHttpProxy } from "@/lib/crawl-proxy";
 import { isLowValueSitelink } from "@/lib/sitelink-filter";
 import { hostMatchesCountryTld } from "@/lib/country-url-resolver";
-import { isHostChallenged, getHostKey } from "@/lib/crawl-host-cache";
+import { isHostChallenged, getHostKey, markHostChallenged } from "@/lib/crawl-host-cache";
 // C-016: ccTLD 切换逻辑移出 crawl-pipeline，改由 country-url-resolver 在 route 层调度
 
 // 全局爬取并发控制：最多 2 个同时执行
@@ -1209,6 +1209,20 @@ async function discoverSitelinkCandidates(
     const metaResults: MetaEntry[] = [...probeResults];
     if (probeShortCircuit) {
       console.warn(`[Sitelinks] HTTP L0 probe ${probeLinks.length}/${probeLinks.length} 全灭，短路跳过剩余 ${remainingLinks.length} 条，直接进 Puppeteer 兜底（CF 保护站快速路径）`);
+      // D-028 v5：probe 4/4 全灭强证据 host 是 CF/DataDome 强反爬站，立即 markChallenged，
+      // 让本次 navLinks 兜底 + sitelink-auto-expand + 下次该 host 的爬取直接走 v3 短路路径，
+      // 避免重复跑 puppeteer 兜底浪费 30s+。实证 alohas.com 12:58 trace：5 次重复兜底。
+      const merchantHost = (() => {
+        try {
+          return new URL(merchantUrl).hostname.toLowerCase();
+        } catch {
+          return "";
+        }
+      })();
+      if (merchantHost) {
+        markHostChallenged(merchantHost);
+        console.warn(`[Sitelinks] D-028 v5：probe 全灭强证据 → markHostChallenged(${merchantHost})，后续走快速路径`);
+      }
       for (const link of remainingLinks) {
         metaResults.push({ link, meta: { title: "", description: "", ok: false, finalUrl: link.url, isSoft404: false } });
       }
