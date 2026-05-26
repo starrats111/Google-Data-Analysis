@@ -15,19 +15,25 @@
  *   - 改造：MAX_SLOTS 2→3；其中 RESERVED_MAIN_CRAWL=1 个仅供主页主爬路径使用，
  *     普通调用（sitelinks 兜底 / image proxy）只能用剩下 NORMAL_SLOTS=2 个。
  *
- * D-028 收紧（2026-05-26，2C/3.6G 服务器 swap 抖动事件）：
+ * D-028 收紧（2026-05-26 11:30，2C/3.6G 服务器 swap 抖动事件）：
  *   - 实证：MAX=3 时同时 3 个 Chrome 总 RSS≈2.1GB，吃掉 60% 内存，挤压 next/mariadb
  *     进入 swap，高峰期 load 飙到 9-10、iowait 32%+。
- *   - 改造：MAX_SLOTS 3→2；保留 RESERVED_MAIN_CRAWL=1 给主爬独占，NORMAL=1 给
- *     sitelinks 兜底/image proxy 排队使用，单 Chrome 高峰内存上限 ≤ 1.4GB（节省 700MB）。
- *   - 服务器升级到 4C/8G 后可放回 MAX=4 / MAIN=1 / NORMAL=3（见 D-028 P3）。
+ *   - 改造：MAX_SLOTS 3→2；保留 RESERVED_MAIN_CRAWL=1 给主爬独占，NORMAL=1。
+ *
+ * D-028 v2 回退（2026-05-26 12:15，发现降到 2 后 normalQ 严重排队）：
+ *   - 实证：peaceoutskincare/agentprovocateur 等强反爬站 sitelinks 兜底 + 社交链接
+ *     puppeteer 同时排队，normalQ 一度达 4，频繁 45s slot timeout，sitelinks 缺失，
+ *     用户感知端到端 3-4 分钟。
+ *   - 改回：MAX_SLOTS 2→3 / NORMAL=2（恢复 D-027 配置）；
+ *     真正减压靠 D-028 v2 的「社交链接黑名单 + 单条 timeout 25s→12s」削减 puppeteer
+ *     调用次数本身，而不是收紧 slot。
  *
  * 环境变量 PUPPETEER_SEMAPHORE_OFF=1 可一键 bypass（用于快速回滚定位）。
  */
 
-const MAX_PUPPETEER_SLOTS = 2;
+const MAX_PUPPETEER_SLOTS = 3;
 const RESERVED_MAIN_CRAWL_SLOTS = 1;
-const NORMAL_SLOTS = MAX_PUPPETEER_SLOTS - RESERVED_MAIN_CRAWL_SLOTS;  // 1
+const NORMAL_SLOTS = MAX_PUPPETEER_SLOTS - RESERVED_MAIN_CRAWL_SLOTS;  // 2
 
 let _active = 0;
 const _waitersMain: Array<(released: () => void) => void> = [];

@@ -87,7 +87,54 @@ const BAD_SITELINK_PATTERNS = [
   /\/(login|signup|register|cart|checkout|account|wishlist|password|privacy|terms|imprint|impressum|datenschutz|agb|cookie-policy|unsubscribe)\b/i,
 ];
 
+// D-028 v2：社交平台 / 第三方分享 host 黑名单
+//
+// 这些 host 不能作为 Google Ads sitelink（Google Ads 政策要求落地页是商家自有域），
+// 同时它们普遍有强反爬（Cloudflare / DataDome），puppeteer 兜底 100% 失败但每次浪费 25-45s
+// 一个 slot。trace 实证：peaceoutskincare 单次广告创建中 twitter.com / facebook.com
+// 的 puppeteer 兜底排队 → slot timeout 45s × 多次 → 用户感知 3-4 分钟卡顿。
+//
+// 命中即丢弃，不进入任何 fetchUrlMeta / batchFetchMetaViaPuppeteer 流程。
+const SOCIAL_HOSTS = new Set([
+  "twitter.com", "x.com", "mobile.twitter.com",
+  "facebook.com", "m.facebook.com", "fb.com", "fb.me",
+  "instagram.com", "m.instagram.com",
+  "pinterest.com", "pinterest.co.uk", "pinterest.de", "pinterest.fr",
+  "youtube.com", "m.youtube.com", "youtu.be",
+  "tiktok.com", "vm.tiktok.com",
+  "linkedin.com", "lnkd.in",
+  "threads.net", "threads.com",
+  "snapchat.com",
+  "reddit.com", "old.reddit.com",
+  "tumblr.com",
+  "weibo.com", "wechat.com",
+  "vk.com", "ok.ru",
+  // 邮件、短链、地图等也不应作为 sitelink
+  "mailto:", "tel:",
+  "goo.gl", "bit.ly", "t.co",
+  "maps.google.com", "goo.gl/maps",
+  "apps.apple.com", "play.google.com",
+]);
+
+function isSocialOrThirdPartyHost(url: string): boolean {
+  if (/^(mailto:|tel:|javascript:|#)/i.test(url)) return true;
+  try {
+    const host = new URL(url).hostname.toLowerCase().replace(/^www\./, "");
+    if (SOCIAL_HOSTS.has(host)) return true;
+    // 子域：如 shop.tiktok.com / business.facebook.com
+    for (const root of SOCIAL_HOSTS) {
+      if (root.includes(":") || root.includes("/")) continue;  // 跳过 mailto: 等
+      if (host.endsWith(`.${root}`)) return true;
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
+
 export function isBadSitelinkUrl(url: string): boolean {
+  // D-028 v2：社交/第三方 host 优先短路，避免后续浪费 puppeteer slot
+  if (isSocialOrThirdPartyHost(url)) return true;
   if (BAD_SITELINK_PATTERNS.some((p) => p.test(url))) return true;
   const lower = url.toLowerCase();
   if (lower.includes("/search?q=cache:") || lower.includes("webcache.googleusercontent.com")) return true;
@@ -1116,8 +1163,12 @@ async function discoverSitelinkCandidates(
     });
     // 对提取到的链接先做 locale 规范化：若无代理，直连从新加坡 IP 爬取的页面会包含
     // /en-sg/ 之类的路径段，需替换为目标国家 locale（如 /en-us/）再探查
+    // D-028 v2：在 fetchUrlMeta 前先用 isBadSitelinkUrl 剔除社交平台 / 第三方 host，
+    // 避免把 twitter.com / facebook.com / instagram.com 等 puppeteer 必败 URL
+    // 喂给 puppeteer 兜底浪费 slot。
     const linksToTry = prioritized
       .filter(l => { try { return !new URL(l.url).search; } catch { return true; } })
+      .filter(l => !isBadSitelinkUrl(l.url))
       .slice(0, 20)
       .map(l => country ? { ...l, url: normalizeLocaleInUrl(l.url, country) } : l);
 
@@ -1186,9 +1237,11 @@ async function discoverSitelinkCandidates(
     const retryUrls = httpFailedLinks.slice(0, needed).map(l => l.url);
     console.warn(`[Sitelinks] HTTP L0 失败 ${httpFailedLinks.length} 条，Puppeteer 共享 browser 兜底验证前 ${needed} 条`);
     try {
+      // D-028 v2：单条 timeout 25s → 12s。强反爬站 puppeteer 兜底常常 25s 也救不回，
+      // 缩短到 12s 让失败站快速放弃，把 slot 让给后面的请求，避免 normalQ 排队雪崩。
       const puppeteerMetas = await batchFetchMetaViaPuppeteer(retryUrls, puppeteerProxyUrl, {
         concurrency: 2,
-        perPageTimeoutMs: 25000,
+        perPageTimeoutMs: 12000,
       });
       const linkByUrl = new Map(httpFailedLinks.map(l => [l.url, l]));
       let puppeteerOk = 0;
@@ -1261,7 +1314,8 @@ async function discoverSitelinkCandidates(
         const retryUrls = navHttpFailed.slice(0, needed).map(l => l.url);
         console.log(`[Sitelinks] navLinks HTTP L0 失败 ${navHttpFailed.length} 条，Puppeteer 兜底前 ${needed} 条`);
         try {
-          const puppeteerMetas = await batchFetchMetaViaPuppeteer(retryUrls, puppeteerProxyUrl, { concurrency: 2, perPageTimeoutMs: 25000 });
+          // D-028 v2：单条 timeout 25s → 12s（同 pageLinks 分支）
+          const puppeteerMetas = await batchFetchMetaViaPuppeteer(retryUrls, puppeteerProxyUrl, { concurrency: 2, perPageTimeoutMs: 12000 });
           const linkByUrl = new Map(navHttpFailed.map(l => [l.url, l]));
           for (const [url, meta] of puppeteerMetas.entries()) {
             const link = linkByUrl.get(url);

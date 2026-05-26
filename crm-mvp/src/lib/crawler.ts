@@ -2384,7 +2384,10 @@ async function firePuppeteerBatch(host: string): Promise<void> {
   console.warn(`[Crawler] L1 Puppeteer 批量启动 host=${host} urls=${urls.length} concurrency=${concurrency}`);
   let result: Map<string, PuppeteerMeta>;
   try {
-    result = await batchFetchMetaViaPuppeteer(urls, batch.proxy, { concurrency, perPageTimeoutMs: 25000 });
+    // D-028 v2：单条 timeout 25s → 12s。L1 coalesce 路径单 host 多 URL 共享 1 个
+    // browser，强反爬站第一条若 12s 内不出结果，后续条更不可能成功（同源同代理同指纹），
+    // 缩短到 12s 让 batch 整体快速结束，把 slot 让给其他 host。
+    result = await batchFetchMetaViaPuppeteer(urls, batch.proxy, { concurrency, perPageTimeoutMs: 12000 });
   } catch (e) {
     console.warn(`[Crawler] L1 Puppeteer 批量异常 host=${host}: ${e instanceof Error ? e.message : e}`);
     result = new Map();
