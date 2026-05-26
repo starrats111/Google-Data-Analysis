@@ -12,6 +12,7 @@ import { getAdMarketConfig } from "@/lib/ad-market";
 import { getProxyUrlForCountry, getHttpProxyUrlForCountry, ensureCountryEgressHttpProxy } from "@/lib/crawl-proxy";
 import { isLowValueSitelink } from "@/lib/sitelink-filter";
 import { hostMatchesCountryTld } from "@/lib/country-url-resolver";
+import { isHostChallenged, getHostKey } from "@/lib/crawl-host-cache";
 // C-016: ccTLD 切换逻辑移出 crawl-pipeline，改由 country-url-resolver 在 route 层调度
 
 // 全局爬取并发控制：最多 2 个同时执行
@@ -1231,31 +1232,56 @@ async function discoverSitelinkCandidates(
   // ══════════════════════════════════════════════════════
   // C-014 §2.2：HTTP 代理识别导致 ok=false 的 URL，用共享 browser 的 Puppeteer 批量真实访问兜底
   // 这是 L0 的一部分（真实访问，不是降级），只是换用更重的浏览器栈绕过指纹识别。
+  //
+  // D-028 v3：商家 host 已 challenged（CF hard-block）时跳过 puppeteer 17 URL batch。
+  // 实证 trace（agentprovocateur.com）：17 URL × 12s × concurrency=2 + 代理 fallback
+  // = 130 秒。puppeteer 在 hard-block 站点 ok 率极低（trace 显示 5/17 全败），耗时
+  // 不成正比。改为：信任 link.text + url path 直接生成 candidate（牺牲 title 精度），
+  // 整体节省 100~130s。
   // ══════════════════════════════════════════════════════
+  const merchantHostKey = getHostKey(merchantUrl);
+  const merchantHostChallenged = merchantHostKey ? isHostChallenged(merchantHostKey) : false;
+
   if (pageLinkDeferred.length < 6 && httpFailedLinks.length > 0) {
-    const needed = Math.min(httpFailedLinks.length, 8);
-    const retryUrls = httpFailedLinks.slice(0, needed).map(l => l.url);
-    console.warn(`[Sitelinks] HTTP L0 失败 ${httpFailedLinks.length} 条，Puppeteer 共享 browser 兜底验证前 ${needed} 条`);
-    try {
-      // D-028 v2：单条 timeout 25s → 12s。强反爬站 puppeteer 兜底常常 25s 也救不回，
-      // 缩短到 12s 让失败站快速放弃，把 slot 让给后面的请求，避免 normalQ 排队雪崩。
-      const puppeteerMetas = await batchFetchMetaViaPuppeteer(retryUrls, puppeteerProxyUrl, {
-        concurrency: 2,
-        perPageTimeoutMs: 12000,
-      });
-      const linkByUrl = new Map(httpFailedLinks.map(l => [l.url, l]));
-      let puppeteerOk = 0;
-      for (const [url, meta] of puppeteerMetas.entries()) {
-        const link = linkByUrl.get(url);
-        if (!link) continue;
-        if (!meta.ok) continue;
-        puppeteerOk++;
-        if (isHomeRedirect(link, meta)) botBlockSignals++;
-        pageLinkDeferred.push({ link, meta });
+    if (merchantHostChallenged) {
+      // 强反爬站：跳过 puppeteer 兜底，用 link.text + url path 直接生成 deferred entry。
+      // tryPushCandidate 内部会用 link.text / titleFromUrlPath 做 title fallback，
+      // 这里把 meta 设为最小可用对象，让下游正常推 candidate（title 来自 link.text）。
+      let added = 0;
+      for (const link of httpFailedLinks) {
+        if (pageLinkDeferred.length >= 6) break;
+        pageLinkDeferred.push({
+          link,
+          meta: { title: "", description: "", ok: true, finalUrl: link.url, isSoft404: false },
+        });
+        added++;
       }
-      console.warn(`[Sitelinks] Puppeteer 兜底完成: 尝试=${puppeteerMetas.size} ok=${puppeteerOk} signals=${botBlockSignals}`);
-    } catch (e) {
-      console.warn(`[Sitelinks] Puppeteer 批量兜底异常:`, e instanceof Error ? e.message : e);
+      console.warn(`[Sitelinks] host=${merchantHostKey} 已 challenged，跳过 17 URL Puppeteer 兜底，直接用 link.text 信任 ${added} 条候选（D-028 v3 短路，节省 ~130s）`);
+    } else {
+      const needed = Math.min(httpFailedLinks.length, 8);
+      const retryUrls = httpFailedLinks.slice(0, needed).map(l => l.url);
+      console.warn(`[Sitelinks] HTTP L0 失败 ${httpFailedLinks.length} 条，Puppeteer 共享 browser 兜底验证前 ${needed} 条`);
+      try {
+        // D-028 v2：单条 timeout 25s → 12s。强反爬站 puppeteer 兜底常常 25s 也救不回，
+        // 缩短到 12s 让失败站快速放弃，把 slot 让给后面的请求，避免 normalQ 排队雪崩。
+        const puppeteerMetas = await batchFetchMetaViaPuppeteer(retryUrls, puppeteerProxyUrl, {
+          concurrency: 2,
+          perPageTimeoutMs: 12000,
+        });
+        const linkByUrl = new Map(httpFailedLinks.map(l => [l.url, l]));
+        let puppeteerOk = 0;
+        for (const [url, meta] of puppeteerMetas.entries()) {
+          const link = linkByUrl.get(url);
+          if (!link) continue;
+          if (!meta.ok) continue;
+          puppeteerOk++;
+          if (isHomeRedirect(link, meta)) botBlockSignals++;
+          pageLinkDeferred.push({ link, meta });
+        }
+        console.warn(`[Sitelinks] Puppeteer 兜底完成: 尝试=${puppeteerMetas.size} ok=${puppeteerOk} signals=${botBlockSignals}`);
+      } catch (e) {
+        console.warn(`[Sitelinks] Puppeteer 批量兜底异常:`, e instanceof Error ? e.message : e);
+      }
     }
   }
 
@@ -1310,23 +1336,37 @@ async function discoverSitelinkCandidates(
 
       // navLinks 分支也走 Puppeteer 兜底
       if (navDeferred.length < 6 && navHttpFailed.length > 0) {
-        const needed = Math.min(navHttpFailed.length, 6);
-        const retryUrls = navHttpFailed.slice(0, needed).map(l => l.url);
-        console.log(`[Sitelinks] navLinks HTTP L0 失败 ${navHttpFailed.length} 条，Puppeteer 兜底前 ${needed} 条`);
-        try {
-          // D-028 v2：单条 timeout 25s → 12s（同 pageLinks 分支）
-          const puppeteerMetas = await batchFetchMetaViaPuppeteer(retryUrls, puppeteerProxyUrl, { concurrency: 2, perPageTimeoutMs: 12000 });
-          const linkByUrl = new Map(navHttpFailed.map(l => [l.url, l]));
-          for (const [url, meta] of puppeteerMetas.entries()) {
-            const link = linkByUrl.get(url);
-            if (!link) continue;
-            if (!meta.ok || meta.isSoft404) continue;
-            if (isHomeRedirect(link, meta)) botBlockSignals++;
-            navDeferred.push({ link, meta });
+        if (merchantHostChallenged) {
+          // D-028 v3：challenged host 跳过 navLinks puppeteer 兜底，信任 link.text
+          let added = 0;
+          for (const link of navHttpFailed) {
+            if (navDeferred.length >= 6) break;
+            navDeferred.push({
+              link,
+              meta: { title: "", description: "", ok: true, finalUrl: link.url, isSoft404: false },
+            });
+            added++;
           }
-          console.warn(`[Sitelinks] navLinks Puppeteer 兜底完成，deferred=${navDeferred.length} signals=${botBlockSignals}`);
-        } catch (e) {
-          console.warn(`[Sitelinks] navLinks Puppeteer 批量兜底异常:`, e instanceof Error ? e.message : e);
+          console.warn(`[Sitelinks] navLinks host 已 challenged，跳过 Puppeteer 兜底，信任 link.text 直接通过 ${added} 条`);
+        } else {
+          const needed = Math.min(navHttpFailed.length, 6);
+          const retryUrls = navHttpFailed.slice(0, needed).map(l => l.url);
+          console.log(`[Sitelinks] navLinks HTTP L0 失败 ${navHttpFailed.length} 条，Puppeteer 兜底前 ${needed} 条`);
+          try {
+            // D-028 v2：单条 timeout 25s → 12s（同 pageLinks 分支）
+            const puppeteerMetas = await batchFetchMetaViaPuppeteer(retryUrls, puppeteerProxyUrl, { concurrency: 2, perPageTimeoutMs: 12000 });
+            const linkByUrl = new Map(navHttpFailed.map(l => [l.url, l]));
+            for (const [url, meta] of puppeteerMetas.entries()) {
+              const link = linkByUrl.get(url);
+              if (!link) continue;
+              if (!meta.ok || meta.isSoft404) continue;
+              if (isHomeRedirect(link, meta)) botBlockSignals++;
+              navDeferred.push({ link, meta });
+            }
+            console.warn(`[Sitelinks] navLinks Puppeteer 兜底完成，deferred=${navDeferred.length} signals=${botBlockSignals}`);
+          } catch (e) {
+            console.warn(`[Sitelinks] navLinks Puppeteer 批量兜底异常:`, e instanceof Error ? e.message : e);
+          }
         }
       }
 

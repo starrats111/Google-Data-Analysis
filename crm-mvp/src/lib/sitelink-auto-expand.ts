@@ -9,6 +9,7 @@
 
 import { getProxyUrlForCountry, fetchViaProxy } from "@/lib/crawl-proxy";
 import { fetchUrlMeta } from "@/lib/crawler";
+import { isHostChallenged, getHostKey } from "@/lib/crawl-host-cache";
 import {
   isBadSitelinkUrl,
   titleFromUrlPath,
@@ -293,13 +294,26 @@ export async function autoExpandSitelinks(opts: {
     }
   }
 
-  // 过滤 + HEAD 验证
+  // D-028 v3：判断商家 host 是否已 challenged（CF/DataDome 强反爬）。
+  // 若是，跳过 HEAD/fetchUrlMeta 的网络验证，直接用 url path 生成 title 即可——
+  // 反正 puppeteer 兜底 12s 也救不回，每个 url 顺序跑 80s+ 是在浪费用户时间。
+  // 牺牲：sitelinks title 不那么精准（用 /lingerie → "Lingerie"），但能在 5s 内出 6 条。
+  const merchantHost = getHostKey(merchantUrl);
+  const merchantChallenged = merchantHost ? isHostChallenged(merchantHost) : false;
+
+  // 过滤 + HEAD 验证（D-028 v3：并行化 + challenged 短路）
   const toVerify = [...candidates].filter((u) => !usedUrls.has(u)).slice(0, 20);
-  const verified: string[] = [];
-  for (const u of toVerify) {
-    if (verified.length + existing.length >= targetCount + 2) break;
-    const ok = await headIsOk(u, proxyUrl);
-    if (ok) verified.push(u);
+  let verified: string[];
+  if (merchantChallenged) {
+    // 强反爬站：信任候选 url，不做 HEAD 验证
+    verified = toVerify.slice(0, targetCount + 2);
+    console.warn(`[SitelinkExpand] host=${merchantHost} 已 challenged，跳过 HEAD 验证（信任候选 url），verified=${verified.length}`);
+  } else {
+    // 正常站：并行 HEAD 验证（之前是顺序 await，N 次 × 5s = 25s+，改并行 = 5s 上限）
+    const headResults = await Promise.all(
+      toVerify.map(async (u) => ({ u, ok: await headIsOk(u, proxyUrl) })),
+    );
+    verified = headResults.filter((r) => r.ok).map((r) => r.u).slice(0, targetCount + 2);
   }
 
   // 拉 meta 构造 SitelinkItem，同时记录同源子域名重定向目标
@@ -307,27 +321,40 @@ export async function autoExpandSitelinks(opts: {
   const discoveredSubdomainRoots = new Set<string>(); // e.g. "https://knowledge.carolina.com"
   const origHostBase = (() => { try { return new URL(merchantUrl).hostname.replace(/^www\./, "").toLowerCase(); } catch { return ""; } })();
 
-  for (const u of verified) {
+  // D-028 v3：并行 fetchUrlMeta（之前是顺序 await，每条 challenged host 走 puppeteer
+  // ≈ 20s，N 条顺序 = 80s+；改并行后整体 ≈ 一次 puppeteer batch 的耗时，且 challenged
+  // 站点直接用 url path 不再启 puppeteer，省 0~80s）
+  const verifiedToFetch = verified.slice(0, targetCount + 2);
+  const fetchResults = await Promise.all(
+    verifiedToFetch.map(async (u) => {
+      // D-028 v3：challenged host 不调 fetchUrlMeta，直接用 url path 兜底 title
+      if (merchantChallenged) {
+        return { u, item: toSitelinkItem(u, titleFromUrlPath(u)), meta: null as null | { ok: boolean; finalUrl: string } };
+      }
+      try {
+        const meta = await fetchUrlMeta(u, proxyUrl ?? undefined, country);
+        const item = toSitelinkItem(u, titleFromUrlPath(u), meta.ok ? { title: meta.title, description: meta.description } : undefined);
+        return { u, item, meta };
+      } catch {
+        return { u, item: toSitelinkItem(u, titleFromUrlPath(u)), meta: null };
+      }
+    }),
+  );
+
+  for (const { u: _u, item, meta } of fetchResults) {
     if (results.length + existing.length >= targetCount) break;
-    try {
-      const meta = await fetchUrlMeta(u, proxyUrl ?? undefined, country);
-      // 若目标 URL 301 到同源子域名，记录以便后续扩展
-      if (meta.ok && meta.finalUrl && meta.finalUrl !== u) {
-        try {
-          const finalHost = new URL(meta.finalUrl).hostname.replace(/^www\./, "").toLowerCase();
-          const finalOrigin = new URL(meta.finalUrl).origin;
-          if (finalHost !== origHostBase && finalHost.endsWith(`.${origHostBase}`)) {
-            discoveredSubdomainRoots.add(finalOrigin);
-          }
-        } catch {}
-      }
-      const item = toSitelinkItem(u, titleFromUrlPath(u), meta.ok ? { title: meta.title, description: meta.description } : undefined);
-      if (item.title && item.title.length >= 2) {
-        results.push(item);
-      }
-    } catch {
-      const item = toSitelinkItem(u, titleFromUrlPath(u));
-      if (item.title && item.title.length >= 2) results.push(item);
+    // 若目标 URL 301 到同源子域名，记录以便后续扩展
+    if (meta && meta.ok && meta.finalUrl && meta.finalUrl !== _u) {
+      try {
+        const finalHost = new URL(meta.finalUrl).hostname.replace(/^www\./, "").toLowerCase();
+        const finalOrigin = new URL(meta.finalUrl).origin;
+        if (finalHost !== origHostBase && finalHost.endsWith(`.${origHostBase}`)) {
+          discoveredSubdomainRoots.add(finalOrigin);
+        }
+      } catch {}
+    }
+    if (item.title && item.title.length >= 2) {
+      results.push(item);
     }
   }
 
