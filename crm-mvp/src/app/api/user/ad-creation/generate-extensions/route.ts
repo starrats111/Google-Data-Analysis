@@ -549,24 +549,12 @@ export async function POST(req: NextRequest) {
           console.log(`[Extensions] crawl_cache ${reason}，重新爬取... forcePuppeteer=${cacheNeedsRefreshForPromo}`);
           // C-027 FIX-B：同一 merchantUrl × country 并发去重（共享同一个 Promise）
           const crawlKey = buildCrawlKey(merchantUrl, country);
-          // D-028 v5：inflight 复用超时会 throw "inflight-reuse-timeout"，
-          // 此时降级用 DB 现有 cache（即使旧/弱），避免请求 500 + 用户无限等待
-          let newCache: CrawlCache;
-          try {
-            newCache = await withCrawlInflightLock(crawlKey, () =>
-              buildCrawlCache(merchantUrl, merchantName, country, undefined, {
-                forcePuppeteer: cacheNeedsRefreshForPromo,
-              }),
-            );
-          } catch (err) {
-            const msg = err instanceof Error ? err.message : String(err);
-            if (msg === "inflight-reuse-timeout" && cache) {
-              console.warn(`[Extensions] D-028 v5：inflight reuse 超时，降级使用现有 cache（即使质量较低）：merchantUrl=${merchantUrl}`);
-              newCache = cache as CrawlCache;
-            } else {
-              throw err;
-            }
-          }
+          // D-028 v7：inflight lock 不再 fail-fast，直接 await 原 promise（最坏 60s 锁释放）
+          const newCache = await withCrawlInflightLock(crawlKey, () =>
+            buildCrawlCache(merchantUrl, merchantName, country, undefined, {
+              forcePuppeteer: cacheNeedsRefreshForPromo,
+            }),
+          );
           const newPromo = newCache.promoRegex as Record<string, unknown> | null;
           const newHasDiscount = (newPromo?.discount_percent ? Number(newPromo.discount_percent) : 0) > 0 ||
             (newPromo?.discount_amount ? Number(newPromo.discount_amount) : 0) > 0;
