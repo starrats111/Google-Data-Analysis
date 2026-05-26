@@ -549,9 +549,10 @@ export async function POST(req: NextRequest) {
           console.log(`[Extensions] crawl_cache ${reason}，重新爬取... forcePuppeteer=${cacheNeedsRefreshForPromo}`);
           // C-027 FIX-B：同一 merchantUrl × country 并发去重（共享同一个 Promise）
           const crawlKey = buildCrawlKey(merchantUrl, country);
-          // D-028 v9：buildCrawlCache 30s 总超时（避免 producer 卡 60s 才被强制释放）
+          // D-028 v9.2：buildCrawlCache 30s 总超时（避免 producer 卡 60s 才被强制释放）
           //   trace 实证 scarosso.com 14:00:31 inflight age=48818ms → 14:00:43 强制释放
-          //   超时后用空 cache 兜底（headlines 仍可由 cache=null 触发 catch 降级）
+          //   v9 bug：占位 cache 字段缺失导致下游 `.length` 崩溃（hertzmexico 14:35:59 实证）
+          //   v9.2：完整匹配 CrawlCache interface 所有必填字段
           const newCache: CrawlCache = await withCrawlInflightLock(crawlKey, async () => {
             const TIMEOUT_MS = 30000;
             const timeout = new Promise<CrawlCache>((_, reject) =>
@@ -570,18 +571,28 @@ export async function POST(req: NextRequest) {
             } catch (err) {
               const msg = err instanceof Error ? err.message : String(err);
               if (msg === "buildCrawlCache-timeout-30s") {
-                console.warn(`[Extensions] D-028 v9：buildCrawlCache 30s 超时降级，使用最小占位 cache：merchantUrl=${merchantUrl}`);
-                return {
-                  pageLinks: [],
-                  navLinks: [],
+                console.warn(`[Extensions] D-028 v9.2：buildCrawlCache 30s 超时降级，使用完整占位 cache：merchantUrl=${merchantUrl}`);
+                const stub: CrawlCache = {
+                  links: [],
                   images: [],
-                  rawText: "",
-                  title: merchantName || "",
-                  description: "",
+                  pageText: "",
+                  features: [],
+                  navItems: [],
+                  phoneCandidates: [],
+                  sitelinkCandidates: [],
+                  semrushTitles: [],
+                  semrushDescriptions: [],
                   promoRegex: null,
-                  detectedLanguageCode: undefined,
-                  finalUrl: merchantUrl,
-                } as unknown as CrawlCache;
+                  priceRegex: [],
+                  crawledProducts: [],
+                  crawledAt: new Date().toISOString(),
+                  crawlMethod: "timeout-stub",
+                  crawlFailed: true,
+                  crawlQualityScore: 0,
+                  crawlQualityIssues: ["timeout_30s"],
+                  navLinks: [],
+                };
+                return stub;
               }
               throw err;
             }
