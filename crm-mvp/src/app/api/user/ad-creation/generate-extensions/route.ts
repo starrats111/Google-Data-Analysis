@@ -550,13 +550,18 @@ export async function POST(req: NextRequest) {
           console.log(`[Extensions] crawl_cache ${reason}，重新爬取... forcePuppeteer=${cacheNeedsRefreshForPromo}`);
           // C-027 FIX-B：同一 merchantUrl × country 并发去重（共享同一个 Promise）
           const crawlKey = buildCrawlKey(merchantUrl, country);
-          // D-028 v9.4：超时大幅放宽（trace 实证 2 核服务器普通站需 30-50s，CF 站 60-90s）
-          //   v9 设 30s → lovevery 1.5M HTML 实际 40-50s → 几乎全部商家触发占位降级（trace 15:05）
-          //   v9.4 spec：
-          //     普通站   60s（覆盖 90% 普通站）
-          //     challenged 站 90s（CF 强反爬，puppeteer + JS challenge 实际耗时）
-          //   一旦超时 → crawlFailed=true 占位 cache，前端正确显示"网站爬取失败"提示，
-          //   用户可点"重新爬取"手动重试（cache 已 inflight lock 释放）。
+          // D-031 (C-090)：修复 v9.4 「外层 timeout < 内层单策略 timeout」 致命数学错误
+          //   实证现象（kiehls.com.sg/lovevery/mustelausa/lancome 等 6 商家 15:39-15:51）：
+          //     外层 60s/90s 超时砍断 → stub cache(crawlFailed=true) → L2 守门 emit context_insufficient
+          //     → 前端 UI 渲染「网站爬取失败」提示，用户即"爬取失败"现象。
+          //   核心数学错误（Read 代码确认）：
+          //     - 外层 TIMEOUT_MS = 60s(普通) / 90s(challenged)（本处 route.ts:567）
+          //     - 内层 STRATEGY_BUDGET_MS = 160s(有代理) / 90s(无代理)（crawl-pipeline.ts:1784）
+          //     - 内层单 puppeteer 策略 SINGLE_STRATEGY_TIMEOUT_MS = 75s（crawl-pipeline.ts:1801）
+          //   ===> 外层 60s/90s < 内层 75s 单策略！第一个策略刚开始就被外层强制砍断！
+          //   D-031 修复 spec（07 拍板 R3 路线 — 加强爬虫能力 + 不能出现失败商家）：
+          //     - 普通 host：120s （= 内层无代理 90s + 30s safety margin，可容纳 1 个完整 puppeteer 策略）
+          //     - challenged host：200s（= 内层有代理 160s + 40s safety，可容纳 2 个完整 puppeteer 策略）
           //   附带：起始打 timer，记录 buildCrawlCache 实际耗时方便后续调参。
           let merchantHostForTimeout = "";
           try {
@@ -564,11 +569,11 @@ export async function POST(req: NextRequest) {
           } catch {}
           const hostKey = merchantHostForTimeout ? getHostKey(merchantHostForTimeout) : "";
           const hostChallengedForTimeout = hostKey ? isHostChallenged(hostKey) : false;
-          const TIMEOUT_MS = hostChallengedForTimeout ? 90000 : 60000;
+          const TIMEOUT_MS = hostChallengedForTimeout ? 200000 : 120000;
           // lock 强制释放时间稍长于 producer timeout，确保 inflight caller 一定能
           // 拿到 producer 的最终结果（stub or real cache），不会被 lock 提前释放。
           const LOCK_TIMEOUT_MS_LOCAL = TIMEOUT_MS + 10000;
-          console.log(`[Extensions] D-028 v9.4：buildCrawlCache 启动 timeout=${TIMEOUT_MS / 1000}s host=${merchantHostForTimeout} challenged=${hostChallengedForTimeout}`);
+          console.log(`[Extensions] D-031：buildCrawlCache 启动 timeout=${TIMEOUT_MS / 1000}s host=${merchantHostForTimeout} challenged=${hostChallengedForTimeout}`);
           const buildStartedAt = Date.now();
           const newCache: CrawlCache = await withCrawlInflightLock(crawlKey, async () => {
             const timeout = new Promise<CrawlCache>((_, reject) =>
@@ -585,13 +590,13 @@ export async function POST(req: NextRequest) {
                 timeout,
               ]);
               const elapsedMs = Date.now() - buildStartedAt;
-              console.log(`[Extensions] D-028 v9.4：buildCrawlCache 完成耗时=${elapsedMs}ms timeout=${TIMEOUT_MS}ms host=${merchantHostForTimeout}`);
+              console.log(`[Extensions] D-031：buildCrawlCache 完成耗时=${elapsedMs}ms timeout=${TIMEOUT_MS}ms host=${merchantHostForTimeout}`);
               return result;
             } catch (err) {
               const msg = err instanceof Error ? err.message : String(err);
               const elapsedMs = Date.now() - buildStartedAt;
               if (msg === "buildCrawlCache-timeout") {
-                console.warn(`[Extensions] D-028 v9.4：buildCrawlCache ${TIMEOUT_MS / 1000}s 超时降级，使用完整占位 cache：merchantUrl=${merchantUrl} elapsedMs=${elapsedMs}`);
+                console.warn(`[Extensions] D-031：buildCrawlCache ${TIMEOUT_MS / 1000}s 超时降级，使用完整占位 cache：merchantUrl=${merchantUrl} elapsedMs=${elapsedMs}`);
                 const stub: CrawlCache = {
                   links: [],
                   images: [],
