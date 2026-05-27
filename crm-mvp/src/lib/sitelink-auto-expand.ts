@@ -24,15 +24,13 @@ export interface SitelinkItem {
   description?: string;
 }
 
-const COMMON_PATHS = [
-  "/shop", "/products", "/collections",
-  "/catalog", "/categories", "/store",
-  "/deals", "/sale", "/offers",
-  "/about", "/about-us",
-  "/contact", "/contact-us",
-  "/faq", "/support", "/help",
-  "/blog", "/news", "/resources",
-];
+// D-031b (C-091)：彻底删除 COMMON_PATHS 编造 fallback。
+// 旧逻辑（D-028 v3 引入的 BUG）：
+//   sitemap + robots 都拿不到 → 拼接 merchantUrl + /shop, /products 等 → challenged host
+//   还跳过 HEAD 验证 → 6 条编造的 URL 直接提交 Google Ads → 拒登「目标网址广告客户无效」
+//   实证：wj10 temu.com 广告 681-LH1-temucom-US-0526-160992 6 条 sitelinks 全部拒登。
+// 新逻辑：sitemap+robots 都失败时返回空列表，上层 sitelink-ai-writer 不生成 sitelinks，
+//   广告主体（headlines/descriptions）仍可正常投放。宁缺毋滥，绝不编造假 URL。
 
 const SITEMAP_URLS = [
   "/sitemap.xml",
@@ -82,14 +80,6 @@ function isTopLevelPath(u: string): boolean {
     return parts.length <= 2;
   } catch {
     return false;
-  }
-}
-
-function absolutize(base: string, href: string): string | null {
-  try {
-    return new URL(href, base).toString();
-  } catch {
-    return null;
   }
 }
 
@@ -194,14 +184,7 @@ async function extractFromRobots(merchantUrl: string, proxyUrl: string | null): 
   }
 }
 
-function probeCommonPaths(merchantUrl: string): string[] {
-  const out: string[] = [];
-  for (const p of COMMON_PATHS) {
-    const u = absolutize(merchantUrl, p);
-    if (u) out.push(u);
-  }
-  return out;
-}
+// D-031b (C-091)：probeCommonPaths 已废弃 — 编造的 URL 必然导致 Google Ads 拒登。
 
 async function headIsOk(url: string, proxyUrl: string | null): Promise<boolean> {
   const doHead = async (useProxy: boolean): Promise<boolean> => {
@@ -288,10 +271,12 @@ export async function autoExpandSitelinks(opts: {
     }
   }
 
+  // D-031b (C-091)：移除 COMMON_PATHS 兜底分支。
+  // 当 sitemap + robots 都拿不到候选时，直接放弃 sitelinks，
+  // 不再编造 /shop /products 等通用路径 — 这些路径在 Google Ads 校验时
+  // 会因 "广告客户无效" 拒登整个广告（详见 设计方案.md D-031b）。
   if (candidates.size + existing.length < targetCount) {
-    for (const u of probeCommonPaths(merchantUrl)) {
-      if (!isBadSitelinkUrl(u)) candidates.add(u);
-    }
+    console.warn(`[SitelinkExpand] sitemap+robots 均未抽到候选，merchantUrl=${merchantUrl} → 放弃 sitelinks（不再用 COMMON_PATHS 编造，避免 Google Ads 拒登）`);
   }
 
   // D-028 v3：判断商家 host 是否已 challenged（CF/DataDome 强反爬）。
