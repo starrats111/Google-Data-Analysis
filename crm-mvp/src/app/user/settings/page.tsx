@@ -176,12 +176,14 @@ function PlatformConnectionsTab() {
     return map;
   }, [connections]);
 
-  // D-026: 计算连接健康等级
+  // D-033: 三次重试策略 — 健康等级计算
   const computeHealthLevel = (conn: Record<string, unknown>): "ok" | "warn" | "error" => {
     const status = String(conn.status || "");
     const consecutiveFailures = Number(conn.consecutive_failures || 0);
-    if (status === "error" || consecutiveFailures >= 1) return "error";
-    if (status === "unverified") return "warn";
+    // >= 3 次连续失败 或 status='error' → 红
+    if (status === "error" || consecutiveFailures >= 3) return "error";
+    // 1-2 次失败（正在重试中）或 unverified 或 从未同步 → 黄
+    if (status === "unverified" || consecutiveFailures >= 1) return "warn";
     const lastSyncedAt = conn.last_synced_at;
     if (!lastSyncedAt) return "warn";
     const ageHours = (Date.now() - new Date(String(lastSyncedAt)).getTime()) / 3600000;
@@ -229,8 +231,16 @@ function PlatformConnectionsTab() {
                       const accName = (conn.account_name as string) || p.code;
                       // D-026: 三态健康展示
                       const health = computeHealthLevel(conn);
+                      const consecutiveFailures = Number(conn.consecutive_failures || 0);
                       const tagColor = health === "ok" ? "green" : health === "warn" ? "gold" : "red";
-                      const tagText = health === "ok" ? accName : health === "warn" ? `${accName} (待验证)` : `${accName} (异常)`;
+                      // D-033: 区分三种状态文字
+                      const tagText = health === "ok"
+                        ? accName
+                        : health === "error"
+                          ? `${accName} (异常)`
+                          : consecutiveFailures >= 1
+                            ? `${accName} (验证中 ${consecutiveFailures}/3)`
+                            : `${accName} (待验证)`;
                       const lastError = (conn.last_error as string) || "";
                       const lastSync = conn.last_synced_at ? new Date(String(conn.last_synced_at)).toLocaleString("zh-CN") : "从未";
                       const lastAttempt = conn.last_sync_attempt_at ? new Date(String(conn.last_sync_attempt_at)).toLocaleString("zh-CN") : "—";

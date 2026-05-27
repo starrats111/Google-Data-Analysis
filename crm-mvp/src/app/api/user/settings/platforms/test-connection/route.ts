@@ -2,7 +2,7 @@ import { NextRequest } from "next/server";
 import { getUserFromRequest } from "@/lib/auth";
 import { apiSuccess, apiError, normalizePlatformCode } from "@/lib/constants";
 import prisma from "@/lib/prisma";
-import { markConnectionSuccess, markConnectionFailure } from "@/lib/connection-health";
+import { markConnectionUserVerified, markConnectionFailure } from "@/lib/connection-health";
 import dayjs from "dayjs";
 
 /**
@@ -82,9 +82,11 @@ export async function POST(req: NextRequest) {
       }, "API 连接测试失败");
     }
 
-    // 成功：如果是既有连接，写成功状态（清空 last_error + 恢复 connected）
+    // 成功：用户手动测试通过 = API 绝对可用，强制清零 consecutive_failures
+    // D-033: 即使自检（auto-sync）之前失败过，用户手动验证通过也代表 API 没问题，
+    //         是我们自检的瞬态/网络问题，不应保留失败计数。
     if (connFromDb) {
-      await markConnectionSuccess(connFromDb.id);
+      await markConnectionUserVerified(connFromDb.id);
     }
 
     return apiSuccess({

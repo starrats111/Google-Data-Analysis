@@ -41,7 +41,11 @@ export async function GET(req: NextRequest) {
   // 24 小时前的时间点
   const cutoff = new Date(Date.now() - 24 * 3600 * 1000);
 
-  // 扫所有未删除的连接 + 关联 user + team（组长在 teams.leader_id）
+  // D-033: 只扫「确认异常」的连接，排除新增/瞬态失败的干扰
+  //   - status='error'：已达 3 次连续失败阈值，确认异常
+  //   - 从未同步 但 created_at > 6h 前 且 consecutive_failures >= 1：加了之后一直没验证通过
+  //   - last_synced_at 过期 且 consecutive_failures >= 1：曾成功但现在连续出错
+  //   排除：刚加的新连接（created_at < 6h）和 0 次失败的待验证连接（可能 API 有数据但 0 条交易）
   type RawConnRow = {
     id: bigint;
     user_id: bigint;
@@ -54,6 +58,7 @@ export async function GET(req: NextRequest) {
     username: string;
     leader_id: bigint | null;
   };
+  const sixHoursAgo = new Date(Date.now() - 6 * 3600 * 1000);
   const rawRows: RawConnRow[] = await prisma.$queryRawUnsafe(`
     SELECT pc.id, pc.user_id, pc.platform, pc.account_name, pc.status,
            pc.last_synced_at, pc.last_error, pc.consecutive_failures,
@@ -63,9 +68,13 @@ export async function GET(req: NextRequest) {
     LEFT JOIN teams t ON t.id = u.team_id AND t.is_deleted = 0
     WHERE pc.is_deleted = 0
       AND pc.api_key IS NOT NULL
-      AND (pc.status = 'error' OR pc.last_synced_at IS NULL OR pc.last_synced_at < ?)
+      AND (
+        pc.status = 'error'
+        OR (pc.last_synced_at IS NULL AND pc.created_at < ? AND pc.consecutive_failures >= 1)
+        OR (pc.last_synced_at < ? AND pc.consecutive_failures >= 1)
+      )
     ORDER BY pc.user_id, pc.platform
-  `, cutoff);
+  `, sixHoursAgo, cutoff);
 
   // raw query 的 unsigned int / bigint 字段统一 normalize（防 JSON.stringify TypeError）
   const rawConns = rawRows.map((r) => ({
