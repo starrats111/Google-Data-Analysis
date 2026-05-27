@@ -821,6 +821,9 @@ const FORMAT_VIOLATION_PATTERNS: Array<{ re: RegExp; label: string; hint: string
   { re: /[A-Z]{4,}/, label: "all_caps_word", hint: "Avoid ALL CAPS words; use Title Case instead." },
   { re: /[✓✔★☆♥♡❤🎁🔥💯✨]/, label: "decorative_symbol", hint: "Remove decorative symbols (✓★♥🔥 etc.) — Google Ads disallows them." },
   { re: /\{\s*(?:KeyWord|keyword|param\d)\s*:/i, label: "dki_misuse", hint: "DKI placeholders like {KeyWord:…} must follow exact Google Ads syntax; remove if misused." },
+  // Title Case 大写规范：介词/冠词/连词在标题中间不应大写（Google 大写字母政策）
+  // 匹配：空格之后出现大写介词/冠词/连词（后面接空格/标点），即非行首位置
+  { re: / (?:Of|In|For|To|At|By|With|On|From|As|An|The|And|But|Or|Nor|So|Yet)(?=[ ,.\-—!?$])/, label: "improper_title_case", hint: "Do not capitalize prepositions (Of/In/For/To/At/By/With/On/From/As), articles (An/The), or conjunctions (And/But/Or/Nor/So/Yet) in the MIDDLE of a headline. E.g. 'End of Play Sneakers' not 'End Of Play Sneakers'." },
 ];
 
 // 国家标签泄漏（brand + " NL"/"BE"/"DE"/"FR" 等）

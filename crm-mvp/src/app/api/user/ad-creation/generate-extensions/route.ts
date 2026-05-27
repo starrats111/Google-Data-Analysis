@@ -114,7 +114,10 @@ STRICT RULES:
 ${existingList}
 4. No dates, no fabricated discount numbers
 5. Each headline must start with a DIFFERENT word
-6. TRADEMARK: Do NOT use the brand name "${merchantName}" in any headline. Describe what the merchant sells using functional/category language instead (e.g. "精選旅遊行程" not "${merchantName}行程").
+6. TRADEMARK: Do NOT use the brand name "${merchantName}" or any founder/designer personal name in any headline. Use functional/category language instead.
+7. CAPITALIZATION: Use standard Title Case — do NOT capitalize prepositions (of, in, for, to, at, by, with, on, from, as), articles (a, an, the), or conjunctions (and, but, or, nor, so, yet) in the MIDDLE of a headline. Never use ALL CAPS words.
+   ✗ "End Of Play Sneakers" → ✓ "End-of-Play Sneakers"
+   ✗ "Shop For The Best Deals" → ✓ "Shop for the Best Deals"
 
 Return ONLY a JSON array of exactly ${needed} strings. Example: ["Headline one","Headline two"]`;
 
@@ -160,7 +163,8 @@ STRICT RULES:
 ${existingList}
 4. No fabricated discounts or unverified claims
 5. Each description must open with a DIFFERENT word
-6. TRADEMARK: Do NOT use the brand name "${merchantName}" in any description. Use functional/benefit language instead.
+6. TRADEMARK: Do NOT use the brand name "${merchantName}" or any founder/designer personal name in any description. Use functional/benefit language instead.
+7. CAPITALIZATION: Descriptions must use sentence case — only capitalize the first word and proper nouns. Never use ALL CAPS words.
 
 Return ONLY a JSON array of exactly ${needed} strings.`;
 
@@ -1012,12 +1016,24 @@ ${langEnforcement}
      ✓ Verified percentage off ("20% Off Sitewide") is allowed in headlines if confirmed on the website.
 7. TRADEMARK COMPLIANCE — MANDATORY (affiliate marketing context):
    · Do NOT use the exact merchant brand name "${merchantName}" in ANY headline or description.
-   · This system runs in an affiliate marketing context. Using a trademarked brand name in ad copy
-     violates Google Ads trademark policy and will cause the entire ad to be REJECTED.
+   · Do NOT use the founder's / designer's personal name in any headline or description.
+   · This system runs in an affiliate marketing context. Using a trademarked brand name or person's name
+     in ad copy violates Google Ads trademark policy and will cause the entire ad to be REJECTED.
    · Instead, describe WHAT the merchant sells using functional/category language:
      ✗ "${merchantName} Exclusive Deals" / "${merchantName} 獨家規劃" → TRADEMARK VIOLATION
      ✓ "Curated Travel Packages" / "精選全球旅遊行程" → COMPLIANT
    · If the brand name appears in website content, use it as context only — never quote it in output.
+8. CAPITALIZATION COMPLIANCE — MANDATORY (Google Ads policy):
+   · Headlines must follow standard English Title Case rules:
+     – Capitalize: nouns, verbs, adjectives, adverbs, and the first word of the headline.
+     – Do NOT capitalize in the MIDDLE of a headline: prepositions (of, in, for, to, at, by, with,
+       on, from, as, into, through, about, between, before, after), articles (a, an, the), or
+       coordinating conjunctions (and, but, or, nor, so, yet).
+     ✗ "End Of Play Sneakers" → WRONG ("Of" is a preposition, must be lowercase)
+     ✗ "Shop For The Best Deals" → WRONG ("For" and "The" in middle position must be lowercase)
+     ✓ "End-of-Play Sneakers" / "Shop for the Best Deals" → CORRECT
+   · Descriptions must use standard sentence case (capitalize only the first word and proper nouns).
+   · NEVER write any word entirely in ALL CAPS (e.g. FREE, SALE, NOW) — this is a policy violation.
 ${discountGuidance}${shippingGuidance}
 
 ═══ MERCHANT INTELLIGENCE — READ ALL BEFORE WRITING ═══
