@@ -529,19 +529,110 @@ async function syncAllCampaignStatuses(): Promise<unknown> {
         updated += r.count;
       }
 
+      // D-034：预加载该 MCC 下所有「CRM 已暂停」的 campaign
+      // 目的：在 Google Ads 返回 ENABLED 时，检测 PAUSED→ENABLED 漂移，自动重试暂停，
+      //        失败时立即通知用户（而不是悄无声息地把 DB 改回 ENABLED）
+      const pausedCampaigns = await prisma.campaigns.findMany({
+        where: { user_id: mcc.user_id, mcc_id: mcc.id, is_deleted: 0, google_status: "PAUSED" },
+        select: { id: true, google_campaign_id: true, customer_id: true, campaign_name: true },
+      });
+      const pausedByGcid = new Map(pausedCampaigns.map((c) => [c.google_campaign_id, c]));
+
       for (const s of statuses) {
-        const result = await prisma.campaigns.updateMany({
-          where: {
-            user_id: mcc.user_id,
-            google_campaign_id: s.campaign_id,
-            is_deleted: 0,
-          },
-          data: {
-            google_status: s.status,
-            last_google_sync_at: new Date(),
-          },
-        });
-        updated += result.count;
+        // D-034：检测 PAUSED→ENABLED 漂移
+        if (s.status === "ENABLED" && pausedByGcid.has(s.campaign_id)) {
+          const existing = pausedByGcid.get(s.campaign_id)!;
+          log(`  [D-034] 检测到 PAUSED→ENABLED 漂移 campaign_id=${existing.id} gcid=${s.campaign_id}，尝试自动重新暂停...`);
+
+          let rePauseOk = false;
+          try {
+            const { updateCampaignStatus } = await import("@/lib/google-ads");
+            const rp = await updateCampaignStatus(
+              credentials,
+              (existing.customer_id || "").replace(/-/g, ""),
+              s.campaign_id,
+              "PAUSED",
+            );
+            if (rp.success) {
+              rePauseOk = true;
+              log(`  [D-034] 自动重新暂停成功 campaign_id=${existing.id} gcid=${s.campaign_id}`);
+            } else {
+              log(`  [D-034] 自动重新暂停失败（API返回失败）campaign_id=${existing.id}: ${rp.message}`);
+            }
+          } catch (err) {
+            log(`  [D-034] 自动重新暂停异常 campaign_id=${existing.id}: ${err instanceof Error ? err.message.slice(0, 120) : String(err)}`);
+          }
+
+          if (rePauseOk) {
+            // 重新暂停成功：保持 PAUSED，仅刷新同步时间
+            await prisma.campaigns.update({
+              where: { id: existing.id },
+              data: { last_google_sync_at: new Date() },
+            });
+          } else {
+            // 重新暂停失败：同步真实状态（ENABLED），并立即发系统通知
+            await prisma.campaigns.update({
+              where: { id: existing.id },
+              data: { google_status: "ENABLED", last_google_sync_at: new Date() },
+            });
+            updated++;
+
+            const dupCutoff24h = new Date(Date.now() - 24 * 3600 * 1000);
+            const alertTitle = `广告状态同步异常：${existing.campaign_name || `campaign#${existing.id}`}`;
+            const dupCount = await prisma.notifications.count({
+              where: {
+                user_id: mcc.user_id,
+                type: "alert",
+                title: alertTitle,
+                created_at: { gte: dupCutoff24h },
+                is_deleted: 0,
+              },
+            });
+            if (dupCount === 0) {
+              const alertContent = [
+                `广告系列「${existing.campaign_name}」在 CRM 已标记为「暂停」，`,
+                `但 Google Ads 端反查显示仍处于「启用」状态，系统自动重新暂停失败。`,
+                ``,
+                `可能原因：`,
+                `1. MCC 服务账号已失效或失去该 CID 的管理权限；`,
+                `2. Google Ads 账号存在合规问题，限制了外部操作；`,
+                `3. 网络 / API 临时异常（可尝试在 CRM「数据中心」重新点击「暂停」）。`,
+                ``,
+                `CID: ${existing.customer_id || "未知"}, Google Campaign ID: ${s.campaign_id}`,
+              ].join("\n");
+              await prisma.notifications.create({
+                data: {
+                  user_id: mcc.user_id,
+                  type: "alert",
+                  title: alertTitle,
+                  content: alertContent,
+                  metadata: JSON.stringify({
+                    source: "D-034 syncAllCampaignStatuses",
+                    campaign_id: existing.id.toString(),
+                    google_campaign_id: s.campaign_id,
+                    customer_id: existing.customer_id,
+                    mcc_id: mcc.id.toString(),
+                  }),
+                },
+              });
+              log(`  [D-034] 已发告警通知 user_id=${mcc.user_id} campaign=${existing.campaign_name}`);
+            }
+          }
+        } else {
+          // 正常情况：直接同步状态
+          const result = await prisma.campaigns.updateMany({
+            where: {
+              user_id: mcc.user_id,
+              google_campaign_id: s.campaign_id,
+              is_deleted: 0,
+            },
+            data: {
+              google_status: s.status,
+              last_google_sync_at: new Date(),
+            },
+          });
+          updated += result.count;
+        }
       }
 
       // 更新 CID 可用状态
