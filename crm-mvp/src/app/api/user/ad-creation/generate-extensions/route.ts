@@ -561,9 +561,11 @@ export async function POST(req: NextRequest) {
           //     - 内层 STRATEGY_BUDGET_MS = 160s(有代理) / 90s(无代理)（crawl-pipeline.ts:1784）
           //     - 内层单 puppeteer 策略 SINGLE_STRATEGY_TIMEOUT_MS = 75s（crawl-pipeline.ts:1801）
           //   ===> 外层 60s/90s < 内层 75s 单策略！第一个策略刚开始就被外层强制砍断！
-          //   D-031 修复 spec（07 拍板 R3 路线 — 加强爬虫能力 + 不能出现失败商家）：
-          //     - 普通 host：120s （= 内层无代理 90s + 30s safety margin，可容纳 1 个完整 puppeteer 策略）
-          //     - challenged host：200s（= 内层有代理 160s + 40s safety，可容纳 2 个完整 puppeteer 策略）
+          //   D-031b2 修复 spec（D-031 遗留 bug：只修了 challenged 路径，普通 host 有代理时仍超时）：
+          //     内层 STRATEGY_BUDGET_MS（crawl-pipeline.ts）= 有代理 160s / 无代理 90s
+          //     外层必须 > 内层最大值才不会提前截断：
+          //     - 普通 host：180s（= 内层有代理 160s + 20s safety，无代理 90s 也被覆盖）
+          //     - challenged host：200s（= 内层有代理 160s + 40s safety，已足够）
           //   附带：起始打 timer，记录 buildCrawlCache 实际耗时方便后续调参。
           let merchantHostForTimeout = "";
           try {
@@ -571,11 +573,11 @@ export async function POST(req: NextRequest) {
           } catch {}
           const hostKey = merchantHostForTimeout ? getHostKey(merchantHostForTimeout) : "";
           const hostChallengedForTimeout = hostKey ? isHostChallenged(hostKey) : false;
-          const TIMEOUT_MS = hostChallengedForTimeout ? 200000 : 120000;
+          const TIMEOUT_MS = hostChallengedForTimeout ? 200000 : 180000;
           // lock 强制释放时间稍长于 producer timeout，确保 inflight caller 一定能
           // 拿到 producer 的最终结果（stub or real cache），不会被 lock 提前释放。
           const LOCK_TIMEOUT_MS_LOCAL = TIMEOUT_MS + 10000;
-          console.log(`[Extensions] D-031：buildCrawlCache 启动 timeout=${TIMEOUT_MS / 1000}s host=${merchantHostForTimeout} challenged=${hostChallengedForTimeout}`);
+          console.log(`[Extensions] D-031b2：buildCrawlCache 启动 timeout=${TIMEOUT_MS / 1000}s host=${merchantHostForTimeout} challenged=${hostChallengedForTimeout}`);
           const buildStartedAt = Date.now();
           const newCache: CrawlCache = await withCrawlInflightLock(crawlKey, async () => {
             const timeout = new Promise<CrawlCache>((_, reject) =>
@@ -598,7 +600,7 @@ export async function POST(req: NextRequest) {
               const msg = err instanceof Error ? err.message : String(err);
               const elapsedMs = Date.now() - buildStartedAt;
               if (msg === "buildCrawlCache-timeout") {
-                console.warn(`[Extensions] D-031：buildCrawlCache ${TIMEOUT_MS / 1000}s 超时降级，使用完整占位 cache：merchantUrl=${merchantUrl} elapsedMs=${elapsedMs}`);
+                console.warn(`[Extensions] D-031b2：buildCrawlCache ${TIMEOUT_MS / 1000}s 超时降级，使用完整占位 cache：merchantUrl=${merchantUrl} elapsedMs=${elapsedMs}`);
                 const stub: CrawlCache = {
                   links: [],
                   images: [],
