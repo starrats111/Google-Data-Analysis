@@ -259,6 +259,7 @@ export default function AdPreviewPage() {
   // 关键词获取
   const [kwFetching, setKwFetching] = useState(false);
   const [semrushFailed, setSemrushFailed] = useState(false);
+  const [semrushFailMsg, setSemrushFailMsg] = useState("");
   const [semrushUrl, setSemrushUrl] = useState("");
   const [semrushUrlFetching, setSemrushUrlFetching] = useState(false);
 
@@ -586,11 +587,14 @@ export default function AdPreviewPage() {
       let json: any;
       try { json = JSON.parse(text); } catch { throw new Error("服务器返回异常，请刷新页面后重试"); }
       if (json.code !== 0) {
+        const errMsg = json.message || "SemRush 自动获取失败，可粘贴 3UE 链接手动获取";
         setSemrushFailed(true);
-        message.error({ content: json.message || "SemRush 自动获取失败，可粘贴 3UE 链接手动获取", duration: 6 });
+        setSemrushFailMsg(errMsg);
+        message.error({ content: errMsg, duration: 6 });
         return;
       }
       setSemrushFailed(false);
+      setSemrushFailMsg("");
       const kws = json.data?.keywords || [];
       const rawCount = json.data?.raw_keyword_count ?? kws.length;
       if (kws.length === 0) { message.warning("SemRush 未找到该商家的关键词，请手动输入"); return; }
@@ -1827,6 +1831,11 @@ export default function AdPreviewPage() {
                 message="SemRush 自动获取失败"
                 description={
                   <div>
+                    {semrushFailMsg && (
+                      <Text type="danger" style={{ display: "block", marginBottom: 6, fontSize: 12 }}>
+                        {semrushFailMsg}
+                      </Text>
+                    )}
                     <Text type="secondary" style={{ display: "block", marginBottom: 8 }}>
                       可粘贴 3UE SemRush 链接手动获取关键词，或在下方直接输入关键词
                     </Text>
