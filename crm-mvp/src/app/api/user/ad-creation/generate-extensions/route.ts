@@ -103,17 +103,18 @@ async function retryMissingHeadlines(
   for (let attempt = 0; attempt < maxRetries && result.length < count; attempt++) {
     const needed = count - result.length;
     const existingList = result.map((h, i) => `${i + 1}. "${h}"`).join("\n");
-    const prompt = `You are writing Google Ads headlines for "${merchantName}".
+    const prompt = `You are writing Google Ads headlines for a merchant that sells: ${merchantName}.
 
 You must generate exactly ${needed} NEW headlines in ${languageName}.
 
 STRICT RULES:
 1. Each headline MUST be ≤ 30 characters (count EVERY character including spaces and punctuation)
-2. Write ONLY in ${languageName} — no English unless it is the brand name
+2. Write ONLY in ${languageName}
 3. Do NOT duplicate or rephrase any of these existing headlines:
 ${existingList}
 4. No dates, no fabricated discount numbers
 5. Each headline must start with a DIFFERENT word
+6. TRADEMARK: Do NOT use the brand name "${merchantName}" in any headline. Describe what the merchant sells using functional/category language instead (e.g. "精選旅遊行程" not "${merchantName}行程").
 
 Return ONLY a JSON array of exactly ${needed} strings. Example: ["Headline one","Headline two"]`;
 
@@ -148,7 +149,7 @@ async function retryMissingDescriptions(
   for (let attempt = 0; attempt < maxRetries && result.length < count; attempt++) {
     const needed = count - result.length;
     const existingList = result.map((d, i) => `${i + 1}. "${d}"`).join("\n");
-    const prompt = `You are writing Google Ads descriptions for "${merchantName}".
+    const prompt = `You are writing Google Ads descriptions for a merchant that sells: ${merchantName}.
 
 Generate exactly ${needed} NEW descriptions in ${languageName}.
 
@@ -159,6 +160,7 @@ STRICT RULES:
 ${existingList}
 4. No fabricated discounts or unverified claims
 5. Each description must open with a DIFFERENT word
+6. TRADEMARK: Do NOT use the brand name "${merchantName}" in any description. Use functional/benefit language instead.
 
 Return ONLY a JSON array of exactly ${needed} strings.`;
 
@@ -1006,6 +1008,14 @@ ${langEnforcement}
    · NO discount codes or promo codes in headlines. Ever.
      ✗ "Use Code SAVE20" / "Enter Promo Code for 20% Off" → REJECTED from headlines
      ✓ Verified percentage off ("20% Off Sitewide") is allowed in headlines if confirmed on the website.
+7. TRADEMARK COMPLIANCE — MANDATORY (affiliate marketing context):
+   · Do NOT use the exact merchant brand name "${merchantName}" in ANY headline or description.
+   · This system runs in an affiliate marketing context. Using a trademarked brand name in ad copy
+     violates Google Ads trademark policy and will cause the entire ad to be REJECTED.
+   · Instead, describe WHAT the merchant sells using functional/category language:
+     ✗ "${merchantName} Exclusive Deals" / "${merchantName} 獨家規劃" → TRADEMARK VIOLATION
+     ✓ "Curated Travel Packages" / "精選全球旅遊行程" → COMPLIANT
+   · If the brand name appears in website content, use it as context only — never quote it in output.
 ${discountGuidance}${shippingGuidance}
 
 ═══ MERCHANT INTELLIGENCE — READ ALL BEFORE WRITING ═══
