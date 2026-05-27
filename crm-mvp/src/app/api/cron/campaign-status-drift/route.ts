@@ -22,6 +22,14 @@ export const maxDuration = 60;
  * 输出：
  *   - 检测到 drift → 发 notifications（type='alert'）给所属用户
  *   - 同 user × 同 campaign 24h 内只发一条避免噪音
+ *
+ * D-029 P2.6 修复（2026-05-27 实证误报）：
+ *   - `s.date > DATE(c.last_google_sync_at)` 严格大于（之前 >= 含歧义）
+ *     原因：ads_daily_stats 按天聚合，无法区分暂停当天 00:00-暂停时刻的合法 cost
+ *     vs 暂停时刻-23:59 的真漂移。改 > 后只看暂停日次日及以后的 cost。
+ *   - `last_google_sync_at < NOW() - 24h`（之前 6h）
+ *     原因：6h 太短，刚暂停几小时就被检测，跨"暂停日"边界制造假阳性。
+ *     24h 给一整天让真漂移浮出，误报率近 0。
  */
 function verifyCron(req: NextRequest): boolean {
   const secret = process.env.CRON_SECRET;
@@ -78,13 +86,13 @@ export async function GET(req: NextRequest) {
      AND s.date >= DATE_SUB(CURDATE(), INTERVAL 7 DAY)
      AND (
        c.last_google_sync_at IS NULL
-       OR s.date >= DATE(c.last_google_sync_at)
+       OR s.date > DATE(c.last_google_sync_at)
      )
      AND s.cost > 0
     WHERE c.is_deleted = 0
       AND c.google_status = 'PAUSED'
       AND c.last_google_sync_at IS NOT NULL
-      AND c.last_google_sync_at < DATE_SUB(NOW(), INTERVAL 6 HOUR)
+      AND c.last_google_sync_at < DATE_SUB(NOW(), INTERVAL 24 HOUR)
     GROUP BY c.id, c.user_id, c.mcc_id, c.customer_id, c.google_campaign_id,
              c.campaign_name, c.google_status, c.last_google_sync_at
     HAVING drift_cost >= 0.5
