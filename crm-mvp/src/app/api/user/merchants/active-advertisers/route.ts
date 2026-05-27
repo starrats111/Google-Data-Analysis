@@ -4,7 +4,7 @@ import { apiSuccess, apiError } from "@/lib/constants";
 import { withUser } from "@/lib/api-handler";
 import prisma from "@/lib/prisma";
 import { sqlAffiliateTxnValidPlatformConnection } from "@/lib/affiliate-transaction-sql";
-import { dateColumnStart, nowCST, txnStartOfMonthUTC } from "@/lib/date-utils";
+import { dateColumnStart, nowCST, txnStartOfMonthUTC, txnNextMonthStartUTC } from "@/lib/date-utils";
 
 /**
  * GET /api/user/merchants/active-advertisers?merchant_id=xxx&platform=YY
@@ -125,11 +125,7 @@ export const GET = withUser(async (req: NextRequest, { user }) => {
   const statsMonthStart = dateColumnStart(monthStartStr);
   const statsNextMonth = dateColumnStart(nextMonthStr);
   const txnMonthStart = txnStartOfMonthUTC();
-  const txnNextMonth = new Date(Date.UTC(
-    txnMonthStart.getUTCMonth() === 11 ? txnMonthStart.getUTCFullYear() + 1 : txnMonthStart.getUTCFullYear(),
-    (txnMonthStart.getUTCMonth() + 1) % 12,
-    1
-  ));
+  const txnNextMonth = txnNextMonthStartUTC();
 
   const allCampaignIds = activeUserIds.flatMap((e) => e.campaignIds);
 

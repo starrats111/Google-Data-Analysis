@@ -129,3 +129,15 @@ export function parseTxnDateEndExclusive(dateStr: string): Date {
 export function txnStartOfMonthUTC(): Date {
   return dayjs().tz(TZ).startOf("month").toDate();
 }
+
+/**
+ * affiliate_transactions 专用：CST 下月月初零点（"本月"结束边界）对应的 UTC 时间。
+ * 例：当前 2026-05-09 → CST 2026-06-01 00:00:00 = UTC 2026-05-31T16:00:00.000Z。
+ *
+ * 注意：不能用 txnStartOfMonthUTC().getUTCMonth()+1 来计算，
+ * 因为 txnStartOfMonthUTC() 返回的 UTC 时间实际上是上月末日（UTC 月份比 CST 月份早1），
+ * 直接对 UTC 月份 +1 会只得到 8 小时的窗口，导致佣金数据严重丢失。
+ */
+export function txnNextMonthStartUTC(): Date {
+  return dayjs().tz(TZ).startOf("month").add(1, "month").toDate();
+}

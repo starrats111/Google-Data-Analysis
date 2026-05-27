@@ -4,7 +4,7 @@ import { apiSuccess, apiError } from "@/lib/constants";
 import { withLeader } from "@/lib/api-handler";
 import prisma from "@/lib/prisma";
 import { sqlAffiliateTxnValidPlatformConnection } from "@/lib/affiliate-transaction-sql";
-import { nowCST, dateColumnStart, txnStartOfMonthUTC } from "@/lib/date-utils";
+import { nowCST, dateColumnStart, txnStartOfMonthUTC, txnNextMonthStartUTC } from "@/lib/date-utils";
 
 /**
  * GET /api/user/team/merchants?page=1&pageSize=50&search=xxx&platform=CG&sortField=monthly_commission&sortOrder=desc
@@ -107,11 +107,7 @@ export const GET = withLeader(async (req: NextRequest, { user }) => {
   const statsMonthStart = dateColumnStart(monthStartStr);
   const statsNextMonth = dateColumnStart(nextMonthStr);
   const txnMonthStart = txnStartOfMonthUTC();
-  const txnNextMonth = new Date(Date.UTC(
-    txnMonthStart.getUTCMonth() === 11 ? txnMonthStart.getUTCFullYear() + 1 : txnMonthStart.getUTCFullYear(),
-    (txnMonthStart.getUTCMonth() + 1) % 12,
-    1
-  ));
+  const txnNextMonth = txnNextMonthStartUTC();
 
   // ─── 第一步：全量查询 campaigns（所有商家，用于在投人数 + 后续花费）───
   const allUmIds = merchantEntries.flatMap((e) => e.umIds);
