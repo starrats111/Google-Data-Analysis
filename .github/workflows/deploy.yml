@@ -64,8 +64,13 @@ jobs:
             rm -rf .next 2>/dev/null || true
             echo ".next cleaned, size before: $(du -sh .next 2>/dev/null || echo 0)"
 
-            echo "===== 5b. Build (service keeps running on old code) ====="
-            NODE_OPTIONS="--max-old-space-size=512" npx next build 2>&1 | tail -20
+            echo "===== 5b. Build with WEBPACK (NOT turbopack) — C-111 critical fix ====="
+            # 真因 v3：Next.js 16.1.7 默认使用 turbopack 生产构建，turbopack 在生成
+            # client chunk 时会引用 module ID（如 244451 Spin / 128473 / 159360 等）
+            # 但同时不把这些 module 输出到任何 chunk 文件 → 浏览器 ChunkLoadError。
+            # `optimizePackageImports` 移除无效，因为 turbopack 本身有此 bug。
+            # 解决：用 `--webpack` 强制走 webpack（久经考验），bundle 稍大但稳定。
+            NODE_OPTIONS="--max-old-space-size=768" npx next build --webpack 2>&1 | tail -20
 
             echo "===== 6. Verify build ====="
             if [ ! -f "$CRM_DIR/.next/BUILD_ID" ]; then
