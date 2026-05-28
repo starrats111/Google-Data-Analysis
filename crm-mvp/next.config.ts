@@ -52,9 +52,13 @@ const nextConfig: NextConfig = {
   // 生产环境关闭浏览器 source map — 节省 ~30% 构建内存和磁盘
   productionBrowserSourceMaps: false,
 
-  // ─── 包导入优化 — 按需加载，减少 bundle 体积 ───
+  // ─── experimental 配置 ───
+  // C-111 / D-046.A 1.B 修复：删除 optimizePackageImports
+  // 真因：Next.js 16 默认 Turbopack 生产构建，与 optimizePackageImports（Next 15 webpack 时代优化）
+  //       叠加时打包遗漏 antd 内部子 module（244451 Spin / 829672 / 836938 / 271645），
+  //       导致懒加载 chunk 抛 ChunkLoadError → 前端 client-side exception。
+  //       Antd v6 自身已支持 ESM tree-shaking，移除该配置后 bundle 仅增 5-10%。
   experimental: {
-    optimizePackageImports: ["antd", "@ant-design/icons", "recharts", "dayjs"],
     serverActions: {
       bodySizeLimit: '5mb',
     },
