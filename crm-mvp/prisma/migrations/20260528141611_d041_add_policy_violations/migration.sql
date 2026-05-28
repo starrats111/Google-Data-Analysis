@@ -1,0 +1,46 @@
+-- D-041 / Policy Hub — Google Ads 政策违规事实表
+-- 数据源：Google Ads API mutate 返回的 PolicyViolationDetails（深度解析见 src/lib/policy-hub/error-parser.ts）
+-- 用途：①拒登可统计/分析（admin 后台看板）；②top 违规规则反向优化 prompt；③商家政策画像数据源
+-- 软删除：本表为审计事实表，不软删；resolved_at 为「已修复时间」标记
+
+CREATE TABLE `policy_violations` (
+  `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `campaign_id` BIGINT UNSIGNED NULL,
+  `user_merchant_id` BIGINT UNSIGNED NULL,
+  `user_id` BIGINT UNSIGNED NULL,
+  `mcc_id` BIGINT UNSIGNED NULL,
+  `google_customer_id` VARCHAR(32) NULL,
+  `campaign_name` VARCHAR(255) NULL,
+  `merchant_domain` VARCHAR(255) NULL,
+  `country` VARCHAR(8) NULL,
+  `policy_category` VARCHAR(32) NOT NULL,
+  `policy_subcategory` VARCHAR(64) NOT NULL,
+  `policy_label_zh` VARCHAR(64) NOT NULL,
+  `policy_official_url` VARCHAR(512) NOT NULL,
+  `error_code` VARCHAR(128) NOT NULL,
+  `policy_name` VARCHAR(128) NOT NULL,
+  `external_policy_name` VARCHAR(128) NULL,
+  `external_policy_description` TEXT NULL,
+  `evidence_field` VARCHAR(64) NOT NULL,
+  `evidence_index` INT NOT NULL DEFAULT -1,
+  `violating_text` TEXT NULL,
+  `trigger_value` TEXT NULL,
+  `field_path` VARCHAR(512) NULL,
+  `severity` VARCHAR(16) NOT NULL DEFAULT 'warning',
+  `suggested_fix` TEXT NULL,
+  `is_exemptible` TINYINT NOT NULL DEFAULT 0,
+  `google_raw_error_json` LONGTEXT NULL,
+  `message` TEXT NULL,
+  `submitted_at` DATETIME(0) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `resolved_at` DATETIME(0) NULL,
+  `created_at` DATETIME(0) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` DATETIME(0) NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  INDEX `idx_campaign` (`campaign_id`),
+  INDEX `idx_user_time` (`user_id`, `submitted_at`),
+  INDEX `idx_merchant_time` (`user_merchant_id`, `submitted_at`),
+  INDEX `idx_category` (`policy_category`, `policy_subcategory`),
+  INDEX `idx_policy_name` (`policy_name`),
+  INDEX `idx_severity_resolved` (`severity`, `resolved_at`),
+  INDEX `idx_submitted_at` (`submitted_at`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;

@@ -1039,3 +1039,56 @@ model semrush_health_logs {
   @@index([checked_at], map: "idx_checked_at")
   @@index([error_type, checked_at], map: "idx_errtype_time")
 }
+
+// -----------------------------------------------------------
+// 37. D-041 / Policy Hub — Google Ads 政策违规事实表
+// 数据源：Google Ads API mutate 返回的 PolicyViolationDetails（深度解析见 src/lib/policy-hub/error-parser.ts）
+// 用途：①拒登可统计/分析（admin 后台看板）；②top 违规规则反向优化 prompt；③商家政策画像数据源
+// 软删除：本表为审计事实表，不软删；resolved_at 为「已修复时间」标记
+// -----------------------------------------------------------
+model policy_violations {
+  id                          BigInt    @id @default(autoincrement()) @db.UnsignedBigInt
+  campaign_id                 BigInt?   @db.UnsignedBigInt // campaigns.id（可空：未提交前 final gate 也会写入）
+  user_merchant_id            BigInt?   @db.UnsignedBigInt
+  user_id                     BigInt?   @db.UnsignedBigInt
+  mcc_id                      BigInt?   @db.UnsignedBigInt
+  google_customer_id          String?   @db.VarChar(32) // Google CID（不带 dash）
+  campaign_name               String?   @db.VarChar(255) // 便于看板显示
+  merchant_domain             String?   @db.VarChar(255)
+  country                     String?   @db.VarChar(8)
+  // 4 大类映射（policy-categories.ts）
+  policy_category             String    @db.VarChar(32) // prohibited / prohibited_practices / restricted / editorial_technical / unknown
+  policy_subcategory          String    @db.VarChar(64) // 子项 slug，对应 D-042 政策知识库 markdown 路径
+  policy_label_zh             String    @db.VarChar(64) // 中文显示名
+  policy_official_url         String    @db.VarChar(512) // Google 官方政策原文 URL
+  // Google Ads API 原始字段
+  error_code                  String    @db.VarChar(128) // 如 "policyViolationError:POLICY_ERROR"
+  policy_name                 String    @db.VarChar(128) // policyViolationDetails.key.policyName，如 "trademark_in_ad_text"
+  external_policy_name        String?   @db.VarChar(128) // 如 "Trademarks"
+  external_policy_description String?   @db.Text
+  // 违规位置与文本
+  evidence_field              String    @db.VarChar(64) // 可读化字段（"标题3" / "Sitelink desc1" / "Callout 文本"）
+  evidence_index              Int       @default(-1) @db.Int // mutate_operations 顶层 index（-1 表示无）
+  violating_text              String?   @db.Text // policyViolationDetails.key.violatingText，如 "BLACK+DECKER"
+  trigger_value               String?   @db.Text // 原始 trigger 值
+  field_path                  String?   @db.VarChar(512) // 原始 fieldPath（mutate_operations[5] > ad > headlines[3]）
+  // 严重度 + 修复建议
+  severity                    String    @default("warning") @db.VarChar(16) // critical / warning / minor
+  suggested_fix               String?   @db.Text
+  is_exemptible               Int       @default(0) @db.TinyInt // 是否可申诉
+  // 元数据
+  google_raw_error_json       String?   @db.LongText // 原始错误体（前 3000 字符）
+  message                     String?   @db.Text // Google Ads message 原文
+  submitted_at                DateTime  @default(now()) @db.DateTime(0) // 广告提交时间
+  resolved_at                 DateTime? @db.DateTime(0) // 已修复时间（员工重新提交成功后由 admin 看板手动标记 / 自动检测）
+  created_at                  DateTime  @default(now()) @db.DateTime(0)
+  updated_at                  DateTime  @default(now()) @updatedAt @db.DateTime(0)
+
+  @@index([campaign_id], map: "idx_campaign")
+  @@index([user_id, submitted_at], map: "idx_user_time")
+  @@index([user_merchant_id, submitted_at], map: "idx_merchant_time")
+  @@index([policy_category, policy_subcategory], map: "idx_category")
+  @@index([policy_name], map: "idx_policy_name")
+  @@index([severity, resolved_at], map: "idx_severity_resolved")
+  @@index([submitted_at], map: "idx_submitted_at")
+}

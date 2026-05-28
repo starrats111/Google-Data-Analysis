@@ -10,6 +10,7 @@ import { extractJsonFromAi } from "@/lib/crawl-pipeline";
 import { isPolicyRiskKeyword } from "@/lib/keyword-optimizer";
 import { mutateGoogleAds, dollarsToMicros, queryGoogleAds, parseGoogleAdsErrors, formatGoogleAdsErrorMessage, isOperationNotPermittedError } from "@/lib/google-ads";
 import type { GoogleAdsViolation } from "@/lib/google-ads";
+import { parsePolicyError, logPolicyViolations, type ParsedPolicyError } from "@/lib/policy-hub";
 import { assignFormalCampaignNameBeforeSubmit, resolvePlatformLabel } from "@/lib/campaign-naming";
 import { readFile } from "fs/promises";
 import { existsSync } from "fs";
@@ -1086,6 +1087,31 @@ export async function POST(req: NextRequest) {
       const errViolations = (mutateErr as any)?.violations as GoogleAdsViolation[] | undefined;
       const rawErrBody = (mutateErr as any)?.rawBody as string | undefined;
 
+      // ─── D-041 Policy Hub：提前深度解析 PolicyViolationDetails ───
+      // 把 -2/-3/1731343072 之类的级联失败标识过滤掉，
+      // 解析出真正的 policyName + violatingText + 可读字段（如「标题3」），
+      // 后续 throw 用 parsedPolicyError.readableMessage 替代旧的拼字符串。
+      const parsedPolicyError: ParsedPolicyError | null = rawErrBody
+        ? parsePolicyError(rawErrBody)
+        : null;
+      // 写入 policy_violations 表（不阻塞主流程：写表失败仅 console.warn）
+      if (parsedPolicyError && parsedPolicyError.primary.length > 0) {
+        try {
+          await logPolicyViolations(parsedPolicyError, {
+            campaign_id: campaign.id,
+            user_merchant_id: campaign.user_merchant_id,
+            user_id: userId,
+            mcc_id: mccAccount.id,
+            google_customer_id: cid,
+            campaign_name: campaign.campaign_name,
+            merchant_domain: finalUrl ? new URL(finalUrl).hostname : null,
+            country: campaign.target_country,
+          });
+        } catch (logErr) {
+          console.warn("[AdSubmit] D-041 logPolicyViolations 失败（不影响广告流程）:", logErr instanceof Error ? logErr.message : logErr);
+        }
+      }
+
       const hasViolationRetriable = errViolations?.some((v) =>
         v.errorCode.toLowerCase().includes("policy")
         || v.errorCode.toLowerCase().includes("prohibited")
@@ -1141,7 +1167,15 @@ export async function POST(req: NextRequest) {
           // Google 上只有广告系列+广告组、没有广告的"空壳"状态。
           const RSA_AD_INDEX = 5;
           if (violatingIndices.has(RSA_AD_INDEX)) {
-            const triggerList = errViolations?.filter((v) => v.trigger).map((v) => `「${v.trigger}」`) || [];
+            // D-041：优先用 policy-hub 深度解析的 readableMessage（含「标题3 触发 TRADEMARK_VIOLATION」位置 + 政策原文 URL + 修复建议）
+            const readable = parsedPolicyError?.readableMessage;
+            if (readable && readable.trim().length > 0) {
+              throw new Error(readable);
+            }
+            // 兜底（policy-hub 解析失败时仍走旧路径，但已过滤 -2/-3）
+            const triggerList = errViolations
+              ?.filter((v) => v.trigger && !/^-?\d+$/.test(v.trigger.trim()))
+              .map((v) => `「${v.trigger}」`) || [];
             const triggerHint = triggerList.length > 0 ? `（违规内容: ${triggerList.join(", ")}）` : "";
             throw new Error(`Google Ads 拒绝了 RSA 广告素材${triggerHint}，请修改标题或描述中的违规文案后重新提交。（违规操作: ${skippedDetails.join("、")}）`);
           }
@@ -1152,7 +1186,14 @@ export async function POST(req: NextRequest) {
           if (filteredOps.length >= 6) {
             result = await mutateGoogleAds(credentials, customerId, filteredOps) as Record<string, unknown>;
           } else {
-            const triggerList = errViolations?.filter((v) => v.trigger).map((v) => `「${v.trigger}」`) || [];
+            // D-041：同样优先用 policy-hub readableMessage
+            const readable = parsedPolicyError?.readableMessage;
+            if (readable && readable.trim().length > 0) {
+              throw new Error(`Google Ads 因政策违规拒绝了 ${violatingIndices.size} 个操作，移除后剩余操作不足。\n\n${readable}`);
+            }
+            const triggerList = errViolations
+              ?.filter((v) => v.trigger && !/^-?\d+$/.test(v.trigger.trim()))
+              .map((v) => `「${v.trigger}」`) || [];
             const triggerHint = triggerList.length > 0 ? `（触发违规的内容: ${triggerList.join(", ")}）` : "";
             throw new Error(`Google Ads 因政策违规拒绝了 ${violatingIndices.size} 个操作（${skippedDetails.join("、")}），移除后剩余操作不足，无法创建广告。${triggerHint}请修改相关关键词或广告文案后重新提交。`);
           }
@@ -1197,6 +1238,11 @@ export async function POST(req: NextRequest) {
           throw mutateErr;
         }
       }
+    }
+
+    // D-041 兜底：理论上 catch 块所有路径都会 result=... 或 throw，但 TS 推断不出来
+    if (!result!) {
+      throw new Error("Google Ads 提交失败但未能识别错误类型，请刷新页面后重试或联系管理员。");
     }
 
     // 解析响应（API 返回 camelCase 或 snake_case 均兼容）
