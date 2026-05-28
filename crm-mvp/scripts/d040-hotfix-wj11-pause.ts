@@ -16,13 +16,13 @@
  */
 
 import { loadEnvFromProjectRoot } from "./load-env-from-dotenv-file";
-loadEnvFromProjectRoot();
-import prisma from "../src/lib/prisma";
 
 const TARGET_IDS = [8246n, 3810n];
 const DRY_RUN = process.env.CONFIRM !== "1";
 
 (async () => {
+  loadEnvFromProjectRoot();
+  const { default: prisma } = await import("../src/lib/prisma");
   console.log("=".repeat(70));
   console.log("D-040 v2 — wj11 hotfix（强制 GAds PAUSED）");
   console.log("DRY_RUN =", DRY_RUN, DRY_RUN ? "(set CONFIRM=1 to actually call GAds API)" : "");

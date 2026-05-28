@@ -15,10 +15,10 @@
  */
 
 import { loadEnvFromProjectRoot } from "./load-env-from-dotenv-file";
-loadEnvFromProjectRoot();
-import prisma from "../src/lib/prisma";
 
 (async () => {
+  loadEnvFromProjectRoot();
+  const { default: prisma } = await import("../src/lib/prisma");
   console.log("=".repeat(80));
   console.log("D-040 v2 — 部署后验证");
   console.log("=".repeat(80));

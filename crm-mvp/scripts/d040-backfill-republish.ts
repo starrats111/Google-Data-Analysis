@@ -29,8 +29,6 @@
  */
 
 import { loadEnvFromProjectRoot } from "./load-env-from-dotenv-file";
-loadEnvFromProjectRoot();
-import prisma from "../src/lib/prisma";
 
 const DRY_RUN = process.env.CONFIRM !== "1";
 const SINCE_DATE = process.env.SINCE || "2026-01-01"; // GAds REMOVED 历史回溯起点
@@ -59,6 +57,8 @@ function microsToDollars(micros: number): number {
 }
 
 async function main() {
+  loadEnvFromProjectRoot();
+  const { default: prisma } = await import("../src/lib/prisma");
   console.log("=".repeat(80));
   console.log("D-040 v2 — 全业务 republish historical cost backfill");
   console.log("DRY_RUN =", DRY_RUN, DRY_RUN ? "(set CONFIRM=1 to write)" : "");
@@ -270,6 +270,5 @@ async function main() {
 
 main().catch((e) => {
   console.error("Fatal:", e);
-  prisma.$disconnect();
   process.exit(1);
 });
