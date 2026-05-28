@@ -11,7 +11,11 @@ import { sqlAffiliateTxnValidPlatformConnection } from "@/lib/affiliate-transact
  * 广告系列列表查询（数据中心主表格数据）
  *
  * F-01 修复：总览(summary/costByMcc)基于全量 campaign 聚合，不再受表格行数限制。
- * 表格行仍保留 200 条展示限制。
+ * D-040 修复（2026-05-28 12:55）：表格行 200 条限制完全取消。
+ *   背景：07 反馈 wj07 看不到 194-210 系列；SSH 实证 wj07 dedupe 后 264 行，
+ *   旧代码 `slice(0, 200)` 后端 ASC 排序截断了序号偏中段的 PAUSED 广告，
+ *   前端再 DESC 二次排序导致中间序号广告完全消失。
+ *   现在直接返回 dedupedCampaigns 全量，让前端可以看到所有数据。
  *
  * 筛选参数：
  * - mcc_account_id: MCC 账户 ID（可选，不传则查所有 MCC）
@@ -378,7 +382,10 @@ export async function GET(req: NextRequest) {
     pausedCount,
   };
 
-  // ─── 表格行：按状态排序，同状态内按广告系列名称中的序号升序，取前 200 条 ───
+  // ─── D-040 修复：取消 slice(0, 200) 表格行限制 ───
+  // 旧代码用 slice(0, 200) 截断，导致 wj07 这种 200+ 个 campaign 的用户看不到序号靠后的 PAUSED 广告。
+  // 现在返回全部 dedupedCampaigns（已按 gcid 去重）让前端可以看到全部数据。
+  // 排序保留：ENABLED 优先，同状态内按名称序号升序（前端会自己做最终 DESC 排序）。
   const STATUS_ORDER: Record<string, number> = { ENABLED: 0, PAUSED: 1, REMOVED: 2 };
   const extractSeq = (name: string | null): number => {
     if (!name) return 999999;
@@ -397,7 +404,8 @@ export async function GET(req: NextRequest) {
   const filteredForDisplay = showRemoved
     ? dedupedCampaigns
     : dedupedCampaigns.filter((c) => c.google_status !== "REMOVED");
-  const displayCampaigns = filteredForDisplay.slice(0, 200);
+  // D-040: 不再截断
+  const displayCampaigns = filteredForDisplay;
   const merchantWritten = new Set<string>();
 
   const rows = displayCampaigns.map((c) => {
@@ -452,7 +460,7 @@ export async function GET(req: NextRequest) {
     rowMeta: {
       displayedCount: displayCampaigns.length,
       totalCount: filteredForDisplay.length,
-      isLimited: filteredForDisplay.length > 200,
+      isLimited: false, // D-040: 已取消 200 条限制
     },
   }));
 }
