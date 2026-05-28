@@ -22,6 +22,12 @@ import { buildCrawlKey, withCrawlInflightLock } from "@/lib/crawl-inflight-lock"
 import { humanizeAdCopyBatch, AD_COPY_ANTI_AI_BLOCK } from "@/lib/humanizer";
 import { autoExpandSitelinks } from "@/lib/sitelink-auto-expand";
 import { generateSitelinkTexts } from "@/lib/sitelink-ai-writer";
+// C-112 / D-046.C — AI 广告创建 8 步智能闭环
+import {
+  runIntelligentAdCreation,
+  type KeywordCandidate,
+  type OrchestratorTask,
+} from "@/lib/intellicenter/ad-creation";
 
 function formatAiRuleBlock(profile: unknown | null | undefined, section: "sitelinks" | "ad_copy" | "compliance"): string {
   if (!profile) return "";
@@ -706,7 +712,28 @@ export async function POST(req: NextRequest) {
           // 不进入主 if 分支，跳过下面的 generateCore
         } else if (types.includes("core")) {
           const confirmedKeywords = Array.isArray(requestKeywords) ? (requestKeywords as string[]).filter(Boolean).slice(0, 10) : [];
-          tasks.push(generateCore(cache!, merchantName, merchantUrl, country, adSettings, aiRuleProfile, adCreativeId, send, ad_language, confirmedKeywords, merchantCategory, dbKeywordsForFallback));
+          // C-112 / D-046.C：8 步 AI 智能闭环（完全替换原 generateCore 主路径）
+          //   - Step 1 reachability  → Step 2 crawl（已 cache）→ Step 3 AI 画像
+          //   - Step 4 政策 pre-flight → Step 5 关键词 5 源 + 三因子 match type
+          //   - Step 6 RAG 证据约束 prompt → Step 7 cosine ≥ 0.7 评分 + 返工
+          //   - Step 8 D-039 H3 兜底剔除 critical
+          // 旧 generateCore 保留为应急 fallback：orchestrator 严重失败时降级，业务不挂。
+          tasks.push(runIntelligentCore(
+            cache!,
+            merchant,
+            campaign,
+            merchantName,
+            merchantUrl,
+            country,
+            adSettings,
+            aiRuleProfile,
+            adCreativeId,
+            send,
+            ad_language,
+            confirmedKeywords,
+            merchantCategory,
+            dbKeywordsForFallback,
+          ));
 
           // F-15: 图片提取独立于 AI 生成流程，并行运行，避免 AI/OCR 异常导致图片丢失
           tasks.push((async () => {
@@ -2532,4 +2559,163 @@ async function selectBestImages(
     `[SelectImages] raw=${rawImages.length} normalized=${normalizedImages.length} filtered=${filtered.length} headPassed=${headPassed.length} clean=${cleanImages.length} ocrPassed=${ocrPassed.length} final=${Math.min(result.length, 20)} | topScores: ${topScores}`,
   );
   return result.slice(0, 20);
+}
+
+// ─── C-112 / D-046.C: 8 步 AI 智能闭环 wrapper ───
+//
+// 本函数完全替换原 generateCore 主路径（headlines + descriptions + sitelinks + callouts）。
+// 流程：
+//   1. 准备多源候选关键词（员工 confirmed + DB fallback + 爬虫 semrushTitles + suggestedKeywords）
+//   2. 准备预算 / CPC 三因子（X4=C 决策依据）
+//   3. 调 orchestrator.runIntelligentAdCreation 跑完 Step 1-8
+//   4. 把 result 拆成现有 SSE 事件类型（headlines / descriptions / sitelinks / callouts）
+//   5. 顺手 emit images（保留 image_urls 写入）
+//   6. orchestrator 整体失败时降级到原 generateCore（保业务不挂）
+async function runIntelligentCore(
+  cache: CrawlCache,
+  merchant: { id: bigint; merchant_name: string | null; merchant_url: string | null; category: string | null },
+  campaign: { id: bigint; target_country: string | null },
+  merchantName: string,
+  merchantUrl: string,
+  country: string,
+  adSettings: any,
+  aiRuleProfile: unknown,
+  adCreativeId: bigint | null,
+  send: (type: string, data: unknown) => void,
+  adLanguageCode?: string,
+  confirmedKeywords: string[] = [],
+  merchantCategory: string | null = null,
+  dbKeywordsForFallback: string[] = [],
+): Promise<void> {
+  const market = getAdMarketConfig(country);
+  const languageName = resolveLanguageName(adLanguageCode || market.languageCode);
+
+  // ─── 1. 多源候选关键词 ───
+  const candidates: KeywordCandidate[] = [];
+  for (const k of confirmedKeywords.slice(0, 12)) {
+    // 员工已确认的关键词 — 最高优先级
+    candidates.push({ text: k, source: "history", sourcePriority: 0 });
+  }
+  for (const k of dbKeywordsForFallback.slice(0, 12)) {
+    candidates.push({ text: k, source: "history", sourcePriority: 1 });
+  }
+  // SemRush 标题中的关键词（C-112 Step 5 5 源融合的 SemRush 入口）
+  if (Array.isArray(cache.semrushTitles)) {
+    for (const t of cache.semrushTitles.slice(0, 12)) {
+      candidates.push({ text: t.toLowerCase(), source: "semrush", sourcePriority: 2 });
+    }
+  }
+  // 爬虫提取的 features（关键词候选）
+  if (Array.isArray(cache.features)) {
+    for (const f of cache.features.slice(0, 8)) {
+      candidates.push({ text: f.toLowerCase(), source: "crawl", sourcePriority: 3 });
+    }
+  }
+
+  // ─── 2. 预算 / CPC 归一化（按 USD 当量近似处理）───
+  const dailyBudgetUsd = Number(adSettings?.daily_budget ?? 2);
+  const maxCpcUsd = Number(adSettings?.max_cpc ?? 0.3);
+
+  // ─── 3. 构造任务清单（headlines×10 + descriptions×4 + sitelinks×6 + callouts×6）───
+  const tasks: OrchestratorTask[] = [
+    { kind: "headlines", count: 10, maxLen: 30 },
+    { kind: "descriptions", count: 4, maxLen: 90, minLen: 40 },
+    { kind: "sitelinks", count: 6, maxLen: 25 },
+    { kind: "callouts", count: 6, maxLen: 25 },
+  ];
+
+  try {
+    const result = await runIntelligentAdCreation({
+      merchantId: merchant.id,
+      campaignId: campaign.id,
+      merchantName,
+      merchantUrl,
+      finalUrl: merchantUrl,
+      targetCountry: country,
+      languageName,
+      existingCrawlCache: cache,
+      candidateKeywords: candidates,
+      dailyBudgetUsd,
+      maxCpcUsd,
+      tasks,
+      emitSSE: send,
+    });
+
+    // 政策阻断：返回 0 文案 + 已 emit policy_blocked，前端会显示阻断 banner
+    if (!result.approved) {
+      console.warn(
+        `[Intellicenter] merchant=${merchant.id} 政策阻断: ${result.blockingReasons.join(" | ")}`,
+      );
+      send("headlines", []);
+      send("descriptions", []);
+      send("sitelinks", []);
+      send("callouts", []);
+      return;
+    }
+
+    // 反 AI / 人性化（保留 D-039 humanize 兜底）
+    const humanizedHeadlines = result.headlines.length > 0
+      ? humanizeAdCopyBatch(result.headlines, 2, 30)
+      : [];
+    const humanizedDescriptions = result.descriptions.length > 0
+      ? humanizeAdCopyBatch(result.descriptions, 40, 90)
+      : [];
+    const humanizedCallouts = result.callouts.length > 0
+      ? humanizeAdCopyBatch(result.callouts, 2, 25)
+      : [];
+
+    send("headlines", humanizedHeadlines);
+    send("descriptions", humanizedDescriptions);
+    if (result.sitelinks.length > 0) {
+      send("sitelinks", result.sitelinks);
+    } else {
+      send("sitelinks", []);
+    }
+    if (humanizedCallouts.length > 0) {
+      send("callouts", humanizedCallouts);
+    }
+
+    // 持久化（与原 generateCore 一致：headlines / descriptions / sitelinks 写到 ad_creatives）
+    if (adCreativeId) {
+      try {
+        await prisma.ad_creatives.update({
+          where: { id: adCreativeId },
+          data: {
+            headlines: humanizedHeadlines as any,
+            descriptions: humanizedDescriptions as any,
+            sitelinks: result.sitelinks as any,
+            callouts: humanizedCallouts as any,
+          },
+        });
+      } catch (e) {
+        console.warn(
+          `[Intellicenter] ad_creatives 持久化失败: ${e instanceof Error ? e.message : e}`,
+        );
+      }
+    }
+
+    // 诊断输出：单步耗时 + AI 调用次数 + 相似度（便于 PM2 日志侧观察）
+    console.log(
+      `[Intellicenter] merchant=${merchant.id} approved=${result.approved} timings=${JSON.stringify(result.timings)} aiCalls=${JSON.stringify(result.aiCalls)} headlines=${humanizedHeadlines.length}/${tasks[0].count} descriptions=${humanizedDescriptions.length}/${tasks[1].count} sitelinks=${result.sitelinks.length}/${tasks[2].count} callouts=${humanizedCallouts.length}/${tasks[3].count} simAvgH=${result.similarity.headlines?.avgSimilarity?.toFixed(2) ?? "-"} simAvgD=${result.similarity.descriptions?.avgSimilarity?.toFixed(2) ?? "-"} lintDropped=${result.linter?.droppedCount ?? 0}`,
+    );
+  } catch (err) {
+    // orchestrator 整体异常（极少见）→ 降级到原 generateCore 让员工业务能继续
+    console.error(
+      `[Intellicenter] orchestrator 异常，降级原 generateCore: ${err instanceof Error ? err.message : err}`,
+    );
+    await generateCore(
+      cache,
+      merchantName,
+      merchantUrl,
+      country,
+      adSettings,
+      aiRuleProfile,
+      adCreativeId,
+      send,
+      adLanguageCode,
+      confirmedKeywords,
+      merchantCategory,
+      dbKeywordsForFallback,
+    );
+  }
 }
